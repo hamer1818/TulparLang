@@ -200,6 +200,8 @@ Interpreter* interpreter_create() {
     interp->functions = (Function**)malloc(sizeof(Function*) * interp->function_capacity);
     interp->return_value = NULL;
     interp->should_return = 0;
+    interp->should_break = 0;
+    interp->should_continue = 0;
     return interp;
 }
 
@@ -393,6 +395,17 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     result = value_create_bool(l >= r);
                 }
             }
+            // Mantıksal operatörler
+            else if (node->op == TOKEN_AND) {
+                int left_truthy = value_is_truthy(left);
+                int right_truthy = value_is_truthy(right);
+                result = value_create_bool(left_truthy && right_truthy);
+            }
+            else if (node->op == TOKEN_OR) {
+                int left_truthy = value_is_truthy(left);
+                int right_truthy = value_is_truthy(right);
+                result = value_create_bool(left_truthy || right_truthy);
+            }
             
             value_free(left);
             value_free(right);
@@ -404,21 +417,32 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             
             return result;
         }
-            
+        
         case AST_UNARY_OP: {
-            Value* val = interpreter_eval_expression(interp, node->left);
+            Value* operand = interpreter_eval_expression(interp, node->left);
             Value* result = NULL;
             
-            if (node->op == TOKEN_MINUS) {
-                if (val->type == VAL_INT) {
-                    result = value_create_int(-val->data.int_val);
-                } else if (val->type == VAL_FLOAT) {
-                    result = value_create_float(-val->data.float_val);
+            if (node->op == TOKEN_BANG) {
+                // Logical NOT
+                int truthy = value_is_truthy(operand);
+                result = value_create_bool(!truthy);
+            }
+            else if (node->op == TOKEN_MINUS) {
+                // Unary minus
+                if (operand->type == VAL_INT) {
+                    result = value_create_int(-operand->data.int_val);
+                } else if (operand->type == VAL_FLOAT) {
+                    result = value_create_float(-operand->data.float_val);
                 }
             }
-            // NOT operatörü için şu an destek yok, gerekirse eklenebilir
             
-            value_free(val);
+            value_free(operand);
+            
+            if (!result) {
+                printf("Hata: Desteklenmeyen unary operatör!\n");
+                exit(1);
+            }
+            
             return result;
         }
             
@@ -519,6 +543,86 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     value_free(arg);
                 }
                 return value_create_int(0);
+            }
+            
+            // toInt() - type conversion
+            if (strcmp(node->name, "toInt") == 0) {
+                if (node->argument_count > 0) {
+                    Value* arg = interpreter_eval_expression(interp, node->arguments[0]);
+                    Value* result = NULL;
+                    
+                    if (arg->type == VAL_INT) {
+                        result = value_create_int(arg->data.int_val);
+                    } else if (arg->type == VAL_FLOAT) {
+                        result = value_create_int((int)arg->data.float_val);
+                    } else if (arg->type == VAL_BOOL) {
+                        result = value_create_int(arg->data.bool_val ? 1 : 0);
+                    } else if (arg->type == VAL_STRING) {
+                        result = value_create_int(atoi(arg->data.string_val));
+                    }
+                    
+                    value_free(arg);
+                    return result ? result : value_create_int(0);
+                }
+                return value_create_int(0);
+            }
+            
+            // toFloat() - type conversion
+            if (strcmp(node->name, "toFloat") == 0) {
+                if (node->argument_count > 0) {
+                    Value* arg = interpreter_eval_expression(interp, node->arguments[0]);
+                    Value* result = NULL;
+                    
+                    if (arg->type == VAL_INT) {
+                        result = value_create_float((float)arg->data.int_val);
+                    } else if (arg->type == VAL_FLOAT) {
+                        result = value_create_float(arg->data.float_val);
+                    } else if (arg->type == VAL_BOOL) {
+                        result = value_create_float(arg->data.bool_val ? 1.0f : 0.0f);
+                    } else if (arg->type == VAL_STRING) {
+                        result = value_create_float(atof(arg->data.string_val));
+                    }
+                    
+                    value_free(arg);
+                    return result ? result : value_create_float(0.0f);
+                }
+                return value_create_float(0.0f);
+            }
+            
+            // toString() - type conversion
+            if (strcmp(node->name, "toString") == 0) {
+                if (node->argument_count > 0) {
+                    Value* arg = interpreter_eval_expression(interp, node->arguments[0]);
+                    char buffer[256];
+                    
+                    if (arg->type == VAL_INT) {
+                        snprintf(buffer, sizeof(buffer), "%d", arg->data.int_val);
+                    } else if (arg->type == VAL_FLOAT) {
+                        snprintf(buffer, sizeof(buffer), "%g", arg->data.float_val);
+                    } else if (arg->type == VAL_BOOL) {
+                        snprintf(buffer, sizeof(buffer), "%s", arg->data.bool_val ? "true" : "false");
+                    } else if (arg->type == VAL_STRING) {
+                        value_free(arg);
+                        return value_create_string(arg->data.string_val);
+                    } else {
+                        snprintf(buffer, sizeof(buffer), "");
+                    }
+                    
+                    value_free(arg);
+                    return value_create_string(buffer);
+                }
+                return value_create_string("");
+            }
+            
+            // toBool() - type conversion
+            if (strcmp(node->name, "toBool") == 0) {
+                if (node->argument_count > 0) {
+                    Value* arg = interpreter_eval_expression(interp, node->arguments[0]);
+                    int result = value_is_truthy(arg);
+                    value_free(arg);
+                    return value_create_bool(result);
+                }
+                return value_create_bool(0);
             }
             
             // Kullanıcı tanımlı fonksiyonlar
@@ -625,6 +729,106 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
             value_free(val);
             break;
         }
+        
+        case AST_COMPOUND_ASSIGN: {
+            // x += 5 gibi
+            Value* current = symbol_table_get(interp->current_scope, node->name);
+            if (!current) {
+                printf("Hata: Tanımlanmamış değişken '%s'\n", node->name);
+                exit(1);
+            }
+            
+            Value* right_val = interpreter_eval_expression(interp, node->right);
+            Value* result = NULL;
+            
+            if (node->op == TOKEN_PLUS_EQUAL) {
+                if (current->type == VAL_INT && right_val->type == VAL_INT) {
+                    result = value_create_int(current->data.int_val + right_val->data.int_val);
+                } else {
+                    float l = (current->type == VAL_FLOAT) ? current->data.float_val : current->data.int_val;
+                    float r = (right_val->type == VAL_FLOAT) ? right_val->data.float_val : right_val->data.int_val;
+                    result = value_create_float(l + r);
+                }
+            }
+            else if (node->op == TOKEN_MINUS_EQUAL) {
+                if (current->type == VAL_INT && right_val->type == VAL_INT) {
+                    result = value_create_int(current->data.int_val - right_val->data.int_val);
+                } else {
+                    float l = (current->type == VAL_FLOAT) ? current->data.float_val : current->data.int_val;
+                    float r = (right_val->type == VAL_FLOAT) ? right_val->data.float_val : right_val->data.int_val;
+                    result = value_create_float(l - r);
+                }
+            }
+            else if (node->op == TOKEN_MULTIPLY_EQUAL) {
+                if (current->type == VAL_INT && right_val->type == VAL_INT) {
+                    result = value_create_int(current->data.int_val * right_val->data.int_val);
+                } else {
+                    float l = (current->type == VAL_FLOAT) ? current->data.float_val : current->data.int_val;
+                    float r = (right_val->type == VAL_FLOAT) ? right_val->data.float_val : right_val->data.int_val;
+                    result = value_create_float(l * r);
+                }
+            }
+            else if (node->op == TOKEN_DIVIDE_EQUAL) {
+                if (current->type == VAL_INT && right_val->type == VAL_INT) {
+                    result = value_create_int(current->data.int_val / right_val->data.int_val);
+                } else {
+                    float l = (current->type == VAL_FLOAT) ? current->data.float_val : current->data.int_val;
+                    float r = (right_val->type == VAL_FLOAT) ? right_val->data.float_val : right_val->data.int_val;
+                    result = value_create_float(l / r);
+                }
+            }
+            
+            if (result) {
+                symbol_table_set(interp->current_scope, node->name, result);
+                value_free(result);
+            }
+            value_free(right_val);
+            break;
+        }
+        
+        case AST_INCREMENT: {
+            // x++
+            Value* current = symbol_table_get(interp->current_scope, node->name);
+            if (!current) {
+                printf("Hata: Tanımlanmamış değişken '%s'\n", node->name);
+                exit(1);
+            }
+            
+            Value* result = NULL;
+            if (current->type == VAL_INT) {
+                result = value_create_int(current->data.int_val + 1);
+            } else if (current->type == VAL_FLOAT) {
+                result = value_create_float(current->data.float_val + 1.0f);
+            }
+            
+            if (result) {
+                symbol_table_set(interp->current_scope, node->name, result);
+                value_free(result);
+            }
+            break;
+        }
+        
+        case AST_DECREMENT: {
+            // x--
+            Value* current = symbol_table_get(interp->current_scope, node->name);
+            if (!current) {
+                printf("Hata: Tanımlanmamış değişken '%s'\n", node->name);
+                exit(1);
+            }
+            
+            Value* result = NULL;
+            if (current->type == VAL_INT) {
+                result = value_create_int(current->data.int_val - 1);
+            } else if (current->type == VAL_FLOAT) {
+                result = value_create_float(current->data.float_val - 1.0f);
+            }
+            
+            if (result) {
+                symbol_table_set(interp->current_scope, node->name, result);
+                value_free(result);
+            }
+            break;
+        }
             
         case AST_FUNCTION_DECL:
             interpreter_register_function(interp, node->name, node);
@@ -636,6 +840,14 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
             }
             interp->return_value = interpreter_eval_expression(interp, node->return_value);
             interp->should_return = 1;
+            break;
+        
+        case AST_BREAK:
+            interp->should_break = 1;
+            break;
+        
+        case AST_CONTINUE:
+            interp->should_continue = 1;
             break;
             
         case AST_IF: {
@@ -657,12 +869,22 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                 int should_continue = value_is_truthy(cond);
                 value_free(cond);
                 
-                if (!should_continue || interp->should_return) {
+                if (!should_continue || interp->should_return || interp->should_break) {
                     break;
                 }
                 
                 interpreter_execute_statement(interp, node->body);
+                
+                if (interp->should_continue) {
+                    interp->should_continue = 0;
+                    continue;
+                }
+                
+                if (interp->should_break) {
+                    break;
+                }
             }
+            interp->should_break = 0;
             break;
         }
             
@@ -680,7 +902,7 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                     int should_continue = value_is_truthy(cond);
                     value_free(cond);
                     
-                    if (!should_continue || interp->should_return) {
+                    if (!should_continue || interp->should_return || interp->should_break) {
                         break;
                     }
                 }
@@ -688,8 +910,17 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                 // Döngü gövdesini çalıştır
                 interpreter_execute_statement(interp, node->body);
                 
-                if (interp->should_return) {
+                if (interp->should_return || interp->should_break) {
                     break;
+                }
+                
+                if (interp->should_continue) {
+                    interp->should_continue = 0;
+                    // Continue: increment'i çalıştır ve devam et
+                    if (node->increment) {
+                        interpreter_execute_statement(interp, node->increment);
+                    }
+                    continue;
                 }
                 
                 // Increment statement'ı çalıştır (i = i + 1)
@@ -697,6 +928,7 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                     interpreter_execute_statement(interp, node->increment);
                 }
             }
+            interp->should_break = 0;
             break;
         }
             
@@ -710,7 +942,7 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                 
                 // 0'dan count'a kadar döngü
                 for (int i = 0; i < count; i++) {
-                    if (interp->should_return) break;
+                    if (interp->should_return || interp->should_break) break;
                     
                     // Iterator değişkenini güncelle
                     Value* iter_val = value_create_int(i);
@@ -719,9 +951,19 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                     
                     // Döngü gövdesini çalıştır
                     interpreter_execute_statement(interp, node->body);
+                    
+                    if (interp->should_continue) {
+                        interp->should_continue = 0;
+                        continue;
+                    }
+                    
+                    if (interp->should_break) {
+                        break;
+                    }
                 }
             }
             
+            interp->should_break = 0;
             value_free(iterable_val);
             break;
         }

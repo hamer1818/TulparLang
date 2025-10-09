@@ -53,6 +53,8 @@ typedef struct {
     int function_capacity;
     Value* return_value;  // Fonksiyonlardan dönüş değeri için
     int should_return;    // Return statement kontrolü
+    int should_break;     // Break statement kontrolü
+    int should_continue;  // Continue statement kontrolü
 } Interpreter;
 
 // Value fonksiyonları

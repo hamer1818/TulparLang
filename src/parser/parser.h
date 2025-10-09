@@ -18,12 +18,17 @@ typedef enum {
     // İfadeler (Statements)
     AST_VARIABLE_DECL,    // int x = 5;
     AST_ASSIGNMENT,       // x = 10;
+    AST_COMPOUND_ASSIGN,  // x += 5; x -= 3; etc
+    AST_INCREMENT,        // x++
+    AST_DECREMENT,        // x--
     AST_FUNCTION_DECL,    // func topla(int a, int b) { ... }
     AST_RETURN,           // return x;
     AST_IF,               // if (x > 5) { ... }
     AST_WHILE,            // while (x < 10) { ... }
     AST_FOR,              // for (int i = 0; i < 10; i = i + 1) { ... }
     AST_FOR_IN,           // for (x in range(10)) { ... }
+    AST_BREAK,            // break;
+    AST_CONTINUE,         // continue;
     AST_BLOCK,            // { ... }
     AST_PROGRAM           // Tüm program
 } ASTNodeType;

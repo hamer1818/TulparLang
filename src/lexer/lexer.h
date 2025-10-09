@@ -17,6 +17,8 @@ typedef enum {
     TOKEN_WHILE,         // "while"
     TOKEN_FOR,           // "for"
     TOKEN_IN,            // "in"
+    TOKEN_BREAK,         // "break"
+    TOKEN_CONTINUE,      // "continue"
     TOKEN_TRUE,          // "true"
     TOKEN_FALSE,         // "false"
     
@@ -34,10 +36,19 @@ typedef enum {
     TOKEN_ASSIGN,        // =
     TOKEN_EQUAL,         // ==
     TOKEN_NOT_EQUAL,     // !=
-    TOKEN_LESS,          // 
+    TOKEN_LESS,          // <
     TOKEN_GREATER,       // >
     TOKEN_LESS_EQUAL,    // <=
     TOKEN_GREATER_EQUAL, // >=
+    TOKEN_AND,           // &&
+    TOKEN_OR,            // ||
+    TOKEN_BANG,          // !
+    TOKEN_PLUS_PLUS,     // ++
+    TOKEN_MINUS_MINUS,   // --
+    TOKEN_PLUS_EQUAL,    // +=
+    TOKEN_MINUS_EQUAL,   // -=
+    TOKEN_MULTIPLY_EQUAL,// *=
+    TOKEN_DIVIDE_EQUAL,  // /=
     
     // Semboller
     TOKEN_LPAREN,        // (

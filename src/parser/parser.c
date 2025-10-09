@@ -179,9 +179,25 @@ static ASTNode* parse_primary(Parser* parser) {
     return NULL;
 }
 
+// Unary expressions (!, -)
+static ASTNode* parse_unary(Parser* parser) {
+    Token* token = parser->current_token;
+    
+    // Unary operators
+    if (token->type == TOKEN_BANG || token->type == TOKEN_MINUS) {
+        ASTNode* node = ast_node_create(AST_UNARY_OP);
+        node->op = token->type;
+        parser_advance(parser);
+        node->left = parse_unary(parser); // Recursive for multiple unary ops
+        return node;
+    }
+    
+    return parse_primary(parser);
+}
+
 // Factor (*, /)
 static ASTNode* parse_factor(Parser* parser) {
-    ASTNode* left = parse_primary(parser);
+    ASTNode* left = parse_unary(parser);
     
     while (parser->current_token->type == TOKEN_MULTIPLY || 
            parser->current_token->type == TOKEN_DIVIDE) {
@@ -191,7 +207,7 @@ static ASTNode* parse_factor(Parser* parser) {
         ASTNode* node = ast_node_create(AST_BINARY_OP);
         node->op = op;
         node->left = left;
-        node->right = parse_primary(parser);
+        node->right = parse_unary(parser);
         left = node;
     }
     
@@ -217,8 +233,8 @@ static ASTNode* parse_term(Parser* parser) {
     return left;
 }
 
-// Expression (karşılaştırma operatörleri)
-static ASTNode* parse_expression(Parser* parser) {
+// Comparison (==, !=, <, >, <=, >=)
+static ASTNode* parse_comparison(Parser* parser) {
     ASTNode* left = parse_term(parser);
     
     while (parser->current_token->type == TOKEN_EQUAL ||
@@ -238,6 +254,45 @@ static ASTNode* parse_expression(Parser* parser) {
     }
     
     return left;
+}
+
+// Logical AND (&&)
+static ASTNode* parse_logical_and(Parser* parser) {
+    ASTNode* left = parse_comparison(parser);
+    
+    while (parser->current_token->type == TOKEN_AND) {
+        parser_advance(parser);
+        
+        ASTNode* node = ast_node_create(AST_BINARY_OP);
+        node->op = TOKEN_AND;
+        node->left = left;
+        node->right = parse_comparison(parser);
+        left = node;
+    }
+    
+    return left;
+}
+
+// Logical OR (||)
+static ASTNode* parse_logical_or(Parser* parser) {
+    ASTNode* left = parse_logical_and(parser);
+    
+    while (parser->current_token->type == TOKEN_OR) {
+        parser_advance(parser);
+        
+        ASTNode* node = ast_node_create(AST_BINARY_OP);
+        node->op = TOKEN_OR;
+        node->left = left;
+        node->right = parse_logical_and(parser);
+        left = node;
+    }
+    
+    return left;
+}
+
+// Expression (en yüksek seviye)
+static ASTNode* parse_expression(Parser* parser) {
+    return parse_logical_or(parser);
 }
 
 // Veri tipini al
@@ -305,6 +360,22 @@ static ASTNode* parse_return(Parser* parser) {
         node->return_value = parse_expression(parser);
     }
     
+    parser_expect(parser, TOKEN_SEMICOLON);
+    return node;
+}
+
+// Break statement
+static ASTNode* parse_break(Parser* parser) {
+    ASTNode* node = ast_node_create(AST_BREAK);
+    parser_advance(parser); // 'break' atla
+    parser_expect(parser, TOKEN_SEMICOLON);
+    return node;
+}
+
+// Continue statement
+static ASTNode* parse_continue(Parser* parser) {
+    ASTNode* node = ast_node_create(AST_CONTINUE);
+    parser_advance(parser); // 'continue' atla
     parser_expect(parser, TOKEN_SEMICOLON);
     return node;
 }
@@ -491,6 +562,16 @@ static ASTNode* parse_statement(Parser* parser) {
         return parse_return(parser);
     }
     
+    // Break statement
+    if (token->type == TOKEN_BREAK) {
+        return parse_break(parser);
+    }
+    
+    // Continue statement
+    if (token->type == TOKEN_CONTINUE) {
+        return parse_continue(parser);
+    }
+    
     // If statement
     if (token->type == TOKEN_IF) {
         return parse_if(parser);
@@ -533,9 +614,48 @@ static ASTNode* parse_statement(Parser* parser) {
     if (token->type == TOKEN_IDENTIFIER) {
         Token* next = parser_peek(parser);
         
-        // Atama
+        // Atama (=)
         if (next && next->type == TOKEN_ASSIGN) {
             return parse_assignment(parser);
+        }
+        
+        // Compound assignment (+=, -=, *=, /=)
+        if (next && (next->type == TOKEN_PLUS_EQUAL || 
+                     next->type == TOKEN_MINUS_EQUAL ||
+                     next->type == TOKEN_MULTIPLY_EQUAL ||
+                     next->type == TOKEN_DIVIDE_EQUAL)) {
+            ASTNode* node = ast_node_create(AST_COMPOUND_ASSIGN);
+            node->name = strdup(parser->current_token->value);
+            parser_advance(parser);
+            
+            // Op'u TokenType olarak sakla
+            node->op = parser->current_token->type;
+            parser_advance(parser);
+            
+            node->right = parse_expression(parser);
+            parser_expect(parser, TOKEN_SEMICOLON);
+            
+            return node;
+        }
+        
+        // Increment (++)
+        if (next && next->type == TOKEN_PLUS_PLUS) {
+            ASTNode* node = ast_node_create(AST_INCREMENT);
+            node->name = strdup(parser->current_token->value);
+            parser_advance(parser);
+            parser_advance(parser); // ++ atla
+            parser_expect(parser, TOKEN_SEMICOLON);
+            return node;
+        }
+        
+        // Decrement (--)
+        if (next && next->type == TOKEN_MINUS_MINUS) {
+            ASTNode* node = ast_node_create(AST_DECREMENT);
+            node->name = strdup(parser->current_token->value);
+            parser_advance(parser);
+            parser_advance(parser); // -- atla
+            parser_expect(parser, TOKEN_SEMICOLON);
+            return node;
         }
         
         // Fonksiyon çağrısı

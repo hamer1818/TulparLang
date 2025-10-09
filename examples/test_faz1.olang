@@ -1,0 +1,54 @@
+// Faz 1 Test Dosyası
+
+print("=== FAZ 1 TEST ===");
+
+// 1. Mantıksal Operatörler
+int x = 5;
+int y = 10;
+
+if (x > 3 && y < 15) {
+    print("AND calisiyor!");
+}
+
+if (x == 10 || y == 10) {
+    print("OR calisiyor!");
+}
+
+bool tersYon = !true;
+if (tersYon == false) {
+    print("NOT calisiyor!");
+}
+
+// 2. Increment/Decrement
+int i = 0;
+i++;
+print("i++ sonrasi:", i);
+
+i--;
+print("i-- sonrasi:", i);
+
+// 3. Compound Assignment
+int toplam = 10;
+toplam += 5;
+print("10 += 5 =", toplam);
+
+toplam -= 3;
+print("15 -= 3 =", toplam);
+
+toplam *= 2;
+print("12 *= 2 =", toplam);
+
+toplam /= 4;
+print("24 /= 4 =", toplam);
+
+// 4. Break ve Continue
+for (int j = 0; j < 10; j++) {
+    if (j == 3) continue;
+    if (j == 7) break;
+    print("j =", j);
+}
+
+print("=== FAZ 1 BASARILI ===");
+
+
+

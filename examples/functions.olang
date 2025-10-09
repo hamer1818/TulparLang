@@ -18,7 +18,7 @@ func faktoriyel(int n) {
     return n * onceki;
 }
 
-// Fonksiyonları kullan
+// Fonksiyonların kullanımı
 int toplam = topla(10, 20);
 int kare_sonuc = kare(7);
 int fakt5 = faktoriyel(5);

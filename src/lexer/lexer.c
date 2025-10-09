@@ -126,6 +126,8 @@ static Token* lexer_read_identifier(Lexer* lexer) {
     else if (strcmp(buffer, "while") == 0) type = TOKEN_WHILE;
     else if (strcmp(buffer, "for") == 0) type = TOKEN_FOR;
     else if (strcmp(buffer, "in") == 0) type = TOKEN_IN;
+    else if (strcmp(buffer, "break") == 0) type = TOKEN_BREAK;
+    else if (strcmp(buffer, "continue") == 0) type = TOKEN_CONTINUE;
     else if (strcmp(buffer, "true") == 0) type = TOKEN_TRUE;
     else if (strcmp(buffer, "false") == 0) type = TOKEN_FALSE;
     
@@ -197,10 +199,38 @@ Token* lexer_next_token(Lexer* lexer) {
         lexer_advance(lexer);
         
         switch (c) {
-            case '+': return token_create(TOKEN_PLUS, "+", start_line, start_column);
-            case '-': return token_create(TOKEN_MINUS, "-", start_line, start_column);
-            case '*': return token_create(TOKEN_MULTIPLY, "*", start_line, start_column);
-            case '/': return token_create(TOKEN_DIVIDE, "/", start_line, start_column);
+            case '+':
+                if (lexer->current_char == '+') {
+                    lexer_advance(lexer);
+                    return token_create(TOKEN_PLUS_PLUS, "++", start_line, start_column);
+                }
+                if (lexer->current_char == '=') {
+                    lexer_advance(lexer);
+                    return token_create(TOKEN_PLUS_EQUAL, "+=", start_line, start_column);
+                }
+                return token_create(TOKEN_PLUS, "+", start_line, start_column);
+            case '-':
+                if (lexer->current_char == '-') {
+                    lexer_advance(lexer);
+                    return token_create(TOKEN_MINUS_MINUS, "--", start_line, start_column);
+                }
+                if (lexer->current_char == '=') {
+                    lexer_advance(lexer);
+                    return token_create(TOKEN_MINUS_EQUAL, "-=", start_line, start_column);
+                }
+                return token_create(TOKEN_MINUS, "-", start_line, start_column);
+            case '*':
+                if (lexer->current_char == '=') {
+                    lexer_advance(lexer);
+                    return token_create(TOKEN_MULTIPLY_EQUAL, "*=", start_line, start_column);
+                }
+                return token_create(TOKEN_MULTIPLY, "*", start_line, start_column);
+            case '/':
+                if (lexer->current_char == '=') {
+                    lexer_advance(lexer);
+                    return token_create(TOKEN_DIVIDE_EQUAL, "/=", start_line, start_column);
+                }
+                return token_create(TOKEN_DIVIDE, "/", start_line, start_column);
             case '(': return token_create(TOKEN_LPAREN, "(", start_line, start_column);
             case ')': return token_create(TOKEN_RPAREN, ")", start_line, start_column);
             case '{': return token_create(TOKEN_LBRACE, "{", start_line, start_column);
@@ -217,6 +247,18 @@ Token* lexer_next_token(Lexer* lexer) {
                 if (lexer->current_char == '=') {
                     lexer_advance(lexer);
                     return token_create(TOKEN_NOT_EQUAL, "!=", start_line, start_column);
+                }
+                return token_create(TOKEN_BANG, "!", start_line, start_column);
+            case '&':
+                if (lexer->current_char == '&') {
+                    lexer_advance(lexer);
+                    return token_create(TOKEN_AND, "&&", start_line, start_column);
+                }
+                break;
+            case '|':
+                if (lexer->current_char == '|') {
+                    lexer_advance(lexer);
+                    return token_create(TOKEN_OR, "||", start_line, start_column);
                 }
                 break;
             case '<':
