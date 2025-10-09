@@ -161,9 +161,53 @@ static ASTNode* parse_primary(Parser* parser) {
             return node;
         }
         
+        // Array access mı? (arr[0])
+        if (parser->current_token->type == TOKEN_LBRACKET) {
+            ASTNode* node = ast_node_create(AST_ARRAY_ACCESS);
+            node->name = name;
+            parser_advance(parser); // '[' atla
+            
+            node->index = parse_expression(parser);
+            parser_expect(parser, TOKEN_RBRACKET);
+            return node;
+        }
+        
         // Sadece değişken
         ASTNode* node = ast_node_create(AST_IDENTIFIER);
         node->name = name;
+        return node;
+    }
+    
+    // Dizi literal ([1, 2, 3])
+    if (token->type == TOKEN_LBRACKET) {
+        ASTNode* node = ast_node_create(AST_ARRAY_LITERAL);
+        parser_advance(parser); // '[' atla
+        
+        node->elements = NULL;
+        node->element_count = 0;
+        
+        // Boş dizi değilse
+        if (parser->current_token->type != TOKEN_RBRACKET) {
+            int capacity = 4;
+            node->elements = (ASTNode**)malloc(sizeof(ASTNode*) * capacity);
+            
+            do {
+                if (node->element_count >= capacity) {
+                    capacity *= 2;
+                    node->elements = (ASTNode**)realloc(node->elements,
+                                                        sizeof(ASTNode*) * capacity);
+                }
+                node->elements[node->element_count++] = parse_expression(parser);
+                
+                if (parser->current_token->type == TOKEN_COMMA) {
+                    parser_advance(parser);
+                } else {
+                    break;
+                }
+            } while (1);
+        }
+        
+        parser_expect(parser, TOKEN_RBRACKET);
         return node;
     }
     
@@ -304,6 +348,12 @@ static DataType parse_data_type(Parser* parser) {
         case TOKEN_FLOAT_TYPE: type = TYPE_FLOAT; break;
         case TOKEN_STR_TYPE: type = TYPE_STRING; break;
         case TOKEN_BOOL_TYPE: type = TYPE_BOOL; break;
+        case TOKEN_ARRAY_TYPE: type = TYPE_ARRAY; break;
+        case TOKEN_ARRAY_INT: type = TYPE_ARRAY_INT; break;
+        case TOKEN_ARRAY_FLOAT: type = TYPE_ARRAY_FLOAT; break;
+        case TOKEN_ARRAY_STR: type = TYPE_ARRAY_STR; break;
+        case TOKEN_ARRAY_BOOL: type = TYPE_ARRAY_BOOL; break;
+        case TOKEN_ARRAY_JSON: type = TYPE_ARRAY_JSON; break;
         default:
             printf("Parser Error: Expected data type at line %d\n", 
                    parser->current_token->line);
@@ -548,7 +598,10 @@ static ASTNode* parse_statement(Parser* parser) {
     
     // Veri tipi ile başlıyorsa değişken tanımlaması
     if (token->type == TOKEN_INT_TYPE || token->type == TOKEN_FLOAT_TYPE ||
-        token->type == TOKEN_STR_TYPE || token->type == TOKEN_BOOL_TYPE) {
+        token->type == TOKEN_STR_TYPE || token->type == TOKEN_BOOL_TYPE ||
+        token->type == TOKEN_ARRAY_TYPE || token->type == TOKEN_ARRAY_INT ||
+        token->type == TOKEN_ARRAY_FLOAT || token->type == TOKEN_ARRAY_STR ||
+        token->type == TOKEN_ARRAY_BOOL || token->type == TOKEN_ARRAY_JSON) {
         return parse_variable_declaration(parser);
     }
     
@@ -613,6 +666,27 @@ static ASTNode* parse_statement(Parser* parser) {
     // Identifier (atama veya fonksiyon çağrısı)
     if (token->type == TOKEN_IDENTIFIER) {
         Token* next = parser_peek(parser);
+        
+        // Array assignment (arr[0] = 5)
+        if (next && next->type == TOKEN_LBRACKET) {
+            ASTNode* node = ast_node_create(AST_ASSIGNMENT);
+            char* name = strdup(parser->current_token->value);
+            parser_advance(parser);
+            parser_advance(parser); // '[' atla
+            
+            // arr[index] şeklinde array access oluştur
+            ASTNode* access = ast_node_create(AST_ARRAY_ACCESS);
+            access->name = name;
+            access->index = parse_expression(parser);
+            parser_expect(parser, TOKEN_RBRACKET);
+            
+            node->left = access;  // Sol taraf array access
+            parser_expect(parser, TOKEN_ASSIGN);
+            node->right = parse_expression(parser);
+            parser_expect(parser, TOKEN_SEMICOLON);
+            
+            return node;
+        }
         
         // Atama (=)
         if (next && next->type == TOKEN_ASSIGN) {

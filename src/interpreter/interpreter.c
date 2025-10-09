@@ -42,6 +42,107 @@ Value* value_create_void() {
     return value;
 }
 
+Value* value_create_array(int capacity) {
+    Value* value = (Value*)malloc(sizeof(Value));
+    value->type = VAL_ARRAY;
+    
+    Array* arr = (Array*)malloc(sizeof(Array));
+    arr->elements = (Value**)malloc(sizeof(Value*) * capacity);
+    arr->length = 0;
+    arr->capacity = capacity;
+    arr->elem_type = VAL_VOID;  // Mixed type
+    
+    value->data.array_val = arr;
+    return value;
+}
+
+Value* value_create_typed_array(int capacity, ValueType elem_type) {
+    Value* value = (Value*)malloc(sizeof(Value));
+    value->type = VAL_ARRAY;
+    
+    Array* arr = (Array*)malloc(sizeof(Array));
+    arr->elements = (Value**)malloc(sizeof(Value*) * capacity);
+    arr->length = 0;
+    arr->capacity = capacity;
+    arr->elem_type = elem_type;  // Typed array
+    
+    value->data.array_val = arr;
+    return value;
+}
+
+// ============================================================================
+// ARRAY FONKSİYONLARI
+// ============================================================================
+
+void array_push(Array* arr, Value* val) {
+    // Tip kontrolü (eğer typed array ise)
+    if (arr->elem_type != VAL_VOID && arr->elem_type != val->type) {
+        printf("Hata: Dizi sadece ");
+        switch (arr->elem_type) {
+            case VAL_INT: printf("int"); break;
+            case VAL_FLOAT: printf("float"); break;
+            case VAL_STRING: printf("str"); break;
+            case VAL_BOOL: printf("bool"); break;
+            default: printf("bilinmeyen tip"); break;
+        }
+        printf(" tipinde eleman kabul eder!\n");
+        return;
+    }
+    
+    if (arr->length >= arr->capacity) {
+        arr->capacity *= 2;
+        arr->elements = (Value**)realloc(arr->elements, 
+                                        sizeof(Value*) * arr->capacity);
+    }
+    arr->elements[arr->length++] = value_copy(val);
+}
+
+Value* array_pop(Array* arr) {
+    if (arr->length == 0) {
+        return value_create_void();
+    }
+    Value* val = arr->elements[--arr->length];
+    return val;  // Ownership transfer
+}
+
+Value* array_get(Array* arr, int index) {
+    if (index < 0 || index >= arr->length) {
+        printf("Hata: Dizi index sınırları dışında: %d (uzunluk: %d)\n", 
+               index, arr->length);
+        return value_create_void();
+    }
+    return value_copy(arr->elements[index]);
+}
+
+void array_set(Array* arr, int index, Value* val) {
+    if (index < 0 || index >= arr->length) {
+        printf("Hata: Dizi index sınırları dışında: %d (uzunluk: %d)\n", 
+               index, arr->length);
+        return;
+    }
+    
+    // Tip kontrolü (eğer typed array ise)
+    if (arr->elem_type != VAL_VOID && arr->elem_type != val->type) {
+        printf("Hata: Dizi sadece ");
+        switch (arr->elem_type) {
+            case VAL_INT: printf("int"); break;
+            case VAL_FLOAT: printf("float"); break;
+            case VAL_STRING: printf("str"); break;
+            case VAL_BOOL: printf("bool"); break;
+            default: printf("bilinmeyen tip"); break;
+        }
+        printf(" tipinde eleman kabul eder!\n");
+        return;
+    }
+    
+    value_free(arr->elements[index]);
+    arr->elements[index] = value_copy(val);
+}
+
+// ============================================================================
+// VALUE FONKSİYONLARI
+// ============================================================================
+
 Value* value_copy(Value* val) {
     if (!val) return NULL;
     
@@ -61,6 +162,21 @@ Value* value_copy(Value* val) {
         case VAL_BOOL:
             copy->data.bool_val = val->data.bool_val;
             break;
+        case VAL_ARRAY: {
+            Array* src = val->data.array_val;
+            Array* dst = (Array*)malloc(sizeof(Array));
+            dst->capacity = src->capacity;
+            dst->length = src->length;
+            dst->elem_type = src->elem_type;
+            dst->elements = (Value**)malloc(sizeof(Value*) * dst->capacity);
+            
+            for (int i = 0; i < src->length; i++) {
+                dst->elements[i] = value_copy(src->elements[i]);
+            }
+            
+            copy->data.array_val = dst;
+            break;
+        }
         default:
             break;
     }
@@ -74,6 +190,16 @@ void value_free(Value* val) {
     if (val->type == VAL_STRING && val->data.string_val) {
         free(val->data.string_val);
     }
+    
+    if (val->type == VAL_ARRAY && val->data.array_val) {
+        Array* arr = val->data.array_val;
+        for (int i = 0; i < arr->length; i++) {
+            value_free(arr->elements[i]);
+        }
+        free(arr->elements);
+        free(arr);
+    }
+    
     free(val);
 }
 
@@ -88,7 +214,7 @@ void value_print(Value* val) {
             printf("%d", val->data.int_val);
             break;
         case VAL_FLOAT:
-            printf("%f", val->data.float_val);
+            printf("%g", val->data.float_val);
             break;
         case VAL_STRING:
             printf("\"%s\"", val->data.string_val);
@@ -96,6 +222,18 @@ void value_print(Value* val) {
         case VAL_BOOL:
             printf("%s", val->data.bool_val ? "true" : "false");
             break;
+        case VAL_ARRAY: {
+            Array* arr = val->data.array_val;
+            printf("[");
+            for (int i = 0; i < arr->length; i++) {
+                value_print(arr->elements[i]);
+                if (i < arr->length - 1) {
+                    printf(", ");
+                }
+            }
+            printf("]");
+            break;
+        }
         case VAL_VOID:
             printf("void");
             break;
@@ -268,6 +406,45 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             
         case AST_BOOL_LITERAL:
             return value_create_bool(node->value.bool_value);
+        
+        case AST_ARRAY_LITERAL: {
+            // Dizi literal: [1, 2, 3]
+            Value* arr = value_create_array(node->element_count > 0 ? node->element_count : 4);
+            
+            for (int i = 0; i < node->element_count; i++) {
+                Value* elem = interpreter_eval_expression(interp, node->elements[i]);
+                array_push(arr->data.array_val, elem);
+                value_free(elem);
+            }
+            
+            return arr;
+        }
+        
+        case AST_ARRAY_ACCESS: {
+            // Array erişimi: arr[0]
+            Value* arr_val = symbol_table_get(interp->current_scope, node->name);
+            if (!arr_val) {
+                printf("Hata: Tanımlanmamış değişken '%s'\n", node->name);
+                exit(1);
+            }
+            
+            if (arr_val->type != VAL_ARRAY) {
+                printf("Hata: '%s' bir dizi değil\n", node->name);
+                exit(1);
+            }
+            
+            Value* index_val = interpreter_eval_expression(interp, node->index);
+            if (index_val->type != VAL_INT) {
+                printf("Hata: Dizi index integer olmalı\n");
+                value_free(index_val);
+                exit(1);
+            }
+            
+            int index = index_val->data.int_val;
+            value_free(index_val);
+            
+            return array_get(arr_val->data.array_val, index);
+        }
             
         case AST_IDENTIFIER: {
             Value* val = symbol_table_get(interp->current_scope, node->name);
@@ -625,6 +802,59 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 return value_create_bool(0);
             }
             
+            // length() - dizi veya string uzunluğu
+            if (strcmp(node->name, "length") == 0) {
+                if (node->argument_count > 0) {
+                    Value* arg = interpreter_eval_expression(interp, node->arguments[0]);
+                    int len = 0;
+                    
+                    if (arg->type == VAL_ARRAY) {
+                        len = arg->data.array_val->length;
+                    } else if (arg->type == VAL_STRING) {
+                        len = strlen(arg->data.string_val);
+                    }
+                    
+                    value_free(arg);
+                    return value_create_int(len);
+                }
+                return value_create_int(0);
+            }
+            
+            // push() - diziye eleman ekle
+            if (strcmp(node->name, "push") == 0) {
+                if (node->argument_count >= 2) {
+                    // İlk argüman: dizi değişkeni (identifier olarak gelir)
+                    if (node->arguments[0]->type == AST_IDENTIFIER) {
+                        char* arr_name = node->arguments[0]->name;
+                        Value* arr_val = symbol_table_get(interp->current_scope, arr_name);
+                        
+                        if (arr_val && arr_val->type == VAL_ARRAY) {
+                            Value* elem = interpreter_eval_expression(interp, node->arguments[1]);
+                            array_push(arr_val->data.array_val, elem);
+                            value_free(elem);
+                            return value_create_void();
+                        }
+                    }
+                }
+                return value_create_void();
+            }
+            
+            // pop() - diziden eleman çıkar
+            if (strcmp(node->name, "pop") == 0) {
+                if (node->argument_count >= 1) {
+                    // İlk argüman: dizi değişkeni (identifier olarak gelir)
+                    if (node->arguments[0]->type == AST_IDENTIFIER) {
+                        char* arr_name = node->arguments[0]->name;
+                        Value* arr_val = symbol_table_get(interp->current_scope, arr_name);
+                        
+                        if (arr_val && arr_val->type == VAL_ARRAY) {
+                            return array_pop(arr_val->data.array_val);
+                        }
+                    }
+                }
+                return value_create_void();
+            }
+            
             // Kullanıcı tanımlı fonksiyonlar
             Function* func = interpreter_get_function(interp, node->name);
             if (!func) {
@@ -697,6 +927,41 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
             Value* val = NULL;
             if (node->right) {
                 val = interpreter_eval_expression(interp, node->right);
+                
+                // Eğer tipli array tanımı ise ve değer de array ise, tip kontrolü yap
+                if (val->type == VAL_ARRAY) {
+                    ValueType required_type = VAL_VOID;
+                    
+                    switch (node->data_type) {
+                        case TYPE_ARRAY_INT: required_type = VAL_INT; break;
+                        case TYPE_ARRAY_FLOAT: required_type = VAL_FLOAT; break;
+                        case TYPE_ARRAY_STR: required_type = VAL_STRING; break;
+                        case TYPE_ARRAY_BOOL: required_type = VAL_BOOL; break;
+                        default: break;
+                    }
+                    
+                    // Array'in tipini güncelle
+                    if (required_type != VAL_VOID) {
+                        val->data.array_val->elem_type = required_type;
+                        
+                        // Mevcut elemanları kontrol et
+                        for (int i = 0; i < val->data.array_val->length; i++) {
+                            if (val->data.array_val->elements[i]->type != required_type) {
+                                printf("Hata: Array literal'deki tüm elemanlar ");
+                                switch (required_type) {
+                                    case VAL_INT: printf("int"); break;
+                                    case VAL_FLOAT: printf("float"); break;
+                                    case VAL_STRING: printf("str"); break;
+                                    case VAL_BOOL: printf("bool"); break;
+                                    default: break;
+                                }
+                                printf(" tipinde olmalı!\n");
+                                value_free(val);
+                                exit(1);
+                            }
+                        }
+                    }
+                }
             } else {
                 // Varsayılan değer
                 switch (node->data_type) {
@@ -712,6 +977,24 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                     case TYPE_BOOL:
                         val = value_create_bool(0);
                         break;
+                    case TYPE_ARRAY:
+                        val = value_create_array(4);  // Mixed type array
+                        break;
+                    case TYPE_ARRAY_INT:
+                        val = value_create_typed_array(4, VAL_INT);
+                        break;
+                    case TYPE_ARRAY_FLOAT:
+                        val = value_create_typed_array(4, VAL_FLOAT);
+                        break;
+                    case TYPE_ARRAY_STR:
+                        val = value_create_typed_array(4, VAL_STRING);
+                        break;
+                    case TYPE_ARRAY_BOOL:
+                        val = value_create_typed_array(4, VAL_BOOL);
+                        break;
+                    case TYPE_ARRAY_JSON:
+                        val = value_create_array(4);  // JSON-like mixed array
+                        break;
                     default:
                         val = value_create_void();
                         break;
@@ -725,7 +1008,35 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
             
         case AST_ASSIGNMENT: {
             Value* val = interpreter_eval_expression(interp, node->right);
-            symbol_table_set(interp->current_scope, node->name, val);
+            
+            // Eğer sol taraf array access ise (arr[0] = 5)
+            if (node->left && node->left->type == AST_ARRAY_ACCESS) {
+                ASTNode* access = node->left;
+                Value* arr_val = symbol_table_get(interp->current_scope, access->name);
+                
+                if (!arr_val || arr_val->type != VAL_ARRAY) {
+                    printf("Hata: '%s' bir dizi değil\n", access->name);
+                    value_free(val);
+                    exit(1);
+                }
+                
+                Value* index_val = interpreter_eval_expression(interp, access->index);
+                if (index_val->type != VAL_INT) {
+                    printf("Hata: Dizi index integer olmalı\n");
+                    value_free(val);
+                    value_free(index_val);
+                    exit(1);
+                }
+                
+                int index = index_val->data.int_val;
+                value_free(index_val);
+                
+                array_set(arr_val->data.array_val, index, val);
+            } else {
+                // Normal assignment
+                symbol_table_set(interp->current_scope, node->name, val);
+            }
+            
             value_free(val);
             break;
         }

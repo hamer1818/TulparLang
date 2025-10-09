@@ -10,10 +10,12 @@ typedef enum {
     AST_FLOAT_LITERAL,
     AST_STRING_LITERAL,
     AST_BOOL_LITERAL,
+    AST_ARRAY_LITERAL,    // [1, 2, 3]
     AST_IDENTIFIER,
     AST_BINARY_OP,        // +, -, *, /, ==, !=, <, >, <=, >=
     AST_UNARY_OP,         // -, !
     AST_FUNCTION_CALL,    // fonksiyon çağrısı
+    AST_ARRAY_ACCESS,     // arr[0]
     
     // İfadeler (Statements)
     AST_VARIABLE_DECL,    // int x = 5;
@@ -39,6 +41,12 @@ typedef enum {
     TYPE_FLOAT,
     TYPE_STRING,
     TYPE_BOOL,
+    TYPE_ARRAY,         // Mixed type array
+    TYPE_ARRAY_INT,     // Int-only array
+    TYPE_ARRAY_FLOAT,   // Float-only array
+    TYPE_ARRAY_STR,     // String-only array
+    TYPE_ARRAY_BOOL,    // Bool-only array
+    TYPE_ARRAY_JSON,    // JSON-like mixed array
     TYPE_VOID
 } DataType;
 
@@ -88,6 +96,11 @@ typedef struct ASTNode {
     // Fonksiyon çağrısı için
     struct ASTNode** arguments;
     int argument_count;
+    
+    // Dizi (Array) için
+    struct ASTNode** elements;    // Dizi elemanları
+    int element_count;            // Eleman sayısı
+    struct ASTNode* index;        // Array access için index (arr[index])
     
 } ASTNode;
 

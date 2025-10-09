@@ -119,6 +119,12 @@ static Token* lexer_read_identifier(Lexer* lexer) {
     else if (strcmp(buffer, "float") == 0) type = TOKEN_FLOAT_TYPE;
     else if (strcmp(buffer, "str") == 0) type = TOKEN_STR_TYPE;
     else if (strcmp(buffer, "bool") == 0) type = TOKEN_BOOL_TYPE;
+    else if (strcmp(buffer, "array") == 0) type = TOKEN_ARRAY_TYPE;
+    else if (strcmp(buffer, "arrayInt") == 0) type = TOKEN_ARRAY_INT;
+    else if (strcmp(buffer, "arrayFloat") == 0) type = TOKEN_ARRAY_FLOAT;
+    else if (strcmp(buffer, "arrayStr") == 0) type = TOKEN_ARRAY_STR;
+    else if (strcmp(buffer, "arrayBool") == 0) type = TOKEN_ARRAY_BOOL;
+    else if (strcmp(buffer, "arrayJson") == 0) type = TOKEN_ARRAY_JSON;
     else if (strcmp(buffer, "func") == 0) type = TOKEN_FUNC;
     else if (strcmp(buffer, "return") == 0) type = TOKEN_RETURN;
     else if (strcmp(buffer, "if") == 0) type = TOKEN_IF;
@@ -235,6 +241,8 @@ Token* lexer_next_token(Lexer* lexer) {
             case ')': return token_create(TOKEN_RPAREN, ")", start_line, start_column);
             case '{': return token_create(TOKEN_LBRACE, "{", start_line, start_column);
             case '}': return token_create(TOKEN_RBRACE, "}", start_line, start_column);
+            case '[': return token_create(TOKEN_LBRACKET, "[", start_line, start_column);
+            case ']': return token_create(TOKEN_RBRACKET, "]", start_line, start_column);
             case ';': return token_create(TOKEN_SEMICOLON, ";", start_line, start_column);
             case ',': return token_create(TOKEN_COMMA, ",", start_line, start_column);
             case '=':

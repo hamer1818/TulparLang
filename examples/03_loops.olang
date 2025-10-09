@@ -1,0 +1,172 @@
+// ============================================
+// DÖNGÜLER (WHILE, FOR, FOR..IN)
+// ============================================
+
+print("=== DÖNGÜ ÖRNEKLERİ ===");
+print("");
+
+// ----------------------------------------
+// 1. WHILE DÖNGÜSÜ
+// ----------------------------------------
+print("--- While Döngüsü ---");
+
+int i = 0;
+while (i < 5) {
+    print("while: i =", i);
+    i++;
+}
+print("");
+
+// ----------------------------------------
+// 2. WHILE İLE TOPLAM HESAPLAMA
+// ----------------------------------------
+print("--- While ile Toplam ---");
+
+int sayac = 1;
+int toplam = 0;
+
+while (sayac <= 10) {
+    toplam += sayac;
+    sayac++;
+}
+
+print("1'den 10'a kadar toplam:", toplam);
+print("");
+
+// ----------------------------------------
+// 3. FOR DÖNGÜSÜ (C-style)
+// ----------------------------------------
+print("--- For Döngüsü (C-style) ---");
+
+for (int j = 0; j < 5; j++) {
+    print("for: j =", j);
+}
+print("");
+
+// ----------------------------------------
+// 4. FOR İLE ÇARPIM TABLOSU
+// ----------------------------------------
+print("--- Çarpım Tablosu (5) ---");
+
+for (int k = 1; k <= 10; k++) {
+    int sonuc = 5 * k;
+    print("5 x", k, "=", sonuc);
+}
+print("");
+
+// ----------------------------------------
+// 5. FOR..IN (FOREACH)
+// ----------------------------------------
+print("--- For..in (Foreach) ---");
+
+for (n in range(5)) {
+    print("foreach: n =", n);
+}
+print("");
+
+// ----------------------------------------
+// 6. FOR..IN İLE KARE ALMA
+// ----------------------------------------
+print("--- Kareleri Hesapla ---");
+
+for (num in range(10)) {
+    int kare = num * num;
+    print(num, "² =", kare);
+}
+print("");
+
+// ----------------------------------------
+// 7. İÇ İÇE DÖNGÜLER
+// ----------------------------------------
+print("--- İç İçe Döngüler (Çarpım Tablosu) ---");
+
+for (int x = 1; x <= 5; x++) {
+    for (int y = 1; y <= 5; y++) {
+        int carpim = x * y;
+        print(x, "x", y, "=", carpim);
+    }
+    print("---");
+}
+print("");
+
+// ----------------------------------------
+// 8. BREAK KULLANIMI (Faz 1)
+// ----------------------------------------
+print("--- Break Örneği ---");
+
+for (int m = 0; m < 10; m++) {
+    if (m == 5) {
+        print("Break: m = 5'te durdu!");
+        break;
+    }
+    print("m =", m);
+}
+print("");
+
+// ----------------------------------------
+// 9. CONTINUE KULLANIMI (Faz 1)
+// ----------------------------------------
+print("--- Continue Örneği ---");
+
+for (int p = 0; p < 10; p++) {
+    if (p == 3 || p == 5 || p == 7) {
+        continue;  // 3, 5, 7'yi atla
+    }
+    print("p =", p);
+}
+print("");
+
+// ----------------------------------------
+// 10. BREAK & CONTINUE BİRLİKTE
+// ----------------------------------------
+print("--- Break & Continue Birlikte ---");
+
+for (int q = 0; q < 20; q++) {
+    if (q == 15) {
+        print("Break: q = 15'te durdu!");
+        break;
+    }
+    if (q == 5 || q == 10) {
+        continue;  // 5 ve 10'u atla
+    }
+    print("q =", q);
+}
+print("");
+
+// ----------------------------------------
+// 11. WHILE İLE BREAK
+// ----------------------------------------
+print("--- While + Break ---");
+
+int w = 0;
+while (w < 100) {
+    if (w == 7) {
+        print("While break: w = 7");
+        break;
+    }
+    print("w =", w);
+    w++;
+}
+print("");
+
+// ----------------------------------------
+// 12. FAKTÖRİYEL HESAPLAMA
+// ----------------------------------------
+print("--- Faktöriyel (5!) ---");
+
+int fakt = 1;
+for (int f = 1; f <= 5; f++) {
+    fakt *= f;
+}
+print("5! =", fakt);
+print("");
+
+// ----------------------------------------
+// SONUÇ
+// ----------------------------------------
+print("=================================");
+print("✅ Tüm döngü örnekleri çalıştı!");
+print("=================================");
+print("");
+print("Sıradaki adım: 04_functions.olang");
+

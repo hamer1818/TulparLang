@@ -1,4 +1,4 @@
-# OLang - Kendi Programlama Diliniz! 🚀
+# OLang - Hızlı Başlangıç 🚀
 
 **OLang**, C tabanlı, basit ve güçlü bir programlama dilidir. Lexer, Parser ve Interpreter ile tam çalışan bir dil implementasyonu.
 
@@ -9,6 +9,28 @@
 - `float` - Ondalıklı sayılar
 - `str` - String (metinler)
 - `bool` - Boolean (true/false)
+- `array` - Karışık tipli diziler (PHP tarzı) ✨ Faz 2
+- `arrayInt` - Sadece integer dizileri (tip güvenlikli) ✨
+- `arrayFloat` - Sadece float dizileri (tip güvenlikli) ✨
+- `arrayStr` - Sadece string dizileri (tip güvenlikli) ✨
+- `arrayBool` - Sadece boolean dizileri (tip güvenlikli) ✨
+- `arrayJson` - JSON-like karma diziler (nested destekli) ✨ YENİ!
+
+### Operatörler
+
+#### Aritmetik
+- `+`, `-`, `*`, `/` - Temel işlemler
+- `++`, `--` - Increment/Decrement (Faz 1 ✨)
+- `+=`, `-=`, `*=`, `/=` - Compound Assignment (Faz 1 ✨)
+
+#### Karşılaştırma
+- `==`, `!=` - Eşitlik kontrolü
+- `<`, `>`, `<=`, `>=` - Büyük-küçük karşılaştırma
+
+#### Mantıksal
+- `&&` - AND (Faz 1 ✨)
+- `||` - OR (Faz 1 ✨)
+- `!` - NOT (Faz 1 ✨)
 
 ### Söz Dizimi (Syntax)
 
@@ -18,6 +40,16 @@ int x = 5;
 float pi = 3.14;
 str isim = "Ahmet";
 bool aktif = true;
+
+// Increment/Decrement (Faz 1)
+x++;     // x = 6
+x--;     // x = 5
+
+// Compound Assignment (Faz 1)
+x += 10;  // x = 15
+x -= 3;   // x = 12
+x *= 2;   // x = 24
+x /= 4;   // x = 6
 ```
 
 #### Fonksiyon Tanımlama
@@ -35,25 +67,48 @@ int toplam = topla(5, 3);  // toplam = 8
 
 #### If/Else Yapısı
 ```olang
+// Basit if/else
 if (x > 5) {
     int y = 10;
 } else {
     int y = 0;
 }
+
+// Mantıksal operatörler ile (Faz 1)
+if (x > 5 && y < 10) {
+    print("Hem x > 5 hem y < 10");
+}
+
+if (x == 0 || y == 0) {
+    print("En az biri sıfır");
+}
+
+bool tersYon = !aktif;  // NOT operatörü
 ```
 
 #### While Döngüsü
 ```olang
 int i = 0;
 while (i < 10) {
-    i = i + 1;
+    i++;  // Increment ile (Faz 1)
+    
+    if (i == 5) continue;  // Continue (Faz 1)
+    if (i == 8) break;     // Break (Faz 1)
 }
 ```
 
 #### For Döngüsü (C-style)
 ```olang
-for (int i = 0; i < 10; i = i + 1) {
+// Klasik for döngüsü
+for (int i = 0; i < 10; i++) {  // i++ kullanımı (Faz 1)
+    if (i == 3) continue;  // 3'ü atla
+    if (i == 7) break;     // 7'de dur
     print("i =", i);
+}
+
+// Compound assignment ile
+for (int i = 0; i < 100; i += 10) {  // 10'ar 10'ar artır (Faz 1)
+    print("i =", i);  // 0, 10, 20, ..., 90
 }
 ```
 
@@ -77,6 +132,44 @@ func fibonacci(int n) {
 }
 
 int fib5 = fibonacci(5);  // fib5 = 5
+```
+
+#### Diziler (Arrays) - Faz 2 ✨
+```olang
+// 1. Karışık tipli diziler (mixed)
+array karma = [1, "Ali", 3.14, true];
+print(karma);  // [1, "Ali", 3.14, true]
+
+// 2. Tip güvenlikli diziler (type-safe)
+arrayInt sayilar = [1, 2, 3, 4, 5];
+arrayStr isimler = ["Ali", "Veli", "Ayşe"];
+arrayFloat floats = [1.5, 2.5, 3.14];
+arrayBool flags = [true, false, true];
+
+// 3. JSON-like diziler (nested destekli) ✨ YENİ!
+arrayJson kullanici = ["Ali", 25, true, "Mühendis"];
+arrayJson apiResponse = [200, "Success", true];
+arrayJson nested = [["user1", 25], ["user2", 30]];  // İç içe!
+
+// 4. Erişim ve değiştirme
+int ilk = sayilar[0];  // 1
+sayilar[2] = 100;      // OK
+str isim = kullanici[0];  // "Ali"
+
+// 5. Tip güvenliği
+push(sayilar, 6);      // ✅ OK (int)
+push(sayilar, "hata"); // ❌ HATA! Sadece int kabul eder
+push(kullanici, "yeni");  // ✅ OK (json mixed)
+
+// 6. Built-in fonksiyonlar
+int uzunluk = length(sayilar);  // 5
+push(sayilar, 6);               // Eleman ekle
+int son = pop(sayilar);         // Son elemanı çıkar
+
+// 7. Döngü ile
+for (int i = 0; i < length(sayilar); i++) {
+    print(sayilar[i]);
+}
 ```
 
 ## 🔧 Derleme ve Çalıştırma
@@ -145,19 +238,24 @@ wsl ./olang mycode.olang    # Windows
 ```
 OLang/
 ├── src/
-│   ├── lexer.c         # Token'lara ayırma
-│   ├── lexer.h
-│   ├── parser.c        # Abstract Syntax Tree oluşturma
-│   ├── parser.h
-│   ├── interpreter.c   # Kodu çalıştırma motoru
-│   ├── interpreter.h
+│   ├── lexer/
+│   │   ├── lexer.c     # Token'lara ayırma
+│   │   └── lexer.h
+│   ├── parser/
+│   │   ├── parser.c    # Abstract Syntax Tree oluşturma
+│   │   └── parser.h
+│   ├── interpreter/
+│   │   ├── interpreter.c   # Kodu çalıştırma motoru
+│   │   └── interpreter.h
 │   └── main.c          # Ana program
 ├── build/              # Derleme çıktıları
 ├── examples/           # Örnek kodlar
 ├── Makefile
-├── build.sh            # Linux/Mac/WSL build script
-├── build.bat           # Windows build script
-└── README.md
+├── build.sh
+├── README.md
+├── KULLANIM.md         # Detaylı kullanım kılavuzu
+├── QUICKSTART.md       # Hızlı başlangıç
+└── GELECEK_OZELLIKLER.md   # Roadmap
 ```
 
 ## 🏗️ Mimari
@@ -191,6 +289,33 @@ AST'yi dolaşarak kodu çalıştırır:
 - `input("prompt")` - Kullanıcıdan string okur
 - `inputInt("prompt")` - Kullanıcıdan integer okur
 - `inputFloat("prompt")` - Kullanıcıdan float okur
+
+### Type Conversion Fonksiyonları (Faz 1 ✨)
+- `toInt(value)` - Herhangi bir değeri integer'a çevirir
+- `toFloat(value)` - Herhangi bir değeri float'a çevirir
+- `toString(value)` - Herhangi bir değeri string'e çevirir
+- `toBool(value)` - Herhangi bir değeri boolean'a çevirir
+
+```olang
+// Örnekler
+int sayi = toInt("123");           // 123
+float ondalik = toFloat("3.14");   // 3.14
+str metin = toString(42);          // "42"
+bool deger = toBool(1);            // true
+```
+
+### Array Fonksiyonları (Faz 2 ✨)
+- `length(arr)` - Dizi uzunluğunu döner
+- `push(arr, value)` - Diziye eleman ekler
+- `pop(arr)` - Diziden son elemanı çıkarır ve döner
+
+```olang
+// Örnekler
+array sayilar = [1, 2, 3];
+int len = length(sayilar);    // 3
+push(sayilar, 4);              // [1, 2, 3, 4]
+int son = pop(sayilar);        // 4, dizi: [1, 2, 3]
+```
 
 ### Yardımcı Fonksiyonlar
 - `range(n)` - 0'dan n'e kadar sayı dizisi (foreach için)
@@ -293,5 +418,5 @@ Bu proje eğitim amaçlı geliştirilmiştir. Özgürce kullanabilir, değiştir
 
 ---
 
-**OLang** - Kendi dilinizi yaratın! 🎉
+**OLang** - OLang dilini kullanın! 🎉
 

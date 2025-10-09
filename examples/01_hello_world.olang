@@ -1,0 +1,146 @@
+// ============================================
+// BAŞLANGIÇ ÖRNEĞİ: OLang'e Hoş Geldiniz!
+// ============================================
+// Bu dosya OLang'in temel özelliklerini gösterir
+
+print("=== OLANG'E HOŞ GELDİNİZ! ===");
+print("");
+
+// ----------------------------------------
+// 1. DEĞİŞKENLER VE VERİ TİPLERİ
+// ----------------------------------------
+print("--- Veri Tipleri ---");
+
+int sayi = 42;
+float pi = 3.14159;
+str mesaj = "Merhaba OLang!";
+bool basarili = true;
+
+print("Integer:", sayi);
+print("Float:", pi);
+print("String:", mesaj);
+print("Boolean:", basarili);
+print("");
+
+// ----------------------------------------
+// 2. ARİTMETİK İŞLEMLER
+// ----------------------------------------
+print("--- Aritmetik İşlemler ---");
+
+int a = 20;
+int b = 8;
+
+int toplam = a + b;
+int fark = a - b;
+int carpim = a * b;
+int bolum = a / b;
+
+print("20 + 8 =", toplam);
+print("20 - 8 =", fark);
+print("20 * 8 =", carpim);
+print("20 / 8 =", bolum);
+print("");
+
+// ----------------------------------------
+// 3. KARŞILAŞTIRMA OPERATÖRLERİ
+// ----------------------------------------
+print("--- Karşılaştırmalar ---");
+
+bool buyuk = a > b;
+bool esit = a == b;
+bool kucuk = a < b;
+
+print("20 > 8 =", buyuk);
+print("20 == 8 =", esit);
+print("20 < 8 =", kucuk);
+print("");
+
+// ----------------------------------------
+// 4. MANTIKSAL OPERATÖRLER (Faz 1)
+// ----------------------------------------
+print("--- Mantıksal Operatörler ---");
+
+bool sonuc1 = (a > 10) && (b < 15);  // AND
+bool sonuc2 = (a > 100) || (b < 15); // OR
+bool sonuc3 = !(a == b);              // NOT
+
+print("(20 > 10) && (8 < 15) =", sonuc1);
+print("(20 > 100) || (8 < 15) =", sonuc2);
+print("!(20 == 8) =", sonuc3);
+print("");
+
+// ----------------------------------------
+// 5. INCREMENT / DECREMENT (Faz 1)
+// ----------------------------------------
+print("--- Increment & Decrement ---");
+
+int sayac = 5;
+print("Başlangıç:", sayac);
+
+sayac++;
+print("sayac++ sonrası:", sayac);
+
+sayac--;
+print("sayac-- sonrası:", sayac);
+print("");
+
+// ----------------------------------------
+// 6. COMPOUND ASSIGNMENT (Faz 1)
+// ----------------------------------------
+print("--- Compound Assignment ---");
+
+int deger = 10;
+print("Başlangıç değer:", deger);
+
+deger += 5;
+print("deger += 5 →", deger);
+
+deger -= 3;
+print("deger -= 3 →", deger);
+
+deger *= 2;
+print("deger *= 2 →", deger);
+
+deger /= 4;
+print("deger /= 4 →", deger);
+print("");
+
+// ----------------------------------------
+// 7. STRING İŞLEMLERİ
+// ----------------------------------------
+print("--- String İşlemleri ---");
+
+str isim = "OLang";
+str versiyon = "1.2.1";
+str info = "Dil: OLang, Versiyon: 1.2.1";
+
+print(info);
+print("");
+
+// ----------------------------------------
+// 8. TİP DÖNÜŞTÜRMELERİ (Faz 1)
+// ----------------------------------------
+print("--- Tip Dönüşümleri ---");
+
+str numStr = "123";
+int numInt = toInt(numStr);
+print("String '123' → int:", numInt);
+
+int yas = 25;
+str yasStr = toString(yas);
+print("int 25 → string:", yasStr);
+
+float ondalik = 3.14;
+int tam = toInt(ondalik);
+print("float 3.14 → int:", tam);
+print("");
+
+// ----------------------------------------
+// 9. SONUÇ
+// ----------------------------------------
+print("=================================");
+print("✅ Tüm temel özellikler çalışıyor!");
+print("=================================");
+print("");
+print("Sıradaki adım: 02_control_flow.olang");
+

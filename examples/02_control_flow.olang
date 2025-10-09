@@ -1,0 +1,183 @@
+// ============================================
+// KONTROL AKIŞI (IF/ELSE)
+// ============================================
+
+print("=== KONTROL AKIŞI ÖRNEKLERİ ===");
+print("");
+
+// ----------------------------------------
+// 1. TEMEL IF/ELSE
+// ----------------------------------------
+print("--- Basit If/Else ---");
+
+int yas = 18;
+str durum = "";
+
+if (yas >= 18) {
+    print("Yetişkinsiniz!");
+} else {
+    print("Çocuksunuz!");
+}
+print("");
+
+// ----------------------------------------
+// 2. İÇ İÇE IF/ELSE
+// ----------------------------------------
+print("--- Notlara Göre Değerlendirme ---");
+
+int not = 75;
+
+if (not >= 90) {
+    print("Not: A (Mükemmel!)");
+} else {
+    if (not >= 80) {
+        print("Not: B (Çok İyi!)");
+    } else {
+        if (not >= 70) {
+            print("Not: C (İyi!)");
+        } else {
+            if (not >= 60) {
+                print("Not: D (Geçer)");
+            } else {
+                print("Not: F (Kaldı)");
+            }
+        }
+    }
+}
+print("");
+
+// ----------------------------------------
+// 3. MANTIKSAL OPERATÖRLER İLE IF
+// ----------------------------------------
+print("--- Mantıksal Operatörler ---");
+
+int sayi = 50;
+
+// AND operatörü
+if (sayi > 30 && sayi < 100) {
+    print("✅ Sayı 30 ile 100 arasında");
+}
+
+// OR operatörü
+if (sayi == 50 || sayi == 100) {
+    print("✅ Sayı 50 veya 100");
+}
+
+// NOT operatörü
+bool negatif = sayi < 0;
+if (!negatif) {
+    print("✅ Sayı pozitif veya sıfır");
+}
+print("");
+
+// ----------------------------------------
+// 4. KARMAŞIK MANTIKSAL İFADELER
+// ----------------------------------------
+print("--- Karmaşık Koşullar ---");
+
+int x = 15;
+int y = 25;
+int z = 20;
+
+if ((x < y) && (y > z) && (z > 10)) {
+    print("✅ Tüm koşullar sağlandı!");
+}
+
+if ((x == 15) || (y == 30) || (z == 25)) {
+    print("✅ En az bir koşul doğru!");
+}
+print("");
+
+// ----------------------------------------
+// 5. BOOL DEĞİŞKENLERLE KONTROL
+// ----------------------------------------
+print("--- Boolean Kontroller ---");
+
+bool aktif = true;
+bool premium = false;
+
+if (aktif && !premium) {
+    print("Hesap aktif ama premium değil");
+}
+
+if (aktif || premium) {
+    print("Hesap ya aktif ya da premium");
+}
+print("");
+
+// ----------------------------------------
+// 6. SAYILARI KARŞILAŞTIRMA
+// ----------------------------------------
+print("--- Sayı Karşılaştırma ---");
+
+int a = 100;
+int b = 50;
+
+if (a > b) {
+    print("a, b'den büyüktür");
+}
+
+if (a >= b) {
+    print("a, b'den büyük veya eşittir");
+}
+
+if (a != b) {
+    print("a, b'ye eşit değildir");
+}
+print("");
+
+// ----------------------------------------
+// 7. TEK SATIRLIK KOŞULLAR
+// ----------------------------------------
+print("--- Basit Kontroller ---");
+
+int puan = 85;
+
+if (puan >= 50) {
+    print("✅ Geçtiniz! Puan:", puan);
+}
+
+if (puan < 100) {
+    print("💡 Daha iyi yapabilirsiniz!");
+}
+print("");
+
+// ----------------------------------------
+// 8. ÇOKLU KOŞUL KONTROLÜ
+// ----------------------------------------
+print("--- Gün Belirleme (Simulasyon) ---");
+
+int gun = 3;  // 1=Pzt, 2=Sal, 3=Çar, ...
+
+if (gun == 1) {
+    print("Bugün Pazartesi");
+} else {
+    if (gun == 2) {
+        print("Bugün Salı");
+    } else {
+        if (gun == 3) {
+            print("Bugün Çarşamba");
+        } else {
+            if (gun == 4) {
+                print("Bugün Perşembe");
+            } else {
+                if (gun == 5) {
+                    print("Bugün Cuma");
+                } else {
+                    print("Bugün Hafta Sonu!");
+                }
+            }
+        }
+    }
+}
+print("");
+
+// ----------------------------------------
+// SONUÇ
+// ----------------------------------------
+print("=================================");
+print("✅ Kontrol akışı örnekleri tamam!");
+print("=================================");
+print("");
+print("Sıradaki adım: 03_loops.olang");
+

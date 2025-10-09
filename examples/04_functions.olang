@@ -1,0 +1,246 @@
+// ============================================
+// FONKSİYONLAR
+// ============================================
+
+print("=== FONKSİYON ÖRNEKLERİ ===");
+print("");
+
+// ----------------------------------------
+// 1. TEMEL FONKSİYONLAR
+// ----------------------------------------
+
+func topla(int a, int b) {
+    return a + b;
+}
+
+func cikar(int a, int b) {
+    return a - b;
+}
+
+func carp(int a, int b) {
+    return a * b;
+}
+
+func bol(int a, int b) {
+    return a / b;
+}
+
+print("--- Temel Fonksiyonlar ---");
+int sonuc1 = topla(10, 5);
+int sonuc2 = cikar(10, 5);
+int sonuc3 = carp(10, 5);
+int sonuc4 = bol(10, 5);
+
+print("topla(10, 5) =", sonuc1);
+print("cikar(10, 5) =", sonuc2);
+print("carp(10, 5) =", sonuc3);
+print("bol(10, 5) =", sonuc4);
+print("");
+
+// ----------------------------------------
+// 2. MATEMATİK FONKSİYONLARI
+// ----------------------------------------
+
+func kare(int n) {
+    return n * n;
+}
+
+func kup(int n) {
+    return n * n * n;
+}
+
+func mutlak_deger(int n) {
+    if (n < 0) {
+        return 0 - n;
+    }
+    return n;
+}
+
+func max(int a, int b) {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+func min(int a, int b) {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+print("--- Matematik Fonksiyonları ---");
+print("kare(7) =", kare(7));
+print("kup(3) =", kup(3));
+print("mutlak_deger(-15) =", mutlak_deger(0-15));
+print("max(10, 20) =", max(10, 20));
+print("min(10, 20) =", min(10, 20));
+print("");
+
+// ----------------------------------------
+// 3. REKURSİF FONKSİYONLAR
+// ----------------------------------------
+
+// Faktöriyel
+func faktoriyel(int n) {
+    if (n <= 1) {
+        return 1;
+    }
+    int onceki = faktoriyel(n - 1);
+    return n * onceki;
+}
+
+// Fibonacci
+func fibonacci(int n) {
+    if (n <= 1) {
+        return n;
+    }
+    int a = fibonacci(n - 1);
+    int b = fibonacci(n - 2);
+    return a + b;
+}
+
+// Üs alma (a^b)
+func power(int a, int b) {
+    if (b == 0) {
+        return 1;
+    }
+    if (b == 1) {
+        return a;
+    }
+    int prev = power(a, b - 1);
+    return a * prev;
+}
+
+print("--- Rekursif Fonksiyonlar ---");
+print("faktoriyel(5) =", faktoriyel(5));
+print("faktoriyel(7) =", faktoriyel(7));
+print("fibonacci(8) =", fibonacci(8));
+print("fibonacci(10) =", fibonacci(10));
+print("power(2, 5) =", power(2, 5));
+print("power(3, 4) =", power(3, 4));
+print("");
+
+// ----------------------------------------
+// 4. BOOL DÖNDÜREN FONKSİYONLAR
+// ----------------------------------------
+
+func cift_mi(int n) {
+    int kalan = n - ((n / 2) * 2);
+    if (kalan == 0) {
+        return 1;  // true
+    }
+    return 0;  // false
+}
+
+func pozitif_mi(int n) {
+    if (n > 0) {
+        return 1;
+    }
+    return 0;
+}
+
+func aralikta_mi(int n, int min, int max) {
+    if (n >= min && n <= max) {
+        return 1;
+    }
+    return 0;
+}
+
+print("--- Boolean Fonksiyonları ---");
+print("cift_mi(4) =", cift_mi(4));
+print("cift_mi(7) =", cift_mi(7));
+print("pozitif_mi(10) =", pozitif_mi(10));
+print("pozitif_mi(-5) =", pozitif_mi(0-5));
+print("aralikta_mi(50, 1, 100) =", aralikta_mi(50, 1, 100));
+print("aralikta_mi(150, 1, 100) =", aralikta_mi(150, 1, 100));
+print("");
+
+// ----------------------------------------
+// 5. İÇ İÇE FONKSİYON ÇAĞRILARI
+// ----------------------------------------
+
+func toplam_kareleri(int a, int b) {
+    int kare_a = kare(a);
+    int kare_b = kare(b);
+    return topla(kare_a, kare_b);
+}
+
+func ortalama(int a, int b, int c) {
+    int t1 = topla(a, b);
+    int t2 = topla(t1, c);
+    return bol(t2, 3);
+}
+
+print("--- İç İçe Fonksiyon Çağrıları ---");
+print("toplam_kareleri(3, 4) =", toplam_kareleri(3, 4));
+print("ortalama(10, 20, 30) =", ortalama(10, 20, 30));
+print("");
+
+// ----------------------------------------
+// 6. STRING FONKSİYONLARI
+// ----------------------------------------
+
+func selamla(str isim) {
+    print("Merhaba,", isim, "!");
+}
+
+func bilgi_ver(str ad, int yas) {
+    print("Ad:", ad);
+    print("Yaş:", yas);
+    int dogum = 2025 - yas;
+    print("Doğum Yılı (yaklaşık):", dogum);
+}
+
+print("--- String Fonksiyonları ---");
+selamla("Ali");
+selamla("Ayşe");
+print("");
+bilgi_ver("Mehmet", 25);
+print("");
+
+// ----------------------------------------
+// 7. ÇOKLU PARAMETRE
+// ----------------------------------------
+
+func carpim_tablosu(int sayi, int limit) {
+    print("Çarpım Tablosu:", sayi);
+    for (int i = 1; i <= limit; i++) {
+        int sonuc = sayi * i;
+        print(sayi, "x", i, "=", sonuc);
+    }
+}
+
+print("--- Çoklu Parametre ---");
+carpim_tablosu(7, 5);
+print("");
+
+// ----------------------------------------
+// 8. FONKSİYON + DÖNGÜ
+// ----------------------------------------
+
+func toplam_aralik(int baslangic, int bitis) {
+    int toplam = 0;
+    for (int i = baslangic; i <= bitis; i++) {
+        toplam += i;
+    }
+    return toplam;
+}
+
+print("--- Fonksiyon + Döngü ---");
+int t1 = toplam_aralik(1, 10);
+int t2 = toplam_aralik(1, 100);
+print("toplam_aralik(1, 10) =", t1);
+print("toplam_aralik(1, 100) =", t2);
+print("");
+
+// ----------------------------------------
+// SONUÇ
+// ----------------------------------------
+print("=================================");
+print("✅ Tüm fonksiyon örnekleri çalıştı!");
+print("=================================");
+print("");
+print("Sıradaki adım: 05_arrays.olang");
+

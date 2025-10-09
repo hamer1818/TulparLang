@@ -8,6 +8,12 @@ typedef enum {
     TOKEN_FLOAT_TYPE,    // "float"
     TOKEN_STR_TYPE,      // "str"
     TOKEN_BOOL_TYPE,     // "bool"
+    TOKEN_ARRAY_TYPE,    // "array" (mixed)
+    TOKEN_ARRAY_INT,     // "arrayInt"
+    TOKEN_ARRAY_FLOAT,   // "arrayFloat"
+    TOKEN_ARRAY_STR,     // "arrayStr"
+    TOKEN_ARRAY_BOOL,    // "arrayBool"
+    TOKEN_ARRAY_JSON,    // "arrayJson" (JSON-like mixed)
     
     // Anahtar kelimeler
     TOKEN_FUNC,          // "func"
@@ -55,6 +61,8 @@ typedef enum {
     TOKEN_RPAREN,        // )
     TOKEN_LBRACE,        // {
     TOKEN_RBRACE,        // }
+    TOKEN_LBRACKET,      // [
+    TOKEN_RBRACKET,      // ]
     TOKEN_SEMICOLON,     // ;
     TOKEN_COMMA,         // ,
     
