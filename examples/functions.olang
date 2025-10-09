@@ -1,0 +1,25 @@
+// Basit toplama fonksiyonu
+func topla(int a, int b) {
+    int sonuc = a + b;
+    return sonuc;
+}
+
+// Kare alma fonksiyonu
+func kare(int n) {
+    return n * n;
+}
+
+// Faktöriyel (recursive)
+func faktoriyel(int n) {
+    if (n <= 1) {
+        return 1;
+    }
+    int onceki = faktoriyel(n - 1);
+    return n * onceki;
+}
+
+// Fonksiyonları kullan
+int toplam = topla(10, 20);
+int kare_sonuc = kare(7);
+int fakt5 = faktoriyel(5);
+

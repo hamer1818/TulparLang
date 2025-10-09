@@ -1,0 +1,23 @@
+// Fibonacci dizisi (recursive)
+func fibonacci(int n) {
+    if (n <= 1) {
+        return n;
+    }
+    int a = fibonacci(n - 1);
+    int b = fibonacci(n - 2);
+    return a + b;
+}
+
+// İlk 10 Fibonacci sayısını hesapla
+int fib0 = fibonacci(0);   // 0
+int fib1 = fibonacci(1);   // 1
+int fib2 = fibonacci(2);   // 1
+int fib3 = fibonacci(3);   // 2
+int fib4 = fibonacci(4);   // 3
+int fib5 = fibonacci(5);   // 5
+int fib6 = fibonacci(6);   // 8
+int fib7 = fibonacci(7);   // 13
+int fib8 = fibonacci(8);   // 21
+int fib9 = fibonacci(9);   // 34
+int fib10 = fibonacci(10); // 55
+

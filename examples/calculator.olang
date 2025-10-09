@@ -1,0 +1,48 @@
+// Basit hesap makinesi fonksiyonları
+
+func topla(int a, int b) {
+    return a + b;
+}
+
+func cikar(int a, int b) {
+    return a - b;
+}
+
+func carp(int a, int b) {
+    return a * b;
+}
+
+func bol(int a, int b) {
+    return a / b;
+}
+
+func mutlak_deger(int n) {
+    if (n < 0) {
+        return 0 - n;
+    }
+    return n;
+}
+
+func max(int a, int b) {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+func min(int a, int b) {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+// Kullanım örnekleri
+int sonuc1 = topla(10, 5);       // 15
+int sonuc2 = cikar(10, 5);       // 5
+int sonuc3 = carp(10, 5);        // 50
+int sonuc4 = bol(10, 5);         // 2
+int sonuc5 = mutlak_deger(0-7);  // 7
+int sonuc6 = max(10, 20);        // 20
+int sonuc7 = min(10, 20);        // 10
+

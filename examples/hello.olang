@@ -1,0 +1,14 @@
+// Basit Değişkenler
+int x = 10;
+float pi = 3.14159;
+str mesaj = "Merhaba OLang!";
+bool basarili = true;
+
+// Matematiksel işlemler
+int a = 5;
+int b = 3;
+int toplam = a + b;
+int fark = a - b;
+int carpim = a * b;
+int bolum = a / b;
+

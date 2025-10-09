@@ -1,0 +1,16 @@
+// Print fonksiyonu testi
+
+int x = 10;
+int y = 20;
+
+print("Merhaba OLang!");
+print("x =", x);
+print("y =", y);
+print("Toplam:", x + y);
+
+str mesaj = "Bu bir string";
+print(mesaj);
+
+bool dogru = true;
+print("Boolean:", dogru);
+

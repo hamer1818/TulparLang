@@ -1,0 +1,29 @@
+// OLang Döngü Örnekleri
+
+print("=== WHILE DONGUSU ===");
+int i = 0;
+while (i < 5) {
+    print("while i =", i);
+    i = i + 1;
+}
+
+print("");
+print("=== FOR DONGUSU (C-style) ===");
+for (int j = 0; j < 5; j = j + 1) {
+    print("for j =", j);
+}
+
+print("");
+print("=== FOREACH DONGUSU (for..in) ===");
+for (k in range(5)) {
+    print("foreach k =", k);
+}
+
+print("");
+print("=== IC ICE FOR ===");
+for (int x = 0; x < 3; x = x + 1) {
+    for (int y = 0; y < 3; y = y + 1) {
+        print("x =", x, "y =", y);
+    }
+}
+
