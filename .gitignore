@@ -1,1 +1,36 @@
+# Build outputs
+olang
+olang.exe
+*.o
+*.obj
+
+# Build directories
+build/
+bin/
+obj/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile.cmake
+*.cmake
+
+# Temporary files
+*.log
+*.tmp
+
+# Platform specific
+Thumbs.db
+desktop.ini
+
+# Test files
 /examples/test.olang
