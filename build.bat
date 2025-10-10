@@ -48,7 +48,7 @@ echo.
 echo Executable: olang.exe
 echo To run examples:
 echo   olang.exe examples\01_hello_world.olang
-goto :eof
+exit /b 0
 
 :build_error
 echo.
