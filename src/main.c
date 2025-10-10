@@ -1,6 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <locale.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <io.h>
+#include <fcntl.h>
+#endif
 #include "lexer/lexer.h"
 #include "parser/parser.h"
 #include "interpreter/interpreter.h"
@@ -28,6 +34,17 @@ char* read_file(const char* filename) {
 }
 
 int main(int argc, char** argv) {
+    // Windows'ta UTF-8 desteği
+    #ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+    _setmode(_fileno(stdout), _O_U8TEXT);
+    _setmode(_fileno(stderr), _O_U8TEXT);
+    #endif
+    
+    // Locale ayarla
+    setlocale(LC_ALL, "en_US.UTF-8");
+    
     char* source = NULL;
     int from_file = 0;
     
