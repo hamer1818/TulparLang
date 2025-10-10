@@ -65,7 +65,7 @@ typedef struct ASTNode {
     // Binary operatör için
     struct ASTNode* left;
     struct ASTNode* right;
-    TokenType op;  // Operatör türü
+    OLangTokenType op;  // Operatör türü
     
     // Değişken/fonksiyon için
     char* name;

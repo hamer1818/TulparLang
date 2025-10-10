@@ -1,7 +1,7 @@
 #ifndef LEXER_H
 #define LEXER_H
 
-// Token türleri
+// Token türleri (Windows winnt.h ile çakışmayı önlemek için OLang prefix)
 typedef enum {
     // Veri tipleri
     TOKEN_INT_TYPE,      // "int"
@@ -68,11 +68,11 @@ typedef enum {
     
     TOKEN_EOF,           // Dosya sonu
     TOKEN_ERROR          // Hata
-} TokenType;
+} OLangTokenType;
 
 // Token yapısı
 typedef struct {
-    TokenType type;
+    OLangTokenType type;
     char* value;         // Token'ın değeri (string olarak)
     int line;            // Hangi satırda olduğu
     int column;          // Hangi sütunda olduğu

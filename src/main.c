@@ -36,14 +36,22 @@ char* read_file(const char* filename) {
 int main(int argc, char** argv) {
     // Windows'ta UTF-8 desteği
     #ifdef _WIN32
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleCP(CP_UTF8);
-    _setmode(_fileno(stdout), _O_U8TEXT);
-    _setmode(_fileno(stderr), _O_U8TEXT);
+    // Console code page'i UTF-8'e ayarla
+    SetConsoleOutputCP(65001);  // CP_UTF8
+    SetConsoleCP(65001);
+    
+    // stdout ve stderr'i binary modda UTF-8 kullanacak şekilde ayarla
+    // _O_U8TEXT yerine _O_BINARY kullanarak printf uyumluluğunu koruyoruz
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+    _setmode(_fileno(stdin), _O_BINARY);
+    
+    // Console buffer'ı UTF-8 için etkinleştir
+    setvbuf(stdout, NULL, _IOFBF, 1000);
     #endif
     
-    // Locale ayarla
-    setlocale(LC_ALL, "en_US.UTF-8");
+    // Locale ayarla (UTF-8 desteği için)
+    setlocale(LC_ALL, ".UTF8");
     
     char* source = NULL;
     int from_file = 0;

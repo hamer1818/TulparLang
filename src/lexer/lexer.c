@@ -44,7 +44,7 @@ static void lexer_skip_comment(Lexer* lexer) {
 }
 
 // Token oluşturma
-static Token* token_create(TokenType type, char* value, int line, int column) {
+static Token* token_create(OLangTokenType type, char* value, int line, int column) {
     Token* token = (Token*)malloc(sizeof(Token));
     token->type = type;
     token->value = value ? strdup(value) : NULL;
@@ -72,7 +72,7 @@ static Token* lexer_read_number(Lexer* lexer) {
     }
     buffer[i] = '\0';
     
-    TokenType type = is_float ? TOKEN_FLOAT_LITERAL : TOKEN_INT_LITERAL;
+    OLangTokenType type = is_float ? TOKEN_FLOAT_LITERAL : TOKEN_INT_LITERAL;
     return token_create(type, buffer, start_line, start_column);
 }
 
@@ -105,15 +105,34 @@ static Token* lexer_read_identifier(Lexer* lexer) {
     char buffer[256];
     int i = 0;
     
-    while (lexer->current_char != '\0' && 
-           (isalnum(lexer->current_char) || lexer->current_char == '_')) {
-        buffer[i++] = lexer->current_char;
-        lexer_advance(lexer);
+    // UTF-8 desteği için: ASCII harfler, rakamlar, alt çizgi ve UTF-8 karakterler
+    // İlk karakter rakam olamaz, onu parser_next_token'da kontrol ediyoruz
+    while (lexer->current_char != '\0') {
+        unsigned char c = (unsigned char)lexer->current_char;
+        
+        // ASCII: harf, rakam veya alt çizgi
+        if (isalnum(c) || c == '_') {
+            buffer[i++] = lexer->current_char;
+            lexer_advance(lexer);
+        }
+        // UTF-8 multi-byte karakterler (0x80-0xFF arası başlayan)
+        // Türkçe: ç(195,167) ğ(196,159) ı(196,177) ö(195,182) ş(197,159) ü(195,188)
+        else if (c >= 0x80) {
+            // UTF-8 multi-byte karakter, olduğu gibi al
+            buffer[i++] = lexer->current_char;
+            lexer_advance(lexer);
+        }
+        else {
+            break;
+        }
+        
+        // Buffer overflow kontrolü
+        if (i >= 255) break;
     }
     buffer[i] = '\0';
     
     // Anahtar kelime kontrolü
-    TokenType type = TOKEN_IDENTIFIER;
+    OLangTokenType type = TOKEN_IDENTIFIER;
     
     if (strcmp(buffer, "int") == 0) type = TOKEN_INT_TYPE;
     else if (strcmp(buffer, "float") == 0) type = TOKEN_FLOAT_TYPE;
@@ -196,7 +215,9 @@ Token* lexer_next_token(Lexer* lexer) {
         }
         
         // Identifier'lar ve anahtar kelimeler
-        if (isalpha(lexer->current_char) || lexer->current_char == '_') {
+        // UTF-8 desteği: ASCII harfler, alt çizgi veya 0x80+ (UTF-8 multi-byte)
+        unsigned char uc = (unsigned char)lexer->current_char;
+        if (isalpha(uc) || uc == '_' || uc >= 0x80) {
             return lexer_read_identifier(lexer);
         }
         

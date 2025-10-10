@@ -1,0 +1,48 @@
+// UTF-8 Türkçe Karakter Testi
+print("╔═══════════════════════════════════════╗");
+print("║   TÜRKÇE KARAKTER TESTİ (UTF-8)      ║");
+print("╚═══════════════════════════════════════╝");
+print("");
+
+// Küçük harfler
+str kucuk = "çğıöşü";
+print("Küçük harfler:", kucuk);
+
+// Büyük harfler
+str buyuk = "ÇĞİÖŞÜ";
+print("Büyük harfler:", buyuk);
+
+// Cümleler
+str cumle1 = "Merhaba Dünya! Türkçe karakterler: çÇğĞıİöÖşŞüÜ";
+print("Cümle 1:", cumle1);
+
+str cumle2 = "İstanbul'da güneşli bir gün ☀️";
+print("Cümle 2:", cumle2);
+
+str cumle3 = "Ağaçlar şehirde çiçek açıyor 🌸";
+print("Cümle 3:", cumle3);
+
+// Özel karakterler ve emojiler
+str emoji = "✓ ✗ ★ ♥ 😊 🚀 🎉";
+print("Emojiler:", emoji);
+
+// Box drawing characters
+print("");
+print("┌─────────────────────────────┐");
+print("│  UTF-8 Box Characters  ✓    │");
+print("└─────────────────────────────┘");
+
+// Türkçe değişken isimleri (identifier'larda Türkçe karakter)
+str şehir = "Ankara";
+str ülke = "Türkiye";
+int yaş = 100;
+
+print("");
+print("Şehir:", şehir);
+print("Ülke:", ülke);
+print("Yaş:", yaş);
+
+print("");
+print("═══════════════════════════════════════");
+print("✅ UTF-8 TÜRKÇE KARAKTER TESTİ BAŞARILI!");
+print("═══════════════════════════════════════");
