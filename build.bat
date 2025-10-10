@@ -9,7 +9,7 @@ echo ========================================
 echo.
 
 REM Check for MinGW
-where gcc >nul 2>nul
+gcc --version >nul 2>nul
 if %errorlevel% neq 0 (
     echo ERROR: MinGW (gcc) not found. Please install it.
     echo For example, using Chocolatey: choco install mingw
@@ -20,8 +20,12 @@ echo Building with Makefile...
 echo.
 
 REM Clean old build
-if exist build rmdir /s /q build
-if exist olang.exe del olang.exe
+if exist build (
+    rmdir /s /q build
+)
+if exist olang.exe (
+    del olang.exe
+)
 
 REM Create build directory
 mkdir build
