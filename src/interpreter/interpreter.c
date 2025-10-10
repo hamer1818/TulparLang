@@ -70,6 +70,146 @@ Value* value_create_typed_array(int capacity, ValueType elem_type) {
     return value;
 }
 
+Value* value_create_object() {
+    Value* value = (Value*)malloc(sizeof(Value));
+    value->type = VAL_OBJECT;
+    value->data.object_val = hash_table_create(16);  // 16 buckets başlangıç
+    return value;
+}
+
+// ============================================================================
+// HASH TABLE FONKSİYONLARI
+// ============================================================================
+
+// Simple hash function (djb2 algorithm)
+unsigned int hash_function(const char* key, int bucket_count) {
+    unsigned long hash = 5381;
+    int c;
+    
+    while ((c = *key++)) {
+        hash = ((hash << 5) + hash) + c; // hash * 33 + c
+    }
+    
+    return hash % bucket_count;
+}
+
+// Hash table oluştur
+HashTable* hash_table_create(int bucket_count) {
+    HashTable* table = (HashTable*)malloc(sizeof(HashTable));
+    table->bucket_count = bucket_count;
+    table->size = 0;
+    table->buckets = (HashEntry**)calloc(bucket_count, sizeof(HashEntry*));
+    return table;
+}
+
+// Hash table temizle
+void hash_table_free(HashTable* table) {
+    if (!table) return;
+    
+    for (int i = 0; i < table->bucket_count; i++) {
+        HashEntry* entry = table->buckets[i];
+        while (entry) {
+            HashEntry* next = entry->next;
+            free(entry->key);
+            value_free(entry->value);
+            free(entry);
+            entry = next;
+        }
+    }
+    
+    free(table->buckets);
+    free(table);
+}
+
+// Key-value ekle/güncelle
+void hash_table_set(HashTable* table, const char* key, Value* value) {
+    unsigned int index = hash_function(key, table->bucket_count);
+    HashEntry* entry = table->buckets[index];
+    
+    // Key zaten var mı kontrol et
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            // Güncelle
+            value_free(entry->value);
+            entry->value = value;
+            return;
+        }
+        entry = entry->next;
+    }
+    
+    // Yeni entry oluştur
+    HashEntry* new_entry = (HashEntry*)malloc(sizeof(HashEntry));
+    new_entry->key = strdup(key);
+    new_entry->value = value;
+    new_entry->next = table->buckets[index];
+    table->buckets[index] = new_entry;
+    table->size++;
+}
+
+// Key ile value al
+Value* hash_table_get(HashTable* table, const char* key) {
+    unsigned int index = hash_function(key, table->bucket_count);
+    HashEntry* entry = table->buckets[index];
+    
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            return entry->value;
+        }
+        entry = entry->next;
+    }
+    
+    return NULL;  // Bulunamadı
+}
+
+// Key var mı kontrol et
+int hash_table_has(HashTable* table, const char* key) {
+    return hash_table_get(table, key) != NULL;
+}
+
+// Key sil
+void hash_table_delete(HashTable* table, const char* key) {
+    unsigned int index = hash_function(key, table->bucket_count);
+    HashEntry* entry = table->buckets[index];
+    HashEntry* prev = NULL;
+    
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            if (prev) {
+                prev->next = entry->next;
+            } else {
+                table->buckets[index] = entry->next;
+            }
+            
+            free(entry->key);
+            value_free(entry->value);
+            free(entry);
+            table->size--;
+            return;
+        }
+        prev = entry;
+        entry = entry->next;
+    }
+}
+
+// Hash table yazdır (debug)
+void hash_table_print(HashTable* table) {
+    printf("{");
+    int first = 1;
+    
+    for (int i = 0; i < table->bucket_count; i++) {
+        HashEntry* entry = table->buckets[i];
+        while (entry) {
+            if (!first) printf(", ");
+            printf("\"%s\": ", entry->key);
+            value_print(entry->value);
+            first = 0;
+            entry = entry->next;
+        }
+    }
+    
+    printf("}");
+}
+
 // ============================================================================
 // ARRAY FONKSİYONLARI
 // ============================================================================
@@ -177,6 +317,22 @@ Value* value_copy(Value* val) {
             copy->data.array_val = dst;
             break;
         }
+        case VAL_OBJECT: {
+            // Deep copy hash table
+            HashTable* src = val->data.object_val;
+            HashTable* dst = hash_table_create(src->bucket_count);
+            
+            for (int i = 0; i < src->bucket_count; i++) {
+                HashEntry* entry = src->buckets[i];
+                while (entry) {
+                    hash_table_set(dst, entry->key, value_copy(entry->value));
+                    entry = entry->next;
+                }
+            }
+            
+            copy->data.object_val = dst;
+            break;
+        }
         default:
             break;
     }
@@ -198,6 +354,10 @@ void value_free(Value* val) {
         }
         free(arr->elements);
         free(arr);
+    }
+    
+    if (val->type == VAL_OBJECT && val->data.object_val) {
+        hash_table_free(val->data.object_val);
     }
     
     free(val);
@@ -234,6 +394,9 @@ void value_print(Value* val) {
             printf("]");
             break;
         }
+        case VAL_OBJECT:
+            hash_table_print(val->data.object_val);
+            break;
         case VAL_VOID:
             printf("void");
             break;
@@ -420,30 +583,65 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             return arr;
         }
         
+        case AST_OBJECT_LITERAL: {
+            // Object literal: { "key": value, "key2": value2 }
+            Value* obj = value_create_object();
+            
+            for (int i = 0; i < node->object_count; i++) {
+                const char* key = node->object_keys[i];
+                Value* value = interpreter_eval_expression(interp, node->object_values[i]);
+                hash_table_set(obj->data.object_val, key, value);
+            }
+            
+            return obj;
+        }
+        
         case AST_ARRAY_ACCESS: {
-            // Array erişimi: arr[0]
-            Value* arr_val = symbol_table_get(interp->current_scope, node->name);
-            if (!arr_val) {
+            // Array/Object erişimi: arr[0] or obj["key"]
+            Value* container = symbol_table_get(interp->current_scope, node->name);
+            if (!container) {
                 printf("Hata: Tanımlanmamış değişken '%s'\n", node->name);
                 exit(1);
             }
             
-            if (arr_val->type != VAL_ARRAY) {
-                printf("Hata: '%s' bir dizi değil\n", node->name);
-                exit(1);
-            }
-            
             Value* index_val = interpreter_eval_expression(interp, node->index);
-            if (index_val->type != VAL_INT) {
-                printf("Hata: Dizi index integer olmalı\n");
+            
+            // Array access (integer index)
+            if (container->type == VAL_ARRAY) {
+                if (index_val->type != VAL_INT) {
+                    printf("Hata: Dizi index integer olmalı\n");
+                    value_free(index_val);
+                    exit(1);
+                }
+                
+                int index = index_val->data.int_val;
                 value_free(index_val);
-                exit(1);
+                return array_get(container->data.array_val, index);
             }
             
-            int index = index_val->data.int_val;
-            value_free(index_val);
+            // Object access (string key)
+            if (container->type == VAL_OBJECT) {
+                if (index_val->type != VAL_STRING) {
+                    printf("Hata: Object key string olmalı\n");
+                    value_free(index_val);
+                    exit(1);
+                }
+                
+                const char* key = index_val->data.string_val;
+                Value* result = hash_table_get(container->data.object_val, key);
+                value_free(index_val);
+                
+                if (!result) {
+                    printf("Hata: Object'te '%s' key'i bulunamadı\n", key);
+                    return value_create_void();
+                }
+                
+                return value_copy(result);
+            }
             
-            return array_get(arr_val->data.array_val, index);
+            printf("Hata: '%s' bir dizi veya object değil\n", node->name);
+            value_free(index_val);
+            exit(1);
         }
             
         case AST_IDENTIFIER: {

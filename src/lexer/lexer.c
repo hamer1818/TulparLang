@@ -266,6 +266,7 @@ Token* lexer_next_token(Lexer* lexer) {
             case ']': return token_create(TOKEN_RBRACKET, "]", start_line, start_column);
             case ';': return token_create(TOKEN_SEMICOLON, ";", start_line, start_column);
             case ',': return token_create(TOKEN_COMMA, ",", start_line, start_column);
+            case ':': return token_create(TOKEN_COLON, ":", start_line, start_column);
             case '=':
                 if (lexer->current_char == '=') {
                     lexer_advance(lexer);

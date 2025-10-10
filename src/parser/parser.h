@@ -11,11 +11,12 @@ typedef enum {
     AST_STRING_LITERAL,
     AST_BOOL_LITERAL,
     AST_ARRAY_LITERAL,    // [1, 2, 3]
+    AST_OBJECT_LITERAL,   // { "key": value }
     AST_IDENTIFIER,
     AST_BINARY_OP,        // +, -, *, /, ==, !=, <, >, <=, >=
     AST_UNARY_OP,         // -, !
     AST_FUNCTION_CALL,    // fonksiyon çağrısı
-    AST_ARRAY_ACCESS,     // arr[0]
+    AST_ARRAY_ACCESS,     // arr[0] or obj["key"]
     
     // İfadeler (Statements)
     AST_VARIABLE_DECL,    // int x = 5;
@@ -101,6 +102,11 @@ typedef struct ASTNode {
     struct ASTNode** elements;    // Dizi elemanları
     int element_count;            // Eleman sayısı
     struct ASTNode* index;        // Array access için index (arr[index])
+    
+    // Object (JSON) için  
+    char** object_keys;           // Object key'leri (string array)
+    struct ASTNode** object_values; // Object value'ları (ASTNode array)
+    int object_count;             // Key-value pair sayısı
     
 } ASTNode;
 

@@ -77,6 +77,21 @@ void ast_node_free(ASTNode* node) {
         free(node->statements);
     }
     
+    // Object düğümlerini temizle
+    if (node->object_keys) {
+        for (int i = 0; i < node->object_count; i++) {
+            if (node->object_keys[i]) free(node->object_keys[i]);
+        }
+        free(node->object_keys);
+    }
+    
+    if (node->object_values) {
+        for (int i = 0; i < node->object_count; i++) {
+            ast_node_free(node->object_values[i]);
+        }
+        free(node->object_values);
+    }
+    
     free(node);
 }
 
@@ -86,6 +101,65 @@ static ASTNode* parse_expression(Parser* parser);
 static ASTNode* parse_term(Parser* parser);
 static ASTNode* parse_factor(Parser* parser);
 static ASTNode* parse_primary(Parser* parser);
+static ASTNode* parse_object_literal(Parser* parser);
+
+// Object literal parse ({ "key": value, "key2": value2 })
+static ASTNode* parse_object_literal(Parser* parser) {
+    ASTNode* node = ast_node_create(AST_OBJECT_LITERAL);
+    parser_advance(parser); // '{' atla
+    
+    node->object_keys = NULL;
+    node->object_values = NULL;
+    node->object_count = 0;
+    
+    // Boş object değilse
+    if (parser->current_token->type != TOKEN_RBRACE) {
+        int capacity = 4;
+        node->object_keys = (char**)malloc(sizeof(char*) * capacity);
+        node->object_values = (ASTNode**)malloc(sizeof(ASTNode*) * capacity);
+        
+        do {
+            // Key (string literal olmalı)
+            if (parser->current_token->type != TOKEN_STRING_LITERAL) {
+                printf("Parser Error: Object key must be a string at line %d\n", 
+                       parser->current_token->line);
+                return node;
+            }
+            
+            if (node->object_count >= capacity) {
+                capacity *= 2;
+                node->object_keys = (char**)realloc(node->object_keys, sizeof(char*) * capacity);
+                node->object_values = (ASTNode**)realloc(node->object_values, 
+                                                          sizeof(ASTNode*) * capacity);
+            }
+            
+            // Key'i sakla
+            node->object_keys[node->object_count] = strdup(parser->current_token->value);
+            parser_advance(parser);
+            
+            // ':' bekle
+            if (!parser_expect(parser, TOKEN_COLON)) {
+                printf("Parser Error: Expected ':' after object key at line %d\n",
+                       parser->current_token->line);
+                return node;
+            }
+            
+            // Value'yu parse et
+            node->object_values[node->object_count] = parse_expression(parser);
+            node->object_count++;
+            
+            // Virgül varsa devam et
+            if (parser->current_token->type == TOKEN_COMMA) {
+                parser_advance(parser);
+            } else {
+                break;
+            }
+        } while (1);
+    }
+    
+    parser_expect(parser, TOKEN_RBRACE);
+    return node;
+}
 
 // Primary expressions (en düşük öncelik)
 static ASTNode* parse_primary(Parser* parser) {
@@ -209,6 +283,11 @@ static ASTNode* parse_primary(Parser* parser) {
         
         parser_expect(parser, TOKEN_RBRACKET);
         return node;
+    }
+    
+    // Object literal ({ "key": value })
+    if (token->type == TOKEN_LBRACE) {
+        return parse_object_literal(parser);
     }
     
     // Parantez içi ifade

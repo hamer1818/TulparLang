@@ -65,6 +65,7 @@ typedef enum {
     TOKEN_RBRACKET,      // ]
     TOKEN_SEMICOLON,     // ;
     TOKEN_COMMA,         // ,
+    TOKEN_COLON,         // : (for JSON objects)
     
     TOKEN_EOF,           // Dosya sonu
     TOKEN_ERROR          // Hata

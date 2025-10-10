@@ -1,0 +1,184 @@
+// ============================================
+// JSON OBJECTS (Key-Value Pairs)
+// ============================================
+
+print("╔════════════════════════════════════╗");
+print("║   JSON OBJECT DESTEĞİ 🎯          ║");
+print("╚════════════════════════════════════╝");
+print("");
+
+// ----------------------------------------
+// 1. TEMEL OBJECT LITERAL
+// ----------------------------------------
+print("=== 1. TEMEL OBJECT ===");
+print("");
+
+arrayJson kisi1 = {
+    "ad": "Hamza",
+    "soyad": "Ortatepe",
+    "yas": 25
+};
+
+print("Kişi 1:", kisi1);
+print("");
+
+// Object'ten veri okuma
+str ad = kisi1["ad"];
+str soyad = kisi1["soyad"];
+int yas = kisi1["yas"];
+
+print("Ad:", ad);
+print("Soyad:", soyad);
+print("Yaş:", yas);
+print("");
+
+// ----------------------------------------
+// 2. NESTED OBJECTS
+// ----------------------------------------
+print("=== 2. NESTED OBJECTS ===");
+print("");
+
+arrayJson kullanici = {
+    "id": 1,
+    "bilgiler": {
+        "ad": "Ahmet",
+        "soyad": "Yılmaz",
+        "email": "ahmet@mail.com"
+    },
+    "aktif": true
+};
+
+print("Kullanıcı:", kullanici);
+print("");
+
+// Nested access
+int kullanici_id = kullanici["id"];
+arrayJson bilgiler = kullanici["bilgiler"];
+str email = bilgiler["email"];
+
+print("Kullanıcı ID:", kullanici_id);
+print("Bilgiler:", bilgiler);
+print("Email:", email);
+print("");
+
+// ----------------------------------------
+// 3. DIZI İÇİNDE OBJECT
+// ----------------------------------------
+print("=== 3. DIZI İÇİNDE OBJECT ===");
+print("");
+
+arrayJson kullanicilar = [
+    {"ad": "Ali", "yas": 25},
+    {"ad": "Veli", "yas": 30},
+    {"ad": "Ayşe", "yas": 28}
+];
+
+print("Kullanıcılar:", kullanicilar);
+print("");
+
+// Diziden object al
+arrayJson ilk_kullanici = kullanicilar[0];
+str ilk_ad = ilk_kullanici["ad"];
+int ilk_yas = ilk_kullanici["yas"];
+
+print("İlk kullanıcı:", ilk_kullanici);
+print("İlk kullanıcı adı:", ilk_ad);
+print("İlk kullanıcı yaşı:", ilk_yas);
+print("");
+
+// ----------------------------------------
+// 4. E-TİCARET ÖRNEĞİ
+// ----------------------------------------
+print("=== 4. E-TİCARET ÖRNEĞİ ===");
+print("");
+
+arrayJson urun = {
+    "id": 101,
+    "isim": "Laptop",
+    "fiyat": 15000,
+    "stok": 5,
+    "ozellikler": {
+        "marka": "Dell",
+        "model": "XPS 15",
+        "ram": 16
+    }
+};
+
+print("Ürün:", urun);
+print("");
+
+str urun_isim = urun["isim"];
+int urun_fiyat = urun["fiyat"];
+arrayJson ozellikler = urun["ozellikler"];
+str marka = ozellikler["marka"];
+
+print("Ürün İsmi:", urun_isim);
+print("Fiyat:", urun_fiyat, "TL");
+print("Marka:", marka);
+print("");
+
+// ----------------------------------------
+// 5. API RESPONSE BENZERİ
+// ----------------------------------------
+print("=== 5. API RESPONSE ===");
+print("");
+
+arrayJson apiResponse = {
+    "status": 200,
+    "message": "Success",
+    "data": {
+        "user_id": 42,
+        "username": "hamza_o",
+        "verified": true
+    }
+};
+
+print("API Response:", apiResponse);
+print("");
+
+int status = apiResponse["status"];
+str message = apiResponse["message"];
+arrayJson data = apiResponse["data"];
+int user_id = data["user_id"];
+str username = data["username"];
+
+print("Status:", status);
+print("Message:", message);
+print("User ID:", user_id);
+print("Username:", username);
+print("");
+
+// ----------------------------------------
+// 6. CONFIG AYARLARI
+// ----------------------------------------
+print("=== 6. CONFIG AYARLARI ===");
+print("");
+
+arrayJson config = {
+    "app_name": "OLang",
+    "version": "1.3.0",
+    "server": {
+        "host": "localhost",
+        "port": 8080,
+        "ssl": false
+    }
+};
+
+print("Config:", config);
+print("");
+
+str app_name = config["app_name"];
+str version = config["version"];
+arrayJson server = config["server"];
+str host = server["host"];
+int port = server["port"];
+
+print("App:", app_name);
+print("Version:", version);
+print("Server:", host);
+print("Port:", port);
+print("");
+
+print("╔════════════════════════════════════╗");
+print("║   ✅ JSON OBJECTS ÇALIŞIYOR!      ║");
+print("╚════════════════════════════════════╝");
