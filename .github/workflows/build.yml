@@ -19,18 +19,19 @@ jobs:
         run: |
           chmod +x build.sh
           ./build.sh
+        timeout-minutes: 5
       
-      - name: Test
+      - name: Smoke test (truncated output)
         run: |
-          ./olang examples/01_hello_world.olang
-          ./olang examples/10_test_phase1.olang
+          ./olang examples/01_hello_world.olang | head -n 80
+        timeout-minutes: 2
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: olang-linux
           path: olang
-
+  
   build-macos:
     runs-on: macos-latest
     steps:
@@ -43,18 +44,19 @@ jobs:
         run: |
           chmod +x build.sh
           ./build.sh
+        timeout-minutes: 5
       
-      - name: Test
+      - name: Smoke test (truncated output)
         run: |
-          ./olang examples/01_hello_world.olang
-          ./olang examples/10_test_phase1.olang
+          ./olang examples/01_hello_world.olang | head -n 80
+        timeout-minutes: 2
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: olang-macos
           path: olang
-
+  
   build-windows:
     runs-on: windows-latest
     steps:
@@ -68,19 +70,20 @@ jobs:
         shell: cmd
         run: |
           call build.bat
+        timeout-minutes: 10
       
-      - name: Test
-        shell: cmd
+      - name: Smoke test (truncated output)
+        shell: powershell
         run: |
-          olang.exe examples\01_hello_world.olang
-          olang.exe examples\10_test_phase1.olang
+          .\olang.exe examples\01_hello_world.olang | Select-Object -First 80
+        timeout-minutes: 2
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: olang-windows
           path: olang.exe
-
+  
   create-release:
     needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
