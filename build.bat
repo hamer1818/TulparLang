@@ -11,7 +11,7 @@ echo.
 REM Check for MinGW
 gcc --version >nul 2>nul
 if %errorlevel% neq 0 (
-    echo ERROR: MinGW (gcc) not found. Please install it.
+    echo ERROR: MinGW ^(gcc^) is required. Please install it.
     echo For example, using Chocolatey: choco install mingw
     exit /b 1
 )
