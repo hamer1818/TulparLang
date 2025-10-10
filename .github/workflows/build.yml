@@ -29,11 +29,16 @@ jobs:
           ./olang examples/01_hello_world.olang | head -n 80
         timeout-minutes: 2
       
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp olang dist/olang-linux-x64
+      
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: olang-linux
-          path: olang
+          name: olang-linux-x64
+          path: dist/olang-linux-x64
   
   build-macos:
     runs-on: macos-latest
@@ -54,11 +59,16 @@ jobs:
           ./olang examples/01_hello_world.olang | head -n 80
         timeout-minutes: 2
       
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp olang dist/olang-macos-universal
+      
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: olang-macos
-          path: olang
+          name: olang-macos-universal
+          path: dist/olang-macos-universal
   
   build-windows:
     runs-on: windows-latest
@@ -81,11 +91,17 @@ jobs:
           .\olang.exe examples\01_hello_world.olang | Select-Object -First 80
         timeout-minutes: 2
       
+      - name: Prepare artifact
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item olang.exe dist/olang-windows-x64.exe
+      
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: olang-windows
-          path: olang.exe
+          name: olang-windows-x64
+          path: dist/olang-windows-x64.exe
   
   create-release:
     needs: [build-linux, build-macos, build-windows]
@@ -117,9 +133,9 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            olang-linux/olang
-            olang-macos/olang
-            olang-windows/olang.exe
+            olang-windows-x64.exe
+            olang-linux-x64
+            olang-macos-universal
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
