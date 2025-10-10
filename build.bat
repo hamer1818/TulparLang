@@ -1,26 +1,59 @@
 @echo off
+REM ============================================
+REM OLang Build Script for Windows
+REM ============================================
+
 echo ========================================
-echo OLang Derleyici (Windows)
+echo OLang Build Script for Windows
 echo ========================================
 echo.
 
-REM Build dizinini oluştur
-if not exist build mkdir build
+REM Check if build directory exists
+if exist build (
+    echo Cleaning old build...
+    rmdir /s /q build
+)
 
-REM Kaynak dosyaları derle
-echo Dosyalar derleniyor...
-gcc -Wall -Wextra -g -Isrc -c src/lexer.c -o build/lexer.o
-gcc -Wall -Wextra -g -Isrc -c src/parser.c -o build/parser.o
-gcc -Wall -Wextra -g -Isrc -c src/interpreter.c -o build/interpreter.o
-gcc -Wall -Wextra -g -Isrc -c src/main.c -o build/main.o
+REM Create build directory
+mkdir build
+cd build
 
-REM Executable oluştur
-echo Executable olusturuluyor...
-gcc build/lexer.o build/parser.o build/interpreter.o build/main.o -o olang.exe
+REM Configure with CMake
+echo.
+echo Configuring with CMake...
+cmake .. -G "MinGW Makefiles"
+if %errorlevel% neq 0 (
+    echo ERROR: CMake configuration failed!
+    cd ..
+    exit /b 1
+)
+
+REM Build
+echo.
+echo Building OLang...
+cmake --build . --config Release
+if %errorlevel% neq 0 (
+    echo ERROR: Build failed!
+    cd ..
+    exit /b 1
+)
+
+REM Copy executable to root
+echo.
+echo Copying executable...
+copy olang.exe ..\olang.exe
+
+cd ..
 
 echo.
 echo ========================================
-echo Derleme tamamlandi!
-echo Calistirmak icin: olang.exe
+echo BUILD SUCCESSFUL!
 echo ========================================
+echo.
+echo Executable: olang.exe
+echo.
+echo To run examples:
+echo   olang.exe examples\01_hello_world.olang
+echo.
 
+pause

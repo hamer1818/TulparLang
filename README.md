@@ -172,6 +172,15 @@ for (int i = 0; i < length(sayilar); i++) {
 }
 ```
 
+## 🌍 Platform Desteği
+
+OLang **tüm platformlarda** çalışır:
+- ✅ **Linux** (Ubuntu, Fedora, Arch, etc.)
+- ✅ **macOS** (Intel & Apple Silicon)
+- ✅ **Windows** (MinGW, Visual Studio, WSL)
+
+**Detaylı kurulum**: `PLATFORM_SUPPORT.md` | **Hızlı kurulum**: `QUICK_INSTALL.md`
+
 ## 🔧 Derleme ve Çalıştırma
 
 ### 1. Projeyi Derleyin
@@ -189,7 +198,14 @@ chmod +x build.sh
 
 #### Makefile ile
 ```bash
-make
+# Otomatik (CMake veya Makefile)
+./build.sh          # Linux/macOS/WSL
+
+# veya
+build.bat           # Windows
+
+# veya manuel
+make                # Unix-like
 ```
 
 ### 2. OLang Dosyalarını Çalıştırın
