@@ -664,7 +664,38 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 return result;
             }
             
-            printf("Hata: Erişilen değer bir dizi veya object değil\n");
+            // String access (character by index)
+            if (container->type == VAL_STRING) {
+                if (index_val->type != VAL_INT) {
+                    printf("Hata: String index integer olmalı\n");
+                    value_free(index_val);
+                    if (node->left) value_free(container);
+                    exit(1);
+                }
+                
+                int idx = index_val->data.int_val;
+                const char* str = container->data.string_val;
+                int len = strlen(str);
+                
+                // Index sınır kontrolü
+                if (idx < 0 || idx >= len) {
+                    printf("Hata: String index sınırların dışında (0-%d arası olmalı, %d verildi)\n", 
+                           len - 1, idx);
+                    value_free(index_val);
+                    if (node->left) value_free(container);
+                    exit(1);
+                }
+                
+                // Tek karakterlik string oluştur
+                char char_str[2] = {str[idx], '\0'};
+                result = value_create_string(char_str);
+                
+                value_free(index_val);
+                if (node->left) value_free(container);
+                return result;
+            }
+            
+            printf("Hata: Erişilen değer bir dizi, object veya string değil\n");
             value_free(index_val);
             if (node->left) value_free(container);
             exit(1);

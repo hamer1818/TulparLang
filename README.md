@@ -461,6 +461,7 @@ print("JSON: {\"ad\": \"Hamza\"}");  // JSON string
 **27 yerleşik matematik fonksiyonu!** Detaylar için: `MATH_FUNCTIONS.md`
 
 #### Temel Fonksiyonlar
+
 - `abs(x)` - Mutlak değer
 - `sqrt(x)` - Karekök
 - `cbrt(x)` - Küpkök
@@ -468,34 +469,41 @@ print("JSON: {\"ad\": \"Hamza\"}");  // JSON string
 - `hypot(x, y)` - Hipotenüs
 
 #### Yuvarlama
+
 - `floor(x)` - Aşağı yuvarla
 - `ceil(x)` - Yukarı yuvarla
 - `round(x)` - Yuvarla
 - `trunc(x)` - Ondalık kısmı at
 
 #### Trigonometrik (Radyan)
+
 - `sin(x)`, `cos(x)`, `tan(x)` - Temel trigonometri
 - `asin(x)`, `acos(x)`, `atan(x)` - Ters trigonometrik
 - `atan2(y, x)` - İki argümanlı arctan
 
 #### Hiperbolik
+
 - `sinh(x)`, `cosh(x)`, `tanh(x)` - Hiperbolik fonksiyonlar
 
 #### Logaritma ve Üstel
+
 - `exp(x)` - e üzeri x
 - `log(x)` - Doğal logaritma (ln)
 - `log10(x)` - 10 tabanında log
 - `log2(x)` - 2 tabanında log
 
 #### İstatistik
+
 - `min(a, b, ...)` - Minimum değer
 - `max(a, b, ...)` - Maximum değer
 
 #### Rastgele
+
 - `random()` - 0-1 arası rastgele float
 - `randint(a, b)` - a-b arası rastgele int
 
 #### Diğer
+
 - `fmod(x, y)` - Kayan nokta mod
 
 ```olang
@@ -507,6 +515,48 @@ float sinDeg = sin(1.57);             // 1.0 (90° in radians)
 float minVal = min(5.0, 3.0, 8.0);    // 3.0
 int zar = randint(1, 6);              // 1-6 arası
 ```
+
+### String İşlemleri (Faz 4 ✨) **YENİ!**
+
+#### String Indexing - Character-Level Access
+
+Stringler karakter dizisi gibi işlem görür ve index ile erişilebilir:
+
+```olang
+str isim = "Ahmet";
+print(isim[0]);      // "A"
+print(isim[1]);      // "h"
+print(isim[4]);      // "t"
+
+// JSON'dan string çıkarıp index ile erişim
+arrayJson kisi = {
+    "isim": "Mehmet",
+    "yas": 25
+};
+
+str ad = kisi["isim"];
+print(ad[0]);        // "M"
+
+// Direkt JSON'dan string index
+print(kisi["isim"][0]);  // "M"
+
+// İç içe JSON + String indexing
+arrayJson data = {
+    "users": [
+        {"name": "Alice", "role": "admin"}
+    ]
+};
+
+print(data["users"][0]["name"]);      // "Alice"
+print(data["users"][0]["name"][0]);   // "A"
+```
+
+**Özellikler:**
+- ✅ String'lere index ile erişim: `str[0]`, `str[1]`, vb.
+- ✅ Her karakter tek karakterlik string olarak döner
+- ✅ Index sınır kontrolü (0 ile uzunluk-1 arası)
+- ✅ JSON/Array zincirleri ile birlikte kullanılabilir
+- ✅ Hata mesajı: "String index sınırların dışında"
 
 ### Yardımcı Fonksiyonlar
 
@@ -701,13 +751,14 @@ print("Carpim:", carpim);
 
 ## 📊 İstatistikler
 
-- **Toplam Kod Satırı**: ~4200+ (yorumlar hariç)
-- **Örnek Dosyalar**: 17 ✨
+- **Toplam Kod Satırı**: ~4300+ (yorumlar hariç)
+- **Örnek Dosyalar**: 19 ✨ (yeni: string indexing, math demo)
 - **Veri Tipleri**: 9 (int, float, str, bool, array, arrayInt, arrayFloat, arrayStr, arrayBool, arrayJson)
 - **Built-in Fonksiyonlar**: **39+** (12 yardımcı + **27 matematik** ✨)
 - **Desteklenen Platformlar**: Linux, macOS, Windows
 - **Encoding**: UTF-8 (Türkçe karakter desteği)
 - **Hash Table Buckets**: 16 (djb2 algorithm)
+- **String Indexing**: ✅ Strings as character arrays ✨ **YENİ!**
 
 ## 🎯 Öne Çıkan Özellikler
 
@@ -716,9 +767,10 @@ print("Carpim:", carpim);
 3. **Nested Structures** 🔗 - Sınırsız derinlikte iç içe yapılar
 4. **Chained Access** ⛓️ - `data["users"][0]["profile"]["email"]` gibi erişim
 5. **Escape Sequences** 🔤 - Professional string formatting (`\n`, `\t`, `\"`, `\\`)
-6. **Matematik Kütüphanesi** 📐 - **27 matematik fonksiyonu** (trigonometri, logaritma, rastgele sayılar) ✨ **YENİ!**
-7. **Type Safety** 🛡️ - Type-safe arrays ile güvenli kod
-8. **Cross-Platform** 💻 - Linux, macOS, Windows desteği
+6. **Matematik Kütüphanesi** 📐 - **27 matematik fonksiyonu** (trigonometri, logaritma, rastgele sayılar) ✨
+7. **String Indexing** 🔤 - `"Merhaba"[0]` → `"M"` (character-level access) ✨ **YENİ!**
+8. **Type Safety** 🛡️ - Type-safe arrays ile güvenli kod
+9. **Cross-Platform** 💻 - Linux, macOS, Windows desteği
 
 ## �📄 Lisans
 
@@ -732,10 +784,10 @@ GitHub: [@hamer1818](https://github.com/hamer1818)
 ## 🔗 Bağlantılar
 
 - **GitHub Repository**: [https://github.com/hamer1818/OLang](https://github.com/hamer1818/OLang)
-- **VS Code Extension**: [https://github.com/hamer1818/olan-ext](https://github.com/hamer1818/olan-ext)
+- **VS Code Extension**: [https://github.com/hamer1818/olang-ext](https://github.com/hamer1818/olang-ext)
 - **Documentation**: [README.md](README.md), [README_EN.md](README_EN.md), [QUICKSTART.md](QUICKSTART.md), [MATH_FUNCTIONS.md](MATH_FUNCTIONS.md) ✨
 
 ---
 
-**OLang v1.4.0** - Modern, UTF-8 destekli, JSON-native, matematik kütüphaneli programlama dili! 🎉  
+**OLang v1.4.1** - Modern, UTF-8 destekli, JSON-native, matematik kütüphaneli, string indexing destekli programlama dili! 🎉  
 **Son Güncelleme**: 13 Ekim 2025

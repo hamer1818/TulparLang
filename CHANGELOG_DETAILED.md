@@ -2,6 +2,26 @@
 
 Tüm önemli değişiklikler bu dosyada dokümante edilmiştir.
 
+## [1.4.1] - 2025-10-13
+
+### ✨ Eklenenler
+- **String Indexing** - String'lere karakter seviyesinde erişim
+  - Syntax: `str[index]` → tek karakterlik string döner
+  - Örnek: `"Merhaba"[0]` → `"M"`
+  - Index sınır kontrolü (0 ile uzunluk-1 arası)
+  - JSON zincirleme ile uyumlu: `data["name"][0]`
+  - İç içe yapılarda çalışır: `users[0]["name"][0]`
+- **Örnek**: `examples/18_string_indexing.olang` ve `examples/test_string_simple.olang`
+
+### 🐛 Düzeltmeler
+- Hata mesajı güncellendi: "Erişilen değer bir dizi veya object değil" → "...veya string değil"
+
+### 📊 İstatistikler
+- Örnek dosya sayısı: 17 → **19**
+- Toplam kod satırı: ~4200 → **~4300**
+
+---
+
 ## [1.4.0] - 2025-10-13
 
 ### ✨ Eklenenler

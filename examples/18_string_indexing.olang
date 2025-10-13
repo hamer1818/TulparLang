@@ -1,0 +1,67 @@
+// ============================================
+// STRING INDEXING TESTİ
+// ============================================
+
+print("=== String Indexing Testi ===");
+print("");
+
+// Basit string erişimi
+str isim = "Ahmet";
+print("İsim:", isim);
+print("İlk harf:", isim[0]);    // "A"
+print("İkinci harf:", isim[1]);  // "h"
+print("Son harf:", isim[4]);     // "t"
+print("");
+
+// JSON'dan string çıkarıp index ile erişim
+arrayJson kullanici = {
+    "isim": "Ayşe",
+    "soyisim": "Yılmaz",
+    "sehir": "İstanbul"
+};
+
+str ad = kullanici["isim"];
+print("Ad:", ad);
+print("Ad'ın ilk harfi:", ad[0]);      // "A"
+print("Ad'ın son harfi:", ad[3]);      // "e"
+print("");
+
+// Direkt JSON'dan string'e erişim ve indexleme
+print("Direkt erişim:", kullanici["sehir"][0]);  // "İ"
+print("");
+
+// Döngü ile string karakterlerini dolaş
+str kelime = "OLang";
+print("Kelime harfleri:");
+int idx = 0;
+for (idx = 0; idx < 5; idx++) {
+    print("  ", idx, ":", kelime[idx]);
+}
+print("");
+
+// Karakter karşılaştırma
+str test = "Hello";
+if (test[0] == "H") {
+    print("✅ İlk harf 'H'");
+}
+print("");
+
+// İç içe JSON'dan string indexing
+arrayJson dizi = {
+    "ekipler": [
+        {
+            "lider": {
+                "isim": "Mehmet",
+                "yetenekler": ["Java", "C#"]
+            }
+        }
+    ]
+};
+
+print("Lider ismi:", dizi["ekipler"][0]["lider"]["isim"]);
+print("Lider isminin ilk harfi:", dizi["ekipler"][0]["lider"]["isim"][0]);
+print("Yetenek:", dizi["ekipler"][0]["lider"]["yetenekler"][0]);
+print("Yetenek ilk harf:", dizi["ekipler"][0]["lider"]["yetenekler"][0][0]);
+print("");
+
+print("✅ String indexing testi tamamlandı!");
