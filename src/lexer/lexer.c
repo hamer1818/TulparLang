@@ -86,8 +86,39 @@ static Token* lexer_read_string(Lexer* lexer) {
     lexer_advance(lexer); // " karakterini atla
     
     while (lexer->current_char != '\0' && lexer->current_char != '"') {
-        buffer[i++] = lexer->current_char;
-        lexer_advance(lexer);
+        // Escape sequence desteği
+        if (lexer->current_char == '\\') {
+            lexer_advance(lexer); // \ karakterini atla
+            
+            switch (lexer->current_char) {
+                case 'n':   // Yeni satır
+                    buffer[i++] = '\n';
+                    break;
+                case 't':   // Tab
+                    buffer[i++] = '\t';
+                    break;
+                case 'r':   // Carriage return
+                    buffer[i++] = '\r';
+                    break;
+                case '\\':  // Backslash
+                    buffer[i++] = '\\';
+                    break;
+                case '"':   // Çift tırnak
+                    buffer[i++] = '"';
+                    break;
+                case '0':   // Null karakter
+                    buffer[i++] = '\0';
+                    break;
+                default:    // Bilinmeyen escape, olduğu gibi ekle
+                    buffer[i++] = '\\';
+                    buffer[i++] = lexer->current_char;
+                    break;
+            }
+            lexer_advance(lexer);
+        } else {
+            buffer[i++] = lexer->current_char;
+            lexer_advance(lexer);
+        }
     }
     
     if (lexer->current_char == '"') {
