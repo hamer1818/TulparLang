@@ -235,15 +235,32 @@ static ASTNode* parse_primary(Parser* parser) {
             return node;
         }
         
-        // Array access mı? (arr[0])
+        // Array/Object access (zincirleme destekli: arr[0][1]["key"])
+        ASTNode* result = NULL;
+        
         if (parser->current_token->type == TOKEN_LBRACKET) {
-            ASTNode* node = ast_node_create(AST_ARRAY_ACCESS);
-            node->name = name;
-            parser_advance(parser); // '[' atla
+            // İlk erişim: arr[0]
+            result = ast_node_create(AST_ARRAY_ACCESS);
+            result->name = name;
             
-            node->index = parse_expression(parser);
+            parser_advance(parser); // '[' atla
+            result->index = parse_expression(parser);
             parser_expect(parser, TOKEN_RBRACKET);
-            return node;
+            
+            // Zincirleme erişim: [1]["key"][2]...
+            while (parser->current_token->type == TOKEN_LBRACKET) {
+                ASTNode* nested = ast_node_create(AST_ARRAY_ACCESS);
+                nested->left = result;  // Önceki erişimi left'e koy
+                nested->name = NULL;    // name artık yok, left var
+                
+                parser_advance(parser); // '[' atla
+                nested->index = parse_expression(parser);
+                parser_expect(parser, TOKEN_RBRACKET);
+                
+                result = nested;
+            }
+            
+            return result;
         }
         
         // Sadece değişken

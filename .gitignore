@@ -33,4 +33,4 @@ Thumbs.db
 desktop.ini
 
 # Test files
-/examples/test.olang
+test*.olang

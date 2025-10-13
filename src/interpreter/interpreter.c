@@ -597,26 +597,43 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
         }
         
         case AST_ARRAY_ACCESS: {
-            // Array/Object erişimi: arr[0] or obj["key"]
-            Value* container = symbol_table_get(interp->current_scope, node->name);
-            if (!container) {
-                printf("Hata: Tanımlanmamış değişken '%s'\n", node->name);
-                exit(1);
+            // Array/Object erişimi: arr[0] or obj["key"] or nested arr[0][1]["key"]
+            Value* container = NULL;
+            
+            // Zincirleme erişim mi? (left var mı?)
+            if (node->left) {
+                // Nested access: önce left'i değerlendir
+                container = interpreter_eval_expression(interp, node->left);
+            } else {
+                // İlk erişim: değişkenden al
+                container = symbol_table_get(interp->current_scope, node->name);
+                if (!container) {
+                    printf("Hata: Tanımlanmamış değişken '%s'\n", node->name);
+                    exit(1);
+                }
+                // Symbol table'dan aldığımız için copy yapma (referans)
+                // Ama nested'de eval'den gelirse zaten yeni value
             }
             
             Value* index_val = interpreter_eval_expression(interp, node->index);
+            Value* result = NULL;
             
             // Array access (integer index)
             if (container->type == VAL_ARRAY) {
                 if (index_val->type != VAL_INT) {
                     printf("Hata: Dizi index integer olmalı\n");
                     value_free(index_val);
+                    if (node->left) value_free(container);
                     exit(1);
                 }
                 
                 int index = index_val->data.int_val;
                 value_free(index_val);
-                return array_get(container->data.array_val, index);
+                result = array_get(container->data.array_val, index);
+                
+                // Left'ten gelen container'ı temizle
+                if (node->left) value_free(container);
+                return result;
             }
             
             // Object access (string key)
@@ -624,23 +641,30 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 if (index_val->type != VAL_STRING) {
                     printf("Hata: Object key string olmalı\n");
                     value_free(index_val);
+                    if (node->left) value_free(container);
                     exit(1);
                 }
                 
                 const char* key = index_val->data.string_val;
-                Value* result = hash_table_get(container->data.object_val, key);
+                Value* found = hash_table_get(container->data.object_val, key);
                 value_free(index_val);
                 
-                if (!result) {
+                if (!found) {
                     printf("Hata: Object'te '%s' key'i bulunamadı\n", key);
+                    if (node->left) value_free(container);
                     return value_create_void();
                 }
                 
-                return value_copy(result);
+                result = value_copy(found);
+                
+                // Left'ten gelen container'ı temizle
+                if (node->left) value_free(container);
+                return result;
             }
             
-            printf("Hata: '%s' bir dizi veya object değil\n", node->name);
+            printf("Hata: Erişilen değer bir dizi veya object değil\n");
             value_free(index_val);
+            if (node->left) value_free(container);
             exit(1);
         }
             
