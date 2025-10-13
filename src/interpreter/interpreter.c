@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+#include <time.h>
 
 // ============================================================================
 // VALUE FONKSİYONLARI
@@ -1075,6 +1077,211 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     }
                 }
                 return value_create_void();
+            }
+            
+            // ========================================================================
+            // MATEMATİK FONKSİYONLARI
+            // ========================================================================
+            
+            // Helper: Get numeric value as double
+            #define GET_NUM_ARG(idx) ({ \
+                Value* _arg = interpreter_eval_expression(interp, node->arguments[idx]); \
+                double _val = 0.0; \
+                if (_arg->type == VAL_INT) _val = (double)_arg->data.int_val; \
+                else if (_arg->type == VAL_FLOAT) _val = (double)_arg->data.float_val; \
+                value_free(_arg); \
+                _val; \
+            })
+            
+            // abs(x) - mutlak değer
+            if (strcmp(node->name, "abs") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)fabs(x));
+            }
+            
+            // sqrt(x) - karekök
+            if (strcmp(node->name, "sqrt") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)sqrt(x));
+            }
+            
+            // pow(x, y) - üs alma
+            if (strcmp(node->name, "pow") == 0 && node->argument_count >= 2) {
+                double x = GET_NUM_ARG(0);
+                double y = GET_NUM_ARG(1);
+                return value_create_float((float)pow(x, y));
+            }
+            
+            // floor(x) - aşağı yuvarlama
+            if (strcmp(node->name, "floor") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_int((int)floor(x));
+            }
+            
+            // ceil(x) - yukarı yuvarlama
+            if (strcmp(node->name, "ceil") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_int((int)ceil(x));
+            }
+            
+            // round(x) - yuvarlama
+            if (strcmp(node->name, "round") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_int((int)round(x));
+            }
+            
+            // sin(x) - sinüs
+            if (strcmp(node->name, "sin") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)sin(x));
+            }
+            
+            // cos(x) - kosinüs
+            if (strcmp(node->name, "cos") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)cos(x));
+            }
+            
+            // tan(x) - tanjant
+            if (strcmp(node->name, "tan") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)tan(x));
+            }
+            
+            // asin(x) - arcsinüs
+            if (strcmp(node->name, "asin") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)asin(x));
+            }
+            
+            // acos(x) - arckosinüs
+            if (strcmp(node->name, "acos") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)acos(x));
+            }
+            
+            // atan(x) - arctanjant
+            if (strcmp(node->name, "atan") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)atan(x));
+            }
+            
+            // atan2(y, x) - iki argümanlı arctanjant
+            if (strcmp(node->name, "atan2") == 0 && node->argument_count >= 2) {
+                double y = GET_NUM_ARG(0);
+                double x = GET_NUM_ARG(1);
+                return value_create_float((float)atan2(y, x));
+            }
+            
+            // exp(x) - e üzeri x
+            if (strcmp(node->name, "exp") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)exp(x));
+            }
+            
+            // log(x) - doğal logaritma (ln)
+            if (strcmp(node->name, "log") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)log(x));
+            }
+            
+            // log10(x) - 10 tabanlı logaritma
+            if (strcmp(node->name, "log10") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)log10(x));
+            }
+            
+            // log2(x) - 2 tabanlı logaritma
+            if (strcmp(node->name, "log2") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)log2(x));
+            }
+            
+            // sinh(x) - hiperbolik sinüs
+            if (strcmp(node->name, "sinh") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)sinh(x));
+            }
+            
+            // cosh(x) - hiperbolik kosinüs
+            if (strcmp(node->name, "cosh") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)cosh(x));
+            }
+            
+            // tanh(x) - hiperbolik tanjant
+            if (strcmp(node->name, "tanh") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)tanh(x));
+            }
+            
+            // min(a, b, ...) - minimum değer
+            if (strcmp(node->name, "min") == 0 && node->argument_count >= 1) {
+                double min_val = GET_NUM_ARG(0);
+                for (int i = 1; i < node->argument_count; i++) {
+                    double val = GET_NUM_ARG(i);
+                    if (val < min_val) min_val = val;
+                }
+                return value_create_float((float)min_val);
+            }
+            
+            // max(a, b, ...) - maximum değer
+            if (strcmp(node->name, "max") == 0 && node->argument_count >= 1) {
+                double max_val = GET_NUM_ARG(0);
+                for (int i = 1; i < node->argument_count; i++) {
+                    double val = GET_NUM_ARG(i);
+                    if (val > max_val) max_val = val;
+                }
+                return value_create_float((float)max_val);
+            }
+            
+            // random() - 0 ile 1 arası rastgele sayı
+            if (strcmp(node->name, "random") == 0) {
+                static int seeded = 0;
+                if (!seeded) {
+                    srand((unsigned int)time(NULL));
+                    seeded = 1;
+                }
+                return value_create_float((float)rand() / (float)RAND_MAX);
+            }
+            
+            // randint(a, b) - a ile b arası rastgele tam sayı
+            if (strcmp(node->name, "randint") == 0 && node->argument_count >= 2) {
+                static int seeded = 0;
+                if (!seeded) {
+                    srand((unsigned int)time(NULL));
+                    seeded = 1;
+                }
+                int a = (int)GET_NUM_ARG(0);
+                int b = (int)GET_NUM_ARG(1);
+                int result = a + rand() % (b - a + 1);
+                return value_create_int(result);
+            }
+            
+            // cbrt(x) - küp kök
+            if (strcmp(node->name, "cbrt") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_float((float)cbrt(x));
+            }
+            
+            // hypot(x, y) - hipotenüs (sqrt(x^2 + y^2))
+            if (strcmp(node->name, "hypot") == 0 && node->argument_count >= 2) {
+                double x = GET_NUM_ARG(0);
+                double y = GET_NUM_ARG(1);
+                return value_create_float((float)hypot(x, y));
+            }
+            
+            // fmod(x, y) - kayan nokta mod
+            if (strcmp(node->name, "fmod") == 0 && node->argument_count >= 2) {
+                double x = GET_NUM_ARG(0);
+                double y = GET_NUM_ARG(1);
+                return value_create_float((float)fmod(x, y));
+            }
+            
+            // trunc(x) - ondalık kısmı atar
+            if (strcmp(node->name, "trunc") == 0 && node->argument_count >= 1) {
+                double x = GET_NUM_ARG(0);
+                return value_create_int((int)trunc(x));
             }
             
             // Kullanıcı tanımlı fonksiyonlar
