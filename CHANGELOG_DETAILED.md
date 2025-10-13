@@ -2,6 +2,37 @@
 
 Tüm önemli değişiklikler bu dosyada dokümante edilmiştir.
 
+## [1.5.0] - 2025-10-13
+
+### ✨ Eklenenler
+- **String İşleme Kütüphanesi** - 16 yerleşik string fonksiyonu
+  - **Dönüşüm**: `upper()`, `lower()`, `capitalize()`, `reverse()`
+  - **Temizleme**: `trim()`, `replace(old, new)`
+  - **Arama**: `contains(sub)`, `startsWith(prefix)`, `endsWith(suffix)`, `indexOf(sub)`, `count(sub)`
+  - **Alt String**: `substring(start, end)`, `repeat(n)`
+  - **Bölme/Birleştirme**: `split(delimiter)` → array, `join(separator, array)` → string
+  - **Kontrol**: `isEmpty()`, `isDigit()`, `isAlpha()`
+  
+- **Özellikler**:
+  - Tüm string fonksiyonları UTF-8 uyumlu
+  - `split()` string'i diziye ayırır
+  - `join()` diziyi string'e birleştirir
+  - Email, URL, metin işleme kolaylaştı
+  
+- **Örnek**: `examples/19_string_functions.olang` - Tüm 16 fonksiyonun testleri
+
+### 🔧 İyileştirmeler
+- `#include <ctype.h>` eklendi (toupper, tolower, isdigit, isalpha için)
+- String fonksiyonları bellek güvenli (malloc/free)
+- Hata kontrolü ve sınır kontrolleri eklendi
+
+### 📊 İstatistikler
+- Toplam built-in fonksiyon sayısı: 39 → **55** (+16 string)
+- Örnek dosya sayısı: 19 → **20**
+- Toplam kod satırı: ~4300 → **~4500**
+
+---
+
 ## [1.4.1] - 2025-10-13
 
 ### ✨ Eklenenler

@@ -558,6 +558,71 @@ print(data["users"][0]["name"][0]);   // "A"
 - ✅ JSON/Array zincirleri ile birlikte kullanılabilir
 - ✅ Hata mesajı: "String index sınırların dışında"
 
+### String İşleme Fonksiyonları (Faz 5 ✨) **YENİ!**
+
+OLang, **16 yerleşik string fonksiyonu** ile güçlü metin işleme yetenekleri sunar:
+
+#### Dönüşüm Fonksiyonları
+```olang
+str text = "Hello World";
+upper(text)         // "HELLO WORLD"
+lower(text)         // "hello world"
+capitalize(text)    // "Hello world"
+reverse(text)       // "dlroW olleH"
+```
+
+#### Temizleme ve Düzenleme
+```olang
+trim("  Hamza  ")              // "Hamza"
+replace("Hi Hi", "Hi", "Bye")  // "Bye Bye"
+```
+
+#### Arama ve Kontrol
+```olang
+contains("Hello", "ell")          // true
+startsWith("Hello", "He")         // true
+endsWith("Hello", "lo")           // true
+indexOf("abcabc", "abc")          // 0 (ilk konum)
+count("banana", "a")              // 3
+```
+
+#### Alt String ve Tekrarlama
+```olang
+substring("JavaScript", 0, 4)  // "Java"
+repeat("Ha", 3)                // "HaHaHa"
+```
+
+#### Bölme ve Birleştirme
+```olang
+arrayStr parts = split("a,b,c", ",");  // ["a", "b", "c"]
+str joined = join("-", parts);          // "a-b-c"
+```
+
+#### Kontrol Fonksiyonları
+```olang
+isEmpty("")          // true
+isDigit("12345")     // true
+isAlpha("abcdef")    // true
+```
+
+**Tüm String Fonksiyonları:**
+- `upper(s)`, `lower(s)`, `capitalize(s)`, `reverse(s)`
+- `trim(s)`, `replace(s, old, new)`
+- `contains(s, sub)`, `startsWith(s, prefix)`, `endsWith(s, suffix)`
+- `indexOf(s, sub)`, `count(s, sub)`
+- `substring(s, start, end)`, `repeat(s, n)`
+- `split(s, delimiter)`, `join(separator, array)`
+- `isEmpty(s)`, `isDigit(s)`, `isAlpha(s)`
+
+**Örnek: Email İşleme**
+```olang
+str email = "  HAMZA@EXAMPLE.COM  ";
+str clean = lower(trim(email));         // "hamza@example.com"
+arrayStr parts = split(clean, "@");     // ["hamza", "example.com"]
+str username = parts[0];                // "hamza"
+str domain = parts[1];                  // "example.com"
+```
+
 ### Yardımcı Fonksiyonlar
 
 - `range(n)` - 0'dan n'e kadar sayı dizisi (foreach için)
@@ -789,5 +854,5 @@ GitHub: [@hamer1818](https://github.com/hamer1818)
 
 ---
 
-**OLang v1.4.1** - Modern, UTF-8 destekli, JSON-native, matematik kütüphaneli, string indexing destekli programlama dili! 🎉  
+**OLang v1.5.0** - Modern, UTF-8 destekli, JSON-native, matematik ve string kütüphaneli programlama dili! 🎉  
 **Son Güncelleme**: 13 Ekim 2025

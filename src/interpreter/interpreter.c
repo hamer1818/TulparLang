@@ -5,6 +5,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <ctype.h>
 
 // ============================================================================
 // VALUE FONKSİYONLARI
@@ -1307,6 +1308,493 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 double x = GET_NUM_ARG(0);
                 double y = GET_NUM_ARG(1);
                 return value_create_float((float)fmod(x, y));
+            }
+            
+            // ========================================================================
+            // STRING FONKSİYONLARI
+            // ========================================================================
+            
+            // Helper: Get string argument
+            #define GET_STR_ARG(idx) ({ \
+                Value* _arg = interpreter_eval_expression(interp, node->arguments[idx]); \
+                char* _str = NULL; \
+                if (_arg->type == VAL_STRING) _str = _arg->data.string_val; \
+                _str; \
+            })
+            
+            // upper(s) - büyük harfe çevir
+            if (strcmp(node->name, "upper") == 0 && node->argument_count >= 1) {
+                Value* arg = interpreter_eval_expression(interp, node->arguments[0]);
+                if (arg->type == VAL_STRING) {
+                    char* str = strdup(arg->data.string_val);
+                    for (int i = 0; str[i]; i++) {
+                        str[i] = toupper((unsigned char)str[i]);
+                    }
+                    value_free(arg);
+                    Value* result = value_create_string(str);
+                    free(str);
+                    return result;
+                }
+                value_free(arg);
+                return value_create_string("");
+            }
+            
+            // lower(s) - küçük harfe çevir
+            if (strcmp(node->name, "lower") == 0 && node->argument_count >= 1) {
+                Value* arg = interpreter_eval_expression(interp, node->arguments[0]);
+                if (arg->type == VAL_STRING) {
+                    char* str = strdup(arg->data.string_val);
+                    for (int i = 0; str[i]; i++) {
+                        str[i] = tolower((unsigned char)str[i]);
+                    }
+                    value_free(arg);
+                    Value* result = value_create_string(str);
+                    free(str);
+                    return result;
+                }
+                value_free(arg);
+                return value_create_string("");
+            }
+            
+            // trim(s) - baş ve sondaki boşlukları sil
+            if (strcmp(node->name, "trim") == 0 && node->argument_count >= 1) {
+                Value* arg = interpreter_eval_expression(interp, node->arguments[0]);
+                if (arg->type == VAL_STRING) {
+                    char* str = arg->data.string_val;
+                    char* start = str;
+                    char* end = str + strlen(str) - 1;
+                    
+                    // Baştan boşlukları atla
+                    while (*start && isspace((unsigned char)*start)) start++;
+                    
+                    // Sondan boşlukları atla
+                    while (end > start && isspace((unsigned char)*end)) end--;
+                    
+                    // Yeni string oluştur
+                    int len = end - start + 1;
+                    char* result_str = (char*)malloc(len + 1);
+                    strncpy(result_str, start, len);
+                    result_str[len] = '\0';
+                    
+                    value_free(arg);
+                    Value* result = value_create_string(result_str);
+                    free(result_str);
+                    return result;
+                }
+                value_free(arg);
+                return value_create_string("");
+            }
+            
+            // replace(s, old, new) - değiştir
+            if (strcmp(node->name, "replace") == 0 && node->argument_count >= 3) {
+                Value* str_val = interpreter_eval_expression(interp, node->arguments[0]);
+                Value* old_val = interpreter_eval_expression(interp, node->arguments[1]);
+                Value* new_val = interpreter_eval_expression(interp, node->arguments[2]);
+                
+                if (str_val->type == VAL_STRING && old_val->type == VAL_STRING && new_val->type == VAL_STRING) {
+                    char* str = str_val->data.string_val;
+                    char* old = old_val->data.string_val;
+                    char* new = new_val->data.string_val;
+                    
+                    int old_len = strlen(old);
+                    int new_len = strlen(new);
+                    
+                    // Kaç kez geçiyor say
+                    int count = 0;
+                    char* p = str;
+                    while ((p = strstr(p, old)) != NULL) {
+                        count++;
+                        p += old_len;
+                    }
+                    
+                    // Yeni string için yer ayır
+                    int result_len = strlen(str) + count * (new_len - old_len);
+                    char* result_str = (char*)malloc(result_len + 1);
+                    char* dst = result_str;
+                    
+                    // Replace işlemi
+                    p = str;
+                    char* found;
+                    while ((found = strstr(p, old)) != NULL) {
+                        int prefix_len = found - p;
+                        strncpy(dst, p, prefix_len);
+                        dst += prefix_len;
+                        strcpy(dst, new);
+                        dst += new_len;
+                        p = found + old_len;
+                    }
+                    strcpy(dst, p);
+                    
+                    value_free(str_val);
+                    value_free(old_val);
+                    value_free(new_val);
+                    
+                    Value* result = value_create_string(result_str);
+                    free(result_str);
+                    return result;
+                }
+                
+                value_free(str_val);
+                value_free(old_val);
+                value_free(new_val);
+                return value_create_string("");
+            }
+            
+            // contains(s, sub) - alt string var mı
+            if (strcmp(node->name, "contains") == 0 && node->argument_count >= 2) {
+                Value* str_val = interpreter_eval_expression(interp, node->arguments[0]);
+                Value* sub_val = interpreter_eval_expression(interp, node->arguments[1]);
+                
+                int result = 0;
+                if (str_val->type == VAL_STRING && sub_val->type == VAL_STRING) {
+                    result = (strstr(str_val->data.string_val, sub_val->data.string_val) != NULL);
+                }
+                
+                value_free(str_val);
+                value_free(sub_val);
+                return value_create_bool(result);
+            }
+            
+            // startsWith(s, prefix) - ile başlıyor mu
+            if (strcmp(node->name, "startsWith") == 0 && node->argument_count >= 2) {
+                Value* str_val = interpreter_eval_expression(interp, node->arguments[0]);
+                Value* prefix_val = interpreter_eval_expression(interp, node->arguments[1]);
+                
+                int result = 0;
+                if (str_val->type == VAL_STRING && prefix_val->type == VAL_STRING) {
+                    result = (strncmp(str_val->data.string_val, prefix_val->data.string_val, 
+                                     strlen(prefix_val->data.string_val)) == 0);
+                }
+                
+                value_free(str_val);
+                value_free(prefix_val);
+                return value_create_bool(result);
+            }
+            
+            // endsWith(s, suffix) - ile bitiyor mu
+            if (strcmp(node->name, "endsWith") == 0 && node->argument_count >= 2) {
+                Value* str_val = interpreter_eval_expression(interp, node->arguments[0]);
+                Value* suffix_val = interpreter_eval_expression(interp, node->arguments[1]);
+                
+                int result = 0;
+                if (str_val->type == VAL_STRING && suffix_val->type == VAL_STRING) {
+                    int str_len = strlen(str_val->data.string_val);
+                    int suffix_len = strlen(suffix_val->data.string_val);
+                    
+                    if (suffix_len <= str_len) {
+                        result = (strcmp(str_val->data.string_val + str_len - suffix_len, 
+                                        suffix_val->data.string_val) == 0);
+                    }
+                }
+                
+                value_free(str_val);
+                value_free(suffix_val);
+                return value_create_bool(result);
+            }
+            
+            // indexOf(s, sub) - ilk konum (-1 = bulunamadı)
+            if (strcmp(node->name, "indexOf") == 0 && node->argument_count >= 2) {
+                Value* str_val = interpreter_eval_expression(interp, node->arguments[0]);
+                Value* sub_val = interpreter_eval_expression(interp, node->arguments[1]);
+                
+                int result = -1;
+                if (str_val->type == VAL_STRING && sub_val->type == VAL_STRING) {
+                    char* found = strstr(str_val->data.string_val, sub_val->data.string_val);
+                    if (found) {
+                        result = found - str_val->data.string_val;
+                    }
+                }
+                
+                value_free(str_val);
+                value_free(sub_val);
+                return value_create_int(result);
+            }
+            
+            // substring(s, start, end) - alt string
+            if (strcmp(node->name, "substring") == 0 && node->argument_count >= 3) {
+                Value* str_val = interpreter_eval_expression(interp, node->arguments[0]);
+                Value* start_val = interpreter_eval_expression(interp, node->arguments[1]);
+                Value* end_val = interpreter_eval_expression(interp, node->arguments[2]);
+                
+                if (str_val->type == VAL_STRING && start_val->type == VAL_INT && end_val->type == VAL_INT) {
+                    char* str = str_val->data.string_val;
+                    int start = start_val->data.int_val;
+                    int end = end_val->data.int_val;
+                    int len = strlen(str);
+                    
+                    // Sınır kontrolleri
+                    if (start < 0) start = 0;
+                    if (end > len) end = len;
+                    if (start > end) start = end;
+                    
+                    int sub_len = end - start;
+                    char* result_str = (char*)malloc(sub_len + 1);
+                    strncpy(result_str, str + start, sub_len);
+                    result_str[sub_len] = '\0';
+                    
+                    value_free(str_val);
+                    value_free(start_val);
+                    value_free(end_val);
+                    
+                    Value* result = value_create_string(result_str);
+                    free(result_str);
+                    return result;
+                }
+                
+                value_free(str_val);
+                value_free(start_val);
+                value_free(end_val);
+                return value_create_string("");
+            }
+            
+            // repeat(s, n) - tekrarla
+            if (strcmp(node->name, "repeat") == 0 && node->argument_count >= 2) {
+                Value* str_val = interpreter_eval_expression(interp, node->arguments[0]);
+                Value* n_val = interpreter_eval_expression(interp, node->arguments[1]);
+                
+                if (str_val->type == VAL_STRING && n_val->type == VAL_INT) {
+                    char* str = str_val->data.string_val;
+                    int n = n_val->data.int_val;
+                    int str_len = strlen(str);
+                    
+                    if (n <= 0) {
+                        value_free(str_val);
+                        value_free(n_val);
+                        return value_create_string("");
+                    }
+                    
+                    char* result_str = (char*)malloc(str_len * n + 1);
+                    result_str[0] = '\0';
+                    
+                    for (int i = 0; i < n; i++) {
+                        strcat(result_str, str);
+                    }
+                    
+                    value_free(str_val);
+                    value_free(n_val);
+                    
+                    Value* result = value_create_string(result_str);
+                    free(result_str);
+                    return result;
+                }
+                
+                value_free(str_val);
+                value_free(n_val);
+                return value_create_string("");
+            }
+            
+            // reverse(s) - ters çevir
+            if (strcmp(node->name, "reverse") == 0 && node->argument_count >= 1) {
+                Value* str_val = interpreter_eval_expression(interp, node->arguments[0]);
+                
+                if (str_val->type == VAL_STRING) {
+                    char* str = str_val->data.string_val;
+                    int len = strlen(str);
+                    char* result_str = (char*)malloc(len + 1);
+                    
+                    for (int i = 0; i < len; i++) {
+                        result_str[i] = str[len - 1 - i];
+                    }
+                    result_str[len] = '\0';
+                    
+                    value_free(str_val);
+                    Value* result = value_create_string(result_str);
+                    free(result_str);
+                    return result;
+                }
+                
+                value_free(str_val);
+                return value_create_string("");
+            }
+            
+            // isEmpty(s) - boş mu
+            if (strcmp(node->name, "isEmpty") == 0 && node->argument_count >= 1) {
+                Value* str_val = interpreter_eval_expression(interp, node->arguments[0]);
+                
+                int result = 1;
+                if (str_val->type == VAL_STRING) {
+                    result = (strlen(str_val->data.string_val) == 0);
+                }
+                
+                value_free(str_val);
+                return value_create_bool(result);
+            }
+            
+            // count(s, sub) - kaç kez geçiyor
+            if (strcmp(node->name, "count") == 0 && node->argument_count >= 2) {
+                Value* str_val = interpreter_eval_expression(interp, node->arguments[0]);
+                Value* sub_val = interpreter_eval_expression(interp, node->arguments[1]);
+                
+                int count = 0;
+                if (str_val->type == VAL_STRING && sub_val->type == VAL_STRING) {
+                    char* str = str_val->data.string_val;
+                    char* sub = sub_val->data.string_val;
+                    int sub_len = strlen(sub);
+                    
+                    char* p = str;
+                    while ((p = strstr(p, sub)) != NULL) {
+                        count++;
+                        p += sub_len;
+                    }
+                }
+                
+                value_free(str_val);
+                value_free(sub_val);
+                return value_create_int(count);
+            }
+            
+            // capitalize(s) - ilk harf büyük
+            if (strcmp(node->name, "capitalize") == 0 && node->argument_count >= 1) {
+                Value* str_val = interpreter_eval_expression(interp, node->arguments[0]);
+                
+                if (str_val->type == VAL_STRING) {
+                    char* str = strdup(str_val->data.string_val);
+                    
+                    if (str[0]) {
+                        str[0] = toupper((unsigned char)str[0]);
+                        for (int i = 1; str[i]; i++) {
+                            str[i] = tolower((unsigned char)str[i]);
+                        }
+                    }
+                    
+                    value_free(str_val);
+                    Value* result = value_create_string(str);
+                    free(str);
+                    return result;
+                }
+                
+                value_free(str_val);
+                return value_create_string("");
+            }
+            
+            // isDigit(s) - sadece rakam mı
+            if (strcmp(node->name, "isDigit") == 0 && node->argument_count >= 1) {
+                Value* str_val = interpreter_eval_expression(interp, node->arguments[0]);
+                
+                int result = 0;
+                if (str_val->type == VAL_STRING && strlen(str_val->data.string_val) > 0) {
+                    result = 1;
+                    for (char* p = str_val->data.string_val; *p; p++) {
+                        if (!isdigit((unsigned char)*p)) {
+                            result = 0;
+                            break;
+                        }
+                    }
+                }
+                
+                value_free(str_val);
+                return value_create_bool(result);
+            }
+            
+            // isAlpha(s) - sadece harf mi
+            if (strcmp(node->name, "isAlpha") == 0 && node->argument_count >= 1) {
+                Value* str_val = interpreter_eval_expression(interp, node->arguments[0]);
+                
+                int result = 0;
+                if (str_val->type == VAL_STRING && strlen(str_val->data.string_val) > 0) {
+                    result = 1;
+                    for (char* p = str_val->data.string_val; *p; p++) {
+                        if (!isalpha((unsigned char)*p)) {
+                            result = 0;
+                            break;
+                        }
+                    }
+                }
+                
+                value_free(str_val);
+                return value_create_bool(result);
+            }
+            
+            // split(s, delimiter) - string'i böl ve dizi döndür
+            if (strcmp(node->name, "split") == 0 && node->argument_count >= 2) {
+                Value* str_val = interpreter_eval_expression(interp, node->arguments[0]);
+                Value* delim_val = interpreter_eval_expression(interp, node->arguments[1]);
+                
+                if (str_val->type == VAL_STRING && delim_val->type == VAL_STRING) {
+                    char* str = strdup(str_val->data.string_val);
+                    char* delim = delim_val->data.string_val;
+                    
+                    // Önce kaç parça olacağını say
+                    int count = 1;
+                    char* temp = str;
+                    while ((temp = strstr(temp, delim)) != NULL) {
+                        count++;
+                        temp += strlen(delim);
+                    }
+                    
+                    // Dizi oluştur
+                    Value* arr = value_create_typed_array(count, VAL_STRING);
+                    
+                    // String'i böl
+                    char* token = str;
+                    char* next = NULL;
+                    for (int i = 0; i < count; i++) {
+                        next = strstr(token, delim);
+                        
+                        if (next) {
+                            *next = '\0';
+                            array_push(arr->data.array_val, value_create_string(token));
+                            token = next + strlen(delim);
+                        } else {
+                            array_push(arr->data.array_val, value_create_string(token));
+                        }
+                    }
+                    
+                    free(str);
+                    value_free(str_val);
+                    value_free(delim_val);
+                    return arr;
+                }
+                
+                value_free(str_val);
+                value_free(delim_val);
+                return value_create_array(0);
+            }
+            
+            // join(separator, array) - diziyi birleştir
+            if (strcmp(node->name, "join") == 0 && node->argument_count >= 2) {
+                Value* sep_val = interpreter_eval_expression(interp, node->arguments[0]);
+                Value* arr_val = interpreter_eval_expression(interp, node->arguments[1]);
+                
+                if (sep_val->type == VAL_STRING && arr_val->type == VAL_ARRAY) {
+                    char* sep = sep_val->data.string_val;
+                    Array* arr = arr_val->data.array_val;
+                    
+                    // Toplam uzunluk hesapla
+                    int total_len = 0;
+                    for (int i = 0; i < arr->length; i++) {
+                        if (arr->elements[i]->type == VAL_STRING) {
+                            total_len += strlen(arr->elements[i]->data.string_val);
+                        }
+                        if (i > 0) {
+                            total_len += strlen(sep);
+                        }
+                    }
+                    
+                    // Sonuç string'i oluştur
+                    char* result_str = (char*)malloc(total_len + 1);
+                    result_str[0] = '\0';
+                    
+                    for (int i = 0; i < arr->length; i++) {
+                        if (i > 0) {
+                            strcat(result_str, sep);
+                        }
+                        if (arr->elements[i]->type == VAL_STRING) {
+                            strcat(result_str, arr->elements[i]->data.string_val);
+                        }
+                    }
+                    
+                    value_free(sep_val);
+                    value_free(arr_val);
+                    
+                    Value* result = value_create_string(result_str);
+                    free(result_str);
+                    return result;
+                }
+                
+                value_free(sep_val);
+                value_free(arr_val);
+                return value_create_string("");
             }
             
             // trunc(x) - ondalık kısmı atar
