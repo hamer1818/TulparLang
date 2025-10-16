@@ -121,6 +121,7 @@ jobs:
     if: |
       github.event_name == 'push' && 
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    continue-on-error: true
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
