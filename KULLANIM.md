@@ -1,4 +1,4 @@
-# OLang Kullanım Kılavuzu 📚
+# TulparLang Kullanım Kılavuzu 📚
 
 ## Hızlı Başlangıç
 
@@ -15,33 +15,33 @@ bash build.sh
 
 ```bash
 # Fibonacci örneği
-wsl ./olang examples/fibonacci.olang
+wsl ./tulpar examples/fibonacci.tpr
 
 # Calculator örneği
-wsl ./olang examples/calculator.olang
+wsl ./tulpar examples/calculator.tpr
 
 # Hello örneği
-wsl ./olang examples/hello.olang
+wsl ./tulpar examples/hello.tpr
 
 # Functions örneği
-wsl ./olang examples/functions.olang
+wsl ./tulpar examples/functions.tpr
 
 # Control flow örneği
-wsl ./olang examples/control_flow.olang
+wsl ./tulpar examples/control_flow.tpr
 ```
 
-## Kendi OLang Programınızı Yazın
+## Kendi TulparLang Programınızı Yazın
 
 ### Adım 1: Dosya Oluşturun
-Herhangi bir metin editöründe `.olang` uzantılı bir dosya oluşturun:
+Herhangi bir metin editöründe `.tpr` uzantılı bir dosya oluşturun:
 
 ```bash
-# Örnek: test.olang
+# Örnek: test.tpr
 ```
 
 ### Adım 2: Kod Yazın
-```olang
-// test.olang
+```tulpar
+// test.tpr
 
 // Değişkenler
 int sayi1 = 10;
@@ -59,13 +59,13 @@ int sonuc = kare(5);
 
 ### Adım 3: Çalıştırın
 ```bash
-wsl ./olang test.olang
+wsl ./tulpar test.tpr
 ```
 
 ## Söz Dizimi Örnekleri
 
 ### Değişken Tanımlama
-```olang
+```tulpar
 int x = 5;
 float pi = 3.14;
 str mesaj = "Merhaba";
@@ -73,7 +73,7 @@ bool aktif = true;
 ```
 
 ### Matematik İşlemleri
-```olang
+```tulpar
 int a = 10;
 int b = 3;
 
@@ -84,7 +84,7 @@ int bolum = a / b;     // 3
 ```
 
 ### Fonksiyon Tanımlama
-```olang
+```tulpar
 // Basit fonksiyon
 func topla(int a, int b) {
     return a + b;
@@ -101,7 +101,7 @@ func faktoriyel(int n) {
 ```
 
 ### If/Else Yapısı
-```olang
+```tulpar
 int x = 15;
 
 if (x > 10) {
@@ -112,7 +112,7 @@ if (x > 10) {
 ```
 
 ### While Döngüsü
-```olang
+```tulpar
 int i = 0;
 int toplam = 0;
 
@@ -123,7 +123,7 @@ while (i < 10) {
 ```
 
 ### Karşılaştırma Operatörleri
-```olang
+```tulpar
 int a = 10;
 int b = 20;
 
@@ -138,7 +138,7 @@ bool buyuk_esit = a >= b;     // false
 ### Built-in Fonksiyonlar
 
 #### Print (Ekrana Yazdırma)
-```olang
+```tulpar
 print("Merhaba Dünya!");
 print("x =", 10);
 print("Toplam:", 5 + 3);
@@ -148,7 +148,7 @@ print("Cevap:", x);
 ```
 
 #### Input (Kullanıcıdan Veri Alma)
-```olang
+```tulpar
 // String okuma
 str isim = input("Adınız: ");
 print("Merhaba", isim);
@@ -163,7 +163,7 @@ print("Boyunuz:", boy, "metre");
 ```
 
 ### İnteraktif Program Örneği
-```olang
+```tulpar
 print("=== İnteraktif Hesap Makinesi ===");
 
 int sayi1 = inputInt("Birinci sayı: ");
@@ -178,7 +178,7 @@ print("Çarpım:", carpim);
 
 ## Programı Anlamak
 
-OLang üç aşamada çalışır:
+TulparLang üç aşamada çalışır:
 
 ### 1. LEXER (Tokenization)
 Kaynak kodunuzu token'lara ayırır:
@@ -200,7 +200,7 @@ AST'yi dolaşarak kodu çalıştırır ve sonuç üretir.
 
 ### Hata: Dosya Bulunamadı
 ```
-Hata: 'test.olang' dosyasi acilamadi!
+Hata: 'test.tpr' dosyasi acilamadi!
 ```
 **Çözüm:** Dosya yolunun doğru olduğundan emin olun.
 
@@ -226,7 +226,7 @@ Hata: Sıfıra bölme!
 
 1. **Noktalı virgül (;) kullanmayı unutmayın!** Her statement noktalı virgülle bitmelidir.
 
-2. **Fonksiyonları kullanmadan önce tanımlayın.** OLang yukarıdan aşağıya çalışır.
+2. **Fonksiyonları kullanmadan önce tanımlayın.** TulparLang yukarıdan aşağıya çalışır.
 
 3. **Değişken tiplerini belirtin.** Her değişken tanımında tip belirtilmelidir (int, float, str, bool).
 
@@ -237,7 +237,7 @@ Hata: Sıfıra bölme!
 ## Örnek Programlar
 
 ### 1. Fibonacci Hesaplama
-```olang
+```tulpar
 func fibonacci(int n) {
     if (n <= 1) {
         return n;
@@ -251,7 +251,7 @@ int fib10 = fibonacci(10);  // 55
 ```
 
 ### 2. Faktöriyel Hesaplama
-```olang
+```tulpar
 func faktoriyel(int n) {
     if (n <= 1) {
         return 1;
@@ -263,7 +263,7 @@ int fakt5 = faktoriyel(5);  // 120
 ```
 
 ### 3. Max/Min Bulma
-```olang
+```tulpar
 func max(int a, int b) {
     if (a > b) {
         return a;
@@ -285,7 +285,7 @@ int kucuk = min(10, 20);   // 10
 ## Gelişmiş Konular
 
 ### Recursive Fonksiyonlar
-OLang recursive fonksiyonları destekler. Her recursive fonksiyon için:
+TulparLang recursive fonksiyonları destekler. Her recursive fonksiyon için:
 - Base case ekleyin (döngüden çıkış koşulu)
 - Her çağrıda problemi küçültün
 
@@ -303,5 +303,5 @@ OLang recursive fonksiyonları destekler. Her recursive fonksiyon için:
 
 **İyi kodlamalar!** 🚀
 
-Sorularınız için: [GitHub Issues](https://github.com/your-repo/OLang/issues)
+Sorularınız için: [GitHub Issues](https://github.com/your-repo/TulparLang/issues)
 

@@ -95,13 +95,13 @@ int main(int argc, char** argv) {
     // Başlık
     if (!from_file) {
         printf("========================================\n");
-        printf("   OLang Interpreter - Demo\n");
+        printf("   TulparLang Interpreter - Demo\n");
         printf("========================================\n\n");
         printf("Kaynak Kod:\n");
         printf("-------------------\n%s\n", source);
         printf("-------------------\n\n");
     } else {
-        printf("OLang calistiriliyor: %s\n\n", argv[1]);
+        printf("TulparLang calistiriliyor: %s\n\n", argv[1]);
     }
     
     // ========================================
@@ -178,7 +178,7 @@ int main(int argc, char** argv) {
     
     if (!from_file) {
         printf("\n========================================\n");
-        printf("   OLang basariyla calisti! ✓\n");
+        printf("   TulparLang basariyla calisti! ✓\n");
         printf("========================================\n");
     } else {
         printf("\n✓ Basariyla tamamlandi.\n");

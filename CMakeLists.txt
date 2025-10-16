@@ -1,9 +1,9 @@
-# OLang - Cross-Platform Programming Language
+# TulparLang - Cross-Platform Programming Language
 # Minimum CMake version
 cmake_minimum_required(VERSION 3.10)
 
 # Project name and version
-project(OLang VERSION 1.2.2 LANGUAGES C)
+project(TulparLang VERSION 1.2.2 LANGUAGES C)
 
 # C Standard
 set(CMAKE_C_STANDARD 99)
@@ -55,17 +55,17 @@ set(ALL_SOURCES
 )
 
 # Executable
-add_executable(olang ${ALL_SOURCES})
+add_executable(tulpar ${ALL_SOURCES})
 
 # Platform-specific settings
 if(WIN32)
     # Windows specific
     message(STATUS "Configuring for Windows")
-    target_compile_definitions(olang PRIVATE PLATFORM_WINDOWS)
+    target_compile_definitions(tulpar PRIVATE PLATFORM_WINDOWS)
 elseif(APPLE)
     # macOS specific
     message(STATUS "Configuring for macOS")
-    target_compile_definitions(olang PRIVATE PLATFORM_MACOS)
+    target_compile_definitions(tulpar PRIVATE PLATFORM_MACOS)
     # Apple Silicon support
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
         message(STATUS "Building for Apple Silicon (ARM64)")
@@ -73,19 +73,19 @@ elseif(APPLE)
 elseif(UNIX)
     # Linux specific
     message(STATUS "Configuring for Linux")
-    target_compile_definitions(olang PRIVATE PLATFORM_LINUX)
-    target_link_libraries(olang m)  # Link math library
+    target_compile_definitions(tulpar PRIVATE PLATFORM_LINUX)
+    target_link_libraries(tulpar m)  # Link math library
 endif()
 
 # Installation
-install(TARGETS olang
+install(TARGETS tulpar
     RUNTIME DESTINATION bin
 )
 
 # Install examples
 install(DIRECTORY examples/
-    DESTINATION share/olang/examples
-    FILES_MATCHING PATTERN "*.olang"
+    DESTINATION share/tulpar/examples
+    FILES_MATCHING PATTERN "*.tpr"
 )
 
 # Install documentation
@@ -97,11 +97,11 @@ install(FILES
     TIP_GUVENLIKLI_DIZILER.md
     ARRAYJSON_KULLANIM.md
     CHANGELOG.md
-    DESTINATION share/doc/olang
+    DESTINATION share/doc/tulpar
 )
 
 # Print build info
-message(STATUS "OLang Version: ${PROJECT_VERSION}")
+message(STATUS "TulparLang Version: ${PROJECT_VERSION}")
 message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "C Compiler: ${CMAKE_C_COMPILER}")
 message(STATUS "System: ${CMAKE_SYSTEM_NAME}")

@@ -1,4 +1,4 @@
-# OLang Hızlı Kurulum Rehberi ⚡
+# TulparLang Hızlı Kurulum Rehberi ⚡
 
 Platform seçin ve adımları takip edin!
 
@@ -12,15 +12,15 @@ Platform seçin ve adımları takip edin!
 # 1. Gerekli araçları yükle (tek satır)
 sudo apt-get update && sudo apt-get install -y build-essential cmake git
 
-# 2. OLang'i indir
-git clone https://github.com/yourusername/OLang.git
-cd OLang
+# 2. TulparLang'i indir
+git clone https://github.com/hamer1818/TulparLang.git
+cd TulparLang
 
 # 3. Build et
 ./build.sh
 
 # 4. Test et
-./olang examples/01_hello_world.olang
+./TulparLang examples/01_hello_world.tpr
 
 # ✅ TAMAMLANDI!
 ```
@@ -32,10 +32,10 @@ cd OLang
 sudo dnf install gcc cmake git
 
 # 2-4. Yukarıdaki adımları takip et
-git clone https://github.com/yourusername/OLang.git
-cd OLang
+git clone https://github.com/hamer1818/TulparLang.git
+cd TulparLang
 ./build.sh
-./olang examples/01_hello_world.olang
+./TulparLang examples/01_hello_world.tpr
 ```
 
 ### Arch Linux
@@ -60,13 +60,13 @@ sudo pacman -S base-devel cmake git
 # 2. Gerekli araçları yükle
 brew install cmake git
 
-# 3. OLang'i indir ve build et
-git clone https://github.com/yourusername/OLang.git
-cd OLang
+# 3. TulparLang'i indir ve build et
+git clone https://github.com/hamer1818/TulparLang.git
+cd TulparLang
 ./build.sh
 
 # 4. Test et
-./olang examples/01_hello_world.olang
+./TulparLang examples/01_hello_world.tpr
 
 # ✅ TAMAMLANDI!
 ```
@@ -87,12 +87,12 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManage
 choco install mingw cmake git -y
 
 # 3. Yeni terminal aç (normal kullanıcı) ve:
-git clone https://github.com/yourusername/OLang.git
-cd OLang
+git clone https://github.com/hamer1818/TulparLang.git
+cd TulparLang
 build.bat
 
 # 4. Test et
-olang.exe examples\01_hello_world.olang
+TulparLang.exe examples\01_hello_world.tpr
 
 # ✅ TAMAMLANDI!
 ```
@@ -109,13 +109,13 @@ wsl --install
 sudo apt-get update
 sudo apt-get install -y build-essential cmake git
 
-# 4. OLang'i kur
-git clone https://github.com/yourusername/OLang.git
-cd OLang
+# 4. TulparLang'i kur
+git clone https://github.com/hamer1818/TulparLang.git
+cd TulparLang
 ./build.sh
 
 # 5. Test et
-./olang examples/01_hello_world.olang
+./TulparLang examples/01_hello_world.tpr
 
 # ✅ TAMAMLANDI!
 ```
@@ -135,12 +135,12 @@ cd OLang
    - Installer'ı çalıştır
    - Varsayılan ayarlarla kur
 
-4. **OLang Build Et**:
+4. **TulparLang Build Et**:
    ```cmd
-   git clone https://github.com/yourusername/OLang.git
-   cd OLang
+   git clone https://github.com/hamer1818/TulparLang.git
+   cd TulparLang
    build.bat
-   olang.exe examples\01_hello_world.olang
+   TulparLang.exe examples\01_hello_world.tpr
    ```
 
 ### Yöntem 4: Visual Studio
@@ -152,14 +152,14 @@ cd OLang
 
 3. **Build**:
    ```cmd
-   git clone https://github.com/yourusername/OLang.git
-   cd OLang
+   git clone https://github.com/hamer1818/TulparLang.git
+   cd TulparLang
    mkdir build
    cd build
    cmake .. -G "Visual Studio 17 2022"
    cmake --build . --config Release
    cd ..
-   build\Release\olang.exe examples\01_hello_world.olang
+   build\Release\TulparLang.exe examples\01_hello_world.tpr
    ```
 
 ---
@@ -189,12 +189,12 @@ cd OLang
 
 ### Linux (Ubuntu)
 ```bash
-sudo apt-get update && sudo apt-get install -y build-essential cmake git && git clone https://github.com/yourusername/OLang.git && cd OLang && ./build.sh && ./olang examples/01_hello_world.olang
+sudo apt-get update && sudo apt-get install -y build-essential cmake git && git clone https://github.com/hamer1818/TulparLang.git && cd TulparLang && ./build.sh && ./TulparLang examples/01_hello_world.tpr
 ```
 
 ### macOS
 ```bash
-brew install cmake git && git clone https://github.com/yourusername/OLang.git && cd OLang && ./build.sh && ./olang examples/01_hello_world.olang
+brew install cmake git && git clone https://github.com/hamer1818/TulparLang.git && cd TulparLang && ./build.sh && ./TulparLang examples/01_hello_world.tpr
 ```
 
 ### Windows (Chocolatey - 2 satır, Admin gerekli)
@@ -203,7 +203,7 @@ brew install cmake git && git clone https://github.com/yourusername/OLang.git &&
 choco install mingw cmake git -y
 
 # Normal terminal:
-git clone https://github.com/yourusername/OLang.git; cd OLang; build.bat; olang.exe examples\01_hello_world.olang
+git clone https://github.com/hamer1818/TulparLang.git; cd TulparLang; build.bat; TulparLang.exe examples\01_hello_world.tpr
 ```
 
 ---
@@ -213,15 +213,15 @@ git clone https://github.com/yourusername/OLang.git; cd OLang; build.bat; olang.
 ### Basit Test
 ```bash
 # Linux/macOS/WSL
-./olang examples/01_hello_world.olang
+./TulparLang examples/01_hello_world.tpr
 
 # Windows
-olang.exe examples\01_hello_world.olang
+TulparLang.exe examples\01_hello_world.tpr
 ```
 
 Çıktı:
 ```
-=== OLANG'E HOŞ GELDİNİZ! ===
+=== TulparLang'E HOŞ GELDİNİZ! ===
 ...
 ✅ Tüm temel özellikler çalışıyor!
 ```
@@ -229,13 +229,13 @@ olang.exe examples\01_hello_world.olang
 ### Tam Test
 ```bash
 # Faz 1 testi
-./olang examples/10_test_phase1.olang
+./TulparLang examples/10_test_phase1.tpr
 
 # Faz 2 testi
-./olang examples/11_test_phase2.olang
+./TulparLang examples/11_test_phase2.tpr
 
 # JSON arrays
-./olang examples/13_json_arrays.olang
+./TulparLang examples/13_json_arrays.tpr
 ```
 
 ---
@@ -282,15 +282,15 @@ chmod +x build.sh
 #### Linux/macOS
 ```bash
 # ~/.bashrc veya ~/.zshrc dosyasına ekle
-export PATH="$PATH:$HOME/OLang"
+export PATH="$PATH:$HOME/TulparLang"
 
 # Veya sistem geneli:
-sudo cp olang /usr/local/bin/
+sudo cp TulparLang /usr/local/bin/
 ```
 
 #### Windows
 1. Sistem Özellikleri → Gelişmiş → Ortam Değişkenleri
-2. PATH'e ekle: `C:\path\to\OLang`
+2. PATH'e ekle: `C:\path\to\TulparLang`
 3. Terminal'i yeniden başlat
 
 ### IDE Entegrasyonu
@@ -299,19 +299,19 @@ sudo cp olang /usr/local/bin/
 ```json
 // .vscode/tasks.json
 {
-  "label": "Run OLang",
+  "label": "Run TulparLang",
   "type": "shell",
-  "command": "./olang ${file}",
+  "command": "./TulparLang ${file}",
   "problemMatcher": []
 }
 ```
 
 #### Sublime Text
 ```json
-// OLang.sublime-build
+// TulparLang.sublime-build
 {
-  "cmd": ["olang", "$file"],
-  "selector": "source.olang"
+  "cmd": ["TulparLang", "$file"],
+  "selector": "source.tpr"
 }
 ```
 
@@ -319,9 +319,9 @@ sudo cp olang /usr/local/bin/
 
 ## ✨ İlk Programınızı Yazın
 
-```olang
-// hello.olang
-print("Merhaba OLang!");
+```TulparLang
+// hello.tpr
+print("Merhaba TulparLang!");
 
 int x = 42;
 str mesaj = "Başarılı!";
@@ -332,7 +332,7 @@ print(mesaj);
 
 Çalıştır:
 ```bash
-./olang hello.olang
+./TulparLang hello.tpr
 ```
 
 ---

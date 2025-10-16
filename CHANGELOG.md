@@ -1,4 +1,4 @@
-# OLang Changelog
+# TulparLang Changelog
 
 ## [1.2.2] - 2025-10-09 - arrayJson Support 🎉
 
@@ -11,7 +11,7 @@
 - Karışık tip desteği (int, float, str, bool bir arada)
 
 **Örnek Kullanımlar:**
-```olang
+```tulpar
 // Kullanıcı verisi
 arrayJson kullanici = ["Ali", 25, true, "Mühendis"];
 
@@ -22,14 +22,12 @@ arrayJson response = [200, "Success", true];
 arrayJson users = [["user1", 25], ["user2", 30]];
 
 // Config data
-arrayJson config = ["OLang", "1.2.2", true, 8080];
+arrayJson config = ["TulparLang", "1.2.2", true, 8080];
 ```
 
 ### 📝 Dokümantasyon
-- ✅ `ARRAYJSON_KULLANIM.md` - Kapsamlı kullanım kılavuzu eklendi
-- ✅ `README.md` güncellendi
-- ✅ `examples/13_json_arrays.olang` - 10 farklı kullanım örneği
-- ✅ `examples/README.md` güncellendi
+- `examples/13_json_arrays.tpr` - 10 farklı kullanım örneği
+- `examples/README.md` güncellendi
 
 ### 🔧 Teknik Değişiklikler
 - `TOKEN_ARRAY_JSON` lexer'a eklendi
@@ -37,7 +35,7 @@ arrayJson config = ["OLang", "1.2.2", true, 8080];
 - Interpreter'da mixed array desteği
 
 ### 📊 İstatistikler
-- **Yeni Dosya**: 3 (ARRAYJSON_KULLANIM.md, 13_json_arrays.olang, CHANGELOG.md)
+- **Yeni Dosya**: 3 (ARRAYJSON_KULLANIM.md, 13_json_arrays.tpr, CHANGELOG.md)
 - **Güncellenen Dosya**: 6 (lexer.h, lexer.c, parser.h, parser.c, interpreter.c, README.md)
 - **Toplam Array Tipi**: 6 (array, arrayInt, arrayFloat, arrayStr, arrayBool, arrayJson)
 
@@ -172,7 +170,7 @@ arrayJson config = ["OLang", "1.2.2", true, 8080];
 
 ## Versiyon Numaralandırma
 
-OLang [Semantic Versioning](https://semver.org/) kullanır:
+TulparLang [Semantic Versioning](https://semver.org/) kullanır:
 - **MAJOR**: Geriye uyumsuz değişiklikler
 - **MINOR**: Yeni özellikler (geriye uyumlu)
 - **PATCH**: Bug fix'ler ve küçük iyileştirmeler

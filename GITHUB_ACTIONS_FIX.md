@@ -53,7 +53,7 @@ GitHub Actions'daki tüm action'lar **v4**'e güncellendi:
 - uses: actions/upload-artifact@v4
 - uses: actions/download-artifact@v4
   with:
-    pattern: olang-*       # Yeni: wildcard pattern
+    pattern: tulpar-*       # Yeni: wildcard pattern
     merge-multiple: true   # Yeni: tüm artifact'ları birleştir
 - uses: softprops/action-gh-release@v2
 ```
@@ -71,7 +71,7 @@ GitHub Actions'daki tüm action'lar **v4**'e güncellendi:
 - name: Download all artifacts
   uses: actions/download-artifact@v4
   with:
-    pattern: olang-*       # Sadece olang-* ile başlayanları indir
+    pattern: tulpar-*       # Sadece tulpar-* ile başlayanları indir
     merge-multiple: true   # Hepsini tek klasöre birleştir
 ```
 
@@ -83,9 +83,9 @@ GitHub Actions'daki tüm action'lar **v4**'e güncellendi:
 - ✅ `build-windows` - Windows latest
 
 ### Artifact Upload
-- ✅ `olang-linux` → v4 ile upload
-- ✅ `olang-macos` → v4 ile upload
-- ✅ `olang-windows` → v4 ile upload
+- ✅ `tulpar-linux` → v4 ile upload
+- ✅ `tulpar-macos` → v4 ile upload
+- ✅ `tulpar-windows` → v4 ile upload
 
 ### Release Creation
 - ✅ Tag push'da otomatik release
@@ -159,7 +159,7 @@ v4 action'lar:
 ---
 
 **Tarih**: 9 Ekim 2025  
-**OLang Version**: 1.2.2  
+**TulparLang Version**: 1.2.2  
 **Actions Version**: v4
 
 **GitHub Actions artık hatasız çalışıyor!** ✅🚀

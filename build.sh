@@ -1,11 +1,11 @@
 #!/bin/bash
 # ============================================
-# OLang Build Script for Unix-like Systems
+# TulparLang Build Script for Unix-like Systems
 # (Linux, macOS, WSL)
 # ============================================
 
 echo "========================================"
-echo "OLang Build Script"
+echo "TulparLang Build Script"
 echo "========================================"
 echo ""
 
@@ -63,7 +63,7 @@ if [ "$BUILD_METHOD" = "cmake" ]; then
 
     # Build
     echo ""
-    echo "Building OLang..."
+    echo "Building TulparLang..."
     cmake --build . --config Release
 
     if [ $? -ne 0 ]; then
@@ -75,7 +75,7 @@ if [ "$BUILD_METHOD" = "cmake" ]; then
     # Copy executable to root
     echo ""
     echo "Copying executable..."
-    cp olang ../olang
+    cp tulpar ../tulpar
 
     cd ..
 else
@@ -94,15 +94,15 @@ else
 fi
 
 # Make executable
-chmod +x olang
+chmod +x tulpar
 
 echo ""
 echo -e "${GREEN}========================================"
 echo "BUILD SUCCESSFUL!"
 echo "========================================${NC}"
 echo ""
-echo "Executable: ./olang"
+echo "Executable: ./tulpar"
 echo ""
 echo "To run examples:"
-echo "  ./olang examples/01_hello_world.olang"
+echo "  ./tulpar examples/01_hello_world.tpr"
 echo ""

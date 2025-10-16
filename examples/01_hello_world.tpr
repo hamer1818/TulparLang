@@ -1,9 +1,9 @@
 // ============================================
-// BAŞLANGIÇ ÖRNEĞİ: OLang'e Hoş Geldiniz!
+// BAŞLANGIÇ ÖRNEĞİ: Tulpar'e Hoş Geldiniz!
 // ============================================
-// Bu dosya OLang'in temel özelliklerini gösterir
+// Bu dosya Tulpar'in temel özelliklerini gösterir
 
-print("=== OLANG'E HOŞ GELDİNİZ! ===");
+print("=== Tulpar'E HOŞ GELDİNİZ! ===");
 print("");
 
 // ----------------------------------------
@@ -13,7 +13,7 @@ print("--- Veri Tipleri ---");
 
 int sayi = 42;
 float pi = 3.14159;
-str mesaj = "Merhaba OLang!";
+str mesaj = "Merhaba Tulpar!";
 bool basarili = true;
 
 print("Integer:", sayi);
@@ -110,9 +110,9 @@ print("");
 // ----------------------------------------
 print("--- String İşlemleri ---");
 
-str isim = "OLang";
+str isim = "Tulpar";
 str versiyon = "1.2.1";
-str info = "Dil: OLang, Versiyon: 1.2.1";
+str info = "Dil: Tulpar, Versiyon: 1.2.1";
 
 print(info);
 print("");
@@ -142,5 +142,5 @@ print("=================================");
 print("✅ Tüm temel özellikler çalışıyor!");
 print("=================================");
 print("");
-print("Sıradaki adım: 02_control_flow.olang");
+print("Sıradaki adım: 02_control_flow.Tulpar");
 

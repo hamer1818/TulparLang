@@ -31,7 +31,7 @@ print("Direkt erişim:", kullanici["sehir"][0]);  // "İ"
 print("");
 
 // Döngü ile string karakterlerini dolaş
-str kelime = "OLang";
+str kelime = "Tulpar";
 print("Kelime harfleri:");
 int idx = 0;
 for (idx = 0; idx < 5; idx++) {

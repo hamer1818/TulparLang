@@ -1,10 +1,10 @@
 @echo off
 REM ============================================
-REM OLang Build Script for Windows
+REM TulparLang Build Script for Windows
 REM ============================================
 
 echo ========================================
-echo OLang Build Script for Windows
+echo TulparLang Build Script for Windows
 echo ========================================
 echo.
 
@@ -23,8 +23,8 @@ REM Clean old build
 if exist build (
     rmdir /s /q build
 )
-if exist olang.exe (
-    del olang.exe
+if exist tulpar.exe (
+    del tulpar.exe
 )
 
 REM Create build directory
@@ -41,7 +41,7 @@ gcc -Wall -Wextra -g -Isrc -c src/main.c -o build/main.o
 if %errorlevel% neq 0 goto :build_error
 
 REM Link
-gcc build/lexer_lexer.o build/parser_parser.o build/interpreter_interpreter.o build/main.o -o olang.exe
+gcc build/lexer_lexer.o build/parser_parser.o build/interpreter_interpreter.o build/main.o -o tulpar.exe
 if %errorlevel% neq 0 goto :build_error
 
 echo.
@@ -49,9 +49,9 @@ echo ========================================
 echo BUILD SUCCESSFUL!
 echo ========================================
 echo.
-echo Executable: olang.exe
+echo Executable: tulpar.exe
 echo To run examples:
-echo   olang.exe examples\01_hello_world.olang
+echo   tulpar.exe examples\01_hello_world.tpr
 exit /b 0
 
 :build_error

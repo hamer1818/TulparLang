@@ -1,11 +1,11 @@
 #!/bin/bash
-# OLang örnek çalıştırıcı
+# TulparLang örnek çalıştırıcı
 
 if [ -z "$1" ]; then
-    echo "Kullanım: ./run_example.sh <dosya.olang>"
+    echo "Kullanım: ./run_example.sh <dosya.tpr>"
     echo ""
     echo "Örnek:"
-    echo "  ./run_example.sh examples/hello.olang"
+    echo "  ./run_example.sh examples/hello.tpr"
     exit 1
 fi
 
@@ -14,7 +14,7 @@ if [ ! -f "$1" ]; then
     exit 1
 fi
 
-echo "OLang dosyası çalıştırılıyor: $1"
+echo "TulparLang dosyası çalıştırılıyor: $1"
 echo "=========================================="
 echo ""
 

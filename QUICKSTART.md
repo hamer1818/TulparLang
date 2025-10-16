@@ -1,6 +1,6 @@
-# OLang - Hızlı Başlangıç 🚀
+# TulparLang - Hızlı Başlangıç 🚀
 
-## 5 Dakikada OLang!
+## 5 Dakikada TulparLang!
 
 ### 1️⃣ Derleme
 
@@ -14,9 +14,9 @@ make
 
 ### 2️⃣ İlk Programınız
 
-`hello.olang` dosyası oluşturun:
-```olang
-print("Merhaba OLang!");
+`hello.tpr` dosyası oluşturun:
+```tulpar
+print("Merhaba TulparLang!");
 
 int x = 10;
 int y = 20;
@@ -27,13 +27,13 @@ print("Toplam:", toplam);
 
 Çalıştırın:
 ```bash
-wsl ./olang hello.olang    # Windows
-./olang hello.olang         # Linux/Mac
+wsl ./tulpar hello.tpr    # Windows
+./tulpar hello.tpr         # Linux/Mac
 ```
 
 ### 3️⃣ Fonksiyonlar
 
-```olang
+```tulpar
 func topla(int a, int b) {
     return a + b;
 }
@@ -54,7 +54,7 @@ print("5! =", fak);
 
 ### 4️⃣ Döngüler
 
-```olang
+```tulpar
 // While döngüsü
 int i = 0;
 while (i < 5) {
@@ -76,7 +76,7 @@ for (k in range(5)) {
 
 ### 5️⃣ Kullanıcı Girişi
 
-```olang
+```tulpar
 str isim = input("Adınız: ");
 int yas = inputInt("Yaşınız: ");
 
@@ -92,7 +92,7 @@ if (yas >= 18) {
 
 ### 6️⃣ Yeni Özellikler (Faz 1) ✨
 
-```olang
+```tulpar
 // Mantıksal operatörler
 int x = 5;
 int y = 10;
@@ -166,7 +166,7 @@ print("Uzunluk:", uzunluk);
 ## 🎯 Örnek Programlar
 
 ### Fibonacci
-```olang
+```tulpar
 func fibonacci(int n) {
     if (n <= 1) {
         return n;
@@ -180,7 +180,7 @@ for (i in range(10)) {
 ```
 
 ### Çarpım Tablosu
-```olang
+```tulpar
 for (i in range(1, 11)) {
     for (j in range(1, 11)) {
         int sonuc = i * j;
@@ -191,7 +191,7 @@ for (i in range(1, 11)) {
 ```
 
 ### Hesap Makinesi
-```olang
+```tulpar
 print("=== Basit Hesap Makinesi ===");
 
 int a = inputInt("Birinci sayı: ");
@@ -205,7 +205,7 @@ print("Bölüm:", a / b);
 
 ## ✅ Başarıyla Tamamladınız!
 
-Artık OLang ile kod yazmaya hazırsınız! 🎉
+Artık TulparLang ile kod yazmaya hazırsınız! 🎉
 
 **Sonraki adımlar:**
 1. `examples/` klasöründeki örnekleri inceleyin

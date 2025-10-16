@@ -133,7 +133,7 @@ print("=== 6. AYARLAR (Config) ===");
 print("");
 
 arrayJson config = [
-    "OLang",           // App name
+    "Tulpar",           // App name
     "1.2.1",           // Version
     true,              // Debug mode
     8080,              // Port

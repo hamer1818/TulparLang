@@ -55,7 +55,7 @@ print("repeat(5):", repeat(tekrar, 5));
 print("");
 
 // 8. reverse()
-str ters = "OLang";
+str ters = "Tulpar";
 print("Orijinal:", ters);
 print("reverse():", reverse(ters));
 print("");
@@ -99,7 +99,7 @@ print("Uzunluk:", length(meyveler));
 print("");
 
 // 14. join()
-arrayStr kelimeler = ["Ben", "OLang", "seviyorum"];
+arrayStr kelimeler = ["Ben", "Tulpar", "seviyorum"];
 print("Dizi:", kelimeler);
 print("join(' '):", join(" ", kelimeler));
 print("join('-'):", join("-", kelimeler));

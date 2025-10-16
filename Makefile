@@ -2,7 +2,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -g -Isrc
 SRC_DIR = src
 BUILD_DIR = build
-TARGET = olang
+TARGET = tulpar
 
 # Tüm kaynak dosyaları bul (recursive)
 LEXER_SOURCES = $(wildcard $(SRC_DIR)/lexer/*.c)

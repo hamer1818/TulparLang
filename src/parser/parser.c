@@ -19,7 +19,7 @@ static Token* parser_peek(Parser* parser) {
     return NULL;
 }
 
-static int parser_expect(Parser* parser, OLangTokenType type) {
+static int parser_expect(Parser* parser, TulparTokenType type) {
     if (parser->current_token->type == type) {
         parser_advance(parser);
         return 1;
@@ -341,7 +341,7 @@ static ASTNode* parse_factor(Parser* parser) {
     
     while (parser->current_token->type == TOKEN_MULTIPLY || 
            parser->current_token->type == TOKEN_DIVIDE) {
-        OLangTokenType op = parser->current_token->type;
+        TulparTokenType op = parser->current_token->type;
         parser_advance(parser);
         
         ASTNode* node = ast_node_create(AST_BINARY_OP);
@@ -360,7 +360,7 @@ static ASTNode* parse_term(Parser* parser) {
     
     while (parser->current_token->type == TOKEN_PLUS || 
            parser->current_token->type == TOKEN_MINUS) {
-        OLangTokenType op = parser->current_token->type;
+        TulparTokenType op = parser->current_token->type;
         parser_advance(parser);
         
         ASTNode* node = ast_node_create(AST_BINARY_OP);
@@ -383,7 +383,7 @@ static ASTNode* parse_comparison(Parser* parser) {
            parser->current_token->type == TOKEN_GREATER ||
            parser->current_token->type == TOKEN_LESS_EQUAL ||
            parser->current_token->type == TOKEN_GREATER_EQUAL) {
-        OLangTokenType op = parser->current_token->type;
+        TulparTokenType op = parser->current_token->type;
         parser_advance(parser);
         
         ASTNode* node = ast_node_create(AST_BINARY_OP);

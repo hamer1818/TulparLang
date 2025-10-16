@@ -1,4 +1,4 @@
-# OLang - Gelecek Özellikler ve Roadmap
+# TulparLang - Gelecek Özellikler ve Roadmap
 
 ## ✅ FAZ 1 - TAMAMLANDI! 🎉
 
@@ -18,7 +18,7 @@
 ### 2.1 Diziler (Arrays) - Yüksek Öncelik
 **Tahmini Süre**: 4-6 saat
 
-```olang
+```tulpar
 // Dizi tanımlama
 int[] sayilar = [1, 2, 3, 4, 5];
 str[] isimler = ["Ali", "Veli", "Ayşe"];
@@ -44,7 +44,7 @@ int son = pop(sayilar);   // Sondan çıkar
 ### 2.2 String Metodları - Orta Öncelik
 **Tahmini Süre**: 2-3 saat
 
-```olang
+```tulpar
 str metin = "Merhaba Dünya";
 int uzunluk = length(metin);
 str buyuk = toUpper(metin);
@@ -63,7 +63,7 @@ bool iceriyor = contains(metin, "Dünya");
 ### 3.1 Struct/Object - Orta Öncelik
 **Tahmini Süre**: 6-8 saat
 
-```olang
+```tulpar
 struct Person {
     str name;
     int age;
@@ -77,7 +77,7 @@ print(kisi.name, kisi.age);
 ### 3.2 Dosya İşlemleri - Düşük Öncelik
 **Tahmini Süre**: 3-4 saat
 
-```olang
+```tulpar
 str icerik = readFile("data.txt");
 writeFile("output.txt", "Merhaba");
 bool varMi = fileExists("test.txt");
@@ -86,7 +86,7 @@ bool varMi = fileExists("test.txt");
 ### 3.3 Hata Yönetimi - Orta Öncelik
 **Tahmini Süre**: 4-5 saat
 
-```olang
+```tulpar
 try {
     int sonuc = 10 / 0;
 } catch (err) {
@@ -97,7 +97,7 @@ try {
 ### 3.4 Lambda/Anonymous Functions - Düşük Öncelik
 **Tahmini Süre**: 5-6 saat
 
-```olang
+```tulpar
 func(int x) -> int adder = func(int a) {
     return a + x;
 };
@@ -126,7 +126,7 @@ int sonuc = adder(5);
 
 ### 4.4 REPL (Interactive Mode)
 - Interaktif komut satırı
-- `.olang` dosya okumadan kod yazma
+- `.tpr` dosya okumadan kod yazma
 
 ---
 
@@ -182,7 +182,7 @@ int sonuc = adder(5);
 
 ## 💡 Sonuç
 
-OLang şu anda **temel bir programlama dili** olarak çalışıyor! 🎉
+TulparLang şu anda **temel bir programlama dili** olarak çalışıyor! 🎉
 
 **Faz 1 tamamlandı** ve dil artık çok daha güçlü. Sıradaki en önemli özellik **diziler** olmalı çünkü:
 - Koleksiyon işlemleri için kritik

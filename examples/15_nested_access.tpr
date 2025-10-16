@@ -147,7 +147,7 @@ print("=== 5. KOMPLEKS NESTED YAPI ===");
 print("");
 
 arrayJson proje = {
-    "isim": "OLang",
+    "isim": "Tulpar",
     "versiyon": "1.3.0",
     "ekipler": [
         {

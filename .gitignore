@@ -1,6 +1,6 @@
 # Build outputs
-olang
-olang.exe
+tulpar
+tulpar.exe
 *.o
 *.obj
 
@@ -33,4 +33,4 @@ Thumbs.db
 desktop.ini
 
 # Test files
-test*.olang
+test*.tpr

@@ -1,6 +1,6 @@
-# OLang - Matematik Fonksiyonları Kılavuzu 📐
+# TulparLang - Matematik Fonksiyonları Kılavuzu 📐
 
-OLang dilinde yerleşik olarak gelen matematik fonksiyonları.
+TulparLang dilinde yerleşik olarak gelen matematik fonksiyonları.
 
 ## 📋 İçindekiler
 
@@ -22,7 +22,7 @@ OLang dilinde yerleşik olarak gelen matematik fonksiyonları.
 ### `abs(x)`
 Mutlak değer döndürür.
 
-```olang
+```TulparLang
 float sonuc = abs(-15.7);  // 15.7
 ```
 
@@ -33,7 +33,7 @@ float sonuc = abs(-15.7);  // 15.7
 ### `floor(x)`
 Aşağı yuvarlar (en yakın küçük tam sayı).
 
-```olang
+```TulparLang
 int sonuc = floor(3.7);  // 3
 int sonuc2 = floor(-3.7);  // -4
 ```
@@ -41,7 +41,7 @@ int sonuc2 = floor(-3.7);  // -4
 ### `ceil(x)`
 Yukarı yuvarlar (en yakın büyük tam sayı).
 
-```olang
+```TulparLang
 int sonuc = ceil(3.2);  // 4
 int sonuc2 = ceil(-3.2);  // -3
 ```
@@ -49,7 +49,7 @@ int sonuc2 = ceil(-3.2);  // -3
 ### `round(x)`
 En yakın tam sayıya yuvarlar.
 
-```olang
+```TulparLang
 int sonuc = round(3.5);  // 4
 int sonuc2 = round(3.4);  // 3
 ```
@@ -57,7 +57,7 @@ int sonuc2 = round(3.4);  // 3
 ### `trunc(x)`
 Ondalık kısmı atar, tam sayı kısmını döndürür.
 
-```olang
+```TulparLang
 int sonuc = trunc(3.9);  // 3
 int sonuc2 = trunc(-3.9);  // -3
 ```
@@ -69,7 +69,7 @@ int sonuc2 = trunc(-3.9);  // -3
 ### `pow(x, y)`
 x üzeri y hesaplar.
 
-```olang
+```TulparLang
 float sonuc = pow(2.0, 8.0);  // 256
 float sonuc2 = pow(5.0, 3.0);  // 125
 ```
@@ -77,7 +77,7 @@ float sonuc2 = pow(5.0, 3.0);  // 125
 ### `sqrt(x)`
 Karekök hesaplar.
 
-```olang
+```TulparLang
 float sonuc = sqrt(25.0);  // 5
 float sonuc2 = sqrt(2.0);  // 1.41421
 ```
@@ -85,7 +85,7 @@ float sonuc2 = sqrt(2.0);  // 1.41421
 ### `cbrt(x)`
 Küpkök hesaplar.
 
-```olang
+```TulparLang
 float sonuc = cbrt(27.0);  // 3
 float sonuc2 = cbrt(8.0);  // 2
 ```
@@ -99,7 +99,7 @@ float sonuc2 = cbrt(8.0);  // 2
 ### `sin(x)`, `cos(x)`, `tan(x)`
 Temel trigonometrik fonksiyonlar.
 
-```olang
+```TulparLang
 float pi = 3.14159;
 float angle = pi / 4.0;  // 45 derece
 
@@ -115,7 +115,7 @@ float tanVal = tan(angle);  // 1.0
 ### `asin(x)`, `acos(x)`, `atan(x)`
 Ters trigonometrik fonksiyonlar (arcsin, arccos, arctan).
 
-```olang
+```TulparLang
 float asinVal = asin(0.5);  // pi/6 radyan (30°)
 float acosVal = acos(0.5);  // pi/3 radyan (60°)
 float atanVal = atan(1.0);  // pi/4 radyan (45°)
@@ -124,7 +124,7 @@ float atanVal = atan(1.0);  // pi/4 radyan (45°)
 ### `atan2(y, x)`
 İki argümanlı arctanjant. Koordinat sisteminde açı hesaplamak için.
 
-```olang
+```TulparLang
 // (1, 1) noktasının açısı
 float angle = atan2(1.0, 1.0);  // pi/4 radyan (45°)
 
@@ -141,7 +141,7 @@ float angle2 = atan2(1.0, -1.0);  // 3*pi/4 radyan (135°)
 ### `sinh(x)`, `cosh(x)`, `tanh(x)`
 Hiperbolik sinüs, kosinüs ve tanjant.
 
-```olang
+```TulparLang
 float sinhVal = sinh(1.0);  // 1.175
 float coshVal = cosh(1.0);  // 1.543
 float tanhVal = tanh(1.0);  // 0.762
@@ -159,7 +159,7 @@ float tanhVal = tanh(1.0);  // 0.762
 ### `exp(x)`
 e üzeri x hesaplar (eˣ).
 
-```olang
+```TulparLang
 float e = exp(1.0);  // 2.71828 (Euler sayısı)
 float sonuc = exp(2.0);  // 7.389
 ```
@@ -167,7 +167,7 @@ float sonuc = exp(2.0);  // 7.389
 ### `log(x)`
 Doğal logaritma (ln x, e tabanında).
 
-```olang
+```TulparLang
 float sonuc = log(2.71828);  // 1.0
 float sonuc2 = log(10.0);  // 2.302
 ```
@@ -175,7 +175,7 @@ float sonuc2 = log(10.0);  // 2.302
 ### `log10(x)`
 10 tabanında logaritma.
 
-```olang
+```TulparLang
 float sonuc = log10(100.0);  // 2.0
 float sonuc2 = log10(1000.0);  // 3.0
 ```
@@ -183,7 +183,7 @@ float sonuc2 = log10(1000.0);  // 3.0
 ### `log2(x)`
 2 tabanında logaritma.
 
-```olang
+```TulparLang
 float sonuc = log2(8.0);  // 3.0
 float sonuc2 = log2(1024.0);  // 10.0
 ```
@@ -195,14 +195,14 @@ float sonuc2 = log2(1024.0);  // 10.0
 ### `min(a, b, ...)`
 Verilen sayılardan en küçüğünü döndürür.
 
-```olang
+```TulparLang
 float sonuc = min(5.0, 3.0, 8.0, 1.0);  // 1.0
 ```
 
 ### `max(a, b, ...)`
 Verilen sayılardan en büyüğünü döndürür.
 
-```olang
+```TulparLang
 float sonuc = max(5.0, 3.0, 8.0, 1.0);  // 8.0
 ```
 
@@ -215,7 +215,7 @@ float sonuc = max(5.0, 3.0, 8.0, 1.0);  // 8.0
 ### `random()`
 0 ile 1 arasında rastgele ondalık sayı üretir (0 dahil, 1 hariç).
 
-```olang
+```TulparLang
 float r1 = random();  // Örnek: 0.724
 float r2 = random();  // Örnek: 0.182
 float r3 = random();  // Örnek: 0.956
@@ -224,14 +224,14 @@ float r3 = random();  // Örnek: 0.956
 ### `randint(a, b)`
 a ile b arasında (her ikisi de dahil) rastgele tam sayı üretir.
 
-```olang
+```TulparLang
 int zar = randint(1, 6);  // 1-6 arası zar atışı
 int yas = randint(18, 65);  // 18-65 arası yaş
 int kart = randint(1, 52);  // Kart çekme
 ```
 
 **Kullanım örnekleri:**
-```olang
+```TulparLang
 // Oyun: Zar atma
 int zar1 = randint(1, 6);
 int zar2 = randint(1, 6);
@@ -251,7 +251,7 @@ float rastgele = min + random() * (max - min);
 ### `hypot(x, y)`
 Hipotenüs hesaplar: √(x² + y²)
 
-```olang
+```TulparLang
 // Pisagor teoremi
 float c = hypot(3.0, 4.0);  // 5.0
 
@@ -264,7 +264,7 @@ float mesafe = hypot(6.0, 8.0);  // 10.0
 ### `fmod(x, y)`
 Kayan noktalı sayılarda mod alma.
 
-```olang
+```TulparLang
 float sonuc = fmod(7.5, 2.3);  // 0.6
 float sonuc2 = fmod(10.5, 3.0);  // 1.5
 ```
@@ -276,7 +276,7 @@ float sonuc2 = fmod(10.5, 3.0);  // 1.5
 ## 🧮 Pratik Örnekler
 
 ### Daire Hesaplamaları
-```olang
+```TulparLang
 float pi = 3.14159;
 float r = 5.0;
 
@@ -290,7 +290,7 @@ print("Çevre:", cevre);  // 31.42
 ```
 
 ### Pisagor Teoremi
-```olang
+```TulparLang
 float a = 3.0;
 float b = 4.0;
 float c = sqrt(pow(a, 2.0) + pow(b, 2.0));
@@ -300,7 +300,7 @@ print("Hipotenüs:", c2);  // 5.0
 ```
 
 ### Açı Dönüşümü (Derece ↔ Radyan)
-```olang
+```TulparLang
 // Derece -> Radyan
 float pi = 3.14159;
 float derece = 45.0;
@@ -314,7 +314,7 @@ print("1.57 rad =", deg, "derece");  // 90°
 ```
 
 ### Üstel Büyüme (Compound Interest)
-```olang
+```TulparLang
 // Yıllık %5 faiz, 10 yıl
 float anaParа = 1000.0;
 float oran = 0.05;
@@ -325,7 +325,7 @@ print("10 yıl sonra:", sonuc);  // 1628.89
 ```
 
 ### Rastgele Şifre Üretimi
-```olang
+```TulparLang
 // 4 haneli PIN kodu
 int pin = randint(1000, 9999);
 print("PIN:", pin);
@@ -386,4 +386,4 @@ bool yazıTura = rastgeleBool == 1;
 
 ---
 
-**OLang v1.3.0** - Matematik Kütüphanesi ✨
+**TulparLang v1.3.0** - Matematik Kütüphanesi ✨

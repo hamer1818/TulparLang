@@ -26,19 +26,19 @@ jobs:
       
       - name: Smoke test (truncated output)
         run: |
-          ./olang examples/01_hello_world.olang | head -n 80
+          ./tulpar examples/01_hello_world.tpr | head -n 80
         timeout-minutes: 2
       
       - name: Prepare artifact
         run: |
           mkdir -p dist
-          cp olang dist/olang-linux-x64
+          cp tulpar dist/tulpar-linux-x64
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: olang-linux-x64
-          path: dist/olang-linux-x64
+          name: tulpar-linux-x64
+          path: dist/tulpar-linux-x64
   
   build-macos:
     runs-on: macos-latest
@@ -56,19 +56,19 @@ jobs:
       
       - name: Smoke test (truncated output)
         run: |
-          ./olang examples/01_hello_world.olang | head -n 80
+          ./tulpar examples/01_hello_world.tpr | head -n 80
         timeout-minutes: 2
       
       - name: Prepare artifact
         run: |
           mkdir -p dist
-          cp olang dist/olang-macos-universal
+          cp tulpar dist/tulpar-macos-universal
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: olang-macos-universal
-          path: dist/olang-macos-universal
+          name: tulpar-macos-universal
+          path: dist/tulpar-macos-universal
   
   build-windows:
     runs-on: windows-latest
@@ -99,20 +99,20 @@ jobs:
         shell: powershell
         run: |
           chcp 65001
-          .\olang.exe examples\01_hello_world.olang | Select-Object -First 80
+          .\tulpar.exe examples\01_hello_world.tpr | Select-Object -First 80
         timeout-minutes: 2
       
       - name: Prepare artifact
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item olang.exe dist/olang-windows-x64.exe
+          Copy-Item tulpar.exe dist/tulpar-windows-x64.exe
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: olang-windows-x64
-          path: dist/olang-windows-x64.exe
+          name: tulpar-windows-x64
+          path: dist/tulpar-windows-x64.exe
   
   create-release:
     needs: [build-linux, build-macos, build-windows]
@@ -125,7 +125,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: olang-*
+          pattern: tulpar-*
           merge-multiple: true
       
       - name: Compute release tag
@@ -140,13 +140,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
-          name: OLang ${{ steps.ver.outputs.tag }}
+          name: TulparLang ${{ steps.ver.outputs.tag }}
           draft: false
           prerelease: false
           files: |
-            olang-windows-x64.exe
-            olang-linux-x64
-            olang-macos-universal
+            tulpar-windows-x64.exe
+            tulpar-linux-x64
+            tulpar-macos-universal
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -155,7 +155,7 @@ print("=== 6. CONFIG AYARLARI ===");
 print("");
 
 arrayJson config = {
-    "app_name": "OLang",
+    "app_name": "Tulpar",
     "version": "1.3.0",
     "server": {
         "host": "localhost",

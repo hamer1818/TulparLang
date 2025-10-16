@@ -1,4 +1,4 @@
-# CHANGELOG - OLang
+# CHANGELOG - TulparLang
 
 Tüm önemli değişiklikler bu dosyada dokümante edilmiştir.
 
@@ -19,7 +19,7 @@ Tüm önemli değişiklikler bu dosyada dokümante edilmiştir.
   - `join()` diziyi string'e birleştirir
   - Email, URL, metin işleme kolaylaştı
   
-- **Örnek**: `examples/19_string_functions.olang` - Tüm 16 fonksiyonun testleri
+- **Örnek**: `examples/19_string_functions.tpr` - Tüm 16 fonksiyonun testleri
 
 ### 🔧 İyileştirmeler
 - `#include <ctype.h>` eklendi (toupper, tolower, isdigit, isalpha için)
@@ -42,7 +42,7 @@ Tüm önemli değişiklikler bu dosyada dokümante edilmiştir.
   - Index sınır kontrolü (0 ile uzunluk-1 arası)
   - JSON zincirleme ile uyumlu: `data["name"][0]`
   - İç içe yapılarda çalışır: `users[0]["name"][0]`
-- **Örnek**: `examples/18_string_indexing.olang` ve `examples/test_string_simple.olang`
+- **Örnek**: `examples/18_string_indexing.tpr` ve `examples/test_string_simple.tpr`
 
 ### 🐛 Düzeltmeler
 - Hata mesajı güncellendi: "Erişilen değer bir dizi veya object değil" → "...veya string değil"
@@ -66,7 +66,7 @@ Tüm önemli değişiklikler bu dosyada dokümante edilmiştir.
   - Rastgele: `random()`, `randint()`
   - Diğer: `fmod()`
 - **Dokümantasyon**: `MATH_FUNCTIONS.md` - Kapsamlı matematik fonksiyonları kılavuzu
-- **Örnek**: `examples/17_math_functions.olang` - Tüm matematik fonksiyonlarının testi
+- **Örnek**: `examples/17_math_functions.tpr` - Tüm matematik fonksiyonlarının testi
 
 ### 📊 İstatistikler
 - Toplam built-in fonksiyon sayısı: 12 → **39**
@@ -100,9 +100,9 @@ Tüm önemli değişiklikler bu dosyada dokümante edilmiştir.
   - `\r` - Carriage return
   - `\0` - Null karakter
 - **Dokümantasyon**:
-  - `examples/14_json_objects.olang` - JSON object örnekleri
-  - `examples/15_nested_access.olang` - Zincirleme erişim testleri
-  - `examples/16_escape_sequences.olang` - Escape sequence örnekleri
+  - `examples/14_json_objects.tpr` - JSON object örnekleri
+  - `examples/15_nested_access.tpr` - Zincirleme erişim testleri
+  - `examples/16_escape_sequences.tpr` - Escape sequence örnekleri
 
 ### 🔧 Değişiklikler
 - Lexer: UTF-8 multi-byte character support
@@ -190,7 +190,7 @@ Tüm önemli değişiklikler bu dosyada dokümante edilmiştir.
 
 ## Versiyon Numaralandırma
 
-OLang [Semantic Versioning](https://semver.org/) kullanır:
+TulparLang [Semantic Versioning](https://semver.org/) kullanır:
 - **Major**: Büyük değişiklikler, geriye uyumsuz değişiklikler
 - **Minor**: Yeni özellikler, geriye uyumlu
 - **Patch**: Hata düzeltmeleri, küçük iyileştirmeler

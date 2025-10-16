@@ -1,6 +1,6 @@
-# OLang - Hızlı Başlangıç 🚀
+# TulparLang - Hızlı Başlangıç 🚀
 
-**OLang**, C tabanlı, basit ve güçlü bir programlama dilidir. Lexer, Parser ve Interpreter ile tam çalışan bir dil implementasyonu.
+**TulparLang**, C tabanlı, basit ve güçlü bir programlama dilidir. Lexer, Parser ve Interpreter ile tam çalışan bir dil implementasyonu.
 
 ## 🎯 Özellikler
 
@@ -40,7 +40,7 @@
 
 #### Değişken Tanımlama
 
-```olang
+```tulpar
 int x = 5;
 float pi = 3.14;
 str isim = "Ahmet";
@@ -66,7 +66,7 @@ str tab = "Ad:\tHamza";                // Tab karakteri
 
 #### Fonksiyon Tanımlama
 
-```olang
+```tulpar
 func topla(int a, int b) {
     int sonuc = a + b;
     return sonuc;
@@ -75,13 +75,13 @@ func topla(int a, int b) {
 
 #### Fonksiyon Çağırma
 
-```olang
+```tulpar
 int toplam = topla(5, 3);  // toplam = 8
 ```
 
 #### If/Else Yapısı
 
-```olang
+```tulpar
 // Basit if/else
 if (x > 5) {
     int y = 10;
@@ -103,7 +103,7 @@ bool tersYon = !aktif;  // NOT operatörü
 
 #### While Döngüsü
 
-```olang
+```tulpar
 int i = 0;
 while (i < 10) {
     i++;  // Increment ile (Faz 1)
@@ -115,7 +115,7 @@ while (i < 10) {
 
 #### For Döngüsü (C-style)
 
-```olang
+```tulpar
 // Klasik for döngüsü
 for (int i = 0; i < 10; i++) {  // i++ kullanımı (Faz 1)
     if (i == 3) continue;  // 3'ü atla
@@ -131,7 +131,7 @@ for (int i = 0; i < 100; i += 10) {  // 10'ar 10'ar artır (Faz 1)
 
 #### Foreach Döngüsü (for..in)
 
-```olang
+```tulpar
 // range() fonksiyonu ile
 for (i in range(10)) {
     print("i =", i);  // 0'dan 9'a kadar
@@ -140,7 +140,7 @@ for (i in range(10)) {
 
 #### Recursive Fonksiyonlar
 
-```olang
+```tulpar
 func fibonacci(int n) {
     if (n <= 1) {
         return n;
@@ -155,7 +155,7 @@ int fib5 = fibonacci(5);  // fib5 = 5
 
 #### Diziler (Arrays) - Faz 2 ✨
 
-```olang
+```tulpar
 // 1. Karışık tipli diziler (mixed)
 array karma = [1, "Ali", 3.14, true];
 print(karma);  // [1, "Ali", 3.14, true]
@@ -233,7 +233,7 @@ for (int i = 0; i < length(sayilar); i++) {
 
 ## 🌍 Platform Desteği
 
-OLang **tüm platformlarda** çalışır:
+TulparLang **tüm platformlarda** çalışır:
 
 - ✅ **Linux** (Ubuntu, Fedora, Arch, etc.)
 - ✅ **macOS** (Intel & Apple Silicon)
@@ -271,34 +271,34 @@ build.bat           # Windows
 make                # Unix-like
 ```
 
-### 2. OLang Dosyalarını Çalıştırın
+### 2. TulparLang Dosyalarını Çalıştırın
 
 #### Dosyadan çalıştırma
 
 ```bash
 # WSL ile (Windows)
-wsl ./olang examples/fibonacci.olang
-wsl ./olang examples/calculator.olang
-wsl ./olang examples/hello.olang
+wsl ./tulpar examples/fibonacci.tpr
+wsl ./tulpar examples/calculator.tpr
+wsl ./tulpar examples/hello.tpr
 
 # Linux/Mac
-./olang examples/fibonacci.olang
-./olang examples/calculator.olang
-./olang examples/hello.olang
+./tulpar examples/fibonacci.tpr
+./tulpar examples/calculator.tpr
+./tulpar examples/hello.tpr
 ```
 
 #### Demo kodu çalıştırma (argümansız)
 
 ```bash
-wsl ./olang      # Windows
-./olang          # Linux/Mac
+wsl ./tulpar      # Windows
+./tulpar          # Linux/Mac
 ```
 
 ### 3. Kendi Dosyanızı Oluşturun
 
-`mycode.olang` adında bir dosya oluşturun:
+`mycode.tpr` adında bir dosya oluşturun:
 
-```olang
+```tulpar
 int x = 10;
 int y = 20;
 
@@ -312,14 +312,14 @@ int sonuc = topla(x, y);
 Çalıştırın:
 
 ```bash
-wsl ./olang mycode.olang    # Windows
-./olang mycode.olang         # Linux/Mac
+wsl ./tulpar mycode.tpr    # Windows
+./tulpar mycode.tpr         # Linux/Mac
 ```
 
 ## 📁 Proje Yapısı
 
 ```plaintext
-OLang/
+TulparLang/
 ├── src/
 │   ├── lexer/
 │   │   ├── lexer.c     # Token'lara ayırma (UTF-8 + Escape sequences)
@@ -333,10 +333,10 @@ OLang/
 │   └── main.c          # Ana program (UTF-8 console setup)
 ├── build/              # Derleme çıktıları
 ├── examples/           # 16 örnek kod dosyası
-│   ├── 01-13_*.olang   # Temel örnekler
-│   ├── 14_json_objects.olang    # JSON object örnekleri ✨
-│   ├── 15_nested_access.olang   # Zincirleme erişim ✨
-│   └── 16_escape_sequences.olang # Escape sequence örnekleri ✨
+│   ├── 01-13_*.tpr   # Temel örnekler
+│   ├── 14_json_objects.tpr    # JSON object örnekleri ✨
+│   ├── 15_nested_access.tpr   # Zincirleme erişim ✨
+│   └── 16_escape_sequences.tpr # Escape sequence örnekleri ✨
 ├── Makefile
 ├── build.sh / build.bat
 ├── README.md
@@ -348,7 +348,7 @@ OLang/
 
 ## 🏗️ Mimari
 
-OLang üç ana bileşenden oluşur:
+TulparLang üç ana bileşenden oluşur:
 
 ### 1. **LEXER** (Tokenization)
 
@@ -411,7 +411,7 @@ AST'yi dolaşarak kodu çalıştırır:
 - `toString(value)` - Herhangi bir değeri string'e çevirir
 - `toBool(value)` - Herhangi bir değeri boolean'a çevirir
 
-```olang
+```tulpar
 // Örnekler
 int sayi = toInt("123");           // 123
 float ondalik = toFloat("3.14");   // 3.14
@@ -425,7 +425,7 @@ bool deger = toBool(1);            // true
 - `push(arr, value)` - Diziye eleman ekler
 - `pop(arr)` - Diziden son elemanı çıkarır ve döner
 
-```olang
+```tulpar
 // Örnekler
 array sayilar = [1, 2, 3];
 int len = length(sayilar);    // 3
@@ -448,7 +448,7 @@ String içinde özel karakterler:
 - `\"` - Çift tırnak
 - `\0` - Null karakter
 
-```olang
+```tulpar
 // Örnekler
 print("Satır 1\nSatır 2");           // İki satır
 print("Ad:\tHamza");                 // Tab ile hizalı
@@ -506,7 +506,7 @@ print("JSON: {\"ad\": \"Hamza\"}");  // JSON string
 
 - `fmod(x, y)` - Kayan nokta mod
 
-```olang
+```tulpar
 // Örnekler
 float karekok = sqrt(25.0);           // 5.0
 float ust = pow(2.0, 8.0);            // 256.0
@@ -522,7 +522,7 @@ int zar = randint(1, 6);              // 1-6 arası
 
 Stringler karakter dizisi gibi işlem görür ve index ile erişilebilir:
 
-```olang
+```tulpar
 str isim = "Ahmet";
 print(isim[0]);      // "A"
 print(isim[1]);      // "h"
@@ -552,6 +552,7 @@ print(data["users"][0]["name"][0]);   // "A"
 ```
 
 **Özellikler:**
+
 - ✅ String'lere index ile erişim: `str[0]`, `str[1]`, vb.
 - ✅ Her karakter tek karakterlik string olarak döner
 - ✅ Index sınır kontrolü (0 ile uzunluk-1 arası)
@@ -560,10 +561,11 @@ print(data["users"][0]["name"][0]);   // "A"
 
 ### String İşleme Fonksiyonları (Faz 5 ✨) **YENİ!**
 
-OLang, **16 yerleşik string fonksiyonu** ile güçlü metin işleme yetenekleri sunar:
+TulparLang, **16 yerleşik string fonksiyonu** ile güçlü metin işleme yetenekleri sunar:
 
 #### Dönüşüm Fonksiyonları
-```olang
+
+```tulpar
 str text = "Hello World";
 upper(text)         // "HELLO WORLD"
 lower(text)         // "hello world"
@@ -572,13 +574,15 @@ reverse(text)       // "dlroW olleH"
 ```
 
 #### Temizleme ve Düzenleme
-```olang
+
+```tulpar
 trim("  Hamza  ")              // "Hamza"
 replace("Hi Hi", "Hi", "Bye")  // "Bye Bye"
 ```
 
 #### Arama ve Kontrol
-```olang
+
+```tulpar
 contains("Hello", "ell")          // true
 startsWith("Hello", "He")         // true
 endsWith("Hello", "lo")           // true
@@ -587,25 +591,29 @@ count("banana", "a")              // 3
 ```
 
 #### Alt String ve Tekrarlama
-```olang
+
+```tulpar
 substring("JavaScript", 0, 4)  // "Java"
 repeat("Ha", 3)                // "HaHaHa"
 ```
 
 #### Bölme ve Birleştirme
-```olang
+
+```tulpar
 arrayStr parts = split("a,b,c", ",");  // ["a", "b", "c"]
 str joined = join("-", parts);          // "a-b-c"
 ```
 
 #### Kontrol Fonksiyonları
-```olang
+
+```tulpar
 isEmpty("")          // true
 isDigit("12345")     // true
 isAlpha("abcdef")    // true
 ```
 
 **Tüm String Fonksiyonları:**
+
 - `upper(s)`, `lower(s)`, `capitalize(s)`, `reverse(s)`
 - `trim(s)`, `replace(s, old, new)`
 - `contains(s, sub)`, `startsWith(s, prefix)`, `endsWith(s, suffix)`
@@ -614,8 +622,9 @@ isAlpha("abcdef")    // true
 - `split(s, delimiter)`, `join(separator, array)`
 - `isEmpty(s)`, `isDigit(s)`, `isAlpha(s)`
 
-**Örnek: Email İşleme**
-```olang
+**Örnek Email İşleme**
+
+```tulpar
 str email = "  HAMZA@EXAMPLE.COM  ";
 str clean = lower(trim(email));         // "hamza@example.com"
 arrayStr parts = split(clean, "@");     // ["hamza", "example.com"]
@@ -629,7 +638,7 @@ str domain = parts[1];                  // "example.com"
 
 ### Örnek Kullanım
 
-```olang
+```tulpar
 // Print kullanımı
 print("Merhaba Dünya!");
 int x = 10;
@@ -667,11 +676,11 @@ print("Merhaba", isim, "! Yaşınız:", yas);
 
 ### Basit Program
 
-```olang
+```tulpar
 // Değişkenler (UTF-8 destekli ✨)
 int x = 5;
 float pi = 3.14;
-str mesaj = "Merhaba OLang!";
+str mesaj = "Merhaba TulparLang!";
 str şehir = "İstanbul";  // Türkçe karakter!
 bool basarili = true;
 
@@ -697,7 +706,7 @@ while (i < 5) {
 
 ### JSON Object Program ✨ **YENİ!**
 
-```olang
+```tulpar
 // Object literal oluşturma
 arrayJson kullanici = {
     "ad": "Hamza",
@@ -741,7 +750,7 @@ print("Lider:", lider);  // "Ahmet"
 
 ### Escape Sequence Örneği ✨ **YENİ!**
 
-```olang
+```tulpar
 // String içinde özel karakterler
 print("Satır 1\nSatır 2\nSatır 3");        // Yeni satır
 print("Ad:\tHamza\nYaş:\t25");             // Tab
@@ -750,20 +759,20 @@ print("JSON: {\"ad\": \"Hamza\"}");        // Tırnak
 
 // Object içinde escape
 arrayJson config = {
-    "path": "C:\\Program Files\\OLang",
-    "message": "\"Welcome\"\nto OLang!"
+    "path": "C:\\Program Files\\TulparLang",
+    "message": "\"Welcome\"\nto TulparLang!"
 };
 print(config["message"]);
 // Çıktı:
 // "Welcome"
-// to OLang!
+// to TulparLang!
 ```
 
 ### İnteraktif Program
 
-```olang
+```tulpar
 // Kullanıcıdan input alma (UTF-8 destekli ✨)
-print("=== OLang Hesap Makinesi ===");
+print("=== TulparLang Hesap Makinesi ===");
 
 int a = inputInt("Birinci sayi: ");
 int b = inputInt("Ikinci sayi: ");
@@ -843,16 +852,16 @@ Bu proje eğitim amaçlı geliştirilmiştir. Özgürce kullanabilir, değiştir
 
 ## 👨‍💻 Geliştirici
 
-**Hamza Ortatepe** - OLang yaratıcısı  
+**Hamza Ortatepe** - TulparLang yaratıcısı  
 GitHub: [@hamer1818](https://github.com/hamer1818)
 
 ## 🔗 Bağlantılar
 
-- **GitHub Repository**: [https://github.com/hamer1818/OLang](https://github.com/hamer1818/OLang)
-- **VS Code Extension**: [https://github.com/hamer1818/olang-ext](https://github.com/hamer1818/olang-ext)
+- **GitHub Repository**: [https://github.com/hamer1818/TulparLang](https://github.com/hamer1818/TulparLang)
+- **VS Code Extension**: [https://github.com/hamer1818/tulpar-ext](https://github.com/hamer1818/tulpar-ext)
 - **Documentation**: [README.md](README.md), [README_EN.md](README_EN.md), [QUICKSTART.md](QUICKSTART.md), [MATH_FUNCTIONS.md](MATH_FUNCTIONS.md) ✨
 
 ---
 
-**OLang v1.5.0** - Modern, UTF-8 destekli, JSON-native, matematik ve string kütüphaneli programlama dili! 🎉  
+**TulparLang v1.5.0** - Modern, UTF-8 destekli, JSON-native, matematik ve string kütüphaneli programlama dili! 🎉  
 **Son Güncelleme**: 13 Ekim 2025

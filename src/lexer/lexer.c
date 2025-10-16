@@ -44,7 +44,7 @@ static void lexer_skip_comment(Lexer* lexer) {
 }
 
 // Token oluşturma
-static Token* token_create(OLangTokenType type, char* value, int line, int column) {
+static Token* token_create(TulparTokenType type, char* value, int line, int column) {
     Token* token = (Token*)malloc(sizeof(Token));
     token->type = type;
     token->value = value ? strdup(value) : NULL;
@@ -72,7 +72,7 @@ static Token* lexer_read_number(Lexer* lexer) {
     }
     buffer[i] = '\0';
     
-    OLangTokenType type = is_float ? TOKEN_FLOAT_LITERAL : TOKEN_INT_LITERAL;
+    TulparTokenType type = is_float ? TOKEN_FLOAT_LITERAL : TOKEN_INT_LITERAL;
     return token_create(type, buffer, start_line, start_column);
 }
 
@@ -163,7 +163,7 @@ static Token* lexer_read_identifier(Lexer* lexer) {
     buffer[i] = '\0';
     
     // Anahtar kelime kontrolü
-    OLangTokenType type = TOKEN_IDENTIFIER;
+    TulparTokenType type = TOKEN_IDENTIFIER;
     
     if (strcmp(buffer, "int") == 0) type = TOKEN_INT_TYPE;
     else if (strcmp(buffer, "float") == 0) type = TOKEN_FLOAT_TYPE;

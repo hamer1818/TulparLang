@@ -1,10 +1,10 @@
-# OLang - Quick Start 🚀
+# TulparLang - Quick Start 🚀
 
-**OLang** is a C-based, simple and powerful programming language with full Lexer, Parser, and Interpreter implementation.
+**TulparLang** is a C-based, simple and powerful programming language with full Lexer, Parser, and Interpreter implementation.
 
 ## 🌍 Cross-Platform Support
 
-OLang works on **all major platforms**:
+TulparLang works on **all major platforms**:
 
 - ✅ **Linux** (Ubuntu, Fedora, Arch, etc.)
 - ✅ **macOS** (Intel & Apple Silicon)
@@ -63,7 +63,7 @@ OLang works on **all major platforms**:
 
 ### Functions
 
-```olang
+```TulparLang
 func add(int a, int b) {
     return a + b;
 }
@@ -110,7 +110,7 @@ str tabs = "Name:\tJohn\nAge:\t25";       // Tab
 
 ### Arrays (Phase 2) ✨
 
-```olang
+```TulparLang
 // 1. Mixed type arrays
 array mixed = [1, "Ali", 3.14, true];
 
@@ -152,10 +152,10 @@ make                # Unix-like
 
 ```bash
 # Linux/macOS/WSL
-./olang examples/01_hello_world.olang
+./TulparLang examples/01_hello_world.tpr
 
 # Windows
-olang.exe examples\01_hello_world.olang
+TulparLang.exe examples\01_hello_world.tpr
 ```
 
 ## 📚 Examples
@@ -189,16 +189,16 @@ olang.exe examples\01_hello_world.olang
 
 ## 🚀 Quick Example
 
-```olang
+```TulparLang
 // Variables (UTF-8 support! ✨)
 int x = 10;
-str name = "OLang";
+str name = "TulparLang";
 str şehir = "İstanbul";  // Turkish characters work!
 
 // Escape sequences ✨
 print("Line 1\nLine 2");
 print("Path: C:\\Users\\Desktop");
-print("JSON: {\"name\": \"OLang\"}");
+print("JSON: {\"name\": \"TulparLang\"}");
 
 // Function
 func greet(str name) {
@@ -241,7 +241,7 @@ for (i in range(5)) {
 
 ## 🎓 Learning Path
 
-1. Start with `examples/01_hello_world.olang`
+1. Start with `examples/01_hello_world.tpr`
 2. Follow examples 02-04 for basics
 3. Try 05-08 for intermediate features
 4. Explore 09-13 for advanced topics
@@ -306,18 +306,18 @@ This project is developed for educational purposes. Feel free to use, modify, an
 
 ## 👨‍💻 Developer
 
-**Hamza Ortatepe** - OLang Creator  
+**Hamza Ortatepe** - TulparLang Creator  
 GitHub: [@hamer1818](https://github.com/hamer1818)
 
 ## 🔗 Links
 
-- **GitHub Repository**: <https://github.com/hamer1818/OLang>
+- **GitHub Repository**: <https://github.com/hamer1818/TulparLang>
 - **VS Code Extension**: <https://github.com/hamer1818/olan-ext>
 - **Documentation**: `README.md` (Turkish), `README_EN.md` (English), `QUICKSTART.md`
 
 ---
 
-**OLang Version**: 1.3.0 (UTF-8 + JSON Objects + Escape Sequences)  
+**TulparLang Version**: 1.3.0 (UTF-8 + JSON Objects + Escape Sequences)  
 **Last Update**: October 13, 2025  
 **Platform Support**: Linux, macOS, Windows
 
