@@ -100,8 +100,6 @@ int main(int argc, char** argv) {
         printf("Kaynak Kod:\n");
         printf("-------------------\n%s\n", source);
         printf("-------------------\n\n");
-    } else {
-        printf("TulparLang calistiriliyor: %s\n\n", argv[1]);
     }
     
     // ========================================
@@ -164,24 +162,17 @@ int main(int argc, char** argv) {
     if (!from_file) {
         printf("\nDegisken Degerleri:\n");
         printf("-------------------\n");
-    } else {
-        printf("Sonuc:\n");
-        printf("------\n");
-    }
-    
-    // Tüm global değişkenleri göster
-    for (int i = 0; i < interp->global_scope->var_count; i++) {
-        printf("%s = ", interp->global_scope->variables[i]->name);
-        value_print(interp->global_scope->variables[i]->value);
-        printf("\n");
-    }
-    
-    if (!from_file) {
+
+        // Tüm global değişkenleri göster
+        for (int i = 0; i < interp->global_scope->var_count; i++) {
+            printf("%s = ", interp->global_scope->variables[i]->name);
+            value_print(interp->global_scope->variables[i]->value);
+            printf("\n");
+        }
+
         printf("\n========================================\n");
         printf("   TulparLang basariyla calisti! ✓\n");
         printf("========================================\n");
-    } else {
-        printf("\n✓ Basariyla tamamlandi.\n");
     }
     
     // Temizlik

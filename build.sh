@@ -97,6 +97,42 @@ fi
 chmod +x tulpar
 
 echo ""
+echo "Running examples test suite..."
+
+TEST_FAILED=0
+INPUT_DIR="examples/inputs"
+
+for example in examples/*.tpr; do
+    [ -f "$example" ] || continue
+    name=$(basename "$example" .tpr)
+    input_file="$INPUT_DIR/$name.txt"
+
+    printf "Running %s... " "$example"
+
+    if [ -f "$input_file" ]; then
+        if ./tulpar "$example" < "$input_file" > /dev/null 2>&1; then
+            echo -e "${GREEN}OK${NC}"
+        else
+            echo -e "${RED}FAILED${NC}"
+            TEST_FAILED=1
+        fi
+    else
+        if ./tulpar "$example" > /dev/null 2>&1; then
+            echo -e "${GREEN}OK${NC}"
+        else
+            echo -e "${RED}FAILED${NC}"
+            TEST_FAILED=1
+        fi
+    fi
+done
+
+if [ $TEST_FAILED -ne 0 ]; then
+    echo ""
+    echo -e "${RED}Example tests failed!${NC}"
+    exit 1
+fi
+
+echo ""
 echo -e "${GREEN}========================================"
 echo "BUILD SUCCESSFUL!"
 echo "========================================${NC}"

@@ -8,8 +8,9 @@
 static void lexer_advance(Lexer* lexer) {
     lexer->position++;
     lexer->column++;
-    
-    if (lexer->position < strlen(lexer->source)) {
+
+    size_t source_length = strlen(lexer->source);
+    if ((size_t)lexer->position < source_length) {
         lexer->current_char = lexer->source[lexer->position];
     } else {
         lexer->current_char = '\0';
@@ -17,8 +18,9 @@ static void lexer_advance(Lexer* lexer) {
 }
 
 static char lexer_peek(Lexer* lexer) {
-    int peek_pos = lexer->position + 1;
-    if (peek_pos < strlen(lexer->source)) {
+    size_t source_length = strlen(lexer->source);
+    size_t peek_pos = (size_t)lexer->position + 1;
+    if (peek_pos < source_length) {
         return lexer->source[peek_pos];
     }
     return '\0';

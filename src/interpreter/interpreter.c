@@ -8,6 +8,63 @@
 #include <ctype.h>
 
 // ============================================================================
+// UTF-8 YARDIMCI FONKSİYONLARI
+// ============================================================================
+
+// UTF-8 karakterinin byte uzunluğunu döndürür
+static int utf8_char_length(unsigned char c) {
+    if ((c & 0x80) == 0) {
+        return 1;
+    }
+    if ((c & 0xE0) == 0xC0) {
+        return 2;
+    }
+    if ((c & 0xF0) == 0xE0) {
+        return 3;
+    }
+    if ((c & 0xF8) == 0xF0) {
+        return 4;
+    }
+    return 1;
+}
+
+// UTF-8 string içindeki karakter sayısını döndürür
+static int utf8_strlen_cp(const char* str) {
+    int length = 0;
+    int i = 0;
+
+    while (str[i] != '\0') {
+        int char_len = utf8_char_length((unsigned char)str[i]);
+        i += char_len;
+        length++;
+    }
+
+    return length;
+}
+
+// UTF-8 string içinden belirtilen index'teki karakteri (string olarak) döndürür
+static char* utf8_char_at(const char* str, int index) {
+    int i = 0;
+    int current = 0;
+
+    while (str[i] != '\0' && current < index) {
+        int char_len = utf8_char_length((unsigned char)str[i]);
+        i += char_len;
+        current++;
+    }
+
+    if (str[i] == '\0') {
+        return NULL; // Sınır dışında
+    }
+
+    int char_len = utf8_char_length((unsigned char)str[i]);
+    char* buffer = (char*)malloc((size_t)char_len + 1);
+    memcpy(buffer, str + i, (size_t)char_len);
+    buffer[char_len] = '\0';
+    return buffer;
+}
+
+// ============================================================================
 // VALUE FONKSİYONLARI
 // ============================================================================
 
@@ -380,7 +437,7 @@ void value_print(Value* val) {
             printf("%g", val->data.float_val);
             break;
         case VAL_STRING:
-            printf("\"%s\"", val->data.string_val);
+            printf("%s", val->data.string_val);
             break;
         case VAL_BOOL:
             printf("%s", val->data.bool_val ? "true" : "false");
@@ -676,7 +733,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 
                 int idx = index_val->data.int_val;
                 const char* str = container->data.string_val;
-                int len = strlen(str);
+                int len = utf8_strlen_cp(str);
                 
                 // Index sınır kontrolü
                 if (idx < 0 || idx >= len) {
@@ -687,9 +744,16 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     exit(1);
                 }
                 
-                // Tek karakterlik string oluştur
-                char char_str[2] = {str[idx], '\0'};
+                char* char_str = utf8_char_at(str, idx);
+                if (!char_str) {
+                    printf("Hata: UTF-8 karakter çözümlenemedi\n");
+                    value_free(index_val);
+                    if (node->left) value_free(container);
+                    exit(1);
+                }
+
                 result = value_create_string(char_str);
+                free(char_str);
                 
                 value_free(index_val);
                 if (node->left) value_free(container);
@@ -779,6 +843,8 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     result = value_create_bool(l == r);
                 } else if (left->type == VAL_BOOL && right->type == VAL_BOOL) {
                     result = value_create_bool(left->data.bool_val == right->data.bool_val);
+                } else if (left->type == VAL_STRING && right->type == VAL_STRING) {
+                    result = value_create_bool(strcmp(left->data.string_val, right->data.string_val) == 0);
                 }
             }
             else if (node->op == TOKEN_NOT_EQUAL) {
@@ -790,6 +856,8 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     result = value_create_bool(l != r);
                 } else if (left->type == VAL_BOOL && right->type == VAL_BOOL) {
                     result = value_create_bool(left->data.bool_val != right->data.bool_val);
+                } else if (left->type == VAL_STRING && right->type == VAL_STRING) {
+                    result = value_create_bool(strcmp(left->data.string_val, right->data.string_val) != 0);
                 }
             }
             else if (node->op == TOKEN_LESS) {
@@ -903,6 +971,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     Value* prompt = interpreter_eval_expression(interp, node->arguments[0]);
                     if (prompt->type == VAL_STRING) {
                         printf("%s", prompt->data.string_val);
+                        fflush(stdout);
                     }
                     value_free(prompt);
                 }
@@ -927,6 +996,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     Value* prompt = interpreter_eval_expression(interp, node->arguments[0]);
                     if (prompt->type == VAL_STRING) {
                         printf("%s", prompt->data.string_val);
+                        fflush(stdout);
                     }
                     value_free(prompt);
                 }
@@ -949,6 +1019,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     Value* prompt = interpreter_eval_expression(interp, node->arguments[0]);
                     if (prompt->type == VAL_STRING) {
                         printf("%s", prompt->data.string_val);
+                        fflush(stdout);
                     }
                     value_free(prompt);
                 }
@@ -1038,7 +1109,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                         value_free(arg);
                         return value_create_string(arg->data.string_val);
                     } else {
-                        snprintf(buffer, sizeof(buffer), "");
+                        buffer[0] = '\0';
                     }
                     
                     value_free(arg);

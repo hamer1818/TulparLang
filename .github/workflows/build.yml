@@ -18,16 +18,11 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake
       
-      - name: Build
+      - name: Build & run examples
         run: |
           chmod +x build.sh
           ./build.sh
         timeout-minutes: 5
-      
-      - name: Smoke test (truncated output)
-        run: |
-          ./tulpar examples/01_hello_world.tpr | head -n 80
-        timeout-minutes: 2
       
       - name: Prepare artifact
         run: |
@@ -48,16 +43,11 @@ jobs:
       - name: Install dependencies
         run: brew install cmake
       
-      - name: Build
+      - name: Build & run examples
         run: |
           chmod +x build.sh
           ./build.sh
         timeout-minutes: 5
-      
-      - name: Smoke test (truncated output)
-        run: |
-          ./tulpar examples/01_hello_world.tpr | head -n 80
-        timeout-minutes: 2
       
       - name: Prepare artifact
         run: |
@@ -86,7 +76,7 @@ jobs:
           $env:PYTHONIOENCODING = "utf-8"
           $env:LANG = "en_US.UTF-8"
       
-      - name: Build
+      - name: Build & run examples
         shell: cmd
         run: |
           call build.bat
@@ -94,13 +84,6 @@ jobs:
         env:
           LANG: en_US.UTF-8
           PYTHONIOENCODING: utf-8
-      
-      - name: Smoke test (truncated output)
-        shell: powershell
-        run: |
-          chcp 65001
-          .\tulpar.exe examples\01_hello_world.tpr | Select-Object -First 80
-        timeout-minutes: 2
       
       - name: Prepare artifact
         shell: powershell

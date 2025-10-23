@@ -1,4 +1,5 @@
 @echo off
+setlocal EnableDelayedExpansion
 REM ============================================
 REM TulparLang Build Script for Windows
 REM ============================================
@@ -46,6 +47,34 @@ if %errorlevel% neq 0 goto :build_error
 
 echo.
 echo ========================================
+echo Running examples test suite...
+echo ========================================
+
+set "TEST_FAILED=0"
+set "INPUT_DIR=examples\inputs"
+
+for %%F in (examples\*.tpr) do (
+    set "EXAMPLE=%%F"
+    set "NAME=%%~nF"
+    echo Running %%F...
+    if exist "!INPUT_DIR!\!NAME!.txt" (
+        type "!INPUT_DIR!\!NAME!.txt" | tulpar.exe "%%F" >nul 2>&1
+    ) else (
+        tulpar.exe "%%F" >nul 2>&1
+    )
+
+    if errorlevel 1 (
+        echo ERROR: %%F failed.
+        set "TEST_FAILED=1"
+    ) else (
+        echo OK: %%F
+    )
+)
+
+if !TEST_FAILED! neq 0 goto :test_error
+
+echo.
+echo ========================================
 echo BUILD SUCCESSFUL!
 echo ========================================
 echo.
@@ -53,6 +82,13 @@ echo Executable: tulpar.exe
 echo To run examples:
 echo   tulpar.exe examples\01_hello_world.tpr
 exit /b 0
+
+:test_error
+echo.
+echo ========================================
+echo ERROR: Example tests failed!
+echo ========================================
+exit /b 1
 
 :build_error
 echo.

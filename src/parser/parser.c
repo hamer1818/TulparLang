@@ -102,6 +102,10 @@ static ASTNode* parse_term(Parser* parser);
 static ASTNode* parse_factor(Parser* parser);
 static ASTNode* parse_primary(Parser* parser);
 static ASTNode* parse_object_literal(Parser* parser);
+static ASTNode* parse_assignment(Parser* parser, int expect_semicolon);
+static ASTNode* parse_compound_assignment(Parser* parser, int expect_semicolon);
+static ASTNode* parse_increment(Parser* parser, int expect_semicolon);
+static ASTNode* parse_decrement(Parser* parser, int expect_semicolon);
 
 // Object literal parse ({ "key": value, "key2": value2 })
 static ASTNode* parse_object_literal(Parser* parser) {
@@ -485,15 +489,66 @@ static ASTNode* parse_variable_declaration(Parser* parser) {
 }
 
 // Atama: x = 10;
-static ASTNode* parse_assignment(Parser* parser) {
+static ASTNode* parse_assignment(Parser* parser, int expect_semicolon) {
     ASTNode* node = ast_node_create(AST_ASSIGNMENT);
     node->name = strdup(parser->current_token->value);
     parser_advance(parser);
-    
+
     parser_expect(parser, TOKEN_ASSIGN);
     node->right = parse_expression(parser);
-    parser_expect(parser, TOKEN_SEMICOLON);
-    
+
+    if (expect_semicolon) {
+        parser_expect(parser, TOKEN_SEMICOLON);
+    }
+
+    return node;
+}
+
+static ASTNode* parse_compound_assignment(Parser* parser, int expect_semicolon) {
+    ASTNode* node = ast_node_create(AST_COMPOUND_ASSIGN);
+    node->name = strdup(parser->current_token->value);
+    parser_advance(parser);
+
+    // Operator ( +=, -=, *=, /= )
+    node->op = parser->current_token->type;
+    parser_advance(parser);
+
+    node->right = parse_expression(parser);
+
+    if (expect_semicolon) {
+        parser_expect(parser, TOKEN_SEMICOLON);
+    }
+
+    return node;
+}
+
+static ASTNode* parse_increment(Parser* parser, int expect_semicolon) {
+    ASTNode* node = ast_node_create(AST_INCREMENT);
+    node->name = strdup(parser->current_token->value);
+    parser_advance(parser);
+
+    // '++' tokenını tüket
+    parser_advance(parser);
+
+    if (expect_semicolon) {
+        parser_expect(parser, TOKEN_SEMICOLON);
+    }
+
+    return node;
+}
+
+static ASTNode* parse_decrement(Parser* parser, int expect_semicolon) {
+    ASTNode* node = ast_node_create(AST_DECREMENT);
+    node->name = strdup(parser->current_token->value);
+    parser_advance(parser);
+
+    // '--' tokenını tüket
+    parser_advance(parser);
+
+    if (expect_semicolon) {
+        parser_expect(parser, TOKEN_SEMICOLON);
+    }
+
     return node;
 }
 
@@ -586,36 +641,59 @@ static ASTNode* parse_while(Parser* parser) {
 static ASTNode* parse_for(Parser* parser) {
     ASTNode* node = ast_node_create(AST_FOR);
     parser_advance(parser); // 'for' atla
-    
+
     parser_expect(parser, TOKEN_LPAREN);
-    
-    // Başlangıç statement (int i = 0)
-    node->init = parse_statement(parser);
-    
-    // Koşul (i < 10)
-    node->condition = parse_expression(parser);
+
+    // Başlangıç statement (int i = 0) veya boş olabilir
+    if (parser->current_token->type != TOKEN_SEMICOLON) {
+        node->init = parse_statement(parser);
+    } else {
+        node->init = NULL;
+        parser_expect(parser, TOKEN_SEMICOLON);
+    }
+
+    // Koşul (i < 10) veya boş olabilir
+    if (parser->current_token->type != TOKEN_SEMICOLON) {
+        node->condition = parse_expression(parser);
+    } else {
+        node->condition = NULL;
+    }
     parser_expect(parser, TOKEN_SEMICOLON);
-    
-    // Artırma (i = i + 1) - assignment olabilir
-    Token* next = parser->current_token;
-    if (next->type == TOKEN_IDENTIFIER) {
-        Token* after = parser_peek(parser);
-        if (after && after->type == TOKEN_ASSIGN) {
-            // Assignment: i = i + 1
-            node->increment = parse_assignment(parser);
+
+    // Artırma (i = i + 1, i++, i += 1) veya boş olabilir
+    if (parser->current_token->type != TOKEN_RPAREN) {
+        if (parser->current_token->type == TOKEN_IDENTIFIER) {
+            Token* after = parser_peek(parser);
+            if (after) {
+                if (after->type == TOKEN_ASSIGN) {
+                    node->increment = parse_assignment(parser, 0);
+                } else if (after->type == TOKEN_PLUS_EQUAL ||
+                           after->type == TOKEN_MINUS_EQUAL ||
+                           after->type == TOKEN_MULTIPLY_EQUAL ||
+                           after->type == TOKEN_DIVIDE_EQUAL) {
+                    node->increment = parse_compound_assignment(parser, 0);
+                } else if (after->type == TOKEN_PLUS_PLUS) {
+                    node->increment = parse_increment(parser, 0);
+                } else if (after->type == TOKEN_MINUS_MINUS) {
+                    node->increment = parse_decrement(parser, 0);
+                } else {
+                    node->increment = parse_expression(parser);
+                }
+            } else {
+                node->increment = parse_expression(parser);
+            }
         } else {
-            // Expression
             node->increment = parse_expression(parser);
         }
     } else {
-        node->increment = parse_expression(parser);
+        node->increment = NULL;
     }
-    
+
     parser_expect(parser, TOKEN_RPAREN);
-    
+
     // Döngü gövdesi
     node->body = parse_statement(parser);
-    
+
     return node;
 }
 
@@ -786,7 +864,7 @@ static ASTNode* parse_statement(Parser* parser) {
         
         // Atama (=)
         if (next && next->type == TOKEN_ASSIGN) {
-            return parse_assignment(parser);
+            return parse_assignment(parser, 1);
         }
         
         // Compound assignment (+=, -=, *=, /=)
@@ -794,44 +872,25 @@ static ASTNode* parse_statement(Parser* parser) {
                      next->type == TOKEN_MINUS_EQUAL ||
                      next->type == TOKEN_MULTIPLY_EQUAL ||
                      next->type == TOKEN_DIVIDE_EQUAL)) {
-            ASTNode* node = ast_node_create(AST_COMPOUND_ASSIGN);
-            node->name = strdup(parser->current_token->value);
-            parser_advance(parser);
-            
-            // Op'u TokenType olarak sakla
-            node->op = parser->current_token->type;
-            parser_advance(parser);
-            
-            node->right = parse_expression(parser);
-            parser_expect(parser, TOKEN_SEMICOLON);
-            
-            return node;
+            return parse_compound_assignment(parser, 1);
         }
         
         // Increment (++)
         if (next && next->type == TOKEN_PLUS_PLUS) {
-            ASTNode* node = ast_node_create(AST_INCREMENT);
-            node->name = strdup(parser->current_token->value);
-            parser_advance(parser);
-            parser_advance(parser); // ++ atla
-            parser_expect(parser, TOKEN_SEMICOLON);
-            return node;
+            return parse_increment(parser, 1);
         }
         
         // Decrement (--)
         if (next && next->type == TOKEN_MINUS_MINUS) {
-            ASTNode* node = ast_node_create(AST_DECREMENT);
-            node->name = strdup(parser->current_token->value);
-            parser_advance(parser);
-            parser_advance(parser); // -- atla
-            parser_expect(parser, TOKEN_SEMICOLON);
-            return node;
+            return parse_decrement(parser, 1);
         }
         
         // Fonksiyon çağrısı
         if (next && next->type == TOKEN_LPAREN) {
             ASTNode* call = parse_primary(parser);
-            parser_expect(parser, TOKEN_SEMICOLON);
+            if (parser->current_token->type == TOKEN_SEMICOLON) {
+                parser_advance(parser);
+            }
             return call;
         }
     }
@@ -861,24 +920,26 @@ void parser_free(Parser* parser) {
 // Program parse etme
 ASTNode* parser_parse(Parser* parser) {
     ASTNode* program = ast_node_create(AST_PROGRAM);
-    
+
     int capacity = 4;
     program->statements = (ASTNode**)malloc(sizeof(ASTNode*) * capacity);
     program->statement_count = 0;
-    
+
     while (parser->current_token->type != TOKEN_EOF) {
         if (program->statement_count >= capacity) {
             capacity *= 2;
-            program->statements = (ASTNode**)realloc(program->statements, 
+            program->statements = (ASTNode**)realloc(program->statements,
                                                      sizeof(ASTNode*) * capacity);
         }
-        
+
         ASTNode* stmt = parse_statement(parser);
         if (stmt) {
             program->statements[program->statement_count++] = stmt;
         }
+
+        // parse_statement genellikle noktalı virgülü tüketir; burada ekstra işlem yok
     }
-    
+
     return program;
 }
 
