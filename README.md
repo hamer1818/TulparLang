@@ -378,6 +378,7 @@ VAR_DECL: x
 - ✅ Object literal parsing: `{ "key": value }`
 - ✅ Chained array access: `arr[0]["key"][1]` (sınırsız derinlik)
 - ✅ Nested AST nodes with `left` field
+- ✅ Type deklarasyonu: `type Name { ... }` ve oluşturucu çağrısı `Name(...)` (named args + default alanlar) ✨
 
 ### 3. **INTERPRETER** (Çalıştırma)
 
@@ -394,6 +395,7 @@ AST'yi dolaşarak kodu çalıştırır:
 - ✅ Object value type (`VAL_OBJECT`)
 - ✅ Recursive nested access evaluation
 - ✅ Deep copy support for objects
+- ✅ Type registry ve constructor: `type` ile tanımlanan şemaların runtime oluşturulması ✨
 
 ## 🔧 Built-in Fonksiyonlar
 
@@ -632,6 +634,31 @@ str username = parts[0];                // "hamza"
 str domain = parts[1];                  // "example.com"
 ```
 
+### Type (Struct) Desteği ✨ YENİ!
+
+```tulpar
+// Type tanımı (default alan desteği)
+type Person {
+    str name;
+    int age;
+    str city = "İstanbul";
+}
+
+// Oluşturucu: positional veya named arg
+Person p1 = Person("Ali", 25, "İstanbul");
+Person p2 = Person(name: "Ayşe", age: 30);   // city → "İstanbul" (default)
+
+// Erişim
+print(p1.name, p1.age, p1.city);
+
+// Dot ile atama
+p1.name = "Veli";
+
+// Nested dot-assign (object ile birlikte)
+arrayJson order = { "customer": { "address": { "city": "Bursa" } } };
+order.customer.address.city = "Ankara";
+```
+
 ### Yardımcı Fonksiyonlar
 
 - `range(n)` - 0'dan n'e kadar sayı dizisi (foreach için)
@@ -811,14 +838,15 @@ print("Carpim:", carpim);
 - ✅ **Nested Objects** - Sınırsız derinlikte iç içe objeler
 - ✅ **Chained Access** - `arr[0]["key"][1]` zincirleme erişim
 - ✅ **Escape Sequences** - `\"`, `\n`, `\t`, `\\`, `\r`, `\0`
+- ✅ **Type (Struct)** - `type Name { ... }` + named arg + default alanlar ✨
 
 ## 🔮 Gelecek Özellikler
 
-- [ ] Dot notation - `obj.key.nested` syntax
+- [x] Dot notation - `obj.key.nested` (nested dot-assign) ✨
 - [ ] Object methods - `keys()`, `values()`, `merge()`
 - [ ] Spread operator - `...obj`, `...arr`
 - [ ] String metodları (split, join, substring)
-- [ ] Class/Struct desteği
+- [x] Type/Struct benzeri: `type Name { ... }` + named arg + default alanlar ✨
 - [ ] Import/Module sistemi
 - [ ] Daha iyi hata mesajları
 - [ ] Optimizasyon ve JIT compilation
@@ -846,7 +874,7 @@ print("Carpim:", carpim);
 8. **Type Safety** 🛡️ - Type-safe arrays ile güvenli kod
 9. **Cross-Platform** 💻 - Linux, macOS, Windows desteği
 
-## �📄 Lisans
+## 📄 Lisans
 
 Bu proje eğitim amaçlı geliştirilmiştir. Özgürce kullanabilir, değiştirebilir ve dağıtabilirsiniz.
 
@@ -863,5 +891,5 @@ GitHub: [@hamer1818](https://github.com/hamer1818)
 
 ---
 
-**TulparLang v1.5.0** - Modern, UTF-8 destekli, JSON-native, matematik ve string kütüphaneli programlama dili! 🎉  
-**Son Güncelleme**: 13 Ekim 2025
+**TulparLang v1.6.0** - Modern, UTF-8 destekli, JSON-native, matematik ve string kütüphaneli, type desteği ile! 🎉  
+**Son Güncelleme**: 05 Kasım 2025

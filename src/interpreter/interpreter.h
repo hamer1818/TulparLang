@@ -74,6 +74,7 @@ typedef struct {
     char** field_names;
     DataType* field_types;
     int field_count;
+    struct ASTNode** field_defaults; // parser'dan gelen default ifadeler
 } TypeDef;
 
 // Symbol Table (Değişken depolama)

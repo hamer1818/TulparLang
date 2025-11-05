@@ -77,6 +77,7 @@ typedef struct ASTNode {
     char** field_names;
     DataType* field_types;
     int field_count;
+    struct ASTNode** field_defaults; // alan varsayılan değer ifadeleri (NULL olabilir)
     
     // Fonksiyon için
     struct ASTNode** parameters;  // Parametre listesi
@@ -103,6 +104,7 @@ typedef struct ASTNode {
     // Fonksiyon çağrısı için
     struct ASTNode** arguments;
     int argument_count;
+    char** argument_names;   // Named argümanlar için; positional ise NULL
     
     // Dizi (Array) için
     struct ASTNode** elements;    // Dizi elemanları

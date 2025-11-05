@@ -60,10 +60,10 @@ str parcasi = substring(metin, 0, 7);
 
 ## 📋 FAZ 3 - İleri Seviye Özellikler
 
-### 3.1 Struct/Object - Orta Öncelik
-**Tahmini Süre**: 6-8 saat
+### 3.1 Struct/Object - Tamamlananlar ve Plan
+**Durum**: 🟢 Kısmen tamamlandı (Object + type, named args, default alanlar, nested dot-assign)
 
-Mevcut (Object - dinamik):
+Mevcut (Object - dinamik ve dot-assign):
 ```tulpar
 var user = { "name": "Ali", "age": 25, "city": "İstanbul" };
 print(user["name"], user["age"]);
@@ -82,18 +82,25 @@ var p = makePerson("Veli", 28, "Ankara");
 print(p["city"]);
 ```
 
-Planlı (Struct - statik):
+Tamamlanan (type - statik şema, named arg, default):
 ```tulpar
-struct Person {
+type Person {
     str name;
     int age;
-    str city;
+    str city = "İstanbul";
 }
 
-Person kisi = Person("Ali", 25, "İstanbul");
-print(kisi.name, kisi.age);
+// Named arg ile constructor
+Person kisi = Person(name: "Ali", age: 25);
+print(kisi.name, kisi.age, kisi.city); // city → "İstanbul"
+
+// Dot-assign (nested dahil)
+kisi.name = "Veli";
+order.customer.address.city = "Ankara";
 ```
-Not: Şu an object alanlarına erişim desteklenir (`obj["key"]`), alan güncelleme (ör. `obj["key"] = x`) planlıdır.
+Planlı (Genişletme):
+- Nested type alanları: `type Order { Person customer; }`
+- Type içi metotlar: `func Person.fullName() { ... }`
 
 ### 3.2 Dosya İşlemleri - Düşük Öncelik
 **Tahmini Süre**: 3-4 saat

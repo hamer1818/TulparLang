@@ -2055,16 +2055,64 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 // Type constructor?
                 TypeDef* t = interpreter_get_type(interp, node->name);
                 if (t) {
-                    // Argümanları değerlendir ve object oluştur
-                    if (node->argument_count != t->field_count) {
-                        printf("Hata: Type '%s' için beklenen argüman sayısı %d, verilen %d\n", node->name, t->field_count, node->argument_count);
-                        exit(1);
-                    }
+                    // Argümanları değerlendir ve object oluştur (named args destekli)
                     Value* obj = value_create_object();
-                    for (int i = 0; i < t->field_count; i++) {
-                        Value* arg = interpreter_eval_expression(interp, node->arguments[i]);
-                        hash_table_set(obj->data.object_val, t->field_names[i], arg);
+                    int used_fields = 0;
+                    int* filled = (int*)calloc(t->field_count, sizeof(int));
+                    // Named arg varsa eşle
+                    int has_named = 0;
+                    for (int i = 0; i < node->argument_count; i++) {
+                        if (node->argument_names && node->argument_names[i]) { has_named = 1; break; }
                     }
+                    if (has_named) {
+                        for (int i = 0; i < node->argument_count; i++) {
+                            if (!node->argument_names[i]) {
+                                printf("Hata: Type '%s' için tüm argümanlar named olmalı veya hiçbiri olmamalı\n", node->name);
+                                exit(1);
+                            }
+                            const char* fname = node->argument_names[i];
+                            int idx = -1;
+                            for (int k = 0; k < t->field_count; k++) {
+                                if (strcmp(t->field_names[k], fname) == 0) { idx = k; break; }
+                            }
+                            if (idx < 0) {
+                                printf("Hata: Type '%s' alanı bulunamadı: %s\n", node->name, fname);
+                                exit(1);
+                            }
+                            if (filled[idx]) {
+                                printf("Hata: Type '%s' alanı iki kez atandı: %s\n", node->name, fname);
+                                exit(1);
+                            }
+                            Value* arg = interpreter_eval_expression(interp, node->arguments[i]);
+                            hash_table_set(obj->data.object_val, t->field_names[idx], arg);
+                            filled[idx] = 1;
+                            used_fields++;
+                        }
+                        // Eksik alanları default ile doldur
+                        for (int k = 0; k < t->field_count; k++) {
+                            if (!filled[k]) {
+                                if (t->field_defaults && t->field_defaults[k]) {
+                                    Value* dv = interpreter_eval_expression(interp, t->field_defaults[k]);
+                                    hash_table_set(obj->data.object_val, t->field_names[k], dv);
+                                    filled[k] = 1;
+                                    used_fields++;
+                                } else {
+                                    printf("Hata: Type '%s' için eksik alan: %s\n", node->name, t->field_names[k]);
+                                    exit(1);
+                                }
+                            }
+                        }
+                    } else {
+                        if (node->argument_count != t->field_count) {
+                            printf("Hata: Type '%s' için beklenen argüman sayısı %d, verilen %d\n", node->name, t->field_count, node->argument_count);
+                            exit(1);
+                        }
+                        for (int i = 0; i < t->field_count; i++) {
+                            Value* arg = interpreter_eval_expression(interp, node->arguments[i]);
+                            hash_table_set(obj->data.object_val, t->field_names[i], arg);
+                        }
+                    }
+                    free(filled);
                     return obj;
                 }
                 printf("Hata: Tanımlanmamış fonksiyon '%s'\n", node->name);
@@ -2131,9 +2179,11 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
             t->field_count = node->field_count;
             t->field_names = (char**)malloc(sizeof(char*) * t->field_count);
             t->field_types = (DataType*)malloc(sizeof(DataType) * t->field_count);
+            t->field_defaults = (ASTNode**)malloc(sizeof(ASTNode*) * t->field_count);
             for (int i = 0; i < t->field_count; i++) {
                 t->field_names[i] = strdup(node->field_names[i]);
                 t->field_types[i] = node->field_types[i];
+                t->field_defaults[i] = node->field_defaults ? node->field_defaults[i] : NULL;
             }
             interpreter_register_type(interp, t);
             break;
@@ -2231,45 +2281,80 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
         case AST_ASSIGNMENT: {
             Value* val = interpreter_eval_expression(interp, node->right);
             
-            // Eğer sol taraf array access ise (arr[0] = 5)
+            // Eğer sol taraf array/object erişimi zinciri ise
             if (node->left && node->left->type == AST_ARRAY_ACCESS) {
-                ASTNode* access = node->left;
-                Value* arr_val = symbol_table_get(interp->current_scope, access->name);
-                
-                if (!arr_val) {
-                    printf("Hata: '%s' tanımlı değil\n", access->name);
+                // Zinciri çöz: base name ve segment listesi
+                ASTNode* seg = node->left;
+                // En sola kadar git
+                while (seg->left) seg = seg->left;
+                if (!seg->name) {
+                    printf("Hata: Geçersiz atama sol tarafı\n");
                     value_free(val);
                     exit(1);
                 }
-                
-                Value* index_val = interpreter_eval_expression(interp, access->index);
-                
-                if (arr_val->type == VAL_ARRAY) {
-                    if (index_val->type != VAL_INT) {
-                        printf("Hata: Dizi index integer olmalı\n");
-                        value_free(val);
-                        value_free(index_val);
-                        exit(1);
+                // Base container
+                Value* container = symbol_table_get(interp->current_scope, seg->name);
+                if (!container) {
+                    printf("Hata: '%s' tanımlı değil\n", seg->name);
+                    value_free(val);
+                    exit(1);
+                }
+                // Zinciri baştan tekrar yürü ve parent+key bul
+                // seg şu anda ilk düğüm; parent için son düğümden bir önceki noktayı bulmalıyız
+                // İlk düğüm tekrar
+                ASTNode* walker = node->left;
+                Value* current = container;
+                Value* parent = NULL;
+                while (walker->left) {
+                    // İleriye gitmek için önce sol'u işle
+                    walker = walker->left;
+                }
+                // Şimdi en sol seg'e tekrar başlayarak node->left'e kadar ilerleyelim
+                // Yeniden başlat
+                // Zinciri iteratif gezmek için liste üretelim
+                int depth = 0; ASTNode* tmp = node->left; while (tmp) { depth++; tmp = tmp->left; }
+                ASTNode** nodes = (ASTNode**)malloc(sizeof(ASTNode*) * depth);
+                tmp = node->left;
+                for (int i = depth - 1; i >= 0; i--) { nodes[i] = tmp; tmp = tmp->left; }
+                // nodes[0] en sol (base), nodes[depth-1] en sağ (target)
+                for (int i = 0; i < depth - 1; i++) {
+                    ASTNode* n = nodes[i];
+                    // index'i değerlendir
+                    Value* idx = interpreter_eval_expression(interp, n->index);
+                    parent = current;
+                    // İleri container'a ilerle
+                    if (parent->type == VAL_OBJECT) {
+                        if (idx->type != VAL_STRING) { printf("Hata: Object key string olmalı\n"); value_free(idx); value_free(val); exit(1);} 
+                        Value* child = hash_table_get(parent->data.object_val, idx->data.string_val);
+                        if (!child) { printf("Hata: Object yolunda eksik alan: %s\n", idx->data.string_val); value_free(idx); value_free(val); exit(1);} 
+                        current = child;
+                    } else if (parent->type == VAL_ARRAY) {
+                        if (idx->type != VAL_INT) { printf("Hata: Dizi index integer olmalı\n"); value_free(idx); value_free(val); exit(1);} 
+                        int index = idx->data.int_val;
+                        // Doğrudan pointer erişimi
+                        if (index < 0 || index >= parent->data.array_val->length) { printf("Hata: Dizi sınırları dışında\n"); value_free(idx); value_free(val); exit(1);} 
+                        current = parent->data.array_val->elements[index];
+                    } else {
+                        printf("Hata: Ara segment dizi veya object olmalı\n"); value_free(idx); value_free(val); exit(1);
                     }
-                    int index = index_val->data.int_val;
-                    value_free(index_val);
-                    array_set(arr_val->data.array_val, index, val);
-                } else if (arr_val->type == VAL_OBJECT) {
-                    if (index_val->type != VAL_STRING) {
-                        printf("Hata: Object key string olmalı\n");
-                        value_free(val);
-                        value_free(index_val);
-                        exit(1);
-                    }
-                    // obj["key"] = val
-                    hash_table_set(arr_val->data.object_val, index_val->data.string_val, value_copy(val));
-                    value_free(index_val);
+                    value_free(idx);
+                }
+                // Şimdi parent=current_parent, target key son segmentin index'i
+                Value* target_parent = current;
+                ASTNode* last = nodes[depth - 1];
+                Value* last_idx = interpreter_eval_expression(interp, last->index);
+                if (target_parent->type == VAL_OBJECT) {
+                    if (last_idx->type != VAL_STRING) { printf("Hata: Object key string olmalı\n"); value_free(last_idx); value_free(val); exit(1);} 
+                    hash_table_set(target_parent->data.object_val, last_idx->data.string_val, value_copy(val));
+                    value_free(last_idx);
+                } else if (target_parent->type == VAL_ARRAY) {
+                    if (last_idx->type != VAL_INT) { printf("Hata: Dizi index integer olmalı\n"); value_free(last_idx); value_free(val); exit(1);} 
+                    array_set(target_parent->data.array_val, last_idx->data.int_val, val);
+                    value_free(last_idx);
                 } else {
-                    printf("Hata: '%s' bir dizi veya object değil\n", access->name);
-                    value_free(val);
-                    value_free(index_val);
-                    exit(1);
+                    printf("Hata: Hedef konteyner dizi veya object olmalı\n"); value_free(last_idx); value_free(val); exit(1);
                 }
+                free(nodes);
             } else {
                 // Normal assignment
                 symbol_table_set(interp->current_scope, node->name, val);

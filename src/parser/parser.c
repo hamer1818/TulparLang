@@ -216,18 +216,42 @@ static ASTNode* parse_primary(Parser* parser) {
             // Argümanları parse et
             node->arguments = NULL;
             node->argument_count = 0;
+            node->argument_names = NULL;
             
             if (parser->current_token->type != TOKEN_RPAREN) {
                 int capacity = 4;
                 node->arguments = (ASTNode**)malloc(sizeof(ASTNode*) * capacity);
+                node->argument_names = (char**)malloc(sizeof(char*) * capacity);
                 
                 do {
                     if (node->argument_count >= capacity) {
                         capacity *= 2;
                         node->arguments = (ASTNode**)realloc(node->arguments, 
                                                              sizeof(ASTNode*) * capacity);
+                        node->argument_names = (char**)realloc(node->argument_names,
+                                                              sizeof(char*) * capacity);
                     }
-                    node->arguments[node->argument_count++] = parse_expression(parser);
+                    // Named arg: ident : expr
+                    if (parser->current_token->type == TOKEN_IDENTIFIER) {
+                        Token* save = parser->current_token;
+                        parser_advance(parser);
+                        if (parser->current_token->type == TOKEN_COLON) {
+                            // named
+                            char* aname = strdup(save->value);
+                            parser_advance(parser); // ':'
+                            node->argument_names[node->argument_count] = aname;
+                            node->arguments[node->argument_count++] = parse_expression(parser);
+                        } else {
+                            // geri al
+                            parser->position -= 1;
+                            parser->current_token = parser->tokens[parser->position];
+                            node->argument_names[node->argument_count] = NULL;
+                            node->arguments[node->argument_count++] = parse_expression(parser);
+                        }
+                    } else {
+                        node->argument_names[node->argument_count] = NULL;
+                        node->arguments[node->argument_count++] = parse_expression(parser);
+                    }
                     
                     if (parser->current_token->type == TOKEN_COMMA) {
                         parser_advance(parser);
@@ -861,6 +885,7 @@ static ASTNode* parse_statement(Parser* parser) {
         int capacity = 4;
         node->field_names = (char**)malloc(sizeof(char*) * capacity);
         node->field_types = (DataType*)malloc(sizeof(DataType) * capacity);
+        node->field_defaults = (ASTNode**)malloc(sizeof(ASTNode*) * capacity);
         
         while (parser->current_token->type != TOKEN_RBRACE && parser->current_token->type != TOKEN_EOF) {
             DataType dt = parse_data_type(parser);
@@ -872,11 +897,18 @@ static ASTNode* parse_statement(Parser* parser) {
                 capacity *= 2;
                 node->field_names = (char**)realloc(node->field_names, sizeof(char*) * capacity);
                 node->field_types = (DataType*)realloc(node->field_types, sizeof(DataType) * capacity);
+                node->field_defaults = (ASTNode**)realloc(node->field_defaults, sizeof(ASTNode*) * capacity);
             }
             node->field_names[node->field_count] = strdup(parser->current_token->value);
             node->field_types[node->field_count] = dt;
+            node->field_defaults[node->field_count] = NULL;
             node->field_count++;
             parser_advance(parser);
+            // Varsayılan değer?
+            if (parser->current_token->type == TOKEN_ASSIGN) {
+                parser_advance(parser);
+                node->field_defaults[node->field_count - 1] = parse_expression(parser);
+            }
             parser_expect(parser, TOKEN_SEMICOLON);
         }
         parser_expect(parser, TOKEN_RBRACE);
@@ -944,7 +976,71 @@ static ASTNode* parse_statement(Parser* parser) {
     // Identifier (atama veya fonksiyon çağrısı)
     if (token->type == TOKEN_IDENTIFIER) {
         Token* next = parser_peek(parser);
+        // Custom type variable declaration: TypeName var = expr;
+        if (next && next->type == TOKEN_IDENTIFIER) {
+            // Lookahead third token
+            int save = parser->position;
+            parser_advance(parser); // consume TypeName
+            parser_advance(parser); // consume var name
+            Token* third = parser->current_token;
+            // reset
+            parser->position = save;
+            parser->current_token = parser->tokens[parser->position];
+            if (third && third->type == TOKEN_ASSIGN) {
+                // Parse as variable declaration with RHS
+                char* type_name = strdup(parser->current_token->value); // unused for now
+                parser_advance(parser); // TypeName
+                char* var_name = strdup(parser->current_token->value);
+                parser_advance(parser); // var
+                parser_expect(parser, TOKEN_ASSIGN);
+                ASTNode* node = ast_node_create(AST_VARIABLE_DECL);
+                node->data_type = TYPE_VOID; // actual runtime determines
+                node->name = var_name;
+                node->right = parse_expression(parser);
+                parser_expect(parser, TOKEN_SEMICOLON);
+                free(type_name);
+                return node;
+            }
+        }
         
+        // Genel dot/bracket assignment: base(.field | [expr])+ = expr;
+        if (next && (next->type == TOKEN_DOT || next->type == TOKEN_LBRACKET)) {
+            char* base = strdup(parser->current_token->value);
+            parser_advance(parser); // name
+            ASTNode* chain = NULL;
+            // İlk segment
+            while (parser->current_token->type == TOKEN_DOT || parser->current_token->type == TOKEN_LBRACKET) {
+                ASTNode* seg = ast_node_create(AST_ARRAY_ACCESS);
+                if (chain) {
+                    seg->left = chain;
+                } else {
+                    seg->name = base;
+                }
+                if (parser->current_token->type == TOKEN_DOT) {
+                    parser_advance(parser);
+                    if (parser->current_token->type != TOKEN_IDENTIFIER) {
+                        printf("Parser Error: Expected identifier after '.' at line %d\n", parser->current_token->line);
+                        return NULL;
+                    }
+                    ASTNode* key = ast_node_create(AST_STRING_LITERAL);
+                    key->value.string_value = strdup(parser->current_token->value);
+                    seg->index = key;
+                    parser_advance(parser);
+                } else {
+                    parser_advance(parser); // '['
+                    seg->index = parse_expression(parser);
+                    parser_expect(parser, TOKEN_RBRACKET);
+                }
+                chain = seg;
+            }
+            ASTNode* node = ast_node_create(AST_ASSIGNMENT);
+            node->left = chain;
+            parser_expect(parser, TOKEN_ASSIGN);
+            node->right = parse_expression(parser);
+            parser_expect(parser, TOKEN_SEMICOLON);
+            return node;
+        }
+
         // Array assignment (arr[0] = 5)
         if (next && next->type == TOKEN_LBRACKET) {
             ASTNode* node = ast_node_create(AST_ASSIGNMENT);

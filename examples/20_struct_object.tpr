@@ -45,10 +45,24 @@ print("");
 type Person {
     str name;
     int age;
-    str city;
+    str city = "İstanbul";
 }
 
-Person s1 = Person("Ali", 25, "İstanbul");
+Person s1 = Person(name: "Ali", age: 25, city: "İstanbul");
 print(s1.name, s1.age, s1.city);
+
+// Dot ile atama
+s1.name = "Veli";
+print("Yeni ad:", s1.name);
+
+// Named arg ve default alan kullanımı (city verilmedi -> "İstanbul")
+Person s2 = Person(name: "Ayşe", age: 30);
+print("Varsayılan şehir:", s2.city);
+
+// Nested dot-assignment: order.customer.address.city
+arrayJson order = { "customer": { "address": { "city": "Bursa" } } };
+print("Sipariş şehir (önce):", order.customer.address.city);
+order.customer.address.city = "Ankara";
+print("Sipariş şehir (sonra):", order.customer.address.city);
 
 

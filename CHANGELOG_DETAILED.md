@@ -2,6 +2,32 @@
 
 Tüm önemli değişiklikler bu dosyada dokümante edilmiştir.
 
+## [1.6.0] - 2025-11-05
+
+### ✨ Eklenenler
+- **type (struct) Desteği**
+  - Söz dizimi: `type Person { str name; int age; str city = "İstanbul"; }`
+  - Oluşturucu: `Person(name: "Ali", age: 25)` → object üretir; eksik alanlar default ile doldurulur
+  - Erişim: `p.name` ve `p["name"]`
+  - Atama: `p.name = "Veli"` ve `p["name"] = "Veli"`
+- **Named Argümanlar**
+  - Fonksiyon ve type oluşturucularda: `fn(x: 1, y: 2)` / `Person(name: ..., age: ...)`
+  - Karışık kullanım engeli: tümü named ya da tümü positional olmalı
+- **Nested Dot Assignment**
+  - İç içe path atamaları: `order.customer.address.city = "Ankara"`
+  - Bracket ile karışık kullanım: `obj.items[0].name = "X"`
+- **Block Yorumları**
+  - `/* ... */` çok satırlı yorum desteği ve açık kapanış hatalarında anlamlı mesaj
+
+### 🔧 İyileştirmeler
+- Windows `winnt.h` ile `TOKEN_TYPE` çakışması giderildi (`TOKEN_TYPE_KW`)
+- Hata mesajları: eksik/tekrarlı/yanlış named alanlarda açıklayıcı uyarılar
+
+### 📦 Örnekler
+- `examples/20_struct_object.tpr` güncellendi: type + named arg + default + nested dot-assign demo
+
+---
+
 ## [1.5.0] - 2025-10-13
 
 ### ✨ Eklenenler
