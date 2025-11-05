@@ -87,6 +87,9 @@ typedef struct ASTNode {
     struct ASTNode** parameters;  // Parametre listesi
     int param_count;
     struct ASTNode* body;
+    // Type method desteği
+    char* receiver_type_name;     // func TypeName.method
+    struct ASTNode* receiver;     // call sırasında: obj.method()
     
     // If/While/For için
     struct ASTNode* condition;

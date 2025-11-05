@@ -975,7 +975,14 @@ void interpreter_register_function(Interpreter* interp, char* name, ASTNode* nod
     }
     
     Function* func = (Function*)malloc(sizeof(Function));
-    func->name = strdup(name);
+    // Type method ise, kayıt adını TypeName.method olarak oluştur
+    if (node->receiver_type_name) {
+        char fullname[256];
+        snprintf(fullname, sizeof(fullname), "%s.%s", node->receiver_type_name, name);
+        func->name = strdup(fullname);
+    } else {
+        func->name = strdup(name);
+    }
     func->node = node;
     interp->functions[interp->function_count++] = func;
 }
@@ -2434,6 +2441,49 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             }
             
             // Kullanıcı tanımlı fonksiyonlar
+            // Metot çağrısı mı? (receiver varsa)
+            if (node->receiver) {
+                Value* recv = interpreter_eval_expression(interp, node->receiver);
+                if (recv->type != VAL_OBJECT) {
+                    printf("Hata: Metot çağrısı için object bekleniyor (line %d)\n", node->line);
+                    exit(1);
+                }
+                Value* mark = hash_table_get(recv->data.object_val, "__type");
+                if (!mark || mark->type != VAL_STRING) {
+                    printf("Hata: Metot için type işareti bulunamadı (line %d)\n", node->line);
+                    exit(1);
+                }
+                // Fonksiyon adı: TypeName.method
+                char fullname[256]; snprintf(fullname, sizeof(fullname), "%s.%s", mark->data.string_val, node->name);
+                Function* m = interpreter_get_function(interp, fullname);
+                if (!m) {
+                    printf("Hata: Tanımlanmamış metot '%s' (line %d)\n", fullname, node->line);
+                    exit(1);
+                }
+                // Argümanları hazırla
+                Value** arg_values = (Value**)malloc(sizeof(Value*) * (node->argument_count));
+                for (int i = 0; i < node->argument_count; i++) arg_values[i] = interpreter_eval_expression(interp, node->arguments[i]);
+                // Yeni scope ve self
+                SymbolTable* old_scope = interp->current_scope;
+                interp->current_scope = symbol_table_create(interp->global_scope);
+                symbol_table_set(interp->current_scope, "self", recv);
+                for (int i = 0; i < node->argument_count; i++) {
+                    symbol_table_set(interp->current_scope, m->node->parameters[i]->name, arg_values[i]);
+                    value_free(arg_values[i]);
+                }
+                free(arg_values);
+                value_free(recv);
+                // Çalıştır
+                interp->should_return = 0;
+                interpreter_execute_statement(interp, m->node->body);
+                Value* result = interp->return_value ? value_copy(interp->return_value) : value_create_void();
+                symbol_table_free(interp->current_scope);
+                interp->current_scope = old_scope;
+                if (interp->return_value) { value_free(interp->return_value); interp->return_value = NULL; }
+                interp->should_return = 0;
+                return result;
+            }
+
             Function* func = interpreter_get_function(interp, node->name);
             if (!func) {
                 // Type constructor?

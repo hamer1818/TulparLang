@@ -1,0 +1,17 @@
+// ============================================
+// TYPE METHODS TESTI
+// ============================================
+
+print("=== Type Methods Test ===");
+
+type Person { str name; int age; }
+
+func Person.fullName() {
+    // self: metot içinde alıcı
+    return self["name"]; // basit
+}
+
+Person p = Person(name: "Ali", age: 25);
+print("fullName:", p.fullName());
+
+

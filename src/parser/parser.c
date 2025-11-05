@@ -297,7 +297,7 @@ static ASTNode* parse_primary(Parser* parser) {
                 
                 result = nested;
             }
-            // Dot-access zinciri: .field .field2
+            // Dot-access zinciri: .field .field2 veya .method(args)
             while (parser->current_token->type == TOKEN_DOT) {
                 parser_advance(parser); // '.'
                 if (parser->current_token->type != TOKEN_IDENTIFIER) {
@@ -305,15 +305,38 @@ static ASTNode* parse_primary(Parser* parser) {
                     return result;
                 }
                 // .field => ["field"]
-                ASTNode* str = ast_node_create(AST_STRING_LITERAL);
-                str->line = parser->current_token->line; str->column = parser->current_token->column;
-                str->value.string_value = strdup(parser->current_token->value);
+                char* member = strdup(parser->current_token->value);
                 parser_advance(parser);
-                ASTNode* nested = ast_node_create(AST_ARRAY_ACCESS);
-                nested->line = parser->current_token->line; nested->column = parser->current_token->column;
-                nested->left = result;
-                nested->index = str;
-                result = nested;
+                if (parser->current_token->type == TOKEN_LPAREN) {
+                    // Method call on receiver
+                    ASTNode* call = ast_node_create(AST_FUNCTION_CALL);
+                    call->name = member; // method name
+                    call->receiver = result; // receiver expression
+                    call->arguments = NULL; call->argument_names = NULL; call->argument_count = 0;
+                    parser_advance(parser); // '('
+                    if (parser->current_token->type != TOKEN_RPAREN) {
+                        int capacity = 4; call->arguments = (ASTNode**)malloc(sizeof(ASTNode*) * capacity);
+                        call->argument_names = (char**)malloc(sizeof(char*) * capacity);
+                        do {
+                            if (call->argument_count >= capacity) { capacity *= 2; call->arguments = (ASTNode**)realloc(call->arguments, sizeof(ASTNode*) * capacity); call->argument_names = (char**)realloc(call->argument_names, sizeof(char*) * capacity); }
+                            if (parser->current_token->type == TOKEN_IDENTIFIER) {
+                                Token* save = parser->current_token; parser_advance(parser);
+                                if (parser->current_token->type == TOKEN_COLON) { parser_advance(parser); call->argument_names[call->argument_count] = strdup(save->value); call->arguments[call->argument_count++] = parse_expression(parser); }
+                                else { parser->position -= 1; parser->current_token = parser->tokens[parser->position]; call->argument_names[call->argument_count] = NULL; call->arguments[call->argument_count++] = parse_expression(parser); }
+                            } else { call->argument_names[call->argument_count] = NULL; call->arguments[call->argument_count++] = parse_expression(parser); }
+                            if (parser->current_token->type == TOKEN_COMMA) parser_advance(parser); else break;
+                        } while (1);
+                    }
+                    parser_expect(parser, TOKEN_RPAREN);
+                    return call;
+                } else {
+                    ASTNode* str = ast_node_create(AST_STRING_LITERAL);
+                    str->value.string_value = member;
+                    ASTNode* nested = ast_node_create(AST_ARRAY_ACCESS);
+                    nested->left = result;
+                    nested->index = str;
+                    result = nested;
+                }
             }
             return result;
         }
@@ -328,9 +351,61 @@ static ASTNode* parse_primary(Parser* parser) {
                 node->name = name;
                 return node;
             }
-            ASTNode* str = ast_node_create(AST_STRING_LITERAL);
-            str->value.string_value = strdup(parser->current_token->value);
+            char* member = strdup(parser->current_token->value);
             parser_advance(parser);
+            
+            // Method call kontrolü (ilk .field için)
+            if (parser->current_token->type == TOKEN_LPAREN) {
+                ASTNode* var_node = ast_node_create(AST_IDENTIFIER);
+                var_node->name = name;
+                ASTNode* call = ast_node_create(AST_FUNCTION_CALL);
+                call->name = member;
+                call->receiver = var_node;
+                call->arguments = NULL; 
+                call->argument_names = NULL; 
+                call->argument_count = 0;
+                parser_advance(parser); // '('
+                if (parser->current_token->type != TOKEN_RPAREN) {
+                    int capacity = 4; 
+                    call->arguments = (ASTNode**)malloc(sizeof(ASTNode*) * capacity);
+                    call->argument_names = (char**)malloc(sizeof(char*) * capacity);
+                    do {
+                        if (call->argument_count >= capacity) { 
+                            capacity *= 2; 
+                            call->arguments = (ASTNode**)realloc(call->arguments, sizeof(ASTNode*) * capacity); 
+                            call->argument_names = (char**)realloc(call->argument_names, sizeof(char*) * capacity); 
+                        }
+                        if (parser->current_token->type == TOKEN_IDENTIFIER) {
+                            Token* save = parser->current_token; 
+                            parser_advance(parser);
+                            if (parser->current_token->type == TOKEN_COLON) { 
+                                parser_advance(parser); 
+                                call->argument_names[call->argument_count] = strdup(save->value); 
+                                call->arguments[call->argument_count++] = parse_expression(parser); 
+                            }
+                            else { 
+                                parser->position -= 1; 
+                                parser->current_token = parser->tokens[parser->position]; 
+                                call->argument_names[call->argument_count] = NULL; 
+                                call->arguments[call->argument_count++] = parse_expression(parser); 
+                            }
+                        } else { 
+                            call->argument_names[call->argument_count] = NULL; 
+                            call->arguments[call->argument_count++] = parse_expression(parser); 
+                        }
+                        if (parser->current_token->type == TOKEN_COMMA) 
+                            parser_advance(parser); 
+                        else 
+                            break;
+                    } while (1);
+                }
+                parser_expect(parser, TOKEN_RPAREN);
+                return call;
+            }
+            
+            // Field access olarak devam et
+            ASTNode* str = ast_node_create(AST_STRING_LITERAL);
+            str->value.string_value = member;
             ASTNode* access = ast_node_create(AST_ARRAY_ACCESS);
             access->name = name;
             access->index = str;
@@ -343,13 +418,37 @@ static ASTNode* parse_primary(Parser* parser) {
                         printf("Parser Error: Expected identifier after '.' at line %d\n", parser->current_token->line);
                         break;
                     }
-                    ASTNode* s = ast_node_create(AST_STRING_LITERAL);
-                    s->value.string_value = strdup(parser->current_token->value);
+                    char* member = strdup(parser->current_token->value);
                     parser_advance(parser);
-                    ASTNode* nested = ast_node_create(AST_ARRAY_ACCESS);
-                    nested->left = result;
-                    nested->index = s;
-                    result = nested;
+                    if (parser->current_token->type == TOKEN_LPAREN) {
+                        ASTNode* call = ast_node_create(AST_FUNCTION_CALL);
+                        call->name = member;
+                        call->receiver = result;
+                        call->arguments = NULL; call->argument_names = NULL; call->argument_count = 0;
+                        parser_advance(parser);
+                        if (parser->current_token->type != TOKEN_RPAREN) {
+                            int capacity = 4; call->arguments = (ASTNode**)malloc(sizeof(ASTNode*) * capacity);
+                            call->argument_names = (char**)malloc(sizeof(char*) * capacity);
+                            do {
+                                if (call->argument_count >= capacity) { capacity *= 2; call->arguments = (ASTNode**)realloc(call->arguments, sizeof(ASTNode*) * capacity); call->argument_names = (char**)realloc(call->argument_names, sizeof(char*) * capacity); }
+                                if (parser->current_token->type == TOKEN_IDENTIFIER) {
+                                    Token* save = parser->current_token; parser_advance(parser);
+                                    if (parser->current_token->type == TOKEN_COLON) { parser_advance(parser); call->argument_names[call->argument_count] = strdup(save->value); call->arguments[call->argument_count++] = parse_expression(parser); }
+                                    else { parser->position -= 1; parser->current_token = parser->tokens[parser->position]; call->argument_names[call->argument_count] = NULL; call->arguments[call->argument_count++] = parse_expression(parser); }
+                                } else { call->argument_names[call->argument_count] = NULL; call->arguments[call->argument_count++] = parse_expression(parser); }
+                                if (parser->current_token->type == TOKEN_COMMA) parser_advance(parser); else break;
+                            } while (1);
+                        }
+                        parser_expect(parser, TOKEN_RPAREN);
+                        return call;
+                    } else {
+                        ASTNode* s = ast_node_create(AST_STRING_LITERAL);
+                        s->value.string_value = member;
+                        ASTNode* nested = ast_node_create(AST_ARRAY_ACCESS);
+                        nested->left = result;
+                        nested->index = s;
+                        result = nested;
+                    }
                 } else {
                     // [expr]
                     ASTNode* nested = ast_node_create(AST_ARRAY_ACCESS);
@@ -824,8 +923,27 @@ static ASTNode* parse_function(Parser* parser) {
     ASTNode* node = ast_node_create(AST_FUNCTION_DECL);
     parser_advance(parser); // 'func' atla
     
-    node->name = strdup(parser->current_token->value);
+    if (parser->current_token->type != TOKEN_IDENTIFIER) {
+        printf("Parser Error: Function name expected at line %d\n", parser->current_token->line);
+        return NULL;
+    }
+    char* first_ident = strdup(parser->current_token->value);
     parser_advance(parser);
+    if (parser->current_token->type == TOKEN_DOT) {
+        // Method declaration: func TypeName.method
+        node->receiver_type_name = first_ident;
+        parser_advance(parser);
+        if (parser->current_token->type != TOKEN_IDENTIFIER) {
+            printf("Parser Error: Method name expected after '.' at line %d\n", parser->current_token->line);
+            free(first_ident);
+            return NULL;
+        }
+        node->name = strdup(parser->current_token->value);
+        parser_advance(parser);
+    } else {
+        node->receiver_type_name = NULL;
+        node->name = first_ident;
+    }
     
     parser_expect(parser, TOKEN_LPAREN);
     
