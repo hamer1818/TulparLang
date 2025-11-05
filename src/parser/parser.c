@@ -33,6 +33,7 @@ static int parser_expect(Parser* parser, TulparTokenType type) {
 ASTNode* ast_node_create(ASTNodeType type) {
     ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
     node->type = type;
+    // Varsayılan olarak mevcut token konumunu atamak için üst seviye çağıranlar set edecektir.
     return node;
 }
 
@@ -172,6 +173,7 @@ static ASTNode* parse_primary(Parser* parser) {
     // Sayı literalleri
     if (token->type == TOKEN_INT_LITERAL) {
         ASTNode* node = ast_node_create(AST_INT_LITERAL);
+        node->line = token->line; node->column = token->column;
         char* endptr = NULL;
         long long v = strtoll(token->value, &endptr, 10);
         node->value.int_value = v;
@@ -181,6 +183,7 @@ static ASTNode* parse_primary(Parser* parser) {
     
     if (token->type == TOKEN_FLOAT_LITERAL) {
         ASTNode* node = ast_node_create(AST_FLOAT_LITERAL);
+        node->line = token->line; node->column = token->column;
         node->value.float_value = atof(token->value);
         parser_advance(parser);
         return node;
@@ -189,6 +192,7 @@ static ASTNode* parse_primary(Parser* parser) {
     // String literalleri
     if (token->type == TOKEN_STRING_LITERAL) {
         ASTNode* node = ast_node_create(AST_STRING_LITERAL);
+        node->line = token->line; node->column = token->column;
         node->value.string_value = strdup(token->value);
         parser_advance(parser);
         return node;
@@ -197,6 +201,7 @@ static ASTNode* parse_primary(Parser* parser) {
     // Boolean literalleri
     if (token->type == TOKEN_TRUE || token->type == TOKEN_FALSE) {
         ASTNode* node = ast_node_create(AST_BOOL_LITERAL);
+        node->line = token->line; node->column = token->column;
         node->value.bool_value = (token->type == TOKEN_TRUE) ? 1 : 0;
         parser_advance(parser);
         return node;
@@ -210,6 +215,7 @@ static ASTNode* parse_primary(Parser* parser) {
         // Fonksiyon çağrısı mı?
         if (parser->current_token->type == TOKEN_LPAREN) {
             ASTNode* node = ast_node_create(AST_FUNCTION_CALL);
+            node->line = parser->current_token->line; node->column = parser->current_token->column;
             node->name = name;
             parser_advance(parser); // '(' atla
             
@@ -271,6 +277,7 @@ static ASTNode* parse_primary(Parser* parser) {
         if (parser->current_token->type == TOKEN_LBRACKET) {
             // İlk erişim: arr[0]
             result = ast_node_create(AST_ARRAY_ACCESS);
+            result->line = parser->current_token->line; result->column = parser->current_token->column;
             result->name = name;
             
             parser_advance(parser); // '[' atla
@@ -280,6 +287,7 @@ static ASTNode* parse_primary(Parser* parser) {
             // Zincirleme erişim: [1]["key"][2]...
             while (parser->current_token->type == TOKEN_LBRACKET) {
                 ASTNode* nested = ast_node_create(AST_ARRAY_ACCESS);
+                nested->line = parser->current_token->line; nested->column = parser->current_token->column;
                 nested->left = result;  // Önceki erişimi left'e koy
                 nested->name = NULL;    // name artık yok, left var
                 
@@ -298,9 +306,11 @@ static ASTNode* parse_primary(Parser* parser) {
                 }
                 // .field => ["field"]
                 ASTNode* str = ast_node_create(AST_STRING_LITERAL);
+                str->line = parser->current_token->line; str->column = parser->current_token->column;
                 str->value.string_value = strdup(parser->current_token->value);
                 parser_advance(parser);
                 ASTNode* nested = ast_node_create(AST_ARRAY_ACCESS);
+                nested->line = parser->current_token->line; nested->column = parser->current_token->column;
                 nested->left = result;
                 nested->index = str;
                 result = nested;
@@ -885,10 +895,35 @@ static ASTNode* parse_statement(Parser* parser) {
         int capacity = 4;
         node->field_names = (char**)malloc(sizeof(char*) * capacity);
         node->field_types = (DataType*)malloc(sizeof(DataType) * capacity);
+        node->field_custom_types = (char**)malloc(sizeof(char*) * capacity);
         node->field_defaults = (ASTNode**)malloc(sizeof(ASTNode*) * capacity);
         
         while (parser->current_token->type != TOKEN_RBRACE && parser->current_token->type != TOKEN_EOF) {
-            DataType dt = parse_data_type(parser);
+            DataType dt = TYPE_VOID;
+            char* custom_type_name = NULL;
+            // Built-in type keyword mü?
+            switch (parser->current_token->type) {
+                case TOKEN_INT_TYPE: dt = TYPE_INT; break;
+                case TOKEN_FLOAT_TYPE: dt = TYPE_FLOAT; break;
+                case TOKEN_STR_TYPE: dt = TYPE_STRING; break;
+                case TOKEN_BOOL_TYPE: dt = TYPE_BOOL; break;
+                case TOKEN_ARRAY_TYPE: dt = TYPE_ARRAY; break;
+                case TOKEN_ARRAY_INT: dt = TYPE_ARRAY_INT; break;
+                case TOKEN_ARRAY_FLOAT: dt = TYPE_ARRAY_FLOAT; break;
+                case TOKEN_ARRAY_STR: dt = TYPE_ARRAY_STR; break;
+                case TOKEN_ARRAY_BOOL: dt = TYPE_ARRAY_BOOL; break;
+                case TOKEN_ARRAY_JSON: dt = TYPE_ARRAY_JSON; break;
+                case TOKEN_IDENTIFIER: {
+                    // Custom type adı
+                    dt = TYPE_CUSTOM;
+                    custom_type_name = strdup(parser->current_token->value);
+                    break;
+                }
+                default:
+                    printf("Parser Error: Expected field type in 'type %s' at line %d\n", node->name, parser->current_token->line);
+                    dt = TYPE_VOID;
+            }
+            parser_advance(parser);
             if (parser->current_token->type != TOKEN_IDENTIFIER) {
                 printf("Parser Error: Expected field name in type '%s' at line %d\n", node->name, parser->current_token->line);
                 break;
@@ -897,10 +932,12 @@ static ASTNode* parse_statement(Parser* parser) {
                 capacity *= 2;
                 node->field_names = (char**)realloc(node->field_names, sizeof(char*) * capacity);
                 node->field_types = (DataType*)realloc(node->field_types, sizeof(DataType) * capacity);
+                node->field_custom_types = (char**)realloc(node->field_custom_types, sizeof(char*) * capacity);
                 node->field_defaults = (ASTNode**)realloc(node->field_defaults, sizeof(ASTNode*) * capacity);
             }
             node->field_names[node->field_count] = strdup(parser->current_token->value);
             node->field_types[node->field_count] = dt;
+            node->field_custom_types[node->field_count] = custom_type_name;
             node->field_defaults[node->field_count] = NULL;
             node->field_count++;
             parser_advance(parser);

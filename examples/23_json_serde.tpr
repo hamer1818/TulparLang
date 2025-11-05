@@ -1,0 +1,18 @@
+// ============================================
+// JSON SERDE TESTLERI (toJson / fromJson)
+// ============================================
+
+print("=== JSON Serde Test ===");
+
+arrayJson user = { "name": "Ali", "age": 25, "skills": ["C", "Go"] };
+str js = toJson(user);
+print("JSON:", js);
+
+arrayJson back = fromJson(js);
+print("Back name:", back["name"]);
+
+type Person { str name; int age; }
+Person p = fromJson("Person", js);
+print("Person:", p.name, p.age);
+
+

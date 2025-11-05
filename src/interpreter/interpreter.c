@@ -113,6 +113,194 @@ static char* bigint_trim(const char* s) {
     return strdup(s);
 }
 
+// ==========================
+// JSON Serde Yardımcıları
+// ==========================
+
+static void sb_append(char** buf, int* cap, int* len, const char* s) {
+    int sl = (int)strlen(s);
+    if (*len + sl + 1 > *cap) {
+        while (*len + sl + 1 > *cap) *cap *= 2;
+        *buf = (char*)realloc(*buf, (size_t)*cap);
+    }
+    memcpy(*buf + *len, s, (size_t)sl);
+    *len += sl;
+    (*buf)[*len] = '\0';
+}
+
+static void json_escape_and_append(char** buf, int* cap, int* len, const char* s) {
+    for (const char* p = s; *p; p++) {
+        char c = *p;
+        switch (c) {
+            case '"': sb_append(buf, cap, len, "\\\""); break;
+            case '\\': sb_append(buf, cap, len, "\\\\"); break;
+            case '\n': sb_append(buf, cap, len, "\\n"); break;
+            case '\r': sb_append(buf, cap, len, "\\r"); break;
+            case '\t': sb_append(buf, cap, len, "\\t"); break;
+            default: {
+                char tmp[2] = { c, 0 };
+                sb_append(buf, cap, len, tmp);
+            }
+        }
+    }
+}
+
+static void value_to_json_internal(Value* v, char** buf, int* cap, int* len);
+
+static void object_to_json(HashTable* obj, char** buf, int* cap, int* len) {
+    sb_append(buf, cap, len, "{");
+    int first = 1;
+    for (int i = 0; i < obj->bucket_count; i++) {
+        HashEntry* e = obj->buckets[i];
+        while (e) {
+            // Skip internal markers
+            if (strcmp(e->key, "__type") != 0) {
+                if (!first) sb_append(buf, cap, len, ",");
+                sb_append(buf, cap, len, "\"");
+                json_escape_and_append(buf, cap, len, e->key);
+                sb_append(buf, cap, len, "\":");
+                value_to_json_internal(e->value, buf, cap, len);
+                first = 0;
+            }
+            e = e->next;
+        }
+    }
+    sb_append(buf, cap, len, "}");
+}
+
+static void array_to_json(Array* arr, char** buf, int* cap, int* len) {
+    sb_append(buf, cap, len, "[");
+    for (int i = 0; i < arr->length; i++) {
+        if (i > 0) sb_append(buf, cap, len, ",");
+        value_to_json_internal(arr->elements[i], buf, cap, len);
+    }
+    sb_append(buf, cap, len, "]");
+}
+
+static void value_to_json_internal(Value* v, char** buf, int* cap, int* len) {
+    switch (v->type) {
+        case VAL_INT: {
+            char tmp[64]; snprintf(tmp, sizeof(tmp), "%lld", v->data.int_val); sb_append(buf, cap, len, tmp); break;
+        }
+        case VAL_FLOAT: {
+            char tmp[64]; snprintf(tmp, sizeof(tmp), "%g", v->data.float_val); sb_append(buf, cap, len, tmp); break;
+        }
+        case VAL_BOOL: {
+            sb_append(buf, cap, len, v->data.bool_val ? "true" : "false"); break;
+        }
+        case VAL_STRING: {
+            sb_append(buf, cap, len, "\"");
+            json_escape_and_append(buf, cap, len, v->data.string_val);
+            sb_append(buf, cap, len, "\"");
+            break;
+        }
+        case VAL_ARRAY: {
+            array_to_json(v->data.array_val, buf, cap, len); break;
+        }
+        case VAL_OBJECT: {
+            object_to_json(v->data.object_val, buf, cap, len); break;
+        }
+        case VAL_BIGINT: {
+            sb_append(buf, cap, len, v->data.bigint_val); break;
+        }
+        default: {
+            sb_append(buf, cap, len, "null"); break;
+        }
+    }
+}
+
+static char* value_to_json_string(Value* v) {
+    int cap = 256, len = 0;
+    char* buf = (char*)malloc((size_t)cap);
+    buf[0] = '\0';
+    value_to_json_internal(v, &buf, &cap, &len);
+    return buf;
+}
+
+// Basit JSON parser (sınırlı)
+typedef struct { const char* s; int i; } JsonCur;
+static void json_skip_ws(JsonCur* c) { while (c->s[c->i] && isspace((unsigned char)c->s[c->i])) c->i++; }
+static int json_match(JsonCur* c, char ch) { if (c->s[c->i] == ch) { c->i++; return 1;} return 0; }
+
+static char* json_parse_string(JsonCur* c) {
+    if (!json_match(c, '"')) return NULL;
+    char* out = (char*)malloc(1); int cap = 1; int len = 0; out[0] = '\0';
+    while (c->s[c->i] && c->s[c->i] != '"') {
+        char ch = c->s[c->i++];
+        if (ch == '\\') {
+            char esc = c->s[c->i++];
+            switch (esc) {
+                case 'n': ch = '\n'; break; case 'r': ch = '\r'; break; case 't': ch = '\t'; break;
+                case '"': ch = '"'; break; case '\\': ch = '\\'; break; default: ch = esc; break;
+            }
+        }
+        if (len + 1 >= cap) { cap *= 2; out = (char*)realloc(out, (size_t)cap); }
+        out[len++] = ch; out[len] = '\0';
+    }
+    json_match(c, '"');
+    return out;
+}
+
+static Value* json_parse_value(JsonCur* c);
+
+static Value* json_parse_array(JsonCur* c) {
+    if (!json_match(c, '[')) return NULL;
+    Value* arrv = value_create_array(4);
+    json_skip_ws(c);
+    if (json_match(c, ']')) return arrv;
+    while (1) {
+        json_skip_ws(c);
+        Value* v = json_parse_value(c);
+        array_push(arrv->data.array_val, v);
+        value_free(v);
+        json_skip_ws(c);
+        if (json_match(c, ']')) break;
+        json_match(c, ',');
+    }
+    return arrv;
+}
+
+static Value* json_parse_object(JsonCur* c) {
+    if (!json_match(c, '{')) return NULL;
+    Value* obj = value_create_object();
+    json_skip_ws(c);
+    if (json_match(c, '}')) return obj;
+    while (1) {
+        json_skip_ws(c);
+        char* key = json_parse_string(c);
+        json_skip_ws(c); json_match(c, ':'); json_skip_ws(c);
+        Value* v = json_parse_value(c);
+        hash_table_set(obj->data.object_val, key, v);
+        free(key);
+        json_skip_ws(c);
+        if (json_match(c, '}')) break;
+        json_match(c, ',');
+    }
+    return obj;
+}
+
+static Value* json_parse_number(JsonCur* c) {
+    int start = c->i; int dot = 0;
+    if (c->s[c->i] == '-') c->i++;
+    while (isdigit((unsigned char)c->s[c->i])) c->i++;
+    if (c->s[c->i] == '.') { dot = 1; c->i++; while (isdigit((unsigned char)c->s[c->i])) c->i++; }
+    int len = c->i - start; char* buf = (char*)malloc((size_t)len + 1);
+    memcpy(buf, c->s + start, (size_t)len); buf[len] = '\0';
+    Value* v = dot ? value_create_float((float)atof(buf)) : value_create_int((long long)atoll(buf));
+    free(buf); return v;
+}
+
+static Value* json_parse_value(JsonCur* c) {
+    json_skip_ws(c);
+    char ch = c->s[c->i];
+    if (ch == '"') { char* s = json_parse_string(c); Value* v = value_create_string(s); free(s); return v; }
+    if (ch == '{') return json_parse_object(c);
+    if (ch == '[') return json_parse_array(c);
+    if (ch == 't' && strncmp(c->s + c->i, "true", 4) == 0) { c->i += 4; return value_create_bool(1); }
+    if (ch == 'f' && strncmp(c->s + c->i, "false", 5) == 0) { c->i += 5; return value_create_bool(0); }
+    if (ch == 'n' && strncmp(c->s + c->i, "null", 4) == 0) { c->i += 4; return value_create_void(); }
+    return json_parse_number(c);
+}
 static char* bigint_from_ll_str(long long x) {
     if (x <= 0) {
         if (x == 0) return strdup("0");
@@ -179,6 +367,95 @@ static char* bigint_mul_small(const char* a, long long b) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%lld", b);
     return bigint_mul_str(a, buf);
+}
+
+static int bigint_cmp(const char* a, const char* b) {
+    int la = (int)strlen(a), lb = (int)strlen(b);
+    if (la != lb) return (la < lb) ? -1 : 1;
+    int c = strcmp(a, b);
+    if (c < 0) return -1;
+    if (c > 0) return 1;
+    return 0;
+}
+
+static char* bigint_sub_str(const char* a, const char* b) {
+    // assumes a >= b (non-negative)
+    int la = (int)strlen(a), lb = (int)strlen(b);
+    int L = la;
+    char* out = (char*)malloc((size_t)L + 1);
+    int ia = la - 1, ib = lb - 1, io = L - 1;
+    int borrow = 0;
+    while (ia >= 0) {
+        int da = a[ia] - '0' - borrow;
+        int db = (ib >= 0) ? (b[ib] - '0') : 0;
+        if (da < db) { da += 10; borrow = 1; } else borrow = 0;
+        int d = da - db;
+        out[io--] = (char)('0' + d);
+        ia--; ib--;
+    }
+    out[L] = '\0';
+    char* trimmed = bigint_trim(out);
+    free(out);
+    return trimmed;
+}
+
+static void bigint_divmod(const char* a, const char* b, char** q_out, char** r_out) {
+    // long division: a / b, both positive decimal strings
+    if (b[0] == '0') { *q_out = strdup("0"); *r_out = strdup("0"); return; }
+    if (bigint_cmp(a, b) < 0) { *q_out = strdup("0"); *r_out = strdup(a); return; }
+    int la = (int)strlen(a);
+    char* rem = strdup("0");
+    char* quo = (char*)malloc((size_t)la + 2);
+    int qi = 0;
+    for (int i = 0; i < la; i++) {
+        // rem = rem*10 + a[i]
+        int rl = (int)strlen(rem);
+        char* rem10 = (char*)malloc((size_t)rl + 2);
+        strcpy(rem10, rem);
+        rem10[rl] = a[i]; rem10[rl+1] = '\0';
+        char* remt = bigint_trim(rem10); free(rem10); free(rem); rem = remt;
+        // find digit
+        int d = 0;
+        // binary search 0..9
+        int lo = 0, hi = 9;
+        while (lo <= hi) {
+            int mid = (lo + hi) / 2;
+            char* prod = bigint_mul_small(b, mid);
+            int cmp = bigint_cmp(prod, rem);
+            free(prod);
+            if (cmp <= 0) { d = mid; lo = mid + 1; } else { hi = mid - 1; }
+        }
+        quo[qi++] = (char)('0' + d);
+        if (d > 0) {
+            char* prod = bigint_mul_small(b, d);
+            char* newrem = bigint_sub_str(rem, prod);
+            free(prod); free(rem); rem = newrem;
+        }
+    }
+    quo[qi] = '\0';
+    char* qtrim = bigint_trim(quo); free(quo);
+    *q_out = qtrim;
+    *r_out = rem;
+}
+
+static char* bigint_pow_str(const char* a, long long e) {
+    // exponentiation by squaring (non-negative e)
+    char* result = strdup("1");
+    char* base = strdup(a);
+    long long expv = e;
+    while (expv > 0) {
+        if (expv & 1LL) {
+            char* tmp = bigint_mul_str(result, base);
+            free(result); result = tmp;
+        }
+        expv >>= 1LL;
+        if (expv) {
+            char* sq = bigint_mul_str(base, base);
+            free(base); base = sq;
+        }
+    }
+    free(base);
+    return result;
 }
 
 Value* value_create_array(int capacity) {
@@ -802,7 +1079,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             // Array access (integer index)
             if (container->type == VAL_ARRAY) {
                 if (index_val->type != VAL_INT) {
-                    printf("Hata: Dizi index integer olmalı\n");
+                    printf("Hata: Dizi index integer olmalı (line %d)\n", node->line);
                     value_free(index_val);
                     if (node->left) value_free(container);
                     exit(1);
@@ -820,7 +1097,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             // Object access (string key)
             if (container->type == VAL_OBJECT) {
                 if (index_val->type != VAL_STRING) {
-                    printf("Hata: Object key string olmalı\n");
+                    printf("Hata: Object key string olmalı (line %d)\n", node->line);
                     value_free(index_val);
                     if (node->left) value_free(container);
                     exit(1);
@@ -846,7 +1123,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             // String access (character by index)
             if (container->type == VAL_STRING) {
                 if (index_val->type != VAL_INT) {
-                    printf("Hata: String index integer olmalı\n");
+                    printf("Hata: String index integer olmalı (line %d)\n", node->line);
                     value_free(index_val);
                     if (node->left) value_free(container);
                     exit(1);
@@ -858,8 +1135,8 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 
                 // Index sınır kontrolü
                 if (idx < 0 || idx >= len) {
-                    printf("Hata: String index sınırların dışında (0-%d arası olmalı, %d verildi)\n", 
-                           len - 1, idx);
+                    printf("Hata: String index sınırların dışında (0-%d, verilen %d) (line %d)\n", 
+                           len - 1, idx, node->line);
                     value_free(index_val);
                     if (node->left) value_free(container);
                     exit(1);
@@ -881,7 +1158,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 return result;
             }
             
-            printf("Hata: Erişilen değer bir dizi, object veya string değil\n");
+            printf("Hata: Erişilen değer bir dizi, object veya string değil (line %d)\n", node->line);
             value_free(index_val);
             if (node->left) value_free(container);
             exit(1);
@@ -890,7 +1167,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
         case AST_IDENTIFIER: {
             Value* val = symbol_table_get(interp->current_scope, node->name);
             if (!val) {
-                printf("Hata: Tanımlanmamış değişken '%s'\n", node->name);
+                printf("Hata: Tanımlanmamış değişken '%s' (line %d)\n", node->name, node->line);
                 exit(1);
             }
             return value_copy(val);
@@ -990,9 +1267,19 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 }
             }
             else if (node->op == TOKEN_DIVIDE) {
-                if (left->type == VAL_INT && right->type == VAL_INT) {
+                if ((left->type == VAL_BIGINT) || (right->type == VAL_BIGINT)) {
+                    const char* la = (left->type == VAL_BIGINT) ? left->data.bigint_val : bigint_from_ll_str(left->data.int_val);
+                    const char* rb = (right->type == VAL_BIGINT) ? right->data.bigint_val : bigint_from_ll_str(right->data.int_val);
+                    char* q; char* r;
+                    bigint_divmod(la, rb, &q, &r);
+                    if (left->type != VAL_BIGINT) free((char*)la);
+                    if (right->type != VAL_BIGINT) free((char*)rb);
+                    Value* res = value_create_bigint(q);
+                    free(q); free(r);
+                    result = res;
+                } else if (left->type == VAL_INT && right->type == VAL_INT) {
                     if (right->data.int_val == 0) {
-                        printf("Hata: Sıfıra bölme!\n");
+                        printf("Hata: Sıfıra bölme! (line %d)\n", node->line);
                         exit(1);
                     }
                     result = value_create_int(left->data.int_val / right->data.int_val);
@@ -1000,7 +1287,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     float l = (left->type == VAL_FLOAT) ? left->data.float_val : left->data.int_val;
                     float r = (right->type == VAL_FLOAT) ? right->data.float_val : right->data.int_val;
                     if (r == 0.0f) {
-                        printf("Hata: Sıfıra bölme!\n");
+                        printf("Hata: Sıfıra bölme! (line %d)\n", node->line);
                         exit(1);
                     }
                     result = value_create_float(l / r);
@@ -1292,6 +1579,61 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 }
                 return value_create_string("");
             }
+
+            // toJson(value) - JSON string üret
+            if (strcmp(node->name, "toJson") == 0) {
+                if (node->argument_count >= 1) {
+                    Value* v = interpreter_eval_expression(interp, node->arguments[0]);
+                    char* js = value_to_json_string(v);
+                    value_free(v);
+                    Value* s = value_create_string(js);
+                    free(js);
+                    return s;
+                }
+                return value_create_string("null");
+            }
+
+            // fromJson(jsonStr) veya fromJson("TypeName", jsonStr)
+            if (strcmp(node->name, "fromJson") == 0) {
+                if (node->argument_count >= 1) {
+                    int arg_idx = 0;
+                    TypeDef* target = NULL;
+                    if (node->argument_count == 2) {
+                        Value* tname = interpreter_eval_expression(interp, node->arguments[0]);
+                        if (tname->type == VAL_STRING) {
+                            target = interpreter_get_type(interp, tname->data.string_val);
+                        }
+                        value_free(tname);
+                        arg_idx = 1;
+                    }
+                    Value* s = interpreter_eval_expression(interp, node->arguments[arg_idx]);
+                    if (s->type != VAL_STRING) { value_free(s); return value_create_void(); }
+                    JsonCur cur = { s->data.string_val, 0 };
+                    Value* v = json_parse_value(&cur);
+                    value_free(s);
+                    if (!target) return v;
+                    // target tipe döndür (object beklenir)
+                    if (v->type != VAL_OBJECT) { value_free(v); return value_create_void(); }
+                    // İşaretle ve tip kontrolü
+                    hash_table_set(v->data.object_val, "__type", value_create_string(target->name));
+                    for (int i = 0; i < target->field_count; i++) {
+                        Value* fld = hash_table_get(v->data.object_val, target->field_names[i]);
+                        if (!fld) {
+                            // default varsa uygula
+                            if (target->field_defaults && target->field_defaults[i]) {
+                                Value* dv = interpreter_eval_expression(interp, target->field_defaults[i]);
+                                hash_table_set(v->data.object_val, target->field_names[i], dv);
+                            } else {
+                                printf("Hata: JSON'da eksik alan: %s (fromJson)\n", target->field_names[i]);
+                                value_free(v);
+                                exit(1);
+                            }
+                        }
+                    }
+                    return v;
+                }
+                return value_create_void();
+            }
             
             // toBool() - type conversion
             if (strcmp(node->name, "toBool") == 0) {
@@ -1385,9 +1727,51 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             
             // pow(x, y) - üs alma
             if (strcmp(node->name, "pow") == 0 && node->argument_count >= 2) {
-                double x = GET_NUM_ARG(0);
-                double y = GET_NUM_ARG(1);
-                return value_create_float((float)pow(x, y));
+                // Eğer iki argüman da integer ise BigInt ile hesapla
+                Value* a0 = interpreter_eval_expression(interp, node->arguments[0]);
+                Value* a1 = interpreter_eval_expression(interp, node->arguments[1]);
+                Value* out = NULL;
+                if ((a0->type == VAL_INT || a0->type == VAL_BIGINT) && (a1->type == VAL_INT)) {
+                    const char* base = (a0->type == VAL_BIGINT) ? a0->data.bigint_val : bigint_from_ll_str(a0->data.int_val);
+                    long long e = a1->data.int_val;
+                    if (e < 0) {
+                        // Negatif üs desteklenmiyor -> float
+                        double xd = (a0->type == VAL_BIGINT) ? atof(base) : (double)a0->data.int_val;
+                        out = value_create_float((float)pow(xd, (double)e));
+                    } else {
+                        char* p = bigint_pow_str(base, e);
+                        out = value_create_bigint(p);
+                        free(p);
+                    }
+                    if (a0->type != VAL_BIGINT) free((char*)base);
+                } else {
+                    double x = GET_NUM_ARG(0);
+                    double y = GET_NUM_ARG(1);
+                    out = value_create_float((float)pow(x, y));
+                }
+                value_free(a0); value_free(a1);
+                return out;
+            }
+
+            // mod(a, b) - tamsayı mod (BigInt destekli)
+            if (strcmp(node->name, "mod") == 0 && node->argument_count >= 2) {
+                Value* a0 = interpreter_eval_expression(interp, node->arguments[0]);
+                Value* a1 = interpreter_eval_expression(interp, node->arguments[1]);
+                Value* out = NULL;
+                if ((a0->type == VAL_BIGINT) || (a1->type == VAL_BIGINT)) {
+                    const char* la = (a0->type == VAL_BIGINT) ? a0->data.bigint_val : bigint_from_ll_str(a0->data.int_val);
+                    const char* rb = (a1->type == VAL_BIGINT) ? a1->data.bigint_val : bigint_from_ll_str(a1->data.int_val);
+                    char* q; char* r; bigint_divmod(la, rb, &q, &r);
+                    out = value_create_bigint(r);
+                    free(q); free(r);
+                    if (a0->type != VAL_BIGINT) free((char*)la);
+                    if (a1->type != VAL_BIGINT) free((char*)rb);
+                } else {
+                    if (a1->data.int_val == 0) { printf("Hata: Sıfıra mod!\n"); exit(1);} 
+                    out = value_create_int(a0->data.int_val % a1->data.int_val);
+                }
+                value_free(a0); value_free(a1);
+                return out;
             }
             
             // floor(x) - aşağı yuvarlama
@@ -2057,6 +2441,8 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 if (t) {
                     // Argümanları değerlendir ve object oluştur (named args destekli)
                     Value* obj = value_create_object();
+                    // Type işareti
+                    hash_table_set(obj->data.object_val, "__type", value_create_string(t->name));
                     int used_fields = 0;
                     int* filled = (int*)calloc(t->field_count, sizeof(int));
                     // Named arg varsa eşle
@@ -2084,6 +2470,19 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                                 exit(1);
                             }
                             Value* arg = interpreter_eval_expression(interp, node->arguments[i]);
+                            // Tip doğrulaması
+                            if (t->field_types[idx] == TYPE_INT && arg->type != VAL_INT) { printf("Hata: Alan '%s' int olmalı\n", t->field_names[idx]); exit(1);} 
+                            if (t->field_types[idx] == TYPE_FLOAT && !(arg->type == VAL_FLOAT || arg->type == VAL_INT)) { printf("Hata: Alan '%s' float olmalı\n", t->field_names[idx]); exit(1);} 
+                            if (t->field_types[idx] == TYPE_STRING && arg->type != VAL_STRING) { printf("Hata: Alan '%s' str olmalı\n", t->field_names[idx]); exit(1);} 
+                            if (t->field_types[idx] == TYPE_BOOL && arg->type != VAL_BOOL) { printf("Hata: Alan '%s' bool olmalı\n", t->field_names[idx]); exit(1);} 
+                            if (t->field_types[idx] == TYPE_CUSTOM) {
+                                if (arg->type != VAL_OBJECT) { printf("Hata: Alan '%s' type '%s' olmalı\n", t->field_names[idx], t->field_custom_types[idx]); exit(1);} 
+                                Value* mark = hash_table_get(arg->data.object_val, "__type");
+                                if (!mark || mark->type != VAL_STRING || strcmp(mark->data.string_val, t->field_custom_types[idx]) != 0) {
+                                    printf("Hata: Alan '%s' type '%s' bekleniyor\n", t->field_names[idx], t->field_custom_types[idx]);
+                                    exit(1);
+                                }
+                            }
                             hash_table_set(obj->data.object_val, t->field_names[idx], arg);
                             filled[idx] = 1;
                             used_fields++;
@@ -2092,8 +2491,20 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                         for (int k = 0; k < t->field_count; k++) {
                             if (!filled[k]) {
                                 if (t->field_defaults && t->field_defaults[k]) {
-                                    Value* dv = interpreter_eval_expression(interp, t->field_defaults[k]);
-                                    hash_table_set(obj->data.object_val, t->field_names[k], dv);
+                                Value* dv = interpreter_eval_expression(interp, t->field_defaults[k]);
+                                if (t->field_types[k] == TYPE_INT && dv->type != VAL_INT) { printf("Hata: Default '%s' int olmalı\n", t->field_names[k]); exit(1);} 
+                                if (t->field_types[k] == TYPE_FLOAT && !(dv->type == VAL_FLOAT || dv->type == VAL_INT)) { printf("Hata: Default '%s' float olmalı\n", t->field_names[k]); exit(1);} 
+                                if (t->field_types[k] == TYPE_STRING && dv->type != VAL_STRING) { printf("Hata: Default '%s' str olmalı\n", t->field_names[k]); exit(1);} 
+                                if (t->field_types[k] == TYPE_BOOL && dv->type != VAL_BOOL) { printf("Hata: Default '%s' bool olmalı\n", t->field_names[k]); exit(1);} 
+                                if (t->field_types[k] == TYPE_CUSTOM) {
+                                    if (dv->type != VAL_OBJECT) { printf("Hata: Default '%s' type '%s' olmalı\n", t->field_names[k], t->field_custom_types[k]); exit(1);} 
+                                    Value* mark = hash_table_get(dv->data.object_val, "__type");
+                                    if (!mark || mark->type != VAL_STRING || strcmp(mark->data.string_val, t->field_custom_types[k]) != 0) {
+                                        printf("Hata: Default '%s' type '%s' bekleniyor\n", t->field_names[k], t->field_custom_types[k]);
+                                        exit(1);
+                                    }
+                                }
+                                hash_table_set(obj->data.object_val, t->field_names[k], dv);
                                     filled[k] = 1;
                                     used_fields++;
                                 } else {
@@ -2109,6 +2520,18 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                         }
                         for (int i = 0; i < t->field_count; i++) {
                             Value* arg = interpreter_eval_expression(interp, node->arguments[i]);
+                            if (t->field_types[i] == TYPE_INT && arg->type != VAL_INT) { printf("Hata: Alan '%s' int olmalı\n", t->field_names[i]); exit(1);} 
+                            if (t->field_types[i] == TYPE_FLOAT && !(arg->type == VAL_FLOAT || arg->type == VAL_INT)) { printf("Hata: Alan '%s' float olmalı\n", t->field_names[i]); exit(1);} 
+                            if (t->field_types[i] == TYPE_STRING && arg->type != VAL_STRING) { printf("Hata: Alan '%s' str olmalı\n", t->field_names[i]); exit(1);} 
+                            if (t->field_types[i] == TYPE_BOOL && arg->type != VAL_BOOL) { printf("Hata: Alan '%s' bool olmalı\n", t->field_names[i]); exit(1);} 
+                            if (t->field_types[i] == TYPE_CUSTOM) {
+                                if (arg->type != VAL_OBJECT) { printf("Hata: Alan '%s' type '%s' olmalı\n", t->field_names[i], t->field_custom_types[i]); exit(1);} 
+                                Value* mark = hash_table_get(arg->data.object_val, "__type");
+                                if (!mark || mark->type != VAL_STRING || strcmp(mark->data.string_val, t->field_custom_types[i]) != 0) {
+                                    printf("Hata: Alan '%s' type '%s' bekleniyor\n", t->field_names[i], t->field_custom_types[i]);
+                                    exit(1);
+                                }
+                            }
                             hash_table_set(obj->data.object_val, t->field_names[i], arg);
                         }
                     }
@@ -2180,10 +2603,12 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
             t->field_names = (char**)malloc(sizeof(char*) * t->field_count);
             t->field_types = (DataType*)malloc(sizeof(DataType) * t->field_count);
             t->field_defaults = (ASTNode**)malloc(sizeof(ASTNode*) * t->field_count);
+            t->field_custom_types = (char**)malloc(sizeof(char*) * t->field_count);
             for (int i = 0; i < t->field_count; i++) {
                 t->field_names[i] = strdup(node->field_names[i]);
                 t->field_types[i] = node->field_types[i];
                 t->field_defaults[i] = node->field_defaults ? node->field_defaults[i] : NULL;
+                t->field_custom_types[i] = node->field_custom_types ? (node->field_custom_types[i] ? strdup(node->field_custom_types[i]) : NULL) : NULL;
             }
             interpreter_register_type(interp, t);
             break;
@@ -2326,16 +2751,21 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                     if (parent->type == VAL_OBJECT) {
                         if (idx->type != VAL_STRING) { printf("Hata: Object key string olmalı\n"); value_free(idx); value_free(val); exit(1);} 
                         Value* child = hash_table_get(parent->data.object_val, idx->data.string_val);
-                        if (!child) { printf("Hata: Object yolunda eksik alan: %s\n", idx->data.string_val); value_free(idx); value_free(val); exit(1);} 
+                        if (!child) {
+                            // Auto-create eksik object
+                            Value* created = value_create_object();
+                            hash_table_set(parent->data.object_val, idx->data.string_val, created);
+                            child = hash_table_get(parent->data.object_val, idx->data.string_val);
+                        }
                         current = child;
                     } else if (parent->type == VAL_ARRAY) {
                         if (idx->type != VAL_INT) { printf("Hata: Dizi index integer olmalı\n"); value_free(idx); value_free(val); exit(1);} 
                         int index = idx->data.int_val;
                         // Doğrudan pointer erişimi
-                        if (index < 0 || index >= parent->data.array_val->length) { printf("Hata: Dizi sınırları dışında\n"); value_free(idx); value_free(val); exit(1);} 
+                if (index < 0 || index >= parent->data.array_val->length) { printf("Hata: Dizi sınırları dışında (line %d)\n", node->line); value_free(idx); value_free(val); exit(1);} 
                         current = parent->data.array_val->elements[index];
                     } else {
-                        printf("Hata: Ara segment dizi veya object olmalı\n"); value_free(idx); value_free(val); exit(1);
+                printf("Hata: Ara segment dizi veya object olmalı (line %d)\n", node->line); value_free(idx); value_free(val); exit(1);
                     }
                     value_free(idx);
                 }
@@ -2344,15 +2774,15 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                 ASTNode* last = nodes[depth - 1];
                 Value* last_idx = interpreter_eval_expression(interp, last->index);
                 if (target_parent->type == VAL_OBJECT) {
-                    if (last_idx->type != VAL_STRING) { printf("Hata: Object key string olmalı\n"); value_free(last_idx); value_free(val); exit(1);} 
+                    if (last_idx->type != VAL_STRING) { printf("Hata: Object key string olmalı (line %d)\n", node->line); value_free(last_idx); value_free(val); exit(1);} 
                     hash_table_set(target_parent->data.object_val, last_idx->data.string_val, value_copy(val));
                     value_free(last_idx);
                 } else if (target_parent->type == VAL_ARRAY) {
-                    if (last_idx->type != VAL_INT) { printf("Hata: Dizi index integer olmalı\n"); value_free(last_idx); value_free(val); exit(1);} 
+                    if (last_idx->type != VAL_INT) { printf("Hata: Dizi index integer olmalı (line %d)\n", node->line); value_free(last_idx); value_free(val); exit(1);} 
                     array_set(target_parent->data.array_val, last_idx->data.int_val, val);
                     value_free(last_idx);
                 } else {
-                    printf("Hata: Hedef konteyner dizi veya object olmalı\n"); value_free(last_idx); value_free(val); exit(1);
+                    printf("Hata: Hedef konteyner dizi veya object olmalı (line %d)\n", node->line); value_free(last_idx); value_free(val); exit(1);
                 }
                 free(nodes);
             } else {

@@ -360,6 +360,26 @@ print(p1.name, p1.age);
 p1.city = "İzmir";
 ```
 
+### JSON Serde (toJson / fromJson) ✨ NEW
+
+```tulpar
+arrayJson user = { "name": "Ali", "age": 25, "skills": ["C", "Go"] };
+str js = toJson(user);          // {"name":"Ali","age":25,"skills":["C","Go"]}
+arrayJson back = fromJson(js);  // JSON -> Tulpar değeri
+
+type Person { str name; int age; }
+Person p = fromJson("Person", js); // Tipli dönüştürme (eksik alanlar default ile tamamlanır)
+```
+
+### BigInt Geliştirmeleri (div / mod / pow) ✨ NEW
+
+```tulpar
+// Büyük tam sayılar için
+print(pow(1234, 20));   // Çok büyük bir sonuç, BigInt olarak
+print(mod(pow(1234,10), 12345));
+print(pow(2, 100));
+```
+
 ### Comments ✨ NEW
 
 ```tulpar

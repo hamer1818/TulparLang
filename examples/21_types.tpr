@@ -1,0 +1,30 @@
+// ============================================
+// TYPE (NESTED) ve NAMED ARG + DEFAULT TESTLERI
+// ============================================
+
+print("=== TYPE (Nested) Test ===");
+
+type Person {
+    str name;
+    int age;
+    str city = "İstanbul";
+}
+
+type Order {
+    Person customer;
+    str id;
+}
+
+Person p = Person(name: "Ali", age: 25);
+print("P:", p.name, p.age, p.city);   // city -> İstanbul
+
+// Nested type: Order.customer is Person
+Order o = Order(customer: p, id: "ORD-1");
+print("Order:", o.customer.name, o.id);
+
+// Dot-assign nested path (auto-create on missing object keys)
+arrayJson data = {};
+data.user.profile.city = "Ankara";
+print("City (auto-create):", data.user.profile.city);
+
+

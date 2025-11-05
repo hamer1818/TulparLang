@@ -43,6 +43,7 @@ typedef enum {
     TYPE_FLOAT,
     TYPE_STRING,
     TYPE_BOOL,
+    TYPE_CUSTOM,
     TYPE_ARRAY,         // Mixed type array
     TYPE_ARRAY_INT,     // Int-only array
     TYPE_ARRAY_FLOAT,   // Float-only array
@@ -55,6 +56,8 @@ typedef enum {
 // AST düğümü
 typedef struct ASTNode {
     ASTNodeType type;
+    int line;
+    int column;
     
     // Değerler (literaller için)
     union {
@@ -76,6 +79,7 @@ typedef struct ASTNode {
     struct ASTNode** field_types_nodes; // optional
     char** field_names;
     DataType* field_types;
+    char** field_custom_types; // TYPE_CUSTOM için hedef type adı
     int field_count;
     struct ASTNode** field_defaults; // alan varsayılan değer ifadeleri (NULL olabilir)
     

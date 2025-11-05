@@ -73,6 +73,7 @@ typedef struct {
     char* name;
     char** field_names;
     DataType* field_types;
+    char** field_custom_types;
     int field_count;
     struct ASTNode** field_defaults; // parser'dan gelen default ifadeler
 } TypeDef;
