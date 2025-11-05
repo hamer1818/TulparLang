@@ -17,6 +17,7 @@ typedef enum {
     AST_UNARY_OP,         // -, !
     AST_FUNCTION_CALL,    // fonksiyon çağrısı
     AST_ARRAY_ACCESS,     // arr[0] or obj["key"]
+    AST_TYPE_DECL,        // type Person { str name; int age; }
     
     // İfadeler (Statements)
     AST_VARIABLE_DECL,    // int x = 5;
@@ -71,6 +72,11 @@ typedef struct ASTNode {
     // Değişken/fonksiyon için
     char* name;
     DataType data_type;
+    // Type decl için
+    struct ASTNode** field_types_nodes; // optional
+    char** field_names;
+    DataType* field_types;
+    int field_count;
     
     // Fonksiyon için
     struct ASTNode** parameters;  // Parametre listesi

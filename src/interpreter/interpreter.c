@@ -654,6 +654,9 @@ Interpreter* interpreter_create() {
     interp->function_capacity = 16;
     interp->function_count = 0;
     interp->functions = (Function**)malloc(sizeof(Function*) * interp->function_capacity);
+    interp->type_capacity = 8;
+    interp->type_count = 0;
+    interp->types = (TypeDef**)malloc(sizeof(TypeDef*) * interp->type_capacity);
     interp->return_value = NULL;
     interp->should_return = 0;
     interp->should_break = 0;
@@ -671,6 +674,14 @@ void interpreter_free(Interpreter* interp) {
         free(interp->functions[i]);
     }
     free(interp->functions);
+    for (int i = 0; i < interp->type_count; i++) {
+        for (int j = 0; j < interp->types[i]->field_count; j++) free(interp->types[i]->field_names[j]);
+        free(interp->types[i]->field_names);
+        free(interp->types[i]->field_types);
+        free(interp->types[i]->name);
+        free(interp->types[i]);
+    }
+    free(interp->types);
     
     if (interp->return_value) {
         value_free(interp->return_value);
@@ -699,6 +710,21 @@ Function* interpreter_get_function(Interpreter* interp, char* name) {
         }
     }
     return NULL;
+}
+
+TypeDef* interpreter_get_type(Interpreter* interp, const char* name) {
+    for (int i = 0; i < interp->type_count; i++) {
+        if (strcmp(interp->types[i]->name, name) == 0) return interp->types[i];
+    }
+    return NULL;
+}
+
+void interpreter_register_type(Interpreter* interp, TypeDef* t) {
+    if (interp->type_count >= interp->type_capacity) {
+        interp->type_capacity *= 2;
+        interp->types = (TypeDef**)realloc(interp->types, sizeof(TypeDef*) * interp->type_capacity);
+    }
+    interp->types[interp->type_count++] = t;
 }
 
 // İleri bildirimler
@@ -2026,6 +2052,21 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             // Kullanıcı tanımlı fonksiyonlar
             Function* func = interpreter_get_function(interp, node->name);
             if (!func) {
+                // Type constructor?
+                TypeDef* t = interpreter_get_type(interp, node->name);
+                if (t) {
+                    // Argümanları değerlendir ve object oluştur
+                    if (node->argument_count != t->field_count) {
+                        printf("Hata: Type '%s' için beklenen argüman sayısı %d, verilen %d\n", node->name, t->field_count, node->argument_count);
+                        exit(1);
+                    }
+                    Value* obj = value_create_object();
+                    for (int i = 0; i < t->field_count; i++) {
+                        Value* arg = interpreter_eval_expression(interp, node->arguments[i]);
+                        hash_table_set(obj->data.object_val, t->field_names[i], arg);
+                    }
+                    return obj;
+                }
                 printf("Hata: Tanımlanmamış fonksiyon '%s'\n", node->name);
                 exit(1);
             }
@@ -2084,6 +2125,19 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
     if (!node || interp->should_return) return;
     
     switch (node->type) {
+        case AST_TYPE_DECL: {
+            TypeDef* t = (TypeDef*)malloc(sizeof(TypeDef));
+            t->name = strdup(node->name);
+            t->field_count = node->field_count;
+            t->field_names = (char**)malloc(sizeof(char*) * t->field_count);
+            t->field_types = (DataType*)malloc(sizeof(DataType) * t->field_count);
+            for (int i = 0; i < t->field_count; i++) {
+                t->field_names[i] = strdup(node->field_names[i]);
+                t->field_types[i] = node->field_types[i];
+            }
+            interpreter_register_type(interp, t);
+            break;
+        }
         case AST_PROGRAM:
         case AST_BLOCK:
             for (int i = 0; i < node->statement_count && !interp->should_return; i++) {
@@ -2182,24 +2236,40 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                 ASTNode* access = node->left;
                 Value* arr_val = symbol_table_get(interp->current_scope, access->name);
                 
-                if (!arr_val || arr_val->type != VAL_ARRAY) {
-                    printf("Hata: '%s' bir dizi değil\n", access->name);
+                if (!arr_val) {
+                    printf("Hata: '%s' tanımlı değil\n", access->name);
                     value_free(val);
                     exit(1);
                 }
                 
                 Value* index_val = interpreter_eval_expression(interp, access->index);
-                if (index_val->type != VAL_INT) {
-                    printf("Hata: Dizi index integer olmalı\n");
+                
+                if (arr_val->type == VAL_ARRAY) {
+                    if (index_val->type != VAL_INT) {
+                        printf("Hata: Dizi index integer olmalı\n");
+                        value_free(val);
+                        value_free(index_val);
+                        exit(1);
+                    }
+                    int index = index_val->data.int_val;
+                    value_free(index_val);
+                    array_set(arr_val->data.array_val, index, val);
+                } else if (arr_val->type == VAL_OBJECT) {
+                    if (index_val->type != VAL_STRING) {
+                        printf("Hata: Object key string olmalı\n");
+                        value_free(val);
+                        value_free(index_val);
+                        exit(1);
+                    }
+                    // obj["key"] = val
+                    hash_table_set(arr_val->data.object_val, index_val->data.string_val, value_copy(val));
+                    value_free(index_val);
+                } else {
+                    printf("Hata: '%s' bir dizi veya object değil\n", access->name);
                     value_free(val);
                     value_free(index_val);
                     exit(1);
                 }
-                
-                int index = index_val->data.int_val;
-                value_free(index_val);
-                
-                array_set(arr_val->data.array_val, index, val);
             } else {
                 // Normal assignment
                 symbol_table_set(interp->current_scope, node->name, val);

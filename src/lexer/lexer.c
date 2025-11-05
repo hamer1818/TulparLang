@@ -45,6 +45,30 @@ static void lexer_skip_comment(Lexer* lexer) {
     }
 }
 
+static void lexer_skip_block_comment(Lexer* lexer) {
+    if (lexer->current_char == '/' && lexer_peek(lexer) == '*') {
+        // Blok yorum: /* ... */
+        int start_line = lexer->line;
+        int start_col = lexer->column;
+        lexer_advance(lexer); // '/'
+        lexer_advance(lexer); // '*'
+        while (lexer->current_char != '\0') {
+            if (lexer->current_char == '*' && lexer_peek(lexer) == '/') {
+                lexer_advance(lexer); // '*'
+                lexer_advance(lexer); // '/'
+                return;
+            }
+            if (lexer->current_char == '\n') {
+                lexer->line++;
+                lexer->column = 0;
+            }
+            lexer_advance(lexer);
+        }
+        // Kapanış bulunamadı
+        fprintf(stderr, "Lexer Error: Block comment not terminated (started at line %d, col %d)\n", start_line, start_col);
+    }
+}
+
 // Token oluşturma
 static Token* token_create(TulparTokenType type, char* value, int line, int column) {
     Token* token = (Token*)malloc(sizeof(Token));
@@ -178,6 +202,7 @@ static Token* lexer_read_identifier(Lexer* lexer) {
     else if (strcmp(buffer, "arrayBool") == 0) type = TOKEN_ARRAY_BOOL;
     else if (strcmp(buffer, "arrayJson") == 0) type = TOKEN_ARRAY_JSON;
     else if (strcmp(buffer, "func") == 0) type = TOKEN_FUNC;
+    else if (strcmp(buffer, "type") == 0) type = TOKEN_TYPE_KW;
     else if (strcmp(buffer, "return") == 0) type = TOKEN_RETURN;
     else if (strcmp(buffer, "if") == 0) type = TOKEN_IF;
     else if (strcmp(buffer, "else") == 0) type = TOKEN_ELSE;
@@ -232,9 +257,15 @@ Token* lexer_next_token(Lexer* lexer) {
         }
         
         // Yorumları atla
-        if (lexer->current_char == '/' && lexer_peek(lexer) == '/') {
-            lexer_skip_comment(lexer);
-            continue;
+        if (lexer->current_char == '/') {
+            if (lexer_peek(lexer) == '/') {
+                lexer_skip_comment(lexer);
+                continue;
+            }
+            if (lexer_peek(lexer) == '*') {
+                lexer_skip_block_comment(lexer);
+                continue;
+            }
         }
         
         // Sayılar
@@ -300,6 +331,7 @@ Token* lexer_next_token(Lexer* lexer) {
             case ';': return token_create(TOKEN_SEMICOLON, ";", start_line, start_column);
             case ',': return token_create(TOKEN_COMMA, ",", start_line, start_column);
             case ':': return token_create(TOKEN_COLON, ":", start_line, start_column);
+            case '.': return token_create(TOKEN_DOT, ".", start_line, start_column);
             case '=':
                 if (lexer->current_char == '=') {
                     lexer_advance(lexer);

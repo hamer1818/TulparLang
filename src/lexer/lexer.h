@@ -17,6 +17,7 @@ typedef enum {
     
     // Anahtar kelimeler
     TOKEN_FUNC,          // "func"
+    TOKEN_TYPE_KW,       // "type" (struct benzeri) - Windows winnt.h TOKEN_TYPE çakışmasını önlemek için
     TOKEN_RETURN,        // "return"
     TOKEN_IF,            // "if"
     TOKEN_ELSE,          // "else"
@@ -66,6 +67,7 @@ typedef enum {
     TOKEN_SEMICOLON,     // ;
     TOKEN_COMMA,         // ,
     TOKEN_COLON,         // : (for JSON objects)
+    TOKEN_DOT,           // . (member access)
     
     TOKEN_EOF,           // Dosya sonu
     TOKEN_ERROR          // Hata

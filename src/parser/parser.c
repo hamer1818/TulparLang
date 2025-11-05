@@ -241,7 +241,7 @@ static ASTNode* parse_primary(Parser* parser) {
             return node;
         }
         
-        // Array/Object access (zincirleme destekli: arr[0][1]["key"])
+        // Array/Object access + dot-access (zincirleme): arr[0][1]["key"].field
         ASTNode* result = NULL;
         
         if (parser->current_token->type == TOKEN_LBRACKET) {
@@ -265,10 +265,71 @@ static ASTNode* parse_primary(Parser* parser) {
                 
                 result = nested;
             }
-            
+            // Dot-access zinciri: .field .field2
+            while (parser->current_token->type == TOKEN_DOT) {
+                parser_advance(parser); // '.'
+                if (parser->current_token->type != TOKEN_IDENTIFIER) {
+                    printf("Parser Error: Expected identifier after '.' at line %d\n", parser->current_token->line);
+                    return result;
+                }
+                // .field => ["field"]
+                ASTNode* str = ast_node_create(AST_STRING_LITERAL);
+                str->value.string_value = strdup(parser->current_token->value);
+                parser_advance(parser);
+                ASTNode* nested = ast_node_create(AST_ARRAY_ACCESS);
+                nested->left = result;
+                nested->index = str;
+                result = nested;
+            }
             return result;
         }
-        
+        // Dot-access başlangıcı: name.field
+        if (parser->current_token->type == TOKEN_DOT) {
+            // name . field
+            parser_advance(parser); // '.'
+            if (parser->current_token->type != TOKEN_IDENTIFIER) {
+                printf("Parser Error: Expected identifier after '.' at line %d\n", parser->current_token->line);
+                // name tek başına identifier olarak dön
+                ASTNode* node = ast_node_create(AST_IDENTIFIER);
+                node->name = name;
+                return node;
+            }
+            ASTNode* str = ast_node_create(AST_STRING_LITERAL);
+            str->value.string_value = strdup(parser->current_token->value);
+            parser_advance(parser);
+            ASTNode* access = ast_node_create(AST_ARRAY_ACCESS);
+            access->name = name;
+            access->index = str;
+            result = access;
+            // Devam eden . veya [ ... ] zinciri
+            while (parser->current_token->type == TOKEN_DOT || parser->current_token->type == TOKEN_LBRACKET) {
+                if (parser->current_token->type == TOKEN_DOT) {
+                    parser_advance(parser);
+                    if (parser->current_token->type != TOKEN_IDENTIFIER) {
+                        printf("Parser Error: Expected identifier after '.' at line %d\n", parser->current_token->line);
+                        break;
+                    }
+                    ASTNode* s = ast_node_create(AST_STRING_LITERAL);
+                    s->value.string_value = strdup(parser->current_token->value);
+                    parser_advance(parser);
+                    ASTNode* nested = ast_node_create(AST_ARRAY_ACCESS);
+                    nested->left = result;
+                    nested->index = s;
+                    result = nested;
+                } else {
+                    // [expr]
+                    ASTNode* nested = ast_node_create(AST_ARRAY_ACCESS);
+                    nested->left = result;
+                    nested->name = NULL;
+                    parser_advance(parser); // '['
+                    nested->index = parse_expression(parser);
+                    parser_expect(parser, TOKEN_RBRACKET);
+                    result = nested;
+                }
+            }
+            return result;
+        }
+
         // Sadece değişken
         ASTNode* node = ast_node_create(AST_IDENTIFIER);
         node->name = name;
@@ -781,6 +842,47 @@ static ASTNode* parse_statement(Parser* parser) {
         return parse_variable_declaration(parser);
     }
     
+    // type bildirimi
+    if (token->type == TOKEN_TYPE_KW) {
+        // parse_type_declaration
+        parser_advance(parser); // 'type'
+        if (parser->current_token->type != TOKEN_IDENTIFIER) {
+            printf("Parser Error: Expected type name after 'type' at line %d\n", parser->current_token->line);
+            return NULL;
+        }
+        ASTNode* node = ast_node_create(AST_TYPE_DECL);
+        node->name = strdup(parser->current_token->value);
+        parser_advance(parser);
+        parser_expect(parser, TOKEN_LBRACE);
+        // fields
+        node->field_names = NULL;
+        node->field_types = NULL;
+        node->field_count = 0;
+        int capacity = 4;
+        node->field_names = (char**)malloc(sizeof(char*) * capacity);
+        node->field_types = (DataType*)malloc(sizeof(DataType) * capacity);
+        
+        while (parser->current_token->type != TOKEN_RBRACE && parser->current_token->type != TOKEN_EOF) {
+            DataType dt = parse_data_type(parser);
+            if (parser->current_token->type != TOKEN_IDENTIFIER) {
+                printf("Parser Error: Expected field name in type '%s' at line %d\n", node->name, parser->current_token->line);
+                break;
+            }
+            if (node->field_count >= capacity) {
+                capacity *= 2;
+                node->field_names = (char**)realloc(node->field_names, sizeof(char*) * capacity);
+                node->field_types = (DataType*)realloc(node->field_types, sizeof(DataType) * capacity);
+            }
+            node->field_names[node->field_count] = strdup(parser->current_token->value);
+            node->field_types[node->field_count] = dt;
+            node->field_count++;
+            parser_advance(parser);
+            parser_expect(parser, TOKEN_SEMICOLON);
+        }
+        parser_expect(parser, TOKEN_RBRACE);
+        return node;
+    }
+    
     // Fonksiyon tanımlaması
     if (token->type == TOKEN_FUNC) {
         return parse_function(parser);
@@ -1061,6 +1163,14 @@ void ast_print(ASTNode* node, int indent) {
             printf("BLOCK\n");
             for (int i = 0; i < node->statement_count; i++) {
                 ast_print(node->statements[i], indent + 1);
+            }
+            break;
+            
+        case AST_TYPE_DECL:
+            printf("TYPE_DECL: %s\n", node->name);
+            printf("  Fields:\n");
+            for (int i = 0; i < node->field_count; i++) {
+                printf("    %s: %d\n", node->field_names[i], node->field_types[i]);
             }
             break;
             

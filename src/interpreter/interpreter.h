@@ -68,6 +68,14 @@ typedef struct {
     ASTNode* node;  // Fonksiyonun AST düğümü
 } Function;
 
+// Type tanımı
+typedef struct {
+    char* name;
+    char** field_names;
+    DataType* field_types;
+    int field_count;
+} TypeDef;
+
 // Symbol Table (Değişken depolama)
 typedef struct SymbolTable {
     Variable** variables;
@@ -83,6 +91,9 @@ typedef struct {
     Function** functions;
     int function_count;
     int function_capacity;
+    TypeDef** types;
+    int type_count;
+    int type_capacity;
     Value* return_value;  // Fonksiyonlardan dönüş değeri için
     int should_return;    // Return statement kontrolü
     int should_break;     // Break statement kontrolü
@@ -130,6 +141,8 @@ Value* symbol_table_get(SymbolTable* table, char* name);
 Interpreter* interpreter_create();
 void interpreter_free(Interpreter* interp);
 void interpreter_execute(Interpreter* interp, ASTNode* node);
+TypeDef* interpreter_get_type(Interpreter* interp, const char* name);
+void interpreter_register_type(Interpreter* interp, TypeDef* t);
 Value* interpreter_eval(Interpreter* interp, ASTNode* node);
 void interpreter_register_function(Interpreter* interp, char* name, ASTNode* node);
 Function* interpreter_get_function(Interpreter* interp, char* name);

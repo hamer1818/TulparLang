@@ -13,15 +13,15 @@
 
 ---
 
-## 📋 FAZ 2 - Veri Yapıları (Sonraki Adım)
+## ✅ FAZ 2 - Veri Yapıları (Tamamlandı)
 
-### 2.1 Diziler (Arrays) - Yüksek Öncelik
-**Tahmini Süre**: 4-6 saat
+### 2.1 Diziler (Arrays)
+**Durum**: ✅ Tamamlandı
 
 ```tulpar
-// Dizi tanımlama
-int[] sayilar = [1, 2, 3, 4, 5];
-str[] isimler = ["Ali", "Veli", "Ayşe"];
+// Dizi tanımlama (Tulpar söz dizimi)
+arrayInt sayilar = [1, 2, 3, 4, 5];
+arrayStr isimler = ["Ali", "Veli", "Ayşe"];
 
 // Dizi erişimi
 int ilk = sayilar[0];
@@ -30,31 +30,31 @@ sayilar[2] = 10;
 // Dizi uzunluğu
 int uzunluk = length(sayilar);
 
-// Dizi metodları
+// Dizi fonksiyonları
 push(sayilar, 6);         // Sona ekle
 int son = pop(sayilar);   // Sondan çıkar
 ```
 
-**İhtiyaçlar**:
-- Lexer: `[`, `]` token'ları
-- Parser: Dizi literal ve index erişimi
-- Interpreter: Dinamik array implementasyonu
-- Built-in fonksiyonlar: `length()`, `push()`, `pop()`
+**Notlar**:
+- Tipli diziler: `arrayInt`, `arrayFloat`, `arrayStr`, `arrayBool`
+- Karışık tip dizi: `array`
+- Sağlanan fonksiyonlar: `length()`, `push()`, `pop()`
 
-### 2.2 String Metodları - Orta Öncelik
-**Tahmini Süre**: 2-3 saat
+### 2.2 String Metodları
+**Durum**: ✅ Tamamlandı (çekirdek fonksiyonlar)
 
 ```tulpar
 str metin = "Merhaba Dünya";
 int uzunluk = length(metin);
-str buyuk = toUpper(metin);
-str kucuk = toLower(metin);
-str[] parcalar = split(metin, " ");
+str buyuk = upper(metin);
+str kucuk = lower(metin);
+arrayStr parcalar = split(metin, " ");
 bool iceriyor = contains(metin, "Dünya");
+str parcasi = substring(metin, 0, 7);
 ```
 
-**İhtiyaçlar**:
-- Built-in fonksiyonlar: `length()`, `toUpper()`, `toLower()`, `split()`, `contains()`, `charAt()`, `substring()`
+**Mevcut fonksiyonlar**:
+- `length()`, `upper()`, `lower()`, `split()`, `contains()`, `substring()`, `replace()`, `trim()`, `indexOf()`, `startsWith()`, `endsWith()`, `repeat()`, `reverse()`, `isEmpty()`, `isDigit()`, `isAlpha()`
 
 ---
 
@@ -63,6 +63,26 @@ bool iceriyor = contains(metin, "Dünya");
 ### 3.1 Struct/Object - Orta Öncelik
 **Tahmini Süre**: 6-8 saat
 
+Mevcut (Object - dinamik):
+```tulpar
+var user = { "name": "Ali", "age": 25, "city": "İstanbul" };
+print(user["name"], user["age"]);
+
+array users = [
+  { "name": "Ali",  "age": 25 },
+  { "name": "Ayşe", "age": 30 }
+];
+print(length(users));
+print(users[0]["name"]);
+
+func makePerson(str name, int age, str city) {
+    return { "name": name, "age": age, "city": city };
+}
+var p = makePerson("Veli", 28, "Ankara");
+print(p["city"]);
+```
+
+Planlı (Struct - statik):
 ```tulpar
 struct Person {
     str name;
@@ -73,6 +93,7 @@ struct Person {
 Person kisi = Person("Ali", 25, "İstanbul");
 print(kisi.name, kisi.age);
 ```
+Not: Şu an object alanlarına erişim desteklenir (`obj["key"]`), alan güncelleme (ör. `obj["key"] = x`) planlıdır.
 
 ### 3.2 Dosya İşlemleri - Düşük Öncelik
 **Tahmini Süre**: 3-4 saat
@@ -110,9 +131,10 @@ int sonuc = adder(5);
 ## 📋 FAZ 4 - Optimizasyon ve İyileştirmeler
 
 ### 4.1 Standard Library
-- Math: `abs()`, `sqrt()`, `pow()`, `min()`, `max()`
-- Random: `random()`, `randomInt()`
-- Time: `now()`, `sleep()`
+- Math (mevcut): `abs()`, `sqrt()`, `pow()`, `floor()`, `ceil()`, `round()`, `cbrt()`, `trunc()`, `min()`, `max()`,
+  `sin()`, `cos()`, `tan()`, `asin()`, `acos()`, `atan()`, `atan2()`, `exp()`, `log()`, `log10()`, `log2()`, `sinh()`, `cosh()`, `tanh()`, `hypot()`, `fmod()`
+- Random (mevcut): `random()`, `randint(a, b)`
+- Time (planlı): `now()`, `sleep()`
 
 ### 4.2 Performans İyileştirmeleri
 - AST optimizasyonu
@@ -167,10 +189,11 @@ int sonuc = adder(5);
 - Compound assignment: `+=`, `-=`, `*=`, `/=`
 - Recursive fonksiyonlar
 - Scope yönetimi (global/local)
+- Diziler: `array`, `arrayInt`, `arrayFloat`, `arrayStr`, `arrayBool` + `length()`, `push()`, `pop()`
+- String metodları: `upper()`, `lower()`, `split()`, `contains()`, `substring()`, `replace()`, `trim()`, `indexOf()`, `startsWith()`, `endsWith()`, `repeat()`, `reverse()`, `isEmpty()`, `isDigit()`, `isAlpha()`
+- Genişletilmiş Math: yukarıda listelenen fonksiyonlar
 
 ### ⏳ Eksik Özellikler:
-- Diziler (arrays)
-- String metodları
 - Struct/Object
 - Dosya işlemleri
 - Hata yönetimi (try/catch)
