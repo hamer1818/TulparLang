@@ -176,7 +176,7 @@ int kalan = kontrol - ((kontrol / 2) * 2);
 if (kalan == 0) {
     print("✅ Çift sayı");
 } else {
-    print("❌ Tek sayı");
+    print("✅ Tek sayı");
 }
 
 // Pozitif mi?

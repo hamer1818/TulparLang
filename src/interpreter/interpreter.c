@@ -1,6 +1,7 @@
 #include "interpreter.h"
 #include "../parser/parser.h"
 #include <stdio.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -68,7 +69,7 @@ static char* utf8_char_at(const char* str, int index) {
 // VALUE FONKSİYONLARI
 // ============================================================================
 
-Value* value_create_int(int val) {
+Value* value_create_int(long long val) {
     Value* value = (Value*)malloc(sizeof(Value));
     value->type = VAL_INT;
     value->data.int_val = val;
@@ -100,6 +101,84 @@ Value* value_create_void() {
     Value* value = (Value*)malloc(sizeof(Value));
     value->type = VAL_VOID;
     return value;
+}
+
+// ==========================
+// BigInt yardımcıları (pozitif tamsayılar)
+// Temsil: yalnızca rakamlardan oluşan decimal string, ön sıfırlar temizlenmiş
+// ==========================
+
+static char* bigint_trim(const char* s) {
+    while (*s == '0' && s[1] != '\0') s++;
+    return strdup(s);
+}
+
+static char* bigint_from_ll_str(long long x) {
+    if (x <= 0) {
+        if (x == 0) return strdup("0");
+        // Negatif desteklenmiyor: mutlak değere çevir (ileride işaret eklenebilir)
+        unsigned long long ux = (unsigned long long)(-(x + 1)) + 1ULL;
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%llu", ux);
+        return bigint_trim(buf);
+    }
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%lld", x);
+    return bigint_trim(buf);
+}
+
+static char* bigint_add_str(const char* a, const char* b) {
+    int la = (int)strlen(a), lb = (int)strlen(b);
+    int L = (la > lb ? la : lb) + 1;
+    char* out = (char*)malloc((size_t)L + 1);
+    int ia = la - 1, ib = lb - 1, io = L;
+    int carry = 0;
+    out[io] = '\0';
+    while (ia >= 0 || ib >= 0 || carry) {
+        int da = (ia >= 0) ? (a[ia] - '0') : 0;
+        int db = (ib >= 0) ? (b[ib] - '0') : 0;
+        int s = da + db + carry;
+        out[--io] = (char)('0' + (s % 10));
+        carry = s / 10;
+        ia--; ib--;
+    }
+    while (io > 0) out[--io] = '0';
+    char* trimmed = bigint_trim(out + io);
+    free(out);
+    return trimmed;
+}
+
+static char* bigint_mul_str(const char* a, const char* b) {
+    if (a[0] == '0' || b[0] == '0') return strdup("0");
+    int la = (int)strlen(a), lb = (int)strlen(b);
+    int L = la + lb;
+    int* tmp = (int*)calloc((size_t)L, sizeof(int));
+    for (int i = la - 1; i >= 0; i--) {
+        int da = a[i] - '0';
+        for (int j = lb - 1; j >= 0; j--) {
+            int db = b[j] - '0';
+            tmp[i + j + 1] += da * db;
+        }
+    }
+    for (int k = L - 1; k > 0; k--) {
+        tmp[k - 1] += tmp[k] / 10;
+        tmp[k] %= 10;
+    }
+    char* out = (char*)malloc((size_t)L + 1);
+    for (int i = 0; i < L; i++) out[i] = (char)('0' + tmp[i]);
+    out[L] = '\0';
+    free(tmp);
+    char* trimmed = bigint_trim(out);
+    free(out);
+    return trimmed;
+}
+
+static char* bigint_mul_small(const char* a, long long b) {
+    if (b == 0) return strdup("0");
+    if (b < 0) b = -b; // işaret desteklenmiyor (ileride eklenebilir)
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%lld", b);
+    return bigint_mul_str(a, buf);
 }
 
 Value* value_create_array(int capacity) {
@@ -134,6 +213,13 @@ Value* value_create_object() {
     Value* value = (Value*)malloc(sizeof(Value));
     value->type = VAL_OBJECT;
     value->data.object_val = hash_table_create(16);  // 16 buckets başlangıç
+    return value;
+}
+
+Value* value_create_bigint(const char* digits) {
+    Value* value = (Value*)malloc(sizeof(Value));
+    value->type = VAL_BIGINT;
+    value->data.bigint_val = bigint_trim(digits);
     return value;
 }
 
@@ -356,6 +442,9 @@ Value* value_copy(Value* val) {
         case VAL_FLOAT:
             copy->data.float_val = val->data.float_val;
             break;
+        case VAL_BIGINT:
+            copy->data.bigint_val = strdup(val->data.bigint_val);
+            break;
         case VAL_STRING:
             copy->data.string_val = strdup(val->data.string_val);
             break;
@@ -419,6 +508,9 @@ void value_free(Value* val) {
     if (val->type == VAL_OBJECT && val->data.object_val) {
         hash_table_free(val->data.object_val);
     }
+    if (val->type == VAL_BIGINT && val->data.bigint_val) {
+        free(val->data.bigint_val);
+    }
     
     free(val);
 }
@@ -431,10 +523,13 @@ void value_print(Value* val) {
     
     switch (val->type) {
         case VAL_INT:
-            printf("%d", val->data.int_val);
+            printf("%lld", val->data.int_val);
             break;
         case VAL_FLOAT:
             printf("%g", val->data.float_val);
+            break;
+        case VAL_BIGINT:
+            printf("%s", val->data.bigint_val);
             break;
         case VAL_STRING:
             printf("%s", val->data.string_val);
@@ -782,8 +877,27 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             
             // Aritmetik operatörler
             if (node->op == TOKEN_PLUS) {
-                if (left->type == VAL_INT && right->type == VAL_INT) {
-                    result = value_create_int(left->data.int_val + right->data.int_val);
+                if (left->type == VAL_BIGINT || right->type == VAL_BIGINT) {
+                    const char* la = (left->type == VAL_BIGINT) ? left->data.bigint_val : bigint_from_ll_str(left->data.int_val);
+                    const char* rb = (right->type == VAL_BIGINT) ? right->data.bigint_val : bigint_from_ll_str(right->data.int_val);
+                    char* sum = bigint_add_str(la, rb);
+                    if (left->type != VAL_BIGINT) free((char*)la);
+                    if (right->type != VAL_BIGINT) free((char*)rb);
+                    result = value_create_bigint(sum);
+                    free(sum);
+                } else if (left->type == VAL_INT && right->type == VAL_INT) {
+                    long long a = left->data.int_val;
+                    long long b = right->data.int_val;
+                    if ((b > 0 && a > (LLONG_MAX - b)) || (b < 0 && a < (LLONG_MIN - b))) {
+                        char* sa = bigint_from_ll_str(a);
+                        char* sb = bigint_from_ll_str(b);
+                        char* sum = bigint_add_str(sa, sb);
+                        free(sa); free(sb);
+                        result = value_create_bigint(sum);
+                        free(sum);
+                    } else {
+                        result = value_create_int(a + b);
+                    }
                 } else if (left->type == VAL_FLOAT || right->type == VAL_FLOAT) {
                     float l = (left->type == VAL_FLOAT) ? left->data.float_val : left->data.int_val;
                     float r = (right->type == VAL_FLOAT) ? right->data.float_val : right->data.int_val;
@@ -800,7 +914,16 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             }
             else if (node->op == TOKEN_MINUS) {
                 if (left->type == VAL_INT && right->type == VAL_INT) {
-                    result = value_create_int(left->data.int_val - right->data.int_val);
+                    long long a = left->data.int_val;
+                    long long b = right->data.int_val;
+                    // Taşma kontrolü: a - b == a + (-b)
+                    if ((-b > 0 && a > (LLONG_MAX + b)) || (-b < 0 && a < (LLONG_MIN + b))) {
+                        float l = (float)a;
+                        float r = (float)b;
+                        result = value_create_float(l - r);
+                    } else {
+                        result = value_create_int(a - b);
+                    }
                 } else {
                     float l = (left->type == VAL_FLOAT) ? left->data.float_val : left->data.int_val;
                     float r = (right->type == VAL_FLOAT) ? right->data.float_val : right->data.int_val;
@@ -808,8 +931,32 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 }
             }
             else if (node->op == TOKEN_MULTIPLY) {
-                if (left->type == VAL_INT && right->type == VAL_INT) {
-                    result = value_create_int(left->data.int_val * right->data.int_val);
+                if (left->type == VAL_BIGINT || right->type == VAL_BIGINT) {
+                    if (left->type == VAL_BIGINT && right->type == VAL_BIGINT) {
+                        char* prod = bigint_mul_str(left->data.bigint_val, right->data.bigint_val);
+                        result = value_create_bigint(prod);
+                        free(prod);
+                    } else {
+                        const char* big = (left->type == VAL_BIGINT) ? left->data.bigint_val : right->data.bigint_val;
+                        long long small = (left->type == VAL_INT) ? left->data.int_val : right->data.int_val;
+                        char* prod = bigint_mul_small(big, small);
+                        result = value_create_bigint(prod);
+                        free(prod);
+                    }
+                } else if (left->type == VAL_INT && right->type == VAL_INT) {
+                    long long a = left->data.int_val;
+                    long long b = right->data.int_val;
+                    if (a != 0 && ((b > 0 && (a > LLONG_MAX / b || a < LLONG_MIN / b))
+                                   || (b < 0 && (a == LLONG_MIN || -a > LLONG_MAX / -b)))) {
+                        char* sa = bigint_from_ll_str(a);
+                        char* sb = bigint_from_ll_str(b);
+                        char* prod = bigint_mul_str(sa, sb);
+                        free(sa); free(sb);
+                        result = value_create_bigint(prod);
+                        free(prod);
+                    } else {
+                        result = value_create_int(a * b);
+                    }
                 } else {
                     float l = (left->type == VAL_FLOAT) ? left->data.float_val : left->data.int_val;
                     float r = (right->type == VAL_FLOAT) ? right->data.float_val : right->data.int_val;
@@ -1002,8 +1149,8 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 }
                 
                 // Kullanıcıdan input al
-                int num;
-                if (scanf("%d", &num) == 1) {
+                long long num;
+                if (scanf("%lld", &num) == 1) {
                     // Buffer'ı temizle
                     int c;
                     while ((c = getchar()) != '\n' && c != EOF);
@@ -1040,7 +1187,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 if (node->argument_count > 0) {
                     Value* arg = interpreter_eval_expression(interp, node->arguments[0]);
                     if (arg->type == VAL_INT) {
-                        int count = arg->data.int_val;
+                        long long count = arg->data.int_val;
                         value_free(arg);
                         return value_create_int(count);
                     }
@@ -1058,11 +1205,13 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     if (arg->type == VAL_INT) {
                         result = value_create_int(arg->data.int_val);
                     } else if (arg->type == VAL_FLOAT) {
-                        result = value_create_int((int)arg->data.float_val);
+                        result = value_create_int((long long)arg->data.float_val);
                     } else if (arg->type == VAL_BOOL) {
                         result = value_create_int(arg->data.bool_val ? 1 : 0);
                     } else if (arg->type == VAL_STRING) {
-                        result = value_create_int(atoi(arg->data.string_val));
+                        char* endptr = NULL;
+                        long long v = strtoll(arg->data.string_val, &endptr, 10);
+                        result = value_create_int(v);
                     }
                     
                     value_free(arg);
@@ -1100,7 +1249,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     char buffer[256];
                     
                     if (arg->type == VAL_INT) {
-                        snprintf(buffer, sizeof(buffer), "%d", arg->data.int_val);
+                        snprintf(buffer, sizeof(buffer), "%lld", arg->data.int_val);
                     } else if (arg->type == VAL_FLOAT) {
                         snprintf(buffer, sizeof(buffer), "%g", arg->data.float_val);
                     } else if (arg->type == VAL_BOOL) {
@@ -2072,29 +2221,79 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
             Value* result = NULL;
             
             if (node->op == TOKEN_PLUS_EQUAL) {
-                if (current->type == VAL_INT && right_val->type == VAL_INT) {
-                    result = value_create_int(current->data.int_val + right_val->data.int_val);
+                if (current->type == VAL_BIGINT || right_val->type == VAL_BIGINT) {
+                    const char* la = (current->type == VAL_BIGINT) ? current->data.bigint_val : bigint_from_ll_str(current->data.int_val);
+                    const char* rb = (right_val->type == VAL_BIGINT) ? right_val->data.bigint_val : bigint_from_ll_str(right_val->data.int_val);
+                    char* sum = bigint_add_str(la, rb);
+                    if (current->type != VAL_BIGINT) free((char*)la);
+                    if (right_val->type != VAL_BIGINT) free((char*)rb);
+                    result = value_create_bigint(sum);
+                    free(sum);
+                } else if (current->type == VAL_INT && right_val->type == VAL_INT) {
+                    long long a = current->data.int_val;
+                    long long b = right_val->data.int_val;
+                    if ((b > 0 && a > (LLONG_MAX - b)) || (b < 0 && a < (LLONG_MIN - b))) {
+                        char* sa = bigint_from_ll_str(a);
+                        char* sb = bigint_from_ll_str(b);
+                        char* sum = bigint_add_str(sa, sb);
+                        free(sa); free(sb);
+                        result = value_create_bigint(sum);
+                        free(sum);
+                    } else {
+                        result = value_create_int(a + b);
+                    }
                 } else {
-                    float l = (current->type == VAL_FLOAT) ? current->data.float_val : current->data.int_val;
-                    float r = (right_val->type == VAL_FLOAT) ? right_val->data.float_val : right_val->data.int_val;
+                    float l = (current->type == VAL_FLOAT) ? current->data.float_val : (float)current->data.int_val;
+                    float r = (right_val->type == VAL_FLOAT) ? right_val->data.float_val : (float)right_val->data.int_val;
                     result = value_create_float(l + r);
                 }
             }
             else if (node->op == TOKEN_MINUS_EQUAL) {
                 if (current->type == VAL_INT && right_val->type == VAL_INT) {
-                    result = value_create_int(current->data.int_val - right_val->data.int_val);
+                    long long a = current->data.int_val;
+                    long long b = right_val->data.int_val;
+                    if ((-b > 0 && a > (LLONG_MAX + b)) || (-b < 0 && a < (LLONG_MIN + b))) {
+                        float l = (float)a; float r = (float)b;
+                        result = value_create_float(l - r);
+                    } else {
+                        result = value_create_int(a - b);
+                    }
                 } else {
-                    float l = (current->type == VAL_FLOAT) ? current->data.float_val : current->data.int_val;
-                    float r = (right_val->type == VAL_FLOAT) ? right_val->data.float_val : right_val->data.int_val;
+                    float l = (current->type == VAL_FLOAT) ? current->data.float_val : (float)current->data.int_val;
+                    float r = (right_val->type == VAL_FLOAT) ? right_val->data.float_val : (float)right_val->data.int_val;
                     result = value_create_float(l - r);
                 }
             }
             else if (node->op == TOKEN_MULTIPLY_EQUAL) {
-                if (current->type == VAL_INT && right_val->type == VAL_INT) {
-                    result = value_create_int(current->data.int_val * right_val->data.int_val);
+                if (current->type == VAL_BIGINT || right_val->type == VAL_BIGINT) {
+                    if (current->type == VAL_BIGINT && right_val->type == VAL_BIGINT) {
+                        char* prod = bigint_mul_str(current->data.bigint_val, right_val->data.bigint_val);
+                        result = value_create_bigint(prod);
+                        free(prod);
+                    } else {
+                        const char* big = (current->type == VAL_BIGINT) ? current->data.bigint_val : right_val->data.bigint_val;
+                        long long small = (current->type == VAL_INT) ? current->data.int_val : right_val->data.int_val;
+                        char* prod = bigint_mul_small(big, small);
+                        result = value_create_bigint(prod);
+                        free(prod);
+                    }
+                } else if (current->type == VAL_INT && right_val->type == VAL_INT) {
+                    long long a = current->data.int_val;
+                    long long b = right_val->data.int_val;
+                    if (a != 0 && ((b > 0 && (a > LLONG_MAX / b || a < LLONG_MIN / b)) ||
+                                   (b < 0 && (a == LLONG_MIN || -a > LLONG_MAX / -b)))) {
+                        char* sa = bigint_from_ll_str(a);
+                        char* sb = bigint_from_ll_str(b);
+                        char* prod = bigint_mul_str(sa, sb);
+                        free(sa); free(sb);
+                        result = value_create_bigint(prod);
+                        free(prod);
+                    } else {
+                        result = value_create_int(a * b);
+                    }
                 } else {
-                    float l = (current->type == VAL_FLOAT) ? current->data.float_val : current->data.int_val;
-                    float r = (right_val->type == VAL_FLOAT) ? right_val->data.float_val : right_val->data.int_val;
+                    float l = (current->type == VAL_FLOAT) ? current->data.float_val : (float)current->data.int_val;
+                    float r = (right_val->type == VAL_FLOAT) ? right_val->data.float_val : (float)right_val->data.int_val;
                     result = value_create_float(l * r);
                 }
             }

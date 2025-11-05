@@ -172,7 +172,9 @@ static ASTNode* parse_primary(Parser* parser) {
     // Sayı literalleri
     if (token->type == TOKEN_INT_LITERAL) {
         ASTNode* node = ast_node_create(AST_INT_LITERAL);
-        node->value.int_value = atoi(token->value);
+        char* endptr = NULL;
+        long long v = strtoll(token->value, &endptr, 10);
+        node->value.int_value = v;
         parser_advance(parser);
         return node;
     }
@@ -958,7 +960,7 @@ void ast_print(ASTNode* node, int indent) {
             break;
             
         case AST_INT_LITERAL:
-            printf("INT: %d\n", node->value.int_value);
+            printf("INT: %lld\n", node->value.int_value);
             break;
             
         case AST_FLOAT_LITERAL:

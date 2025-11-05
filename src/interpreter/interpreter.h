@@ -11,6 +11,7 @@ typedef enum {
     VAL_BOOL,
     VAL_ARRAY,      // Diziler
     VAL_OBJECT,     // JSON Objects (hash table)
+    VAL_BIGINT,     // Keyfi büyüklükte tamsayı (decimal string)
     VAL_VOID,
     VAL_FUNCTION
 } ValueType;
@@ -45,12 +46,13 @@ typedef struct {
 struct Value {
     ValueType type;
     union {
-        int int_val;
+        long long int_val;
         float float_val;
         char* string_val;
         int bool_val;
         Array* array_val;
         HashTable* object_val;  // Object için hash table
+        char* bigint_val;       // BigInt (sadece rakamlar, isteğe bağlı '+' işaretsiz)
     } data;
 };
 
@@ -88,7 +90,7 @@ typedef struct {
 } Interpreter;
 
 // Value fonksiyonları
-Value* value_create_int(int val);
+Value* value_create_int(long long val);
 Value* value_create_float(float val);
 Value* value_create_string(char* val);
 Value* value_create_bool(int val);
@@ -96,6 +98,7 @@ Value* value_create_array(int capacity);
 Value* value_create_typed_array(int capacity, ValueType elem_type);
 Value* value_create_object();
 Value* value_create_void();
+Value* value_create_bigint(const char* digits);
 Value* value_copy(Value* val);
 void value_free(Value* val);
 void value_print(Value* val);

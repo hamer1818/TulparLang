@@ -57,7 +57,7 @@ typedef struct ASTNode {
     
     // Değerler (literaller için)
     union {
-        int int_value;
+        long long int_value;
         float float_value;
         char* string_value;
         int bool_value;
