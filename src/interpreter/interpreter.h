@@ -100,6 +100,9 @@ typedef struct {
     int should_return;    // Return statement kontrolü
     int should_break;     // Break statement kontrolü
     int should_continue;  // Continue statement kontrolü
+    ASTNode** retained_modules; // import edilen AST'leri sakla
+    int retained_count;
+    int retained_capacity;
 } Interpreter;
 
 // Value fonksiyonları
@@ -143,6 +146,7 @@ Value* symbol_table_get(SymbolTable* table, char* name);
 Interpreter* interpreter_create();
 void interpreter_free(Interpreter* interp);
 void interpreter_execute(Interpreter* interp, ASTNode* node);
+void interpreter_execute_statement(Interpreter* interp, ASTNode* node);
 TypeDef* interpreter_get_type(Interpreter* interp, const char* name);
 void interpreter_register_type(Interpreter* interp, TypeDef* t);
 Value* interpreter_eval(Interpreter* interp, ASTNode* node);

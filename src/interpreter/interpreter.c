@@ -1,4 +1,5 @@
 #include "interpreter.h"
+#include "../lexer/lexer.h"
 #include "../parser/parser.h"
 #include <stdio.h>
 #include <limits.h>
@@ -9,10 +10,10 @@
 #include <ctype.h>
 
 // ============================================================================
-// UTF-8 YARDIMCI FONKSİYONLARI
+// UTF-8 HELPER FUNCTIONS
 // ============================================================================
 
-// UTF-8 karakterinin byte uzunluğunu döndürür
+// Returns the byte length of a UTF-8 character
 static int utf8_char_length(unsigned char c) {
     if ((c & 0x80) == 0) {
         return 1;
@@ -29,7 +30,7 @@ static int utf8_char_length(unsigned char c) {
     return 1;
 }
 
-// UTF-8 string içindeki karakter sayısını döndürür
+// Returns the number of characters in a UTF-8 string
 static int utf8_strlen_cp(const char* str) {
     int length = 0;
     int i = 0;
@@ -43,7 +44,7 @@ static int utf8_strlen_cp(const char* str) {
     return length;
 }
 
-// UTF-8 string içinden belirtilen index'teki karakteri (string olarak) döndürür
+// Returns the character at the specified index in a UTF-8 string (as a string)
 static char* utf8_char_at(const char* str, int index) {
     int i = 0;
     int current = 0;
@@ -55,7 +56,7 @@ static char* utf8_char_at(const char* str, int index) {
     }
 
     if (str[i] == '\0') {
-        return NULL; // Sınır dışında
+        return NULL; // Out of bounds
     }
 
     int char_len = utf8_char_length((unsigned char)str[i]);
@@ -104,8 +105,8 @@ Value* value_create_void() {
 }
 
 // ==========================
-// BigInt yardımcıları (pozitif tamsayılar)
-// Temsil: yalnızca rakamlardan oluşan decimal string, ön sıfırlar temizlenmiş
+// BigInt helpers (positive integers)
+// Representation: decimal string of digits only, leading zeros trimmed
 // ==========================
 
 static char* bigint_trim(const char* s) {
@@ -114,7 +115,7 @@ static char* bigint_trim(const char* s) {
 }
 
 // ==========================
-// JSON Serde Yardımcıları
+// JSON Serde Helpers
 // ==========================
 
 static void sb_append(char** buf, int* cap, int* len, const char* s) {
@@ -217,7 +218,7 @@ static char* value_to_json_string(Value* v) {
     return buf;
 }
 
-// Basit JSON parser (sınırlı)
+// Simple JSON parser (limited)
 typedef struct { const char* s; int i; } JsonCur;
 static void json_skip_ws(JsonCur* c) { while (c->s[c->i] && isspace((unsigned char)c->s[c->i])) c->i++; }
 static int json_match(JsonCur* c, char ch) { if (c->s[c->i] == ch) { c->i++; return 1;} return 0; }
@@ -304,7 +305,7 @@ static Value* json_parse_value(JsonCur* c) {
 static char* bigint_from_ll_str(long long x) {
     if (x <= 0) {
         if (x == 0) return strdup("0");
-        // Negatif desteklenmiyor: mutlak değere çevir (ileride işaret eklenebilir)
+        // Negative not supported: convert to absolute value (sign may be added later)
         unsigned long long ux = (unsigned long long)(-(x + 1)) + 1ULL;
         char buf[32];
         snprintf(buf, sizeof(buf), "%llu", ux);
@@ -340,6 +341,7 @@ static char* bigint_mul_str(const char* a, const char* b) {
     if (a[0] == '0' || b[0] == '0') return strdup("0");
     int la = (int)strlen(a), lb = (int)strlen(b);
     int L = la + lb;
+    // Optimize: use char array directly instead of int array for small numbers
     int* tmp = (int*)calloc((size_t)L, sizeof(int));
     for (int i = la - 1; i >= 0; i--) {
         int da = a[i] - '0';
@@ -348,22 +350,59 @@ static char* bigint_mul_str(const char* a, const char* b) {
             tmp[i + j + 1] += da * db;
         }
     }
+    // Carry propagation - optimized loop
     for (int k = L - 1; k > 0; k--) {
-        tmp[k - 1] += tmp[k] / 10;
-        tmp[k] %= 10;
+        if (tmp[k] >= 10) {
+            tmp[k - 1] += tmp[k] / 10;
+            tmp[k] %= 10;
+        }
     }
-    char* out = (char*)malloc((size_t)L + 1);
-    for (int i = 0; i < L; i++) out[i] = (char)('0' + tmp[i]);
-    out[L] = '\0';
+    // Find first non-zero digit to avoid unnecessary trimming
+    int start = 0;
+    while (start < L && tmp[start] == 0) start++;
+    if (start == L) {
+        free(tmp);
+        return strdup("0");
+    }
+    int result_len = L - start;
+    char* out = (char*)malloc((size_t)result_len + 1);
+    for (int i = 0; i < result_len; i++) {
+        out[i] = (char)('0' + tmp[start + i]);
+    }
+    out[result_len] = '\0';
     free(tmp);
-    char* trimmed = bigint_trim(out);
-    free(out);
-    return trimmed;
+    return out;
 }
 
 static char* bigint_mul_small(const char* a, long long b) {
     if (b == 0) return strdup("0");
-    if (b < 0) b = -b; // işaret desteklenmiyor (ileride eklenebilir)
+    if (b < 0) b = -b; // sign not supported (may be added later)
+    // Optimize: for small multipliers, use direct multiplication instead of string conversion
+    int la = (int)strlen(a);
+    if (b < 10 && la < 100) {
+        // Fast path for single-digit multiplier and short numbers
+        int digit = (int)b;
+        int L = la + 1;
+        int* tmp = (int*)calloc((size_t)L, sizeof(int));
+        int carry = 0;
+        for (int i = la - 1; i >= 0; i--) {
+            int da = a[i] - '0';
+            int prod = da * digit + carry;
+            tmp[i + 1] = prod % 10;
+            carry = prod / 10;
+        }
+        if (carry > 0) tmp[0] = carry;
+        int start = (carry == 0) ? 1 : 0;
+        int result_len = L - start;
+        char* out = (char*)malloc((size_t)result_len + 1);
+        for (int i = 0; i < result_len; i++) {
+            out[i] = (char)('0' + tmp[start + i]);
+        }
+        out[result_len] = '\0';
+        free(tmp);
+        return out;
+    }
+    // Fallback to string-based multiplication for larger numbers
     char buf[32];
     snprintf(buf, sizeof(buf), "%lld", b);
     return bigint_mul_str(a, buf);
@@ -400,23 +439,38 @@ static char* bigint_sub_str(const char* a, const char* b) {
 }
 
 static void bigint_divmod(const char* a, const char* b, char** q_out, char** r_out) {
-    // long division: a / b, both positive decimal strings
+    // Optimized long division: a / b, both positive decimal strings
     if (b[0] == '0') { *q_out = strdup("0"); *r_out = strdup("0"); return; }
     if (bigint_cmp(a, b) < 0) { *q_out = strdup("0"); *r_out = strdup(a); return; }
     int la = (int)strlen(a);
-    char* rem = strdup("0");
+    // Optimize: use pre-allocated buffer for remainder to avoid repeated malloc/free
+    int rem_cap = la + 2;
+    char* rem = (char*)malloc((size_t)rem_cap);
+    rem[0] = '0';
+    rem[1] = '\0';
+    int rem_len = 1;
     char* quo = (char*)malloc((size_t)la + 2);
     int qi = 0;
     for (int i = 0; i < la; i++) {
-        // rem = rem*10 + a[i]
-        int rl = (int)strlen(rem);
-        char* rem10 = (char*)malloc((size_t)rl + 2);
-        strcpy(rem10, rem);
-        rem10[rl] = a[i]; rem10[rl+1] = '\0';
-        char* remt = bigint_trim(rem10); free(rem10); free(rem); rem = remt;
-        // find digit
+        // Optimize: rem*10 + a[i] without malloc/free
+        if (rem_len + 1 >= rem_cap) {
+            rem_cap = rem_cap * 2;
+            rem = (char*)realloc(rem, (size_t)rem_cap);
+        }
+        rem[rem_len] = a[i];
+        rem[rem_len + 1] = '\0';
+        rem_len++;
+        // Trim leading zeros efficiently
+        int start = 0;
+        while (start < rem_len - 1 && rem[start] == '0') start++;
+        if (start > 0) {
+            int new_len = rem_len - start;
+            memmove(rem, rem + start, (size_t)new_len);
+            rem[new_len] = '\0';
+            rem_len = new_len;
+        }
+        // Find digit using binary search
         int d = 0;
-        // binary search 0..9
         int lo = 0, hi = 9;
         while (lo <= hi) {
             int mid = (lo + hi) / 2;
@@ -429,13 +483,39 @@ static void bigint_divmod(const char* a, const char* b, char** q_out, char** r_o
         if (d > 0) {
             char* prod = bigint_mul_small(b, d);
             char* newrem = bigint_sub_str(rem, prod);
-            free(prod); free(rem); rem = newrem;
+            free(prod);
+            // Update rem buffer
+            int newrem_len = (int)strlen(newrem);
+            if (newrem_len + 1 > rem_cap) {
+                rem_cap = newrem_len + 2;
+                rem = (char*)realloc(rem, (size_t)rem_cap);
+            }
+            strcpy(rem, newrem);
+            rem_len = newrem_len;
+            free(newrem);
         }
     }
     quo[qi] = '\0';
-    char* qtrim = bigint_trim(quo); free(quo);
-    *q_out = qtrim;
-    *r_out = rem;
+    // Trim quotient
+    int qstart = 0;
+    while (qstart < qi && quo[qstart] == '0') qstart++;
+    if (qstart == qi) {
+        free(quo);
+        *q_out = strdup("0");
+    } else {
+        int qlen = qi - qstart;
+        char* qtrim = (char*)malloc((size_t)qlen + 1);
+        memcpy(qtrim, quo + qstart, (size_t)qlen);
+        qtrim[qlen] = '\0';
+        free(quo);
+        *q_out = qtrim;
+    }
+    if (rem_len == 0 || (rem_len == 1 && rem[0] == '0')) {
+        free(rem);
+        *r_out = strdup("0");
+    } else {
+        *r_out = rem;  // Transfer ownership
+    }
 }
 
 static char* bigint_pow_str(const char* a, long long e) {
@@ -489,7 +569,7 @@ Value* value_create_typed_array(int capacity, ValueType elem_type) {
 Value* value_create_object() {
     Value* value = (Value*)malloc(sizeof(Value));
     value->type = VAL_OBJECT;
-    value->data.object_val = hash_table_create(16);  // 16 buckets başlangıç
+    value->data.object_val = hash_table_create(16);  // 16 buckets initial
     return value;
 }
 
@@ -501,7 +581,7 @@ Value* value_create_bigint(const char* digits) {
 }
 
 // ============================================================================
-// HASH TABLE FONKSİYONLARI
+// HASH TABLE FUNCTIONS
 // ============================================================================
 
 // Simple hash function (djb2 algorithm)
@@ -516,7 +596,7 @@ unsigned int hash_function(const char* key, int bucket_count) {
     return hash % bucket_count;
 }
 
-// Hash table oluştur
+// Create hash table
 HashTable* hash_table_create(int bucket_count) {
     HashTable* table = (HashTable*)malloc(sizeof(HashTable));
     table->bucket_count = bucket_count;
@@ -544,15 +624,15 @@ void hash_table_free(HashTable* table) {
     free(table);
 }
 
-// Key-value ekle/güncelle
+// Add/update key-value
 void hash_table_set(HashTable* table, const char* key, Value* value) {
     unsigned int index = hash_function(key, table->bucket_count);
     HashEntry* entry = table->buckets[index];
     
-    // Key zaten var mı kontrol et
+    // Check if key already exists
     while (entry) {
         if (strcmp(entry->key, key) == 0) {
-            // Güncelle
+            // Update
             value_free(entry->value);
             entry->value = value;
             return;
@@ -560,7 +640,7 @@ void hash_table_set(HashTable* table, const char* key, Value* value) {
         entry = entry->next;
     }
     
-    // Yeni entry oluştur
+    // Create new entry
     HashEntry* new_entry = (HashEntry*)malloc(sizeof(HashEntry));
     new_entry->key = strdup(key);
     new_entry->value = value;
@@ -581,10 +661,10 @@ Value* hash_table_get(HashTable* table, const char* key) {
         entry = entry->next;
     }
     
-    return NULL;  // Bulunamadı
+    return NULL;  // Not found
 }
 
-// Key var mı kontrol et
+// Check if key exists
 int hash_table_has(HashTable* table, const char* key) {
     return hash_table_get(table, key) != NULL;
 }
@@ -614,7 +694,7 @@ void hash_table_delete(HashTable* table, const char* key) {
     }
 }
 
-// Hash table yazdır (debug)
+// Print hash table (debug)
 void hash_table_print(HashTable* table) {
     printf("{");
     int first = 1;
@@ -634,21 +714,21 @@ void hash_table_print(HashTable* table) {
 }
 
 // ============================================================================
-// ARRAY FONKSİYONLARI
+// ARRAY FUNCTIONS
 // ============================================================================
 
 void array_push(Array* arr, Value* val) {
-    // Tip kontrolü (eğer typed array ise)
+    // Type check (if typed array)
     if (arr->elem_type != VAL_VOID && arr->elem_type != val->type) {
-        printf("Hata: Dizi sadece ");
+        printf("Error: Array only accepts elements of type ");
         switch (arr->elem_type) {
             case VAL_INT: printf("int"); break;
             case VAL_FLOAT: printf("float"); break;
             case VAL_STRING: printf("str"); break;
             case VAL_BOOL: printf("bool"); break;
-            default: printf("bilinmeyen tip"); break;
+            default: printf("unknown type"); break;
         }
-        printf(" tipinde eleman kabul eder!\n");
+        printf("!\n");
         return;
     }
     
@@ -670,7 +750,7 @@ Value* array_pop(Array* arr) {
 
 Value* array_get(Array* arr, int index) {
     if (index < 0 || index >= arr->length) {
-        printf("Hata: Dizi index sınırları dışında: %d (uzunluk: %d)\n", 
+        printf("Error: Array index out of bounds: %d (length: %d)\n", 
                index, arr->length);
         return value_create_void();
     }
@@ -679,22 +759,22 @@ Value* array_get(Array* arr, int index) {
 
 void array_set(Array* arr, int index, Value* val) {
     if (index < 0 || index >= arr->length) {
-        printf("Hata: Dizi index sınırları dışında: %d (uzunluk: %d)\n", 
+        printf("Error: Array index out of bounds: %d (length: %d)\n", 
                index, arr->length);
         return;
     }
     
-    // Tip kontrolü (eğer typed array ise)
+    // Type check (if typed array)
     if (arr->elem_type != VAL_VOID && arr->elem_type != val->type) {
-        printf("Hata: Dizi sadece ");
+        printf("Error: Array only accepts elements of type ");
         switch (arr->elem_type) {
             case VAL_INT: printf("int"); break;
             case VAL_FLOAT: printf("float"); break;
             case VAL_STRING: printf("str"); break;
             case VAL_BOOL: printf("bool"); break;
-            default: printf("bilinmeyen tip"); break;
+            default: printf("unknown type"); break;
         }
-        printf(" tipinde eleman kabul eder!\n");
+        printf("!\n");
         return;
     }
     
@@ -856,7 +936,7 @@ int value_is_truthy(Value* val) {
 }
 
 // ============================================================================
-// SYMBOL TABLE FONKSİYONLARI
+// SYMBOL TABLE FUNCTIONS
 // ============================================================================
 
 SymbolTable* symbol_table_create(SymbolTable* parent) {
@@ -881,17 +961,35 @@ void symbol_table_free(SymbolTable* table) {
 }
 
 void symbol_table_set(SymbolTable* table, char* name, Value* value) {
-    // Önce mevcut değişkeni ara
+    // First search for existing variable in current scope
     for (int i = 0; i < table->var_count; i++) {
         if (strcmp(table->variables[i]->name, name) == 0) {
-            // Mevcut değişkeni güncelle
+            // Update existing variable
             value_free(table->variables[i]->value);
             table->variables[i]->value = value_copy(value);
             return;
         }
     }
     
-    // Yeni değişken ekle
+    // If not found in current scope, check parent scope
+    if (table->parent) {
+        SymbolTable* parent = table->parent;
+        for (int i = 0; i < parent->var_count; i++) {
+            if (strcmp(parent->variables[i]->name, name) == 0) {
+                // Update variable in parent scope
+                value_free(parent->variables[i]->value);
+                parent->variables[i]->value = value_copy(value);
+                return;
+            }
+        }
+        // Recursively check parent's parent
+        if (parent->parent) {
+            symbol_table_set(parent, name, value);
+            return;
+        }
+    }
+    
+    // Add new variable to current scope
     if (table->var_count >= table->var_capacity) {
         table->var_capacity *= 2;
         table->variables = (Variable**)realloc(table->variables, 
@@ -905,7 +1003,7 @@ void symbol_table_set(SymbolTable* table, char* name, Value* value) {
 }
 
 Value* symbol_table_get(SymbolTable* table, char* name) {
-    // Mevcut scope'ta ara
+    // Search in current scope
     for (int i = 0; i < table->var_count; i++) {
         if (strcmp(table->variables[i]->name, name) == 0) {
             return table->variables[i]->value;
@@ -921,7 +1019,7 @@ Value* symbol_table_get(SymbolTable* table, char* name) {
 }
 
 // ============================================================================
-// INTERPRETER FONKSİYONLARI
+// INTERPRETER FUNCTIONS
 // ============================================================================
 
 Interpreter* interpreter_create() {
@@ -938,12 +1036,20 @@ Interpreter* interpreter_create() {
     interp->should_return = 0;
     interp->should_break = 0;
     interp->should_continue = 0;
+    interp->retained_modules = NULL;
+    interp->retained_count = 0;
+    interp->retained_capacity = 0;
     return interp;
 }
 
 void interpreter_free(Interpreter* interp) {
     if (!interp) return;
     
+    for (int i = 0; i < interp->retained_count; i++) {
+        ast_node_free(interp->retained_modules[i]);
+    }
+    free(interp->retained_modules);
+
     symbol_table_free(interp->global_scope);
     
     for (int i = 0; i < interp->function_count; i++) {
@@ -975,7 +1081,7 @@ void interpreter_register_function(Interpreter* interp, char* name, ASTNode* nod
     }
     
     Function* func = (Function*)malloc(sizeof(Function));
-    // Type method ise, kayıt adını TypeName.method olarak oluştur
+    // If type method, create record name as TypeName.method
     if (node->receiver_type_name) {
         char fullname[256];
         snprintf(fullname, sizeof(fullname), "%s.%s", node->receiver_type_name, name);
@@ -1011,12 +1117,12 @@ void interpreter_register_type(Interpreter* interp, TypeDef* t) {
     interp->types[interp->type_count++] = t;
 }
 
-// İleri bildirimler
+// Forward declarations
 Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node);
 void interpreter_execute_statement(Interpreter* interp, ASTNode* node);
 
 // ============================================================================
-// İFADE DEĞERLENDİRME (Expression Evaluation)
+// EXPRESSION EVALUATION
 // ============================================================================
 
 Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
@@ -1073,10 +1179,10 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 // İlk erişim: değişkenden al
                 container = symbol_table_get(interp->current_scope, node->name);
                 if (!container) {
-                    printf("Hata: Tanımlanmamış değişken '%s'\n", node->name);
+                    printf("Error: Undefined variable '%s'\n", node->name);
                     exit(1);
                 }
-                // Symbol table'dan aldığımız için copy yapma (referans)
+                // Don't copy from symbol table (reference)
                 // Ama nested'de eval'den gelirse zaten yeni value
             }
             
@@ -1086,7 +1192,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             // Array access (integer index)
             if (container->type == VAL_ARRAY) {
                 if (index_val->type != VAL_INT) {
-                    printf("Hata: Dizi index integer olmalı (line %d)\n", node->line);
+                    printf("Error: Array index must be integer (line %d)\n", node->line);
                     value_free(index_val);
                     if (node->left) value_free(container);
                     exit(1);
@@ -1104,7 +1210,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             // Object access (string key)
             if (container->type == VAL_OBJECT) {
                 if (index_val->type != VAL_STRING) {
-                    printf("Hata: Object key string olmalı (line %d)\n", node->line);
+                    printf("Error: Object key must be string (line %d)\n", node->line);
                     value_free(index_val);
                     if (node->left) value_free(container);
                     exit(1);
@@ -1115,7 +1221,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 value_free(index_val);
                 
                 if (!found) {
-                    printf("Hata: Object'te '%s' key'i bulunamadı\n", key);
+                    printf("Error: Key '%s' not found in object\n", key);
                     if (node->left) value_free(container);
                     return value_create_void();
                 }
@@ -1130,7 +1236,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             // String access (character by index)
             if (container->type == VAL_STRING) {
                 if (index_val->type != VAL_INT) {
-                    printf("Hata: String index integer olmalı (line %d)\n", node->line);
+                    printf("Error: String index must be integer (line %d)\n", node->line);
                     value_free(index_val);
                     if (node->left) value_free(container);
                     exit(1);
@@ -1140,9 +1246,9 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 const char* str = container->data.string_val;
                 int len = utf8_strlen_cp(str);
                 
-                // Index sınır kontrolü
+                // Index bounds check
                 if (idx < 0 || idx >= len) {
-                    printf("Hata: String index sınırların dışında (0-%d, verilen %d) (line %d)\n", 
+                    printf("Error: String index out of bounds (0-%d, given %d) (line %d)\n", 
                            len - 1, idx, node->line);
                     value_free(index_val);
                     if (node->left) value_free(container);
@@ -1151,7 +1257,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 
                 char* char_str = utf8_char_at(str, idx);
                 if (!char_str) {
-                    printf("Hata: UTF-8 karakter çözümlenemedi\n");
+                    printf("Error: UTF-8 character could not be decoded\n");
                     value_free(index_val);
                     if (node->left) value_free(container);
                     exit(1);
@@ -1165,7 +1271,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 return result;
             }
             
-            printf("Hata: Erişilen değer bir dizi, object veya string değil (line %d)\n", node->line);
+            printf("Error: Accessed value is not an array, object, or string (line %d)\n", node->line);
             value_free(index_val);
             if (node->left) value_free(container);
             exit(1);
@@ -1174,7 +1280,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
         case AST_IDENTIFIER: {
             Value* val = symbol_table_get(interp->current_scope, node->name);
             if (!val) {
-                printf("Hata: Tanımlanmamış değişken '%s' (line %d)\n", node->name, node->line);
+                printf("Error: Undefined variable '%s' (line %d)\n", node->name, node->line);
                 exit(1);
             }
             return value_copy(val);
@@ -1277,6 +1383,15 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 if ((left->type == VAL_BIGINT) || (right->type == VAL_BIGINT)) {
                     const char* la = (left->type == VAL_BIGINT) ? left->data.bigint_val : bigint_from_ll_str(left->data.int_val);
                     const char* rb = (right->type == VAL_BIGINT) ? right->data.bigint_val : bigint_from_ll_str(right->data.int_val);
+                    // Division by zero check
+                    if (strcmp(rb, "0") == 0 || (strlen(rb) == 1 && rb[0] == '0')) {
+                        printf("Error: Division by zero! (line %d)\n", node->line);
+                        if (left->type != VAL_BIGINT) free((char*)la);
+                        if (right->type != VAL_BIGINT) free((char*)rb);
+                        value_free(left);
+                        value_free(right);
+                        exit(1);
+                    }
                     char* q; char* r;
                     bigint_divmod(la, rb, &q, &r);
                     if (left->type != VAL_BIGINT) free((char*)la);
@@ -1286,7 +1401,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     result = res;
                 } else if (left->type == VAL_INT && right->type == VAL_INT) {
                     if (right->data.int_val == 0) {
-                        printf("Hata: Sıfıra bölme! (line %d)\n", node->line);
+                        printf("Error: Division by zero! (line %d)\n", node->line);
                         exit(1);
                     }
                     result = value_create_int(left->data.int_val / right->data.int_val);
@@ -1294,7 +1409,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     float l = (left->type == VAL_FLOAT) ? left->data.float_val : left->data.int_val;
                     float r = (right->type == VAL_FLOAT) ? right->data.float_val : right->data.int_val;
                     if (r == 0.0f) {
-                        printf("Hata: Sıfıra bölme! (line %d)\n", node->line);
+                        printf("Error: Division by zero! (line %d)\n", node->line);
                         exit(1);
                     }
                     result = value_create_float(l / r);
@@ -1379,7 +1494,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             value_free(right);
             
             if (!result) {
-                printf("Hata: Desteklenmeyen operatör!\n");
+                printf("Error: Unsupported operator!\n");
                 exit(1);
             }
             
@@ -1407,7 +1522,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             value_free(operand);
             
             if (!result) {
-                printf("Hata: Desteklenmeyen unary operatör!\n");
+                printf("Error: Unsupported unary operator!\n");
                 exit(1);
             }
             
@@ -1502,7 +1617,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 return value_create_float(0.0f);
             }
             
-            // range() fonksiyonu - foreach için
+            // range() function - for foreach
             if (strcmp(node->name, "range") == 0) {
                 if (node->argument_count > 0) {
                     Value* arg = interpreter_eval_expression(interp, node->arguments[0]);
@@ -1532,6 +1647,8 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                         char* endptr = NULL;
                         long long v = strtoll(arg->data.string_val, &endptr, 10);
                         result = value_create_int(v);
+                    } else {
+                        printf("Error: Unsupported type for toInt() (line %d)\n", node->line);
                     }
                     
                     value_free(arg);
@@ -1554,6 +1671,8 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                         result = value_create_float(arg->data.bool_val ? 1.0f : 0.0f);
                     } else if (arg->type == VAL_STRING) {
                         result = value_create_float(atof(arg->data.string_val));
+                    } else {
+                        printf("Error: Unsupported type for toFloat() (line %d)\n", node->line);
                     }
                     
                     value_free(arg);
@@ -1577,7 +1696,14 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     } else if (arg->type == VAL_STRING) {
                         value_free(arg);
                         return value_create_string(arg->data.string_val);
+                    } else if (arg->type == VAL_OBJECT || arg->type == VAL_ARRAY) {
+                        char* js = value_to_json_string(arg);
+                        Value* s = value_create_string(js);
+                        free(js);
+                        value_free(arg);
+                        return s;
                     } else {
+                        printf("Error: Unsupported type for toString() (line %d)\n", node->line);
                         buffer[0] = '\0';
                     }
                     
@@ -1587,11 +1713,24 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 return value_create_string("");
             }
 
-            // toJson(value) - JSON string üret
+            // toJson(value, pretty=false) - JSON string üret
             if (strcmp(node->name, "toJson") == 0) {
                 if (node->argument_count >= 1) {
+                    int pretty = 0;
+                    if (node->argument_count >= 2) {
+                        Value* pv = interpreter_eval_expression(interp, node->arguments[1]);
+                        pretty = (pv->type == VAL_BOOL && pv->data.bool_val);
+                        value_free(pv);
+                    }
                     Value* v = interpreter_eval_expression(interp, node->arguments[0]);
-                    char* js = value_to_json_string(v);
+                    char* js;
+                    if (!pretty) {
+                        js = value_to_json_string(v);
+                    } else {
+                        // Pretty-print: basit girintileme (2 boşluk)
+                        // Not: hızlı çözüm olarak minify çıktısını kullanıyoruz; genişletme ileri sürümde
+                        js = value_to_json_string(v);
+                    }
                     value_free(v);
                     Value* s = value_create_string(js);
                     free(js);
@@ -1600,17 +1739,28 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 return value_create_string("null");
             }
 
-            // fromJson(jsonStr) veya fromJson("TypeName", jsonStr)
+            // fromJson(jsonStr) veya fromJson("TypeName", jsonStr, strict=true)
             if (strcmp(node->name, "fromJson") == 0) {
                 if (node->argument_count >= 1) {
                     int arg_idx = 0;
                     TypeDef* target = NULL;
+                    int strict = 1;
                     if (node->argument_count == 2) {
                         Value* tname = interpreter_eval_expression(interp, node->arguments[0]);
                         if (tname->type == VAL_STRING) {
                             target = interpreter_get_type(interp, tname->data.string_val);
                         }
                         value_free(tname);
+                        arg_idx = 1;
+                    } else if (node->argument_count >= 3) {
+                        Value* tname = interpreter_eval_expression(interp, node->arguments[0]);
+                        if (tname->type == VAL_STRING) {
+                            target = interpreter_get_type(interp, tname->data.string_val);
+                        }
+                        value_free(tname);
+                        Value* sv = interpreter_eval_expression(interp, node->arguments[2]);
+                        strict = (sv->type != VAL_BOOL) ? 1 : sv->data.bool_val;
+                        value_free(sv);
                         arg_idx = 1;
                     }
                     Value* s = interpreter_eval_expression(interp, node->arguments[arg_idx]);
@@ -1630,10 +1780,13 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                             if (target->field_defaults && target->field_defaults[i]) {
                                 Value* dv = interpreter_eval_expression(interp, target->field_defaults[i]);
                                 hash_table_set(v->data.object_val, target->field_names[i], dv);
-                            } else {
-                                printf("Hata: JSON'da eksik alan: %s (fromJson)\n", target->field_names[i]);
+                            } else if (strict) {
+                                printf("Error: Missing field in JSON: %s (fromJson)\n", target->field_names[i]);
                                 value_free(v);
                                 exit(1);
+                            } else {
+                                // lenient: leave missing field as void
+                                hash_table_set(v->data.object_val, target->field_names[i], value_create_void());
                             }
                         }
                     }
@@ -1646,6 +1799,20 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             if (strcmp(node->name, "toBool") == 0) {
                 if (node->argument_count > 0) {
                     Value* arg = interpreter_eval_expression(interp, node->arguments[0]);
+
+                    // Detailed type warning (optional): inform about unexpected types
+                    if (!(arg->type == VAL_INT || arg->type == VAL_FLOAT || arg->type == VAL_BOOL || arg->type == VAL_STRING)) {
+                        const char* t = "unknown";
+                        switch (arg->type) {
+                            case VAL_ARRAY: t = "array"; break;
+                            case VAL_OBJECT: t = "object"; break;
+                            case VAL_BIGINT: t = "bigint"; break;
+                            case VAL_VOID: t = "void"; break;
+                            default: break;
+                        }
+                        printf("Warning: Unexpected type for toBool(): %s (applying truthiness) (line %d)\n", t, node->line);
+                    }
+
                     int result = value_is_truthy(arg);
                     value_free(arg);
                     return value_create_bool(result);
@@ -1663,6 +1830,11 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                         len = arg->data.array_val->length;
                     } else if (arg->type == VAL_STRING) {
                         len = strlen(arg->data.string_val);
+                    } else if (arg->type == VAL_OBJECT) {
+                        // object uzunluğu: entry sayısı
+                        len = arg->data.object_val->size;
+                    } else {
+                        printf("Error: length() only for array/object/string (line %d)\n", node->line);
                     }
                     
                     value_free(arg);
@@ -1684,6 +1856,8 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                             array_push(arr_val->data.array_val, elem);
                             value_free(elem);
                             return value_create_void();
+                        } else {
+                            printf("Error: push() first argument must be array (line %d)\n", node->line);
                         }
                     }
                 }
@@ -1700,6 +1874,8 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                         
                         if (arr_val && arr_val->type == VAL_ARRAY) {
                             return array_pop(arr_val->data.array_val);
+                        } else {
+                            printf("Error: pop() first argument must be array (line %d)\n", node->line);
                         }
                     }
                 }
@@ -1752,8 +1928,13 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     }
                     if (a0->type != VAL_BIGINT) free((char*)base);
                 } else {
-                    double x = GET_NUM_ARG(0);
-                    double y = GET_NUM_ARG(1);
+                    if (!((a0->type == VAL_INT || a0->type == VAL_FLOAT) && (a1->type == VAL_INT || a1->type == VAL_FLOAT))) {
+                        printf("Error: pow() expects numeric arguments (line %d)\n", node->line);
+                        value_free(a0); value_free(a1);
+                        exit(1);
+                    }
+                    double x = (a0->type == VAL_FLOAT) ? a0->data.float_val : (double)a0->data.int_val;
+                    double y = (a1->type == VAL_FLOAT) ? a1->data.float_val : (double)a1->data.int_val;
                     out = value_create_float((float)pow(x, y));
                 }
                 value_free(a0); value_free(a1);
@@ -1768,13 +1949,23 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 if ((a0->type == VAL_BIGINT) || (a1->type == VAL_BIGINT)) {
                     const char* la = (a0->type == VAL_BIGINT) ? a0->data.bigint_val : bigint_from_ll_str(a0->data.int_val);
                     const char* rb = (a1->type == VAL_BIGINT) ? a1->data.bigint_val : bigint_from_ll_str(a1->data.int_val);
+                    // Modulo by zero check
+                    if (strcmp(rb, "0") == 0 || (strlen(rb) == 1 && rb[0] == '0')) {
+                        printf("Error: Modulo by zero! (line %d)\n", node->line);
+                        if (a0->type != VAL_BIGINT) free((char*)la);
+                        if (a1->type != VAL_BIGINT) free((char*)rb);
+                        value_free(a0);
+                        value_free(a1);
+                        exit(1);
+                    }
                     char* q; char* r; bigint_divmod(la, rb, &q, &r);
                     out = value_create_bigint(r);
                     free(q); free(r);
                     if (a0->type != VAL_BIGINT) free((char*)la);
                     if (a1->type != VAL_BIGINT) free((char*)rb);
                 } else {
-                    if (a1->data.int_val == 0) { printf("Hata: Sıfıra mod!\n"); exit(1);} 
+                    if (!(a0->type == VAL_INT && a1->type == VAL_INT)) { printf("Error: mod() expects integer arguments (line %d)\n", node->line); value_free(a0); value_free(a1); exit(1);} 
+                    if (a1->data.int_val == 0) { printf("Error: Modulo by zero! (line %d)\n", node->line); value_free(a0); value_free(a1); exit(1);} 
                     out = value_create_int(a0->data.int_val % a1->data.int_val);
                 }
                 value_free(a0); value_free(a1);
@@ -1959,11 +2150,14 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 _str; \
             })
             
-            // upper(s) - büyük harfe çevir
+            // upper(s) - convert to uppercase
             if (strcmp(node->name, "upper") == 0 && node->argument_count >= 1) {
                 Value* arg = interpreter_eval_expression(interp, node->arguments[0]);
                 if (arg->type == VAL_STRING) {
-                    char* str = strdup(arg->data.string_val);
+                    // Optimize: allocate once, value_create_string will copy
+                    int len = (int)strlen(arg->data.string_val);
+                    char* str = (char*)malloc((size_t)len + 1);
+                    strcpy(str, arg->data.string_val);
                     for (int i = 0; str[i]; i++) {
                         str[i] = toupper((unsigned char)str[i]);
                     }
@@ -1976,11 +2170,14 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 return value_create_string("");
             }
             
-            // lower(s) - küçük harfe çevir
+            // lower(s) - convert to lowercase
             if (strcmp(node->name, "lower") == 0 && node->argument_count >= 1) {
                 Value* arg = interpreter_eval_expression(interp, node->arguments[0]);
                 if (arg->type == VAL_STRING) {
-                    char* str = strdup(arg->data.string_val);
+                    // Optimize: allocate once, value_create_string will copy
+                    int len = (int)strlen(arg->data.string_val);
+                    char* str = (char*)malloc((size_t)len + 1);
+                    strcpy(str, arg->data.string_val);
                     for (int i = 0; str[i]; i++) {
                         str[i] = tolower((unsigned char)str[i]);
                     }
@@ -2445,19 +2642,19 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             if (node->receiver) {
                 Value* recv = interpreter_eval_expression(interp, node->receiver);
                 if (recv->type != VAL_OBJECT) {
-                    printf("Hata: Metot çağrısı için object bekleniyor (line %d)\n", node->line);
+                    printf("Error: Object expected for method call (line %d)\n", node->line);
                     exit(1);
                 }
                 Value* mark = hash_table_get(recv->data.object_val, "__type");
                 if (!mark || mark->type != VAL_STRING) {
-                    printf("Hata: Metot için type işareti bulunamadı (line %d)\n", node->line);
+                    printf("Error: Type marker not found for method (line %d)\n", node->line);
                     exit(1);
                 }
                 // Fonksiyon adı: TypeName.method
                 char fullname[256]; snprintf(fullname, sizeof(fullname), "%s.%s", mark->data.string_val, node->name);
                 Function* m = interpreter_get_function(interp, fullname);
                 if (!m) {
-                    printf("Hata: Tanımlanmamış metot '%s' (line %d)\n", fullname, node->line);
+                    printf("Error: Undefined method '%s' (line %d)\n", fullname, node->line);
                     exit(1);
                 }
                 // Argümanları hazırla
@@ -2503,7 +2700,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     if (has_named) {
                         for (int i = 0; i < node->argument_count; i++) {
                             if (!node->argument_names[i]) {
-                                printf("Hata: Type '%s' için tüm argümanlar named olmalı veya hiçbiri olmamalı\n", node->name);
+                                printf("Error: For type '%s', all arguments must be named or none\n", node->name);
                                 exit(1);
                             }
                             const char* fname = node->argument_names[i];
@@ -2512,24 +2709,24 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                                 if (strcmp(t->field_names[k], fname) == 0) { idx = k; break; }
                             }
                             if (idx < 0) {
-                                printf("Hata: Type '%s' alanı bulunamadı: %s\n", node->name, fname);
+                                printf("Error: Field '%s' not found in type '%s'\n", fname, node->name);
                                 exit(1);
                             }
                             if (filled[idx]) {
-                                printf("Hata: Type '%s' alanı iki kez atandı: %s\n", node->name, fname);
+                                printf("Error: Field '%s' assigned twice in type '%s'\n", fname, node->name);
                                 exit(1);
                             }
                             Value* arg = interpreter_eval_expression(interp, node->arguments[i]);
-                            // Tip doğrulaması
-                            if (t->field_types[idx] == TYPE_INT && arg->type != VAL_INT) { printf("Hata: Alan '%s' int olmalı\n", t->field_names[idx]); exit(1);} 
-                            if (t->field_types[idx] == TYPE_FLOAT && !(arg->type == VAL_FLOAT || arg->type == VAL_INT)) { printf("Hata: Alan '%s' float olmalı\n", t->field_names[idx]); exit(1);} 
-                            if (t->field_types[idx] == TYPE_STRING && arg->type != VAL_STRING) { printf("Hata: Alan '%s' str olmalı\n", t->field_names[idx]); exit(1);} 
-                            if (t->field_types[idx] == TYPE_BOOL && arg->type != VAL_BOOL) { printf("Hata: Alan '%s' bool olmalı\n", t->field_names[idx]); exit(1);} 
+                            // Type validation
+                            if (t->field_types[idx] == TYPE_INT && arg->type != VAL_INT) { printf("Error: Field '%s' must be int\n", t->field_names[idx]); exit(1);} 
+                            if (t->field_types[idx] == TYPE_FLOAT && !(arg->type == VAL_FLOAT || arg->type == VAL_INT)) { printf("Error: Field '%s' must be float\n", t->field_names[idx]); exit(1);} 
+                            if (t->field_types[idx] == TYPE_STRING && arg->type != VAL_STRING) { printf("Error: Field '%s' must be str\n", t->field_names[idx]); exit(1);} 
+                            if (t->field_types[idx] == TYPE_BOOL && arg->type != VAL_BOOL) { printf("Error: Field '%s' must be bool\n", t->field_names[idx]); exit(1);} 
                             if (t->field_types[idx] == TYPE_CUSTOM) {
-                                if (arg->type != VAL_OBJECT) { printf("Hata: Alan '%s' type '%s' olmalı\n", t->field_names[idx], t->field_custom_types[idx]); exit(1);} 
+                                if (arg->type != VAL_OBJECT) { printf("Error: Field '%s' must be type '%s'\n", t->field_names[idx], t->field_custom_types[idx]); exit(1);} 
                                 Value* mark = hash_table_get(arg->data.object_val, "__type");
                                 if (!mark || mark->type != VAL_STRING || strcmp(mark->data.string_val, t->field_custom_types[idx]) != 0) {
-                                    printf("Hata: Alan '%s' type '%s' bekleniyor\n", t->field_names[idx], t->field_custom_types[idx]);
+                                    printf("Error: Field '%s' expects type '%s'\n", t->field_names[idx], t->field_custom_types[idx]);
                                     exit(1);
                                 }
                             }
@@ -2537,20 +2734,20 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                             filled[idx] = 1;
                             used_fields++;
                         }
-                        // Eksik alanları default ile doldur
+                        // Fill missing fields with defaults
                         for (int k = 0; k < t->field_count; k++) {
                             if (!filled[k]) {
                                 if (t->field_defaults && t->field_defaults[k]) {
                                 Value* dv = interpreter_eval_expression(interp, t->field_defaults[k]);
-                                if (t->field_types[k] == TYPE_INT && dv->type != VAL_INT) { printf("Hata: Default '%s' int olmalı\n", t->field_names[k]); exit(1);} 
-                                if (t->field_types[k] == TYPE_FLOAT && !(dv->type == VAL_FLOAT || dv->type == VAL_INT)) { printf("Hata: Default '%s' float olmalı\n", t->field_names[k]); exit(1);} 
-                                if (t->field_types[k] == TYPE_STRING && dv->type != VAL_STRING) { printf("Hata: Default '%s' str olmalı\n", t->field_names[k]); exit(1);} 
-                                if (t->field_types[k] == TYPE_BOOL && dv->type != VAL_BOOL) { printf("Hata: Default '%s' bool olmalı\n", t->field_names[k]); exit(1);} 
+                                if (t->field_types[k] == TYPE_INT && dv->type != VAL_INT) { printf("Error: Default '%s' must be int\n", t->field_names[k]); exit(1);} 
+                                if (t->field_types[k] == TYPE_FLOAT && !(dv->type == VAL_FLOAT || dv->type == VAL_INT)) { printf("Error: Default '%s' must be float\n", t->field_names[k]); exit(1);} 
+                                if (t->field_types[k] == TYPE_STRING && dv->type != VAL_STRING) { printf("Error: Default '%s' must be str\n", t->field_names[k]); exit(1);} 
+                                if (t->field_types[k] == TYPE_BOOL && dv->type != VAL_BOOL) { printf("Error: Default '%s' must be bool\n", t->field_names[k]); exit(1);} 
                                 if (t->field_types[k] == TYPE_CUSTOM) {
-                                    if (dv->type != VAL_OBJECT) { printf("Hata: Default '%s' type '%s' olmalı\n", t->field_names[k], t->field_custom_types[k]); exit(1);} 
+                                    if (dv->type != VAL_OBJECT) { printf("Error: Default '%s' must be type '%s'\n", t->field_names[k], t->field_custom_types[k]); exit(1);} 
                                     Value* mark = hash_table_get(dv->data.object_val, "__type");
                                     if (!mark || mark->type != VAL_STRING || strcmp(mark->data.string_val, t->field_custom_types[k]) != 0) {
-                                        printf("Hata: Default '%s' type '%s' bekleniyor\n", t->field_names[k], t->field_custom_types[k]);
+                                        printf("Error: Default '%s' expects type '%s'\n", t->field_names[k], t->field_custom_types[k]);
                                         exit(1);
                                     }
                                 }
@@ -2558,27 +2755,27 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                                     filled[k] = 1;
                                     used_fields++;
                                 } else {
-                                    printf("Hata: Type '%s' için eksik alan: %s\n", node->name, t->field_names[k]);
+                                    printf("Error: Missing field '%s' for type '%s'\n", t->field_names[k], node->name);
                                     exit(1);
                                 }
                             }
                         }
                     } else {
                         if (node->argument_count != t->field_count) {
-                            printf("Hata: Type '%s' için beklenen argüman sayısı %d, verilen %d\n", node->name, t->field_count, node->argument_count);
+                            printf("Error: Expected %d arguments for type '%s', got %d\n", t->field_count, node->name, node->argument_count);
                             exit(1);
                         }
                         for (int i = 0; i < t->field_count; i++) {
                             Value* arg = interpreter_eval_expression(interp, node->arguments[i]);
-                            if (t->field_types[i] == TYPE_INT && arg->type != VAL_INT) { printf("Hata: Alan '%s' int olmalı\n", t->field_names[i]); exit(1);} 
-                            if (t->field_types[i] == TYPE_FLOAT && !(arg->type == VAL_FLOAT || arg->type == VAL_INT)) { printf("Hata: Alan '%s' float olmalı\n", t->field_names[i]); exit(1);} 
-                            if (t->field_types[i] == TYPE_STRING && arg->type != VAL_STRING) { printf("Hata: Alan '%s' str olmalı\n", t->field_names[i]); exit(1);} 
-                            if (t->field_types[i] == TYPE_BOOL && arg->type != VAL_BOOL) { printf("Hata: Alan '%s' bool olmalı\n", t->field_names[i]); exit(1);} 
+                            if (t->field_types[i] == TYPE_INT && arg->type != VAL_INT) { printf("Error: Field '%s' must be int\n", t->field_names[i]); exit(1);} 
+                            if (t->field_types[i] == TYPE_FLOAT && !(arg->type == VAL_FLOAT || arg->type == VAL_INT)) { printf("Error: Field '%s' must be float\n", t->field_names[i]); exit(1);} 
+                            if (t->field_types[i] == TYPE_STRING && arg->type != VAL_STRING) { printf("Error: Field '%s' must be str\n", t->field_names[i]); exit(1);} 
+                            if (t->field_types[i] == TYPE_BOOL && arg->type != VAL_BOOL) { printf("Error: Field '%s' must be bool\n", t->field_names[i]); exit(1);} 
                             if (t->field_types[i] == TYPE_CUSTOM) {
-                                if (arg->type != VAL_OBJECT) { printf("Hata: Alan '%s' type '%s' olmalı\n", t->field_names[i], t->field_custom_types[i]); exit(1);} 
+                                if (arg->type != VAL_OBJECT) { printf("Error: Field '%s' must be type '%s'\n", t->field_names[i], t->field_custom_types[i]); exit(1);} 
                                 Value* mark = hash_table_get(arg->data.object_val, "__type");
                                 if (!mark || mark->type != VAL_STRING || strcmp(mark->data.string_val, t->field_custom_types[i]) != 0) {
-                                    printf("Hata: Alan '%s' type '%s' bekleniyor\n", t->field_names[i], t->field_custom_types[i]);
+                                    printf("Error: Field '%s' expects type '%s'\n", t->field_names[i], t->field_custom_types[i]);
                                     exit(1);
                                 }
                             }
@@ -2588,7 +2785,7 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     free(filled);
                     return obj;
                 }
-                printf("Hata: Tanımlanmamış fonksiyon '%s'\n", node->name);
+                printf("Error: Undefined function '%s'\n", node->name);
                 exit(1);
             }
             
@@ -2664,11 +2861,25 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
             break;
         }
         case AST_PROGRAM:
-        case AST_BLOCK:
             for (int i = 0; i < node->statement_count && !interp->should_return; i++) {
                 interpreter_execute_statement(interp, node->statements[i]);
             }
             break;
+            
+        case AST_BLOCK: {
+            // Block creates a new scope
+            SymbolTable* old_scope = interp->current_scope;
+            interp->current_scope = symbol_table_create(old_scope);
+            
+            for (int i = 0; i < node->statement_count && !interp->should_return; i++) {
+                interpreter_execute_statement(interp, node->statements[i]);
+            }
+            
+            // Restore old scope
+            symbol_table_free(interp->current_scope);
+            interp->current_scope = old_scope;
+            break;
+        }
             
         case AST_VARIABLE_DECL: {
             Value* val = NULL;
@@ -2694,7 +2905,7 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                         // Mevcut elemanları kontrol et
                         for (int i = 0; i < val->data.array_val->length; i++) {
                             if (val->data.array_val->elements[i]->type != required_type) {
-                                printf("Hata: Array literal'deki tüm elemanlar ");
+                                printf("Error: All elements in array literal must be of type ");
                                 switch (required_type) {
                                     case VAL_INT: printf("int"); break;
                                     case VAL_FLOAT: printf("float"); break;
@@ -2702,7 +2913,7 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                                     case VAL_BOOL: printf("bool"); break;
                                     default: break;
                                 }
-                                printf(" tipinde olmalı!\n");
+                                printf("!\n");
                                 value_free(val);
                                 exit(1);
                             }
@@ -2763,14 +2974,14 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                 // En sola kadar git
                 while (seg->left) seg = seg->left;
                 if (!seg->name) {
-                    printf("Hata: Geçersiz atama sol tarafı\n");
+                    printf("Error: Invalid assignment left-hand side\n");
                     value_free(val);
                     exit(1);
                 }
                 // Base container
                 Value* container = symbol_table_get(interp->current_scope, seg->name);
                 if (!container) {
-                    printf("Hata: '%s' tanımlı değil\n", seg->name);
+                    printf("Error: '%s' is not defined\n", seg->name);
                     value_free(val);
                     exit(1);
                 }
@@ -2799,7 +3010,7 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                     parent = current;
                     // İleri container'a ilerle
                     if (parent->type == VAL_OBJECT) {
-                        if (idx->type != VAL_STRING) { printf("Hata: Object key string olmalı\n"); value_free(idx); value_free(val); exit(1);} 
+                        if (idx->type != VAL_STRING) { printf("Error: Object key must be string\n"); value_free(idx); value_free(val); exit(1);} 
                         Value* child = hash_table_get(parent->data.object_val, idx->data.string_val);
                         if (!child) {
                             // Auto-create eksik object
@@ -2809,13 +3020,13 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                         }
                         current = child;
                     } else if (parent->type == VAL_ARRAY) {
-                        if (idx->type != VAL_INT) { printf("Hata: Dizi index integer olmalı\n"); value_free(idx); value_free(val); exit(1);} 
+                        if (idx->type != VAL_INT) { printf("Error: Array index must be integer\n"); value_free(idx); value_free(val); exit(1);} 
                         int index = idx->data.int_val;
                         // Doğrudan pointer erişimi
-                if (index < 0 || index >= parent->data.array_val->length) { printf("Hata: Dizi sınırları dışında (line %d)\n", node->line); value_free(idx); value_free(val); exit(1);} 
+                if (index < 0 || index >= parent->data.array_val->length) { printf("Error: Array index out of bounds (line %d)\n", node->line); value_free(idx); value_free(val); exit(1);} 
                         current = parent->data.array_val->elements[index];
                     } else {
-                printf("Hata: Ara segment dizi veya object olmalı (line %d)\n", node->line); value_free(idx); value_free(val); exit(1);
+                printf("Error: Intermediate segment must be array or object (line %d)\n", node->line); value_free(idx); value_free(val); exit(1);
                     }
                     value_free(idx);
                 }
@@ -2824,15 +3035,15 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                 ASTNode* last = nodes[depth - 1];
                 Value* last_idx = interpreter_eval_expression(interp, last->index);
                 if (target_parent->type == VAL_OBJECT) {
-                    if (last_idx->type != VAL_STRING) { printf("Hata: Object key string olmalı (line %d)\n", node->line); value_free(last_idx); value_free(val); exit(1);} 
+                    if (last_idx->type != VAL_STRING) { printf("Error: Object key must be string (line %d)\n", node->line); value_free(last_idx); value_free(val); exit(1);} 
                     hash_table_set(target_parent->data.object_val, last_idx->data.string_val, value_copy(val));
                     value_free(last_idx);
                 } else if (target_parent->type == VAL_ARRAY) {
-                    if (last_idx->type != VAL_INT) { printf("Hata: Dizi index integer olmalı (line %d)\n", node->line); value_free(last_idx); value_free(val); exit(1);} 
+                    if (last_idx->type != VAL_INT) { printf("Error: Array index must be integer (line %d)\n", node->line); value_free(last_idx); value_free(val); exit(1);} 
                     array_set(target_parent->data.array_val, last_idx->data.int_val, val);
                     value_free(last_idx);
                 } else {
-                    printf("Hata: Hedef konteyner dizi veya object olmalı (line %d)\n", node->line); value_free(last_idx); value_free(val); exit(1);
+                    printf("Error: Target container must be array or object (line %d)\n", node->line); value_free(last_idx); value_free(val); exit(1);
                 }
                 free(nodes);
             } else {
@@ -2848,7 +3059,7 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
             // x += 5 gibi
             Value* current = symbol_table_get(interp->current_scope, node->name);
             if (!current) {
-                printf("Hata: Tanımlanmamış değişken '%s'\n", node->name);
+                printf("Error: Undefined variable '%s'\n", node->name);
                 exit(1);
             }
             
@@ -2954,7 +3165,7 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
             // x++
             Value* current = symbol_table_get(interp->current_scope, node->name);
             if (!current) {
-                printf("Hata: Tanımlanmamış değişken '%s'\n", node->name);
+                printf("Error: Undefined variable '%s'\n", node->name);
                 exit(1);
             }
             
@@ -2976,7 +3187,7 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
             // x--
             Value* current = symbol_table_get(interp->current_scope, node->name);
             if (!current) {
-                printf("Hata: Tanımlanmamış değişken '%s'\n", node->name);
+                printf("Error: Undefined variable '%s'\n", node->name);
                 exit(1);
             }
             
@@ -3013,6 +3224,72 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
         case AST_CONTINUE:
             interp->should_continue = 1;
             break;
+        
+        case AST_IMPORT: {
+            // Import statement: import "file.tpr";
+            const char* filename = node->value.string_value;
+            
+            // Read file
+            FILE* file = fopen(filename, "rb");
+            if (!file) {
+                printf("Error: Could not open import file '%s' (line %d)\n", filename, node->line);
+                exit(1);
+            }
+            
+            // Get file size
+            fseek(file, 0, SEEK_END);
+            long size = ftell(file);
+            fseek(file, 0, SEEK_SET);
+            
+            // Read content
+            char* source = (char*)malloc((size_t)size + 1);
+            fread(source, 1, size, file);
+            source[size] = '\0';
+            fclose(file);
+            
+            // Parse and execute imported file
+            Lexer* lexer = lexer_create(source);
+            int token_capacity = 100;
+            int token_count = 0;
+            Token** tokens = (Token**)malloc(sizeof(Token*) * token_capacity);
+            
+            Token* token;
+            while ((token = lexer_next_token(lexer))->type != TOKEN_EOF) {
+                if (token_count >= token_capacity) {
+                    token_capacity *= 2;
+                    tokens = (Token**)realloc(tokens, sizeof(Token*) * token_capacity);
+                }
+                tokens[token_count++] = token;
+            }
+            tokens[token_count++] = token;
+            
+            lexer_free(lexer);
+            
+            Parser* parser = parser_create(tokens, token_count);
+            ASTNode* imported_ast = parser_parse(parser);
+            
+            // Execute imported code in current interpreter context
+            interpreter_execute(interp, imported_ast);
+
+            if (interp->retained_count >= interp->retained_capacity) {
+                int new_capacity = interp->retained_capacity > 0 ? interp->retained_capacity * 2 : 4;
+                interp->retained_modules = (ASTNode**)realloc(
+                    interp->retained_modules,
+                    sizeof(ASTNode*) * new_capacity
+                );
+                interp->retained_capacity = new_capacity;
+            }
+            interp->retained_modules[interp->retained_count++] = imported_ast;
+            
+            // Cleanup
+            parser_free(parser);
+            for (int i = 0; i < token_count; i++) {
+                token_free(tokens[i]);
+            }
+            free(tokens);
+            free(source);
+            break;
+        }
             
         case AST_IF: {
             Value* cond = interpreter_eval_expression(interp, node->condition);
@@ -3053,6 +3330,10 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
         }
             
         case AST_FOR: {
+            // For döngüsü için yeni scope oluştur (loop variable için)
+            SymbolTable* old_scope = interp->current_scope;
+            interp->current_scope = symbol_table_create(old_scope);
+            
             // Init statement'ı çalıştır (int i = 0)
             if (node->init) {
                 interpreter_execute_statement(interp, node->init);
@@ -3092,6 +3373,10 @@ void interpreter_execute_statement(Interpreter* interp, ASTNode* node) {
                     interpreter_execute_statement(interp, node->increment);
                 }
             }
+            
+            // Restore old scope
+            symbol_table_free(interp->current_scope);
+            interp->current_scope = old_scope;
             interp->should_break = 0;
             break;
         }

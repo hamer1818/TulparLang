@@ -1,0 +1,31 @@
+// ============================================
+// toBool() Ayrıntılı Tür Uyarısı Testleri
+// ============================================
+
+print("=== toBool Uyarı Testleri ===");
+
+// Beklenen (uyarı yok): int/float/bool/str
+print("-- Beklenen tipler (uyarı yok) --");
+print("toBool(0)        =", toBool(0));
+print("toBool(1)        =", toBool(1));
+print("toBool(0.0)      =", toBool(0.0));
+print("toBool(3.14)     =", toBool(3.14));
+print("toBool(false)    =", toBool(false));
+print("toBool(true)     =", toBool(true));
+print("toBool(\"\")      =", toBool(""));
+print("toBool(\"abc\")   =", toBool("abc"));
+print("");
+
+// Beklenmeyen tipler (uyarı beklenir): array, object, bigint
+print("-- Beklenmeyen tipler (uyarı beklenir) --");
+array arr = [1, 2, 3];
+print("toBool([1,2,3])  =", toBool(arr)); // array → uyarı
+
+json obj = {"a": 1, "b": 2};
+print("toBool({a:1,b:2})=", toBool(obj)); // object → uyarı
+
+// BigInt: pow(int,int) → BigInt
+var big = pow(1234, 8);
+print("toBool(BigInt)   =", toBool(big)); // bigint → uyarı
+
+print("✅ toBool uyarı testleri tamamlandı");

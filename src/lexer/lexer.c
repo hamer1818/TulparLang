@@ -204,6 +204,7 @@ static Token* lexer_read_identifier(Lexer* lexer) {
     else if (strcmp(buffer, "func") == 0) type = TOKEN_FUNC;
     else if (strcmp(buffer, "type") == 0) type = TOKEN_TYPE_KW;
     else if (strcmp(buffer, "return") == 0) type = TOKEN_RETURN;
+    else if (strcmp(buffer, "import") == 0) type = TOKEN_IMPORT;
     else if (strcmp(buffer, "if") == 0) type = TOKEN_IF;
     else if (strcmp(buffer, "else") == 0) type = TOKEN_ELSE;
     else if (strcmp(buffer, "while") == 0) type = TOKEN_WHILE;
@@ -218,7 +219,7 @@ static Token* lexer_read_identifier(Lexer* lexer) {
 }
 
 // Lexer oluşturma
-Lexer* lexer_create(char* source) {
+Lexer* lexer_create(const char* source) {
     Lexer* lexer = (Lexer*)malloc(sizeof(Lexer));
     lexer->source = strdup(source);
     lexer->position = 0;

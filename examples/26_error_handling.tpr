@@ -1,0 +1,21 @@
+// ============================================
+// HATA DENEYİMİ TESTLERİ (Line/Column Bilgisi)
+// ============================================
+
+print("=== Hata Deneyimi Testleri ===");
+
+// BigInt sıfıra bölme hatası (line bilgisi ile)
+print("-- BigInt Sıfıra Bölme Testi --");
+arrayJson big = pow(1234, 10);
+// Not: Aşağıdaki satır hata verecek (line bilgisi ile)
+arrayJson result = big / 0;
+print("Bu satır çalışmaz (yukarıda hata var)");
+
+// BigInt sıfıra mod hatası (line bilgisi ile)
+print("-- BigInt Sıfıra Mod Testi --");
+// Not: Aşağıdaki satır hata verecek (line bilgisi ile)
+arrayJson modResult = mod(big, 0);
+print("Bu satır çalışmaz (yukarıda hata var)");
+
+print("✅ Hata deneyimi testleri tamamlandı (hata mesajları line bilgisi içerir)");
+

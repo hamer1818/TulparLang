@@ -26,6 +26,7 @@ typedef enum {
     TOKEN_IN,            // "in"
     TOKEN_BREAK,         // "break"
     TOKEN_CONTINUE,      // "continue"
+    TOKEN_IMPORT,        // "import"
     TOKEN_TRUE,          // "true"
     TOKEN_FALSE,         // "false"
     
@@ -69,8 +70,8 @@ typedef enum {
     TOKEN_COLON,         // : (for JSON objects)
     TOKEN_DOT,           // . (member access)
     
-    TOKEN_EOF,           // Dosya sonu
-    TOKEN_ERROR          // Hata
+    TOKEN_EOF,           // End of file
+    TOKEN_ERROR          // Error
 } TulparTokenType;
 
 // Token yapısı
@@ -91,7 +92,7 @@ typedef struct {
 } Lexer;
 
 // Fonksiyon prototipleri
-Lexer* lexer_create(char* source);
+Lexer* lexer_create(const char* source);
 void lexer_free(Lexer* lexer);
 Token* lexer_next_token(Lexer* lexer);
 void token_free(Token* token);

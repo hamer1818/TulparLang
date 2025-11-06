@@ -15,7 +15,7 @@
 char* read_file(const char* filename) {
     FILE* file = fopen(filename, "rb");
     if (!file) {
-        printf("Hata: '%s' dosyasi acilamadi!\n", filename);
+        printf("Error: Could not open file '%s'!\n", filename);
         return NULL;
     }
     
@@ -33,32 +33,143 @@ char* read_file(const char* filename) {
     return buffer;
 }
 
+// REPL mode
+static void run_repl() {
+    printf("TulparLang REPL (Interactive Mode)\n");
+    printf("Type 'exit' or 'quit' to exit, 'help' for help\n");
+    printf("========================================\n\n");
+    
+    Interpreter* interp = interpreter_create();
+    char line[4096];
+    
+    while (1) {
+        printf(">>> ");
+        fflush(stdout);
+        
+        if (!fgets(line, sizeof(line), stdin)) {
+            if (feof(stdin)) {
+                printf("\n");
+                break;
+            }
+            continue;
+        }
+        
+        // Remove newline
+        size_t len = strlen(line);
+        if (len > 0 && line[len-1] == '\n') {
+            line[len-1] = '\0';
+            len--;
+        }
+        
+        // Skip empty lines
+        if (len == 0) continue;
+        
+        // Handle commands
+        if (strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0) {
+            break;
+        }
+        if (strcmp(line, "help") == 0) {
+            printf("Commands:\n");
+            printf("  exit, quit - Exit REPL\n");
+            printf("  help       - Show this help\n");
+            printf("  clear      - Clear screen\n");
+            continue;
+        }
+        if (strcmp(line, "clear") == 0) {
+            #ifdef _WIN32
+            system("cls");
+            #else
+            system("clear");
+            #endif
+            continue;
+        }
+        
+        // Execute code
+        Lexer* lexer = lexer_create(line);
+        int token_capacity = 100;
+        int token_count = 0;
+        Token** tokens = (Token**)malloc(sizeof(Token*) * token_capacity);
+        
+        Token* token;
+        while ((token = lexer_next_token(lexer))->type != TOKEN_EOF) {
+            if (token_count >= token_capacity) {
+                token_capacity *= 2;
+                tokens = (Token**)realloc(tokens, sizeof(Token*) * token_capacity);
+            }
+            tokens[token_count++] = token;
+        }
+        tokens[token_count++] = token;
+        
+        lexer_free(lexer);
+        
+        Parser* parser = parser_create(tokens, token_count);
+        ASTNode* ast = parser_parse(parser);
+        
+        if (ast && ast->type == AST_PROGRAM && ast->statement_count > 0) {
+            ASTNode* stmt = ast->statements[0];
+            // Check if it's a function call or expression that can be evaluated
+            if (stmt->type == AST_FUNCTION_CALL) {
+                // Function call - evaluate and print result if not void
+                Value* result = interpreter_eval(interp, stmt);
+                if (result && result->type != VAL_VOID) {
+                    value_print(result);
+                    printf("\n");
+                }
+                value_free(result);
+            } else if (stmt->type == AST_IDENTIFIER || stmt->type == AST_BINARY_OP || 
+                       stmt->type == AST_UNARY_OP || stmt->type == AST_ARRAY_ACCESS) {
+                // Expression - evaluate and print result
+                Value* result = interpreter_eval(interp, stmt);
+                if (result && result->type != VAL_VOID) {
+                    value_print(result);
+                    printf("\n");
+                }
+                value_free(result);
+            } else {
+                // It's a statement, execute it
+                interpreter_execute_statement(interp, stmt);
+            }
+        }
+        
+        ast_node_free(ast);
+        parser_free(parser);
+        
+        for (int i = 0; i < token_count; i++) {
+            token_free(tokens[i]);
+        }
+        free(tokens);
+    }
+    
+    interpreter_free(interp);
+    printf("Goodbye!\n");
+}
+
 int main(int argc, char** argv) {
-    // Windows'ta UTF-8 desteği
+    // Windows UTF-8 support
     #ifdef _WIN32
-    // Console code page'i UTF-8'e ayarla
     SetConsoleOutputCP(65001);  // CP_UTF8
     SetConsoleCP(65001);
-    
-    // stdout ve stderr'i binary modda UTF-8 kullanacak şekilde ayarla
-    // _O_U8TEXT yerine _O_BINARY kullanarak printf uyumluluğunu koruyoruz
     _setmode(_fileno(stdout), _O_BINARY);
     _setmode(_fileno(stderr), _O_BINARY);
     _setmode(_fileno(stdin), _O_BINARY);
-    
-    // Console buffer'ı UTF-8 için etkinleştir
     setvbuf(stdout, NULL, _IOFBF, 1000);
     #endif
     
-    // Locale ayarla (UTF-8 desteği için)
+    // Locale setup
     setlocale(LC_ALL, ".UTF8");
+    
+    // Check for REPL mode
+    if (argc > 1 && (strcmp(argv[1], "--repl") == 0 || strcmp(argv[1], "-i") == 0)) {
+        run_repl();
+        return 0;
+    }
     
     char* source = NULL;
     int from_file = 0;
     
-    // Komut satırı argümanlarını kontrol et
+    // Command line arguments
     if (argc > 1) {
-        // Dosyadan oku
+        // Read from file
         source = read_file(argv[1]);
         if (!source) {
             return 1;

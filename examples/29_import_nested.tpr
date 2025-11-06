@@ -1,0 +1,24 @@
+// ============================================
+// İÇ İÇE IMPORT TESTİ
+// ============================================
+
+// utils.tpr'ı import et (bu da başka bir dosyayı import edebilir)
+import "examples/utils.tpr";
+
+// Import edilen fonksiyonları kullan
+int a = topla(1, 2);
+int b = carp(3, 4);
+int c = us_al(2, 8);
+
+print("İç içe import testi:");
+print("topla(1, 2) =", a);
+print("carp(3, 4) =", b);
+print("us_al(2, 8) =", c);
+
+// Import edilen tipi kullan
+Point p1 = Point(x: 1, y: 2);
+Point p2 = Point(x: 3, y: 4);
+
+print("Point 1:", p1.x, p1.y);
+print("Point 2:", p2.x, p2.y);
+

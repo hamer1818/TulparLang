@@ -4,7 +4,7 @@
 #include "parser.h"
 #include "../lexer/lexer.h"
 
-// Yardımcı fonksiyonlar
+// Helper functions
 static void parser_advance(Parser* parser) {
     if (parser->position < parser->token_count - 1) {
         parser->position++;
@@ -29,15 +29,15 @@ static int parser_expect(Parser* parser, TulparTokenType type) {
     return 0;
 }
 
-// AST düğümü oluşturma
+// Create AST node
 ASTNode* ast_node_create(ASTNodeType type) {
     ASTNode* node = (ASTNode*)calloc(1, sizeof(ASTNode));
     node->type = type;
-    // Varsayılan olarak mevcut token konumunu atamak için üst seviye çağıranlar set edecektir.
+    // Top-level callers will set line/column from current token by default.
     return node;
 }
 
-// AST düğümünü bellekten silme
+// Free AST node from memory
 void ast_node_free(ASTNode* node) {
     if (!node) return;
     
@@ -542,10 +542,14 @@ static ASTNode* parse_factor(Parser* parser) {
     while (parser->current_token->type == TOKEN_MULTIPLY || 
            parser->current_token->type == TOKEN_DIVIDE) {
         TulparTokenType op = parser->current_token->type;
+        int op_line = parser->current_token->line;
+        int op_column = parser->current_token->column;
         parser_advance(parser);
         
         ASTNode* node = ast_node_create(AST_BINARY_OP);
         node->op = op;
+        node->line = op_line;
+        node->column = op_column;
         node->left = left;
         node->right = parse_unary(parser);
         left = node;
@@ -561,10 +565,14 @@ static ASTNode* parse_term(Parser* parser) {
     while (parser->current_token->type == TOKEN_PLUS || 
            parser->current_token->type == TOKEN_MINUS) {
         TulparTokenType op = parser->current_token->type;
+        int op_line = parser->current_token->line;
+        int op_column = parser->current_token->column;
         parser_advance(parser);
         
         ASTNode* node = ast_node_create(AST_BINARY_OP);
         node->op = op;
+        node->line = op_line;
+        node->column = op_column;
         node->left = left;
         node->right = parse_factor(parser);
         left = node;
@@ -584,10 +592,14 @@ static ASTNode* parse_comparison(Parser* parser) {
            parser->current_token->type == TOKEN_LESS_EQUAL ||
            parser->current_token->type == TOKEN_GREATER_EQUAL) {
         TulparTokenType op = parser->current_token->type;
+        int op_line = parser->current_token->line;
+        int op_column = parser->current_token->column;
         parser_advance(parser);
         
         ASTNode* node = ast_node_create(AST_BINARY_OP);
         node->op = op;
+        node->line = op_line;
+        node->column = op_column;
         node->left = left;
         node->right = parse_term(parser);
         left = node;
@@ -601,10 +613,14 @@ static ASTNode* parse_logical_and(Parser* parser) {
     ASTNode* left = parse_comparison(parser);
     
     while (parser->current_token->type == TOKEN_AND) {
+        int op_line = parser->current_token->line;
+        int op_column = parser->current_token->column;
         parser_advance(parser);
         
         ASTNode* node = ast_node_create(AST_BINARY_OP);
         node->op = TOKEN_AND;
+        node->line = op_line;
+        node->column = op_column;
         node->left = left;
         node->right = parse_comparison(parser);
         left = node;
@@ -618,10 +634,14 @@ static ASTNode* parse_logical_or(Parser* parser) {
     ASTNode* left = parse_logical_and(parser);
     
     while (parser->current_token->type == TOKEN_OR) {
+        int op_line = parser->current_token->line;
+        int op_column = parser->current_token->column;
         parser_advance(parser);
         
         ASTNode* node = ast_node_create(AST_BINARY_OP);
         node->op = TOKEN_OR;
+        node->line = op_line;
+        node->column = op_column;
         node->left = left;
         node->right = parse_logical_and(parser);
         left = node;
@@ -1090,6 +1110,27 @@ static ASTNode* parse_statement(Parser* parser) {
         return parse_continue(parser);
     }
     
+    // Import statement
+    if (token->type == TOKEN_IMPORT) {
+        ASTNode* node = ast_node_create(AST_IMPORT);
+        node->line = token->line;
+        node->column = token->column;
+        parser_advance(parser); // 'import' atla
+        
+        // String literal bekleniyor
+        if (parser->current_token->type != TOKEN_STRING_LITERAL) {
+            printf("Parser Error: Expected string literal after 'import' at line %d\n", 
+                   parser->current_token->line);
+            ast_node_free(node);
+            return NULL;
+        }
+        
+        node->value.string_value = strdup(parser->current_token->value);
+        parser_advance(parser);
+        parser_expect(parser, TOKEN_SEMICOLON);
+        return node;
+    }
+    
     // If statement
     if (token->type == TOKEN_IF) {
         return parse_if(parser);
@@ -1298,7 +1339,7 @@ ASTNode* parser_parse(Parser* parser) {
     return program;
 }
 
-// AST yazdırma (debug için)
+// Print AST (for debug)
 void ast_print(ASTNode* node, int indent) {
     if (!node) return;
     

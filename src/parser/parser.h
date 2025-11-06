@@ -33,6 +33,7 @@ typedef enum {
     AST_FOR_IN,           // for (x in range(10)) { ... }
     AST_BREAK,            // break;
     AST_CONTINUE,         // continue;
+    AST_IMPORT,           // import "file.tpr";
     AST_BLOCK,            // { ... }
     AST_PROGRAM           // Tüm program
 } ASTNodeType;
