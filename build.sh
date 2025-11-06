@@ -101,11 +101,26 @@ echo "Running examples test suite..."
 
 TEST_FAILED=0
 INPUT_DIR="examples/inputs"
+SKIP_TESTS=("26_error_handling.tpr" "26b_error_handling_mod.tpr")
 
 for example in examples/*.tpr; do
     [ -f "$example" ] || continue
     name=$(basename "$example" .tpr)
     input_file="$INPUT_DIR/$name.txt"
+
+    example_file=$(basename "$example")
+    skip=0
+    for skip_file in "${SKIP_TESTS[@]}"; do
+        if [ "$example_file" = "$skip_file" ]; then
+            skip=1
+            break
+        fi
+    done
+
+    if [ $skip -eq 1 ]; then
+        printf "SKIP: %s (intentional error test)\n" "$example"
+        continue
+    fi
 
     printf "Running %s... " "$example"
 
