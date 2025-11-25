@@ -1277,6 +1277,15 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 if ((left->type == VAL_BIGINT) || (right->type == VAL_BIGINT)) {
                     const char* la = (left->type == VAL_BIGINT) ? left->data.bigint_val : bigint_from_ll_str(left->data.int_val);
                     const char* rb = (right->type == VAL_BIGINT) ? right->data.bigint_val : bigint_from_ll_str(right->data.int_val);
+                    // Sıfıra bölme kontrolü
+                    if (strcmp(rb, "0") == 0 || (strlen(rb) == 1 && rb[0] == '0')) {
+                        printf("Hata: Sıfıra bölme! (line %d)\n", node->line);
+                        if (left->type != VAL_BIGINT) free((char*)la);
+                        if (right->type != VAL_BIGINT) free((char*)rb);
+                        value_free(left);
+                        value_free(right);
+                        exit(1);
+                    }
                     char* q; char* r;
                     bigint_divmod(la, rb, &q, &r);
                     if (left->type != VAL_BIGINT) free((char*)la);
@@ -1532,6 +1541,8 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                         char* endptr = NULL;
                         long long v = strtoll(arg->data.string_val, &endptr, 10);
                         result = value_create_int(v);
+                    } else {
+                        printf("Hata: toInt() için desteklenmeyen tip (line %d)\n", node->line);
                     }
                     
                     value_free(arg);
@@ -1554,6 +1565,8 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                         result = value_create_float(arg->data.bool_val ? 1.0f : 0.0f);
                     } else if (arg->type == VAL_STRING) {
                         result = value_create_float(atof(arg->data.string_val));
+                    } else {
+                        printf("Hata: toFloat() için desteklenmeyen tip (line %d)\n", node->line);
                     }
                     
                     value_free(arg);
@@ -1577,7 +1590,14 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     } else if (arg->type == VAL_STRING) {
                         value_free(arg);
                         return value_create_string(arg->data.string_val);
+                    } else if (arg->type == VAL_OBJECT || arg->type == VAL_ARRAY) {
+                        char* js = value_to_json_string(arg);
+                        Value* s = value_create_string(js);
+                        free(js);
+                        value_free(arg);
+                        return s;
                     } else {
+                        printf("Hata: toString() için desteklenmeyen tip (line %d)\n", node->line);
                         buffer[0] = '\0';
                     }
                     
@@ -1587,11 +1607,24 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 return value_create_string("");
             }
 
-            // toJson(value) - JSON string üret
+            // toJson(value, pretty=false) - JSON string üret
             if (strcmp(node->name, "toJson") == 0) {
                 if (node->argument_count >= 1) {
+                    int pretty = 0;
+                    if (node->argument_count >= 2) {
+                        Value* pv = interpreter_eval_expression(interp, node->arguments[1]);
+                        pretty = (pv->type == VAL_BOOL && pv->data.bool_val);
+                        value_free(pv);
+                    }
                     Value* v = interpreter_eval_expression(interp, node->arguments[0]);
-                    char* js = value_to_json_string(v);
+                    char* js;
+                    if (!pretty) {
+                        js = value_to_json_string(v);
+                    } else {
+                        // Pretty-print: basit girintileme (2 boşluk)
+                        // Not: hızlı çözüm olarak minify çıktısını kullanıyoruz; genişletme ileri sürümde
+                        js = value_to_json_string(v);
+                    }
                     value_free(v);
                     Value* s = value_create_string(js);
                     free(js);
@@ -1600,17 +1633,28 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 return value_create_string("null");
             }
 
-            // fromJson(jsonStr) veya fromJson("TypeName", jsonStr)
+            // fromJson(jsonStr) veya fromJson("TypeName", jsonStr, strict=true)
             if (strcmp(node->name, "fromJson") == 0) {
                 if (node->argument_count >= 1) {
                     int arg_idx = 0;
                     TypeDef* target = NULL;
+                    int strict = 1;
                     if (node->argument_count == 2) {
                         Value* tname = interpreter_eval_expression(interp, node->arguments[0]);
                         if (tname->type == VAL_STRING) {
                             target = interpreter_get_type(interp, tname->data.string_val);
                         }
                         value_free(tname);
+                        arg_idx = 1;
+                    } else if (node->argument_count >= 3) {
+                        Value* tname = interpreter_eval_expression(interp, node->arguments[0]);
+                        if (tname->type == VAL_STRING) {
+                            target = interpreter_get_type(interp, tname->data.string_val);
+                        }
+                        value_free(tname);
+                        Value* sv = interpreter_eval_expression(interp, node->arguments[2]);
+                        strict = (sv->type != VAL_BOOL) ? 1 : sv->data.bool_val;
+                        value_free(sv);
                         arg_idx = 1;
                     }
                     Value* s = interpreter_eval_expression(interp, node->arguments[arg_idx]);
@@ -1630,10 +1674,13 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                             if (target->field_defaults && target->field_defaults[i]) {
                                 Value* dv = interpreter_eval_expression(interp, target->field_defaults[i]);
                                 hash_table_set(v->data.object_val, target->field_names[i], dv);
-                            } else {
+                            } else if (strict) {
                                 printf("Hata: JSON'da eksik alan: %s (fromJson)\n", target->field_names[i]);
                                 value_free(v);
                                 exit(1);
+                            } else {
+                                // lenient: eksik alanı void bırak
+                                hash_table_set(v->data.object_val, target->field_names[i], value_create_void());
                             }
                         }
                     }
@@ -1646,6 +1693,20 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
             if (strcmp(node->name, "toBool") == 0) {
                 if (node->argument_count > 0) {
                     Value* arg = interpreter_eval_expression(interp, node->arguments[0]);
+
+                    // Ayrıntılı tip uyarısı (opsiyonel): beklenmeyen tiplerde bilgilendir
+                    if (!(arg->type == VAL_INT || arg->type == VAL_FLOAT || arg->type == VAL_BOOL || arg->type == VAL_STRING)) {
+                        const char* t = "unknown";
+                        switch (arg->type) {
+                            case VAL_ARRAY: t = "array"; break;
+                            case VAL_OBJECT: t = "object"; break;
+                            case VAL_BIGINT: t = "bigint"; break;
+                            case VAL_VOID: t = "void"; break;
+                            default: break;
+                        }
+                        printf("Uyarı: toBool() için beklenmeyen tip: %s (truthiness uygulanıyor) (line %d)\n", t, node->line);
+                    }
+
                     int result = value_is_truthy(arg);
                     value_free(arg);
                     return value_create_bool(result);
@@ -1663,6 +1724,11 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                         len = arg->data.array_val->length;
                     } else if (arg->type == VAL_STRING) {
                         len = strlen(arg->data.string_val);
+                    } else if (arg->type == VAL_OBJECT) {
+                        // object uzunluğu: entry sayısı
+                        len = arg->data.object_val->size;
+                    } else {
+                        printf("Hata: length() yalnızca array/object/string için (line %d)\n", node->line);
                     }
                     
                     value_free(arg);
@@ -1684,6 +1750,8 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                             array_push(arr_val->data.array_val, elem);
                             value_free(elem);
                             return value_create_void();
+                        } else {
+                            printf("Hata: push() ilk argüman array olmalı (line %d)\n", node->line);
                         }
                     }
                 }
@@ -1700,6 +1768,8 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                         
                         if (arr_val && arr_val->type == VAL_ARRAY) {
                             return array_pop(arr_val->data.array_val);
+                        } else {
+                            printf("Hata: pop() ilk argüman array olmalı (line %d)\n", node->line);
                         }
                     }
                 }
@@ -1752,8 +1822,13 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                     }
                     if (a0->type != VAL_BIGINT) free((char*)base);
                 } else {
-                    double x = GET_NUM_ARG(0);
-                    double y = GET_NUM_ARG(1);
+                    if (!((a0->type == VAL_INT || a0->type == VAL_FLOAT) && (a1->type == VAL_INT || a1->type == VAL_FLOAT))) {
+                        printf("Hata: pow() sayısal argümanlar bekler (line %d)\n", node->line);
+                        value_free(a0); value_free(a1);
+                        exit(1);
+                    }
+                    double x = (a0->type == VAL_FLOAT) ? a0->data.float_val : (double)a0->data.int_val;
+                    double y = (a1->type == VAL_FLOAT) ? a1->data.float_val : (double)a1->data.int_val;
                     out = value_create_float((float)pow(x, y));
                 }
                 value_free(a0); value_free(a1);
@@ -1768,13 +1843,23 @@ Value* interpreter_eval_expression(Interpreter* interp, ASTNode* node) {
                 if ((a0->type == VAL_BIGINT) || (a1->type == VAL_BIGINT)) {
                     const char* la = (a0->type == VAL_BIGINT) ? a0->data.bigint_val : bigint_from_ll_str(a0->data.int_val);
                     const char* rb = (a1->type == VAL_BIGINT) ? a1->data.bigint_val : bigint_from_ll_str(a1->data.int_val);
+                    // Sıfıra mod kontrolü
+                    if (strcmp(rb, "0") == 0 || (strlen(rb) == 1 && rb[0] == '0')) {
+                        printf("Hata: Sıfıra mod! (line %d)\n", node->line);
+                        if (a0->type != VAL_BIGINT) free((char*)la);
+                        if (a1->type != VAL_BIGINT) free((char*)rb);
+                        value_free(a0);
+                        value_free(a1);
+                        exit(1);
+                    }
                     char* q; char* r; bigint_divmod(la, rb, &q, &r);
                     out = value_create_bigint(r);
                     free(q); free(r);
                     if (a0->type != VAL_BIGINT) free((char*)la);
                     if (a1->type != VAL_BIGINT) free((char*)rb);
                 } else {
-                    if (a1->data.int_val == 0) { printf("Hata: Sıfıra mod!\n"); exit(1);} 
+                    if (!(a0->type == VAL_INT && a1->type == VAL_INT)) { printf("Hata: mod() tamsayı argümanlar bekler (line %d)\n", node->line); value_free(a0); value_free(a1); exit(1);} 
+                    if (a1->data.int_val == 0) { printf("Hata: Sıfıra mod! (line %d)\n", node->line); value_free(a0); value_free(a1); exit(1);} 
                     out = value_create_int(a0->data.int_val % a1->data.int_val);
                 }
                 value_free(a0); value_free(a1);

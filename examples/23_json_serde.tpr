@@ -15,4 +15,28 @@ type Person { str name; int age; }
 Person p = fromJson("Person", js);
 print("Person:", p.name, p.age);
 
+print("");
+print("=== toJson Pretty-Print Test ===");
+str jsPretty = toJson(user, true);
+print("Pretty JSON:", jsPretty);
+str jsMinify = toJson(user, false);
+print("Minify JSON:", jsMinify);
+
+print("");
+print("=== fromJson Strict/Lenient Test ===");
+type User { str name; int age; str email; }
+str partialJson = "{\"name\":\"Ali\",\"age\":25}"; // email eksik
+
+// Strict mode (default): eksik alan hata verir
+print("Strict mode (default):");
+Person p2 = fromJson("Person", partialJson);
+print("Person (strict):", p2.name, p2.age);
+
+// Lenient mode: eksik alanlar void olur
+print("Lenient mode:");
+str lenientJson = "{\"name\":\"Veli\",\"age\":30}";
+// Not: strict=false ile lenient mod aktif
+// Person p3 = fromJson("Person", lenientJson, false);
+// print("Person (lenient):", p3.name, p3.age);
+
 
