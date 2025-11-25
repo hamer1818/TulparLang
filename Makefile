@@ -26,7 +26,7 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(TARGET): $(OBJECTS)
-	$(CC) $(OBJECTS) -o $(TARGET)
+	$(CC) $(OBJECTS) -o $(TARGET) -lws2_32
 
 # Lexer modülü
 $(BUILD_DIR)/lexer_%.o: $(SRC_DIR)/lexer/%.c

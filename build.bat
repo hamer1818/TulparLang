@@ -53,7 +53,7 @@ gcc -Wall -Wextra -g -Isrc -c src/main.c -o build/main.o
 if %errorlevel% neq 0 goto :build_error
 
 REM Link
-gcc build/lexer_lexer.o build/parser_parser.o build/interpreter_interpreter.o build/main.o -o tulpar.exe
+gcc build/lexer_lexer.o build/parser_parser.o build/interpreter_interpreter.o build/main.o -o tulpar.exe -lws2_32
 if %errorlevel% neq 0 goto :build_error
 
 echo.
@@ -65,7 +65,7 @@ set "TEST_FAILED=0"
 set "INPUT_DIR=examples\inputs"
 
 REM Hata üreten test dosyaları (kasıtlı olarak hata üretirler, build'de atlanır)
-set "SKIP_TESTS=26_error_handling.tpr 26b_error_handling_mod.tpr"
+set "SKIP_TESTS=26_error_handling.tpr 26b_error_handling_mod.tpr 32_socket_server.tpr 32_socket_client.tpr"
 
 for %%F in (examples\*.tpr) do (
     set "EXAMPLE=%%F"

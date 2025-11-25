@@ -62,6 +62,7 @@ if(WIN32)
     # Windows specific
     message(STATUS "Configuring for Windows")
     target_compile_definitions(tulpar PRIVATE PLATFORM_WINDOWS)
+    target_link_libraries(tulpar ws2_32)
 elseif(APPLE)
     # macOS specific
     message(STATUS "Configuring for macOS")

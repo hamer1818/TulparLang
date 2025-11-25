@@ -2,18 +2,33 @@
 #define INTERPRETER_H
 
 #include "../parser/parser.h"
+#include <time.h>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#define SOCKET int
+#define INVALID_SOCKET -1
+#define SOCKET_ERROR -1
+#endif
 
 // Runtime değer türleri
 typedef enum {
-    VAL_INT,
-    VAL_FLOAT,
-    VAL_STRING,
-    VAL_BOOL,
-    VAL_ARRAY,      // Diziler
-    VAL_OBJECT,     // JSON Objects (hash table)
-    VAL_BIGINT,     // Keyfi büyüklükte tamsayı (decimal string)
-    VAL_VOID,
-    VAL_FUNCTION
+  VAL_INT,
+  VAL_FLOAT,
+  VAL_STRING,
+  VAL_BOOL,
+  VAL_ARRAY,  // Diziler
+  VAL_OBJECT, // JSON Objects (hash table)
+  VAL_BIGINT, // Keyfi büyüklükte tamsayı (decimal string)
+  VAL_VOID,
+  VAL_FUNCTION
 } ValueType;
 
 // Forward declaration
@@ -22,136 +37,136 @@ typedef struct HashTable HashTable;
 
 // Hash table entry (key-value pair)
 typedef struct HashEntry {
-    char* key;
-    Value* value;
-    struct HashEntry* next;  // Chaining for collision handling
+  char *key;
+  Value *value;
+  struct HashEntry *next; // Chaining for collision handling
 } HashEntry;
 
 // Hash table structure
 struct HashTable {
-    HashEntry** buckets;     // Array of bucket pointers
-    int bucket_count;        // Number of buckets
-    int size;                // Number of entries
+  HashEntry **buckets; // Array of bucket pointers
+  int bucket_count;    // Number of buckets
+  int size;            // Number of entries
 };
 
 // Array structure
 typedef struct {
-    Value** elements;    // Dizi elemanları
-    int length;          // Dizi uzunluğu
-    int capacity;        // Kapasite
-    ValueType elem_type; // Eleman tipi (VAL_VOID = mixed)
+  Value **elements;    // Dizi elemanları
+  int length;          // Dizi uzunluğu
+  int capacity;        // Kapasite
+  ValueType elem_type; // Eleman tipi (VAL_VOID = mixed)
 } Array;
 
 // Runtime değer
 struct Value {
-    ValueType type;
-    union {
-        long long int_val;
-        float float_val;
-        char* string_val;
-        int bool_val;
-        Array* array_val;
-        HashTable* object_val;  // Object için hash table
-        char* bigint_val;       // BigInt (sadece rakamlar, isteğe bağlı '+' işaretsiz)
-    } data;
+  ValueType type;
+  union {
+    long long int_val;
+    float float_val;
+    char *string_val;
+    int bool_val;
+    Array *array_val;
+    HashTable *object_val; // Object için hash table
+    char *bigint_val; // BigInt (sadece rakamlar, isteğe bağlı '+' işaretsiz)
+  } data;
 };
 
 // Değişken (Symbol Table için)
 typedef struct {
-    char* name;
-    Value* value;
+  char *name;
+  Value *value;
 } Variable;
 
 // Fonksiyon tanımı
 typedef struct {
-    char* name;
-    ASTNode* node;  // Fonksiyonun AST düğümü
+  char *name;
+  ASTNode *node; // Fonksiyonun AST düğümü
 } Function;
 
 // Type tanımı
 typedef struct {
-    char* name;
-    char** field_names;
-    DataType* field_types;
-    char** field_custom_types;
-    int field_count;
-    struct ASTNode** field_defaults; // parser'dan gelen default ifadeler
+  char *name;
+  char **field_names;
+  DataType *field_types;
+  char **field_custom_types;
+  int field_count;
+  struct ASTNode **field_defaults; // parser'dan gelen default ifadeler
 } TypeDef;
 
 // Symbol Table (Değişken depolama)
 typedef struct SymbolTable {
-    Variable** variables;
-    int var_count;
-    int var_capacity;
-    struct SymbolTable* parent;  // Scope için parent symbol table
+  Variable **variables;
+  int var_count;
+  int var_capacity;
+  struct SymbolTable *parent; // Scope için parent symbol table
 } SymbolTable;
 
 // Interpreter context
 typedef struct {
-    SymbolTable* global_scope;
-    SymbolTable* current_scope;
-    Function** functions;
-    int function_count;
-    int function_capacity;
-    TypeDef** types;
-    int type_count;
-    int type_capacity;
-    Value* return_value;  // Fonksiyonlardan dönüş değeri için
-    int should_return;    // Return statement kontrolü
-    int should_break;     // Break statement kontrolü
-    int should_continue;  // Continue statement kontrolü
-    ASTNode** retained_modules; // import edilen AST'leri sakla
-    int retained_count;
-    int retained_capacity;
+  SymbolTable *global_scope;
+  SymbolTable *current_scope;
+  Function **functions;
+  int function_count;
+  int function_capacity;
+  TypeDef **types;
+  int type_count;
+  int type_capacity;
+  Value *return_value;        // Fonksiyonlardan dönüş değeri için
+  int should_return;          // Return statement kontrolü
+  int should_break;           // Break statement kontrolü
+  int should_continue;        // Continue statement kontrolü
+  ASTNode **retained_modules; // import edilen AST'leri sakla
+  int retained_count;
+  int retained_capacity;
 } Interpreter;
 
 // Value fonksiyonları
-Value* value_create_int(long long val);
-Value* value_create_float(float val);
-Value* value_create_string(char* val);
-Value* value_create_bool(int val);
-Value* value_create_array(int capacity);
-Value* value_create_typed_array(int capacity, ValueType elem_type);
-Value* value_create_object();
-Value* value_create_void();
-Value* value_create_bigint(const char* digits);
-Value* value_copy(Value* val);
-void value_free(Value* val);
-void value_print(Value* val);
-int value_is_truthy(Value* val);
+Value *value_create_int(long long val);
+Value *value_create_float(float val);
+Value *value_create_string(char *val);
+Value *value_create_bool(int val);
+Value *value_create_array(int capacity);
+Value *value_create_typed_array(int capacity, ValueType elem_type);
+Value *value_create_object();
+Value *value_create_void();
+Value *value_create_bigint(const char *digits);
+Value *value_copy(Value *val);
+void value_free(Value *val);
+void value_print(Value *val);
+int value_is_truthy(Value *val);
 
 // Hash Table fonksiyonları
-HashTable* hash_table_create(int bucket_count);
-void hash_table_free(HashTable* table);
-unsigned int hash_function(const char* key, int bucket_count);
-void hash_table_set(HashTable* table, const char* key, Value* value);
-Value* hash_table_get(HashTable* table, const char* key);
-int hash_table_has(HashTable* table, const char* key);
-void hash_table_delete(HashTable* table, const char* key);
-void hash_table_print(HashTable* table);
+HashTable *hash_table_create(int bucket_count);
+void hash_table_free(HashTable *table);
+unsigned int hash_function(const char *key, int bucket_count);
+void hash_table_set(HashTable *table, const char *key, Value *value);
+Value *hash_table_get(HashTable *table, const char *key);
+int hash_table_has(HashTable *table, const char *key);
+void hash_table_delete(HashTable *table, const char *key);
+void hash_table_print(HashTable *table);
 
 // Array fonksiyonları
-void array_push(Array* arr, Value* val);
-Value* array_pop(Array* arr);
-Value* array_get(Array* arr, int index);
-void array_set(Array* arr, int index, Value* val);
+void array_push(Array *arr, Value *val);
+Value *array_pop(Array *arr);
+Value *array_get(Array *arr, int index);
+void array_set(Array *arr, int index, Value *val);
 
 // Symbol Table fonksiyonları
-SymbolTable* symbol_table_create(SymbolTable* parent);
-void symbol_table_free(SymbolTable* table);
-void symbol_table_set(SymbolTable* table, char* name, Value* value);
-Value* symbol_table_get(SymbolTable* table, char* name);
+SymbolTable *symbol_table_create(SymbolTable *parent);
+void symbol_table_free(SymbolTable *table);
+void symbol_table_set(SymbolTable *table, char *name, Value *value);
+Value *symbol_table_get(SymbolTable *table, char *name);
 
 // Interpreter fonksiyonları
-Interpreter* interpreter_create();
-void interpreter_free(Interpreter* interp);
-void interpreter_execute(Interpreter* interp, ASTNode* node);
-void interpreter_execute_statement(Interpreter* interp, ASTNode* node);
-TypeDef* interpreter_get_type(Interpreter* interp, const char* name);
-void interpreter_register_type(Interpreter* interp, TypeDef* t);
-Value* interpreter_eval(Interpreter* interp, ASTNode* node);
-void interpreter_register_function(Interpreter* interp, char* name, ASTNode* node);
-Function* interpreter_get_function(Interpreter* interp, char* name);
+Interpreter *interpreter_create();
+void interpreter_free(Interpreter *interp);
+void interpreter_execute(Interpreter *interp, ASTNode *node);
+void interpreter_execute_statement(Interpreter *interp, ASTNode *node);
+TypeDef *interpreter_get_type(Interpreter *interp, const char *name);
+void interpreter_register_type(Interpreter *interp, TypeDef *t);
+Value *interpreter_eval(Interpreter *interp, ASTNode *node);
+void interpreter_register_function(Interpreter *interp, char *name,
+                                   ASTNode *node);
+Function *interpreter_get_function(Interpreter *interp, char *name);
 
 #endif
-

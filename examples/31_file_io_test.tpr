@@ -1,0 +1,58 @@
+// ============================================
+// FILE I/O VE STRING TESTİ
+// ============================================
+
+print("=== FILE I/O TEST ===");
+str filename = "test_file.txt";
+
+// 1. Dosya Yazma
+print("1. Dosya yazılıyor...");
+write_file(filename, "Merhaba Tulpar!\nBu bir test dosyasıdır.");
+
+// 2. Dosya Kontrolü
+bool exists = file_exists(filename);
+print("Dosya var mı?", exists);
+
+// 3. Dosya Okuma
+print("2. Dosya okunuyor...");
+str content = read_file(filename);
+print("İçerik:");
+print(content);
+
+// 4. Dosya Ekleme
+print("3. Dosya ekleniyor...");
+append_file(filename, "\nYeni satır eklendi.");
+
+// 5. Tekrar Okuma
+str new_content = read_file(filename);
+print("Yeni İçerik:");
+print(new_content);
+
+print("");
+print("=== STRING TEST ===");
+
+// 6. Trim
+str s1 = "   Tulpar   ";
+print("Original:", s1, "| Trimmed:", trim(s1));
+
+// 7. Replace
+str s2 = "Hello World";
+print("Original:", s2, "| Replaced:", replace(s2, "World", "Tulpar"));
+
+// 8. Upper/Lower
+str s3 = "Tulpar";
+print("Upper:", toUpper(s3), "| Lower:", toLower(s3));
+
+// 9. Split
+str s4 = "elma,armut,kiraz";
+print("Split 'elma,armut,kiraz':");
+arrayJson parts = split(s4, ",");
+print(parts);
+
+// 10. Contains / IndexOf
+str s5 = "Merhaba Dunya";
+print("Contains 'Dunya':", contains(s5, "Dunya"));
+print("Index of 'Dunya':", index_of(s5, "Dunya"));
+
+print("");
+print("✅ Test tamamlandı!");

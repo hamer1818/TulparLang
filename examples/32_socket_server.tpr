@@ -1,0 +1,33 @@
+// Socket Server Example (Simplified)
+print("Starting server...");
+
+// Create server socket listening on 127.0.0.1:8080
+int sockfd = socket_server("127.0.0.1", 8080);
+if (sockfd == -1) {
+    print("Failed to start server");
+    return;
+}
+
+print("Server listening on 127.0.0.1:8080");
+
+// Accept a connection
+int client_sock = socket_accept(sockfd);
+if (client_sock == -1) {
+    print("Accept failed");
+    socket_close(sockfd);
+    return;
+}
+
+print("Client connected");
+
+// Receive message
+str msg = socket_receive(client_sock, 1024);
+print("Received: " + msg);
+
+// Send response
+socket_send(client_sock, "Hello from Tulpar Server!");
+
+// Close connections
+socket_close(client_sock);
+socket_close(sockfd);
+print("Server closed");
