@@ -1,0 +1,38 @@
+import "lib/socket.tpr";
+
+print("Starting Simplified Server...");
+// create_server returns a Socket object
+// Note: In Tulpar, we don't need 'var' keyword, just type or auto-inference?
+// The examples show 'int x = ...' or 'Person p = ...'.
+// But 'create_server' returns a 'Socket'.
+// So: Socket server = create_server(...)
+
+Socket server = create_server("127.0.0.1", 8081);
+
+if (server.connected) {
+    print("Server listening on 127.0.0.1:8081");
+    print("Waiting for connection...");
+    
+    // Accept blocks until a client connects
+    Socket client = server.accept();
+    
+    if (client.connected) {
+        print("Client connected!");
+        
+        // Send a welcome message
+        client.send("Hello from Simplified Server!");
+        
+        // Receive response
+        str msg = client.receive(1024);
+        print("Received from client: " + msg);
+        
+        client.close();
+    } else {
+        print("Accept failed or invalid client");
+    }
+    
+    server.close();
+    print("Server closed");
+} else {
+    print("Failed to start server");
+}

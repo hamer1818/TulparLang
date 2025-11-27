@@ -1,0 +1,112 @@
+// Tulpar Standard Library - Socket Wrapper
+
+type Socket {
+    int sockfd;
+    str host;
+    int port;
+    bool is_server;
+    bool connected;
+}
+
+func Socket.send(str data) {
+    if (self.connected) {
+        return socket_send(self.sockfd, data);
+    }
+    return -1;
+}
+
+func Socket.receive(int size) {
+    if (self.connected) {
+        return socket_receive(self.sockfd, size);
+    }
+    return "";
+}
+
+func Socket.close() {
+    if (self.connected) {
+        socket_close(self.sockfd);
+        self.connected = false;
+    }
+}
+
+func Socket.accept() {
+    if (self.is_server) {
+        if (self.connected) {
+            int client_fd = socket_accept(self.sockfd);
+            if (client_fd != -1) {
+                return Socket(
+                    sockfd: client_fd, 
+                    host: "", 
+                    port: 0, 
+                    is_server: false, 
+                    connected: true
+                );
+            }
+        }
+    }
+    return Socket(sockfd: -1, host: "", port: 0, is_server: false, connected: false);
+}
+
+func create_server(str host, int port) {
+    int fd = socket_server(host, port);
+    if (fd != -1) {
+        return Socket(
+            sockfd: fd, 
+            host: host, 
+            port: port, 
+            is_server: true, 
+            connected: true
+        );
+    }
+    return Socket(sockfd: -1, host: host, port: port, is_server: true, connected: false);
+}
+
+func create_client(str host, int port) {
+    int fd = socket_client(host, port);
+    if (fd != -1) {
+        return Socket(
+            sockfd: fd, 
+            host: host, 
+            port: port, 
+            is_server: false, 
+            connected: true
+        );
+    }
+    return Socket(sockfd: -1, host: host, port: port, is_server: false, connected: false);
+}
+
+// Select wrapper
+// sockets: array of Socket objects
+// timeout_ms: int
+// returns: array of Socket objects that are ready
+func select_sockets(array sockets, int timeout_ms) {
+    // Extract fds
+    array fds = [];
+    for (int i = 0; i < length(sockets); i++) {
+        Socket s = sockets[i];
+        if (s.connected) {
+            push(fds, s.sockfd);
+        }
+    }
+    
+    // Call built-in socket_select
+    // print("Calling socket_select with " + length(fds) + " sockets");
+    array ready_fds = socket_select(fds, timeout_ms);
+    // print("socket_select returned " + length(ready_fds) + " sockets");
+    
+    // Map back to Socket objects
+    array ready_sockets = [];
+    for (int i = 0; i < length(ready_fds); i++) {
+        int fd = ready_fds[i];
+        // Find matching socket object
+        for (int j = 0; j < length(sockets); j++) {
+            Socket s = sockets[j];
+            if (s.sockfd == fd) {
+                push(ready_sockets, s);
+                break;
+            }
+        }
+    }
+    
+    return ready_sockets;
+}

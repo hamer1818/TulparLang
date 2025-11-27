@@ -4,6 +4,19 @@ SRC_DIR = src
 BUILD_DIR = build
 TARGET = tulpar
 
+# Detect OS
+ifeq ($(OS),Windows_NT)
+    LDFLAGS = -lws2_32
+else
+    UNAME_S := $(shell uname -s)
+    ifeq ($(UNAME_S),Linux)
+        LDFLAGS = -lm
+    endif
+    ifeq ($(UNAME_S),Darwin)
+        LDFLAGS = 
+    endif
+endif
+
 # Tüm kaynak dosyaları bul (recursive)
 LEXER_SOURCES = $(wildcard $(SRC_DIR)/lexer/*.c)
 PARSER_SOURCES = $(wildcard $(SRC_DIR)/parser/*.c)
@@ -26,7 +39,7 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(TARGET): $(OBJECTS)
-	$(CC) $(OBJECTS) -o $(TARGET) -lws2_32
+	$(CC) $(OBJECTS) -o $(TARGET) $(LDFLAGS)
 
 # Lexer modülü
 $(BUILD_DIR)/lexer_%.o: $(SRC_DIR)/lexer/%.c

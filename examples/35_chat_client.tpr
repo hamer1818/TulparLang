@@ -1,0 +1,45 @@
+import "lib/socket.tpr";
+
+print("==================================");
+print("      TULPAR CHAT CLIENT");
+print("==================================");
+
+print("Connecting to server at 127.0.0.1:8080...");
+Socket client = create_client("127.0.0.1", 8080);
+
+if (client.connected) {
+    print("Connected to server!");
+    print("Chat started. Type 'exit' to quit.");
+    print("----------------------------------");
+    
+    while (true) {
+        // Client sends first
+        str msg = input("You: ");
+        client.send(msg);
+        
+        if (msg == "exit") {
+            break;
+        }
+        
+        // Client waits for reply
+        print("Waiting for server reply...");
+        str reply = client.receive(1024);
+        
+        if (reply == "") {
+            print("Server disconnected.");
+            break;
+        }
+        
+        print("Server: " + reply);
+        
+        if (reply == "exit") {
+            print("Server ended the chat.");
+            break;
+        }
+    }
+    
+    client.close();
+    print("Disconnected.");
+} else {
+    print("Failed to connect to server. Make sure it is running.");
+}

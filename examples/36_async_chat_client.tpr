@@ -1,0 +1,64 @@
+import "lib/socket.tpr";
+
+print("==================================");
+print("   TULPAR MULTI-USER CHAT CLIENT");
+print("==================================");
+
+print("Connecting to server...");
+Socket client = create_client("127.0.0.1", 8080);
+
+if (client.connected) {
+    print("Connected! Type messages and press Enter.");
+    
+    // NOTE: Since we don't have non-blocking console input easily on Windows without threads,
+    // this client will still block on 'input()' for sending messages.
+    // However, the SERVER is now fully asynchronous and supports multiple users.
+    // To see incoming messages immediately, we would need a separate thread or non-blocking console.
+    // For this demo, we will use a simple loop where we check for messages before asking for input.
+    // Ideally, run multiple clients to see them talk to each other.
+    
+    while (true) {
+        // Check for incoming messages (with short timeout)
+        // Note: Since 'input' blocks, we won't see messages WHILE typing.
+        // This is a limitation of the single-threaded client terminal.
+        
+        array monitor = [client];
+        array ready = select_sockets(monitor, 100); // 100ms check
+        
+        if (length(ready) > 0) {
+            str msg = client.receive(1024);
+            if (msg == "") {
+                print("Server disconnected.");
+                break;
+            }
+            print(msg);
+        }
+        
+        // We can't easily check "if user wants to type" without kbhit.
+        // So we will just block on input for now. 
+        // To make it feel more "async", we could use a very short timeout loop
+        // but 'input()' is blocking.
+        
+        // For the purpose of the user request "server ortak nokta olacak... server mesaj atmak zorunda olmayacak",
+        // the server part is the key. 
+        
+        print("You (type 'r' to refresh/read, or message): ");
+        str text = input("");
+        
+        if (text == "r") {
+            continue; // Just loop to read
+        }
+        
+        if (text == "exit") {
+            break;
+        }
+        
+        if (text != "") {
+            client.send(text);
+        }
+    }
+    
+    client.close();
+} else {
+    print("Failed to connect.");
+}

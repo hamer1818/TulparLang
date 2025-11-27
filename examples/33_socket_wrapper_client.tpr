@@ -1,0 +1,21 @@
+import "lib/socket.tpr";
+
+print("Connecting to server...");
+
+Socket client = create_client("127.0.0.1", 8081);
+
+if (client.connected) {
+    print("Connected to server!");
+    
+    // Receive welcome message
+    str msg = client.receive(1024);
+    print("Server said: " + msg);
+    
+    // Send response
+    client.send("Hello Server, I am the Client!");
+    
+    client.close();
+    print("Client closed");
+} else {
+    print("Failed to connect to server");
+}

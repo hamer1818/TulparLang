@@ -2155,6 +2155,65 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
       return value_create_int(-1);
     }
 
+    // socket_select(read_fds, timeout_ms)
+    // read_fds: array of integers (socket fds)
+    // timeout_ms: int (milliseconds)
+    // returns: array of integers (ready socket fds)
+    if (strcmp(node->name, "socket_select") == 0 && node->argument_count >= 2) {
+      Value *fds_val = interpreter_eval_expression(interp, node->arguments[0]);
+      Value *timeout_val =
+          interpreter_eval_expression(interp, node->arguments[1]);
+
+      if (fds_val->type == VAL_ARRAY && timeout_val->type == VAL_INT) {
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        int max_fd = 0;
+
+        // Add fds to set
+        for (int i = 0; i < fds_val->data.array_val->length; i++) {
+          Value *fd_v = fds_val->data.array_val->elements[i];
+          if (fd_v->type == VAL_INT) {
+            SOCKET s = (SOCKET)fd_v->data.int_val;
+            FD_SET(s, &readfds);
+            if ((int)s > max_fd)
+              max_fd = (int)s;
+          }
+        }
+
+        struct timeval tv;
+        tv.tv_sec = timeout_val->data.int_val / 1000;
+        tv.tv_usec = (timeout_val->data.int_val % 1000) * 1000;
+
+        int activity = select(max_fd + 1, &readfds, NULL, NULL, &tv);
+
+        if (activity < 0) {
+          value_free(fds_val);
+          value_free(timeout_val);
+          return value_create_array(0); // Error or interrupt
+        }
+
+        // Create result array
+        Value *res_array = value_create_array(0);
+        for (int i = 0; i < fds_val->data.array_val->length; i++) {
+          Value *fd_v = fds_val->data.array_val->elements[i];
+          if (fd_v->type == VAL_INT) {
+            SOCKET s = (SOCKET)fd_v->data.int_val;
+            if (FD_ISSET(s, &readfds)) {
+              array_push(res_array->data.array_val,
+                         value_create_int((long long)s));
+            }
+          }
+        }
+
+        value_free(fds_val);
+        value_free(timeout_val);
+        return res_array;
+      }
+      value_free(fds_val);
+      value_free(timeout_val);
+      return value_create_array(0);
+    }
+
     // ========================================================================
     // FILE I/O FUNCTIONS
     // ========================================================================
@@ -3671,9 +3730,9 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
         if (has_named) {
           for (int i = 0; i < node->argument_count; i++) {
             if (!node->argument_names[i]) {
-              printf(
-                  "Error: For type '%s', all arguments must be named or none\n",
-                  node->name);
+              printf("Error: For type '%s', all arguments must be named or "
+                     "none\n",
+                     node->name);
               exit(1);
             }
             const char *fname = node->argument_names[i];
@@ -4124,9 +4183,9 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode *node) {
           }
           current = parent->data.array_val->elements[index];
         } else {
-          printf(
-              "Error: Intermediate segment must be array or object (line %d)\n",
-              node->line);
+          printf("Error: Intermediate segment must be array or object (line "
+                 "%d)\n",
+                 node->line);
           value_free(idx);
           value_free(val);
           exit(1);
