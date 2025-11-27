@@ -3800,6 +3800,38 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
       Value *res = value_create_string(response);
       free(response);
       return res;
+    }
+
+    // DATABASE FUNCTIONS
+    // ========================================================================
+
+    // db_open(path)
+    if (strcmp(node->name, "db_open") == 0 && node->argument_count >= 1) {
+      // printf("DEBUG: db_open called\n");
+      Value *path_val = interpreter_eval_expression(interp, node->arguments[0]);
+      if (path_val->type != VAL_STRING) {
+        value_free(path_val);
+        return value_create_int(0); // NULL pointer basically
+      }
+
+      // printf("DEBUG: Opening database: %s\n", path_val->data.string_val);
+      sqlite3 *db;
+      int rc = sqlite3_open(path_val->data.string_val, &db);
+
+      value_free(path_val);
+
+      if (rc) {
+        // printf("DEBUG: Failed to open database: %d\n", rc);
+        sqlite3_close(db);
+        return value_create_int(0);
+      }
+
+      // printf("DEBUG: Database opened successfully. DB ptr: %p\n", (void*)db);
+      return value_create_int((long long)db);
+    }
+
+    // db_close(db)
+    if (strcmp(node->name, "db_close") == 0 && node->argument_count >= 1) {
       Value *db_val = interpreter_eval_expression(interp, node->arguments[0]);
       if (db_val->type == VAL_INT) {
         sqlite3 *db = (sqlite3 *)db_val->data.int_val;

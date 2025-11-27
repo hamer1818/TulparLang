@@ -46,12 +46,17 @@ set(MAIN_SOURCES
     src/main.c
 )
 
+set(SQLITE_SOURCES
+    lib/sqlite3/sqlite3.c
+)
+
 # All sources
 set(ALL_SOURCES
     ${LEXER_SOURCES}
     ${PARSER_SOURCES}
     ${INTERPRETER_SOURCES}
     ${MAIN_SOURCES}
+    ${SQLITE_SOURCES}
 )
 
 # Executable
@@ -67,6 +72,7 @@ elseif(APPLE)
     # macOS specific
     message(STATUS "Configuring for macOS")
     target_compile_definitions(tulpar PRIVATE PLATFORM_MACOS)
+    target_link_libraries(tulpar pthread dl)
     # Apple Silicon support
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
         message(STATUS "Building for Apple Silicon (ARM64)")
@@ -75,7 +81,7 @@ elseif(UNIX)
     # Linux specific
     message(STATUS "Configuring for Linux")
     target_compile_definitions(tulpar PRIVATE PLATFORM_LINUX)
-    target_link_libraries(tulpar m)  # Link math library
+    target_link_libraries(tulpar m pthread dl)  # Link math library
 endif()
 
 # Installation
