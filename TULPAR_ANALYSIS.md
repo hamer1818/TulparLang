@@ -84,9 +84,3 @@ Normal bir dil gibi çalışması için gereken temel yapıtaşları.
     *   **String:** `split`, `join`, `replace`, `trim`, `toUpper`, `toLower`.
 6.  **Scope Yönetimi ve Garbage Collection:**
     *   Bellek yönetimi şu an manuel veya basit seviyede olabilir, uzun çalışan sunucular için sağlam bir GC veya bellek modeli gerekir.
-
-### 2.3. Önerilen Yol Haritası (Roadmap)
-
-2.  **Faz 2: Soket Programlama (Socket Programming):** TCP soketleri üzerinden veri alışverişini sağlayın.
-3.  **Faz 3: HTTP Katmanı:** Soketler üzerine basit bir HTTP parser ve server yapısı kurun.
-4.  **Faz 4: Veritabanı Bağlantısı:** SQLite gibi basit bir veritabanı ile başlayarak veri saklamayı mümkün kılın.

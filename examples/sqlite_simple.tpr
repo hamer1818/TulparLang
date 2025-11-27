@@ -1,0 +1,10 @@
+// Simple SQLite Test
+print("Starting simple test...");
+int db = db_open("simple.db");
+print("DB Handle:");
+print(db);
+if (db != 0) {
+    print("Closing db...");
+    db_close(db);
+}
+print("Done.");

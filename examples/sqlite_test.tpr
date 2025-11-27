@@ -1,0 +1,31 @@
+// SQLite Test Script
+
+print("Opening database...");
+int db = db_open("test.db");
+
+if (db == 0) {
+    print("Failed to open database!");
+} else {
+    print("Database opened successfully.");
+
+    // Create table
+    print("Creating table...");
+    db_query(db, "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);");
+
+    // Insert data
+    print("Inserting data...");
+    db_query(db, "INSERT INTO users (name, email) VALUES ('Hamza', 'hamza@example.com');");
+    db_query(db, "INSERT INTO users (name, email) VALUES ('Tulpar', 'tulpar@lang.com');");
+
+    // Query data
+    print("Querying data...");
+    array results = db_query(db, "SELECT * FROM users;");
+
+    print("Results:");
+    print(results);
+
+    // Close database
+    print("Closing database...");
+    db_close(db);
+    print("Done.");
+}

@@ -50,9 +50,11 @@ gcc -Wall -Wextra -g -Isrc -c src/interpreter/interpreter.c -o build/interpreter
 if %errorlevel% neq 0 goto :build_error
 gcc -Wall -Wextra -g -Isrc -c src/main.c -o build/main.o
 if %errorlevel% neq 0 goto :build_error
+gcc -c lib/sqlite3/sqlite3.c -o build/sqlite3.o
+if %errorlevel% neq 0 goto :build_error
 
 REM Link
-gcc build/lexer_lexer.o build/parser_parser.o build/interpreter_interpreter.o build/main.o -o tulpar.exe -lws2_32
+gcc build/lexer_lexer.o build/parser_parser.o build/interpreter_interpreter.o build/main.o build/sqlite3.o -o tulpar.exe -lws2_32
 if %errorlevel% neq 0 goto :build_error
 
 echo.

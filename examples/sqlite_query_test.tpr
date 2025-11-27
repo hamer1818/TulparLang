@@ -1,0 +1,20 @@
+// SQLite Query Test
+print("Opening database...");
+int db = db_open("query_test.db");
+print("DB Handle:");
+print(db);
+if (db != 0) {
+    print("Creating table...");
+    db_query(db, "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT);");
+    print("Inserting data...");
+    db_query(db, "INSERT INTO users (name) VALUES ('Tulpar');");
+
+    print("Querying data...");
+    array results = db_query(db, "SELECT * FROM users;");
+
+    print("Results:");
+    print(results);
+    print("Closing database...");
+    db_close(db);
+}
+print("Done.");

@@ -34,3 +34,5 @@ desktop.ini
 
 # Test files
 test*.tpr
+
+*.db

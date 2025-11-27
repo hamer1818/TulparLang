@@ -1,4 +1,5 @@
 #include "interpreter.h"
+#include "../../lib/sqlite3/sqlite3.h"
 #include "../lexer/lexer.h"
 #include "../parser/parser.h"
 #include <ctype.h>
@@ -9,11 +10,32 @@
 #include <string.h>
 #include <time.h>
 
-// ============================================================================
-// UTF-8 HELPER FUNCTIONS
-// ============================================================================
+// SQLite Callback
+static int tulpar_sqlite_callback(void *data, int argc, char **argv,
+                                  char **azColName) {
+  // printf("DEBUG: Callback called with %d columns\n", argc);
+  // fflush(stdout);
+  Value *list = (Value *)data;
+  Value *row_obj = value_create_object();
 
-// Returns the byte length of a UTF-8 character
+  for (int i = 0; i < argc; i++) {
+    // printf("DEBUG: Column: %s\n", azColName[i]);
+    // fflush(stdout);
+    if (argv[i]) {
+      hash_table_set(row_obj->data.object_val, azColName[i],
+                     value_create_string(argv[i]));
+    } else {
+      hash_table_set(row_obj->data.object_val, azColName[i],
+                     value_create_string("NULL"));
+    }
+  }
+
+  array_push(list->data.array_val, row_obj);
+  value_free(row_obj); // Fix memory leak as array_push copies the value
+  return 0;
+}
+
+// ============================================================================
 static int utf8_char_length(unsigned char c) {
   if ((c & 0x80) == 0) {
     return 1;
@@ -995,7 +1017,7 @@ void array_push(Array *arr, Value *val) {
   }
 
   if (arr->length >= arr->capacity) {
-    arr->capacity *= 2;
+    arr->capacity = (arr->capacity == 0) ? 8 : arr->capacity * 2;
     arr->elements =
         (Value **)realloc(arr->elements, sizeof(Value *) * arr->capacity);
   }
@@ -1877,6 +1899,8 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
     // Built-in fonksiyonları kontrol et
 
     // ========================================================================
+    // SOCKET FUNCTIONS
+
     // SOCKET FUNCTIONS
     // ========================================================================
 
@@ -3649,6 +3673,181 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
     if (strcmp(node->name, "trunc") == 0 && node->argument_count >= 1) {
       double x = GET_NUM_ARG(0);
       return value_create_int((int)trunc(x));
+    }
+
+    // http_parse_request(raw_request)
+    if (strcmp(node->name, "http_parse_request") == 0 &&
+        node->argument_count >= 1) {
+      Value *raw_val = interpreter_eval_expression(interp, node->arguments[0]);
+      if (raw_val->type != VAL_STRING) {
+        value_free(raw_val);
+        return value_create_object(); // Return empty object on error
+      }
+
+      char *raw = raw_val->data.string_val;
+      Value *req_obj = value_create_object();
+
+      // Parse Request Line: GET /path HTTP/1.1
+      char *line_end = strstr(raw, "\r\n");
+      if (line_end) {
+        char *line = (char *)malloc(line_end - raw + 1);
+        strncpy(line, raw, line_end - raw);
+        line[line_end - raw] = '\0';
+
+        char *method = strtok(line, " ");
+        char *path = strtok(NULL, " ");
+        // char *proto = strtok(NULL, " "); // Unused for now
+
+        if (method)
+          hash_table_set(req_obj->data.object_val, "method",
+                         value_create_string(method));
+        if (path)
+          hash_table_set(req_obj->data.object_val, "path",
+                         value_create_string(path));
+
+        free(line);
+
+        // Parse Headers
+        Value *headers_obj = value_create_object();
+        char *header_start = line_end + 2;
+        while (1) {
+          char *header_end = strstr(header_start, "\r\n");
+          if (!header_end || header_end == header_start) {
+            // End of headers
+            if (header_end)
+              header_start = header_end + 2; // Skip last CRLF
+            break;
+          }
+
+          char *header_line = (char *)malloc(header_end - header_start + 1);
+          strncpy(header_line, header_start, header_end - header_start);
+          header_line[header_end - header_start] = '\0';
+
+          char *colon = strchr(header_line, ':');
+          if (colon) {
+            *colon = '\0';
+            char *key = header_line;
+            char *val = colon + 1;
+            while (*val == ' ')
+              val++; // trim leading space
+            hash_table_set(headers_obj->data.object_val, key,
+                           value_create_string(val));
+          }
+
+          free(header_line);
+          header_start = header_end + 2;
+        }
+        hash_table_set(req_obj->data.object_val, "headers", headers_obj);
+
+        // Body
+        if (*header_start) {
+          hash_table_set(req_obj->data.object_val, "body",
+                         value_create_string(header_start));
+        } else {
+          hash_table_set(req_obj->data.object_val, "body",
+                         value_create_string(""));
+        }
+      } else {
+        // Fallback if no CRLF found (maybe just one line or empty)
+        hash_table_set(req_obj->data.object_val, "body",
+                       value_create_string(""));
+      }
+
+      value_free(raw_val);
+      return req_obj;
+    }
+
+    // http_create_response(status, content_type, body)
+    if (strcmp(node->name, "http_create_response") == 0 &&
+        node->argument_count >= 3) {
+      Value *status_val =
+          interpreter_eval_expression(interp, node->arguments[0]);
+      Value *type_val = interpreter_eval_expression(interp, node->arguments[1]);
+      Value *body_val = interpreter_eval_expression(interp, node->arguments[2]);
+
+      int status =
+          (status_val->type == VAL_INT) ? (int)status_val->data.int_val : 200;
+      char *ctype = (type_val->type == VAL_STRING) ? type_val->data.string_val
+                                                   : "text/plain";
+      char *body =
+          (body_val->type == VAL_STRING) ? body_val->data.string_val : "";
+
+      char *status_text = "OK";
+      if (status == 404)
+        status_text = "Not Found";
+      if (status == 500)
+        status_text = "Internal Server Error";
+      if (status == 400)
+        status_text = "Bad Request";
+      if (status == 201)
+        status_text = "Created";
+
+      // Calculate length
+      int len = snprintf(NULL, 0,
+                         "HTTP/1.1 %d %s\r\nContent-Type: "
+                         "%s\r\nContent-Length: %zu\r\nConnection: "
+                         "close\r\n\r\n%s",
+                         status, status_text, ctype, strlen(body), body);
+
+      char *response = (char *)malloc(len + 1);
+      sprintf(response,
+              "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: "
+              "%zu\r\nConnection: close\r\n\r\n%s",
+              status, status_text, ctype, strlen(body), body);
+
+      value_free(status_val);
+      value_free(type_val);
+      Value *res = value_create_string(response);
+      free(response);
+      return res;
+      Value *db_val = interpreter_eval_expression(interp, node->arguments[0]);
+      if (db_val->type == VAL_INT) {
+        sqlite3 *db = (sqlite3 *)db_val->data.int_val;
+        if (db) {
+          sqlite3_close(db);
+        }
+      }
+      value_free(db_val);
+      return value_create_void();
+    }
+
+    // db_query(db, sql)
+    if (strcmp(node->name, "db_query") == 0 && node->argument_count >= 2) {
+      // printf("DEBUG: db_query called\n");
+      // fflush(stdout);
+      Value *db_val = interpreter_eval_expression(interp, node->arguments[0]);
+      Value *sql_val = interpreter_eval_expression(interp, node->arguments[1]);
+
+      if (db_val->type == VAL_INT && sql_val->type == VAL_STRING) {
+        sqlite3 *db = (sqlite3 *)db_val->data.int_val;
+        char *sql = sql_val->data.string_val;
+        char *err_msg = 0;
+
+        // printf("DEBUG: Executing SQL: %s\n", sql);
+        // fflush(stdout);
+
+        // We will store results in a list of objects
+        Value *result_list = value_create_array(0);
+
+        int rc = sqlite3_exec(db, sql, tulpar_sqlite_callback,
+                              (void *)result_list, &err_msg);
+
+        value_free(db_val);
+        value_free(sql_val);
+
+        if (rc != SQLITE_OK) {
+          printf("SQL Error: %s\n", err_msg);
+          sqlite3_free(err_msg);
+          return result_list;
+        }
+
+        // printf("DEBUG: SQL executed successfully\n");
+        return result_list;
+      }
+
+      value_free(db_val);
+      value_free(sql_val);
+      return value_create_array(0);
     }
 
     // Kullanıcı tanımlı fonksiyonlar
