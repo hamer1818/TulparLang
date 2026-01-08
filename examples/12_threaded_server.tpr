@@ -1,0 +1,26 @@
+import "lib/router.tpr";
+
+print("=== Threaded HTTP Server Example ===");
+print("This server handles each request in a new thread.");
+
+// Port
+int port = 8089;
+
+// Route handler
+route_get("/", "handle_home");
+route_get("/slow", "handle_slow");
+
+func handle_home() {
+    // Note: In current router implementation, handlers are defined in routes
+    // and matched, but execution logic is inside router.tpr loop in thread.
+}
+
+func handle_slow() {
+    // This endpoint simulates work
+}
+
+// Middleware to simulate work/logging
+use_middleware("logger");
+
+print("Starting server on port " + toString(port));
+listen(port);

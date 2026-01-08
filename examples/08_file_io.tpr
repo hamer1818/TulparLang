@@ -1,0 +1,27 @@
+print("=== File I/O Demo ===");
+
+str filename = "test_file.txt";
+str content = "Hello, File World!\nThis is line 2.";
+
+// 1. Write
+print("Writing to '" + filename + "'...");
+write_file(filename, content);
+
+// 2. Read
+print("Reading from '" + filename + "'...");
+str read_back = read_file(filename);
+print("Content:\n" + read_back);
+
+// 3. Append
+print("Appending...");
+append_file(filename, "\nLine 3 appended.");
+
+str final_content = read_file(filename);
+print("Final Content:\n" + final_content);
+
+// 4. File Exists
+if (file_exists(filename)) {
+    print("File exists check passed.");
+}
+
+// Note: Ensure interpreter has file_io built-ins enabled.

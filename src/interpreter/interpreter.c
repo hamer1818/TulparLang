@@ -10,6 +10,21 @@
 #include <string.h>
 #include <time.h>
 
+// Thread Arguments Structure
+typedef struct {
+  Interpreter *parent_interp;
+  char *func_name;
+  Value *arg;
+} ThreadArgs;
+
+// Forward Declarations
+static Interpreter *interpreter_clone(Interpreter *src);
+#ifdef _WIN32
+DWORD WINAPI thread_entry_point(LPVOID lpParam);
+#else
+void *thread_entry_point(void *arg);
+#endif
+
 // SQLite Callback
 static int tulpar_sqlite_callback(void *data, int argc, char **argv,
                                   char **azColName) {
@@ -1134,6 +1149,29 @@ Value *value_copy(Value *val) {
     copy->data.object_val = dst;
     break;
   }
+  case VAL_THREAD: {
+#ifdef _WIN32
+    HANDLE hTarget;
+    // Thread handle'ını kopyala (Duplicate) - böylece her value kendi
+    // handle'ına sahip olur
+    if (DuplicateHandle(GetCurrentProcess(), val->data.thread_val,
+                        GetCurrentProcess(), &hTarget, 0, FALSE,
+                        DUPLICATE_SAME_ACCESS)) {
+      copy->data.thread_val = hTarget;
+    } else {
+      copy->data.thread_val = NULL;
+    }
+#else
+    copy->data.thread_val =
+        val->data.thread_val; // POSIX thread id kopyalanabilir
+#endif
+    break;
+  }
+  case VAL_MUTEX: {
+    // Mutex handle kopyala (Shallow copy - aynı mutex'i işaret eder)
+    copy->data.mutex_val = val->data.mutex_val;
+    break;
+  }
   default:
     break;
   }
@@ -1163,6 +1201,14 @@ void value_free(Value *val) {
   }
   if (val->type == VAL_BIGINT && val->data.bigint_val) {
     free(val->data.bigint_val);
+  }
+
+  if (val->type == VAL_THREAD) {
+#ifdef _WIN32
+    if (val->data.thread_val) {
+      CloseHandle(val->data.thread_val);
+    }
+#endif
   }
 
   free(val);
@@ -1207,6 +1253,12 @@ void value_print(Value *val) {
     break;
   case VAL_VOID:
     printf("void");
+    break;
+  case VAL_THREAD:
+    printf("<Thread>");
+    break;
+  case VAL_MUTEX:
+    printf("<Mutex>");
     break;
   default:
     printf("unknown");
@@ -1346,6 +1398,10 @@ Interpreter *interpreter_create() {
   interp->retained_modules = NULL;
   interp->retained_count = 0;
   interp->retained_capacity = 0;
+  // Exception handling initialization
+  interp->exception_handler = NULL;
+  interp->has_exception = 0;
+  interp->current_exception = NULL;
   return interp;
 }
 
@@ -2578,6 +2634,133 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
         value_free(arg);
       }
       return value_create_int(0);
+    }
+
+    // sleep() function - delay execution in milliseconds
+    if (strcmp(node->name, "sleep") == 0) {
+      if (node->argument_count > 0) {
+        Value *arg = interpreter_eval_expression(interp, node->arguments[0]);
+        if (arg->type == VAL_INT) {
+          long long ms = arg->data.int_val;
+#ifdef _WIN32
+          Sleep((DWORD)ms);
+#else
+          usleep(ms * 1000);
+#endif
+          value_free(arg);
+          return value_create_void();
+        }
+        value_free(arg);
+      }
+      return value_create_void();
+    }
+
+    // ============================================
+    // THREADING FUNCTIONS (Built-in)
+    // ============================================
+
+    // thread_create(func_name, arg)
+    if (strcmp(node->name, "thread_create") == 0) {
+      if (node->argument_count >= 1) {
+        Value *func_name_val =
+            interpreter_eval_expression(interp, node->arguments[0]);
+        Value *arg_val = NULL;
+        if (node->argument_count > 1) {
+          arg_val = interpreter_eval_expression(interp, node->arguments[1]);
+        } else {
+          arg_val = value_create_void();
+        }
+
+        if (func_name_val->type == VAL_STRING) {
+          // Thread Args hazırla
+          ThreadArgs *args = (ThreadArgs *)malloc(sizeof(ThreadArgs));
+          args->parent_interp = interp;
+          args->func_name = strdup(func_name_val->data.string_val);
+          // Argümanı kopyala (deep copy safe değilse bile value_copy yap)
+          // Aslında arg_val ownership'i ThreadArgs'a geçecek, çünkü burada free
+          // etmeyeceğiz Ama ThreadArgs içinde deep copy yapmazsak, ana thread
+          // free ederse sorun olur? value_create_xxx ile oluşturulan değer
+          // malloc'ludur. arg_val burada free edilmeyecek, thread içinde free
+          // edilecek. Ancak interpreter_eval_expression yeni bir value
+          // döndürür. Bu value'nun sahipliğini args'a veriyoruz.
+          args->arg = arg_val; // Sahiplik devri
+
+#ifdef _WIN32
+          HANDLE hThread =
+              CreateThread(NULL,               // default security attributes
+                           0,                  // use default stack size
+                           thread_entry_point, // thread function name
+                           args,               // argument to thread function
+                           0,                  // use default creation flags
+                           NULL);              // returns the thread identifier
+
+          if (hThread == NULL) {
+            printf("Error creating thread\n");
+            free(args->func_name);
+            free(args);
+            value_free(arg_val);
+          } else {
+            // Thread handle döndür (VAL_THREAD eklenmeli value_create_thread)
+            // Manuel oluştur:
+            Value *val_t = (Value *)malloc(sizeof(Value));
+            val_t->type = VAL_THREAD;
+            val_t->data.thread_val = hThread;
+            value_free(func_name_val);
+            return val_t;
+          }
+#else
+          // POSIX TODO
+#endif
+        }
+        value_free(func_name_val);
+        // arg_val sahipliği devredilmediyse free et (hata durumu)
+      }
+      return value_create_void();
+    }
+
+    // mutex_create()
+    if (strcmp(node->name, "mutex_create") == 0) {
+#ifdef _WIN32
+      CRITICAL_SECTION *cs =
+          (CRITICAL_SECTION *)malloc(sizeof(CRITICAL_SECTION));
+      InitializeCriticalSection(cs);
+
+      Value *val_m = (Value *)malloc(sizeof(Value));
+      val_m->type = VAL_MUTEX;
+      val_m->data.mutex_val = cs;
+      return val_m;
+#else
+      // POSIX PTHREAD_MUTEX_INITIALIZER? Dynamic -> pthread_mutex_init
+#endif
+      return value_create_void();
+    }
+
+    // mutex_lock(mutex)
+    if (strcmp(node->name, "mutex_lock") == 0) {
+      if (node->argument_count > 0) {
+        Value *arg = interpreter_eval_expression(interp, node->arguments[0]);
+        if (arg->type == VAL_MUTEX) {
+#ifdef _WIN32
+          EnterCriticalSection(arg->data.mutex_val);
+#endif
+        }
+        value_free(arg); // Handle kopyasını free et, mutex'in kendisini değil
+      }
+      return value_create_void();
+    }
+
+    // mutex_unlock(mutex)
+    if (strcmp(node->name, "mutex_unlock") == 0) {
+      if (node->argument_count > 0) {
+        Value *arg = interpreter_eval_expression(interp, node->arguments[0]);
+        if (arg->type == VAL_MUTEX) {
+#ifdef _WIN32
+          LeaveCriticalSection(arg->data.mutex_val);
+#endif
+        }
+        value_free(arg);
+      }
+      return value_create_void();
     }
 
     // toInt() - type conversion
@@ -4857,6 +5040,89 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode *node) {
     break;
   }
 
+  case AST_TRY_CATCH: {
+    // Try-Catch exception handling using setjmp/longjmp
+    ExceptionHandler handler;
+    handler.exception = NULL;
+    handler.active = 1;
+    handler.parent = interp->exception_handler;
+    interp->exception_handler = &handler;
+
+    // setjmp returns 0 on first call, non-zero when longjmp is called
+    int jmp_result = setjmp(handler.jump_buffer);
+
+    if (jmp_result == 0) {
+      // Normal execution - try block
+      interpreter_execute_statement(interp, node->try_block);
+
+      // If no exception, deactivate handler
+      handler.active = 0;
+      interp->exception_handler = handler.parent;
+
+      // Execute finally block if present
+      if (node->finally_block) {
+        interpreter_execute_statement(interp, node->finally_block);
+      }
+    } else {
+      // Exception was thrown - catch block
+      handler.active = 0;
+      interp->exception_handler = handler.parent;
+
+      // Get the exception value
+      Value *exception_val = interp->current_exception;
+      interp->has_exception = 0;
+      interp->current_exception = NULL;
+
+      // Create new scope for catch block with exception variable
+      SymbolTable *old_scope = interp->current_scope;
+      interp->current_scope = symbol_table_create(old_scope);
+
+      // Set exception variable in catch scope
+      if (node->catch_var && exception_val) {
+        symbol_table_set(interp->current_scope, node->catch_var, exception_val);
+      }
+
+      // Execute catch block
+      interpreter_execute_statement(interp, node->catch_block);
+
+      // Restore scope
+      symbol_table_free(interp->current_scope);
+      interp->current_scope = old_scope;
+
+      // Free exception value
+      if (exception_val) {
+        value_free(exception_val);
+      }
+
+      // Execute finally block if present
+      if (node->finally_block) {
+        interpreter_execute_statement(interp, node->finally_block);
+      }
+    }
+    break;
+  }
+
+  case AST_THROW: {
+    // Evaluate the throw expression
+    Value *throw_val = interpreter_eval_expression(interp, node->throw_expr);
+
+    // Check if there's an active exception handler
+    if (interp->exception_handler && interp->exception_handler->active) {
+      // Store exception and jump to handler
+      interp->has_exception = 1;
+      interp->current_exception = throw_val;
+      longjmp(interp->exception_handler->jump_buffer, 1);
+    } else {
+      // No handler - unhandled exception, print error and exit
+      printf("Unhandled exception at line %d: ", node->line);
+      value_print(throw_val);
+      printf("\n");
+      value_free(throw_val);
+      exit(1);
+    }
+    break;
+  }
+
   default:
     break;
   }
@@ -4873,3 +5139,86 @@ void interpreter_execute(Interpreter *interp, ASTNode *node) {
 Value *interpreter_eval(Interpreter *interp, ASTNode *node) {
   return interpreter_eval_expression(interp, node);
 }
+
+// ============================================
+// Thread Helper Functions
+// ============================================
+
+// Helper: Interpreter clone (Thread için)
+// Sadece fonksiyonları ve o anki global değişkenlerin snapshot'ını alır
+static Interpreter *interpreter_clone(Interpreter *src) {
+  Interpreter *dest = interpreter_create();
+
+  // Fonksiyonları kopyala (kod değişmez, referans)
+  for (int i = 0; i < src->function_count; i++) {
+    Function *f = src->functions[i];
+    interpreter_register_function(dest, f->name, f->node);
+  }
+
+  // Tipleri kopyala
+  for (int i = 0; i < src->type_count; i++) {
+    TypeDef *t = src->types[i];
+    interpreter_register_type(dest, t);
+  }
+
+  // Global değişkenleri kopyala (Deep Copy gerekli!)
+  SymbolTable *src_global = src->global_scope;
+  for (int i = 0; i < src_global->var_count; i++) {
+    Variable *var = src_global->variables[i];
+    if (var && var->name && var->value) {
+      Value *val_copy = value_copy(var->value);
+      symbol_table_set(dest->global_scope, var->name, val_copy);
+    }
+  }
+
+  return dest;
+}
+
+// Thread Entry Point (Windows)
+#ifdef _WIN32
+DWORD WINAPI thread_entry_point(LPVOID lpParam) {
+  ThreadArgs *args = (ThreadArgs *)lpParam;
+
+  // Yeni interpreter oluştur ve init et
+  Interpreter *thread_interp = interpreter_clone(args->parent_interp);
+
+  // Fonksiyonu bul
+  Function *func = interpreter_get_function(thread_interp, args->func_name);
+  if (func) {
+    ASTNode *func_node = func->node;
+    if (func_node && func_node->body) {
+      // Argüman varsa ilk parametreye ata
+      // args->arg zaten kopyalanmış bir değer olmalı (main thread'den bağımsız)
+      if (func_node->param_count > 0 && args->arg) {
+        symbol_table_set(thread_interp->global_scope,
+                         func_node->parameters[0]->name, args->arg);
+      }
+
+      // Fonksiyon gövdesini çalıştır
+      // interpreter_execute exception yakalamayı da içerir
+      interpreter_execute(thread_interp, func_node->body);
+    }
+  }
+
+  // Temizlik
+  interpreter_free(thread_interp);
+  // args->arg thread'e aitti (clone sırasında veya creation sırasında
+  // kopyalandı) Ancak symbol_table_set (yukarıda) kopyalamadı, direkt pointer'ı
+  // aldı. interpreter_free sembol tablosunu temizleyince argüman da silinir. Bu
+  // yüzden burada free etmeye gerek yok (eğer symbol table sahipliği aldıysa).
+  // symbol_table_set value ownership almaz, ama SymbolTable destroy ederken
+  // value_free çağırır mı? Evet, symbol_table_free -> value_free çağırır. Bu
+  // yüzden burada args->arg'ı free etmemeliyiz.
+
+  free(args->func_name);
+  free(args);
+
+  return 0;
+}
+#else
+// POSIX Thread entry point
+void *thread_entry_point(void *arg) {
+  // POSIX Implementation (TODO)
+  return NULL;
+}
+#endif

@@ -1,0 +1,44 @@
+print("=== Data Structures Demo ===");
+
+// 1. JSON Objects
+print("\n--- JSON Objects ---");
+json person = {
+    "name": "Hamza",
+    "age": 25,
+    "skills": ["C", "Python", "Tulpar"],
+    "address": {
+        "city": "Istanbul",
+        "zip": "34000"
+    }
+};
+
+print("Person: " + toJson(person));
+print("Name: " + person["name"]);
+print("City: " + person["address"]["city"]);
+print("Skill 1: " + person["skills"][0]);
+
+// Modification
+person["age"] = 26;
+print("Updated Age: " + toString(person["age"]));
+
+// 2. JSON Arrays
+print("\n--- JSON Arrays ---");
+arrayJson users = [
+    {"id": 1, "name": "Alice"},
+    {"id": 2, "name": "Bob"}
+];
+
+print("Users: " + toJson(users));
+
+for (int i = 0; i < length(users); i++) {
+    print("User " + toString(users[i]["id"]) + ": " + users[i]["name"]);
+}
+
+// 3. Struct-like usage (Dictionary)
+print("\n--- Dictionary Usage ---");
+json config = {};
+config["host"] = "localhost";
+config["port"] = 8080;
+config["debug"] = true;
+
+print("Config: " + toJson(config));

@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![TulparLang Logo](https://img.shields.io/badge/TulparLang-v1.6.0-blue?style=for-the-badge)
+![TulparLang Logo](https://img.shields.io/badge/TulparLang-v2.0.0-blue?style=for-the-badge)
 [![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=for-the-badge)](PLATFORM_SUPPORT.md)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen?style=for-the-badge)](BUILD.md)
@@ -48,10 +48,10 @@ TulparLang is a modern, statically-typed programming language built from scratch
 
 | Metric | Value |
 |--------|-------|
-| **Total Lines of Code** | ~4,300+ |
-| **Built-in Functions** | 50+ |
+| **Total Lines of Code** | ~5,500+ |
+| **Built-in Functions** | 60+ |
 | **Data Types** | 9 |
-| **Example Programs** | 19 |
+| **Example Programs** | 13 |
 | **Supported Platforms** | 3 |
 
 ---
@@ -102,6 +102,26 @@ type Person {
     int age;
     str city = "İstanbul";
 }
+```
+
+### ⚡ Multi-Threading Support ✨ NEW
+Native operating system threads and mutex synchronization for high-performance parallel processing.
+```tulpar
+// Create a new thread
+thread_create("worker_function", arg);
+
+// Synchronization
+mutex lock = mutex_create();
+mutex_lock(lock);
+// Critical section...
+mutex_unlock(lock);
+```
+
+### 🚀 High-Performance Router ✨ NEW
+Multi-threaded HTTP router capable of handling concurrent requests without blocking.
+```tulpar
+// Thread-per-request model
+listen(8080); // Spawns a new thread for each incoming connection
 ```
 
 ---
@@ -692,14 +712,20 @@ TulparLang/
 │   │   └── interpreter.h
 │   └── main.c                   # Entry point
 ├── build/                       # Build artifacts
-├── examples/                    # 19 example programs
-│   ├── 01_hello.tpr
-│   ├── 02_variables.tpr
-│   ├── 14_json_objects.tpr
-│   ├── 15_nested_access.tpr
-│   ├── 16_escape_sequences.tpr
-│   ├── 17_math_demo.tpr
-│   └── 18_string_indexing.tpr
+├── examples/                    # 13 Consolidated Examples
+│   ├── 01_hello_world.tpr       # Basic Syntax
+│   ├── 02_basics.tpr            # Variables, Loops, Functions
+│   ├── 03_interactive.tpr       # Input/Output
+│   ├── 04_math_logic.tpr        # Math & Logic
+│   ├── 05_strings.tpr           # String Operations
+│   ├── 06_data_structures.tpr   # JSON Arrays/Objects
+│   ├── 07_modules.tpr           # Import System
+│   ├── 08_file_io.tpr           # File Operations
+│   ├── 09_socket_server.tpr     # Chat Server
+│   ├── 10_try_catch.tpr         # Error Handling
+│   ├── 11_router_app.tpr        # Advanced Web App
+│   ├── 12_threaded_server.tpr   # Multi-Threaded HTTP
+│   └── 13_database.tpr          # SQLite Integration
 ├── docs/                        # Documentation
 │   ├── QUICKSTART.md
 │   ├── KULLANIM.md
@@ -761,17 +787,25 @@ For detailed platform-specific instructions, see [PLATFORM_SUPPORT.md](PLATFORM_
   - [x] String indexing
   - [x] 16 string operations
 
+- [x] Phase 5: Advanced I/O & Modules
+  - [x] Module/Import system
+  - [x] File I/O operations
+  - [x] Error handling (try/catch)
+
+- [x] Phase 6: Performance & Connectivity
+  - [x] Multi-Threading & Mutexes
+  - [x] High-Performance Router
+  - [x] Socket Networking
+  - [x] Database Integration (SQLite)
+
 ### In Progress 🚧
 
 - [ ] Dot notation for objects (`obj.key.nested`)
 - [ ] Object methods (`keys()`, `values()`, `merge()`)
 - [ ] Spread operator (`...obj`, `...arr`)
-- [ ] Module/Import system
 
 ### Planned 📋
 
-- [ ] File I/O operations
-- [ ] Error handling (try/catch)
 - [ ] Lambdas and closures
 - [ ] Standard library expansion
 - [ ] Optimizations and JIT compilation

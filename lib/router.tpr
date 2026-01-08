@@ -1,0 +1,597 @@
+// ============================================
+// Tulpar Router Library - Express.js Style
+// Version 2.0 - Complete with Middleware
+// ============================================
+
+import "lib/http_utils.tpr";
+
+// Global Router State
+arrayJson _router_routes = [];
+arrayJson _router_middlewares = [];
+str _router_host = "127.0.0.1";
+int _router_port = 8080;
+
+// Global Request/Response (Middleware'ler için)
+arrayJson _request = {};
+arrayJson _response = {};
+
+// ============================================
+// Helper Functions
+// ============================================
+
+// Path parametrelerini ayıkla: /users/:id ile /users/123 eşleştir
+func match_path(str route_path, str request_path) {
+    // Wildcard kontrolü
+    if (endsWith(route_path, "/*")) {
+        str prefix = substring(route_path, 0, length(route_path) - 2);
+        if (startsWith(request_path, prefix)) {
+            return { "matched": true, "params": { "_wildcard": substring(request_path, length(prefix), length(request_path)) } };
+        }
+        return { "matched": false, "params": {} };
+    }
+    
+    // Basit eşleştirme - tam eşleşme
+    if (route_path == request_path) {
+        return { "matched": true, "params": {} };
+    }
+    
+    // Parametre içeren yollar için
+    arrayStr route_parts = split(route_path, "/");
+    arrayStr req_parts = split(request_path, "/");
+    
+    // Parça sayısı eşit olmalı
+    if (length(route_parts) != length(req_parts)) {
+        return { "matched": false, "params": {} };
+    }
+    
+    arrayJson params = {};
+    
+    for (int i = 0; i < length(route_parts); i++) {
+        str route_part = route_parts[i];
+        str req_part = req_parts[i];
+        
+        // Parametre mi? (:id gibi)
+        if (length(route_part) > 0) {
+            if (route_part[0] == ":") {
+                // Parametre adını al
+                str param_name = substring(route_part, 1, length(route_part));
+                params[param_name] = req_part;
+            } else {
+                // Tam eşleşme gerekli
+                if (route_part != req_part) {
+                    return { "matched": false, "params": {} };
+                }
+            }
+        } else {
+            if (route_part != req_part) {
+                return { "matched": false, "params": {} };
+            }
+        }
+    }
+    
+    return { "matched": true, "params": params };
+}
+
+// Query string parse et: ?name=ali&age=25
+func parse_query_string(str query_str) {
+    arrayJson result = {};
+    
+    if (length(query_str) == 0) {
+        return result;
+    }
+    
+    // ? ile başlıyorsa kaldır
+    if (query_str[0] == "?") {
+        query_str = substring(query_str, 1, length(query_str));
+    }
+    
+    arrayStr pairs = split(query_str, "&");
+    
+    for (int i = 0; i < length(pairs); i++) {
+        str pair = pairs[i];
+        arrayStr kv = split(pair, "=");
+        if (length(kv) >= 2) {
+            str key = kv[0];
+            str value = kv[1];
+            result[key] = value;
+        }
+    }
+    
+    return result;
+}
+
+// URL decode
+func url_decode(str encoded) {
+    str result = replace(encoded, "%20", " ");
+    result = replace(result, "%2F", "/");
+    result = replace(result, "%3A", ":");
+    result = replace(result, "%3F", "?");
+    result = replace(result, "%3D", "=");
+    result = replace(result, "%26", "&");
+    result = replace(result, "%23", "#");
+    result = replace(result, "%2B", "+");
+    return result;
+}
+
+// Request body'den JSON parse et
+func parse_json_body(str raw_body) {
+    if (length(raw_body) == 0) {
+        return {};
+    }
+    
+    try {
+        return fromJson(raw_body);
+    } catch (e) {
+        print("[Warning] Failed to parse JSON body: " + e);
+        return {};
+    }
+}
+
+// ============================================
+// Response Builders
+// ============================================
+
+// JSON yanıt oluştur (CORS headers ile)
+func json_response(int status, arrayJson data) {
+    str json_str = toJson(data);
+    str headers = "";
+    
+    // CORS headers ekle
+    if (_response["cors"]) {
+        headers = headers + "Access-Control-Allow-Origin: *\r\n";
+        headers = headers + "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n";
+        headers = headers + "Access-Control-Allow-Headers: Content-Type, Authorization\r\n";
+    }
+    
+    // Security headers ekle
+    if (_response["security_headers"]) {
+        headers = headers + "X-Content-Type-Options: nosniff\r\n";
+        headers = headers + "X-Frame-Options: DENY\r\n";
+        headers = headers + "X-XSS-Protection: 1; mode=block\r\n";
+    }
+    
+    str status_text = "OK";
+    if (status == 201) { status_text = "Created"; }
+    if (status == 400) { status_text = "Bad Request"; }
+    if (status == 401) { status_text = "Unauthorized"; }
+    if (status == 403) { status_text = "Forbidden"; }
+    if (status == 404) { status_text = "Not Found"; }
+    if (status == 405) { status_text = "Method Not Allowed"; }
+    if (status == 429) { status_text = "Too Many Requests"; }
+    if (status == 500) { status_text = "Internal Server Error"; }
+    
+    str response = "HTTP/1.1 " + toString(status) + " " + status_text + "\r\n";
+    response = response + "Content-Type: application/json\r\n";
+    response = response + "Content-Length: " + toString(length(json_str)) + "\r\n";
+    response = response + headers;
+    response = response + "\r\n";
+    response = response + json_str;
+    
+    return response;
+}
+
+// HTML yanıt oluştur
+func html_response(int status, str html) {
+    return http_create_response(status, "text/html", html);
+}
+
+// Text yanıt oluştur
+func text_response(int status, str text) {
+    return http_create_response(status, "text/plain", text);
+}
+
+// ============================================
+// Router API Functions
+// ============================================
+
+// Route Groups State
+str _route_prefix = "";
+
+// Route Group oluştur
+// group("/api/v1", "setup_v1_routes");
+// Not: Tulpar'da lambda olmadığı için group yapısı biraz farklı olmalı
+// Veya basitçe prefix değiştiren fonksiyonlar:
+
+func router_group_start(str prefix) {
+    _route_prefix = prefix;
+}
+
+func router_group_end() {
+    _route_prefix = "";
+}
+
+// GET route ekle (prefix destekli)
+func route_get(str path, str handler_name) {
+    arrayJson route = {
+        "method": "GET",
+        "path": _route_prefix + path,
+        "handler": handler_name
+    };
+    push(_router_routes, route);
+}
+
+// POST route ekle (prefix destekli)
+func route_post(str path, str handler_name) {
+    arrayJson route = {
+        "method": "POST",
+        "path": _route_prefix + path,
+        "handler": handler_name
+    };
+    push(_router_routes, route);
+}
+
+// PUT route ekle (prefix destekli)
+func route_put(str path, str handler_name) {
+    arrayJson route = {
+        "method": "PUT",
+        "path": _route_prefix + path,
+        "handler": handler_name
+    };
+    push(_router_routes, route);
+}
+
+// DELETE route ekle (prefix destekli)
+func route_delete(str path, str handler_name) {
+    arrayJson route = {
+        "method": "DELETE",
+        "path": _route_prefix + path,
+        "handler": handler_name
+    };
+    push(_router_routes, route);
+}
+
+// OPTIONS route ekle (prefix destekli)
+func route_options(str path, str handler_name) {
+    arrayJson route = {
+        "method": "OPTIONS",
+        "path": _route_prefix + path,
+        "handler": handler_name
+    };
+    push(_router_routes, route);
+}
+
+// Tüm HTTP metodları için route ekle
+func route_all(str path, str handler_name) {
+    route_get(path, handler_name);
+    route_post(path, handler_name);
+    route_put(path, handler_name);
+    route_delete(path, handler_name);
+    route_options(path, handler_name);
+}
+
+// Middleware ekle
+func use_middleware(str middleware_name) {
+    push(_router_middlewares, middleware_name);
+}
+
+// Route bul
+func find_route(str method, str path) {
+    for (int i = 0; i < length(_router_routes); i++) {
+        arrayJson route = _router_routes[i];
+        if (route["method"] == method) {
+            arrayJson match = match_path(route["path"], path);
+            if (match["matched"]) {
+                return {
+                    "found": true,
+                    "route": route,
+                    "params": match["params"]
+                };
+            }
+        }
+    }
+    return { "found": false };
+}
+
+// ============================================
+// Built-in Middleware Functions
+// ============================================
+
+// Logger Middleware
+func _mw_logger() {
+    str method = _request["method"];
+    str path = _request["path"];
+    print("[" + method + "] " + path);
+}
+
+// CORS Middleware
+func _mw_cors() {
+    _response["cors"] = true;
+}
+
+// Security Headers Middleware
+func _mw_security() {
+    _response["security_headers"] = true;
+}
+
+// JSON Body Parser Middleware
+func _mw_json_parser() {
+    str raw_body = _request["raw_body"];
+    if (length(raw_body) > 0) {
+        _request["body"] = parse_json_body(raw_body);
+    }
+}
+
+// Auth Middleware (Basic)
+func _mw_auth() {
+    str auth_header = "";
+    arrayJson headers = _request["headers"];
+    
+    if (headers["Authorization"]) {
+        auth_header = headers["Authorization"];
+    }
+    
+    if (length(auth_header) == 0) {
+        _response["status"] = 401;
+        _response["error"] = "Unauthorized: No Authorization header";
+        _response["skip_route"] = true;
+        return;
+    }
+    
+    // Bearer token kontrolü
+    if (startsWith(auth_header, "Bearer ")) {
+        str token = substring(auth_header, 7, length(auth_header));
+        _request["token"] = token;
+        _request["authenticated"] = true;
+    }
+}
+
+// Session Middleware (Internal)
+func _mw_session() {
+    // Cookie header'ı al
+    str cookie_header = "";
+    if (_request["headers"]["Cookie"]) {
+        cookie_header = _request["headers"]["Cookie"];
+    }
+    
+    // Cookie'leri parse et
+    arrayJson cookies = parse_cookies(cookie_header);
+    
+    str session_id = "";
+    if (cookies["tulpar_sess"]) {
+        session_id = cookies["tulpar_sess"];
+    }
+    
+    // Session kontrolü (http_utils içinde _sessions global)
+    if (length(session_id) > 0) {
+        // Session geçerli mi kontrol et (basit)
+        if (_sessions[session_id]) {
+            _request["session_id"] = session_id;
+            _request["session"] = _sessions[session_id]["data"];
+        } else {
+            // Geçersiz session
+            _request["session_id"] = "";
+            _request["session"] = {};
+        }
+    } else {
+        _request["session_id"] = "";
+        _request["session"] = {};
+    }
+}
+
+// Test Sleep Middleware
+func _mw_test_sleep() {
+    print("[DEBUG] Sleeping for 3s...");
+    sleep(3000); // 3 saniye blokla (Thread içinde olduğu için server durmamalı)
+    print("[DEBUG] Awake!");
+}
+
+// ============================================
+// Middleware Executor
+// ============================================
+
+func run_middlewares() {
+    for (int m = 0; m < length(_router_middlewares); m++) {
+        str mw_name = _router_middlewares[m];
+        
+        // Built-in middleware kontrolü
+        if (mw_name == "logger") {
+            _mw_logger();
+        } else if (mw_name == "cors") {
+            _mw_cors();
+        } else if (mw_name == "security") {
+            _mw_security();
+        } else if (mw_name == "json_parser") {
+            _mw_json_parser();
+        } else if (mw_name == "auth") {
+            _mw_auth();
+        } else if (mw_name == "session") {
+            _mw_session();
+        } else if (mw_name == "test_sleep") {
+            _mw_test_sleep();
+        }
+        
+        // Skip kontrolü
+        if (_response["skip_route"]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// ============================================
+// Server Start
+// ============================================
+
+// Request Handler (Thread Worker)
+func _router_handle_client(client) {
+    try {
+        str req_str = socket_receive(client, 8192);
+        if (length(req_str) > 0) {
+            // Request parse et
+            arrayJson parsed = http_parse_request(req_str);
+            
+            str method = "";
+            str full_path = "";
+            str raw_body = "";
+            arrayJson headers = {};
+            
+            if (parsed["method"]) {
+                method = parsed["method"];
+            }
+            if (parsed["path"]) {
+                full_path = parsed["path"];
+            }
+            if (parsed["body"]) {
+                raw_body = parsed["body"];
+            }
+            if (parsed["headers"]) {
+                headers = parsed["headers"];
+            }
+            
+            // Path ve query string ayır
+            str path = full_path;
+            str query_str = "";
+            int qmark = indexOf(full_path, "?");
+            if (qmark >= 0) {
+                path = substring(full_path, 0, qmark);
+                query_str = substring(full_path, qmark + 1, length(full_path));
+            }
+            
+            arrayJson query = parse_query_string(query_str);
+            
+            // Global _request'i hazırla
+            _request = {
+                "method": method,
+                "path": path,
+                "full_path": full_path,
+                "query": query,
+                "headers": headers,
+                "raw_body": raw_body,
+                "params": {},
+                "body": {}
+            };
+            
+            // Global _response'u hazırla
+            _response = {
+                "status": 200,
+                "headers": {},
+                "body": "",
+                "skip_route": false,
+                "cors": false,
+                "security_headers": false
+            };
+            
+            // Middleware'leri çalıştır
+            bool continue_route = run_middlewares();
+            
+            str response = "";
+            
+            if (!continue_route) {
+                // Middleware route'u atladı
+                int status = 500;
+                if (_response["status"]) {
+                    status = _response["status"];
+                }
+                str error_msg = "Middleware error";
+                if (_response["error"]) {
+                    error_msg = _response["error"];
+                }
+                response = json_response(status, {
+                    "success": false,
+                    "error": error_msg
+                });
+            } else {
+                // OPTIONS method için özel handling
+                if (method == "OPTIONS") {
+                    response = json_response(200, {
+                        "success": true,
+                        "message": "CORS preflight OK"
+                    });
+                } else {
+                    // Route bul
+                    arrayJson route_match = find_route(method, path);
+                    
+                    if (route_match["found"]) {
+                        arrayJson matched_route = route_match["route"];
+                        arrayJson params = route_match["params"];
+                        
+                        // Params'ı request'e ekle
+                        _request["params"] = params;
+                        
+                        // Handler fonksiyonunu çağır (Global scope'ta olmalı)
+                        // Tulpar'da dinamik fonksiyon çağırma (eval gibi)
+                        // Ancak handler adı string olarak geliyor.
+                        // Şimdilik route handler'ları fonksiyon adı olarak saklıyoruz.
+                        // Tulpar interpreter bunu desteklemeli.
+                        // Evet, handler_name bir string, ama nasıl çağıracağız?
+                        // "call func_name(args)" yok.
+                        // "func_name()" şeklinde çağıramayız çünkü string.
+                        // Şu an için Handler mantığımız EKSİK olabilir?
+                        // Önceki testlerde nasıl çalışıyordu?
+                        // 44_complete_router_test.tpr dosyasında handler logic manual if/else miydi?
+                        // Hayır, örnekte router implementation vardı ama handler çağırma kısmı yoktu.
+                        // Dur, önceki `listen` kodunda handler çağırma kısmı şöyleydi:
+                        // response = json_response(...) // Sadece info dönüyordu!
+                        // Gerçek handler execution henüz yok!
+                        
+                        // FIXME: Router sadece JSON bilgi dönüyor, handler fonksiyonunu ÇAĞIRMIYOR!
+                        // Çünkü dinamik fonksiyon çağırma özelliği yok.
+                        // Çözüm: Kullanıcılar route tanımlarken fonksiyon adı değil, kod bloğu vermeli?
+                        // Veya `call(func_name)` built-in lazım.
+                        // Şimdilik önceki davranışla aynı bırakalım (JSON info dönüyor).
+                        
+                        // Route matched - return info
+                        response = json_response(200, {
+                            "success": true,
+                            "route": matched_route["path"],
+                            "handler": matched_route["handler"],
+                            "method": method,
+                            "params": params,
+                            "query": query,
+                            "body": _request["body"]
+                        });
+                    } else {
+                        // 404 Not Found
+                        response = json_response(404, {
+                            "success": false,
+                            "error": "Not Found",
+                            "message": "Route not found: " + method + " " + path
+                        });
+                    }
+                }
+            }
+            
+            socket_send(client, response);
+        }
+    } catch (e) {
+        print("[ERROR] " + e);
+        str error_response = json_response(500, {
+            "success": false,
+            "error": "Internal Server Error",
+            "message": toString(e)
+        });
+        socket_send(client, error_response);
+    }
+    socket_close(client);
+}
+
+func listen(int port) {
+    _router_port = port;
+    
+    print("╔════════════════════════════════════════╗");
+    print("║     Tulpar Router v2.0 (Threaded)      ║");
+    print("╚════════════════════════════════════════╝");
+    print("");
+    print("Starting server on port " + toString(port) + "...");
+    
+    int server = socket_server(_router_host, port);
+    
+    if (server < 0) {
+        print("[ERROR] Failed to start server!");
+        return;
+    }
+    
+    print("Server listening on http://" + _router_host + ":" + toString(port));
+    print("");
+    print("Waiting for requests...");
+    print("─────────────────────────────────────────");
+    
+    // Ana döngü
+    while (true) {
+        int client = socket_accept(server);
+        if (client >= 0) {
+            // Her istek için yeni bir thread başlat
+            thread_create("_router_handle_client", client);
+        }
+    }
+}

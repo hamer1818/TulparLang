@@ -1,2 +1,0 @@
-import "lib/socket.tpr";
-print("Lib loaded successfully");

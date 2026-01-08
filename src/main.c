@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
@@ -158,7 +157,7 @@ int main(int argc, char **argv) {
   _setmode(_fileno(stdout), _O_BINARY);
   _setmode(_fileno(stderr), _O_BINARY);
   _setmode(_fileno(stdin), _O_BINARY);
-  setvbuf(stdout, NULL, _IOFBF, 1000);
+  setvbuf(stdout, NULL, _IONBF, 0);
 #endif
 
   // Locale setup
@@ -208,10 +207,9 @@ int main(int argc, char **argv) {
                     "int fib5 = fibonacci(5);\n");
   }
 
-  // Başlık
   if (!from_file) {
     printf("========================================\n");
-    printf("   TulparLang Interpreter - Demo\n");
+    printf("   TulparLang Interpreter v2.0.0 🐎\n");
     printf("========================================\n\n");
     printf("Kaynak Kod:\n");
     printf("-------------------\n%s\n", source);

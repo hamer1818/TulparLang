@@ -1,0 +1,197 @@
+// ============================================
+// Tulpar Async Library
+// Basit asenkron programlama yardımcıları
+// ============================================
+
+// NOT: TulparLang şu anda gerçek asenkron programlama (event loop, callbacks)
+// desteklememektedir. Bu kütüphane, asenkron programlama için temel yapıları
+// tanımlar ve gelecekte interpreter desteği ile genişletilebilir.
+
+// ============================================
+// Global Timer State
+// ============================================
+
+arrayJson _timers = [];
+int _timer_id = 0;
+
+// ============================================
+// Timer Types (for documentation)
+// ============================================
+
+// Timer yapısı:
+// {
+//     "id": int,           // Timer ID
+//     "delay": int,        // Milisaniye cinsinden gecikme
+//     "callback": str,     // Callback fonksiyon adı
+//     "interval": bool,    // Tekrarlayan timer mı?
+//     "active": bool       // Timer aktif mi?
+// }
+
+// ============================================
+// Timer Functions
+// ============================================
+
+// Yeni timeout oluştur (gelecek için hazırlık)
+// NOT: Şu an blocking delay olarak çalışır
+func setTimeout(str callback_name, int delay_ms) {
+    _timer_id = _timer_id + 1;
+    
+    arrayJson timer = {
+        "id": _timer_id,
+        "delay": delay_ms,
+        "callback": callback_name,
+        "interval": false,
+        "active": true
+    };
+    
+    push(_timers, timer);
+    
+    // Şu an için sadece timer'ı kaydet
+    // Gerçek çalıştırma event loop gerektirir
+    print("[Timer] setTimeout registered: " + callback_name + " (delay: " + toString(delay_ms) + "ms)");
+    
+    return _timer_id;
+}
+
+// Yeni interval oluştur
+func setInterval(str callback_name, int interval_ms) {
+    _timer_id = _timer_id + 1;
+    
+    arrayJson timer = {
+        "id": _timer_id,
+        "delay": interval_ms,
+        "callback": callback_name,
+        "interval": true,
+        "active": true
+    };
+    
+    push(_timers, timer);
+    
+    print("[Timer] setInterval registered: " + callback_name + " (interval: " + toString(interval_ms) + "ms)");
+    
+    return _timer_id;
+}
+
+// Timer'ı iptal et
+func clearTimeout(int timer_id) {
+    for (int i = 0; i < length(_timers); i++) {
+        if (_timers[i]["id"] == timer_id) {
+            _timers[i]["active"] = false;
+            print("[Timer] Timer " + toString(timer_id) + " cleared");
+            return true;
+        }
+    }
+    return false;
+}
+
+// Interval'ı iptal et (aynı işlev)
+func clearInterval(int timer_id) {
+    return clearTimeout(timer_id);
+}
+
+// ============================================
+// Promise-like Pattern (Simulated)
+// ============================================
+
+// Promise state'leri
+str PROMISE_PENDING = "pending";
+str PROMISE_FULFILLED = "fulfilled";
+str PROMISE_REJECTED = "rejected";
+
+// Promise oluştur
+func create_promise() {
+    return {
+        "state": PROMISE_PENDING,
+        "value": "",
+        "error": ""
+    };
+}
+
+// Promise resolve et
+func resolve_promise(arrayJson promise, str value) {
+    promise["state"] = PROMISE_FULFILLED;
+    promise["value"] = value;
+    return promise;
+}
+
+// Promise reject et
+func reject_promise(arrayJson promise, str error) {
+    promise["state"] = PROMISE_REJECTED;
+    promise["error"] = error;
+    return promise;
+}
+
+// Promise durumunu kontrol et
+func is_pending(arrayJson promise) {
+    return promise["state"] == PROMISE_PENDING;
+}
+
+func is_fulfilled(arrayJson promise) {
+    return promise["state"] == PROMISE_FULFILLED;
+}
+
+func is_rejected(arrayJson promise) {
+    return promise["state"] == PROMISE_REJECTED;
+}
+
+// ============================================
+// Async/Await Pattern (Documentation)
+// ============================================
+
+/*
+Gelecek sürümlerde aşağıdaki sözdizimi desteklenebilir:
+
+async func fetchData() {
+    arrayJson result = await http_get("https://api.example.com/data");
+    return result;
+}
+
+// Callback-based pattern (şu an desteklenen)
+func fetchData_callback(str url, str success_callback, str error_callback) {
+    try {
+        arrayJson result = http_get(url);
+        // success_callback(result);  // First-class functions gerektirir
+    } catch (e) {
+        // error_callback(e);
+    }
+}
+*/
+
+// ============================================
+// Utility Functions
+// ============================================
+
+// Gerçek delay fonksiyonu
+func delay(int ms) {
+    sleep(ms);
+}
+
+// İş kuyruğu oluştur
+func create_task_queue() {
+    return {
+        "tasks": [],
+        "running": false
+    };
+}
+
+// Kuyruğa iş ekle
+func enqueue_task(arrayJson queue, str task_name, arrayJson data) {
+    arrayJson task = {
+        "name": task_name,
+        "data": data,
+        "status": "pending"
+    };
+    push(queue["tasks"], task);
+    return queue;
+}
+
+// Kuyruktan iş al
+func dequeue_task(arrayJson queue) {
+    if (length(queue["tasks"]) > 0) {
+        arrayJson task = queue["tasks"][0];
+        // shift() yerine manuel yöntemi için
+        // TODO: Array shift fonksiyonu eklenebilir
+        return task;
+    }
+    return {};
+}

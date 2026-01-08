@@ -1,0 +1,155 @@
+// ============================================
+// Tulpar HTTP Utilities Library
+// Cookies, Sessions, Static Files
+// ============================================
+
+// ============================================
+// Cookie Handling
+// ============================================
+
+// Cookie Parse Et
+// "name=value; name2=value2" -> {"name": "value", "name2": "value2"}
+func parse_cookies(str cookie_header) {
+    arrayJson cookies = {};
+    
+    if (length(cookie_header) == 0) {
+        return cookies;
+    }
+    
+    arrayStr parts = split(cookie_header, ";");
+    
+    for (int i = 0; i < length(parts); i++) {
+        str part = parts[i];
+        // Trim whitespace (basit implementasyon)
+        // TODO: string_trim fonksiyonu eklendiğinde güncelle
+        
+        arrayStr kv = split(part, "=");
+        if (length(kv) >= 2) {
+            str key = kv[0];
+            str val = kv[1];
+            
+            // Key başındaki boşlukları temizle (basit)
+            if (length(key) > 0 && key[0] == " ") {
+                key = substring(key, 1, length(key));
+            }
+            
+            cookies[key] = val;
+        }
+    }
+    
+    return cookies;
+}
+
+// Set-Cookie Header Oluştur
+func create_cookie(str name, str value, arrayJson options) {
+    str cookie = name + "=" + value;
+    
+    if (options["Path"]) {
+        cookie = cookie + "; Path=" + options["Path"];
+    } else {
+        cookie = cookie + "; Path=/";
+    }
+    
+    if (options["HttpOnly"]) {
+        if (options["HttpOnly"]) {
+            cookie = cookie + "; HttpOnly";
+        }
+    }
+    
+    if (options["Secure"]) {
+        if (options["Secure"]) {
+            cookie = cookie + "; Secure";
+        }
+    }
+    
+    if (options["Max-Age"]) {
+        cookie = cookie + "; Max-Age=" + toString(options["Max-Age"]);
+    }
+    
+    if (options["SameSite"]) {
+        cookie = cookie + "; SameSite=" + options["SameSite"];
+    }
+    
+    return cookie;
+}
+
+// ============================================
+// Session Management (In-Memory)
+// ============================================
+
+arrayJson _sessions = {};
+
+// Yeni session oluştur
+func create_session(arrayJson user_data) {
+    // Basit session ID oluşturma (random sayı + timestamp)
+    // Not: Gerçek uygulamada daha güvenli UUID kullanılmalı
+    int rand_id = 0; // TODO: random() eklenince güncelle
+    str session_id = "sess_" + toString(_router_port) + "_" + toString(length(_sessions)); 
+    
+    _sessions[session_id] = {
+        "id": session_id,
+        "data": user_data,
+        "created_at": "TODO: timestamp", 
+        "expires_at": "TODO: timestamp + duration"
+    };
+    
+    return session_id;
+}
+
+// Session getir
+func get_session(str session_id) {
+    if (_sessions[session_id]) {
+        return _sessions[session_id];
+    }
+    return {};
+}
+
+// Session sil
+func destroy_session(str session_id) {
+    // Tulpar'da array/map elemanı silme desteği kısıtlı olabilir
+    // Şimdilik boşaltma yapalım
+    if (_sessions[session_id]) {
+        _sessions[session_id] = {}; 
+        return true;
+    }
+    return false;
+}
+
+// ============================================
+// Static File Serving
+// ============================================
+
+// Content-Type belirle
+func get_mime_type(str filename) {
+    if (endsWith(filename, ".html")) { return "text/html"; }
+    if (endsWith(filename, ".css")) { return "text/css"; }
+    if (endsWith(filename, ".js")) { return "application/javascript"; }
+    if (endsWith(filename, ".json")) { return "application/json"; }
+    if (endsWith(filename, ".png")) { return "image/png"; }
+    if (endsWith(filename, ".jpg")) { return "image/jpeg"; }
+    if (endsWith(filename, ".txt")) { return "text/plain"; }
+    return "application/octet-stream";
+}
+
+// Dosya oku ve response hazırla
+// Not: read_file fonksiyonu interpreter'da olmalı
+func serve_static_file(str path) {
+    // Path traversal koruması (basit)
+    if (contains(path, "..")) {
+        return json_response(403, {"error": "Forbidden"});
+    }
+    
+    try {
+        // Dosya okuma (Interpreter'da read_file built-in olmalı)
+        // Eğer yoksa, bu fonksiyonu interpreter güncellemesinden sonra aktifleştirin
+        // şimdilik simülasyon
+        
+        // str content = read_file(path); // TODO: implement read_file
+        // return http_create_response(200, get_mime_type(path), content);
+        
+        return json_response(501, {"error": "Not Implemented: File IO pending"});
+        
+    } catch (e) {
+        return json_response(404, {"error": "File not found"});
+    }
+}

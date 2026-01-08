@@ -1,0 +1,54 @@
+// ============================================
+// TRY-CATCH TEST
+// ============================================
+
+print("=== Try-Catch Test ===");
+
+// Test 1: Basic try-catch with throw
+print("\n-- Test 1: Basic throw and catch --");
+try {
+    print("Inside try block");
+    throw "This is an error!";
+    print("This should NOT print");
+} catch (e) {
+    print("Caught exception: " + e);
+}
+print("After try-catch");
+
+// Test 2: Try-catch with object throw
+print("\n-- Test 2: Object throw --");
+try {
+    arrayJson error = {
+        "message": "Something went wrong",
+        "code": 500
+    };
+    throw error;
+} catch (err) {
+    print("Caught error object:");
+    print("Message: " + err["message"]);
+}
+
+// Test 3: Try-catch with finally
+print("\n-- Test 3: Finally block --");
+try {
+    print("Try block executing");
+    throw "Error with finally";
+} catch (e) {
+    print("Caught: " + e);
+} finally {
+    print("Finally block - always executes");
+}
+
+// Test 4: No exception thrown
+print("\n-- Test 4: No exception --");
+try {
+    print("Try block - no error");
+    int x = 5 + 3;
+    print("Result: " + toString(x));
+} catch (e) {
+    print("This should NOT print");
+} finally {
+    print("Finally runs anyway");
+}
+
+print("\n=== All tests completed! ===");

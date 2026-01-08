@@ -117,6 +117,7 @@ static ASTNode *parse_assignment(Parser *parser, int expect_semicolon);
 static ASTNode *parse_compound_assignment(Parser *parser, int expect_semicolon);
 static ASTNode *parse_increment(Parser *parser, int expect_semicolon);
 static ASTNode *parse_decrement(Parser *parser, int expect_semicolon);
+static ASTNode *parse_block(Parser *parser);
 
 // Object literal parse ({ "key": value, "key2": value2 })
 static ASTNode *parse_object_literal(Parser *parser) {
@@ -905,6 +906,90 @@ static ASTNode *parse_continue(Parser *parser) {
   return node;
 }
 
+// Try-Catch-Finally statement
+// Syntax: try { ... } catch (e) { ... } finally { ... }
+static ASTNode *parse_try_catch(Parser *parser) {
+  ASTNode *node = ast_node_create(AST_TRY_CATCH);
+  node->line = parser->current_token->line;
+  node->column = parser->current_token->column;
+  parser_advance(parser); // 'try' atla
+
+  // Try block
+  if (parser->current_token->type != TOKEN_LBRACE) {
+    printf("Parser Error: Expected '{' after 'try' at line %d\n",
+           parser->current_token->line);
+    ast_node_free(node);
+    return NULL;
+  }
+  node->try_block = parse_block(parser);
+
+  // Catch block (required)
+  if (parser->current_token->type != TOKEN_CATCH) {
+    printf("Parser Error: Expected 'catch' after try block at line %d\n",
+           parser->current_token->line);
+    ast_node_free(node);
+    return NULL;
+  }
+  parser_advance(parser); // 'catch' atla
+
+  // catch (e) - exception variable
+  parser_expect(parser, TOKEN_LPAREN);
+  if (parser->current_token->type != TOKEN_IDENTIFIER) {
+    printf("Parser Error: Expected exception variable in catch at line %d\n",
+           parser->current_token->line);
+    ast_node_free(node);
+    return NULL;
+  }
+  node->catch_var = strdup(parser->current_token->value);
+  parser_advance(parser);
+  parser_expect(parser, TOKEN_RPAREN);
+
+  // Catch block body
+  if (parser->current_token->type != TOKEN_LBRACE) {
+    printf("Parser Error: Expected '{' after catch at line %d\n",
+           parser->current_token->line);
+    ast_node_free(node);
+    return NULL;
+  }
+  node->catch_block = parse_block(parser);
+
+  // Finally block (optional)
+  node->finally_block = NULL;
+  if (parser->current_token->type == TOKEN_FINALLY) {
+    parser_advance(parser); // 'finally' atla
+    if (parser->current_token->type != TOKEN_LBRACE) {
+      printf("Parser Error: Expected '{' after 'finally' at line %d\n",
+             parser->current_token->line);
+      ast_node_free(node);
+      return NULL;
+    }
+    node->finally_block = parse_block(parser);
+  }
+
+  return node;
+}
+
+// Throw statement
+// Syntax: throw expression;
+static ASTNode *parse_throw(Parser *parser) {
+  ASTNode *node = ast_node_create(AST_THROW);
+  node->line = parser->current_token->line;
+  node->column = parser->current_token->column;
+  parser_advance(parser); // 'throw' atla
+
+  // throw sonrası expression bekleniyor
+  node->throw_expr = parse_expression(parser);
+  if (!node->throw_expr) {
+    printf("Parser Error: Expected expression after 'throw' at line %d\n",
+           parser->current_token->line);
+    ast_node_free(node);
+    return NULL;
+  }
+
+  parser_expect(parser, TOKEN_SEMICOLON);
+  return node;
+}
+
 // Block: { ... }
 static ASTNode *parse_block(Parser *parser) {
   ASTNode *node = ast_node_create(AST_BLOCK);
@@ -1247,6 +1332,16 @@ static ASTNode *parse_statement(Parser *parser) {
   // Continue statement
   if (token->type == TOKEN_CONTINUE) {
     return parse_continue(parser);
+  }
+
+  // Try-Catch statement
+  if (token->type == TOKEN_TRY) {
+    return parse_try_catch(parser);
+  }
+
+  // Throw statement
+  if (token->type == TOKEN_THROW) {
+    return parse_throw(parser);
   }
 
   // Import statement

@@ -1,0 +1,20 @@
+print("=== Modules Demo ===");
+print("Importing 'examples/utils.tpr'...");
+
+// Modülü import et
+// Not: Çalıştırılan dizine göre path değişebilir. 
+// Bu örnek Tulpar kök dizininden çalıştırıldığında geçerlidir.
+import "examples/utils.tpr";
+
+print("Utils Imported.");
+
+// Utis içindeki fonksiyonları kullan
+print("PI: " + toString(PI));
+print("5 + 10 = " + toString(topla(5, 10)));
+print("3^4 = " + toString(us_al(3, 4)));
+
+// Utils içindeki tipi kullan
+Point p;
+p.x = 10;
+p.y = 20;
+print("Point: (" + toString(p.x) + ", " + toString(p.y) + ")");

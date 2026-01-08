@@ -1,8 +1,0 @@
-type Person { str name; }
-func Person.greet() {
-    print("Hello, " + self["name"]);
-}
-
-Person p = Person(name: "Ali");
-p.greet(); // This should work now
-print("Done");

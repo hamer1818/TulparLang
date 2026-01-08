@@ -1,0 +1,163 @@
+// ============================================
+// Tulpar Middleware Library
+// Built-in middleware'ler
+// ============================================
+
+// ============================================
+// Logger Middleware
+// Her request'i loglar
+// ============================================
+func middleware_logger() {
+    str timestamp = toString(_request["timestamp"]);
+    str method = _request["method"];
+    str path = _request["path"];
+    
+    print("[LOG] " + timestamp + " - " + method + " " + path);
+}
+
+// ============================================
+// CORS Middleware
+// Cross-Origin Resource Sharing headers ekler
+// ============================================
+func middleware_cors() {
+    _response["headers"]["Access-Control-Allow-Origin"] = "*";
+    _response["headers"]["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";
+    _response["headers"]["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
+}
+
+// ============================================
+// JSON Body Parser Middleware
+// Request body'yi JSON olarak parse eder
+// ============================================
+func middleware_json_parser() {
+    str content_type = "";
+    if (_request["headers"]["Content-Type"]) {
+        content_type = _request["headers"]["Content-Type"];
+    }
+    
+    if (contains(content_type, "application/json")) {
+        str raw_body = _request["raw_body"];
+        if (length(raw_body) > 0) {
+            try {
+                _request["body"] = fromJson(raw_body);
+            } catch (e) {
+                _request["body"] = {};
+                print("[Warning] Failed to parse JSON body");
+            }
+        }
+    }
+}
+
+// ============================================
+// Auth Middleware (Example)
+// Bearer token kontrolü yapar
+// ============================================
+func middleware_auth() {
+    str auth_header = "";
+    if (_request["headers"]["Authorization"]) {
+        auth_header = _request["headers"]["Authorization"];
+    }
+    
+    if (length(auth_header) == 0) {
+        _response["status"] = 401;
+        _response["error"] = "Unauthorized: No Authorization header";
+        _response["skip_route"] = true;
+        return;
+    }
+    
+    // Bearer token kontrolü
+    if (!startsWith(auth_header, "Bearer ")) {
+        _response["status"] = 401;
+        _response["error"] = "Unauthorized: Invalid token format";
+        _response["skip_route"] = true;
+        return;
+    }
+    
+    // Token'ı ayıkla ve request'e ekle
+    str token = substring(auth_header, 7, length(auth_header));
+    _request["token"] = token;
+    _request["authenticated"] = true;
+}
+
+// ============================================
+// Rate Limiter Middleware (Simple)
+// Basit istek sayacı
+// ============================================
+// Not: Bu basit bir örnek. Gerçek rate limiting için
+// redis veya benzeri bir store gerekir.
+
+arrayJson _rate_limit_store = {};
+
+func middleware_rate_limiter() {
+    str client_ip = "127.0.0.1"; // TODO: Gerçek IP'yi al
+    int max_requests = 100;
+    int window_seconds = 60;
+    
+    // Basit rate limit kontrolü
+    // Gerçek implementasyonda timestamp kontrolü gerekir
+    if (_rate_limit_store[client_ip]) {
+        int count = _rate_limit_store[client_ip];
+        if (count >= max_requests) {
+            _response["status"] = 429;
+            _response["error"] = "Too Many Requests";
+            _response["skip_route"] = true;
+            return;
+        }
+        _rate_limit_store[client_ip] = count + 1;
+    } else {
+        _rate_limit_store[client_ip] = 1;
+    }
+}
+
+// ============================================
+// Security Headers Middleware
+// Güvenlik headerları ekler
+// ============================================
+func middleware_security_headers() {
+    _response["headers"]["X-Content-Type-Options"] = "nosniff";
+    _response["headers"]["X-Frame-Options"] = "DENY";
+    _response["headers"]["X-XSS-Protection"] = "1; mode=block";
+    _response["headers"]["Referrer-Policy"] = "strict-origin-when-cross-origin";
+}
+
+// ============================================
+// Session Middleware
+// Cookie tabanlı session yönetimi
+// ============================================
+// NOT: http_utils.tpr import edilmeli
+
+func middleware_session() {
+    // Cookie header'ı al
+    str cookie_header = "";
+    if (_request["headers"]["Cookie"]) {
+        cookie_header = _request["headers"]["Cookie"];
+    }
+    
+    // Cookie'leri parse et (library fonksiyonu)
+    // Bu fonksiyon henüz router'a dahil edilmediği için buraya kopyalayım veya
+    // import yapısını düzeltmeliyiz. Şimdilik basitleştirilmiş parser:
+    
+    str session_id = "";
+    if (length(cookie_header) > 0) {
+        if (contains(cookie_header, "tulpar_sess=")) {
+            // Basit extraction
+            arrayStr parts = split(cookie_header, "tulpar_sess=");
+            if (length(parts) > 1) {
+                str after = parts[1];
+                arrayStr parts2 = split(after, ";");
+                session_id = parts2[0];
+            }
+        }
+    }
+    
+    // Session kontrolü
+    if (length(session_id) > 0) {
+        // Global sessions arrayine erişim gerekli
+        // Şimdilik route handler içinde erişilecek
+        _request["session_id"] = session_id;
+    } else {
+        // Yeni session oluşturulmalı mı?
+        // Bu genellikle login sırasında yapılır
+        _request["session_id"] = "";
+    }
+}
