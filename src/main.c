@@ -1,4 +1,4 @@
-#define WIN32_LEAN_AND_MEAN
+
 #include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +14,9 @@
 #include "interpreter/interpreter.h"
 #include "lexer/lexer.h"
 #include "parser/parser.h"
+#include "vm/compiler.h"
+#include "vm/vm.h"
+#include <time.h>
 
 // Dosyadan kaynak kodu oku
 char *read_file(const char *filename) {
@@ -262,35 +265,94 @@ int main(int argc, char **argv) {
   }
 
   // ========================================
-  // 3. INTERPRETER (Kodu Çalıştırma)
+  // 3. RUNTIME (VM vs Interpreter)
   // ========================================
-  if (!from_file) {
-    printf("\n3. INTERPRETER (Kodu Calistirma)\n");
-    printf("=================================\n");
+  int use_vm = 1; // Default to VM
+
+  if (argc > 2 && strcmp(argv[2], "--legacy") == 0) {
+    use_vm = 0;
   }
 
-  Interpreter *interp = interpreter_create();
-  interpreter_execute(interp, ast);
-
-  // Sonuçları göster
-  if (!from_file) {
-    printf("\nDegisken Degerleri:\n");
-    printf("-------------------\n");
-
-    // Tüm global değişkenleri göster
-    for (int i = 0; i < interp->global_scope->var_count; i++) {
-      printf("%s = ", interp->global_scope->variables[i]->name);
-      value_print(interp->global_scope->variables[i]->value);
-      printf("\n");
+  if (use_vm) {
+    if (!from_file) {
+      printf("\n3. COMPILER & VM (Bytecode Execution)\n");
+      printf("========================================\n");
     }
 
-    printf("\n========================================\n");
-    printf("   TulparLang basariyla calisti! ✓\n");
-    printf("========================================\n");
+    // Compile AST to Bytecode
+    Chunk *chunk = compile(ast);
+
+    if (!chunk) {
+      printf("Error: Compilation failed!\n");
+      return 1;
+    }
+
+    if (!from_file) {
+      // chunk_disassemble(chunk, "Main Script");
+    }
+
+    // Initialize VM
+    VM *vm = vm_create();
+
+    // Create main script function
+    ObjFunction *script = vm_new_function(vm);
+
+    // Transfer chunk ownership to script function
+    script->chunk = *chunk; // Copy struct content
+    free(chunk);            // Free the container, keep the content
+
+    // Run VM
+    clock_t start = clock();
+    VMResult result = vm_run(vm, script);
+    clock_t end = clock();
+
+    if (!from_file) {
+      double cpu_time_used = ((double)(end - start)) / CLOCKS_PER_SEC * 1000.0;
+      printf("\nUnpacked Execution Time: %.2f ms\n", cpu_time_used);
+
+      if (result == VM_OK) {
+        printf("\n========================================\n");
+        printf("   Tulpar VM basariyla calisti! ✓\n");
+        printf("========================================\n");
+      } else {
+        printf("\n========================================\n");
+        printf("   Tulpar VM hatayla sonlandi! ✗\n");
+        printf("========================================\n");
+      }
+    }
+
+    vm_free(vm);
+
+  } else {
+    // Legacy Interpreter
+    if (!from_file) {
+      printf("\n3. INTERPRETER (Legacy Execution)\n");
+      printf("=================================\n");
+    }
+
+    Interpreter *interp = interpreter_create();
+    interpreter_execute(interp, ast);
+
+    // Sonuçları göster
+    if (!from_file) {
+      printf("\nDegisken Degerleri:\n");
+      printf("-------------------\n");
+
+      // Tüm global değişkenleri göster
+      for (int i = 0; i < interp->global_scope->var_count; i++) {
+        printf("%s = ", interp->global_scope->variables[i]->name);
+        value_print(interp->global_scope->variables[i]->value);
+        printf("\n");
+      }
+
+      printf("\n========================================\n");
+      printf("   TulparLang (Legacy) basariyla calisti! ✓\n");
+      printf("========================================\n");
+    }
+    interpreter_free(interp);
   }
 
   // Temizlik
-  interpreter_free(interp);
   ast_node_free(ast);
   parser_free(parser);
 

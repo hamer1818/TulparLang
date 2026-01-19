@@ -1,0 +1,125 @@
+// ============================================
+// TULPAR PERFORMANS BENCHMARK TESTİ
+// Kendi zaman ölçümü ile
+// ============================================
+
+print("=======================================================");
+print("          TULPAR PERFORMANS BENCHMARK");
+print("=======================================================");
+print("");
+
+// Zaman formatlama fonksiyonu
+func printTime(float ms) {
+    if (ms < 1.0) {
+        print("  Sure:", ms * 1000, "us");
+    } else {
+        print("  Sure:", ms, "ms");
+    }
+}
+
+// TEST 1: Fibonacci Hesaplama (Rekürsif)
+func fibonacci(int n) {
+    if (n <= 1) {
+        return n;
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+// TEST 2: Faktöriyel Hesaplama (Rekürsif)
+func factorial(int n) {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+// TEST 3: Döngü Performansı
+func loopTest(int iterations) {
+    int sum = 0;
+    for (int i = 0; i < iterations; i++) {
+        sum = sum + i;
+    }
+    return sum;
+}
+
+// TEST 4: İç içe döngü performansı
+func nestedLoop(int size) {
+    int count = 0;
+    for (int i = 0; i < size; i++) {
+        for (int j = 0; j < size; j++) {
+            count = count + 1;
+        }
+    }
+    return count;
+}
+
+// TEST 5: String işlemi
+func stringTest(int iterations) {
+    str result = "";
+    for (int i = 0; i < iterations; i++) {
+        result = result + "a";
+    }
+    return length(result);
+}
+
+// Toplam süre
+float total_time = 0.0;
+
+// --- Test 1: Fibonacci ---
+print("Test 1: Fibonacci(30)");
+float start1 = clock_ms();
+int fib_result = fibonacci(30);
+float end1 = clock_ms();
+float time1 = end1 - start1;
+total_time = total_time + time1;
+print("  Sonuc:", fib_result);
+printTime(time1);
+print("");
+
+// --- Test 2: Faktöriyel ---
+print("Test 2: Factorial(20)");
+float start2 = clock_ms();
+int fact_result = factorial(20);
+float end2 = clock_ms();
+float time2 = end2 - start2;
+total_time = total_time + time2;
+print("  Sonuc:", fact_result);
+printTime(time2);
+print("");
+
+// --- Test 3: Döngü Testi ---
+print("Test 3: Loop 1.000.000 iterasyon");
+float start3 = clock_ms();
+int loop_result = loopTest(1000000);
+float end3 = clock_ms();
+float time3 = end3 - start3;
+total_time = total_time + time3;
+print("  Sonuc:", loop_result);
+printTime(time3);
+print("");
+
+// --- Test 4: İç içe döngü ---
+print("Test 4: Nested Loop 1000x1000");
+float start4 = clock_ms();
+int nested_result = nestedLoop(1000);
+float end4 = clock_ms();
+float time4 = end4 - start4;
+total_time = total_time + time4;
+print("  Sonuc:", nested_result);
+printTime(time4);
+print("");
+
+// --- Test 5: String birleştirme ---
+print("Test 5: String concatenation 100000");
+float start5 = clock_ms();
+int str_result = stringTest(100000);
+float end5 = clock_ms();
+float time5 = end5 - start5;
+total_time = total_time + time5;
+print("  Sonuc:", str_result);
+printTime(time5);
+print("");
+
+print("=======================================================");
+print("TOPLAM SURE:", printTime(total_time));
+print("=======================================================");

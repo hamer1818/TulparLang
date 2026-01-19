@@ -16,6 +16,14 @@ REM Parse arguments
 set "ACTION=%1"
 set "TARGET=%2"
 
+REM Build mode (release by default)
+set "BUILD_MODE=release"
+if "%ACTION%"=="debug" (
+    set "BUILD_MODE=debug"
+    set "ACTION=%2"
+    set "TARGET=%3"
+)
+
 if "%ACTION%"=="clean" goto :clean
 if "%ACTION%"=="test" goto :test_only
 goto :build
@@ -33,41 +41,71 @@ exit /b 0
 
 :build
 echo ========================================
-echo Building TulparLang...
+echo Building TulparLang [%BUILD_MODE%]...
 echo ========================================
 echo.
 
 if not exist build mkdir build
 
+REM Set compiler flags based on build mode
+if "%BUILD_MODE%"=="debug" (
+    set "CFLAGS=-Wall -DWIN32_LEAN_AND_MEAN -DTULPAR_DEBUG -Wextra -g -O0 -Isrc"
+    set "LFLAGS=-g"
+    set "SQLITE_FLAGS=-g -O0 -w -DWIN32_LEAN_AND_MEAN"
+    echo Debug mode: Bounds checking enabled, optimizations disabled
+) else (
+    set "CFLAGS=-Wall -DWIN32_LEAN_AND_MEAN -Wextra -O3 -Isrc"
+    set "LFLAGS=-O3 -flto"
+    set "SQLITE_FLAGS=-O3 -w -DWIN32_LEAN_AND_MEAN"
+    echo Release mode: Optimizations enabled, bounds checking disabled
+)
+echo.
+
 REM Compile with UTF-8 support
 REM Note: This is not a true incremental build (make is better for that), 
 REM but we avoid cleaning everything first.
-gcc -Wall -Wextra -g -Isrc -c src/lexer/lexer.c -o build/lexer_lexer.o
+gcc %CFLAGS% -c src/lexer/lexer.c -o build/lexer_lexer.o
 if %errorlevel% neq 0 goto :build_error
-gcc -Wall -Wextra -g -Isrc -c src/parser/parser.c -o build/parser_parser.o
+gcc %CFLAGS% -c src/parser/parser.c -o build/parser_parser.o
 if %errorlevel% neq 0 goto :build_error
-gcc -Wall -Wextra -g -Isrc -c src/interpreter/interpreter.c -o build/interpreter_interpreter.o
+gcc %CFLAGS% -c src/interpreter/interpreter.c -o build/interpreter_interpreter.o
 if %errorlevel% neq 0 goto :build_error
-gcc -Wall -Wextra -g -Isrc -c src/main.c -o build/main.o
+gcc %CFLAGS% -c src/vm/bytecode.c -o build/vm_bytecode.o
 if %errorlevel% neq 0 goto :build_error
-gcc -c lib/sqlite3/sqlite3.c -o build/sqlite3.o
+gcc %CFLAGS% -flto -c src/vm/vm.c -o build/vm_vm.o
+if %errorlevel% neq 0 goto :build_error
+gcc %CFLAGS% -c src/vm/compiler.c -o build/vm_compiler.o
+if %errorlevel% neq 0 goto :build_error
+gcc %CFLAGS% -c src/jit/jit_memory.c -o build/jit_memory.o
+if %errorlevel% neq 0 goto :build_error
+gcc %CFLAGS% -c src/jit/x64_emit.c -o build/x64_emit.o
+if %errorlevel% neq 0 goto :build_error
+gcc %CFLAGS% -c src/jit/jit_compiler.c -o build/jit_compiler.o
+if %errorlevel% neq 0 goto :build_error
+gcc %CFLAGS% -c src/jit/jit_optimize.c -o build/jit_optimize.o
+if %errorlevel% neq 0 goto :build_error
+gcc %CFLAGS% -c src/main.c -o build/main.o
+if %errorlevel% neq 0 goto :build_error
+gcc %SQLITE_FLAGS% -c lib/sqlite3/sqlite3.c -o build/sqlite3.o
 if %errorlevel% neq 0 goto :build_error
 
 REM Link
-gcc build/lexer_lexer.o build/parser_parser.o build/interpreter_interpreter.o build/main.o build/sqlite3.o -o tulpar.exe -lws2_32
+gcc %LFLAGS% build/lexer_lexer.o build/parser_parser.o build/interpreter_interpreter.o build/vm_bytecode.o build/vm_vm.o build/vm_compiler.o build/jit_memory.o build/x64_emit.o build/jit_compiler.o build/jit_optimize.o build/main.o build/sqlite3.o -o tulpar.exe -lws2_32
 if %errorlevel% neq 0 goto :build_error
 
 echo.
 echo ========================================
-echo BUILD SUCCESSFUL!
+echo BUILD SUCCESSFUL! [%BUILD_MODE%]
 echo ========================================
 echo.
 echo Executable: tulpar.exe
 echo.
 echo Usage:
-echo   build.bat           - Build only
+echo   build.bat           - Build release ^(optimized^)
+echo   build.bat debug     - Build debug ^(with bounds checking^)
 echo   build.bat clean     - Clean build artifacts
 echo   build.bat test      - Run all tests
+echo   build.bat debug test - Debug build + run tests
 echo   build.bat test file - Run specific test file
 echo.
 
@@ -88,8 +126,8 @@ echo.
 set "TEST_FAILED=0"
 set "INPUT_DIR=examples\inputs"
 
-REM Hata üreten test dosyaları (kasıtlı olarak hata üretirler, build'de atlanır)
-set "SKIP_TESTS=26_error_handling.tpr 26b_error_handling_mod.tpr 32_socket_server.tpr 32_socket_client.tpr 33_socket_wrapper_server.tpr 35_chat_server.tpr 36_async_chat_server.tpr"
+REM Hata üreten test dosyaları, server dosyaları veya library dosyaları (build'de atlanır)
+set "SKIP_TESTS=26_error_handling.tpr 26b_error_handling_mod.tpr 32_socket_server.tpr 32_socket_client.tpr 33_socket_wrapper_server.tpr 35_chat_server.tpr 36_async_chat_server.tpr 09_socket_client.tpr 09_socket_server.tpr 09_socket_simple.tpr 11_router_app.tpr 12_threaded_server.tpr utils.tpr"
 
 REM If a specific target is provided, check if it exists
 if not "%TARGET%"=="" (

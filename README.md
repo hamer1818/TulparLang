@@ -508,7 +508,16 @@ random()         // Random float [0,1)
 randint(a, b)    // Random int [a,b]
 ```
 
+#### Time Functions ✨ NEW
+```tulpar
+timestamp()      // Unix timestamp (seconds since epoch)
+time_ms()        // Milliseconds since epoch
+clock_ms()       // Milliseconds since program start (high precision)
+sleep(ms)        // Sleep for specified milliseconds
+```
+
 For complete documentation, see [MATH_FUNCTIONS.md](MATH_FUNCTIONS.md).
+
 
 ### String Operations (16 Functions)
 

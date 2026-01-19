@@ -17,6 +17,7 @@
 // Windows Thread Types
 #define THREAD_HANDLE HANDLE
 #define MUTEX_HANDLE CRITICAL_SECTION
+typedef int socklen_t;
 
 #else
 #include <arpa/inet.h>

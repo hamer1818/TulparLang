@@ -5,9 +5,9 @@ print("      TULPAR CHAT CLIENT");
 print("==================================");
 
 print("Connecting to server at 127.0.0.1:8080...");
-Socket client = create_client("127.0.0.1", 8080);
+json client = create_client("127.0.0.1", 8080);
 
-if (client.connected) {
+if (client["connected"]) {
     print("Connected to server!");
     print("Chat started. Type 'exit' to quit.");
     print("----------------------------------");
@@ -15,7 +15,7 @@ if (client.connected) {
     while (true) {
         // Client sends first
         str msg = input("You: ");
-        client.send(msg);
+        socket_obj_send(client, msg);
         
         if (msg == "exit") {
             break;
@@ -23,7 +23,7 @@ if (client.connected) {
         
         // Client waits for reply
         print("Waiting for server reply...");
-        str reply = client.receive(1024);
+        str reply = socket_obj_receive(client, 1024);
         
         if (reply == "") {
             print("Server disconnected.");
@@ -38,7 +38,7 @@ if (client.connected) {
         }
     }
     
-    client.close();
+    socket_obj_close(client);
     print("Disconnected.");
 } else {
     print("Failed to connect to server. Make sure it is running.");

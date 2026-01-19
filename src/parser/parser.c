@@ -4,6 +4,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Type Registry for custom types (e.g., type Point { ... })
+#define MAX_CUSTOM_TYPES 64
+static char *registered_types[MAX_CUSTOM_TYPES];
+static int registered_type_count = 0;
+
+static void register_custom_type(const char *name) {
+  if (registered_type_count < MAX_CUSTOM_TYPES) {
+    registered_types[registered_type_count++] = strdup(name);
+  }
+}
+
+static int is_custom_type(const char *name) {
+  for (int i = 0; i < registered_type_count; i++) {
+    if (strcmp(registered_types[i], name) == 0) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 // Helper functions
 static void parser_advance(Parser *parser) {
   if (parser->position < parser->token_count - 1) {
@@ -778,6 +798,13 @@ static DataType parse_data_type(Parser *parser) {
   case TOKEN_ARRAY_JSON:
     type = TYPE_ARRAY_JSON;
     break;
+  case TOKEN_IDENTIFIER:
+    // Check if it's a registered custom type
+    if (is_custom_type(parser->current_token->value)) {
+      type = TYPE_CUSTOM;
+      break;
+    }
+    // Fall through to error
   default:
     printf("Parser Error: Expected data type at line %d\n",
            parser->current_token->line);
@@ -1209,6 +1236,20 @@ static ASTNode *parse_statement(Parser *parser) {
     return parse_variable_declaration(parser);
   }
 
+  // Custom type değişken tanımlaması: Point p;
+  // Check if it's "TypeName varName;" pattern (IDENTIFIER IDENTIFIER)
+  if (token->type == TOKEN_IDENTIFIER) {
+    Token *next = parser_peek(parser);
+    if (next && next->type == TOKEN_IDENTIFIER) {
+      // This looks like "TypeName varName" - treat as custom type declaration
+      // Register the type name if not already registered
+      if (!is_custom_type(token->value)) {
+        register_custom_type(token->value);
+      }
+      return parse_variable_declaration(parser);
+    }
+  }
+
   // type bildirimi
   if (token->type == TOKEN_TYPE_KW) {
     // parse_type_declaration
@@ -1220,6 +1261,8 @@ static ASTNode *parse_statement(Parser *parser) {
     }
     ASTNode *node = ast_node_create(AST_TYPE_DECL);
     node->name = strdup(parser->current_token->value);
+    // Register the custom type so it can be used in variable declarations
+    register_custom_type(node->name);
     parser_advance(parser);
     parser_expect(parser, TOKEN_LBRACE);
     // fields
@@ -1417,18 +1460,26 @@ static ASTNode *parse_statement(Parser *parser) {
       // reset
       parser->position = save;
       parser->current_token = parser->tokens[parser->position];
-      if (third && third->type == TOKEN_ASSIGN) {
-        // Parse as variable declaration with RHS
+      if (third &&
+          (third->type == TOKEN_ASSIGN || third->type == TOKEN_SEMICOLON)) {
+        // Parse as variable declaration
         char *type_name =
             strdup(parser->current_token->value); // unused for now
         parser_advance(parser);                   // TypeName
         char *var_name = strdup(parser->current_token->value);
         parser_advance(parser); // var
-        parser_expect(parser, TOKEN_ASSIGN);
+
         ASTNode *node = ast_node_create(AST_VARIABLE_DECL);
-        node->data_type = TYPE_VOID; // actual runtime determines
+        node->data_type = TYPE_VOID; // actual runtime determines check
         node->name = var_name;
-        node->right = parse_expression(parser);
+
+        if (parser->current_token->type == TOKEN_ASSIGN) {
+          parser_advance(parser);
+          node->right = parse_expression(parser);
+        } else {
+          node->right = NULL;
+        }
+
         parser_expect(parser, TOKEN_SEMICOLON);
         free(type_name);
         return node;

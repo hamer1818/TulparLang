@@ -20,8 +20,8 @@ else()
 endif()
 
 # Debug/Release configurations
-set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3")
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g -DTULPAR_DEBUG")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -flto")
 
 # Include directories
 include_directories(${PROJECT_SOURCE_DIR}/src)
@@ -42,6 +42,24 @@ set(INTERPRETER_SOURCES
     src/interpreter/interpreter.h
 )
 
+set(VM_SOURCES
+    src/vm/vm.c
+    src/vm/vm.h
+    src/vm/compiler.c
+    src/vm/compiler.h
+    src/vm/bytecode.c
+    src/vm/bytecode.h
+)
+
+set(JIT_SOURCES
+    src/jit/jit.h
+    src/jit/jit_memory.c
+    src/jit/x64_emit.h
+    src/jit/x64_emit.c
+    src/jit/jit_compiler.c
+    src/jit/jit_optimize.c
+)
+
 set(MAIN_SOURCES
     src/main.c
 )
@@ -55,6 +73,8 @@ set(ALL_SOURCES
     ${LEXER_SOURCES}
     ${PARSER_SOURCES}
     ${INTERPRETER_SOURCES}
+    ${VM_SOURCES}
+    ${JIT_SOURCES}
     ${MAIN_SOURCES}
     ${SQLITE_SOURCES}
 )

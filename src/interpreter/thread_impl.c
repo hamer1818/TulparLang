@@ -2,6 +2,16 @@
 // Thread Management Structures
 // ============================================
 
+#include "interpreter.h"
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
 typedef struct {
   Interpreter *parent_interp; // Kopyalanacak kaynak (dikkatli olunmalı)
   char *func_name;

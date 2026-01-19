@@ -219,41 +219,119 @@ static char *string_to_lower(const char *s) {
 }
 
 // ============================================================================
-// VALUE FONKSİYONLARI
+// VALUE FONKSİYONLARI - OPTİMİZE EDİLMİŞ
 // ============================================================================
 
+// ========================
+// FAZ 1: VALUE POOL
+// ========================
+#define VALUE_POOL_SIZE 8192
+static Value value_pool[VALUE_POOL_SIZE];
+static int pool_index = 0;
+
+// Pool'dan hızlı allocation (malloc'tan 10x+ hızlı)
+static inline Value *value_pool_alloc() {
+  if (pool_index < VALUE_POOL_SIZE) {
+    return &value_pool[pool_index++];
+  }
+  // Pool doluysa fallback to malloc
+  return (Value *)malloc(sizeof(Value));
+}
+
+// Pool sıfırlama (büyük işlemlerden sonra)
+void value_pool_reset() { pool_index = 0; }
+
+// ========================
+// FAZ 1: INTEGER CACHE
+// ========================
+#define INT_CACHE_MIN -5
+#define INT_CACHE_MAX 256
+#define INT_CACHE_SIZE (INT_CACHE_MAX - INT_CACHE_MIN + 1)
+static Value *int_cache[INT_CACHE_SIZE];
+static int int_cache_initialized = 0;
+
+// Cache'i başlat
+static void init_int_cache() {
+  if (int_cache_initialized)
+    return;
+  for (int i = 0; i < INT_CACHE_SIZE; i++) {
+    Value *v = (Value *)malloc(sizeof(Value));
+    v->type = VAL_INT;
+    v->data.int_val = i + INT_CACHE_MIN;
+    int_cache[i] = v;
+  }
+  int_cache_initialized = 1;
+}
+
+// ========================
+// FAZ 1: SINGLETON VALUES
+// ========================
+static Value *val_true = NULL;
+static Value *val_false = NULL;
+static Value *val_void = NULL;
+
+static void init_singletons() {
+  if (!val_true) {
+    val_true = (Value *)malloc(sizeof(Value));
+    val_true->type = VAL_BOOL;
+    val_true->data.bool_val = 1;
+  }
+  if (!val_false) {
+    val_false = (Value *)malloc(sizeof(Value));
+    val_false->type = VAL_BOOL;
+    val_false->data.bool_val = 0;
+  }
+  if (!val_void) {
+    val_void = (Value *)malloc(sizeof(Value));
+    val_void->type = VAL_VOID;
+  }
+}
+
+// ========================
+// OPTİMİZE EDİLMİŞ OLUŞTURUCULAR
+// ========================
+
 Value *value_create_int(long long val) {
-  Value *value = (Value *)malloc(sizeof(Value));
+  // Integer cache kontrolü
+  if (!int_cache_initialized)
+    init_int_cache();
+
+  if (val >= INT_CACHE_MIN && val <= INT_CACHE_MAX) {
+    // Cache'den döndür - malloc yok!
+    return int_cache[val - INT_CACHE_MIN];
+  }
+
+  // Cache dışı: pool'dan al
+  Value *value = value_pool_alloc();
   value->type = VAL_INT;
   value->data.int_val = val;
   return value;
 }
 
 Value *value_create_float(float val) {
-  Value *value = (Value *)malloc(sizeof(Value));
+  Value *value = value_pool_alloc();
   value->type = VAL_FLOAT;
   value->data.float_val = val;
   return value;
 }
 
 Value *value_create_string(char *val) {
-  Value *value = (Value *)malloc(sizeof(Value));
+  Value *value = value_pool_alloc();
   value->type = VAL_STRING;
   value->data.string_val = strdup(val);
   return value;
 }
 
 Value *value_create_bool(int val) {
-  Value *value = (Value *)malloc(sizeof(Value));
-  value->type = VAL_BOOL;
-  value->data.bool_val = val;
-  return value;
+  init_singletons();
+  // Singleton döndür - malloc yok!
+  return val ? val_true : val_false;
 }
 
 Value *value_create_void() {
-  Value *value = (Value *)malloc(sizeof(Value));
-  value->type = VAL_VOID;
-  return value;
+  init_singletons();
+  // Singleton döndür - malloc yok!
+  return val_void;
 }
 
 // ==========================
@@ -621,6 +699,8 @@ static char *bigint_mul_str(const char *a, const char *b) {
     return strdup("0");
   }
   int result_len = L - start;
+  if (result_len < 0)
+    return strdup("0");
   char *out = (char *)malloc((size_t)result_len + 1);
   for (int i = 0; i < result_len; i++) {
     out[i] = (char)('0' + tmp[start + i]);
@@ -1099,13 +1179,43 @@ Value *value_copy(Value *val) {
   if (!val)
     return NULL;
 
-  Value *copy = (Value *)malloc(sizeof(Value));
+  // ========================
+  // FAZ 1: Hızlı path - cache/singleton değerleri doğrudan döndür
+  // ========================
+
+  // Singleton değerler - doğrudan döndür
+  if (val == val_true || val == val_false || val == val_void) {
+    return val;
+  }
+
+  // Integer cache - doğrudan döndür
+  if (val->type == VAL_INT) {
+    long long v = val->data.int_val;
+    if (v >= INT_CACHE_MIN && v <= INT_CACHE_MAX) {
+      return val; // Cache'deki değeri döndür
+    }
+  }
+
+  // Bool ve void için singleton döndür
+  if (val->type == VAL_BOOL) {
+    init_singletons();
+    return val->data.bool_val ? val_true : val_false;
+  }
+
+  if (val->type == VAL_VOID) {
+    init_singletons();
+    return val_void;
+  }
+
+  // Diğer tipler için pool'dan allocation
+  Value *copy = value_pool_alloc();
   copy->type = val->type;
 
   switch (val->type) {
   case VAL_INT:
     copy->data.int_val = val->data.int_val;
     break;
+
   case VAL_FLOAT:
     copy->data.float_val = val->data.float_val;
     break;
@@ -1183,6 +1293,51 @@ void value_free(Value *val) {
   if (!val)
     return;
 
+  // ========================
+  // FAZ 1: Cache/Singleton/Pool kontrolü
+  // ========================
+
+  // Singleton değerlerini free etme
+  if (val == val_true || val == val_false || val == val_void) {
+    return;
+  }
+
+  // Integer cache'deki değerleri free etme
+  if (val->type == VAL_INT) {
+    long long v = val->data.int_val;
+    if (v >= INT_CACHE_MIN && v <= INT_CACHE_MAX) {
+      return; // Cache'de, free etme
+    }
+  }
+
+  // Pool'daki değerleri free etme
+  if (val >= &value_pool[0] && val < &value_pool[VALUE_POOL_SIZE]) {
+    // Pool'da, string gibi kaynakları temizle ama struct'ı free etme
+    if (val->type == VAL_STRING && val->data.string_val) {
+      free(val->data.string_val);
+      val->data.string_val = NULL;
+    }
+    if (val->type == VAL_BIGINT && val->data.bigint_val) {
+      free(val->data.bigint_val);
+      val->data.bigint_val = NULL;
+    }
+    if (val->type == VAL_ARRAY && val->data.array_val) {
+      Array *arr = val->data.array_val;
+      for (int i = 0; i < arr->length; i++) {
+        value_free(arr->elements[i]);
+      }
+      free(arr->elements);
+      free(arr);
+      val->data.array_val = NULL;
+    }
+    if (val->type == VAL_OBJECT && val->data.object_val) {
+      hash_table_free(val->data.object_val);
+      val->data.object_val = NULL;
+    }
+    return; // Pool'da - struct'ı free etme
+  }
+
+  // Normal malloc'lanmış değerler için orijinal logic
   if (val->type == VAL_STRING && val->data.string_val) {
     free(val->data.string_val);
   }
@@ -1353,10 +1508,27 @@ void symbol_table_set(SymbolTable *table, char *name, Value *value) {
   table->variables[table->var_count++] = var;
 }
 
+// ========================
+// FAZ 1: Symbol Table Lookup Cache
+// ========================
+static SymbolTable *last_var_table = NULL;
+static char *last_var_name = NULL;
+static Value **last_var_ptr = NULL;
+
 Value *symbol_table_get(SymbolTable *table, char *name) {
+  // Fast path: same table, same name (loop variables!)
+  if (last_var_table == table && last_var_name &&
+      strcmp(last_var_name, name) == 0 && last_var_ptr) {
+    return *last_var_ptr;
+  }
+
   // Search in current scope
   for (int i = 0; i < table->var_count; i++) {
     if (strcmp(table->variables[i]->name, name) == 0) {
+      // Update cache
+      last_var_table = table;
+      last_var_name = table->variables[i]->name;
+      last_var_ptr = &table->variables[i]->value;
       return table->variables[i]->value;
     }
   }
@@ -1463,9 +1635,24 @@ void interpreter_register_function(Interpreter *interp, char *name,
   interp->functions[interp->function_count++] = func;
 }
 
+// ========================
+// FAZ 1: Function Lookup Cache
+// ========================
+static char *last_func_name = NULL;
+static Function *last_func = NULL;
+
 Function *interpreter_get_function(Interpreter *interp, char *name) {
+  // Fast path: check cache first (great for recursive calls)
+  if (last_func_name && last_func && strcmp(last_func_name, name) == 0) {
+    return last_func;
+  }
+
+  // Linear search fallback
   for (int i = 0; i < interp->function_count; i++) {
     if (strcmp(interp->functions[i]->name, name) == 0) {
+      // Update cache
+      last_func_name = interp->functions[i]->name;
+      last_func = interp->functions[i];
       return interp->functions[i];
     }
   }
@@ -2029,7 +2216,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
       if (sock_val->type == VAL_INT) {
         SOCKET sock = (SOCKET)sock_val->data.int_val;
         struct sockaddr_in client;
-        int c = sizeof(struct sockaddr_in);
+        socklen_t c = sizeof(struct sockaddr_in);
         SOCKET new_socket = accept(sock, (struct sockaddr *)&client, &c);
 
         value_free(sock_val);
@@ -3322,6 +3509,83 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
       int b = (int)GET_NUM_ARG(1);
       int result = a + rand() % (b - a + 1);
       return value_create_int(result);
+    }
+
+    // ========================================================================
+    // ZAMAN FONKSİYONLARI
+    // ========================================================================
+
+    // timestamp() - Unix timestamp (saniye cinsinden)
+    if (strcmp(node->name, "timestamp") == 0) {
+      return value_create_int((long long)time(NULL));
+    }
+
+    // time_ms() - Milisaniye cinsinden zaman damgası (epoch'tan beri)
+    if (strcmp(node->name, "time_ms") == 0) {
+#ifdef _WIN32
+      FILETIME ft;
+      GetSystemTimeAsFileTime(&ft);
+      ULARGE_INTEGER uli;
+      uli.LowPart = ft.dwLowDateTime;
+      uli.HighPart = ft.dwHighDateTime;
+      // Windows: 100-nanosecond intervals since January 1, 1601
+      // Convert to milliseconds since Unix epoch (January 1, 1970)
+      long long ms = (uli.QuadPart / 10000LL) - 11644473600000LL;
+      return value_create_int(ms);
+#else
+      struct timespec ts;
+      clock_gettime(CLOCK_REALTIME, &ts);
+      long long ms = (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
+      return value_create_int(ms);
+#endif
+    }
+
+    // clock_ms() - Program başlangıcından beri geçen milisaniye (yüksek
+    // hassasiyet)
+    if (strcmp(node->name, "clock_ms") == 0) {
+#ifdef _WIN32
+      static LARGE_INTEGER frequency = {0};
+      static LARGE_INTEGER start = {0};
+      static int initialized = 0;
+      if (!initialized) {
+        QueryPerformanceFrequency(&frequency);
+        QueryPerformanceCounter(&start);
+        initialized = 1;
+      }
+      LARGE_INTEGER now;
+      QueryPerformanceCounter(&now);
+      double elapsed = (double)(now.QuadPart - start.QuadPart) * 1000.0 /
+                       (double)frequency.QuadPart;
+      return value_create_float((float)elapsed);
+#else
+      static struct timespec start = {0, 0};
+      static int initialized = 0;
+      if (!initialized) {
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        initialized = 1;
+      }
+      struct timespec now;
+      clock_gettime(CLOCK_MONOTONIC, &now);
+      double elapsed = (now.tv_sec - start.tv_sec) * 1000.0 +
+                       (now.tv_nsec - start.tv_nsec) / 1000000.0;
+      return value_create_float((float)elapsed);
+#endif
+    }
+
+    // sleep(ms) - Belirtilen milisaniye kadar bekle
+    if (strcmp(node->name, "sleep") == 0 && node->argument_count >= 1) {
+      Value *ms_val = interpreter_eval_expression(interp, node->arguments[0]);
+      if (ms_val->type == VAL_INT || ms_val->type == VAL_FLOAT) {
+        int ms = (ms_val->type == VAL_INT) ? (int)ms_val->data.int_val
+                                           : (int)ms_val->data.float_val;
+#ifdef _WIN32
+        Sleep(ms);
+#else
+        usleep(ms * 1000);
+#endif
+      }
+      value_free(ms_val);
+      return value_create_void();
     }
 
     // cbrt(x) - küp kök

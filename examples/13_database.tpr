@@ -1,4 +1,8 @@
-// SQLite Test Script
+// ============================================
+// SQLite Database Test Script
+// ============================================
+
+print("=== Tulpar SQLite Test ===\n");
 
 print("Opening database...");
 int db = db_open("test.db");
@@ -6,26 +10,38 @@ int db = db_open("test.db");
 if (db == 0) {
     print("Failed to open database!");
 } else {
-    print("Database opened successfully.");
+    print("Database opened successfully.\n");
 
-    // Create table
+    // Create table (fresh start)
     print("Creating table...");
-    db_query(db, "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);");
+    db_query(db, "DROP TABLE IF EXISTS users;");
+    db_query(db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);");
+    print("Table created.\n");
 
     // Insert data
     print("Inserting data...");
     db_query(db, "INSERT INTO users (name, email) VALUES ('Hamza', 'hamza@example.com');");
     db_query(db, "INSERT INTO users (name, email) VALUES ('Tulpar', 'tulpar@lang.com');");
+    db_query(db, "INSERT INTO users (name, email) VALUES ('Test User', 'test@test.com');");
+    print("3 rows inserted.\n");
 
     // Query data
     print("Querying data...");
     array results = db_query(db, "SELECT * FROM users;");
 
-    print("Results:");
-    print(results);
+    print("Results (" + toString(length(results)) + " rows):");
+    print(toJson(results));
+    print("");
+
+    // Display each row
+    print("Individual rows:");
+    for (int i = 0; i < length(results); i++) {
+        json row = results[i];
+        print("  [" + toString(row["id"]) + "] " + row["name"] + " <" + row["email"] + ">");
+    }
 
     // Close database
-    print("Closing database...");
+    print("\nClosing database...");
     db_close(db);
     print("Done.");
 }

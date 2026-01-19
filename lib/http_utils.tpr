@@ -1,7 +1,102 @@
 // ============================================
 // Tulpar HTTP Utilities Library
-// Cookies, Sessions, Static Files
+// Cookies, Sessions, Static Files, HTTP Parsing
 // ============================================
+
+// ============================================
+// HTTP Request/Response Functions
+// ============================================
+
+// HTTP Request Parse Et
+// "GET /path HTTP/1.1\r\nHeader: value\r\n\r\nbody"
+func http_parse_request(str raw_request) {
+    json result = {
+        "method": "",
+        "path": "",
+        "version": "",
+        "headers": {},
+        "body": ""
+    };
+    
+    if (length(raw_request) == 0) {
+        return result;
+    }
+    
+    // Headers ve body ayır
+    int body_start = indexOf(raw_request, "\r\n\r\n");
+    str headers_part = raw_request;
+    str body_part = "";
+    
+    if (body_start >= 0) {
+        headers_part = substring(raw_request, 0, body_start);
+        body_part = substring(raw_request, body_start + 4, length(raw_request));
+    }
+    
+    // İlk satır: GET /path HTTP/1.1
+    array lines = split(headers_part, "\r\n");
+    
+    if (length(lines) > 0) {
+        str first_line = lines[0];
+        array parts = split(first_line, " ");
+        
+        if (length(parts) >= 2) {
+            result["method"] = parts[0];
+            result["path"] = parts[1];
+            if (length(parts) >= 3) {
+                result["version"] = parts[2];
+            }
+        }
+    }
+    
+    // Headers parse et
+    json headers = {};
+    for (int i = 1; i < length(lines); i++) {
+        str line = lines[i];
+        int colon = indexOf(line, ":");
+        if (colon > 0) {
+            str key = substring(line, 0, colon);
+            str value = substring(line, colon + 1, length(line));
+            // Trim leading space from value
+            if (length(value) > 0 && value[0] == " ") {
+                value = substring(value, 1, length(value));
+            }
+            headers[key] = value;
+        }
+    }
+    result["headers"] = headers;
+    
+    // Body
+    result["body"] = body_part;
+    
+    return result;
+}
+
+// HTTP Response Oluştur
+func http_create_response(int status, str content_type, str body) {
+    str status_text = "OK";
+    if (status == 201) { status_text = "Created"; }
+    if (status == 204) { status_text = "No Content"; }
+    if (status == 301) { status_text = "Moved Permanently"; }
+    if (status == 302) { status_text = "Found"; }
+    if (status == 304) { status_text = "Not Modified"; }
+    if (status == 400) { status_text = "Bad Request"; }
+    if (status == 401) { status_text = "Unauthorized"; }
+    if (status == 403) { status_text = "Forbidden"; }
+    if (status == 404) { status_text = "Not Found"; }
+    if (status == 405) { status_text = "Method Not Allowed"; }
+    if (status == 500) { status_text = "Internal Server Error"; }
+    if (status == 501) { status_text = "Not Implemented"; }
+    if (status == 503) { status_text = "Service Unavailable"; }
+    
+    str response = "HTTP/1.1 " + toString(status) + " " + status_text + "\r\n";
+    response = response + "Content-Type: " + content_type + "\r\n";
+    response = response + "Content-Length: " + toString(length(body)) + "\r\n";
+    response = response + "Connection: close\r\n";
+    response = response + "\r\n";
+    response = response + body;
+    
+    return response;
+}
 
 // ============================================
 // Cookie Handling
@@ -10,20 +105,20 @@
 // Cookie Parse Et
 // "name=value; name2=value2" -> {"name": "value", "name2": "value2"}
 func parse_cookies(str cookie_header) {
-    arrayJson cookies = {};
+    json cookies = {};
     
     if (length(cookie_header) == 0) {
         return cookies;
     }
     
-    arrayStr parts = split(cookie_header, ";");
+    array parts = split(cookie_header, ";");
     
     for (int i = 0; i < length(parts); i++) {
         str part = parts[i];
         // Trim whitespace (basit implementasyon)
         // TODO: string_trim fonksiyonu eklendiğinde güncelle
         
-        arrayStr kv = split(part, "=");
+        array kv = split(part, "=");
         if (length(kv) >= 2) {
             str key = kv[0];
             str val = kv[1];
@@ -41,7 +136,7 @@ func parse_cookies(str cookie_header) {
 }
 
 // Set-Cookie Header Oluştur
-func create_cookie(str name, str value, arrayJson options) {
+func create_cookie(str name, str value, json options) {
     str cookie = name + "=" + value;
     
     if (options["Path"]) {
@@ -77,10 +172,10 @@ func create_cookie(str name, str value, arrayJson options) {
 // Session Management (In-Memory)
 // ============================================
 
-arrayJson _sessions = {};
+json _sessions = {};
 
 // Yeni session oluştur
-func create_session(arrayJson user_data) {
+func create_session(json user_data) {
     // Basit session ID oluşturma (random sayı + timestamp)
     // Not: Gerçek uygulamada daha güvenli UUID kullanılmalı
     int rand_id = 0; // TODO: random() eklenince güncelle

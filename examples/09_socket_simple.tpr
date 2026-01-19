@@ -1,0 +1,30 @@
+// Simple Socket Demo (without OOP)
+print("=== Simple Socket Server ===");
+
+print("Creating server on 127.0.0.1:8888...");
+int server_fd = socket_server("127.0.0.1", 8888);
+
+if (server_fd != -1) {
+    print("Server started on port 8888!");
+    print("Run 'telnet 127.0.0.1 8888' or 'nc 127.0.0.1 8888' to connect");
+    print("Waiting for connection...");
+    
+    int client_fd = socket_accept(server_fd);
+    
+    if (client_fd != -1) {
+        print("Client connected!");
+        socket_send(client_fd, "Welcome to Tulpar!\r\n");
+        
+        str msg = socket_receive(client_fd, 1024);
+        print("Received: " + msg);
+        
+        socket_send(client_fd, "Goodbye!\r\n");
+        socket_close(client_fd);
+        print("Client disconnected.");
+    }
+    
+    socket_close(server_fd);
+    print("Server stopped.");
+} else {
+    print("Failed to create server (port might be in use)");
+}

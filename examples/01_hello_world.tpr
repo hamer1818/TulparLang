@@ -3,7 +3,7 @@
 // ============================================
 // Bu dosya Tulpar'in temel özelliklerini gösterir
 
-print("=== Tulpar'E HOŞ GELDİNİZ! ===");
+print("=== Tulpar'E HOS GELDINIZ! ===");
 print("");
 
 // ----------------------------------------
@@ -23,9 +23,9 @@ print("Boolean:", basarili);
 print("");
 
 // ----------------------------------------
-// 2. ARİTMETİK İŞLEMLER
+// 2. ARITMETIK ISLEMLER
 // ----------------------------------------
-print("--- Aritmetik İşlemler ---");
+print("--- Aritmetik Islemler ---");
 
 int a = 20;
 int b = 8;
@@ -42,9 +42,9 @@ print("20 / 8 =", bolum);
 print("");
 
 // ----------------------------------------
-// 3. KARŞILAŞTIRMA OPERATÖRLERİ
+// 3. KARSILASTIRMA OPERATORLERI
 // ----------------------------------------
-print("--- Karşılaştırmalar ---");
+print("--- Karsilastirmalar ---");
 
 bool buyuk = a > b;
 bool esit = a == b;
@@ -56,9 +56,10 @@ print("20 < 8 =", kucuk);
 print("");
 
 // ----------------------------------------
-// 4. MANTIKSAL OPERATÖRLER (Faz 1)
+// 4. MANTIK SAL ISLEMLER
 // ----------------------------------------
-print("--- Mantıksal Operatörler ---");
+print("");
+print("--- Mantiksal Operatorler ---");
 
 bool sonuc1 = (a > 10) && (b < 15);  // AND
 bool sonuc2 = (a > 100) || (b < 15); // OR

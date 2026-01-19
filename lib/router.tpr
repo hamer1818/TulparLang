@@ -6,14 +6,14 @@
 import "lib/http_utils.tpr";
 
 // Global Router State
-arrayJson _router_routes = [];
-arrayJson _router_middlewares = [];
+array _router_routes = [];
+array _router_middlewares = [];
 str _router_host = "127.0.0.1";
 int _router_port = 8080;
 
 // Global Request/Response (Middleware'ler için)
-arrayJson _request = {};
-arrayJson _response = {};
+json _request = {};
+json _response = {};
 
 // ============================================
 // Helper Functions
@@ -36,15 +36,15 @@ func match_path(str route_path, str request_path) {
     }
     
     // Parametre içeren yollar için
-    arrayStr route_parts = split(route_path, "/");
-    arrayStr req_parts = split(request_path, "/");
+    array route_parts = split(route_path, "/");
+    array req_parts = split(request_path, "/");
     
     // Parça sayısı eşit olmalı
     if (length(route_parts) != length(req_parts)) {
         return { "matched": false, "params": {} };
     }
     
-    arrayJson params = {};
+    json params = {};
     
     for (int i = 0; i < length(route_parts); i++) {
         str route_part = route_parts[i];
@@ -74,7 +74,7 @@ func match_path(str route_path, str request_path) {
 
 // Query string parse et: ?name=ali&age=25
 func parse_query_string(str query_str) {
-    arrayJson result = {};
+    json result = {};
     
     if (length(query_str) == 0) {
         return result;
@@ -85,11 +85,11 @@ func parse_query_string(str query_str) {
         query_str = substring(query_str, 1, length(query_str));
     }
     
-    arrayStr pairs = split(query_str, "&");
+    array pairs = split(query_str, "&");
     
     for (int i = 0; i < length(pairs); i++) {
         str pair = pairs[i];
-        arrayStr kv = split(pair, "=");
+        array kv = split(pair, "=");
         if (length(kv) >= 2) {
             str key = kv[0];
             str value = kv[1];
@@ -132,7 +132,7 @@ func parse_json_body(str raw_body) {
 // ============================================
 
 // JSON yanıt oluştur (CORS headers ile)
-func json_response(int status, arrayJson data) {
+func json_response(int status, json data) {
     str json_str = toJson(data);
     str headers = "";
     
@@ -202,9 +202,10 @@ func router_group_end() {
 
 // GET route ekle (prefix destekli)
 func route_get(str path, str handler_name) {
-    arrayJson route = {
+    str full_path = _route_prefix + path;
+    json route = {
         "method": "GET",
-        "path": _route_prefix + path,
+        "path": full_path,
         "handler": handler_name
     };
     push(_router_routes, route);
@@ -212,7 +213,7 @@ func route_get(str path, str handler_name) {
 
 // POST route ekle (prefix destekli)
 func route_post(str path, str handler_name) {
-    arrayJson route = {
+    json route = {
         "method": "POST",
         "path": _route_prefix + path,
         "handler": handler_name
@@ -222,7 +223,7 @@ func route_post(str path, str handler_name) {
 
 // PUT route ekle (prefix destekli)
 func route_put(str path, str handler_name) {
-    arrayJson route = {
+    json route = {
         "method": "PUT",
         "path": _route_prefix + path,
         "handler": handler_name
@@ -232,7 +233,7 @@ func route_put(str path, str handler_name) {
 
 // DELETE route ekle (prefix destekli)
 func route_delete(str path, str handler_name) {
-    arrayJson route = {
+    json route = {
         "method": "DELETE",
         "path": _route_prefix + path,
         "handler": handler_name
@@ -242,7 +243,7 @@ func route_delete(str path, str handler_name) {
 
 // OPTIONS route ekle (prefix destekli)
 func route_options(str path, str handler_name) {
-    arrayJson route = {
+    json route = {
         "method": "OPTIONS",
         "path": _route_prefix + path,
         "handler": handler_name
@@ -266,10 +267,24 @@ func use_middleware(str middleware_name) {
 
 // Route bul
 func find_route(str method, str path) {
-    for (int i = 0; i < length(_router_routes); i++) {
-        arrayJson route = _router_routes[i];
-        if (route["method"] == method) {
-            arrayJson match = match_path(route["path"], path);
+    int routes_len = length(_router_routes);
+    for (int i = 0; i < routes_len; i++) {
+        json route = _router_routes[i];
+        str route_method = route["method"];
+        str route_path = route["path"];
+        
+        if (route_method == method) {
+            // Simple exact match first
+            if (route_path == path) {
+                return {
+                    "found": true,
+                    "route": route,
+                    "params": {}
+                };
+            }
+            
+            // Pattern matching for parametric routes
+            json match = match_path(route_path, path);
             if (match["matched"]) {
                 return {
                     "found": true,
@@ -314,7 +329,7 @@ func _mw_json_parser() {
 // Auth Middleware (Basic)
 func _mw_auth() {
     str auth_header = "";
-    arrayJson headers = _request["headers"];
+    json headers = _request["headers"];
     
     if (headers["Authorization"]) {
         auth_header = headers["Authorization"];
@@ -344,7 +359,7 @@ func _mw_session() {
     }
     
     // Cookie'leri parse et
-    arrayJson cookies = parse_cookies(cookie_header);
+    json cookies = parse_cookies(cookie_header);
     
     str session_id = "";
     if (cookies["tulpar_sess"]) {
@@ -413,17 +428,17 @@ func run_middlewares() {
 // ============================================
 
 // Request Handler (Thread Worker)
-func _router_handle_client(client) {
+func _router_handle_client(int client) {
     try {
         str req_str = socket_receive(client, 8192);
         if (length(req_str) > 0) {
             // Request parse et
-            arrayJson parsed = http_parse_request(req_str);
+            json parsed = http_parse_request(req_str);
             
             str method = "";
             str full_path = "";
             str raw_body = "";
-            arrayJson headers = {};
+            json headers = {};
             
             if (parsed["method"]) {
                 method = parsed["method"];
@@ -447,7 +462,7 @@ func _router_handle_client(client) {
                 query_str = substring(full_path, qmark + 1, length(full_path));
             }
             
-            arrayJson query = parse_query_string(query_str);
+            json query = parse_query_string(query_str);
             
             // Global _request'i hazırla
             _request = {
@@ -499,11 +514,11 @@ func _router_handle_client(client) {
                     });
                 } else {
                     // Route bul
-                    arrayJson route_match = find_route(method, path);
+                    json route_match = find_route(method, path);
                     
                     if (route_match["found"]) {
-                        arrayJson matched_route = route_match["route"];
-                        arrayJson params = route_match["params"];
+                        json matched_route = route_match["route"];
+                        json params = route_match["params"];
                         
                         // Params'ı request'e ekle
                         _request["params"] = params;
@@ -569,7 +584,7 @@ func listen(int port) {
     _router_port = port;
     
     print("╔════════════════════════════════════════╗");
-    print("║     Tulpar Router v2.0 (Threaded)      ║");
+    print("║        Tulpar Router v2.0              ║");
     print("╚════════════════════════════════════════╝");
     print("");
     print("Starting server on port " + toString(port) + "...");
@@ -586,12 +601,11 @@ func listen(int port) {
     print("Waiting for requests...");
     print("─────────────────────────────────────────");
     
-    // Ana döngü
+    // Ana döngü - senkron işleme (single-threaded)
     while (true) {
         int client = socket_accept(server);
         if (client >= 0) {
-            // Her istek için yeni bir thread başlat
-            thread_create("_router_handle_client", client);
+            _router_handle_client(client);
         }
     }
 }
