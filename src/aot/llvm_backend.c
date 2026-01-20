@@ -5,11 +5,14 @@
 #define _CRT_NONSTDC_NO_DEPRECATE
 
 #include "llvm_backend.h"
+#include "../lexer/lexer.h"
+#include "../parser/parser.h"
 #include "llvm_types.h"
 #include "llvm_values.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 
 char *my_strdup(const char *s) {
   if (!s)
@@ -20,6 +23,9 @@ char *my_strdup(const char *s) {
     strcpy(copy, s);
   return copy;
 }
+
+// Forward declarations
+void codegen_func_def(LLVMBackend *backend, ASTNode *node);
 
 // Declare external runtime functions
 void declare_runtime_functions(LLVMBackend *backend) {

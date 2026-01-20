@@ -38,6 +38,9 @@ typedef int SOCKET;
 // Forward declarations for JSON serialization
 static void value_to_json(VMValue v, char **buf, size_t *pos, size_t *capacity);
 
+// External function from runtime_bindings.c
+extern void print_vm_value(VMValue value);
+
 static void ensure_capacity(char **buf, size_t *capacity, size_t needed) {
   while (*capacity < needed) {
     *capacity *= 2;
