@@ -116,13 +116,14 @@ int compiler_add_local(Compiler *compiler, const char *name) {
   local->name = strdup(name);
   local->depth = compiler->scope_depth;
   local->slot = compiler->local_count;
-  local->type = LOCAL_TYPE_UNKNOWN;  // Default to unknown
+  local->type = LOCAL_TYPE_UNKNOWN; // Default to unknown
 
   return compiler->local_count++;
 }
 
 // Add local with type hint
-int compiler_add_local_typed(Compiler *compiler, const char *name, LocalType type) {
+int compiler_add_local_typed(Compiler *compiler, const char *name,
+                             LocalType type) {
   int slot = compiler_add_local(compiler, name);
   if (slot >= 0) {
     compiler->locals[slot].type = type;
@@ -155,61 +156,63 @@ int compiler_resolve_local(Compiler *compiler, const char *name) {
 // Infer the type of an expression at compile time
 // Returns LOCAL_TYPE_UNKNOWN if type cannot be determined
 static LocalType infer_expression_type(Compiler *compiler, ASTNode *node) {
-  if (!node) return LOCAL_TYPE_UNKNOWN;
-  
+  if (!node)
+    return LOCAL_TYPE_UNKNOWN;
+
   switch (node->type) {
-    case AST_INT_LITERAL:
-      // Integer literal
-      return LOCAL_TYPE_INT;
-    
-    case AST_FLOAT_LITERAL:
-      return LOCAL_TYPE_FLOAT;
-    
-    case AST_STRING_LITERAL:
-      return LOCAL_TYPE_STRING;
-    
-    case AST_BOOL_LITERAL:
-      return LOCAL_TYPE_BOOL;
-    
-    case AST_IDENTIFIER: {
-      // Look up local variable type
-      int slot = compiler_resolve_local(compiler, node->name);
-      if (slot >= 0) {
-        return compiler_get_local_type(compiler, slot);
-      }
-      return LOCAL_TYPE_UNKNOWN;  // Global or unknown
+  case AST_INT_LITERAL:
+    // Integer literal
+    return LOCAL_TYPE_INT;
+
+  case AST_FLOAT_LITERAL:
+    return LOCAL_TYPE_FLOAT;
+
+  case AST_STRING_LITERAL:
+    return LOCAL_TYPE_STRING;
+
+  case AST_BOOL_LITERAL:
+    return LOCAL_TYPE_BOOL;
+
+  case AST_IDENTIFIER: {
+    // Look up local variable type
+    int slot = compiler_resolve_local(compiler, node->name);
+    if (slot >= 0) {
+      return compiler_get_local_type(compiler, slot);
     }
-    
-    case AST_BINARY_OP: {
-      // Arithmetic operations preserve type if both operands match
-      LocalType left = infer_expression_type(compiler, node->left);
-      LocalType right = infer_expression_type(compiler, node->right);
-      
-      if (left == LOCAL_TYPE_INT && right == LOCAL_TYPE_INT) {
-        // Comparisons return bool, arithmetic returns int
-        switch (node->op) {
-          case TOKEN_LESS:
-          case TOKEN_LESS_EQUAL:
-          case TOKEN_GREATER:
-          case TOKEN_GREATER_EQUAL:
-          case TOKEN_EQUAL:
-          case TOKEN_NOT_EQUAL:
-            return LOCAL_TYPE_BOOL;
-          default:
-            return LOCAL_TYPE_INT;
-        }
+    return LOCAL_TYPE_UNKNOWN; // Global or unknown
+  }
+
+  case AST_BINARY_OP: {
+    // Arithmetic operations preserve type if both operands match
+    LocalType left = infer_expression_type(compiler, node->left);
+    LocalType right = infer_expression_type(compiler, node->right);
+
+    if (left == LOCAL_TYPE_INT && right == LOCAL_TYPE_INT) {
+      // Comparisons return bool, arithmetic returns int
+      switch (node->op) {
+      case TOKEN_LESS:
+      case TOKEN_LESS_EQUAL:
+      case TOKEN_GREATER:
+      case TOKEN_GREATER_EQUAL:
+      case TOKEN_EQUAL:
+      case TOKEN_NOT_EQUAL:
+        return LOCAL_TYPE_BOOL;
+      default:
+        return LOCAL_TYPE_INT;
       }
-      return LOCAL_TYPE_UNKNOWN;
     }
-    
-    default:
-      return LOCAL_TYPE_UNKNOWN;
+    return LOCAL_TYPE_UNKNOWN;
+  }
+
+  default:
+    return LOCAL_TYPE_UNKNOWN;
   }
 }
 
 // Check if both operands of a binary op are integers
 static int is_int_binary_op(Compiler *compiler, ASTNode *node) {
-  if (!node || node->type != AST_BINARY_OP) return 0;
+  if (!node || node->type != AST_BINARY_OP)
+    return 0;
   LocalType left = infer_expression_type(compiler, node->left);
   LocalType right = infer_expression_type(compiler, node->right);
   return (left == LOCAL_TYPE_INT && right == LOCAL_TYPE_INT);
@@ -304,11 +307,13 @@ void compile_expression(Compiler *compiler, ASTNode *node) {
         // Could be a global variable or property name
         // Try to compile as expression first (handles variables)
         // For bracket notation arr[varname], we want the variable value
-        // For dot notation obj.prop, we'd want string key (but Tulpar uses bracket notation)
+        // For dot notation obj.prop, we'd want string key (but Tulpar uses
+        // bracket notation)
         compile_expression(compiler, node->index);
       }
     } else {
-      compile_expression(compiler, node->index); // Index value (literal, expression, etc.)
+      compile_expression(
+          compiler, node->index); // Index value (literal, expression, etc.)
     }
     emit_byte(compiler, OP_ARRAY_GET, node->line); // Generic get
     break;
@@ -332,59 +337,60 @@ void compile_expression(Compiler *compiler, ASTNode *node) {
     // OPTIMIZATION: Try register-immediate pattern first (local OP const)
     // Pattern: variable - constant  OR  variable < constant etc.
     // These are VERY common in fibonacci and loops
-    if (node->left && node->left->type == AST_IDENTIFIER && 
-        node->right && node->right->type == AST_INT_LITERAL) {
-      
+    if (node->left && node->left->type == AST_IDENTIFIER && node->right &&
+        node->right->type == AST_INT_LITERAL) {
+
       // Check if it's a local variable
       int local_slot = compiler_resolve_local(compiler, node->left->name);
-      
-      if (local_slot != -1 && node->right->value.int_value >= -32768 && 
+
+      if (local_slot != -1 && node->right->value.int_value >= -32768 &&
           node->right->value.int_value <= 32767) {
-        
+
         int16_t imm = (int16_t)node->right->value.int_value;
-        
+
         switch (node->op) {
-          case TOKEN_MINUS:
-            // Pattern: n - 1, n - 2 (fibonacci!)
-            // Use: LOAD_LOCAL + OP_SUB_RI (saves one stack operation)
-            emit_byte(compiler, OP_LOAD_LOCAL, node->line);
-            emit_short(compiler, local_slot, node->line);
-            emit_byte(compiler, OP_SUB_RI, node->line);
-            emit_byte(compiler, (uint8_t)0, node->line);  // result goes back to stack (special case)
-            emit_short(compiler, imm, node->line);
-            break;
-            
-          case TOKEN_LESS:
-            // Pattern: n < 1, i < 1000000 (loop conditions!)
+        case TOKEN_MINUS:
+          // Pattern: n - 1, n - 2 (fibonacci!)
+          // Use: LOAD_LOCAL + OP_SUB_RI (saves one stack operation)
+          emit_byte(compiler, OP_LOAD_LOCAL, node->line);
+          emit_short(compiler, local_slot, node->line);
+          emit_byte(compiler, OP_SUB_RI, node->line);
+          emit_byte(compiler, (uint8_t)0,
+                    node->line); // result goes back to stack (special case)
+          emit_short(compiler, imm, node->line);
+          break;
+
+        case TOKEN_LESS:
+          // Pattern: n < 1, i < 1000000 (loop conditions!)
+          emit_byte(compiler, OP_LT_RI, node->line);
+          emit_byte(compiler, (uint8_t)local_slot, node->line);
+          emit_short(compiler, imm, node->line);
+          break;
+
+        case TOKEN_LESS_EQUAL:
+          // Pattern: n <= 1 (fibonacci base case!)
+          // Implement as: n < (imm + 1) if imm < 32767
+          if (imm < 32767) {
             emit_byte(compiler, OP_LT_RI, node->line);
             emit_byte(compiler, (uint8_t)local_slot, node->line);
-            emit_short(compiler, imm, node->line);
-            break;
-            
-          case TOKEN_LESS_EQUAL:
-            // Pattern: n <= 1 (fibonacci base case!)
-            // Implement as: n < (imm + 1) if imm < 32767
-            if (imm < 32767) {
-              emit_byte(compiler, OP_LT_RI, node->line);
-              emit_byte(compiler, (uint8_t)local_slot, node->line);
-              emit_short(compiler, imm + 1, node->line);
-            } else {
-              // Fallback to stack-based
-              compile_expression(compiler, node->left);
-              compile_expression(compiler, node->right);
-              emit_byte(compiler, OP_LE_INT, node->line);
-            }
-            break;
-            
-          default:
-            // Other ops: fallback to stack-based
-            goto stack_based_binary;
+            emit_short(compiler, imm + 1, node->line);
+          } else {
+            // Fallback to stack-based
+            compile_expression(compiler, node->left);
+            compile_expression(compiler, node->right);
+            emit_byte(compiler, OP_LE_INT, node->line);
+          }
+          break;
+
+        default:
+          // Other ops: fallback to stack-based
+          goto stack_based_binary;
         }
-        break;  // Exit AST_BINARY_OP case
+        break; // Exit AST_BINARY_OP case
       }
     }
-    
-stack_based_binary:
+
+  stack_based_binary:
     compile_expression(compiler, node->left);
     compile_expression(compiler, node->right);
 
@@ -737,18 +743,43 @@ stack_based_binary:
         emit_short(compiler, 0xFFFF, node->line); // Inline Cache Slot
       }
 
-      // 2. Compile arguments
       for (int i = 0; i < node->argument_count; i++) {
         compile_expression(compiler, node->arguments[i]);
       }
 
-      // 3. Call - use specialized opcodes for common arities
-      switch (node->argument_count) {
+      // 3. Call - OPTIMIZATION: Use cached calls for recursive patterns!
+      int is_recursive = 0;
+      static int global_cache_id = 0; // Static counter for cache IDs
+
+      // Check if calling the same function we're currently in (recursive call)
+      if (compiler->function && compiler->function->name &&
+          node->name && // Function name is in node->name for function calls
+          strcmp(compiler->function->name, node->name) == 0) { // Both are char*
+        is_recursive = 1;
+      }
+
+      if (is_recursive && node->argument_count <= 2) {
+        // RECURSIVE CALL! Use inline cached call for massive speedup!
+        if (node->argument_count == 1) {
+          emit_byte(compiler, OP_CALL_1_CACHED, node->line);
+          // Allocate a unique cache ID for this call site
+          emit_short(compiler, global_cache_id++, node->line);
+        } else if (node->argument_count == 2) {
+          emit_byte(compiler, OP_CALL_2_CACHED, node->line);
+          emit_short(compiler, global_cache_id++, node->line);
+        } else {
+          // Fallback for other arities
+          emit_byte(compiler, OP_CALL_FAST, node->line);
+          emit_byte(compiler, (uint8_t)node->argument_count, node->line);
+        }
+      } else {
+        // Normal call (non-recursive or unknown)
+        switch (node->argument_count) {
         case 0:
           emit_byte(compiler, OP_CALL_0, node->line);
           break;
         case 1:
-          emit_byte(compiler, OP_CALL_1, node->line);  // fibonacci(n-1) pattern
+          emit_byte(compiler, OP_CALL_1, node->line);
           break;
         case 2:
           emit_byte(compiler, OP_CALL_2, node->line);
@@ -757,6 +788,7 @@ stack_based_binary:
           emit_byte(compiler, OP_CALL_FAST, node->line);
           emit_byte(compiler, (uint8_t)node->argument_count, node->line);
           break;
+        }
       }
     }
 
@@ -828,11 +860,21 @@ void compile_statement(Compiler *compiler, ASTNode *node) {
     // Determine local type for specialization
     LocalType local_type = LOCAL_TYPE_UNKNOWN;
     switch (node->data_type) {
-      case TYPE_INT: local_type = LOCAL_TYPE_INT; break;
-      case TYPE_FLOAT: local_type = LOCAL_TYPE_FLOAT; break;
-      case TYPE_STRING: local_type = LOCAL_TYPE_STRING; break;
-      case TYPE_BOOL: local_type = LOCAL_TYPE_BOOL; break;
-      default: local_type = LOCAL_TYPE_UNKNOWN; break;
+    case TYPE_INT:
+      local_type = LOCAL_TYPE_INT;
+      break;
+    case TYPE_FLOAT:
+      local_type = LOCAL_TYPE_FLOAT;
+      break;
+    case TYPE_STRING:
+      local_type = LOCAL_TYPE_STRING;
+      break;
+    case TYPE_BOOL:
+      local_type = LOCAL_TYPE_BOOL;
+      break;
+    default:
+      local_type = LOCAL_TYPE_UNKNOWN;
+      break;
     }
 
     if (compiler->scope_depth == 0) {
@@ -865,23 +907,23 @@ void compile_statement(Compiler *compiler, ASTNode *node) {
         strcmp(node->right->left->name, node->name) == 0 &&
         node->right->right && node->right->right->type == AST_INT_LITERAL &&
         node->right->right->value.int_value == 1) {
-      
+
       // Pattern detected: var = var + 1
       int slot = compiler_resolve_local(compiler, node->name);
       if (slot != -1) {
         // Use ultra-fast increment
         emit_byte(compiler, OP_INC_LOCAL_FAST, node->line);
         emit_short(compiler, (uint16_t)slot, node->line);
-        break;  // Done, skip normal path
+        break; // Done, skip normal path
       }
     }
-    
+
     // OPTIMIZATION 2: Detect "sum = sum + x" pattern for superinstruction
     if (node->name && node->right && node->right->type == AST_BINARY_OP &&
         node->right->op == TOKEN_PLUS && node->right->left &&
         node->right->left->type == AST_IDENTIFIER &&
         strcmp(node->right->left->name, node->name) == 0) {
-      
+
       // Pattern detected: var = var + expr
       int slot = compiler_resolve_local(compiler, node->name);
       if (slot != -1) {
@@ -890,10 +932,10 @@ void compile_statement(Compiler *compiler, ASTNode *node) {
         // Use superinstruction: LOAD_ADD_STORE
         emit_byte(compiler, OP_LOAD_ADD_STORE, node->line);
         emit_short(compiler, (uint16_t)slot, node->line);
-        break;  // Done, skip normal path
+        break; // Done, skip normal path
       }
     }
-    
+
     compile_expression(compiler, node->right);
 
     if (node->name) {
@@ -926,7 +968,8 @@ void compile_statement(Compiler *compiler, ASTNode *node) {
 
       // REWRITE:
       // 1. Compile Left (Array + Index)
-      // İlk erişim için name kullanılıyor (g[0] = x), zincirleme için left (g[0][1] = x)
+      // İlk erişim için name kullanılıyor (g[0] = x), zincirleme için left
+      // (g[0][1] = x)
       if (node->left->left) {
         compile_expression(compiler, node->left->left); // Zincirleme erişim
       } else if (node->left->name) {
@@ -1004,9 +1047,9 @@ void compile_statement(Compiler *compiler, ASTNode *node) {
     int outer_is_for_loop = compiler->is_for_loop;
     int outer_break_count = compiler->break_count;
     int outer_continue_count = compiler->continue_count;
-    
+
     compiler->loop_start = compiler->chunk->code_length;
-    compiler->is_for_loop = 0;  // While loop - continue jumps back directly
+    compiler->is_for_loop = 0; // While loop - continue jumps back directly
     compiler->break_count = 0;
     compiler->continue_count = 0;
     compiler->loop_depth++;
@@ -1027,21 +1070,21 @@ void compile_statement(Compiler *compiler, ASTNode *node) {
     // Patch exit jump
     patch_jump(compiler, exit_jump);
     emit_byte(compiler, OP_POP, node->line);
-    
+
     // Patch all break jumps (to after loop)
     for (int i = 0; i < compiler->break_count; i++) {
       patch_jump(compiler, compiler->break_jumps[i]);
     }
-    
+
     // Note: Continue jumps for while use emit_loop directly in AST_CONTINUE
-    
+
     // Restore outer loop state
     compiler->loop_start = outer_loop_start;
     compiler->is_for_loop = outer_is_for_loop;
     compiler->break_count = outer_break_count;
     compiler->continue_count = outer_continue_count;
     compiler->loop_depth--;
-     break;
+    break;
   }
 
   case AST_FOR: {
@@ -1057,9 +1100,10 @@ void compile_statement(Compiler *compiler, ASTNode *node) {
     int outer_is_for_loop = compiler->is_for_loop;
     int outer_break_count = compiler->break_count;
     int outer_continue_count = compiler->continue_count;
-    
+
     compiler->loop_start = compiler->chunk->code_length;
-    compiler->is_for_loop = 1;  // For loop - continue needs forward jump to increment
+    compiler->is_for_loop =
+        1; // For loop - continue needs forward jump to increment
     compiler->break_count = 0;
     compiler->continue_count = 0;
     compiler->loop_depth++;
@@ -1094,12 +1138,12 @@ void compile_statement(Compiler *compiler, ASTNode *node) {
       patch_jump(compiler, exit_jump);
       emit_byte(compiler, OP_POP, node->line);
     }
-    
+
     // Patch all break jumps
     for (int i = 0; i < compiler->break_count; i++) {
       patch_jump(compiler, compiler->break_jumps[i]);
     }
-    
+
     // Restore outer loop state
     compiler->loop_start = outer_loop_start;
     compiler->is_for_loop = outer_is_for_loop;
@@ -1113,7 +1157,8 @@ void compile_statement(Compiler *compiler, ASTNode *node) {
 
   case AST_BREAK: {
     if (compiler->loop_depth == 0) {
-      fprintf(stderr, "Compiler Error: 'break' outside of loop at line %d\n", node->line);
+      fprintf(stderr, "Compiler Error: 'break' outside of loop at line %d\n",
+              node->line);
     } else {
       // Emit jump and save offset for later patching
       int jump = emit_jump(compiler, OP_JUMP, node->line);
@@ -1126,7 +1171,8 @@ void compile_statement(Compiler *compiler, ASTNode *node) {
 
   case AST_CONTINUE: {
     if (compiler->loop_depth == 0) {
-      fprintf(stderr, "Compiler Error: 'continue' outside of loop at line %d\n", node->line);
+      fprintf(stderr, "Compiler Error: 'continue' outside of loop at line %d\n",
+              node->line);
     } else if (compiler->is_for_loop) {
       // For loop: emit forward jump - will be patched to increment
       int jump = emit_jump(compiler, OP_JUMP, node->line);
@@ -1284,13 +1330,17 @@ void compile_statement(Compiler *compiler, ASTNode *node) {
       // Add argument to locals with type information if available
       ASTNode *param = node->parameters[i];
       LocalType param_type = LOCAL_TYPE_UNKNOWN;
-      
+
       // If parameter has type annotation, use it
-      if (param->data_type == TYPE_INT) param_type = LOCAL_TYPE_INT;
-      else if (param->data_type == TYPE_FLOAT) param_type = LOCAL_TYPE_FLOAT;
-      else if (param->data_type == TYPE_STRING) param_type = LOCAL_TYPE_STRING;
-      else if (param->data_type == TYPE_BOOL) param_type = LOCAL_TYPE_BOOL;
-      
+      if (param->data_type == TYPE_INT)
+        param_type = LOCAL_TYPE_INT;
+      else if (param->data_type == TYPE_FLOAT)
+        param_type = LOCAL_TYPE_FLOAT;
+      else if (param->data_type == TYPE_STRING)
+        param_type = LOCAL_TYPE_STRING;
+      else if (param->data_type == TYPE_BOOL)
+        param_type = LOCAL_TYPE_BOOL;
+
       compiler_add_local_typed(func_compiler, param->name, param_type);
       // We don't need to emit STORE because arguments are already on stack when
       // called

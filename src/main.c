@@ -16,6 +16,9 @@
 #include "parser/parser.h"
 #include "vm/compiler.h"
 #include "vm/vm.h"
+#ifdef TULPAR_AOT_ENABLED
+#include "aot/aot_pipeline.h"
+#endif
 #include <time.h>
 
 // Dosyadan kaynak kodu oku
@@ -173,50 +176,99 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+  // Check for AOT mode
+#ifdef TULPAR_AOT_ENABLED
+  if (argc > 1 && strcmp(argv[1], "--aot") == 0) {
+    if (argc < 3) {
+      printf("Usage: tulpar --aot <source.tpr> [output_name]\n");
+      return 1;
+    }
+    char *source = read_file(argv[2]);
+    if (!source) {
+      return 1;
+    }
+
+    // Output name defaults to input file without extension
+    const char *output_name = (argc > 3) ? argv[3] : "a.out";
+
+    AOTResult result = aot_compile(source, output_name);
+    free(source);
+    return (result == AOT_OK) ? 0 : 1;
+  }
+#endif
+
   char *source = NULL;
   int from_file = 0;
 
   // Command line arguments
   if (argc > 1) {
-    // Read from file
+    // Check for explicit --aot flag OR if file ends with .tpr (auto-AOT)
+#ifdef TULPAR_AOT_ENABLED
+    int use_aot = 0;
+    int file_arg_index = 1;
+    const char *output_name = "a.out";
+
+    if (strcmp(argv[1], "--aot") == 0) {
+      use_aot = 1;
+      file_arg_index = 2;
+      if (argc > 3)
+        output_name = argv[3];
+    } else {
+      // Auto-detect .tpr files -> use AOT
+      const char *ext = strrchr(argv[1], '.');
+      if (ext && strcmp(ext, ".tpr") == 0) {
+        use_aot = 1;
+        if (argc > 2)
+          output_name = argv[2];
+      }
+    }
+
+    if (use_aot) {
+      if (file_arg_index >= argc) {
+        printf("TulparLang v2.1.0 (LLVM Backend)\n");
+        printf("Usage:\n");
+        printf("  tulpar <source.tpr>           - Compile to native binary\n");
+        printf("  tulpar <source.tpr> <output>  - Compile with custom output "
+               "name\n");
+        printf("  tulpar --aot <source.tpr>     - Explicit AOT compilation\n");
+        printf("  tulpar --repl                 - Interactive mode\n");
+        return 1;
+      }
+
+      source = read_file(argv[file_arg_index]);
+      if (!source)
+        return 1;
+
+      printf("TulparLang v2.1.0 (LLVM Backend)\n");
+      printf("Compiling %s -> %s\n", argv[file_arg_index], output_name);
+
+      AOTResult result = aot_compile(source, output_name);
+      free(source);
+      return (result == AOT_OK) ? 0 : 1;
+    }
+#endif
+
+    // Legacy: VM execution (kept for compatibility)
     source = read_file(argv[1]);
     if (!source) {
       return 1;
     }
     from_file = 1;
   } else {
-    // Varsayılan test kodu
-    source = strdup("int x = 5;\n"
-                    "float pi = 3.14;\n"
-                    "str isim = \"Ahmet\";\n"
-                    "bool aktif = true;\n"
-                    "\n"
-                    "func topla(int a, int b) {\n"
-                    "    int sonuc = a + b;\n"
-                    "    return sonuc;\n"
-                    "}\n"
-                    "\n"
-                    "int toplam = topla(5, 3);\n"
-                    "\n"
-                    "func fibonacci(int n) {\n"
-                    "    if (n <= 1) {\n"
-                    "        return n;\n"
-                    "    }\n"
-                    "    int a = fibonacci(n - 1);\n"
-                    "    int b = fibonacci(n - 2);\n"
-                    "    return a + b;\n"
-                    "}\n"
-                    "\n"
-                    "int fib5 = fibonacci(5);\n");
+    // No arguments - show help
+    printf("TulparLang v2.1.0 (LLVM Backend)\n\n");
+    printf("Usage:\n");
+    printf("  tulpar <source.tpr>           - Compile to native binary\n");
+    printf(
+        "  tulpar <source.tpr> <output>  - Compile with custom output name\n");
+    printf("  tulpar --repl                 - Interactive mode\n");
+    return 0;
   }
 
   if (!from_file) {
     printf("========================================\n");
-    printf("   TulparLang Interpreter v2.0.0 🐎\n");
+    printf("   TulparLang v2.1.0 (LLVM Backend)\n");
     printf("========================================\n\n");
-    printf("Kaynak Kod:\n");
-    printf("-------------------\n%s\n", source);
-    printf("-------------------\n\n");
   }
 
   // ========================================

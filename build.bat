@@ -1,28 +1,18 @@
 @echo off
 setlocal EnableDelayedExpansion
 REM ============================================
-REM TulparLang Build Script for Windows
+REM TulparLang Build Script for Windows (LLVM Backend)
+REM Version 2.1.0
 REM ============================================
 
-REM Check for MinGW
-gcc --version >nul 2>nul
-if %errorlevel% neq 0 (
-    echo ERROR: MinGW ^(gcc^) is required. Please install it.
-    echo For example, using Chocolatey: choco install mingw
-    exit /b 1
-)
+echo ========================================
+echo TulparLang Build Script (LLVM Backend)
+echo ========================================
+echo.
 
 REM Parse arguments
 set "ACTION=%1"
 set "TARGET=%2"
-
-REM Build mode (release by default)
-set "BUILD_MODE=release"
-if "%ACTION%"=="debug" (
-    set "BUILD_MODE=debug"
-    set "ACTION=%2"
-    set "TARGET=%3"
-)
 
 if "%ACTION%"=="clean" goto :clean
 if "%ACTION%"=="test" goto :test_only
@@ -30,86 +20,101 @@ goto :build
 
 :clean
 echo Cleaning build artifacts...
-if exist build (
-    rmdir /s /q build 2>nul
-)
-if exist tulpar.exe (
-    del tulpar.exe 2>nul
-)
+if exist build rmdir /s /q build 2>nul
+if exist tulpar.exe del tulpar.exe 2>nul
+if exist a.out.exe del a.out.exe 2>nul
+if exist a.out del a.out 2>nul
+if exist a.out.ll del a.out.ll 2>nul
+if exist a.out.o del a.out.o 2>nul
 echo Clean complete.
 exit /b 0
 
 :build
-echo ========================================
-echo Building TulparLang [%BUILD_MODE%]...
-echo ========================================
+echo Checking dependencies...
+echo.
+
+REM Check CMake
+cmake --version >nul 2>nul
+if %errorlevel% neq 0 (
+    echo ERROR: CMake is required.
+    echo Install from: https://cmake.org/download/
+    echo Or use: winget install Kitware.CMake
+    exit /b 1
+)
+echo   CMake: OK
+
+REM Check for LLVM (via llvm-config or cmake find)
+where llvm-config >nul 2>nul
+if %errorlevel% neq 0 (
+    REM Try common LLVM paths
+    if exist "C:\Program Files\LLVM\bin\llvm-config.exe" (
+        set "PATH=C:\Program Files\LLVM\bin;%PATH%"
+        echo   LLVM: OK (found in Program Files)
+    ) else (
+        echo.
+        echo WARNING: llvm-config not found in PATH.
+        echo.
+        echo Install LLVM from: https://releases.llvm.org/
+        echo Or use MSYS2: pacman -S mingw-w64-x86_64-llvm
+        echo.
+        echo Attempting build anyway (CMake may find LLVM)...
+    )
+) else (
+    echo   LLVM: OK
+)
+
+echo.
+echo Building TulparLang...
 echo.
 
 if not exist build mkdir build
+cd build
 
-REM Set compiler flags based on build mode
-if "%BUILD_MODE%"=="debug" (
-    set "CFLAGS=-Wall -DWIN32_LEAN_AND_MEAN -DTULPAR_DEBUG -Wextra -g -O0 -Isrc"
-    set "LFLAGS=-g"
-    set "SQLITE_FLAGS=-g -O0 -w -DWIN32_LEAN_AND_MEAN"
-    echo Debug mode: Bounds checking enabled, optimizations disabled
-) else (
-    set "CFLAGS=-Wall -DWIN32_LEAN_AND_MEAN -Wextra -O3 -Isrc"
-    set "LFLAGS=-O3 -flto"
-    set "SQLITE_FLAGS=-O3 -w -DWIN32_LEAN_AND_MEAN"
-    echo Release mode: Optimizations enabled, bounds checking disabled
+REM Configure with CMake
+cmake .. -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+if %errorlevel% neq 0 (
+    echo.
+    echo ========================================
+    echo ERROR: CMake configuration failed!
+    echo ========================================
+    echo.
+    echo Make sure LLVM is installed and findable by CMake.
+    echo You may need to set LLVM_DIR environment variable:
+    echo   set LLVM_DIR=C:\path\to\llvm\lib\cmake\llvm
+    echo.
+    cd ..
+    exit /b 1
 )
-echo.
 
-REM Compile with UTF-8 support
-REM Note: This is not a true incremental build (make is better for that), 
-REM but we avoid cleaning everything first.
-gcc %CFLAGS% -c src/lexer/lexer.c -o build/lexer_lexer.o
-if %errorlevel% neq 0 goto :build_error
-gcc %CFLAGS% -c src/parser/parser.c -o build/parser_parser.o
-if %errorlevel% neq 0 goto :build_error
-gcc %CFLAGS% -c src/interpreter/interpreter.c -o build/interpreter_interpreter.o
-if %errorlevel% neq 0 goto :build_error
-gcc %CFLAGS% -c src/vm/bytecode.c -o build/vm_bytecode.o
-if %errorlevel% neq 0 goto :build_error
-gcc %CFLAGS% -flto -c src/vm/vm.c -o build/vm_vm.o
-if %errorlevel% neq 0 goto :build_error
-gcc %CFLAGS% -c src/vm/compiler.c -o build/vm_compiler.o
-if %errorlevel% neq 0 goto :build_error
-gcc %CFLAGS% -c src/jit/jit_memory.c -o build/jit_memory.o
-if %errorlevel% neq 0 goto :build_error
-gcc %CFLAGS% -c src/jit/x64_emit.c -o build/x64_emit.o
-if %errorlevel% neq 0 goto :build_error
-gcc %CFLAGS% -c src/jit/jit_compiler.c -o build/jit_compiler.o
-if %errorlevel% neq 0 goto :build_error
-gcc %CFLAGS% -c src/jit/jit_optimize.c -o build/jit_optimize.o
-if %errorlevel% neq 0 goto :build_error
-gcc %CFLAGS% -c src/main.c -o build/main.o
-if %errorlevel% neq 0 goto :build_error
-gcc %SQLITE_FLAGS% -c lib/sqlite3/sqlite3.c -o build/sqlite3.o
-if %errorlevel% neq 0 goto :build_error
+REM Build
+cmake --build . --config Release
+if %errorlevel% neq 0 (
+    echo.
+    echo ========================================
+    echo ERROR: Build failed!
+    echo ========================================
+    cd ..
+    exit /b 1
+)
 
-REM Link
-gcc %LFLAGS% build/lexer_lexer.o build/parser_parser.o build/interpreter_interpreter.o build/vm_bytecode.o build/vm_vm.o build/vm_compiler.o build/jit_memory.o build/x64_emit.o build/jit_compiler.o build/jit_optimize.o build/main.o build/sqlite3.o -o tulpar.exe -lws2_32
-if %errorlevel% neq 0 goto :build_error
+REM Copy executable
+copy tulpar.exe ..\tulpar.exe >nul
+
+cd ..
 
 echo.
 echo ========================================
-echo BUILD SUCCESSFUL! [%BUILD_MODE%]
+echo BUILD SUCCESSFUL!
 echo ========================================
 echo.
 echo Executable: tulpar.exe
 echo.
 echo Usage:
-echo   build.bat           - Build release ^(optimized^)
-echo   build.bat debug     - Build debug ^(with bounds checking^)
-echo   build.bat clean     - Clean build artifacts
-echo   build.bat test      - Run all tests
-echo   build.bat debug test - Debug build + run tests
-echo   build.bat test file - Run specific test file
+echo   tulpar.exe --aot file.tpr      - Compile to native
+echo   tulpar.exe --aot file.tpr out  - Custom output name
+echo   build.bat clean                - Clean artifacts
+echo   build.bat test                 - Run all tests
 echo.
-
-REM If just building, exit here.
 exit /b 0
 
 :test_only
@@ -119,32 +124,27 @@ if %errorlevel% neq 0 exit /b 1
 
 echo.
 echo ========================================
-echo Running tests...
+echo Running AOT tests...
 echo ========================================
 echo.
 
 set "TEST_FAILED=0"
 set "INPUT_DIR=examples\inputs"
+set "SKIP_TESTS=utils.tpr 09_socket_server.tpr 09_socket_client.tpr 11_router_app.tpr 12_threaded_server.tpr"
 
-REM Hata üreten test dosyaları, server dosyaları veya library dosyaları (build'de atlanır)
-set "SKIP_TESTS=26_error_handling.tpr 26b_error_handling_mod.tpr 32_socket_server.tpr 32_socket_client.tpr 33_socket_wrapper_server.tpr 35_chat_server.tpr 36_async_chat_server.tpr 09_socket_client.tpr 09_socket_server.tpr 09_socket_simple.tpr 11_router_app.tpr 12_threaded_server.tpr utils.tpr"
-
-REM If a specific target is provided, check if it exists
 if not "%TARGET%"=="" (
     if not exist "%TARGET%" (
         echo ERROR: Test file '%TARGET%' not found.
         exit /b 1
     )
-    REM Run single test
     call :run_test "%TARGET%"
 ) else (
-    REM Run all tests
     for %%F in (examples\*.tpr) do (
         set "SKIP=0"
         for %%S in (!SKIP_TESTS!) do (
             if "%%~nxF"=="%%S" (
                 set "SKIP=1"
-                echo SKIP: %%F ^(intentional error test^)
+                echo SKIP: %%F
             )
         )
         
@@ -154,7 +154,13 @@ if not "%TARGET%"=="" (
     )
 )
 
-if !TEST_FAILED! neq 0 goto :test_error
+if !TEST_FAILED! neq 0 (
+    echo.
+    echo ========================================
+    echo ERROR: Some tests failed!
+    echo ========================================
+    exit /b 1
+)
 
 echo.
 echo ========================================
@@ -166,66 +172,38 @@ exit /b 0
 set "EXAMPLE=%~1"
 set "NAME=%~n1"
 
-echo Running %EXAMPLE%...
-set "TEMP_OUT=build\temp_!NAME!.out"
-set "TEMP_ERR=build\temp_!NAME!.err"
+echo Testing %EXAMPLE%...
 
-REM Run test with timeout using PowerShell
-if exist "!INPUT_DIR!\!NAME!.txt" (
-    powershell -Command "$proc = Start-Process -FilePath 'tulpar.exe' -ArgumentList '%EXAMPLE%' -PassThru -WindowStyle Hidden -RedirectStandardOutput '!TEMP_OUT!' -RedirectStandardError '!TEMP_ERR!' -RedirectStandardInput '!INPUT_DIR!\!NAME!.txt'; if ($proc) { $proc | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue; if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force; exit 1 } else { exit $proc.ExitCode } } else { exit 1 }"
-) else (
-    powershell -Command "$proc = Start-Process -FilePath 'tulpar.exe' -ArgumentList '%EXAMPLE%' -PassThru -WindowStyle Hidden -RedirectStandardOutput '!TEMP_OUT!' -RedirectStandardError '!TEMP_ERR!'; if ($proc) { $proc | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue; if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force; exit 1 } else { exit $proc.ExitCode } } else { exit 1 }"
-)
-set "TEST_EXITCODE=!errorlevel!"
-
-REM Check if tulpar.exe is still running (timeout occurred)
-tasklist /FI "IMAGENAME eq tulpar.exe" 2>nul | find /I "tulpar.exe" >nul
-if !errorlevel!==0 (
-    echo ERROR: %EXAMPLE% timed out after 15 seconds ^(infinite loop detected^)
-    taskkill /F /IM tulpar.exe >nul 2>&1
-    echo.
-    echo Error output:
-    if exist "!TEMP_ERR!" type "!TEMP_ERR!"
-    echo.
-    echo Output ^(partial^):
-    if exist "!TEMP_OUT!" (
-        powershell -Command "Get-Content '!TEMP_OUT!' -TotalCount 50"
-    )
-    echo.
-    echo ----------------------------------------
+REM AOT compile
+tulpar.exe --aot "%EXAMPLE%" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo   FAIL: %EXAMPLE% ^(compilation^)
     set "TEST_FAILED=1"
-) else (
-    if !TEST_EXITCODE! neq 0 (
-        echo ERROR: %EXAMPLE% failed.
-        echo.
-        echo Error output:
-        if exist "!TEMP_ERR!" type "!TEMP_ERR!"
-        echo.
-        echo Output:
-        if exist "!TEMP_OUT!" type "!TEMP_OUT!"
-        echo.
-        echo ----------------------------------------
+    exit /b 0
+)
+
+REM Run the compiled binary
+if exist a.out (
+    if exist "!INPUT_DIR!\!NAME!.txt" (
+        a.out < "!INPUT_DIR!\!NAME!.txt" >nul 2>&1
+    ) else (
+        a.out >nul 2>&1
+    )
+    
+    if !errorlevel! neq 0 (
+        echo   FAIL: %EXAMPLE% ^(execution^)
         set "TEST_FAILED=1"
     ) else (
-        echo OK: %EXAMPLE%
+        echo   PASS: %EXAMPLE%
     )
+) else (
+    echo   FAIL: %EXAMPLE% ^(no output^)
+    set "TEST_FAILED=1"
 )
 
 REM Cleanup
-if exist "!TEMP_OUT!" del "!TEMP_OUT!" 2>nul
-if exist "!TEMP_ERR!" del "!TEMP_ERR!" 2>nul
+if exist a.out del a.out 2>nul
+if exist a.out.ll del a.out.ll 2>nul
+if exist a.out.o del a.out.o 2>nul
+
 exit /b 0
-
-:test_error
-echo.
-echo ========================================
-echo ERROR: Example tests failed!
-echo ========================================
-exit /b 1
-
-:build_error
-echo.
-echo ========================================
-echo ERROR: Build failed!
-echo ========================================
-exit /b 1

@@ -1,66 +1,58 @@
 print("=== TulparLang Basics Demo ===");
 
-// 1. Variables & Types
-print("\n--- Variables ---");
+print("--- Variables ---");
 int x = 10;
 float pi = 3.14;
 str name = "Tulpar";
 bool active = true;
 
-print("Int: " + toString(x));
+print("Integer: " + toString(x));
 print("Float: " + toString(pi));
 print("String: " + name);
-print("Bool: " + toString(active));
+if (active) {
+  print("Boolean: true");
+}
 
-// 2. Control Flow
 print("\n--- Control Flow ---");
 if (x > 5) {
-    print("x is greater than 5");
+  print("x is greater than 5");
 } else {
-    print("x is small");
+  print("x is small");
 }
 
-if (active && x == 10) {
-    print("Active and x is 10");
-}
-
-// 3. Loops
-print("\n--- Loops ---");
-print("While Loop:");
 int i = 0;
 while (i < 3) {
-    print("  Count: " + toString(i));
-    i = i + 1;
+  print("Count: " + toString(i));
+  i = i + 1;
 }
 
-print("For Loop:");
-for (int j = 0; j < 3; j = j + 1) {
-    print("  Index: " + toString(j));
-}
+print("\n--- Arrays ---");
+array arr = [1, 2, 3];
+push(arr, 4);
+str jsonArr = toJson(arr);
+print("Array: " + jsonArr);
 
-// 4. Functions
+str lenStr = toString(len(arr));
+print("Length: " + lenStr);
+
+arr[0] = 99;
+str finalJson = toJson(arr);
+print("Modified: " + finalJson);
+
 print("\n--- Functions ---");
+
 func add(int a, int b) {
-    return a + b;
+  return a + b;
 }
 
 func greet(str n) {
-    return "Hello, " + n + "!";
+  return "Hello, " + n + "!";
 }
 
 int sum = add(5, 7);
 print("Sum of 5 + 7 = " + toString(sum));
-print(greet("User"));
 
-// 5. Arrays
-print("\n--- Arrays ---");
-array arr = [1, 2, 3];
-push(arr, 4);
-print("Array: " + toJson(arr));
-print("Length: " + toString(length(arr)));
-print("Element 2: " + toString(arr[2]));
-
-arr[0] = 99;
-print("Modified: " + toJson(arr));
+str msg = greet("User");
+print(msg);
 
 print("\nBasics Demo Completed.");

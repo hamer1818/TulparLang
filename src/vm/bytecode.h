@@ -106,66 +106,70 @@ typedef enum {
   // ----------------------
   // OPTIMIZED OPCODES (Superinstructions)
   // ----------------------
-  OP_FOR_ITER,      // Optimized for loop: slot(2) + limit(8) + body_end_offset(2)
-  OP_INC_LOCAL,     // Increment local variable in-place: slot(2)
-  OP_DEC_LOCAL,     // Decrement local variable in-place: slot(2)
-  
+  OP_FOR_ITER,  // Optimized for loop: slot(2) + limit(8) + body_end_offset(2)
+  OP_INC_LOCAL, // Increment local variable in-place: slot(2)
+  OP_DEC_LOCAL, // Decrement local variable in-place: slot(2)
+
   // ----------------------
   // TYPE-SPECIALIZED OPCODES (No type check)
   // ----------------------
-  OP_ADD_INT,       // Integer add (no type check)
-  OP_SUB_INT,       // Integer subtract
-  OP_MUL_INT,       // Integer multiply
-  OP_DIV_INT,       // Integer divide
-  OP_LT_INT,        // Integer less than
-  OP_LE_INT,        // Integer less or equal
-  OP_GT_INT,        // Integer greater than
-  OP_GE_INT,        // Integer greater or equal
-  OP_EQ_INT,        // Integer equal
-  OP_NE_INT,        // Integer not equal
+  OP_ADD_INT, // Integer add (no type check)
+  OP_SUB_INT, // Integer subtract
+  OP_MUL_INT, // Integer multiply
+  OP_DIV_INT, // Integer divide
+  OP_LT_INT,  // Integer less than
+  OP_LE_INT,  // Integer less or equal
+  OP_GT_INT,  // Integer greater than
+  OP_GE_INT,  // Integer greater or equal
+  OP_EQ_INT,  // Integer equal
+  OP_NE_INT,  // Integer not equal
 
   // ----------------------
   // FAST CALL OPCODES (No JIT check, minimal overhead)
   // ----------------------
-  OP_CALL_FAST,     // Fast function call - no JIT, no type check
-  OP_RETURN_INT,    // Return integer directly to accumulator
-  OP_CALL_0,        // Call with 0 args (ultra-fast)
-  OP_CALL_1,        // Call with 1 arg (ultra-fast)
-  OP_CALL_2,        // Call with 2 args (fibonacci pattern)
-  OP_RETURN_FAST,   // Ultra-fast return - minimal stack manipulation
-  
+  OP_CALL_FAST,   // Fast function call - no JIT, no type check
+  OP_RETURN_INT,  // Return integer directly to accumulator
+  OP_CALL_0,      // Call with 0 args (ultra-fast)
+  OP_CALL_1,      // Call with 1 arg (ultra-fast)
+  OP_CALL_2,      // Call with 2 args (fibonacci pattern)
+  OP_RETURN_FAST, // Ultra-fast return - minimal stack manipulation
+
+  // INLINE CACHED CALLS (20-40% faster for recursive calls!)
+  OP_CALL_1_CACHED, // Call with 1 arg + inline cache (followed by cache_id)
+  OP_CALL_2_CACHED, // Call with 2 args + inline cache
+
   // ----------------------
   // SUPERINSTRUCTIONS (Combined opcodes)
   // ----------------------
-  OP_LOAD_LOCAL_ADD,    // LOAD_LOCAL + ADD (common in loops)
-  OP_LOAD_LOCAL_SUB,    // LOAD_LOCAL + SUB
-  OP_LOAD_LOCAL_LT,     // LOAD_LOCAL + LT (for loop conditions)
-  OP_DEC_JUMP_NZ,       // Decrement local, jump if not zero
-  OP_LOAD_ADD_STORE,    // sum = sum + i pattern
-  OP_INC_LOCAL_FAST,    // var = var + 1 (common counter increment)
-  
+  OP_LOAD_LOCAL_ADD, // LOAD_LOCAL + ADD (common in loops)
+  OP_LOAD_LOCAL_SUB, // LOAD_LOCAL + SUB
+  OP_LOAD_LOCAL_LT,  // LOAD_LOCAL + LT (for loop conditions)
+  OP_DEC_JUMP_NZ,    // Decrement local, jump if not zero
+  OP_LOAD_ADD_STORE, // sum = sum + i pattern
+  OP_INC_LOCAL_FAST, // var = var + 1 (common counter increment)
+
   // ----------------------
   // REGISTER-BASED OPCODES (Faz 2 - Hibrit)
   // Format: OP_XXX_RRR dst, src1, src2 (3 register operands)
   // Registers are local slot indices (r0 = slot[0], r1 = slot[1], ...)
   // ----------------------
-  OP_ADD_RRR,           // dst = src1 + src2 (register-to-register add)
-  OP_SUB_RRR,           // dst = src1 - src2
-  OP_MUL_RRR,           // dst = src1 * src2
-  OP_DIV_RRR,           // dst = src1 / src2
-  OP_LT_RRR,            // dst = src1 < src2
-  OP_LE_RRR,            // dst = src1 <= src2
-  OP_GT_RRR,            // dst = src1 > src2
-  OP_GE_RRR,            // dst = src1 >= src2
-  OP_EQ_RRR,            // dst = src1 == src2
-  OP_NE_RRR,            // dst = src1 != src2
-  OP_MOV_RR,            // dst = src (register copy)
-  OP_MOV_RI,            // dst = imm (load immediate to register)
-  OP_ADD_RI,            // dst = dst + imm (add immediate)
-  OP_SUB_RI,            // dst = dst - imm (subtract immediate)
-  OP_LT_RI,             // dst = dst < imm (compare with immediate)
-  
-  OP_OPCODE_COUNT   // Total number of opcodes
+  OP_ADD_RRR, // dst = src1 + src2 (register-to-register add)
+  OP_SUB_RRR, // dst = src1 - src2
+  OP_MUL_RRR, // dst = src1 * src2
+  OP_DIV_RRR, // dst = src1 / src2
+  OP_LT_RRR,  // dst = src1 < src2
+  OP_LE_RRR,  // dst = src1 <= src2
+  OP_GT_RRR,  // dst = src1 > src2
+  OP_GE_RRR,  // dst = src1 >= src2
+  OP_EQ_RRR,  // dst = src1 == src2
+  OP_NE_RRR,  // dst = src1 != src2
+  OP_MOV_RR,  // dst = src (register copy)
+  OP_MOV_RI,  // dst = imm (load immediate to register)
+  OP_ADD_RI,  // dst = dst + imm (add immediate)
+  OP_SUB_RI,  // dst = dst - imm (subtract immediate)
+  OP_LT_RI,   // dst = dst < imm (compare with immediate)
+
+  OP_OPCODE_COUNT // Total number of opcodes
 } OpCode;
 
 // ============================================================================

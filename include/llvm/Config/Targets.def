@@ -1,0 +1,15 @@
+/* LLVM Targets - Windows x64 build */
+/* This file lists all available targets */
+
+#ifndef LLVM_ENUM_TARGETS
+#  define LLVM_ENUM_TARGETS
+#endif
+
+/* Native target (X86 for Windows) */
+LLVM_TARGET(X86)
+
+/* Additional common targets */
+LLVM_TARGET(AArch64)
+LLVM_TARGET(ARM)
+
+#undef LLVM_ENUM_TARGETS

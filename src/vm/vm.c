@@ -19,11 +19,11 @@ typedef int SOCKET;
 #define closesocket(s) close(s)
 #define WSAGetLastError() errno
 #endif
+#include "../../lib/sqlite3/sqlite3.h"
+#include "../jit/jit.h"
 #include "../parser/parser.h"
 #include "compiler.h"
 #include "vm.h"
-#include "../../lib/sqlite3/sqlite3.h"
-#include "../jit/jit.h"
 #include <math.h> // For clock()
 #include <stdarg.h>
 #include <stdio.h>
@@ -45,14 +45,16 @@ static void ensure_capacity(char **buf, size_t *capacity, size_t needed) {
   }
 }
 
-static void append_str(char **buf, size_t *pos, size_t *capacity, const char *str) {
+static void append_str(char **buf, size_t *pos, size_t *capacity,
+                       const char *str) {
   size_t len = strlen(str);
   ensure_capacity(buf, capacity, *pos + len + 1);
   strcpy(*buf + *pos, str);
   *pos += len;
 }
 
-static void value_to_json(VMValue v, char **buf, size_t *pos, size_t *capacity) {
+static void value_to_json(VMValue v, char **buf, size_t *pos,
+                          size_t *capacity) {
   if (IS_INT(v)) {
     char tmp[64];
     snprintf(tmp, 64, "%lld", AS_INT(v));
@@ -73,7 +75,8 @@ static void value_to_json(VMValue v, char **buf, size_t *pos, size_t *capacity) 
     ObjArray *arr = (ObjArray *)AS_OBJ(v);
     append_str(buf, pos, capacity, "[");
     for (int i = 0; i < arr->count; i++) {
-      if (i > 0) append_str(buf, pos, capacity, ", ");
+      if (i > 0)
+        append_str(buf, pos, capacity, ", ");
       value_to_json(arr->items[i], buf, pos, capacity);
     }
     append_str(buf, pos, capacity, "]");
@@ -81,7 +84,8 @@ static void value_to_json(VMValue v, char **buf, size_t *pos, size_t *capacity) 
     ObjObject *obj = (ObjObject *)AS_OBJ(v);
     append_str(buf, pos, capacity, "{");
     for (int i = 0; i < obj->count; i++) {
-      if (i > 0) append_str(buf, pos, capacity, ", ");
+      if (i > 0)
+        append_str(buf, pos, capacity, ", ");
       append_str(buf, pos, capacity, "\"");
       append_str(buf, pos, capacity, obj->keys[i]->chars);
       append_str(buf, pos, capacity, "\": ");
@@ -131,14 +135,15 @@ static void runtime_error(VM *vm, const char *format, ...) {
 
 static ArenaBlock *arena_block_create(size_t size) {
   ArenaBlock *block = (ArenaBlock *)malloc(sizeof(ArenaBlock));
-  if (!block) return NULL;
-  
+  if (!block)
+    return NULL;
+
   block->base = (char *)malloc(size);
   if (!block->base) {
     free(block);
     return NULL;
   }
-  
+
   block->current = block->base;
   block->capacity = size;
   block->next = NULL;
@@ -154,22 +159,24 @@ static void arena_block_destroy(ArenaBlock *block) {
 
 Arena *arena_create(size_t initial_size) {
   Arena *arena = (Arena *)malloc(sizeof(Arena));
-  if (!arena) return NULL;
-  
+  if (!arena)
+    return NULL;
+
   arena->first_block = arena_block_create(initial_size);
   if (!arena->first_block) {
     free(arena);
     return NULL;
   }
-  
+
   arena->current_block = arena->first_block;
   arena->total_allocated = 0;
   return arena;
 }
 
 void arena_destroy(Arena *arena) {
-  if (!arena) return;
-  
+  if (!arena)
+    return;
+
   ArenaBlock *block = arena->first_block;
   while (block) {
     ArenaBlock *next = block->next;
@@ -182,11 +189,11 @@ void arena_destroy(Arena *arena) {
 void *arena_alloc(Arena *arena, size_t size) {
   // Align size to ARENA_ALIGNMENT
   size = (size + ARENA_ALIGNMENT - 1) & ~(ARENA_ALIGNMENT - 1);
-  
+
   ArenaBlock *block = arena->current_block;
   size_t used = block->current - block->base;
   size_t remaining = block->capacity - used;
-  
+
   // Check if current block has space
   if (LIKELY(size <= remaining)) {
     void *ptr = block->current;
@@ -194,16 +201,17 @@ void *arena_alloc(Arena *arena, size_t size) {
     arena->total_allocated += size;
     return ptr;
   }
-  
+
   // Need new block - allocate at least as much as requested or default size
   size_t new_size = size > ARENA_DEFAULT_SIZE ? size : ARENA_DEFAULT_SIZE;
   ArenaBlock *new_block = arena_block_create(new_size);
-  if (!new_block) return NULL;
-  
+  if (!new_block)
+    return NULL;
+
   // Link to chain
   block->next = new_block;
   arena->current_block = new_block;
-  
+
   void *ptr = new_block->current;
   new_block->current += size;
   arena->total_allocated += size;
@@ -211,8 +219,9 @@ void *arena_alloc(Arena *arena, size_t size) {
 }
 
 void arena_reset(Arena *arena) {
-  if (!arena) return;
-  
+  if (!arena)
+    return;
+
   // Keep first block, free others
   ArenaBlock *block = arena->first_block->next;
   while (block) {
@@ -220,7 +229,7 @@ void arena_reset(Arena *arena) {
     arena_block_destroy(block);
     block = next;
   }
-  
+
   arena->first_block->current = arena->first_block->base;
   arena->first_block->next = NULL;
   arena->current_block = arena->first_block;
@@ -237,7 +246,7 @@ void arena_reset(Arena *arena) {
 static Obj *allocate_object(VM *vm, size_t size, ObjType type) {
   Obj *obj;
   uint8_t from_arena = 0;
-  
+
   // Use arena for small objects, malloc for large ones
   if (LIKELY(size <= ARENA_ALLOC_THRESHOLD && vm->arena != NULL)) {
     obj = (Obj *)arena_alloc(vm->arena, size);
@@ -246,9 +255,10 @@ static Obj *allocate_object(VM *vm, size_t size, ObjType type) {
     obj = (Obj *)malloc(size);
     from_arena = 0;
   }
-  
-  if (!obj) return NULL;
-  
+
+  if (!obj)
+    return NULL;
+
   obj->type = type;
   obj->arena_allocated = from_arena;
   obj->next = vm->objects;
@@ -283,9 +293,19 @@ ObjString *vm_alloc_string(VM *vm, const char *chars, int length) {
   ObjString *str =
       (ObjString *)allocate_object(vm, sizeof(ObjString), OBJ_STRING);
   str->length = length;
-  str->capacity = length;
+
+  // OPTIMIZATION: Pre-allocate capacity for string concatenation
+  // Empty strings and small strings get extra capacity for future appends
+  if (length == 0) {
+    str->capacity = 256; // Empty string gets 256 bytes (common in loops!)
+  } else if (length < 64) {
+    str->capacity = 128; // Small strings get 128 bytes
+  } else {
+    str->capacity = length * 2; // Larger strings: 2x growth strategy
+  }
+
   str->ref_count = 1; // Start with 1 reference (The caller/stack)
-  str->chars = (char *)malloc(length + 1);
+  str->chars = (char *)malloc(str->capacity + 1);
   memcpy(str->chars, chars, length);
   str->chars[length] = '\0';
   str->hash = hash;
@@ -433,8 +453,8 @@ ObjFunction *vm_new_function(VM *vm) {
   func->arity = 0;
   func->upvalue_count = 0;
   func->name = NULL;
-  func->call_count = 0;   // Init profiling
-  func->jit_code = NULL;  // No JIT code yet
+  func->call_count = 0;  // Init profiling
+  func->jit_code = NULL; // No JIT code yet
 
   // Initialize chunk manually
   func->chunk.code = NULL;
@@ -466,7 +486,7 @@ VM *vm_create() {
   // Initialize global cache
   vm->global_cache_count = 0;
   for (int i = 0; i < VM_GLOBALS_MAX; i++) {
-    vm->global_cache[i] = -1;  // Invalid index
+    vm->global_cache[i] = -1; // Invalid index
   }
 
   vm->objects = NULL;
@@ -487,7 +507,7 @@ VM *vm_create() {
 
 static void free_object(Obj *obj) {
   int from_arena = obj->arena_allocated;
-  
+
   switch (obj->type) {
   case OBJ_STRING: {
     ObjString *str = (ObjString *)obj;
@@ -618,7 +638,7 @@ VMValue *vm_get_global(VM *vm, ObjString *name) {
 // VALUE PRINTING
 // ============================================================================
 
-void print_vm_value(VMValue value) {
+void vm_print_value(VMValue value) {
   switch (value.type) {
   case VM_VAL_INT:
     printf("%lld", AS_INT(value));
@@ -692,7 +712,8 @@ void vm_runtime_error(VM *vm, const char *format, ...) {
 
 // Floating point conversions if needed (implicit casts)
 // Fast path binary operation using TYPE_PAIR for quick dispatch
-// TOS CACHING: Direct stack pointer manipulation to avoid function call overhead
+// TOS CACHING: Direct stack pointer manipulation to avoid function call
+// overhead
 #define BINARY_OP(op)                                                          \
   do {                                                                         \
     VMValue *sp = vm->stack_top - 2;                                           \
@@ -700,21 +721,21 @@ void vm_runtime_error(VM *vm, const char *format, ...) {
     VMValue b = sp[1];                                                         \
     uint8_t type_pair = TYPE_PAIR(a, b);                                       \
     switch (type_pair) {                                                       \
-      case TYPE_INT_INT:                                                       \
-        sp[0] = VM_INT(AS_INT(a) op AS_INT(b));                                \
-        break;                                                                 \
-      case TYPE_FLOAT_FLOAT:                                                   \
-        sp[0] = VM_FLOAT(AS_FLOAT(a) op AS_FLOAT(b));                          \
-        break;                                                                 \
-      case TYPE_INT_FLOAT:                                                     \
-        sp[0] = VM_FLOAT((double)AS_INT(a) op AS_FLOAT(b));                    \
-        break;                                                                 \
-      case TYPE_FLOAT_INT:                                                     \
-        sp[0] = VM_FLOAT(AS_FLOAT(a) op (double)AS_INT(b));                    \
-        break;                                                                 \
-      default:                                                                 \
-        sp[0] = VM_FLOAT(0.0); /* Error fallback */                            \
-        break;                                                                 \
+    case TYPE_INT_INT:                                                         \
+      sp[0] = VM_INT(AS_INT(a) op AS_INT(b));                                  \
+      break;                                                                   \
+    case TYPE_FLOAT_FLOAT:                                                     \
+      sp[0] = VM_FLOAT(AS_FLOAT(a) op AS_FLOAT(b));                            \
+      break;                                                                   \
+    case TYPE_INT_FLOAT:                                                       \
+      sp[0] = VM_FLOAT((double)AS_INT(a) op AS_FLOAT(b));                      \
+      break;                                                                   \
+    case TYPE_FLOAT_INT:                                                       \
+      sp[0] = VM_FLOAT(AS_FLOAT(a) op(double) AS_INT(b));                      \
+      break;                                                                   \
+    default:                                                                   \
+      sp[0] = VM_FLOAT(0.0); /* Error fallback */                              \
+      break;                                                                   \
     }                                                                          \
     vm->stack_top = sp + 1;                                                    \
   } while (0)
@@ -728,21 +749,21 @@ void vm_runtime_error(VM *vm, const char *format, ...) {
     VMValue b = sp[1];                                                         \
     uint8_t type_pair = TYPE_PAIR(a, b);                                       \
     switch (type_pair) {                                                       \
-      case TYPE_INT_INT:                                                       \
-        sp[0] = VM_BOOL(AS_INT(a) op AS_INT(b));                               \
-        break;                                                                 \
-      case TYPE_FLOAT_FLOAT:                                                   \
-        sp[0] = VM_BOOL(AS_FLOAT(a) op AS_FLOAT(b));                           \
-        break;                                                                 \
-      case TYPE_INT_FLOAT:                                                     \
-        sp[0] = VM_BOOL((double)AS_INT(a) op AS_FLOAT(b));                     \
-        break;                                                                 \
-      case TYPE_FLOAT_INT:                                                     \
-        sp[0] = VM_BOOL(AS_FLOAT(a) op (double)AS_INT(b));                     \
-        break;                                                                 \
-      default:                                                                 \
-        sp[0] = VM_BOOL(0); /* Error fallback */                               \
-        break;                                                                 \
+    case TYPE_INT_INT:                                                         \
+      sp[0] = VM_BOOL(AS_INT(a) op AS_INT(b));                                 \
+      break;                                                                   \
+    case TYPE_FLOAT_FLOAT:                                                     \
+      sp[0] = VM_BOOL(AS_FLOAT(a) op AS_FLOAT(b));                             \
+      break;                                                                   \
+    case TYPE_INT_FLOAT:                                                       \
+      sp[0] = VM_BOOL((double)AS_INT(a) op AS_FLOAT(b));                       \
+      break;                                                                   \
+    case TYPE_FLOAT_INT:                                                       \
+      sp[0] = VM_BOOL(AS_FLOAT(a) op(double) AS_INT(b));                       \
+      break;                                                                   \
+    default:                                                                   \
+      sp[0] = VM_BOOL(0); /* Error fallback */                                 \
+      break;                                                                   \
     }                                                                          \
     vm->stack_top = sp + 1;                                                    \
   } while (0)
@@ -763,43 +784,34 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
 
 #ifdef __GNUC__
   static void *dispatch_table[] = {
-      &&OP_NOP,          &&OP_POP,          &&OP_DUP,
-      &&OP_CONST_INT,    &&OP_CONST_FLOAT,  &&OP_CONST_TRUE,
-      &&OP_CONST_FALSE,  &&OP_CONST_VOID,   &&OP_CONST_FUNC,
-      &&OP_CONST_STR,    &&OP_ADD,          &&OP_SUB,
-      &&OP_MUL,          &&OP_DIV,          &&OP_MOD,
-      &&OP_NEG,          &&OP_INC,          &&OP_DEC,
-      &&OP_EQ,           &&OP_NE,           &&OP_LT,
-      &&OP_LE,           &&OP_GT,           &&OP_GE,
-      &&OP_AND,          &&OP_OR,           &&OP_NOT,
-      &&OP_LOAD_LOCAL,   &&OP_STORE_LOCAL,  &&OP_LOAD_GLOBAL,
-      &&OP_STORE_GLOBAL, &&OP_JUMP,         &&OP_JUMP_IF_FALSE,
-      &&OP_JUMP_IF_TRUE, &&OP_LOOP,         &&OP_CALL,
-      &&OP_TAIL_CALL,    &&OP_CALL_BUILTIN, &&OP_RETURN,
-      &&OP_RETURN_VOID,  &&OP_ARRAY_NEW,    &&OP_ARRAY_PUSH,
-      &&OP_ARRAY_GET,    &&OP_ARRAY_SET,    &&OP_OBJECT_NEW,
-      &&OP_OBJECT_GET,   &&OP_OBJECT_SET,   &&OP_PRINT,
-      &&OP_IMPORT,       &&OP_TRY,          &&OP_POP_TRY,
-      &&OP_THROW,        &&OP_HALT,
+      &&OP_NOP, &&OP_POP, &&OP_DUP, &&OP_CONST_INT, &&OP_CONST_FLOAT,
+      &&OP_CONST_TRUE, &&OP_CONST_FALSE, &&OP_CONST_VOID, &&OP_CONST_FUNC,
+      &&OP_CONST_STR, &&OP_ADD, &&OP_SUB, &&OP_MUL, &&OP_DIV, &&OP_MOD,
+      &&OP_NEG, &&OP_INC, &&OP_DEC, &&OP_EQ, &&OP_NE, &&OP_LT, &&OP_LE, &&OP_GT,
+      &&OP_GE, &&OP_AND, &&OP_OR, &&OP_NOT, &&OP_LOAD_LOCAL, &&OP_STORE_LOCAL,
+      &&OP_LOAD_GLOBAL, &&OP_STORE_GLOBAL, &&OP_JUMP, &&OP_JUMP_IF_FALSE,
+      &&OP_JUMP_IF_TRUE, &&OP_LOOP, &&OP_CALL, &&OP_TAIL_CALL,
+      &&OP_CALL_BUILTIN, &&OP_RETURN, &&OP_RETURN_VOID, &&OP_ARRAY_NEW,
+      &&OP_ARRAY_PUSH, &&OP_ARRAY_GET, &&OP_ARRAY_SET, &&OP_OBJECT_NEW,
+      &&OP_OBJECT_GET, &&OP_OBJECT_SET, &&OP_PRINT, &&OP_IMPORT, &&OP_TRY,
+      &&OP_POP_TRY, &&OP_THROW, &&OP_HALT,
       // Optimized opcodes
-      &&OP_FOR_ITER,     &&OP_INC_LOCAL,    &&OP_DEC_LOCAL,
-      // Type-specialized opcodes  
-      &&OP_ADD_INT,      &&OP_SUB_INT,      &&OP_MUL_INT,
-      &&OP_DIV_INT,      &&OP_LT_INT,       &&OP_LE_INT,
-      &&OP_GT_INT,       &&OP_GE_INT,       &&OP_EQ_INT,
-      &&OP_NE_INT,
+      &&OP_FOR_ITER, &&OP_INC_LOCAL, &&OP_DEC_LOCAL,
+      // Type-specialized opcodes
+      &&OP_ADD_INT, &&OP_SUB_INT, &&OP_MUL_INT, &&OP_DIV_INT, &&OP_LT_INT,
+      &&OP_LE_INT, &&OP_GT_INT, &&OP_GE_INT, &&OP_EQ_INT, &&OP_NE_INT,
       // Fast call opcodes
-      &&OP_CALL_FAST,    &&OP_RETURN_INT,
-      &&OP_CALL_0,       &&OP_CALL_1,       &&OP_CALL_2,
+      &&OP_CALL_FAST, &&OP_RETURN_INT, &&OP_CALL_0, &&OP_CALL_1, &&OP_CALL_2,
       &&OP_RETURN_FAST,
+      // Inline cached calls
+      &&OP_CALL_1_CACHED, &&OP_CALL_2_CACHED,
       // Superinstructions
       &&OP_LOAD_LOCAL_ADD, &&OP_LOAD_LOCAL_SUB, &&OP_LOAD_LOCAL_LT,
-      &&OP_DEC_JUMP_NZ,  &&OP_LOAD_ADD_STORE, &&OP_INC_LOCAL_FAST,
+      &&OP_DEC_JUMP_NZ, &&OP_LOAD_ADD_STORE, &&OP_INC_LOCAL_FAST,
       // Register-based opcodes
-      &&OP_ADD_RRR, &&OP_SUB_RRR, &&OP_MUL_RRR, &&OP_DIV_RRR,
-      &&OP_LT_RRR, &&OP_LE_RRR, &&OP_GT_RRR, &&OP_GE_RRR,
-      &&OP_EQ_RRR, &&OP_NE_RRR, &&OP_MOV_RR, &&OP_MOV_RI,
-      &&OP_ADD_RI, &&OP_SUB_RI, &&OP_LT_RI};
+      &&OP_ADD_RRR, &&OP_SUB_RRR, &&OP_MUL_RRR, &&OP_DIV_RRR, &&OP_LT_RRR,
+      &&OP_LE_RRR, &&OP_GT_RRR, &&OP_GE_RRR, &&OP_EQ_RRR, &&OP_NE_RRR,
+      &&OP_MOV_RR, &&OP_MOV_RI, &&OP_ADD_RI, &&OP_SUB_RI, &&OP_LT_RI};
 
   DISPATCH(); // Jump to first instruction
 #endif
@@ -1053,11 +1065,10 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           // Compare by content, not just pointer (strings may not be interned)
           ObjString *sa = AS_STRING(a);
           ObjString *sb = AS_STRING(b);
-          int eq = (sa == sb) || 
-                   (sa->length == sb->length && strcmp(sa->chars, sb->chars) == 0);
+          int eq = (sa == sb) || (sa->length == sb->length &&
+                                  strcmp(sa->chars, sb->chars) == 0);
           vm_push(vm, VM_BOOL(eq));
-        }
-        else
+        } else
           vm_push(vm, VM_BOOL(0));
         DISPATCH();
       }
@@ -1075,11 +1086,10 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         else if (IS_STRING(a) && IS_STRING(b)) {
           ObjString *sa = AS_STRING(a);
           ObjString *sb = AS_STRING(b);
-          int ne = (sa != sb) && 
-                   (sa->length != sb->length || strcmp(sa->chars, sb->chars) != 0);
+          int ne = (sa != sb) && (sa->length != sb->length ||
+                                  strcmp(sa->chars, sb->chars) != 0);
           vm_push(vm, VM_BOOL(ne));
-        }
-        else
+        } else
           vm_push(vm, VM_BOOL(1));
         DISPATCH();
       }
@@ -1130,7 +1140,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
       TARGET(OP_LOAD_GLOBAL) : {
         Constant c = READ_CONSTANT(); // name string
         uint16_t cache_slot = READ_SHORT();
-        
+
         VMValue val;
         // Fast path: Inline cache hit (no string allocation needed)
         if (LIKELY(cache_slot < (uint16_t)vm->global_count)) {
@@ -1138,16 +1148,17 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           vm_push(vm, val);
           DISPATCH();
         }
-        
+
         // Slow path: Cache miss - need to look up by name
-        ObjString *name = vm_alloc_string(vm, c.string_val, strlen(c.string_val));
+        ObjString *name =
+            vm_alloc_string(vm, c.string_val, strlen(c.string_val));
         VMValue *v = vm_get_global(vm, name);
         if (UNLIKELY(!v)) {
           runtime_error(vm, "Undefined gloabl '%s'", name->chars);
           return VM_RUNTIME_ERROR;
         }
         val = *v;
-        
+
         // Update cache: write back index to bytecode for next access
         for (int i = 0; i < vm->global_count; i++) {
           if (vm->globals[i].key == name) {
@@ -1156,24 +1167,25 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
             break;
           }
         }
-        
+
         vm_push(vm, val);
         DISPATCH();
       }
       TARGET(OP_STORE_GLOBAL) : {
         Constant c = READ_CONSTANT();
         uint16_t cache_slot = READ_SHORT();
-        
+
         // Fast path: Inline cache hit (no string allocation needed)
         if (LIKELY(cache_slot < (uint16_t)vm->global_count)) {
           vm->globals[cache_slot].value = vm_peek(vm, 0);
           DISPATCH();
         }
-        
+
         // Slow path: Cache miss
-        ObjString *name = vm_alloc_string(vm, c.string_val, strlen(c.string_val));
+        ObjString *name =
+            vm_alloc_string(vm, c.string_val, strlen(c.string_val));
         vm_define_global(vm, name, vm_peek(vm, 0));
-        
+
         // Update cache for next access
         for (int i = 0; i < vm->global_count; i++) {
           if (vm->globals[i].key == name) {
@@ -1212,7 +1224,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
       TARGET(OP_LOOP) : {
         uint16_t offset = READ_SHORT();
         uint8_t *loop_target = ip - offset;
-        
+
         // Hot loop detection: Count iterations
         // Look up or create trace entry for this loop
         LoopTrace *trace = NULL;
@@ -1222,7 +1234,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
             break;
           }
         }
-        
+
         if (!trace && vm->loop_traces.count < MAX_LOOP_TRACES) {
           // New loop - create entry
           trace = &vm->loop_traces.traces[vm->loop_traces.count++];
@@ -1231,14 +1243,14 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           trace->trace_recorded = 0;
           trace->native_code = NULL;
         }
-        
+
         if (trace) {
           trace->iteration_count++;
-          
+
           // If hot enough and has native code, use it
           // (Native code compilation would be done elsewhere)
         }
-        
+
         ip = loop_target;
         DISPATCH();
       }
@@ -1277,30 +1289,31 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
 
         // JIT Compilation - compile hot functions to native code
         func->call_count++;
-        
+
 #if JIT_ENABLED
         // Check if we should JIT compile this function
         if (func->call_count >= JIT_THRESHOLD && !func->jit_code) {
           // Try to compile
           func->jit_code = jit_compile_function(vm, func);
           if (func->jit_code && func->name) {
-            // Uncomment for debug: printf("[JIT] Compiled: %s\n", func->name->chars);
+            // Uncomment for debug: printf("[JIT] Compiled: %s\n",
+            // func->name->chars);
           }
         }
-        
+
         // If JIT code exists and is valid, execute it
         if (func->jit_code && func->jit_code->valid) {
           // Execute JIT code
           JITFunction jit_func = func->jit_code->entry;
           jit_func(vm);
-          
+
           // After JIT returns, pop the frame
           vm->frame_count--;
           if (vm->frame_count == 0) {
             // Program finished
             return VM_OK;
           }
-          
+
           // Restore previous frame
           frame = &vm->frames[vm->frame_count - 1];
           ip = frame->ip;
@@ -1639,15 +1652,16 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           vm_push(vm, VM_OBJ(vm_alloc_string(vm, buf, strlen(buf))));
           break;
         }
-        case 51: { // toJson(val) -> String (recursive, supports nested objects/arrays)
+        case 51: { // toJson(val) -> String (recursive, supports nested
+                   // objects/arrays)
           VMValue v = vm_pop(vm);
           size_t capacity = 256;
           size_t pos = 0;
           char *buf = malloc(capacity);
           buf[0] = '\0';
-          
+
           value_to_json(v, &buf, &pos, &capacity);
-          
+
           vm_push(vm, VM_OBJ(vm_alloc_string(vm, buf, pos)));
           free(buf);
           break;
@@ -1926,26 +1940,26 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           if (IS_STRING(strVal)) {
             char *s = AS_STRING(strVal)->chars;
             int len = AS_STRING(strVal)->length;
-            
+
             // Find start (skip leading whitespace)
             int start = 0;
-            while (start < len && (s[start] == ' ' || s[start] == '\t' || 
-                   s[start] == '\n' || s[start] == '\r')) {
+            while (start < len && (s[start] == ' ' || s[start] == '\t' ||
+                                   s[start] == '\n' || s[start] == '\r')) {
               start++;
             }
-            
+
             // Find end (skip trailing whitespace)
             int end = len;
-            while (end > start && (s[end - 1] == ' ' || s[end - 1] == '\t' || 
-                   s[end - 1] == '\n' || s[end - 1] == '\r')) {
+            while (end > start && (s[end - 1] == ' ' || s[end - 1] == '\t' ||
+                                   s[end - 1] == '\n' || s[end - 1] == '\r')) {
               end--;
             }
-            
+
             int new_len = end - start;
             char *trimmed = malloc(new_len + 1);
             memcpy(trimmed, s + start, new_len);
             trimmed[new_len] = '\0';
-            
+
             vm_push(vm, VM_OBJ(vm_alloc_string(vm, trimmed, new_len)));
             free(trimmed);
           } else {
@@ -2047,12 +2061,12 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         case 90: { // socket_server(host, port) -> fd
           VMValue portVal = vm_pop(vm);
           VMValue hostVal = vm_pop(vm);
-          
+
           if (!IS_STRING(hostVal) || !IS_INT(portVal)) {
             vm_push(vm, VM_INT(-1));
             break;
           }
-          
+
 #ifdef _WIN32
           // Initialize Winsock
           static int wsa_initialized = 0;
@@ -2065,23 +2079,24 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
             wsa_initialized = 1;
           }
 #endif
-          
+
           int server_fd = socket(AF_INET, SOCK_STREAM, 0);
           if (server_fd < 0) {
             vm_push(vm, VM_INT(-1));
             break;
           }
-          
+
           // Allow address reuse
           int opt = 1;
-          setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
-          
+          setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt,
+                     sizeof(opt));
+
           struct sockaddr_in addr;
           addr.sin_family = AF_INET;
           addr.sin_port = htons((int)AS_INT(portVal));
           addr.sin_addr.s_addr = inet_addr(AS_STRING(hostVal)->chars);
-          
-          if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+
+          if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
 #ifdef _WIN32
             closesocket(server_fd);
 #else
@@ -2090,7 +2105,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
             vm_push(vm, VM_INT(-1));
             break;
           }
-          
+
           if (listen(server_fd, 5) < 0) {
 #ifdef _WIN32
             closesocket(server_fd);
@@ -2100,7 +2115,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
             vm_push(vm, VM_INT(-1));
             break;
           }
-          
+
           vm_push(vm, VM_INT(server_fd));
           break;
         }
@@ -2108,12 +2123,12 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         case 91: { // socket_client(host, port) -> fd
           VMValue portVal = vm_pop(vm);
           VMValue hostVal = vm_pop(vm);
-          
+
           if (!IS_STRING(hostVal) || !IS_INT(portVal)) {
             vm_push(vm, VM_INT(-1));
             break;
           }
-          
+
 #ifdef _WIN32
           static int wsa_initialized = 0;
           if (!wsa_initialized) {
@@ -2125,19 +2140,19 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
             wsa_initialized = 1;
           }
 #endif
-          
+
           int client_fd = socket(AF_INET, SOCK_STREAM, 0);
           if (client_fd < 0) {
             vm_push(vm, VM_INT(-1));
             break;
           }
-          
+
           struct sockaddr_in addr;
           addr.sin_family = AF_INET;
           addr.sin_port = htons((int)AS_INT(portVal));
           addr.sin_addr.s_addr = inet_addr(AS_STRING(hostVal)->chars);
-          
-          if (connect(client_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+
+          if (connect(client_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
 #ifdef _WIN32
             closesocket(client_fd);
 #else
@@ -2146,7 +2161,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
             vm_push(vm, VM_INT(-1));
             break;
           }
-          
+
           vm_push(vm, VM_INT(client_fd));
           break;
         }
@@ -2157,11 +2172,12 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
             vm_push(vm, VM_INT(-1));
             break;
           }
-          
+
           struct sockaddr_in client_addr;
           socklen_t client_len = sizeof(client_addr);
-          int client_fd = accept((int)AS_INT(fdVal), (struct sockaddr*)&client_addr, &client_len);
-          
+          int client_fd = accept((int)AS_INT(fdVal),
+                                 (struct sockaddr *)&client_addr, &client_len);
+
           vm_push(vm, VM_INT(client_fd));
           break;
         }
@@ -2169,13 +2185,14 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         case 93: { // socket_send(fd, data) -> bytes_sent
           VMValue dataVal = vm_pop(vm);
           VMValue fdVal = vm_pop(vm);
-          
+
           if (!IS_INT(fdVal) || !IS_STRING(dataVal)) {
             vm_push(vm, VM_INT(-1));
             break;
           }
-          
-          int sent = send((int)AS_INT(fdVal), AS_STRING(dataVal)->chars, AS_STRING(dataVal)->length, 0);
+
+          int sent = send((int)AS_INT(fdVal), AS_STRING(dataVal)->chars,
+                          AS_STRING(dataVal)->length, 0);
           vm_push(vm, VM_INT(sent));
           break;
         }
@@ -2183,16 +2200,16 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         case 94: { // socket_receive(fd, size) -> string
           VMValue sizeVal = vm_pop(vm);
           VMValue fdVal = vm_pop(vm);
-          
+
           if (!IS_INT(fdVal) || !IS_INT(sizeVal)) {
             vm_push(vm, VM_OBJ(vm_alloc_string(vm, "", 0)));
             break;
           }
-          
+
           int size = (int)AS_INT(sizeVal);
           char *buf = malloc(size + 1);
           int received = recv((int)AS_INT(fdVal), buf, size, 0);
-          
+
           if (received > 0) {
             buf[received] = '\0';
             vm_push(vm, VM_OBJ(vm_alloc_string(vm, buf, received)));
@@ -2219,35 +2236,37 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         case 96: { // socket_select(fds_array, timeout_ms) -> ready_fds_array
           VMValue timeoutVal = vm_pop(vm);
           VMValue fdsVal = vm_pop(vm);
-          
+
           ObjArray *result = vm_allocate_array(vm);
-          
-          if (!IS_OBJ(fdsVal) || AS_OBJ(fdsVal)->type != OBJ_ARRAY || !IS_INT(timeoutVal)) {
+
+          if (!IS_OBJ(fdsVal) || AS_OBJ(fdsVal)->type != OBJ_ARRAY ||
+              !IS_INT(timeoutVal)) {
             vm_push(vm, VM_OBJ(result));
             break;
           }
-          
-          ObjArray *fds = (ObjArray*)AS_OBJ(fdsVal);
+
+          ObjArray *fds = (ObjArray *)AS_OBJ(fdsVal);
           int timeout_ms = (int)AS_INT(timeoutVal);
-          
+
           fd_set read_fds;
           FD_ZERO(&read_fds);
           int max_fd = 0;
-          
+
           for (int i = 0; i < fds->count; i++) {
             if (IS_INT(fds->items[i])) {
               int fd = (int)AS_INT(fds->items[i]);
               FD_SET(fd, &read_fds);
-              if (fd > max_fd) max_fd = fd;
+              if (fd > max_fd)
+                max_fd = fd;
             }
           }
-          
+
           struct timeval tv;
           tv.tv_sec = timeout_ms / 1000;
           tv.tv_usec = (timeout_ms % 1000) * 1000;
-          
+
           int ready = select(max_fd + 1, &read_fds, NULL, NULL, &tv);
-          
+
           if (ready > 0) {
             for (int i = 0; i < fds->count; i++) {
               if (IS_INT(fds->items[i])) {
@@ -2258,7 +2277,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
               }
             }
           }
-          
+
           vm_push(vm, VM_OBJ(result));
           break;
         }
@@ -2296,77 +2315,79 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         case 102: { // db_query(db, sql) -> array of rows (each row is object)
           VMValue sqlVal = vm_pop(vm);
           VMValue dbVal = vm_pop(vm);
-          
+
           ObjArray *results = vm_allocate_array(vm);
-          
+
           if (!IS_INT(dbVal) || !IS_STRING(sqlVal)) {
             vm_push(vm, VM_OBJ(results));
             break;
           }
-          
+
           sqlite3 *db = (sqlite3 *)(intptr_t)AS_INT(dbVal);
           char *sql = AS_STRING(sqlVal)->chars;
-          
+
           if (!db) {
             vm_push(vm, VM_OBJ(results));
             break;
           }
-          
+
           sqlite3_stmt *stmt;
           int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
-          
+
           if (rc != SQLITE_OK) {
             // Return empty array on error
             vm_push(vm, VM_OBJ(results));
             break;
           }
-          
+
           // Execute and collect results
           while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
             ObjObject *row = vm_allocate_object(vm);
             int col_count = sqlite3_column_count(stmt);
-            
+
             for (int i = 0; i < col_count; i++) {
               const char *col_name = sqlite3_column_name(stmt, i);
               ObjString *key = vm_alloc_string(vm, col_name, strlen(col_name));
-              
+
               VMValue val;
               int col_type = sqlite3_column_type(stmt, i);
-              
+
               switch (col_type) {
-                case SQLITE_INTEGER:
-                  val = VM_INT(sqlite3_column_int64(stmt, i));
-                  break;
-                case SQLITE_FLOAT:
-                  val = VM_FLOAT(sqlite3_column_double(stmt, i));
-                  break;
-                case SQLITE_TEXT: {
-                  const char *text = (const char *)sqlite3_column_text(stmt, i);
-                  int len = sqlite3_column_bytes(stmt, i);
-                  val = VM_OBJ(vm_alloc_string(vm, text, len));
-                  break;
-                }
-                case SQLITE_NULL:
-                default:
-                  val = VM_VOID();
-                  break;
+              case SQLITE_INTEGER:
+                val = VM_INT(sqlite3_column_int64(stmt, i));
+                break;
+              case SQLITE_FLOAT:
+                val = VM_FLOAT(sqlite3_column_double(stmt, i));
+                break;
+              case SQLITE_TEXT: {
+                const char *text = (const char *)sqlite3_column_text(stmt, i);
+                int len = sqlite3_column_bytes(stmt, i);
+                val = VM_OBJ(vm_alloc_string(vm, text, len));
+                break;
               }
-              
+              case SQLITE_NULL:
+              default:
+                val = VM_VOID();
+                break;
+              }
+
               // Add to row object
               if (row->capacity < row->count + 1) {
                 int old_cap = row->capacity;
                 row->capacity = old_cap < 8 ? 8 : old_cap * 2;
-                row->keys = realloc(row->keys, sizeof(ObjString *) * row->capacity);
-                row->values = realloc(row->values, sizeof(VMValue) * row->capacity);
+                row->keys =
+                    realloc(row->keys, sizeof(ObjString *) * row->capacity);
+                row->values =
+                    realloc(row->values, sizeof(VMValue) * row->capacity);
               }
               row->keys[row->count] = key;
               row->values[row->count] = val;
               row->count++;
             }
-            
+
             vm_array_push(vm, results, VM_OBJ(row));
           }
-          
+
           sqlite3_finalize(stmt);
           vm_push(vm, VM_OBJ(results));
           break;
@@ -2434,9 +2455,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         DISPATCH();
       }
 
-      TARGET(OP_HALT) : {
-        return VM_OK;
-      }
+      TARGET(OP_HALT) : { return VM_OK; }
 
       TARGET(OP_ARRAY_NEW) : {
         // Opcode followed by initial size (not really used if we push manually,
@@ -2529,7 +2548,8 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           }
         }
 
-        runtime_error(vm, "Index access only supported on Arrays/Objects/Strings.");
+        runtime_error(vm,
+                      "Index access only supported on Arrays/Objects/Strings.");
         return VM_RUNTIME_ERROR;
       }
       TARGET(OP_ARRAY_SET) : {
@@ -2838,16 +2858,16 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
       // ================================================================
       // OPTIMIZED OPCODES - Superinstructions
       // ================================================================
-      
+
       TARGET(OP_FOR_ITER) : {
         // Optimized for loop: slot(2) + limit_const(2) + body_end_offset(2)
         uint16_t slot = READ_SHORT();
         Constant limit_const = READ_CONSTANT();
         uint16_t end_offset = READ_SHORT();
-        
+
         int64_t i = AS_INT(frame->slots[slot]);
         int64_t limit = limit_const.int_val;
-        
+
         if (i < limit) {
           // Continue loop - increment and execute body
           frame->slots[slot] = VM_INT(i + 1);
@@ -2858,7 +2878,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         }
         DISPATCH();
       }
-      
+
       TARGET(OP_INC_LOCAL) : {
         // Increment local variable in-place
         uint16_t slot = READ_SHORT();
@@ -2866,7 +2886,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         frame->slots[slot] = VM_INT(val + 1);
         DISPATCH();
       }
-      
+
       TARGET(OP_DEC_LOCAL) : {
         // Decrement local variable in-place
         uint16_t slot = READ_SHORT();
@@ -2874,11 +2894,11 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         frame->slots[slot] = VM_INT(val - 1);
         DISPATCH();
       }
-      
+
       // ================================================================
       // TYPE-SPECIALIZED OPCODES - No type checking
       // ================================================================
-      
+
       TARGET(OP_ADD_INT) : {
         // Fast integer add - assumes both operands are integers
         int64_t b = AS_INT(vm_pop(vm));
@@ -2886,63 +2906,63 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         vm_push(vm, VM_INT(a + b));
         DISPATCH();
       }
-      
+
       TARGET(OP_SUB_INT) : {
         int64_t b = AS_INT(vm_pop(vm));
         int64_t a = AS_INT(vm_pop(vm));
         vm_push(vm, VM_INT(a - b));
         DISPATCH();
       }
-      
+
       TARGET(OP_MUL_INT) : {
         int64_t b = AS_INT(vm_pop(vm));
         int64_t a = AS_INT(vm_pop(vm));
         vm_push(vm, VM_INT(a * b));
         DISPATCH();
       }
-      
+
       TARGET(OP_DIV_INT) : {
         int64_t b = AS_INT(vm_pop(vm));
         int64_t a = AS_INT(vm_pop(vm));
         vm_push(vm, VM_INT(a / b));
         DISPATCH();
       }
-      
+
       TARGET(OP_LT_INT) : {
         int64_t b = AS_INT(vm_pop(vm));
         int64_t a = AS_INT(vm_pop(vm));
         vm_push(vm, VM_BOOL(a < b));
         DISPATCH();
       }
-      
+
       TARGET(OP_LE_INT) : {
         int64_t b = AS_INT(vm_pop(vm));
         int64_t a = AS_INT(vm_pop(vm));
         vm_push(vm, VM_BOOL(a <= b));
         DISPATCH();
       }
-      
+
       TARGET(OP_GT_INT) : {
         int64_t b = AS_INT(vm_pop(vm));
         int64_t a = AS_INT(vm_pop(vm));
         vm_push(vm, VM_BOOL(a > b));
         DISPATCH();
       }
-      
+
       TARGET(OP_GE_INT) : {
         int64_t b = AS_INT(vm_pop(vm));
         int64_t a = AS_INT(vm_pop(vm));
         vm_push(vm, VM_BOOL(a >= b));
         DISPATCH();
       }
-      
+
       TARGET(OP_EQ_INT) : {
         int64_t b = AS_INT(vm_pop(vm));
         int64_t a = AS_INT(vm_pop(vm));
         vm_push(vm, VM_BOOL(a == b));
         DISPATCH();
       }
-      
+
       TARGET(OP_NE_INT) : {
         int64_t b = AS_INT(vm_pop(vm));
         int64_t a = AS_INT(vm_pop(vm));
@@ -2953,140 +2973,300 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
       // ================================================================
       // FAST CALL OPCODES - Minimal overhead function calls
       // ================================================================
-      
+
       TARGET(OP_CALL_FAST) : {
         // Ultra-fast call path - no JIT check, no type validation
         int arg_count = READ_BYTE();
         ObjFunction *func = AS_FUNCTION(vm_peek(vm, arg_count));
-        
+
         // Save IP and setup new frame inline
         frame->ip = ip;
         frame = &vm->frames[vm->frame_count++];
         frame->function = func;
         frame->ip = func->chunk.code;
         frame->slots = vm->stack_top - arg_count - 1;
-        
+
         // Update local registers
         ip = frame->ip;
         chunk = &func->chunk;
         DISPATCH();
       }
-      
+
       TARGET(OP_RETURN_INT) : {
         // Fast return for integer values - uses accumulator
         vm->acc = vm_pop(vm);
-        
+
         // Pop frame
         vm->frame_count--;
         if (vm->frame_count == 0) {
           return VM_OK;
         }
-        
+
         // Restore caller frame
         frame = &vm->frames[vm->frame_count - 1];
-        vm->stack_top = frame->slots + 1;  // Keep function slot
+        vm->stack_top = frame->slots + 1; // Keep function slot
         ip = frame->ip;
         chunk = &frame->function->chunk;
-        
+
         // Push accumulator to caller's stack
         vm_push(vm, vm->acc);
         DISPATCH();
       }
-      
+
       // ================================================================
       // ULTRA-FAST CALL OPCODES - Specialized for common arities
       // ================================================================
-      
+
       TARGET(OP_CALL_0) : {
         // Ultra-fast call with 0 arguments
         ObjFunction *func = AS_FUNCTION(*(vm->stack_top - 1));
-        
+
         // Save return address
         frame->ip = ip;
-        
+
         // Setup new frame - minimal operations
         CallFrame *new_frame = &vm->frames[vm->frame_count++];
         new_frame->function = func;
         new_frame->ip = func->chunk.code;
         new_frame->slots = vm->stack_top - 1;
         new_frame->handler_count = 0;
-        
+
         // Switch to new frame
         frame = new_frame;
         ip = new_frame->ip;
         chunk = &func->chunk;
         DISPATCH();
       }
-      
+
       TARGET(OP_CALL_1) : {
         // Ultra-fast call with 1 argument (common: fibonacci(n-1))
         ObjFunction *func = AS_FUNCTION(*(vm->stack_top - 2));
-        
+
         frame->ip = ip;
-        
+
         CallFrame *new_frame = &vm->frames[vm->frame_count++];
         new_frame->function = func;
         new_frame->ip = func->chunk.code;
         new_frame->slots = vm->stack_top - 2;
         new_frame->handler_count = 0;
-        
+
         frame = new_frame;
         ip = new_frame->ip;
         chunk = &func->chunk;
         DISPATCH();
       }
-      
+
       TARGET(OP_CALL_2) : {
         // Ultra-fast call with 2 arguments
         ObjFunction *func = AS_FUNCTION(*(vm->stack_top - 3));
-        
+
         frame->ip = ip;
-        
+
         CallFrame *new_frame = &vm->frames[vm->frame_count++];
         new_frame->function = func;
         new_frame->ip = func->chunk.code;
         new_frame->slots = vm->stack_top - 3;
         new_frame->handler_count = 0;
-        
+
         frame = new_frame;
         ip = new_frame->ip;
         chunk = &func->chunk;
         DISPATCH();
       }
-      
+
+      // INLINE CACHED CALLS - REAL IMPLEMENTATION! 🚀
+      TARGET(OP_CALL_1_CACHED) : {
+        uint16_t cache_id = READ_SHORT();
+        CallSiteCache *cache = &vm->call_caches[cache_id];
+
+        // Peek the function from stack (1 arg means function is at -2)
+        VMValue callee = *(vm->stack_top - 2);
+
+        // CACHE HIT PATH (HOT - 99.9% for recursive calls!)
+        if (LIKELY(IS_FUNCTION(callee) &&
+                   AS_FUNCTION(callee) == cache->cached_function)) {
+          // CACHE HIT! Ultra-fast path! ⚡
+          cache->cache_hit_count++;
+
+          ObjFunction *func = cache->cached_function;
+
+          // Direct frame setup (no type check, no lookup!)
+          frame->ip = ip;
+          CallFrame *new_frame = &vm->frames[vm->frame_count++];
+          new_frame->function = func;
+          new_frame->ip = cache->cached_entry_point; // Cached!
+          new_frame->slots = vm->stack_top - 2;
+          new_frame->handler_count = 0;
+
+          frame = new_frame;
+          ip = cache->cached_entry_point; // Direct jump to cached entry
+          chunk = &func->chunk;
+
+// JIT check (cached!)
+#if JIT_ENABLED
+          if (UNLIKELY(cache->cached_jit && cache->cached_jit->valid)) {
+            // JIT code available and cached!
+            cache->cached_jit->entry(vm);
+            vm->frame_count--;
+            DISPATCH();
+          }
+#endif
+
+          DISPATCH();
+        }
+
+        // CACHE MISS PATH (COLD - only first call or polymorphic sites)
+        cache->cache_miss_count++;
+
+        // Type check
+        if (UNLIKELY(!IS_FUNCTION(callee))) {
+          runtime_error(vm, "Can only call functions.");
+          return VM_RUNTIME_ERROR;
+        }
+
+        ObjFunction *func = AS_FUNCTION(callee);
+
+        // UPDATE CACHE for next call!
+        cache->cached_function = func;
+        cache->cached_entry_point = func->chunk.code;
+#if JIT_ENABLED
+        cache->cached_jit = func->jit_code;
+#else
+        cache->cached_jit = NULL;
+#endif
+
+        // Execute call (normal path)
+        frame->ip = ip;
+        CallFrame *new_frame = &vm->frames[vm->frame_count++];
+        new_frame->function = func;
+        new_frame->ip = func->chunk.code;
+        new_frame->slots = vm->stack_top - 2;
+        new_frame->handler_count = 0;
+
+        frame = new_frame;
+        ip = new_frame->ip;
+        chunk = &func->chunk;
+
+// JIT check
+#if JIT_ENABLED
+        if (func->jit_code && func->jit_code->valid) {
+          func->jit_code->entry(vm);
+          vm->frame_count--;
+          DISPATCH();
+        }
+#endif
+
+        DISPATCH();
+      }
+
+      TARGET(OP_CALL_2_CACHED) : {
+        uint16_t cache_id = READ_SHORT();
+        CallSiteCache *cache = &vm->call_caches[cache_id];
+
+        VMValue callee = *(vm->stack_top - 3); // 2 args means function at -3
+
+        // CACHE HIT
+        if (LIKELY(IS_FUNCTION(callee) &&
+                   AS_FUNCTION(callee) == cache->cached_function)) {
+          cache->cache_hit_count++;
+
+          ObjFunction *func = cache->cached_function;
+          frame->ip = ip;
+          CallFrame *new_frame = &vm->frames[vm->frame_count++];
+          new_frame->function = func;
+          new_frame->ip = cache->cached_entry_point;
+          new_frame->slots = vm->stack_top - 3;
+          new_frame->handler_count = 0;
+
+          frame = new_frame;
+          ip = cache->cached_entry_point;
+          chunk = &func->chunk;
+
+#if JIT_ENABLED
+          if (UNLIKELY(cache->cached_jit && cache->cached_jit->valid)) {
+            cache->cached_jit->entry(vm);
+            vm->frame_count--;
+            DISPATCH();
+          }
+#endif
+
+          DISPATCH();
+        }
+
+        // CACHE MISS
+        cache->cache_miss_count++;
+
+        if (UNLIKELY(!IS_FUNCTION(callee))) {
+          runtime_error(vm, "Can only call functions.");
+          return VM_RUNTIME_ERROR;
+        }
+
+        ObjFunction *func = AS_FUNCTION(callee);
+
+        // Update cache
+        cache->cached_function = func;
+        cache->cached_entry_point = func->chunk.code;
+#if JIT_ENABLED
+        cache->cached_jit = func->jit_code;
+#else
+        cache->cached_jit = NULL;
+#endif
+
+        frame->ip = ip;
+        CallFrame *new_frame = &vm->frames[vm->frame_count++];
+        new_frame->function = func;
+        new_frame->ip = func->chunk.code;
+        new_frame->slots = vm->stack_top - 3;
+        new_frame->handler_count = 0;
+
+        frame = new_frame;
+        ip = new_frame->ip;
+        chunk = &func->chunk;
+
+#if JIT_ENABLED
+        if (func->jit_code && func->jit_code->valid) {
+          func->jit_code->entry(vm);
+          vm->frame_count--;
+          DISPATCH();
+        }
+#endif
+
+        DISPATCH();
+      }
+
       TARGET(OP_RETURN_FAST) : {
         // Ultra-fast return
-        VMValue result = vm_pop(vm);  // Get return value
-        
+        VMValue result = vm_pop(vm); // Get return value
+
         // Discard callee's locals - reset to callee's slots base
         vm->stack_top = frame->slots;
-        
+
         // Push result to caller's stack
         vm_push(vm, result);
-        
+
         // Pop frame
         vm->frame_count--;
         if (UNLIKELY(vm->frame_count == 0)) {
           return VM_OK;
         }
-        
+
         // Restore caller frame
         frame = &vm->frames[vm->frame_count - 1];
         ip = frame->ip;
         chunk = &frame->function->chunk;
         DISPATCH();
       }
-      
+
       // ================================================================
       // SUPERINSTRUCTIONS - Combined common patterns
       // ================================================================
-      
+
       TARGET(OP_LOAD_LOCAL_ADD) : {
         // Common pattern: push local + add to TOS
         uint16_t slot = READ_SHORT();
         VMValue local = frame->slots[slot];
         VMValue *sp = vm->stack_top - 1;
-        
+
         if (LIKELY(IS_INT(local) && IS_INT(*sp))) {
           sp[0] = VM_INT(AS_INT(*sp) + AS_INT(local));
         } else {
@@ -3096,12 +3276,12 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         }
         DISPATCH();
       }
-      
+
       TARGET(OP_LOAD_LOCAL_SUB) : {
         uint16_t slot = READ_SHORT();
         VMValue local = frame->slots[slot];
         VMValue *sp = vm->stack_top - 1;
-        
+
         if (LIKELY(IS_INT(local) && IS_INT(*sp))) {
           sp[0] = VM_INT(AS_INT(*sp) - AS_INT(local));
         } else {
@@ -3110,13 +3290,13 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         }
         DISPATCH();
       }
-      
+
       TARGET(OP_LOAD_LOCAL_LT) : {
         // Pattern: i < limit (used in for loops)
         uint16_t slot = READ_SHORT();
         VMValue local = frame->slots[slot];
         VMValue *sp = vm->stack_top - 1;
-        
+
         if (LIKELY(IS_INT(local) && IS_INT(*sp))) {
           sp[0] = VM_BOOL(AS_INT(*sp) < AS_INT(local));
         } else {
@@ -3125,28 +3305,28 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         }
         DISPATCH();
       }
-      
+
       TARGET(OP_DEC_JUMP_NZ) : {
         // Countdown loop: decrement local, jump if not zero
         uint16_t slot = READ_SHORT();
         int16_t offset = (int16_t)READ_SHORT();
-        
+
         int64_t val = AS_INT(frame->slots[slot]);
         val--;
         frame->slots[slot] = VM_INT(val);
-        
+
         if (val != 0) {
           ip += offset;
         }
         DISPATCH();
       }
-      
+
       TARGET(OP_LOAD_ADD_STORE) : {
         // Pattern: sum = sum + x (x is on stack, sum is local)
         uint16_t slot = READ_SHORT();
         VMValue x = vm_pop(vm);
         VMValue sum = frame->slots[slot];
-        
+
         if (LIKELY(IS_INT(sum) && IS_INT(x))) {
           frame->slots[slot] = VM_INT(AS_INT(sum) + AS_INT(x));
         } else {
@@ -3158,7 +3338,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         }
         DISPATCH();
       }
-      
+
       TARGET(OP_INC_LOCAL_FAST) : {
         // Ultra-fast increment: var = var + 1 (assumes int)
         uint16_t slot = READ_SHORT();
@@ -3170,88 +3350,98 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
       // REGISTER-BASED OPCODES - Direct register-to-register operations
       // Format: OP dst, src1, src2 (each is a local slot index)
       // ================================================================
-      
+
       TARGET(OP_ADD_RRR) : {
         // dst = src1 + src2 (all registers/slots)
         uint8_t dst = READ_BYTE();
         uint8_t src1 = READ_BYTE();
         uint8_t src2 = READ_BYTE();
-        frame->slots[dst] = VM_INT(AS_INT(frame->slots[src1]) + AS_INT(frame->slots[src2]));
+        frame->slots[dst] =
+            VM_INT(AS_INT(frame->slots[src1]) + AS_INT(frame->slots[src2]));
         DISPATCH();
       }
-      
+
       TARGET(OP_SUB_RRR) : {
         uint8_t dst = READ_BYTE();
         uint8_t src1 = READ_BYTE();
         uint8_t src2 = READ_BYTE();
-        frame->slots[dst] = VM_INT(AS_INT(frame->slots[src1]) - AS_INT(frame->slots[src2]));
+        frame->slots[dst] =
+            VM_INT(AS_INT(frame->slots[src1]) - AS_INT(frame->slots[src2]));
         DISPATCH();
       }
-      
+
       TARGET(OP_MUL_RRR) : {
         uint8_t dst = READ_BYTE();
         uint8_t src1 = READ_BYTE();
         uint8_t src2 = READ_BYTE();
-        frame->slots[dst] = VM_INT(AS_INT(frame->slots[src1]) * AS_INT(frame->slots[src2]));
+        frame->slots[dst] =
+            VM_INT(AS_INT(frame->slots[src1]) * AS_INT(frame->slots[src2]));
         DISPATCH();
       }
-      
+
       TARGET(OP_DIV_RRR) : {
         uint8_t dst = READ_BYTE();
         uint8_t src1 = READ_BYTE();
         uint8_t src2 = READ_BYTE();
-        frame->slots[dst] = VM_INT(AS_INT(frame->slots[src1]) / AS_INT(frame->slots[src2]));
+        frame->slots[dst] =
+            VM_INT(AS_INT(frame->slots[src1]) / AS_INT(frame->slots[src2]));
         DISPATCH();
       }
-      
+
       TARGET(OP_LT_RRR) : {
         uint8_t dst = READ_BYTE();
         uint8_t src1 = READ_BYTE();
         uint8_t src2 = READ_BYTE();
-        frame->slots[dst] = VM_BOOL(AS_INT(frame->slots[src1]) < AS_INT(frame->slots[src2]));
+        frame->slots[dst] =
+            VM_BOOL(AS_INT(frame->slots[src1]) < AS_INT(frame->slots[src2]));
         DISPATCH();
       }
-      
+
       TARGET(OP_LE_RRR) : {
         uint8_t dst = READ_BYTE();
         uint8_t src1 = READ_BYTE();
         uint8_t src2 = READ_BYTE();
-        frame->slots[dst] = VM_BOOL(AS_INT(frame->slots[src1]) <= AS_INT(frame->slots[src2]));
+        frame->slots[dst] =
+            VM_BOOL(AS_INT(frame->slots[src1]) <= AS_INT(frame->slots[src2]));
         DISPATCH();
       }
-      
+
       TARGET(OP_GT_RRR) : {
         uint8_t dst = READ_BYTE();
         uint8_t src1 = READ_BYTE();
         uint8_t src2 = READ_BYTE();
-        frame->slots[dst] = VM_BOOL(AS_INT(frame->slots[src1]) > AS_INT(frame->slots[src2]));
+        frame->slots[dst] =
+            VM_BOOL(AS_INT(frame->slots[src1]) > AS_INT(frame->slots[src2]));
         DISPATCH();
       }
-      
+
       TARGET(OP_GE_RRR) : {
         uint8_t dst = READ_BYTE();
         uint8_t src1 = READ_BYTE();
         uint8_t src2 = READ_BYTE();
-        frame->slots[dst] = VM_BOOL(AS_INT(frame->slots[src1]) >= AS_INT(frame->slots[src2]));
+        frame->slots[dst] =
+            VM_BOOL(AS_INT(frame->slots[src1]) >= AS_INT(frame->slots[src2]));
         DISPATCH();
       }
-      
+
       TARGET(OP_EQ_RRR) : {
         uint8_t dst = READ_BYTE();
         uint8_t src1 = READ_BYTE();
         uint8_t src2 = READ_BYTE();
-        frame->slots[dst] = VM_BOOL(AS_INT(frame->slots[src1]) == AS_INT(frame->slots[src2]));
+        frame->slots[dst] =
+            VM_BOOL(AS_INT(frame->slots[src1]) == AS_INT(frame->slots[src2]));
         DISPATCH();
       }
-      
+
       TARGET(OP_NE_RRR) : {
         uint8_t dst = READ_BYTE();
         uint8_t src1 = READ_BYTE();
         uint8_t src2 = READ_BYTE();
-        frame->slots[dst] = VM_BOOL(AS_INT(frame->slots[src1]) != AS_INT(frame->slots[src2]));
+        frame->slots[dst] =
+            VM_BOOL(AS_INT(frame->slots[src1]) != AS_INT(frame->slots[src2]));
         DISPATCH();
       }
-      
+
       TARGET(OP_MOV_RR) : {
         // dst = src (register copy)
         uint8_t dst = READ_BYTE();
@@ -3259,7 +3449,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         frame->slots[dst] = frame->slots[src];
         DISPATCH();
       }
-      
+
       TARGET(OP_MOV_RI) : {
         // dst = immediate (load 16-bit immediate to register)
         uint8_t dst = READ_BYTE();
@@ -3267,7 +3457,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         frame->slots[dst] = VM_INT(imm);
         DISPATCH();
       }
-      
+
       TARGET(OP_ADD_RI) : {
         // dst = dst + immediate
         uint8_t dst = READ_BYTE();
@@ -3275,15 +3465,15 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         frame->slots[dst].as.int_val += imm;
         DISPATCH();
       }
-      
+
       TARGET(OP_SUB_RI) : {
         // Stack version: TOS = TOS - immediate (for fibonacci n-1, n-2 pattern)
-        READ_BYTE();  // Skip dst byte (not used in stack mode)
+        READ_BYTE(); // Skip dst byte (not used in stack mode)
         int16_t imm = (int16_t)READ_SHORT();
-        vm->stack_top[-1].as.int_val -= imm;  // Modify top of stack directly
+        vm->stack_top[-1].as.int_val -= imm; // Modify top of stack directly
         DISPATCH();
       }
-      
+
       TARGET(OP_LT_RI) : {
         // tmp = dst < immediate (result in temp register, pushes to stack)
         uint8_t reg = READ_BYTE();
@@ -3347,32 +3537,32 @@ ObjObject *vm_allocate_object(VM *vm) {
 void jit_helper_call(VM *vm, int arg_count) {
   // Get callee from stack
   VMValue callee = vm_peek(vm, arg_count);
-  
+
   if (!IS_FUNCTION(callee)) {
     printf("JIT Error: Can only call functions\n");
     vm_push(vm, VM_VOID());
     return;
   }
-  
+
   ObjFunction *func = AS_FUNCTION(callee);
-  
+
   // Check arity
   if (arg_count != func->arity) {
     printf("JIT Error: Expected %d args but got %d\n", func->arity, arg_count);
     vm_push(vm, VM_VOID());
     return;
   }
-  
+
   // Check for stack overflow
   if (vm->frame_count >= VM_FRAMES_MAX) {
     printf("JIT Error: Stack overflow\n");
     vm_push(vm, VM_VOID());
     return;
   }
-  
+
   // Increment call count for JIT profiling
   func->call_count++;
-  
+
   // Check if function has JIT code - if so, use it!
 #if JIT_ENABLED
   if (func->jit_code && func->jit_code->valid) {
@@ -3382,18 +3572,18 @@ void jit_helper_call(VM *vm, int arg_count) {
     frame->ip = func->chunk.code;
     frame->slots = vm->stack_top - arg_count - 1;
     frame->handler_count = 0;
-    
+
     // Execute JIT code directly!
     JITFunction jit_func = func->jit_code->entry;
     jit_func(vm);
-    
+
     // JIT code handles return, stack cleanup
     // Pop frame and push result
     vm->frame_count--;
     // Result should already be on stack from JIT epilogue
     return;
   }
-  
+
   // Try to JIT compile if hot enough
   if (func->call_count >= JIT_THRESHOLD && !func->jit_code) {
     func->jit_code = jit_compile_function(vm, func);
@@ -3404,216 +3594,218 @@ void jit_helper_call(VM *vm, int arg_count) {
       frame->ip = func->chunk.code;
       frame->slots = vm->stack_top - arg_count - 1;
       frame->handler_count = 0;
-      
+
       JITFunction jit_func = func->jit_code->entry;
       jit_func(vm);
-      
+
       vm->frame_count--;
       return;
     }
   }
 #endif
-  
+
   // Fallback: Setup new call frame for interpreter
   CallFrame *frame = &vm->frames[vm->frame_count++];
   frame->function = func;
   frame->ip = func->chunk.code;
   frame->slots = vm->stack_top - arg_count - 1;
   frame->handler_count = 0;
-  
+
   // Run interpreter for this function
   // We need a mini-interpreter loop here
   register uint8_t *ip = frame->ip;
   Chunk *chunk = &func->chunk;
-  
-  #define READ_BYTE() (*ip++)
-  #define READ_SHORT() (ip += 2, (uint16_t)((ip[-2]) | (ip[-1] << 8)))
-  #define READ_CONSTANT() (chunk->constants[READ_SHORT()])
-  
+
+#define READ_BYTE() (*ip++)
+#define READ_SHORT() (ip += 2, (uint16_t)((ip[-2]) | (ip[-1] << 8)))
+#define READ_CONSTANT() (chunk->constants[READ_SHORT()])
+
   for (;;) {
     uint8_t instruction = READ_BYTE();
-    
+
     switch (instruction) {
-      case OP_CONST_INT: {
-        Constant c = READ_CONSTANT();
-        vm_push(vm, VM_INT(c.int_val));
-        break;
+    case OP_CONST_INT: {
+      Constant c = READ_CONSTANT();
+      vm_push(vm, VM_INT(c.int_val));
+      break;
+    }
+
+    case OP_CONST_TRUE:
+      vm_push(vm, VM_BOOL(1));
+      break;
+
+    case OP_CONST_FALSE:
+      vm_push(vm, VM_BOOL(0));
+      break;
+
+    case OP_CONST_VOID:
+      vm_push(vm, VM_VOID());
+      break;
+
+    case OP_POP:
+      vm_pop(vm);
+      break;
+
+    case OP_ADD: {
+      VMValue b = vm_pop(vm);
+      VMValue a = vm_pop(vm);
+      if (IS_INT(a) && IS_INT(b)) {
+        vm_push(vm, VM_INT(AS_INT(a) + AS_INT(b)));
+      } else {
+        vm_push(vm, VM_FLOAT(AS_FLOAT(a) + AS_FLOAT(b)));
       }
-      
-      case OP_CONST_TRUE:
-        vm_push(vm, VM_BOOL(1));
-        break;
-        
-      case OP_CONST_FALSE:
-        vm_push(vm, VM_BOOL(0));
-        break;
-        
-      case OP_CONST_VOID:
-        vm_push(vm, VM_VOID());
-        break;
-        
-      case OP_POP:
-        vm_pop(vm);
-        break;
-        
-      case OP_ADD: {
-        VMValue b = vm_pop(vm);
-        VMValue a = vm_pop(vm);
-        if (IS_INT(a) && IS_INT(b)) {
-          vm_push(vm, VM_INT(AS_INT(a) + AS_INT(b)));
-        } else {
-          vm_push(vm, VM_FLOAT(AS_FLOAT(a) + AS_FLOAT(b)));
-        }
-        break;
+      break;
+    }
+
+    case OP_SUB: {
+      VMValue b = vm_pop(vm);
+      VMValue a = vm_pop(vm);
+      if (IS_INT(a) && IS_INT(b)) {
+        vm_push(vm, VM_INT(AS_INT(a) - AS_INT(b)));
+      } else {
+        vm_push(vm, VM_FLOAT(AS_FLOAT(a) - AS_FLOAT(b)));
       }
-      
-      case OP_SUB: {
-        VMValue b = vm_pop(vm);
-        VMValue a = vm_pop(vm);
-        if (IS_INT(a) && IS_INT(b)) {
-          vm_push(vm, VM_INT(AS_INT(a) - AS_INT(b)));
-        } else {
-          vm_push(vm, VM_FLOAT(AS_FLOAT(a) - AS_FLOAT(b)));
-        }
-        break;
+      break;
+    }
+
+    case OP_MUL: {
+      VMValue b = vm_pop(vm);
+      VMValue a = vm_pop(vm);
+      if (IS_INT(a) && IS_INT(b)) {
+        vm_push(vm, VM_INT(AS_INT(a) * AS_INT(b)));
+      } else {
+        vm_push(vm, VM_FLOAT(AS_FLOAT(a) * AS_FLOAT(b)));
       }
-      
-      case OP_MUL: {
-        VMValue b = vm_pop(vm);
-        VMValue a = vm_pop(vm);
-        if (IS_INT(a) && IS_INT(b)) {
-          vm_push(vm, VM_INT(AS_INT(a) * AS_INT(b)));
-        } else {
-          vm_push(vm, VM_FLOAT(AS_FLOAT(a) * AS_FLOAT(b)));
-        }
-        break;
-      }
-      
-      case OP_LT: {
-        VMValue b = vm_pop(vm);
-        VMValue a = vm_pop(vm);
-        vm_push(vm, VM_BOOL(AS_INT(a) < AS_INT(b)));
-        break;
-      }
-      
-      case OP_LE: {
-        VMValue b = vm_pop(vm);
-        VMValue a = vm_pop(vm);
-        vm_push(vm, VM_BOOL(AS_INT(a) <= AS_INT(b)));
-        break;
-      }
-      
-      case OP_GT: {
-        VMValue b = vm_pop(vm);
-        VMValue a = vm_pop(vm);
-        vm_push(vm, VM_BOOL(AS_INT(a) > AS_INT(b)));
-        break;
-      }
-      
-      case OP_GE: {
-        VMValue b = vm_pop(vm);
-        VMValue a = vm_pop(vm);
-        vm_push(vm, VM_BOOL(AS_INT(a) >= AS_INT(b)));
-        break;
-      }
-      
-      case OP_EQ: {
-        VMValue b = vm_pop(vm);
-        VMValue a = vm_pop(vm);
-        vm_push(vm, VM_BOOL(AS_INT(a) == AS_INT(b)));
-        break;
-      }
-      
-      case OP_NE: {
-        VMValue b = vm_pop(vm);
-        VMValue a = vm_pop(vm);
-        vm_push(vm, VM_BOOL(AS_INT(a) != AS_INT(b)));
-        break;
-      }
-      
-      case OP_LOAD_LOCAL: {
-        uint16_t slot = READ_SHORT();
-        vm_push(vm, frame->slots[slot]);
-        break;
-      }
-      
-      case OP_STORE_LOCAL: {
-        uint16_t slot = READ_SHORT();
-        frame->slots[slot] = vm_peek(vm, 0);
-        break;
-      }
-      
-      case OP_JUMP: {
-        uint16_t offset = READ_SHORT();
+      break;
+    }
+
+    case OP_LT: {
+      VMValue b = vm_pop(vm);
+      VMValue a = vm_pop(vm);
+      vm_push(vm, VM_BOOL(AS_INT(a) < AS_INT(b)));
+      break;
+    }
+
+    case OP_LE: {
+      VMValue b = vm_pop(vm);
+      VMValue a = vm_pop(vm);
+      vm_push(vm, VM_BOOL(AS_INT(a) <= AS_INT(b)));
+      break;
+    }
+
+    case OP_GT: {
+      VMValue b = vm_pop(vm);
+      VMValue a = vm_pop(vm);
+      vm_push(vm, VM_BOOL(AS_INT(a) > AS_INT(b)));
+      break;
+    }
+
+    case OP_GE: {
+      VMValue b = vm_pop(vm);
+      VMValue a = vm_pop(vm);
+      vm_push(vm, VM_BOOL(AS_INT(a) >= AS_INT(b)));
+      break;
+    }
+
+    case OP_EQ: {
+      VMValue b = vm_pop(vm);
+      VMValue a = vm_pop(vm);
+      vm_push(vm, VM_BOOL(AS_INT(a) == AS_INT(b)));
+      break;
+    }
+
+    case OP_NE: {
+      VMValue b = vm_pop(vm);
+      VMValue a = vm_pop(vm);
+      vm_push(vm, VM_BOOL(AS_INT(a) != AS_INT(b)));
+      break;
+    }
+
+    case OP_LOAD_LOCAL: {
+      uint16_t slot = READ_SHORT();
+      vm_push(vm, frame->slots[slot]);
+      break;
+    }
+
+    case OP_STORE_LOCAL: {
+      uint16_t slot = READ_SHORT();
+      frame->slots[slot] = vm_peek(vm, 0);
+      break;
+    }
+
+    case OP_JUMP: {
+      uint16_t offset = READ_SHORT();
+      ip += offset;
+      break;
+    }
+
+    case OP_JUMP_IF_FALSE: {
+      uint16_t offset = READ_SHORT();
+      if (!AS_BOOL(vm_peek(vm, 0))) {
         ip += offset;
-        break;
       }
-      
-      case OP_JUMP_IF_FALSE: {
-        uint16_t offset = READ_SHORT();
-        if (!AS_BOOL(vm_peek(vm, 0))) {
-          ip += offset;
-        }
-        break;
-      }
-      
-      case OP_LOOP: {
-        uint16_t offset = READ_SHORT();
-        ip -= offset;
-        break;
-      }
-      
-      case OP_CALL:
-      case OP_CALL_FAST:
-      case OP_CALL_1: {
-        int call_arg_count = (instruction == OP_CALL || instruction == OP_CALL_FAST) 
-                            ? READ_BYTE() : 1;
-        // Recursive call - use jit_helper_call
-        jit_helper_call(vm, call_arg_count);
-        break;
-      }
-      
-      case OP_RETURN:
-      case OP_RETURN_FAST: {
-        VMValue result = vm_pop(vm);
-        vm->frame_count--;
-        vm->stack_top = frame->slots;
-        vm_push(vm, result);
-        return;  // Exit mini-interpreter
-      }
-      
-      case OP_RETURN_VOID: {
-        vm->frame_count--;
-        vm->stack_top = frame->slots;
-        vm_push(vm, VM_VOID());
-        return;
-      }
-      
-      default:
-        printf("JIT Helper: Unsupported opcode %d\n", instruction);
-        vm->frame_count--;
-        vm->stack_top = frame->slots;
-        vm_push(vm, VM_VOID());
-        return;
+      break;
+    }
+
+    case OP_LOOP: {
+      uint16_t offset = READ_SHORT();
+      ip -= offset;
+      break;
+    }
+
+    case OP_CALL:
+    case OP_CALL_FAST:
+    case OP_CALL_1: {
+      int call_arg_count =
+          (instruction == OP_CALL || instruction == OP_CALL_FAST) ? READ_BYTE()
+                                                                  : 1;
+      // Recursive call - use jit_helper_call
+      jit_helper_call(vm, call_arg_count);
+      break;
+    }
+
+    case OP_RETURN:
+    case OP_RETURN_FAST: {
+      VMValue result = vm_pop(vm);
+      vm->frame_count--;
+      vm->stack_top = frame->slots;
+      vm_push(vm, result);
+      return; // Exit mini-interpreter
+    }
+
+    case OP_RETURN_VOID: {
+      vm->frame_count--;
+      vm->stack_top = frame->slots;
+      vm_push(vm, VM_VOID());
+      return;
+    }
+
+    default:
+      printf("JIT Helper: Unsupported opcode %d\n", instruction);
+      vm->frame_count--;
+      vm->stack_top = frame->slots;
+      vm_push(vm, VM_VOID());
+      return;
     }
   }
-  
-  #undef READ_BYTE
-  #undef READ_SHORT
-  #undef READ_CONSTANT
+
+#undef READ_BYTE
+#undef READ_SHORT
+#undef READ_CONSTANT
 }
 
 // Simplified interpreter call for JIT - runs a function and returns result
-VMValue jit_interpreter_call(VM *vm, ObjFunction *func, VMValue *args, int arg_count) {
+VMValue jit_interpreter_call(VM *vm, ObjFunction *func, VMValue *args,
+                             int arg_count) {
   // Push function and args to stack
   vm_push(vm, VM_OBJ(func));
   for (int i = 0; i < arg_count; i++) {
     vm_push(vm, args[i]);
   }
-  
+
   // Call helper
   jit_helper_call(vm, arg_count);
-  
+
   // Pop and return result
   return vm_pop(vm);
 }

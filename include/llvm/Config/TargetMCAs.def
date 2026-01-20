@@ -1,0 +1,2 @@
+/* LLVM Target MCA */
+LLVM_TARGETMCA(X86)

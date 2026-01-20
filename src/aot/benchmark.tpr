@@ -1,0 +1,21 @@
+// Tulpar AOT Benchmark: Recursive Fibonacci
+// Goal: Stress test function calls and arithmetic
+
+func fib(int n) {
+    if (n < 2) {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+func main_bench() {
+    print("Starting Benchmark (Fib 40)...");
+    
+    // Calculate
+    int res = fib(40);
+    
+    print("Result:");
+    print(res); 
+}
+
+main_bench();

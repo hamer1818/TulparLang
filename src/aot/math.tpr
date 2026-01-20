@@ -1,0 +1,5 @@
+// Simple math test for AOT
+int result = 10 + 20;
+// implicit return in standard Tulpar? 
+// Or needs main? 
+// For now, tulpac.c treats PROGRAM as main body.

@@ -1,32 +1,48 @@
-# TulparLang - Cross-Platform Programming Language
+# TulparLang - Cross-Platform Programming Language (LLVM Backend)
 # Minimum CMake version
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.14)
 
 # Project name and version
-project(TulparLang VERSION 1.2.2 LANGUAGES C)
+project(TulparLang VERSION 2.1.0 LANGUAGES C CXX)
 
 # C Standard
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ============================================
+# LLVM is REQUIRED for TulparLang 2.x
+# ============================================
+find_package(LLVM REQUIRED CONFIG)
+message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
+
+include_directories(${LLVM_INCLUDE_DIRS})
+add_definitions(${LLVM_DEFINITIONS})
 
 # Compiler flags
 if(MSVC)
-    # Windows (Visual Studio)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W4")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4")
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 else()
-    # Unix-like systems (Linux, macOS)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra")
 endif()
 
 # Debug/Release configurations
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g -DTULPAR_DEBUG")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -flto")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3")
 
 # Include directories
 include_directories(${PROJECT_SOURCE_DIR}/src)
 
+# ============================================
 # Source files
+# ============================================
+
+# Core Language
 set(LEXER_SOURCES
     src/lexer/lexer.c
     src/lexer/lexer.h
@@ -37,21 +53,33 @@ set(PARSER_SOURCES
     src/parser/parser.h
 )
 
-set(INTERPRETER_SOURCES
-    src/interpreter/interpreter.c
-    src/interpreter/interpreter.h
+# LLVM Backend (Primary)
+set(AOT_SOURCES
+    src/aot/llvm_backend.c
+    src/aot/llvm_backend.h
+    src/aot/llvm_types.c
+    src/aot/llvm_types.h
+    src/aot/llvm_values.c
+    src/aot/llvm_values.h
+    src/aot/aot_pipeline.c
+    src/aot/aot_pipeline.h
 )
 
-set(VM_SOURCES
+# Runtime Support (needed for AOT binaries)
+set(RUNTIME_SOURCES
+    src/vm/runtime_bindings.c
     src/vm/vm.c
     src/vm/vm.h
-    src/vm/compiler.c
-    src/vm/compiler.h
     src/vm/bytecode.c
     src/vm/bytecode.h
+    src/vm/compiler.c
+    src/vm/compiler.h
 )
 
-set(JIT_SOURCES
+# Legacy (kept for compatibility, may be removed in future)
+set(LEGACY_SOURCES
+    src/interpreter/interpreter.c
+    src/interpreter/interpreter.h
     src/jit/jit.h
     src/jit/jit_memory.c
     src/jit/x64_emit.h
@@ -68,54 +96,83 @@ set(SQLITE_SOURCES
     lib/sqlite3/sqlite3.c
 )
 
-# All sources
+# ============================================
+# Main Executable
+# ============================================
 set(ALL_SOURCES
     ${LEXER_SOURCES}
     ${PARSER_SOURCES}
-    ${INTERPRETER_SOURCES}
-    ${VM_SOURCES}
-    ${JIT_SOURCES}
+    ${AOT_SOURCES}
+    ${RUNTIME_SOURCES}
+    ${LEGACY_SOURCES}
     ${MAIN_SOURCES}
     ${SQLITE_SOURCES}
 )
 
-# Executable
 add_executable(tulpar ${ALL_SOURCES})
 
+# Always enable AOT
+target_compile_definitions(tulpar PRIVATE TULPAR_AOT_ENABLED)
+
+# LLVM Linking
+llvm_map_components_to_libnames(llvm_libs 
+    support core irreader 
+    x86asmparser x86codegen x86desc x86info
+    asmparser asmprinter
+    target mc
+)
+target_link_libraries(tulpar ${llvm_libs} stdc++)
+
+# ============================================
+# Runtime Library (for AOT-compiled binaries)
+# ============================================
+add_library(tulpar_runtime STATIC
+    src/vm/runtime_bindings.c
+    src/vm/vm.c
+    src/vm/bytecode.c
+    src/vm/compiler.c
+    src/lexer/lexer.c
+    src/parser/parser.c
+    src/jit/jit_memory.c
+    src/jit/x64_emit.c
+    src/jit/jit_compiler.c
+    src/jit/jit_optimize.c
+    lib/sqlite3/sqlite3.c
+)
+target_include_directories(tulpar_runtime PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(tulpar_runtime PRIVATE TULPAR_RUNTIME_ONLY)
+
+# ============================================
 # Platform-specific settings
+# ============================================
 if(WIN32)
-    # Windows specific
     message(STATUS "Configuring for Windows")
     target_compile_definitions(tulpar PRIVATE PLATFORM_WINDOWS)
     target_link_libraries(tulpar ws2_32)
 elseif(APPLE)
-    # macOS specific
     message(STATUS "Configuring for macOS")
     target_compile_definitions(tulpar PRIVATE PLATFORM_MACOS)
     target_link_libraries(tulpar pthread dl)
-    # Apple Silicon support
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
         message(STATUS "Building for Apple Silicon (ARM64)")
     endif()
 elseif(UNIX)
-    # Linux specific
     message(STATUS "Configuring for Linux")
     target_compile_definitions(tulpar PRIVATE PLATFORM_LINUX)
-    target_link_libraries(tulpar m pthread dl)  # Link math library
+    target_link_libraries(tulpar m pthread dl)
 endif()
 
+# ============================================
 # Installation
-install(TARGETS tulpar
-    RUNTIME DESTINATION bin
-)
+# ============================================
+install(TARGETS tulpar RUNTIME DESTINATION bin)
+install(TARGETS tulpar_runtime ARCHIVE DESTINATION lib)
 
-# Install examples
 install(DIRECTORY examples/
     DESTINATION share/tulpar/examples
     FILES_MATCHING PATTERN "*.tpr"
 )
 
-# Install documentation
 install(FILES
     README.md
     QUICKSTART.md
@@ -127,9 +184,14 @@ install(FILES
     DESTINATION share/doc/tulpar
 )
 
-# Print build info
-message(STATUS "TulparLang Version: ${PROJECT_VERSION}")
+# ============================================
+# Build Info
+# ============================================
+message(STATUS "")
+message(STATUS "=== TulparLang Build Configuration ===")
+message(STATUS "Version: ${PROJECT_VERSION}")
 message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "LLVM Version: ${LLVM_PACKAGE_VERSION}")
 message(STATUS "C Compiler: ${CMAKE_C_COMPILER}")
 message(STATUS "System: ${CMAKE_SYSTEM_NAME}")
-
+message(STATUS "======================================")
