@@ -114,13 +114,24 @@ add_executable(tulpar ${ALL_SOURCES})
 # Always enable AOT
 target_compile_definitions(tulpar PRIVATE TULPAR_AOT_ENABLED)
 
-# LLVM Linking
-llvm_map_components_to_libnames(llvm_libs 
-    support core irreader 
-    x86asmparser x86codegen x86desc x86info
-    asmparser asmprinter
-    target mc
-)
+# LLVM Linking - Cross-platform support (x86_64 + AArch64)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64|ARM64")
+    # ARM64/AArch64 architecture (Apple Silicon, Linux ARM)
+    llvm_map_components_to_libnames(llvm_libs 
+        support core irreader 
+        aarch64asmparser aarch64codegen aarch64desc aarch64info
+        asmparser asmprinter
+        target mc
+    )
+else()
+    # x86_64 architecture (Intel/AMD)
+    llvm_map_components_to_libnames(llvm_libs 
+        support core irreader 
+        x86asmparser x86codegen x86desc x86info
+        asmparser asmprinter
+        target mc
+    )
+endif()
 target_link_libraries(tulpar ${llvm_libs} stdc++)
 
 # ============================================
