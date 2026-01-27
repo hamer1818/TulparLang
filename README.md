@@ -1,961 +1,305 @@
-# TulparLang 🐎
+# TulparLang
 
 <div align="center">
 
-![TulparLang Logo](https://img.shields.io/badge/TulparLang-v2.1.0-blue?style=for-the-badge)
-[![Build](https://github.com/hamza-tpr/TulparLang/actions/workflows/build.yml/badge.svg)](https://github.com/hamza-tpr/TulparLang/actions/workflows/build.yml)
-[![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=for-the-badge)](PLATFORM_SUPPORT.md)
-[![Performance](https://img.shields.io/badge/performance-C%20like-orange?style=for-the-badge)](BENCHMARK.md)
+[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/hamer1818/TulparLang/releases)
+[![Build](https://github.com/hamer1818/TulparLang/actions/workflows/build.yml/badge.svg)](https://github.com/hamer1818/TulparLang/actions/workflows/build.yml)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Linux%20|%20macOS%20|%20Windows-lightgrey.svg)]()
 
-**A modern, C-based programming language with UTF-8 support, JSON-native syntax, and comprehensive built-in libraries**
-
-[Quick Start](#-quick-start) • [Documentation](#-documentation) • [Examples](#-examples) • [Contributing](#-contributing)
+A statically-typed programming language with LLVM backend, UTF-8 support, and native JSON syntax.
 
 </div>
 
 ---
 
-## 📋 Table of Contents
+## Overview
 
-- [Overview](#-overview)
-- [Key Features](#-key-features)
-- [Installation](#-installation)
-- [Quick Start](#-quick-start)
-- [Language Syntax](#-language-syntax)
-- [Built-in Functions](#-built-in-functions)
-- [Examples](#-examples)
-- [Architecture](#-architecture)
-- [Project Structure](#-project-structure)
-- [Platform Support](#-platform-support)
-- [Roadmap](#-roadmap)
-- [Contributing](#-contributing)
-- [License](#-license)
+TulparLang is a modern programming language built in C with an LLVM-18 backend for native code generation. It combines the simplicity of dynamic languages with the performance of compiled languages.
 
----
+**Key characteristics:**
+- Static typing with type inference
+- First-class JSON support
+- UTF-8 native strings
+- LLVM AOT compilation
+- Cross-platform (Linux, macOS, Windows)
 
-## 🎯 Overview
+## Performance
 
-TulparLang is a modern, statically-typed programming language built from scratch in C. It features a complete implementation including Lexer, Parser, and Interpreter, designed for both educational purposes and practical applications.
+Benchmark results comparing total execution time across 11 algorithmic tests:
 
-### Design Philosophy
+| Language | Total Time | Relative to C |
+|----------|------------|---------------|
+| C (gcc -O3) | 2.28 ms | 1.0x |
+| **Tulpar (AOT)** | 8.77 ms | 3.9x |
+| JavaScript (Node) | 22.69 ms | 10x |
+| PHP 8.3 | 173.67 ms | 76x |
+| Python 3.11 | 350.74 ms | 154x |
 
-- **Simplicity First**: Clean, readable syntax inspired by C and JavaScript
-- **Type Safety**: Strong typing with type-safe arrays and structs
-- **Modern Features**: JSON-native syntax, UTF-8 support, and extensive standard library
-- **Cross-Platform**: Write once, run anywhere (Linux, macOS, Windows)
+Tulpar achieves near-C performance while maintaining high-level language ergonomics.
 
-### Statistics
-
-| Metric | Value |
-|--------|-------|
-| **Total Lines of Code** | ~5,500+ |
-| **Built-in Functions** | 60+ |
-| **Data Types** | 9 |
-| **Example Programs** | 13 |
-| **Supported Platforms** | 3 |
-
----
-
-## ✨ Key Features
-
-### 🌍 UTF-8 Support
-Full Unicode support for variable names, strings, and identifiers
-```tulpar
-str şehir = "İstanbul";
-str ülke = "Türkiye";
-```
-
-### 📦 JSON-Native Syntax
-First-class JSON object support with hash table implementation
-```tulpar
-arrayJson user = {
-    "name": "Hamza",
-    "age": 25,
-    "city": "İstanbul"
-};
-```
-
-### 🔗 Chained Access
-Unlimited depth nested object and array access
-```tulpar
-str email = company["ceo"]["contact"]["email"];
-```
-
-### 📐 Math Library
-27 built-in mathematical functions including trigonometry, logarithms, and random numbers
-```tulpar
-float result = sqrt(pow(3.0, 2.0) + pow(4.0, 2.0));  // 5.0
-```
-
-### 🔤 String Operations
-16 comprehensive string manipulation functions
-```tulpar
-str clean = lower(trim("  HELLO  "));  // "hello"
-arrayStr parts = split("a,b,c", ",");   // ["a", "b", "c"]
-```
-
-### 🛡️ Type Safety
-Type-safe arrays and custom struct definitions
-```tulpar
-type Person {
-    str name;
-    int age;
-    str city = "İstanbul";
-}
-```
-
-### ⚡ Multi-Threading Support ✨ NEW
-Native operating system threads and mutex synchronization for high-performance parallel processing.
-```tulpar
-// Create a new thread
-thread_create("worker_function", arg);
-
-// Synchronization
-mutex lock = mutex_create();
-mutex_lock(lock);
-// Critical section...
-mutex_unlock(lock);
-```
-
-### 🚀 High-Performance Router ✨ NEW
-Multi-threaded HTTP router capable of handling concurrent requests without blocking.
-```tulpar
-// Thread-per-request model
-listen(8080); // Spawns a new thread for each incoming connection
-```
-
-### ⚡ LLVM AOT Performance ✨ NEW
-Ahead-of-Time compilation to native machine code via LLVM-18 backend.
-
-**Benchmark Results - Total Time (11 Tests Combined):**
-
-| Rank | Language | Total Time | vs C | vs Python |
-|------|----------|------------|------|-----------|
-| 🥇 | **C (gcc -O3)** | 2.28 ms | baseline | **154x faster** |
-| 🥈 | **Tulpar (AOT)** | 8.77 ms | ~3.9x | **40x faster** |
-| 🥉 | **JavaScript (Node)** | 22.69 ms | ~10x | 15x faster |
-| 4th | **PHP 8.3** | 173.67 ms | ~76x | 2x faster |
-| 5th | **Python 3.11** | 350.74 ms | ~154x | baseline |
-
-**Individual Test Highlights:**
-
-| Test | C | Tulpar | Ratio |
-|------|---|--------|-------|
-| Fibonacci(30) | 1.05 ms | 3.11 ms | 3.0x |
-| Ackermann(3,8) | 0.86 ms | 4.56 ms | 5.3x |
-| BubbleSort(1K) | 18.5 µs | 5.9 µs | **0.3x (Tulpar faster!)** |
-| Sieve(10K) | 35.3 µs | 11.0 µs | **0.3x (Tulpar faster!)** |
-
-> 🐎 **Tulpar delivers C-like performance** - Only ~3.9x slower than C while being 40x faster than Python. Outperforms C in some memory-intensive tests!
-
----
-
-## 🚀 Installation
+## Installation
 
 ### Prerequisites
 
-- GCC or Clang compiler
-- Make (optional but recommended)
-- CMake 3.10+ (optional)
+- GCC or Clang
+- LLVM 18+
+- CMake 3.14+
 
 ### Build from Source
 
-#### Linux / macOS
-
 ```bash
 git clone https://github.com/hamer1818/TulparLang.git
 cd TulparLang
-chmod +x build.sh
+mkdir build && cd build
+cmake ..
+make
+```
+
+### Quick Install (Linux/macOS)
+
+```bash
 ./build.sh
 ```
 
-#### Windows (WSL)
-
-```bash
-git clone https://github.com/hamer1818/TulparLang.git
-cd TulparLang
-wsl bash build.sh
-```
-
-#### Windows (Native)
+### Windows
 
 ```cmd
-git clone https://github.com/hamer1818/TulparLang.git
-cd TulparLang
 build.bat
 ```
 
-### Using Makefile
+## Quick Start
 
-```bash
-make          # Build the project
-make clean    # Clean build artifacts
-make run      # Build and run demo
-```
-
-For detailed platform-specific instructions, see [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md) and [QUICK_INSTALL.md](QUICK_INSTALL.md).
-
----
-
-## 🎯 Quick Start
-
-### Your First Program
-
-Create a file named `hello.tpr`:
+Create `hello.tpr`:
 
 ```tulpar
-// Hello World with UTF-8 support
-str greeting = "Merhaba Dünya!";
-print(greeting);
+str message = "Hello, World!";
+print(message);
 
-// Function definition
 func square(int n) {
     return n * n;
 }
 
-// Usage
-int result = square(5);
-print("5'in karesi:", result);
+print(square(5));  // Output: 25
 ```
 
-### Run the Program
+Run:
 
 ```bash
-./tulpar hello.tpr          # Linux/macOS
-wsl ./tulpar hello.tpr      # Windows (WSL)
+./tulpar hello.tpr
 ```
 
-### Interactive REPL Mode
-
-```bash
-./tulpar                    # Run without arguments for demo mode
-```
-
----
-
-## 📚 Language Syntax
+## Language Features
 
 ### Data Types
 
-| Type | Description | Example |
-|------|-------------|---------|
-| `int` | Integer numbers | `int x = 42;` |
-| `float` | Floating-point numbers | `float pi = 3.14;` |
-| `str` | UTF-8 strings | `str name = "Hamza";` |
-| `bool` | Boolean values | `bool flag = true;` |
-| `array` | Mixed-type arrays | `array mix = [1, "text", 3.14];` |
-| `arrayInt` | Type-safe integer arrays | `arrayInt nums = [1, 2, 3];` |
-| `arrayFloat` | Type-safe float arrays | `arrayFloat vals = [1.5, 2.5];` |
-| `arrayStr` | Type-safe string arrays | `arrayStr names = ["Ali", "Veli"];` |
-| `arrayBool` | Type-safe boolean arrays | `arrayBool flags = [true, false];` |
-| `arrayJson` | JSON-like objects | `arrayJson obj = {"key": "value"};` |
-
-### Variables and Constants
-
 ```tulpar
-// Variable declaration
-int x = 10;
-float y = 3.14;
-str name = "TulparLang";
+int x = 42;
+float pi = 3.14159;
+str name = "Tulpar";
 bool active = true;
 
-// Compound assignment
-x += 5;   // x = 15
-x *= 2;   // x = 30
-
-// Increment/Decrement
-x++;      // x = 31
-x--;      // x = 30
+array mixed = [1, "text", 3.14];
+arrayInt numbers = [1, 2, 3, 4, 5];
+json config = {"host": "localhost", "port": 8080};
 ```
 
 ### Control Flow
 
-#### If-Else Statements
-
 ```tulpar
-int age = 18;
-
-if (age >= 18) {
-    print("Adult");
+if (x > 0) {
+    print("positive");
 } else {
-    print("Minor");
+    print("non-positive");
 }
 
-// Logical operators
-if (age >= 18 && age < 65) {
-    print("Working age");
-}
-```
-
-#### While Loop
-
-```tulpar
-int i = 0;
-while (i < 10) {
-    if (i == 5) continue;
-    if (i == 8) break;
-    print(i);
-    i++;
-}
-```
-
-#### For Loop
-
-```tulpar
-// C-style for loop
 for (int i = 0; i < 10; i++) {
-    print("i =", i);
+    print(i);
 }
 
-// For-each with range
-for (i in range(10)) {
-    print("i =", i);
+while (condition) {
+    // loop body
 }
 ```
 
 ### Functions
 
 ```tulpar
-// Function definition
-func add(int a, int b) {
-    return a + b;
-}
-
-// Recursive function
 func fibonacci(int n) {
     if (n <= 1) {
         return n;
     }
     return fibonacci(n - 1) + fibonacci(n - 2);
 }
-
-// Function call
-int sum = add(5, 3);
-int fib = fibonacci(10);
 ```
 
-### Arrays and Objects
+### JSON Objects
 
 ```tulpar
-// Type-safe arrays
-arrayInt numbers = [1, 2, 3, 4, 5];
-arrayStr names = ["Ali", "Veli", "Ayşe"];
-
-// Array operations
-int len = length(numbers);
-push(numbers, 6);
-int last = pop(numbers);
-
-// JSON objects
-arrayJson user = {
-    "name": "Hamza",
-    "age": 25,
-    "email": "hamza@example.com"
-};
-
-// Nested objects
-arrayJson company = {
-    "name": "Tech Corp",
-    "ceo": {
-        "name": "Hamza",
-        "contact": {
-            "email": "hamza@techcorp.com"
-        }
+json user = {
+    "name": "Alice",
+    "age": 30,
+    "address": {
+        "city": "Istanbul",
+        "country": "Turkey"
     }
 };
 
-// Chained access
-str email = company["ceo"]["contact"]["email"];
+print(user["address"]["city"]);  // Istanbul
+print(user.address.city);        // Istanbul (dot notation)
 ```
 
-### Object Dot Notation and Assignment ✨ NEW
+### Custom Types
 
 ```tulpar
-arrayJson person = { "name": "Ali", "age": 25, "city": "İstanbul" };
-
-// Read with dot notation
-print(person.name, person.age, person.city);
-
-// Write with dot (nested supported)
-person.name = "Veli";
-arrayJson order = { "customer": { "address": { "city": "Bursa" } } };
-order.customer.address.city = "Ankara";
-
-// Mixed with bracket
-person["city"] = "İzmir";
-```
-
-### Custom Types (Structs)
-
-```tulpar
-// Type definition with default values
 type Person {
     str name;
     int age;
-    str city = "İstanbul";
+    str city = "Istanbul";  // default value
 }
 
-// Constructor with named arguments
-Person p1 = Person("Ali", 25, "Ankara");
-Person p2 = Person(name: "Ayşe", age: 30);  // Uses default city
-
-// Access and modify
-print(p1.name, p1.age);
-p1.city = "İzmir";
+Person p = Person("Ali", 25);
+print(p.name, p.age, p.city);
 ```
 
-### JSON Serde (toJson / fromJson) ✨ NEW
+### Error Handling
 
 ```tulpar
-arrayJson user = { "name": "Ali", "age": 25, "skills": ["C", "Go"] };
-str js = toJson(user);          // {"name":"Ali","age":25,"skills":["C","Go"]}
-arrayJson back = fromJson(js);  // JSON -> Tulpar değeri
-
-type Person { str name; int age; }
-Person p = fromJson("Person", js); // Tipli dönüştürme (eksik alanlar default ile tamamlanır)
-```
-
-### BigInt Geliştirmeleri (div / mod / pow) ✨ NEW
-
-```tulpar
-// Büyük tam sayılar için
-print(pow(1234, 20));   // Çok büyük bir sonuç, BigInt olarak
-print(mod(pow(1234,10), 12345));
-print(pow(2, 100));
-```
-
-### Comments ✨ NEW
-
-```tulpar
-// Single-line comment
-
-/*
- Multi-line
- block comment
-*/
-```
-
-### String Features
-
-#### Escape Sequences
-
-```tulpar
-print("Line 1\nLine 2");              // Newline
-print("Name:\tHamza");                // Tab
-print("Path: C:\\Users\\Desktop");    // Backslash
-print("JSON: {\"key\": \"value\"}");  // Quotes
-```
-
-#### String Indexing
-
-```tulpar
-str text = "Hello";
-print(text[0]);  // "H"
-print(text[4]);  // "o"
-
-// With JSON objects
-arrayJson data = {"name": "Alice"};
-print(data["name"][0]);  // "A"
-```
-
----
-
-## 🛠️ Built-in Functions
-
-### Input/Output
-
-| Function | Description | Example |
-|----------|-------------|---------|
-| `print(...)` | Print values to console | `print("Hello", x, y);` |
-| `input(prompt)` | Read string from user | `str name = input("Name: ");` |
-| `inputInt(prompt)` | Read integer | `int age = inputInt("Age: ");` |
-| `inputFloat(prompt)` | Read float | `float val = inputFloat("Value: ");` |
-
-### Type Conversion
-
-| Function | Description | Example |
-|----------|-------------|---------|
-| `toInt(value)` | Convert to integer | `int x = toInt("123");` |
-| `toFloat(value)` | Convert to float | `float y = toFloat("3.14");` |
-| `toString(value)` | Convert to string | `str s = toString(42);` |
-| `toBool(value)` | Convert to boolean | `bool b = toBool(1);` |
-
-### Array Operations
-
-| Function | Description | Example |
-|----------|-------------|---------|
-| `length(arr)` | Get array/object length | `int len = length(arr);` |
-| `push(arr, value)` | Add element | `push(arr, 10);` |
-| `pop(arr)` | Remove and return last | `int x = pop(arr);` |
-| `range(n)` | Create integer range | `for (i in range(10)) {...}` |
-
-### Mathematics (27 Functions)
-
-#### Basic Operations
-```tulpar
-abs(x)           // Absolute value
-sqrt(x)          // Square root
-cbrt(x)          // Cube root
-pow(x, y)        // Power (x^y)
-hypot(x, y)      // Hypotenuse
-```
-
-#### Rounding
-```tulpar
-floor(x)         // Round down
-ceil(x)          // Round up
-round(x)         // Round to nearest
-trunc(x)         // Truncate decimal
-```
-
-#### Trigonometry
-```tulpar
-sin(x), cos(x), tan(x)           // Basic trig
-asin(x), acos(x), atan(x)        // Inverse trig
-atan2(y, x)                      // Two-argument arctan
-sinh(x), cosh(x), tanh(x)        // Hyperbolic
-```
-
-#### Logarithms and Exponentials
-```tulpar
-exp(x)           // e^x
-log(x)           // Natural log (ln)
-log10(x)         // Base-10 log
-log2(x)          // Base-2 log
-```
-
-#### Statistics and Random
-```tulpar
-min(a, b, ...)   // Minimum value
-max(a, b, ...)   // Maximum value
-random()         // Random float [0,1)
-randint(a, b)    // Random int [a,b]
-```
-
-#### Time Functions ✨ NEW
-```tulpar
-timestamp()      // Unix timestamp (seconds since epoch)
-time_ms()        // Milliseconds since epoch
-clock_ms()       // Milliseconds since program start (high precision)
-sleep(ms)        // Sleep for specified milliseconds
-```
-
-For complete documentation, see [MATH_FUNCTIONS.md](MATH_FUNCTIONS.md).
-
-
-### String Operations (16 Functions)
-
-#### Transformation
-```tulpar
-upper(s)              // Convert to uppercase
-lower(s)              // Convert to lowercase
-capitalize(s)         // Capitalize first letter
-reverse(s)            // Reverse string
-```
-
-#### Search and Check
-```tulpar
-contains(s, sub)      // Check if contains substring
-startsWith(s, pre)    // Check prefix
-endsWith(s, suf)      // Check suffix
-indexOf(s, sub)       // Find first occurrence
-count(s, sub)         // Count occurrences
-```
-
-#### Manipulation
-```tulpar
-trim(s)               // Remove whitespace
-replace(s, old, new)  // Replace substring
-substring(s, i, j)    // Extract substring
-repeat(s, n)          // Repeat string n times
-```
-
-#### Array Operations
-```tulpar
-split(s, delim)       // Split into array
-join(sep, arr)        // Join array to string
-```
-
-#### Validation
-```tulpar
-isEmpty(s)            // Check if empty
-isDigit(s)            // Check if all digits
-isAlpha(s)            // Check if all letters
-```
-
----
-
-## 💡 Examples
-
-### Example 1: Calculator
-
-```tulpar
-print("=== TulparLang Calculator ===");
-
-int a = inputInt("First number: ");
-int b = inputInt("Second number: ");
-
-print("Sum:", a + b);
-print("Difference:", a - b);
-print("Product:", a * b);
-print("Division:", a / b);
-```
-
-### Example 2: Fibonacci Sequence
-
-```tulpar
-func fibonacci(int n) {
-    if (n <= 1) {
-        return n;
-    }
-    return fibonacci(n - 1) + fibonacci(n - 2);
-}
-
-print("Fibonacci sequence:");
-for (int i = 0; i < 10; i++) {
-    print("F(" + toString(i) + ") =", fibonacci(i));
+try {
+    int result = riskyOperation();
+} catch (e) {
+    print("Error:", e);
 }
 ```
 
-### Example 3: JSON Data Processing
+### Multi-Threading
 
 ```tulpar
-arrayJson users = {
-    "data": [
-        {"name": "Alice", "age": 25, "role": "Developer"},
-        {"name": "Bob", "age": 30, "role": "Designer"},
-        {"name": "Charlie", "age": 35, "role": "Manager"}
-    ]
-};
+thread_create("worker_function", arg);
 
-// Process user data
-for (int i = 0; i < length(users["data"]); i++) {
-    arrayJson user = users["data"][i];
-    str name = user["name"];
-    int age = user["age"];
-    str role = user["role"];
-    
-    print(name, "-", age, "years old -", role);
+mutex lock = mutex_create();
+mutex_lock(lock);
+// critical section
+mutex_unlock(lock);
+```
+
+### Networking
+
+```tulpar
+int server = socket_server("127.0.0.1", 8080);
+int client = socket_accept(server);
+str data = socket_receive(client, 1024);
+socket_send(client, "HTTP/1.1 200 OK\r\n\r\nHello");
+socket_close(client);
+```
+
+### Database (SQLite)
+
+```tulpar
+int db = db_open("app.db");
+db_execute(db, "CREATE TABLE users (id INTEGER, name TEXT)");
+json rows = db_query(db, "SELECT * FROM users");
+db_close(db);
+```
+
+## Standard Library
+
+### Tulpar Wings (Web Framework)
+
+```tulpar
+import "wings";
+
+func home() {
+    return {"message": "Welcome to Tulpar Wings!"};
 }
+
+func users() {
+    return [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}];
+}
+
+get("/", "home");
+get("/users", "users");
+listen(3000);
 ```
 
-### Example 4: String Processing
+### Built-in Functions
 
-```tulpar
-str email = "  HAMZA@EXAMPLE.COM  ";
+| Category | Functions |
+|----------|-----------|
+| I/O | `print`, `input`, `inputInt`, `inputFloat` |
+| Type Conversion | `toInt`, `toFloat`, `toString`, `toBool` |
+| Math | `abs`, `sqrt`, `pow`, `sin`, `cos`, `tan`, `log`, `exp`, `floor`, `ceil`, `round`, `random`, `randint`, `min`, `max` |
+| String | `length`, `upper`, `lower`, `trim`, `split`, `join`, `replace`, `substring`, `contains`, `startsWith`, `endsWith`, `indexOf` |
+| Array | `push`, `pop`, `length`, `range` |
+| JSON | `toJson`, `fromJson` |
+| Time | `timestamp`, `time_ms`, `clock_ms`, `sleep` |
+| File | `file_read`, `file_write`, `file_exists`, `file_delete` |
 
-// Clean and parse email
-str clean = lower(trim(email));
-arrayStr parts = split(clean, "@");
-str username = parts[0];
-str domain = parts[1];
-
-print("Username:", username);
-print("Domain:", domain);
-print("Valid:", contains(domain, "."));
-```
-
-### Example 5: Mathematical Computation
-
-```tulpar
-// Calculate circle properties
-float radius = 5.0;
-float pi = 3.14159;
-
-float area = pi * pow(radius, 2.0);
-float circumference = 2.0 * pi * radius;
-
-print("Radius:", radius);
-print("Area:", area);
-print("Circumference:", circumference);
-
-// Random point in circle
-float angle = random() * 2.0 * pi;
-float r = random() * radius;
-float x = r * cos(angle);
-float y = r * sin(angle);
-
-print("Random point: (", x, ",", y, ")");
-```
-
-More examples available in the [examples/](examples/) directory.
-
----
-
-## 🏗️ Architecture
-
-TulparLang consists of three main components:
-
-### 1. Lexer (Tokenization)
-
-Converts source code into tokens:
-
-```
-int x = 5; → [INT_TYPE, IDENTIFIER, ASSIGN, INT_LITERAL, SEMICOLON]
-```
-
-**Features:**
-- UTF-8 character support
-- Escape sequence handling
-- Object literal tokenization
-- Multi-character operators
-
-### 2. Parser (AST Generation)
-
-Builds an Abstract Syntax Tree from tokens:
-
-```
-VAR_DECL: x
-  └── INT: 5
-```
-
-**Features:**
-- Object literal parsing
-- Chained array access (unlimited depth)
-- Type declarations
-- Expression precedence
-
-### 3. Interpreter (Execution)
-
-Executes the AST:
-
-**Features:**
-- Symbol table for variables
-- Function table with recursion support
-- Scope management (global/local)
-- Hash table for objects (djb2 algorithm)
-- Deep copy support
-- Type system with structs
-
----
-
-## 📁 Project Structure
+## Project Structure
 
 ```
 TulparLang/
 ├── src/
-│   ├── lexer/
-│   │   ├── lexer.c              # Tokenization with UTF-8
-│   │   └── lexer.h
-│   ├── parser/
-│   │   ├── parser.c             # AST generation
-│   │   └── parser.h
-│   ├── interpreter/
-│   │   ├── interpreter.c        # Runtime execution
-│   │   └── interpreter.h
-│   └── main.c                   # Entry point
-├── build/                       # Build artifacts
-├── examples/                    # 13 Consolidated Examples
-│   ├── 01_hello_world.tpr       # Basic Syntax
-│   ├── 02_basics.tpr            # Variables, Loops, Functions
-│   ├── 03_interactive.tpr       # Input/Output
-│   ├── 04_math_logic.tpr        # Math & Logic
-│   ├── 05_strings.tpr           # String Operations
-│   ├── 06_data_structures.tpr   # JSON Arrays/Objects
-│   ├── 07_modules.tpr           # Import System
-│   ├── 08_file_io.tpr           # File Operations
-│   ├── 09_socket_server.tpr     # Chat Server
-│   ├── 10_try_catch.tpr         # Error Handling
-│   ├── 11_router_app.tpr        # Advanced Web App
-│   ├── 12_threaded_server.tpr   # Multi-Threaded HTTP
-│   └── 13_database.tpr          # SQLite Integration
-├── docs/                        # Documentation
-│   ├── QUICKSTART.md
-│   ├── KULLANIM.md
-│   ├── MATH_FUNCTIONS.md
-│   └── GELECEK_OZELLIKLER.md
-├── Makefile
-├── CMakeLists.txt
-├── build.sh                     # Build script (Unix)
-├── build.bat                    # Build script (Windows)
-├── README.md                    # This file
-├── README_EN.md                 # English version
-└── LICENSE
+│   ├── lexer/          # Tokenization
+│   ├── parser/         # AST generation
+│   ├── interpreter/    # Runtime execution
+│   ├── vm/             # Virtual machine
+│   └── aot/            # LLVM backend
+├── lib/                # Standard libraries
+├── examples/           # Example programs
+├── cmake/              # CMake modules
+└── runtime/            # Runtime support
 ```
 
----
+## Examples
 
-## 🌐 Platform Support
+Example programs are available in the `examples/` directory:
 
-TulparLang runs on all major platforms:
+| File | Description |
+|------|-------------|
+| `01_hello_world.tpr` | Basic syntax |
+| `02_basics.tpr` | Variables, loops, functions |
+| `03_interactive.tpr` | User input/output |
+| `04_math_logic.tpr` | Mathematical operations |
+| `05_strings.tpr` | String manipulation |
+| `06_data_structures.tpr` | JSON and arrays |
+| `07_modules.tpr` | Import system |
+| `08_file_io.tpr` | File operations |
+| `09_socket_server.tpr` | Network server |
+| `10_try_catch.tpr` | Error handling |
+| `11_router_app.tpr` | Web application |
+| `12_threaded_server.tpr` | Multi-threaded HTTP |
+| `13_database.tpr` | SQLite integration |
+| `api_wings.tpr` | REST API with Wings |
 
-| Platform | Status | Notes |
-|----------|--------|-------|
-| **Linux** | ✅ Fully Supported | Ubuntu, Fedora, Arch, etc. |
-| **macOS** | ✅ Fully Supported | Intel & Apple Silicon |
-| **Windows** | ✅ Fully Supported | MinGW, Visual Studio, WSL |
+## Documentation
 
-For detailed platform-specific instructions, see [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md).
+- [Quick Start Guide](docs/QUICKSTART.md)
+- [Language Reference](docs/KULLANIM.md)
+- [Math Functions](docs/MATH_FUNCTIONS.md)
+- [Platform Support](docs/PLATFORM_SUPPORT.md)
 
----
-
-## 🗺️ Roadmap
-
-### Completed ✅
-
-- [x] Phase 1: Core language features
-  - [x] Basic data types
-  - [x] Functions and recursion
-  - [x] Control flow structures
-  - [x] Logical operators
-  - [x] Increment/decrement
-  - [x] Type conversion
-
-- [x] Phase 2: Arrays
-  - [x] Mixed-type arrays
-  - [x] Type-safe arrays
-  - [x] JSON arrays
-  - [x] Array operations
-
-- [x] Phase 3: Advanced Features
-  - [x] UTF-8 support
-  - [x] JSON object literals
-  - [x] Nested objects
-  - [x] Chained access
-  - [x] Escape sequences
-  - [x] Custom types (structs)
-
-- [x] Phase 4: Math & String Libraries
-  - [x] 27 math functions
-  - [x] String indexing
-  - [x] 16 string operations
-
-- [x] Phase 5: Advanced I/O & Modules
-  - [x] Module/Import system
-  - [x] File I/O operations
-  - [x] Error handling (try/catch)
-
-- [x] Phase 6: Performance & Connectivity
-  - [x] Multi-Threading & Mutexes
-  - [x] High-Performance Router
-  - [x] Socket Networking
-  - [x] Database Integration (SQLite)
-
-### In Progress 🚧
-
-- [ ] Dot notation for objects (`obj.key.nested`)
-- [ ] Object methods (`keys()`, `values()`, `merge()`)
-- [ ] Spread operator (`...obj`, `...arr`)
-
-### Planned 📋
-
-- [ ] Lambdas and closures
-- [ ] Standard library expansion
-- [ ] Optimizations and JIT compilation
-- [ ] Package manager
-- [ ] Documentation generator
-
-For detailed roadmap, see [GELECEK_OZELLIKLER.md](GELECEK_OZELLIKLER.md).
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! Here's how you can help:
-
-### Getting Started
+## Contributing
 
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Run tests and ensure code quality
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to the branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
+2. Create a feature branch (`git checkout -b feature/name`)
+3. Commit changes (`git commit -m 'Add feature'`)
+4. Push to branch (`git push origin feature/name`)
+5. Open a Pull Request
 
-### Development Guidelines
+## License
 
-- Follow existing code style and conventions
-- Add tests for new features
-- Update documentation as needed
-- Write clear commit messages
-- Comment complex logic
+MIT License - see [LICENSE](LICENSE) for details.
 
-### Areas for Contribution
-
-- 🐛 Bug fixes
-- ✨ New language features
-- 📚 Documentation improvements
-- 🧪 Test coverage
-- 🎨 VS Code extension features
-- 🌍 Translations
-
----
-
-## 📖 Documentation
-
-- **[Quick Start Guide](QUICKSTART.md)** - Get started in 5 minutes
-- **[User Manual](KULLANIM.md)** - Complete language reference (Turkish)
-- **[Math Functions](MATH_FUNCTIONS.md)** - Mathematical library documentation
-- **[Platform Support](PLATFORM_SUPPORT.md)** - Platform-specific guides
-- **[Future Features](GELECEK_OZELLIKLER.md)** - Roadmap and planned features
-
----
-
-## 🔗 Resources
-
-- **GitHub Repository**: [github.com/hamer1818/TulparLang](https://github.com/hamer1818/TulparLang)
-- **VS Code Extension**: [github.com/hamer1818/tulpar-ext](https://github.com/hamer1818/tulpar-ext)
-- **Issue Tracker**: [GitHub Issues](https://github.com/hamer1818/TulparLang/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/hamer1818/TulparLang/discussions)
-
----
-
-## 👨‍💻 Author
+## Author
 
 **Hamza Ortatepe**  
-Creator and Lead Developer of TulparLang
-
-- GitHub: [@hamer1818](https://github.com/hamer1818)
-- Email: hamzaortatepe@hotmail.com
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-### MIT License Summary
-
-```
-Copyright (c) 2025 Hamza Ortatepe
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-```
-
----
-
-## 🙏 Acknowledgments
-
-- Inspired by C, JavaScript, and Python
-- Built with passion for programming language design
-- Thanks to all contributors and users
-
----
-
-## 📊 Project Stats
-
-![GitHub stars](https://img.shields.io/github/stars/hamer1818/TulparLang?style=social)
-![GitHub forks](https://img.shields.io/github/forks/hamer1818/TulparLang?style=social)
-![GitHub watchers](https://img.shields.io/github/watchers/hamer1818/TulparLang?style=social)
+GitHub: [@hamer1818](https://github.com/hamer1818)
 
 ---
 
 <div align="center">
 
-**TulparLang v1.6.0** - Modern, UTF-8 Supported, JSON-Native Programming Language
-
-Made with ❤️ by [Hamza Ortatepe](https://github.com/hamer1818)
-
-⭐ **Star us on GitHub!** ⭐
+[Documentation](docs/) · [Examples](examples/) · [Issues](https://github.com/hamer1818/TulparLang/issues)
 
 </div>
