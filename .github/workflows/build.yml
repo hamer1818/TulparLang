@@ -106,35 +106,50 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Cache Chocolatey packages
+      - name: Cache LLVM
+        id: cache-llvm
         uses: actions/cache@v4
         with:
-          path: |
-            C:\ProgramData\chocolatey\lib
-            C:\Program Files\LLVM
-          key: choco-llvm18-${{ runner.os }}-${{ hashFiles('.github/workflows/build.yml') }}
-          restore-keys: |
-            choco-llvm18-${{ runner.os }}-
+          path: C:\LLVM
+          key: llvm-18.1.8-windows-x64
       
-      - name: Install LLVM
+      - name: Download LLVM
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
         run: |
-          choco install llvm --version=18.1.8 -y
-          choco install cmake -y
-          choco install mingw -y
+          Invoke-WebRequest -Uri "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.exe" -OutFile "llvm-installer.exe"
+          Start-Process -FilePath "llvm-installer.exe" -ArgumentList "/S", "/D=C:\LLVM" -Wait
+          Remove-Item "llvm-installer.exe"
+        shell: powershell
+      
+      - name: Install MinGW
+        run: choco install mingw -y
         shell: powershell
       
       - name: Set environment
         run: |
-          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+          echo "C:\LLVM\bin" >> $env:GITHUB_PATH
           echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin" >> $env:GITHUB_PATH
-          echo "LLVM_DIR=C:\Program Files\LLVM\lib\cmake\llvm" >> $env:GITHUB_ENV
+          echo "LLVM_DIR=C:\LLVM\lib\cmake\llvm" >> $env:GITHUB_ENV
+        shell: powershell
+      
+      - name: Verify LLVM installation
+        run: |
+          Write-Host "LLVM bin:"
+          Get-ChildItem "C:\LLVM\bin" -Name | Select-Object -First 10
+          Write-Host "`nLLVM cmake:"
+          if (Test-Path "C:\LLVM\lib\cmake\llvm") {
+            Get-ChildItem "C:\LLVM\lib\cmake\llvm" -Name | Select-Object -First 5
+          } else {
+            Write-Host "CMake config not found in expected location"
+            Get-ChildItem "C:\LLVM\lib\cmake" -Recurse -Name 2>$null | Select-Object -First 10
+          }
         shell: powershell
       
       - name: Build with LLVM
         run: |
           mkdir build
           cd build
-          cmake .. -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="%LLVM_DIR%"
+          cmake .. -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="C:\LLVM\lib\cmake\llvm"
           cmake --build . --config Release
         timeout-minutes: 15
         shell: cmd
