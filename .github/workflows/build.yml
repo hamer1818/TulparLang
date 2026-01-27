@@ -199,14 +199,6 @@ jobs:
             Write-Host "⚠️ No executable to package - Windows build experimental"
           }
         shell: powershell
-          if (Test-Path build\tulpar.exe) {
-            Copy-Item build\tulpar.exe dist\tulpar-windows-x64.exe
-            Write-Host "✅ Artifact prepared: dist\tulpar-windows-x64.exe"
-          } else {
-            Write-Host "❌ No executable to package"
-            exit 1
-          }
-        shell: powershell
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
