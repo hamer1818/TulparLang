@@ -2,6 +2,7 @@
 #include "../../lib/sqlite3/sqlite3.h"
 #include "../lexer/lexer.h"
 #include "../parser/parser.h"
+#include "../embedded_libs.h"  // Embedded standard libraries
 #include <ctype.h>
 #include <limits.h>
 #include <math.h>
@@ -5163,29 +5164,48 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode *node) {
     break;
 
   case AST_IMPORT: {
-    // Import statement: import "file.tpr";
+    // Import statement: import "file.tpr"; or import "wings";
     const char *filename = node->value.string_value;
+    char *source = NULL;
+    int is_embedded = 0;
 
-    // Read file
-    FILE *file = fopen(filename, "rb");
-    if (!file) {
-      printf("Error: Could not open import file '%s' (line %d)\n", filename,
-             node->line);
-      exit(1);
+    // First, check if it's an embedded library (e.g., "wings", "router")
+    const char *embedded_source = get_embedded_lib(filename);
+    if (embedded_source != NULL) {
+      // Use embedded library
+      source = strdup(embedded_source);
+      is_embedded = 1;
+    } else {
+      // Try to read from file
+      FILE *file = fopen(filename, "rb");
+      if (!file) {
+        // Try with .tpr extension
+        char *with_ext = (char *)malloc(strlen(filename) + 5);
+        sprintf(with_ext, "%s.tpr", filename);
+        file = fopen(with_ext, "rb");
+        free(with_ext);
+      }
+      
+      if (!file) {
+        printf("Error: Could not open import '%s' (line %d)\n", filename,
+               node->line);
+        printf("  Hint: Available embedded libraries: wings, router, http_utils\n");
+        exit(1);
+      }
+
+      // Get file size
+      fseek(file, 0, SEEK_END);
+      long size = ftell(file);
+      fseek(file, 0, SEEK_SET);
+
+      // Read content
+      source = (char *)malloc((size_t)size + 1);
+      fread(source, 1, size, file);
+      source[size] = '\0';
+      fclose(file);
     }
 
-    // Get file size
-    fseek(file, 0, SEEK_END);
-    long size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-
-    // Read content
-    char *source = (char *)malloc((size_t)size + 1);
-    fread(source, 1, size, file);
-    source[size] = '\0';
-    fclose(file);
-
-    // Parse and execute imported file
+    // Parse and execute imported code
     Lexer *lexer = lexer_create(source);
     int token_capacity = 100;
     int token_count = 0;

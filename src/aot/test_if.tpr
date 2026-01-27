@@ -1,0 +1,15 @@
+// Test Control Flow: IF/ELSE
+
+int x = 10;
+int result = 0;
+
+if (x > 5) {
+    result = 1;
+} else {
+    result = 0;
+}
+
+int y = 20;
+if (y < 10) {
+    result = result + 10;
+}

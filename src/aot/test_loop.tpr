@@ -1,0 +1,13 @@
+// Test Loop Control Flow
+
+int i = 0;
+while (i < 5) {
+    i = i + 1;
+}
+
+int count = 10;
+int result = 0;
+while (count > 0) {
+    result = result + 2;
+    count = count - 1;
+}

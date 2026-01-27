@@ -1,0 +1,7 @@
+// Test Hello World
+
+func main_test() {
+    print("Hello AOT from Tulpar!");
+}
+
+main_test();

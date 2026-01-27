@@ -2,7 +2,7 @@
 // My API with Tulpar Wings - Super Simple!
 // Run with: tulpar api_wings.tpr --legacy
 // ============================================
-import "D:/yazilim/Tulpar/lib/wings.tpr";
+import "wings";  // Built-in library, no path needed!
 
 // Handler functions - return JSON directly
 func home() {

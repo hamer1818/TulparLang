@@ -1,41 +1,91 @@
-# Build outputs
+# ============================================
+# Tulpar Project .gitignore
+# ============================================
+
+# ==== Build Outputs ====
 tulpar
 tulpar.exe
 *.o
 *.obj
-*.ll
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
 
-# Build directories
+# ==== Build Directories ====
 build/
+build-win/
+build-linux/
 bin/
 obj/
+out/
 
-# IDE files
+# ==== CMake Generated ====
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+!cmake/
+
+# ==== Auto-Generated Files ====
+src/embedded_libs.h
+
+# ==== LLVM IR Files ====
+*.ll
+*.bc
+
+# ==== IDE & Editor ====
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+*.sublime-*
+*.code-workspace
+
+# ==== OS Files ====
 .DS_Store
-
-# CMake
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-Makefile.cmake
-*.cmake
-
-# Temporary files
-*.log
-*.tmp
-
-# Platform specific
 Thumbs.db
 desktop.ini
+ehthumbs.db
 
-# Test files
-test*.tpr
+# ==== Temporary & Log Files ====
+*.log
+*.tmp
+*.temp
+*.bak
+*.cache
 
+# ==== Database Files ====
 *.db
+*.sqlite
+*.sqlite3
 
+# ==== Benchmark Outputs ====
+benchmarks/*.exe
+benchmarks/*.ll
+benchmarks/*_test
+benchmarks/a.out*
+benchmarks/bench_*
+benchmarks/sb_test
+benchmarks/qb_test
+benchmarks/verify_test
+benchmarks/c_bench
+
+# ==== Test Outputs ====
 *.out
+a.out
+
+# ==== Python (if any scripts) ====
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+
+# ==== Keep These (not ignored) ====
+# lib/*.tpr - Standard libraries
+# examples/*.tpr - Example files  
+# cmake/*.cmake - CMake modules
+# src/embedded_libs.h.in - Template file

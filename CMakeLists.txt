@@ -12,6 +12,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ============================================
+# Embed Standard Libraries (lib/*.tpr)
+# ============================================
+include(${CMAKE_SOURCE_DIR}/cmake/EmbedLibraries.cmake)
+
+# ============================================
 # LLVM is REQUIRED for TulparLang 2.x
 # ============================================
 find_package(LLVM REQUIRED CONFIG)

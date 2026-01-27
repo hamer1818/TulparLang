@@ -1,0 +1,6 @@
+// Test object property assignment
+json p = {"x": 1};
+print("Initial: " + toJson(p));
+p["x"] = 2;
+print("After p[x] = 2: " + toJson(p));
+print("Done");

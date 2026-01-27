@@ -171,11 +171,22 @@ int main(int argc, char **argv) {
 
   // Flags
   int force_vm = 0;      // --vm / --run forces VM path, skips AOT
+  int use_legacy = 0;    // --legacy forces interpreter (not VM)
   int arg_offset = 1;    // index of first non-flag arg
 
-  if (argc > 1 && (strcmp(argv[1], "--vm") == 0 || strcmp(argv[1], "--run") == 0)) {
-    force_vm = 1;
-    arg_offset = 2;
+  // Parse flags
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--vm") == 0 || strcmp(argv[i], "--run") == 0) {
+      force_vm = 1;
+      arg_offset = i + 1;
+    } else if (strcmp(argv[i], "--legacy") == 0) {
+      use_legacy = 1;
+      arg_offset = i + 1;
+    } else if (argv[i][0] != '-') {
+      // First non-flag argument is the file
+      arg_offset = i;
+      break;
+    }
   }
 
   // Check for REPL mode
@@ -284,11 +295,7 @@ int main(int argc, char **argv) {
   // ========================================
   // 3. RUNTIME (VM vs Interpreter)
   // ========================================
-  int use_vm = 1; // Default to VM
-
-  if (argc > arg_offset + 1 && strcmp(argv[arg_offset + 1], "--legacy") == 0) {
-    use_vm = 0;
-  }
+  int use_vm = !use_legacy; // Use VM unless --legacy flag was set
 
   if (use_vm) {
     if (!from_file) {
