@@ -183,7 +183,7 @@ jobs:
         run: |
           if (Test-Path build\tulpar.exe) {
             Write-Host "✅ Build successful!"
-            .\build\tulpar.exe --version 2>$null || Write-Host "Version check skipped"
+            try { .\build\tulpar.exe --version 2>$null } catch { Write-Host "Version check skipped" }
           } else {
             Write-Host "⚠️ Build failed - tulpar.exe not found"
           }
