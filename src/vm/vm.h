@@ -10,8 +10,8 @@
 // Stack-based bytecode interpreter with Arena Allocator
 // ============================================================================
 
-#define VM_STACK_MAX 4096
-#define VM_FRAMES_MAX 256
+#define VM_STACK_MAX 16384
+#define VM_FRAMES_MAX 4096
 #define VM_GLOBALS_MAX 1024
 
 // ============================================================================
@@ -101,11 +101,13 @@ typedef enum {
 // Object types for heap allocation
 typedef enum { OBJ_STRING, OBJ_ARRAY, OBJ_OBJECT, OBJ_FUNCTION } ObjType;
 
-// Base object header
+// Base object header - ARC enabled
 typedef struct Obj {
   ObjType type;
   struct Obj *next;        // For GC linked list
   uint8_t arena_allocated; // 1 if allocated from arena, 0 if malloc
+  int32_t ref_count;       // ARC reference count
+  uint8_t is_moved;        // Move semantics: 1 if ownership transferred
 } Obj;
 
 // String object
@@ -113,7 +115,6 @@ typedef struct {
   Obj obj;
   int length;
   int capacity;
-  int ref_count;
   char *chars;
   uint32_t hash;
 } ObjString;

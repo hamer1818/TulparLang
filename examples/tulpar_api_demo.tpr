@@ -1,0 +1,119 @@
+// ============================================
+// TulparAPI Example - User Management API
+// FastAPI-style syntax with Tulpar speed!
+// ============================================
+
+import "lib/tulpar_api.tpr";
+
+// Initialize API
+api_init("User Management API", "1.0.0");
+
+// Enable middleware
+api_use("logger");
+api_use("cors");
+
+// ============================================
+// In-memory Database (Simulation)
+// ============================================
+json _users = [];
+int _user_id_counter = 0;
+
+// Seed some users
+func seed_users() {
+    for(int i=0; i<10; i++) {
+        _user_id_counter = _user_id_counter + 1;
+        json user = {
+            "id": _user_id_counter,
+            "name": "User " + toString(_user_id_counter),
+            "email": "user" + toString(_user_id_counter) + "@example.com",
+            "age": 20 + i
+        };
+        push(_users, user);
+    }
+    print("📦 Seeded " + toString(len(_users)) + " users");
+}
+
+// ============================================
+// API Handlers
+// ============================================
+
+// GET /users - List all users
+func list_users(json req) {
+    return api_json_response({
+        "users": _users,
+        "count": len(_users)
+    });
+}
+
+// GET /users/:id - Get user by ID
+func get_user(json req) {
+    int id = toInt(req["params"]["id"]);
+    
+    for(int i=0; i<len(_users); i++) {
+        if(_users[i]["id"] == id) {
+            return json_response(_users[i]);
+        }
+    }
+    
+    return api_error_response("User not found", 404);
+}
+
+// POST /users - Create new user
+func create_user(json req) {
+    _user_id_counter = _user_id_counter + 1;
+    
+    json new_user = {
+        "id": _user_id_counter,
+        "name": req["body"]["name"],
+        "email": req["body"]["email"],
+        "age": req["body"]["age"]
+    };
+    
+    push(_users, new_user);
+    
+    return api_json_response_status({
+        "message": "User created",
+        "user": new_user
+    }, 201);
+}
+
+// DELETE /users/:id - Delete user
+func delete_user(json req) {
+    int id = toInt(req["params"]["id"]);
+    
+    for(int i=0; i<len(_users); i++) {
+        if(_users[i]["id"] == id) {
+            // Remove user (simplified - just mark as deleted)
+            return api_success_response("User deleted", _users[i]);
+        }
+    }
+    
+    return api_error_response("User not found", 404);
+}
+
+// GET /stats - Get API statistics
+func get_stats(json req) {
+    return api_json_response({
+        "total_users": len(_users),
+        "api_version": "1.0.0",
+        "uptime_ms": clock_ms()
+    });
+}
+
+// ============================================
+// Register Routes (FastAPI style!)
+// ============================================
+
+api_get("/users", "list_users");
+api_get("/users/:id", "get_user");
+api_post("/users", "create_user");
+api_delete("/users/:id", "delete_user");
+api_get("/stats", "get_stats");
+
+// Seed database
+seed_users();
+
+// Start server
+int PORT = 28082;
+print("Starting on port " + toString(PORT));
+api_run(PORT);

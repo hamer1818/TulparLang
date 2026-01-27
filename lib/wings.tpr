@@ -1,0 +1,115 @@
+// ============================================
+// Tulpar Wings - Fast API Framework
+// "Give your API wings!" 🪶
+// ============================================
+
+array _routes = [];
+json _request = {};
+int _found_route_idx = -1;
+
+// Route registration
+func get(str path, str handler) {
+    push(_routes, {"method": "GET", "path": path, "handler": handler});
+}
+
+func post(str path, str handler) {
+    push(_routes, {"method": "POST", "path": path, "handler": handler});
+}
+
+func put(str path, str handler) {
+    push(_routes, {"method": "PUT", "path": path, "handler": handler});
+}
+
+func del(str path, str handler) {
+    push(_routes, {"method": "DELETE", "path": path, "handler": handler});
+}
+
+// Internal: JSON response builder
+func _json_response(int status, str body) {
+    int len = length(body);
+    str resp = "HTTP/1.1 " + toString(status) + " OK\r\nContent-Type: application/json\r\nContent-Length: " + toString(len) + "\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n" + body;
+    return resp;
+}
+
+// Internal: Find matching route - returns index or -1
+func _find_route(str method, str path) {
+    for (int i = 0; i < length(_routes); i++) {
+        json r = _routes[i];
+        if (r["method"] == method && r["path"] == path) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// Start server
+func listen(int port) {
+    print("");
+    print("  ╔═══════════════════════════════════╗");
+    print("  ║       Tulpar Wings v1.0           ║");
+    print("  ║    Give your API wings! 🪶        ║");
+    print("  ╚═══════════════════════════════════╝");
+    print("");
+    print("  Routes:");
+    for (int i = 0; i < length(_routes); i++) {
+        json r = _routes[i];
+        print("    " + r["method"] + " " + r["path"] + " -> " + r["handler"] + "()");
+    }
+    print("");
+    print("  Server: http://127.0.0.1:" + toString(port));
+    print("  Press Ctrl+C to stop");
+    print("");
+    
+    int server = socket_server("127.0.0.1", port);
+    if (server < 0) {
+        print("ERROR: Failed to start server!");
+        return;
+    }
+    
+    while (true) {
+        int client = socket_accept(server);
+        if (client >= 0) {
+            str raw = socket_receive(client, 4096);
+            
+            // Parse request
+            array lines = split(raw, "\r\n");
+            str method = "";
+            str path = "/";
+            if (length(lines) > 0) {
+                array parts = split(lines[0], " ");
+                if (length(parts) >= 2) {
+                    method = parts[0];
+                    path = parts[1];
+                }
+            }
+            
+            // Find body
+            int body_idx = indexOf(raw, "\r\n\r\n");
+            str body = "";
+            if (body_idx >= 0) {
+                body = substring(raw, body_idx + 4, length(raw));
+            }
+            
+            // Set global request object
+            _request = {"method": method, "path": path, "body": body};
+            
+            print("  " + method + " " + path);
+            
+            // Find route and call handler
+            int route_idx = _find_route(method, path);
+            str response = "";
+            
+            if (route_idx >= 0) {
+                // Call handler dynamically
+                json route = _routes[route_idx];
+                json result = call(route["handler"]);
+                response = _json_response(200, toJson(result));
+            } else {
+                response = _json_response(404, "{\"error\": \"Not Found\", \"path\": \"" + path + "\"}");
+            }
+            
+            socket_send(client, response);
+            socket_close(client);
+        }
+    }
+}

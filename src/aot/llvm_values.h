@@ -8,6 +8,7 @@
 // Helpers to build VMValue structs in IR
 LLVMValueRef llvm_vm_val_int(LLVMBackend *backend, int64_t value);
 LLVMValueRef llvm_vm_val_bool(LLVMBackend *backend, int value);
+LLVMValueRef llvm_vm_val_bool_val(LLVMBackend *backend, LLVMValueRef value);
 LLVMValueRef llvm_vm_val_int_val(LLVMBackend *backend, LLVMValueRef value);
 LLVMValueRef llvm_build_vm_val_float(LLVMBackend *backend,
                                      LLVMValueRef float_val);

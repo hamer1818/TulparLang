@@ -29,10 +29,12 @@ echo -e "${YELLOW}Platform: ${PLATFORM}${NC}"
 # Parse arguments
 ACTION="$1"
 TARGET="$2"
+BUILD_DIR="build-linux"
 
 if [ "$ACTION" = "clean" ]; then
     echo "Cleaning build artifacts..."
-    rm -rf build
+    rm -rf "$BUILD_DIR"
+    rm -rf build  # legacy
     rm -f tulpar a.out *.o *.ll
     echo -e "${GREEN}Clean complete.${NC}"
     exit 0
@@ -111,7 +113,7 @@ if [ "$ACTION" = "test" ]; then
 
     TEST_FAILED=0
     INPUT_DIR="examples/inputs"
-    SKIP_TESTS=("utils.tpr" "09_socket_server.tpr" "09_socket_client.tpr" "11_router_app.tpr" "12_threaded_server.tpr")
+    SKIP_TESTS=("utils.tpr" "09_socket_simple.tpr" "09_socket_server.tpr" "09_socket_client.tpr" "11_router_app.tpr" "12_threaded_server.tpr" "tulpar_api_demo.tpr" )
 
     run_test() {
         local example="$1"
@@ -190,8 +192,8 @@ fi
 
 # Build with CMake
 echo "Building TulparLang..."
-mkdir -p build
-cd build
+mkdir -p "$BUILD_DIR"
+cd "$BUILD_DIR"
 
 cmake .. -DCMAKE_BUILD_TYPE=Release
 if [ $? -ne 0 ]; then

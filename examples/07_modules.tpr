@@ -1,5 +1,5 @@
 print("=== Modules Demo ===");
-print("Importing 'examples/utils.tpr'...");
+print("Importing 'examples/utils.tpr'");
 
 // Modülü import et
 // Not: Çalıştırılan dizine göre path değişebilir. 

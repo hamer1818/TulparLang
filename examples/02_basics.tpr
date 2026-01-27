@@ -41,11 +41,11 @@ print("Modified: " + finalJson);
 
 print("\n--- Functions ---");
 
-func add(int a, int b) {
+func add(int a, int b): int {
   return a + b;
 }
 
-func greet(str n) {
+func greet(str n): str {
   return "Hello, " + n + "!";
 }
 

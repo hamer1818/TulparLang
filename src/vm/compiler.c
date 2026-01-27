@@ -481,7 +481,8 @@ void compile_expression(Compiler *compiler, ASTNode *node) {
       // Clock expects 0 arguments
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
       emit_byte(compiler, 0, node->line); // ID 0
-    } else if (strcmp(node->name, "length") == 0) {
+    } else if (strcmp(node->name, "length") == 0 ||
+               strcmp(node->name, "len") == 0) {
       // Length expects 1 argument
       if (node->argument_count > 0) {
         compile_expression(compiler, node->arguments[0]);
@@ -717,13 +718,11 @@ void compile_expression(Compiler *compiler, ASTNode *node) {
       compile_expression(compiler, node->arguments[0]); // Arr
       compile_expression(compiler, node->arguments[1]); // Val
       emit_byte(compiler, OP_ARRAY_PUSH, node->line);
-      // push returns void/null? or the array?
-      // Usually void in Tulpar? Or new length?
-      // If it is expression, push result.
-      // Let's assume OP_ARRAY_PUSH modifies in place and pushes nothing (void).
-      // However, AST_FUNCTION_CALL expects a result.
-      // We should emit OP_CONST_VOID or make OP_ARRAY_PUSH push result.
-      // VM OP_ARRAY_PUSH likely pushes nothing. So emit VOID.
+      // OP_ARRAY_PUSH leaves array on stack (for literal chaining).
+      // For push() function, we must pop it to avoid leak.
+      emit_byte(compiler, OP_POP, node->line);
+
+      // push returns void
       emit_byte(compiler, OP_CONST_VOID, node->line);
     } else if (strcmp(node->name, "exp") == 0) {
       compile_expression(compiler, node->arguments[0]);
@@ -914,7 +913,8 @@ void compile_statement(Compiler *compiler, ASTNode *node) {
         // Use ultra-fast increment
         emit_byte(compiler, OP_INC_LOCAL_FAST, node->line);
         emit_short(compiler, (uint16_t)slot, node->line);
-        break; // Done, skip normal path
+        emit_byte(compiler, OP_POP, node->line); // Maintain stack balance
+        break;                                   // Done, skip normal path
       }
     }
 
@@ -932,13 +932,14 @@ void compile_statement(Compiler *compiler, ASTNode *node) {
         // Use superinstruction: LOAD_ADD_STORE
         emit_byte(compiler, OP_LOAD_ADD_STORE, node->line);
         emit_short(compiler, (uint16_t)slot, node->line);
-        break; // Done, skip normal path
+        emit_byte(compiler, OP_POP, node->line); // Maintain stack balance
+        break;                                   // Done, skip normal path
       }
     }
 
-    compile_expression(compiler, node->right);
-
     if (node->name) {
+      compile_expression(compiler,
+                         node->right); // Compile RHS for variable assignment
       int slot = compiler_resolve_local(compiler, node->name);
       if (slot != -1) {
         emit_byte(compiler, OP_STORE_LOCAL, node->line);
@@ -985,28 +986,19 @@ void compile_statement(Compiler *compiler, ASTNode *node) {
           emit_short(compiler, 0xFFFF, node->line); // Inline Cache Slot
         }
       }
-      // Property access: if index is IDENTIFIER, use its name as string key
-      if (node->left->index->type == AST_IDENTIFIER) {
-        int idx = chunk_add_string(compiler->chunk, node->left->index->name);
-        emit_byte(compiler, OP_CONST_STR, node->line);
-        emit_short(compiler, (uint16_t)idx, node->line);
-      } else {
-        compile_expression(compiler, node->left->index); // Index
-      }
+      // Compile the index expression normally
+      // Note: For object property access with identifier like obj.property,
+      // the parser should create a different AST structure (AST_MEMBER_ACCESS)
+      // Here we just compile whatever index expression is given
+      compile_expression(compiler, node->left->index); // Index
       // 2. Compile Value
       compile_expression(compiler, node->right); // Val
       // Stack: [Arr, Index, Val]
       emit_byte(compiler, OP_ARRAY_SET, node->line);
-      // OP_ARRAY_SET should set and push nothing (void)? Or result?
-      // Assignments usually eval to value.
-      // But `compile_statement` pops.
-      // So OP_ARRAY_SET should likely leave result on stack?
-      // The original `AST_ASSIGNMENT` logic uses `OP_STORE...` which leaves val
-      // on stack, then `OP_POP`. So yes, `OP_ARRAY_SET` should leave `Val` on
-      // stack. But since we did `expression(right)` LAST, `Val` is at top.
-      // `OP_ARRAY_SET` -> pop val, pop idx, pop arr. Set arr[idx]=val. Push
-      // val.
-      return; // Done, break will emit POP.
+      // OP_ARRAY_SET pops arr, idx, val and pushes val as result
+      // We need to pop the result since this is a statement
+      emit_byte(compiler, OP_POP, node->line);
+      return; // Done
     }
 
     emit_byte(compiler, OP_POP, node->line); // Discard result

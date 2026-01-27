@@ -250,6 +250,10 @@ static Token *lexer_read_identifier(Lexer *lexer) {
     type = TOKEN_TRUE;
   else if (strcmp(buffer, "false") == 0)
     type = TOKEN_FALSE;
+  else if (strcmp(buffer, "move") == 0)
+    type = TOKEN_MOVE;
+  else if (strcmp(buffer, "var") == 0)
+    type = TOKEN_VAR;
 
   return token_create(type, buffer, start_line, start_column);
 }

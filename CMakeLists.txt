@@ -65,6 +65,12 @@ set(AOT_SOURCES
     src/aot/aot_pipeline.h
 )
 
+# Type Inference
+set(TYPEINFER_SOURCES
+    src/typeinfer/typeinfer.c
+    src/typeinfer/typeinfer.h
+)
+
 # Runtime Support (needed for AOT binaries)
 set(RUNTIME_SOURCES
     src/vm/runtime_bindings.c
@@ -74,6 +80,11 @@ set(RUNTIME_SOURCES
     src/vm/bytecode.h
     src/vm/compiler.c
     src/vm/compiler.h
+    runtime/cJSON.c
+    runtime/tulpar_arc.c
+    runtime/tulpar_arc.h
+    runtime/tulpar_native.c
+    runtime/tulpar_native.h
 )
 
 # Legacy (kept for compatibility, may be removed in future)
@@ -103,6 +114,7 @@ set(ALL_SOURCES
     ${LEXER_SOURCES}
     ${PARSER_SOURCES}
     ${AOT_SOURCES}
+    ${TYPEINFER_SOURCES}
     ${RUNTIME_SOURCES}
     ${LEGACY_SOURCES}
     ${MAIN_SOURCES}
@@ -120,7 +132,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64|ARM64")
     llvm_map_components_to_libnames(llvm_libs 
         support core irreader 
         aarch64asmparser aarch64codegen aarch64desc aarch64info
-        asmparser asmprinter
+        passes asmparser asmprinter
         target mc
     )
 else()
@@ -128,7 +140,7 @@ else()
     llvm_map_components_to_libnames(llvm_libs 
         support core irreader 
         x86asmparser x86codegen x86desc x86info
-        asmparser asmprinter
+        passes asmparser asmprinter
         target mc
     )
 endif()
@@ -142,6 +154,7 @@ add_library(tulpar_runtime STATIC
     src/vm/vm.c
     src/vm/bytecode.c
     src/vm/compiler.c
+    runtime/cJSON.c
     src/lexer/lexer.c
     src/parser/parser.c
     src/jit/jit_memory.c

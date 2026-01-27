@@ -3,6 +3,7 @@ tulpar
 tulpar.exe
 *.o
 *.obj
+*.ll
 
 # Build directories
 build/
@@ -36,3 +37,5 @@ desktop.ini
 test*.tpr
 
 *.db
+
+*.out

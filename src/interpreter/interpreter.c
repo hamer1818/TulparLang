@@ -2142,8 +2142,65 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
     // Built-in fonksiyonları kontrol et
 
     // ========================================================================
-    // SOCKET FUNCTIONS
+    // DYNAMIC FUNCTION CALL - call(func_name, arg1, arg2, ...)
+    // ========================================================================
+    if (strcmp(node->name, "call") == 0 && node->argument_count >= 1) {
+      Value *func_name_val = interpreter_eval_expression(interp, node->arguments[0]);
+      if (func_name_val->type != VAL_STRING) {
+        printf("Error: call() first argument must be a string (function name)\n");
+        value_free(func_name_val);
+        return value_create_void();
+      }
+      
+      char *func_name = func_name_val->data.string_val;
+      Function *func = interpreter_get_function(interp, func_name);
+      
+      if (!func) {
+        printf("Error: Function '%s' not found for call()\n", func_name);
+        value_free(func_name_val);
+        return value_create_void();
+      }
+      
+      // Prepare arguments (skip first argument which is function name)
+      int actual_arg_count = node->argument_count - 1;
+      Value **arg_values = (Value **)malloc(sizeof(Value *) * (actual_arg_count > 0 ? actual_arg_count : 1));
+      for (int i = 0; i < actual_arg_count; i++) {
+        arg_values[i] = interpreter_eval_expression(interp, node->arguments[i + 1]);
+      }
+      
+      // Create new scope
+      SymbolTable *old_scope = interp->current_scope;
+      interp->current_scope = symbol_table_create(interp->global_scope);
+      
+      // Set parameters in new scope
+      for (int i = 0; i < actual_arg_count && i < func->node->param_count; i++) {
+        symbol_table_set(interp->current_scope, func->node->parameters[i]->name, arg_values[i]);
+        value_free(arg_values[i]);
+      }
+      free(arg_values);
+      value_free(func_name_val);
+      
+      // Execute function body
+      interp->should_return = 0;
+      interpreter_execute_statement(interp, func->node->body);
+      
+      // Get return value
+      Value *result = interp->return_value ? value_copy(interp->return_value) : value_create_void();
+      
+      // Restore scope
+      symbol_table_free(interp->current_scope);
+      interp->current_scope = old_scope;
+      
+      if (interp->return_value) {
+        value_free(interp->return_value);
+        interp->return_value = NULL;
+      }
+      interp->should_return = 0;
+      
+      return result;
+    }
 
+    // ========================================================================
     // SOCKET FUNCTIONS
     // ========================================================================
 

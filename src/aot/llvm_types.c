@@ -20,15 +20,19 @@ void llvm_init_types(LLVMBackend *backend) {
 
   // --- Define VMValue Body ---
   // struct VMValue {
-  //   int type;      // offset 0
-  //   union as;      // offset 8 (aligned to 8)
+  //   int type;      // offset 0  (4 bytes)
+  //   union as;      // offset 8  (8 bytes, aligned to 8 on x86-64)
   // }
+  // Total: 16 bytes with alignment padding
   // We model 'as' as i64 (largest member)
+  // Note: LLVM will add implicit padding for alignment when isPacked=0
   LLVMTypeRef vm_val_elements[] = {
       LLVMInt32TypeInContext(ctx), // type
-      LLVMInt64TypeInContext(ctx)  // as (holds int/float bits or pointer)
+      LLVMArrayType(LLVMInt8TypeInContext(ctx),
+                    4),           // Explicit Padding to force offset 8
+      LLVMInt64TypeInContext(ctx) // as
   };
-  LLVMStructSetBody(backend->vm_value_type, vm_val_elements, 2, 0);
+  LLVMStructSetBody(backend->vm_value_type, vm_val_elements, 3, 0);
 
   // --- Define Obj Body ---
   // struct Obj {

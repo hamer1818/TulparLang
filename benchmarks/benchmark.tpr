@@ -1,40 +1,61 @@
 // ============================================
-// TULPAR PERFORMANS BENCHMARK TESTİ
-// Kendi zaman ölçümü ile
+// TULPAR PERFORMANS BENCHMARK TESTİ v2
+// Tulpar ile uyumlu testler
 // ============================================
 
 print("=======================================================");
-print("          TULPAR PERFORMANS BENCHMARK");
+print("          TULPAR PERFORMANS BENCHMARK v2");
 print("=======================================================");
 print("");
 
-// Zaman formatlama fonksiyonu
-func printTime(float ms) {
-    if (ms < 1.0) {
-        print("  Sure:", ms * 1000, "us");
-    } else {
-        print("  Sure:", ms, "ms");
-    }
-}
-
-// TEST 1: Fibonacci Hesaplama (Rekürsif)
-func fibonacci(int n) {
+// ------------------------------------------------------------
+// TEST 1: Fibonacci (Rekürsif)
+// ------------------------------------------------------------
+func fibonacci(int n): int {
     if (n <= 1) {
         return n;
     }
     return fibonacci(n - 1) + fibonacci(n - 2);
 }
 
-// TEST 2: Faktöriyel Hesaplama (Rekürsif)
-func factorial(int n) {
+// ------------------------------------------------------------
+// TEST 2: Faktöriyel (Rekürsif)
+// ------------------------------------------------------------
+func factorial(int n): int {
     if (n <= 1) {
         return 1;
     }
     return n * factorial(n - 1);
 }
 
-// TEST 3: Döngü Performansı
-func loopTest(int iterations) {
+// ------------------------------------------------------------
+// TEST 3: Ackermann (Derin Rekürsiyon)
+// A(m, n)
+// ------------------------------------------------------------
+func ackermann(int m, int n): int {
+    if (m == 0) {
+        return n + 1;
+    }
+    if (n == 0) {
+        return ackermann(m - 1, 1);
+    }
+    return ackermann(m - 1, ackermann(m, n - 1));
+}
+
+// ------------------------------------------------------------
+// TEST 4: Tak (Takuechi) - Yoğun Rekürsiyon
+// ------------------------------------------------------------
+func tak(int x, int y, int z): int {
+    if (y < x) {
+        return tak(tak(x - 1, y, z), tak(y - 1, z, x), tak(z - 1, x, y));
+    }
+    return z;
+}
+
+// ------------------------------------------------------------
+// TEST 5: Döngü Performansı (Sayısal)
+// ------------------------------------------------------------
+func loopTest(int iterations): int {
     int sum = 0;
     for (int i = 0; i < iterations; i++) {
         sum = sum + i;
@@ -42,84 +63,253 @@ func loopTest(int iterations) {
     return sum;
 }
 
-// TEST 4: İç içe döngü performansı
-func nestedLoop(int size) {
+// ------------------------------------------------------------
+// TEST 6: Sieve of Eratosthenes (Dizi/Bellek)
+// Primes up to n
+// ------------------------------------------------------------
+func sieve(int n): int {
+    json flags = []; 
+    for(int i=0; i<=n; i++) {
+        push(flags, 0); 
+    }
+    
     int count = 0;
-    for (int i = 0; i < size; i++) {
-        for (int j = 0; j < size; j++) {
+    for(int i=2; i<=n; i++) {
+        if(flags[i] == 0) {
             count = count + 1;
+            for(int k=i*i; k<=n; k=k+i) {
+                flags[k] = 1;
+            }
         }
     }
     return count;
 }
 
-// TEST 5: String işlemi
-func stringTest(int iterations) {
-    str result = "";
-    for (int i = 0; i < iterations; i++) {
-        result = result + "a";
+// ------------------------------------------------------------
+// TEST 7: Bubble Sort (Dizi/Nested Loop)
+// Anti-optimization: Full checksum to prevent dead code elimination
+// ------------------------------------------------------------
+func bubbleSort(int size): int {
+    json arr = [];
+    int seed = 12345;
+    for(int i=0; i<size; i++) {
+        int temp = seed * 1103515245 + 12345;
+        seed = temp - (temp / 32768) * 32768;
+        push(arr, seed);
     }
-    return length(result);
+    
+    for(int i=0; i<size; i++) {
+        for(int j=0; j<size-1; j++) {
+            if(arr[j] > arr[j+1]) {
+                int temp = arr[j];
+                arr[j] = arr[j+1];
+                arr[j+1] = temp;
+            }
+        }
+    }
+    
+    // Compute checksum of ALL elements to prevent optimization
+    int checksum = 0;
+    for(int i=0; i<size; i++) {
+        checksum = checksum + arr[i];
+    }
+    return checksum;
 }
 
-// Toplam süre
+// ------------------------------------------------------------
+// TEST 8: String Concatenation
+// ------------------------------------------------------------
+func stringConcat(int iterations): int {
+    string result = "";
+    for(int i=0; i<iterations; i++) {
+        result = result + "a";
+    }
+    return len(result);
+}
+
+// ------------------------------------------------------------
+// TEST 9: Array Push/Pop (Memory)
+// ------------------------------------------------------------
+func arrayMemory(int size): int {
+    json arr = [];
+    for(int i=0; i<size; i++) {
+        push(arr, i);
+    }
+    int sum = 0;
+    for(int i=0; i<size; i++) {
+        sum = sum + arr[i];
+    }
+    return sum;
+}
+
+// ------------------------------------------------------------
+// TEST 10: String Allocation (Heavy String Test)
+// Uses StringBuilder for O(n) performance instead of O(n²)
+// ------------------------------------------------------------
+func stringAllocation(int iterations): int {
+    var sb = StringBuilder(iterations * 20);
+    for(int i=0; i<iterations; i++) {
+        sb_append(sb, "Merhaba Dunya ");
+    }
+    string result = sb_tostring(sb);
+    sb_free(sb);
+    return len(result);
+}
+
+// ------------------------------------------------------------
+// TEST 11: JSON Build & Parse (Object Creation)
+// Build large JSON object and access elements
+// ------------------------------------------------------------
+func jsonBuildTest(int size): int {
+    json data = [];
+    for(int i=0; i<size; i++) {
+        json item = {
+            "id": i,
+            "name": "Item",
+            "value": i * 10,
+            "active": 1
+        };
+        push(data, item);
+    }
+    // Access and sum values
+    int sum = 0;
+    for(int i=0; i<size; i++) {
+        sum = sum + data[i]["value"];
+    }
+    return sum;
+}
+
+// ============================================================
+// RUN TESTS
+// ============================================================
+
 float total_time = 0.0;
+float start = 0.0;
+float end = 0.0;
 
-// --- Test 1: Fibonacci ---
+// 1. Fibonacci
 print("Test 1: Fibonacci(30)");
-float start1 = clock_ms();
-int fib_result = fibonacci(30);
-float end1 = clock_ms();
-float time1 = end1 - start1;
-total_time = total_time + time1;
-print("  Sonuc:", fib_result);
-printTime(time1);
+start = clock_ms();
+int r1 = fibonacci(30);
+end = clock_ms();
+float t1 = end - start;
+total_time = total_time + t1;
+print("  Sonuc:", r1);
+print("  Sure:", t1, "ms");
 print("");
 
-// --- Test 2: Faktöriyel ---
+// 2. Factorial
 print("Test 2: Factorial(20)");
-float start2 = clock_ms();
-int fact_result = factorial(20);
-float end2 = clock_ms();
-float time2 = end2 - start2;
-total_time = total_time + time2;
-print("  Sonuc:", fact_result);
-printTime(time2);
+start = clock_ms();
+int r2 = factorial(20);
+end = clock_ms();
+float t2 = end - start;
+total_time = total_time + t2;
+print("  Sonuc:", r2);
+print("  Sure:", t2, "ms");
 print("");
 
-// --- Test 3: Döngü Testi ---
-print("Test 3: Loop 1.000.000 iterasyon");
-float start3 = clock_ms();
-int loop_result = loopTest(1000000);
-float end3 = clock_ms();
-float time3 = end3 - start3;
-total_time = total_time + time3;
-print("  Sonuc:", loop_result);
-printTime(time3);
+// 3. Ackermann
+print("Test 3: Ackermann(3, 8)");
+start = clock_ms();
+int r3 = ackermann(3, 8);
+end = clock_ms();
+float t3 = end - start;
+total_time = total_time + t3;
+print("  Sonuc:", r3);
+print("  Sure:", t3, "ms");
 print("");
 
-// --- Test 4: İç içe döngü ---
-print("Test 4: Nested Loop 1000x1000");
-float start4 = clock_ms();
-int nested_result = nestedLoop(1000);
-float end4 = clock_ms();
-float time4 = end4 - start4;
-total_time = total_time + time4;
-print("  Sonuc:", nested_result);
-printTime(time4);
+// 4. Tak
+print("Test 4: Tak(18, 12, 6)");
+start = clock_ms();
+int r4 = tak(18, 12, 6);
+end = clock_ms();
+float t4 = end - start;
+total_time = total_time + t4;
+print("  Sonuc:", r4);
+print("  Sure:", t4, "ms");
 print("");
 
-// --- Test 5: String birleştirme ---
-print("Test 5: String concatenation 100000");
-float start5 = clock_ms();
-int str_result = stringTest(100000);
-float end5 = clock_ms();
-float time5 = end5 - start5;
-total_time = total_time + time5;
-print("  Sonuc:", str_result);
-printTime(time5);
+// 5. Loop
+print("Test 5: Loop 1M");
+start = clock_ms();
+int r5 = loopTest(1000000);
+end = clock_ms();
+float t5 = end - start;
+total_time = total_time + t5;
+print("  Sonuc:", r5);
+print("  Sure:", t5, "ms");
+print("");
+
+// 6. Sieve
+print("Test 6: Sieve(10000)");
+start = clock_ms();
+int r6 = sieve(10000);
+end = clock_ms();
+float t6 = end - start;
+total_time = total_time + t6;
+print("  Sonuc:", r6);
+print("  Sure:", t6, "ms");
+print("");
+
+// 7. Bubble Sort (Fixed: Now uses value-based array access - no stack overflow!)
+print("Test 7: BubbleSort(1000)");
+start = clock_ms();
+int r7 = bubbleSort(1000);
+end = clock_ms();
+float t7 = end - start;
+total_time = total_time + t7;
+print("  Sonuc:", r7);
+print("  Sure:", t7, "ms");
+print("");
+
+// 8. String Concat
+print("Test 8: StringConcat(1000)");
+start = clock_ms();
+int r8 = stringConcat(1000);
+end = clock_ms();
+float t8 = end - start;
+total_time = total_time + t8;
+print("  Sonuc:", r8);
+print("  Sure:", t8, "ms");
+print("");
+
+// 9. Array Memory
+print("Test 9: ArrayMemory(10000)");
+start = clock_ms();
+int r9 = arrayMemory(10000);
+end = clock_ms();
+float t9 = end - start;
+total_time = total_time + t9;
+print("  Sonuc:", r9);
+print("  Sure:", t9, "ms");
+print("");
+
+// 10. String Allocation (Heavy)
+/*
+print("Test 10: StringAllocation(1000)");
+start = clock_ms();
+int r10 = stringAllocation(1000);
+end = clock_ms();
+float t10 = end - start;
+total_time = total_time + t10;
+print("  Sonuc:", r10);
+print("  Sure:", t10, "ms");
+print("");
+*/
+
+// 11. JSON Build Test
+print("Test 11: JSONBuild(1000)");
+start = clock_ms();
+int r11 = jsonBuildTest(1000);
+end = clock_ms();
+float t11 = end - start;
+total_time = total_time + t11;
+print("  Sonuc:", r11);
+print("  Sure:", t11, "ms");
 print("");
 
 print("=======================================================");
-print("TOPLAM SURE:", printTime(total_time));
+print("TOPLAM SURE:", total_time, "ms");
 print("=======================================================");

@@ -1,0 +1,38 @@
+// ============================================
+// My API with Tulpar Wings - Super Simple!
+// Run with: tulpar api_wings.tpr --legacy
+// ============================================
+import "D:/yazilim/Tulpar/lib/wings.tpr";
+
+// Handler functions - return JSON directly
+func home() {
+    return {"message": "Welcome to Tulpar Wings!", "version": "1.0"};
+}
+
+func health() {
+    return {"status": "healthy", "uptime": "100%"};
+}
+
+func users() {
+    return {
+        "users": [
+            {"id": 1, "name": "Hamza"},
+            {"id": 2, "name": "Ali"},
+            {"id": 3, "name": "Veli"}
+        ],
+        "count": 3
+    };
+}
+
+func echo() {
+    return {"received": _request["body"], "method": _request["method"]};
+}
+
+// Define routes - just 4 lines!
+get("/", "home");
+get("/health", "health");
+get("/users", "users");
+post("/echo", "echo");
+
+// Start server on port 3000
+listen(3000);

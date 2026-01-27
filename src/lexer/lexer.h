@@ -33,6 +33,8 @@ typedef enum {
     TOKEN_IMPORT,        // "import"
     TOKEN_TRUE,          // "true"
     TOKEN_FALSE,         // "false"
+    TOKEN_MOVE,          // "move" - ownership transfer
+    TOKEN_VAR,           // "var" - type inference
     
     // Değerler
     TOKEN_IDENTIFIER,    // değişken/fonksiyon isimleri

@@ -2,10 +2,11 @@
 
 <div align="center">
 
-![TulparLang Logo](https://img.shields.io/badge/TulparLang-v2.0.0-blue?style=for-the-badge)
+![TulparLang Logo](https://img.shields.io/badge/TulparLang-v2.1.0-blue?style=for-the-badge)
+[![Build](https://github.com/hamza-tpr/TulparLang/actions/workflows/build.yml/badge.svg)](https://github.com/hamza-tpr/TulparLang/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=for-the-badge)](PLATFORM_SUPPORT.md)
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen?style=for-the-badge)](BUILD.md)
+[![Performance](https://img.shields.io/badge/performance-C%20like-orange?style=for-the-badge)](BENCHMARK.md)
 
 **A modern, C-based programming language with UTF-8 support, JSON-native syntax, and comprehensive built-in libraries**
 
@@ -123,6 +124,30 @@ Multi-threaded HTTP router capable of handling concurrent requests without block
 // Thread-per-request model
 listen(8080); // Spawns a new thread for each incoming connection
 ```
+
+### ⚡ LLVM AOT Performance ✨ NEW
+Ahead-of-Time compilation to native machine code via LLVM-18 backend.
+
+**Benchmark Results - Total Time (11 Tests Combined):**
+
+| Rank | Language | Total Time | vs C | vs Python |
+|------|----------|------------|------|-----------|
+| 🥇 | **C (gcc -O3)** | 2.28 ms | baseline | **154x faster** |
+| 🥈 | **Tulpar (AOT)** | 8.77 ms | ~3.9x | **40x faster** |
+| 🥉 | **JavaScript (Node)** | 22.69 ms | ~10x | 15x faster |
+| 4th | **PHP 8.3** | 173.67 ms | ~76x | 2x faster |
+| 5th | **Python 3.11** | 350.74 ms | ~154x | baseline |
+
+**Individual Test Highlights:**
+
+| Test | C | Tulpar | Ratio |
+|------|---|--------|-------|
+| Fibonacci(30) | 1.05 ms | 3.11 ms | 3.0x |
+| Ackermann(3,8) | 0.86 ms | 4.56 ms | 5.3x |
+| BubbleSort(1K) | 18.5 µs | 5.9 µs | **0.3x (Tulpar faster!)** |
+| Sieve(10K) | 35.3 µs | 11.0 µs | **0.3x (Tulpar faster!)** |
+
+> 🐎 **Tulpar delivers C-like performance** - Only ~3.9x slower than C while being 40x faster than Python. Outperforms C in some memory-intensive tests!
 
 ---
 

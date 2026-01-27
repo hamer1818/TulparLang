@@ -5,10 +5,10 @@
 #include <string.h>
 
 #ifdef _WIN32
+#include <winsock2.h>
+#include <windows.h>
 #include <fcntl.h>
 #include <io.h>
-#include <windows.h>
-#include <winsock2.h>
 
 #endif
 #include "interpreter/interpreter.h"
@@ -169,6 +169,15 @@ int main(int argc, char **argv) {
   // Locale setup
   setlocale(LC_ALL, ".UTF8");
 
+  // Flags
+  int force_vm = 0;      // --vm / --run forces VM path, skips AOT
+  int arg_offset = 1;    // index of first non-flag arg
+
+  if (argc > 1 && (strcmp(argv[1], "--vm") == 0 || strcmp(argv[1], "--run") == 0)) {
+    force_vm = 1;
+    arg_offset = 2;
+  }
+
   // Check for REPL mode
   if (argc > 1 &&
       (strcmp(argv[1], "--repl") == 0 || strcmp(argv[1], "-i") == 0)) {
@@ -176,20 +185,20 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  // Check for AOT mode
+  // Check for explicit AOT mode
 #ifdef TULPAR_AOT_ENABLED
-  if (argc > 1 && strcmp(argv[1], "--aot") == 0) {
-    if (argc < 3) {
+  if (!force_vm && argc > arg_offset && strcmp(argv[arg_offset], "--aot") == 0) {
+    if (arg_offset + 1 >= argc) {
       printf("Usage: tulpar --aot <source.tpr> [output_name]\n");
       return 1;
     }
-    char *source = read_file(argv[2]);
+    char *source = read_file(argv[arg_offset + 1]);
     if (!source) {
       return 1;
     }
 
     // Output name defaults to input file without extension
-    const char *output_name = (argc > 3) ? argv[3] : "a.out";
+    const char *output_name = (arg_offset + 2 < argc) ? argv[arg_offset + 2] : "a.out";
 
     AOTResult result = aot_compile(source, output_name);
     free(source);
@@ -201,55 +210,9 @@ int main(int argc, char **argv) {
   int from_file = 0;
 
   // Command line arguments
-  if (argc > 1) {
-    // Check for explicit --aot flag OR if file ends with .tpr (auto-AOT)
-#ifdef TULPAR_AOT_ENABLED
-    int use_aot = 0;
-    int file_arg_index = 1;
-    const char *output_name = "a.out";
-
-    if (strcmp(argv[1], "--aot") == 0) {
-      use_aot = 1;
-      file_arg_index = 2;
-      if (argc > 3)
-        output_name = argv[3];
-    } else {
-      // Auto-detect .tpr files -> use AOT
-      const char *ext = strrchr(argv[1], '.');
-      if (ext && strcmp(ext, ".tpr") == 0) {
-        use_aot = 1;
-        if (argc > 2)
-          output_name = argv[2];
-      }
-    }
-
-    if (use_aot) {
-      if (file_arg_index >= argc) {
-        printf("TulparLang v2.1.0 (LLVM Backend)\n");
-        printf("Usage:\n");
-        printf("  tulpar <source.tpr>           - Compile to native binary\n");
-        printf("  tulpar <source.tpr> <output>  - Compile with custom output "
-               "name\n");
-        printf("  tulpar --aot <source.tpr>     - Explicit AOT compilation\n");
-        printf("  tulpar --repl                 - Interactive mode\n");
-        return 1;
-      }
-
-      source = read_file(argv[file_arg_index]);
-      if (!source)
-        return 1;
-
-      printf("TulparLang v2.1.0 (LLVM Backend)\n");
-      printf("Compiling %s -> %s\n", argv[file_arg_index], output_name);
-
-      AOTResult result = aot_compile(source, output_name);
-      free(source);
-      return (result == AOT_OK) ? 0 : 1;
-    }
-#endif
-
-    // Legacy: VM execution (kept for compatibility)
-    source = read_file(argv[1]);
+  if (argc > arg_offset) {
+    // Default: run via VM/interpreter
+    source = read_file(argv[arg_offset]);
     if (!source) {
       return 1;
     }
@@ -258,9 +221,11 @@ int main(int argc, char **argv) {
     // No arguments - show help
     printf("TulparLang v2.1.0 (LLVM Backend)\n\n");
     printf("Usage:\n");
-    printf("  tulpar <source.tpr>           - Compile to native binary\n");
-    printf(
-        "  tulpar <source.tpr> <output>  - Compile with custom output name\n");
+    printf("  tulpar <source.tpr>           - Run via VM (default)\n");
+    printf("  tulpar --aot <source.tpr>     - Compile to native binary\n");
+    printf("  tulpar --aot <source.tpr> out - Compile with custom output name\n");
+    printf("  tulpar --vm <source.tpr>      - Force VM execution (alias)\n");
+    printf("  tulpar --run <source.tpr>     - Alias for --vm\n");
     printf("  tulpar --repl                 - Interactive mode\n");
     return 0;
   }
@@ -321,7 +286,7 @@ int main(int argc, char **argv) {
   // ========================================
   int use_vm = 1; // Default to VM
 
-  if (argc > 2 && strcmp(argv[2], "--legacy") == 0) {
+  if (argc > arg_offset + 1 && strcmp(argv[arg_offset + 1], "--legacy") == 0) {
     use_vm = 0;
   }
 

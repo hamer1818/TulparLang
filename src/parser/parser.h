@@ -2,6 +2,7 @@
 #define PARSER_H
 
 #include "../lexer/lexer.h"
+#include <stdint.h>
 
 // AST düğüm türleri
 typedef enum {
@@ -42,6 +43,7 @@ typedef enum {
 
 // Veri tipi
 typedef enum {
+  TYPE_UNKNOWN = 0,   // Unknown type (not specified)
   TYPE_INT,
   TYPE_FLOAT,
   TYPE_STRING,
@@ -91,9 +93,14 @@ typedef struct ASTNode {
   struct ASTNode **parameters; // Parametre listesi
   int param_count;
   struct ASTNode *body;
+  DataType return_type;       // Fonksiyon dönüş tipi (TYPE_VOID varsayılan)
+  char *return_custom_type;   // TYPE_CUSTOM dönüş tipi için tip adı
   // Type method desteği
   char *receiver_type_name; // func TypeName.method
   struct ASTNode *receiver; // call sırasında: obj.method()
+  
+  // ARC ve Move Semantics için
+  uint8_t is_moved;           // Bu değişken move edildi mi?
 
   // If/While/For için
   struct ASTNode *condition;

@@ -1,0 +1,70 @@
+// ============================================
+// TulparAPI Simple Example
+// Demonstrates basic API response generation
+// ============================================
+
+print("=== TulparAPI Simple Example ===");
+print("");
+
+// Sample data
+arrayJson users = [];
+
+// Add some users
+for (int i = 0; i < 5; i++) {
+    int uid = i + 1;
+    json user = {
+        "id": uid,
+        "name": "User",
+        "email": "user@example.com"
+    };
+    push(users, user);
+}
+
+print("Created " + toString(length(users)) + " users");
+
+// Simulate API responses
+print("");
+print("--- GET /users ---");
+json list_response = {
+    "status": 200,
+    "data": users,
+    "count": length(users)
+};
+print(toJson(list_response));
+
+print("");
+print("--- GET /users/1 ---");
+json user1 = users[0];
+json get_response = {
+    "status": 200,
+    "data": user1
+};
+print(toJson(get_response));
+
+print("");
+print("--- POST /users ---");
+int new_id = length(users) + 1;
+json new_user = {
+    "id": new_id,
+    "name": "NewUser",
+    "email": "new@example.com"
+};
+push(users, new_user);
+json post_response = {
+    "status": 201,
+    "data": new_user
+};
+print(toJson(post_response));
+
+print("");
+print("--- DELETE /users/6 ---");
+json delete_response = {
+    "status": 200,
+    "message": "User deleted"
+};
+print(toJson(delete_response));
+
+print("");
+print("Total users: " + toString(length(users)));
+print("");
+print("=== API Example Complete ===");

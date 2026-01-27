@@ -15,6 +15,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            /var/cache/apt/archives
+            /usr/lib/llvm-18
+          key: apt-llvm18-${{ runner.os }}-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: |
+            apt-llvm18-${{ runner.os }}-
+      
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -53,6 +63,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      - name: Cache Homebrew packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /opt/homebrew/opt/llvm@18
+            /usr/local/opt/llvm@18
+          key: homebrew-llvm18-${{ runner.os }}-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: |
+            homebrew-llvm18-${{ runner.os }}-
+      
       - name: Install dependencies
         run: |
           brew install cmake llvm@18
@@ -85,6 +106,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      - name: Cache Chocolatey packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\ProgramData\chocolatey\lib
+            C:\Program Files\LLVM
+          key: choco-llvm18-${{ runner.os }}-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: |
+            choco-llvm18-${{ runner.os }}-
+      
       - name: Install LLVM
         run: |
           choco install llvm --version=18.1.8 -y
@@ -94,29 +125,40 @@ jobs:
       
       - name: Set environment
         run: |
-          $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
-          $env:LLVM_DIR = "C:\Program Files\LLVM\lib\cmake\llvm"
-          echo "PATH=$env:PATH" >> $env:GITHUB_ENV
-          echo "LLVM_DIR=$env:LLVM_DIR" >> $env:GITHUB_ENV
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+          echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin" >> $env:GITHUB_PATH
+          echo "LLVM_DIR=C:\Program Files\LLVM\lib\cmake\llvm" >> $env:GITHUB_ENV
         shell: powershell
       
       - name: Build with LLVM
         run: |
           mkdir build
           cd build
-          cmake .. -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+          cmake .. -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="%LLVM_DIR%"
           cmake --build . --config Release
         timeout-minutes: 15
         shell: cmd
-        continue-on-error: true
+      
+      - name: Verify build
+        run: |
+          if (Test-Path build\tulpar.exe) {
+            Write-Host "✅ Build successful!"
+            .\build\tulpar.exe --version 2>$null || Write-Host "Version check skipped"
+          } else {
+            Write-Host "❌ Build failed - tulpar.exe not found"
+            exit 1
+          }
+        shell: powershell
       
       - name: Prepare artifact
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           if (Test-Path build\tulpar.exe) {
             Copy-Item build\tulpar.exe dist\tulpar-windows-x64.exe
+            Write-Host "✅ Artifact prepared: dist\tulpar-windows-x64.exe"
           } else {
-            echo "Build failed, no executable produced"
+            Write-Host "❌ No executable to package"
+            exit 1
           }
         shell: powershell
       

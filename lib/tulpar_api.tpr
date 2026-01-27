@@ -1,0 +1,167 @@
+// ============================================
+// TulparAPI - FastAPI-style Micro Framework
+// Ultra-fast API development for Tulpar
+// ============================================
+
+import "lib/router.tpr";
+
+// Provide a len() helper aliasing built-in length()
+func len(array a) { return length(a); }
+func len(json a) { return length(a); }
+func len(str s) { return length(s); }
+
+// ============================================
+// TulparAPI Class-like Functions
+// ============================================
+
+// Global API state
+json _api_routes = [];
+json _api_config = {
+    "title": "TulparAPI",
+    "version": "1.0.0",
+    "debug": 0
+};
+
+// Initialize API
+func api_init(str title, str version) {
+    _api_config["title"] = title;
+    _api_config["version"] = version;
+    print("🚀 " + title + " v" + version + " starting...");
+}
+
+// ============================================
+// Route Decorators (Function-based)
+// ============================================
+
+// GET endpoint
+func api_get(str path, str handler_name) {
+    route_get(path, handler_name);
+    json route = {
+        "method": "GET",
+        "path": path,
+        "handler": handler_name
+    };
+    push(_api_routes, route);
+}
+
+// POST endpoint
+func api_post(str path, str handler_name) {
+    route_post(path, handler_name);
+    json route = {
+        "method": "POST",
+        "path": path,
+        "handler": handler_name
+    };
+    push(_api_routes, route);
+}
+
+// PUT endpoint
+func api_put(str path, str handler_name) {
+    route_put(path, handler_name);
+    json route = {
+        "method": "PUT",
+        "path": path,
+        "handler": handler_name
+    };
+    push(_api_routes, route);
+}
+
+// DELETE endpoint
+func api_delete(str path, str handler_name) {
+    route_delete(path, handler_name);
+    json route = {
+        "method": "DELETE",
+        "path": path,
+        "handler": handler_name
+    };
+    push(_api_routes, route);
+}
+
+// ============================================
+// Response Helpers
+// ============================================
+
+// JSON Response (string HTTP response)
+func api_json_response(json data) {
+    return json_response(200, data);
+}
+
+// JSON Response with status (string HTTP response)
+func api_json_response_status(json data, int status) {
+    return json_response(status, data);
+}
+
+// Error Response
+func api_error_response(str message, int status) {
+    json error = {
+        "error": message,
+        "status": status
+    };
+    return api_json_response_status(error, status);
+}
+
+// Success Response
+func api_success_response(str message, json data) {
+    json resp = {
+        "success": 1,
+        "message": message,
+        "data": data
+    };
+    return api_json_response(resp);
+}
+
+// ============================================
+// Built-in Endpoints
+// ============================================
+
+// Health check endpoint handler
+func _health_handler(json req) {
+    return api_json_response({
+        "status": "healthy",
+        "timestamp": clock_ms()
+    });
+}
+
+// API info endpoint handler
+func _info_handler(json req) {
+    return api_json_response({
+        "title": _api_config["title"],
+        "version": _api_config["version"],
+        "routes": _api_routes
+    });
+}
+
+// ============================================
+// Server Start
+// ============================================
+
+func api_run(int port) {
+    // Add built-in routes
+    api_get("/health", "_health_handler");
+    api_get("/api/info", "_info_handler");
+
+    // Export helpers to global scope for user scripts
+    len = len;
+    
+    print("📡 API running on http://127.0.0.1:" + toString(port));
+    print("📚 Endpoints registered: " + toString(len(_api_routes)));
+    print("");
+    
+    // List all routes
+    for(int i=0; i<len(_api_routes); i++) {
+        json r = _api_routes[i];
+        print("  " + r["method"] + " " + r["path"]);
+    }
+    print("");
+    
+    listen(port);
+}
+
+// ============================================
+// Middleware Support
+// ============================================
+
+func api_use(str middleware_name) {
+    use_middleware(middleware_name);
+    print("✅ Middleware enabled: " + middleware_name);
+}

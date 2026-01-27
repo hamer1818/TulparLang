@@ -815,6 +815,35 @@ static DataType parse_data_type(Parser *parser) {
   return type;
 }
 
+// var ile değişken tanımlama (type inference): var x = 5;
+static ASTNode *parse_var_declaration(Parser *parser) {
+  ASTNode *node = ast_node_create(AST_VARIABLE_DECL);
+  parser_advance(parser); // 'var' atla
+  node->data_type = TYPE_VOID; // Type inference - sonra çıkarılacak
+  
+  if (parser->current_token->type != TOKEN_IDENTIFIER) {
+    printf("Parser Error: Expected identifier after 'var' at line %d\n",
+           parser->current_token->line);
+    ast_node_free(node);
+    return NULL;
+  }
+  
+  node->name = strdup(parser->current_token->value);
+  parser_advance(parser);
+  
+  if (parser->current_token->type != TOKEN_ASSIGN) {
+    printf("Parser Error: 'var' declaration requires initialization at line %d\n",
+           parser->current_token->line);
+    ast_node_free(node);
+    return NULL;
+  }
+  
+  parser_advance(parser); // '=' atla
+  node->right = parse_expression(parser);
+  parser_expect(parser, TOKEN_SEMICOLON);
+  return node;
+}
+
 // Değişken tanımlama: int x = 5;
 static ASTNode *parse_variable_declaration(Parser *parser) {
   ASTNode *node = ast_node_create(AST_VARIABLE_DECL);
@@ -1218,6 +1247,20 @@ static ASTNode *parse_function(Parser *parser) {
   }
 
   parser_expect(parser, TOKEN_RPAREN);
+  
+  // Dönüş tipi parse et: func foo(int a): int { ... }
+  if (parser->current_token->type == TOKEN_COLON) {
+    parser_advance(parser); // ':' atla
+    node->return_type = parse_data_type(parser);
+    // TYPE_CUSTOM için özel isim saklama
+    if (node->return_type == TYPE_CUSTOM) {
+      // parse_data_type zaten advance etti, bir önceki token'a bakmamız gerek
+      // Şimdilik custom type için ek işlem yapmıyoruz
+    }
+  } else {
+    node->return_type = TYPE_VOID; // Varsayılan
+  }
+  
   node->body = parse_block(parser);
 
   return node;
@@ -1226,6 +1269,11 @@ static ASTNode *parse_function(Parser *parser) {
 // Statement parse etme
 static ASTNode *parse_statement(Parser *parser) {
   Token *token = parser->current_token;
+
+  // var ile type inference değişken tanımlama
+  if (token->type == TOKEN_VAR) {
+    return parse_var_declaration(parser);
+  }
 
   // Veri tipi ile başlıyorsa değişken tanımlaması
   if (token->type == TOKEN_INT_TYPE || token->type == TOKEN_FLOAT_TYPE ||

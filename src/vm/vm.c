@@ -307,7 +307,7 @@ ObjString *vm_alloc_string(VM *vm, const char *chars, int length) {
     str->capacity = length * 2; // Larger strings: 2x growth strategy
   }
 
-  str->ref_count = 1; // Start with 1 reference (The caller/stack)
+  str->obj.ref_count = 1; // Start with 1 reference (The caller/stack)
   str->chars = (char *)malloc(str->capacity + 1);
   memcpy(str->chars, chars, length);
   str->chars[length] = '\0';
@@ -344,7 +344,7 @@ ObjString *vm_take_string(VM *vm, char *chars, int length) {
       (ObjString *)allocate_object(vm, sizeof(ObjString), OBJ_STRING);
   str->length = length;
   str->capacity = length;
-  str->ref_count = 1;
+  str->obj.ref_count = 1;
   str->chars = chars; // Take ownership directly!
   str->chars[length] = '\0';
   str->hash = hash;
@@ -443,7 +443,7 @@ ObjString *vm_alloc_string_buffer(VM *vm, int length, int capacity) {
       (ObjString *)allocate_object(vm, sizeof(ObjString), OBJ_STRING);
   str->length = length;
   str->capacity = capacity;
-  str->ref_count = 1;
+  str->obj.ref_count = 1;
   str->chars = (char *)malloc(capacity + 1);
   str->chars[length] = '\0';
   str->hash = 0; // Not hashed yet
@@ -2483,6 +2483,10 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         // Yes.
 
         if (!IS_OBJ(arrVal) || AS_OBJ(arrVal)->type != OBJ_ARRAY) {
+          printf("DEBUG: OP_ARRAY_PUSH failed. Type: %s, IsObj: %d\n",
+                 IS_OBJ(arrVal) ? "OBJ" : "NON-OBJ", IS_OBJ(arrVal));
+          if (IS_OBJ(arrVal))
+            printf("ObjType: %d\n", AS_OBJ(arrVal)->type);
           runtime_error(vm, "Expected array for push.");
           return VM_RUNTIME_ERROR;
         }
@@ -3331,13 +3335,17 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         VMValue sum = frame->slots[slot];
 
         if (LIKELY(IS_INT(sum) && IS_INT(x))) {
-          frame->slots[slot] = VM_INT(AS_INT(sum) + AS_INT(x));
+          VMValue result = VM_INT(AS_INT(sum) + AS_INT(x));
+          frame->slots[slot] = result;
+          vm_push(vm, result);
         } else {
           // Fallback
           vm_push(vm, sum);
           vm_push(vm, x);
           BINARY_OP(+);
-          frame->slots[slot] = vm_pop(vm);
+          // Result is on stack. Copy to slot.
+          frame->slots[slot] = vm_peek(vm, 0);
+          // Result stays on stack. Correct.
         }
         DISPATCH();
       }
@@ -3346,6 +3354,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         // Ultra-fast increment: var = var + 1 (assumes int)
         uint16_t slot = READ_SHORT();
         frame->slots[slot].as.int_val++;
+        vm_push(vm, frame->slots[slot]);
         DISPATCH();
       }
 

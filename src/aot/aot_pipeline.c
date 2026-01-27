@@ -65,6 +65,9 @@ AOTResult aot_compile(const char *source, const char *output_name) {
   printf("[AOT] Generating LLVM IR...\n");
   llvm_backend_compile(backend, ast);
 
+  printf("[AOT] Optimizing...\n");
+  llvm_backend_optimize(backend);
+
   // Generate output filename
   char obj_filename[256];
   char exe_filename[256];
@@ -89,21 +92,26 @@ AOTResult aot_compile(const char *source, const char *output_name) {
   char link_cmd[1024];
 #ifdef _WIN32
   snprintf(link_cmd, sizeof(link_cmd),
-           "clang %s -o %s.exe -L./build -ltulpar_runtime 2>&1", obj_filename,
-           exe_filename);
-#else
-  snprintf(link_cmd, sizeof(link_cmd),
-           "clang %s -o %s -no-pie -L./build -ltulpar_runtime -lm -lpthread "
-           "-ldl 2>&1",
+           "clang -O3 %s -o %s.exe -L. -L./build-win -L./build "
+           "-ltulpar_runtime -lws2_32 2>&1",
            obj_filename, exe_filename);
+#else
+  snprintf(
+      link_cmd, sizeof(link_cmd),
+      "clang -O3 %s -o %s -no-pie -L./build -ltulpar_runtime -lm -lpthread "
+      "-ldl 2>&1",
+      obj_filename, exe_filename);
 #endif
 
   int link_result = system(link_cmd);
   if (link_result != 0) {
     fprintf(stderr,
-            "[AOT] Warning: Linking failed (code %d). Object file generated.\n",
+            "[AOT] Error: Linking failed (code %d). Check clang installation "
+            "and libraries.\n",
             link_result);
-    // Don't return error - object file is still valid
+    llvm_backend_destroy(backend);
+    ast_node_free(ast);
+    return AOT_ERROR_LINK;
   } else {
     printf("[AOT] Successfully created: %s\n", exe_filename);
   }
