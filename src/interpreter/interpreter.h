@@ -5,34 +5,17 @@
 #include <setjmp.h>
 #include <time.h>
 
-#ifdef _WIN32
-#include <process.h>
-#include <windows.h> // Threads
-#include <winsock2.h>
-
-#ifdef _MSC_VER
-#pragma comment(lib, "ws2_32.lib")
-#endif
-
-// Windows Thread Types
-#define THREAD_HANDLE HANDLE
-#define MUTEX_HANDLE CRITICAL_SECTION
-typedef int socklen_t;
-
-#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
-#include <pthread.h> // POSIX Threads
+#include <pthread.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
-// POSIX Thread Types
 #define THREAD_HANDLE pthread_t
 #define MUTEX_HANDLE pthread_mutex_t
 #define SOCKET int
 #define INVALID_SOCKET -1
 #define SOCKET_ERROR -1
-#endif
 
 // Runtime değer türleri
 typedef enum {

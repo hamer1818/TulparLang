@@ -29,7 +29,13 @@ echo -e "${YELLOW}Platform: ${PLATFORM}${NC}"
 # Parse arguments
 ACTION="$1"
 TARGET="$2"
-BUILD_DIR="build-linux"
+
+# Set build directory based on platform
+case "${OS}" in
+    Linux*)     BUILD_DIR="build-linux";;
+    Darwin*)    BUILD_DIR="build-macos";;
+    *)          BUILD_DIR="build";;
+esac
 
 if [ "$ACTION" = "clean" ]; then
     echo "Cleaning build artifacts..."

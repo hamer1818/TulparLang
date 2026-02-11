@@ -1,4 +1,5 @@
-# TulparLang - Cross-Platform Programming Language (LLVM Backend)
+# TulparLang - Programming Language (LLVM Backend)
+# Supported platforms: Linux, macOS (Windows users should use WSL)
 # Minimum CMake version
 cmake_minimum_required(VERSION 3.14)
 
@@ -27,14 +28,8 @@ include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 
 # Compiler flags
-if(MSVC)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W4")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4")
-    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
-else()
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra")
-endif()
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra")
 
 # Debug/Release configurations
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g -DTULPAR_DEBUG")
@@ -172,13 +167,9 @@ target_include_directories(tulpar_runtime PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_compile_definitions(tulpar_runtime PRIVATE TULPAR_RUNTIME_ONLY)
 
 # ============================================
-# Platform-specific settings
+# Platform-specific settings (Linux & macOS only)
 # ============================================
-if(WIN32)
-    message(STATUS "Configuring for Windows")
-    target_compile_definitions(tulpar PRIVATE PLATFORM_WINDOWS)
-    target_link_libraries(tulpar ws2_32)
-elseif(APPLE)
+if(APPLE)
     message(STATUS "Configuring for macOS")
     target_compile_definitions(tulpar PRIVATE PLATFORM_MACOS)
     target_link_libraries(tulpar pthread dl)
@@ -189,6 +180,8 @@ elseif(UNIX)
     message(STATUS "Configuring for Linux")
     target_compile_definitions(tulpar PRIVATE PLATFORM_LINUX)
     target_link_libraries(tulpar m pthread dl)
+else()
+    message(FATAL_ERROR "Unsupported platform. TulparLang only supports Linux and macOS. Windows users should use WSL.")
 endif()
 
 # ============================================
@@ -224,3 +217,4 @@ message(STATUS "LLVM Version: ${LLVM_PACKAGE_VERSION}")
 message(STATUS "C Compiler: ${CMAKE_C_COMPILER}")
 message(STATUS "System: ${CMAKE_SYSTEM_NAME}")
 message(STATUS "======================================")
+# Touch for rebuild

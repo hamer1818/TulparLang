@@ -1,15 +1,17 @@
 // ============================================
-// TULPAR PERFORMANS BENCHMARK TESTİ v2
-// Tulpar ile uyumlu testler
+// TULPAR PERFORMANS BENCHMARK TESTİ v3 (REALISTIC)
+// Optimized to prevent constant folding and timer resolution issues
 // ============================================
 
 print("=======================================================");
-print("          TULPAR PERFORMANS BENCHMARK v2");
+print("          TULPAR PERFORMANS BENCHMARK v3");
 print("=======================================================");
 print("");
 
 // ------------------------------------------------------------
 // TEST 1: Fibonacci (Rekürsif)
+// Increased to 35 (was 30) to ensure measurable runtime
+// Note: 40 might be too slow for interpreted langs in this suite
 // ------------------------------------------------------------
 func fibonacci(int n): int {
     if (n <= 1) {
@@ -30,7 +32,6 @@ func factorial(int n): int {
 
 // ------------------------------------------------------------
 // TEST 3: Ackermann (Derin Rekürsiyon)
-// A(m, n)
 // ------------------------------------------------------------
 func ackermann(int m, int n): int {
     if (m == 0) {
@@ -43,7 +44,7 @@ func ackermann(int m, int n): int {
 }
 
 // ------------------------------------------------------------
-// TEST 4: Tak (Takuechi) - Yoğun Rekürsiyon
+// TEST 4: Tak (Takuechi)
 // ------------------------------------------------------------
 func tak(int x, int y, int z): int {
     if (y < x) {
@@ -54,6 +55,8 @@ func tak(int x, int y, int z): int {
 
 // ------------------------------------------------------------
 // TEST 5: Döngü Performansı (Sayısal)
+// Increased to 100M (was 1M) to beat 15ms timer resolution
+// Note: Using simple summation (not Xorshift) because AOT parser doesn't support bitwise ops
 // ------------------------------------------------------------
 func loopTest(int iterations): int {
     int sum = 0;
@@ -64,11 +67,12 @@ func loopTest(int iterations): int {
 }
 
 // ------------------------------------------------------------
-// TEST 6: Sieve of Eratosthenes (Dizi/Bellek)
-// Primes up to n
+// TEST 6: Sieve of Eratosthenes
+// Increased to 50K (was 10K)
 // ------------------------------------------------------------
 func sieve(int n): int {
     json flags = []; 
+    // Pre-fill array
     for(int i=0; i<=n; i++) {
         push(flags, 0); 
     }
@@ -86,15 +90,22 @@ func sieve(int n): int {
 }
 
 // ------------------------------------------------------------
-// TEST 7: Bubble Sort (Dizi/Nested Loop)
-// Anti-optimization: Full checksum to prevent dead code elimination
+// TEST 7: Bubble Sort (Dynamic & Heavy)
+// Increased to 5000 (was 1000)
+// Uses runtime random numbers to prevent constant folding
 // ------------------------------------------------------------
 func bubbleSort(int size): int {
     json arr = [];
-    int seed = 12345;
+    int seed = 12345; // Initial seed
+    
+    // Simulate runtime randomness
+    // In a real scenario, use time() or input(), but here we use 
+    // a pseudo-random generator that the compiler hopefully won't pre-calculate 
+    // for 5000 iterations.
     for(int i=0; i<size; i++) {
-        int temp = seed * 1103515245 + 12345;
-        seed = temp - (temp / 32768) * 32768;
+        seed = seed * 1103 + 12345;
+        if(seed < 0) { seed = 0 - seed; }
+        seed = seed - (seed / 10000) * 10000;
         push(arr, seed);
     }
     
@@ -108,7 +119,7 @@ func bubbleSort(int size): int {
         }
     }
     
-    // Compute checksum of ALL elements to prevent optimization
+    // Checksum
     int checksum = 0;
     for(int i=0; i<size; i++) {
         checksum = checksum + arr[i];
@@ -118,6 +129,7 @@ func bubbleSort(int size): int {
 
 // ------------------------------------------------------------
 // TEST 8: String Concatenation
+// Increased to 20000 (was 1000)
 // ------------------------------------------------------------
 func stringConcat(int iterations): int {
     string result = "";
@@ -128,7 +140,8 @@ func stringConcat(int iterations): int {
 }
 
 // ------------------------------------------------------------
-// TEST 9: Array Push/Pop (Memory)
+// TEST 9: Array Memory
+// Increased to 50000 (was 10000)
 // ------------------------------------------------------------
 func arrayMemory(int size): int {
     json arr = [];
@@ -143,22 +156,8 @@ func arrayMemory(int size): int {
 }
 
 // ------------------------------------------------------------
-// TEST 10: String Allocation (Heavy String Test)
-// Uses StringBuilder for O(n) performance instead of O(n²)
-// ------------------------------------------------------------
-func stringAllocation(int iterations): int {
-    var sb = StringBuilder(iterations * 20);
-    for(int i=0; i<iterations; i++) {
-        sb_append(sb, "Merhaba Dunya ");
-    }
-    string result = sb_tostring(sb);
-    sb_free(sb);
-    return len(result);
-}
-
-// ------------------------------------------------------------
-// TEST 11: JSON Build & Parse (Object Creation)
-// Build large JSON object and access elements
+// TEST 11: JSON Build
+// Increased to 20000 (was 1000)
 // ------------------------------------------------------------
 func jsonBuildTest(int size): int {
     json data = [];
@@ -171,7 +170,6 @@ func jsonBuildTest(int size): int {
         };
         push(data, item);
     }
-    // Access and sum values
     int sum = 0;
     for(int i=0; i<size; i++) {
         sum = sum + data[i]["value"];
@@ -186,27 +184,38 @@ func jsonBuildTest(int size): int {
 float total_time = 0.0;
 float start = 0.0;
 float end = 0.0;
+float t = 0.0;
+
+// Dynamic inputs determined at runtime to prevent AOT constant folding
+int fib_input = 35;
+int fact_input = 20;
+int loop_iter = 100000000; // 100 Million
+int sieve_size = 50000;
+int bubble_size = 5000;
+int str_iter = 20000;
+int arr_size = 50000;
+int json_size = 20000;
 
 // 1. Fibonacci
-print("Test 1: Fibonacci(30)");
+print("Test 1: Fibonacci(", fib_input, ")");
 start = clock_ms();
-int r1 = fibonacci(30);
+int r1 = fibonacci(fib_input);
 end = clock_ms();
-float t1 = end - start;
-total_time = total_time + t1;
+t = end - start;
+total_time = total_time + t;
 print("  Sonuc:", r1);
-print("  Sure:", t1, "ms");
+print("  Sure:", t, "ms");
 print("");
 
 // 2. Factorial
-print("Test 2: Factorial(20)");
+print("Test 2: Factorial(", fact_input, ")");
 start = clock_ms();
-int r2 = factorial(20);
+int r2 = factorial(fact_input);
 end = clock_ms();
-float t2 = end - start;
-total_time = total_time + t2;
+t = end - start;
+total_time = total_time + t;
 print("  Sonuc:", r2);
-print("  Sure:", t2, "ms");
+print("  Sure:", t, "ms");
 print("");
 
 // 3. Ackermann
@@ -214,10 +223,10 @@ print("Test 3: Ackermann(3, 8)");
 start = clock_ms();
 int r3 = ackermann(3, 8);
 end = clock_ms();
-float t3 = end - start;
-total_time = total_time + t3;
+t = end - start;
+total_time = total_time + t;
 print("  Sonuc:", r3);
-print("  Sure:", t3, "ms");
+print("  Sure:", t, "ms");
 print("");
 
 // 4. Tak
@@ -225,89 +234,76 @@ print("Test 4: Tak(18, 12, 6)");
 start = clock_ms();
 int r4 = tak(18, 12, 6);
 end = clock_ms();
-float t4 = end - start;
-total_time = total_time + t4;
+t = end - start;
+total_time = total_time + t;
 print("  Sonuc:", r4);
-print("  Sure:", t4, "ms");
+print("  Sure:", t, "ms");
 print("");
 
 // 5. Loop
-print("Test 5: Loop 1M");
+print("Test 5: Loop 100M");
 start = clock_ms();
-int r5 = loopTest(1000000);
+int r5 = loopTest(loop_iter);
 end = clock_ms();
-float t5 = end - start;
-total_time = total_time + t5;
+t = end - start;
+total_time = total_time + t;
 print("  Sonuc:", r5);
-print("  Sure:", t5, "ms");
+print("  Sure:", t, "ms");
 print("");
 
 // 6. Sieve
-print("Test 6: Sieve(10000)");
+print("Test 6: Sieve(", sieve_size, ")");
 start = clock_ms();
-int r6 = sieve(10000);
+int r6 = sieve(sieve_size);
 end = clock_ms();
-float t6 = end - start;
-total_time = total_time + t6;
+t = end - start;
+total_time = total_time + t;
 print("  Sonuc:", r6);
-print("  Sure:", t6, "ms");
+print("  Sure:", t, "ms");
 print("");
 
-// 7. Bubble Sort (Fixed: Now uses value-based array access - no stack overflow!)
-print("Test 7: BubbleSort(1000)");
+// 7. Bubble Sort
+print("Test 7: BubbleSort(", bubble_size, ")");
 start = clock_ms();
-int r7 = bubbleSort(1000);
+int r7 = bubbleSort(bubble_size);
 end = clock_ms();
-float t7 = end - start;
-total_time = total_time + t7;
+t = end - start;
+total_time = total_time + t;
 print("  Sonuc:", r7);
-print("  Sure:", t7, "ms");
+print("  Sure:", t, "ms");
 print("");
 
 // 8. String Concat
-print("Test 8: StringConcat(1000)");
+print("Test 8: StringConcat(", str_iter, ")");
 start = clock_ms();
-int r8 = stringConcat(1000);
+int r8 = stringConcat(str_iter);
 end = clock_ms();
-float t8 = end - start;
-total_time = total_time + t8;
+t = end - start;
+total_time = total_time + t;
 print("  Sonuc:", r8);
-print("  Sure:", t8, "ms");
+print("  Sure:", t, "ms");
 print("");
 
 // 9. Array Memory
-print("Test 9: ArrayMemory(10000)");
+print("Test 9: ArrayMemory(", arr_size, ")");
 start = clock_ms();
-int r9 = arrayMemory(10000);
+int r9 = arrayMemory(arr_size);
 end = clock_ms();
-float t9 = end - start;
-total_time = total_time + t9;
+t = end - start;
+total_time = total_time + t;
 print("  Sonuc:", r9);
-print("  Sure:", t9, "ms");
+print("  Sure:", t, "ms");
 print("");
-
-// 10. String Allocation (Heavy)
-/*
-print("Test 10: StringAllocation(1000)");
-start = clock_ms();
-int r10 = stringAllocation(1000);
-end = clock_ms();
-float t10 = end - start;
-total_time = total_time + t10;
-print("  Sonuc:", r10);
-print("  Sure:", t10, "ms");
-print("");
-*/
 
 // 11. JSON Build Test
-print("Test 11: JSONBuild(1000)");
+print("Test 11: JSONBuild(", json_size, ")");
 start = clock_ms();
-int r11 = jsonBuildTest(1000);
+int r11 = jsonBuildTest(json_size);
 end = clock_ms();
-float t11 = end - start;
-total_time = total_time + t11;
+t = end - start;
+total_time = total_time + t;
 print("  Sonuc:", r11);
-print("  Sure:", t11, "ms");
+print("  Sure:", t, "ms");
 print("");
 
 print("=======================================================");

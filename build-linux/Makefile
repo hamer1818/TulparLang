@@ -293,6 +293,54 @@ runtime/cJSON.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/runtime/cJSON.c.s
 .PHONY : runtime/cJSON.c.s
 
+runtime/tulpar_arc.o: runtime/tulpar_arc.c.o
+.PHONY : runtime/tulpar_arc.o
+
+# target to build an object file
+runtime/tulpar_arc.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_arc.c.o
+.PHONY : runtime/tulpar_arc.c.o
+
+runtime/tulpar_arc.i: runtime/tulpar_arc.c.i
+.PHONY : runtime/tulpar_arc.i
+
+# target to preprocess a source file
+runtime/tulpar_arc.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_arc.c.i
+.PHONY : runtime/tulpar_arc.c.i
+
+runtime/tulpar_arc.s: runtime/tulpar_arc.c.s
+.PHONY : runtime/tulpar_arc.s
+
+# target to generate assembly for a file
+runtime/tulpar_arc.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_arc.c.s
+.PHONY : runtime/tulpar_arc.c.s
+
+runtime/tulpar_native.o: runtime/tulpar_native.c.o
+.PHONY : runtime/tulpar_native.o
+
+# target to build an object file
+runtime/tulpar_native.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_native.c.o
+.PHONY : runtime/tulpar_native.c.o
+
+runtime/tulpar_native.i: runtime/tulpar_native.c.i
+.PHONY : runtime/tulpar_native.i
+
+# target to preprocess a source file
+runtime/tulpar_native.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_native.c.i
+.PHONY : runtime/tulpar_native.c.i
+
+runtime/tulpar_native.s: runtime/tulpar_native.c.s
+.PHONY : runtime/tulpar_native.s
+
+# target to generate assembly for a file
+runtime/tulpar_native.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_native.c.s
+.PHONY : runtime/tulpar_native.c.s
+
 src/aot/aot_pipeline.o: src/aot/aot_pipeline.c.o
 .PHONY : src/aot/aot_pipeline.o
 
@@ -599,6 +647,30 @@ src/parser/parser.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/parser/parser.c.s
 .PHONY : src/parser/parser.c.s
 
+src/typeinfer/typeinfer.o: src/typeinfer/typeinfer.c.o
+.PHONY : src/typeinfer/typeinfer.o
+
+# target to build an object file
+src/typeinfer/typeinfer.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/typeinfer/typeinfer.c.o
+.PHONY : src/typeinfer/typeinfer.c.o
+
+src/typeinfer/typeinfer.i: src/typeinfer/typeinfer.c.i
+.PHONY : src/typeinfer/typeinfer.i
+
+# target to preprocess a source file
+src/typeinfer/typeinfer.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/typeinfer/typeinfer.c.i
+.PHONY : src/typeinfer/typeinfer.c.i
+
+src/typeinfer/typeinfer.s: src/typeinfer/typeinfer.c.s
+.PHONY : src/typeinfer/typeinfer.s
+
+# target to generate assembly for a file
+src/typeinfer/typeinfer.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/typeinfer/typeinfer.c.s
+.PHONY : src/typeinfer/typeinfer.c.s
+
 src/vm/bytecode.o: src/vm/bytecode.c.o
 .PHONY : src/vm/bytecode.o
 
@@ -731,6 +803,12 @@ help:
 	@echo "... runtime/cJSON.o"
 	@echo "... runtime/cJSON.i"
 	@echo "... runtime/cJSON.s"
+	@echo "... runtime/tulpar_arc.o"
+	@echo "... runtime/tulpar_arc.i"
+	@echo "... runtime/tulpar_arc.s"
+	@echo "... runtime/tulpar_native.o"
+	@echo "... runtime/tulpar_native.i"
+	@echo "... runtime/tulpar_native.s"
 	@echo "... src/aot/aot_pipeline.o"
 	@echo "... src/aot/aot_pipeline.i"
 	@echo "... src/aot/aot_pipeline.s"
@@ -767,6 +845,9 @@ help:
 	@echo "... src/parser/parser.o"
 	@echo "... src/parser/parser.i"
 	@echo "... src/parser/parser.s"
+	@echo "... src/typeinfer/typeinfer.o"
+	@echo "... src/typeinfer/typeinfer.i"
+	@echo "... src/typeinfer/typeinfer.s"
 	@echo "... src/vm/bytecode.o"
 	@echo "... src/vm/bytecode.i"
 	@echo "... src/vm/bytecode.s"

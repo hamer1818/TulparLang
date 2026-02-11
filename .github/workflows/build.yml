@@ -1,4 +1,4 @@
-name: Cross-Platform Build (LLVM)
+name: Linux & macOS Build (LLVM)
 
 on:
   push:
@@ -80,63 +80,8 @@ jobs:
           name: tulpar-macos-universal
           path: dist/tulpar-macos-universal
   
-  build-windows:
-    runs-on: windows-latest
-    continue-on-error: true  # Windows build is experimental
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            mingw-w64-x86_64-toolchain
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-llvm
-            mingw-w64-x86_64-clang
-      
-      - name: Build with LLVM
-        shell: msys2 {0}
-        run: |
-          mkdir -p build
-          cd build
-          cmake .. -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
-          cmake --build . --config Release -j$(nproc)
-        timeout-minutes: 20
-      
-      - name: Verify build
-        shell: msys2 {0}
-        run: |
-          if [ -f build/tulpar.exe ]; then
-            echo "✅ Build successful!"
-          else
-            echo "⚠️ Build failed - tulpar.exe not found"
-          fi
-      
-      - name: Prepare artifact
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          if (Test-Path build\tulpar.exe) {
-            Copy-Item build\tulpar.exe dist\tulpar-windows-x64.exe
-            Write-Host "✅ Artifact prepared"
-          } else {
-            # Create placeholder so workflow doesn't fail
-            "Windows build experimental" | Out-File dist\tulpar-windows-x64.txt
-            Write-Host "⚠️ No executable - placeholder created"
-          }
-      
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tulpar-windows-x64
-          path: dist/tulpar-windows-x64.*
-          if-no-files-found: ignore
-  
   create-release:
-    needs: [build-linux, build-macos, build-windows]
+    needs: [build-linux, build-macos]
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'push' && 
@@ -174,11 +119,11 @@ jobs:
             ### Downloads
             - `tulpar-linux-x64` - Linux executable
             - `tulpar-macos-universal` - macOS executable
-            - `tulpar-windows-x64.exe` - Windows executable
+            
+            > **Windows users**: Please use WSL (Windows Subsystem for Linux) to run TulparLang.
           draft: false
           prerelease: false
           files: |
-            tulpar-windows-x64.exe
             tulpar-linux-x64
             tulpar-macos-universal
         env:

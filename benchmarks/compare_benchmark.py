@@ -114,7 +114,7 @@ def run_python_benchmarks():
     results = {}
     
     start = time.perf_counter()
-    fib_result = fibonacci(30)
+    fib_result = fibonacci(35)
     end = time.perf_counter()
     results['fibonacci'] = {'result': fib_result, 'time': (end - start) * 1000}
     
@@ -134,37 +134,34 @@ def run_python_benchmarks():
     results['tak'] = {'result': tak_result, 'time': (end - start) * 1000}
 
     start = time.perf_counter()
-    loop_result = loop_test(1000000)
+    loop_result = loop_test(1000000)  # 1M iterations to match other languages
     end = time.perf_counter()
     results['loop'] = {'result': loop_result, 'time': (end - start) * 1000}
     
     start = time.perf_counter()
-    sieve_result = sieve(10000)
+    sieve_result = sieve(50000)
     end = time.perf_counter()
     results['sieve'] = {'result': sieve_result, 'time': (end - start) * 1000}
 
     start = time.perf_counter()
-    bubble_result = bubble_sort(100)
+    bubble_result = bubble_sort(5000)
     end = time.perf_counter()
     results['bubble'] = {'result': bubble_result, 'time': (end - start) * 1000}
     
     start = time.perf_counter()
-    str_result = string_concat(1000)
+    str_result = string_concat(20000)
     end = time.perf_counter()
     results['stringconcat'] = {'result': str_result, 'time': (end - start) * 1000}
     
     start = time.perf_counter()
-    arr_result = array_memory(10000)
+    arr_result = array_memory(50000)
     end = time.perf_counter()
     results['arraymemory'] = {'result': arr_result, 'time': (end - start) * 1000}
     
-    start = time.perf_counter()
-    str_alloc_result = string_allocation(1000)
-    end = time.perf_counter()
-    results['stringalloc'] = {'result': str_alloc_result, 'time': (end - start) * 1000}
+    # string alloc removed from compiled langs mostly
     
     start = time.perf_counter()
-    json_result = json_build_test(1000)
+    json_result = json_build_test(20000)
     end = time.perf_counter()
     results['jsonbuild'] = {'result': json_result, 'time': (end - start) * 1000}
     
@@ -177,18 +174,20 @@ def parse_benchmark_output(output):
     
     # Test sonuçlarını parse et - multiline çıktıları da destekle
     # Tulpar çıktısı: "Sure:\n18.6421\n ms" şeklinde olabilir
+    # Note: Windows encodes µ as "Âµ" or "µ", handle both
+    # Also handle "ns" (nanoseconds) from Go output
     test_patterns = [
-        ('fibonacci', r'Test 1:.*?Sure:\s*([\d.eE+-]+)\s*(ms|µs|us)'),
-        ('factorial', r'Test 2:.*?Sure:\s*([\d.eE+-]+)\s*(ms|µs|us)'),
-        ('ackermann', r'Test 3:.*?Sure:\s*([\d.eE+-]+)\s*(ms|µs|us)'),
-        ('tak', r'Test 4:.*?Sure:\s*([\d.eE+-]+)\s*(ms|µs|us)'),
-        ('loop', r'Test 5:.*?Sure:\s*([\d.eE+-]+)\s*(ms|µs|us)'),
-        ('sieve', r'Test 6:.*?Sure:\s*([\d.eE+-]+)\s*(ms|µs|us)'),
-        ('bubble', r'Test 7:.*?Sure:\s*([\d.eE+-]+)\s*(ms|µs|us)'),
-        ('stringconcat', r'Test 8:.*?Sure:\s*([\d.eE+-]+)\s*(ms|µs|us)'),
-        ('arraymemory', r'Test 9:.*?Sure:\s*([\d.eE+-]+)\s*(ms|µs|us)'),
-        ('stringalloc', r'Test 10:.*?Sure:\s*([\d.eE+-]+)\s*(ms|µs|us)'),
-        ('jsonbuild', r'Test 11:.*?Sure:\s*([\d.eE+-]+)\s*(ms|µs|us)'),
+        ('fibonacci', r'Test 1:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
+        ('factorial', r'Test 2:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
+        ('ackermann', r'Test 3:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
+        ('tak', r'Test 4:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
+        ('loop', r'Test 5:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
+        ('sieve', r'Test 6:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
+        ('bubble', r'Test 7:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
+        ('stringconcat', r'Test 8:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
+        ('arraymemory', r'Test 9:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
+        ('stringalloc', r'Test 10:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
+        ('jsonbuild', r'Test 11:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
     ]
     
     for name, pattern in test_patterns:
@@ -196,8 +195,11 @@ def parse_benchmark_output(output):
         if match:
             val = float(match.group(1))
             unit = match.group(2).lower()
-            if unit in ['µs', 'us']:
+            # Handle all microsecond variants and nanoseconds
+            if 'µ' in unit or 'â' in unit or unit == 'us':
                 val /= 1000.0  # µs -> ms
+            elif unit == 'ns':
+                val /= 1000000.0  # ns -> ms
             results[name] = val
     
     # Toplam süreyi parse et
@@ -208,6 +210,7 @@ def parse_benchmark_output(output):
         results['total'] = sum(results.values()) if results else 0
     
     return results
+
 
 # ... (rest of the file) ...
 
@@ -378,6 +381,90 @@ def run_php_benchmark():
         return {'error': str(e)}
 
 
+def run_go_benchmark():
+    """Go benchmark testini çalıştır"""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    go_source = os.path.join(script_dir, 'benchmark.go')
+    go_exe = os.path.join(script_dir, 'benchmark_go.exe' if platform.system() == 'Windows' else 'benchmark_go')
+    
+    if not os.path.exists(go_source):
+        return {'error': 'benchmark.go bulunamadı'}
+    
+    # Go kontrolü
+    go_cmd = shutil.which('go')
+    if not go_cmd:
+        return {'error': 'Go bulunamadı. Go compiler yüklü değil.'}
+    
+    try:
+        # Derle
+        # go build -o benchmark_go.exe benchmark.go
+        compile_result = subprocess.run(
+            ['go', 'build', '-o', go_exe, go_source],
+            capture_output=True, text=True, timeout=60, cwd=script_dir
+        )
+        if compile_result.returncode != 0:
+            return {'error': f'Derleme hatası: {compile_result.stderr}'}
+        
+        # Çalıştır
+        result = subprocess.run([go_exe], capture_output=True, text=True, timeout=300, cwd=script_dir)
+        
+        # Temizle
+        if os.path.exists(go_exe):
+            os.remove(go_exe)
+        
+        return {'results': parse_benchmark_output(result.stdout), 'output': result.stdout}
+    except subprocess.TimeoutExpired:
+        return {'error': 'Timeout'}
+    except Exception as e:
+        return {'error': str(e)}
+
+
+def run_rust_benchmark():
+    """Rust benchmark testini çalıştır"""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    rust_source = os.path.join(script_dir, 'benchmark.rs')
+    rust_exe = os.path.join(script_dir, 'benchmark_rs.exe' if platform.system() == 'Windows' else 'benchmark_rs')
+    
+    if not os.path.exists(rust_source):
+        return {'error': 'benchmark.rs bulunamadı'}
+    
+    # Rustc kontrolü
+    rustc = shutil.which('rustc')
+    if not rustc:
+        # Fallback to common Windows path
+        common_path = os.path.expanduser('~/.cargo/bin/rustc.exe')
+        if os.path.exists(common_path):
+            rustc = common_path
+        else:
+            return {'error': 'Rust (rustc) bulunamadı.'}
+    
+    try:
+        # Derle: rustc -O benchmark.rs -o benchmark_rs
+        compile_result = subprocess.run(
+            [rustc, '-O', rust_source, '-o', rust_exe],
+            capture_output=True, text=True, timeout=60, cwd=script_dir
+        )
+        if compile_result.returncode != 0:
+            return {'error': f'Derleme hatası: {compile_result.stderr}'}
+        
+        # Çalıştır
+        result = subprocess.run([rust_exe], capture_output=True, text=True, timeout=300, cwd=script_dir)
+        
+        # Temizle
+        if os.path.exists(rust_exe):
+            os.remove(rust_exe)
+        # remove .pdb on windows if exists
+        pdb_file = rust_exe.replace('.exe', '.pdb') if platform.system() == 'Windows' else ''
+        if pdb_file and os.path.exists(pdb_file):
+             os.remove(pdb_file)
+        
+        return {'results': parse_benchmark_output(result.stdout), 'output': result.stdout}
+    except subprocess.TimeoutExpired:
+        return {'error': 'Timeout'}
+    except Exception as e:
+        return {'error': str(e)}
+
+
 def format_time(ms):
     if ms is None:
         return "N/A"
@@ -392,6 +479,7 @@ def format_time(ms):
 
 
 def main():
+    sys.stdout.reconfigure(encoding='utf-8')
     print("=" * 80)
     print("       🏁 MULTI-LANGUAGE PERFORMANS KARŞILAŞTIRMASI 🏁")
     print("            Tulpar vs Python vs C vs JavaScript vs PHP")
@@ -444,7 +532,28 @@ def main():
         print(f"⚠️  PHP Benchmark Atlandı: {php_data.get('error', 'Bilinmeyen hata')}")
         all_results['PHP'] = {}
     
-    # 5. Tulpar
+    # 5. Go
+    print("🔵 Go Benchmark Çalıştırılıyor...")
+    go_data = run_go_benchmark()
+    if 'results' in go_data:
+        all_results['Go'] = go_data['results']
+        print("✅ Go Benchmark Tamamlandı!")
+    else:
+        print(f"⚠️  Go Benchmark Atlandı: {go_data.get('error', 'Bilinmeyen hata')}")
+        all_results['Go'] = {}
+    
+    # 6. Rust
+    print("🦀 Rust Benchmark Çalıştırılıyor...")
+    rust_data = run_rust_benchmark()
+    if 'results' in rust_data:
+        all_results['Rust'] = rust_data['results']
+        print("✅ Rust Benchmark Tamamlandı!")
+    else:
+        print(f"⚠️  Rust Benchmark Atlandı: {rust_data.get('error', 'Bilinmeyen hata')}")
+        all_results['Rust'] = {}
+
+    # 7. Tulpar
+
     print("🐎 Tulpar Benchmark Çalıştırılıyor...")
     tulpar_data = run_tulpar_benchmark()
     if 'results' in tulpar_data:
@@ -478,7 +587,7 @@ def main():
         'jsonbuild': 'JSONBuild(1K)'
     }
     
-    languages = ['C', 'JavaScript', 'Python', 'PHP', 'Tulpar']
+    languages = ['C', 'Rust', 'Go', 'JavaScript', 'Python', 'PHP', 'Tulpar']
     
     # Header
     header = f"  {'Test':<20}"
@@ -516,17 +625,25 @@ def main():
     totals.sort(key=lambda x: x[1])
     
     if totals:
-        fastest_lang, fastest_time = totals[0]
+        # Tulpar'ın süresini bul
+        tulpar_total = all_results.get('Tulpar', {}).get('total', 0)
         
-        print(f"  {'Sıra':<6} {'Dil':<15} {'Toplam Süre':<18} {'Karşılaştırma':<25}")
-        print("  " + "-" * 70)
+        print(f"  {'Sıra':<6} {'Dil':<15} {'Toplam Süre':<18} {'Karşılaştırma (Ref: Tulpar)':<25}")
+        print("  " + "-" * 80)
         
         for i, (lang, total) in enumerate(totals, 1):
-            if i == 1:
-                comparison = "🏆 EN HIZLI"
+            comparison = ""
+            if lang == "Tulpar":
+                comparison = "🔵 REFERANS"
+            elif tulpar_total > 0:
+                if total < tulpar_total:
+                    ratio = tulpar_total / total
+                    comparison = f"🚀 {ratio:.2f}x daha HIZLI"
+                else:
+                    ratio = total / tulpar_total
+                    comparison = f"📉 {ratio:.2f}x daha YAVAŞ"
             else:
-                ratio = total / fastest_time
-                comparison = f"📉 {ratio:.2f}x yavaş"
+                 comparison = "N/A"
             
             medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "  "
             print(f"  {medal} {i:<3} {lang:<15} {format_time(total):<18} {comparison:<25}")
@@ -541,26 +658,21 @@ def main():
     print("=" * 80)
     print()
     
-    if totals:
-        fastest_lang, fastest_time = totals[0]
+    if totals and tulpar_total > 0:
+        tulpar_rank = next((i for i, (l, _) in enumerate(totals, 1) if l == 'Tulpar'), 0)
         
-        # Tulpar'ın konumu
-        tulpar_total = all_results.get('Tulpar', {}).get('total', 0)
-        if tulpar_total > 0:
-            tulpar_rank = next((i for i, (l, _) in enumerate(totals, 1) if l == 'Tulpar'), 0)
-            ratio_to_fastest = tulpar_total / fastest_time if fastest_time > 0 else 0
-            
-            print(f"  🐎 Tulpar Sıralaması: {tulpar_rank}/{len(totals)}")
-            print(f"  ⏱️  Tulpar Toplam Süre: {format_time(tulpar_total)}")
-            print(f"  📈 En hızlıya ({fastest_lang}) göre: {ratio_to_fastest:.2f}x yavaş")
-            
-            # Python ile karşılaştır
-            python_total = all_results.get('Python', {}).get('total', 0)
-            if python_total > 0:
-                if tulpar_total < python_total:
-                    print(f"  🎉 Python'dan {python_total/tulpar_total:.2f}x HIZLI!")
-                else:
-                    print(f"  📉 Python'dan {tulpar_total/python_total:.2f}x yavaş")
+        print(f"  🐎 Tulpar Sıralaması: {tulpar_rank}/{len(totals)}")
+        print(f"  ⏱️  Tulpar Toplam Süre: {format_time(tulpar_total)}")
+        
+        fastest_lang, fastest_time = totals[0]
+        if fastest_lang != 'Tulpar':
+             print(f"  🏎️  En Hızlı ({fastest_lang}): {format_time(fastest_time)}")
+        
+        # Python karşılaştırması
+        python_total = all_results.get('Python', {}).get('total', 0)
+        if python_total > 0:
+             ratio = python_total / tulpar_total
+             print(f"  🎉 Python'dan {ratio:.2f}x daha HIZLI!")
     
     print()
     print("=" * 80)
@@ -572,17 +684,26 @@ def main():
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write("=" * 80 + "\n")
         f.write("MULTI-LANGUAGE PERFORMANS KARŞILAŞTIRMASI\n")
-        f.write("Tulpar vs Python vs C vs JavaScript vs PHP\n")
+        f.write("Tulpar vs Python vs C vs JavaScript vs PHP vs Go vs Rust\n")
         f.write("=" * 80 + "\n")
         f.write(f"Tarih: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Platform: {platform.system()} {platform.release()}\n\n")
         
         f.write("-" * 80 + "\n")
-        f.write("TOPLAM SÜRELER (Sıralı)\n")
+        f.write("TOPLAM SÜRELER (Sıralı) - Referans: Tulpar\n")
         f.write("-" * 80 + "\n\n")
         
         for i, (lang, total) in enumerate(totals, 1):
-            f.write(f"{i}. {lang}: {format_time(total)}\n")
+             comp = ""
+             if lang == "Tulpar":
+                 comp = "(REFERANS)"
+             elif tulpar_total > 0:
+                if total < tulpar_total:
+                    comp = f"({tulpar_total/total:.2f}x HIZLI)"
+                else:
+                    comp = f"({total/tulpar_total:.2f}x YAVAS)"
+             
+             f.write(f"{i}. {lang}: {format_time(total)} {comp}\n")
         
         f.write("\n" + "=" * 80 + "\n")
     

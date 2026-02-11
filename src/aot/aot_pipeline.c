@@ -90,18 +90,11 @@ AOTResult aot_compile(const char *source, const char *output_name) {
   // Link using clang (or system linker)
   printf("[AOT] Linking executable: %s\n", exe_filename);
   char link_cmd[1024];
-#ifdef _WIN32
-  snprintf(link_cmd, sizeof(link_cmd),
-           "clang -O3 %s -o %s.exe -L. -L./build-win -L./build "
-           "-ltulpar_runtime -lws2_32 2>&1",
-           obj_filename, exe_filename);
-#else
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang -O3 %s -o %s -no-pie -L./build -ltulpar_runtime -lm -lpthread "
-      "-ldl 2>&1",
+      "clang -O3 %s -o %s -no-pie -L./build -L./build-linux -L./build-macos "
+      "-ltulpar_runtime -lm -lpthread -ldl 2>&1",
       obj_filename, exe_filename);
-#endif
 
   int link_result = system(link_cmd);
   if (link_result != 0) {
@@ -131,11 +124,77 @@ AOTResult aot_compile_and_run(const char *source) {
 
   // Try to execute
   printf("[AOT] Executing generated binary...\n");
-#ifdef _WIN32
-  system("tulpar_temp.exe");
-#else
   system("./tulpar_temp");
-#endif
 
   return AOT_OK;
+}
+
+// Silent compile to native binary (no output, temp files)
+static AOTResult aot_compile_silent(const char *source,
+                                    const char *output_name) {
+  ASTNode *ast = parse_source(source);
+  if (!ast) {
+    return AOT_ERROR_PARSE;
+  }
+
+  LLVMBackend *backend = llvm_backend_create("tulpar_aot_module");
+  if (!backend) {
+    ast_node_free(ast);
+    return AOT_ERROR_CODEGEN;
+  }
+  backend->quiet = 1; // Suppress [AOT] messages
+
+  llvm_backend_compile(backend, ast);
+  llvm_backend_optimize(backend);
+
+  char obj_filename[256];
+  char exe_filename[256];
+  snprintf(obj_filename, sizeof(obj_filename), "%s.o", output_name);
+  snprintf(exe_filename, sizeof(exe_filename), "%s", output_name);
+
+  if (llvm_backend_emit_object(backend, obj_filename) != 0) {
+    llvm_backend_destroy(backend);
+    ast_node_free(ast);
+    return AOT_ERROR_EMIT;
+  }
+
+  // Link silently (suppress output)
+  char link_cmd[1024];
+  snprintf(
+      link_cmd, sizeof(link_cmd),
+      "clang -O3 %s -o %s -no-pie -L./build -L./build-linux -L./build-macos "
+      "-ltulpar_runtime -lm -lpthread -ldl 2>/dev/null",
+      obj_filename, exe_filename);
+
+  int link_result = system(link_cmd);
+
+  // Cleanup object file
+  remove(obj_filename);
+
+  llvm_backend_destroy(backend);
+  ast_node_free(ast);
+
+  if (link_result != 0) {
+    return AOT_ERROR_LINK;
+  }
+
+  return AOT_OK;
+}
+
+// Silent compile and run - used as default execution mode
+// Compiles to temp binary, runs it, cleans up. No [AOT] output.
+AOTResult aot_compile_and_run_silent(const char *source) {
+  AOTResult result = aot_compile_silent(source, "/tmp/.tulpar_run");
+  if (result != AOT_OK) {
+    return result;
+  }
+
+  // Execute the compiled binary
+  int run_result = system("/tmp/.tulpar_run");
+
+  // Cleanup temp files
+  remove("/tmp/.tulpar_run");
+  remove("/tmp/.tulpar_run.ll");
+
+  return (run_result == 0) ? AOT_OK : AOT_ERROR_LINK;
 }

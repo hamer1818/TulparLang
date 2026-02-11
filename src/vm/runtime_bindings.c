@@ -4,12 +4,15 @@
 
 #define TYPE_BOOL_BOOL ((VM_VAL_BOOL << 4) | VM_VAL_BOOL)
 #include <ctype.h>
+#include <locale.h>
 #include <setjmp.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <dlfcn.h>
 
 // Exception Handling Globals (Removed duplicates)
 
@@ -36,6 +39,55 @@ typedef struct {
 
 // Global arena for AOT string allocations
 static AOTArena *g_aot_string_arena = NULL;
+
+// AOT Dynamic Call Support
+VMValue aot_call_dynamic(VMValue func_name) {
+  if (!IS_STRING(func_name)) {
+    printf("Runtime Error: call() expects string\n");
+    return VM_VOID();
+  }
+
+  ObjString *str = AS_STRING(func_name);
+  char *original_name = str->chars;
+
+  // Prefix usage: t_name (except main, but we don't dynamic call main usually)
+  char name[256];
+  if (strcmp(original_name, "main") == 0) {
+    snprintf(name, sizeof(name), "main");
+  } else {
+    snprintf(name, sizeof(name), "t_%s", original_name);
+  }
+
+  void (*func_ptr)(VMValue *) = NULL;
+
+  func_ptr = (void (*)(VMValue *))dlsym(RTLD_DEFAULT, name);
+  if (!func_ptr) {
+    func_ptr = (void (*)(VMValue *))dlsym(RTLD_DEFAULT, original_name);
+  }
+
+  if (!func_ptr) {
+    printf("Runtime Error: Function '%s' not found (AOT)\n", name);
+    return VM_VOID();
+  }
+
+  // Call function
+  // AOT functions signature: void func(VMValue* result_ptr)
+  // We pass a local VMValue address to capture result
+
+  VMValue result = VM_VOID();
+  func_ptr(&result);
+  return result;
+}
+
+// AOT runtime initialization (locale/UTF-8, console modes)
+void aot_runtime_init(void) {
+  static int initialized = 0;
+  if (initialized)
+    return;
+  initialized = 1;
+
+  setlocale(LC_ALL, ".UTF8");
+}
 
 static AOTArenaBlock *aot_arena_new_block(size_t min_size) {
   size_t size =
@@ -146,7 +198,10 @@ static ObjString *aot_allocate_string(const char *chars, int length) {
   str->obj.type = OBJ_STRING;
   str->obj.arena_allocated = 1; // Mark as arena allocated
   str->obj.next = NULL;
+  str->obj.ref_count = 1;
+  str->obj.is_moved = 0;
   str->length = length;
+  str->capacity = length + 1;
 
   // Chars immediately follow struct
   str->chars = block + sizeof(ObjString);
@@ -197,7 +252,10 @@ VMValue aot_string_concat_fast(VMValue a, VMValue b) {
   result->obj.type = OBJ_STRING;
   result->obj.arena_allocated = 1;
   result->obj.next = NULL;
+  result->obj.ref_count = 1;
+  result->obj.is_moved = 0;
   result->length = total_len;
+  result->capacity = total_len + 1;
   result->chars = block + sizeof(ObjString);
 
   // Direct memory copy
@@ -209,6 +267,12 @@ VMValue aot_string_concat_fast(VMValue a, VMValue b) {
   result->hash = 0;
 
   return VM_OBJ((Obj *)result);
+}
+
+VMValue aot_string_concat_fast_ptr(VMValue *a_ptr, VMValue *b_ptr) {
+  if (!a_ptr || !b_ptr)
+    return VM_INT(0);
+  return aot_string_concat_fast(*a_ptr, *b_ptr);
 }
 
 // Create string from C string literal (fast path)
@@ -664,7 +728,8 @@ void vm_object_set(VM *vm, ObjObject *obj, char *key, VMValue value) {
 
   // Create string object for key
   int len = strlen(key);
-  ObjString *keyObj = vm_alloc_string(vm, key, len);
+  ObjString *keyObj =
+      vm ? vm_alloc_string(vm, key, len) : aot_allocate_string(key, len);
 
   // Check if key exists
   for (int i = 0; i < obj->count; i++) {
@@ -855,6 +920,13 @@ VMValue aot_to_string(VMValue value) {
   return VM_OBJ((Obj *)str);
 }
 
+// Pointer ABI wrappers for AOT (Windows-friendly)
+VMValue aot_to_string_ptr(VMValue *value_ptr) {
+  if (!value_ptr)
+    return VM_INT(0);
+  return aot_to_string(*value_ptr);
+}
+
 // toInt(VMValue) -> int64
 int64_t aot_to_int(VMValue value) {
   switch (value.type) {
@@ -872,6 +944,12 @@ int64_t aot_to_int(VMValue value) {
   default:
     return 0;
   }
+}
+
+int64_t aot_to_int_ptr(VMValue *value_ptr) {
+  if (!value_ptr)
+    return 0;
+  return aot_to_int(*value_ptr);
 }
 
 // toFloat(VMValue) -> double
@@ -893,6 +971,12 @@ double aot_to_float(VMValue value) {
   }
 }
 
+double aot_to_float_ptr(VMValue *value_ptr) {
+  if (!value_ptr)
+    return 0.0;
+  return aot_to_float(*value_ptr);
+}
+
 // len(VMValue) -> int
 int64_t aot_len(VMValue value) {
   if (IS_STRING(value)) {
@@ -901,6 +985,12 @@ int64_t aot_len(VMValue value) {
     return AS_ARRAY(value)->count;
   }
   return 0;
+}
+
+int64_t aot_len_ptr(VMValue *value_ptr) {
+  if (!value_ptr)
+    return 0;
+  return aot_len(*value_ptr);
 }
 
 // push(array, value) - wrapper for AOT (pointer ABI for Windows)
@@ -938,9 +1028,12 @@ typedef struct {
   size_t cap;
 } JSBuilder;
 
+// Thread-local storage
+#define TULPAR_THREAD_LOCAL __thread
+
 // Pre-allocated buffer for small JSON (avoids malloc for simple cases)
-static __thread char js_small_buffer[4096];
-static __thread int js_small_buffer_in_use = 0;
+static TULPAR_THREAD_LOCAL char js_small_buffer[4096];
+static TULPAR_THREAD_LOCAL int js_small_buffer_in_use = 0;
 
 static void js_init(JSBuilder *b) {
   // Use thread-local buffer if available (avoids malloc)
@@ -1267,6 +1360,12 @@ VMValue aot_to_json(VMValue value) {
   return VM_OBJ((Obj *)res);
 }
 
+VMValue aot_to_json_ptr(VMValue *value_ptr) {
+  if (!value_ptr)
+    return VM_INT(0);
+  return aot_to_json(*value_ptr);
+}
+
 // AOT Wrappers for Allocations
 ObjArray *vm_allocate_array_aot_wrapper(void *vm) {
   if (vm)
@@ -1275,6 +1374,8 @@ ObjArray *vm_allocate_array_aot_wrapper(void *vm) {
   arr->obj.type = OBJ_ARRAY;
   arr->obj.arena_allocated = 0;
   arr->obj.next = NULL;
+  arr->obj.ref_count = 1;
+  arr->obj.is_moved = 0;
   arr->count = 0;
   arr->capacity = 0;
   arr->items = NULL;
@@ -1288,6 +1389,8 @@ ObjObject *vm_allocate_object_aot_wrapper(void *vm) {
   obj->obj.type = OBJ_OBJECT;
   obj->obj.arena_allocated = 0;
   obj->obj.next = NULL;
+  obj->obj.ref_count = 1;
+  obj->obj.is_moved = 0;
   obj->count = 0;
   obj->capacity = 0;
   obj->keys = NULL;
@@ -1311,6 +1414,13 @@ void vm_array_push_aot_wrapper(void *vm, ObjArray *array, VMValue value) {
   array->items[array->count++] = value;
 }
 
+void vm_array_push_aot_ptr_wrapper(void *vm, ObjArray *array,
+                                   VMValue *value_ptr) {
+  if (!value_ptr)
+    return;
+  vm_array_push_aot_wrapper(vm, array, *value_ptr);
+}
+
 void vm_object_set_aot_wrapper(void *vm, ObjObject *obj, char *key,
                                VMValue value) {
   if (vm) {
@@ -1332,6 +1442,13 @@ void vm_object_set_aot_wrapper(void *vm, ObjObject *obj, char *key,
   obj->count++;
 }
 
+void vm_object_set_aot_ptr_wrapper(void *vm, ObjObject *obj, char *key,
+                                   VMValue *value_ptr) {
+  if (!value_ptr)
+    return;
+  vm_object_set_aot_wrapper(vm, obj, key, *value_ptr);
+}
+
 // --- AOT Builtin Logic for Input and Strings ---
 
 // AOT Input: Reads a line from stdin
@@ -1340,6 +1457,10 @@ VMValue aot_input() {
   if (fgets(buffer, sizeof(buffer), stdin)) {
     size_t len = strlen(buffer);
     if (len > 0 && buffer[len - 1] == '\n') {
+      buffer[len - 1] = '\0';
+      len--;
+    }
+    if (len > 0 && buffer[len - 1] == '\r') {
       buffer[len - 1] = '\0';
       len--;
     }
@@ -1382,6 +1503,12 @@ VMValue aot_trim(VMValue val) {
   ObjString *res = aot_allocate_string(buf, new_len);
   free(buf);
   return VM_OBJ((Obj *)res);
+}
+
+VMValue aot_trim_ptr(VMValue *val_ptr) {
+  if (!val_ptr)
+    return VM_INT(0);
+  return aot_trim(*val_ptr);
 }
 
 // AOT Replace
@@ -1427,6 +1554,12 @@ VMValue aot_replace(VMValue strVal, VMValue oldVal, VMValue newVal) {
   return VM_OBJ((Obj *)resObj);
 }
 
+VMValue aot_replace_ptr(VMValue *str_ptr, VMValue *old_ptr, VMValue *new_ptr) {
+  if (!str_ptr || !old_ptr || !new_ptr)
+    return VM_INT(0);
+  return aot_replace(*str_ptr, *old_ptr, *new_ptr);
+}
+
 // AOT Split
 VMValue aot_split(VMValue strVal, VMValue delVal) {
   if (!IS_STRING(strVal) || !IS_STRING(delVal)) {
@@ -1469,6 +1602,12 @@ VMValue aot_split(VMValue strVal, VMValue delVal) {
 
   return VM_OBJ((Obj *)arr);
 }
+
+VMValue aot_split_ptr(VMValue *str_ptr, VMValue *del_ptr) {
+  if (!str_ptr || !del_ptr)
+    return VM_INT(0);
+  return aot_split(*str_ptr, *del_ptr);
+}
 // ============================================================================
 // File I/O Builtins
 // ============================================================================
@@ -1506,6 +1645,12 @@ VMValue aot_read_file(VMValue path_val) {
   return VM_OBJ(ostr);
 }
 
+VMValue aot_read_file_ptr(VMValue *path_ptr) {
+  if (!path_ptr)
+    return VM_VOID();
+  return aot_read_file(*path_ptr);
+}
+
 VMValue aot_write_file(VMValue path_val, VMValue content_val) {
   if (!IS_STRING(path_val) || !IS_STRING(content_val))
     return VM_VOID();
@@ -1519,6 +1664,12 @@ VMValue aot_write_file(VMValue path_val, VMValue content_val) {
     fclose(f);
   }
   return VM_VOID();
+}
+
+VMValue aot_write_file_ptr(VMValue *path_ptr, VMValue *content_ptr) {
+  if (!path_ptr || !content_ptr)
+    return VM_VOID();
+  return aot_write_file(*path_ptr, *content_ptr);
 }
 
 VMValue aot_append_file(VMValue path_val, VMValue content_val) {
@@ -1536,6 +1687,12 @@ VMValue aot_append_file(VMValue path_val, VMValue content_val) {
   return VM_VOID();
 }
 
+VMValue aot_append_file_ptr(VMValue *path_ptr, VMValue *content_ptr) {
+  if (!path_ptr || !content_ptr)
+    return VM_VOID();
+  return aot_append_file(*path_ptr, *content_ptr);
+}
+
 VMValue aot_file_exists(VMValue path_val) {
   if (!IS_STRING(path_val))
     return VM_BOOL(false);
@@ -1548,6 +1705,12 @@ VMValue aot_file_exists(VMValue path_val) {
   return VM_BOOL(false);
 }
 
+VMValue aot_file_exists_ptr(VMValue *path_ptr) {
+  if (!path_ptr)
+    return VM_BOOL(false);
+  return aot_file_exists(*path_ptr);
+}
+
 // ============================================================================
 // Exception Handling Runtime (setjmp/longjmp based)
 // ============================================================================
@@ -1558,7 +1721,7 @@ static jmp_buf eh_stack[EH_STACK_MAX];
 static int eh_depth = 0;
 static VMValue eh_exception;
 
-// Returns pointer to jmp_buf for setjmp
+// Returns pointer to jmp_buf for direct setjmp call
 jmp_buf *aot_try_push(void) {
   if (eh_depth >= EH_STACK_MAX) {
     fprintf(stderr, "Exception handler stack overflow\n");
@@ -1578,8 +1741,6 @@ void aot_throw(VMValue exception) {
     if (IS_STRING(exception)) {
       fprintf(stderr, "%s\n", AS_STRING(exception)->chars);
     } else if (IS_OBJECT(exception)) {
-      // Try to print "message" property if exists?
-      // Simple fallback
       fprintf(stderr, "<object type=%d>\n", AS_OBJ(exception)->type);
     } else {
       fprintf(stderr, "<value type=%d>\n", exception.type);
@@ -1587,8 +1748,15 @@ void aot_throw(VMValue exception) {
     exit(1);
   }
   eh_exception = exception;
-  eh_depth--;
-  longjmp(eh_stack[eh_depth], 1);
+  int target_depth = eh_depth - 1;
+  eh_depth = target_depth;
+  longjmp(eh_stack[target_depth], 1);
+}
+
+void aot_throw_ptr(VMValue *exception_ptr) {
+  if (!exception_ptr)
+    return;
+  aot_throw(*exception_ptr);
 }
 
 VMValue aot_get_exception(void) { return eh_exception; }
@@ -1614,51 +1782,22 @@ VMValue aot_clock_ms(void) {
 // ============================================================================
 // Socket Functions (AOT)
 // ============================================================================
-#ifdef _WIN32
-#include <windows.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-
-#pragma comment(lib, "Ws2_32.lib")
-static int wsa_initialized = 0;
-static int ensure_wsa(void) {
-  if (wsa_initialized)
-    return 1;
-  WSADATA wsa;
-  if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
-    return 0;
-  wsa_initialized = 1;
-  return 1;
-}
-#define tulpar_socket SOCKET
-#define tulpar_close closesocket
-#define tulpar_send send
-#define tulpar_recv recv
-#define tulpar_invalid_socket INVALID_SOCKET
-#else
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
-static int ensure_wsa(void) { return 1; }
 #define tulpar_socket int
 #define tulpar_close close
 #define tulpar_send send
 #define tulpar_recv recv
 #define tulpar_invalid_socket -1
-#endif
 
 VMValue aot_socket_server(VMValue hostVal, VMValue portVal) {
   if (!IS_STRING(hostVal) || !IS_INT(portVal))
     return VM_INT(-1);
 
   int port = (int)AS_INT(portVal);
-
-#ifdef _WIN32
-  if (!ensure_wsa())
-    return VM_INT(-1);
-#endif
 
   tulpar_socket server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (server_fd == tulpar_invalid_socket)
@@ -1691,9 +1830,6 @@ VMValue aot_socket_client(VMValue hostVal, VMValue portVal) {
 
   const char *host = AS_STRING(hostVal)->chars;
   int port = (int)AS_INT(portVal);
-
-  if (!ensure_wsa())
-    return VM_INT(-1);
 
   tulpar_socket sock = socket(AF_INET, SOCK_STREAM, 0);
   if (sock == tulpar_invalid_socket)
@@ -2179,6 +2315,144 @@ VMValue aot_math_fmod(VMValue x, VMValue y) {
   return VM_FLOAT(fmod(xv, yv));
 }
 
+VMValue aot_math_sqrt_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_sqrt(*v_ptr);
+}
+
+VMValue aot_math_pow_ptr(VMValue *b_ptr, VMValue *e_ptr) {
+  if (!b_ptr || !e_ptr)
+    return VM_INT(0);
+  return aot_math_pow(*b_ptr, *e_ptr);
+}
+
+VMValue aot_math_floor_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_floor(*v_ptr);
+}
+
+VMValue aot_math_ceil_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_ceil(*v_ptr);
+}
+
+VMValue aot_math_round_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_round(*v_ptr);
+}
+
+VMValue aot_math_sin_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_sin(*v_ptr);
+}
+
+VMValue aot_math_cos_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_cos(*v_ptr);
+}
+
+VMValue aot_math_tan_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_tan(*v_ptr);
+}
+
+VMValue aot_math_asin_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_asin(*v_ptr);
+}
+
+VMValue aot_math_acos_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_acos(*v_ptr);
+}
+
+VMValue aot_math_atan_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_atan(*v_ptr);
+}
+
+VMValue aot_math_atan2_ptr(VMValue *y_ptr, VMValue *x_ptr) {
+  if (!y_ptr || !x_ptr)
+    return VM_INT(0);
+  return aot_math_atan2(*y_ptr, *x_ptr);
+}
+
+VMValue aot_math_exp_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_exp(*v_ptr);
+}
+
+VMValue aot_math_log_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_log(*v_ptr);
+}
+
+VMValue aot_math_log10_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_log10(*v_ptr);
+}
+
+VMValue aot_math_log2_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_log2(*v_ptr);
+}
+
+VMValue aot_math_sinh_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_sinh(*v_ptr);
+}
+
+VMValue aot_math_cosh_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_cosh(*v_ptr);
+}
+
+VMValue aot_math_tanh_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_tanh(*v_ptr);
+}
+
+VMValue aot_math_cbrt_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_cbrt(*v_ptr);
+}
+
+VMValue aot_math_hypot_ptr(VMValue *x_ptr, VMValue *y_ptr) {
+  if (!x_ptr || !y_ptr)
+    return VM_INT(0);
+  return aot_math_hypot(*x_ptr, *y_ptr);
+}
+
+VMValue aot_math_trunc_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_math_trunc(*v_ptr);
+}
+
+VMValue aot_math_fmod_ptr(VMValue *x_ptr, VMValue *y_ptr) {
+  if (!x_ptr || !y_ptr)
+    return VM_INT(0);
+  return aot_math_fmod(*x_ptr, *y_ptr);
+}
+
 // Random number generator (seeded on first call)
 static int aot_random_seeded = 0;
 VMValue aot_math_random(void) {
@@ -2199,16 +2473,34 @@ VMValue aot_math_randint(VMValue minVal, VMValue maxVal) {
   return VM_INT(min + rand() % (max - min + 1));
 }
 
+VMValue aot_math_randint_ptr(VMValue *min_ptr, VMValue *max_ptr) {
+  if (!min_ptr || !max_ptr)
+    return VM_INT(0);
+  return aot_math_randint(*min_ptr, *max_ptr);
+}
+
 VMValue aot_math_min(VMValue a, VMValue b) {
   double av = IS_INT(a) ? (double)AS_INT(a) : AS_FLOAT(a);
   double bv = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
   return VM_FLOAT(av < bv ? av : bv);
 }
 
+VMValue aot_math_min_ptr(VMValue *a_ptr, VMValue *b_ptr) {
+  if (!a_ptr || !b_ptr)
+    return VM_INT(0);
+  return aot_math_min(*a_ptr, *b_ptr);
+}
+
 VMValue aot_math_max(VMValue a, VMValue b) {
   double av = IS_INT(a) ? (double)AS_INT(a) : AS_FLOAT(a);
   double bv = IS_INT(b) ? (double)AS_INT(b) : AS_FLOAT(b);
   return VM_FLOAT(av > bv ? av : bv);
+}
+
+VMValue aot_math_max_ptr(VMValue *a_ptr, VMValue *b_ptr) {
+  if (!a_ptr || !b_ptr)
+    return VM_INT(0);
+  return aot_math_max(*a_ptr, *b_ptr);
 }
 
 // ============================================================================
@@ -2227,6 +2519,12 @@ VMValue aot_string_upper(VMValue v) {
   return VM_OBJ((Obj *)aot_allocate_string(result, s->length));
 }
 
+VMValue aot_string_upper_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_string_upper(*v_ptr);
+}
+
 VMValue aot_string_lower(VMValue v) {
   if (!IS_STRING(v))
     return v;
@@ -2239,12 +2537,24 @@ VMValue aot_string_lower(VMValue v) {
   return VM_OBJ((Obj *)aot_allocate_string(result, s->length));
 }
 
+VMValue aot_string_lower_ptr(VMValue *v_ptr) {
+  if (!v_ptr)
+    return VM_INT(0);
+  return aot_string_lower(*v_ptr);
+}
+
 VMValue aot_string_contains(VMValue haystack, VMValue needle) {
   if (!IS_STRING(haystack) || !IS_STRING(needle))
     return VM_BOOL(0);
   ObjString *h = AS_STRING(haystack);
   ObjString *n = AS_STRING(needle);
   return VM_BOOL(strstr(h->chars, n->chars) != NULL);
+}
+
+VMValue aot_string_contains_ptr(VMValue *h_ptr, VMValue *n_ptr) {
+  if (!h_ptr || !n_ptr)
+    return VM_BOOL(0);
+  return aot_string_contains(*h_ptr, *n_ptr);
 }
 
 VMValue aot_string_starts_with(VMValue str, VMValue prefix) {
@@ -2257,6 +2567,12 @@ VMValue aot_string_starts_with(VMValue str, VMValue prefix) {
   return VM_BOOL(strncmp(s->chars, p->chars, p->length) == 0);
 }
 
+VMValue aot_string_starts_with_ptr(VMValue *s_ptr, VMValue *p_ptr) {
+  if (!s_ptr || !p_ptr)
+    return VM_BOOL(0);
+  return aot_string_starts_with(*s_ptr, *p_ptr);
+}
+
 VMValue aot_string_ends_with(VMValue str, VMValue suffix) {
   if (!IS_STRING(str) || !IS_STRING(suffix))
     return VM_BOOL(0);
@@ -2265,6 +2581,12 @@ VMValue aot_string_ends_with(VMValue str, VMValue suffix) {
   if (x->length > s->length)
     return VM_BOOL(0);
   return VM_BOOL(strcmp(s->chars + s->length - x->length, x->chars) == 0);
+}
+
+VMValue aot_string_ends_with_ptr(VMValue *s_ptr, VMValue *x_ptr) {
+  if (!s_ptr || !x_ptr)
+    return VM_BOOL(0);
+  return aot_string_ends_with(*s_ptr, *x_ptr);
 }
 
 VMValue aot_string_index_of(VMValue haystack, VMValue needle) {
@@ -2276,6 +2598,12 @@ VMValue aot_string_index_of(VMValue haystack, VMValue needle) {
   if (pos == NULL)
     return VM_INT(-1);
   return VM_INT(pos - h->chars);
+}
+
+VMValue aot_string_index_of_ptr(VMValue *h_ptr, VMValue *n_ptr) {
+  if (!h_ptr || !n_ptr)
+    return VM_INT(-1);
+  return aot_string_index_of(*h_ptr, *n_ptr);
 }
 
 VMValue aot_string_substring(VMValue str, VMValue startVal, VMValue endVal) {
@@ -2296,6 +2624,13 @@ VMValue aot_string_substring(VMValue str, VMValue startVal, VMValue endVal) {
   return VM_OBJ((Obj *)aot_allocate_string(s->chars + start, len));
 }
 
+VMValue aot_string_substring_ptr(VMValue *s_ptr, VMValue *start_ptr,
+                                 VMValue *end_ptr) {
+  if (!s_ptr || !start_ptr || !end_ptr)
+    return VM_INT(0);
+  return aot_string_substring(*s_ptr, *start_ptr, *end_ptr);
+}
+
 VMValue aot_string_repeat(VMValue str, VMValue countVal) {
   if (!IS_STRING(str) || !IS_INT(countVal))
     return str;
@@ -2313,6 +2648,12 @@ VMValue aot_string_repeat(VMValue str, VMValue countVal) {
   return VM_OBJ((Obj *)aot_allocate_string(result, total_len));
 }
 
+VMValue aot_string_repeat_ptr(VMValue *s_ptr, VMValue *c_ptr) {
+  if (!s_ptr || !c_ptr)
+    return VM_INT(0);
+  return aot_string_repeat(*s_ptr, *c_ptr);
+}
+
 VMValue aot_string_reverse(VMValue str) {
   if (!IS_STRING(str))
     return str;
@@ -2325,10 +2666,22 @@ VMValue aot_string_reverse(VMValue str) {
   return VM_OBJ((Obj *)aot_allocate_string(result, s->length));
 }
 
+VMValue aot_string_reverse_ptr(VMValue *s_ptr) {
+  if (!s_ptr)
+    return VM_INT(0);
+  return aot_string_reverse(*s_ptr);
+}
+
 VMValue aot_string_is_empty(VMValue str) {
   if (!IS_STRING(str))
     return VM_BOOL(1);
   return VM_BOOL(AS_STRING(str)->length == 0);
+}
+
+VMValue aot_string_is_empty_ptr(VMValue *s_ptr) {
+  if (!s_ptr)
+    return VM_BOOL(1);
+  return aot_string_is_empty(*s_ptr);
 }
 
 VMValue aot_string_count(VMValue haystack, VMValue needle) {
@@ -2348,6 +2701,12 @@ VMValue aot_string_count(VMValue haystack, VMValue needle) {
   return VM_INT(count);
 }
 
+VMValue aot_string_count_ptr(VMValue *h_ptr, VMValue *n_ptr) {
+  if (!h_ptr || !n_ptr)
+    return VM_INT(0);
+  return aot_string_count(*h_ptr, *n_ptr);
+}
+
 VMValue aot_string_capitalize(VMValue str) {
   if (!IS_STRING(str))
     return str;
@@ -2364,6 +2723,12 @@ VMValue aot_string_capitalize(VMValue str) {
   return VM_OBJ((Obj *)aot_allocate_string(result, s->length));
 }
 
+VMValue aot_string_capitalize_ptr(VMValue *s_ptr) {
+  if (!s_ptr)
+    return VM_INT(0);
+  return aot_string_capitalize(*s_ptr);
+}
+
 VMValue aot_string_is_digit(VMValue str) {
   if (!IS_STRING(str))
     return VM_BOOL(0);
@@ -2377,6 +2742,12 @@ VMValue aot_string_is_digit(VMValue str) {
   return VM_BOOL(1);
 }
 
+VMValue aot_string_is_digit_ptr(VMValue *s_ptr) {
+  if (!s_ptr)
+    return VM_BOOL(0);
+  return aot_string_is_digit(*s_ptr);
+}
+
 VMValue aot_string_is_alpha(VMValue str) {
   if (!IS_STRING(str))
     return VM_BOOL(0);
@@ -2388,6 +2759,12 @@ VMValue aot_string_is_alpha(VMValue str) {
       return VM_BOOL(0);
   }
   return VM_BOOL(1);
+}
+
+VMValue aot_string_is_alpha_ptr(VMValue *s_ptr) {
+  if (!s_ptr)
+    return VM_BOOL(0);
+  return aot_string_is_alpha(*s_ptr);
 }
 
 VMValue aot_string_join(VMValue sep, VMValue arr) {
@@ -2426,6 +2803,12 @@ VMValue aot_string_join(VMValue sep, VMValue arr) {
   return VM_OBJ((Obj *)aot_allocate_string(result, total_len));
 }
 
+VMValue aot_string_join_ptr(VMValue *sep_ptr, VMValue *arr_ptr) {
+  if (!sep_ptr || !arr_ptr)
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  return aot_string_join(*sep_ptr, *arr_ptr);
+}
+
 // ============================================================================
 // Time Functions (AOT) - Extended
 // ============================================================================
@@ -2442,11 +2825,13 @@ void aot_sleep(VMValue msVal) {
   if (!IS_INT(msVal))
     return;
   int64_t ms = AS_INT(msVal);
-#ifdef _WIN32
-  Sleep((DWORD)ms);
-#else
   usleep((useconds_t)(ms * 1000));
-#endif
+}
+
+void aot_sleep_ptr(VMValue *ms_ptr) {
+  if (!ms_ptr)
+    return;
+  aot_sleep(*ms_ptr);
 }
 
 // ============================================================================
@@ -2713,6 +3098,14 @@ VMValue aot_input_int(VMValue promptVal) {
 
   char buf[64];
   if (fgets(buf, sizeof(buf), stdin)) {
+    size_t len = strlen(buf);
+    if (len > 0 && buf[len - 1] == '\n') {
+      buf[len - 1] = '\0';
+      len--;
+    }
+    if (len > 0 && buf[len - 1] == '\r') {
+      buf[len - 1] = '\0';
+    }
     return VM_INT(atoll(buf));
   }
   return VM_INT(0);
@@ -2726,6 +3119,14 @@ VMValue aot_input_float(VMValue promptVal) {
 
   char buf[64];
   if (fgets(buf, sizeof(buf), stdin)) {
+    size_t len = strlen(buf);
+    if (len > 0 && buf[len - 1] == '\n') {
+      buf[len - 1] = '\0';
+      len--;
+    }
+    if (len > 0 && buf[len - 1] == '\r') {
+      buf[len - 1] = '\0';
+    }
     return VM_FLOAT(atof(buf));
   }
   return VM_FLOAT(0.0);
@@ -2787,6 +3188,12 @@ VMValue aot_db_open(VMValue pathVal) {
   return VM_INT((int64_t)(uintptr_t)db);
 }
 
+VMValue aot_db_open_ptr(VMValue *path_ptr) {
+  if (!path_ptr)
+    return VM_INT(0);
+  return aot_db_open(*path_ptr);
+}
+
 // db_close(db_handle) -> void
 void aot_db_close(VMValue dbVal) {
   if (!IS_INT(dbVal))
@@ -2796,6 +3203,12 @@ void aot_db_close(VMValue dbVal) {
   if (db) {
     sqlite3_close(db);
   }
+}
+
+void aot_db_close_ptr(VMValue *db_ptr) {
+  if (!db_ptr)
+    return;
+  aot_db_close(*db_ptr);
 }
 
 // db_execute(db_handle, sql) -> bool (success)
@@ -2817,6 +3230,12 @@ VMValue aot_db_execute(VMValue dbVal, VMValue sqlVal) {
   }
 
   return VM_BOOL(rc == SQLITE_OK);
+}
+
+VMValue aot_db_execute_ptr(VMValue *db_ptr, VMValue *sql_ptr) {
+  if (!db_ptr || !sql_ptr)
+    return VM_BOOL(0);
+  return aot_db_execute(*db_ptr, *sql_ptr);
 }
 
 // db_query(db_handle, sql) -> array of objects (rows)
@@ -2918,6 +3337,12 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
   sqlite3_finalize(stmt);
 
   return VM_OBJ((Obj *)result);
+}
+
+VMValue aot_db_query_ptr(VMValue *db_ptr, VMValue *sql_ptr) {
+  if (!db_ptr || !sql_ptr)
+    return VM_INT(0);
+  return aot_db_query(*db_ptr, *sql_ptr);
 }
 
 // db_last_insert_id(db_handle) -> int64

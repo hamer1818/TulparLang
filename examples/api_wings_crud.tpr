@@ -1,0 +1,129 @@
+// ============================================
+// Tulpar Wings - Full CRUD API Example
+// Run with: tulpar api_wings_crud.tpr
+// ============================================
+import "wings";
+
+// ============================================
+// In-memory Database
+// ============================================
+array _users = [];
+int _next_id = 1;
+
+// Seed initial data
+func seed_data() {
+    push(_users, {"id": 1, "name": "Hamza", "email": "hamza@tulpar.dev", "role": "admin"});
+    push(_users, {"id": 2, "name": "Ali", "email": "ali@tulpar.dev", "role": "user"});
+    push(_users, {"id": 3, "name": "Veli", "email": "veli@tulpar.dev", "role": "user"});
+    _next_id = 4;
+}
+
+seed_data();
+
+// ============================================
+// API Handlers
+// ============================================
+
+// GET / - API info
+func api_info() {
+    return {
+        "name": "Tulpar Wings CRUD API",
+        "version": "1.0.0",
+        "endpoints": [
+            "GET  /           - API info",
+            "GET  /health     - Health check",
+            "GET  /users      - List all users",
+            "GET  /stats      - API statistics",
+            "POST /users      - Create user (body: JSON)",
+            "POST /echo       - Echo request body"
+        ]
+    };
+}
+
+// GET /health - Health check
+func health_check() {
+    return {
+        "status": "healthy",
+        "uptime_ms": clock_ms(),
+        "users_count": length(_users)
+    };
+}
+
+// GET /users - List all users
+func list_users() {
+    return {
+        "success": true,
+        "data": _users,
+        "count": length(_users)
+    };
+}
+
+// GET /stats - API statistics
+func get_stats() {
+    return {
+        "total_users": length(_users),
+        "next_id": _next_id,
+        "api_version": "1.0.0",
+        "uptime_ms": clock_ms()
+    };
+}
+
+// POST /users - Create a new user
+func create_user() {
+    str body = _request["body"];
+    json new_user = {
+        "id": _next_id,
+        "name": "NewUser",
+        "email": "new@tulpar.dev",
+        "role": "user"
+    };
+
+    // Try to parse body if available
+    if (length(body) > 0) {
+        json parsed = fromJson(body);
+        if (parsed["name"]) {
+            new_user["name"] = parsed["name"];
+        }
+        if (parsed["email"]) {
+            new_user["email"] = parsed["email"];
+        }
+        if (parsed["role"]) {
+            new_user["role"] = parsed["role"];
+        }
+    }
+
+    push(_users, new_user);
+    _next_id = _next_id + 1;
+
+    return {
+        "success": true,
+        "message": "User created",
+        "data": new_user
+    };
+}
+
+// POST /echo - Echo back request data
+func echo_handler() {
+    return {
+        "method": _request["method"],
+        "path": _request["path"],
+        "body": _request["body"],
+        "echo": true
+    };
+}
+
+// ============================================
+// Route Registration
+// ============================================
+get("/", "api_info");
+get("/health", "health_check");
+get("/users", "list_users");
+get("/stats", "get_stats");
+post("/users", "create_user");
+post("/echo", "echo_handler");
+
+// ============================================
+// Start Server
+// ============================================
+print("Seed data loaded: " + toString(length(_users)) + " users");
+listen(3000);

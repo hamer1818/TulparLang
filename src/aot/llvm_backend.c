@@ -1,10 +1,8 @@
 // Tulpar LLVM Backend - Implementation
 // Phase 3 Fix: Printf types
 
-#define _CRT_SECURE_NO_WARNINGS
-#define _CRT_NONSTDC_NO_DEPRECATE
-
 #include "llvm_backend.h"
+#include "../embedded_libs.h" // Embedded libraries
 #include "../lexer/lexer.h"
 #include "../parser/parser.h"
 #include "llvm_types.h"
@@ -104,20 +102,18 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_vm_allocate_array = LLVMAddFunction(
       backend->module, "vm_allocate_array_aot_wrapper", alloc_arr_type);
 
-  // vm_array_push(VM*, ObjArray*, VMValue)
+  // vm_array_push_ptr(VM*, ObjArray*, VMValue*)
   LLVMTypeRef push_params[] = {backend->ptr_type, backend->ptr_type,
-                               backend->vm_value_type};
-  // vm_array_push (void return in stub/wrapper) - wait, wrapper is
-  // vm_array_push_wrapper Wrapper signature: void(VM*, ObjArray*, VMValue)
+                               backend->ptr_type};
   LLVMTypeRef push_type =
       LLVMFunctionType(backend->void_type, push_params, 3, 0);
-  backend->func_vm_array_push =
-      LLVMAddFunction(backend->module, "vm_array_push_aot_wrapper", push_type);
+  backend->func_vm_array_push = LLVMAddFunction(
+      backend->module, "vm_array_push_aot_ptr_wrapper", push_type);
 
   // vm_array_get(ObjArray*, int) -> VMValue
   LLVMTypeRef get_params[] = {backend->ptr_type, backend->int32_type};
   LLVMTypeRef get_type =
-      LLVMFunctionType(backend->vm_value_type, get_params, 2, 0);
+      LLVMFunctionType(backend->ret_pair_type, get_params, 2, 0);
   backend->func_vm_array_get =
       LLVMAddFunction(backend->module, "vm_array_get", get_type);
 
@@ -137,19 +133,19 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_vm_allocate_object = LLVMAddFunction(
       backend->module, "vm_allocate_object_aot_wrapper", alloc_obj_type);
 
-  // vm_object_set(VM*, ObjObject*, char*, VMValue)
+  // vm_object_set_ptr(VM*, ObjObject*, char*, VMValue*)
   LLVMTypeRef obj_set_params[] = {backend->ptr_type, backend->ptr_type,
-                                  backend->ptr_type, backend->vm_value_type};
+                                  backend->ptr_type, backend->ptr_type};
   LLVMTypeRef obj_set_type =
       LLVMFunctionType(backend->void_type, obj_set_params, 4, 0);
   backend->func_vm_object_set = LLVMAddFunction(
-      backend->module, "vm_object_set_aot_wrapper", obj_set_type);
+      backend->module, "vm_object_set_aot_ptr_wrapper", obj_set_type);
 
   // vm_get_element_ptr(VMValue*, VMValue*) -> VMValue (pointer-based for ABI
   // compatibility)
   LLVMTypeRef get_el_params[] = {backend->ptr_type, backend->ptr_type};
   LLVMTypeRef get_el_type =
-      LLVMFunctionType(backend->vm_value_type, get_el_params, 2, 0);
+      LLVMFunctionType(backend->ret_pair_type, get_el_params, 2, 0);
   backend->func_vm_get_element =
       LLVMAddFunction(backend->module, "vm_get_element_ptr", get_el_type);
 
@@ -164,38 +160,44 @@ void declare_runtime_functions(LLVMBackend *backend) {
 
   // ====== AOT Builtin Functions ======
 
-  // aot_to_string(VMValue) -> char*
-  LLVMTypeRef to_str_params[] = {backend->vm_value_type};
+  // aot_to_string_ptr(VMValue*) -> VMValue
+  LLVMTypeRef to_str_params[] = {backend->ptr_type};
   LLVMTypeRef to_str_type =
-      LLVMFunctionType(backend->vm_value_type, to_str_params, 1, 0);
+      LLVMFunctionType(backend->ret_pair_type, to_str_params, 1, 0);
   backend->func_aot_to_string =
-      LLVMAddFunction(backend->module, "aot_to_string", to_str_type);
+      LLVMAddFunction(backend->module, "aot_to_string_ptr", to_str_type);
 
-  // aot_to_int(VMValue) -> int64
-  LLVMTypeRef to_int_params[] = {backend->vm_value_type};
+  // aot_runtime_init() -> void
+  LLVMTypeRef rt_init_type = LLVMFunctionType(backend->void_type, NULL, 0, 0);
+  backend->func_aot_runtime_init =
+      LLVMAddFunction(backend->module, "aot_runtime_init", rt_init_type);
+
+  // aot_to_int_ptr(VMValue*) -> int64
+  LLVMTypeRef to_int_params[] = {backend->ptr_type};
   LLVMTypeRef to_int_type =
       LLVMFunctionType(backend->int_type, to_int_params, 1, 0);
   backend->func_aot_to_int =
-      LLVMAddFunction(backend->module, "aot_to_int", to_int_type);
+      LLVMAddFunction(backend->module, "aot_to_int_ptr", to_int_type);
 
-  // aot_to_json(VMValue) -> VMValue
-  LLVMTypeRef to_json_params[] = {backend->vm_value_type};
+  // aot_to_json_ptr(VMValue*) -> VMValue
+  LLVMTypeRef to_json_params[] = {backend->ptr_type};
   LLVMTypeRef to_json_type =
-      LLVMFunctionType(backend->vm_value_type, to_json_params, 1, 0);
+      LLVMFunctionType(backend->ret_pair_type, to_json_params, 1, 0);
   backend->func_aot_to_json =
-      LLVMAddFunction(backend->module, "aot_to_json", to_json_type);
+      LLVMAddFunction(backend->module, "aot_to_json_ptr", to_json_type);
 
-  // aot_to_float(VMValue) -> double
-  LLVMTypeRef to_float_params[] = {backend->vm_value_type};
+  // aot_to_float_ptr(VMValue*) -> double
+  LLVMTypeRef to_float_params[] = {backend->ptr_type};
   LLVMTypeRef to_float_type =
       LLVMFunctionType(backend->float_type, to_float_params, 1, 0);
   backend->func_aot_to_float =
-      LLVMAddFunction(backend->module, "aot_to_float", to_float_type);
+      LLVMAddFunction(backend->module, "aot_to_float_ptr", to_float_type);
 
-  // aot_len(VMValue) -> int64
-  LLVMTypeRef len_params[] = {backend->vm_value_type};
+  // aot_len_ptr(VMValue*) -> int64
+  LLVMTypeRef len_params[] = {backend->ptr_type};
   LLVMTypeRef len_type = LLVMFunctionType(backend->int_type, len_params, 1, 0);
-  backend->func_aot_len = LLVMAddFunction(backend->module, "aot_len", len_type);
+  backend->func_aot_len =
+      LLVMAddFunction(backend->module, "aot_len_ptr", len_type);
 
   // aot_array_push(VMValue*, VMValue*) -> void (pointer ABI)
   LLVMTypeRef push_aot_params[] = {backend->ptr_type, backend->ptr_type};
@@ -207,7 +209,7 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // aot_array_pop(VMValue) -> VMValue
   LLVMTypeRef pop_params[] = {backend->vm_value_type};
   LLVMTypeRef pop_type =
-      LLVMFunctionType(backend->vm_value_type, pop_params, 1, 0);
+      LLVMFunctionType(backend->ret_pair_type, pop_params, 1, 0);
   backend->func_aot_array_pop =
       LLVMAddFunction(backend->module, "aot_array_pop", pop_type);
 
@@ -215,7 +217,7 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // aot_array_get_fast(VMValue arr, i64 index) -> VMValue
   LLVMTypeRef get_fast_params[] = {backend->vm_value_type, backend->int_type};
   LLVMTypeRef get_fast_type =
-      LLVMFunctionType(backend->vm_value_type, get_fast_params, 2, 0);
+      LLVMFunctionType(backend->ret_pair_type, get_fast_params, 2, 0);
   backend->func_aot_array_get_fast =
       LLVMAddFunction(backend->module, "aot_array_get_fast", get_fast_type);
 
@@ -238,7 +240,7 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // aot_array_get_raw_fast(ObjArray* arr, i64 index) -> VMValue
   LLVMTypeRef get_raw_fast_params[] = {backend->ptr_type, backend->int_type};
   LLVMTypeRef get_raw_fast_type =
-      LLVMFunctionType(backend->vm_value_type, get_raw_fast_params, 2, 0);
+      LLVMFunctionType(backend->ret_pair_type, get_raw_fast_params, 2, 0);
   backend->func_aot_array_get_raw_fast = LLVMAddFunction(
       backend->module, "aot_array_get_raw_fast", get_raw_fast_type);
 
@@ -251,53 +253,53 @@ void declare_runtime_functions(LLVMBackend *backend) {
       backend->module, "aot_array_set_raw_fast", set_raw_fast_type);
 
   // aot_input() -> VMValue
-  LLVMTypeRef input_type = LLVMFunctionType(backend->vm_value_type, NULL, 0, 0);
+  LLVMTypeRef input_type = LLVMFunctionType(backend->ret_pair_type, NULL, 0, 0);
   backend->func_aot_input =
       LLVMAddFunction(backend->module, "aot_input", input_type);
 
-  // aot_trim(VMValue) -> VMValue
-  LLVMTypeRef trim_params[] = {backend->vm_value_type};
+  // aot_trim_ptr(VMValue*) -> VMValue
+  LLVMTypeRef trim_params[] = {backend->ptr_type};
   LLVMTypeRef trim_type =
-      LLVMFunctionType(backend->vm_value_type, trim_params, 1, 0);
+      LLVMFunctionType(backend->ret_pair_type, trim_params, 1, 0);
   backend->func_aot_trim =
-      LLVMAddFunction(backend->module, "aot_trim", trim_type);
+      LLVMAddFunction(backend->module, "aot_trim_ptr", trim_type);
 
-  // aot_replace(VMValue, VMValue, VMValue) -> VMValue
-  LLVMTypeRef replace_params[] = {
-      backend->vm_value_type, backend->vm_value_type, backend->vm_value_type};
+  // aot_replace_ptr(VMValue*, VMValue*, VMValue*) -> VMValue
+  LLVMTypeRef replace_params[] = {backend->ptr_type, backend->ptr_type,
+                                  backend->ptr_type};
   LLVMTypeRef replace_type =
-      LLVMFunctionType(backend->vm_value_type, replace_params, 3, 0);
+      LLVMFunctionType(backend->ret_pair_type, replace_params, 3, 0);
   backend->func_aot_replace =
-      LLVMAddFunction(backend->module, "aot_replace", replace_type);
+      LLVMAddFunction(backend->module, "aot_replace_ptr", replace_type);
 
-  // aot_split(VMValue, VMValue) -> VMValue
-  LLVMTypeRef split_params[] = {backend->vm_value_type, backend->vm_value_type};
+  // aot_split_ptr(VMValue*, VMValue*) -> VMValue
+  LLVMTypeRef split_params[] = {backend->ptr_type, backend->ptr_type};
   LLVMTypeRef split_type =
-      LLVMFunctionType(backend->vm_value_type, split_params, 2, 0);
+      LLVMFunctionType(backend->ret_pair_type, split_params, 2, 0);
   backend->func_aot_split =
-      LLVMAddFunction(backend->module, "aot_split", split_type);
+      LLVMAddFunction(backend->module, "aot_split_ptr", split_type);
 
   // File I/O Functions
   // aot_read_file(path) -> VMValue
-  LLVMTypeRef read_params[] = {backend->vm_value_type};
+  LLVMTypeRef read_params[] = {backend->ptr_type};
   LLVMTypeRef read_type =
-      LLVMFunctionType(backend->vm_value_type, read_params, 1, 0);
+      LLVMFunctionType(backend->ret_pair_type, read_params, 1, 0);
   backend->func_aot_read_file =
-      LLVMAddFunction(backend->module, "aot_read_file", read_type);
+      LLVMAddFunction(backend->module, "aot_read_file_ptr", read_type);
 
   // aot_write_file(path, content) -> VMValue
-  LLVMTypeRef write_params[] = {backend->vm_value_type, backend->vm_value_type};
+  LLVMTypeRef write_params[] = {backend->ptr_type, backend->ptr_type};
   LLVMTypeRef write_type =
-      LLVMFunctionType(backend->vm_value_type, write_params, 2, 0);
+      LLVMFunctionType(backend->ret_pair_type, write_params, 2, 0);
   backend->func_aot_write_file =
-      LLVMAddFunction(backend->module, "aot_write_file", write_type);
+      LLVMAddFunction(backend->module, "aot_write_file_ptr", write_type);
 
   // aot_append_file(path, content) -> VMValue
   backend->func_aot_append_file =
-      LLVMAddFunction(backend->module, "aot_append_file", write_type);
+      LLVMAddFunction(backend->module, "aot_append_file_ptr", write_type);
 
   backend->func_aot_file_exists =
-      LLVMAddFunction(backend->module, "aot_file_exists", read_type);
+      LLVMAddFunction(backend->module, "aot_file_exists_ptr", read_type);
 
   // Exception Handling Functions
   // aot_try_push() -> jmp_buf* (ptr)
@@ -310,16 +312,16 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_try_pop =
       LLVMAddFunction(backend->module, "aot_try_pop", try_pop_type);
 
-  // aot_throw(VMValue) -> void (noreturn)
-  LLVMTypeRef throw_params[] = {backend->vm_value_type};
+  // aot_throw_ptr(VMValue*) -> void (noreturn)
+  LLVMTypeRef throw_params[] = {backend->ptr_type};
   LLVMTypeRef throw_type =
       LLVMFunctionType(backend->void_type, throw_params, 1, 0);
   backend->func_aot_throw =
-      LLVMAddFunction(backend->module, "aot_throw", throw_type);
+      LLVMAddFunction(backend->module, "aot_throw_ptr", throw_type);
 
   // aot_get_exception() -> VMValue
   LLVMTypeRef get_exc_type =
-      LLVMFunctionType(backend->vm_value_type, NULL, 0, 0);
+      LLVMFunctionType(backend->ret_pair_type, NULL, 0, 0);
   backend->func_aot_get_exception =
       LLVMAddFunction(backend->module, "aot_get_exception", get_exc_type);
 
@@ -329,9 +331,14 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMFunctionType(backend->int32_type, setjmp_params, 1, 0);
   backend->func_setjmp =
       LLVMAddFunction(backend->module, "setjmp", setjmp_type);
+  LLVMAddAttributeAtIndex(
+      backend->func_setjmp, LLVMAttributeFunctionIndex,
+      LLVMCreateEnumAttribute(
+          backend->context,
+          LLVMGetEnumAttributeKindForName("returns_twice", 13), 0));
 
   // aot_clock_ms() -> VMValue (float ms)
-  LLVMTypeRef clock_type = LLVMFunctionType(backend->vm_value_type, NULL, 0, 0);
+  LLVMTypeRef clock_type = LLVMFunctionType(backend->ret_pair_type, NULL, 0, 0);
   backend->func_aot_clock_ms =
       LLVMAddFunction(backend->module, "aot_clock_ms", clock_type);
 
@@ -340,7 +347,7 @@ void declare_runtime_functions(LLVMBackend *backend) {
   LLVMTypeRef sock_server_params[] = {backend->vm_value_type,
                                       backend->vm_value_type};
   LLVMTypeRef sock_server_type =
-      LLVMFunctionType(backend->vm_value_type, sock_server_params, 2, 0);
+      LLVMFunctionType(backend->ret_pair_type, sock_server_params, 2, 0);
   backend->func_aot_socket_server =
       LLVMAddFunction(backend->module, "aot_socket_server", sock_server_type);
 
@@ -351,7 +358,7 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // aot_socket_accept(server_fd) -> int (client_fd)
   LLVMTypeRef sock_accept_params[] = {backend->vm_value_type};
   LLVMTypeRef sock_accept_type =
-      LLVMFunctionType(backend->vm_value_type, sock_accept_params, 1, 0);
+      LLVMFunctionType(backend->ret_pair_type, sock_accept_params, 1, 0);
   backend->func_aot_socket_accept =
       LLVMAddFunction(backend->module, "aot_socket_accept", sock_accept_type);
 
@@ -359,7 +366,7 @@ void declare_runtime_functions(LLVMBackend *backend) {
   LLVMTypeRef sock_send_params[] = {backend->vm_value_type,
                                     backend->vm_value_type};
   LLVMTypeRef sock_send_type =
-      LLVMFunctionType(backend->vm_value_type, sock_send_params, 2, 0);
+      LLVMFunctionType(backend->ret_pair_type, sock_send_params, 2, 0);
   backend->func_aot_socket_send =
       LLVMAddFunction(backend->module, "aot_socket_send", sock_send_type);
 
@@ -375,14 +382,21 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_socket_close =
       LLVMAddFunction(backend->module, "aot_socket_close", sock_close_type);
 
+  // aot_call_dynamic(handler_name) -> VMValue
+  // Param is VMValue (string)
+  LLVMTypeRef call_dyn_params[] = {backend->vm_value_type};
+  LLVMTypeRef call_dyn_type =
+      LLVMFunctionType(backend->ret_pair_type, call_dyn_params, 1, 0);
+  backend->func_aot_call_dynamic =
+      LLVMAddFunction(backend->module, "aot_call_dynamic", call_dyn_type);
+
   // ====== Fast String Operations ======
-  // aot_string_concat_fast(VMValue, VMValue) -> VMValue
-  LLVMTypeRef str_concat_params[] = {backend->vm_value_type,
-                                     backend->vm_value_type};
+  // aot_string_concat_fast_ptr(VMValue*, VMValue*) -> VMValue
+  LLVMTypeRef str_concat_params[] = {backend->ptr_type, backend->ptr_type};
   LLVMTypeRef str_concat_type =
-      LLVMFunctionType(backend->vm_value_type, str_concat_params, 2, 0);
+      LLVMFunctionType(backend->ret_pair_type, str_concat_params, 2, 0);
   backend->func_aot_string_concat_fast = LLVMAddFunction(
-      backend->module, "aot_string_concat_fast", str_concat_type);
+      backend->module, "aot_string_concat_fast_ptr", str_concat_type);
 
   // ====== StringBuilder Functions ======
   // aot_stringbuilder_new(int capacity) -> ptr
@@ -402,7 +416,7 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // aot_stringbuilder_to_string(ptr) -> VMValue
   LLVMTypeRef sb_tostring_params[] = {backend->ptr_type};
   LLVMTypeRef sb_tostring_type =
-      LLVMFunctionType(backend->vm_value_type, sb_tostring_params, 1, 0);
+      LLVMFunctionType(backend->ret_pair_type, sb_tostring_params, 1, 0);
   backend->func_aot_stringbuilder_to_string = LLVMAddFunction(
       backend->module, "aot_stringbuilder_to_string", sb_tostring_type);
 
@@ -418,7 +432,7 @@ void declare_runtime_functions(LLVMBackend *backend) {
   LLVMTypeRef thread_create_params[] = {backend->ptr_type,
                                         backend->vm_value_type};
   LLVMTypeRef thread_create_type =
-      LLVMFunctionType(backend->vm_value_type, thread_create_params, 2, 0);
+      LLVMFunctionType(backend->ret_pair_type, thread_create_params, 2, 0);
   backend->func_aot_thread_create =
       LLVMAddFunction(backend->module, "aot_thread_create", thread_create_type);
 
@@ -435,7 +449,7 @@ void declare_runtime_functions(LLVMBackend *backend) {
 
   // aot_mutex_create() -> VMValue (mutex_ptr)
   LLVMTypeRef mutex_create_type =
-      LLVMFunctionType(backend->vm_value_type, NULL, 0, 0);
+      LLVMFunctionType(backend->ret_pair_type, NULL, 0, 0);
   backend->func_aot_mutex_create =
       LLVMAddFunction(backend->module, "aot_mutex_create", mutex_create_type);
 
@@ -458,7 +472,7 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // aot_http_parse_request(raw) -> VMValue (object)
   LLVMTypeRef http_parse_params[] = {backend->vm_value_type};
   LLVMTypeRef http_parse_type =
-      LLVMFunctionType(backend->vm_value_type, http_parse_params, 1, 0);
+      LLVMFunctionType(backend->ret_pair_type, http_parse_params, 1, 0);
   backend->func_aot_http_parse_request = LLVMAddFunction(
       backend->module, "aot_http_parse_request", http_parse_type);
 
@@ -466,7 +480,7 @@ void declare_runtime_functions(LLVMBackend *backend) {
   LLVMTypeRef http_response_params[] = {
       backend->vm_value_type, backend->vm_value_type, backend->vm_value_type};
   LLVMTypeRef http_response_type =
-      LLVMFunctionType(backend->vm_value_type, http_response_params, 3, 0);
+      LLVMFunctionType(backend->ret_pair_type, http_response_params, 3, 0);
   backend->func_aot_http_create_response = LLVMAddFunction(
       backend->module, "aot_http_create_response", http_response_type);
 
@@ -482,142 +496,142 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMAddFunction(backend->module, "aot_math_abs", math1_ptr_type);
 
   // Single param math (Standard): sqrt, floor, ceil, ...
-  LLVMTypeRef math1_params[] = {backend->vm_value_type};
+  LLVMTypeRef math1_params[] = {backend->ptr_type};
   LLVMTypeRef math1_type =
-      LLVMFunctionType(backend->vm_value_type, math1_params, 1, 0);
+      LLVMFunctionType(backend->ret_pair_type, math1_params, 1, 0);
 
   // backend->func_aot_math_abs = ... (Removed from here)
   backend->func_aot_math_sqrt =
-      LLVMAddFunction(backend->module, "aot_math_sqrt", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_sqrt_ptr", math1_type);
   backend->func_aot_math_floor =
-      LLVMAddFunction(backend->module, "aot_math_floor", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_floor_ptr", math1_type);
   backend->func_aot_math_ceil =
-      LLVMAddFunction(backend->module, "aot_math_ceil", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_ceil_ptr", math1_type);
   backend->func_aot_math_round =
-      LLVMAddFunction(backend->module, "aot_math_round", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_round_ptr", math1_type);
   backend->func_aot_math_sin =
-      LLVMAddFunction(backend->module, "aot_math_sin", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_sin_ptr", math1_type);
   backend->func_aot_math_cos =
-      LLVMAddFunction(backend->module, "aot_math_cos", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_cos_ptr", math1_type);
   backend->func_aot_math_tan =
-      LLVMAddFunction(backend->module, "aot_math_tan", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_tan_ptr", math1_type);
   backend->func_aot_math_asin =
-      LLVMAddFunction(backend->module, "aot_math_asin", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_asin_ptr", math1_type);
   backend->func_aot_math_acos =
-      LLVMAddFunction(backend->module, "aot_math_acos", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_acos_ptr", math1_type);
   backend->func_aot_math_atan =
-      LLVMAddFunction(backend->module, "aot_math_atan", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_atan_ptr", math1_type);
   backend->func_aot_math_exp =
-      LLVMAddFunction(backend->module, "aot_math_exp", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_exp_ptr", math1_type);
   backend->func_aot_math_log =
-      LLVMAddFunction(backend->module, "aot_math_log", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_log_ptr", math1_type);
   backend->func_aot_math_log10 =
-      LLVMAddFunction(backend->module, "aot_math_log10", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_log10_ptr", math1_type);
   backend->func_aot_math_log2 =
-      LLVMAddFunction(backend->module, "aot_math_log2", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_log2_ptr", math1_type);
   backend->func_aot_math_sinh =
-      LLVMAddFunction(backend->module, "aot_math_sinh", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_sinh_ptr", math1_type);
   backend->func_aot_math_cosh =
-      LLVMAddFunction(backend->module, "aot_math_cosh", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_cosh_ptr", math1_type);
   backend->func_aot_math_tanh =
-      LLVMAddFunction(backend->module, "aot_math_tanh", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_tanh_ptr", math1_type);
   backend->func_aot_math_cbrt =
-      LLVMAddFunction(backend->module, "aot_math_cbrt", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_cbrt_ptr", math1_type);
   backend->func_aot_math_trunc =
-      LLVMAddFunction(backend->module, "aot_math_trunc", math1_type);
+      LLVMAddFunction(backend->module, "aot_math_trunc_ptr", math1_type);
 
   // Two param math: pow, atan2, hypot, fmod, min, max, randint
-  LLVMTypeRef math2_params[] = {backend->vm_value_type, backend->vm_value_type};
+  LLVMTypeRef math2_params[] = {backend->ptr_type, backend->ptr_type};
   LLVMTypeRef math2_type =
-      LLVMFunctionType(backend->vm_value_type, math2_params, 2, 0);
+      LLVMFunctionType(backend->ret_pair_type, math2_params, 2, 0);
 
   backend->func_aot_math_pow =
-      LLVMAddFunction(backend->module, "aot_math_pow", math2_type);
+      LLVMAddFunction(backend->module, "aot_math_pow_ptr", math2_type);
   backend->func_aot_math_atan2 =
-      LLVMAddFunction(backend->module, "aot_math_atan2", math2_type);
+      LLVMAddFunction(backend->module, "aot_math_atan2_ptr", math2_type);
   backend->func_aot_math_hypot =
-      LLVMAddFunction(backend->module, "aot_math_hypot", math2_type);
+      LLVMAddFunction(backend->module, "aot_math_hypot_ptr", math2_type);
   backend->func_aot_math_fmod =
-      LLVMAddFunction(backend->module, "aot_math_fmod", math2_type);
+      LLVMAddFunction(backend->module, "aot_math_fmod_ptr", math2_type);
   backend->func_aot_math_min =
-      LLVMAddFunction(backend->module, "aot_math_min", math2_type);
+      LLVMAddFunction(backend->module, "aot_math_min_ptr", math2_type);
   backend->func_aot_math_max =
-      LLVMAddFunction(backend->module, "aot_math_max", math2_type);
+      LLVMAddFunction(backend->module, "aot_math_max_ptr", math2_type);
   backend->func_aot_math_randint =
-      LLVMAddFunction(backend->module, "aot_math_randint", math2_type);
+      LLVMAddFunction(backend->module, "aot_math_randint_ptr", math2_type);
 
   // No param math: random
-  LLVMTypeRef math0_type = LLVMFunctionType(backend->vm_value_type, NULL, 0, 0);
+  LLVMTypeRef math0_type = LLVMFunctionType(backend->ret_pair_type, NULL, 0, 0);
   backend->func_aot_math_random =
       LLVMAddFunction(backend->module, "aot_math_random", math0_type);
 
   // ====== String Functions ======
   // Single param: upper, lower, reverse, isEmpty, capitalize, isDigit, isAlpha
-  LLVMTypeRef str1_params[] = {backend->vm_value_type};
+  LLVMTypeRef str1_params[] = {backend->ptr_type};
   LLVMTypeRef str1_type =
-      LLVMFunctionType(backend->vm_value_type, str1_params, 1, 0);
+      LLVMFunctionType(backend->ret_pair_type, str1_params, 1, 0);
 
   backend->func_aot_string_upper =
-      LLVMAddFunction(backend->module, "aot_string_upper", str1_type);
+      LLVMAddFunction(backend->module, "aot_string_upper_ptr", str1_type);
   backend->func_aot_string_lower =
-      LLVMAddFunction(backend->module, "aot_string_lower", str1_type);
+      LLVMAddFunction(backend->module, "aot_string_lower_ptr", str1_type);
   backend->func_aot_string_reverse =
-      LLVMAddFunction(backend->module, "aot_string_reverse", str1_type);
+      LLVMAddFunction(backend->module, "aot_string_reverse_ptr", str1_type);
   backend->func_aot_string_is_empty =
-      LLVMAddFunction(backend->module, "aot_string_is_empty", str1_type);
+      LLVMAddFunction(backend->module, "aot_string_is_empty_ptr", str1_type);
   backend->func_aot_string_capitalize =
-      LLVMAddFunction(backend->module, "aot_string_capitalize", str1_type);
+      LLVMAddFunction(backend->module, "aot_string_capitalize_ptr", str1_type);
   backend->func_aot_string_is_digit =
-      LLVMAddFunction(backend->module, "aot_string_is_digit", str1_type);
+      LLVMAddFunction(backend->module, "aot_string_is_digit_ptr", str1_type);
   backend->func_aot_string_is_alpha =
-      LLVMAddFunction(backend->module, "aot_string_is_alpha", str1_type);
+      LLVMAddFunction(backend->module, "aot_string_is_alpha_ptr", str1_type);
 
   // Two param: contains, startsWith, endsWith, indexOf, repeat, count, join
-  LLVMTypeRef str2_params[] = {backend->vm_value_type, backend->vm_value_type};
+  LLVMTypeRef str2_params[] = {backend->ptr_type, backend->ptr_type};
   LLVMTypeRef str2_type =
-      LLVMFunctionType(backend->vm_value_type, str2_params, 2, 0);
+      LLVMFunctionType(backend->ret_pair_type, str2_params, 2, 0);
 
   backend->func_aot_string_contains =
-      LLVMAddFunction(backend->module, "aot_string_contains", str2_type);
+      LLVMAddFunction(backend->module, "aot_string_contains_ptr", str2_type);
   backend->func_aot_string_starts_with =
-      LLVMAddFunction(backend->module, "aot_string_starts_with", str2_type);
+      LLVMAddFunction(backend->module, "aot_string_starts_with_ptr", str2_type);
   backend->func_aot_string_ends_with =
-      LLVMAddFunction(backend->module, "aot_string_ends_with", str2_type);
+      LLVMAddFunction(backend->module, "aot_string_ends_with_ptr", str2_type);
   backend->func_aot_string_index_of =
-      LLVMAddFunction(backend->module, "aot_string_index_of", str2_type);
+      LLVMAddFunction(backend->module, "aot_string_index_of_ptr", str2_type);
   backend->func_aot_string_repeat =
-      LLVMAddFunction(backend->module, "aot_string_repeat", str2_type);
+      LLVMAddFunction(backend->module, "aot_string_repeat_ptr", str2_type);
   backend->func_aot_string_count =
-      LLVMAddFunction(backend->module, "aot_string_count", str2_type);
+      LLVMAddFunction(backend->module, "aot_string_count_ptr", str2_type);
   backend->func_aot_string_join =
-      LLVMAddFunction(backend->module, "aot_string_join", str2_type);
+      LLVMAddFunction(backend->module, "aot_string_join_ptr", str2_type);
 
   // Three param: substring(str, start, end)
-  LLVMTypeRef str3_params[] = {backend->vm_value_type, backend->vm_value_type,
-                               backend->vm_value_type};
+  LLVMTypeRef str3_params[] = {backend->ptr_type, backend->ptr_type,
+                               backend->ptr_type};
   LLVMTypeRef str3_type =
-      LLVMFunctionType(backend->vm_value_type, str3_params, 3, 0);
+      LLVMFunctionType(backend->ret_pair_type, str3_params, 3, 0);
   backend->func_aot_string_substring =
-      LLVMAddFunction(backend->module, "aot_string_substring", str3_type);
+      LLVMAddFunction(backend->module, "aot_string_substring_ptr", str3_type);
 
   // ====== Time Functions ======
-  LLVMTypeRef time0_type = LLVMFunctionType(backend->vm_value_type, NULL, 0, 0);
+  LLVMTypeRef time0_type = LLVMFunctionType(backend->ret_pair_type, NULL, 0, 0);
   backend->func_aot_timestamp =
       LLVMAddFunction(backend->module, "aot_timestamp", time0_type);
   backend->func_aot_time_ms =
       LLVMAddFunction(backend->module, "aot_time_ms", time0_type);
 
-  LLVMTypeRef sleep_params[] = {backend->vm_value_type};
+  LLVMTypeRef sleep_params[] = {backend->ptr_type};
   LLVMTypeRef sleep_type =
       LLVMFunctionType(backend->void_type, sleep_params, 1, 0);
   backend->func_aot_sleep =
-      LLVMAddFunction(backend->module, "aot_sleep", sleep_type);
+      LLVMAddFunction(backend->module, "aot_sleep_ptr", sleep_type);
 
   // ====== JSON Functions ======
   // aot_from_json(str) -> VMValue
   LLVMTypeRef from_json_params[] = {backend->vm_value_type};
   LLVMTypeRef from_json_type =
-      LLVMFunctionType(backend->vm_value_type, from_json_params, 1, 0);
+      LLVMFunctionType(backend->ret_pair_type, from_json_params, 1, 0);
   backend->func_aot_from_json =
       LLVMAddFunction(backend->module, "aot_from_json", from_json_type);
 
@@ -626,7 +640,7 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // aot_input_float(prompt) -> VMValue
   LLVMTypeRef input_prompt_params[] = {backend->vm_value_type};
   LLVMTypeRef input_prompt_type =
-      LLVMFunctionType(backend->vm_value_type, input_prompt_params, 1, 0);
+      LLVMFunctionType(backend->ret_pair_type, input_prompt_params, 1, 0);
   backend->func_aot_input_int =
       LLVMAddFunction(backend->module, "aot_input_int", input_prompt_type);
   backend->func_aot_input_float =
@@ -636,36 +650,35 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // aot_range(end) -> VMValue (array)
   LLVMTypeRef range_params[] = {backend->vm_value_type};
   LLVMTypeRef range_type =
-      LLVMFunctionType(backend->vm_value_type, range_params, 1, 0);
+      LLVMFunctionType(backend->ret_pair_type, range_params, 1, 0);
   backend->func_aot_range =
       LLVMAddFunction(backend->module, "aot_range", range_type);
 
   // ====== SQLite Database Functions ======
-  // aot_db_open(path) -> int64 (db handle)
-  LLVMTypeRef db_open_params[] = {backend->vm_value_type};
+  // aot_db_open_ptr(path) -> int64 (db handle)
+  LLVMTypeRef db_open_params[] = {backend->ptr_type};
   LLVMTypeRef db_open_type =
-      LLVMFunctionType(backend->vm_value_type, db_open_params, 1, 0);
+      LLVMFunctionType(backend->ret_pair_type, db_open_params, 1, 0);
   backend->func_aot_db_open =
-      LLVMAddFunction(backend->module, "aot_db_open", db_open_type);
+      LLVMAddFunction(backend->module, "aot_db_open_ptr", db_open_type);
 
-  // aot_db_close(db) -> void
-  LLVMTypeRef db_close_params[] = {backend->vm_value_type};
+  // aot_db_close_ptr(db) -> void
+  LLVMTypeRef db_close_params[] = {backend->ptr_type};
   LLVMTypeRef db_close_type =
       LLVMFunctionType(backend->void_type, db_close_params, 1, 0);
   backend->func_aot_db_close =
-      LLVMAddFunction(backend->module, "aot_db_close", db_close_type);
+      LLVMAddFunction(backend->module, "aot_db_close_ptr", db_close_type);
 
-  // aot_db_execute(db, sql) -> bool
-  LLVMTypeRef db_exec_params[] = {backend->vm_value_type,
-                                  backend->vm_value_type};
+  // aot_db_execute_ptr(db, sql) -> bool
+  LLVMTypeRef db_exec_params[] = {backend->ptr_type, backend->ptr_type};
   LLVMTypeRef db_exec_type =
-      LLVMFunctionType(backend->vm_value_type, db_exec_params, 2, 0);
+      LLVMFunctionType(backend->ret_pair_type, db_exec_params, 2, 0);
   backend->func_aot_db_execute =
-      LLVMAddFunction(backend->module, "aot_db_execute", db_exec_type);
+      LLVMAddFunction(backend->module, "aot_db_execute_ptr", db_exec_type);
 
-  // aot_db_query(db, sql) -> array
+  // aot_db_query_ptr(db, sql) -> array
   backend->func_aot_db_query =
-      LLVMAddFunction(backend->module, "aot_db_query", db_exec_type);
+      LLVMAddFunction(backend->module, "aot_db_query_ptr", db_exec_type);
 
   // aot_db_last_insert_id(db) -> int64
   backend->func_aot_db_last_insert_id =
@@ -678,7 +691,7 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // ====== Type Checking Functions ======
   LLVMTypeRef type_check_params[] = {backend->vm_value_type};
   LLVMTypeRef type_check_type =
-      LLVMFunctionType(backend->vm_value_type, type_check_params, 1, 0);
+      LLVMFunctionType(backend->ret_pair_type, type_check_params, 1, 0);
 
   backend->func_aot_typeof =
       LLVMAddFunction(backend->module, "aot_typeof", type_check_type);
@@ -723,7 +736,7 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
   backend->current_scope = NULL;
   backend->function_count = 0;
   backend->imported_count = 0;
-  
+
   // Enable static typing by default for performance
   backend->use_static_typing = 1;
 
@@ -820,6 +833,13 @@ LLVMValueRef get_local(LLVMBackend *backend, const char *name) {
     }
     s = s->parent;
   }
+
+  // Fallback: Check for Global Variable (for imported modules)
+  LLVMValueRef global_var = LLVMGetNamedGlobal(backend->module, name);
+  if (global_var) {
+    return global_var;
+  }
+
   return NULL;
 }
 
@@ -877,7 +897,7 @@ LLVMValueRef box_typed_value(LLVMBackend *backend, TypedValue tv) {
     // Convert i64 to bool VMValue
     LLVMValueRef s = LLVMGetUndef(backend->vm_value_type);
     s = LLVMBuildInsertValue(backend->builder, s,
-                             LLVMConstInt(backend->int32_type, 2, 0), 0, "");
+                             LLVMConstInt(backend->int32_type, 2, 0), 0, "");  // VM_VAL_BOOL = 2
     s = LLVMBuildInsertValue(backend->builder, s, tv.value, 2, "");
     return s;
   }
@@ -937,7 +957,7 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode *node) {
     if (func) {
       LLVMTypeRef func_type = LLVMGlobalGetValueType(func);
       LLVMTypeRef ret_type = LLVMGetReturnType(func_type);
-      
+
       // Check if it's a native function (returns i64 directly)
       if (ret_type == backend->int_type) {
         // Build arguments - convert to i64
@@ -951,21 +971,23 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode *node) {
               args[i] = arg.value;
             } else if (arg.boxed) {
               // Extract int from boxed value
-              args[i] = LLVMBuildExtractValue(backend->builder, arg.boxed, 2, "arg_int");
+              args[i] = LLVMBuildExtractValue(backend->builder, arg.boxed, 2,
+                                              "arg_int");
             } else {
               args[i] = arg.value;
             }
           }
         }
-        
-        result.value = LLVMBuildCall2(backend->builder, func_type, func,
-                                       args, arg_count, "call_native");
+
+        result.value = LLVMBuildCall2(backend->builder, func_type, func, args,
+                                      arg_count, "call_native");
         result.type = INFERRED_INT;
-        if (args) free(args);
+        if (args)
+          free(args);
         return result;
       }
     }
-    
+
     // Fall back to boxed codegen
     result.boxed = codegen_expression(backend, node);
     result.value = result.boxed;
@@ -1104,8 +1126,13 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     if (node->elements) {
       for (int i = 0; i < node->element_count; i++) {
         LLVMValueRef val = codegen_expression(backend, node->elements[i]);
+        LLVMValueRef val_ptr = LLVMBuildAlloca(
+            backend->builder, backend->vm_value_type, "arr_lit_val_ptr");
+        LLVMBuildStore(backend->builder, val, val_ptr);
+        LLVMValueRef val_void = LLVMBuildBitCast(
+            backend->builder, val_ptr, backend->ptr_type, "arr_lit_val_void");
         LLVMValueRef push_args[] = {LLVMConstNull(backend->ptr_type), arr_obj,
-                                    val};
+                                    val_void};
         LLVMBuildCall2(backend->builder,
                        LLVMGlobalGetValueType(backend->func_vm_array_push),
                        backend->func_vm_array_push, push_args, 3, "");
@@ -1130,11 +1157,17 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
 
       LLVMValueRef val = codegen_expression(backend, node->object_values[i]);
 
+      LLVMValueRef val_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "obj_lit_val_ptr");
+      LLVMBuildStore(backend->builder, val, val_ptr);
+      LLVMValueRef val_void = LLVMBuildBitCast(
+          backend->builder, val_ptr, backend->ptr_type, "obj_lit_val_void");
+
       LLVMValueRef set_args[] = {
           LLVMConstPointerNull(backend->ptr_type), // VM*
           obj_ptr,                                 // ObjObject*
           key_global,                              // char* key
-          val                                      // VMValue value
+          val_void                                 // VMValue* value
       };
       LLVMBuildCall2(backend->builder,
                      LLVMGlobalGetValueType(backend->func_vm_object_set),
@@ -1182,10 +1215,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
       LLVMBuildStore(backend->builder, idx_val, index_temp);
 
       LLVMValueRef args[] = {target_temp, index_temp};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_vm_get_element),
-          backend->func_vm_get_element, args, 2, "obj_element");
+      return llvm_call_vmvalue_func(backend, backend->func_vm_get_element, args, 2, "obj_element");
     }
 
     // ============================================================
@@ -1204,9 +1234,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     LLVMBuildStore(backend->builder, idx_val, index_temp);
 
     LLVMValueRef args[] = {target_temp, index_temp};
-    return LLVMBuildCall2(backend->builder,
-                          LLVMGlobalGetValueType(backend->func_vm_get_element),
-                          backend->func_vm_get_element, args, 2, "element");
+    return llvm_call_vmvalue_func(backend, backend->func_vm_get_element, args, 2, "element");
   }
 
   case AST_INCREMENT: {
@@ -1283,9 +1311,27 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     LLVMValueRef R_void =
         LLVMBuildBitCast(backend->builder, R_ptr, backend->ptr_type, "R_void");
 
+    int op_token = node->op;
+    switch (op_token) {
+    case TOKEN_PLUS_EQUAL:
+      op_token = TOKEN_PLUS;
+      break;
+    case TOKEN_MINUS_EQUAL:
+      op_token = TOKEN_MINUS;
+      break;
+    case TOKEN_MULTIPLY_EQUAL:
+      op_token = TOKEN_MULTIPLY;
+      break;
+    case TOKEN_DIVIDE_EQUAL:
+      op_token = TOKEN_DIVIDE;
+      break;
+    default:
+      break;
+    }
+
     LLVMValueRef bin_args[] = {
         LLVMConstPointerNull(backend->ptr_type), L_void, R_void,
-        LLVMConstInt(backend->int32_type, node->op, 0), res_void};
+        LLVMConstInt(backend->int32_type, op_token, 0), res_void};
 
     LLVMBuildCall2(backend->builder, backend->vm_binary_op_type,
                    backend->func_vm_binary_op, bin_args, 5, "");
@@ -1315,29 +1361,39 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     if (!L || !R)
       return llvm_vm_val_int(backend, 0);
 
+    if (node->op == TOKEN_AND || node->op == TOKEN_OR) {
+      LLVMValueRef l_truthy = llvm_build_is_truthy(backend, L);
+      LLVMValueRef r_truthy = llvm_build_is_truthy(backend, R);
+      LLVMValueRef bool_res =
+          (node->op == TOKEN_AND)
+              ? LLVMBuildAnd(backend->builder, l_truthy, r_truthy, "and_bool")
+              : LLVMBuildOr(backend->builder, l_truthy, r_truthy, "or_bool");
+      return llvm_vm_val_bool_val(backend, bool_res);
+    }
+
     // Extract types for fast path checking
     LLVMValueRef l_type =
         LLVMBuildExtractValue(backend->builder, L, 0, "l_type");
     LLVMValueRef r_type =
         LLVMBuildExtractValue(backend->builder, R, 0, "r_type");
 
-    // Check if both are INT (type == 0)
+    // Check if both are INT (type == 1)
     LLVMValueRef l_is_int =
         LLVMBuildICmp(backend->builder, LLVMIntEQ, l_type,
-                      LLVMConstInt(backend->int32_type, 0, 0), "l_int");
+                      LLVMConstInt(backend->int32_type, 0, 0), "l_int");  // VM_VAL_INT = 0
     LLVMValueRef r_is_int =
         LLVMBuildICmp(backend->builder, LLVMIntEQ, r_type,
-                      LLVMConstInt(backend->int32_type, 0, 0), "r_int");
+                      LLVMConstInt(backend->int32_type, 0, 0), "r_int");  // VM_VAL_INT = 0
     LLVMValueRef both_int =
         LLVMBuildAnd(backend->builder, l_is_int, r_is_int, "both_int");
 
-    // Check if both are FLOAT (type == 1)
+    // Check if both are FLOAT (type == 2)
     LLVMValueRef l_is_float =
         LLVMBuildICmp(backend->builder, LLVMIntEQ, l_type,
-                      LLVMConstInt(backend->int32_type, 1, 0), "l_float");
+                      LLVMConstInt(backend->int32_type, 1, 0), "l_float");  // VM_VAL_FLOAT = 1
     LLVMValueRef r_is_float =
         LLVMBuildICmp(backend->builder, LLVMIntEQ, r_type,
-                      LLVMConstInt(backend->int32_type, 1, 0), "r_float");
+                      LLVMConstInt(backend->int32_type, 1, 0), "r_float");  // VM_VAL_FLOAT = 1
     LLVMValueRef both_float =
         LLVMBuildAnd(backend->builder, l_is_float, r_is_float, "both_float");
 
@@ -1458,7 +1514,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     LLVMValueRef int_vm_res;
     if (int_res) {
       if (is_bool_res) {
-        // Result is BOOL (type 2)
+        // Result is BOOL (type 3)
         int_vm_res = llvm_vm_val_bool(backend, 0); // dummy init
         // Manually build struct to avoid constant restrictions if needed,
         // but llvm_vm_val_int_val handles runtime values for INT, need one for
@@ -1467,11 +1523,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
         LLVMValueRef s = LLVMGetUndef(backend->vm_value_type);
         s = LLVMBuildInsertValue(backend->builder, s,
                                  LLVMConstInt(backend->int32_type, 2, 0), 0,
-                                 "");
+                                 "");  // VM_VAL_BOOL = 2
         s = LLVMBuildInsertValue(backend->builder, s, int_res, 2, "");
         int_vm_res = s;
       } else {
-        // Result is INT (type 0)
+        // Result is INT (type 1)
         int_vm_res = llvm_vm_val_int_val(backend, int_res);
       }
       LLVMBuildBr(backend->builder, merge_block);
@@ -1546,23 +1602,23 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     LLVMValueRef float_vm_res;
     if (float_res) {
       if (float_is_bool) {
-        // Result is BOOL (type 2)
+        // Result is BOOL (type 3)
         LLVMValueRef bool_ext = LLVMBuildZExt(backend->builder, float_res,
                                               backend->int_type, "bool_zext");
         LLVMValueRef s = LLVMGetUndef(backend->vm_value_type);
         s = LLVMBuildInsertValue(backend->builder, s,
                                  LLVMConstInt(backend->int32_type, 2, 0), 0,
-                                 "");
+                                 "");  // VM_VAL_BOOL = 2
         s = LLVMBuildInsertValue(backend->builder, s, bool_ext, 2, "");
         float_vm_res = s;
       } else {
-        // Result is FLOAT (type 1) - convert double back to i64 bits
+        // Result is FLOAT (type 2) - convert double back to i64 bits
         LLVMValueRef res_bits = LLVMBuildBitCast(backend->builder, float_res,
                                                  backend->int_type, "res_bits");
         LLVMValueRef s = LLVMGetUndef(backend->vm_value_type);
         s = LLVMBuildInsertValue(backend->builder, s,
                                  LLVMConstInt(backend->int32_type, 1, 0), 0,
-                                 "");
+                                 "");  // VM_VAL_FLOAT = 1
         s = LLVMBuildInsertValue(backend->builder, s, res_bits, 2, "");
         float_vm_res = s;
       }
@@ -1602,11 +1658,19 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
 
       // --- String Concat Fast Path ---
       LLVMPositionBuilderAtEnd(backend->builder, str_concat_block);
-      LLVMValueRef str_args[] = {L, R};
-      LLVMValueRef str_result = LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_string_concat_fast),
-          backend->func_aot_string_concat_fast, str_args, 2, "str_concat_res");
+      LLVMValueRef L_ptr_sc =
+          LLVMBuildAlloca(backend->builder, backend->vm_value_type, "L_ptr_sc");
+      LLVMBuildStore(backend->builder, L, L_ptr_sc);
+      LLVMValueRef R_ptr_sc =
+          LLVMBuildAlloca(backend->builder, backend->vm_value_type, "R_ptr_sc");
+      LLVMBuildStore(backend->builder, R, R_ptr_sc);
+      LLVMValueRef L_void_sc = LLVMBuildBitCast(backend->builder, L_ptr_sc,
+                                                backend->ptr_type, "L_void_sc");
+      LLVMValueRef R_void_sc = LLVMBuildBitCast(backend->builder, R_ptr_sc,
+                                                backend->ptr_type, "R_void_sc");
+      LLVMValueRef str_args[] = {L_void_sc, R_void_sc};
+      LLVMValueRef str_result = llvm_call_vmvalue_func(
+          backend, backend->func_aot_string_concat_fast, str_args, 2, "str_concat_res");
       LLVMBuildBr(backend->builder, fallback_merge);
       LLVMBasicBlockRef str_block_end = LLVMGetInsertBlock(backend->builder);
 
@@ -1731,10 +1795,10 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
           LLVMBuildExtractValue(backend->builder, operand, 0, "unary_type");
       LLVMValueRef is_int = LLVMBuildICmp(
           backend->builder, LLVMIntEQ, type_val,
-          LLVMConstInt(backend->int32_type, 0, 0), "unary_is_int");
+          LLVMConstInt(backend->int32_type, 0, 0), "unary_is_int");  // VM_VAL_INT = 0
       LLVMValueRef is_float = LLVMBuildICmp(
           backend->builder, LLVMIntEQ, type_val,
-          LLVMConstInt(backend->int32_type, 1, 0), "unary_is_float");
+          LLVMConstInt(backend->int32_type, 1, 0), "unary_is_float");  // VM_VAL_FLOAT = 1
 
       LLVMValueRef func = backend->current_function;
       if (!func)
@@ -1790,6 +1854,27 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
 
   // TODO: Function Call Update
   case AST_FUNCTION_CALL: {
+    // call(func_name) -> dynamic dispatch
+    if (node->name && strcmp(node->name, "call") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      // Alloca to pass by value/pointer as needed by ABI
+      LLVMValueRef arg_ptr =
+          LLVMBuildAlloca(backend->builder, backend->vm_value_type, "call_arg");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+
+      // Load it back? No, wait.
+      // aot_call_dynamic signature: VMValue(VMValue) (pass by value usually for
+      // small structs, but VMValue is 16 bytes) LLVM ABI for struct passing can
+      // be complex. Let's passed by pointer to be safe or check signature. Step
+      // 1729 registration: LLVMFunctionType(backend->vm_value_type,
+      // call_dyn_params, 1, 0); Params are BY VALUE in LLVM IR if not pointer
+      // type. So we pass 'arg' directly.
+
+      LLVMValueRef args[] = {arg};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_call_dynamic, args, 1, "call_res");
+    }
+
     // Check for builtin "print" function
     if (node->name && strcmp(node->name, "print") == 0) {
       // Generate print calls for each argument on the same line
@@ -1846,25 +1931,30 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     if (node->name && strcmp(node->name, "toString") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
-      LLVMValueRef args[] = {arg};
-      LLVMValueRef result = LLVMBuildCall2(
-          backend->builder, LLVMGlobalGetValueType(backend->func_aot_to_string),
-          backend->func_aot_to_string, args, 1, "to_str");
-      return result;
+      LLVMValueRef arg_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "to_str_arg");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "to_str_arg_ptr");
+      LLVMValueRef args[] = {arg_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_to_string, args, 1, "to_str");
     }
 
     // clock_ms() -> float
     if (node->name && strcmp(node->name, "clock_ms") == 0) {
-      return LLVMBuildCall2(backend->builder,
-                            LLVMGlobalGetValueType(backend->func_aot_clock_ms),
-                            backend->func_aot_clock_ms, NULL, 0, "clock_res");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_clock_ms, NULL, 0, "clock_res");
     }
 
     // toInt(value) -> int
     if (node->name && strcmp(node->name, "toInt") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
-      LLVMValueRef args[] = {arg};
+      LLVMValueRef arg_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "to_int_arg");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "to_int_arg_ptr");
+      LLVMValueRef args[] = {arg_void};
       LLVMValueRef result = LLVMBuildCall2(
           backend->builder, LLVMGlobalGetValueType(backend->func_aot_to_int),
           backend->func_aot_to_int, args, 1, "to_int");
@@ -1875,18 +1965,25 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     if (node->name && strcmp(node->name, "toJson") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
-      LLVMValueRef args[] = {arg};
-      LLVMValueRef result = LLVMBuildCall2(
-          backend->builder, LLVMGlobalGetValueType(backend->func_aot_to_json),
-          backend->func_aot_to_json, args, 1, "to_json");
-      return result;
+      LLVMValueRef arg_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "to_json_arg");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "to_json_arg_ptr");
+      LLVMValueRef args[] = {arg_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_to_json, args, 1, "to_json");
     }
 
     // toFloat(value) -> float
     if (node->name && strcmp(node->name, "toFloat") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
-      LLVMValueRef args[] = {arg};
+      LLVMValueRef arg_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "to_float_arg");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "to_float_arg_ptr");
+      LLVMValueRef args[] = {arg_void};
       LLVMValueRef result = LLVMBuildCall2(
           backend->builder, LLVMGlobalGetValueType(backend->func_aot_to_float),
           backend->func_aot_to_float, args, 1, "to_float");
@@ -1897,7 +1994,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     if (node->name && strcmp(node->name, "len") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
-      LLVMValueRef args[] = {arg};
+      LLVMValueRef arg_ptr =
+          LLVMBuildAlloca(backend->builder, backend->vm_value_type, "len_arg");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "len_arg_ptr");
+      LLVMValueRef args[] = {arg_void};
       LLVMValueRef result = LLVMBuildCall2(
           backend->builder, LLVMGlobalGetValueType(backend->func_aot_len),
           backend->func_aot_len, args, 1, "len_result");
@@ -1908,7 +2010,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     if (node->name && strcmp(node->name, "length") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
-      LLVMValueRef args[] = {arg};
+      LLVMValueRef arg_ptr =
+          LLVMBuildAlloca(backend->builder, backend->vm_value_type, "len_arg");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "len_arg_ptr");
+      LLVMValueRef args[] = {arg_void};
       LLVMValueRef result = LLVMBuildCall2(
           backend->builder, LLVMGlobalGetValueType(backend->func_aot_len),
           backend->func_aot_len, args, 1, "len_result");
@@ -1941,30 +2048,27 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
         node->argument_count >= 1) {
       LLVMValueRef arr = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef args[] = {arr};
-      return LLVMBuildCall2(backend->builder,
-                            LLVMGlobalGetValueType(backend->func_aot_array_pop),
-                            backend->func_aot_array_pop, args, 1, "pop_result");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_array_pop, args, 1, "pop_result");
     }
 
     // input() -> String
     if (node->name && strcmp(node->name, "input") == 0) {
       if (!backend->func_aot_input)
         fprintf(stderr, "Fatal: func_aot_input is null\n");
-      LLVMValueRef result = LLVMBuildCall2(
-          backend->builder, LLVMGlobalGetValueType(backend->func_aot_input),
-          backend->func_aot_input, NULL, 0, "input_res");
-      return result;
+      return llvm_call_vmvalue_func(backend, backend->func_aot_input, NULL, 0, "input_res");
     }
 
     // trim(str) -> String
     if (node->name && strcmp(node->name, "trim") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
-      LLVMValueRef args[] = {arg};
-      LLVMValueRef result = LLVMBuildCall2(
-          backend->builder, LLVMGlobalGetValueType(backend->func_aot_trim),
-          backend->func_aot_trim, args, 1, "trim_res");
-      return result;
+      LLVMValueRef arg_ptr =
+          LLVMBuildAlloca(backend->builder, backend->vm_value_type, "trim_arg");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "trim_arg_ptr");
+      LLVMValueRef args[] = {arg_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_trim, args, 1, "trim_res");
     }
 
     // replace(str, old, new) -> String
@@ -1973,11 +2077,23 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
       LLVMValueRef str = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef oldVal = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef newVal = codegen_expression(backend, node->arguments[2]);
-      LLVMValueRef args[] = {str, oldVal, newVal};
-      LLVMValueRef result = LLVMBuildCall2(
-          backend->builder, LLVMGlobalGetValueType(backend->func_aot_replace),
-          backend->func_aot_replace, args, 3, "replace_res");
-      return result;
+      LLVMValueRef str_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "replace_str_ptr");
+      LLVMBuildStore(backend->builder, str, str_ptr);
+      LLVMValueRef old_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "replace_old_ptr");
+      LLVMBuildStore(backend->builder, oldVal, old_ptr);
+      LLVMValueRef new_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "replace_new_ptr");
+      LLVMBuildStore(backend->builder, newVal, new_ptr);
+      LLVMValueRef str_void = LLVMBuildBitCast(
+          backend->builder, str_ptr, backend->ptr_type, "replace_str_void");
+      LLVMValueRef old_void = LLVMBuildBitCast(
+          backend->builder, old_ptr, backend->ptr_type, "replace_old_void");
+      LLVMValueRef new_void = LLVMBuildBitCast(
+          backend->builder, new_ptr, backend->ptr_type, "replace_new_void");
+      LLVMValueRef args[] = {str_void, old_void, new_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_replace, args, 3, "replace_res");
     }
 
     // split(str, del) -> Array
@@ -1985,82 +2101,156 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
         node->argument_count >= 2) {
       LLVMValueRef str = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef del = codegen_expression(backend, node->arguments[1]);
-      LLVMValueRef args[] = {str, del};
-      LLVMValueRef result = LLVMBuildCall2(
-          backend->builder, LLVMGlobalGetValueType(backend->func_aot_split),
-          backend->func_aot_split, args, 2, "split_res");
-      return result;
+      LLVMValueRef str_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "split_str_ptr");
+      LLVMBuildStore(backend->builder, str, str_ptr);
+      LLVMValueRef del_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "split_del_ptr");
+      LLVMBuildStore(backend->builder, del, del_ptr);
+      LLVMValueRef str_void = LLVMBuildBitCast(
+          backend->builder, str_ptr, backend->ptr_type, "split_str_void");
+      LLVMValueRef del_void = LLVMBuildBitCast(
+          backend->builder, del_ptr, backend->ptr_type, "split_del_void");
+      LLVMValueRef args[] = {str_void, del_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_split, args, 2, "split_res");
     }
 
     if (strcmp(node->name, "read_file") == 0) {
-      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
-      return LLVMBuildCall2(backend->builder,
-                            LLVMGlobalGetValueType(backend->func_aot_read_file),
-                            backend->func_aot_read_file, args, 1, "read_res");
+      LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef arg_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "read_arg_ptr");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "read_arg_void");
+      LLVMValueRef args[] = {arg_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_read_file, args, 1, "read_res");
     }
     if (strcmp(node->name, "write_file") == 0) {
-      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
-                             codegen_expression(backend, node->arguments[1])};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_write_file),
-          backend->func_aot_write_file, args, 2, "write_res");
+      LLVMValueRef p = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef c = codegen_expression(backend, node->arguments[1]);
+      LLVMValueRef p_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "write_path_ptr");
+      LLVMBuildStore(backend->builder, p, p_ptr);
+      LLVMValueRef c_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "write_content_ptr");
+      LLVMBuildStore(backend->builder, c, c_ptr);
+      LLVMValueRef p_void = LLVMBuildBitCast(
+          backend->builder, p_ptr, backend->ptr_type, "write_path_void");
+      LLVMValueRef c_void = LLVMBuildBitCast(
+          backend->builder, c_ptr, backend->ptr_type, "write_content_void");
+      LLVMValueRef args[] = {p_void, c_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_write_file, args, 2, "write_res");
     }
     if (strcmp(node->name, "append_file") == 0) {
-      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
-                             codegen_expression(backend, node->arguments[1])};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_append_file),
-          backend->func_aot_append_file, args, 2, "append_res");
+      LLVMValueRef p = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef c = codegen_expression(backend, node->arguments[1]);
+      LLVMValueRef p_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "append_path_ptr");
+      LLVMBuildStore(backend->builder, p, p_ptr);
+      LLVMValueRef c_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "append_content_ptr");
+      LLVMBuildStore(backend->builder, c, c_ptr);
+      LLVMValueRef p_void = LLVMBuildBitCast(
+          backend->builder, p_ptr, backend->ptr_type, "append_path_void");
+      LLVMValueRef c_void = LLVMBuildBitCast(
+          backend->builder, c_ptr, backend->ptr_type, "append_content_void");
+      LLVMValueRef args[] = {p_void, c_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_append_file, args, 2, "append_res");
     }
     if (strcmp(node->name, "file_exists") == 0) {
-      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_file_exists),
-          backend->func_aot_file_exists, args, 1, "exists_res");
+      LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef arg_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "exists_arg_ptr");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "exists_arg_void");
+      LLVMValueRef args[] = {arg_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_file_exists, args, 1, "exists_res");
+    }
+
+    if (strcmp(node->name, "db_open") == 0) {
+      LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef arg_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "db_open_arg_ptr");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "db_open_arg_void");
+      LLVMValueRef args[] = {arg_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_db_open, args, 1, "db_open_res");
+    }
+
+    if (strcmp(node->name, "db_close") == 0) {
+      LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef arg_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "db_close_arg_ptr");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "db_close_arg_void");
+      LLVMValueRef args[] = {arg_void};
+      LLVMBuildCall2(backend->builder,
+                     LLVMGlobalGetValueType(backend->func_aot_db_close),
+                     backend->func_aot_db_close, args, 1, "");
+      return llvm_vm_val_int(backend, 0);
+    }
+
+    if (strcmp(node->name, "db_execute") == 0) {
+      LLVMValueRef db = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef sql = codegen_expression(backend, node->arguments[1]);
+      LLVMValueRef db_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "db_exec_db_ptr");
+      LLVMBuildStore(backend->builder, db, db_ptr);
+      LLVMValueRef sql_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "db_exec_sql_ptr");
+      LLVMBuildStore(backend->builder, sql, sql_ptr);
+      LLVMValueRef db_void = LLVMBuildBitCast(
+          backend->builder, db_ptr, backend->ptr_type, "db_exec_db_void");
+      LLVMValueRef sql_void = LLVMBuildBitCast(
+          backend->builder, sql_ptr, backend->ptr_type, "db_exec_sql_void");
+      LLVMValueRef args[] = {db_void, sql_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_db_execute, args, 2, "db_exec_res");
+    }
+
+    if (strcmp(node->name, "db_query") == 0) {
+      LLVMValueRef db = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef sql = codegen_expression(backend, node->arguments[1]);
+      LLVMValueRef db_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "db_query_db_ptr");
+      LLVMBuildStore(backend->builder, db, db_ptr);
+      LLVMValueRef sql_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "db_query_sql_ptr");
+      LLVMBuildStore(backend->builder, sql, sql_ptr);
+      LLVMValueRef db_void = LLVMBuildBitCast(
+          backend->builder, db_ptr, backend->ptr_type, "db_query_db_void");
+      LLVMValueRef sql_void = LLVMBuildBitCast(
+          backend->builder, sql_ptr, backend->ptr_type, "db_query_sql_void");
+      LLVMValueRef args[] = {db_void, sql_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_db_query, args, 2, "db_query_res");
     }
 
     // Socket Functions
     if (strcmp(node->name, "socket_server") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_socket_server),
-          backend->func_aot_socket_server, args, 2, "sock_fd");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_socket_server, args, 2, "sock_fd");
     }
     if (strcmp(node->name, "socket_client") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_socket_client),
-          backend->func_aot_socket_client, args, 2, "sock_fd");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_socket_client, args, 2, "sock_fd");
     }
     if (strcmp(node->name, "socket_accept") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_socket_accept),
-          backend->func_aot_socket_accept, args, 1, "client_fd");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_socket_accept, args, 1, "client_fd");
     }
     if (strcmp(node->name, "socket_send") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_socket_send),
-          backend->func_aot_socket_send, args, 2, "bytes_sent");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_socket_send, args, 2, "bytes_sent");
     }
     if (strcmp(node->name, "socket_receive") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_socket_receive),
-          backend->func_aot_socket_receive, args, 2, "recv_data");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_socket_receive, args, 2, "recv_data");
     }
     if (strcmp(node->name, "socket_close") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
@@ -2087,10 +2277,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
       }
       LLVMValueRef arg = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef args[] = {func_ptr, arg};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_thread_create),
-          backend->func_aot_thread_create, args, 2, "thread_id");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_thread_create, args, 2, "thread_id");
     }
 
     // thread_join(thread_id)
@@ -2113,10 +2300,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
 
     // mutex_create() -> mutex_ptr
     if (strcmp(node->name, "mutex_create") == 0) {
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_mutex_create),
-          backend->func_aot_mutex_create, NULL, 0, "mutex_ptr");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_mutex_create, NULL, 0, "mutex_ptr");
     }
 
     // mutex_lock(mutex)
@@ -2151,10 +2335,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     if (strcmp(node->name, "http_parse_request") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_http_parse_request),
-          backend->func_aot_http_parse_request, args, 1, "parsed_req");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_http_parse_request, args, 1, "parsed_req");
     }
 
     // http_create_response(status, content_type, body) -> string
@@ -2163,20 +2344,21 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1]),
                              codegen_expression(backend, node->arguments[2])};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_http_create_response),
-          backend->func_aot_http_create_response, args, 3, "http_resp");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_http_create_response, args, 3, "http_resp");
     }
 
 // ====== Math Functions - Single Param ======
 #define MATH1_FUNC(func_name, field)                                           \
   if (strcmp(node->name, func_name) == 0 && node->argument_count >= 1) {       \
-    LLVMValueRef m1_args[] = {                                                 \
-        codegen_expression(backend, node->arguments[0])};                      \
-    return LLVMBuildCall2(backend->builder,                                    \
-                          LLVMGlobalGetValueType(backend->field),              \
-                          backend->field, m1_args, 1, func_name "_res");       \
+    LLVMValueRef v = codegen_expression(backend, node->arguments[0]);          \
+    LLVMValueRef v_ptr = LLVMBuildAlloca(                                      \
+        backend->builder, backend->vm_value_type, func_name "_arg_ptr");       \
+    LLVMBuildStore(backend->builder, v, v_ptr);                                \
+    LLVMValueRef v_void = LLVMBuildBitCast(                                    \
+        backend->builder, v_ptr, backend->ptr_type, func_name "_arg_void");    \
+    LLVMValueRef m1_args[] = {v_void};                                         \
+    return llvm_call_vmvalue_func(backend, backend->field, m1_args, 1,         \
+                                  func_name "_res");                           \
   }
 
     // abs(v) -> passed by pointer with result pointer
@@ -2224,12 +2406,21 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
 // ====== Math Functions - Two Params ======
 #define MATH2_FUNC(func_name, field)                                           \
   if (strcmp(node->name, func_name) == 0 && node->argument_count >= 2) {       \
-    LLVMValueRef m2_args[] = {                                                 \
-        codegen_expression(backend, node->arguments[0]),                       \
-        codegen_expression(backend, node->arguments[1])};                      \
-    return LLVMBuildCall2(backend->builder,                                    \
-                          LLVMGlobalGetValueType(backend->field),              \
-                          backend->field, m2_args, 2, func_name "_res");       \
+    LLVMValueRef v1 = codegen_expression(backend, node->arguments[0]);         \
+    LLVMValueRef v2 = codegen_expression(backend, node->arguments[1]);         \
+    LLVMValueRef v1_ptr = LLVMBuildAlloca(                                     \
+        backend->builder, backend->vm_value_type, func_name "_arg1_ptr");      \
+    LLVMBuildStore(backend->builder, v1, v1_ptr);                              \
+    LLVMValueRef v2_ptr = LLVMBuildAlloca(                                     \
+        backend->builder, backend->vm_value_type, func_name "_arg2_ptr");      \
+    LLVMBuildStore(backend->builder, v2, v2_ptr);                              \
+    LLVMValueRef v1_void = LLVMBuildBitCast(                                   \
+        backend->builder, v1_ptr, backend->ptr_type, func_name "_arg1_void");  \
+    LLVMValueRef v2_void = LLVMBuildBitCast(                                   \
+        backend->builder, v2_ptr, backend->ptr_type, func_name "_arg2_void");  \
+    LLVMValueRef m2_args[] = {v1_void, v2_void};                               \
+    return llvm_call_vmvalue_func(backend, backend->field, m2_args, 2,         \
+                                  func_name "_res");                           \
   }
 
     MATH2_FUNC("pow", func_aot_math_pow)
@@ -2244,20 +2435,21 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
 
     // random() -> float (0.0 - 1.0)
     if (strcmp(node->name, "random") == 0) {
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_math_random),
-          backend->func_aot_math_random, NULL, 0, "random_res");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_math_random, NULL, 0, "random_res");
     }
 
 // ====== String Functions - Single Param ======
 #define STR1_FUNC(func_name, field)                                            \
   if (strcmp(node->name, func_name) == 0 && node->argument_count >= 1) {       \
-    LLVMValueRef s1_args[] = {                                                 \
-        codegen_expression(backend, node->arguments[0])};                      \
-    return LLVMBuildCall2(backend->builder,                                    \
-                          LLVMGlobalGetValueType(backend->field),              \
-                          backend->field, s1_args, 1, func_name "_res");       \
+    LLVMValueRef v = codegen_expression(backend, node->arguments[0]);          \
+    LLVMValueRef v_ptr = LLVMBuildAlloca(                                      \
+        backend->builder, backend->vm_value_type, func_name "_arg_ptr");       \
+    LLVMBuildStore(backend->builder, v, v_ptr);                                \
+    LLVMValueRef v_void = LLVMBuildBitCast(                                    \
+        backend->builder, v_ptr, backend->ptr_type, func_name "_arg_void");    \
+    LLVMValueRef s1_args[] = {v_void};                                         \
+    return llvm_call_vmvalue_func(backend, backend->field, s1_args, 1,         \
+                                  func_name "_res");                           \
   }
 
     STR1_FUNC("upper", func_aot_string_upper)
@@ -2273,12 +2465,21 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
 // ====== String Functions - Two Params ======
 #define STR2_FUNC(func_name, field)                                            \
   if (strcmp(node->name, func_name) == 0 && node->argument_count >= 2) {       \
-    LLVMValueRef s2_args[] = {                                                 \
-        codegen_expression(backend, node->arguments[0]),                       \
-        codegen_expression(backend, node->arguments[1])};                      \
-    return LLVMBuildCall2(backend->builder,                                    \
-                          LLVMGlobalGetValueType(backend->field),              \
-                          backend->field, s2_args, 2, func_name "_res");       \
+    LLVMValueRef v1 = codegen_expression(backend, node->arguments[0]);         \
+    LLVMValueRef v2 = codegen_expression(backend, node->arguments[1]);         \
+    LLVMValueRef v1_ptr = LLVMBuildAlloca(                                     \
+        backend->builder, backend->vm_value_type, func_name "_arg1_ptr");      \
+    LLVMBuildStore(backend->builder, v1, v1_ptr);                              \
+    LLVMValueRef v2_ptr = LLVMBuildAlloca(                                     \
+        backend->builder, backend->vm_value_type, func_name "_arg2_ptr");      \
+    LLVMBuildStore(backend->builder, v2, v2_ptr);                              \
+    LLVMValueRef v1_void = LLVMBuildBitCast(                                   \
+        backend->builder, v1_ptr, backend->ptr_type, func_name "_arg1_void");  \
+    LLVMValueRef v2_void = LLVMBuildBitCast(                                   \
+        backend->builder, v2_ptr, backend->ptr_type, func_name "_arg2_void");  \
+    LLVMValueRef s2_args[] = {v1_void, v2_void};                               \
+    return llvm_call_vmvalue_func(backend, backend->field, s2_args, 2,         \
+                                  func_name "_res");                           \
   }
 
     STR2_FUNC("contains", func_aot_string_contains)
@@ -2293,33 +2494,48 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
 
     // substring(str, start, end) -> string
     if (strcmp(node->name, "substring") == 0 && node->argument_count >= 3) {
-      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
-                             codegen_expression(backend, node->arguments[1]),
-                             codegen_expression(backend, node->arguments[2])};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_string_substring),
-          backend->func_aot_string_substring, args, 3, "substring_res");
+      LLVMValueRef v0 = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef v1 = codegen_expression(backend, node->arguments[1]);
+      LLVMValueRef v2 = codegen_expression(backend, node->arguments[2]);
+      LLVMValueRef v0_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "substring_arg0_ptr");
+      LLVMBuildStore(backend->builder, v0, v0_ptr);
+      LLVMValueRef v1_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "substring_arg1_ptr");
+      LLVMBuildStore(backend->builder, v1, v1_ptr);
+      LLVMValueRef v2_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "substring_arg2_ptr");
+      LLVMBuildStore(backend->builder, v2, v2_ptr);
+      LLVMValueRef v0_void = LLVMBuildBitCast(
+          backend->builder, v0_ptr, backend->ptr_type, "substring_arg0_void");
+      LLVMValueRef v1_void = LLVMBuildBitCast(
+          backend->builder, v1_ptr, backend->ptr_type, "substring_arg1_void");
+      LLVMValueRef v2_void = LLVMBuildBitCast(
+          backend->builder, v2_ptr, backend->ptr_type, "substring_arg2_void");
+      LLVMValueRef args[] = {v0_void, v1_void, v2_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_string_substring, args, 3, "substring_res");
     }
 
     // ====== Time Functions ======
     // timestamp() -> int (unix timestamp)
     if (strcmp(node->name, "timestamp") == 0) {
-      return LLVMBuildCall2(
-          backend->builder, LLVMGlobalGetValueType(backend->func_aot_timestamp),
-          backend->func_aot_timestamp, NULL, 0, "timestamp_res");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_timestamp, NULL, 0, "timestamp_res");
     }
 
     // time_ms() -> int (milliseconds)
     if (strcmp(node->name, "time_ms") == 0) {
-      return LLVMBuildCall2(backend->builder,
-                            LLVMGlobalGetValueType(backend->func_aot_time_ms),
-                            backend->func_aot_time_ms, NULL, 0, "time_ms_res");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_time_ms, NULL, 0, "time_ms_res");
     }
 
     // sleep(ms)
     if (strcmp(node->name, "sleep") == 0 && node->argument_count >= 1) {
-      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef arg_ptr = LLVMBuildAlloca(
+          backend->builder, backend->vm_value_type, "sleep_arg_ptr");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "sleep_arg_void");
+      LLVMValueRef args[] = {arg_void};
       LLVMBuildCall2(backend->builder,
                      LLVMGlobalGetValueType(backend->func_aot_sleep),
                      backend->func_aot_sleep, args, 1, "");
@@ -2330,9 +2546,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     // fromJson(str) -> object/array
     if (strcmp(node->name, "fromJson") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
-      return LLVMBuildCall2(
-          backend->builder, LLVMGlobalGetValueType(backend->func_aot_from_json),
-          backend->func_aot_from_json, args, 1, "from_json_res");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_from_json, args, 1, "from_json_res");
     }
 
     // ====== Input Functions ======
@@ -2343,9 +2557,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
               ? codegen_expression(backend, node->arguments[0])
               : llvm_vm_val_int(backend, 0);
       LLVMValueRef args[] = {prompt};
-      return LLVMBuildCall2(
-          backend->builder, LLVMGlobalGetValueType(backend->func_aot_input_int),
-          backend->func_aot_input_int, args, 1, "input_int_res");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_input_int, args, 1, "input_int_res");
     }
 
     // input_float(prompt) -> float
@@ -2355,28 +2567,21 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
               ? codegen_expression(backend, node->arguments[0])
               : llvm_vm_val_int(backend, 0);
       LLVMValueRef args[] = {prompt};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_input_float),
-          backend->func_aot_input_float, args, 1, "input_float_res");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_input_float, args, 1, "input_float_res");
     }
 
     // ====== Range Function ======
     // range(end) -> array [0, 1, ..., end-1]
     if (strcmp(node->name, "range") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
-      return LLVMBuildCall2(backend->builder,
-                            LLVMGlobalGetValueType(backend->func_aot_range),
-                            backend->func_aot_range, args, 1, "range_res");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_range, args, 1, "range_res");
     }
 
     // ====== SQLite Database Functions ======
     // db_open(path) -> db_handle
     if (strcmp(node->name, "db_open") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
-      return LLVMBuildCall2(backend->builder,
-                            LLVMGlobalGetValueType(backend->func_aot_db_open),
-                            backend->func_aot_db_open, args, 1, "db_handle");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_db_open, args, 1, "db_handle");
     }
 
     // db_close(db)
@@ -2392,37 +2597,27 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     if (strcmp(node->name, "db_execute") == 0 && node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_db_execute),
-          backend->func_aot_db_execute, args, 2, "db_exec_res");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_db_execute, args, 2, "db_exec_res");
     }
 
     // db_query(db, sql) -> array of objects
     if (strcmp(node->name, "db_query") == 0 && node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
-      return LLVMBuildCall2(
-          backend->builder, LLVMGlobalGetValueType(backend->func_aot_db_query),
-          backend->func_aot_db_query, args, 2, "db_query_res");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_db_query, args, 2, "db_query_res");
     }
 
     // db_last_insert_id(db) -> int64
     if (strcmp(node->name, "db_last_insert_id") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_db_last_insert_id),
-          backend->func_aot_db_last_insert_id, args, 1, "db_last_id");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_db_last_insert_id, args, 1, "db_last_id");
     }
 
     // db_error(db) -> string
     if (strcmp(node->name, "db_error") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
-      return LLVMBuildCall2(backend->builder,
-                            LLVMGlobalGetValueType(backend->func_aot_db_error),
-                            backend->func_aot_db_error, args, 1, "db_err");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_db_error, args, 1, "db_err");
     }
 
 // ====== Type Checking Functions ======
@@ -2430,9 +2625,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
   if (strcmp(node->name, func_name) == 0 && node->argument_count >= 1) {       \
     LLVMValueRef tc_args[] = {                                                 \
         codegen_expression(backend, node->arguments[0])};                      \
-    return LLVMBuildCall2(backend->builder,                                    \
-                          LLVMGlobalGetValueType(backend->field),              \
-                          backend->field, tc_args, 1, func_name "_res");       \
+    return llvm_call_vmvalue_func(backend, backend->field, tc_args, 1,         \
+                                  func_name "_res");                           \
   }
 
     TYPE_CHECK_FUNC("typeof", func_aot_typeof)
@@ -2500,10 +2694,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
       LLVMValueRef sb_ptr = LLVMBuildIntToPtr(backend->builder, ptr_int,
                                               backend->ptr_type, "sb_ptr");
       LLVMValueRef args[] = {sb_ptr};
-      return LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_stringbuilder_to_string),
-          backend->func_aot_stringbuilder_to_string, args, 1, "sb_str");
+      return llvm_call_vmvalue_func(backend, backend->func_aot_stringbuilder_to_string, args, 1, "sb_str");
     }
 
     // sb_free(sb) -> void
@@ -2521,7 +2712,18 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     }
 
     // User-defined or Runtime function call
-    LLVMValueRef func = LLVMGetNamedFunction(backend->module, node->name);
+    char func_name[256];
+    if (strcmp(node->name, "main") == 0) {
+      snprintf(func_name, sizeof(func_name), "main");
+    } else {
+      snprintf(func_name, sizeof(func_name), "t_%s", node->name);
+    }
+
+    LLVMValueRef func = LLVMGetNamedFunction(backend->module, func_name);
+    // Fallback: Check original name (for builtins or non-prefixed)
+    if (!func) {
+      func = LLVMGetNamedFunction(backend->module, node->name);
+    }
     if (func) {
       // Check if it is a registered user function (uses NEW ABI: void
       // func(ret*, args*...))
@@ -2543,20 +2745,24 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
           if (arg_count > 0) {
             args = (LLVMValueRef *)malloc(sizeof(LLVMValueRef) * arg_count);
             for (int i = 0; i < arg_count; i++) {
-              LLVMValueRef val = codegen_expression(backend, node->arguments[i]);
+              LLVMValueRef val =
+                  codegen_expression(backend, node->arguments[i]);
               // Extract i64 from VMValue
-              args[i] = LLVMBuildExtractValue(backend->builder, val, 2, "arg_i64");
+              args[i] =
+                  LLVMBuildExtractValue(backend->builder, val, 2, "arg_i64");
             }
           }
-          
-          LLVMValueRef result = LLVMBuildCall2(backend->builder, user_func_type, func,
-                                                args, arg_count, "native_call");
-          if (args) free(args);
-          
+
+          LLVMValueRef result =
+              LLVMBuildCall2(backend->builder, user_func_type, func, args,
+                             arg_count, "native_call");
+          if (args)
+            free(args);
+
           // Box result back to VMValue
           return llvm_vm_val_int_val(backend, result);
         }
-        
+
         // --- NEW ABI (User Function) ---
         // 1. Allocate Result Slot
         LLVMValueRef res_ptr = LLVMBuildAlloca(
@@ -2631,6 +2837,21 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode *node) {
     // printf("[AOT] Declaring var: %s\n", node->name);
     LLVMValueRef init = node->right ? codegen_expression(backend, node->right)
                                     : llvm_vm_val_int(backend, 0);
+
+    // Check if it's already a global (from pre-scan)
+    LLVMValueRef global_var = LLVMGetNamedGlobal(backend->module, node->name);
+    if (global_var) {
+      LLVMBuildStore(backend->builder, init, global_var);
+      // Do NOT add to local scope, or add it pointing to global?
+      // get_local() will look at local scope first.
+      // If we add it to local scope, it waits...
+      // get_local() implementation: checks scope chain, then fallback to
+      // global. So we don't strictly need to add it to local scope if get_local
+      // finds it globally. But for consistency/shadowing rules? Since this is
+      // top-level, shadowing is not an issue.
+      return global_var;
+    }
+
     LLVMValueRef alloca =
         llvm_build_alloca_at_entry(backend, backend->vm_value_type, node->name);
     LLVMBuildStore(backend->builder, init, alloca);
@@ -2861,10 +3082,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode *node) {
     LLVMPositionBuilderAtEnd(backend->builder, catchB);
     if (node->catch_var && node->catch_block) {
       // Get exception: VMValue e = aot_get_exception()
-      LLVMValueRef exc = LLVMBuildCall2(
-          backend->builder,
-          LLVMGlobalGetValueType(backend->func_aot_get_exception),
-          backend->func_aot_get_exception, NULL, 0, "exception");
+      LLVMValueRef exc = llvm_call_vmvalue_func(
+          backend, backend->func_aot_get_exception, NULL, 0, "exception");
       // Store to catch variable (at entry)
       LLVMValueRef alloca = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, node->catch_var);
@@ -2891,7 +3110,12 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode *node) {
     LLVMValueRef exc = node->throw_expr
                            ? codegen_expression(backend, node->throw_expr)
                            : llvm_vm_val_int(backend, 0);
-    LLVMValueRef args[] = {exc};
+    LLVMValueRef exc_ptr = LLVMBuildAlloca(
+        backend->builder, backend->vm_value_type, "throw_exc_ptr");
+    LLVMBuildStore(backend->builder, exc, exc_ptr);
+    LLVMValueRef exc_void = LLVMBuildBitCast(
+        backend->builder, exc_ptr, backend->ptr_type, "throw_exc_void");
+    LLVMValueRef args[] = {exc_void};
     LLVMBuildCall2(backend->builder,
                    LLVMGlobalGetValueType(backend->func_aot_throw),
                    backend->func_aot_throw, args, 1, "");
@@ -2913,20 +3137,34 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode *node) {
 
     printf("[AOT] Importing: %s\n", rel_path);
 
-    FILE *f = fopen(rel_path, "rb");
-    if (!f) {
-      fprintf(stderr, "Error: Could not import file '%s'\n", rel_path);
-      return NULL;
-    }
-    fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
-    fseek(f, 0, SEEK_SET);
+    char *source = NULL;
+    // Check embedded libs first
+    const char *embedded_code = get_embedded_lib(rel_path);
+    if (embedded_code) {
+      source = strdup(embedded_code);
+    } else {
+      FILE *f = fopen(rel_path, "rb");
+      if (!f) {
+        // Try .tpr extension
+        char path_buf[256];
+        snprintf(path_buf, sizeof(path_buf), "%s.tpr", rel_path);
+        f = fopen(path_buf, "rb");
 
-    char *source = (char *)malloc(fsize + 1);
-    size_t read_size = fread(source, 1, fsize, f);
-    (void)read_size;
-    source[fsize] = 0;
-    fclose(f);
+        if (!f) {
+          fprintf(stderr, "Error: Could not import file '%s'\n", rel_path);
+          return NULL;
+        }
+      }
+      fseek(f, 0, SEEK_END);
+      long fsize = ftell(f);
+      fseek(f, 0, SEEK_SET);
+
+      source = (char *)malloc(fsize + 1);
+      size_t read_size = fread(source, 1, fsize, f);
+      (void)read_size;
+      source[fsize] = 0;
+      fclose(f);
+    }
 
     Lexer *lexer = lexer_create(source);
     int token_capacity = 1024;
@@ -2951,6 +3189,20 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode *node) {
     if (module_ast) {
       // Compile function definitions from module
       if (module_ast->type == AST_PROGRAM && module_ast->statements) {
+        // Pass 0: Pre-scan for Global Variables (Forward Declaration)
+        for (int i = 0; i < module_ast->statement_count; i++) {
+          if (module_ast->statements[i]->type == AST_VARIABLE_DECL) {
+            ASTNode *decl = module_ast->statements[i];
+            if (!LLVMGetNamedGlobal(backend->module, decl->name)) {
+              LLVMValueRef global_var = LLVMAddGlobal(
+                  backend->module, backend->vm_value_type, decl->name);
+              LLVMSetInitializer(global_var,
+                                 LLVMConstNull(backend->vm_value_type));
+              LLVMSetLinkage(global_var, LLVMInternalLinkage);
+            }
+          }
+        }
+
         for (int i = 0; i < module_ast->statement_count; i++) {
           if (module_ast->statements[i]->type == AST_FUNCTION_DECL) {
             codegen_func_def(backend, module_ast->statements[i]);
@@ -3006,7 +3258,7 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode *node) {
 
   // Check if function already exists in module (avoid duplicates)
   if (LLVMGetNamedFunction(backend->module, node->name)) {
-    return;  // Already defined
+    return; // Already defined
   }
 
   int param_count = node->param_count;
@@ -3023,13 +3275,14 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode *node) {
 
   // Use original name for function (not _native_ prefix) so calls can find it
   LLVMValueRef func = LLVMAddFunction(backend->module, node->name, func_type);
-  register_function(backend, node->name, func_type);  // Register for lookups
+  register_function(backend, node->name, func_type); // Register for lookups
 
   // Add optimization attributes
   // nounwind: function doesn't throw exceptions
   // noinline: prevent inlining to preserve function boundaries
   // optnone: CRITICAL - completely disable optimization for this function
-  //          This prevents LLVM from eliminating loops via closed-form solutions
+  //          This prevents LLVM from eliminating loops via closed-form
+  //          solutions
   LLVMAddAttributeAtIndex(
       func, LLVMAttributeFunctionIndex,
       LLVMCreateEnumAttribute(
@@ -3037,13 +3290,11 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode *node) {
   LLVMAddAttributeAtIndex(
       func, LLVMAttributeFunctionIndex,
       LLVMCreateEnumAttribute(
-          backend->context, LLVMGetEnumAttributeKindForName("noinline", 8),
-          0));
+          backend->context, LLVMGetEnumAttributeKindForName("noinline", 8), 0));
   LLVMAddAttributeAtIndex(
       func, LLVMAttributeFunctionIndex,
       LLVMCreateEnumAttribute(
-          backend->context, LLVMGetEnumAttributeKindForName("optnone", 7),
-          0));
+          backend->context, LLVMGetEnumAttributeKindForName("optnone", 7), 0));
 
   LLVMValueRef prev_func = backend->current_function;
   LLVMBasicBlockRef prev_block = LLVMGetInsertBlock(backend->builder);
@@ -3160,30 +3411,36 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode *node) {
         LLVMPositionBuilderAtEnd(backend->builder, merge_bb);
       } else if (stmt->type == AST_VARIABLE_DECL) {
         // Native variable declaration
-        LLVMValueRef alloca = LLVMBuildAlloca(backend->builder, backend->int_type, stmt->name);
+        LLVMValueRef alloca =
+            LLVMBuildAlloca(backend->builder, backend->int_type, stmt->name);
         if (stmt->right) {
           TypedValue init = codegen_typed_expr(backend, stmt->right);
           if (init.type == INFERRED_INT || init.type == INFERRED_BOOL) {
             LLVMBuildStore(backend->builder, init.value, alloca);
           } else if (init.boxed) {
-            LLVMValueRef int_val = LLVMBuildExtractValue(backend->builder, init.boxed, 2, "init_int");
+            LLVMValueRef int_val = LLVMBuildExtractValue(
+                backend->builder, init.boxed, 2, "init_int");
             LLVMBuildStore(backend->builder, int_val, alloca);
           } else {
-            LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), alloca);
+            LLVMBuildStore(backend->builder,
+                           LLVMConstInt(backend->int_type, 0, 0), alloca);
           }
         } else {
-          LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), alloca);
+          LLVMBuildStore(backend->builder,
+                         LLVMConstInt(backend->int_type, 0, 0), alloca);
         }
         add_local_typed(backend, stmt->name, NULL, INFERRED_INT, alloca);
       } else if (stmt->type == AST_ASSIGNMENT) {
         // Native assignment
-        LLVMValueRef var_ptr = get_local_native(backend, stmt->left ? stmt->left->name : stmt->name);
+        LLVMValueRef var_ptr = get_local_native(
+            backend, stmt->left ? stmt->left->name : stmt->name);
         if (var_ptr) {
           TypedValue val = codegen_typed_expr(backend, stmt->right);
           if (val.type == INFERRED_INT || val.type == INFERRED_BOOL) {
             LLVMBuildStore(backend->builder, val.value, var_ptr);
           } else if (val.boxed) {
-            LLVMValueRef int_val = LLVMBuildExtractValue(backend->builder, val.boxed, 2, "assign_int");
+            LLVMValueRef int_val = LLVMBuildExtractValue(
+                backend->builder, val.boxed, 2, "assign_int");
             LLVMBuildStore(backend->builder, int_val, var_ptr);
           }
         }
@@ -3192,47 +3449,54 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode *node) {
         // Initialize
         if (stmt->init) {
           if (stmt->init->type == AST_VARIABLE_DECL) {
-            LLVMValueRef alloca = LLVMBuildAlloca(backend->builder, backend->int_type, stmt->init->name);
+            LLVMValueRef alloca = LLVMBuildAlloca(
+                backend->builder, backend->int_type, stmt->init->name);
             if (stmt->init->right) {
               TypedValue init = codegen_typed_expr(backend, stmt->init->right);
               if (init.type == INFERRED_INT) {
                 LLVMBuildStore(backend->builder, init.value, alloca);
               } else {
-                LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), alloca);
+                LLVMBuildStore(backend->builder,
+                               LLVMConstInt(backend->int_type, 0, 0), alloca);
               }
             } else {
-              LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), alloca);
+              LLVMBuildStore(backend->builder,
+                             LLVMConstInt(backend->int_type, 0, 0), alloca);
             }
-            add_local_typed(backend, stmt->init->name, NULL, INFERRED_INT, alloca);
+            add_local_typed(backend, stmt->init->name, NULL, INFERRED_INT,
+                            alloca);
           }
         }
-        
+
         LLVMBasicBlockRef loop_cond = LLVMAppendBasicBlock(func, "for.cond");
         LLVMBasicBlockRef loop_body = LLVMAppendBasicBlock(func, "for.body");
         LLVMBasicBlockRef loop_inc = LLVMAppendBasicBlock(func, "for.inc");
         LLVMBasicBlockRef loop_end = LLVMAppendBasicBlock(func, "for.end");
-        
+
         LLVMBuildBr(backend->builder, loop_cond);
-        
+
         // Condition
         LLVMPositionBuilderAtEnd(backend->builder, loop_cond);
         TypedValue cond = codegen_typed_expr(backend, stmt->condition);
         LLVMValueRef cond_bool;
         if (cond.type == INFERRED_INT || cond.type == INFERRED_BOOL) {
-          cond_bool = LLVMBuildICmp(backend->builder, LLVMIntNE, cond.value,
-                                    LLVMConstInt(backend->int_type, 0, 0), "for_cond");
+          cond_bool =
+              LLVMBuildICmp(backend->builder, LLVMIntNE, cond.value,
+                            LLVMConstInt(backend->int_type, 0, 0), "for_cond");
         } else {
           cond_bool = LLVMConstInt(backend->bool_type, 1, 0);
         }
         LLVMBuildCondBr(backend->builder, cond_bool, loop_body, loop_end);
-        
+
         // Body
         LLVMPositionBuilderAtEnd(backend->builder, loop_body);
         if (stmt->body && stmt->body->type == AST_BLOCK) {
           for (int j = 0; j < stmt->body->statement_count; j++) {
             ASTNode *body_stmt = stmt->body->statements[j];
             if (body_stmt->type == AST_ASSIGNMENT) {
-              LLVMValueRef var_ptr = get_local_native(backend, body_stmt->left ? body_stmt->left->name : body_stmt->name);
+              LLVMValueRef var_ptr = get_local_native(
+                  backend,
+                  body_stmt->left ? body_stmt->left->name : body_stmt->name);
               if (var_ptr) {
                 TypedValue val = codegen_typed_expr(backend, body_stmt->right);
                 if (val.type == INFERRED_INT || val.type == INFERRED_BOOL) {
@@ -3241,62 +3505,85 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode *node) {
               }
             } else if (body_stmt->type == AST_VARIABLE_DECL) {
               // Variable declaration inside loop body
-              LLVMValueRef alloca = LLVMBuildAlloca(backend->builder, backend->int_type, body_stmt->name);
+              LLVMValueRef alloca = LLVMBuildAlloca(
+                  backend->builder, backend->int_type, body_stmt->name);
               if (body_stmt->right) {
                 TypedValue init = codegen_typed_expr(backend, body_stmt->right);
                 if (init.type == INFERRED_INT) {
                   LLVMBuildStore(backend->builder, init.value, alloca);
                 } else {
-                  LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), alloca);
+                  LLVMBuildStore(backend->builder,
+                                 LLVMConstInt(backend->int_type, 0, 0), alloca);
                 }
               } else {
-                LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), alloca);
+                LLVMBuildStore(backend->builder,
+                               LLVMConstInt(backend->int_type, 0, 0), alloca);
               }
-              add_local_typed(backend, body_stmt->name, NULL, INFERRED_INT, alloca);
+              add_local_typed(backend, body_stmt->name, NULL, INFERRED_INT,
+                              alloca);
             } else if (body_stmt->type == AST_FOR) {
               // Nested for loop - generate inline
               ASTNode *inner = body_stmt;
-              
+
               // Initialize inner loop variable
               if (inner->init && inner->init->type == AST_VARIABLE_DECL) {
-                LLVMValueRef inner_alloca = LLVMBuildAlloca(backend->builder, backend->int_type, inner->init->name);
+                LLVMValueRef inner_alloca = LLVMBuildAlloca(
+                    backend->builder, backend->int_type, inner->init->name);
                 if (inner->init->right) {
-                  TypedValue init_val = codegen_typed_expr(backend, inner->init->right);
+                  TypedValue init_val =
+                      codegen_typed_expr(backend, inner->init->right);
                   if (init_val.type == INFERRED_INT) {
-                    LLVMBuildStore(backend->builder, init_val.value, inner_alloca);
+                    LLVMBuildStore(backend->builder, init_val.value,
+                                   inner_alloca);
                   } else {
-                    LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), inner_alloca);
+                    LLVMBuildStore(backend->builder,
+                                   LLVMConstInt(backend->int_type, 0, 0),
+                                   inner_alloca);
                   }
                 } else {
-                  LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), inner_alloca);
+                  LLVMBuildStore(backend->builder,
+                                 LLVMConstInt(backend->int_type, 0, 0),
+                                 inner_alloca);
                 }
-                add_local_typed(backend, inner->init->name, NULL, INFERRED_INT, inner_alloca);
+                add_local_typed(backend, inner->init->name, NULL, INFERRED_INT,
+                                inner_alloca);
               }
-              
-              LLVMBasicBlockRef inner_cond = LLVMAppendBasicBlock(func, "inner.cond");
-              LLVMBasicBlockRef inner_body = LLVMAppendBasicBlock(func, "inner.body");
-              LLVMBasicBlockRef inner_inc = LLVMAppendBasicBlock(func, "inner.inc");
-              LLVMBasicBlockRef inner_end = LLVMAppendBasicBlock(func, "inner.end");
-              
+
+              LLVMBasicBlockRef inner_cond =
+                  LLVMAppendBasicBlock(func, "inner.cond");
+              LLVMBasicBlockRef inner_body =
+                  LLVMAppendBasicBlock(func, "inner.body");
+              LLVMBasicBlockRef inner_inc =
+                  LLVMAppendBasicBlock(func, "inner.inc");
+              LLVMBasicBlockRef inner_end =
+                  LLVMAppendBasicBlock(func, "inner.end");
+
               LLVMBuildBr(backend->builder, inner_cond);
-              
+
               // Inner condition
               LLVMPositionBuilderAtEnd(backend->builder, inner_cond);
-              TypedValue inner_cond_val = codegen_typed_expr(backend, inner->condition);
-              LLVMValueRef inner_cond_bool = LLVMBuildICmp(backend->builder, LLVMIntNE, inner_cond_val.value,
-                                        LLVMConstInt(backend->int_type, 0, 0), "inner_cond");
-              LLVMBuildCondBr(backend->builder, inner_cond_bool, inner_body, inner_end);
-              
+              TypedValue inner_cond_val =
+                  codegen_typed_expr(backend, inner->condition);
+              LLVMValueRef inner_cond_bool = LLVMBuildICmp(
+                  backend->builder, LLVMIntNE, inner_cond_val.value,
+                  LLVMConstInt(backend->int_type, 0, 0), "inner_cond");
+              LLVMBuildCondBr(backend->builder, inner_cond_bool, inner_body,
+                              inner_end);
+
               // Inner body
               LLVMPositionBuilderAtEnd(backend->builder, inner_body);
               if (inner->body && inner->body->type == AST_BLOCK) {
                 for (int k = 0; k < inner->body->statement_count; k++) {
                   ASTNode *inner_stmt = inner->body->statements[k];
                   if (inner_stmt->type == AST_ASSIGNMENT) {
-                    LLVMValueRef var_ptr = get_local_native(backend, inner_stmt->left ? inner_stmt->left->name : inner_stmt->name);
+                    LLVMValueRef var_ptr = get_local_native(
+                        backend, inner_stmt->left ? inner_stmt->left->name
+                                                  : inner_stmt->name);
                     if (var_ptr) {
-                      TypedValue val = codegen_typed_expr(backend, inner_stmt->right);
-                      if (val.type == INFERRED_INT || val.type == INFERRED_BOOL) {
+                      TypedValue val =
+                          codegen_typed_expr(backend, inner_stmt->right);
+                      if (val.type == INFERRED_INT ||
+                          val.type == INFERRED_BOOL) {
                         LLVMBuildStore(backend->builder, val.value, var_ptr);
                       }
                     }
@@ -3304,34 +3591,42 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode *node) {
                 }
               }
               LLVMBuildBr(backend->builder, inner_inc);
-              
+
               // Inner increment
               LLVMPositionBuilderAtEnd(backend->builder, inner_inc);
-              if (inner->increment && inner->increment->type == AST_ASSIGNMENT) {
-                LLVMValueRef var_ptr = get_local_native(backend, inner->increment->left ? inner->increment->left->name : inner->increment->name);
+              if (inner->increment &&
+                  inner->increment->type == AST_ASSIGNMENT) {
+                LLVMValueRef var_ptr =
+                    get_local_native(backend, inner->increment->left
+                                                  ? inner->increment->left->name
+                                                  : inner->increment->name);
                 if (var_ptr) {
-                  TypedValue val = codegen_typed_expr(backend, inner->increment->right);
+                  TypedValue val =
+                      codegen_typed_expr(backend, inner->increment->right);
                   if (val.type == INFERRED_INT || val.type == INFERRED_BOOL) {
                     LLVMBuildStore(backend->builder, val.value, var_ptr);
                   }
                 }
               }
               LLVMBuildBr(backend->builder, inner_cond);
-              
+
               // Continue after inner loop
               LLVMPositionBuilderAtEnd(backend->builder, inner_end);
             }
           }
         }
         LLVMBuildBr(backend->builder, loop_inc);
-        
+
         // Increment
         LLVMPositionBuilderAtEnd(backend->builder, loop_inc);
         if (stmt->increment) {
           if (stmt->increment->type == AST_ASSIGNMENT) {
-            LLVMValueRef var_ptr = get_local_native(backend, stmt->increment->left ? stmt->increment->left->name : stmt->increment->name);
+            LLVMValueRef var_ptr = get_local_native(
+                backend, stmt->increment->left ? stmt->increment->left->name
+                                               : stmt->increment->name);
             if (var_ptr) {
-              TypedValue val = codegen_typed_expr(backend, stmt->increment->right);
+              TypedValue val =
+                  codegen_typed_expr(backend, stmt->increment->right);
               if (val.type == INFERRED_INT || val.type == INFERRED_BOOL) {
                 LLVMBuildStore(backend->builder, val.value, var_ptr);
               }
@@ -3339,7 +3634,7 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode *node) {
           }
         }
         LLVMBuildBr(backend->builder, loop_cond);
-        
+
         LLVMPositionBuilderAtEnd(backend->builder, loop_end);
       }
     }
@@ -3359,8 +3654,7 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode *node) {
 
 void codegen_func_def(LLVMBackend *backend, ASTNode *node) {
   // Check if function has explicit return type - use native codegen
-  if (backend->use_static_typing && node->return_type != TYPE_VOID && 
-      node->return_type != TYPE_UNKNOWN) {
+  if (backend->use_static_typing && node->return_type == TYPE_INT) {
     // Verify all parameters have types
     int all_typed = 1;
     for (int i = 0; i < node->param_count; i++) {
@@ -3369,14 +3663,24 @@ void codegen_func_def(LLVMBackend *backend, ASTNode *node) {
         break;
       }
     }
-    if (all_typed) {
+    if (all_typed && is_all_int_params(node)) {
       codegen_native_func_def(backend, node);
       return;
     }
   }
-  
+
   int user_param_count = node->param_count;
   int total_params = user_param_count + 1; // +1 for Result Pointer
+
+  char func_name[256];
+  if (strcmp(node->name, "main") == 0) {
+    snprintf(func_name, sizeof(func_name), "main");
+  } else {
+    snprintf(func_name, sizeof(func_name), "t_%s", node->name);
+  }
+
+  // Define function type: void func(VMValue* result_ptr, VMValue* arg1, ...)
+  // (Assuming Void ABI for user functions)
 
   // Param types: [ResultPtr, ArgPtr, ArgPtr...]
   LLVMTypeRef *param_types =
@@ -3387,8 +3691,29 @@ void codegen_func_def(LLVMBackend *backend, ASTNode *node) {
   LLVMTypeRef func_type =
       LLVMFunctionType(backend->void_type, param_types, total_params, 0);
 
-  LLVMValueRef func = LLVMAddFunction(backend->module, node->name, func_type);
-  register_function(backend, node->name, func_type);
+  LLVMValueRef func = LLVMAddFunction(backend->module, func_name, func_type);
+  register_function(
+      backend, node->name,
+      func_type); // Register with ORIGINAL name for lookup in compiler?
+  // Wait, register_function stores it in `functions` array.
+  // When we retrieve it later, we verify existance?
+  // Let's modify register_function logic or lookups.
+  // Actually, LLVMAddFunction uses mangled name.
+  // But our internal lookup table `functions` should use original name?
+  // Or simpler: LLVMGetNamedFunction should use mangled name.
+
+  // Correction: Register with original name in our internal struct,
+  // but LLVM function has mangled name.
+  // But wait, codegen_call uses LLVMGetNamedFunction?
+  // Let's check codegen_call logic first.
+
+  // Assuming codegen_call uses internal table or GetNamedFunction.
+  // If GetNamedFunction, we need to mangle there too.
+  // Let's stick to mangled name everywhere for consistency?
+  // No, `node->name` is original.
+
+  // Proceed with replacement. But register logic needs update elsewhere
+  // potentially.
 
   // ============================================================
   // INLINING & OPTIMIZATION ATTRIBUTES
@@ -3415,6 +3740,7 @@ void codegen_func_def(LLVMBackend *backend, ASTNode *node) {
   LLVMPositionBuilderAtEnd(backend->builder, entry);
 
   enter_scope(backend);
+  backend->current_function_is_void_abi = 1;
 
   // Handle parameters
   // Param 0 is Result Pointer (used by return)
@@ -3444,8 +3770,11 @@ void codegen_func_def(LLVMBackend *backend, ASTNode *node) {
   codegen_statement(backend, node->body);
 
   // Default return if missing
-  if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder)))
-    LLVMBuildRet(backend->builder, llvm_vm_val_int(backend, 0));
+  if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder))) {
+    LLVMValueRef res_ptr = LLVMGetParam(func, 0);
+    LLVMBuildStore(backend->builder, llvm_vm_val_int(backend, 0), res_ptr);
+    LLVMBuildRetVoid(backend->builder);
+  }
 
   exit_scope(backend);
   free(param_types);
@@ -3458,15 +3787,10 @@ void codegen_func_def(LLVMBackend *backend, ASTNode *node) {
 void llvm_backend_compile(LLVMBackend *backend, ASTNode *node) {
   if (node->type != AST_PROGRAM)
     return;
-  if (node->statements) {
-    for (int i = 0; i < node->statement_count; i++) {
-      if (node->statements[i]->type == AST_FUNCTION_DECL)
-        codegen_func_def(backend, node->statements[i]);
-    }
-  }
 
   // MAIN FUNCTION: int main() -> returns raw i32 (OS exit code)
-  // But inside it works with VMValues.
+  // We must create it FIRST so that imports (Pass 0) can emit init code into
+  // it.
   LLVMTypeRef main_type = LLVMFunctionType(backend->int32_type, NULL, 0, 0);
   LLVMValueRef main_func = LLVMAddFunction(backend->module, "main", main_type);
   backend->current_function = main_func;
@@ -3474,6 +3798,27 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode *node) {
   LLVMPositionBuilderAtEnd(backend->builder, entry);
 
   enter_scope(backend);
+
+  // Initialize Runtime
+  LLVMBuildCall2(backend->builder,
+                 LLVMGlobalGetValueType(backend->func_aot_runtime_init),
+                 backend->func_aot_runtime_init, NULL, 0, "");
+
+  if (node->statements) {
+    // Pass 0: Process Imports FIRST to declare external functions/globals
+    for (int i = 0; i < node->statement_count; i++) {
+      if (node->statements[i]->type == AST_IMPORT) {
+        codegen_statement(backend, node->statements[i]);
+      }
+    }
+
+    // Pass 1: Compile Functions
+    for (int i = 0; i < node->statement_count; i++) {
+      if (node->statements[i]->type == AST_FUNCTION_DECL)
+        codegen_func_def(backend, node->statements[i]);
+    }
+  }
+
   if (node->statements) {
     for (int i = 0; i < node->statement_count; i++) {
       if (node->statements[i]->type != AST_FUNCTION_DECL)
@@ -3553,15 +3898,16 @@ void llvm_backend_optimize(LLVMBackend *backend) {
   // O2 + selective passes - no inline/loop-unroll to preserve loop structure
   // This prevents LLVM from computing closed-form solutions for simple loops
   LLVMErrorRef error = LLVMRunPasses(
-      backend->module, "default<O2>,function(sroa,gvn,instcombine)",
-      NULL, options);
+      backend->module, "default<O2>,function(sroa,gvn,instcombine)", NULL,
+      options);
 
   if (error) {
     char *msg = LLVMGetErrorMessage(error);
     fprintf(stderr, "[AOT] Warning: Optimization failed: %s\n", msg);
     LLVMDisposeErrorMessage(msg);
   } else {
-    printf("[AOT] Optimizations (O3) applied successfully.\n");
+    if (!backend->quiet)
+      printf("[AOT] Optimizations (O3) applied successfully.\n");
   }
 
   LLVMDisposePassBuilderOptions(options);
@@ -3573,77 +3919,105 @@ void llvm_backend_optimize(LLVMBackend *backend) {
 
 void llvm_backend_enable_static_typing(LLVMBackend *backend) {
   backend->use_static_typing = 1;
-  
+
   // Declare native runtime functions
   // tulpar_print_int(i64) -> void
   LLVMTypeRef print_int_params[] = {backend->int_type};
-  LLVMTypeRef print_int_type = LLVMFunctionType(backend->void_type, print_int_params, 1, 0);
-  backend->func_tulpar_print_int = LLVMAddFunction(backend->module, "tulpar_print_int", print_int_type);
-  backend->func_tulpar_println_int = LLVMAddFunction(backend->module, "tulpar_println_int", print_int_type);
-  
+  LLVMTypeRef print_int_type =
+      LLVMFunctionType(backend->void_type, print_int_params, 1, 0);
+  backend->func_tulpar_print_int =
+      LLVMAddFunction(backend->module, "tulpar_print_int", print_int_type);
+  backend->func_tulpar_println_int =
+      LLVMAddFunction(backend->module, "tulpar_println_int", print_int_type);
+
   // tulpar_print_float(double) -> void
   LLVMTypeRef print_float_params[] = {backend->float_type};
-  LLVMTypeRef print_float_type = LLVMFunctionType(backend->void_type, print_float_params, 1, 0);
-  backend->func_tulpar_print_float = LLVMAddFunction(backend->module, "tulpar_print_float", print_float_type);
-  backend->func_tulpar_println_float = LLVMAddFunction(backend->module, "tulpar_println_float", print_float_type);
-  
+  LLVMTypeRef print_float_type =
+      LLVMFunctionType(backend->void_type, print_float_params, 1, 0);
+  backend->func_tulpar_print_float =
+      LLVMAddFunction(backend->module, "tulpar_print_float", print_float_type);
+  backend->func_tulpar_println_float = LLVMAddFunction(
+      backend->module, "tulpar_println_float", print_float_type);
+
   // tulpar_print_bool(i8) -> void
   LLVMTypeRef print_bool_params[] = {backend->bool_type};
-  LLVMTypeRef print_bool_type = LLVMFunctionType(backend->void_type, print_bool_params, 1, 0);
-  backend->func_tulpar_print_bool = LLVMAddFunction(backend->module, "tulpar_print_bool", print_bool_type);
-  backend->func_tulpar_println_bool = LLVMAddFunction(backend->module, "tulpar_println_bool", print_bool_type);
-  
+  LLVMTypeRef print_bool_type =
+      LLVMFunctionType(backend->void_type, print_bool_params, 1, 0);
+  backend->func_tulpar_print_bool =
+      LLVMAddFunction(backend->module, "tulpar_print_bool", print_bool_type);
+  backend->func_tulpar_println_bool =
+      LLVMAddFunction(backend->module, "tulpar_println_bool", print_bool_type);
+
   // tulpar_print_string(i8*) -> void
   LLVMTypeRef print_str_params[] = {backend->string_type};
-  LLVMTypeRef print_str_type = LLVMFunctionType(backend->void_type, print_str_params, 1, 0);
-  backend->func_tulpar_print_string = LLVMAddFunction(backend->module, "tulpar_print_string", print_str_type);
-  backend->func_tulpar_println_string = LLVMAddFunction(backend->module, "tulpar_println_string", print_str_type);
-  
+  LLVMTypeRef print_str_type =
+      LLVMFunctionType(backend->void_type, print_str_params, 1, 0);
+  backend->func_tulpar_print_string =
+      LLVMAddFunction(backend->module, "tulpar_print_string", print_str_type);
+  backend->func_tulpar_println_string =
+      LLVMAddFunction(backend->module, "tulpar_println_string", print_str_type);
+
   // tulpar_print_newline() -> void
   LLVMTypeRef print_nl_type = LLVMFunctionType(backend->void_type, NULL, 0, 0);
-  backend->func_tulpar_print_newline = LLVMAddFunction(backend->module, "tulpar_print_newline", print_nl_type);
-  
+  backend->func_tulpar_print_newline =
+      LLVMAddFunction(backend->module, "tulpar_print_newline", print_nl_type);
+
   // tulpar_string_concat(i8*, i8*) -> i8*
   LLVMTypeRef concat_params[] = {backend->string_type, backend->string_type};
-  LLVMTypeRef concat_type = LLVMFunctionType(backend->string_type, concat_params, 2, 0);
-  backend->func_tulpar_string_concat = LLVMAddFunction(backend->module, "tulpar_string_concat", concat_type);
-  
+  LLVMTypeRef concat_type =
+      LLVMFunctionType(backend->string_type, concat_params, 2, 0);
+  backend->func_tulpar_string_concat =
+      LLVMAddFunction(backend->module, "tulpar_string_concat", concat_type);
+
   // tulpar_string_length(i8*) -> i64
   LLVMTypeRef strlen_params[] = {backend->string_type};
-  LLVMTypeRef strlen_type = LLVMFunctionType(backend->int_type, strlen_params, 1, 0);
-  backend->func_tulpar_string_length = LLVMAddFunction(backend->module, "tulpar_string_length", strlen_type);
-  
+  LLVMTypeRef strlen_type =
+      LLVMFunctionType(backend->int_type, strlen_params, 1, 0);
+  backend->func_tulpar_string_length =
+      LLVMAddFunction(backend->module, "tulpar_string_length", strlen_type);
+
   // tulpar_clock_ms() -> double
   LLVMTypeRef clock_type = LLVMFunctionType(backend->float_type, NULL, 0, 0);
-  backend->func_tulpar_clock_ms = LLVMAddFunction(backend->module, "tulpar_clock_ms", clock_type);
+  backend->func_tulpar_clock_ms =
+      LLVMAddFunction(backend->module, "tulpar_clock_ms", clock_type);
 }
 
 // Convert DataType to LLVM type
 LLVMTypeRef datatype_to_llvm(LLVMBackend *backend, DataType type) {
   switch (type) {
-    case TYPE_INT:    return backend->int_type;
-    case TYPE_FLOAT:  return backend->float_type;
-    case TYPE_BOOL:   return backend->bool_type;
-    case TYPE_STRING: return backend->string_type;
-    case TYPE_VOID:   return backend->void_type;
-    default:          return backend->vm_value_type; // Fallback for complex types
+  case TYPE_INT:
+    return backend->int_type;
+  case TYPE_FLOAT:
+    return backend->float_type;
+  case TYPE_BOOL:
+    return backend->bool_type;
+  case TYPE_STRING:
+    return backend->string_type;
+  case TYPE_VOID:
+    return backend->void_type;
+  default:
+    return backend->vm_value_type; // Fallback for complex types
   }
 }
 
 // Convert DataType to InferredType
 InferredType datatype_to_inferred(DataType type) {
   switch (type) {
-    case TYPE_INT:    return INFERRED_INT;
-    case TYPE_FLOAT:  return INFERRED_FLOAT;
-    case TYPE_BOOL:   return INFERRED_BOOL;
-    case TYPE_STRING: return INFERRED_STRING;
-    case TYPE_ARRAY:
-    case TYPE_ARRAY_INT:
-    case TYPE_ARRAY_FLOAT:
-    case TYPE_ARRAY_STR:
-    case TYPE_ARRAY_BOOL:
-      return INFERRED_ARRAY;
-    default:          return INFERRED_UNKNOWN;
+  case TYPE_INT:
+    return INFERRED_INT;
+  case TYPE_FLOAT:
+    return INFERRED_FLOAT;
+  case TYPE_BOOL:
+    return INFERRED_BOOL;
+  case TYPE_STRING:
+    return INFERRED_STRING;
+  case TYPE_ARRAY:
+  case TYPE_ARRAY_INT:
+  case TYPE_ARRAY_FLOAT:
+  case TYPE_ARRAY_STR:
+  case TYPE_ARRAY_BOOL:
+    return INFERRED_ARRAY;
+  default:
+    return INFERRED_UNKNOWN;
   }
 }
-

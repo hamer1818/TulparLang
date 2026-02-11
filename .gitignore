@@ -12,6 +12,8 @@ tulpar.exe
 *.so
 *.dylib
 *.dll
+*.pdb
+*.exe
 
 # ==== Build Directories ====
 build/
@@ -61,6 +63,9 @@ ehthumbs.db
 *.db
 *.sqlite
 *.sqlite3
+benchmark_results.txt
+aot_out.txt
+test_file.txt
 
 # ==== Benchmark Outputs ====
 benchmarks/*.exe

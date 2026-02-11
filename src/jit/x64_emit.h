@@ -33,26 +33,15 @@ typedef enum {
 } X64Reg;
 
 // ============================================================================
-// x64 CALLING CONVENTION
+// x64 CALLING CONVENTION (System V AMD64 - Linux/macOS)
 // ============================================================================
 
-#ifdef _WIN32
-// Windows x64: RCX, RDX, R8, R9 for first 4 args
-#define ARG1_REG RCX
-#define ARG2_REG RDX
-#define ARG3_REG R8
-#define ARG4_REG R9
-#define SCRATCH_REG R10
-#define SCRATCH_REG2 R11
-#else
-// System V AMD64 (Linux/macOS): RDI, RSI, RDX, RCX, R8, R9
 #define ARG1_REG RDI
 #define ARG2_REG RSI
 #define ARG3_REG RDX
 #define ARG4_REG RCX
 #define SCRATCH_REG R10
 #define SCRATCH_REG2 R11
-#endif
 
 // ============================================================================
 // REX PREFIX HELPERS

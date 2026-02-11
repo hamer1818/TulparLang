@@ -523,38 +523,9 @@ func _router_handle_client(int client) {
                         // Params'ı request'e ekle
                         _request["params"] = params;
                         
-                        // Handler fonksiyonunu çağır (Global scope'ta olmalı)
-                        // Tulpar'da dinamik fonksiyon çağırma (eval gibi)
-                        // Ancak handler adı string olarak geliyor.
-                        // Şimdilik route handler'ları fonksiyon adı olarak saklıyoruz.
-                        // Tulpar interpreter bunu desteklemeli.
-                        // Evet, handler_name bir string, ama nasıl çağıracağız?
-                        // "call func_name(args)" yok.
-                        // "func_name()" şeklinde çağıramayız çünkü string.
-                        // Şu an için Handler mantığımız EKSİK olabilir?
-                        // Önceki testlerde nasıl çalışıyordu?
-                        // 44_complete_router_test.tpr dosyasında handler logic manual if/else miydi?
-                        // Hayır, örnekte router implementation vardı ama handler çağırma kısmı yoktu.
-                        // Dur, önceki `listen` kodunda handler çağırma kısmı şöyleydi:
-                        // response = json_response(...) // Sadece info dönüyordu!
-                        // Gerçek handler execution henüz yok!
-                        
-                        // FIXME: Router sadece JSON bilgi dönüyor, handler fonksiyonunu ÇAĞIRMIYOR!
-                        // Çünkü dinamik fonksiyon çağırma özelliği yok.
-                        // Çözüm: Kullanıcılar route tanımlarken fonksiyon adı değil, kod bloğu vermeli?
-                        // Veya `call(func_name)` built-in lazım.
-                        // Şimdilik önceki davranışla aynı bırakalım (JSON info dönüyor).
-                        
-                        // Route matched - return info
-                        response = json_response(200, {
-                            "success": true,
-                            "route": matched_route["path"],
-                            "handler": matched_route["handler"],
-                            "method": method,
-                            "params": params,
-                            "query": query,
-                            "body": _request["body"]
-                        });
+                        // Handler fonksiyonunu call() ile dinamik olarak cagir
+                        json result = call(matched_route["handler"]);
+                        response = json_response(200, result);
                     } else {
                         // 404 Not Found
                         response = json_response(404, {

@@ -20,11 +20,7 @@ typedef struct {
 
 // Forward Declarations
 static Interpreter *interpreter_clone(Interpreter *src);
-#ifdef _WIN32
-DWORD WINAPI thread_entry_point(LPVOID lpParam);
-#else
 void *thread_entry_point(void *arg);
-#endif
 
 // SQLite Callback
 static int tulpar_sqlite_callback(void *data, int argc, char **argv,
@@ -1261,21 +1257,7 @@ Value *value_copy(Value *val) {
     break;
   }
   case VAL_THREAD: {
-#ifdef _WIN32
-    HANDLE hTarget;
-    // Thread handle'ını kopyala (Duplicate) - böylece her value kendi
-    // handle'ına sahip olur
-    if (DuplicateHandle(GetCurrentProcess(), val->data.thread_val,
-                        GetCurrentProcess(), &hTarget, 0, FALSE,
-                        DUPLICATE_SAME_ACCESS)) {
-      copy->data.thread_val = hTarget;
-    } else {
-      copy->data.thread_val = NULL;
-    }
-#else
-    copy->data.thread_val =
-        val->data.thread_val; // POSIX thread id kopyalanabilir
-#endif
+    copy->data.thread_val = val->data.thread_val;
     break;
   }
   case VAL_MUTEX: {
@@ -1357,14 +1339,6 @@ void value_free(Value *val) {
   }
   if (val->type == VAL_BIGINT && val->data.bigint_val) {
     free(val->data.bigint_val);
-  }
-
-  if (val->type == VAL_THREAD) {
-#ifdef _WIN32
-    if (val->data.thread_val) {
-      CloseHandle(val->data.thread_val);
-    }
-#endif
   }
 
   free(val);
@@ -1547,13 +1521,6 @@ Value *symbol_table_get(SymbolTable *table, char *name) {
 // ============================================================================
 
 Interpreter *interpreter_create() {
-#ifdef _WIN32
-  WSADATA wsaData;
-  if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-    fprintf(stderr, "WSAStartup failed.\n");
-    exit(1);
-  }
-#endif
   Interpreter *interp = (Interpreter *)malloc(sizeof(Interpreter));
   interp->global_scope = symbol_table_create(NULL);
   interp->current_scope = interp->global_scope;
@@ -1609,9 +1576,6 @@ void interpreter_free(Interpreter *interp) {
   }
 
   free(interp);
-#ifdef _WIN32
-  WSACleanup();
-#endif
 }
 
 void interpreter_register_function(Interpreter *interp, char *name,
@@ -2376,11 +2340,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
       Value *sock_val = interpreter_eval_expression(interp, node->arguments[0]);
       if (sock_val->type == VAL_INT) {
         SOCKET sock = (SOCKET)sock_val->data.int_val;
-#ifdef _WIN32
-        closesocket(sock);
-#else
         close(sock);
-#endif
         value_free(sock_val);
         return value_create_void();
       }
@@ -2412,22 +2372,14 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
 
         if (bind(sock, (struct sockaddr *)&server, sizeof(server)) ==
             SOCKET_ERROR) {
-#ifdef _WIN32
-          closesocket(sock);
-#else
           close(sock);
-#endif
           value_free(host_val);
           value_free(port_val);
           return value_create_int(-1);
         }
 
         if (listen(sock, 5) == SOCKET_ERROR) {
-#ifdef _WIN32
-          closesocket(sock);
-#else
           close(sock);
-#endif
           value_free(host_val);
           value_free(port_val);
           return value_create_int(-1);
@@ -2461,11 +2413,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
         server.sin_port = htons((unsigned short)port_val->data.int_val);
 
         if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0) {
-#ifdef _WIN32
-          closesocket(sock);
-#else
           close(sock);
-#endif
           value_free(host_val);
           value_free(port_val);
           return value_create_int(-1);
@@ -2887,11 +2835,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
         Value *arg = interpreter_eval_expression(interp, node->arguments[0]);
         if (arg->type == VAL_INT) {
           long long ms = arg->data.int_val;
-#ifdef _WIN32
-          Sleep((DWORD)ms);
-#else
           usleep(ms * 1000);
-#endif
           value_free(arg);
           return value_create_void();
         }
@@ -2930,32 +2874,20 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
           // döndürür. Bu value'nun sahipliğini args'a veriyoruz.
           args->arg = arg_val; // Sahiplik devri
 
-#ifdef _WIN32
-          HANDLE hThread =
-              CreateThread(NULL,               // default security attributes
-                           0,                  // use default stack size
-                           thread_entry_point, // thread function name
-                           args,               // argument to thread function
-                           0,                  // use default creation flags
-                           NULL);              // returns the thread identifier
-
-          if (hThread == NULL) {
+          pthread_t tid;
+          if (pthread_create(&tid, NULL, thread_entry_point, args) != 0) {
             printf("Error creating thread\n");
             free(args->func_name);
             free(args);
             value_free(arg_val);
           } else {
-            // Thread handle döndür (VAL_THREAD eklenmeli value_create_thread)
-            // Manuel oluştur:
+            pthread_detach(tid);
             Value *val_t = (Value *)malloc(sizeof(Value));
             val_t->type = VAL_THREAD;
-            val_t->data.thread_val = hThread;
+            val_t->data.thread_val = tid;
             value_free(func_name_val);
             return val_t;
           }
-#else
-          // POSIX TODO
-#endif
         }
         value_free(func_name_val);
         // arg_val sahipliği devredilmediyse free et (hata durumu)
@@ -2965,19 +2897,14 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
 
     // mutex_create()
     if (strcmp(node->name, "mutex_create") == 0) {
-#ifdef _WIN32
-      CRITICAL_SECTION *cs =
-          (CRITICAL_SECTION *)malloc(sizeof(CRITICAL_SECTION));
-      InitializeCriticalSection(cs);
+      pthread_mutex_t *mtx =
+          (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+      pthread_mutex_init(mtx, NULL);
 
       Value *val_m = (Value *)malloc(sizeof(Value));
       val_m->type = VAL_MUTEX;
-      val_m->data.mutex_val = cs;
+      val_m->data.mutex_val = mtx;
       return val_m;
-#else
-      // POSIX PTHREAD_MUTEX_INITIALIZER? Dynamic -> pthread_mutex_init
-#endif
-      return value_create_void();
     }
 
     // mutex_lock(mutex)
@@ -2985,11 +2912,9 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
       if (node->argument_count > 0) {
         Value *arg = interpreter_eval_expression(interp, node->arguments[0]);
         if (arg->type == VAL_MUTEX) {
-#ifdef _WIN32
-          EnterCriticalSection(arg->data.mutex_val);
-#endif
+          pthread_mutex_lock(arg->data.mutex_val);
         }
-        value_free(arg); // Handle kopyasını free et, mutex'in kendisini değil
+        value_free(arg);
       }
       return value_create_void();
     }
@@ -2999,9 +2924,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
       if (node->argument_count > 0) {
         Value *arg = interpreter_eval_expression(interp, node->arguments[0]);
         if (arg->type == VAL_MUTEX) {
-#ifdef _WIN32
-          LeaveCriticalSection(arg->data.mutex_val);
-#endif
+          pthread_mutex_unlock(arg->data.mutex_val);
         }
         value_free(arg);
       }
@@ -3580,42 +3503,15 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
 
     // time_ms() - Milisaniye cinsinden zaman damgası (epoch'tan beri)
     if (strcmp(node->name, "time_ms") == 0) {
-#ifdef _WIN32
-      FILETIME ft;
-      GetSystemTimeAsFileTime(&ft);
-      ULARGE_INTEGER uli;
-      uli.LowPart = ft.dwLowDateTime;
-      uli.HighPart = ft.dwHighDateTime;
-      // Windows: 100-nanosecond intervals since January 1, 1601
-      // Convert to milliseconds since Unix epoch (January 1, 1970)
-      long long ms = (uli.QuadPart / 10000LL) - 11644473600000LL;
-      return value_create_int(ms);
-#else
       struct timespec ts;
       clock_gettime(CLOCK_REALTIME, &ts);
       long long ms = (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
       return value_create_int(ms);
-#endif
     }
 
     // clock_ms() - Program başlangıcından beri geçen milisaniye (yüksek
     // hassasiyet)
     if (strcmp(node->name, "clock_ms") == 0) {
-#ifdef _WIN32
-      static LARGE_INTEGER frequency = {0};
-      static LARGE_INTEGER start = {0};
-      static int initialized = 0;
-      if (!initialized) {
-        QueryPerformanceFrequency(&frequency);
-        QueryPerformanceCounter(&start);
-        initialized = 1;
-      }
-      LARGE_INTEGER now;
-      QueryPerformanceCounter(&now);
-      double elapsed = (double)(now.QuadPart - start.QuadPart) * 1000.0 /
-                       (double)frequency.QuadPart;
-      return value_create_float((float)elapsed);
-#else
       static struct timespec start = {0, 0};
       static int initialized = 0;
       if (!initialized) {
@@ -3627,7 +3523,6 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
       double elapsed = (now.tv_sec - start.tv_sec) * 1000.0 +
                        (now.tv_nsec - start.tv_nsec) / 1000000.0;
       return value_create_float((float)elapsed);
-#endif
     }
 
     // sleep(ms) - Belirtilen milisaniye kadar bekle
@@ -3636,11 +3531,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode *node) {
       if (ms_val->type == VAL_INT || ms_val->type == VAL_FLOAT) {
         int ms = (ms_val->type == VAL_INT) ? (int)ms_val->data.int_val
                                            : (int)ms_val->data.float_val;
-#ifdef _WIN32
-        Sleep(ms);
-#else
         usleep(ms * 1000);
-#endif
       }
       value_free(ms_val);
       return value_create_void();
@@ -5515,51 +5406,29 @@ static Interpreter *interpreter_clone(Interpreter *src) {
   return dest;
 }
 
-// Thread Entry Point (Windows)
-#ifdef _WIN32
-DWORD WINAPI thread_entry_point(LPVOID lpParam) {
-  ThreadArgs *args = (ThreadArgs *)lpParam;
+// Thread Entry Point (POSIX)
+void *thread_entry_point(void *arg) {
+  ThreadArgs *args = (ThreadArgs *)arg;
 
-  // Yeni interpreter oluştur ve init et
   Interpreter *thread_interp = interpreter_clone(args->parent_interp);
 
-  // Fonksiyonu bul
   Function *func = interpreter_get_function(thread_interp, args->func_name);
   if (func) {
     ASTNode *func_node = func->node;
     if (func_node && func_node->body) {
-      // Argüman varsa ilk parametreye ata
-      // args->arg zaten kopyalanmış bir değer olmalı (main thread'den bağımsız)
       if (func_node->param_count > 0 && args->arg) {
         symbol_table_set(thread_interp->global_scope,
                          func_node->parameters[0]->name, args->arg);
       }
 
-      // Fonksiyon gövdesini çalıştır
-      // interpreter_execute exception yakalamayı da içerir
       interpreter_execute(thread_interp, func_node->body);
     }
   }
 
-  // Temizlik
   interpreter_free(thread_interp);
-  // args->arg thread'e aitti (clone sırasında veya creation sırasında
-  // kopyalandı) Ancak symbol_table_set (yukarıda) kopyalamadı, direkt pointer'ı
-  // aldı. interpreter_free sembol tablosunu temizleyince argüman da silinir. Bu
-  // yüzden burada free etmeye gerek yok (eğer symbol table sahipliği aldıysa).
-  // symbol_table_set value ownership almaz, ama SymbolTable destroy ederken
-  // value_free çağırır mı? Evet, symbol_table_free -> value_free çağırır. Bu
-  // yüzden burada args->arg'ı free etmemeliyiz.
 
   free(args->func_name);
   free(args);
 
-  return 0;
-}
-#else
-// POSIX Thread entry point
-void *thread_entry_point(void *arg) {
-  // POSIX Implementation (TODO)
   return NULL;
 }
-#endif

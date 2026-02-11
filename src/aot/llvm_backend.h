@@ -55,8 +55,8 @@ typedef struct {
   LLVMTypeRef string_type; // i8*
 
   // VM Types
-  // VM Types
-  LLVMTypeRef vm_value_type;   // struct VMValue
+  LLVMTypeRef vm_value_type;   // struct VMValue {i32, [4xi8], i64}
+  LLVMTypeRef ret_pair_type;   // {i64, i64} - ABI-safe return type for VMValue
   LLVMTypeRef obj_type;        // struct Obj
   LLVMTypeRef obj_string_type; // struct ObjString
 
@@ -110,6 +110,7 @@ typedef struct {
   LLVMValueRef func_aot_array_push;
   LLVMValueRef func_aot_array_pop;
   LLVMValueRef func_aot_to_json;
+  LLVMValueRef func_aot_runtime_init;
   LLVMValueRef func_aot_input;
   LLVMValueRef func_aot_trim;
   LLVMValueRef func_aot_replace;
@@ -137,6 +138,9 @@ typedef struct {
   LLVMValueRef func_aot_socket_send;
   LLVMValueRef func_aot_socket_receive;
   LLVMValueRef func_aot_socket_close;
+
+  // Dynamic Call (Wings support)
+  LLVMValueRef func_aot_call_dynamic;
 
   // Fast String Operations
   LLVMValueRef func_aot_string_concat_fast;
@@ -260,13 +264,19 @@ typedef struct {
   LLVMValueRef func_tulpar_println_bool;
   LLVMValueRef func_tulpar_println_string;
   LLVMValueRef func_tulpar_print_newline;
-  
+
   LLVMValueRef func_tulpar_string_concat;
   LLVMValueRef func_tulpar_string_length;
   LLVMValueRef func_tulpar_clock_ms;
-  
+
   // Static typing mode flag
-  int use_static_typing;  // 1 = use native types, 0 = use VMValue
+  int use_static_typing; // 1 = use native types, 0 = use VMValue
+
+  // ABI tracking
+  int current_function_is_void_abi;
+
+  // Quiet mode - suppress [AOT] messages during compilation
+  int quiet;
 
 } LLVMBackend;
 
@@ -284,7 +294,7 @@ void llvm_backend_enable_static_typing(LLVMBackend *backend);
 void enter_scope(LLVMBackend *backend);
 void exit_scope(LLVMBackend *backend);
 void add_local(LLVMBackend *backend, const char *name, LLVMValueRef val);
-void add_local_typed(LLVMBackend *backend, const char *name, LLVMValueRef val, 
+void add_local_typed(LLVMBackend *backend, const char *name, LLVMValueRef val,
                      InferredType type, LLVMValueRef native_val);
 LLVMValueRef get_local(LLVMBackend *backend, const char *name);
 InferredType get_local_type(LLVMBackend *backend, const char *name);
@@ -292,7 +302,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node);
 LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode *node);
 
 // Native type codegen (static typing)
-LLVMValueRef codegen_native_expr(LLVMBackend *backend, ASTNode *node, DataType expected_type);
+LLVMValueRef codegen_native_expr(LLVMBackend *backend, ASTNode *node,
+                                 DataType expected_type);
 void codegen_native_func_def(LLVMBackend *backend, ASTNode *node);
 
 // DataType to LLVM type conversion

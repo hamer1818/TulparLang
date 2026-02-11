@@ -4,13 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <windows.h>
-#include <fcntl.h>
-#include <io.h>
-
-#endif
 #include "interpreter/interpreter.h"
 #include "lexer/lexer.h"
 #include "parser/parser.h"
@@ -87,11 +80,7 @@ static void run_repl() {
       continue;
     }
     if (strcmp(line, "clear") == 0) {
-#ifdef _WIN32
-      system("cls");
-#else
       system("clear");
-#endif
       continue;
     }
 
@@ -156,32 +145,30 @@ static void run_repl() {
 }
 
 int main(int argc, char **argv) {
-// Windows UTF-8 support
-#ifdef _WIN32
-  SetConsoleOutputCP(65001); // CP_UTF8
-  SetConsoleCP(65001);
-  _setmode(_fileno(stdout), _O_BINARY);
-  _setmode(_fileno(stderr), _O_BINARY);
-  _setmode(_fileno(stdin), _O_BINARY);
-  setvbuf(stdout, NULL, _IONBF, 0);
-#endif
-
   // Locale setup
   setlocale(LC_ALL, ".UTF8");
 
   // Flags
-  int force_vm = 0;      // --vm / --run forces VM path, skips AOT
-  int use_legacy = 0;    // --legacy forces interpreter (not VM)
-  int arg_offset = 1;    // index of first non-flag arg
+  int force_vm = 0;    // --vm / --run forces VM path, skips AOT
+  int use_legacy = 0;  // --legacy forces interpreter (not VM)
+  int build_mode = 0;  // build / --build / --aot: save native binary
+  int arg_offset = 1;  // index of first non-flag arg
 
   // Parse flags
   for (int i = 1; i < argc; i++) {
+
     if (strcmp(argv[i], "--vm") == 0 || strcmp(argv[i], "--run") == 0) {
       force_vm = 1;
       arg_offset = i + 1;
     } else if (strcmp(argv[i], "--legacy") == 0) {
       use_legacy = 1;
       arg_offset = i + 1;
+    } else if (strcmp(argv[i], "--aot") == 0 ||
+               strcmp(argv[i], "--build") == 0 ||
+               strcmp(argv[i], "build") == 0) {
+      build_mode = 1;
+      arg_offset = i;
+      break;
     } else if (argv[i][0] != '-') {
       // First non-flag argument is the file
       arg_offset = i;
@@ -196,11 +183,11 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  // Check for explicit AOT mode
 #ifdef TULPAR_AOT_ENABLED
-  if (!force_vm && argc > arg_offset && strcmp(argv[arg_offset], "--aot") == 0) {
+  // Build mode: save native binary (tulpar build file.tpr [output])
+  if (!force_vm && build_mode) {
     if (arg_offset + 1 >= argc) {
-      printf("Usage: tulpar --aot <source.tpr> [output_name]\n");
+      printf("Usage: tulpar build <source.tpr> [output_name]\n");
       return 1;
     }
     char *source = read_file(argv[arg_offset + 1]);
@@ -208,8 +195,40 @@ int main(int argc, char **argv) {
       return 1;
     }
 
-    // Output name defaults to input file without extension
-    const char *output_name = (arg_offset + 2 < argc) ? argv[arg_offset + 2] : "a.out";
+    // Output name strategy:
+    // 1. Explicit argument
+    // 2. Derive from input filename (e.g., hello.tpr -> hello)
+    // 3. Fallback to "a.out"
+
+    char default_output_name[256];
+    const char *output_name;
+
+    if (arg_offset + 2 < argc) {
+      // User provided explicit output name
+      output_name = argv[arg_offset + 2];
+    } else {
+      // Derive from input file
+      const char *input_path = argv[arg_offset + 1];
+      const char *base_name = strrchr(input_path, '/');
+      if (!base_name)
+        base_name = input_path;
+      else
+        base_name++; // Skip separator
+
+      // Copy up to extension
+      const char *ext = strrchr(base_name, '.');
+      size_t len = ext ? (size_t)(ext - base_name) : strlen(base_name);
+      if (len >= sizeof(default_output_name))
+        len = sizeof(default_output_name) - 1;
+
+      strncpy(default_output_name, base_name, len);
+      default_output_name[len] = '\0';
+
+      if (len == 0)
+        strcpy(default_output_name, "a.out"); // Fallback
+
+      output_name = default_output_name;
+    }
 
     AOTResult result = aot_compile(source, output_name);
     free(source);
@@ -222,22 +241,36 @@ int main(int argc, char **argv) {
 
   // Command line arguments
   if (argc > arg_offset) {
-    // Default: run via VM/interpreter
     source = read_file(argv[arg_offset]);
     if (!source) {
       return 1;
     }
     from_file = 1;
+
+#ifdef TULPAR_AOT_ENABLED
+    // Default mode: AOT compile & run (fastest execution)
+    // Falls back to VM if AOT compilation fails
+    if (!force_vm && !use_legacy) {
+      AOTResult aot_result = aot_compile_and_run_silent(source);
+      if (aot_result == AOT_OK) {
+        free(source);
+        return 0;
+      }
+      // AOT failed - fall through to VM mode silently
+    }
+#endif
   } else {
     // No arguments - show help
-    printf("TulparLang v2.1.0 (LLVM Backend)\n\n");
+    printf("TulparLang v2.1.0 (LLVM AOT Backend)\n\n");
     printf("Usage:\n");
-    printf("  tulpar <source.tpr>           - Run via VM (default)\n");
-    printf("  tulpar --aot <source.tpr>     - Compile to native binary\n");
-    printf("  tulpar --aot <source.tpr> out - Compile with custom output name\n");
-    printf("  tulpar --vm <source.tpr>      - Force VM execution (alias)\n");
-    printf("  tulpar --run <source.tpr>     - Alias for --vm\n");
-    printf("  tulpar --repl                 - Interactive mode\n");
+    printf("  tulpar <source.tpr>              - Run program (AOT native "
+           "speed)\n");
+    printf("  tulpar build <source.tpr> [out]  - Build standalone native "
+           "binary\n");
+    printf(
+        "  tulpar --vm <source.tpr>         - Run via VM (instant start)\n");
+    printf("  tulpar --repl                    - Interactive mode\n");
+    printf("\nTulparLang: Python gibi kolay, C gibi hizli.\n");
     return 0;
   }
 

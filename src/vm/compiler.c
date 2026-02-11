@@ -713,6 +713,10 @@ void compile_expression(Compiler *compiler, ASTNode *node) {
       compile_expression(compiler, node->arguments[1]); // sql
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
       emit_byte(compiler, 102, node->line);
+    } else if (strcmp(node->name, "call") == 0) {
+      compile_expression(compiler, node->arguments[0]); // func name
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 120, node->line);
     } else if (strcmp(node->name, "push") == 0) {
       // Built-in push(arr, val)
       compile_expression(compiler, node->arguments[0]); // Arr

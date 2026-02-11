@@ -1,18 +1,19 @@
 ================================================================================
 MULTI-LANGUAGE PERFORMANS KARŞILAŞTIRMASI
-Tulpar vs Python vs C vs JavaScript vs PHP
+Tulpar vs Python vs C vs JavaScript vs PHP vs Go vs Rust
 ================================================================================
-Tarih: 2026-01-27 13:53:24
-Platform: Windows 11
+Tarih: 2026-02-11 23:11:17
+Platform: Linux 6.6.87.2-microsoft-standard-WSL2
 
 --------------------------------------------------------------------------------
-TOPLAM SÜRELER (Sıralı)
+TOPLAM SÜRELER (Sıralı) - Referans: Tulpar
 --------------------------------------------------------------------------------
 
-1. C: 2.277 ms
-2. Tulpar: 8.773 ms
-3. JavaScript: 22.685 ms
-4. PHP: 173.666 ms
-5. Python: 350.744 ms
+1. C: 8.647 ms (1.66x HIZLI)
+2. Rust: 9.301 ms (1.54x HIZLI)
+3. Tulpar: 14.359 ms (REFERANS)
+4. JavaScript: 57.129 ms (3.98x YAVAS)
+5. PHP: 120.827 ms (8.41x YAVAS)
+6. Python: 3.671 s (255.63x YAVAS)
 
 ================================================================================

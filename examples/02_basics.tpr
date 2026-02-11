@@ -32,7 +32,7 @@ push(arr, 4);
 str jsonArr = toJson(arr);
 print("Array: " + jsonArr);
 
-str lenStr = toString(len(arr));
+str lenStr = toString(length(arr));
 print("Length: " + lenStr);
 
 arr[0] = 99;

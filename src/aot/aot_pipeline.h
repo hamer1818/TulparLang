@@ -12,11 +12,15 @@ typedef enum {
   AOT_ERROR_LINK
 } AOTResult;
 
-// Compile Tulpar source to executable
+// Compile Tulpar source to executable (verbose mode)
 // Returns AOT_OK on success, error code otherwise
 AOTResult aot_compile(const char *source, const char *output_name);
 
 // Compile and run (JIT-style, but AOT under the hood)
 AOTResult aot_compile_and_run(const char *source);
+
+// Silent compile and run - no [AOT] messages, temp binary, auto-cleanup
+// Returns AOT_OK on success. Used as default execution mode.
+AOTResult aot_compile_and_run_silent(const char *source);
 
 #endif // AOT_PIPELINE_H

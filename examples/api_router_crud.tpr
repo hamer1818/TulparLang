@@ -1,0 +1,158 @@
+// ============================================
+// Tulpar Router - Full CRUD API Example
+// Uses the advanced router with middleware support
+// Run with: tulpar api_router_crud.tpr
+// ============================================
+import "lib/router.tpr";
+
+// ============================================
+// In-memory Database
+// ============================================
+array _products = [];
+int _next_id = 1;
+
+// Seed data
+func seed_products() {
+    push(_products, {"id": 1, "name": "Laptop", "price": 999, "stock": 10});
+    push(_products, {"id": 2, "name": "Phone", "price": 599, "stock": 25});
+    push(_products, {"id": 3, "name": "Tablet", "price": 399, "stock": 15});
+    _next_id = 4;
+    print("Seeded " + toString(length(_products)) + " products");
+}
+
+seed_products();
+
+// ============================================
+// Enable Middleware
+// ============================================
+use_middleware("logger");
+use_middleware("cors");
+
+// ============================================
+// Handler Functions
+// ============================================
+
+// GET / - Home
+func handle_home() {
+    return {
+        "name": "Tulpar Router Product API",
+        "version": "2.0.0",
+        "middleware": ["logger", "cors"]
+    };
+}
+
+// GET /products - List all products
+func handle_list_products() {
+    return {
+        "success": true,
+        "data": _products,
+        "count": length(_products)
+    };
+}
+
+// GET /products/:id - Get product by ID
+func handle_get_product() {
+    json params = _request["params"];
+    int id = toInt(params["id"]);
+
+    for (int i = 0; i < length(_products); i++) {
+        if (_products[i]["id"] == id) {
+            return {
+                "success": true,
+                "data": _products[i]
+            };
+        }
+    }
+
+    return {
+        "success": false,
+        "error": "Product not found",
+        "id": id
+    };
+}
+
+// POST /products - Create product
+func handle_create_product() {
+    json new_product = {
+        "id": _next_id,
+        "name": "New Product",
+        "price": 0,
+        "stock": 0
+    };
+
+    str raw_body = _request["raw_body"];
+    if (length(raw_body) > 0) {
+        json body = fromJson(raw_body);
+        if (body["name"]) {
+            new_product["name"] = body["name"];
+        }
+        if (body["price"]) {
+            new_product["price"] = body["price"];
+        }
+        if (body["stock"]) {
+            new_product["stock"] = body["stock"];
+        }
+    }
+
+    push(_products, new_product);
+    _next_id = _next_id + 1;
+
+    return {
+        "success": true,
+        "message": "Product created",
+        "data": new_product
+    };
+}
+
+// DELETE /products/:id - Delete product
+func handle_delete_product() {
+    json params = _request["params"];
+    int id = toInt(params["id"]);
+
+    for (int i = 0; i < length(_products); i++) {
+        if (_products[i]["id"] == id) {
+            return {
+                "success": true,
+                "message": "Product deleted",
+                "data": _products[i]
+            };
+        }
+    }
+
+    return {
+        "success": false,
+        "error": "Product not found"
+    };
+}
+
+// GET /health - Health check
+func handle_health() {
+    return {
+        "status": "healthy",
+        "products_count": length(_products),
+        "uptime_ms": clock_ms()
+    };
+}
+
+// ============================================
+// Route Registration (with groups!)
+// ============================================
+
+// Root routes
+route_get("/", "handle_home");
+route_get("/health", "handle_health");
+
+// Product API group
+router_group_start("/products");
+route_get("", "handle_list_products");
+route_post("", "handle_create_product");
+router_group_end();
+
+// Parametric routes
+route_get("/products/:id", "handle_get_product");
+route_delete("/products/:id", "handle_delete_product");
+
+// ============================================
+// Start Server
+// ============================================
+listen(8080);

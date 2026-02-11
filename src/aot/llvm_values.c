@@ -4,28 +4,33 @@
 #include <stdint.h>
 
 // VMValue Construction Helpers
-// VMValue struct layout: {i32 type, i64 as} with implicit padding
+// VMValue struct layout: {i32 type, [4 x i8] pad, i64 as}
+//
+// C runtime VMValueType enum (from vm.h):
+//   VM_VAL_INT   = 0
+//   VM_VAL_FLOAT = 1
+//   VM_VAL_BOOL  = 2
+//   VM_VAL_VOID  = 3
+//   VM_VAL_OBJ   = 4
 
-// Create tagged INT value: {type: 0 (VM_VAL_INT), as: i64}
 // Create tagged INT value: {type: 0 (VM_VAL_INT), pad, as: i64}
 LLVMValueRef llvm_vm_val_int(LLVMBackend *backend, int64_t value) {
   LLVMValueRef padding =
       LLVMConstNull(LLVMArrayType(LLVMInt8TypeInContext(backend->context), 4));
   LLVMValueRef fields[] = {
-      LLVMConstInt(backend->int32_type, 0, 0),  // VM_VAL_INT
+      LLVMConstInt(backend->int32_type, 0, 0),  // VM_VAL_INT = 0
       padding,                                  // Padding
       LLVMConstInt(backend->int_type, value, 0) // as
   };
   return LLVMConstNamedStruct(backend->vm_value_type, fields, 3);
 }
 
-// Create tagged BOOL value: {type: 2 (VM_VAL_BOOL), as: i64}
 // Create tagged BOOL value: {type: 2 (VM_VAL_BOOL), pad, as: i64}
 LLVMValueRef llvm_vm_val_bool(LLVMBackend *backend, int value) {
   LLVMValueRef padding =
       LLVMConstNull(LLVMArrayType(LLVMInt8TypeInContext(backend->context), 4));
   LLVMValueRef fields[] = {
-      LLVMConstInt(backend->int32_type, 2, 0), // VM_VAL_BOOL
+      LLVMConstInt(backend->int32_type, 2, 0), // VM_VAL_BOOL = 2
       padding, LLVMConstInt(backend->int_type, value ? 1 : 0, 0)}; // as
   return LLVMConstNamedStruct(backend->vm_value_type, fields, 3);
 }
@@ -37,9 +42,7 @@ LLVMValueRef llvm_vm_val_bool_val(LLVMBackend *backend, LLVMValueRef value) {
 
   LLVMValueRef s = LLVMGetUndef(backend->vm_value_type);
   s = LLVMBuildInsertValue(backend->builder, s,
-                           LLVMConstInt(backend->int32_type, 2, 0), 0, "");
-  // Padding initialized? Default undef is fine for runtime logic, but let's be
-  // safe if copied Actually InsertValue(val, 2) is enough, padding stays undef
+                           LLVMConstInt(backend->int32_type, 2, 0), 0, ""); // VM_VAL_BOOL = 2
   s = LLVMBuildInsertValue(backend->builder, s, as_i64, 2, "");
   return s;
 }
@@ -49,14 +52,12 @@ LLVMValueRef llvm_vm_val_int_val(LLVMBackend *backend, LLVMValueRef value) {
   LLVMValueRef s = LLVMGetUndef(backend->vm_value_type);
   s = LLVMBuildInsertValue(backend->builder, s,
                            LLVMConstInt(backend->int32_type, 0, 0), 0,
-                           ""); // type = VM_VAL_INT
+                           ""); // VM_VAL_INT = 0
   s = LLVMBuildInsertValue(backend->builder, s, value, 2, ""); // as (index 2)
   return s;
 }
 
 // Create tagged FLOAT value: {type: 1 (VM_VAL_FLOAT), as: cast(double -> i64)}
-// Note: We need a runtime bitcast since LLVM ConstStruct fields must match
-// types
 LLVMValueRef llvm_build_vm_val_float(LLVMBackend *backend,
                                      LLVMValueRef float_val) {
   LLVMValueRef cast_val = LLVMBuildBitCast(backend->builder, float_val,
@@ -65,7 +66,7 @@ LLVMValueRef llvm_build_vm_val_float(LLVMBackend *backend,
   LLVMValueRef s = LLVMGetUndef(backend->vm_value_type);
   s = LLVMBuildInsertValue(backend->builder, s,
                            LLVMConstInt(backend->int32_type, 1, 0), 0,
-                           ""); // type
+                           ""); // VM_VAL_FLOAT = 1
   s = LLVMBuildInsertValue(backend->builder, s, cast_val, 2,
                            ""); // as (index 2)
   return s;
@@ -115,4 +116,40 @@ LLVMValueRef llvm_extract_vm_val_ptr(LLVMBackend *backend,
       LLVMBuildExtractValue(backend->builder, vm_val, 2, "extract_ptr_int");
   return LLVMBuildIntToPtr(backend->builder, as_int, backend->ptr_type,
                            "extract_ptr"); // Return i8*
+}
+
+// ============================================================================
+// ABI-safe VMValue return conversion
+// ============================================================================
+// LLVM uses sret for {i32, [4xi8], i64} but returns {i64, i64} in registers.
+// This helper converts a {i64, i64} return value to a VMValue struct.
+// Use this after calling any C function that returns VMValue.
+
+LLVMValueRef llvm_convert_ret_pair_to_vmvalue(LLVMBackend *backend,
+                                              LLVMValueRef ret_pair) {
+  // Extract the two i64 values from the return pair
+  LLVMValueRef lo =
+      LLVMBuildExtractValue(backend->builder, ret_pair, 0, "ret_lo");
+  LLVMValueRef hi =
+      LLVMBuildExtractValue(backend->builder, ret_pair, 1, "ret_hi");
+
+  // Store pair into memory, then load as VMValue (type punning through memory)
+  LLVMValueRef temp =
+      LLVMBuildAlloca(backend->builder, backend->ret_pair_type, "ret_tmp");
+  LLVMBuildStore(backend->builder, ret_pair, temp);
+
+  // Load as VMValue from the same memory location
+  return LLVMBuildLoad2(backend->builder, backend->vm_value_type, temp,
+                        "vmval_ret");
+}
+
+// Helper: Call a C function that returns VMValue, handling ABI conversion
+// The function must be declared with ret_pair_type return type
+LLVMValueRef llvm_call_vmvalue_func(LLVMBackend *backend, LLVMValueRef func,
+                                    LLVMValueRef *args, unsigned arg_count,
+                                    const char *name) {
+  LLVMValueRef ret_pair = LLVMBuildCall2(
+      backend->builder, LLVMGlobalGetValueType(func), func, args, arg_count,
+      name);
+  return llvm_convert_ret_pair_to_vmvalue(backend, ret_pair);
 }

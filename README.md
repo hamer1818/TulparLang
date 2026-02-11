@@ -5,7 +5,7 @@
 [![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/hamer1818/TulparLang/releases)
 [![Build](https://github.com/hamer1818/TulparLang/actions/workflows/build.yml/badge.svg)](https://github.com/hamer1818/TulparLang/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux%20|%20macOS%20|%20Windows-lightgrey.svg)]()
+[![Platform](https://img.shields.io/badge/platform-Linux%20|%20macOS-lightgrey.svg)]()
 
 A statically-typed programming language with LLVM backend, UTF-8 support, and native JSON syntax.
 
@@ -22,21 +22,25 @@ TulparLang is a modern programming language built in C with an LLVM-18 backend f
 - First-class JSON support
 - UTF-8 native strings
 - LLVM AOT compilation
-- Cross-platform (Linux, macOS, Windows)
+- Cross-platform (Linux, macOS; Windows via WSL)
 
 ## Performance
-
-Benchmark results comparing total execution time across 11 algorithmic tests:
-
-| Language | Total Time | Relative to C |
-|----------|------------|---------------|
-| C (gcc -O3) | 2.28 ms | 1.0x |
-| **Tulpar (AOT)** | 8.77 ms | 3.9x |
-| JavaScript (Node) | 22.69 ms | 10x |
-| PHP 8.3 | 173.67 ms | 76x |
-| Python 3.11 | 350.74 ms | 154x |
-
-Tulpar achieves near-C performance while maintaining high-level language ergonomics.
+ 
+Benchmark results comparing total execution time across 11 algorithmic tests (lower is better):
+ 
+| Rank | Language | Total Time (ms) | Relative to C | Relative to Tulpar |
+|------|----------|-----------------|---------------|--------------------|
+| 🥇 | **C (gcc -O3)** | **4.05 ms** | **1.0x** | 2.26x faster |
+| 🥈 | **Tulpar (AOT)** | **9.17 ms** | 2.26x slower | **Reference** |
+| 🥉 | Rust (1.80) | 9.27 ms | 2.29x slower | 1.01x slower |
+| 4 | Go (1.23) | 17.33 ms | 4.28x slower | 1.89x slower |
+| 5 | JavaScript (Node) | 22.16 ms | 5.47x slower | 2.42x slower |
+| 6 | PHP 8.3 | 197.04 ms | 48.6x slower | 21.48x slower |
+| 7 | Python 3.12 | 365.67 ms | 90.2x slower | 39.87x slower |
+ 
+> **Note:** Tulpar's AOT compiler (LLVM-backed) performs neck-and-neck with Rust, demonstrating high efficiency for algorithmic tasks.
+ 
+Tulpar achieves near-C performance while being significantly faster than interpreted languages like Python and PHP.
 
 ## Installation
 
@@ -62,10 +66,15 @@ make
 ./build.sh
 ```
 
-### Windows
+### Windows (via WSL)
 
-```cmd
-build.bat
+Windows users should use [WSL (Windows Subsystem for Linux)](https://learn.microsoft.com/en-us/windows/wsl/install) to build and run TulparLang:
+
+```bash
+# Inside WSL (Ubuntu):
+sudo apt-get install build-essential cmake llvm-18-dev
+cd /mnt/c/path/to/TulparLang
+./build.sh
 ```
 
 ## Quick Start
@@ -87,6 +96,29 @@ Run:
 
 ```bash
 ./tulpar hello.tpr
+```
+
+## Command Line Usage
+
+### Running Scripts (Default: Native AOT Speed)
+```bash
+tulpar script.tpr           # Fastest: AOT compile & run (native speed)
+tulpar --vm script.tpr      # VM mode: instant start, good for development
+```
+
+By default, `tulpar` transparently compiles your code to a native binary via LLVM and runs it. This gives you **C-like speed** with **Python-like simplicity** - no extra flags needed.
+
+### Building Standalone Executables
+Compile your Tulpar code into a standalone native binary for distribution:
+
+```bash
+tulpar build script.tpr         # Creates 'script' binary
+tulpar build script.tpr myapp   # Custom output name
+```
+
+### Interactive REPL
+```bash
+tulpar --repl
 ```
 
 ## Language Features

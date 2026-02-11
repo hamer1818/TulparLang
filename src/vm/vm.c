@@ -1,25 +1,18 @@
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#pragma comment(lib, "ws2_32.lib")
-typedef int socklen_t;
-#else
-// POSIX socket includes
+#ifndef TULPAR_WASM_BUILD
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
-// Cross-platform compatibility definitions
-typedef int SOCKET;
-#define INVALID_SOCKET (-1)
-#define SOCKET_ERROR (-1)
 #define closesocket(s) close(s)
-#define WSAGetLastError() errno
-#endif
+#endif // TULPAR_WASM_BUILD
+#ifndef TULPAR_WASM_BUILD
 #include "../../lib/sqlite3/sqlite3.h"
+#endif
+#include "../embedded_libs.h"
 #include "../jit/jit.h"
 #include "../parser/parser.h"
 #include "compiler.h"
@@ -1423,19 +1416,10 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
 
         switch (builtin_id) {
         case 0: { // clock()
-#ifdef _WIN32
-          LARGE_INTEGER frequency;
-          LARGE_INTEGER counter;
-          QueryPerformanceFrequency(&frequency);
-          QueryPerformanceCounter(&counter);
-          double ms = (double)counter.QuadPart / frequency.QuadPart * 1000.0;
-          vm_push(vm, VM_FLOAT(ms));
-#else
           struct timespec ts;
           clock_gettime(CLOCK_MONOTONIC, &ts);
           double ms = (ts.tv_sec * 1000.0) + (ts.tv_nsec / 1000000.0);
           vm_push(vm, VM_FLOAT(ms));
-#endif
           break;
         }
         case 1: { // length(obj)
@@ -1452,22 +1436,14 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           break;
         }
         // --- Sockets ---
+#ifndef TULPAR_WASM_BUILD
         case 30: { // socket_server(host, port)
           VMValue portVal = vm_pop(vm);
           VMValue hostVal = vm_pop(vm);
-// Init WSA
-#ifdef _WIN32
-          static int wsa_init = 0;
-          if (!wsa_init) {
-            WSADATA wsaData;
-            WSAStartup(MAKEWORD(2, 2), &wsaData);
-            wsa_init = 1;
-          }
-#endif
 
-          SOCKET server_fd = socket(AF_INET, SOCK_STREAM, 0);
-          if (server_fd == INVALID_SOCKET) {
-            printf("Socket error: %d\n", WSAGetLastError());
+          int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+          if (server_fd == -1) {
+            printf("Socket error: %d\n", errno);
             vm_push(vm, VM_INT(-1));
           } else {
             struct sockaddr_in server_addr;
@@ -1486,12 +1462,12 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
 
             if (bind(server_fd, (struct sockaddr *)&server_addr,
                      sizeof(server_addr)) < 0) {
-              printf("Bind error: %d\n", WSAGetLastError());
+              printf("Bind error: %d\n", errno);
               closesocket(server_fd);
               vm_push(vm, VM_INT(-1));
             } else {
               if (listen(server_fd, 5) < 0) {
-                printf("Listen error: %d\n", WSAGetLastError());
+                printf("Listen error: %d\n", errno);
                 closesocket(server_fd);
                 vm_push(vm, VM_INT(-1));
               } else {
@@ -1503,12 +1479,12 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         }
         case 31: { // socket_accept(server_fd)
           VMValue serverVal = vm_pop(vm);
-          SOCKET server_fd = (SOCKET)AS_INT(serverVal);
+          int server_fd = (int)AS_INT(serverVal);
           struct sockaddr_in client_addr;
           socklen_t addr_len = sizeof(client_addr);
-          SOCKET client_fd =
+          int client_fd =
               accept(server_fd, (struct sockaddr *)&client_addr, &addr_len);
-          if (client_fd == INVALID_SOCKET) {
+          if (client_fd == -1) {
             vm_push(vm, VM_INT(-1));
           } else {
             vm_push(vm, VM_INT((long long)client_fd));
@@ -1519,7 +1495,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           VMValue sizeVal = vm_pop(vm);
           VMValue fdVal = vm_pop(vm);
           int size = IS_INT(sizeVal) ? (int)AS_INT(sizeVal) : 1024;
-          SOCKET fd = (SOCKET)AS_INT(fdVal);
+          int fd = (int)AS_INT(fdVal);
 
           char *buffer = (char *)malloc(size + 1);
           int bytes = recv(fd, buffer, size, 0);
@@ -1535,7 +1511,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         case 33: { // socket_send(client_fd, data)
           VMValue dataVal = vm_pop(vm);
           VMValue fdVal = vm_pop(vm);
-          SOCKET fd = (SOCKET)AS_INT(fdVal);
+          int fd = (int)AS_INT(fdVal);
           if (IS_STRING(dataVal)) {
             send(fd, AS_STRING(dataVal)->chars, AS_STRING(dataVal)->length, 0);
           }
@@ -1544,10 +1520,11 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         }
         case 34: { // socket_close(fd)
           VMValue fdVal = vm_pop(vm);
-          closesocket((SOCKET)AS_INT(fdVal));
+          close((int)AS_INT(fdVal));
           vm_push(vm, VM_VOID());
           break;
         }
+#endif // TULPAR_WASM_BUILD
 
         // --- Threading (Fake) ---
         case 40: { // thread_create(func_name, arg)
@@ -1624,10 +1601,11 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         case 41: { // sleep(ms)
           VMValue msVal = vm_pop(vm);
           int ms = IS_INT(msVal) ? (int)AS_INT(msVal) : 0;
-#ifdef _WIN32
-          Sleep(ms);
-#else
+#ifndef TULPAR_WASM_BUILD
           usleep(ms * 1000);
+#else
+          // WebAssembly'de sleep desteklenmiyor
+          // Sadece void döndür
 #endif
           vm_push(vm, VM_VOID());
           break;
@@ -2061,6 +2039,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         }
 
         // --- Socket I/O ---
+#ifndef TULPAR_WASM_BUILD
         case 90: { // socket_server(host, port) -> fd
           VMValue portVal = vm_pop(vm);
           VMValue hostVal = vm_pop(vm);
@@ -2070,21 +2049,8 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
             break;
           }
 
-#ifdef _WIN32
-          // Initialize Winsock
-          static int wsa_initialized = 0;
-          if (!wsa_initialized) {
-            WSADATA wsaData;
-            if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-              vm_push(vm, VM_INT(-1));
-              break;
-            }
-            wsa_initialized = 1;
-          }
-#endif
-
           int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-          if (server_fd < 0) {
+          if (server_fd == -1) {
             vm_push(vm, VM_INT(-1));
             break;
           }
@@ -2099,27 +2065,19 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           addr.sin_port = htons((int)AS_INT(portVal));
           addr.sin_addr.s_addr = inet_addr(AS_STRING(hostVal)->chars);
 
-          if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-#ifdef _WIN32
+          if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
             closesocket(server_fd);
-#else
-            close(server_fd);
-#endif
             vm_push(vm, VM_INT(-1));
             break;
           }
 
-          if (listen(server_fd, 5) < 0) {
-#ifdef _WIN32
+          if (listen(server_fd, 5) == -1) {
             closesocket(server_fd);
-#else
-            close(server_fd);
-#endif
             vm_push(vm, VM_INT(-1));
             break;
           }
 
-          vm_push(vm, VM_INT(server_fd));
+          vm_push(vm, VM_INT((long long)server_fd));
           break;
         }
 
@@ -2132,20 +2090,8 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
             break;
           }
 
-#ifdef _WIN32
-          static int wsa_initialized = 0;
-          if (!wsa_initialized) {
-            WSADATA wsaData;
-            if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-              vm_push(vm, VM_INT(-1));
-              break;
-            }
-            wsa_initialized = 1;
-          }
-#endif
-
           int client_fd = socket(AF_INET, SOCK_STREAM, 0);
-          if (client_fd < 0) {
+          if (client_fd == -1) {
             vm_push(vm, VM_INT(-1));
             break;
           }
@@ -2155,17 +2101,13 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           addr.sin_port = htons((int)AS_INT(portVal));
           addr.sin_addr.s_addr = inet_addr(AS_STRING(hostVal)->chars);
 
-          if (connect(client_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-#ifdef _WIN32
+          if (connect(client_fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
             closesocket(client_fd);
-#else
-            close(client_fd);
-#endif
             vm_push(vm, VM_INT(-1));
             break;
           }
 
-          vm_push(vm, VM_INT(client_fd));
+          vm_push(vm, VM_INT((long long)client_fd));
           break;
         }
 
@@ -2178,10 +2120,16 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
 
           struct sockaddr_in client_addr;
           socklen_t client_len = sizeof(client_addr);
-          int client_fd = accept((int)AS_INT(fdVal),
-                                 (struct sockaddr *)&client_addr, &client_len);
+          int client_fd =
+              accept((int)AS_INT(fdVal), (struct sockaddr *)&client_addr,
+                     &client_len);
 
-          vm_push(vm, VM_INT(client_fd));
+          if (client_fd == -1) {
+            vm_push(vm, VM_INT(-1));
+            break;
+          }
+
+          vm_push(vm, VM_INT((long long)client_fd));
           break;
         }
 
@@ -2194,8 +2142,8 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
             break;
           }
 
-          int sent = send((int)AS_INT(fdVal), AS_STRING(dataVal)->chars,
-                          AS_STRING(dataVal)->length, 0);
+          int sent = (int)send((int)AS_INT(fdVal), AS_STRING(dataVal)->chars,
+                               AS_STRING(dataVal)->length, 0);
           vm_push(vm, VM_INT(sent));
           break;
         }
@@ -2211,7 +2159,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
 
           int size = (int)AS_INT(sizeVal);
           char *buf = malloc(size + 1);
-          int received = recv((int)AS_INT(fdVal), buf, size, 0);
+          int received = (int)recv((int)AS_INT(fdVal), buf, size, 0);
 
           if (received > 0) {
             buf[received] = '\0';
@@ -2226,11 +2174,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         case 95: { // socket_close(fd)
           VMValue fdVal = vm_pop(vm);
           if (IS_INT(fdVal)) {
-#ifdef _WIN32
-            closesocket((int)AS_INT(fdVal));
-#else
             close((int)AS_INT(fdVal));
-#endif
           }
           vm_push(vm, VM_VOID());
           break;
@@ -2284,7 +2228,9 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           vm_push(vm, VM_OBJ(result));
           break;
         }
+#endif // TULPAR_WASM_BUILD
 
+#ifndef TULPAR_WASM_BUILD
         // --- Database (SQLite) ---
         case 100: { // db_open(path) -> db handle (int)
           VMValue pathVal = vm_pop(vm);
@@ -2394,6 +2340,70 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           sqlite3_finalize(stmt);
           vm_push(vm, VM_OBJ(results));
           break;
+        }
+#endif // TULPAR_WASM_BUILD
+
+        case 120: { // call(func_name)
+          VMValue val = vm_pop(vm);
+          if (!IS_STRING(val)) {
+            runtime_error(vm, "call() expects a function name string.");
+            return VM_RUNTIME_ERROR;
+          }
+          ObjString *name = AS_STRING(val);
+
+          // Search global
+          int found = 0;
+          VMValue funcVal = VM_VOID();
+
+          // 1. Try globals
+          for (int i = 0; i < vm->global_count; i++) {
+            if (vm->globals[i].key == name ||
+                strcmp(vm->globals[i].key->chars, name->chars) == 0) {
+              funcVal = vm->globals[i].value;
+              found = 1;
+              break;
+            }
+          }
+
+          if (!found) {
+            // Try to find if function object exists (maybe not in globals if
+            // local? but call() implies dynamic global dispatch usually)
+            printf("Runtime Error: Function '%s' not found.\n", name->chars);
+            vm_push(vm, VM_VOID());
+            break;
+          }
+
+          if (!IS_FUNCTION(funcVal)) {
+            printf("Runtime Error: '%s' is not a function.\n", name->chars);
+            vm_push(vm, VM_VOID());
+            break;
+          }
+
+          ObjFunction *func = AS_FUNCTION(funcVal);
+          if (func->arity != 0) {
+            printf("Runtime Error: call() only supports 0-arity functions. "
+                   "'%s' has %d.\n",
+                   name->chars, func->arity);
+            vm_push(vm, VM_VOID());
+            break;
+          }
+
+          // Execute
+          vm_push(vm, funcVal); // Push function as slot 0
+
+          frame->ip = ip;
+
+          CallFrame *newFrame = &vm->frames[vm->frame_count++];
+          newFrame->function = func;
+          newFrame->ip = func->chunk.code;
+          newFrame->slots = vm->stack_top - 1;
+          newFrame->handler_count = 0;
+
+          frame = newFrame;
+          ip = newFrame->ip;
+          chunk = &func->chunk;
+
+          DISPATCH();
         }
 
         default:
@@ -2731,9 +2741,28 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         char *fileName = frame->function->chunk.constants[nameIdx].string_val;
 
         // 1. Read file
-        char *source = read_file(fileName);
+        // Check embedded libs first
+        const char *embedded_source = get_embedded_lib(fileName);
+        char *source = NULL;
+
+        if (embedded_source != NULL) {
+          // Use embedded source
+          source =
+              strdup(embedded_source);
+        } else {
+          // Read from disk
+          source = read_file(fileName);
+          // Try with .tpr extension if failed
+          if (source == NULL) {
+            char ptrName[256];
+            snprintf(ptrName, sizeof(ptrName), "%s.tpr", fileName);
+            source = read_file(ptrName);
+          }
+        }
+
         if (source == NULL) {
           printf("Import Error: Could not read file '%s'\n", fileName);
+          printf("  Hint: Available libraries: wings, router, http_utils\n");
           // Push void to avoid crash if assignment expects result
           vm_push(vm, VM_VOID());
           DISPATCH();

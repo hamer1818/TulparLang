@@ -1,3 +1,0 @@
-Hello, File World!
-This is line 2.
-Line 3 appended.

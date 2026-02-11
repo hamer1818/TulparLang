@@ -5,12 +5,7 @@
 #include "interpreter.h"
 #include <stdlib.h>
 #include <string.h>
-
-#ifdef _WIN32
-#include <windows.h>
-#else
 #include <pthread.h>
-#endif
 
 typedef struct {
   Interpreter *parent_interp; // Kopyalanacak kaynak (dikkatli olunmalı)
@@ -58,10 +53,9 @@ Interpreter *interpreter_clone(Interpreter *src) {
   return dest;
 }
 
-// Thread Entry Point (Windows)
-#ifdef _WIN32
-DWORD WINAPI thread_entry_point(LPVOID lpParam) {
-  ThreadArgs *args = (ThreadArgs *)lpParam;
+// POSIX Thread entry point
+void *thread_entry_point(void *arg) {
+  ThreadArgs *args = (ThreadArgs *)arg;
 
   // Yeni interpreter oluştur ve init et
   Interpreter *thread_interp = interpreter_clone(args->parent_interp);
@@ -69,43 +63,12 @@ DWORD WINAPI thread_entry_point(LPVOID lpParam) {
   // Fonksiyonu bul
   Function *func = interpreter_get_function(thread_interp, args->func_name);
   if (func) {
-    // Fonksiyon çağrısı için ortamı hazırla
-    // ... (argüman geçirme mantığı - burası biraz karmaşık, direkt eval
-    // yapamayız) Basitçe: Fonksiyonun AST'sini execute et, ama argümanları
-    // scope'a ekle
-
-    // Geçici çözüm: Fonksiyonun parametre adını bulip sembol tablosuna ekle
-    // AST FuncDecl noduna erişim lazım.
     ASTNode *func_node = func->node;
-    if (func_node && func_node->parameters && func_node->param_count > 0) {
-      // İlk parametreye args->arg değerini ata
-      char *param_name = func_node->parameters[0];
-      // Yeni scope oluştur (fonksiyon scope'u) -> interpreter_execute zaten
-      // yapar
-
-      // HACK: Global scope'a argümanı ekleyip fonksiyonu çağıracağız
-      // Veya "client_socket" gibi global bir değişken set edeceğiz thread
-      // içinde
-      symbol_table_set(thread_interp->global_scope, "_thread_arg", args->arg);
-    }
-
-    // Fonksiyonu çalıştır
-    // Fonksiyon AST'si bir BLOCK'tur (FuncDecl body'si)
-    // Direkt body'yi çalıştırabiliriz ama parametre ataması eksik kalır.
-
-    // Doğrusu: Function Call simülasyonu
-    // Ama interpreter_eval_function_call private olabilir.
-    // Şimdilik: Fonksiyon gövdesini çalıştır, argümanı global "_arg" olarak
-    // ver.
-
-    // Düzeltme: interpreter_execute fonksiyonu ASTNode alır.
-    // Biz fonksiyonun BODY'sini (Block) çalıştırmalıyız.
-    // Parametreleri de global scope'a "inject" edelim.
-    if (func_node->body) {
+    if (func_node && func_node->body) {
       // Argüman varsa ilk parametreye ata
-      if (func_node->param_count > 0) {
-        symbol_table_set(thread_interp->global_scope, func_node->parameters[0],
-                         value_copy(args->arg));
+      if (func_node->param_count > 0 && args->arg) {
+        symbol_table_set(thread_interp->global_scope,
+                         func_node->parameters[0]->name, args->arg);
       }
 
       interpreter_execute(thread_interp, func_node->body);
@@ -114,21 +77,8 @@ DWORD WINAPI thread_entry_point(LPVOID lpParam) {
 
   // Temizlik
   interpreter_free(thread_interp);
-  // args->arg zaten kopyalandı veya free edildi sorumluluğu kime ait?
-  // value_copy yaptık sembol tablosuna, args->arg ana thread'e ait.
-  // Ana thread free etmemeli (Value ref counting yok).
-  // Argument ana thread'den kopyalanmış (deep copy) gelmeli ThreadArgs'a.
-  // Evet, thread_create fonksiyonunda copy yapacağız.
-  value_free(args->arg); // ThreadArgs içindeki kopyayı temizle
   free(args->func_name);
   free(args);
 
-  return 0;
-}
-#else
-// POSIX Thread entry point
-void *thread_entry_point(void *arg) {
-  // Aynı mantık...
   return NULL;
 }
-#endif

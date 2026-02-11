@@ -6,39 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#else
 #include <sys/mman.h>
 #include <unistd.h>
-#endif
 
 // ============================================================================
 // PLATFORM-SPECIFIC MEMORY ALLOCATION
 // ============================================================================
-
-#ifdef _WIN32
-
-// Windows: Use VirtualAlloc for executable memory
-static void *alloc_executable_memory(size_t size) {
-    return VirtualAlloc(NULL, size, 
-                        MEM_COMMIT | MEM_RESERVE, 
-                        PAGE_READWRITE);  // Start as RW, make exec later
-}
-
-static void free_executable_memory(void *ptr, size_t size) {
-    (void)size;
-    VirtualFree(ptr, 0, MEM_RELEASE);
-}
-
-static int make_memory_executable(void *ptr, size_t size) {
-    DWORD old_protect;
-    return VirtualProtect(ptr, size, PAGE_EXECUTE_READ, &old_protect) != 0;
-}
-
-#else
 
 // Unix/Linux/macOS: Use mmap for executable memory
 static void *alloc_executable_memory(size_t size) {
@@ -56,8 +29,6 @@ static void free_executable_memory(void *ptr, size_t size) {
 static int make_memory_executable(void *ptr, size_t size) {
     return mprotect(ptr, size, PROT_READ | PROT_EXEC) == 0;
 }
-
-#endif
 
 // ============================================================================
 // JIT CODE BUFFER IMPLEMENTATION
