@@ -49,6 +49,14 @@ static int parser_expect(Parser *parser, TulparTokenType type) {
   return 0;
 }
 
+// Semicolons are optional in Tulpar (Python-like ease of use)
+// If a semicolon is present, consume it. Otherwise, silently continue.
+static void parser_optional_semicolon(Parser *parser) {
+  if (parser->current_token->type == TOKEN_SEMICOLON) {
+    parser_advance(parser);
+  }
+}
+
 // Create AST node
 ASTNode *ast_node_create(ASTNodeType type) {
   ASTNode *node = (ASTNode *)calloc(1, sizeof(ASTNode));
@@ -840,7 +848,7 @@ static ASTNode *parse_var_declaration(Parser *parser) {
   
   parser_advance(parser); // '=' atla
   node->right = parse_expression(parser);
-  parser_expect(parser, TOKEN_SEMICOLON);
+  parser_optional_semicolon(parser);
   return node;
 }
 
@@ -864,7 +872,7 @@ static ASTNode *parse_variable_declaration(Parser *parser) {
     node->right = parse_expression(parser);
   }
 
-  parser_expect(parser, TOKEN_SEMICOLON);
+  parser_optional_semicolon(parser);
   return node;
 }
 
@@ -878,7 +886,7 @@ static ASTNode *parse_assignment(Parser *parser, int expect_semicolon) {
   node->right = parse_expression(parser);
 
   if (expect_semicolon) {
-    parser_expect(parser, TOKEN_SEMICOLON);
+    parser_optional_semicolon(parser);
   }
 
   return node;
@@ -897,7 +905,7 @@ static ASTNode *parse_compound_assignment(Parser *parser,
   node->right = parse_expression(parser);
 
   if (expect_semicolon) {
-    parser_expect(parser, TOKEN_SEMICOLON);
+    parser_optional_semicolon(parser);
   }
 
   return node;
@@ -912,7 +920,7 @@ static ASTNode *parse_increment(Parser *parser, int expect_semicolon) {
   parser_advance(parser);
 
   if (expect_semicolon) {
-    parser_expect(parser, TOKEN_SEMICOLON);
+    parser_optional_semicolon(parser);
   }
 
   return node;
@@ -927,7 +935,7 @@ static ASTNode *parse_decrement(Parser *parser, int expect_semicolon) {
   parser_advance(parser);
 
   if (expect_semicolon) {
-    parser_expect(parser, TOKEN_SEMICOLON);
+    parser_optional_semicolon(parser);
   }
 
   return node;
@@ -938,11 +946,14 @@ static ASTNode *parse_return(Parser *parser) {
   ASTNode *node = ast_node_create(AST_RETURN);
   parser_advance(parser); // 'return' atla
 
-  if (parser->current_token->type != TOKEN_SEMICOLON) {
+  // return sonrasında expression yoksa (;, }, EOF) dönüş değeri yok
+  if (parser->current_token->type != TOKEN_SEMICOLON &&
+      parser->current_token->type != TOKEN_RBRACE &&
+      parser->current_token->type != TOKEN_EOF) {
     node->return_value = parse_expression(parser);
   }
 
-  parser_expect(parser, TOKEN_SEMICOLON);
+  parser_optional_semicolon(parser);
   return node;
 }
 
@@ -950,7 +961,7 @@ static ASTNode *parse_return(Parser *parser) {
 static ASTNode *parse_break(Parser *parser) {
   ASTNode *node = ast_node_create(AST_BREAK);
   parser_advance(parser); // 'break' atla
-  parser_expect(parser, TOKEN_SEMICOLON);
+  parser_optional_semicolon(parser);
   return node;
 }
 
@@ -958,7 +969,7 @@ static ASTNode *parse_break(Parser *parser) {
 static ASTNode *parse_continue(Parser *parser) {
   ASTNode *node = ast_node_create(AST_CONTINUE);
   parser_advance(parser); // 'continue' atla
-  parser_expect(parser, TOKEN_SEMICOLON);
+  parser_optional_semicolon(parser);
   return node;
 }
 
@@ -1042,7 +1053,7 @@ static ASTNode *parse_throw(Parser *parser) {
     return NULL;
   }
 
-  parser_expect(parser, TOKEN_SEMICOLON);
+  parser_optional_semicolon(parser);
   return node;
 }
 
@@ -1232,7 +1243,36 @@ static ASTNode *parse_function(Parser *parser) {
       }
 
       ASTNode *param = ast_node_create(AST_VARIABLE_DECL);
-      param->data_type = parse_data_type(parser);
+
+      // Check if parameter has a type annotation
+      // Type keywords (int, float, str, etc.) → typed parameter
+      // Identifier followed by another identifier → "TypeName paramName" (typed)
+      // Otherwise → just a parameter name, untyped (Python-like)
+      int has_type = 0;
+      if (parser->current_token->type == TOKEN_INT_TYPE ||
+          parser->current_token->type == TOKEN_FLOAT_TYPE ||
+          parser->current_token->type == TOKEN_STR_TYPE ||
+          parser->current_token->type == TOKEN_BOOL_TYPE ||
+          parser->current_token->type == TOKEN_ARRAY_TYPE ||
+          parser->current_token->type == TOKEN_ARRAY_INT ||
+          parser->current_token->type == TOKEN_ARRAY_FLOAT ||
+          parser->current_token->type == TOKEN_ARRAY_STR ||
+          parser->current_token->type == TOKEN_ARRAY_BOOL ||
+          parser->current_token->type == TOKEN_ARRAY_JSON) {
+        has_type = 1;
+      } else if (parser->current_token->type == TOKEN_IDENTIFIER) {
+        Token *next = parser_peek(parser);
+        if (next && next->type == TOKEN_IDENTIFIER) {
+          has_type = 1; // "TypeName paramName" pattern
+        }
+      }
+
+      if (has_type) {
+        param->data_type = parse_data_type(parser);
+      } else {
+        param->data_type = TYPE_VOID; // Untyped parameter (Python-like)
+      }
+
       param->name = strdup(parser->current_token->value);
       parser_advance(parser);
 
@@ -1399,7 +1439,7 @@ static ASTNode *parse_statement(Parser *parser) {
         parser_advance(parser);
         node->field_defaults[node->field_count - 1] = parse_expression(parser);
       }
-      parser_expect(parser, TOKEN_SEMICOLON);
+      parser_optional_semicolon(parser);
     }
     parser_expect(parser, TOKEN_RBRACE);
     return node;
@@ -1453,7 +1493,7 @@ static ASTNode *parse_statement(Parser *parser) {
 
     node->value.string_value = strdup(parser->current_token->value);
     parser_advance(parser);
-    parser_expect(parser, TOKEN_SEMICOLON);
+    parser_optional_semicolon(parser);
     return node;
   }
 
@@ -1528,7 +1568,7 @@ static ASTNode *parse_statement(Parser *parser) {
           node->right = NULL;
         }
 
-        parser_expect(parser, TOKEN_SEMICOLON);
+        parser_optional_semicolon(parser);
         free(type_name);
         return node;
       }
@@ -1549,7 +1589,7 @@ static ASTNode *parse_statement(Parser *parser) {
         node->left = expr;
       }
       node->right = parse_expression(parser);
-      parser_expect(parser, TOKEN_SEMICOLON);
+      parser_optional_semicolon(parser);
       return node;
     }
 
@@ -1564,11 +1604,6 @@ static ASTNode *parse_statement(Parser *parser) {
         node->name = strdup(expr->name);
         ast_node_free(expr);
       } else {
-        // Compound assignment currently only supports simple variables in
-        // interpreter? Let's check interpreter.c AST_COMPOUND_ASSIGN. It uses
-        // symbol_table_get(..., node->name). So it DOES NOT support
-        // array/object compound assignment yet. We should probably error or
-        // support it. For now, assume identifier.
         printf("Parser Error: Compound assignment only supported for variables "
                "at line %d\n",
                parser->current_token->line);
@@ -1578,7 +1613,7 @@ static ASTNode *parse_statement(Parser *parser) {
       node->op = parser->current_token->type;
       parser_advance(parser);
       node->right = parse_expression(parser);
-      parser_expect(parser, TOKEN_SEMICOLON);
+      parser_optional_semicolon(parser);
       return node;
     }
 
@@ -1596,7 +1631,7 @@ static ASTNode *parse_statement(Parser *parser) {
         return NULL;
       }
       parser_advance(parser);
-      parser_expect(parser, TOKEN_SEMICOLON);
+      parser_optional_semicolon(parser);
       return node;
     }
 
@@ -1614,20 +1649,14 @@ static ASTNode *parse_statement(Parser *parser) {
         return NULL;
       }
       parser_advance(parser);
-      parser_expect(parser, TOKEN_SEMICOLON);
+      parser_optional_semicolon(parser);
       return node;
     }
 
     // Expression statement (function call, method call, etc.)
-    if (parser->current_token->type == TOKEN_SEMICOLON) {
-      parser_advance(parser);
-      return expr;
-    }
-
-    printf("Parser Error: Unexpected token after expression at line %d\n",
-           parser->current_token->line);
-    ast_node_free(expr);
-    return NULL;
+    // Semicolons are optional - just consume if present
+    parser_optional_semicolon(parser);
+    return expr;
   }
 
   printf("Parser Error: Unexpected statement at line %d\n", token->line);
