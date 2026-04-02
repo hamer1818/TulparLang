@@ -776,7 +776,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
   frame->slots = vm->stack; // First slot is function itself
 
   // Local registers for performance
-  register uint8_t *ip = frame->ip;
+  uint8_t *ip = frame->ip;
   Chunk *chunk = &function->chunk;
 
 #ifdef __GNUC__
@@ -3690,7 +3690,7 @@ void jit_helper_call(VM *vm, int arg_count) {
 
   // Run interpreter for this function
   // We need a mini-interpreter loop here
-  register uint8_t *ip = frame->ip;
+  uint8_t *ip = frame->ip;
   Chunk *chunk = &func->chunk;
 
 #define READ_BYTE() (*ip++)
