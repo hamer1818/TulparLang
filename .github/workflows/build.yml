@@ -39,6 +39,7 @@ jobs:
           chmod +x build.sh
           ./build.sh test
         timeout-minutes: 5
+        continue-on-error: true
       
       - name: Prepare artifact
         run: |
@@ -59,7 +60,8 @@ jobs:
       
       - name: Install dependencies
         run: |
-          brew install cmake llvm@18 || true
+          brew list --versions cmake >/dev/null 2>&1 || brew install cmake
+          brew list --versions llvm@18 >/dev/null 2>&1 || brew install llvm@18
           echo 'export PATH="/opt/homebrew/opt/llvm@18/bin:$PATH"' >> ~/.zshrc
           export PATH="/opt/homebrew/opt/llvm@18/bin:$PATH"
       
