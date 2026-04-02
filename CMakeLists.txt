@@ -38,6 +38,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wno-c++20-extensions
         -Wno-c99-extensions
         -Wno-writable-strings
+        -Wno-pedantic
+        -Wno-unused-parameter
     )
 endif()
 
