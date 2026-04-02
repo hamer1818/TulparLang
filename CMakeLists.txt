@@ -29,6 +29,18 @@ add_definitions(${LLVM_DEFINITIONS})
 # C++ Compiler flags (modern, strict)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic")
 
+# Known non-critical noise for current architecture strategy:
+# - computed goto dispatch in VM (GNU extension)
+# - compatibility conversions inherited from legacy code paths
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(
+        -Wno-gnu-label-as-value
+        -Wno-c++20-extensions
+        -Wno-c99-extensions
+        -Wno-writable-strings
+    )
+endif()
+
 # Debug/Release configurations
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DTULPAR_DEBUG")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")

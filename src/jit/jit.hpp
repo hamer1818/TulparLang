@@ -28,7 +28,6 @@ typedef struct ObjFunction ObjFunction;
 #define JIT_ENABLED 1
 #else
 #define JIT_ENABLED 0
-#warning "JIT disabled: ARM64/non-x86_64 architecture detected"
 #endif
 
 // ============================================================================
