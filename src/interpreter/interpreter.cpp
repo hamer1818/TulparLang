@@ -4205,11 +4205,11 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
                          "close\r\n\r\n%s",
                          status, status_text, ctype, strlen(body), body);
 
-      char *response = (char *)malloc(len + 1);
-      sprintf(response,
-              "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: "
-              "%zu\r\nConnection: close\r\n\r\n%s",
-              status, status_text, ctype, strlen(body), body);
+      char *response = (char *)malloc((size_t)len + 1);
+      snprintf(response, (size_t)len + 1,
+               "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: "
+               "%zu\r\nConnection: close\r\n\r\n%s",
+               status, status_text, ctype, strlen(body), body);
 
       value_free(status_val);
       value_free(type_val);
@@ -5098,8 +5098,9 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
       FILE *file = fopen(filename, "rb");
       if (!file) {
         // Try with .tpr extension
-        char *with_ext = (char *)malloc(strlen(filename) + 5);
-        sprintf(with_ext, "%s.tpr", filename);
+        size_t ext_len = strlen(filename) + 5;
+        char *with_ext = (char *)malloc(ext_len);
+        snprintf(with_ext, ext_len, "%s.tpr", filename);
         file = fopen(with_ext, "rb");
         free(with_ext);
       }

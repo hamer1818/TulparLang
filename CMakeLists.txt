@@ -177,7 +177,7 @@ else()
         target mc
     )
 endif()
-target_link_libraries(tulpar ${llvm_libs} stdc++)
+target_link_libraries(tulpar ${llvm_libs})
 
 # ============================================
 # Runtime Library (for AOT-compiled binaries)

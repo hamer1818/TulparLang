@@ -11,6 +11,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: "false"
 
 jobs:
   build-linux:
@@ -38,7 +39,6 @@ jobs:
           chmod +x build.sh
           ./build.sh test
         timeout-minutes: 5
-        continue-on-error: true
       
       - name: Prepare artifact
         run: |
@@ -59,7 +59,7 @@ jobs:
       
       - name: Install dependencies
         run: |
-          brew install cmake llvm@18
+          brew install cmake llvm@18 || true
           echo 'export PATH="/opt/homebrew/opt/llvm@18/bin:$PATH"' >> ~/.zshrc
           export PATH="/opt/homebrew/opt/llvm@18/bin:$PATH"
       
