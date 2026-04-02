@@ -1,0 +1,71 @@
+// TulparLang - Tam Türkçe Sözdizimi Örneği
+// Bu örnek dilin tüm özelliklerini Türkçe anahtar kelimelerle gösterir
+
+// Değişken tanımlama - Türkçe veri tipleri
+tamsayı yaş = 25;
+ondalık boy = 1.75;
+metin isim = "Ahmet";
+mantıksal aktif = doğru;
+
+// Dizi tanımlama
+dizi karışık = [1, "metin", 3.14, doğru];
+diziTamsayı sayılar = [1, 2, 3, 4, 5];
+diziMetin isimler = ["Ali", "Ayşe", "Mehmet"];
+
+// Fonksiyon tanımlama
+fonksiyon selamla(metin ad) {
+    metin mesaj = "Merhaba, " + ad + "!";
+    geri_döndür mesaj;
+}
+
+// Tip çıkarımı
+değişken otomatik = 42;  // tamsayı olarak çıkarılır
+
+// Koşullu ifadeler
+eğer (yaş >= 18) {
+    metin durum = "Yetişkin";
+} yoksa {
+    metin durum = "Çocuk";
+}
+
+// Döngüler
+için (tamsayı i = 0; i < 5; i++) {
+    // İşlem
+}
+
+tamsayı sayaç = 0;
+iken (sayaç < 10) {
+    sayaç++;
+}
+
+// For-in döngüsü
+için (değer içinde sayılar) {
+    // Her eleman için işlem
+}
+
+// Hata yönetimi
+dene {
+    tamsayı sonuç = riskliİşlem();
+} yakala (hata) {
+    metin mesaj = "Hata oluştu: " + hata;
+} sonunda {
+    // Temizlik işlemleri
+}
+
+// Özel tip tanımlama
+tip Kişi {
+    metin ad;
+    tamsayı yaş;
+    metin şehir = "İstanbul";
+}
+
+// Ana fonksiyon
+fonksiyon main() {
+    metin selam = selamla("Dünya");
+    
+    Kişi kullanıcı;
+    kullanıcı.ad = "Zeynep";
+    kullanıcı.yaş = 30;
+    
+    geri_döndür 0;
+}

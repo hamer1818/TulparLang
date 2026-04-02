@@ -5,6 +5,137 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <unordered_map>
+
+// ============================================================================
+// Keyword Mapping Table (Turkish-first with English/ASCII aliases)
+// ============================================================================
+
+static const std::unordered_map<std::string, TulparTokenType>& get_keyword_map() {
+    static const std::unordered_map<std::string, TulparTokenType> KEYWORD_MAP = {
+        // Data Types - Turkish (primary)
+        {"tamsayı", TOKEN_INT_TYPE},
+        {"ondalık", TOKEN_FLOAT_TYPE},
+        {"metin", TOKEN_STR_TYPE},
+        {"mantıksal", TOKEN_BOOL_TYPE},
+        {"dizi", TOKEN_ARRAY_TYPE},
+        {"diziTamsayı", TOKEN_ARRAY_INT},
+        {"diziOndalık", TOKEN_ARRAY_FLOAT},
+        {"diziMetin", TOKEN_ARRAY_STR},
+        {"diziMantıksal", TOKEN_ARRAY_BOOL},
+        {"diziJson", TOKEN_ARRAY_JSON},
+        
+        // Data Types - English (aliases)
+        {"int", TOKEN_INT_TYPE},
+        {"float", TOKEN_FLOAT_TYPE},
+        {"str", TOKEN_STR_TYPE},
+        {"bool", TOKEN_BOOL_TYPE},
+        {"array", TOKEN_ARRAY_TYPE},
+        {"arrayInt", TOKEN_ARRAY_INT},
+        {"arrayFloat", TOKEN_ARRAY_FLOAT},
+        {"arrayStr", TOKEN_ARRAY_STR},
+        {"arrayBool", TOKEN_ARRAY_BOOL},
+        {"arrayJson", TOKEN_ARRAY_JSON},
+        
+        // Data Types - ASCII Turkish (aliases)
+        {"tamsayi", TOKEN_INT_TYPE},
+        {"ondalik", TOKEN_FLOAT_TYPE},
+        {"mantiksal", TOKEN_BOOL_TYPE},
+        {"diziTamsayi", TOKEN_ARRAY_INT},
+        {"diziOndalik", TOKEN_ARRAY_FLOAT},
+        {"diziMantiksal", TOKEN_ARRAY_BOOL},
+        
+        // Control Flow - Turkish (primary)
+        {"eğer", TOKEN_IF},
+        {"yoksa", TOKEN_ELSE},
+        {"iken", TOKEN_WHILE},
+        {"için", TOKEN_FOR},
+        {"içinde", TOKEN_IN},
+        {"dur", TOKEN_BREAK},
+        {"devam_et", TOKEN_CONTINUE},
+        {"geri_döndür", TOKEN_RETURN},
+        
+        // Control Flow - English (aliases)
+        {"if", TOKEN_IF},
+        {"else", TOKEN_ELSE},
+        {"while", TOKEN_WHILE},
+        {"for", TOKEN_FOR},
+        {"in", TOKEN_IN},
+        {"break", TOKEN_BREAK},
+        {"continue", TOKEN_CONTINUE},
+        {"return", TOKEN_RETURN},
+        
+        // Control Flow - ASCII Turkish (aliases)
+        {"eger", TOKEN_IF},
+        {"icin", TOKEN_FOR},
+        {"icinde", TOKEN_IN},
+        {"devam", TOKEN_CONTINUE},
+        {"geri_dondur", TOKEN_RETURN},
+        {"don", TOKEN_RETURN},
+        
+        // Functions - Turkish (primary)
+        {"fonksiyon", TOKEN_FUNC},
+        {"tip", TOKEN_TYPE_KW},
+        {"değişken", TOKEN_VAR},
+        {"taşı", TOKEN_MOVE},
+        
+        // Functions - English (aliases)
+        {"func", TOKEN_FUNC},
+        {"type", TOKEN_TYPE_KW},
+        {"var", TOKEN_VAR},
+        {"move", TOKEN_MOVE},
+        
+        // Functions - ASCII Turkish (aliases)
+        {"degisken", TOKEN_VAR},
+        {"tasi", TOKEN_MOVE},
+        
+        // Legacy Turkish aliases (backward compat)
+        {"işlev", TOKEN_FUNC},
+        {"fonk", TOKEN_FUNC},
+        {"döndür", TOKEN_RETURN},
+        {"değilse", TOKEN_ELSE},
+        {"dondur", TOKEN_RETURN},
+        {"degilse", TOKEN_ELSE},
+        {"islev", TOKEN_FUNC},
+        
+        // Exception Handling - Turkish (primary)
+        {"dene", TOKEN_TRY},
+        {"yakala", TOKEN_CATCH},
+        {"sonunda", TOKEN_FINALLY},
+        {"fırlat", TOKEN_THROW},
+        
+        // Exception Handling - English (aliases)
+        {"try", TOKEN_TRY},
+        {"catch", TOKEN_CATCH},
+        {"finally", TOKEN_FINALLY},
+        {"throw", TOKEN_THROW},
+        
+        // Exception Handling - ASCII Turkish (aliases)
+        {"firlat", TOKEN_THROW},
+        
+        // Import - Turkish (primary)
+        {"içe_aktar", TOKEN_IMPORT},
+        
+        // Import - English (aliases)
+        {"import", TOKEN_IMPORT},
+        
+        // Import - ASCII Turkish (aliases)
+        {"ice_aktar", TOKEN_IMPORT},
+        
+        // Boolean Literals - Turkish (primary)
+        {"doğru", TOKEN_TRUE},
+        {"yanlış", TOKEN_FALSE},
+        
+        // Boolean Literals - English (aliases)
+        {"true", TOKEN_TRUE},
+        {"false", TOKEN_FALSE},
+        
+        // Boolean Literals - ASCII Turkish (aliases)
+        {"dogru", TOKEN_TRUE},
+        {"yanlis", TOKEN_FALSE}
+    };
+    return KEYWORD_MAP;
+}
 
 // ============================================================================
 // Token Class Implementation
@@ -176,61 +307,10 @@ Token Lexer::read_identifier() {
         advance();
     }
     
-    // Check for keywords
-    TulparTokenType type = TOKEN_IDENTIFIER;
-    
-    // Data types
-    if (buffer == "int") type = TOKEN_INT_TYPE;
-    else if (buffer == "float") type = TOKEN_FLOAT_TYPE;
-    else if (buffer == "str") type = TOKEN_STR_TYPE;
-    else if (buffer == "bool") type = TOKEN_BOOL_TYPE;
-    else if (buffer == "array") type = TOKEN_ARRAY_TYPE;
-    else if (buffer == "arrayInt") type = TOKEN_ARRAY_INT;
-    else if (buffer == "arrayFloat") type = TOKEN_ARRAY_FLOAT;
-    else if (buffer == "arrayStr") type = TOKEN_ARRAY_STR;
-    else if (buffer == "arrayBool") type = TOKEN_ARRAY_BOOL;
-    else if (buffer == "arrayJson") type = TOKEN_ARRAY_JSON;
-    
-    // Keywords
-    else if (buffer == "func") type = TOKEN_FUNC;
-    else if (buffer == "type") type = TOKEN_TYPE_KW;
-    else if (buffer == "return") type = TOKEN_RETURN;
-    else if (buffer == "if") type = TOKEN_IF;
-    else if (buffer == "else") type = TOKEN_ELSE;
-    else if (buffer == "while") type = TOKEN_WHILE;
-    else if (buffer == "for") type = TOKEN_FOR;
-    else if (buffer == "in") type = TOKEN_IN;
-    else if (buffer == "break") type = TOKEN_BREAK;
-    else if (buffer == "continue") type = TOKEN_CONTINUE;
-    else if (buffer == "try") type = TOKEN_TRY;
-    else if (buffer == "catch") type = TOKEN_CATCH;
-    else if (buffer == "finally") type = TOKEN_FINALLY;
-    else if (buffer == "throw") type = TOKEN_THROW;
-    else if (buffer == "import") type = TOKEN_IMPORT;
-    else if (buffer == "true") type = TOKEN_TRUE;
-    else if (buffer == "false") type = TOKEN_FALSE;
-    else if (buffer == "move") type = TOKEN_MOVE;
-    else if (buffer == "var") type = TOKEN_VAR;
-    
-    // Turkish keywords (UTF-8 encoded)
-    else if (buffer == "iken") type = TOKEN_WHILE;
-    else if (buffer == "eğer") type = TOKEN_IF;
-    else if (buffer == "yoksa") type = TOKEN_ELSE;
-    else if (buffer == "değilse") type = TOKEN_ELSE;
-    else if (buffer == "için") type = TOKEN_FOR;
-    else if (buffer == "dur") type = TOKEN_BREAK;
-    else if (buffer == "devam") type = TOKEN_CONTINUE;
-    else if (buffer == "işlev") type = TOKEN_FUNC;
-    else if (buffer == "fonk") type = TOKEN_FUNC;
-    else if (buffer == "döndür") type = TOKEN_RETURN;
-    else if (buffer == "içe_aktar") type = TOKEN_IMPORT;
-    else if (buffer == "doğru") type = TOKEN_TRUE;
-    else if (buffer == "yanlış") type = TOKEN_FALSE;
-    else if (buffer == "dene") type = TOKEN_TRY;
-    else if (buffer == "yakala") type = TOKEN_CATCH;
-    else if (buffer == "sonunda") type = TOKEN_FINALLY;
-    else if (buffer == "fırlat") type = TOKEN_THROW;
-    else if (buffer == "tip") type = TOKEN_TYPE_KW;
+    // Lookup keyword in the table
+    const auto& keyword_map = get_keyword_map();
+    auto it = keyword_map.find(buffer);
+    TulparTokenType type = (it != keyword_map.end()) ? it->second : TOKEN_IDENTIFIER;
     
     return Token(type, buffer, start_line, start_column);
 }

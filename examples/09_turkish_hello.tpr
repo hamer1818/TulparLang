@@ -2,40 +2,41 @@
 // Bu örnek Tulpar dilinin Türkçe anahtar kelimeler ve yerleşik fonksiyonlarla 
 // nasıl kullanılabileceğini göstermektedir.
 
-içe_aktar "std"
+içe_aktar "std";
 
-// 'işlev' = 'func',  'döndür' = 'return'
-işlev selam_ver(isim) {
-    yazı metin = "Merhaba, " + isim + "!"
-    yazı buyuk_metin = upper(metin)
+// Türkçe veri tipleri ve fonksiyon tanımı
+fonksiyon selam_ver(metin isim) {
+    metin mesaj = "Merhaba, " + isim + "!";
+    metin buyuk_metin = upper(mesaj);
     
-    // 'eğer' = 'if', 'değilse' = 'else'
+    // Koşullu yapılar
     eğer (isim == "Tulpar") {
-        print("Büyük harfle: " + buyuk_metin)
-    } değilse {
-        print("Küçük harfle: " + lower(metin))
+        print("Büyük harfle: " + buyuk_metin);
+    } yoksa {
+        print("Küçük harfle: " + lower(mesaj));
     }
     
-    döndür doğru  // 'doğru' = 'true'
+    geri_döndür doğru;
 }
 
-// 'var' = 'var' (değişken), 'tip' = 'type'
-var dil_adi = "Tulpar"
-sayı versiyon = 2
+// Değişken tanımlama
+değişken dil_adi = "Tulpar";
+tamsayı versiyon = 2;
 
-print("---------------------------------")
-print("Dil: " + dil_adi + " v" + toString(versiyon))
-print("---------------------------------")
+print("---------------------------------");
+print("Dil: " + dil_adi + " v" + toString(versiyon));
+print("---------------------------------");
 
-// 'mantık' = 'bool'
-mantık basarili = selam_ver("Dünya")
-selam_ver(dil_adi)
+// Fonksiyon çağrısı
+mantıksal basarili = selam_ver("Dünya");
+selam_ver(dil_adi);
 
-// Döngü örneği: 'için' = 'for', 'iken' = 'while'
-sayı sayac = 0
+// Döngü örneği
+tamsayı sayac = 0;
 iken (sayac < 3) {
-    print("Sayaç: " + toString(sayac))
-    sayac = sayac + 1
+    print("Sayaç: " + toString(sayac));
+    sayac = sayac + 1;
 }
 
-print("=== Program Başarıyla Tamamlandı ===")
+print("=== Program Başarıyla Tamamlandı ===");
+
