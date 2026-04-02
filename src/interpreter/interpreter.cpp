@@ -3239,28 +3239,28 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
 // MATEMAT─░K FONKS─░YONLARI
 // ========================================================================
 
-// Helper: Get numeric value as double
-#define GET_NUM_ARG(idx)                                                       \
-  ({                                                                           \
-    Value *_arg = interpreter_eval_expression(interp, node->arguments[idx]);   \
-    double _val = 0.0;                                                         \
-    if (_arg->type == VAL_INT)                                                 \
-      _val = (double)_arg->data.int_val;                                       \
-    else if (_arg->type == VAL_FLOAT)                                          \
-      _val = (double)_arg->data.float_val;                                     \
-    value_free(_arg);                                                          \
-    _val;                                                                      \
-  })
+    // Helper: Get numeric value as double
+    auto get_num_arg = [&](int idx) -> double {
+      Value *arg = interpreter_eval_expression(interp, node->arguments[idx]);
+      double val = 0.0;
+      if (arg->type == VAL_INT) {
+        val = (double)arg->data.int_val;
+      } else if (arg->type == VAL_FLOAT) {
+        val = (double)arg->data.float_val;
+      }
+      value_free(arg);
+      return val;
+    };
 
     // abs(x) - mutlak de─şer
     if (strcmp(node->name, "abs") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)fabs(x));
     }
 
     // sqrt(x) - karek├Âk
     if (strcmp(node->name, "sqrt") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)sqrt(x));
     }
 
@@ -3364,112 +3364,112 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
 
     // floor(x) - a┼şa─ş─▒ yuvarlama
     if (strcmp(node->name, "floor") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_int((int)floor(x));
     }
 
     // ceil(x) - yukar─▒ yuvarlama
     if (strcmp(node->name, "ceil") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_int((int)ceil(x));
     }
 
     // round(x) - yuvarlama
     if (strcmp(node->name, "round") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_int((int)round(x));
     }
 
     // sin(x) - sin├╝s
     if (strcmp(node->name, "sin") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)sin(x));
     }
 
     // cos(x) - kosin├╝s
     if (strcmp(node->name, "cos") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)cos(x));
     }
 
     // tan(x) - tanjant
     if (strcmp(node->name, "tan") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)tan(x));
     }
 
     // asin(x) - arcsin├╝s
     if (strcmp(node->name, "asin") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)asin(x));
     }
 
     // acos(x) - arckosin├╝s
     if (strcmp(node->name, "acos") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)acos(x));
     }
 
     // atan(x) - arctanjant
     if (strcmp(node->name, "atan") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)atan(x));
     }
 
     // atan2(y, x) - iki arg├╝manl─▒ arctanjant
     if (strcmp(node->name, "atan2") == 0 && node->argument_count >= 2) {
-      double y = GET_NUM_ARG(0);
-      double x = GET_NUM_ARG(1);
+      double y = get_num_arg(0);
+      double x = get_num_arg(1);
       return value_create_float((float)atan2(y, x));
     }
 
     // exp(x) - e ├╝zeri x
     if (strcmp(node->name, "exp") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)exp(x));
     }
 
     // log(x) - do─şal logaritma (ln)
     if (strcmp(node->name, "log") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)log(x));
     }
 
     // log10(x) - 10 tabanl─▒ logaritma
     if (strcmp(node->name, "log10") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)log10(x));
     }
 
     // log2(x) - 2 tabanl─▒ logaritma
     if (strcmp(node->name, "log2") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)log2(x));
     }
 
     // sinh(x) - hiperbolik sin├╝s
     if (strcmp(node->name, "sinh") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)sinh(x));
     }
 
     // cosh(x) - hiperbolik kosin├╝s
     if (strcmp(node->name, "cosh") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)cosh(x));
     }
 
     // tanh(x) - hiperbolik tanjant
     if (strcmp(node->name, "tanh") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)tanh(x));
     }
 
     // min(a, b, ...) - minimum de─şer
     if (strcmp(node->name, "min") == 0 && node->argument_count >= 1) {
-      double min_val = GET_NUM_ARG(0);
+      double min_val = get_num_arg(0);
       for (int i = 1; i < node->argument_count; i++) {
-        double val = GET_NUM_ARG(i);
+        double val = get_num_arg(i);
         if (val < min_val)
           min_val = val;
       }
@@ -3478,9 +3478,9 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
 
     // max(a, b, ...) - maximum de─şer
     if (strcmp(node->name, "max") == 0 && node->argument_count >= 1) {
-      double max_val = GET_NUM_ARG(0);
+      double max_val = get_num_arg(0);
       for (int i = 1; i < node->argument_count; i++) {
-        double val = GET_NUM_ARG(i);
+        double val = get_num_arg(i);
         if (val > max_val)
           max_val = val;
       }
@@ -3504,8 +3504,8 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
         srand((unsigned int)time(NULL));
         seeded = 1;
       }
-      int a = (int)GET_NUM_ARG(0);
-      int b = (int)GET_NUM_ARG(1);
+      int a = (int)get_num_arg(0);
+      int b = (int)get_num_arg(1);
       int result = a + rand() % (b - a + 1);
       return value_create_int(result);
     }
@@ -3557,21 +3557,21 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
 
     // cbrt(x) - k├╝p k├Âk
     if (strcmp(node->name, "cbrt") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_float((float)cbrt(x));
     }
 
     // hypot(x, y) - hipoten├╝s (sqrt(x^2 + y^2))
     if (strcmp(node->name, "hypot") == 0 && node->argument_count >= 2) {
-      double x = GET_NUM_ARG(0);
-      double y = GET_NUM_ARG(1);
+      double x = get_num_arg(0);
+      double y = get_num_arg(1);
       return value_create_float((float)hypot(x, y));
     }
 
     // fmod(x, y) - kayan nokta mod
     if (strcmp(node->name, "fmod") == 0 && node->argument_count >= 2) {
-      double x = GET_NUM_ARG(0);
-      double y = GET_NUM_ARG(1);
+      double x = get_num_arg(0);
+      double y = get_num_arg(1);
       return value_create_float((float)fmod(x, y));
     }
 
@@ -4085,7 +4085,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
 
     // trunc(x) - ondal─▒k k─▒sm─▒ atar
     if (strcmp(node->name, "trunc") == 0 && node->argument_count >= 1) {
-      double x = GET_NUM_ARG(0);
+      double x = get_num_arg(0);
       return value_create_int((int)trunc(x));
     }
 

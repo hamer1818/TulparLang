@@ -145,12 +145,47 @@ typedef struct {
   } as;
 } VMValue;
 
+static inline VMValue vm_make_int(long long v) {
+  VMValue value;
+  value.type = VM_VAL_INT;
+  value.as.int_val = v;
+  return value;
+}
+
+static inline VMValue vm_make_float(double v) {
+  VMValue value;
+  value.type = VM_VAL_FLOAT;
+  value.as.float_val = v;
+  return value;
+}
+
+static inline VMValue vm_make_bool(int v) {
+  VMValue value;
+  value.type = VM_VAL_BOOL;
+  value.as.bool_val = v;
+  return value;
+}
+
+static inline VMValue vm_make_void() {
+  VMValue value;
+  value.type = VM_VAL_VOID;
+  value.as.int_val = 0;
+  return value;
+}
+
+static inline VMValue vm_make_obj(void *v) {
+  VMValue value;
+  value.type = VM_VAL_OBJ;
+  value.as.obj = (Obj *)v;
+  return value;
+}
+
 // Value creation macros
-#define VM_INT(v) ((VMValue){VM_VAL_INT, {.int_val = (v)}})
-#define VM_FLOAT(v) ((VMValue){VM_VAL_FLOAT, {.float_val = (v)}})
-#define VM_BOOL(v) ((VMValue){VM_VAL_BOOL, {.bool_val = (v)}})
-#define VM_VOID() ((VMValue){VM_VAL_VOID, {.int_val = 0}})
-#define VM_OBJ(v) ((VMValue){VM_VAL_OBJ, {.obj = (Obj *)(v)}})
+#define VM_INT(v) vm_make_int((v))
+#define VM_FLOAT(v) vm_make_float((v))
+#define VM_BOOL(v) vm_make_bool((v))
+#define VM_VOID() vm_make_void()
+#define VM_OBJ(v) vm_make_obj((v))
 
 // Value accessors
 #define AS_INT(v) ((v).as.int_val)

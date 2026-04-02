@@ -691,7 +691,7 @@ void vm_runtime_error(VM *vm, const char *format, ...) {
 #undef READ_SHORT
 #undef READ_CONSTANT
 
-#ifdef __GNUC__
+#if defined(__GNUC__) && !defined(__clang__)
 #define READ_BYTE() (*ip++)
 #define READ_SHORT() (ip += 2, (uint16_t)((ip[-2]) | (ip[-1] << 8)))
 #define READ_CONSTANT() (chunk->constants[READ_SHORT()])
@@ -780,7 +780,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
   uint8_t *ip = frame->ip;
   Chunk *chunk = &function->chunk;
 
-#ifdef __GNUC__
+#if defined(__GNUC__) && !defined(__clang__)
   static void *dispatch_table[] = {
       &&OP_NOP, &&OP_POP, &&OP_DUP, &&OP_CONST_INT, &&OP_CONST_FLOAT,
       &&OP_CONST_TRUE, &&OP_CONST_FALSE, &&OP_CONST_VOID, &&OP_CONST_FUNC,
@@ -816,7 +816,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
 
   // Main loop
   for (;;) {
-#ifndef __GNUC__
+#if !defined(__GNUC__) || defined(__clang__)
     uint8_t instruction = READ_BYTE();
     switch (instruction)
 #endif
@@ -3577,8 +3577,8 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         DISPATCH();
       }
 
-#ifndef __GNUC__
-    default:
+#if !defined(__GNUC__) || defined(__clang__)
+      default:
       runtime_error(vm, "Unknown opcode %d", instruction);
       return VM_RUNTIME_ERROR;
 #endif
