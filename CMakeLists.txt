@@ -32,14 +32,28 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic")
 # Known non-critical noise for current architecture strategy:
 # - computed goto dispatch in VM (GNU extension)
 # - compatibility conversions inherited from legacy code paths
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     add_compile_options(
-        -Wno-gnu-label-as-value
-        -Wno-c++20-extensions
-        -Wno-c99-extensions
-        -Wno-writable-strings
-        -Wno-pedantic
-        -Wno-unused-parameter
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-pedantic>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-write-strings>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-function>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-variable>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-but-set-variable>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-maybe-uninitialized>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter>
+    )
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-gnu-label-as-value>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-c++20-extensions>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-c99-extensions>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-writable-strings>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-pedantic>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-defaulted-function-deleted>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-function>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-variable>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-but-set-variable>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter>
     )
 endif()
 

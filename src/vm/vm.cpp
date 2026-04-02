@@ -3563,7 +3563,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
 
       TARGET(OP_SUB_RI) : {
         // Stack version: TOS = TOS - immediate (for fibonacci n-1, n-2 pattern)
-        READ_BYTE(); // Skip dst byte (not used in stack mode)
+        (void)READ_BYTE(); // Skip dst byte (not used in stack mode)
         int16_t imm = (int16_t)READ_SHORT();
         vm->stack_top[-1].as.int_val -= imm; // Modify top of stack directly
         DISPATCH();

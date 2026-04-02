@@ -114,7 +114,8 @@ static char *read_file_content(const char *path) {
   fseek(f, 0, SEEK_SET);
   char *content = (char *)malloc(size + 1);
   if (content) {
-    fread(content, 1, size, f);
+    size_t bytes_read = fread(content, 1, (size_t)size, f);
+    (void)bytes_read;
     content[size] = '\0';
   }
   fclose(f);
@@ -5117,7 +5118,8 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
 
       // Read content
       source = (char *)malloc((size_t)size + 1);
-      fread(source, 1, size, file);
+      size_t import_read = fread(source, 1, (size_t)size, file);
+      (void)import_read;
       source[size] = '\0';
       fclose(file);
     }

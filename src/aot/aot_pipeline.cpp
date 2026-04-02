@@ -124,7 +124,8 @@ AOTResult aot_compile_and_run(const char *source) {
 
   // Try to execute
   printf("[AOT] Executing generated binary...\n");
-  system("./tulpar_temp");
+  int run_status = system("./tulpar_temp");
+  (void)run_status;
 
   return AOT_OK;
 }

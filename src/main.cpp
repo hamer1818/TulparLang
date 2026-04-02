@@ -33,7 +33,8 @@ char *read_file(const char *filename) {
 
   // Bellek ayır ve oku
   char *buffer = static_cast<char *>(malloc(size + 1));
-  fread(buffer, 1, size, file);
+  size_t bytes_read = fread(buffer, 1, size, file);
+  (void)bytes_read;
   buffer[size] = '\0';
 
   fclose(file);
@@ -84,7 +85,8 @@ static void run_repl() {
       continue;
     }
     if (strcmp(line, "clear") == 0) {
-      system("clear");
+      int clear_status = system("clear");
+      (void)clear_status;
       continue;
     }
 

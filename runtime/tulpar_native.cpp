@@ -357,7 +357,8 @@ TulparString tulpar_read_file(TulparString path) {
   fseek(f, 0, SEEK_SET);
   
   char *content = static_cast<char *>(malloc(size + 1));
-  fread(content, 1, size, f);
+  size_t bytes_read = fread(content, 1, (size_t)size, f);
+  (void)bytes_read;
   content[size] = '\0';
   fclose(f);
   
