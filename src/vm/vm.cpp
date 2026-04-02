@@ -15,6 +15,7 @@
 #include "../embedded_libs.h"
 #include "../jit/jit.hpp"
 #include "../parser/parser.hpp"
+#include "../common/localization.hpp"
 #include "compiler.hpp"
 #include "vm.hpp"
 #include <cctype>
@@ -97,7 +98,7 @@ static void value_to_json(VMValue v, char **buf, size_t *pos,
 static void runtime_error(VM *vm, const char *format, ...) {
   va_list args;
   va_start(args, format);
-  vfprintf(stderr, format, args);
+  vfprintf(stderr, tulpar::i18n::tr_for_en(format), args);
   va_end(args);
   fputs("\n", stderr);
 
@@ -675,8 +676,8 @@ void vm_runtime_error(VM *vm, const char *format, ...) {
   (void)vm; // Unused parameter
   va_list args;
   va_start(args, format);
-  fprintf(stderr, "Runtime Error: ");
-  vfprintf(stderr, format, args);
+  fprintf(stderr, "%s", tulpar::i18n::tr_for_en("Runtime Error: "));
+  vfprintf(stderr, tulpar::i18n::tr_for_en(format), args);
   va_end(args);
   fprintf(stderr, "\n");
 }
@@ -1445,7 +1446,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
 
           int server_fd = socket(AF_INET, SOCK_STREAM, 0);
           if (server_fd == -1) {
-            printf("Socket error: %d\n", errno);
+            printf(tulpar::i18n::tr_for_en("Socket error: %d\n"), errno);
             vm_push(vm, VM_INT(-1));
           } else {
             struct sockaddr_in server_addr;
@@ -1464,12 +1465,12 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
 
             if (bind(server_fd, (struct sockaddr *)&server_addr,
                      sizeof(server_addr)) < 0) {
-              printf("Bind error: %d\n", errno);
+              printf(tulpar::i18n::tr_for_en("Bind error: %d\n"), errno);
               closesocket(server_fd);
               vm_push(vm, VM_INT(-1));
             } else {
               if (listen(server_fd, 5) < 0) {
-                printf("Listen error: %d\n", errno);
+                printf(tulpar::i18n::tr_for_en("Listen error: %d\n"), errno);
                 closesocket(server_fd);
                 vm_push(vm, VM_INT(-1));
               } else {
@@ -2404,21 +2405,29 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           if (!found) {
             // Try to find if function object exists (maybe not in globals if
             // local? but call() implies dynamic global dispatch usually)
-            printf("Runtime Error: Function '%s' not found.\n", name->chars);
+            printf("%s '%s'.\n",
+                   tulpar::i18n::tr_en("Calisma Zamani Hatasi: Fonksiyon bulunamadi",
+                                       "Runtime Error: Function not found"),
+                   name->chars);
             vm_push(vm, VM_VOID());
             break;
           }
 
           if (!IS_FUNCTION(funcVal)) {
-            printf("Runtime Error: '%s' is not a function.\n", name->chars);
+            printf("%s '%s'.\n",
+                   tulpar::i18n::tr_en("Calisma Zamani Hatasi: Bu bir fonksiyon degil",
+                                       "Runtime Error: Not a function"),
+                   name->chars);
             vm_push(vm, VM_VOID());
             break;
           }
 
           ObjFunction *func = AS_FUNCTION(funcVal);
           if (func->arity != 0) {
-            printf("Runtime Error: call() only supports 0-arity functions. "
-                   "'%s' has %d.\n",
+            printf("%s '%s' (%d).\n",
+                   tulpar::i18n::tr_en(
+                       "Calisma Zamani Hatasi: call() yalnizca 0 argumanli fonksiyonlari destekler",
+                       "Runtime Error: call() only supports 0-arity functions"),
                    name->chars, func->arity);
             vm_push(vm, VM_VOID());
             break;
@@ -2797,8 +2806,11 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         }
 
         if (source == nullptr) {
-          printf("Import Error: Could not read file '%s'\n", fileName);
-          printf("  Hint: Available libraries: wings, router, http_utils\n");
+          printf("%s '%s'\n",
+                 tulpar::i18n::tr_en("Import Hatasi: Dosya okunamadi",
+                                     "Import Error: Could not read file"),
+                 fileName);
+          printf("%s", tulpar::i18n::tr_for_en("  Hint: Available libraries: wings, router, http_utils\n"));
           // Push void to avoid crash if assignment expects result
           vm_push(vm, VM_VOID());
           DISPATCH();
@@ -2808,7 +2820,10 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         ASTNode_C *program = parse_source(source);
 
         if (program == nullptr) {
-          printf("Import Error: Failed to parse '%s'\n", fileName);
+          printf("%s '%s'\n",
+                 tulpar::i18n::tr_en("Import Hatasi: Parse islemi basarisiz",
+                                     "Import Error: Failed to parse"),
+                 fileName);
           free(source);
           vm_push(vm, VM_VOID());
           DISPATCH();
@@ -2822,7 +2837,10 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         // preventing free.
 
         if (compiledParams == nullptr) {
-          printf("Import Error: Failed to compile '%s'\n", fileName);
+          printf("%s '%s'\n",
+                 tulpar::i18n::tr_en("Import Hatasi: Derleme basarisiz",
+                                     "Import Error: Failed to compile"),
+                 fileName);
           free(source);
           vm_push(vm, VM_VOID());
           DISPATCH();
@@ -3616,7 +3634,8 @@ void jit_helper_call(VM *vm, int arg_count) {
   VMValue callee = vm_peek(vm, arg_count);
 
   if (!IS_FUNCTION(callee)) {
-    printf("JIT Error: Can only call functions\n");
+    printf("%s\n", tulpar::i18n::tr_en("JIT Hatasi: Yalnizca fonksiyonlar cagrilabilir",
+                                       "JIT Error: Can only call functions"));
     vm_push(vm, VM_VOID());
     return;
   }
@@ -3625,14 +3644,18 @@ void jit_helper_call(VM *vm, int arg_count) {
 
   // Check arity
   if (arg_count != func->arity) {
-    printf("JIT Error: Expected %d args but got %d\n", func->arity, arg_count);
+    printf("%s (expected=%d, got=%d)\n",
+           tulpar::i18n::tr_en("JIT Hatasi: Arguman sayisi uyusmuyor",
+                               "JIT Error: Argument count mismatch"),
+           func->arity, arg_count);
     vm_push(vm, VM_VOID());
     return;
   }
 
   // Check for stack overflow
   if (vm->frame_count >= VM_FRAMES_MAX) {
-    printf("JIT Error: Stack overflow\n");
+    printf("%s\n", tulpar::i18n::tr_en("JIT Hatasi: Yigin tasmasi",
+                                       "JIT Error: Stack overflow"));
     vm_push(vm, VM_VOID());
     return;
   }

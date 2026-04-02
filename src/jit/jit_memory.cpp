@@ -3,6 +3,7 @@
 // ============================================================================
 
 #include "jit.hpp"
+#include "../common/localization.hpp"
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
@@ -78,7 +79,7 @@ static int jit_ensure_capacity(JITCode *code, size_t needed) {
     
     // Can't realloc executable memory easily, so we fail
     // In production, we'd allocate a new larger buffer and copy
-    fprintf(stderr, "JIT Error: Code buffer overflow (need %zu, have %zu)\n",
+    fprintf(stderr, tulpar::i18n::tr_for_en("JIT Error: Code buffer overflow (need %zu, have %zu)\n"),
             code->size + needed, code->capacity);
     return 0;
 }

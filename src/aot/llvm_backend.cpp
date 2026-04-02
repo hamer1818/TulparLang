@@ -5,6 +5,7 @@
 #include "../embedded_libs.h" // Embedded libraries
 #include "../lexer/lexer.hpp"
 #include "../parser/parser.hpp"
+#include "../common/localization.hpp"
 #include "llvm_types.hpp"
 #include "llvm_values.hpp"
 #include <llvm-c/Analysis.h>
@@ -1187,7 +1188,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         left_val = LLVMBuildLoad2(backend->builder, backend->vm_value_type,
                                   val_ptr, node->name);
       } else {
-        fprintf(stderr, "Undefined var in array access: %s\n", node->name);
+        fprintf(stderr, tulpar::i18n::tr_for_en("Undefined var in array access: %s\n"), node->name);
       }
     } else if (node->left) {
       // Nested access uses node->left
@@ -1251,7 +1252,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMBuildStore(backend->builder, new_val, val_ptr);
       return old_val; // Post-increment returns old value
     }
-    fprintf(stderr, "Undefined var in increment: %s\n", node->name);
+    fprintf(stderr, tulpar::i18n::tr_for_en("Undefined var in increment: %s\n"), node->name);
     return llvm_vm_val_int(backend, 0);
   }
 
@@ -1268,14 +1269,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMBuildStore(backend->builder, new_val, val_ptr);
       return old_val;
     }
-    fprintf(stderr, "Undefined var in decrement: %s\n", node->name);
+    fprintf(stderr, tulpar::i18n::tr_for_en("Undefined var in decrement: %s\n"), node->name);
     return llvm_vm_val_int(backend, 0);
   }
 
   case AST_COMPOUND_ASSIGN: {
     LLVMValueRef val_ptr = get_local(backend, node->name);
     if (!val_ptr) {
-      fprintf(stderr, "Undefined var in compound assign: %s\n", node->name);
+      fprintf(stderr, tulpar::i18n::tr_for_en("Undefined var in compound assign: %s\n"), node->name);
       return llvm_vm_val_int(backend, 0);
     }
 
@@ -2920,7 +2921,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       if (target)
         LLVMBuildStore(backend->builder, val, target);
       else {
-        fprintf(stderr, "Undefined var in assignment: %s\n", node->name);
+        fprintf(stderr, tulpar::i18n::tr_for_en("Undefined var in assignment: %s\n"), node->name);
         // Print known vars
         Scope *s = backend->current_scope;
         while (s) {
@@ -3155,7 +3156,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         f = fopen(path_buf, "rb");
 
         if (!f) {
-          fprintf(stderr, "Error: Could not import file '%s'\n", rel_path);
+          fprintf(stderr, tulpar::i18n::tr_for_en("Error: Could not import file '%s'\n"), rel_path);
           return nullptr;
         }
       }
@@ -3936,7 +3937,7 @@ void llvm_backend_optimize(LLVMBackend *backend) {
 
   if (error) {
     char *msg = LLVMGetErrorMessage(error);
-    fprintf(stderr, "[AOT] Warning: Optimization failed: %s\n", msg);
+    fprintf(stderr, tulpar::i18n::tr_for_en("[AOT] Warning: Optimization failed: %s\n"), msg);
     LLVMDisposeErrorMessage(msg);
   } else {
     if (!backend->quiet)

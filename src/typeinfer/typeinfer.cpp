@@ -2,6 +2,7 @@
 // Full static type inference for compile-time type checking
 
 #include "typeinfer.hpp"
+#include "../common/localization.hpp"
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -25,7 +26,7 @@ static void report_error(TypeInferContext *ctx, const char *format, ...) {
 
   ctx->last_error = buffer;
   ctx->error_count++;
-  fprintf(stderr, "Type Error: %s\n", buffer);
+  fprintf(stderr, tulpar::i18n::tr_for_en("Type Error: %s\n"), buffer);
 }
 
 static DataType lookup_symbol_type(TypeInferContext *ctx, const std::string &name) {

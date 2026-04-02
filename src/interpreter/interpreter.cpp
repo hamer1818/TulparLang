@@ -1,5 +1,6 @@
 #include "interpreter.hpp"
 #include "../../lib/sqlite3/sqlite3.h"
+#include "../common/localization.hpp"
 #include "../lexer/lexer.hpp"
 #include "../parser/parser.hpp"
 #include "../embedded_libs.h"  // Embedded standard libraries
@@ -1086,7 +1087,7 @@ void hash_table_print(HashTable *table) {
 void array_push(Array *arr, Value *val) {
   // Type check (if typed array)
   if (arr->elem_type != VAL_VOID && arr->elem_type != val->type) {
-    printf("Error: Array only accepts elements of type ");
+    printf("%s", tulpar::i18n::tr_for_en("Error: Array only accepts elements of type "));
     switch (arr->elem_type) {
     case VAL_INT:
       printf("int");
@@ -1126,7 +1127,7 @@ Value *array_pop(Array *arr) {
 
 Value *array_get(Array *arr, int index) {
   if (index < 0 || index >= arr->length) {
-    printf("Error: Array index out of bounds: %d (length: %d)\n", index,
+    printf(tulpar::i18n::tr_for_en("Error: Array index out of bounds: %d (length: %d)\n"), index,
            arr->length);
     return value_create_void();
   }
@@ -1135,14 +1136,14 @@ Value *array_get(Array *arr, int index) {
 
 void array_set(Array *arr, int index, Value *val) {
   if (index < 0 || index >= arr->length) {
-    printf("Error: Array index out of bounds: %d (length: %d)\n", index,
+    printf(tulpar::i18n::tr_for_en("Error: Array index out of bounds: %d (length: %d)\n"), index,
            arr->length);
     return;
   }
 
   // Type check (if typed array)
   if (arr->elem_type != VAL_VOID && arr->elem_type != val->type) {
-    printf("Error: Array only accepts elements of type ");
+    printf("%s", tulpar::i18n::tr_for_en("Error: Array only accepts elements of type "));
     switch (arr->elem_type) {
     case VAL_INT:
       printf("int");
@@ -1706,7 +1707,10 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       // ─░lk eri┼şim: de─şi┼şkenden al
       container = symbol_table_get(interp->current_scope, node->name);
       if (!container) {
-        printf("Error: Undefined variable '%s'\n", node->name);
+        printf("%s '%s'\n",
+               tulpar::i18n::tr_en("Hata: Tanimsiz degisken",
+                                   "Error: Undefined variable"),
+               node->name);
         exit(1);
       }
       // Don't copy from symbol table (reference)
@@ -1719,7 +1723,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
     // Array access (integer index)
     if (container->type == VAL_ARRAY) {
       if (index_val->type != VAL_INT) {
-        printf("Error: Array index must be integer (line %d)\n", node->line);
+        printf(tulpar::i18n::tr_for_en("Error: Array index must be integer (line %d)\n"), node->line);
         value_free(index_val);
         if (node->left)
           value_free(container);
@@ -1739,7 +1743,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
     // Object access (string key)
     if (container->type == VAL_OBJECT) {
       if (index_val->type != VAL_STRING) {
-        printf("Error: Object key must be string (line %d)\n", node->line);
+        printf(tulpar::i18n::tr_for_en("Error: Object key must be string (line %d)\n"), node->line);
         value_free(index_val);
         if (node->left)
           value_free(container);
@@ -1751,7 +1755,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       value_free(index_val);
 
       if (!found) {
-        printf("Error: Key '%s' not found in object\n", key);
+        printf(tulpar::i18n::tr_for_en("Error: Key '%s' not found in object\n"), key);
         if (node->left)
           value_free(container);
         return value_create_void();
@@ -1768,7 +1772,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
     // String access (character by index)
     if (container->type == VAL_STRING) {
       if (index_val->type != VAL_INT) {
-        printf("Error: String index must be integer (line %d)\n", node->line);
+        printf(tulpar::i18n::tr_for_en("Error: String index must be integer (line %d)\n"), node->line);
         value_free(index_val);
         if (node->left)
           value_free(container);
@@ -1781,7 +1785,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
 
       // Index bounds check
       if (idx < 0 || idx >= len) {
-        printf("Error: String index out of bounds (0-%d, given %d) (line %d)\n",
+        printf(tulpar::i18n::tr_for_en("Error: String index out of bounds (0-%d, given %d) (line %d)\n"),
                len - 1, idx, node->line);
         value_free(index_val);
         if (node->left)
@@ -1791,7 +1795,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
 
       char *char_str = utf8_char_at(str, idx);
       if (!char_str) {
-        printf("Error: UTF-8 character could not be decoded\n");
+        printf("%s", tulpar::i18n::tr_for_en("Error: UTF-8 character could not be decoded\n"));
         value_free(index_val);
         if (node->left)
           value_free(container);
@@ -1808,7 +1812,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
     }
 
     printf(
-        "Error: Accessed value is not an array, object, or string (line %d)\n",
+        tulpar::i18n::tr_for_en("Error: Accessed value is not an array, object, or string (line %d)\n"),
         node->line);
     value_free(index_val);
     if (node->left)
@@ -1819,8 +1823,10 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
   case AST_IDENTIFIER: {
     Value *val = symbol_table_get(interp->current_scope, node->name);
     if (!val) {
-      printf("Error: Undefined variable '%s' (line %d)\n", node->name,
-             node->line);
+      printf("%s '%s' (line %d)\n",
+             tulpar::i18n::tr_en("Hata: Tanimsiz degisken",
+                                 "Error: Undefined variable"),
+             node->name, node->line);
       exit(1);
     }
     return value_copy(val);
@@ -1944,7 +1950,10 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
                              : bigint_from_ll_str(right->data.int_val);
         // Division by zero check
         if (strcmp(rb, "0") == 0 || (strlen(rb) == 1 && rb[0] == '0')) {
-          printf("Error: Division by zero! (line %d)\n", node->line);
+          printf("%s (line %d)\n",
+                 tulpar::i18n::tr_en("Hata: Sifira bolme!",
+                                     "Error: Division by zero!"),
+                 node->line);
           if (left->type != VAL_BIGINT)
             free((char *)la);
           if (right->type != VAL_BIGINT)
@@ -1966,7 +1975,10 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
         result = res;
       } else if (left->type == VAL_INT && right->type == VAL_INT) {
         if (right->data.int_val == 0) {
-          printf("Error: Division by zero! (line %d)\n", node->line);
+          printf("%s (line %d)\n",
+                 tulpar::i18n::tr_en("Hata: Sifira bolme!",
+                                     "Error: Division by zero!"),
+                 node->line);
           exit(1);
         }
         result = value_create_int(left->data.int_val / right->data.int_val);
@@ -1976,7 +1988,10 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
         float r = (right->type == VAL_FLOAT) ? right->data.float_val
                                              : right->data.int_val;
         if (r == 0.0f) {
-          printf("Error: Division by zero! (line %d)\n", node->line);
+          printf("%s (line %d)\n",
+                 tulpar::i18n::tr_en("Hata: Sifira bolme!",
+                                     "Error: Division by zero!"),
+                 node->line);
           exit(1);
         }
         result = value_create_float(l / r);
@@ -2069,7 +2084,8 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
     value_free(right);
 
     if (!result) {
-      printf("Error: Unsupported operator!\n");
+      printf("%s\n", tulpar::i18n::tr_en("Hata: Desteklenmeyen operator!",
+                                         "Error: Unsupported operator!"));
       exit(1);
     }
 
@@ -2096,7 +2112,8 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
     value_free(operand);
 
     if (!result) {
-      printf("Error: Unsupported unary operator!\n");
+      printf("%s\n", tulpar::i18n::tr_en("Hata: Desteklenmeyen tekli operator!",
+                                         "Error: Unsupported unary operator!"));
       exit(1);
     }
 
@@ -2112,7 +2129,9 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
     if (strcmp(node->name, "call") == 0 && node->argument_count >= 1) {
       Value *func_name_val = interpreter_eval_expression(interp, node->arguments[0]);
       if (func_name_val->type != VAL_STRING) {
-        printf("Error: call() first argument must be a string (function name)\n");
+        printf("%s\n", tulpar::i18n::tr_en(
+                         "Hata: call() ilk arguman olarak string (fonksiyon adi) bekler",
+                         "Error: call() first argument must be a string (function name)"));
         value_free(func_name_val);
         return value_create_void();
       }
@@ -2121,7 +2140,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       Function *func = interpreter_get_function(interp, func_name);
       
       if (!func) {
-        printf("Error: Function '%s' not found for call()\n", func_name);
+        printf(tulpar::i18n::tr_for_en("Error: Function '%s' not found for call()\n"), func_name);
         value_free(func_name_val);
         return value_create_void();
       }
@@ -2948,7 +2967,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
           long long v = strtoll(arg->data.string_val, &endptr, 10);
           result = value_create_int(v);
         } else {
-          printf("Error: Unsupported type for toInt() (line %d)\n", node->line);
+          printf(tulpar::i18n::tr_for_en("Error: Unsupported type for toInt() (line %d)\n"), node->line);
         }
 
         value_free(arg);
@@ -2972,7 +2991,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
         } else if (arg->type == VAL_STRING) {
           result = value_create_float(atof(arg->data.string_val));
         } else {
-          printf("Error: Unsupported type for toFloat() (line %d)\n",
+          printf(tulpar::i18n::tr_for_en("Error: Unsupported type for toFloat() (line %d)\n"),
                  node->line);
         }
 
@@ -3005,7 +3024,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
           value_free(arg);
           return s;
         } else {
-          printf("Error: Unsupported type for toString() (line %d)\n",
+          printf(tulpar::i18n::tr_for_en("Error: Unsupported type for toString() (line %d)\n"),
                  node->line);
           buffer[0] = '\0';
         }
@@ -3098,7 +3117,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
                   interp, target->field_defaults[i]);
               hash_table_set(v->data.object_val, target->field_names[i], dv);
             } else if (strict) {
-              printf("Error: Missing field in JSON: %s (fromJson)\n",
+              printf(tulpar::i18n::tr_for_en("Error: Missing field in JSON: %s (fromJson)\n"),
                      target->field_names[i]);
               value_free(v);
               exit(1);
@@ -3139,8 +3158,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
           default:
             break;
           }
-          printf("Warning: Unexpected type for toBool(): %s (applying "
-                 "truthiness) (line %d)\n",
+          printf(tulpar::i18n::tr_for_en("Warning: Unexpected type for toBool(): %s (applying truthiness) (line %d)\n"),
                  t, node->line);
         }
 
@@ -3165,7 +3183,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
           // object uzunlu─şu: entry say─▒s─▒
           len = arg->data.object_val->size;
         } else {
-          printf("Error: length() only for array/object/string (line %d)\n",
+          printf(tulpar::i18n::tr_for_en("Error: length() only for array/object/string (line %d)\n"),
                  node->line);
         }
 
@@ -3190,7 +3208,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
             value_free(elem);
             return value_create_void();
           } else {
-            printf("Error: push() first argument must be array (line %d)\n",
+            printf(tulpar::i18n::tr_for_en("Error: push() first argument must be array (line %d)\n"),
                    node->line);
           }
         }
@@ -3209,7 +3227,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
           if (arr_val && arr_val->type == VAL_ARRAY) {
             return array_pop(arr_val->data.array_val);
           } else {
-            printf("Error: pop() first argument must be array (line %d)\n",
+            printf(tulpar::i18n::tr_for_en("Error: pop() first argument must be array (line %d)\n"),
                    node->line);
           }
         }
@@ -3273,7 +3291,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       } else {
         if (!((a0->type == VAL_INT || a0->type == VAL_FLOAT) &&
               (a1->type == VAL_INT || a1->type == VAL_FLOAT))) {
-          printf("Error: pow() expects numeric arguments (line %d)\n",
+          printf(tulpar::i18n::tr_for_en("Error: pow() expects numeric arguments (line %d)\n"),
                  node->line);
           value_free(a0);
           value_free(a1);
@@ -3304,7 +3322,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
                              : bigint_from_ll_str(a1->data.int_val);
         // Modulo by zero check
         if (strcmp(rb, "0") == 0 || (strlen(rb) == 1 && rb[0] == '0')) {
-          printf("Error: Modulo by zero! (line %d)\n", node->line);
+          printf(tulpar::i18n::tr_for_en("Error: Modulo by zero! (line %d)\n"), node->line);
           if (a0->type != VAL_BIGINT)
             free((char *)la);
           if (a1->type != VAL_BIGINT)
@@ -3325,14 +3343,14 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
           free((char *)rb);
       } else {
         if (!(a0->type == VAL_INT && a1->type == VAL_INT)) {
-          printf("Error: mod() expects integer arguments (line %d)\n",
+          printf(tulpar::i18n::tr_for_en("Error: mod() expects integer arguments (line %d)\n"),
                  node->line);
           value_free(a0);
           value_free(a1);
           exit(1);
         }
         if (a1->data.int_val == 0) {
-          printf("Error: Modulo by zero! (line %d)\n", node->line);
+          printf(tulpar::i18n::tr_for_en("Error: Modulo by zero! (line %d)\n"), node->line);
           value_free(a0);
           value_free(a1);
           exit(1);
@@ -4265,7 +4283,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
         value_free(sql_val);
 
         if (rc != SQLITE_OK) {
-          printf("SQL Error: %s\n", err_msg);
+          printf(tulpar::i18n::tr_for_en("SQL Error: %s\n"), err_msg);
           sqlite3_free(err_msg);
           return result_list;
         }
@@ -4284,13 +4302,13 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
     if (node->receiver) {
       Value *recv = interpreter_eval_expression(interp, node->receiver);
       if (recv->type != VAL_OBJECT) {
-        printf("Error: Object expected for method call (line %d)\n",
+        printf(tulpar::i18n::tr_for_en("Error: Object expected for method call (line %d)\n"),
                node->line);
         exit(1);
       }
       Value *mark = hash_table_get(recv->data.object_val, "__type");
       if (!mark || mark->type != VAL_STRING) {
-        printf("Error: Type marker not found for method (line %d)\n",
+        printf(tulpar::i18n::tr_for_en("Error: Type marker not found for method (line %d)\n"),
                node->line);
         exit(1);
       }
@@ -4300,7 +4318,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
                node->name);
       Function *m = interpreter_get_function(interp, fullname);
       if (!m) {
-        printf("Error: Undefined method '%s' (line %d)\n", fullname,
+        printf(tulpar::i18n::tr_for_en("Error: Undefined method '%s' (line %d)\n"), fullname,
                node->line);
         exit(1);
       }
@@ -4358,8 +4376,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
         if (has_named) {
           for (int i = 0; i < node->argument_count; i++) {
             if (!node->argument_names[i]) {
-              printf("Error: For type '%s', all arguments must be named or "
-                     "none\n",
+              printf(tulpar::i18n::tr_for_en("Error: For type '%s', all arguments must be named or none\n"),
                      node->name);
               exit(1);
             }
@@ -4372,12 +4389,12 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
               }
             }
             if (idx < 0) {
-              printf("Error: Field '%s' not found in type '%s'\n", fname,
+              printf(tulpar::i18n::tr_for_en("Error: Field '%s' not found in type '%s'\n"), fname,
                      node->name);
               exit(1);
             }
             if (filled[idx]) {
-              printf("Error: Field '%s' assigned twice in type '%s'\n", fname,
+              printf(tulpar::i18n::tr_for_en("Error: Field '%s' assigned twice in type '%s'\n"), fname,
                      node->name);
               exit(1);
             }
@@ -4385,25 +4402,25 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
                 interpreter_eval_expression(interp, node->arguments[i]);
             // Type validation
             if (t->field_types[idx] == TYPE_INT && arg->type != VAL_INT) {
-              printf("Error: Field '%s' must be int\n", t->field_names[idx]);
+              printf(tulpar::i18n::tr_for_en("Error: Field '%s' must be int\n"), t->field_names[idx]);
               exit(1);
             }
             if (t->field_types[idx] == TYPE_FLOAT &&
                 !(arg->type == VAL_FLOAT || arg->type == VAL_INT)) {
-              printf("Error: Field '%s' must be float\n", t->field_names[idx]);
+              printf(tulpar::i18n::tr_for_en("Error: Field '%s' must be float\n"), t->field_names[idx]);
               exit(1);
             }
             if (t->field_types[idx] == TYPE_STRING && arg->type != VAL_STRING) {
-              printf("Error: Field '%s' must be str\n", t->field_names[idx]);
+              printf(tulpar::i18n::tr_for_en("Error: Field '%s' must be str\n"), t->field_names[idx]);
               exit(1);
             }
             if (t->field_types[idx] == TYPE_BOOL && arg->type != VAL_BOOL) {
-              printf("Error: Field '%s' must be bool\n", t->field_names[idx]);
+              printf(tulpar::i18n::tr_for_en("Error: Field '%s' must be bool\n"), t->field_names[idx]);
               exit(1);
             }
             if (t->field_types[idx] == TYPE_CUSTOM) {
               if (arg->type != VAL_OBJECT) {
-                printf("Error: Field '%s' must be type '%s'\n",
+                printf(tulpar::i18n::tr_for_en("Error: Field '%s' must be type '%s'\n"),
                        t->field_names[idx], t->field_custom_types[idx]);
                 exit(1);
               }
@@ -4411,7 +4428,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
               if (!mark || mark->type != VAL_STRING ||
                   strcmp(mark->data.string_val, t->field_custom_types[idx]) !=
                       0) {
-                printf("Error: Field '%s' expects type '%s'\n",
+                printf(tulpar::i18n::tr_for_en("Error: Field '%s' expects type '%s'\n"),
                        t->field_names[idx], t->field_custom_types[idx]);
                 exit(1);
               }
@@ -4427,30 +4444,30 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
                 Value *dv =
                     interpreter_eval_expression(interp, t->field_defaults[k]);
                 if (t->field_types[k] == TYPE_INT && dv->type != VAL_INT) {
-                  printf("Error: Default '%s' must be int\n",
+                  printf(tulpar::i18n::tr_for_en("Error: Default '%s' must be int\n"),
                          t->field_names[k]);
                   exit(1);
                 }
                 if (t->field_types[k] == TYPE_FLOAT &&
                     !(dv->type == VAL_FLOAT || dv->type == VAL_INT)) {
-                  printf("Error: Default '%s' must be float\n",
+                  printf(tulpar::i18n::tr_for_en("Error: Default '%s' must be float\n"),
                          t->field_names[k]);
                   exit(1);
                 }
                 if (t->field_types[k] == TYPE_STRING &&
                     dv->type != VAL_STRING) {
-                  printf("Error: Default '%s' must be str\n",
+                  printf(tulpar::i18n::tr_for_en("Error: Default '%s' must be str\n"),
                          t->field_names[k]);
                   exit(1);
                 }
                 if (t->field_types[k] == TYPE_BOOL && dv->type != VAL_BOOL) {
-                  printf("Error: Default '%s' must be bool\n",
+                  printf(tulpar::i18n::tr_for_en("Error: Default '%s' must be bool\n"),
                          t->field_names[k]);
                   exit(1);
                 }
                 if (t->field_types[k] == TYPE_CUSTOM) {
                   if (dv->type != VAL_OBJECT) {
-                    printf("Error: Default '%s' must be type '%s'\n",
+                    printf(tulpar::i18n::tr_for_en("Error: Default '%s' must be type '%s'\n"),
                            t->field_names[k], t->field_custom_types[k]);
                     exit(1);
                   }
@@ -4458,7 +4475,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
                   if (!mark || mark->type != VAL_STRING ||
                       strcmp(mark->data.string_val, t->field_custom_types[k]) !=
                           0) {
-                    printf("Error: Default '%s' expects type '%s'\n",
+                    printf(tulpar::i18n::tr_for_en("Error: Default '%s' expects type '%s'\n"),
                            t->field_names[k], t->field_custom_types[k]);
                     exit(1);
                   }
@@ -4467,7 +4484,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
                 filled[k] = 1;
                 used_fields++;
               } else {
-                printf("Error: Missing field '%s' for type '%s'\n",
+                printf(tulpar::i18n::tr_for_en("Error: Missing field '%s' for type '%s'\n"),
                        t->field_names[k], node->name);
                 exit(1);
               }
@@ -4475,7 +4492,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
           }
         } else {
           if (node->argument_count != t->field_count) {
-            printf("Error: Expected %d arguments for type '%s', got %d\n",
+            printf(tulpar::i18n::tr_for_en("Error: Expected %d arguments for type '%s', got %d\n"),
                    t->field_count, node->name, node->argument_count);
             exit(1);
           }
@@ -4483,25 +4500,25 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
             Value *arg =
                 interpreter_eval_expression(interp, node->arguments[i]);
             if (t->field_types[i] == TYPE_INT && arg->type != VAL_INT) {
-              printf("Error: Field '%s' must be int\n", t->field_names[i]);
+              printf(tulpar::i18n::tr_for_en("Error: Field '%s' must be int\n"), t->field_names[i]);
               exit(1);
             }
             if (t->field_types[i] == TYPE_FLOAT &&
                 !(arg->type == VAL_FLOAT || arg->type == VAL_INT)) {
-              printf("Error: Field '%s' must be float\n", t->field_names[i]);
+              printf(tulpar::i18n::tr_for_en("Error: Field '%s' must be float\n"), t->field_names[i]);
               exit(1);
             }
             if (t->field_types[i] == TYPE_STRING && arg->type != VAL_STRING) {
-              printf("Error: Field '%s' must be str\n", t->field_names[i]);
+              printf(tulpar::i18n::tr_for_en("Error: Field '%s' must be str\n"), t->field_names[i]);
               exit(1);
             }
             if (t->field_types[i] == TYPE_BOOL && arg->type != VAL_BOOL) {
-              printf("Error: Field '%s' must be bool\n", t->field_names[i]);
+              printf(tulpar::i18n::tr_for_en("Error: Field '%s' must be bool\n"), t->field_names[i]);
               exit(1);
             }
             if (t->field_types[i] == TYPE_CUSTOM) {
               if (arg->type != VAL_OBJECT) {
-                printf("Error: Field '%s' must be type '%s'\n",
+                printf(tulpar::i18n::tr_for_en("Error: Field '%s' must be type '%s'\n"),
                        t->field_names[i], t->field_custom_types[i]);
                 exit(1);
               }
@@ -4509,7 +4526,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
               if (!mark || mark->type != VAL_STRING ||
                   strcmp(mark->data.string_val, t->field_custom_types[i]) !=
                       0) {
-                printf("Error: Field '%s' expects type '%s'\n",
+                printf(tulpar::i18n::tr_for_en("Error: Field '%s' expects type '%s'\n"),
                        t->field_names[i], t->field_custom_types[i]);
                 exit(1);
               }
@@ -4520,7 +4537,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
         free(filled);
         return obj;
       }
-      printf("Error: Undefined function '%s'\n", node->name);
+      printf(tulpar::i18n::tr_for_en("Error: Undefined function '%s'\n"), node->name);
       exit(1);
     }
 
@@ -4654,7 +4671,7 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
           // Mevcut elemanlar─▒ kontrol et
           for (int i = 0; i < val->data.array_val->length; i++) {
             if (val->data.array_val->elements[i]->type != required_type) {
-              printf("Error: All elements in array literal must be of type ");
+              printf("%s", tulpar::i18n::tr_for_en("Error: All elements in array literal must be of type "));
               switch (required_type) {
               case VAL_INT:
                 printf("int");
@@ -4733,14 +4750,14 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
       while (seg->left)
         seg = seg->left;
       if (!seg->name) {
-        printf("Error: Invalid assignment left-hand side\n");
+        printf("%s", tulpar::i18n::tr_for_en("Error: Invalid assignment left-hand side\n"));
         value_free(val);
         exit(1);
       }
       // Base container
       Value *container = symbol_table_get(interp->current_scope, seg->name);
       if (!container) {
-        printf("Error: '%s' is not defined\n", seg->name);
+        printf(tulpar::i18n::tr_for_en("Error: '%s' is not defined\n"), seg->name);
         value_free(val);
         exit(1);
       }
@@ -4778,7 +4795,7 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
         // ─░leri container'a ilerle
         if (parent->type == VAL_OBJECT) {
           if (idx->type != VAL_STRING) {
-            printf("Error: Object key must be string\n");
+            printf("%s", tulpar::i18n::tr_for_en("Error: Object key must be string\n"));
             value_free(idx);
             value_free(val);
             exit(1);
@@ -4796,7 +4813,7 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
           current = child;
         } else if (parent->type == VAL_ARRAY) {
           if (idx->type != VAL_INT) {
-            printf("Error: Array index must be integer\n");
+            printf("%s", tulpar::i18n::tr_for_en("Error: Array index must be integer\n"));
             value_free(idx);
             value_free(val);
             exit(1);
@@ -4804,15 +4821,14 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
           int index = idx->data.int_val;
           // Do─şrudan pointer eri┼şimi
           if (index < 0 || index >= parent->data.array_val->length) {
-            printf("Error: Array index out of bounds (line %d)\n", node->line);
+            printf(tulpar::i18n::tr_for_en("Error: Array index out of bounds (line %d)\n"), node->line);
             value_free(idx);
             value_free(val);
             exit(1);
           }
           current = parent->data.array_val->elements[index];
         } else {
-          printf("Error: Intermediate segment must be array or object (line "
-                 "%d)\n",
+          printf(tulpar::i18n::tr_for_en("Error: Intermediate segment must be array or object (line %d)\n"),
                  node->line);
           value_free(idx);
           value_free(val);
@@ -4826,7 +4842,7 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
       Value *last_idx = interpreter_eval_expression(interp, last->index);
       if (target_parent->type == VAL_OBJECT) {
         if (last_idx->type != VAL_STRING) {
-          printf("Error: Object key must be string (line %d)\n", node->line);
+          printf(tulpar::i18n::tr_for_en("Error: Object key must be string (line %d)\n"), node->line);
           value_free(last_idx);
           value_free(val);
           exit(1);
@@ -4836,7 +4852,7 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
         value_free(last_idx);
       } else if (target_parent->type == VAL_ARRAY) {
         if (last_idx->type != VAL_INT) {
-          printf("Error: Array index must be integer (line %d)\n", node->line);
+          printf(tulpar::i18n::tr_for_en("Error: Array index must be integer (line %d)\n"), node->line);
           value_free(last_idx);
           value_free(val);
           exit(1);
@@ -4844,7 +4860,7 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
         array_set(target_parent->data.array_val, last_idx->data.int_val, val);
         value_free(last_idx);
       } else {
-        printf("Error: Target container must be array or object (line %d)\n",
+        printf(tulpar::i18n::tr_for_en("Error: Target container must be array or object (line %d)\n"),
                node->line);
         value_free(last_idx);
         value_free(val);
@@ -4864,7 +4880,10 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
     // x += 5 gibi
     Value *current = symbol_table_get(interp->current_scope, node->name);
     if (!current) {
-      printf("Error: Undefined variable '%s'\n", node->name);
+      printf("%s '%s'\n",
+             tulpar::i18n::tr_en("Hata: Tanimsiz degisken",
+                                 "Error: Undefined variable"),
+             node->name);
       exit(1);
     }
 
@@ -4994,7 +5013,10 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
     // x++
     Value *current = symbol_table_get(interp->current_scope, node->name);
     if (!current) {
-      printf("Error: Undefined variable '%s'\n", node->name);
+      printf("%s '%s'\n",
+             tulpar::i18n::tr_en("Hata: Tanimsiz degisken",
+                                 "Error: Undefined variable"),
+             node->name);
       exit(1);
     }
 
@@ -5016,7 +5038,10 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
     // x--
     Value *current = symbol_table_get(interp->current_scope, node->name);
     if (!current) {
-      printf("Error: Undefined variable '%s'\n", node->name);
+      printf("%s '%s'\n",
+             tulpar::i18n::tr_en("Hata: Tanimsiz degisken",
+                                 "Error: Undefined variable"),
+             node->name);
       exit(1);
     }
 
@@ -5079,9 +5104,9 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
       }
       
       if (!file) {
-        printf("Error: Could not open import '%s' (line %d)\n", filename,
+        printf(tulpar::i18n::tr_for_en("Error: Could not open import '%s' (line %d)\n"), filename,
                node->line);
-        printf("  Hint: Available embedded libraries: wings, router, http_utils\n");
+        printf("%s", tulpar::i18n::tr_for_en("  Hint: Available embedded libraries: wings, router, http_utils\n"));
         exit(1);
       }
 

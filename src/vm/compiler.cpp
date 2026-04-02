@@ -1,4 +1,5 @@
 #include "compiler.hpp"
+#include "../common/localization.hpp"
 #include <cstdio>
 #include <cstring>
 
@@ -75,7 +76,8 @@ int emit_jump(Compiler *compiler, uint8_t op, int line) {
 void patch_jump(Compiler *compiler, int offset) {
   int jump = compiler->chunk->code_length - offset - 2;
   if (jump > 0xFFFF) {
-    printf("Compiler Error: Jump too large\n");
+    printf("%s\n", tulpar::i18n::tr_en("Derleyici Hatasi: Atlama cok buyuk",
+                                       "Compiler Error: Jump too large"));
     return;
   }
   compiler->chunk->code[offset] = jump & 0xFF;
@@ -108,7 +110,9 @@ void compiler_end_scope(Compiler *compiler) {
 
 int compiler_add_local(Compiler *compiler, const char *name) {
   if (compiler->local_count >= 256) {
-    printf("Compiler Error: Too many local variables\n");
+    printf("%s\n",
+           tulpar::i18n::tr_en("Derleyici Hatasi: Cok fazla yerel degisken",
+                               "Compiler Error: Too many local variables"));
     return -1;
   }
 
@@ -444,7 +448,10 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
     }
     // Note: Modulo operator (%) not yet in lexer - fallback to default
     default:
-      printf("Compiler Error: Unsupported binary operator\n");
+      printf("%s\n",
+             tulpar::i18n::tr_en(
+                 "Derleyici Hatasi: Desteklenmeyen ikili operator",
+                 "Compiler Error: Unsupported binary operator"));
       break;
     }
     break;
@@ -461,7 +468,10 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
       emit_byte(compiler, OP_NOT, node->line);
       break;
     default:
-      printf("Compiler Error: Unsupported unary operator\n");
+      printf("%s\n",
+             tulpar::i18n::tr_en(
+                 "Derleyici Hatasi: Desteklenmeyen tekli operator",
+                 "Compiler Error: Unsupported unary operator"));
       break;
     }
     break;
@@ -835,7 +845,7 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
   }
 
   default:
-    printf("Compiler Warning: Unhandled expression type %d\n", node->type);
+    printf(tulpar::i18n::tr_for_en("Compiler Warning: Unhandled expression type %d\n"), node->type);
     break;
   }
 }
@@ -1265,7 +1275,7 @@ void compile_statement(Compiler *compiler, ASTNode_C *node) {
 
   case AST_BREAK: {
     if (compiler->loop_depth == 0) {
-      fprintf(stderr, "Compiler Error: 'break' outside of loop at line %d\n",
+      fprintf(stderr, tulpar::i18n::tr_for_en("Compiler Error: 'break' outside of loop at line %d\n"),
               node->line);
     } else {
       // Emit jump and save offset for later patching
@@ -1279,7 +1289,7 @@ void compile_statement(Compiler *compiler, ASTNode_C *node) {
 
   case AST_CONTINUE: {
     if (compiler->loop_depth == 0) {
-      fprintf(stderr, "Compiler Error: 'continue' outside of loop at line %d\n",
+      fprintf(stderr, tulpar::i18n::tr_for_en("Compiler Error: 'continue' outside of loop at line %d\n"),
               node->line);
     } else if (compiler->is_for_loop) {
       // For loop: emit forward jump - will be patched to increment
@@ -1579,7 +1589,7 @@ void compile_statement(Compiler *compiler, ASTNode_C *node) {
   }
 
   default:
-    printf("Compiler Warning: Unhandled statement type %d\n", node->type);
+    printf(tulpar::i18n::tr_for_en("Compiler Warning: Unhandled statement type %d\n"), node->type);
     break;
   }
 }

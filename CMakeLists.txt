@@ -40,6 +40,12 @@ include_directories(${PROJECT_SOURCE_DIR}/src)
 # Source files
 # ============================================
 
+# Common
+set(COMMON_SOURCES
+    src/common/localization.cpp
+    src/common/localization.hpp
+)
+
 # Core Language
 set(LEXER_SOURCES
     src/lexer/lexer.cpp
@@ -109,6 +115,7 @@ set(SQLITE_SOURCES
 # Main Executable
 # ============================================
 set(ALL_SOURCES
+    ${COMMON_SOURCES}
     ${LEXER_SOURCES}
     ${PARSER_SOURCES}
     ${AOT_SOURCES}
@@ -148,6 +155,7 @@ target_link_libraries(tulpar ${llvm_libs} stdc++)
 # Runtime Library (for AOT-compiled binaries)
 # ============================================
 add_library(tulpar_runtime STATIC
+    src/common/localization.cpp
     src/vm/runtime_bindings.cpp
     src/vm/vm.cpp
     src/vm/bytecode.cpp

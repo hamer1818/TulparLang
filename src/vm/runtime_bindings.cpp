@@ -1,5 +1,6 @@
 #include "../../runtime/cJSON.h"
 #include "../lexer/lexer.hpp"
+#include "../common/localization.hpp"
 #include "vm.hpp"
 
 #define TYPE_BOOL_BOOL ((VM_VAL_BOOL << 4) | VM_VAL_BOOL)
@@ -51,7 +52,8 @@ static AOTArena *g_aot_string_arena = nullptr;
 // AOT Dynamic Call Support
 VMValue aot_call_dynamic(VMValue func_name) {
   if (!IS_STRING(func_name)) {
-    printf("Runtime Error: call() expects string\n");
+    printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
+                                       "Runtime Error: call() expects string"));
     return VM_VOID();
   }
 
@@ -74,7 +76,10 @@ VMValue aot_call_dynamic(VMValue func_name) {
   }
 
   if (!func_ptr) {
-    printf("Runtime Error: Function '%s' not found (AOT)\n", name);
+    printf("%s '%s' (AOT)\n",
+           tulpar::i18n::tr_en("Calisma Zamani Hatasi: Fonksiyon bulunamadi",
+                               "Runtime Error: Function not found"),
+           name);
     return VM_VOID();
   }
 
@@ -441,7 +446,8 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
     switch (type_pair) {
     case TYPE_INT_INT:
       if (AS_INT(b) == 0) {
-        printf("Runtime Error: Division by zero\n");
+        printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
+                                           "Runtime Error: Division by zero"));
         *result = VM_INT(0);
         return;
       }
@@ -615,7 +621,9 @@ void vm_array_push_wrapper(VM *vm, ObjArray *array, VMValue value) {
 
 VMValue vm_array_get(ObjArray *array, int index) {
   if (!array || index < 0 || index >= array->count) {
-    printf("Runtime Error: Array index out of bounds\n");
+    printf("%s\n",
+           tulpar::i18n::tr_en("Calisma Zamani Hatasi: Dizi indeksi sinir disinda",
+                               "Runtime Error: Array index out of bounds"));
     return VM_INT(0);
   }
   return array->items[index];
@@ -623,7 +631,9 @@ VMValue vm_array_get(ObjArray *array, int index) {
 
 void vm_array_set(ObjArray *array, int index, VMValue value) {
   if (!array || index < 0 || index >= array->count) {
-    printf("Runtime Error: Array index out of bounds\n");
+    printf("%s\n",
+           tulpar::i18n::tr_en("Calisma Zamani Hatasi: Dizi indeksi sinir disinda",
+                               "Runtime Error: Array index out of bounds"));
     return;
   }
   array->items[index] = value;
@@ -788,7 +798,9 @@ VMValue vm_get_element_ptr(VMValue *target, VMValue *index) {
 void vm_set_element_ptr(VM *vm, VMValue *target, VMValue *index,
                         VMValue *value) {
   if (!target || !index || !value) {
-    printf("Runtime Error: nullptr pointer in set element\n");
+    printf("%s\n",
+           tulpar::i18n::tr_en("Calisma Zamani Hatasi: set element icin gecersiz pointer",
+                               "Runtime Error: nullptr pointer in set element"));
     return;
   }
   vm_set_element(vm, *target, *index, *value);
@@ -812,7 +824,10 @@ VMValue vm_get_element(VMValue target, VMValue index) {
       return VM_OBJ(aot_allocate_string(&str->chars[idx], 1));
     }
   }
-  printf("Runtime Error: Invalid index or target for get access\n");
+  printf("%s\n",
+         tulpar::i18n::tr_en(
+             "Calisma Zamani Hatasi: get islemi icin gecersiz hedef veya indeks",
+             "Runtime Error: Invalid index or target for get access"));
   return VM_INT(0);
 }
 
@@ -828,7 +843,10 @@ void vm_set_element(VM *vm, VMValue target, VMValue index, VMValue value) {
       return;
     }
   }
-  printf("Runtime Error: Invalid index or target for set access\n");
+  printf("%s\n",
+         tulpar::i18n::tr_en(
+             "Calisma Zamani Hatasi: set islemi icin gecersiz hedef veya indeks",
+             "Runtime Error: Invalid index or target for set access"));
 }
 
 // Print a VMValue (used by OP_PRINT in VM)

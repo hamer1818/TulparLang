@@ -1,4 +1,5 @@
 #include "lexer.hpp"
+#include "../common/localization.hpp"
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -106,7 +107,7 @@ void Lexer::skip_block_comment() {
         
         // Not terminated
         fprintf(stderr,
-                "Lexer Error: Block comment not terminated (started at line %d, col %d)\n",
+                tulpar::i18n::tr_for_en("Lexer Error: Block comment not terminated (started at line %d, col %d)\n"),
                 start_line, start_col);
     }
 }
@@ -349,7 +350,7 @@ Token Lexer::next_token() {
             case ':': return Token(TOKEN_COLON, value, start_line, start_column);
             case '.': return Token(TOKEN_DOT, value, start_line, start_column);
             default:
-                fprintf(stderr, "Lexer Error: Unknown character '%c' at line %d, col %d\n",
+                fprintf(stderr, tulpar::i18n::tr_for_en("Lexer Error: Unknown character '%c' at line %d, col %d\n"),
                         ch, start_line, start_column);
                 return Token(TOKEN_ERROR, value, start_line, start_column);
         }

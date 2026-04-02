@@ -1,6 +1,7 @@
 #include "aot_pipeline.hpp"
 #include "../lexer/lexer.hpp"
 #include "../parser/parser.hpp"
+#include "../common/localization.hpp"
 #include "llvm_backend.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -50,14 +51,14 @@ AOTResult aot_compile(const char *source, const char *output_name) {
   printf("[AOT] Parsing source...\n");
   ASTNode_C *ast = parse_source(source);
   if (!ast) {
-    fprintf(stderr, "[AOT] Error: Failed to parse source\n");
+    fprintf(stderr, "%s", tulpar::i18n::tr_for_en("[AOT] Error: Failed to parse source\n"));
     return AOT_ERROR_PARSE;
   }
 
   printf("[AOT] Creating LLVM backend...\n");
   LLVMBackend *backend = llvm_backend_create("tulpar_aot_module");
   if (!backend) {
-    fprintf(stderr, "[AOT] Error: Failed to create LLVM backend\n");
+    fprintf(stderr, "%s", tulpar::i18n::tr_for_en("[AOT] Error: Failed to create LLVM backend\n"));
     ast_node_free(ast);
     return AOT_ERROR_CODEGEN;
   }
@@ -81,7 +82,7 @@ AOTResult aot_compile(const char *source, const char *output_name) {
 
   printf("[AOT] Emitting object file: %s\n", obj_filename);
   if (llvm_backend_emit_object(backend, obj_filename) != 0) {
-    fprintf(stderr, "[AOT] Error: Failed to emit object file\n");
+    fprintf(stderr, "%s", tulpar::i18n::tr_for_en("[AOT] Error: Failed to emit object file\n"));
     llvm_backend_destroy(backend);
     ast_node_free(ast);
     return AOT_ERROR_EMIT;
@@ -98,9 +99,8 @@ AOTResult aot_compile(const char *source, const char *output_name) {
 
   int link_result = system(link_cmd);
   if (link_result != 0) {
-    fprintf(stderr,
-            "[AOT] Error: Linking failed (code %d). Check clang installation "
-            "and libraries.\n",
+    fprintf(stderr, tulpar::i18n::tr_for_en(
+            "[AOT] Error: Linking failed (code %d). Check clang installation and libraries.\n"),
             link_result);
     llvm_backend_destroy(backend);
     ast_node_free(ast);

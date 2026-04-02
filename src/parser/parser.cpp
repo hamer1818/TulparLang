@@ -1,5 +1,6 @@
 #include "parser.hpp"
 #include "ast_visitor.hpp"
+#include "../common/localization.hpp"
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -63,7 +64,7 @@ bool Parser::is_at_end() const {
 }
 
 void Parser::error(const std::string& message) {
-    fprintf(stderr, "Parser Error: %s\n", message.c_str());
+    fprintf(stderr, tulpar::i18n::tr_for_en("Parser Error: %s\n"), message.c_str());
     throw std::runtime_error(message);
 }
 
@@ -96,7 +97,7 @@ std::unique_ptr<ASTNode> Parser::parse() {
         try {
             statements.push_back(parse_statement());
         } catch (const std::exception& e) {
-            fprintf(stderr, "Parse error: %s\n", e.what());
+            fprintf(stderr, tulpar::i18n::tr_for_en("Parse error: %s\n"), e.what());
             // Skip to next statement
             while (!is_at_end() && current().type() != TOKEN_SEMICOLON &&
                    current().type() != TOKEN_RBRACE) {

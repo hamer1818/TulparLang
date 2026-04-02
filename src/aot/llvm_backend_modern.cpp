@@ -1,4 +1,5 @@
 #include "llvm_backend_modern.hpp"
+#include "../common/localization.hpp"
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/IR/Verifier.h>
@@ -178,7 +179,7 @@ void LLVMBackend::compile(const ASTNode& root) {
             std::cerr << "Module verification failed:\n" << error_str << std::endl;
         }
     } catch (const std::exception& e) {
-        std::cerr << "Compilation error: " << e.what() << std::endl;
+        std::cerr << tulpar::i18n::tr_for_en("Compilation error: ") << e.what() << std::endl;
     }
 }
 

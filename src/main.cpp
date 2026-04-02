@@ -7,6 +7,7 @@
 #include "interpreter/interpreter.hpp"
 #include "lexer/lexer.hpp"
 #include "parser/parser.hpp"
+#include "common/localization.hpp"
 #include "vm/compiler.hpp"
 #include "vm/vm.hpp"
 #ifdef TULPAR_AOT_ENABLED
@@ -18,7 +19,10 @@
 char *read_file(const char *filename) {
   FILE *file = fopen(filename, "rb");
   if (!file) {
-    printf("Error: Could not open file '%s'!\n", filename);
+    printf("%s '%s'!\n",
+           tulpar::i18n::tr_en("Hata: Dosya acilamadi",
+                               "Error: Could not open file"),
+           filename);
     return nullptr;
   }
 
@@ -340,7 +344,9 @@ int main(int argc, char **argv) {
     Chunk *chunk = compile(ast);
 
     if (!chunk) {
-      printf("Error: Compilation failed!\n");
+      printf("%s\n",
+             tulpar::i18n::tr_en("Hata: Derleme basarisiz!",
+                                 "Error: Compilation failed!"));
       return 1;
     }
 
