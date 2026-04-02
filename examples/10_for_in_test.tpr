@@ -1,0 +1,7 @@
+my_array = [10, 20, 30]
+
+var asd = 10;
+
+for (oge in my_array) {
+    print(oge)
+}

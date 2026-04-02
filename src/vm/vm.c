@@ -1962,6 +1962,40 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           break;
         }
 
+        case 78: { // upper(str) -> UPPERCASE string
+          VMValue strVal = vm_pop(vm);
+          if (IS_STRING(strVal)) {
+            ObjString *s = AS_STRING(strVal);
+            char *result = malloc(s->length + 1);
+            for (int i = 0; i < (int)s->length; i++) {
+              result[i] = toupper((unsigned char)s->chars[i]);
+            }
+            result[s->length] = '\0';
+            vm_push(vm, VM_OBJ(vm_alloc_string(vm, result, s->length)));
+            free(result);
+          } else {
+            vm_push(vm, VM_OBJ(vm_alloc_string(vm, "", 0)));
+          }
+          break;
+        }
+
+        case 79: { // lower(str) -> lowercase string
+          VMValue strVal = vm_pop(vm);
+          if (IS_STRING(strVal)) {
+            ObjString *s = AS_STRING(strVal);
+            char *result = malloc(s->length + 1);
+            for (int i = 0; i < (int)s->length; i++) {
+              result[i] = tolower((unsigned char)s->chars[i]);
+            }
+            result[s->length] = '\0';
+            vm_push(vm, VM_OBJ(vm_alloc_string(vm, result, s->length)));
+            free(result);
+          } else {
+            vm_push(vm, VM_OBJ(vm_alloc_string(vm, "", 0)));
+          }
+          break;
+        }
+
         // --- File I/O ---
         case 80: { // write_file(filename, content) -> bool
           VMValue contentVal = vm_pop(vm);

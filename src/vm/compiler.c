@@ -643,6 +643,16 @@ void compile_expression(Compiler *compiler, ASTNode *node) {
       compile_expression(compiler, node->arguments[0]);
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
       emit_byte(compiler, 76, node->line);
+    } else if (strcmp(node->name, "upper") == 0 ||
+               strcmp(node->name, "toUpper") == 0) {
+      compile_expression(compiler, node->arguments[0]);
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 78, node->line);
+    } else if (strcmp(node->name, "lower") == 0 ||
+               strcmp(node->name, "toLower") == 0) {
+      compile_expression(compiler, node->arguments[0]);
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 79, node->line);
     }
     // File I/O
     else if (strcmp(node->name, "write_file") == 0) {
@@ -1141,6 +1151,108 @@ void compile_statement(Compiler *compiler, ASTNode *node) {
     }
 
     // Restore outer loop state
+    compiler->loop_start = outer_loop_start;
+    compiler->is_for_loop = outer_is_for_loop;
+    compiler->break_count = outer_break_count;
+    compiler->continue_count = outer_continue_count;
+    compiler->loop_depth--;
+
+    compiler_end_scope(compiler);
+    break;
+  }
+
+  case AST_FOR_IN: {
+    compiler_begin_scope(compiler);
+
+    // 1. Array değerlendirmesi ve gizli bir yerel değişkene (_arr) atanması
+    compile_expression(compiler, node->iterable);
+    int arr_slot = compiler_add_local_typed(compiler, "_arr", LOCAL_TYPE_UNKNOWN);
+    emit_byte(compiler, OP_STORE_LOCAL, node->line);
+    emit_short(compiler, (uint16_t)arr_slot, node->line);
+
+    // 2. Array uzunluğunun hesaplanması (_len)
+    emit_byte(compiler, OP_LOAD_LOCAL, node->line);
+    emit_short(compiler, (uint16_t)arr_slot, node->line);
+    emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+    emit_byte(compiler, 1, node->line); // built-in ID 1: length()
+    int len_slot = compiler_add_local_typed(compiler, "_len", LOCAL_TYPE_INT);
+    emit_byte(compiler, OP_STORE_LOCAL, node->line);
+    emit_short(compiler, (uint16_t)len_slot, node->line);
+
+    // 3. Döngü sayacının ilklendirilmesi (_i = 0)
+    emit_byte(compiler, OP_CONST_INT, node->line);
+    Constant zero_const = {.type = CONST_INT, .int_val = 0};
+    emit_constant(compiler, zero_const, node->line);
+    int i_slot = compiler_add_local_typed(compiler, "_i", LOCAL_TYPE_INT);
+    emit_byte(compiler, OP_STORE_LOCAL, node->line);
+    emit_short(compiler, (uint16_t)i_slot, node->line);
+
+    // 4. Kullanıcının iterator değişkeninin (örneğin oge) tanımlanması
+    emit_byte(compiler, OP_CONST_VOID, node->line);
+    int item_slot = compiler_add_local_typed(compiler, node->name, LOCAL_TYPE_UNKNOWN);
+    emit_byte(compiler, OP_STORE_LOCAL, node->line);
+    emit_short(compiler, (uint16_t)item_slot, node->line);
+
+    // Döngü Başlangıcı Ayarları
+    int outer_loop_start = compiler->loop_start;
+    int outer_is_for_loop = compiler->is_for_loop;
+    int outer_break_count = compiler->break_count;
+    int outer_continue_count = compiler->continue_count;
+
+    compiler->loop_start = compiler->chunk->code_length;
+    compiler->is_for_loop = 1;
+    compiler->break_count = 0;
+    compiler->continue_count = 0;
+    compiler->loop_depth++;
+
+    // Döngü Koşulu: _i < _len
+    emit_byte(compiler, OP_LOAD_LOCAL, node->line);
+    emit_short(compiler, (uint16_t)i_slot, node->line);
+    emit_byte(compiler, OP_LOAD_LOCAL, node->line);
+    emit_short(compiler, (uint16_t)len_slot, node->line);
+    emit_byte(compiler, OP_LT_INT, node->line); // hızlı tip-özel küçüktür
+
+    int exit_jump = emit_jump(compiler, OP_JUMP_IF_FALSE, node->line);
+    emit_byte(compiler, OP_POP, node->line);
+
+    // oge = _arr[_i] ataması
+    emit_byte(compiler, OP_LOAD_LOCAL, node->line);
+    emit_short(compiler, (uint16_t)arr_slot, node->line);
+    emit_byte(compiler, OP_LOAD_LOCAL, node->line);
+    emit_short(compiler, (uint16_t)i_slot, node->line);
+    emit_byte(compiler, OP_ARRAY_GET, node->line);
+
+    emit_byte(compiler, OP_STORE_LOCAL, node->line);
+    emit_short(compiler, (uint16_t)item_slot, node->line);
+    emit_byte(compiler, OP_POP, node->line); // store sonucu stack'te kalanı temizle
+
+    // Kullanıcının yazdığı gövde kodlarının derlenmesi
+    compile_statement(compiler, node->body);
+
+    // Continue ile atlanacak yer (artırma öncesi)
+    for (int i = 0; i < compiler->continue_count; i++) {
+      patch_jump(compiler, compiler->continue_jumps[i]);
+    }
+    compiler->continue_count = 0;
+
+    // Döngü sayacının artırılması: _i++
+    emit_byte(compiler, OP_INC_LOCAL_FAST, node->line);
+    emit_short(compiler, (uint16_t)i_slot, node->line);
+    emit_byte(compiler, OP_POP, node->line); // inc_fast sonucu stack'ten al
+
+    // Başa Dön
+    emit_loop(compiler, compiler->loop_start, node->line);
+
+    // Çıkış (False) Jump'ının patchlenmesi
+    patch_jump(compiler, exit_jump);
+    emit_byte(compiler, OP_POP, node->line);
+
+    // Break Jump'larının patchlenmesi
+    for (int i = 0; i < compiler->break_count; i++) {
+      patch_jump(compiler, compiler->break_jumps[i]);
+    }
+
+    // Orijinal dış döngü ayarlarının geri yüklenmesi
     compiler->loop_start = outer_loop_start;
     compiler->is_for_loop = outer_is_for_loop;
     compiler->break_count = outer_break_count;

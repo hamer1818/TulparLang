@@ -1350,7 +1350,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
       return LLVMBuildLoad2(backend->builder, backend->vm_value_type, val_ptr,
                             node->name);
     }
-    fprintf(stderr, "Undefined var: %s\n", node->name);
+    fprintf(stderr, "HATA (Satır %d): '%s' değişkeni tanımlanmamış.\n  İpucu: Değişken adını yanlış yazmış olabilirsiniz veya henüz tanımlamadınız.\n", node->line, node->name);
     return NULL;
   }
 
@@ -2010,6 +2010,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     if (node->name && strcmp(node->name, "length") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      if (!arg) return llvm_vm_val_int(backend, 0);
       LLVMValueRef arg_ptr =
           LLVMBuildAlloca(backend->builder, backend->vm_value_type, "len_arg");
       LLVMBuildStore(backend->builder, arg, arg_ptr);
@@ -2027,6 +2028,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
         node->argument_count >= 2) {
       LLVMValueRef arr = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef val = codegen_expression(backend, node->arguments[1]);
+      if (!arr || !val) return llvm_vm_val_int(backend, 0);
 
       // Allocate temps and store values for pointer ABI
       LLVMValueRef arr_ptr = LLVMBuildAlloca(
@@ -2047,6 +2049,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
     if (node->name && strcmp(node->name, "pop") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arr = codegen_expression(backend, node->arguments[0]);
+      if (!arr) return llvm_vm_val_int(backend, 0);
       LLVMValueRef args[] = {arr};
       return llvm_call_vmvalue_func(backend, backend->func_aot_array_pop, args, 1, "pop_result");
     }
@@ -2820,7 +2823,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode *node) {
       return result;
     }
 
-    fprintf(stderr, "Unknown function: %s\n", node->name);
+    fprintf(stderr, "HATA (Satır %d): '%s' adında bir fonksiyon bulunamadı.\n  İpucu: Fonksiyon adını doğru yazdığınızdan ve import ettiğinizden emin olun.\n", node->line, node->name);
     return llvm_vm_val_int(backend, 0);
   }
 
@@ -3187,13 +3190,14 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode *node) {
     parser_free(parser);
 
     if (module_ast) {
-      // Compile function definitions from module
       if (module_ast->type == AST_PROGRAM && module_ast->statements) {
-        // Pass 0: Pre-scan for Global Variables (Forward Declaration)
+        // Pass 0.1: Pre-scan for Global Variables (Forward Declaration)
+        printf("[AOT DEBUG] Module statement count: %d\n", module_ast->statement_count);
         for (int i = 0; i < module_ast->statement_count; i++) {
           if (module_ast->statements[i]->type == AST_VARIABLE_DECL) {
             ASTNode *decl = module_ast->statements[i];
             if (!LLVMGetNamedGlobal(backend->module, decl->name)) {
+              printf("[AOT DEBUG] Registering IMPORT global: %s\n", decl->name);
               LLVMValueRef global_var = LLVMAddGlobal(
                   backend->module, backend->vm_value_type, decl->name);
               LLVMSetInitializer(global_var,
@@ -3203,14 +3207,24 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode *node) {
           }
         }
 
+        // Pass 0.2: Process nested Imports LAST (before functions)
+        for (int i = 0; i < module_ast->statement_count; i++) {
+          if (module_ast->statements[i]->type == AST_IMPORT) {
+            codegen_statement(backend, module_ast->statements[i]);
+          }
+        }
+
+        // Pass 1: Compile function definitions from module
         for (int i = 0; i < module_ast->statement_count; i++) {
           if (module_ast->statements[i]->type == AST_FUNCTION_DECL) {
             codegen_func_def(backend, module_ast->statements[i]);
           }
         }
-        // Execute top-level statements in current scope
+
+        // Pass 2: Execute top-level statements in current scope (skip funcs and imports)
         for (int i = 0; i < module_ast->statement_count; i++) {
-          if (module_ast->statements[i]->type != AST_FUNCTION_DECL) {
+          if (module_ast->statements[i]->type != AST_FUNCTION_DECL &&
+              module_ast->statements[i]->type != AST_IMPORT) {
             codegen_statement(backend, module_ast->statements[i]);
           }
         }
@@ -3805,7 +3819,22 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode *node) {
                  backend->func_aot_runtime_init, NULL, 0, "");
 
   if (node->statements) {
-    // Pass 0: Process Imports FIRST to declare external functions/globals
+    // Pass 0.1: Pre-scan for Global Variables (Forward Declaration)
+    for (int i = 0; i < node->statement_count; i++) {
+      if (node->statements[i]->type == AST_VARIABLE_DECL) {
+        ASTNode *decl = node->statements[i];
+        if (!LLVMGetNamedGlobal(backend->module, decl->name)) {
+          printf("[AOT DEBUG] Registering MAIN global: %s\n", decl->name);
+          LLVMValueRef global_var = LLVMAddGlobal(
+              backend->module, backend->vm_value_type, decl->name);
+          LLVMSetInitializer(global_var,
+                             LLVMConstNull(backend->vm_value_type));
+          // LLVMSetLinkage(...)
+        }
+      }
+    }
+
+    // Pass 0.2: Process Imports LAST (before functions)
     for (int i = 0; i < node->statement_count; i++) {
       if (node->statements[i]->type == AST_IMPORT) {
         codegen_statement(backend, node->statements[i]);
@@ -3820,9 +3849,12 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode *node) {
   }
 
   if (node->statements) {
+    // Pass 2: Main loop logic (Execute Statements)
     for (int i = 0; i < node->statement_count; i++) {
-      if (node->statements[i]->type != AST_FUNCTION_DECL)
+      if (node->statements[i]->type != AST_FUNCTION_DECL &&
+          node->statements[i]->type != AST_IMPORT) {
         codegen_statement(backend, node->statements[i]);
+      }
     }
   }
 

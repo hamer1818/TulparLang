@@ -1,0 +1,19 @@
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libtinfo.so.6
+Unknown function: parse_cookies
+Undefined var in array access: _sessions
+Undefined var in array access: _sessions
+Undefined var: _products
+
+Program received signal SIGSEGV, Segmentation fault.
+0x00007ffff15e81fd in ?? () from /lib/x86_64-linux-gnu/libLLVM.so.18.1
+#0  0x00007ffff15e81fd in ?? () from /lib/x86_64-linux-gnu/libLLVM.so.18.1
+#1  0x00005555555ad7dc in codegen_expression (backend=0x55555578ed10, node=0x55555578beb0) at src/aot/llvm_backend.c:2034
+#2  0x00005555555b637c in codegen_statement (backend=0x55555578ed10, node=0x55555578beb0) at src/aot/llvm_backend.c:3128
+#3  0x00005555555b55aa in codegen_statement (backend=0x55555578ed10, node=0x55555578bcf0) at src/aot/llvm_backend.c:2939
+#4  0x00005555555b8bdc in codegen_func_def (backend=0x55555578ed10, node=0x55555578bb30) at src/aot/llvm_backend.c:3770
+#5  0x00005555555b8e9a in llvm_backend_compile (backend=0x55555578ed10, node=0x55555578b220) at src/aot/llvm_backend.c:3818
+#6  0x00005555555a5054 in aot_compile_silent (source=0x55555578c200 "// ", '=' <repeats 44 times>, "\r\n// Tulpar Router - Full CRUD API Example\r\n// Uses the advanced router with middleware support\r\n// Run with: tulpar api_router_crud.tpr\r\n// ", '=' <repeats 12 times>..., output_name=0x5555556c6a55 "/tmp/.tulpar_run") at src/aot/aot_pipeline.c:147
+#7  0x00005555555a51c3 in aot_compile_and_run_silent (source=0x55555578c200 "// ", '=' <repeats 44 times>, "\r\n// Tulpar Router - Full CRUD API Example\r\n// Uses the advanced router with middleware support\r\n// Run with: tulpar api_router_crud.tpr\r\n// ", '=' <repeats 12 times>...) at src/aot/aot_pipeline.c:187
+#8  0x00005555555badb0 in main (argc=2, argv=0x7fffffffd8d8) at src/main.c:254

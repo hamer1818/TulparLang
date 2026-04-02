@@ -255,6 +255,71 @@ static Token *lexer_read_identifier(Lexer *lexer) {
   else if (strcmp(buffer, "var") == 0)
     type = TOKEN_VAR;
 
+  // ============================================================
+  // Türkçe Anahtar Kelime Alias'ları (Turkish Keyword Aliases)
+  // Tulpar — Türk mitolojisindeki kanatlı at'tan esinlenmiştir.
+  // İngilizce kelimeler kaldırılmadan, Türkçe eşdeğerleri de
+  // desteklenmektedir. Her iki sözdizimi de geçerlidir.
+  // ============================================================
+
+  // Veri tipleri (Data types) — her UTF-8 byte ayrı \x kaçışıyla yazıldı
+  else if (strcmp(buffer, "say" "\xc4" "\xb1") == 0)              // sayı = int
+    type = TOKEN_INT_TYPE;
+  else if (strcmp(buffer, "ger" "\xc3" "\xa7" "ek") == 0)         // gerçek = float
+    type = TOKEN_FLOAT_TYPE;
+  else if (strcmp(buffer, "yaz" "\xc4" "\xb1") == 0)              // yazı = str
+    type = TOKEN_STR_TYPE;
+  else if (strcmp(buffer, "mant" "\xc4" "\xb1" "k") == 0)         // mantık = bool
+    type = TOKEN_BOOL_TYPE;
+  else if (strcmp(buffer, "dizi") == 0)                            // dizi = array
+    type = TOKEN_ARRAY_TYPE;
+
+  // Kontrol akışı (Control flow)
+  else if (strcmp(buffer, "e" "\xc4" "\x9f" "er") == 0)           // eğer = if
+    type = TOKEN_IF;
+  else if (strcmp(buffer, "de" "\xc4" "\x9f" "ilse") == 0)        // değilse = else
+    type = TOKEN_ELSE;
+  else if (strcmp(buffer, "iken") == 0)                            // iken = while
+    type = TOKEN_WHILE;
+  else if (strcmp(buffer, "i" "\xc3" "\xa7" "in") == 0)           // için = for
+    type = TOKEN_FOR;
+  else if (strcmp(buffer, "dur") == 0)                             // dur = break
+    type = TOKEN_BREAK;
+  else if (strcmp(buffer, "devam") == 0)                           // devam = continue
+    type = TOKEN_CONTINUE;
+
+  // Fonksiyon (Functions)
+  else if (strcmp(buffer, "i" "\xc5" "\x9f" "lev") == 0)          // işlev = func
+    type = TOKEN_FUNC;
+  else if (strcmp(buffer, "fonk") == 0)                            // fonk = func (kısaltma)
+    type = TOKEN_FUNC;
+  else if (strcmp(buffer, "d" "\xc3" "\xb6" "nd" "\xc3" "\xbc" "r") == 0) // döndür = return
+    type = TOKEN_RETURN;
+
+  // Modül (Module)
+  else if (strcmp(buffer, "i" "\xc3" "\xa7" "e_aktar") == 0)      // içe_aktar = import
+    type = TOKEN_IMPORT;
+
+  // Boolean değerler (Boolean values)
+  else if (strcmp(buffer, "do" "\xc4" "\x9f" "ru") == 0)          // doğru = true
+    type = TOKEN_TRUE;
+  else if (strcmp(buffer, "yanl" "\xc4" "\xb1" "\xc5" "\x9f") == 0) // yanlış = false
+    type = TOKEN_FALSE;
+
+  // Hata yönetimi (Error handling)
+  else if (strcmp(buffer, "dene") == 0)                            // dene = try
+    type = TOKEN_TRY;
+  else if (strcmp(buffer, "yakala") == 0)                          // yakala = catch
+    type = TOKEN_CATCH;
+  else if (strcmp(buffer, "sonunda") == 0)                         // sonunda = finally
+    type = TOKEN_FINALLY;
+  else if (strcmp(buffer, "f" "\xc4" "\xb1" "rlat") == 0)         // fırlat = throw
+    type = TOKEN_THROW;
+
+  // Tip bildirimi (Type declaration)
+  else if (strcmp(buffer, "tip") == 0)                             // tip = type
+    type = TOKEN_TYPE_KW;
+
   return token_create(type, buffer, start_line, start_column);
 }
 

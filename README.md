@@ -2,12 +2,13 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/hamer1818/TulparLang/releases)
-[![Build](https://github.com/hamer1818/TulparLang/actions/workflows/build.yml/badge.svg)](https://github.com/hamer1818/TulparLang/actions/workflows/build.yml)
+[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/hamer1818/OLang/releases)
+[![Build](https://github.com/hamer1818/OLang/actions/workflows/build.yml/badge.svg)](https://github.com/hamer1818/OLang/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20|%20macOS-lightgrey.svg)]()
+[![C Source](https://img.shields.io/badge/source-~32K%20lines-orange.svg)]()
 
-A statically-typed programming language with LLVM backend, UTF-8 support, and native JSON syntax.
+A statically-typed programming language with LLVM backend, JIT compiler, UTF-8 support, and native JSON syntax.
 
 </div>
 
@@ -22,25 +23,35 @@ TulparLang is a modern programming language built in C with an LLVM-18 backend f
 - First-class JSON support
 - UTF-8 native strings
 - LLVM AOT compilation
+- x64 JIT compiler
+- WebAssembly (WASM) target support
+- Automatic Reference Counting (ARC) memory management
 - Cross-platform (Linux, macOS; Windows via WSL)
+
+## Codebase Statistics
+
+| Metric | Value |
+|--------|-------|
+| Core Source (`src/`) | ~27,700 lines of C |
+| Runtime (`runtime/`) | ~4,300 lines of C |
+| Standard Library (`lib/`) | ~1,550 lines of Tulpar |
+| Example Programs | 25 files |
+| Benchmark Suites | 8 files (C, Rust, Go, JS, PHP, Python, Tulpar) |
 
 ## Performance
  
-Benchmark results comparing total execution time across 11 algorithmic tests (lower is better):
+Benchmark results comparing total execution time across algorithmic tests (lower is better):
  
-| Rank | Language | Total Time (ms) | Relative to C | Relative to Tulpar |
-|------|----------|-----------------|---------------|--------------------|
-| 🥇 | **C (gcc -O3)** | **4.05 ms** | **1.0x** | 2.26x faster |
-| 🥈 | **Tulpar (AOT)** | **9.17 ms** | 2.26x slower | **Reference** |
-| 🥉 | Rust (1.80) | 9.27 ms | 2.29x slower | 1.01x slower |
-| 4 | Go (1.23) | 17.33 ms | 4.28x slower | 1.89x slower |
-| 5 | JavaScript (Node) | 22.16 ms | 5.47x slower | 2.42x slower |
-| 6 | PHP 8.3 | 197.04 ms | 48.6x slower | 21.48x slower |
-| 7 | Python 3.12 | 365.67 ms | 90.2x slower | 39.87x slower |
+| Rank | Language | Total Time | Relative to Tulpar |
+|------|----------|------------|---------------------|
+| 🥇 | **C (gcc -O3)** | **8.65 ms** | 1.66x faster |
+| 🥈 | **Rust (1.80)** | **9.30 ms** | 1.54x faster |
+| 🥉 | **Tulpar (AOT)** | **14.36 ms** | **Reference** |
+| 4 | JavaScript (Node) | 57.13 ms | 3.98x slower |
+| 5 | PHP 8.3 | 120.83 ms | 8.41x slower |
+| 6 | Python 3.12 | 3,671 ms | 255.63x slower |
  
-> **Note:** Tulpar's AOT compiler (LLVM-backed) performs neck-and-neck with Rust, demonstrating high efficiency for algorithmic tasks.
- 
-Tulpar achieves near-C performance while being significantly faster than interpreted languages like Python and PHP.
+> **Note:** Benchmarks run on Linux 6.6.87 (WSL2). Tulpar's LLVM-backed AOT compiler achieves performance in the same ballpark as C and Rust, while being dramatically faster than interpreted languages.
 
 ## Installation
 
@@ -53,8 +64,8 @@ Tulpar achieves near-C performance while being significantly faster than interpr
 ### Build from Source
 
 ```bash
-git clone https://github.com/hamer1818/TulparLang.git
-cd TulparLang
+git clone https://github.com/hamer1818/OLang.git
+cd OLang
 mkdir build && cd build
 cmake ..
 make
@@ -73,7 +84,7 @@ Windows users should use [WSL (Windows Subsystem for Linux)](https://learn.micro
 ```bash
 # Inside WSL (Ubuntu):
 sudo apt-get install build-essential cmake llvm-18-dev
-cd /mnt/c/path/to/TulparLang
+cd /mnt/c/path/to/OLang
 ./build.sh
 ```
 
@@ -254,6 +265,19 @@ get("/users", "users");
 listen(3000);
 ```
 
+### Library Modules
+
+| Module | File | Description |
+|--------|------|-------------|
+| Wings | `wings.tpr` | Lightweight web framework |
+| Router | `router.tpr` | URL routing & path matching |
+| HTTP Utils | `http_utils.tpr` | HTTP request/response helpers |
+| Middleware | `middleware.tpr` | Request middleware pipeline |
+| Async | `async.tpr` | Asynchronous task support |
+| Tulpar API | `tulpar_api.tpr` | High-level API framework |
+| Socket | `socket.tpr` | Socket abstraction layer |
+| SQLite | `sqlite3/` | Embedded SQLite3 database |
+
 ### Built-in Functions
 
 | Category | Functions |
@@ -267,21 +291,35 @@ listen(3000);
 | Time | `timestamp`, `time_ms`, `clock_ms`, `sleep` |
 | File | `file_read`, `file_write`, `file_exists`, `file_delete` |
 
-## Project Structure
+## Architecture
 
 ```
 TulparLang/
 ├── src/
-│   ├── lexer/          # Tokenization
-│   ├── parser/         # AST generation
-│   ├── interpreter/    # Runtime execution
-│   ├── vm/             # Virtual machine
-│   └── aot/            # LLVM backend
-├── lib/                # Standard libraries
-├── examples/           # Example programs
+│   ├── lexer/          # Tokenization (lexer.c, lexer.h)
+│   ├── parser/         # AST generation (parser.c, parser.h)
+│   ├── typeinfer/      # Type inference engine
+│   ├── aot/            # LLVM AOT backend (~175K line codegen)
+│   ├── jit/            # x64 JIT compiler & optimizer
+│   ├── vm/             # Bytecode VM (compiler, runtime bindings)
+│   └── interpreter/    # Tree-walk interpreter (legacy)
+├── lib/                # Standard libraries (Wings, Router, etc.)
+├── runtime/            # Runtime support (cJSON, ARC, native FFI)
+├── examples/           # 25 example programs
+├── benchmarks/         # Multi-language benchmark suite
+├── wasm/               # WebAssembly target support
 ├── cmake/              # CMake modules
-└── runtime/            # Runtime support
+└── docs/               # Documentation
 ```
+
+### Execution Backends
+
+| Backend | Status | Description |
+|---------|--------|-------------|
+| **AOT (LLVM)** | Primary | Compiles to native binaries via LLVM IR. Best performance. |
+| **VM** | Active | Bytecode VM for fast startup and development. |
+| **JIT** | Active | x64 JIT with optimization passes. |
+| **Interpreter** | Legacy | Tree-walk interpreter, kept for compatibility. |
 
 ## Examples
 
@@ -298,11 +336,19 @@ Example programs are available in the `examples/` directory:
 | `07_modules.tpr` | Import system |
 | `08_file_io.tpr` | File operations |
 | `09_socket_server.tpr` | Network server |
+| `09_socket_client.tpr` | Network client |
+| `09_socket_simple.tpr` | Simple socket communication |
 | `10_try_catch.tpr` | Error handling |
 | `11_router_app.tpr` | Web application |
 | `12_threaded_server.tpr` | Multi-threaded HTTP |
 | `13_database.tpr` | SQLite integration |
+| `14_api_server.tpr` | API server |
+| `15_feature_test.tpr` | Feature showcase |
 | `api_wings.tpr` | REST API with Wings |
+| `api_wings_crud.tpr` | CRUD API with Wings |
+| `api_router_crud.tpr` | Router-based CRUD API |
+| `api_simple.tpr` | Simple API example |
+| `tulpar_api_demo.tpr` | Tulpar API demo |
 
 ## Documentation
 
@@ -310,6 +356,7 @@ Example programs are available in the `examples/` directory:
 - [Language Reference](docs/KULLANIM.md)
 - [Math Functions](docs/MATH_FUNCTIONS.md)
 - [Platform Support](docs/PLATFORM_SUPPORT.md)
+- [Build Comparison](BUILD_COMPARISON.md)
 
 ## Contributing
 
@@ -332,6 +379,6 @@ GitHub: [@hamer1818](https://github.com/hamer1818)
 
 <div align="center">
 
-[Documentation](docs/) · [Examples](examples/) · [Issues](https://github.com/hamer1818/TulparLang/issues)
+[Documentation](docs/) · [Examples](examples/) · [Issues](https://github.com/hamer1818/OLang/issues)
 
 </div>

@@ -1,0 +1,21 @@
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libtinfo.so.6
+Undefined var: _router_port
+
+Program received signal SIGSEGV, Segmentation fault.
+0x00007ffff15e81fd in ?? () from /lib/x86_64-linux-gnu/libLLVM.so.18.1
+#0  0x00007ffff15e81fd in ?? () from /lib/x86_64-linux-gnu/libLLVM.so.18.1
+#1  0x00005555555aceb3 in codegen_expression (backend=0x55555578fd10, node=0x55555589ec30) at src/aot/llvm_backend.c:1936
+#2  0x00005555555aa6f5 in codegen_expression (backend=0x55555578fd10, node=0x55555589eaa0) at src/aot/llvm_backend.c:1360
+#3  0x00005555555aa6d1 in codegen_expression (backend=0x55555578fd10, node=0x55555589ef90) at src/aot/llvm_backend.c:1359
+#4  0x00005555555aa6d1 in codegen_expression (backend=0x55555578fd10, node=0x55555589f290) at src/aot/llvm_backend.c:1359
+#5  0x00005555555b5038 in codegen_statement (backend=0x55555578fd10, node=0x55555589e780) at src/aot/llvm_backend.c:2841
+#6  0x00005555555b5625 in codegen_statement (backend=0x55555578fd10, node=0x55555589e2e0) at src/aot/llvm_backend.c:2942
+#7  0x00005555555b8d09 in codegen_func_def (backend=0x55555578fd10, node=0x55555589dfc0) at src/aot/llvm_backend.c:3782
+#8  0x00005555555b6a0b in codegen_statement (backend=0x55555578fd10, node=0x5555557bfc50) at src/aot/llvm_backend.c:3218
+#9  0x00005555555b6870 in codegen_statement (backend=0x55555578fd10, node=0x55555578c3c0) at src/aot/llvm_backend.c:3197
+#10 0x00005555555b8f5f in llvm_backend_compile (backend=0x55555578fd10, node=0x55555578c220) at src/aot/llvm_backend.c:3823
+#11 0x00005555555a5054 in aot_compile_silent (source=0x55555578d200 "// ", '=' <repeats 44 times>, "\r\n// Tulpar Router - Full CRUD API Example\r\n// Uses the advanced router with middleware support\r\n// Run with: tulpar api_router_crud.tpr\r\n// ", '=' <repeats 12 times>..., output_name=0x5555556c7a55 "/tmp/.tulpar_run") at src/aot/aot_pipeline.c:147
+#12 0x00005555555a51c3 in aot_compile_and_run_silent (source=0x55555578d200 "// ", '=' <repeats 44 times>, "\r\n// Tulpar Router - Full CRUD API Example\r\n// Uses the advanced router with middleware support\r\n// Run with: tulpar api_router_crud.tpr\r\n// ", '=' <repeats 12 times>...) at src/aot/aot_pipeline.c:187
+#13 0x00005555555bafd8 in main (argc=2, argv=0x7fffffffd8d8) at src/main.c:254

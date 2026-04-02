@@ -1,0 +1,29 @@
+Çalıştırılacak örnek testleri başlatılıyor...
+=============================================
+[TEST] examples/01_hello_world.tpr ... ✅ BAŞARILI
+[TEST] examples/02_basics.tpr ... ✅ BAŞARILI
+[TEST] examples/03_interactive.tpr ... ✅ BAŞARILI
+[TEST] examples/04_math_logic.tpr ... ✅ BAŞARILI
+[TEST] examples/05_strings.tpr ... ⏳ ZAMAN AŞIMI (Sunucu veya Etkileşimli bekleyiş)
+[TEST] examples/06_data_structures.tpr ... ⏳ ZAMAN AŞIMI (Sunucu veya Etkileşimli bekleyiş)
+[TEST] examples/07_modules.tpr ... ✅ BAŞARILI
+[TEST] examples/08_file_io.tpr ... ✅ BAŞARILI
+[TEST] examples/09_socket_client.tpr ... ⏳ ZAMAN AŞIMI (Sunucu veya Etkileşimli bekleyiş)
+[TEST] examples/09_socket_server.tpr ... ⏳ ZAMAN AŞIMI (Sunucu veya Etkileşimli bekleyiş)
+[TEST] examples/09_socket_simple.tpr ... ⏳ ZAMAN AŞIMI (Sunucu veya Etkileşimli bekleyiş)
+[TEST] examples/10_try_catch.tpr ... ✅ BAŞARILI
+[TEST] examples/11_router_app.tpr ... ⏳ ZAMAN AŞIMI (Sunucu veya Etkileşimli bekleyiş)
+[TEST] examples/12_threaded_server.tpr ... ⏳ ZAMAN AŞIMI (Sunucu veya Etkileşimli bekleyiş)
+[TEST] examples/13_database.tpr ... ✅ BAŞARILI
+[TEST] examples/14_api_server.tpr ... ⏳ ZAMAN AŞIMI (Sunucu veya Etkileşimli bekleyiş)
+[TEST] examples/15_feature_test.tpr ... ✅ BAŞARILI
+[TEST] examples/api_router_crud.tpr ... ❌ SEGMENTATION FAULT (Hata kodu: 139)
+[TEST] examples/api_simple.tpr ... ✅ BAŞARILI
+[TEST] examples/api_wings.tpr ... ⏳ ZAMAN AŞIMI (Sunucu veya Etkileşimli bekleyiş)
+[TEST] examples/api_wings_crud.tpr ... ❌ SEGMENTATION FAULT (Hata kodu: 139)
+[TEST] examples/benchmark.tpr ... ⏳ ZAMAN AŞIMI (Sunucu veya Etkileşimli bekleyiş)
+[TEST] examples/test_minimal.tpr ... ✅ BAŞARILI
+[TEST] examples/tulpar_api_demo.tpr ... ❌ SEGMENTATION FAULT (Hata kodu: 139)
+[TEST] examples/utils.tpr ... ✅ BAŞARILI
+=============================================
+Testler tamamlandı.
