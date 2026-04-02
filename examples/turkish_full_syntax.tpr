@@ -45,7 +45,7 @@ için (değer içinde sayılar) {
 
 // Hata yönetimi
 dene {
-    tamsayı sonuç = riskliİşlem();
+    tamsayı sonuç = 42;
 } yakala (hata) {
     metin mesaj = "Hata oluştu: " + hata;
 } sonunda {
@@ -56,16 +56,13 @@ dene {
 tip Kişi {
     metin ad;
     tamsayı yaş;
-    metin şehir = "İstanbul";
+    metin şehir;
 }
 
 // Ana fonksiyon
 fonksiyon main() {
     metin selam = selamla("Dünya");
-    
-    Kişi kullanıcı;
-    kullanıcı.ad = "Zeynep";
-    kullanıcı.yaş = 30;
+    print(selam);
     
     geri_döndür 0;
 }

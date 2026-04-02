@@ -1599,6 +1599,10 @@ void compile_statement(Compiler *compiler, ASTNode_C *node) {
 // ============================================================================
 
 Chunk *compile(ASTNode_C *ast) {
+  if (!ast) {
+    return nullptr;
+  }
+
   Compiler *compiler = compiler_create();
   current = compiler;
 

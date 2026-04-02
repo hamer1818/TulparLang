@@ -105,6 +105,12 @@ std::unique_ptr<ASTNode> Parser::parse() {
             }
             if (current().type() == TOKEN_SEMICOLON) {
                 advance();
+            } else if (current().type() == TOKEN_RBRACE) {
+                // Move forward to avoid getting stuck on the same block terminator.
+                advance();
+            } else if (!is_at_end()) {
+                // Ensure forward progress even when recovery sentinel is not found.
+                advance();
             }
         }
     }
@@ -125,6 +131,11 @@ std::unique_ptr<ASTNode> Parser::parse_statement() {
         check(TOKEN_ARRAY_FLOAT) || check(TOKEN_ARRAY_STR) ||
         check(TOKEN_ARRAY_BOOL) || check(TOKEN_ARRAY_JSON) ||
         check(TOKEN_VAR)) {
+        return parse_variable_decl();
+    }
+
+    // Custom type variable declaration: <TypeName> <varName> ...
+    if (check(TOKEN_IDENTIFIER) && peek().type() == TOKEN_IDENTIFIER) {
         return parse_variable_decl();
     }
     
@@ -437,6 +448,32 @@ std::unique_ptr<ASTNode> Parser::parse_block() {
 }
 
 std::unique_ptr<ASTNode> Parser::parse_expression_statement() {
+    // Assignment / compound assignment statement fast path
+    if (check(TOKEN_IDENTIFIER)) {
+        const Token name_tok = current();
+        const TulparTokenType next_type = peek().type();
+        if (next_type == TOKEN_ASSIGN ||
+            next_type == TOKEN_PLUS_EQUAL ||
+            next_type == TOKEN_MINUS_EQUAL ||
+            next_type == TOKEN_MULTIPLY_EQUAL ||
+            next_type == TOKEN_DIVIDE_EQUAL) {
+            SourceLocation loc(name_tok.line(), name_tok.column());
+            advance(); // identifier
+            advance(); // assignment operator
+            auto value = parse_expression();
+            expect(TOKEN_SEMICOLON, "Expected ';' after expression");
+
+            if (next_type == TOKEN_ASSIGN) {
+                return std::make_unique<ASTNode>(
+                    Assignment(name_tok.value(), std::move(value), loc)
+                );
+            }
+            return std::make_unique<ASTNode>(
+                CompoundAssign(name_tok.value(), next_type, std::move(value), loc)
+            );
+        }
+    }
+
     auto expr = parse_expression();
     expect(TOKEN_SEMICOLON, "Expected ';' after expression");
     return expr;
@@ -668,36 +705,404 @@ DataType Parser::parse_type() {
 }
 
 // ============================================================================
-// Legacy C API Implementation (stub for compatibility)
+// Legacy C API Implementation (compatibility bridge)
 // ============================================================================
+
+namespace {
+
+static char* dup_cstr(const std::string& value) {
+    char* out = static_cast<char*>(malloc(value.size() + 1));
+    if (!out) return nullptr;
+    std::memcpy(out, value.c_str(), value.size() + 1);
+    return out;
+}
+
+static ASTNode_C* convert_ast_node(const ASTNode& node);
+
+static void set_loc(ASTNode_C* out, const SourceLocation& loc) {
+    out->line = loc.line;
+    out->column = loc.column;
+}
+
+static ASTNode_C* convert_ast_node_ptr(const std::unique_ptr<ASTNode>& node) {
+    return node ? convert_ast_node(*node) : nullptr;
+}
+
+static ASTNode_C* convert_ast_node(const ASTNode& node) {
+    ASTNode_C* out = static_cast<ASTNode_C*>(std::calloc(1, sizeof(ASTNode_C)));
+    if (!out) return nullptr;
+
+    std::visit([&](const auto& n) {
+        using T = std::decay_t<decltype(n)>;
+
+        if constexpr (std::is_same_v<T, IntLiteral>) {
+            out->type = AST_INT_LITERAL;
+            out->value.int_value = n.value;
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, FloatLiteral>) {
+            out->type = AST_FLOAT_LITERAL;
+            out->value.float_value = static_cast<float>(n.value);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, StringLiteral>) {
+            out->type = AST_STRING_LITERAL;
+            out->value.string_value = dup_cstr(n.value);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, BoolLiteral>) {
+            out->type = AST_BOOL_LITERAL;
+            out->value.bool_value = n.value ? 1 : 0;
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, Identifier>) {
+            out->type = AST_IDENTIFIER;
+            out->name = dup_cstr(n.name);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, BinaryOp>) {
+            out->type = AST_BINARY_OP;
+            out->left = convert_ast_node_ptr(n.left);
+            out->right = convert_ast_node_ptr(n.right);
+            out->op = n.op;
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, UnaryOp>) {
+            out->type = AST_UNARY_OP;
+            out->left = convert_ast_node_ptr(n.operand);
+            out->op = n.op;
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, ArrayLiteral>) {
+            out->type = AST_ARRAY_LITERAL;
+            out->element_count = static_cast<int>(n.elements.size());
+            if (out->element_count > 0) {
+                out->elements = static_cast<ASTNode_C**>(std::calloc(out->element_count, sizeof(ASTNode_C*)));
+                for (int i = 0; i < out->element_count; ++i) {
+                    out->elements[i] = convert_ast_node_ptr(n.elements[i]);
+                }
+            }
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, ObjectLiteral>) {
+            out->type = AST_OBJECT_LITERAL;
+            out->object_count = static_cast<int>(n.fields.size());
+            if (out->object_count > 0) {
+                out->object_keys = static_cast<char**>(std::calloc(out->object_count, sizeof(char*)));
+                out->object_values = static_cast<ASTNode_C**>(std::calloc(out->object_count, sizeof(ASTNode_C*)));
+                for (int i = 0; i < out->object_count; ++i) {
+                    out->object_keys[i] = dup_cstr(n.fields[i].first);
+                    out->object_values[i] = convert_ast_node_ptr(n.fields[i].second);
+                }
+            }
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, ArrayAccess>) {
+            out->type = AST_ARRAY_ACCESS;
+            out->left = convert_ast_node_ptr(n.object);
+            out->index = convert_ast_node_ptr(n.index);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, FunctionCall>) {
+            out->type = AST_FUNCTION_CALL;
+            out->name = dup_cstr(n.name);
+            out->argument_count = static_cast<int>(n.arguments.size());
+            if (out->argument_count > 0) {
+                out->arguments = static_cast<ASTNode_C**>(std::calloc(out->argument_count, sizeof(ASTNode_C*)));
+                for (int i = 0; i < out->argument_count; ++i) {
+                    out->arguments[i] = convert_ast_node_ptr(n.arguments[i]);
+                }
+            }
+            out->receiver = convert_ast_node_ptr(n.receiver);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, VariableDecl>) {
+            out->type = AST_VARIABLE_DECL;
+            out->name = dup_cstr(n.name);
+            out->data_type = n.data_type;
+            out->right = convert_ast_node_ptr(n.initializer);
+            out->is_moved = n.is_moved ? 1 : 0;
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, Assignment>) {
+            out->type = AST_ASSIGNMENT;
+            out->name = dup_cstr(n.name);
+            out->right = convert_ast_node_ptr(n.value);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, CompoundAssign>) {
+            out->type = AST_COMPOUND_ASSIGN;
+            out->name = dup_cstr(n.name);
+            out->right = convert_ast_node_ptr(n.value);
+            out->op = n.op;
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, IncrementOp>) {
+            out->type = AST_INCREMENT;
+            out->name = dup_cstr(n.name);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, DecrementOp>) {
+            out->type = AST_DECREMENT;
+            out->name = dup_cstr(n.name);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, FunctionDecl>) {
+            out->type = AST_FUNCTION_DECL;
+            out->name = dup_cstr(n.name);
+            out->param_count = static_cast<int>(n.parameters.size());
+            out->return_type = n.return_type;
+            if (n.return_custom_type.has_value()) {
+                out->return_custom_type = dup_cstr(n.return_custom_type.value());
+            }
+            if (out->param_count > 0) {
+                out->parameters = static_cast<ASTNode_C**>(std::calloc(out->param_count, sizeof(ASTNode_C*)));
+                for (int i = 0; i < out->param_count; ++i) {
+                    ASTNode_C* param = static_cast<ASTNode_C*>(std::calloc(1, sizeof(ASTNode_C)));
+                    param->type = AST_VARIABLE_DECL;
+                    param->name = dup_cstr(n.parameters[i].name);
+                    param->data_type = n.parameters[i].type;
+                    if (n.parameters[i].custom_type.has_value()) {
+                        param->return_custom_type = dup_cstr(n.parameters[i].custom_type.value());
+                    }
+                    out->parameters[i] = param;
+                }
+            }
+            out->body = convert_ast_node_ptr(n.body);
+            if (n.receiver_type.has_value()) {
+                out->receiver_type_name = dup_cstr(n.receiver_type.value());
+            }
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, IfStatement>) {
+            out->type = AST_IF;
+            out->condition = convert_ast_node_ptr(n.condition);
+            out->then_branch = convert_ast_node_ptr(n.then_branch);
+            out->else_branch = convert_ast_node_ptr(n.else_branch);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, WhileLoop>) {
+            out->type = AST_WHILE;
+            out->condition = convert_ast_node_ptr(n.condition);
+            out->body = convert_ast_node_ptr(n.body);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, ForLoop>) {
+            out->type = AST_FOR;
+            out->init = convert_ast_node_ptr(n.init);
+            out->condition = convert_ast_node_ptr(n.condition);
+            out->increment = convert_ast_node_ptr(n.increment);
+            out->body = convert_ast_node_ptr(n.body);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, ForInLoop>) {
+            out->type = AST_FOR_IN;
+            out->name = dup_cstr(n.variable);
+            out->iterable = convert_ast_node_ptr(n.iterable);
+            out->body = convert_ast_node_ptr(n.body);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, ReturnStatement>) {
+            out->type = AST_RETURN;
+            out->return_value = convert_ast_node_ptr(n.value);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, BreakStatement>) {
+            out->type = AST_BREAK;
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, ContinueStatement>) {
+            out->type = AST_CONTINUE;
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, Block>) {
+            out->type = AST_BLOCK;
+            out->statement_count = static_cast<int>(n.statements.size());
+            if (out->statement_count > 0) {
+                out->statements = static_cast<ASTNode_C**>(std::calloc(out->statement_count, sizeof(ASTNode_C*)));
+                for (int i = 0; i < out->statement_count; ++i) {
+                    out->statements[i] = convert_ast_node_ptr(n.statements[i]);
+                }
+            }
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, Program>) {
+            out->type = AST_PROGRAM;
+            out->statement_count = static_cast<int>(n.statements.size());
+            if (out->statement_count > 0) {
+                out->statements = static_cast<ASTNode_C**>(std::calloc(out->statement_count, sizeof(ASTNode_C*)));
+                for (int i = 0; i < out->statement_count; ++i) {
+                    out->statements[i] = convert_ast_node_ptr(n.statements[i]);
+                }
+            }
+            out->line = 1;
+            out->column = 1;
+        } else if constexpr (std::is_same_v<T, TryCatch>) {
+            out->type = AST_TRY_CATCH;
+            out->try_block = convert_ast_node_ptr(n.try_block);
+            out->catch_var = dup_cstr(n.catch_var);
+            out->catch_block = convert_ast_node_ptr(n.catch_block);
+            out->finally_block = convert_ast_node_ptr(n.finally_block);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, ThrowStatement>) {
+            out->type = AST_THROW;
+            out->throw_expr = convert_ast_node_ptr(n.expression);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, ImportStatement>) {
+            out->type = AST_IMPORT;
+            // Legacy AOT path reads import path from value.string_value.
+            out->value.string_value = dup_cstr(n.path);
+            // Keep name populated as a compatibility alias for other backends.
+            out->name = dup_cstr(n.path);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, TypeDecl>) {
+            out->type = AST_TYPE_DECL;
+            out->name = dup_cstr(n.name);
+            out->field_count = static_cast<int>(n.field_names.size());
+            if (out->field_count > 0) {
+                out->field_names = static_cast<char**>(std::calloc(out->field_count, sizeof(char*)));
+                out->field_types = static_cast<DataType*>(std::calloc(out->field_count, sizeof(DataType)));
+                out->field_custom_types = static_cast<char**>(std::calloc(out->field_count, sizeof(char*)));
+                out->field_defaults = static_cast<ASTNode_C**>(std::calloc(out->field_count, sizeof(ASTNode_C*)));
+                for (int i = 0; i < out->field_count; ++i) {
+                    out->field_names[i] = dup_cstr(n.field_names[i]);
+                    out->field_types[i] = n.field_types[i];
+                    if (n.field_custom_types[i].has_value()) {
+                        out->field_custom_types[i] = dup_cstr(n.field_custom_types[i].value());
+                    }
+                    out->field_defaults[i] = convert_ast_node_ptr(n.field_defaults[i]);
+                }
+            }
+            set_loc(out, n.loc);
+        }
+    }, node.value);
+
+    return out;
+}
+
+static void ast_node_free_recursive(ASTNode_C* node) {
+    if (!node) return;
+
+    ast_node_free_recursive(node->left);
+    ast_node_free_recursive(node->right);
+    ast_node_free_recursive(node->body);
+    ast_node_free_recursive(node->condition);
+    ast_node_free_recursive(node->then_branch);
+    ast_node_free_recursive(node->else_branch);
+    ast_node_free_recursive(node->init);
+    ast_node_free_recursive(node->increment);
+    ast_node_free_recursive(node->iterable);
+    ast_node_free_recursive(node->return_value);
+    ast_node_free_recursive(node->index);
+    ast_node_free_recursive(node->receiver);
+    ast_node_free_recursive(node->try_block);
+    ast_node_free_recursive(node->catch_block);
+    ast_node_free_recursive(node->finally_block);
+    ast_node_free_recursive(node->throw_expr);
+
+    for (int i = 0; i < node->statement_count; ++i) ast_node_free_recursive(node->statements[i]);
+    for (int i = 0; i < node->argument_count; ++i) ast_node_free_recursive(node->arguments[i]);
+    for (int i = 0; i < node->element_count; ++i) ast_node_free_recursive(node->elements[i]);
+    for (int i = 0; i < node->object_count; ++i) ast_node_free_recursive(node->object_values[i]);
+    for (int i = 0; i < node->param_count; ++i) ast_node_free_recursive(node->parameters[i]);
+    for (int i = 0; i < node->field_count; ++i) ast_node_free_recursive(node->field_defaults[i]);
+
+    if (node->type == AST_STRING_LITERAL) {
+        free(node->value.string_value);
+    }
+
+    switch (node->type) {
+        case AST_IDENTIFIER:
+        case AST_VARIABLE_DECL:
+        case AST_ASSIGNMENT:
+        case AST_COMPOUND_ASSIGN:
+        case AST_INCREMENT:
+        case AST_DECREMENT:
+        case AST_FUNCTION_DECL:
+        case AST_IMPORT:
+        case AST_TYPE_DECL:
+        case AST_FOR_IN:
+        case AST_FUNCTION_CALL:
+            free(node->name);
+            break;
+        default:
+            break;
+    }
+
+    if (node->type == AST_FUNCTION_DECL) {
+        free(node->return_custom_type);
+        free(node->receiver_type_name);
+    }
+
+    if (node->type == AST_TRY_CATCH) {
+        free(node->catch_var);
+    }
+
+    if (node->field_names) {
+        for (int i = 0; i < node->field_count; ++i) free(node->field_names[i]);
+        free(node->field_names);
+    }
+    if (node->field_custom_types) {
+        for (int i = 0; i < node->field_count; ++i) free(node->field_custom_types[i]);
+        free(node->field_custom_types);
+    }
+    if (node->object_keys) {
+        for (int i = 0; i < node->object_count; ++i) free(node->object_keys[i]);
+        free(node->object_keys);
+    }
+    if (node->argument_names) {
+        for (int i = 0; i < node->argument_count; ++i) free(node->argument_names[i]);
+        free(node->argument_names);
+    }
+
+    free(node->field_types);
+    free(node->field_types_nodes);
+    free(node->field_defaults);
+    free(node->statements);
+    free(node->arguments);
+    free(node->elements);
+    free(node->object_values);
+    free(node->parameters);
+    free(node);
+}
+
+} // namespace
 
 extern "C" {
 
 Parser_C *parser_create(Token **tokens, int token_count) {
-    // TODO: Implement C API wrapper
-    return nullptr;
+    if (!tokens || token_count <= 0) return nullptr;
+    Parser_C* parser = static_cast<Parser_C*>(std::calloc(1, sizeof(Parser_C)));
+    if (!parser) return nullptr;
+    parser->tokens = tokens;
+    parser->token_count = token_count;
+    parser->position = 0;
+    parser->current_token = tokens[0];
+    return parser;
 }
 
 void parser_free(Parser_C *parser) {
-    // TODO: Implement
+    free(parser);
 }
 
 ASTNode_C *parser_parse(Parser_C *parser) {
-    // TODO: Implement
-    return nullptr;
+    if (!parser || !parser->tokens || parser->token_count <= 0) return nullptr;
+
+    std::vector<Token> token_vec;
+    token_vec.reserve(parser->token_count);
+    for (int i = 0; i < parser->token_count; ++i) {
+        if (parser->tokens[i]) {
+            token_vec.push_back(*parser->tokens[i]);
+        }
+    }
+    if (token_vec.empty() || token_vec.back().type() != TOKEN_EOF) {
+        token_vec.emplace_back(TOKEN_EOF, "", 0, 0);
+    }
+
+    try {
+        Parser modern_parser(std::move(token_vec));
+        std::unique_ptr<ASTNode> modern_ast = modern_parser.parse();
+        if (!modern_ast) return nullptr;
+        return convert_ast_node(*modern_ast);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, tulpar::i18n::tr_for_en("Parser Error: %s\n"), e.what());
+        return nullptr;
+    }
 }
 
 ASTNode_C *ast_node_create(ASTNodeType type) {
-    // TODO: Implement
-    return nullptr;
+    ASTNode_C* node = static_cast<ASTNode_C*>(std::calloc(1, sizeof(ASTNode_C)));
+    if (!node) return nullptr;
+    node->type = type;
+    return node;
 }
 
 void ast_node_free(ASTNode_C *node) {
-    // TODO: Implement
+    ast_node_free_recursive(node);
 }
 
 void ast_print(ASTNode_C *node, int indent) {
-    // TODO: Implement
+    if (!node) return;
+    for (int i = 0; i < indent; ++i) std::printf("  ");
+    std::printf("ASTNode(type=%d)\n", static_cast<int>(node->type));
+    for (int i = 0; i < node->statement_count; ++i) {
+        ast_print(node->statements[i], indent + 1);
+    }
 }
 
 } // extern "C"

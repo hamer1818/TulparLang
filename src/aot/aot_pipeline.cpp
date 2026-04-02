@@ -163,7 +163,7 @@ static AOTResult aot_compile_silent(const char *source,
   snprintf(
       link_cmd, sizeof(link_cmd),
       "clang -O3 %s -o %s -no-pie -L./build -L./build-linux -L./build-macos "
-      "-ltulpar_runtime -lm -lpthread -ldl 2>/dev/nullptr",
+      "-ltulpar_runtime -lm -lpthread -ldl 2>/dev/null",
       obj_filename, exe_filename);
 
   int link_result = system(link_cmd);

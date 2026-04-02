@@ -2,8 +2,6 @@
 // Bu örnek Tulpar dilinin Türkçe anahtar kelimeler ve yerleşik fonksiyonlarla 
 // nasıl kullanılabileceğini göstermektedir.
 
-içe_aktar "std";
-
 // Türkçe veri tipleri ve fonksiyon tanımı
 fonksiyon selam_ver(metin isim) {
     metin mesaj = "Merhaba, " + isim + "!";

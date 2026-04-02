@@ -323,6 +323,18 @@ int main(int argc, char **argv) {
 
   Parser_C *parser = parser_create(tokens, token_count);
   ASTNode_C *ast = parser_parse(parser);
+  if (!ast) {
+    fprintf(stderr, "%s\n",
+            tulpar::i18n::tr_en("Hata: Parse asamasi basarisiz.",
+                                "Error: Parse phase failed."));
+    parser_free(parser);
+    for (int i = 0; i < token_count; i++) {
+      token_free(tokens[i]);
+    }
+    free(tokens);
+    free(source);
+    return 1;
+  }
 
   if (!from_file) {
     printf("Abstract Syntax Tree:\n");
