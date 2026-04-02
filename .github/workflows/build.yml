@@ -32,6 +32,7 @@ jobs:
         run: |
           cp build/tulpar tulpar
           chmod +x tulpar
+          chmod +x build.sh
           ./build.sh test
         timeout-minutes: 5
         continue-on-error: true
