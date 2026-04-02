@@ -17,6 +17,7 @@
 #include "../parser/parser.h"
 #include "compiler.h"
 #include "vm.h"
+#include <ctype.h>
 #include <math.h> // For clock()
 #include <stdarg.h>
 #include <stdio.h>
