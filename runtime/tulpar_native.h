@@ -41,6 +41,10 @@ typedef struct {
   int32_t capacity;
 } TulparArrayBool;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // ============================================================================
 // Print Functions - No VMValue, direct types
 // ============================================================================
@@ -137,5 +141,9 @@ void tulpar_write_file(TulparString path, TulparString content);
 // ============================================================================
 
 TulparFloat tulpar_clock_ms(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // TULPAR_NATIVE_H

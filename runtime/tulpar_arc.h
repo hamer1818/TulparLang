@@ -7,8 +7,12 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-// Forward declarations from vm.h
+// Forward declarations from vm.hpp
 typedef struct Obj Obj;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // ============================================================================
 // ARC Core Functions
@@ -51,6 +55,10 @@ void arc_scope_exit(Obj **objects, int count);
 #ifdef TULPAR_DEBUG
 void arc_print_stats(void);
 int arc_get_live_count(void);
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif // TULPAR_ARC_H

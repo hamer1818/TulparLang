@@ -1,16 +1,15 @@
-# TulparLang - Programming Language (LLVM Backend)
+# TulparLang - Programming Language (Modern C++17 + LLVM Backend)
 # Supported platforms: Linux, macOS (Windows users should use WSL)
 # Minimum CMake version
 cmake_minimum_required(VERSION 3.14)
 
-# Project name and version
+# Project name and version - Now using modern C++17
 project(TulparLang VERSION 2.1.0 LANGUAGES C CXX)
 
-# C Standard
-set(CMAKE_C_STANDARD 99)
-set(CMAKE_C_STANDARD_REQUIRED ON)
+# C++17 Standard (required for std::variant, std::optional, std::unique_ptr)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 # ============================================
 # Embed Standard Libraries (lib/*.tpr)
@@ -27,13 +26,12 @@ message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 
-# Compiler flags
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra")
+# C++ Compiler flags (modern, strict)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic")
 
 # Debug/Release configurations
-set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g -DTULPAR_DEBUG")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DTULPAR_DEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
 
 # Include directories
 include_directories(${PROJECT_SOURCE_DIR}/src)
@@ -44,63 +42,63 @@ include_directories(${PROJECT_SOURCE_DIR}/src)
 
 # Core Language
 set(LEXER_SOURCES
-    src/lexer/lexer.c
-    src/lexer/lexer.h
+    src/lexer/lexer.cpp
+    src/lexer/lexer.hpp
 )
 
 set(PARSER_SOURCES
-    src/parser/parser.c
-    src/parser/parser.h
+    src/parser/parser.cpp
+    src/parser/parser.hpp
 )
 
-# LLVM Backend (Primary)
+# LLVM Backend (Primary) - Now using C++ API
 set(AOT_SOURCES
-    src/aot/llvm_backend.c
-    src/aot/llvm_backend.h
-    src/aot/llvm_types.c
-    src/aot/llvm_types.h
-    src/aot/llvm_values.c
-    src/aot/llvm_values.h
-    src/aot/aot_pipeline.c
-    src/aot/aot_pipeline.h
+    src/aot/llvm_backend.cpp
+    src/aot/llvm_backend.hpp
+    src/aot/llvm_types.cpp
+    src/aot/llvm_types.hpp
+    src/aot/llvm_values.cpp
+    src/aot/llvm_values.hpp
+    src/aot/aot_pipeline.cpp
+    src/aot/aot_pipeline.hpp
 )
 
 # Type Inference
 set(TYPEINFER_SOURCES
-    src/typeinfer/typeinfer.c
-    src/typeinfer/typeinfer.h
+    src/typeinfer/typeinfer.cpp
+    src/typeinfer/typeinfer.hpp
 )
 
 # Runtime Support (needed for AOT binaries)
 set(RUNTIME_SOURCES
-    src/vm/runtime_bindings.c
-    src/vm/vm.c
-    src/vm/vm.h
-    src/vm/bytecode.c
-    src/vm/bytecode.h
-    src/vm/compiler.c
-    src/vm/compiler.h
+    src/vm/runtime_bindings.cpp
+    src/vm/vm.cpp
+    src/vm/vm.hpp
+    src/vm/bytecode.cpp
+    src/vm/bytecode.hpp
+    src/vm/compiler.cpp
+    src/vm/compiler.hpp
     runtime/cJSON.c
-    runtime/tulpar_arc.c
+    runtime/tulpar_arc.cpp
     runtime/tulpar_arc.h
-    runtime/tulpar_native.c
+    runtime/tulpar_native.cpp
     runtime/tulpar_native.h
 )
 
 # Legacy (kept for compatibility, may be removed in future)
 set(LEGACY_SOURCES
-    src/interpreter/interpreter.c
-    src/interpreter/interpreter.h
-    src/jit/jit.h
-    src/jit/jit_memory.c
-    src/jit/x64_emit.h
-    src/jit/x64_emit.c
-    src/jit/jit_compiler.c
-    src/jit/jit_optimize.c
+    src/interpreter/interpreter.cpp
+    src/interpreter/interpreter.hpp
+    src/jit/jit.hpp
+    src/jit/jit_memory.cpp
+    src/jit/x64_emit.hpp
+    src/jit/x64_emit.cpp
+    src/jit/jit_compiler.cpp
+    src/jit/jit_optimize.cpp
 )
 
 set(MAIN_SOURCES
-    src/main.c
+    src/main.cpp
 )
 
 set(SQLITE_SOURCES
@@ -150,17 +148,17 @@ target_link_libraries(tulpar ${llvm_libs} stdc++)
 # Runtime Library (for AOT-compiled binaries)
 # ============================================
 add_library(tulpar_runtime STATIC
-    src/vm/runtime_bindings.c
-    src/vm/vm.c
-    src/vm/bytecode.c
-    src/vm/compiler.c
+    src/vm/runtime_bindings.cpp
+    src/vm/vm.cpp
+    src/vm/bytecode.cpp
+    src/vm/compiler.cpp
     runtime/cJSON.c
-    src/lexer/lexer.c
-    src/parser/parser.c
-    src/jit/jit_memory.c
-    src/jit/x64_emit.c
-    src/jit/jit_compiler.c
-    src/jit/jit_optimize.c
+    src/lexer/lexer.cpp
+    src/parser/parser.cpp
+    src/jit/jit_memory.cpp
+    src/jit/x64_emit.cpp
+    src/jit/jit_compiler.cpp
+    src/jit/jit_optimize.cpp
     lib/sqlite3/sqlite3.c
 )
 target_include_directories(tulpar_runtime PRIVATE ${PROJECT_SOURCE_DIR}/src)
@@ -214,7 +212,8 @@ message(STATUS "=== TulparLang Build Configuration ===")
 message(STATUS "Version: ${PROJECT_VERSION}")
 message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "LLVM Version: ${LLVM_PACKAGE_VERSION}")
-message(STATUS "C Compiler: ${CMAKE_C_COMPILER}")
+message(STATUS "C++ Compiler: ${CMAKE_CXX_COMPILER}")
+message(STATUS "C++ Standard: C++${CMAKE_CXX_STANDARD}")
 message(STATUS "System: ${CMAKE_SYSTEM_NAME}")
 message(STATUS "======================================")
 # Touch for rebuild

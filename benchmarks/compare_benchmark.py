@@ -234,17 +234,18 @@ def run_tulpar_benchmark():
     project_dir = os.path.join(script_dir, '..')
     
     # Try multiple possible Tulpar executable locations
+    # Prefer root binary first (test scripts in repo use this path successfully)
     if platform.system() == 'Windows':
         possible_paths = [
+            os.path.join(project_dir, 'tulpar.exe'),
             os.path.join(project_dir, 'build-win', 'tulpar.exe'),
             os.path.join(project_dir, 'build', 'tulpar.exe'),
-            os.path.join(project_dir, 'tulpar.exe'),
         ]
     else:
         possible_paths = [
+            os.path.join(project_dir, 'tulpar'),
             os.path.join(project_dir, 'build-linux', 'tulpar'),
             os.path.join(project_dir, 'build', 'tulpar'),
-            os.path.join(project_dir, 'tulpar'),
         ]
     
     tulpar_exe = None
@@ -263,37 +264,29 @@ def run_tulpar_benchmark():
         return {'error': f'Tulpar bulunamadı. Aranan yollar:\n    {tried_paths}'}
     
     try:
-        # Try AOT with the compatible benchmark first
+        # 1) Prefer direct execution of AOT-compatible benchmark script.
+        #    This path proved more stable than "--aot <file> <outbin>" in current tree.
         aot_benchmark = os.path.join(script_dir, 'benchmark_aot.tpr')
-        
         if os.path.exists(aot_benchmark):
-            # Use AOT-compatible benchmark
-            compile_cmd = [tulpar_exe, '--aot', aot_benchmark, output_bin]
-            compile_result = subprocess.run(compile_cmd, capture_output=True, text=True, timeout=60, cwd=project_dir)
-            
-            # Handle double .exe issue on Windows
-            actual_bin = output_bin + '.exe' if platform.system() == 'Windows' and os.path.exists(output_bin + '.exe') else output_bin
-            
-            if compile_result.returncode == 0 and os.path.exists(actual_bin):
-                result = subprocess.run([actual_bin], capture_output=True, text=True, timeout=300, cwd=project_dir)
-                
-                # Cleanup
-                try:
-                    os.remove(actual_bin)
-                    for ext in ['.ll', '.o', '.exe.ll', '.exe.o']:
-                        cleanup_file = output_bin + ext
-                        if os.path.exists(cleanup_file):
-                            os.remove(cleanup_file)
-                except:
-                    pass
-                
-                return {'results': parse_benchmark_output(result.stdout), 'output': result.stdout}
-        
-        # Fallback to VM mode for full benchmark compatibility
+            aot_run = subprocess.run(
+                [tulpar_exe, aot_benchmark],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                cwd=project_dir
+            )
+            aot_output = (aot_run.stdout or "") + "\n" + (aot_run.stderr or "")
+            aot_parsed = parse_benchmark_output(aot_output)
+            has_measurements = any(k != 'total' and v > 0 for k, v in aot_parsed.items())
+            if has_measurements:
+                return {'results': aot_parsed, 'output': aot_output}
+
+        # 2) Fallback to legacy benchmark file (VM/full compatibility path)
         run_cmd = [tulpar_exe, benchmark_file]
         result = subprocess.run(run_cmd, capture_output=True, text=True, timeout=300, cwd=project_dir)
-        return {'results': parse_benchmark_output(result.stdout), 'output': result.stdout}
-        
+        output = (result.stdout or "") + "\n" + (result.stderr or "")
+        return {'results': parse_benchmark_output(output), 'output': output}
+
     except subprocess.TimeoutExpired:
         return {'error': 'Timeout'}
     except Exception as e:
