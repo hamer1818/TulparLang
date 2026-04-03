@@ -94,8 +94,16 @@ jobs:
       - name: Setup LLVM
         shell: pwsh
         run: |
-          Write-Host "Installing LLVM via Chocolatey..." -ForegroundColor Cyan
-          choco install llvm --version=18.1.8 -y
+          Write-Host "Setting up LLVM for Windows build..." -ForegroundColor Cyan
+          
+          # First, uninstall existing LLVM if present
+          Write-Host "Removing existing LLVM installation..." -ForegroundColor Yellow
+          choco uninstall llvm -y --force 2>$null
+          Start-Sleep -Seconds 3
+          
+          # Install specific LLVM version with dev files
+          Write-Host "Installing LLVM 18.1.8 via Chocolatey..." -ForegroundColor Cyan
+          choco install llvm --version=18.1.8 -y --force
           
           # Refresh environment variables
           $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
@@ -107,30 +115,28 @@ jobs:
           $llvmPath = "C:\Program Files\LLVM"
           if (Test-Path $llvmPath) {
             Write-Host "LLVM installed at: $llvmPath" -ForegroundColor Green
-            Write-Host "Contents:" -ForegroundColor Cyan
-            Get-ChildItem $llvmPath | Select-Object -First 10 | ForEach-Object { Write-Host "  - $($_.Name)" }
+            Write-Host "LLVM version:" -ForegroundColor Cyan
+            & "$llvmPath\bin\llvm-config.exe" --version
           } else {
             Write-Host "ERROR: LLVM directory not found!" -ForegroundColor Red
             exit 1
           }
           
-          # Check for cmake directory
-          $cmakePath = "$llvmPath\lib\cmake\llvm"
-          if (Test-Path $cmakePath) {
-            Write-Host "CMake files found at: $cmakePath" -ForegroundColor Green
-            Write-Host "Verifying LLVMConfig.cmake exists..." -ForegroundColor Cyan
-            if (Test-Path "$cmakePath\LLVMConfig.cmake") {
-              Write-Host "✓ LLVMConfig.cmake found!" -ForegroundColor Green
-            } else {
-              Write-Host "ERROR: LLVMConfig.cmake not found!" -ForegroundColor Red
-              Write-Host "Available files:" -ForegroundColor Yellow
-              Get-ChildItem $cmakePath | ForEach-Object { Write-Host "  - $($_.Name)" }
-              exit 1
-            }
+          # Search for LLVMConfig.cmake in all possible locations
+          Write-Host "Searching for LLVM CMake files..." -ForegroundColor Cyan
+          $cmakeFiles = Get-ChildItem "$llvmPath" -Recurse -Filter "LLVMConfig.cmake" -ErrorAction SilentlyContinue
+          
+          if ($cmakeFiles) {
+            $cmakePath = $cmakeFiles[0].DirectoryName
+            Write-Host "✓ Found LLVMConfig.cmake at: $cmakePath" -ForegroundColor Green
+            echo "LLVM_CMAKE_DIR=$cmakePath" >> $env:GITHUB_ENV
           } else {
-            Write-Host "ERROR: CMake directory not found at expected location" -ForegroundColor Red
-            Write-Host "Searching for cmake files..." -ForegroundColor Yellow
-            Get-ChildItem "$llvmPath\lib" -Recurse -Filter "*Config.cmake" | ForEach-Object { Write-Host "  Found: $($_.FullName)" }
+            Write-Host "ERROR: LLVMConfig.cmake not found in LLVM installation!" -ForegroundColor Red
+            Write-Host "Searching all cmake directories..." -ForegroundColor Yellow
+            Get-ChildItem "$llvmPath" -Recurse -Directory -Filter "cmake" | ForEach-Object { 
+              Write-Host "  Found cmake dir: $($_.FullName)"
+              Get-ChildItem $_.FullName -Filter "*.cmake" | ForEach-Object { Write-Host "    - $($_.Name)" }
+            }
             exit 1
           }
       
@@ -141,16 +147,15 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
-          $env:LLVM_DIR = "C:\Program Files\LLVM\lib\cmake\llvm"
           
-          Write-Host "LLVM_DIR: $env:LLVM_DIR" -ForegroundColor Cyan
+          Write-Host "LLVM_CMAKE_DIR: $env:LLVM_CMAKE_DIR" -ForegroundColor Cyan
           
-          Write-Host "Configuring CMake..." -ForegroundColor Cyan
+          Write-Host "Configuring CMake with MSVC..." -ForegroundColor Cyan
           mkdir build-windows
           cd build-windows
-          cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$env:LLVM_DIR"
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$env:LLVM_CMAKE_DIR"
           
-          Write-Host "Building..." -ForegroundColor Cyan
+          Write-Host "Building with MSVC..." -ForegroundColor Cyan
           cmake --build . --config Release -j
         timeout-minutes: 25
       

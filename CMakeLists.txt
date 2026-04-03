@@ -1,5 +1,5 @@
 # TulparLang - Programming Language (Modern C++17 + LLVM Backend)
-# Supported platforms: Linux, macOS (Windows users should use WSL)
+# Supported platforms: Linux, macOS, Windows (native MSVC support)
 # Minimum CMake version
 cmake_minimum_required(VERSION 3.14)
 
@@ -27,7 +27,24 @@ include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 
 # C++ Compiler flags (modern, strict)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic")
+if(MSVC)
+    # MSVC specific flags
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /EHsc /permissive-")
+    # Disable specific MSVC warnings
+    add_compile_options(
+        /wd4244  # conversion from 'type1' to 'type2', possible loss of data
+        /wd4267  # conversion from 'size_t' to 'type', possible loss of data
+        /wd4996  # function was declared deprecated
+        /wd4005  # macro redefinition
+        /wd4146  # unary minus operator applied to unsigned type
+        /wd4624  # destructor was implicitly defined as deleted
+    )
+    # Enable big object files for LLVM
+    add_compile_options(/bigobj)
+else()
+    # GCC/Clang flags
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic")
+endif()
 
 # Known non-critical noise for current architecture strategy:
 # - computed goto dispatch in VM (GNU extension)
@@ -58,8 +75,13 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 # Debug/Release configurations
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DTULPAR_DEBUG")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
+if(MSVC)
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Zi /DTULPAR_DEBUG")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /DNDEBUG")
+else()
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DTULPAR_DEBUG")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
+endif()
 
 # Include directories
 include_directories(${PROJECT_SOURCE_DIR}/src)
