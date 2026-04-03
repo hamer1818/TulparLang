@@ -6,16 +6,17 @@
 #include "../common/platform_sockets.h"
 #include "vm.hpp"
 
+// Windows MSVC compatibility: ssize_t is not standard on Windows
+#if defined(_MSC_VER) && !defined(ssize_t)
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
+
 #define TYPE_BOOL_BOOL ((VM_VAL_BOOL << 4) | VM_VAL_BOOL)
 #include <cctype>
 #include <locale.h>
 #include <setjmp.h>
 #include <stdbool.h>
-#include <cstddef>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -1923,9 +1924,9 @@ void aot_socket_close(VMValue fdVal) {
   }
 }
 // ============================================================================
-// Threading Functions (AOT) - POSIX pthread
+// Threading Functions (AOT) - Cross-platform threading
 // ============================================================================
-#include <pthread.h>
+#include "../common/platform_threads.h"
 
 // Thread argument structure
 typedef struct {
@@ -1934,7 +1935,11 @@ typedef struct {
 } AOTThreadArgs;
 
 // Thread entry point wrapper
+#if PLATFORM_WINDOWS
+static unsigned __stdcall aot_thread_entry(void *arg) {
+#else
 static void *aot_thread_entry(void *arg) {
+#endif
   AOTThreadArgs *targs = (AOTThreadArgs *)arg;
 
   // Call the function pointer with the argument
@@ -1947,12 +1952,16 @@ static void *aot_thread_entry(void *arg) {
   }
 
   free(targs);
+#if PLATFORM_WINDOWS
+  return 0;
+#else
   return nullptr;
+#endif
 }
 
 // thread_create(func_ptr, arg) -> thread_id
 VMValue aot_thread_create(void *func_ptr, VMValue arg) {
-  pthread_t thread;
+  tulpar_thread_t thread;
 
   AOTThreadArgs *targs = static_cast<AOTThreadArgs*>(malloc(sizeof(AOTThreadArgs)));
   if (!targs)
@@ -1961,14 +1970,18 @@ VMValue aot_thread_create(void *func_ptr, VMValue arg) {
   targs->func_ptr = func_ptr;
   targs->arg = arg;
 
-  int result = pthread_create(&thread, nullptr, aot_thread_entry, targs);
+#if PLATFORM_WINDOWS
+  int result = tulpar_thread_create(&thread, (tulpar_thread_func_t)aot_thread_entry, targs);
+#else
+  int result = tulpar_thread_create(&thread, aot_thread_entry, targs);
+#endif
   if (result != 0) {
     free(targs);
     return VM_INT(-1);
   }
 
-  // Return thread ID as int64 (pthread_t is typically unsigned long)
-  return VM_INT((int64_t)thread);
+  // Return thread ID as int64
+  return VM_INT((int64_t)(uintptr_t)thread);
 }
 
 // thread_join(thread_id) -> void
@@ -1976,8 +1989,8 @@ void aot_thread_join(VMValue threadVal) {
   if (!IS_INT(threadVal))
     return;
 
-  pthread_t thread = (pthread_t)AS_INT(threadVal);
-  pthread_join(thread, nullptr);
+  tulpar_thread_t thread = (tulpar_thread_t)(uintptr_t)AS_INT(threadVal);
+  tulpar_thread_join(thread);
 }
 
 // thread_detach(thread_id) -> void
@@ -1985,21 +1998,21 @@ void aot_thread_detach(VMValue threadVal) {
   if (!IS_INT(threadVal))
     return;
 
-  pthread_t thread = (pthread_t)AS_INT(threadVal);
-  pthread_detach(thread);
+  tulpar_thread_t thread = (tulpar_thread_t)(uintptr_t)AS_INT(threadVal);
+  tulpar_thread_detach(thread);
 }
 
 // ============================================================================
-// Mutex Functions (AOT) - POSIX pthread_mutex
+// Mutex Functions (AOT) - Cross-platform mutex
 // ============================================================================
 
 // mutex_create() -> mutex_ptr (as int64)
 VMValue aot_mutex_create(void) {
-  pthread_mutex_t *mutex = static_cast<pthread_mutex_t*>(malloc(sizeof(pthread_mutex_t)));
+  tulpar_mutex_t *mutex = static_cast<tulpar_mutex_t*>(malloc(sizeof(tulpar_mutex_t)));
   if (!mutex)
     return VM_INT(0);
 
-  pthread_mutex_init(mutex, nullptr);
+  tulpar_mutex_init(mutex);
 
   // Return mutex pointer as int64
   return VM_INT((int64_t)(uintptr_t)mutex);
@@ -2010,9 +2023,9 @@ void aot_mutex_lock(VMValue mutexVal) {
   if (!IS_INT(mutexVal))
     return;
 
-  pthread_mutex_t *mutex = (pthread_mutex_t *)(uintptr_t)AS_INT(mutexVal);
+  tulpar_mutex_t *mutex = (tulpar_mutex_t *)(uintptr_t)AS_INT(mutexVal);
   if (mutex) {
-    pthread_mutex_lock(mutex);
+    tulpar_mutex_lock(mutex);
   }
 }
 
@@ -2021,9 +2034,9 @@ void aot_mutex_unlock(VMValue mutexVal) {
   if (!IS_INT(mutexVal))
     return;
 
-  pthread_mutex_t *mutex = (pthread_mutex_t *)(uintptr_t)AS_INT(mutexVal);
+  tulpar_mutex_t *mutex = (tulpar_mutex_t *)(uintptr_t)AS_INT(mutexVal);
   if (mutex) {
-    pthread_mutex_unlock(mutex);
+    tulpar_mutex_unlock(mutex);
   }
 }
 
@@ -2032,9 +2045,9 @@ void aot_mutex_destroy(VMValue mutexVal) {
   if (!IS_INT(mutexVal))
     return;
 
-  pthread_mutex_t *mutex = (pthread_mutex_t *)(uintptr_t)AS_INT(mutexVal);
+  tulpar_mutex_t *mutex = (tulpar_mutex_t *)(uintptr_t)AS_INT(mutexVal);
   if (mutex) {
-    pthread_mutex_destroy(mutex);
+    tulpar_mutex_destroy(mutex);
     free(mutex);
   }
 }

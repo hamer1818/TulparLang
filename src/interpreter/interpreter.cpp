@@ -1,6 +1,9 @@
 #include "interpreter.hpp"
 #include "../../lib/sqlite3/sqlite3.h"
 #include "../common/localization.hpp"
+#include "../common/platform.h"
+#include "../common/platform_sockets.h"
+#include "../common/platform_threads.h"
 #include "../lexer/lexer.hpp"
 #include "../parser/parser.hpp"
 #include "../embedded_libs.h"  // Embedded standard libraries
@@ -11,6 +14,23 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+// Platform-specific includes for sockets
+#if PLATFORM_WINDOWS
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  typedef SOCKET tulpar_socket_interp;
+  #define INVALID_SOCKET_INTERP INVALID_SOCKET
+  #define SOCKET_ERROR_INTERP SOCKET_ERROR
+#else
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <unistd.h>
+  typedef int tulpar_socket_interp;
+  #define INVALID_SOCKET_INTERP (-1)
+  #define SOCKET_ERROR_INTERP (-1)
+#endif
 
 // Thread Arguments Structure
 typedef struct {
@@ -2195,8 +2215,8 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
 
     // socket_create(domain, type, protocol)
     if (strcmp(node->name, "socket_create") == 0) {
-      SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
-      if (sock == INVALID_SOCKET) {
+      tulpar_socket_interp sock = socket(AF_INET, SOCK_STREAM, 0);
+      if (sock == INVALID_SOCKET_INTERP) {
         return value_create_int(-1);
       }
       return value_create_int((long long)sock);
@@ -2210,14 +2230,14 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
 
       if (sock_val->type == VAL_INT && host_val->type == VAL_STRING &&
           port_val->type == VAL_INT) {
-        SOCKET sock = (SOCKET)sock_val->data.int_val;
+        tulpar_socket_interp sock = (tulpar_socket_interp)sock_val->data.int_val;
         struct sockaddr_in server;
         server.sin_family = AF_INET;
         server.sin_addr.s_addr = inet_addr(host_val->data.string_val);
         server.sin_port = htons((unsigned short)port_val->data.int_val);
 
         if (bind(sock, (struct sockaddr *)&server, sizeof(server)) ==
-            SOCKET_ERROR) {
+            SOCKET_ERROR_INTERP) {
           value_free(sock_val);
           value_free(host_val);
           value_free(port_val);
@@ -2241,8 +2261,8 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
           interpreter_eval_expression(interp, node->arguments[1]);
 
       if (sock_val->type == VAL_INT && backlog_val->type == VAL_INT) {
-        SOCKET sock = (SOCKET)sock_val->data.int_val;
-        if (listen(sock, (int)backlog_val->data.int_val) == SOCKET_ERROR) {
+        tulpar_socket_interp sock = (tulpar_socket_interp)sock_val->data.int_val;
+        if (listen(sock, (int)backlog_val->data.int_val) == SOCKET_ERROR_INTERP) {
           value_free(sock_val);
           value_free(backlog_val);
           return value_create_int(-1);
@@ -2260,13 +2280,13 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
     if (strcmp(node->name, "socket_accept") == 0 && node->argument_count >= 1) {
       Value *sock_val = interpreter_eval_expression(interp, node->arguments[0]);
       if (sock_val->type == VAL_INT) {
-        SOCKET sock = (SOCKET)sock_val->data.int_val;
+        tulpar_socket_interp sock = (tulpar_socket_interp)sock_val->data.int_val;
         struct sockaddr_in client;
         socklen_t c = sizeof(struct sockaddr_in);
-        SOCKET new_socket = accept(sock, (struct sockaddr *)&client, &c);
+        tulpar_socket_interp new_socket = accept(sock, (struct sockaddr *)&client, &c);
 
         value_free(sock_val);
-        if (new_socket == INVALID_SOCKET) {
+        if (new_socket == INVALID_SOCKET_INTERP) {
           return value_create_int(-1);
         }
         return value_create_int((long long)new_socket);
@@ -2284,7 +2304,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
 
       if (sock_val->type == VAL_INT && host_val->type == VAL_STRING &&
           port_val->type == VAL_INT) {
-        SOCKET sock = (SOCKET)sock_val->data.int_val;
+        tulpar_socket_interp sock = (tulpar_socket_interp)sock_val->data.int_val;
         struct sockaddr_in server;
         server.sin_family = AF_INET;
         server.sin_addr.s_addr = inet_addr(host_val->data.string_val);
@@ -2313,7 +2333,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       Value *data_val = interpreter_eval_expression(interp, node->arguments[1]);
 
       if (sock_val->type == VAL_INT && data_val->type == VAL_STRING) {
-        SOCKET sock = (SOCKET)sock_val->data.int_val;
+        tulpar_socket_interp sock = (tulpar_socket_interp)sock_val->data.int_val;
         const char *msg = data_val->data.string_val;
         if (send(sock, msg, strlen(msg), 0) < 0) {
           value_free(sock_val);
@@ -2336,7 +2356,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       Value *size_val = interpreter_eval_expression(interp, node->arguments[1]);
 
       if (sock_val->type == VAL_INT && size_val->type == VAL_INT) {
-        SOCKET sock = (SOCKET)sock_val->data.int_val;
+        tulpar_socket_interp sock = (tulpar_socket_interp)sock_val->data.int_val;
         int size = (int)size_val->data.int_val;
         char *buffer = (char *)malloc(size + 1);
         int recv_size;
@@ -2378,8 +2398,8 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       Value *port_val = interpreter_eval_expression(interp, node->arguments[1]);
 
       if (host_val->type == VAL_STRING && port_val->type == VAL_INT) {
-        SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
-        if (sock == INVALID_SOCKET) {
+        tulpar_socket_interp sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock == INVALID_SOCKET_INTERP) {
           value_free(host_val);
           value_free(port_val);
           return value_create_int(-1);
@@ -2395,14 +2415,14 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
         server.sin_port = htons((unsigned short)port_val->data.int_val);
 
         if (bind(sock, (struct sockaddr *)&server, sizeof(server)) ==
-            SOCKET_ERROR) {
+            SOCKET_ERROR_INTERP) {
           tulpar_socket_close(sock);
           value_free(host_val);
           value_free(port_val);
           return value_create_int(-1);
         }
 
-        if (listen(sock, 5) == SOCKET_ERROR) {
+        if (listen(sock, 5) == SOCKET_ERROR_INTERP) {
           tulpar_socket_close(sock);
           value_free(host_val);
           value_free(port_val);
@@ -3519,25 +3539,27 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
 
     // time_ms() - Milisaniye cinsinden zaman damgas─▒ (epoch'tan beri)
     if (strcmp(node->name, "time_ms") == 0) {
+#if PLATFORM_WINDOWS
+      FILETIME ft;
+      ULARGE_INTEGER uli;
+      GetSystemTimeAsFileTime(&ft);
+      uli.LowPart = ft.dwLowDateTime;
+      uli.HighPart = ft.dwHighDateTime;
+      // Convert from 100-nanosecond intervals to milliseconds
+      long long ms = (uli.QuadPart - 116444736000000000ULL) / 10000ULL;
+      return value_create_int(ms);
+#else
       struct timespec ts;
       clock_gettime(CLOCK_REALTIME, &ts);
       long long ms = (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
       return value_create_int(ms);
+#endif
     }
 
     // clock_ms() - Program ba┼şlang─▒c─▒ndan beri ge├ğen milisaniye (y├╝ksek
     // hassasiyet)
     if (strcmp(node->name, "clock_ms") == 0) {
-      static struct timespec start = {0, 0};
-      static int initialized = 0;
-      if (!initialized) {
-        clock_gettime(CLOCK_MONOTONIC, &start);
-        initialized = 1;
-      }
-      struct timespec now;
-      clock_gettime(CLOCK_MONOTONIC, &now);
-      double elapsed = (now.tv_sec - start.tv_sec) * 1000.0 +
-                       (now.tv_nsec - start.tv_nsec) / 1000000.0;
+      double elapsed = tulpar_clock_ms();
       return value_create_float((float)elapsed);
     }
 
@@ -3547,7 +3569,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       if (ms_val->type == VAL_INT || ms_val->type == VAL_FLOAT) {
         int ms = (ms_val->type == VAL_INT) ? (int)ms_val->data.int_val
                                            : (int)ms_val->data.float_val;
-        usleep(ms * 1000);
+        tulpar_sleep_ms(ms);
       }
       value_free(ms_val);
       return value_create_void();
@@ -4328,7 +4350,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       // Yeni scope ve self
       SymbolTable *old_scope = interp->current_scope;
       interp->current_scope = symbol_table_create(interp->global_scope);
-      symbol_table_set(interp->current_scope, "self", recv);
+      symbol_table_set(interp->current_scope, const_cast<char*>("self"), recv);
       for (int i = 0; i < node->argument_count; i++) {
         symbol_table_set(interp->current_scope, m->node->parameters[i]->name,
                          arg_values[i]);

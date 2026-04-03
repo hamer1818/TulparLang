@@ -94,22 +94,33 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
       
+      - name: Install LLVM via Chocolatey
+        shell: pwsh
+        run: |
+          Write-Host "Installing LLVM via Chocolatey..." -ForegroundColor Cyan
+          choco install llvm --version=18.1.8 -y --no-progress
+          refreshenv
+          $llvmPath = "C:\Program Files\LLVM"
+          $env:PATH = "$llvmPath\bin;$env:PATH"
+          Write-Host "LLVM installed at: $llvmPath" -ForegroundColor Green
+          & clang --version
+      
       - name: Build with LLVM
         shell: pwsh
         run: |
-          # Use pre-installed LLVM on GitHub Actions runner
           $llvmPath = "C:\Program Files\LLVM"
           $env:PATH = "$llvmPath\bin;$env:PATH"
           $env:LLVM_DIR = $llvmPath
           
           Write-Host "Using LLVM from: $llvmPath" -ForegroundColor Cyan
-          & clang --version
+          Write-Host "Checking LLVM headers..." -ForegroundColor Cyan
+          Get-ChildItem "$llvmPath\include\llvm-c" -ErrorAction SilentlyContinue | Select-Object -First 5
           
           mkdir build-windows
           cd build-windows
           cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$llvmPath"
           cmake --build . --config Release -j
-        timeout-minutes: 15
+        timeout-minutes: 20
       
       - name: Prepare artifact
         shell: pwsh
