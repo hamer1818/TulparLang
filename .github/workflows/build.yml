@@ -100,14 +100,33 @@ jobs:
           
           Invoke-WebRequest -Uri $llvmUrl -OutFile $llvmInstaller -UseBasicParsing
           
-          Write-Host "Installing LLVM..." -ForegroundColor Cyan
-          Start-Process -FilePath $llvmInstaller -ArgumentList "/S" -Wait -NoNewWindow
+          Write-Host "Installing LLVM (this may take a few minutes)..." -ForegroundColor Cyan
+          $process = Start-Process -FilePath $llvmInstaller -ArgumentList "/S" -PassThru -NoNewWindow
+          $process.WaitForExit()
           
-          # Add LLVM to PATH
-          $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
+          Write-Host "Installation complete. Exit code: $($process.ExitCode)" -ForegroundColor Cyan
           
-          Write-Host "Verifying LLVM installation..." -ForegroundColor Cyan
-          & "C:\Program Files\LLVM\bin\llvm-config.exe" --version
+          # Wait a bit for file system to settle
+          Start-Sleep -Seconds 5
+          
+          # Verify installation
+          $llvmPath = "C:\Program Files\LLVM"
+          if (Test-Path $llvmPath) {
+            Write-Host "LLVM installed at: $llvmPath" -ForegroundColor Green
+            Write-Host "Contents:" -ForegroundColor Cyan
+            Get-ChildItem $llvmPath | Select-Object -First 10 | ForEach-Object { Write-Host "  - $($_.Name)" }
+          } else {
+            Write-Host "ERROR: LLVM directory not found!" -ForegroundColor Red
+            exit 1
+          }
+          
+          # Check for cmake directory
+          $cmakePath = "$llvmPath\lib\cmake\llvm"
+          if (Test-Path $cmakePath) {
+            Write-Host "CMake files found at: $cmakePath" -ForegroundColor Green
+          } else {
+            Write-Host "WARNING: CMake directory not found at expected location" -ForegroundColor Yellow
+          }
       
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
@@ -117,6 +136,8 @@ jobs:
         run: |
           $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
           $env:LLVM_DIR = "C:\Program Files\LLVM\lib\cmake\llvm"
+          
+          Write-Host "LLVM_DIR: $env:LLVM_DIR" -ForegroundColor Cyan
           
           Write-Host "Configuring CMake..." -ForegroundColor Cyan
           mkdir build-windows
