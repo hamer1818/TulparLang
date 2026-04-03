@@ -168,17 +168,34 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
+          $llvmPath = "C:\Program Files\LLVM"
           
-          # Set LLVM_DIR environment variable for CMake
-          $llvmDir = if ($env:LLVM_CMAKE_DIR) { $env:LLVM_CMAKE_DIR } else { "C:\Program Files\LLVM" }
-          $env:LLVM_DIR = $llvmDir
+          # Set LLVM_DIR for CMake (both env var and -D parameter)
+          $env:LLVM_DIR = $llvmPath
           
-          Write-Host "Using LLVM from: $llvmDir" -ForegroundColor Cyan
+          Write-Host "Using LLVM from: $llvmPath" -ForegroundColor Cyan
+          Write-Host "Checking LLVM installation..." -ForegroundColor Cyan
+          
+          # Debug: Show what's in LLVM directory
+          if (Test-Path $llvmPath) {
+            Write-Host "LLVM directory contents:" -ForegroundColor Cyan
+            Get-ChildItem $llvmPath | ForEach-Object { Write-Host "  $($_.Name)" }
+            
+            if (Test-Path "$llvmPath\include") {
+              Write-Host "Include directory contents:" -ForegroundColor Cyan
+              Get-ChildItem "$llvmPath\include" | ForEach-Object { Write-Host "  $($_.Name)" }
+            }
+            
+            if (Test-Path "$llvmPath\lib") {
+              $libCount = (Get-ChildItem "$llvmPath\lib" -Filter "*.lib" | Measure-Object).Count
+              Write-Host "Found $libCount .lib files in lib directory" -ForegroundColor Cyan
+            }
+          }
           
           Write-Host "Configuring CMake with MSVC..." -ForegroundColor Cyan
           mkdir build-windows
           cd build-windows
-          cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$llvmPath"
           
           Write-Host "Building with MSVC..." -ForegroundColor Cyan
           cmake --build . --config Release -j

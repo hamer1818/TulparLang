@@ -2,42 +2,86 @@
 # This is a fallback module for Windows builds where LLVM is installed via Chocolatey
 
 if(WIN32)
-    # Try to find LLVM installation directory
-    set(LLVM_POSSIBLE_PATHS
-        "C:/Program Files/LLVM"
-        "C:/LLVM"
-        "$ENV{LLVM_DIR}"
-        "$ENV{LLVM_CMAKE_DIR}"
-    )
-    
-    foreach(LLVM_PATH ${LLVM_POSSIBLE_PATHS})
-        if(EXISTS "${LLVM_PATH}/include/llvm")
-            set(LLVM_ROOT "${LLVM_PATH}")
-            break()
+    # First check if LLVM_DIR was passed as a CMake variable
+    if(LLVM_DIR AND EXISTS "${LLVM_DIR}")
+        set(LLVM_ROOT "${LLVM_DIR}")
+        message(STATUS "FindLLVM: Using LLVM_DIR from CMake variable: ${LLVM_ROOT}")
+    else()
+        # Try to find LLVM installation directory from environment or standard paths
+        set(LLVM_POSSIBLE_PATHS
+            "$ENV{LLVM_DIR}"
+            "$ENV{LLVM_CMAKE_DIR}"
+            "C:/Program Files/LLVM"
+            "C:/LLVM"
+        )
+        
+        # Check multiple possible indicators that LLVM is installed
+        foreach(LLVM_PATH ${LLVM_POSSIBLE_PATHS})
+            if(LLVM_PATH AND EXISTS "${LLVM_PATH}")
+                # Check for any of these indicators
+                if(EXISTS "${LLVM_PATH}/include/llvm" OR 
+                   EXISTS "${LLVM_PATH}/include/llvm-c" OR
+                   EXISTS "${LLVM_PATH}/lib" OR
+                   EXISTS "${LLVM_PATH}/bin/clang.exe")
+                    set(LLVM_ROOT "${LLVM_PATH}")
+                    message(STATUS "FindLLVM: Found LLVM at ${LLVM_ROOT}")
+                    break()
+                endif()
+            endif()
+        endforeach()
+        
+        if(NOT LLVM_ROOT)
+            # Fallback: just use C:/Program Files/LLVM if it exists
+            if(EXISTS "C:/Program Files/LLVM")
+                set(LLVM_ROOT "C:/Program Files/LLVM")
+                message(STATUS "FindLLVM: Using default LLVM path: ${LLVM_ROOT}")
+            else()
+                message(STATUS "FindLLVM: Searched paths:")
+                foreach(LLVM_PATH ${LLVM_POSSIBLE_PATHS})
+                    message(STATUS "  - ${LLVM_PATH}")
+                endforeach()
+                message(FATAL_ERROR "Could not find LLVM installation. Please set LLVM_DIR environment variable.")
+            endif()
         endif()
-    endforeach()
-    
-    if(NOT LLVM_ROOT)
-        message(FATAL_ERROR "Could not find LLVM installation. Please set LLVM_DIR environment variable.")
     endif()
     
     # Set LLVM paths
     set(LLVM_INCLUDE_DIRS "${LLVM_ROOT}/include")
     set(LLVM_LIBRARY_DIRS "${LLVM_ROOT}/lib")
     
-    # Find LLVM version
-    if(EXISTS "${LLVM_INCLUDE_DIRS}/llvm/Config/llvm-config.h")
-        file(READ "${LLVM_INCLUDE_DIRS}/llvm/Config/llvm-config.h" LLVM_CONFIG_H)
-        string(REGEX MATCH "#define LLVM_VERSION_MAJOR ([0-9]+)" _ ${LLVM_CONFIG_H})
-        set(LLVM_VERSION_MAJOR ${CMAKE_MATCH_1})
-        string(REGEX MATCH "#define LLVM_VERSION_MINOR ([0-9]+)" _ ${LLVM_CONFIG_H})
-        set(LLVM_VERSION_MINOR ${CMAKE_MATCH_1})
-        string(REGEX MATCH "#define LLVM_VERSION_PATCH ([0-9]+)" _ ${LLVM_CONFIG_H})
-        set(LLVM_VERSION_PATCH ${CMAKE_MATCH_1})
-        set(LLVM_PACKAGE_VERSION "${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.${LLVM_VERSION_PATCH}")
-    else()
-        set(LLVM_PACKAGE_VERSION "Unknown")
+    message(STATUS "FindLLVM: LLVM_INCLUDE_DIRS = ${LLVM_INCLUDE_DIRS}")
+    message(STATUS "FindLLVM: LLVM_LIBRARY_DIRS = ${LLVM_LIBRARY_DIRS}")
+    
+    # List what's in the lib directory for debugging
+    if(EXISTS "${LLVM_LIBRARY_DIRS}")
+        file(GLOB LLVM_LIB_FILES "${LLVM_LIBRARY_DIRS}/*.lib")
+        list(LENGTH LLVM_LIB_FILES LLVM_LIB_COUNT)
+        message(STATUS "FindLLVM: Found ${LLVM_LIB_COUNT} .lib files in ${LLVM_LIBRARY_DIRS}")
     endif()
+    
+    # Find LLVM version from llvm-config.h or llvm/Config/llvm-config.h
+    set(LLVM_CONFIG_PATHS
+        "${LLVM_INCLUDE_DIRS}/llvm/Config/llvm-config.h"
+        "${LLVM_INCLUDE_DIRS}/llvm-c/llvm-config.h"
+    )
+    
+    set(LLVM_PACKAGE_VERSION "18.0.0")  # Default assumption
+    foreach(CONFIG_PATH ${LLVM_CONFIG_PATHS})
+        if(EXISTS "${CONFIG_PATH}")
+            file(READ "${CONFIG_PATH}" LLVM_CONFIG_H)
+            string(REGEX MATCH "#define LLVM_VERSION_MAJOR ([0-9]+)" _ ${LLVM_CONFIG_H})
+            if(CMAKE_MATCH_1)
+                set(LLVM_VERSION_MAJOR ${CMAKE_MATCH_1})
+                string(REGEX MATCH "#define LLVM_VERSION_MINOR ([0-9]+)" _ ${LLVM_CONFIG_H})
+                set(LLVM_VERSION_MINOR ${CMAKE_MATCH_1})
+                string(REGEX MATCH "#define LLVM_VERSION_PATCH ([0-9]+)" _ ${LLVM_CONFIG_H})
+                set(LLVM_VERSION_PATCH ${CMAKE_MATCH_1})
+                set(LLVM_PACKAGE_VERSION "${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.${LLVM_VERSION_PATCH}")
+                message(STATUS "FindLLVM: Detected LLVM version ${LLVM_PACKAGE_VERSION}")
+                break()
+            endif()
+        endif()
+    endforeach()
     
     # Find required LLVM libraries
     set(LLVM_REQUIRED_LIBS
