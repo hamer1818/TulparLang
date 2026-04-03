@@ -19,17 +19,15 @@
 #if PLATFORM_WINDOWS
   #include <winsock2.h>
   #include <ws2tcpip.h>
-  typedef SOCKET tulpar_socket_interp;
-  #define INVALID_SOCKET_INTERP INVALID_SOCKET
-  #define SOCKET_ERROR_INTERP SOCKET_ERROR
 #else
   #include <sys/socket.h>
   #include <netinet/in.h>
   #include <arpa/inet.h>
   #include <unistd.h>
-  typedef int tulpar_socket_interp;
-  #define INVALID_SOCKET_INTERP (-1)
-  #define SOCKET_ERROR_INTERP (-1)
+  // Define Windows socket constants for POSIX
+  #define INVALID_SOCKET (-1)
+  #define SOCKET_ERROR (-1)
+  typedef int SOCKET;
 #endif
 
 // Thread Arguments Structure
@@ -2215,8 +2213,8 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
 
     // socket_create(domain, type, protocol)
     if (strcmp(node->name, "socket_create") == 0) {
-      tulpar_socket_interp sock = socket(AF_INET, SOCK_STREAM, 0);
-      if (sock == INVALID_SOCKET_INTERP) {
+      SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+      if (sock == INVALID_SOCKET) {
         return value_create_int(-1);
       }
       return value_create_int((long long)sock);
@@ -2230,14 +2228,14 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
 
       if (sock_val->type == VAL_INT && host_val->type == VAL_STRING &&
           port_val->type == VAL_INT) {
-        tulpar_socket_interp sock = (tulpar_socket_interp)sock_val->data.int_val;
+        SOCKET sock = (SOCKET)sock_val->data.int_val;
         struct sockaddr_in server;
         server.sin_family = AF_INET;
         server.sin_addr.s_addr = inet_addr(host_val->data.string_val);
         server.sin_port = htons((unsigned short)port_val->data.int_val);
 
         if (bind(sock, (struct sockaddr *)&server, sizeof(server)) ==
-            SOCKET_ERROR_INTERP) {
+            SOCKET_ERROR) {
           value_free(sock_val);
           value_free(host_val);
           value_free(port_val);
@@ -2261,8 +2259,8 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
           interpreter_eval_expression(interp, node->arguments[1]);
 
       if (sock_val->type == VAL_INT && backlog_val->type == VAL_INT) {
-        tulpar_socket_interp sock = (tulpar_socket_interp)sock_val->data.int_val;
-        if (listen(sock, (int)backlog_val->data.int_val) == SOCKET_ERROR_INTERP) {
+        SOCKET sock = (SOCKET)sock_val->data.int_val;
+        if (listen(sock, (int)backlog_val->data.int_val) == SOCKET_ERROR) {
           value_free(sock_val);
           value_free(backlog_val);
           return value_create_int(-1);
@@ -2280,13 +2278,13 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
     if (strcmp(node->name, "socket_accept") == 0 && node->argument_count >= 1) {
       Value *sock_val = interpreter_eval_expression(interp, node->arguments[0]);
       if (sock_val->type == VAL_INT) {
-        tulpar_socket_interp sock = (tulpar_socket_interp)sock_val->data.int_val;
+        SOCKET sock = (SOCKET)sock_val->data.int_val;
         struct sockaddr_in client;
         socklen_t c = sizeof(struct sockaddr_in);
-        tulpar_socket_interp new_socket = accept(sock, (struct sockaddr *)&client, &c);
+        SOCKET new_socket = accept(sock, (struct sockaddr *)&client, &c);
 
         value_free(sock_val);
-        if (new_socket == INVALID_SOCKET_INTERP) {
+        if (new_socket == INVALID_SOCKET) {
           return value_create_int(-1);
         }
         return value_create_int((long long)new_socket);
@@ -2304,7 +2302,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
 
       if (sock_val->type == VAL_INT && host_val->type == VAL_STRING &&
           port_val->type == VAL_INT) {
-        tulpar_socket_interp sock = (tulpar_socket_interp)sock_val->data.int_val;
+        SOCKET sock = (SOCKET)sock_val->data.int_val;
         struct sockaddr_in server;
         server.sin_family = AF_INET;
         server.sin_addr.s_addr = inet_addr(host_val->data.string_val);
@@ -2333,7 +2331,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       Value *data_val = interpreter_eval_expression(interp, node->arguments[1]);
 
       if (sock_val->type == VAL_INT && data_val->type == VAL_STRING) {
-        tulpar_socket_interp sock = (tulpar_socket_interp)sock_val->data.int_val;
+        SOCKET sock = (SOCKET)sock_val->data.int_val;
         const char *msg = data_val->data.string_val;
         if (send(sock, msg, strlen(msg), 0) < 0) {
           value_free(sock_val);
@@ -2356,7 +2354,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       Value *size_val = interpreter_eval_expression(interp, node->arguments[1]);
 
       if (sock_val->type == VAL_INT && size_val->type == VAL_INT) {
-        tulpar_socket_interp sock = (tulpar_socket_interp)sock_val->data.int_val;
+        SOCKET sock = (SOCKET)sock_val->data.int_val;
         int size = (int)size_val->data.int_val;
         char *buffer = (char *)malloc(size + 1);
         int recv_size;
@@ -2398,8 +2396,8 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       Value *port_val = interpreter_eval_expression(interp, node->arguments[1]);
 
       if (host_val->type == VAL_STRING && port_val->type == VAL_INT) {
-        tulpar_socket_interp sock = socket(AF_INET, SOCK_STREAM, 0);
-        if (sock == INVALID_SOCKET_INTERP) {
+        SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock == INVALID_SOCKET) {
           value_free(host_val);
           value_free(port_val);
           return value_create_int(-1);
@@ -2415,14 +2413,14 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
         server.sin_port = htons((unsigned short)port_val->data.int_val);
 
         if (bind(sock, (struct sockaddr *)&server, sizeof(server)) ==
-            SOCKET_ERROR_INTERP) {
+            SOCKET_ERROR) {
           tulpar_socket_close(sock);
           value_free(host_val);
           value_free(port_val);
           return value_create_int(-1);
         }
 
-        if (listen(sock, 5) == SOCKET_ERROR_INTERP) {
+        if (listen(sock, 5) == SOCKET_ERROR) {
           tulpar_socket_close(sock);
           value_free(host_val);
           value_free(port_val);

@@ -293,491 +293,518 @@ runtime/cJSON.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/runtime/cJSON.c.s
 .PHONY : runtime/cJSON.c.s
 
-runtime/tulpar_arc.o: runtime/tulpar_arc.c.o
+runtime/tulpar_arc.o: runtime/tulpar_arc.cpp.o
 .PHONY : runtime/tulpar_arc.o
 
 # target to build an object file
-runtime/tulpar_arc.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_arc.c.o
-.PHONY : runtime/tulpar_arc.c.o
+runtime/tulpar_arc.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_arc.cpp.o
+.PHONY : runtime/tulpar_arc.cpp.o
 
-runtime/tulpar_arc.i: runtime/tulpar_arc.c.i
+runtime/tulpar_arc.i: runtime/tulpar_arc.cpp.i
 .PHONY : runtime/tulpar_arc.i
 
 # target to preprocess a source file
-runtime/tulpar_arc.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_arc.c.i
-.PHONY : runtime/tulpar_arc.c.i
+runtime/tulpar_arc.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_arc.cpp.i
+.PHONY : runtime/tulpar_arc.cpp.i
 
-runtime/tulpar_arc.s: runtime/tulpar_arc.c.s
+runtime/tulpar_arc.s: runtime/tulpar_arc.cpp.s
 .PHONY : runtime/tulpar_arc.s
 
 # target to generate assembly for a file
-runtime/tulpar_arc.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_arc.c.s
-.PHONY : runtime/tulpar_arc.c.s
+runtime/tulpar_arc.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_arc.cpp.s
+.PHONY : runtime/tulpar_arc.cpp.s
 
-runtime/tulpar_native.o: runtime/tulpar_native.c.o
+runtime/tulpar_native.o: runtime/tulpar_native.cpp.o
 .PHONY : runtime/tulpar_native.o
 
 # target to build an object file
-runtime/tulpar_native.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_native.c.o
-.PHONY : runtime/tulpar_native.c.o
+runtime/tulpar_native.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_native.cpp.o
+.PHONY : runtime/tulpar_native.cpp.o
 
-runtime/tulpar_native.i: runtime/tulpar_native.c.i
+runtime/tulpar_native.i: runtime/tulpar_native.cpp.i
 .PHONY : runtime/tulpar_native.i
 
 # target to preprocess a source file
-runtime/tulpar_native.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_native.c.i
-.PHONY : runtime/tulpar_native.c.i
+runtime/tulpar_native.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_native.cpp.i
+.PHONY : runtime/tulpar_native.cpp.i
 
-runtime/tulpar_native.s: runtime/tulpar_native.c.s
+runtime/tulpar_native.s: runtime/tulpar_native.cpp.s
 .PHONY : runtime/tulpar_native.s
 
 # target to generate assembly for a file
-runtime/tulpar_native.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_native.c.s
-.PHONY : runtime/tulpar_native.c.s
+runtime/tulpar_native.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/runtime/tulpar_native.cpp.s
+.PHONY : runtime/tulpar_native.cpp.s
 
-src/aot/aot_pipeline.o: src/aot/aot_pipeline.c.o
+src/aot/aot_pipeline.o: src/aot/aot_pipeline.cpp.o
 .PHONY : src/aot/aot_pipeline.o
 
 # target to build an object file
-src/aot/aot_pipeline.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/aot_pipeline.c.o
-.PHONY : src/aot/aot_pipeline.c.o
+src/aot/aot_pipeline.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/aot_pipeline.cpp.o
+.PHONY : src/aot/aot_pipeline.cpp.o
 
-src/aot/aot_pipeline.i: src/aot/aot_pipeline.c.i
+src/aot/aot_pipeline.i: src/aot/aot_pipeline.cpp.i
 .PHONY : src/aot/aot_pipeline.i
 
 # target to preprocess a source file
-src/aot/aot_pipeline.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/aot_pipeline.c.i
-.PHONY : src/aot/aot_pipeline.c.i
+src/aot/aot_pipeline.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/aot_pipeline.cpp.i
+.PHONY : src/aot/aot_pipeline.cpp.i
 
-src/aot/aot_pipeline.s: src/aot/aot_pipeline.c.s
+src/aot/aot_pipeline.s: src/aot/aot_pipeline.cpp.s
 .PHONY : src/aot/aot_pipeline.s
 
 # target to generate assembly for a file
-src/aot/aot_pipeline.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/aot_pipeline.c.s
-.PHONY : src/aot/aot_pipeline.c.s
+src/aot/aot_pipeline.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/aot_pipeline.cpp.s
+.PHONY : src/aot/aot_pipeline.cpp.s
 
-src/aot/llvm_backend.o: src/aot/llvm_backend.c.o
+src/aot/llvm_backend.o: src/aot/llvm_backend.cpp.o
 .PHONY : src/aot/llvm_backend.o
 
 # target to build an object file
-src/aot/llvm_backend.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_backend.c.o
-.PHONY : src/aot/llvm_backend.c.o
+src/aot/llvm_backend.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_backend.cpp.o
+.PHONY : src/aot/llvm_backend.cpp.o
 
-src/aot/llvm_backend.i: src/aot/llvm_backend.c.i
+src/aot/llvm_backend.i: src/aot/llvm_backend.cpp.i
 .PHONY : src/aot/llvm_backend.i
 
 # target to preprocess a source file
-src/aot/llvm_backend.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_backend.c.i
-.PHONY : src/aot/llvm_backend.c.i
+src/aot/llvm_backend.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_backend.cpp.i
+.PHONY : src/aot/llvm_backend.cpp.i
 
-src/aot/llvm_backend.s: src/aot/llvm_backend.c.s
+src/aot/llvm_backend.s: src/aot/llvm_backend.cpp.s
 .PHONY : src/aot/llvm_backend.s
 
 # target to generate assembly for a file
-src/aot/llvm_backend.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_backend.c.s
-.PHONY : src/aot/llvm_backend.c.s
+src/aot/llvm_backend.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_backend.cpp.s
+.PHONY : src/aot/llvm_backend.cpp.s
 
-src/aot/llvm_types.o: src/aot/llvm_types.c.o
+src/aot/llvm_types.o: src/aot/llvm_types.cpp.o
 .PHONY : src/aot/llvm_types.o
 
 # target to build an object file
-src/aot/llvm_types.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_types.c.o
-.PHONY : src/aot/llvm_types.c.o
+src/aot/llvm_types.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_types.cpp.o
+.PHONY : src/aot/llvm_types.cpp.o
 
-src/aot/llvm_types.i: src/aot/llvm_types.c.i
+src/aot/llvm_types.i: src/aot/llvm_types.cpp.i
 .PHONY : src/aot/llvm_types.i
 
 # target to preprocess a source file
-src/aot/llvm_types.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_types.c.i
-.PHONY : src/aot/llvm_types.c.i
+src/aot/llvm_types.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_types.cpp.i
+.PHONY : src/aot/llvm_types.cpp.i
 
-src/aot/llvm_types.s: src/aot/llvm_types.c.s
+src/aot/llvm_types.s: src/aot/llvm_types.cpp.s
 .PHONY : src/aot/llvm_types.s
 
 # target to generate assembly for a file
-src/aot/llvm_types.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_types.c.s
-.PHONY : src/aot/llvm_types.c.s
+src/aot/llvm_types.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_types.cpp.s
+.PHONY : src/aot/llvm_types.cpp.s
 
-src/aot/llvm_values.o: src/aot/llvm_values.c.o
+src/aot/llvm_values.o: src/aot/llvm_values.cpp.o
 .PHONY : src/aot/llvm_values.o
 
 # target to build an object file
-src/aot/llvm_values.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_values.c.o
-.PHONY : src/aot/llvm_values.c.o
+src/aot/llvm_values.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_values.cpp.o
+.PHONY : src/aot/llvm_values.cpp.o
 
-src/aot/llvm_values.i: src/aot/llvm_values.c.i
+src/aot/llvm_values.i: src/aot/llvm_values.cpp.i
 .PHONY : src/aot/llvm_values.i
 
 # target to preprocess a source file
-src/aot/llvm_values.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_values.c.i
-.PHONY : src/aot/llvm_values.c.i
+src/aot/llvm_values.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_values.cpp.i
+.PHONY : src/aot/llvm_values.cpp.i
 
-src/aot/llvm_values.s: src/aot/llvm_values.c.s
+src/aot/llvm_values.s: src/aot/llvm_values.cpp.s
 .PHONY : src/aot/llvm_values.s
 
 # target to generate assembly for a file
-src/aot/llvm_values.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_values.c.s
-.PHONY : src/aot/llvm_values.c.s
+src/aot/llvm_values.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/aot/llvm_values.cpp.s
+.PHONY : src/aot/llvm_values.cpp.s
 
-src/interpreter/interpreter.o: src/interpreter/interpreter.c.o
+src/common/localization.o: src/common/localization.cpp.o
+.PHONY : src/common/localization.o
+
+# target to build an object file
+src/common/localization.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/common/localization.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/common/localization.cpp.o
+.PHONY : src/common/localization.cpp.o
+
+src/common/localization.i: src/common/localization.cpp.i
+.PHONY : src/common/localization.i
+
+# target to preprocess a source file
+src/common/localization.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/common/localization.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/common/localization.cpp.i
+.PHONY : src/common/localization.cpp.i
+
+src/common/localization.s: src/common/localization.cpp.s
+.PHONY : src/common/localization.s
+
+# target to generate assembly for a file
+src/common/localization.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/common/localization.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/common/localization.cpp.s
+.PHONY : src/common/localization.cpp.s
+
+src/interpreter/interpreter.o: src/interpreter/interpreter.cpp.o
 .PHONY : src/interpreter/interpreter.o
 
 # target to build an object file
-src/interpreter/interpreter.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/interpreter/interpreter.c.o
-.PHONY : src/interpreter/interpreter.c.o
+src/interpreter/interpreter.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/interpreter/interpreter.cpp.o
+.PHONY : src/interpreter/interpreter.cpp.o
 
-src/interpreter/interpreter.i: src/interpreter/interpreter.c.i
+src/interpreter/interpreter.i: src/interpreter/interpreter.cpp.i
 .PHONY : src/interpreter/interpreter.i
 
 # target to preprocess a source file
-src/interpreter/interpreter.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/interpreter/interpreter.c.i
-.PHONY : src/interpreter/interpreter.c.i
+src/interpreter/interpreter.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/interpreter/interpreter.cpp.i
+.PHONY : src/interpreter/interpreter.cpp.i
 
-src/interpreter/interpreter.s: src/interpreter/interpreter.c.s
+src/interpreter/interpreter.s: src/interpreter/interpreter.cpp.s
 .PHONY : src/interpreter/interpreter.s
 
 # target to generate assembly for a file
-src/interpreter/interpreter.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/interpreter/interpreter.c.s
-.PHONY : src/interpreter/interpreter.c.s
+src/interpreter/interpreter.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/interpreter/interpreter.cpp.s
+.PHONY : src/interpreter/interpreter.cpp.s
 
-src/jit/jit_compiler.o: src/jit/jit_compiler.c.o
+src/jit/jit_compiler.o: src/jit/jit_compiler.cpp.o
 .PHONY : src/jit/jit_compiler.o
 
 # target to build an object file
-src/jit/jit_compiler.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_compiler.c.o
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_compiler.c.o
-.PHONY : src/jit/jit_compiler.c.o
+src/jit/jit_compiler.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_compiler.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_compiler.cpp.o
+.PHONY : src/jit/jit_compiler.cpp.o
 
-src/jit/jit_compiler.i: src/jit/jit_compiler.c.i
+src/jit/jit_compiler.i: src/jit/jit_compiler.cpp.i
 .PHONY : src/jit/jit_compiler.i
 
 # target to preprocess a source file
-src/jit/jit_compiler.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_compiler.c.i
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_compiler.c.i
-.PHONY : src/jit/jit_compiler.c.i
+src/jit/jit_compiler.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_compiler.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_compiler.cpp.i
+.PHONY : src/jit/jit_compiler.cpp.i
 
-src/jit/jit_compiler.s: src/jit/jit_compiler.c.s
+src/jit/jit_compiler.s: src/jit/jit_compiler.cpp.s
 .PHONY : src/jit/jit_compiler.s
 
 # target to generate assembly for a file
-src/jit/jit_compiler.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_compiler.c.s
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_compiler.c.s
-.PHONY : src/jit/jit_compiler.c.s
+src/jit/jit_compiler.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_compiler.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_compiler.cpp.s
+.PHONY : src/jit/jit_compiler.cpp.s
 
-src/jit/jit_memory.o: src/jit/jit_memory.c.o
+src/jit/jit_memory.o: src/jit/jit_memory.cpp.o
 .PHONY : src/jit/jit_memory.o
 
 # target to build an object file
-src/jit/jit_memory.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_memory.c.o
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_memory.c.o
-.PHONY : src/jit/jit_memory.c.o
+src/jit/jit_memory.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_memory.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_memory.cpp.o
+.PHONY : src/jit/jit_memory.cpp.o
 
-src/jit/jit_memory.i: src/jit/jit_memory.c.i
+src/jit/jit_memory.i: src/jit/jit_memory.cpp.i
 .PHONY : src/jit/jit_memory.i
 
 # target to preprocess a source file
-src/jit/jit_memory.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_memory.c.i
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_memory.c.i
-.PHONY : src/jit/jit_memory.c.i
+src/jit/jit_memory.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_memory.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_memory.cpp.i
+.PHONY : src/jit/jit_memory.cpp.i
 
-src/jit/jit_memory.s: src/jit/jit_memory.c.s
+src/jit/jit_memory.s: src/jit/jit_memory.cpp.s
 .PHONY : src/jit/jit_memory.s
 
 # target to generate assembly for a file
-src/jit/jit_memory.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_memory.c.s
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_memory.c.s
-.PHONY : src/jit/jit_memory.c.s
+src/jit/jit_memory.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_memory.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_memory.cpp.s
+.PHONY : src/jit/jit_memory.cpp.s
 
-src/jit/jit_optimize.o: src/jit/jit_optimize.c.o
+src/jit/jit_optimize.o: src/jit/jit_optimize.cpp.o
 .PHONY : src/jit/jit_optimize.o
 
 # target to build an object file
-src/jit/jit_optimize.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_optimize.c.o
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_optimize.c.o
-.PHONY : src/jit/jit_optimize.c.o
+src/jit/jit_optimize.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_optimize.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_optimize.cpp.o
+.PHONY : src/jit/jit_optimize.cpp.o
 
-src/jit/jit_optimize.i: src/jit/jit_optimize.c.i
+src/jit/jit_optimize.i: src/jit/jit_optimize.cpp.i
 .PHONY : src/jit/jit_optimize.i
 
 # target to preprocess a source file
-src/jit/jit_optimize.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_optimize.c.i
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_optimize.c.i
-.PHONY : src/jit/jit_optimize.c.i
+src/jit/jit_optimize.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_optimize.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_optimize.cpp.i
+.PHONY : src/jit/jit_optimize.cpp.i
 
-src/jit/jit_optimize.s: src/jit/jit_optimize.c.s
+src/jit/jit_optimize.s: src/jit/jit_optimize.cpp.s
 .PHONY : src/jit/jit_optimize.s
 
 # target to generate assembly for a file
-src/jit/jit_optimize.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_optimize.c.s
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_optimize.c.s
-.PHONY : src/jit/jit_optimize.c.s
+src/jit/jit_optimize.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/jit_optimize.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/jit_optimize.cpp.s
+.PHONY : src/jit/jit_optimize.cpp.s
 
-src/jit/x64_emit.o: src/jit/x64_emit.c.o
+src/jit/x64_emit.o: src/jit/x64_emit.cpp.o
 .PHONY : src/jit/x64_emit.o
 
 # target to build an object file
-src/jit/x64_emit.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/x64_emit.c.o
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/x64_emit.c.o
-.PHONY : src/jit/x64_emit.c.o
+src/jit/x64_emit.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/x64_emit.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/x64_emit.cpp.o
+.PHONY : src/jit/x64_emit.cpp.o
 
-src/jit/x64_emit.i: src/jit/x64_emit.c.i
+src/jit/x64_emit.i: src/jit/x64_emit.cpp.i
 .PHONY : src/jit/x64_emit.i
 
 # target to preprocess a source file
-src/jit/x64_emit.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/x64_emit.c.i
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/x64_emit.c.i
-.PHONY : src/jit/x64_emit.c.i
+src/jit/x64_emit.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/x64_emit.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/x64_emit.cpp.i
+.PHONY : src/jit/x64_emit.cpp.i
 
-src/jit/x64_emit.s: src/jit/x64_emit.c.s
+src/jit/x64_emit.s: src/jit/x64_emit.cpp.s
 .PHONY : src/jit/x64_emit.s
 
 # target to generate assembly for a file
-src/jit/x64_emit.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/x64_emit.c.s
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/x64_emit.c.s
-.PHONY : src/jit/x64_emit.c.s
+src/jit/x64_emit.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/jit/x64_emit.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/jit/x64_emit.cpp.s
+.PHONY : src/jit/x64_emit.cpp.s
 
-src/lexer/lexer.o: src/lexer/lexer.c.o
+src/lexer/lexer.o: src/lexer/lexer.cpp.o
 .PHONY : src/lexer/lexer.o
 
 # target to build an object file
-src/lexer/lexer.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/lexer/lexer.c.o
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/lexer/lexer.c.o
-.PHONY : src/lexer/lexer.c.o
+src/lexer/lexer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/lexer/lexer.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/lexer/lexer.cpp.o
+.PHONY : src/lexer/lexer.cpp.o
 
-src/lexer/lexer.i: src/lexer/lexer.c.i
+src/lexer/lexer.i: src/lexer/lexer.cpp.i
 .PHONY : src/lexer/lexer.i
 
 # target to preprocess a source file
-src/lexer/lexer.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/lexer/lexer.c.i
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/lexer/lexer.c.i
-.PHONY : src/lexer/lexer.c.i
+src/lexer/lexer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/lexer/lexer.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/lexer/lexer.cpp.i
+.PHONY : src/lexer/lexer.cpp.i
 
-src/lexer/lexer.s: src/lexer/lexer.c.s
+src/lexer/lexer.s: src/lexer/lexer.cpp.s
 .PHONY : src/lexer/lexer.s
 
 # target to generate assembly for a file
-src/lexer/lexer.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/lexer/lexer.c.s
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/lexer/lexer.c.s
-.PHONY : src/lexer/lexer.c.s
+src/lexer/lexer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/lexer/lexer.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/lexer/lexer.cpp.s
+.PHONY : src/lexer/lexer.cpp.s
 
-src/main.o: src/main.c.o
+src/main.o: src/main.cpp.o
 .PHONY : src/main.o
 
 # target to build an object file
-src/main.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/main.c.o
-.PHONY : src/main.c.o
+src/main.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/main.cpp.o
+.PHONY : src/main.cpp.o
 
-src/main.i: src/main.c.i
+src/main.i: src/main.cpp.i
 .PHONY : src/main.i
 
 # target to preprocess a source file
-src/main.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/main.c.i
-.PHONY : src/main.c.i
+src/main.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/main.cpp.i
+.PHONY : src/main.cpp.i
 
-src/main.s: src/main.c.s
+src/main.s: src/main.cpp.s
 .PHONY : src/main.s
 
 # target to generate assembly for a file
-src/main.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/main.c.s
-.PHONY : src/main.c.s
+src/main.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/main.cpp.s
+.PHONY : src/main.cpp.s
 
-src/parser/parser.o: src/parser/parser.c.o
+src/parser/parser.o: src/parser/parser.cpp.o
 .PHONY : src/parser/parser.o
 
 # target to build an object file
-src/parser/parser.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/parser/parser.c.o
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/parser/parser.c.o
-.PHONY : src/parser/parser.c.o
+src/parser/parser.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/parser/parser.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/parser/parser.cpp.o
+.PHONY : src/parser/parser.cpp.o
 
-src/parser/parser.i: src/parser/parser.c.i
+src/parser/parser.i: src/parser/parser.cpp.i
 .PHONY : src/parser/parser.i
 
 # target to preprocess a source file
-src/parser/parser.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/parser/parser.c.i
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/parser/parser.c.i
-.PHONY : src/parser/parser.c.i
+src/parser/parser.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/parser/parser.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/parser/parser.cpp.i
+.PHONY : src/parser/parser.cpp.i
 
-src/parser/parser.s: src/parser/parser.c.s
+src/parser/parser.s: src/parser/parser.cpp.s
 .PHONY : src/parser/parser.s
 
 # target to generate assembly for a file
-src/parser/parser.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/parser/parser.c.s
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/parser/parser.c.s
-.PHONY : src/parser/parser.c.s
+src/parser/parser.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/parser/parser.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/parser/parser.cpp.s
+.PHONY : src/parser/parser.cpp.s
 
-src/typeinfer/typeinfer.o: src/typeinfer/typeinfer.c.o
+src/typeinfer/typeinfer.o: src/typeinfer/typeinfer.cpp.o
 .PHONY : src/typeinfer/typeinfer.o
 
 # target to build an object file
-src/typeinfer/typeinfer.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/typeinfer/typeinfer.c.o
-.PHONY : src/typeinfer/typeinfer.c.o
+src/typeinfer/typeinfer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/typeinfer/typeinfer.cpp.o
+.PHONY : src/typeinfer/typeinfer.cpp.o
 
-src/typeinfer/typeinfer.i: src/typeinfer/typeinfer.c.i
+src/typeinfer/typeinfer.i: src/typeinfer/typeinfer.cpp.i
 .PHONY : src/typeinfer/typeinfer.i
 
 # target to preprocess a source file
-src/typeinfer/typeinfer.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/typeinfer/typeinfer.c.i
-.PHONY : src/typeinfer/typeinfer.c.i
+src/typeinfer/typeinfer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/typeinfer/typeinfer.cpp.i
+.PHONY : src/typeinfer/typeinfer.cpp.i
 
-src/typeinfer/typeinfer.s: src/typeinfer/typeinfer.c.s
+src/typeinfer/typeinfer.s: src/typeinfer/typeinfer.cpp.s
 .PHONY : src/typeinfer/typeinfer.s
 
 # target to generate assembly for a file
-src/typeinfer/typeinfer.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/typeinfer/typeinfer.c.s
-.PHONY : src/typeinfer/typeinfer.c.s
+src/typeinfer/typeinfer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/typeinfer/typeinfer.cpp.s
+.PHONY : src/typeinfer/typeinfer.cpp.s
 
-src/vm/bytecode.o: src/vm/bytecode.c.o
+src/vm/bytecode.o: src/vm/bytecode.cpp.o
 .PHONY : src/vm/bytecode.o
 
 # target to build an object file
-src/vm/bytecode.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/bytecode.c.o
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/bytecode.c.o
-.PHONY : src/vm/bytecode.c.o
+src/vm/bytecode.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/bytecode.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/bytecode.cpp.o
+.PHONY : src/vm/bytecode.cpp.o
 
-src/vm/bytecode.i: src/vm/bytecode.c.i
+src/vm/bytecode.i: src/vm/bytecode.cpp.i
 .PHONY : src/vm/bytecode.i
 
 # target to preprocess a source file
-src/vm/bytecode.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/bytecode.c.i
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/bytecode.c.i
-.PHONY : src/vm/bytecode.c.i
+src/vm/bytecode.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/bytecode.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/bytecode.cpp.i
+.PHONY : src/vm/bytecode.cpp.i
 
-src/vm/bytecode.s: src/vm/bytecode.c.s
+src/vm/bytecode.s: src/vm/bytecode.cpp.s
 .PHONY : src/vm/bytecode.s
 
 # target to generate assembly for a file
-src/vm/bytecode.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/bytecode.c.s
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/bytecode.c.s
-.PHONY : src/vm/bytecode.c.s
+src/vm/bytecode.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/bytecode.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/bytecode.cpp.s
+.PHONY : src/vm/bytecode.cpp.s
 
-src/vm/compiler.o: src/vm/compiler.c.o
+src/vm/compiler.o: src/vm/compiler.cpp.o
 .PHONY : src/vm/compiler.o
 
 # target to build an object file
-src/vm/compiler.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/compiler.c.o
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/compiler.c.o
-.PHONY : src/vm/compiler.c.o
+src/vm/compiler.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/compiler.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/compiler.cpp.o
+.PHONY : src/vm/compiler.cpp.o
 
-src/vm/compiler.i: src/vm/compiler.c.i
+src/vm/compiler.i: src/vm/compiler.cpp.i
 .PHONY : src/vm/compiler.i
 
 # target to preprocess a source file
-src/vm/compiler.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/compiler.c.i
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/compiler.c.i
-.PHONY : src/vm/compiler.c.i
+src/vm/compiler.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/compiler.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/compiler.cpp.i
+.PHONY : src/vm/compiler.cpp.i
 
-src/vm/compiler.s: src/vm/compiler.c.s
+src/vm/compiler.s: src/vm/compiler.cpp.s
 .PHONY : src/vm/compiler.s
 
 # target to generate assembly for a file
-src/vm/compiler.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/compiler.c.s
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/compiler.c.s
-.PHONY : src/vm/compiler.c.s
+src/vm/compiler.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/compiler.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/compiler.cpp.s
+.PHONY : src/vm/compiler.cpp.s
 
-src/vm/runtime_bindings.o: src/vm/runtime_bindings.c.o
+src/vm/runtime_bindings.o: src/vm/runtime_bindings.cpp.o
 .PHONY : src/vm/runtime_bindings.o
 
 # target to build an object file
-src/vm/runtime_bindings.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/runtime_bindings.c.o
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/runtime_bindings.c.o
-.PHONY : src/vm/runtime_bindings.c.o
+src/vm/runtime_bindings.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/runtime_bindings.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/runtime_bindings.cpp.o
+.PHONY : src/vm/runtime_bindings.cpp.o
 
-src/vm/runtime_bindings.i: src/vm/runtime_bindings.c.i
+src/vm/runtime_bindings.i: src/vm/runtime_bindings.cpp.i
 .PHONY : src/vm/runtime_bindings.i
 
 # target to preprocess a source file
-src/vm/runtime_bindings.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/runtime_bindings.c.i
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/runtime_bindings.c.i
-.PHONY : src/vm/runtime_bindings.c.i
+src/vm/runtime_bindings.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/runtime_bindings.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/runtime_bindings.cpp.i
+.PHONY : src/vm/runtime_bindings.cpp.i
 
-src/vm/runtime_bindings.s: src/vm/runtime_bindings.c.s
+src/vm/runtime_bindings.s: src/vm/runtime_bindings.cpp.s
 .PHONY : src/vm/runtime_bindings.s
 
 # target to generate assembly for a file
-src/vm/runtime_bindings.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/runtime_bindings.c.s
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/runtime_bindings.c.s
-.PHONY : src/vm/runtime_bindings.c.s
+src/vm/runtime_bindings.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/runtime_bindings.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/runtime_bindings.cpp.s
+.PHONY : src/vm/runtime_bindings.cpp.s
 
-src/vm/vm.o: src/vm/vm.c.o
+src/vm/vm.o: src/vm/vm.cpp.o
 .PHONY : src/vm/vm.o
 
 # target to build an object file
-src/vm/vm.c.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/vm.c.o
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/vm.c.o
-.PHONY : src/vm/vm.c.o
+src/vm/vm.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/vm.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/vm.cpp.o
+.PHONY : src/vm/vm.cpp.o
 
-src/vm/vm.i: src/vm/vm.c.i
+src/vm/vm.i: src/vm/vm.cpp.i
 .PHONY : src/vm/vm.i
 
 # target to preprocess a source file
-src/vm/vm.c.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/vm.c.i
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/vm.c.i
-.PHONY : src/vm/vm.c.i
+src/vm/vm.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/vm.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/vm.cpp.i
+.PHONY : src/vm/vm.cpp.i
 
-src/vm/vm.s: src/vm/vm.c.s
+src/vm/vm.s: src/vm/vm.cpp.s
 .PHONY : src/vm/vm.s
 
 # target to generate assembly for a file
-src/vm/vm.c.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/vm.c.s
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/vm.c.s
-.PHONY : src/vm/vm.c.s
+src/vm/vm.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar.dir/build.make CMakeFiles/tulpar.dir/src/vm/vm.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/tulpar_runtime.dir/build.make CMakeFiles/tulpar_runtime.dir/src/vm/vm.cpp.s
+.PHONY : src/vm/vm.cpp.s
 
 # Help Target
 help:
@@ -821,6 +848,9 @@ help:
 	@echo "... src/aot/llvm_values.o"
 	@echo "... src/aot/llvm_values.i"
 	@echo "... src/aot/llvm_values.s"
+	@echo "... src/common/localization.o"
+	@echo "... src/common/localization.i"
+	@echo "... src/common/localization.s"
 	@echo "... src/interpreter/interpreter.o"
 	@echo "... src/interpreter/interpreter.i"
 	@echo "... src/interpreter/interpreter.s"

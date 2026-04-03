@@ -2214,7 +2214,17 @@ VMValue aot_http_create_response(VMValue statusVal, VMValue contentTypeVal,
 // ============================================================================
 // Math Functions (AOT) - Using libm
 // ============================================================================
+
+// Close extern "C" block before including cmath (C++ header)
+#ifdef __cplusplus
+}
+#endif
+
 #include <cmath>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 void aot_math_abs(VMValue *result, VMValue *v_ptr) {
   VMValue v = *v_ptr;
