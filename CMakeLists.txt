@@ -200,8 +200,24 @@ add_library(tulpar_runtime STATIC
 target_include_directories(tulpar_runtime PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_compile_definitions(tulpar_runtime PRIVATE TULPAR_RUNTIME_ONLY)
 
+# Windows-specific settings for runtime
+if(WIN32 AND MSVC)
+    target_compile_options(tulpar_runtime PRIVATE 
+        /utf-8
+        /W3
+        /wd4996
+        /wd4244
+        /wd4267
+    )
+    target_compile_definitions(tulpar_runtime PRIVATE 
+        _CRT_SECURE_NO_WARNINGS
+        _WINSOCK_DEPRECATED_NO_WARNINGS
+        PLATFORM_WINDOWS
+    )
+endif()
+
 # ============================================
-# Platform-specific settings (Linux & macOS only)
+# Platform-specific settings
 # ============================================
 if(APPLE)
     message(STATUS "Configuring for macOS")
@@ -215,8 +231,32 @@ elseif(UNIX)
     message(STATUS "Configuring for Linux")
     target_compile_definitions(tulpar PRIVATE PLATFORM_LINUX)
     target_link_libraries(tulpar m pthread dl)
+elseif(WIN32)
+    message(STATUS "Configuring for Windows (MSVC)")
+    target_compile_definitions(tulpar PRIVATE PLATFORM_WINDOWS)
+    
+    # Winsock2 for networking
+    target_link_libraries(tulpar ws2_32 wsock32)
+    
+    # UTF-8 console support
+    if(MSVC)
+        target_compile_options(tulpar PRIVATE 
+            /utf-8           # UTF-8 source files
+            /W3              # Warning level 3
+            /wd4996          # Disable deprecated function warnings
+            /wd4244          # Disable conversion warnings
+            /wd4267          # Disable size_t conversion warnings
+            /EHsc            # Exception handling model
+        )
+        
+        # Disable "unsafe" CRT warnings for standard C functions
+        target_compile_definitions(tulpar PRIVATE 
+            _CRT_SECURE_NO_WARNINGS
+            _WINSOCK_DEPRECATED_NO_WARNINGS
+        )
+    endif()
 else()
-    message(FATAL_ERROR "Unsupported platform. TulparLang only supports Linux and macOS. Windows users should use WSL.")
+    message(FATAL_ERROR "Unsupported platform. TulparLang supports Linux, macOS, and Windows.")
 endif()
 
 # ============================================

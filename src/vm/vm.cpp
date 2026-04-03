@@ -1,13 +1,11 @@
 #ifndef TULPAR_WASM_BUILD
-#include <arpa/inet.h>
+#include "../common/platform_sockets.h"
 #include <errno.h>
-#include <netinet/in.h>
-#include <sys/select.h>
-#include <sys/socket.h>
 #include <ctime>
-#include <unistd.h>
 
-#define closesocket(s) close(s)
+#if !PLATFORM_WINDOWS
+#include <sys/select.h>
+#endif
 #endif // TULPAR_WASM_BUILD
 #ifndef TULPAR_WASM_BUILD
 #include "../../lib/sqlite3/sqlite3.h"
@@ -475,6 +473,15 @@ ObjFunction *vm_new_function(VM *vm) {
 // ============================================================================
 
 VM *vm_create() {
+  // Initialize sockets on Windows (first time only)
+#ifndef TULPAR_WASM_BUILD
+  static int sockets_initialized = 0;
+  if (!sockets_initialized) {
+    tulpar_socket_init();
+    sockets_initialized = 1;
+  }
+#endif
+
   VM *vm = static_cast<VM*>(malloc(sizeof(VM)));
 
   vm->frame_count = 0;
@@ -1466,12 +1473,12 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
             if (bind(server_fd, (struct sockaddr *)&server_addr,
                      sizeof(server_addr)) < 0) {
               printf(tulpar::i18n::tr_for_en("Bind error: %d\n"), errno);
-              closesocket(server_fd);
+              tulpar_socket_close(server_fd);
               vm_push(vm, VM_INT(-1));
             } else {
               if (listen(server_fd, 5) < 0) {
                 printf(tulpar::i18n::tr_for_en("Listen error: %d\n"), errno);
-                closesocket(server_fd);
+                tulpar_socket_close(server_fd);
                 vm_push(vm, VM_INT(-1));
               } else {
                 vm_push(vm, VM_INT((long long)server_fd));
@@ -2103,13 +2110,13 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           addr.sin_addr.s_addr = inet_addr(AS_STRING(hostVal)->chars);
 
           if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
-            closesocket(server_fd);
+            tulpar_socket_close(server_fd);
             vm_push(vm, VM_INT(-1));
             break;
           }
 
           if (listen(server_fd, 5) == -1) {
-            closesocket(server_fd);
+            tulpar_socket_close(server_fd);
             vm_push(vm, VM_INT(-1));
             break;
           }
@@ -2139,7 +2146,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           addr.sin_addr.s_addr = inet_addr(AS_STRING(hostVal)->chars);
 
           if (connect(client_fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
-            closesocket(client_fd);
+            tulpar_socket_close(client_fd);
             vm_push(vm, VM_INT(-1));
             break;
           }

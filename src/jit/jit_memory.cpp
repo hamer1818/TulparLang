@@ -4,16 +4,42 @@
 
 #include "jit.hpp"
 #include "../common/localization.hpp"
+#include "../common/platform.h"
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
-#include <sys/mman.h>
-#include <unistd.h>
+
+#if PLATFORM_WINDOWS
+    #include <windows.h>
+#else
+    #include <sys/mman.h>
+    #include <unistd.h>
+#endif
 
 // ============================================================================
 // PLATFORM-SPECIFIC MEMORY ALLOCATION
 // ============================================================================
 
+#if PLATFORM_WINDOWS
+// Windows: Use VirtualAlloc for executable memory
+static void *alloc_executable_memory(size_t size) {
+    void *ptr = VirtualAlloc(nullptr, size,
+                            MEM_COMMIT | MEM_RESERVE,
+                            PAGE_READWRITE);
+    return ptr;
+}
+
+static void free_executable_memory(void *ptr, size_t size) {
+    (void)size; // Unused on Windows
+    VirtualFree(ptr, 0, MEM_RELEASE);
+}
+
+static int make_memory_executable(void *ptr, size_t size) {
+    DWORD old_protect;
+    return VirtualProtect(ptr, size, PAGE_EXECUTE_READ, &old_protect) ? 1 : 0;
+}
+
+#else
 // Unix/Linux/macOS: Use mmap for executable memory
 static void *alloc_executable_memory(size_t size) {
     void *ptr = mmap(nullptr, size,
@@ -30,6 +56,7 @@ static void free_executable_memory(void *ptr, size_t size) {
 static int make_memory_executable(void *ptr, size_t size) {
     return mprotect(ptr, size, PROT_READ | PROT_EXEC) == 0;
 }
+#endif
 
 // ============================================================================
 // JIT CODE BUFFER IMPLEMENTATION

@@ -1,6 +1,7 @@
 #include "../../runtime/cJSON.h"
 #include "../lexer/lexer.hpp"
 #include "../common/localization.hpp"
+#include "../common/platform_dl.h"
 #include "vm.hpp"
 
 #define TYPE_BOOL_BOOL ((VM_VAL_BOOL << 4) | VM_VAL_BOOL)
@@ -13,9 +14,11 @@
 #include <cstdlib>
 #include <cstring>
 
-#include <dlfcn.h>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
-// ============================================================================
 // EXTERN "C" BLOCK - AOT Runtime Functions (called from LLVM compiled code)
 // ============================================================================
 
@@ -70,9 +73,10 @@ VMValue aot_call_dynamic(VMValue func_name) {
 
   void (*func_ptr)(VMValue *) = nullptr;
 
-  func_ptr = (void (*)(VMValue *))dlsym(RTLD_DEFAULT, name);
+  // Try to find the function in the current process using platform abstraction
+  func_ptr = (void (*)(VMValue *))tulpar_dlsym(TULPAR_RTLD_DEFAULT, name);
   if (!func_ptr) {
-    func_ptr = (void (*)(VMValue *))dlsym(RTLD_DEFAULT, original_name);
+    func_ptr = (void (*)(VMValue *))tulpar_dlsym(TULPAR_RTLD_DEFAULT, original_name);
   }
 
   if (!func_ptr) {
@@ -80,6 +84,10 @@ VMValue aot_call_dynamic(VMValue func_name) {
            tulpar::i18n::tr_en("Calisma Zamani Hatasi: Fonksiyon bulunamadi",
                                "Runtime Error: Function not found"),
            name);
+    const char *error = tulpar_dlerror();
+    if (error) {
+      printf("  Detail: %s\n", error);
+    }
     return VM_VOID();
   }
 

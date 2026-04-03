@@ -5,7 +5,7 @@
 [![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/hamer1818/OLang/releases)
 [![Build](https://github.com/hamer1818/OLang/actions/workflows/build.yml/badge.svg)](https://github.com/hamer1818/OLang/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux%20|%20macOS-lightgrey.svg)]()
+[![Platform](https://img.shields.io/badge/platform-Linux%20|%20macOS%20|%20Windows-lightgrey.svg)]()
 [![C Source](https://img.shields.io/badge/source-~32K%20lines-orange.svg)]()
 
 A statically-typed programming language with LLVM backend, JIT compiler, UTF-8 support, and native JSON syntax.
@@ -26,7 +26,7 @@ TulparLang is a modern programming language built in C with an LLVM-18 backend f
 - x64 JIT compiler
 - WebAssembly (WASM) target support
 - Automatic Reference Counting (ARC) memory management
-- Cross-platform (Linux, macOS; Windows via WSL)
+- Cross-platform (Linux, macOS, Windows with native MSVC support)
 
 ## Codebase Statistics
 
@@ -77,11 +77,37 @@ make
 ./build.sh
 ```
 
-### Windows (via WSL)
+### Windows (Native Build)
 
-Windows users should use [WSL (Windows Subsystem for Linux)](https://learn.microsoft.com/en-us/windows/wsl/install) to build and run TulparLang:
+**Prerequisites:**
+- Visual Studio 2019/2022 with "Desktop development with C++" workload
+- CMake 3.14+ ([Download](https://cmake.org/download/))
+- LLVM 18+ for Windows ([Download](https://github.com/llvm/llvm-project/releases))
+
+**Build:**
+
+```batch
+# Using batch script
+build.bat
+
+# Or using PowerShell
+.\build.ps1
+
+# Or using CMake directly
+mkdir build-windows
+cd build-windows
+cmake .. -G "Visual Studio 17 2022" -A x64
+cmake --build . --config Release
+```
+
+**Alternative: WSL (if needed)**
+
+Windows users can also use WSL (Windows Subsystem for Linux):
 
 ```bash
+# Install WSL
+wsl --install
+
 # Inside WSL (Ubuntu):
 sudo apt-get install build-essential cmake llvm-18-dev
 cd /mnt/c/path/to/OLang
