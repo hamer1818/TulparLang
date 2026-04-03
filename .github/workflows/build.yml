@@ -91,32 +91,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Cache LLVM
-        id: cache-llvm
-        uses: actions/cache@v4
-        with:
-          path: C:\Program Files\LLVM
-          key: llvm-18.1.8-windows-x64
-      
-      - name: Setup LLVM
-        if: steps.cache-llvm.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          Write-Host "Installing LLVM via Chocolatey..." -ForegroundColor Cyan
-          choco install llvm --version=18.1.8 -y --no-progress
-          Write-Host "LLVM installation complete" -ForegroundColor Green
-      
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
       
       - name: Build with LLVM
         shell: pwsh
         run: |
+          # Use pre-installed LLVM on GitHub Actions runner
           $llvmPath = "C:\Program Files\LLVM"
           $env:PATH = "$llvmPath\bin;$env:PATH"
           $env:LLVM_DIR = $llvmPath
           
           Write-Host "Using LLVM from: $llvmPath" -ForegroundColor Cyan
+          & clang --version
           
           mkdir build-windows
           cd build-windows
