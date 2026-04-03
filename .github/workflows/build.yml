@@ -91,57 +91,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      - name: Cache LLVM
+        id: cache-llvm
+        uses: actions/cache@v4
+        with:
+          path: C:\Program Files\LLVM
+          key: llvm-18.1.8-windows-x64
+      
       - name: Setup LLVM
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          Write-Host "Setting up LLVM for Windows build..." -ForegroundColor Cyan
-          
-          # Download LLVM 18.1.8 release from GitHub
-          $llvmVersion = "18.1.8"
-          $llvmUrl = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$llvmVersion/LLVM-$llvmVersion-win64.exe"
-          $installerPath = "$env:TEMP\LLVM-$llvmVersion-win64.exe"
-          $llvmPath = "C:\Program Files\LLVM"
-          
-          # Remove existing LLVM if present
-          if (Test-Path $llvmPath) {
-            Write-Host "Removing existing LLVM installation..." -ForegroundColor Yellow
-            Remove-Item -Recurse -Force $llvmPath -ErrorAction SilentlyContinue
-          }
-          
-          # Download LLVM installer
-          Write-Host "Downloading LLVM $llvmVersion..." -ForegroundColor Cyan
-          Invoke-WebRequest -Uri $llvmUrl -OutFile $installerPath -UseBasicParsing
-          
-          # Install LLVM silently
-          Write-Host "Installing LLVM..." -ForegroundColor Cyan
-          Start-Process -FilePath $installerPath -ArgumentList "/S", "/D=$llvmPath" -Wait -NoNewWindow
-          
-          # Wait for installation to complete
-          Start-Sleep -Seconds 10
-          
-          # Verify installation
-          if (-not (Test-Path $llvmPath)) {
-            Write-Host "ERROR: LLVM directory not found!" -ForegroundColor Red
-            exit 1
-          }
-          
-          Write-Host "LLVM installed at: $llvmPath" -ForegroundColor Green
-          Write-Host "Directory structure:" -ForegroundColor Cyan
-          Get-ChildItem $llvmPath | Select-Object Name | Format-Table -AutoSize
-          
-          # Check for include/llvm-c directory
-          if (Test-Path "$llvmPath\include\llvm-c") {
-            Write-Host "Found llvm-c headers" -ForegroundColor Green
-            Get-ChildItem "$llvmPath\include\llvm-c" | Select-Object -First 5 Name | Format-Table -AutoSize
-          } else {
-            Write-Host "WARNING: llvm-c headers not found!" -ForegroundColor Yellow
-          }
-          
-          # Check for lib files
-          if (Test-Path "$llvmPath\lib") {
-            $libCount = (Get-ChildItem "$llvmPath\lib" -Filter "*.lib" | Measure-Object).Count
-            Write-Host "Found $libCount .lib files in lib directory" -ForegroundColor Cyan
-          }
+          Write-Host "Installing LLVM via Chocolatey..." -ForegroundColor Cyan
+          choco install llvm --version=18.1.8 -y --no-progress
+          Write-Host "LLVM installation complete" -ForegroundColor Green
       
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
@@ -149,39 +112,17 @@ jobs:
       - name: Build with LLVM
         shell: pwsh
         run: |
-          $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
           $llvmPath = "C:\Program Files\LLVM"
-          
-          # Set LLVM_DIR for CMake (both env var and -D parameter)
+          $env:PATH = "$llvmPath\bin;$env:PATH"
           $env:LLVM_DIR = $llvmPath
           
           Write-Host "Using LLVM from: $llvmPath" -ForegroundColor Cyan
-          Write-Host "Checking LLVM installation..." -ForegroundColor Cyan
           
-          # Debug: Show what's in LLVM directory
-          if (Test-Path $llvmPath) {
-            Write-Host "LLVM directory contents:" -ForegroundColor Cyan
-            Get-ChildItem $llvmPath | ForEach-Object { Write-Host "  $($_.Name)" }
-            
-            if (Test-Path "$llvmPath\include") {
-              Write-Host "Include directory contents:" -ForegroundColor Cyan
-              Get-ChildItem "$llvmPath\include" | ForEach-Object { Write-Host "  $($_.Name)" }
-            }
-            
-            if (Test-Path "$llvmPath\lib") {
-              $libCount = (Get-ChildItem "$llvmPath\lib" -Filter "*.lib" | Measure-Object).Count
-              Write-Host "Found $libCount .lib files in lib directory" -ForegroundColor Cyan
-            }
-          }
-          
-          Write-Host "Configuring CMake with MSVC..." -ForegroundColor Cyan
           mkdir build-windows
           cd build-windows
           cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$llvmPath"
-          
-          Write-Host "Building with MSVC..." -ForegroundColor Cyan
           cmake --build . --config Release -j
-        timeout-minutes: 25
+        timeout-minutes: 15
       
       - name: Prepare artifact
         shell: pwsh
