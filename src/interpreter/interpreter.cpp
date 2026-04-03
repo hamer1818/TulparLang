@@ -15,7 +15,7 @@
 #include <string.h>
 #include <time.h>
 
-// Platform-specific includes for sockets
+// Platform-specific includes for sockets (AFTER platform.h is included)
 #if PLATFORM_WINDOWS
   #include <winsock2.h>
   #include <ws2tcpip.h>
@@ -24,9 +24,13 @@
   #include <netinet/in.h>
   #include <arpa/inet.h>
   #include <unistd.h>
-  // Define Windows socket constants for POSIX
-  #define INVALID_SOCKET (-1)
-  #define SOCKET_ERROR (-1)
+  // Define Windows socket types/constants for POSIX compatibility
+  #ifndef INVALID_SOCKET
+    #define INVALID_SOCKET (-1)
+  #endif
+  #ifndef SOCKET_ERROR
+    #define SOCKET_ERROR (-1)
+  #endif
   typedef int SOCKET;
 #endif
 

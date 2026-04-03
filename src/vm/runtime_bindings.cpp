@@ -2872,7 +2872,7 @@ void aot_sleep(VMValue msVal) {
   if (!IS_INT(msVal))
     return;
   int64_t ms = AS_INT(msVal);
-  usleep((useconds_t)(ms * 1000));
+  tulpar_sleep_ms((unsigned int)ms);
 }
 
 void aot_sleep_ptr(VMValue *ms_ptr) {
