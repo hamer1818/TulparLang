@@ -94,19 +94,13 @@ jobs:
       - name: Setup LLVM
         shell: pwsh
         run: |
-          Write-Host "Downloading LLVM 18.1.8 for Windows..." -ForegroundColor Cyan
-          $llvmUrl = "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.exe"
-          $llvmInstaller = "$env:TEMP\llvm-installer.exe"
+          Write-Host "Installing LLVM via Chocolatey..." -ForegroundColor Cyan
+          choco install llvm --version=18.1.8 -y
           
-          Invoke-WebRequest -Uri $llvmUrl -OutFile $llvmInstaller -UseBasicParsing
+          # Refresh environment variables
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
           
-          Write-Host "Installing LLVM (this may take a few minutes)..." -ForegroundColor Cyan
-          $process = Start-Process -FilePath $llvmInstaller -ArgumentList "/S" -PassThru -NoNewWindow
-          $process.WaitForExit()
-          
-          Write-Host "Installation complete. Exit code: $($process.ExitCode)" -ForegroundColor Cyan
-          
-          # Wait a bit for file system to settle
+          # Wait for installation to complete
           Start-Sleep -Seconds 5
           
           # Verify installation
@@ -124,8 +118,20 @@ jobs:
           $cmakePath = "$llvmPath\lib\cmake\llvm"
           if (Test-Path $cmakePath) {
             Write-Host "CMake files found at: $cmakePath" -ForegroundColor Green
+            Write-Host "Verifying LLVMConfig.cmake exists..." -ForegroundColor Cyan
+            if (Test-Path "$cmakePath\LLVMConfig.cmake") {
+              Write-Host "✓ LLVMConfig.cmake found!" -ForegroundColor Green
+            } else {
+              Write-Host "ERROR: LLVMConfig.cmake not found!" -ForegroundColor Red
+              Write-Host "Available files:" -ForegroundColor Yellow
+              Get-ChildItem $cmakePath | ForEach-Object { Write-Host "  - $($_.Name)" }
+              exit 1
+            }
           } else {
-            Write-Host "WARNING: CMake directory not found at expected location" -ForegroundColor Yellow
+            Write-Host "ERROR: CMake directory not found at expected location" -ForegroundColor Red
+            Write-Host "Searching for cmake files..." -ForegroundColor Yellow
+            Get-ChildItem "$llvmPath\lib" -Recurse -Filter "*Config.cmake" | ForEach-Object { Write-Host "  Found: $($_.FullName)" }
+            exit 1
           }
       
       - name: Setup MSBuild
