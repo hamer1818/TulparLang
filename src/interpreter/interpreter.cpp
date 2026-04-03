@@ -21,7 +21,11 @@ typedef struct {
 
 // Forward Declarations
 static Interpreter *interpreter_clone(Interpreter *src);
-void *thread_entry_point(void *arg);
+#if PLATFORM_WINDOWS
+unsigned __stdcall thread_entry_point_impl(void *arg);
+#else
+void *thread_entry_point_impl(void *arg);
+#endif
 
 // SQLite Callback
 static int tulpar_sqlite_callback(void *data, int argc, char **argv,
@@ -2360,7 +2364,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       Value *sock_val = interpreter_eval_expression(interp, node->arguments[0]);
       if (sock_val->type == VAL_INT) {
         SOCKET sock = (SOCKET)sock_val->data.int_val;
-        close(sock);
+        tulpar_socket_close(sock);
         value_free(sock_val);
         return value_create_void();
       }
@@ -2392,14 +2396,14 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
 
         if (bind(sock, (struct sockaddr *)&server, sizeof(server)) ==
             SOCKET_ERROR) {
-          close(sock);
+          tulpar_socket_close(sock);
           value_free(host_val);
           value_free(port_val);
           return value_create_int(-1);
         }
 
         if (listen(sock, 5) == SOCKET_ERROR) {
-          close(sock);
+          tulpar_socket_close(sock);
           value_free(host_val);
           value_free(port_val);
           return value_create_int(-1);
@@ -2433,7 +2437,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
         server.sin_port = htons((unsigned short)port_val->data.int_val);
 
         if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0) {
-          close(sock);
+          tulpar_socket_close(sock);
           value_free(host_val);
           value_free(port_val);
           return value_create_int(-1);
@@ -2855,7 +2859,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
         Value *arg = interpreter_eval_expression(interp, node->arguments[0]);
         if (arg->type == VAL_INT) {
           long long ms = arg->data.int_val;
-          usleep(ms * 1000);
+          tulpar_thread_sleep((unsigned int)ms);
           value_free(arg);
           return value_create_void();
         }
@@ -2881,27 +2885,20 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
         }
 
         if (func_name_val->type == VAL_STRING) {
-          // Thread Args haz─▒rla
+          // Thread Args hazırla
           ThreadArgs *args = (ThreadArgs *)malloc(sizeof(ThreadArgs));
           args->parent_interp = interp;
           args->func_name = strdup(func_name_val->data.string_val);
-          // Arg├╝man─▒ kopyala (deep copy safe de─şilse bile value_copy yap)
-          // Asl─▒nda arg_val ownership'i ThreadArgs'a ge├ğecek, ├ğ├╝nk├╝ burada free
-          // etmeyece─şiz Ama ThreadArgs i├ğinde deep copy yapmazsak, ana thread
-          // free ederse sorun olur? value_create_xxx ile olu┼şturulan de─şer
-          // malloc'ludur. arg_val burada free edilmeyecek, thread i├ğinde free
-          // edilecek. Ancak interpreter_eval_expression yeni bir value
-          // d├Ând├╝r├╝r. Bu value'nun sahipli─şini args'a veriyoruz.
           args->arg = arg_val; // Sahiplik devri
 
-          pthread_t tid;
-          if (pthread_create(&tid, NULL, thread_entry_point, args) != 0) {
+          tulpar_thread_t tid;
+          if (tulpar_thread_create(&tid, thread_entry_point_impl, args) != 0) {
             printf("Error creating thread\n");
             free(args->func_name);
             free(args);
             value_free(arg_val);
           } else {
-            pthread_detach(tid);
+            tulpar_thread_detach(tid);
             Value *val_t = (Value *)malloc(sizeof(Value));
             val_t->type = VAL_THREAD;
             val_t->data.thread_val = tid;
@@ -2910,16 +2907,16 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
           }
         }
         value_free(func_name_val);
-        // arg_val sahipli─şi devredilmediyse free et (hata durumu)
+        // arg_val sahipliği devredilmediyse free et (hata durumu)
       }
       return value_create_void();
     }
 
     // mutex_create()
     if (strcmp(node->name, "mutex_create") == 0) {
-      pthread_mutex_t *mtx =
-          (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
-      pthread_mutex_init(mtx, NULL);
+      tulpar_mutex_t *mtx =
+          (tulpar_mutex_t *)malloc(sizeof(tulpar_mutex_t));
+      tulpar_mutex_init(mtx);
 
       Value *val_m = (Value *)malloc(sizeof(Value));
       val_m->type = VAL_MUTEX;
@@ -2932,7 +2929,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       if (node->argument_count > 0) {
         Value *arg = interpreter_eval_expression(interp, node->arguments[0]);
         if (arg->type == VAL_MUTEX) {
-          pthread_mutex_lock(arg->data.mutex_val);
+          tulpar_mutex_lock(arg->data.mutex_val);
         }
         value_free(arg);
       }
@@ -2944,7 +2941,7 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       if (node->argument_count > 0) {
         Value *arg = interpreter_eval_expression(interp, node->arguments[0]);
         if (arg->type == VAL_MUTEX) {
-          pthread_mutex_unlock(arg->data.mutex_val);
+          tulpar_mutex_unlock(arg->data.mutex_val);
         }
         value_free(arg);
       }
@@ -5435,8 +5432,12 @@ static Interpreter *interpreter_clone(Interpreter *src) {
   return dest;
 }
 
-// Thread Entry Point (POSIX)
-void *thread_entry_point(void *arg) {
+// Thread Entry Point (Cross-Platform)
+#if PLATFORM_WINDOWS
+unsigned __stdcall thread_entry_point_impl(void *arg) {
+#else
+void *thread_entry_point_impl(void *arg) {
+#endif
   ThreadArgs *args = (ThreadArgs *)arg;
 
   Interpreter *thread_interp = interpreter_clone(args->parent_interp);
@@ -5459,6 +5460,10 @@ void *thread_entry_point(void *arg) {
   free(args->func_name);
   free(args);
 
+#if PLATFORM_WINDOWS
+  return 0;
+#else
   return NULL;
+#endif
 }
 

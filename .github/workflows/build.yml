@@ -96,69 +96,51 @@ jobs:
         run: |
           Write-Host "Setting up LLVM for Windows build..." -ForegroundColor Cyan
           
-          # First, uninstall existing LLVM if present
-          Write-Host "Removing existing LLVM installation..." -ForegroundColor Yellow
-          choco uninstall llvm -y --force 2>$null
-          Start-Sleep -Seconds 3
+          # Download LLVM 18.1.8 release from GitHub
+          $llvmVersion = "18.1.8"
+          $llvmUrl = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$llvmVersion/LLVM-$llvmVersion-win64.exe"
+          $installerPath = "$env:TEMP\LLVM-$llvmVersion-win64.exe"
+          $llvmPath = "C:\Program Files\LLVM"
           
-          # Install specific LLVM version with dev files
-          Write-Host "Installing LLVM 18.1.8 via Chocolatey..." -ForegroundColor Cyan
-          choco install llvm --version=18.1.8 -y --force
+          # Remove existing LLVM if present
+          if (Test-Path $llvmPath) {
+            Write-Host "Removing existing LLVM installation..." -ForegroundColor Yellow
+            Remove-Item -Recurse -Force $llvmPath -ErrorAction SilentlyContinue
+          }
           
-          # Refresh environment variables
-          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+          # Download LLVM installer
+          Write-Host "Downloading LLVM $llvmVersion..." -ForegroundColor Cyan
+          Invoke-WebRequest -Uri $llvmUrl -OutFile $installerPath -UseBasicParsing
+          
+          # Install LLVM silently
+          Write-Host "Installing LLVM..." -ForegroundColor Cyan
+          Start-Process -FilePath $installerPath -ArgumentList "/S", "/D=$llvmPath" -Wait -NoNewWindow
           
           # Wait for installation to complete
-          Start-Sleep -Seconds 5
+          Start-Sleep -Seconds 10
           
           # Verify installation
-          $llvmPath = "C:\Program Files\LLVM"
           if (-not (Test-Path $llvmPath)) {
             Write-Host "ERROR: LLVM directory not found!" -ForegroundColor Red
             exit 1
           }
           
-          Write-Host "✓ LLVM installed at: $llvmPath" -ForegroundColor Green
+          Write-Host "LLVM installed at: $llvmPath" -ForegroundColor Green
           Write-Host "Directory structure:" -ForegroundColor Cyan
-          Get-ChildItem $llvmPath | Select-Object Name, Length | Format-Table -AutoSize
+          Get-ChildItem $llvmPath | Select-Object Name | Format-Table -AutoSize
           
-          # Search for LLVMConfig.cmake in all possible locations
-          Write-Host "Searching for LLVM CMake configuration files..." -ForegroundColor Cyan
-          $cmakeFiles = Get-ChildItem "$llvmPath" -Recurse -Filter "LLVMConfig.cmake" -ErrorAction SilentlyContinue
-          
-          if ($cmakeFiles) {
-            $cmakePath = $cmakeFiles[0].DirectoryName
-            Write-Host "✓ Found LLVMConfig.cmake at: $cmakePath" -ForegroundColor Green
-            echo "LLVM_CMAKE_DIR=$cmakePath" >> $env:GITHUB_ENV
+          # Check for include/llvm-c directory
+          if (Test-Path "$llvmPath\include\llvm-c") {
+            Write-Host "Found llvm-c headers" -ForegroundColor Green
+            Get-ChildItem "$llvmPath\include\llvm-c" | Select-Object -First 5 Name | Format-Table -AutoSize
           } else {
-            Write-Host "LLVMConfig.cmake not found, searching for any cmake files..." -ForegroundColor Yellow
-            $allCmakeFiles = Get-ChildItem "$llvmPath" -Recurse -Filter "*.cmake" -ErrorAction SilentlyContinue
-            
-            if ($allCmakeFiles) {
-              Write-Host "Found cmake files:" -ForegroundColor Cyan
-              $allCmakeFiles | ForEach-Object { Write-Host "  - $($_.FullName)" }
-            }
-            
-            # Try standard locations
-            $standardPaths = @(
-              "$llvmPath\lib\cmake\llvm",
-              "$llvmPath\cmake",
-              "$llvmPath\share\llvm\cmake"
-            )
-            
-            foreach ($path in $standardPaths) {
-              if (Test-Path $path) {
-                Write-Host "Using standard cmake path: $path" -ForegroundColor Cyan
-                echo "LLVM_CMAKE_DIR=$path" >> $env:GITHUB_ENV
-                break
-              }
-            }
-            
-            # If still not found, use LLVM root and let CMake search
-            if (-not $env:LLVM_CMAKE_DIR) {
-              Write-Host "Using LLVM_DIR as fallback: $llvmPath" -ForegroundColor Yellow
-              echo "LLVM_CMAKE_DIR=$llvmPath" >> $env:GITHUB_ENV
-            }
+            Write-Host "WARNING: llvm-c headers not found!" -ForegroundColor Yellow
+          }
+          
+          # Check for lib files
+          if (Test-Path "$llvmPath\lib") {
+            $libCount = (Get-ChildItem "$llvmPath\lib" -Filter "*.lib" | Measure-Object).Count
+            Write-Host "Found $libCount .lib files in lib directory" -ForegroundColor Cyan
           }
       
       - name: Setup MSBuild

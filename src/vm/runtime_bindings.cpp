@@ -3,6 +3,7 @@
 #include "../common/localization.hpp"
 #include "../common/platform_dl.h"
 #include "../common/platform.h"
+#include "../common/platform_sockets.h"
 #include "vm.hpp"
 
 #define TYPE_BOOL_BOOL ((VM_VAL_BOOL << 4) | VM_VAL_BOOL)
@@ -1809,16 +1810,12 @@ VMValue aot_clock_ms(void) {
 // ============================================================================
 // Socket Functions (AOT)
 // ============================================================================
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#define tulpar_socket int
-#define tulpar_close close
+// platform_sockets.h already included at top - provides cross-platform socket API
+#define tulpar_socket socket_t
+#define tulpar_close tulpar_socket_close
 #define tulpar_send send
 #define tulpar_recv recv
-#define tulpar_invalid_socket -1
+#define tulpar_invalid_socket INVALID_SOCKET_VALUE
 
 VMValue aot_socket_server(VMValue hostVal, VMValue portVal) {
   if (!IS_STRING(hostVal) || !IS_INT(portVal))
