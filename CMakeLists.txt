@@ -19,10 +19,13 @@ include(${CMAKE_SOURCE_DIR}/cmake/EmbedLibraries.cmake)
 # ============================================
 # LLVM is REQUIRED for TulparLang 2.x
 # ============================================
+# Add cmake directory to module path for FindLLVM.cmake
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+
 # Try CONFIG mode first (preferred), fallback to MODULE mode
 find_package(LLVM CONFIG QUIET)
 if(NOT LLVM_FOUND)
-    message(STATUS "LLVM CONFIG mode failed, trying without CONFIG requirement...")
+    message(STATUS "LLVM CONFIG mode failed, trying MODULE mode with FindLLVM.cmake...")
     find_package(LLVM REQUIRED)
 endif()
 
@@ -31,24 +34,11 @@ message(STATUS "LLVM_DIR: ${LLVM_DIR}")
 message(STATUS "LLVM_INCLUDE_DIRS: ${LLVM_INCLUDE_DIRS}")
 message(STATUS "LLVM_LIBRARY_DIRS: ${LLVM_LIBRARY_DIRS}")
 
-# Fallback: If LLVM_INCLUDE_DIRS is not set, try to find it manually on Windows
-if(NOT LLVM_INCLUDE_DIRS AND WIN32)
-    if(DEFINED ENV{LLVM_CMAKE_DIR})
-        get_filename_component(LLVM_ROOT "$ENV{LLVM_CMAKE_DIR}" DIRECTORY)
-        get_filename_component(LLVM_ROOT "${LLVM_ROOT}" DIRECTORY)
-        get_filename_component(LLVM_ROOT "${LLVM_ROOT}" DIRECTORY)
-        set(LLVM_INCLUDE_DIRS "${LLVM_ROOT}/include")
-        set(LLVM_LIBRARY_DIRS "${LLVM_ROOT}/lib")
-        message(STATUS "Using manual LLVM paths on Windows:")
-        message(STATUS "  LLVM_ROOT: ${LLVM_ROOT}")
-        message(STATUS "  LLVM_INCLUDE_DIRS: ${LLVM_INCLUDE_DIRS}")
-        message(STATUS "  LLVM_LIBRARY_DIRS: ${LLVM_LIBRARY_DIRS}")
-    endif()
-endif()
-
 include_directories(${LLVM_INCLUDE_DIRS})
 link_directories(${LLVM_LIBRARY_DIRS})
-add_definitions(${LLVM_DEFINITIONS})
+if(LLVM_DEFINITIONS)
+    add_definitions(${LLVM_DEFINITIONS})
+endif()
 
 # C++ Compiler flags (modern, strict)
 if(MSVC)
