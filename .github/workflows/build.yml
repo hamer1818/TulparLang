@@ -91,13 +91,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Setup LLVM with Chocolatey
+      - name: Setup LLVM
         shell: pwsh
         run: |
-          Write-Host "Installing LLVM via Chocolatey..." -ForegroundColor Cyan
-          choco install llvm --version=18.1.6 -y
+          Write-Host "Downloading LLVM 18.1.8 for Windows..." -ForegroundColor Cyan
+          $llvmUrl = "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.exe"
+          $llvmInstaller = "$env:TEMP\llvm-installer.exe"
+          
+          Invoke-WebRequest -Uri $llvmUrl -OutFile $llvmInstaller -UseBasicParsing
+          
+          Write-Host "Installing LLVM..." -ForegroundColor Cyan
+          Start-Process -FilePath $llvmInstaller -ArgumentList "/S" -Wait -NoNewWindow
+          
+          # Add LLVM to PATH
           $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
-          llvm-config --version
+          
+          Write-Host "Verifying LLVM installation..." -ForegroundColor Cyan
+          & "C:\Program Files\LLVM\bin\llvm-config.exe" --version
       
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
@@ -107,11 +117,15 @@ jobs:
         run: |
           $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
           $env:LLVM_DIR = "C:\Program Files\LLVM\lib\cmake\llvm"
+          
+          Write-Host "Configuring CMake..." -ForegroundColor Cyan
           mkdir build-windows
           cd build-windows
           cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$env:LLVM_DIR"
+          
+          Write-Host "Building..." -ForegroundColor Cyan
           cmake --build . --config Release -j
-        timeout-minutes: 20
+        timeout-minutes: 25
       
       - name: Prepare artifact
         shell: pwsh
