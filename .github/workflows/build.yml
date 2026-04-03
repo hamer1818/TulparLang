@@ -113,17 +113,17 @@ jobs:
           
           # Verify installation
           $llvmPath = "C:\Program Files\LLVM"
-          if (Test-Path $llvmPath) {
-            Write-Host "LLVM installed at: $llvmPath" -ForegroundColor Green
-            Write-Host "LLVM version:" -ForegroundColor Cyan
-            & "$llvmPath\bin\llvm-config.exe" --version
-          } else {
+          if (-not (Test-Path $llvmPath)) {
             Write-Host "ERROR: LLVM directory not found!" -ForegroundColor Red
             exit 1
           }
           
+          Write-Host "✓ LLVM installed at: $llvmPath" -ForegroundColor Green
+          Write-Host "Directory structure:" -ForegroundColor Cyan
+          Get-ChildItem $llvmPath | Select-Object Name, Length | Format-Table -AutoSize
+          
           # Search for LLVMConfig.cmake in all possible locations
-          Write-Host "Searching for LLVM CMake files..." -ForegroundColor Cyan
+          Write-Host "Searching for LLVM CMake configuration files..." -ForegroundColor Cyan
           $cmakeFiles = Get-ChildItem "$llvmPath" -Recurse -Filter "LLVMConfig.cmake" -ErrorAction SilentlyContinue
           
           if ($cmakeFiles) {
@@ -131,13 +131,34 @@ jobs:
             Write-Host "✓ Found LLVMConfig.cmake at: $cmakePath" -ForegroundColor Green
             echo "LLVM_CMAKE_DIR=$cmakePath" >> $env:GITHUB_ENV
           } else {
-            Write-Host "ERROR: LLVMConfig.cmake not found in LLVM installation!" -ForegroundColor Red
-            Write-Host "Searching all cmake directories..." -ForegroundColor Yellow
-            Get-ChildItem "$llvmPath" -Recurse -Directory -Filter "cmake" | ForEach-Object { 
-              Write-Host "  Found cmake dir: $($_.FullName)"
-              Get-ChildItem $_.FullName -Filter "*.cmake" | ForEach-Object { Write-Host "    - $($_.Name)" }
+            Write-Host "LLVMConfig.cmake not found, searching for any cmake files..." -ForegroundColor Yellow
+            $allCmakeFiles = Get-ChildItem "$llvmPath" -Recurse -Filter "*.cmake" -ErrorAction SilentlyContinue
+            
+            if ($allCmakeFiles) {
+              Write-Host "Found cmake files:" -ForegroundColor Cyan
+              $allCmakeFiles | ForEach-Object { Write-Host "  - $($_.FullName)" }
             }
-            exit 1
+            
+            # Try standard locations
+            $standardPaths = @(
+              "$llvmPath\lib\cmake\llvm",
+              "$llvmPath\cmake",
+              "$llvmPath\share\llvm\cmake"
+            )
+            
+            foreach ($path in $standardPaths) {
+              if (Test-Path $path) {
+                Write-Host "Using standard cmake path: $path" -ForegroundColor Cyan
+                echo "LLVM_CMAKE_DIR=$path" >> $env:GITHUB_ENV
+                break
+              }
+            }
+            
+            # If still not found, use LLVM root and let CMake search
+            if (-not $env:LLVM_CMAKE_DIR) {
+              Write-Host "Using LLVM_DIR as fallback: $llvmPath" -ForegroundColor Yellow
+              echo "LLVM_CMAKE_DIR=$llvmPath" >> $env:GITHUB_ENV
+            }
           }
       
       - name: Setup MSBuild
