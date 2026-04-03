@@ -2,6 +2,7 @@
 #include "../lexer/lexer.hpp"
 #include "../common/localization.hpp"
 #include "../common/platform_dl.h"
+#include "../common/platform.h"
 #include "vm.hpp"
 
 #define TYPE_BOOL_BOOL ((VM_VAL_BOOL << 4) | VM_VAL_BOOL)
@@ -702,14 +703,14 @@ void aot_array_set_fast(VMValue arr_val, int64_t index, VMValue value) {
 
 // Unsafe array get - NO type check, NO bounds check
 // Assumes arr_val is definitely an array and index is in range
-__attribute__((always_inline)) static inline VMValue
+TULPAR_INLINE static VMValue
 aot_array_get_unsafe(VMValue arr_val, int64_t index) {
   ObjArray *arr = AS_ARRAY(arr_val); // Direct cast, no check
   return arr->items[index];
 }
 
 // Unsafe array set - NO type check, NO bounds check
-__attribute__((always_inline)) static inline void
+TULPAR_INLINE static void
 aot_array_set_unsafe(VMValue arr_val, int64_t index, VMValue value) {
   ObjArray *arr = AS_ARRAY(arr_val); // Direct cast, no check
   arr->items[index] = value;
@@ -728,12 +729,12 @@ ObjArray *aot_array_get_raw(VMValue arr_val) {
 }
 
 // Direct array element access via raw pointer - FASTEST!
-__attribute__((always_inline)) static inline VMValue
+TULPAR_INLINE static VMValue
 aot_raw_get(ObjArray *arr, int64_t index) {
   return arr->items[index];
 }
 
-__attribute__((always_inline)) static inline void
+TULPAR_INLINE static void
 aot_raw_set(ObjArray *arr, int64_t index, VMValue value) {
   arr->items[index] = value;
 }
@@ -1064,11 +1065,11 @@ typedef struct {
 } JSBuilder;
 
 // Thread-local storage
-#define TULPAR_THREAD_LOCAL __thread
+#define TULPAR_TLS TULPAR_THREAD_LOCAL
 
 // Pre-allocated buffer for small JSON (avoids malloc for simple cases)
-static TULPAR_THREAD_LOCAL char js_small_buffer[4096];
-static TULPAR_THREAD_LOCAL int js_small_buffer_in_use = 0;
+static TULPAR_TLS char js_small_buffer[4096];
+static TULPAR_TLS int js_small_buffer_in_use = 0;
 
 static void js_init(JSBuilder *b) {
   // Use thread-local buffer if available (avoids malloc)
@@ -1799,19 +1800,10 @@ VMValue aot_get_exception(void) { return eh_exception; }
 // ============================================
 // Time Functions
 // ============================================
-#include <sys/time.h>
 #include <ctime>
 
 VMValue aot_clock_ms(void) {
-  struct timeval tv;
-  gettimeofday(&tv, nullptr);
-  double ms = tv.tv_sec * 1000.0 + tv.tv_usec / 1000.0;
-  // Return relative time from program start
-  static double start_time = 0;
-  if (start_time == 0) {
-    start_time = ms;
-  }
-  return VM_FLOAT(ms - start_time);
+  return VM_FLOAT(tulpar_clock_ms());
 }
 
 // ============================================================================

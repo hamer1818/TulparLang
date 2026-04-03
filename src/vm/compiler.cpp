@@ -233,22 +233,27 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
   switch (node->type) {
   case AST_INT_LITERAL: {
     emit_byte(compiler, OP_CONST_INT, node->line);
-    Constant c = {.type = CONST_INT, .int_val = node->value.int_value};
+    Constant c;
+    c.type = CONST_INT;
+    c.int_val = node->value.int_value;
     emit_constant(compiler, c, node->line);
     break;
   }
 
   case AST_FLOAT_LITERAL: {
     emit_byte(compiler, OP_CONST_FLOAT, node->line);
-    Constant c = {.type = CONST_FLOAT, .float_val = node->value.float_value};
+    Constant c;
+    c.type = CONST_FLOAT;
+    c.float_val = node->value.float_value;
     emit_constant(compiler, c, node->line);
     break;
   }
 
   case AST_STRING_LITERAL: {
     emit_byte(compiler, OP_CONST_STR, node->line);
-    Constant c = {.type = CONST_STRING,
-                  .string_val = strdup(node->value.string_value)};
+    Constant c;
+    c.type = CONST_STRING;
+    c.string_val = strdup(node->value.string_value);
     emit_constant(compiler, c, node->line);
     break;
   }
@@ -271,8 +276,9 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
     for (int i = 0; i < node->object_count; i++) {
       // Push Key
       emit_byte(compiler, OP_CONST_STR, node->line);
-      Constant c = {.type = CONST_STRING,
-                    .string_val = strdup(node->object_keys[i])};
+      Constant c;
+      c.type = CONST_STRING;
+      c.string_val = strdup(node->object_keys[i]);
       emit_constant(compiler, c, node->line);
 
       // Push Value
@@ -1191,7 +1197,9 @@ void compile_statement(Compiler *compiler, ASTNode_C *node) {
 
     // 3. Döngü sayacının ilklendirilmesi (_i = 0)
     emit_byte(compiler, OP_CONST_INT, node->line);
-    Constant zero_const = {.type = CONST_INT, .int_val = 0};
+    Constant zero_const;
+    zero_const.type = CONST_INT;
+    zero_const.int_val = 0;
     emit_constant(compiler, zero_const, node->line);
     int i_slot = compiler_add_local_typed(compiler, "_i", LOCAL_TYPE_INT);
     emit_byte(compiler, OP_STORE_LOCAL, node->line);

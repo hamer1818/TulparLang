@@ -2,20 +2,26 @@
 #define INTERPRETER_H
 
 #include "../parser/parser.hpp"
+#include "../common/platform.h"
+#include "../common/platform_sockets.h"
+#include "../common/platform_threads.h"
 #include <setjmp.h>
 #include <ctime>
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <pthread.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
-#define THREAD_HANDLE pthread_t
-#define MUTEX_HANDLE pthread_mutex_t
-#define SOCKET int
-#define INVALID_SOCKET -1
-#define SOCKET_ERROR -1
+// Cross-platform type definitions
+#if PLATFORM_WINDOWS
+    #define THREAD_HANDLE tulpar_thread_t
+    #define MUTEX_HANDLE tulpar_mutex_t
+    #define SOCKET socket_t
+    #define INVALID_SOCKET INVALID_SOCKET_VALUE
+    #define SOCKET_ERROR SOCKET_ERROR_VALUE
+#else
+    #define THREAD_HANDLE tulpar_thread_t
+    #define MUTEX_HANDLE tulpar_mutex_t
+    #define SOCKET socket_t
+    #define INVALID_SOCKET INVALID_SOCKET_VALUE
+    #define SOCKET_ERROR SOCKET_ERROR_VALUE
+#endif
 
 // Runtime değer türleri
 typedef enum {

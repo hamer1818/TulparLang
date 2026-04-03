@@ -217,7 +217,8 @@ endif()
 # Windows MSVC specific linking requirements
 if(MSVC)
     # Link against version.lib which is required by LLVM on Windows
-    target_link_libraries(tulpar ${llvm_libs} version)
+    # Also link ws2_32 for socket support
+    target_link_libraries(tulpar ${llvm_libs} version ws2_32)
 else()
     target_link_libraries(tulpar ${llvm_libs})
 endif()
@@ -257,6 +258,8 @@ if(WIN32 AND MSVC)
         _WINSOCK_DEPRECATED_NO_WARNINGS
         PLATFORM_WINDOWS
     )
+    # Link Winsock for socket support
+    target_link_libraries(tulpar_runtime ws2_32)
 endif()
 
 # ============================================

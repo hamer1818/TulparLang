@@ -1,3 +1,5 @@
+#include "../common/platform.h"
+#include "../common/platform_threads.h"
 #ifndef TULPAR_WASM_BUILD
 #include "../common/platform_sockets.h"
 #include <errno.h>
@@ -1426,9 +1428,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
 
         switch (builtin_id) {
         case 0: { // clock()
-          struct timespec ts;
-          clock_gettime(CLOCK_MONOTONIC, &ts);
-          double ms = (ts.tv_sec * 1000.0) + (ts.tv_nsec / 1000000.0);
+          double ms = tulpar_clock_ms();
           vm_push(vm, VM_FLOAT(ms));
           break;
         }
@@ -1530,7 +1530,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         }
         case 34: { // socket_close(fd)
           VMValue fdVal = vm_pop(vm);
-          close((int)AS_INT(fdVal));
+          tulpar_socket_close((socket_t)AS_INT(fdVal));
           vm_push(vm, VM_VOID());
           break;
         }
@@ -1612,7 +1612,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           VMValue msVal = vm_pop(vm);
           int ms = IS_INT(msVal) ? (int)AS_INT(msVal) : 0;
 #ifndef TULPAR_WASM_BUILD
-          usleep(ms * 1000);
+          tulpar_sleep_ms(ms);
 #else
           // WebAssembly'de sleep desteklenmiyor
           // Sadece void döndür
@@ -2218,7 +2218,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         case 95: { // socket_close(fd)
           VMValue fdVal = vm_pop(vm);
           if (IS_INT(fdVal)) {
-            close((int)AS_INT(fdVal));
+            tulpar_socket_close((socket_t)AS_INT(fdVal));
           }
           vm_push(vm, VM_VOID());
           break;
