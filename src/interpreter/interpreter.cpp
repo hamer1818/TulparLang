@@ -314,7 +314,7 @@ Value *value_create_float(float val) {
   return value;
 }
 
-Value *value_create_string(char *val) {
+Value *value_create_string(const char *val) {
   Value *value = value_pool_alloc();
   value->type = VAL_STRING;
   value->data.string_val = strdup(val);

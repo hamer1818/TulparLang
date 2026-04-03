@@ -144,7 +144,7 @@ typedef struct {
 // Value fonksiyonları
 Value *value_create_int(long long val);
 Value *value_create_float(float val);
-Value *value_create_string(char *val);
+Value *value_create_string(const char *val);
 Value *value_create_bool(int val);
 Value *value_create_array(int capacity);
 Value *value_create_typed_array(int capacity, ValueType elem_type);
