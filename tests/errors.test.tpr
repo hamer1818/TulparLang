@@ -1,0 +1,78 @@
+// Error-path tests — verifies try/catch + throw behaviour and that the
+// runtime raises the expected exceptions when user code makes mistakes.
+//
+// These tests use assert_throws (added in lib/test.tpr) to invoke a
+// handler and check that it raises an exception with a substring-matching
+// message. assert_throws("h", "") just asserts "any exception".
+
+import "test";
+
+// ----- Basic throw/catch ---------------------------------------------------
+
+func throws_user_msg() {
+    throw "user error: bad input";
+}
+
+func tc_user_msg() {
+    assert_throws("throws_user_msg", "bad input");
+}
+
+// ----- Nested try (inner catches, outer doesn't see) ----------------------
+
+func _has_inner_catch() {
+    try {
+        throw "inner";
+    } catch (e) {
+        // swallow
+    }
+    // No re-throw → outer should NOT see anything.
+}
+
+func tc_inner_caught_isnt_seen() {
+    // assert_throws expects a throw; this handler shouldn't throw because
+    // the inner catch swallowed it. So this assert_throws SHOULD fail —
+    // we wrap the test inversion: call _has_inner_catch directly inside
+    // a try here and assert no propagation.
+    int saw = 0;
+    try {
+        call("_has_inner_catch");
+    } catch (e) {
+        saw = 1;
+    }
+    assert_eq_int(saw, 0);
+}
+
+// ----- Re-throw preserves message -----------------------------------------
+
+func _rethrows() {
+    try {
+        throw "first";
+    } catch (e) {
+        throw "wrapped: " + toString(e);
+    }
+}
+
+func tc_rethrow_wraps_message() {
+    int caught = 0;
+    str msg = "";
+    try {
+        call("_rethrows");
+    } catch (e) {
+        caught = 1;
+        msg = toString(e);
+    }
+    assert_eq_int(caught, 1);
+    assert_contains(msg, "wrapped");
+    assert_contains(msg, "first");
+}
+
+// ----- Run all tests -------------------------------------------------------
+
+print("=== Tulpar Error-Path Tests ===");
+print("");
+
+test("throw with user message", "tc_user_msg");
+test("inner catch absorbs throw", "tc_inner_caught_isnt_seen");
+test("re-throw wraps message", "tc_rethrow_wraps_message");
+
+test_summary();

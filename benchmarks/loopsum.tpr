@@ -1,0 +1,13 @@
+// Typed AOT path: explicit `int` types + `: int` return enable native LLVM
+// codegen (i64 alloca + direct LLVM add/cmp, no vm_binary_op).
+func compute(int n): int {
+    int total = 0;
+    int i = 0;
+    while (i < n) {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+
+print(compute(10000000));

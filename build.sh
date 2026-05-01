@@ -30,7 +30,8 @@ echo -e "${YELLOW}Platform: ${PLATFORM}${NC}"
 ACTION="$1"
 TARGET="$2"
 
-# Set build directory based on platform
+# Single platform-suffixed build directory (mirrors build.bat behaviour:
+# contents are wiped on every build so a stale runtime archive never lingers).
 case "${OS}" in
     Linux*)     BUILD_DIR="build-linux";;
     Darwin*)    BUILD_DIR="build-macos";;
@@ -40,7 +41,6 @@ esac
 if [ "$ACTION" = "clean" ]; then
     echo "Cleaning build artifacts..."
     rm -rf "$BUILD_DIR"
-    rm -rf build  # legacy
     rm -f tulpar a.out *.o *.ll
     echo -e "${GREEN}Clean complete.${NC}"
     exit 0
@@ -119,15 +119,27 @@ if [ "$ACTION" = "test" ]; then
 
     TEST_FAILED=0
     INPUT_DIR="examples/inputs"
-    SKIP_TESTS=("utils.tpr" "09_socket_simple.tpr" "09_socket_server.tpr" "09_socket_client.tpr" "11_router_app.tpr" "12_threaded_server.tpr" "tulpar_api_demo.tpr" )
+    SKIP_TESTS=()
+    # Compile-only smoke tests: server/listener examples that block on
+    # listen()/api_run(), plus utils.tpr (module-only — has no top-level
+    # program, but we still verify it parses/lowers). We verify the build
+    # succeeds (catches regressions in the embedded server/router/api
+    # stdlib path) but do not run the binary.
+    COMPILE_ONLY_TESTS=("09_socket_simple.tpr" "09_socket_server.tpr" \
+                        "09_socket_client.tpr" "11_router_app.tpr" \
+                        "12_threaded_server.tpr" "14_api_server.tpr" \
+                        "api_wings.tpr" "api_wings_crud.tpr" \
+                        "api_router_crud.tpr" "tulpar_api_demo.tpr" \
+                        "utils.tpr")
 
     run_test() {
         local example="$1"
+        local compile_only="$2"
         local name=$(basename "$example" .tpr)
         local input_file="$INPUT_DIR/$name.txt"
-        
+
         printf "Testing %s... " "$example"
-        
+
         # Use timeout if available
         TIMEOUT_CMD=""
         if command -v timeout &> /dev/null; then
@@ -136,14 +148,19 @@ if [ "$ACTION" = "test" ]; then
             TIMEOUT_CMD="gtimeout 30s"
         fi
 
-        # Run AOT compilation and execution
+        # Run AOT compilation and (optionally) execution
         if $TIMEOUT_CMD ./tulpar --aot "$example" > /dev/null 2>&1 && [ -f "a.out" ]; then
+            if [ "$compile_only" = "1" ]; then
+                echo -e "${GREEN}PASS (compile-only)${NC}"
+                rm -f a.out a.out.ll a.out.o
+                return
+            fi
             if [ -f "$input_file" ]; then
                 $TIMEOUT_CMD ./a.out < "$input_file" > /dev/null 2>&1
             else
                 $TIMEOUT_CMD ./a.out > /dev/null 2>&1
             fi
-            
+
             if [ $? -eq 0 ]; then
                 echo -e "${GREEN}PASS${NC}"
             else
@@ -154,7 +171,7 @@ if [ "$ACTION" = "test" ]; then
             echo -e "${RED}FAIL (compilation)${NC}"
             TEST_FAILED=1
         fi
-        
+
         rm -f a.out a.out.ll a.out.o
     }
 
@@ -163,11 +180,11 @@ if [ "$ACTION" = "test" ]; then
             echo -e "${RED}ERROR: Test file '$TARGET' not found.${NC}"
             exit 1
         fi
-        run_test "$TARGET"
+        run_test "$TARGET" 0
     else
         for example in examples/*.tpr; do
             [ -f "$example" ] || continue
-            
+
             example_file=$(basename "$example")
             skip=0
             for skip_file in "${SKIP_TESTS[@]}"; do
@@ -176,13 +193,21 @@ if [ "$ACTION" = "test" ]; then
                     break
                 fi
             done
-        
+
             if [ $skip -eq 1 ]; then
                 printf "SKIP: %s\n" "$example"
                 continue
             fi
-            
-            run_test "$example"
+
+            compile_only=0
+            for co_file in "${COMPILE_ONLY_TESTS[@]}"; do
+                if [ "$example_file" = "$co_file" ]; then
+                    compile_only=1
+                    break
+                fi
+            done
+
+            run_test "$example" "$compile_only"
         done
     fi
 
@@ -196,8 +221,10 @@ if [ "$ACTION" = "test" ]; then
     exit 0
 fi
 
-# Build with CMake
+# Build with CMake — wipe contents first so we always get a clean configure
 echo "Building TulparLang..."
+echo "Preparing $BUILD_DIR (wiping contents)..."
+rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 

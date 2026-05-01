@@ -73,30 +73,30 @@ func main() {
 	v18 := 18 * V_INT
 	v12 := 12 * V_INT
 	v6 := 6 * V_INT
-	measure("Test 4: Tak(18, 12, 6)", 2000, func() interface{} {
+	measure("Test 4: Tak(18, 12, 6)", 200, func() interface{} {
 		return tak(v18, v12, v6)
 	})
 
 	v1M := 1000000 * V_INT
-	measure("Test 5: Loop 1M", 10000, func() interface{} {
+	measure("Test 5: Loop 1M", 1000, func() interface{} {
 		return loopTest(v1M)
 	})
 
 	v10K := 10000 * V_INT
-	measure("Test 6: Sieve(10K)", 50000, func() interface{} {
+	measure("Test 6: Sieve(10K)", 5000, func() interface{} {
 		return sieve(v10K)
 	})
 
 	v1K := 1000 * V_INT
-	measure("Test 7: BubbleSort(1K)", 20000, func() interface{} {
+	measure("Test 7: BubbleSort(1K)", 200, func() interface{} {
 		return bubbleSort(v1K)
 	})
 
-	measure("Test 8: StringConcat(1K)", 100000, func() interface{} {
+	measure("Test 8: StringConcat(1K)", 10000, func() interface{} {
 		return stringConcat(v1K)
 	})
 
-	measure("Test 9: ArrayMemory(10K)", 100000, func() interface{} {
+	measure("Test 9: ArrayMemory(10K)", 10000, func() interface{} {
 		return arrayMemory(v10K)
 	})
 

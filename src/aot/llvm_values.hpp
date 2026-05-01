@@ -25,4 +25,17 @@ LLVMValueRef llvm_call_vmvalue_func(LLVMBackend *backend, LLVMValueRef func,
                                     LLVMValueRef *args, unsigned arg_count,
                                     const char *name);
 
+// Build a function type for a runtime function that returns VMValue.
+// Drop-in replacement for `LLVMFunctionType(backend->ret_pair_type, args,
+// count, isvararg)`: signature is identical, only the *return ABI* changes.
+// On SysV-ABI platforms (Linux, macOS) the function returns `{i64,i64}` —
+// pair-of-i64 in registers. On Windows MS-x64 the C compiler emits 16-byte
+// structs via a hidden `sret` pointer, so we synthesise
+// `void(ptr sret, args...)` to match. Pair with `llvm_call_vmvalue_func`,
+// which handles the per-platform call shape.
+LLVMTypeRef llvm_make_vmvalue_func_type(LLVMBackend *backend,
+                                        LLVMTypeRef *arg_types,
+                                        unsigned arg_count,
+                                        int is_vararg);
+
 #endif

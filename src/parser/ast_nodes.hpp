@@ -169,12 +169,19 @@ struct VariableDecl {
 };
 
 struct Assignment {
-    std::string name;
+    std::string name;                       // simple lvalue: variable name
+    std::unique_ptr<ASTNode> target;        // complex lvalue: arr[i], arr[i][j], obj.f
     std::unique_ptr<ASTNode> value;
     SourceLocation loc;
-    
+
+    // Simple form: name = value;
     Assignment(const std::string& n, std::unique_ptr<ASTNode> v, SourceLocation l)
-        : name(n), value(std::move(v)), loc(l) {}
+        : name(n), target(nullptr), value(std::move(v)), loc(l) {}
+
+    // Complex form: <target-expr> = value;
+    Assignment(std::unique_ptr<ASTNode> tgt,
+               std::unique_ptr<ASTNode> v, SourceLocation l)
+        : name(""), target(std::move(tgt)), value(std::move(v)), loc(l) {}
 };
 
 struct CompoundAssign {

@@ -1,0 +1,57 @@
+// Coverage for AST_BREAK / AST_CONTINUE in the AOT codegen path. Used
+// to be a silent no-op (case missing in `codegen_statement`); after the
+// loop_stack fix in src/aot/llvm_backend.cpp these all jump to the
+// right basic block, including from inside nested `if` and `try`.
+
+import "test";
+
+func break_inside_if() {
+    int i = 0;
+    int seen = 0;
+    while (i < 10) {
+        if (i == 3) {
+            seen = i;
+            break;
+        }
+        i = i + 1;
+    }
+    assert_eq_int(i, 3);
+    assert_eq_int(seen, 3);
+}
+
+func continue_inside_if() {
+    // Skip k == 2; sum 0+1+3+4 = 8.
+    int sum = 0;
+    for (int k = 0; k < 5; k = k + 1) {
+        if (k == 2) {
+            continue;
+        }
+        sum = sum + k;
+    }
+    assert_eq_int(sum, 8);
+}
+
+func nested_break() {
+    // break exits ONLY the inner loop; outer keeps iterating. Each
+    // outer iter accumulates 2 (k = 0, 1) before the inner break.
+    int outer = 0;
+    int total = 0;
+    while (outer < 3) {
+        int inner = 0;
+        while (inner < 5) {
+            if (inner == 2) {
+                break;
+            }
+            total = total + 1;
+            inner = inner + 1;
+        }
+        outer = outer + 1;
+    }
+    assert_eq_int(total, 6);
+}
+
+print("=== break / continue codegen ===");
+test("break inside if", "break_inside_if");
+test("continue inside if", "continue_inside_if");
+test("nested break", "nested_break");
+test_summary();

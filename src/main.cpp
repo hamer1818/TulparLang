@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <sys/stat.h>
 
 #include "interpreter/interpreter.hpp"
 #include "lexer/lexer.hpp"
@@ -13,6 +14,9 @@
 #ifdef TULPAR_AOT_ENABLED
 #include "aot/aot_pipeline.hpp"
 #endif
+#include "lsp/lsp_server.hpp"
+#include "fmt/formatter.hpp"
+#include "pkg/pkg_cli.hpp"
 #include <ctime>
 
 // Dosyadan kaynak kodu oku
@@ -154,6 +158,28 @@ int main(int argc, char **argv) {
   // Locale setup
   setlocale(LC_ALL, ".UTF8");
 
+  // LSP mode short-circuits everything else: it owns stdin/stdout for
+  // the JSON-RPC transport and must not be polluted by any startup
+  // banner or REPL prompt. Check before any other flag dispatch.
+  for (int i = 1; i < argc; i++) {
+    if (std::strcmp(argv[i], "--lsp") == 0) {
+      return tulpar::lsp_run_server();
+    }
+  }
+
+  // `tulpar fmt <file>` runs the source formatter and exits. Keep it
+  // before AOT dispatch — `fmt` shares no state with the compile
+  // pipeline.
+  if (argc >= 2 && std::strcmp(argv[1], "fmt") == 0) {
+    return tulpar::fmt_cli_main(argc, argv);
+  }
+
+  // `tulpar pkg <subcommand>` runs the package manager and exits. Same
+  // reasoning — no overlap with compile / run / build paths.
+  if (argc >= 2 && std::strcmp(argv[1], "pkg") == 0) {
+    return tulpar::pkg_cli_main(argc, argv);
+  }
+
   // Flags
   int force_vm = 0;    // --vm / --run forces VM path, skips AOT
   int use_legacy = 0;  // --legacy forces interpreter (not VM)
@@ -236,7 +262,36 @@ int main(int argc, char **argv) {
       output_name = default_output_name;
     }
 
-    AOTResult result = aot_compile(source, output_name);
+    // Cache check: skip the whole AOT pipeline (~400ms link cost on Win)
+    // when the output binary is newer than both the source file and the
+    // compiler driver itself. Disable with TULPAR_AOT_NOCACHE=1 or by
+    // deleting the output file. We only check this for the persistent
+    // `tulpar build` path; the silent run path uses a temp output.
+    {
+      const char *nocache = getenv("TULPAR_AOT_NOCACHE");
+      if (!(nocache && *nocache && *nocache != '0')) {
+        char exe_path[512];
+#ifdef _WIN32
+        snprintf(exe_path, sizeof(exe_path), "%s.exe", output_name);
+#else
+        snprintf(exe_path, sizeof(exe_path), "%s", output_name);
+#endif
+        struct stat src_st, exe_st, drv_st;
+        if (stat(exe_path, &exe_st) == 0 &&
+            stat(argv[arg_offset + 1], &src_st) == 0) {
+          int driver_ok = (stat(argv[0], &drv_st) == 0);
+          if (exe_st.st_mtime >= src_st.st_mtime &&
+              (!driver_ok || exe_st.st_mtime >= drv_st.st_mtime)) {
+            printf("[AOT] Cache hit: %s up-to-date\n", exe_path);
+            free(source);
+            return 0;
+          }
+        }
+      }
+    }
+
+    AOTResult result = aot_compile_with_filename(
+        source, output_name, argv[arg_offset + 1]);
     free(source);
     return (result == AOT_OK) ? 0 : 1;
   }
@@ -257,7 +312,8 @@ int main(int argc, char **argv) {
     // Default mode: AOT compile & run (fastest execution)
     // Falls back to VM if AOT compilation fails
     if (!force_vm && !use_legacy) {
-      AOTResult aot_result = aot_compile_and_run_silent(source);
+      AOTResult aot_result = aot_compile_and_run_silent_with_filename(
+          source, argv[arg_offset]);
       if (aot_result == AOT_OK) {
         free(source);
         return 0;

@@ -22,6 +22,13 @@ include(${CMAKE_SOURCE_DIR}/cmake/EmbedLibraries.cmake)
 # Add cmake directory to module path for FindLLVM.cmake
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
+# LLVM (especially MSYS2/mingw builds) imports targets like ZLIB::ZLIB and
+# LibXml2::LibXml2. Find them up-front so the imported targets exist before
+# LLVMConfig.cmake references them. Quiet/optional so MSVC builds still work.
+find_package(ZLIB QUIET)
+find_package(LibXml2 QUIET)
+find_package(zstd QUIET)
+
 # Try CONFIG mode first (preferred), fallback to MODULE mode
 find_package(LLVM CONFIG QUIET)
 if(NOT LLVM_FOUND)
@@ -33,6 +40,19 @@ message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "LLVM_DIR: ${LLVM_DIR}")
 message(STATUS "LLVM_INCLUDE_DIRS: ${LLVM_INCLUDE_DIRS}")
 message(STATUS "LLVM_LIBRARY_DIRS: ${LLVM_LIBRARY_DIRS}")
+
+# OpenSSL is OPTIONAL — when present, `https://` URLs become available
+# in `aot_http_request` and `tulpar pkg install` registry/url specs.
+# When absent, `http://` keeps working as before and `https://` URLs
+# return a clear "TLS not compiled in" error at runtime. Install on
+# MSYS2 mingw64 with: `pacman -S mingw-w64-x86_64-openssl`
+find_package(OpenSSL QUIET)
+if(OpenSSL_FOUND)
+    message(STATUS "OpenSSL: ${OPENSSL_VERSION} (TLS enabled)")
+    add_compile_definitions(TULPAR_HAS_TLS=1)
+else()
+    message(STATUS "OpenSSL: not found (TLS disabled — `https://` URLs will fail at runtime)")
+endif()
 
 include_directories(${LLVM_INCLUDE_DIRS})
 link_directories(${LLVM_LIBRARY_DIRS})
@@ -108,6 +128,10 @@ include_directories(${PROJECT_SOURCE_DIR}/src)
 set(COMMON_SOURCES
     src/common/localization.cpp
     src/common/localization.hpp
+    src/common/diagnostics.cpp
+    src/common/diagnostics.hpp
+    src/common/http_fetch.cpp
+    src/common/http_fetch.hpp
 )
 
 # Core Language
@@ -171,9 +195,43 @@ set(MAIN_SOURCES
     src/main.cpp
 )
 
+# Language Server (LSP)
+set(LSP_SOURCES
+    src/lsp/lsp_server.cpp
+    src/lsp/lsp_server.hpp
+    src/lsp/builtins.cpp
+    src/lsp/builtins.hpp
+    src/lsp/document_index.cpp
+    src/lsp/document_index.hpp
+)
+
+# Source formatter (`tulpar fmt`)
+set(FMT_SOURCES
+    src/fmt/formatter.cpp
+    src/fmt/formatter.hpp
+)
+
+# Package manager (`tulpar pkg ...`)
+set(PKG_SOURCES
+    src/pkg/manifest.cpp
+    src/pkg/manifest.hpp
+    src/pkg/pkg_cli.cpp
+    src/pkg/pkg_cli.hpp
+)
+
 set(SQLITE_SOURCES
     lib/sqlite3/sqlite3.c
 )
+
+# SQLite is vendored 3rd-party. Its amalgamation triggers spurious
+# diagnostics on modern toolchains (gcc/MinGW raises -Wstringop-overread on
+# sqlite3ColumnSetColl, cc1 emits "source object likely at address zero"
+# even though the access is guarded). Silence them on the SQLite TU only
+# so they don't drown real warnings in our own code.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set_source_files_properties(lib/sqlite3/sqlite3.c PROPERTIES
+        COMPILE_OPTIONS "-Wno-stringop-overread;-Wno-stringop-overflow")
+endif()
 
 # ============================================
 # Main Executable
@@ -186,6 +244,9 @@ set(ALL_SOURCES
     ${TYPEINFER_SOURCES}
     ${RUNTIME_SOURCES}
     ${LEGACY_SOURCES}
+    ${LSP_SOURCES}
+    ${FMT_SOURCES}
+    ${PKG_SOURCES}
     ${MAIN_SOURCES}
     ${SQLITE_SOURCES}
 )
@@ -223,11 +284,17 @@ else()
     target_link_libraries(tulpar ${llvm_libs})
 endif()
 
+if(OpenSSL_FOUND)
+    target_link_libraries(tulpar OpenSSL::SSL OpenSSL::Crypto)
+endif()
+
 # ============================================
 # Runtime Library (for AOT-compiled binaries)
 # ============================================
 add_library(tulpar_runtime STATIC
     src/common/localization.cpp
+    src/common/diagnostics.cpp
+    src/common/http_fetch.cpp
     src/vm/runtime_bindings.cpp
     src/vm/vm.cpp
     src/vm/bytecode.cpp
@@ -243,6 +310,9 @@ add_library(tulpar_runtime STATIC
 )
 target_include_directories(tulpar_runtime PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_compile_definitions(tulpar_runtime PRIVATE TULPAR_RUNTIME_ONLY)
+if(OpenSSL_FOUND)
+    target_link_libraries(tulpar_runtime PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+endif()
 
 # Windows-specific settings for runtime
 if(WIN32 AND MSVC)

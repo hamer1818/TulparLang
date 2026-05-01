@@ -1,0 +1,69 @@
+// Coverage for the new builtins added in this turn:
+//   * datetime parse  (parse_iso8601)
+//   * regex           (regex_match / regex_search / regex_capture / regex_replace)
+import "test";
+
+func parse_epoch() {
+    assert_eq_int(parse_iso8601("1970-01-01T00:00:00Z"), 0);
+}
+
+func parse_known() {
+    // 2026-01-01T00:00:00Z -> 1767225600
+    assert_eq_int(parse_iso8601("2026-01-01T00:00:00Z"), 1767225600);
+}
+
+func parse_space_form() {
+    // SQLite-style "YYYY-MM-DD HH:MM:SS" (space separator).
+    assert_eq_int(parse_iso8601("2026-01-01 00:00:00"), 1767225600);
+}
+
+func parse_invalid() {
+    assert_eq_int(parse_iso8601("not-a-date"), -1);
+}
+
+func parse_round_trip() {
+    int t = 1767225600;
+    str s = format_iso8601(t);
+    assert_eq_int(parse_iso8601(s), t);
+}
+
+func rx_match_full() {
+    assert_eq_int(regex_match("[0-9]+", "12345"), 1);
+    assert_eq_int(regex_match("[0-9]+", "12a45"), 0);  // not full match
+}
+
+func rx_search_partial() {
+    assert_eq_int(regex_search("[0-9]+", "abc 42 xyz"), 1);
+    assert_eq_int(regex_search("[0-9]+", "no digits"), 0);
+}
+
+func rx_capture_groups() {
+    array g = regex_capture("(\\w+)=(\\w+)", "name=Hamza");
+    assert_eq_int(length(g), 3);
+    assert_eq_str(g[0], "name=Hamza");
+    assert_eq_str(g[1], "name");
+    assert_eq_str(g[2], "Hamza");
+}
+
+func rx_capture_no_match() {
+    array g = regex_capture("[0-9]+", "no digits");
+    assert_eq_int(length(g), 0);
+}
+
+func rx_replace_all() {
+    str s = regex_replace("[0-9]+", "a1 b22 c333", "N");
+    assert_eq_str(s, "aN bN cN");
+}
+
+print("=== stdlib extras (datetime parse + regex) ===");
+test("parse epoch",          "parse_epoch");
+test("parse known timestamp","parse_known");
+test("parse space form",     "parse_space_form");
+test("parse invalid",        "parse_invalid");
+test("round-trip parse/format","parse_round_trip");
+test("regex_match full",     "rx_match_full");
+test("regex_search partial", "rx_search_partial");
+test("regex_capture groups", "rx_capture_groups");
+test("regex_capture no-match","rx_capture_no_match");
+test("regex_replace all",    "rx_replace_all");
+test_summary();

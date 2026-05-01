@@ -109,124 +109,108 @@ def json_build_test(size):
         sum_val += data[i]['value']
     return sum_val
 
+def _measure_avg(func, iterations):
+    """Run func() `iterations` times after a warmup, return avg ms per call.
+
+    Inner-loop averaging matches the methodology used by C/Rust/Go/Tulpar AOT
+    benchmarks so per-call times are directly comparable across languages.
+    """
+    warmup = max(1, iterations // 10)
+    for _ in range(warmup):
+        func()
+    start = time.perf_counter()
+    for _ in range(iterations):
+        result = func()
+    end = time.perf_counter()
+    avg_ms = ((end - start) / iterations) * 1000.0
+    return result, avg_ms
+
+
+# Standard benchmark workload. Every language runs these exact parameters
+# with these inner iteration counts. Expected results are recorded for
+# correctness verification.
+PYTHON_WORKLOAD = [
+    # (key,            iters,  callable,                       expected_result)
+    ('fibonacci',      100,    lambda: fibonacci(30),          832040),
+    ('factorial',      100000, lambda: factorial(20),          2432902008176640000),
+    ('ackermann',      50,     lambda: ackermann(3, 8),        2045),
+    ('tak',            200,    lambda: tak(18, 12, 6),         7),
+    ('loop',           100,    lambda: loop_test(1000000),     499999500000),
+    ('sieve',          1000,   lambda: sieve(10000),           1229),
+    ('bubble',         50,     lambda: bubble_sort(1000),      None),  # checksum is seed-dependent
+    ('stringconcat',   2000,   lambda: string_concat(1000),    1000),
+    ('arraymemory',    1000,   lambda: array_memory(10000),    49995000),
+    ('stringalloc',    2000,   lambda: string_allocation(1000), 14000),
+    ('jsonbuild',      500,    lambda: json_build_test(1000),  4995000),
+]
+
+
 def run_python_benchmarks():
-    """Python benchmark testlerini çalıştır"""
+    """Python benchmark testlerini çalıştır (inner-loop averaging)."""
     results = {}
-    
-    start = time.perf_counter()
-    fib_result = fibonacci(35)
-    end = time.perf_counter()
-    results['fibonacci'] = {'result': fib_result, 'time': (end - start) * 1000}
-    
-    start = time.perf_counter()
-    fact_result = factorial(20)
-    end = time.perf_counter()
-    results['factorial'] = {'result': fact_result, 'time': (end - start) * 1000}
-    
-    start = time.perf_counter()
-    ack_result = ackermann(3, 8)
-    end = time.perf_counter()
-    results['ackermann'] = {'result': ack_result, 'time': (end - start) * 1000}
-
-    start = time.perf_counter()
-    tak_result = tak(18, 12, 6)
-    end = time.perf_counter()
-    results['tak'] = {'result': tak_result, 'time': (end - start) * 1000}
-
-    start = time.perf_counter()
-    loop_result = loop_test(1000000)  # 1M iterations to match other languages
-    end = time.perf_counter()
-    results['loop'] = {'result': loop_result, 'time': (end - start) * 1000}
-    
-    start = time.perf_counter()
-    sieve_result = sieve(50000)
-    end = time.perf_counter()
-    results['sieve'] = {'result': sieve_result, 'time': (end - start) * 1000}
-
-    start = time.perf_counter()
-    bubble_result = bubble_sort(5000)
-    end = time.perf_counter()
-    results['bubble'] = {'result': bubble_result, 'time': (end - start) * 1000}
-    
-    start = time.perf_counter()
-    str_result = string_concat(20000)
-    end = time.perf_counter()
-    results['stringconcat'] = {'result': str_result, 'time': (end - start) * 1000}
-    
-    start = time.perf_counter()
-    arr_result = array_memory(50000)
-    end = time.perf_counter()
-    results['arraymemory'] = {'result': arr_result, 'time': (end - start) * 1000}
-    
-    # string alloc removed from compiled langs mostly
-    
-    start = time.perf_counter()
-    json_result = json_build_test(20000)
-    end = time.perf_counter()
-    results['jsonbuild'] = {'result': json_result, 'time': (end - start) * 1000}
-    
+    for key, iters, fn, expected in PYTHON_WORKLOAD:
+        last_result, avg_ms = _measure_avg(fn, iters)
+        ok = (expected is None) or (last_result == expected)
+        results[key] = {'result': last_result, 'time': avg_ms, 'expected': expected, 'ok': ok}
     return results
 
 
 def parse_benchmark_output(output):
-    """Benchmark çıktısından süreleri parse et"""
+    """Benchmark çıktısından süreleri parse et.
+
+    Her test bloğunun ilk 'Sure: <num> <unit>' satırını alır. Önce çıktıyı
+    'Test N:' başlıklarına bölerek izole eder; bu sayede 'Sure: N/A' gören
+    bir test, sonraki testin değerini greedy biçimde çekemez.
+    """
     results = {}
-    
-    # Test sonuçlarını parse et - multiline çıktıları da destekle
-    # Tulpar çıktısı: "Sure:\n18.6421\n ms" şeklinde olabilir
-    # Note: Windows encodes µ as "Âµ" or "µ", handle both
-    # Also handle "ns" (nanoseconds) from Go output
-    test_patterns = [
-        ('fibonacci', r'Test 1:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
-        ('factorial', r'Test 2:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
-        ('ackermann', r'Test 3:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
-        ('tak', r'Test 4:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
-        ('loop', r'Test 5:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
-        ('sieve', r'Test 6:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
-        ('bubble', r'Test 7:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
-        ('stringconcat', r'Test 8:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
-        ('arraymemory', r'Test 9:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
-        ('stringalloc', r'Test 10:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
-        ('jsonbuild', r'Test 11:.*?Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)'),
-    ]
-    
-    for name, pattern in test_patterns:
-        match = re.search(pattern, output, re.DOTALL | re.IGNORECASE)
-        if match:
-            val = float(match.group(1))
-            unit = match.group(2).lower()
-            # Handle all microsecond variants and nanoseconds
-            if 'µ' in unit or 'â' in unit or unit == 'us':
-                val /= 1000.0  # µs -> ms
-            elif unit == 'ns':
-                val /= 1000000.0  # ns -> ms
-            results[name] = val
-    
+
+    test_keys = {
+        1: 'fibonacci', 2: 'factorial', 3: 'ackermann', 4: 'tak',
+        5: 'loop', 6: 'sieve', 7: 'bubble', 8: 'stringconcat',
+        9: 'arraymemory', 10: 'stringalloc', 11: 'jsonbuild',
+    }
+
+    # Her testin gövdesini izole et. (?=Test N:|sonu) ile bir sonraki bloğa
+    # taşmayı engelliyoruz; aksi halde 'N/A' içeren testler komşu Sure'yi yer.
+    # Note: Windows encodes µ as "Âµ" or "µ"; Go outputs "ns" for very small times.
+    sure_re = re.compile(
+        r'Sure:\s*([\d.eE+-]+)\s*(ms|[µÂ]+s|us|ns)',
+        re.IGNORECASE,
+    )
+
+    for num, name in test_keys.items():
+        # Test N başlığından, sonraki Test başlığına (veya çıktının sonuna)
+        # kadarki bloğu yakala.
+        block_re = re.compile(
+            rf'Test {num}\s*:(.*?)(?=Test {num + 1}\s*:|TOPLAM\s*SURE|\Z)',
+            re.DOTALL | re.IGNORECASE,
+        )
+        block_match = block_re.search(output)
+        if not block_match:
+            continue
+        block = block_match.group(1)
+        # Bloğun ilk geçerli 'Sure:' satırını al — N/A satırı içermez (regex
+        # numara bekliyor, N/A eşleşmez).
+        m = sure_re.search(block)
+        if not m:
+            continue
+        val = float(m.group(1))
+        unit = m.group(2).lower()
+        if 'µ' in unit or 'â' in unit or unit == 'us':
+            val /= 1000.0  # µs -> ms
+        elif unit == 'ns':
+            val /= 1000000.0  # ns -> ms
+        results[name] = val
+
     # Toplam süreyi parse et
     total_match = re.search(r'TOPLAM SURE:\s*([\d.]+)\s*ms', output, re.IGNORECASE)
     if total_match:
         results['total'] = float(total_match.group(1))
     else:
         results['total'] = sum(results.values()) if results else 0
-    
+
     return results
 
-
-# ... (rest of the file) ...
-
-    test_names = {
-        'fibonacci': 'Fibonacci(30)',
-        'factorial': 'Factorial(20)',
-        'ackermann': 'Ackermann(3, 8)',
-        'tak': 'Tak(18, 12, 6)',
-        'loop': 'Loop 1M',
-        'sieve': 'Sieve(10K)',
-        'bubble': 'BubbleSort(1K)',
-        'stringconcat': 'StringConcat(1K)',
-        'arraymemory': 'ArrayMemory(10K)',
-        'stringalloc': 'StringAlloc(1K)',
-        'jsonbuild': 'JSONBuild(1K)'
-    }
 
 def run_tulpar_benchmark():
     """Tulpar benchmark testini çalıştır"""
@@ -510,9 +494,13 @@ def main():
     # 3. Python
     print("🐍 Python Benchmark Çalıştırılıyor...")
     python_results = run_python_benchmarks()
-    python_total = sum([r['time'] for r in python_results.values()])
+    python_total = sum(r['time'] for r in python_results.values())
     all_results['Python'] = {k: v['time'] for k, v in python_results.items()}
     all_results['Python']['total'] = python_total
+    # Correctness check on Python (the reference implementation in this script).
+    bad = [(k, v['result'], v['expected']) for k, v in python_results.items() if not v['ok']]
+    if bad:
+        print(f"⚠️  Python sonuç hatası: {bad}")
     print("✅ Python Benchmark Tamamlandı!")
     
     # 4. PHP
@@ -566,20 +554,21 @@ def main():
     print("=" * 80)
     print()
     
+    # Standard workload labels (must match parameters in every benchmark.* file).
     test_names = {
-        'fibonacci': 'Fibonacci(30)',
-        'factorial': 'Factorial(20)',
-        'ackermann': 'Ackermann(3, 8)',
-        'tak': 'Tak(18, 12, 6)',
-        'loop': 'Loop 1M',
-        'sieve': 'Sieve(10K)',
-        'bubble': 'BubbleSort(1K)',
+        'fibonacci':    'Fibonacci(30)',
+        'factorial':    'Factorial(20)',
+        'ackermann':    'Ackermann(3, 8)',
+        'tak':          'Tak(18, 12, 6)',
+        'loop':         'Loop 1M',
+        'sieve':        'Sieve(10K)',
+        'bubble':       'BubbleSort(1K)',
         'stringconcat': 'StringConcat(1K)',
         'arraymemory': 'ArrayMemory(10K)',
         'stringalloc': 'StringAlloc(1K)',
-        'jsonbuild': 'JSONBuild(1K)'
+        'jsonbuild':    'JSONBuild(1K)',
     }
-    
+
     languages = ['C', 'Rust', 'Go', 'JavaScript', 'Python', 'PHP', 'Tulpar']
     
     # Header
@@ -589,11 +578,13 @@ def main():
     print(header)
     print("  " + "-" * (20 + 15 * len(languages)))
     
-    # Test Sonuçları
+    # Test Sonuçları. Eksik anahtarlar (parser bir sayı bulamamış =
+    # test skip edilmiş veya çıktı parse edilememiş) None olarak akıyor;
+    # format_time bunu "N/A" olarak basıyor — sıfırla karıştırılmıyor.
     for key, name in test_names.items():
         row = f"  {name:<20}"
         for lang in languages:
-            val = all_results.get(lang, {}).get(key, 0)
+            val = all_results.get(lang, {}).get(key)
             row += f" {format_time(val):<14}"
         print(row)
     
@@ -607,20 +598,44 @@ def main():
     print("=" * 80)
     print()
     
-    # Sıralama için toplam süreleri al
+    # Adil karşılaştırma için toplamı, *tüm* dillerin ölçtüğü ortak test
+    # alt-kümesi üzerinden hesapla. Bu olmadan, bazı testleri skip eden bir
+    # dil yapay olarak hızlı görünür (toplam = daha az testin sürelerinin
+    # toplamı).
+    test_keys = list(test_names.keys())
+    measured_keys_per_lang = {
+        lang: {k for k in test_keys if all_results.get(lang, {}).get(k) is not None}
+        for lang in languages
+    }
+    common_keys = set(test_keys)
+    for lang in languages:
+        if measured_keys_per_lang[lang]:  # En az bir ölçümü olan dilleri dikkate al
+            common_keys &= measured_keys_per_lang[lang]
+
+    if common_keys:
+        print(f"  (Ortak alt küme: {len(common_keys)} test — {sorted(common_keys)})")
+        print()
+
+    # Toplamı yalnızca ortak testler üzerinden hesapla.
     totals = []
     for lang in languages:
-        total = all_results.get(lang, {}).get('total', 0)
+        lang_results = all_results.get(lang, {})
+        if not lang_results:
+            continue
+        # Ortak testlerin hepsini ölçtü mü?
+        if not common_keys.issubset(measured_keys_per_lang[lang]):
+            continue
+        total = sum(lang_results[k] for k in common_keys)
         if total > 0:
             totals.append((lang, total))
-    
+
     # Sırala (en hızlıdan en yavaşa)
     totals.sort(key=lambda x: x[1])
     
     if totals:
-        # Tulpar'ın süresini bul
-        tulpar_total = all_results.get('Tulpar', {}).get('total', 0)
-        
+        # Tulpar'ın ortak-alt-küme toplamı
+        tulpar_total = next((t for l, t in totals if l == 'Tulpar'), 0)
+
         print(f"  {'Sıra':<6} {'Dil':<15} {'Toplam Süre':<18} {'Karşılaştırma (Ref: Tulpar)':<25}")
         print("  " + "-" * 80)
         
@@ -661,11 +676,14 @@ def main():
         if fastest_lang != 'Tulpar':
              print(f"  🏎️  En Hızlı ({fastest_lang}): {format_time(fastest_time)}")
         
-        # Python karşılaştırması
-        python_total = all_results.get('Python', {}).get('total', 0)
+        # Python karşılaştırması (ortak alt küme üzerinden)
+        python_total = next((t for l, t in totals if l == 'Python'), 0)
         if python_total > 0:
-             ratio = python_total / tulpar_total
-             print(f"  🎉 Python'dan {ratio:.2f}x daha HIZLI!")
+            ratio = python_total / tulpar_total
+            if ratio >= 1:
+                print(f"  🎉 Python'dan {ratio:.2f}x daha HIZLI!")
+            else:
+                print(f"  📉 Python'dan {1.0/ratio:.2f}x daha YAVAS")
     
     print()
     print("=" * 80)

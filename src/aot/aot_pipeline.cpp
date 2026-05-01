@@ -2,17 +2,77 @@
 #include "../lexer/lexer.hpp"
 #include "../parser/parser.hpp"
 #include "../common/localization.hpp"
+#include "../common/platform.h"
+#include "../lsp/document_index.hpp"
 #include "llvm_backend.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 
 #include <llvm-c/Core.h>
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
 
-// Parse source code to AST
-static ASTNode_C *parse_source(const char *source) {
+// Optional per-phase wallclock breakdown. Enable with TULPAR_AOT_TIME=1.
+static int aot_timing_enabled() {
+  static int cached = -1;
+  if (cached < 0) {
+    const char *e = getenv("TULPAR_AOT_TIME");
+    cached = (e && *e && *e != '0') ? 1 : 0;
+  }
+  return cached;
+}
+struct AOTPhaseTimer {
+  const char *name;
+  std::chrono::steady_clock::time_point start;
+  AOTPhaseTimer(const char *n) : name(n) {
+    if (aot_timing_enabled()) start = std::chrono::steady_clock::now();
+  }
+  ~AOTPhaseTimer() {
+    if (!aot_timing_enabled()) return;
+    auto end = std::chrono::steady_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    fprintf(stderr, "[AOT-TIME] %-12s %4lldms\n", name, (long long)ms);
+  }
+};
+
+// Platform-specific link flags / temp paths.
+// build-<platform> is searched before legacy ./build to avoid picking
+// up a stale runtime archive from an older configuration.
+// Note on `--export-all-symbols` / `-rdynamic`:
+// Tulpar's `call(name)` builtin uses dlsym/GetProcAddress to dispatch to
+// user-defined functions by name (wings/router handlers, lib/test.tpr
+// runners, ...). By default an executable does NOT export its own internal
+// symbols, so without these flags the lookup silently fails on the actual
+// function and the runtime hits its "Function not found" path. We pay the
+// minor binary-size cost to make `call()` work uniformly across Windows
+// (MinGW) and Linux/macOS.
+#if PLATFORM_WINDOWS
+  #define AOT_LINK_LIB_FLAGS \
+      "-L./build-windows -L./build-windows/Release -L./build " \
+      "-Wl,--export-all-symbols " \
+      "-ltulpar_runtime -lws2_32 -lwsock32"
+  #define AOT_LINK_PIE_FLAG ""
+  #define AOT_EXE_SUFFIX ".exe"
+  #define AOT_TMP_RUN_BASE ".tulpar_run"
+#else
+  #define AOT_LINK_LIB_FLAGS \
+      "-L./build-linux -L./build-macos -L./build " \
+      "-rdynamic " \
+      "-ltulpar_runtime -lm -lpthread -ldl"
+  #define AOT_LINK_PIE_FLAG "-no-pie"
+  #define AOT_EXE_SUFFIX ""
+  #define AOT_TMP_RUN_BASE "/tmp/.tulpar_run"
+#endif
+
+// Parse source code to AST. Caller-provided `source_filename` is
+// optional and only used by parse-time diagnostics for the file path
+// in `--> path:line` headers.
+static ASTNode_C *parse_source(const char *source,
+                               const char *source_filename = nullptr) {
+  // Hand source + filename to the parser for Rust-style diagnostics.
+  parser_set_diagnostic_context(source, source_filename);
   Lexer *lexer = lexer_create(source);
 
   int token_capacity = 100;
@@ -46,28 +106,67 @@ static ASTNode_C *parse_source(const char *source) {
   return ast;
 }
 
-// Compile Tulpar source to object file
+// Compile Tulpar source to object file.
+//
+// The `_with_filename` variant is the canonical entry point — it pipes the
+// source filename through to LLVMBackend so codegen diagnostics can render
+// `--> path/file.tpr:42` headers. The plain `aot_compile` is kept as a
+// thin wrapper that defaults the filename to NULL (legacy behaviour: shows
+// `(stdin)` in diagnostics).
 AOTResult aot_compile(const char *source, const char *output_name) {
-  printf("[AOT] Parsing source...\n");
-  ASTNode_C *ast = parse_source(source);
+  return aot_compile_with_filename(source, output_name, nullptr);
+}
+
+AOTResult aot_compile_with_filename(const char *source,
+                                    const char *output_name,
+                                    const char *source_filename) {
+  ASTNode_C *ast;
+  {
+    AOTPhaseTimer t("parse");
+    printf("[AOT] Parsing source...\n");
+    ast = parse_source(source, source_filename);
+  }
   if (!ast) {
     fprintf(stderr, "%s", tulpar::i18n::tr_for_en("[AOT] Error: Failed to parse source\n"));
     return AOT_ERROR_PARSE;
   }
 
-  printf("[AOT] Creating LLVM backend...\n");
-  LLVMBackend *backend = llvm_backend_create("tulpar_aot_module");
+  LLVMBackend *backend;
+  {
+    AOTPhaseTimer t("backend-init");
+    printf("[AOT] Creating LLVM backend...\n");
+    backend = llvm_backend_create("tulpar_aot_module");
+  }
   if (!backend) {
     fprintf(stderr, "%s", tulpar::i18n::tr_for_en("[AOT] Error: Failed to create LLVM backend\n"));
     ast_node_free(ast);
     return AOT_ERROR_CODEGEN;
   }
 
-  printf("[AOT] Generating LLVM IR...\n");
-  llvm_backend_compile(backend, ast);
+  // Hand the source text to the backend so codegen errors can render a
+  // Rust-style line excerpt + caret. (Borrow only — caller owns the buffer.)
+  backend->source_text = source;
+  backend->source_filename = source_filename;
 
-  printf("[AOT] Optimizing...\n");
-  llvm_backend_optimize(backend);
+  {
+    AOTPhaseTimer t("codegen");
+    printf("[AOT] Generating LLVM IR...\n");
+    llvm_backend_compile(backend, ast);
+  }
+
+  if (backend->had_error) {
+    fprintf(stderr, "%s", tulpar::i18n::tr_for_en(
+        "[AOT] Error: Codegen reported errors above; aborting build.\n"));
+    llvm_backend_destroy(backend);
+    ast_node_free(ast);
+    return AOT_ERROR_CODEGEN;
+  }
+
+  {
+    AOTPhaseTimer t("optimize");
+    printf("[AOT] Optimizing...\n");
+    llvm_backend_optimize(backend);
+  }
 
   // Generate output filename
   char obj_filename[256];
@@ -75,29 +174,43 @@ AOTResult aot_compile(const char *source, const char *output_name) {
   snprintf(obj_filename, sizeof(obj_filename), "%s.o", output_name);
   snprintf(exe_filename, sizeof(exe_filename), "%s", output_name);
 
-  // Emit IR (Debug)
-  char ir_file[256];
-  snprintf(ir_file, sizeof(ir_file), "%s.ll", output_name);
-  llvm_backend_emit_ir_file(backend, ir_file);
-
-  printf("[AOT] Emitting object file: %s\n", obj_filename);
-  if (llvm_backend_emit_object(backend, obj_filename) != 0) {
-    fprintf(stderr, "%s", tulpar::i18n::tr_for_en("[AOT] Error: Failed to emit object file\n"));
-    llvm_backend_destroy(backend);
-    ast_node_free(ast);
-    return AOT_ERROR_EMIT;
+  // Emit IR (Debug). Off by default — costs measurable I/O on bigger inputs
+  // and almost nobody reads the .ll. Enable with TULPAR_AOT_EMIT_LL=1.
+  {
+    const char *e = getenv("TULPAR_AOT_EMIT_LL");
+    if (e && *e && *e != '0') {
+      AOTPhaseTimer t("emit-ll");
+      char ir_file[256];
+      snprintf(ir_file, sizeof(ir_file), "%s.ll", output_name);
+      llvm_backend_emit_ir_file(backend, ir_file);
+    }
   }
 
-  // Link using clang (or system linker)
+  {
+    AOTPhaseTimer t("emit-obj");
+    printf("[AOT] Emitting object file: %s\n", obj_filename);
+    if (llvm_backend_emit_object(backend, obj_filename) != 0) {
+      fprintf(stderr, "%s", tulpar::i18n::tr_for_en("[AOT] Error: Failed to emit object file\n"));
+      llvm_backend_destroy(backend);
+      ast_node_free(ast);
+      return AOT_ERROR_EMIT;
+    }
+  }
+
+  // Link using clang++ (need C++ runtime for tulpar_runtime)
   printf("[AOT] Linking executable: %s\n", exe_filename);
   char link_cmd[1024];
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang -O3 %s -o %s -no-pie -L./build -L./build-linux -L./build-macos "
-      "-ltulpar_runtime -lm -lpthread -ldl 2>&1",
-      obj_filename, exe_filename);
+      "clang++ %s -o %s%s %s %s 2>&1",
+      obj_filename, exe_filename, AOT_EXE_SUFFIX,
+      AOT_LINK_PIE_FLAG, AOT_LINK_LIB_FLAGS);
 
-  int link_result = system(link_cmd);
+  int link_result;
+  {
+    AOTPhaseTimer t("link");
+    link_result = system(link_cmd);
+  }
   if (link_result != 0) {
     fprintf(stderr, tulpar::i18n::tr_for_en(
             "[AOT] Error: Linking failed (code %d). Check clang installation and libraries.\n"),
@@ -124,7 +237,13 @@ AOTResult aot_compile_and_run(const char *source) {
 
   // Try to execute
   printf("[AOT] Executing generated binary...\n");
+#if PLATFORM_WINDOWS
+  // cmd.exe does not auto-search the current directory unless an explicit
+  // path is given, so prefix with .\ to ensure the binary is found.
+  int run_status = system(".\\tulpar_temp.exe");
+#else
   int run_status = system("./tulpar_temp");
+#endif
   (void)run_status;
 
   return AOT_OK;
@@ -132,8 +251,9 @@ AOTResult aot_compile_and_run(const char *source) {
 
 // Silent compile to native binary (no output, temp files)
 static AOTResult aot_compile_silent(const char *source,
-                                    const char *output_name) {
-  ASTNode_C *ast = parse_source(source);
+                                    const char *output_name,
+                                    const char *source_filename) {
+  ASTNode_C *ast = parse_source(source, source_filename);
   if (!ast) {
     return AOT_ERROR_PARSE;
   }
@@ -144,8 +264,15 @@ static AOTResult aot_compile_silent(const char *source,
     return AOT_ERROR_CODEGEN;
   }
   backend->quiet = 1; // Suppress [AOT] messages
+  backend->source_text = source;
+  backend->source_filename = source_filename;
 
   llvm_backend_compile(backend, ast);
+  if (backend->had_error) {
+    llvm_backend_destroy(backend);
+    ast_node_free(ast);
+    return AOT_ERROR_CODEGEN;
+  }
   llvm_backend_optimize(backend);
 
   char obj_filename[256];
@@ -161,11 +288,19 @@ static AOTResult aot_compile_silent(const char *source,
 
   // Link silently (suppress output)
   char link_cmd[1024];
+#if PLATFORM_WINDOWS
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang -O3 %s -o %s -no-pie -L./build -L./build-linux -L./build-macos "
-      "-ltulpar_runtime -lm -lpthread -ldl 2>/dev/null",
-      obj_filename, exe_filename);
+      "clang++ %s -o %s%s %s %s 2>NUL",
+      obj_filename, exe_filename, AOT_EXE_SUFFIX,
+      AOT_LINK_PIE_FLAG, AOT_LINK_LIB_FLAGS);
+#else
+  snprintf(
+      link_cmd, sizeof(link_cmd),
+      "clang++ %s -o %s%s %s %s 2>/dev/null",
+      obj_filename, exe_filename, AOT_EXE_SUFFIX,
+      AOT_LINK_PIE_FLAG, AOT_LINK_LIB_FLAGS);
+#endif
 
   int link_result = system(link_cmd);
 
@@ -182,20 +317,77 @@ static AOTResult aot_compile_silent(const char *source,
   return AOT_OK;
 }
 
-// Silent compile and run - used as default execution mode
+// Silent compile and run - used as default execution mode.
 // Compiles to temp binary, runs it, cleans up. No [AOT] output.
 AOTResult aot_compile_and_run_silent(const char *source) {
-  AOTResult result = aot_compile_silent(source, "/tmp/.tulpar_run");
+  return aot_compile_and_run_silent_with_filename(source, nullptr);
+}
+
+AOTResult aot_compile_and_run_silent_with_filename(const char *source,
+                                                   const char *source_filename) {
+#if PLATFORM_WINDOWS
+  const char *base = "tulpar_run_tmp";
+  AOTResult result = aot_compile_silent(source, base, source_filename);
   if (result != AOT_OK) {
     return result;
   }
-
-  // Execute the compiled binary
+  // cmd.exe does not auto-search the current directory unless an explicit
+  // path is given, so prefix with .\ to ensure the binary is found.
+  int run_result = system(".\\tulpar_run_tmp.exe");
+  remove("tulpar_run_tmp.exe");
+  remove("tulpar_run_tmp.ll");
+  remove("tulpar_run_tmp.o");
+#else
+  const char *base = "/tmp/.tulpar_run";
+  AOTResult result = aot_compile_silent(source, base, source_filename);
+  if (result != AOT_OK) {
+    return result;
+  }
   int run_result = system("/tmp/.tulpar_run");
-
-  // Cleanup temp files
   remove("/tmp/.tulpar_run");
   remove("/tmp/.tulpar_run.ll");
+#endif
 
   return (run_result == 0) ? AOT_OK : AOT_ERROR_LINK;
+}
+
+// Check-only pipeline: parse + codegen pass, no optimisation, no object
+// emission, no link. Used by the LSP server (`tulpar --lsp`) to gather
+// structured diagnostics on every keystroke. Cost is dominated by
+// llvm_backend_compile, but staying off the linker keeps end-to-end
+// latency in the ~100ms range on typical files.
+AOTResult aot_check_only(const char *source, const char *source_filename) {
+  return aot_check_and_index(source, source_filename, nullptr);
+}
+
+AOTResult aot_check_and_index(const char *source, const char *source_filename,
+                              void *out_index) {
+  ASTNode_C *ast = parse_source(source, source_filename);
+  if (!ast) {
+    return AOT_ERROR_PARSE;
+  }
+
+  LLVMBackend *backend = llvm_backend_create("tulpar_lsp_check");
+  if (!backend) {
+    ast_node_free(ast);
+    return AOT_ERROR_CODEGEN;
+  }
+  backend->quiet = 1;
+  backend->source_text = source;
+  backend->source_filename = source_filename;
+
+  llvm_backend_compile(backend, ast);
+  AOTResult result = backend->had_error ? AOT_ERROR_CODEGEN : AOT_OK;
+
+  // Build the symbol index *after* codegen but before ast_node_free —
+  // codegen might mutate AST node fields (e.g. importing module bodies),
+  // so we capture the post-import state for hover/completion.
+  if (out_index) {
+    auto *idx = static_cast<tulpar::DocumentIndex *>(out_index);
+    tulpar::document_index_build(ast, source, *idx);
+  }
+
+  llvm_backend_destroy(backend);
+  ast_node_free(ast);
+  return result;
 }

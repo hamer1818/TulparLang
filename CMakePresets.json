@@ -1,0 +1,57 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 23, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "windows-mingw",
+      "displayName": "Windows (MinGW64 / MSYS2 LLVM)",
+      "description": "MinGW Makefiles + MSYS2 LLVM. Used by build.bat / build.ps1.",
+      "inherits": "base",
+      "generator": "MinGW Makefiles",
+      "binaryDir": "${sourceDir}/build-windows",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "C:/msys64/mingw64",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "linux",
+      "displayName": "Linux (system clang/gcc + LLVM)",
+      "description": "Default Linux build. Used by build.sh.",
+      "inherits": "base",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-linux"
+    },
+    {
+      "name": "macos",
+      "displayName": "macOS (system clang + LLVM)",
+      "description": "Default macOS build. Used by build.sh.",
+      "inherits": "base",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-macos"
+    },
+    {
+      "name": "ninja",
+      "displayName": "Ninja (any platform with ninja installed)",
+      "description": "Faster, parallel-friendly generator for incremental dev builds.",
+      "inherits": "base",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-ninja"
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-mingw", "configurePreset": "windows-mingw", "jobs": 0 },
+    { "name": "linux",         "configurePreset": "linux",         "jobs": 0 },
+    { "name": "macos",         "configurePreset": "macos",         "jobs": 0 },
+    { "name": "ninja",         "configurePreset": "ninja",         "jobs": 0 }
+  ]
+}

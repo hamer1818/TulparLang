@@ -140,9 +140,6 @@ func api_run(int port) {
     api_get("/health", "_health_handler");
     api_get("/api/info", "_info_handler");
 
-    // Export helpers to global scope for user scripts
-    len = len;
-    
     print("📡 API running on http://127.0.0.1:" + toString(port));
     print("📚 Endpoints registered: " + toString(len(_api_routes)));
     print("");

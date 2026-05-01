@@ -131,9 +131,9 @@ int yas = 25;
 str yasStr = toString(yas);
 print("int 25 → string:", yasStr);
 
-float ondalik = 3.14;
-int tam = toInt(ondalik);
-print("float 3.14 → int:", tam);
+float pi_yaklasik = 3.14;
+int tam_kisim = toInt(pi_yaklasik);
+print("float 3.14 → int:", tam_kisim);
 print("");
 
 // ----------------------------------------

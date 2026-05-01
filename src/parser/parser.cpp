@@ -1,6 +1,9 @@
 #include "parser.hpp"
 #include "ast_visitor.hpp"
 #include "../common/localization.hpp"
+#include "../common/diagnostics.hpp"
+#include <climits>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -63,8 +66,115 @@ bool Parser::is_at_end() const {
     return current().type() == TOKEN_EOF;
 }
 
+// Source/filename context borrowed from the host (compiler driver) so
+// parser diagnostics can render a Rust-style excerpt without changing
+// the C++ Parser API. Single-threaded compilation, so a process-global
+// is safe.
+namespace {
+const char *g_parser_source_text = nullptr;
+const char *g_parser_source_filename = nullptr;
+// Set whenever Parser::error fires; checked in parser_parse() so that a
+// recoverable parse error (which used to silently produce a partial AST
+// that codegen happily processed) now causes the parse to fail outright.
+int g_parser_error_count = 0;
+}
+
+extern "C" void parser_set_diagnostic_context(const char *source_text,
+                                              const char *source_filename) {
+    g_parser_source_text = source_text;
+    g_parser_source_filename = source_filename;
+    g_parser_error_count = 0;
+}
+
+// Render a Rust-style multi-line parse error. Mirrors the AOT codegen's
+// `report_codegen_error` so user-facing diagnostics look uniform whether
+// the failure happens during parse or codegen. `caret_token` is the
+// substring on the indicated line that the caret should underline; pass
+// null/empty to skip the caret. `hint` is optional. `column_hint` (1-based)
+// disambiguates the caret when the same lexeme appears multiple times on
+// the line; pass <=0 to fall back to first-occurrence search.
+static void render_parse_error_pretty(int line, const std::string& message,
+                                      const char *caret_token,
+                                      const char *hint,
+                                      int column_hint = 0) {
+    // LSP / structured-collection mode: push a record and skip stderr
+    // entirely so the JSON-RPC transport stays clean.
+    if (tulpar::diag_sink_active()) {
+        int col = column_hint > 0 ? column_hint : 1;
+        int len = (caret_token && *caret_token) ? (int)std::strlen(caret_token) : 0;
+        tulpar::diag_sink_push(line, col, len, "error", message.c_str(), hint);
+        return;
+    }
+    std::fprintf(stderr, "hata: %s\n", message.c_str());
+    if (g_parser_source_filename && *g_parser_source_filename) {
+        std::fprintf(stderr, "  --> %s:%d\n", g_parser_source_filename, line);
+    } else {
+        std::fprintf(stderr, "  --> (stdin):%d\n", line);
+    }
+    if (g_parser_source_text) {
+        const char *src = g_parser_source_text;
+        int cur_line = 1;
+        const char *line_start = src;
+        while (*src && cur_line < line) {
+            if (*src == '\n') {
+                cur_line++;
+                line_start = src + 1;
+            }
+            src++;
+        }
+        const char *line_end = line_start;
+        while (*line_end && *line_end != '\n' && *line_end != '\r') line_end++;
+        std::fprintf(stderr, "    |\n");
+        std::fprintf(stderr, "%3d | %.*s\n", line,
+                     (int)(line_end - line_start), line_start);
+        if (caret_token && *caret_token) {
+            int line_len = (int)(line_end - line_start);
+            int caret_len = (int)std::strlen(caret_token);
+            int caret_col = -1;
+            for (int i = 0; i + caret_len <= line_len; i++) {
+                if (std::memcmp(line_start + i, caret_token, caret_len) == 0) {
+                    caret_col = i;
+                    break;
+                }
+            }
+            if (caret_col >= 0) {
+                std::fprintf(stderr, "    | ");
+                for (int i = 0; i < caret_col; i++) std::fputc(' ', stderr);
+                for (int i = 0; i < caret_len; i++) std::fputc('^', stderr);
+                std::fputc('\n', stderr);
+            }
+        }
+    }
+    if (hint && *hint) {
+        std::fprintf(stderr, "    = ipucu: %s\n", hint);
+    }
+}
+
 void Parser::error(const std::string& message) {
-    fprintf(stderr, tulpar::i18n::tr_for_en("Parser Error: %s\n"), message.c_str());
+    g_parser_error_count++;
+    // The legacy Parser::error is invoked from inside parse_* helpers;
+    // expect() builds the message as "<expectation> at line N", so we
+    // try to recover the line and the offending token text for caret
+    // rendering. Fall back to the classic one-liner if we can't.
+    int line = current().line();
+    std::string clean = message;
+    auto pos = clean.find(" at line ");
+    if (pos != std::string::npos) {
+        clean = clean.substr(0, pos);
+    }
+    // Best-effort caret token: the lexeme of the current token (the one
+    // we choked on). Empty for EOF/punctuation we can't render meaningfully.
+    std::string lexeme;
+    int column = 0;
+    if (!is_at_end()) {
+        const Token &t = current();
+        lexeme = t.value();
+        column = t.column();
+    }
+    const char *caret = lexeme.empty() ? nullptr : lexeme.c_str();
+    render_parse_error_pretty(line, "ayrıştırma hatası: " + clean, caret,
+                              "sözdiziminde bir eksiklik var — beklenen "
+                              "yapıyı kontrol edin", column);
     throw std::runtime_error(message);
 }
 
@@ -97,8 +207,10 @@ std::unique_ptr<ASTNode> Parser::parse() {
         try {
             statements.push_back(parse_statement());
         } catch (const std::exception& e) {
-            fprintf(stderr, tulpar::i18n::tr_for_en("Parse error: %s\n"), e.what());
-            // Skip to next statement
+            // Pretty diagnostic was already emitted by Parser::error(); we
+            // just need to recover and keep parsing the rest of the file
+            // so the user sees every parse error in a single run.
+            (void)e;
             while (!is_at_end() && current().type() != TOKEN_SEMICOLON &&
                    current().type() != TOKEN_RBRACE) {
                 advance();
@@ -232,13 +344,18 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
     }
     
     expect(TOKEN_RPAREN, "Expected ')' after parameters");
-    
-    // Return type (optional, defaults to void)
+
+    // Return type (optional, defaults to void).
+    // Two forms accepted:
+    //   func name(...) { ... }              // no return type
+    //   func name(...) int { ... }          // bare type
+    //   func name(...): int { ... }         // colon-prefixed (idiomatic)
     DataType return_type = TYPE_VOID;
+    match(TOKEN_COLON); // consume ':' if present, harmless otherwise
     if (!check(TOKEN_LBRACE)) {
         return_type = parse_type();
     }
-    
+
     // Function body
     auto body = parse_block();
     
@@ -343,7 +460,23 @@ std::unique_ptr<ASTNode> Parser::parse_for_loop() {
     auto init = parse_statement();
     auto condition = parse_expression();
     expect(TOKEN_SEMICOLON, "Expected ';' after condition");
-    auto increment = parse_expression();
+
+    // Increment may be either an expression (i++ / i+=1 are postfix/compound)
+    // OR an assignment statement (i = i + 1) — accept both.
+    std::unique_ptr<ASTNode> increment;
+    if (check(TOKEN_IDENTIFIER) && peek().type() == TOKEN_ASSIGN) {
+        SourceLocation iloc(current().line(), current().column());
+        Token name_tok = current();
+        advance(); // identifier
+        advance(); // '='
+        auto value = parse_expression();
+        increment = std::make_unique<ASTNode>(
+            Assignment(name_tok.value(), std::move(value), iloc)
+        );
+    } else {
+        increment = parse_expression();
+    }
+
     expect(TOKEN_RPAREN, "Expected ')' after for clauses");
     
     auto body = parse_statement();
@@ -475,6 +608,23 @@ std::unique_ptr<ASTNode> Parser::parse_expression_statement() {
     }
 
     auto expr = parse_expression();
+
+    // Complex-lvalue assignment:  arr[i] = val;  obj["k"]["k2"] = val;
+    if (check(TOKEN_ASSIGN)) {
+        // Only valid if expr is an ArrayAccess (or chain thereof).
+        // Other lvalues currently aren't supported and will fall through
+        // to the existing error path.
+        if (std::holds_alternative<ArrayAccess>(expr->value)) {
+            SourceLocation loc(current().line(), current().column());
+            advance(); // consume '='
+            auto value = parse_expression();
+            expect(TOKEN_SEMICOLON, "Expected ';' after assignment");
+            return std::make_unique<ASTNode>(
+                Assignment(std::move(expr), std::move(value), loc)
+            );
+        }
+    }
+
     expect(TOKEN_SEMICOLON, "Expected ';' after expression");
     return expr;
 }
@@ -485,25 +635,25 @@ std::unique_ptr<ASTNode> Parser::parse_expression_statement() {
 
 std::unique_ptr<ASTNode> Parser::parse_expression(int precedence) {
     auto left = parse_unary();
-    
+
     while (!is_at_end()) {
         TulparTokenType op = current().type();
         int op_prec = get_precedence(op);
-        
+
         if (op_prec <= precedence) {
             break;
         }
-        
+
         advance(); // consume operator
         auto right = parse_expression(op_prec);
-        
+
         SourceLocation loc(current().line(), current().column());
         left = std::make_unique<ASTNode>(
             BinaryOp(std::move(left), std::move(right), op, loc)
         );
     }
-    
-    return parse_postfix(std::move(left));
+
+    return left;
 }
 
 std::unique_ptr<ASTNode> Parser::parse_unary() {
@@ -513,8 +663,10 @@ std::unique_ptr<ASTNode> Parser::parse_unary() {
         auto operand = parse_unary();
         return std::make_unique<ASTNode>(UnaryOp(std::move(operand), op, loc));
     }
-    
-    return parse_primary();
+
+    // Postfix (call, index, ++/--) bagdas operand'a ait — binary operandi
+    // her zaman primary+postfix bicimde olmali ki 'f(x) + g(y)' calissin.
+    return parse_postfix(parse_primary());
 }
 
 std::unique_ptr<ASTNode> Parser::parse_primary() {
@@ -522,13 +674,34 @@ std::unique_ptr<ASTNode> Parser::parse_primary() {
     
     // Literals
     if (check(TOKEN_INT_LITERAL)) {
-        long long value = std::stoll(current().value());
+        // stoll raises out_of_range/invalid_argument; catch instead of crashing.
+        // Literals that overflow i64 (e.g. BigInt: 123...890) are clamped to
+        // INT64_MAX with a warning; runtime BigInt support is the proper fix.
+        long long value = 0;
+        const std::string& tok = current().value();
+        try {
+            value = std::stoll(tok);
+        } catch (const std::out_of_range&) {
+            std::fprintf(stderr,
+                "Uyari (Satir %d): '%s' i64 aralik disinda; INT64_MAX'a kirpildi.\n",
+                current().line(), tok.c_str());
+            value = INT64_MAX;
+        } catch (const std::invalid_argument&) {
+            error("Invalid integer literal");
+        }
         advance();
         return std::make_unique<ASTNode>(IntLiteral(value, loc));
     }
-    
+
     if (check(TOKEN_FLOAT_LITERAL)) {
-        double value = std::stod(current().value());
+        double value = 0.0;
+        try {
+            value = std::stod(current().value());
+        } catch (const std::out_of_range&) {
+            value = 0.0;
+        } catch (const std::invalid_argument&) {
+            error("Invalid float literal");
+        }
         advance();
         return std::make_unique<ASTNode>(FloatLiteral(value, loc));
     }
@@ -583,6 +756,18 @@ std::unique_ptr<ASTNode> Parser::parse_postfix(std::unique_ptr<ASTNode> expr) {
             expr = parse_call(std::move(expr));
         } else if (match(TOKEN_LBRACKET)) {
             expr = parse_array_access(std::move(expr));
+        } else if (match(TOKEN_DOT)) {
+            // Member access: obj.field  -->  obj["field"]
+            // Desugars to ArrayAccess with a string literal index, so the
+            // existing object-store/load runtime path handles it as-is.
+            SourceLocation dot_loc(current().line(), current().column());
+            Token field = expect(TOKEN_IDENTIFIER, "Expected field name after '.'");
+            auto key = std::make_unique<ASTNode>(
+                StringLiteral(field.value(), dot_loc)
+            );
+            expr = std::make_unique<ASTNode>(
+                ArrayAccess(std::move(expr), std::move(key), dot_loc)
+            );
         } else if (match(TOKEN_PLUS_PLUS)) {
             // x++ becomes increment
             if (auto* id = std::get_if<Identifier>(&expr->value)) {
@@ -815,6 +1000,10 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
         } else if constexpr (std::is_same_v<T, Assignment>) {
             out->type = AST_ASSIGNMENT;
             out->name = dup_cstr(n.name);
+            // Complex lvalue: emit `left` so codegen sees AST_ARRAY_ACCESS etc.
+            if (n.target) {
+                out->left = convert_ast_node_ptr(n.target);
+            }
             out->right = convert_ast_node_ptr(n.value);
             set_loc(out, n.loc);
         } else if constexpr (std::is_same_v<T, CompoundAssign>) {
@@ -1078,9 +1267,16 @@ ASTNode_C *parser_parse(Parser_C *parser) {
         Parser modern_parser(std::move(token_vec));
         std::unique_ptr<ASTNode> modern_ast = modern_parser.parse();
         if (!modern_ast) return nullptr;
+        // Even if parse() recovered and returned a partial AST, refuse to
+        // proceed when any Parser::error fired — codegen on broken syntax
+        // produces misleading "[AOT] Successfully created" output and the
+        // user thinks their bad source compiled cleanly.
+        if (g_parser_error_count > 0) return nullptr;
         return convert_ast_node(*modern_ast);
     } catch (const std::exception& e) {
-        std::fprintf(stderr, tulpar::i18n::tr_for_en("Parser Error: %s\n"), e.what());
+        // Pretty diagnostic was already emitted by Parser::error(); the
+        // throw here just propagates control back up.
+        (void)e;
         return nullptr;
     }
 }

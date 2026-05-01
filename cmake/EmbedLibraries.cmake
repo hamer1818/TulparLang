@@ -51,6 +51,13 @@ endfunction()
 embed_library("wings" "wings.tpr" EMBEDDED_WINGS_CONTENT)
 embed_library("router" "router.tpr" EMBEDDED_ROUTER_CONTENT)
 embed_library("http_utils" "http_utils.tpr" EMBEDDED_HTTP_UTILS_CONTENT)
+embed_library("async" "async.tpr" EMBEDDED_ASYNC_CONTENT)
+embed_library("middleware" "middleware.tpr" EMBEDDED_MIDDLEWARE_CONTENT)
+embed_library("socket" "socket.tpr" EMBEDDED_SOCKET_CONTENT)
+embed_library("tulpar_api" "tulpar_api.tpr" EMBEDDED_TULPAR_API_CONTENT)
+embed_library("test" "test.tpr" EMBEDDED_TEST_CONTENT)
+embed_library("http_client" "http_client.tpr" EMBEDDED_HTTP_CLIENT_CONTENT)
+embed_library("orm" "orm.tpr" EMBEDDED_ORM_CONTENT)
 
 # Generate the header file from template
 configure_file(

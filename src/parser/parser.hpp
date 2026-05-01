@@ -194,6 +194,13 @@ extern "C" {
     ASTNode_C *ast_node_create(ASTNodeType type);
     void ast_node_free(ASTNode_C *node);
     void ast_print(ASTNode_C *node, int indent);
+
+    // Provide source text + filename so parse-time diagnostics can render a
+    // Rust-style line excerpt + caret rather than a one-liner. Both pointers
+    // are borrowed (caller owns) and live until the next parse_parse call.
+    // Pass null/null to disable enrichment.
+    void parser_set_diagnostic_context(const char *source_text,
+                                       const char *source_filename);
 }
 
 #endif // TULPAR_PARSER_HPP

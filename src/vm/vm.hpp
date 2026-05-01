@@ -160,9 +160,15 @@ static inline VMValue vm_make_float(double v) {
 }
 
 static inline VMValue vm_make_bool(int v) {
+  // Zero the whole `as` slot first — `as.bool_val = v` only writes one
+  // byte and leaves the remaining 7 bytes uninitialised. After SysV ABI
+  // splits VMValue into {i64, i64} for return, those uninitialised bytes
+  // become part of the returned `as` field and `is_truthy` (which tests
+  // `as != 0`) reports stale garbage as "truthy" even for VM_BOOL(0).
   VMValue value;
   value.type = VM_VAL_BOOL;
-  value.as.bool_val = v;
+  value.as.int_val = 0;
+  value.as.bool_val = v ? 1 : 0;
   return value;
 }
 

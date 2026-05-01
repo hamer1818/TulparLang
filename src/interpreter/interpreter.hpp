@@ -9,17 +9,17 @@
 #include <ctime>
 
 // Cross-platform type definitions
-#if PLATFORM_WINDOWS
-    #define THREAD_HANDLE tulpar_thread_t
-    #define MUTEX_HANDLE tulpar_mutex_t
+// Note: On Windows, <winsock2.h> already defines INVALID_SOCKET and
+// SOCKET_ERROR. Don't redefine them or we'll clobber the real values.
+#define THREAD_HANDLE tulpar_thread_t
+#define MUTEX_HANDLE tulpar_mutex_t
+#ifndef SOCKET
     #define SOCKET socket_t
+#endif
+#ifndef INVALID_SOCKET
     #define INVALID_SOCKET INVALID_SOCKET_VALUE
-    #define SOCKET_ERROR SOCKET_ERROR_VALUE
-#else
-    #define THREAD_HANDLE tulpar_thread_t
-    #define MUTEX_HANDLE tulpar_mutex_t
-    #define SOCKET socket_t
-    #define INVALID_SOCKET INVALID_SOCKET_VALUE
+#endif
+#ifndef SOCKET_ERROR
     #define SOCKET_ERROR SOCKET_ERROR_VALUE
 #endif
 

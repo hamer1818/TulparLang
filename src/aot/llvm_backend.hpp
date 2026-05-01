@@ -112,6 +112,23 @@ typedef struct {
   LLVMValueRef func_aot_to_json;
   LLVMValueRef func_aot_runtime_init;
   LLVMValueRef func_aot_input;
+  LLVMValueRef func_aot_env;
+  LLVMValueRef func_aot_arena_save;
+  LLVMValueRef func_aot_arena_restore;
+  LLVMValueRef func_aot_now_iso8601;
+  LLVMValueRef func_aot_format_iso8601;
+  LLVMValueRef func_aot_parse_iso8601;
+  LLVMValueRef func_aot_regex_match;
+  LLVMValueRef func_aot_regex_search;
+  LLVMValueRef func_aot_regex_capture;
+  LLVMValueRef func_aot_regex_replace;
+  LLVMValueRef func_aot_weekday;
+  LLVMValueRef func_aot_date_add_seconds;
+  LLVMValueRef func_aot_file_glob;
+  LLVMValueRef func_aot_csv_parse;
+  LLVMValueRef func_aot_csv_emit;
+  LLVMValueRef func_aot_keys;
+  LLVMValueRef func_aot_http_request;
   LLVMValueRef func_aot_trim;
   LLVMValueRef func_aot_replace;
   LLVMValueRef func_aot_split;
@@ -127,6 +144,8 @@ typedef struct {
   LLVMValueRef func_aot_throw;
   LLVMValueRef func_aot_get_exception;
   LLVMValueRef func_setjmp;
+  // llvm.frameaddress.p0 — Windows only, feeds _setjmpex's 2nd arg.
+  LLVMValueRef func_frameaddress;
 
   // Time functions
   LLVMValueRef func_aot_clock_ms;
@@ -164,6 +183,16 @@ typedef struct {
   // HTTP Functions
   LLVMValueRef func_aot_http_parse_request;
   LLVMValueRef func_aot_http_create_response;
+  LLVMValueRef func_aot_http_create_response_full;
+  LLVMValueRef func_aot_http_create_response_keepalive;
+  LLVMValueRef func_aot_http_should_keepalive;
+  LLVMValueRef func_aot_http_recv_request;
+  LLVMValueRef func_aot_http_status_text;
+  LLVMValueRef func_aot_path_match;
+  LLVMValueRef func_aot_parse_query;
+
+  // Process control
+  LLVMValueRef func_aot_exit;
 
   // Math Functions - Single param
   LLVMValueRef func_aot_math_abs;
@@ -192,6 +221,7 @@ typedef struct {
   LLVMValueRef func_aot_math_atan2;
   LLVMValueRef func_aot_math_hypot;
   LLVMValueRef func_aot_math_fmod;
+  LLVMValueRef func_aot_math_mod;
   LLVMValueRef func_aot_math_min;
   LLVMValueRef func_aot_math_max;
   LLVMValueRef func_aot_math_randint;
@@ -275,8 +305,32 @@ typedef struct {
   // ABI tracking
   int current_function_is_void_abi;
 
+  // Loop control-flow stack: tracks the {continue-target, break-target}
+  // basic blocks of every `while`/`for` we're currently inside, so AST_BREAK
+  // and AST_CONTINUE can branch to the right block. Capped at 32 (deeper
+  // loop nesting is exotic; if we ever hit it we'd error out).
+  struct LoopContext {
+    LLVMBasicBlockRef continue_block;  // where `continue;` jumps to
+    LLVMBasicBlockRef break_block;     // where `break;` jumps to
+  } loop_stack[32];
+  int loop_depth;
+
   // Quiet mode - suppress [AOT] messages during compilation
   int quiet;
+
+  // Codegen error flag — set by any site that prints an "HATA" diagnostic
+  // (undefined identifier, undefined function, etc). aot_compile reads this
+  // after llvm_backend_compile() and turns it into AOT_ERROR_CODEGEN so a
+  // broken IR never silently produces a working-looking exe.
+  int had_error;
+
+  // Original source text (NUL-terminated). When non-null, codegen errors
+  // include a source-line excerpt + caret next to the diagnostic message,
+  // Rust-style. Owned by aot_compile, lives for the duration of codegen.
+  const char *source_text;
+  // Optional source filename used in the diagnostic prefix
+  // ("HATA (lib/router.tpr:245): ..."). May be null for stdin/embedded input.
+  const char *source_filename;
 
 } LLVMBackend;
 
@@ -294,6 +348,12 @@ void llvm_backend_enable_static_typing(LLVMBackend *backend);
 void enter_scope(LLVMBackend *backend);
 void exit_scope(LLVMBackend *backend);
 void add_local(LLVMBackend *backend, const char *name, LLVMValueRef val);
+
+// Build an alloca pinned to the function's entry block. Use this any time
+// the alloca site is inside a loop body — block-local LLVMBuildAlloca grows
+// the stack frame on every iteration and overflows in long-running loops.
+LLVMValueRef llvm_build_alloca_at_entry(LLVMBackend *backend, LLVMTypeRef type,
+                                        const char *name);
 void add_local_typed(LLVMBackend *backend, const char *name, LLVMValueRef val,
                      InferredType type, LLVMValueRef native_val);
 LLVMValueRef get_local(LLVMBackend *backend, const char *name);

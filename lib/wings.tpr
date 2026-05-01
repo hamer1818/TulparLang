@@ -1,13 +1,46 @@
 // ============================================
 // Tulpar Wings - Fast API Framework
 // "Give your API wings!" 🪶
+//
+// HTTP request parsing and response building are delegated to native
+// runtime builtins (`http_parse_request`, `http_create_response`,
+// `http_status_text`) so the hot path runs in C++ rather than the
+// interpreter. Handlers receive the parsed request via the `_request`
+// global (with .method, .path, .raw_path, .query, .headers, .body fields).
 // ============================================
 
 array _routes = [];
 json _request = {};
-int _found_route_idx = -1;
 
-// Route registration
+// Default response headers shared across the whole server lifetime.
+// Pulled out of the per-connection block so the arena-reset path
+// (`arena_save`/`arena_restore` in listen()) can roll a request's
+// allocations back without freeing this object.
+json _default_headers = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization"
+};
+
+// Server start time + per-request counters. Wings updates these on
+// every request; `metrics_handler` reads them. Keep them tiny — adding
+// a histogram would require either runtime support or a Tulpar-side
+// reduction over an array, both bigger than warranted today.
+int _wings_started_at = 0;
+int _wings_requests_total = 0;
+int _wings_requests_2xx = 0;
+int _wings_requests_4xx = 0;
+int _wings_requests_5xx = 0;
+
+// Handler mutex used by `listen_async`. We serialise the
+// "set _request global → run handler → read result" critical section
+// so concurrent worker threads don't race on Tulpar's shared globals
+// (an LLVM-level thread-local-globals refactor is the next step;
+// this mutex is the no-codegen-change interim that lets us ship
+// multi-threaded recv/send today). Counters use the same mutex.
+int _wings_handler_mu = 0;
+
+// ----- Route registration --------------------------------------------------
 func get(str path, str handler) {
     push(_routes, {"method": "GET", "path": path, "handler": handler});
 }
@@ -24,14 +57,10 @@ func del(str path, str handler) {
     push(_routes, {"method": "DELETE", "path": path, "handler": handler});
 }
 
-// Internal: JSON response builder
-func _json_response(int status, str body) {
-    int len = length(body);
-    str resp = "HTTP/1.1 " + toString(status) + " OK\r\nContent-Type: application/json\r\nContent-Length: " + toString(len) + "\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n" + body;
-    return resp;
-}
-
-// Internal: Find matching route - returns index or -1
+// ----- Internals -----------------------------------------------------------
+// Linear scan over registered routes. Tulpar arrays of small dicts are tight
+// enough that this is dominated by string compare cost; for hundreds of
+// routes a hash table would help, but we avoid the dependency for now.
 func _find_route(str method, str path) {
     for (int i = 0; i < length(_routes); i++) {
         json r = _routes[i];
@@ -42,11 +71,285 @@ func _find_route(str method, str path) {
     return -1;
 }
 
-// Start server
-func listen(int port) {
+// ----- Built-in production helpers -----------------------------------------
+//
+// These are auto-registered when listen() is called: the user's app
+// gets `/healthz` and `/metrics` for free, matching the de-facto k8s
+// convention. Handlers can be replaced by registering the same paths
+// before calling listen().
+
+func _wings_healthz() {
+    return {
+        "status": "ok",
+        "uptime_s": timestamp() - _wings_started_at,
+        "now": now_iso8601()
+    };
+}
+
+func _wings_metrics() {
+    // Auto-detect format=prom in the query string. Without proper
+    // content-negotiation infra in Wings yet (no per-route content
+    // type override), routing on the query string is the cheapest
+    // way to expose both shapes from the same path.
+    json q = _request["query"];
+    if (q) {
+        str fmt = q["format"];
+        if (fmt == "prom") {
+            // The dispatcher will toJson() this dict — wrap the prom
+            // body as a single field so the client can pull it out.
+            // Plain Prometheus scrapers expect text/plain though, so
+            // expose `wings_metrics_prom()` directly from a dedicated
+            // user-facing route when full conformance is needed.
+            return {"_raw": wings_metrics_prom()};
+        }
+    }
+    return {
+        "uptime_s": timestamp() - _wings_started_at,
+        "requests_total": _wings_requests_total,
+        "requests_2xx": _wings_requests_2xx,
+        "requests_4xx": _wings_requests_4xx,
+        "requests_5xx": _wings_requests_5xx,
+        "routes": length(_routes)
+    };
+}
+
+// Prometheus text exposition format. Same numbers, different shape — a
+// scraper can hit `/metrics?format=prom` (or set `Accept: text/plain`,
+// but Wings doesn't have content-negotiation yet so we go with the
+// query-string switch).
+//
+// Format:
+//   # HELP <name> <doc>
+//   # TYPE <name> <gauge|counter>
+//   <name> <value>
+//
+// Returned as a plain string so the user can wrap it in a `text/plain`
+// response. We don't auto-register the prom handler — apps that want
+// it call `wings_metrics_prom()` from their own /metrics handler.
+func wings_metrics_prom() {
+    int uptime = timestamp() - _wings_started_at;
+    str s = "# HELP tulpar_uptime_seconds Wings server uptime\n";
+    s = s + "# TYPE tulpar_uptime_seconds gauge\n";
+    s = s + "tulpar_uptime_seconds " + toString(uptime) + "\n";
+    s = s + "# HELP tulpar_requests_total HTTP requests served\n";
+    s = s + "# TYPE tulpar_requests_total counter\n";
+    s = s + "tulpar_requests_total " + toString(_wings_requests_total) + "\n";
+    s = s + "# HELP tulpar_requests_by_class HTTP requests grouped by status class\n";
+    s = s + "# TYPE tulpar_requests_by_class counter\n";
+    s = s + "tulpar_requests_by_class{class=\"2xx\"} " + toString(_wings_requests_2xx) + "\n";
+    s = s + "tulpar_requests_by_class{class=\"4xx\"} " + toString(_wings_requests_4xx) + "\n";
+    s = s + "tulpar_requests_by_class{class=\"5xx\"} " + toString(_wings_requests_5xx) + "\n";
+    s = s + "# HELP tulpar_routes_total Number of registered HTTP routes\n";
+    s = s + "# TYPE tulpar_routes_total gauge\n";
+    s = s + "tulpar_routes_total " + toString(length(_routes)) + "\n";
+    return s;
+}
+
+// Structured access log entry — call from any handler that wants its
+// own log line in the same format as Wings' built-in access log. The
+// shape mirrors common JSON log conventions (`@timestamp`, `level`,
+// `msg`) so log aggregators don't need a custom parser.
+func log_info(str msg) {
+    print(toJson({
+        "@timestamp": now_iso8601(),
+        "level": "info",
+        "msg": msg
+    }));
+}
+
+func log_error(str msg) {
+    print(toJson({
+        "@timestamp": now_iso8601(),
+        "level": "error",
+        "msg": msg
+    }));
+}
+
+// ----- Multi-threaded request serving --------------------------------------
+//
+// `listen_async(port)` accepts on the main thread and spawns a detached
+// worker per accepted TCP connection. Each worker runs the same
+// keep-alive request loop as the synchronous `listen()` but takes the
+// `_wings_handler_mu` mutex around the small critical section that
+// mutates the `_request` global and dispatches the handler.
+//
+// What runs concurrently:
+//   * recv (per-connection)
+//   * response build (per-connection, owns its arena scope)
+//   * send (per-connection)
+//
+// What's serialised under the mutex:
+//   * `_request = req` global mutation
+//   * handler dispatch (`call(route["handler"])`) which itself reads
+//     the `_request` global
+//   * counter increments on `_wings_requests_*`
+//
+// On modern hardware where handlers are cheap (<5µs) but recv/send
+// dominate (~10–20µs each), this gives a meaningful concurrency win
+// without needing thread-local globals at the LLVM level. Once the
+// codegen learns to mark per-request globals TLS, the mutex goes away
+// and handler exec parallelises too.
+func _wings_serve_connection(json client_arg) {
+    int client = client_arg;
+    int wm = arena_save();
+
+    while (true) {
+        str raw = http_recv_request(client, 65536);
+        if (length(raw) == 0) {
+            break;
+        }
+        json req = http_parse_request(raw);
+        int keep = http_should_keepalive(req);
+
+        // ----- Critical section: handler dispatch -----
+        mutex_lock(_wings_handler_mu);
+        _request = req;
+        str method = req["method"];
+        str path = req["path"];
+        if (length(env("TULPAR_HTTP_QUIET")) == 0) {
+            print("  " + method + " " + path);
+        }
+        int route_idx = _find_route(method, path);
+        json result = {};
+        bool found = false;
+        if (route_idx >= 0) {
+            json route = _routes[route_idx];
+            result = call(route["handler"]);
+            found = true;
+        }
+        _wings_requests_total = _wings_requests_total + 1;
+        if (found) {
+            _wings_requests_2xx = _wings_requests_2xx + 1;
+        } else {
+            _wings_requests_4xx = _wings_requests_4xx + 1;
+        }
+        mutex_unlock(_wings_handler_mu);
+        // ----- End critical section -----
+
+        // Response build + send happen outside the lock — these touch
+        // only locals + the read-only `_default_headers` global.
+        str response = "";
+        if (found) {
+            response = http_create_response(200, "application/json",
+                toJson(result), _default_headers, keep);
+        } else {
+            str body = "{\"error\":\"" + http_status_text(404) +
+                "\",\"path\":\"" + path + "\"}";
+            response = http_create_response(404, "application/json", body,
+                _default_headers, keep);
+        }
+
+        socket_send(client, response);
+        arena_restore(wm);
+
+        if (keep == 0) {
+            break;
+        }
+    }
+    socket_close(client);
+}
+
+func listen_async(int port) {
+    if (_find_route("GET", "/healthz") < 0) {
+        get("/healthz", "_wings_healthz");
+    }
+    if (_find_route("GET", "/metrics") < 0) {
+        get("/metrics", "_wings_metrics");
+    }
+    _wings_started_at = timestamp();
+    _wings_handler_mu = mutex_create();
+
     print("");
     print("  ╔═══════════════════════════════════╗");
-    print("  ║       Tulpar Wings v1.0           ║");
+    print("  ║       Tulpar Wings v2.1 (async)   ║");
+    print("  ║    Give your API wings! 🪶        ║");
+    print("  ╚═══════════════════════════════════╝");
+    print("");
+    print("  Routes:");
+    for (int i = 0; i < length(_routes); i++) {
+        json r = _routes[i];
+        print("    " + r["method"] + " " + r["path"] + " -> " + r["handler"] + "()");
+    }
+    print("");
+    print("  Server: http://127.0.0.1:" + toString(port) + " (multi-threaded)");
+    print("  Press Ctrl+C to stop");
+    print("");
+
+    int server = socket_server("127.0.0.1", port);
+    if (server < 0) {
+        print("ERROR: Failed to start server!");
+        return;
+    }
+
+    while (true) {
+        int client = socket_accept(server);
+        if (client < 0) {
+            continue;
+        }
+        // Box the fd into a json so `thread_create` passes it through
+        // the canonical VMValue ABI rather than a native i64 register.
+        // The worker unboxes on entry.
+        json c = client;
+        int t = thread_create(_wings_serve_connection, c);
+        thread_detach(t);
+    }
+}
+
+// ----- OpenAPI auto-generation ---------------------------------------------
+//
+// Walks the registered routes and emits a minimal OpenAPI 3.0 document
+// (the JSON Swagger UI / Postman / Insomnia consume directly). We
+// don't infer types or response schemas — just methods and paths plus
+// a placeholder 200 response. Fancier shapes (request/response models,
+// auth) are a richer-route-metadata feature for a later iteration.
+//
+// Usage:
+//   func openapi_handler() { return wings_openapi("My API", "1.0"); }
+//   get("/openapi.json", "openapi_handler");
+//
+// The returned object is a json that toJson()/json_response can turn
+// straight into a wire payload.
+func wings_openapi(str title, str version) {
+    json paths = {};
+    for (int i = 0; i < length(_routes); i++) {
+        json r = _routes[i];
+        str path = r["path"];
+        str method_lc = lower(r["method"]);
+        // OpenAPI keys path objects on the URL; multiple verbs on the
+        // same path land on the same key. We build per-path on-demand.
+        json existing = paths[path];
+        if (!existing) {
+            existing = {};
+        }
+        existing[method_lc] = {
+            "summary": r["handler"],
+            "responses": {"200": {"description": "OK"}}
+        };
+        paths[path] = existing;
+    }
+    return {
+        "openapi": "3.0.0",
+        "info": {"title": title, "version": version},
+        "paths": paths
+    };
+}
+
+// ----- Server loop ---------------------------------------------------------
+func listen(int port) {
+    // Auto-register /healthz and /metrics if the user hasn't already
+    // claimed those paths. This is opt-out: just register your own
+    // GET handler for the same path before calling listen().
+    if (_find_route("GET", "/healthz") < 0) {
+        get("/healthz", "_wings_healthz");
+    }
+    if (_find_route("GET", "/metrics") < 0) {
+        get("/metrics", "_wings_metrics");
+    }
+    _wings_started_at = timestamp();
+
+    print("");
+    print("  ╔═══════════════════════════════════╗");
+    print("  ║       Tulpar Wings v2.0           ║");
     print("  ║    Give your API wings! 🪶        ║");
     print("  ╚═══════════════════════════════════╝");
     print("");
@@ -59,57 +362,72 @@ func listen(int port) {
     print("  Server: http://127.0.0.1:" + toString(port));
     print("  Press Ctrl+C to stop");
     print("");
-    
+
     int server = socket_server("127.0.0.1", port);
     if (server < 0) {
         print("ERROR: Failed to start server!");
         return;
     }
-    
+
+    // Arena watermark taken once at server start. Every request below
+    // saves/restores against this baseline so transient request
+    // allocations (parsed request, response string, JSON serialisation)
+    // are recycled, not accumulated. Routes + _default_headers were
+    // allocated before this point and stay live forever.
+    int _wings_arena_wm = arena_save();
+
     while (true) {
         int client = socket_accept(server);
-        if (client >= 0) {
-            str raw = socket_receive(client, 4096);
-            
-            // Parse request
-            array lines = split(raw, "\r\n");
-            str method = "";
-            str path = "/";
-            if (length(lines) > 0) {
-                array parts = split(lines[0], " ");
-                if (length(parts) >= 2) {
-                    method = parts[0];
-                    path = parts[1];
-                }
+        if (client < 0) {
+            continue;
+        }
+
+        while (true) {
+            str raw = http_recv_request(client, 65536);
+            if (length(raw) == 0) {
+                break;
             }
-            
-            // Find body
-            int body_idx = indexOf(raw, "\r\n\r\n");
-            str body = "";
-            if (body_idx >= 0) {
-                body = substring(raw, body_idx + 4, length(raw));
+            json req = http_parse_request(raw);
+            _request = req;
+
+            str method = req["method"];
+            str path = req["path"];
+            if (length(env("TULPAR_HTTP_QUIET")) == 0) {
+                print("  " + method + " " + path);
             }
-            
-            // Set global request object
-            _request = {"method": method, "path": path, "body": body};
-            
-            print("  " + method + " " + path);
-            
-            // Find route and call handler
+
+            int keep = http_should_keepalive(req);
+
             int route_idx = _find_route(method, path);
             str response = "";
-            
+            _wings_requests_total = _wings_requests_total + 1;
             if (route_idx >= 0) {
-                // Call handler dynamically
                 json route = _routes[route_idx];
                 json result = call(route["handler"]);
-                response = _json_response(200, toJson(result));
+                response = http_create_response(200, "application/json",
+                    toJson(result), _default_headers, keep);
+                _wings_requests_2xx = _wings_requests_2xx + 1;
             } else {
-                response = _json_response(404, "{\"error\": \"Not Found\", \"path\": \"" + path + "\"}");
+                str body = "{\"error\":\"" + http_status_text(404) +
+                    "\",\"path\":\"" + path + "\"}";
+                response = http_create_response(404, "application/json", body,
+                    _default_headers, keep);
+                _wings_requests_4xx = _wings_requests_4xx + 1;
             }
-            
+
             socket_send(client, response);
-            socket_close(client);
+
+            // Per-request arena reset: keeps memory bounded even on a
+            // single long-lived keep-alive connection. Anything the
+            // handler returned via _request / response is owned by this
+            // arena scope and goes away here. Handlers must NOT stash
+            // arena pointers on globals.
+            arena_restore(_wings_arena_wm);
+
+            if (keep == 0) {
+                break;
+            }
         }
+        socket_close(client);
     }
 }

@@ -4193,6 +4193,102 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       return req_obj;
     }
 
+    // http_create_response(status, content_type, body[, headers])
+    // 4-arg form: append extra headers from a json object (CORS, cookies, ...).
+    if (strcmp(node->name, "http_create_response") == 0 &&
+        node->argument_count >= 4) {
+      Value *status_val =
+          interpreter_eval_expression(interp, node->arguments[0]);
+      Value *type_val = interpreter_eval_expression(interp, node->arguments[1]);
+      Value *body_val = interpreter_eval_expression(interp, node->arguments[2]);
+      Value *headers_val = interpreter_eval_expression(interp, node->arguments[3]);
+
+      int status = (status_val->type == VAL_INT) ? (int)status_val->data.int_val : 200;
+      const char *ctype = (type_val->type == VAL_STRING)
+                              ? type_val->data.string_val
+                              : "text/plain";
+      const char *body = (body_val->type == VAL_STRING)
+                             ? body_val->data.string_val
+                             : "";
+      // Reuse the same status-text mapping as the AOT path. Inline switch
+      // keeps the interpreter independent of the runtime symbol so the
+      // legacy interpreter still builds without linking to libtulpar_runtime.
+      const char *status_text;
+      switch (status) {
+        case 200: status_text = "OK"; break;
+        case 201: status_text = "Created"; break;
+        case 204: status_text = "No Content"; break;
+        case 301: status_text = "Moved Permanently"; break;
+        case 302: status_text = "Found"; break;
+        case 400: status_text = "Bad Request"; break;
+        case 401: status_text = "Unauthorized"; break;
+        case 403: status_text = "Forbidden"; break;
+        case 404: status_text = "Not Found"; break;
+        case 409: status_text = "Conflict"; break;
+        case 500: status_text = "Internal Server Error"; break;
+        case 503: status_text = "Service Unavailable"; break;
+        default:  status_text = "OK"; break;
+      }
+
+      // Build into a dynamic buffer.
+      size_t blen = strlen(body);
+      size_t cap = 256 + strlen(ctype) + blen;
+      // Reserve a generous extra-headers budget; resize on overflow.
+      size_t extra_budget = 1024;
+      char *response = (char *)malloc(cap + extra_budget + 1);
+      int p = snprintf(response, cap + extra_budget,
+                       "HTTP/1.1 %d %s\r\n"
+                       "Content-Type: %s\r\n"
+                       "Content-Length: %zu\r\n",
+                       status, status_text, ctype, blen);
+
+      auto eq_ci = [](const char *a, const char *b) {
+        while (*a && *b) {
+          char ca = *a++, cb = *b++;
+          if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+          if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+          if (ca != cb) return false;
+        }
+        return *a == 0 && *b == 0;
+      };
+
+      if (headers_val->type == VAL_OBJECT && headers_val->data.object_val) {
+        HashTable *ht = headers_val->data.object_val;
+        for (int i = 0; i < ht->bucket_count; i++) {
+          HashEntry *e = ht->buckets[i];
+          while (e) {
+            const char *kn = e->key;
+            Value *vv = e->value;
+            if (kn && vv && vv->type == VAL_STRING && vv->data.string_val) {
+              if (!(eq_ci(kn, "Content-Type") || eq_ci(kn, "Content-Length") ||
+                    eq_ci(kn, "Connection"))) {
+                p += snprintf(response + p,
+                              cap + extra_budget - (size_t)p,
+                              "%s: %s\r\n", kn, vv->data.string_val);
+              }
+            }
+            e = e->next;
+          }
+        }
+      }
+      p += snprintf(response + p, cap + extra_budget - (size_t)p,
+                    "Connection: close\r\n\r\n");
+      // Append body.
+      if (blen > 0) {
+        memcpy(response + p, body, blen);
+        p += (int)blen;
+      }
+      response[p] = '\0';
+
+      value_free(status_val);
+      value_free(type_val);
+      value_free(body_val);
+      value_free(headers_val);
+      Value *res = value_create_string(response);
+      free(response);
+      return res;
+    }
+
     // http_create_response(status, content_type, body)
     if (strcmp(node->name, "http_create_response") == 0 &&
         node->argument_count >= 3) {
@@ -4237,6 +4333,200 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       Value *res = value_create_string(response);
       free(response);
       return res;
+    }
+
+    // path_match(pattern, path) -> {matched, params}
+    // Mirrors aot_path_match — Express-style routing patterns.
+    if (strcmp(node->name, "path_match") == 0 &&
+        node->argument_count >= 2) {
+      Value *pat_v = interpreter_eval_expression(interp, node->arguments[0]);
+      Value *pth_v = interpreter_eval_expression(interp, node->arguments[1]);
+      Value *result = value_create_object();
+      Value *params = value_create_object();
+      // matched is exposed as int (0/1) instead of bool so user code that
+      // does `if (m["matched"]) {...}` AND tests doing `assert_eq_int(...)`
+      // both work without type juggling.
+      auto fail = [&]() -> Value * {
+        hash_table_set(result->data.object_val, "matched", value_create_int(0));
+        hash_table_set(result->data.object_val, "params", params);
+        value_free(pat_v);
+        value_free(pth_v);
+        return result;
+      };
+      if (pat_v->type != VAL_STRING || pth_v->type != VAL_STRING) {
+        return fail();
+      }
+      const char *pat = pat_v->data.string_val;
+      const char *pth = pth_v->data.string_val;
+      int patLen = (int)strlen(pat);
+      int pthLen = (int)strlen(pth);
+
+      // Wildcard tail
+      if (patLen >= 2 && pat[patLen - 2] == '/' && pat[patLen - 1] == '*') {
+        int prefix_len = patLen - 2;
+        if (pthLen >= prefix_len && memcmp(pat, pth, prefix_len) == 0) {
+          int wc_start = prefix_len;
+          if (wc_start < pthLen && pth[wc_start] == '/') wc_start++;
+          int wc_len = pthLen - wc_start;
+          char *buf = (char *)malloc(wc_len + 1);
+          memcpy(buf, pth + wc_start, wc_len);
+          buf[wc_len] = '\0';
+          hash_table_set(params->data.object_val, "_wildcard", value_create_string(buf));
+          free(buf);
+          hash_table_set(result->data.object_val, "matched", value_create_int(1));
+          hash_table_set(result->data.object_val, "params", params);
+          value_free(pat_v);
+          value_free(pth_v);
+          return result;
+        }
+        return fail();
+      }
+
+      int pi = 0, hi = 0;
+      while (pi < patLen && hi < pthLen) {
+        if (pat[pi] == '/' && pth[hi] == '/') { pi++; hi++; }
+        else if (pat[pi] == '/' || pth[hi] == '/') { return fail(); }
+
+        int p_end = pi;
+        while (p_end < patLen && pat[p_end] != '/') p_end++;
+        int h_end = hi;
+        while (h_end < pthLen && pth[h_end] != '/') h_end++;
+
+        if (p_end > pi && pat[pi] == ':') {
+          if (h_end == hi) return fail();
+          int name_len = p_end - pi - 1;
+          int val_len = h_end - hi;
+          char *name_buf = (char *)malloc(name_len + 1);
+          memcpy(name_buf, pat + pi + 1, name_len);
+          name_buf[name_len] = '\0';
+          char *val_buf = (char *)malloc(val_len + 1);
+          memcpy(val_buf, pth + hi, val_len);
+          val_buf[val_len] = '\0';
+          hash_table_set(params->data.object_val, name_buf, value_create_string(val_buf));
+          free(name_buf);
+          free(val_buf);
+        } else {
+          int p_len = p_end - pi;
+          int h_len = h_end - hi;
+          if (p_len != h_len || memcmp(pat + pi, pth + hi, p_len) != 0) {
+            return fail();
+          }
+        }
+        pi = p_end;
+        hi = h_end;
+      }
+      while (pi < patLen && pat[pi] == '/') pi++;
+      while (hi < pthLen && pth[hi] == '/') hi++;
+      bool matched = (pi == patLen) && (hi == pthLen);
+      hash_table_set(result->data.object_val, "matched",
+                     value_create_int(matched ? 1 : 0));
+      hash_table_set(result->data.object_val, "params", params);
+      value_free(pat_v);
+      value_free(pth_v);
+      return result;
+    }
+
+    // parse_query(str) -> object  (urlencoded `k=v&k=v` -> json)
+    if (strcmp(node->name, "parse_query") == 0 &&
+        node->argument_count >= 1) {
+      Value *s_v = interpreter_eval_expression(interp, node->arguments[0]);
+      Value *result = value_create_object();
+      if (s_v->type != VAL_STRING) {
+        value_free(s_v);
+        return result;
+      }
+      const char *data = s_v->data.string_val;
+      int len = (int)strlen(data);
+      if (len > 0 && data[0] == '?') { data++; len--; }
+      auto hexv = [](char ch) -> int {
+        if (ch >= '0' && ch <= '9') return ch - '0';
+        if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+        if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+        return -1;
+      };
+      auto urldec = [&](const char *src, int slen, char *dst) {
+        int o = 0;
+        for (int i = 0; i < slen; i++) {
+          char c = src[i];
+          if (c == '+') dst[o++] = ' ';
+          else if (c == '%' && i + 2 < slen) {
+            int hi = hexv(src[i + 1]);
+            int lo = hexv(src[i + 2]);
+            if (hi >= 0 && lo >= 0) { dst[o++] = (char)((hi << 4) | lo); i += 2; }
+            else dst[o++] = c;
+          } else dst[o++] = c;
+        }
+        return o;
+      };
+      int i = 0;
+      while (i < len) {
+        int ks = i;
+        while (i < len && data[i] != '=' && data[i] != '&') i++;
+        int ke = i;
+        int vs = ke, ve = ke;
+        if (i < len && data[i] == '=') {
+          vs = i + 1;
+          i = vs;
+          while (i < len && data[i] != '&') i++;
+          ve = i;
+        }
+        if (ke > ks) {
+          char *kbuf = (char *)malloc(ke - ks + 1);
+          int klen = urldec(data + ks, ke - ks, kbuf);
+          kbuf[klen] = '\0';
+          char *vbuf = (char *)malloc(ve - vs + 1);
+          int vlen = ve > vs ? urldec(data + vs, ve - vs, vbuf) : 0;
+          vbuf[vlen] = '\0';
+          hash_table_set(result->data.object_val, kbuf, value_create_string(vbuf));
+          free(kbuf);
+          free(vbuf);
+        }
+        if (i < len && data[i] == '&') i++;
+      }
+      value_free(s_v);
+      return result;
+    }
+
+    // http_status_text(status) -> str (IANA reason phrase)
+    if (strcmp(node->name, "http_status_text") == 0 &&
+        node->argument_count >= 1) {
+      Value *status_val =
+          interpreter_eval_expression(interp, node->arguments[0]);
+      int status = (status_val->type == VAL_INT)
+                       ? (int)status_val->data.int_val
+                       : 200;
+      value_free(status_val);
+      const char *txt;
+      switch (status) {
+        case 100: txt = "Continue"; break;
+        case 101: txt = "Switching Protocols"; break;
+        case 200: txt = "OK"; break;
+        case 201: txt = "Created"; break;
+        case 202: txt = "Accepted"; break;
+        case 204: txt = "No Content"; break;
+        case 301: txt = "Moved Permanently"; break;
+        case 302: txt = "Found"; break;
+        case 303: txt = "See Other"; break;
+        case 304: txt = "Not Modified"; break;
+        case 307: txt = "Temporary Redirect"; break;
+        case 308: txt = "Permanent Redirect"; break;
+        case 400: txt = "Bad Request"; break;
+        case 401: txt = "Unauthorized"; break;
+        case 403: txt = "Forbidden"; break;
+        case 404: txt = "Not Found"; break;
+        case 405: txt = "Method Not Allowed"; break;
+        case 409: txt = "Conflict"; break;
+        case 410: txt = "Gone"; break;
+        case 422: txt = "Unprocessable Entity"; break;
+        case 429: txt = "Too Many Requests"; break;
+        case 500: txt = "Internal Server Error"; break;
+        case 501: txt = "Not Implemented"; break;
+        case 502: txt = "Bad Gateway"; break;
+        case 503: txt = "Service Unavailable"; break;
+        case 504: txt = "Gateway Timeout"; break;
+        default:  txt = "OK"; break;
+      }
+      return value_create_string(txt);
     }
 
     // DATABASE FUNCTIONS

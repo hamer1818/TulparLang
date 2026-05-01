@@ -124,15 +124,18 @@ extern "C" {
 // Get current time in milliseconds (monotonic clock for measurements)
 static inline double tulpar_clock_ms(void) {
 #if PLATFORM_WINDOWS
-    static LARGE_INTEGER frequency = {0};
-    static LARGE_INTEGER start_time = {0};
+    // Initialise via QuadPart to avoid -Wmissing-field-initializers on
+    // gcc/MinGW: LARGE_INTEGER is a union with a nested struct, and {0}
+    // would otherwise leave LowPart/HighPart unmentioned.
+    static LARGE_INTEGER frequency  = { .QuadPart = 0 };
+    static LARGE_INTEGER start_time = { .QuadPart = 0 };
     LARGE_INTEGER current_time;
-    
+
     if (frequency.QuadPart == 0) {
         QueryPerformanceFrequency(&frequency);
         QueryPerformanceCounter(&start_time);
     }
-    
+
     QueryPerformanceCounter(&current_time);
     return (double)(current_time.QuadPart - start_time.QuadPart) * 1000.0 / (double)frequency.QuadPart;
 #else
@@ -144,6 +147,25 @@ static inline double tulpar_clock_ms(void) {
         start_time = ms;
     }
     return ms - start_time;
+#endif
+}
+
+// Get current wall-clock time in milliseconds since the Unix epoch.
+// Distinct from tulpar_clock_ms() which is monotonic-from-start; use this
+// for `time_ms()` style calls where the absolute timestamp matters.
+static inline long long tulpar_epoch_ms(void) {
+#if PLATFORM_WINDOWS
+    FILETIME ft;
+    ULARGE_INTEGER uli;
+    GetSystemTimeAsFileTime(&ft);
+    uli.LowPart = ft.dwLowDateTime;
+    uli.HighPart = ft.dwHighDateTime;
+    // 100-ns intervals since 1601-01-01 -> ms since Unix epoch (1970-01-01)
+    return (long long)((uli.QuadPart - 116444736000000000ULL) / 10000ULL);
+#else
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (long long)(tv.tv_sec * 1000LL + tv.tv_usec / 1000LL);
 #endif
 }
 

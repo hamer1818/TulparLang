@@ -1,0 +1,56 @@
+// Tulpar math-builtin tests. Covers the hot path that benchmark.tpr
+// already exercises (sqrt/pow/abs) plus the trig + min/max + random
+// surface that handlers commonly reach for.
+
+import "test";
+
+func abs_basic() {
+    assert_eq_int(abs(5), 5);
+    assert_eq_int(abs(-5), 5);
+    assert_eq_int(abs(0), 0);
+}
+
+func sqrt_basic() {
+    // sqrt returns float; check via toString (avoids float comparison flake).
+    assert_eq_str(toString(sqrt(16)), "4");
+    assert_eq_str(toString(sqrt(0)), "0");
+}
+
+func pow_basic() {
+    assert_eq_str(toString(pow(2, 10)), "1024");
+    assert_eq_str(toString(pow(3, 2)), "9");
+    assert_eq_str(toString(pow(5, 0)), "1");
+}
+
+func floor_ceil_round() {
+    assert_eq_str(toString(floor(3.7)), "3");
+    assert_eq_str(toString(ceil(3.2)), "4");
+    assert_eq_str(toString(round(3.5)), "4");
+}
+
+func min_max() {
+    assert_eq_int(min(7, 3), 3);
+    assert_eq_int(max(7, 3), 7);
+    assert_eq_int(min(-2, -5), -5);
+}
+
+func mod_basic() {
+    // Tulpar's lexer does not recognise '%' as an operator yet; use the
+    // `mod()` builtin instead. (Tracked separately — adding '%' is a
+    // contained lexer change.)
+    assert_eq_int(mod(10, 3), 1);
+    assert_eq_int(mod(20, 4), 0);
+    assert_eq_int(mod(7, 2), 1);
+}
+
+print("=== Tulpar Math Builtin Tests ===");
+print("");
+
+test("abs", "abs_basic");
+test("sqrt", "sqrt_basic");
+test("pow", "pow_basic");
+test("floor / ceil / round", "floor_ceil_round");
+test("min / max", "min_max");
+test("modulo (%)", "mod_basic");
+
+test_summary();

@@ -1,7 +1,6 @@
-my_array = [10, 20, 30]
-
-var asd = 10;
+// Demonstrates for-in iteration over a json array.
+json my_array = [10, 20, 30];
 
 for (oge in my_array) {
-    print(oge)
+    print(oge);
 }
