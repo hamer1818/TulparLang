@@ -6,6 +6,7 @@
 #include <vector>
 #include <memory>
 #include <stdexcept>
+#include <cstdint>
 
 // ============================================================================
 // Modern C++ Parser Class
