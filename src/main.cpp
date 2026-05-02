@@ -54,6 +54,63 @@ char *read_file(const char *filename) {
   return buffer;
 }
 
+// Print the top-level command reference. Shared between explicit
+// `tulpar --help` / `-h` / `help` / `?` invocations and the no-args
+// fallback so both stay in sync.
+static void print_help() {
+  std::printf("TulparLang %s (LLVM AOT Backend)\n\n", tulpar::kVersion);
+
+  std::printf("%s\n", tulpar::i18n::tr_en("Kullanim:", "Usage:"));
+  std::printf("  tulpar <source.tpr>              %s\n",
+              tulpar::i18n::tr_en("- Programi calistir (AOT, native hiz)",
+                                  "- Run program (AOT, native speed)"));
+  std::printf("  tulpar build <source.tpr> [out]  %s\n",
+              tulpar::i18n::tr_en("- Bagimsiz native ikili olustur",
+                                  "- Build standalone native binary"));
+  std::printf("  tulpar --vm <source.tpr>         %s\n",
+              tulpar::i18n::tr_en("- VM ile calistir (anlik baslangic)",
+                                  "- Run via VM (instant start)"));
+  std::printf("  tulpar --legacy <source.tpr>     %s\n",
+              tulpar::i18n::tr_en("- Tree-walk yorumlayici (eski)",
+                                  "- Tree-walk interpreter (legacy)"));
+  std::printf("  tulpar --repl, -i                %s\n",
+              tulpar::i18n::tr_en("- Etkilesimli mod (REPL)",
+                                  "- Interactive mode (REPL)"));
+
+  std::printf("\n%s\n",
+              tulpar::i18n::tr_en("Aletler:", "Tools:"));
+  std::printf("  tulpar fmt <source.tpr>          %s\n",
+              tulpar::i18n::tr_en("- Kaynak kodu formatla",
+                                  "- Format source code"));
+  std::printf("  tulpar pkg <komut>               %s\n",
+              tulpar::i18n::tr_en("- Paket yoneticisi (init/install/...)",
+                                  "- Package manager (init/install/...)"));
+  std::printf("  tulpar --lsp                     %s\n",
+              tulpar::i18n::tr_en("- LSP sunucusu (editor entegrasyonu)",
+                                  "- LSP server (editor integration)"));
+
+  std::printf("\n%s\n",
+              tulpar::i18n::tr_en("Surum & guncelleme:",
+                                  "Version & updates:"));
+  std::printf("  tulpar version, --version, -v    %s\n",
+              tulpar::i18n::tr_en("- Surum bilgisini yazdir",
+                                  "- Print version"));
+  std::printf("  tulpar update [--check]          %s\n",
+              tulpar::i18n::tr_en("- Guncellemeleri kontrol et / yukle",
+                                  "- Check for / install updates"));
+
+  std::printf("\n%s\n",
+              tulpar::i18n::tr_en("Yardim:", "Help:"));
+  std::printf("  tulpar --help, -h, help, ?       %s\n",
+              tulpar::i18n::tr_en("- Bu yardim metnini goster",
+                                  "- Show this help"));
+
+  std::printf("\n%s\n",
+              tulpar::i18n::tr_en(
+                  "Daha fazlasi: https://tulparlang.dev",
+                  "More info: https://tulparlang.dev"));
+}
+
 // REPL mode
 static void run_repl() {
   printf("TulparLang REPL (Interactive Mode)\n");
@@ -204,6 +261,17 @@ int main(int argc, char **argv) {
                     std::strcmp(argv[1], "--version") == 0 ||
                     std::strcmp(argv[1], "-v") == 0)) {
     std::printf("TulparLang %s\n", tulpar::kVersion);
+    return 0;
+  }
+
+  // `tulpar --help` / `-h` / `help` / `?` — print command reference and
+  // exit. Same dispatch list users reach for after `tulpar` with no args
+  // shows them the banner.
+  if (argc >= 2 && (std::strcmp(argv[1], "--help") == 0 ||
+                    std::strcmp(argv[1], "-h") == 0 ||
+                    std::strcmp(argv[1], "help") == 0 ||
+                    std::strcmp(argv[1], "?") == 0)) {
+    print_help();
     return 0;
   }
 
@@ -368,20 +436,9 @@ int main(int argc, char **argv) {
     }
 #endif
   } else {
-    // No arguments - show help
-    printf("TulparLang %s (LLVM AOT Backend)\n\n", tulpar::kVersion);
-    printf("Usage:\n");
-    printf("  tulpar <source.tpr>              - Run program (AOT native "
-           "speed)\n");
-    printf("  tulpar build <source.tpr> [out]  - Build standalone native "
-           "binary\n");
-    printf(
-        "  tulpar --vm <source.tpr>         - Run via VM (instant start)\n");
-    printf("  tulpar --repl                    - Interactive mode\n");
-    printf("  tulpar --version                 - Print version\n");
-    printf("  tulpar update [--check]          - Check for / install "
-           "updates\n");
-    printf("\nTulparLang: Python gibi kolay, C gibi hizli.\n");
+    // No arguments — fall through to the same help text users reach via
+    // explicit `--help` / `-h` / `?`. Single source of truth.
+    print_help();
     return 0;
   }
 
