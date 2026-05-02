@@ -152,6 +152,37 @@ jobs:
         with:
           name: tulpar-windows-x64
           path: dist/tulpar-windows-x64.exe
+
+      # ----------------------------------------------------------------
+      # GUI installer (Inno Setup). Pre-installed on GitHub-hosted
+      # `windows-latest` runners at C:\Program Files (x86)\Inno Setup 6\.
+      # We run this in pwsh (not msys2) to avoid path-translation pain
+      # when invoking the Windows-native ISCC.exe.
+      # ----------------------------------------------------------------
+      - name: Build GUI installer (Inno Setup)
+        shell: pwsh
+        env:
+          TULPAR_VERSION: v2.1.0.${{ github.run_number }}
+        run: |
+          # Inno Setup's AppVersion expects pure x.y.z[.w], no leading 'v'.
+          $appVersion = $env:TULPAR_VERSION -replace '^v',''
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            throw "ISCC.exe not found at $iscc — runner image changed?"
+          }
+          & $iscc `
+            "/DAppVersion=$appVersion" `
+            "/DSourceBinary=$pwd\build-windows\tulpar.exe" `
+            "installer\tulpar.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
+          # ISCC writes to installer\Output\<OutputBaseFilename>.exe
+          Copy-Item installer\Output\tulpar-setup-windows-x64.exe dist\
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tulpar-windows-installer
+          path: dist/tulpar-setup-windows-x64.exe
   
   create-release:
     needs: [build-linux, build-macos, build-windows]
@@ -190,10 +221,23 @@ jobs:
             - Cross-platform support
             
             ### Downloads
+            - `tulpar-setup-windows-x64.exe` - **Windows GUI installer** (recommended for Windows users; auto-PATH, Start Menu entry, Uninstall entry)
+            - `tulpar-windows-x64.exe` - Windows raw executable (portable use)
             - `tulpar-linux-x64` - Linux executable
             - `tulpar-macos-universal` - macOS executable
-            - `tulpar-windows-x64.exe` - Windows executable (native MSVC build)
-            
+
+            ### One-line install (Windows / Linux / macOS)
+
+            ```powershell
+            # Windows (PowerShell)
+            iwr -useb https://tulparlang.dev/install.ps1 | iex
+            ```
+
+            ```bash
+            # Linux / macOS
+            curl -fsSL https://tulparlang.dev/install.sh | bash
+            ```
+
             > **Note**: Windows now has native support! No WSL required.
           draft: false
           prerelease: false
@@ -201,5 +245,6 @@ jobs:
             tulpar-linux-x64
             tulpar-macos-universal
             tulpar-windows-x64.exe
+            tulpar-setup-windows-x64.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
