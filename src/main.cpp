@@ -24,6 +24,8 @@
 #include "lsp/lsp_server.hpp"
 #include "fmt/formatter.hpp"
 #include "pkg/pkg_cli.hpp"
+#include "cli/update_cmd.hpp"
+#include "common/version.hpp"
 #include <ctime>
 
 // Dosyadan kaynak kodu oku
@@ -195,6 +197,24 @@ int main(int argc, char **argv) {
     return tulpar::pkg_cli_main(argc, argv);
   }
 
+  // `tulpar version` / `tulpar --version` / `-v` — print and exit. Kept
+  // before the source-file dispatch so a file literally named `version`
+  // would not shadow it (vanishingly unlikely but trivial to guard).
+  if (argc >= 2 && (std::strcmp(argv[1], "version") == 0 ||
+                    std::strcmp(argv[1], "--version") == 0 ||
+                    std::strcmp(argv[1], "-v") == 0)) {
+    std::printf("TulparLang %s\n", tulpar::kVersion);
+    return 0;
+  }
+
+  // `tulpar update [--check]` — query GitHub for latest release and
+  // (optionally) re-run the install script to upgrade in place. Shells
+  // out to PowerShell/curl for the HTTPS fetch so we don't link OpenSSL
+  // just for the update path.
+  if (argc >= 2 && std::strcmp(argv[1], "update") == 0) {
+    return tulpar::update_cmd_main(argc, argv);
+  }
+
   // Flags
   int force_vm = 0;    // --vm / --run forces VM path, skips AOT
   int use_legacy = 0;  // --legacy forces interpreter (not VM)
@@ -349,7 +369,7 @@ int main(int argc, char **argv) {
 #endif
   } else {
     // No arguments - show help
-    printf("TulparLang v2.1.0 (LLVM AOT Backend)\n\n");
+    printf("TulparLang %s (LLVM AOT Backend)\n\n", tulpar::kVersion);
     printf("Usage:\n");
     printf("  tulpar <source.tpr>              - Run program (AOT native "
            "speed)\n");
@@ -358,6 +378,9 @@ int main(int argc, char **argv) {
     printf(
         "  tulpar --vm <source.tpr>         - Run via VM (instant start)\n");
     printf("  tulpar --repl                    - Interactive mode\n");
+    printf("  tulpar --version                 - Print version\n");
+    printf("  tulpar update [--check]          - Check for / install "
+           "updates\n");
     printf("\nTulparLang: Python gibi kolay, C gibi hizli.\n");
     return 0;
   }
