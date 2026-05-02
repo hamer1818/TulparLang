@@ -11,6 +11,7 @@
 #include "lsp_server.hpp"
 
 #include "../common/diagnostics.hpp"
+#include "../common/localization.hpp"
 #include "../aot/aot_pipeline.hpp"
 #include "builtins.hpp"
 #include "document_index.hpp"
@@ -230,7 +231,9 @@ void publish_diagnostics(const std::string &uri,
 
         std::string msg = d.message;
         if (!d.hint.empty()) {
-            msg += "\nipucu: ";
+            msg += "\n";
+            msg += tulpar::i18n::tr_en("ipucu", "hint");
+            msg += ": ";
             msg += d.hint;
         }
         cJSON_AddStringToObject(item, "message", msg.c_str());
