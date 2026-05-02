@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TulparLang</title>
+<meta name="description" content="TulparLang — modern, statik tipli betik dili. LLVM tabanlı AOT derleyici.">
+<style>
+  :root {
+    --bg: #0e1116;
+    --fg: #e6edf3;
+    --muted: #8b949e;
+    --accent: #f78166;
+    --code-bg: #161b22;
+    --border: #30363d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.6;
+  }
+  .wrap {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 4rem 1.5rem 6rem;
+  }
+  h1 {
+    font-size: 2.5rem;
+    margin: 0 0 .25rem;
+    font-weight: 700;
+  }
+  h1 .accent { color: var(--accent); }
+  .tagline {
+    color: var(--muted);
+    margin: 0 0 3rem;
+    font-size: 1.1rem;
+  }
+  h2 {
+    font-size: 1.25rem;
+    margin: 2.5rem 0 1rem;
+    padding-bottom: .35rem;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+    font-size: .9rem;
+    line-height: 1.5;
+  }
+  code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  }
+  p code, li code {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    padding: .1rem .35rem;
+    border-radius: 3px;
+    font-size: .85em;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ul { padding-left: 1.4rem; }
+  li { margin-bottom: .35rem; }
+  footer {
+    margin-top: 4rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: .85rem;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Tulpar<span class="accent">Lang</span></h1>
+<p class="tagline">Modern, statik tipli betik dili. LLVM tabanlı AOT derleyici.</p>
+
+<h2>Kurulum</h2>
+
+<p><strong>Windows</strong> (PowerShell):</p>
+<pre><code>iwr -useb https://tulparlang.dev/install.ps1 | iex</code></pre>
+
+<p><strong>Linux / macOS</strong>:</p>
+<pre><code>curl -fsSL https://tulparlang.dev/install.sh | bash</code></pre>
+
+<p>Yeniden çalıştırmak en son sürüme yükseltir. Kurulu sürümden sonra:</p>
+<pre><code>tulpar update --check</code></pre>
+
+<h2>Hızlı başlangıç</h2>
+<pre><code>// merhaba.tpr
+print("Merhaba dünya");
+</code></pre>
+<pre><code>tulpar merhaba.tpr</code></pre>
+
+<h2>Daha fazlası</h2>
+<ul>
+<li>GitHub: <a href="https://github.com/hamer1818/TulparLang">github.com/hamer1818/TulparLang</a></li>
+<li>Sürümler: <a href="https://github.com/hamer1818/TulparLang/releases">GitHub Releases</a></li>
+<li>Kullanım kılavuzu: <a href="KULLANIM.md">KULLANIM.md</a></li>
+<li>Hızlı başlangıç: <a href="QUICKSTART.md">QUICKSTART.md</a></li>
+</ul>
+
+<footer>
+  Açık kaynak. Hata bildirimi ve katkı için GitHub repo'su.
+</footer>
+
+</div>
+</body>
+</html>

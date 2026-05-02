@@ -2,7 +2,7 @@
 # TulparLang installer — Linux / macOS
 #
 # Usage (one-liner):
-#   curl -fsSL https://raw.githubusercontent.com/hamer1818/TulparLang/main/scripts/install.sh | bash
+#   curl -fsSL https://tulparlang.dev/install.sh | bash
 #
 # What this does:
 #   1. Detects OS (Linux / macOS).

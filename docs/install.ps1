@@ -1,7 +1,7 @@
 # TulparLang installer - Windows
 #
 # Usage (one-liner):
-#   iwr -useb https://raw.githubusercontent.com/hamer1818/TulparLang/main/scripts/install.ps1 | iex
+#   iwr -useb https://tulparlang.dev/install.ps1 | iex
 #
 # What this does:
 #   1. Queries the latest GitHub release.

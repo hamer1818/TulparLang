@@ -97,17 +97,18 @@ bool fetch_latest_tag(std::string &out_tag, std::string &out_err) {
 // rename-then-replace dance the manual installer uses, which is the only
 // safe way to swap a running tulpar.exe on Windows.
 int run_install_script() {
+    // Custom domain (tulparlang.dev) is served by GitHub Pages from the
+    // same repo's docs/ folder. The published install.ps1 / install.sh
+    // are byte-identical to the ones referenced by the README — using the
+    // short domain just keeps the in-binary URL stable if the repo ever
+    // gets renamed or moved away from the hamer1818 org.
 #ifdef _WIN32
     const char *cmd =
         "powershell -NoProfile -ExecutionPolicy Bypass -Command "
-        "\"iwr -useb "
-        "https://raw.githubusercontent.com/hamer1818/TulparLang/main/scripts/install.ps1 "
-        "| iex\"";
+        "\"iwr -useb https://tulparlang.dev/install.ps1 | iex\"";
 #else
     const char *cmd =
-        "curl -fsSL "
-        "https://raw.githubusercontent.com/hamer1818/TulparLang/main/scripts/install.sh "
-        "| bash";
+        "curl -fsSL https://tulparlang.dev/install.sh | bash";
 #endif
     return std::system(cmd);
 }
