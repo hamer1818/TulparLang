@@ -96,18 +96,18 @@ bool fetch_latest_tag(std::string &out_tag, std::string &out_err) {
 // idempotent: re-running upgrades to the latest release using the same
 // rename-then-replace dance the manual installer uses, which is the only
 // safe way to swap a running tulpar.exe on Windows.
+//
+// The scripts are hosted by the website project (tulpar-lang-web's Astro
+// `public/` folder) and served from the apex of tulparlang.dev. Single
+// source of truth — this repo no longer carries its own copy.
 int run_install_script() {
 #ifdef _WIN32
     const char *cmd =
         "powershell -NoProfile -ExecutionPolicy Bypass -Command "
-        "\"iwr -useb "
-        "https://raw.githubusercontent.com/hamer1818/TulparLang/main/scripts/install.ps1 "
-        "| iex\"";
+        "\"iwr -useb https://tulparlang.dev/install.ps1 | iex\"";
 #else
     const char *cmd =
-        "curl -fsSL "
-        "https://raw.githubusercontent.com/hamer1818/TulparLang/main/scripts/install.sh "
-        "| bash";
+        "curl -fsSL https://tulparlang.dev/install.sh | bash";
 #endif
     return std::system(cmd);
 }
