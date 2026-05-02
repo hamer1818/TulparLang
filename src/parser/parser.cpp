@@ -348,12 +348,29 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
     
     if (!check(TOKEN_RPAREN)) {
         do {
-            DataType param_type = parse_type();
-            Token param_name = expect(TOKEN_IDENTIFIER, "Expected parameter name");
-            parameters.emplace_back(param_name.value(), param_type);
+            // Two accepted forms per parameter:
+            //   typed:   `int a`, `MyType a`, `var a`
+            //   untyped: `a`           (Python-style; same as `var a`)
+            // We disambiguate with a single-token lookahead: a bare
+            // identifier followed by `,` or `)` is the untyped form.
+            // Anything else routes through parse_type() which knows how
+            // to consume builtin and custom type names.
+            bool untyped = check(TOKEN_IDENTIFIER) &&
+                           (peek(1).type() == TOKEN_COMMA ||
+                            peek(1).type() == TOKEN_RPAREN);
+            if (untyped) {
+                Token param_name = current();
+                advance();
+                parameters.emplace_back(param_name.value(), TYPE_UNKNOWN);
+            } else {
+                DataType param_type = parse_type();
+                Token param_name = expect(TOKEN_IDENTIFIER,
+                                          "Expected parameter name");
+                parameters.emplace_back(param_name.value(), param_type);
+            }
         } while (match(TOKEN_COMMA));
     }
-    
+
     expect(TOKEN_RPAREN, "Expected ')' after parameters");
 
     // Return type (optional, defaults to void).
