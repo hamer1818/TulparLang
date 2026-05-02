@@ -275,10 +275,10 @@ else()
     )
 endif()
 
-# Windows MSVC specific linking requirements
-if(MSVC)
-    # Link against version.lib which is required by LLVM on Windows
-    # Also link ws2_32 for socket support
+# Windows-specific linking requirements (applies to MSVC and MinGW)
+if(WIN32)
+    # version.lib is required by LLVM (VerQueryValue) on Windows;
+    # ws2_32 is needed for socket support.
     target_link_libraries(tulpar ${llvm_libs} version ws2_32)
 else()
     target_link_libraries(tulpar ${llvm_libs})
@@ -314,22 +314,24 @@ if(OpenSSL_FOUND)
     target_link_libraries(tulpar_runtime PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 endif()
 
-# Windows-specific settings for runtime
-if(WIN32 AND MSVC)
-    target_compile_options(tulpar_runtime PRIVATE 
-        /utf-8
-        /W3
-        /wd4996
-        /wd4244
-        /wd4267
-    )
-    target_compile_definitions(tulpar_runtime PRIVATE 
-        _CRT_SECURE_NO_WARNINGS
-        _WINSOCK_DEPRECATED_NO_WARNINGS
-        PLATFORM_WINDOWS
-    )
+# Windows-specific settings for runtime (apply to both MSVC and MinGW)
+if(WIN32)
+    target_compile_definitions(tulpar_runtime PRIVATE PLATFORM_WINDOWS)
     # Link Winsock for socket support
-    target_link_libraries(tulpar_runtime ws2_32)
+    target_link_libraries(tulpar_runtime PUBLIC ws2_32)
+    if(MSVC)
+        target_compile_options(tulpar_runtime PRIVATE
+            /utf-8
+            /W3
+            /wd4996
+            /wd4244
+            /wd4267
+        )
+        target_compile_definitions(tulpar_runtime PRIVATE
+            _CRT_SECURE_NO_WARNINGS
+            _WINSOCK_DEPRECATED_NO_WARNINGS
+        )
+    endif()
 endif()
 
 # ============================================

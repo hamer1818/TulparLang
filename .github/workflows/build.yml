@@ -88,46 +88,52 @@ jobs:
   
   build-windows:
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
-      
-      - name: Install LLVM via Chocolatey
-        shell: pwsh
-        run: |
-          Write-Host "Installing LLVM via Chocolatey..." -ForegroundColor Cyan
-          choco install llvm --version=18.1.8 -y --no-progress
-          refreshenv
-          $llvmPath = "C:\Program Files\LLVM"
-          $env:PATH = "$llvmPath\bin;$env:PATH"
-          Write-Host "LLVM installed at: $llvmPath" -ForegroundColor Green
-          & clang --version
-      
+
+      # MSYS2 mingw64 is the only realistic way to get a full LLVM dev tree
+      # (headers + LLVM*.dll.a libs) on a Windows runner without a 30+ min
+      # vcpkg/source build. The official LLVM Windows installer and Chocolatey
+      # only ship the compiler distribution — the static libs we link against
+      # (LLVMCore, LLVMSupport, …) aren't there.
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            git
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-llvm
+            mingw-w64-x86_64-clang
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-zstd
+            mingw-w64-x86_64-libxml2
+            mingw-w64-x86_64-openssl
+
       - name: Build with LLVM
-        shell: pwsh
         run: |
-          $llvmPath = "C:\Program Files\LLVM"
-          $env:PATH = "$llvmPath\bin;$env:PATH"
-          $env:LLVM_DIR = $llvmPath
-          
-          Write-Host "Using LLVM from: $llvmPath" -ForegroundColor Cyan
-          Write-Host "Checking LLVM headers..." -ForegroundColor Cyan
-          Get-ChildItem "$llvmPath\include\llvm-c" -ErrorAction SilentlyContinue | Select-Object -First 5
-          
-          mkdir build-windows
+          clang --version
+          llvm-config --version
+          mkdir -p build-windows
           cd build-windows
-          cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$llvmPath"
+          cmake .. -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc \
+            -DCMAKE_CXX_COMPILER=g++
           cmake --build . --config Release -j
         timeout-minutes: 20
-      
+
       - name: Prepare artifact
-        shell: pwsh
         run: |
-          mkdir dist
-          copy build-windows\Release\tulpar.exe dist\tulpar-windows-x64.exe
-      
+          mkdir -p dist
+          cp build-windows/tulpar.exe dist/tulpar-windows-x64.exe
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

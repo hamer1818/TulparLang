@@ -124,11 +124,12 @@ extern "C" {
 // Get current time in milliseconds (monotonic clock for measurements)
 static inline double tulpar_clock_ms(void) {
 #if PLATFORM_WINDOWS
-    // Initialise via QuadPart to avoid -Wmissing-field-initializers on
-    // gcc/MinGW: LARGE_INTEGER is a union with a nested struct, and {0}
-    // would otherwise leave LowPart/HighPart unmentioned.
-    static LARGE_INTEGER frequency  = { .QuadPart = 0 };
-    static LARGE_INTEGER start_time = { .QuadPart = 0 };
+    // Static storage zero-initialises by default — avoids both
+    // -Wmissing-field-initializers on gcc/MinGW (which {0} would
+    // trigger because LARGE_INTEGER is a union of nested structs)
+    // and MSVC C7555 (designated initializers need C++20).
+    static LARGE_INTEGER frequency;
+    static LARGE_INTEGER start_time;
     LARGE_INTEGER current_time;
 
     if (frequency.QuadPart == 0) {
