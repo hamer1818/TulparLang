@@ -2,409 +2,327 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/hamer1818/OLang/releases)
-[![Build](https://github.com/hamer1818/OLang/actions/workflows/build.yml/badge.svg)](https://github.com/hamer1818/OLang/actions/workflows/build.yml)
+[![Build](https://github.com/hamer1818/TulparLang/actions/workflows/build.yml/badge.svg)](https://github.com/hamer1818/TulparLang/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20|%20macOS%20|%20Windows-lightgrey.svg)]()
-[![C Source](https://img.shields.io/badge/source-~32K%20lines-orange.svg)]()
+[![Website](https://img.shields.io/badge/site-tulparlang.dev-00e5ff.svg)](https://tulparlang.dev)
 
-A statically-typed programming language with LLVM backend, JIT compiler, UTF-8 support, and native JSON syntax.
+A statically-typed programming language with an LLVM 18 backend, native JSON syntax, UTF-8 strings, and a batteries-included standard library — all in a single ~7 MB binary.
 
 </div>
 
 ---
 
-## Overview
+## Install
 
-TulparLang is a modern programming language built in C with an LLVM-18 backend for native code generation. It combines the simplicity of dynamic languages with the performance of compiled languages.
+**Windows (PowerShell):**
 
-**Key characteristics:**
-- Static typing with type inference
-- First-class JSON support
-- UTF-8 native strings
-- LLVM AOT compilation
-- x64 JIT compiler
-- WebAssembly (WASM) target support
-- Automatic Reference Counting (ARC) memory management
-- Cross-platform (Linux, macOS, Windows with native MSVC support)
+```powershell
+iwr -useb https://tulparlang.dev/install.ps1 | iex
+```
 
-## Codebase Statistics
-
-| Metric | Value |
-|--------|-------|
-| Core Source (`src/`) | ~27,700 lines of C |
-| Runtime (`runtime/`) | ~4,300 lines of C |
-| Standard Library (`lib/`) | ~1,550 lines of Tulpar |
-| Example Programs | 25 files |
-| Benchmark Suites | 8 files (C, Rust, Go, JS, PHP, Python, Tulpar) |
-
-## Performance
- 
-Benchmark results comparing total execution time across algorithmic tests (lower is better):
- 
-| Rank | Language | Total Time | Relative to Tulpar |
-|------|----------|------------|---------------------|
-| 🥇 | **C (gcc -O3)** | **8.65 ms** | 1.66x faster |
-| 🥈 | **Rust (1.80)** | **9.30 ms** | 1.54x faster |
-| 🥉 | **Tulpar (AOT)** | **14.36 ms** | **Reference** |
-| 4 | JavaScript (Node) | 57.13 ms | 3.98x slower |
-| 5 | PHP 8.3 | 120.83 ms | 8.41x slower |
-| 6 | Python 3.12 | 3,671 ms | 255.63x slower |
- 
-> **Note:** Benchmarks run on Linux 6.6.87 (WSL2). Tulpar's LLVM-backed AOT compiler achieves performance in the same ballpark as C and Rust, while being dramatically faster than interpreted languages.
-
-## Installation
-
-### Prerequisites
-
-- GCC or Clang
-- LLVM 18+
-- CMake 3.14+
-
-### Build from Source
+**Linux / macOS:**
 
 ```bash
-git clone https://github.com/hamer1818/OLang.git
-cd OLang
-mkdir build && cd build
-cmake ..
-make
+curl -fsSL https://tulparlang.dev/install.sh | bash
 ```
 
-### Quick Install (Linux/macOS)
+Both scripts download the latest release, drop `tulpar` into a per-user
+location (`%LOCALAPPDATA%\Programs\Tulpar` on Windows, `~/.local/bin`
+on Linux/macOS), and wire up `PATH`. No admin rights needed. Run
+`tulpar update` later to upgrade in place.
 
-```bash
-./build.sh
-```
+Prefer the GUI? Download `tulpar-setup-windows-x64.exe` from the
+[latest release](https://github.com/hamer1818/TulparLang/releases/latest)
+— per-user install, Start Menu entry, Add/Remove Programs entry.
 
-### Windows (Native Build)
-
-**Prerequisites:**
-- Visual Studio 2019/2022 with "Desktop development with C++" workload
-- CMake 3.14+ ([Download](https://cmake.org/download/))
-- LLVM 18+ for Windows ([Download](https://github.com/llvm/llvm-project/releases))
-
-**Build:**
-
-```batch
-# Using batch script
-build.bat
-
-# Or using PowerShell
-.\build.ps1
-
-# Or using CMake directly
-mkdir build-windows
-cd build-windows
-cmake .. -G "Visual Studio 17 2022" -A x64
-cmake --build . --config Release
-```
-
-**Alternative: WSL (if needed)**
-
-Windows users can also use WSL (Windows Subsystem for Linux):
-
-```bash
-# Install WSL
-wsl --install
-
-# Inside WSL (Ubuntu):
-sudo apt-get install build-essential cmake llvm-18-dev
-cd /mnt/c/path/to/OLang
-./build.sh
-```
-
-## Quick Start
+## Quick start
 
 Create `hello.tpr`:
 
 ```tulpar
-str message = "Hello, World!";
+str message = "Merhaba, dünya!";
 print(message);
 
 func square(int n) {
     return n * n;
 }
 
-print(square(5));  // Output: 25
+print(square(5));   // 25
 ```
 
-Run:
+Run it:
 
 ```bash
-./tulpar hello.tpr
+tulpar hello.tpr
 ```
 
-## Command Line Usage
+The default `tulpar <file>` invocation AOT-compiles via LLVM and runs
+the resulting native binary — Python-shaped syntax, near-Rust speed.
 
-### Running Scripts (Default: Native AOT Speed)
+## Why TulparLang
+
+- **Native speed.** LLVM 18 AOT compilation. Within ~1.7× of `gcc -O3`
+  on standard arithmetic benchmarks; multiple times faster than
+  Node.js, PHP, Python.
+- **No build step for prototyping.** `tulpar file.tpr` runs in one
+  step. `tulpar build file.tpr` produces a standalone native binary
+  when you're ready to ship.
+- **Batteries included.** Wings (HTTP server), TulparAPI (FastAPI-style
+  routing), ORM (SQLite), HTTP client, sockets, threads, and a test
+  framework — all in the default install, no package manager required
+  for the standard library.
+- **First-class JSON.** `json` is a built-in type with literal syntax
+  (`{"k": v}`), dot access (`obj.key`), and `toJson` / `fromJson` round-trips.
+- **UTF-8 native.** Source code, strings, identifiers all UTF-8.
+  Turkish keyword aliases for the localised feel, full English
+  fallback everywhere.
+- **Single-binary toolchain.** One `tulpar` executable bundles the
+  compiler, runtime, package manager, formatter, and language server.
+- **Cross-platform.** Linux, macOS, Windows (native MSVC and MSYS2
+  MinGW). WebAssembly target also supported.
+
+## Performance
+
+Benchmark results across algorithmic tests (lower is better):
+
+| Rank | Language          | Total Time   | Relative to Tulpar |
+|------|-------------------|--------------|--------------------|
+| 🥇    | C (`gcc -O3`)     | **8.65 ms**  | 1.66× faster       |
+| 🥈    | Rust 1.80         | **9.30 ms**  | 1.54× faster       |
+| 🥉    | **Tulpar (AOT)**  | **14.36 ms** | **Reference**      |
+| 4    | JavaScript (Node) | 57.13 ms     | 3.98× slower       |
+| 5    | PHP 8.3           | 120.83 ms    | 8.41× slower       |
+| 6    | Python 3.12       | 3,671 ms     | 255.63× slower     |
+
+Run `./benchmarks/run_benchmarks.sh` (or `.ps1` on Windows) to
+reproduce. Detailed methodology in
+[benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+
+## Command reference
+
+The full list lives at <https://tulparlang.dev/reference/cli/>; the
+short version:
+
 ```bash
-tulpar script.tpr           # Fastest: AOT compile & run (native speed)
-tulpar --vm script.tpr      # VM mode: instant start, good for development
+tulpar <file.tpr>             # Run via AOT (default; native speed)
+tulpar --vm <file.tpr>        # Bytecode VM (instant startup)
+tulpar --legacy <file.tpr>    # Tree-walk interpreter (debug)
+tulpar build <file.tpr> [out] # Standalone native binary
+
+tulpar --repl                 # Interactive REPL
+tulpar fmt <file.tpr>         # Source formatter
+tulpar pkg <subcommand>       # Package manager (init, add, install)
+tulpar --lsp                  # Language server (editor integration)
+
+tulpar version                # Show installed version
+tulpar update [--check]       # Self-update from tulparlang.dev
+tulpar --help                 # Show command reference
 ```
 
-By default, `tulpar` transparently compiles your code to a native binary via LLVM and runs it. This gives you **C-like speed** with **Python-like simplicity** - no extra flags needed.
+CLI output language follows the system locale — Turkish on TR
+machines, English everywhere else. Override with `TULPAR_LANG=tr` or
+`TULPAR_LANG=en`.
 
-### Building Standalone Executables
-Compile your Tulpar code into a standalone native binary for distribution:
+## Build from source
+
+**Prerequisites:** GCC or Clang, LLVM 18+, CMake 3.14+.
+
+**Linux / macOS:**
 
 ```bash
-tulpar build script.tpr         # Creates 'script' binary
-tulpar build script.tpr myapp   # Custom output name
+./build.sh
 ```
 
-### Interactive REPL
-```bash
-tulpar --repl
+**Windows (native MSVC):**
+
+```powershell
+.\build.ps1
+# or: build.bat
+# or:
+cmake -S . -B build-windows -G "Visual Studio 17 2022" -A x64
+cmake --build build-windows --config Release
 ```
 
-## Language Features
+`build.sh` and `build.ps1` wipe the build directory each time. For
+incremental rebuilds during development, use CMake directly. The
+output is a `tulpar` (`tulpar.exe` on Windows) copied to the repo root
+plus `libtulpar_runtime.a` linked by AOT-compiled user binaries.
 
-### Data Types
+## Language at a glance
 
 ```tulpar
+// Static types with inference
 int x = 42;
 float pi = 3.14159;
 str name = "Tulpar";
 bool active = true;
 
-array mixed = [1, "text", 3.14];
-arrayInt numbers = [1, 2, 3, 4, 5];
-json config = {"host": "localhost", "port": 8080};
-```
+// Number literals
+int hex = 0xFF;     // 255
+int oct = 0o755;    // 493
+int bin = 0b1010;   // 10
 
-### Control Flow
-
-```tulpar
-if (x > 0) {
-    print("positive");
-} else {
-    print("non-positive");
-}
-
-for (int i = 0; i < 10; i++) {
-    print(i);
-}
-
-while (condition) {
-    // loop body
-}
-```
-
-### Functions
-
-```tulpar
-func fibonacci(int n) {
-    if (n <= 1) {
-        return n;
-    }
-    return fibonacci(n - 1) + fibonacci(n - 2);
-}
-```
-
-### JSON Objects
-
-```tulpar
+// First-class JSON
 json user = {
-    "name": "Alice",
+    "name": "Ali",
     "age": 30,
-    "address": {
-        "city": "Istanbul",
-        "country": "Turkey"
-    }
+    "address": { "city": "Istanbul" }
 };
+print(user.address.city);  // dot access works
 
-print(user["address"]["city"]);  // Istanbul
-print(user.address.city);        // Istanbul (dot notation)
-```
-
-### Custom Types
-
-```tulpar
+// Custom types
 type Person {
     str name;
     int age;
-    str city = "Istanbul";  // default value
+    str city = "Istanbul";   // default
 }
-
 Person p = Person("Ali", 25);
-print(p.name, p.age, p.city);
-```
 
-### Error Handling
+// Control flow
+for (int i = 0; i < 10; i++) { print(i); }
+for (k in user) { print(k); }
 
-```tulpar
+// Error handling
 try {
-    int result = riskyOperation();
+    risky();
 } catch (e) {
     print("Error:", e);
-}
-```
-
-### Multi-Threading
-
-```tulpar
-thread_create("worker_function", arg);
-
-mutex lock = mutex_create();
-mutex_lock(lock);
-// critical section
-mutex_unlock(lock);
-```
-
-### Networking
-
-```tulpar
-int server = socket_server("127.0.0.1", 8080);
-int client = socket_accept(server);
-str data = socket_receive(client, 1024);
-socket_send(client, "HTTP/1.1 200 OK\r\n\r\nHello");
-socket_close(client);
-```
-
-### Database (SQLite)
-
-```tulpar
-int db = db_open("app.db");
-db_execute(db, "CREATE TABLE users (id INTEGER, name TEXT)");
-json rows = db_query(db, "SELECT * FROM users");
-db_close(db);
-```
-
-## Standard Library
-
-### Tulpar Wings (Web Framework)
-
-```tulpar
-import "wings";
-
-func home() {
-    return {"message": "Welcome to Tulpar Wings!"};
+} finally {
+    cleanup();
 }
 
-func users() {
-    return [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}];
+// Threading
+int mu = mutex_create();
+func worker(arg) {
+    mutex_lock(mu);
+    // critical section
+    mutex_unlock(mu);
 }
-
-get("/", "home");
-get("/users", "users");
-listen(3000);
+int t = thread_create("worker", 42);
+thread_detach(t);
 ```
 
-### Library Modules
+Full guide at <https://tulparlang.dev/guide/syntax/>.
 
-| Module | File | Description |
-|--------|------|-------------|
-| Wings | `wings.tpr` | Lightweight web framework |
-| Router | `router.tpr` | URL routing & path matching |
-| HTTP Utils | `http_utils.tpr` | HTTP request/response helpers |
-| Middleware | `middleware.tpr` | Request middleware pipeline |
-| Async | `async.tpr` | Asynchronous task support |
-| Tulpar API | `tulpar_api.tpr` | High-level API framework |
-| Socket | `socket.tpr` | Socket abstraction layer |
-| SQLite | `sqlite3/` | Embedded SQLite3 database |
+## Standard library
 
-### Built-in Functions
+All modules below are **embedded in the binary** — `import "name"`
+just works, no package install required.
 
-| Category | Functions |
-|----------|-----------|
-| I/O | `print`, `input`, `inputInt`, `inputFloat` |
-| Type Conversion | `toInt`, `toFloat`, `toString`, `toBool` |
-| Math | `abs`, `sqrt`, `pow`, `sin`, `cos`, `tan`, `log`, `exp`, `floor`, `ceil`, `round`, `random`, `randint`, `min`, `max` |
-| String | `length`, `upper`, `lower`, `trim`, `split`, `join`, `replace`, `substring`, `contains`, `startsWith`, `endsWith`, `indexOf` |
-| Array | `push`, `pop`, `length`, `range` |
-| JSON | `toJson`, `fromJson` |
-| Time | `timestamp`, `time_ms`, `clock_ms`, `sleep` |
-| File | `file_read`, `file_write`, `file_exists`, `file_delete` |
+| Module           | Purpose                                                  |
+|------------------|----------------------------------------------------------|
+| `wings`          | Lightweight HTTP server, threaded request handling       |
+| `tulpar_api`     | FastAPI-style routing & JSON envelopes on top of Wings   |
+| `router`         | Express-style URL routing & middleware                   |
+| `http_utils`     | HTTP request parsing & response building primitives      |
+| `http_client`    | Outbound HTTP/HTTPS — `http_get`, `http_post_json`, …    |
+| `middleware`     | Built-in middleware (logger, CORS, auth, rate-limit)     |
+| `socket`         | TCP socket wrappers                                      |
+| `async`          | `setTimeout` / `setInterval` / Promise scaffolding       |
+| `orm`            | SQLite ORM — `define_model`, `orm_create`, `orm_where`   |
+| `test`           | Jest-style assertion framework + suite runner            |
+
+Native built-ins (no `import` needed):
+
+| Category        | Functions                                                                     |
+|-----------------|-------------------------------------------------------------------------------|
+| I/O             | `print`, `input`, `inputInt`, `inputFloat`                                    |
+| Type conversion | `toInt`, `toFloat`, `toString`, `toBool`                                      |
+| Math            | `abs`, `sqrt`, `pow`, `sin`, `cos`, `tan`, `log`, `exp`, `floor`, `ceil`, `round`, `random`, `randint`, `min`, `max` |
+| String          | `length`, `upper`, `lower`, `trim`, `split`, `join`, `replace`, `substring`, `contains`, `startsWith`, `endsWith`, `indexOf` |
+| Array           | `push`, `pop`, `length`, `range`                                              |
+| JSON            | `toJson`, `fromJson`                                                          |
+| Date / Time     | `timestamp`, `time_ms`, `now_iso8601`, `clock_ms`, `sleep`                    |
+| File            | `file_read`, `file_write`, `file_exists`, `file_delete`, `file_append`        |
+| Sockets         | `socket_server`, `socket_client`, `socket_accept`, `socket_send`, `socket_receive`, `socket_close` |
+| Database        | `db_open`, `db_execute`, `db_query`, `db_close` (vendored SQLite3)            |
+| Threading       | `thread_create`, `thread_detach`, `mutex_create`, `mutex_lock`, `mutex_unlock` |
+| HTTP (native)   | `http_request`, `http_parse_request`, `http_create_response`, `http_status_text`, `path_match`, `parse_query` |
 
 ## Architecture
 
 ```
 TulparLang/
 ├── src/
-│   ├── lexer/          # Tokenization (lexer.c, lexer.h)
-│   ├── parser/         # AST generation (parser.c, parser.h)
-│   ├── typeinfer/      # Type inference engine
-│   ├── aot/            # LLVM AOT backend (~175K line codegen)
-│   ├── jit/            # x64 JIT compiler & optimizer
-│   ├── vm/             # Bytecode VM (compiler, runtime bindings)
-│   └── interpreter/    # Tree-walk interpreter (legacy)
-├── lib/                # Standard libraries (Wings, Router, etc.)
-├── runtime/            # Runtime support (cJSON, ARC, native FFI)
-├── examples/           # 25 example programs
+│   ├── lexer/          # Tokenization
+│   ├── parser/         # Recursive-descent parser, AST nodes
+│   ├── typeinfer/      # Type inference
+│   ├── aot/            # LLVM 18 AOT backend (primary)
+│   ├── vm/             # Bytecode VM + compiler
+│   ├── jit/            # x64 JIT (legacy, still linked)
+│   ├── interpreter/    # Tree-walk interpreter (legacy, REPL)
+│   ├── lsp/            # Language Server Protocol
+│   ├── fmt/            # Source formatter
+│   ├── pkg/            # Package manager
+│   ├── cli/            # Subcommands (update, etc.)
+│   └── common/         # Localization, version, platform shims
+├── lib/                # Standard library (Tulpar source, embedded at build)
+├── runtime/            # cJSON, ARC heap, native FFI
+├── examples/           # 30 example programs
 ├── benchmarks/         # Multi-language benchmark suite
-├── wasm/               # WebAssembly target support
-├── cmake/              # CMake modules
-└── docs/               # Documentation
+├── installer/          # Inno Setup script for Windows MSI
+├── wasm/               # WebAssembly target (separate build)
+└── cmake/              # CMake modules + EmbedLibraries.cmake
 ```
 
-### Execution Backends
+### Execution backends
 
-| Backend | Status | Description |
-|---------|--------|-------------|
-| **AOT (LLVM)** | Primary | Compiles to native binaries via LLVM IR. Best performance. |
-| **VM** | Active | Bytecode VM for fast startup and development. |
-| **JIT** | Active | x64 JIT with optimization passes. |
-| **Interpreter** | Legacy | Tree-walk interpreter, kept for compatibility. |
+| Backend            | Status  | Notes                                           |
+|--------------------|---------|-------------------------------------------------|
+| **AOT (LLVM 18)**  | Primary | LLVM IR → native via clang. Default for `tulpar <file>`. |
+| **Bytecode VM**    | Active  | Fast startup; used by `--vm` and as AOT fallback. |
+| **x64 JIT**        | Legacy  | Direct emitter; kept for benchmarking.          |
+| **Tree-walk**      | Legacy  | REPL-only.                                      |
 
 ## Examples
 
-Example programs are available in the `examples/` directory:
+Thirty example programs live in [examples/](examples/). A few highlights:
 
-| File | Description |
-|------|-------------|
-| `01_hello_world.tpr` | Basic syntax |
-| `02_basics.tpr` | Variables, loops, functions |
-| `03_interactive.tpr` | User input/output |
-| `04_math_logic.tpr` | Mathematical operations |
-| `05_strings.tpr` | String manipulation |
-| `06_data_structures.tpr` | JSON and arrays |
-| `07_modules.tpr` | Import system |
-| `08_file_io.tpr` | File operations |
-| `09_socket_server.tpr` | Network server |
-| `09_socket_client.tpr` | Network client |
-| `09_socket_simple.tpr` | Simple socket communication |
-| `10_try_catch.tpr` | Error handling |
-| `11_router_app.tpr` | Web application |
-| `12_threaded_server.tpr` | Multi-threaded HTTP |
-| `13_database.tpr` | SQLite integration |
-| `14_api_server.tpr` | API server |
-| `15_feature_test.tpr` | Feature showcase |
-| `api_wings.tpr` | REST API with Wings |
-| `api_wings_crud.tpr` | CRUD API with Wings |
-| `api_router_crud.tpr` | Router-based CRUD API |
-| `api_simple.tpr` | Simple API example |
-| `tulpar_api_demo.tpr` | Tulpar API demo |
+| File                          | Demonstrates                              |
+|-------------------------------|-------------------------------------------|
+| `01_hello_world.tpr`          | Basic syntax, types, arithmetic           |
+| `06_data_structures.tpr`      | Arrays + JSON                             |
+| `10_try_catch.tpr`            | Error handling                            |
+| `12_threaded_server.tpr`      | Threaded HTTP server                      |
+| `13_database.tpr`             | SQLite via the built-in `db_*` API        |
+| `api_wings_crud.tpr`          | REST CRUD on top of Wings                 |
+| `tulpar_api_demo.tpr`         | Full TulparAPI app with middleware        |
+| `benchmark.tpr`               | The `fib` / `loopsum` benchmark workloads |
+
+Run any of them with `tulpar examples/<file>.tpr`.
 
 ## Documentation
 
-- [Quick Start Guide](docs/QUICKSTART.md)
-- [Language Reference](docs/KULLANIM.md)
-- [Math Functions](docs/MATH_FUNCTIONS.md)
-- [Platform Support](docs/PLATFORM_SUPPORT.md)
-- [Build Comparison](BUILD_COMPARISON.md)
+Full docs (Türkçe & English) at **<https://tulparlang.dev>**.
+
+Local docs in this repo:
+
+- [docs/QUICKSTART.md](docs/QUICKSTART.md)
+- [docs/KULLANIM.md](docs/KULLANIM.md) — language reference (Türkçe)
+- [docs/MATH_FUNCTIONS.md](docs/MATH_FUNCTIONS.md)
+- [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md)
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/name`)
-3. Commit changes (`git commit -m 'Add feature'`)
-4. Push to branch (`git push origin feature/name`)
+3. Commit your changes
+4. Push to the branch
 5. Open a Pull Request
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE).
 
 ## Author
 
-**Hamza Ortatepe**  
-GitHub: [@hamer1818](https://github.com/hamer1818)
+**Hamza Ortatepe** · [@hamer1818](https://github.com/hamer1818)
 
 ---
 
 <div align="center">
 
-[Documentation](docs/) · [Examples](examples/) · [Issues](https://github.com/hamer1818/OLang/issues)
+[Site](https://tulparlang.dev) · [Docs](https://tulparlang.dev/intro/getting-started/) · [Examples](examples/) · [Releases](https://github.com/hamer1818/TulparLang/releases) · [Issues](https://github.com/hamer1818/TulparLang/issues)
 
 </div>
