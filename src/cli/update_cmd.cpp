@@ -61,21 +61,34 @@ bool fetch_latest_tag(std::string &out_tag, std::string &out_err) {
     url += kRepo;
     url += "/releases/latest";
 
+    std::string body;
+    int rc;
+
 #ifdef _WIN32
-    // -UseBasicParsing avoids IE engine dependency on older Windows
-    // installs; ConvertTo-Json is overkill so we just print the raw body.
-    std::string cmd =
-        "powershell -NoProfile -ExecutionPolicy Bypass -Command "
-        "\"try { (Invoke-WebRequest -Uri '" + url + "' "
-        "-Headers @{'User-Agent'='tulpar-update'} -UseBasicParsing).Content } "
-        "catch { Write-Error $_.Exception.Message; exit 1 }\"";
+    // Prefer the curl.exe bundled with Windows 10 1803+ (and all of
+    // Windows 11) — it has near-zero startup cost vs PowerShell's
+    // ~500ms cold spin-up, which the user feels every time they run
+    // `tulpar update`. PowerShell stays as the safety net for legacy
+    // Windows installs that predate bundled curl.
+    std::string curl_cmd =
+        "curl.exe -fsSL -H \"User-Agent: tulpar-update\" \"" + url + "\" 2>NUL";
+    rc = capture_command(curl_cmd, body);
+    if (rc != 0 || body.empty()) {
+        body.clear();
+        std::string ps_cmd =
+            "powershell -NoProfile -ExecutionPolicy Bypass -Command "
+            "\"$ProgressPreference='SilentlyContinue'; "
+            "try { (Invoke-WebRequest -Uri '" + url + "' "
+            "-Headers @{'User-Agent'='tulpar-update'} -UseBasicParsing).Content } "
+            "catch { Write-Error $_.Exception.Message; exit 1 }\"";
+        rc = capture_command(ps_cmd, body);
+    }
 #else
     std::string cmd =
         "curl -fsSL -H 'User-Agent: tulpar-update' '" + url + "'";
+    rc = capture_command(cmd, body);
 #endif
 
-    std::string body;
-    int rc = capture_command(cmd, body);
     if (rc != 0 || body.empty()) {
         out_err = i18n::tr_en(
             "Sürüm bilgisi alınamadı (ağ hatası veya araç eksik).",
@@ -102,9 +115,15 @@ bool fetch_latest_tag(std::string &out_tag, std::string &out_err) {
 // source of truth — this repo no longer carries its own copy.
 int run_install_script() {
 #ifdef _WIN32
+    // $ProgressPreference='SilentlyContinue' kills the IWR progress bar
+    // — without it, the iwr that fetches install.ps1 itself can spend
+    // hundreds of ms re-rendering the bar on Windows PowerShell 5.1.
+    // Defensive: install.ps1 sets this too, but only after it starts
+    // executing. We need it active for the wrapping iwr as well.
     const char *cmd =
         "powershell -NoProfile -ExecutionPolicy Bypass -Command "
-        "\"iwr -useb https://tulparlang.dev/install.ps1 | iex\"";
+        "\"$ProgressPreference='SilentlyContinue'; "
+        "iwr -useb https://tulparlang.dev/install.ps1 | iex\"";
 #else
     const char *cmd =
         "curl -fsSL https://tulparlang.dev/install.sh | bash";
