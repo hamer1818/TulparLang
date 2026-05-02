@@ -1,6 +1,9 @@
 #include "localization.hpp"
 #include <cstdlib>
 #include <cstring>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace tulpar {
 namespace i18n {
@@ -19,15 +22,39 @@ static bool contains_tr_marker(const char *value) {
   return false;
 }
 
+#ifdef _WIN32
+// On Windows, LC_*/LANG are usually unset. Read the user's UI locale from
+// the OS — GetUserDefaultLocaleName returns BCP-47 names like "tr-TR".
+static bool windows_locale_is_turkish() {
+  wchar_t buf[LOCALE_NAME_MAX_LENGTH];
+  int n = GetUserDefaultLocaleName(buf, LOCALE_NAME_MAX_LENGTH);
+  if (n <= 0) return false;
+  // ASCII compare is fine: locale names are tr-TR, en-US, ...
+  return (buf[0] == L't' || buf[0] == L'T') &&
+         (buf[1] == L'r' || buf[1] == L'R') &&
+         (buf[2] == 0 || buf[2] == L'-' || buf[2] == L'_');
+}
+#endif
+
 bool is_turkish_locale() {
+  // If the user has set LC_ALL/LC_MESSAGES/LANG, that's an explicit
+  // override — honour it and don't second-guess via the OS locale. This
+  // matches POSIX semantics and lets users force English on a Turkish
+  // Windows machine (or vice-versa) by setting LANG.
   const char *envs[] = {"LC_ALL", "LC_MESSAGES", "LANG"};
   for (const char *env_name : envs) {
     const char *value = getenv(env_name);
-    if (contains_tr_marker(value)) {
-      return true;
+    if (value && *value) {
+      return contains_tr_marker(value);
     }
   }
+#ifdef _WIN32
+  // No env override — fall back to the OS UI locale. This is the path
+  // taken by the typical Windows end-user who never touches LANG.
+  return windows_locale_is_turkish();
+#else
   return false;
+#endif
 }
 
 const char *tr_en(const char *tr_text, const char *en_text) {
@@ -37,6 +64,12 @@ const char *tr_en(const char *tr_text, const char *en_text) {
 const char *tr_for_en(const char *en_text) {
   if (!en_text) {
     return "";
+  }
+  // Honour the user's locale: on non-Turkish systems return the English
+  // input unchanged. Without this guard every caller would unconditionally
+  // print Turkish, which contradicted is_turkish_locale().
+  if (!is_turkish_locale()) {
+    return en_text;
   }
 
   if (strcmp(en_text, "Runtime Error: ") == 0)
@@ -247,6 +280,96 @@ const char *tr_for_en(const char *en_text) {
     return "Derleyici Uyarisi: Ele alinmayan komut tipi %d\n";
   if (strcmp(en_text, "[AOT] Warning: Optimization failed: %s\n") == 0)
     return "[AOT] Uyari: Optimizasyon basarisiz: %s\n";
+
+  // ---- Parser expectation messages (Parser::expect / Parser::error) ----
+  if (strcmp(en_text, "Expected variable name") == 0)
+    return "değişken adı bekleniyordu";
+  if (strcmp(en_text, "Expected ';' after variable declaration") == 0)
+    return "değişken tanımından sonra ';' bekleniyordu";
+  if (strcmp(en_text, "Expected function name") == 0)
+    return "fonksiyon adı bekleniyordu";
+  if (strcmp(en_text, "Expected '(' after function name") == 0)
+    return "fonksiyon adından sonra '(' bekleniyordu";
+  if (strcmp(en_text, "Expected parameter name") == 0)
+    return "parametre adı bekleniyordu";
+  if (strcmp(en_text, "Expected ')' after parameters") == 0)
+    return "parametrelerden sonra ')' bekleniyordu";
+  if (strcmp(en_text, "Expected type name") == 0)
+    return "tip adı bekleniyordu";
+  if (strcmp(en_text, "Expected '{' after type name") == 0)
+    return "tip adından sonra '{' bekleniyordu";
+  if (strcmp(en_text, "Expected field name") == 0)
+    return "alan adı bekleniyordu";
+  if (strcmp(en_text, "Expected ';' after field") == 0)
+    return "alandan sonra ';' bekleniyordu";
+  if (strcmp(en_text, "Expected '}' after type body") == 0)
+    return "tip gövdesinden sonra '}' bekleniyordu";
+  if (strcmp(en_text, "Expected '(' after 'if'") == 0)
+    return "'if' sonrası '(' bekleniyordu";
+  if (strcmp(en_text, "Expected ')' after condition") == 0)
+    return "koşuldan sonra ')' bekleniyordu";
+  if (strcmp(en_text, "Expected '(' after 'while'") == 0)
+    return "'while' sonrası '(' bekleniyordu";
+  if (strcmp(en_text, "Expected '(' after 'for'") == 0)
+    return "'for' sonrası '(' bekleniyordu";
+  if (strcmp(en_text, "Expected ')' after for-in") == 0)
+    return "for-in sonrası ')' bekleniyordu";
+  if (strcmp(en_text, "Expected ';' after condition") == 0)
+    return "koşuldan sonra ';' bekleniyordu";
+  if (strcmp(en_text, "Expected ')' after for clauses") == 0)
+    return "for ifadelerinden sonra ')' bekleniyordu";
+  if (strcmp(en_text, "Expected ';' after return") == 0)
+    return "return sonrası ';' bekleniyordu";
+  if (strcmp(en_text, "Expected ';' after break") == 0)
+    return "break sonrası ';' bekleniyordu";
+  if (strcmp(en_text, "Expected ';' after continue") == 0)
+    return "continue sonrası ';' bekleniyordu";
+  if (strcmp(en_text, "Expected 'catch' after try block") == 0)
+    return "try bloğundan sonra 'catch' bekleniyordu";
+  if (strcmp(en_text, "Expected '(' after 'catch'") == 0)
+    return "'catch' sonrası '(' bekleniyordu";
+  if (strcmp(en_text, "Expected exception variable name") == 0)
+    return "istisna değişken adı bekleniyordu";
+  if (strcmp(en_text, "Expected ')' after exception variable") == 0)
+    return "istisna değişkeninden sonra ')' bekleniyordu";
+  if (strcmp(en_text, "Expected ';' after throw") == 0)
+    return "throw sonrası ';' bekleniyordu";
+  if (strcmp(en_text, "Expected string literal after import") == 0)
+    return "import sonrası string sabit bekleniyordu";
+  if (strcmp(en_text, "Expected ';' after import") == 0)
+    return "import sonrası ';' bekleniyordu";
+  if (strcmp(en_text, "Expected '{'") == 0)
+    return "'{' bekleniyordu";
+  if (strcmp(en_text, "Expected '}'") == 0)
+    return "'}' bekleniyordu";
+  if (strcmp(en_text, "Expected ';' after expression") == 0)
+    return "ifadeden sonra ';' bekleniyordu";
+  if (strcmp(en_text, "Expected ';' after assignment") == 0)
+    return "atamadan sonra ';' bekleniyordu";
+  if (strcmp(en_text, "Expected ')' after expression") == 0)
+    return "ifadeden sonra ')' bekleniyordu";
+  if (strcmp(en_text, "Expected field name after '.'") == 0)
+    return "'.' sonrası alan adı bekleniyordu";
+  if (strcmp(en_text, "Expected ')' after arguments") == 0)
+    return "argümanlardan sonra ')' bekleniyordu";
+  if (strcmp(en_text, "Expected ']' after array index") == 0)
+    return "dizi indeksinden sonra ']' bekleniyordu";
+  if (strcmp(en_text, "Expected ']' after array elements") == 0)
+    return "dizi elemanlarından sonra ']' bekleniyordu";
+  if (strcmp(en_text, "Expected string key in object") == 0)
+    return "nesnede string anahtar bekleniyordu";
+  if (strcmp(en_text, "Expected ':' after object key") == 0)
+    return "nesne anahtarından sonra ':' bekleniyordu";
+  if (strcmp(en_text, "Expected '}' after object fields") == 0)
+    return "nesne alanlarından sonra '}' bekleniyordu";
+  if (strcmp(en_text, "Invalid integer literal") == 0)
+    return "geçersiz tamsayı sabiti";
+  if (strcmp(en_text, "Invalid float literal") == 0)
+    return "geçersiz ondalık sabit";
+  if (strcmp(en_text, "Unexpected token in expression") == 0)
+    return "ifadede beklenmeyen sembol";
+  if (strcmp(en_text, "Can only call identifiers") == 0)
+    return "yalnızca tanımlayıcılar çağrılabilir";
 
   return en_text;
 }

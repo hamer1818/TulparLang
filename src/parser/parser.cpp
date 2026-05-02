@@ -105,7 +105,9 @@ static void render_parse_error_pretty(int line, const std::string& message,
         tulpar::diag_sink_push(line, col, len, "error", message.c_str(), hint);
         return;
     }
-    std::fprintf(stderr, "hata: %s\n", message.c_str());
+    std::fprintf(stderr, "%s: %s\n",
+                 tulpar::i18n::tr_en("hata", "error"),
+                 message.c_str());
     if (g_parser_source_filename && *g_parser_source_filename) {
         std::fprintf(stderr, "  --> %s:%d\n", g_parser_source_filename, line);
     } else {
@@ -146,7 +148,8 @@ static void render_parse_error_pretty(int line, const std::string& message,
         }
     }
     if (hint && *hint) {
-        std::fprintf(stderr, "    = ipucu: %s\n", hint);
+        std::fprintf(stderr, "    = %s: %s\n",
+                     tulpar::i18n::tr_en("ipucu", "hint"), hint);
     }
 }
 
@@ -162,6 +165,11 @@ void Parser::error(const std::string& message) {
     if (pos != std::string::npos) {
         clean = clean.substr(0, pos);
     }
+    // Localize the bare expectation ("Expected ';' after expression",
+    // "Invalid integer literal", ...) before composing the prefixed line.
+    // tr_for_en is a no-op on non-Turkish locales, so callers can keep
+    // passing English strings.
+    clean = tulpar::i18n::tr_for_en(clean.c_str());
     // Best-effort caret token: the lexeme of the current token (the one
     // we choked on). Empty for EOF/punctuation we can't render meaningfully.
     std::string lexeme;
@@ -172,9 +180,12 @@ void Parser::error(const std::string& message) {
         column = t.column();
     }
     const char *caret = lexeme.empty() ? nullptr : lexeme.c_str();
-    render_parse_error_pretty(line, "ayrıştırma hatası: " + clean, caret,
-                              "sözdiziminde bir eksiklik var — beklenen "
-                              "yapıyı kontrol edin", column);
+    std::string prefix = tulpar::i18n::tr_en("ayrıştırma hatası: ",
+                                              "parse error: ");
+    const char *hint = tulpar::i18n::tr_en(
+        "sözdiziminde bir eksiklik var — beklenen yapıyı kontrol edin",
+        "syntax is incomplete — check the expected construct");
+    render_parse_error_pretty(line, prefix + clean, caret, hint, column);
     throw std::runtime_error(message);
 }
 
