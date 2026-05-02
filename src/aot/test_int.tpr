@@ -1,4 +1,0 @@
-func test() {
-    print(12345);
-}
-test();
