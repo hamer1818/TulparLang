@@ -329,7 +329,7 @@ if(WIN32 AND MSVC)
         PLATFORM_WINDOWS
     )
     # Link Winsock for socket support
-    target_link_libraries(tulpar_runtime ws2_32)
+    target_link_libraries(tulpar_runtime PUBLIC ws2_32)
 endif()
 
 # ============================================
