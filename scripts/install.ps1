@@ -13,6 +13,22 @@
 #Requires -Version 5
 $ErrorActionPreference = 'Stop'
 
+# Force UTF-8 on the console so the Turkish characters and box-drawing
+# glyphs in this script (`→`, `✓`, `ü`, `İ`, ...) render correctly. When
+# the script is run via `iwr | iex`, PowerShell inherits the parent
+# console's output encoding — which on a fresh Windows is the legacy OEM
+# code page (CP437/CP850), turning every multi-byte UTF-8 character into
+# `?`. Setting these here is per-process and does not leak to the user's
+# shell after the installer exits.
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    [Console]::InputEncoding  = [System.Text.Encoding]::UTF8
+    $OutputEncoding           = [System.Text.Encoding]::UTF8
+} catch {
+    # Old Windows / sandboxed hosts may refuse — fall through, the script
+    # will still work, only the diacritics in messages will be munged.
+}
+
 $Repo       = 'hamer1818/TulparLang'
 $AssetName  = 'tulpar-windows-x64.exe'
 $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\Tulpar'
