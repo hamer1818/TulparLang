@@ -230,14 +230,30 @@ static void report_codegen_error(LLVMBackend *backend, int line,
 
   if (!backend->source_text) {
     // Legacy path: keep the existing one-line "HATA" format.
-    fprintf(stderr, "HATA (Satır %d): %s\n", line, message);
+    fprintf(stderr, "%s (%s %d): %s\n",
+            tulpar::i18n::tr_en("HATA", "ERROR"),
+            tulpar::i18n::tr_en("Satır", "Line"),
+            line, message);
     if (hint && *hint) {
-      fprintf(stderr, "  İpucu: %s\n", hint);
+      fprintf(stderr, "  %s: %s\n",
+              tulpar::i18n::tr_en("İpucu", "Hint"), hint);
     }
     return;
   }
 
-  fprintf(stderr, "%s: %s\n", kind ? kind : "hata", message);
+  // Callers pass literal "hata" / "uyarı" as the kind label. Map them to
+  // the user's locale here so the prefix is English on non-Turkish systems.
+  const char *kind_localized;
+  if (!kind) {
+    kind_localized = tulpar::i18n::tr_en("hata", "error");
+  } else if (strcmp(kind, "hata") == 0) {
+    kind_localized = tulpar::i18n::tr_en("hata", "error");
+  } else if (strcmp(kind, "uyarı") == 0 || strcmp(kind, "uyari") == 0) {
+    kind_localized = tulpar::i18n::tr_en("uyarı", "warning");
+  } else {
+    kind_localized = kind;
+  }
+  fprintf(stderr, "%s: %s\n", kind_localized, message);
   if (backend->source_filename && *backend->source_filename) {
     fprintf(stderr, "  --> %s:%d\n", backend->source_filename, line);
   } else {
@@ -271,7 +287,8 @@ static void report_codegen_error(LLVMBackend *backend, int line,
     fputc('\n', stderr);
   }
   if (hint && *hint) {
-    fprintf(stderr, "    = ipucu: %s\n", hint);
+    fprintf(stderr, "    = %s: %s\n",
+            tulpar::i18n::tr_en("ipucu", "hint"), hint);
   }
 }
 

@@ -4,6 +4,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <sys/stat.h>
+#ifdef _WIN32
+// WIN32_LEAN_AND_MEAN keeps windows.h from pulling in the legacy winsock.h,
+// which would conflict with the winsock2.h that platform_sockets.h includes
+// further down through the interpreter/parser/vm headers.
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 #include "interpreter/interpreter.hpp"
 #include "lexer/lexer.hpp"
@@ -158,6 +165,14 @@ int main(int argc, char **argv) {
   // Locale setup
   setlocale(LC_ALL, ".UTF8");
 
+#ifdef _WIN32
+  // Windows console defaults to OEM code page (CP437/CP850), which renders
+  // our UTF-8 diagnostic strings as garbage like "ayr─▒┼şt─▒rma". Switch
+  // both input and output to UTF-8 so Turkish characters print correctly.
+  SetConsoleOutputCP(CP_UTF8);
+  SetConsoleCP(CP_UTF8);
+#endif
+
   // LSP mode short-circuits everything else: it owns stdin/stdout for
   // the JSON-RPC transport and must not be polluted by any startup
   // banner or REPL prompt. Check before any other flag dispatch.
@@ -309,8 +324,13 @@ int main(int argc, char **argv) {
     from_file = 1;
 
 #ifdef TULPAR_AOT_ENABLED
-    // Default mode: AOT compile & run (fastest execution)
-    // Falls back to VM if AOT compilation fails
+    // Default mode: AOT compile & run (fastest execution).
+    // Fall back to VM only when AOT failed for *infrastructure* reasons
+    // (object emit / link). Source-level errors (parse, codegen) are
+    // already user-visible and re-running them through the VM would just
+    // print the same diagnostic a second time — that's the duplicate
+    // error users used to see on Windows where the runtime archive is
+    // often missing.
     if (!force_vm && !use_legacy) {
       AOTResult aot_result = aot_compile_and_run_silent_with_filename(
           source, argv[arg_offset]);
@@ -318,7 +338,13 @@ int main(int argc, char **argv) {
         free(source);
         return 0;
       }
-      // AOT failed - fall through to VM mode silently
+      if (aot_result == AOT_ERROR_PARSE ||
+          aot_result == AOT_ERROR_CODEGEN) {
+        free(source);
+        return 1;
+      }
+      // AOT_ERROR_EMIT / AOT_ERROR_LINK: clang or libtulpar_runtime.a
+      // missing — fall through to VM silently so the program still runs.
     }
 #endif
   } else {
