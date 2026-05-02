@@ -25,10 +25,17 @@ jobs:
           sudo apt-get install -y build-essential cmake llvm-18-dev
       
       - name: Build with LLVM
+        env:
+          # Mirrors the formula used by `create-release` below so the
+          # embedded version (`tulpar --version`) matches the published
+          # release tag — which is what `tulpar update --check` compares
+          # against.
+          TULPAR_VERSION: v2.1.0.${{ github.run_number }}
         run: |
           mkdir -p build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake .. -DCMAKE_BUILD_TYPE=Release \
+            -DTULPAR_VERSION="${TULPAR_VERSION}"
           cmake --build . --config Release -j$(nproc)
         timeout-minutes: 10
       
@@ -66,12 +73,15 @@ jobs:
           export PATH="/opt/homebrew/opt/llvm@18/bin:$PATH"
       
       - name: Build with LLVM
+        env:
+          TULPAR_VERSION: v2.1.0.${{ github.run_number }}
         run: |
           export PATH="/opt/homebrew/opt/llvm@18/bin:$PATH"
           export LLVM_DIR="/opt/homebrew/opt/llvm@18/lib/cmake/llvm"
           mkdir -p build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$LLVM_DIR
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$LLVM_DIR \
+            -DTULPAR_VERSION="${TULPAR_VERSION}"
           cmake --build . --config Release -j$(sysctl -n hw.ncpu)
         timeout-minutes: 10
       
@@ -117,6 +127,8 @@ jobs:
             mingw-w64-x86_64-openssl
 
       - name: Build with LLVM
+        env:
+          TULPAR_VERSION: v2.1.0.${{ github.run_number }}
         run: |
           clang --version
           llvm-config --version
@@ -125,7 +137,8 @@ jobs:
           cmake .. -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=gcc \
-            -DCMAKE_CXX_COMPILER=g++
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DTULPAR_VERSION="${TULPAR_VERSION}"
           cmake --build . --config Release -j
         timeout-minutes: 20
 

@@ -219,6 +219,12 @@ set(PKG_SOURCES
     src/pkg/pkg_cli.hpp
 )
 
+# CLI subcommands (`tulpar update`, version, ...)
+set(CLI_SOURCES
+    src/cli/update_cmd.cpp
+    src/cli/update_cmd.hpp
+)
+
 set(SQLITE_SOURCES
     lib/sqlite3/sqlite3.c
 )
@@ -247,6 +253,7 @@ set(ALL_SOURCES
     ${LSP_SOURCES}
     ${FMT_SOURCES}
     ${PKG_SOURCES}
+    ${CLI_SOURCES}
     ${MAIN_SOURCES}
     ${SQLITE_SOURCES}
 )
@@ -255,6 +262,15 @@ add_executable(tulpar ${ALL_SOURCES})
 
 # Always enable AOT
 target_compile_definitions(tulpar PRIVATE TULPAR_AOT_ENABLED)
+
+# Embedded version string. Defaults to "<project_version>-dev" for local
+# builds; the release CI overrides with `-DTULPAR_VERSION=v2.1.0.<run>` so
+# `tulpar --version` matches the actual GitHub release tag, which the
+# in-binary `tulpar update` checker compares against.
+set(TULPAR_VERSION "${PROJECT_VERSION}-dev"
+    CACHE STRING "Embedded version string surfaced via tulpar --version")
+target_compile_definitions(tulpar
+    PRIVATE TULPAR_VERSION_STRING="${TULPAR_VERSION}")
 
 # LLVM Linking - Cross-platform support (x86_64 + AArch64)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64|ARM64")
