@@ -16,7 +16,11 @@ tulpar.exe
 *.exe
 
 # ==== Build Directories ====
+# build-* glob covers every per-platform / per-toolchain variant
+# (build-windows, build-msys, build-macos, build-windows-mingw, …).
+# A few common names are listed explicitly for clarity.
 build/
+build-*/
 build-win/
 build-linux/
 bin/
@@ -89,8 +93,23 @@ __pycache__/
 .env
 venv/
 
+# ==== Vendored LLVM headers (now removed from tracking) ====
+# include/ once carried a full vendored LLVM source tree. Every active
+# source uses the system LLVM via find_package (LLVM_INCLUDE_DIRS), so
+# the local copy was orphaned. Ignored to stop a stray LLVM extract or
+# tool-driven auto-vendor from sneaking it back into git.
+include/
+
+# ==== Scratch / debug dumps ====
+# Files that show up from ad-hoc dev sessions: gdb backtrace dumps,
+# example output captures, scratch test programs run from the repo root.
+bt.txt
+bt_full.txt
+test.tpr
+test_results.txt
+
 # ==== Keep These (not ignored) ====
 # lib/*.tpr - Standard libraries
-# examples/*.tpr - Example files  
+# examples/*.tpr - Example files
 # cmake/*.cmake - CMake modules
 # src/embedded_libs.h.in - Template file
