@@ -1,4 +1,4 @@
-# TulparLang installer — Windows
+# TulparLang installer - Windows
 #
 # Usage (one-liner):
 #   iwr -useb https://raw.githubusercontent.com/hamer1818/TulparLang/main/scripts/install.ps1 | iex
@@ -9,67 +9,65 @@
 #   3. Adds that directory to the user-level PATH (no admin required).
 #
 # Re-running this script upgrades the installed tulpar to the latest release.
+#
+# NOTE on output: this script intentionally uses ASCII-only characters
+# (=> [OK] [!]) and ASCII-transliterated Turkish (Surum, Indirme, ...).
+# When invoked via `iwr | iex`, the script runs in the host session whose
+# console encoding setup we can't fully change from inside the script —
+# unicode glyphs and diacritics are unreliable there. Installed tulpar.exe
+# itself displays full Turkish correctly via its own UTF-8 console setup.
 
 #Requires -Version 5
 $ErrorActionPreference = 'Stop'
 
-# Force UTF-8 on the console so the Turkish characters and box-drawing
-# glyphs in this script (`→`, `✓`, `ü`, `İ`, ...) render correctly. When
-# the script is run via `iwr | iex`, PowerShell inherits the parent
-# console's output encoding — which on a fresh Windows is the legacy OEM
-# code page (CP437/CP850), turning every multi-byte UTF-8 character into
-# `?`. Setting these here is per-process and does not leak to the user's
-# shell after the installer exits.
+# Belt-and-suspenders: try to set UTF-8 anyway in case the host honours
+# it. Safe to fail silently — we use ASCII-only characters below either way.
 try {
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-    [Console]::InputEncoding  = [System.Text.Encoding]::UTF8
     $OutputEncoding           = [System.Text.Encoding]::UTF8
-} catch {
-    # Old Windows / sandboxed hosts may refuse — fall through, the script
-    # will still work, only the diacritics in messages will be munged.
-}
+} catch {}
 
 $Repo       = 'hamer1818/TulparLang'
 $AssetName  = 'tulpar-windows-x64.exe'
 $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\Tulpar'
 $BinaryPath = Join-Path $InstallDir 'tulpar.exe'
 
-function Write-Step($msg)    { Write-Host "→ $msg" -ForegroundColor Cyan }
-function Write-Success($msg) { Write-Host "✓ $msg" -ForegroundColor Green }
-function Write-Note($msg)    { Write-Host "  $msg" -ForegroundColor DarkGray }
-function Write-Warn($msg)    { Write-Host "! $msg" -ForegroundColor Yellow }
+function Write-Step($msg)    { Write-Host "==> $msg" -ForegroundColor Cyan }
+function Write-Success($msg) { Write-Host "[OK] $msg" -ForegroundColor Green }
+function Write-Note($msg)    { Write-Host "     $msg" -ForegroundColor DarkGray }
+function Write-Warn($msg)    { Write-Host "[!]  $msg" -ForegroundColor Yellow }
 
 Write-Host ""
 Write-Host "TulparLang installer" -ForegroundColor Cyan
 Write-Host "===================="
 
 # 1. Find the latest release.
-Write-Step "GitHub'dan son sürüm sorgulanıyor..."
+Write-Step "GitHub'dan son surum sorgulaniyor..."
 $apiUrl = "https://api.github.com/repos/$Repo/releases/latest"
 try {
     $release = Invoke-RestMethod -Uri $apiUrl -Headers @{ 'User-Agent' = 'tulpar-installer' }
 } catch {
-    throw "Sürüm bilgisi alınamadı ($apiUrl): $_"
+    throw "Surum bilgisi alinamadi ($apiUrl): $_"
 }
 $tag = $release.tag_name
 $asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
 if (-not $asset) {
-    throw "Release '$tag' içinde '$AssetName' bulunamadı."
+    throw "Release '$tag' icinde '$AssetName' bulunamadi."
 }
-Write-Note "Son sürüm: $tag"
+Write-Note "Son surum: $tag"
 
 # 2. Download the binary. Windows can't overwrite a running .exe, so if a
 #    previous install is on-disk we rename it out of the way first; that
 #    rename works even while the process is running, and the .old file is
 #    removed on success.
-Write-Step "İndiriliyor: $BinaryPath"
+Write-Step "Indiriliyor: $BinaryPath"
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 $oldPath = "$BinaryPath.old"
 if (Test-Path $oldPath) { Remove-Item $oldPath -Force -ErrorAction SilentlyContinue }
 if (Test-Path $BinaryPath) {
     try { Move-Item -Path $BinaryPath -Destination $oldPath -Force }
     catch {
-        throw "Mevcut tulpar.exe taşınamadı (başka bir process tarafından kilitleniyor olabilir): $_"
+        throw "Mevcut tulpar.exe tasinamadi (baska bir process tarafindan kilitleniyor olabilir): $_"
     }
 }
 try {
@@ -77,7 +75,7 @@ try {
 } catch {
     # Restore previous on download failure so the user isn't left without a tulpar.
     if (Test-Path $oldPath) { Move-Item -Path $oldPath -Destination $BinaryPath -Force }
-    throw "İndirme başarısız: $_"
+    throw "Indirme basarisiz: $_"
 }
 if (Test-Path $oldPath) { Remove-Item $oldPath -Force -ErrorAction SilentlyContinue }
 
@@ -88,13 +86,13 @@ if (Test-Path $oldPath) { Remove-Item $oldPath -Force -ErrorAction SilentlyConti
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $entries  = if ($userPath) { $userPath -split ';' | Where-Object { $_ } } else { @() }
 if ($entries -notcontains $InstallDir) {
-    Write-Step "PATH güncelleniyor: $InstallDir"
+    Write-Step "PATH guncelleniyor: $InstallDir"
     $newPath = if ($userPath) { "$userPath;$InstallDir" } else { $InstallDir }
     [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
     $env:Path = "$env:Path;$InstallDir"
-    Write-Note "Yeni terminallerde otomatik geçerli olur."
+    Write-Note "Yeni terminallerde otomatik gecerli olur."
 } else {
-    Write-Step "PATH zaten ayarlı."
+    Write-Step "PATH zaten ayarli."
 }
 
 # 4. Smoke test.
@@ -102,12 +100,12 @@ $version = & $BinaryPath --version 2>$null
 if (-not $version) { $version = $tag }
 
 Write-Host ""
-Write-Success "TulparLang $tag kuruldu → $BinaryPath"
+Write-Success "TulparLang $tag kuruldu -> $BinaryPath"
 Write-Host ""
 Write-Host "Deneme:" -ForegroundColor Cyan
 Write-Host "  tulpar --version"
 Write-Host "  tulpar --repl"
 Write-Host ""
-Write-Host "Güncellemek için:" -ForegroundColor Cyan
+Write-Host "Guncellemek icin:" -ForegroundColor Cyan
 Write-Host "  tulpar update            # built-in (varsa)"
-Write-Host "  veya bu installer'ı yeniden çalıştır."
+Write-Host "  veya bu installer'i yeniden calistir."
