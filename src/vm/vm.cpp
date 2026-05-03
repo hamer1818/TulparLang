@@ -2802,13 +2802,29 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           source =
               strdup(embedded_source);
         } else {
-          // Read from disk
+          // Resolution order (must match the AOT path so VM/AOT behaviour
+          // stays consistent — see docs/ecosystem/package-manager.mdx):
+          //   1. ./<name>
+          //   2. ./<name>.tpr
+          //   3. ./tulpar_modules/<name>/<name>.tpr  (vendored entry-point)
+          //   4. ./tulpar_modules/<name>.tpr        (vendored single-file)
           source = read_file(fileName);
-          // Try with .tpr extension if failed
           if (source == nullptr) {
-            char ptrName[256];
+            char ptrName[512];
             snprintf(ptrName, sizeof(ptrName), "%s.tpr", fileName);
             source = read_file(ptrName);
+          }
+          if (source == nullptr) {
+            char vendorEntry[512];
+            snprintf(vendorEntry, sizeof(vendorEntry),
+                     "tulpar_modules/%s/%s.tpr", fileName, fileName);
+            source = read_file(vendorEntry);
+          }
+          if (source == nullptr) {
+            char vendorSingle[512];
+            snprintf(vendorSingle, sizeof(vendorSingle),
+                     "tulpar_modules/%s.tpr", fileName);
+            source = read_file(vendorSingle);
           }
         }
 
