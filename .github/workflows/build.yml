@@ -53,13 +53,19 @@ jobs:
           mkdir -p dist
           cp build/tulpar dist/tulpar-linux-x64
           cp build/libtulpar_runtime.a dist/libtulpar_runtime-linux-x64.a
-      
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: tulpar-linux-x64
           path: dist/tulpar-linux-x64
-  
+
+      - name: Upload runtime library
+        uses: actions/upload-artifact@v4
+        with:
+          name: libtulpar_runtime-linux-x64
+          path: dist/libtulpar_runtime-linux-x64.a
+
   build-macos:
     runs-on: macos-latest
     steps:
@@ -89,13 +95,20 @@ jobs:
         run: |
           mkdir -p dist
           cp build/tulpar dist/tulpar-macos-universal
-      
+          cp build/libtulpar_runtime.a dist/libtulpar_runtime-macos-universal.a
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: tulpar-macos-universal
           path: dist/tulpar-macos-universal
-  
+
+      - name: Upload runtime library
+        uses: actions/upload-artifact@v4
+        with:
+          name: libtulpar_runtime-macos-universal
+          path: dist/libtulpar_runtime-macos-universal.a
+
   build-windows:
     runs-on: windows-latest
     defaults:
@@ -146,12 +159,19 @@ jobs:
         run: |
           mkdir -p dist
           cp build-windows/tulpar.exe dist/tulpar-windows-x64.exe
+          cp build-windows/libtulpar_runtime.a dist/libtulpar_runtime-windows-x64.a
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: tulpar-windows-x64
           path: dist/tulpar-windows-x64.exe
+
+      - name: Upload runtime library
+        uses: actions/upload-artifact@v4
+        with:
+          name: libtulpar_runtime-windows-x64
+          path: dist/libtulpar_runtime-windows-x64.a
 
       # ----------------------------------------------------------------
       # GUI installer (Inno Setup). Pre-installed on GitHub-hosted
@@ -173,6 +193,7 @@ jobs:
           & $iscc `
             "/DAppVersion=$appVersion" `
             "/DSourceBinary=$pwd\build-windows\tulpar.exe" `
+            "/DSourceRuntimeLib=$pwd\build-windows\libtulpar_runtime.a" `
             "installer\tulpar.iss"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
           # ISCC writes to installer\Output\<OutputBaseFilename>.exe
@@ -195,7 +216,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: tulpar-*
+          pattern: '{tulpar-*,libtulpar_runtime-*}'
           merge-multiple: true
       
       - name: Compute release tag
@@ -226,6 +247,11 @@ jobs:
             - `tulpar-linux-x64` - Linux executable
             - `tulpar-macos-universal` - macOS executable
 
+            **Runtime libraries** (required for `tulpar build` / AOT, automatically installed by the one-line installer):
+            - `libtulpar_runtime-linux-x64.a`
+            - `libtulpar_runtime-macos-universal.a`
+            - `libtulpar_runtime-windows-x64.a`
+
             ### One-line install (Windows / Linux / macOS)
 
             ```powershell
@@ -246,5 +272,8 @@ jobs:
             tulpar-macos-universal
             tulpar-windows-x64.exe
             tulpar-setup-windows-x64.exe
+            libtulpar_runtime-linux-x64.a
+            libtulpar_runtime-macos-universal.a
+            libtulpar_runtime-windows-x64.a
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

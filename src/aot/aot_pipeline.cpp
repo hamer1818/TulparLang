@@ -9,10 +9,15 @@
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <string>
 
 #include <llvm-c/Core.h>
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
+
+#if PLATFORM_MACOS
+  #include <mach-o/dyld.h>
+#endif
 
 // Optional per-phase wallclock breakdown. Enable with TULPAR_AOT_TIME=1.
 static int aot_timing_enabled() {
@@ -38,8 +43,13 @@ struct AOTPhaseTimer {
 };
 
 // Platform-specific link flags / temp paths.
-// build-<platform> is searched before legacy ./build to avoid picking
-// up a stale runtime archive from an older configuration.
+//
+// `AOT_LINK_LIB_FLAGS` only carries platform-fixed switches and the
+// link line itself; library search paths (`-L`) are computed at
+// runtime in build_link_search_dirs() so installed `tulpar.exe`
+// finds `libtulpar_runtime.a` next to itself, while developer
+// builds still pick it up from `./build-<platform>/`.
+//
 // Note on `--export-all-symbols` / `-rdynamic`:
 // Tulpar's `call(name)` builtin uses dlsym/GetProcAddress to dispatch to
 // user-defined functions by name (wings/router handlers, lib/test.tpr
@@ -50,7 +60,6 @@ struct AOTPhaseTimer {
 // (MinGW) and Linux/macOS.
 #if PLATFORM_WINDOWS
   #define AOT_LINK_LIB_FLAGS \
-      "-L./build-windows -L./build-windows/Release -L./build " \
       "-Wl,--export-all-symbols " \
       "-ltulpar_runtime -lws2_32 -lwsock32"
   #define AOT_LINK_PIE_FLAG ""
@@ -58,13 +67,87 @@ struct AOTPhaseTimer {
   #define AOT_TMP_RUN_BASE ".tulpar_run"
 #else
   #define AOT_LINK_LIB_FLAGS \
-      "-L./build-linux -L./build-macos -L./build " \
       "-rdynamic " \
       "-ltulpar_runtime -lm -lpthread -ldl"
   #define AOT_LINK_PIE_FLAG "-no-pie"
   #define AOT_EXE_SUFFIX ""
   #define AOT_TMP_RUN_BASE "/tmp/.tulpar_run"
 #endif
+
+// Resolve the directory holding the running tulpar binary. Used so
+// AOT-compiled programs link against `libtulpar_runtime.a` shipped
+// next to `tulpar.exe` (or `tulpar`) by the installer, rather than
+// relying on a hard-coded `./build-windows/` style fallback.
+//
+// Empty string means "couldn't figure it out" — the caller still
+// adds dev-tree fallbacks so a fresh-from-`build.sh` checkout works.
+static std::string get_executable_dir() {
+#if PLATFORM_WINDOWS
+  char buf[MAX_PATH];
+  DWORD len = GetModuleFileNameA(nullptr, buf, MAX_PATH);
+  if (len == 0 || len >= MAX_PATH) return "";
+  std::string p(buf, len);
+  size_t slash = p.find_last_of("\\/");
+  return (slash == std::string::npos) ? "" : p.substr(0, slash);
+#elif PLATFORM_MACOS
+  char buf[1024];
+  uint32_t size = sizeof(buf);
+  if (_NSGetExecutablePath(buf, &size) != 0) return "";
+  std::string p(buf);
+  size_t slash = p.find_last_of('/');
+  return (slash == std::string::npos) ? "" : p.substr(0, slash);
+#else
+  char buf[1024];
+  ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+  if (len <= 0) return "";
+  buf[len] = '\0';
+  std::string p(buf);
+  size_t slash = p.find_last_of('/');
+  return (slash == std::string::npos) ? "" : p.substr(0, slash);
+#endif
+}
+
+// Build the `-L<dir>` switches passed to clang++ at link time.
+//
+// Order matters: clang searches the first path that contains the
+// requested library first, so the installer location should win
+// over the dev-tree fallbacks if both happen to be present.
+static std::string build_link_search_dirs() {
+  std::string out;
+  auto add = [&](const std::string &dir) {
+    if (dir.empty()) return;
+    out += "-L\"";
+    out += dir;
+    out += "\" ";
+  };
+
+  std::string exe_dir = get_executable_dir();
+  if (!exe_dir.empty()) {
+    add(exe_dir);          // installer drops libtulpar_runtime.a here
+    add(exe_dir + "/lib"); // package-manager-style /lib subdir variant
+  }
+
+  // Dev-tree fallbacks — running `tulpar` straight out of the repo
+  // root after `./build.sh` should keep working without TULPAR_HOME.
+#if PLATFORM_WINDOWS
+  add("./build-windows");
+  add("./build-windows/Release");
+#elif PLATFORM_MACOS
+  add("./build-macos");
+#else
+  add("./build-linux");
+#endif
+  add("./build");
+
+  // Last resort override — operators with custom layouts can set
+  // TULPAR_RUNTIME_DIR=/some/path to point at the runtime archive
+  // without recompiling.
+  if (const char *env = getenv("TULPAR_RUNTIME_DIR"); env && *env) {
+    add(env);
+  }
+
+  return out;
+}
 
 // Parse source code to AST. Caller-provided `source_filename` is
 // optional and only used by parse-time diagnostics for the file path
@@ -199,12 +282,13 @@ AOTResult aot_compile_with_filename(const char *source,
 
   // Link using clang++ (need C++ runtime for tulpar_runtime)
   printf("[AOT] Linking executable: %s\n", exe_filename);
-  char link_cmd[1024];
+  std::string search_dirs = build_link_search_dirs();
+  char link_cmd[2048];
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s -o %s%s %s %s 2>&1",
+      "clang++ %s -o %s%s %s %s%s 2>&1",
       obj_filename, exe_filename, AOT_EXE_SUFFIX,
-      AOT_LINK_PIE_FLAG, AOT_LINK_LIB_FLAGS);
+      AOT_LINK_PIE_FLAG, search_dirs.c_str(), AOT_LINK_LIB_FLAGS);
 
   int link_result;
   {
@@ -287,19 +371,20 @@ static AOTResult aot_compile_silent(const char *source,
   }
 
   // Link silently (suppress output)
-  char link_cmd[1024];
+  std::string silent_search_dirs = build_link_search_dirs();
+  char link_cmd[2048];
 #if PLATFORM_WINDOWS
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s -o %s%s %s %s 2>NUL",
+      "clang++ %s -o %s%s %s %s%s 2>NUL",
       obj_filename, exe_filename, AOT_EXE_SUFFIX,
-      AOT_LINK_PIE_FLAG, AOT_LINK_LIB_FLAGS);
+      AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(), AOT_LINK_LIB_FLAGS);
 #else
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s -o %s%s %s %s 2>/dev/null",
+      "clang++ %s -o %s%s %s %s%s 2>/dev/null",
       obj_filename, exe_filename, AOT_EXE_SUFFIX,
-      AOT_LINK_PIE_FLAG, AOT_LINK_LIB_FLAGS);
+      AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(), AOT_LINK_LIB_FLAGS);
 #endif
 
   int link_result = system(link_cmd);

@@ -14,6 +14,10 @@
   #define SourceBinary "..\build-windows\tulpar.exe"
 #endif
 
+#ifndef SourceRuntimeLib
+  #define SourceRuntimeLib "..\build-windows\libtulpar_runtime.a"
+#endif
+
 #define AppName        "TulparLang"
 #define AppPublisher   "TulparLang Project"
 #define AppURL         "https://tulparlang.dev"
@@ -65,7 +69,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "addtopath"; Description: "{code:PathTaskDescription}"; GroupDescription: "{code:EnvGroupDescription}"; Flags: checkedonce
 
 [Files]
-Source: "{#SourceBinary}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceBinary}";     DestDir: "{app}"; Flags: ignoreversion
+; libtulpar_runtime.a is consumed at link time by `tulpar build` / the
+; default AOT pipeline. The AOT linker probes the directory containing
+; tulpar.exe (see src/aot/aot_pipeline.cpp:build_link_search_dirs)
+; before falling back to the dev-tree build dirs, so dropping the
+; archive next to tulpar.exe is enough.
+Source: "{#SourceRuntimeLib}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; Start Menu entries. We add both a launcher (opens REPL — most useful
