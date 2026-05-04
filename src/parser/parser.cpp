@@ -619,12 +619,24 @@ std::unique_ptr<ASTNode> Parser::parse_throw_statement() {
 std::unique_ptr<ASTNode> Parser::parse_import_statement() {
     SourceLocation loc(current().line(), current().column());
     advance(); // consume 'import'
-    
+
     Token path_tok = expect(TOKEN_STRING_LITERAL, "Expected string literal after import");
+
+    // Optional `as <alias>` — `as` is a contextual identifier rather than a
+    // reserved keyword so existing user code that happens to define a
+    // variable / function called `as` still parses unchanged.
+    std::string alias;
+    if (check(TOKEN_IDENTIFIER) && current().value() == "as") {
+        advance(); // consume 'as'
+        Token alias_tok = expect(TOKEN_IDENTIFIER,
+                                 "Expected alias identifier after 'as'");
+        alias = alias_tok.value();
+    }
+
     expect(TOKEN_SEMICOLON, "Expected ';' after import");
-    
+
     return std::make_unique<ASTNode>(
-        ImportStatement(path_tok.value(), loc)
+        ImportStatement(path_tok.value(), alias, loc)
     );
 }
 
@@ -1179,8 +1191,11 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
             out->type = AST_IMPORT;
             // Legacy AOT path reads import path from value.string_value.
             out->value.string_value = dup_cstr(n.path);
-            // Keep name populated as a compatibility alias for other backends.
-            out->name = dup_cstr(n.path);
+            // The C-bridge AST has no dedicated `alias` field, but `name` is
+            // unused by the AST_IMPORT consumers (AOT + VM both read the path
+            // from value.string_value). Repurpose `name` to carry the alias —
+            // empty string when the user wrote `import "x";` without `as`.
+            out->name = dup_cstr(n.alias);
             set_loc(out, n.loc);
         } else if constexpr (std::is_same_v<T, TypeDecl>) {
             out->type = AST_TYPE_DECL;

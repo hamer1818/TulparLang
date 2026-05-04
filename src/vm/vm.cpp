@@ -14,6 +14,7 @@
 #endif
 #include "../embedded_libs.h"
 #include "../parser/parser.hpp"
+#include "../parser/import_alias.hpp"
 #include "../common/localization.hpp"
 #include "compiler.hpp"
 #include "vm.hpp"
@@ -2732,9 +2733,15 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
 
       TARGET(OP_IMPORT) : {
         uint16_t nameIdx = READ_SHORT();
+        // Second short is the alias slot — empty string when the user wrote
+        // a plain `import "x";`. The compiler always emits both shorts
+        // (see vm/compiler.cpp), so this read is unconditional.
+        uint16_t aliasIdx = READ_SHORT();
         // Access chunk from current frame
         CallFrame *frame = &vm->frames[vm->frame_count - 1];
         char *fileName = frame->function->chunk.constants[nameIdx].string_val;
+        const char *importAlias =
+            frame->function->chunk.constants[aliasIdx].string_val;
 
         // 1. Read file
         // Check embedded libs first
@@ -2785,6 +2792,12 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
 
         // 2. Parse
         ASTNode_C *program = parse_source(source);
+
+        // Apply `import "x" as alias;` namespacing if the user attached an
+        // alias. apply_import_alias is a no-op on null/empty alias.
+        if (program && importAlias && *importAlias) {
+          apply_import_alias(program, importAlias);
+        }
 
         if (program == nullptr) {
           printf("%s '%s'\n",

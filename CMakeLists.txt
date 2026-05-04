@@ -143,6 +143,8 @@ set(LEXER_SOURCES
 set(PARSER_SOURCES
     src/parser/parser.cpp
     src/parser/parser.hpp
+    src/parser/import_alias.cpp
+    src/parser/import_alias.hpp
 )
 
 # LLVM Backend (Primary) - Now using C++ API
@@ -312,6 +314,7 @@ add_library(tulpar_runtime STATIC
     runtime/cJSON.c
     src/lexer/lexer.cpp
     src/parser/parser.cpp
+    src/parser/import_alias.cpp
     lib/sqlite3/sqlite3.c
 )
 target_include_directories(tulpar_runtime PRIVATE ${PROJECT_SOURCE_DIR}/src)

@@ -1542,13 +1542,16 @@ void compile_statement(Compiler *compiler, ASTNode_C *node) {
 
   case AST_IMPORT: {
     emit_byte(compiler, OP_IMPORT, node->line);
-    // Expect node->name to be the filename string? Or node->value.string_value?
-    // AST_IMPORT usually: import "file"; -> node name might be filename.
-    // Let's use node->name assuming parser puts it there.
-    // Also valid: import name = "file" (variable decl).
-    // Simple import "str".
-    int idx = chunk_add_string(compiler->chunk, node->value.string_value);
-    emit_short(compiler, (uint16_t)idx, node->line);
+    // OP_IMPORT operand layout: <path_idx:u16> <alias_idx:u16>. The C-bridge
+    // stashes the optional `as alias` identifier in node->name (empty
+    // string when the user wrote a plain `import "x";`). The runtime
+    // looks the second slot up in the constant pool and skips namespacing
+    // when it resolves to the empty string.
+    int path_idx = chunk_add_string(compiler->chunk, node->value.string_value);
+    emit_short(compiler, (uint16_t)path_idx, node->line);
+    const char *alias = (node->name && *node->name) ? node->name : "";
+    int alias_idx = chunk_add_string(compiler->chunk, alias);
+    emit_short(compiler, (uint16_t)alias_idx, node->line);
     break;
   }
 
