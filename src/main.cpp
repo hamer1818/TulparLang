@@ -7,12 +7,11 @@
 #ifdef _WIN32
 // WIN32_LEAN_AND_MEAN keeps windows.h from pulling in the legacy winsock.h,
 // which would conflict with the winsock2.h that platform_sockets.h includes
-// further down through the interpreter/parser/vm headers.
+// further down through the parser/vm headers.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #endif
 
-#include "interpreter/interpreter.hpp"
 #include "lexer/lexer.hpp"
 #include "parser/parser.hpp"
 #include "common/localization.hpp"
@@ -73,9 +72,6 @@ static void print_help() {
   std::printf("  tulpar --vm <source.tpr>         %s\n",
               tulpar::i18n::tr_en("- VM ile calistir (anlik baslangic)",
                                   "- Run via VM (instant start)"));
-  std::printf("  tulpar --legacy <source.tpr>     %s\n",
-              tulpar::i18n::tr_en("- Tree-walk yorumlayici (eski)",
-                                  "- Tree-walk interpreter (legacy)"));
   std::printf("  tulpar --repl, -i                %s\n",
               tulpar::i18n::tr_en("- Etkilesimli mod (REPL)",
                                   "- Interactive mode (REPL)"));
@@ -230,11 +226,10 @@ static void run_repl() {
   printf("Type 'exit', 'quit', or 'q' to exit, 'help' for help\n");
   printf("========================================\n\n");
 
-  // The REPL is now VM-backed (legacy tree-walk interpreter is on the way
-  // out). One VM lives for the whole session; globals + user functions
-  // persist across inputs because vm_run reuses vm->globals and the
-  // function constant pool of each compiled chunk hands its function
-  // value into globals via OP_STORE_GLOBAL.
+  // The REPL is VM-backed: one VM lives for the whole session; globals
+  // and user functions persist across inputs because vm_run reuses
+  // vm->globals and the function constant pool of each compiled chunk
+  // hands its function value into globals via OP_STORE_GLOBAL.
   VM *vm = vm_create();
   // Line editor: arrow-key history + in-line editing on ttys; transparently
   // falls back to fgets when stdin is piped (test scripts / shebang use).
@@ -537,7 +532,6 @@ int main(int argc, char **argv) {
 
   // Flags
   int force_vm = 0;    // --vm / --run forces VM path, skips AOT
-  int use_legacy = 0;  // --legacy forces interpreter (not VM)
   int build_mode = 0;  // build / --build / --aot: save native binary
   int arg_offset = 1;  // index of first non-flag arg
 
@@ -546,9 +540,6 @@ int main(int argc, char **argv) {
 
     if (strcmp(argv[i], "--vm") == 0 || strcmp(argv[i], "--run") == 0) {
       force_vm = 1;
-      arg_offset = i + 1;
-    } else if (strcmp(argv[i], "--legacy") == 0) {
-      use_legacy = 1;
       arg_offset = i + 1;
     } else if (strcmp(argv[i], "--aot") == 0 ||
                strcmp(argv[i], "--build") == 0 ||
@@ -671,7 +662,7 @@ int main(int argc, char **argv) {
     // print the same diagnostic a second time — that's the duplicate
     // error users used to see on Windows where the runtime archive is
     // often missing.
-    if (!force_vm && !use_legacy) {
+    if (!force_vm) {
       AOTResult aot_result = aot_compile_and_run_silent_with_filename(
           source, argv[arg_offset]);
       if (aot_result == AOT_OK) {
@@ -758,90 +749,54 @@ int main(int argc, char **argv) {
   }
 
   // ========================================
-  // 3. RUNTIME (VM vs Interpreter)
+  // 3. RUNTIME (VM)
   // ========================================
-  int use_vm = !use_legacy; // Use VM unless --legacy flag was set
-
-  if (use_vm) {
-    if (!from_file) {
-      printf("\n3. COMPILER & VM (Bytecode Execution)\n");
-      printf("========================================\n");
-    }
-
-    // Compile AST to Bytecode
-    Chunk *chunk = compile(ast);
-
-    if (!chunk) {
-      printf("%s\n",
-             tulpar::i18n::tr_en("Hata: Derleme basarisiz!",
-                                 "Error: Compilation failed!"));
-      return 1;
-    }
-
-    if (!from_file) {
-      // chunk_disassemble(chunk, "Main Script");
-    }
-
-    // Initialize VM
-    VM *vm = vm_create();
-
-    // Create main script function
-    ObjFunction *script = vm_new_function(vm);
-
-    // Transfer chunk ownership to script function
-    script->chunk = *chunk; // Copy struct content
-    free(chunk);            // Free the container, keep the content
-
-    // Run VM
-    clock_t start = clock();
-    VMResult result = vm_run(vm, script);
-    clock_t end = clock();
-
-    if (!from_file) {
-      double cpu_time_used = ((double)(end - start)) / CLOCKS_PER_SEC * 1000.0;
-      printf("\nUnpacked Execution Time: %.2f ms\n", cpu_time_used);
-
-      if (result == VM_OK) {
-        printf("\n========================================\n");
-        printf("   Tulpar VM basariyla calisti! ✓\n");
-        printf("========================================\n");
-      } else {
-        printf("\n========================================\n");
-        printf("   Tulpar VM hatayla sonlandi! ✗\n");
-        printf("========================================\n");
-      }
-    }
-
-    vm_free(vm);
-
-  } else {
-    // Legacy Interpreter
-    if (!from_file) {
-      printf("\n3. INTERPRETER (Legacy Execution)\n");
-      printf("=================================\n");
-    }
-
-    Interpreter *interp = interpreter_create();
-    interpreter_execute(interp, ast);
-
-    // Sonuçları göster
-    if (!from_file) {
-      printf("\nDegisken Degerleri:\n");
-      printf("-------------------\n");
-
-      // Tüm global değişkenleri göster
-      for (int i = 0; i < interp->global_scope->var_count; i++) {
-        printf("%s = ", interp->global_scope->variables[i]->name);
-        value_print(interp->global_scope->variables[i]->value);
-        printf("\n");
-      }
-
-      printf("\n========================================\n");
-      printf("   TulparLang (Legacy) basariyla calisti! ✓\n");
-      printf("========================================\n");
-    }
-    interpreter_free(interp);
+  if (!from_file) {
+    printf("\n3. COMPILER & VM (Bytecode Execution)\n");
+    printf("========================================\n");
   }
+
+  // Compile AST to Bytecode
+  Chunk *chunk = compile(ast);
+
+  if (!chunk) {
+    printf("%s\n",
+           tulpar::i18n::tr_en("Hata: Derleme basarisiz!",
+                               "Error: Compilation failed!"));
+    return 1;
+  }
+
+  // Initialize VM
+  VM *vm = vm_create();
+
+  // Create main script function
+  ObjFunction *script = vm_new_function(vm);
+
+  // Transfer chunk ownership to script function
+  script->chunk = *chunk; // Copy struct content
+  free(chunk);            // Free the container, keep the content
+
+  // Run VM
+  clock_t start = clock();
+  VMResult result = vm_run(vm, script);
+  clock_t end = clock();
+
+  if (!from_file) {
+    double cpu_time_used = ((double)(end - start)) / CLOCKS_PER_SEC * 1000.0;
+    printf("\nUnpacked Execution Time: %.2f ms\n", cpu_time_used);
+
+    if (result == VM_OK) {
+      printf("\n========================================\n");
+      printf("   Tulpar VM basariyla calisti! ✓\n");
+      printf("========================================\n");
+    } else {
+      printf("\n========================================\n");
+      printf("   Tulpar VM hatayla sonlandi! ✗\n");
+      printf("========================================\n");
+    }
+  }
+
+  vm_free(vm);
 
   // Temizlik
   ast_node_free(ast);

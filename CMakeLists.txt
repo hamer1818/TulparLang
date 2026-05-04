@@ -179,10 +179,9 @@ set(RUNTIME_SOURCES
     runtime/tulpar_native.h
 )
 
-# Legacy (kept for compatibility, may be removed in future)
+# JIT (legacy x64 direct emitter; not invoked by the runtime archive but
+# linked into `tulpar` so a future fallback path stays compilable).
 set(LEGACY_SOURCES
-    src/interpreter/interpreter.cpp
-    src/interpreter/interpreter.hpp
     src/jit/jit.hpp
     src/jit/jit_memory.cpp
     src/jit/x64_emit.hpp
