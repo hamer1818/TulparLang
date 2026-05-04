@@ -189,18 +189,53 @@ static const char *resolve_history_path() {
   return path;
 }
 
+// Wraps a bare-expression top-level statement in a synthetic `print(<expr>)`
+// call so the user gets feedback when they type `1 + 2` at the REPL prompt
+// (matching the previous interpreter-backed REPL UX). FUNCTION_CALL is left
+// alone because we can't tell at compile time whether it returns void —
+// auto-printing those would render "void" for every `print(...)` re-print
+// and every void-returning user function.
+static void repl_wrap_bare_expression(ASTNode_C *program) {
+  if (!program || program->type != AST_PROGRAM ||
+      program->statement_count <= 0) {
+    return;
+  }
+  ASTNode_C *stmt = program->statements[0];
+  if (!stmt) return;
+  bool is_bare_expr = stmt->type == AST_IDENTIFIER ||
+                      stmt->type == AST_BINARY_OP ||
+                      stmt->type == AST_UNARY_OP ||
+                      stmt->type == AST_ARRAY_ACCESS;
+  if (!is_bare_expr) return;
+
+  ASTNode_C *call = ast_node_create(AST_FUNCTION_CALL);
+  call->name = strdup("print");
+  call->argument_count = 1;
+  call->arguments =
+      static_cast<ASTNode_C **>(std::calloc(1, sizeof(ASTNode_C *)));
+  call->arguments[0] = stmt;
+  call->line = stmt->line;
+  program->statements[0] = call;
+}
+
 // REPL mode
 static void run_repl() {
-  // Winsock'u initialize et — socket_create() vb. built-in'ler bunu bekler.
-  // VM yolunda vm.cpp tetikliyor; REPL legacy interpreter'a dustugu icin
-  // burada acik cagri sart, yoksa Windows'ta socket() INVALID_SOCKET dondurur.
+  // Winsock initialization for socket_create() and friends. VM's vm_run
+  // initializes per-call — fine — but we kept the explicit call here from
+  // the legacy-interp era so a regression that drops VM init doesn't
+  // silently break sockets in the REPL on Windows.
   tulpar_socket_init();
 
   printf("TulparLang REPL (Interactive Mode)\n");
   printf("Type 'exit', 'quit', or 'q' to exit, 'help' for help\n");
   printf("========================================\n\n");
 
-  Interpreter *interp = interpreter_create();
+  // The REPL is now VM-backed (legacy tree-walk interpreter is on the way
+  // out). One VM lives for the whole session; globals + user functions
+  // persist across inputs because vm_run reuses vm->globals and the
+  // function constant pool of each compiled chunk hands its function
+  // value into globals via OP_STORE_GLOBAL.
+  VM *vm = vm_create();
   // Line editor: arrow-key history + in-line editing on ttys; transparently
   // falls back to fgets when stdin is piped (test scripts / shebang use).
   LineEditor *editor = line_editor_create(resolve_history_path());
@@ -214,24 +249,18 @@ static void run_repl() {
   char *buf = static_cast<char *>(malloc(buf_cap));
   if (!buf) {
     printf("error: REPL buffer allocation failed\n");
-    interpreter_free(interp);
+    vm_free(vm);
     return;
   }
   buf[0] = '\0';
   size_t buf_len = 0;
   int continuation = 0;
 
-  // ASTs the REPL has parsed and handed to the interpreter so far. We
-  // CANNOT free them iteration-by-iteration: `interpreter_register_
-  // function` (in interpreter.cpp) stores the AST_FUNCTION_DECL node
-  // pointer raw — `func->node = node`, no deep-copy — and a later
-  // `square(7)` call dereferences `func->node->parameters` /
-  // `func->node->body`. Freeing the AST per iteration leaves dangling
-  // pointers in the function table and the next call segfaults. Same
-  // applies to AST_TYPE_DECL (type registry holds pointers into AST
-  // field-default subtrees). We hold every parsed AST until REPL exit
-  // and free them in one pass at the end. Memory leak per input is
-  // bounded and short-lived (single interactive session).
+  // We retain ASTs across iterations because compiled function objects
+  // hold pointers into them indirectly (constant pool entries reference
+  // the chunk; the chunk references no AST, but type/name strings can
+  // alias the source). Free in a single pass at REPL exit. Bounded per
+  // session — fine.
   size_t ast_cap = 64;
   size_t ast_count = 0;
   ASTNode_C **kept_asts =
@@ -380,28 +409,21 @@ static void run_repl() {
     ASTNode_C *ast = parser_parse(parser);
 
     if (ast && ast->type == AST_PROGRAM && ast->statement_count > 0) {
-      ASTNode_C *stmt = ast->statements[0];
-      // Check if it's a function call or expression that can be evaluated
-      if (stmt->type == AST_FUNCTION_CALL) {
-        // Function call - evaluate and print result if not void
-        Value *result = interpreter_eval(interp, stmt);
-        if (result && result->type != VAL_VOID) {
-          value_print(result);
-          printf("\n");
-        }
-        value_free(result);
-      } else if (stmt->type == AST_IDENTIFIER || stmt->type == AST_BINARY_OP ||
-                 stmt->type == AST_UNARY_OP || stmt->type == AST_ARRAY_ACCESS) {
-        // Expression - evaluate and print result
-        Value *result = interpreter_eval(interp, stmt);
-        if (result && result->type != VAL_VOID) {
-          value_print(result);
-          printf("\n");
-        }
-        value_free(result);
-      } else {
-        // It's a statement, execute it
-        interpreter_execute_statement(interp, stmt);
+      // Wrap bare expressions (`1+2`, `x`, `arr[0]`) in `print(...)` so the
+      // REPL gives feedback on naked expressions like every other REPL.
+      // Function calls are intentionally NOT wrapped — see helper comment.
+      repl_wrap_bare_expression(ast);
+
+      // Compile this input's AST into a fresh chunk, wrap as a top-level
+      // function, and execute on the persistent VM. Globals + user-defined
+      // functions registered by previous inputs remain visible — that's the
+      // whole point of REPL state.
+      Chunk *chunk = compile(ast);
+      if (chunk) {
+        ObjFunction *script = vm_new_function(vm);
+        script->chunk = *chunk;  // transfer chunk content
+        free(chunk);             // container only — content owned by script
+        vm_run(vm, script);
       }
     }
 
@@ -429,12 +451,9 @@ static void run_repl() {
     continuation = 0;
   }
 
-  // Tear down everything that holds AST pointers BEFORE freeing the
-  // ASTs themselves. interpreter_free walks the function/type tables
-  // (which only own copies of names, not the AST) so it doesn't touch
-  // the kept_asts memory; freeing the interpreter first means any code
-  // path it invokes during teardown can't see released AST nodes.
-  interpreter_free(interp);
+  // Tear down VM first (it owns ObjFunction allocations whose chunks borrow
+  // from the AST'd-allocated function bodies), then free the retained ASTs.
+  vm_free(vm);
   for (size_t i = 0; i < ast_count; i++) {
     ast_node_free(kept_asts[i]);
   }
