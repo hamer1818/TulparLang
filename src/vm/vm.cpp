@@ -2387,6 +2387,17 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         }
 #endif // TULPAR_WASM_BUILD
 
+        case 130: { // range(end) -> [0, 1, ..., end-1]
+          VMValue endVal = vm_pop(vm);
+          int64_t end = IS_INT(endVal) ? AS_INT(endVal) : 0;
+          if (end < 0) end = 0;
+          ObjArray *array = vm_allocate_array(vm);
+          for (int64_t i = 0; i < end; i++) {
+            vm_array_push(vm, array, VM_INT(i));
+          }
+          vm_push(vm, VM_OBJ((Obj *)array));
+          break;
+        }
         case 120: { // call(func_name)
           VMValue val = vm_pop(vm);
           if (!IS_STRING(val)) {

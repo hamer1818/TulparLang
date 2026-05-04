@@ -507,6 +507,22 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
       }
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
       emit_byte(compiler, 1, node->line); // ID 1
+    } else if (strcmp(node->name, "range") == 0) {
+      // range(end) -> [0, 1, ..., end-1]. Aligned with AOT/legacy semantics
+      // (aot_range in runtime_bindings.cpp also returns ObjArray) so the
+      // existing AST_FOR_IN compiler — which calls length() and indexes the
+      // iterable — works unchanged: `for (i in range(N)) {...}`.
+      if (node->argument_count > 0) {
+        compile_expression(compiler, node->arguments[0]);
+      } else {
+        emit_byte(compiler, OP_CONST_INT, node->line);
+        Constant zero;
+        zero.type = CONST_INT;
+        zero.int_val = 0;
+        emit_constant(compiler, zero, node->line);
+      }
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 130, node->line); // ID 130: range
     }
     // Math functions
     else if (strcmp(node->name, "sqrt") == 0) {
