@@ -25,6 +25,7 @@
 #include "lsp/lsp_server.hpp"
 #include "fmt/formatter.hpp"
 #include "pkg/pkg_cli.hpp"
+#include "cli/line_edit.hpp"
 #include "cli/update_cmd.hpp"
 #include "common/version.hpp"
 #include <ctime>
@@ -164,6 +165,26 @@ static int repl_input_complete(const char *s) {
   return 1;
 }
 
+// Resolves the persistent REPL history file path. Honors $TULPAR_HISTORY,
+// otherwise falls back to ~/.tulpar_history (POSIX) or %USERPROFILE%/.tulpar_history
+// (Windows). Returns a static buffer; "" disables persistence.
+static const char *resolve_history_path() {
+  static char path[1024];
+  const char *override_env = std::getenv("TULPAR_HISTORY");
+  if (override_env && *override_env) {
+    snprintf(path, sizeof(path), "%s", override_env);
+    return path;
+  }
+#ifdef _WIN32
+  const char *home = std::getenv("USERPROFILE");
+#else
+  const char *home = std::getenv("HOME");
+#endif
+  if (!home || !*home) return "";
+  snprintf(path, sizeof(path), "%s/.tulpar_history", home);
+  return path;
+}
+
 // REPL mode
 static void run_repl() {
   // Winsock'u initialize et — socket_create() vb. built-in'ler bunu bekler.
@@ -176,6 +197,9 @@ static void run_repl() {
   printf("========================================\n\n");
 
   Interpreter *interp = interpreter_create();
+  // Line editor: arrow-key history + in-line editing on ttys; transparently
+  // falls back to fgets when stdin is piped (test scripts / shebang use).
+  LineEditor *editor = line_editor_create(resolve_history_path());
   char line[4096];
 
   // Accumulator for multi-line input. Most interactive sessions stay
@@ -210,18 +234,29 @@ static void run_repl() {
       static_cast<ASTNode_C **>(malloc(sizeof(ASTNode_C *) * ast_cap));
 
   while (1) {
-    printf(continuation ? "... " : ">>> ");
-    fflush(stdout);
-
-    if (!fgets(line, sizeof(line), stdin)) {
-      if (feof(stdin)) {
-        printf("\n");
-        break;
-      }
-      continue;
+    const char *prompt = continuation ? "... " : ">>> ";
+    char *edited = line_editor_readline(editor, prompt);
+    if (!edited) {
+      // EOF (Ctrl-D on POSIX, Ctrl-Z+Enter on Windows, or stdin closed).
+      printf("\n");
+      break;
     }
 
-    size_t line_len = strlen(line);
+    // The rest of the loop expects `line` to look like fgets() output (a
+    // newline-terminated buffer). Copy + append '\n' so we don't have to
+    // touch the multi-line accumulator / trim logic below.
+    size_t edited_len = strlen(edited);
+    if (edited_len + 2 >= sizeof(line)) {
+      printf("error: input too long, ignored\n");
+      free(edited);
+      continue;
+    }
+    memcpy(line, edited, edited_len);
+    line[edited_len] = '\n';
+    line[edited_len + 1] = '\0';
+    free(edited);
+
+    size_t line_len = edited_len + 1;
 
     // First-line meta-commands. We only intercept `exit`/`quit`/`help`/
     // `clear` on a fresh prompt; once a multi-line input is in progress
@@ -302,6 +337,10 @@ static void run_repl() {
       continuation = 0;
       continue;
     }
+
+    // Snapshot the user's text BEFORE we append the convenience ';' below;
+    // that's what we want in history (what they actually typed).
+    line_editor_add_history(editor, buf);
 
     // REPL convenience: forgiving terminator. Tulpar's grammar requires
     // ';' after expression statements, but typing it on every interactive
@@ -397,6 +436,9 @@ static void run_repl() {
   }
   free(kept_asts);
   free(buf);
+  // Destroy after we're sure no more history will be added — also flushes
+  // the history file (best-effort).
+  line_editor_destroy(editor);
   printf("Goodbye!\n");
 }
 
