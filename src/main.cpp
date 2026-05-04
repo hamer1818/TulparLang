@@ -166,7 +166,7 @@ static int repl_input_complete(const char *s) {
 // REPL mode
 static void run_repl() {
   printf("TulparLang REPL (Interactive Mode)\n");
-  printf("Type 'exit' or 'quit' to exit, 'help' for help\n");
+  printf("Type 'exit', 'quit', or 'q' to exit, 'help' for help\n");
   printf("========================================\n\n");
 
   Interpreter *interp = interpreter_create();
@@ -231,12 +231,13 @@ static void run_repl() {
       }
 
       if (tlen == 0) continue;
-      if (strcmp(trimmed, "exit") == 0 || strcmp(trimmed, "quit") == 0) break;
+      if (strcmp(trimmed, "exit") == 0 || strcmp(trimmed, "quit") == 0 ||
+          strcmp(trimmed, "q") == 0) break;
       if (strcmp(trimmed, "help") == 0) {
         printf("Commands:\n");
-        printf("  exit, quit - Exit REPL\n");
-        printf("  help       - Show this help\n");
-        printf("  clear      - Clear screen\n");
+        printf("  exit, quit, q - Exit REPL\n");
+        printf("  help          - Show this help\n");
+        printf("  clear         - Clear screen\n");
         printf("  Multi-line: '{', '(', '[' open a continuation prompt ('... ')\n");
         continue;
       }
