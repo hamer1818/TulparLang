@@ -146,6 +146,50 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
   }
 
   if (const auto *call = as_node<FunctionCall>(expr)) {
+    // Always recurse into arguments so nested calls / expressions get
+    // checked even if THIS call is a built-in we don't have a signature
+    // for (e.g., `print(add(1))` — print has no signature, but `add(1)`
+    // inside it still needs its arg-count checked).
+    std::vector<DataType> arg_types;
+    arg_types.reserve(call->arguments.size());
+    for (const auto &arg : call->arguments) {
+      arg_types.push_back(infer_expr(ctx, arg.get()));
+    }
+
+    // User-defined function call: check arg count + arg types against the
+    // signature we registered during the pre-pass. Built-ins are not in
+    // ctx->functions and are skipped — their argument contracts are too
+    // varied to model here without a dedicated catalogue.
+    auto sig_it = ctx->functions.find(call->name);
+    if (sig_it != ctx->functions.end()) {
+      const FunctionSignature &sig = sig_it->second;
+      const int expected = static_cast<int>(sig.param_types.size());
+      const int got = static_cast<int>(arg_types.size());
+      if (expected != got) {
+        report_error(ctx,
+                     "Function '%s' expects %d argument(s), got %d at line %d",
+                     call->name.c_str(), expected, got, call->loc.line);
+      } else {
+        // Same unknown-aware tolerance as VarDecl/Assignment: if either side
+        // is unknown (TYPE_VOID/UNKNOWN/CUSTOM) we don't flag — better a
+        // false negative than a false positive while the catalogue grows.
+        auto is_unknown = [](DataType t) {
+          return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM;
+        };
+        for (int i = 0; i < expected; ++i) {
+          DataType param_type = sig.param_types[i];
+          if (!is_unknown(param_type) && !is_unknown(arg_types[i]) &&
+              !types_compatible(param_type, arg_types[i])) {
+            report_error(ctx,
+                         "Argument %d of '%s': expected %s, got %s at line %d",
+                         i + 1, call->name.c_str(),
+                         datatype_to_string(param_type),
+                         datatype_to_string(arg_types[i]), call->loc.line);
+          }
+        }
+      }
+    }
+
     DataType ret = function_return_type(ctx, call->name);
     if (ret == TYPE_VOID && call->name != "print" && call->name != "println") {
       if (call->name == "len")
@@ -331,6 +375,13 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     ctx->current_function_name = prev_func;
     return;
   }
+
+  // Expression-statement fallback: Tulpar doesn't have a dedicated AST node
+  // for "expression used as a statement"; the parser just returns the bare
+  // expression (FunctionCall, etc.). Without this fallback, top-level
+  // function calls are never visited by infer_stmt and the new arg-count /
+  // arg-type checks never run on them.
+  infer_expr(ctx, stmt);
 }
 
 } // namespace
