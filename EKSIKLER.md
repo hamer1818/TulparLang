@@ -546,13 +546,13 @@ ediyordu; fib'de tahmin tutarlı.
 | — | Yerleşik fonksiyon imza kataloğu | ✅ RESOLVED (2026-05-05; PR #33, 50+ builtin) |
 | 48 | VM string concat fn-local'de `0` döndürüyor (AOT doğru) | ✅ RESOLVED (2026-05-05; OP_LOAD_ADD_STORE'a string dalı) |
 | 49 | Modül namespace'leri yok (`import ... as alias`) | ✅ RESOLVED (2026-05-05; PR #35) |
-| 50 | typeinfer `len`/`abs` polimorfizmi wildcard kullanıyor | 🟡 OPEN (false negative) |
+| 50 | typeinfer `len`/`abs` polimorfizmi wildcard kullanıyor | ✅ RESOLVED (2026-05-05; isim-bazlı kategori kontrolü) |
 
 ### Kalan iş kalemleri (sonraki etap)
 
 - ✅ **48. VM string concat fn-local'de `0` döndürüyor** — RESOLVED (2026-05-05). Kök neden: `s = s + " world"` AST_ASSIGNMENT'ın `var = var + expr` superinstruction optimizasyonuna düşüyordu (`OP_LOAD_ADD_STORE`); fast path int-only, fallback `BINARY_OP(+)` ise string pair'i bilmiyor → default arm `VM_FLOAT(0.0)` üretip user'ın string atamasını sessizce siliyordu. [src/vm/vm.cpp:OP_LOAD_ADD_STORE](src/vm/vm.cpp) içinde IS_STRING&IS_STRING dalı eklendi (OP_ADD'in concat path'inin paralel kopyası, fakat in-place append yerine her zaman fresh buffer çünkü fn-local sum başka değişkenden alias'lanabilir). [tests/strings.test.tpr](tests/strings.test.tpr) iki yeni regresyon koruyucu ekledi (`fn_local_string_concat_typed` + `fn_local_string_concat_let`).
 - ✅ **49. Modül namespace'leri** — RESOLVED (2026-05-05; PR #35). `import "name" as alias;` sözdizimi parser'a eklendi; `apply_import_alias` helper'ı modülün top-level fonksiyonlarını `<alias>__<name>` ile mangle ediyor, modül-içi cagrilar da aynı anda yeniden yazılıyor. AOT (`AST_IMPORT` codegen) ve VM (`OP_IMPORT` runtime) ortak helper'ı çağırıyor. `as` bağlamsal identifier (rezerv kelime değil); `let as = 42` hala çalışıyor. Phase 2 (Python-style `m.func()` syntax) sırada.
-- 🟡 **50. typeinfer `len`/`abs` polimorfizmi wildcard** — PR #33 katalog wildcard kullanıyor (`len(unknown)`), bu `len(42)` gibi açık hataları yakalamıyor. İlerideki çözüm: `TYPE_COLLECTION` pseudo-tipi veya çoklu-imza kaydı (`len(string)->int` + `len(array)->int`). Düşük öncelik — gerçek hayatta nadir.
+- ✅ **50. typeinfer `len`/`abs` polimorfizmi wildcard** — RESOLVED (2026-05-05). FunctionSignature shape'ini değiştirmek yerine FunctionCall validator'a inline kategori kontrolü eklendi: `len`/`length` → `is_collection(string|array*)`, `abs` → `is_numeric(int|float)`. Wildcard sadece bu iki ismin ilk parametresinde "stricter check" olarak değerlendiriliyor; `len(42)` ve `abs("hello")` artık `[typecheck] expected string or array, got int` ve `expected int or float, got str` üretiyor. 60+ dosya taramasında sıfır false positive.
 
 ### 2026-05 etabı
 
