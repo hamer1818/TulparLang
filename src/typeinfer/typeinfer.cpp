@@ -541,11 +541,113 @@ void typeinfer_statement(TypeInferContext *ctx, const ASTNode *stmt) {
   infer_stmt(ctx, stmt);
 }
 
+// Pre-populate the function table with the language's built-in / runtime
+// functions so calls like `len(42)` get the same arg-count + arg-type
+// scrutiny as user-defined functions. Polymorphic positions (e.g. the
+// argument to `len` — string OR array) use TYPE_UNKNOWN, which the
+// FunctionCall checker treats as a wildcard so the count check still
+// fires but the type check skips. Variadic / special-cased builtins
+// (`print`, `println`, `call`) are intentionally absent — registering
+// them with a fixed arity would false-positive valid programs. Keep
+// this list ordered roughly by category for ease of audit.
+static void register_builtin_signatures(TypeInferContext *ctx) {
+  struct BuiltinSig {
+    const char *name;
+    DataType return_type;
+    std::vector<DataType> params;
+  };
+  // NB: the AOT path's `lower_for_in_in_place` synthesises `length()` calls
+  // on the C-bridge AST — those happen after our pre-pass on the std::variant
+  // AST, so the synthetic calls never reach typeinfer.
+  const BuiltinSig sigs[] = {
+      // Time
+      {"clock", TYPE_FLOAT, {}},
+      {"clock_ms", TYPE_FLOAT, {}},
+      // Collection / string size
+      {"length", TYPE_INT, {TYPE_UNKNOWN}},
+      {"len", TYPE_INT, {TYPE_UNKNOWN}},
+      // Range / iteration
+      {"range", TYPE_ARRAY_INT, {TYPE_INT}},
+      // Math (single float arg → float result)
+      {"sqrt", TYPE_FLOAT, {TYPE_FLOAT}},
+      {"sin", TYPE_FLOAT, {TYPE_FLOAT}},
+      {"cos", TYPE_FLOAT, {TYPE_FLOAT}},
+      {"tan", TYPE_FLOAT, {TYPE_FLOAT}},
+      {"log", TYPE_FLOAT, {TYPE_FLOAT}},
+      {"log10", TYPE_FLOAT, {TYPE_FLOAT}},
+      {"exp", TYPE_FLOAT, {TYPE_FLOAT}},
+      {"floor", TYPE_FLOAT, {TYPE_FLOAT}},
+      {"ceil", TYPE_FLOAT, {TYPE_FLOAT}},
+      // abs is int-or-float polymorphic — leave the arg open to avoid
+      // false-positives on `abs(-3)`.
+      {"abs", TYPE_UNKNOWN, {TYPE_UNKNOWN}},
+      // Conversions (polymorphic input)
+      {"toString", TYPE_STRING, {TYPE_UNKNOWN}},
+      {"toJson", TYPE_STRING, {TYPE_UNKNOWN}},
+      {"fromJson", TYPE_UNKNOWN, {TYPE_STRING}},
+      {"toInt", TYPE_INT, {TYPE_UNKNOWN}},
+      {"toFloat", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"toBool", TYPE_BOOL, {TYPE_UNKNOWN}},
+      // I/O
+      {"input", TYPE_STRING, {}},
+      {"exit", TYPE_VOID, {TYPE_INT}},
+      {"sleep", TYPE_VOID, {TYPE_INT}},
+      // String utils
+      {"split", TYPE_ARRAY_STR, {TYPE_STRING, TYPE_STRING}},
+      {"replace", TYPE_STRING, {TYPE_STRING, TYPE_STRING, TYPE_STRING}},
+      {"substring", TYPE_STRING, {TYPE_STRING, TYPE_INT, TYPE_INT}},
+      {"indexOf", TYPE_INT, {TYPE_STRING, TYPE_STRING}},
+      {"contains", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
+      {"startsWith", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
+      {"endsWith", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
+      {"trim", TYPE_STRING, {TYPE_STRING}},
+      {"upper", TYPE_STRING, {TYPE_STRING}},
+      {"toUpper", TYPE_STRING, {TYPE_STRING}},
+      {"lower", TYPE_STRING, {TYPE_STRING}},
+      {"toLower", TYPE_STRING, {TYPE_STRING}},
+      // File I/O
+      {"write_file", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
+      {"read_file", TYPE_STRING, {TYPE_STRING}},
+      {"append_file", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
+      {"file_exists", TYPE_BOOL, {TYPE_STRING}},
+      // Sockets — handles + buffers are opaque to typeinfer; we still
+      // catch arg-count typos via the wildcard params.
+      {"socket_server", TYPE_UNKNOWN, {TYPE_STRING, TYPE_INT}},
+      {"socket_client", TYPE_UNKNOWN, {TYPE_STRING, TYPE_INT}},
+      {"socket_accept", TYPE_UNKNOWN, {TYPE_UNKNOWN}},
+      {"socket_send", TYPE_INT, {TYPE_UNKNOWN, TYPE_STRING}},
+      {"socket_receive", TYPE_STRING, {TYPE_UNKNOWN, TYPE_INT}},
+      {"socket_recv", TYPE_STRING, {TYPE_UNKNOWN, TYPE_INT}},
+      {"socket_close", TYPE_VOID, {TYPE_UNKNOWN}},
+      {"socket_select", TYPE_UNKNOWN, {TYPE_UNKNOWN, TYPE_INT}},
+      // Threads
+      {"thread_create", TYPE_UNKNOWN, {TYPE_STRING, TYPE_UNKNOWN}},
+      // Database (SQLite)
+      {"db_open", TYPE_UNKNOWN, {TYPE_STRING}},
+      {"db_close", TYPE_VOID, {TYPE_UNKNOWN}},
+      {"db_query", TYPE_UNKNOWN, {TYPE_UNKNOWN, TYPE_STRING}},
+      // Array mutation — `push(arr, val)` accepts any value type.
+      {"push", TYPE_VOID, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+  };
+  for (const auto &s : sigs) {
+    std::vector<DataType> ps = s.params;
+    typeinfer_register_function(ctx, s.name, s.return_type,
+                                ps.empty() ? nullptr : ps.data(),
+                                static_cast<int>(ps.size()));
+  }
+}
+
 void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
   const auto *prog = as_node<Program>(program);
   if (!prog) {
     return;
   }
+
+  // Builtins go in BEFORE walking the AST so user code that calls a
+  // builtin from a top-level statement (no enclosing function) is still
+  // scrutinised. User-defined functions then layer on top — if a user
+  // happens to define `func len(...)`, their signature wins (last write).
+  register_builtin_signatures(ctx);
 
   for (const auto &stmt : prog->statements) {
     if (const auto *func = as_node<FunctionDecl>(stmt.get())) {
