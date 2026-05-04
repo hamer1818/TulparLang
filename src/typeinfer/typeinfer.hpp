@@ -42,6 +42,14 @@ struct TypeInferContext {
   // Error tracking
   int error_count;
   std::string last_error;
+
+  // When true, diagnostics are formatted as `[typecheck]` warnings
+  // (informational, non-fatal) instead of `Type Error:` lines, and the
+  // optional `source_path` is folded in so editors can jump to the file.
+  // Used by the build/run pre-pass (`typeinfer_emit_warnings`); the
+  // standalone `tulpar typecheck` subcommand keeps the default error mode.
+  bool warning_mode;
+  std::string source_path;
 };
 
 // ============================================================================

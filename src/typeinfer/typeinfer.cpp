@@ -26,7 +26,17 @@ static void report_error(TypeInferContext *ctx, const char *format, ...) {
 
   ctx->last_error = buffer;
   ctx->error_count++;
-  fprintf(stderr, tulpar::i18n::tr_for_en("Type Error: %s\n"), buffer);
+  if (ctx->warning_mode) {
+    // Pre-pass mode: tag as informational so users / editors know the build
+    // is still continuing. Include source path when known so jump-to works.
+    if (!ctx->source_path.empty()) {
+      fprintf(stderr, "[typecheck] %s: %s\n", ctx->source_path.c_str(), buffer);
+    } else {
+      fprintf(stderr, "[typecheck] %s\n", buffer);
+    }
+  } else {
+    fprintf(stderr, tulpar::i18n::tr_for_en("Type Error: %s\n"), buffer);
+  }
 }
 
 static DataType lookup_symbol_type(TypeInferContext *ctx, const std::string &name) {
@@ -452,6 +462,8 @@ TypeInferContext *typeinfer_create(void) {
   ctx->current_function_name.clear();
   ctx->error_count = 0;
   ctx->last_error.clear();
+  ctx->warning_mode = false;
+  ctx->source_path.clear();
   return ctx;
 }
 
