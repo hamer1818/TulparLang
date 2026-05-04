@@ -9,15 +9,19 @@ on:
 permissions:
   contents: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: "false"
+# All third-party actions below are pinned to versions whose handlers
+# ship Node 24 natively (the @v5 line for actions/*; softprops/action-gh-release
+# @v2.2.x onwards). The previous workflow set
+# `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` to coerce v4 actions onto the
+# Node 24 runtime, which surfaced as deprecation warnings AND broke
+# actions/checkout's git invocation with exit 128 (the action's bundled
+# JS expected Node 20 ABI). Bumping resolves both.
 
 jobs:
   build-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       
       - name: Install dependencies
         run: |
@@ -55,13 +59,13 @@ jobs:
           cp build/libtulpar_runtime.a dist/libtulpar_runtime-linux-x64.a
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: tulpar-linux-x64
           path: dist/tulpar-linux-x64
 
       - name: Upload runtime library
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: libtulpar_runtime-linux-x64
           path: dist/libtulpar_runtime-linux-x64.a
@@ -69,7 +73,7 @@ jobs:
   build-macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       
       - name: Install dependencies
         run: |
@@ -98,13 +102,13 @@ jobs:
           cp build/libtulpar_runtime.a dist/libtulpar_runtime-macos-universal.a
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: tulpar-macos-universal
           path: dist/tulpar-macos-universal
 
       - name: Upload runtime library
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: libtulpar_runtime-macos-universal
           path: dist/libtulpar_runtime-macos-universal.a
@@ -115,7 +119,7 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # MSYS2 mingw64 is the only realistic way to get a full LLVM dev tree
       # (headers + LLVM*.dll.a libs) on a Windows runner without a 30+ min
@@ -162,13 +166,13 @@ jobs:
           cp build-windows/libtulpar_runtime.a dist/libtulpar_runtime-windows-x64.a
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: tulpar-windows-x64
           path: dist/tulpar-windows-x64.exe
 
       - name: Upload runtime library
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: libtulpar_runtime-windows-x64
           path: dist/libtulpar_runtime-windows-x64.a
@@ -200,7 +204,7 @@ jobs:
           Copy-Item installer\Output\tulpar-setup-windows-x64.exe dist\
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: tulpar-windows-installer
           path: dist/tulpar-setup-windows-x64.exe
@@ -214,7 +218,7 @@ jobs:
     continue-on-error: true
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           pattern: '{tulpar-*,libtulpar_runtime-*}'
           merge-multiple: true
