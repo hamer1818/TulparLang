@@ -137,6 +137,12 @@ if [ "$ACTION" = "test" ]; then
         local compile_only="$2"
         local name=$(basename "$example" .tpr)
         local input_file="$INPUT_DIR/$name.txt"
+        # `tulpar --aot <foo.tpr>` derives its output binary from the source
+        # basename (`<name>` here), NOT `a.out` — the historical fallback
+        # only kicks in when the basename strips down to empty (which never
+        # happens for our examples). Earlier versions of this runner checked
+        # `[ -f a.out ]` and silently failed every example on Linux CI.
+        local out_path="$name"
 
         printf "Testing %s... " "$example"
 
@@ -149,16 +155,16 @@ if [ "$ACTION" = "test" ]; then
         fi
 
         # Run AOT compilation and (optionally) execution
-        if $TIMEOUT_CMD ./tulpar --aot "$example" > /dev/null 2>&1 && [ -f "a.out" ]; then
+        if $TIMEOUT_CMD ./tulpar --aot "$example" > /dev/null 2>&1 && [ -f "$out_path" ]; then
             if [ "$compile_only" = "1" ]; then
                 echo -e "${GREEN}PASS (compile-only)${NC}"
-                rm -f a.out a.out.ll a.out.o
+                rm -f "$out_path" "$out_path.ll" "$out_path.o"
                 return
             fi
             if [ -f "$input_file" ]; then
-                $TIMEOUT_CMD ./a.out < "$input_file" > /dev/null 2>&1
+                $TIMEOUT_CMD "./$out_path" < "$input_file" > /dev/null 2>&1
             else
-                $TIMEOUT_CMD ./a.out > /dev/null 2>&1
+                $TIMEOUT_CMD "./$out_path" > /dev/null 2>&1
             fi
 
             if [ $? -eq 0 ]; then
@@ -172,7 +178,7 @@ if [ "$ACTION" = "test" ]; then
             TEST_FAILED=1
         fi
 
-        rm -f a.out a.out.ll a.out.o
+        rm -f "$out_path" "$out_path.ll" "$out_path.o"
     }
 
     if [ -n "$TARGET" ]; then
