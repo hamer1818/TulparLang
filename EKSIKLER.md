@@ -540,10 +540,28 @@ ediyordu; fib'de tahmin tutarlı.
 | 45 | "Undefined var in {array access, increment, decrement, compound assign, assignment}" 5 ayrı yer hâlâ legacy formatta | ✅ RESOLVED (2026-04-30; hepsi `report_codegen_error` üzerinden) |
 | 46 | Hata mesajları typo'larda yardımcı olmuyordu (no "did you mean…?") | ✅ RESOLVED (2026-04-30; bounded-Levenshtein + scope/global/function name set) |
 | 47 | Parser hataları hâlâ tek satırlık format kullanıyordu | ✅ RESOLVED (2026-04-30; `parser_set_diagnostic_context` + Rust-stil source preview + filename + caret) |
+| — | Legacy tree-walk interpreter sunset | ✅ RESOLVED (2026-05-04; PR #30, −6109 satır) |
+| — | x64 JIT sunset | ✅ RESOLVED (2026-05-04; PR #31, −2162 satır) |
+| — | typeinfer build/run pre-pass | ✅ RESOLVED (2026-05-05; PR #32, `[typecheck]` uyarıları otomatik) |
+| — | Yerleşik fonksiyon imza kataloğu | ✅ RESOLVED (2026-05-05; PR #33, 50+ builtin) |
+| 48 | VM string concat fn-local'de `0` döndürüyor (AOT doğru) | 🟡 OPEN (path divergansı) |
+| 49 | Modül namespace'leri yok (`import ... as alias`) | 🟡 OPEN (DX iyileştirmesi) |
+| 50 | typeinfer `len`/`abs` polimorfizmi wildcard kullanıyor | 🟡 OPEN (false negative) |
 
 ### Kalan iş kalemleri (sonraki etap)
 
-- *(şu an boş — geçmiş etapta listelenen tüm maddeler tamamlandı).*
+- 🟡 **48. VM string concat fn-local'de `0` döndürüyor** — `func sb(): int { string s = "hello"; s = s + " world"; return len(s); }` AOT'ta `11` (doğru), VM'de `0` (yanlış). EKSIKLER#16'nın 2026-04-28 fix'i sadece AOT yolunu (typed codegen) kapsıyor; VM compiler'ında fn-local string yeniden atama hâlâ değer kaybediyor olmalı. Düşük öncelik (kullanıcılar default execution AOT'ta, VM yolu fallback) ama kalan tek bilinen path-divergence.
+- 🟡 **49. Modül namespace'leri** — `import "math" as m; m::abs(x)` ya da `m.abs(x)` sözdizimi yok. Şu an `import "math";` çağrısı `math.tpr`'deki **tüm fonksiyonları global namespace'e** doluyor; iki kütüphanenin aynı isimli fonksiyonları çakışıyor (örneğin `socket.tpr` ve `wings.tpr` her ikisi de `route`/`listen` türevleri ihraç ederse). Çözüm: parser'da `import ... as alias`, AST'te ModuleImport node'unda alias alanı, AOT/VM'de fonksiyon isimleri alias prefix'i ile mangle. Python kolaylığını korumak için alias opsiyonel: `import "x"` ile alias yoksa eski davranış sürer.
+- 🟡 **50. typeinfer `len`/`abs` polimorfizmi wildcard** — PR #33 katalog wildcard kullanıyor (`len(unknown)`), bu `len(42)` gibi açık hataları yakalamıyor. İlerideki çözüm: `TYPE_COLLECTION` pseudo-tipi veya çoklu-imza kaydı (`len(string)->int` + `len(array)->int`). Düşük öncelik — gerçek hayatta nadir.
+
+### 2026-05 etabı
+
+Aşağıdaki maddeler 2026-05 etabıyla tamamlandı:
+
+- ✅ **Legacy tree-walk interpreter sunset** (PR #30, 2026-05-04): `src/interpreter/` (~6,109 satır, 5,784 satırlık `interpreter.cpp` dahil) silindi. REPL son tüketicisiydi; PR #29 ile VM-backed'a göçtü. `--legacy` CLI bayrağı kaldırıldı, fallback yolu yok. Kazanç: tek path bug fix'leri her zaman AOT+VM iki yola da uygulanıyor; üç-yol divergansı (#2 örneği) tarihe karıştı.
+- ✅ **x64 JIT sunset** (PR #31, 2026-05-04): `src/jit/` (2,162 satır) silindi. Threshold-triggered tier-1 native code emitter idi; fib(28) ölçümlerinde JIT-on (282/287/285ms) vs JIT-off (282/280/289ms) gürültü içinde — kazanç yok. ARM64'te zaten `JIT_ENABLED=0` idi; production AOT yolu hiç çağırmıyordu. `ObjFunction.jit_code`, `LoopTrace`, `CallSiteCache.cached_jit`, `jit_helper_call`/`jit_interpreter_call` mini-interpreter da temizlendi.
+- ✅ **typeinfer build/run pre-pass** (PR #32, 2026-05-05): `typeinfer_emit_warnings` paylaşılan helper'ı `tulpar` / `tulpar build` / `tulpar --vm` yollarında otomatik çalışıyor — `[typecheck] <path>: <msg>` uyarıları stderr'a basılıyor, build/run hicbir zaman bloklanmıyor. `--no-typecheck` bayrağı ve `TULPAR_NO_TYPECHECK=1` env var'ı kapatma yolu. Eski opt-in `tulpar typecheck` subcommand'i hata modunda korunuyor.
+- ✅ **Yerleşik fonksiyon imza kataloğu** (PR #33, 2026-05-05): typeinfer 50+ yerleşiğin imzasını önceden yüklenir hale getirildi (math/io/string/file/socket/db/thread). Polimorfik konumlar TYPE_UNKNOWN wildcard ile kaydedildi — arg sayısı hep denetleniyor, monomorfik tip mismatch'leri (`substring(123, 0, 2)`, `read_file()`, `sqrt(1.0, 2.0)`) build öncesi yakalanıyor. Variadik (`print`, `println`) ve özel (`call`) yerleşikler bilerek katalog dışı.
 
 ### 2026-04-28 etabı
 
