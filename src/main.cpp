@@ -16,6 +16,7 @@
 #include "lexer/lexer.hpp"
 #include "parser/parser.hpp"
 #include "common/localization.hpp"
+#include "common/platform_sockets.h"
 #include "vm/compiler.hpp"
 #include "vm/vm.hpp"
 #ifdef TULPAR_AOT_ENABLED
@@ -165,6 +166,11 @@ static int repl_input_complete(const char *s) {
 
 // REPL mode
 static void run_repl() {
+  // Winsock'u initialize et — socket_create() vb. built-in'ler bunu bekler.
+  // VM yolunda vm.cpp tetikliyor; REPL legacy interpreter'a dustugu icin
+  // burada acik cagri sart, yoksa Windows'ta socket() INVALID_SOCKET dondurur.
+  tulpar_socket_init();
+
   printf("TulparLang REPL (Interactive Mode)\n");
   printf("Type 'exit', 'quit', or 'q' to exit, 'help' for help\n");
   printf("========================================\n\n");

@@ -2025,75 +2025,58 @@ Value *interpreter_eval_expression(Interpreter *interp, ASTNode_C *node) {
       }
     }
     // Kar┼ş─▒la┼şt─▒rma operat├Ârleri
-    else if (node->op == TOKEN_EQUAL) {
-      if (left->type == VAL_INT && right->type == VAL_INT) {
-        result = value_create_bool(left->data.int_val == right->data.int_val);
-      } else if (left->type == VAL_FLOAT || right->type == VAL_FLOAT) {
+    else if (node->op == TOKEN_EQUAL || node->op == TOKEN_NOT_EQUAL ||
+             node->op == TOKEN_LESS || node->op == TOKEN_GREATER ||
+             node->op == TOKEN_LESS_EQUAL || node->op == TOKEN_GREATER_EQUAL) {
+      // Karsilastirma operatorleri. Bool, kar┼şilastirma ve aritmetik amaciyla
+      // int olarak ele alinir — boylece `cond == 0` (cond bir bool oldugunda)
+      // veya bool/int karisik ifadeler "Desteklenmeyen operator" hatasi
+      // yerine duzgun calisir. AOT yolu da bool'u i64 olarak tasiyor.
+      bool int_like_l = (left->type == VAL_INT || left->type == VAL_BOOL);
+      bool int_like_r = (right->type == VAL_INT || right->type == VAL_BOOL);
+      auto as_ll = [](Value *v) -> long long {
+        return (v->type == VAL_BOOL) ? (long long)v->data.bool_val
+                                     : v->data.int_val;
+      };
+
+      if (int_like_l && int_like_r) {
+        long long a = as_ll(left);
+        long long b = as_ll(right);
+        switch (node->op) {
+        case TOKEN_EQUAL: result = value_create_bool(a == b); break;
+        case TOKEN_NOT_EQUAL: result = value_create_bool(a != b); break;
+        case TOKEN_LESS: result = value_create_bool(a < b); break;
+        case TOKEN_GREATER: result = value_create_bool(a > b); break;
+        case TOKEN_LESS_EQUAL: result = value_create_bool(a <= b); break;
+        case TOKEN_GREATER_EQUAL: result = value_create_bool(a >= b); break;
+        default: break;
+        }
+      } else if ((left->type == VAL_FLOAT || int_like_l) &&
+                 (right->type == VAL_FLOAT || int_like_r)) {
         float l = (left->type == VAL_FLOAT) ? left->data.float_val
-                                            : left->data.int_val;
+                                            : (float)as_ll(left);
         float r = (right->type == VAL_FLOAT) ? right->data.float_val
-                                             : right->data.int_val;
-        result = value_create_bool(l == r);
-      } else if (left->type == VAL_BOOL && right->type == VAL_BOOL) {
-        result = value_create_bool(left->data.bool_val == right->data.bool_val);
+                                             : (float)as_ll(right);
+        switch (node->op) {
+        case TOKEN_EQUAL: result = value_create_bool(l == r); break;
+        case TOKEN_NOT_EQUAL: result = value_create_bool(l != r); break;
+        case TOKEN_LESS: result = value_create_bool(l < r); break;
+        case TOKEN_GREATER: result = value_create_bool(l > r); break;
+        case TOKEN_LESS_EQUAL: result = value_create_bool(l <= r); break;
+        case TOKEN_GREATER_EQUAL: result = value_create_bool(l >= r); break;
+        default: break;
+        }
       } else if (left->type == VAL_STRING && right->type == VAL_STRING) {
-        result = value_create_bool(
-            strcmp(left->data.string_val, right->data.string_val) == 0);
-      }
-    } else if (node->op == TOKEN_NOT_EQUAL) {
-      if (left->type == VAL_INT && right->type == VAL_INT) {
-        result = value_create_bool(left->data.int_val != right->data.int_val);
-      } else if (left->type == VAL_FLOAT || right->type == VAL_FLOAT) {
-        float l = (left->type == VAL_FLOAT) ? left->data.float_val
-                                            : left->data.int_val;
-        float r = (right->type == VAL_FLOAT) ? right->data.float_val
-                                             : right->data.int_val;
-        result = value_create_bool(l != r);
-      } else if (left->type == VAL_BOOL && right->type == VAL_BOOL) {
-        result = value_create_bool(left->data.bool_val != right->data.bool_val);
-      } else if (left->type == VAL_STRING && right->type == VAL_STRING) {
-        result = value_create_bool(
-            strcmp(left->data.string_val, right->data.string_val) != 0);
-      }
-    } else if (node->op == TOKEN_LESS) {
-      if (left->type == VAL_INT && right->type == VAL_INT) {
-        result = value_create_bool(left->data.int_val < right->data.int_val);
-      } else {
-        float l = (left->type == VAL_FLOAT) ? left->data.float_val
-                                            : left->data.int_val;
-        float r = (right->type == VAL_FLOAT) ? right->data.float_val
-                                             : right->data.int_val;
-        result = value_create_bool(l < r);
-      }
-    } else if (node->op == TOKEN_GREATER) {
-      if (left->type == VAL_INT && right->type == VAL_INT) {
-        result = value_create_bool(left->data.int_val > right->data.int_val);
-      } else {
-        float l = (left->type == VAL_FLOAT) ? left->data.float_val
-                                            : left->data.int_val;
-        float r = (right->type == VAL_FLOAT) ? right->data.float_val
-                                             : right->data.int_val;
-        result = value_create_bool(l > r);
-      }
-    } else if (node->op == TOKEN_LESS_EQUAL) {
-      if (left->type == VAL_INT && right->type == VAL_INT) {
-        result = value_create_bool(left->data.int_val <= right->data.int_val);
-      } else {
-        float l = (left->type == VAL_FLOAT) ? left->data.float_val
-                                            : left->data.int_val;
-        float r = (right->type == VAL_FLOAT) ? right->data.float_val
-                                             : right->data.int_val;
-        result = value_create_bool(l <= r);
-      }
-    } else if (node->op == TOKEN_GREATER_EQUAL) {
-      if (left->type == VAL_INT && right->type == VAL_INT) {
-        result = value_create_bool(left->data.int_val >= right->data.int_val);
-      } else {
-        float l = (left->type == VAL_FLOAT) ? left->data.float_val
-                                            : left->data.int_val;
-        float r = (right->type == VAL_FLOAT) ? right->data.float_val
-                                             : right->data.int_val;
-        result = value_create_bool(l >= r);
+        int cmp = strcmp(left->data.string_val, right->data.string_val);
+        switch (node->op) {
+        case TOKEN_EQUAL: result = value_create_bool(cmp == 0); break;
+        case TOKEN_NOT_EQUAL: result = value_create_bool(cmp != 0); break;
+        case TOKEN_LESS: result = value_create_bool(cmp < 0); break;
+        case TOKEN_GREATER: result = value_create_bool(cmp > 0); break;
+        case TOKEN_LESS_EQUAL: result = value_create_bool(cmp <= 0); break;
+        case TOKEN_GREATER_EQUAL: result = value_create_bool(cmp >= 0); break;
+        default: break;
+        }
       }
     }
     // Mant─▒ksal operat├Ârler
@@ -5040,6 +5023,12 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
       case TYPE_ARRAY_JSON:
         val = value_create_array(4); // JSON-like mixed array
         break;
+      case TYPE_CUSTOM:
+        // `Point p;` — match the AOT path (llvm_backend.cpp ~3610): allocate
+        // an empty object so subsequent `p.x = ...` hits the object set path
+        // instead of erroring on a void target.
+        val = value_create_object();
+        break;
       default:
         val = value_create_void();
         break;
@@ -5073,22 +5062,16 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
         value_free(val);
         exit(1);
       }
-      // Zinciri ba┼ştan tekrar y├╝r├╝ ve parent+key bul
-      // seg ┼şu anda ilk d├╝─ş├╝m; parent i├ğin son d├╝─ş├╝mden bir ├Ânceki noktay─▒
-      // bulmal─▒y─▒z ─░lk d├╝─ş├╝m tekrar
-      ASTNode_C *walker = node->left;
+      // Zinciri yurujup target parent + key bul.
+      // Sadece ArrayAccess dugumlerini topla; en ictekı Identifier "base"dir
+      // ve `container` zaten ona karsilik geliyor — onu nodes[] icine almak
+      // depth'i bir sisirir ve ilk iterasyonda Identifier'in olmayan `index`i
+      // ile "Object key must be string" hatasina sebep olur.
       Value *current = container;
       Value *parent = NULL;
-      while (walker->left) {
-        // ─░leriye gitmek i├ğin ├Ânce sol'u i┼şle
-        walker = walker->left;
-      }
-      // ┼Şimdi en sol seg'e tekrar ba┼şlayarak node->left'e kadar ilerleyelim
-      // Yeniden ba┼şlat
-      // Zinciri iteratif gezmek i├ğin liste ├╝retelim
       int depth = 0;
       ASTNode_C *tmp = node->left;
-      while (tmp) {
+      while (tmp && tmp->type == AST_ARRAY_ACCESS) {
         depth++;
         tmp = tmp->left;
       }
