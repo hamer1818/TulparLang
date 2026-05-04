@@ -832,11 +832,38 @@ std::unique_ptr<ASTNode> Parser::parse_postfix(std::unique_ptr<ASTNode> expr) {
         } else if (match(TOKEN_LBRACKET)) {
             expr = parse_array_access(std::move(expr));
         } else if (match(TOKEN_DOT)) {
+            SourceLocation dot_loc(current().line(), current().column());
+            Token field = expect(TOKEN_IDENTIFIER, "Expected field name after '.'");
+
+            // Python-style qualified call: `m.func(args)` parses as a single
+            // `FunctionCall("m__func", args)`. Pairs with the import alias
+            // mangling — `import "math" as m;` renames the module's
+            // top-level functions to `m__<name>`, so the lookup hits cleanly.
+            // Trigger fires only when the chain head is an Identifier and
+            // the very next token is `(`; standard `obj.field` reads / writes
+            // (chains like `point.x`, `arr.length`, `a.b.c(x)`) keep falling
+            // through to the existing ArrayAccess desugar.
+            if (check(TOKEN_LPAREN)) {
+                if (auto *id = std::get_if<Identifier>(&expr->value)) {
+                    std::string mangled = id->name + "__" + field.value();
+                    advance(); // consume '('
+                    std::vector<std::unique_ptr<ASTNode>> arguments;
+                    if (!check(TOKEN_RPAREN)) {
+                        do {
+                            arguments.push_back(parse_expression());
+                        } while (match(TOKEN_COMMA));
+                    }
+                    expect(TOKEN_RPAREN, "Expected ')' after arguments");
+                    expr = std::make_unique<ASTNode>(
+                        FunctionCall(mangled, std::move(arguments), dot_loc)
+                    );
+                    continue;
+                }
+            }
+
             // Member access: obj.field  -->  obj["field"]
             // Desugars to ArrayAccess with a string literal index, so the
             // existing object-store/load runtime path handles it as-is.
-            SourceLocation dot_loc(current().line(), current().column());
-            Token field = expect(TOKEN_IDENTIFIER, "Expected field name after '.'");
             auto key = std::make_unique<ASTNode>(
                 StringLiteral(field.value(), dot_loc)
             );

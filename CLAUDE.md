@@ -101,6 +101,8 @@ SQLite (`lib/sqlite3/sqlite3.c`) is vendored and compiled straight into both `tu
 
 `import "name" as alias;` namespaces the imported module — every top-level `func` defined in the module is renamed to `<alias>__<name>` and intra-module calls are rewritten in lockstep, so two libraries that both export `route` (or `helper`, etc.) can coexist. Built-ins (`print`, `len`, ...) and references to the importer's own functions are not touched. The rewrite lives in `src/parser/import_alias.cpp` and is invoked from both the AOT (`AST_IMPORT` codegen) and VM (`OP_IMPORT` runtime) paths. Plain `import "name";` (no alias) preserves the historical "all names land in global scope" behaviour.
 
+Call sites can be written either way: `m.func(args)` (Python-style) and `m__func(args)` (literal mangled form) are equivalent. `parse_postfix` rewrites `<identifier>.<identifier>(args)` to a single `FunctionCall("<id1>__<id2>", args)` at parse time; standard `obj.field` reads / writes (`p.x`, `cfg.host`) keep falling through to the existing ArrayAccess desugar. Method-style calls on real objects (`obj.method(x)` where `obj` isn't a module alias) still aren't supported — the rewrite optimistically assumes module qualification, so the call resolves at codegen / runtime as if the user had typed `<id1>__<id2>` directly.
+
 ### Cross-platform shims
 
 Platform detection goes through `src/common/platform.h`, `platform_sockets.h`, `platform_threads.h`, `platform_dl.h`. Always add new syscalls through these headers rather than `#ifdef _WIN32` directly — the Windows port is recent and code that bypasses the shim tends to break the MSVC build. `PLATFORM_WINDOWS`, `PLATFORM_LINUX`, `PLATFORM_MACOS` are defined by CMake.
