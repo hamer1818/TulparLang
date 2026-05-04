@@ -161,6 +161,8 @@ set(AOT_SOURCES
 set(TYPEINFER_SOURCES
     src/typeinfer/typeinfer.cpp
     src/typeinfer/typeinfer.hpp
+    src/typeinfer/typeinfer_warn.cpp
+    src/typeinfer/typeinfer_warn.hpp
 )
 
 # Runtime Support (needed for AOT binaries)
