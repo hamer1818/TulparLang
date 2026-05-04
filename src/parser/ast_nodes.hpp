@@ -329,9 +329,18 @@ struct ThrowStatement {
 
 struct ImportStatement {
     std::string path;
+    // Optional `as <alias>` clause: when non-empty, the imported module's
+    // top-level function names are mangled to `<alias>__<name>` and calls
+    // within the same module are rewritten in lockstep, so `import "math"
+    // as m;` followed by `m__abs(x)` resolves cleanly without colliding
+    // with another module that exports `abs`. Empty string preserves the
+    // pre-aliasing behaviour (functions land in the global namespace).
+    std::string alias;
     SourceLocation loc;
-    
+
     ImportStatement(const std::string& p, SourceLocation l) : path(p), loc(l) {}
+    ImportStatement(const std::string& p, const std::string& a, SourceLocation l)
+        : path(p), alias(a), loc(l) {}
 };
 
 struct TypeDecl {

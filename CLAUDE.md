@@ -99,6 +99,8 @@ SQLite (`lib/sqlite3/sqlite3.c`) is vendored and compiled straight into both `tu
 
 `import "name"` resolution (in `src/aot/llvm_backend.cpp` around the import handler, mirrored by the VM in `src/vm/vm.cpp`) probes, in order: embedded stdlib name → literal `name` → `name.tpr` → `tulpar_modules/<name>/<name>.tpr` → `tulpar_modules/<name>.tpr`. The last two slots are how `tulpar pkg install` makes a dep usable: it copies a `path:` spec into `tulpar_modules/<name>/` and the convention is that `<name>.tpr` inside that directory is the entry point.
 
+`import "name" as alias;` namespaces the imported module — every top-level `func` defined in the module is renamed to `<alias>__<name>` and intra-module calls are rewritten in lockstep, so two libraries that both export `route` (or `helper`, etc.) can coexist. Built-ins (`print`, `len`, ...) and references to the importer's own functions are not touched. The rewrite lives in `src/parser/import_alias.cpp` and is invoked from both the AOT (`AST_IMPORT` codegen) and VM (`OP_IMPORT` runtime) paths. Plain `import "name";` (no alias) preserves the historical "all names land in global scope" behaviour.
+
 ### Cross-platform shims
 
 Platform detection goes through `src/common/platform.h`, `platform_sockets.h`, `platform_threads.h`, `platform_dl.h`. Always add new syscalls through these headers rather than `#ifdef _WIN32` directly — the Windows port is recent and code that bypasses the shim tends to break the MSVC build. `PLATFORM_WINDOWS`, `PLATFORM_LINUX`, `PLATFORM_MACOS` are defined by CMake.

@@ -5,6 +5,7 @@
 #include "../embedded_libs.h" // Embedded libraries
 #include "../lexer/lexer.hpp"
 #include "../parser/parser.hpp"
+#include "../parser/import_alias.hpp"
 #include "../common/localization.hpp"
 #include "../common/diagnostics.hpp"
 #include "llvm_types.hpp"
@@ -4192,6 +4193,13 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     Parser_C *parser = parser_create(tokens, token_count);
     ASTNode_C *module_ast = parser_parse(parser);
     parser_free(parser);
+
+    // Apply `import "x" as alias;` namespacing before any codegen sees the
+    // module. The C-bridge stashes the alias in `node->name` (empty string
+    // when omitted, in which case apply_import_alias is a no-op).
+    if (module_ast && node->name && *node->name) {
+      apply_import_alias(module_ast, node->name);
+    }
 
     if (module_ast) {
       if (module_ast->type == AST_PROGRAM && module_ast->statements) {
