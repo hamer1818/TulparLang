@@ -186,15 +186,56 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
         auto is_unknown = [](DataType t) {
           return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM;
         };
+        // Polymorphism categories for select built-ins. The catalog
+        // registers these with TYPE_UNKNOWN to keep the storage shape
+        // simple, so the call-site check folds the category in here
+        // rather than extending FunctionSignature with overload sets.
+        // Only fires when the registered param IS the wildcard — user
+        // functions named `len`/`abs` (rare but legal) keep their own
+        // declared types.
+        auto is_collection = [](DataType t) {
+          return t == TYPE_STRING || t == TYPE_ARRAY ||
+                 t == TYPE_ARRAY_INT || t == TYPE_ARRAY_FLOAT ||
+                 t == TYPE_ARRAY_STR || t == TYPE_ARRAY_BOOL ||
+                 t == TYPE_ARRAY_JSON;
+        };
+        auto is_numeric = [](DataType t) {
+          return t == TYPE_INT || t == TYPE_FLOAT;
+        };
+        const bool poly_collection =
+            (call->name == "len" || call->name == "length");
+        const bool poly_numeric = (call->name == "abs");
+
         for (int i = 0; i < expected; ++i) {
           DataType param_type = sig.param_types[i];
-          if (!is_unknown(param_type) && !is_unknown(arg_types[i]) &&
-              !types_compatible(param_type, arg_types[i])) {
+          DataType arg_type = arg_types[i];
+
+          // Polymorphic position with concrete arg → use category check
+          // instead of the wildcard-skip default.
+          if (param_type == TYPE_UNKNOWN && i == 0 && !is_unknown(arg_type)) {
+            if (poly_collection && !is_collection(arg_type)) {
+              report_error(ctx,
+                           "Argument %d of '%s': expected string or array, got %s at line %d",
+                           i + 1, call->name.c_str(),
+                           datatype_to_string(arg_type), call->loc.line);
+              continue;
+            }
+            if (poly_numeric && !is_numeric(arg_type)) {
+              report_error(ctx,
+                           "Argument %d of '%s': expected int or float, got %s at line %d",
+                           i + 1, call->name.c_str(),
+                           datatype_to_string(arg_type), call->loc.line);
+              continue;
+            }
+          }
+
+          if (!is_unknown(param_type) && !is_unknown(arg_type) &&
+              !types_compatible(param_type, arg_type)) {
             report_error(ctx,
                          "Argument %d of '%s': expected %s, got %s at line %d",
                          i + 1, call->name.c_str(),
                          datatype_to_string(param_type),
-                         datatype_to_string(arg_types[i]), call->loc.line);
+                         datatype_to_string(arg_type), call->loc.line);
           }
         }
       }
