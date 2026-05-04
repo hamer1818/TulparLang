@@ -929,8 +929,17 @@ void compile_statement(Compiler *compiler, ASTNode_C *node) {
     break;
 
   case AST_ASSIGNMENT: {
+    // The C-bridge stores `name` as a malloc'd "" (not nullptr) when the
+    // assignment uses a complex lvalue (`p["x"] = ...`, `arr[i][j] = ...`)
+    // — the actual target is in `node->left`. A bare `if (node->name)` is
+    // truthy for "" and silently routes those assignments through the
+    // simple-variable path, which compiles to OP_STORE_GLOBAL "" — so all
+    // object/array property writes were lost. Treat empty-string `name`
+    // as "no simple target" for every check below.
+    bool has_simple_name = node->name && node->name[0] != '\0';
+
     // OPTIMIZATION 1: Detect "var = var + 1" pattern (common counter)
-    if (node->name && node->right && node->right->type == AST_BINARY_OP &&
+    if (has_simple_name && node->right && node->right->type == AST_BINARY_OP &&
         node->right->op == TOKEN_PLUS && node->right->left &&
         node->right->left->type == AST_IDENTIFIER &&
         strcmp(node->right->left->name, node->name) == 0 &&
@@ -949,7 +958,7 @@ void compile_statement(Compiler *compiler, ASTNode_C *node) {
     }
 
     // OPTIMIZATION 2: Detect "sum = sum + x" pattern for superinstruction
-    if (node->name && node->right && node->right->type == AST_BINARY_OP &&
+    if (has_simple_name && node->right && node->right->type == AST_BINARY_OP &&
         node->right->op == TOKEN_PLUS && node->right->left &&
         node->right->left->type == AST_IDENTIFIER &&
         strcmp(node->right->left->name, node->name) == 0) {
@@ -967,7 +976,7 @@ void compile_statement(Compiler *compiler, ASTNode_C *node) {
       }
     }
 
-    if (node->name) {
+    if (has_simple_name) {
       compile_expression(compiler,
                          node->right); // Compile RHS for variable assignment
       int slot = compiler_resolve_local(compiler, node->name);
