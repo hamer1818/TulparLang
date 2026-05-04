@@ -49,6 +49,139 @@ static void report_codegen_error(LLVMBackend *backend, int line,
                                  const char *kind, const char *message,
                                  const char *caret_token, const char *hint);
 
+// Lowers `for (name in iterable) body` to a desugared C-style for over an
+// index, in place. The original AST_FOR_IN node is mutated into an AST_BLOCK
+// whose statements are equivalent to:
+//
+//   { json __forin_it_<line> = <iterable>;
+//     for (int __forin_idx_<line> = 0;
+//          __forin_idx_<line> < length(__forin_it_<line>);
+//          __forin_idx_<line> = __forin_idx_<line> + 1) {
+//       <name> = __forin_it_<line>[__forin_idx_<line>];
+//       <body>
+//     } }
+//
+// The original `iterable` and `body` subtrees are moved into the desugared
+// form (no deep copy), so the existing ast_node_free recursion frees them
+// exactly once on shutdown. Necessary because AST_FOR_IN had no codegen case
+// at all in this backend — `for (x in arr) { ... }` silently produced an
+// exe that did nothing.
+static void lower_for_in_in_place(ASTNode_C *node) {
+  ASTNode_C *iterable = node->iterable;
+  ASTNode_C *body = node->body;
+  char *loop_var = node->name;
+  int line = node->line;
+
+  char it_name[48], idx_name[48];
+  std::snprintf(it_name, sizeof(it_name), "__forin_it_%d_%p", line,
+                static_cast<void *>(node));
+  std::snprintf(idx_name, sizeof(idx_name), "__forin_idx_%d_%p", line,
+                static_cast<void *>(node));
+
+  auto mk_id = [&](const char *n) {
+    ASTNode_C *id = ast_node_create(AST_IDENTIFIER);
+    id->name = strdup(n);
+    id->line = line;
+    return id;
+  };
+  auto mk_int = [&](long long v) {
+    ASTNode_C *lit = ast_node_create(AST_INT_LITERAL);
+    lit->value.int_value = v;
+    lit->line = line;
+    return lit;
+  };
+
+  // var <name>; — declare the loop variable up front so the per-iteration
+  // assignment below resolves it as a local. Without this, AOT's strict
+  // "assign to undefined" check fires before we ever reach the loop body.
+  ASTNode_C *loop_var_decl = ast_node_create(AST_VARIABLE_DECL);
+  loop_var_decl->name = strdup(loop_var);
+  loop_var_decl->data_type = TYPE_VOID;
+  loop_var_decl->line = line;
+
+  // json __forin_it_<line> = <iterable>;
+  ASTNode_C *it_decl = ast_node_create(AST_VARIABLE_DECL);
+  it_decl->name = strdup(it_name);
+  it_decl->data_type = TYPE_ARRAY_JSON;
+  it_decl->right = iterable;
+  it_decl->line = line;
+
+  // int __forin_idx_<line> = 0;
+  ASTNode_C *idx_decl = ast_node_create(AST_VARIABLE_DECL);
+  idx_decl->name = strdup(idx_name);
+  idx_decl->data_type = TYPE_INT;
+  idx_decl->right = mk_int(0);
+  idx_decl->line = line;
+
+  // length(__forin_it_<line>)
+  ASTNode_C *len_call = ast_node_create(AST_FUNCTION_CALL);
+  len_call->name = strdup("length");
+  len_call->argument_count = 1;
+  len_call->arguments =
+      static_cast<ASTNode_C **>(std::calloc(1, sizeof(ASTNode_C *)));
+  len_call->arguments[0] = mk_id(it_name);
+  len_call->line = line;
+
+  // __forin_idx_<line> < length(...)
+  ASTNode_C *cond = ast_node_create(AST_BINARY_OP);
+  cond->op = TOKEN_LESS;
+  cond->left = mk_id(idx_name);
+  cond->right = len_call;
+  cond->line = line;
+
+  // __forin_idx_<line> = __forin_idx_<line> + 1
+  ASTNode_C *plus = ast_node_create(AST_BINARY_OP);
+  plus->op = TOKEN_PLUS;
+  plus->left = mk_id(idx_name);
+  plus->right = mk_int(1);
+  plus->line = line;
+  ASTNode_C *idx_inc = ast_node_create(AST_ASSIGNMENT);
+  idx_inc->name = strdup(idx_name);
+  idx_inc->right = plus;
+  idx_inc->line = line;
+
+  // <name> = __forin_it_<line>[__forin_idx_<line>]
+  ASTNode_C *access = ast_node_create(AST_ARRAY_ACCESS);
+  access->left = mk_id(it_name);
+  access->index = mk_id(idx_name);
+  access->line = line;
+  ASTNode_C *name_assign = ast_node_create(AST_ASSIGNMENT);
+  name_assign->name = strdup(loop_var);
+  name_assign->right = access;
+  name_assign->line = line;
+
+  // Wrap body so the assignment runs first each iteration.
+  ASTNode_C *new_body = ast_node_create(AST_BLOCK);
+  new_body->statement_count = 2;
+  new_body->statements =
+      static_cast<ASTNode_C **>(std::calloc(2, sizeof(ASTNode_C *)));
+  new_body->statements[0] = name_assign;
+  new_body->statements[1] = body;
+  new_body->line = line;
+
+  ASTNode_C *for_node = ast_node_create(AST_FOR);
+  for_node->init = idx_decl;
+  for_node->condition = cond;
+  for_node->increment = idx_inc;
+  for_node->body = new_body;
+  for_node->line = line;
+
+  // Mutate the original node into AST_BLOCK { it_decl; for_node; }. We
+  // null out the ownership pointers we transferred so the original node's
+  // destructor doesn't double-free.
+  std::free(node->name);
+  node->type = AST_BLOCK;
+  node->name = nullptr;
+  node->iterable = nullptr;
+  node->body = nullptr;
+  node->statement_count = 3;
+  node->statements =
+      static_cast<ASTNode_C **>(std::calloc(3, sizeof(ASTNode_C *)));
+  node->statements[0] = loop_var_decl;
+  node->statements[1] = it_decl;
+  node->statements[2] = for_node;
+}
+
 // ---------------------------------------------------------------------------
 // "Did you mean..?" Levenshtein-based suggestion helper for diagnostics.
 // ---------------------------------------------------------------------------
@@ -3781,6 +3914,13 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       LLVMBuildBr(backend->builder, condB);
     LLVMPositionBuilderAtEnd(backend->builder, exitB);
     return nullptr;
+  }
+  case AST_FOR_IN: {
+    // Lower in place to a desugared C-style for over an index, then re-
+    // dispatch through the now-AST_BLOCK case. Done lazily on first visit
+    // so the AST stays small until/unless this codegen pass touches it.
+    lower_for_in_in_place(node);
+    return codegen_statement(backend, node);
   }
   case AST_FOR: {
     // for (init; condition; increment) { body }

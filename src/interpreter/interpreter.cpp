@@ -5556,7 +5556,7 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
     // Iterable'─▒ de─şerlendir (range(10) gibi)
     Value *iterable_val = interpreter_eval_expression(interp, node->iterable);
 
-    // E─şer range() fonksiyon ├ğa─şr─▒s─▒ysa, int d├Âner
+    // range(N) -> int: 0..N-1 boyunca don
     if (iterable_val->type == VAL_INT) {
       int count = iterable_val->data.int_val;
 
@@ -5581,6 +5581,24 @@ void interpreter_execute_statement(Interpreter *interp, ASTNode_C *node) {
         if (interp->should_break) {
           break;
         }
+      }
+    } else if (iterable_val->type == VAL_ARRAY) {
+      // Array uzerinde iterasyon — onceki halinde bu dal yoktu, dolayisiyla
+      // `for (x in [1,2,3]) { ... }` sessizce hicbir sey yapmiyordu (output
+      // yok, hata yok). VM zaten dogru calisiyor; bu interpreter'i ona
+      // hizalar.
+      Array *arr = iterable_val->data.array_val;
+      for (int i = 0; i < arr->length; i++) {
+        if (interp->should_return || interp->should_break) break;
+        Value *iter_val = value_copy(arr->elements[i]);
+        symbol_table_set(interp->current_scope, node->name, iter_val);
+        value_free(iter_val);
+        interpreter_execute_statement(interp, node->body);
+        if (interp->should_continue) {
+          interp->should_continue = 0;
+          continue;
+        }
+        if (interp->should_break) break;
       }
     }
 
