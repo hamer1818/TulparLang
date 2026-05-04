@@ -187,6 +187,22 @@ static void run_repl() {
   size_t buf_len = 0;
   int continuation = 0;
 
+  // ASTs the REPL has parsed and handed to the interpreter so far. We
+  // CANNOT free them iteration-by-iteration: `interpreter_register_
+  // function` (in interpreter.cpp) stores the AST_FUNCTION_DECL node
+  // pointer raw — `func->node = node`, no deep-copy — and a later
+  // `square(7)` call dereferences `func->node->parameters` /
+  // `func->node->body`. Freeing the AST per iteration leaves dangling
+  // pointers in the function table and the next call segfaults. Same
+  // applies to AST_TYPE_DECL (type registry holds pointers into AST
+  // field-default subtrees). We hold every parsed AST until REPL exit
+  // and free them in one pass at the end. Memory leak per input is
+  // bounded and short-lived (single interactive session).
+  size_t ast_cap = 64;
+  size_t ast_count = 0;
+  ASTNode_C **kept_asts =
+      static_cast<ASTNode_C **>(malloc(sizeof(ASTNode_C *) * ast_cap));
+
   while (1) {
     printf(continuation ? "... " : ">>> ");
     fflush(stdout);
@@ -339,7 +355,16 @@ static void run_repl() {
       }
     }
 
-    ast_node_free(ast);
+    // See note above: keep the AST alive until REPL exit. ast can be
+    // null when parsing failed — only retain successful parses.
+    if (ast) {
+      if (ast_count >= ast_cap) {
+        ast_cap *= 2;
+        kept_asts = static_cast<ASTNode_C **>(
+            realloc(kept_asts, sizeof(ASTNode_C *) * ast_cap));
+      }
+      kept_asts[ast_count++] = ast;
+    }
     parser_free(parser);
 
     for (int i = 0; i < token_count; i++) {
@@ -354,8 +379,17 @@ static void run_repl() {
     continuation = 0;
   }
 
-  free(buf);
+  // Tear down everything that holds AST pointers BEFORE freeing the
+  // ASTs themselves. interpreter_free walks the function/type tables
+  // (which only own copies of names, not the AST) so it doesn't touch
+  // the kept_asts memory; freeing the interpreter first means any code
+  // path it invokes during teardown can't see released AST nodes.
   interpreter_free(interp);
+  for (size_t i = 0; i < ast_count; i++) {
+    ast_node_free(kept_asts[i]);
+  }
+  free(kept_asts);
+  free(buf);
   printf("Goodbye!\n");
 }
 
