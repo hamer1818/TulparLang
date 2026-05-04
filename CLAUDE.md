@@ -26,17 +26,25 @@ Two CMake targets are built:
 - `tulpar` — the compiler/driver executable.
 - `tulpar_runtime` — static library (`libtulpar_runtime.a` / `.lib`) that AOT-compiled user binaries link against. It is compiled with `-DTULPAR_RUNTIME_ONLY` and contains a different source subset from `tulpar` itself. When editing runtime-visible code (anything in `src/vm/runtime_bindings.cpp`, `runtime/*`, lexer, parser, `vm/`, `jit/`, SQLite), both targets must stay buildable.
 
+The AOT linker resolves `libtulpar_runtime.a` at runtime via `build_link_search_dirs()` in `src/aot/aot_pipeline.cpp` — it probes the directory containing the running `tulpar` binary first (so the installer can drop the archive next to `tulpar.exe`), then `<exe_dir>/lib`, then the dev-tree `build-<platform>/` directories. The Windows installer (`installer/tulpar.iss`, Inno Setup) ships both `tulpar.exe` and `libtulpar_runtime.a` into `%LOCALAPPDATA%\Programs\Tulpar`; CI passes `/DSourceBinary` and `/DSourceRuntimeLib` to `iscc`.
+
 ## Tests
 
-There is no unit-test framework. `./build.sh test` is an end-to-end runner:
+`./build.sh test` is an end-to-end runner over `examples/`:
 
 ```bash
 ./build.sh test                           # Run every examples/*.tpr through AOT
 ./build.sh test examples/02_basics.tpr    # Run one example
-run_tests.bat                             # Windows equivalent
+run_tests.bat                             # Windows wrapper around run_tests.ps1
 ```
 
-It invokes `./tulpar --aot <file>`, expects an `a.out` to be produced, runs it, and compares only the exit status. Interactive examples get stdin from `examples/inputs/<basename>.txt`. A hardcoded `SKIP_TESTS` list in `build.sh` (and a parallel one in `run_tests.bat`) excludes network/server-style examples and ones still pending features: `utils.tpr`, `09_socket_simple.tpr`, `09_socket_server.tpr`, `09_socket_client.tpr`, `11_router_app.tpr`, `12_threaded_server.tpr`, `14_api_server.tpr`. Update **both** scripts when adding skips.
+It invokes `./tulpar --aot <file>`, expects an `a.out`/`<base>.exe` to be produced, runs it, and compares only the exit status. Interactive examples get stdin from `examples/inputs/<basename>.txt`. The `SKIP_TESTS` array is currently empty; the active filter is `COMPILE_ONLY_TESTS` in `build.sh` (and `$compileOnly` in `run_tests.ps1`) — examples that block on `listen()` / `api_run()` (sockets, router, wings, tulpar_api) plus the import-only `utils.tpr` are compiled but not executed, so a regression in the embedded server/router stdlib path still fails the suite. Update **both** scripts when adding entries.
+
+`run_tests.ps1` uses `tulpar build` per file (not `--aot`) and enforces per-test compile/run timeouts (`-CompileTimeoutSec`, `-RunTimeoutSec`, default 30 s each) so a hung example doesn't block the suite.
+
+A separate `tests/` directory holds focused regression suites that are **not** run by `./build.sh test`:
+- `*.test.tpr` — Tulpar source using the embedded `test` library (`import "test"`, jest-style assertions). Run with `./tulpar tests/<file>.test.tpr`.
+- `*_smoke.py` / `lsp_smoke.py` — Python harnesses that drive the LSP / formatter / package manager subprocesses. Manual; not yet wired into CI.
 
 CI (`.github/workflows/build.yml`) builds on Ubuntu, macOS, and Windows; only the Linux job runs `./build.sh test` (and it is `continue-on-error`).
 
@@ -45,14 +53,22 @@ A multi-language micro-benchmark harness lives in `benchmarks/` — `run_benchma
 ## Running Tulpar programs
 
 ```bash
-./tulpar script.tpr            # Default: AOT compile + run (silent), falls back to VM on failure
-./tulpar --vm script.tpr       # Force VM path (faster startup)
-./tulpar --legacy script.tpr   # Force tree-walk interpreter
-./tulpar build script.tpr [out]  # Emit standalone native binary
-./tulpar --repl                # Interactive mode (interpreter-backed)
+./tulpar script.tpr             # Default: AOT compile + run (silent), falls back to VM on failure
+./tulpar --vm script.tpr        # Force VM path (faster startup)
+./tulpar --legacy script.tpr    # Force tree-walk interpreter
+./tulpar build script.tpr [out] # Emit standalone native binary
+./tulpar --repl                 # Interactive mode (interpreter-backed)
+
+./tulpar fmt script.tpr         # Source formatter (src/fmt/)
+./tulpar pkg <init|add|install> # Package manager (src/pkg/)
+./tulpar update [--check]       # Self-update from tulparlang.dev (src/cli/update_cmd.cpp)
+./tulpar --lsp                  # LSP server on stdio (src/lsp/)
+./tulpar version | --help       # Version / command reference
 ```
 
-CLI parsing lives at the top of `main()` in `src/main.cpp:153`; `--aot`, `--build`, and the positional `build` subcommand all set build-mode. Default execution calls `aot_compile_and_run_silent()`; on any AOT failure it silently falls through to the VM, so "it runs" is not evidence the AOT path worked — check with `tulpar build` or `--aot` explicitly.
+CLI dispatch lives in `main()` in [src/main.cpp](src/main.cpp); `--lsp`, `fmt`, `pkg`, `version`, `--help`, and `update` all short-circuit before the run/build path. Default execution calls `aot_compile_and_run_silent()`; on any AOT failure it silently falls through to the VM, so "it runs" is not evidence the AOT path worked — check with `tulpar build` or `--aot` explicitly. `--lsp` owns stdin/stdout for JSON-RPC, so it must dispatch before any banner/REPL output.
+
+CLI output language follows the system locale; override with `TULPAR_LANG=tr` / `TULPAR_LANG=en`.
 
 ## Architecture
 
@@ -62,17 +78,27 @@ Pipeline, top to bottom:
 2. **Parser** (`src/parser/`) — hand-written recursive descent, produces AST nodes defined in `parser/ast_nodes.hpp`. A visitor interface lives in `ast_visitor.hpp`.
 3. **Type inference** (`src/typeinfer/`) — runs over the AST before codegen.
 4. **Backends** — four of them share the same AST:
-   - **AOT / LLVM** (`src/aot/`, primary): `aot_pipeline.cpp` is the entry point (`aot_compile`, `aot_compile_and_run`, `aot_compile_and_run_silent`). Actual IR generation is split across `llvm_backend.cpp`, `llvm_types.cpp`, `llvm_values.cpp` — that's the full list in `AOT_SOURCES` (CMakeLists.txt). Other `.cpp` files in `src/aot/` (notably `llvm_backend_modern.cpp`) are dead/experimental and not built — don't edit them expecting changes to take effect. Architecture-specific LLVM components are selected in `CMakeLists.txt` (`x86*` vs `aarch64*`).
+   - **AOT / LLVM** (`src/aot/`, primary): `aot_pipeline.cpp` is the entry point (`aot_compile`, `aot_compile_and_run`, `aot_compile_and_run_silent`). Actual IR generation is split across `llvm_backend.cpp`, `llvm_types.cpp`, `llvm_values.cpp` — that's the full list in `AOT_SOURCES` (CMakeLists.txt). Architecture-specific LLVM components are selected in `CMakeLists.txt` (`x86*` vs `aarch64*`).
    - **VM** (`src/vm/`): `compiler.cpp` lowers AST → bytecode (`bytecode.cpp`), `vm.cpp` executes it, `runtime_bindings.cpp` implements built-ins (print, sockets, db, threads, etc.). This is also the path AOT'd binaries use at runtime.
    - **JIT** (`src/jit/`): x64 direct emitter. Labelled legacy in `CMakeLists.txt` but still linked into `tulpar` and the runtime archive.
    - **Interpreter** (`src/interpreter/`): tree-walk, labelled legacy. Still used by the REPL.
 5. **Runtime support** (`runtime/`) — `cJSON`, `tulpar_arc` (automatic reference counting for heap values), `tulpar_native` (FFI).
 
+Auxiliary subsystems share the same AST and live alongside the backends:
+- `src/lsp/` — LSP server (`tulpar --lsp`). `document_index.cpp` reparses on every change; `builtins.cpp` registers the native built-in symbol table for completion/hover.
+- `src/fmt/` — source formatter (`tulpar fmt`).
+- `src/pkg/` — package manager (`tulpar pkg`). `manifest.cpp` reads `tulpar.toml`; `pkg_cli.cpp` vendors `path:` deps into `tulpar_modules/<name>/` (registry deps are still TODO).
+- `src/cli/` — extra subcommands (currently `update_cmd.cpp` for `tulpar update`).
+
 ### Standard library is embedded at build time
 
-`lib/*.tpr` files are read by `cmake/EmbedLibraries.cmake` and baked into `src/embedded_libs.h` via `configure_file()` from `src/embedded_libs.h.in`. If you add a new stdlib module (currently `wings`, `router`, `http_utils` are embedded; `async`, `middleware`, `socket`, `tulpar_api` exist as files), add an `embed_library(...)` call there **and** a slot in `embedded_libs.h.in`. `src/embedded_libs.h` is generated build output (gitignored) — never hand-edit; edit the `.in` template and the `lib/*.tpr` source instead.
+`lib/*.tpr` files are read by `cmake/EmbedLibraries.cmake` and baked into `src/embedded_libs.h` via `configure_file()` from `src/embedded_libs.h.in`. Currently embedded: `wings`, `router`, `http_utils`, `async`, `middleware`, `socket`, `tulpar_api`, `test`, `http_client`, `orm` — i.e. every `.tpr` in `lib/`. To add a new stdlib module, drop it in `lib/`, add an `embed_library(...)` call in `cmake/EmbedLibraries.cmake`, **and** a slot in `embedded_libs.h.in`. `src/embedded_libs.h` is generated build output (gitignored) — never hand-edit; edit the `.in` template and the `lib/*.tpr` source instead.
 
 SQLite (`lib/sqlite3/sqlite3.c`) is vendored and compiled straight into both `tulpar` and `tulpar_runtime`.
+
+### Imports and `tulpar_modules`
+
+`import "name"` resolution (in `src/aot/llvm_backend.cpp` around the import handler, mirrored by the VM in `src/vm/vm.cpp`) probes, in order: embedded stdlib name → literal `name` → `name.tpr` → `tulpar_modules/<name>/<name>.tpr` → `tulpar_modules/<name>.tpr`. The last two slots are how `tulpar pkg install` makes a dep usable: it copies a `path:` spec into `tulpar_modules/<name>/` and the convention is that `<name>.tpr` inside that directory is the entry point.
 
 ### Cross-platform shims
 
@@ -85,8 +111,8 @@ Platform detection goes through `src/common/platform.h`, `platform_sockets.h`, `
 ## Working with this codebase
 
 - `.bak` files in `src/lexer/` and `src/parser/` are dead snapshots; ignore them.
-- `src/aot/` contains a lot of loose `.c`, `.exe`, `.obj`, and standalone test scripts from manual codegen experiments. Only the files listed under `AOT_SOURCES` in `CMakeLists.txt` are actually part of the build.
-- The repo root accumulates loose artifacts from ad-hoc compile sessions: `loopsum.exe`, `turkish_full_syntax.exe`, `*.ll`, `*.o`, a Linux `tulpar` binary, an old `Makefile`, scratch `test.tpr` / `test.db` files. None of them are inputs to the build — leave them alone unless cleaning up.
-- `EKSIKLER.md` (Turkish: "missing items") is the project's running list of known gaps and TODO features; consult it before claiming a feature is broken vs. unimplemented.
-- User-facing diagnostic strings should go through `tr_en("<turkish>", "<english>")` — don't hardcode only one language.
-- New examples land in `examples/`, numbered roughly by theme; if they need stdin, drop a fixture in `examples/inputs/<name>.txt` or add the filename to `SKIP_TESTS` in `build.sh` **and** `run_tests.bat`.
+- Only the files listed under `AOT_SOURCES` in `CMakeLists.txt` are part of the AOT build (`aot_pipeline.cpp`, `llvm_backend.cpp`, `llvm_types.cpp`, `llvm_values.cpp`). The repo was cleaned of historical scratch files in commit `f237471` ("chore: repoyu yetim/scratch dosyalardan temizle"); if you find loose `.c`/`.exe`/`.obj`/`.ll` files reappearing in `src/aot/` or the repo root, they're new scratch from your session — not load-bearing.
+- The repo root still keeps a `tulpar.exe` copy (build output) plus `test.db` / `test_file.txt` (left behind by example runs). None of those are build inputs.
+- [EKSIKLER.md](EKSIKLER.md) (Turkish: "missing items") is the project's running list of known gaps and TODO features; consult it before claiming a feature is broken vs. unimplemented. [OZET.md](OZET.md) is a higher-level project status summary.
+- User-facing diagnostic strings should go through `tr_en("<turkish>", "<english>")` from `src/common/localization.hpp` — don't hardcode only one language.
+- New examples land in `examples/`, numbered roughly by theme. If they need stdin, drop a fixture in `examples/inputs/<name>.txt`. If they block on `listen()` / `api_run()`, add the filename to `COMPILE_ONLY_TESTS` in `build.sh` **and** `$compileOnly` in `run_tests.ps1`.
