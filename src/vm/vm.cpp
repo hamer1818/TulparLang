@@ -13,7 +13,6 @@
 #include "../../lib/sqlite3/sqlite3.h"
 #endif
 #include "../embedded_libs.h"
-#include "../jit/jit.hpp"
 #include "../parser/parser.hpp"
 #include "../common/localization.hpp"
 #include "compiler.hpp"
@@ -452,7 +451,6 @@ ObjFunction *vm_new_function(VM *vm) {
   func->upvalue_count = 0;
   func->name = nullptr;
   func->call_count = 0;  // Init profiling
-  func->jit_code = nullptr; // No JIT code yet
 
   // Initialize chunk manually
   func->chunk.code = nullptr;
@@ -507,8 +505,6 @@ VM *vm_create() {
   vm->string_count = 0;
   vm->string_capacity = 0;
 
-  vm->legacy_interp = nullptr; // Initialized to nullptr
-
   return vm;
 }
 
@@ -528,11 +524,6 @@ static void free_object(Obj *obj) {
   }
   case OBJ_FUNCTION: {
     ObjFunction *func = (ObjFunction *)obj;
-    // Free JIT compiled code
-    if (func->jit_code) {
-      jit_free_compiled(func->jit_code);
-      func->jit_code = nullptr;
-    }
     // Free chunk contents (always malloc'd)
     if (func->chunk.code)
       free(func->chunk.code);
@@ -1231,35 +1222,7 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
       }
       TARGET(OP_LOOP) : {
         uint16_t offset = READ_SHORT();
-        uint8_t *loop_target = ip - offset;
-
-        // Hot loop detection: Count iterations
-        // Look up or create trace entry for this loop
-        LoopTrace *trace = nullptr;
-        for (int i = 0; i < vm->loop_traces.count; i++) {
-          if (vm->loop_traces.traces[i].loop_start == loop_target) {
-            trace = &vm->loop_traces.traces[i];
-            break;
-          }
-        }
-
-        if (!trace && vm->loop_traces.count < MAX_LOOP_TRACES) {
-          // New loop - create entry
-          trace = &vm->loop_traces.traces[vm->loop_traces.count++];
-          trace->loop_start = loop_target;
-          trace->iteration_count = 0;
-          trace->trace_recorded = 0;
-          trace->native_code = nullptr;
-        }
-
-        if (trace) {
-          trace->iteration_count++;
-
-          // If hot enough and has native code, use it
-          // (Native code compilation would be done elsewhere)
-        }
-
-        ip = loop_target;
+        ip = ip - offset;
         DISPATCH();
       }
 
@@ -1295,40 +1258,10 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         frame->slots = vm->stack_top - arg_count -
                        1; // -1 for function itself local slot 0
 
-        // JIT Compilation - compile hot functions to native code
+        // Profile counter (kept for symmetry with other dispatch paths
+        // even though JIT is gone — cheap, and other call sites still
+        // increment it the same way).
         func->call_count++;
-
-#if JIT_ENABLED
-        // Check if we should JIT compile this function
-        if (func->call_count >= JIT_THRESHOLD && !func->jit_code) {
-          // Try to compile
-          func->jit_code = jit_compile_function(vm, func);
-          if (func->jit_code && func->name) {
-            // Uncomment for debug: printf("[JIT] Compiled: %s\n",
-            // func->name->chars);
-          }
-        }
-
-        // If JIT code exists and is valid, execute it
-        if (func->jit_code && func->jit_code->valid) {
-          // Execute JIT code
-          JITFunction jit_func = func->jit_code->entry;
-          jit_func(vm);
-
-          // After JIT returns, pop the frame
-          vm->frame_count--;
-          if (vm->frame_count == 0) {
-            // Program finished
-            return VM_OK;
-          }
-
-          // Restore previous frame
-          frame = &vm->frames[vm->frame_count - 1];
-          ip = frame->ip;
-          chunk = &frame->function->chunk;
-          DISPATCH();
-        }
-#endif
 
         // Update cached regs (interpreter path)
         ip = frame->ip;
@@ -3226,16 +3159,6 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           ip = cache->cached_entry_point; // Direct jump to cached entry
           chunk = &func->chunk;
 
-// JIT check (cached!)
-#if JIT_ENABLED
-          if (UNLIKELY(cache->cached_jit && cache->cached_jit->valid)) {
-            // JIT code available and cached!
-            cache->cached_jit->entry(vm);
-            vm->frame_count--;
-            DISPATCH();
-          }
-#endif
-
           DISPATCH();
         }
 
@@ -3253,11 +3176,8 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         // UPDATE CACHE for next call!
         cache->cached_function = func;
         cache->cached_entry_point = func->chunk.code;
-#if JIT_ENABLED
-        cache->cached_jit = func->jit_code;
-#else
-        cache->cached_jit = nullptr;
-#endif
+
+
 
         // Execute call (normal path)
         frame->ip = ip;
@@ -3270,15 +3190,6 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         frame = new_frame;
         ip = new_frame->ip;
         chunk = &func->chunk;
-
-// JIT check
-#if JIT_ENABLED
-        if (func->jit_code && func->jit_code->valid) {
-          func->jit_code->entry(vm);
-          vm->frame_count--;
-          DISPATCH();
-        }
-#endif
 
         DISPATCH();
       }
@@ -3306,14 +3217,6 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           ip = cache->cached_entry_point;
           chunk = &func->chunk;
 
-#if JIT_ENABLED
-          if (UNLIKELY(cache->cached_jit && cache->cached_jit->valid)) {
-            cache->cached_jit->entry(vm);
-            vm->frame_count--;
-            DISPATCH();
-          }
-#endif
-
           DISPATCH();
         }
 
@@ -3330,11 +3233,8 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         // Update cache
         cache->cached_function = func;
         cache->cached_entry_point = func->chunk.code;
-#if JIT_ENABLED
-        cache->cached_jit = func->jit_code;
-#else
-        cache->cached_jit = nullptr;
-#endif
+
+
 
         frame->ip = ip;
         CallFrame *new_frame = &vm->frames[vm->frame_count++];
@@ -3346,14 +3246,6 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         frame = new_frame;
         ip = new_frame->ip;
         chunk = &func->chunk;
-
-#if JIT_ENABLED
-        if (func->jit_code && func->jit_code->valid) {
-          func->jit_code->entry(vm);
-          vm->frame_count--;
-          DISPATCH();
-        }
-#endif
 
         DISPATCH();
       }
@@ -3656,290 +3548,3 @@ ObjObject *vm_allocate_object(VM *vm) {
   return obj;
 }
 
-// ============================================================================
-// JIT HELPER FUNCTIONS
-// ============================================================================
-
-// Helper called from JIT code to execute a function call via interpreter
-// Stack layout on entry: [callee, arg0, arg1, ..., argN-1]
-// On return: [result]
-void jit_helper_call(VM *vm, int arg_count) {
-  // Get callee from stack
-  VMValue callee = vm_peek(vm, arg_count);
-
-  if (!IS_FUNCTION(callee)) {
-    printf("%s\n", tulpar::i18n::tr_en("JIT Hatasi: Yalnizca fonksiyonlar cagrilabilir",
-                                       "JIT Error: Can only call functions"));
-    vm_push(vm, VM_VOID());
-    return;
-  }
-
-  ObjFunction *func = AS_FUNCTION(callee);
-
-  // Check arity
-  if (arg_count != func->arity) {
-    printf("%s (expected=%d, got=%d)\n",
-           tulpar::i18n::tr_en("JIT Hatasi: Arguman sayisi uyusmuyor",
-                               "JIT Error: Argument count mismatch"),
-           func->arity, arg_count);
-    vm_push(vm, VM_VOID());
-    return;
-  }
-
-  // Check for stack overflow
-  if (vm->frame_count >= VM_FRAMES_MAX) {
-    printf("%s\n", tulpar::i18n::tr_en("JIT Hatasi: Yigin tasmasi",
-                                       "JIT Error: Stack overflow"));
-    vm_push(vm, VM_VOID());
-    return;
-  }
-
-  // Increment call count for JIT profiling
-  func->call_count++;
-
-  // Check if function has JIT code - if so, use it!
-#if JIT_ENABLED
-  if (func->jit_code && func->jit_code->valid) {
-    // Setup frame for JIT execution
-    CallFrame *frame = &vm->frames[vm->frame_count++];
-    frame->function = func;
-    frame->ip = func->chunk.code;
-    frame->slots = vm->stack_top - arg_count - 1;
-    frame->handler_count = 0;
-
-    // Execute JIT code directly!
-    JITFunction jit_func = func->jit_code->entry;
-    jit_func(vm);
-
-    // JIT code handles return, stack cleanup
-    // Pop frame and push result
-    vm->frame_count--;
-    // Result should already be on stack from JIT epilogue
-    return;
-  }
-
-  // Try to JIT compile if hot enough
-  if (func->call_count >= JIT_THRESHOLD && !func->jit_code) {
-    func->jit_code = jit_compile_function(vm, func);
-    if (func->jit_code && func->jit_code->valid) {
-      // Compiled! Use JIT for this call
-      CallFrame *frame = &vm->frames[vm->frame_count++];
-      frame->function = func;
-      frame->ip = func->chunk.code;
-      frame->slots = vm->stack_top - arg_count - 1;
-      frame->handler_count = 0;
-
-      JITFunction jit_func = func->jit_code->entry;
-      jit_func(vm);
-
-      vm->frame_count--;
-      return;
-    }
-  }
-#endif
-
-  // Fallback: Setup new call frame for interpreter
-  CallFrame *frame = &vm->frames[vm->frame_count++];
-  frame->function = func;
-  frame->ip = func->chunk.code;
-  frame->slots = vm->stack_top - arg_count - 1;
-  frame->handler_count = 0;
-
-  // Run interpreter for this function
-  // We need a mini-interpreter loop here
-  uint8_t *ip = frame->ip;
-  Chunk *chunk = &func->chunk;
-
-#define READ_BYTE() (*ip++)
-#define READ_SHORT() (ip += 2, (uint16_t)((ip[-2]) | (ip[-1] << 8)))
-#define READ_CONSTANT() (chunk->constants[READ_SHORT()])
-
-  for (;;) {
-    uint8_t instruction = READ_BYTE();
-
-    switch (instruction) {
-    case OP_CONST_INT: {
-      Constant c = READ_CONSTANT();
-      vm_push(vm, VM_INT(c.int_val));
-      break;
-    }
-
-    case OP_CONST_TRUE:
-      vm_push(vm, VM_BOOL(1));
-      break;
-
-    case OP_CONST_FALSE:
-      vm_push(vm, VM_BOOL(0));
-      break;
-
-    case OP_CONST_VOID:
-      vm_push(vm, VM_VOID());
-      break;
-
-    case OP_POP:
-      vm_pop(vm);
-      break;
-
-    case OP_ADD: {
-      VMValue b = vm_pop(vm);
-      VMValue a = vm_pop(vm);
-      if (IS_INT(a) && IS_INT(b)) {
-        vm_push(vm, VM_INT(AS_INT(a) + AS_INT(b)));
-      } else {
-        vm_push(vm, VM_FLOAT(AS_FLOAT(a) + AS_FLOAT(b)));
-      }
-      break;
-    }
-
-    case OP_SUB: {
-      VMValue b = vm_pop(vm);
-      VMValue a = vm_pop(vm);
-      if (IS_INT(a) && IS_INT(b)) {
-        vm_push(vm, VM_INT(AS_INT(a) - AS_INT(b)));
-      } else {
-        vm_push(vm, VM_FLOAT(AS_FLOAT(a) - AS_FLOAT(b)));
-      }
-      break;
-    }
-
-    case OP_MUL: {
-      VMValue b = vm_pop(vm);
-      VMValue a = vm_pop(vm);
-      if (IS_INT(a) && IS_INT(b)) {
-        vm_push(vm, VM_INT(AS_INT(a) * AS_INT(b)));
-      } else {
-        vm_push(vm, VM_FLOAT(AS_FLOAT(a) * AS_FLOAT(b)));
-      }
-      break;
-    }
-
-    case OP_LT: {
-      VMValue b = vm_pop(vm);
-      VMValue a = vm_pop(vm);
-      vm_push(vm, VM_BOOL(AS_INT(a) < AS_INT(b)));
-      break;
-    }
-
-    case OP_LE: {
-      VMValue b = vm_pop(vm);
-      VMValue a = vm_pop(vm);
-      vm_push(vm, VM_BOOL(AS_INT(a) <= AS_INT(b)));
-      break;
-    }
-
-    case OP_GT: {
-      VMValue b = vm_pop(vm);
-      VMValue a = vm_pop(vm);
-      vm_push(vm, VM_BOOL(AS_INT(a) > AS_INT(b)));
-      break;
-    }
-
-    case OP_GE: {
-      VMValue b = vm_pop(vm);
-      VMValue a = vm_pop(vm);
-      vm_push(vm, VM_BOOL(AS_INT(a) >= AS_INT(b)));
-      break;
-    }
-
-    case OP_EQ: {
-      VMValue b = vm_pop(vm);
-      VMValue a = vm_pop(vm);
-      vm_push(vm, VM_BOOL(AS_INT(a) == AS_INT(b)));
-      break;
-    }
-
-    case OP_NE: {
-      VMValue b = vm_pop(vm);
-      VMValue a = vm_pop(vm);
-      vm_push(vm, VM_BOOL(AS_INT(a) != AS_INT(b)));
-      break;
-    }
-
-    case OP_LOAD_LOCAL: {
-      uint16_t slot = READ_SHORT();
-      vm_push(vm, frame->slots[slot]);
-      break;
-    }
-
-    case OP_STORE_LOCAL: {
-      uint16_t slot = READ_SHORT();
-      frame->slots[slot] = vm_peek(vm, 0);
-      break;
-    }
-
-    case OP_JUMP: {
-      uint16_t offset = READ_SHORT();
-      ip += offset;
-      break;
-    }
-
-    case OP_JUMP_IF_FALSE: {
-      uint16_t offset = READ_SHORT();
-      if (!AS_BOOL(vm_peek(vm, 0))) {
-        ip += offset;
-      }
-      break;
-    }
-
-    case OP_LOOP: {
-      uint16_t offset = READ_SHORT();
-      ip -= offset;
-      break;
-    }
-
-    case OP_CALL:
-    case OP_CALL_FAST:
-    case OP_CALL_1: {
-      int call_arg_count =
-          (instruction == OP_CALL || instruction == OP_CALL_FAST) ? READ_BYTE()
-                                                                  : 1;
-      // Recursive call - use jit_helper_call
-      jit_helper_call(vm, call_arg_count);
-      break;
-    }
-
-    case OP_RETURN:
-    case OP_RETURN_FAST: {
-      VMValue result = vm_pop(vm);
-      vm->frame_count--;
-      vm->stack_top = frame->slots;
-      vm_push(vm, result);
-      return; // Exit mini-interpreter
-    }
-
-    case OP_RETURN_VOID: {
-      vm->frame_count--;
-      vm->stack_top = frame->slots;
-      vm_push(vm, VM_VOID());
-      return;
-    }
-
-    default:
-      printf("JIT Helper: Unsupported opcode %d\n", instruction);
-      vm->frame_count--;
-      vm->stack_top = frame->slots;
-      vm_push(vm, VM_VOID());
-      return;
-    }
-  }
-
-#undef READ_BYTE
-#undef READ_SHORT
-#undef READ_CONSTANT
-}
-
-// Simplified interpreter call for JIT - runs a function and returns result
-VMValue jit_interpreter_call(VM *vm, ObjFunction *func, VMValue *args,
-                             int arg_count) {
-  // Push function and args to stack
-  vm_push(vm, VM_OBJ(func));
-  for (int i = 0; i < arg_count; i++) {
-    vm_push(vm, args[i]);
-  }
-
-  // Call helper
-  jit_helper_call(vm, arg_count);
-
-  // Pop and return result
-  return vm_pop(vm);
-}

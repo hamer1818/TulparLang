@@ -119,9 +119,6 @@ typedef struct {
   uint32_t hash;
 } ObjString;
 
-// Forward declare JIT types
-struct JITCompiledFunc;
-
 // Function object
 typedef struct ObjFunction {
   Obj obj;
@@ -130,8 +127,6 @@ typedef struct ObjFunction {
   Chunk chunk;
   ObjString *name;
   int call_count; // Profiling counter
-  struct JITCompiledFunc
-      *jit_code; // JIT compiled native code (NULL if not compiled)
 } ObjFunction;
 
 // VM Value - 16 bytes, stack allocated
@@ -267,35 +262,11 @@ typedef struct {
 
 #define VM_MAX_EXCEPTIONS 64
 
-// ============================================================================
-// TRACING JIT (Faz 4) - Must be before VM struct
-// ============================================================================
-
-// Loop trace for JIT compilation
-#define TRACE_THRESHOLD 100  // Iterations before tracing starts
-#define MAX_TRACE_LENGTH 256 // Maximum bytecode ops in a trace
-#define MAX_LOOP_TRACES 64
-
-typedef struct {
-  uint8_t *loop_start;             // Pointer to OP_LOOP bytecode
-  int iteration_count;             // How many times this loop ran
-  int trace_recorded;              // 1 if trace was recorded
-  uint8_t trace[MAX_TRACE_LENGTH]; // Recorded bytecode trace
-  int trace_length;                // Length of recorded trace
-  void *native_code;               // Compiled native code (if any)
-} LoopTrace;
-
-typedef struct {
-  LoopTrace traces[MAX_LOOP_TRACES];
-  int count;
-} LoopTraceTable;
-
 // Forward declaration for inline caching
 // Call site inline cache for function calls (MAJOR OPTIMIZATION!)
 struct CallSiteCache {
   ObjFunction *cached_function;       // Cached target function
   uint8_t *cached_entry_point;        // Cached bytecode entry point
-  struct JITCompiledFunc *cached_jit; // Cached JIT code (if available)
   uint32_t cache_hit_count;           // Statistics: cache hits
   uint32_t cache_miss_count;          // Statistics: cache misses
 };
@@ -344,12 +315,6 @@ typedef struct VM {
   ObjString **strings;
   int string_count;
   int string_capacity;
-
-  // Built-in functions (void* to avoid include conflicts)
-  void *legacy_interp; // Fallback to legacy interpreter
-
-  // Loop tracing for JIT (Faz 4)
-  LoopTraceTable loop_traces;
 
   // OPTIMIZATION: Inline caching for function calls
   CallSiteCache call_caches[256]; // Cache for OP_CALL_1_CACHED, etc.
@@ -406,11 +371,6 @@ void vm_array_push(VM *vm, ObjArray *array, VMValue value);
 
 // Object functions
 ObjObject *vm_allocate_object(VM *vm);
-
-// JIT Helper functions
-void jit_helper_call(VM *vm, int arg_count);
-VMValue jit_interpreter_call(VM *vm, ObjFunction *func, VMValue *args,
-                             int arg_count);
 
 #ifdef __cplusplus
 }
