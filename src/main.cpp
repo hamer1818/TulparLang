@@ -111,6 +111,58 @@ static void print_help() {
                   "More info: https://tulparlang.dev"));
 }
 
+// Returns true when the accumulated REPL buffer's brackets/parens/braces
+// are balanced and we aren't sitting inside an unterminated string or
+// block comment — i.e. the user has typed enough source to make a
+// well-formed input attempt. Used to decide between primary (`>>> `) and
+// continuation (`... `) prompts. String / line-comment / block-comment
+// state is tracked so braces inside them don't trick us into prompting
+// early. Tracking is approximate (we don't care about syntactic nesting,
+// only character-level matching) but that's fine for this UX shortcut —
+// the parser still has the final say on validity.
+static int repl_input_complete(const char *s) {
+  int paren = 0, brace = 0, bracket = 0;
+  int in_string = 0, in_line_comment = 0, in_block_comment = 0;
+  char string_quote = 0;
+
+  for (size_t i = 0; s[i]; i++) {
+    char c = s[i];
+    char nx = s[i + 1];
+
+    if (in_line_comment) {
+      if (c == '\n') in_line_comment = 0;
+      continue;
+    }
+    if (in_block_comment) {
+      if (c == '*' && nx == '/') {
+        in_block_comment = 0;
+        i++;
+      }
+      continue;
+    }
+    if (in_string) {
+      if (c == '\\' && nx) { i++; continue; }
+      if (c == string_quote) in_string = 0;
+      continue;
+    }
+
+    if (c == '/' && nx == '/') { in_line_comment = 1; i++; continue; }
+    if (c == '/' && nx == '*') { in_block_comment = 1; i++; continue; }
+    if (c == '"' || c == '\'') { in_string = 1; string_quote = c; continue; }
+
+    if (c == '(') paren++;
+    else if (c == ')') paren--;
+    else if (c == '{') brace++;
+    else if (c == '}') brace--;
+    else if (c == '[') bracket++;
+    else if (c == ']') bracket--;
+  }
+
+  if (paren > 0 || brace > 0 || bracket > 0) return 0;
+  if (in_string || in_block_comment) return 0;
+  return 1;
+}
+
 // REPL mode
 static void run_repl() {
   printf("TulparLang REPL (Interactive Mode)\n");
@@ -120,8 +172,39 @@ static void run_repl() {
   Interpreter *interp = interpreter_create();
   char line[4096];
 
+  // Accumulator for multi-line input. Most interactive sessions stay
+  // tiny, but loops/function bodies/JSON literals do span lines. 64 KB
+  // is plenty for any reasonable typed input; on overflow we reset and
+  // surface a clear message rather than silently truncating.
+  size_t buf_cap = 65536;
+  char *buf = static_cast<char *>(malloc(buf_cap));
+  if (!buf) {
+    printf("error: REPL buffer allocation failed\n");
+    interpreter_free(interp);
+    return;
+  }
+  buf[0] = '\0';
+  size_t buf_len = 0;
+  int continuation = 0;
+
+  // ASTs the REPL has parsed and handed to the interpreter so far. We
+  // CANNOT free them iteration-by-iteration: `interpreter_register_
+  // function` (in interpreter.cpp) stores the AST_FUNCTION_DECL node
+  // pointer raw — `func->node = node`, no deep-copy — and a later
+  // `square(7)` call dereferences `func->node->parameters` /
+  // `func->node->body`. Freeing the AST per iteration leaves dangling
+  // pointers in the function table and the next call segfaults. Same
+  // applies to AST_TYPE_DECL (type registry holds pointers into AST
+  // field-default subtrees). We hold every parsed AST until REPL exit
+  // and free them in one pass at the end. Memory leak per input is
+  // bounded and short-lived (single interactive session).
+  size_t ast_cap = 64;
+  size_t ast_count = 0;
+  ASTNode_C **kept_asts =
+      static_cast<ASTNode_C **>(malloc(sizeof(ASTNode_C *) * ast_cap));
+
   while (1) {
-    printf(">>> ");
+    printf(continuation ? "... " : ">>> ");
     fflush(stdout);
 
     if (!fgets(line, sizeof(line), stdin)) {
@@ -132,31 +215,84 @@ static void run_repl() {
       continue;
     }
 
-    // Remove newline
-    size_t len = strlen(line);
-    if (len > 0 && line[len - 1] == '\n') {
-      line[len - 1] = '\0';
-      len--;
+    size_t line_len = strlen(line);
+
+    // First-line meta-commands. We only intercept `exit`/`quit`/`help`/
+    // `clear` on a fresh prompt; once a multi-line input is in progress
+    // any line goes into the buffer verbatim (so `exit` inside a string
+    // literal isn't hijacked).
+    if (!continuation) {
+      char trimmed[sizeof(line)];
+      memcpy(trimmed, line, line_len + 1);
+      size_t tlen = line_len;
+      if (tlen > 0 && trimmed[tlen - 1] == '\n') {
+        trimmed[tlen - 1] = '\0';
+        tlen--;
+      }
+
+      if (tlen == 0) continue;
+      if (strcmp(trimmed, "exit") == 0 || strcmp(trimmed, "quit") == 0) break;
+      if (strcmp(trimmed, "help") == 0) {
+        printf("Commands:\n");
+        printf("  exit, quit - Exit REPL\n");
+        printf("  help       - Show this help\n");
+        printf("  clear      - Clear screen\n");
+        printf("  Multi-line: '{', '(', '[' open a continuation prompt ('... ')\n");
+        continue;
+      }
+      if (strcmp(trimmed, "clear") == 0) {
+        int clear_status = system("clear");
+        (void)clear_status;
+        continue;
+      }
+    } else {
+      // Continuation mode escape hatch: a literal blank line aborts the
+      // in-progress multi-line buffer instead of forcing the user to
+      // close every brace they've opened by mistake.
+      int only_ws = 1;
+      for (size_t i = 0; line[i]; i++) {
+        if (line[i] != ' ' && line[i] != '\t' && line[i] != '\r' &&
+            line[i] != '\n') {
+          only_ws = 0;
+          break;
+        }
+      }
+      if (only_ws) {
+        buf_len = 0;
+        buf[0] = '\0';
+        continuation = 0;
+        continue;
+      }
     }
 
-    // Skip empty lines
-    if (len == 0)
+    // Append (with newline preserved so multi-line source-location
+    // diagnostics report the right line number).
+    if (buf_len + line_len + 1 >= buf_cap) {
+      printf("error: input too long, resetting REPL buffer\n");
+      buf_len = 0;
+      buf[0] = '\0';
+      continuation = 0;
       continue;
+    }
+    memcpy(buf + buf_len, line, line_len);
+    buf_len += line_len;
+    buf[buf_len] = '\0';
 
-    // Handle commands
-    if (strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0) {
-      break;
-    }
-    if (strcmp(line, "help") == 0) {
-      printf("Commands:\n");
-      printf("  exit, quit - Exit REPL\n");
-      printf("  help       - Show this help\n");
-      printf("  clear      - Clear screen\n");
+    // Need more input?
+    if (!repl_input_complete(buf)) {
+      continuation = 1;
       continue;
     }
-    if (strcmp(line, "clear") == 0) {
-      int clear_status = system("clear");
-      (void)clear_status;
+
+    // Trim trailing whitespace before the terminator check below.
+    while (buf_len > 0 &&
+           (buf[buf_len - 1] == '\n' || buf[buf_len - 1] == '\r' ||
+            buf[buf_len - 1] == ' ' || buf[buf_len - 1] == '\t')) {
+      buf_len--;
+      buf[buf_len] = '\0';
+    }
+    if (buf_len == 0) {
+      continuation = 0;
       continue;
     }
 
@@ -165,19 +301,15 @@ static void run_repl() {
     // line is friction users don't expect (Python/Node REPLs don't ask
     // for one). If the input doesn't already end with a statement
     // terminator (`;`) or block closer (`}`), append `;` before lexing.
-    // Block-headed forms like `if (...) { ... }` still parse because
-    // they end with `}`; we leave those alone.
-    if (len > 0 && len + 1 < sizeof(line)) {
-      char last = line[len - 1];
-      if (last != ';' && last != '}') {
-        line[len] = ';';
-        line[len + 1] = '\0';
-        len++;
-      }
+    char last = buf[buf_len - 1];
+    if (last != ';' && last != '}' && buf_len + 1 < buf_cap) {
+      buf[buf_len] = ';';
+      buf[buf_len + 1] = '\0';
+      buf_len++;
     }
 
     // Execute code
-    Lexer *lexer = lexer_create(line);
+    Lexer *lexer = lexer_create(buf);
     int token_capacity = 100;
     int token_count = 0;
     Token **tokens = static_cast<Token **>(malloc(sizeof(Token *) * token_capacity));
@@ -223,16 +355,41 @@ static void run_repl() {
       }
     }
 
-    ast_node_free(ast);
+    // See note above: keep the AST alive until REPL exit. ast can be
+    // null when parsing failed — only retain successful parses.
+    if (ast) {
+      if (ast_count >= ast_cap) {
+        ast_cap *= 2;
+        kept_asts = static_cast<ASTNode_C **>(
+            realloc(kept_asts, sizeof(ASTNode_C *) * ast_cap));
+      }
+      kept_asts[ast_count++] = ast;
+    }
     parser_free(parser);
 
     for (int i = 0; i < token_count; i++) {
       token_free(tokens[i]);
     }
     free(tokens);
+
+    // Done with this input — reset the multi-line accumulator so the
+    // next prompt is the primary one again.
+    buf_len = 0;
+    buf[0] = '\0';
+    continuation = 0;
   }
 
+  // Tear down everything that holds AST pointers BEFORE freeing the
+  // ASTs themselves. interpreter_free walks the function/type tables
+  // (which only own copies of names, not the AST) so it doesn't touch
+  // the kept_asts memory; freeing the interpreter first means any code
+  // path it invokes during teardown can't see released AST nodes.
   interpreter_free(interp);
+  for (size_t i = 0; i < ast_count; i++) {
+    ast_node_free(kept_asts[i]);
+  }
+  free(kept_asts);
+  free(buf);
   printf("Goodbye!\n");
 }
 
