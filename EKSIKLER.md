@@ -544,14 +544,14 @@ ediyordu; fib'de tahmin tutarlı.
 | — | x64 JIT sunset | ✅ RESOLVED (2026-05-04; PR #31, −2162 satır) |
 | — | typeinfer build/run pre-pass | ✅ RESOLVED (2026-05-05; PR #32, `[typecheck]` uyarıları otomatik) |
 | — | Yerleşik fonksiyon imza kataloğu | ✅ RESOLVED (2026-05-05; PR #33, 50+ builtin) |
-| 48 | VM string concat fn-local'de `0` döndürüyor (AOT doğru) | 🟡 OPEN (path divergansı) |
-| 49 | Modül namespace'leri yok (`import ... as alias`) | 🟡 OPEN (DX iyileştirmesi) |
+| 48 | VM string concat fn-local'de `0` döndürüyor (AOT doğru) | ✅ RESOLVED (2026-05-05; OP_LOAD_ADD_STORE'a string dalı) |
+| 49 | Modül namespace'leri yok (`import ... as alias`) | ✅ RESOLVED (2026-05-05; PR #35) |
 | 50 | typeinfer `len`/`abs` polimorfizmi wildcard kullanıyor | 🟡 OPEN (false negative) |
 
 ### Kalan iş kalemleri (sonraki etap)
 
-- 🟡 **48. VM string concat fn-local'de `0` döndürüyor** — `func sb(): int { string s = "hello"; s = s + " world"; return len(s); }` AOT'ta `11` (doğru), VM'de `0` (yanlış). EKSIKLER#16'nın 2026-04-28 fix'i sadece AOT yolunu (typed codegen) kapsıyor; VM compiler'ında fn-local string yeniden atama hâlâ değer kaybediyor olmalı. Düşük öncelik (kullanıcılar default execution AOT'ta, VM yolu fallback) ama kalan tek bilinen path-divergence.
-- 🟡 **49. Modül namespace'leri** — `import "math" as m; m::abs(x)` ya da `m.abs(x)` sözdizimi yok. Şu an `import "math";` çağrısı `math.tpr`'deki **tüm fonksiyonları global namespace'e** doluyor; iki kütüphanenin aynı isimli fonksiyonları çakışıyor (örneğin `socket.tpr` ve `wings.tpr` her ikisi de `route`/`listen` türevleri ihraç ederse). Çözüm: parser'da `import ... as alias`, AST'te ModuleImport node'unda alias alanı, AOT/VM'de fonksiyon isimleri alias prefix'i ile mangle. Python kolaylığını korumak için alias opsiyonel: `import "x"` ile alias yoksa eski davranış sürer.
+- ✅ **48. VM string concat fn-local'de `0` döndürüyor** — RESOLVED (2026-05-05). Kök neden: `s = s + " world"` AST_ASSIGNMENT'ın `var = var + expr` superinstruction optimizasyonuna düşüyordu (`OP_LOAD_ADD_STORE`); fast path int-only, fallback `BINARY_OP(+)` ise string pair'i bilmiyor → default arm `VM_FLOAT(0.0)` üretip user'ın string atamasını sessizce siliyordu. [src/vm/vm.cpp:OP_LOAD_ADD_STORE](src/vm/vm.cpp) içinde IS_STRING&IS_STRING dalı eklendi (OP_ADD'in concat path'inin paralel kopyası, fakat in-place append yerine her zaman fresh buffer çünkü fn-local sum başka değişkenden alias'lanabilir). [tests/strings.test.tpr](tests/strings.test.tpr) iki yeni regresyon koruyucu ekledi (`fn_local_string_concat_typed` + `fn_local_string_concat_let`).
+- ✅ **49. Modül namespace'leri** — RESOLVED (2026-05-05; PR #35). `import "name" as alias;` sözdizimi parser'a eklendi; `apply_import_alias` helper'ı modülün top-level fonksiyonlarını `<alias>__<name>` ile mangle ediyor, modül-içi cagrilar da aynı anda yeniden yazılıyor. AOT (`AST_IMPORT` codegen) ve VM (`OP_IMPORT` runtime) ortak helper'ı çağırıyor. `as` bağlamsal identifier (rezerv kelime değil); `let as = 42` hala çalışıyor. Phase 2 (Python-style `m.func()` syntax) sırada.
 - 🟡 **50. typeinfer `len`/`abs` polimorfizmi wildcard** — PR #33 katalog wildcard kullanıyor (`len(unknown)`), bu `len(42)` gibi açık hataları yakalamıyor. İlerideki çözüm: `TYPE_COLLECTION` pseudo-tipi veya çoklu-imza kaydı (`len(string)->int` + `len(array)->int`). Düşük öncelik — gerçek hayatta nadir.
 
 ### 2026-05 etabı

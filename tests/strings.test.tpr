@@ -105,6 +105,25 @@ func toString_basic() {
     assert_eq_str(toString(-1), "-1");
 }
 
+// EKSIKLER #48 regression — string-typed local reassigned via `s = s + ...`
+// used to silently land on the int-only OP_LOAD_ADD_STORE fast path,
+// destroying the value (length(s) returned 0). Cover both explicit `string`
+// and inferred `let` declarations so the fix sticks.
+func fn_local_string_concat_typed() {
+    string s = "hello";
+    s = s + " world";
+    assert_eq_int(length(s), 11);
+    assert_eq_str(s, "hello world");
+}
+
+func fn_local_string_concat_let() {
+    let s = "abc";
+    s = s + "de";
+    s = s + "f";
+    assert_eq_int(length(s), 6);
+    assert_eq_str(s, "abcdef");
+}
+
 // ----- Run all tests -------------------------------------------------------
 
 print("=== Tulpar String Builtin Tests ===");
@@ -122,5 +141,7 @@ test("repeat", "repeat_basic");
 test("trim", "trim_basic");
 test("toInt / toFloat", "toInt_toFloat");
 test("toString", "toString_basic");
+test("fn-local string concat (typed)", "fn_local_string_concat_typed");
+test("fn-local string concat (let)", "fn_local_string_concat_let");
 
 test_summary();
