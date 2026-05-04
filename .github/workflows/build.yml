@@ -9,13 +9,16 @@ on:
 permissions:
   contents: write
 
-# All third-party actions below are pinned to versions whose handlers
-# ship Node 24 natively (the @v5 line for actions/*; softprops/action-gh-release
-# @v2.2.x onwards). The previous workflow set
-# `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` to coerce v4 actions onto the
-# Node 24 runtime, which surfaced as deprecation warnings AND broke
-# actions/checkout's git invocation with exit 128 (the action's bundled
-# JS expected Node 20 ABI). Bumping resolves both.
+# `actions/*` are pinned at @v5 (latest major), which still ships
+# bundled Node 20 handlers — GitHub flags this as a deprecation
+# warning. Setting FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 opts in to the
+# Node 24 runtime that becomes default on 2026-06-02 anyway, which is
+# what the warning explicitly recommends. The previous "git exit 128"
+# regression in `Post Run actions/checkout` was unrelated to FORCE —
+# it came from a stray submodule pointer at `wasm/emsdk` with no
+# `.gitmodules` entry; removing that index entry fixed cleanup.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   build-linux:

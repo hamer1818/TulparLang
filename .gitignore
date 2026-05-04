@@ -113,3 +113,6 @@ test_results.txt
 # examples/*.tpr - Example files
 # cmake/*.cmake - CMake modules
 # src/embedded_libs.h.in - Template file
+# wasm/emsdk is a local Emscripten SDK install pulled by wasm/build_wasm.sh
+# (formerly tracked as a stray submodule pointer with no .gitmodules — broke CI checkout cleanup)
+wasm/emsdk/
