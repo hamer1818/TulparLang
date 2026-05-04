@@ -76,11 +76,11 @@ Pipeline, top to bottom:
 1. **Lexer** (`src/lexer/`) — tokenizes UTF-8 source into `Token*` arrays.
 2. **Parser** (`src/parser/`) — hand-written recursive descent, produces AST nodes defined in `parser/ast_nodes.hpp`. A visitor interface lives in `ast_visitor.hpp`.
 3. **Type inference** (`src/typeinfer/`) — runs over the AST before codegen.
-4. **Backends** — three of them share the same AST:
+4. **Backends** — two of them share the same AST:
    - **AOT / LLVM** (`src/aot/`, primary): `aot_pipeline.cpp` is the entry point (`aot_compile`, `aot_compile_and_run`, `aot_compile_and_run_silent`). Actual IR generation is split across `llvm_backend.cpp`, `llvm_types.cpp`, `llvm_values.cpp` — that's the full list in `AOT_SOURCES` (CMakeLists.txt). Architecture-specific LLVM components are selected in `CMakeLists.txt` (`x86*` vs `aarch64*`).
    - **VM** (`src/vm/`): `compiler.cpp` lowers AST → bytecode (`bytecode.cpp`), `vm.cpp` executes it, `runtime_bindings.cpp` implements built-ins (print, sockets, db, threads, etc.). This is also the path AOT'd binaries use at runtime, and the path the REPL uses.
-   - **JIT** (`src/jit/`): x64 direct emitter. Labelled legacy in `CMakeLists.txt` but still linked into `tulpar` and the runtime archive.
    - **Tree-walk interpreter** (formerly `src/interpreter/`) — sunset on 2026-05-05. The REPL was the last consumer; it now compiles each input through the VM compiler and runs it on a persistent VM. The `--legacy` CLI flag is gone.
+   - **x64 JIT** (formerly `src/jit/`) — sunset on 2026-05-05. Threshold-triggered tier-1 native code emitter (~2.2k satır) that compiled hot VM functions to x64. ARM64 had it disabled; production AOT path never invoked it; measured perf delta vs pure VM was within noise (<5% on fib(28)). Removed alongside the bytecode hooks (`ObjFunction.jit_code`, `CallSiteCache.cached_jit`, `LoopTrace`, `jit_helper_call`, `jit_interpreter_call`).
 5. **Runtime support** (`runtime/`) — `cJSON`, `tulpar_arc` (automatic reference counting for heap values), `tulpar_native` (FFI).
 
 Auxiliary subsystems share the same AST and live alongside the backends:

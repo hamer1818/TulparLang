@@ -179,17 +179,6 @@ set(RUNTIME_SOURCES
     runtime/tulpar_native.h
 )
 
-# JIT (legacy x64 direct emitter; not invoked by the runtime archive but
-# linked into `tulpar` so a future fallback path stays compilable).
-set(LEGACY_SOURCES
-    src/jit/jit.hpp
-    src/jit/jit_memory.cpp
-    src/jit/x64_emit.hpp
-    src/jit/x64_emit.cpp
-    src/jit/jit_compiler.cpp
-    src/jit/jit_optimize.cpp
-)
-
 set(MAIN_SOURCES
     src/main.cpp
 )
@@ -253,7 +242,6 @@ set(ALL_SOURCES
     ${AOT_SOURCES}
     ${TYPEINFER_SOURCES}
     ${RUNTIME_SOURCES}
-    ${LEGACY_SOURCES}
     ${LSP_SOURCES}
     ${FMT_SOURCES}
     ${PKG_SOURCES}
@@ -322,10 +310,6 @@ add_library(tulpar_runtime STATIC
     runtime/cJSON.c
     src/lexer/lexer.cpp
     src/parser/parser.cpp
-    src/jit/jit_memory.cpp
-    src/jit/x64_emit.cpp
-    src/jit/jit_compiler.cpp
-    src/jit/jit_optimize.cpp
     lib/sqlite3/sqlite3.c
 )
 target_include_directories(tulpar_runtime PRIVATE ${PROJECT_SOURCE_DIR}/src)
