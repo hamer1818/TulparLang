@@ -26,6 +26,7 @@
 #include "fmt/formatter.hpp"
 #include "pkg/pkg_cli.hpp"
 #include "cli/line_edit.hpp"
+#include "cli/typecheck_cmd.hpp"
 #include "cli/update_cmd.hpp"
 #include "common/version.hpp"
 #include <ctime>
@@ -84,6 +85,9 @@ static void print_help() {
   std::printf("  tulpar fmt <source.tpr>          %s\n",
               tulpar::i18n::tr_en("- Kaynak kodu formatla",
                                   "- Format source code"));
+  std::printf("  tulpar typecheck <source.tpr>    %s\n",
+              tulpar::i18n::tr_en("- Statik tip kontrolu (deneysel)",
+                                  "- Static type check (experimental)"));
   std::printf("  tulpar pkg <komut>               %s\n",
               tulpar::i18n::tr_en("- Paket yoneticisi (init/install/...)",
                                   "- Package manager (init/install/...)"));
@@ -474,6 +478,13 @@ int main(int argc, char **argv) {
   // reasoning — no overlap with compile / run / build paths.
   if (argc >= 2 && std::strcmp(argv[1], "pkg") == 0) {
     return tulpar::pkg_cli_main(argc, argv);
+  }
+
+  // `tulpar typecheck <file>` runs the static type-inference pass and
+  // reports issues. Build/run pipelines do not invoke it yet; surfacing
+  // it as a tool so authors and CI can opt in while we shape the rules.
+  if (argc >= 2 && std::strcmp(argv[1], "typecheck") == 0) {
+    return tulpar::typecheck_cmd_main(argc, argv);
   }
 
   // `tulpar version` / `tulpar --version` / `-v` — print and exit. Kept

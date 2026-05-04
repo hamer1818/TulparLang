@@ -219,12 +219,15 @@ set(PKG_SOURCES
     src/pkg/pkg_cli.hpp
 )
 
-# CLI subcommands (`tulpar update`, version, ...) and REPL line editor
+# CLI subcommands (`tulpar update`, `tulpar typecheck`, version, ...) and
+# REPL line editor.
 set(CLI_SOURCES
     src/cli/update_cmd.cpp
     src/cli/update_cmd.hpp
     src/cli/line_edit.cpp
     src/cli/line_edit.hpp
+    src/cli/typecheck_cmd.cpp
+    src/cli/typecheck_cmd.hpp
 )
 
 set(SQLITE_SOURCES

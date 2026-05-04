@@ -201,7 +201,18 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     }
     if (decl->initializer) {
       DataType init_type = infer_expr(ctx, decl->initializer.get());
-      if (declared_type != TYPE_VOID && !types_compatible(declared_type, init_type)) {
+      // Skip the check when either side is unknown: TYPE_VOID often means
+      // "expression returns from a built-in we haven't catalogued";
+      // TYPE_CUSTOM means a user-declared struct whose field set typeinfer
+      // doesn't track here, and TYPE_UNKNOWN is the explicit `var x = …`
+      // / `degisken x = …` form. Conservative on purpose — a future PR
+      // can tighten once the builtin catalogue and custom-type tracking
+      // are richer.
+      auto is_unknown = [](DataType t) {
+        return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM;
+      };
+      if (!is_unknown(declared_type) && !is_unknown(init_type) &&
+          !types_compatible(declared_type, init_type)) {
         report_error(ctx, "Type mismatch in declaration of '%s': expected %s, got %s at line %d",
                      decl->name.c_str(), datatype_to_string(declared_type),
                      datatype_to_string(init_type), decl->loc.line);
@@ -214,7 +225,12 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
   if (const auto *assign = as_node<Assignment>(stmt)) {
     DataType var_type = lookup_symbol_type(ctx, assign->name);
     DataType expr_type = infer_expr(ctx, assign->value.get());
-    if (var_type != TYPE_VOID && !types_compatible(var_type, expr_type)) {
+    // See VariableDecl note above: don't flag against unknown-typed sides.
+    auto is_unknown = [](DataType t) {
+      return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM;
+    };
+    if (!is_unknown(var_type) && !is_unknown(expr_type) &&
+        !types_compatible(var_type, expr_type)) {
       report_error(ctx, "Type mismatch in assignment to '%s': expected %s, got %s at line %d",
                    assign->name.c_str(), datatype_to_string(var_type),
                    datatype_to_string(expr_type), assign->loc.line);
@@ -225,7 +241,8 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
   if (const auto *ret = as_node<ReturnStatement>(stmt)) {
     if (ret->value) {
       DataType ret_type = infer_expr(ctx, ret->value.get());
-      if (ctx->current_return_type != TYPE_VOID &&
+      // Don't flag against unknown-typed return expressions.
+      if (ctx->current_return_type != TYPE_VOID && ret_type != TYPE_VOID &&
           !types_compatible(ctx->current_return_type, ret_type)) {
         report_error(ctx,
                      "Return type mismatch in function '%s': expected %s, got %s at line %d",
@@ -237,9 +254,18 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     return;
   }
 
+  // For if/while/for-condition checks, treat TYPE_VOID as "unknown — we
+  // don't have a return-type entry for whatever expression produced it"
+  // and skip the check rather than emit a false positive. Conservative on
+  // purpose; we'd rather miss a real bug than annoy users until typeinfer's
+  // builtin catalogue is exhaustive.
+  auto cond_acceptable = [](DataType t) {
+    return t == TYPE_BOOL || t == TYPE_INT || t == TYPE_VOID;
+  };
+
   if (const auto *if_stmt = as_node<IfStatement>(stmt)) {
     DataType cond_type = infer_expr(ctx, if_stmt->condition.get());
-    if (cond_type != TYPE_BOOL && cond_type != TYPE_INT) {
+    if (!cond_acceptable(cond_type)) {
       report_error(ctx, "Condition must be boolean or integer at line %d",
                    if_stmt->loc.line);
     }
@@ -252,7 +278,7 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
 
   if (const auto *while_stmt = as_node<WhileLoop>(stmt)) {
     DataType cond_type = infer_expr(ctx, while_stmt->condition.get());
-    if (cond_type != TYPE_BOOL && cond_type != TYPE_INT) {
+    if (!cond_acceptable(cond_type)) {
       report_error(ctx, "While condition must be boolean or integer at line %d",
                    while_stmt->loc.line);
     }
@@ -264,7 +290,7 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     infer_stmt(ctx, for_stmt->init.get());
     if (for_stmt->condition) {
       DataType cond_type = infer_expr(ctx, for_stmt->condition.get());
-      if (cond_type != TYPE_BOOL && cond_type != TYPE_INT) {
+      if (!cond_acceptable(cond_type)) {
         report_error(ctx, "For condition must be boolean or integer at line %d",
                      for_stmt->loc.line);
       }
