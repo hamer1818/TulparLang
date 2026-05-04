@@ -506,9 +506,44 @@ std::unique_ptr<ASTNode> Parser::parse_for_loop() {
     }
 
     expect(TOKEN_RPAREN, "Expected ')' after for clauses");
-    
+
+    // Heuristic: catch the swapped-clauses mistake where a user writes
+    //
+    //     for (int i = 0; i++; i < 10) { ... }
+    //
+    // instead of `for (init; cond; update)`. With the slots swapped the
+    // condition is a postfix `++`/`--` which evaluates to the OLD value
+    // (0 the first iteration → falsy), the loop body never runs, and
+    // the user sees an empty prompt with no error. We emit a non-fatal
+    // hint so the failure mode is at least visible. Only fires on the
+    // exact suspicious shape (mutation in cond + comparison in update),
+    // so legitimate uses like `for (i; mutate(); i = i+1)` aren't
+    // flagged.
+    if (condition && increment) {
+        bool cond_is_mutation =
+            std::holds_alternative<IncrementOp>(condition->value) ||
+            std::holds_alternative<DecrementOp>(condition->value);
+        bool upd_is_comparison = false;
+        if (std::holds_alternative<BinaryOp>(increment->value)) {
+            const auto& bo = std::get<BinaryOp>(increment->value);
+            upd_is_comparison =
+                bo.op == TOKEN_LESS || bo.op == TOKEN_GREATER ||
+                bo.op == TOKEN_LESS_EQUAL || bo.op == TOKEN_GREATER_EQUAL ||
+                bo.op == TOKEN_EQUAL || bo.op == TOKEN_NOT_EQUAL;
+        }
+        if (cond_is_mutation && upd_is_comparison) {
+            std::fprintf(stderr, "%s: %s\n",
+                         tulpar::i18n::tr_en("uyari", "warning"),
+                         tulpar::i18n::tr_en(
+                             "for-dongusu kosulu ve guncellemesi yer degistirmis "
+                             "gorunuyor — beklenen: for (init; kosul; guncelleme)",
+                             "for-loop condition and update look swapped — "
+                             "expected: for (init; condition; update)"));
+        }
+    }
+
     auto body = parse_statement();
-    
+
     return std::make_unique<ASTNode>(
         ForLoop(std::move(init), std::move(condition),
                 std::move(increment), std::move(body), loc)
