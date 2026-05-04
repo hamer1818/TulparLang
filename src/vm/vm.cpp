@@ -3351,7 +3351,12 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
       }
 
       TARGET(OP_LOAD_ADD_STORE) : {
-        // Pattern: sum = sum + x (x is on stack, sum is local)
+        // Pattern: sum = sum + x (x is on stack, sum is local).
+        // Compiler emits this for any `var = var + expr` where var is a
+        // local — including the string-typed case `s = s + "..."`. The
+        // string branch below is required, otherwise BINARY_OP's default
+        // arm produces VM_FLOAT(0.0) and the user's string assignment is
+        // silently destroyed (EKSIKLER #48).
         uint16_t slot = READ_SHORT();
         VMValue x = vm_pop(vm);
         VMValue sum = frame->slots[slot];
@@ -3360,8 +3365,27 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           VMValue result = VM_INT(AS_INT(sum) + AS_INT(x));
           frame->slots[slot] = result;
           vm_push(vm, result);
+        } else if (IS_STRING(sum) && IS_STRING(x)) {
+          // Mirror OP_ADD's concat path. We always allocate a fresh
+          // buffer here rather than the in-place append OP_ADD attempts,
+          // because the source `sum` is reachable from `frame->slots[slot]`
+          // and from any other alias (e.g. a variable assigned `let t = s`
+          // before this op); mutating it would surprise those aliases.
+          ObjString *sa = AS_STRING(sum);
+          ObjString *sb = AS_STRING(x);
+          int new_len = sa->length + sb->length;
+          int new_cap = new_len < 64 ? 64 : new_len * 2;
+          ObjString *result = vm_alloc_string_buffer(vm, new_len, new_cap);
+          memcpy(result->chars, sa->chars, sa->length);
+          memcpy(result->chars + sa->length, sb->chars, sb->length);
+          result->chars[new_len] = 0;
+          result->hash = hash_string(result->chars, new_len);
+          VMValue rv = VM_OBJ(result);
+          frame->slots[slot] = rv;
+          vm_push(vm, rv);
         } else {
-          // Fallback
+          // Numeric fallback (int/float mixes). Strings already handled
+          // above, so BINARY_OP's int/float-only switch is safe here.
           vm_push(vm, sum);
           vm_push(vm, x);
           BINARY_OP(+);
