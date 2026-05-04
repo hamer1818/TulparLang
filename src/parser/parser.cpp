@@ -1280,6 +1280,15 @@ void parser_free(Parser_C *parser) {
 ASTNode_C *parser_parse(Parser_C *parser) {
     if (!parser || !parser->tokens || parser->token_count <= 0) return nullptr;
 
+    // Reset the per-parse error counter. Callers (REPL, LSP, embedded
+    // re-parses) invoke parser_parse repeatedly without going through
+    // parser_set_source_context; without this reset a single failing
+    // parse would poison every subsequent call because the `g_parser_
+    // error_count > 0` guard below would short-circuit them all and
+    // silently return nullptr — i.e. the REPL would look like print()
+    // does nothing after the first syntax error.
+    g_parser_error_count = 0;
+
     std::vector<Token> token_vec;
     token_vec.reserve(parser->token_count);
     for (int i = 0; i < parser->token_count; ++i) {

@@ -160,6 +160,22 @@ static void run_repl() {
       continue;
     }
 
+    // REPL convenience: forgiving terminator. Tulpar's grammar requires
+    // ';' after expression statements, but typing it on every interactive
+    // line is friction users don't expect (Python/Node REPLs don't ask
+    // for one). If the input doesn't already end with a statement
+    // terminator (`;`) or block closer (`}`), append `;` before lexing.
+    // Block-headed forms like `if (...) { ... }` still parse because
+    // they end with `}`; we leave those alone.
+    if (len > 0 && len + 1 < sizeof(line)) {
+      char last = line[len - 1];
+      if (last != ';' && last != '}') {
+        line[len] = ';';
+        line[len + 1] = '\0';
+        len++;
+      }
+    }
+
     // Execute code
     Lexer *lexer = lexer_create(line);
     int token_capacity = 100;
