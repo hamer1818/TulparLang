@@ -1,5 +1,6 @@
 #include "pkg_cli.hpp"
 #include "manifest.hpp"
+#include "sha256.hpp"
 #include "../common/http_fetch.hpp"
 
 #include <algorithm>
@@ -8,6 +9,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <sstream>
 #include <string>
 #include <sys/stat.h>
 
@@ -162,9 +165,79 @@ int cmd_install() {
     }
 
     // Lockfile assembly. Each registry / url install records the
-    // resolved URL so re-installing the same manifest is byte-stable
-    // even if the registry's `latest` pointer moves later.
-    std::vector<std::pair<std::string, std::string>> lock_entries;
+    // resolved URL + a SHA-256 of the downloaded body so re-installing
+    // the same manifest is byte-stable even if the registry's `latest`
+    // pointer moves later, AND so we can detect tampered registries
+    // serving different content under the same URL.
+    struct LockEntry { std::string name, url, sha256; };
+    std::vector<LockEntry> lock_entries;
+
+    // Read the existing lockfile if present so subsequent installs can
+    // skip the network round-trip when `tulpar_modules/<name>/<name>.tpr`
+    // already exists and matches the recorded sha256. Format is
+    //
+    //   [resolved]
+    //   <name> = "<url>"
+    //   [checksums]
+    //   <name> = "<sha256-hex>"
+    //
+    // Older clients without the `[checksums]` table just see a simple
+    // url map and ignore the new section, so the format is backward
+    // compatible.
+    std::map<std::string, std::string> prev_resolved;
+    std::map<std::string, std::string> prev_sha;
+    if (file_exists(kLockFile)) {
+        std::ifstream lf(kLockFile);
+        std::string section;
+        for (std::string line; std::getline(lf, line);) {
+            // strip leading whitespace + trailing CR/whitespace
+            size_t lo = line.find_first_not_of(" \t");
+            size_t hi = line.find_last_not_of(" \t\r");
+            if (lo == std::string::npos) continue;
+            std::string l = line.substr(lo, hi - lo + 1);
+            if (l.empty() || l[0] == '#') continue;
+            if (l.front() == '[' && l.back() == ']') {
+                section = l.substr(1, l.size() - 2);
+                continue;
+            }
+            size_t eq = l.find('=');
+            if (eq == std::string::npos) continue;
+            std::string k = l.substr(0, eq);
+            std::string v = l.substr(eq + 1);
+            // trim k
+            size_t kend = k.find_last_not_of(" \t");
+            if (kend != std::string::npos) k = k.substr(0, kend + 1);
+            // trim v + strip surrounding quotes
+            size_t vlo = v.find_first_not_of(" \t");
+            size_t vhi = v.find_last_not_of(" \t\r");
+            if (vlo == std::string::npos) continue;
+            v = v.substr(vlo, vhi - vlo + 1);
+            if (v.size() >= 2 && v.front() == '"' && v.back() == '"') {
+                v = v.substr(1, v.size() - 2);
+            }
+            if (section == "resolved") prev_resolved[k] = v;
+            else if (section == "checksums") prev_sha[k] = v;
+        }
+    }
+
+    // Common helper: returns true if the existing on-disk content for
+    // `<name>` matches the lockfile's recorded hash for `<name>`. When
+    // it does, we can skip the network fetch entirely — same behavior
+    // npm/cargo cache lookups offer.
+    auto local_matches_lock = [&](const std::string &name,
+                                  const std::string &expected_url) -> bool {
+        auto rit = prev_resolved.find(name);
+        auto sit = prev_sha.find(name);
+        if (rit == prev_resolved.end() || sit == prev_sha.end()) return false;
+        if (rit->second != expected_url) return false;
+        fs::path target = modules_dir / name / (name + ".tpr");
+        std::ifstream in(target, std::ios::binary);
+        if (!in) return false;
+        std::ostringstream buf;
+        buf << in.rdbuf();
+        std::string body = buf.str();
+        return tulpar::sha256_hex(body) == sit->second;
+    };
 
     int installed = 0;
     int skipped = 0;
@@ -175,6 +248,14 @@ int cmd_install() {
         // path for now. Real semver registry comes after TLS lands.
         if (spec.rfind("url:", 0) == 0) {
             std::string url = spec.substr(4);
+            if (local_matches_lock(name, url)) {
+                std::fprintf(stdout,
+                             "  = %s (cached, sha256 matches lockfile)\n",
+                             name.c_str());
+                lock_entries.push_back({name, url, prev_sha[name]});
+                installed++;
+                continue;
+            }
             std::string body, err;
             int status = 0;
             if (!tulpar::http_fetch_url(url, body, status, err)) {
@@ -185,6 +266,24 @@ int cmd_install() {
             if (status < 200 || status >= 300) {
                 std::fprintf(stderr, "tulpar pkg install: %s: HTTP %d from %s\n",
                              name.c_str(), status, url.c_str());
+                return 1;
+            }
+            std::string body_sha = tulpar::sha256_hex(body);
+            // Lockfile pin: when the lockfile already records this name
+            // at this URL with a different sha256, refuse to overwrite —
+            // the registry served different bytes under a previously
+            // pinned URL (potentially malicious). User can recover by
+            // editing tulpar.lock or removing the entry explicitly.
+            auto sit = prev_sha.find(name);
+            if (sit != prev_sha.end() && prev_resolved[name] == url &&
+                sit->second != body_sha) {
+                std::fprintf(stderr,
+                             "tulpar pkg install: %s@%s: lockfile sha256 "
+                             "mismatch (expected %s, got %s) — refusing to "
+                             "overwrite. Delete tulpar.lock or fix the "
+                             "registry URL.\n",
+                             name.c_str(), url.c_str(),
+                             sit->second.c_str(), body_sha.c_str());
                 return 1;
             }
             fs::path dest_dir = modules_dir / name;
@@ -199,10 +298,10 @@ int cmd_install() {
                 return 1;
             }
             out.write(body.data(), (std::streamsize)body.size());
-            std::fprintf(stdout, "  + %s -> %s (%zu bytes from %s)\n",
+            std::fprintf(stdout, "  + %s -> %s (%zu bytes from %s, sha256 %.12s...)\n",
                          name.c_str(), target.string().c_str(), body.size(),
-                         url.c_str());
-            lock_entries.push_back({name, url});
+                         url.c_str(), body_sha.c_str());
+            lock_entries.push_back({name, url, body_sha});
             installed++;
             continue;
         }
@@ -230,6 +329,15 @@ int cmd_install() {
             url += spec;
             url += ".tpr";
 
+            if (local_matches_lock(name, url)) {
+                std::fprintf(stdout,
+                             "  = %s@%s (cached, sha256 matches lockfile)\n",
+                             name.c_str(), spec.c_str());
+                lock_entries.push_back({name, url, prev_sha[name]});
+                installed++;
+                continue;
+            }
+
             std::string body, err;
             int status = 0;
             if (!tulpar::http_fetch_url(url, body, status, err)) {
@@ -243,6 +351,19 @@ int cmd_install() {
                 std::fprintf(stderr,
                              "tulpar pkg install: %s@%s: HTTP %d from %s\n",
                              name.c_str(), spec.c_str(), status, url.c_str());
+                return 1;
+            }
+            std::string body_sha = tulpar::sha256_hex(body);
+            auto sit = prev_sha.find(name);
+            if (sit != prev_sha.end() && prev_resolved[name] == url &&
+                sit->second != body_sha) {
+                std::fprintf(stderr,
+                             "tulpar pkg install: %s@%s: lockfile sha256 "
+                             "mismatch (expected %s, got %s) — refusing to "
+                             "overwrite. Delete tulpar.lock or fix the "
+                             "registry URL.\n",
+                             name.c_str(), spec.c_str(),
+                             sit->second.c_str(), body_sha.c_str());
                 return 1;
             }
             fs::path dest_dir = modules_dir / name;
@@ -260,10 +381,11 @@ int cmd_install() {
             }
             out.write(body.data(), (std::streamsize)body.size());
             std::fprintf(stdout,
-                         "  + %s@%s -> %s (%zu bytes from registry)\n",
+                         "  + %s@%s -> %s (%zu bytes from registry, sha256 %.12s...)\n",
                          name.c_str(), spec.c_str(),
-                         target.string().c_str(), body.size());
-            lock_entries.push_back({name, url});
+                         target.string().c_str(), body.size(),
+                         body_sha.c_str());
+            lock_entries.push_back({name, url, body_sha});
             installed++;
             continue;
         }
@@ -313,25 +435,51 @@ int cmd_install() {
                      copied == 1 ? "" : "s");
         // Lock entry for path: deps records the spec verbatim — the
         // resolution is just "look at the same directory next time",
-        // so the spec IS the lock.
-        lock_entries.push_back({name, spec});
+        // so the spec IS the lock. No sha256: local files can change
+        // freely, the lockfile-cache flow doesn't apply here.
+        lock_entries.push_back({name, spec, ""});
         installed++;
     }
 
-    // Write tulpar.lock — same TOML subset as the manifest, just one
-    // [resolved] table mapping `name = "fully-resolved-url-or-spec"`.
+    // Write tulpar.lock — backward-compatible TOML with two tables:
+    //   [resolved]   name = "<url-or-spec>"
+    //   [checksums]  name = "<sha256-hex>"
+    // Older clients only consume `[resolved]` and ignore the new
+    // section. Path deps don't have a sha256 (local files can change
+    // freely); their entry in `[checksums]` is omitted entirely.
     if (!lock_entries.empty()) {
-        std::string lock_body = "# tulpar.lock — auto-generated by `tulpar pkg install`.\n";
-        lock_body += "# DO NOT EDIT. Commit alongside tulpar.toml so re-installs are reproducible.\n\n";
-        lock_body += "[resolved]\n";
-        for (const auto &[k, v] : lock_entries) {
-            lock_body += k;
-            lock_body += " = \"";
+        auto escape = [](const std::string &v) {
+            std::string out;
+            out.reserve(v.size());
             for (char c : v) {
-                if (c == '\\' || c == '"') lock_body.push_back('\\');
-                lock_body.push_back(c);
+                if (c == '\\' || c == '"') out.push_back('\\');
+                out.push_back(c);
             }
+            return out;
+        };
+        std::string lock_body =
+            "# tulpar.lock — auto-generated by `tulpar pkg install`.\n"
+            "# DO NOT EDIT. Commit alongside tulpar.toml so re-installs are reproducible.\n\n"
+            "[resolved]\n";
+        for (const auto &e : lock_entries) {
+            lock_body += e.name;
+            lock_body += " = \"";
+            lock_body += escape(e.url);
             lock_body += "\"\n";
+        }
+        bool any_sha = false;
+        for (const auto &e : lock_entries) {
+            if (!e.sha256.empty()) { any_sha = true; break; }
+        }
+        if (any_sha) {
+            lock_body += "\n[checksums]\n";
+            for (const auto &e : lock_entries) {
+                if (e.sha256.empty()) continue;
+                lock_body += e.name;
+                lock_body += " = \"";
+                lock_body += escape(e.sha256);
+                lock_body += "\"\n";
+            }
         }
         std::ofstream lf(kLockFile, std::ios::binary | std::ios::trunc);
         if (lf) {

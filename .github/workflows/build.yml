@@ -58,7 +58,17 @@ jobs:
           chmod +x build.sh
           ./build.sh test
         timeout-minutes: 5
-      
+
+      # SHA-256 smoke test for the package-manager checksum helper.
+      # Compiles the helper standalone against FIPS 180-4 reference
+      # vectors. Cheap (~1s) and orthogonal to the main `tulpar` binary
+      # so a regression in this isolated unit fails fast.
+      - name: SHA-256 helper test
+        run: |
+          g++ -std=c++17 tests/sha256_smoke.cpp src/pkg/sha256.cpp \
+              -Isrc/pkg -o sha256_smoke
+          ./sha256_smoke
+
       - name: Prepare artifact
         run: |
           mkdir -p dist
