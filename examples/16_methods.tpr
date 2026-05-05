@@ -1,0 +1,25 @@
+// ============================================
+// METHOD-STYLE CALLS
+// ============================================
+// `obj.method(args)` Python-stil cagri formu. obj bir modul alias
+// degilse, derleyici cagriyi `method(obj, args...)` seklinde yeniden
+// yazar. Bu sayede serbest fonksiyonlar bir nesne uzerinde method
+// gibi cagrilabiliyor — class/struct gerektirmiyor.
+
+func greet(json self, str name): str {
+    return self["title"] + ": Merhaba " + name + "!";
+}
+
+func area(json rect): int {
+    return rect["w"] * rect["h"];
+}
+
+json speaker = { "title": "Tulpar" };
+print(speaker.greet("dunya"));   // Tulpar: Merhaba dunya!
+
+json box = { "w": 3, "h": 5 };
+print(box.area());                // 15
+
+// Free fonksiyon olarak ayni cagri da calisir — method form sadece
+// bir syntactic shortcut.
+print(greet(speaker, "Tulpar"));  // Tulpar: Merhaba Tulpar!

@@ -1,0 +1,9 @@
+// Expected: typeinfer should reject `len(int)` — len/length only
+// accepts collections (string, array). Recent typeinfer poly fix
+// (PR #38, EKSIKLER #50) added category checks for these builtins.
+//
+// Strict mode should turn this into exit 1 with a `[typecheck]` line
+// mentioning the receiver type.
+
+int n = len(42);
+print(n);

@@ -59,6 +59,15 @@ jobs:
           ./build.sh test
         timeout-minutes: 5
 
+      # typeinfer regression suite — drives `tulpar --strict <file>` over
+      # tests/typeinfer/{pass,fail}/*.tpr. The runner already builds the
+      # binary above; we just need to make the script executable.
+      - name: Run typeinfer strict-mode tests
+        run: |
+          chmod +x tests/typeinfer/run.sh
+          ./tests/typeinfer/run.sh
+        timeout-minutes: 2
+
       # SHA-256 smoke test for the package-manager checksum helper.
       # Compiles the helper standalone against FIPS 180-4 reference
       # vectors. Cheap (~1s) and orthogonal to the main `tulpar` binary

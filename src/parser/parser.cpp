@@ -313,25 +313,39 @@ std::unique_ptr<ASTNode> Parser::parse_statement() {
 
 std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
     SourceLocation loc(current().line(), current().column());
-    
+
+    // Capture custom-type identifier (`Point p;`) before parse_type
+    // consumes it. Builtin types like `int`/`str` come in as their own
+    // tokens, so this snapshot only matters for the TOKEN_IDENTIFIER
+    // path inside parse_type that returns TYPE_CUSTOM.
+    std::optional<std::string> custom_type_name;
+    if (check(TOKEN_IDENTIFIER)) {
+        custom_type_name = current().value();
+    }
+
     // Parse type
     DataType type = parse_type();
-    
+
+    // Only keep the captured name when the parser actually resolved
+    // to a custom type — otherwise `int x;` would store the spurious
+    // "int" identifier we never used.
+    if (type != TYPE_CUSTOM) custom_type_name.reset();
+
     // Parse variable name
     Token name_tok = expect(TOKEN_IDENTIFIER, "Expected variable name");
     std::string name = name_tok.value();
-    
+
     // Optional initializer
     std::unique_ptr<ASTNode> initializer = nullptr;
     if (match(TOKEN_ASSIGN)) {
         initializer = parse_expression();
     }
-    
+
     expect(TOKEN_SEMICOLON, "Expected ';' after variable declaration");
-    
-    return std::make_unique<ASTNode>(
-        VariableDecl(name, type, std::move(initializer), loc)
-    );
+
+    VariableDecl vd(name, type, std::move(initializer), loc);
+    vd.custom_type = std::move(custom_type_name);
+    return std::make_unique<ASTNode>(std::move(vd));
 }
 
 std::unique_ptr<ASTNode> Parser::parse_function_decl() {
@@ -835,17 +849,28 @@ std::unique_ptr<ASTNode> Parser::parse_postfix(std::unique_ptr<ASTNode> expr) {
             SourceLocation dot_loc(current().line(), current().column());
             Token field = expect(TOKEN_IDENTIFIER, "Expected field name after '.'");
 
-            // Python-style qualified call: `m.func(args)` parses as a single
-            // `FunctionCall("m__func", args)`. Pairs with the import alias
-            // mangling — `import "math" as m;` renames the module's
-            // top-level functions to `m__<name>`, so the lookup hits cleanly.
-            // Trigger fires only when the chain head is an Identifier and
-            // the very next token is `(`; standard `obj.field` reads / writes
-            // (chains like `point.x`, `arr.length`, `a.b.c(x)`) keep falling
-            // through to the existing ArrayAccess desugar.
+            // Qualified call: `<head>.<name>(args)` parses as a single
+            // FunctionCall whose `name` is the unmangled member identifier
+            // and whose `receiver` field holds the head expression. Codegen
+            // (AOT + VM) is what picks the actual dispatch:
+            //
+            //   1. If `<head_name>__<name>` resolves as a function (i.e. the
+            //      head is a `import "..." as <head>` alias), call it as
+            //      a module-alias call (current behavior, unchanged).
+            //   2. Otherwise, call `<name>` with `<head>` prepended to the
+            //      argument list — Python/Go-style method dispatch on a
+            //      regular variable / json / struct.
+            //   3. Otherwise, "function not found" with the raw method
+            //      name.
+            //
+            // Trigger still fires only when the chain head is a bare
+            // Identifier and the next token is `(`. Field access
+            // (`p.x` without parens) keeps falling through to the
+            // ArrayAccess desugar below.
             if (check(TOKEN_LPAREN)) {
-                if (auto *id = std::get_if<Identifier>(&expr->value)) {
-                    std::string mangled = id->name + "__" + field.value();
+                if (std::get_if<Identifier>(&expr->value)) {
+                    std::string method_name = field.value();
+                    auto receiver_node = std::move(expr);
                     advance(); // consume '('
                     std::vector<std::unique_ptr<ASTNode>> arguments;
                     if (!check(TOKEN_RPAREN)) {
@@ -854,9 +879,9 @@ std::unique_ptr<ASTNode> Parser::parse_postfix(std::unique_ptr<ASTNode> expr) {
                         } while (match(TOKEN_COMMA));
                     }
                     expect(TOKEN_RPAREN, "Expected ')' after arguments");
-                    expr = std::make_unique<ASTNode>(
-                        FunctionCall(mangled, std::move(arguments), dot_loc)
-                    );
+                    FunctionCall fc(method_name, std::move(arguments), dot_loc);
+                    fc.receiver = std::move(receiver_node);
+                    expr = std::make_unique<ASTNode>(std::move(fc));
                     continue;
                 }
             }

@@ -1,7 +1,17 @@
 #include "compiler.hpp"
 #include "../common/localization.hpp"
+#include "../parser/import_alias.hpp"
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <unordered_set>
+
+// Function-name set used by resolve_qualified_call to decide alias-vs-method
+// dispatch when the parser saw `<recv>.<name>(args)`. Scoped to the lifetime
+// of a single compile() call (set/cleared in compile()). Declared up here so
+// compile_expression's AST_FUNCTION_CALL handler — which lives below — can
+// see it.
+static const std::unordered_set<std::string> *g_compile_func_names = nullptr;
 
 // Forward decl
 void compile_statement(Compiler *compiler, ASTNode_C *node);
@@ -484,6 +494,22 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
   }
 
   case AST_FUNCTION_CALL: {
+    // Method-call resolution: parser populated node->receiver for
+    // `<recv>.<name>(args)`. Pick alias (`<recv>__<name>`) vs method
+    // (`<name>(<recv>, args...)`) shape. Uses the function-name set
+    // built at compile() entry; no-op when the program has no qualified
+    // calls or the receiver is null.
+    if (node->receiver && g_compile_func_names) {
+      auto func_in_set = [](const char *raw, void *ctx) -> int {
+        const auto *names =
+            static_cast<const std::unordered_set<std::string> *>(ctx);
+        return names && names->count(raw) ? 1 : 0;
+      };
+      resolve_qualified_call(
+          node, func_in_set,
+          const_cast<std::unordered_set<std::string> *>(g_compile_func_names));
+    }
+
     // Check for built-ins first
     if (strcmp(node->name, "print") == 0) {
       // Print expects arguments on stack
@@ -1634,6 +1660,17 @@ void compile_statement(Compiler *compiler, ASTNode_C *node) {
 // MAIN COMPILE FUNCTION
 // ============================================================================
 
+static void collect_function_decl_names(
+    ASTNode_C *node, std::unordered_set<std::string> &out) {
+  if (!node) return;
+  if (node->type == AST_FUNCTION_DECL && node->name) {
+    out.insert(node->name);
+  }
+  for (int i = 0; i < node->statement_count && node->statements; ++i) {
+    collect_function_decl_names(node->statements[i], out);
+  }
+}
+
 Chunk *compile(ASTNode_C *ast) {
   if (!ast) {
     return nullptr;
@@ -1641,6 +1678,13 @@ Chunk *compile(ASTNode_C *ast) {
 
   Compiler *compiler = compiler_create();
   current = compiler;
+
+  // Pre-scan: collect every top-level function name (including ones
+  // mangled by `apply_import_alias` to `<alias>__<name>`). Used by
+  // resolve_qualified_call to pick alias-vs-method dispatch shape.
+  std::unordered_set<std::string> func_names;
+  collect_function_decl_names(ast, func_names);
+  g_compile_func_names = &func_names;
 
   // Compile the AST
   if (ast->type == AST_PROGRAM) {
@@ -1650,6 +1694,8 @@ Chunk *compile(ASTNode_C *ast) {
   } else {
     compile_statement(compiler, ast);
   }
+
+  g_compile_func_names = nullptr;
 
   // Emit halt
   emit_byte(compiler, OP_RETURN_VOID, 0);
