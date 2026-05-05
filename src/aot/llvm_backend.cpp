@@ -1279,7 +1279,14 @@ void declare_runtime_functions(LLVMBackend *backend) {
 }
 
 LLVMBackend *llvm_backend_create(const char *module_name) {
-  LLVMBackend *backend = static_cast<LLVMBackend*>(malloc(sizeof(LLVMBackend)));
+  // calloc instead of malloc: every counter / pointer field defaults to 0 /
+  // NULL. Previously this struct grew via malloc and each new counter had
+  // to be initialised by hand below — `struct_type_count` (PR48) slipped
+  // through that and produced a silent-path heisenbug where
+  // register_struct_type() wrote far outside `struct_types[64]` and
+  // crashed with ACCESS_VIOLATION before any IR was emitted. Zero-init
+  // fixes the class of bug at the source.
+  LLVMBackend *backend = static_cast<LLVMBackend*>(calloc(1, sizeof(LLVMBackend)));
   LLVMInitializeNativeTarget();
 
   backend->context = LLVMContextCreate();
