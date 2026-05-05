@@ -1365,8 +1365,10 @@ void exit_scope(LLVMBackend *backend) {
   if (backend->current_scope) {
     Scope *old = backend->current_scope;
     backend->current_scope = old->parent;
-    for (int i = 0; i < old->count; i++)
+    for (int i = 0; i < old->count; i++) {
       free(old->vars[i].name);
+      if (old->vars[i].struct_type_name) free(old->vars[i].struct_type_name);
+    }
     free(old);
   }
 }
@@ -1380,6 +1382,7 @@ void add_local(LLVMBackend *backend, const char *name, LLVMValueRef val) {
     s->vars[s->count].value = val;
     s->vars[s->count].known_type = INFERRED_UNKNOWN;
     s->vars[s->count].native_value = nullptr;
+    s->vars[s->count].struct_type_name = nullptr;
     s->count++;
   }
 }
@@ -1395,8 +1398,122 @@ void add_local_typed(LLVMBackend *backend, const char *name, LLVMValueRef val,
     s->vars[s->count].value = val;
     s->vars[s->count].known_type = type;
     s->vars[s->count].native_value = native_val;
+    s->vars[s->count].struct_type_name = nullptr;
     s->count++;
   }
+}
+
+// Add a typed-struct local. `alloca_ptr` is an alloca to the LLVM struct
+// type registered under `struct_name`. Field accesses against this name
+// take the GEP+load/store path instead of vm_get_element / vm_set_element.
+void add_local_struct(LLVMBackend *backend, const char *name,
+                      LLVMValueRef alloca_ptr, const char *struct_name) {
+  if (!backend->current_scope) return;
+  Scope *s = backend->current_scope;
+  if (s->count < 256) {
+    s->vars[s->count].name = my_strdup(name);
+    s->vars[s->count].value = alloca_ptr;
+    s->vars[s->count].known_type = INFERRED_UNKNOWN;
+    s->vars[s->count].native_value = nullptr;
+    s->vars[s->count].struct_type_name = my_strdup(struct_name);
+    s->count++;
+  }
+}
+
+const char *get_local_struct_type(LLVMBackend *backend, const char *name) {
+  Scope *s = backend->current_scope;
+  while (s) {
+    for (int i = 0; i < s->count; i++) {
+      if (strcmp(s->vars[i].name, name) == 0) {
+        return s->vars[i].struct_type_name;
+      }
+    }
+    s = s->parent;
+  }
+  return nullptr;
+}
+
+StructTypeEntry *find_struct_type(LLVMBackend *backend, const char *name) {
+  if (!backend || !name) return nullptr;
+  for (int i = 0; i < backend->struct_type_count; i++) {
+    if (strcmp(backend->struct_types[i].name, name) == 0) {
+      return &backend->struct_types[i];
+    }
+  }
+  return nullptr;
+}
+
+int struct_type_field_index(StructTypeEntry *st, const char *field_name) {
+  if (!st || !field_name) return -1;
+  for (int i = 0; i < st->field_count; i++) {
+    if (strcmp(st->field_names[i], field_name) == 0) return i;
+  }
+  return -1;
+}
+
+int struct_is_trivially_unboxable(StructTypeEntry *st) {
+  if (!st) return 0;
+  for (int i = 0; i < st->field_count; i++) {
+    DataType ft = st->field_types[i];
+    if (ft != TYPE_INT && ft != TYPE_BOOL) return 0;
+  }
+  return 1;
+}
+
+StructTypeEntry *register_struct_type(LLVMBackend *backend, ASTNode_C *type_decl) {
+  if (!backend || !type_decl || type_decl->type != AST_TYPE_DECL) return nullptr;
+  if (!type_decl->name || !type_decl->field_names || type_decl->field_count <= 0)
+    return nullptr;
+  if (backend->struct_type_count >= 64) {
+    fprintf(stderr,
+            "[AOT] Warning: struct table full; '%s' falls back to boxed path.\n",
+            type_decl->name);
+    return nullptr;
+  }
+  // Allow re-declaration to be a no-op when the layout matches; otherwise the
+  // earlier registered version wins (parser/typeinfer have already flagged
+  // duplicates upstream).
+  StructTypeEntry *existing = find_struct_type(backend, type_decl->name);
+  if (existing) return existing;
+
+  StructTypeEntry *st = &backend->struct_types[backend->struct_type_count];
+  st->name = my_strdup(type_decl->name);
+  st->field_count = type_decl->field_count;
+  st->field_names =
+      static_cast<char **>(malloc(sizeof(char *) * st->field_count));
+  st->field_types =
+      static_cast<DataType *>(malloc(sizeof(DataType) * st->field_count));
+  for (int i = 0; i < st->field_count; i++) {
+    st->field_names[i] = my_strdup(type_decl->field_names[i]);
+    st->field_types[i] = type_decl->field_types[i];
+  }
+
+  // Build the LLVM struct layout. Trivially unboxable fields (int/bool) map
+  // to i64 — bool gets promoted to i64 so the struct stays naturally aligned
+  // and field load/store sites don't have to special-case smaller integers.
+  // Non-trivial fields fall back to vm_value_type so the struct still has a
+  // reserved slot, but field access against that slot will need to take the
+  // boxed path (left as a follow-up: this PR's VAR_DECL branch only takes
+  // the typed alloca for trivially-unboxable structs).
+  LLVMTypeRef *field_llvm =
+      static_cast<LLVMTypeRef *>(malloc(sizeof(LLVMTypeRef) * st->field_count));
+  for (int i = 0; i < st->field_count; i++) {
+    DataType ft = st->field_types[i];
+    if (ft == TYPE_INT || ft == TYPE_BOOL) {
+      field_llvm[i] = backend->int_type;
+    } else {
+      field_llvm[i] = backend->vm_value_type;
+    }
+  }
+  // Named struct improves IR readability without affecting layout.
+  char ty_name[128];
+  snprintf(ty_name, sizeof(ty_name), "tulpar_struct.%s", st->name);
+  st->llvm_type = LLVMStructCreateNamed(backend->context, ty_name);
+  LLVMStructSetBody(st->llvm_type, field_llvm, (unsigned)st->field_count, 0);
+  free(field_llvm);
+
+  backend->struct_type_count++;
+  return st;
 }
 
 LLVMValueRef get_local(LLVMBackend *backend, const char *name) {
@@ -1753,6 +1870,53 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   }
 
   case AST_ARRAY_ACCESS: {
+    // Typed-struct fast path: when the receiver is a bare identifier
+    // backed by a typed-struct local AND the index is a literal string
+    // matching one of the struct's field names, lower this access to
+    // a single getelementptr + load of the field's native i64 (or
+    // bool-as-i64). Result is wrapped back into a VMValue with INT/BOOL
+    // tag so the surrounding expression evaluator stays oblivious.
+    // Falls through to the generic vm_get_element runtime call below
+    // when the receiver isn't typed (regular json/array) or the index
+    // isn't a known field name.
+    //
+    // The C-bridge stores the receiver in `node->left` (an AST_IDENTIFIER
+    // for `p.x`), with the receiver's name on that child node. `node->name`
+    // on ArrayAccess itself is unset by the C++ Parser conversion.
+    {
+      const char *receiver_name = nullptr;
+      if (node->left && node->left->type == AST_IDENTIFIER && node->left->name) {
+        receiver_name = node->left->name;
+      } else if (node->name) {
+        receiver_name = node->name;  // legacy path some callers may use
+      }
+      if (receiver_name && node->index &&
+          node->index->type == AST_STRING_LITERAL &&
+          node->index->value.string_value) {
+        const char *struct_name = get_local_struct_type(backend, receiver_name);
+        if (struct_name) {
+          StructTypeEntry *st = find_struct_type(backend, struct_name);
+          int idx = struct_type_field_index(st, node->index->value.string_value);
+          if (st && idx >= 0) {
+            LLVMValueRef alloca_ptr = get_local(backend, receiver_name);
+            LLVMValueRef field_ptr = LLVMBuildStructGEP2(
+                backend->builder, st->llvm_type, alloca_ptr,
+                (unsigned)idx, "struct.field.ptr");
+            LLVMValueRef field_val = LLVMBuildLoad2(
+                backend->builder, backend->int_type, field_ptr, "struct.field");
+            DataType ft = st->field_types[idx];
+            if (ft == TYPE_BOOL) {
+              LLVMValueRef as_bool = LLVMBuildICmp(
+                  backend->builder, LLVMIntNE, field_val,
+                  LLVMConstInt(backend->int_type, 0, 0), "field.tobool");
+              return llvm_vm_val_bool_val(backend, as_bool);
+            }
+            return llvm_vm_val_int_val(backend, field_val);
+          }
+        }
+      }
+    }
+
     LLVMValueRef left_val = nullptr;
 
     // Parser stores first identifier access in node->name, not node->left
@@ -3755,6 +3919,42 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       return existing_global;
     }
 
+    // Native typed-struct path: when the declaration is for a registered
+    // user struct AND every field is trivially unboxable (int/bool), allocate
+    // the LLVM struct type directly. Field access via `p.x` then lowers to
+    // a single getelementptr + load instead of vm_get_element. Falls back
+    // to the boxed VMValue path below for:
+    //   - structs whose entry was never registered (parser had no TypeDecl)
+    //   - structs with non-trivial field types (string, array, nested struct)
+    //   - decls with an initializer (e.g. `Point p = { x: 1, y: 2 };`) —
+    //     handling object-literal init for typed structs is deferred to a
+    //     follow-up PR; for now those keep the boxed Object initialiser.
+    if (node->data_type == TYPE_CUSTOM && !node->right) {
+      const char *struct_name = nullptr;
+      if (node->return_custom_type) struct_name = node->return_custom_type;
+      // VAR_DECL stores the custom type name in `field_custom_types` slot 0
+      // when the parser captured an identifier-shaped type. The C-bridge
+      // doesn't expose a dedicated `custom_type` field; the parser pipes it
+      // via `field_custom_types[0]` for VAR_DECL nodes (see parser.cpp).
+      // We accept either source so the codegen stays robust to where the
+      // upstream stashes the name.
+      if (!struct_name && node->field_custom_types && node->field_count > 0) {
+        struct_name = node->field_custom_types[0];
+      }
+      StructTypeEntry *st = find_struct_type(backend, struct_name);
+      if (st && struct_is_trivially_unboxable(st)) {
+        LLVMValueRef typed_alloca = llvm_build_alloca_at_entry(
+            backend, st->llvm_type, node->name);
+        // Zero-initialize: matches the legacy boxed path's "int 0" defaults
+        // for all fields, and saves the user from reading uninitialised
+        // memory before they assign to fields.
+        LLVMBuildStore(backend->builder, LLVMConstNull(st->llvm_type),
+                       typed_alloca);
+        add_local_struct(backend, node->name, typed_alloca, st->name);
+        return typed_alloca;
+      }
+    }
+
     // printf("[AOT] Declaring var: %s\n", node->name);
     LLVMValueRef init;
     if (node->right) {
@@ -3807,6 +4007,50 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     LLVMValueRef val = codegen_expression(backend, node->right);
+
+    // Typed-struct fast path mirror of the AST_ARRAY_ACCESS reader: when
+    // assigning to `<typed_struct>.<field>` (parser desugars to
+    // ArrayAccess with a string-literal index), lower to a single GEP +
+    // store of the native i64 extracted from the rhs VMValue. Falls
+    // through to the generic vm_set_element runtime call below for
+    // regular json / array writes.
+    //
+    // The receiver name lives on the ArrayAccess child's `left`
+    // identifier (matching the C-bridge conversion); ArrayAccess.name is
+    // unset by the parser path.
+    if (node->left && node->left->type == AST_ARRAY_ACCESS &&
+        node->left->index &&
+        node->left->index->type == AST_STRING_LITERAL &&
+        node->left->index->value.string_value) {
+      const char *recv_name = nullptr;
+      if (node->left->left && node->left->left->type == AST_IDENTIFIER &&
+          node->left->left->name) {
+        recv_name = node->left->left->name;
+      } else if (node->left->name) {
+        recv_name = node->left->name;
+      }
+      if (recv_name) {
+        const char *struct_name = get_local_struct_type(backend, recv_name);
+        if (struct_name) {
+          StructTypeEntry *st = find_struct_type(backend, struct_name);
+          int idx = struct_type_field_index(
+              st, node->left->index->value.string_value);
+          if (st && idx >= 0) {
+            LLVMValueRef alloca_ptr = get_local(backend, recv_name);
+            LLVMValueRef field_ptr = LLVMBuildStructGEP2(
+                backend->builder, st->llvm_type, alloca_ptr,
+                (unsigned)idx, "struct.field.ptr");
+            // Extract the i64 payload from the boxed VMValue rhs (slot 2
+            // of {tag, pad, i64}). The bool case writes the same i64
+            // because true/false box with int_val=1 / int_val=0.
+            LLVMValueRef rhs_i64 = LLVMBuildExtractValue(
+                backend->builder, val, 2, "rhs.i64");
+            LLVMBuildStore(backend->builder, rhs_i64, field_ptr);
+            return val;
+          }
+        }
+      }
+    }
 
     // Check for Array/Object Assignment: arr[i] = val OR obj["k"] = val
     if (node->left && node->left->type == AST_ARRAY_ACCESS) {
@@ -5067,6 +5311,17 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
                  backend->func_aot_runtime_init, nullptr, 0, "");
 
   if (node->statements) {
+    // Pass 0.0: Register user-defined struct types so subsequent passes
+    // (variable decls, field accesses) can resolve `struct Point { ... }`
+    // declarations regardless of textual order. Done before globals so a
+    // typed-struct global would also see the layout, though that codepath
+    // isn't wired up yet.
+    for (int i = 0; i < node->statement_count; i++) {
+      if (node->statements[i]->type == AST_TYPE_DECL) {
+        register_struct_type(backend, node->statements[i]);
+      }
+    }
+
     // Pass 0.1: Pre-scan for Global Variables (Forward Declaration)
     // Pure-int top-level globals (declared as `int x = ...;`) get a native
     // i64 global plus a typed-local registration so codegen_typed_expr can

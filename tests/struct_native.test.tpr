@@ -1,0 +1,88 @@
+// Native struct codegen — `struct Point { int x; int y; }` AOT'da
+// LLVMStructType + getelementptr ile lower'lanir. Field access boxed
+// `vm_get_element`/`vm_set_element` cagrilarini atliyor; LLVM O3 cogu
+// durumda struct'i tamamen inline ediyor.
+//
+// Bu test PR'in dogrulugunu (numerical correctness) garanti altina
+// aliyor — performansi degil. Performans dogrulamasi
+// benchmarks/struct_sum/ Plan 04 PR6'ya dusuyor.
+
+import "test";
+
+struct Point {
+    int x;
+    int y;
+}
+
+struct Box {
+    int width;
+    int height;
+    int depth;
+}
+
+func roundtrip_int_field() {
+    Point p;
+    p.x = 42;
+    assert_eq_int(42, p.x);
+}
+
+func multiple_fields() {
+    Point p;
+    p.x = 3;
+    p.y = 4;
+    assert_eq_int(3, p.x);
+    assert_eq_int(4, p.y);
+}
+
+func arithmetic_on_fields() {
+    Point p;
+    p.x = 3;
+    p.y = 4;
+    assert_eq_int(25, p.x * p.x + p.y * p.y);
+}
+
+func three_field_struct() {
+    Box b;
+    b.width = 2;
+    b.height = 3;
+    b.depth = 4;
+    assert_eq_int(24, b.width * b.height * b.depth);
+}
+
+func default_zero_init() {
+    // `Point p;` baslangicta tum alanlari sifirla doldurur — boxed
+    // `Object` yolundaki "missing key -> 0" davranisini tutarli sekilde
+    // typed yolda da koruyoruz.
+    Point p;
+    assert_eq_int(0, p.x);
+    assert_eq_int(0, p.y);
+}
+
+func reassign_field() {
+    Point p;
+    p.x = 1;
+    p.x = 99;
+    assert_eq_int(99, p.x);
+}
+
+func two_distinct_locals() {
+    Point a;
+    Point b;
+    a.x = 10;
+    b.x = 20;
+    a.y = 30;
+    b.y = 40;
+    assert_eq_int(10, a.x);
+    assert_eq_int(20, b.x);
+    assert_eq_int(30, a.y);
+    assert_eq_int(40, b.y);
+}
+
+test("typed struct: int field roundtrip", "roundtrip_int_field");
+test("typed struct: multiple int fields", "multiple_fields");
+test("typed struct: arithmetic on fields", "arithmetic_on_fields");
+test("typed struct: three-field struct", "three_field_struct");
+test("typed struct: default zero-initialised fields", "default_zero_init");
+test("typed struct: reassigning a field", "reassign_field");
+test("typed struct: two distinct typed-struct locals do not alias",
+     "two_distinct_locals");
