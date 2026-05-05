@@ -58,17 +58,34 @@ struct AOTPhaseTimer {
 // function and the runtime hits its "Function not found" path. We pay the
 // minor binary-size cost to make `call()` work uniformly across Windows
 // (MinGW) and Linux/macOS.
+//
+// Note on `-lssl -lcrypto`:
+// `libtulpar_runtime.a` ships `http_fetch.cpp.o` which references OpenSSL
+// (`SSL_CTX_new`, `OPENSSL_init_ssl`, ...) when the driver was built with
+// `TULPAR_HAS_TLS=1`. Static archives don't bake their own deps in, so the
+// AOT-pipeline's hand-rolled clang line has to forward those flags itself
+// or every user binary fails with "undefined reference to OPENSSL_init_ssl"
+// at link time. Linux CI hit this for the entire examples/ suite once the
+// runner started actually invoking `tulpar --aot`. The flag is gated on
+// `TULPAR_HAS_TLS` so a TLS-disabled build (no OpenSSL on the host) still
+// produces a working linker line.
+#if defined(TULPAR_HAS_TLS)
+  #define AOT_TLS_LINK_FLAGS " -lssl -lcrypto"
+#else
+  #define AOT_TLS_LINK_FLAGS ""
+#endif
+
 #if PLATFORM_WINDOWS
   #define AOT_LINK_LIB_FLAGS \
       "-Wl,--export-all-symbols " \
-      "-ltulpar_runtime -lws2_32 -lwsock32"
+      "-ltulpar_runtime -lws2_32 -lwsock32" AOT_TLS_LINK_FLAGS
   #define AOT_LINK_PIE_FLAG ""
   #define AOT_EXE_SUFFIX ".exe"
   #define AOT_TMP_RUN_BASE ".tulpar_run"
 #else
   #define AOT_LINK_LIB_FLAGS \
       "-rdynamic " \
-      "-ltulpar_runtime -lm -lpthread -ldl"
+      "-ltulpar_runtime -lm -lpthread -ldl" AOT_TLS_LINK_FLAGS
   #define AOT_LINK_PIE_FLAG "-no-pie"
   #define AOT_EXE_SUFFIX ""
   #define AOT_TMP_RUN_BASE "/tmp/.tulpar_run"

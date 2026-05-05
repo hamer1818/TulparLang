@@ -46,6 +46,11 @@ jobs:
           cmake --build . --config Release -j$(nproc)
         timeout-minutes: 10
       
+      # Test failures used to be masked with `continue-on-error: true`,
+      # which hid a months-long Linux regression where every example
+      # failed AOT linking against `libtulpar_runtime.a` (missing
+      # OpenSSL link flags). Mask removed so test breakage actually
+      # turns the job red and blocks the release.
       - name: Run tests
         run: |
           cp build/tulpar tulpar
@@ -53,7 +58,6 @@ jobs:
           chmod +x build.sh
           ./build.sh test
         timeout-minutes: 5
-        continue-on-error: true
       
       - name: Prepare artifact
         run: |
