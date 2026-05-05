@@ -1,0 +1,11 @@
+// Expected: typeinfer clean — no `[typecheck]` lines emitted.
+// Acts as a regression guard: anything we tighten in typeinfer must
+// not start to false-positive on plain int/string operations.
+
+int n = 42;
+str s = "hello";
+print(n);
+print(s);
+print(len(s));     // string -> int (allowed)
+float r = abs(-3); // int -> int -> float coercion (allowed)
+print(r);

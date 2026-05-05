@@ -89,6 +89,10 @@ static void print_help() {
               tulpar::i18n::tr_en(
                   "- run/build oncesi tip uyarilarini kapat",
                   "- Disable pre-build [typecheck] warnings"));
+  std::printf("  --strict                         %s\n",
+              tulpar::i18n::tr_en(
+                  "- [typecheck] uyarilarini hata olarak ele al",
+                  "- Promote [typecheck] warnings to errors"));
   std::printf("  tulpar pkg <komut>               %s\n",
               tulpar::i18n::tr_en("- Paket yoneticisi (init/install/...)",
                                   "- Package manager (init/install/...)"));
@@ -539,6 +543,15 @@ int main(int argc, char **argv) {
   int force_vm = 0;    // --vm / --run forces VM path, skips AOT
   int build_mode = 0;  // build / --build / --aot: save native binary
   int skip_typecheck = 0;  // --no-typecheck disables the pre-pass warnings
+  // --strict flips the typeinfer pre-pass from informational to
+  // exit-blocking. Default: 0 (warnings only). Env var TULPAR_STRICT=1
+  // sets it; CLI --strict flag wins. --no-typecheck overrides both
+  // (no warnings emitted, no exit).
+  int strict_typecheck = 0;
+  {
+    const char *env = getenv("TULPAR_STRICT");
+    if (env && *env && strcmp(env, "0") != 0) strict_typecheck = 1;
+  }
   int arg_offset = 1;  // index of first non-flag arg
 
   // Parse flags
@@ -552,6 +565,10 @@ int main(int argc, char **argv) {
       // env-var override (TULPAR_NO_TYPECHECK=1). Doesn't shift arg_offset
       // on its own — the next non-flag arg still sets the file index.
       skip_typecheck = 1;
+    } else if (strcmp(argv[i], "--strict") == 0) {
+      // Promote `[typecheck]` warnings to exit-blocking errors. Format
+      // stays the same; we just summarise and exit 1 when count > 0.
+      strict_typecheck = 1;
     } else if (strcmp(argv[i], "--aot") == 0 ||
                strcmp(argv[i], "--build") == 0 ||
                strcmp(argv[i], "build") == 0) {
@@ -585,10 +602,20 @@ int main(int argc, char **argv) {
     }
 
     // Surface static type-inference findings as `[typecheck]` warnings
-    // before the LLVM build. Always informational — never blocks the
-    // build. Suppressed by `--no-typecheck` or `TULPAR_NO_TYPECHECK=1`.
+    // before the LLVM build. Informational by default — never blocks
+    // the build. Suppressed by `--no-typecheck` or
+    // `TULPAR_NO_TYPECHECK=1`. With `--strict` (or `TULPAR_STRICT=1`),
+    // we keep the same `[typecheck]` format but treat any warning as
+    // an exit-blocking error.
     if (!skip_typecheck) {
-      tulpar::typeinfer_emit_warnings(source, argv[arg_offset + 1]);
+      int n = tulpar::typeinfer_emit_warnings(source, argv[arg_offset + 1]);
+      if (strict_typecheck && n > 0) {
+        fprintf(stderr,
+                "[typecheck] %d %s (strict mode); aborting build.\n",
+                n, n == 1 ? "error" : "errors");
+        free(source);
+        return 1;
+      }
     }
 
     // Output name strategy:
@@ -676,7 +703,14 @@ int main(int argc, char **argv) {
     // see `[typecheck]` warnings on default execution (`tulpar foo.tpr`)
     // and `tulpar --vm foo.tpr` alike. Build mode runs its own call above.
     if (!skip_typecheck) {
-      tulpar::typeinfer_emit_warnings(source, argv[arg_offset]);
+      int n = tulpar::typeinfer_emit_warnings(source, argv[arg_offset]);
+      if (strict_typecheck && n > 0) {
+        fprintf(stderr,
+                "[typecheck] %d %s (strict mode); aborting run.\n",
+                n, n == 1 ? "error" : "errors");
+        free(source);
+        return 1;
+      }
     }
 
 #ifdef TULPAR_AOT_ENABLED
