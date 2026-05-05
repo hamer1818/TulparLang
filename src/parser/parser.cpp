@@ -835,17 +835,28 @@ std::unique_ptr<ASTNode> Parser::parse_postfix(std::unique_ptr<ASTNode> expr) {
             SourceLocation dot_loc(current().line(), current().column());
             Token field = expect(TOKEN_IDENTIFIER, "Expected field name after '.'");
 
-            // Python-style qualified call: `m.func(args)` parses as a single
-            // `FunctionCall("m__func", args)`. Pairs with the import alias
-            // mangling — `import "math" as m;` renames the module's
-            // top-level functions to `m__<name>`, so the lookup hits cleanly.
-            // Trigger fires only when the chain head is an Identifier and
-            // the very next token is `(`; standard `obj.field` reads / writes
-            // (chains like `point.x`, `arr.length`, `a.b.c(x)`) keep falling
-            // through to the existing ArrayAccess desugar.
+            // Qualified call: `<head>.<name>(args)` parses as a single
+            // FunctionCall whose `name` is the unmangled member identifier
+            // and whose `receiver` field holds the head expression. Codegen
+            // (AOT + VM) is what picks the actual dispatch:
+            //
+            //   1. If `<head_name>__<name>` resolves as a function (i.e. the
+            //      head is a `import "..." as <head>` alias), call it as
+            //      a module-alias call (current behavior, unchanged).
+            //   2. Otherwise, call `<name>` with `<head>` prepended to the
+            //      argument list — Python/Go-style method dispatch on a
+            //      regular variable / json / struct.
+            //   3. Otherwise, "function not found" with the raw method
+            //      name.
+            //
+            // Trigger still fires only when the chain head is a bare
+            // Identifier and the next token is `(`. Field access
+            // (`p.x` without parens) keeps falling through to the
+            // ArrayAccess desugar below.
             if (check(TOKEN_LPAREN)) {
-                if (auto *id = std::get_if<Identifier>(&expr->value)) {
-                    std::string mangled = id->name + "__" + field.value();
+                if (std::get_if<Identifier>(&expr->value)) {
+                    std::string method_name = field.value();
+                    auto receiver_node = std::move(expr);
                     advance(); // consume '('
                     std::vector<std::unique_ptr<ASTNode>> arguments;
                     if (!check(TOKEN_RPAREN)) {
@@ -854,9 +865,9 @@ std::unique_ptr<ASTNode> Parser::parse_postfix(std::unique_ptr<ASTNode> expr) {
                         } while (match(TOKEN_COMMA));
                     }
                     expect(TOKEN_RPAREN, "Expected ')' after arguments");
-                    expr = std::make_unique<ASTNode>(
-                        FunctionCall(mangled, std::move(arguments), dot_loc)
-                    );
+                    FunctionCall fc(method_name, std::move(arguments), dot_loc);
+                    fc.receiver = std::move(receiver_node);
+                    expr = std::make_unique<ASTNode>(std::move(fc));
                     continue;
                 }
             }

@@ -2535,6 +2535,24 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
   // TODO: Function Call Update
   case AST_FUNCTION_CALL: {
+    // Method-call resolution: when the parser saw `<recv>.<name>(args)`
+    // it stored `<recv>` in node->receiver and left node->name as the
+    // unmangled member name. Decide here whether to dispatch as an
+    // import-alias call (`<recv>__<name>`) or a method call
+    // (`<name>(<recv>, args...)`). The helper mutates the node in place
+    // so the rest of this case stays oblivious to the receiver.
+    if (node->receiver) {
+      auto func_in_module = [](const char *raw, void *ctx) -> int {
+        char prefixed[300];
+        snprintf(prefixed, sizeof(prefixed), "t_%s", raw);
+        LLVMModuleRef m = static_cast<LLVMModuleRef>(ctx);
+        if (LLVMGetNamedFunction(m, prefixed)) return 1;
+        if (LLVMGetNamedFunction(m, raw)) return 1;
+        return 0;
+      };
+      resolve_qualified_call(node, func_in_module, backend->module);
+    }
+
     // call(func_name) -> dynamic dispatch
     if (node->name && strcmp(node->name, "call") == 0 &&
         node->argument_count >= 1) {

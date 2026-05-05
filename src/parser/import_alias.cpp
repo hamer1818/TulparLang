@@ -82,6 +82,66 @@ void rewrite_calls(ASTNode_C *node, const std::string &alias,
 
 }  // namespace
 
+int resolve_qualified_call(ASTNode_C *node,
+                           tulpar_function_exists_fn function_exists,
+                           void *ctx) {
+  if (!node || node->type != AST_FUNCTION_CALL) return 0;
+  if (!node->receiver || node->receiver->type != AST_IDENTIFIER) return 0;
+  if (!node->receiver->name || !node->name) return 0;
+  if (!function_exists) return 0;
+
+  std::string mangled;
+  mangled.reserve(std::strlen(node->receiver->name) + 2 +
+                  std::strlen(node->name));
+  mangled.append(node->receiver->name);
+  mangled.append("__");
+  mangled.append(node->name);
+
+  // Alias path: <recv>__<name> already registered (apply_import_alias
+  // path). Rewrite node->name and free the now-redundant receiver.
+  if (function_exists(mangled.c_str(), ctx)) {
+    std::free(node->name);
+    node->name = static_cast<char *>(std::malloc(mangled.size() + 1));
+    std::memcpy(node->name, mangled.c_str(), mangled.size() + 1);
+    ast_node_free(node->receiver);
+    node->receiver = nullptr;
+    return 1;
+  }
+
+  // Method path: prepend receiver as the first positional argument. We
+  // do not gate this branch on function_exists() — leaving the resolved
+  // shape `<name>(receiver, args...)` to fall through into the existing
+  // FUNCTION_CALL codegen lets the standard "function not found"
+  // diagnostic fire with the user-meaningful method name (`<name>`)
+  // rather than the synthetic mangled form.
+  int new_count = node->argument_count + 1;
+  ASTNode_C **new_args = static_cast<ASTNode_C **>(
+      std::malloc(sizeof(ASTNode_C *) * static_cast<size_t>(new_count)));
+  new_args[0] = node->receiver;
+  for (int i = 0; i < node->argument_count; ++i) {
+    new_args[i + 1] = node->arguments[i];
+  }
+  if (node->arguments) std::free(node->arguments);
+  node->arguments = new_args;
+  node->argument_count = new_count;
+  // argument_names: extend with a null slot for the new receiver-arg if
+  // the caller had named-argument metadata. Most call sites leave this
+  // null entirely (named args aren't widely used), in which case we
+  // skip touching it.
+  if (node->argument_names) {
+    char **new_names = static_cast<char **>(
+        std::malloc(sizeof(char *) * static_cast<size_t>(new_count)));
+    new_names[0] = nullptr;
+    for (int i = 0; i < node->argument_count - 1; ++i) {
+      new_names[i + 1] = node->argument_names[i];
+    }
+    std::free(node->argument_names);
+    node->argument_names = new_names;
+  }
+  node->receiver = nullptr;
+  return 2;
+}
+
 void apply_import_alias(ASTNode_C *program, const char *alias) {
   if (!program || !alias || !*alias) return;
   if (program->type != AST_PROGRAM) return;
