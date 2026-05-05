@@ -30,10 +30,21 @@ struct FunctionSignature {
   std::vector<DataType> param_types;
 };
 
+// User-declared struct (`struct Point { int x; int y; }`). Field
+// types are tracked so a future PR can validate `<TypeName> ident;`
+// declarations and (Plan 04 PR3+) drive unboxed LLVM struct codegen.
+// Order is preserved — codegen emits fields in declaration order.
+struct StructTypeInfo {
+  std::vector<std::string> field_names;
+  std::vector<DataType> field_types;
+  std::vector<std::optional<std::string>> field_custom_types;
+};
+
 // Type checker context
 struct TypeInferContext {
   std::unordered_map<std::string, TypeSymbol> symbols;
   std::unordered_map<std::string, FunctionSignature> functions;
+  std::unordered_map<std::string, StructTypeInfo> struct_types;
 
   // Current function context (for return type checking)
   DataType current_return_type;

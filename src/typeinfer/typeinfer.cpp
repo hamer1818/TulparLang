@@ -313,6 +313,19 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
 
   if (const auto *decl = as_node<VariableDecl>(stmt)) {
     DataType declared_type = decl->data_type;
+    // Validate custom-typed declarations: `Point p;` / `Point p = ...;`
+    // referencing a user-defined struct must point at a registered
+    // type. Catches typos (`Pont p;`) at typecheck time before codegen
+    // emits opaque "field not found" diagnostics. Skipped silently if
+    // the type system runs in warning mode and the lookup fails — the
+    // strict mode (Plan 03) is what turns this into an exit-blocking
+    // error.
+    if (decl->data_type == TYPE_CUSTOM && decl->custom_type.has_value() &&
+        !ctx->struct_types.count(decl->custom_type.value())) {
+      report_error(ctx, "Unknown type '%s' in declaration of '%s' at line %d",
+                   decl->custom_type.value().c_str(), decl->name.c_str(),
+                   decl->loc.line);
+    }
     if (declared_type == TYPE_VOID && decl->initializer) {
       declared_type = infer_expr(ctx, decl->initializer.get());
     }
@@ -722,6 +735,21 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
       typeinfer_register_function(ctx, func->name.c_str(), func->return_type,
                                   param_types.empty() ? nullptr : param_types.data(),
                                   static_cast<int>(param_types.size()));
+    }
+    // Pre-scan struct declarations so `<TypeName> ident;` decls
+    // anywhere in the program (even before the type's definition
+    // textually) can validate against ctx->struct_types.
+    if (const auto *type_decl = as_node<TypeDecl>(stmt.get())) {
+      if (ctx->struct_types.count(type_decl->name)) {
+        report_error(ctx, "Duplicate struct/type declaration '%s' at line %d",
+                     type_decl->name.c_str(), type_decl->loc.line);
+      } else {
+        StructTypeInfo info;
+        info.field_names = type_decl->field_names;
+        info.field_types = type_decl->field_types;
+        info.field_custom_types = type_decl->field_custom_types;
+        ctx->struct_types[type_decl->name] = std::move(info);
+      }
     }
   }
 

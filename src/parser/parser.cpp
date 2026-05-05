@@ -313,25 +313,39 @@ std::unique_ptr<ASTNode> Parser::parse_statement() {
 
 std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
     SourceLocation loc(current().line(), current().column());
-    
+
+    // Capture custom-type identifier (`Point p;`) before parse_type
+    // consumes it. Builtin types like `int`/`str` come in as their own
+    // tokens, so this snapshot only matters for the TOKEN_IDENTIFIER
+    // path inside parse_type that returns TYPE_CUSTOM.
+    std::optional<std::string> custom_type_name;
+    if (check(TOKEN_IDENTIFIER)) {
+        custom_type_name = current().value();
+    }
+
     // Parse type
     DataType type = parse_type();
-    
+
+    // Only keep the captured name when the parser actually resolved
+    // to a custom type — otherwise `int x;` would store the spurious
+    // "int" identifier we never used.
+    if (type != TYPE_CUSTOM) custom_type_name.reset();
+
     // Parse variable name
     Token name_tok = expect(TOKEN_IDENTIFIER, "Expected variable name");
     std::string name = name_tok.value();
-    
+
     // Optional initializer
     std::unique_ptr<ASTNode> initializer = nullptr;
     if (match(TOKEN_ASSIGN)) {
         initializer = parse_expression();
     }
-    
+
     expect(TOKEN_SEMICOLON, "Expected ';' after variable declaration");
-    
-    return std::make_unique<ASTNode>(
-        VariableDecl(name, type, std::move(initializer), loc)
-    );
+
+    VariableDecl vd(name, type, std::move(initializer), loc);
+    vd.custom_type = std::move(custom_type_name);
+    return std::make_unique<ASTNode>(std::move(vd));
 }
 
 std::unique_ptr<ASTNode> Parser::parse_function_decl() {
