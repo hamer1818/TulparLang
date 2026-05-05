@@ -161,16 +161,38 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     // for (e.g., `print(add(1))` — print has no signature, but `add(1)`
     // inside it still needs its arg-count checked).
     std::vector<DataType> arg_types;
-    arg_types.reserve(call->arguments.size());
+    arg_types.reserve(call->arguments.size() + 1);
     for (const auto &arg : call->arguments) {
       arg_types.push_back(infer_expr(ctx, arg.get()));
+    }
+
+    // Method-call dispatch awareness: when the parser saw
+    // `<recv>.<name>(args)` it stored `<recv>` in call->receiver and
+    // left call->name unmangled. We mirror the codegen-side resolver
+    // (`resolve_qualified_call`) so the arg-count / arg-type checks run
+    // against the function shape the AOT/VM will actually emit.
+    std::string effective_name = call->name;
+    if (call->receiver) {
+      DataType receiver_type = infer_expr(ctx, call->receiver.get());
+      bool resolved_as_alias = false;
+      if (const auto *recv_id = as_node<Identifier>(call->receiver.get())) {
+        std::string mangled = recv_id->name + "__" + call->name;
+        if (ctx->functions.count(mangled)) {
+          effective_name = mangled;
+          resolved_as_alias = true;
+        }
+      }
+      if (!resolved_as_alias) {
+        // Method path: receiver counts as first positional arg.
+        arg_types.insert(arg_types.begin(), receiver_type);
+      }
     }
 
     // User-defined function call: check arg count + arg types against the
     // signature we registered during the pre-pass. Built-ins are not in
     // ctx->functions and are skipped — their argument contracts are too
     // varied to model here without a dedicated catalogue.
-    auto sig_it = ctx->functions.find(call->name);
+    auto sig_it = ctx->functions.find(effective_name);
     if (sig_it != ctx->functions.end()) {
       const FunctionSignature &sig = sig_it->second;
       const int expected = static_cast<int>(sig.param_types.size());
@@ -241,7 +263,7 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
       }
     }
 
-    DataType ret = function_return_type(ctx, call->name);
+    DataType ret = function_return_type(ctx, effective_name);
     if (ret == TYPE_VOID && call->name != "print" && call->name != "println") {
       if (call->name == "len")
         return TYPE_INT;
