@@ -24,6 +24,11 @@ typedef struct {
   LLVMValueRef value;        // Alloca or direct value
   InferredType known_type;   // Known type for unboxing
   LLVMValueRef native_value; // Unboxed native value (i64/double) when known
+  // When this local is a user-defined struct (`struct Point p;`) lowered to a
+  // native LLVM struct type, this points at the registered StructTypeEntry's
+  // name so field access can resolve fields against the layout. NULL for
+  // regular VMValue locals (the historical default path).
+  char *struct_type_name;
 } LocalVar;
 
 typedef struct Scope {
@@ -39,6 +44,20 @@ typedef struct {
   InferredType *param_types; // Known parameter types
   int param_count;
 } FunctionEntry;
+
+// User-declared struct (`struct Point { int x; int y; }`) tracked by the
+// AOT backend so field accesses can lower to a single getelementptr + load
+// (typed path) instead of the generic vm_get_element runtime call (boxed
+// path). The boxed path stays as a fallback when the local isn't tagged
+// with a struct_type_name, so adding entries here is opt-in: only the new
+// VAR_DECL TYPE_CUSTOM branch produces a typed-struct local.
+typedef struct {
+  char *name;            // e.g. "Point"
+  LLVMTypeRef llvm_type; // %struct.Point = type { i64, i64 }
+  char **field_names;    // declaration-ordered (matches LLVM struct order)
+  DataType *field_types;
+  int field_count;
+} StructTypeEntry;
 
 typedef struct {
   LLVMContextRef context;
@@ -97,6 +116,9 @@ typedef struct {
 
   FunctionEntry functions[128];
   int function_count;
+
+  StructTypeEntry struct_types[64];
+  int struct_type_count;
 
   // Import tracking
   char *imported_files[128];
@@ -369,5 +391,27 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node);
 // DataType to LLVM type conversion
 LLVMTypeRef datatype_to_llvm(LLVMBackend *backend, DataType type);
 InferredType datatype_to_inferred(DataType type);
+
+// User-defined struct tracking for the typed (unboxed) struct lower path.
+// `register_struct_type` builds the LLVM struct layout from a TypeDecl AST
+// node and adds it to backend->struct_types. Returns the entry pointer
+// (or NULL if the table is full / inputs are invalid).
+struct ASTNode_C;
+StructTypeEntry *register_struct_type(LLVMBackend *backend, struct ASTNode_C *type_decl);
+StructTypeEntry *find_struct_type(LLVMBackend *backend, const char *name);
+// Returns the field index in declaration order, or -1 if the field isn't
+// part of the struct.
+int struct_type_field_index(StructTypeEntry *st, const char *field_name);
+// `add_local_struct` adds a typed-struct local: `value` is an alloca to the
+// LLVM struct type, `struct_name` is the registered StructTypeEntry name.
+void add_local_struct(LLVMBackend *backend, const char *name, LLVMValueRef alloca_ptr,
+                      const char *struct_name);
+// Returns the struct_type_name of the local (or NULL if it's a regular
+// VMValue local). Walks the scope chain like get_local.
+const char *get_local_struct_type(LLVMBackend *backend, const char *name);
+// Predicate: a struct is "trivially unboxable" when every field is a plain
+// int or bool. Strings/arrays/nested structs hit the fallback boxed path
+// in this PR; later PRs will widen the predicate.
+int struct_is_trivially_unboxable(StructTypeEntry *st);
 
 #endif

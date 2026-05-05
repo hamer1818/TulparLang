@@ -1123,6 +1123,14 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
             out->data_type = n.data_type;
             out->right = convert_ast_node_ptr(n.initializer);
             out->is_moved = n.is_moved ? 1 : 0;
+            // Pipe `Point p;` style custom-type names through to the
+            // C-bridge so the AOT codegen can resolve them against
+            // backend->struct_types. We reuse `return_custom_type` as
+            // the carrier slot — it is unused on VAR_DECL nodes and its
+            // free lifecycle is already covered by ast_node_free.
+            if (n.custom_type.has_value()) {
+                out->return_custom_type = dup_cstr(n.custom_type.value());
+            }
             set_loc(out, n.loc);
         } else if constexpr (std::is_same_v<T, Assignment>) {
             out->type = AST_ASSIGNMENT;
