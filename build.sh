@@ -143,6 +143,8 @@ if [ "$ACTION" = "test" ]; then
         # happens for our examples). Earlier versions of this runner checked
         # `[ -f a.out ]` and silently failed every example on Linux CI.
         local out_path="$name"
+        local compile_log
+        compile_log=$(mktemp)
 
         printf "Testing %s... " "$example"
 
@@ -154,8 +156,10 @@ if [ "$ACTION" = "test" ]; then
             TIMEOUT_CMD="gtimeout 30s"
         fi
 
-        # Run AOT compilation and (optionally) execution
-        if $TIMEOUT_CMD ./tulpar --aot "$example" > /dev/null 2>&1 && [ -f "$out_path" ]; then
+        # Run AOT compilation and (optionally) execution. Capture stderr+stdout
+        # to a tempfile so we can echo it on failure — silent failures here
+        # used to hide every diagnostic and turn CI into "all FAIL, no clue why".
+        if $TIMEOUT_CMD ./tulpar --aot "$example" > "$compile_log" 2>&1 && [ -f "$out_path" ]; then
             if [ "$compile_only" = "1" ]; then
                 echo -e "${GREEN}PASS (compile-only)${NC}"
                 rm -f "$out_path" "$out_path.ll" "$out_path.o"
@@ -175,10 +179,13 @@ if [ "$ACTION" = "test" ]; then
             fi
         else
             echo -e "${RED}FAIL (compilation)${NC}"
+            echo "----- compile log: $example -----"
+            sed 's/^/    /' "$compile_log" | head -n 40
+            echo "----- end log -----"
             TEST_FAILED=1
         fi
 
-        rm -f "$out_path" "$out_path.ll" "$out_path.o"
+        rm -f "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
     }
 
     if [ -n "$TARGET" ]; then
