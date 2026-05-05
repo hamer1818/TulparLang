@@ -82,6 +82,11 @@ static const std::unordered_map<std::string, TulparTokenType>& get_keyword_map()
         // Functions - English (aliases)
         {"func", TOKEN_FUNC},
         {"type", TOKEN_TYPE_KW},
+        // `struct` is a familiar spelling for users coming from C/Rust/Go;
+        // it parses identically to `type Name { ... }` (same AST, same
+        // codegen). This keeps the surface ergonomic without forking the
+        // declaration semantics.
+        {"struct", TOKEN_TYPE_KW},
         {"var", TOKEN_VAR},
         {"move", TOKEN_MOVE},
         
