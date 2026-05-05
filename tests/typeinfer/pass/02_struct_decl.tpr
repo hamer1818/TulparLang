@@ -1,0 +1,11 @@
+// Expected: typeinfer clean — registered struct type, valid usage.
+
+type Point {
+    int x;
+    int y;
+}
+
+Point origin;
+origin.x = 0;
+origin.y = 0;
+print(origin.x);
