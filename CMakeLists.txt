@@ -209,6 +209,8 @@ set(PKG_SOURCES
     src/pkg/manifest.hpp
     src/pkg/pkg_cli.cpp
     src/pkg/pkg_cli.hpp
+    src/pkg/sha256.cpp
+    src/pkg/sha256.hpp
 )
 
 # CLI subcommands (`tulpar update`, `tulpar typecheck`, version, ...) and
