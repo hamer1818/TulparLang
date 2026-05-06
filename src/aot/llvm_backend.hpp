@@ -141,6 +141,16 @@ typedef struct {
   LLVMValueRef func_aot_len;
   LLVMValueRef func_aot_array_push;
   LLVMValueRef func_aot_array_pop;
+  // Plan 04 v2 heap promotion — typed structs lifted onto the heap so
+  // they can survive past their stack scope (push, return-as-array,
+  // store into json object). Field codegen on a struct VMValue uses
+  // the get/set helpers; field index is resolved at compile time from
+  // the struct registry, so the helper is just an indexed slot access.
+  LLVMValueRef func_aot_struct_alloc;
+  LLVMValueRef func_aot_struct_alloc_from_fields;
+  LLVMValueRef func_aot_struct_get_field;
+  LLVMValueRef func_aot_struct_set_field;
+  LLVMValueRef func_aot_struct_unpack_to;
   LLVMValueRef func_aot_to_json;
   LLVMValueRef func_aot_runtime_init;
   LLVMValueRef func_aot_input;

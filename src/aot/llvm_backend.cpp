@@ -596,6 +596,50 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_array_pop =
       LLVMAddFunction(backend->module, "aot_array_pop", pop_type);
 
+  // ObjStruct heap-promotion runtime (Plan 04 v2).
+  //
+  // aot_struct_alloc(const char *type_name, int field_count) -> VMValue
+  LLVMTypeRef struct_alloc_params[] = {backend->ptr_type, backend->int32_type};
+  LLVMTypeRef struct_alloc_type =
+      llvm_make_vmvalue_func_type(backend, struct_alloc_params, 2, 0);
+  backend->func_aot_struct_alloc =
+      LLVMAddFunction(backend->module, "aot_struct_alloc", struct_alloc_type);
+
+  // aot_struct_alloc_from_fields(const char *type_name, int field_count,
+  //                              const int64_t *src) -> VMValue
+  LLVMTypeRef struct_clone_params[] = {backend->ptr_type, backend->int32_type,
+                                       backend->ptr_type};
+  LLVMTypeRef struct_clone_type =
+      llvm_make_vmvalue_func_type(backend, struct_clone_params, 3, 0);
+  backend->func_aot_struct_alloc_from_fields = LLVMAddFunction(
+      backend->module, "aot_struct_alloc_from_fields", struct_clone_type);
+
+  // aot_struct_get_field_ptr(VMValue *v, int idx) -> i64
+  // Pointer ABI: matches the caller convention used by aot_array_push +
+  // aot_print_value etc. Avoids the {i32,[4xi8],i64} by-value struct
+  // mismatch with the C ABI on Windows x64.
+  LLVMTypeRef struct_get_params[] = {backend->ptr_type, backend->int32_type};
+  LLVMTypeRef struct_get_type =
+      LLVMFunctionType(backend->int_type, struct_get_params, 2, 0);
+  backend->func_aot_struct_get_field = LLVMAddFunction(
+      backend->module, "aot_struct_get_field_ptr", struct_get_type);
+
+  // aot_struct_set_field_ptr(VMValue *v, int idx, i64 val) -> void
+  LLVMTypeRef struct_set_params[] = {backend->ptr_type, backend->int32_type,
+                                     backend->int_type};
+  LLVMTypeRef struct_set_type =
+      LLVMFunctionType(backend->void_type, struct_set_params, 3, 0);
+  backend->func_aot_struct_set_field = LLVMAddFunction(
+      backend->module, "aot_struct_set_field_ptr", struct_set_type);
+
+  // aot_struct_unpack_to(VMValue *v, int field_count, i64 *dst) -> void
+  LLVMTypeRef struct_unpack_params[] = {
+      backend->ptr_type, backend->int32_type, backend->ptr_type};
+  LLVMTypeRef struct_unpack_type =
+      LLVMFunctionType(backend->void_type, struct_unpack_params, 3, 0);
+  backend->func_aot_struct_unpack_to = LLVMAddFunction(
+      backend->module, "aot_struct_unpack_to", struct_unpack_type);
+
   // ====== Fast Array Access (value-based, no alloca) ======
   // aot_array_get_fast(VMValue arr, i64 index) -> VMValue
   LLVMTypeRef get_fast_params[] = {backend->vm_value_type, backend->int_type};
@@ -3055,8 +3099,67 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // push(array, value) - pointer ABI
     if (node->name && strcmp(node->name, "push") == 0 &&
         node->argument_count >= 2) {
+      // Heap-promote escape path (Plan 04 v2): if arg[1] is a typed-struct
+      // identifier OR a struct-returning call, lift the struct contents to
+      // a heap ObjStruct first. The boxed VMValue we hand to aot_array_push
+      // then carries an Obj* whose payload survives caller scope cleanup.
+      // Without this, the existing fallback below would push a "zero
+      // VMValue" placeholder and the array would silently lose the data —
+      // exactly what Plan 04 PR1..PR6 deferred to this PR.
+      ASTNode_C *val_arg = node->arguments[1];
+      LLVMValueRef val = nullptr;
+      if (val_arg && val_arg->type == AST_IDENTIFIER && val_arg->name) {
+        const char *src_struct = get_local_struct_type(backend, val_arg->name);
+        LLVMValueRef src_alloca = get_local(backend, val_arg->name);
+        if (src_struct && src_alloca) {
+          StructTypeEntry *st = find_struct_type(backend, src_struct);
+          if (st && struct_is_trivially_unboxable(st)) {
+            LLVMValueRef name_str = LLVMBuildGlobalStringPtr(
+                backend->builder, st->name, "struct.type.name");
+            LLVMValueRef field_count = LLVMConstInt(
+                backend->int32_type, (unsigned)st->field_count, 0);
+            LLVMValueRef alloc_args[] = {name_str, field_count, src_alloca};
+            val = llvm_call_vmvalue_func(
+                backend, backend->func_aot_struct_alloc_from_fields,
+                alloc_args, 3, "push.struct.heap");
+          }
+        }
+      } else if (val_arg && val_arg->type == AST_FUNCTION_CALL &&
+                 val_arg->name) {
+        const char *ret_struct = nullptr;
+        for (int j = 0; j < backend->function_count; j++) {
+          if (strcmp(backend->functions[j].name, val_arg->name) == 0) {
+            ret_struct = backend->functions[j].return_struct_name;
+            break;
+          }
+        }
+        if (ret_struct) {
+          StructTypeEntry *st = find_struct_type(backend, ret_struct);
+          if (st && struct_is_trivially_unboxable(st)) {
+            LLVMValueRef tmp = llvm_build_alloca_at_entry(
+                backend, st->llvm_type, "push.struct.call.tmp");
+            LLVMBuildStore(backend->builder,
+                           LLVMConstNull(st->llvm_type), tmp);
+            backend->pending_struct_result_ptr = tmp;
+            backend->pending_struct_result_name = st->name;
+            (void)codegen_expression(backend, val_arg);
+            backend->pending_struct_result_ptr = nullptr;
+            backend->pending_struct_result_name = nullptr;
+            LLVMValueRef name_str = LLVMBuildGlobalStringPtr(
+                backend->builder, st->name, "struct.type.name");
+            LLVMValueRef field_count = LLVMConstInt(
+                backend->int32_type, (unsigned)st->field_count, 0);
+            LLVMValueRef alloc_args[] = {name_str, field_count, tmp};
+            val = llvm_call_vmvalue_func(
+                backend, backend->func_aot_struct_alloc_from_fields,
+                alloc_args, 3, "push.struct.call.heap");
+          }
+        }
+      }
       LLVMValueRef arr = codegen_expression(backend, node->arguments[0]);
-      LLVMValueRef val = codegen_expression(backend, node->arguments[1]);
+      if (!val) {
+        val = codegen_expression(backend, val_arg);
+      }
       if (!arr || !val) return llvm_vm_val_int(backend, 0);
 
       // Allocate temps and store values for pointer ABI. Hoist to entry so a
@@ -4283,8 +4386,29 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         }
       }
     }
+    // Heap-struct unpack path (Plan 04 v2): `V3 p = points[0];` /
+    // `V3 p = some_dict["key"];` — the RHS is a generic VMValue that
+    // (we hope) holds an OBJ_STRUCT pointer at runtime. Same stack
+    // alloca as the typed paths so subsequent `.x`/`.y` reads keep the
+    // GEP+load fast path; the fields are populated via aot_struct_unpack_to
+    // at the alloca site. The runtime helper zero-fills on type
+    // mismatch so misuse is silent (typeinfer can flag it later).
+    bool init_is_heap_unpack = false;
+    if (node->data_type == TYPE_CUSTOM && node->right &&
+        !init_is_object_literal && !init_is_struct_call) {
+      switch (node->right->type) {
+      case AST_ARRAY_ACCESS:
+      case AST_IDENTIFIER:
+      case AST_FUNCTION_CALL:
+        init_is_heap_unpack = true;
+        break;
+      default:
+        break;
+      }
+    }
     if (node->data_type == TYPE_CUSTOM &&
-        (!node->right || init_is_object_literal || init_is_struct_call)) {
+        (!node->right || init_is_object_literal || init_is_struct_call ||
+         init_is_heap_unpack)) {
       const char *struct_name = nullptr;
       if (node->return_custom_type) struct_name = node->return_custom_type;
       // VAR_DECL stores the custom type name in `field_custom_types` slot 0
@@ -4368,6 +4492,27 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           // the call took the regular VMValue path instead.
           backend->pending_struct_result_ptr = nullptr;
           backend->pending_struct_result_name = nullptr;
+        } else if (init_is_heap_unpack) {
+          // `V3 p = points[0];` — codegen the RHS as a regular VMValue,
+          // store it to a temp alloca, hand the pointer to
+          // aot_struct_unpack_to. The helper either fills our slots
+          // from a heap ObjStruct or leaves them zero (already done by
+          // the LLVMConstNull store above). Field reads on `p`
+          // afterwards use the existing GEP+load path; no per-access
+          // runtime call.
+          LLVMValueRef rhs_val = codegen_expression(backend, node->right);
+          if (rhs_val) {
+            LLVMValueRef rhs_tmp = llvm_build_alloca_at_entry(
+                backend, backend->vm_value_type, "unpack.rhs.tmp");
+            LLVMBuildStore(backend->builder, rhs_val, rhs_tmp);
+            LLVMValueRef field_count = LLVMConstInt(
+                backend->int32_type, (unsigned)st->field_count, 0);
+            LLVMValueRef unpack_args[] = {rhs_tmp, field_count, typed_alloca};
+            LLVMBuildCall2(
+                backend->builder,
+                LLVMGlobalGetValueType(backend->func_aot_struct_unpack_to),
+                backend->func_aot_struct_unpack_to, unpack_args, 3, "");
+          }
         }
         add_local_struct(backend, node->name, typed_alloca, st->name);
         return typed_alloca;
