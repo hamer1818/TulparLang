@@ -488,6 +488,9 @@ VM *vm_create() {
   vm->frame_count = 0;
   vm->stack_top = vm->stack;
   vm->global_count = 0;
+  // Top-level user script lives in cwd → no import_dir. Slot is
+  // populated when OP_IMPORT pushes a frame for a freshly-loaded module.
+  vm->import_dirs[0][0] = '\0';
 
   // Initialize global cache
   vm->global_cache_count = 0;
@@ -2770,6 +2773,10 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         // Check embedded libs first
         const char *embedded_source = get_embedded_lib(fileName);
         char *source = nullptr;
+        // Track the actual filesystem path we read from so we can derive
+        // the directory for nested-import sibling resolution. Stays empty
+        // for embedded libs (no real filesystem dir).
+        char resolved_path[512] = "";
 
         if (embedded_source != nullptr) {
           // Use embedded source
@@ -2778,27 +2785,61 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         } else {
           // Resolution order (must match the AOT path so VM/AOT behaviour
           // stays consistent — see docs/ecosystem/package-manager.mdx):
+          //   0. <current_frame_import_dir>/<name>.tpr (bundle-local sibling)
           //   1. ./<name>
           //   2. ./<name>.tpr
           //   3. ./tulpar_modules/<name>/<name>.tpr  (vendored entry-point)
           //   4. ./tulpar_modules/<name>.tpr        (vendored single-file)
-          source = read_file(fileName);
+          //
+          // (0) is what makes multi-file `.tpkg` bundles work — without
+          // it, `tulpar_modules/multipkg/multipkg.tpr` doing
+          // `import "greetings"` only finds the cwd-rooted candidates,
+          // misses the sibling, and falls through to a "Could not read
+          // file 'greetings'" error. AOT got this fix in PR #61; this
+          // mirrors the same logic for the VM.
+          const char *cur_dir = vm->import_dirs[vm->frame_count - 1];
+          if (cur_dir[0] != '\0') {
+            char sibling[512];
+            snprintf(sibling, sizeof(sibling), "%s/%s.tpr",
+                     cur_dir, fileName);
+            source = read_file(sibling);
+            if (source != nullptr) {
+              snprintf(resolved_path, sizeof(resolved_path), "%s", sibling);
+            }
+          }
+          if (source == nullptr) {
+            source = read_file(fileName);
+            if (source != nullptr) {
+              snprintf(resolved_path, sizeof(resolved_path), "%s", fileName);
+            }
+          }
           if (source == nullptr) {
             char ptrName[512];
             snprintf(ptrName, sizeof(ptrName), "%s.tpr", fileName);
             source = read_file(ptrName);
+            if (source != nullptr) {
+              snprintf(resolved_path, sizeof(resolved_path), "%s", ptrName);
+            }
           }
           if (source == nullptr) {
             char vendorEntry[512];
             snprintf(vendorEntry, sizeof(vendorEntry),
                      "tulpar_modules/%s/%s.tpr", fileName, fileName);
             source = read_file(vendorEntry);
+            if (source != nullptr) {
+              snprintf(resolved_path, sizeof(resolved_path), "%s",
+                       vendorEntry);
+            }
           }
           if (source == nullptr) {
             char vendorSingle[512];
             snprintf(vendorSingle, sizeof(vendorSingle),
                      "tulpar_modules/%s.tpr", fileName);
             source = read_file(vendorSingle);
+            if (source != nullptr) {
+              snprintf(resolved_path, sizeof(resolved_path), "%s",
+                       vendorSingle);
+            }
           }
         }
 
@@ -2875,10 +2916,36 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           return VM_RUNTIME_ERROR;
         }
 
+        // Stash the resolved file's directory in the NEW frame's slot
+        // (`vm->frame_count` is the index that will become current after
+        // the increment below). Nested OP_IMPORTs inside the imported
+        // module will then read this slot via `import_dirs[frame_count-1]`
+        // and probe siblings before cwd-rooted candidates.
+        // Embedded libs / failed dir-derivation leave the slot empty,
+        // which is the same as "no bundle-local probe" — safe default.
+        char new_import_dir[256] = "";
+        if (resolved_path[0] != '\0') {
+          const char *last_sep = nullptr;
+          for (const char *p = resolved_path; *p; p++) {
+            if (*p == '/' || *p == '\\') last_sep = p;
+          }
+          if (last_sep && last_sep > resolved_path) {
+            size_t dir_len = (size_t)(last_sep - resolved_path);
+            if (dir_len >= sizeof(new_import_dir))
+              dir_len = sizeof(new_import_dir) - 1;
+            memcpy(new_import_dir, resolved_path, dir_len);
+            new_import_dir[dir_len] = '\0';
+          }
+        }
+
         CallFrame *newFrame = &vm->frames[vm->frame_count++];
         newFrame->function = scriptFunc;
         newFrame->ip = scriptFunc->chunk.code;
         newFrame->slots = vm->stack_top - 1; // Function starts at -1 (arity 0)
+        // `frame_count - 1` is now the new frame's index.
+        snprintf(vm->import_dirs[vm->frame_count - 1],
+                 sizeof(vm->import_dirs[vm->frame_count - 1]),
+                 "%s", new_import_dir);
 
         // Update local registers
         frame = newFrame;
