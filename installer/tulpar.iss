@@ -2,9 +2,18 @@
 ;
 ; Build with: iscc.exe /DAppVersion=2.1.0.42 /DSourceBinary=path\to\tulpar.exe installer\tulpar.iss
 ;
-; CI sets both /D values; running locally without them falls back to a
+; CI sets the /D values; running locally without them falls back to a
 ; "0.0.0-dev" stamp and the build-windows/tulpar.exe path so a developer
 ; can `iscc installer\tulpar.iss` after `cmake --build`.
+;
+; On Windows, tulpar.exe pulls three non-system DLLs out of MSYS2's
+; mingw64 runtime that don't ship with stock Windows: libwinpthread-1.dll
+; and the zlib1.dll / libzstd.dll that LLVM transitively depends on.
+; The installer bundles them next to tulpar.exe so a fresh install on a
+; box without MSYS2 / Git PATH doesn't fail at launch with
+; STATUS_DLL_NOT_FOUND. (libgcc_s_seh-1.dll and libstdc++-6.dll are
+; folded into tulpar.exe via -static-libgcc/-static-libstdc++ so they
+; don't need bundling.)
 
 #ifndef AppVersion
   #define AppVersion "0.0.0-dev"
@@ -16,6 +25,10 @@
 
 #ifndef SourceRuntimeLib
   #define SourceRuntimeLib "..\build-windows\libtulpar_runtime.a"
+#endif
+
+#ifndef SourceMingwBin
+  #define SourceMingwBin "C:\msys64\mingw64\bin"
 #endif
 
 #define AppName        "TulparLang"
@@ -76,6 +89,14 @@ Source: "{#SourceBinary}";     DestDir: "{app}"; Flags: ignoreversion
 ; before falling back to the dev-tree build dirs, so dropping the
 ; archive next to tulpar.exe is enough.
 Source: "{#SourceRuntimeLib}"; DestDir: "{app}"; Flags: ignoreversion
+; MinGW / LLVM runtime DLLs that don't ship with Windows. tulpar.exe
+; lists each in its import table; without them the launcher dies with
+; STATUS_DLL_NOT_FOUND on the very first invocation. Sitting next to
+; tulpar.exe is enough — Windows resolves DLLs from the executable's
+; own directory before walking PATH.
+Source: "{#SourceMingwBin}\libwinpthread-1.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceMingwBin}\zlib1.dll";           DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceMingwBin}\libzstd.dll";         DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; Start Menu entries. We add both a launcher (opens REPL — most useful

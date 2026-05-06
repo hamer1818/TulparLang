@@ -75,9 +75,25 @@ struct AOTPhaseTimer {
   #define AOT_TLS_LINK_FLAGS ""
 #endif
 
+// Note on Windows static linking:
+// User-produced AOT binaries pulled `libgcc_s_seh-1.dll`, `libstdc++-6.dll`,
+// and `libwinpthread-1.dll` from MinGW out of the linker. None of these
+// ship with stock Windows, so a binary built on a developer's machine and
+// copied to a fresh Win10/11 install would fail at launch with
+// STATUS_DLL_NOT_FOUND (0xC0000135) — defeating the "tulpar build foo.tpr
+// produces a standalone exe" promise. `-static` switches the link mode
+// for the whole AOT line (every -l<name> resolves to its `.a` form);
+// `-static-libgcc -static-libstdc++` are belt-and-suspenders so the GCC
+// support libs go in even if a downstream change reintroduces a -Bdynamic
+// segment. ws2_32 / kernel32 etc. only have import-lib form, so `-static`
+// happily pulls them from the same `.a` files MinGW always uses for them.
+// Trade-off: roughly +3 MB per produced exe (from ~3 MB to ~5–6 MB).
+// Worth it: the user can now zip/email a single .exe to any 64-bit
+// Windows box and have it run.
 #if PLATFORM_WINDOWS
   #define AOT_LINK_LIB_FLAGS \
       "-Wl,--export-all-symbols " \
+      "-static -static-libgcc -static-libstdc++ " \
       "-ltulpar_runtime -lws2_32 -lwsock32" AOT_TLS_LINK_FLAGS
   #define AOT_LINK_PIE_FLAG ""
   #define AOT_EXE_SUFFIX ".exe"

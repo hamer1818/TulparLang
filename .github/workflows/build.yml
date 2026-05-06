@@ -153,6 +153,7 @@ jobs:
       # only ship the compiler distribution — the static libs we link against
       # (LLVMCore, LLVMSupport, …) aren't there.
       - name: Setup MSYS2
+        id: msys2
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
@@ -220,10 +221,16 @@ jobs:
           if (-not (Test-Path $iscc)) {
             throw "ISCC.exe not found at $iscc — runner image changed?"
           }
+          # The installer bundles libwinpthread / zlib1 / libzstd from
+          # MSYS2 mingw64; setup-msys2 exposes its install root via the
+          # `msys2-location` output. Joining `\mingw64\bin` gets us the
+          # directory ISCC's Source: lines walk for the bundled DLLs.
+          $mingwBin = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin"
           & $iscc `
             "/DAppVersion=$appVersion" `
             "/DSourceBinary=$pwd\build-windows\tulpar.exe" `
             "/DSourceRuntimeLib=$pwd\build-windows\libtulpar_runtime.a" `
+            "/DSourceMingwBin=$mingwBin" `
             "installer\tulpar.iss"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
           # ISCC writes to installer\Output\<OutputBaseFilename>.exe
