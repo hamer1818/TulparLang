@@ -204,9 +204,30 @@ LLVMValueRef llvm_call_vmvalue_func(LLVMBackend *backend, LLVMValueRef func,
   free(all);
   return LLVMBuildLoad2(backend->builder, backend->vm_value_type, out, name);
 #else
+  // Coerce each VMValue arg to {i64, i64} via memory aliasing — the
+  // function type was declared with `ret_pair_type` for VMValue args
+  // (see llvm_make_vmvalue_func_type SysV branch). The bitcast through
+  // memory is the standard C "type-pun via pointer cast" pattern;
+  // alloca + store + load lets LLVM keep it as a no-op when the
+  // optimizer can prove both halves stay in registers.
+  LLVMValueRef *coerced = static_cast<LLVMValueRef*>(
+      malloc(sizeof(LLVMValueRef) * arg_count));
+  for (unsigned i = 0; i < arg_count; i++) {
+    LLVMTypeRef arg_ty = LLVMTypeOf(args[i]);
+    if (arg_ty == backend->vm_value_type) {
+      LLVMValueRef slot = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "vmarg_coerce_slot");
+      LLVMBuildStore(backend->builder, args[i], slot);
+      coerced[i] = LLVMBuildLoad2(backend->builder, backend->ret_pair_type,
+                                  slot, "vmarg_as_pair");
+    } else {
+      coerced[i] = args[i];
+    }
+  }
   LLVMValueRef ret_pair = LLVMBuildCall2(
-      backend->builder, LLVMGlobalGetValueType(func), func, args, arg_count,
-      name);
+      backend->builder, LLVMGlobalGetValueType(func), func, coerced,
+      arg_count, name);
+  free(coerced);
   return llvm_convert_ret_pair_to_vmvalue(backend, ret_pair);
 #endif
 }
@@ -235,7 +256,27 @@ LLVMTypeRef llvm_make_vmvalue_func_type(LLVMBackend *backend,
   free(all);
   return ft;
 #else
-  return LLVMFunctionType(backend->ret_pair_type, arg_types, arg_count,
-                          is_vararg);
+  // SysV (Linux/macOS): for VMValue args, declare them as the coerced
+  // {i64, i64} pair (`ret_pair_type`) — same shape we use for the return.
+  // Why: passing {i32, [4xi8], i64} as a struct value works for one arg
+  // (lands in rdi:rsi) but a second arg silently corrupts somewhere in
+  // LLVM's SysV ABI lowering — `socket_server("127.0.0.1", port)` reaches
+  // the C runtime with garbage VMValues and segfaults the very first
+  // bind() / accept(). Coercing to the explicit `{i64, i64}` matches what
+  // GCC emits for a 16-byte INTEGER+INTEGER struct argument and sidesteps
+  // the lowering bug.
+  LLVMTypeRef *all = static_cast<LLVMTypeRef*>(
+      malloc(sizeof(LLVMTypeRef) * arg_count));
+  for (unsigned i = 0; i < arg_count; i++) {
+    if (arg_types[i] == backend->vm_value_type) {
+      all[i] = backend->ret_pair_type;
+    } else {
+      all[i] = arg_types[i];
+    }
+  }
+  LLVMTypeRef ft = LLVMFunctionType(backend->ret_pair_type, all, arg_count,
+                                    is_vararg);
+  free(all);
+  return ft;
 #endif
 }
