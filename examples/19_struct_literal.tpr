@@ -1,0 +1,42 @@
+// Plan 04 PR4 hedef ornek: typed-struct literal initializer.
+// `Point p = { x: 3, y: 4 };` artik native struct yolunda calisiyor —
+// parser bare-identifier key'leri sadece TYPE_CUSTOM VAR_DECL init
+// baglaminda kabul ediyor, codegen alloca + alan-alan GEP+store
+// uretiyor. Eksik alanlar (literal'de yazilmamis) sifir-init'i koruyor.
+
+struct Point {
+    int x;
+    int y;
+}
+
+struct Box {
+    int width;
+    int height;
+    int depth;
+}
+
+func dist_squared(): int {
+    Point p = { x: 3, y: 4 };
+    return p.x * p.x + p.y * p.y;
+}
+
+func partial_init(): int {
+    Point p = { x: 7 };  // y default = 0
+    return p.x + p.y;
+}
+
+func volume(): int {
+    Box b = { width: 2, height: 3, depth: 4 };
+    return b.width * b.height * b.depth;
+}
+
+func mutate_after_init(): int {
+    Point p = { x: 1, y: 2 };
+    p.x = p.x + 10;
+    return p.x + p.y;
+}
+
+print(dist_squared());        // 25
+print(partial_init());        // 7
+print(volume());              // 24
+print(mutate_after_init());   // 13

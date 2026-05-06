@@ -39,6 +39,12 @@ private:
     std::unique_ptr<ASTNode> parse_array_access(std::unique_ptr<ASTNode> object);
     std::unique_ptr<ASTNode> parse_array_literal();
     std::unique_ptr<ASTNode> parse_object_literal();
+    // Restricted-context object literal accepting both string and bare
+    // identifier keys, used only for typed-struct VAR_DECL initializers
+    // (`Point p = { x: 1, y: 2 };`). Generic object literals continue to
+    // require string keys via parse_object_literal so the relaxed key
+    // form does not introduce parser ambiguity at expression position.
+    std::unique_ptr<ASTNode> parse_struct_literal_init();
     
     // Statement parsing
     std::unique_ptr<ASTNode> parse_statement();

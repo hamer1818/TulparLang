@@ -78,6 +78,52 @@ func two_distinct_locals() {
     assert_eq_int(40, b.y);
 }
 
+func struct_literal_init() {
+    // `Point p = { x: 3, y: 4 };` — bare-identifier keys, typed-alloca path
+    // emits zero-init followed by per-field GEP+store of the i64 payload.
+    Point p = { x: 3, y: 4 };
+    assert_eq_int(3, p.x);
+    assert_eq_int(4, p.y);
+}
+
+func struct_literal_init_partial() {
+    // Missing field defaults to the zero-init pre-fill of the alloca, so
+    // `y` reads back as 0 even though the literal only sets `x`.
+    Point p = { x: 7 };
+    assert_eq_int(7, p.x);
+    assert_eq_int(0, p.y);
+}
+
+func struct_literal_init_three_fields() {
+    Box b = { width: 2, height: 3, depth: 4 };
+    assert_eq_int(24, b.width * b.height * b.depth);
+}
+
+func struct_literal_init_reassign() {
+    // The typed-alloca local should remain mutable after a literal init.
+    Point p = { x: 1, y: 2 };
+    p.x = 99;
+    assert_eq_int(99, p.x);
+    assert_eq_int(2, p.y);
+}
+
+func struct_literal_init_string_keys() {
+    // Backwards-compat: existing `{"x": ...}` syntax still works for
+    // typed-struct init. Same parse path accepts both.
+    Point p = { "x": 5, "y": 6 };
+    assert_eq_int(5, p.x);
+    assert_eq_int(6, p.y);
+}
+
+func struct_literal_init_uses_expressions() {
+    // Field values aren't restricted to literals — any expression that
+    // boxes into an int VMValue is fine; the codegen extracts slot 2.
+    int base = 10;
+    Point p = { x: base + 1, y: base * 2 };
+    assert_eq_int(11, p.x);
+    assert_eq_int(20, p.y);
+}
+
 test("typed struct: int field roundtrip", "roundtrip_int_field");
 test("typed struct: multiple int fields", "multiple_fields");
 test("typed struct: arithmetic on fields", "arithmetic_on_fields");
@@ -86,3 +132,15 @@ test("typed struct: default zero-initialised fields", "default_zero_init");
 test("typed struct: reassigning a field", "reassign_field");
 test("typed struct: two distinct typed-struct locals do not alias",
      "two_distinct_locals");
+test("typed struct: literal init `{ x: 3, y: 4 }` populates fields",
+     "struct_literal_init");
+test("typed struct: literal init with missing field zero-defaults",
+     "struct_literal_init_partial");
+test("typed struct: literal init across three fields",
+     "struct_literal_init_three_fields");
+test("typed struct: literal init still allows later reassignment",
+     "struct_literal_init_reassign");
+test("typed struct: literal init accepts string keys (back-compat)",
+     "struct_literal_init_string_keys");
+test("typed struct: literal init accepts arbitrary expressions",
+     "struct_literal_init_uses_expressions");

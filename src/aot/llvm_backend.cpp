@@ -3933,10 +3933,16 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // to the boxed VMValue path below for:
     //   - structs whose entry was never registered (parser had no TypeDecl)
     //   - structs with non-trivial field types (string, array, nested struct)
-    //   - decls with an initializer (e.g. `Point p = { x: 1, y: 2 };`) —
-    //     handling object-literal init for typed structs is deferred to a
-    //     follow-up PR; for now those keep the boxed Object initialiser.
-    if (node->data_type == TYPE_CUSTOM && !node->right) {
+    //   - decls whose initializer isn't a struct literal (e.g.
+    //     `Point p = some_func();`) — those still keep the boxed Object
+    //     initialiser since the rhs may carry a heap object.
+    //
+    // Object-literal initializers (`Point p = { x: 1, y: 2 };`) take the
+    // typed path: zero-init the alloca, then GEP+store each provided field's
+    // i64 payload. Unspecified fields default to zero, matching the
+    // initializer-less branch's behaviour.
+    if (node->data_type == TYPE_CUSTOM &&
+        (!node->right || node->right->type == AST_OBJECT_LITERAL)) {
       const char *struct_name = nullptr;
       if (node->return_custom_type) struct_name = node->return_custom_type;
       // VAR_DECL stores the custom type name in `field_custom_types` slot 0
@@ -3949,7 +3955,21 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         struct_name = node->field_custom_types[0];
       }
       StructTypeEntry *st = find_struct_type(backend, struct_name);
-      if (st && struct_is_trivially_unboxable(st)) {
+      bool can_take_typed_path = st && struct_is_trivially_unboxable(st);
+      // For a literal init, every key must resolve to a known field of the
+      // struct. If any key is bogus (`Point p = { z: 1 };`), fall through to
+      // the boxed Object path so the existing object_set runtime can still
+      // store it — that's the path codegen already uses for boxed json
+      // assignments and produces a sensible runtime error today.
+      if (can_take_typed_path && node->right) {
+        for (int k = 0; k < node->right->object_count; k++) {
+          if (struct_type_field_index(st, node->right->object_keys[k]) < 0) {
+            can_take_typed_path = false;
+            break;
+          }
+        }
+      }
+      if (can_take_typed_path) {
         LLVMValueRef typed_alloca = llvm_build_alloca_at_entry(
             backend, st->llvm_type, node->name);
         // Zero-initialize: matches the legacy boxed path's "int 0" defaults
@@ -3957,6 +3977,27 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         // memory before they assign to fields.
         LLVMBuildStore(backend->builder, LLVMConstNull(st->llvm_type),
                        typed_alloca);
+        if (node->right) {
+          // `Point p = { x: 3, y: 4 };` — store each provided field's i64
+          // payload via GEP. Slot 2 of the boxed VMValue holds the int/bool
+          // payload (true/false box as 1/0). Anything else (string, array)
+          // would be miscompiled here, but struct_is_trivially_unboxable()
+          // already guarantees every field is int/bool, and the typeinfer
+          // strict-mode catches obvious string/array literals against an
+          // int field at typecheck time.
+          for (int k = 0; k < node->right->object_count; k++) {
+            const char *fname = node->right->object_keys[k];
+            int idx = struct_type_field_index(st, fname);
+            LLVMValueRef val_box = codegen_expression(
+                backend, node->right->object_values[k]);
+            LLVMValueRef i64_val = LLVMBuildExtractValue(
+                backend->builder, val_box, 2, "lit.i64");
+            LLVMValueRef field_ptr = LLVMBuildStructGEP2(
+                backend->builder, st->llvm_type, typed_alloca,
+                (unsigned)idx, "struct.lit.field.ptr");
+            LLVMBuildStore(backend->builder, i64_val, field_ptr);
+          }
+        }
         add_local_struct(backend, node->name, typed_alloca, st->name);
         return typed_alloca;
       }
