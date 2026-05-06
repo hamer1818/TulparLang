@@ -106,6 +106,27 @@ bool manifest_parse(const std::string &source, Manifest &out,
         std::string key = strip(line.substr(0, eq));
         std::string val_part = strip(line.substr(eq + 1));
         // strip trailing line comment ("foo" # bar)
+        // Bool literals (true/false) are accepted only for the
+        // top-level `strict` key — every other key is string-only.
+        if (section == SEC_TOP && key == "strict") {
+            // Allow trailing comment after the bool: `strict = true # note`
+            std::string bool_part = val_part;
+            size_t hash = bool_part.find('#');
+            if (hash != std::string::npos) bool_part = strip(bool_part.substr(0, hash));
+            if (bool_part == "true") {
+                out.strict_typecheck = true;
+                continue;
+            }
+            if (bool_part == "false") {
+                out.strict_typecheck = false;
+                continue;
+            }
+            out_err = "line " + std::to_string(lineno) +
+                      ": 'strict' must be `true` or `false` (got: '" +
+                      bool_part + "')";
+            return false;
+        }
+
         if (val_part.size() && val_part[0] == '"') {
             std::string val;
             size_t consumed = 0;
@@ -180,6 +201,9 @@ std::string Manifest::to_toml() const {
     kv("description", description);
     kv("author", author);
     kv("license", license);
+    if (strict_typecheck) {
+        out += "strict = true\n";
+    }
 
     if (!registry_url.empty()) {
         out += "\n[registry]\n";

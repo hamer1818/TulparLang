@@ -23,6 +23,7 @@
 #endif
 #include "lsp/lsp_server.hpp"
 #include "fmt/formatter.hpp"
+#include "pkg/manifest.hpp"
 #include "pkg/pkg_cli.hpp"
 #include "cli/line_edit.hpp"
 #include "cli/typecheck_cmd.hpp"
@@ -91,8 +92,10 @@ static void print_help() {
                   "- Disable pre-build [typecheck] warnings"));
   std::printf("  --strict                         %s\n",
               tulpar::i18n::tr_en(
-                  "- [typecheck] uyarilarini hata olarak ele al",
-                  "- Promote [typecheck] warnings to errors"));
+                  "- [typecheck] uyarilarini hata olarak ele al "
+                  "(tulpar.toml `strict = true` kalici hale getirir)",
+                  "- Promote [typecheck] warnings to errors "
+                  "(set `strict = true` in tulpar.toml to make permanent)"));
   std::printf("  tulpar pkg <komut>               %s\n",
               tulpar::i18n::tr_en("- Paket yoneticisi (init/install/...)",
                                   "- Package manager (init/install/...)"));
@@ -544,13 +547,30 @@ int main(int argc, char **argv) {
   int build_mode = 0;  // build / --build / --aot: save native binary
   int skip_typecheck = 0;  // --no-typecheck disables the pre-pass warnings
   // --strict flips the typeinfer pre-pass from informational to
-  // exit-blocking. Default: 0 (warnings only). Env var TULPAR_STRICT=1
-  // sets it; CLI --strict flag wins. --no-typecheck overrides both
-  // (no warnings emitted, no exit).
+  // exit-blocking. Precedence (lowest to highest):
+  //   1. Default: 0 (warnings only)
+  //   2. tulpar.toml `strict = true` in CWD (project default)
+  //   3. Env var TULPAR_STRICT — non-empty value, "0" disables, anything
+  //      else enables. Lets CI override the project default explicitly.
+  //   4. CLI --strict flag — always enables.
+  // --no-typecheck still overrides everything (no warnings, no exit).
   int strict_typecheck = 0;
   {
+    // Only surface a parse error if the file actually exists — silent
+    // skip when there's no manifest at all (most scripts run without one).
+    struct stat st;
+    if (stat("tulpar.toml", &st) == 0) {
+      tulpar::Manifest cwd_manifest;
+      std::string manifest_err;
+      if (tulpar::manifest_load("tulpar.toml", cwd_manifest, manifest_err)) {
+        if (cwd_manifest.strict_typecheck) strict_typecheck = 1;
+      } else {
+        std::fprintf(stderr, "[manifest] tulpar.toml: %s (ignoring)\n",
+                     manifest_err.c_str());
+      }
+    }
     const char *env = getenv("TULPAR_STRICT");
-    if (env && *env && strcmp(env, "0") != 0) strict_typecheck = 1;
+    if (env && *env) strict_typecheck = (strcmp(env, "0") != 0) ? 1 : 0;
   }
   int arg_offset = 1;  // index of first non-flag arg
 
