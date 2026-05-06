@@ -216,10 +216,14 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
         // functions named `len`/`abs` (rare but legal) keep their own
         // declared types.
         auto is_collection = [](DataType t) {
+          // `length(json)` returns the key count (matches Python's
+          // `len({})`, JS's `Object.keys(o).length`). Originally `json`
+          // was rejected here because the runtime returned 0; now both
+          // VM and AOT count keys, so accept json as a collection too.
           return t == TYPE_STRING || t == TYPE_ARRAY ||
                  t == TYPE_ARRAY_INT || t == TYPE_ARRAY_FLOAT ||
                  t == TYPE_ARRAY_STR || t == TYPE_ARRAY_BOOL ||
-                 t == TYPE_ARRAY_JSON;
+                 t == TYPE_ARRAY_JSON || t == TYPE_JSON;
         };
         auto is_numeric = [](DataType t) {
           return t == TYPE_INT || t == TYPE_FLOAT;
@@ -237,7 +241,7 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
           if (param_type == TYPE_UNKNOWN && i == 0 && !is_unknown(arg_type)) {
             if (poly_collection && !is_collection(arg_type)) {
               report_error(ctx,
-                           "Argument %d of '%s': expected string or array, got %s at line %d",
+                           "Argument %d of '%s': expected string, array or json, got %s at line %d",
                            i + 1, call->name.c_str(),
                            datatype_to_string(arg_type), call->loc.line);
               continue;
