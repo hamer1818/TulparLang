@@ -2829,7 +2829,68 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           LLVMBuildCall2(backend->builder,
                          LLVMGlobalGetValueType(backend->func_printf),
                          backend->func_printf, printf_args, 2, "");
-        } else {
+        } else if (arg->type == AST_IDENTIFIER && arg->name &&
+                   get_local_struct_type(backend, arg->name)) {
+          // Typed-struct print: emit `Name { f1: <int>, f2: <int>, ... }`
+          // directly via printf calls, GEP-loading each field's i64
+          // payload. Avoids feeding a raw struct alloca through the
+          // VMValue print pipeline (which would mis-read the bytes).
+          // Trivially-unboxable (int/bool) is the only path PR3-PR5 takes,
+          // so every field is an i64 here. bool prints as 0/1 — same as
+          // the boxed VMValue print path treats it.
+          const char *struct_name =
+              get_local_struct_type(backend, arg->name);
+          StructTypeEntry *st = find_struct_type(backend, struct_name);
+          LLVMValueRef alloca = get_local(backend, arg->name);
+          if (st && alloca) {
+            char hdr[256];
+            snprintf(hdr, sizeof(hdr), "%s { ", st->name);
+            LLVMValueRef hdr_str =
+                LLVMBuildGlobalStringPtr(backend->builder, hdr,
+                                          "struct.print.hdr");
+            LLVMValueRef hdr_args[] = {hdr_str};
+            LLVMBuildCall2(backend->builder,
+                           LLVMGlobalGetValueType(backend->func_printf),
+                           backend->func_printf, hdr_args, 1, "");
+            LLVMValueRef sep_fmt = LLVMBuildGlobalStringPtr(
+                backend->builder, ", ", "struct.print.sep");
+            for (int f = 0; f < st->field_count; f++) {
+              if (f > 0) {
+                LLVMValueRef sep_args[] = {sep_fmt};
+                LLVMBuildCall2(
+                    backend->builder,
+                    LLVMGlobalGetValueType(backend->func_printf),
+                    backend->func_printf, sep_args, 1, "");
+              }
+              char fname_lit[256];
+              snprintf(fname_lit, sizeof(fname_lit), "%s: %%lld",
+                       st->field_names[f]);
+              LLVMValueRef fname_fmt = LLVMBuildGlobalStringPtr(
+                  backend->builder, fname_lit, "struct.print.field");
+              LLVMValueRef field_ptr = LLVMBuildStructGEP2(
+                  backend->builder, st->llvm_type, alloca,
+                  (unsigned)f, "struct.print.gep");
+              LLVMValueRef field_val = LLVMBuildLoad2(
+                  backend->builder, backend->int_type, field_ptr,
+                  "struct.print.fld");
+              LLVMValueRef pf_args[] = {fname_fmt, field_val};
+              LLVMBuildCall2(backend->builder,
+                             LLVMGlobalGetValueType(backend->func_printf),
+                             backend->func_printf, pf_args, 2, "");
+            }
+            LLVMValueRef tail_str = LLVMBuildGlobalStringPtr(
+                backend->builder, " }", "struct.print.tail");
+            LLVMValueRef tail_args[] = {tail_str};
+            LLVMBuildCall2(backend->builder,
+                           LLVMGlobalGetValueType(backend->func_printf),
+                           backend->func_printf, tail_args, 1, "");
+            continue;
+          }
+          // Fall through to the generic VMValue path if for any reason
+          // the struct entry wasn't resolvable (defensive — well-typed
+          // code shouldn't hit this).
+        }
+        if (arg->type != AST_STRING_LITERAL) {
           // Other types: use print_value_inline(VMValue*) - no newline
           // Need to pass pointer for ABI compatibility
           LLVMValueRef arg_val = codegen_expression(backend, arg);

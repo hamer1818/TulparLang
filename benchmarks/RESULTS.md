@@ -11,14 +11,25 @@ Best wall time of 3 runs per language. Times in milliseconds.
 | loopsum:C(gcc -O2) | 67 | 49999995000000 |
 | fib:Tulpar AOT | 114 | 9227465 |
 | fib:C(gcc -O2) | 83 | 9227465 |
+| struct_sum:Tulpar AOT (struct) | 29.7 | 299999970000000 |
+| struct_sum:Tulpar AOT (boxed)  | 2923.6 | 299999970000000 |
+| struct_sum:C(gcc -O2)          | 20.2 | 299999970000000 |
 
-Tulpar AOT lands in the **1.3–1.4× C** range — same neighbourhood as
-Rust and Go on identical hardware. The earlier 2026-04-28 record had
-Tulpar at 166 ms on `loopsum` and 185 ms on `fib`; the gap closed once
-LLVM had room to optimise the typed AOT path's tight loops (`break` /
-`continue` codegen no longer leaves dead-code phi nodes in front of
-the loop's induction-variable updates, and the static `recv` buffer
-removed a malloc/free hot pair from any benchmark that touches sockets).
+Tulpar AOT (CPU loops) lands in the **1.3–1.4× C** range — same
+neighbourhood as Rust and Go on identical hardware.
+
+`struct_sum` measures Plan 04 PR6: 10M iterasyon × 3-field `V3` struct
+toplamasi.
+- **Typed struct path** (`benchmarks/struct_sum.tpr`): native LLVM
+  struct alloca + alan-alan `getelementptr` + `load`/`store`. LLVM O3
+  cogu durumda struct'i tamamen scalarize ediyor.
+- **Boxed json path** (`benchmarks/struct_sum_boxed.tpr`): ayni
+  hesaplama, ama her alan erisimi `vm_set_element` /
+  `vm_get_element` runtime cagrilarindan geciyor — Plan 04 oncesi
+  "her sey json" yaklasimi.
+- Sonuc: typed yol ~**98× hizli** (boxed json'a karsi) ve C'ye
+  ~1.47× yakin. Plan 04'un struct hedefi (mottosu: "C kadar hizli")
+  somut, olculebilir bir kazanc olarak dogrulandi.
 
 ## HTTP throughput
 
