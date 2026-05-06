@@ -306,6 +306,17 @@ typedef struct VM {
   CallFrame frames[VM_FRAMES_MAX];
   int frame_count;
 
+  // Per-frame "where did this module's source live?" — populated when
+  // OP_IMPORT pushes a new frame for a freshly-loaded `.tpr` and probed
+  // by nested OP_IMPORTs to resolve bundle-local sibling imports
+  // (e.g. tulpar_modules/multipkg/multipkg.tpr doing `import "greetings"`
+  // finds tulpar_modules/multipkg/greetings.tpr before the cwd-rooted
+  // candidates would either miss it or grab a wrong unrelated package).
+  // Empty string for the top-level user script (lives in cwd) and for
+  // the embedded-libs path. Mirrors `current_import_dir` tracking in
+  // src/aot/llvm_backend.cpp's AST_IMPORT handler.
+  char import_dirs[VM_FRAMES_MAX][256];
+
   // Value stack
   VMValue stack[VM_STACK_MAX];
   VMValue *stack_top;
