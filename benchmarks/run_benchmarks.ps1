@@ -44,8 +44,9 @@ function Compile-Native {
 
 # Build native targets first.
 Write-Host "Compiling native programs..."
-Compile-Native -Source 'benchmarks/fib.c'     -Out 'benchmarks/fib_c.exe'     -Flags @()
-Compile-Native -Source 'benchmarks/loopsum.c' -Out 'benchmarks/loopsum_c.exe' -Flags @()
+Compile-Native -Source 'benchmarks/fib.c'        -Out 'benchmarks/fib_c.exe'        -Flags @()
+Compile-Native -Source 'benchmarks/loopsum.c'    -Out 'benchmarks/loopsum_c.exe'    -Flags @()
+Compile-Native -Source 'benchmarks/struct_sum.c' -Out 'benchmarks/struct_sum_c.exe' -Flags @()
 
 Write-Host "Compiling Go..."
 & go build -o 'benchmarks/fib_go.exe'     'benchmarks/fib.go'
@@ -62,9 +63,13 @@ Push-Location 'benchmarks'
 Pop-Location
 
 Write-Host "Building Tulpar AOT binaries..."
-Remove-Item 'benchmarks/fib_tulpar.exe', 'benchmarks/loopsum_tulpar.exe' -ErrorAction SilentlyContinue
-& .\tulpar.exe build benchmarks\loopsum.tpr benchmarks\loopsum_tulpar 2>&1 | Out-Null
-& .\tulpar.exe build benchmarks\fib.tpr     benchmarks\fib_tulpar     2>&1 | Out-Null
+Remove-Item 'benchmarks/fib_tulpar.exe', 'benchmarks/loopsum_tulpar.exe',
+            'benchmarks/struct_sum_tulpar.exe', 'benchmarks/struct_sum_boxed_tulpar.exe' `
+            -ErrorAction SilentlyContinue
+& .\tulpar.exe build benchmarks\loopsum.tpr          benchmarks\loopsum_tulpar          2>&1 | Out-Null
+& .\tulpar.exe build benchmarks\fib.tpr              benchmarks\fib_tulpar              2>&1 | Out-Null
+& .\tulpar.exe build benchmarks\struct_sum.tpr       benchmarks\struct_sum_tulpar       2>&1 | Out-Null
+& .\tulpar.exe build benchmarks\struct_sum_boxed.tpr benchmarks\struct_sum_boxed_tulpar 2>&1 | Out-Null
 
 $results = @()
 
@@ -89,6 +94,15 @@ $results += Measure-Run -Label 'fib:Go'          -Cmd '.\benchmarks\fib_go.exe' 
 $results += Measure-Run -Label 'fib:Rust'        -Cmd '.\benchmarks\fib_rs.exe' -CmdArgs @()
 $results += Measure-Run -Label 'fib:C(gcc -O2)'  -Cmd '.\benchmarks\fib_c.exe'  -CmdArgs @()
 $results += Measure-Run -Label 'fib:Java'        -Cmd 'java' -CmdArgs @('-cp','benchmarks','fib')
+
+# struct_sum benchmark — Plan 04 PR6. Native struct alloca + GEP yolu
+# (`struct_sum.tpr`) ile boxed json `vm_get_element` yolu
+# (`struct_sum_boxed.tpr`) arasi kazanc grafigini olcer; C aynisini
+# gcc -O2 ile native olarak yapar.
+Write-Host "`n--- struct_sum (10M iterasyon, 3-field V3 toplama) ---"
+$results += Measure-Run -Label 'struct_sum:Tulpar AOT (struct)' -Cmd '.\benchmarks\struct_sum_tulpar.exe'       -CmdArgs @()
+$results += Measure-Run -Label 'struct_sum:Tulpar AOT (boxed)'  -Cmd '.\benchmarks\struct_sum_boxed_tulpar.exe' -CmdArgs @()
+$results += Measure-Run -Label 'struct_sum:C(gcc -O2)'          -Cmd '.\benchmarks\struct_sum_c.exe'            -CmdArgs @()
 
 Write-Host "`n=== RESULTS (best of $Repeats runs) ==="
 $results | Format-Table Benchmark, Best_ms, Output -AutoSize
