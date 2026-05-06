@@ -4976,14 +4976,43 @@ static int native_codegen_supports_stmt(ASTNode_C *stmt) {
   if (!stmt) return 1;
   switch (stmt->type) {
   case AST_RETURN:
+    return 1;
   case AST_ASSIGNMENT:
+    // Native locals are i64. `acc[key] = value` needs `acc` loaded as a
+    // 16-byte VMValue, which OOB-reads off our 8-byte alloca and crashes
+    // codegen (the parser sets `node->name` for plain `x = v` and leaves
+    // it null when the lhs is an ArrayAccess subscript). Bail to the
+    // boxed function path whenever we see a subscript-assign so the
+    // function gets the regular VMValue ABI, where the lhs has the
+    // right shape. Plain `x = expr` keeps working.
+    if (stmt->name) return 1;
+    if (stmt->left && stmt->left->type == AST_ARRAY_ACCESS) return 0;
     return 1;
   case AST_VARIABLE_DECL:
     // Native locals are unconditionally allocated as i64, so only
-    // int/bool/(untyped) decls survive the round-trip. `json arr = []`,
+    // int/bool decls survive the round-trip. `json arr = []`,
     // `string s = "..."`, `Point p;`, etc. silently lose their tag info.
-    if (stmt->data_type == TYPE_INT || stmt->data_type == TYPE_BOOL ||
-        stmt->data_type == TYPE_UNKNOWN) {
+    //
+    // `var x = ...` (TYPE_UNKNOWN) is *usually* fine because the
+    // initialiser tends to be int — except when it's an object literal
+    // (`var acc = {"x": 0}`) or array literal (`var arr = [1,2]`),
+    // where the i64 alloca can't hold the boxed VMValue and any later
+    // subscript read/write reaches into garbage. Inspect the initialiser
+    // shape and bail to the boxed function path for those.
+    if (stmt->data_type == TYPE_INT || stmt->data_type == TYPE_BOOL) {
+      return 1;
+    }
+    if (stmt->data_type == TYPE_UNKNOWN) {
+      if (stmt->right) {
+        switch (stmt->right->type) {
+        case AST_OBJECT_LITERAL:
+        case AST_ARRAY_LITERAL:
+        case AST_STRING_LITERAL:
+          return 0;
+        default:
+          break;
+        }
+      }
       return 1;
     }
     return 0;

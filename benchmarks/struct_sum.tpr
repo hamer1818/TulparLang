@@ -5,9 +5,9 @@
 //
 // `struct_sum_boxed.tpr` ile birebir ayni hesaplama; tek fark her iki
 // dosyanin kullandigi alan erisim mekanizmasi (typed GEP vs boxed
-// runtime helper). Iki dosyayi top-level'de tutuyoruz cunku
-// `int`-return fn icindeki `var acc = {...}` formu pre-existing bug
-// nedeniyle native-AOT pipeline'ini cokerttiriyor.
+// runtime helper). Iki dosyayi top-level'de tutuyoruz, cunku top-level
+// LLVM main'e inip ayni init overhead'ine sahip oluyor — boylece iki
+// path adil sartlarda olculuyor.
 
 struct V3 {
     int x;
