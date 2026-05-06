@@ -77,10 +77,47 @@ foreach ($f in (Get-ChildItem examples\*.tpr | Sort-Object Name)) {
   }
 
   # Compile-only suite: server/listener examples that block on listen()/api_run().
-  # We verify the build succeeds and the binary is produced; we don't run it.
+  # We verify the build succeeds AND run a 2-second runtime smoke test —
+  # spawn the binary, give it time to either start serving (wings/router
+  # block on accept) or crash early, then check liveness. PR #64 was
+  # exactly this regression: every wings example built clean on Linux
+  # but segfaulted at socket_server() — would have caught it here at
+  # CI time instead of silently shipping in a release.
   if ($compileOnly -contains $f.Name) {
-    Write-Host ("PASS(compile-only) {0} [compile {1}ms]" -f $f.Name, $compileTime)
-    $compileOnlyPass++
+    $smokeProc = $null
+    $smokeFailed = $false
+    $smokeMsg = ""
+    try {
+      $smokeProc = Start-Process -FilePath ".\$bin" -PassThru -NoNewWindow `
+        -RedirectStandardOutput ([IO.Path]::Combine($env:TEMP, "$base.smoke.out")) `
+        -RedirectStandardError  ([IO.Path]::Combine($env:TEMP, "$base.smoke.err"))
+      $smokeProc | Wait-Process -Timeout 2 -ErrorAction SilentlyContinue
+      if ($smokeProc.HasExited) {
+        if ($smokeProc.ExitCode -ne 0) {
+          $smokeFailed = $true
+          $smokeMsg = "exit $($smokeProc.ExitCode)"
+        }
+      } else {
+        # Still running after 2s — counts as healthy (blocked on accept).
+        # Tear it down before moving to the next example.
+        Stop-Process -Id $smokeProc.Id -Force -ErrorAction SilentlyContinue
+        $smokeProc | Wait-Process -ErrorAction SilentlyContinue
+      }
+    } catch {
+      $smokeFailed = $true
+      $smokeMsg = "exception: $_"
+    }
+    Remove-Item -ErrorAction SilentlyContinue -Force -LiteralPath @(
+      [IO.Path]::Combine($env:TEMP, "$base.smoke.out"),
+      [IO.Path]::Combine($env:TEMP, "$base.smoke.err")
+    )
+    if ($smokeFailed) {
+      Write-Host ("FAIL(smoke {0}) {1} [compile {2}ms]" -f $smokeMsg, $f.Name, $compileTime)
+      $fail++; $failed += "$($f.Name) (smoke $smokeMsg)"
+    } else {
+      Write-Host ("PASS(compile-only +smoke) {0} [compile {1}ms]" -f $f.Name, $compileTime)
+      $compileOnlyPass++
+    }
     Remove-Item -ErrorAction SilentlyContinue -Force "$base.exe","$base.ll","$base.o"
     continue
   }
