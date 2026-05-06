@@ -187,10 +187,22 @@ jobs:
         timeout-minutes: 20
 
       - name: Prepare artifact
+        shell: pwsh
         run: |
-          mkdir -p dist
-          cp build-windows/tulpar.exe dist/tulpar-windows-x64.exe
-          cp build-windows/libtulpar_runtime.a dist/libtulpar_runtime-windows-x64.a
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item build-windows\tulpar.exe         dist\tulpar-windows-x64.exe
+          Copy-Item build-windows\libtulpar_runtime.a dist\libtulpar_runtime-windows-x64.a
+          # The MinGW runtime DLLs that the installer bundles are also
+          # published as standalone release assets so the one-line
+          # install.ps1 path (`iwr -useb tulparlang.dev/install.ps1 | iex`)
+          # can fetch them too — without this, curl-installed users hit
+          # the same STATUS_DLL_NOT_FOUND that PR #52 fixed for the GUI
+          # installer. Filenames stay pristine so they can be dropped
+          # next to tulpar.exe verbatim.
+          $mingwBin = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin"
+          Copy-Item "$mingwBin\libwinpthread-1.dll" dist\libwinpthread-1.dll
+          Copy-Item "$mingwBin\zlib1.dll"           dist\zlib1.dll
+          Copy-Item "$mingwBin\libzstd.dll"         dist\libzstd.dll
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5
@@ -203,6 +215,15 @@ jobs:
         with:
           name: libtulpar_runtime-windows-x64
           path: dist/libtulpar_runtime-windows-x64.a
+
+      - name: Upload bundled MinGW DLLs
+        uses: actions/upload-artifact@v5
+        with:
+          name: tulpar-windows-runtime-dlls
+          path: |
+            dist/libwinpthread-1.dll
+            dist/zlib1.dll
+            dist/libzstd.dll
 
       # ----------------------------------------------------------------
       # GUI installer (Inno Setup). Pre-installed on GitHub-hosted
@@ -255,13 +276,51 @@ jobs:
         with:
           pattern: '{tulpar-*,libtulpar_runtime-*}'
           merge-multiple: true
-      
+
       - name: Compute release tag
         id: ver
         shell: bash
         run: |
           TAG="v2.1.0.${GITHUB_RUN_NUMBER}"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      # Generate a SHA-256 manifest covering every published release
+      # asset. `tulpar update` and the install scripts both fetch this
+      # file from `releases/download/<tag>/SHA256SUMS.txt` and verify
+      # each downloaded artifact against it before installing — so a
+      # transit-corrupted or maliciously-swapped binary fails the
+      # verification step instead of being silently installed. Format
+      # matches GNU coreutils `sha256sum -b` output (`<hex>  <name>`)
+      # so a user can also verify manually with `sha256sum -c`.
+      - name: Generate SHA256SUMS.txt
+        shell: bash
+        run: |
+          # Hash the actual files we're about to upload, not the
+          # downloaded-artifacts directory layout (which may carry stale
+          # entries from previous patterns). List explicitly so a missing
+          # asset shows up as a CI failure here, not as a silent gap in
+          # the manifest.
+          ls -la
+          : > SHA256SUMS.txt
+          for f in \
+              tulpar-linux-x64 \
+              tulpar-macos-universal \
+              tulpar-windows-x64.exe \
+              tulpar-setup-windows-x64.exe \
+              libtulpar_runtime-linux-x64.a \
+              libtulpar_runtime-macos-universal.a \
+              libtulpar_runtime-windows-x64.a \
+              libwinpthread-1.dll \
+              zlib1.dll \
+              libzstd.dll; do
+            if [ ! -f "$f" ]; then
+              echo "ERROR: expected release artifact missing: $f" >&2
+              exit 1
+            fi
+            sha256sum -b "$f" >> SHA256SUMS.txt
+          done
+          echo "--- SHA256SUMS.txt ---"
+          cat SHA256SUMS.txt
       
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -289,6 +348,12 @@ jobs:
             - `libtulpar_runtime-macos-universal.a`
             - `libtulpar_runtime-windows-x64.a`
 
+            **Windows runtime DLLs** (bundled by the GUI installer; published as standalone assets so `install.ps1` can fetch them too):
+            - `libwinpthread-1.dll`, `zlib1.dll`, `libzstd.dll`
+
+            **Integrity:**
+            - `SHA256SUMS.txt` — `sha256sum -b` manifest covering every asset above. `tulpar update` verifies its downloads against this file; you can also check manually with `sha256sum -c SHA256SUMS.txt`.
+
             ### One-line install (Windows / Linux / macOS)
 
             ```powershell
@@ -312,5 +377,9 @@ jobs:
             libtulpar_runtime-linux-x64.a
             libtulpar_runtime-macos-universal.a
             libtulpar_runtime-windows-x64.a
+            libwinpthread-1.dll
+            zlib1.dll
+            libzstd.dll
+            SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
