@@ -71,6 +71,89 @@ func _find_route(str method, str path) {
     return -1;
 }
 
+// ----- Path parameters ----------------------------------------------------
+//
+// Routes can include `:name` placeholders that match any single
+// non-`/` segment, e.g. `get("/v1/packages/:name", "show")` matches
+// `/v1/packages/demo` and exposes `_request["params"]["name"] == "demo"`.
+// Multiple params per route work too: `/users/:uid/posts/:pid`.
+//
+// Two-pass dispatch:
+//   1. Exact match (`_find_route`) — O(routes), no param overhead, the
+//      hot path that 99% of static routes take.
+//   2. Pattern match (`_find_route_with_params`) — only consulted when
+//      the exact lookup misses AND the route's path contains a `:`.
+//
+// Falling back per-request keeps the param-free routes free of any
+// extra string ops; param routes pay for split + per-segment compare,
+// which on a typical 3-segment URL is still microseconds.
+
+func _wings_split_path(str path) {
+    // Drop the leading `/` so split doesn't produce an empty first
+    // segment. Trailing `/` is preserved as an empty segment, which
+    // makes `/foo/` ≠ `/foo` — intentional, mirrors most routers.
+    str trimmed = path;
+    if (length(trimmed) > 0 && substring(trimmed, 0, 1) == "/") {
+        trimmed = substring(trimmed, 1, length(trimmed));
+    }
+    return split(trimmed, "/");
+}
+
+// Match a `:name`-bearing pattern against an actual path. Returns
+// {"match": <bool>, "params": <json>} — params is empty when match is
+// false. The two-key shape lets the caller tell "no match" from
+// "matched with zero params" without a sentinel value.
+func _wings_match_pattern(str pattern, str path) {
+    array p_segs = _wings_split_path(pattern);
+    array u_segs = _wings_split_path(path);
+    if (length(p_segs) != length(u_segs)) {
+        return {"match": false, "params": {}};
+    }
+    json params = {};
+    for (int i = 0; i < length(p_segs); i++) {
+        str ps = p_segs[i];
+        str us = u_segs[i];
+        if (length(ps) > 0 && substring(ps, 0, 1) == ":") {
+            // Capture: strip the leading `:`, store value under that name.
+            str pname = substring(ps, 1, length(ps));
+            params[pname] = us;
+        } else {
+            if (ps != us) {
+                return {"match": false, "params": {}};
+            }
+        }
+    }
+    return {"match": true, "params": params};
+}
+
+// Extended dispatch lookup that handles both exact and pattern routes.
+// Returns {"index": <int>, "params": <json>} where index < 0 means no
+// match. Populates _request["params"] downstream so handlers can read
+// captured values via `_request["params"]["name"]`.
+func _find_route_with_params(str method, str path) {
+    int exact = _find_route(method, path);
+    if (exact >= 0) {
+        return {"index": exact, "params": {}};
+    }
+    for (int i = 0; i < length(_routes); i++) {
+        json r = _routes[i];
+        if (r["method"] != method) {
+            continue;
+        }
+        str pat = r["path"];
+        // Routes without `:` would have caught above as exact matches.
+        // Skipping here saves a split() per non-param route per request.
+        if (indexOf(pat, ":") < 0) {
+            continue;
+        }
+        json m = _wings_match_pattern(pat, path);
+        if (m["match"]) {
+            return {"index": i, "params": m["params"]};
+        }
+    }
+    return {"index": -1, "params": {}};
+}
+
 // Raw-response envelope detection. Handlers that need to bypass the
 // default JSON serialisation (e.g. registry bytes, Prometheus
 // exposition, plain-text health probes) return:
@@ -263,15 +346,22 @@ func _wings_serve_connection(json client_arg) {
         if (length(env("TULPAR_HTTP_QUIET")) == 0) {
             print("  " + method + " " + path);
         }
-        int route_idx = _find_route(method, path);
-        // HEAD fallback: if no exact match for HEAD, dispatch the GET
-        // handler instead and strip the body before sending. Standard
-        // HTTP behaviour expected by uptime probes / healthcheckers.
+        // Two-pass dispatch (exact + pattern). Returns
+        // {"index": <int>, "params": <json>}; index < 0 means no match.
+        json route_match = _find_route_with_params(method, path);
+        int route_idx = route_match["index"];
+        // HEAD fallback: if no match for HEAD, retry the lookup as GET
+        // (still pattern-aware) and strip the body before sending.
+        // Standard HTTP behaviour expected by uptime probes / healthcheckers.
         bool is_head = false;
         if (route_idx < 0 && method == "HEAD") {
-            route_idx = _find_route("GET", path);
+            route_match = _find_route_with_params("GET", path);
+            route_idx = route_match["index"];
             is_head = true;
         }
+        // Captured path params land in _request["params"] for the
+        // handler to read. Empty json when route had no `:name` segments.
+        _request["params"] = route_match["params"];
         json result = {};
         bool found = false;
         if (route_idx >= 0) {
@@ -459,14 +549,19 @@ func listen(int port) {
 
             int keep = http_should_keepalive(req);
 
-            int route_idx = _find_route(method, path);
-            // HEAD fallback to GET handler; body stripped after build
-            // so Content-Length still matches what GET would send.
+            // Two-pass dispatch (exact + pattern). _request gets a
+            // populated `params` key before the handler runs.
+            json route_match = _find_route_with_params(method, path);
+            int route_idx = route_match["index"];
+            // HEAD fallback to (pattern-aware) GET handler; body stripped
+            // after build so Content-Length still matches GET's payload.
             bool is_head = false;
             if (route_idx < 0 && method == "HEAD") {
-                route_idx = _find_route("GET", path);
+                route_match = _find_route_with_params("GET", path);
+                route_idx = route_match["index"];
                 is_head = true;
             }
+            _request["params"] = route_match["params"];
             str response = "";
             _wings_requests_total = _wings_requests_total + 1;
             if (route_idx >= 0) {
