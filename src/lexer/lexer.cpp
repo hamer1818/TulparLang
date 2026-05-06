@@ -24,7 +24,8 @@ static const std::unordered_map<std::string, TulparTokenType>& get_keyword_map()
         {"diziMetin", TOKEN_ARRAY_STR},
         {"diziMantıksal", TOKEN_ARRAY_BOOL},
         {"diziJson", TOKEN_ARRAY_JSON},
-        
+        {"json", TOKEN_JSON_TYPE},
+
         // Data Types - English (aliases)
         {"int", TOKEN_INT_TYPE},
         {"float", TOKEN_FLOAT_TYPE},

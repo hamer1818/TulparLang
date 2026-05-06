@@ -110,7 +110,7 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
   }
 
   if (as_node<ObjectLiteral>(expr)) {
-    return TYPE_ARRAY_JSON;
+    return TYPE_JSON;
   }
 
   if (const auto *id = as_node<Identifier>(expr)) {
@@ -339,7 +339,8 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
       // can tighten once the builtin catalogue and custom-type tracking
       // are richer.
       auto is_unknown = [](DataType t) {
-        return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM;
+        return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM ||
+               t == TYPE_JSON;
       };
       if (!is_unknown(declared_type) && !is_unknown(init_type) &&
           !types_compatible(declared_type, init_type)) {
@@ -496,6 +497,8 @@ const char *datatype_to_string(DataType type) {
     return "arrayBool";
   case TYPE_ARRAY_JSON:
     return "arrayJson";
+  case TYPE_JSON:
+    return "json";
   case TYPE_CUSTOM:
     return "custom";
   default:
@@ -644,6 +647,17 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"len", TYPE_INT, {TYPE_UNKNOWN}},
       // Range / iteration
       {"range", TYPE_ARRAY_INT, {TYPE_INT}},
+      // Object/json keys — returns a string array of field names.
+      {"keys", TYPE_ARRAY_STR, {TYPE_UNKNOWN}},
+      {"values", TYPE_ARRAY, {TYPE_UNKNOWN}},
+      // Array mutation
+      {"push", TYPE_VOID, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"pop", TYPE_UNKNOWN, {TYPE_UNKNOWN}},
+      // env() — process env var lookup, "" when missing
+      {"env", TYPE_STRING, {TYPE_STRING}},
+      // call(name, ...) — handler dispatch by string. Args are variadic;
+      // we still register it so length/arity isn't flagged.
+      {"call", TYPE_UNKNOWN, {TYPE_STRING}},
       // Math (single float arg → float result)
       {"sqrt", TYPE_FLOAT, {TYPE_FLOAT}},
       {"sin", TYPE_FLOAT, {TYPE_FLOAT}},
