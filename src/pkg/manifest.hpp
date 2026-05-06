@@ -40,6 +40,11 @@ struct Manifest {
     // Order is preserved via a parallel vector so `tulpar pkg list`
     // shows them in the order the user wrote them.
     std::vector<std::pair<std::string, std::string>> dependencies;
+    // Top-level `strict = true` flips the typeinfer pre-pass into
+    // exit-blocking mode for `tulpar` / `tulpar build` / `tulpar --vm`
+    // when run from the project root. CLI `--strict` and env
+    // `TULPAR_STRICT=1` still take precedence (in that order).
+    bool strict_typecheck = false;
 
     // Round-trip serialise this manifest back to the TOML subset we
     // accept on input. Idempotent — reading a manifest, serialising it,
