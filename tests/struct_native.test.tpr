@@ -124,6 +124,71 @@ func struct_literal_init_uses_expressions() {
     assert_eq_int(20, p.y);
 }
 
+// ---- Plan 04 PR5: function arg / return as struct ----
+
+func _dist_sq(Point p): int {
+    return p.x * p.x + p.y * p.y;
+}
+
+func _make_point(int a, int b): Point {
+    Point p = { x: a, y: b };
+    return p;
+}
+
+func _translate_x(Point p, int dx): Point {
+    p.x = p.x + dx;
+    return p;
+}
+
+func _box_volume(Box b): int {
+    return b.width * b.height * b.depth;
+}
+
+func struct_arg_local_identifier() {
+    // Pass-by-value typed-struct arg: caller passes the alloca pointer,
+    // callee copies into its own local — `_dist_sq` just reads fields.
+    Point p = { x: 3, y: 4 };
+    assert_eq_int(25, _dist_sq(p));
+}
+
+func struct_arg_object_literal() {
+    // Object literal in arg position: codegen builds a temp struct alloca
+    // populated field-by-field, passes its pointer.
+    assert_eq_int(100, _dist_sq({ x: 6, y: 8 }));
+}
+
+func struct_arg_three_fields_literal() {
+    assert_eq_int(24, _box_volume({ width: 2, height: 3, depth: 4 }));
+}
+
+func struct_return_into_typed_var_decl() {
+    // Struct-returning fn directly fills the typed VAR_DECL alloca.
+    Point p = _make_point(7, 9);
+    assert_eq_int(7, p.x);
+    assert_eq_int(9, p.y);
+}
+
+func struct_arg_pass_by_value() {
+    // Callee mutates its local, caller's struct must be unchanged.
+    Point p = { x: 1, y: 2 };
+    Point t = _translate_x(p, 100);
+    assert_eq_int(101, t.x);
+    assert_eq_int(2, t.y);
+    assert_eq_int(1, p.x);
+    assert_eq_int(2, p.y);
+}
+
+func struct_return_chain() {
+    // Chaining struct returns: each call writes into its own typed local.
+    Point p = _make_point(1, 2);
+    Point q = _translate_x(p, 5);
+    assert_eq_int(6, q.x);
+    assert_eq_int(2, q.y);
+    // First struct still intact — pass-by-value already covered above,
+    // but exercise it again across two struct-returning calls in series.
+    assert_eq_int(1, p.x);
+}
+
 test("typed struct: int field roundtrip", "roundtrip_int_field");
 test("typed struct: multiple int fields", "multiple_fields");
 test("typed struct: arithmetic on fields", "arithmetic_on_fields");
@@ -144,3 +209,15 @@ test("typed struct: literal init accepts string keys (back-compat)",
      "struct_literal_init_string_keys");
 test("typed struct: literal init accepts arbitrary expressions",
      "struct_literal_init_uses_expressions");
+test("typed struct: function arg via local identifier",
+     "struct_arg_local_identifier");
+test("typed struct: function arg via object literal",
+     "struct_arg_object_literal");
+test("typed struct: 3-field struct arg via literal",
+     "struct_arg_three_fields_literal");
+test("typed struct: function return into typed VAR_DECL",
+     "struct_return_into_typed_var_decl");
+test("typed struct: function arg passes by value (caller intact)",
+     "struct_arg_pass_by_value");
+test("typed struct: chained struct returns preserve originals",
+     "struct_return_chain");

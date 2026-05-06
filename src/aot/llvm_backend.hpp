@@ -43,6 +43,16 @@ typedef struct {
   InferredType return_type;  // Known return type
   InferredType *param_types; // Known parameter types
   int param_count;
+  // Per-parameter struct type names (size matches param_count). Non-NULL slot
+  // means the matching parameter is declared as a user struct (e.g.
+  // `Point p`); the call-site codegen passes a struct pointer through that
+  // slot instead of boxing the rhs into a VMValue. NULL slots (the common
+  // case) keep the existing VMValue-pointer ABI.
+  char **param_struct_names;
+  // Non-NULL when the function returns a user struct (`func make(): Point`).
+  // Caller allocates a typed-struct alloca and passes its pointer as
+  // the result_ptr; callee writes into it via memcpy on return.
+  char *return_struct_name;
 } FunctionEntry;
 
 // User-declared struct (`struct Point { int x; int y; }`) tracked by the
@@ -326,6 +336,21 @@ typedef struct {
 
   // ABI tracking
   int current_function_is_void_abi;
+  // Set to the registered struct name (managed pointer into struct_types[])
+  // while emitting a function whose declared return type is a user struct.
+  // Tells AST_RETURN to memcpy the source struct into the result pointer
+  // (param 0) instead of building a VMValue store. NULL during regular
+  // VMValue-returning functions.
+  const char *current_function_returns_struct;
+  // Hint slot for VAR_DECL `Point p = make_point();`: VAR_DECL allocates the
+  // typed-struct local for `p` first, then sets this slot before calling
+  // codegen_expression on the rhs. AST_FUNCTION_CALL, when the callee
+  // returns a matching struct, reuses the supplied alloca as the call's
+  // result_ptr — that avoids an extra alloca + copy and lets the function
+  // write its struct return straight into `p`. Cleared back to NULL after
+  // the rhs codegen returns so it doesn't leak across statements.
+  LLVMValueRef pending_struct_result_ptr;
+  const char *pending_struct_result_name;
 
   // Loop control-flow stack: tracks the {continue-target, break-target}
   // basic blocks of every `while`/`for` we're currently inside, so AST_BREAK

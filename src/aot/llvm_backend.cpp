@@ -1334,8 +1334,16 @@ void llvm_backend_destroy(LLVMBackend *backend) {
   LLVMDisposeBuilder(backend->builder);
   LLVMDisposeModule(backend->module);
   LLVMContextDispose(backend->context);
-  for (int i = 0; i < backend->function_count; i++)
+  for (int i = 0; i < backend->function_count; i++) {
     free(backend->functions[i].name);
+    if (backend->functions[i].param_struct_names) {
+      for (int p = 0; p < backend->functions[i].param_count; p++) {
+        free(backend->functions[i].param_struct_names[p]);
+      }
+      free(backend->functions[i].param_struct_names);
+    }
+    free(backend->functions[i].return_struct_name);
+  }
   free(backend);
 }
 
@@ -1344,7 +1352,57 @@ void register_function(LLVMBackend *backend, const char *name,
   if (backend->function_count < 128) {
     backend->functions[backend->function_count].name = my_strdup(name);
     backend->functions[backend->function_count].type = type;
+    // Struct info defaults: NULL slots mean "not a struct param/return".
+    // Populated by set_function_struct_info() right after register_function
+    // when the caller (predeclare / codegen_func_def) has the AST in hand.
+    backend->functions[backend->function_count].param_struct_names = nullptr;
+    backend->functions[backend->function_count].param_count = 0;
+    backend->functions[backend->function_count].return_struct_name = nullptr;
     backend->function_count++;
+  }
+}
+
+// Populate per-function struct info from the AST. Walks parameters and the
+// declared return type; if a slot is TYPE_CUSTOM and resolves to a registered
+// struct entry, that slot's struct name is recorded so call-site codegen can
+// switch to pointer-passing instead of VMValue boxing. Idempotent — safe to
+// call from both predeclare and codegen_func_def (codegen_func_def reuses the
+// pre-declared signature so the entry already exists).
+static void set_function_struct_info(LLVMBackend *backend,
+                                     const char *name, ASTNode_C *node) {
+  if (!backend || !name || !node) return;
+  if (node->type != AST_FUNCTION_DECL) return;
+  for (int i = 0; i < backend->function_count; i++) {
+    if (strcmp(backend->functions[i].name, name) != 0) continue;
+    FunctionEntry *fe = &backend->functions[i];
+    // Free any previously populated info so repeat calls don't leak.
+    if (fe->param_struct_names) {
+      for (int p = 0; p < fe->param_count; p++) free(fe->param_struct_names[p]);
+      free(fe->param_struct_names);
+      fe->param_struct_names = nullptr;
+    }
+    free(fe->return_struct_name);
+    fe->return_struct_name = nullptr;
+    fe->param_count = node->param_count;
+    if (node->param_count > 0) {
+      fe->param_struct_names = static_cast<char **>(
+          calloc(node->param_count, sizeof(char *)));
+      for (int p = 0; p < node->param_count; p++) {
+        ASTNode_C *par = node->parameters[p];
+        if (par && par->data_type == TYPE_CUSTOM &&
+            par->return_custom_type) {
+          if (find_struct_type(backend, par->return_custom_type)) {
+            fe->param_struct_names[p] = my_strdup(par->return_custom_type);
+          }
+        }
+      }
+    }
+    if (node->return_type == TYPE_CUSTOM && node->return_custom_type) {
+      if (find_struct_type(backend, node->return_custom_type)) {
+        fe->return_struct_name = my_strdup(node->return_custom_type);
+      }
+    }
+    return;
   }
 }
 
@@ -3822,11 +3880,61 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         }
 
         // --- NEW ABI (User Function) ---
+        // Look up the callee's FunctionEntry to discover whether any
+        // params are typed structs and whether the return is a typed
+        // struct. NULL slots stay on the existing VMValue-pointer ABI.
+        FunctionEntry *callee_entry = nullptr;
+        for (int i = 0; i < backend->function_count; i++) {
+          if (strcmp(backend->functions[i].name, node->name) == 0) {
+            callee_entry = &backend->functions[i];
+            break;
+          }
+        }
+
         // 1. Allocate Result Slot. Entry-hoisted: a recursive function (e.g.
         // fib(n-1) + fib(n-2)) emits this alloca many times per stack frame
         // and unbounded recursion would explode the stack otherwise.
-        LLVMValueRef res_ptr = llvm_build_alloca_at_entry(
-            backend, backend->vm_value_type, "call_res_ptr");
+        //
+        // Struct-returning callee: alloca the struct type instead so the
+        // function writes a native struct directly into our slot. The
+        // caller code below loads the i64 slot 0 just to keep the
+        // expression's VMValue contract (zero) — well-typed code should
+        // consume the struct return through the VAR_DECL path, which
+        // intercepts before we even get here. Pure expression-context use
+        // of a struct return falls back to a placeholder VMValue.
+        LLVMValueRef res_ptr;
+        StructTypeEntry *ret_st = nullptr;
+        if (callee_entry && callee_entry->return_struct_name) {
+          ret_st = find_struct_type(backend,
+                                     callee_entry->return_struct_name);
+        }
+        // VAR_DECL hint: when `Point p = make_point();` is being lowered,
+        // VAR_DECL has already allocated a typed-struct local for `p` and
+        // pinned its alloca on backend->pending_struct_result_ptr (with
+        // the matching struct name). Use that alloca directly so the call
+        // writes its return into `p` — avoids an intermediate temp + copy.
+        if (ret_st && backend->pending_struct_result_ptr &&
+            backend->pending_struct_result_name &&
+            strcmp(backend->pending_struct_result_name,
+                   ret_st->name) == 0) {
+          res_ptr = backend->pending_struct_result_ptr;
+        } else if (ret_st) {
+          res_ptr = llvm_build_alloca_at_entry(
+              backend, ret_st->llvm_type, "call_res_struct_ptr");
+          // Zero-init so the function's default-return path (which would
+          // already write the struct) plus any partial writes still leave
+          // the alloca well-defined.
+          LLVMBuildStore(backend->builder, LLVMConstNull(ret_st->llvm_type),
+                         res_ptr);
+        } else {
+          res_ptr = llvm_build_alloca_at_entry(
+              backend, backend->vm_value_type, "call_res_ptr");
+        }
+        // Clear the hint slot regardless of whether we consumed it — leaving
+        // it set across nested expressions would attach the same alloca to
+        // an inner call that happens to have a matching return type.
+        backend->pending_struct_result_ptr = nullptr;
+        backend->pending_struct_result_name = nullptr;
 
         // 2. Prepare Args: [ResultPtr, Arg1Ptr, Arg2Ptr...]
         int call_arg_count = node->argument_count + 1;
@@ -3835,6 +3943,68 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         args[0] = res_ptr;
 
         for (int i = 0; i < node->argument_count; i++) {
+          // Typed-struct param slot: expect a typed-struct identifier on
+          // the caller side and pass its alloca pointer directly. Falls
+          // back to the boxed path below for non-identifier exprs (e.g.
+          // a struct-returning call as an argument — would need a temp
+          // alloca; deferred to a future PR).
+          const char *expected_struct = nullptr;
+          if (callee_entry && callee_entry->param_struct_names &&
+              i < callee_entry->param_count) {
+            expected_struct = callee_entry->param_struct_names[i];
+          }
+          if (expected_struct) {
+            ASTNode_C *arg = node->arguments[i];
+            const char *src_struct = nullptr;
+            LLVMValueRef src_alloca = nullptr;
+            if (arg && arg->type == AST_IDENTIFIER && arg->name) {
+              src_struct = get_local_struct_type(backend, arg->name);
+              src_alloca = get_local(backend, arg->name);
+            }
+            if (src_struct && src_alloca &&
+                strcmp(src_struct, expected_struct) == 0) {
+              args[i + 1] = src_alloca;
+              continue;
+            }
+            // Object literal as a struct arg (`f({ x: 1, y: 2 })`):
+            // build a temp struct alloca, populate per-field, pass its
+            // pointer. Same shape as the VAR_DECL literal path.
+            if (arg && arg->type == AST_OBJECT_LITERAL) {
+              StructTypeEntry *st = find_struct_type(backend, expected_struct);
+              bool keys_ok = st && struct_is_trivially_unboxable(st);
+              if (keys_ok) {
+                for (int k = 0; k < arg->object_count; k++) {
+                  if (struct_type_field_index(st, arg->object_keys[k]) < 0) {
+                    keys_ok = false;
+                    break;
+                  }
+                }
+              }
+              if (keys_ok) {
+                LLVMValueRef tmp = llvm_build_alloca_at_entry(
+                    backend, st->llvm_type, "arg.struct.lit");
+                LLVMBuildStore(backend->builder, LLVMConstNull(st->llvm_type),
+                               tmp);
+                for (int k = 0; k < arg->object_count; k++) {
+                  int idx = struct_type_field_index(st, arg->object_keys[k]);
+                  LLVMValueRef vbox =
+                      codegen_expression(backend, arg->object_values[k]);
+                  LLVMValueRef i64v = LLVMBuildExtractValue(
+                      backend->builder, vbox, 2, "arg.lit.i64");
+                  LLVMValueRef fp = LLVMBuildStructGEP2(
+                      backend->builder, st->llvm_type, tmp,
+                      (unsigned)idx, "arg.lit.field.ptr");
+                  LLVMBuildStore(backend->builder, i64v, fp);
+                }
+                args[i + 1] = tmp;
+                continue;
+              }
+            }
+            // Fall through to the boxed VMValue path on any mismatch —
+            // the call will likely misbehave at runtime, but preserving
+            // the existing path keeps the rest of the program compilable
+            // and lets typeinfer surface the user-visible diagnostic.
+          }
           // Evaluate argument
           LLVMValueRef val = codegen_expression(backend, node->arguments[i]);
           // Store to temp alloca to get pointer (entry-hoisted)
@@ -3850,6 +4020,15 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         free(args);
 
         // 4. Load Result
+        // Struct-returning callee in plain expression context: there is no
+        // sensible 16-byte VMValue projection of a multi-i64 struct, so we
+        // hand back a zero VMValue placeholder. The VAR_DECL path for
+        // `Point p = make_point();` intercepts struct-return calls before
+        // they reach this branch, so well-typed code never observes the
+        // zero. Anything else is a typeinfer-level issue.
+        if (ret_st) {
+          return llvm_vm_val_int(backend, 0);
+        }
         return LLVMBuildLoad2(backend->builder, backend->vm_value_type, res_ptr,
                               "call_res_loaded");
       }
@@ -3933,16 +4112,39 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // to the boxed VMValue path below for:
     //   - structs whose entry was never registered (parser had no TypeDecl)
     //   - structs with non-trivial field types (string, array, nested struct)
-    //   - decls whose initializer isn't a struct literal (e.g.
-    //     `Point p = some_func();`) — those still keep the boxed Object
-    //     initialiser since the rhs may carry a heap object.
+    //   - decls whose initializer is something other than the supported
+    //     forms below (e.g. `Point p = other_p;` plain copy — still on the
+    //     boxed Object path until we lower struct-typed identifier copies).
     //
-    // Object-literal initializers (`Point p = { x: 1, y: 2 };`) take the
-    // typed path: zero-init the alloca, then GEP+store each provided field's
-    // i64 payload. Unspecified fields default to zero, matching the
-    // initializer-less branch's behaviour.
+    // Supported initializer shapes on the typed path:
+    //   - no init           -> alloca + zero-fill
+    //   - object literal    -> alloca + zero-fill + per-field GEP+store
+    //   - struct-returning  -> alloca + pin as pending_struct_result_ptr,
+    //     function call        let AST_FUNCTION_CALL write its return
+    //                          straight into the alloca (Plan 04 PR5).
+    bool init_is_object_literal =
+        node->right && node->right->type == AST_OBJECT_LITERAL;
+    bool init_is_struct_call = false;
+    {
+      // Lookahead: peek the FunctionEntry to see if the call returns this
+      // declaration's struct type. Cheap (linear scan over function table)
+      // and only runs when the rhs is a function call, so the cost stays
+      // proportional to actually-typed-struct VAR_DECLs.
+      if (node->right && node->right->type == AST_FUNCTION_CALL &&
+          node->right->name) {
+        for (int i = 0; i < backend->function_count; i++) {
+          if (strcmp(backend->functions[i].name,
+                     node->right->name) == 0) {
+            if (backend->functions[i].return_struct_name) {
+              init_is_struct_call = true;
+            }
+            break;
+          }
+        }
+      }
+    }
     if (node->data_type == TYPE_CUSTOM &&
-        (!node->right || node->right->type == AST_OBJECT_LITERAL)) {
+        (!node->right || init_is_object_literal || init_is_struct_call)) {
       const char *struct_name = nullptr;
       if (node->return_custom_type) struct_name = node->return_custom_type;
       // VAR_DECL stores the custom type name in `field_custom_types` slot 0
@@ -3961,12 +4163,29 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       // the boxed Object path so the existing object_set runtime can still
       // store it — that's the path codegen already uses for boxed json
       // assignments and produces a sensible runtime error today.
-      if (can_take_typed_path && node->right) {
+      if (can_take_typed_path && init_is_object_literal) {
         for (int k = 0; k < node->right->object_count; k++) {
           if (struct_type_field_index(st, node->right->object_keys[k]) < 0) {
             can_take_typed_path = false;
             break;
           }
+        }
+      }
+      // Struct-call init must agree on the struct name — otherwise we'd
+      // pin the wrong alloca and the function would write a different
+      // layout into our slot.
+      if (can_take_typed_path && init_is_struct_call) {
+        const char *callee_ret_struct = nullptr;
+        for (int i = 0; i < backend->function_count; i++) {
+          if (strcmp(backend->functions[i].name,
+                     node->right->name) == 0) {
+            callee_ret_struct = backend->functions[i].return_struct_name;
+            break;
+          }
+        }
+        if (!callee_ret_struct ||
+            strcmp(callee_ret_struct, st->name) != 0) {
+          can_take_typed_path = false;
         }
       }
       if (can_take_typed_path) {
@@ -3977,7 +4196,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         // memory before they assign to fields.
         LLVMBuildStore(backend->builder, LLVMConstNull(st->llvm_type),
                        typed_alloca);
-        if (node->right) {
+        if (init_is_object_literal) {
           // `Point p = { x: 3, y: 4 };` — store each provided field's i64
           // payload via GEP. Slot 2 of the boxed VMValue holds the int/bool
           // payload (true/false box as 1/0). Anything else (string, array)
@@ -3997,6 +4216,18 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                 (unsigned)idx, "struct.lit.field.ptr");
             LLVMBuildStore(backend->builder, i64_val, field_ptr);
           }
+        } else if (init_is_struct_call) {
+          // `Point p = make_point();` — pin the alloca on the hint slot,
+          // then let the AST_FUNCTION_CALL codegen pick it up as the
+          // call's result_ptr (no extra temp + copy).
+          backend->pending_struct_result_ptr = typed_alloca;
+          backend->pending_struct_result_name = st->name;
+          codegen_expression(backend, node->right);
+          // AST_FUNCTION_CALL clears the hint after consuming it, but
+          // defensively re-clear here in case the lookup mismatched and
+          // the call took the regular VMValue path instead.
+          backend->pending_struct_result_ptr = nullptr;
+          backend->pending_struct_result_name = nullptr;
         }
         add_local_struct(backend, node->name, typed_alloca, st->name);
         return typed_alloca;
@@ -4309,6 +4540,62 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     return nullptr;
   }
   case AST_RETURN: {
+    // Struct-returning function: result_ptr (param 0) is a struct*. Source
+    // is expected to be either a typed-struct identifier (already a struct
+    // alloca), an object literal we can lower directly into the result, or
+    // a function call returning the same struct (handled by routing the
+    // call's result_ptr to ours). Anything else (boxed VMValue) is a type
+    // mismatch — typeinfer's strict mode catches the obvious cases and the
+    // fallback below preserves current behaviour.
+    if (backend->current_function_returns_struct && node->return_value) {
+      StructTypeEntry *st = find_struct_type(
+          backend, backend->current_function_returns_struct);
+      LLVMValueRef res_ptr = LLVMGetParam(backend->current_function, 0);
+      ASTNode_C *rv = node->return_value;
+      if (st && rv->type == AST_IDENTIFIER && rv->name) {
+        const char *sn = get_local_struct_type(backend, rv->name);
+        LLVMValueRef src = get_local(backend, rv->name);
+        if (sn && src && strcmp(sn, st->name) == 0) {
+          LLVMValueRef loaded = LLVMBuildLoad2(
+              backend->builder, st->llvm_type, src, "ret.struct.load");
+          LLVMBuildStore(backend->builder, loaded, res_ptr);
+          return LLVMBuildRetVoid(backend->builder);
+        }
+      }
+      if (st && rv->type == AST_OBJECT_LITERAL) {
+        // `return { x: 1, y: 2 };` — same field-validation + zero-init +
+        // GEP+store pattern as the VAR_DECL literal path, but we write
+        // straight into the caller-supplied result pointer.
+        bool keys_ok = struct_is_trivially_unboxable(st);
+        if (keys_ok) {
+          for (int k = 0; k < rv->object_count; k++) {
+            if (struct_type_field_index(st, rv->object_keys[k]) < 0) {
+              keys_ok = false;
+              break;
+            }
+          }
+        }
+        if (keys_ok) {
+          LLVMBuildStore(backend->builder, LLVMConstNull(st->llvm_type),
+                         res_ptr);
+          for (int k = 0; k < rv->object_count; k++) {
+            int idx = struct_type_field_index(st, rv->object_keys[k]);
+            LLVMValueRef val_box =
+                codegen_expression(backend, rv->object_values[k]);
+            LLVMValueRef i64_val = LLVMBuildExtractValue(
+                backend->builder, val_box, 2, "ret.lit.i64");
+            LLVMValueRef field_ptr = LLVMBuildStructGEP2(
+                backend->builder, st->llvm_type, res_ptr,
+                (unsigned)idx, "ret.lit.field.ptr");
+            LLVMBuildStore(backend->builder, i64_val, field_ptr);
+          }
+          return LLVMBuildRetVoid(backend->builder);
+        }
+      }
+      // Fallback: behave as before (store boxed VMValue). The caller side
+      // either won't reach here for typed struct returns or will mis-read
+      // the result; typeinfer is the right place to surface this.
+    }
     LLVMValueRef ret =
         node->return_value
             ? codegen_expression(backend, node->return_value)
@@ -5189,6 +5476,11 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
     register_function(
         backend, node->name,
         func_type); // Register with ORIGINAL name for lookup in compiler?
+    // Same struct-info populate as predeclare_user_function — needed when
+    // codegen_func_def emits a function that wasn't pre-declared (rare,
+    // mostly module-edge-case paths). Keeps the FunctionEntry consistent
+    // either way so call sites resolve struct params/returns identically.
+    set_function_struct_info(backend, node->name, node);
   }
   // Wait, register_function stores it in `functions` array.
   // When we retrieve it later, we verify existance?
@@ -5236,6 +5528,18 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
 
   enter_scope(backend);
   backend->current_function_is_void_abi = 1;
+  // Pick up the struct-return marker that predeclare set on this function's
+  // entry, if any. Saved/restored around the body so nested function decls
+  // (currently disallowed but cheap to be defensive) don't leak the flag.
+  const char *prev_returns_struct = backend->current_function_returns_struct;
+  backend->current_function_returns_struct = nullptr;
+  for (int i = 0; i < backend->function_count; i++) {
+    if (strcmp(backend->functions[i].name, node->name) == 0) {
+      backend->current_function_returns_struct =
+          backend->functions[i].return_struct_name;
+      break;
+    }
+  }
 
   // Handle parameters
   // Param 0 is Result Pointer (used by return)
@@ -5244,6 +5548,38 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
     if (node->parameters[i]) {
       // Get pointer to argument (Param i+1)
       LLVMValueRef arg_ptr = LLVMGetParam(func, i + 1);
+
+      // Native typed-struct param: when the caller passed a struct pointer
+      // through this slot, materialize a local typed alloca and copy the
+      // struct contents in. The caller-side codegen guarantees the slot
+      // holds a struct pointer whenever this slot's struct name is set on
+      // the FunctionEntry. Copy-on-entry preserves pass-by-value semantics
+      // (callee mutating `p.x` does not affect the caller) and reuses the
+      // existing typed-struct local infrastructure for field access via
+      // LLVMBuildStructGEP2 — once we register the alloca with
+      // add_local_struct, AST_ARRAY_ACCESS / AST_ASSIGNMENT field reads &
+      // writes "just work" without further callee changes.
+      const char *param_struct_name = nullptr;
+      if (node->parameters[i]->data_type == TYPE_CUSTOM &&
+          node->parameters[i]->return_custom_type) {
+        StructTypeEntry *st = find_struct_type(
+            backend, node->parameters[i]->return_custom_type);
+        if (st && struct_is_trivially_unboxable(st)) {
+          param_struct_name = st->name;
+          LLVMValueRef typed_alloca = llvm_build_alloca_at_entry(
+              backend, st->llvm_type, node->parameters[i]->name);
+          // load %struct + store covers all field bytes; LLVM lowers to
+          // memcpy / per-field movs after O3 — no need for an explicit
+          // memcpy intrinsic.
+          LLVMValueRef loaded = LLVMBuildLoad2(
+              backend->builder, st->llvm_type, arg_ptr,
+              node->parameters[i]->name);
+          LLVMBuildStore(backend->builder, loaded, typed_alloca);
+          add_local_struct(backend, node->parameters[i]->name, typed_alloca,
+                           st->name);
+          continue;
+        }
+      }
 
       // We must load the value to ensure pass-by-value semantics if the var is
       // modified (Or we can treat it as local var pointer if we trust it won't
@@ -5267,10 +5603,24 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
   // Default return if missing
   if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder))) {
     LLVMValueRef res_ptr = LLVMGetParam(func, 0);
-    LLVMBuildStore(backend->builder, llvm_vm_val_int(backend, 0), res_ptr);
+    if (backend->current_function_returns_struct) {
+      // Struct-returning function with no explicit return: zero-fill the
+      // result struct so the caller reads consistent default values rather
+      // than uninitialised stack contents (matches the boxed path's default
+      // VMValue int 0).
+      StructTypeEntry *st = find_struct_type(
+          backend, backend->current_function_returns_struct);
+      if (st) {
+        LLVMBuildStore(backend->builder, LLVMConstNull(st->llvm_type),
+                       res_ptr);
+      }
+    } else {
+      LLVMBuildStore(backend->builder, llvm_vm_val_int(backend, 0), res_ptr);
+    }
     LLVMBuildRetVoid(backend->builder);
   }
 
+  backend->current_function_returns_struct = prev_returns_struct;
   exit_scope(backend);
   if (param_types)
     free(param_types);
@@ -5330,6 +5680,12 @@ static void predeclare_func_signature(LLVMBackend *backend, ASTNode_C *node) {
     LLVMTypeRef ft = LLVMFunctionType(backend->void_type, pt, total, 0);
     LLVMValueRef f = LLVMAddFunction(backend->module, fn, ft);
     register_function(backend, node->name, ft);
+    // Boxed ABI keeps every parameter slot as a generic `ptr`, so struct
+    // params/return don't change the LLVM signature — they only change how
+    // each pointer is dereferenced. set_function_struct_info records which
+    // slots carry typed struct memory so the call-site codegen and the
+    // function body codegen agree on the dereference shape.
+    set_function_struct_info(backend, node->name, node);
     LLVMAddAttributeAtIndex(
         f, LLVMAttributeFunctionIndex,
         LLVMCreateEnumAttribute(

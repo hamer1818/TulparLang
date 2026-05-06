@@ -386,10 +386,24 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
                 advance();
                 parameters.emplace_back(param_name.value(), TYPE_UNKNOWN);
             } else {
+                // Capture the identifier value before parse_type() consumes
+                // it; same trick as parse_variable_decl. parse_type() returns
+                // TYPE_CUSTOM for any identifier-shaped type but discards
+                // the actual name, so without this snapshot the AST loses
+                // which struct (`Point`, `Box`, ...) the param refers to —
+                // and the AOT codegen can't decide between struct-pointer
+                // ABI and the boxed VMValue ABI.
+                std::optional<std::string> param_custom_type;
+                if (check(TOKEN_IDENTIFIER)) {
+                    param_custom_type = current().value();
+                }
                 DataType param_type = parse_type();
+                if (param_type != TYPE_CUSTOM) param_custom_type.reset();
                 Token param_name = expect(TOKEN_IDENTIFIER,
                                           "Expected parameter name");
-                parameters.emplace_back(param_name.value(), param_type);
+                Parameter par(param_name.value(), param_type);
+                par.custom_type = std::move(param_custom_type);
+                parameters.push_back(std::move(par));
             }
         } while (match(TOKEN_COMMA));
     }
@@ -402,17 +416,26 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
     //   func name(...) int { ... }          // bare type
     //   func name(...): int { ... }         // colon-prefixed (idiomatic)
     DataType return_type = TYPE_VOID;
+    std::optional<std::string> return_custom_type_name;
     match(TOKEN_COLON); // consume ':' if present, harmless otherwise
     if (!check(TOKEN_LBRACE)) {
+        // Same identifier-name snapshot pattern as parameters above —
+        // `func make(): Point { ... }` keeps "Point" alive on the AST
+        // so the AOT can emit a struct-returning ABI for it.
+        if (check(TOKEN_IDENTIFIER)) {
+            return_custom_type_name = current().value();
+        }
         return_type = parse_type();
+        if (return_type != TYPE_CUSTOM) return_custom_type_name.reset();
     }
 
     // Function body
     auto body = parse_block();
-    
-    return std::make_unique<ASTNode>(
-        FunctionDecl(name, std::move(parameters), return_type, std::move(body), loc)
-    );
+
+    FunctionDecl decl(name, std::move(parameters), return_type,
+                      std::move(body), loc);
+    decl.return_custom_type = std::move(return_custom_type_name);
+    return std::make_unique<ASTNode>(std::move(decl));
 }
 
 std::unique_ptr<ASTNode> Parser::parse_type_decl() {
@@ -978,6 +1001,14 @@ std::unique_ptr<ASTNode> Parser::parse_array_literal() {
 }
 
 std::unique_ptr<ASTNode> Parser::parse_object_literal() {
+    // Generic object literal at expression position. Originally only string
+    // keys (`{"x": 1}`) were accepted; PR4 added bare-identifier keys for
+    // typed-struct VAR_DECL init (`Point p = { x: 1 }`). PR5 promotes that
+    // relaxation to the generic path so struct literals also work in
+    // function-argument position (`volume({ w: 2, h: 3 })`) and other
+    // expression contexts. Object literals only appear at expression
+    // position — `{` at statement position routes through parse_block —
+    // so widening the key set doesn't introduce new ambiguity with blocks.
     SourceLocation loc(current().line(), current().column());
     advance(); // consume '{'
 
@@ -985,11 +1016,17 @@ std::unique_ptr<ASTNode> Parser::parse_object_literal() {
 
     if (!check(TOKEN_RBRACE)) {
         do {
-            Token key = expect(TOKEN_STRING_LITERAL, "Expected string key in object");
+            std::string key;
+            if (check(TOKEN_STRING_LITERAL) || check(TOKEN_IDENTIFIER)) {
+                key = current().value();
+                advance();
+            } else {
+                error("Expected string or identifier key in object");
+            }
             expect(TOKEN_COLON, "Expected ':' after object key");
             auto value = parse_expression();
 
-            fields.emplace_back(key.value(), std::move(value));
+            fields.emplace_back(std::move(key), std::move(value));
         } while (match(TOKEN_COMMA));
     }
 
