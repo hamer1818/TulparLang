@@ -196,13 +196,60 @@ jobs:
           # published as standalone release assets so the one-line
           # install.ps1 path (`iwr -useb tulparlang.dev/install.ps1 | iex`)
           # can fetch them too — without this, curl-installed users hit
-          # the same STATUS_DLL_NOT_FOUND that PR #52 fixed for the GUI
-          # installer. Filenames stay pristine so they can be dropped
-          # next to tulpar.exe verbatim.
+          # STATUS_DLL_NOT_FOUND on first launch. We bundle:
+          #   * libwinpthread-1.dll, zlib1.dll, libzstd.dll — MinGW + LLVM
+          #     transitive deps (PR #52, PR #54)
+          #   * libssl-3-x64.dll, libcrypto-3-x64.dll — OpenSSL 3 from
+          #     mingw-w64-openssl, linked because CMakeLists.txt enables
+          #     OpenSSL when present so `https://` URLs work in
+          #     `tulpar update`, `tulpar pkg install`, and the embedded
+          #     http_client. Discovered missing on a fresh Win10 box.
+          # We assert each source DLL exists before copying so a future
+          # MSYS2 rename (e.g. OpenSSL 4 -> libssl-4-x64.dll) fails the
+          # build loudly instead of silently shipping an installer that
+          # crashes at first launch on user machines.
           $mingwBin = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin"
-          Copy-Item "$mingwBin\libwinpthread-1.dll" dist\libwinpthread-1.dll
-          Copy-Item "$mingwBin\zlib1.dll"           dist\zlib1.dll
-          Copy-Item "$mingwBin\libzstd.dll"         dist\libzstd.dll
+          $bundledDlls = @(
+            'libwinpthread-1.dll',
+            'zlib1.dll',
+            'libzstd.dll',
+            'libssl-3-x64.dll',
+            'libcrypto-3-x64.dll'
+          )
+          foreach ($dll in $bundledDlls) {
+            $src = Join-Path $mingwBin $dll
+            if (-not (Test-Path $src)) {
+              throw "Bundled DLL missing in MSYS2: $src — has the package layout changed?"
+            }
+            Copy-Item $src "dist\$dll"
+          }
+          # Belt-and-suspenders: dump the actual import table of the built
+          # tulpar.exe and fail the build if anything in the import list
+          # isn't either a stock-Windows system DLL or one of the DLLs we
+          # bundle. Catches the "binary picked up a new transitive
+          # dependency we forgot to ship" failure mode at CI time, not
+          # on user machines. System DLL list is the conservative set that
+          # ships on every Windows 10+ box.
+          $systemDlls = @(
+            'kernel32.dll', 'kernelbase.dll', 'ntdll.dll', 'msvcrt.dll',
+            'advapi32.dll', 'user32.dll', 'shell32.dll', 'ole32.dll',
+            'oleaut32.dll', 'ws2_32.dll', 'crypt32.dll', 'secur32.dll',
+            'gdi32.dll', 'rpcrt4.dll', 'shlwapi.dll', 'bcrypt.dll',
+            'iphlpapi.dll', 'userenv.dll', 'version.dll', 'winmm.dll',
+            'powrprof.dll', 'dbghelp.dll', 'imm32.dll'
+          )
+          $allowed = ($systemDlls + $bundledDlls) | ForEach-Object { $_.ToLower() }
+          $imports = & objdump.exe -p dist\tulpar-windows-x64.exe |
+                     Select-String '^\s*DLL Name:\s*(.+)$' |
+                     ForEach-Object { $_.Matches[0].Groups[1].Value.Trim().ToLower() }
+          $missing = $imports | Where-Object { $_ -notin $allowed }
+          if ($missing) {
+            Write-Host "tulpar.exe imports DLLs that are neither system nor bundled:" -ForegroundColor Red
+            $missing | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+            Write-Host "Either add them to `$bundledDlls or to the system whitelist."
+            throw "DLL bundling guard failed."
+          }
+          Write-Host "DLL bundling guard: OK ($($imports.Count) imports, all covered)"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5
@@ -224,6 +271,8 @@ jobs:
             dist/libwinpthread-1.dll
             dist/zlib1.dll
             dist/libzstd.dll
+            dist/libssl-3-x64.dll
+            dist/libcrypto-3-x64.dll
 
       # ----------------------------------------------------------------
       # GUI installer (Inno Setup). Pre-installed on GitHub-hosted
@@ -312,7 +361,9 @@ jobs:
               libtulpar_runtime-windows-x64.a \
               libwinpthread-1.dll \
               zlib1.dll \
-              libzstd.dll; do
+              libzstd.dll \
+              libssl-3-x64.dll \
+              libcrypto-3-x64.dll; do
             if [ ! -f "$f" ]; then
               echo "ERROR: expected release artifact missing: $f" >&2
               exit 1
@@ -349,7 +400,8 @@ jobs:
             - `libtulpar_runtime-windows-x64.a`
 
             **Windows runtime DLLs** (bundled by the GUI installer; published as standalone assets so `install.ps1` can fetch them too):
-            - `libwinpthread-1.dll`, `zlib1.dll`, `libzstd.dll`
+            - `libwinpthread-1.dll`, `zlib1.dll`, `libzstd.dll` — MinGW + LLVM transitive deps
+            - `libssl-3-x64.dll`, `libcrypto-3-x64.dll` — OpenSSL 3 (required for HTTPS)
 
             **Integrity:**
             - `SHA256SUMS.txt` — `sha256sum -b` manifest covering every asset above. `tulpar update` verifies its downloads against this file; you can also check manually with `sha256sum -c SHA256SUMS.txt`.
@@ -380,6 +432,8 @@ jobs:
             libwinpthread-1.dll
             zlib1.dll
             libzstd.dll
+            libssl-3-x64.dll
+            libcrypto-3-x64.dll
             SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
