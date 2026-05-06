@@ -110,6 +110,21 @@ func _wings_build_404(str path, int keep) {
         _default_headers, keep);
 }
 
+// HTTP HEAD support — RFC 9110 §9.3.2: "The server SHOULD send the
+// same header fields in response to a HEAD request as it would have
+// sent if the request had been a GET". We build the GET response
+// normally (so Content-Length matches what GET would return) and then
+// truncate everything after the headers / body separator. This also
+// keeps healthcheck probes, uptime monitors and curl -I working
+// without per-route HEAD handler registration.
+func _wings_strip_response_body(str response) {
+    int sep = indexOf(response, "\r\n\r\n");
+    if (sep < 0) {
+        return response;
+    }
+    return substring(response, 0, sep + 4);
+}
+
 // ----- Built-in production helpers -----------------------------------------
 //
 // These are auto-registered when listen() is called: the user's app
@@ -249,6 +264,14 @@ func _wings_serve_connection(json client_arg) {
             print("  " + method + " " + path);
         }
         int route_idx = _find_route(method, path);
+        // HEAD fallback: if no exact match for HEAD, dispatch the GET
+        // handler instead and strip the body before sending. Standard
+        // HTTP behaviour expected by uptime probes / healthcheckers.
+        bool is_head = false;
+        if (route_idx < 0 && method == "HEAD") {
+            route_idx = _find_route("GET", path);
+            is_head = true;
+        }
         json result = {};
         bool found = false;
         if (route_idx >= 0) {
@@ -272,6 +295,9 @@ func _wings_serve_connection(json client_arg) {
             response = _wings_build_response(result, keep);
         } else {
             response = _wings_build_404(path, keep);
+        }
+        if (is_head) {
+            response = _wings_strip_response_body(response);
         }
 
         socket_send(client, response);
@@ -434,6 +460,13 @@ func listen(int port) {
             int keep = http_should_keepalive(req);
 
             int route_idx = _find_route(method, path);
+            // HEAD fallback to GET handler; body stripped after build
+            // so Content-Length still matches what GET would send.
+            bool is_head = false;
+            if (route_idx < 0 && method == "HEAD") {
+                route_idx = _find_route("GET", path);
+                is_head = true;
+            }
             str response = "";
             _wings_requests_total = _wings_requests_total + 1;
             if (route_idx >= 0) {
@@ -444,6 +477,9 @@ func listen(int port) {
             } else {
                 response = _wings_build_404(path, keep);
                 _wings_requests_4xx = _wings_requests_4xx + 1;
+            }
+            if (is_head) {
+                response = _wings_strip_response_body(response);
             }
 
             socket_send(client, response);
