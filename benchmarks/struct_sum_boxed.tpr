@@ -4,10 +4,11 @@
 // "her sey json" yaklasimi. struct_sum.tpr ile ayni sonucu uretip
 // alan erisim runtime overhead'ini olcer.
 //
-// Not: `func sum_v3(int n): int { var acc = {...}; ... }` formu
-// pre-existing native-AOT pipeline bug'i nedeniyle crash ediyor;
-// bu benchmark'i top-level'de kosuyoruz. Her iki versiyon da
-// LLVM ana fonksiyona inip ayni init overhead'ine sahip oluyor.
+// Top-level'de kosuyoruz (struct_sum.tpr ile ayni — adil olcum
+// icin). LLVM main'e inip ayni init overhead'ine sahip oluyor.
+// PR6'da `int`-return fn icine sarmak crash ediyordu; o bug
+// (eligibility check `var acc = {...}` icin native-AOT path'ini
+// kabul ediyordu) bu PR'da kapandi.
 
 var acc = { "x": 0, "y": 0, "z": 0 };
 int n = 10000000;
