@@ -5048,6 +5048,10 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
   // optnone: CRITICAL - completely disable optimization for this function
   //          This prevents LLVM from eliminating loops via closed-form
   //          solutions
+  // uwtable + frame-pointer=all: required so `longjmp` can SEH-unwind
+  //          through this frame on Windows x64 if a callee throws. See
+  //          the matching block on the regular-typed function path
+  //          below for the full rationale (Issue #53).
   LLVMAddAttributeAtIndex(
       func, LLVMAttributeFunctionIndex,
       LLVMCreateEnumAttribute(
@@ -5060,6 +5064,11 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
       func, LLVMAttributeFunctionIndex,
       LLVMCreateEnumAttribute(
           backend->context, LLVMGetEnumAttributeKindForName("optnone", 7), 0));
+  LLVMAddAttributeAtIndex(
+      func, LLVMAttributeFunctionIndex,
+      LLVMCreateEnumAttribute(
+          backend->context, LLVMGetEnumAttributeKindForName("uwtable", 7), 2));
+  LLVMAddTargetDependentFunctionAttr(func, "frame-pointer", "all");
 
   LLVMValueRef prev_func = backend->current_function;
   LLVMBasicBlockRef prev_block = LLVMGetInsertBlock(backend->builder);
@@ -5567,11 +5576,38 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
   // INLINING & OPTIMIZATION ATTRIBUTES
   // ============================================================
 
-  // nounwind - function doesn't throw exceptions
+  // uwtable + frame-pointer=all: the AOT try/catch lowering on Windows
+  // x64 lowers `try { ... } catch { ... }` to `_setjmpex(buf, frame)` /
+  // `longjmp(buf, 1)`. `longjmp` on Windows x64 walks SEH unwind info
+  // (.pdata/.xdata) of every frame between the throw site and the
+  // setjmp site via `RtlUnwindEx`. A function without a uwtable emits
+  // *no* .pdata entry; when the unwinder hits such a frame it fails
+  // fast (STATUS_BAD_STACK / STATUS_STACK_BUFFER_OVERRUN).
+  //
+  // We previously marked every user function `nounwind`, which lets
+  // LLVM legally omit the unwind table. That was true for functions
+  // that don't throw — but a function with `try { call(...) }` *does*
+  // need to be unwound past, and a function that contains `throw`
+  // unwinds itself. Forcing `uwtable` keeps the .pdata entry. Forcing
+  // `frame-pointer=all` keeps RBP usable for the SEH frame address
+  // recorded in `_setjmpex(buf, __builtin_frame_address(0))`.
+  //
+  // Why "uwtable" instead of dropping "nounwind"? `nounwind` is a
+  // useful optimizer hint — it lets LLVM eliminate landing pads it
+  // would otherwise have to keep around for C++-style exceptions, and
+  // we're not using those. We just need the unwind table to exist so
+  // `longjmp`'s SEH walker can traverse the function. `uwtable` keeps
+  // the table; `nounwind` keeps the optimization. See Issue #53 for
+  // the minimal repro that surfaces under redirected stdio.
   LLVMAddAttributeAtIndex(
       func, LLVMAttributeFunctionIndex,
       LLVMCreateEnumAttribute(
           backend->context, LLVMGetEnumAttributeKindForName("nounwind", 8), 0));
+  LLVMAddAttributeAtIndex(
+      func, LLVMAttributeFunctionIndex,
+      LLVMCreateEnumAttribute(
+          backend->context, LLVMGetEnumAttributeKindForName("uwtable", 7), 2));
+  LLVMAddTargetDependentFunctionAttr(func, "frame-pointer", "all");
 
   // All user functions get inlinehint
   LLVMAddAttributeAtIndex(
