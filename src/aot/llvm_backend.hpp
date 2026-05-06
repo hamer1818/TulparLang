@@ -134,6 +134,15 @@ typedef struct {
   char *imported_files[128];
   int imported_count;
 
+  // Plan 02 PR3 multi-file paket: when processing an import statement
+  // from inside a multi-file bundled package, sibling imports (`import
+  // "util"` from `tulpar_modules/foo/main.tpr`) need to find the
+  // bundle's own directory before falling back to the cwd-rooted
+  // probes. Holds the path of the directory currently being recursed
+  // into (e.g. `tulpar_modules/foo`); empty string when the import
+  // came from cwd. Saved/restored across nested imports.
+  char current_import_dir[256];
+
   // AOT Builtin Functions
   LLVMValueRef func_aot_to_string;
   LLVMValueRef func_aot_to_int;

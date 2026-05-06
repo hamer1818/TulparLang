@@ -1,6 +1,7 @@
 #include "pkg_cli.hpp"
 #include "manifest.hpp"
 #include "sha256.hpp"
+#include "tpkg.hpp"
 #include "../common/http_fetch.hpp"
 
 #include <algorithm>
@@ -290,17 +291,65 @@ int cmd_install() {
             std::error_code ec2;
             fs::remove_all(dest_dir, ec2);
             fs::create_directories(dest_dir, ec2);
-            fs::path target = dest_dir / (name + ".tpr");
-            std::ofstream out(target, std::ios::binary | std::ios::trunc);
-            if (!out) {
-                std::fprintf(stderr, "tulpar pkg install: %s: cannot write '%s'\n",
-                             name.c_str(), target.string().c_str());
-                return 1;
+
+            // .tpkg multi-file bundle (Plan 02 PR3): content-sniff
+            // dispatch. We treat the body as a JSON archive when:
+            //   - the URL ends in `.tpkg` (explicit), OR
+            //   - the first non-whitespace byte is `{` AND the body
+            //     contains the `"tpkg"` schema key.
+            // Anything else (default `.tpr` body, code starting with
+            // `func`, `import`, etc.) keeps the legacy single-file
+            // write. Content-sniff is robust to registry endpoints
+            // that serve via query strings rather than file extensions
+            // (e.g. `/v1/package/bytes?name=X&version=Y`).
+            bool is_bundle = false;
+            if (url.size() >= 5 &&
+                url.compare(url.size() - 5, 5, ".tpkg") == 0) {
+                is_bundle = true;
+            } else {
+                size_t i = 0;
+                while (i < body.size() &&
+                       (body[i] == ' ' || body[i] == '\t' ||
+                        body[i] == '\n' || body[i] == '\r')) i++;
+                if (i < body.size() && body[i] == '{' &&
+                    body.find("\"tpkg\"") != std::string::npos) {
+                    is_bundle = true;
+                }
             }
-            out.write(body.data(), (std::streamsize)body.size());
-            std::fprintf(stdout, "  + %s -> %s (%zu bytes from %s, sha256 %.12s...)\n",
-                         name.c_str(), target.string().c_str(), body.size(),
-                         url.c_str(), body_sha.c_str());
+            if (is_bundle) {
+                Tpkg pkg;
+                std::string perr;
+                if (!tpkg_parse(body, pkg, perr)) {
+                    std::fprintf(stderr,
+                                 "tulpar pkg install: %s: %s\n",
+                                 name.c_str(), perr.c_str());
+                    return 1;
+                }
+                if (!tpkg_extract(pkg, dest_dir.string(), perr)) {
+                    std::fprintf(stderr,
+                                 "tulpar pkg install: %s: %s\n",
+                                 name.c_str(), perr.c_str());
+                    return 1;
+                }
+                std::fprintf(stdout,
+                             "  + %s (.tpkg, %zu files) -> %s "
+                             "(%zu archive bytes, sha256 %.12s...)\n",
+                             name.c_str(), pkg.files.size(),
+                             dest_dir.string().c_str(), body.size(),
+                             body_sha.c_str());
+            } else {
+                fs::path target = dest_dir / (name + ".tpr");
+                std::ofstream out(target, std::ios::binary | std::ios::trunc);
+                if (!out) {
+                    std::fprintf(stderr, "tulpar pkg install: %s: cannot write '%s'\n",
+                                 name.c_str(), target.string().c_str());
+                    return 1;
+                }
+                out.write(body.data(), (std::streamsize)body.size());
+                std::fprintf(stdout, "  + %s -> %s (%zu bytes from %s, sha256 %.12s...)\n",
+                             name.c_str(), target.string().c_str(), body.size(),
+                             url.c_str(), body_sha.c_str());
+            }
             lock_entries.push_back({name, url, body_sha});
             installed++;
             continue;

@@ -5030,37 +5030,61 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       printf("[AOT] Importing: %s\n", rel_path);
 
     char *source = nullptr;
+    // Track the resolved file's directory so nested imports inside a
+    // multi-file bundle (Plan 02 PR3) can find their siblings. Empty
+    // when we resolve via embedded libs / cwd-rooted candidates.
+    char resolved_dir[256] = "";
     // Check embedded libs first
     const char *embedded_code = get_embedded_lib(rel_path);
     if (embedded_code) {
       source = strdup(embedded_code);
     } else {
       // Resolution order for `import "name"`:
+      //   0. <current_import_dir>/<name>.tpr     (bundle-local sibling)
       //   1. literal `name` (relative path or absolute file)
       //   2. literal + `.tpr` extension
-      //   3. tulpar_modules/<name>/<name>.tpr   (vendored entry point)
-      //   4. tulpar_modules/<name>.tpr          (single-file vendor)
+      //   3. tulpar_modules/<name>/<name>.tpr    (vendored entry point)
+      //   4. tulpar_modules/<name>.tpr           (single-file vendor)
       //
       // (3) + (4) are how `tulpar pkg install` makes a dep usable: it
       // copies a path: spec into tulpar_modules/<name>/, and the
       // convention is that `<name>.tpr` inside that dir is the entry.
-      FILE *f = fopen(rel_path, "rb");
+      // (0) is what makes multi-file bundles work — `tulpar_modules/foo/
+      // main.tpr` doing `import "util"` finds `tulpar_modules/foo/util.tpr`
+      // before falling back to the cwd-rooted candidates that would
+      // either miss the file or grab the wrong unrelated package.
+      FILE *f = nullptr;
+      char resolved_path[512] = "";
+      if (backend->current_import_dir[0] != '\0') {
+        char path_buf[512];
+        snprintf(path_buf, sizeof(path_buf), "%s/%s.tpr",
+                 backend->current_import_dir, rel_path);
+        f = fopen(path_buf, "rb");
+        if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
+      }
+      if (!f) {
+        f = fopen(rel_path, "rb");
+        if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", rel_path);
+      }
       if (!f) {
         char path_buf[512];
         snprintf(path_buf, sizeof(path_buf), "%s.tpr", rel_path);
         f = fopen(path_buf, "rb");
+        if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
       }
       if (!f) {
         char path_buf[512];
         snprintf(path_buf, sizeof(path_buf),
                  "tulpar_modules/%s/%s.tpr", rel_path, rel_path);
         f = fopen(path_buf, "rb");
+        if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
       }
       if (!f) {
         char path_buf[512];
         snprintf(path_buf, sizeof(path_buf),
                  "tulpar_modules/%s.tpr", rel_path);
         f = fopen(path_buf, "rb");
+        if (f) snprintf(resolved_path, sizeof(resolved_path), "%s", path_buf);
       }
       if (!f) {
         fprintf(stderr, tulpar::i18n::tr_for_en("Error: Could not import file '%s'\n"), rel_path);
@@ -5075,6 +5099,21 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       (void)read_size;
       source[fsize] = 0;
       fclose(f);
+
+      // Compute the directory for nested imports. dirname() handling:
+      // strip the last `/` (or `\`) segment. If no separator, the file
+      // lived in cwd → leave resolved_dir empty so nested imports use
+      // the existing cwd-rooted probes only.
+      const char *last_slash = nullptr;
+      for (const char *p = resolved_path; *p; p++) {
+        if (*p == '/' || *p == '\\') last_slash = p;
+      }
+      if (last_slash && last_slash > resolved_path) {
+        size_t dir_len = (size_t)(last_slash - resolved_path);
+        if (dir_len >= sizeof(resolved_dir)) dir_len = sizeof(resolved_dir) - 1;
+        memcpy(resolved_dir, resolved_path, dir_len);
+        resolved_dir[dir_len] = '\0';
+      }
     }
 
     Lexer *lexer = lexer_create(source);
@@ -5138,12 +5177,21 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           backend->current_function = saved_func;
         }
 
-        // Pass 0.2: Process nested Imports LAST (before functions)
+        // Pass 0.2: Process nested Imports LAST (before functions).
+        // Save/restore current_import_dir so a bundle's nested imports
+        // see THIS module's directory, not the parent's (Plan 02 PR3).
+        char saved_import_dir[256];
+        snprintf(saved_import_dir, sizeof(saved_import_dir), "%s",
+                 backend->current_import_dir);
+        snprintf(backend->current_import_dir,
+                 sizeof(backend->current_import_dir), "%s", resolved_dir);
         for (int i = 0; i < module_ast->statement_count; i++) {
           if (module_ast->statements[i]->type == AST_IMPORT) {
             codegen_statement(backend, module_ast->statements[i]);
           }
         }
+        snprintf(backend->current_import_dir,
+                 sizeof(backend->current_import_dir), "%s", saved_import_dir);
 
         // Pass 1: Compile function definitions from module (bodies)
         // codegen_func_def reuses the pre-declared signature created above.
