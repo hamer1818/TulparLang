@@ -99,7 +99,7 @@ typedef enum {
 } VMValueType;
 
 // Object types for heap allocation
-typedef enum { OBJ_STRING, OBJ_ARRAY, OBJ_OBJECT, OBJ_FUNCTION } ObjType;
+typedef enum { OBJ_STRING, OBJ_ARRAY, OBJ_OBJECT, OBJ_FUNCTION, OBJ_STRUCT } ObjType;
 
 // Base object header - ARC enabled
 typedef struct Obj {
@@ -227,6 +227,31 @@ typedef struct {
   ObjString **keys;
   VMValue *values;
 } ObjObject;
+
+// Heap-allocated struct (Plan 04 v2 — heap promotion).
+//
+// Layout matches the stack-alloca path used by typed-struct VAR_DECLs:
+// each field is a 64-bit slot, GEP-addressable by index. The compile-time
+// struct registry (StructTypeEntry in llvm_backend.cpp) supplies the
+// field names; ObjStruct only holds the `type_name` pointer (interned in
+// the AOT module) so runtime print/diagnostics can recover the type.
+//
+// Phase 1 only handles trivially-unboxable structs (every field is int
+// or bool — i.e. fits in i64). String/array/nested-struct fields require
+// GC descent and are deferred to phase 2; the codegen path bails to the
+// boxed json fallback when the struct can't take the typed path.
+//
+// `fields` is a flexible array member: total allocation is
+// `sizeof(ObjStruct) + field_count * sizeof(int64_t)`.
+typedef struct {
+  Obj obj;
+  const char *type_name;   // interned by the AOT module; lifetime ≥ struct
+  int field_count;         // mirror of StructTypeEntry::field_count
+  int64_t fields[1];       // flexible array — index 0..field_count-1 valid
+} ObjStruct;
+
+#define IS_STRUCT(v) (IS_OBJ(v) && AS_OBJ(v)->type == OBJ_STRUCT)
+#define AS_STRUCT(v) ((ObjStruct *)AS_OBJ(v))
 
 // ============================================================================
 // CALL FRAME

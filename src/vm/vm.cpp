@@ -564,6 +564,15 @@ static void free_object(Obj *obj) {
       free(o);
     break;
   }
+  case OBJ_STRUCT: {
+    // Phase 1 ObjStruct: trivially-unboxable only, fields live inline
+    // via the flexible array member. No owned pointers to chase, so
+    // freeing the object itself is enough — the arena claims arena
+    // allocations on its own.
+    if (!from_arena)
+      free(obj);
+    break;
+  }
   default:
     if (!from_arena)
       free(obj);
@@ -666,6 +675,20 @@ void vm_print_value(VMValue value) {
       printf("<array>");
     } else if (IS_OBJECT(value)) {
       printf("<object>");
+    } else if (IS_STRUCT(value)) {
+      // Heap-promoted typed struct (Plan 04 v2). Phase 1: trivially-
+      // unboxable only — every field is i64 (int/bool). We don't have
+      // field names on the heap struct itself; the runtime schema
+      // registry isn't wired up yet, so we print `Type { 1, 2, 3 }`
+      // by-position. AOT-side print path knows the schema and uses
+      // named fields for stack-typed locals (`Type { x: 1, y: 2 }`).
+      ObjStruct *s = AS_STRUCT(value);
+      printf("%s { ", s->type_name ? s->type_name : "struct");
+      for (int i = 0; i < s->field_count; i++) {
+        if (i > 0) printf(", ");
+        printf("%lld", (long long)s->fields[i]);
+      }
+      printf(" }");
     } else {
       printf("<obj>");
     }

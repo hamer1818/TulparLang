@@ -1248,6 +1248,102 @@ VMValue aot_array_pop(VMValue arr_val) {
 }
 
 // ============================================================================
+// ObjStruct heap-promoted typed structs (Plan 04 v2)
+//
+// Stack-typed structs (PR3..PR6) live as scalarized LLVM allocas. That's
+// the fastest path but the values can't escape — `push(arr, p)` and
+// `obj["k"] = p` need a heap pointer. The escape sites in llvm_backend.cpp
+// call `aot_struct_alloc` / `aot_struct_alloc_from_fields` to lift the
+// stack contents into a heap `ObjStruct` and pass the boxed VMValue
+// downstream. Field reads on a struct VMValue go through
+// `aot_struct_get_field`.
+// ============================================================================
+
+// Allocate an empty heap struct. `field_count` slots, all zero-initialised.
+// Type name is interned by the AOT module, lifetime ≥ struct.
+extern "C" VMValue aot_struct_alloc(const char *type_name, int field_count) {
+  if (field_count < 0) field_count = 0;
+  // ObjStruct already reserves one i64 slot via the flexible-array
+  // member, so allocate `(N-1)` extra slots (0 when N <= 1).
+  size_t extra =
+      (field_count > 1) ? (size_t)(field_count - 1) * sizeof(int64_t) : 0;
+  ObjStruct *s = static_cast<ObjStruct *>(malloc(sizeof(ObjStruct) + extra));
+  if (!s) return VM_INT(0);
+  s->obj.type = OBJ_STRUCT;
+  s->obj.next = nullptr;
+  s->obj.arena_allocated = 0;
+  s->obj.ref_count = 1;
+  s->obj.is_moved = 0;
+  s->type_name = type_name;
+  s->field_count = field_count;
+  for (int i = 0; i < field_count; i++) s->fields[i] = 0;
+  return VM_OBJ(s);
+}
+
+// Allocate + bulk-fill from a contiguous int64 array. The AOT side has
+// the stack alloca whose layout matches `ObjStruct::fields`, so the
+// promotion site can pass &alloca + memcpy through this single helper.
+extern "C" VMValue aot_struct_alloc_from_fields(const char *type_name,
+                                                int field_count,
+                                                const int64_t *src) {
+  VMValue v = aot_struct_alloc(type_name, field_count);
+  if (!IS_STRUCT(v) || !src) return v;
+  ObjStruct *s = AS_STRUCT(v);
+  for (int i = 0; i < field_count; i++) s->fields[i] = src[i];
+  return v;
+}
+
+// Read field `idx` from a heap struct. Returns 0 on type/range errors so
+// callers don't crash on a misuse — typeinfer + AOT type check should
+// already prevent the bad cases.
+//
+// Pointer ABI: VMValue is 16 bytes which the LLVM-C / Windows x64 ABI
+// passes via implicit indirection in some configurations. Taking a
+// pointer here keeps the call shape stable across platforms — the
+// caller alloca-stores the boxed value and hands us the pointer.
+extern "C" long long aot_struct_get_field_ptr(VMValue *vp, int idx) {
+  if (!vp) return 0;
+  VMValue v = *vp;
+  if (!IS_STRUCT(v)) return 0;
+  ObjStruct *s = AS_STRUCT(v);
+  if (idx < 0 || idx >= s->field_count) return 0;
+  return s->fields[idx];
+}
+
+extern "C" void aot_struct_set_field_ptr(VMValue *vp, int idx, long long val) {
+  if (!vp) return;
+  VMValue v = *vp;
+  if (!IS_STRUCT(v)) return;
+  ObjStruct *s = AS_STRUCT(v);
+  if (idx < 0 || idx >= s->field_count) return;
+  s->fields[idx] = val;
+}
+
+// Unpack heap struct fields into a caller-supplied i64 buffer. Used when
+// a typed-struct VAR_DECL takes its RHS from a generic VMValue source
+// (`V3 p = points[0];`). The destination matches the stack-alloca
+// layout of trivially-unboxable structs, so subsequent `.x`/`.y`
+// reads use the existing GEP+load path with zero changes.
+//
+// `field_count` is the declared struct's field count; we copy
+// min(field_count, src->field_count) slots and zero the tail. Mismatch
+// is silently truncated/padded — typeinfer is the right place to flag
+// it. If `v` isn't a struct, dst is zeroed (matches the "missing
+// field returns 0" convention used elsewhere in the codebase).
+extern "C" void aot_struct_unpack_to(VMValue *vp, int field_count,
+                                     long long *dst) {
+  if (!dst || field_count <= 0) return;
+  if (vp && IS_STRUCT(*vp)) {
+    ObjStruct *s = AS_STRUCT(*vp);
+    int n = field_count < s->field_count ? field_count : s->field_count;
+    for (int i = 0; i < n; i++) dst[i] = s->fields[i];
+    for (int i = n; i < field_count; i++) dst[i] = 0;
+  } else {
+    for (int i = 0; i < field_count; i++) dst[i] = 0;
+  }
+}
+
+// ============================================================================
 // JSON Serialization - Optimized for Performance
 // ============================================================================
 

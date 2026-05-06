@@ -47,6 +47,7 @@ Write-Host "Compiling native programs..."
 Compile-Native -Source 'benchmarks/fib.c'        -Out 'benchmarks/fib_c.exe'        -Flags @()
 Compile-Native -Source 'benchmarks/loopsum.c'    -Out 'benchmarks/loopsum_c.exe'    -Flags @()
 Compile-Native -Source 'benchmarks/struct_sum.c' -Out 'benchmarks/struct_sum_c.exe' -Flags @()
+Compile-Native -Source 'benchmarks/struct_array_push.c' -Out 'benchmarks/struct_array_push_c.exe' -Flags @()
 
 Write-Host "Compiling Go..."
 & go build -o 'benchmarks/fib_go.exe'     'benchmarks/fib.go'
@@ -64,12 +65,16 @@ Pop-Location
 
 Write-Host "Building Tulpar AOT binaries..."
 Remove-Item 'benchmarks/fib_tulpar.exe', 'benchmarks/loopsum_tulpar.exe',
-            'benchmarks/struct_sum_tulpar.exe', 'benchmarks/struct_sum_boxed_tulpar.exe' `
+            'benchmarks/struct_sum_tulpar.exe', 'benchmarks/struct_sum_boxed_tulpar.exe',
+            'benchmarks/struct_array_push_tulpar.exe',
+            'benchmarks/struct_array_push_boxed_tulpar.exe' `
             -ErrorAction SilentlyContinue
-& .\tulpar.exe build benchmarks\loopsum.tpr          benchmarks\loopsum_tulpar          2>&1 | Out-Null
-& .\tulpar.exe build benchmarks\fib.tpr              benchmarks\fib_tulpar              2>&1 | Out-Null
-& .\tulpar.exe build benchmarks\struct_sum.tpr       benchmarks\struct_sum_tulpar       2>&1 | Out-Null
-& .\tulpar.exe build benchmarks\struct_sum_boxed.tpr benchmarks\struct_sum_boxed_tulpar 2>&1 | Out-Null
+& .\tulpar.exe build benchmarks\loopsum.tpr               benchmarks\loopsum_tulpar               2>&1 | Out-Null
+& .\tulpar.exe build benchmarks\fib.tpr                   benchmarks\fib_tulpar                   2>&1 | Out-Null
+& .\tulpar.exe build benchmarks\struct_sum.tpr            benchmarks\struct_sum_tulpar            2>&1 | Out-Null
+& .\tulpar.exe build benchmarks\struct_sum_boxed.tpr      benchmarks\struct_sum_boxed_tulpar      2>&1 | Out-Null
+& .\tulpar.exe build benchmarks\struct_array_push.tpr     benchmarks\struct_array_push_tulpar     2>&1 | Out-Null
+& .\tulpar.exe build benchmarks\struct_array_push_boxed.tpr benchmarks\struct_array_push_boxed_tulpar 2>&1 | Out-Null
 
 $results = @()
 
@@ -103,6 +108,15 @@ Write-Host "`n--- struct_sum (10M iterasyon, 3-field V3 toplama) ---"
 $results += Measure-Run -Label 'struct_sum:Tulpar AOT (struct)' -Cmd '.\benchmarks\struct_sum_tulpar.exe'       -CmdArgs @()
 $results += Measure-Run -Label 'struct_sum:Tulpar AOT (boxed)'  -Cmd '.\benchmarks\struct_sum_boxed_tulpar.exe' -CmdArgs @()
 $results += Measure-Run -Label 'struct_sum:C(gcc -O2)'          -Cmd '.\benchmarks\struct_sum_c.exe'            -CmdArgs @()
+
+# struct_array_push benchmark — Plan 04 v2 heap promotion. Push 1M typed
+# struct'i array'e + readback x+y+z toplama. Plan 04 v2 oncesi bu yol
+# bozuktu (struct kayboluyordu); boxed json muadili field erisim basina
+# iki runtime cagrisi yapiyordu.
+Write-Host "`n--- struct_array_push (1M push + readback, V3) ---"
+$results += Measure-Run -Label 'struct_array_push:Tulpar AOT (heap struct)' -Cmd '.\benchmarks\struct_array_push_tulpar.exe'       -CmdArgs @()
+$results += Measure-Run -Label 'struct_array_push:Tulpar AOT (boxed json)'  -Cmd '.\benchmarks\struct_array_push_boxed_tulpar.exe' -CmdArgs @()
+$results += Measure-Run -Label 'struct_array_push:C(gcc -O2)'               -Cmd '.\benchmarks\struct_array_push_c.exe'            -CmdArgs @()
 
 Write-Host "`n=== RESULTS (best of $Repeats runs) ==="
 $results | Format-Table Benchmark, Best_ms, Output -AutoSize
