@@ -17,6 +17,7 @@ enum TulparTokenType {
     TOKEN_ARRAY_STR,     // "arrayStr"
     TOKEN_ARRAY_BOOL,    // "arrayBool"
     TOKEN_ARRAY_JSON,    // "arrayJson" (JSON-like mixed)
+    TOKEN_JSON_TYPE,     // "json" — runtime dynamic dict/object
     
     // Anahtar kelimeler
     TOKEN_FUNC,          // "func"

@@ -17,6 +17,7 @@ std::string render_type(int data_type, const char *custom_type) {
         case TYPE_ARRAY_STR: return "array<str>";
         case TYPE_ARRAY_BOOL: return "array<bool>";
         case TYPE_ARRAY_JSON: return "array<json>";
+        case TYPE_JSON: return "json";
         case TYPE_CUSTOM:
             return custom_type ? std::string(custom_type) : std::string();
         default:

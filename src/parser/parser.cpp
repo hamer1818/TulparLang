@@ -253,7 +253,7 @@ std::unique_ptr<ASTNode> Parser::parse_statement() {
         check(TOKEN_ARRAY_TYPE) || check(TOKEN_ARRAY_INT) ||
         check(TOKEN_ARRAY_FLOAT) || check(TOKEN_ARRAY_STR) ||
         check(TOKEN_ARRAY_BOOL) || check(TOKEN_ARRAY_JSON) ||
-        check(TOKEN_VAR)) {
+        check(TOKEN_JSON_TYPE) || check(TOKEN_VAR)) {
         return parse_variable_decl();
     }
 
@@ -1077,6 +1077,7 @@ DataType Parser::parse_type() {
     if (match(TOKEN_ARRAY_STR)) return TYPE_ARRAY_STR;
     if (match(TOKEN_ARRAY_BOOL)) return TYPE_ARRAY_BOOL;
     if (match(TOKEN_ARRAY_JSON)) return TYPE_ARRAY_JSON;
+    if (match(TOKEN_JSON_TYPE)) return TYPE_JSON;
     if (match(TOKEN_VAR)) return TYPE_UNKNOWN;
     
     // Custom type

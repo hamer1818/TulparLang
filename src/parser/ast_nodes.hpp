@@ -35,6 +35,7 @@ enum DataType {
     TYPE_ARRAY_STR,
     TYPE_ARRAY_BOOL,
     TYPE_ARRAY_JSON,
+    TYPE_JSON,
     TYPE_VOID
 };
 
