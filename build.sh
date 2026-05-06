@@ -161,7 +161,45 @@ if [ "$ACTION" = "test" ]; then
         # used to hide every diagnostic and turn CI into "all FAIL, no clue why".
         if $TIMEOUT_CMD ./tulpar --aot "$example" > "$compile_log" 2>&1 && [ -f "$out_path" ]; then
             if [ "$compile_only" = "1" ]; then
-                echo -e "${GREEN}PASS (compile-only)${NC}"
+                # Runtime smoke test for COMPILE_ONLY examples: spawn the
+                # binary in the background, give it 2s to either start
+                # serving (wings/router will block on accept) or crash,
+                # then check whether it's still alive. PR #64 was
+                # exactly this regression: every wings example built
+                # cleanly on Linux but segfaulted at socket_server() —
+                # would have been caught here at CI time instead of
+                # silently shipping in a release. SIGTERM the survivors;
+                # any non-zero exit before the SIGTERM means a real
+                # runtime failure.
+                local smoke_log
+                smoke_log=$(mktemp)
+                "./$out_path" > "$smoke_log" 2>&1 &
+                local smoke_pid=$!
+                sleep 2
+                if kill -0 "$smoke_pid" 2>/dev/null; then
+                    # Still running — looked healthy enough. Tear down.
+                    kill -TERM "$smoke_pid" 2>/dev/null
+                    wait "$smoke_pid" 2>/dev/null
+                    echo -e "${GREEN}PASS (compile-only +smoke)${NC}"
+                else
+                    # Already exited; check status. Bash's $? after
+                    # wait on a known-dead pid returns the exit status.
+                    wait "$smoke_pid" 2>/dev/null
+                    local smoke_rc=$?
+                    if [ "$smoke_rc" = "0" ]; then
+                        # Cleanly exited within 2s — usually a script
+                        # that runs to completion and doesn't actually
+                        # call listen(). That's still PASS.
+                        echo -e "${GREEN}PASS (compile-only +smoke)${NC}"
+                    else
+                        echo -e "${RED}FAIL (smoke crashed, exit $smoke_rc)${NC}"
+                        echo "----- smoke log: $example -----"
+                        sed 's/^/    /' "$smoke_log" | head -n 40
+                        echo "----- end log -----"
+                        TEST_FAILED=1
+                    fi
+                fi
+                rm -f "$smoke_log"
                 rm -f "$out_path" "$out_path.ll" "$out_path.o"
                 return
             fi
