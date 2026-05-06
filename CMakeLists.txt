@@ -363,13 +363,31 @@ elseif(UNIX)
 elseif(WIN32)
     message(STATUS "Configuring for Windows (MSVC)")
     target_compile_definitions(tulpar PRIVATE PLATFORM_WINDOWS)
-    
+
     # Winsock2 for networking
     target_link_libraries(tulpar ws2_32 wsock32)
-    
+
+    # MinGW: fold the GCC C++ runtime + winpthread + the LLVM-pulled
+    # zlib/zstd shared libs into tulpar.exe so a fresh Windows install
+    # (no MSYS2 / Git PATH on PATH) can launch it without bumping into
+    # STATUS_DLL_NOT_FOUND on libgcc_s_seh-1.dll, libstdc++-6.dll,
+    # libwinpthread-1.dll, zlib1.dll, or libzstd.dll. zlib/zstd are
+    # transitive deps of the static LLVM components linked above, so
+    # they show up in the import table even though tulpar source never
+    # touches them directly. -Wl,-Bstatic ... -Wl,-Bdynamic is scoped
+    # so ws2_32 / kernel32 / advapi32 / etc. (Windows system libs that
+    # only have import-lib form) keep being resolved dynamically.
+    if(NOT MSVC)
+        target_link_options(tulpar PRIVATE
+            -static-libgcc
+            -static-libstdc++
+            -Wl,-Bstatic -lwinpthread -lz -lzstd -Wl,-Bdynamic
+        )
+    endif()
+
     # UTF-8 console support
     if(MSVC)
-        target_compile_options(tulpar PRIVATE 
+        target_compile_options(tulpar PRIVATE
             /utf-8           # UTF-8 source files
             /W3              # Warning level 3
             /wd4996          # Disable deprecated function warnings
@@ -377,9 +395,9 @@ elseif(WIN32)
             /wd4267          # Disable size_t conversion warnings
             /EHsc            # Exception handling model
         )
-        
+
         # Disable "unsafe" CRT warnings for standard C functions
-        target_compile_definitions(tulpar PRIVATE 
+        target_compile_definitions(tulpar PRIVATE
             _CRT_SECURE_NO_WARNINGS
             _WINSOCK_DEPRECATED_NO_WARNINGS
         )
