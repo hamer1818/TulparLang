@@ -1206,11 +1206,22 @@ double aot_to_float_ptr(VMValue *value_ptr) {
 }
 
 // len(VMValue) -> int
+//
+// Strings: byte length (matches String.length).
+// Arrays:  element count.
+// Objects: key count — `length({a:1, b:2})` returns 2. Used to be 0;
+//          changed because every dogfood backend reached for
+//          `length(query)` to detect an empty query string and got
+//          surprised. Mirrors Python's `len({})`, JS's
+//          `Object.keys(o).length`, etc.
+// Anything else (int, bool, float, nil): 0.
 int64_t aot_len(VMValue value) {
   if (IS_STRING(value)) {
     return AS_STRING(value)->length;
   } else if (IS_ARRAY(value)) {
     return AS_ARRAY(value)->count;
+  } else if (IS_OBJECT(value)) {
+    return ((ObjObject *)AS_OBJECT(value))->count;
   }
   return 0;
 }
