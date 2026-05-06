@@ -71,6 +71,45 @@ func _find_route(str method, str path) {
     return -1;
 }
 
+// Raw-response envelope detection. Handlers that need to bypass the
+// default JSON serialisation (e.g. registry bytes, Prometheus
+// exposition, plain-text health probes) return:
+//   {"_raw": "<body>", "_content_type": "text/plain; charset=utf-8"}
+// `_content_type` is optional and defaults to text/plain. Anything else
+// in the dict is ignored — `_raw` is an all-or-nothing escape hatch.
+func _wings_has_raw(json result) {
+    array rk = keys(result);
+    for (int i = 0; i < length(rk); i++) {
+        if (rk[i] == "_raw") {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Build the wire response for a dispatched handler. Centralises the
+// `_raw` envelope check so both `listen()` and `listen_async()` get the
+// same behaviour without duplicating the branching.
+func _wings_build_response(json result, int keep) {
+    if (_wings_has_raw(result)) {
+        str ct = result["_content_type"];
+        if (length(ct) == 0) {
+            ct = "text/plain; charset=utf-8";
+        }
+        str rbody = result["_raw"];
+        return http_create_response(200, ct, rbody, _default_headers, keep);
+    }
+    return http_create_response(200, "application/json",
+        toJson(result), _default_headers, keep);
+}
+
+func _wings_build_404(str path, int keep) {
+    str body = "{\"error\":\"" + http_status_text(404) +
+        "\",\"path\":\"" + path + "\"}";
+    return http_create_response(404, "application/json", body,
+        _default_headers, keep);
+}
+
 // ----- Built-in production helpers -----------------------------------------
 //
 // These are auto-registered when listen() is called: the user's app
@@ -87,20 +126,20 @@ func _wings_healthz() {
 }
 
 func _wings_metrics() {
-    // Auto-detect format=prom in the query string. Without proper
-    // content-negotiation infra in Wings yet (no per-route content
-    // type override), routing on the query string is the cheapest
-    // way to expose both shapes from the same path.
+    // Auto-detect format=prom in the query string. Routing on the query
+    // string is the cheapest way to expose both shapes from the same path
+    // until full content-negotiation lands.
     json q = _request["query"];
     if (q) {
         str fmt = q["format"];
         if (fmt == "prom") {
-            // The dispatcher will toJson() this dict — wrap the prom
-            // body as a single field so the client can pull it out.
-            // Plain Prometheus scrapers expect text/plain though, so
-            // expose `wings_metrics_prom()` directly from a dedicated
-            // user-facing route when full conformance is needed.
-            return {"_raw": wings_metrics_prom()};
+            // Raw envelope: the dispatcher serves `_raw` as the body
+            // verbatim with `_content_type` as the response Content-Type.
+            // Prom scrapers expect text/plain; version=0.0.4 explicitly.
+            return {
+                "_raw": wings_metrics_prom(),
+                "_content_type": "text/plain; version=0.0.4; charset=utf-8"
+            };
         }
     }
     return {
@@ -230,13 +269,9 @@ func _wings_serve_connection(json client_arg) {
         // only locals + the read-only `_default_headers` global.
         str response = "";
         if (found) {
-            response = http_create_response(200, "application/json",
-                toJson(result), _default_headers, keep);
+            response = _wings_build_response(result, keep);
         } else {
-            str body = "{\"error\":\"" + http_status_text(404) +
-                "\",\"path\":\"" + path + "\"}";
-            response = http_create_response(404, "application/json", body,
-                _default_headers, keep);
+            response = _wings_build_404(path, keep);
         }
 
         socket_send(client, response);
@@ -404,14 +439,10 @@ func listen(int port) {
             if (route_idx >= 0) {
                 json route = _routes[route_idx];
                 json result = call(route["handler"]);
-                response = http_create_response(200, "application/json",
-                    toJson(result), _default_headers, keep);
+                response = _wings_build_response(result, keep);
                 _wings_requests_2xx = _wings_requests_2xx + 1;
             } else {
-                str body = "{\"error\":\"" + http_status_text(404) +
-                    "\",\"path\":\"" + path + "\"}";
-                response = http_create_response(404, "application/json", body,
-                    _default_headers, keep);
+                response = _wings_build_404(path, keep);
                 _wings_requests_4xx = _wings_requests_4xx + 1;
             }
 
