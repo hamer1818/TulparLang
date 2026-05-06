@@ -338,7 +338,16 @@ std::unique_ptr<ASTNode> Parser::parse_variable_decl() {
     // Optional initializer
     std::unique_ptr<ASTNode> initializer = nullptr;
     if (match(TOKEN_ASSIGN)) {
-        initializer = parse_expression();
+        // Typed-struct literal: `Point p = { x: 1, y: 2 };` — parse with the
+        // relaxed key syntax (bare identifiers OR string literals) so users
+        // can write field names directly. Generic expression contexts still
+        // route through parse_object_literal which only accepts string keys,
+        // keeping any non-typed `{ ... }` parse behaviour unchanged.
+        if (type == TYPE_CUSTOM && check(TOKEN_LBRACE)) {
+            initializer = parse_struct_literal_init();
+        } else {
+            initializer = parse_expression();
+        }
     }
 
     expect(TOKEN_SEMICOLON, "Expected ';' after variable declaration");
@@ -971,21 +980,48 @@ std::unique_ptr<ASTNode> Parser::parse_array_literal() {
 std::unique_ptr<ASTNode> Parser::parse_object_literal() {
     SourceLocation loc(current().line(), current().column());
     advance(); // consume '{'
-    
+
     std::vector<std::pair<std::string, std::unique_ptr<ASTNode>>> fields;
-    
+
     if (!check(TOKEN_RBRACE)) {
         do {
             Token key = expect(TOKEN_STRING_LITERAL, "Expected string key in object");
             expect(TOKEN_COLON, "Expected ':' after object key");
             auto value = parse_expression();
-            
+
             fields.emplace_back(key.value(), std::move(value));
         } while (match(TOKEN_COMMA));
     }
-    
+
     expect(TOKEN_RBRACE, "Expected '}' after object fields");
-    
+
+    return std::make_unique<ASTNode>(ObjectLiteral(std::move(fields), loc));
+}
+
+std::unique_ptr<ASTNode> Parser::parse_struct_literal_init() {
+    SourceLocation loc(current().line(), current().column());
+    advance(); // consume '{'
+
+    std::vector<std::pair<std::string, std::unique_ptr<ASTNode>>> fields;
+
+    if (!check(TOKEN_RBRACE)) {
+        do {
+            std::string key;
+            if (check(TOKEN_STRING_LITERAL) || check(TOKEN_IDENTIFIER)) {
+                key = current().value();
+                advance();
+            } else {
+                error("Expected field name in struct literal");
+            }
+            expect(TOKEN_COLON, "Expected ':' after struct field name");
+            auto value = parse_expression();
+
+            fields.emplace_back(std::move(key), std::move(value));
+        } while (match(TOKEN_COMMA));
+    }
+
+    expect(TOKEN_RBRACE, "Expected '}' after struct fields");
+
     return std::make_unique<ASTNode>(ObjectLiteral(std::move(fields), loc));
 }
 
