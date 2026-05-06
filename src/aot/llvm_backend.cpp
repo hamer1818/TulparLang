@@ -2829,8 +2829,17 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           LLVMBuildCall2(backend->builder,
                          LLVMGlobalGetValueType(backend->func_printf),
                          backend->func_printf, printf_args, 2, "");
-        } else if (arg->type == AST_IDENTIFIER && arg->name &&
-                   get_local_struct_type(backend, arg->name)) {
+        } else if (
+            (arg->type == AST_IDENTIFIER && arg->name &&
+             get_local_struct_type(backend, arg->name)) ||
+            (arg->type == AST_FUNCTION_CALL && arg->name && [&]() {
+               for (int j = 0; j < backend->function_count; j++) {
+                 if (strcmp(backend->functions[j].name, arg->name) == 0) {
+                   return backend->functions[j].return_struct_name != nullptr;
+                 }
+               }
+               return false;
+             }())) {
           // Typed-struct print: emit `Name { f1: <int>, f2: <int>, ... }`
           // directly via printf calls, GEP-loading each field's i64
           // payload. Avoids feeding a raw struct alloca through the
@@ -2838,10 +2847,40 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           // Trivially-unboxable (int/bool) is the only path PR3-PR5 takes,
           // so every field is an i64 here. bool prints as 0/1 — same as
           // the boxed VMValue print path treats it.
-          const char *struct_name =
-              get_local_struct_type(backend, arg->name);
-          StructTypeEntry *st = find_struct_type(backend, struct_name);
-          LLVMValueRef alloca = get_local(backend, arg->name);
+          //
+          // Two sources for the struct alloca:
+          //   - identifier:    the local's pinned alloca (no allocation)
+          //   - function call: alloca a temp of the callee's return
+          //                    struct, pin the hint, evaluate the call
+          //                    (writes into our temp), then format from
+          //                    the temp.
+          const char *struct_name = nullptr;
+          StructTypeEntry *st = nullptr;
+          LLVMValueRef alloca = nullptr;
+          if (arg->type == AST_IDENTIFIER) {
+            struct_name = get_local_struct_type(backend, arg->name);
+            st = find_struct_type(backend, struct_name);
+            alloca = get_local(backend, arg->name);
+          } else {
+            for (int j = 0; j < backend->function_count; j++) {
+              if (strcmp(backend->functions[j].name, arg->name) == 0) {
+                struct_name = backend->functions[j].return_struct_name;
+                break;
+              }
+            }
+            st = find_struct_type(backend, struct_name);
+            if (st) {
+              alloca = llvm_build_alloca_at_entry(
+                  backend, st->llvm_type, "print.struct.call");
+              LLVMBuildStore(backend->builder,
+                             LLVMConstNull(st->llvm_type), alloca);
+              backend->pending_struct_result_ptr = alloca;
+              backend->pending_struct_result_name = st->name;
+              (void)codegen_expression(backend, arg);
+              backend->pending_struct_result_ptr = nullptr;
+              backend->pending_struct_result_name = nullptr;
+            }
+          }
           if (st && alloca) {
             char hdr[256];
             snprintf(hdr, sizeof(hdr), "%s { ", st->name);

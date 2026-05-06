@@ -53,3 +53,7 @@ V3 r3 = origin_plus(b);
 print(r3.x);                    // 10
 print(r3.y);                    // 20
 print(r3.z);                    // 30
+
+// `print(struct_returning_call())` — pin the print's temp struct alloca
+// on the hint, let the call write into it, then format from there.
+print(make_v3(7, 8, 9));        // V3 { x: 7, y: 8, z: 9 }
