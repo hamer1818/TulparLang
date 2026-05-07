@@ -1,0 +1,190 @@
+// Wings TLS listener — server-side HTTPS for Tulpar.
+//
+// Same handler API as `lib/wings`'s `listen` / `listen_async` /
+// `listen_pool` / `listen_evented`, but every request rides over a
+// TLS connection. Routes are still registered with `get` / `post` /
+// etc. from `wings`; this module just adds the encrypted listener
+// loop. Internally each connection gets its own thread (the
+// listen_async shape) — keeps the implementation small while the
+// async-I/O follow-up grows partial-read state for unencrypted Wings.
+//
+// Usage:
+//   import "wings";
+//   import "wings_tls";
+//   get("/", "home");
+//   wings_tls(8443, "./server.crt", "./server.key");
+//
+// Cert + key are PEM-encoded files. For local dev use `openssl req
+// -x509 -newkey rsa:2048 -keyout server.key -out server.crt -days 365
+// -nodes -subj "/CN=localhost"`. For production point at your real
+// cert chain (e.g. Let's Encrypt's `fullchain.pem` + `privkey.pem`).
+//
+// Build requirements: Tulpar must be compiled with OpenSSL — i.e.
+// `find_package(OpenSSL)` succeeded at CMake time. `tls_init` returns
+// 0 immediately on TLS-disabled builds and the listener prints an
+// error and exits.
+
+import "wings";
+
+// Worker for one TLS connection. Reads bytes via SSL_read, parses,
+// dispatches to the matching route, sends the response back via
+// SSL_write, and tears down. No keep-alive yet — each connection
+// serves one request and closes (TLS keep-alive can be re-added once
+// `_wings_serve_one_request`-style splitting happens for the TLS path).
+//
+// The SSL pointer is boxed into a `json` so `thread_create` passes it
+// through the canonical VMValue ABI; the worker unboxes on entry.
+func _wings_tls_serve(json ssl_box) {
+    int ssl = ssl_box;
+    int wm = arena_save();
+
+    // SSL_read max — 256 KiB is plenty for typical wings JSON requests
+    // and keeps DoS exposure bounded. See _wings_max_body_bytes for
+    // the plain-HTTP equivalent.
+    str raw = tls_recv(ssl, 262144);
+    if (length(raw) == 0) {
+        tls_close(ssl);
+        arena_restore(wm);
+        return;
+    }
+    json req = http_parse_request(raw);
+
+    _request = req;
+    str method = req["method"];
+    str path = req["path"];
+    if (length(env("TULPAR_HTTP_QUIET")) == 0) {
+        print("  TLS " + method + " " + path);
+    }
+
+    // Same OPTIONS preflight short-circuit as plain wings — browsers
+    // hitting an HTTPS endpoint with non-simple headers still need a
+    // 204 + CORS-header reply before the real request.
+    bool is_options = (method == "OPTIONS");
+    if (is_options) {
+        _request["params"] = {};
+        _wings_requests_total = _wings_requests_total + 1;
+        _wings_requests_2xx = _wings_requests_2xx + 1;
+        // Force `Connection: close` (5th arg = 0) since we aren't
+        // doing keep-alive on the TLS path yet.
+        str preflight = http_create_response(
+            204, "text/plain; charset=utf-8", "", _default_headers, 0);
+        tls_send(ssl, preflight);
+        tls_close(ssl);
+        arena_restore(wm);
+        return;
+    }
+
+    json route_match = _find_route_with_params(method, path);
+    int route_idx = route_match["index"];
+    bool is_head = false;
+    if (route_idx < 0 && method == "HEAD") {
+        route_match = _find_route_with_params("GET", path);
+        route_idx = route_match["index"];
+        is_head = true;
+    }
+    _request["params"] = route_match["params"];
+
+    json result = {};
+    bool found = false;
+    if (route_idx >= 0) {
+        json route = _routes[route_idx];
+        result = call(route["handler"]);
+        found = true;
+    }
+    _wings_requests_total = _wings_requests_total + 1;
+    if (found) {
+        int eff_status = _wings_status_or(result, 200);
+        if (eff_status >= 500) {
+            _wings_requests_5xx = _wings_requests_5xx + 1;
+        } else if (eff_status >= 400) {
+            _wings_requests_4xx = _wings_requests_4xx + 1;
+        } else {
+            _wings_requests_2xx = _wings_requests_2xx + 1;
+        }
+    } else {
+        _wings_requests_4xx = _wings_requests_4xx + 1;
+    }
+
+    str response = "";
+    if (found) {
+        // 5th arg = 0: Connection: close. TLS keep-alive will land in
+        // the same follow-up that adds partial-read state machines for
+        // the plain wings path.
+        response = _wings_build_response(result, 0);
+    } else {
+        response = _wings_build_404(path, 0);
+    }
+    if (is_head) {
+        response = _wings_strip_response_body(response);
+    }
+    tls_send(ssl, response);
+    tls_close(ssl);
+    arena_restore(wm);
+}
+
+// Public entry point. Starts a TLS listener on `port` using the cert
+// and key files at the given paths. Blocks the calling thread on the
+// accept loop; spawns one worker thread per accepted connection.
+//
+// The SSL_CTX is created once and shared across every connection this
+// listener serves — cert/key files are read at startup, not per
+// request. A failure to read the cert/key (wrong path, mismatched
+// pair, malformed PEM) prints to stderr and aborts the listener so
+// you don't end up running an "open" server by accident.
+func wings_tls(int port, str cert_path, str key_path) {
+    if (_find_route("GET", "/healthz") < 0) {
+        get("/healthz", "_wings_healthz");
+    }
+    if (_find_route("GET", "/metrics") < 0) {
+        get("/metrics", "_wings_metrics");
+    }
+    _wings_apply_env_config();
+    _wings_started_at = timestamp();
+
+    int ctx = tls_init(cert_path, key_path);
+    if (ctx == 0) {
+        print("ERROR: TLS init failed — check cert/key paths and that");
+        print("       Tulpar was built with OpenSSL.");
+        return;
+    }
+
+    print("");
+    print("  ╔═══════════════════════════════════╗");
+    print("  ║       Tulpar Wings v2.4 (TLS)     ║");
+    print("  ║    Give your API wings! 🪶        ║");
+    print("  ╚═══════════════════════════════════╝");
+    print("");
+    print("  Routes:");
+    for (int i = 0; i < length(_routes); i++) {
+        json r = _routes[i];
+        print("    " + r["method"] + " " + r["path"] + " -> " + r["handler"] + "()");
+    }
+    print("");
+    print("  Server: https://127.0.0.1:" + toString(port) + " (TLS)");
+    print("  Press Ctrl+C to stop");
+    print("");
+
+    int server = socket_server("127.0.0.1", port);
+    if (server < 0) {
+        print("ERROR: Failed to start server!");
+        tls_ctx_free(ctx);
+        return;
+    }
+
+    while (true) {
+        int client = socket_accept(server);
+        if (client < 0) {
+            continue;
+        }
+        // SSL_accept happens here, on the accept thread, so a slow
+        // handshake doesn't tie up the worker count. Failed handshake
+        // closes the underlying fd inside tls_accept.
+        int ssl = tls_accept(ctx, client);
+        if (ssl == 0) {
+            continue;
+        }
+        json sb = ssl;
+        int t = thread_create(_wings_tls_serve, sb);
+        thread_detach(t);
+    }
+}

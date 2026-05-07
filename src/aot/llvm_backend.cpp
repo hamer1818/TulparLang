@@ -978,6 +978,22 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_socket_poll =
       LLVMAddFunction(backend->module, "aot_socket_poll", sock_poll_type);
 
+  // TLS server primitives. tls_init / tls_accept take 2 args; tls_recv
+  // and tls_send take 2 args; tls_close and tls_ctx_free take 1 arg.
+  // All return a VMValue (int, string, or sentinel).
+  backend->func_aot_tls_init =
+      LLVMAddFunction(backend->module, "aot_tls_init", sock_poll_type);
+  backend->func_aot_tls_accept =
+      LLVMAddFunction(backend->module, "aot_tls_accept", sock_poll_type);
+  backend->func_aot_tls_recv =
+      LLVMAddFunction(backend->module, "aot_tls_recv", sock_poll_type);
+  backend->func_aot_tls_send =
+      LLVMAddFunction(backend->module, "aot_tls_send", sock_poll_type);
+  backend->func_aot_tls_close =
+      LLVMAddFunction(backend->module, "aot_tls_close", sock_close_type);
+  backend->func_aot_tls_ctx_free =
+      LLVMAddFunction(backend->module, "aot_tls_ctx_free", sock_close_type);
+
   // aot_call_dynamic(handler_name) -> VMValue
   // Param is VMValue (string)
   LLVMTypeRef call_dyn_params[] = {backend->vm_value_type};
@@ -3565,6 +3581,48 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(
           backend, backend->func_aot_socket_poll, args, 2, "sock_poll_res");
+    }
+    // TLS server primitives. Same dispatch shape as socket_*; the
+    // builtin names match what `lib/wings_tls.tpr` calls.
+    if (strcmp(node->name, "tls_init") == 0 &&
+        node->argument_count == 2) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
+                             codegen_expression(backend, node->arguments[1])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_tls_init,
+                                    args, 2, "tls_ctx");
+    }
+    if (strcmp(node->name, "tls_accept") == 0 &&
+        node->argument_count == 2) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
+                             codegen_expression(backend, node->arguments[1])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_tls_accept,
+                                    args, 2, "tls_ssl");
+    }
+    if (strcmp(node->name, "tls_recv") == 0 &&
+        node->argument_count == 2) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
+                             codegen_expression(backend, node->arguments[1])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_tls_recv,
+                                    args, 2, "tls_recv_data");
+    }
+    if (strcmp(node->name, "tls_send") == 0 &&
+        node->argument_count == 2) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
+                             codegen_expression(backend, node->arguments[1])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_tls_send,
+                                    args, 2, "tls_send_n");
+    }
+    if (strcmp(node->name, "tls_close") == 0 &&
+        node->argument_count == 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_tls_close,
+                                    args, 1, "tls_close_res");
+    }
+    if (strcmp(node->name, "tls_ctx_free") == 0 &&
+        node->argument_count == 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_tls_ctx_free,
+                                    args, 1, "tls_ctx_free_res");
     }
 
     // ====== Threading Functions ======

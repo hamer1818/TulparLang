@@ -71,6 +71,12 @@ static const char *EMBEDDED_ORM =
 @EMBEDDED_ORM_CONTENT@;
 
 // ========================================
+// lib/wings_tls.tpr
+// ========================================
+static const char *EMBEDDED_WINGS_TLS =
+@EMBEDDED_WINGS_TLS_CONTENT@;
+
+// ========================================
 // Library Lookup
 // ========================================
 static const char* get_embedded_lib(const char *name) {
@@ -85,6 +91,7 @@ static const char* get_embedded_lib(const char *name) {
     if (strcmp(name, "test") == 0) return EMBEDDED_TEST;
     if (strcmp(name, "http_client") == 0) return EMBEDDED_HTTP_CLIENT;
     if (strcmp(name, "orm") == 0) return EMBEDDED_ORM;
+    if (strcmp(name, "wings_tls") == 0) return EMBEDDED_WINGS_TLS;
     return NULL;
 }
 

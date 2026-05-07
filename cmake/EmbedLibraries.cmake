@@ -58,6 +58,7 @@ embed_library("tulpar_api" "tulpar_api.tpr" EMBEDDED_TULPAR_API_CONTENT)
 embed_library("test" "test.tpr" EMBEDDED_TEST_CONTENT)
 embed_library("http_client" "http_client.tpr" EMBEDDED_HTTP_CLIENT_CONTENT)
 embed_library("orm" "orm.tpr" EMBEDDED_ORM_CONTENT)
+embed_library("wings_tls" "wings_tls.tpr" EMBEDDED_WINGS_TLS_CONTENT)
 
 # Generate the header file from template
 configure_file(

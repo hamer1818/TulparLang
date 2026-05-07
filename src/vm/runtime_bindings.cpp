@@ -3098,6 +3098,190 @@ VMValue aot_socket_poll(VMValue fdsVal, VMValue timeoutVal) {
   if (ready_buf != stack_ready) free(ready_buf);
   return out;
 }
+
+// ============================================================================
+// TLS server primitives — power Wings TLS listener (lib/wings_tls.tpr)
+// ============================================================================
+//
+// Mirrors the client-side OpenSSL path in src/common/http_fetch.cpp but
+// flips the direction: SSL_CTX uses TLS_server_method() + a cert/key
+// pair the user supplies, every accepted fd gets wrapped in SSL_accept,
+// and read/write go through SSL_read / SSL_write instead of recv / send.
+//
+// The Tulpar surface keeps the SSL pointer as an opaque int64 (raw
+// reinterpret_cast of `SSL *`). User code holds it as `int ssl` and
+// passes it to the four helpers; lifetime is tied to `tls_close`. We
+// keep the SSL_CTX alive for the listener's whole lifetime — one
+// per call to `tls_listen` — so cert/key files are read once at
+// startup and shared across every connection that listener serves.
+//
+// Build: gated on TULPAR_HAS_TLS (set by CMake when find_package(OpenSSL)
+// succeeds). Without TLS the builtins return error sentinels so calling
+// code degrades gracefully — Tulpar binaries built on a host without
+// OpenSSL still run, just without the TLS surface.
+
+#if defined(TULPAR_HAS_TLS)
+  #include <openssl/ssl.h>
+  #include <openssl/err.h>
+#endif
+
+// Initialize a TLS server context. Loads the cert + key from disk,
+// configures TLS_server_method, and returns the SSL_CTX pointer as
+// int64 for Tulpar code to thread back into tls_accept. Returns 0 on
+// any failure (invalid paths, mismatched cert/key, or no-TLS build).
+VMValue aot_tls_init(VMValue certVal, VMValue keyVal) {
+#if defined(TULPAR_HAS_TLS)
+  if (!IS_STRING(certVal) || !IS_STRING(keyVal)) return VM_INT(0);
+  const char *cert_path = AS_STRING(certVal)->chars;
+  const char *key_path = AS_STRING(keyVal)->chars;
+  // OpenSSL 1.1.0+ initializes itself lazily; older versions need
+  // OPENSSL_init_ssl(0, nullptr) but we already require modern OpenSSL
+  // for the client-side TLS support.
+  SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+  if (!ctx) return VM_INT(0);
+  // Reasonable defaults: TLS 1.2+, no SSLv3 / TLS 1.0/1.1.
+  SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+  if (SSL_CTX_use_certificate_file(ctx, cert_path, SSL_FILETYPE_PEM) != 1) {
+    fprintf(stderr, "[tls] use_certificate_file failed for %s\n", cert_path);
+    SSL_CTX_free(ctx);
+    return VM_INT(0);
+  }
+  if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) != 1) {
+    fprintf(stderr, "[tls] use_PrivateKey_file failed for %s\n", key_path);
+    SSL_CTX_free(ctx);
+    return VM_INT(0);
+  }
+  if (SSL_CTX_check_private_key(ctx) != 1) {
+    fprintf(stderr, "[tls] check_private_key failed (cert/key mismatch?)\n");
+    SSL_CTX_free(ctx);
+    return VM_INT(0);
+  }
+  return VM_INT((int64_t)(uintptr_t)ctx);
+#else
+  (void)certVal; (void)keyVal;
+  return VM_INT(0);
+#endif
+}
+
+// Accept + SSL_accept on a connection that arrived on a plain TCP
+// listening socket. The caller keeps using `socket_accept(server)` to
+// get the raw fd, then hands the fd here along with the ctx returned
+// from tls_init. We do the SSL_accept handshake synchronously and hand
+// back the SSL* (cast to int64) on success, 0 on failure. On failure
+// we close the underlying socket so the caller doesn't have to track
+// it separately.
+VMValue aot_tls_accept(VMValue ctxVal, VMValue clientFdVal) {
+#if defined(TULPAR_HAS_TLS)
+  if (!IS_INT(ctxVal) || !IS_INT(clientFdVal)) return VM_INT(0);
+  SSL_CTX *ctx = (SSL_CTX *)(uintptr_t)AS_INT(ctxVal);
+  tulpar_socket fd = (tulpar_socket)AS_INT(clientFdVal);
+  if (!ctx) return VM_INT(0);
+  SSL *ssl = SSL_new(ctx);
+  if (!ssl) return VM_INT(0);
+  if (SSL_set_fd(ssl, (int)fd) != 1) {
+    SSL_free(ssl);
+    return VM_INT(0);
+  }
+  int hs = SSL_accept(ssl);
+  if (hs != 1) {
+    int err = SSL_get_error(ssl, hs);
+    fprintf(stderr, "[tls] SSL_accept failed err=%d\n", err);
+    SSL_free(ssl);
+    tulpar_close(fd);
+    return VM_INT(0);
+  }
+  return VM_INT((int64_t)(uintptr_t)ssl);
+#else
+  (void)ctxVal; (void)clientFdVal;
+  return VM_INT(0);
+#endif
+}
+
+// Read up to `max_bytes` from a TLS connection. Returns the bytes as
+// a Tulpar string. Empty string on EOF or error — same shape as
+// `socket_receive` so wings handler logic can drive both sides with
+// the same contract.
+VMValue aot_tls_recv(VMValue sslVal, VMValue maxVal) {
+#if defined(TULPAR_HAS_TLS)
+  if (!IS_INT(sslVal) || !IS_INT(maxVal)) {
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  }
+  SSL *ssl = (SSL *)(uintptr_t)AS_INT(sslVal);
+  int max_bytes = (int)AS_INT(maxVal);
+  if (!ssl || max_bytes <= 0 || max_bytes > 16 * 1024 * 1024) {
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  }
+  char *buf = (char *)malloc((size_t)max_bytes + 1);
+  if (!buf) return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  int n = SSL_read(ssl, buf, max_bytes);
+  if (n <= 0) {
+    free(buf);
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  }
+  buf[n] = 0;
+  ObjString *res = aot_allocate_string(buf, n);
+  free(buf);
+  return VM_OBJ((Obj *)res);
+#else
+  (void)sslVal; (void)maxVal;
+  return VM_OBJ((Obj *)aot_allocate_string("", 0));
+#endif
+}
+
+// Write a Tulpar string to a TLS connection. Returns the byte count
+// SSL_write reported, or -1 on error / closed connection. Single-shot;
+// no partial-write retry, mirroring the existing socket_send shape.
+// Wings' typical < 64 KiB JSON responses fit inside a single SSL_write.
+VMValue aot_tls_send(VMValue sslVal, VMValue dataVal) {
+#if defined(TULPAR_HAS_TLS)
+  if (!IS_INT(sslVal) || !IS_STRING(dataVal)) return VM_INT(-1);
+  SSL *ssl = (SSL *)(uintptr_t)AS_INT(sslVal);
+  ObjString *s = AS_STRING(dataVal);
+  if (!ssl || !s) return VM_INT(-1);
+  int n = SSL_write(ssl, s->chars, (int)s->length);
+  return VM_INT((int64_t)n);
+#else
+  (void)sslVal; (void)dataVal;
+  return VM_INT(-1);
+#endif
+}
+
+// Tear down an SSL connection and close the underlying TCP fd. Idempotent
+// on a NULL pointer — handler code that hits an early SSL_accept failure
+// and calls tls_close(0) shouldn't crash.
+VMValue aot_tls_close(VMValue sslVal) {
+#if defined(TULPAR_HAS_TLS)
+  if (!IS_INT(sslVal)) return VM_INT(0);
+  SSL *ssl = (SSL *)(uintptr_t)AS_INT(sslVal);
+  if (!ssl) return VM_INT(0);
+  // Best-effort graceful shutdown — clients that already closed don't
+  // need a response, and SSL_shutdown returning 0 is normal in that case.
+  SSL_shutdown(ssl);
+  int fd = SSL_get_fd(ssl);
+  SSL_free(ssl);
+  if (fd >= 0) tulpar_close((tulpar_socket)fd);
+  return VM_INT(0);
+#else
+  (void)sslVal;
+  return VM_INT(0);
+#endif
+}
+
+// Free an SSL_CTX returned by tls_init. Call once per listener at
+// shutdown — typically never in practice because Wings servers run
+// to SIGTERM, but exposed so embed-style use can clean up explicitly.
+VMValue aot_tls_ctx_free(VMValue ctxVal) {
+#if defined(TULPAR_HAS_TLS)
+  if (!IS_INT(ctxVal)) return VM_INT(0);
+  SSL_CTX *ctx = (SSL_CTX *)(uintptr_t)AS_INT(ctxVal);
+  if (ctx) SSL_CTX_free(ctx);
+  return VM_INT(0);
+#else
+  (void)ctxVal;
+  return VM_INT(0);
+#endif
+}
+
 // ============================================================================
 // Threading Functions (AOT) - Cross-platform threading
 // ============================================================================
