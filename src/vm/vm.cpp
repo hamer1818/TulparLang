@@ -1710,6 +1710,26 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           break;
         }
 
+        case 62: { // env(name) -> String (process env var, "" when unset)
+          // Mirrors aot_env in runtime_bindings.cpp so scripts that
+          // gate behavior on env vars (config flags, debug toggles)
+          // run identically under both backends. Used by the
+          // benchmark harness to keep loop bounds opaque to the
+          // optimizer.
+          VMValue nameVal = vm_pop(vm);
+          if (!IS_STRING(nameVal)) {
+            vm_push(vm, VM_OBJ(vm_alloc_string(vm, "", 0)));
+            break;
+          }
+          const char *val = getenv(AS_STRING(nameVal)->chars);
+          if (!val) {
+            vm_push(vm, VM_OBJ(vm_alloc_string(vm, "", 0)));
+          } else {
+            vm_push(vm, VM_OBJ(vm_alloc_string(vm, val, strlen(val))));
+          }
+          break;
+        }
+
         // --- String Utils ---
         case 70: { // split(str, delim)
           VMValue delimVal = vm_pop(vm);

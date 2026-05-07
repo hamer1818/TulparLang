@@ -657,6 +657,13 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
       // input() -> reads a line from stdin
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
       emit_byte(compiler, 61, node->line);
+    } else if (strcmp(node->name, "env") == 0) {
+      // env(name) -> process environment variable as a string,
+      // "" when unset. Matches the AOT builtin so VM and AOT
+      // scripts behave identically when reading config from env.
+      compile_expression(compiler, node->arguments[0]);
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 62, node->line);
     }
     // String Utils
     else if (strcmp(node->name, "split") == 0) {
