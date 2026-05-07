@@ -125,6 +125,87 @@ int locate_name_column(const char *source, int line_1based,
     return 1;
 }
 
+// Walk the subtree and return the maximum line number we see anywhere
+// inside it. Used to derive a function's body range so the LSP can
+// answer "is the cursor inside this function?" without re-parsing.
+// Lines are 1-based; nodes with no line info default to 0 and don't
+// contribute to the max.
+int max_line_in_subtree(const ASTNode_C *node) {
+    if (!node) return 0;
+    int m = node->line;
+    auto bump = [&m](int v) { if (v > m) m = v; };
+    bump(max_line_in_subtree(node->left));
+    bump(max_line_in_subtree(node->right));
+    bump(max_line_in_subtree(node->condition));
+    bump(max_line_in_subtree(node->then_branch));
+    bump(max_line_in_subtree(node->else_branch));
+    bump(max_line_in_subtree(node->init));
+    bump(max_line_in_subtree(node->increment));
+    bump(max_line_in_subtree(node->iterable));
+    bump(max_line_in_subtree(node->body));
+    bump(max_line_in_subtree(node->return_value));
+    bump(max_line_in_subtree(node->try_block));
+    bump(max_line_in_subtree(node->catch_block));
+    bump(max_line_in_subtree(node->finally_block));
+    bump(max_line_in_subtree(node->throw_expr));
+    bump(max_line_in_subtree(node->index));
+    for (int i = 0; i < node->statement_count; i++)
+        bump(max_line_in_subtree(node->statements[i]));
+    for (int i = 0; i < node->element_count; i++)
+        bump(max_line_in_subtree(node->elements[i]));
+    for (int i = 0; i < node->object_count; i++)
+        bump(max_line_in_subtree(node->object_values[i]));
+    for (int i = 0; i < node->argument_count; i++)
+        bump(max_line_in_subtree(node->arguments[i]));
+    for (int i = 0; i < node->param_count; i++)
+        bump(max_line_in_subtree(node->parameters[i]));
+    return m;
+}
+
+// Walk the subtree and collect every AST_VARIABLE_DECL we find. The
+// `scope_function` argument is propagated unchanged — the caller
+// chooses "" for top-level or the function name for body walks; nested
+// functions don't exist in Tulpar so we never need to override.
+void collect_var_decls(const ASTNode_C *node, const char *source,
+                       const std::string &scope_function,
+                       std::vector<IndexVariable> &out) {
+    if (!node) return;
+    if (node->type == AST_VARIABLE_DECL && node->name) {
+        IndexVariable v;
+        v.name = node->name;
+        v.type = render_type(node->data_type, node->return_custom_type);
+        v.line = node->line;
+        v.column = locate_name_column(source, node->line, node->name);
+        v.scope_function = scope_function;
+        out.push_back(std::move(v));
+        // Initializer expression can also contain decls (e.g. inside
+        // a lambda or block expression in the future). Walk it too.
+        if (node->right) collect_var_decls(node->right, source, scope_function, out);
+        return;
+    }
+    if (node->left)  collect_var_decls(node->left, source, scope_function, out);
+    if (node->right) collect_var_decls(node->right, source, scope_function, out);
+    if (node->condition)   collect_var_decls(node->condition, source, scope_function, out);
+    if (node->then_branch) collect_var_decls(node->then_branch, source, scope_function, out);
+    if (node->else_branch) collect_var_decls(node->else_branch, source, scope_function, out);
+    if (node->init)      collect_var_decls(node->init, source, scope_function, out);
+    if (node->increment) collect_var_decls(node->increment, source, scope_function, out);
+    if (node->iterable)  collect_var_decls(node->iterable, source, scope_function, out);
+    if (node->body)        collect_var_decls(node->body, source, scope_function, out);
+    if (node->return_value) collect_var_decls(node->return_value, source, scope_function, out);
+    if (node->try_block)    collect_var_decls(node->try_block, source, scope_function, out);
+    if (node->catch_block)  collect_var_decls(node->catch_block, source, scope_function, out);
+    if (node->finally_block)collect_var_decls(node->finally_block, source, scope_function, out);
+    for (int i = 0; i < node->statement_count; i++)
+        collect_var_decls(node->statements[i], source, scope_function, out);
+    for (int i = 0; i < node->element_count; i++)
+        collect_var_decls(node->elements[i], source, scope_function, out);
+    for (int i = 0; i < node->object_count; i++)
+        collect_var_decls(node->object_values[i], source, scope_function, out);
+    for (int i = 0; i < node->argument_count; i++)
+        collect_var_decls(node->arguments[i], source, scope_function, out);
+}
+
 // Recursive walker that collects every AST_FUNCTION_CALL anywhere in
 // the tree — function bodies, conditional branches, loop bodies, try
 // blocks, etc. We don't include calls that are themselves the named
@@ -200,22 +281,46 @@ void document_index_build(const ASTNode_C *ast, const char *source,
 
         fn.return_type = render_type(stmt->return_type, stmt->return_custom_type);
         fn.line = stmt->line;
+        // end_line = max line we see anywhere in the body. If body is
+        // missing (forward-declared func — rare), fall back to decl line
+        // so containment checks degenerate to "decl line only".
+        fn.end_line = stmt->body ? max_line_in_subtree(stmt->body) : stmt->line;
+        if (fn.end_line < fn.line) fn.end_line = fn.line;
         fn.column = locate_name_column(source, stmt->line, fn.name.c_str());
         fn.leading_comment = extract_leading_comment(source, stmt->line);
+
+        // Function parameters are bindings too — surface them in the
+        // index so hover on `n` inside `func fib(int n)` resolves.
+        for (int p = 0; p < stmt->param_count; p++) {
+            const ASTNode_C *param = stmt->parameters[p];
+            if (!param || !param->name) continue;
+            IndexVariable pv;
+            pv.name = param->name;
+            pv.type = render_type(param->data_type, param->return_custom_type);
+            pv.line = param->line ? param->line : stmt->line;
+            pv.column = locate_name_column(source, pv.line, param->name);
+            pv.scope_function = fn.name;
+            out.variables.push_back(std::move(pv));
+        }
+
         out.functions.push_back(std::move(fn));
 
-        // Walk into the function body to collect call sites in there.
+        // Walk into the function body to collect call sites + var decls.
         if (stmt->body) {
             collect_call_sites(stmt->body, source, out.call_sites);
+            collect_var_decls(stmt->body, source,
+                              stmt->name ? stmt->name : "", out.variables);
         }
     }
 
     // Top-level statements (script-style code outside any function) are
-    // also a valid place to find calls — e.g. `print(greet("Hamza"));`.
+    // also a valid place to find calls + var decls — `print(greet("Hamza"))`,
+    // `int total = 0;`, etc. Scope name = "" marks them global.
     for (int i = 0; i < ast->statement_count; i++) {
         const ASTNode_C *stmt = ast->statements[i];
         if (!stmt || stmt->type == AST_FUNCTION_DECL) continue;
         collect_call_sites(stmt, source, out.call_sites);
+        collect_var_decls(stmt, source, "", out.variables);
     }
 }
 

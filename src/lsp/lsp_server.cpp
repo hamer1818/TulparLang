@@ -563,6 +563,54 @@ std::string format_signature(const IndexFunction &fn) {
 // hover / completion / definition
 // ---------------------------------------------------------------------------
 
+cJSON *build_hover_for_variable(const IndexVariable &v) {
+    cJSON *result = cJSON_CreateObject();
+    cJSON *contents = cJSON_AddObjectToObject(result, "contents");
+    cJSON_AddStringToObject(contents, "kind", "markdown");
+    // Show type if we have one; fall back to `<unknown>` so users see
+    // the LSP recognised the symbol even before typeinfer runs.
+    std::string type_str = v.type.empty() ? "<unknown>" : v.type;
+    std::string md = "```tulpar\n";
+    md += type_str;
+    md += " ";
+    md += v.name;
+    md += "\n```";
+    if (!v.scope_function.empty()) {
+        md += "\n\n*(local in `";
+        md += v.scope_function;
+        md += "`, line ";
+        md += std::to_string(v.line);
+        md += ")*";
+    } else {
+        md += "\n\n*(top-level, line ";
+        md += std::to_string(v.line);
+        md += ")*";
+    }
+    cJSON_AddStringToObject(contents, "value", md.c_str());
+    return result;
+}
+
+// Find the function whose body contains `line_0based` (1-based on the
+// IndexFunction side). Returns the function name, or "" if the cursor is
+// not inside any function (top-level scope). We pick the innermost match
+// by preferring later start lines among overlapping ranges; in practice
+// Tulpar doesn't allow nested functions so any match is the unique one.
+std::string enclosing_function_at_line(const DocumentIndex &idx,
+                                       int line_0based) {
+    int line_1based = line_0based + 1;
+    std::string best;
+    int best_start = -1;
+    for (const auto &fn : idx.functions) {
+        if (line_1based >= fn.line && line_1based <= fn.end_line) {
+            if (fn.line > best_start) {
+                best_start = fn.line;
+                best = fn.name;
+            }
+        }
+    }
+    return best;
+}
+
 cJSON *build_hover_for_user_function(const IndexFunction &fn) {
     cJSON *result = cJSON_CreateObject();
     cJSON *contents = cJSON_AddObjectToObject(result, "contents");
@@ -620,6 +668,25 @@ void handle_hover(DocumentStore &docs, cJSON *id, cJSON *params) {
         }
     }
 
+    // Variables: prefer the binding visible at the cursor's enclosing
+    // scope. Same name can exist in multiple functions (think `int i`
+    // inside many loops); the LSP should hover the one the user is
+    // actually looking at. Top-level vars match anywhere outside a
+    // function. Last-wins on ties so a local rebinding shadows the
+    // outer with the same name (declaration order matches scope walk).
+    std::string scope = enclosing_function_at_line(it->second.index, line);
+    const IndexVariable *best = nullptr;
+    for (const auto &v : it->second.index.variables) {
+        if (v.name != word) continue;
+        if (v.scope_function.empty() || v.scope_function == scope) {
+            best = &v;  // last-wins shadowing
+        }
+    }
+    if (best) {
+        send_response(id, build_hover_for_variable(*best));
+        return;
+    }
+
     if (auto *b = builtin_lookup(word.c_str())) {
         send_response(id, build_hover_for_builtin(b));
         return;
@@ -631,9 +698,22 @@ void handle_hover(DocumentStore &docs, cJSON *id, cJSON *params) {
 void handle_completion(DocumentStore &docs, cJSON *id, cJSON *params) {
     if (!id) return;
     cJSON *td = cJSON_GetObjectItem(params, "textDocument");
+    cJSON *pos = cJSON_GetObjectItem(params, "position");
     if (!td) { send_response(id, nullptr); return; }
     const char *uri = cJSON_GetStringValue(cJSON_GetObjectItem(td, "uri"));
     auto it = docs.docs.find(uri ? uri : "");
+
+    // Cursor scope determines which locals are visible. Without a
+    // position (some clients omit it on the initial trigger), we fall
+    // back to top-level scope and only show globals + functions +
+    // builtins + keywords.
+    int cursor_line = pos ? (int)cJSON_GetNumberValue(
+                                cJSON_GetObjectItem(pos, "line"))
+                          : -1;
+    std::string scope;
+    if (it != docs.docs.end() && cursor_line >= 0) {
+        scope = enclosing_function_at_line(it->second.index, cursor_line);
+    }
 
     cJSON *result = cJSON_CreateObject();
     cJSON_AddBoolToObject(result, "isIncomplete", 0);
@@ -651,6 +731,28 @@ void handle_completion(DocumentStore &docs, cJSON *id, cJSON *params) {
                 cJSON_AddStringToObject(doc, "kind", "markdown");
                 cJSON_AddStringToObject(doc, "value", fn.leading_comment.c_str());
             }
+            cJSON_AddItemToArray(items, item);
+        }
+
+        // 1b) Variables visible in the current scope: top-level globals
+        // are always offered; locals are only offered when the cursor
+        // is inside their declaring function. Same-name shadowing means
+        // the same label can appear twice (e.g. global `total` + a
+        // function-local `total`); IDEs deduplicate by label.
+        for (const auto &v : it->second.index.variables) {
+            if (!v.scope_function.empty() && v.scope_function != scope) {
+                continue;
+            }
+            cJSON *item = cJSON_CreateObject();
+            cJSON_AddStringToObject(item, "label", v.name.c_str());
+            // CompletionItemKind: 6 = Variable, but parameters and
+            // top-level constants ride the same lane — we don't track
+            // the distinction yet.
+            cJSON_AddNumberToObject(item, "kind", 6);
+            std::string detail = v.type.empty() ? std::string("<unknown>") : v.type;
+            detail += " ";
+            detail += v.name;
+            cJSON_AddStringToObject(item, "detail", detail.c_str());
             cJSON_AddItemToArray(items, item);
         }
     }
