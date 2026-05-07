@@ -17,6 +17,7 @@ extern "C" {
 #include <map>
 #include <sstream>
 #include <string>
+#include <vector>
 #include <sys/stat.h>
 
 namespace fs = std::filesystem;
@@ -31,6 +32,160 @@ constexpr const char *kLockFile = "tulpar.lock";
 bool file_exists(const char *path) {
     struct stat st;
     return stat(path, &st) == 0;
+}
+
+// ---------------------------------------------------------------------------
+// Semver range support (client-side).
+//
+// Versions inside `tulpar.toml` and `tulpar pkg add foo@<spec>` can now be:
+//   * exact:  "1.2.3"   — must match a published version verbatim
+//   * caret:  "^1.2.3"  — >=1.2.3, <2.0.0  (compatible-within-major)
+//   * tilde:  "~1.2.3"  — >=1.2.3, <1.3.0  (compatible-within-minor)
+//   * any:    "*", ""   — highest published version wins
+//
+// Pre-release / build metadata is intentionally ignored on both sides
+// of the comparison: the integer parse stops at the first non-digit so
+// `1.0.0-rc1` parses to (1,0,0) and is treated equal to `1.0.0`. This
+// mirrors the registry's own `_semver_compare` helper (tulpar-be PR
+// #16) so client and server agree on what "equal" means until full
+// pre-release semantics are introduced.
+
+struct SemVer {
+    int major = 0;
+    int minor = 0;
+    int patch = 0;
+    bool ok = false;
+};
+
+SemVer parse_semver(const std::string &s) {
+    SemVer r;
+    int parts[3] = {0, 0, 0};
+    int idx = 0;
+    size_t i = 0;
+    while (idx < 3 && i < s.size()) {
+        if (s[i] < '0' || s[i] > '9') break;
+        int v = 0;
+        while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
+            v = v * 10 + (s[i] - '0');
+            i++;
+        }
+        parts[idx++] = v;
+        if (i < s.size() && s[i] == '.') {
+            i++;
+        } else {
+            break;
+        }
+    }
+    if (idx == 0) return r;
+    r.major = parts[0];
+    r.minor = parts[1];
+    r.patch = parts[2];
+    r.ok = true;
+    return r;
+}
+
+int cmp_semver(const SemVer &a, const SemVer &b) {
+    if (a.major != b.major) return a.major < b.major ? -1 : 1;
+    if (a.minor != b.minor) return a.minor < b.minor ? -1 : 1;
+    if (a.patch != b.patch) return a.patch < b.patch ? -1 : 1;
+    return 0;
+}
+
+bool is_range_spec(const std::string &spec) {
+    if (spec.empty()) return true; // empty = "*"
+    if (spec == "*" || spec == "latest") return true;
+    if (spec[0] == '^' || spec[0] == '~') return true;
+    return false;
+}
+
+// Test a candidate against a spec. Spec already filtered through
+// `is_range_spec` true; exact matches are handled by the caller's
+// fast path before this helper is reached.
+bool match_range(const std::string &spec, const std::string &version) {
+    SemVer v = parse_semver(version);
+    if (!v.ok) return false;
+    if (spec.empty() || spec == "*" || spec == "latest") return true;
+
+    char op = spec[0];
+    SemVer base = parse_semver(spec.substr(1));
+    if (!base.ok) return false;
+    if (cmp_semver(v, base) < 0) return false; // below floor
+
+    if (op == '^') {
+        // < (base.major + 1).0.0; treats 0.x specially for safety —
+        // 0.x bumps are breaking under semver convention, so `^0.2.3`
+        // means `>=0.2.3, <0.3.0` not `<1.0.0`.
+        if (base.major > 0) {
+            return v.major == base.major;
+        }
+        if (base.minor > 0) {
+            return v.major == 0 && v.minor == base.minor;
+        }
+        return v.major == 0 && v.minor == 0 && v.patch == base.patch;
+    }
+    if (op == '~') {
+        // <(base.major).(base.minor + 1).0
+        return v.major == base.major && v.minor == base.minor;
+    }
+    return false;
+}
+
+// Pull `GET <registry>/v1/packages/<name>` and parse the `versions` array.
+// Returns empty vector + err on failure; caller decides whether to
+// fall back to verbatim-spec install.
+bool fetch_versions(const std::string &registry_url, const std::string &name,
+                    std::vector<std::string> &out, std::string &err) {
+    std::string url = registry_url;
+    if (!url.empty() && url.back() == '/') url.pop_back();
+    url += "/v1/packages/";
+    url += name;
+
+    std::string body;
+    int status = 0;
+    if (!tulpar::http_fetch_url(url, body, status, err)) {
+        return false;
+    }
+    if (status < 200 || status >= 300) {
+        err = "HTTP " + std::to_string(status);
+        return false;
+    }
+    cJSON *doc = cJSON_Parse(body.c_str());
+    if (!doc) {
+        err = "registry response is not valid JSON";
+        return false;
+    }
+    cJSON *vers = cJSON_GetObjectItem(doc, "versions");
+    if (!cJSON_IsArray(vers)) {
+        cJSON_Delete(doc);
+        err = "registry response missing `versions` array";
+        return false;
+    }
+    cJSON *it = nullptr;
+    cJSON_ArrayForEach(it, vers) {
+        if (cJSON_IsString(it) && it->valuestring) {
+            out.emplace_back(it->valuestring);
+        }
+    }
+    cJSON_Delete(doc);
+    return true;
+}
+
+// Pick the highest-comparing available version that satisfies `spec`.
+// Returns "" when none match (caller surfaces a helpful error).
+std::string pick_best_match(const std::string &spec,
+                            const std::vector<std::string> &available) {
+    std::string best;
+    SemVer best_v;
+    for (const auto &v : available) {
+        if (!match_range(spec, v)) continue;
+        SemVer cand = parse_semver(v);
+        if (!cand.ok) continue;
+        if (best.empty() || cmp_semver(cand, best_v) > 0) {
+            best = v;
+            best_v = cand;
+        }
+    }
+    return best;
 }
 
 int cmd_init(int argc, char **argv) {
@@ -371,8 +526,11 @@ int cmd_install() {
         // content-sniff used by the `url:` branch above picks the
         // right extraction path.
         //
-        // Real semver ranges (`^0.2.0`, `>=1.0,<2`) are out of scope;
-        // the version string is taken literally as the URL fragment.
+        // Range specs (`^1.2.3`, `~1.0.0`, `*`, `""`) get resolved up
+        // front against the registry's `/v1/packages/<name>` listing,
+        // and the highest matching version becomes the URL fragment.
+        // Plain "1.2.3" stays exact — the lookup still hits the same
+        // endpoint, just without the resolution step.
         if (spec.rfind("path:", 0) != 0) {
             if (m.registry_url.empty()) {
                 std::fprintf(stdout,
@@ -382,12 +540,36 @@ int cmd_install() {
                 skipped++;
                 continue;
             }
+            std::string resolved_version = spec;
+            if (is_range_spec(spec)) {
+                std::vector<std::string> available;
+                std::string err;
+                if (!fetch_versions(m.registry_url, name, available, err)) {
+                    std::fprintf(stderr,
+                                 "tulpar pkg install: %s@%s: range resolve "
+                                 "failed: %s\n",
+                                 name.c_str(), spec.c_str(), err.c_str());
+                    return 1;
+                }
+                resolved_version = pick_best_match(spec, available);
+                if (resolved_version.empty()) {
+                    std::fprintf(stderr,
+                                 "tulpar pkg install: %s@%s: no published "
+                                 "version satisfies the range (registry has "
+                                 "%zu version%s)\n",
+                                 name.c_str(), spec.c_str(), available.size(),
+                                 available.size() == 1 ? "" : "s");
+                    return 1;
+                }
+                std::fprintf(stdout, "  > %s@%s -> resolved %s\n", name.c_str(),
+                             spec.c_str(), resolved_version.c_str());
+            }
             std::string url = m.registry_url;
             if (!url.empty() && url.back() == '/') url.pop_back();
             url += "/v1/packages/";
             url += name;
             url += "/versions/";
-            url += spec;
+            url += resolved_version;
             url += "/source";
 
             if (local_matches_lock(name, url)) {
