@@ -1278,11 +1278,22 @@ extern "C" VMValue aot_struct_alloc(const char *type_name, int field_count) {
   // member, so allocate `(N-1)` extra slots (0 when N <= 1).
   size_t extra =
       (field_count > 1) ? (size_t)(field_count - 1) * sizeof(int64_t) : 0;
-  ObjStruct *s = static_cast<ObjStruct *>(malloc(sizeof(ObjStruct) + extra));
+  // Arena-allocate so a 1M-iter `push(arr, struct)` loop becomes 1M
+  // bump-pointer increments instead of 1M mallocs. Two correctness
+  // notes:
+  //   * The previous malloc path had no free site (no GC sweep, no
+  //     ref_count drop wired up for ObjStruct), so every push leaked a
+  //     ~40-byte block until process exit. Arena alloc preserves that
+  //     "live until program ends" behaviour for non-arena-scoped code
+  //     and ADDS proper cleanup at request boundaries in wings (which
+  //     calls aot_arena_restore between requests).
+  //   * `arena_allocated = 1` flags downstream paths (any future free)
+  //     to skip libc free() — arena memory must not be passed to free.
+  ObjStruct *s = static_cast<ObjStruct *>(aot_arena_alloc(sizeof(ObjStruct) + extra));
   if (!s) return VM_INT(0);
   s->obj.type = OBJ_STRUCT;
   s->obj.next = nullptr;
-  s->obj.arena_allocated = 0;
+  s->obj.arena_allocated = 1;
   s->obj.ref_count = 1;
   s->obj.is_moved = 0;
   s->type_name = type_name;
