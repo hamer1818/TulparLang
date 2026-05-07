@@ -94,8 +94,79 @@ int cmp_semver(const SemVer &a, const SemVer &b) {
 bool is_range_spec(const std::string &spec) {
     if (spec.empty()) return true; // empty = "*"
     if (spec == "*" || spec == "latest") return true;
-    if (spec[0] == '^' || spec[0] == '~') return true;
+    char c = spec[0];
+    if (c == '^' || c == '~') return true;
+    if (c == '<' || c == '>' || c == '=') return true; // bare comparator
+    if (spec.find(',') != std::string::npos) return true; // compound
     return false;
+}
+
+// Single-comparator constraint, the building block of compound ranges
+// like ">=1.0,<2.0". The parser tolerates whitespace around the
+// operator and version so users can write ">= 1.0, < 2.0" if they
+// prefer; commas split constraints and constraints AND together.
+struct Constraint {
+    enum Op { LT, LE, GT, GE, EQ } op;
+    SemVer ver;
+    bool ok;
+};
+
+Constraint parse_constraint(const std::string &piece) {
+    Constraint c;
+    c.ok = false;
+    c.op = Constraint::EQ;
+    size_t i = 0;
+    while (i < piece.size() && (piece[i] == ' ' || piece[i] == '\t')) i++;
+    if (i >= piece.size()) return c;
+
+    if (i + 1 < piece.size() && piece[i] == '>' && piece[i + 1] == '=') {
+        c.op = Constraint::GE; i += 2;
+    } else if (i + 1 < piece.size() && piece[i] == '<' && piece[i + 1] == '=') {
+        c.op = Constraint::LE; i += 2;
+    } else if (piece[i] == '>') {
+        c.op = Constraint::GT; i++;
+    } else if (piece[i] == '<') {
+        c.op = Constraint::LT; i++;
+    } else if (piece[i] == '=') {
+        c.op = Constraint::EQ; i++;
+    } else {
+        c.op = Constraint::EQ;
+    }
+    while (i < piece.size() && (piece[i] == ' ' || piece[i] == '\t')) i++;
+    c.ver = parse_semver(piece.substr(i));
+    if (!c.ver.ok) return c;
+    c.ok = true;
+    return c;
+}
+
+// Walk a comma-separated spec; a candidate version satisfies the spec
+// only if it matches *every* constraint (AND across the list). An
+// unparseable constraint anywhere in the spec poisons the whole thing
+// — no silent partial matches.
+bool match_constraints(const std::string &spec, const SemVer &v) {
+    size_t start = 0;
+    while (start <= spec.size()) {
+        size_t comma = spec.find(',', start);
+        std::string piece =
+            spec.substr(start, comma == std::string::npos
+                                   ? std::string::npos
+                                   : comma - start);
+        Constraint c = parse_constraint(piece);
+        if (!c.ok) return false;
+        int cmp = cmp_semver(v, c.ver);
+        bool m = false;
+        switch (c.op) {
+        case Constraint::LT: m = cmp < 0; break;
+        case Constraint::LE: m = cmp <= 0; break;
+        case Constraint::GT: m = cmp > 0; break;
+        case Constraint::GE: m = cmp >= 0; break;
+        case Constraint::EQ: m = cmp == 0; break;
+        }
+        if (!m) return false;
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    return true;
 }
 
 // Test a candidate against a spec. Spec already filtered through
@@ -105,6 +176,12 @@ bool match_range(const std::string &spec, const std::string &version) {
     SemVer v = parse_semver(version);
     if (!v.ok) return false;
     if (spec.empty() || spec == "*" || spec == "latest") return true;
+
+    // Compound spec or bare comparator (>=, <, etc.) → constraint list.
+    if (spec.find(',') != std::string::npos || spec[0] == '<' ||
+        spec[0] == '>' || spec[0] == '=') {
+        return match_constraints(spec, v);
+    }
 
     char op = spec[0];
     SemVer base = parse_semver(spec.substr(1));
