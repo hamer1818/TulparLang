@@ -58,6 +58,24 @@ func del(str path, str handler) {
 }
 
 // ----- Internals -----------------------------------------------------------
+// Pull `Cookie:` out of the parsed headers object and run it through
+// the native `parse_cookies` builtin. Empty object when the header is
+// absent or empty so handlers can always do `_request["cookies"]["sid"]`
+// without a length() guard. Tries both casings — `http_parse_request`
+// preserves wire case, but most browsers send `Cookie` while curl
+// defaults to `cookie`.
+func _wings_extract_cookies(json req) {
+    json headers = req["headers"];
+    str raw = headers["Cookie"];
+    if (length(raw) == 0) {
+        raw = headers["cookie"];
+    }
+    if (length(raw) == 0) {
+        return {};
+    }
+    return parse_cookies(raw);
+}
+
 // Linear scan over registered routes. Tulpar arrays of small dicts are tight
 // enough that this is dominated by string compare cost; for hundreds of
 // routes a hash table would help, but we avoid the dependency for now.
@@ -389,6 +407,7 @@ func _wings_serve_connection(json client_arg) {
         bool is_options = (method == "OPTIONS");
         if (is_options) {
             _request["params"] = {};
+            _request["cookies"] = {};
             _wings_requests_total = _wings_requests_total + 1;
             _wings_requests_2xx = _wings_requests_2xx + 1;
             mutex_unlock(_wings_handler_mu);
@@ -418,6 +437,9 @@ func _wings_serve_connection(json client_arg) {
         // Captured path params land in _request["params"] for the
         // handler to read. Empty json when route had no `:name` segments.
         _request["params"] = route_match["params"];
+        // Cookies always present (empty object when no Cookie header) so
+        // handlers can read `_request["cookies"]["sid"]` without guards.
+        _request["cookies"] = _wings_extract_cookies(req);
         json result = {};
         bool found = false;
         if (route_idx >= 0) {
@@ -622,6 +644,7 @@ func listen(int port) {
             // OPTIONS gets a synthetic 204 with the default header set).
             if (method == "OPTIONS") {
                 _request["params"] = {};
+                _request["cookies"] = {};
                 str preflight = http_create_response(
                     204, "text/plain; charset=utf-8", "", _default_headers, keep);
                 socket_send(client, preflight);
@@ -647,6 +670,8 @@ func listen(int port) {
                 is_head = true;
             }
             _request["params"] = route_match["params"];
+            // Same cookie expansion as the async path.
+            _request["cookies"] = _wings_extract_cookies(req);
             str response = "";
             _wings_requests_total = _wings_requests_total + 1;
             if (route_idx >= 0) {

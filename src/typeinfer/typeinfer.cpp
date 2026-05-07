@@ -716,6 +716,9 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"socket_select", TYPE_UNKNOWN, {TYPE_UNKNOWN, TYPE_INT}},
       // Threads
       {"thread_create", TYPE_UNKNOWN, {TYPE_STRING, TYPE_UNKNOWN}},
+      // HTTP helpers
+      {"parse_query", TYPE_UNKNOWN, {TYPE_STRING}},
+      {"parse_cookies", TYPE_UNKNOWN, {TYPE_STRING}},
       // Database (SQLite)
       {"db_open", TYPE_UNKNOWN, {TYPE_STRING}},
       {"db_close", TYPE_VOID, {TYPE_UNKNOWN}},
