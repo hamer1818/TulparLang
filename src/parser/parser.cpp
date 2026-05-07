@@ -77,6 +77,12 @@ const char *g_parser_source_filename = nullptr;
 // recoverable parse error (which used to silently produce a partial AST
 // that codegen happily processed) now causes the parse to fail outright.
 int g_parser_error_count = 0;
+// When non-zero, Parser::error skips the pretty-render step. Used by the
+// typeinfer pre-pass: it parses the source for AST shape but the AOT
+// pipeline parses again right after with proper filename context, so
+// printing the same error twice is just noise. The catch in
+// typeinfer_warn.cpp silently drops the exception either way.
+int g_parser_quiet = 0;
 }
 
 extern "C" void parser_set_diagnostic_context(const char *source_text,
@@ -85,6 +91,10 @@ extern "C" void parser_set_diagnostic_context(const char *source_text,
     g_parser_source_filename = source_filename;
     g_parser_error_count = 0;
 }
+
+extern "C" void parser_set_quiet(int quiet) { g_parser_quiet = quiet ? 1 : 0; }
+
+extern "C" int parser_get_error_count(void) { return g_parser_error_count; }
 
 // Render a Rust-style multi-line parse error. Mirrors the AOT codegen's
 // `report_codegen_error` so user-facing diagnostics look uniform whether
@@ -185,7 +195,9 @@ void Parser::error(const std::string& message) {
     const char *hint = tulpar::i18n::tr_en(
         "sözdiziminde bir eksiklik var — beklenen yapıyı kontrol edin",
         "syntax is incomplete — check the expected construct");
-    render_parse_error_pretty(line, prefix + clean, caret, hint, column);
+    if (!g_parser_quiet) {
+        render_parse_error_pretty(line, prefix + clean, caret, hint, column);
+    }
     throw std::runtime_error(message);
 }
 
@@ -221,9 +233,49 @@ std::unique_ptr<ASTNode> Parser::parse() {
             // Pretty diagnostic was already emitted by Parser::error(); we
             // just need to recover and keep parsing the rest of the file
             // so the user sees every parse error in a single run.
+            //
+            // Panic-mode synchronisation: walk forward until we see a
+            // statement terminator (`;`, `}`) OR a token that begins a
+            // new statement (type keyword, `func`, control keyword, ...).
+            // Without the keyword sentinels, files that lack semicolons
+            // entirely (a common failure mode while typing) get eaten
+            // wholesale on the first error and only one diagnostic ever
+            // surfaces. With them, every malformed line yields its own
+            // diagnostic, the way Python or Rust handle parse failures.
             (void)e;
+            auto begins_statement = [](TulparTokenType t) {
+                switch (t) {
+                    case TOKEN_INT_TYPE:
+                    case TOKEN_FLOAT_TYPE:
+                    case TOKEN_STR_TYPE:
+                    case TOKEN_BOOL_TYPE:
+                    case TOKEN_ARRAY_TYPE:
+                    case TOKEN_ARRAY_INT:
+                    case TOKEN_ARRAY_FLOAT:
+                    case TOKEN_ARRAY_STR:
+                    case TOKEN_ARRAY_BOOL:
+                    case TOKEN_ARRAY_JSON:
+                    case TOKEN_JSON_TYPE:
+                    case TOKEN_VAR:
+                    case TOKEN_FUNC:
+                    case TOKEN_IF:
+                    case TOKEN_WHILE:
+                    case TOKEN_FOR:
+                    case TOKEN_RETURN:
+                    case TOKEN_BREAK:
+                    case TOKEN_CONTINUE:
+                    case TOKEN_IMPORT:
+                    case TOKEN_TRY:
+                    case TOKEN_THROW:
+                    case TOKEN_TYPE_KW:
+                        return true;
+                    default:
+                        return false;
+                }
+            };
             while (!is_at_end() && current().type() != TOKEN_SEMICOLON &&
-                   current().type() != TOKEN_RBRACE) {
+                   current().type() != TOKEN_RBRACE &&
+                   !begins_statement(current().type())) {
                 advance();
             }
             if (current().type() == TOKEN_SEMICOLON) {
@@ -231,10 +283,10 @@ std::unique_ptr<ASTNode> Parser::parse() {
             } else if (current().type() == TOKEN_RBRACE) {
                 // Move forward to avoid getting stuck on the same block terminator.
                 advance();
-            } else if (!is_at_end()) {
-                // Ensure forward progress even when recovery sentinel is not found.
-                advance();
             }
+            // For statement-keyword sentinels, do NOT advance — the next
+            // iteration of the outer loop's parse_statement() expects to
+            // see the keyword as its first token.
         }
     }
     
