@@ -4,6 +4,10 @@
 #include "tpkg.hpp"
 #include "../common/http_fetch.hpp"
 
+extern "C" {
+#include "../../runtime/cJSON.h"
+}
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -540,6 +544,325 @@ int cmd_install() {
     return 0;
 }
 
+// Read a UTF-8 text file. Returns empty string on failure (caller treats
+// as fatal — `cmd_publish` is the only consumer and it errors out
+// explicitly when nothing comes back).
+std::string read_file_text(const fs::path &p, std::string &out_err) {
+    std::ifstream in(p, std::ios::binary);
+    if (!in) {
+        out_err = "cannot read '" + p.string() + "'";
+        return {};
+    }
+    std::ostringstream buf;
+    buf << in.rdbuf();
+    return buf.str();
+}
+
+// Walk the project root looking for `.tpr` files to ship. Excludes
+// `tulpar_modules/` (dependencies — not ours), the build artifacts
+// `build*/`, and anything beginning with `.` (hidden files / .git).
+// Returns POSIX-style relative paths (forward slashes), sorted, so
+// the published bundle is byte-stable across runs and OSes — a
+// requirement for the sha256 we send to the registry to mean anything.
+std::vector<std::string> collect_project_sources(std::string &out_err) {
+    fs::path root = fs::current_path();
+    std::vector<std::string> result;
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(
+             root, fs::directory_options::skip_permission_denied, ec);
+         !ec && it != fs::recursive_directory_iterator(); ++it) {
+        const fs::path &p = it->path();
+        std::string seg = p.filename().string();
+        // Prune hidden dirs and the noisy ones before descending.
+        if (it->is_directory()) {
+            if (seg == "tulpar_modules" || seg == "build" ||
+                seg == "build-linux" || seg == "build-macos" ||
+                seg == "build-windows" || seg == "node_modules" ||
+                (!seg.empty() && seg[0] == '.')) {
+                it.disable_recursion_pending();
+            }
+            continue;
+        }
+        if (!it->is_regular_file()) continue;
+        if (p.extension() != ".tpr") continue;
+        fs::path rel = fs::relative(p, root, ec);
+        if (ec) {
+            out_err = "relative path failed for '" + p.string() + "'";
+            return {};
+        }
+        // Normalise to POSIX separators — the bundle is JSON consumed
+        // cross-platform, and the on-disk path validator in tpkg.cpp
+        // accepts both, but keeping the wire form uniform avoids
+        // surprises in the published JSON.
+        std::string rels = rel.generic_string();
+        result.push_back(std::move(rels));
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+// Build the `source` payload to ship.
+//
+// Two shapes, picked automatically:
+//   - exactly one `.tpr` and it equals `<name>.tpr` → raw `.tpr` body
+//     (registry stores it verbatim; install side writes it straight to
+//     `tulpar_modules/<name>/<name>.tpr`).
+//   - anything else → `.tpkg` JSON bundle (matches `runtime/cJSON.h`-built
+//     archives the install side already content-sniffs).
+//
+// `entry` defaults to `<name>.tpr`. If the user wrote their entry
+// somewhere else (`src/foo.tpr`), we still set `entry` to `<name>.tpr`
+// — the registry contract is that `<name>.tpr` exists at the bundle
+// root, because that's how `import "<name>"` resolves on the consumer
+// side. We *enforce* that by failing publish if no `<name>.tpr` is
+// present in the collected files.
+std::string build_publish_source(const std::string &name,
+                                 const std::string &version,
+                                 const std::vector<std::string> &files,
+                                 std::string &out_err) {
+    std::string entry_name = name + ".tpr";
+    bool has_entry = false;
+    for (const auto &f : files) {
+        if (f == entry_name) { has_entry = true; break; }
+    }
+    if (!has_entry) {
+        out_err = "no '" + entry_name + "' at the project root — every "
+                  "published package must expose `<name>.tpr` as the "
+                  "import entry point";
+        return {};
+    }
+
+    if (files.size() == 1 && files[0] == entry_name) {
+        // Single-file shape: raw `.tpr` body, no JSON envelope. Cheaper
+        // to fetch and easier to read on the registry side.
+        std::string err;
+        std::string body = read_file_text(fs::path(entry_name), err);
+        if (!err.empty()) { out_err = err; return {}; }
+        return body;
+    }
+
+    // Multi-file shape: build a `.tpkg` JSON bundle. Use cJSON for
+    // string escaping so embedded backslashes/quotes/newlines come
+    // out wire-correct.
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "tpkg", 1);
+    cJSON_AddStringToObject(root, "name", name.c_str());
+    cJSON_AddStringToObject(root, "version", version.c_str());
+    cJSON_AddStringToObject(root, "entry", entry_name.c_str());
+    cJSON *jfiles = cJSON_AddArrayToObject(root, "files");
+    for (const auto &f : files) {
+        std::string err;
+        std::string content = read_file_text(fs::path(f), err);
+        if (!err.empty()) {
+            out_err = err;
+            cJSON_Delete(root);
+            return {};
+        }
+        cJSON *jf = cJSON_CreateObject();
+        cJSON_AddStringToObject(jf, "path", f.c_str());
+        cJSON_AddStringToObject(jf, "content", content.c_str());
+        cJSON_AddItemToArray(jfiles, jf);
+    }
+    char *printed = cJSON_PrintUnformatted(root);
+    if (!printed) {
+        out_err = "tpkg JSON serialise failed";
+        cJSON_Delete(root);
+        return {};
+    }
+    std::string out(printed);
+    std::free(printed);
+    cJSON_Delete(root);
+    return out;
+}
+
+// Resolve the registry root URL. Order:
+//   1. `--registry <url>` flag
+//   2. `[registry] url = "..."` in tulpar.toml
+//   3. `TULPAR_REGISTRY` env
+// Trailing slash trimmed for clean concatenation.
+std::string resolve_registry(const std::string &flag_url,
+                             const Manifest &m) {
+    auto trim_slash = [](std::string u) {
+        while (!u.empty() && u.back() == '/') u.pop_back();
+        return u;
+    };
+    if (!flag_url.empty()) return trim_slash(flag_url);
+    if (!m.registry_url.empty()) return trim_slash(m.registry_url);
+    if (const char *env = std::getenv("TULPAR_REGISTRY")) {
+        return trim_slash(std::string(env));
+    }
+    return {};
+}
+
+// Resolve the publish bearer token. Order:
+//   1. `--token <tok>` flag
+//   2. `TULPAR_PUBLISH_TOKEN` env
+// We *don't* read the token from tulpar.toml — committing the publish
+// secret next to the manifest would be the wrong default, and the env
+// var is what every CI provider reaches for first.
+std::string resolve_token(const std::string &flag_token) {
+    if (!flag_token.empty()) return flag_token;
+    if (const char *env = std::getenv("TULPAR_PUBLISH_TOKEN")) return env;
+    return {};
+}
+
+// Split an HTTP/1.0 raw response (status line + headers + CRLF CRLF +
+// body) into status code + body string. Returns false on a malformed
+// response. The HTTP fetch helper already concatenates everything for
+// us, so this is just slicing.
+bool split_http_response(const std::string &full, int &out_status,
+                         std::string &out_body) {
+    size_t le = full.find('\n');
+    if (le == std::string::npos) return false;
+    std::string status_line = full.substr(0, le);
+    if (!status_line.empty() && status_line.back() == '\r') status_line.pop_back();
+    size_t sp = status_line.find(' ');
+    if (sp == std::string::npos) return false;
+    size_t sp2 = status_line.find(' ', sp + 1);
+    std::string code = status_line.substr(
+        sp + 1, (sp2 == std::string::npos ? status_line.size() : sp2) - sp - 1);
+    out_status = std::atoi(code.c_str());
+    size_t body_start = full.find("\r\n\r\n");
+    if (body_start == std::string::npos) {
+        body_start = full.find("\n\n");
+        if (body_start != std::string::npos) body_start += 2;
+        else body_start = full.size();
+    } else {
+        body_start += 4;
+    }
+    out_body = (body_start < full.size()) ? full.substr(body_start) : "";
+    return true;
+}
+
+int cmd_publish(int argc, char **argv) {
+    // Minimal flag parsing — only `--registry <url>`, `--token <tok>`,
+    // `--dry-run` are supported. Anything unknown errors loudly so we
+    // don't silently absorb a typo.
+    std::string flag_registry;
+    std::string flag_token;
+    bool dry_run = false;
+    for (int i = 0; i < argc; i++) {
+        std::string a = argv[i];
+        if (a == "--registry" && i + 1 < argc) {
+            flag_registry = argv[++i];
+        } else if (a == "--token" && i + 1 < argc) {
+            flag_token = argv[++i];
+        } else if (a == "--dry-run") {
+            dry_run = true;
+        } else {
+            std::fprintf(stderr,
+                         "tulpar pkg publish: unknown argument '%s'\n"
+                         "Usage: tulpar pkg publish [--registry <url>] "
+                         "[--token <tok>] [--dry-run]\n",
+                         a.c_str());
+            return 2;
+        }
+    }
+
+    Manifest m;
+    std::string err;
+    if (!manifest_load(kManifestFile, m, err)) {
+        std::fprintf(stderr, "tulpar pkg publish: %s\n", err.c_str());
+        return 1;
+    }
+    if (m.name.empty() || m.version.empty()) {
+        std::fprintf(stderr, "tulpar pkg publish: tulpar.toml must set both "
+                             "`name` and `version` (got name='%s', version='%s')\n",
+                     m.name.c_str(), m.version.c_str());
+        return 1;
+    }
+
+    std::string registry = resolve_registry(flag_registry, m);
+    if (registry.empty()) {
+        std::fprintf(stderr,
+                     "tulpar pkg publish: no registry configured. Set one of:\n"
+                     "  - `--registry <url>` flag\n"
+                     "  - `[registry]\\nurl = \"https://...\"` in tulpar.toml\n"
+                     "  - `TULPAR_REGISTRY` env var\n");
+        return 1;
+    }
+
+    std::string token = resolve_token(flag_token);
+    if (token.empty() && !dry_run) {
+        std::fprintf(stderr,
+                     "tulpar pkg publish: no auth token. Pass `--token <tok>` "
+                     "or set TULPAR_PUBLISH_TOKEN. (Use --dry-run to skip the "
+                     "POST and just see what would ship.)\n");
+        return 1;
+    }
+
+    std::vector<std::string> files = collect_project_sources(err);
+    if (!err.empty()) {
+        std::fprintf(stderr, "tulpar pkg publish: %s\n", err.c_str());
+        return 1;
+    }
+    if (files.empty()) {
+        std::fprintf(stderr, "tulpar pkg publish: no .tpr files found in "
+                             "project root\n");
+        return 1;
+    }
+
+    std::string source = build_publish_source(m.name, m.version, files, err);
+    if (!err.empty()) {
+        std::fprintf(stderr, "tulpar pkg publish: %s\n", err.c_str());
+        return 1;
+    }
+    std::string sha = sha256_hex(source);
+
+    std::fprintf(stdout, "publishing %s@%s\n", m.name.c_str(), m.version.c_str());
+    std::fprintf(stdout, "  registry:    %s\n", registry.c_str());
+    std::fprintf(stdout, "  files:       %zu\n", files.size());
+    for (const auto &f : files) {
+        std::fprintf(stdout, "    - %s\n", f.c_str());
+    }
+    std::fprintf(stdout, "  shape:       %s\n",
+                 (files.size() == 1 && files[0] == m.name + ".tpr")
+                     ? "raw .tpr"
+                     : ".tpkg bundle");
+    std::fprintf(stdout, "  source size: %zu bytes\n", source.size());
+    std::fprintf(stdout, "  sha256:      %s\n", sha.c_str());
+
+    if (dry_run) {
+        std::fprintf(stdout, "dry-run: not posting to registry\n");
+        return 0;
+    }
+
+    // Build the request JSON. cJSON handles the string escaping for us
+    // — the `source` field will contain real newlines, quotes, and
+    // backslashes that need to come out wire-clean.
+    cJSON *body_json = cJSON_CreateObject();
+    cJSON_AddStringToObject(body_json, "name", m.name.c_str());
+    cJSON_AddStringToObject(body_json, "version", m.version.c_str());
+    cJSON_AddStringToObject(body_json, "sha256", sha.c_str());
+    cJSON_AddStringToObject(body_json, "source", source.c_str());
+    cJSON_AddStringToObject(body_json, "description", m.description.c_str());
+    char *printed = cJSON_PrintUnformatted(body_json);
+    std::string body_str(printed ? printed : "");
+    if (printed) std::free(printed);
+    cJSON_Delete(body_json);
+
+    std::string url = registry + "/v1/publish";
+    std::string auth_hdr = "Authorization: Bearer " + token + "\r\n";
+    std::string full, fetch_err;
+    if (!tulpar::http_request_url("POST", url, body_str, full, fetch_err,
+                                  auth_hdr)) {
+        std::fprintf(stderr, "tulpar pkg publish: %s\n", fetch_err.c_str());
+        return 1;
+    }
+    int status = 0;
+    std::string resp_body;
+    if (!split_http_response(full, status, resp_body)) {
+        std::fprintf(stderr, "tulpar pkg publish: malformed HTTP response\n");
+        return 1;
+    }
+    std::fprintf(stdout, "  HTTP %d\n", status);
+    std::fprintf(stdout, "  %s\n", resp_body.c_str());
+    if (status < 200 || status >= 300) {
+        return 1;
+    }
+    return 0;
+}
+
 int cmd_remove(int argc, char **argv) {
     if (argc < 1) {
         std::fprintf(stderr, "Usage: tulpar pkg remove <name>\n");
@@ -581,11 +904,17 @@ void print_usage() {
         "  remove <name>          Drop a dependency line.\n"
         "  install                Vendor every `path:` dependency into\n"
         "                         tulpar_modules/<name>/.\n"
+        "  publish [flags]        Publish the current package to the\n"
+        "                         configured registry.\n"
+        "                           --registry <url>   override the registry root\n"
+        "                           --token <tok>      override TULPAR_PUBLISH_TOKEN\n"
+        "                           --dry-run          print the bundle plan, skip POST\n"
         "\n"
         "The manifest format is a small TOML subset (string values only,\n"
-        "top-level keys + a single [dependencies] table). Registry\n"
-        "fetching is not wired up yet; for now use `path:./local/dir`\n"
-        "as the version spec to vendor a sibling package.\n");
+        "top-level keys + a single [dependencies] table). For `publish`,\n"
+        "set the registry URL via `[registry]\\nurl = \"https://...\"` in\n"
+        "tulpar.toml or via the TULPAR_REGISTRY env var, and the auth\n"
+        "token via TULPAR_PUBLISH_TOKEN.\n");
 }
 
 }  // namespace
@@ -605,6 +934,7 @@ int pkg_cli_main(int argc, char **argv) {
     if (std::strcmp(sub, "add") == 0)     return cmd_add(sub_argc, sub_argv);
     if (std::strcmp(sub, "remove") == 0)  return cmd_remove(sub_argc, sub_argv);
     if (std::strcmp(sub, "install") == 0) return cmd_install();
+    if (std::strcmp(sub, "publish") == 0) return cmd_publish(sub_argc, sub_argv);
 
     std::fprintf(stderr, "tulpar pkg: unknown command '%s'\n\n", sub);
     print_usage();

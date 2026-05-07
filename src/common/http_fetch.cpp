@@ -264,7 +264,8 @@ bool http_fetch_url(const std::string &url, std::string &out_body,
 
 bool http_request_url(const std::string &method, const std::string &url,
                       const std::string &body, std::string &out_full,
-                      std::string &out_err) {
+                      std::string &out_err,
+                      const std::string &extra_headers) {
     out_full.clear();
     out_err.clear();
 
@@ -333,6 +334,9 @@ bool http_request_url(const std::string &method, const std::string &url,
         std::snprintf(clen, sizeof(clen), "Content-Length: %zu\r\n", body.size());
         req += clen;
         req += "Content-Type: application/json\r\n";
+    }
+    if (!extra_headers.empty()) {
+        req += extra_headers;
     }
     req += "Connection: close\r\n\r\n";
     req += body;
