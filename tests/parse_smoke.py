@@ -118,6 +118,20 @@ def main() -> int:
             f"{duplicated}"
         )
 
+    # Line-number recovery: the three errors should land on lines 1, 2,
+    # 3 (where the user actually forgot the `;`), not 2, 3, 4 (where the
+    # parser's cursor was when it noticed the gap). This is a separate
+    # `expect()` fix from the multi-error recovery — easy to regress
+    # accidentally if someone reverts to `current().line()` for the
+    # error report.
+    reported_lines = sorted({int(n) for (_, n) in location_lines})
+    expected_lines = [1, 2, 3]
+    if reported_lines != expected_lines:
+        failures.append(
+            f"line-recovery: expected errors at lines {expected_lines}, "
+            f"got {reported_lines}"
+        )
+
     # Sanity: at least one of the location markers should match the
     # tempfile we just wrote (rules out a typeinfer-only path that
     # reports `(stdin)` while the filename context is unset).
