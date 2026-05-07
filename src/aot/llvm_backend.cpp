@@ -31,6 +31,22 @@ static bool global_needs_tls(const char *name) {
   return strcmp(name, "_request") == 0;
 }
 
+// Counter globals that wings increments from parallel worker threads.
+// The pattern `name = name + delta` against any of these is compiled
+// to a single `atomicrmw add` instead of the usual load + add + store
+// triple — the unlocked triple races on read-modify-write under load
+// and drops increments. Keep this list narrow; atomic RMW costs a
+// memory fence on most ISAs and isn't worth paying for non-shared
+// counters.
+static bool global_needs_atomic_rmw(const char *name) {
+  if (!name)
+    return false;
+  return strcmp(name, "_wings_requests_total") == 0 ||
+         strcmp(name, "_wings_requests_2xx") == 0 ||
+         strcmp(name, "_wings_requests_4xx") == 0 ||
+         strcmp(name, "_wings_requests_5xx") == 0;
+}
+
 char *my_strdup(const char *s) {
   if (!s)
     return nullptr;
@@ -4582,6 +4598,53 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       InferredType vt_t = get_local_type(backend, node->name);
       LLVMValueRef nat_t = get_local_native(backend, node->name);
       if (vt_t == INFERRED_INT && nat_t) {
+        // Atomic-RMW fast path. Pattern: `name = name + delta` (or its
+        // commutative twin) where `name` is on the counter whitelist.
+        // Compiles to a single `atomicrmw add monotonic` so concurrent
+        // wings worker threads can't drop increments. We only handle
+        // the exact `name + expr` shape — anything more complex
+        // (`name = name * 2 + 1` etc.) falls through to the regular
+        // load+add+store path; the whitelist exists precisely so
+        // non-counter writes pay no atomic cost.
+        if (global_needs_atomic_rmw(node->name) && node->right &&
+            node->right->type == AST_BINARY_OP &&
+            node->right->op == TOKEN_PLUS) {
+          ASTNode_C *delta_node = nullptr;
+          if (node->right->left &&
+              node->right->left->type == AST_IDENTIFIER &&
+              node->right->left->name &&
+              strcmp(node->right->left->name, node->name) == 0) {
+            delta_node = node->right->right;
+          } else if (node->right->right &&
+                     node->right->right->type == AST_IDENTIFIER &&
+                     node->right->right->name &&
+                     strcmp(node->right->right->name, node->name) == 0) {
+            delta_node = node->right->left;
+          }
+          if (delta_node) {
+            TypedValue dt = codegen_typed_expr(backend, delta_node);
+            LLVMValueRef delta_i64;
+            if (dt.type == INFERRED_INT || dt.type == INFERRED_BOOL) {
+              delta_i64 = dt.value;
+            } else if (dt.boxed) {
+              delta_i64 = LLVMBuildExtractValue(backend->builder, dt.boxed,
+                                                2, "atomic.delta");
+            } else {
+              delta_i64 = LLVMConstInt(backend->int_type, 0, 0);
+            }
+            LLVMValueRef old_val = LLVMBuildAtomicRMW(
+                backend->builder, LLVMAtomicRMWBinOpAdd, nat_t, delta_i64,
+                LLVMAtomicOrderingMonotonic, /*singleThread=*/false);
+            // atomicrmw yields the *old* value; reconstruct the new
+            // one for the assignment-expression result. Wings counter
+            // increments are statements (result unused), so this is
+            // mostly cosmetic — but cheap and keeps the shape right.
+            LLVMValueRef new_val = LLVMBuildAdd(backend->builder, old_val,
+                                                delta_i64, "atomic.new");
+            return llvm_vm_val_int_val(backend, new_val);
+          }
+        }
+
         TypedValue tv = codegen_typed_expr(backend, node->right);
         LLVMValueRef int_val;
         if (tv.type == INFERRED_INT || tv.type == INFERRED_BOOL) {
@@ -5172,19 +5235,40 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
 
     if (module_ast) {
       if (module_ast->type == AST_PROGRAM && module_ast->statements) {
-        // Pass 0.1: Pre-scan for Global Variables (Forward Declaration)
+        // Pass 0.1: Pre-scan for Global Variables (Forward Declaration).
+        // Mirror the top-level rule: pure-int globals (declared as
+        // `int x = ...;`) get a native i64 global plus a typed-local
+        // registration, so codegen_typed_expr can emit unboxed
+        // load/store paths for them. Non-int globals stay boxed
+        // VMValue. Without this, wings' int counters declared inside
+        // the imported module would land on the boxed path and miss
+        // the typed-int fast paths (atomic RMW for race-free counter
+        // updates included).
         for (int i = 0; i < module_ast->statement_count; i++) {
           if (module_ast->statements[i]->type == AST_VARIABLE_DECL) {
             ASTNode_C *decl = module_ast->statements[i];
             if (!LLVMGetNamedGlobal(backend->module, decl->name)) {
-              LLVMValueRef global_var = LLVMAddGlobal(
-                  backend->module, backend->vm_value_type, decl->name);
-              LLVMSetInitializer(global_var,
-                                 LLVMConstNull(backend->vm_value_type));
-              LLVMSetLinkage(global_var, LLVMInternalLinkage);
-              if (global_needs_tls(decl->name)) {
-                LLVMSetThreadLocalMode(global_var,
-                                       LLVMGeneralDynamicTLSModel);
+              if (backend->use_static_typing && decl->data_type == TYPE_INT) {
+                LLVMValueRef ig = LLVMAddGlobal(
+                    backend->module, backend->int_type, decl->name);
+                LLVMSetInitializer(ig,
+                                   LLVMConstInt(backend->int_type, 0, 0));
+                LLVMSetLinkage(ig, LLVMInternalLinkage);
+                add_local_typed(backend, decl->name, nullptr,
+                                INFERRED_INT, ig);
+                if (global_needs_tls(decl->name)) {
+                  LLVMSetThreadLocalMode(ig, LLVMGeneralDynamicTLSModel);
+                }
+              } else {
+                LLVMValueRef global_var = LLVMAddGlobal(
+                    backend->module, backend->vm_value_type, decl->name);
+                LLVMSetInitializer(global_var,
+                                   LLVMConstNull(backend->vm_value_type));
+                LLVMSetLinkage(global_var, LLVMInternalLinkage);
+                if (global_needs_tls(decl->name)) {
+                  LLVMSetThreadLocalMode(global_var,
+                                         LLVMGeneralDynamicTLSModel);
+                }
               }
             }
           }
