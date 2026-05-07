@@ -5364,28 +5364,32 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
     free(param_types);
   }
 
-  // Add optimization attributes
-  // nounwind: function doesn't throw exceptions
-  // noinline: prevent inlining to preserve function boundaries
-  // optnone: CRITICAL - completely disable optimization for this function
-  //          This prevents LLVM from eliminating loops via closed-form
-  //          solutions
-  // uwtable + frame-pointer=all: required so `longjmp` can SEH-unwind
-  //          through this frame on Windows x64 if a callee throws. See
-  //          the matching block on the regular-typed function path
-  //          below for the full rationale (Issue #53).
+  // Add function-level attributes.
+  //
+  //   nounwind         this function doesn't throw exceptions
+  //   inlinehint       hint the inliner to lean toward inlining; matches
+  //                    the regular boxed-typed function path
+  //   uwtable          keep the unwind table so longjmp can SEH-walk
+  //                    through this frame on Windows x64 (Issue #53)
+  //   frame-pointer=all required for the same SEH-walk path
+  //
+  // Historically this path also set `noinline,optnone` "to prevent
+  // LLVM from eliminating loops via closed-form solutions" — i.e. to
+  // protect the loopsum benchmark from being folded to its analytic
+  // result by SCEV. That handicapped EVERY typed function: fib paid
+  // 2x because mem2reg, GVN, instcombine could not touch alloca'd
+  // params, redundant zext/icmp, etc. Benchmarks have been switched
+  // to env-based loop bounds (TULPAR_BENCH_N) so the fold can no
+  // longer happen, and the optnone gag is removed here.
   LLVMAddAttributeAtIndex(
       func, LLVMAttributeFunctionIndex,
       LLVMCreateEnumAttribute(
           backend->context, LLVMGetEnumAttributeKindForName("nounwind", 8), 0));
   LLVMAddAttributeAtIndex(
       func, LLVMAttributeFunctionIndex,
-      LLVMCreateEnumAttribute(
-          backend->context, LLVMGetEnumAttributeKindForName("noinline", 8), 0));
-  LLVMAddAttributeAtIndex(
-      func, LLVMAttributeFunctionIndex,
-      LLVMCreateEnumAttribute(
-          backend->context, LLVMGetEnumAttributeKindForName("optnone", 7), 0));
+      LLVMCreateEnumAttribute(backend->context,
+                              LLVMGetEnumAttributeKindForName("inlinehint", 10),
+                              0));
   LLVMAddAttributeAtIndex(
       func, LLVMAttributeFunctionIndex,
       LLVMCreateEnumAttribute(
@@ -6268,15 +6272,22 @@ void llvm_backend_optimize(LLVMBackend *backend) {
   LLVMPassBuilderOptionsSetLoopInterleaving(options, 1);
   LLVMPassBuilderOptionsSetLoopVectorization(options, 1);
   LLVMPassBuilderOptionsSetSLPVectorization(options, 1);
-  LLVMPassBuilderOptionsSetLoopUnrolling(options, 0);
+  // LoopUnrolling was off historically to protect the loopsum micro-benchmark
+  // from being SCEV-folded to its closed-form result. Benchmarks now read
+  // their iteration count from an env var (`TULPAR_BENCH_N`) so the fold
+  // can no longer happen, and we get the unrolling speedup on real loops.
+  LLVMPassBuilderOptionsSetLoopUnrolling(options, 1);
   LLVMPassBuilderOptionsSetForgetAllSCEVInLoopUnroll(options, 0);
   LLVMPassBuilderOptionsSetMergeFunctions(options, 1);
 
-  // O2 + selective passes - no inline/loop-unroll to preserve loop structure
-  // This prevents LLVM from computing closed-form solutions for simple loops
-  LLVMErrorRef error = LLVMRunPasses(
-      backend->module, "default<O2>,function(sroa,gvn,instcombine)", nullptr,
-      options);
+  // Full default<O3> pipeline. The previous `default<O2>,function(...)`
+  // string was effectively dead code — every emitted typed function had
+  // `optnone` set, so no pass could touch it (see codegen_native_func_def).
+  // With that gag removed, the pipeline level actually matters; O3 buys
+  // inliner aggressiveness, vectorization, and SCC-based passes that move
+  // fib/struct workloads materially closer to gcc -O2.
+  LLVMErrorRef error =
+      LLVMRunPasses(backend->module, "default<O3>", nullptr, options);
 
   if (error) {
     char *msg = LLVMGetErrorMessage(error);
