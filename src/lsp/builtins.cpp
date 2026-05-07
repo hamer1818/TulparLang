@@ -92,6 +92,7 @@ const BuiltinEntry kBuiltins[] = {
     {"http_status_text",    "http_status_text(code: int): str",     "200→\"OK\", 404→\"Not Found\", …"},
     {"path_match",          "path_match(pattern: str, path: str): json", "/users/:id ile gelen path'i eşler."},
     {"parse_query",         "parse_query(qs: str): json",           "?a=1&b=2 → {a: \"1\", b: \"2\"}"},
+    {"parse_cookies",       "parse_cookies(header: str): json",     "Cookie header'ı parse eder: \"a=1; b=2\" → {a: \"1\", b: \"2\"}"},
 
     // ---- Socket ----
     {"socket_server",  "socket_server(host: str, port: int): int",  ""},

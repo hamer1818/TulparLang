@@ -3530,6 +3530,45 @@ VMValue aot_path_match(VMValue patternVal, VMValue pathVal) {
   return VM_OBJ((Obj *)result);
 }
 
+// Builtin: parse_cookies(str) -> json
+// Parse an RFC 6265 Cookie header value (`a=1; b=2; c=hello`) into a
+// JSON-style object. Pairs are split on `;`, leading whitespace on each
+// pair is trimmed, and the first `=` separates name from value (so a
+// value containing `=` round-trips intact). Empty names are skipped;
+// duplicate names follow last-write-wins. No URL-decoding — cookies use
+// quoted-pair / token grammar, not percent-encoding, and decoding here
+// would corrupt quoted strings.
+VMValue aot_parse_cookies(VMValue strVal) {
+  if (!IS_STRING(strVal)) {
+    return VM_OBJ((Obj *)aot_http_make_obj(0));
+  }
+  ObjString *s = AS_STRING(strVal);
+  const char *data = s->chars;
+  int len = s->length;
+  ObjObject *o = aot_http_make_obj(4);
+  int i = 0;
+  while (i < len) {
+    while (i < len && (data[i] == ' ' || data[i] == '\t')) i++;
+    int key_start = i;
+    while (i < len && data[i] != '=' && data[i] != ';') i++;
+    int key_end = i;
+    int val_start = key_end;
+    int val_end = key_end;
+    if (i < len && data[i] == '=') {
+      val_start = i + 1;
+      i = val_start;
+      while (i < len && data[i] != ';') i++;
+      val_end = i;
+    }
+    if (key_end > key_start) {
+      aot_http_obj_set_str(o, data + key_start, key_end - key_start,
+                           data + val_start, val_end - val_start);
+    }
+    if (i < len && data[i] == ';') i++;
+  }
+  return VM_OBJ((Obj *)o);
+}
+
 // Builtin: parse_query(str) -> json
 // Parse a urlencoded `k1=v1&k2=v2` string (with or without a leading '?')
 // into a JSON-style object. Same internals as the parser used for HTTP

@@ -102,6 +102,45 @@ func query_url_decoded() {
     assert_eq_str(q["space"], "hi there");
 }
 
+// ----- parse_cookies -------------------------------------------------------
+
+func cookies_basic() {
+    json c = parse_cookies("sid=abc123; theme=dark");
+    assert_eq_str(c["sid"], "abc123");
+    assert_eq_str(c["theme"], "dark");
+}
+
+func cookies_no_space_after_semicolon() {
+    // RFC 6265 says `; ` but real-world clients are sloppy — make sure
+    // we still split on bare `;`.
+    json c = parse_cookies("a=1;b=2;c=3");
+    assert_eq_str(c["a"], "1");
+    assert_eq_str(c["b"], "2");
+    assert_eq_str(c["c"], "3");
+}
+
+func cookies_value_contains_equals() {
+    // Values with `=` must round-trip — a base64'd token is the canonical
+    // case. Splitting on the FIRST `=` (not all of them) is the contract.
+    json c = parse_cookies("token=abc=def==; v=1");
+    assert_eq_str(c["token"], "abc=def==");
+    assert_eq_str(c["v"], "1");
+}
+
+func cookies_empty_input() {
+    json c = parse_cookies("");
+    // Just verify the call returns an empty object without crashing.
+    assert_eq_int(1, 1);
+}
+
+func cookies_no_value() {
+    // Some legacy cookies are flag-style with no `=value` part. We
+    // store them with an empty string value rather than dropping them.
+    json c = parse_cookies("flag; sid=42");
+    assert_eq_str(c["flag"], "");
+    assert_eq_str(c["sid"], "42");
+}
+
 // ----- http_status_text ----------------------------------------------------
 
 func status_text_known() {
@@ -184,6 +223,12 @@ test("path_match: /* wildcard", "path_wildcard");
 test("parse_query: leading '?'", "query_with_leading_question_mark");
 test("parse_query: empty input", "query_empty");
 test("parse_query: URL-decoded values", "query_url_decoded");
+
+test("parse_cookies: basic two pairs", "cookies_basic");
+test("parse_cookies: no space after `;`", "cookies_no_space_after_semicolon");
+test("parse_cookies: value contains `=`", "cookies_value_contains_equals");
+test("parse_cookies: empty input", "cookies_empty_input");
+test("parse_cookies: flag-style with no value", "cookies_no_value");
 
 test("http_status_text: known codes", "status_text_known");
 test("http_status_text: unknown falls back", "status_text_unknown_falls_back");

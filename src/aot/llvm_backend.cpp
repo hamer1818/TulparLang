@@ -1088,6 +1088,12 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_parse_query = LLVMAddFunction(
       backend->module, "aot_parse_query", http_parse_type);
 
+  // aot_parse_cookies(str) -> VMValue (object)
+  // Same VMValue (str) -> VMValue (object) shape as parse_query, so we
+  // reuse http_parse_type rather than declaring a fresh signature.
+  backend->func_aot_parse_cookies = LLVMAddFunction(
+      backend->module, "aot_parse_cookies", http_parse_type);
+
   // aot_exit_i32(int code) -> noreturn  (process termination)
   // Takes a raw i32 to avoid VMValue ABI complications for a one-shot call.
   LLVMTypeRef exit_params[] = {backend->int32_type};
@@ -3646,6 +3652,13 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_parse_query, args, 1, "parse_query");
+    }
+
+    // parse_cookies(str) -> object
+    if (strcmp(node->name, "parse_cookies") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_parse_cookies, args, 1, "parse_cookies");
     }
 
     // exit(code) -> noreturn

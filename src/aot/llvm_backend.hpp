@@ -241,6 +241,7 @@ typedef struct {
   LLVMValueRef func_aot_http_status_text;
   LLVMValueRef func_aot_path_match;
   LLVMValueRef func_aot_parse_query;
+  LLVMValueRef func_aot_parse_cookies;
 
   // Process control
   LLVMValueRef func_aot_exit;
