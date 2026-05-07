@@ -27,11 +27,12 @@ json _default_headers = {
 // a histogram would require either runtime support or a Tulpar-side
 // reduction over an array, both bigger than warranted today.
 //
-// The counters are written without a lock — under heavy parallel load
-// the AOT path can drop a handful of increments because two threads
-// race on `n = n + 1` (read-modify-write is not atomic). That's
-// considered acceptable for telemetry; an `atomic_add` runtime helper
-// is on the roadmap if/when the slop becomes visible on production.
+// The four `_wings_requests_*` counters are race-free under parallel
+// `listen_async` workers: the AOT codegen recognises the
+// `name = name + delta` pattern against this whitelist and lowers it
+// to `atomicrmw add monotonic` so concurrent threads cannot drop
+// increments. `_wings_started_at` is written exactly once at startup
+// and so doesn't need atomic treatment.
 int _wings_started_at = 0;
 int _wings_requests_total = 0;
 int _wings_requests_2xx = 0;
