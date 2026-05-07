@@ -38,6 +38,29 @@ int _wings_requests_2xx = 0;
 int _wings_requests_4xx = 0;
 int _wings_requests_5xx = 0;
 
+// Per-request body cap. The native `http_recv_request` helper grows
+// its receive buffer dynamically up to this ceiling, so values up to
+// ~hundreds of MB are reachable without paying for memory you don't
+// use on small requests. 16 MiB is a reasonable default for API
+// uploads (package tarballs, multi-record JSON imports). Override
+// via `TULPAR_HTTP_MAX_BODY=<bytes>` for stricter or looser caps.
+int _wings_max_body_bytes = 16777216;
+
+// Pulls config overrides from the environment. Today only
+// `TULPAR_HTTP_MAX_BODY` (bytes) is honoured; future env-based knobs
+// land here too so listen()/listen_async() stay clean. Below 1 KiB
+// is rejected — the static recv buffer is sized to fit at least the
+// header block, anything smaller would just churn rejections.
+func _wings_apply_env_config() {
+    str cap_str = env("TULPAR_HTTP_MAX_BODY");
+    if (length(cap_str) > 0) {
+        int parsed = toInt(cap_str);
+        if (parsed >= 1024) {
+            _wings_max_body_bytes = parsed;
+        }
+    }
+}
+
 // ----- Route registration --------------------------------------------------
 func get(str path, str handler) {
     push(_routes, {"method": "GET", "path": path, "handler": handler});
@@ -376,7 +399,7 @@ func _wings_serve_connection(json client_arg) {
     int wm = arena_save();
 
     while (true) {
-        str raw = http_recv_request(client, 65536);
+        str raw = http_recv_request(client, _wings_max_body_bytes);
         if (length(raw) == 0) {
             break;
         }
@@ -489,6 +512,7 @@ func listen_async(int port) {
     if (_find_route("GET", "/metrics") < 0) {
         get("/metrics", "_wings_metrics");
     }
+    _wings_apply_env_config();
     _wings_started_at = timestamp();
 
     print("");
@@ -577,6 +601,7 @@ func listen(int port) {
     if (_find_route("GET", "/metrics") < 0) {
         get("/metrics", "_wings_metrics");
     }
+    _wings_apply_env_config();
     _wings_started_at = timestamp();
 
     print("");
@@ -615,7 +640,7 @@ func listen(int port) {
         }
 
         while (true) {
-            str raw = http_recv_request(client, 65536);
+            str raw = http_recv_request(client, _wings_max_body_bytes);
             if (length(raw) == 0) {
                 break;
             }

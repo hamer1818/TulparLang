@@ -3765,62 +3765,73 @@ VMValue aot_http_should_keepalive(VMValue requestVal) {
 
 // Builtin: http_recv_request(client_fd, max_bytes) -> str
 //
-// Reads exactly one HTTP/1.x request off `client_fd`, growing the read
-// up to `max_bytes` total. Returns "" on connection close / error.
+// Reads exactly one HTTP/1.x request off `client_fd`. `max_bytes` is the
+// **absolute upper bound** (DoS guard) — request size grows the receive
+// buffer dynamically up to that ceiling, never beyond it. Returns ""
+// on connection close, error, or if the announced Content-Length would
+// exceed `max_bytes`.
 //
-// Necessary for keep-alive: the previous `socket_receive(fd, 8192)`
-// pattern would either over-read into the *next* pipelined request or
-// under-read a body larger than 8KB. Here we:
-//   1. Recv until `\r\n\r\n` is in the buffer (end of headers).
-//   2. Parse `Content-Length:` out of those headers.
-//   3. Recv until total bytes >= header_end + content_length.
+// Algorithm:
+//   1. Recv into a 64KB thread-local static buffer until `\r\n\r\n` is
+//      seen — that block is plenty for the largest realistic header
+//      block (browsers cap themselves around 8KB; we leave headroom).
+//   2. Parse `Content-Length:` out of the headers.
+//   3. If `needed = header_end + content_length` exceeds `max_bytes`,
+//      reject (return ""). Otherwise, if `needed` exceeds the static
+//      buffer's 64KB capacity, switch to a heap-allocated buffer
+//      sized to `needed + 1` and copy across what we already read.
+//   4. Continue receiving until total >= needed, then return.
 //
 // We deliberately don't consume bytes past `needed` so a future
 // `http_recv_request` on the same fd starts cleanly.
+//
+// Reusing the static buffer across calls (when the request fits) saves
+// a 64KB malloc + free on every keep-alive request — measurable on
+// hot-path benchmarks. The heap fallback only kicks in for body
+// payloads larger than 64KB (file uploads, big JSON, etc.), which is
+// when the cost of the malloc is dwarfed by the bytes themselves.
 VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
   if (!IS_INT(fdVal))
     return VM_OBJ((Obj *)aot_allocate_string("", 0));
   tulpar_socket fd = (tulpar_socket)AS_INT(fdVal);
-  int max_bytes = IS_INT(maxVal) ? (int)AS_INT(maxVal) : 65536;
+  // Default cap: 16 MiB. Big enough for realistic API uploads (package
+  // tarballs, multi-record JSON imports), small enough that a single
+  // worker can't exhaust memory under attack.
+  int max_bytes = IS_INT(maxVal) ? (int)AS_INT(maxVal) : 16 * 1024 * 1024;
   if (max_bytes < 1024) max_bytes = 1024;
 
-  // Static recycled receive buffer. The function copies the bytes into
-  // arena via `aot_allocate_string` before returning, so reusing the
-  // raw recv buffer across calls is safe (the previous request's bytes
-  // never leak into the next request's parsed VMValue). Saves a 64KB
-  // malloc + free on every keep-alive request — measurable on hot-path
-  // benchmarks. Falls back to malloc if the request asks for more than
-  // the static cap (rare; we ship a default of 65536).
+  static const int STATIC_CAP = 65536;
   static thread_local char *static_buf = nullptr;
-  static thread_local int static_cap = 0;
-  char *buf;
+  if (!static_buf) {
+    static_buf = (char *)malloc(STATIC_CAP + 1);
+  }
+  char *buf = static_buf;
+  int cap = static_buf ? STATIC_CAP : 0;
   bool buf_owned = false;
-  if (max_bytes <= 65536) {
-    if (!static_buf) {
-      static_buf = (char *)malloc(65536 + 1);
-      if (static_buf) static_cap = 65536;
-    }
-    if (static_buf) {
-      buf = static_buf;
-    } else {
-      buf = (char *)malloc(max_bytes + 1);
-      buf_owned = true;
-    }
-  } else {
-    buf = (char *)malloc(max_bytes + 1);
+  if (!buf) {
+    // First-call malloc failed — fall back to per-call alloc capped at
+    // either max_bytes or STATIC_CAP, whichever is smaller, so we still
+    // make progress on the header read.
+    int initial = max_bytes < STATIC_CAP ? max_bytes : STATIC_CAP;
+    buf = (char *)malloc(initial + 1);
+    if (!buf) return VM_OBJ((Obj *)aot_allocate_string("", 0));
+    cap = initial;
     buf_owned = true;
   }
-  if (!buf)
-    return VM_OBJ((Obj *)aot_allocate_string("", 0));
 
   int total = 0;
   int header_end = -1;
   int content_length = -1;
   int needed = -1;
 
-  while (total < max_bytes) {
-    int chunk = max_bytes - total;
-    ssize_t n = tulpar_recv(fd, buf + total, chunk, 0);
+  for (;;) {
+    // Read window: until we know `needed`, fill up to `cap`. After that,
+    // fill up to `needed`. Either way, `cap` is the hard physical bound.
+    int target = (needed > 0) ? needed : cap;
+    if (target > cap) target = cap; // belt-and-braces
+    if (total >= target) break;
+
+    ssize_t n = tulpar_recv(fd, buf + total, target - total, 0);
     if (n <= 0) {
       if (buf_owned) free(buf);
       return VM_OBJ((Obj *)aot_allocate_string("", 0));
@@ -3837,7 +3848,14 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
           break;
         }
       }
-      if (header_end < 0) continue;
+      if (header_end < 0) {
+        // Header didn't fit in `cap` bytes — pathological client; reject.
+        if (total >= cap) {
+          if (buf_owned) free(buf);
+          return VM_OBJ((Obj *)aot_allocate_string("", 0));
+        }
+        continue;
+      }
 
       content_length = 0;
       const char *hdr_end = buf + header_end - 4;
@@ -3859,12 +3877,14 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
           if (m) {
             const char *p = line_start + plen;
             while (p < line_end && (*p == ' ' || *p == '\t')) p++;
-            int val = 0;
+            long long val = 0;
             while (p < line_end && *p >= '0' && *p <= '9') {
               val = val * 10 + (*p - '0');
               p++;
             }
-            content_length = val;
+            // Clamp to int range so the cap math below stays safe.
+            if (val > 0x7fffffffLL) val = 0x7fffffffLL;
+            content_length = (int)val;
             break;
           }
         }
@@ -3873,6 +3893,28 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
         if (line_start < hdr_end && *line_start == '\n') line_start++;
       }
       needed = header_end + content_length;
+
+      // DoS guard: announced body would push us past max_bytes.
+      if (needed > max_bytes) {
+        if (buf_owned) free(buf);
+        return VM_OBJ((Obj *)aot_allocate_string("", 0));
+      }
+
+      // Body too big for the static buffer → grow into a private heap
+      // allocation. Copy what we already received so the recv loop can
+      // continue from `total` without restarting.
+      if (needed > cap) {
+        char *grown = (char *)malloc((size_t)needed + 1);
+        if (!grown) {
+          if (buf_owned) free(buf);
+          return VM_OBJ((Obj *)aot_allocate_string("", 0));
+        }
+        memcpy(grown, buf, (size_t)total);
+        if (buf_owned) free(buf);
+        buf = grown;
+        cap = needed;
+        buf_owned = true;
+      }
     }
 
     if (needed > 0 && total >= needed) break;
