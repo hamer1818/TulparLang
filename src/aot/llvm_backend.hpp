@@ -211,6 +211,14 @@ typedef struct {
   LLVMValueRef func_aot_socket_set_nonblocking;
   LLVMValueRef func_aot_socket_poll;
 
+  // TLS server primitives — power lib/wings_tls.tpr
+  LLVMValueRef func_aot_tls_init;
+  LLVMValueRef func_aot_tls_accept;
+  LLVMValueRef func_aot_tls_recv;
+  LLVMValueRef func_aot_tls_send;
+  LLVMValueRef func_aot_tls_close;
+  LLVMValueRef func_aot_tls_ctx_free;
+
   // Dynamic Call (Wings support)
   LLVMValueRef func_aot_call_dynamic;
 
