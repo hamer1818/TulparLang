@@ -208,6 +208,18 @@ extern "C" {
     // Pass null/null to disable enrichment.
     void parser_set_diagnostic_context(const char *source_text,
                                        const char *source_filename);
+
+    // Suppress the pretty-render side of Parser::error. The parse still
+    // throws, the catch upstream still recovers — but no diagnostic
+    // reaches stderr. Callers that re-parse later (typeinfer pre-pass)
+    // use this to avoid double-reporting the same syntax error.
+    void parser_set_quiet(int quiet);
+
+    // How many parse errors fired during the last `Parser::parse()`. The
+    // parser recovers and returns a partial AST regardless; pre-pass
+    // consumers (typeinfer) read this to decide whether the AST is
+    // trustworthy enough to walk.
+    int parser_get_error_count(void);
 }
 
 #endif // TULPAR_PARSER_HPP
