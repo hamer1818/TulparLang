@@ -30,6 +30,48 @@ Best wall time of 5 runs per language. Times in milliseconds.
 | struct_array_push:Tulpar AOT (boxed json) | 628.7 | 2999997000000 |
 | struct_array_push:C(gcc -O2) | 24.5 | 2999997000000 |
 
+## HTTP listener throughput (2026-05-07, post-listen_evented + listen_pool)
+
+3000 requests across 4 keep-alive connections, single-machine localhost
+loopback. All four Wings listener variants compared head-to-head against
+Python `ThreadingHTTPServer` and Node.js `http`. `TULPAR_HTTP_QUIET=1`
+suppresses per-request access logs so we measure the network-path cost,
+not console I/O.
+
+| Server                  | req/sec  | × Tulpar listen | Notes |
+|-------------------------|---------:|----------------:|-------|
+| Tulpar `listen_async`   | **34 095** | 1.87× | Thread per connection. Burst-best. |
+| Tulpar `listen_pool x8` | 33 026   | 1.81× | Pre-spawned worker pool, 8 workers. |
+| Tulpar `listen_evented` | 31 032   | 1.70× | Single thread, poll() multiplexed. |
+| Tulpar `listen` (sync)  | 18 207   | 1.00× | One in-flight request, baseline. |
+| Node.js `http`          | 17 805   | 0.98× of sync `listen` | Reference. |
+| Python `ThreadingHTTP`  | 11 717   | 0.64× of sync `listen` | Reference. |
+
+Cross-comparison vs runtimes:
+
+- Tulpar `listen_async` is **1.91× Node.js**, **2.91× Python**.
+- Tulpar `listen_pool` is **1.85× Node.js**, **2.82× Python**.
+- Tulpar `listen_evented` is **1.74× Node.js**, **2.65× Python**.
+
+The four listeners trade off as expected for their scheduling model:
+
+- `listen_async` wins burst tests because every TCP connection gets its
+  own OS thread immediately. Pays the thread-creation cost on every
+  request; for sustained 1k+ req/s you want `listen_pool`.
+- `listen_pool` recycles N workers; numbers stay flat under sustained
+  load while `listen_async` would degrade once thread-creation cost
+  becomes a bottleneck. 8 workers match `listen_async` on this hardware.
+- `listen_evented` is single-thread + multi-fd via `poll()` / `WSAPoll`.
+  Trades raw throughput (~10% under pool) for bounded memory and zero
+  per-connection thread overhead — best fit for many-idle-keep-alive
+  workloads (chat, dashboards, SSE).
+
+The sync `listen` baseline is unchanged — it serves one request at a
+time and Node.js' single-threaded event loop is roughly the same shape,
+so the two land within 3% of each other.
+
+Reproduce: `python benchmarks/http_bench.py --requests 3000 --connections 4`
+
 ## What changed in the AOT pipeline
 
 Three knobs in `src/aot/llvm_backend.cpp` were holding back the typed
