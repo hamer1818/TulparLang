@@ -170,19 +170,48 @@ func _wings_has_raw(json result) {
     return false;
 }
 
+// Optional status-code envelope. Handlers that want to return a
+// non-200 status (`401` for auth failures, `404`s the handler computes
+// itself, `409` for conflicts, `201` for creates, ...) include
+// `"_status": <int>` in the response dict:
+//
+//   return {"error": "conflict", "_status": 409};
+//   return {"ok": true, "_status": 201};
+//
+// Any positive integer is honored verbatim. The field is left in the
+// JSON body — handlers that want it stripped should not include it
+// (or should structure their schema differently). Falls back to the
+// caller-supplied default (200 for handler hits, 404 for no-match)
+// when absent or not an int. Both `_raw` and JSON paths see this.
+func _wings_status_or(json result, int fallback) {
+    array rk = keys(result);
+    for (int i = 0; i < length(rk); i++) {
+        if (rk[i] == "_status") {
+            int s = result["_status"];
+            if (s > 0) {
+                return s;
+            }
+            return fallback;
+        }
+    }
+    return fallback;
+}
+
 // Build the wire response for a dispatched handler. Centralises the
-// `_raw` envelope check so both `listen()` and `listen_async()` get the
-// same behaviour without duplicating the branching.
+// `_raw` and `_status` envelope checks so both `listen()` and
+// `listen_async()` get the same behaviour without duplicating the
+// branching.
 func _wings_build_response(json result, int keep) {
+    int status = _wings_status_or(result, 200);
     if (_wings_has_raw(result)) {
         str ct = result["_content_type"];
         if (length(ct) == 0) {
             ct = "text/plain; charset=utf-8";
         }
         str rbody = result["_raw"];
-        return http_create_response(200, ct, rbody, _default_headers, keep);
+        return http_create_response(status, ct, rbody, _default_headers, keep);
     }
-    return http_create_response(200, "application/json",
+    return http_create_response(status, "application/json",
         toJson(result), _default_headers, keep);
 }
 
@@ -370,8 +399,19 @@ func _wings_serve_connection(json client_arg) {
             found = true;
         }
         _wings_requests_total = _wings_requests_total + 1;
+        // Bucket the request by the status the handler actually
+        // returns (via `_status` envelope) — not just "matched route".
+        // A handler that returns `{"_status": 401}` for a bad token
+        // increments 4xx, not 2xx.
         if (found) {
-            _wings_requests_2xx = _wings_requests_2xx + 1;
+            int eff_status = _wings_status_or(result, 200);
+            if (eff_status >= 500) {
+                _wings_requests_5xx = _wings_requests_5xx + 1;
+            } else if (eff_status >= 400) {
+                _wings_requests_4xx = _wings_requests_4xx + 1;
+            } else {
+                _wings_requests_2xx = _wings_requests_2xx + 1;
+            }
         } else {
             _wings_requests_4xx = _wings_requests_4xx + 1;
         }
@@ -568,7 +608,17 @@ func listen(int port) {
                 json route = _routes[route_idx];
                 json result = call(route["handler"]);
                 response = _wings_build_response(result, keep);
-                _wings_requests_2xx = _wings_requests_2xx + 1;
+                // Bucket by handler-returned status (`_status` envelope),
+                // not "matched route". 401/409/500-class errors land in
+                // the right counter even when dispatched cleanly.
+                int eff_status = _wings_status_or(result, 200);
+                if (eff_status >= 500) {
+                    _wings_requests_5xx = _wings_requests_5xx + 1;
+                } else if (eff_status >= 400) {
+                    _wings_requests_4xx = _wings_requests_4xx + 1;
+                } else {
+                    _wings_requests_2xx = _wings_requests_2xx + 1;
+                }
             } else {
                 response = _wings_build_404(path, keep);
                 _wings_requests_4xx = _wings_requests_4xx + 1;
