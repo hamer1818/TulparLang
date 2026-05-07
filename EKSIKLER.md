@@ -547,8 +547,92 @@ ediyordu; fib'de tahmin tutarlı.
 | 48 | VM string concat fn-local'de `0` döndürüyor (AOT doğru) | ✅ RESOLVED (2026-05-05; OP_LOAD_ADD_STORE'a string dalı) |
 | 49 | Modül namespace'leri yok (`import ... as alias`) | ✅ RESOLVED (2026-05-05; PR #35) |
 | 50 | typeinfer `len`/`abs` polimorfizmi wildcard kullanıyor | ✅ RESOLVED (2026-05-05; isim-bazlı kategori kontrolü) |
+| 51 | Wings handler-loop mutex (TLS yok diye `_wings_handler_mu` zorunluydu) | ✅ RESOLVED (2026-05-06; PR #79 — `_request` TLS, mutex kaldırıldı) |
+| 52 | `http_recv_request` 64 KiB statik tampon, büyük POST'larda truncate ediyordu | ✅ RESOLVED (2026-05-06; PR #80 — Content-Length-aware streaming, 16 MiB cap, `TULPAR_HTTP_MAX_BODY` env override) |
+| 53 | Wings counter'ları (`_wings_requests_total/2xx/4xx/5xx`) data race'e açıktı | ✅ RESOLVED (2026-05-06; PR #81 — top-level int globals için `LLVMBuildAtomicRMW` superinstruction) |
+| 54 | tulpar-be registry "latest" insertion-order'lı (semver değil) | ✅ RESOLVED (2026-05-06; PR #16 — `_pick_latest_version` semver compare) |
+| 55 | tulpar-be audit log unbounded büyüyor + per-IP rate limit yok | ✅ RESOLVED (2026-05-06; PR #16 — `_AUDIT_RETAIN=5000`, prune every 100, 5 submit/h/IP) |
+| 56 | `tulpar pkg install` semver range (`^1.2`, `>=1,<2`) yoktu — verbatim URL'ye giriyordu | ✅ RESOLVED (2026-05-06; PR #82+#83 — `parse_semver` + `match_range` + compound constraints) |
+| 57 | Wings handler'ları CORS preflight (OPTIONS) için 405 dönüyordu | ✅ RESOLVED (2026-05-07; commit fa4fc11 — auto OPTIONS → 204) |
+| 58 | Windows MSYS2'de `https://` URL'leri OpenSSL bulamıyordu (build-time) | ✅ RESOLVED (2026-05-07; commit 7ceca74 — `-DOPENSSL_ROOT_DIR` MSYS2 default) |
+| 59 | `ObjStruct.push()` her field için malloc — struct-heavy kod yavaş | ✅ RESOLVED (2026-05-07; commit 2f99174 — arena-allocated, malloc'suz) |
+| 60 | pkg.tulparlang.dev hover renkleri "pitch black", favicon yok | ✅ RESOLVED (2026-05-06; PR #11+#12+#13 — palette + 4 sayfa rollout + favicon) |
 
-### Kalan iş kalemleri (sonraki etap)
+### 🟡 Açık iş kalemleri (v0.9 → v1.0 yol haritası)
+
+#### Adım 1 — Codegen miscompile (öncelik 🔴 kritik)
+
+**Şiddet:** Yüksek — Wings handler'larında `_request[k] = func_returning_obj()` deseni
+runtime'da SIGSEGV ile çöküyor (`vm_object_set: obj=NULL`). PR #84'te hot-fix olarak
+`_request["cookies"] = wings_cookies(req)` yazma yolu kapatıldı (handler'lar artık
+helper'ı kendileri çağırıyor); ama codegen miscompile arka planda hâlâ duruyor.
+
+**Reprodüksiyon:** Tam wings symbol table + `listen()` döngüsü altında
+`_request["cookies"] = some_func(req)` deseni → `vm_object_set` `obj=nil`
+backtrace'i. Küçük izole testler (top-level + simple loop + global + arg + wings-style
+pattern) tetiklemiyor; problem function ordering'e veya handler-loop'un pre/post
+yapısına duyarlı.
+
+**Sonraki adım:** Repro scaffold'u büyüt — wings'in tüm symbol table'ını içe alan
+küçük bir test kur, `--emit-llvm` ile IR diff'i çek, "function-returning-object →
+global-subscript-write" lowering yolunu izle.
+
+#### Adım 2 — CI runtime smoke (öncelik 🟠 yüksek)
+
+`COMPILE_ONLY_TESTS` listesi (wings/router/socket/api/tulpar_api örnekleri) sadece
+*derleniyor*, çalıştırılmıyor — PR #76'nın ürettiği wings cookies regresyonu 4 PR
+boyunca main'de yattı. Çözüm: `build.sh test` runtime modunda bu örnekler için
+`tulpar build` ardından arka planda spawn, 200 ms bekleme, `curl localhost:<port>/healthz`,
+ve sürecin sonlandırılması adımlarını ekle. Beklenen kazanım: wings/router'a yansıyan
+herhangi bir codegen regresyonu CI'da görünür.
+
+#### Faz 2 devamı — Geliştirici UX rötuşları
+
+- Parser hata satır numarası recovery (bazen sonraki satırı raporluyor).
+- Multi-error parser modu (şu an ilk fatal'da duruyor).
+- LSP variable + type hover/completion (şu an sadece function/keyword tamamlanıyor).
+- LSP signature help (parametre içindeyken aktif imza ipucu).
+- Incremental document sync (`change: 2`).
+- `tulpar fmt` token-pass'i operatör/virgül boşluğu dışında tutamayan kenar durumlar.
+
+#### Faz 3 — Production-ready API (kalan)
+
+- **Async I/O server** — epoll/kqueue/IOCP. Şu an `listen()` tek-thread,
+  `listen_async()` thread-per-connection — "C kadar hızlı" sloganı için event-loop
+  modeli gerekli.
+- **TLS aktivasyonu doğrulama** — code path hazır (`TULPAR_HAS_TLS` define), MSYS2
+  default'u commit 7ceca74 ile geldi; gerçek `https://` GET + `wings_tls` listener
+  E2E ile doğrulanmalı.
+- **Wings TLS listener** — server-side `SSL_accept` + per-request `SSL_read/write`;
+  client TLS altyapısıyla simetrik.
+- **Trust-store config** — `SSL_VERIFY_NONE` yerine kullanıcı-tarafı CA bundle
+  yolu (Tulpar config'i).
+- **WebSocket / SSE** — Wings'te uzun yaşayan bağlantı tipi yok henüz.
+
+#### Ekosistem + tooling
+
+- `tests/router.test.tpr`, JSON edge case'leri, file IO için daha fazla unit test.
+- Quickstart + language reference + pkg guide (`tulparlang.dev/docs/`).
+- Multi-file `.tpr` paket arşivleri (tar/zip extraction) — şu an single-file.
+- `tulpar update` mekanizmasının binary release artifacts'i çekme yolu.
+
+### 🎯 v1.0 = "dil tam oldu" kriterleri
+
+1. **Sıfır bilinen davranış regresyonu** — `git log --grep="fix(.*regression"` boş;
+   CI compile + runtime gate'leri yeşil.
+2. **Motto taşınıyor** — benchmark'lar Go/Java sınıfında; örnekler Python kadar okunur.
+3. **Ekosistem self-host** — tulpar-be production'da, pkg.tulparlang.dev paket sunuyor;
+   3rd-party kullanıcı `tulpar pkg add foo@^1` ile çalışan dep ekleyebiliyor.
+4. **Dokümantasyon eşiği** — quickstart + language reference + pkg guide
+   `tulparlang.dev/docs/` altında canlı.
+5. **Stable release** — `v1.0.0` git tag + binary release artifacts; `tulpar update`
+   mekanizması bunu çekiyor.
+
+**Tahmini takvim:** Adım 1 + Adım 2 + Faz 2 rötuşu = **v0.9 RC, 3-4 hafta**.
+Faz 3 (async I/O, TLS doğrulama, Wings TLS) + docs + benchmark refresh = **v1.0,
+2-3 ay**.
+
+### Eski etap notları (referans)
 
 - ✅ **48. VM string concat fn-local'de `0` döndürüyor** — RESOLVED (2026-05-05). Kök neden: `s = s + " world"` AST_ASSIGNMENT'ın `var = var + expr` superinstruction optimizasyonuna düşüyordu (`OP_LOAD_ADD_STORE`); fast path int-only, fallback `BINARY_OP(+)` ise string pair'i bilmiyor → default arm `VM_FLOAT(0.0)` üretip user'ın string atamasını sessizce siliyordu. [src/vm/vm.cpp:OP_LOAD_ADD_STORE](src/vm/vm.cpp) içinde IS_STRING&IS_STRING dalı eklendi (OP_ADD'in concat path'inin paralel kopyası, fakat in-place append yerine her zaman fresh buffer çünkü fn-local sum başka değişkenden alias'lanabilir). [tests/strings.test.tpr](tests/strings.test.tpr) iki yeni regresyon koruyucu ekledi (`fn_local_string_concat_typed` + `fn_local_string_concat_let`).
 - ✅ **49. Modül namespace'leri** — RESOLVED (2026-05-05; PR #35). `import "name" as alias;` sözdizimi parser'a eklendi; `apply_import_alias` helper'ı modülün top-level fonksiyonlarını `<alias>__<name>` ile mangle ediyor, modül-içi cagrilar da aynı anda yeniden yazılıyor. AOT (`AST_IMPORT` codegen) ve VM (`OP_IMPORT` runtime) ortak helper'ı çağırıyor. `as` bağlamsal identifier (rezerv kelime değil); `let as = 42` hala çalışıyor. Phase 2 (Python-style `m.func()` syntax) sırada.
