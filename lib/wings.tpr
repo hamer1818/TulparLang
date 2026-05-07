@@ -26,19 +26,17 @@ json _default_headers = {
 // every request; `metrics_handler` reads them. Keep them tiny — adding
 // a histogram would require either runtime support or a Tulpar-side
 // reduction over an array, both bigger than warranted today.
+//
+// The counters are written without a lock — under heavy parallel load
+// the AOT path can drop a handful of increments because two threads
+// race on `n = n + 1` (read-modify-write is not atomic). That's
+// considered acceptable for telemetry; an `atomic_add` runtime helper
+// is on the roadmap if/when the slop becomes visible on production.
 int _wings_started_at = 0;
 int _wings_requests_total = 0;
 int _wings_requests_2xx = 0;
 int _wings_requests_4xx = 0;
 int _wings_requests_5xx = 0;
-
-// Handler mutex used by `listen_async`. We serialise the
-// "set _request global → run handler → read result" critical section
-// so concurrent worker threads don't race on Tulpar's shared globals
-// (an LLVM-level thread-local-globals refactor is the next step;
-// this mutex is the no-codegen-change interim that lets us ship
-// multi-threaded recv/send today). Counters use the same mutex.
-int _wings_handler_mu = 0;
 
 // ----- Route registration --------------------------------------------------
 func get(str path, str handler) {
@@ -353,26 +351,26 @@ func log_error(str msg) {
 //
 // `listen_async(port)` accepts on the main thread and spawns a detached
 // worker per accepted TCP connection. Each worker runs the same
-// keep-alive request loop as the synchronous `listen()` but takes the
-// `_wings_handler_mu` mutex around the small critical section that
-// mutates the `_request` global and dispatches the handler.
+// keep-alive request loop as the synchronous `listen()` and dispatches
+// its handler **without any cross-worker lock** — recv, parse,
+// `_request = req`, the handler call, response build and send all run
+// in parallel across worker threads.
 //
-// What runs concurrently:
-//   * recv (per-connection)
-//   * response build (per-connection, owns its arena scope)
-//   * send (per-connection)
+// What makes this race-free:
+//   * `_request` is marked thread-local at the LLVM level
+//     (`global_needs_tls()` in src/aot/llvm_backend.cpp), so each
+//     worker mutates its own copy. A handler reading `_request["body"]`
+//     sees the request that *its* worker just stored, never the one a
+//     sibling worker is mid-update on.
+//   * `_routes` and `_default_headers` are write-once-at-startup and
+//     read-only during request serving.
+//   * Counter increments (`_wings_requests_total`, `_2xx`, etc.) are
+//     deliberately unlocked — see the comment on their declaration.
 //
-// What's serialised under the mutex:
-//   * `_request = req` global mutation
-//   * handler dispatch (`call(route["handler"])`) which itself reads
-//     the `_request` global
-//   * counter increments on `_wings_requests_*`
-//
-// On modern hardware where handlers are cheap (<5µs) but recv/send
-// dominate (~10–20µs each), this gives a meaningful concurrency win
-// without needing thread-local globals at the LLVM level. Once the
-// codegen learns to mark per-request globals TLS, the mutex goes away
-// and handler exec parallelises too.
+// VM path: `thread_create` in the VM doesn't actually spawn an OS
+// thread (it's an inline call back into the same interpreter), so the
+// VM serves connections sequentially anyway. The lock-free design is
+// safe there too — there are simply no concurrent writers to race on.
 func _wings_serve_connection(json client_arg) {
     int client = client_arg;
     int wm = arena_save();
@@ -385,8 +383,6 @@ func _wings_serve_connection(json client_arg) {
         json req = http_parse_request(raw);
         int keep = http_should_keepalive(req);
 
-        // ----- Critical section: handler dispatch -----
-        mutex_lock(_wings_handler_mu);
         _request = req;
         str method = req["method"];
         str path = req["path"];
@@ -410,7 +406,6 @@ func _wings_serve_connection(json client_arg) {
             _request["cookies"] = {};
             _wings_requests_total = _wings_requests_total + 1;
             _wings_requests_2xx = _wings_requests_2xx + 1;
-            mutex_unlock(_wings_handler_mu);
             str preflight = http_create_response(
                 204, "text/plain; charset=utf-8", "", _default_headers, keep);
             socket_send(client, preflight);
@@ -464,8 +459,6 @@ func _wings_serve_connection(json client_arg) {
         } else {
             _wings_requests_4xx = _wings_requests_4xx + 1;
         }
-        mutex_unlock(_wings_handler_mu);
-        // ----- End critical section -----
 
         // Response build + send happen outside the lock — these touch
         // only locals + the read-only `_default_headers` global.
@@ -497,7 +490,6 @@ func listen_async(int port) {
         get("/metrics", "_wings_metrics");
     }
     _wings_started_at = timestamp();
-    _wings_handler_mu = mutex_create();
 
     print("");
     print("  ╔═══════════════════════════════════╗");
