@@ -341,6 +341,114 @@ def main() -> int:
             else:
                 print(f"signatureHelp builtin OK: {sigs[0]['label']!r}")
 
+        # 5h. Variable hover + scope-aware completion. Load a program with
+        # a top-level int, a function parameter, and a function-local
+        # variable so we can pin each to a specific (line, column) in the
+        # LSP request.
+        var_program = (
+            "int total = 0;\n"                         # line 0, var `total`
+            "func add(int amount): int {\n"            # line 1, param `amount`
+            "    int sum = total + amount;\n"          # line 2, local `sum`
+            "    return sum;\n"                        # line 3
+            "}\n"                                      # line 4
+            "print(add(7));\n"                         # line 5
+        )
+        send(p, {"jsonrpc": "2.0", "method": "textDocument/didChange",
+                 "params": {"textDocument": {"uri": "file:///tmp/good.tpr", "version": 7},
+                            "contentChanges": [{"text": var_program}]}})
+        diag = read_msg(p)
+        if diag.get("method") != "textDocument/publishDiagnostics" or \
+                diag["params"]["diagnostics"]:
+            failures.append(f"var-hover-prep: expected clean diags, got {diag!r}")
+
+        # Hover on `total` at the top-level decl (line 0, col 4 = inside
+        # the identifier).
+        send(p, {"jsonrpc": "2.0", "id": 30, "method": "textDocument/hover",
+                 "params": {"textDocument": {"uri": "file:///tmp/good.tpr"},
+                            "position": {"line": 0, "character": 4}}})
+        resp = read_msg(p)
+        if resp.get("id") != 30 or resp.get("result") is None:
+            failures.append(f"hover top-level var: bad response {resp!r}")
+        else:
+            md = resp["result"]["contents"]["value"]
+            if "int total" not in md or "top-level" not in md:
+                failures.append(f"hover top-level var: expected 'int total' + "
+                                f"'top-level' in {md!r}")
+            else:
+                print("hover top-level var OK")
+
+        # Hover on parameter `amount` at line 1 col 18.
+        send(p, {"jsonrpc": "2.0", "id": 31, "method": "textDocument/hover",
+                 "params": {"textDocument": {"uri": "file:///tmp/good.tpr"},
+                            "position": {"line": 1, "character": 18}}})
+        resp = read_msg(p)
+        if resp.get("id") != 31 or resp.get("result") is None:
+            failures.append(f"hover param: bad response {resp!r}")
+        else:
+            md = resp["result"]["contents"]["value"]
+            if "int amount" not in md or "local in" not in md or \
+                    "`add`" not in md:
+                failures.append(f"hover param: expected 'int amount' + "
+                                f"'local in `add`' in {md!r}")
+            else:
+                print("hover function param OK")
+
+        # Hover on local `sum` at line 2 col 8.
+        send(p, {"jsonrpc": "2.0", "id": 32, "method": "textDocument/hover",
+                 "params": {"textDocument": {"uri": "file:///tmp/good.tpr"},
+                            "position": {"line": 2, "character": 8}}})
+        resp = read_msg(p)
+        if resp.get("id") != 32 or resp.get("result") is None:
+            failures.append(f"hover local var: bad response {resp!r}")
+        else:
+            md = resp["result"]["contents"]["value"]
+            if "int sum" not in md or "local in" not in md:
+                failures.append(f"hover local var: expected 'int sum' + "
+                                f"'local in' in {md!r}")
+            else:
+                print("hover function-local var OK")
+
+        # Completion inside `add` body (line 3) — should include the
+        # parameter `amount`, the local `sum`, the global `total`, the
+        # function `add` itself, and at least one builtin.
+        send(p, {"jsonrpc": "2.0", "id": 33, "method": "textDocument/completion",
+                 "params": {"textDocument": {"uri": "file:///tmp/good.tpr"},
+                            "position": {"line": 3, "character": 4}}})
+        resp = read_msg(p)
+        if resp.get("id") != 33:
+            failures.append(f"completion in-fn: bad id {resp!r}")
+        else:
+            labels = {i["label"] for i in resp["result"]["items"]}
+            need = {"amount", "sum", "total", "add", "print"}
+            missing = need - labels
+            if missing:
+                failures.append(f"completion in-fn: missing labels {missing}")
+            else:
+                print(f"completion in-fn OK: {len(labels)} unique labels, "
+                      f"locals visible")
+
+        # Completion at top-level (line 5) — should still see `total` and
+        # `add` but NOT the function-local `sum` / `amount`. Tests scope
+        # narrowing.
+        send(p, {"jsonrpc": "2.0", "id": 34, "method": "textDocument/completion",
+                 "params": {"textDocument": {"uri": "file:///tmp/good.tpr"},
+                            "position": {"line": 5, "character": 0}}})
+        resp = read_msg(p)
+        if resp.get("id") != 34:
+            failures.append(f"completion top-level: bad id {resp!r}")
+        else:
+            labels = {i["label"] for i in resp["result"]["items"]}
+            if "total" not in labels or "add" not in labels:
+                failures.append(f"completion top-level: missing globals "
+                                f"(total/add) in {labels!r}")
+            elif "sum" in labels or "amount" in labels:
+                # We expect locals to be hidden. If they leaked in, scope
+                # narrowing is broken.
+                failures.append(f"completion top-level: function-locals "
+                                f"leaked into global scope ({labels & {'sum', 'amount'}})")
+            else:
+                print("completion top-level OK (locals correctly hidden)")
+
         # 6. didChange with parse error (missing semicolon → expected ';')
         parse_bad = 'int x = 1\nint y = 2;\n'
         send(p, {"jsonrpc": "2.0", "method": "textDocument/didChange",
