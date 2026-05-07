@@ -22,21 +22,32 @@ import tempfile
 import threading
 import time
 
-WINGS_SRC = """\
-import "wings";
+def wings_src(listener_call: str) -> str:
+    """Build a Wings server source pinned to one listener variant.
+    `listener_call` is the literal Tulpar code for the final call —
+    e.g. `listen(8765)` or `listen_pool(8770, 8)`.
+    """
+    return (
+        'import "wings";\n'
+        '\n'
+        'func index_handler() { return {"hello": "world"}; }\n'
+        'func ping_handler() { return {"pong": 1}; }\n'
+        '\n'
+        'get("/", "index_handler");\n'
+        'get("/ping", "ping_handler");\n'
+        f'{listener_call};\n'
+    )
 
-func index_handler() {
-    return {"hello": "world"};
-}
 
-func ping_handler() {
-    return {"pong": 1};
-}
-
-get("/", "index_handler");
-get("/ping", "ping_handler");
-listen(8765);
-"""
+# Each variant: (label, port, listener_call, build_dir_suffix). All
+# share the same handler body so the only differences are the
+# scheduling model under test.
+WINGS_VARIANTS = [
+    ("Tulpar listen",         8765, "listen(8765)",                "sync"),
+    ("Tulpar listen_async",   8770, "listen_async(8770)",          "async"),
+    ("Tulpar listen_pool x8", 8771, "listen_pool(8771, 8)",        "pool"),
+    ("Tulpar listen_evented", 8772, "listen_evented(8772)",        "ev"),
+]
 
 PY_BASELINE_SRC = """\
 import http.server, json, sys
@@ -186,24 +197,29 @@ def main() -> int:
 
     results = []
     with tempfile.TemporaryDirectory(prefix="tulpar_bench_") as wd:
-        # Build Tulpar server
-        tpr_path = os.path.join(wd, "wings_bench.tpr")
-        bin_path = os.path.join(wd, "wings_bench")
-        with open(tpr_path, "w", encoding="utf-8") as f:
-            f.write(WINGS_SRC)
-        subprocess.check_call([exe, "build", tpr_path, bin_path],
-                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                              timeout=60)
-        tulpar_bin = bin_path + (".exe" if sys.platform == "win32" else "")
-
-        # Tulpar Wings — TULPAR_HTTP_QUIET silences the per-request access
-        # log on the server side so we measure the network-path cost, not
-        # console I/O. This matches how a benchmarked Go/Node server runs.
+        # TULPAR_HTTP_QUIET silences the per-request access log on the
+        # server side so we measure the network-path cost, not console
+        # I/O. Matches how a benchmarked Go/Node server runs.
         env = os.environ.copy()
         env["TULPAR_HTTP_QUIET"] = "1"
-        results.append(bench_server("Tulpar Wings", [tulpar_bin], 8765,
-                                     args.requests, args.connections,
-                                     env=env))
+
+        # Build + bench each Wings listener variant.
+        for label, port, call, suffix in WINGS_VARIANTS:
+            tpr_path = os.path.join(wd, f"wings_{suffix}.tpr")
+            bin_base = os.path.join(wd, f"wings_{suffix}")
+            with open(tpr_path, "w", encoding="utf-8") as f:
+                f.write(wings_src(call))
+            subprocess.check_call(
+                [exe, "build", tpr_path, bin_base],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                timeout=60,
+            )
+            tulpar_bin = bin_base + (".exe" if sys.platform == "win32" else "")
+            results.append(bench_server(
+                label, [tulpar_bin], port,
+                args.requests, args.connections,
+                env=env,
+            ))
 
         # Python baseline (ThreadingHTTPServer)
         py_path = os.path.join(wd, "py_baseline.py")
