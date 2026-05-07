@@ -55,7 +55,19 @@ bool Parser::check(TulparTokenType type) const {
 
 Token Parser::expect(TulparTokenType type, const std::string& error_msg) {
     if (!check(type)) {
-        error(error_msg + " at line " + std::to_string(current().line()));
+        // For "expected X after Y" failures, the user wrote Y on line N
+        // and forgot X. The current token has already moved past the
+        // gap (typically to the start of the next statement on line N+1),
+        // so reporting `current().line()` shows the user the wrong line.
+        // Prefer the previously-consumed token's line: that's where Y
+        // actually ends, which matches the user's mental model of
+        // "I forgot a `;` on this line".
+        int err_line = current().line();
+        if (position_ > 0) {
+            int prev_line = tokens_[position_ - 1].line();
+            if (prev_line > 0) err_line = prev_line;
+        }
+        error(error_msg + " at line " + std::to_string(err_line));
     }
     Token tok = current();
     advance();
@@ -173,6 +185,17 @@ void Parser::error(const std::string& message) {
     std::string clean = message;
     auto pos = clean.find(" at line ");
     if (pos != std::string::npos) {
+        // Embedded "at line N" — prefer it. expect() now passes the
+        // previous-token line for "expected X after Y" errors, which
+        // matches where the user actually forgot the construct rather
+        // than where the parser's cursor ended up.
+        const char *p = message.c_str() + pos + 9;  // strlen(" at line ")
+        int parsed = 0;
+        while (*p >= '0' && *p <= '9') {
+            parsed = parsed * 10 + (*p - '0');
+            p++;
+        }
+        if (parsed > 0) line = parsed;
         clean = clean.substr(0, pos);
     }
     // Localize the bare expectation ("Expected ';' after expression",
