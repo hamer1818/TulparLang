@@ -208,6 +208,75 @@ std::string normalise_line_spacing(const std::string &content) {
             out.push_back('{');
             continue;
         }
+        // Identifier directly followed by `{` — same gofmt rule applied
+        // to return types (`func f(): int{`), struct heads (`Point p{`),
+        // etc. Without this, the keyword-spacing pass leaves `int{` and
+        // similar token glue intact.
+        if (c == '{' && !out.empty()) {
+            char prev = out.back();
+            bool is_word_char = (prev >= 'a' && prev <= 'z') ||
+                                (prev >= 'A' && prev <= 'Z') ||
+                                (prev >= '0' && prev <= '9') ||
+                                prev == '_';
+            if (is_word_char) {
+                out.push_back(' ');
+                out.push_back('{');
+                continue;
+            }
+        }
+
+        // Generic type opener: `array<int>`, `array<json>`, etc. Tulpar
+        // tokenizes these as single TOKEN_ARRAY_INT-style tokens but the
+        // formatter walks the source character-by-character, so without
+        // a lookahead `<` falls through to the binary-operator path and
+        // gets spaced into `array < int >`. Detect the closed shape
+        // `<TYPE>` and emit it verbatim.
+        if (c == '<') {
+            static const char *const kGenericInner[] = {
+                "int", "float", "str", "bool", "json", "array"
+            };
+            // Walk past optional whitespace after `<`, match a type
+            // keyword, walk past optional whitespace, require `>`.
+            size_t p = i + 1;
+            while (p < content.size() &&
+                   (content[p] == ' ' || content[p] == '\t')) p++;
+            int matched = 0;
+            for (auto kw : kGenericInner) {
+                size_t kw_len = std::strlen(kw);
+                if (p + kw_len > content.size()) continue;
+                if (std::memcmp(&content[p], kw, kw_len) != 0) continue;
+                char after = (p + kw_len < content.size())
+                                 ? content[p + kw_len] : '\0';
+                bool word_break = !((after >= 'a' && after <= 'z') ||
+                                    (after >= 'A' && after <= 'Z') ||
+                                    (after >= '0' && after <= '9') ||
+                                    after == '_');
+                if (!word_break) continue;
+                matched = (int)kw_len;
+                break;
+            }
+            if (matched) {
+                size_t q = p + matched;
+                while (q < content.size() &&
+                       (content[q] == ' ' || content[q] == '\t')) q++;
+                if (q < content.size() && content[q] == '>') {
+                    // Confirmed generic. The whitespace pass above may
+                    // already have queued a space before `array`; we
+                    // want exactly one space between the previous token
+                    // and `array`, but no space between `array` and `<`,
+                    // nor between `<` and the type, etc. The `array`
+                    // text is already in `out`; trim a trailing space
+                    // we may have just emitted.
+                    while (!out.empty() && out.back() == ' ') out.pop_back();
+                    out.push_back('<');
+                    out.append(&content[p], (size_t)matched);
+                    out.push_back('>');
+                    i = q;  // skip past the `>` (loop increments)
+                    continue;
+                }
+            }
+            // Not a generic — fall through to binary-op handling.
+        }
 
         // Multi-char operators: detect `==`, `!=`, `<=`, `>=`, `&&`,
         // `||`, `+=`, `-=`, `*=`, `/=` and `=` standalone.

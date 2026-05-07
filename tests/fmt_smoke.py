@@ -111,6 +111,45 @@ def main() -> int:
     if "pozitif,  ok" not in formatted:
         failures.append("string-content normalised (must not be touched)")
 
+    # Check 9: identifier directly followed by `{` gets a space inserted —
+    # `func add(...): int{` should become `func add(...): int {`.
+    edge_input = (
+        "func add(int a, int b): int{return a + b;}\n"
+        "array<int> nums = [1,2,3];\n"
+        "json o = {\"a\":1,\"b\":2};\n"
+    )
+    edge_out = run_fmt(exe, edge_input)
+    if "int{" in edge_out:
+        failures.append(
+            f"token-pass: `int{{` not separated into `int {{` "
+            f"({edge_out!r})"
+        )
+    elif ": int {" not in edge_out:
+        failures.append(
+            f"token-pass: expected `: int {{` after fix, got {edge_out!r}"
+        )
+    # Check 10: generic types `array<int>` keep their angle brackets
+    # tight — pre-fix this came out as `array < int >` because the
+    # binary-op path treated `<` and `>` as comparisons.
+    if "array < int >" in edge_out:
+        failures.append(
+            f"generic-type spacing: `array<int>` got binary-op spaces "
+            f"in {edge_out!r}"
+        )
+    elif "array<int>" not in edge_out:
+        failures.append(
+            f"generic-type spacing: expected `array<int>` verbatim, "
+            f"got {edge_out!r}"
+        )
+    # Check 11: object literal keys still get one space after the colon
+    # (this is unchanged from before, but the new generic-detect logic
+    # sits next to the colon path so guard against accidental drift).
+    if "\"a\": 1" not in edge_out:
+        failures.append(
+            f"json key spacing regressed: expected `\"a\": 1` in "
+            f"{edge_out!r}"
+        )
+
     if failures:
         print("FAIL:")
         for f in failures:
