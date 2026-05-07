@@ -6,7 +6,13 @@
 
 ## 📊 Mevcut durum
 
-- **EKSIKLER.md:** 47 madde, hepsi RESOLVED
+- **EKSIKLER.md:** 60 madde, hepsi RESOLVED — son tur (#51-60): wings TLS+mutex
+  removal, streaming http_recv (16 MiB cap + env override), counter atomic RMW
+  superinstruction, registry semver-aware latest + audit retention + per-IP rate
+  limit, pkg semver range resolver (`^`, `~`, compound `>=1,<2`), CORS preflight
+  auto-204, MSYS2 OpenSSL build default, struct arena-alloc (malloc'suz push),
+  pkg.tulparlang.dev palette + favicon + 4 sayfa rollout
+- **EKSIKLER.md (eski sayım):** 47 madde RESOLVED
 - **Test paketi:** 30 example + 9 unit suite — **39/39 PASS** + 7/7 smoke
   (lsp, fmt, keepalive, pkg, http_client, production, **async_wings**)
   - `tests/lsp_smoke.py` (init, hover, completion, definition, references, rename, diagnostics — 9/9 check)
@@ -430,42 +436,86 @@ hata: 'greting' adında bir fonksiyon bulunamadı
 
 ---
 
-## 🔜 Kalan işler (önceliğe göre)
+## 🔜 Kalan işler — v0.9 RC → v1.0 yol haritası
 
-### Faz 2 devamı — Python kadar kolay'ın kalan rötuşları
+### 🔴 Adım 1 — Codegen miscompile (kritik, açık)
 
-- **Parse hatası satır numarası recovery** — şu an bazen sonraki satırı raporluyor, kullanıcı için kafa karıştırıcı.
-- **`tulpar fmt`** — gofmt-stil idempotent formatlayıcı; eklenti format-on-save kullanır.
-- **Parse error multi-error mode** — şu an ilk fatal'da duruyor; tüm hataları toplu göstermek isteniyorsa toplu mod.
+PR #84 wings cookies SIGSEGV'ini hot-fix'le kapattı (`_request["cookies"] = func()`
+yazma yolu kapatıldı, helper public oldu). Asıl codegen miscompile arka planda
+duruyor: tam wings symbol table altında "function-returning-object →
+global-subscript-write" deseni `vm_object_set: obj=NULL` ile çöküyor.
 
-### Faz 2 — bittiği için kalan UX iyileştirmeleri (yeni ileri iş)
+- Repro scaffold'u büyüt — wings'in tüm symbol table'ını içe alan minimal test.
+- `--emit-llvm` ile IR diff, lowering yolunu izle.
+- Kök neden: muhtemelen `_request = req` atamasının TLS / global slot'a
+  propagasyonu kaybolan bir yan yol.
 
-- **LSP Stage 4 — find-references + rename** (her ikisi de symbol-usage indeksi gerektirir; AST visitor)
-- **LSP signature help** (parametre içindeyken aktif imza ipucu — virgül üstüne hover gibi)
-- **Variable / type hover + completion** — şu an sadece function ve keyword tamamlanıyor
-- **Incremental document sync** (`change: 2`) — büyük dosyalarda 100 ms+ → diff-based
-- **`tulpar fmt` token pass** — operatör/virgül boşluğu (`a+b` → `a + b`), `,` sonrası tek boşluk, `func   add` → `func add`
+### 🟠 Adım 2 — CI runtime smoke (yüksek, açık)
 
-### Faz 3 — Production-ready API
+`COMPILE_ONLY_TESTS` listesi sadece derleniyor — PR #76 wings regresyonu 4 PR
+boyunca main'de yattı. `build.sh test` ve `run_tests.ps1`'e wings/router/api
+örnekleri için spawn → 200 ms bekle → curl `/healthz` → kill akışı eklenmeli.
 
-- **HTTP keepalive + streaming receive** — şu an 8KB tek receive, her request yeni bağlantı kuruluyor.
-- **Async I/O server** (epoll / kqueue / IOCP) — şu an tek-thread accept loop, "C kadar hızlı" iddiasını HTTP tarafında karşılamıyor.
-- **TLS / HTTPS** — BoringSSL / OpenSSL bind.
-- **Logging + metrics + graceful shutdown** + `/healthz`, `/metrics` endpoint'leri.
-- **OpenAPI auto-generation** — route tanımlarından `swagger.json`. "5 dakikada API + dokümantasyon" satılır.
+### Faz 2 devamı — Python kadar kolay rötuşları
 
-### Yan iş — ekosistem
+- Parse hatası satır numarası recovery (bazen sonraki satırı raporluyor).
+- Parse error multi-error mode (şu an ilk fatal'da duruyor).
+- LSP variable + type hover/completion (şu an sadece function ve keyword).
+- LSP signature help (parametre içindeyken aktif imza ipucu).
+- Incremental document sync (`change: 2`) — büyük dosyalarda diff-based.
+- `tulpar fmt` token-pass kenar durumları.
 
-- **`tulpar package` / `tulpar.toml`** — paket yöneticisi; ekosistem için olmazsa olmaz.
-- **ORM / QueryBuilder** — SQLite zaten gömülü; `User.find(id=1)` "Python kadar kolay" zirvesi.
-- **Daha fazla unit test** — `tests/router.test.tpr`, JSON edge cases, file IO.
-- **Docs** — sloganı yansıtan quick-start, örnekler.
+### Faz 3 — Production-ready API (kalan)
+
+- **Async I/O server** — epoll/kqueue/IOCP. Şu an `listen()` tek-thread,
+  `listen_async()` thread-per-connection — event-loop modeline geçiş "C kadar
+  hızlı" iddiasını HTTP tarafında da karşılar.
+- **TLS doğrulama E2E** — code path hazır, MSYS2 OpenSSL default'u commit
+  7ceca74 ile geldi; `https://` GET + `wings_tls` listener tam yol smoke testi
+  hâlâ bekliyor.
+- **Wings TLS listener** — server-side `SSL_accept` + per-request
+  `SSL_read/write`; client TLS altyapısıyla simetrik.
+- **Trust-store config** — `SSL_VERIFY_NONE` yerine kullanıcı CA bundle yolu.
+- **WebSocket / SSE** — Wings'te uzun yaşayan bağlantı tipi yok.
+- **Codegen full atomic** — top-level int globals ✅ (PR #81); imported pass
+  globals'a aynı superinstruction lazım (boxed VMValue → native i64 hardening).
+
+### Ekosistem + tooling
+
+- `tests/router.test.tpr`, JSON edge case'leri, file IO unit test'leri.
+- Quickstart + language reference + pkg guide → `tulparlang.dev/docs/`.
+- Multi-file `.tpr` paket arşivleri (tar/zip extraction).
+- `tulpar update` binary release artifacts pull mekanizması.
+- Daha fazla 3rd-party paket (community discovery için pkg.tulparlang.dev'de
+  "featured" section).
+
+### 🎯 v1.0 = "dil tam oldu" kriterleri
+
+1. **Sıfır bilinen davranış regresyonu** — `git log --grep="fix(.*regression"`
+   boş; CI compile + runtime gate'leri yeşil.
+2. **Motto taşınıyor** — benchmark'lar Go/Java sınıfında; örnekler Python kadar
+   okunur.
+3. **Ekosistem self-host** — tulpar-be production'da, pkg.tulparlang.dev paket
+   sunuyor; 3rd-party kullanıcı `tulpar pkg add foo@^1` ile çalışan dep
+   ekleyebiliyor.
+4. **Dokümantasyon eşiği** — quickstart + language reference + pkg guide
+   `tulparlang.dev/docs/` altında canlı.
+5. **Stable release** — `v1.0.0` git tag + binary release artifacts; `tulpar
+   update` mekanizması bunu çekiyor.
+
+**Tahmini takvim:**
+
+| Aşama | İçerik | Süre |
+|-------|--------|-----:|
+| v0.9 RC | Adım 1 + Adım 2 + Faz 2 rötuşu | 3-4 hafta |
+| v1.0 | Faz 3 (async I/O, TLS doğrulama, Wings TLS) + docs + benchmark refresh | 2-3 ay |
 
 ### Bilinen ufak konular
 
-- `assert_throws` çalışıyor ama bazı `string ==` edge case'lerinde toString roundtrip gerek.
-- `[AOT]` mesajları verbose build modunda çıkıyor (silent path temiz). İleride clean-stdout flag istenirse eklenir.
-- Parse error recovery satır no'su occasionally bir satır kayık (ayrı tur).
+- `assert_throws` çalışıyor ama bazı `string ==` edge case'lerinde toString
+  roundtrip gerek.
+- `[AOT]` mesajları verbose build modunda çıkıyor (silent path temiz).
+- Parse error recovery satır no'su occasionally bir satır kayık.
 
 ---
 
