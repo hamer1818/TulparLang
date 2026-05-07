@@ -17,6 +17,20 @@
 #include <cstdlib>
 #include <cstring>
 
+// Globals that the runtime needs a per-thread view of. Wings' `_request`
+// is set + read once per HTTP request; with shared storage, parallel
+// worker threads race on it and the lib-level workaround was a mutex
+// covering the whole "set _request → dispatch handler" critical section.
+// Marking it TLS lets each thread mutate its own copy and the mutex
+// goes away. Keep this list narrow — TLS reads are slightly more
+// expensive than plain globals, so only flag identifiers that actually
+// need per-thread storage.
+static bool global_needs_tls(const char *name) {
+  if (!name)
+    return false;
+  return strcmp(name, "_request") == 0;
+}
+
 char *my_strdup(const char *s) {
   if (!s)
     return nullptr;
@@ -5168,6 +5182,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
               LLVMSetInitializer(global_var,
                                  LLVMConstNull(backend->vm_value_type));
               LLVMSetLinkage(global_var, LLVMInternalLinkage);
+              if (global_needs_tls(decl->name)) {
+                LLVMSetThreadLocalMode(global_var,
+                                       LLVMGeneralDynamicTLSModel);
+              }
             }
           }
         }
@@ -6175,11 +6193,18 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
                 backend->module, backend->int_type, decl->name);
             LLVMSetInitializer(ig, LLVMConstInt(backend->int_type, 0, 0));
             add_local_typed(backend, decl->name, nullptr, INFERRED_INT, ig);
+            if (global_needs_tls(decl->name)) {
+              LLVMSetThreadLocalMode(ig, LLVMGeneralDynamicTLSModel);
+            }
           } else {
             LLVMValueRef global_var = LLVMAddGlobal(
                 backend->module, backend->vm_value_type, decl->name);
             LLVMSetInitializer(global_var,
                                LLVMConstNull(backend->vm_value_type));
+            if (global_needs_tls(decl->name)) {
+              LLVMSetThreadLocalMode(global_var,
+                                     LLVMGeneralDynamicTLSModel);
+            }
           }
         }
       }
