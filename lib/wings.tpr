@@ -80,13 +80,26 @@ func del(str path, str handler) {
 }
 
 // ----- Internals -----------------------------------------------------------
-// Pull `Cookie:` out of the parsed headers object and run it through
-// the native `parse_cookies` builtin. Empty object when the header is
-// absent or empty so handlers can always do `_request["cookies"]["sid"]`
-// without a length() guard. Tries both casings — `http_parse_request`
+// Pull `Cookie:` out of the parsed headers object and run it through the
+// native `parse_cookies` builtin. Returns an empty object when the
+// header is absent or empty. Tries both casings — `http_parse_request`
 // preserves wire case, but most browsers send `Cookie` while curl
 // defaults to `cookie`.
-func _wings_extract_cookies(json req) {
+//
+// Public: handlers that want cookies call this themselves with
+// `_request` as the argument:
+//   json cookies = wings_cookies(_request);
+//   str sid = cookies["sid"];
+//
+// We deliberately do NOT auto-populate `_request["cookies"]` from the
+// dispatcher — there's a Linux AOT codegen miscompile (tracked
+// separately) where assigning a function-call's object return into a
+// global subscript leaves the global with a NULL `obj_val`, which
+// crashes the next request's `_request[...] = ...` write inside
+// `vm_object_set`. The repro is small but the root-cause fix is in
+// codegen, not here. Until that lands, wings exposes the helper and
+// lets handlers opt in.
+func wings_cookies(json req) {
     json headers = req["headers"];
     str raw = headers["Cookie"];
     if (length(raw) == 0) {
@@ -427,7 +440,6 @@ func _wings_serve_connection(json client_arg) {
         bool is_options = (method == "OPTIONS");
         if (is_options) {
             _request["params"] = {};
-            _request["cookies"] = {};
             _wings_requests_total = _wings_requests_total + 1;
             _wings_requests_2xx = _wings_requests_2xx + 1;
             str preflight = http_create_response(
@@ -456,9 +468,9 @@ func _wings_serve_connection(json client_arg) {
         // Captured path params land in _request["params"] for the
         // handler to read. Empty json when route had no `:name` segments.
         _request["params"] = route_match["params"];
-        // Cookies always present (empty object when no Cookie header) so
-        // handlers can read `_request["cookies"]["sid"]` without guards.
-        _request["cookies"] = _wings_extract_cookies(req);
+        // Cookies are NOT auto-populated — handlers that need them call
+        // `wings_cookies(_request)` themselves. See the helper's
+        // doc-comment for the codegen reason.
         json result = {};
         bool found = false;
         if (route_idx >= 0) {
@@ -662,7 +674,6 @@ func listen(int port) {
             // OPTIONS gets a synthetic 204 with the default header set).
             if (method == "OPTIONS") {
                 _request["params"] = {};
-                _request["cookies"] = {};
                 str preflight = http_create_response(
                     204, "text/plain; charset=utf-8", "", _default_headers, keep);
                 socket_send(client, preflight);
@@ -688,8 +699,8 @@ func listen(int port) {
                 is_head = true;
             }
             _request["params"] = route_match["params"];
-            // Same cookie expansion as the async path.
-            _request["cookies"] = _wings_extract_cookies(req);
+            // Cookies are NOT auto-populated — see the matching note
+            // in the async path / `wings_cookies` helper.
             str response = "";
             _wings_requests_total = _wings_requests_total + 1;
             if (route_idx >= 0) {
