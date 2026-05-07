@@ -208,6 +208,8 @@ typedef struct {
   LLVMValueRef func_aot_socket_send;
   LLVMValueRef func_aot_socket_receive;
   LLVMValueRef func_aot_socket_close;
+  LLVMValueRef func_aot_socket_set_nonblocking;
+  LLVMValueRef func_aot_socket_poll;
 
   // Dynamic Call (Wings support)
   LLVMValueRef func_aot_call_dynamic;

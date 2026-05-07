@@ -2997,6 +2997,107 @@ VMValue aot_socket_close(VMValue fdVal) {
   }
   return VM_INT(0);
 }
+
+// Set a socket to non-blocking mode. Returns 1 on success, 0 on failure.
+// Used by `listen_evented` so accept() and recv() don't park the entire
+// event loop when the client hasn't filled its TCP buffers yet.
+VMValue aot_socket_set_nonblocking(VMValue fdVal) {
+  if (!IS_INT(fdVal))
+    return VM_INT(0);
+  tulpar_socket fd = (tulpar_socket)AS_INT(fdVal);
+  return VM_INT(tulpar_socket_set_nonblocking(fd, 1) == 0 ? 1 : 0);
+}
+
+// Poll an array of fds for read-ready events. Input is a Tulpar `json`
+// array of integer fds; output is a fresh `json` array of indices into
+// the input that have POLLIN | POLLERR | POLLHUP set after the call.
+//
+// `timeout_ms` follows poll(2) semantics: 0 = non-blocking probe,
+// negative = block forever, positive = block up to N ms.
+//
+// We watch POLLIN only (not POLLOUT) because the simple per-request
+// model in `listen_evented` does send() blocking after handler dispatch
+// — the trade-off is no partial-write resume, which would matter for
+// streaming responses but doesn't for our typical < 64 KiB JSON
+// payloads. POLLERR / POLLHUP go straight to "fire" so the loop can
+// observe peer disconnect and clean up the slot.
+VMValue aot_socket_poll(VMValue fdsVal, VMValue timeoutVal) {
+  // Allocator helper: build an ObjArray with the given count of items
+  // copied from `src` (or zeros if src is null). Arena-allocated so the
+  // per-request reset reclaims memory automatically inside Wings.
+  auto make_arr = [](int n, const VMValue *src) -> VMValue {
+    ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
+    a->obj.type = OBJ_ARRAY;
+    a->obj.arena_allocated = 1;
+    a->obj.next = nullptr;
+    a->obj.ref_count = 1;
+    a->obj.is_moved = 0;
+    a->capacity = n;
+    a->count = n;
+    if (n > 0) {
+      a->items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * (size_t)n);
+      if (src) {
+        for (int i = 0; i < n; i++) a->items[i] = src[i];
+      }
+    } else {
+      a->items = nullptr;
+    }
+    return VM_OBJ((Obj *)a);
+  };
+
+  if (!IS_ARRAY(fdsVal)) {
+    return make_arr(0, nullptr);
+  }
+  ObjArray *arr = AS_ARRAY(fdsVal);
+  int nfds = (int)arr->count;
+  if (nfds <= 0) {
+    return make_arr(0, nullptr);
+  }
+  // Cap to a sane maximum; 4096 fds in one Tulpar process is well past
+  // what `listen_evented` will ever reach and keeps stack usage bounded.
+  if (nfds > 4096) nfds = 4096;
+
+  // Stack buffer for small fd counts (the common case — a server with
+  // < 256 concurrent conns) so we don't malloc/free per tick.
+  tulpar_pollfd small_buf[256];
+  tulpar_pollfd *pfds = (nfds <= 256)
+                            ? small_buf
+                            : (tulpar_pollfd *)malloc(sizeof(tulpar_pollfd) * (size_t)nfds);
+  if (!pfds) {
+    return make_arr(0, nullptr);
+  }
+
+  for (int i = 0; i < nfds; i++) {
+    VMValue v = arr->items[i];
+    int64_t fd = IS_INT(v) ? AS_INT(v) : -1;
+    pfds[i].fd = (tulpar_socket)fd;
+    pfds[i].events = POLLIN;
+    pfds[i].revents = 0;
+  }
+
+  int timeout_ms = IS_INT(timeoutVal) ? (int)AS_INT(timeoutVal) : 0;
+  int rc = tulpar_socket_poll(pfds, (unsigned int)nfds, timeout_ms);
+
+  // Walk results into a stack buffer first; sized to nfds so it always
+  // fits even with everything firing at once.
+  VMValue stack_ready[256];
+  VMValue *ready_buf = (nfds <= 256)
+                           ? stack_ready
+                           : (VMValue *)malloc(sizeof(VMValue) * (size_t)nfds);
+  int ready_count = 0;
+  if (rc > 0 && ready_buf) {
+    for (int i = 0; i < nfds; i++) {
+      if (pfds[i].revents & (POLLIN | POLLERR | POLLHUP)) {
+        ready_buf[ready_count++] = VM_INT((int64_t)i);
+      }
+    }
+  }
+
+  VMValue out = make_arr(ready_count, ready_buf);
+  if (pfds != small_buf) free(pfds);
+  if (ready_buf != stack_ready) free(ready_buf);
+  return out;
+}
 // ============================================================================
 // Threading Functions (AOT) - Cross-platform threading
 // ============================================================================

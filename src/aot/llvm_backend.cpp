@@ -964,6 +964,20 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_socket_close =
       LLVMAddFunction(backend->module, "aot_socket_close", sock_close_type);
 
+  // aot_socket_set_nonblocking(fd) -> int (1 ok, 0 fail). Same signature
+  // as socket_close so we reuse `sock_close_type`.
+  backend->func_aot_socket_set_nonblocking = LLVMAddFunction(
+      backend->module, "aot_socket_set_nonblocking", sock_close_type);
+
+  // aot_socket_poll(fds_array, timeout_ms) -> json array of indices.
+  // 2 VMValue params, returns VMValue.
+  LLVMTypeRef sock_poll_params[] = {backend->vm_value_type,
+                                    backend->vm_value_type};
+  LLVMTypeRef sock_poll_type =
+      llvm_make_vmvalue_func_type(backend, sock_poll_params, 2, 0);
+  backend->func_aot_socket_poll =
+      LLVMAddFunction(backend->module, "aot_socket_poll", sock_poll_type);
+
   // aot_call_dynamic(handler_name) -> VMValue
   // Param is VMValue (string)
   LLVMTypeRef call_dyn_params[] = {backend->vm_value_type};
@@ -3537,6 +3551,20 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_socket_close,
                                     args, 1, "sock_close_res");
+    }
+    if (strcmp(node->name, "socket_set_nonblocking") == 0 &&
+        node->argument_count == 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(
+          backend, backend->func_aot_socket_set_nonblocking, args, 1,
+          "sock_nonblock_res");
+    }
+    if (strcmp(node->name, "socket_poll") == 0 &&
+        node->argument_count == 2) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
+                             codegen_expression(backend, node->arguments[1])};
+      return llvm_call_vmvalue_func(
+          backend, backend->func_aot_socket_poll, args, 2, "sock_poll_res");
     }
 
     // ====== Threading Functions ======

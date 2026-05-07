@@ -147,4 +147,43 @@ static inline int tulpar_socket_would_block(int error_code) {
 }
 #endif
 
+// ============================================================================
+// poll() / WSAPoll() — same API on POSIX and Windows
+// ============================================================================
+//
+// Used by `listen_evented` in lib/wings.tpr to multiplex many client
+// sockets on a single thread without spawning threads per connection.
+// We expose the POSIX `struct pollfd` shape directly because Winsock2's
+// WSAPOLLFD has identical layout (validated on MSYS2 mingw-w64);
+// callers fill in `events` (POLLIN / POLLOUT) and read `revents` after
+// the call.
+//
+// Return: count of fds with non-zero `revents`, or -1 on error.
+
+#if PLATFORM_WINDOWS
+    // WSAPOLLFD lives in <winsock2.h> already included above. WSAPoll
+    // ships in Vista+ — every Windows we target.
+    typedef WSAPOLLFD tulpar_pollfd;
+#else
+    #include <poll.h>
+    typedef struct pollfd tulpar_pollfd;
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+static inline int tulpar_socket_poll(tulpar_pollfd *fds, unsigned int nfds,
+                                     int timeout_ms) {
+#if PLATFORM_WINDOWS
+    return WSAPoll(fds, (ULONG)nfds, timeout_ms);
+#else
+    return poll(fds, (nfds_t)nfds, timeout_ms);
+#endif
+}
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif // TULPAR_PLATFORM_SOCKETS_H
