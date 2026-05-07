@@ -518,6 +518,88 @@ func _wings_serve_connection(json client_arg) {
     socket_close(client);
 }
 
+// Pre-spawned worker pool. Each worker thread is a perpetual
+// `accept()` loop on the shared listening socket. The kernel serialises
+// concurrent accept() across processes/threads, so only one worker
+// wakes per incoming connection — no thundering-herd pause and no
+// thread-creation cost per request.
+//
+// This is the "thread pool" middle ground between sync `listen` (one
+// in-flight request) and `listen_async` (one OS thread per request).
+// At 1k req/s, listen_async creates 1000 threads/sec; listen_pool
+// reuses N. Empirically 4-16 workers saturate a single CPU core's
+// worth of HTTP work; tune to physical cores for CPU-bound handlers.
+//
+// The socket fd is boxed into a `json` parameter because
+// `thread_create` passes its argument through the canonical VMValue
+// ABI rather than a native i64 register; the worker unboxes on entry.
+// This is the same pattern `listen_async` uses for per-conn fds.
+func _wings_pool_worker(json server_box) {
+    int server = server_box;
+    while (true) {
+        int client = socket_accept(server);
+        if (client < 0) {
+            continue;
+        }
+        // Reuse the existing per-connection serve function — keep-alive
+        // loop, arena reset, request counters, etc. all already there.
+        json c = client;
+        _wings_serve_connection(c);
+    }
+}
+
+func listen_pool(int port, int n_workers) {
+    if (n_workers < 1) {
+        n_workers = 4;
+    }
+    if (_find_route("GET", "/healthz") < 0) {
+        get("/healthz", "_wings_healthz");
+    }
+    if (_find_route("GET", "/metrics") < 0) {
+        get("/metrics", "_wings_metrics");
+    }
+    _wings_apply_env_config();
+    _wings_started_at = timestamp();
+
+    print("");
+    print("  ╔═══════════════════════════════════╗");
+    print("  ║       Tulpar Wings v2.2 (pool)    ║");
+    print("  ║    Give your API wings! 🪶        ║");
+    print("  ╚═══════════════════════════════════╝");
+    print("");
+    print("  Routes:");
+    for (int i = 0; i < length(_routes); i++) {
+        json r = _routes[i];
+        print("    " + r["method"] + " " + r["path"] + " -> " + r["handler"] + "()");
+    }
+    print("");
+    print("  Server: http://127.0.0.1:" + toString(port) + " (worker pool, " + toString(n_workers) + ")");
+    print("  Press Ctrl+C to stop");
+    print("");
+
+    int server = socket_server("127.0.0.1", port);
+    if (server < 0) {
+        print("ERROR: Failed to start server!");
+        return;
+    }
+
+    // Spawn N worker threads, each blocks on accept() of the same
+    // listening socket. The first kernel-delivered connection wakes
+    // exactly one worker.
+    for (int i = 0; i < n_workers; i = i + 1) {
+        json sb = server;
+        int t = thread_create(_wings_pool_worker, sb);
+        thread_detach(t);
+    }
+
+    // Main thread parks. A "Ctrl+C breaks out" loop is enough — no
+    // need to also serve from main. Keeping main idle simplifies
+    // shutdown signalling once we add it.
+    while (true) {
+        sleep(60000);
+    }
+}
+
 func listen_async(int port) {
     if (_find_route("GET", "/healthz") < 0) {
         get("/healthz", "_wings_healthz");

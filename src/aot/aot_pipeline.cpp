@@ -70,7 +70,18 @@ struct AOTPhaseTimer {
 // `TULPAR_HAS_TLS` so a TLS-disabled build (no OpenSSL on the host) still
 // produces a working linker line.
 #if defined(TULPAR_HAS_TLS)
-  #define AOT_TLS_LINK_FLAGS " -lssl -lcrypto"
+  #if PLATFORM_WINDOWS
+    // MSYS2's static libcrypto.a pulls in CertFindCertificateInStore,
+    // CertCloseStore, CertOpenSystemStoreW (winstore_store provider) +
+    // raw socket calls (getsockopt, WSA*) on top of the usual ws2_32
+    // surface. Without -lcrypt32 the produced exe fails to link with
+    // a parade of `undefined reference to __imp_CertFindCertificateInStore`.
+    // ws2_32 is already in the Windows base flags below, so we don't
+    // duplicate it here.
+    #define AOT_TLS_LINK_FLAGS " -lssl -lcrypto -lcrypt32"
+  #else
+    #define AOT_TLS_LINK_FLAGS " -lssl -lcrypto"
+  #endif
 #else
   #define AOT_TLS_LINK_FLAGS ""
 #endif
@@ -91,10 +102,18 @@ struct AOTPhaseTimer {
 // Worth it: the user can now zip/email a single .exe to any 64-bit
 // Windows box and have it run.
 #if PLATFORM_WINDOWS
+  // Link order matters under MinGW's GNU ld: an archive only resolves
+  // symbols requested by libraries that came BEFORE it on the command
+  // line. libssl / libcrypto pull in WSA*, getsockopt, CertFind*, etc.,
+  // so they must appear LEFT of `-lws2_32 -lcrypt32`. The pre-PR-#92
+  // order had ws2_32 before libssl and produced a wall of
+  // `undefined reference to __imp_WSAGetLastError` once OpenSSL was
+  // available at build time on Windows.
   #define AOT_LINK_LIB_FLAGS \
       "-Wl,--export-all-symbols " \
       "-static -static-libgcc -static-libstdc++ " \
-      "-ltulpar_runtime -lws2_32 -lwsock32" AOT_TLS_LINK_FLAGS
+      "-ltulpar_runtime" AOT_TLS_LINK_FLAGS \
+      " -lws2_32 -lwsock32"
   #define AOT_LINK_PIE_FLAG ""
   #define AOT_EXE_SUFFIX ".exe"
   #define AOT_TMP_RUN_BASE ".tulpar_run"
