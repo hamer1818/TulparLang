@@ -22,9 +22,16 @@ bool http_fetch_url(const std::string &url, std::string &out_body,
 // line + headers + `\r\n\r\n` + body) so the caller can do its own
 // parsing — easier than threading a structured result back through
 // VMValue here.
+//
+// `extra_headers` is appended verbatim to the request after the
+// auto-generated `Host` / `User-Agent` / `Content-Length` / `Content-Type`
+// lines. Each header MUST end in `\r\n`; pass empty string when none are
+// needed. Used by `tulpar pkg publish` to add `Authorization: Bearer <…>`
+// without forking another HTTP path.
 bool http_request_url(const std::string &method, const std::string &url,
                       const std::string &body, std::string &out_full,
-                      std::string &out_err);
+                      std::string &out_err,
+                      const std::string &extra_headers = "");
 
 }  // namespace tulpar
 
