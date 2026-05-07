@@ -3,6 +3,13 @@ name: Linux & macOS Build (LLVM)
 on:
   push:
     branches: [ main, master, develop ]
+    # Tag pushes (e.g. `git tag v1.0.0 && git push origin v1.0.0`) also
+    # trigger this workflow so we can mint stable / explicitly-versioned
+    # releases without hand-running anything else. The create-release
+    # job below detects whether we're on a tag and uses the tag name
+    # verbatim as the version (vs. the rolling `v2.1.0.<run>` we
+    # auto-mint on main pushes).
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main, master ]
 
@@ -37,7 +44,12 @@ jobs:
           # embedded version (`tulpar --version`) matches the published
           # release tag — which is what `tulpar update --check` compares
           # against.
-          TULPAR_VERSION: v2.1.0.${{ github.run_number }}
+          # Tag-pushed builds embed the tag name (so `tulpar --version`
+          # shows e.g. `v1.0.0`); main-pushed builds get the rolling
+          # auto-version. Same expression used by the create-release job
+          # to keep `tulpar update --check` consistent with the embedded
+          # version string.
+          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v2.1.0.{0}', github.run_number) }}
         run: |
           mkdir -p build
           cd build
@@ -110,7 +122,12 @@ jobs:
       
       - name: Build with LLVM
         env:
-          TULPAR_VERSION: v2.1.0.${{ github.run_number }}
+          # Tag-pushed builds embed the tag name (so `tulpar --version`
+          # shows e.g. `v1.0.0`); main-pushed builds get the rolling
+          # auto-version. Same expression used by the create-release job
+          # to keep `tulpar update --check` consistent with the embedded
+          # version string.
+          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v2.1.0.{0}', github.run_number) }}
         run: |
           export PATH="/opt/homebrew/opt/llvm@18/bin:$PATH"
           export LLVM_DIR="/opt/homebrew/opt/llvm@18/lib/cmake/llvm"
@@ -172,7 +189,12 @@ jobs:
 
       - name: Build with LLVM
         env:
-          TULPAR_VERSION: v2.1.0.${{ github.run_number }}
+          # Tag-pushed builds embed the tag name (so `tulpar --version`
+          # shows e.g. `v1.0.0`); main-pushed builds get the rolling
+          # auto-version. Same expression used by the create-release job
+          # to keep `tulpar update --check` consistent with the embedded
+          # version string.
+          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v2.1.0.{0}', github.run_number) }}
         run: |
           clang --version
           llvm-config --version
@@ -283,7 +305,12 @@ jobs:
       - name: Build GUI installer (Inno Setup)
         shell: pwsh
         env:
-          TULPAR_VERSION: v2.1.0.${{ github.run_number }}
+          # Tag-pushed builds embed the tag name (so `tulpar --version`
+          # shows e.g. `v1.0.0`); main-pushed builds get the rolling
+          # auto-version. Same expression used by the create-release job
+          # to keep `tulpar update --check` consistent with the embedded
+          # version string.
+          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v2.1.0.{0}', github.run_number) }}
         run: |
           # Inno Setup's AppVersion expects pure x.y.z[.w], no leading 'v'.
           $appVersion = $env:TULPAR_VERSION -replace '^v',''
@@ -315,9 +342,16 @@ jobs:
   create-release:
     needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
+    # Releases come from two paths: every push to main produces a
+    # rolling `v2.1.0.<run>` release (used by `tulpar update` to roll
+    # users forward continuously), and every `v*` tag push produces a
+    # release named after the tag verbatim (used to mint stable
+    # versions like v1.0.0 that we don't want overwriting on the next
+    # main commit).
     if: |
-      github.event_name == 'push' && 
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' ||
+       startsWith(github.ref, 'refs/tags/v'))
     continue-on-error: true
     steps:
       - name: Download all artifacts
@@ -330,8 +364,17 @@ jobs:
         id: ver
         shell: bash
         run: |
-          TAG="v2.1.0.${GITHUB_RUN_NUMBER}"
+          # If the workflow was triggered by a tag push, use that tag
+          # name verbatim — that's the explicit "stable v1.0.0" path.
+          # Otherwise fall back to the rolling auto-version we mint on
+          # every push to main.
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="v2.1.0.${GITHUB_RUN_NUMBER}"
+          fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Using release tag: $TAG"
 
       # Generate a SHA-256 manifest covering every published release
       # asset. `tulpar update` and the install scripts both fetch this
