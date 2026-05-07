@@ -18,6 +18,22 @@ $compileOnly = @(
   'utils.tpr'
 )
 $skip = @()
+
+# HTTP smoke probes — see build.sh for rationale. The 2s alive check below
+# only verifies startup didn't crash, but wings/router examples block in
+# accept() so the handler-level bug class (Issue #86 / PR #76 cookies) sails
+# right through. Each entry below = "after alive check, HTTP GET this URL
+# with a 5s timeout; require any response code, otherwise FAIL". The body
+# and status are intentionally ignored — the bug fires before either is
+# produced, we just need the roundtrip.
+$smokeProbes = @{
+  'api_wings.tpr'         = 'http://127.0.0.1:3000/'
+  'api_wings_crud.tpr'    = 'http://127.0.0.1:3000/'
+  'api_router_crud.tpr'   = 'http://127.0.0.1:8080/'
+  '11_router_app.tpr'     = 'http://127.0.0.1:8080/'
+  '12_threaded_server.tpr'= 'http://127.0.0.1:8089/'
+}
+
 $total = 0; $pass = 0; $fail = 0; $skipped = 0; $timedOut = 0; $compileOnlyPass = 0
 $failed = @()
 $timeouts = @()
@@ -98,8 +114,39 @@ foreach ($f in (Get-ChildItem examples\*.tpr | Sort-Object Name)) {
           $smokeMsg = "exit $($smokeProc.ExitCode)"
         }
       } else {
-        # Still running after 2s — counts as healthy (blocked on accept).
-        # Tear it down before moving to the next example.
+        # Still alive after 2s. If we have an HTTP probe for this
+        # example, hit it now — the bare alive check otherwise lets
+        # handler-level crashes (Issue #86) pass undetected.
+        $probeUrl = $smokeProbes[$f.Name]
+        if ($probeUrl) {
+          try {
+            # -UseBasicParsing avoids IE engine init; TimeoutSec bounds the
+            # call so a hung handler doesn't wedge the suite.
+            $resp = Invoke-WebRequest -Uri $probeUrl -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+            # Any HTTP response is success — we don't care about status.
+            if (-not $smokeProc.HasExited -and $resp.StatusCode -gt 0) {
+              # Probe round-tripped, server still alive: real pass.
+            } else {
+              $smokeFailed = $true
+              $smokeMsg = "server died after probe"
+            }
+          } catch {
+            # Connect refused, timeout, or 5xx-with-throw all land here.
+            # Differentiate "server crashed" vs "probe couldn't reach":
+            # if the process exited during the probe, it crashed on the
+            # request — exactly the regression we want to catch.
+            if ($smokeProc.HasExited) {
+              $smokeFailed = $true
+              $smokeMsg = "server crashed on probe (exit $($smokeProc.ExitCode))"
+            } else {
+              # Server still alive but probe couldn't reach. Could be a
+              # genuine probe misconfiguration (wrong port). Still flag
+              # it so we notice rather than silently hide bugs.
+              $smokeFailed = $true
+              $smokeMsg = "probe failed: $($_.Exception.Message)"
+            }
+          }
+        }
         Stop-Process -Id $smokeProc.Id -Force -ErrorAction SilentlyContinue
         $smokeProc | Wait-Process -ErrorAction SilentlyContinue
       }
@@ -115,7 +162,8 @@ foreach ($f in (Get-ChildItem examples\*.tpr | Sort-Object Name)) {
       Write-Host ("FAIL(smoke {0}) {1} [compile {2}ms]" -f $smokeMsg, $f.Name, $compileTime)
       $fail++; $failed += "$($f.Name) (smoke $smokeMsg)"
     } else {
-      Write-Host ("PASS(compile-only +smoke) {0} [compile {1}ms]" -f $f.Name, $compileTime)
+      $probeNote = if ($smokeProbes[$f.Name]) { ' +probe' } else { '' }
+      Write-Host ("PASS(compile-only +smoke{0}) {1} [compile {2}ms]" -f $probeNote, $f.Name, $compileTime)
       $compileOnlyPass++
     }
     Remove-Item -ErrorAction SilentlyContinue -Force "$base.exe","$base.ll","$base.o"
