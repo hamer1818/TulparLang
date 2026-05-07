@@ -360,11 +360,19 @@ int cmd_install() {
         }
 
         // Registry version spec — anything that isn't `path:` / `url:`
-        // and the manifest declares a `[registry] url`. Resolution rule
-        // is intentionally simple: the registry MUST expose package
-        // sources at `<registry>/<name>/<version>.tpr`. Real semver
-        // ranges (`^0.2.0`, `>=1.0,<2`) are out of scope; the version
-        // string is taken literally as the URL fragment.
+        // and the manifest declares a `[registry] url`. The registry's
+        // well-known shape (defined by tulpar-be / pkg.tulparlang.dev)
+        // serves package source bytes at:
+        //
+        //   <registry>/v1/packages/<name>/versions/<version>/source
+        //
+        // The body is either a raw `.tpr` (single-file package) or a
+        // `.tpkg` JSON archive (multi-file bundle). The same
+        // content-sniff used by the `url:` branch above picks the
+        // right extraction path.
+        //
+        // Real semver ranges (`^0.2.0`, `>=1.0,<2`) are out of scope;
+        // the version string is taken literally as the URL fragment.
         if (spec.rfind("path:", 0) != 0) {
             if (m.registry_url.empty()) {
                 std::fprintf(stdout,
@@ -376,11 +384,11 @@ int cmd_install() {
             }
             std::string url = m.registry_url;
             if (!url.empty() && url.back() == '/') url.pop_back();
-            url += "/";
+            url += "/v1/packages/";
             url += name;
-            url += "/";
+            url += "/versions/";
             url += spec;
-            url += ".tpr";
+            url += "/source";
 
             if (local_matches_lock(name, url)) {
                 std::fprintf(stdout,
@@ -423,21 +431,60 @@ int cmd_install() {
             std::error_code ec2;
             fs::remove_all(dest_dir, ec2);
             fs::create_directories(dest_dir, ec2);
-            fs::path target = dest_dir / (name + ".tpr");
-            std::ofstream out(target, std::ios::binary | std::ios::trunc);
-            if (!out) {
-                std::fprintf(stderr,
-                             "tulpar pkg install: %s@%s: cannot write '%s'\n",
-                             name.c_str(), spec.c_str(),
-                             target.string().c_str());
-                return 1;
+
+            // Content-sniff: registry bodies can be raw .tpr OR a
+            // .tpkg JSON archive (e.g. multipkg). Same probe the `url:`
+            // branch uses — first non-whitespace byte `{` plus a
+            // `"tpkg"` schema key triggers the bundle path.
+            bool is_bundle = false;
+            {
+                size_t i = 0;
+                while (i < body.size() &&
+                       (body[i] == ' ' || body[i] == '\t' ||
+                        body[i] == '\n' || body[i] == '\r')) i++;
+                if (i < body.size() && body[i] == '{' &&
+                    body.find("\"tpkg\"") != std::string::npos) {
+                    is_bundle = true;
+                }
             }
-            out.write(body.data(), (std::streamsize)body.size());
-            std::fprintf(stdout,
-                         "  + %s@%s -> %s (%zu bytes from registry, sha256 %.12s...)\n",
-                         name.c_str(), spec.c_str(),
-                         target.string().c_str(), body.size(),
-                         body_sha.c_str());
+            if (is_bundle) {
+                Tpkg pkg;
+                std::string perr;
+                if (!tpkg_parse(body, pkg, perr)) {
+                    std::fprintf(stderr,
+                                 "tulpar pkg install: %s@%s: %s\n",
+                                 name.c_str(), spec.c_str(), perr.c_str());
+                    return 1;
+                }
+                if (!tpkg_extract(pkg, dest_dir.string(), perr)) {
+                    std::fprintf(stderr,
+                                 "tulpar pkg install: %s@%s: %s\n",
+                                 name.c_str(), spec.c_str(), perr.c_str());
+                    return 1;
+                }
+                std::fprintf(stdout,
+                             "  + %s@%s (.tpkg, %zu files) -> %s "
+                             "(%zu archive bytes, sha256 %.12s...)\n",
+                             name.c_str(), spec.c_str(), pkg.files.size(),
+                             dest_dir.string().c_str(), body.size(),
+                             body_sha.c_str());
+            } else {
+                fs::path target = dest_dir / (name + ".tpr");
+                std::ofstream out(target, std::ios::binary | std::ios::trunc);
+                if (!out) {
+                    std::fprintf(stderr,
+                                 "tulpar pkg install: %s@%s: cannot write '%s'\n",
+                                 name.c_str(), spec.c_str(),
+                                 target.string().c_str());
+                    return 1;
+                }
+                out.write(body.data(), (std::streamsize)body.size());
+                std::fprintf(stdout,
+                             "  + %s@%s -> %s (%zu bytes from registry, sha256 %.12s...)\n",
+                             name.c_str(), spec.c_str(),
+                             target.string().c_str(), body.size(),
+                             body_sha.c_str());
+            }
             lock_entries.push_back({name, url, body_sha});
             installed++;
             continue;
