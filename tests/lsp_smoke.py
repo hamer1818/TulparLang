@@ -273,6 +273,74 @@ def main() -> int:
             else:
                 print(f"rename OK ({len(file_edits)} edit(s) -> 'say_hi')")
 
+        # 5g. signatureHelp — load a program with a clearly-positioned call
+        # and ask for parameter info while the cursor is inside the parens.
+        sig_program = (
+            "func greet(str name): str {\n"   # line 0
+            "    return \"hi, \" + name;\n"
+            "}\n"
+            "func add(int a, int b): int {\n"  # line 3
+            "    return a + b;\n"
+            "}\n"
+            "print(greet(\"Hamza\"));\n"        # line 6: greet "(" at col 11
+            "print(add(1, 2));\n"               # line 7: add "(" at col 9
+        )
+        send(p, {"jsonrpc": "2.0", "method": "textDocument/didChange",
+                 "params": {"textDocument": {"uri": "file:///tmp/good.tpr", "version": 6},
+                            "contentChanges": [{"text": sig_program}]}})
+        diag = read_msg(p)
+        if diag.get("method") != "textDocument/publishDiagnostics" or \
+                diag["params"]["diagnostics"]:
+            failures.append(f"sig-help-prep: expected clean diags, got {diag!r}")
+
+        # Cursor right after greet's `(` — inside its first param.
+        send(p, {"jsonrpc": "2.0", "id": 20, "method": "textDocument/signatureHelp",
+                 "params": {"textDocument": {"uri": "file:///tmp/good.tpr"},
+                            "position": {"line": 6, "character": 12}}})
+        resp = read_msg(p)
+        if resp.get("id") != 20 or resp.get("result") is None:
+            failures.append(f"signatureHelp greet: bad response {resp!r}")
+        else:
+            sigs = resp["result"]["signatures"]
+            if not sigs or "greet" not in sigs[0]["label"]:
+                failures.append(f"signatureHelp greet: bad label {sigs!r}")
+            elif resp["result"]["activeParameter"] != 0:
+                failures.append(
+                    f"signatureHelp greet: expected activeParameter=0, "
+                    f"got {resp['result']['activeParameter']}")
+            else:
+                print(f"signatureHelp user-func OK: {sigs[0]['label']!r} (active=0)")
+
+        # Cursor after `1, ` in add(1, |2) — should report activeParameter=1.
+        send(p, {"jsonrpc": "2.0", "id": 21, "method": "textDocument/signatureHelp",
+                 "params": {"textDocument": {"uri": "file:///tmp/good.tpr"},
+                            "position": {"line": 7, "character": 13}}})
+        resp = read_msg(p)
+        if resp.get("id") != 21 or resp.get("result") is None:
+            failures.append(f"signatureHelp add active=1: bad response {resp!r}")
+        else:
+            ap = resp["result"]["activeParameter"]
+            if ap != 1:
+                failures.append(
+                    f"signatureHelp add active=1: expected 1, got {ap}")
+            else:
+                print("signatureHelp active-param tracking OK (commas counted)")
+
+        # Cursor inside print(...) — `print` is a builtin, so the catalog
+        # entry should drive the response.
+        send(p, {"jsonrpc": "2.0", "id": 22, "method": "textDocument/signatureHelp",
+                 "params": {"textDocument": {"uri": "file:///tmp/good.tpr"},
+                            "position": {"line": 6, "character": 6}}})
+        resp = read_msg(p)
+        if resp.get("id") != 22 or resp.get("result") is None:
+            failures.append(f"signatureHelp builtin: bad response {resp!r}")
+        else:
+            sigs = resp["result"]["signatures"]
+            if not sigs or "print" not in sigs[0]["label"]:
+                failures.append(f"signatureHelp builtin: bad label {sigs!r}")
+            else:
+                print(f"signatureHelp builtin OK: {sigs[0]['label']!r}")
+
         # 6. didChange with parse error (missing semicolon → expected ';')
         parse_bad = 'int x = 1\nint y = 2;\n'
         send(p, {"jsonrpc": "2.0", "method": "textDocument/didChange",

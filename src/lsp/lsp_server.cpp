@@ -305,6 +305,17 @@ cJSON *build_initialize_result() {
     cJSON *triggers = cJSON_AddArrayToObject(cp, "triggerCharacters");
     cJSON_AddItemToArray(triggers, cJSON_CreateString("."));
 
+    // Signature help: editor pops the parameter hint window when the user
+    // types `(` or `,` inside an arg list (or moves the cursor there).
+    // `retriggerCharacters` keeps the popup updated as the user moves
+    // between params via `,`.
+    cJSON *sh = cJSON_AddObjectToObject(caps, "signatureHelpProvider");
+    cJSON *sh_trig = cJSON_AddArrayToObject(sh, "triggerCharacters");
+    cJSON_AddItemToArray(sh_trig, cJSON_CreateString("("));
+    cJSON_AddItemToArray(sh_trig, cJSON_CreateString(","));
+    cJSON *sh_retrig = cJSON_AddArrayToObject(sh, "retriggerCharacters");
+    cJSON_AddItemToArray(sh_retrig, cJSON_CreateString(","));
+
     cJSON *info = cJSON_AddObjectToObject(result, "serverInfo");
     cJSON_AddStringToObject(info, "name", "tulpar-lsp");
     cJSON_AddStringToObject(info, "version", "0.2.0");
@@ -404,6 +415,123 @@ std::string word_at_position(const std::string &source, int line, int character)
 
     if (start >= end) return {};
     return source.substr(line_start + start, end - start);
+}
+
+// Locate the enclosing call site for the cursor and report which
+// parameter slot the cursor is in. Walks the source backwards from the
+// cursor offset, counting paren depth and commas at depth 0 below the
+// outermost unmatched `(`. Returns false when the cursor isn't inside
+// a call.
+//
+// `out_func_offset` is the byte offset of the first char of the
+// function name token preceding the open `(` — the caller uses it to
+// pull out the identifier with `is_ident_char`. `out_active_param`
+// counts commas (so the param right after `(` is index 0).
+//
+// String literals are tracked one quote at a time so a `(` or `,`
+// inside `"foo, bar"` doesn't fool us. Strings contain `"` only when
+// preceded by a `\`; we approximate with a 1-char lookback (good
+// enough for LSP heuristics — no need to fully tokenise for a
+// signature-help hint).
+bool find_enclosing_call(const std::string &src, size_t cursor_offset,
+                         size_t *out_func_offset, int *out_active_param) {
+    int depth = 0;
+    int commas = 0;
+    bool in_string = false;
+    char string_quote = 0;
+    // First pass — find the unmatched `(`. We count from cursor backwards
+    // because we need to know whether each comma we cross belongs to the
+    // outermost call (depth==0 at time of crossing).
+    if (cursor_offset > src.size()) cursor_offset = src.size();
+    long long i = (long long)cursor_offset - 1;
+    long long open_paren = -1;
+    while (i >= 0) {
+        char c = src[(size_t)i];
+        if (in_string) {
+            if (c == string_quote && (i == 0 || src[(size_t)i - 1] != '\\')) {
+                in_string = false;
+            }
+            i--;
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            in_string = true;
+            string_quote = c;
+            i--;
+            continue;
+        }
+        if (c == ')' || c == ']' || c == '}') {
+            depth++;
+        } else if (c == '(' || c == '[' || c == '{') {
+            if (depth == 0) {
+                if (c == '(') {
+                    open_paren = i;
+                    break;
+                }
+                // `[` or `{` at depth 0 means we're inside an array/object
+                // literal, not a call. No signature to show.
+                return false;
+            }
+            depth--;
+        } else if (c == ',' && depth == 0) {
+            commas++;
+        } else if (c == ';' && depth == 0) {
+            // Statement boundary — we walked too far; no enclosing call.
+            return false;
+        }
+        i--;
+    }
+    if (open_paren < 0) return false;
+
+    // Walk left of the `(` skipping whitespace, then collect the identifier.
+    long long j = open_paren - 1;
+    while (j >= 0 && (src[(size_t)j] == ' ' || src[(size_t)j] == '\t')) j--;
+    if (j < 0 || !is_ident_char(src[(size_t)j])) return false;
+    long long name_end = j + 1;
+    while (j >= 0 && is_ident_char(src[(size_t)j])) j--;
+    long long name_start = j + 1;
+    if (name_start >= name_end) return false;
+
+    *out_func_offset = (size_t)name_start;
+    *out_active_param = commas;
+    return true;
+}
+
+// Convert a byte offset in the source into the (line, col) that the
+// LSP-level word_at_position helper expects. Both 0-based — LSP coords.
+void offset_to_line_col(const std::string &src, size_t offset, int *line,
+                        int *col) {
+    int l = 0;
+    int c = 0;
+    for (size_t i = 0; i < offset && i < src.size(); i++) {
+        if (src[i] == '\n') {
+            l++;
+            c = 0;
+        } else {
+            c++;
+        }
+    }
+    *line = l;
+    *col = c;
+}
+
+// Translate (line, character) — both 0-based, LSP convention — to a
+// linear byte offset in `src`. Tabs count as one character (LSP treats
+// them as one code unit unless the client negotiates otherwise, which
+// no real editor does).
+size_t line_col_to_offset(const std::string &src, int line, int character) {
+    size_t i = 0;
+    int cur_line = 0;
+    while (i < src.size() && cur_line < line) {
+        if (src[i] == '\n') cur_line++;
+        i++;
+    }
+    int cur_col = 0;
+    while (i < src.size() && cur_col < character && src[i] != '\n') {
+        i++;
+        cur_col++;
+    }
+    return i;
 }
 
 // Render a function signature in the form
@@ -671,6 +799,149 @@ void handle_rename(DocumentStore &docs, cJSON *id, cJSON *params) {
     send_response(id, edit);
 }
 
+// Split a rendered signature label like
+//   "name(p1: type, p2: type, ...): ret"
+// into per-parameter [start, end) byte ranges over the label string.
+// LSP wants the param label expressed as offsets into the SignatureInfo
+// label so the editor can bold/underline the active param verbatim.
+//
+// Top-level commas only — depth tracking lets a nested type like
+// `array<int, str>` (hypothetical) keep its inner comma intact. We
+// stop at the matching `)` so a return-type annotation past `):` is
+// never mistaken for a final parameter.
+struct ParamSpan { size_t start; size_t end; };
+std::vector<ParamSpan> split_signature_params(const std::string &sig) {
+    std::vector<ParamSpan> out;
+    size_t open = sig.find('(');
+    if (open == std::string::npos) return out;
+    size_t i = open + 1;
+    size_t param_start = i;
+    int depth = 0;
+    auto trim_span = [&](size_t s, size_t e) {
+        while (s < e && (sig[s] == ' ' || sig[s] == '\t')) s++;
+        while (e > s && (sig[e - 1] == ' ' || sig[e - 1] == '\t')) e--;
+        if (e > s) out.push_back({s, e});
+    };
+    while (i < sig.size()) {
+        char c = sig[i];
+        if (c == '(' || c == '[' || c == '<') depth++;
+        else if (c == ')' || c == ']' || c == '>') {
+            if (depth == 0) {  // closing paren of the call
+                trim_span(param_start, i);
+                return out;
+            }
+            depth--;
+        } else if (c == ',' && depth == 0) {
+            trim_span(param_start, i);
+            param_start = i + 1;
+        }
+        i++;
+    }
+    return out;
+}
+
+cJSON *build_signature_info_for_user(const IndexFunction &fn) {
+    cJSON *sig = cJSON_CreateObject();
+    std::string label = format_signature(fn);
+    cJSON_AddStringToObject(sig, "label", label.c_str());
+    if (!fn.leading_comment.empty()) {
+        cJSON *doc = cJSON_AddObjectToObject(sig, "documentation");
+        cJSON_AddStringToObject(doc, "kind", "markdown");
+        cJSON_AddStringToObject(doc, "value", fn.leading_comment.c_str());
+    }
+    auto spans = split_signature_params(label);
+    cJSON *params = cJSON_AddArrayToObject(sig, "parameters");
+    for (const auto &sp : spans) {
+        cJSON *p = cJSON_CreateObject();
+        // [start, end] offsets — the editor highlights this exact slice.
+        cJSON *range = cJSON_AddArrayToObject(p, "label");
+        cJSON_AddItemToArray(range, cJSON_CreateNumber((double)sp.start));
+        cJSON_AddItemToArray(range, cJSON_CreateNumber((double)sp.end));
+        cJSON_AddItemToArray(params, p);
+    }
+    return sig;
+}
+
+cJSON *build_signature_info_for_builtin(const BuiltinEntry *b) {
+    cJSON *sig = cJSON_CreateObject();
+    cJSON_AddStringToObject(sig, "label", b->signature);
+    if (b->doc && *b->doc) {
+        cJSON *doc = cJSON_AddObjectToObject(sig, "documentation");
+        cJSON_AddStringToObject(doc, "kind", "markdown");
+        cJSON_AddStringToObject(doc, "value", b->doc);
+    }
+    auto spans = split_signature_params(b->signature);
+    cJSON *params = cJSON_AddArrayToObject(sig, "parameters");
+    for (const auto &sp : spans) {
+        cJSON *p = cJSON_CreateObject();
+        cJSON *range = cJSON_AddArrayToObject(p, "label");
+        cJSON_AddItemToArray(range, cJSON_CreateNumber((double)sp.start));
+        cJSON_AddItemToArray(range, cJSON_CreateNumber((double)sp.end));
+        cJSON_AddItemToArray(params, p);
+    }
+    return sig;
+}
+
+void handle_signature_help(DocumentStore &docs, cJSON *id, cJSON *params) {
+    if (!id) return;
+    cJSON *td = cJSON_GetObjectItem(params, "textDocument");
+    cJSON *pos = cJSON_GetObjectItem(params, "position");
+    if (!td || !pos) { send_response(id, nullptr); return; }
+    const char *uri = cJSON_GetStringValue(cJSON_GetObjectItem(td, "uri"));
+    if (!uri) { send_response(id, nullptr); return; }
+    auto it = docs.docs.find(uri);
+    if (it == docs.docs.end()) { send_response(id, nullptr); return; }
+
+    int line = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(pos, "line"));
+    int ch   = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(pos, "character"));
+
+    const std::string &src = it->second.text;
+    size_t cursor_off = line_col_to_offset(src, line, ch);
+
+    size_t func_off = 0;
+    int active = 0;
+    if (!find_enclosing_call(src, cursor_off, &func_off, &active)) {
+        send_response(id, nullptr);
+        return;
+    }
+
+    // Pull the identifier out of the source at func_off.
+    size_t end = func_off;
+    while (end < src.size() && is_ident_char(src[end])) end++;
+    if (end <= func_off) { send_response(id, nullptr); return; }
+    std::string name(src, func_off, end - func_off);
+
+    // User functions shadow builtins (matches Tulpar's lookup order).
+    cJSON *sig_info = nullptr;
+    for (const auto &fn : it->second.index.functions) {
+        if (fn.name == name) {
+            sig_info = build_signature_info_for_user(fn);
+            // Clamp active param to the actual arity so the highlight
+            // doesn't fall off the end when the user types extra commas.
+            int arity = (int)fn.params.size();
+            if (arity > 0 && active >= arity) active = arity - 1;
+            break;
+        }
+    }
+    if (!sig_info) {
+        if (auto *b = builtin_lookup(name.c_str())) {
+            sig_info = build_signature_info_for_builtin(b);
+            auto spans = split_signature_params(b->signature);
+            int arity = (int)spans.size();
+            if (arity > 0 && active >= arity) active = arity - 1;
+        }
+    }
+
+    if (!sig_info) { send_response(id, nullptr); return; }
+
+    cJSON *result = cJSON_CreateObject();
+    cJSON *sigs = cJSON_AddArrayToObject(result, "signatures");
+    cJSON_AddItemToArray(sigs, sig_info);
+    cJSON_AddNumberToObject(result, "activeSignature", 0);
+    cJSON_AddNumberToObject(result, "activeParameter", active);
+    send_response(id, result);
+}
+
 void handle_definition(DocumentStore &docs, cJSON *id, cJSON *params) {
     if (!id) return;
     cJSON *td = cJSON_GetObjectItem(params, "textDocument");
@@ -764,6 +1035,8 @@ int lsp_run_server() {
             handle_hover(docs, id, params);
         } else if (std::strcmp(method, "textDocument/completion") == 0) {
             handle_completion(docs, id, params);
+        } else if (std::strcmp(method, "textDocument/signatureHelp") == 0) {
+            handle_signature_help(docs, id, params);
         } else if (std::strcmp(method, "textDocument/definition") == 0) {
             handle_definition(docs, id, params);
         } else if (std::strcmp(method, "textDocument/references") == 0) {
