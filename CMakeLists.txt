@@ -44,8 +44,15 @@ message(STATUS "LLVM_LIBRARY_DIRS: ${LLVM_LIBRARY_DIRS}")
 # OpenSSL is OPTIONAL — when present, `https://` URLs become available
 # in `aot_http_request` and `tulpar pkg install` registry/url specs.
 # When absent, `http://` keeps working as before and `https://` URLs
-# return a clear "TLS not compiled in" error at runtime. Install on
-# MSYS2 mingw64 with: `pacman -S mingw-w64-x86_64-openssl`
+# return a clear "TLS not compiled in" error at runtime.
+#
+# Install:
+#   Linux:  apt install libssl-dev          (auto-detected)
+#   macOS:  brew install openssl            (auto-detected via brew prefix)
+#   MSYS2:  pacman -S mingw-w64-x86_64-openssl
+#           — build.bat passes -DOPENSSL_ROOT_DIR=C:/msys64/mingw64
+#             so the auto-detect Just Works on the standard MSYS2 path.
+#             Override with -DOPENSSL_ROOT_DIR=... for non-default installs.
 find_package(OpenSSL QUIET)
 if(OpenSSL_FOUND)
     message(STATUS "OpenSSL: ${OPENSSL_VERSION} (TLS enabled)")

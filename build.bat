@@ -105,7 +105,7 @@ goto :copy_exe
 
 :cmake_mingw
 echo Configuring with MinGW Makefiles...
-cmake .. -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="%LLVM_DIR_USED%" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_PREFIX_PATH=C:/msys64/mingw64 -DZLIB_ROOT=C:/msys64/mingw64 -DLibXml2_ROOT=C:/msys64/mingw64
+cmake .. -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="%LLVM_DIR_USED%" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_PREFIX_PATH=C:/msys64/mingw64 -DZLIB_ROOT=C:/msys64/mingw64 -DLibXml2_ROOT=C:/msys64/mingw64 -DOPENSSL_ROOT_DIR=C:/msys64/mingw64
 if errorlevel 1 goto :cmake_failed
 echo.
 echo Building project...
