@@ -375,6 +375,33 @@ func _wings_serve_connection(json client_arg) {
         if (length(env("TULPAR_HTTP_QUIET")) == 0) {
             print("  " + method + " " + path);
         }
+        // CORS preflight short-circuit. Browsers send `OPTIONS` before
+        // any "non-simple" request (custom headers like `Authorization`,
+        // PUT/DELETE, JSON body) and require a 2xx response WITH the
+        // Access-Control-Allow-* headers attached, or they reject the
+        // real request as "preflight failed". We don't want every route
+        // to register a manual OPTIONS handler, so wings answers any
+        // preflight with 204 + the default CORS header set.
+        //
+        // Counted as a 2xx (not skipped from /metrics) so the operator
+        // can see preflight traffic if it ever spikes — useful when a
+        // browser client is hammering the API in a tight loop.
+        bool is_options = (method == "OPTIONS");
+        if (is_options) {
+            _request["params"] = {};
+            _wings_requests_total = _wings_requests_total + 1;
+            _wings_requests_2xx = _wings_requests_2xx + 1;
+            mutex_unlock(_wings_handler_mu);
+            str preflight = http_create_response(
+                204, "text/plain; charset=utf-8", "", _default_headers, keep);
+            socket_send(client, preflight);
+            arena_restore(wm);
+            if (keep == 0) {
+                break;
+            }
+            continue;
+        }
+
         // Two-pass dispatch (exact + pattern). Returns
         // {"index": <int>, "params": <json>}; index < 0 means no match.
         json route_match = _find_route_with_params(method, path);
@@ -588,6 +615,24 @@ func listen(int port) {
             }
 
             int keep = http_should_keepalive(req);
+
+            // CORS preflight short-circuit — see the matching block
+            // in `listen()` for the full rationale (browsers reject a
+            // 4xx preflight even when CORS headers are present, so
+            // OPTIONS gets a synthetic 204 with the default header set).
+            if (method == "OPTIONS") {
+                _request["params"] = {};
+                str preflight = http_create_response(
+                    204, "text/plain; charset=utf-8", "", _default_headers, keep);
+                socket_send(client, preflight);
+                _wings_requests_total = _wings_requests_total + 1;
+                _wings_requests_2xx = _wings_requests_2xx + 1;
+                arena_restore(_wings_arena_wm);
+                if (keep == 0) {
+                    break;
+                }
+                continue;
+            }
 
             // Two-pass dispatch (exact + pattern). _request gets a
             // populated `params` key before the handler runs.
