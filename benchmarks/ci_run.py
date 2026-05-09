@@ -297,7 +297,17 @@ def cpu_table(built: dict[str, bool], repeats: int) -> list[dict]:
             print(f"[bench] skip {group}/{lang}: toolchain missing")
             continue
         print(f"[bench] running {group}/{lang} (best of {repeats})")
-        ms, out = best_of(cmd, repeats=repeats)
+        # Wrap best_of: a single hung / crashed comparator must not
+        # take down the entire CPU run. We log, mark the row missing,
+        # and keep going. The CI table renders the missing cell as
+        # `—` so the failure is visible without being fatal.
+        try:
+            ms, out = best_of(cmd, repeats=repeats)
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError,
+                RuntimeError, OSError) as e:
+            print(f"[bench]   -> FAILED: {type(e).__name__}: {e}",
+                  file=sys.stderr)
+            continue
         rows.append({
             "benchmark": group,
             "language": lang,
