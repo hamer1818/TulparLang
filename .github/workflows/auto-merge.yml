@@ -1,0 +1,34 @@
+# Auto-merge: every non-draft PR is queued for squash-merge as soon as
+# the required status checks (build-linux/macos/windows) turn green.
+#
+# Without this workflow, each PR would need a manual "Enable auto-merge"
+# click in the UI (or `gh pr merge --auto`). With it, the only manual
+# step is opening the PR — main's branch protection still blocks the
+# actual merge until the three required builds pass, so this is purely
+# automation, not a relaxation of the gating.
+#
+# The default GITHUB_TOKEN has enough scope for `gh pr merge --auto`
+# given the explicit `pull-requests: write` permission below; no PAT
+# needed. PRs from forks won't be auto-enabled (their token is
+# read-only by GitHub policy) — fine for a solo repo.
+
+name: Auto-merge
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable-auto-merge:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge (squash)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge "$PR_URL" --auto --squash
