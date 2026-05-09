@@ -141,12 +141,20 @@ def render_http_table(payload: dict) -> str:
             vs_node = "—"
         lines.append(f"| {label} | {rps:,} | {ratio_listen}× | {vs_node} |".replace(",", " "))
 
-    # Headline cross-runtime ratio for the intro paragraph.
-    async_row = next((r for r in http if r["server"] == "Tulpar listen_async"), None)
+    # Headline cross-runtime ratio for the intro paragraph. Pick the
+    # FASTEST working Tulpar listener (rps > 0) — if listen_async
+    # crashed on this runner, `listen_pool` or `listen_evented` is
+    # still meaningful. If everything failed, we skip the sentence
+    # rather than print "0.0× the throughput".
+    tulpar_rows = [r for r in http
+                   if r["server"].startswith("Tulpar") and r["rps"] > 0]
+    headline = max(tulpar_rows, key=lambda x: x["rps"]) if tulpar_rows else None
+    async_row = headline if headline and headline["server"] != "Tulpar listen" else None
     if async_row and node and node["rps"]:
         ratio = round(async_row["rps"] / node["rps"], 2)
+        listener_name = async_row["server"].replace("Tulpar ", "").split(" ")[0]
         lines.append("")
-        lines.append(f"Tulpar's `listen_async` serves **{ratio}× the throughput "
+        lines.append(f"Tulpar's `{listener_name}` serves **{ratio}× the throughput "
                      f"of Node.js' built-in `http`** on this localhost run.")
     return "\n".join(lines)
 
