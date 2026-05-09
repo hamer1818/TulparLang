@@ -45,14 +45,19 @@ jobs:
     runs-on: ubuntu-latest
     # Skip when:
     #   * the triggering build failed (no artifact to consume anyway);
-    #   * the triggering commit was the bench-bot's own refresh
-    #     (`[bench skip]` marker — belt-and-suspenders against loops,
-    #     since GITHUB_TOKEN-driven pushes don't trigger workflows by
-    #     default).
+    #   * the triggering commit IS the bench-bot's own refresh.
+    #
+    # We recognise the bot's refresh by the commit subject's exact
+    # prefix — earlier we used `contains(message, '[bench skip]')` but
+    # that false-positived on any human PR whose description happened
+    # to mention `[bench skip]` in passing (caught the long way: PR
+    # 111's body explained the marker and accidentally suppressed the
+    # bench that should have run on its merge). The bot writes a very
+    # specific subject line, so prefix-matching against that is robust.
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       !contains(github.event.workflow_run.head_commit.message, '[bench skip]'))
+       !startsWith(github.event.workflow_run.head_commit.message, 'ci(benchmarks): refresh results from CI run [bench skip]'))
     timeout-minutes: 25
 
     steps:
