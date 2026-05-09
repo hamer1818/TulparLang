@@ -7,10 +7,16 @@
 # actual merge until the three required builds pass, so this is purely
 # automation, not a relaxation of the gating.
 #
-# The default GITHUB_TOKEN has enough scope for `gh pr merge --auto`
-# given the explicit `pull-requests: write` permission below; no PAT
-# needed. PRs from forks won't be auto-enabled (their token is
-# read-only by GitHub policy) — fine for a solo repo.
+# Why a PAT (AUTOMERGE_PAT) instead of the default GITHUB_TOKEN: when a
+# workflow uses GITHUB_TOKEN to merge a PR, the resulting push to main
+# is attributed to the token and GitHub deliberately suppresses any
+# downstream workflow_run / push events. That meant build.yml's
+# main-push job stopped firing on every merge — branch builds still
+# ran, tag-triggered release builds still ran, but the post-merge
+# validation against main's HEAD was silently skipped. A user-scoped
+# fine-grained PAT scoped to this repo (Contents + Pull requests:
+# read+write) doesn't trip the recursion guard, so the merge it
+# performs DOES trigger build.yml on main as expected.
 
 name: Auto-merge
 
@@ -29,6 +35,6 @@ jobs:
     steps:
       - name: Enable auto-merge (squash)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.AUTOMERGE_PAT }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: gh pr merge "$PR_URL" --auto --squash
