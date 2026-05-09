@@ -1,0 +1,160 @@
+name: Benchmarks (auto-update README)
+
+# Why this workflow exists: README's perf claims used to be hand-edited
+# from one developer's local Windows runs, which made them slow to
+# refresh and easy to drift from reality. This workflow regenerates the
+# benchmark numbers in README.md and benchmarks/RESULTS.md on every
+# push to `main`, then commits the refreshed files back. Methodology +
+# variance notes live in benchmarks/CI.md.
+
+on:
+  push:
+    branches: [main]
+  # Manual re-run for debugging / one-off refreshes without a code push.
+  workflow_dispatch:
+
+# `contents: write` lets the bench-bot push the regenerated files back
+# to main. Pushes performed with GITHUB_TOKEN do NOT re-trigger `push`
+# workflows by design — that's how we avoid an infinite bench loop
+# without needing a PAT. The `[bench skip]` filter on the job below is
+# belt-and-suspenders in case we ever switch to a PAT-driven push.
+permissions:
+  contents: write
+
+# Don't run two benchmark jobs concurrently on the same ref — they'd
+# share the runner CPU and produce meaningless cross-contaminated
+# numbers. We don't cancel in progress because each commit's numbers
+# are themselves the artifact we want recorded.
+concurrency:
+  group: benchmarks-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    # Skip when the triggering commit was itself the bench-bot
+    # refreshing results — prevents a self-reinforcing loop if we ever
+    # switch off the GITHUB_TOKEN no-recursion guarantee. Match the
+    # exact tag the commit step below writes.
+    if: ${{ !contains(github.event.head_commit.message, '[bench skip]') }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # Full clone is overkill, depth 1 is enough — we only need to
+          # rebuild HEAD. Token is the workflow's GITHUB_TOKEN; with
+          # `permissions: contents: write` above it can push.
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake llvm-18-dev
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2.23
+        with:
+          key: ${{ runner.os }}-bench-ccache
+          max-size: 500M
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # `ubuntu-latest` already ships rustc + cargo via rustup, so no
+      # explicit Rust setup step is needed. Same goes for gcc.
+
+      - name: Build Tulpar (Release, ccache)
+        env:
+          TULPAR_VERSION: bench-${{ github.sha }}
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DTULPAR_VERSION="${TULPAR_VERSION}"
+          cmake --build . -j$(nproc)
+          cp tulpar ../tulpar
+          chmod +x ../tulpar
+        timeout-minutes: 15
+
+      - name: Verify Tulpar binary
+        run: ./tulpar --help | head -3
+
+      # Run the suite. `--no-java` because JVM startup dominates the
+      # short loopsum/fib timings and varies wildly on shared CI
+      # runners; we'd be measuring runner noise more than the workload.
+      # See benchmarks/CI.md for the variance discussion.
+      - name: Run benchmarks
+        env:
+          TULPAR_HTTP_QUIET: '1'
+        run: |
+          python3 benchmarks/ci_run.py \
+            --repeats 5 \
+            --http-requests 3000 \
+            --http-connections 4 \
+            --no-java
+        timeout-minutes: 15
+
+      - name: Update README perf tables from RESULTS.json
+        run: python3 benchmarks/update_readme.py
+
+      - name: Show diff
+        run: |
+          echo "=== git status ==="
+          git status --short
+          echo "=== diff ==="
+          git --no-pager diff README.md benchmarks/RESULTS.md benchmarks/RESULTS.json || true
+
+      - name: Commit and push refreshed results
+        env:
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_REPO: ${{ github.repository }}
+          GH_SHA: ${{ github.sha }}
+        run: |
+          # Git identity for the bot commit. Keep these fields stable so
+          # `git log --author='tulpar-bench-bot'` works as a filter.
+          git config user.name 'tulpar-bench-bot'
+          git config user.email 'bench@tulparlang.dev'
+
+          # If nothing changed (rare — only if the runner produced
+          # numbers identical to the prior run, or the markers in
+          # README/RESULTS were missing) we exit clean. The workflow is
+          # still green; we just have no commit to make.
+          if git diff --quiet README.md benchmarks/RESULTS.md benchmarks/RESULTS.json 2>/dev/null; then
+            echo "No benchmark changes — nothing to commit."
+            exit 0
+          fi
+
+          git add README.md benchmarks/RESULTS.md benchmarks/RESULTS.json
+          git commit -m "ci(benchmarks): refresh results from CI run [bench skip]
+
+Source commit: ${GH_SHA}
+Workflow run: https://github.com/${GH_REPO}/actions/runs/${GH_RUN_ID}
+
+This commit is auto-generated by .github/workflows/bench.yml. The
+benchmark orchestrator lives at benchmarks/ci_run.py; methodology +
+variance notes are in benchmarks/CI.md."
+
+          # If main moved while we were running, the push will fail.
+          # That's fine — the next push to main will trigger another
+          # bench run that refreshes against the latest tip. We don't
+          # try to rebase here because the only files we touch are
+          # auto-generated, so a stale push has no rescue value.
+          git push origin HEAD:main
