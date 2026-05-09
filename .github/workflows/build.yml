@@ -31,8 +31,29 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
     steps:
+      # Skip the vendored Emscripten SDK at clone time — it's ~400 MB
+      # and the main CMake build doesn't reference it (wasm builds run
+      # locally via wasm/build_wasm.sh, never in CI). Saves ~20-40s of
+      # checkout time on every job. cone-mode must be off because we
+      # want to *exclude* a path while keeping everything else.
       - uses: actions/checkout@v5
-      
+        with:
+          sparse-checkout: |
+            /*
+            !wasm/emsdk
+          sparse-checkout-cone-mode: false
+
+      # ccache stores compiler outputs keyed on preprocessed source +
+      # flags. First run on a fresh branch is a cold miss (no speedup);
+      # subsequent runs hit on every untouched .cpp and only recompile
+      # what actually changed. The action handles cache key / restore
+      # / save and exposes `ccache gcc` / `ccache g++` via PATH wrappers.
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-ccache
+          max-size: 500M
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -53,11 +74,17 @@ jobs:
         run: |
           mkdir -p build
           cd build
+          # CMAKE_<LANG>_COMPILER_LAUNCHER routes every cc/c++ invocation
+          # through ccache without us having to fiddle with CC/CXX (and
+          # without confusing autodetection that sniffs the compiler
+          # binary's name).
           cmake .. -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DTULPAR_VERSION="${TULPAR_VERSION}"
           cmake --build . --config Release -j$(nproc)
         timeout-minutes: 10
-      
+
       # Test failures used to be masked with `continue-on-error: true`,
       # which hid a months-long Linux regression where every example
       # failed AOT linking against `libtulpar_runtime.a` (missing
@@ -112,7 +139,18 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
-      
+        with:
+          sparse-checkout: |
+            /*
+            !wasm/emsdk
+          sparse-checkout-cone-mode: false
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-ccache
+          max-size: 500M
+
       - name: Install dependencies
         run: |
           brew list --versions cmake >/dev/null 2>&1 || brew install cmake
@@ -134,6 +172,8 @@ jobs:
           mkdir -p build
           cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$LLVM_DIR \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DTULPAR_VERSION="${TULPAR_VERSION}"
           cmake --build . --config Release -j$(sysctl -n hw.ncpu)
         timeout-minutes: 10
@@ -163,29 +203,60 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            /*
+            !wasm/emsdk
+          sparse-checkout-cone-mode: false
 
       # MSYS2 mingw64 is the only realistic way to get a full LLVM dev tree
       # (headers + LLVM*.dll.a libs) on a Windows runner without a 30+ min
       # vcpkg/source build. The official LLVM Windows installer and Chocolatey
       # only ship the compiler distribution — the static libs we link against
       # (LLVMCore, LLVMSupport, …) aren't there.
+      #
+      # `cache: true` snapshots the full MSYS2 install tree keyed on the
+      # `install:` package list — turning a ~90s package-manager run into
+      # a ~10s cache restore. Cache invalidates automatically when the
+      # package list below changes. We dropped `mingw-w64-x86_64-clang`
+      # because the build uses gcc/g++ (see CMAKE_C_COMPILER below); the
+      # only consumer was a `clang --version` diagnostic line we no
+      # longer need.
       - name: Setup MSYS2
         id: msys2
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: false
+          cache: true
           install: >-
             git
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-llvm
-            mingw-w64-x86_64-clang
+            mingw-w64-x86_64-ccache
             mingw-w64-x86_64-zlib
             mingw-w64-x86_64-zstd
             mingw-w64-x86_64-libxml2
             mingw-w64-x86_64-openssl
+
+      # ccache cache pinned to a workspace-relative path so both the
+      # msys2 shell and Windows-native actions/cache see the same dir
+      # (otherwise `~` translates differently between shells and the
+      # cache doesn't actually round-trip). actions/cache covers the
+      # cross-run persistence; CMAKE_<LANG>_COMPILER_LAUNCHER below
+      # routes gcc/g++ through it. The cache restore key is a moving
+      # target keyed on the commit SHA so each run writes a fresh entry,
+      # while restore-keys lets us inherit the previous run's cache as
+      # a warm starting point.
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ${{ runner.os }}-msys2-ccache-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-msys2-ccache-
 
       - name: Build with LLVM
         env:
@@ -195,8 +266,8 @@ jobs:
           # to keep `tulpar update --check` consistent with the embedded
           # version string.
           TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v2.1.0.{0}', github.run_number) }}
+          CCACHE_DIR: ${{ runner.temp }}/ccache
         run: |
-          clang --version
           llvm-config --version
           mkdir -p build-windows
           cd build-windows
@@ -204,9 +275,20 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=gcc \
             -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DTULPAR_VERSION="${TULPAR_VERSION}"
           cmake --build . --config Release -j
         timeout-minutes: 20
+
+      # Print ccache stats so a slow run is easy to triage at a glance —
+      # the Build step above could be slow because nothing was cached
+      # (cold start) or because the cache hit rate was poor (rare, but
+      # would point at flag changes invalidating entries).
+      - name: ccache stats
+        env:
+          CCACHE_DIR: ${{ runner.temp }}/ccache
+        run: ccache -s
 
       - name: Prepare artifact
         shell: pwsh
