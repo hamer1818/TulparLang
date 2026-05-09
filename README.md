@@ -18,11 +18,12 @@
 
 **TulparLang** is an open-source, statically-typed, ahead-of-time compiled
 programming language built on **LLVM 18**. It pairs Python-shaped syntax
-with native binary performance — within ~1.7× of `gcc -O2` on standard
-arithmetic benchmarks and over **1.9× faster than Node.js** on HTTP
-throughput — and ships with a batteries-included standard library so you
-can build a production HTTP/HTTPS API without installing a single
-external dependency.
+with native binary performance — within ~1.5–1.8× of `gcc -O2` on
+integer microbenchmarks (`loopsum`, `fib(35)`), and on a localhost
+JSON-API micro-benchmark the `listen_async` Wings listener serves
+**~1.9× the throughput of Node.js' built-in `http`** — and ships with a
+batteries-included standard library so you can build a production
+HTTP/HTTPS API without installing a single external dependency.
 
 Files use the `.tpr` extension. The whole toolchain — compiler, runtime,
 package manager, formatter, language server, and REST framework — is a
@@ -30,9 +31,11 @@ single ~7 MB executable. Source code, identifiers, and strings are
 UTF-8 throughout, with first-class support for both Turkish and English
 keywords and diagnostics.
 
-**Use it for:** REST APIs and microservices, scripting and automation,
-CLI tools, learning a compiled language with familiar syntax, prototyping
-backend services that need to ship as a single binary.
+**Use it for:** dependency-free native backend services, REST APIs and
+microservices, CLI tools, scripting and automation. The sweet spot is
+"Python-shaped ergonomics with a single-binary deploy and no runtime to
+install on the target machine" — if that matches your shape, the rest
+of the README is for you.
 
 **Highlights:**
 
@@ -95,7 +98,8 @@ tulpar hello.tpr
 ```
 
 The default `tulpar <file>` invocation AOT-compiles via LLVM and runs
-the resulting native binary — Python-shaped syntax, near-Rust speed.
+the resulting native binary — Python-shaped syntax, native-binary
+performance (see [Performance](#performance) for the actual numbers).
 
 ## Build a REST API in 8 lines
 
@@ -125,8 +129,11 @@ hit the API immediately.
 ## Why TulparLang
 
 - **Native speed.** LLVM 18 AOT compilation. ~1.5–1.8× of `gcc -O2`
-  on integer/recursive benchmarks; **2.9× faster than Python**, **2.7×
-  faster than Node.js** on the JSON-API hot path.
+  on integer microbenchmarks; on a localhost JSON-API microbenchmark
+  the `listen_async` Wings listener is **1.91× Node.js' `http`** and
+  **2.91× CPython's `ThreadingHTTPServer`** in throughput. See
+  [benchmarks/RESULTS.md](benchmarks/RESULTS.md) for the full table
+  and methodology.
 - **No build step for prototyping.** `tulpar file.tpr` runs in one step.
   `tulpar build file.tpr` produces a standalone native binary when you
   want to ship.
@@ -158,11 +165,20 @@ hit the API immediately.
 
 ## Performance
 
+> **Scope.** All numbers below are **microbenchmarks** — tight integer
+> loops and small JSON handlers on a single machine, localhost loopback
+> for HTTP. They isolate compiler / runtime / scheduler costs and let
+> Tulpar be compared against C, Rust, Go, Node, etc. on the same shape
+> of workload. They do **not** model real production traffic (cold
+> starts, large payloads, distributed clients, p99 tail latency, GC
+> pressure under load). Treat them as a peer-comparison floor for the
+> hot path, not as a production projection.
+
 ### CPU benchmarks
 
 10M-iteration sum and recursive Fibonacci(35), best of 5 runs on
 Windows 10/x86_64. See [benchmarks/RESULTS.md](benchmarks/RESULTS.md)
-for raw numbers and methodology.
+for raw numbers and the full optimization-pipeline writeup.
 
 | Benchmark      | Tulpar AOT  | C (gcc -O2) | Rust 1.80 | Go    | Node.js | Python 3.12 |
 |----------------|------------:|------------:|----------:|------:|--------:|------------:|
