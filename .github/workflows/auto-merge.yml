@@ -30,7 +30,15 @@ permissions:
 
 jobs:
   enable-auto-merge:
-    if: github.event.pull_request.draft == false
+    # Skip drafts (still WIP) AND skip PRs from forks. GitHub strips
+    # secrets — including AUTOMERGE_PAT — from any workflow triggered
+    # by a fork's pull_request, so this job would fail with "no token
+    # provided" and litter the Actions log. Fork PRs are reviewed
+    # manually by the maintainer; once approved, branch protection
+    # auto-fires the merge anyway.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Enable auto-merge (squash)
