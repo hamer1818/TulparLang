@@ -16,17 +16,6 @@ on:
 permissions:
   contents: write
 
-# `actions/*` are pinned at @v5 (latest major), which still ships
-# bundled Node 20 handlers — GitHub flags this as a deprecation
-# warning. Setting FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 opts in to the
-# Node 24 runtime that becomes default on 2026-06-02 anyway, which is
-# what the warning explicitly recommends. The previous "git exit 128"
-# regression in `Post Run actions/checkout` was unrelated to FORCE —
-# it came from a stray submodule pointer at `wasm/emsdk` with no
-# `.gitmodules` entry; removing that index entry fixed cleanup.
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   build-linux:
     runs-on: ubuntu-latest
@@ -36,7 +25,7 @@ jobs:
       # locally via wasm/build_wasm.sh, never in CI). Saves ~20-40s of
       # checkout time on every job. cone-mode must be off because we
       # want to *exclude* a path while keeping everything else.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           sparse-checkout: |
             /*
@@ -49,7 +38,7 @@ jobs:
       # what actually changed. The action handles cache key / restore
       # / save and exposes `ccache gcc` / `ccache g++` via PATH wrappers.
       - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@v1.2.23
         with:
           key: ${{ runner.os }}-ccache
           max-size: 500M
@@ -124,13 +113,13 @@ jobs:
           cp build/libtulpar_runtime.a dist/libtulpar_runtime-linux-x64.a
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: tulpar-linux-x64
           path: dist/tulpar-linux-x64
 
       - name: Upload runtime library
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: libtulpar_runtime-linux-x64
           path: dist/libtulpar_runtime-linux-x64.a
@@ -138,7 +127,7 @@ jobs:
   build-macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           sparse-checkout: |
             /*
@@ -146,7 +135,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@v1.2.23
         with:
           key: ${{ runner.os }}-ccache
           max-size: 500M
@@ -185,13 +174,13 @@ jobs:
           cp build/libtulpar_runtime.a dist/libtulpar_runtime-macos-universal.a
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: tulpar-macos-universal
           path: dist/tulpar-macos-universal
 
       - name: Upload runtime library
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: libtulpar_runtime-macos-universal
           path: dist/libtulpar_runtime-macos-universal.a
@@ -202,7 +191,7 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           sparse-checkout: |
             /*
@@ -251,7 +240,7 @@ jobs:
       # while restore-keys lets us inherit the previous run's cache as
       # a warm starting point.
       - name: Restore ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ runner.temp }}/ccache
           key: ${{ runner.os }}-msys2-ccache-${{ github.sha }}
@@ -356,19 +345,19 @@ jobs:
           Write-Host "DLL bundling guard: OK ($($imports.Count) imports, all covered)"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: tulpar-windows-x64
           path: dist/tulpar-windows-x64.exe
 
       - name: Upload runtime library
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: libtulpar_runtime-windows-x64
           path: dist/libtulpar_runtime-windows-x64.a
 
       - name: Upload bundled MinGW DLLs
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: tulpar-windows-runtime-dlls
           path: |
@@ -416,7 +405,7 @@ jobs:
           Copy-Item installer\Output\tulpar-setup-windows-x64.exe dist\
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: tulpar-windows-installer
           path: dist/tulpar-setup-windows-x64.exe
@@ -437,7 +426,7 @@ jobs:
     continue-on-error: true
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: '{tulpar-*,libtulpar_runtime-*}'
           merge-multiple: true
@@ -499,7 +488,7 @@ jobs:
           cat SHA256SUMS.txt
       
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: TulparLang ${{ steps.ver.outputs.tag }} (LLVM)
