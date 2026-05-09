@@ -122,10 +122,29 @@ def hammer(host: str, port: int, n_requests: int, n_threads: int) -> tuple[float
     barrier = threading.Barrier(n_threads + 1)
 
     def worker(idx: int):
-        sock = socket.create_connection((host, port), timeout=15.0)
+        # If create_connection fails for ONE worker (e.g., the server
+        # crashed mid-warmup, port refused), the other workers must
+        # not hang forever at barrier.wait(). barrier.abort() unblocks
+        # everyone with BrokenBarrierError, which we then absorb at the
+        # call sites. Without this, a single connect failure deadlocks
+        # the harness on shared CI runners (caught the long way on
+        # GitHub Actions).
+        try:
+            sock = socket.create_connection((host, port), timeout=15.0)
+        except OSError:
+            barrier.abort()
+            return
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        # Bound recv calls below — a server that accepts the connection
+        # then never sends a response would otherwise hang the worker
+        # forever (recv with no timeout blocks indefinitely).
+        sock.settimeout(15.0)
         buf = bytearray()
-        barrier.wait()
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            sock.close()
+            return
         t0 = time.perf_counter()
         try:
             for _ in range(each):
@@ -146,13 +165,27 @@ def hammer(host: str, port: int, n_requests: int, n_threads: int) -> tuple[float
                     buf.extend(chunk)
                 buf = buf[he + cl:]
                 completed[idx] += 1
+        except (OSError, socket.timeout):
+            # Connection reset / timeout mid-stream — happens when the
+            # server crashes under load. The wall-time entry is what
+            # we got up to that point; the harness above sees `done`
+            # < expected and reports rps accordingly.
+            return
         finally:
             sock.close()
             per_thread[idx] = time.perf_counter() - t0
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
     for t in threads: t.start()
-    barrier.wait()
+    try:
+        barrier.wait()
+    except threading.BrokenBarrierError:
+        # Every worker failed to connect — server didn't start. Join
+        # threads (they all exited fast), then return zero completions
+        # so the caller can record the failure as "0 rps" without
+        # crashing the whole bench run.
+        for t in threads: t.join(timeout=5.0)
+        return 0.0, 0, per_thread
     t0 = time.perf_counter()
     for t in threads: t.join()
     wall = time.perf_counter() - t0

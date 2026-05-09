@@ -3,28 +3,35 @@ name: Benchmarks (auto-update README)
 # Why this workflow exists: README's perf claims used to be hand-edited
 # from one developer's local Windows runs, which made them slow to
 # refresh and easy to drift from reality. This workflow regenerates the
-# benchmark numbers in README.md and benchmarks/RESULTS.md on every
-# push to `main`, then commits the refreshed files back. Methodology +
-# variance notes live in benchmarks/CI.md.
+# benchmark numbers in README.md and benchmarks/RESULTS.md after every
+# successful main build, then commits the refreshed files back.
+# Methodology + variance notes live in benchmarks/CI.md.
 
 on:
-  push:
+  # Fire after the build workflow finishes on main. We consume its
+  # already-built `tulpar-linux-x64` artifact instead of compiling
+  # Tulpar from scratch — saves the 5-10 min of LLVM 18 compile per
+  # bench run, and guarantees we benchmark the same binary that built
+  # successfully.
+  workflow_run:
+    workflows: ["Linux & macOS Build (LLVM)"]
+    types: [completed]
     branches: [main]
-  # Manual re-run for debugging / one-off refreshes without a code push.
+  # Manual re-run for debugging / one-off refreshes. Pulls the latest
+  # successful build run's artifact from `main` rather than rebuilding.
   workflow_dispatch:
 
-# `contents: write` lets the bench-bot push the regenerated files back
-# to main. Pushes performed with GITHUB_TOKEN do NOT re-trigger `push`
-# workflows by design — that's how we avoid an infinite bench loop
-# without needing a PAT. The `[bench skip]` filter on the job below is
-# belt-and-suspenders in case we ever switch to a PAT-driven push.
+# `contents: write` lets the bench-bot push the regenerated files
+# back; `actions: read` is required so the cross-workflow artifact
+# download can list the triggering build run's artifacts.
 permissions:
   contents: write
+  actions: read
 
 # Don't run two benchmark jobs concurrently on the same ref — they'd
-# share the runner CPU and produce meaningless cross-contaminated
-# numbers. We don't cancel in progress because each commit's numbers
-# are themselves the artifact we want recorded.
+# share runner CPU and produce meaningless cross-contaminated numbers.
+# We don't cancel in progress because each commit's numbers are
+# themselves the artifact we want recorded.
 concurrency:
   group: benchmarks-${{ github.ref }}
   cancel-in-progress: false
@@ -32,34 +39,103 @@ concurrency:
 jobs:
   benchmark:
     runs-on: ubuntu-latest
-    # Skip when the triggering commit was itself the bench-bot
-    # refreshing results — prevents a self-reinforcing loop if we ever
-    # switch off the GITHUB_TOKEN no-recursion guarantee. Match the
-    # exact tag the commit step below writes.
-    if: ${{ !contains(github.event.head_commit.message, '[bench skip]') }}
-    timeout-minutes: 30
+    # Skip when:
+    #   * the triggering build failed (no artifact to consume anyway);
+    #   * the triggering commit was the bench-bot's own refresh
+    #     (`[bench skip]` marker — belt-and-suspenders against loops,
+    #     since GITHUB_TOKEN-driven pushes don't trigger workflows by
+    #     default).
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       !contains(github.event.workflow_run.head_commit.message, '[bench skip]'))
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          # Full clone is overkill, depth 1 is enough — we only need to
-          # rebuild HEAD. Token is the workflow's GITHUB_TOKEN; with
-          # `permissions: contents: write` above it can push.
           fetch-depth: 1
+          # On workflow_run, the default ref is the branch the workflow
+          # FILE lives on (main), but the build we're benchmarking may
+          # have run against a now-superseded commit. Pin to that exact
+          # commit so the README we publish matches the binary that
+          # produced the numbers.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake llvm-18-dev
-
-      - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2.23
+      # ------------------------------------------------------------------
+      # Tulpar binary acquisition. Two paths:
+      #   1. workflow_run    -> pull the artifact from THIS run.
+      #   2. workflow_dispatch -> find the most recent successful build
+      #      run on main and pull from there. Falls back to a from-source
+      #      build if no successful run exists yet (first-time / clean
+      #      slate scenarios).
+      # ------------------------------------------------------------------
+      - name: Download Tulpar binary (workflow_run)
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@v8
         with:
-          key: ${{ runner.os }}-bench-ccache
-          max-size: 500M
+          name: tulpar-linux-x64
+          path: dist
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Tulpar runtime lib (workflow_run)
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@v8
+        with:
+          name: libtulpar_runtime-linux-x64
+          path: dist
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Acquire Tulpar binary (workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          mkdir -p dist
+          # Prefer reusing the latest successful build artifact so the
+          # manual run reflects the same binary as the auto-triggered
+          # path. Falls back to source build if the workflow has never
+          # run successfully on main (greenfield / brand-new repo).
+          run_id=$(gh run list \
+            --workflow='Linux & macOS Build (LLVM)' \
+            --branch=main --status=success --limit=1 \
+            --json databaseId --jq '.[0].databaseId' || echo "")
+          if [ -n "$run_id" ]; then
+            echo "Reusing Tulpar artifact from build run $run_id"
+            gh run download "$run_id" \
+              -n tulpar-linux-x64           -D dist \
+              -n libtulpar_runtime-linux-x64 -D dist
+          else
+            echo "No successful main build found; building from source."
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+              build-essential cmake llvm-18-dev
+            mkdir -p build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release
+            cmake --build . -j"$(nproc)"
+            cp tulpar                ../dist/tulpar-linux-x64
+            cp libtulpar_runtime.a   ../dist/libtulpar_runtime-linux-x64.a
+          fi
+
+      - name: Stage Tulpar binary + runtime lib
+        run: |
+          set -e
+          # Move both files to the repo root with their canonical names.
+          # The AOT pipeline's `build_link_search_dirs()` probes the
+          # directory containing the running tulpar binary first, so
+          # placing libtulpar_runtime.a next to ./tulpar is enough for
+          # `tulpar build` to find it during the http_bench wings_*
+          # compiles.
+          mv dist/tulpar-linux-x64                ./tulpar
+          mv dist/libtulpar_runtime-linux-x64.a   ./libtulpar_runtime.a
+          chmod +x ./tulpar
+          ls -la ./tulpar ./libtulpar_runtime.a
+          ./tulpar --help | head -3
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -76,26 +152,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      # `ubuntu-latest` already ships rustc + cargo via rustup, so no
-      # explicit Rust setup step is needed. Same goes for gcc.
-
-      - name: Build Tulpar (Release, ccache)
-        env:
-          TULPAR_VERSION: bench-${{ github.sha }}
-        run: |
-          mkdir -p build
-          cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DTULPAR_VERSION="${TULPAR_VERSION}"
-          cmake --build . -j$(nproc)
-          cp tulpar ../tulpar
-          chmod +x ../tulpar
-        timeout-minutes: 15
-
-      - name: Verify Tulpar binary
-        run: ./tulpar --help | head -3
+      # `ubuntu-latest` ships rustc + cargo via rustup and gcc out of
+      # the box, so no explicit Rust / C setup step is needed.
 
       # Run the suite. `--no-java` because JVM startup dominates the
       # short loopsum/fib timings and varies wildly on shared CI
@@ -126,7 +184,7 @@ jobs:
         env:
           GH_RUN_ID: ${{ github.run_id }}
           GH_REPO: ${{ github.repository }}
-          GH_SHA: ${{ github.sha }}
+          GH_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           # Git identity for the bot commit. Keep these fields stable so
           # `git log --author='tulpar-bench-bot'` works as a filter.
