@@ -165,8 +165,11 @@ function New-WizardImage {
 
         $titleY    = $logoY + $logoBox + 6
         $subtitleY = $titleY + 32
+        # Subtitle deliberately avoids comparing TulparLang to other
+        # languages — the wizard is the user's first impression of the
+        # brand and shouldn't read like a competitor pitch.
         $g.DrawString('TulparLang', $titleFont, $titleBrush, (New-Object System.Drawing.RectangleF 0, $titleY, $Width, 32), $sf)
-        $g.DrawString('the python-fast script', $subtitleFont, $subtitleBrush, (New-Object System.Drawing.RectangleF 0, $subtitleY, $Width, 24), $sf)
+        $g.DrawString('statik tipli betik dili', $subtitleFont, $subtitleBrush, (New-Object System.Drawing.RectangleF 0, $subtitleY, $Width, 24), $sf)
 
         $titleFont.Dispose(); $subtitleFont.Dispose()
         $titleBrush.Dispose(); $subtitleBrush.Dispose()

@@ -44,7 +44,7 @@
 #define AppName        "TulparLang"
 #define AppPublisher   "TulparLang Project"
 #define AppURL         "https://tulparlang.dev"
-#define AppDocsURL     "https://tulparlang.dev/docs"
+#define AppPackagesURL "https://pkg.tulparlang.dev"
 #define AppExeName     "tulpar.exe"
 #define UninstallID    "{{8B4A6E2C-4A57-4A8E-9F6F-3B0DBC9C7E1A}"
 
@@ -112,12 +112,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; resolved by [CustomMessages] below per-language.
 [Messages]
 turkish.WelcomeLabel1=[name] kurulumuna hos geldiniz
-turkish.WelcomeLabel2=Bu sihirbaz [name/ver] sürümünü bilgisayariniza yükleyecek.%n%nTulparLang, Python kadar kolay yazilan, C kadar hizli calisan, statik tipli bir betik dilidir.%n%nDevam etmek icin Ileri'yi tiklayin.
+turkish.WelcomeLabel2=Bu sihirbaz [name/ver] sürümünü bilgisayariniza yükleyecek.%n%nTulparLang; modern, hizli ve statik tipli bir betik dilidir.%n%nDevam etmek icin Ileri'yi tiklayin.
 turkish.FinishedHeadingLabel=[name] kuruldu
 turkish.FinishedLabelNoIcons=[name] basariyla kuruldu.%n%nBaslamak icin terminalde "tulpar --repl" komutunu calistirin ya da bir .tpr dosyasini "tulpar dosya.tpr" ile derleyip calistirin.
 turkish.FinishedLabel=[name] basariyla kuruldu.%n%nBaslamak icin terminalde "tulpar --repl" komutunu calistirin ya da bir .tpr dosyasini "tulpar dosya.tpr" ile derleyip calistirin.
 english.WelcomeLabel1=Welcome to the [name] installer
-english.WelcomeLabel2=This wizard will install [name/ver] on your computer.%n%nTulparLang is a statically-typed scripting language: as easy to write as Python, as fast to run as C.%n%nClick Next to continue.
+english.WelcomeLabel2=This wizard will install [name/ver] on your computer.%n%nTulparLang is a modern, fast, statically-typed scripting language.%n%nClick Next to continue.
 english.FinishedHeadingLabel=[name] is installed
 english.FinishedLabelNoIcons=[name] was installed successfully.%n%nTo get started, run "tulpar --repl" in your terminal, or compile and run a .tpr file with "tulpar file.tpr".
 english.FinishedLabel=[name] was installed successfully.%n%nTo get started, run "tulpar --repl" in your terminal, or compile and run a .tpr file with "tulpar file.tpr".
@@ -129,22 +129,24 @@ turkish.ShortcutsGroupDescription=Kisayollar:
 turkish.DesktopIconDescription=Masaustune kisayol olustur
 turkish.QuickStartTask=Kurulumdan sonra TulparLang REPL'i baslat
 turkish.VisitWebsiteDescription=tulparlang.dev'i ac
-turkish.ViewDocsDescription=Belgeleri ac (tulparlang.dev/docs)
+turkish.VisitPackagesDescription=pkg.tulparlang.dev'i ac (paket kayit defteri)
 turkish.StartMenuRepl=TulparLang REPL
-turkish.StartMenuDocs=TulparLang Belgeleri
+turkish.StartMenuPackages=TulparLang Paketleri
 turkish.StartMenuWeb=TulparLang Web Sitesi
 turkish.StartMenuUninstall=TulparLang'i Kaldir
+turkish.AlreadyInstalledPrompt=Bilgisayarinizda zaten TulparLang %1 sürümü kurulu.%n%nBu sihirbaz onu %2 sürümüyle degistirecek.%n%nDevam etmek istiyor musunuz?
 english.PathTaskDescription=Add Tulpar to user PATH (recommended)
 english.EnvGroupDescription=Environment:
 english.ShortcutsGroupDescription=Shortcuts:
 english.DesktopIconDescription=Create a desktop shortcut
 english.QuickStartTask=Launch the TulparLang REPL after install
 english.VisitWebsiteDescription=Open tulparlang.dev
-english.ViewDocsDescription=Open the documentation (tulparlang.dev/docs)
+english.VisitPackagesDescription=Open pkg.tulparlang.dev (package registry)
 english.StartMenuRepl=TulparLang REPL
-english.StartMenuDocs=TulparLang Documentation
+english.StartMenuPackages=TulparLang Packages
 english.StartMenuWeb=TulparLang Website
 english.StartMenuUninstall=Uninstall TulparLang
+english.AlreadyInstalledPrompt=TulparLang %1 is already installed on this computer.%n%nThis wizard will replace it with version %2.%n%nDo you want to continue?
 
 [Tasks]
 ; PATH wiring — default checked. Unchecking still installs the binary,
@@ -179,10 +181,11 @@ Source: "{#SourceMingwBin}\libcrypto-3-x64.dll"; DestDir: "{app}"; Flags: ignore
 
 [Icons]
 ; Start Menu group. REPL launcher first (most useful thing a non-CLI
-; user can do with the binary directly), docs second, website third,
-; uninstaller last. IconFilename pulls the brand glyph onto each entry.
+; user can do with the binary directly), package registry second,
+; website third, uninstaller last. IconFilename pulls the brand glyph
+; onto each entry.
 Name: "{group}\{cm:StartMenuRepl}"; Filename: "{app}\{#AppExeName}"; Parameters: "--repl"; WorkingDir: "{userdocs}"; IconFilename: "{app}\tulpar.ico"
-Name: "{group}\{cm:StartMenuDocs}"; Filename: "{#AppDocsURL}"; IconFilename: "{app}\tulpar.ico"
+Name: "{group}\{cm:StartMenuPackages}"; Filename: "{#AppPackagesURL}"; IconFilename: "{app}\tulpar.ico"
 Name: "{group}\{cm:StartMenuWeb}"; Filename: "{#AppURL}"; IconFilename: "{app}\tulpar.ico"
 Name: "{group}\{cm:StartMenuUninstall}"; Filename: "{uninstallexe}"
 ; Desktop shortcut — only created when the optional task is checked.
@@ -191,14 +194,62 @@ Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Parameters: "
 [Run]
 ; Optional post-install actions (all unchecked by default — kept opt-in
 ; to avoid being noisy). Order: REPL launch first since most users want
-; to verify the install worked, then docs / website.
+; to verify the install worked, then website / package registry.
 Filename: "{app}\{#AppExeName}"; Parameters: "--repl"; Description: "{cm:QuickStartTask}"; Flags: nowait postinstall skipifsilent unchecked
-Filename: "{#AppDocsURL}";  Description: "{cm:ViewDocsDescription}";    Flags: nowait postinstall skipifsilent shellexec unchecked
-Filename: "{#AppURL}";      Description: "{cm:VisitWebsiteDescription}"; Flags: nowait postinstall skipifsilent shellexec unchecked
+Filename: "{#AppURL}";          Description: "{cm:VisitWebsiteDescription}";  Flags: nowait postinstall skipifsilent shellexec unchecked
+Filename: "{#AppPackagesURL}";  Description: "{cm:VisitPackagesDescription}"; Flags: nowait postinstall skipifsilent shellexec unchecked
 
 [Code]
 const
   EnvironmentKey = 'Environment';
+  // Inno Setup mirrors the AppId into the Uninstall hive with an `_is1`
+  // suffix; reading DisplayVersion off that key is the canonical way to
+  // detect a previous TulparLang install (any prior version, since the
+  // AppId is a stable GUID across releases). HKCU because we install
+  // per-user (PrivilegesRequired=lowest).
+  UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#UninstallID}_is1';
+
+// Read DisplayVersion of an existing TulparLang install, if any. Returns
+// empty string when not installed. We probe HKCU first (the per-user
+// install path this .iss writes to) and then HKLM as a fallback for
+// machines where an older build was installed system-wide.
+function GetInstalledVersion(): string;
+var
+  V: string;
+begin
+  Result := '';
+  if RegQueryStringValue(HKEY_CURRENT_USER, UninstallKey, 'DisplayVersion', V) then begin
+    Result := V;
+    Exit;
+  end;
+  if RegQueryStringValue(HKEY_LOCAL_MACHINE, UninstallKey, 'DisplayVersion', V) then
+    Result := V;
+end;
+
+// Pre-install probe — fires before any wizard page renders. If a prior
+// TulparLang is present, surface its version up front and let the user
+// abort cleanly. Inno Setup carries over the previous install dir
+// automatically (UsePreviousAppDir defaults to yes), so saying "yes"
+// here means an in-place upgrade. Returning False aborts setup
+// silently — same effect as closing the window.
+function InitializeSetup(): Boolean;
+var
+  Existing: string;
+  Prompt: string;
+begin
+  Result := True;
+  Existing := GetInstalledVersion();
+  if Existing = '' then
+    Exit;
+
+  // %1 = installed version, %2 = the version we're about to install.
+  // The /silent flag (used by `winget install` and similar) suppresses
+  // MsgBox automatically — Inno Setup answers IDYES on its behalf, so
+  // unattended upgrades keep working.
+  Prompt := FmtMessage(CustomMessage('AlreadyInstalledPrompt'), [Existing, '{#AppVersion}']);
+  if MsgBox(Prompt, mbConfirmation, MB_YESNO) = IDNO then
+    Result := False;
+end;
 
 // PATH manipulation. We touch HKCU\Environment\Path (user-scope) so no
 // admin prompt is needed and we don't pollute the system PATH. The
