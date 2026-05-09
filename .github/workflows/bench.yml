@@ -191,7 +191,23 @@ jobs:
 
       - name: Open or refresh bench PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # AUTOMERGE_PAT is the same fine-grained user PAT that
+          # auto-merge.yml uses (Contents + Pull requests, read+write
+          # on this repo). We need it for two reasons:
+          #   1. The default GITHUB_TOKEN cannot create pull requests
+          #      unless the repo's Settings → Actions → Workflow
+          #      permissions → "Allow GitHub Actions to create and
+          #      approve pull requests" is enabled. We don't want to
+          #      flip that — using a PAT keeps the setting locked
+          #      down for any other workflow that might be tempted.
+          #   2. PRs / merges done via GITHUB_TOKEN suppress
+          #      downstream `push` workflows (GitHub's recursion
+          #      guard). Our auto-merge step needs main's build.yml
+          #      to fire on the squashed commit (so create-release
+          #      keeps publishing rolling releases), and that only
+          #      happens with a user-scoped PAT — same reason
+          #      auto-merge.yml uses this exact secret.
+          GH_TOKEN: ${{ secrets.AUTOMERGE_PAT }}
           GH_RUN_ID: ${{ github.run_id }}
           GH_REPO: ${{ github.repository }}
           GH_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
