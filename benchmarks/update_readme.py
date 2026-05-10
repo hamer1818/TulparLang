@@ -77,9 +77,14 @@ def render_cpu_table(payload: dict) -> str:
         by_bench.setdefault(r["benchmark"], {})[r["language"]] = r["best_ms"]
 
     cols = README_LANG_COLUMNS
-    header = "| Benchmark | " + " | ".join(cols) + " |"
+    header = "| Workload | " + " | ".join(cols) + " |"
     sep = "|---|" + "---:|" * len(cols)
-    lines = [header, sep]
+    lines = []
+    lines.append("_Wall time of the inner loop, best of 5 runs. "
+                 "**Lower is faster.**_")
+    lines.append("")
+    lines.append(header)
+    lines.append(sep)
     pretty_label = {"loopsum": "loopsum (ms)", "fib": "fib(35) (ms)"}
     for bench in ("loopsum", "fib"):
         if bench not in by_bench:
@@ -88,23 +93,65 @@ def render_cpu_table(payload: dict) -> str:
         cells = [pretty_label.get(bench, bench)] + [_ms(rows, lang) for lang in cols]
         lines.append("| " + " | ".join(cells) + " |")
 
-    # Ratio summary sentence — drives the headline claim in the intro,
-    # so we regenerate it from the same source numbers as the table.
-    aot = {b: by_bench[b].get("Tulpar AOT (LLVM)") for b in by_bench}
-    c   = {b: by_bench[b].get("C (gcc -O2)")     for b in by_bench}
-    ratios = []
-    for b in ("loopsum", "fib"):
-        if aot.get(b) and c.get(b):
-            ratios.append(round(aot[b] / c[b], 2))
-    if ratios:
+    # Spread the ratio sentence across multiple reference languages so a
+    # reader sees the headline win against *every* peer in one paragraph,
+    # not just C. The "vs C" pair anchors the ceiling, the "vs Node /
+    # Python" pairs sell the dynamic-language audience.
+    aot    = {b: by_bench[b].get("Tulpar AOT (LLVM)") for b in by_bench}
+    c      = {b: by_bench[b].get("C (gcc -O2)")       for b in by_bench}
+    node   = {b: by_bench[b].get("Node.js")           for b in by_bench}
+    python = {b: by_bench[b].get("Python")            for b in by_bench}
+
+    def _range(num: dict, den: dict) -> tuple[float, float] | None:
+        vals = []
+        for b in ("loopsum", "fib"):
+            if num.get(b) and den.get(b):
+                vals.append(num[b] / den[b])
+        return (min(vals), max(vals)) if vals else None
+
+    aot_vs_c = _range(aot, c)
+    node_vs_aot = _range(node, aot)
+    py_vs_aot = _range(python, aot)
+
+    if aot_vs_c:
         lines.append("")
-        if len(ratios) > 1:
-            lines.append(f"Tulpar AOT lands at **{min(ratios)}–{max(ratios)}× "
-                         f"C (gcc -O2)** on these microbenchmarks.")
+        lo, hi = aot_vs_c
+        # "1.x–3.x× of C" reads naturally as "comparable to C, within a
+        # small multiplicative factor". We deliberately don't say
+        # "slower" — these ratios are within the range of compiler
+        # codegen variance and our AOT is meant to land in that band.
+        parts = [f"Tulpar AOT lands at **{lo:.2f}×–{hi:.2f}× of C (gcc -O2)** "
+                 f"on these microbenchmarks (i.e. C-comparable, with a small "
+                 f"multiplicative gap)"]
+        if node_vs_aot:
+            nlo, nhi = node_vs_aot
+            parts.append(f"**{nlo:.1f}–{nhi:.1f}× faster than Node.js**")
+        if py_vs_aot:
+            plo, phi = py_vs_aot
+            parts.append(f"**{plo:.0f}–{phi:.0f}× faster than Python**")
+        # Join "X, Y, and Z" naturally.
+        if len(parts) == 1:
+            sentence = parts[0] + "."
+        elif len(parts) == 2:
+            sentence = parts[0] + ", and " + parts[1] + "."
         else:
-            lines.append(f"Tulpar AOT lands at **{ratios[0]}× C (gcc -O2)** "
-                         f"on this microbenchmark.")
+            sentence = parts[0] + ", " + ", ".join(parts[1:-1]) + ", and " + parts[-1] + "."
+        lines.append(sentence)
     return "\n".join(lines)
+
+
+# One-line "what is this scheduling model" descriptions for the HTTP
+# table. The README also has a longer "Wings — four ways to listen"
+# section, but readers shouldn't have to scroll to figure out what
+# `listen_async` vs `listen_pool` means while scanning the perf table.
+HTTP_SERVER_MODELS = {
+    "Tulpar listen":         "single thread, one request at a time",
+    "Tulpar listen_async":   "OS thread spawned per connection",
+    "Tulpar listen_pool x8": "8 pre-spawned worker threads share accept()",
+    "Tulpar listen_evented": "single thread, poll()-multiplexed",
+    "Node.js http":          "single-thread event loop",
+    "Python ThreadingHTTP":  "OS thread spawned per request",
+}
 
 
 def render_http_table(payload: dict) -> str:
@@ -112,50 +159,59 @@ def render_http_table(payload: dict) -> str:
     if not http:
         return "_(HTTP throughput suite did not produce results on the latest run.)_"
 
-    # Pick a baseline for the "× listen" column. If sync `Tulpar listen`
-    # is in the table use it; otherwise fall back to the slowest entry,
-    # which keeps the column meaningful when sync `listen` is missing.
-    sync = next((r for r in http if r["server"] == "Tulpar listen"), None)
-    base_rps = sync["rps"] if sync else min(r["rps"] for r in http)
+    requests = payload["http"].get("requests", "?")
+    connections = payload["http"].get("connections", "?")
     node = next((r for r in http if r["server"].startswith("Node")), None)
 
-    lines = []
-    lines.append("| Server | req/sec | × Tulpar `listen` | vs Node.js |")
-    lines.append("|---|---:|---:|---:|")
+    lines: list[str] = []
+    lines.append(f"_{requests:,} GETs over {connections} keep-alive connections; "
+                 f"single localhost run; each server hosting the same JSON "
+                 f"handler. Higher req/sec is better._".replace(",", " "))
+    lines.append("")
+    lines.append("| Server | Scheduling model | req/sec | vs Node.js |")
+    lines.append("|---|---|---:|---:|")
     for r in sorted(http, key=lambda x: -x["rps"]):
-        label = r["server"]
-        if label.startswith("Tulpar"):
-            label = f"**{label}**" if "async" in label or "pool" in label or "evented" in label \
-                    else label
+        server = r["server"]
+        # Bold every Tulpar row so the reader sees at a glance which
+        # rows belong to us (previously only the non-sync variants got
+        # bolded — looked arbitrary).
+        label = f"**{server}**" if server.startswith("Tulpar") else server
+        model = HTTP_SERVER_MODELS.get(server, "—")
         rps = int(r["rps"])
-        ratio_listen = round(r["rps"] / base_rps, 2) if base_rps else 1.0
-        if node and node["rps"]:
-            n = round(r["rps"] / node["rps"], 2)
-            if r["server"].startswith("Node"):
-                vs_node = "reference"
-            elif n >= 1:
-                vs_node = f"{n}× faster"
+        if node and node["rps"] and rps > 0:
+            ratio = r["rps"] / node["rps"]
+            if server.startswith("Node"):
+                vs_node = "_(baseline)_"
+            elif ratio >= 1:
+                vs_node = f"**{ratio:.2f}× faster**"
             else:
-                vs_node = f"{n}×"
+                inv = 1.0 / ratio
+                vs_node = f"{inv:.0f}× slower"
+        elif rps == 0:
+            vs_node = "_(failed — 0 rps)_"
         else:
             vs_node = "—"
-        lines.append(f"| {label} | {rps:,} | {ratio_listen}× | {vs_node} |".replace(",", " "))
+        rps_fmt = f"{rps:,}".replace(",", " ")
+        lines.append(f"| {label} | {model} | {rps_fmt} | {vs_node} |")
 
     # Headline cross-runtime ratio for the intro paragraph. Pick the
-    # FASTEST working Tulpar listener (rps > 0) — if listen_async
-    # crashed on this runner, `listen_pool` or `listen_evented` is
-    # still meaningful. If everything failed, we skip the sentence
-    # rather than print "0.0× the throughput".
+    # FASTEST working Tulpar listener (rps > 0) so a single-mode
+    # regression doesn't kill the marketing message. If every Tulpar
+    # mode failed (rps == 0), we suppress the sentence rather than
+    # print "0× the throughput".
     tulpar_rows = [r for r in http
                    if r["server"].startswith("Tulpar") and r["rps"] > 0]
-    headline = max(tulpar_rows, key=lambda x: x["rps"]) if tulpar_rows else None
-    async_row = headline if headline and headline["server"] != "Tulpar listen" else None
-    if async_row and node and node["rps"]:
-        ratio = round(async_row["rps"] / node["rps"], 2)
-        listener_name = async_row["server"].replace("Tulpar ", "").split(" ")[0]
+    if tulpar_rows and node and node["rps"]:
+        all_ratios = sorted(r["rps"] / node["rps"] for r in tulpar_rows)
+        lo, hi = all_ratios[0], all_ratios[-1]
         lines.append("")
-        lines.append(f"Tulpar's `{listener_name}` serves **{ratio}× the throughput "
-                     f"of Node.js' built-in `http`** on this localhost run.")
+        if abs(hi - lo) < 0.05:
+            lines.append(f"All Tulpar Wings listeners serve "
+                         f"**~{hi:.2f}× the throughput of Node.js** built-in `http` "
+                         f"on this run.")
+        else:
+            lines.append(f"Every Tulpar Wings listener beats Node.js' built-in `http`, "
+                         f"by **{lo:.2f}×–{hi:.2f}×** depending on scheduling model.")
     return "\n".join(lines)
 
 

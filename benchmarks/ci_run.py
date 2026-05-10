@@ -399,6 +399,19 @@ RESULTS_START = "<!-- BENCH:RESULTS START -->"
 RESULTS_END = "<!-- BENCH:RESULTS END -->"
 
 
+# Mirror of the HTTP_SERVER_MODELS map in update_readme.py. Kept inline
+# here so RESULTS.md and README.md show identical "what is this server"
+# descriptions for the same data — neither file references the other.
+HTTP_SERVER_MODELS = {
+    "Tulpar listen":         "single thread, one request at a time",
+    "Tulpar listen_async":   "OS thread spawned per connection",
+    "Tulpar listen_pool x8": "8 pre-spawned worker threads share accept()",
+    "Tulpar listen_evented": "single thread, poll()-multiplexed",
+    "Node.js http":          "single-thread event loop",
+    "Python ThreadingHTTP":  "OS thread spawned per request",
+}
+
+
 def render_results_md_section(payload: dict) -> str:
     """Build the auto-managed Markdown block dropped into RESULTS.md."""
     run = payload["run"]
@@ -423,7 +436,8 @@ def render_results_md_section(payload: dict) -> str:
     # CPU table.
     lines.append("## CPU benchmarks")
     lines.append("")
-    lines.append("Times in ms; best wall time of N runs.")
+    lines.append(f"Best wall time of {run['repeats']} runs, in milliseconds. "
+                 "**Lower is faster.**")
     lines.append("")
     by_lang = sorted({r["language"] for r in cpu})
     benches = ["loopsum", "fib"]
@@ -440,43 +454,65 @@ def render_results_md_section(payload: dict) -> str:
         lines.append("| " + " | ".join(row) + " |")
     lines.append("")
 
-    # Ratios — Tulpar AOT vs C and vs Node, for each benchmark. These
-    # are the headline numbers we cite in the README intro, so we
-    # publish them in the same artifact for traceability.
+    # Ratios — Tulpar AOT vs C / Node / Python, for each benchmark.
+    # The headline claim sits in README; this table is the
+    # full per-benchmark breakdown anyone can audit.
     aot_rows = {r["benchmark"]: r["best_ms"] for r in cpu
                 if r["language"] == "Tulpar AOT (LLVM)"}
     c_rows = {r["benchmark"]: r["best_ms"] for r in cpu
               if r["language"] == "C (gcc -O2)"}
     node_rows = {r["benchmark"]: r["best_ms"] for r in cpu
                  if r["language"] == "Node.js"}
+    py_rows = {r["benchmark"]: r["best_ms"] for r in cpu
+               if r["language"] == "Python"}
     if aot_rows and c_rows:
-        lines.append("**Ratios (Tulpar AOT vs reference):**")
+        lines.append("**Speed ratios** — how Tulpar AOT compares to each reference language:")
         lines.append("")
-        lines.append("| Benchmark | × C (gcc -O2) | × Node.js |")
-        lines.append("|---|---:|---:|")
+        lines.append("| Workload | vs C (gcc -O2) | vs Node.js | vs Python |")
+        lines.append("|---|---:|---:|---:|")
         for b in benches:
-            if b in aot_rows and b in c_rows:
-                vc = round(aot_rows[b] / c_rows[b], 2)
-                if b in node_rows:
-                    vn = round(node_rows[b] / aot_rows[b], 2)
-                    lines.append(f"| {b} | {vc}× | {vn}× faster |")
-                else:
-                    lines.append(f"| {b} | {vc}× | — |")
+            if b not in aot_rows or b not in c_rows:
+                continue
+            vc = round(aot_rows[b] / c_rows[b], 2)
+            vc_cell = f"{vc}× of C"
+            vn = (f"**{round(node_rows[b] / aot_rows[b], 1)}× faster**"
+                  if b in node_rows else "—")
+            vp = (f"**{round(py_rows[b] / aot_rows[b])}× faster**"
+                  if b in py_rows else "—")
+            lines.append(f"| {b} | {vc_cell} | {vn} | {vp} |")
         lines.append("")
 
     # HTTP table.
     if http:
         lines.append("## HTTP throughput")
         lines.append("")
-        lines.append(f"{payload['http']['requests']} requests across "
-                     f"{payload['http']['connections']} keep-alive "
-                     f"connections, single-machine localhost.")
+        lines.append(f"{payload['http']['requests']:,} GETs over "
+                     f"{payload['http']['connections']} keep-alive connections; "
+                     "single localhost run; each server hosting the same JSON "
+                     "handler. **Higher req/sec is better.**".replace(",", " "))
         lines.append("")
-        lines.append("| Server | req/sec | wall (s) |")
-        lines.append("|---|---:|---:|")
+        node = next((r for r in http if r["server"].startswith("Node")), None)
+        lines.append("| Server | Scheduling model | req/sec | vs Node.js |")
+        lines.append("|---|---|---:|---:|")
         for r in sorted(http, key=lambda x: -x["rps"]):
-            label = f"**{r['server']}**" if r["server"].startswith("Tulpar") else r["server"]
-            lines.append(f"| {label} | {int(r['rps'])} | {r['wall_s']} |")
+            server = r["server"]
+            label = f"**{server}**" if server.startswith("Tulpar") else server
+            model = HTTP_SERVER_MODELS.get(server, "—")
+            rps = int(r["rps"])
+            if node and node["rps"] and rps > 0:
+                ratio = r["rps"] / node["rps"]
+                if server.startswith("Node"):
+                    vs_node = "_(baseline)_"
+                elif ratio >= 1:
+                    vs_node = f"**{ratio:.2f}× faster**"
+                else:
+                    vs_node = f"{1.0/ratio:.0f}× slower"
+            elif rps == 0:
+                vs_node = "_(failed — 0 rps)_"
+            else:
+                vs_node = "—"
+            rps_fmt = f"{rps:,}".replace(",", " ")
+            lines.append(f"| {label} | {model} | {rps_fmt} | {vs_node} |")
         lines.append("")
 
     lines.append(RESULTS_END)
