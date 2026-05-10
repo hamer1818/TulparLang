@@ -689,7 +689,40 @@ jobs:
           done
           echo "--- SHA256SUMS.txt ---"
           cat SHA256SUMS.txt
-      
+
+      # Detached GPG signature over SHA256SUMS.txt — a release-only ed25519
+      # key whose public half is committed at `release-public.asc`. The
+      # signature lets someone with the public key verify that the manifest
+      # was produced by THIS workflow and hasn't been swapped post-release.
+      # If GPG_PRIVATE_KEY isn't configured (e.g. on a fork), skip cleanly:
+      # SHA256SUMS.txt itself still ships, and install scripts treat the
+      # `.asc` as opt-in.
+      - name: Sign SHA256SUMS.txt (GPG, opt-in via secret)
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
+            echo "GPG_PRIVATE_KEY secret not set; skipping signature (SHA256SUMS.txt still published)"
+            exit 0
+          fi
+          # Import key into a workflow-scoped keyring; the runner is
+          # ephemeral so cleanup after the job is automatic.
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import 2>&1 | tail -5
+          # Detached + armored signature. `--pinentry-mode loopback` plus
+          # an empty `--passphrase` lets gpg sign non-interactively when
+          # the key was generated without a passphrase. If GPG_PASSPHRASE
+          # is set, use it; otherwise pass an empty string.
+          gpg --batch --yes \
+              --pinentry-mode loopback \
+              --passphrase "${GPG_PASSPHRASE:-}" \
+              --detach-sign --armor \
+              --output SHA256SUMS.txt.asc \
+              SHA256SUMS.txt
+          echo "--- SHA256SUMS.txt.asc ---"
+          cat SHA256SUMS.txt.asc
+
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
@@ -722,6 +755,7 @@ jobs:
 
             **Integrity:**
             - `SHA256SUMS.txt` — `sha256sum -b` manifest covering every asset above. `tulpar update` verifies its downloads against this file; you can also check manually with `sha256sum -c SHA256SUMS.txt`.
+            - `SHA256SUMS.txt.asc` — detached GPG signature over `SHA256SUMS.txt`, signed by the [TulparLang Release key](https://github.com/hamer1818/TulparLang/blob/main/release-public.asc) (fingerprint `CE5C 22BD EA61 58BC 8221 3A7E 4396 41B3 0E8D FDEE`). Optional verification: `gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt`. Present only when the workflow has the signing secret; absent on fork builds.
 
             ### One-line install (Windows / Linux / macOS)
 
@@ -751,6 +785,6 @@ jobs:
             libzstd.dll
             libssl-3-x64.dll
             libcrypto-3-x64.dll
-            SHA256SUMS.txt
+            SHA256SUMS.txt*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
