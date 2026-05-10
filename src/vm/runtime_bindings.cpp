@@ -3889,6 +3889,144 @@ VMValue aot_path_match(VMValue patternVal, VMValue pathVal) {
   return VM_OBJ((Obj *)result);
 }
 
+// wings_find_route(routes, method, path) -> {"index": <int>, "params": <obj>}
+//
+// Two-pass route lookup matching the prior lib/wings.tpr behaviour
+// (`_find_route` + `_find_route_with_params`) but folded into one C
+// function so the per-request serve path no longer pays for the
+// Tulpar function dispatch + json["method"]/json["path"] hash lookups
+// per route iteration.
+//
+// Pass 1 (exact match): walks every route, returns the first whose
+// method AND path equal the request's. The vast majority of static
+// routes hit here, never touching the pattern path.
+//
+// Pass 2 (pattern match): only enters routes whose path contains a
+// ':' (param-bearing). Inlines the segment-walking logic that
+// `aot_path_match` uses for a single pattern — collapses the
+// "walk routes -> for each: walk segments" double loop into one
+// function call rather than `routes × path_match()` Tulpar calls.
+//
+// Return shape mirrors `_find_route_with_params`:
+//   {"index": <int>, "params": <obj>}
+// `index >= 0` means matched; `params` holds captures from `:name`
+// segments (empty object on exact match).
+VMValue aot_wings_find_route(VMValue routesVal, VMValue methodVal,
+                             VMValue pathVal) {
+  ObjObject *result = aot_http_make_obj(2);
+  ObjObject *params = aot_http_make_obj(0);
+
+  auto bail = [&](int index_val) -> VMValue {
+    aot_http_obj_set(result, "index", 5, VM_INT(index_val));
+    aot_http_obj_set(result, "params", 6, VM_OBJ((Obj *)params));
+    return VM_OBJ((Obj *)result);
+  };
+
+  if (!IS_ARRAY(routesVal) || !IS_STRING(methodVal) || !IS_STRING(pathVal)) {
+    return bail(-1);
+  }
+
+  ObjArray *routes = (ObjArray *)AS_ARRAY(routesVal);
+  ObjString *m = AS_STRING(methodVal);
+  ObjString *p = AS_STRING(pathVal);
+  const char *mchars = m->chars;
+  int mlen = m->length;
+  const char *pchars = p->chars;
+  int plen = p->length;
+
+  // Pass 1: exact match. Hot path — first route that matches wins.
+  // Most production apps have a handful of static routes plus a few
+  // `:name`-bearing ones; this loop short-circuits on the static hits.
+  for (int i = 0; i < routes->count; i++) {
+    VMValue rv = routes->items[i];
+    if (!IS_OBJECT(rv)) continue;
+    ObjObject *r = (ObjObject *)AS_OBJECT(rv);
+    VMValue rm = vm_object_get(r, (char *)"method");
+    VMValue rp = vm_object_get(r, (char *)"path");
+    if (!IS_STRING(rm) || !IS_STRING(rp)) continue;
+    ObjString *rm_s = AS_STRING(rm);
+    ObjString *rp_s = AS_STRING(rp);
+    if (rm_s->length == mlen && rp_s->length == plen &&
+        memcmp(rm_s->chars, mchars, mlen) == 0 &&
+        memcmp(rp_s->chars, pchars, plen) == 0) {
+      return bail(i);
+    }
+  }
+
+  // Pass 2: pattern match. We only enter this loop if the exact pass
+  // missed entirely, and we only consider routes whose path contains
+  // a ':' — non-param routes are exact-only by construction.
+  for (int i = 0; i < routes->count; i++) {
+    VMValue rv = routes->items[i];
+    if (!IS_OBJECT(rv)) continue;
+    ObjObject *r = (ObjObject *)AS_OBJECT(rv);
+    VMValue rm = vm_object_get(r, (char *)"method");
+    VMValue rp = vm_object_get(r, (char *)"path");
+    if (!IS_STRING(rm) || !IS_STRING(rp)) continue;
+    ObjString *rm_s = AS_STRING(rm);
+    ObjString *rp_s = AS_STRING(rp);
+    if (rm_s->length != mlen ||
+        memcmp(rm_s->chars, mchars, mlen) != 0) continue;
+    const char *pat = rp_s->chars;
+    int patLen = rp_s->length;
+    // Skip non-param routes — already considered above.
+    bool has_param = false;
+    for (int k = 0; k < patLen; k++) {
+      if (pat[k] == ':') { has_param = true; break; }
+    }
+    if (!has_param) continue;
+
+    // Reset params for this attempt — failed pattern matches must
+    // not leak captures into the next route's try (was a real bug
+    // when the Tulpar version was first written).
+    params = aot_http_make_obj(2);
+
+    // Segment-walk the request path against the pattern path. Same
+    // shape as aot_path_match's non-wildcard branch — duplicated
+    // here so we don't pay an extra function call per route AND so
+    // the captures land in the local `params` object rather than
+    // path_match's own allocation we'd have to deep-copy.
+    int pi = 0; // pattern cursor
+    int hi = 0; // request-path cursor
+    bool matched = true;
+    while (pi < patLen && hi < plen) {
+      if (pat[pi] == '/' && pchars[hi] == '/') { pi++; hi++; continue; }
+      if (pat[pi] == '/' || pchars[hi] == '/') { matched = false; break; }
+      int p_end = pi;
+      while (p_end < patLen && pat[p_end] != '/') p_end++;
+      int h_end = hi;
+      while (h_end < plen && pchars[h_end] != '/') h_end++;
+      if (p_end > pi && pat[pi] == ':') {
+        if (h_end == hi) { matched = false; break; }
+        aot_http_obj_set_str(params, pat + pi + 1, p_end - pi - 1,
+                             pchars + hi, h_end - hi);
+      } else {
+        int p_len = p_end - pi;
+        int h_len = h_end - hi;
+        if (p_len != h_len || memcmp(pat + pi, pchars + hi, p_len) != 0) {
+          matched = false; break;
+        }
+      }
+      pi = p_end;
+      hi = h_end;
+    }
+    if (matched) {
+      // Allow a trailing '/' on either side.
+      while (pi < patLen && pat[pi] == '/') pi++;
+      while (hi < plen && pchars[hi] == '/') hi++;
+      matched = (pi == patLen) && (hi == plen);
+    }
+    if (matched) {
+      return bail(i);
+    }
+  }
+
+  // No match: return -1 with the (possibly stale-after-failed-pattern)
+  // params object empty. Rebuilt for cleanliness.
+  params = aot_http_make_obj(0);
+  return bail(-1);
+}
+
 // Builtin: parse_cookies(str) -> json
 // Parse an RFC 6265 Cookie header value (`a=1; b=2; c=hello`) into a
 // JSON-style object. Pairs are split on `;`, leading whitespace on each
