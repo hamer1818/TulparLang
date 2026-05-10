@@ -738,6 +738,10 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
       compile_expression(compiler, node->arguments[0]); // filename
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
       emit_byte(compiler, 83, node->line);
+    } else if (strcmp(node->name, "sha256") == 0) {
+      compile_expression(compiler, node->arguments[0]); // input string
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 84, node->line);
     }
     // Socket I/O
     else if (strcmp(node->name, "socket_server") == 0) {

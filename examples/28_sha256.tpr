@@ -1,0 +1,49 @@
+// sha256 builtin — content-addressed hashing in pure Tulpar.
+//
+// Use cases:
+//   * Token fingerprinting — bucket key for a per-user / per-token
+//     rate limiter without keeping the full token live in memory.
+//   * Content integrity — verify that bytes you pulled match a sha
+//     announced upstream (`tulpar pkg install` already does this
+//     internally; user-level code can do the same now).
+//
+// The digest is the standard FIPS 180-4 SHA-256, lowercase hex,
+// 64 chars. Same output as `openssl dgst -sha256 -r` and Python's
+// `hashlib.sha256(...).hexdigest()`.
+
+func expect(str label, str got, str want) {
+    if (got == want) {
+        print("OK   " + label);
+    } else {
+        print("FAIL " + label);
+        print("     got:  " + got);
+        print("     want: " + want);
+    }
+}
+
+// Empty input is the canonical zero-bytes digest.
+expect("sha256(\"\")",
+       sha256(""),
+       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
+// Single character.
+expect("sha256(\"a\")",
+       sha256("a"),
+       "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb");
+
+// "abc" — matches `printf '%s' abc | sha256sum`.
+expect("sha256(\"abc\")",
+       sha256("abc"),
+       "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+
+// Token-fingerprint shaped input — long random-looking string.
+expect("sha256(<long token>)",
+       sha256("publish-token-CE5C22BDEA6158BC82213A7E439641B30E8DFDEE-rotate-2026"),
+       "a24532ed5132ff8927f4d22d0c8d42cac48106df1e6aa3a2c07c57253a938f89");
+
+// Idempotent: calling twice on the same input gives the same hash.
+str a = sha256("repeat me");
+str b = sha256("repeat me");
+expect("idempotence", a, b);
+
+print("done");

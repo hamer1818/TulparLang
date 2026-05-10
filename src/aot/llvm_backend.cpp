@@ -846,6 +846,11 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_file_exists =
       LLVMAddFunction(backend->module, "aot_file_exists_ptr", read_type);
 
+  // aot_sha256(str) -> VMValue (lowercase 64-char hex digest as str).
+  // Same single-VMValue-pointer ABI as read_file/file_exists.
+  backend->func_aot_sha256 =
+      LLVMAddFunction(backend->module, "aot_sha256_ptr", read_type);
+
   // Exception Handling Functions
   // aot_try_push() -> jmp_buf* (ptr)
   LLVMTypeRef try_push_type = LLVMFunctionType(backend->ptr_type, nullptr, 0, 0);
@@ -3477,6 +3482,16 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           backend->builder, arg_ptr, backend->ptr_type, "exists_arg_void");
       LLVMValueRef args[] = {arg_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_file_exists, args, 1, "exists_res");
+    }
+    if (strcmp(node->name, "sha256") == 0) {
+      LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "sha256_arg_ptr");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "sha256_arg_void");
+      LLVMValueRef args[] = {arg_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_sha256, args, 1, "sha256_res");
     }
 
     if (strcmp(node->name, "db_open") == 0) {

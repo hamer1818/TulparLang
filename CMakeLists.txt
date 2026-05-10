@@ -326,6 +326,7 @@ add_library(tulpar_runtime STATIC
     src/lexer/lexer.cpp
     src/parser/parser.cpp
     src/parser/import_alias.cpp
+    src/pkg/sha256.cpp
     lib/sqlite3/sqlite3.c
 )
 target_include_directories(tulpar_runtime PRIVATE ${PROJECT_SOURCE_DIR}/src)
