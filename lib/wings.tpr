@@ -250,22 +250,19 @@ func _wings_status_or(json result, int fallback) {
     return fallback;
 }
 
-// Build the wire response for a dispatched handler. Centralises the
-// `_raw` and `_status` envelope checks so both `listen()` and
-// `listen_async()` get the same behaviour without duplicating the
-// branching.
+// Build the wire response for a dispatched handler. The native
+// `wings_build_response` builtin folds the envelope check + JSON
+// serialisation + response framing into a single C call, replacing
+// three Tulpar function hops per request. Behaviour is identical to
+// the prior all-Tulpar implementation:
+//   * `_status`       overrides the 200 default
+//   * `_raw`          uses the string verbatim as body (no JSON)
+//   * `_content_type` Content-Type when `_raw` is set (else text/plain)
+//   * otherwise       body = toJson(result), Content-Type = application/json
+// The Tulpar wrapper is kept so library consumers calling
+// `_wings_build_response` directly (uncommon, but legal) still resolve.
 func _wings_build_response(json result, int keep) {
-    int status = _wings_status_or(result, 200);
-    if (_wings_has_raw(result)) {
-        str ct = result["_content_type"];
-        if (length(ct) == 0) {
-            ct = "text/plain; charset=utf-8";
-        }
-        str rbody = result["_raw"];
-        return http_create_response(status, ct, rbody, _default_headers, keep);
-    }
-    return http_create_response(status, "application/json",
-        toJson(result), _default_headers, keep);
+    return wings_build_response(result, _default_headers, keep);
 }
 
 func _wings_build_404(str path, int keep) {
