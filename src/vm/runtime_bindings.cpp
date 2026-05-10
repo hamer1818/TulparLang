@@ -4399,6 +4399,83 @@ VMValue aot_http_create_response(VMValue statusVal, VMValue contentTypeVal,
   return VM_OBJ((Obj *)aot_allocate_string(response, total_len));
 }
 
+// wings_build_response(result, default_headers, keep) -> wire-string
+//
+// One-stop native replacement for the lib/wings.tpr `_wings_build_response`
+// helper. Previously each request went through this Tulpar code:
+//
+//   func _wings_build_response(json result, int keep) {
+//       int status = _wings_status_or(result, 200);   // tulpar fn call
+//       if (_wings_has_raw(result)) { ... }           // tulpar fn call
+//       return http_create_response(status, "application/json",
+//           toJson(result), _default_headers, keep);  // 2 allocs
+//   }
+//
+// Three Tulpar function calls + two arena allocations (toJson string +
+// response string) per request. This builtin folds the envelope check,
+// JSON serialisation, and response framing into a single C call with
+// one arena allocation for the final wire bytes (toJson writes into a
+// scratch buffer that's then memcpy'd into the response; we'll inline
+// that further in a follow-up if needed).
+//
+// Recognises the same response envelope as the Tulpar code:
+//   * `_status`       — override 200 default
+//   * `_raw`          — body string is `_raw` verbatim (skip toJson)
+//   * `_content_type` — Content-Type when `_raw` is set
+//                       (defaults to "text/plain; charset=utf-8")
+VMValue aot_wings_build_response(VMValue resultVal, VMValue defaultHeadersVal,
+                                 VMValue keepVal) {
+  int status = 200;
+  const char *content_type_str = nullptr;
+  ObjString *raw_body = nullptr;
+
+  if (IS_OBJECT(resultVal)) {
+    ObjObject *obj = (ObjObject *)AS_OBJECT(resultVal);
+    for (int i = 0; i < obj->count; i++) {
+      ObjString *k = obj->keys[i];
+      if (!k) continue;
+      const char *key = k->chars;
+      VMValue v = obj->values[i];
+      if (strcmp(key, "_status") == 0 && IS_INT(v)) {
+        status = (int)AS_INT(v);
+      } else if (strcmp(key, "_raw") == 0 && IS_STRING(v)) {
+        raw_body = AS_STRING(v);
+      } else if (strcmp(key, "_content_type") == 0 && IS_STRING(v)) {
+        content_type_str = AS_STRING(v)->chars;
+      }
+    }
+  }
+
+  // Pick body + content type. Mirrors the Tulpar branch exactly so a
+  // handler returning `{"_raw": "...", "_content_type": ""}` falls
+  // back to text/plain just like before.
+  VMValue body_val;
+  if (raw_body) {
+    if (!content_type_str || content_type_str[0] == '\0') {
+      content_type_str = "text/plain; charset=utf-8";
+    }
+    body_val = VM_OBJ((Obj *)raw_body);
+  } else {
+    // Normal handler path: serialise the whole result to JSON. We
+    // reuse aot_to_json (JSBuilder fast-path) rather than cJSON.
+    content_type_str = "application/json";
+    body_val = aot_to_json(resultVal);
+  }
+
+  // Stash content_type in a VMValue string so we can delegate the
+  // actual wire framing to the existing keep-alive response builder.
+  // This is the one allocation we don't fully fold today — collapsing
+  // it would require teaching aot_http_create_response_keepalive to
+  // take a (const char*, size_t) pair directly, which means a second
+  // entry point. Left for a follow-up if profiling shows it matters.
+  size_t ct_len = strlen(content_type_str);
+  ObjString *ct_str = aot_allocate_string(content_type_str, (int)ct_len);
+  VMValue ct_val = VM_OBJ((Obj *)ct_str);
+
+  return aot_http_create_response_keepalive(VM_INT(status), ct_val, body_val,
+                                            defaultHeadersVal, keepVal);
+}
+
 // ============================================================================
 // Math Functions (AOT) - Using libm
 // ============================================================================

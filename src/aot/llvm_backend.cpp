@@ -1153,6 +1153,17 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_parse_query = LLVMAddFunction(
       backend->module, "aot_parse_query", http_parse_type);
 
+  // aot_wings_build_response(result, default_headers, keep) -> wire-string
+  // Native replacement for lib/wings.tpr's `_wings_build_response`.
+  // Same 3 VMValue args as the keepalive response builder minus the
+  // explicit status/ct (those are inferred from the result envelope).
+  LLVMTypeRef wings_build_resp_params[] = {
+      backend->vm_value_type, backend->vm_value_type, backend->vm_value_type};
+  LLVMTypeRef wings_build_resp_type =
+      llvm_make_vmvalue_func_type(backend, wings_build_resp_params, 3, 0);
+  backend->func_aot_wings_build_response = LLVMAddFunction(
+      backend->module, "aot_wings_build_response", wings_build_resp_type);
+
   // aot_parse_cookies(str) -> VMValue (object)
   // Same VMValue (str) -> VMValue (object) shape as parse_query, so we
   // reuse http_parse_type rather than declaring a fresh signature.
@@ -3768,6 +3779,20 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_http_status_text, args, 1, "status_text");
+    }
+
+    // wings_build_response(result, default_headers, keep) -> wire string
+    // Fused replacement for the Tulpar-side _wings_build_response —
+    // skips three function-call hops per request and folds the envelope
+    // check + toJson + framing into one native call.
+    if (strcmp(node->name, "wings_build_response") == 0 &&
+        node->argument_count >= 3) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
+                             codegen_expression(backend, node->arguments[1]),
+                             codegen_expression(backend, node->arguments[2])};
+      return llvm_call_vmvalue_func(backend,
+                                    backend->func_aot_wings_build_response,
+                                    args, 3, "wings_build_resp");
     }
 
     // path_match(pattern, path) -> {matched, params}
