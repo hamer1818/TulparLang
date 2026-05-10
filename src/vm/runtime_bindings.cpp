@@ -2720,6 +2720,15 @@ VMValue aot_socket_server(VMValue hostVal, VMValue portVal) {
   setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt,
              sizeof(opt));
 
+  // SO_REUSEPORT lets multiple listening sockets share the same port
+  // with kernel-level load balancing across them — exactly what
+  // `listen_pool` wants long-term and harmless for the single-socket
+  // variants. POSIX-only; Windows winsock has no equivalent (its
+  // SO_REUSEADDR already covers the overlap case differently).
+#if !PLATFORM_WINDOWS && defined(SO_REUSEPORT)
+  setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+#endif
+
   struct sockaddr_in address;
   address.sin_family = AF_INET;
   address.sin_addr.s_addr = INADDR_ANY;
@@ -2730,7 +2739,19 @@ VMValue aot_socket_server(VMValue hostVal, VMValue portVal) {
     return VM_INT(-1);
   }
 
-  if (listen(server_fd, 3) < 0) {
+  // Backlog was 3. On any modern Linux with 4+ concurrent connections
+  // (e.g. the benchmark harness's 4-worker parallel connect), the
+  // accept queue overflows before the server's main thread can drain
+  // it; the kernel silently drops the SYN-ACK on the overflow path
+  // (default `tcp_abort_on_overflow=0`), the client's `connect()`
+  // hangs or fails, and the bench's barrier-on-failure logic aborts
+  // every worker — manifesting as 0 rps in the CI HTTP results table
+  // for `listen_async` and `listen_pool` (caught the long way on
+  // GitHub Actions). SOMAXCONN is the largest backlog the kernel
+  // accepts; on Linux 4096+ on modern distros, on Windows it's
+  // INT_MAX. Either way it's "as big as the kernel will allow," which
+  // is what we want for a long-running server.
+  if (listen(server_fd, SOMAXCONN) < 0) {
     tulpar_close(server_fd);
     return VM_INT(-1);
   }
