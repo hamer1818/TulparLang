@@ -188,6 +188,7 @@ typedef struct {
   LLVMValueRef func_aot_write_file;
   LLVMValueRef func_aot_append_file;
   LLVMValueRef func_aot_file_exists;
+  LLVMValueRef func_aot_sha256;
 
   // Exception Handling
   LLVMValueRef func_aot_try_push;

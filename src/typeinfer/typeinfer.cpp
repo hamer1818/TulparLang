@@ -704,6 +704,8 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"read_file", TYPE_STRING, {TYPE_STRING}},
       {"append_file", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
       {"file_exists", TYPE_BOOL, {TYPE_STRING}},
+      // Crypto / content integrity
+      {"sha256", TYPE_STRING, {TYPE_STRING}},
       // Sockets — handles + buffers are opaque to typeinfer; we still
       // catch arg-count typos via the wildcard params.
       {"socket_server", TYPE_UNKNOWN, {TYPE_STRING, TYPE_INT}},

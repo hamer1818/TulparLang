@@ -4,6 +4,7 @@
 #include "../common/platform_dl.h"
 #include "../common/platform.h"
 #include "../common/platform_sockets.h"
+#include "../pkg/sha256.hpp"
 #include "vm.hpp"
 
 // Windows MSVC compatibility: ssize_t is not standard on Windows
@@ -2611,6 +2612,29 @@ VMValue aot_file_exists_ptr(VMValue *path_ptr) {
   if (!path_ptr)
     return VM_BOOL(false);
   return aot_file_exists(*path_ptr);
+}
+
+// sha256(s: str) -> str — lowercase 64-char hex digest of the input
+// bytes. Wraps the same `tulpar::sha256_hex` helper the package
+// manager and update-cmd already use; the user-facing builtin lets
+// .tpr code reach the digest directly (token fingerprints, content
+// integrity checks, signed-cookie HMAC building blocks).
+//
+// Empty string → digest of zero bytes (`e3b0c44...`). Non-string
+// argument → empty result; the typeinfer catalog rejects this at
+// compile time anyway, so the runtime guard is just defense.
+VMValue aot_sha256(VMValue v) {
+  if (!IS_STRING(v))
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  ObjString *s = AS_STRING(v);
+  std::string hex = tulpar::sha256_hex(s->chars, (size_t)s->length);
+  return VM_OBJ((Obj *)aot_allocate_string(hex.data(), (int)hex.size()));
+}
+
+VMValue aot_sha256_ptr(VMValue *vp) {
+  if (!vp)
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  return aot_sha256(*vp);
 }
 
 // ============================================================================

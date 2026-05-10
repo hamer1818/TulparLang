@@ -18,6 +18,7 @@
 #include "../common/localization.hpp"
 #include "compiler.hpp"
 #include "vm.hpp"
+#include "../pkg/sha256.hpp"
 #include <cctype>
 #include <cmath> // For clock()
 #include <stdarg.h>
@@ -2058,6 +2059,20 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
             }
           } else {
             vm_push(vm, VM_BOOL(0));
+          }
+          break;
+        }
+
+        case 84: { // sha256(s) -> string (lowercase 64-char hex digest)
+          VMValue v = vm_pop(vm);
+          if (IS_STRING(v)) {
+            ObjString *s = AS_STRING(v);
+            std::string hex =
+                tulpar::sha256_hex(s->chars, (size_t)s->length);
+            vm_push(vm, VM_OBJ(vm_alloc_string(vm, hex.data(),
+                                               (int)hex.size())));
+          } else {
+            vm_push(vm, VM_OBJ(vm_alloc_string(vm, "", 0)));
           }
           break;
         }
