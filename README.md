@@ -194,7 +194,7 @@ hit the API immediately.
 ## Performance
 
 <!-- BENCH:META START -->
-> _Auto-updated by CI on every push to `main`. Last run: **2026-05-10T10:49:30Z** UTC · commit [`40e672f`](../../commit/40e672f8e2cccd86ae9df45d912ba99373d1bfee) · runner `Linux` · `AMD EPYC 7763 64-Core Processor` (4 CPUs). Methodology: [benchmarks/CI.md](benchmarks/CI.md)._
+> _Auto-updated by CI on every push to `main`. Last run: **2026-05-10T21:34:28Z** UTC · commit [`b1d5153`](../../commit/b1d515362e35908727bafdec1eb14a6b4d9c717c) · runner `Linux` · `AMD EPYC 7763 64-Core Processor` (4 CPUs). Methodology: [benchmarks/CI.md](benchmarks/CI.md)._
 <!-- BENCH:META END -->
 
 > **Scope.** All numbers below are **microbenchmarks** — tight integer
@@ -215,10 +215,10 @@ the most recent CI run and the optimization-pipeline writeup.
 <!-- BENCH:CPU_TABLE START -->
 | Benchmark | Tulpar AOT (LLVM) | C (gcc -O2) | Rust (-O3) | Go | Node.js | Python |
 |---|---:|---:|---:|---:|---:|---:|
-| loopsum (ms) | **1.8** | 0.6 | 0.8 | 4.3 | 36.3 | 831.2 |
-| fib(35) (ms) | **28.8** | 18.4 | 29.5 | 53.7 | 132.8 | 1218.4 |
+| loopsum (ms) | **1.8** | 0.6 | 0.8 | 4.2 | 35.0 | 855.2 |
+| fib(35) (ms) | **28.2** | 18.3 | 28.9 | 53.8 | 130.1 | 1217.2 |
 
-Tulpar AOT lands at **1.57–3.0× C (gcc -O2)** on these microbenchmarks.
+Tulpar AOT lands at **1.54–3.0× C (gcc -O2)** on these microbenchmarks.
 <!-- BENCH:CPU_TABLE END -->
 
 ### HTTP throughput
@@ -229,9 +229,9 @@ JSON handler running on every server.
 <!-- BENCH:HTTP_TABLE START -->
 | Server | req/sec | × Tulpar `listen` | vs Node.js |
 |---|---:|---:|---:|
-| **Tulpar listen_evented** | 17 412 | 1.01× | 1.63× faster |
-| Tulpar listen | 17 302 | 1.0× | 1.61× faster |
-| Node.js http | 10 714 | 0.62× | reference |
+| **Tulpar listen_evented** | 17 260 | 1.13× | 1.63× faster |
+| Tulpar listen | 15 281 | 1.0× | 1.44× faster |
+| Node.js http | 10 614 | 0.69× | reference |
 | Python ThreadingHTTP | 98 | 0.01× | 0.01× |
 | **Tulpar listen_async** | 0 | 0.0× | 0.0× |
 | **Tulpar listen_pool x8** | 0 | 0.0× | 0.0× |
