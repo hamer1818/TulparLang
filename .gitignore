@@ -108,6 +108,15 @@ bt_full.txt
 test.tpr
 test_results.txt
 
+# ==== WASM build dir ====
+# wasm/build_wasm.sh writes Emscripten outputs here. Underscored name slips
+# past the `build-*/` glob above, so cover it explicitly.
+wasm/build_wasm/
+
+# ==== Claude Code per-project state ====
+# Scheduled-tasks lock + any future .claude/ scratch — local-only, never useful upstream.
+.claude/
+
 # ==== Keep These (not ignored) ====
 # lib/*.tpr - Standard libraries
 # examples/*.tpr - Example files
