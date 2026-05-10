@@ -3340,11 +3340,29 @@ typedef struct {
 
 // Thread entry point wrapper.
 //
-// Tulpar user functions are emitted with the AOT result-pointer ABI
-// (`void func(VMValue *result, VMValue arg1, …)`), not a return-by-
-// value ABI. The historical typedef here used `VMValue (*)(VMValue)`,
-// which silently produced wrong calls when worker threads dispatched
-// to user code — typically a crash on first arg access.
+// Tulpar user functions are emitted by `codegen_func_def`
+// (src/aot/llvm_backend.cpp) with the signature
+// `void func(VMValue *result_ptr, VMValue *arg1_ptr, ...)` — every
+// argument is a *pointer* to a VMValue, never a VMValue by value.
+//
+// Two historical bugs lived here:
+//   1. The original typedef was `VMValue (*)(VMValue)` (return-by-
+//      value). Fixed earlier to `void (*)(VMValue *, VMValue)`.
+//   2. The earlier fix STILL passed the argument by value. On Windows
+//      x64 MS-ABI, 16-byte VMValue structs are automatically passed
+//      by hidden pointer, so the by-value call accidentally matched
+//      the codegen'd pointer-taking ABI. On Linux/macOS SysV-ABI,
+//      16-byte structs are split into two integer registers — the
+//      callee then read those register contents as if they were a
+//      pointer, dereferenced garbage, and segfaulted on first arg
+//      access. Manifested as `listen_async` / `listen_pool` failing
+//      with empty bodies / 0 rps on CI Linux (caught via WSL repro
+//      with gdb pointing to `t.wings_pool_worker`'s first instruction).
+//
+// Fix: declare the typedef with `VMValue *` for the arg and pass
+// `&targs->arg`. Now matches the codegen'd ABI on every platform.
+// `targs` lives for the duration of this function (free()'d below),
+// so taking its address is safe.
 #if PLATFORM_WINDOWS
 static unsigned __stdcall aot_thread_entry(void *arg) {
 #else
@@ -3352,12 +3370,12 @@ static void *aot_thread_entry(void *arg) {
 #endif
   AOTThreadArgs *targs = (AOTThreadArgs *)arg;
 
-  typedef void (*ThreadFunc)(VMValue *result, VMValue arg);
+  typedef void (*ThreadFunc)(VMValue *result, VMValue *arg);
   ThreadFunc func = (ThreadFunc)targs->func_ptr;
 
   if (func) {
     VMValue result = VM_VOID();
-    func(&result, targs->arg);
+    func(&result, &targs->arg);
   }
 
   free(targs);
