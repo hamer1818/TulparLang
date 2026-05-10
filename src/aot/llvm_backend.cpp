@@ -1164,6 +1164,18 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_wings_build_response = LLVMAddFunction(
       backend->module, "aot_wings_build_response", wings_build_resp_type);
 
+  // aot_wings_find_route(routes, method, path) -> {index, params}
+  // Two-pass route lookup (exact, then pattern) in one native call,
+  // replacing the per-request Tulpar dispatch through
+  // `_find_route_with_params`. Shape matches `aot_path_match` — three
+  // VMValue inputs, one VMValue object output.
+  LLVMTypeRef wings_find_route_params[] = {
+      backend->vm_value_type, backend->vm_value_type, backend->vm_value_type};
+  LLVMTypeRef wings_find_route_type =
+      llvm_make_vmvalue_func_type(backend, wings_find_route_params, 3, 0);
+  backend->func_aot_wings_find_route = LLVMAddFunction(
+      backend->module, "aot_wings_find_route", wings_find_route_type);
+
   // aot_parse_cookies(str) -> VMValue (object)
   // Same VMValue (str) -> VMValue (object) shape as parse_query, so we
   // reuse http_parse_type rather than declaring a fresh signature.
@@ -3793,6 +3805,20 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend,
                                     backend->func_aot_wings_build_response,
                                     args, 3, "wings_build_resp");
+    }
+
+    // wings_find_route(routes, method, path) -> {"index", "params"}
+    // Native replacement for the Tulpar `_find_route_with_params`
+    // serve-path lookup. Saves N json[get]s per route iteration on
+    // every request.
+    if (strcmp(node->name, "wings_find_route") == 0 &&
+        node->argument_count >= 3) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
+                             codegen_expression(backend, node->arguments[1]),
+                             codegen_expression(backend, node->arguments[2])};
+      return llvm_call_vmvalue_func(backend,
+                                    backend->func_aot_wings_find_route,
+                                    args, 3, "wings_find_route");
     }
 
     // path_match(pattern, path) -> {matched, params}

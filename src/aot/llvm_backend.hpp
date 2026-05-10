@@ -257,6 +257,9 @@ typedef struct {
   // toJson + http_create_response_keepalive sequence into one native
   // call (one Tulpar function dispatch instead of three).
   LLVMValueRef func_aot_wings_build_response;
+  // Native route lookup (exact + pattern) — replaces the per-request
+  // Tulpar `_find_route_with_params` loop with a single C call.
+  LLVMValueRef func_aot_wings_find_route;
 
   // Process control
   LLVMValueRef func_aot_exit;
