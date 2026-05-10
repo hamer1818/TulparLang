@@ -20,7 +20,60 @@ permissions:
   actions: read
 
 jobs:
+  # Bench-bot's refresh PRs (and their squash-merges into main) touch
+  # only README.md + benchmarks/RESULTS.{md,json}. A full build for
+  # those is wasted wall-time — we'd burn one PR build *and* a
+  # post-merge reuse build on a docs-only change that can't possibly
+  # produce a different binary. This job computes the docs-only flag
+  # once; the three OS build jobs (and create-release) inherit it via
+  # `needs` and skip themselves when the flag is set. Skipped required
+  # checks satisfy branch protection, so the bench PR still auto-merges
+  # without manual intervention.
+  detect-docs-only:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.detect.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+          sparse-checkout: |
+            /*
+            !wasm/emsdk
+          sparse-checkout-cone-mode: false
+      - name: Compute docs_only flag
+        id: detect
+        shell: bash
+        run: |
+          # Tag pushes always rebuild — they exist to mint a stable
+          # release whose artifacts must be republished even if the
+          # commit content is identical to a previous build.
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "Tag push — treating as code change."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! git rev-parse HEAD^ >/dev/null 2>&1; then
+            echo "No parent commit available — defaulting to full build."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          changed=$(git diff --name-only HEAD^..HEAD)
+          echo "Files changed since HEAD^:"
+          printf '  %s\n' $changed
+          # Allowlist of paths that can never affect built artifacts.
+          # Everything bench-bot writes to lives here; if every changed
+          # path is in this set, the build is a no-op.
+          non_docs=$(echo "$changed" | grep -vE '^(README\.md|benchmarks/RESULTS\.(md|json))$' || true)
+          if [ -n "$changed" ] && [ -z "$non_docs" ]; then
+            echo "All changes are docs/bench-output — build can skip."
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Code changed — full build required."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build-linux:
+    needs: detect-docs-only
+    if: needs.detect-docs-only.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       # Skip the vendored Emscripten SDK at clone time — it's ~400 MB
@@ -217,6 +270,8 @@ jobs:
           path: dist/libtulpar_runtime-linux-x64.a
 
   build-macos:
+    needs: detect-docs-only
+    if: needs.detect-docs-only.outputs.docs_only != 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
@@ -337,6 +392,8 @@ jobs:
           path: dist/libtulpar_runtime-macos-universal.a
 
   build-windows:
+    needs: detect-docs-only
+    if: needs.detect-docs-only.outputs.docs_only != 'true'
     runs-on: windows-latest
     defaults:
       run:
@@ -661,7 +718,7 @@ jobs:
           path: dist/tulpar-setup-windows-x64.exe
   
   create-release:
-    needs: [build-linux, build-macos, build-windows]
+    needs: [detect-docs-only, build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
     # Releases come from two paths: every push to main produces a
     # rolling `v2.1.0.<run>` release (used by `tulpar update` to roll
@@ -669,8 +726,13 @@ jobs:
     # release named after the tag verbatim (used to mint stable
     # versions like v1.0.0 that we don't want overwriting on the next
     # main commit).
+    # Skip release publishing on docs-only pushes — the binaries are
+    # identical to the prior run and a duplicate release would only
+    # bump the version number without giving `tulpar update` anything
+    # new to download.
     if: |
       github.event_name == 'push' &&
+      needs.detect-docs-only.outputs.docs_only != 'true' &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' ||
        startsWith(github.ref, 'refs/tags/v'))
     # No `continue-on-error` — a release-publishing failure must turn the
