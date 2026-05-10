@@ -76,6 +76,34 @@ Prefer the GUI? Download `tulpar-setup-windows-x64.exe` from the
 [latest release](https://github.com/hamer1818/TulparLang/releases/latest)
 — per-user install, Start Menu entry, Add/Remove Programs entry.
 
+### Verifying releases
+
+Every release ships with `SHA256SUMS.txt` (asset hashes) and
+`SHA256SUMS.txt.asc` (a detached GPG signature over that manifest by
+the TulparLang Release key). The install scripts already verify the
+SHA-256 hashes; the GPG signature is an optional extra layer.
+
+```bash
+# Import the release-signing public key (one-time)
+curl -fsSL https://raw.githubusercontent.com/hamer1818/TulparLang/main/release-public.asc \
+  | gpg --import
+
+# Verify (download both files from the release page first)
+gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt
+```
+
+Public key fingerprint:
+
+```
+CE5C 22BD EA61 58BC 8221 3A7E  4396 41B3 0E8D FDEE
+```
+
+The key is ed25519, valid until 2028-05-09, used only for release
+signing. If `gpg --verify` reports `Good signature` and the
+fingerprint matches, the manifest came from the release workflow
+unchanged.
+
 ## Quick start
 
 Create `hello.tpr`:
