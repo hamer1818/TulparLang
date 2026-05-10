@@ -194,7 +194,7 @@ hit the API immediately.
 ## Performance
 
 <!-- BENCH:META START -->
-> _Auto-updated by CI on every push to `main`. Last run: **2026-05-10T09:21:15Z** UTC · commit [`39d14e1`](../../commit/39d14e130868c563d0a86e803e148e7cb65ac497) · runner `Linux` · `Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz` (4 CPUs). Methodology: [benchmarks/CI.md](benchmarks/CI.md)._
+> _Auto-updated by CI on every push to `main`. Last run: **2026-05-10T10:49:30Z** UTC · commit [`40e672f`](../../commit/40e672f8e2cccd86ae9df45d912ba99373d1bfee) · runner `Linux` · `AMD EPYC 7763 64-Core Processor` (4 CPUs). Methodology: [benchmarks/CI.md](benchmarks/CI.md)._
 <!-- BENCH:META END -->
 
 > **Scope.** All numbers below are **microbenchmarks** — tight integer
@@ -215,10 +215,10 @@ the most recent CI run and the optimization-pipeline writeup.
 <!-- BENCH:CPU_TABLE START -->
 | Benchmark | Tulpar AOT (LLVM) | C (gcc -O2) | Rust (-O3) | Go | Node.js | Python |
 |---|---:|---:|---:|---:|---:|---:|
-| loopsum (ms) | **1.5** | 0.4 | 0.6 | 4.5 | 38.4 | 834.9 |
-| fib(35) (ms) | **27.5** | 16.2 | 25.7 | 50.6 | 120.1 | 1146.7 |
+| loopsum (ms) | **1.8** | 0.6 | 0.8 | 4.3 | 36.3 | 831.2 |
+| fib(35) (ms) | **28.8** | 18.4 | 29.5 | 53.7 | 132.8 | 1218.4 |
 
-Tulpar AOT lands at **1.7–3.75× C (gcc -O2)** on these microbenchmarks.
+Tulpar AOT lands at **1.57–3.0× C (gcc -O2)** on these microbenchmarks.
 <!-- BENCH:CPU_TABLE END -->
 
 ### HTTP throughput
@@ -229,14 +229,14 @@ JSON handler running on every server.
 <!-- BENCH:HTTP_TABLE START -->
 | Server | req/sec | × Tulpar `listen` | vs Node.js |
 |---|---:|---:|---:|
-| **Tulpar listen_evented** | 27 627 | 1.04× | 1.92× faster |
-| Tulpar listen | 26 651 | 1.0× | 1.85× faster |
-| Node.js http | 14 412 | 0.54× | reference |
-| Python ThreadingHTTP | 98 | 0.0× | 0.01× |
+| **Tulpar listen_evented** | 17 412 | 1.01× | 1.63× faster |
+| Tulpar listen | 17 302 | 1.0× | 1.61× faster |
+| Node.js http | 10 714 | 0.62× | reference |
+| Python ThreadingHTTP | 98 | 0.01× | 0.01× |
 | **Tulpar listen_async** | 0 | 0.0× | 0.0× |
 | **Tulpar listen_pool x8** | 0 | 0.0× | 0.0× |
 
-Tulpar's `listen_evented` serves **1.92× the throughput of Node.js' built-in `http`** on this localhost run.
+Tulpar's `listen_evented` serves **1.63× the throughput of Node.js' built-in `http`** on this localhost run.
 <!-- BENCH:HTTP_TABLE END -->
 
 Reproduce locally: `python benchmarks/http_bench.py --requests 3000 --connections 4`.
