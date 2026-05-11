@@ -4559,9 +4559,44 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   }
 }
 
+// Plan 07 PR 3c — per-statement debug location set.
+//
+// Position the IR builder on `node`'s declaration line right before
+// any `LLVMBuild*` instruction the statement codegen emits. The
+// builder copies its current location onto every new instruction, so
+// updating it once per statement is enough to give gdb / lldb the
+// line-level resolution they need to step through .tpr source.
+//
+// No-op when --debug isn't set, when the node has no line info
+// (line <= 0), or when the function being emitted has no
+// DISubprogram (defensive guard — every user function emit path
+// attaches one in PR 3b, but built-ins and orphan codegen calls
+// might not, and the verifier rejects a !DILocation that scopes
+// against a non-Subprogram metadata).
+static void set_debug_loc_for_node(LLVMBackend *backend, ASTNode_C *node) {
+  if (!backend || !backend->di_builder || !backend->builder) return;
+  if (!node || node->line <= 0) return;
+  LLVMValueRef func = backend->current_function;
+  if (!func) return;
+  LLVMMetadataRef scope = LLVMGetSubprogram(func);
+  if (!scope) return;
+  unsigned col = (node->column > 0) ? (unsigned)node->column : 0u;
+  LLVMMetadataRef loc = LLVMDIBuilderCreateDebugLocation(
+      backend->context, (unsigned)node->line, col, scope,
+      /*InlinedAt=*/nullptr);
+  LLVMSetCurrentDebugLocation2(backend->builder, loc);
+}
+
 LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
   if (!node)
     return nullptr;
+  // PR 3c: each statement seeds its own debug location so the
+  // builder's current-loc slot carries the right line/column onto
+  // every instruction we emit for this statement. Block / function-
+  // declaration / import nodes that just recurse into children
+  // still benefit — their nested codegen_statement calls will
+  // overwrite the location before they emit anything visible.
+  set_debug_loc_for_node(backend, node);
   switch (node->type) {
   case AST_VARIABLE_DECL: {
     // Native typed-int global (registered in Pass 0.1 for `int x = ...;`)?
@@ -6454,6 +6489,15 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   backend->current_function = main_func;
   LLVMBasicBlockRef entry = LLVMAppendBasicBlock(main_func, "entry");
   LLVMPositionBuilderAtEnd(backend->builder, entry);
+
+  // Plan 07 PR 3b/3c: bind a DISubprogram to main so top-level
+  // statements (which the parser emits as direct children of
+  // AST_PROGRAM and codegen funnels into main's body below) can
+  // claim debug locations scoped under a real subprogram.
+  // `decl_line` 1 — main is synthesized from the program root, so
+  // the first source line is the only sensible anchor.
+  llvm_backend_emit_subprogram_for_function(backend, main_func, "main",
+                                            /*decl_line=*/1);
 
   enter_scope(backend);
 
