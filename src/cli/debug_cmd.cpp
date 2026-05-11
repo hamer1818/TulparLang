@@ -25,6 +25,7 @@
 // to stderr only (LSP follows the same rule, for the same reason).
 
 #include "debug_cmd.hpp"
+#include "../aot/aot_pipeline.hpp"
 
 extern "C" {
 #include "../../runtime/cJSON.h"
@@ -35,10 +36,21 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <sys/stat.h>
 
 #ifdef _WIN32
   #include <fcntl.h>
   #include <io.h>
+  #define DUP _dup
+  #define DUP2 _dup2
+  #define FILENO _fileno
+  #define CLOSE _close
+#else
+  #include <unistd.h>
+  #define DUP dup
+  #define DUP2 dup2
+  #define FILENO fileno
+  #define CLOSE close
 #endif
 
 namespace tulpar {
@@ -51,10 +63,18 @@ namespace {
 // easier wire-log reading.
 int g_next_seq = 1;
 
-// Program path arrived via argv[2]. Recorded once at startup so a
-// future `launch` request handler in PR 4b can pick it up without
-// re-parsing argv.
+// Program path arrived via argv[2]. The `launch` request handler can
+// override this with its own `program` argument, so callers using
+// VS Code's `launch.json` aren't forced to also pass the file on the
+// command line.
 std::string g_program_path;
+// Set by `launch` once an AOT build succeeds. PR 4c (gdb spawn) reads
+// it to feed `gdb --interpreter=mi3 ./<built_binary>`.
+std::string g_built_binary;
+// True once a `launch` request has run AOT-build to completion. PR 4c
+// will use this as the gate for forwarding execution-control requests
+// (`continue` / `next` / `stepIn`) to the underlying debugger.
+bool g_launched = false;
 
 // stdin / stdout must be binary on Windows or the runtime would
 // translate \r\n line endings between our raw bytes and the DAP
@@ -218,6 +238,192 @@ void handle_initialize(cJSON *request) {
   send_initialized_event();
 }
 
+// Strip the `.tpr` extension off a source path and append the
+// platform's executable suffix. `aot_compile_with_filename_debug`
+// derives its output basename the same way `tulpar build` does;
+// matching that here lets the (eventual) gdb spawn invocation use a
+// predictable path.
+std::string derive_output_name(const std::string &src) {
+  std::string out = src;
+  // Trim trailing `.tpr` so the basename matches what the AOT
+  // pipeline emits. Other extensions are left alone — the user
+  // shouldn't be `launch`ing a non-.tpr file, but we don't want to
+  // silently corrupt arbitrary paths if they do.
+  if (out.size() > 4 &&
+      out.compare(out.size() - 4, 4, ".tpr") == 0) {
+    out.resize(out.size() - 4);
+  }
+  return out;
+}
+
+// Slurp a whole text file into a heap-allocated buffer. Caller is
+// responsible for `free()`. Returns nullptr when the file can't be
+// opened — the caller then surfaces a structured "failed to launch"
+// response to the DAP client.
+char *slurp_file(const char *path) {
+  FILE *f = std::fopen(path, "rb");
+  if (!f) return nullptr;
+  std::fseek(f, 0, SEEK_END);
+  long size = std::ftell(f);
+  std::fseek(f, 0, SEEK_SET);
+  if (size < 0) { std::fclose(f); return nullptr; }
+  char *buf = static_cast<char *>(std::malloc(static_cast<size_t>(size) + 1));
+  if (!buf) { std::fclose(f); return nullptr; }
+  size_t got = std::fread(buf, 1, static_cast<size_t>(size), f);
+  buf[got] = '\0';
+  std::fclose(f);
+  return buf;
+}
+
+// `launch` is the first request that actually does work. DAP semantics:
+//   1. Read `program` (and optionally `stopOnEntry`, `args`, etc.)
+//     from `arguments`.
+//   2. Get the debuggee ready to run, but don't start it yet — that
+//     happens after `configurationDone` so the client has a chance to
+//     set breakpoints first.
+//   3. Reply success once the debuggee is "loaded".
+//
+// PR 4b scope: do the AOT build with debug info so PR 4c has a binary
+// to feed gdb. Source-file read failures, AOT codegen errors, and
+// link failures all surface as `success: false` with the AOT pipeline
+// result code in the message — the DAP client renders that in its
+// "DEBUG CONSOLE" pane verbatim. gdb spawn / `-exec-run` /
+// `stopped` event come in PR 4c.
+void handle_launch(cJSON *request) {
+  cJSON *args = cJSON_GetObjectItem(request, "arguments");
+
+  // Honour `arguments.program` when the client provided one (VS Code
+  // `launch.json` does). Fall back to the path we got off argv[2] at
+  // startup so a hand-rolled DAP session with no launch.json still
+  // works.
+  std::string program = g_program_path;
+  if (cJSON_IsObject(args)) {
+    cJSON *p = cJSON_GetObjectItem(args, "program");
+    if (cJSON_IsString(p) && p->valuestring && *p->valuestring) {
+      program = p->valuestring;
+    }
+  }
+
+  if (program.empty()) {
+    cJSON *resp = make_response(request, /*success=*/false,
+                                "launch: no `program` provided");
+    cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+
+  std::fprintf(stderr, "[dap] launch: building %s with debug info...\n",
+               program.c_str());
+
+  char *source = slurp_file(program.c_str());
+  if (!source) {
+    std::string msg = "launch: cannot read source file '" + program + "'";
+    cJSON *resp = make_response(request, /*success=*/false, msg.c_str());
+    cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+
+  std::string output = derive_output_name(program);
+
+  // AOT pipeline writes its `[AOT] ...` progress lines to stdout via
+  // raw printf. That's harmless in normal `tulpar build` invocations
+  // but here stdout IS the DAP wire — any byte we leak there breaks
+  // the `Content-Length: N\r\n\r\n<json>` framing and the client
+  // hangs trying to parse the next response. Redirect stdout to
+  // stderr for the duration of the build so those progress lines end
+  // up in the same channel the rest of our diagnostics use, then
+  // restore stdout so write_message can resume sending DAP messages.
+  std::fflush(stdout);
+  int saved_stdout = DUP(FILENO(stdout));
+  DUP2(FILENO(stderr), FILENO(stdout));
+
+  AOTResult rc = aot_compile_with_filename_debug(source, output.c_str(),
+                                                 program.c_str(),
+                                                 /*emit_debug_info=*/1);
+  std::fflush(stdout);
+  DUP2(saved_stdout, FILENO(stdout));
+  CLOSE(saved_stdout);
+  std::free(source);
+
+  if (rc != AOT_OK) {
+    // The pipeline already streamed its own diagnostic output to
+    // stderr; we just hand a short human-readable summary back to
+    // the client so the DEBUG CONSOLE shows something useful.
+    char msg[128];
+    std::snprintf(msg, sizeof(msg),
+                  "launch: AOT build failed (result=%d)", static_cast<int>(rc));
+    cJSON *resp = make_response(request, /*success=*/false, msg);
+    cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+
+  // Stash the path the gdb spawn (PR 4c) will hand to
+  // `--interpreter=mi3`. AOT emits the executable next to the build
+  // dir (or with .exe on Windows); we don't need to verify that file
+  // exists right now because the spawn step will surface that error
+  // naturally.
+  g_built_binary = output;
+  g_launched = true;
+  std::fprintf(stderr, "[dap] launch: build OK, binary=%s\n",
+               output.c_str());
+
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+  write_message(resp);
+  cJSON_Delete(resp);
+}
+
+// `configurationDone` is the client saying "I've sent all my
+// setBreakpoints / setExceptionBreakpoints / setDataBreakpoints
+// requests — go run the debuggee now." PR 4b accepts it but doesn't
+// actually start anything; PR 4c will spawn gdb here and forward
+// `-exec-run`.
+void handle_configuration_done(cJSON *request) {
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+  write_message(resp);
+  cJSON_Delete(resp);
+}
+
+// `threads` is polled by every DAP client right after the first
+// `stopped` event so the variables / stack views know which thread
+// to query. Tulpar AOT binaries are predominantly single-threaded
+// (wings spawns workers, but those won't surface to the debugger
+// until the threading runtime grows DAP integration), so we report a
+// single fake thread with id=1. Clients tolerate this fine when the
+// stopped event also references thread 1.
+void handle_threads(cJSON *request) {
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON *body = cJSON_CreateObject();
+  cJSON *threads = cJSON_CreateArray();
+  cJSON *t = cJSON_CreateObject();
+  cJSON_AddNumberToObject(t, "id", 1);
+  cJSON_AddStringToObject(t, "name", "main");
+  cJSON_AddItemToArray(threads, t);
+  cJSON_AddItemToObject(body, "threads", threads);
+  cJSON_AddItemToObject(resp, "body", body);
+  write_message(resp);
+  cJSON_Delete(resp);
+}
+
+// `terminate` (graceful shutdown, vs. `disconnect` which is
+// hard-stop) — PR 4c will use this to send `kill` to the gdb
+// subprocess. For now there's nothing to terminate beyond the
+// adapter itself, so we acknowledge and let the loop continue;
+// VS Code follows up with `disconnect` after a graceful terminate.
+void handle_terminate(cJSON *request) {
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+  write_message(resp);
+  cJSON_Delete(resp);
+  g_launched = false;
+}
+
 // `disconnect` is the client's "we're done, please exit". DAP allows
 // the server to choose whether to terminate the debuggee — we don't
 // have one yet, so just acknowledge and let the main loop fall out.
@@ -289,6 +495,14 @@ int debug_cmd_main(int argc, char **argv) {
 
     if (std::strcmp(cmd, "initialize") == 0) {
       handle_initialize(msg);
+    } else if (std::strcmp(cmd, "launch") == 0) {
+      handle_launch(msg);
+    } else if (std::strcmp(cmd, "configurationDone") == 0) {
+      handle_configuration_done(msg);
+    } else if (std::strcmp(cmd, "threads") == 0) {
+      handle_threads(msg);
+    } else if (std::strcmp(cmd, "terminate") == 0) {
+      handle_terminate(msg);
     } else if (std::strcmp(cmd, "disconnect") == 0) {
       handle_disconnect(msg);
       cJSON_Delete(msg);

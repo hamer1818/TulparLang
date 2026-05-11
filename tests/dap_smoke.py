@@ -59,8 +59,22 @@ def main() -> int:
     exe = find_tulpar_exe()
     failures: list[str] = []
 
+    # Stage a tiny .tpr in the OS temp dir so the launch step has a
+    # real source file to point at. We use the OS-temp resolver
+    # (`tempfile.mkstemp`) rather than `/tmp/...` so the smoke runs on
+    # Windows native binaries (where /tmp doesn't resolve to a real
+    # path the AOT pipeline can fopen) as well as POSIX.
+    import tempfile
+    tpr_fd, tpr_path = tempfile.mkstemp(prefix="dap_smoke_", suffix=".tpr")
+    with os.fdopen(tpr_fd, "w", encoding="utf-8") as f:
+        f.write('print("hello from dap smoke");\n')
+    # AOT pipeline emits next to the source basename; clean it up too.
+    out_path = tpr_path[:-4]  # strip .tpr
+    cleanup_paths = [tpr_path, out_path, out_path + ".exe",
+                     out_path + ".o", out_path + ".ll"]
+
     proc = subprocess.Popen(
-        [exe, "debug", "/tmp/dap_smoke_dummy.tpr"],
+        [exe, "debug", tpr_path],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
 
@@ -83,23 +97,61 @@ def main() -> int:
         if not evt or evt.get("type") != "event" or evt.get("event") != "initialized":
             failures.append(f"initialized event: wrong shape: {evt!r}")
 
-        # 3) Any unimplemented request should return a structured
-        # "not implemented" response, not hang the channel.
+        # 3) launch -> AOT-builds the program with debug info, replies
+        # success. The pipeline's stdout is redirected to stderr for the
+        # duration of the build so it can't corrupt the DAP wire (every
+        # `[AOT] ...` byte on stdout here would break Content-Length
+        # framing). A failed build comes back as success=false with a
+        # `message`, never as a hang.
         send(proc, {
-            "seq": 2, "type": "request", "command": "setBreakpoints",
-            "arguments": {"source": {"path": "/tmp/x.tpr"}, "breakpoints": []},
+            "seq": 2, "type": "request", "command": "launch",
+            "arguments": {"program": tpr_path, "stopOnEntry": False},
         })
         r = recv(proc)
-        if not r or r.get("command") != "setBreakpoints":
-            failures.append(f"setBreakpoints: wrong shape: {r!r}")
-        elif r.get("success") is not False:
-            failures.append(f"setBreakpoints: expected success=false: {r!r}")
-        elif "not implemented" not in (r.get("message") or "").lower():
-            failures.append(f"setBreakpoints: missing 'not implemented' message: {r!r}")
+        if not r or r.get("command") != "launch":
+            failures.append(f"launch: wrong shape: {r!r}")
+        elif not r.get("success"):
+            failures.append(f"launch: success=false: {r!r}")
 
-        # 4) disconnect -> success, process exits 0
+        # 4) configurationDone -> success (PR 4c will hand control to
+        # gdb here; today it's a no-op acknowledge).
         send(proc, {
-            "seq": 3, "type": "request", "command": "disconnect",
+            "seq": 3, "type": "request", "command": "configurationDone",
+            "arguments": {},
+        })
+        r = recv(proc)
+        if not r or not r.get("success"):
+            failures.append(f"configurationDone: wrong shape: {r!r}")
+
+        # 5) threads -> exactly one fake thread (id=1, name="main")
+        send(proc, {
+            "seq": 4, "type": "request", "command": "threads",
+            "arguments": {},
+        })
+        r = recv(proc)
+        if not r or not r.get("success"):
+            failures.append(f"threads: success=false: {r!r}")
+        else:
+            threads = (r.get("body") or {}).get("threads") or []
+            if len(threads) != 1 or threads[0].get("id") != 1:
+                failures.append(f"threads: expected [{{id:1,...}}], got {threads!r}")
+
+        # 6) An unimplemented request still returns a structured
+        # "not implemented" response, not a hang. We pick `evaluate`
+        # specifically because PR 4c hasn't wired it up yet.
+        send(proc, {
+            "seq": 5, "type": "request", "command": "evaluate",
+            "arguments": {"expression": "1+1", "context": "repl"},
+        })
+        r = recv(proc)
+        if not r or r.get("command") != "evaluate":
+            failures.append(f"evaluate stub: wrong shape: {r!r}")
+        elif r.get("success") is not False:
+            failures.append(f"evaluate stub: expected success=false: {r!r}")
+
+        # 7) disconnect -> success, process exits 0
+        send(proc, {
+            "seq": 6, "type": "request", "command": "disconnect",
             "arguments": {},
         })
         r = recv(proc)
@@ -120,6 +172,11 @@ def main() -> int:
             proc.kill()
         except Exception:
             pass
+        for p in cleanup_paths:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
     if failures:
         print("FAIL:")
