@@ -5777,6 +5777,15 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
     for (int i = 0; i < node->body->statement_count; i++) {
       ASTNode_C *stmt = node->body->statements[i];
 
+      // Plan 07 PR 3d: seed a per-statement debug location in the
+      // typed-int function body too. The hand-rolled loop here
+      // inlines AST_RETURN / AST_IF directly for the fast path
+      // (it doesn't recurse through codegen_statement), so PR 3c's
+      // helper wouldn't fire on these statements. Calling it
+      // explicitly here gives gdb the same per-line resolution it
+      // gets in boxed-function bodies. No-op when --debug is off.
+      set_debug_loc_for_node(backend, stmt);
+
       if (stmt->type == AST_RETURN) {
         // Use typed codegen for return value
         TypedValue ret = codegen_typed_expr(backend, stmt->return_value);
