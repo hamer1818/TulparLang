@@ -5498,6 +5498,9 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                 if (global_needs_tls(decl->name)) {
                   LLVMSetThreadLocalMode(ig, LLVMGeneralDynamicTLSModel);
                 }
+                // PR 3g: surface imported-module int global to debugger.
+                llvm_backend_emit_global_declare(
+                    backend, decl->name, ig, decl->line, /*is_vmvalue=*/0);
               } else {
                 LLVMValueRef global_var = LLVMAddGlobal(
                     backend->module, backend->vm_value_type, decl->name);
@@ -5508,6 +5511,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                   LLVMSetThreadLocalMode(global_var,
                                          LLVMGeneralDynamicTLSModel);
                 }
+                // PR 3g: surface imported-module boxed global to debugger.
+                llvm_backend_emit_global_declare(
+                    backend, decl->name, global_var, decl->line,
+                    /*is_vmvalue=*/1);
               }
             }
           }
@@ -6562,6 +6569,9 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
             if (global_needs_tls(decl->name)) {
               LLVMSetThreadLocalMode(ig, LLVMGeneralDynamicTLSModel);
             }
+            // PR 3g: surface this top-level int global to the debugger.
+            llvm_backend_emit_global_declare(backend, decl->name, ig,
+                                             decl->line, /*is_vmvalue=*/0);
           } else {
             LLVMValueRef global_var = LLVMAddGlobal(
                 backend->module, backend->vm_value_type, decl->name);
@@ -6571,6 +6581,9 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
               LLVMSetThreadLocalMode(global_var,
                                      LLVMGeneralDynamicTLSModel);
             }
+            // PR 3g: surface this top-level boxed global to the debugger.
+            llvm_backend_emit_global_declare(backend, decl->name, global_var,
+                                             decl->line, /*is_vmvalue=*/1);
           }
         }
       }
@@ -7095,6 +7108,55 @@ void llvm_backend_emit_local_int_declare(LLVMBackend *backend,
   LLVMDIBuilderInsertDeclareAtEnd(backend->di_builder, alloca, var, expr, loc,
                                   block);
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// Plan 07 PR 3g — `DIGlobalVariableExpression` for top-level globals.
+//
+// Top-level `int x = ...;` / `json obj = ...;` etc. don't live on
+// the stack — Pass 0.1 emits an `LLVMAddGlobal`, and subsequent
+// `codegen_statement::AST_VARIABLE_DECL` calls find it via
+// `LLVMGetNamedGlobal` and just `Store` into it. `dbg.declare`
+// would be wrong for these (it's local-variable shaped); we attach
+// a `DIGlobalVariableExpression` to the LLVM global via
+// `LLVMGlobalSetMetadata("dbg", ...)` instead.
+//
+// Coverage: native i64 globals (PR 3e's `di_int_type`) and boxed
+// VMValue globals (PR 3f's `di_vmvalue_type`). Caller picks via
+// the `is_vmvalue` flag — the only divergence is which cached type
+// metadata to point the global variable at.
+
+void llvm_backend_emit_global_declare(LLVMBackend *backend, const char *name,
+                                      LLVMValueRef global_var, int line,
+                                      int is_vmvalue) {
+  if (!backend || !backend->di_builder) return;
+  if (!global_var || !name || !*name || line <= 0) return;
+  LLVMMetadataRef type =
+      is_vmvalue ? backend->di_vmvalue_type : backend->di_int_type;
+  if (!type) return;
+
+  LLVMMetadataRef gve_expr =
+      LLVMDIBuilderCreateExpression(backend->di_builder, nullptr, 0);
+  LLVMMetadataRef gv = LLVMDIBuilderCreateGlobalVariableExpression(
+      backend->di_builder,
+      /*Scope=*/backend->di_compile_unit,
+      /*Name=*/name, strlen(name),
+      /*Linkage=*/name, strlen(name),  // mangled = source name for globals
+      backend->di_file,
+      (unsigned)line,
+      /*Ty=*/type,
+      /*LocalToUnit=*/1,
+      /*Expr=*/gve_expr,
+      /*Decl=*/nullptr,
+      /*AlignInBits=*/0);
+
+  // `dbg` is the LLVM-canonical metadata kind name. `LLVMGlobalSet*`
+  // takes the kind ID, not the string — we fetch it from the
+  // context. `MDKind_dbg` would be a perfectly fine local constant,
+  // but the lookup is cheap and avoids hard-coding an internal ID.
+  unsigned dbg_kind = LLVMGetMDKindIDInContext(
+      backend->context, "dbg", strlen("dbg"));
+  LLVMGlobalSetMetadata(global_var, dbg_kind, gv);
 }
 
 // PR 3f — same shape as the int variant, but pointing the
