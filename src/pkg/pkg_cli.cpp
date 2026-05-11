@@ -280,6 +280,13 @@ int cmd_init(int argc, char **argv) {
     m.version = "0.1.0";
     m.description = "A Tulpar package.";
     m.license = "MIT";
+    // Default to the canonical hosted registry so `tulpar pkg add foo`
+    // → `tulpar pkg install` works out of the box. Users that prefer
+    // a private registry or want to skip remote installs entirely can
+    // edit the `[registry]` table — leaving the line in but unused is
+    // harmless because installs only hit the registry for non-path: /
+    // non-url: dep specs.
+    m.registry_url = "https://api.pkg.tulparlang.dev";
 
     std::string err;
     if (!manifest_save(kManifestFile, m, err)) {
@@ -1217,10 +1224,15 @@ void print_usage() {
         "                           --dry-run          print the bundle plan, skip POST\n"
         "\n"
         "The manifest format is a small TOML subset (string values only,\n"
-        "top-level keys + a single [dependencies] table). For `publish`,\n"
-        "set the registry URL via `[registry]\\nurl = \"https://...\"` in\n"
-        "tulpar.toml or via the TULPAR_REGISTRY env var, and the auth\n"
-        "token via TULPAR_PUBLISH_TOKEN.\n");
+        "top-level keys + a single [dependencies] table). `tulpar pkg init`\n"
+        "writes the canonical hosted registry URL into the new manifest:\n"
+        "\n"
+        "  [registry]\n"
+        "  url = \"https://api.pkg.tulparlang.dev\"\n"
+        "\n"
+        "Override via `--registry <url>`, TULPAR_REGISTRY env, or by editing\n"
+        "that line directly. Publish auth: TULPAR_PUBLISH_TOKEN env or\n"
+        "`--token <tok>`.\n");
 }
 
 }  // namespace
