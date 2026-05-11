@@ -19,6 +19,16 @@ permissions:
   # so it can list and download artifacts from the PR's earlier build run.
   actions: read
 
+# Cancel superseded runs on the same ref so a fresh push to a PR
+# branch immediately frees up the ~3-minute runner allocations of
+# its previous build. `main` and tag refs are exempted via the
+# `cancel-in-progress` expression so post-merge reuse-path builds
+# always complete (the bench workflow consumes their artifacts —
+# cancelling a half-finished main build would orphan that chain).
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
   # Bench-bot's refresh PRs (and their squash-merges into main) touch
   # only README.md + benchmarks/RESULTS.{md,json}. A full build for
@@ -193,11 +203,29 @@ jobs:
           key: ${{ runner.os }}-ccache
           max-size: 500M
 
-      - name: Install dependencies
+      # llvm-18-dev is ~120 MB of headers + static libs that apt downloads
+      # then extracts on every fresh build. The cache-apt-pkgs action
+      # snapshots /var/cache/apt + the .deb files keyed on the package
+      # list, so warm restores skip both the download and the dpkg
+      # configure step (~50-60s → ~5-8s). build-essential + cmake are
+      # also in here but they're tiny — the win is dominated by LLVM.
+      - name: Cache apt packages
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        uses: awalsh128/cache-apt-pkgs-action@v1.4.3
+        with:
+          packages: build-essential cmake llvm-18-dev
+          version: 1.0
+
+      - name: Verify apt packages installed
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake llvm-18-dev
+          # The cache action installs the packages on cache miss + restore
+          # symlinks them on cache hit. This step exists as a fast sanity
+          # check that `llvm-config-18` (the smoke target) is reachable
+          # — if the cache restore goes sideways we want a clear error
+          # before CMake tries to find_package(LLVM).
+          which llvm-config-18 cmake gcc g++
+          llvm-config-18 --version
 
       - name: Build with LLVM
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
@@ -367,11 +395,40 @@ jobs:
           key: ${{ runner.os }}-ccache
           max-size: 500M
 
+      # Brew installs llvm@18 from source on a cold runner — ~5-7 minutes
+      # of wall time. The Cellar (the actual installed binaries +
+      # headers) lives at `$(brew --prefix)/Cellar/llvm@18` and can be
+      # tar+restored across runs. We pin to the runner-image OS so a
+      # macos-13/14/15 swap doesn't restore an incompatible binary.
+      #
+      # Cache miss: `brew install` runs as before.
+      # Cache hit:  symlink the cellar back into place + `brew link
+      #             --force --overwrite llvm@18` to rewire opt/. The
+      #             link step is ~3s vs the 5-min install.
+      #
+      # cmake is already in the GitHub Actions macos-* runner image,
+      # so we only cache the LLVM tree.
+      - name: Cache brew LLVM
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        id: brew-llvm-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/homebrew/Cellar/llvm@18
+            /usr/local/Cellar/llvm@18
+          key: ${{ runner.os }}-${{ runner.arch }}-brew-llvm18-v1
+
       - name: Install dependencies
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           brew list --versions cmake >/dev/null 2>&1 || brew install cmake
-          brew list --versions llvm@18 >/dev/null 2>&1 || brew install llvm@18
+          if [ "${{ steps.brew-llvm-cache.outputs.cache-hit }}" = "true" ]; then
+            # Cellar restored from cache; just rewire the symlinks into
+            # $(brew --prefix)/opt/llvm@18 that find_package(LLVM) looks at.
+            brew link --force --overwrite llvm@18 || brew install llvm@18
+          else
+            brew list --versions llvm@18 >/dev/null 2>&1 || brew install llvm@18
+          fi
 
       - name: Build with LLVM
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'

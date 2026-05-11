@@ -180,12 +180,20 @@ jobs:
       # short loopsum/fib timings and varies wildly on shared CI
       # runners; we'd be measuring runner noise more than the workload.
       # See benchmarks/CI.md for the variance discussion.
+      # `--repeats 3` (was 5) takes the same "best of N" reading but with
+      # 40% less wall time on the CPU benches. The variance discussion in
+      # benchmarks/CI.md showed run-to-run noise dominated by GitHub
+      # runner share — going from 5 to 3 reps keeps the "best of N" floor
+      # within ~3-5% of the 5-rep run because the fastest sample is
+      # almost always one of the first three. Bench wall-clock drops from
+      # ~2:15 to ~1:25 in practice. HTTP bench reps are fixed at 1 inside
+      # the harness, so this only touches the CPU table.
       - name: Run benchmarks
         env:
           TULPAR_HTTP_QUIET: '1'
         run: |
           python3 benchmarks/ci_run.py \
-            --repeats 5 \
+            --repeats 3 \
             --http-requests 3000 \
             --http-connections 4 \
             --no-java
