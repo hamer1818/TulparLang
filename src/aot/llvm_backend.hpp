@@ -508,6 +508,15 @@ void llvm_backend_emit_local_vmvalue_declare(LLVMBackend *backend,
                                              const char *name,
                                              LLVMValueRef alloca, int line);
 
+// Plan 07 PR 3g: attach a `DIGlobalVariableExpression` to a
+// top-level global. Use `is_vmvalue=0` for native int globals
+// (i64), `is_vmvalue=1` for boxed VMValue globals. Hook this in
+// right after `LLVMAddGlobal` in the Pass 0.1 / module-import
+// pre-scan. No-op when --debug is off.
+void llvm_backend_emit_global_declare(LLVMBackend *backend, const char *name,
+                                      LLVMValueRef global_var, int line,
+                                      int is_vmvalue);
+
 // Enable static typing mode for native performance
 void llvm_backend_enable_static_typing(LLVMBackend *backend);
 
