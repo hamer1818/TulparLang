@@ -77,6 +77,27 @@ func _wings_apply_env_config() {
     }
 }
 
+// Bind address used by every listener variant. Env-driven, default
+// `0.0.0.0` so containerised / production deployments work without
+// configuration. PR #141 had this hardcoded to `127.0.0.1` to keep
+// Windows Firewall from prompting on every fresh dev binary, but that
+// broke every Docker deploy of wings: inside the container 127.0.0.1
+// is the *container's* own loopback, not the host's, so
+// `docker run -p 8080:8080` forwards traffic to the container which
+// never reaches a 127.0.0.1-only listener — the host sees connection
+// refused / 502 Bad Gateway through any reverse proxy.
+//
+// Local-only callers (dev loops, smoke tests, benchmarks) set
+// `TULPAR_WINGS_HOST=127.0.0.1` to keep the firewall-prompt-free
+// path; production / containers leave it unset for the safe default.
+func _wings_bind_host() {
+    str h = env("TULPAR_WINGS_HOST");
+    if (length(h) == 0) {
+        return "0.0.0.0";
+    }
+    return h;
+}
+
 // Cache table for `cached_get`. Indexed by route position in `_routes`
 // — kept the same length as the routes array, so lookup is a plain
 // O(1) array read. Entries default to "" (uncached); the first
@@ -708,7 +729,7 @@ func listen_evented(int port) {
     print("  Press Ctrl+C to stop");
     print("");
 
-    int server = socket_server("127.0.0.1", port);
+    int server = socket_server(_wings_bind_host(), port);
     if (server < 0) {
         print("ERROR: Failed to start server!");
         return;
@@ -836,7 +857,7 @@ func listen_pool(int port, int n_workers) {
     print("  Press Ctrl+C to stop");
     print("");
 
-    int server = socket_server("127.0.0.1", port);
+    int server = socket_server(_wings_bind_host(), port);
     if (server < 0) {
         print("ERROR: Failed to start server!");
         return;
@@ -885,7 +906,7 @@ func listen_async(int port) {
     print("  Press Ctrl+C to stop");
     print("");
 
-    int server = socket_server("127.0.0.1", port);
+    int server = socket_server(_wings_bind_host(), port);
     if (server < 0) {
         print("ERROR: Failed to start server!");
         return;
@@ -974,7 +995,7 @@ func listen(int port) {
     print("  Press Ctrl+C to stop");
     print("");
 
-    int server = socket_server("127.0.0.1", port);
+    int server = socket_server(_wings_bind_host(), port);
     if (server < 0) {
         print("ERROR: Failed to start server!");
         return;
