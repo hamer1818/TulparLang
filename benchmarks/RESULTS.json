@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "run": {
-    "timestamp_utc": "2026-05-10T23:03:20Z",
-    "git_sha": "aff004a364a85a19e80d4c8c1ff50cc953e5e480",
-    "git_short": "aff004a",
+    "timestamp_utc": "2026-05-11T06:55:05Z",
+    "git_sha": "5092085afd1058f0789f705389f7d497494ba1c8",
+    "git_short": "5092085",
     "runner": {
       "os": "Linux",
       "release": "6.17.0-1010-azure",
       "machine": "x86_64",
       "python": "3.12.13",
       "cpu_count": 4,
-      "cpu_model": "AMD EPYC 9V74 80-Core Processor"
+      "cpu_model": "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"
     },
     "repeats": 5,
     "loopsum_iterations": 10000000,
@@ -20,85 +20,85 @@
     {
       "benchmark": "loopsum",
       "language": "Tulpar AOT (LLVM)",
-      "best_ms": 2.0,
+      "best_ms": 1.4,
       "output": "49999995000000"
     },
     {
       "benchmark": "loopsum",
       "language": "Tulpar VM",
-      "best_ms": 155.5,
+      "best_ms": 156.7,
       "output": "49999995000000"
     },
     {
       "benchmark": "loopsum",
       "language": "C (gcc -O2)",
+      "best_ms": 0.4,
+      "output": "49999995000000"
+    },
+    {
+      "benchmark": "loopsum",
+      "language": "Rust (-O3)",
       "best_ms": 0.6,
       "output": "49999995000000"
     },
     {
       "benchmark": "loopsum",
-      "language": "Rust (-O3)",
-      "best_ms": 0.8,
-      "output": "49999995000000"
-    },
-    {
-      "benchmark": "loopsum",
       "language": "Go",
-      "best_ms": 4.7,
+      "best_ms": 4.6,
       "output": "49999995000000"
     },
     {
       "benchmark": "loopsum",
       "language": "Node.js",
-      "best_ms": 41.9,
+      "best_ms": 37.3,
       "output": "49999995000000"
     },
     {
       "benchmark": "loopsum",
       "language": "Python",
-      "best_ms": 1008.9,
+      "best_ms": 844.3,
       "output": "49999995000000"
     },
     {
       "benchmark": "fib",
       "language": "Tulpar AOT (LLVM)",
-      "best_ms": 32.2,
+      "best_ms": 27.3,
       "output": "9227465"
     },
     {
       "benchmark": "fib",
       "language": "Tulpar VM",
-      "best_ms": 589.1,
+      "best_ms": 462.9,
       "output": "9227465"
     },
     {
       "benchmark": "fib",
       "language": "C (gcc -O2)",
-      "best_ms": 17.2,
+      "best_ms": 16.1,
       "output": "9227465"
     },
     {
       "benchmark": "fib",
       "language": "Rust (-O3)",
-      "best_ms": 32.5,
+      "best_ms": 25.6,
       "output": "9227465"
     },
     {
       "benchmark": "fib",
       "language": "Go",
-      "best_ms": 58.4,
+      "best_ms": 50.4,
       "output": "9227465"
     },
     {
       "benchmark": "fib",
       "language": "Node.js",
-      "best_ms": 141.1,
+      "best_ms": 121.8,
       "output": "9227465"
     },
     {
       "benchmark": "fib",
       "language": "Python",
-      "best_ms": 1256.9,
+      "best_ms": 1149.1,
       "output": "9227465"
     }
   ],
@@ -108,38 +108,38 @@
     "results": [
       {
         "server": "Tulpar listen",
-        "rps": 21230.0,
-        "wall_s": 0.141,
+        "rps": 28175.0,
+        "wall_s": 0.106,
         "completed": 3000
       },
       {
         "server": "Tulpar listen_async",
-        "rps": 22110.0,
-        "wall_s": 0.136,
+        "rps": 24583.0,
+        "wall_s": 0.122,
         "completed": 3000
       },
       {
         "server": "Tulpar listen_pool x8",
-        "rps": 22034.0,
-        "wall_s": 0.136,
+        "rps": 23523.0,
+        "wall_s": 0.128,
         "completed": 3000
       },
       {
         "server": "Tulpar listen_evented",
-        "rps": 23475.0,
-        "wall_s": 0.128,
+        "rps": 23625.0,
+        "wall_s": 0.127,
         "completed": 3000
       },
       {
         "server": "Python ThreadingHTTP",
         "rps": 98.0,
-        "wall_s": 30.675,
+        "wall_s": 30.677,
         "completed": 3000
       },
       {
         "server": "Node.js http",
-        "rps": 11398.0,
-        "wall_s": 0.263,
+        "rps": 16088.0,
+        "wall_s": 0.186,
         "completed": 3000
       }
     ]
