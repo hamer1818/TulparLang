@@ -82,6 +82,11 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 - **Counter atomic RMW (PR #81):** Top-level int globals için
   `LLVMBuildAtomicRMW` superinstruction; `_wings_requests_total/2xx/4xx/5xx`
   data-race-free.
+- **Thread-local `_request` (PR #79):** `global_needs_tls()` AOT
+  helper'ı `_request` global'ini `LLVMGeneralDynamicTLSModel` ile
+  işaretliyor → her thread kendi slot'una yazar, mutex serileşmesi
+  yok. Wings 4 listener varyantında handler dispatch tamamen paralel
+  ilerliyor; `_wings_handler_mu` kalıntısı da PR #79'la kaldırıldı.
 - **Native fast path'ler:** `wings_build_response` (envelope+toJson+framing
   tek C çağrısı), `wings_find_route` (route lookup tek C çağrısı),
   `fast_u32_itoa` + el-yazısı framing, co-located ObjString+chars
@@ -209,11 +214,6 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   diff lazım.
 - 🟡 **AOT debug info (DWARF/CodeView).** Debugger ön-koşulu;
   `tulpar build --debug` flag'i + `.debug_line` emit'i lazım.
-- 🟡 **LLVM thread-local globals (handler paralelliği).**
-  `listen_async` paralel recv/send var ama handler exec hâlâ
-  `_wings_handler_mu` altında serileşiyor (kısmen). `_request`/`_response`
-  global'leri için `LLVMSetThreadLocalMode(g, LLVMGeneralDynamicTLSModel)`.
-  Tahmini efor: ~half-day.
 - 🟢 **Codegen full atomic:** imported pass globals'a `LLVMBuildAtomicRMW`
   (top-level int globals zaten yapıldı).
 
