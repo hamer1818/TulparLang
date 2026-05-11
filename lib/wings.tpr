@@ -77,21 +77,61 @@ func _wings_apply_env_config() {
     }
 }
 
+// Cache table for `cached_get`. Indexed by route position in `_routes`
+// — kept the same length as the routes array, so lookup is a plain
+// O(1) array read. Entries default to "" (uncached); the first
+// request to a cached route writes the wire bytes here and every
+// subsequent request short-circuits to a `socket_send` of these bytes.
+//
+// Why parallel array instead of a json-map keyed by index-string:
+// json map lookup is a linear key scan, which would become the
+// per-request cache lookup cost itself. Array index access is O(1).
+array _wings_cache_wires = [];
+
 // ----- Route registration --------------------------------------------------
+// Every registration pushes a `""` placeholder to `_wings_cache_wires`
+// at the same time so the parallel-index invariant holds — even for
+// non-cached routes, where the placeholder is simply never written.
 func get(str path, str handler) {
     push(_routes, {"method": "GET", "path": path, "handler": handler});
+    push(_wings_cache_wires, "");
 }
 
 func post(str path, str handler) {
     push(_routes, {"method": "POST", "path": path, "handler": handler});
+    push(_wings_cache_wires, "");
 }
 
 func put(str path, str handler) {
     push(_routes, {"method": "PUT", "path": path, "handler": handler});
+    push(_wings_cache_wires, "");
 }
 
 func del(str path, str handler) {
     push(_routes, {"method": "DELETE", "path": path, "handler": handler});
+    push(_wings_cache_wires, "");
+}
+
+// Register a GET route whose response is cached at the wire-byte level
+// after the first hit. The handler is called *once*, the resulting
+// wire bytes (full HTTP response including headers + body) are stored
+// in `_wings_cache_wires[idx]`, and every subsequent request is served
+// from the cache via a single socket_send — skipping handler dispatch,
+// toJson, and response framing entirely. Per-request latency on the
+// cached path is effectively one syscall.
+//
+// Use when the handler's output is a pure function of (method, path)
+// — i.e. doesn't depend on `_request`, query params, cookies, body,
+// or wall-clock time. Examples that fit: static JSON payloads, API
+// version banners, config dumps that change only at restart. Examples
+// that DON'T fit: anything reading `timestamp()` / `now_iso8601()`
+// (the cache freezes that value), and anything that mutates
+// per-request state.
+//
+// No invalidation API yet — re-cache happens at process restart.
+func cached_get(str path, str handler) {
+    push(_routes, {"method": "GET", "path": path, "handler": handler, "cached": 1});
+    push(_wings_cache_wires, "");
 }
 
 // ----- Internals -----------------------------------------------------------
@@ -251,6 +291,68 @@ func _wings_status_or(json result, int fallback) {
         }
     }
     return fallback;
+}
+
+// Resolve a matched route to wire-byte response. This is the single
+// dispatch point used by every serve loop (sync, async, evented) so
+// the cache fast-path lives in one place instead of being duplicated
+// across three serve sites.
+//
+// Cache fast path (only for routes registered via `cached_get`):
+//   1. read `_wings_cache_wires[route_idx]`
+//   2. if non-empty, this route's response was built on a prior
+//      request — return the wire bytes directly, skipping the
+//      handler call, toJson serialisation, and HTTP framing.
+//
+// Slow path (every uncached route, or first hit on a cached one):
+//   1. dispatch the handler via `call()`
+//   2. classify status into 2xx/4xx/5xx buckets for /metrics
+//   3. build the wire response
+//   4. on cached routes, store the wire bytes for future hits
+//
+// `_wings_requests_total` is always incremented exactly once per
+// resolved request, regardless of cache hit/miss. Status bucketing
+// on cache hits assumes 2xx — only success responses get cached
+// (404 / 5xx bodies aren't worth pinning and would mask transient
+// upstream failures).
+func _wings_dispatch_cached(int route_idx, int keep) {
+    json route = _routes[route_idx];
+
+    if (route["cached"] == 1) {
+        str cached = _wings_cache_wires[route_idx];
+        if (length(cached) > 0) {
+            _wings_requests_total = _wings_requests_total + 1;
+            _wings_requests_2xx = _wings_requests_2xx + 1;
+            return cached;
+        }
+    }
+
+    json result = call(route["handler"]);
+    _wings_requests_total = _wings_requests_total + 1;
+    int eff_status = _wings_status_or(result, 200);
+    if (eff_status >= 500) {
+        _wings_requests_5xx = _wings_requests_5xx + 1;
+    } else if (eff_status >= 400) {
+        _wings_requests_4xx = _wings_requests_4xx + 1;
+    } else {
+        _wings_requests_2xx = _wings_requests_2xx + 1;
+    }
+
+    str response = _wings_build_response(result, keep);
+
+    // First-hit cache population. Only 2xx responses get pinned —
+    // pinning a 4xx/5xx would freeze a transient failure into the
+    // hot path. `string_pin` copies the response out of the
+    // per-request arena into permanent (malloc'd) storage so the
+    // subsequent `arena_restore` doesn't reclaim the bytes the cache
+    // points at. The keep flag is baked into the cached bytes; that's
+    // fine because Connection is advisory and a close-requesting
+    // client closes regardless of the server's hint.
+    if (route["cached"] == 1 && eff_status < 400) {
+        _wings_cache_wires[route_idx] = string_pin(response);
+    }
+
+    return response;
 }
 
 // Build the wire response for a dispatched handler. The native
@@ -471,37 +573,15 @@ func _wings_serve_connection(json client_arg) {
         // Cookies are NOT auto-populated — handlers that need them call
         // `wings_cookies(_request)` themselves. See the helper's
         // doc-comment for the codegen reason.
-        json result = {};
-        bool found = false;
-        if (route_idx >= 0) {
-            json route = _routes[route_idx];
-            result = call(route["handler"]);
-            found = true;
-        }
-        _wings_requests_total = _wings_requests_total + 1;
-        // Bucket the request by the status the handler actually
-        // returns (via `_status` envelope) — not just "matched route".
-        // A handler that returns `{"_status": 401}` for a bad token
-        // increments 4xx, not 2xx.
-        if (found) {
-            int eff_status = _wings_status_or(result, 200);
-            if (eff_status >= 500) {
-                _wings_requests_5xx = _wings_requests_5xx + 1;
-            } else if (eff_status >= 400) {
-                _wings_requests_4xx = _wings_requests_4xx + 1;
-            } else {
-                _wings_requests_2xx = _wings_requests_2xx + 1;
-            }
-        } else {
-            _wings_requests_4xx = _wings_requests_4xx + 1;
-        }
-
-        // Response build + send happen outside the lock — these touch
-        // only locals + the read-only `_default_headers` global.
         str response = "";
-        if (found) {
-            response = _wings_build_response(result, keep);
+        if (route_idx >= 0) {
+            // Cache lookup + handler dispatch + counter bump + response
+            // build all live in `_wings_dispatch_cached` so the
+            // sync/async/evented serve loops stay in lockstep.
+            response = _wings_dispatch_cached(route_idx, keep);
         } else {
+            _wings_requests_total = _wings_requests_total + 1;
+            _wings_requests_4xx = _wings_requests_4xx + 1;
             response = _wings_build_404(path, keep);
         }
         if (is_head) {
@@ -569,31 +649,13 @@ func _wings_serve_one_request(int client) {
     }
     _request["params"] = route_match["params"];
 
-    json result = {};
-    bool found = false;
-    if (route_idx >= 0) {
-        json route = _routes[route_idx];
-        result = call(route["handler"]);
-        found = true;
-    }
-    _wings_requests_total = _wings_requests_total + 1;
-    if (found) {
-        int eff_status = _wings_status_or(result, 200);
-        if (eff_status >= 500) {
-            _wings_requests_5xx = _wings_requests_5xx + 1;
-        } else if (eff_status >= 400) {
-            _wings_requests_4xx = _wings_requests_4xx + 1;
-        } else {
-            _wings_requests_2xx = _wings_requests_2xx + 1;
-        }
-    } else {
-        _wings_requests_4xx = _wings_requests_4xx + 1;
-    }
-
     str response = "";
-    if (found) {
-        response = _wings_build_response(result, keep);
+    if (route_idx >= 0) {
+        // Shared dispatch (cache fast-path + handler + counters + build).
+        response = _wings_dispatch_cached(route_idx, keep);
     } else {
+        _wings_requests_total = _wings_requests_total + 1;
+        _wings_requests_4xx = _wings_requests_4xx + 1;
         response = _wings_build_404(path, keep);
     }
     if (is_head) {
@@ -975,25 +1037,13 @@ func listen(int port) {
             // Cookies are NOT auto-populated — see the matching note
             // in the async path / `wings_cookies` helper.
             str response = "";
-            _wings_requests_total = _wings_requests_total + 1;
             if (route_idx >= 0) {
-                json route = _routes[route_idx];
-                json result = call(route["handler"]);
-                response = _wings_build_response(result, keep);
-                // Bucket by handler-returned status (`_status` envelope),
-                // not "matched route". 401/409/500-class errors land in
-                // the right counter even when dispatched cleanly.
-                int eff_status = _wings_status_or(result, 200);
-                if (eff_status >= 500) {
-                    _wings_requests_5xx = _wings_requests_5xx + 1;
-                } else if (eff_status >= 400) {
-                    _wings_requests_4xx = _wings_requests_4xx + 1;
-                } else {
-                    _wings_requests_2xx = _wings_requests_2xx + 1;
-                }
+                // Shared dispatch (cache fast-path + handler + counters + build).
+                response = _wings_dispatch_cached(route_idx, keep);
             } else {
-                response = _wings_build_404(path, keep);
+                _wings_requests_total = _wings_requests_total + 1;
                 _wings_requests_4xx = _wings_requests_4xx + 1;
+                response = _wings_build_404(path, keep);
             }
             if (is_head) {
                 response = _wings_strip_response_body(response);

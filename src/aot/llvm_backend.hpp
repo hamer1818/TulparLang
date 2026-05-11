@@ -260,6 +260,10 @@ typedef struct {
   // Native route lookup (exact + pattern) — replaces the per-request
   // Tulpar `_find_route_with_params` loop with a single C call.
   LLVMValueRef func_aot_wings_find_route;
+  // Permanent-storage copy of a string (escapes the per-request arena).
+  // Wings response cache uses this to pin cached wire bytes past the
+  // serve loop's `arena_restore`.
+  LLVMValueRef func_aot_string_pin;
 
   // Process control
   LLVMValueRef func_aot_exit;

@@ -430,6 +430,42 @@ static ObjString *aot_allocate_string(const char *chars, int length) {
   return str;
 }
 
+// string_pin(s) -> str
+//
+// Copies an arena-allocated string into permanent (malloc'd) storage
+// and returns a new ObjString whose lifetime is the process. Used by
+// the wings response cache: the cached wire bytes must outlive the
+// per-request arena (which is reset via `arena_restore` after every
+// `socket_send`) — without pinning, the next request's allocations
+// stomp the cache's char buffer and subsequent reads return garbage.
+//
+// The malloc-based ObjString is marked `arena_allocated = 0`, so any
+// future GC pass (if/when AOT gains one) skips it; today it leaks for
+// the process lifetime, which is bounded by `unique_cached_routes ×
+// response_size` and intentional.
+VMValue aot_string_pin(VMValue strVal) {
+  if (!IS_STRING(strVal)) return strVal;
+  ObjString *src = AS_STRING(strVal);
+
+  // Single contiguous malloc: ObjString header + char payload + NUL.
+  ObjString *pinned = (ObjString *)malloc(sizeof(ObjString) + src->length + 1);
+  if (!pinned) return strVal; // OOM — fall back to arena string
+
+  pinned->obj.type = OBJ_STRING;
+  pinned->obj.arena_allocated = 0; // permanent — not part of arena
+  pinned->obj.next = nullptr;
+  pinned->obj.ref_count = 1;
+  pinned->obj.is_moved = 0;
+  pinned->length = src->length;
+  pinned->capacity = src->length + 1;
+  pinned->chars = (char *)(pinned + 1);
+  memcpy(pinned->chars, src->chars, src->length);
+  pinned->chars[src->length] = '\0';
+  pinned->hash = 0;
+
+  return VM_OBJ((Obj *)pinned);
+}
+
 // Wrapper for AOT string literals (matches vm_alloc_string signature)
 ObjString *vm_alloc_string_aot(void *vm, const char *chars, int length) {
   return aot_allocate_string(chars, length);

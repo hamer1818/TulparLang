@@ -145,12 +145,13 @@ def render_cpu_table(payload: dict) -> str:
 # section, but readers shouldn't have to scroll to figure out what
 # `listen_async` vs `listen_pool` means while scanning the perf table.
 HTTP_SERVER_MODELS = {
-    "Tulpar listen":         "single thread, one request at a time",
-    "Tulpar listen_async":   "OS thread spawned per connection",
-    "Tulpar listen_pool x8": "8 pre-spawned worker threads share accept()",
-    "Tulpar listen_evented": "single thread, poll()-multiplexed",
-    "Node.js http":          "single-thread event loop",
-    "Python ThreadingHTTP":  "OS thread spawned per request",
+    "Tulpar listen":           "single thread, one request at a time",
+    "Tulpar listen_async":     "OS thread spawned per connection",
+    "Tulpar listen_pool x8":   "8 pre-spawned worker threads share accept()",
+    "Tulpar listen_evented":   "single thread, poll()-multiplexed",
+    "Tulpar evented + cache":  "evented + wire-byte cache for cached_get routes",
+    "Node.js http":            "single-thread event loop",
+    "Python ThreadingHTTP":    "OS thread spawned per request",
 }
 
 
