@@ -3408,6 +3408,22 @@ VMValue aot_tls_ctx_free(VMValue ctxVal) {
 // ============================================================================
 #include "../common/platform_threads.h"
 
+// cpu_count() -> int (logical CPUs as seen by the OS)
+//
+// Exposes `tulpar_get_cpu_count()` (sysconf(_SC_NPROCESSORS_ONLN) on
+// POSIX, GetSystemInfo().dwNumberOfProcessors on Windows). Used by
+// wings.tpr's `listen_pool` to default its worker count to the
+// host's CPU count when the caller didn't explicitly pick one — a
+// hardcoded `x8` over-subscribes on a 4-vCPU CI runner and was the
+// difference between threading variants beating Node by 1.9× (low
+// conc, no over-subscription) and barely 1.2× (high conc, 8 workers
+// thrashing on 4 cores).
+VMValue aot_cpu_count(void) {
+  int n = tulpar_get_cpu_count();
+  if (n < 1) n = 1;
+  return VM_INT((int64_t)n);
+}
+
 // Thread argument structure
 typedef struct {
   void *func_ptr; // Function pointer to call

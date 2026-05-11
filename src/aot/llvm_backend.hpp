@@ -264,6 +264,9 @@ typedef struct {
   // Wings response cache uses this to pin cached wire bytes past the
   // serve loop's `arena_restore`.
   LLVMValueRef func_aot_string_pin;
+  // Logical CPU count (sysconf / GetSystemInfo). Wings uses this to
+  // default `listen_pool`'s worker count to a host-matched value.
+  LLVMValueRef func_aot_cpu_count;
 
   // Process control
   LLVMValueRef func_aot_exit;

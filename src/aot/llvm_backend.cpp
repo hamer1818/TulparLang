@@ -1185,6 +1185,14 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_string_pin = LLVMAddFunction(
       backend->module, "aot_string_pin", string_pin_type);
 
+  // aot_cpu_count() -> int (no args). Used by wings.tpr's listen_pool
+  // to size its worker pool to the host's logical CPU count when the
+  // caller didn't pass an explicit n_workers.
+  LLVMTypeRef cpu_count_type =
+      llvm_make_vmvalue_func_type(backend, nullptr, 0, 0);
+  backend->func_aot_cpu_count = LLVMAddFunction(
+      backend->module, "aot_cpu_count", cpu_count_type);
+
   // aot_parse_cookies(str) -> VMValue (object)
   // Same VMValue (str) -> VMValue (object) shape as parse_query, so we
   // reuse http_parse_type rather than declaring a fresh signature.
@@ -3836,6 +3844,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_string_pin,
                                     args, 1, "string_pin");
+    }
+
+    // cpu_count() -> int (logical CPUs).
+    if (strcmp(node->name, "cpu_count") == 0 && node->argument_count == 0) {
+      return llvm_call_vmvalue_func(backend, backend->func_aot_cpu_count,
+                                    nullptr, 0, "cpu_count");
     }
 
     // path_match(pattern, path) -> {matched, params}
