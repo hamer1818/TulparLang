@@ -79,6 +79,25 @@ def main() -> int:
         # 5) round-trip parsing — ensure manifest is still well-formed
         run(exe, ["list"], wd)
 
+        # 5a) Pre-release + build-metadata semver specs must round-trip
+        # through `add` and `list` verbatim — the parser accepts them,
+        # the manifest serialiser preserves them, and the next read
+        # reproduces the same string. Regression for parse_semver
+        # ignoring everything after the first non-digit (which used to
+        # silently drop `-rc1` / `+ci.42` between save and re-read).
+        run(exe, ["add", "alpha-pin@1.0.0-rc1"], wd)
+        run(exe, ["add", "build-tagged@1.0.0+ci.42"], wd)
+        run(exe, ["add", "compound@>=1.0.0-rc1,<2.0.0"], wd)
+        out = run(exe, ["list"], wd)
+        for needle in ("1.0.0-rc1", "1.0.0+ci.42", ">=1.0.0-rc1,<2.0.0"):
+            if needle not in out:
+                failures.append(
+                    f"semver round-trip: '{needle}' missing in pkg list: {out!r}"
+                )
+        run(exe, ["remove", "alpha-pin"], wd)
+        run(exe, ["remove", "build-tagged"], wd)
+        run(exe, ["remove", "compound"], wd)
+
         # 6) install a `path:` dep + verify it's vendored.
         # Build a tiny sibling package, point the manifest at it, install.
         # Strip the registry-versioned `wings` dep from step 3 first so

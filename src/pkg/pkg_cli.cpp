@@ -38,22 +38,33 @@ bool file_exists(const char *path) {
 // Semver range support (client-side).
 //
 // Versions inside `tulpar.toml` and `tulpar pkg add foo@<spec>` can now be:
-//   * exact:  "1.2.3"   — must match a published version verbatim
-//   * caret:  "^1.2.3"  — >=1.2.3, <2.0.0  (compatible-within-major)
-//   * tilde:  "~1.2.3"  — >=1.2.3, <1.3.0  (compatible-within-minor)
-//   * any:    "*", ""   — highest published version wins
+//   * exact:  "1.2.3"          — must match a published version verbatim
+//   * caret:  "^1.2.3"         — >=1.2.3, <2.0.0  (compatible-within-major)
+//   * tilde:  "~1.2.3"         — >=1.2.3, <1.3.0  (compatible-within-minor)
+//   * any:    "*", ""          — highest published version wins
+//   * pre-release: `1.0.0-rc1` — full semver 2.0.0 ordering against the
+//     pre-release tag, build-metadata (`+ci.42`) parsed but ignored
+//     for precedence per spec.
 //
-// Pre-release / build metadata is intentionally ignored on both sides
-// of the comparison: the integer parse stops at the first non-digit so
-// `1.0.0-rc1` parses to (1,0,0) and is treated equal to `1.0.0`. This
-// mirrors the registry's own `_semver_compare` helper (tulpar-be PR
-// #16) so client and server agree on what "equal" means until full
-// pre-release semantics are introduced.
+// Pre-release ordering follows semver 2.0.0 §11:
+//   - A version WITHOUT a pre-release tag has higher precedence than
+//     one WITH a pre-release tag at the same (major.minor.patch).
+//   - Pre-release ids compare dot-segment by dot-segment. Numeric
+//     segments compare numerically and rank lower than alpha segments;
+//     alpha segments compare lex.
+//   - Build metadata after `+` is ignored entirely.
 
 struct SemVer {
     int major = 0;
     int minor = 0;
     int patch = 0;
+    // Empty when there's no pre-release tag (the common case for
+    // stable releases). When non-empty, holds everything between the
+    // `-` and the `+` (or end-of-string), e.g. "rc1", "alpha.7".
+    std::string prerelease;
+    // Build metadata is parsed but ignored for precedence per spec —
+    // we keep it for round-trip / observability only.
+    std::string build;
     bool ok = false;
 };
 
@@ -80,15 +91,85 @@ SemVer parse_semver(const std::string &s) {
     r.major = parts[0];
     r.minor = parts[1];
     r.patch = parts[2];
+    // Pre-release tag: `-<ids>` between the patch number and either
+    // `+<build>` or end-of-string. Both `1.0.0-rc1+ci.42` and
+    // `1.0.0-rc1` are valid; we slice the body and stash it on the
+    // SemVer for the comparator to use.
+    if (i < s.size() && s[i] == '-') {
+        size_t pre_start = i + 1;
+        size_t pre_end = pre_start;
+        while (pre_end < s.size() && s[pre_end] != '+') pre_end++;
+        r.prerelease = s.substr(pre_start, pre_end - pre_start);
+        i = pre_end;
+    }
+    if (i < s.size() && s[i] == '+') {
+        r.build = s.substr(i + 1);
+    }
     r.ok = true;
     return r;
+}
+
+// Compare one dot-segment of two pre-release tags. Semver §11.4.1 says:
+// numeric segments compare numerically; numeric < alpha when types
+// differ; alpha-vs-alpha is lex.
+int cmp_prerelease_segment(const std::string &a, const std::string &b) {
+    auto is_numeric = [](const std::string &s) {
+        if (s.empty()) return false;
+        for (char c : s) {
+            if (c < '0' || c > '9') return false;
+        }
+        return true;
+    };
+    bool an = is_numeric(a);
+    bool bn = is_numeric(b);
+    if (an && bn) {
+        long la = std::strtol(a.c_str(), nullptr, 10);
+        long lb = std::strtol(b.c_str(), nullptr, 10);
+        if (la != lb) return la < lb ? -1 : 1;
+        return 0;
+    }
+    if (an != bn) return an ? -1 : 1; // numeric < alpha
+    if (a != b) return a < b ? -1 : 1;
+    return 0;
+}
+
+// Compare two pre-release tags (already dot-separated). Spec §11.4.4:
+// a longer set of fields has higher precedence than a shorter one
+// when all preceding fields are equal. Empty tag (stable release) is
+// handled by cmp_semver before reaching here.
+int cmp_prerelease(const std::string &a, const std::string &b) {
+    size_t ai = 0, bi = 0;
+    while (ai < a.size() || bi < b.size()) {
+        std::string sa, sb;
+        if (ai < a.size()) {
+            size_t dot = a.find('.', ai);
+            sa = a.substr(ai, dot == std::string::npos ? std::string::npos : dot - ai);
+            ai = dot == std::string::npos ? a.size() : dot + 1;
+        }
+        if (bi < b.size()) {
+            size_t dot = b.find('.', bi);
+            sb = b.substr(bi, dot == std::string::npos ? std::string::npos : dot - bi);
+            bi = dot == std::string::npos ? b.size() : dot + 1;
+        }
+        if (sa.empty() && !sb.empty()) return -1;
+        if (!sa.empty() && sb.empty()) return 1;
+        int c = cmp_prerelease_segment(sa, sb);
+        if (c != 0) return c;
+    }
+    return 0;
 }
 
 int cmp_semver(const SemVer &a, const SemVer &b) {
     if (a.major != b.major) return a.major < b.major ? -1 : 1;
     if (a.minor != b.minor) return a.minor < b.minor ? -1 : 1;
     if (a.patch != b.patch) return a.patch < b.patch ? -1 : 1;
-    return 0;
+    // Spec §11.3: a version WITHOUT a pre-release tag outranks one
+    // WITH a pre-release tag at the same (major.minor.patch).
+    bool ap = !a.prerelease.empty();
+    bool bp = !b.prerelease.empty();
+    if (ap != bp) return ap ? -1 : 1;
+    if (!ap) return 0; // both stable, equal
+    return cmp_prerelease(a.prerelease, b.prerelease);
 }
 
 bool is_range_spec(const std::string &spec) {
