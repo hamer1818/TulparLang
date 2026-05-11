@@ -47,6 +47,15 @@ def main() -> int:
             text = f.read()
         if 'name = "smoke-pkg"' not in text:
             failures.append(f"init: name not in manifest: {text!r}")
+        # Regression for the registry-URL default: pkg init must seed
+        # the canonical hosted registry so a fresh user can
+        # `pkg add demo && pkg install` without editing the manifest.
+        # If the default URL changes, update the literal here AND the
+        # corresponding string in src/pkg/pkg_cli.cpp::cmd_init.
+        if "https://api.pkg.tulparlang.dev" not in text:
+            failures.append(
+                f"init: default registry URL missing from manifest: {text!r}"
+            )
 
         # 2) init refuses to overwrite
         run(exe, ["init"], wd, expect_rc=1)
@@ -72,6 +81,12 @@ def main() -> int:
 
         # 6) install a `path:` dep + verify it's vendored.
         # Build a tiny sibling package, point the manifest at it, install.
+        # Strip the registry-versioned `wings` dep from step 3 first so
+        # `pkg install` stays offline — wings isn't published on the
+        # hosted registry, and now that `pkg init` seeds a registry URL
+        # by default, an unresolved range hits the network and fails
+        # the run on CI machines without the live registry reachable.
+        run(exe, ["remove", "wings"], wd)
         sibling = os.path.join(wd, "vendored_lib")
         os.makedirs(sibling, exist_ok=True)
         with open(os.path.join(sibling, "vendored_lib.tpr"), "w",
