@@ -7049,6 +7049,18 @@ void llvm_backend_emit_local_int_declare(LLVMBackend *backend,
 
   LLVMBasicBlockRef block = LLVMGetInsertBlock(backend->builder);
   if (!block) return;
+  // LLVM 19 renamed the C API for inserting debug-info declares as
+  // part of the migration from `llvm.dbg.declare` intrinsics to
+  // record-based debug info. We support both: CMake defines
+  // `TULPAR_LLVM_MAJOR` from `LLVM_VERSION_MAJOR`, and the gate
+  // picks the right symbol. CI runs LLVM 18 (Linux apt, macOS
+  // homebrew); MSYS2 ships LLVM 19; Plan 07 PR 3e originally hit
+  // a portability break by using only the new spelling.
+#if TULPAR_LLVM_MAJOR >= 19
   LLVMDIBuilderInsertDeclareRecordAtEnd(backend->di_builder, alloca, var, expr,
                                         loc, block);
+#else
+  LLVMDIBuilderInsertDeclareAtEnd(backend->di_builder, alloca, var, expr, loc,
+                                  block);
+#endif
 }

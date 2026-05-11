@@ -41,6 +41,14 @@ message(STATUS "LLVM_DIR: ${LLVM_DIR}")
 message(STATUS "LLVM_INCLUDE_DIRS: ${LLVM_INCLUDE_DIRS}")
 message(STATUS "LLVM_LIBRARY_DIRS: ${LLVM_LIBRARY_DIRS}")
 
+# Expose LLVM major version to C++ so codegen can pick between API
+# spellings that LLVM has renamed across versions. Concretely:
+# `LLVMDIBuilderInsertDeclareAtEnd` (≤ 18) vs
+# `LLVMDIBuilderInsertDeclareRecordAtEnd` (≥ 19, record-based debug
+# info migration). Plan 07 PR 3e tripped on this — MSYS2 ships
+# LLVM 19, CI's apt installs LLVM 18.
+add_compile_definitions(TULPAR_LLVM_MAJOR=${LLVM_VERSION_MAJOR})
+
 # OpenSSL is OPTIONAL — when present, `https://` URLs become available
 # in `aot_http_request` and `tulpar pkg install` registry/url specs.
 # When absent, `http://` keeps working as before and `https://` URLs
