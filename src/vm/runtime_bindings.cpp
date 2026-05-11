@@ -2765,9 +2765,49 @@ VMValue aot_socket_server(VMValue hostVal, VMValue portVal) {
   setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
 #endif
 
+  // Resolve the `host` argument. Previously this was *ignored* and
+  // we always bound to `INADDR_ANY`, which is wrong in two ways:
+  //
+  //   1. A wings user calling `socket_server("127.0.0.1", port)` got
+  //      a socket bound to every interface anyway. A dev-only call
+  //      that should have stayed strictly local was reachable from
+  //      the LAN — a small but real security smell.
+  //
+  //   2. On Windows, the first time a binary binds a non-loopback
+  //      listener Windows Firewall pops "Allow this app to
+  //      communicate?" and waits for a user click. Every test run
+  //      that builds a fresh binary in a tempdir triggers a fresh
+  //      prompt (firewall rules are keyed on the absolute exe path),
+  //      which made iterating on benchmarks and smoke tests very
+  //      painful. Loopback bindings are exempt from the prompt, so
+  //      honouring "127.0.0.1" properly fixes the firewall pain
+  //      without any allowlisting or signing.
+  //
+  // The parse is permissive: unknown / unparseable host strings
+  // fall back to ANY rather than failing, so any existing user code
+  // passing an odd value keeps the wildcard behaviour it used to get.
   struct sockaddr_in address;
   address.sin_family = AF_INET;
-  address.sin_addr.s_addr = INADDR_ANY;
+  const char *host_str = AS_STRING(hostVal)->chars;
+  if (host_str && (strcmp(host_str, "127.0.0.1") == 0 ||
+                   strcmp(host_str, "localhost") == 0)) {
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  } else if (!host_str || host_str[0] == '\0' ||
+             strcmp(host_str, "0.0.0.0") == 0 ||
+             strcmp(host_str, "::") == 0) {
+    address.sin_addr.s_addr = INADDR_ANY;
+  } else {
+    struct in_addr parsed;
+#if PLATFORM_WINDOWS
+    if (InetPtonA(AF_INET, host_str, &parsed) == 1) {
+#else
+    if (inet_pton(AF_INET, host_str, &parsed) == 1) {
+#endif
+      address.sin_addr = parsed;
+    } else {
+      address.sin_addr.s_addr = INADDR_ANY;
+    }
+  }
   address.sin_port = htons((uint16_t)port);
 
   if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
