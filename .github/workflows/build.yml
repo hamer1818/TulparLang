@@ -781,18 +781,22 @@ jobs:
       # `windows-latest` runners at C:\Program Files (x86)\Inno Setup 6\.
       # We run this in pwsh (not msys2) to avoid path-translation pain
       # when invoking the Windows-native ISCC.exe.
-      # Skipped on the reuse path — the installer artifact has already
-      # been downloaded from the PR's build run by the reuse step at
-      # the top of this job. Also skipped on PR builds: the installer
-      # is a release-only artifact (no PR consumer needs it), and
-      # iscc burns ~35-40s every time. We rebuild it on push:main and
-      # tag pushes where create-release actually publishes it.
+      #
+      # Skipped on the reuse path — the installer artifact has
+      # already been downloaded from the PR's build run by the
+      # reuse step at the top of this job.
+      #
+      # NOTE: an earlier attempt (PR #182, reverted in #183) also
+      # skipped this step on PR runs to save ~37s of feedback time.
+      # That broke post-merge reuse-path builds because the reuse
+      # downloader requires the PR-side `tulpar-windows-installer`
+      # artifact, so a missing PR-side installer forced a full fresh
+      # ~190s LLVM rebuild on every push:main. The PR-side ~37s cost
+      # is the smaller of the two; restore the original gating so
+      # post-merge stays on the fast reuse path.
       # ----------------------------------------------------------------
       - name: Build GUI installer (Inno Setup)
-        if: >-
-          needs.detect-docs-only.outputs.docs_only != 'true' &&
-          steps.reuse.outputs.reused != 'true' &&
-          github.event_name != 'pull_request'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         shell: pwsh
         env:
           # Tag-pushed builds embed the tag name (so `tulpar --version`
@@ -824,9 +828,7 @@ jobs:
           Copy-Item installer\Output\tulpar-setup-windows-x64.exe dist\
 
       - name: Upload installer artifact
-        if: >-
-          needs.detect-docs-only.outputs.docs_only != 'true' &&
-          github.event_name != 'pull_request'
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: tulpar-windows-installer
