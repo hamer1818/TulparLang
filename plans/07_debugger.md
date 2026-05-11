@@ -1,11 +1,51 @@
 # Plan 07 — Debugger MVP (DWARF + DAP)
 
-**Durum:** PROPOSED
-**Tahmin:** 5-7 PR
+**Durum:** IN PROGRESS — Parça A (DWARF emit) tamamlandı. Parça B
+(DAP server + VS Code integration) bekliyor.
+**Tahmin:** 5-7 PR (Parça A için 7 PR açıldı, kapandı; Parça B için
+3-4 PR daha)
 **Risk:** Yüksek — yeni codegen path (DWARF emit) + yeni TCP protokol
 sunucusu (DAP); LSP'den daha karmaşık
 **Mottoya katkı:** Python kolay (breakpoint, step, watch — modern dil
 beklentisi)
+
+## Parça A (DWARF emit) tamamlandı — PR'lar #160 / #161 / #164 / #165 / #167 / #169 / #171 / #173
+
+`tulpar --debug build <file>` AOT komutu artık tam DWARF metadata
+emit ediyor. Aşağıdaki katmanlar IR'da `!dbg` metadata olarak görünür:
+
+| Katman | PR | Açıklama |
+|---|---|---|
+| LLVMDIBuilder skeleton (CompileUnit + File + module flags) | #160 | `!DICompileUnit`, `!DIFile`, `Dwarf Version` + `Debug Info Version` |
+| Optimizer pin to verify-only when `--debug` is on | #161 | O3 → verify; 1:1 source mapping korunur |
+| Per-function `DISubprogram` + entry debug location | #164 | Her user fonksiyon (+ main) bir `DISubprogram` ile bağlı |
+| Per-statement `LLVMSetCurrentDebugLocation2` | #165 | Top-level + boxed-VMValue body içi statement coverage |
+| Typed-int body interior statement coverage | #167 | `codegen_native_func_def`'in hand-rolled body loop'u da `DILocation` üretir |
+| `DILocalVariable` for int locals + params | #169 | `gdb info locals` / `print <int>` çalışır |
+| `DILocalVariable` for boxed VMValue locals + params + catch | #171 | json / str / array / `catch (e)` görünür |
+| `DIGlobalVariableExpression` for top-level + imported globals | #173 | `info variables` her global'i listeler |
+
+Plus PR #169'un takip eden fix'i: `TULPAR_LLVM_MAJOR` CMake macro'su
+ile LLVM 18 (CI) ve LLVM 19 (MSYS2 dev) arası C API isim drift'i
+(`Insert*RecordAtEnd` rename) hazır. Memory'de
+`reference_llvm_version_drift.md` not düşülmüş.
+
+## Parça B (DAP server + VS Code integration) — devam ediyor
+
+Geriye kalan adımlar PR 4-6 kapsamında:
+
+- **PR 4**: `tulpar debug <file>` subcommand + DAP JSON-RPC stdio
+  framing + `initialize` / `disconnect` handshake. gdb subprocess
+  spawn şu noktada yok — protokol katmanı izole olarak yazılır.
+- **PR 4a sonrası**: gdb `--interpreter=mi3` subprocess
+  yönetimi + `launch` / `setBreakpoints` / `stackTrace` / `variables`
+  / `continue` / `next` / `stepIn` translation.
+- **PR 5**: `vscode-tulpar` eklentisinde `contributes.debuggers`
+  bloğu + `launch.json` snippet.
+- **PR 6 (opsiyonel)**: gdb pretty-printer Tulpar VMValue
+  tag/payload'unu decode etsin (right now debugger 16-byte opaque
+  blob görüyor; pretty-printer ile "json {k: 1}", "str hamza" gibi
+  okunabilir display).
 
 ## Hedef
 
