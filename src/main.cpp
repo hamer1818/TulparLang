@@ -26,6 +26,7 @@
 #include "pkg/manifest.hpp"
 #include "pkg/pkg_cli.hpp"
 #include "cli/line_edit.hpp"
+#include "cli/debug_cmd.hpp"
 #include "cli/typecheck_cmd.hpp"
 #include "cli/update_cmd.hpp"
 #include "typeinfer/typeinfer_warn.hpp"
@@ -102,6 +103,10 @@ static void print_help() {
   std::printf("  tulpar --lsp                     %s\n",
               tulpar::i18n::tr_en("- LSP sunucusu (editor entegrasyonu)",
                                   "- LSP server (editor integration)"));
+  std::printf("  tulpar debug <source.tpr>        %s\n",
+              tulpar::i18n::tr_en(
+                  "- DAP hata ayiklayici (deneysel — Plan 07)",
+                  "- DAP debug adapter (experimental — Plan 07)"));
 
   std::printf("\n%s\n",
               tulpar::i18n::tr_en("Surum & guncelleme:",
@@ -540,6 +545,14 @@ int main(int argc, char **argv) {
   // just for the update path.
   if (argc >= 2 && std::strcmp(argv[1], "update") == 0) {
     return tulpar::update_cmd_main(argc, argv);
+  }
+
+  // `tulpar debug <file.tpr>` — Plan 07 Part B. Opens a Debug Adapter
+  // Protocol server on stdio. Owns stdin/stdout (every diagnostic
+  // line goes to stderr), so it must dispatch before any banner /
+  // REPL output — same constraint `--lsp` carries.
+  if (argc >= 2 && std::strcmp(argv[1], "debug") == 0) {
+    return tulpar::debug_cmd_main(argc, argv);
   }
 
   // Flags
