@@ -5714,6 +5714,13 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
   LLVMBasicBlockRef entry = LLVMAppendBasicBlock(func, "entry");
   LLVMPositionBuilderAtEnd(backend->builder, entry);
 
+  // Plan 07 PR 3b: bind a DISubprogram to this typed-int function
+  // and seed the builder's debug location on the entry block. No-op
+  // when --debug isn't set. AST nodes carry the declaration line via
+  // `node->line`; 0 falls back to "no source line" in the debugger.
+  llvm_backend_emit_subprogram_for_function(backend, func, node->name,
+                                            node->line);
+
   enter_scope(backend);
 
   // Add parameters as native i64 locals
@@ -6259,6 +6266,13 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
 
   LLVMBasicBlockRef entry = LLVMAppendBasicBlock(func, "entry");
   LLVMPositionBuilderAtEnd(backend->builder, entry);
+
+  // Plan 07 PR 3b: bind a DISubprogram to this user function and
+  // seed the builder's debug location on the entry block. No-op when
+  // --debug isn't set. `node->line` is the parser-recorded
+  // declaration line; 0 ⇒ debugger reports "no source line".
+  llvm_backend_emit_subprogram_for_function(backend, func, node->name,
+                                            node->line);
 
   enter_scope(backend);
   backend->current_function_is_void_abi = 1;
@@ -6843,4 +6857,85 @@ void llvm_backend_finalize_debug_info(LLVMBackend *backend) {
   LLVMDIBuilderFinalize(backend->di_builder);
   // Keep the builder alive so the metadata it owns isn't freed before
   // emit_object / emit_ir_file run. `llvm_backend_destroy` disposes it.
+}
+
+// ---------------------------------------------------------------------------
+// Plan 07 PR 3b — Per-function `DISubprogram` + baseline debug location.
+//
+// What this adds in the IR (when `--debug` is set):
+//   * Every user function gets its own `!DISubprogram` metadata,
+//     pinned to the compile unit's `DIFile` and scoped under the
+//     `DICompileUnit` from PR 2. `LLVMSetSubprogram(func, sp)` ties
+//     the LLVM value to the metadata so the debugger can walk back
+//     from a code address to "this is user function `foo`".
+//   * The builder is positioned on the declaration line via
+//     `LLVMSetCurrentDebugLocation2`. Without that, the *first*
+//     instruction of every function would have no `!dbg` annotation,
+//     and the LLVM verifier rejects the module ("function has a
+//     subprogram but its instructions don't"). Setting the location
+//     once on entry makes every instruction the body's codegen later
+//     emits inherit a sensible default.
+//
+// Why a single dummy subroutine type:
+//   The full `DISubroutineType` would enumerate every parameter and
+//   return type with proper `DIBasicType` / `DICompositeType`
+//   metadata. Tulpar functions take and return `VMValue`-shaped
+//   {i32, [4xi8], i64} structs, which doesn't map onto a clean
+//   debugger primitive. Until PR 3c gives us per-variable metadata,
+//   the debugger only needs to see "this is a function" — passing a
+//   single-element `(null = void)` type array is the LLVM-blessed
+//   shape for that.
+
+LLVMMetadataRef llvm_backend_emit_subprogram_for_function(
+    LLVMBackend *backend, LLVMValueRef func, const char *name, int decl_line) {
+  if (!backend || !backend->di_builder || !func) return nullptr;
+  if (decl_line < 0) decl_line = 0;
+
+  // Skip if this LLVM function already has a subprogram bound (idempotent
+  // — both emit paths can call us, predeclare + body emit can both fire
+  // on the same function, modules that reuse a function value
+  // shouldn't accidentally attach two subprograms).
+  if (LLVMGetSubprogram(func)) return LLVMGetSubprogram(func);
+
+  // Single-null types array = void(void)-style subroutine. Sufficient for
+  // function-level "where am I in the call stack" debugger queries.
+  LLVMMetadataRef param_types[1] = { nullptr };
+  LLVMMetadataRef sub_routine_type =
+      LLVMDIBuilderCreateSubroutineType(backend->di_builder, backend->di_file,
+                                        param_types, 1, LLVMDIFlagZero);
+
+  // `IsLocalToUnit`: every user function is module-internal but
+  // available across translation units (we don't have multi-CU
+  // builds yet), so 0 is fine. `IsDefinition`: yes — we're emitting
+  // the body right after this call. `ScopeLine` matches DeclLine
+  // (Tulpar doesn't separate signature line from body-open line).
+  // `Flags`: ZERO; `Optimized`: false (PR 3a pinned -O0 in debug).
+  const char *safe_name = (name && *name) ? name : "<anonymous>";
+  LLVMMetadataRef subprogram = LLVMDIBuilderCreateFunction(
+      backend->di_builder,
+      backend->di_compile_unit,       // scope
+      safe_name, strlen(safe_name),   // name
+      safe_name, strlen(safe_name),   // linkage name (same as source name)
+      backend->di_file,               // file
+      decl_line,                      // line
+      sub_routine_type,               // type
+      /*IsLocalToUnit=*/0,
+      /*IsDefinition=*/1,
+      /*ScopeLine=*/decl_line,
+      LLVMDIFlagZero,
+      /*IsOptimized=*/0);
+
+  LLVMSetSubprogram(func, subprogram);
+
+  // Position the builder on the declaration line so the first
+  // instruction codegen emits inherits a `!dbg` annotation. Column
+  // 0 = "unknown column"; LLVM accepts and downstream debuggers
+  // tolerate it.
+  if (backend->builder) {
+    LLVMMetadataRef loc = LLVMDIBuilderCreateDebugLocation(
+        backend->context, (unsigned)decl_line, /*column=*/0, subprogram,
+        /*InlinedAt=*/nullptr);
+    LLVMSetCurrentDebugLocation2(backend->builder, loc);
+  }
+  return subprogram;
 }

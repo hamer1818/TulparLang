@@ -464,6 +464,17 @@ void llvm_backend_init_debug_info(LLVMBackend *backend,
                                   const char *source_filename);
 void llvm_backend_finalize_debug_info(LLVMBackend *backend);
 
+// Plan 07 PR 3b: attach a `DISubprogram` to a user function and
+// position the builder on its declaration line. Call this right
+// after the entry basic block exists and before codegen walks the
+// body — the returned subprogram is also stashed as
+// `LLVMGetSubprogram(func)` so subsequent debug locations can scope
+// against it. No-op + returns NULL when emit_debug_info is off.
+// `decl_line` should be the parser-recorded line of the function
+// declaration; 0 is accepted (debugger will report "no source line").
+LLVMMetadataRef llvm_backend_emit_subprogram_for_function(
+    LLVMBackend *backend, LLVMValueRef func, const char *name, int decl_line);
+
 // Enable static typing mode for native performance
 void llvm_backend_enable_static_typing(LLVMBackend *backend);
 
