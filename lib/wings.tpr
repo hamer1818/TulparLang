@@ -47,11 +47,20 @@ int _wings_requests_5xx = 0;
 // via `TULPAR_HTTP_MAX_BODY=<bytes>` for stricter or looser caps.
 int _wings_max_body_bytes = 16777216;
 
-// Pulls config overrides from the environment. Today only
-// `TULPAR_HTTP_MAX_BODY` (bytes) is honoured; future env-based knobs
-// land here too so listen()/listen_async() stay clean. Below 1 KiB
-// is rejected — the static recv buffer is sized to fit at least the
-// header block, anything smaller would just churn rejections.
+// HTTP_QUIET cache. The per-request access log lookup used to call
+// `env("TULPAR_HTTP_QUIET")` on every served request — one getenv
+// syscall + one string allocation per request, in three serve loops
+// (sync, async, evented). Env vars don't change after process start,
+// so we snapshot the truthiness once in `_wings_apply_env_config` and
+// the serve loops read the int directly.
+int _wings_quiet = 0;
+
+// Pulls config overrides from the environment. Today honours
+// `TULPAR_HTTP_MAX_BODY` (bytes) and `TULPAR_HTTP_QUIET` (any
+// non-empty value silences the per-request access log). Future
+// env-based knobs land here too so listen()/listen_async() stay clean.
+// Below 1 KiB is rejected — the static recv buffer is sized to fit at
+// least the header block, anything smaller would just churn rejections.
 func _wings_apply_env_config() {
     str cap_str = env("TULPAR_HTTP_MAX_BODY");
     if (length(cap_str) > 0) {
@@ -59,6 +68,12 @@ func _wings_apply_env_config() {
         if (parsed >= 1024) {
             _wings_max_body_bytes = parsed;
         }
+    }
+    // Snapshot HTTP_QUIET once so the per-request access log check is
+    // a single int comparison instead of a getenv syscall + length()
+    // round-trip on every served request.
+    if (length(env("TULPAR_HTTP_QUIET")) > 0) {
+        _wings_quiet = 1;
     }
 }
 
@@ -183,28 +198,16 @@ func _wings_match_pattern(str pattern, str path) {
 // Returns {"index": <int>, "params": <json>} where index < 0 means no
 // match. Populates _request["params"] downstream so handlers can read
 // captured values via `_request["params"]["name"]`.
+//
+// The native `wings_find_route` builtin folds the exact + pattern
+// two-pass walk into a single C call — replaces N × (`r["method"]`,
+// `r["path"]`, `_wings_match_pattern` …) json hash hits with one
+// memcmp-driven segment walk per request. The Tulpar wrapper is kept
+// so user code calling `_find_route_with_params` directly still
+// resolves, but the wings serve path now incurs a single native call
+// per request.
 func _find_route_with_params(str method, str path) {
-    int exact = _find_route(method, path);
-    if (exact >= 0) {
-        return {"index": exact, "params": {}};
-    }
-    for (int i = 0; i < length(_routes); i++) {
-        json r = _routes[i];
-        if (r["method"] != method) {
-            continue;
-        }
-        str pat = r["path"];
-        // Routes without `:` would have caught above as exact matches.
-        // Skipping here saves a split() per non-param route per request.
-        if (indexOf(pat, ":") < 0) {
-            continue;
-        }
-        json m = _wings_match_pattern(pat, path);
-        if (m["match"]) {
-            return {"index": i, "params": m["params"]};
-        }
-    }
-    return {"index": -1, "params": {}};
+    return wings_find_route(_routes, method, path);
 }
 
 // Raw-response envelope detection. Handlers that need to bypass the
@@ -420,7 +423,7 @@ func _wings_serve_connection(json client_arg) {
         _request = req;
         str method = req["method"];
         str path = req["path"];
-        if (length(env("TULPAR_HTTP_QUIET")) == 0) {
+        if (_wings_quiet == 0) {
             print("  " + method + " " + path);
         }
         // CORS preflight short-circuit. Browsers send `OPTIONS` before
@@ -541,7 +544,7 @@ func _wings_serve_one_request(int client) {
     _request = req;
     str method = req["method"];
     str path = req["path"];
-    if (length(env("TULPAR_HTTP_QUIET")) == 0) {
+    if (_wings_quiet == 0) {
         print("  " + method + " " + path);
     }
     bool is_options = (method == "OPTIONS");
@@ -932,7 +935,7 @@ func listen(int port) {
 
             str method = req["method"];
             str path = req["path"];
-            if (length(env("TULPAR_HTTP_QUIET")) == 0) {
+            if (_wings_quiet == 0) {
                 print("  " + method + " " + path);
             }
 
