@@ -4521,8 +4521,28 @@ VMValue aot_http_create_response_keepalive(VMValue statusVal,
   }
 
   size_t cap = 80 + content_type_len + extra_len + body_len + 64;
-  char *response = (char *)aot_arena_alloc(cap + 1);
-  char *w = response;
+
+  // Allocate ObjString header + payload buffer in ONE arena block.
+  // Previously this ran a two-step:
+  //   1. arena_alloc(cap+1)              -> scratch char buffer
+  //   2. aot_allocate_string(scratch, n) -> ObjString + chars (copies scratch)
+  // i.e. one arena alloc + one full memcpy of the response bytes,
+  // every HTTP response. By writing directly into the ObjString's
+  // co-located chars buffer we drop the second alloc and the trailing
+  // memcpy entirely. The cap is a safe upper bound (matches the
+  // previous scratch size), so over-allocation by a few bytes is the
+  // worst case — same arena lifetime semantics either way.
+  size_t total = sizeof(ObjString) + cap + 1;
+  char *block = (char *)aot_arena_alloc(total);
+  ObjString *str = (ObjString *)block;
+  str->obj.type = OBJ_STRING;
+  str->obj.arena_allocated = 1;
+  str->obj.next = nullptr;
+  str->obj.ref_count = 1;
+  str->obj.is_moved = 0;
+  str->chars = block + sizeof(ObjString);
+  str->hash = 0;
+  char *w = str->chars;
 
   // "HTTP/1.1 <status> <status_text>\r\nContent-Type: <ct>\r\nContent-Length: <n>\r\n"
   // Hand-rolled because the snprintf equivalent re-parses the format
@@ -4564,7 +4584,10 @@ VMValue aot_http_create_response_keepalive(VMValue statusVal,
     memcpy(w, body, body_len); w += body_len;
   }
   *w = '\0';
-  return VM_OBJ((Obj *)aot_allocate_string(response, (int)(w - response)));
+
+  str->length = (int)(w - str->chars);
+  str->capacity = str->length + 1;
+  return VM_OBJ((Obj *)str);
 }
 
 // Create HTTP response string
