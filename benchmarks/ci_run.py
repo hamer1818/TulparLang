@@ -484,19 +484,28 @@ def render_results_md_section(payload: dict) -> str:
             lines.append(f"| {b} | {vc_cell} | {vn} | {vp} |")
         lines.append("")
 
-    # HTTP table.
-    if http:
-        lines.append("## HTTP throughput")
+    # HTTP table. Renders once per non-empty results list — the
+    # low-conc baseline first, then the high-conc variant under its
+    # own subheading so readers can compare single-stream perf against
+    # multi-core scaling without conflating them.
+    def _render_http(results: list[dict], requests: int, connections: int,
+                     subheading: str, note: str) -> None:
+        if not results:
+            return
+        lines.append(subheading)
         lines.append("")
-        lines.append(f"{payload['http']['requests']:,} GETs over "
-                     f"{payload['http']['connections']} keep-alive connections; "
-                     "single localhost run; each server hosting the same JSON "
-                     "handler. **Higher req/sec is better.**".replace(",", " "))
+        lines.append(f"{requests:,} GETs over {connections} keep-alive "
+                     "connections; single localhost run; each server hosting "
+                     "the same JSON handler. **Higher req/sec is better.**"
+                     .replace(",", " "))
+        if note:
+            lines.append("")
+            lines.append(note)
         lines.append("")
-        node = next((r for r in http if r["server"].startswith("Node")), None)
+        node = next((r for r in results if r["server"].startswith("Node")), None)
         lines.append("| Server | Scheduling model | req/sec | vs Node.js |")
         lines.append("|---|---|---:|---:|")
-        for r in sorted(http, key=lambda x: -x["rps"]):
+        for r in sorted(results, key=lambda x: -x["rps"]):
             server = r["server"]
             label = f"**{server}**" if server.startswith("Tulpar") else server
             model = HTTP_SERVER_MODELS.get(server, "—")
@@ -516,6 +525,25 @@ def render_results_md_section(payload: dict) -> str:
             rps_fmt = f"{rps:,}".replace(",", " ")
             lines.append(f"| {label} | {model} | {rps_fmt} | {vs_node} |")
         lines.append("")
+
+    if http:
+        _render_http(
+            http, payload['http']['requests'], payload['http']['connections'],
+            "## HTTP throughput (low concurrency)",
+            "_Apples-to-apples view: a single client thread per connection, "
+            "modest parallelism. Comparable to a CLI tool or background "
+            "agent hitting the API._")
+
+    http_high_payload = payload.get("http_high", {})
+    if http_high_payload.get("results"):
+        _render_http(
+            http_high_payload["results"],
+            http_high_payload["requests"],
+            http_high_payload["connections"],
+            "## HTTP throughput (high concurrency)",
+            "_Higher parallelism — same per-thread workload as the low-conc "
+            "table above, but 4× the concurrent connections. Surfaces the "
+            "multi-core scaling that single-stream benchmarks hide._")
 
     lines.append(RESULTS_END)
     return "\n".join(lines)
@@ -547,9 +575,16 @@ def main() -> int:
     ap.add_argument("--repeats", type=int, default=5,
                     help="repeats per CPU benchmark (best wall time wins)")
     ap.add_argument("--http-requests", type=int, default=3000,
-                    help="total HTTP requests across all connections")
+                    help="total HTTP requests for the low-concurrency pass")
     ap.add_argument("--http-connections", type=int, default=4,
-                    help="parallel keep-alive connections")
+                    help="parallel keep-alive connections for the low-concurrency pass")
+    ap.add_argument("--http-high-multiplier", type=int, default=4,
+                    help="scale factor for the second high-concurrency HTTP "
+                         "pass — requests AND connections are multiplied by "
+                         "this, so the per-thread workload stays constant and "
+                         "only the concurrency varies (4× by default: 4 conn "
+                         "+ 750 reqs/thread vs 16 conn + 750 reqs/thread). "
+                         "Set to 1 to disable the high-concurrency pass.")
     ap.add_argument("--no-http", action="store_true",
                     help="skip the HTTP throughput suite")
     ap.add_argument("--no-java", action="store_true",
@@ -570,11 +605,28 @@ def main() -> int:
     cpu = cpu_table(built, repeats=args.repeats)
 
     http = []
+    http_high: list[dict] = []
     if not args.no_http:
         try:
             http = http_table(args.http_requests, args.http_connections)
         except Exception as e:  # noqa: BLE001
             print(f"[bench] HTTP suite failed: {e}", file=sys.stderr)
+
+        # Second pass at higher concurrency. Same per-thread workload
+        # (requests * multiplier across connections * multiplier =
+        # same per-conn count), so the only experimental variable is
+        # how many concurrent keep-alive streams the server is juggling.
+        # Lets readers compare Tulpar's low-conc single-stream perf
+        # against its high-conc multi-core scaling without conflating
+        # the two in one number.
+        if args.http_high_multiplier > 1:
+            try:
+                mult = args.http_high_multiplier
+                http_high = http_table(args.http_requests * mult,
+                                       args.http_connections * mult)
+            except Exception as e:  # noqa: BLE001
+                print(f"[bench] HTTP high-conc suite failed: {e}",
+                      file=sys.stderr)
 
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -592,6 +644,11 @@ def main() -> int:
             "requests": args.http_requests,
             "connections": args.http_connections,
             "results": http,
+        },
+        "http_high": {
+            "requests": args.http_requests * args.http_high_multiplier,
+            "connections": args.http_connections * args.http_high_multiplier,
+            "results": http_high,
         },
     }
 

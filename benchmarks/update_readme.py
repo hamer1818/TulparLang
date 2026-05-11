@@ -155,27 +155,34 @@ HTTP_SERVER_MODELS = {
 }
 
 
-def render_http_table(payload: dict) -> str:
-    http = payload["http"]["results"]
+def _fmt_thousand(n: int) -> str:
+    """Format an int with space-as-thousand-separator (matches Tulpar
+    docs style and works in monospace tables). `f'{n:,}'` uses commas
+    which conflict with prose punctuation when we do bulk replaces, so
+    do the substitution once here on a known-numeric value."""
+    return f"{n:,}".replace(",", " ")
+
+
+def _render_one_http_block(http: list[dict], requests, connections,
+                           preamble: str, headline_label: str) -> list[str]:
+    """Render a single HTTP throughput table (rows + headline sentence).
+    Used twice: once for the low-conc baseline, once for the high-conc
+    pass. Returns the list of markdown lines so the caller can splice
+    them between an optional subheading and the next section."""
     if not http:
-        return "_(HTTP throughput suite did not produce results on the latest run.)_"
-
-    requests = payload["http"].get("requests", "?")
-    connections = payload["http"].get("connections", "?")
+        return []
     node = next((r for r in http if r["server"].startswith("Node")), None)
-
     lines: list[str] = []
-    lines.append(f"_{requests:,} GETs over {connections} keep-alive connections; "
+    req_str = _fmt_thousand(requests) if isinstance(requests, int) else str(requests)
+    conn_str = str(connections)
+    lines.append(f"_{req_str} GETs over {conn_str} keep-alive connections; "
                  f"single localhost run; each server hosting the same JSON "
-                 f"handler. Higher req/sec is better._".replace(",", " "))
+                 f"handler. {preamble} Higher req/sec is better._")
     lines.append("")
     lines.append("| Server | Scheduling model | req/sec | vs Node.js |")
     lines.append("|---|---|---:|---:|")
     for r in sorted(http, key=lambda x: -x["rps"]):
         server = r["server"]
-        # Bold every Tulpar row so the reader sees at a glance which
-        # rows belong to us (previously only the non-sync variants got
-        # bolded — looked arbitrary).
         label = f"**{server}**" if server.startswith("Tulpar") else server
         model = HTTP_SERVER_MODELS.get(server, "—")
         rps = int(r["rps"])
@@ -187,33 +194,74 @@ def render_http_table(payload: dict) -> str:
                 vs_node = f"**{ratio:.2f}× faster**"
             else:
                 inv = 1.0 / ratio
-                vs_node = f"{inv:.0f}× slower"
+                vs_node = f"{inv:.2f}× slower"
         elif rps == 0:
             vs_node = "_(failed — 0 rps)_"
         else:
             vs_node = "—"
-        rps_fmt = f"{rps:,}".replace(",", " ")
-        lines.append(f"| {label} | {model} | {rps_fmt} | {vs_node} |")
+        lines.append(f"| {label} | {model} | {_fmt_thousand(rps)} | {vs_node} |")
 
-    # Headline cross-runtime ratio for the intro paragraph. Pick the
-    # FASTEST working Tulpar listener (rps > 0) so a single-mode
-    # regression doesn't kill the marketing message. If every Tulpar
-    # mode failed (rps == 0), we suppress the sentence rather than
-    # print "0× the throughput".
-    tulpar_rows = [r for r in http
-                   if r["server"].startswith("Tulpar") and r["rps"] > 0]
-    if tulpar_rows and node and node["rps"]:
-        all_ratios = sorted(r["rps"] / node["rps"] for r in tulpar_rows)
-        lo, hi = all_ratios[0], all_ratios[-1]
+    # Headline ratio for this concurrency level. Restrict to Tulpar
+    # rows that ACTUALLY beat Node — a single outlier (a runner-specific
+    # filesystem cliff on the WSL `listen` row, etc.) would otherwise
+    # produce a "0.5×–1.5×" range that reads worse than the truth. If
+    # every variant trails Node we skip the sentence rather than print
+    # a "slower" headline.
+    winning = [r for r in http
+               if r["server"].startswith("Tulpar")
+               and r["rps"] > 0 and node and r["rps"] > node["rps"]]
+    if winning and node and node["rps"]:
+        ratios = sorted(r["rps"] / node["rps"] for r in winning)
+        lo, hi = ratios[0], ratios[-1]
         lines.append("")
         if abs(hi - lo) < 0.05:
-            lines.append(f"All Tulpar Wings listeners serve "
-                         f"**~{hi:.2f}× the throughput of Node.js** built-in `http` "
-                         f"on this run.")
+            lines.append(f"Tulpar Wings listeners {headline_label} serve "
+                         f"**~{hi:.2f}× the throughput of Node.js** built-in `http`.")
+        elif len(winning) == 1:
+            lines.append(f"Tulpar's `{winning[0]['server'].replace('Tulpar ', '')}` "
+                         f"{headline_label} serves **{hi:.2f}× the throughput of "
+                         f"Node.js** built-in `http`.")
         else:
-            lines.append(f"Every Tulpar Wings listener beats Node.js' built-in `http`, "
-                         f"by **{lo:.2f}×–{hi:.2f}×** depending on scheduling model.")
-    return "\n".join(lines)
+            lines.append(f"{len(winning)} of the Tulpar Wings listeners "
+                         f"{headline_label} beat Node.js' built-in `http`, "
+                         f"by **{lo:.2f}×–{hi:.2f}×** depending on "
+                         f"scheduling model.")
+    return lines
+
+
+def render_http_table(payload: dict) -> str:
+    http = payload["http"]["results"]
+    if not http:
+        return "_(HTTP throughput suite did not produce results on the latest run.)_"
+
+    # Low-concurrency block: the headline baseline. Comparable to a CLI
+    # tool or background agent hitting the API one client at a time.
+    requests = payload["http"].get("requests", "?")
+    connections = payload["http"].get("connections", "?")
+    out = []
+    out.append("### Low concurrency")
+    out.append("")
+    out.extend(_render_one_http_block(
+        http, requests, connections,
+        preamble="Apples-to-apples view: one client thread per connection.",
+        headline_label="at this concurrency"))
+
+    # High-concurrency block (optional). Same per-thread workload as
+    # the low-conc table, but with 4× the concurrent connections —
+    # surfaces multi-core scaling that single-stream benchmarks hide.
+    http_high = payload.get("http_high", {}).get("results", [])
+    if http_high:
+        out.append("")
+        out.append("### High concurrency")
+        out.append("")
+        out.extend(_render_one_http_block(
+            http_high,
+            payload["http_high"].get("requests", "?"),
+            payload["http_high"].get("connections", "?"),
+            preamble="Same per-thread workload as the low-concurrency block, "
+                     "scaled up to surface multi-core scaling.",
+            headline_label="under this load"))
+    return "\n".join(out)
 
 
 def splice(text: str, start: str, end: str, body: str) -> tuple[str, bool]:
