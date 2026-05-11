@@ -14,6 +14,7 @@ oluşturulma sırasıdır.
 | 02 | [Package registry tamamlaması](02_pkg_registry.md) | 2-4 PR | Düşük | Ekosistem |
 | 03 | [typeinfer strict mode](03_typeinfer_strict.md) | 1-2 PR | Düşük | Python kolay (erken hata) |
 | 04 | [Native record/struct types (unboxed)](04_native_structs.md) | 4-6 PR | Yüksek | C kadar hızlı |
+| 05 | [Generics (parametric polymorphism)](05_generics.md) | 5-8 PR | Yüksek | Python kolay + C kadar hızlı |
 
 Tipik bir uygulama akışı:
 
