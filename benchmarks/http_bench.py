@@ -22,10 +22,14 @@ import tempfile
 import threading
 import time
 
-def wings_src(listener_call: str) -> str:
+def wings_src(listener_call: str, *, register: str = "get") -> str:
     """Build a Wings server source pinned to one listener variant.
     `listener_call` is the literal Tulpar code for the final call —
     e.g. `listen(8765)` or `listen_pool(8770, 8)`.
+    `register` is the routing function — `"get"` for dynamic dispatch
+    (handler runs every request) or `"cached_get"` for wire-byte
+    cache mode (handler runs once, subsequent requests serve cached
+    bytes via a single syscall).
     """
     return (
         'import "wings";\n'
@@ -33,20 +37,26 @@ def wings_src(listener_call: str) -> str:
         'func index_handler() { return {"hello": "world"}; }\n'
         'func ping_handler() { return {"pong": 1}; }\n'
         '\n'
-        'get("/", "index_handler");\n'
-        'get("/ping", "ping_handler");\n'
+        f'{register}("/", "index_handler");\n'
+        f'{register}("/ping", "ping_handler");\n'
         f'{listener_call};\n'
     )
 
 
-# Each variant: (label, port, listener_call, build_dir_suffix). All
-# share the same handler body so the only differences are the
-# scheduling model under test.
+# Each variant: (label, port, listener_call, build_dir_suffix,
+# register_fn). All four scheduling-model variants register with
+# plain `get` so the bench measures the full dispatch path. The
+# fifth row is the wire-byte cache fast-path on top of the
+# fastest listener (`listen_evented`) — shows what the same workload
+# looks like when the handler's output is pinned via `cached_get`.
+# Same JSON handler, same listener; the only delta is the route
+# registration verb.
 WINGS_VARIANTS = [
-    ("Tulpar listen",         8765, "listen(8765)",                "sync"),
-    ("Tulpar listen_async",   8770, "listen_async(8770)",          "async"),
-    ("Tulpar listen_pool x8", 8771, "listen_pool(8771, 8)",        "pool"),
-    ("Tulpar listen_evented", 8772, "listen_evented(8772)",        "ev"),
+    ("Tulpar listen",            8765, "listen(8765)",         "sync",   "get"),
+    ("Tulpar listen_async",      8770, "listen_async(8770)",   "async",  "get"),
+    ("Tulpar listen_pool x8",    8771, "listen_pool(8771, 8)", "pool",   "get"),
+    ("Tulpar listen_evented",    8772, "listen_evented(8772)", "ev",     "get"),
+    ("Tulpar evented + cache",   8773, "listen_evented(8773)", "cached", "cached_get"),
 ]
 
 PY_BASELINE_SRC = """\
@@ -237,11 +247,11 @@ def main() -> int:
         env["TULPAR_HTTP_QUIET"] = "1"
 
         # Build + bench each Wings listener variant.
-        for label, port, call, suffix in WINGS_VARIANTS:
+        for label, port, call, suffix, register in WINGS_VARIANTS:
             tpr_path = os.path.join(wd, f"wings_{suffix}.tpr")
             bin_base = os.path.join(wd, f"wings_{suffix}")
             with open(tpr_path, "w", encoding="utf-8") as f:
-                f.write(wings_src(call))
+                f.write(wings_src(call, register=register))
             subprocess.check_call(
                 [exe, "build", tpr_path, bin_base],
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,

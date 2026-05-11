@@ -333,10 +333,11 @@ def http_table(requests: int, connections: int) -> list[dict]:
     with tempfile.TemporaryDirectory(prefix="tulpar_bench_") as wd:
         # Each Wings variant: write a one-file Tulpar source, build it,
         # bench it. Same handler; only the listener call changes.
-        for label, port, call, suffix in http_bench.WINGS_VARIANTS:
+        for label, port, call, suffix, register in http_bench.WINGS_VARIANTS:
             tpr_path = Path(wd) / f"wings_{suffix}.tpr"
             bin_base = Path(wd) / f"wings_{suffix}"
-            tpr_path.write_text(http_bench.wings_src(call), encoding="utf-8")
+            tpr_path.write_text(http_bench.wings_src(call, register=register),
+                                encoding="utf-8")
             try:
                 subprocess.run([str(TULPAR_EXE), "build", str(tpr_path), str(bin_base)],
                                check=True, timeout=120,
@@ -403,12 +404,13 @@ RESULTS_END = "<!-- BENCH:RESULTS END -->"
 # here so RESULTS.md and README.md show identical "what is this server"
 # descriptions for the same data — neither file references the other.
 HTTP_SERVER_MODELS = {
-    "Tulpar listen":         "single thread, one request at a time",
-    "Tulpar listen_async":   "OS thread spawned per connection",
-    "Tulpar listen_pool x8": "8 pre-spawned worker threads share accept()",
-    "Tulpar listen_evented": "single thread, poll()-multiplexed",
-    "Node.js http":          "single-thread event loop",
-    "Python ThreadingHTTP":  "OS thread spawned per request",
+    "Tulpar listen":           "single thread, one request at a time",
+    "Tulpar listen_async":     "OS thread spawned per connection",
+    "Tulpar listen_pool x8":   "8 pre-spawned worker threads share accept()",
+    "Tulpar listen_evented":   "single thread, poll()-multiplexed",
+    "Tulpar evented + cache":  "evented + wire-byte cache for cached_get routes",
+    "Node.js http":            "single-thread event loop",
+    "Python ThreadingHTTP":    "OS thread spawned per request",
 }
 
 

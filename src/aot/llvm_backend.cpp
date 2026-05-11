@@ -1176,6 +1176,15 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_wings_find_route = LLVMAddFunction(
       backend->module, "aot_wings_find_route", wings_find_route_type);
 
+  // aot_string_pin(str) -> str (permanent copy)
+  // VMValue->VMValue. Used by the wings response cache to pin entries
+  // past the per-request `arena_restore`.
+  LLVMTypeRef string_pin_params[] = {backend->vm_value_type};
+  LLVMTypeRef string_pin_type =
+      llvm_make_vmvalue_func_type(backend, string_pin_params, 1, 0);
+  backend->func_aot_string_pin = LLVMAddFunction(
+      backend->module, "aot_string_pin", string_pin_type);
+
   // aot_parse_cookies(str) -> VMValue (object)
   // Same VMValue (str) -> VMValue (object) shape as parse_query, so we
   // reuse http_parse_type rather than declaring a fresh signature.
@@ -3819,6 +3828,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend,
                                     backend->func_aot_wings_find_route,
                                     args, 3, "wings_find_route");
+    }
+
+    // string_pin(s) -> str (permanent copy outside the per-request arena)
+    if (strcmp(node->name, "string_pin") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_string_pin,
+                                    args, 1, "string_pin");
     }
 
     // path_match(pattern, path) -> {matched, params}
