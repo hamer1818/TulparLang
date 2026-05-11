@@ -6598,14 +6598,23 @@ void llvm_backend_optimize(LLVMBackend *backend) {
   LLVMPassBuilderOptionsSetForgetAllSCEVInLoopUnroll(options, 0);
   LLVMPassBuilderOptionsSetMergeFunctions(options, 1);
 
+  // Pipeline level: O3 by default. In `--debug` mode we drop to a
+  // verifier-only pass so the IR reaches the object emitter exactly
+  // as codegen produced it — inlining / vectorisation would otherwise
+  // shred the source-line mapping a debugger needs (gdb steps through
+  // basic blocks that no longer correspond 1:1 to .tpr lines). Plan
+  // 07 PR 3 — landed alongside the per-function DISubprogram /
+  // per-statement debug-location work in subsequent PRs.
+  //
   // Full default<O3> pipeline. The previous `default<O2>,function(...)`
   // string was effectively dead code — every emitted typed function had
   // `optnone` set, so no pass could touch it (see codegen_native_func_def).
   // With that gag removed, the pipeline level actually matters; O3 buys
   // inliner aggressiveness, vectorization, and SCC-based passes that move
   // fib/struct workloads materially closer to gcc -O2.
+  const char *pipeline = backend->emit_debug_info ? "verify" : "default<O3>";
   LLVMErrorRef error =
-      LLVMRunPasses(backend->module, "default<O3>", nullptr, options);
+      LLVMRunPasses(backend->module, pipeline, nullptr, options);
 
   if (error) {
     char *msg = LLVMGetErrorMessage(error);
