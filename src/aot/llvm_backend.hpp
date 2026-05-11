@@ -435,6 +435,12 @@ typedef struct {
   LLVMDIBuilderRef di_builder;
   LLVMMetadataRef di_file;
   LLVMMetadataRef di_compile_unit;
+  // Plan 07 PR 3e: cached `DIBasicType` for the int64 primitive.
+  // Created once in `init_debug_info` so every local-int declaration
+  // can reuse it (LLVM dedups identical types itself, but the cache
+  // avoids re-walking the API per declaration). NULL when --debug
+  // is off.
+  LLVMMetadataRef di_int_type;
 
   // Original source text (NUL-terminated). When non-null, codegen errors
   // include a source-line excerpt + caret next to the diagnostic message,
@@ -474,6 +480,16 @@ void llvm_backend_finalize_debug_info(LLVMBackend *backend);
 // declaration; 0 is accepted (debugger will report "no source line").
 LLVMMetadataRef llvm_backend_emit_subprogram_for_function(
     LLVMBackend *backend, LLVMValueRef func, const char *name, int decl_line);
+
+// Plan 07 PR 3e: emit `DILocalVariable` + `llvm.dbg.declare` for an
+// int64 local. Hook this in right after a local `alloca` for a
+// declared int variable so gdb's `info locals` / `print x` can read
+// it back. No-op when --debug is off, when no DISubprogram is bound
+// to the current function, or when alloca/name is null. `line`
+// should be the parser-recorded declaration line.
+void llvm_backend_emit_local_int_declare(LLVMBackend *backend,
+                                         const char *name,
+                                         LLVMValueRef alloca, int line);
 
 // Enable static typing mode for native performance
 void llvm_backend_enable_static_typing(LLVMBackend *backend);

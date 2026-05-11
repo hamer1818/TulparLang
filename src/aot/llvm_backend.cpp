@@ -1480,6 +1480,7 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
   backend->di_builder = nullptr;
   backend->di_file = nullptr;
   backend->di_compile_unit = nullptr;
+  backend->di_int_type = nullptr;
 
   // Declare Runtime
   declare_runtime_functions(backend);
@@ -5769,6 +5770,11 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
       // Add as typed local (INFERRED_INT with native alloca)
       add_local_typed(backend, node->parameters[i]->name, nullptr, INFERRED_INT,
                       alloca);
+      // Plan 07 PR 3e: expose this parameter to the debugger. Use
+      // the function's declaration line as the anchor — parameters
+      // don't have their own AST line in the existing parser shape.
+      llvm_backend_emit_local_int_declare(
+          backend, node->parameters[i]->name, alloca, node->line);
     }
   }
 
@@ -5892,6 +5898,9 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
                          LLVMConstInt(backend->int_type, 0, 0), alloca);
         }
         add_local_typed(backend, stmt->name, nullptr, INFERRED_INT, alloca);
+        // PR 3e: surface this `int` local to the debugger.
+        llvm_backend_emit_local_int_declare(backend, stmt->name, alloca,
+                                            stmt->line);
       } else if (stmt->type == AST_ASSIGNMENT) {
         // Native assignment
         LLVMValueRef var_ptr = get_local_native(
@@ -6903,6 +6912,14 @@ void llvm_backend_init_debug_info(LLVMBackend *backend,
       /*DebugInfoForProfiling=*/0,
       /*SysRoot=*/"", 0,
       /*SDK=*/"", 0);
+
+  // PR 3e: cache the int64 basic type once. `DW_ATE_signed` (5) is
+  // the DWARF encoding for signed integer types. Size in BITS (not
+  // bytes). Tulpar's `int` is an i64 across the board, so a single
+  // shared `DIBasicType` covers every local-int declaration.
+  backend->di_int_type = LLVMDIBuilderCreateBasicType(
+      backend->di_builder, "int", strlen("int"), /*SizeInBits=*/64,
+      /*DW_ATE_signed=*/0x05, LLVMDIFlagZero);
 }
 
 void llvm_backend_finalize_debug_info(LLVMBackend *backend) {
@@ -6991,4 +7008,68 @@ LLVMMetadataRef llvm_backend_emit_subprogram_for_function(
     LLVMSetCurrentDebugLocation2(backend->builder, loc);
   }
   return subprogram;
+}
+
+// ---------------------------------------------------------------------------
+// Plan 07 PR 3e — Local variable metadata (int64 only for now).
+//
+// Emits a `!DILocalVariable` + `llvm.dbg.declare` intrinsic
+// associating an LLVM `alloca` with its source-level name, so
+// gdb's `info locals` / `print <name>` can read the value back.
+//
+// Coverage is intentionally narrow this PR: `int` locals only.
+// Tulpar's other primitive carriers (`str`, `array`, boxed
+// `VMValue`) need richer type metadata (pointer / composite types)
+// and don't lower onto a clean primitive alloca every site — they
+// land in a follow-up. Skipping a declaration here is safe; the
+// debugger just doesn't list that variable.
+
+void llvm_backend_emit_local_int_declare(LLVMBackend *backend,
+                                         const char *name,
+                                         LLVMValueRef alloca, int line) {
+  if (!backend || !backend->di_builder || !backend->builder) return;
+  if (!alloca || !name || !*name || line <= 0) return;
+  if (!backend->di_int_type) return;
+  LLVMValueRef func = backend->current_function;
+  if (!func) return;
+  LLVMMetadataRef scope = LLVMGetSubprogram(func);
+  if (!scope) return;
+
+  // `AlwaysPreserve=1` keeps the variable visible to the debugger
+  // even when no instruction references it. Useful for declared-but-
+  // unread locals — gdb still shows them in `info locals`.
+  LLVMMetadataRef var = LLVMDIBuilderCreateAutoVariable(
+      backend->di_builder, scope, name, strlen(name), backend->di_file,
+      (unsigned)line, backend->di_int_type,
+      /*AlwaysPreserve=*/1, LLVMDIFlagZero,
+      /*AlignInBits=*/0);
+
+  // An empty expression — the alloca's address IS the variable's
+  // address (no GEP / cast in between). `CreateExpression(NULL, 0)`
+  // is the LLVM-blessed way to spell that.
+  LLVMMetadataRef expr =
+      LLVMDIBuilderCreateExpression(backend->di_builder, nullptr, 0);
+
+  // Anchor the declare intrinsic on the same line as the alloca.
+  // Column 0 = "unknown"; debuggers tolerate it.
+  LLVMMetadataRef loc = LLVMDIBuilderCreateDebugLocation(
+      backend->context, (unsigned)line, /*column=*/0, scope,
+      /*InlinedAt=*/nullptr);
+
+  LLVMBasicBlockRef block = LLVMGetInsertBlock(backend->builder);
+  if (!block) return;
+  // LLVM 19 renamed the C API for inserting debug-info declares as
+  // part of the migration from `llvm.dbg.declare` intrinsics to
+  // record-based debug info. We support both: CMake defines
+  // `TULPAR_LLVM_MAJOR` from `LLVM_VERSION_MAJOR`, and the gate
+  // picks the right symbol. CI runs LLVM 18 (Linux apt, macOS
+  // homebrew); MSYS2 ships LLVM 19; Plan 07 PR 3e originally hit
+  // a portability break by using only the new spelling.
+#if TULPAR_LLVM_MAJOR >= 19
+  LLVMDIBuilderInsertDeclareRecordAtEnd(backend->di_builder, alloca, var, expr,
+                                        loc, block);
+#else
+  LLVMDIBuilderInsertDeclareAtEnd(backend->di_builder, alloca, var, expr, loc,
+                                  block);
+#endif
 }
