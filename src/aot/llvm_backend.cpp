@@ -1481,6 +1481,7 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
   backend->di_file = nullptr;
   backend->di_compile_unit = nullptr;
   backend->di_int_type = nullptr;
+  backend->di_vmvalue_type = nullptr;
 
   // Declare Runtime
   declare_runtime_functions(backend);
@@ -4822,6 +4823,9 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         llvm_build_alloca_at_entry(backend, backend->vm_value_type, node->name);
     LLVMBuildStore(backend->builder, init, alloca);
     add_local(backend, node->name, alloca);
+    // PR 3f: surface this boxed VMValue local to the debugger.
+    llvm_backend_emit_local_vmvalue_declare(backend, node->name, alloca,
+                                            node->line);
     return alloca;
   }
   case AST_ASSIGNMENT: {
@@ -5302,6 +5306,9 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           backend, backend->vm_value_type, node->catch_var);
       LLVMBuildStore(backend->builder, exc, alloca);
       add_local(backend, node->catch_var, alloca);
+      // PR 3f: surface the catch-bound exception value to the debugger.
+      llvm_backend_emit_local_vmvalue_declare(backend, node->catch_var, alloca,
+                                              node->line);
 
       codegen_statement(backend, node->catch_block);
     }
@@ -6396,6 +6403,9 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
           backend, backend->vm_value_type, node->parameters[i]->name);
       LLVMBuildStore(backend->builder, val, alloca);
       add_local(backend, node->parameters[i]->name, alloca);
+      // PR 3f: surface this boxed parameter to the debugger.
+      llvm_backend_emit_local_vmvalue_declare(
+          backend, node->parameters[i]->name, alloca, node->line);
     }
   }
 
@@ -6920,6 +6930,19 @@ void llvm_backend_init_debug_info(LLVMBackend *backend,
   backend->di_int_type = LLVMDIBuilderCreateBasicType(
       backend->di_builder, "int", strlen("int"), /*SizeInBits=*/64,
       /*DW_ATE_signed=*/0x05, LLVMDIFlagZero);
+
+  // PR 3f: cache an opaque 128-bit basic type for the `VMValue`
+  // carrier. The struct is {i32 tag, [4 x i8] pad, i64 data} = 16
+  // bytes = 128 bits. We don't expand it into a `DICompositeType`
+  // with proper members yet — that needs the carrier struct
+  // registered first, plus per-tag union semantics the LLVM C API
+  // doesn't expose cleanly. `DW_ATE_unsigned` (7) is the closest
+  // honest description: a 128-bit opaque blob. Future PR can swap
+  // this for a `CreateStructType` + member fields, plus a gdb
+  // pretty-printer that decodes tag/payload into a Tulpar value.
+  backend->di_vmvalue_type = LLVMDIBuilderCreateBasicType(
+      backend->di_builder, "VMValue", strlen("VMValue"),
+      /*SizeInBits=*/128, /*DW_ATE_unsigned=*/0x07, LLVMDIFlagZero);
 }
 
 void llvm_backend_finalize_debug_info(LLVMBackend *backend) {
@@ -7065,6 +7088,45 @@ void llvm_backend_emit_local_int_declare(LLVMBackend *backend,
   // picks the right symbol. CI runs LLVM 18 (Linux apt, macOS
   // homebrew); MSYS2 ships LLVM 19; Plan 07 PR 3e originally hit
   // a portability break by using only the new spelling.
+#if TULPAR_LLVM_MAJOR >= 19
+  LLVMDIBuilderInsertDeclareRecordAtEnd(backend->di_builder, alloca, var, expr,
+                                        loc, block);
+#else
+  LLVMDIBuilderInsertDeclareAtEnd(backend->di_builder, alloca, var, expr, loc,
+                                  block);
+#endif
+}
+
+// PR 3f — same shape as the int variant, but pointing the
+// DILocalVariable at the cached `di_vmvalue_type`. Sites that call
+// `add_local(...)` (boxed json/str/array/generic VMValue carriers)
+// invoke this so the debugger sees the variable name + storage.
+void llvm_backend_emit_local_vmvalue_declare(LLVMBackend *backend,
+                                             const char *name,
+                                             LLVMValueRef alloca, int line) {
+  if (!backend || !backend->di_builder || !backend->builder) return;
+  if (!alloca || !name || !*name || line <= 0) return;
+  if (!backend->di_vmvalue_type) return;
+  LLVMValueRef func = backend->current_function;
+  if (!func) return;
+  LLVMMetadataRef scope = LLVMGetSubprogram(func);
+  if (!scope) return;
+
+  LLVMMetadataRef var = LLVMDIBuilderCreateAutoVariable(
+      backend->di_builder, scope, name, strlen(name), backend->di_file,
+      (unsigned)line, backend->di_vmvalue_type,
+      /*AlwaysPreserve=*/1, LLVMDIFlagZero,
+      /*AlignInBits=*/0);
+
+  LLVMMetadataRef expr =
+      LLVMDIBuilderCreateExpression(backend->di_builder, nullptr, 0);
+
+  LLVMMetadataRef loc = LLVMDIBuilderCreateDebugLocation(
+      backend->context, (unsigned)line, /*column=*/0, scope,
+      /*InlinedAt=*/nullptr);
+
+  LLVMBasicBlockRef block = LLVMGetInsertBlock(backend->builder);
+  if (!block) return;
 #if TULPAR_LLVM_MAJOR >= 19
   LLVMDIBuilderInsertDeclareRecordAtEnd(backend->di_builder, alloca, var, expr,
                                         loc, block);
