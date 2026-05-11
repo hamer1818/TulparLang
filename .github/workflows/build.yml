@@ -610,11 +610,21 @@ jobs:
           msystem: MINGW64
           update: false
           cache: true
+          # `mingw-w64-x86_64-toolchain` is a meta-package that pulls
+          # the full GCC family (gcc + gcc-fortran + gcc-objc +
+          # gcc-ada + gcc-libgfortran + gdb-multiarch + ...). Tulpar
+          # only needs gcc (which carries g++) + the standard MinGW
+          # runtime; the rest is dead weight that inflates both the
+          # cache size and the install time. Naming `gcc` directly
+          # also gets us `binutils` and `make` via dependency
+          # resolution, which is what we'd otherwise rely on the
+          # meta-package for.
+          # Dropped `mingw-w64-x86_64-ninja` — CMake generator is
+          # `MinGW Makefiles` (see build.bat), make ships with gcc.
           install: >-
             git
-            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-gcc
             mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
             mingw-w64-x86_64-llvm
             mingw-w64-x86_64-ccache
             mingw-w64-x86_64-zlib
@@ -773,10 +783,16 @@ jobs:
       # when invoking the Windows-native ISCC.exe.
       # Skipped on the reuse path — the installer artifact has already
       # been downloaded from the PR's build run by the reuse step at
-      # the top of this job.
+      # the top of this job. Also skipped on PR builds: the installer
+      # is a release-only artifact (no PR consumer needs it), and
+      # iscc burns ~35-40s every time. We rebuild it on push:main and
+      # tag pushes where create-release actually publishes it.
       # ----------------------------------------------------------------
       - name: Build GUI installer (Inno Setup)
-        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        if: >-
+          needs.detect-docs-only.outputs.docs_only != 'true' &&
+          steps.reuse.outputs.reused != 'true' &&
+          github.event_name != 'pull_request'
         shell: pwsh
         env:
           # Tag-pushed builds embed the tag name (so `tulpar --version`
@@ -808,7 +824,9 @@ jobs:
           Copy-Item installer\Output\tulpar-setup-windows-x64.exe dist\
 
       - name: Upload installer artifact
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        if: >-
+          needs.detect-docs-only.outputs.docs_only != 'true' &&
+          github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7
         with:
           name: tulpar-windows-installer
