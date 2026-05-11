@@ -28,6 +28,15 @@ permissions:
   contents: write
   pull-requests: write
 
+# Same enable-auto-merge invocation gets queued on every push to a PR
+# (`synchronize`). The first one already set the auto-merge flag —
+# subsequent ones are idempotent no-ops, but each one still spawns a
+# runner and burns 10-15s. Cancelling in-progress keeps the latest
+# enable call's check status visible and frees the queue.
+concurrency:
+  group: auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   enable-auto-merge:
     # Skip drafts (still WIP) AND skip PRs from forks. GitHub strips
