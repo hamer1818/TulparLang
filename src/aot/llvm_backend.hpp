@@ -5,6 +5,7 @@
 
 #include "../parser/parser.hpp"
 #include <llvm-c/Core.h>
+#include <llvm-c/DebugInfo.h>
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
 
@@ -417,14 +418,23 @@ typedef struct {
   int had_error;
 
   // Plan 07 PR 1 scaffold: `tulpar build --debug` sets this flag. Today
-  // it just forwards `-g` to clang at link time and pins the optimiser
-  // at -O0 in the pipeline so subsequent debugger sessions don't see
-  // inlined frames. Plan 07 PR 2 will use this slot as the gate for
-  // `LLVMDIBuilder*` metadata emission (compile unit + per-function
-  // subprogram metadata + per-statement debug locations) so gdb / lldb
-  // can step through the original .tpr lines instead of the LLVM IR
-  // basic blocks they currently see.
+  // it forwards `-g` to clang at link time and pins the optimiser at
+  // -O0 in the pipeline so subsequent debugger sessions don't see
+  // inlined frames. PR 2 (this commit) lights up the LLVMDIBuilder
+  // path below — compile unit + file metadata land in the IR when the
+  // flag is on. Per-function subprogram metadata and per-statement
+  // debug locations follow in PR 3.
   int emit_debug_info;
+
+  // Plan 07 PR 2: LLVMDIBuilder bundle. NULL when `emit_debug_info`
+  // is off (the no-op default — same path as before this PR). When
+  // on, `llvm_backend_init_debug_info` populates all three slots, and
+  // `llvm_backend_finalize_debug_info` must be called before the
+  // first IR-consumer (`emit_ir_file` / `emit_object`) so the
+  // metadata graph is closed and verifier-clean.
+  LLVMDIBuilderRef di_builder;
+  LLVMMetadataRef di_file;
+  LLVMMetadataRef di_compile_unit;
 
   // Original source text (NUL-terminated). When non-null, codegen errors
   // include a source-line excerpt + caret next to the diagnostic message,
@@ -442,6 +452,17 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node);
 void llvm_backend_optimize(LLVMBackend *backend);
 int llvm_backend_emit_object(LLVMBackend *backend, const char *filename);
 int llvm_backend_emit_ir_file(LLVMBackend *backend, const char *filename);
+
+// Plan 07 PR 2: open / close the LLVMDIBuilder bundle. Call init once
+// after the backend is created but before codegen runs, then finalize
+// once after `llvm_backend_compile` returns and before the first IR
+// consumer (`emit_object` / `emit_ir_file`). Both are no-ops when
+// `backend->emit_debug_info == 0`. `source_filename` is optional;
+// when NULL, the compile unit uses "<stdin>" as the source path so
+// downstream debuggers still see *something*.
+void llvm_backend_init_debug_info(LLVMBackend *backend,
+                                  const char *source_filename);
+void llvm_backend_finalize_debug_info(LLVMBackend *backend);
 
 // Enable static typing mode for native performance
 void llvm_backend_enable_static_typing(LLVMBackend *backend);

@@ -292,6 +292,11 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   backend->source_filename = source_filename;
   backend->emit_debug_info = emit_debug_info;
 
+  // Plan 07 PR 2: open the debug-info graph before codegen runs so
+  // subsequent passes can hang `DISubprogram` / `!dbg` metadata off
+  // the compile unit set up here. No-op when --debug was not passed.
+  llvm_backend_init_debug_info(backend, source_filename);
+
   {
     AOTPhaseTimer t("codegen");
     printf("[AOT] Generating LLVM IR...\n");
@@ -311,6 +316,13 @@ AOTResult aot_compile_with_filename_debug(const char *source,
     printf("[AOT] Optimizing...\n");
     llvm_backend_optimize(backend);
   }
+
+  // Plan 07 PR 2: close the debug-info graph before any IR consumer
+  // (emit_ir_file / emit_object) walks it. Finalize must come AFTER
+  // optimisation so any optimiser pass that touches `!dbg` metadata
+  // has run; doing it before would leave dangling references that
+  // the verifier rejects. No-op when --debug was not passed.
+  llvm_backend_finalize_debug_info(backend);
 
   // Generate output filename
   char obj_filename[256];
