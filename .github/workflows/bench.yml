@@ -71,7 +71,19 @@ jobs:
           # commit so the README we publish matches the binary that
           # produced the numbers.
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # AUTOMERGE_PAT (not GITHUB_TOKEN) is what `actions/checkout`
+          # writes into `.git/config` as the push credential. The later
+          # `git push --force origin "HEAD:$BRANCH"` step in this job
+          # uses that credential, so the token choice here determines
+          # whether build.yml fires on the resulting bench branch push.
+          # GitHub's recursive-prevention rule skips workflow triggers
+          # for pushes authenticated with GITHUB_TOKEN, which caused
+          # PR #150 to land on `bench/auto-refresh` with zero CI runs
+          # and got stuck BLOCKED forever (no required checks could go
+          # green). Routing the push through the human-scoped PAT lifts
+          # that guard — same reason the `gh pr create` / `gh pr merge`
+          # calls below already use AUTOMERGE_PAT.
+          token: ${{ secrets.AUTOMERGE_PAT }}
 
       # ------------------------------------------------------------------
       # Tulpar binary acquisition. Two paths:
