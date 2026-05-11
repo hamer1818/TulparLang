@@ -1477,6 +1477,9 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
   backend->source_text = nullptr;
   backend->source_filename = nullptr;
   backend->emit_debug_info = 0;
+  backend->di_builder = nullptr;
+  backend->di_file = nullptr;
+  backend->di_compile_unit = nullptr;
 
   // Declare Runtime
   declare_runtime_functions(backend);
@@ -1487,6 +1490,15 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
 void llvm_backend_destroy(LLVMBackend *backend) {
   if (!backend)
     return;
+  // Plan 07 PR 2: tear down debug info bundle before the module dies.
+  // `finalize` is idempotent + tolerates being skipped (caller may have
+  // already invoked it before emit), but the dispose has to happen
+  // here so the metadata graph owned by the DIBuilder is released
+  // before LLVMDisposeModule pulls the module out from under it.
+  if (backend->di_builder) {
+    LLVMDisposeDIBuilder(backend->di_builder);
+    backend->di_builder = nullptr;
+  }
   LLVMDisposeBuilder(backend->builder);
   LLVMDisposeModule(backend->module);
   LLVMContextDispose(backend->context);
@@ -6714,4 +6726,112 @@ InferredType datatype_to_inferred(DataType type) {
   default:
     return INFERRED_UNKNOWN;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Plan 07 PR 2 — LLVMDIBuilder bootstrap.
+//
+// Opens the debug-info graph on the module so the emitted object file
+// carries `.debug_info` / `.debug_line` etc. sections that name the
+// original .tpr source. Today this is the compile-unit + source-file
+// pair — enough to make `objdump -h` / `readelf --debug-dump=info`
+// show user-rooted entries, and enough to anchor the per-function
+// `DISubprogram` metadata that PR 3 will hang off the same DIFile.
+//
+// Important: the LLVM verifier rejects modules that set the
+// `Debug Info Version` module flag but never produce a DICompileUnit,
+// and equally rejects modules with a `!llvm.dbg.cu` named-metadata
+// list but no version flag. So whatever this function does, it does
+// both halves or neither — there's no partial-init state worth
+// supporting.
+
+// Pull the leaf filename out of a (possibly empty / NULL) source path.
+// Always returns a pointer into a NUL-terminated static-ish buffer
+// supplied by the caller; the LLVM C API copies the bytes itself, so
+// no lifetime concerns past the immediate call.
+static const char *debug_basename(const char *path) {
+  if (!path || !*path) return "<stdin>";
+  const char *slash = path;
+  for (const char *p = path; *p; ++p) {
+    if (*p == '/' || *p == '\\') slash = p + 1;
+  }
+  return slash;
+}
+
+// Carve the directory portion out of `path`, copy it into `buf`, and
+// return `buf`. Empty string when the path has no directory component
+// (LLVM is happy with "" — it just means "the file lives wherever the
+// debugger was launched from").
+static const char *debug_dirname(const char *path, char *buf, size_t cap) {
+  if (!path || !*path || cap == 0) { if (cap) buf[0] = '\0'; return buf; }
+  const char *last = nullptr;
+  for (const char *p = path; *p; ++p) {
+    if (*p == '/' || *p == '\\') last = p;
+  }
+  if (!last) { buf[0] = '\0'; return buf; }
+  size_t n = (size_t)(last - path);
+  if (n >= cap) n = cap - 1;
+  memcpy(buf, path, n);
+  buf[n] = '\0';
+  return buf;
+}
+
+void llvm_backend_init_debug_info(LLVMBackend *backend,
+                                  const char *source_filename) {
+  if (!backend || !backend->emit_debug_info) return;
+  if (backend->di_builder) return;  // idempotent — second call is a no-op
+
+  // The LLVM verifier wants these two module flags whenever a
+  // DICompileUnit is in the IR. Versions are the ones gdb / lldb in
+  // 2026 actually consume; if we ever target a newer host toolchain
+  // these can be bumped without touching anything else here.
+  LLVMValueRef dwarf_version = LLVMConstInt(
+      LLVMInt32TypeInContext(backend->context), /*DWARF v4*/ 4, /*signed=*/0);
+  LLVMValueRef di_version = LLVMConstInt(
+      LLVMInt32TypeInContext(backend->context),
+      LLVMDebugMetadataVersion(), /*signed=*/0);
+  LLVMAddModuleFlag(backend->module, LLVMModuleFlagBehaviorWarning,
+                    "Dwarf Version", strlen("Dwarf Version"),
+                    LLVMValueAsMetadata(dwarf_version));
+  LLVMAddModuleFlag(backend->module, LLVMModuleFlagBehaviorWarning,
+                    "Debug Info Version", strlen("Debug Info Version"),
+                    LLVMValueAsMetadata(di_version));
+
+  backend->di_builder = LLVMCreateDIBuilder(backend->module);
+
+  const char *fname = debug_basename(source_filename);
+  char dirbuf[1024];
+  const char *dirname = debug_dirname(source_filename, dirbuf, sizeof(dirbuf));
+  backend->di_file = LLVMDIBuilderCreateFile(
+      backend->di_builder, fname, strlen(fname), dirname, strlen(dirname));
+
+  // `DW_LANG_C99` is the closest registered DWARF language for
+  // TulparLang's surface (no DW_LANG_Tulpar exists). gdb / lldb both
+  // accept "unknown source language" code paths fine when the
+  // producer string identifies the actual compiler, which we set to
+  // a fixed "Tulpar AOT" tag below so a `file` / `readelf` reader
+  // can still attribute the binary correctly.
+  const char *producer = "Tulpar AOT";
+  backend->di_compile_unit = LLVMDIBuilderCreateCompileUnit(
+      backend->di_builder,
+      LLVMDWARFSourceLanguageC,
+      backend->di_file,
+      producer, strlen(producer),
+      /*isOptimized=*/0,
+      /*Flags=*/"", 0,
+      /*RuntimeVer=*/0,
+      /*SplitName=*/"", 0,
+      LLVMDWARFEmissionFull,
+      /*DWOId=*/0,
+      /*SplitDebugInlining=*/0,
+      /*DebugInfoForProfiling=*/0,
+      /*SysRoot=*/"", 0,
+      /*SDK=*/"", 0);
+}
+
+void llvm_backend_finalize_debug_info(LLVMBackend *backend) {
+  if (!backend || !backend->di_builder) return;
+  LLVMDIBuilderFinalize(backend->di_builder);
+  // Keep the builder alive so the metadata it owns isn't freed before
+  // emit_object / emit_ir_file run. `llvm_backend_destroy` disposes it.
 }
