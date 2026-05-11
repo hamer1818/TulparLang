@@ -54,7 +54,10 @@ def wings_src(listener_call: str, *, register: str = "get") -> str:
 WINGS_VARIANTS = [
     ("Tulpar listen",            8765, "listen(8765)",         "sync",   "get"),
     ("Tulpar listen_async",      8770, "listen_async(8770)",   "async",  "get"),
-    ("Tulpar listen_pool x8",    8771, "listen_pool(8771, 8)", "pool",   "get"),
+    # Pool size 0 -> wings.tpr auto-detects via cpu_count(). Previously
+    # hardcoded x8, which over-subscribed on a 4-vCPU CI runner and
+    # showed up as a ~25% throughput drop at high concurrency.
+    ("Tulpar listen_pool",       8771, "listen_pool(8771, 0)", "pool",   "get"),
     ("Tulpar listen_evented",    8772, "listen_evented(8772)", "ev",     "get"),
     ("Tulpar evented + cache",   8773, "listen_evented(8773)", "cached", "cached_get"),
 ]

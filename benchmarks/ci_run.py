@@ -406,7 +406,7 @@ RESULTS_END = "<!-- BENCH:RESULTS END -->"
 HTTP_SERVER_MODELS = {
     "Tulpar listen":           "single thread, one request at a time",
     "Tulpar listen_async":     "OS thread spawned per connection",
-    "Tulpar listen_pool x8":   "8 pre-spawned worker threads share accept()",
+    "Tulpar listen_pool":      "worker pool sized to host CPU count, sharing accept()",
     "Tulpar listen_evented":   "single thread, poll()-multiplexed",
     "Tulpar evented + cache":  "evented + wire-byte cache for cached_get routes",
     "Node.js http":            "single-thread event loop",

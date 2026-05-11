@@ -802,8 +802,14 @@ func _wings_pool_worker(json server_box) {
 }
 
 func listen_pool(int port, int n_workers) {
+    // `n_workers <= 0` -> auto-detect logical CPU count. The previous
+    // fallback was a hardcoded `4` regardless of host; on a 4-vCPU CI
+    // runner that happened to fit, but `listen_pool(port, 8)` would
+    // over-subscribe and degrade by ~25% under high-concurrency load
+    // because 8 threads thrashed for 4 cores. Auto-detect makes the
+    // common case ("pick a sensible default") match the host.
     if (n_workers < 1) {
-        n_workers = 4;
+        n_workers = cpu_count();
     }
     if (_find_route("GET", "/healthz") < 0) {
         get("/healthz", "_wings_healthz");
