@@ -72,16 +72,35 @@ jobs:
           fi
 
   build-linux:
+    # Branch protection on this repo lists `build-linux` / `build-macos`
+    # / `build-windows` as *required* status checks, by name. A job-level
+    # `if:` that evaluates to false makes the job "skipped" — which is
+    # a separate conclusion from "success", and this repo's branch
+    # protection refuses to consider skipped a satisfied requirement.
+    # The bench-bot's docs-only PRs got wedged in that state for ~15 min
+    # before someone noticed (PR #142). Run the job *unconditionally* and
+    # gate every real step on the docs-only output instead, so the
+    # check still reports green (all steps skipped = job successful)
+    # for docs-only refreshes.
     needs: detect-docs-only
-    if: needs.detect-docs-only.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
+      # Docs-only short-circuit: the bench-bot's auto-refresh PRs only
+      # touch README.md and benchmarks/RESULTS.{md,json}. The build is a
+      # no-op for them. We still RUN the job (so the named required
+      # status check appears as green to branch protection) but every
+      # subsequent step gates on the docs-only flag below.
+      - name: Docs-only skip notice
+        if: needs.detect-docs-only.outputs.docs_only == 'true'
+        run: echo "Docs-only change detected; build steps will be skipped (job reports success)."
+
       # Skip the vendored Emscripten SDK at clone time — it's ~400 MB
       # and the main CMake build doesn't reference it (wasm builds run
       # locally via wasm/build_wasm.sh, never in CI). Saves ~20-40s of
       # checkout time on every job. cone-mode must be off because we
       # want to *exclude* a path while keeping everything else.
       - uses: actions/checkout@v6
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
         with:
           sparse-checkout: |
             /*
@@ -97,7 +116,7 @@ jobs:
       # build from source — they don't have a prior PR to reuse.
       - name: Try to reuse PR's build artifacts
         id: reuse
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -168,20 +187,20 @@ jobs:
       # what actually changed. The action handles cache key / restore
       # / save and exposes `ccache gcc` / `ccache g++` via PATH wrappers.
       - name: Setup ccache
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         uses: hendrikmuhs/ccache-action@v1.2.23
         with:
           key: ${{ runner.os }}-ccache
           max-size: 500M
 
       - name: Install dependencies
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake llvm-18-dev
 
       - name: Build with LLVM
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         env:
           # Mirrors the formula used by `create-release` below so the
           # embedded version (`tulpar --version`) matches the published
@@ -218,7 +237,7 @@ jobs:
       # PRs always run them; only post-merge main-push uses the reuse
       # path.)
       - name: Run tests
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           cp build/tulpar tulpar
           chmod +x tulpar
@@ -230,7 +249,7 @@ jobs:
       # tests/typeinfer/{pass,fail}/*.tpr. The runner already builds the
       # binary above; we just need to make the script executable.
       - name: Run typeinfer strict-mode tests
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           chmod +x tests/typeinfer/run.sh
           ./tests/typeinfer/run.sh
@@ -241,14 +260,14 @@ jobs:
       # vectors. Cheap (~1s) and orthogonal to the main `tulpar` binary
       # so a regression in this isolated unit fails fast.
       - name: SHA-256 helper test
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           g++ -std=c++17 tests/sha256_smoke.cpp src/pkg/sha256.cpp \
               -Isrc/pkg -o sha256_smoke
           ./sha256_smoke
 
       - name: Prepare artifact
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           mkdir -p dist
           cp build/tulpar dist/tulpar-linux-x64
@@ -258,23 +277,31 @@ jobs:
       # placed there either by the reuse step (downloaded from PR run)
       # or by Prepare artifact (copied from build/).
       - name: Upload artifact
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: tulpar-linux-x64
           path: dist/tulpar-linux-x64
 
       - name: Upload runtime library
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: libtulpar_runtime-linux-x64
           path: dist/libtulpar_runtime-linux-x64.a
 
   build-macos:
+    # See `build-linux` for why this is unconditional + gated per-step
+    # instead of skipped at the job level.
     needs: detect-docs-only
-    if: needs.detect-docs-only.outputs.docs_only != 'true'
     runs-on: macos-latest
     steps:
+      - name: Docs-only skip notice
+        if: needs.detect-docs-only.outputs.docs_only == 'true'
+        run: echo "Docs-only change detected; build steps will be skipped (job reports success)."
+
       - uses: actions/checkout@v6
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
         with:
           sparse-checkout: |
             /*
@@ -285,7 +312,7 @@ jobs:
       # job's reuse step for the rationale and fallback behavior.
       - name: Try to reuse PR's build artifacts
         id: reuse
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -334,20 +361,20 @@ jobs:
           echo "reused=true" >> "$GITHUB_OUTPUT"
 
       - name: Setup ccache
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         uses: hendrikmuhs/ccache-action@v1.2.23
         with:
           key: ${{ runner.os }}-ccache
           max-size: 500M
 
       - name: Install dependencies
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           brew list --versions cmake >/dev/null 2>&1 || brew install cmake
           brew list --versions llvm@18 >/dev/null 2>&1 || brew install llvm@18
 
       - name: Build with LLVM
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         env:
           # Tag-pushed builds embed the tag name (so `tulpar --version`
           # shows e.g. `v1.0.0`); main-pushed builds get the rolling
@@ -373,33 +400,42 @@ jobs:
         timeout-minutes: 10
 
       - name: Prepare artifact
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         run: |
           mkdir -p dist
           cp build/tulpar dist/tulpar-macos-universal
           cp build/libtulpar_runtime.a dist/libtulpar_runtime-macos-universal.a
 
       - name: Upload artifact
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: tulpar-macos-universal
           path: dist/tulpar-macos-universal
 
       - name: Upload runtime library
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: libtulpar_runtime-macos-universal
           path: dist/libtulpar_runtime-macos-universal.a
 
   build-windows:
+    # See `build-linux` for why this is unconditional + gated per-step
+    # instead of skipped at the job level.
     needs: detect-docs-only
-    if: needs.detect-docs-only.outputs.docs_only != 'true'
     runs-on: windows-latest
     defaults:
       run:
         shell: msys2 {0}
     steps:
+      - name: Docs-only skip notice
+        if: needs.detect-docs-only.outputs.docs_only == 'true'
+        shell: pwsh
+        run: Write-Host "Docs-only change detected; build steps will be skipped (job reports success)."
+
       - uses: actions/checkout@v6
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
         with:
           sparse-checkout: |
             /*
@@ -427,7 +463,7 @@ jobs:
       # consistent behavior across MSYS2 / pwsh shells.
       - name: Try to reuse PR's build artifacts
         id: reuse
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -511,7 +547,7 @@ jobs:
 
       - name: Setup MSYS2
         id: msys2
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
@@ -539,7 +575,7 @@ jobs:
       # while restore-keys lets us inherit the previous run's cache as
       # a warm starting point.
       - name: Restore ccache
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         uses: actions/cache@v5
         with:
           path: ${{ runner.temp }}/ccache
@@ -548,7 +584,7 @@ jobs:
             ${{ runner.os }}-msys2-ccache-
 
       - name: Build with LLVM
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         env:
           # Tag-pushed builds embed the tag name (so `tulpar --version`
           # shows e.g. `v1.0.0`); main-pushed builds get the rolling
@@ -576,13 +612,13 @@ jobs:
       # (cold start) or because the cache hit rate was poor (rare, but
       # would point at flag changes invalidating entries).
       - name: ccache stats
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         env:
           CCACHE_DIR: ${{ runner.temp }}/ccache
         run: ccache -s
 
       - name: Prepare artifact
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
@@ -648,18 +684,21 @@ jobs:
           Write-Host "DLL bundling guard: OK ($($imports.Count) imports, all covered)"
 
       - name: Upload artifact
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: tulpar-windows-x64
           path: dist/tulpar-windows-x64.exe
 
       - name: Upload runtime library
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: libtulpar_runtime-windows-x64
           path: dist/libtulpar_runtime-windows-x64.a
 
       - name: Upload bundled MinGW DLLs
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: tulpar-windows-runtime-dlls
@@ -680,7 +719,7 @@ jobs:
       # the top of this job.
       # ----------------------------------------------------------------
       - name: Build GUI installer (Inno Setup)
-        if: steps.reuse.outputs.reused != 'true'
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         shell: pwsh
         env:
           # Tag-pushed builds embed the tag name (so `tulpar --version`
@@ -712,6 +751,7 @@ jobs:
           Copy-Item installer\Output\tulpar-setup-windows-x64.exe dist\
 
       - name: Upload installer artifact
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: tulpar-windows-installer
