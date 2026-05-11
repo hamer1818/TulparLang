@@ -4419,6 +4419,22 @@ VMValue aot_http_recv_request(VMValue fdVal, VMValue maxVal) {
 // instead of being hardcoded. Existing 3- and 4-arg call sites stay
 // unchanged for backwards compat; only stdlib (wings.tpr / router.tpr)
 // upgrades to this 5-arg form.
+// Fast unsigned int -> ASCII conversion. Hand-rolled because snprintf's
+// format-string interpretation is measurably costly on a hot HTTP path
+// (40-100ns per call × 4 calls per response). Returns the advanced
+// write pointer.
+static inline char *fast_u32_itoa(char *dst, uint32_t n) {
+  if (n == 0) { *dst++ = '0'; return dst; }
+  char tmp[12];
+  int i = 0;
+  while (n > 0) {
+    tmp[i++] = (char)('0' + (n % 10));
+    n /= 10;
+  }
+  while (i > 0) *dst++ = tmp[--i];
+  return dst;
+}
+
 VMValue aot_http_create_response_keepalive(VMValue statusVal,
                                            VMValue contentTypeVal,
                                            VMValue bodyVal,
@@ -4428,6 +4444,9 @@ VMValue aot_http_create_response_keepalive(VMValue statusVal,
   const char *content_type = IS_STRING(contentTypeVal)
                                  ? AS_STRING(contentTypeVal)->chars
                                  : "text/plain";
+  size_t content_type_len = IS_STRING(contentTypeVal)
+                                ? (size_t)AS_STRING(contentTypeVal)->length
+                                : strlen("text/plain");
   const char *body = "";
   int body_len = 0;
   if (IS_STRING(bodyVal)) {
@@ -4436,6 +4455,7 @@ VMValue aot_http_create_response_keepalive(VMValue statusVal,
   }
   bool keep = IS_INT(keepVal) ? (AS_INT(keepVal) != 0) : false;
   const char *status_text = aot_http_status_text_cstr(status);
+  size_t status_text_len = strlen(status_text);
 
   ObjObject *headers = nullptr;
   if (IS_OBJECT(headersVal)) {
@@ -4464,13 +4484,25 @@ VMValue aot_http_create_response_keepalive(VMValue statusVal,
     }
   }
 
-  size_t cap = 80 + strlen(content_type) + extra_len + body_len + 64;
+  size_t cap = 80 + content_type_len + extra_len + body_len + 64;
   char *response = (char *)aot_arena_alloc(cap + 1);
-  int p = snprintf(response, cap,
-                   "HTTP/1.1 %d %s\r\n"
-                   "Content-Type: %s\r\n"
-                   "Content-Length: %d\r\n",
-                   status, status_text, content_type, body_len);
+  char *w = response;
+
+  // "HTTP/1.1 <status> <status_text>\r\nContent-Type: <ct>\r\nContent-Length: <n>\r\n"
+  // Hand-rolled because the snprintf equivalent re-parses the format
+  // string and re-walks each %s/%d on every call — measurably costly
+  // on a hot HTTP path. memcpy + fast_u32_itoa get the same bytes out
+  // without the conversion-specifier machinery.
+  memcpy(w, "HTTP/1.1 ", 9); w += 9;
+  w = fast_u32_itoa(w, (uint32_t)status);
+  *w++ = ' ';
+  memcpy(w, status_text, status_text_len); w += status_text_len;
+  memcpy(w, "\r\nContent-Type: ", 16); w += 16;
+  memcpy(w, content_type, content_type_len); w += content_type_len;
+  memcpy(w, "\r\nContent-Length: ", 18); w += 18;
+  w = fast_u32_itoa(w, (uint32_t)body_len);
+  *w++ = '\r'; *w++ = '\n';
+
   if (headers) {
     for (int i = 0; i < headers->count; i++) {
       ObjString *k = headers->keys[i];
@@ -4480,18 +4512,23 @@ VMValue aot_http_create_response_keepalive(VMValue statusVal,
       if (eq_ci(k->chars, "Content-Type") ||
           eq_ci(k->chars, "Content-Length") ||
           eq_ci(k->chars, "Connection")) continue;
-      p += snprintf(response + p, cap - p, "%s: %.*s\r\n", k->chars,
-                    v->length, v->chars);
+      memcpy(w, k->chars, k->length); w += k->length;
+      *w++ = ':'; *w++ = ' ';
+      memcpy(w, v->chars, v->length); w += v->length;
+      *w++ = '\r'; *w++ = '\n';
     }
   }
-  p += snprintf(response + p, cap - p, "Connection: %s\r\n\r\n",
-                keep ? "keep-alive" : "close");
-  if (body_len > 0 && (size_t)p + body_len < cap) {
-    memcpy(response + p, body, body_len);
-    p += body_len;
+
+  if (keep) {
+    memcpy(w, "Connection: keep-alive\r\n\r\n", 26); w += 26;
+  } else {
+    memcpy(w, "Connection: close\r\n\r\n", 21); w += 21;
   }
-  response[p] = '\0';
-  return VM_OBJ((Obj *)aot_allocate_string(response, p));
+  if (body_len > 0) {
+    memcpy(w, body, body_len); w += body_len;
+  }
+  *w = '\0';
+  return VM_OBJ((Obj *)aot_allocate_string(response, (int)(w - response)));
 }
 
 // Create HTTP response string
