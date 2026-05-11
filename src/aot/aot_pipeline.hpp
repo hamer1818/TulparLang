@@ -21,6 +21,18 @@ AOTResult aot_compile_with_filename(const char *source,
                                     const char *output_name,
                                     const char *source_filename);
 
+// `emit_debug_info != 0` requests an AOT build that retains debug
+// symbols: clang is invoked with `-g`, the optimiser is held at -O0
+// (otherwise inlined functions confuse `gdb`/`lldb` line stepping),
+// and the LLVMBackend's emit_debug_info slot is set so later PRs can
+// drop in `LLVMDIBuilder` metadata without changing the call chain.
+// This is the entry point for `tulpar build --debug` (Plan 07 PR 1);
+// the full DWARF / CodeView emission lands in Plan 07 PR 2-3.
+AOTResult aot_compile_with_filename_debug(const char *source,
+                                          const char *output_name,
+                                          const char *source_filename,
+                                          int emit_debug_info);
+
 // Compile and run (JIT-style, but AOT under the hood)
 AOTResult aot_compile_and_run(const char *source);
 

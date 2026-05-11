@@ -1476,6 +1476,7 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
   backend->had_error = 0;
   backend->source_text = nullptr;
   backend->source_filename = nullptr;
+  backend->emit_debug_info = 0;
 
   // Declare Runtime
   declare_runtime_functions(backend);

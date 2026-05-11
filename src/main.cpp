@@ -546,6 +546,13 @@ int main(int argc, char **argv) {
   int force_vm = 0;    // --vm / --run forces VM path, skips AOT
   int build_mode = 0;  // build / --build / --aot: save native binary
   int skip_typecheck = 0;  // --no-typecheck disables the pre-pass warnings
+  // Plan 07 PR 1: `tulpar build --debug` (or `-g`) requests an AOT
+  // build that keeps debug symbols. Today this just forwards `-g` to
+  // clang at link time; the LLVMDIBuilder metadata that lets gdb /
+  // lldb step through .tpr source lines lands in Plan 07 PR 2-3 (the
+  // backend slot is already plumbed through so callers don't need
+  // another signature break later).
+  int emit_debug = 0;
   // --strict flips the typeinfer pre-pass from informational to
   // exit-blocking. Precedence (lowest to highest):
   //   1. Default: 0 (warnings only)
@@ -589,6 +596,11 @@ int main(int argc, char **argv) {
       // Promote `[typecheck]` warnings to exit-blocking errors. Format
       // stays the same; we just summarise and exit 1 when count > 0.
       strict_typecheck = 1;
+    } else if (strcmp(argv[i], "--debug") == 0 ||
+               strcmp(argv[i], "-g") == 0) {
+      // `tulpar build --debug` opt-in. Doesn't shift arg_offset on its
+      // own — the next non-flag arg still sets the file index.
+      emit_debug = 1;
     } else if (strcmp(argv[i], "--aot") == 0 ||
                strcmp(argv[i], "--build") == 0 ||
                strcmp(argv[i], "build") == 0) {
@@ -701,8 +713,8 @@ int main(int argc, char **argv) {
       }
     }
 
-    AOTResult result = aot_compile_with_filename(
-        source, output_name, argv[arg_offset + 1]);
+    AOTResult result = aot_compile_with_filename_debug(
+        source, output_name, argv[arg_offset + 1], emit_debug);
     free(source);
     return (result == AOT_OK) ? 0 : 1;
   }
