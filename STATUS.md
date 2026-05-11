@@ -132,6 +132,20 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 - **LSP:** init, diagnostics, hover, completion, go-to-definition,
   find-references, rename. `tests/lsp_smoke.py` 9/9 check.
 
+### Test harness
+
+- **CI runtime smoke (build.sh + run_tests.ps1):** her
+  `COMPILE_ONLY_TESTS` örneği derleme sonrası 2 s spawn edilir,
+  `kill -0` (PS: `HasExited`) ile hayatta mı kontrol edilir, kayıtlı
+  HTTP probe URL'i varsa (wings/router examples için
+  `127.0.0.1:3000/` veya `:8080/`) `curl --max-time 5` ile çağrılır,
+  sonra `SIGTERM` ile durdurulur. Probe HTTP responsesı bekleyenden
+  farklıysa veya server probe sırasında ölürse FAIL. `continue-on-error`
+  mask'i CI workflow'undan kaldırıldı; gerçek bir runtime regresyonu
+  iş kırmızı yapar, release'i bloke eder. PR #76 wings cookies
+  miscompile gibi 4 PR boyunca main'de yatan regresyonların
+  tekrarını önler.
+
 ### Benchmark harness
 
 - `benchmarks/ci_run.py` her main push'unda çalışır, RESULTS.json +
@@ -193,10 +207,6 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   deseni `vm_object_set: obj=NULL` ile çöküyor. Hot-fix kapalı
   durumda; root cause arka planda. Repro scaffold büyütme + LLVM IR
   diff lazım.
-- 🟡 **CI runtime smoke.** `COMPILE_ONLY_TESTS` listesi (wings/router/
-  socket/api örnekleri) sadece derleniyor. `tulpar build` → background
-  spawn → 200 ms bekle → curl `/healthz` → kill akışı eklenmeli.
-  PR #76 wings regresyonu 4 PR boyunca main'de yatmıştı.
 - 🟡 **AOT debug info (DWARF/CodeView).** Debugger ön-koşulu;
   `tulpar build --debug` flag'i + `.debug_line` emit'i lazım.
 - 🟡 **LLVM thread-local globals (handler paralelliği).**
