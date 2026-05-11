@@ -255,6 +255,14 @@ AOTResult aot_compile(const char *source, const char *output_name) {
 AOTResult aot_compile_with_filename(const char *source,
                                     const char *output_name,
                                     const char *source_filename) {
+  return aot_compile_with_filename_debug(source, output_name,
+                                         source_filename, /*emit_debug=*/0);
+}
+
+AOTResult aot_compile_with_filename_debug(const char *source,
+                                          const char *output_name,
+                                          const char *source_filename,
+                                          int emit_debug_info) {
   ASTNode_C *ast;
   {
     AOTPhaseTimer t("parse");
@@ -282,6 +290,7 @@ AOTResult aot_compile_with_filename(const char *source,
   // Rust-style line excerpt + caret. (Borrow only — caller owns the buffer.)
   backend->source_text = source;
   backend->source_filename = source_filename;
+  backend->emit_debug_info = emit_debug_info;
 
   {
     AOTPhaseTimer t("codegen");
@@ -332,14 +341,21 @@ AOTResult aot_compile_with_filename(const char *source,
     }
   }
 
-  // Link using clang++ (need C++ runtime for tulpar_runtime)
+  // Link using clang++ (need C++ runtime for tulpar_runtime).
+  // `-g` is forwarded to clang when --debug was requested so debug
+  // sections emitted in the object file survive linking into the
+  // final binary. Today the object has no `!dbg` metadata yet
+  // (Plan 07 PR 2 wires up LLVMDIBuilder), so `-g` is effectively
+  // a no-op until that lands — but plumbing the switch through now
+  // keeps the CLI surface stable across the PR series.
   printf("[AOT] Linking executable: %s\n", exe_filename);
   std::string search_dirs = build_link_search_dirs();
+  const char *debug_flag = emit_debug_info ? "-g " : "";
   char link_cmd[2048];
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s -o %s%s %s %s%s 2>&1",
-      obj_filename, exe_filename, AOT_EXE_SUFFIX,
+      "clang++ %s%s -o %s%s %s %s%s 2>&1",
+      debug_flag, obj_filename, exe_filename, AOT_EXE_SUFFIX,
       AOT_LINK_PIE_FLAG, search_dirs.c_str(), AOT_LINK_LIB_FLAGS);
 
   int link_result;

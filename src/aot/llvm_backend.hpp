@@ -416,6 +416,16 @@ typedef struct {
   // broken IR never silently produces a working-looking exe.
   int had_error;
 
+  // Plan 07 PR 1 scaffold: `tulpar build --debug` sets this flag. Today
+  // it just forwards `-g` to clang at link time and pins the optimiser
+  // at -O0 in the pipeline so subsequent debugger sessions don't see
+  // inlined frames. Plan 07 PR 2 will use this slot as the gate for
+  // `LLVMDIBuilder*` metadata emission (compile unit + per-function
+  // subprogram metadata + per-statement debug locations) so gdb / lldb
+  // can step through the original .tpr lines instead of the LLVM IR
+  // basic blocks they currently see.
+  int emit_debug_info;
+
   // Original source text (NUL-terminated). When non-null, codegen errors
   // include a source-line excerpt + caret next to the diagnostic message,
   // Rust-style. Owned by aot_compile, lives for the duration of codegen.
