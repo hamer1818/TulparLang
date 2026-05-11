@@ -136,6 +136,19 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   collapse + keyword-aware spacing, idempotent token-pass.
 - **LSP:** init, diagnostics, hover, completion, go-to-definition,
   find-references, rename. `tests/lsp_smoke.py` 9/9 check.
+- **AOT debug info (Plan 07 Parça A — PR'lar #160–#173):**
+  `tulpar [--debug | -g] build <file>` opt-in. LLVM IR'da `!dbg`
+  metadata: `DICompileUnit` + `DIFile` + module flags, her user
+  fonksiyon (+ main) için `DISubprogram`, her statement için
+  `DILocation` (top-level + boxed + typed-int body), her int/boxed
+  VMValue local + parameter için `DILocalVariable` + `dbg.declare`,
+  top-level + imported-module globals için
+  `DIGlobalVariableExpression` + `dbg` metadata kind. Optimizer
+  `--debug` modunda `verify` (`-O0`) — 1:1 source mapping korunur.
+  `CMakeLists.txt` `TULPAR_LLVM_MAJOR` macro'su LLVM 18 (CI) ile
+  LLVM 19 (MSYS2) arası C API rename'leri için hazır. `gdb
+  ./binary` step-through + breakpoint + `info locals/variables`
+  artık `.tpr` satırlarına çözünüyor.
 
 ### Test harness
 
@@ -212,15 +225,20 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   deseni `vm_object_set: obj=NULL` ile çöküyor. Hot-fix kapalı
   durumda; root cause arka planda. Repro scaffold büyütme + LLVM IR
   diff lazım.
-- 🟡 **AOT debug info (DWARF/CodeView).** Debugger ön-koşulu;
-  `tulpar build --debug` flag'i + `.debug_line` emit'i lazım.
 - 🟢 **Codegen full atomic:** imported pass globals'a `LLVMBuildAtomicRMW`
   (top-level int globals zaten yapıldı).
 
 ### Tooling
 
-- 🟡 **Debugger MVP.** DWARF emit + minimal DAP server + VS Code
-  extension panel. En büyük tek tooling boşluğu.
+- 🟡 **Debugger MVP — Parça B: DAP server.** Parça A (DWARF emit)
+  tamamlandı (Plan 07 PR 2-3g, 7 PR mergedoldu): `tulpar --debug
+  build` artık `!DICompileUnit` + per-function `DISubprogram` +
+  per-statement `DILocation` + her local/param/global için
+  `DILocalVariable` / `DIGlobalVariableExpression` emit ediyor;
+  `gdb ./binary` step-through + breakpoint çalışmalı. Kalan:
+  `tulpar debug <file>` DAP server (gdb `--interpreter=mi3`
+  wrapper) + `vscode-tulpar` `contributes.debuggers` bloğu — VS
+  Code "Run and Debug" entegrasyonu için.
 - 🟢 **Parser multi-error mode.** Şu an ilk fatal'da duruyor; recovery
   ve bağımsız hata bildirimi eksik.
 - 🟢 **LSP signature help.** Parametre içindeyken aktif imza ipucu.
