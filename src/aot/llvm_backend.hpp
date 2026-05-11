@@ -441,6 +441,13 @@ typedef struct {
   // avoids re-walking the API per declaration). NULL when --debug
   // is off.
   LLVMMetadataRef di_int_type;
+  // Plan 07 PR 3f: cached opaque `DIBasicType` for the 16-byte
+  // `VMValue` carrier. Boxed locals (`json`, `str`, `array`, plus any
+  // typed `VMValue` parameter) get this type for `info locals` /
+  // `print <name>` to surface the variable existence and storage
+  // address. Decoding the tag + payload back to a Tulpar-level type
+  // is the gdb pretty-printer's job — out of scope for this PR.
+  LLVMMetadataRef di_vmvalue_type;
 
   // Original source text (NUL-terminated). When non-null, codegen errors
   // include a source-line excerpt + caret next to the diagnostic message,
@@ -490,6 +497,16 @@ LLVMMetadataRef llvm_backend_emit_subprogram_for_function(
 void llvm_backend_emit_local_int_declare(LLVMBackend *backend,
                                          const char *name,
                                          LLVMValueRef alloca, int line);
+
+// Plan 07 PR 3f: same shape as the int variant, but for a 16-byte
+// boxed `VMValue` local (the `add_local(...)` path: json / str /
+// array / generic VMValue declarations and function parameters).
+// Surfaces variable existence and address to the debugger; a future
+// gdb pretty-printer can decode the tag + payload into a Tulpar-
+// level value display.
+void llvm_backend_emit_local_vmvalue_declare(LLVMBackend *backend,
+                                             const char *name,
+                                             LLVMValueRef alloca, int line);
 
 // Enable static typing mode for native performance
 void llvm_backend_enable_static_typing(LLVMBackend *backend);
