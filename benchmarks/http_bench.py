@@ -246,8 +246,14 @@ def main() -> int:
         # TULPAR_HTTP_QUIET silences the per-request access log on the
         # server side so we measure the network-path cost, not console
         # I/O. Matches how a benchmarked Go/Node server runs.
+        # TULPAR_WINGS_HOST=127.0.0.1 keeps the listener loopback-only
+        # — wings now defaults to 0.0.0.0 so production containers
+        # work, but localhost benches don't need a wildcard bind and
+        # the loopback path skips Windows Firewall prompts on fresh
+        # tempdir binaries.
         env = os.environ.copy()
         env["TULPAR_HTTP_QUIET"] = "1"
+        env["TULPAR_WINGS_HOST"] = "127.0.0.1"
 
         # Build + bench each Wings listener variant.
         for label, port, call, suffix, register in WINGS_VARIANTS:
