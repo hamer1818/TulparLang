@@ -428,6 +428,22 @@ class GdbProcess {
 // by terminate/disconnect or by the main loop on EOF.
 GdbProcess g_gdb;
 
+// Varobj registry for struct/array drill-down. `handle_variables`
+// allocates a synthetic DAP `variablesReference` for each aggregate
+// it encounters and pairs it with the gdb varobj name created via
+// `-var-create`. Subsequent `variables(ref)` calls look the name up
+// here and run `-var-list-children` to get the next level.
+//
+// References start at 1000 so they never collide with scope-derived
+// refs (those go 1..frame_count+1; even pathological 50-frame stacks
+// stay well under the gap). Counter is monotonic for the life of the
+// adapter — varobjs are never `-var-delete`d today, so the gdb-side
+// varobj table grows with each expansion. That's fine for typical
+// debug sessions; very long sessions could revisit cleanup.
+std::mutex g_varobj_mu;
+std::unordered_map<int, std::string> g_varobj_refs;
+std::atomic<int> g_next_varobj_ref{1000};
+
 bool GdbProcess::start(const std::string &binary) {
   if (m_running.load()) {
     std::fprintf(stderr, "[dap] gdb: start() called while already running\n");
@@ -1459,6 +1475,56 @@ void handle_scopes(cJSON *request) {
   cJSON_Delete(resp);
 }
 
+// Try to create a gdb varobj for `expr` (or use an existing
+// `parent_varobj_name` if non-empty). Returns:
+//   - 0   if the value has no children (gdb numchild == 0)
+//   - new DAP variablesReference (>= 1000) if numchild > 0; the
+//         caller can pass that ref back to `variables(...)` to
+//         retrieve the children.
+// On failure (gdb error, timeout) returns 0 too — the caller
+// surfaces the variable as a leaf rather than blowing up the
+// whole request.
+int try_make_drilldown_ref(const std::string &expr) {
+  // Allocate a fresh varobj name. `-var-create` requires a unique
+  // name across the gdb session; we generate `tulpar_var_<N>`
+  // using the same counter as DAP references so the two stay
+  // 1:1 (makes log traces easier to read).
+  int n = g_next_varobj_ref.fetch_add(1);
+  char vname[32];
+  std::snprintf(vname, sizeof(vname), "tulpar_var_%d", n);
+
+  // Build `-var-create <vname> * "<expr>"`. The `*` placeholder
+  // means "use the current frame for evaluation". The expression
+  // is escaped with the same rules evaluate / setVariable use.
+  std::string cmd = "-var-create ";
+  cmd += vname;
+  cmd += " * \"";
+  for (char c : expr) {
+    if (c == '"' || c == '\\') cmd.push_back('\\');
+    cmd.push_back(c);
+  }
+  cmd.push_back('"');
+
+  std::string r = gdb_query(cmd, 1000);
+  if (r.compare(0, 5, "^done") != 0) return 0;
+
+  std::string numchild_s = mi_field(r, "numchild");
+  int numchild = std::atoi(numchild_s.c_str());
+  if (numchild <= 0) {
+    // Leaf — don't bother registering. Best-effort delete the
+    // varobj we just created so gdb's table doesn't grow with
+    // useless leaf entries.
+    std::string del = "-var-delete ";
+    del += vname;
+    g_gdb.send_command(del, /*prefix_token=*/false);
+    return 0;
+  }
+
+  std::lock_guard<std::mutex> lk(g_varobj_mu);
+  g_varobj_refs[n] = vname;
+  return n;
+}
+
 void handle_variables(cJSON *request) {
   cJSON *args = cJSON_GetObjectItem(request, "arguments");
   int vref = 0;
@@ -1475,39 +1541,109 @@ void handle_variables(cJSON *request) {
     cJSON_Delete(resp);
     return;
   }
+
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON *body = cJSON_CreateObject();
+  cJSON *vars = cJSON_CreateArray();
+
+  // ----- Drill-down path: ref >= 1000 names a registered varobj.
+  // Look up the gdb varobj name, list its children, and emit each
+  // child as a Variable. Children that themselves have children
+  // get their own variablesReference (also >= 1000) so the client
+  // can keep drilling.
+  if (vref >= 1000) {
+    std::string varobj;
+    {
+      std::lock_guard<std::mutex> lk(g_varobj_mu);
+      auto it = g_varobj_refs.find(vref);
+      if (it != g_varobj_refs.end()) varobj = it->second;
+    }
+    if (!varobj.empty()) {
+      std::string cmd =
+          "-var-list-children --simple-values \"" + varobj + "\"";
+      std::string r = gdb_query(cmd, 2000);
+      if (r.compare(0, 5, "^done") == 0) {
+        // `^done,numchild="N",children=[child={name="<vobj>.field",
+        //   exp="field",numchild="...",value="...",type="..."},...]`
+        auto child_tuples = mi_split_list(r, "children");
+        for (auto &ct : child_tuples) {
+          std::string exp = mi_field(ct, "exp");
+          std::string value = mi_field(ct, "value");
+          std::string type = mi_field(ct, "type");
+          std::string nc = mi_field(ct, "numchild");
+          std::string child_vobj = mi_field(ct, "name");
+          if (exp.empty()) continue;
+
+          // gdb auto-creates child varobjs as part of
+          // -var-list-children. Re-use those names directly when
+          // a grandchild exists — saves a round-trip of -var-create
+          // we would otherwise have to do per child.
+          int gc_ref = 0;
+          if (std::atoi(nc.c_str()) > 0 && !child_vobj.empty()) {
+            int n = g_next_varobj_ref.fetch_add(1);
+            std::lock_guard<std::mutex> lk(g_varobj_mu);
+            g_varobj_refs[n] = child_vobj;
+            gc_ref = n;
+          }
+
+          cJSON *v = cJSON_CreateObject();
+          cJSON_AddStringToObject(v, "name", exp.c_str());
+          cJSON_AddStringToObject(v, "value", value.c_str());
+          cJSON_AddStringToObject(v, "type", type.c_str());
+          cJSON_AddNumberToObject(v, "variablesReference", gc_ref);
+          cJSON_AddItemToArray(vars, v);
+        }
+      }
+    }
+    cJSON_AddItemToObject(body, "variables", vars);
+    cJSON_AddItemToObject(resp, "body", body);
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+
+  // ----- Frame-locals path: 0 < ref < 1000. Maps back to a stack
+  // frame index via the inverse of `handle_scopes`'s encoding.
   int frame_id = vref - 1;
 
-  // `--simple-values` (1 in MI3 numeric form) asks gdb to fold each
-  // variable's `value` into the listing — we get name + value + type
-  // in a single round-trip instead of N round-trips of -var-create /
-  // -var-evaluate-expression / -var-info-type.
+  // `--simple-values` asks gdb to fold each variable's `value`
+  // into the listing — we get name + value + type in a single
+  // round-trip instead of N round-trips of -var-create /
+  // -var-evaluate-expression / -var-info-type. Aggregates come
+  // back with an empty `value` field; the drill-down path below
+  // catches those and adds a child reference via -var-create.
   char cmdbuf[96];
   std::snprintf(cmdbuf, sizeof(cmdbuf),
                 "-stack-list-variables --thread 1 --frame %d --simple-values",
                 frame_id);
   std::string result = gdb_query(cmdbuf);
 
-  cJSON *resp = make_response(request, /*success=*/true, nullptr);
-  cJSON *body = cJSON_CreateObject();
-  cJSON *vars = cJSON_CreateArray();
-
   if (result.compare(0, 5, "^done") == 0) {
-    // `^done,variables=[{name="x",value="42",type="int"},{name="s",
-    //   value="\"hi\"",type="ObjString *"}]`
     auto var_tuples = mi_split_list(result, "variables");
     for (auto &t : var_tuples) {
       std::string name = mi_field(t, "name");
       std::string value = mi_field(t, "value");
       std::string type = mi_field(t, "type");
       if (name.empty()) continue;
+
+      // gdb omits the `value` field on aggregate types under
+      // `--simple-values`. That's our signal to spawn a varobj
+      // and offer a drill-down reference. Scalars and pointer
+      // strings come back with a populated value, so we skip the
+      // extra round-trip in the common case.
+      int child_ref = 0;
+      if (value.empty()) {
+        child_ref = try_make_drilldown_ref(name);
+        if (child_ref == 0) {
+          value = "<aggregate>";
+        }
+      }
+
       cJSON *v = cJSON_CreateObject();
       cJSON_AddStringToObject(v, "name", name.c_str());
       cJSON_AddStringToObject(v, "value", value.c_str());
       cJSON_AddStringToObject(v, "type", type.c_str());
-      // PR 4d keeps every variable as a leaf — no nested struct
-      // drill-down. A later PR can switch to -var-create per entry
-      // and use a child variablesReference for tuple/array types.
-      cJSON_AddNumberToObject(v, "variablesReference", 0);
+      cJSON_AddNumberToObject(v, "variablesReference", child_ref);
       cJSON_AddItemToArray(vars, v);
     }
   }
