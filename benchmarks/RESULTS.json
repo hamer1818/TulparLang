@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "run": {
-    "timestamp_utc": "2026-05-12T17:25:01Z",
-    "git_sha": "b95e6fe49634147f8a54e5233aa6e5f6bab0d407",
-    "git_short": "b95e6fe",
+    "timestamp_utc": "2026-05-12T17:41:45Z",
+    "git_sha": "ba5492f9411a13162a445dc751e9d4ee3bd5adbd",
+    "git_short": "ba5492f",
     "runner": {
       "os": "Linux",
       "release": "6.17.0-1010-azure",
@@ -20,13 +20,13 @@
     {
       "benchmark": "loopsum",
       "language": "Tulpar AOT (LLVM)",
-      "best_ms": 1.9,
+      "best_ms": 1.8,
       "output": "49999995000000"
     },
     {
       "benchmark": "loopsum",
       "language": "Tulpar VM",
-      "best_ms": 149.9,
+      "best_ms": 154.1,
       "output": "49999995000000"
     },
     {
@@ -50,55 +50,55 @@
     {
       "benchmark": "loopsum",
       "language": "Node.js",
-      "best_ms": 37.5,
+      "best_ms": 36.4,
       "output": "49999995000000"
     },
     {
       "benchmark": "loopsum",
       "language": "Python",
-      "best_ms": 854.2,
+      "best_ms": 862.6,
       "output": "49999995000000"
     },
     {
       "benchmark": "fib",
       "language": "Tulpar AOT (LLVM)",
-      "best_ms": 29.1,
+      "best_ms": 28.3,
       "output": "9227465"
     },
     {
       "benchmark": "fib",
       "language": "Tulpar VM",
-      "best_ms": 529.5,
+      "best_ms": 529.6,
       "output": "9227465"
     },
     {
       "benchmark": "fib",
       "language": "C (gcc -O2)",
-      "best_ms": 18.4,
+      "best_ms": 18.2,
       "output": "9227465"
     },
     {
       "benchmark": "fib",
       "language": "Rust (-O3)",
-      "best_ms": 29.4,
+      "best_ms": 28.9,
       "output": "9227465"
     },
     {
       "benchmark": "fib",
       "language": "Go",
-      "best_ms": 54.1,
+      "best_ms": 53.6,
       "output": "9227465"
     },
     {
       "benchmark": "fib",
       "language": "Node.js",
-      "best_ms": 131.8,
+      "best_ms": 130.2,
       "output": "9227465"
     },
     {
       "benchmark": "fib",
       "language": "Python",
-      "best_ms": 1219.0,
+      "best_ms": 1217.5,
       "output": "9227465"
     }
   ],
@@ -108,44 +108,44 @@
     "results": [
       {
         "server": "Tulpar listen",
-        "rps": 15529.0,
-        "wall_s": 0.193,
+        "rps": 15220.0,
+        "wall_s": 0.197,
         "completed": 3000
       },
       {
         "server": "Tulpar listen_async",
-        "rps": 15625.0,
-        "wall_s": 0.192,
+        "rps": 16449.0,
+        "wall_s": 0.182,
         "completed": 3000
       },
       {
         "server": "Tulpar listen_pool",
-        "rps": 16147.0,
-        "wall_s": 0.186,
+        "rps": 16197.0,
+        "wall_s": 0.185,
         "completed": 3000
       },
       {
         "server": "Tulpar listen_evented",
-        "rps": 16277.0,
-        "wall_s": 0.184,
+        "rps": 16584.0,
+        "wall_s": 0.181,
         "completed": 3000
       },
       {
         "server": "Tulpar evented + cache",
-        "rps": 15923.0,
-        "wall_s": 0.188,
+        "rps": 16230.0,
+        "wall_s": 0.185,
         "completed": 3000
       },
       {
         "server": "Python ThreadingHTTP",
         "rps": 98.0,
-        "wall_s": 30.675,
+        "wall_s": 30.674,
         "completed": 3000
       },
       {
         "server": "Node.js http",
-        "rps": 9026.0,
-        "wall_s": 0.332,
+        "rps": 10560.0,
+        "wall_s": 0.284,
         "completed": 3000
       }
     ]
@@ -156,32 +156,32 @@
     "results": [
       {
         "server": "Tulpar listen",
-        "rps": 15402.0,
-        "wall_s": 0.779,
+        "rps": 15085.0,
+        "wall_s": 0.795,
         "completed": 12000
       },
       {
         "server": "Tulpar listen_async",
-        "rps": 16201.0,
-        "wall_s": 0.741,
+        "rps": 16585.0,
+        "wall_s": 0.724,
         "completed": 12000
       },
       {
         "server": "Tulpar listen_pool",
-        "rps": 16013.0,
-        "wall_s": 0.749,
+        "rps": 16483.0,
+        "wall_s": 0.728,
         "completed": 12000
       },
       {
         "server": "Tulpar listen_evented",
-        "rps": 16225.0,
-        "wall_s": 0.74,
+        "rps": 16476.0,
+        "wall_s": 0.728,
         "completed": 12000
       },
       {
         "server": "Tulpar evented + cache",
-        "rps": 16267.0,
-        "wall_s": 0.738,
+        "rps": 16591.0,
+        "wall_s": 0.723,
         "completed": 12000
       },
       {
@@ -192,8 +192,8 @@
       },
       {
         "server": "Node.js http",
-        "rps": 15245.0,
-        "wall_s": 0.787,
+        "rps": 14346.0,
+        "wall_s": 0.836,
         "completed": 12000
       }
     ]
