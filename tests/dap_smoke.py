@@ -126,21 +126,29 @@ def recv_response(proc: subprocess.Popen, command: str,
     return None
 
 
-def drain_until_terminated(proc: subprocess.Popen,
-                            collected_events: list[dict],
-                            timeout: float = 10.0) -> bool:
-    """After configurationDone success, drain events looking for
-    `terminated`. Returns True iff we saw it before timeout. Other
-    events (stopped, output, thread) are stashed without judgment."""
+def drain_until(proc: subprocess.Popen,
+                 collected_events: list[dict],
+                 stop_on: tuple[str, ...],
+                 timeout: float = 10.0) -> str | None:
+    """Drain DAP messages, stashing events in `collected_events`,
+    until one of the named events arrives or timeout. Returns the
+    event name that caused the stop (or None on timeout).
+
+    Used after configurationDone:
+      - if the breakpoint fires, we see `stopped` and the inferior is
+        paused — caller can exercise stackTrace / variables.
+      - if the program runs to completion without hitting the
+        breakpoint, we see `terminated` instead.
+      - on timeout, caller fails the smoke."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         m = recv(proc, timeout=max(0.1, deadline - time.monotonic()))
         if m is None:
-            return False
+            return None
         collected_events.append(m)
-        if m.get("type") == "event" and m.get("event") == "terminated":
-            return True
-    return False
+        if m.get("type") == "event" and m.get("event") in stop_on:
+            return m.get("event")
+    return None
 
 
 def main() -> int:
@@ -253,12 +261,75 @@ def main() -> int:
             if not r or not r.get("success"):
                 failures.append(f"configurationDone: wrong shape: {r!r}")
 
-            if not drain_until_terminated(proc, events, timeout=10.0):
-                # Dump the events we did see for triage.
+            # Drain events from `-exec-run`. Two legitimate outcomes:
+            #   - `stopped` (breakpoint fired and the inferior is now
+            #     paused — exercise stackTrace / scopes / variables
+            #     while gdb still has a live frame to report on).
+            #   - `terminated` (the program ran to completion without
+            #     hitting the breakpoint, e.g. DWARF didn't map the
+            #     requested line cleanly — that's fine, we still
+            #     verify the shape of the inspection responses via
+            #     the empty-stack path).
+            outcome = drain_until(proc, events, ("stopped", "terminated"),
+                                  timeout=10.0)
+            if outcome is None:
                 seen = [e.get("event") for e in events if e.get("type") == "event"]
                 failures.append(
-                    f"never saw `terminated` event within 10s (saw: {seen!r})"
+                    f"neither `stopped` nor `terminated` within 10s (saw: {seen!r})"
                 )
+
+            # Exercise the stack-inspection trio regardless of outcome:
+            # the handlers must produce well-shaped JSON either way
+            # (live frames when paused, empty arrays when the
+            # inferior is gone). We assert shape, not values, so the
+            # smoke doesn't depend on whether the breakpoint actually
+            # resolved against the DWARF line table.
+            send(proc, {
+                "seq": 100, "type": "request", "command": "stackTrace",
+                "arguments": {"threadId": 1},
+            })
+            r = recv_response(proc, "stackTrace", events, timeout=5.0)
+            if not r:
+                failures.append("stackTrace: no response")
+            elif not r.get("success"):
+                failures.append(f"stackTrace: success=false: {r!r}")
+            else:
+                body = r.get("body") or {}
+                if "stackFrames" not in body or "totalFrames" not in body:
+                    failures.append(f"stackTrace: missing keys: {body!r}")
+                else:
+                    frames = body["stackFrames"]
+                    if outcome == "stopped" and len(frames) == 0:
+                        # Paused at a breakpoint but gdb reported no
+                        # frames — would mean either DWARF emit or
+                        # MI parsing is broken. Flag it.
+                        failures.append("stackTrace: stopped but empty frames")
+
+            send(proc, {
+                "seq": 101, "type": "request", "command": "scopes",
+                "arguments": {"frameId": 0},
+            })
+            r = recv_response(proc, "scopes", events, timeout=5.0)
+            if not r or not r.get("success"):
+                failures.append(f"scopes: wrong shape: {r!r}")
+            else:
+                scopes = (r.get("body") or {}).get("scopes") or []
+                if len(scopes) != 1 or scopes[0].get("name") != "Locals":
+                    failures.append(f"scopes: expected one Locals scope, got {scopes!r}")
+                elif (scopes[0].get("variablesReference") or 0) <= 0:
+                    failures.append(f"scopes: Locals reference <=0: {scopes!r}")
+
+            send(proc, {
+                "seq": 102, "type": "request", "command": "variables",
+                "arguments": {"variablesReference": 1},
+            })
+            r = recv_response(proc, "variables", events, timeout=5.0)
+            if not r or not r.get("success"):
+                failures.append(f"variables: wrong shape: {r!r}")
+            else:
+                body = r.get("body") or {}
+                if "variables" not in body or not isinstance(body["variables"], list):
+                    failures.append(f"variables: missing array: {body!r}")
 
         # 6) threads -> exactly one fake thread (id=1, name="main")
         send(proc, {
