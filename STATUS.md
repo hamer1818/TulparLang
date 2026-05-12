@@ -381,7 +381,13 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 ### Dokümantasyon
 
 - 🟡 **Quickstart + dil reference + pkg guide → `tulparlang.dev/docs/`.**
-  Şu an dokümantasyon dağınık (README + örnekler + bu dosya).
+  README'de Quick start + Build a REST API + Streaming (SSE/WS) +
+  Package management bölümleri var, CLI reference + Standard library
+  tablosu güncel — fakat tulparlang.dev/docs/ altındaki tam dil
+  reference, derleyici flag matrisi, OS-spesifik kurulum kılavuzları
+  hâlâ eksik. README, "quickstart" eşiğini karşılıyor; reference +
+  pkg/wings derinlemesine kılavuzları için ayrı bir docs commit
+  turu gerek.
 
 ---
 
