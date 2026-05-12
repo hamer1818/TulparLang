@@ -145,8 +145,11 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   generator, `log_info/error` structured JSON.
 - **Formatter:** indent + trailing-ws + EOF newline + blank-line
   collapse + keyword-aware spacing, idempotent token-pass.
-- **LSP:** init, diagnostics, hover, completion, go-to-definition,
-  find-references, rename. `tests/lsp_smoke.py` 9/9 check.
+- **LSP:** init, diagnostics, hover (functions, builtins, AND
+  scope-aware variables), completion, go-to-definition,
+  find-references, rename, signatureHelp (active-parameter aware
+  for both user functions and builtins). `tests/lsp_smoke.py` 9/9
+  check.
 - **AOT debug info (Plan 07 Parça A — PR'lar #160–#173):**
   `tulpar [--debug | -g] build <file>` opt-in. LLVM IR'da `!dbg`
   metadata: `DICompileUnit` + `DIFile` + module flags, her user
@@ -289,10 +292,16 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   (watchpoints), instruction breakpoints.
 - 🟢 **Parser multi-error mode.** Şu an ilk fatal'da duruyor; recovery
   ve bağımsız hata bildirimi eksik.
-- 🟢 **LSP signature help.** Parametre içindeyken aktif imza ipucu.
-- 🟢 **LSP variable + type hover.** Şu an sadece function/keyword.
-- 🟢 **Incremental document sync** (`change: 2`) — büyük dosyalar.
-- 🟢 **`tulpar doc` generator.** Docstring → HTML/MD.
+- 🟢 **LSP incremental document sync** (`change: 2`) — bugün full-text
+  re-parse her keystroke'ta gidiyor; sub-100ms olduğu için küçük
+  dosyalarda farkı yok ama büyük dosyalarda diff-bazlı sync kazanç
+  verir.
+- 🟢 **`tulpar doc` generator.** Docstring → HTML/MD. Bugün
+  `tulpar fmt` / `tulpar --lsp` / `tulpar typecheck` var ama
+  dökümantasyon üretici CLI yok; LSP `hover`'ın gösterdiği
+  leading-comment doc string'leri offline bir markdown ağacına
+  döküp `tulparlang.dev/docs/reference/` altına entegre etmek
+  ekosistemi tamamlar.
 - 🟢 **JetBrains plugin.** Sadece VS Code var.
 
 ### Ağ / I/O / TLS
