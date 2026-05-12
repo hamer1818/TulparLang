@@ -4162,6 +4162,189 @@ VMValue aot_parse_cookies(VMValue strVal) {
 // Parse a urlencoded `k1=v1&k2=v2` string (with or without a leading '?')
 // into a JSON-style object. Same internals as the parser used for HTTP
 // request query strings, exposed for user-space body parsing.
+// ---------------------------------------------------------------------------
+// Crypto / encoding utilities — sha1 + base64.
+//
+// Self-contained implementations (no OpenSSL dependency) so the helpers
+// are always available, regardless of whether the build pulled OpenSSL
+// in for HTTPS. Used by the WebSocket accept-key derivation
+// (`wings_ws_accept_key`), but also broadly useful for cookies, JWT
+// HMAC, ETags, content-addressed caches — anything that wants
+// "give me a stable short hash of this blob" or "embed binary in a
+// header line".
+// ---------------------------------------------------------------------------
+
+namespace {
+
+void sha1_compute(const uint8_t *data, size_t len, uint8_t out[20]) {
+    uint32_t h[5] = {0x67452301, 0xEFCDAB89, 0x98BADCFE,
+                    0x10325476, 0xC3D2E1F0};
+    // Pad: append 0x80, zeros, then 64-bit big-endian length-in-bits.
+    size_t padded_len = ((len + 9 + 63) / 64) * 64;
+    std::vector<uint8_t> buf(padded_len, 0);
+    std::memcpy(buf.data(), data, len);
+    buf[len] = 0x80;
+    uint64_t bits = (uint64_t)len * 8;
+    for (int i = 0; i < 8; i++) {
+        buf[padded_len - 1 - i] = (uint8_t)((bits >> (i * 8)) & 0xFF);
+    }
+    for (size_t off = 0; off < padded_len; off += 64) {
+        uint32_t w[80];
+        for (int i = 0; i < 16; i++) {
+            w[i] = ((uint32_t)buf[off + i * 4 + 0] << 24) |
+                   ((uint32_t)buf[off + i * 4 + 1] << 16) |
+                   ((uint32_t)buf[off + i * 4 + 2] << 8)  |
+                   ((uint32_t)buf[off + i * 4 + 3]);
+        }
+        for (int i = 16; i < 80; i++) {
+            uint32_t v = w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16];
+            w[i] = (v << 1) | (v >> 31);
+        }
+        uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
+        for (int i = 0; i < 80; i++) {
+            uint32_t f, k;
+            if (i < 20) { f = (b & c) | (~b & d); k = 0x5A827999; }
+            else if (i < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1; }
+            else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC; }
+            else { f = b ^ c ^ d; k = 0xCA62C1D6; }
+            uint32_t t = ((a << 5) | (a >> 27)) + f + e + k + w[i];
+            e = d; d = c; c = (b << 30) | (b >> 2); b = a; a = t;
+        }
+        h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
+    }
+    for (int i = 0; i < 5; i++) {
+        out[i * 4 + 0] = (uint8_t)((h[i] >> 24) & 0xFF);
+        out[i * 4 + 1] = (uint8_t)((h[i] >> 16) & 0xFF);
+        out[i * 4 + 2] = (uint8_t)((h[i] >> 8)  & 0xFF);
+        out[i * 4 + 3] = (uint8_t)(h[i]         & 0xFF);
+    }
+}
+
+void base64_encode_buf(const uint8_t *src, size_t len, std::string &out) {
+    static const char alpha[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    out.clear();
+    out.reserve(((len + 2) / 3) * 4);
+    size_t i = 0;
+    while (i + 3 <= len) {
+        uint32_t v = ((uint32_t)src[i] << 16) | ((uint32_t)src[i + 1] << 8) |
+                     (uint32_t)src[i + 2];
+        out.push_back(alpha[(v >> 18) & 63]);
+        out.push_back(alpha[(v >> 12) & 63]);
+        out.push_back(alpha[(v >> 6) & 63]);
+        out.push_back(alpha[v & 63]);
+        i += 3;
+    }
+    if (i < len) {
+        uint32_t v = (uint32_t)src[i] << 16;
+        int rem = (int)(len - i);
+        if (rem == 2) v |= (uint32_t)src[i + 1] << 8;
+        out.push_back(alpha[(v >> 18) & 63]);
+        out.push_back(alpha[(v >> 12) & 63]);
+        out.push_back(rem == 2 ? alpha[(v >> 6) & 63] : '=');
+        out.push_back('=');
+    }
+}
+
+bool base64_decode_buf(const char *src, size_t len, std::string &out) {
+    static int8_t table[256];
+    static bool table_inited = false;
+    if (!table_inited) {
+        for (int i = 0; i < 256; i++) table[i] = -1;
+        const char *a = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for (int i = 0; i < 64; i++) table[(uint8_t)a[i]] = (int8_t)i;
+        table_inited = true;
+    }
+    out.clear();
+    out.reserve((len * 3) / 4);
+    uint32_t buf = 0;
+    int bits = 0;
+    for (size_t i = 0; i < len; i++) {
+        uint8_t c = (uint8_t)src[i];
+        if (c == '=' || c == '\n' || c == '\r' || c == ' ' || c == '\t') continue;
+        int v = table[c];
+        if (v < 0) return false;
+        buf = (buf << 6) | (uint32_t)v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back((char)((buf >> bits) & 0xFF));
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+// sha1(str) -> 20-byte binary string (each byte is one char in the
+// returned string). Useful as a building block; user code wanting a
+// printable hash should call sha1_hex.
+VMValue aot_sha1(VMValue strVal) {
+    if (!IS_STRING(strVal)) return VM_OBJ((Obj *)aot_allocate_string("", 0));
+    ObjString *s = AS_STRING(strVal);
+    uint8_t digest[20];
+    sha1_compute((const uint8_t *)s->chars, (size_t)s->length, digest);
+    return VM_OBJ((Obj *)aot_allocate_string((const char *)digest, 20));
+}
+
+// sha1_hex(str) -> 40-char lowercase hex digest.
+VMValue aot_sha1_hex(VMValue strVal) {
+    if (!IS_STRING(strVal)) return VM_OBJ((Obj *)aot_allocate_string("", 0));
+    ObjString *s = AS_STRING(strVal);
+    uint8_t digest[20];
+    sha1_compute((const uint8_t *)s->chars, (size_t)s->length, digest);
+    char hex[41];
+    for (int i = 0; i < 20; i++) {
+        std::snprintf(hex + i * 2, 3, "%02x", digest[i]);
+    }
+    return VM_OBJ((Obj *)aot_allocate_string(hex, 40));
+}
+
+// base64_encode(str) -> base64 string. Handles arbitrary bytes (including
+// the binary 20-byte form returned by sha1()); padding (`=`) is emitted
+// when the input length isn't a multiple of 3.
+VMValue aot_base64_encode(VMValue strVal) {
+    if (!IS_STRING(strVal)) return VM_OBJ((Obj *)aot_allocate_string("", 0));
+    ObjString *s = AS_STRING(strVal);
+    std::string out;
+    base64_encode_buf((const uint8_t *)s->chars, (size_t)s->length, out);
+    return VM_OBJ((Obj *)aot_allocate_string(out.data(), (int)out.size()));
+}
+
+// base64_decode(str) -> decoded bytes as a string. Whitespace inside
+// the input is skipped (so callers can pass pretty-printed base64).
+// Returns empty string on malformed input.
+VMValue aot_base64_decode(VMValue strVal) {
+    if (!IS_STRING(strVal)) return VM_OBJ((Obj *)aot_allocate_string("", 0));
+    ObjString *s = AS_STRING(strVal);
+    std::string out;
+    if (!base64_decode_buf(s->chars, (size_t)s->length, out)) {
+        return VM_OBJ((Obj *)aot_allocate_string("", 0));
+    }
+    return VM_OBJ((Obj *)aot_allocate_string(out.data(), (int)out.size()));
+}
+
+// wings_ws_accept_key(client_key) -> base64(sha1(client_key + GUID))
+//
+// The WebSocket upgrade handshake (RFC 6455 §4.2.2 step 5) demands the
+// server prove it parsed the Sec-WebSocket-Key header by returning
+// `base64(sha1(<key> + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))`. This
+// helper is the only piece of the upgrade that benefits from a native:
+// the rest (header parse, response build, frame masking) is pure
+// string manipulation that's fine in Tulpar source.
+VMValue aot_wings_ws_accept_key(VMValue keyVal) {
+    if (!IS_STRING(keyVal)) return VM_OBJ((Obj *)aot_allocate_string("", 0));
+    ObjString *s = AS_STRING(keyVal);
+    std::string combined;
+    combined.assign(s->chars, (size_t)s->length);
+    combined += "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    uint8_t digest[20];
+    sha1_compute((const uint8_t *)combined.data(), combined.size(), digest);
+    std::string out;
+    base64_encode_buf(digest, 20, out);
+    return VM_OBJ((Obj *)aot_allocate_string(out.data(), (int)out.size()));
+}
+
 VMValue aot_parse_query(VMValue strVal) {
   if (!IS_STRING(strVal)) {
     return VM_OBJ((Obj *)aot_http_make_obj(0));

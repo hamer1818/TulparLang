@@ -269,6 +269,19 @@ typedef struct {
   // default `listen_pool`'s worker count to a host-matched value.
   LLVMValueRef func_aot_cpu_count;
 
+  // Crypto / encoding utilities — sha1 + base64. Self-contained C++
+  // implementations (no OpenSSL needed); used by the WebSocket upgrade
+  // handshake (`wings_ws_accept_key`) but also exposed directly for
+  // signed cookies, JWT HMAC, ETag generation, etc.
+  LLVMValueRef func_aot_sha1;
+  LLVMValueRef func_aot_sha1_hex;
+  LLVMValueRef func_aot_base64_encode;
+  LLVMValueRef func_aot_base64_decode;
+  // base64(sha1(client_key + RFC 6455 GUID)) — the only piece of the
+  // WebSocket handshake that benefits from a native; rest is pure
+  // string work that's fine in Tulpar source.
+  LLVMValueRef func_aot_wings_ws_accept_key;
+
   // Process control
   LLVMValueRef func_aot_exit;
 

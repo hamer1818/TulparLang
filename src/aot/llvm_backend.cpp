@@ -1199,6 +1199,20 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_parse_cookies = LLVMAddFunction(
       backend->module, "aot_parse_cookies", http_parse_type);
 
+  // ====== Crypto / encoding helpers ======
+  // All take a single VMValue string and return a VMValue string, so
+  // they share string_pin_type's shape.
+  backend->func_aot_sha1 = LLVMAddFunction(
+      backend->module, "aot_sha1", string_pin_type);
+  backend->func_aot_sha1_hex = LLVMAddFunction(
+      backend->module, "aot_sha1_hex", string_pin_type);
+  backend->func_aot_base64_encode = LLVMAddFunction(
+      backend->module, "aot_base64_encode", string_pin_type);
+  backend->func_aot_base64_decode = LLVMAddFunction(
+      backend->module, "aot_base64_decode", string_pin_type);
+  backend->func_aot_wings_ws_accept_key = LLVMAddFunction(
+      backend->module, "aot_wings_ws_accept_key", string_pin_type);
+
   // aot_exit_i32(int code) -> noreturn  (process termination)
   // Takes a raw i32 to avoid VMValue ABI complications for a one-shot call.
   LLVMTypeRef exit_params[] = {backend->int32_type};
@@ -3859,6 +3873,38 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_string_pin,
                                     args, 1, "string_pin");
+    }
+
+    // sha1(s) / sha1_hex(s) / base64_encode(s) / base64_decode(s) /
+    // wings_ws_accept_key(s) — single-arg VMValue->VMValue helpers.
+    if (strcmp(node->name, "sha1") == 0 && node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_sha1,
+                                    args, 1, "sha1");
+    }
+    if (strcmp(node->name, "sha1_hex") == 0 && node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_sha1_hex,
+                                    args, 1, "sha1_hex");
+    }
+    if (strcmp(node->name, "base64_encode") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_base64_encode,
+                                    args, 1, "base64_encode");
+    }
+    if (strcmp(node->name, "base64_decode") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_base64_decode,
+                                    args, 1, "base64_decode");
+    }
+    if (strcmp(node->name, "wings_ws_accept_key") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend,
+                                    backend->func_aot_wings_ws_accept_key,
+                                    args, 1, "ws_accept_key");
     }
 
     // cpu_count() -> int (logical CPUs).

@@ -14,6 +14,7 @@
 #if defined(TULPAR_HAS_TLS)
   #include <openssl/ssl.h>
   #include <openssl/err.h>
+  #include <openssl/x509v3.h>
 #endif
 
 #if !defined(_WIN32)
@@ -37,6 +38,72 @@
 namespace tulpar {
 
 namespace {
+
+#if defined(TULPAR_HAS_TLS)
+// Configure a fresh SSL_CTX with the same trust-store rules used by
+// every TLS client in the codebase (http_fetch_url + http_request_url
+// today; future tls_* builtins too). Rules:
+//
+//   1. Default: SSL_VERIFY_PEER + hostname check. Calls
+//      SSL_CTX_set_default_verify_paths() first so distro-installed
+//      CA bundles work out of the box on Linux/macOS.
+//   2. If $TULPAR_CA_BUNDLE points at a readable PEM file, load it on
+//      top of the defaults. This is how MSYS2 builds (and CI) point
+//      at the system trust store explicitly.
+//   3. If $TULPAR_TLS_INSECURE=1, downgrade to SSL_VERIFY_NONE. Dev
+//      and self-signed-fixture escape hatch; never the default.
+//
+// Returns the configured SSL_CTX or nullptr on failure (caller frees
+// with SSL_CTX_free).
+SSL_CTX *make_client_tls_ctx(std::string &out_err) {
+    static bool g_ssl_inited = false;
+    if (!g_ssl_inited) {
+        SSL_library_init();
+        SSL_load_error_strings();
+        OpenSSL_add_all_algorithms();
+        g_ssl_inited = true;
+    }
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) {
+        out_err = "SSL_CTX_new failed";
+        return nullptr;
+    }
+    SSL_CTX_set_default_verify_paths(ctx);
+    const char *ca_bundle = std::getenv("TULPAR_CA_BUNDLE");
+    if (ca_bundle && ca_bundle[0]) {
+        if (SSL_CTX_load_verify_locations(ctx, ca_bundle, nullptr) != 1) {
+            SSL_CTX_free(ctx);
+            out_err = "TULPAR_CA_BUNDLE points at unreadable file: ";
+            out_err += ca_bundle;
+            return nullptr;
+        }
+    }
+    const char *insecure = std::getenv("TULPAR_TLS_INSECURE");
+    if (insecure && insecure[0] == '1') {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
+    } else {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
+    }
+    return ctx;
+}
+
+// Wire up SNI + hostname verification on a fresh SSL object. Mirrors
+// what every modern client (curl, libcurl, requests) does after
+// SSL_new + before SSL_connect. Skipped when TULPAR_TLS_INSECURE=1 is
+// set — make_client_tls_ctx has already disabled chain verification
+// in that mode and the hostname check would otherwise still fail on
+// self-signed dev fixtures.
+void apply_tls_hostname_check(SSL *ssl, const std::string &host) {
+    SSL_set_tlsext_host_name(ssl, host.c_str());
+    const char *insecure = std::getenv("TULPAR_TLS_INSECURE");
+    if (insecure && insecure[0] == '1') return;
+    X509_VERIFY_PARAM *param = SSL_get0_param(ssl);
+    if (!param) return;
+    X509_VERIFY_PARAM_set_hostflags(
+        param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+    X509_VERIFY_PARAM_set1_host(param, host.c_str(), host.size());
+}
+#endif  // TULPAR_HAS_TLS
 
 bool parse_http_url_internal(const std::string &url, std::string &host,
                              int &port, std::string &path, bool &is_https) {
@@ -150,27 +217,11 @@ bool http_fetch_url(const std::string &url, std::string &out_body,
 
 #if defined(TULPAR_HAS_TLS)
     if (is_https) {
-        // Lazily initialise the OpenSSL library state. Idempotent
-        // since OpenSSL 1.1; safe to call from multiple threads.
-        static bool g_ssl_inited = false;
-        if (!g_ssl_inited) {
-            SSL_library_init();
-            SSL_load_error_strings();
-            OpenSSL_add_all_algorithms();
-            g_ssl_inited = true;
-        }
-        SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+        SSL_CTX *ctx = make_client_tls_ctx(out_err);
         if (!ctx) {
             tul_close(sock);
-            out_err = "SSL_CTX_new failed";
             return false;
         }
-        // Use the system trust store if discoverable; fall back to
-        // disabling verification rather than refusing the request,
-        // because most MSYS2 installs don't ship a usable trust store.
-        // For production this needs a configurable cert path.
-        SSL_CTX_set_default_verify_paths(ctx);
-        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
 
         SSL *ssl = SSL_new(ctx);
         if (!ssl) {
@@ -179,13 +230,25 @@ bool http_fetch_url(const std::string &url, std::string &out_body,
             out_err = "SSL_new failed";
             return false;
         }
-        SSL_set_tlsext_host_name(ssl, host.c_str());  // SNI
+        apply_tls_hostname_check(ssl, host);
         SSL_set_fd(ssl, (int)sock);
         if (SSL_connect(ssl) != 1) {
+            unsigned long ssl_err = ERR_peek_last_error();
+            int verify_rc = (int)SSL_get_verify_result(ssl);
             SSL_free(ssl);
             SSL_CTX_free(ctx);
             tul_close(sock);
-            out_err = "TLS handshake failed for " + host;
+            char detail[160];
+            if (verify_rc != X509_V_OK) {
+                std::snprintf(detail, sizeof(detail),
+                              " (cert verify: %s)",
+                              X509_verify_cert_error_string(verify_rc));
+            } else if (ssl_err) {
+                std::snprintf(detail, sizeof(detail), " (ssl: 0x%lx)", ssl_err);
+            } else {
+                detail[0] = '\0';
+            }
+            out_err = "TLS handshake failed for " + host + detail;
             return false;
         }
         if (SSL_write(ssl, req.data(), (int)req.size()) <= 0) {
@@ -343,24 +406,27 @@ bool http_request_url(const std::string &method, const std::string &url,
 
 #if defined(TULPAR_HAS_TLS)
     if (is_https) {
-        static bool g_ssl_inited2 = false;
-        if (!g_ssl_inited2) {
-            SSL_library_init();
-            SSL_load_error_strings();
-            OpenSSL_add_all_algorithms();
-            g_ssl_inited2 = true;
-        }
-        SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
-        if (!ctx) { tul_close(sock); out_err = "SSL_CTX_new failed"; return false; }
-        SSL_CTX_set_default_verify_paths(ctx);
-        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
+        SSL_CTX *ctx = make_client_tls_ctx(out_err);
+        if (!ctx) { tul_close(sock); return false; }
         SSL *ssl = SSL_new(ctx);
         if (!ssl) { SSL_CTX_free(ctx); tul_close(sock); out_err = "SSL_new failed"; return false; }
-        SSL_set_tlsext_host_name(ssl, host.c_str());
+        apply_tls_hostname_check(ssl, host);
         SSL_set_fd(ssl, (int)sock);
         if (SSL_connect(ssl) != 1) {
+            unsigned long ssl_err = ERR_peek_last_error();
+            int verify_rc = (int)SSL_get_verify_result(ssl);
             SSL_free(ssl); SSL_CTX_free(ctx); tul_close(sock);
-            out_err = "TLS handshake failed for " + host;
+            char detail[160];
+            if (verify_rc != X509_V_OK) {
+                std::snprintf(detail, sizeof(detail),
+                              " (cert verify: %s)",
+                              X509_verify_cert_error_string(verify_rc));
+            } else if (ssl_err) {
+                std::snprintf(detail, sizeof(detail), " (ssl: 0x%lx)", ssl_err);
+            } else {
+                detail[0] = '\0';
+            }
+            out_err = "TLS handshake failed for " + host + detail;
             return false;
         }
         if (SSL_write(ssl, req.data(), (int)req.size()) <= 0) {
