@@ -1,28 +1,34 @@
 // Tulpar Debug Adapter Protocol (DAP) entry point.
 //
-// Plan 07 PR 4 — Debugger MVP, Part B (scaffold).
+// Plan 07 Part B — Debugger MVP, DAP server.
 //
-// This first PR establishes the DAP plumbing:
-//   - stdio JSON-RPC framing read + write (`Content-Length: N\r\n\r\n<json>`),
-//   - sequence-number bookkeeping for response correlation,
-//   - an `initialize` → capabilities advertisement,
-//   - a `disconnect` → clean exit,
-//   - "not implemented yet" responses for every other DAP request so a
-//     client sees a clearly-shaped error instead of a hang.
+// What's wired up right now:
+//   - stdio JSON-RPC framing (`Content-Length: N\r\n\r\n<json>`).
+//   - `initialize` → capabilities + `initialized` event.
+//   - `launch` → AOT-builds the .tpr with `--debug` (DWARF emit from
+//     Plan 07 Part A) so a gdb subprocess can attach to it later.
+//   - `setBreakpoints` → forwards each (path, line) to gdb MI
+//     (`-break-insert`) and returns the verified Breakpoint[] reply.
+//   - `configurationDone` → spawns `gdb --interpreter=mi3 -nx <binary>`
+//     and sends `-exec-run`. A background reader thread parses MI
+//     async records and pushes DAP events:
+//       *stopped(reason=breakpoint-hit)   →  stopped(reason=breakpoint)
+//       *stopped(reason=exited-normally)  →  stopped(reason=exit) + terminated
+//       *stopped(reason=signal-received)  →  stopped(reason=exception)
+//       ~"..." console + @"..." target    →  output(category=stdout)
+//   - `threads` → single fake thread { id: 1, name: "main" }.
+//   - `terminate` / `disconnect` → sends `-gdb-exit`, reaps subprocess.
 //
-// What's deliberately NOT here yet:
-//   - No gdb subprocess. `launch`, `setBreakpoints`, `stackTrace`,
-//     `variables`, `continue`, `next`, `stepIn`, `stepOut`, etc. all
-//     reply `success: false` with `message: "not implemented yet"`.
-//     Those wire up in PR 4b on top of `gdb --interpreter=mi3`.
-//   - No source-file validation. We accept the program path argument
-//     and stash it so PR 4b's `launch` can read it back, but we don't
-//     try to AOT-build the .tpr here — the debug build happens inside
-//     `launch` request handling, which doesn't exist yet.
-//   - No threads/scopes/variables view. Capabilities reflect that.
+// What's intentionally NOT wired up yet (later PRs in Plan 07 Part B):
+//   - `stackTrace` / `scopes` / `variables` — return "not implemented".
+//   - `continue` / `next` / `stepIn` / `stepOut` — return "not implemented".
+//   - `evaluate` / `setVariable` — return "not implemented".
+//   - Conditional / log / hit-count / function breakpoints.
 //
 // stdin/stdout are owned by this command — every diagnostic line goes
 // to stderr only (LSP follows the same rule, for the same reason).
+// The reader thread shares stdout with the main thread, so every
+// `write_message` call goes through `g_stdout_mu`.
 
 #include "debug_cmd.hpp"
 #include "../aot/aot_pipeline.hpp"
@@ -31,21 +37,30 @@ extern "C" {
 #include "../../runtime/cJSON.h"
 }
 
+#include <atomic>
 #include <cctype>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <sys/stat.h>
+#include <thread>
+#include <unordered_map>
+#include <vector>
 
 #ifdef _WIN32
   #include <fcntl.h>
   #include <io.h>
+  #include <windows.h>
   #define DUP _dup
   #define DUP2 _dup2
   #define FILENO _fileno
   #define CLOSE _close
 #else
+  #include <signal.h>
+  #include <sys/wait.h>
   #include <unistd.h>
   #define DUP dup
   #define DUP2 dup2
@@ -71,10 +86,17 @@ std::string g_program_path;
 // Set by `launch` once an AOT build succeeds. PR 4c (gdb spawn) reads
 // it to feed `gdb --interpreter=mi3 ./<built_binary>`.
 std::string g_built_binary;
-// True once a `launch` request has run AOT-build to completion. PR 4c
-// will use this as the gate for forwarding execution-control requests
-// (`continue` / `next` / `stepIn`) to the underlying debugger.
+// True once a `launch` request has run AOT-build to completion. The
+// gdb subprocess only starts inside `configurationDone`, so handlers
+// that come before that point check this flag to refuse early calls.
 bool g_launched = false;
+
+// stdout is shared between the main request loop (which writes DAP
+// responses synchronously) and the gdb reader thread (which writes
+// DAP events asynchronously as the inferior runs). Every framed
+// write_message call MUST hold this mutex or the two streams race
+// and produce torn `Content-Length: N\r\n\r\n<json>` frames.
+std::mutex g_stdout_mu;
 
 // stdin / stdout must be binary on Windows or the runtime would
 // translate \r\n line endings between our raw bytes and the DAP
@@ -131,11 +153,15 @@ bool read_message(std::string &out_body) {
   return got == out_body.size();
 }
 
-// Write one DAP message. Caller owns + frees the cJSON object.
+// Write one DAP message. Caller owns + frees the cJSON object. Takes
+// `g_stdout_mu` so the gdb reader thread can write events
+// concurrently with the main loop's responses without tearing the
+// `Content-Length: N\r\n\r\n<json>` framing.
 void write_message(cJSON *msg) {
   char *json = cJSON_PrintUnformatted(msg);
   if (!json) return;
   size_t len = std::strlen(json);
+  std::lock_guard<std::mutex> lk(g_stdout_mu);
   std::fprintf(stdout, "Content-Length: %zu\r\n\r\n", len);
   std::fwrite(json, 1, len, stdout);
   std::fflush(stdout);
@@ -182,6 +208,485 @@ cJSON *make_event(const char *event_name) {
 void send_initialized_event() {
   cJSON *evt = make_event("initialized");
   cJSON_AddItemToObject(evt, "body", cJSON_CreateObject());
+  write_message(evt);
+  cJSON_Delete(evt);
+}
+
+// ---------------------------------------------------------------------------
+// gdb/MI subprocess plumbing.
+//
+// We talk to gdb in MI3 mode over an anonymous bidirectional pipe.
+// Every request gets a numeric token prefix (`123-break-insert ...`)
+// so the reader thread can match the `123^done` / `123^error` result
+// record back to the caller. Result records arrive interleaved with
+// async records (`*stopped`, `=thread-exited`, ...) and stream
+// records (`~"..."` console, `@"..."` target, `&"..."` log) — the
+// reader keeps them apart and routes async records to DAP events.
+
+// Unescape a gdb MI C-string literal in place. MI uses the C escape
+// alphabet: \n \t \r \\ \" \a \b \f \v \xHH \0NN. We handle the
+// common ones; anything we don't recognise is left literal so the
+// user still sees something useful in the DEBUG CONSOLE.
+std::string mi_unescape(const std::string &s) {
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size(); ++i) {
+    char c = s[i];
+    if (c != '\\' || i + 1 >= s.size()) { out.push_back(c); continue; }
+    char next = s[++i];
+    switch (next) {
+      case 'n': out.push_back('\n'); break;
+      case 't': out.push_back('\t'); break;
+      case 'r': out.push_back('\r'); break;
+      case '\\': out.push_back('\\'); break;
+      case '"': out.push_back('"'); break;
+      case 'a': out.push_back('\a'); break;
+      case 'b': out.push_back('\b'); break;
+      case 'f': out.push_back('\f'); break;
+      case 'v': out.push_back('\v'); break;
+      case '0': out.push_back('\0'); break;
+      default: out.push_back('\\'); out.push_back(next); break;
+    }
+  }
+  return out;
+}
+
+// Extract the value of a `key="..."` pair from a single MI record
+// line. Returns "" if the key isn't present or the value isn't a
+// quoted string. Stops at the matching unescaped `"`. Sufficient for
+// the fields we actually parse (`reason`, `bkpt.line`, `bkpt.file`,
+// `exit-code`, etc.) — the records we care about all use the simple
+// `key="value"` form, never nested tuples.
+std::string mi_field(const std::string &record, const std::string &key) {
+  std::string needle = key + "=\"";
+  size_t pos = record.find(needle);
+  if (pos == std::string::npos) return "";
+  pos += needle.size();
+  std::string out;
+  while (pos < record.size()) {
+    char c = record[pos++];
+    if (c == '\\' && pos < record.size()) {
+      out.push_back(c);
+      out.push_back(record[pos++]);
+      continue;
+    }
+    if (c == '"') break;
+    out.push_back(c);
+  }
+  return mi_unescape(out);
+}
+
+class GdbProcess {
+ public:
+  GdbProcess() = default;
+  ~GdbProcess() { stop(); }
+
+  // Spawn `gdb --interpreter=mi3 -nx <binary>` with bidirectional
+  // pipes. Returns false (and leaves the object in an unstarted
+  // state) if gdb couldn't be spawned — the caller surfaces that as
+  // `success: false` on the DAP request that triggered the spawn.
+  bool start(const std::string &binary);
+
+  // Send one MI command. `prefix_token` is true for requests we want
+  // to correlate (setBreakpoints, exec-run); false for fire-and-
+  // forget cleanup commands (-gdb-exit). Returns the token assigned
+  // (0 when prefix_token=false), so the caller can later pull the
+  // matching `^done`/`^error` record via wait_for_result.
+  int send_command(const std::string &cmd, bool prefix_token);
+
+  // Block until the result record for `token` arrives, or until
+  // `timeout_ms` elapses. Returns the whole record line minus the
+  // token prefix (e.g. `^done,bkpt={...}`); empty string on timeout.
+  std::string wait_for_result(int token, int timeout_ms);
+
+  // Tear down the subprocess: send `-gdb-exit`, close pipes, join
+  // the reader thread, reap. Safe to call even if start() failed or
+  // stop() was already invoked.
+  void stop();
+
+  bool running() const { return m_running.load(); }
+
+ private:
+  void reader_loop();
+  void dispatch_async_record(const std::string &kind,
+                             const std::string &record);
+  void emit_stopped(const std::string &reason);
+  void emit_terminated();
+  void emit_output(const std::string &category,
+                   const std::string &content);
+
+#ifdef _WIN32
+  HANDLE m_proc = nullptr;
+  HANDLE m_in_w = nullptr;  // parent → gdb stdin
+  HANDLE m_out_r = nullptr; // gdb stdout → parent
+#else
+  pid_t m_pid = -1;
+  int m_in_w = -1;
+  int m_out_r = -1;
+#endif
+
+  std::atomic<bool> m_running{false};
+  std::atomic<int> m_next_token{1};
+  std::thread m_reader;
+
+  // Mutex protects m_results + m_results_cv. Reader fills the map
+  // when it sees a tokened `^done` / `^error`; wait_for_result drains.
+  std::mutex m_results_mu;
+  std::condition_variable m_results_cv;
+  std::unordered_map<int, std::string> m_results;
+
+  // Send-side mutex so concurrent writers (today: only the main
+  // thread, but cheap insurance against future stepping handlers)
+  // can't tear MI commands.
+  std::mutex m_send_mu;
+};
+
+// Global gdb instance. Initialised by configurationDone, torn down
+// by terminate/disconnect or by the main loop on EOF.
+GdbProcess g_gdb;
+
+bool GdbProcess::start(const std::string &binary) {
+  if (m_running.load()) {
+    std::fprintf(stderr, "[dap] gdb: start() called while already running\n");
+    return false;
+  }
+
+#ifdef _WIN32
+  SECURITY_ATTRIBUTES sa = {};
+  sa.nLength = sizeof(sa);
+  sa.bInheritHandle = TRUE;
+  sa.lpSecurityDescriptor = nullptr;
+
+  HANDLE in_r = nullptr, in_w = nullptr, out_r = nullptr, out_w = nullptr;
+  if (!CreatePipe(&in_r, &in_w, &sa, 0)) {
+    std::fprintf(stderr, "[dap] gdb: CreatePipe(stdin) failed\n");
+    return false;
+  }
+  if (!SetHandleInformation(in_w, HANDLE_FLAG_INHERIT, 0)) {
+    CloseHandle(in_r); CloseHandle(in_w);
+    return false;
+  }
+  if (!CreatePipe(&out_r, &out_w, &sa, 0)) {
+    CloseHandle(in_r); CloseHandle(in_w);
+    return false;
+  }
+  if (!SetHandleInformation(out_r, HANDLE_FLAG_INHERIT, 0)) {
+    CloseHandle(in_r); CloseHandle(in_w);
+    CloseHandle(out_r); CloseHandle(out_w);
+    return false;
+  }
+
+  STARTUPINFOW si = {};
+  si.cb = sizeof(si);
+  si.dwFlags = STARTF_USESTDHANDLES;
+  si.hStdInput = in_r;
+  si.hStdOutput = out_w;
+  si.hStdError = out_w;  // fold gdb stderr into the same pipe
+  PROCESS_INFORMATION pi = {};
+
+  // Build a UTF-16 command line. Quote the binary path so spaces in
+  // the AOT output directory don't break argv splitting.
+  std::wstring cmd = L"gdb.exe --interpreter=mi3 -nx -q \"";
+  for (char c : binary) {
+    cmd.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+  }
+  cmd.push_back(L'"');
+
+  BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
+                           CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+  // Always close the child-side handles in the parent — keeping them
+  // open would prevent the pipes from ever signalling EOF.
+  CloseHandle(in_r);
+  CloseHandle(out_w);
+  if (!ok) {
+    std::fprintf(stderr, "[dap] gdb: CreateProcess failed (err=%lu)\n",
+                 GetLastError());
+    CloseHandle(in_w);
+    CloseHandle(out_r);
+    return false;
+  }
+  CloseHandle(pi.hThread);
+  m_proc = pi.hProcess;
+  m_in_w = in_w;
+  m_out_r = out_r;
+#else
+  int in_pipe[2] = {-1, -1};
+  int out_pipe[2] = {-1, -1};
+  if (pipe(in_pipe) != 0) return false;
+  if (pipe(out_pipe) != 0) {
+    close(in_pipe[0]); close(in_pipe[1]);
+    return false;
+  }
+  pid_t pid = fork();
+  if (pid < 0) {
+    close(in_pipe[0]); close(in_pipe[1]);
+    close(out_pipe[0]); close(out_pipe[1]);
+    return false;
+  }
+  if (pid == 0) {
+    dup2(in_pipe[0], 0);
+    dup2(out_pipe[1], 1);
+    dup2(out_pipe[1], 2);  // fold gdb stderr → same pipe
+    close(in_pipe[0]); close(in_pipe[1]);
+    close(out_pipe[0]); close(out_pipe[1]);
+    execlp("gdb", "gdb", "--interpreter=mi3", "-nx", "-q",
+           binary.c_str(), nullptr);
+    _exit(127);
+  }
+  close(in_pipe[0]);
+  close(out_pipe[1]);
+  m_pid = pid;
+  m_in_w = in_pipe[1];
+  m_out_r = out_pipe[0];
+#endif
+
+  m_running.store(true);
+  m_reader = std::thread(&GdbProcess::reader_loop, this);
+  return true;
+}
+
+int GdbProcess::send_command(const std::string &cmd, bool prefix_token) {
+  if (!m_running.load()) return 0;
+  std::lock_guard<std::mutex> lk(m_send_mu);
+  int token = 0;
+  std::string line;
+  if (prefix_token) {
+    token = m_next_token.fetch_add(1);
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%d", token);
+    line.append(buf);
+  }
+  line.append(cmd);
+  line.push_back('\n');
+#ifdef _WIN32
+  DWORD wrote = 0;
+  WriteFile(m_in_w, line.data(), static_cast<DWORD>(line.size()), &wrote,
+            nullptr);
+#else
+  ssize_t wrote = ::write(m_in_w, line.data(), line.size());
+  (void)wrote;
+#endif
+  return token;
+}
+
+std::string GdbProcess::wait_for_result(int token, int timeout_ms) {
+  std::unique_lock<std::mutex> lk(m_results_mu);
+  if (!m_results_cv.wait_for(lk, std::chrono::milliseconds(timeout_ms),
+                             [&]() { return m_results.count(token) > 0; })) {
+    return "";
+  }
+  std::string out = std::move(m_results[token]);
+  m_results.erase(token);
+  return out;
+}
+
+void GdbProcess::stop() {
+  if (!m_running.load()) {
+    // start() failed or stop() already ran. Still clean up any half-
+    // initialised handles in case start() bailed mid-way.
+#ifdef _WIN32
+    if (m_in_w)  { CloseHandle(m_in_w);  m_in_w = nullptr; }
+    if (m_out_r) { CloseHandle(m_out_r); m_out_r = nullptr; }
+    if (m_proc)  { CloseHandle(m_proc);  m_proc = nullptr; }
+#endif
+    return;
+  }
+
+  // Best-effort polite shutdown: -gdb-exit asks gdb to detach +
+  // exit, which closes our output pipe and trips the reader's EOF.
+  send_command("-gdb-exit", false);
+
+#ifdef _WIN32
+  // Closing the write end lets gdb see EOF on its stdin and bail out
+  // if it ignored -gdb-exit for any reason.
+  if (m_in_w) { CloseHandle(m_in_w); m_in_w = nullptr; }
+  // Give gdb a second to exit gracefully; if it hasn't, kill it.
+  // 1000 ms matches the LSP/DAP "no hang on shutdown" convention.
+  DWORD wait = WaitForSingleObject(m_proc, 1000);
+  if (wait != WAIT_OBJECT_0) {
+    TerminateProcess(m_proc, 1);
+    WaitForSingleObject(m_proc, INFINITE);
+  }
+  CloseHandle(m_proc); m_proc = nullptr;
+  if (m_out_r) { CloseHandle(m_out_r); m_out_r = nullptr; }
+#else
+  if (m_in_w >= 0) { ::close(m_in_w); m_in_w = -1; }
+  // Reader's read() returns 0 once gdb closes its stdout; we still
+  // waitpid here to reap the zombie.
+  int status = 0;
+  for (int i = 0; i < 20; ++i) {
+    pid_t r = waitpid(m_pid, &status, WNOHANG);
+    if (r == m_pid) break;
+    if (r < 0) break;
+    struct timespec ts = {0, 50 * 1000 * 1000};  // 50ms
+    nanosleep(&ts, nullptr);
+  }
+  if (waitpid(m_pid, &status, WNOHANG) == 0) {
+    kill(m_pid, SIGKILL);
+    waitpid(m_pid, &status, 0);
+  }
+  if (m_out_r >= 0) { ::close(m_out_r); m_out_r = -1; }
+  m_pid = -1;
+#endif
+  m_running.store(false);
+  if (m_reader.joinable()) m_reader.join();
+
+  // Wake any waiters left over so they see m_running=false instead
+  // of blocking forever on a result that will never arrive.
+  std::lock_guard<std::mutex> lk(m_results_mu);
+  m_results.clear();
+  m_results_cv.notify_all();
+}
+
+void GdbProcess::reader_loop() {
+  std::string line;
+  for (;;) {
+    char buf[4096];
+#ifdef _WIN32
+    DWORD got = 0;
+    BOOL ok = ReadFile(m_out_r, buf, sizeof(buf), &got, nullptr);
+    if (!ok || got == 0) break;
+#else
+    ssize_t got = ::read(m_out_r, buf, sizeof(buf));
+    if (got <= 0) break;
+#endif
+    for (size_t i = 0; i < static_cast<size_t>(got); ++i) {
+      char c = buf[i];
+      if (c == '\r') continue;
+      if (c == '\n') {
+        if (!line.empty()) {
+          // Trim trailing whitespace just in case.
+          while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) {
+            line.pop_back();
+          }
+          std::fprintf(stderr, "[dap] gdb<< %s\n", line.c_str());
+
+          // Parse the line. Possible shapes (MI3):
+          //   ^done,...          result record (no token)
+          //   123^done,...       result record (tokened)
+          //   *stopped,...       async exec record
+          //   =thread-exited,... async notify record
+          //   ~"..."             console-stream
+          //   @"..."             target-stream
+          //   &"..."             log-stream
+          //   (gdb)              prompt — ignore
+          size_t p = 0;
+          int token = 0;
+          while (p < line.size() && std::isdigit(static_cast<unsigned char>(line[p]))) {
+            token = token * 10 + (line[p] - '0');
+            ++p;
+          }
+          if (p < line.size()) {
+            char prefix = line[p];
+            std::string body = line.substr(p);
+            if (prefix == '^') {
+              // Result record. If a token preceded it, route to the
+              // waiting send_and_wait via the result map.
+              if (token > 0) {
+                {
+                  std::lock_guard<std::mutex> lk(m_results_mu);
+                  m_results[token] = body;
+                }
+                m_results_cv.notify_all();
+              }
+            } else if (prefix == '*') {
+              dispatch_async_record("exec", body);
+            } else if (prefix == '=') {
+              dispatch_async_record("notify", body);
+            } else if (prefix == '~') {
+              // Console stream: gdb's own chatter. Show it under
+              // category=console so the client puts it in the
+              // DEBUG CONSOLE without mixing with program stdout.
+              size_t q1 = body.find('"');
+              size_t q2 = body.rfind('"');
+              if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1) {
+                emit_output("console", mi_unescape(body.substr(q1 + 1, q2 - q1 - 1)));
+              }
+            } else if (prefix == '@') {
+              // Target stream: the inferior's stdout.
+              size_t q1 = body.find('"');
+              size_t q2 = body.rfind('"');
+              if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1) {
+                emit_output("stdout", mi_unescape(body.substr(q1 + 1, q2 - q1 - 1)));
+              }
+            }
+            // log-stream `&"..."` and `(gdb)` prompt fall through —
+            // logged to stderr above, nothing more to do.
+          }
+        }
+        line.clear();
+        continue;
+      }
+      line.push_back(c);
+    }
+  }
+  m_running.store(false);
+  // Wake any waiter on a never-coming result.
+  std::lock_guard<std::mutex> lk(m_results_mu);
+  m_results_cv.notify_all();
+}
+
+void GdbProcess::dispatch_async_record(const std::string &kind,
+                                       const std::string &record) {
+  if (kind == "exec") {
+    // record starts with e.g. "stopped,reason=\"exited-normally\",..."
+    if (record.compare(0, std::strlen("stopped"), "stopped") == 0) {
+      std::string reason = mi_field(record, "reason");
+      emit_stopped(reason);
+      // exited-* reasons mean the inferior is gone — also emit
+      // `terminated` so the client tears down the session.
+      if (reason == "exited-normally" || reason == "exited" ||
+          reason == "exited-signalled") {
+        emit_terminated();
+      }
+    }
+    // *running is ignored — DAP `continued` event is only required
+    // when WE initiated the resume; for `-exec-run` the client
+    // already knows we're running.
+  }
+  // We deliberately don't translate every `=` notify record — only
+  // the bits that surface to the user. =thread-group-exited would be
+  // a candidate but `*stopped,reason=exited-normally` covers it.
+}
+
+void GdbProcess::emit_stopped(const std::string &mi_reason) {
+  // Map gdb/MI reasons to DAP reasons. The DAP spec's `reason`
+  // enum is small (step, breakpoint, exception, pause, entry,
+  // goto, function breakpoint, data breakpoint, instruction
+  // breakpoint, exit); anything we can't classify cleanly we send
+  // as the literal MI string and let the client render it.
+  std::string dap_reason = mi_reason;
+  if (mi_reason == "breakpoint-hit") dap_reason = "breakpoint";
+  else if (mi_reason == "end-stepping-range" ||
+           mi_reason == "function-finished") dap_reason = "step";
+  else if (mi_reason == "signal-received") dap_reason = "exception";
+  else if (mi_reason == "exited-normally" || mi_reason == "exited" ||
+           mi_reason == "exited-signalled") dap_reason = "exit";
+
+  cJSON *evt = make_event("stopped");
+  cJSON *body = cJSON_CreateObject();
+  cJSON_AddStringToObject(body, "reason", dap_reason.c_str());
+  cJSON_AddNumberToObject(body, "threadId", 1);
+  cJSON_AddBoolToObject(body, "allThreadsStopped", true);
+  cJSON_AddItemToObject(evt, "body", body);
+  write_message(evt);
+  cJSON_Delete(evt);
+}
+
+void GdbProcess::emit_terminated() {
+  cJSON *evt = make_event("terminated");
+  cJSON_AddItemToObject(evt, "body", cJSON_CreateObject());
+  write_message(evt);
+  cJSON_Delete(evt);
+}
+
+void GdbProcess::emit_output(const std::string &category,
+                              const std::string &content) {
+  cJSON *evt = make_event("output");
+  cJSON *body = cJSON_CreateObject();
+  cJSON_AddStringToObject(body, "category", category.c_str());
+  cJSON_AddStringToObject(body, "output", content.c_str());
+  cJSON_AddItemToObject(evt, "body", body);
   write_message(evt);
   cJSON_Delete(evt);
 }
@@ -362,15 +867,38 @@ void handle_launch(cJSON *request) {
     return;
   }
 
-  // Stash the path the gdb spawn (PR 4c) will hand to
-  // `--interpreter=mi3`. AOT emits the executable next to the build
-  // dir (or with .exe on Windows); we don't need to verify that file
-  // exists right now because the spawn step will surface that error
-  // naturally.
-  g_built_binary = output;
-  g_launched = true;
+  // AOT emits the executable next to the source basename. On Windows
+  // it gets a `.exe` suffix; gdb on Windows accepts either path,
+  // but we feed the platform-suffixed name so the gdb command-line
+  // looks right in the [dap] log.
+  std::string binary_for_gdb = output;
+#ifdef _WIN32
+  // Only append `.exe` if the AOT pipeline didn't already produce
+  // that path itself — Tulpar's Windows AOT emits `<base>.exe`.
+  if (binary_for_gdb.size() < 4 ||
+      binary_for_gdb.compare(binary_for_gdb.size() - 4, 4, ".exe") != 0) {
+    binary_for_gdb += ".exe";
+  }
+#endif
+  g_built_binary = binary_for_gdb;
   std::fprintf(stderr, "[dap] launch: build OK, binary=%s\n",
-               output.c_str());
+               binary_for_gdb.c_str());
+
+  // Spawn gdb in MI3 mode right now so `setBreakpoints` (which
+  // arrives between `launch` and `configurationDone` per DAP) has
+  // a live subprocess to forward `-break-insert` to. The reader
+  // thread starts immediately and absorbs gdb's startup banner.
+  if (!g_gdb.start(binary_for_gdb)) {
+    cJSON *resp = make_response(request, /*success=*/false,
+                                "launch: failed to spawn gdb subprocess "
+                                "(is gdb installed and on PATH?)");
+    cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+
+  g_launched = true;
 
   cJSON *resp = make_response(request, /*success=*/true, nullptr);
   cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
@@ -378,16 +906,127 @@ void handle_launch(cJSON *request) {
   cJSON_Delete(resp);
 }
 
+// `setBreakpoints` arrives after the client receives `initialized`
+// and before `configurationDone`. DAP semantics: the request REPLACES
+// the entire breakpoint set for the named source — so the right
+// thing is to clear gdb's existing breakpoints and re-insert. For
+// PR 4c we accept the over-approximation that no breakpoints existed
+// yet (every smoke run starts fresh; the same is true for a typical
+// VS Code session because each F5 restarts the adapter). A later PR
+// will track per-source breakpoint IDs and `-break-delete` stale ones.
+//
+// Per breakpoint we send:
+//   <token>-break-insert -f <path>:<line>
+// `-f` makes gdb defer insertion if the source isn't loaded yet
+// (which it won't be — `-exec-run` hasn't fired). The `^done` reply
+// carries `bkpt={...,line="N",func="...",pending="..."}` which we
+// parse into a verified Breakpoint{} for the response body.
+void handle_set_breakpoints(cJSON *request) {
+  cJSON *args = cJSON_GetObjectItem(request, "arguments");
+  cJSON *source = cJSON_IsObject(args)
+                       ? cJSON_GetObjectItem(args, "source") : nullptr;
+  cJSON *path = cJSON_IsObject(source)
+                     ? cJSON_GetObjectItem(source, "path") : nullptr;
+  cJSON *bkpts = cJSON_IsObject(args)
+                      ? cJSON_GetObjectItem(args, "breakpoints") : nullptr;
+
+  if (!cJSON_IsString(path) || !path->valuestring || !*path->valuestring) {
+    cJSON *resp = make_response(request, /*success=*/false,
+                                "setBreakpoints: missing source.path");
+    cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+  if (!g_gdb.running()) {
+    cJSON *resp = make_response(request, /*success=*/false,
+                                "setBreakpoints: gdb subprocess not running "
+                                "(launch first)");
+    cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON *body = cJSON_CreateObject();
+  cJSON *verified = cJSON_CreateArray();
+
+  if (cJSON_IsArray(bkpts)) {
+    cJSON *bp = nullptr;
+    cJSON_ArrayForEach(bp, bkpts) {
+      cJSON *line_j = cJSON_GetObjectItem(bp, "line");
+      int line = cJSON_IsNumber(line_j) ? static_cast<int>(line_j->valuedouble)
+                                        : 0;
+      std::string cmd = "-break-insert -f \"";
+      cmd.append(path->valuestring);
+      cmd.push_back(':');
+      char numbuf[16];
+      std::snprintf(numbuf, sizeof(numbuf), "%d", line);
+      cmd.append(numbuf);
+      cmd.push_back('"');
+
+      int tok = g_gdb.send_command(cmd, /*prefix_token=*/true);
+      // 2-second cap per breakpoint — gdb usually replies in <50ms
+      // but we shouldn't hang the DAP wire if it stalls.
+      std::string result = g_gdb.wait_for_result(tok, 2000);
+
+      cJSON *out_bp = cJSON_CreateObject();
+      bool ok = result.compare(0, 5, "^done") == 0;
+      cJSON_AddBoolToObject(out_bp, "verified", ok);
+      if (ok) {
+        // gdb may return either `line="N"` (resolved) or `pending="..."`
+        // (deferred). For deferred we still report the user's
+        // requested line; the client renders an unverified marker.
+        std::string resolved_line = mi_field(result, "line");
+        int rl = resolved_line.empty() ? line : std::atoi(resolved_line.c_str());
+        cJSON_AddNumberToObject(out_bp, "line", rl);
+      } else {
+        cJSON_AddNumberToObject(out_bp, "line", line);
+        std::string msg = mi_field(result, "msg");
+        if (msg.empty()) msg = result.empty() ? "gdb timeout" : result;
+        cJSON_AddStringToObject(out_bp, "message", msg.c_str());
+      }
+      cJSON *src_copy = cJSON_CreateObject();
+      cJSON_AddStringToObject(src_copy, "path", path->valuestring);
+      cJSON_AddItemToObject(out_bp, "source", src_copy);
+      cJSON_AddItemToArray(verified, out_bp);
+    }
+  }
+
+  cJSON_AddItemToObject(body, "breakpoints", verified);
+  cJSON_AddItemToObject(resp, "body", body);
+  write_message(resp);
+  cJSON_Delete(resp);
+}
+
 // `configurationDone` is the client saying "I've sent all my
 // setBreakpoints / setExceptionBreakpoints / setDataBreakpoints
-// requests — go run the debuggee now." PR 4b accepts it but doesn't
-// actually start anything; PR 4c will spawn gdb here and forward
-// `-exec-run`.
+// requests — go run the debuggee now." We answer success first
+// (the spec is strict that the response precedes any `stopped`
+// event that the resulting `-exec-run` produces), THEN send the
+// MI command. The reader thread is already running; it'll surface
+// the inferior's `*stopped` records as DAP events.
 void handle_configuration_done(cJSON *request) {
   cJSON *resp = make_response(request, /*success=*/true, nullptr);
   cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
   write_message(resp);
   cJSON_Delete(resp);
+
+  if (!g_gdb.running()) {
+    // launch never succeeded — nothing to run. The client will time
+    // out on the missing `stopped` event eventually, but a literal
+    // hang is worse than a silent no-op here.
+    std::fprintf(stderr,
+                 "[dap] configurationDone with no gdb subprocess; "
+                 "skipping -exec-run\n");
+    return;
+  }
+  // -exec-run starts the inferior. We use a separate token to make
+  // the wire log easier to follow, but we don't wait_for_result —
+  // gdb's `^running` is followed asynchronously by `*stopped` events
+  // that the reader thread translates into DAP `stopped` / `terminated`.
+  g_gdb.send_command("-exec-run", /*prefix_token=*/true);
 }
 
 // `threads` is polled by every DAP client right after the first
@@ -411,23 +1050,27 @@ void handle_threads(cJSON *request) {
   cJSON_Delete(resp);
 }
 
-// `terminate` (graceful shutdown, vs. `disconnect` which is
-// hard-stop) — PR 4c will use this to send `kill` to the gdb
-// subprocess. For now there's nothing to terminate beyond the
-// adapter itself, so we acknowledge and let the loop continue;
-// VS Code follows up with `disconnect` after a graceful terminate.
+// `terminate` is "stop the debuggee but keep the adapter alive in
+// case the client wants to relaunch". VS Code follows up with
+// `disconnect` after a graceful terminate, so it's fine to fully
+// tear down gdb here — a re-launch in the same session would have
+// to spawn a fresh subprocess anyway.
 void handle_terminate(cJSON *request) {
+  g_gdb.stop();
+  g_launched = false;
   cJSON *resp = make_response(request, /*success=*/true, nullptr);
   cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
   write_message(resp);
   cJSON_Delete(resp);
-  g_launched = false;
 }
 
-// `disconnect` is the client's "we're done, please exit". DAP allows
-// the server to choose whether to terminate the debuggee — we don't
-// have one yet, so just acknowledge and let the main loop fall out.
+// `disconnect` is "we're done, please exit". DAP allows the server
+// to choose whether to terminate the debuggee — we always do,
+// because leaving a detached inferior behind would orphan the
+// process tree.
 void handle_disconnect(cJSON *request) {
+  g_gdb.stop();
+  g_launched = false;
   cJSON *resp = make_response(request, /*success=*/true, nullptr);
   cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
   write_message(resp);
@@ -439,7 +1082,7 @@ void handle_disconnect(cJSON *request) {
 // instead of waiting forever for a reply that never comes.
 void handle_not_implemented(cJSON *request, const char *command) {
   cJSON *resp = make_response(request, /*success=*/false,
-                              "Not implemented yet — PR 4b will add this.");
+                              "Not implemented yet.");
   cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
   std::fprintf(stderr, "[dap] request '%s' rejected: not implemented yet\n",
                command ? command : "?");
@@ -497,6 +1140,8 @@ int debug_cmd_main(int argc, char **argv) {
       handle_initialize(msg);
     } else if (std::strcmp(cmd, "launch") == 0) {
       handle_launch(msg);
+    } else if (std::strcmp(cmd, "setBreakpoints") == 0) {
+      handle_set_breakpoints(msg);
     } else if (std::strcmp(cmd, "configurationDone") == 0) {
       handle_configuration_done(msg);
     } else if (std::strcmp(cmd, "threads") == 0) {
@@ -513,6 +1158,10 @@ int debug_cmd_main(int argc, char **argv) {
     cJSON_Delete(msg);
   }
 
+  // EOF or explicit disconnect — either way, make sure the gdb
+  // subprocess doesn't outlive us. stop() is a no-op if it was
+  // already reaped by handle_terminate/handle_disconnect.
+  g_gdb.stop();
   std::fprintf(stderr, "[dap] adapter shutting down\n");
   return 0;
 }
