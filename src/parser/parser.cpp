@@ -935,13 +935,51 @@ std::unique_ptr<ASTNode> Parser::parse_primary() {
         return std::make_unique<ASTNode>(Identifier(name, loc));
     }
     
+    // Lambda head check. `(<type-keyword> ...)  =>  body` is a
+    // lambda expression. Tulpar doesn't have C-style casts, so a
+    // `(` followed by a type keyword in expression position is
+    // unambiguously a lambda head — never a parenthesised
+    // expression. Codegen / first-class function values aren't
+    // wired up yet, so we surface a clear "not yet supported"
+    // diagnostic here instead of letting it fall through to the
+    // generic "Unexpected token in expression" message. The
+    // TOKEN_FAT_ARROW token landed alongside this scaffolding so
+    // a future Plan 06 PR can drop in the parser + codegen for
+    // real without touching the lexer.
+    if (check(TOKEN_LPAREN)) {
+        TulparTokenType nxt = peek(1).type();
+        bool looks_like_lambda =
+            nxt == TOKEN_INT_TYPE || nxt == TOKEN_FLOAT_TYPE ||
+            nxt == TOKEN_STR_TYPE || nxt == TOKEN_BOOL_TYPE ||
+            nxt == TOKEN_ARRAY_TYPE || nxt == TOKEN_ARRAY_INT ||
+            nxt == TOKEN_ARRAY_FLOAT || nxt == TOKEN_ARRAY_STR ||
+            nxt == TOKEN_ARRAY_BOOL || nxt == TOKEN_ARRAY_JSON ||
+            nxt == TOKEN_JSON_TYPE;
+        if (looks_like_lambda) {
+            error("lambda expressions not yet supported "
+                  "(planned: parser + codegen + env capture in a "
+                  "follow-up PR; for now use a named function)");
+            return nullptr;
+        }
+    }
+
     // Parenthesized expression
     if (match(TOKEN_LPAREN)) {
         auto expr = parse_expression();
         expect(TOKEN_RPAREN, "Expected ')' after expression");
         return expr;
     }
-    
+
+    // Reach here on tokens that don't open any expression form.
+    // A bare `=>` in expression position falls here too —
+    // recognising it explicitly gives the user a clearer signal
+    // than the generic "Unexpected token" message.
+    if (check(TOKEN_FAT_ARROW)) {
+        error("'=>' outside a lambda head — lambda expressions "
+              "are not yet supported (planned in a follow-up PR)");
+        return nullptr;
+    }
+
     error("Unexpected token in expression");
     return nullptr;
 }
