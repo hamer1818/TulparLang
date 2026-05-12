@@ -400,18 +400,39 @@ def main() -> int:
         # back success=false with a clear message — accept that
         # without further assertion.
 
-        # 7b) A still-unimplemented request returns the structured
-        # "not implemented" fallback. `setVariable` is the smallest
-        # remaining stub.
+        # 7b) setVariable — round-trip through gdb's
+        # `-data-evaluate-expression "name=value"`. Same outcome
+        # shape as evaluate: success=true with body.value when
+        # gdb accepts the assignment, success=false with the gdb
+        # error otherwise. Without a live frame (no breakpoint
+        # hit), gdb rejects the assignment as "no symbol x in
+        # current context" — accept either outcome.
         send(proc, {
-            "seq": 6, "type": "request", "command": "setVariable",
+            "seq": 7, "type": "request", "command": "setVariable",
             "arguments": {"variablesReference": 1, "name": "x", "value": "1"},
         })
         r = recv_response(proc, "setVariable", events, timeout=5.0)
         if not r:
-            failures.append("setVariable stub: no response")
+            failures.append("setVariable: no response")
+        elif launch_ok and r.get("success") is True:
+            body = r.get("body") or {}
+            if "value" not in body:
+                failures.append(f"setVariable: missing `value` field in body: {body!r}")
+        # success=false with a clear message (gdb rejected assignment
+        # / inferior gone / gdb missing) is also acceptable.
+
+        # 7c) A still-unimplemented request returns the structured
+        # "not implemented" fallback. `restart` is the smallest
+        # remaining stub.
+        send(proc, {
+            "seq": 8, "type": "request", "command": "restart",
+            "arguments": {},
+        })
+        r = recv_response(proc, "restart", events, timeout=5.0)
+        if not r:
+            failures.append("restart stub: no response")
         elif r.get("success") is not False:
-            failures.append(f"setVariable stub: expected success=false: {r!r}")
+            failures.append(f"restart stub: expected success=false: {r!r}")
 
         # 8) disconnect -> success, process exits 0
         send(proc, {

@@ -782,7 +782,7 @@ void handle_initialize(cJSON *request) {
   cJSON_AddBoolToObject(body, "supportsHitConditionalBreakpoints", false);
   cJSON_AddBoolToObject(body, "supportsEvaluateForHovers", true);
   cJSON_AddBoolToObject(body, "supportsStepBack", false);
-  cJSON_AddBoolToObject(body, "supportsSetVariable", false);
+  cJSON_AddBoolToObject(body, "supportsSetVariable", true);
   cJSON_AddBoolToObject(body, "supportsRestartFrame", false);
   cJSON_AddBoolToObject(body, "supportsGotoTargetsRequest", false);
   cJSON_AddBoolToObject(body, "supportsStepInTargetsRequest", false);
@@ -1521,6 +1521,104 @@ void handle_evaluate(cJSON *request) {
   cJSON_Delete(resp);
 }
 
+// `setVariable` powers VS Code's watch-row editing (click a value,
+// type a new one, hit Enter). DAP semantics:
+//
+//   request.arguments = {
+//     variablesReference: <scope ref from `scopes`>,
+//     name: "<identifier>",
+//     value: "<expression — usually a literal, may be an expression>"
+//   }
+//
+// The variablesReference identifies which scope the named variable
+// lives in. `handle_scopes` encodes frame_id as variablesReference
+// = frame_id + 1, so we decode the same way to pick the gdb frame
+// and select it before the assignment.
+//
+// MI mapping: gdb has `-gdb-set var x=42` for plain assignment but
+// it doesn't return the new value, which DAP needs for the
+// response. Routing through `-data-evaluate-expression "x=42"`
+// gets both at once — C-family assignment expressions evaluate to
+// the assigned value, so the response body's `value` field falls
+// out for free.
+void handle_set_variable(cJSON *request) {
+  cJSON *args = cJSON_GetObjectItem(request, "arguments");
+  cJSON *vref_j = cJSON_IsObject(args)
+                       ? cJSON_GetObjectItem(args, "variablesReference") : nullptr;
+  cJSON *name_j = cJSON_IsObject(args)
+                       ? cJSON_GetObjectItem(args, "name") : nullptr;
+  cJSON *value_j = cJSON_IsObject(args)
+                        ? cJSON_GetObjectItem(args, "value") : nullptr;
+
+  if (!cJSON_IsString(name_j) || !name_j->valuestring ||
+      !*name_j->valuestring) {
+    execution_control_fail(request, "setVariable: missing or empty name");
+    return;
+  }
+  if (!cJSON_IsString(value_j) || !value_j->valuestring) {
+    execution_control_fail(request, "setVariable: missing value");
+    return;
+  }
+  if (!g_gdb.running()) {
+    execution_control_fail(request, "setVariable: gdb subprocess not running");
+    return;
+  }
+
+  // Frame select. variablesReference of 0 is invalid for
+  // setVariable (DAP spec says it's only valid for `variables`).
+  // We accept it as "current gdb frame" rather than rejecting, so
+  // a future REPL flow that wants to poke a global doesn't have
+  // to fabricate a fake frame ref.
+  int vref = cJSON_IsNumber(vref_j) ? static_cast<int>(vref_j->valuedouble) : 0;
+  if (vref > 0) {
+    int fid = vref - 1;
+    char frame_cmd[48];
+    std::snprintf(frame_cmd, sizeof(frame_cmd),
+                  "-stack-select-frame %d", fid);
+    g_gdb.send_command(frame_cmd, /*prefix_token=*/true);
+  }
+
+  // Build `<name>=<value>` assignment expression, escaped for MI.
+  std::string mi_cmd = "-data-evaluate-expression \"";
+  for (const char *p = name_j->valuestring; *p; ++p) {
+    if (*p == '"' || *p == '\\') mi_cmd.push_back('\\');
+    mi_cmd.push_back(*p);
+  }
+  mi_cmd.push_back('=');
+  for (const char *p = value_j->valuestring; *p; ++p) {
+    if (*p == '"' || *p == '\\') mi_cmd.push_back('\\');
+    mi_cmd.push_back(*p);
+  }
+  mi_cmd.push_back('"');
+
+  std::string result = gdb_query(mi_cmd, 2000);
+
+  if (result.compare(0, 5, "^done") == 0) {
+    cJSON *resp = make_response(request, /*success=*/true, nullptr);
+    cJSON *body = cJSON_CreateObject();
+    std::string new_value = mi_field(result, "value");
+    cJSON_AddStringToObject(body, "value",
+                            new_value.empty() ? "<no value>" : new_value.c_str());
+    // No drill-down on the assigned value yet — same leaf-only
+    // policy `variables` and `evaluate` use today.
+    cJSON_AddNumberToObject(body, "variablesReference", 0);
+    cJSON_AddItemToObject(resp, "body", body);
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+
+  // gdb rejected the assignment — type mismatch, read-only
+  // expression, parse error. Surface as DAP success=false so the
+  // watch panel reverts the edit visibly instead of silently
+  // accepting a broken write.
+  std::string msg = mi_field(result, "msg");
+  if (msg.empty()) {
+    msg = result.empty() ? "gdb setVariable timeout" : result;
+  }
+  execution_control_fail(request, msg.c_str());
+}
+
 // For every request we haven't wired up yet, send a structured
 // "not implemented" response so the client surfaces a clear error
 // instead of waiting forever for a reply that never comes.
@@ -1608,6 +1706,8 @@ int debug_cmd_main(int argc, char **argv) {
       handle_step_out(msg);
     } else if (std::strcmp(cmd, "evaluate") == 0) {
       handle_evaluate(msg);
+    } else if (std::strcmp(cmd, "setVariable") == 0) {
+      handle_set_variable(msg);
     } else if (std::strcmp(cmd, "terminate") == 0) {
       handle_terminate(msg);
     } else if (std::strcmp(cmd, "disconnect") == 0) {
