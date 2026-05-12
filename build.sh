@@ -129,8 +129,8 @@ if [ "$ACTION" = "test" ]; then
                         "09_socket_client.tpr" "11_router_app.tpr" \
                         "12_threaded_server.tpr" "14_api_server.tpr" \
                         "api_wings.tpr" "api_wings_crud.tpr" \
-                        "api_router_crud.tpr" "tulpar_api_demo.tpr" \
-                        "utils.tpr")
+                        "api_wings_tls.tpr" "api_router_crud.tpr" \
+                        "tulpar_api_demo.tpr" "utils.tpr")
 
     # HTTP smoke probes. The 2-second alive check above only verifies the
     # process didn't crash during startup — wings/router examples block
@@ -145,6 +145,7 @@ if [ "$ACTION" = "test" ]; then
         case "$1" in
             api_wings.tpr)        echo "http://127.0.0.1:3000/" ;;
             api_wings_crud.tpr)   echo "http://127.0.0.1:3000/" ;;
+            api_wings_tls.tpr)    echo "https://127.0.0.1:8443/" ;;
             api_router_crud.tpr)  echo "http://127.0.0.1:8080/" ;;
             11_router_app.tpr)    echo "http://127.0.0.1:8080/" ;;
             12_threaded_server.tpr) echo "http://127.0.0.1:8089/" ;;
@@ -207,8 +208,12 @@ if [ "$ACTION" = "test" ]; then
                         # -s: silent. -o /dev/null: drop body. --max-time 5:
                         # bound the whole request. -w "%{http_code}": print
                         # status code (or 000 on connect/timeout failure).
+                        # -k: trust self-signed certs — needed for the
+                        # api_wings_tls.tpr smoke (the fixture cert in
+                        # tests/fixtures/ has no CA chain), no-op for
+                        # plain HTTP probes.
                         local code
-                        code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$probe_url" 2>/dev/null)
+                        code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -k "$probe_url" 2>/dev/null)
                         if [ -z "$code" ] || [ "$code" = "000" ]; then
                             probe_status="probe_failed_no_response"
                         elif ! kill -0 "$smoke_pid" 2>/dev/null; then

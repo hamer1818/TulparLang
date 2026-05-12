@@ -1,0 +1,45 @@
+// Minimal Tulpar Wings HTTPS example.
+//
+// Same handler API as the plain-HTTP `examples/api_wings.tpr`, but
+// every request rides over TLS via `wings_tls(port, cert_path,
+// key_path)`. The cert + key paths point at the pre-generated test
+// fixtures under `tests/fixtures/tls_dev.*`, so this file works as
+// both a runnable demo and a CI smoke for the OpenSSL-backed
+// listener.
+//
+// To run by hand:
+//   tulpar examples/api_wings_tls.tpr
+//   # then in another shell:
+//   curl --insecure https://127.0.0.1:8443/
+//
+// `--insecure` is required because the fixture cert is self-signed —
+// there's no CA to chain to. Production code would point at a real
+// cert chain (Let's Encrypt's `fullchain.pem` + `privkey.pem`) and
+// drop the `--insecure` from the client.
+//
+// Build requirements: Tulpar must have been compiled with OpenSSL
+// (`find_package(OpenSSL)` succeeded at CMake time). If not, the
+// listener prints an error and exits.
+
+import "wings";
+import "wings_tls";
+
+// Two trivial handlers that don't depend on TLS-specific data —
+// `wings_tls` reuses the same dispatcher as plain wings, so any route
+// you can register on `wings` works here too.
+func home() {
+    return {"message": "Tulpar Wings TLS smoke", "secure": true};
+}
+
+func health() {
+    return {"status": "healthy", "tls": true};
+}
+
+get("/", "home");
+get("/health", "health");
+
+// Cert + key paths are relative to the CWD the runner spawns this
+// from — the CI smoke (`build.sh test`) launches the binary from
+// the repo root so these paths resolve correctly. Hand-runs need to
+// be invoked from the repo root too.
+wings_tls(8443, "tests/fixtures/tls_dev.crt", "tests/fixtures/tls_dev.key");
