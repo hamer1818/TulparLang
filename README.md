@@ -194,7 +194,7 @@ hit the API immediately.
 ## Performance
 
 <!-- BENCH:META START -->
-> _Auto-updated by CI on every push to `main`. Last run: **2026-05-12T21:18:57Z** UTC · commit [`a949172`](../../commit/a949172de158206a8344de89df556d070748c309) · runner `Linux` · `AMD EPYC 9V74 80-Core Processor` (4 CPUs). Methodology: [benchmarks/CI.md](benchmarks/CI.md)._
+> _Auto-updated by CI on every push to `main`. Last run: **2026-05-12T21:27:23Z** UTC · commit [`f5cd327`](../../commit/f5cd3275dab6b252557fdb440d4bc54d74fb563a) · runner `Linux` · `AMD EPYC 9V74 80-Core Processor` (4 CPUs). Methodology: [benchmarks/CI.md](benchmarks/CI.md)._
 <!-- BENCH:META END -->
 
 > **Scope.** All numbers below are **microbenchmarks** — tight integer
@@ -217,10 +217,10 @@ _Wall time of the inner loop, best of 5 runs. **Lower is faster.**_
 
 | Workload | Tulpar AOT (LLVM) | C (gcc -O2) | Rust (-O3) | Go | Node.js | Python |
 |---|---:|---:|---:|---:|---:|---:|
-| loopsum (ms) | **1.9** | 0.6 | 0.8 | 4.7 | 40.0 | 970.7 |
-| fib(35) (ms) | **29.6** | 17.0 | 32.4 | 59.5 | 141.5 | 1260.0 |
+| loopsum (ms) | **1.5** | 0.5 | 0.7 | 3.6 | 30.9 | 840.9 |
+| fib(35) (ms) | **22.9** | 13.2 | 25.1 | 44.9 | 109.8 | 976.5 |
 
-Tulpar AOT lands at **1.74×–3.17× of C (gcc -O2)** on these microbenchmarks (i.e. C-comparable, with a small multiplicative gap), **4.8–21.1× faster than Node.js**, and **43–511× faster than Python**.
+Tulpar AOT lands at **1.73×–3.00× of C (gcc -O2)** on these microbenchmarks (i.e. C-comparable, with a small multiplicative gap), **4.8–20.6× faster than Node.js**, and **43–561× faster than Python**.
 <!-- BENCH:CPU_TABLE END -->
 
 ### HTTP throughput
@@ -235,15 +235,15 @@ _3 000 GETs over 4 keep-alive connections; single localhost run; each server hos
 
 | Server | Scheduling model | req/sec | vs Node.js |
 |---|---|---:|---:|
-| **Tulpar listen** | single thread, one request at a time | 23 774 | **2.04× faster** |
-| **Tulpar listen_evented** | single thread, poll()-multiplexed | 23 387 | **2.01× faster** |
-| **Tulpar evented + cache** | evented + wire-byte cache for cached_get routes | 23 069 | **1.98× faster** |
-| **Tulpar listen_async** | OS thread spawned per connection | 22 299 | **1.92× faster** |
-| **Tulpar listen_pool** | worker pool sized to host CPU count, sharing accept() | 22 146 | **1.90× faster** |
-| Node.js http | single-thread event loop | 11 627 | _(baseline)_ |
-| Python ThreadingHTTP | OS thread spawned per request | 98 | 118.64× slower |
+| **Tulpar listen** | single thread, one request at a time | 30 815 | **2.05× faster** |
+| **Tulpar listen_evented** | single thread, poll()-multiplexed | 29 275 | **1.95× faster** |
+| **Tulpar evented + cache** | evented + wire-byte cache for cached_get routes | 28 635 | **1.91× faster** |
+| **Tulpar listen_pool** | worker pool sized to host CPU count, sharing accept() | 28 339 | **1.89× faster** |
+| **Tulpar listen_async** | OS thread spawned per connection | 28 213 | **1.88× faster** |
+| Node.js http | single-thread event loop | 15 020 | _(baseline)_ |
+| Python ThreadingHTTP | OS thread spawned per request | 98 | 153.27× slower |
 
-5 of the Tulpar Wings listeners at this concurrency beat Node.js' built-in `http`, by **1.90×–2.04×** depending on scheduling model.
+5 of the Tulpar Wings listeners at this concurrency beat Node.js' built-in `http`, by **1.88×–2.05×** depending on scheduling model.
 
 ### High concurrency
 
@@ -251,15 +251,15 @@ _12 000 GETs over 16 keep-alive connections; single localhost run; each server h
 
 | Server | Scheduling model | req/sec | vs Node.js |
 |---|---|---:|---:|
-| **Tulpar listen** | single thread, one request at a time | 22 706 | **1.43× faster** |
-| **Tulpar listen_pool** | worker pool sized to host CPU count, sharing accept() | 22 257 | **1.40× faster** |
-| **Tulpar listen_async** | OS thread spawned per connection | 19 843 | **1.25× faster** |
-| **Tulpar evented + cache** | evented + wire-byte cache for cached_get routes | 19 502 | **1.23× faster** |
-| **Tulpar listen_evented** | single thread, poll()-multiplexed | 19 471 | **1.23× faster** |
-| Node.js http | single-thread event loop | 15 866 | _(baseline)_ |
-| Python ThreadingHTTP | OS thread spawned per request | 391 | 40.58× slower |
+| **Tulpar listen** | single thread, one request at a time | 29 444 | **1.43× faster** |
+| **Tulpar listen_pool** | worker pool sized to host CPU count, sharing accept() | 28 291 | **1.37× faster** |
+| **Tulpar listen_async** | OS thread spawned per connection | 25 454 | **1.23× faster** |
+| **Tulpar evented + cache** | evented + wire-byte cache for cached_get routes | 24 946 | **1.21× faster** |
+| **Tulpar listen_evented** | single thread, poll()-multiplexed | 24 676 | **1.19× faster** |
+| Node.js http | single-thread event loop | 20 655 | _(baseline)_ |
+| Python ThreadingHTTP | OS thread spawned per request | 391 | 52.83× slower |
 
-5 of the Tulpar Wings listeners under this load beat Node.js' built-in `http`, by **1.23×–1.43×** depending on scheduling model.
+5 of the Tulpar Wings listeners under this load beat Node.js' built-in `http`, by **1.19×–1.43×** depending on scheduling model.
 <!-- BENCH:HTTP_TABLE END -->
 
 Reproduce locally: `python benchmarks/http_bench.py --requests 3000 --connections 4`.
