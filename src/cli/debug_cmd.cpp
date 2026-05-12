@@ -851,7 +851,7 @@ void handle_initialize(cJSON *request) {
   cJSON *body = cJSON_CreateObject();
 
   cJSON_AddBoolToObject(body, "supportsConfigurationDoneRequest", true);
-  cJSON_AddBoolToObject(body, "supportsFunctionBreakpoints", false);
+  cJSON_AddBoolToObject(body, "supportsFunctionBreakpoints", true);
   cJSON_AddBoolToObject(body, "supportsConditionalBreakpoints", true);
   cJSON_AddBoolToObject(body, "supportsHitConditionalBreakpoints", true);
   cJSON_AddBoolToObject(body, "supportsEvaluateForHovers", true);
@@ -1212,6 +1212,135 @@ void handle_set_breakpoints(cJSON *request) {
       cJSON *src_copy = cJSON_CreateObject();
       cJSON_AddStringToObject(src_copy, "path", path->valuestring);
       cJSON_AddItemToObject(out_bp, "source", src_copy);
+      cJSON_AddItemToArray(verified, out_bp);
+    }
+  }
+
+  cJSON_AddItemToObject(body, "breakpoints", verified);
+  cJSON_AddItemToObject(resp, "body", body);
+  write_message(resp);
+  cJSON_Delete(resp);
+}
+
+// `setFunctionBreakpoints` is the cousin of `setBreakpoints`: same
+// payload shape, except the target is a function NAME rather than
+// a (file, line) pair. DAP clients use it for "break on entry to
+// X" without the user having to scroll to the function definition
+// and click in the gutter. VS Code surfaces these as the
+// "Function Breakpoints" group in the BREAKPOINTS panel.
+//
+// MI mapping: `-break-insert <funcname>` (no `-f` flag since
+// there's no line to defer; the function name resolves at insert
+// time, or pendings on a future loaded module). The same
+// condition / hit-count / logMessage fields flow through with the
+// same `-c "<expr>"` / `-i N` flags and post-`^done` bkptno
+// recording for logpoints.
+//
+// Replaces the entire function-breakpoint set on each call, just
+// like setBreakpoints does for source lines.
+void handle_set_function_breakpoints(cJSON *request) {
+  cJSON *args = cJSON_GetObjectItem(request, "arguments");
+  cJSON *bkpts = cJSON_IsObject(args)
+                      ? cJSON_GetObjectItem(args, "breakpoints") : nullptr;
+
+  if (!g_gdb.running()) {
+    cJSON *resp = make_response(request, /*success=*/false,
+                                "setFunctionBreakpoints: gdb subprocess not "
+                                "running (launch first)");
+    cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+
+  // Logpoint table is keyed by gdb's bkptno which is global across
+  // all breakpoint kinds. Clearing on entry would wipe out the
+  // line-breakpoint logpoints registered by `setBreakpoints` —
+  // wrong. The two handlers manage disjoint key ranges instead:
+  // line bps are typically <100, function bps reuse the same
+  // counter from gdb but are practically rare. We over-approximate
+  // by leaving the map alone; setBreakpoints clears it on its own
+  // entry so the worst case is stale function-bp entries hanging
+  // around until the next line-bp setBreakpoints.
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON *body = cJSON_CreateObject();
+  cJSON *verified = cJSON_CreateArray();
+
+  if (cJSON_IsArray(bkpts)) {
+    cJSON *bp = nullptr;
+    cJSON_ArrayForEach(bp, bkpts) {
+      cJSON *name_j = cJSON_GetObjectItem(bp, "name");
+      cJSON *cond_j = cJSON_GetObjectItem(bp, "condition");
+      cJSON *hit_j  = cJSON_GetObjectItem(bp, "hitCondition");
+      cJSON *log_j  = cJSON_GetObjectItem(bp, "logMessage");
+
+      cJSON *out_bp = cJSON_CreateObject();
+      if (!cJSON_IsString(name_j) || !name_j->valuestring ||
+          !*name_j->valuestring) {
+        cJSON_AddBoolToObject(out_bp, "verified", false);
+        cJSON_AddStringToObject(out_bp, "message",
+                                "setFunctionBreakpoints: entry missing `name`");
+        cJSON_AddItemToArray(verified, out_bp);
+        continue;
+      }
+
+      // Same condition / hit-count flag construction as
+      // setBreakpoints. Kept inline rather than factored out
+      // because the calling shape is otherwise too different
+      // (function name vs file:line target) for a shared
+      // helper to read clearly.
+      std::string cmd = "-break-insert";
+      if (cJSON_IsString(cond_j) && cond_j->valuestring && *cond_j->valuestring) {
+        cmd.append(" -c \"");
+        for (const char *p = cond_j->valuestring; *p; ++p) {
+          if (*p == '"' || *p == '\\') cmd.push_back('\\');
+          cmd.push_back(*p);
+        }
+        cmd.push_back('"');
+      }
+      if (cJSON_IsString(hit_j) && hit_j->valuestring && *hit_j->valuestring) {
+        const char *p = hit_j->valuestring;
+        while (*p && !std::isdigit(static_cast<unsigned char>(*p))) ++p;
+        if (*p) {
+          int hit_n = std::atoi(p);
+          if (hit_n > 0) {
+            char hitbuf[24];
+            std::snprintf(hitbuf, sizeof(hitbuf), " -i %d", hit_n);
+            cmd.append(hitbuf);
+          }
+        }
+      }
+      cmd.push_back(' ');
+      // No quoting of the function name — gdb expects bare symbols
+      // here, and DAP clients send `main` not `"main"`. Pathological
+      // names with spaces (C++ templates) would need a different
+      // escape, but Tulpar functions are bare identifiers today.
+      cmd.append(name_j->valuestring);
+
+      int tok = g_gdb.send_command(cmd, /*prefix_token=*/true);
+      std::string result = g_gdb.wait_for_result(tok, 2000);
+
+      bool ok = result.compare(0, 5, "^done") == 0;
+      cJSON_AddBoolToObject(out_bp, "verified", ok);
+      if (ok) {
+        // Surface gdb's bkptno as DAP `id` — VS Code uses it to
+        // correlate the Breakpoints panel rows with `*stopped`
+        // events. Same pattern as setBreakpoints.
+        std::string bkptno = mi_field(result, "number");
+        if (!bkptno.empty()) {
+          int n = std::atoi(bkptno.c_str());
+          if (n > 0) cJSON_AddNumberToObject(out_bp, "id", n);
+          if (cJSON_IsString(log_j) && log_j->valuestring && *log_j->valuestring &&
+              n > 0) {
+            std::lock_guard<std::mutex> lk(g_gdb.m_logpoints_mu);
+            g_gdb.m_logpoints[n] = log_j->valuestring;
+          }
+        }
+      } else {
+        std::string msg = mi_field(result, "msg");
+        if (msg.empty()) msg = result.empty() ? "gdb timeout" : result;
+        cJSON_AddStringToObject(out_bp, "message", msg.c_str());
+      }
       cJSON_AddItemToArray(verified, out_bp);
     }
   }
@@ -1998,6 +2127,8 @@ int debug_cmd_main(int argc, char **argv) {
       handle_launch(msg);
     } else if (std::strcmp(cmd, "setBreakpoints") == 0) {
       handle_set_breakpoints(msg);
+    } else if (std::strcmp(cmd, "setFunctionBreakpoints") == 0) {
+      handle_set_function_breakpoints(msg);
     } else if (std::strcmp(cmd, "configurationDone") == 0) {
       handle_configuration_done(msg);
     } else if (std::strcmp(cmd, "threads") == 0) {

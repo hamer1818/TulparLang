@@ -433,20 +433,20 @@ def main() -> int:
         # / inferior gone / gdb missing) is also acceptable.
 
         # 7c) A still-unimplemented request returns the structured
-        # "not implemented" fallback. `setFunctionBreakpoints` is
-        # one of the remaining stubs (line breakpoints carry the
-        # main F5 workflow; function/data/instruction breakpoints
-        # are less common and not yet wired).
+        # "not implemented" fallback. `dataBreakpointInfo` is one of
+        # the remaining stubs — data breakpoints are an OS-debugger
+        # feature (watchpoints) that we haven't surfaced through
+        # the adapter yet.
         send(proc, {
-            "seq": 8, "type": "request", "command": "setFunctionBreakpoints",
-            "arguments": {"breakpoints": [{"name": "main"}]},
+            "seq": 8, "type": "request", "command": "dataBreakpointInfo",
+            "arguments": {"variablesReference": 0, "name": "x"},
         })
-        r = recv_response(proc, "setFunctionBreakpoints", events, timeout=5.0)
+        r = recv_response(proc, "dataBreakpointInfo", events, timeout=5.0)
         if not r:
-            failures.append("setFunctionBreakpoints stub: no response")
+            failures.append("dataBreakpointInfo stub: no response")
         elif r.get("success") is not False:
             failures.append(
-                f"setFunctionBreakpoints stub: expected success=false: {r!r}")
+                f"dataBreakpointInfo stub: expected success=false: {r!r}")
 
         # 8) disconnect -> success, process exits 0
         send(proc, {
