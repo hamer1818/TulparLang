@@ -276,6 +276,70 @@ std::string mi_field(const std::string &record, const std::string &key) {
   return mi_unescape(out);
 }
 
+// Split a MI list (`<key>=[...]`) into its top-level elements. The
+// elements come back with surrounding whitespace stripped but the
+// `key=` prefix preserved if present, so e.g.
+//
+//   stack=[frame={level="0",file="x.tpr"},frame={level="1"}]
+//
+// yields two strings: `frame={level="0",file="x.tpr"}` and
+// `frame={level="1"}`. mi_field() works directly on either.
+//
+// Tracks `{`/`[` nesting and skips commas inside quoted strings so a
+// value like `value="a,b"` doesn't split the parent tuple. Stops at
+// the matching `]` closing the outer list. Returns an empty vector
+// when the list key isn't present.
+std::vector<std::string> mi_split_list(const std::string &record,
+                                        const std::string &list_key) {
+  std::vector<std::string> out;
+  std::string needle = list_key + "=[";
+  size_t start = record.find(needle);
+  if (start == std::string::npos) return out;
+  start += needle.size();
+  int depth = 0;
+  bool in_str = false;
+  bool esc = false;
+  size_t elem_start = start;
+  for (size_t i = start; i < record.size(); ++i) {
+    char c = record[i];
+    if (in_str) {
+      if (esc) { esc = false; continue; }
+      if (c == '\\') { esc = true; continue; }
+      if (c == '"') in_str = false;
+      continue;
+    }
+    if (c == '"') { in_str = true; continue; }
+    if (c == '{' || c == '[') { depth++; continue; }
+    if (c == '}') { if (depth > 0) depth--; continue; }
+    if (c == ']') {
+      if (depth == 0) {
+        if (i > elem_start) {
+          std::string e = record.substr(elem_start, i - elem_start);
+          // Strip leading/trailing whitespace + commas.
+          size_t s = 0;
+          while (s < e.size() && (e[s] == ' ' || e[s] == '\t' || e[s] == ',')) s++;
+          size_t en = e.size();
+          while (en > s && (e[en - 1] == ' ' || e[en - 1] == '\t')) en--;
+          if (en > s) out.push_back(e.substr(s, en - s));
+        }
+        return out;
+      }
+      depth--;
+      continue;
+    }
+    if (c == ',' && depth == 0) {
+      std::string e = record.substr(elem_start, i - elem_start);
+      size_t s = 0;
+      while (s < e.size() && (e[s] == ' ' || e[s] == '\t')) s++;
+      size_t en = e.size();
+      while (en > s && (e[en - 1] == ' ' || e[en - 1] == '\t')) en--;
+      if (en > s) out.push_back(e.substr(s, en - s));
+      elem_start = i + 1;
+    }
+  }
+  return out;
+}
+
 class GdbProcess {
  public:
   GdbProcess() = default;
@@ -1077,6 +1141,198 @@ void handle_disconnect(cJSON *request) {
   cJSON_Delete(resp);
 }
 
+// ---------------------------------------------------------------------------
+// Stack / scopes / variables inspection.
+//
+// Client flow after a `stopped` event:
+//   threads      →  [{ id: 1, name: "main" }]
+//   stackTrace   →  StackFrame[] from `-stack-list-frames`
+//   scopes       →  one "Locals" Scope per frame; variablesReference
+//                   carries the frame level + 1 so variables() can
+//                   recover the gdb frame index.
+//   variables    →  Variable[] from `-stack-list-variables
+//                   --thread 1 --frame N --simple-values`. Nested
+//                   structs are flattened to their gdb-printed value
+//                   (no per-field drill-down yet).
+//
+// Step / continue support is the next PR; what's here is purely the
+// "show me what's on the stack right now" view.
+
+// Forward a tokened MI command and return the result-record body, or
+// empty string on timeout. Used by every inspection handler.
+std::string gdb_query(const std::string &cmd, int timeout_ms = 2000) {
+  if (!g_gdb.running()) return "";
+  int tok = g_gdb.send_command(cmd, /*prefix_token=*/true);
+  return g_gdb.wait_for_result(tok, timeout_ms);
+}
+
+void handle_stack_trace(cJSON *request) {
+  if (!g_gdb.running()) {
+    cJSON *resp = make_response(request, /*success=*/false,
+                                "stackTrace: gdb subprocess not running");
+    cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+
+  std::string result = gdb_query("-stack-list-frames");
+  if (result.compare(0, 5, "^done") != 0) {
+    // gdb hasn't loaded a stack yet (e.g. the program already exited
+    // before the client asked). Return an empty frames list with
+    // success=true so the client doesn't render an error toast —
+    // an empty stack is a legitimate state, not a failure.
+    cJSON *resp = make_response(request, /*success=*/true, nullptr);
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddItemToObject(body, "stackFrames", cJSON_CreateArray());
+    cJSON_AddNumberToObject(body, "totalFrames", 0);
+    cJSON_AddItemToObject(resp, "body", body);
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON *body = cJSON_CreateObject();
+  cJSON *frames = cJSON_CreateArray();
+
+  // `^done,stack=[frame={level="0",addr="...",func="main",file="hello.tpr",
+  //                fullname="/abs/hello.tpr",line="3"},frame={...}]`
+  auto frame_tuples = mi_split_list(result, "stack");
+  int total = 0;
+  for (auto &t : frame_tuples) {
+    cJSON *f = cJSON_CreateObject();
+    std::string level = mi_field(t, "level");
+    std::string func = mi_field(t, "func");
+    std::string file = mi_field(t, "file");
+    std::string fullname = mi_field(t, "fullname");
+    std::string line = mi_field(t, "line");
+
+    int id = level.empty() ? total : std::atoi(level.c_str());
+    cJSON_AddNumberToObject(f, "id", id);
+    cJSON_AddStringToObject(f, "name", func.empty() ? "??" : func.c_str());
+    cJSON_AddNumberToObject(f, "line", line.empty() ? 0 : std::atoi(line.c_str()));
+    cJSON_AddNumberToObject(f, "column", 1);
+
+    // Prefer fullname (absolute) over file (relative or basename
+    // depending on gdb's path config). VS Code happily opens either
+    // but absolute paths spare it a workspace search.
+    cJSON *src = cJSON_CreateObject();
+    const std::string &path = fullname.empty() ? file : fullname;
+    if (!path.empty()) {
+      cJSON_AddStringToObject(src, "path", path.c_str());
+      // `name` is the display label in the breakpoint panel; the
+      // basename keeps it short.
+      size_t slash = path.find_last_of("/\\");
+      cJSON_AddStringToObject(src, "name",
+                              (slash == std::string::npos)
+                                  ? path.c_str()
+                                  : path.c_str() + slash + 1);
+    }
+    cJSON_AddItemToObject(f, "source", src);
+    cJSON_AddItemToArray(frames, f);
+    total++;
+  }
+
+  cJSON_AddItemToObject(body, "stackFrames", frames);
+  cJSON_AddNumberToObject(body, "totalFrames", total);
+  cJSON_AddItemToObject(resp, "body", body);
+  write_message(resp);
+  cJSON_Delete(resp);
+}
+
+// `scopes` is just a directory of variable groups for a given frame.
+// We expose one group, "Locals", whose `variablesReference` encodes
+// the frame index. `variablesReference = frame_id + 1` so the value
+// is always > 0 (DAP reserves 0 for "no children"). The client then
+// calls `variables(ref)` to actually pull the per-variable list.
+void handle_scopes(cJSON *request) {
+  cJSON *args = cJSON_GetObjectItem(request, "arguments");
+  int frame_id = 0;
+  if (cJSON_IsObject(args)) {
+    cJSON *fid = cJSON_GetObjectItem(args, "frameId");
+    if (cJSON_IsNumber(fid)) frame_id = static_cast<int>(fid->valuedouble);
+  }
+
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON *body = cJSON_CreateObject();
+  cJSON *scopes = cJSON_CreateArray();
+
+  cJSON *locals = cJSON_CreateObject();
+  cJSON_AddStringToObject(locals, "name", "Locals");
+  cJSON_AddStringToObject(locals, "presentationHint", "locals");
+  cJSON_AddNumberToObject(locals, "variablesReference", frame_id + 1);
+  cJSON_AddBoolToObject(locals, "expensive", false);
+  cJSON_AddItemToArray(scopes, locals);
+
+  cJSON_AddItemToObject(body, "scopes", scopes);
+  cJSON_AddItemToObject(resp, "body", body);
+  write_message(resp);
+  cJSON_Delete(resp);
+}
+
+void handle_variables(cJSON *request) {
+  cJSON *args = cJSON_GetObjectItem(request, "arguments");
+  int vref = 0;
+  if (cJSON_IsObject(args)) {
+    cJSON *r = cJSON_GetObjectItem(args, "variablesReference");
+    if (cJSON_IsNumber(r)) vref = static_cast<int>(r->valuedouble);
+  }
+  if (vref <= 0 || !g_gdb.running()) {
+    cJSON *resp = make_response(request, /*success=*/true, nullptr);
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddItemToObject(body, "variables", cJSON_CreateArray());
+    cJSON_AddItemToObject(resp, "body", body);
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+  int frame_id = vref - 1;
+
+  // `--simple-values` (1 in MI3 numeric form) asks gdb to fold each
+  // variable's `value` into the listing — we get name + value + type
+  // in a single round-trip instead of N round-trips of -var-create /
+  // -var-evaluate-expression / -var-info-type.
+  char cmdbuf[96];
+  std::snprintf(cmdbuf, sizeof(cmdbuf),
+                "-stack-list-variables --thread 1 --frame %d --simple-values",
+                frame_id);
+  std::string result = gdb_query(cmdbuf);
+
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON *body = cJSON_CreateObject();
+  cJSON *vars = cJSON_CreateArray();
+
+  if (result.compare(0, 5, "^done") == 0) {
+    // `^done,variables=[{name="x",value="42",type="int"},{name="s",
+    //   value="\"hi\"",type="ObjString *"}]`
+    auto var_tuples = mi_split_list(result, "variables");
+    for (auto &t : var_tuples) {
+      std::string name = mi_field(t, "name");
+      std::string value = mi_field(t, "value");
+      std::string type = mi_field(t, "type");
+      if (name.empty()) continue;
+      cJSON *v = cJSON_CreateObject();
+      cJSON_AddStringToObject(v, "name", name.c_str());
+      cJSON_AddStringToObject(v, "value", value.c_str());
+      cJSON_AddStringToObject(v, "type", type.c_str());
+      // PR 4d keeps every variable as a leaf — no nested struct
+      // drill-down. A later PR can switch to -var-create per entry
+      // and use a child variablesReference for tuple/array types.
+      cJSON_AddNumberToObject(v, "variablesReference", 0);
+      cJSON_AddItemToArray(vars, v);
+    }
+  }
+  // If the result wasn't ^done, leave the array empty. Common cause
+  // is calling variables() after the inferior exited; an empty list
+  // is more useful to the client than an error.
+
+  cJSON_AddItemToObject(body, "variables", vars);
+  cJSON_AddItemToObject(resp, "body", body);
+  write_message(resp);
+  cJSON_Delete(resp);
+}
+
 // For every request we haven't wired up yet, send a structured
 // "not implemented" response so the client surfaces a clear error
 // instead of waiting forever for a reply that never comes.
@@ -1146,6 +1402,12 @@ int debug_cmd_main(int argc, char **argv) {
       handle_configuration_done(msg);
     } else if (std::strcmp(cmd, "threads") == 0) {
       handle_threads(msg);
+    } else if (std::strcmp(cmd, "stackTrace") == 0) {
+      handle_stack_trace(msg);
+    } else if (std::strcmp(cmd, "scopes") == 0) {
+      handle_scopes(msg);
+    } else if (std::strcmp(cmd, "variables") == 0) {
+      handle_variables(msg);
     } else if (std::strcmp(cmd, "terminate") == 0) {
       handle_terminate(msg);
     } else if (std::strcmp(cmd, "disconnect") == 0) {
