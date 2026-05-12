@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Continue'
 $compileOnly = @(
   '09_socket_simple.tpr','09_socket_server.tpr','09_socket_client.tpr',
   '11_router_app.tpr','12_threaded_server.tpr','14_api_server.tpr',
-  'api_wings.tpr','api_wings_crud.tpr','api_router_crud.tpr','tulpar_api_demo.tpr',
+  'api_wings.tpr','api_wings_crud.tpr','api_wings_tls.tpr','api_router_crud.tpr','tulpar_api_demo.tpr',
   # utils.tpr is a module designed to be imported by 07_modules.tpr; running
   # it standalone is meaningless (no top-level program), but it should still
   # parse + lower cleanly so we at least catch compile-side regressions.
@@ -29,6 +29,7 @@ $skip = @()
 $smokeProbes = @{
   'api_wings.tpr'         = 'http://127.0.0.1:3000/'
   'api_wings_crud.tpr'    = 'http://127.0.0.1:3000/'
+  'api_wings_tls.tpr'     = 'https://127.0.0.1:8443/'
   'api_router_crud.tpr'   = 'http://127.0.0.1:8080/'
   '11_router_app.tpr'     = 'http://127.0.0.1:8080/'
   '12_threaded_server.tpr'= 'http://127.0.0.1:8089/'
@@ -122,7 +123,10 @@ foreach ($f in (Get-ChildItem examples\*.tpr | Sort-Object Name)) {
           try {
             # -UseBasicParsing avoids IE engine init; TimeoutSec bounds the
             # call so a hung handler doesn't wedge the suite.
-            $resp = Invoke-WebRequest -Uri $probeUrl -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+            # -SkipCertificateCheck trusts the self-signed fixture cert in
+            # tests/fixtures/ for api_wings_tls.tpr (no CA chain); no-op
+            # for plain HTTP probes since the flag only kicks in on https://.
+            $resp = Invoke-WebRequest -Uri $probeUrl -UseBasicParsing -TimeoutSec 5 -SkipCertificateCheck -ErrorAction Stop
             # Any HTTP response is success — we don't care about status.
             if (-not $smokeProc.HasExited -and $resp.StatusCode -gt 0) {
               # Probe round-tripped, server still alive: real pass.
