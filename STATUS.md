@@ -149,6 +149,24 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   LLVM 19 (MSYS2) arası C API rename'leri için hazır. `gdb
   ./binary` step-through + breakpoint + `info locals/variables`
   artık `.tpr` satırlarına çözünüyor.
+- **DAP server (Plan 07 Parça B — PR'lar #178/#180/#186/#188/#190,
+  ayrıca TulparLang-ext PR #1):** `tulpar debug <file.tpr>` stdio
+  JSON-RPC DAP server. AOT-build with --debug → spawn
+  `gdb --interpreter=mi3` (cross-platform: Windows `CreatePipe` +
+  `CreateProcessW`, POSIX `pipe` + `fork`) → background reader
+  thread parses MI3 records (`*stopped`, `=...`, `~`/`@`/`&` stream)
+  ve DAP `stopped`/`terminated`/`output` event'lerine çevirir.
+  Yapılan handler'lar: `initialize`/`launch`/`setBreakpoints`/
+  `configurationDone`/`threads`/`stackTrace`/`scopes`/`variables`/
+  `continue`/`pause`/`next`/`stepIn`/`stepOut`/`terminate`/
+  `disconnect`. MI tuple/list splitter `mi_split_list` ile
+  `stack=[frame={...},frame={...}]` ve `variables=[{...},{...}]`
+  parse edilir. SIGINT disambiguation (`pause` vs `exception`).
+  `tests/dap_smoke.py` gdb-missing branch + gdb-present
+  setBreakpoints → stack inspection → continue → terminated
+  round-trip'i doğruluyor. `vscode-tulpar` v0.4.0
+  `contributes.debuggers` (`type: "tulpar"`) + `breakpoints` +
+  `tulpar.debug` komutu ile F5 ergonomi.
 
 ### Test harness
 
@@ -230,15 +248,12 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Tooling
 
-- 🟡 **Debugger MVP — Parça B: DAP server.** Parça A (DWARF emit)
-  tamamlandı (Plan 07 PR 2-3g, 7 PR mergedoldu): `tulpar --debug
-  build` artık `!DICompileUnit` + per-function `DISubprogram` +
-  per-statement `DILocation` + her local/param/global için
-  `DILocalVariable` / `DIGlobalVariableExpression` emit ediyor;
-  `gdb ./binary` step-through + breakpoint çalışmalı. Kalan:
-  `tulpar debug <file>` DAP server (gdb `--interpreter=mi3`
-  wrapper) + `vscode-tulpar` `contributes.debuggers` bloğu — VS
-  Code "Run and Debug" entegrasyonu için.
+- 🟢 **DAP server polish (post-Plan 07 Parça B).** Çekirdek tamam
+  (yukarı bkz. Yapılanlar). Geriye küçük adımlar: `evaluate` /
+  `setVariable` (REPL/watch), conditional + hit-count + log
+  breakpoints, function/data/instruction breakpoints, `variables`
+  içinde struct/array drill-down (`-var-create` per leaf), DAP
+  `restart` request.
 - 🟢 **Parser multi-error mode.** Şu an ilk fatal'da duruyor; recovery
   ve bağımsız hata bildirimi eksik.
 - 🟢 **LSP signature help.** Parametre içindeyken aktif imza ipucu.
