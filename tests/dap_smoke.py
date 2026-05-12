@@ -1,10 +1,32 @@
-"""Smoke test for `tulpar debug <file.tpr>` — the DAP scaffold from
-Plan 07 PR 4.
+"""Smoke test for `tulpar debug <file.tpr>` — the DAP server.
 
-Walks the minimal handshake (`initialize` → response + `initialized`
-event → `disconnect`), checks that an unimplemented request gets a
-structured "not implemented" error (rather than a hang), and verifies
-the process exits cleanly afterwards.
+Walks the full Plan 07 Part B handshake and verifies it produces the
+expected wire output:
+
+  1. initialize    →  response with capabilities
+                  →  `initialized` event
+  2. launch        →  AOT-builds the .tpr with `--debug`, spawns
+                     `gdb --interpreter=mi3 -nx <binary>`, returns
+                     success=true once both are ready.
+  3. setBreakpoints  →  forwards each line to gdb via `-break-insert`
+                       and returns the verified Breakpoint[]
+                       reply. PR 4c accepts either verified or
+                       deferred-pending — the program is so short
+                       that whether the breakpoint actually fires
+                       before exit is timing-dependent.
+  4. configurationDone  →  sends `-exec-run` to gdb. The smoke
+                          then drains DAP events until it sees
+                          `terminated` (with a 10 s timeout). The
+                          inferior `print("hello from dap smoke")`
+                          races to completion well before 10 s so
+                          this gates a real gdb subprocess working
+                          end-to-end.
+  5. threads / evaluate stub / disconnect — same as the prior smoke.
+
+If gdb isn't installed (CI macOS, some dev machines), launch comes
+back as success=false with a "failed to spawn gdb" message and the
+smoke verifies THAT path instead — it doesn't fail the run just
+because gdb is absent.
 
 Run:
     python tests/dap_smoke.py
@@ -14,8 +36,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 
 
 def find_tulpar_exe() -> str:
@@ -28,6 +53,21 @@ def find_tulpar_exe() -> str:
     raise SystemExit("could not find tulpar.exe in repo root")
 
 
+def gdb_available() -> bool:
+    # Quick PATH probe so the smoke can branch instead of failing on
+    # environments without gdb installed. We don't actually parse the
+    # output — `--version` is just a cheap "does the binary exist and
+    # respond" check.
+    exe = shutil.which("gdb") or shutil.which("gdb.exe")
+    if not exe:
+        return False
+    try:
+        subprocess.run([exe, "--version"], capture_output=True, timeout=5)
+        return True
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def send(proc: subprocess.Popen, msg: dict) -> None:
     body = json.dumps(msg).encode()
     proc.stdin.write(f"Content-Length: {len(body)}\r\n\r\n".encode())
@@ -35,11 +75,14 @@ def send(proc: subprocess.Popen, msg: dict) -> None:
     proc.stdin.flush()
 
 
-def recv(proc: subprocess.Popen) -> dict | None:
+def recv(proc: subprocess.Popen, timeout: float | None = None) -> dict | None:
     # Read Content-Length header and any other headers until the
     # \r\n\r\n separator. Same shape LSP / DAP both use.
+    deadline = None if timeout is None else (time.monotonic() + timeout)
     headers = b""
     while b"\r\n\r\n" not in headers:
+        if deadline is not None and time.monotonic() > deadline:
+            return None
         c = proc.stdout.read(1)
         if not c:
             return None
@@ -51,20 +94,66 @@ def recv(proc: subprocess.Popen) -> dict | None:
             cl = int(h.split(b":", 1)[1].strip())
             break
     assert cl is not None, f"no Content-Length in {head!r}"
-    body = rest + proc.stdout.read(cl - len(rest))
+    body = rest
+    while len(body) < cl:
+        chunk = proc.stdout.read(cl - len(body))
+        if not chunk:
+            return None
+        body += chunk
     return json.loads(body)
+
+
+def recv_response(proc: subprocess.Popen, command: str,
+                  collected_events: list[dict],
+                  timeout: float = 5.0) -> dict | None:
+    """Recv messages until we see a `response` for `command`, stashing
+    any `event` messages into `collected_events` along the way.
+
+    The gdb reader thread emits `stopped` / `terminated` / `output`
+    events asynchronously, so a response can be preceded by an
+    arbitrary number of events on the wire."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        m = recv(proc, timeout=max(0.1, deadline - time.monotonic()))
+        if m is None:
+            return None
+        if m.get("type") == "event":
+            collected_events.append(m)
+            continue
+        if m.get("type") == "response" and m.get("command") == command:
+            return m
+        # Some other shape — keep waiting.
+    return None
+
+
+def drain_until_terminated(proc: subprocess.Popen,
+                            collected_events: list[dict],
+                            timeout: float = 10.0) -> bool:
+    """After configurationDone success, drain events looking for
+    `terminated`. Returns True iff we saw it before timeout. Other
+    events (stopped, output, thread) are stashed without judgment."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        m = recv(proc, timeout=max(0.1, deadline - time.monotonic()))
+        if m is None:
+            return False
+        collected_events.append(m)
+        if m.get("type") == "event" and m.get("event") == "terminated":
+            return True
+    return False
 
 
 def main() -> int:
     exe = find_tulpar_exe()
     failures: list[str] = []
+    have_gdb = gdb_available()
+    print(f"[smoke] gdb available: {have_gdb}", file=sys.stderr)
 
     # Stage a tiny .tpr in the OS temp dir so the launch step has a
     # real source file to point at. We use the OS-temp resolver
     # (`tempfile.mkstemp`) rather than `/tmp/...` so the smoke runs on
     # Windows native binaries (where /tmp doesn't resolve to a real
     # path the AOT pipeline can fopen) as well as POSIX.
-    import tempfile
     tpr_fd, tpr_path = tempfile.mkstemp(prefix="dap_smoke_", suffix=".tpr")
     with os.fdopen(tpr_fd, "w", encoding="utf-8") as f:
         f.write('print("hello from dap smoke");\n')
@@ -79,92 +168,143 @@ def main() -> int:
     )
 
     try:
+        events: list[dict] = []
+
         # 1) initialize -> response with capabilities body
         send(proc, {
             "seq": 1, "type": "request", "command": "initialize",
             "arguments": {"clientID": "smoke", "adapterID": "tulpar"},
         })
-        r = recv(proc)
-        if not r or r.get("type") != "response" or r.get("command") != "initialize":
-            failures.append(f"initialize: wrong shape: {r!r}")
+        r = recv_response(proc, "initialize", events)
+        if not r:
+            failures.append("initialize: no response")
         elif not r.get("success"):
             failures.append(f"initialize: success=false: {r!r}")
         elif "supportsConfigurationDoneRequest" not in (r.get("body") or {}):
             failures.append(f"initialize: missing capabilities body: {r!r}")
 
-        # 2) initialized event MUST arrive after the initialize response
-        evt = recv(proc)
-        if not evt or evt.get("type") != "event" or evt.get("event") != "initialized":
-            failures.append(f"initialized event: wrong shape: {evt!r}")
+        # 2) initialized event MUST arrive after the initialize response.
+        # The current adapter emits it inside handle_initialize, so it
+        # should already be in `events`.
+        if not any(e.get("event") == "initialized" for e in events):
+            evt = recv(proc, timeout=2.0)
+            if evt:
+                events.append(evt)
+        if not any(e.get("event") == "initialized" for e in events):
+            failures.append("never saw `initialized` event")
 
-        # 3) launch -> AOT-builds the program with debug info, replies
-        # success. The pipeline's stdout is redirected to stderr for the
-        # duration of the build so it can't corrupt the DAP wire (every
-        # `[AOT] ...` byte on stdout here would break Content-Length
-        # framing). A failed build comes back as success=false with a
-        # `message`, never as a hang.
+        # 3) launch -> AOT-builds the program with debug info AND
+        # spawns gdb. The pipeline's stdout is redirected to stderr
+        # for the duration of the build so it can't corrupt the DAP
+        # wire. If gdb isn't installed, success=false with a clear
+        # message naming gdb — the smoke validates THAT path on
+        # systems without gdb instead of declaring failure.
         send(proc, {
             "seq": 2, "type": "request", "command": "launch",
             "arguments": {"program": tpr_path, "stopOnEntry": False},
         })
-        r = recv(proc)
-        if not r or r.get("command") != "launch":
-            failures.append(f"launch: wrong shape: {r!r}")
-        elif not r.get("success"):
-            failures.append(f"launch: success=false: {r!r}")
+        r = recv_response(proc, "launch", events, timeout=30.0)
+        launch_ok = bool(r and r.get("success"))
+        if not r:
+            failures.append("launch: no response")
+        elif not launch_ok:
+            msg = (r.get("message") or "")
+            if have_gdb:
+                failures.append(f"launch: success=false despite gdb present: {r!r}")
+            elif "gdb" not in msg.lower():
+                failures.append(f"launch: failed but message doesn't mention gdb: {r!r}")
+            # If gdb is missing, accept the structured failure and
+            # skip the inferior portion of the test — disconnect
+            # below will still verify the adapter shuts down cleanly.
 
-        # 4) configurationDone -> success (PR 4c will hand control to
-        # gdb here; today it's a no-op acknowledge).
+        if launch_ok:
+            # 4) setBreakpoints -> forwards `-break-insert` to gdb
+            # per line and returns the verified Breakpoint[] reply.
+            send(proc, {
+                "seq": 3, "type": "request", "command": "setBreakpoints",
+                "arguments": {
+                    "source": {"path": tpr_path},
+                    "breakpoints": [{"line": 1}],
+                },
+            })
+            r = recv_response(proc, "setBreakpoints", events, timeout=5.0)
+            if not r:
+                failures.append("setBreakpoints: no response")
+            elif not r.get("success"):
+                failures.append(f"setBreakpoints: success=false: {r!r}")
+            else:
+                bps = (r.get("body") or {}).get("breakpoints") or []
+                if len(bps) != 1:
+                    failures.append(f"setBreakpoints: expected 1 entry, got {bps!r}")
+                # Either verified=true (gdb resolved it) or verified=
+                # false with a message (couldn't resolve at the .tpr
+                # line — depends on how DWARF maps `print(...)`) is
+                # acceptable. We just want a structured reply, not a
+                # hang.
+
+            # 5) configurationDone -> response, then -exec-run runs
+            # the inferior. We expect a `terminated` event within
+            # 10 s as the tiny program completes.
+            send(proc, {
+                "seq": 4, "type": "request", "command": "configurationDone",
+                "arguments": {},
+            })
+            r = recv_response(proc, "configurationDone", events, timeout=5.0)
+            if not r or not r.get("success"):
+                failures.append(f"configurationDone: wrong shape: {r!r}")
+
+            if not drain_until_terminated(proc, events, timeout=10.0):
+                # Dump the events we did see for triage.
+                seen = [e.get("event") for e in events if e.get("type") == "event"]
+                failures.append(
+                    f"never saw `terminated` event within 10s (saw: {seen!r})"
+                )
+
+        # 6) threads -> exactly one fake thread (id=1, name="main")
         send(proc, {
-            "seq": 3, "type": "request", "command": "configurationDone",
+            "seq": 5, "type": "request", "command": "threads",
             "arguments": {},
         })
-        r = recv(proc)
-        if not r or not r.get("success"):
-            failures.append(f"configurationDone: wrong shape: {r!r}")
-
-        # 5) threads -> exactly one fake thread (id=1, name="main")
-        send(proc, {
-            "seq": 4, "type": "request", "command": "threads",
-            "arguments": {},
-        })
-        r = recv(proc)
+        r = recv_response(proc, "threads", events, timeout=5.0)
         if not r or not r.get("success"):
             failures.append(f"threads: success=false: {r!r}")
-        else:
+        elif launch_ok:
             threads = (r.get("body") or {}).get("threads") or []
             if len(threads) != 1 or threads[0].get("id") != 1:
                 failures.append(f"threads: expected [{{id:1,...}}], got {threads!r}")
 
-        # 6) An unimplemented request still returns a structured
-        # "not implemented" response, not a hang. We pick `evaluate`
-        # specifically because PR 4c hasn't wired it up yet.
+        # 7) An unimplemented request still returns a structured
+        # "not implemented" response, not a hang. `evaluate` isn't
+        # wired up in PR 4c either.
         send(proc, {
-            "seq": 5, "type": "request", "command": "evaluate",
+            "seq": 6, "type": "request", "command": "evaluate",
             "arguments": {"expression": "1+1", "context": "repl"},
         })
-        r = recv(proc)
-        if not r or r.get("command") != "evaluate":
-            failures.append(f"evaluate stub: wrong shape: {r!r}")
+        r = recv_response(proc, "evaluate", events, timeout=5.0)
+        if not r:
+            failures.append("evaluate stub: no response")
         elif r.get("success") is not False:
             failures.append(f"evaluate stub: expected success=false: {r!r}")
 
-        # 7) disconnect -> success, process exits 0
+        # 8) disconnect -> success, process exits 0
         send(proc, {
-            "seq": 6, "type": "request", "command": "disconnect",
+            "seq": 7, "type": "request", "command": "disconnect",
             "arguments": {},
         })
-        r = recv(proc)
-        if not r or r.get("command") != "disconnect" or not r.get("success"):
+        r = recv_response(proc, "disconnect", events, timeout=5.0)
+        if not r or not r.get("success"):
             failures.append(f"disconnect: wrong shape: {r!r}")
 
-        # 5) clean exit within 3s
+        # 9) clean exit within 5s. gdb tear-down can take ~1s, so
+        # give it a slightly more generous budget than the scaffold's
+        # 3s. handle_disconnect calls g_gdb.stop() before replying so
+        # the gdb subprocess is gone by the time we get here.
         try:
-            rc = proc.wait(timeout=3)
+            rc = proc.wait(timeout=5)
             if rc != 0:
                 failures.append(f"adapter exit code = {rc}, expected 0")
         except subprocess.TimeoutExpired:
-            failures.append("adapter did not exit within 3s after disconnect")
+            failures.append("adapter did not exit within 5s after disconnect")
             proc.kill()
 
     finally:
