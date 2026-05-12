@@ -1,39 +1,35 @@
 // WebSocket frame I/O round-trip smoke.
 //
-// One frame, one direction: server sends, client receives. Validates
-// the basic FIN+opcode + < 126 byte length encoding path round-trips
-// through `aot_wings_ws_send_frame` / `aot_wings_ws_recv_frame`, plus
-// the RFC 6455 §4.2.2 accept-key derivation.
+// Server thread sends one text frame; main reads it via
+// wings_ws_recv_frame and asserts opcode + fin + payload. Also
+// re-verifies the RFC 6455 §4.2.2 accept-key derivation through the
+// AOT path (independent of the C-level smoke at examples/31).
 //
-// (A multi-frame variant of this smoke surfaced a calling-convention
-// quirk under threading; pending root-cause investigation, the
-// natives are independently verified via the C-side TLS smoke and
-// the single-frame round-trip below covers the common server-handler
-// case: "read one frame, respond, close.")
+// The server fd is passed via `thread_create`'s arg slot (boxed as
+// a json) — the same pattern lib/wings.tpr's listen_pool uses.
+// Using a global instead of passing through arg races on Linux
+// pthreads: the spawned thread can observe the global's initial
+// zero before the main thread's assignment becomes visible across
+// CPUs, and `socket_accept(0)` then EBADFs.
 
 import "wings";
 
-int _g_server_fd = 0;
-
 func server_thread(json arg) {
-    int client = socket_accept(_g_server_fd);
+    int server_fd = arg;
+    int client = socket_accept(server_fd);
     wings_ws_send_text(client, "hello");
-    // Block on a 1-byte ack before closing — Windows closesocket()
-    // is abortive and would discard pending sends.
-    str ack = socket_receive(client, 1);
-    socket_close(client);
-    socket_close(_g_server_fd);
+    // Leave the connection open; main does the closes once it has
+    // drained the frame. Returning here lets `thread_join` complete.
 }
 
-int port = 18769;
+int port = 18771;
 int server_fd = socket_server("127.0.0.1", port);
 if (server_fd < 0) {
     print("FAIL bind");
     exit(0);
 }
-_g_server_fd = server_fd;
 
-int t = thread_create(server_thread, 0);
+int t = thread_create(server_thread, server_fd);
 int client = socket_client("127.0.0.1", port);
 
 json f = wings_ws_recv_frame(client);
@@ -53,6 +49,6 @@ if (ws_key == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") {
     print("FAIL accept-key got=" + ws_key);
 }
 
-socket_send(client, "x");
-socket_close(client);
 thread_join(t);
+socket_close(client);
+socket_close(server_fd);
