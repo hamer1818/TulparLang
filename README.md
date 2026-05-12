@@ -154,6 +154,58 @@ TLS via OpenSSL with the same handler API. Wings auto-registers
 `/healthz` + `/metrics` and answers CORS preflights so a browser can
 hit the API immediately.
 
+### Streaming (SSE / WebSocket)
+
+Long-lived connections take over the socket and signal
+`{"_stream": 1}` so wings skips its normal response envelope:
+
+```tulpar
+import "wings";
+
+func events() {
+    int fd = wings_current_fd();
+    socket_send(fd, wings_sse_headers());
+    int i = 0;
+    while (i < 5) {
+        socket_send(fd, wings_sse_event("tick", "{\"n\":" + toString(i) + "}"));
+        sleep(300);
+        i = i + 1;
+    }
+    return {"_stream": 1};
+}
+
+get("/events", "events");
+listen(8093);
+```
+
+`curl -N http://127.0.0.1:8093/events` will print 5 tick frames live.
+WebSocket handlers use `wings_ws_upgrade(req)` for the handshake,
+`wings_ws_send_text(fd, payload)` + `wings_ws_recv_frame(fd)` for the
+frame loop, and the same `{"_stream": 1}` return value.
+
+## Package management
+
+Vendored stdlib (`wings`, `router`, `http_client`, `orm`, …) is
+embedded in the binary — no install step. Third-party packages flow
+through `tulpar pkg`:
+
+```bash
+tulpar pkg init my-app           # writes tulpar.toml + default registry URL
+tulpar pkg search                # browse the catalog (empty query = all)
+tulpar pkg search wings          # filter by name + description
+tulpar pkg info demo             # version list, downloads, install hint
+tulpar pkg add demo@^1.0         # add a dependency line
+tulpar pkg install               # vendor everything into tulpar_modules/
+tulpar pkg publish --token $T    # publish current package to the registry
+```
+
+`tulpar pkg init` seeds the canonical registry
+(`https://api.pkg.tulparlang.dev`); override via the `[registry] url`
+line in `tulpar.toml`, `--registry <url>` flag, or `TULPAR_REGISTRY`
+env. Semver ranges are full 2.0.0 (`^`, `~`, `*`, `>=,<`, pre-release
+plus build metadata). Installs go through a lockfile (`tulpar.lock`)
+with SHA-256 checksums so re-installs are byte-stable.
+
 ## Why TulparLang
 
 - **Native speed.** LLVM 18 AOT compilation. ~1.5–1.8× of `gcc -O2`
@@ -281,6 +333,13 @@ All five share `_request`, `_response`, route counters, `/healthz` /
 `/metrics` auto-routes, OPTIONS preflight handling, structured
 logging, and OpenAPI 3.0 generation via `wings_openapi(title, version)`.
 
+Long-lived connection types (Server-Sent Events, WebSocket upgrade)
+take over the socket and return `{"_stream": 1}` so the dispatcher
+skips its envelope build — see [Streaming](#streaming-sse--websocket)
+above and [`examples/api_wings_sse.tpr`](examples/api_wings_sse.tpr) /
+[`examples/32_wings_ws_frames.tpr`](examples/32_wings_ws_frames.tpr)
+for end-to-end demos.
+
 ## Command reference
 
 The full list lives at <https://tulparlang.dev/reference/cli/>; the
@@ -294,7 +353,11 @@ tulpar build <file.tpr> [out] # Standalone native binary
 tulpar --repl                 # Interactive REPL
 tulpar fmt <file.tpr>         # Source formatter
 tulpar typecheck <file.tpr>   # Standalone typechecker
-tulpar pkg <subcommand>       # Package manager (init, add, install, publish)
+tulpar pkg <subcommand>       # Package manager:
+                              #   init, list, add, remove, install,
+                              #   search, info, publish
+tulpar doc <file.tpr>         # Markdown reference generator
+tulpar debug <file.tpr>       # DAP server (VS Code debugger)
 tulpar --lsp                  # Language server (editor integration)
 
 tulpar version                # Show installed version
@@ -429,7 +492,8 @@ Native built-ins (no `import` needed):
 | Sockets         | `socket_server`, `socket_client`, `socket_accept`, `socket_send`, `socket_receive`, `socket_close`, `socket_set_nonblocking`, `socket_poll` |
 | TLS (server)    | `tls_init`, `tls_accept`, `tls_recv`, `tls_send`, `tls_close`, `tls_ctx_free` |
 | HTTP (native)   | `http_request`, `http_parse_request`, `http_create_response`, `http_status_text`, `path_match`, `parse_query`, `http_recv_request`, `http_should_keepalive` |
-| Wings helpers   | `wings_openapi`, `wings_metrics_prom`, `wings_cookies`, `log_info`, `log_error` |
+| Wings helpers   | `wings_openapi`, `wings_metrics_prom`, `wings_cookies`, `log_info`, `log_error`, `wings_current_fd`, `wings_sse_headers`, `wings_sse_event`, `wings_ws_upgrade`, `wings_ws_send_text`, `wings_ws_send_close`, `wings_ws_send_pong`, `wings_ws_send_frame`, `wings_ws_recv_frame`, `wings_ws_accept_key` |
+| Crypto / encode | `sha1`, `sha1_hex`, `sha256`, `base64_encode`, `base64_decode`                |
 | Database        | `db_open`, `db_execute`, `db_query`, `db_close` (vendored SQLite3)            |
 | Threading       | `thread_create`, `thread_detach`, `thread_join`, `mutex_create`, `mutex_lock`, `mutex_unlock`, `mutex_destroy` |
 | Memory arena    | `arena_save`, `arena_restore` (per-request bounded memory)                    |
@@ -483,6 +547,9 @@ highlights:
 | `12_threaded_server.tpr`      | Threaded HTTP server                        |
 | `13_database.tpr`             | SQLite via the built-in `db_*` API          |
 | `api_wings_crud.tpr`          | REST CRUD on top of Wings                   |
+| `api_wings_sse.tpr`           | Server-Sent Events via the streaming dispatcher |
+| `32_wings_ws_frames.tpr`      | WebSocket send/recv frame round-trip        |
+| `31_crypto_sse_ws.tpr`        | `sha1` / `base64` / WS accept-key + SSE formatting |
 | `tulpar_api_demo.tpr`         | Full TulparAPI app with middleware          |
 | `benchmark.tpr`               | The `fib` / `loopsum` benchmark workloads   |
 
