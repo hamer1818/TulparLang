@@ -1213,6 +1213,15 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_wings_ws_accept_key = LLVMAddFunction(
       backend->module, "aot_wings_ws_accept_key", string_pin_type);
 
+  // wings_ws_send_frame(fd, opcode, payload) -> int.
+  // 3 VMValue args, VMValue (int) return — same shape as
+  // wings_find_route_type.
+  backend->func_aot_wings_ws_send_frame = LLVMAddFunction(
+      backend->module, "aot_wings_ws_send_frame", wings_find_route_type);
+  // wings_ws_recv_frame(fd) -> json (object). Single VMValue arg.
+  backend->func_aot_wings_ws_recv_frame = LLVMAddFunction(
+      backend->module, "aot_wings_ws_recv_frame", string_pin_type);
+
   // aot_exit_i32(int code) -> noreturn  (process termination)
   // Takes a raw i32 to avoid VMValue ABI complications for a one-shot call.
   LLVMTypeRef exit_params[] = {backend->int32_type};
@@ -3905,6 +3914,24 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend,
                                     backend->func_aot_wings_ws_accept_key,
                                     args, 1, "ws_accept_key");
+    }
+    // wings_ws_send_frame(fd, opcode, payload) -> int
+    if (strcmp(node->name, "wings_ws_send_frame") == 0 &&
+        node->argument_count >= 3) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
+                             codegen_expression(backend, node->arguments[1]),
+                             codegen_expression(backend, node->arguments[2])};
+      return llvm_call_vmvalue_func(backend,
+                                    backend->func_aot_wings_ws_send_frame,
+                                    args, 3, "ws_send_frame");
+    }
+    // wings_ws_recv_frame(fd) -> {ok, opcode, fin, payload} | {ok=0, error}
+    if (strcmp(node->name, "wings_ws_recv_frame") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend,
+                                    backend->func_aot_wings_ws_recv_frame,
+                                    args, 1, "ws_recv_frame");
     }
 
     // cpu_count() -> int (logical CPUs).

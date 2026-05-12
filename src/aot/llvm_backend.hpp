@@ -281,6 +281,13 @@ typedef struct {
   // WebSocket handshake that benefits from a native; rest is pure
   // string work that's fine in Tulpar source.
   LLVMValueRef func_aot_wings_ws_accept_key;
+  // WebSocket frame I/O (RFC 6455 §5.2). Send is 3-arg
+  // (fd, opcode, payload) → int; recv is 1-arg (fd) → object
+  // {ok, opcode, fin, payload} / {ok=0, error}. Closes the upgrade
+  // loop so a wings keep-alive socket can pump frames entirely in
+  // Tulpar source without raw-byte bit-twiddling.
+  LLVMValueRef func_aot_wings_ws_send_frame;
+  LLVMValueRef func_aot_wings_ws_recv_frame;
 
   // Process control
   LLVMValueRef func_aot_exit;

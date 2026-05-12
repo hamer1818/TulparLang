@@ -79,9 +79,14 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   `cpu_count()`), `listen_evented` (poll()-multiplex).
 - **Wire-byte cache:** `cached_get(path, handler)` — handler bir kez
   çalışır, sonraki istekler cached bytes'i tek syscall ile gönderir.
-- **Counter atomic RMW (PR #81):** Top-level int globals için
-  `LLVMBuildAtomicRMW` superinstruction; `_wings_requests_total/2xx/4xx/5xx`
-  data-race-free.
+- **Counter atomic RMW (PR #81):** Top-level VE imported-module
+  int globals için `LLVMBuildAtomicRMW` superinstruction;
+  `_wings_requests_total/2xx/4xx/5xx` data-race-free. Imported
+  int globals AOT'da `add_local_typed(.., INFERRED_INT, ig)` ile
+  kayıtlanır → `AST_ASSIGNMENT` typed-int fast-path'i
+  `global_needs_atomic_rmw()` whitelist'ine takılan yazımları
+  `atomicrmw add monotonic`'e indirir. `import "wings"`'le çekildiğinde
+  de race-free.
 - **Thread-local `_request` (PR #79):** `global_needs_tls()` AOT
   helper'ı `_request` global'ini `LLVMGeneralDynamicTLSModel` ile
   işaretliyor → her thread kendi slot'una yazar, mutex serileşmesi
@@ -154,14 +159,22 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   ortak yapı taşı. `examples/31_crypto_sse_ws.tpr` FIPS 180-1
   TEST1 ve RFC 6455 §1.3 ws-handshake vektörlerini smoke test
   ediyor.
-- **Wings WebSocket upgrade + SSE helpers:** `wings_ws_upgrade(req)`
-  — 101 Switching Protocols + Sec-WebSocket-Accept üretir
-  (frame seviyesinde okuma/yazma user code'a bırakıldı, native
-  yardımcı `wings_ws_accept_key`). `wings_sse_headers()` +
-  `wings_sse_event(name, data)` — `Content-Type: text/event-stream`
-  yanıt başlığı + `data: …\r\n\r\n` event çerçevesi formatter'ları.
-  Stream'i tutmak için handler fd'yi kendisi `socket_send` ile
-  besler, dispatcher response envelope'i için beklemez.
+- **Wings WebSocket upgrade + frame I/O + SSE helpers:**
+  `wings_ws_upgrade(req)` 101 Switching Protocols +
+  Sec-WebSocket-Accept üretir; `wings_ws_send_frame(fd, opcode, payload)`
+  FIN+opcode + length-encoded frame (< 126 / 16-bit / 64-bit
+  uzunluk yolları) bir tek `send()` çağrısıyla yazar;
+  `wings_ws_recv_frame(fd)` header parse + 7/16/64-bit length
+  decode + masking key XOR'unu yapar, `{ok, opcode, fin, payload}`
+  veya `{ok=0, error}` döner. `lib/wings.tpr` ergonomic
+  wrapper'ları: `wings_ws_send_text/close/pong` +
+  `WS_OPCODE_TEXT/BINARY/CLOSE/PING/PONG` sabitleri. SSE tarafında
+  `wings_sse_headers()` + `wings_sse_event(name, data)` —
+  `text/event-stream` yanıt başlığı + `data: …\r\n\r\n` event
+  çerçevesi formatter'ları. Stream'i tutmak için handler fd'yi
+  kendisi `socket_send` ile besler, dispatcher response envelope'i
+  için beklemez. `examples/32_wings_ws_frames.tpr` round-trip
+  smoke + accept-key vector doğruluyor.
 - **Datetime + regex stdlib:** `now`, `format`, `parse_iso8601`,
   `weekday`, `date_add_seconds`, `regex_match/search/capture/replace`.
 - **CSV + glob + env:** `csv_parse/emit`, `file_glob`, `env()`,
@@ -331,8 +344,6 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
     nasıl yüklendiğini takip etmek; muhtemelen `align 4` struct
     load/store kombinasyonu ile `struct.VMValue zeroinitializer` TLS
     init arasında bir interaction var.
-- 🟢 **Codegen full atomic:** imported pass globals'a `LLVMBuildAtomicRMW`
-  (top-level int globals zaten yapıldı).
 
 ### Tooling
 
@@ -340,12 +351,6 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Ağ / I/O / TLS
 
-- 🟢 **WebSocket frame I/O.** Upgrade handshake hazır
-  (`wings_ws_upgrade` + `wings_ws_accept_key`), ama frame
-  encode/decode (FIN, opcode, masking, fragmentation) bugün user
-  code'da yazılmak zorunda. Native `wings_ws_send_frame` /
-  `wings_ws_recv_frame` eklenirse keep-alive socket loop tamamen
-  Tulpar dilinde kalır.
 - 🟢 **SSE streaming dispatcher.** `wings_sse_headers` +
   `wings_sse_event` formatlayıcılar mevcut; uzun-yaşayan stream'i
   handler içinden `socket_send` ile sürmek gerekiyor — wings

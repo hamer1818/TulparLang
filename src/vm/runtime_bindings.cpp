@@ -4345,6 +4345,183 @@ VMValue aot_wings_ws_accept_key(VMValue keyVal) {
     return VM_OBJ((Obj *)aot_allocate_string(out.data(), (int)out.size()));
 }
 
+// ---------------------------------------------------------------------------
+// WebSocket frame I/O — `wings_ws_send_frame` + `wings_ws_recv_frame`.
+//
+// RFC 6455 §5.2 frame layout:
+//
+//   bit 0:    FIN (we always set: single-message frames only)
+//   bit 1-3:  RSV1-3 (always 0)
+//   bit 4-7:  opcode (1=text, 2=binary, 8=close, 9=ping, 10=pong)
+//   bit 8:    MASK (server→client unmasked = 0; client→server = 1)
+//   bit 9-15: payload-length
+//     < 126:  this IS the length
+//     126:    next 2 bytes big-endian unsigned length
+//     127:    next 8 bytes big-endian unsigned length
+//   masking-key (4 bytes) — only when MASK=1
+//   payload (length bytes; XOR'd with masking-key when MASK=1)
+//
+// Both helpers do synchronous reads/writes via `recv`/`send`. Loops
+// guard against short reads (TCP can split header + length + key
+// across multiple TCP segments under load). Caller owns the fd; this
+// helper just sees a connected socket.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// recv exactly N bytes, looping past short reads. Returns false if
+// the peer closed cleanly or errored before N bytes arrived.
+bool ws_recv_exact(tulpar_socket fd, uint8_t *buf, size_t n) {
+    size_t got = 0;
+    while (got < n) {
+        ssize_t r = (ssize_t)tulpar_recv(fd, (char *)buf + got,
+                                         (int)(n - got), 0);
+        if (r <= 0) return false;
+        got += (size_t)r;
+    }
+    return true;
+}
+
+}  // namespace
+
+// wings_ws_send_frame(fd, opcode, payload) -> int (bytes sent or -1)
+//
+// Server→client: always unmasked per RFC 6455 §5.1. We always set FIN
+// (single-frame messages) — fragmented sends require multiple calls
+// with opcode 0 for continuations and aren't useful for typical
+// JSON-line / text-event traffic. Caller may construct any opcode
+// (text=1, binary=2, close=8, ping=9, pong=10); we don't enforce
+// "control frames must be ≤125 bytes" — that's the caller's job.
+VMValue aot_wings_ws_send_frame(VMValue fdVal, VMValue opcodeVal,
+                                VMValue payloadVal) {
+    if (!IS_INT(fdVal) || !IS_INT(opcodeVal) || !IS_STRING(payloadVal)) {
+        return VM_INT(-1);
+    }
+    tulpar_socket fd = (tulpar_socket)AS_INT(fdVal);
+    int opcode = (int)AS_INT(opcodeVal) & 0x0F;
+    ObjString *p = AS_STRING(payloadVal);
+    // ObjString.length is int, so promotion to size_t can't go negative;
+    // make that explicit so memcpy's bound-check doesn't warn.
+    if (p->length < 0) return VM_INT(-1);
+    size_t len = (size_t)p->length;
+
+    // Pre-size a header buffer big enough for the worst case:
+    // 1 (FIN|opcode) + 1 (mask|len-prefix) + 8 (64-bit ext length).
+    uint8_t header[10];
+    int hlen = 0;
+    header[hlen++] = (uint8_t)(0x80 | opcode);  // FIN + opcode
+    if (len < 126) {
+        header[hlen++] = (uint8_t)len;
+    } else if (len <= 0xFFFF) {
+        header[hlen++] = 126;
+        header[hlen++] = (uint8_t)((len >> 8) & 0xFF);
+        header[hlen++] = (uint8_t)(len & 0xFF);
+    } else {
+        header[hlen++] = 127;
+        uint64_t u64 = (uint64_t)len;
+        for (int i = 7; i >= 0; i--) {
+            header[hlen++] = (uint8_t)((u64 >> (i * 8)) & 0xFF);
+        }
+    }
+
+    // Send header + payload as one contiguous buffer. Two separate
+    // send() calls would also work in principle, but on Windows the
+    // pair occasionally surfaces an ordering quirk where the second
+    // segment doesn't reach the peer for an unusually long time —
+    // most visible in tests that read back-to-back frames. Buffer
+    // copy cost is negligible against the syscall savings.
+    std::vector<uint8_t> wire((size_t)hlen + len);
+    std::memcpy(wire.data(), header, (size_t)hlen);
+    if (len > 0) {
+        std::memcpy(wire.data() + hlen, p->chars, len);
+    }
+    size_t sent = 0;
+    size_t total = wire.size();
+    while (sent < total) {
+        ssize_t s = (ssize_t)tulpar_send(fd, (const char *)wire.data() + sent,
+                                         (int)(total - sent), 0);
+        if (s < 0) return VM_INT(-1);
+        sent += (size_t)s;
+    }
+    return VM_INT((int64_t)total);
+}
+
+// wings_ws_recv_frame(fd) -> json
+//
+// Returns an object:
+//   { "ok": 1, "opcode": <int>, "fin": <int>, "payload": <str> }
+// or on disconnect / malformed input:
+//   { "ok": 0, "error": "<reason>" }
+//
+// Payload is unmasked when the client sets the MASK bit (which it
+// must per RFC 6455 §5.3 — client→server frames are always masked).
+// We accept unmasked frames too in case Tulpar ever does the
+// non-standard "act as a WebSocket client" role; the wire is
+// otherwise identical.
+//
+// Caps payload at 16 MiB to keep a hostile client from triggering
+// unbounded malloc; that's well above the typical JSON-line / chat
+// message size and matches `_wings_max_body_bytes`'s default ceiling.
+VMValue aot_wings_ws_recv_frame(VMValue fdVal) {
+    auto err = [](const char *msg) -> VMValue {
+        ObjObject *r = aot_http_make_obj(2);
+        aot_http_obj_set(r, "ok", 2, VM_INT(0));
+        aot_http_obj_set_str(r, "error", 5, msg, (int)strlen(msg));
+        return VM_OBJ((Obj *)r);
+    };
+    if (!IS_INT(fdVal)) return err("bad fd");
+    tulpar_socket fd = (tulpar_socket)AS_INT(fdVal);
+
+    uint8_t hdr[2];
+    if (!ws_recv_exact(fd, hdr, 2)) return err("connection closed");
+    int fin = (hdr[0] >> 7) & 1;
+    int opcode = hdr[0] & 0x0F;
+    int masked = (hdr[1] >> 7) & 1;
+    uint64_t payload_len = hdr[1] & 0x7F;
+
+    if (payload_len == 126) {
+        uint8_t ext[2];
+        if (!ws_recv_exact(fd, ext, 2)) return err("short read on 16-bit length");
+        payload_len = ((uint64_t)ext[0] << 8) | (uint64_t)ext[1];
+    } else if (payload_len == 127) {
+        uint8_t ext[8];
+        if (!ws_recv_exact(fd, ext, 8)) return err("short read on 64-bit length");
+        payload_len = 0;
+        for (int i = 0; i < 8; i++) {
+            payload_len = (payload_len << 8) | (uint64_t)ext[i];
+        }
+    }
+
+    if (payload_len > 16 * 1024 * 1024ULL) {
+        return err("payload exceeds 16 MiB cap");
+    }
+
+    uint8_t mask_key[4] = {0, 0, 0, 0};
+    if (masked) {
+        if (!ws_recv_exact(fd, mask_key, 4)) return err("short read on mask key");
+    }
+
+    std::vector<char> payload((size_t)payload_len);
+    if (payload_len > 0) {
+        if (!ws_recv_exact(fd, (uint8_t *)payload.data(),
+                           (size_t)payload_len)) {
+            return err("short read on payload");
+        }
+        if (masked) {
+            for (uint64_t i = 0; i < payload_len; i++) {
+                payload[(size_t)i] ^= (char)mask_key[i & 3];
+            }
+        }
+    }
+
+    ObjObject *r = aot_http_make_obj(4);
+    aot_http_obj_set(r, "ok", 2, VM_INT(1));
+    aot_http_obj_set(r, "opcode", 6, VM_INT(opcode));
+    aot_http_obj_set(r, "fin", 3, VM_INT(fin));
+    aot_http_obj_set_str(r, "payload", 7, payload.data(), (int)payload_len);
+    return VM_OBJ((Obj *)r);
+}
+
 VMValue aot_parse_query(VMValue strVal) {
   if (!IS_STRING(strVal)) {
     return VM_OBJ((Obj *)aot_http_make_obj(0));
