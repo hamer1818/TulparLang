@@ -368,18 +368,50 @@ def main() -> int:
             if len(threads) != 1 or threads[0].get("id") != 1:
                 failures.append(f"threads: expected [{{id:1,...}}], got {threads!r}")
 
-        # 7) An unimplemented request still returns a structured
-        # "not implemented" response, not a hang. `evaluate` isn't
-        # wired up in PR 4c either.
+        # 7) evaluate — forwards `-data-evaluate-expression` to gdb
+        # and returns the result as a string. Two valid outcomes:
+        #   - gdb has a frame to evaluate in (the breakpoint fired
+        #     and inferior is paused): the expression `1+1` resolves
+        #     and the result is "2".
+        #   - gdb has no frame (inferior already exited, or
+        #     terminated branch was taken): the evaluate returns
+        #     success=true with the gdb error string in `result` —
+        #     that's the contract VS Code's watch panel relies on
+        #     so the row stays visible. Either way, success=true +
+        #     a `result` field in the body is the wire shape we're
+        #     guarding.
+        # If the launch path failed (no gdb), evaluate comes back
+        # success=false with a structured message; we accept that
+        # too.
         send(proc, {
             "seq": 6, "type": "request", "command": "evaluate",
             "arguments": {"expression": "1+1", "context": "repl"},
         })
         r = recv_response(proc, "evaluate", events, timeout=5.0)
         if not r:
-            failures.append("evaluate stub: no response")
+            failures.append("evaluate: no response")
+        elif launch_ok and not r.get("success"):
+            failures.append(f"evaluate: success=false despite live adapter: {r!r}")
+        elif launch_ok:
+            body = r.get("body") or {}
+            if "result" not in body:
+                failures.append(f"evaluate: missing `result` field in body: {body!r}")
+        # When launch_ok is False (gdb missing), evaluate may come
+        # back success=false with a clear message — accept that
+        # without further assertion.
+
+        # 7b) A still-unimplemented request returns the structured
+        # "not implemented" fallback. `setVariable` is the smallest
+        # remaining stub.
+        send(proc, {
+            "seq": 6, "type": "request", "command": "setVariable",
+            "arguments": {"variablesReference": 1, "name": "x", "value": "1"},
+        })
+        r = recv_response(proc, "setVariable", events, timeout=5.0)
+        if not r:
+            failures.append("setVariable stub: no response")
         elif r.get("success") is not False:
-            failures.append(f"evaluate stub: expected success=false: {r!r}")
+            failures.append(f"setVariable stub: expected success=false: {r!r}")
 
         # 8) disconnect -> success, process exits 0
         send(proc, {
