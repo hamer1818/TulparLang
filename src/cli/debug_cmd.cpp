@@ -403,6 +403,25 @@ class GdbProcess {
   // thread, but cheap insurance against future stepping handlers)
   // can't tear MI commands.
   std::mutex m_send_mu;
+
+ public:
+  // Logpoint registry. DAP logpoints are gdb breakpoints whose
+  // *stopped event the adapter intercepts: instead of forwarding
+  // the stop to the client, we emit the logMessage as an `output`
+  // event and `-exec-continue` ourselves. The user gets
+  // printf-style debug output without actually pausing the
+  // program. The reader thread does the intercept on the hot
+  // path, so the lookup needs to be fast and lock-light — a
+  // single mutex around an unordered_map keyed by gdb's bkptno
+  // is plenty.
+  //
+  // Stored value is the raw DAP `logMessage` string. PR 4d-ish
+  // follow-up will add `{expr}` interpolation; today we emit the
+  // string verbatim so the reader thread doesn't need to issue
+  // synchronous evaluate calls back into the same gdb session
+  // (which would deadlock the result-waiter).
+  std::mutex m_logpoints_mu;
+  std::unordered_map<int, std::string> m_logpoints;
 };
 
 // Global gdb instance. Initialised by configurationDone, torn down
@@ -600,6 +619,12 @@ void GdbProcess::stop() {
   std::lock_guard<std::mutex> lk(m_results_mu);
   m_results.clear();
   m_results_cv.notify_all();
+  // Logpoints don't survive a gdb teardown — the bkptno keys
+  // they're indexed by are gone with the subprocess.
+  {
+    std::lock_guard<std::mutex> lp(m_logpoints_mu);
+    m_logpoints.clear();
+  }
 }
 
 void GdbProcess::reader_loop() {
@@ -696,6 +721,39 @@ void GdbProcess::dispatch_async_record(const std::string &kind,
     // record starts with e.g. "stopped,reason=\"exited-normally\",..."
     if (record.compare(0, std::strlen("stopped"), "stopped") == 0) {
       std::string reason = mi_field(record, "reason");
+
+      // Logpoint intercept: when a breakpoint with a `logMessage`
+      // fires, we DON'T forward the stop to the client. Instead
+      // emit the message as an `output` event and immediately
+      // `-exec-continue` so the program keeps running. The user
+      // gets printf-style trace output without actually pausing.
+      if (reason == "breakpoint-hit") {
+        std::string bkptno = mi_field(record, "bkptno");
+        if (!bkptno.empty()) {
+          int n = std::atoi(bkptno.c_str());
+          std::string msg;
+          {
+            std::lock_guard<std::mutex> lk(m_logpoints_mu);
+            auto it = m_logpoints.find(n);
+            if (it != m_logpoints.end()) msg = it->second;
+          }
+          if (!msg.empty()) {
+            // Append a newline so consecutive logpoints don't run
+            // together in the DEBUG CONSOLE.
+            if (msg.back() != '\n') msg.push_back('\n');
+            emit_output("console", msg);
+            // Auto-resume. This is a fire-and-forget MI command:
+            // gdb will send back a `^running` we'll log and then
+            // the next `*stopped` (real or another logpoint) when
+            // it actually fires. The reader thread doesn't block
+            // waiting for a token here because send_command is
+            // non-blocking on the write side.
+            send_command("-exec-continue", /*prefix_token=*/true);
+            return;
+          }
+        }
+      }
+
       // Disambiguate a user-initiated pause (`-exec-interrupt` →
       // SIGINT) from a real exception (segfault → SIGSEGV, etc.) so
       // DAP `reason` lands on `pause` vs `exception`. emit_stopped
@@ -795,7 +853,7 @@ void handle_initialize(cJSON *request) {
   cJSON_AddBoolToObject(body, "supportTerminateDebuggee", true);
   cJSON_AddBoolToObject(body, "supportsDelayedStackTraceLoading", false);
   cJSON_AddBoolToObject(body, "supportsLoadedSourcesRequest", false);
-  cJSON_AddBoolToObject(body, "supportsLogPoints", false);
+  cJSON_AddBoolToObject(body, "supportsLogPoints", true);
   cJSON_AddBoolToObject(body, "supportsTerminateThreadsRequest", false);
   cJSON_AddBoolToObject(body, "supportsSetExpression", false);
   cJSON_AddBoolToObject(body, "supportsTerminateRequest", true);
@@ -1022,6 +1080,19 @@ void handle_set_breakpoints(cJSON *request) {
     return;
   }
 
+  // DAP setBreakpoints REPLACES the breakpoint set for the named
+  // source. We don't track per-source today (PR 4c left the
+  // "no -break-delete on stale breakpoints" gap as an over-
+  // approximation), but logpoints share the same lifecycle: a
+  // fresh setBreakpoints call shouldn't leave stale logpoint
+  // intercepts in the reader-thread map. Clear them out — the
+  // loop below repopulates whichever ones still have a
+  // logMessage attached.
+  {
+    std::lock_guard<std::mutex> lk(g_gdb.m_logpoints_mu);
+    g_gdb.m_logpoints.clear();
+  }
+
   cJSON *resp = make_response(request, /*success=*/true, nullptr);
   cJSON *body = cJSON_CreateObject();
   cJSON *verified = cJSON_CreateArray();
@@ -1032,6 +1103,7 @@ void handle_set_breakpoints(cJSON *request) {
       cJSON *line_j = cJSON_GetObjectItem(bp, "line");
       cJSON *cond_j = cJSON_GetObjectItem(bp, "condition");
       cJSON *hit_j  = cJSON_GetObjectItem(bp, "hitCondition");
+      cJSON *log_j  = cJSON_GetObjectItem(bp, "logMessage");
       int line = cJSON_IsNumber(line_j) ? static_cast<int>(line_j->valuedouble)
                                         : 0;
 
@@ -1097,6 +1169,24 @@ void handle_set_breakpoints(cJSON *request) {
         std::string resolved_line = mi_field(result, "line");
         int rl = resolved_line.empty() ? line : std::atoi(resolved_line.c_str());
         cJSON_AddNumberToObject(out_bp, "line", rl);
+
+        // Logpoint registration. DAP `logMessage` means "when
+        // this breakpoint fires, emit the message as an `output`
+        // event and resume — don't pause the debuggee". We use
+        // gdb's bkptno (from the ^done reply) as the key, so the
+        // reader thread can look it up O(1) on each *stopped
+        // record. Today we store the raw string; future PR adds
+        // `{expr}` interpolation.
+        if (cJSON_IsString(log_j) && log_j->valuestring && *log_j->valuestring) {
+          std::string bkptno = mi_field(result, "number");
+          if (!bkptno.empty()) {
+            int n = std::atoi(bkptno.c_str());
+            if (n > 0) {
+              std::lock_guard<std::mutex> lk(g_gdb.m_logpoints_mu);
+              g_gdb.m_logpoints[n] = log_j->valuestring;
+            }
+          }
+        }
       } else {
         cJSON_AddNumberToObject(out_bp, "line", line);
         std::string msg = mi_field(result, "msg");
