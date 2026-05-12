@@ -178,17 +178,26 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   LLVM 19 (MSYS2) arası C API rename'leri için hazır. `gdb
   ./binary` step-through + breakpoint + `info locals/variables`
   artık `.tpr` satırlarına çözünüyor.
-- **DAP server (Plan 07 Parça B — PR'lar #178/#180/#186/#188/#190,
-  ayrıca TulparLang-ext PR #1):** `tulpar debug <file.tpr>` stdio
-  JSON-RPC DAP server. AOT-build with --debug → spawn
-  `gdb --interpreter=mi3` (cross-platform: Windows `CreatePipe` +
-  `CreateProcessW`, POSIX `pipe` + `fork`) → background reader
-  thread parses MI3 records (`*stopped`, `=...`, `~`/`@`/`&` stream)
-  ve DAP `stopped`/`terminated`/`output` event'lerine çevirir.
+- **DAP server (Plan 07 Parça B — TulparLang #178/#180/#186/#188/#190
+  ve tüm polish bundle'ları #199–#223, ayrıca TulparLang-ext PR #1):**
+  `tulpar debug <file.tpr>` stdio JSON-RPC DAP server. AOT-build
+  with --debug → spawn `gdb --interpreter=mi3` (cross-platform:
+  Windows `CreatePipe` + `CreateProcessW`, POSIX `pipe` + `fork`) →
+  background reader thread MI3 records (`*stopped`, `=...`,
+  `~`/`@`/`&` stream) parse edip DAP
+  `stopped`/`terminated`/`output` event'lerine çevirir.
   Yapılan handler'lar: `initialize`/`launch`/`setBreakpoints`/
-  `configurationDone`/`threads`/`stackTrace`/`scopes`/`variables`/
-  `continue`/`pause`/`next`/`stepIn`/`stepOut`/`terminate`/
-  `disconnect`. MI tuple/list splitter `mi_split_list` ile
+  `setFunctionBreakpoints`/`setDataBreakpoints`/`dataBreakpointInfo`/
+  `setInstructionBreakpoints`/`configurationDone`/`threads`/
+  `stackTrace`/`scopes`/`variables` (struct/array drill-down via
+  `-var-create`)/`evaluate`/`setVariable`/`continue`/`pause`/`next`/
+  `stepIn`/`stepOut`/`restart`/`terminate`/`disconnect`.
+  Breakpoint'lerin tamamı condition + hit-count destekli; logpoint
+  `logMessage`'ları `{expr}` interpolation ile detached worker
+  thread'de evaluate edilir + `output` event yayınlanıp
+  `-exec-continue` ile devam edilir (reader thread'den synchronous
+  evaluate deadlock olur, worker thread bunu sidestep eder). MI
+  tuple/list splitter `mi_split_list` ile
   `stack=[frame={...},frame={...}]` ve `variables=[{...},{...}]`
   parse edilir. SIGINT disambiguation (`pause` vs `exception`).
   `tests/dap_smoke.py` gdb-missing branch + gdb-present
@@ -299,16 +308,6 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Tooling
 
-- 🟢 **DAP server polish (post-Plan 07 Parça B).** Çekirdek + ana
-  polish dilimleri 2026-05-12 turunda kapandı: `evaluate` (PR #199),
-  `setVariable` (PR #201), conditional + hit-count breakpoints
-  (PR #203), log breakpoints (PR #205), `restart` (PR #207),
-  struct/array drill-down via `-var-create` (PR #209),
-  `setFunctionBreakpoints` (PR #211). Kalan: `logMessage`
-  `{expr}` interpolation (reader-thread'i callback-based result
-  delivery'ye geçirmek lazım — bugünkü `wait_for_result` reader
-  thread'den çağrıldığında deadlock olur), data breakpoints
-  (watchpoints), instruction breakpoints.
 - 🟢 **JetBrains plugin.** Sadece VS Code var.
 
 ### Ağ / I/O / TLS
