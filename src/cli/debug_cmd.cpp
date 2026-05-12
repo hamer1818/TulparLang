@@ -780,7 +780,7 @@ void handle_initialize(cJSON *request) {
   cJSON_AddBoolToObject(body, "supportsFunctionBreakpoints", false);
   cJSON_AddBoolToObject(body, "supportsConditionalBreakpoints", false);
   cJSON_AddBoolToObject(body, "supportsHitConditionalBreakpoints", false);
-  cJSON_AddBoolToObject(body, "supportsEvaluateForHovers", false);
+  cJSON_AddBoolToObject(body, "supportsEvaluateForHovers", true);
   cJSON_AddBoolToObject(body, "supportsStepBack", false);
   cJSON_AddBoolToObject(body, "supportsSetVariable", false);
   cJSON_AddBoolToObject(body, "supportsRestartFrame", false);
@@ -1428,6 +1428,99 @@ void handle_step_out(cJSON *request) {
   execution_control_reply(request, /*include_continued_flag=*/false);
 }
 
+// `evaluate` powers VS Code's watch panel + the Debug Console REPL
+// + hover-on-expression. The DAP request carries an arbitrary
+// expression string and (optionally) a frameId to evaluate it in;
+// gdb/MI's equivalent is `-data-evaluate-expression`, scoped to
+// the currently-selected frame.
+//
+// Frame selection: when `frameId` is set we send
+// `-stack-select-frame N` first so the evaluator sees that frame's
+// locals. If frameId is absent (the Debug Console REPL doesn't
+// provide one), we evaluate in gdb's current frame which is
+// whatever was selected by the last `stackTrace` request.
+//
+// Error shape: gdb's `^error,msg="..."` (undefined identifier,
+// syntax error, etc.) surfaces as DAP success=true with the error
+// string as the `result` body field — that's how VS Code's watch
+// panel expects to render expression failures, since marking the
+// whole DAP response as success=false would suppress the row
+// entirely. Only adapter-side failures (gdb subprocess gone,
+// expression missing from arguments) come back as DAP success=false.
+void handle_evaluate(cJSON *request) {
+  cJSON *args = cJSON_GetObjectItem(request, "arguments");
+  cJSON *expr_j = cJSON_IsObject(args)
+                       ? cJSON_GetObjectItem(args, "expression") : nullptr;
+  cJSON *frame_j = cJSON_IsObject(args)
+                        ? cJSON_GetObjectItem(args, "frameId") : nullptr;
+
+  if (!cJSON_IsString(expr_j) || !expr_j->valuestring ||
+      !*expr_j->valuestring) {
+    execution_control_fail(request, "evaluate: missing or empty expression");
+    return;
+  }
+  if (!g_gdb.running()) {
+    execution_control_fail(request, "evaluate: gdb subprocess not running");
+    return;
+  }
+
+  // Switch frame first so the expression resolves against THIS
+  // frame's locals. `-stack-select-frame` is cheap; a bad frameId
+  // will surface as the evaluate itself failing on missing
+  // identifiers, which the client renders anyway. Skip when
+  // frameId is absent (REPL mode).
+  if (cJSON_IsNumber(frame_j)) {
+    int fid = static_cast<int>(frame_j->valuedouble);
+    char frame_cmd[48];
+    std::snprintf(frame_cmd, sizeof(frame_cmd),
+                  "-stack-select-frame %d", fid);
+    g_gdb.send_command(frame_cmd, /*prefix_token=*/true);
+  }
+
+  // gdb/MI expects the expression wrapped in C-string quotes with
+  // internal `"` and `\` escaped. We don't try to handle every
+  // weird escape — pathological inputs will round-trip as a
+  // syntax error from gdb, which is exactly what the user should
+  // see in the watch panel.
+  std::string mi_cmd = "-data-evaluate-expression \"";
+  for (const char *p = expr_j->valuestring; *p; ++p) {
+    if (*p == '"' || *p == '\\') mi_cmd.push_back('\\');
+    mi_cmd.push_back(*p);
+  }
+  mi_cmd.push_back('"');
+
+  // 2-second cap — gdb usually replies in <10ms but a hung
+  // evaluator shouldn't wedge the DAP wire.
+  std::string result = gdb_query(mi_cmd, 2000);
+
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON *body = cJSON_CreateObject();
+  if (result.compare(0, 5, "^done") == 0) {
+    std::string value = mi_field(result, "value");
+    cJSON_AddStringToObject(body, "result",
+                            value.empty() ? "<no value>" : value.c_str());
+  } else {
+    // ^error or timeout — surface the gdb message as the result
+    // string. Watch panel renders it on the row; the DAP request
+    // itself stays success=true so the panel keeps the row in
+    // play.
+    std::string msg = mi_field(result, "msg");
+    if (msg.empty()) {
+      msg = result.empty() ? "gdb evaluate timeout" : result;
+    }
+    cJSON_AddStringToObject(body, "result", msg.c_str());
+  }
+  // No drill-down children for evaluate results today — same
+  // limitation as `variables`. A later PR can switch to
+  // `-var-create` per evaluate and expose a non-zero
+  // variablesReference when the value is a struct/array.
+  cJSON_AddNumberToObject(body, "variablesReference", 0);
+
+  cJSON_AddItemToObject(resp, "body", body);
+  write_message(resp);
+  cJSON_Delete(resp);
+}
+
 // For every request we haven't wired up yet, send a structured
 // "not implemented" response so the client surfaces a clear error
 // instead of waiting forever for a reply that never comes.
@@ -1513,6 +1606,8 @@ int debug_cmd_main(int argc, char **argv) {
       handle_step_in(msg);
     } else if (std::strcmp(cmd, "stepOut") == 0) {
       handle_step_out(msg);
+    } else if (std::strcmp(cmd, "evaluate") == 0) {
+      handle_evaluate(msg);
     } else if (std::strcmp(cmd, "terminate") == 0) {
       handle_terminate(msg);
     } else if (std::strcmp(cmd, "disconnect") == 0) {
