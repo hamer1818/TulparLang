@@ -433,17 +433,20 @@ def main() -> int:
         # / inferior gone / gdb missing) is also acceptable.
 
         # 7c) A still-unimplemented request returns the structured
-        # "not implemented" fallback. `restart` is the smallest
-        # remaining stub.
+        # "not implemented" fallback. `setFunctionBreakpoints` is
+        # one of the remaining stubs (line breakpoints carry the
+        # main F5 workflow; function/data/instruction breakpoints
+        # are less common and not yet wired).
         send(proc, {
-            "seq": 8, "type": "request", "command": "restart",
-            "arguments": {},
+            "seq": 8, "type": "request", "command": "setFunctionBreakpoints",
+            "arguments": {"breakpoints": [{"name": "main"}]},
         })
-        r = recv_response(proc, "restart", events, timeout=5.0)
+        r = recv_response(proc, "setFunctionBreakpoints", events, timeout=5.0)
         if not r:
-            failures.append("restart stub: no response")
+            failures.append("setFunctionBreakpoints stub: no response")
         elif r.get("success") is not False:
-            failures.append(f"restart stub: expected success=false: {r!r}")
+            failures.append(
+                f"setFunctionBreakpoints stub: expected success=false: {r!r}")
 
         # 8) disconnect -> success, process exits 0
         send(proc, {

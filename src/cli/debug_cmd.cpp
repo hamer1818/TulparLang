@@ -846,7 +846,7 @@ void handle_initialize(cJSON *request) {
   cJSON_AddBoolToObject(body, "supportsStepInTargetsRequest", false);
   cJSON_AddBoolToObject(body, "supportsCompletionsRequest", false);
   cJSON_AddBoolToObject(body, "supportsModulesRequest", false);
-  cJSON_AddBoolToObject(body, "supportsRestartRequest", false);
+  cJSON_AddBoolToObject(body, "supportsRestartRequest", true);
   cJSON_AddBoolToObject(body, "supportsExceptionOptions", false);
   cJSON_AddBoolToObject(body, "supportsValueFormattingOptions", false);
   cJSON_AddBoolToObject(body, "supportsExceptionInfoRequest", false);
@@ -1277,6 +1277,52 @@ void handle_terminate(cJSON *request) {
 void handle_disconnect(cJSON *request) {
   g_gdb.stop();
   g_launched = false;
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+  write_message(resp);
+  cJSON_Delete(resp);
+}
+
+// `restart` is "tear down the current debuggee and re-launch the
+// same configuration". DAP clients fire this when the user clicks
+// the green circular-arrow icon next to the play button. Saves
+// the disconnect → launch round-trip the client would otherwise
+// do (plus a fresh `initialize` handshake) — important for VS
+// Code's UX because the call stack / watch / breakpoint state
+// stays mounted across the restart.
+//
+// Implementation: stop the gdb subprocess (which also clears
+// logpoints, results, and any in-flight wait_for_result waiters),
+// then re-spawn on the same `g_built_binary` we recorded during
+// the original launch. The AOT build is preserved — we don't
+// rebuild the .tpr, just respawn gdb against the existing
+// executable. After the response goes out, the client typically
+// re-sends `setBreakpoints` + `configurationDone` to repopulate
+// the bp table and start the new inferior.
+void handle_restart(cJSON *request) {
+  // Inline failure path — `execution_control_fail` lives further
+  // down the file and forward-declaring it just for this one
+  // call isn't worth the noise.
+  auto fail = [&](const char *msg) {
+    cJSON *resp = make_response(request, /*success=*/false, msg);
+    cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+    write_message(resp);
+    cJSON_Delete(resp);
+  };
+
+  if (!g_launched || g_built_binary.empty()) {
+    fail("restart: no launched session to restart (call launch first)");
+    return;
+  }
+
+  g_gdb.stop();
+
+  if (!g_gdb.start(g_built_binary)) {
+    g_launched = false;
+    fail("restart: failed to respawn gdb subprocess (is gdb still on PATH?)");
+    return;
+  }
+
   cJSON *resp = make_response(request, /*success=*/true, nullptr);
   cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
   write_message(resp);
@@ -1840,6 +1886,8 @@ int debug_cmd_main(int argc, char **argv) {
       handle_evaluate(msg);
     } else if (std::strcmp(cmd, "setVariable") == 0) {
       handle_set_variable(msg);
+    } else if (std::strcmp(cmd, "restart") == 0) {
+      handle_restart(msg);
     } else if (std::strcmp(cmd, "terminate") == 0) {
       handle_terminate(msg);
     } else if (std::strcmp(cmd, "disconnect") == 0) {
