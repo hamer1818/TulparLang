@@ -228,11 +228,21 @@ def main() -> int:
         if launch_ok:
             # 4) setBreakpoints -> forwards `-break-insert` to gdb
             # per line and returns the verified Breakpoint[] reply.
+            # We attach `condition` + `hitCondition` to exercise the
+            # `-c` / `-i` MI flag passthrough — the smoke doesn't
+            # validate that the conditions actually filter (no live
+            # frame to evaluate against), but the breakpoint setup
+            # round-trip must still complete without breaking the
+            # response shape.
             send(proc, {
                 "seq": 3, "type": "request", "command": "setBreakpoints",
                 "arguments": {
                     "source": {"path": tpr_path},
-                    "breakpoints": [{"line": 1}],
+                    "breakpoints": [{
+                        "line": 1,
+                        "condition": "1 == 1",
+                        "hitCondition": "1",
+                    }],
                 },
             })
             r = recv_response(proc, "setBreakpoints", events, timeout=5.0)
