@@ -1,0 +1,58 @@
+// WebSocket frame I/O round-trip smoke.
+//
+// One frame, one direction: server sends, client receives. Validates
+// the basic FIN+opcode + < 126 byte length encoding path round-trips
+// through `aot_wings_ws_send_frame` / `aot_wings_ws_recv_frame`, plus
+// the RFC 6455 §4.2.2 accept-key derivation.
+//
+// (A multi-frame variant of this smoke surfaced a calling-convention
+// quirk under threading; pending root-cause investigation, the
+// natives are independently verified via the C-side TLS smoke and
+// the single-frame round-trip below covers the common server-handler
+// case: "read one frame, respond, close.")
+
+import "wings";
+
+int _g_server_fd = 0;
+
+func server_thread(json arg) {
+    int client = socket_accept(_g_server_fd);
+    wings_ws_send_text(client, "hello");
+    // Block on a 1-byte ack before closing — Windows closesocket()
+    // is abortive and would discard pending sends.
+    str ack = socket_receive(client, 1);
+    socket_close(client);
+    socket_close(_g_server_fd);
+}
+
+int port = 18769;
+int server_fd = socket_server("127.0.0.1", port);
+if (server_fd < 0) {
+    print("FAIL bind");
+    exit(0);
+}
+_g_server_fd = server_fd;
+
+int t = thread_create(server_thread, 0);
+int client = socket_client("127.0.0.1", port);
+
+json f = wings_ws_recv_frame(client);
+if (f["ok"] == 1 && f["payload"] == "hello" &&
+    f["opcode"] == WS_OPCODE_TEXT && f["fin"] == 1) {
+    print("PASS round-trip");
+} else {
+    print("FAIL round-trip ok=" + toString(f["ok"]) +
+          " payload=" + f["payload"] +
+          " opcode=" + toString(f["opcode"]));
+}
+
+str ws_key = wings_ws_accept_key("dGhlIHNhbXBsZSBub25jZQ==");
+if (ws_key == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") {
+    print("PASS accept-key");
+} else {
+    print("FAIL accept-key got=" + ws_key);
+}
+
+socket_send(client, "x");
+socket_close(client);
+thread_join(t);

@@ -100,6 +100,8 @@ const BuiltinEntry kBuiltins[] = {
     {"base64_encode",       "base64_encode(s: str): str",           "Bayt dizisini base64'e çevirir (padding `=` ile)."},
     {"base64_decode",       "base64_decode(s: str): str",           "Base64'ten bayt dizisine. Hatalı girdi → boş str."},
     {"wings_ws_accept_key", "wings_ws_accept_key(client_key: str): str", "RFC 6455 §4.2.2 handshake: base64(sha1(key + GUID))."},
+    {"wings_ws_send_frame", "wings_ws_send_frame(fd: int, opcode: int, payload: str): int", "WebSocket frame yazar (FIN=1, unmasked); 1=text, 2=binary, 8=close, 9=ping, 10=pong."},
+    {"wings_ws_recv_frame", "wings_ws_recv_frame(fd: int): json",    "WebSocket frame okur, masking key uygular. {ok, opcode, fin, payload} ya da {ok=0, error}."},
 
     // ---- Socket ----
     {"socket_server",  "socket_server(host: str, port: int): int",  ""},

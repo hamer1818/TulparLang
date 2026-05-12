@@ -527,6 +527,31 @@ func wings_sse_event(str name, str data) {
     return s;
 }
 
+// ----- WebSocket frame I/O helpers -----------------------------------------
+//
+// Three opcode constants + two send wrappers. The full
+// `wings_ws_send_frame(fd, opcode, payload)` is still available for
+// binary frames, ping/pong, etc.; these wrappers cover the 95% case
+// (send text, send close, receive — and pong any ping we get).
+
+int WS_OPCODE_TEXT   = 1;
+int WS_OPCODE_BINARY = 2;
+int WS_OPCODE_CLOSE  = 8;
+int WS_OPCODE_PING   = 9;
+int WS_OPCODE_PONG   = 10;
+
+func wings_ws_send_text(int fd, str payload) {
+    return wings_ws_send_frame(fd, WS_OPCODE_TEXT, payload);
+}
+
+func wings_ws_send_close(int fd) {
+    return wings_ws_send_frame(fd, WS_OPCODE_CLOSE, "");
+}
+
+func wings_ws_send_pong(int fd, str payload) {
+    return wings_ws_send_frame(fd, WS_OPCODE_PONG, payload);
+}
+
 // ----- WebSocket upgrade helper --------------------------------------------
 //
 // `wings_ws_upgrade(req)` builds the 101 Switching Protocols response a
