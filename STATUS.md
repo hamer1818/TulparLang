@@ -161,8 +161,10 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 - **LSP:** init, diagnostics, hover (functions, builtins, AND
   scope-aware variables), completion, go-to-definition,
   find-references, rename, signatureHelp (active-parameter aware
-  for both user functions and builtins). `tests/lsp_smoke.py` 9/9
-  check.
+  for both user functions and builtins), **incremental document
+  sync** (`change=2`; full-text replace still accepted for
+  clients that don't negotiate the cheaper form).
+  `tests/lsp_smoke.py` 9/9 check.
 - **AOT debug info (Plan 07 Parça A — PR'lar #160–#173):**
   `tulpar [--debug | -g] build <file>` opt-in. LLVM IR'da `!dbg`
   metadata: `DICompileUnit` + `DIFile` + module flags, her user
@@ -252,8 +254,12 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   func tick() { n = n + 1; }` deseni sessizce çöküyor (program
   output vermiyor). Higher-order patterns için ortam (environment)
   yapısı ve indirect call gerek.
-- 🟡 **Lambda ifadeleri.** `(int a, int b) => a + b` yok; map/filter
-  benzeri kullanım sözdizimsiz.
+- 🟡 **Lambda ifadeleri.** `(int a, int b) => a + b` parser
+  scaffolding'i yerinde (lexer'a `TOKEN_FAT_ARROW` eklendi,
+  `(<type> ...) =>` deseni ve bare `=>` parser'da "lambda
+  expressions not yet supported" diagnostic'iyle yakalanıyor) —
+  AST node + codegen + env capture follow-up PR'lar için
+  bekliyor; map/filter benzeri kullanım hâlâ sözdizimsiz.
 - 🟢 **Pattern matching / `match` ifadesi.** Switch yok; if-else
   zinciri ile yapılıyor.
 - 🟢 **Generics.** Type system overhaul; `func f<T>(T x): T` parse
@@ -303,10 +309,6 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   delivery'ye geçirmek lazım — bugünkü `wait_for_result` reader
   thread'den çağrıldığında deadlock olur), data breakpoints
   (watchpoints), instruction breakpoints.
-- 🟢 **LSP incremental document sync** (`change: 2`) — bugün full-text
-  re-parse her keystroke'ta gidiyor; sub-100ms olduğu için küçük
-  dosyalarda farkı yok ama büyük dosyalarda diff-bazlı sync kazanç
-  verir.
 - 🟢 **JetBrains plugin.** Sadece VS Code var.
 
 ### Ağ / I/O / TLS

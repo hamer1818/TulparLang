@@ -391,6 +391,18 @@ Token Lexer::next_token() {
             advance(); advance();
             return Token(TOKEN_EQUAL, "==", start_line, start_column);
         }
+        if (ch == '=' && next_ch == '>') {
+            // Lambda head: `(int a, int b) => expr`. Parser
+            // recognises this after a parenthesised parameter
+            // list to build an AST_LAMBDA node. Codegen for
+            // lambdas isn't wired up yet — current parser
+            // surfaces a clear "lambdas not yet supported"
+            // error so the syntax can land first and the
+            // codegen + env-capture follow-ups stay scoped to
+            // their own PRs.
+            advance(); advance();
+            return Token(TOKEN_FAT_ARROW, "=>", start_line, start_column);
+        }
         if (ch == '!' && next_ch == '=') {
             advance(); advance();
             return Token(TOKEN_NOT_EQUAL, "!=", start_line, start_column);

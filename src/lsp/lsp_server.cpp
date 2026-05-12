@@ -287,12 +287,16 @@ void send_response(cJSON *id, cJSON *result_or_null) {
 cJSON *build_initialize_result() {
     cJSON *result = cJSON_CreateObject();
     cJSON *caps = cJSON_AddObjectToObject(result, "capabilities");
-    // Full-text document sync. Incremental sync (change=2) is a future
-    // optimisation — at the file sizes Tulpar projects hit today the
-    // re-parse is sub-100ms either way.
+    // Incremental document sync (change=2). Clients send each edit
+    // as `(range, text)` rather than the entire document on every
+    // keystroke — sub-100ms re-parse stays sub-100ms but the wire
+    // bandwidth drops linearly with file size. `handle_did_change`
+    // accepts BOTH shapes (a change event with `range` is
+    // incremental; without is full-replace), so clients that don't
+    // negotiate incremental sync still work as before.
     cJSON *sync = cJSON_AddObjectToObject(caps, "textDocumentSync");
     cJSON_AddBoolToObject(sync, "openClose", 1);
-    cJSON_AddNumberToObject(sync, "change", 1);  // 1 = full text
+    cJSON_AddNumberToObject(sync, "change", 2);  // 2 = incremental
     cJSON *save = cJSON_AddObjectToObject(sync, "save");
     cJSON_AddBoolToObject(save, "includeText", 0);
 
@@ -333,6 +337,10 @@ void handle_did_open(DocumentStore &docs, cJSON *params) {
     check_and_publish(uri, entry);
 }
 
+// Forward decl — the definition lives further down with the rest of
+// the position helpers, but didChange needs it for incremental sync.
+size_t line_col_to_offset(const std::string &src, int line, int character);
+
 void handle_did_change(DocumentStore &docs, cJSON *params) {
     cJSON *td = cJSON_GetObjectItem(params, "textDocument");
     if (!td) return;
@@ -340,17 +348,50 @@ void handle_did_change(DocumentStore &docs, cJSON *params) {
     if (!uri) return;
     cJSON *changes = cJSON_GetObjectItem(params, "contentChanges");
     if (!cJSON_IsArray(changes)) return;
-    // Full-text sync: take the last change's text wholesale. (Per the
-    // capabilities we advertise, the client always sends the entire
-    // document on every keystroke.)
-    cJSON *last = nullptr;
     int n = cJSON_GetArraySize(changes);
     if (n <= 0) return;
-    last = cJSON_GetArrayItem(changes, n - 1);
-    const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(last, "text"));
-    if (!text) return;
+
     auto &entry = docs.docs[uri];
-    entry.text = text;
+
+    // The LSP spec lets each TextDocumentContentChangeEvent be EITHER
+    // a full replace (just a `text` field) OR an incremental edit
+    // (`range` + `text`). With change=2 advertised in capabilities,
+    // clients send the cheaper incremental form for typical edits
+    // (single-char insertions, line-range diffs) and fall back to
+    // full replace only on big paste / undo operations. We accept
+    // both shapes per event in order — the LSP spec says the changes
+    // array is applied head-to-tail.
+    for (int i = 0; i < n; i++) {
+        cJSON *ev = cJSON_GetArrayItem(changes, i);
+        if (!ev) continue;
+        const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "text"));
+        if (!text) continue;
+        cJSON *range = cJSON_GetObjectItem(ev, "range");
+        if (!cJSON_IsObject(range)) {
+            // No range => full-document replace. Drop everything we
+            // accumulated so far and start from this text. The spec
+            // says full-replace events MUST be the only event in
+            // their batch, but we don't enforce that — taking the
+            // last-wins interpretation is robust against sloppy
+            // clients.
+            entry.text = text;
+            continue;
+        }
+        // Incremental: replace src[start_off .. end_off) with text.
+        cJSON *start = cJSON_GetObjectItem(range, "start");
+        cJSON *end_j = cJSON_GetObjectItem(range, "end");
+        if (!cJSON_IsObject(start) || !cJSON_IsObject(end_j)) continue;
+        int sl = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(start, "line"));
+        int sc = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(start, "character"));
+        int el = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(end_j, "line"));
+        int ec = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(end_j, "character"));
+        size_t s_off = line_col_to_offset(entry.text, sl, sc);
+        size_t e_off = line_col_to_offset(entry.text, el, ec);
+        if (e_off < s_off) e_off = s_off;
+        if (e_off > entry.text.size()) e_off = entry.text.size();
+        entry.text.replace(s_off, e_off - s_off, text);
+    }
+
     check_and_publish(uri, entry);
 }
 
