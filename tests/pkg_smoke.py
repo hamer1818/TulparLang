@@ -98,6 +98,24 @@ def main() -> int:
         run(exe, ["remove", "build-tagged"], wd)
         run(exe, ["remove", "compound"], wd)
 
+        # 5b) `pkg search` / `pkg info` reject missing-registry input.
+        # Run from an empty subdir with no manifest and no env override
+        # so the "no registry configured" branch fires; this validates
+        # the CLI parse path without hitting the network.
+        empty_sub = os.path.join(wd, "no_manifest")
+        os.makedirs(empty_sub, exist_ok=True)
+        old_env_reg = os.environ.pop("TULPAR_REGISTRY", None)
+        try:
+            run(exe, ["search"], empty_sub, expect_rc=1)
+            run(exe, ["info", "demo"], empty_sub, expect_rc=1)
+            # 5c) Missing positional arg on `pkg info`.
+            run(exe, ["info"], empty_sub, expect_rc=2)
+            # 5d) Unknown flag is rejected loudly.
+            run(exe, ["search", "--no-such-flag"], empty_sub, expect_rc=2)
+        finally:
+            if old_env_reg is not None:
+                os.environ["TULPAR_REGISTRY"] = old_env_reg
+
         # 6) install a `path:` dep + verify it's vendored.
         # Build a tiny sibling package, point the manifest at it, install.
         # Strip the registry-versioned `wings` dep from step 3 first so

@@ -12,6 +12,7 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -1257,6 +1258,257 @@ int cmd_publish(int argc, char **argv) {
     return 0;
 }
 
+// ASCII-lowercase a string in place. Used by cmd_search for
+// case-insensitive substring matching — fine for the typical mostly-
+// ASCII package-name corpus; non-ASCII bytes pass through unchanged
+// so a Turkish-language description still matches against itself.
+static void ascii_tolower(std::string &s) {
+    for (auto &c : s) {
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    }
+}
+
+// Pretty-print a `published_at` Unix timestamp in YYYY-MM-DD UTC. The
+// registry stores seconds-since-epoch ints; the human formatter is
+// keyed to what `pkg info` / `pkg search` show, not full ISO 8601.
+static std::string format_unix_date(long long ts) {
+    if (ts <= 0) return "—";
+    time_t t = (time_t)ts;
+    struct tm utc;
+#if defined(_WIN32)
+    gmtime_s(&utc, &t);
+#else
+    gmtime_r(&t, &utc);
+#endif
+    char buf[16];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d", &utc);
+    return std::string(buf);
+}
+
+// GET <registry>/v1/packages — full catalog. Returned as a parsed
+// cJSON root the caller owns (must cJSON_Delete). Used by `pkg search`
+// (client-side filter) and `pkg list --remote`.
+static cJSON *fetch_catalog(const std::string &registry_url,
+                            std::string &err) {
+    std::string url = registry_url;
+    if (!url.empty() && url.back() == '/') url.pop_back();
+    url += "/v1/packages";
+
+    std::string body;
+    int status = 0;
+    if (!tulpar::http_fetch_url(url, body, status, err)) return nullptr;
+    if (status < 200 || status >= 300) {
+        err = "HTTP " + std::to_string(status);
+        return nullptr;
+    }
+    cJSON *doc = cJSON_Parse(body.c_str());
+    if (!doc) {
+        err = "registry response is not valid JSON";
+        return nullptr;
+    }
+    return doc;
+}
+
+int cmd_search(int argc, char **argv) {
+    // `tulpar pkg search [query] [--registry <url>]`. Empty query lists
+    // every package in the catalog — useful both for discovery and as
+    // an `is the registry up?` smoke. Match is a case-insensitive
+    // substring against name + description (server has no /v1/search
+    // endpoint yet; client-side filter is fine for the current corpus
+    // size — re-evaluate when the catalog crosses a few thousand
+    // entries).
+    std::string query;
+    std::string flag_registry;
+    for (int i = 0; i < argc; i++) {
+        std::string a = argv[i];
+        if (a == "--registry" && i + 1 < argc) {
+            flag_registry = argv[++i];
+        } else if (!a.empty() && a[0] == '-') {
+            std::fprintf(stderr,
+                         "tulpar pkg search: unknown flag '%s'\n"
+                         "Usage: tulpar pkg search [query] [--registry <url>]\n",
+                         a.c_str());
+            return 2;
+        } else if (query.empty()) {
+            query = a;
+        }
+    }
+
+    Manifest m;
+    std::string ignore_err;
+    manifest_load(kManifestFile, m, ignore_err);  // optional
+    std::string registry = resolve_registry(flag_registry, m);
+    if (registry.empty()) {
+        std::fprintf(stderr,
+                     "tulpar pkg search: no registry configured. Pass "
+                     "`--registry <url>`, set `TULPAR_REGISTRY`, or run "
+                     "from a package directory whose tulpar.toml sets one.\n");
+        return 1;
+    }
+
+    std::string err;
+    cJSON *doc = fetch_catalog(registry, err);
+    if (!doc) {
+        std::fprintf(stderr, "tulpar pkg search: %s\n", err.c_str());
+        return 1;
+    }
+    cJSON *packages = cJSON_GetObjectItem(doc, "packages");
+    if (!cJSON_IsArray(packages)) {
+        cJSON_Delete(doc);
+        std::fprintf(stderr,
+                     "tulpar pkg search: registry response missing "
+                     "`packages` array\n");
+        return 1;
+    }
+
+    std::string q_lc = query;
+    ascii_tolower(q_lc);
+
+    int shown = 0;
+    cJSON *it = nullptr;
+    cJSON_ArrayForEach(it, packages) {
+        const char *name = "";
+        const char *latest = "";
+        const char *desc = "";
+        long long downloads = 0;
+        long long published_at = 0;
+        cJSON *n = cJSON_GetObjectItem(it, "name");
+        cJSON *l = cJSON_GetObjectItem(it, "latest");
+        cJSON *d = cJSON_GetObjectItem(it, "description");
+        cJSON *t = cJSON_GetObjectItem(it, "total_downloads");
+        cJSON *p = cJSON_GetObjectItem(it, "latest_published_at");
+        if (cJSON_IsString(n) && n->valuestring) name = n->valuestring;
+        if (cJSON_IsString(l) && l->valuestring) latest = l->valuestring;
+        if (cJSON_IsString(d) && d->valuestring) desc = d->valuestring;
+        if (cJSON_IsNumber(t)) downloads = (long long)t->valuedouble;
+        if (cJSON_IsNumber(p)) published_at = (long long)p->valuedouble;
+        if (!q_lc.empty()) {
+            std::string hay = std::string(name) + " " + desc;
+            ascii_tolower(hay);
+            if (hay.find(q_lc) == std::string::npos) continue;
+        }
+        std::fprintf(stdout, "%-24s %-10s %4lld dl  %s  %s\n",
+                     name, latest, downloads,
+                     format_unix_date(published_at).c_str(), desc);
+        shown++;
+    }
+    cJSON_Delete(doc);
+
+    if (shown == 0) {
+        if (query.empty()) {
+            std::fprintf(stdout, "(registry has no packages)\n");
+        } else {
+            std::fprintf(stdout, "no packages match '%s'\n", query.c_str());
+        }
+    }
+    return 0;
+}
+
+int cmd_info(int argc, char **argv) {
+    // `tulpar pkg info <name> [--registry <url>]`. Shows the
+    // `/v1/packages/:name` summary in a readable form. Use this before
+    // `pkg add` to confirm the package exists and inspect the version
+    // list; the alternative used to be opening the JSON URL in a
+    // browser, which doesn't tell you what's available locally.
+    std::string name;
+    std::string flag_registry;
+    for (int i = 0; i < argc; i++) {
+        std::string a = argv[i];
+        if (a == "--registry" && i + 1 < argc) {
+            flag_registry = argv[++i];
+        } else if (!a.empty() && a[0] == '-') {
+            std::fprintf(stderr,
+                         "tulpar pkg info: unknown flag '%s'\n"
+                         "Usage: tulpar pkg info <name> [--registry <url>]\n",
+                         a.c_str());
+            return 2;
+        } else if (name.empty()) {
+            name = a;
+        }
+    }
+    if (name.empty()) {
+        std::fprintf(stderr,
+                     "Usage: tulpar pkg info <name> [--registry <url>]\n");
+        return 2;
+    }
+
+    Manifest m;
+    std::string ignore_err;
+    manifest_load(kManifestFile, m, ignore_err);
+    std::string registry = resolve_registry(flag_registry, m);
+    if (registry.empty()) {
+        std::fprintf(stderr,
+                     "tulpar pkg info: no registry configured. Pass "
+                     "`--registry <url>`, set `TULPAR_REGISTRY`, or run "
+                     "from a package directory whose tulpar.toml sets one.\n");
+        return 1;
+    }
+
+    std::string url = registry;
+    url += "/v1/packages/";
+    url += name;
+    std::string body;
+    int status = 0;
+    std::string err;
+    if (!tulpar::http_fetch_url(url, body, status, err)) {
+        std::fprintf(stderr, "tulpar pkg info: %s\n", err.c_str());
+        return 1;
+    }
+    if (status == 404) {
+        std::fprintf(stderr, "tulpar pkg info: '%s' not found in %s\n",
+                     name.c_str(), registry.c_str());
+        return 1;
+    }
+    if (status < 200 || status >= 300) {
+        std::fprintf(stderr, "tulpar pkg info: HTTP %d from %s\n",
+                     status, url.c_str());
+        return 1;
+    }
+    cJSON *doc = cJSON_Parse(body.c_str());
+    if (!doc) {
+        std::fprintf(stderr,
+                     "tulpar pkg info: registry response is not valid JSON\n");
+        return 1;
+    }
+
+    const char *resp_name = "";
+    const char *latest = "";
+    const char *desc = "";
+    long long downloads = 0;
+    cJSON *n = cJSON_GetObjectItem(doc, "name");
+    cJSON *l = cJSON_GetObjectItem(doc, "latest");
+    cJSON *d = cJSON_GetObjectItem(doc, "description");
+    cJSON *t = cJSON_GetObjectItem(doc, "total_downloads");
+    cJSON *vers = cJSON_GetObjectItem(doc, "versions");
+    if (cJSON_IsString(n) && n->valuestring) resp_name = n->valuestring;
+    if (cJSON_IsString(l) && l->valuestring) latest = l->valuestring;
+    if (cJSON_IsString(d) && d->valuestring) desc = d->valuestring;
+    if (cJSON_IsNumber(t)) downloads = (long long)t->valuedouble;
+
+    std::fprintf(stdout, "name        %s\n", resp_name);
+    std::fprintf(stdout, "latest      %s\n", latest);
+    if (desc[0]) {
+        std::fprintf(stdout, "description %s\n", desc);
+    }
+    std::fprintf(stdout, "downloads   %lld\n", downloads);
+    std::fprintf(stdout, "registry    %s\n", registry.c_str());
+    std::fprintf(stdout, "versions   ");
+    if (cJSON_IsArray(vers)) {
+        cJSON *vit = nullptr;
+        cJSON_ArrayForEach(vit, vers) {
+            if (cJSON_IsString(vit) && vit->valuestring) {
+                std::fprintf(stdout, " %s", vit->valuestring);
+            }
+        }
+    }
+    std::fprintf(stdout, "\n");
+    std::fprintf(stdout,
+                 "install     tulpar pkg add %s@^%s && tulpar pkg install\n",
+                 resp_name, latest);
+    cJSON_Delete(doc);
+    return 0;
+}
+
 int cmd_remove(int argc, char **argv) {
     if (argc < 1) {
         std::fprintf(stderr, "Usage: tulpar pkg remove <name>\n");
@@ -1298,6 +1550,11 @@ void print_usage() {
         "  remove <name>          Drop a dependency line.\n"
         "  install                Vendor every `path:` dependency into\n"
         "                         tulpar_modules/<name>/.\n"
+        "  search [query] [flags] Browse the registry catalog. Empty\n"
+        "                         query lists every package.\n"
+        "                           --registry <url>   override the registry root\n"
+        "  info <name> [flags]    Show registry metadata for one package.\n"
+        "                           --registry <url>   override the registry root\n"
         "  publish [flags]        Publish the current package to the\n"
         "                         configured registry.\n"
         "                           --registry <url>   override the registry root\n"
@@ -1333,6 +1590,8 @@ int pkg_cli_main(int argc, char **argv) {
     if (std::strcmp(sub, "add") == 0)     return cmd_add(sub_argc, sub_argv);
     if (std::strcmp(sub, "remove") == 0)  return cmd_remove(sub_argc, sub_argv);
     if (std::strcmp(sub, "install") == 0) return cmd_install();
+    if (std::strcmp(sub, "search") == 0)  return cmd_search(sub_argc, sub_argv);
+    if (std::strcmp(sub, "info") == 0)    return cmd_info(sub_argc, sub_argv);
     if (std::strcmp(sub, "publish") == 0) return cmd_publish(sub_argc, sub_argv);
 
     std::fprintf(stderr, "tulpar pkg: unknown command '%s'\n\n", sub);

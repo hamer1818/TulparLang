@@ -102,8 +102,13 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Pkg ekosistemi
 
-- **CLI:** `init/list/add/remove/install/publish` + `.tpkg` JSON bundle
-  (multi-file) + content sniff (raw `.tpr` vs `.tpkg`).
+- **CLI:** `init/list/add/remove/install/publish/search/info` + `.tpkg`
+  JSON bundle (multi-file) + content sniff (raw `.tpr` vs `.tpkg`).
+  `pkg search [query]` registry catalog'unu ASCII-lowercase substring
+  match ile filtreler (boş query = tüm listele), `pkg info <name>`
+  ise tek paket detayı (versiyon listesi, indirme sayısı, install
+  hint string). İkisi de `--registry <url>` flag'i kabul eder ve
+  registry'siz çağrıyı hata ile reddeder.
 - **Manifest:** TOML alt-kümesi, `[registry]` + `[dependencies]`
   bölümleri, `strict = true` typecheck pre-pass eskaltörü.
 - **Semver range:** exact, caret (`^1.2.3`), tilde (`~1.2.3`),
@@ -355,7 +360,10 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   `demo` + `multipkg` smoke-test paketleri var. Stdlib paketleri
   (`wings`, `router`, `http_utils`, vb.) eski markdown listelerinde
   geçiyor ama registry'de publish edilmemiş.
-- 🟢 **`pkg search` + featured packages.** Discovery zayıf.
+- 🟢 **Server-side `/v1/search` endpoint.** Bugün `pkg search` client-side
+  filtreliyor — registry catalog'u büyüdüğünde `/v1/packages` payload'ı
+  N MB'a çıkarsa server-side full-text + featured-flag endpoint'ine
+  geçmek gerek. Şu anki paket sayısı (2) ile gereksiz.
 - 🟢 **Registry binary release asset support.** Şu an sadece source
   bundles; `tulpar update` benzeri binary distribution registry'den
   henüz çekmiyor.
