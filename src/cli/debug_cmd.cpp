@@ -370,6 +370,25 @@ class GdbProcess {
 
   bool running() const { return m_running.load(); }
 
+  // Replace `{expr}` placeholders in a logpoint message with the
+  // result of evaluating `expr` against the current gdb frame.
+  // `{{` / `}}` escape to literal braces per DAP spec. Called from
+  // the detached worker thread that handles logpoint hits — the
+  // reader thread can't call it directly because the synchronous
+  // evaluate inside would deadlock against `wait_for_result`
+  // (which the reader thread itself fulfils).
+  std::string interpolate_logpoint_message(const std::string &raw);
+
+  // Public-ish wrappers so the detached logpoint worker can emit
+  // the output event + auto-resume after interpolation. Both are
+  // safe to call after `stop()` — emit_output writes to stdout
+  // regardless of subprocess state, and send_command short-circuits
+  // when `m_running` is false.
+  void emit_output_public(const std::string &category,
+                          const std::string &content) {
+    emit_output(category, content);
+  }
+
  private:
   void reader_loop();
   void dispatch_async_record(const std::string &kind,
@@ -754,17 +773,34 @@ void GdbProcess::dispatch_async_record(const std::string &kind,
             if (it != m_logpoints.end()) msg = it->second;
           }
           if (!msg.empty()) {
-            // Append a newline so consecutive logpoints don't run
-            // together in the DEBUG CONSOLE.
-            if (msg.back() != '\n') msg.push_back('\n');
-            emit_output("console", msg);
-            // Auto-resume. This is a fire-and-forget MI command:
-            // gdb will send back a `^running` we'll log and then
-            // the next `*stopped` (real or another logpoint) when
-            // it actually fires. The reader thread doesn't block
-            // waiting for a token here because send_command is
-            // non-blocking on the write side.
-            send_command("-exec-continue", /*prefix_token=*/true);
+            // Hand off to a detached worker. The reader thread
+            // (this thread) CAN'T do the interpolation itself
+            // because each `{expr}` placeholder needs a
+            // synchronous `-data-evaluate-expression` round-trip,
+            // and `wait_for_result` is fulfilled by — this very
+            // reader thread. Calling it from here would deadlock
+            // permanently.
+            //
+            // The worker pulls the message, calls
+            // `interpolate_logpoint_message` (which does the
+            // evaluate round-trips against gdb's current frame),
+            // emits the resulting `output` event, then issues
+            // `-exec-continue` to resume the inferior. The
+            // detached thread outlives this stack frame and dies
+            // when its body returns. Safe across `stop()`:
+            // emit_output writes to stdout regardless, and
+            // send_command short-circuits when m_running is false.
+            std::thread([this, msg = std::move(msg)]() mutable {
+              std::string interpolated =
+                  interpolate_logpoint_message(msg);
+              if (interpolated.empty() ||
+                  interpolated.back() != '\n') {
+                interpolated.push_back('\n');
+              }
+              emit_output_public("console", interpolated);
+              send_command("-exec-continue",
+                           /*prefix_token=*/true);
+            }).detach();
             return;
           }
         }
@@ -839,6 +875,71 @@ void GdbProcess::emit_output(const std::string &category,
   cJSON_Delete(evt);
 }
 
+// Logpoint `{expr}` interpolation. DAP spec for logMessage:
+//   "Some words {x} other words {a+b}"
+//   `{{` and `}}` escape to literal `{` / `}`.
+//
+// Runs on a detached worker thread (NEVER on the reader thread —
+// the synchronous `wait_for_result` calls inside would deadlock
+// against the same reader that fulfils them). Each `{expr}` does
+// one `-data-evaluate-expression` round-trip; failures fall back
+// to `<error-msg>` inline so the user can see which placeholder
+// blew up instead of getting an empty output event.
+std::string GdbProcess::interpolate_logpoint_message(const std::string &raw) {
+  std::string out;
+  out.reserve(raw.size());
+  size_t i = 0;
+  while (i < raw.size()) {
+    char c = raw[i];
+    // Escaped `{{` / `}}` reduce to literal braces.
+    if (c == '{' && i + 1 < raw.size() && raw[i + 1] == '{') {
+      out.push_back('{');
+      i += 2;
+      continue;
+    }
+    if (c == '}' && i + 1 < raw.size() && raw[i + 1] == '}') {
+      out.push_back('}');
+      i += 2;
+      continue;
+    }
+    if (c == '{') {
+      // Find matching `}`. Doesn't recursively interpolate
+      // placeholders nested inside — DAP doesn't ask for that and
+      // gdb expressions like `arr[i].field` don't need braces.
+      size_t end = i + 1;
+      while (end < raw.size() && raw[end] != '}') end++;
+      if (end >= raw.size()) {
+        // Unterminated placeholder — emit the rest verbatim
+        // rather than silently dropping the trailing braces.
+        out.append(raw, i, std::string::npos);
+        break;
+      }
+      std::string expr(raw, i + 1, end - i - 1);
+      std::string cmd = "-data-evaluate-expression \"";
+      for (char ec : expr) {
+        if (ec == '"' || ec == '\\') cmd.push_back('\\');
+        cmd.push_back(ec);
+      }
+      cmd.push_back('"');
+      int tok = send_command(cmd, /*prefix_token=*/true);
+      std::string res = wait_for_result(tok, 1000);
+      if (res.compare(0, 5, "^done") == 0) {
+        out += mi_field(res, "value");
+      } else {
+        std::string err = mi_field(res, "msg");
+        out.push_back('<');
+        out.append(err.empty() ? "?" : err);
+        out.push_back('>');
+      }
+      i = end + 1;
+      continue;
+    }
+    out.push_back(c);
+    i++;
+  }
+  return out;
+}
+
 // Handle the `initialize` request. Advertises what this server CAN
 // do today — which is almost nothing besides keeping the channel
 // alive — and emits the `initialized` event the client waits on
@@ -873,7 +974,7 @@ void handle_initialize(cJSON *request) {
   cJSON_AddBoolToObject(body, "supportsTerminateThreadsRequest", false);
   cJSON_AddBoolToObject(body, "supportsSetExpression", false);
   cJSON_AddBoolToObject(body, "supportsTerminateRequest", true);
-  cJSON_AddBoolToObject(body, "supportsDataBreakpoints", false);
+  cJSON_AddBoolToObject(body, "supportsDataBreakpoints", true);
   cJSON_AddBoolToObject(body, "supportsReadMemoryRequest", false);
   cJSON_AddBoolToObject(body, "supportsWriteMemoryRequest", false);
   cJSON_AddBoolToObject(body, "supportsDisassembleRequest", false);
@@ -881,7 +982,7 @@ void handle_initialize(cJSON *request) {
   cJSON_AddBoolToObject(body, "supportsBreakpointLocationsRequest", false);
   cJSON_AddBoolToObject(body, "supportsClipboardContext", false);
   cJSON_AddBoolToObject(body, "supportsSteppingGranularity", false);
-  cJSON_AddBoolToObject(body, "supportsInstructionBreakpoints", false);
+  cJSON_AddBoolToObject(body, "supportsInstructionBreakpoints", true);
   cJSON_AddBoolToObject(body, "supportsExceptionFilterOptions", false);
 
   cJSON_AddItemToObject(resp, "body", body);
@@ -1336,6 +1437,215 @@ void handle_set_function_breakpoints(cJSON *request) {
             g_gdb.m_logpoints[n] = log_j->valuestring;
           }
         }
+      } else {
+        std::string msg = mi_field(result, "msg");
+        if (msg.empty()) msg = result.empty() ? "gdb timeout" : result;
+        cJSON_AddStringToObject(out_bp, "message", msg.c_str());
+      }
+      cJSON_AddItemToArray(verified, out_bp);
+    }
+  }
+
+  cJSON_AddItemToObject(body, "breakpoints", verified);
+  cJSON_AddItemToObject(resp, "body", body);
+  write_message(resp);
+  cJSON_Delete(resp);
+}
+
+// `dataBreakpointInfo` is a two-step handshake: the client first
+// asks the adapter "can you watch this variable, and what's the
+// canonical `dataId` for it?". Our implementation: the dataId is
+// just the expression text itself; gdb's `-break-watch` takes
+// expressions directly so there's no precomputation needed. The
+// response advertises all three access types (read / write /
+// readWrite — gdb supports `-break-watch -r` / default / `-a`).
+//
+// The DAP request shape varies — clients can ask either:
+//   { name: "x", variablesReference: <scope> }   — name resolved
+//                                                   in that scope
+//   { name: "0x7fff...", asAddress: true }       — raw address
+// We collapse both into the `name` field as the dataId; gdb
+// figures out whether it's a symbol or an address at watch time.
+void handle_data_breakpoint_info(cJSON *request) {
+  cJSON *args = cJSON_GetObjectItem(request, "arguments");
+  cJSON *name_j = cJSON_IsObject(args)
+                       ? cJSON_GetObjectItem(args, "name") : nullptr;
+  if (!cJSON_IsString(name_j) || !name_j->valuestring ||
+      !*name_j->valuestring) {
+    cJSON *resp = make_response(request, /*success=*/true, nullptr);
+    cJSON *body = cJSON_CreateObject();
+    // Spec: dataId=null means "can't watch this". Provide a
+    // human-readable description so the client doesn't render an
+    // empty Watch row.
+    cJSON_AddNullToObject(body, "dataId");
+    cJSON_AddStringToObject(body, "description",
+                             "no expression provided");
+    cJSON_AddItemToObject(resp, "body", body);
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON *body = cJSON_CreateObject();
+  cJSON_AddStringToObject(body, "dataId", name_j->valuestring);
+  std::string desc = std::string("Watch ") + name_j->valuestring;
+  cJSON_AddStringToObject(body, "description", desc.c_str());
+  cJSON *access = cJSON_AddArrayToObject(body, "accessTypes");
+  cJSON_AddItemToArray(access, cJSON_CreateString("read"));
+  cJSON_AddItemToArray(access, cJSON_CreateString("write"));
+  cJSON_AddItemToArray(access, cJSON_CreateString("readWrite"));
+  cJSON_AddBoolToObject(body, "canPersist", false);
+  cJSON_AddItemToObject(resp, "body", body);
+  write_message(resp);
+  cJSON_Delete(resp);
+}
+
+// `setDataBreakpoints` replaces the entire data-breakpoint set.
+// Each entry has a `dataId` (the expression to watch) and an
+// `accessType` (read/write/readWrite). gdb mapping:
+//   write     →  -break-watch <expr>        (default; stops on write)
+//   read      →  -break-watch -r <expr>     (stops on read)
+//   readWrite →  -break-watch -a <expr>     (stops on either)
+// Same response shape as `setBreakpoints` / `setFunctionBreakpoints`:
+// per-entry `{verified, id?, message?}`.
+void handle_set_data_breakpoints(cJSON *request) {
+  cJSON *args = cJSON_GetObjectItem(request, "arguments");
+  cJSON *bkpts = cJSON_IsObject(args)
+                      ? cJSON_GetObjectItem(args, "breakpoints") : nullptr;
+  if (!g_gdb.running()) {
+    cJSON *resp = make_response(request, /*success=*/false,
+                                "setDataBreakpoints: gdb subprocess not "
+                                "running (launch first)");
+    cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON *body = cJSON_CreateObject();
+  cJSON *verified = cJSON_CreateArray();
+
+  if (cJSON_IsArray(bkpts)) {
+    cJSON *bp = nullptr;
+    cJSON_ArrayForEach(bp, bkpts) {
+      cJSON *id_j = cJSON_GetObjectItem(bp, "dataId");
+      cJSON *acc_j = cJSON_GetObjectItem(bp, "accessType");
+      cJSON *out_bp = cJSON_CreateObject();
+      if (!cJSON_IsString(id_j) || !id_j->valuestring ||
+          !*id_j->valuestring) {
+        cJSON_AddBoolToObject(out_bp, "verified", false);
+        cJSON_AddStringToObject(out_bp, "message",
+                                "missing dataId");
+        cJSON_AddItemToArray(verified, out_bp);
+        continue;
+      }
+      const char *acc = cJSON_IsString(acc_j) && acc_j->valuestring
+                            ? acc_j->valuestring
+                            : "write";
+      std::string cmd = "-break-watch";
+      if (std::strcmp(acc, "read") == 0) cmd += " -r";
+      else if (std::strcmp(acc, "readWrite") == 0) cmd += " -a";
+      cmd += " ";
+      cmd += id_j->valuestring;
+
+      int tok = g_gdb.send_command(cmd, /*prefix_token=*/true);
+      std::string result = g_gdb.wait_for_result(tok, 2000);
+      bool ok = result.compare(0, 5, "^done") == 0;
+      cJSON_AddBoolToObject(out_bp, "verified", ok);
+      if (ok) {
+        // gdb's `-break-watch` reply has `wpt={number="N",...}` or
+        // `hw-rwpt=...` / `hw-awpt=...` depending on access type.
+        // Pull whichever number first appears; the DAP `id`
+        // doesn't care which gdb keyword wrapped it.
+        std::string n = mi_field(result, "number");
+        if (!n.empty()) {
+          int parsed = std::atoi(n.c_str());
+          if (parsed > 0) cJSON_AddNumberToObject(out_bp, "id", parsed);
+        }
+      } else {
+        std::string msg = mi_field(result, "msg");
+        if (msg.empty()) msg = result.empty() ? "gdb timeout" : result;
+        cJSON_AddStringToObject(out_bp, "message", msg.c_str());
+      }
+      cJSON_AddItemToArray(verified, out_bp);
+    }
+  }
+
+  cJSON_AddItemToObject(body, "breakpoints", verified);
+  cJSON_AddItemToObject(resp, "body", body);
+  write_message(resp);
+  cJSON_Delete(resp);
+}
+
+// `setInstructionBreakpoints` is the assembly-level cousin of
+// `setBreakpoints`: each entry carries an `instructionReference`
+// (a hex address like "0x7ffff7fde000") plus an optional `offset`
+// in bytes. Useful when stepping through the disassembly view and
+// you want to pause on a specific machine instruction rather than
+// a source line.
+//
+// gdb mapping: `-break-insert *<address+offset>`. The `*` prefix
+// tells gdb to interpret the operand as a raw address rather than
+// a symbol. We compute `address + offset` in C++ (rather than
+// letting gdb do the arithmetic) so non-zero offsets stay readable
+// in the wire log.
+void handle_set_instruction_breakpoints(cJSON *request) {
+  cJSON *args = cJSON_GetObjectItem(request, "arguments");
+  cJSON *bkpts = cJSON_IsObject(args)
+                      ? cJSON_GetObjectItem(args, "breakpoints") : nullptr;
+  if (!g_gdb.running()) {
+    cJSON *resp = make_response(request, /*success=*/false,
+                                "setInstructionBreakpoints: gdb "
+                                "subprocess not running (launch first)");
+    cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+    write_message(resp);
+    cJSON_Delete(resp);
+    return;
+  }
+
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON *body = cJSON_CreateObject();
+  cJSON *verified = cJSON_CreateArray();
+
+  if (cJSON_IsArray(bkpts)) {
+    cJSON *bp = nullptr;
+    cJSON_ArrayForEach(bp, bkpts) {
+      cJSON *ref_j = cJSON_GetObjectItem(bp, "instructionReference");
+      cJSON *off_j = cJSON_GetObjectItem(bp, "offset");
+      cJSON *out_bp = cJSON_CreateObject();
+      if (!cJSON_IsString(ref_j) || !ref_j->valuestring ||
+          !*ref_j->valuestring) {
+        cJSON_AddBoolToObject(out_bp, "verified", false);
+        cJSON_AddStringToObject(out_bp, "message",
+                                "missing instructionReference");
+        cJSON_AddItemToArray(verified, out_bp);
+        continue;
+      }
+      // Parse the hex address. Tolerate `0x`-prefixed strings, the
+      // common case; non-hex bytes will hit the strtoull failure
+      // path and we surface a parse error per-entry.
+      unsigned long long addr = std::strtoull(ref_j->valuestring,
+                                              nullptr, 0);
+      int off = cJSON_IsNumber(off_j) ? static_cast<int>(off_j->valuedouble)
+                                      : 0;
+      unsigned long long final_addr = addr + static_cast<long long>(off);
+      char hex[32];
+      std::snprintf(hex, sizeof(hex), "0x%llx", final_addr);
+      std::string cmd = "-break-insert *";
+      cmd += hex;
+
+      int tok = g_gdb.send_command(cmd, /*prefix_token=*/true);
+      std::string result = g_gdb.wait_for_result(tok, 2000);
+      bool ok = result.compare(0, 5, "^done") == 0;
+      cJSON_AddBoolToObject(out_bp, "verified", ok);
+      if (ok) {
+        std::string n = mi_field(result, "number");
+        if (!n.empty()) {
+          int parsed = std::atoi(n.c_str());
+          if (parsed > 0) cJSON_AddNumberToObject(out_bp, "id", parsed);
+        }
+        cJSON_AddStringToObject(out_bp, "instructionReference", hex);
       } else {
         std::string msg = mi_field(result, "msg");
         if (msg.empty()) msg = result.empty() ? "gdb timeout" : result;
@@ -2129,6 +2439,12 @@ int debug_cmd_main(int argc, char **argv) {
       handle_set_breakpoints(msg);
     } else if (std::strcmp(cmd, "setFunctionBreakpoints") == 0) {
       handle_set_function_breakpoints(msg);
+    } else if (std::strcmp(cmd, "dataBreakpointInfo") == 0) {
+      handle_data_breakpoint_info(msg);
+    } else if (std::strcmp(cmd, "setDataBreakpoints") == 0) {
+      handle_set_data_breakpoints(msg);
+    } else if (std::strcmp(cmd, "setInstructionBreakpoints") == 0) {
+      handle_set_instruction_breakpoints(msg);
     } else if (std::strcmp(cmd, "configurationDone") == 0) {
       handle_configuration_done(msg);
     } else if (std::strcmp(cmd, "threads") == 0) {

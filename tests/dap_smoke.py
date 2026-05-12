@@ -433,20 +433,21 @@ def main() -> int:
         # / inferior gone / gdb missing) is also acceptable.
 
         # 7c) A still-unimplemented request returns the structured
-        # "not implemented" fallback. `dataBreakpointInfo` is one of
-        # the remaining stubs — data breakpoints are an OS-debugger
-        # feature (watchpoints) that we haven't surfaced through
-        # the adapter yet.
+        # "not implemented" fallback. `readMemory` is one of the
+        # remaining stubs — reading raw inferior memory through
+        # `-data-read-memory-bytes` isn't wired up yet (the
+        # DAP polish list focused on the source/variable-level
+        # surface first).
         send(proc, {
-            "seq": 8, "type": "request", "command": "dataBreakpointInfo",
-            "arguments": {"variablesReference": 0, "name": "x"},
+            "seq": 8, "type": "request", "command": "readMemory",
+            "arguments": {"memoryReference": "0x7fff0000", "count": 16},
         })
-        r = recv_response(proc, "dataBreakpointInfo", events, timeout=5.0)
+        r = recv_response(proc, "readMemory", events, timeout=5.0)
         if not r:
-            failures.append("dataBreakpointInfo stub: no response")
+            failures.append("readMemory stub: no response")
         elif r.get("success") is not False:
             failures.append(
-                f"dataBreakpointInfo stub: expected success=false: {r!r}")
+                f"readMemory stub: expected success=false: {r!r}")
 
         # 8) disconnect -> success, process exits 0
         send(proc, {
