@@ -91,6 +91,14 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   tek C çağrısı), `wings_find_route` (route lookup tek C çağrısı),
   `fast_u32_itoa` + el-yazısı framing, co-located ObjString+chars
   allocation. Localhost loopback bind (LAN firewall prompt yok).
+- **HTTPS listener (`lib/wings_tls.tpr`):** `wings_tls(port, cert, key)`
+  açılışta tek bir `SSL_CTX` kurar, kabul edilen her bağlantıyı
+  thread-per-conn worker'la `SSL_accept` → `SSL_read` →
+  handler dispatch → `SSL_write` → `SSL_shutdown` zincirinde
+  servis eder. OpenSSL gating CMake `find_package(OpenSSL)` ile.
+  PR #197 ile CI smoke probe (`examples/api_wings_tls.tpr` +
+  `tests/fixtures/tls_dev.crt/.key` 10-yıl geçerli self-signed
+  fixture) end-to-end doğrulama altında.
 
 ### Pkg ekosistemi
 
@@ -100,7 +108,10 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   bölümleri, `strict = true` typecheck pre-pass eskaltörü.
 - **Semver range:** exact, caret (`^1.2.3`), tilde (`~1.2.3`),
   any (`*`/`""`), bare comparator (`>=`, `<`, `=`), compound
-  (`>=1,<2`).
+  (`>=1,<2`). Pre-release + build-metadata (`1.0.0-rc1+ci.42`)
+  parser + comparator: semver 2.0.0 §11 ordering, build
+  metadata round-trips but doesn't affect precedence.
+  `tests/pkg_smoke.py` covers add/remove/lockfile round-trip.
 - **Lockfile (`tulpar.lock`):** `[resolved]` + `[checksums]` (SHA-256),
   byte-stable re-install + tamper detection.
 - **Canlı registry (tulpar-be, Tulpar dilinde yazılmış):**
@@ -233,8 +244,6 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   hatası veriyor.
 - 🟢 **`async/await` keywords.** `lib/async.tpr` var ama dil-seviyesi
   state-machine transform yok.
-- 🟢 **Pre-release / build-metadata semver:** `1.0.0-rc1+ci.42`
-  ignore'lanıyor — parse stop at first non-digit.
 
 ### Runtime + codegen
 
@@ -268,12 +277,16 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Tooling
 
-- 🟢 **DAP server polish (post-Plan 07 Parça B).** Çekirdek tamam
-  (yukarı bkz. Yapılanlar). Geriye küçük adımlar: `evaluate` /
-  `setVariable` (REPL/watch), conditional + hit-count + log
-  breakpoints, function/data/instruction breakpoints, `variables`
-  içinde struct/array drill-down (`-var-create` per leaf), DAP
-  `restart` request.
+- 🟢 **DAP server polish (post-Plan 07 Parça B).** Çekirdek + ana
+  polish dilimleri 2026-05-12 turunda kapandı: `evaluate` (PR #199),
+  `setVariable` (PR #201), conditional + hit-count breakpoints
+  (PR #203), log breakpoints (PR #205), `restart` (PR #207),
+  struct/array drill-down via `-var-create` (PR #209),
+  `setFunctionBreakpoints` (PR #211). Kalan: `logMessage`
+  `{expr}` interpolation (reader-thread'i callback-based result
+  delivery'ye geçirmek lazım — bugünkü `wait_for_result` reader
+  thread'den çağrıldığında deadlock olur), data breakpoints
+  (watchpoints), instruction breakpoints.
 - 🟢 **Parser multi-error mode.** Şu an ilk fatal'da duruyor; recovery
   ve bağımsız hata bildirimi eksik.
 - 🟢 **LSP signature help.** Parametre içindeyken aktif imza ipucu.
@@ -284,11 +297,10 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Ağ / I/O / TLS
 
-- 🟡 **TLS doğrulama E2E.** OpenSSL-gated path hazır; MSYS2 default
-  detection commit'lendi; tam smoke (https GET + wings_tls listener)
-  bekliyor. CA bundle trust-store config (`SSL_VERIFY_NONE` yerine).
-- 🟢 **Wings TLS listener.** Server-side `SSL_accept` +
-  per-request `SSL_read/write`. Client TLS altyapısı simetrik.
+- 🟢 **TLS client trust-store config.** `http_client.tpr` hâlâ
+  `SSL_VERIFY_NONE` ile gidiyor — gerçek prod CA bundle entegrasyonu
+  ve `https://` GET'in tam doğrulama smoke'u eksik. (Server-side
+  listener tarafı PR #197 ile end-to-end smoke'lu.)
 - 🟢 **WebSocket / SSE.** Wings'te uzun yaşayan bağlantı tipi yok.
 - 🟢 **HTTP/2.** HTTP/1.1 keep-alive + multi-thread bugünkü iş
   yüklerini karşılıyor.
