@@ -27,6 +27,7 @@
 #include "pkg/pkg_cli.hpp"
 #include "cli/line_edit.hpp"
 #include "cli/debug_cmd.hpp"
+#include "cli/doc_cmd.hpp"
 #include "cli/typecheck_cmd.hpp"
 #include "cli/update_cmd.hpp"
 #include "typeinfer/typeinfer_warn.hpp"
@@ -87,6 +88,12 @@ static void print_help() {
   std::printf("  tulpar typecheck <source.tpr>    %s\n",
               tulpar::i18n::tr_en("- Statik tip kontrolu (deneysel)",
                                   "- Static type check (experimental)"));
+  std::printf("  tulpar doc <source.tpr>          %s\n",
+              tulpar::i18n::tr_en(
+                  "- Markdown referansi uret (fonksiyon + global'lerin "
+                  "leading-comment docstring'leri)",
+                  "- Emit a markdown reference from function + global "
+                  "leading-comment docstrings"));
   std::printf("  --no-typecheck                   %s\n",
               tulpar::i18n::tr_en(
                   "- run/build oncesi tip uyarilarini kapat",
@@ -516,6 +523,14 @@ int main(int argc, char **argv) {
   // it as a tool so authors and CI can opt in while we shape the rules.
   if (argc >= 2 && std::strcmp(argv[1], "typecheck") == 0) {
     return tulpar::typecheck_cmd_main(argc, argv);
+  }
+
+  // `tulpar doc <file>` emits a markdown reference (functions +
+  // top-level globals, with leading-comment docstrings) for the
+  // file. Same content the LSP `hover` surfaces in the editor —
+  // routed through `aot_check_and_index` so the two stay in lockstep.
+  if (argc >= 2 && std::strcmp(argv[1], "doc") == 0) {
+    return tulpar::doc_cmd_main(argc, argv);
   }
 
   // `tulpar version` / `tulpar --version` / `-v` — print and exit. Kept
