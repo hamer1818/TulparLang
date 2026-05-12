@@ -129,7 +129,8 @@ if [ "$ACTION" = "test" ]; then
                         "09_socket_client.tpr" "11_router_app.tpr" \
                         "12_threaded_server.tpr" "14_api_server.tpr" \
                         "api_wings.tpr" "api_wings_crud.tpr" \
-                        "api_wings_tls.tpr" "api_router_crud.tpr" \
+                        "api_wings_tls.tpr" "api_wings_sse.tpr" \
+                        "api_router_crud.tpr" \
                         "tulpar_api_demo.tpr" "utils.tpr")
 
     # HTTP smoke probes. The 2-second alive check above only verifies the
@@ -146,6 +147,7 @@ if [ "$ACTION" = "test" ]; then
             api_wings.tpr)        echo "http://127.0.0.1:3000/" ;;
             api_wings_crud.tpr)   echo "http://127.0.0.1:3000/" ;;
             api_wings_tls.tpr)    echo "https://127.0.0.1:8443/" ;;
+            api_wings_sse.tpr)    echo "http://127.0.0.1:8093/" ;;
             api_router_crud.tpr)  echo "http://127.0.0.1:8080/" ;;
             11_router_app.tpr)    echo "http://127.0.0.1:8080/" ;;
             12_threaded_server.tpr) echo "http://127.0.0.1:8089/" ;;

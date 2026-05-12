@@ -1,0 +1,43 @@
+// Server-Sent Events demo over wings (streaming dispatcher).
+//
+// Demonstrates the streaming-handler contract:
+//
+//   * Read the current connection's fd via `wings_current_fd()`.
+//   * Write to the socket directly with `socket_send` + the
+//     `wings_sse_*` formatters.
+//   * Return `{"_stream": 1}` so wings skips its own response
+//     envelope build + send. The connection is force-closed
+//     after the handler returns; keep-alive doesn't survive a
+//     streamed handler.
+//
+// Drive it with `curl -N http://127.0.0.1:8093/events` or an
+// EventSource client:
+//
+//   const es = new EventSource('http://127.0.0.1:8093/events');
+//   es.addEventListener('tick', e => console.log(e.data));
+
+import "wings";
+
+func events() {
+    int fd = wings_current_fd();
+    socket_send(fd, wings_sse_headers());
+    int i = 0;
+    while (i < 5) {
+        socket_send(fd, wings_sse_event("tick",
+            "{\"n\":" + toString(i) + "}"));
+        sleep(300);
+        i = i + 1;
+    }
+    socket_send(fd, wings_sse_event("done", "{}"));
+    return {"_stream": 1};
+}
+
+func root() {
+    return {"status": "ok", "endpoints": ["/events"]};
+}
+
+get("/", "root");
+get("/events", "events");
+
+print("Wings SSE demo on http://127.0.0.1:8093");
+listen(8093);

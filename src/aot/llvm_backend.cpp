@@ -1222,6 +1222,13 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_wings_ws_recv_frame = LLVMAddFunction(
       backend->module, "aot_wings_ws_recv_frame", string_pin_type);
 
+  // wings_set_current_fd(fd) -> int (sentinel 0). Single VMValue arg.
+  backend->func_aot_wings_set_current_fd = LLVMAddFunction(
+      backend->module, "aot_wings_set_current_fd", string_pin_type);
+  // wings_current_fd() -> int. No args.
+  backend->func_aot_wings_current_fd = LLVMAddFunction(
+      backend->module, "aot_wings_current_fd", cpu_count_type);
+
   // aot_exit_i32(int code) -> noreturn  (process termination)
   // Takes a raw i32 to avoid VMValue ABI complications for a one-shot call.
   LLVMTypeRef exit_params[] = {backend->int32_type};
@@ -3932,6 +3939,21 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend,
                                     backend->func_aot_wings_ws_recv_frame,
                                     args, 1, "ws_recv_frame");
+    }
+    // wings_set_current_fd(fd) -> 0 (sentinel)
+    if (strcmp(node->name, "wings_set_current_fd") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend,
+                                    backend->func_aot_wings_set_current_fd,
+                                    args, 1, "wings_set_fd");
+    }
+    // wings_current_fd() -> int
+    if (strcmp(node->name, "wings_current_fd") == 0 &&
+        node->argument_count == 0) {
+      return llvm_call_vmvalue_func(backend,
+                                    backend->func_aot_wings_current_fd,
+                                    nullptr, 0, "wings_cur_fd");
     }
 
     // cpu_count() -> int (logical CPUs).
