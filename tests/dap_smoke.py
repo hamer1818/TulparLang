@@ -242,6 +242,7 @@ def main() -> int:
                         "line": 1,
                         "condition": "1 == 1",
                         "hitCondition": "1",
+                        "logMessage": "smoke-logpoint",
                     }],
                 },
             })
