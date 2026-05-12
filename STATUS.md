@@ -133,7 +133,30 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   `assert_eq_int/str/bool`, `assert_contains`, `assert_status`,
   `assert_throws`. Runner: `test()` + `test_summary()`.
 - **HTTP client (`lib/http_client.tpr`):** `http_get/post/put/delete/
-  get_json/post_json`, OpenSSL-gated `https://` (skeleton hazır).
+  get_json/post_json`, OpenSSL-gated `https://`. Trust-store
+  doğrulaması default açık: `SSL_VERIFY_PEER` + RFC 6125 hostname
+  check via `X509_VERIFY_PARAM_set1_host`. `TULPAR_CA_BUNDLE=<pem>`
+  ile özel CA bundle (MSYS2 builds default trust-store'a sahip
+  değil), `TULPAR_TLS_INSECURE=1` ile self-signed / dev fixture'a
+  düşüş — `make_client_tls_ctx` + `apply_tls_hostname_check` hem
+  `tulpar pkg install` hem `http_request` builtin'inden geçer,
+  handshake hatası mesajında `cert verify: …` detayı taşır.
+- **Kripto / encoding builtins:** `sha1(s)` (20-bayt ikili),
+  `sha1_hex(s)` (40 hex), `base64_encode(s)`, `base64_decode(s)`,
+  `wings_ws_accept_key(s)` (RFC 6455 §4.2.2 base64+sha1+GUID).
+  Saf C++ (`runtime_bindings.cpp`), OpenSSL bağımlılığı yok —
+  signed cookies, JWT HMAC, ETag, content-addressed cache vb. için
+  ortak yapı taşı. `examples/31_crypto_sse_ws.tpr` FIPS 180-1
+  TEST1 ve RFC 6455 §1.3 ws-handshake vektörlerini smoke test
+  ediyor.
+- **Wings WebSocket upgrade + SSE helpers:** `wings_ws_upgrade(req)`
+  — 101 Switching Protocols + Sec-WebSocket-Accept üretir
+  (frame seviyesinde okuma/yazma user code'a bırakıldı, native
+  yardımcı `wings_ws_accept_key`). `wings_sse_headers()` +
+  `wings_sse_event(name, data)` — `Content-Type: text/event-stream`
+  yanıt başlığı + `data: …\r\n\r\n` event çerçevesi formatter'ları.
+  Stream'i tutmak için handler fd'yi kendisi `socket_send` ile
+  besler, dispatcher response envelope'i için beklemez.
 - **Datetime + regex stdlib:** `now`, `format`, `parse_iso8601`,
   `weekday`, `date_add_seconds`, `regex_match/search/capture/replace`.
 - **CSV + glob + env:** `csv_parse/emit`, `file_glob`, `env()`,
@@ -312,11 +335,17 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Ağ / I/O / TLS
 
-- 🟢 **TLS client trust-store config.** `http_client.tpr` hâlâ
-  `SSL_VERIFY_NONE` ile gidiyor — gerçek prod CA bundle entegrasyonu
-  ve `https://` GET'in tam doğrulama smoke'u eksik. (Server-side
-  listener tarafı PR #197 ile end-to-end smoke'lu.)
-- 🟢 **WebSocket / SSE.** Wings'te uzun yaşayan bağlantı tipi yok.
+- 🟢 **WebSocket frame I/O.** Upgrade handshake hazır
+  (`wings_ws_upgrade` + `wings_ws_accept_key`), ama frame
+  encode/decode (FIN, opcode, masking, fragmentation) bugün user
+  code'da yazılmak zorunda. Native `wings_ws_send_frame` /
+  `wings_ws_recv_frame` eklenirse keep-alive socket loop tamamen
+  Tulpar dilinde kalır.
+- 🟢 **SSE streaming dispatcher.** `wings_sse_headers` +
+  `wings_sse_event` formatlayıcılar mevcut; uzun-yaşayan stream'i
+  handler içinden `socket_send` ile sürmek gerekiyor — wings
+  dispatcher'ı henüz "stream et, response envelope bekleme"
+  modunu tanımıyor.
 - 🟢 **HTTP/2.** HTTP/1.1 keep-alive + multi-thread bugünkü iş
   yüklerini karşılıyor.
 

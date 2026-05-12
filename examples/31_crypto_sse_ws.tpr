@@ -1,0 +1,53 @@
+// Crypto utilities + SSE/WS upgrade smoke.
+//
+// Exercises:
+//   * sha1 / sha1_hex / base64_encode / base64_decode native helpers.
+//   * wings_ws_accept_key — the RFC 6455 §4.2.2 handshake derivation
+//     (must match the known answer from the spec example).
+//   * wings_sse_headers + wings_sse_event — formats only, no live
+//     connection (CI doesn't run wings examples interactively).
+//
+// Verifies fixed test vectors so a codegen regression is loud.
+
+import "wings";
+
+// ---- SHA-1 known answers (FIPS 180-1 §7 + RFC 3174) ----
+str hex = sha1_hex("abc");
+print(hex);  // a9993e364706816aba3e25717850c26c9cd0d89d
+
+str hex2 = sha1_hex("");
+print(hex2);  // da39a3ee5e6b4b0d3255bfef95601890afd80709
+
+// ---- base64 round-trip ----
+str enc = base64_encode("Hello, Tulpar!");
+print(enc);  // SGVsbG8sIFR1bHBhciE=
+
+str dec = base64_decode(enc);
+print(dec);  // Hello, Tulpar!
+
+// Edge cases: empty input, single-byte (one `=` padding pair),
+// two-byte (one `=` padding) — full coverage of the encoder's tail
+// handling.
+print(base64_encode(""));   // (empty)
+print(base64_encode("f"));  // Zg==
+print(base64_encode("fo")); // Zm8=
+print(base64_encode("foo"));// Zm9v
+
+// ---- WebSocket accept-key (RFC 6455 §1.3 worked example) ----
+// Client sends Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+// Server must echo  Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+str ws = wings_ws_accept_key("dGhlIHNhbXBsZSBub25jZQ==");
+print(ws);  // s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+
+// ---- SSE frame shape ----
+print(wings_sse_event("ping", "{\"x\":1}"));
+print(wings_sse_event("", "plain"));
+
+// ---- WS upgrade response shape (no live socket) ----
+json fake_req = {
+    "headers": {
+        "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ=="
+    }
+};
+str upgrade = wings_ws_upgrade(fake_req);
+print(upgrade);

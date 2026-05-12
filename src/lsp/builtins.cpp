@@ -94,6 +94,13 @@ const BuiltinEntry kBuiltins[] = {
     {"parse_query",         "parse_query(qs: str): json",           "?a=1&b=2 → {a: \"1\", b: \"2\"}"},
     {"parse_cookies",       "parse_cookies(header: str): json",     "Cookie header'ı parse eder: \"a=1; b=2\" → {a: \"1\", b: \"2\"}"},
 
+    // ---- Crypto / encoding ----
+    {"sha1",                "sha1(s: str): str",                    "20-baytlık ikili SHA-1 özeti döner."},
+    {"sha1_hex",            "sha1_hex(s: str): str",                "40 karakter küçük-harf hex SHA-1."},
+    {"base64_encode",       "base64_encode(s: str): str",           "Bayt dizisini base64'e çevirir (padding `=` ile)."},
+    {"base64_decode",       "base64_decode(s: str): str",           "Base64'ten bayt dizisine. Hatalı girdi → boş str."},
+    {"wings_ws_accept_key", "wings_ws_accept_key(client_key: str): str", "RFC 6455 §4.2.2 handshake: base64(sha1(key + GUID))."},
+
     // ---- Socket ----
     {"socket_server",  "socket_server(host: str, port: int): int",  ""},
     {"socket_client",  "socket_client(host: str, port: int): int",  ""},

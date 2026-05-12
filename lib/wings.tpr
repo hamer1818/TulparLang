@@ -487,6 +487,80 @@ func wings_metrics_prom() {
     return s;
 }
 
+// ----- Server-Sent Events (SSE) --------------------------------------------
+//
+// SSE is the half-duplex cousin of WebSockets: a long-lived HTTP/1.1
+// response that streams `data: …\n\n` frames over a `text/event-stream`
+// connection. The browser's `EventSource` API consumes them with one
+// line of JS. Wings exposes two pieces:
+//
+//   1. `wings_sse_headers()` — the response status-line + headers
+//      block. Send it once, immediately after accepting the request,
+//      to upgrade the response to a stream.
+//   2. `wings_sse_event(name, data)` — formats one event frame. Pass
+//      an empty string for `name` to omit the `event:` line (the
+//      browser will fire the default `message` event).
+//
+// Drive the stream by writing both into the connection's fd with
+// `socket_send`. The handler should NOT return a normal envelope —
+// wings can't both stream and build a single response, so SSE handlers
+// `socket_close()` the fd themselves when the stream ends.
+func wings_sse_headers() {
+    str s = "HTTP/1.1 200 OK\r\n";
+    s = s + "Content-Type: text/event-stream\r\n";
+    s = s + "Cache-Control: no-cache\r\n";
+    s = s + "Connection: keep-alive\r\n";
+    s = s + "Access-Control-Allow-Origin: *\r\n";
+    s = s + "\r\n";
+    return s;
+}
+
+func wings_sse_event(str name, str data) {
+    str s = "";
+    if (length(name) > 0) {
+        s = s + "event: " + name + "\r\n";
+    }
+    // Multiline payloads need every line prefixed with `data: `.
+    // For the common single-line JSON case, this is just one prefix
+    // and one trailing blank line.
+    s = s + "data: " + data + "\r\n\r\n";
+    return s;
+}
+
+// ----- WebSocket upgrade helper --------------------------------------------
+//
+// `wings_ws_upgrade(req)` builds the 101 Switching Protocols response a
+// WebSocket client expects after the GET-with-Upgrade-header handshake.
+// The hard part — deriving Sec-WebSocket-Accept from the client's key
+// per RFC 6455 §4.2.2 — is done in the `wings_ws_accept_key` native
+// (sha1 + base64). The rest is plain header assembly.
+//
+// Returns the upgrade response string, ready to `socket_send`. The
+// handler then owns the fd and can read/write frames at the socket
+// level. Frame masking + opcode handling are left to user code today
+// (WebSocket frame structure is documented enough that a 30-line
+// Tulpar implementation is straightforward).
+func wings_ws_upgrade(json req) {
+    json hdrs = req["headers"];
+    str key = "";
+    if (hdrs) {
+        key = hdrs["Sec-WebSocket-Key"];
+        if (length(key) == 0) {
+            key = hdrs["sec-websocket-key"];
+        }
+    }
+    if (length(key) == 0) {
+        return "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
+    }
+    str accept_key = wings_ws_accept_key(key);
+    str s = "HTTP/1.1 101 Switching Protocols\r\n";
+    s = s + "Upgrade: websocket\r\n";
+    s = s + "Connection: Upgrade\r\n";
+    s = s + "Sec-WebSocket-Accept: " + accept_key + "\r\n";
+    s = s + "\r\n";
+    return s;
+}
+
 // Structured access log entry — call from any handler that wants its
 // own log line in the same format as Wings' built-in access log. The
 // shape mirrors common JSON log conventions (`@timestamp`, `level`,
