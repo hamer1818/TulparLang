@@ -288,6 +288,14 @@ typedef struct {
   // Tulpar source without raw-byte bit-twiddling.
   LLVMValueRef func_aot_wings_ws_send_frame;
   LLVMValueRef func_aot_wings_ws_recv_frame;
+  // Per-thread current-request fd. Wings dispatchers set this on
+  // every request; streaming handlers read it back to write to the
+  // socket directly and signal `{"_stream": 1}` to skip the
+  // dispatcher's response build. Used as the SSE / WS-upgrade
+  // sidechannel that doesn't go through `_request[k] = …` (cookies
+  // miscompile turf).
+  LLVMValueRef func_aot_wings_set_current_fd;
+  LLVMValueRef func_aot_wings_current_fd;
 
   // Process control
   LLVMValueRef func_aot_exit;

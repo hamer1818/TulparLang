@@ -4332,6 +4332,28 @@ VMValue aot_base64_decode(VMValue strVal) {
 // helper is the only piece of the upgrade that benefits from a native:
 // the rest (header parse, response build, frame masking) is pure
 // string manipulation that's fine in Tulpar source.
+// Per-thread current-request fd. Wings sets this on every incoming
+// request before invoking the user's handler; streaming handlers
+// (SSE / WS upgrade / long-poll) read it back via
+// `wings_current_fd()` so they can write to the socket directly,
+// then signal `{"_stream": 1}` to tell the dispatcher "I already
+// owned the response; skip the envelope build".
+//
+// Stored as a C-level thread-local rather than a Tulpar
+// `_request[k] = client` slot because the latter shape collides
+// with the still-open wings cookies miscompile (a `_request[k] = …`
+// write followed by another subscript write corrupts the object).
+static TULPAR_TLS int64_t g_wings_current_fd = 0;
+
+VMValue aot_wings_set_current_fd(VMValue fdVal) {
+    if (IS_INT(fdVal)) g_wings_current_fd = AS_INT(fdVal);
+    return VM_INT(0);
+}
+
+VMValue aot_wings_current_fd(void) {
+    return VM_INT(g_wings_current_fd);
+}
+
 VMValue aot_wings_ws_accept_key(VMValue keyVal) {
     if (!IS_STRING(keyVal)) return VM_OBJ((Obj *)aot_allocate_string("", 0));
     ObjString *s = AS_STRING(keyVal);

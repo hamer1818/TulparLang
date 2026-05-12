@@ -102,6 +102,8 @@ const BuiltinEntry kBuiltins[] = {
     {"wings_ws_accept_key", "wings_ws_accept_key(client_key: str): str", "RFC 6455 §4.2.2 handshake: base64(sha1(key + GUID))."},
     {"wings_ws_send_frame", "wings_ws_send_frame(fd: int, opcode: int, payload: str): int", "WebSocket frame yazar (FIN=1, unmasked); 1=text, 2=binary, 8=close, 9=ping, 10=pong."},
     {"wings_ws_recv_frame", "wings_ws_recv_frame(fd: int): json",    "WebSocket frame okur, masking key uygular. {ok, opcode, fin, payload} ya da {ok=0, error}."},
+    {"wings_set_current_fd","wings_set_current_fd(fd: int): int",   "Wings dispatcher dahili: handler'a aktif istek fd'sini geçirir."},
+    {"wings_current_fd",    "wings_current_fd(): int",              "Aktif istek soketinin fd'si. SSE / WS upgrade streaming için."},
 
     // ---- Socket ----
     {"socket_server",  "socket_server(host: str, port: int): int",  ""},

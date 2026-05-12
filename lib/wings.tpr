@@ -350,6 +350,19 @@ func _wings_dispatch_cached(int route_idx, int keep) {
 
     json result = call(route["handler"]);
     _wings_requests_total = _wings_requests_total + 1;
+    // Streaming handlers (SSE / WS upgrade / long-poll) signal
+    // "I've already written to the socket myself; don't try to
+    // build a response envelope" by returning `{"_stream": 1}`.
+    // The serve loop sees the empty-string response and skips its
+    // own socket_send + forces the connection closed (keep-alive
+    // doesn't make sense after a stream — the handler picked the
+    // moment the connection ends). Status is counted as 2xx; the
+    // handler did its job successfully.
+    int is_stream = result["_stream"];
+    if (is_stream == 1) {
+        _wings_requests_2xx = _wings_requests_2xx + 1;
+        return "";
+    }
     int eff_status = _wings_status_or(result, 200);
     if (eff_status >= 500) {
         _wings_requests_5xx = _wings_requests_5xx + 1;
@@ -643,6 +656,12 @@ func _wings_serve_connection(json client_arg) {
         int keep = http_should_keepalive(req);
 
         _request = req;
+        // Surface the connection fd to streaming handlers via a
+        // dedicated thread-local rather than `_request[k] = client`.
+        // The latter shape triggers the (still-open) wings cookies
+        // miscompile: a single `_request[k] = ...` followed by
+        // another subscript write later corrupts the object.
+        wings_set_current_fd(client);
         str method = req["method"];
         str path = req["path"];
         if (_wings_quiet == 0) {
@@ -708,6 +727,14 @@ func _wings_serve_connection(json client_arg) {
             response = _wings_strip_response_body(response);
         }
 
+        // Empty response = streaming handler already wrote to the
+        // socket and signalled `{"_stream": 1}`. Skip our send and
+        // force-close: keep-alive across a stream boundary would
+        // strand connection state.
+        if (length(response) == 0) {
+            arena_restore(wm);
+            break;
+        }
         socket_send(client, response);
         arena_restore(wm);
 
@@ -742,6 +769,7 @@ func _wings_serve_one_request(int client) {
     int keep = http_should_keepalive(req);
 
     _request = req;
+    wings_set_current_fd(client);
     str method = req["method"];
     str path = req["path"];
     if (_wings_quiet == 0) {
@@ -780,6 +808,13 @@ func _wings_serve_one_request(int client) {
     }
     if (is_head) {
         response = _wings_strip_response_body(response);
+    }
+    // Empty response from a streaming handler — see the comment in
+    // `_wings_serve_connection`. Force the caller to close by
+    // returning keep=0.
+    if (length(response) == 0) {
+        arena_restore(wm);
+        return 0;
     }
     socket_send(client, response);
     arena_restore(wm);
@@ -1120,6 +1155,7 @@ func listen(int port) {
             }
             json req = http_parse_request(raw);
             _request = req;
+            wings_set_current_fd(client);
 
             str method = req["method"];
             str path = req["path"];
@@ -1175,6 +1211,12 @@ func listen(int port) {
                 response = _wings_strip_response_body(response);
             }
 
+            // Empty response → streaming handler took over the socket.
+            // Close + bail; keep-alive doesn't survive a stream.
+            if (length(response) == 0) {
+                arena_restore(_wings_arena_wm);
+                break;
+            }
             socket_send(client, response);
 
             // Per-request arena reset: keeps memory bounded even on a

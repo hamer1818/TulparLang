@@ -171,10 +171,20 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   `WS_OPCODE_TEXT/BINARY/CLOSE/PING/PONG` sabitleri. SSE tarafında
   `wings_sse_headers()` + `wings_sse_event(name, data)` —
   `text/event-stream` yanıt başlığı + `data: …\r\n\r\n` event
-  çerçevesi formatter'ları. Stream'i tutmak için handler fd'yi
-  kendisi `socket_send` ile besler, dispatcher response envelope'i
-  için beklemez. `examples/32_wings_ws_frames.tpr` round-trip
-  smoke + accept-key vector doğruluyor.
+  çerçevesi formatter'ları. `examples/32_wings_ws_frames.tpr`
+  round-trip smoke + accept-key vector doğruluyor.
+- **Wings streaming dispatcher (SSE / WS keep-alive akış):**
+  Handler `{"_stream": 1}` döndürdüğünde wings dispatcher yanıt
+  envelope build'ini atlar, soketi force-close eder
+  (keep-alive bir stream'i hayatta tutamaz). Handler aktif istek
+  fd'sini `wings_current_fd()` ile alır (C-tarafı thread-local,
+  her istek başında dispatcher tarafından set ediliyor), sonra
+  `socket_send` + `wings_sse_*` / `wings_ws_*` formatter'ları ile
+  doğrudan yazar. Sidechannel `_request[k] = …` yazılımından
+  bilinçli olarak kaçınıyor — açık wings cookies miscompile'ı
+  tetiklememek için. `examples/api_wings_sse.tpr` end-to-end
+  smoke: 5 tick SSE stream + done event, `/` + `/healthz` +
+  `/metrics` paralel çalışıyor.
 - **Datetime + regex stdlib:** `now`, `format`, `parse_iso8601`,
   `weekday`, `date_add_seconds`, `regex_match/search/capture/replace`.
 - **CSV + glob + env:** `csv_parse/emit`, `file_glob`, `env()`,
@@ -351,11 +361,6 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Ağ / I/O / TLS
 
-- 🟢 **SSE streaming dispatcher.** `wings_sse_headers` +
-  `wings_sse_event` formatlayıcılar mevcut; uzun-yaşayan stream'i
-  handler içinden `socket_send` ile sürmek gerekiyor — wings
-  dispatcher'ı henüz "stream et, response envelope bekleme"
-  modunu tanımıyor.
 - 🟢 **HTTP/2.** HTTP/1.1 keep-alive + multi-thread bugünkü iş
   yüklerini karşılıyor.
 
