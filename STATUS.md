@@ -238,11 +238,31 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Runtime + codegen
 
-- 🔴 **Wings cookies miscompile.** PR #84 hot-fix'i durdu: tam wings
-  symbol table altında "function-returning-object → global-subscript-write"
-  deseni `vm_object_set: obj=NULL` ile çöküyor. Hot-fix kapalı
-  durumda; root cause arka planda. Repro scaffold büyütme + LLVM IR
-  diff lazım.
+- 🔴 **Wings cookies miscompile.** PR #84 hot-fix'i durdu, root cause
+  hâlâ açık. 2026-05-12 araştırma turunda yeni bulgular:
+  - **Windows AOT'ta da çöküyor** — PR #84 "Linux-only" demişti ama
+    `examples/api_wings.tpr`'de `_request["cookies"] = wings_cookies(req);`
+    satırını geri koyduğumda Windows'ta da ilk istekte segfault. Yani
+    OS-spesifik değil, hem `-O3` hem `--debug` (`-O0` "verify" pipeline)
+    altında tetikleniyor → LLVM optimizer bug'ı değil, Tulpar
+    codegen'inde.
+  - **Çöküş tam olarak subscript-write adımında** — `vm_set_element_ptr`
+    çağrısı, `vm_object_set obj=NULL` ile. Crash'ten hemen önce
+    `print(_request["method"])` doğru değeri ("GET") yazıyor; demek ki
+    `_request` o noktada geçerli. `wings_cookies(req)` başarıyla geri
+    dönüyor. ANCAK `_request["cookies"] = result;` adımında crash.
+    Aynı satırı `_request["cookies"] = {};` literal RHS ile yazınca
+    sorun yok.
+  - Tetiklemek için `examples/api_wings.tpr` shape'i gerekiyor
+    (`listen()` + arena_save + birden çok `_request[k]=...` yazımı).
+    `examples/30_wings_cookies_regression.tpr` (PR #194) standalone
+    pattern'i çalıştırıyor ve CI'da yeşil — yani basit sıralama
+    yetmiyor, full wings function-table + ordering gerekiyor.
+  - Sıradaki adım: IR diff'de `vm_set_element_ptr` çağrısının
+    `target_set_tmp` packing'inde `_request.5` (obj_val) field'ının
+    nasıl yüklendiğini takip etmek; muhtemelen `align 4` struct
+    load/store kombinasyonu ile `struct.VMValue zeroinitializer` TLS
+    init arasında bir interaction var.
 - 🟢 **Codegen full atomic:** imported pass globals'a `LLVMBuildAtomicRMW`
   (top-level int globals zaten yapıldı).
 
