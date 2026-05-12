@@ -145,6 +145,19 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   generator, `log_info/error` structured JSON.
 - **Formatter:** indent + trailing-ws + EOF newline + blank-line
   collapse + keyword-aware spacing, idempotent token-pass.
+- **Parser multi-error mode:** ilk hatadan sonra panic-mode
+  synchronisation (statement-terminator `;`/`}` veya
+  statement-başlangıcı keyword'üne kadar atla) ile devam edip
+  geri kalan dosyada bağımsız hata bildirimleri üretiyor. Tek
+  derleme çağrısında birden fazla `parse error` rapor
+  edilebiliyor — `tulpar build` çıkışında "missing `;`"
+  diagnosticleri sıralı bir liste halinde geliyor.
+- **`tulpar doc` (PR #219):** Markdown reference üretici.
+  `tulpar doc <file.tpr>` → fonksiyon + top-level global +
+  leading-comment docstring'leri stdout'a Markdown olarak
+  basar. `--include-internal` underscore-prefixed isimleri de
+  ekler. LSP hover'ı besleyen aynı `aot_check_and_index`
+  helper'ından geçer; iki yüzey lockstep.
 - **LSP:** init, diagnostics, hover (functions, builtins, AND
   scope-aware variables), completion, go-to-definition,
   find-references, rename, signatureHelp (active-parameter aware
@@ -290,18 +303,10 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   delivery'ye geçirmek lazım — bugünkü `wait_for_result` reader
   thread'den çağrıldığında deadlock olur), data breakpoints
   (watchpoints), instruction breakpoints.
-- 🟢 **Parser multi-error mode.** Şu an ilk fatal'da duruyor; recovery
-  ve bağımsız hata bildirimi eksik.
 - 🟢 **LSP incremental document sync** (`change: 2`) — bugün full-text
   re-parse her keystroke'ta gidiyor; sub-100ms olduğu için küçük
   dosyalarda farkı yok ama büyük dosyalarda diff-bazlı sync kazanç
   verir.
-- 🟢 **`tulpar doc` generator.** Docstring → HTML/MD. Bugün
-  `tulpar fmt` / `tulpar --lsp` / `tulpar typecheck` var ama
-  dökümantasyon üretici CLI yok; LSP `hover`'ın gösterdiği
-  leading-comment doc string'leri offline bir markdown ağacına
-  döküp `tulparlang.dev/docs/reference/` altına entegre etmek
-  ekosistemi tamamlar.
 - 🟢 **JetBrains plugin.** Sadece VS Code var.
 
 ### Ağ / I/O / TLS
