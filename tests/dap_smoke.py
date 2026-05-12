@@ -331,6 +331,30 @@ def main() -> int:
                 if "variables" not in body or not isinstance(body["variables"], list):
                     failures.append(f"variables: missing array: {body!r}")
 
+            # If the breakpoint actually fired (we saw a `stopped`
+            # event), the inferior is still paused. Send `continue`
+            # to resume it and verify a `terminated` event arrives
+            # within 10 s — that's the round-trip proof that the
+            # stepping handlers reach gdb and the reader thread
+            # translates the resulting `*stopped,reason=exited-*`
+            # records back into DAP events.
+            if outcome == "stopped":
+                send(proc, {
+                    "seq": 103, "type": "request", "command": "continue",
+                    "arguments": {"threadId": 1},
+                })
+                r = recv_response(proc, "continue", events, timeout=5.0)
+                if not r or not r.get("success"):
+                    failures.append(f"continue: wrong shape: {r!r}")
+                elif not ((r.get("body") or {}).get("allThreadsContinued")):
+                    failures.append(f"continue: allThreadsContinued missing: {r!r}")
+
+                if drain_until(proc, events, ("terminated",), timeout=10.0) is None:
+                    seen = [e.get("event") for e in events if e.get("type") == "event"]
+                    failures.append(
+                        f"continue: no `terminated` within 10s (saw: {seen!r})"
+                    )
+
         # 6) threads -> exactly one fake thread (id=1, name="main")
         send(proc, {
             "seq": 5, "type": "request", "command": "threads",

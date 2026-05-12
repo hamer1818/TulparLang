@@ -696,6 +696,15 @@ void GdbProcess::dispatch_async_record(const std::string &kind,
     // record starts with e.g. "stopped,reason=\"exited-normally\",..."
     if (record.compare(0, std::strlen("stopped"), "stopped") == 0) {
       std::string reason = mi_field(record, "reason");
+      // Disambiguate a user-initiated pause (`-exec-interrupt` →
+      // SIGINT) from a real exception (segfault → SIGSEGV, etc.) so
+      // DAP `reason` lands on `pause` vs `exception`. emit_stopped
+      // can't tell from `reason` alone, so we peek at signal-name
+      // here and swap to a synthetic marker before forwarding.
+      if (reason == "signal-received") {
+        std::string sig = mi_field(record, "signal-name");
+        if (sig == "SIGINT" || sig == "0") reason = "_pause";
+      }
       emit_stopped(reason);
       // exited-* reasons mean the inferior is gone — also emit
       // `terminated` so the client tears down the session.
@@ -723,6 +732,7 @@ void GdbProcess::emit_stopped(const std::string &mi_reason) {
   if (mi_reason == "breakpoint-hit") dap_reason = "breakpoint";
   else if (mi_reason == "end-stepping-range" ||
            mi_reason == "function-finished") dap_reason = "step";
+  else if (mi_reason == "_pause") dap_reason = "pause";
   else if (mi_reason == "signal-received") dap_reason = "exception";
   else if (mi_reason == "exited-normally" || mi_reason == "exited" ||
            mi_reason == "exited-signalled") dap_reason = "exit";
@@ -1333,6 +1343,91 @@ void handle_variables(cJSON *request) {
   cJSON_Delete(resp);
 }
 
+// ---------------------------------------------------------------------------
+// Execution control: continue / pause / next / stepIn / stepOut.
+//
+// Every command is fire-and-forget at the DAP level: the response
+// goes out immediately with success=true, and the subsequent
+// `*stopped` async record from gdb (handled by the reader thread)
+// translates into a DAP `stopped` event that drives the client's UI.
+//
+// MI mapping:
+//   continue   →  -exec-continue            (resume all threads)
+//   pause      →  -exec-interrupt           (SIGINT into the inferior)
+//   next       →  -exec-next                (step over)
+//   stepIn     →  -exec-step                (step into)
+//   stepOut    →  -exec-finish              (run to caller, then stop)
+
+void execution_control_reply(cJSON *request, bool include_continued_flag) {
+  cJSON *resp = make_response(request, /*success=*/true, nullptr);
+  cJSON *body = cJSON_CreateObject();
+  if (include_continued_flag) {
+    cJSON_AddBoolToObject(body, "allThreadsContinued", true);
+  }
+  cJSON_AddItemToObject(resp, "body", body);
+  write_message(resp);
+  cJSON_Delete(resp);
+}
+
+void execution_control_fail(cJSON *request, const char *msg) {
+  cJSON *resp = make_response(request, /*success=*/false, msg);
+  cJSON_AddItemToObject(resp, "body", cJSON_CreateObject());
+  write_message(resp);
+  cJSON_Delete(resp);
+}
+
+void handle_continue(cJSON *request) {
+  if (!g_gdb.running()) {
+    execution_control_fail(request, "continue: gdb subprocess not running");
+    return;
+  }
+  // -exec-continue resumes all stopped threads. Tulpar AOT binaries
+  // are effectively single-threaded from the debugger's POV (wings
+  // worker pools don't surface to gdb yet), so the global resume is
+  // the right semantic.
+  g_gdb.send_command("-exec-continue", /*prefix_token=*/true);
+  execution_control_reply(request, /*include_continued_flag=*/true);
+}
+
+void handle_pause(cJSON *request) {
+  if (!g_gdb.running()) {
+    execution_control_fail(request, "pause: gdb subprocess not running");
+    return;
+  }
+  // -exec-interrupt sends SIGINT to the inferior. The reader thread
+  // will surface the resulting *stopped record as a DAP `stopped`
+  // event (mapped from `signal-received`/SIGINT → `pause`).
+  g_gdb.send_command("-exec-interrupt", /*prefix_token=*/true);
+  execution_control_reply(request, /*include_continued_flag=*/false);
+}
+
+void handle_next(cJSON *request) {
+  if (!g_gdb.running()) {
+    execution_control_fail(request, "next: gdb subprocess not running");
+    return;
+  }
+  g_gdb.send_command("-exec-next", /*prefix_token=*/true);
+  execution_control_reply(request, /*include_continued_flag=*/false);
+}
+
+void handle_step_in(cJSON *request) {
+  if (!g_gdb.running()) {
+    execution_control_fail(request, "stepIn: gdb subprocess not running");
+    return;
+  }
+  g_gdb.send_command("-exec-step", /*prefix_token=*/true);
+  execution_control_reply(request, /*include_continued_flag=*/false);
+}
+
+void handle_step_out(cJSON *request) {
+  if (!g_gdb.running()) {
+    execution_control_fail(request, "stepOut: gdb subprocess not running");
+    return;
+  }
+  g_gdb.send_command("-exec-finish", /*prefix_token=*/true);
+  execution_control_reply(request, /*include_continued_flag=*/false);
+}
+
 // For every request we haven't wired up yet, send a structured
 // "not implemented" response so the client surfaces a clear error
 // instead of waiting forever for a reply that never comes.
@@ -1408,6 +1503,16 @@ int debug_cmd_main(int argc, char **argv) {
       handle_scopes(msg);
     } else if (std::strcmp(cmd, "variables") == 0) {
       handle_variables(msg);
+    } else if (std::strcmp(cmd, "continue") == 0) {
+      handle_continue(msg);
+    } else if (std::strcmp(cmd, "pause") == 0) {
+      handle_pause(msg);
+    } else if (std::strcmp(cmd, "next") == 0) {
+      handle_next(msg);
+    } else if (std::strcmp(cmd, "stepIn") == 0) {
+      handle_step_in(msg);
+    } else if (std::strcmp(cmd, "stepOut") == 0) {
+      handle_step_out(msg);
     } else if (std::strcmp(cmd, "terminate") == 0) {
       handle_terminate(msg);
     } else if (std::strcmp(cmd, "disconnect") == 0) {
