@@ -1,0 +1,55 @@
+// Regression scaffold for the wings cookies codegen miscompile
+// reported in PR #84.
+//
+// The bug: on Linux AOT, `_request[k] = func_call(req)` where
+// `_request` is wings's TLS-flagged global json segfaults inside
+// `vm_object_set` with `obj=NULL` — the just-assigned `_request =
+// req;` didn't propagate into the global's `obj_val` slot. PR #84
+// hot-fixed by removing the cookies auto-populate from
+// `_wings_serve_connection` and `listen()`; the underlying codegen
+// bug was paused for a separate fix. Initial minimal repros in PR
+// #84 didn't trip the crash — it seemed to need the full wings
+// symbol table or its function ordering.
+//
+// This example shrinks that gap: it imports wings (so the TLS
+// `_request` global is in scope), constructs a synthetic request,
+// and runs the EXACT subscript-write pattern (`_request[k] =
+// wings_cookies(req)`) inside a helper that mirrors the dispatcher
+// shape. If the codegen miscompile is still live, AOT-running this
+// on Linux segfaults — same way PR #84 saw it. If the miscompile
+// has been latently fixed by accumulated codegen changes since PR
+// #84, this file runs cleanly and serves as a regression guard.
+//
+// Either way, the `build.sh test` smoke catches a future regression
+// of this exact shape on CI before it ships.
+
+import "wings";
+
+func dispatch_like(json req) {
+    // This mirrors `_wings_serve_one_request`'s hot path verbatim:
+    // first `_request = req;`, then a literal-RHS subscript-write
+    // (the params line, which has always worked), THEN the
+    // function-call-RHS subscript-write that PR #84 reported as
+    // crashing. Keeping all three writes in one helper is the
+    // closest standalone shape to the actual crash site.
+    _request = req;
+    _request["params"] = {};
+    _request["cookies"] = wings_cookies(req);
+}
+
+// Multiple iterations because the bug was "first request" only —
+// re-running confirms the pattern is stable across calls, not a
+// flaky one-shot in a noisy environment.
+int i = 0;
+while (i < 50) {
+    json req = {
+        "method": "GET",
+        "path": "/",
+        "headers": {"Cookie": "sid=abc; theme=dark"},
+        "body": ""
+    };
+    dispatch_like(req);
+    i = i + 1;
+}
+
+print("ok");
