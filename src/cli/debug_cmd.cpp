@@ -778,8 +778,8 @@ void handle_initialize(cJSON *request) {
 
   cJSON_AddBoolToObject(body, "supportsConfigurationDoneRequest", true);
   cJSON_AddBoolToObject(body, "supportsFunctionBreakpoints", false);
-  cJSON_AddBoolToObject(body, "supportsConditionalBreakpoints", false);
-  cJSON_AddBoolToObject(body, "supportsHitConditionalBreakpoints", false);
+  cJSON_AddBoolToObject(body, "supportsConditionalBreakpoints", true);
+  cJSON_AddBoolToObject(body, "supportsHitConditionalBreakpoints", true);
   cJSON_AddBoolToObject(body, "supportsEvaluateForHovers", true);
   cJSON_AddBoolToObject(body, "supportsStepBack", false);
   cJSON_AddBoolToObject(body, "supportsSetVariable", true);
@@ -1030,9 +1030,51 @@ void handle_set_breakpoints(cJSON *request) {
     cJSON *bp = nullptr;
     cJSON_ArrayForEach(bp, bkpts) {
       cJSON *line_j = cJSON_GetObjectItem(bp, "line");
+      cJSON *cond_j = cJSON_GetObjectItem(bp, "condition");
+      cJSON *hit_j  = cJSON_GetObjectItem(bp, "hitCondition");
       int line = cJSON_IsNumber(line_j) ? static_cast<int>(line_j->valuedouble)
                                         : 0;
-      std::string cmd = "-break-insert -f \"";
+
+      // `-break-insert -f` deferred location, plus the two optional
+      // DAP fields that the user can attach in the gutter "Edit
+      // Breakpoint…" popup:
+      //   condition     → `-c "<expr>"`. gdb only stops when the
+      //                   expression evaluates true. Same expression
+      //                   grammar as evaluate / setVariable use.
+      //   hitCondition  → `-i <N>`. Ignore the first N hits, stop on
+      //                   the (N+1)th. DAP spec says hitCondition
+      //                   is a string ("== 5", ">= 10", ...) but
+      //                   gdb's MI flag is a plain integer count —
+      //                   we trim the comparator and read the
+      //                   digits, falling back to skipping the
+      //                   flag entirely if no integer parses.
+      std::string cmd = "-break-insert -f";
+      if (cJSON_IsString(cond_j) && cond_j->valuestring && *cond_j->valuestring) {
+        cmd.append(" -c \"");
+        for (const char *p = cond_j->valuestring; *p; ++p) {
+          if (*p == '"' || *p == '\\') cmd.push_back('\\');
+          cmd.push_back(*p);
+        }
+        cmd.push_back('"');
+      }
+      if (cJSON_IsString(hit_j) && hit_j->valuestring && *hit_j->valuestring) {
+        // Strip leading non-digit chars so "== 5" / ">= 10" / "  3"
+        // all reduce to the integer the user meant. DAP doesn't pin
+        // a syntax; the comparator is informational. gdb interprets
+        // `-i N` as "skip the first N hits", which is the most
+        // common intent regardless of the comparator the user typed.
+        const char *p = hit_j->valuestring;
+        while (*p && !std::isdigit(static_cast<unsigned char>(*p))) ++p;
+        if (*p) {
+          int hit_n = std::atoi(p);
+          if (hit_n > 0) {
+            char hitbuf[24];
+            std::snprintf(hitbuf, sizeof(hitbuf), " -i %d", hit_n);
+            cmd.append(hitbuf);
+          }
+        }
+      }
+      cmd.append(" \"");
       cmd.append(path->valuestring);
       cmd.push_back(':');
       char numbuf[16];
