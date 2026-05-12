@@ -5496,7 +5496,17 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                 add_local_typed(backend, decl->name, nullptr,
                                 INFERRED_INT, ig);
                 if (global_needs_tls(decl->name)) {
-                  LLVMSetThreadLocalMode(ig, LLVMGeneralDynamicTLSModel);
+                  // LocalExec: Tulpar AOT always produces executables
+                  // (never shared libraries), so TLS slots resolve at
+                  // link time with direct segment-register offsets.
+                  // Avoids `__emutls_get_address` on MinGW, which
+                  // appears to interact badly with the multi-store
+                  // shape AOT codegen emits for boxed VMValue writes
+                  // (see PR #195: `_request[k] = func_call(...)`
+                  // crashes obj_val=NULL with the general-dynamic
+                  // model). LocalExec is also strictly faster — one
+                  // load instead of a runtime call per access.
+                  LLVMSetThreadLocalMode(ig, LLVMLocalExecTLSModel);
                 }
                 // PR 3g: surface imported-module int global to debugger.
                 llvm_backend_emit_global_declare(
@@ -5509,7 +5519,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                 LLVMSetLinkage(global_var, LLVMInternalLinkage);
                 if (global_needs_tls(decl->name)) {
                   LLVMSetThreadLocalMode(global_var,
-                                         LLVMGeneralDynamicTLSModel);
+                                         LLVMLocalExecTLSModel);
                 }
                 // PR 3g: surface imported-module boxed global to debugger.
                 llvm_backend_emit_global_declare(
@@ -6567,7 +6577,9 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
             LLVMSetInitializer(ig, LLVMConstInt(backend->int_type, 0, 0));
             add_local_typed(backend, decl->name, nullptr, INFERRED_INT, ig);
             if (global_needs_tls(decl->name)) {
-              LLVMSetThreadLocalMode(ig, LLVMGeneralDynamicTLSModel);
+              // LocalExec — see the matching note in the
+              // imported-module path above (Pass 0.05).
+              LLVMSetThreadLocalMode(ig, LLVMLocalExecTLSModel);
             }
             // PR 3g: surface this top-level int global to the debugger.
             llvm_backend_emit_global_declare(backend, decl->name, ig,
@@ -6579,7 +6591,7 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
                                LLVMConstNull(backend->vm_value_type));
             if (global_needs_tls(decl->name)) {
               LLVMSetThreadLocalMode(global_var,
-                                     LLVMGeneralDynamicTLSModel);
+                                     LLVMLocalExecTLSModel);
             }
             // PR 3g: surface this top-level boxed global to the debugger.
             llvm_backend_emit_global_declare(backend, decl->name, global_var,
