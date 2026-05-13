@@ -1,6 +1,10 @@
 # Plan 02 — Package Registry Tamamlaması
 
-**Durum:** PROPOSED
+**Durum:** COMPLETED (2026-04 → 2026-05, PR'lar #47/#61/#71/#72/#82/#83/
+\#229 + tulpar-be backend) — registry `api.pkg.tulparlang.dev` canlı,
+CLI `init/list/add/remove/install/publish/search/info` + `.tpkg`
+multi-file bundle + lockfile + full semver 2.0.0 ranges. Bkz. STATUS §
+"Pkg ekosistemi".
 **Tahmin:** 2-4 PR (1 client + 1 server + 1 entegrasyon + opsiyonel auth)
 **Risk:** Düşük (mevcut altyapı %80 hazır)
 **Mottoya katkı:** Ekosistem genişletme

@@ -1,6 +1,10 @@
 # Plan 04 — Native Record/Struct Types (Unboxed)
 
-**Durum:** PROPOSED
+**Durum:** COMPLETED (2026-05, PR'lar #48 / #49 / #50 + sonraki polish
+turları) — `struct Point { int x; int y; }` typed alloca + GEP yolundan
+LLVM IR'da native i64×N olarak temsil ediliyor; typed fn arg/return,
+`print(struct)` formatter, `benchmarks/struct_sum` eklendi. Bkz. STATUS
+§ "Çekirdek dil".
 **Tahmin:** 4-6 PR (parser → AST → typeinfer → AOT codegen → VM → benchmark/cleanup)
 **Risk:** Yüksek (codegen, runtime ABI ve typeinfer üçlüsünü birden değiştirir)
 **Mottoya katkı:** C kadar hızlı (somut, ölçülebilir kazanç)
