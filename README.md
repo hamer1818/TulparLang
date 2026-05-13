@@ -569,9 +569,9 @@ Quick links:
 
 Local docs in this repo:
 
-- [docs/QUICKSTART.md](docs/QUICKSTART.md)
-- [docs/KULLANIM.md](docs/KULLANIM.md) — language reference (Türkçe)
+- [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) — per-OS prerequisites, build steps, troubleshooting
 - [RELEASING.md](RELEASING.md) — how stable releases are cut
+- [STATUS.md](STATUS.md) — current shipping status + open gaps
 
 ## Contributing
 

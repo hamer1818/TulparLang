@@ -441,12 +441,10 @@ install(DIRECTORY examples/
 
 install(FILES
     README.md
-    QUICKSTART.md
-    KULLANIM.md
-    GELECEK_OZELLIKLER.md
-    TIP_GUVENLIKLI_DIZILER.md
-    ARRAYJSON_KULLANIM.md
-    CHANGELOG.md
+    RELEASING.md
+    STATUS.md
+    LICENSE
+    docs/PLATFORM_SUPPORT.md
     DESTINATION share/doc/tulpar
 )
 
