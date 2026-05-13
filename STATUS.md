@@ -305,7 +305,9 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ## 🔜 Açık eksikler
 
-Öncelik sırası: 🔴 kritik, 🟡 önemli, 🟢 nice-to-have.
+Öncelik sırası: 🔴 kritik, 🟡 önemli, 🟢 nice-to-have. Her madde
+**"Sıradaki adım"** satırıyla: bir sonraki oturuma cold-start
+girildiğinde ne yapacağımı bilelim.
 
 ### Dil seviyesi
 
@@ -314,55 +316,109 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   func tick() { n = n + 1; }` deseni sessizce çöküyor (program
   output vermiyor). Higher-order patterns için ortam (environment)
   yapısı ve indirect call gerek.
+  - **Sıradaki adım:** Mini-plan: (1) closure object layout
+    (heap env ptr + fn ptr), (2) AST'ye capture analizi,
+    (3) codegen'de env struct + indirect call site. Lambda PR'ı
+    (aşağıda) parser scaffold'unu hazırladı; closure body'sini
+    onun üzerine kur.
+
 - 🟡 **Lambda ifadeleri.** `(int a, int b) => a + b` parser
   scaffolding'i yerinde (lexer'a `TOKEN_FAT_ARROW` eklendi,
   `(<type> ...) =>` deseni ve bare `=>` parser'da "lambda
   expressions not yet supported" diagnostic'iyle yakalanıyor) —
-  AST node + codegen + env capture follow-up PR'lar için
-  bekliyor; map/filter benzeri kullanım hâlâ sözdizimsiz.
+  AST node + codegen + env capture follow-up PR'lar için bekliyor.
+  - **Sıradaki adım:** Diagnostic'i kaldır, `AST_LAMBDA` üret.
+    Sıfır-capture lambda'lardan başla (anonim fn olarak codegen,
+    fn pointer döndür); `examples/lambda_zero_capture.tpr` ile
+    smoke. Capture'lı versiyon closures iş başlayınca eklenir.
+
 - 🟢 **Pattern matching / `match` ifadesi.** Switch yok; if-else
   zinciri ile yapılıyor.
+  - **Sıradaki adım:** Sözdizim kararı (`match x { 1 => …, _ => … }`?).
+    Sonra parser node + AST + codegen — basit literal pattern'larla
+    başla; struct/array destructuring v1.1'e ertelenebilir.
+
 - 🟢 **Generics.** Type system overhaul; `func f<T>(T x): T` parse
   hatası veriyor.
+  - **Sıradaki adım:** v1.0 sonrası. Typecheck pre-pass'te `<T>`
+    syntax'ını parse + iz sürebilecek şekilde genişlet,
+    monomorphization stratejisini seç.
+
 - 🟢 **`async/await` keywords.** `lib/async.tpr` var ama dil-seviyesi
   state-machine transform yok.
+  - **Sıradaki adım:** Closures + first-class fn iş bittikten
+    sonra. Async fn'leri state-machine'e çevirmek callback-based
+    runtime üzerine kurulu.
 
 ### Runtime + codegen
 
 - 🔴 **Wings cookies miscompile.** PR #84 hot-fix'i durdu, root cause
-  hâlâ açık. 2026-05-12 araştırma turunda yeni bulgular:
-  - **Windows AOT'ta da çöküyor** — PR #84 "Linux-only" demişti ama
+  hâlâ açık. Mevcut bulgular:
+  - **Windows + Linux AOT'ta çöküyor** —
     `examples/api_wings.tpr`'de `_request["cookies"] = wings_cookies(req);`
-    satırını geri koyduğumda Windows'ta da ilk istekte segfault. Yani
-    OS-spesifik değil, hem `-O3` hem `--debug` (`-O0` "verify" pipeline)
-    altında tetikleniyor → LLVM optimizer bug'ı değil, Tulpar
-    codegen'inde.
-  - **Çöküş tam olarak subscript-write adımında** — `vm_set_element_ptr`
-    çağrısı, `vm_object_set obj=NULL` ile. Crash'ten hemen önce
-    `print(_request["method"])` doğru değeri ("GET") yazıyor; demek ki
-    `_request` o noktada geçerli. `wings_cookies(req)` başarıyla geri
-    dönüyor. ANCAK `_request["cookies"] = result;` adımında crash.
-    Aynı satırı `_request["cookies"] = {};` literal RHS ile yazınca
-    sorun yok.
-  - Tetiklemek için `examples/api_wings.tpr` shape'i gerekiyor
-    (`listen()` + arena_save + birden çok `_request[k]=...` yazımı).
-    `examples/30_wings_cookies_regression.tpr` (PR #194) standalone
-    pattern'i çalıştırıyor ve CI'da yeşil — yani basit sıralama
-    yetmiyor, full wings function-table + ordering gerekiyor.
-  - Sıradaki adım: IR diff'de `vm_set_element_ptr` çağrısının
-    `target_set_tmp` packing'inde `_request.5` (obj_val) field'ının
-    nasıl yüklendiğini takip etmek; muhtemelen `align 4` struct
-    load/store kombinasyonu ile `struct.VMValue zeroinitializer` TLS
-    init arasında bir interaction var.
+    satırını geri koyduğumda ilk istekte segfault. OS-spesifik
+    değil, hem `-O3` hem `--debug` (`-O0` "verify") altında
+    tetikleniyor → LLVM optimizer bug'ı değil, Tulpar codegen'inde.
+  - **Çöküş tam olarak subscript-write adımında** —
+    `vm_set_element_ptr` çağrısı `vm_object_set obj=NULL` ile.
+    `wings_cookies(req)` başarıyla dönüyor; `_request["cookies"] = result;`
+    yazımında crash. Aynı satırı `_request["cookies"] = {};` literal
+    RHS ile yazınca sorun yok.
+  - **Yeni bulgu (2026-05-13, PR #233):** Sadece "function call
+    RHS" tetiklemiyor. SSE dispatcher denerken
+    `_request["_fd"] = client;` (local int RHS) eklediğimde bir
+    sonraki `_request["params"] = route_match["params"];`
+    crashladı. Yani iki ardışık `_request[k]=...` yazımı
+    yeterli — RHS'in fn-call olması zorunlu değil.
+  - **Minimal repro ÇALIŞMIYOR:** İzole bir
+    `_request = {…}; _request[k1]=…; _request[k2]=…;` programı
+    plain global + TLS global ikisinde de sorunsuz çalışıyor. Bug
+    "import wings + tam dispatcher + listen() loop" bağlamı
+    gerektiriyor. Full wings function-table + ordering kritik;
+    `examples/30_wings_cookies_regression.tpr` (PR #194)
+    standalone pattern'i CI'da yeşil.
+  - **PR #213** `_request`'in TLS modelini `GeneralDynamic` →
+    `LocalExec` swapladı, bug değişmedi → access mekanizmasında
+    değil, store/load shape'inde.
+  - **Sıradaki adım:** `lib/wings.tpr`'a `_request["cookies"] = wings_cookies(req);`
+    geri koy. `examples/api_wings.tpr`'i `tulpar build --emit-llvm`
+    (varsa) veya intermediate `.ll`/`.o` çıktısıyla derle.
+    Crash öncesi `vm_set_element_ptr` çağrısının `target_set_tmp`
+    packing'inde `_request`'in struct field 5 (`obj_val`) nasıl
+    yüklendiğini incele — align 4 vs align 8, TLS slot init'i ile
+    load arası interaction, RIP-rel'den hangi sembole erişiliyor.
+    `addr2line` + `objdump -dS` ile crashed PC → kaynak satır.
+    Hedef: tek bir LLVM IR farkı bulup minimal fix.
+
+- 🟢 **WebSocket recv multi-call calling-conv quirk** (PR #231
+  development sırasında çıktı, doğrudan kullanıcı etkisi yok ama
+  smoke'da multi-frame round-trip yazamadık): ardışık
+  `wings_ws_recv_frame(fd)` çağrılarında ikinci çağrı `fdVal`
+  parametresini ilk çağrıdan farklı (server thread'in accepted
+  fd'si) görüyor. Debug print'lerinde `[recv] enter fd=344` sonrası
+  `[recv] enter fd=356` çıkıyor. Tek-frame round-trip çalışıyor
+  (`examples/32_wings_ws_frames.tpr` PASS).
+  - **Sıradaki adım:** AOT'da `wings_ws_recv_frame` dispatch
+    site'ına bak — VMValue 1-arg fn ABI'si MinGW64 SysV-shaped
+    struct'da sıkışıklık yaşıyor olabilir (aot_socket_close'a
+    yapılan ABI fix'inin benzeri). Şu an `string_pin_type`
+    kullanılıyor; tek-i64 alan ayrı bir signature deneyebilir,
+    veya çağrı taraflı `LLVMBuildAlloca` + value-by-pointer
+    ABI'ye geç.
 
 ### Tooling
 
 - 🟢 **JetBrains plugin.** Sadece VS Code var.
+  - **Sıradaki adım:** IntelliJ Platform SDK + grammar skeleton.
+    LSP4IJ ile LSP proxy en kestirme; native plugin v2.0.
 
-### Ağ / I/O / TLS
+### Ağ / I/O
 
 - 🟢 **HTTP/2.** HTTP/1.1 keep-alive + multi-thread bugünkü iş
   yüklerini karşılıyor.
+  - **Sıradaki adım:** v1.x sonrası. nghttp2 entegre etmek
+    (`wings_h2(port, …)` listener) veya saf C HPACK decoder —
+    karar gerekli.
 
 ### Pkg ekosistemi (içerik)
 
@@ -370,24 +426,37 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   `demo` + `multipkg` smoke-test paketleri var. Stdlib paketleri
   (`wings`, `router`, `http_utils`, vb.) eski markdown listelerinde
   geçiyor ama registry'de publish edilmemiş.
-- 🟢 **Server-side `/v1/search` endpoint.** Bugün `pkg search` client-side
-  filtreliyor — registry catalog'u büyüdüğünde `/v1/packages` payload'ı
-  N MB'a çıkarsa server-side full-text + featured-flag endpoint'ine
-  geçmek gerek. Şu anki paket sayısı (2) ile gereksiz.
+  - **Sıradaki adım:** v1.0 release sonrası gerçek kullanıcı
+    paketlerini bekle; veya kendi wings-extension'larımızı
+    (`wings_jwt`, `wings_postgres` vb.) publish et.
+
+- 🟢 **Server-side `/v1/search` endpoint.** Bugün `pkg search`
+  client-side filtreliyor — registry catalog'u büyüdüğünde
+  server-side full-text + featured-flag endpoint'ine geçmek gerek.
+  Şu anki paket sayısı (2) ile gereksiz.
+  - **Sıradaki adım:** N>50 paket olduğunda; tulpar-be'ye
+    `/v1/search?q=…` ekle, SQLite FTS5 ile.
+
 - 🟢 **Registry binary release asset support.** Şu an sadece source
   bundles; `tulpar update` benzeri binary distribution registry'den
   henüz çekmiyor.
+  - **Sıradaki adım:** Manifest'e `[release.binaries] linux-x64 = "url"`
+    şeması ekle; `pkg add` opt-in binary çekme.
 
 ### Dokümantasyon
 
-- 🟡 **Quickstart + dil reference + pkg guide → `tulparlang.dev/docs/`.**
-  README'de Quick start + Build a REST API + Streaming (SSE/WS) +
-  Package management bölümleri var, CLI reference + Standard library
+- 🟡 **`tulparlang.dev/docs/` deep dives.** README'de Quick start +
+  Build a REST API + Streaming (SSE/WS) + Package management
+  bölümleri var (PR #234 ile), CLI reference + Standard library
   tablosu güncel — fakat tulparlang.dev/docs/ altındaki tam dil
-  reference, derleyici flag matrisi, OS-spesifik kurulum kılavuzları
-  hâlâ eksik. README, "quickstart" eşiğini karşılıyor; reference +
-  pkg/wings derinlemesine kılavuzları için ayrı bir docs commit
-  turu gerek.
+  reference, derleyici flag matrisi, OS-spesifik kurulum
+  kılavuzları hâlâ eksik. README "quickstart" eşiğini karşılıyor;
+  reference + pkg/wings derinlemesine kılavuzları için ayrı bir
+  docs commit turu gerek.
+  - **Sıradaki adım:** `pkg.tulparlang.dev` Astro repo'sunu klonla
+    (veya yeni `docs.tulparlang.dev` aç), `docs/` collection'ı
+    ekle, README içeriğini bölümlere ayır + genişlet. v1.0
+    release blocker.
 
 ---
 
