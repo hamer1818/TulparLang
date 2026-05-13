@@ -742,6 +742,32 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
         emit_byte(compiler, 68, node->line);
       else
         emit_byte(compiler, 67, node->line);
+    } else if (strcmp(node->name, "pow") == 0) {
+      compile_expression(compiler, node->arguments[0]); // base
+      compile_expression(compiler, node->arguments[1]); // exp
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 85, node->line);
+    } else if (strcmp(node->name, "format_iso8601") == 0) {
+      compile_expression(compiler, node->arguments[0]); // seconds
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 86, node->line);
+    } else if (strcmp(node->name, "parse_iso8601") == 0) {
+      compile_expression(compiler, node->arguments[0]); // str
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 87, node->line);
+    } else if (strcmp(node->name, "weekday") == 0) {
+      compile_expression(compiler, node->arguments[0]); // seconds
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 88, node->line);
+    } else if (strcmp(node->name, "repeat") == 0) {
+      compile_expression(compiler, node->arguments[0]); // str
+      compile_expression(compiler, node->arguments[1]); // count
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 89, node->line);
+    } else if (strcmp(node->name, "now_iso8601") == 0) {
+      // No args.
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 97, node->line);
     } else if (strcmp(node->name, "exit") == 0) {
       if (node->argument_count > 0)
         compile_expression(compiler, node->arguments[0]);

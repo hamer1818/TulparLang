@@ -83,6 +83,12 @@ extern "C" VMValue aot_date_add_seconds(VMValue baseVal, VMValue deltaVal);
 extern "C" VMValue aot_db_execute(VMValue dbVal, VMValue sqlVal);
 extern "C" VMValue aot_db_error(VMValue dbVal);
 extern "C" VMValue aot_db_last_insert_id(VMValue dbVal);
+extern "C" VMValue aot_math_pow(VMValue base, VMValue exp);
+extern "C" VMValue aot_format_iso8601(VMValue secsVal);
+extern "C" VMValue aot_parse_iso8601(VMValue strVal);
+extern "C" VMValue aot_weekday(VMValue secsVal);
+extern "C" VMValue aot_string_repeat(VMValue str, VMValue countVal);
+extern "C" VMValue aot_now_iso8601(void);
 
 static void runtime_error(VM *vm, const char *format, ...) {
   va_list args;
@@ -2133,6 +2139,37 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           } else {
             vm_push(vm, VM_OBJ(vm_alloc_string(vm, "", 0)));
           }
+          break;
+        }
+        case 85: { // pow(base, exp) -> number
+          VMValue exp = vm_pop(vm);
+          VMValue base = vm_pop(vm);
+          vm_push(vm, aot_math_pow(base, exp));
+          break;
+        }
+        case 86: { // format_iso8601(seconds) -> str
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_format_iso8601(v));
+          break;
+        }
+        case 87: { // parse_iso8601(str) -> int (epoch seconds, -1 on error)
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_parse_iso8601(v));
+          break;
+        }
+        case 88: { // weekday(seconds) -> int (0=Sunday..6=Saturday)
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_weekday(v));
+          break;
+        }
+        case 89: { // repeat(str, count) -> str
+          VMValue count = vm_pop(vm);
+          VMValue str = vm_pop(vm);
+          vm_push(vm, aot_string_repeat(str, count));
+          break;
+        }
+        case 97: { // now_iso8601() -> str
+          vm_push(vm, aot_now_iso8601());
           break;
         }
 
