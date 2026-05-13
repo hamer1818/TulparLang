@@ -89,6 +89,11 @@ extern "C" VMValue aot_parse_iso8601(VMValue strVal);
 extern "C" VMValue aot_weekday(VMValue secsVal);
 extern "C" VMValue aot_string_repeat(VMValue str, VMValue countVal);
 extern "C" VMValue aot_now_iso8601(void);
+extern "C" VMValue aot_regex_match(VMValue patVal, VMValue strVal);
+extern "C" VMValue aot_regex_search(VMValue patVal, VMValue strVal);
+extern "C" VMValue aot_regex_capture(VMValue patVal, VMValue strVal);
+extern "C" VMValue aot_regex_replace(VMValue patVal, VMValue strVal,
+                                     VMValue replVal);
 
 static void runtime_error(VM *vm, const char *format, ...) {
   va_list args;
@@ -1745,6 +1750,31 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           vm_push(vm,
                   aot_http_create_response_keepalive(
                       status, content_type, body, headers, keepalive));
+          break;
+        }
+        case 110: { // regex_match(pat, str) -> int (0/1, full match)
+          VMValue str = vm_pop(vm);
+          VMValue pat = vm_pop(vm);
+          vm_push(vm, aot_regex_match(pat, str));
+          break;
+        }
+        case 111: { // regex_search(pat, str) -> int (0/1, partial match)
+          VMValue str = vm_pop(vm);
+          VMValue pat = vm_pop(vm);
+          vm_push(vm, aot_regex_search(pat, str));
+          break;
+        }
+        case 112: { // regex_capture(pat, str) -> array<str> (group 0 = full)
+          VMValue str = vm_pop(vm);
+          VMValue pat = vm_pop(vm);
+          vm_push(vm, aot_regex_capture(pat, str));
+          break;
+        }
+        case 113: { // regex_replace(pat, str, repl) -> str (replace all)
+          VMValue repl = vm_pop(vm);
+          VMValue str = vm_pop(vm);
+          VMValue pat = vm_pop(vm);
+          vm_push(vm, aot_regex_replace(pat, str, repl));
           break;
         }
         case 60: { // exit(code)

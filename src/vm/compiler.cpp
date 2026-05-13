@@ -610,6 +610,27 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
       // No args.
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
       emit_byte(compiler, 109, node->line);
+    } else if (strcmp(node->name, "regex_match") == 0) {
+      compile_expression(compiler, node->arguments[0]); // pattern
+      compile_expression(compiler, node->arguments[1]); // string
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 110, node->line);
+    } else if (strcmp(node->name, "regex_search") == 0) {
+      compile_expression(compiler, node->arguments[0]); // pattern
+      compile_expression(compiler, node->arguments[1]); // string
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 111, node->line);
+    } else if (strcmp(node->name, "regex_capture") == 0) {
+      compile_expression(compiler, node->arguments[0]); // pattern
+      compile_expression(compiler, node->arguments[1]); // string
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 112, node->line);
+    } else if (strcmp(node->name, "regex_replace") == 0) {
+      compile_expression(compiler, node->arguments[0]); // pattern
+      compile_expression(compiler, node->arguments[1]); // string
+      compile_expression(compiler, node->arguments[2]); // replacement
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 113, node->line);
     } else if (strcmp(node->name, "csv_parse") == 0) {
       compile_expression(compiler, node->arguments[0]); // str
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
