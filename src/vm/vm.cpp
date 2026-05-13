@@ -47,6 +47,24 @@ extern "C" VMValue aot_http_parse_request(VMValue rawRequest);
 extern "C" VMValue aot_http_status_text(VMValue statusVal);
 extern "C" VMValue aot_http_should_keepalive(VMValue requestVal);
 extern "C" VMValue aot_path_match(VMValue patternVal, VMValue pathVal);
+// aot_math_abs's pointer-out signature stands out from the rest — wrap
+// it inline in case 15 (and case 105 for round) so callers see the
+// regular VMValue → VMValue shape every other math builtin uses.
+extern "C" void aot_math_abs(VMValue *result, VMValue *v_ptr);
+extern "C" VMValue aot_math_sqrt(VMValue v);
+extern "C" VMValue aot_math_sin(VMValue v);
+extern "C" VMValue aot_math_cos(VMValue v);
+extern "C" VMValue aot_math_tan(VMValue v);
+extern "C" VMValue aot_math_floor(VMValue v);
+extern "C" VMValue aot_math_ceil(VMValue v);
+extern "C" VMValue aot_math_round(VMValue v);
+extern "C" VMValue aot_math_log(VMValue v);
+extern "C" VMValue aot_math_log10(VMValue v);
+extern "C" VMValue aot_math_exp(VMValue v);
+extern "C" VMValue aot_math_min(VMValue a, VMValue b);
+extern "C" VMValue aot_math_max(VMValue a, VMValue b);
+extern "C" VMValue aot_math_mod(VMValue a, VMValue b);
+extern "C" VMValue aot_math_random(void);
 extern "C" VMValue aot_http_create_response(VMValue statusVal,
                                             VMValue contentTypeVal,
                                             VMValue bodyVal);
@@ -2499,51 +2517,96 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           DISPATCH();
         }
 
+        // --- Math 1-arg builtins (opcodes 10-19) ---
+        // Each case delegates to the shared `aot_math_X` impl so VM and
+        // AOT produce the same VMValue (same numeric value AND same type
+        // — important because `aot_math_abs` returns int for int input,
+        // and `assert_eq_int(abs(5), 5)` in tests/math.test.tpr depended
+        // on that. The previous catch-all here converted every input to
+        // double and always pushed VM_FLOAT, which broke that test).
+        case 10: { // sqrt(x) -> float
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_math_sqrt(v));
+          break;
+        }
+        case 11: { // sin(x) -> float
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_math_sin(v));
+          break;
+        }
+        case 12: { // cos(x) -> float
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_math_cos(v));
+          break;
+        }
+        case 13: { // floor(x) -> float
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_math_floor(v));
+          break;
+        }
+        case 14: { // ceil(x) -> float
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_math_ceil(v));
+          break;
+        }
+        case 15: { // abs(x) -> same type as input (int or float)
+          VMValue v = vm_pop(vm);
+          VMValue result;
+          aot_math_abs(&result, &v);
+          vm_push(vm, result);
+          break;
+        }
+        case 16: { // tan(x) -> float
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_math_tan(v));
+          break;
+        }
+        case 17: { // log(x) -> float
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_math_log(v));
+          break;
+        }
+        case 18: { // log10(x) -> float
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_math_log10(v));
+          break;
+        }
+        case 19: { // exp(x) -> float
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_math_exp(v));
+          break;
+        }
+
+        case 105: { // round(x) -> float
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_math_round(v));
+          break;
+        }
+        case 106: { // min(a, b) -> number
+          VMValue b = vm_pop(vm);
+          VMValue a = vm_pop(vm);
+          vm_push(vm, aot_math_min(a, b));
+          break;
+        }
+        case 107: { // max(a, b) -> number
+          VMValue b = vm_pop(vm);
+          VMValue a = vm_pop(vm);
+          vm_push(vm, aot_math_max(a, b));
+          break;
+        }
+        case 108: { // mod(a, b) -> number
+          VMValue b = vm_pop(vm);
+          VMValue a = vm_pop(vm);
+          vm_push(vm, aot_math_mod(a, b));
+          break;
+        }
+        case 109: { // random() -> float in [0.0, 1.0)
+          vm_push(vm, aot_math_random());
+          break;
+        }
+
         default:
-          // Math?
-          if (builtin_id < 10 && builtin_id > 1) { // Unknown low ID
-            vm_push(vm, VM_VOID());
-          } else if (builtin_id >= 10 && builtin_id < 30) {
-            // Existing math logic
-            VMValue v = vm_pop(vm);
-            double d = IS_INT(v) ? (double)AS_INT(v) : AS_FLOAT(v);
-            double res = 0;
-            switch (builtin_id) {
-            case 10:
-              res = sqrt(d);
-              break;
-            case 11:
-              res = sin(d);
-              break;
-            case 12:
-              res = cos(d);
-              break;
-            case 13:
-              res = floor(d);
-              break;
-            case 14:
-              res = ceil(d);
-              break;
-            case 15:
-              res = fabs(d);
-              break;
-            case 16:
-              res = tan(d);
-              break;
-            case 17:
-              res = log(d);
-              break;
-            case 18:
-              res = log10(d);
-              break;
-            case 19:
-              res = exp(d);
-              break;
-            }
-            vm_push(vm, VM_FLOAT(res));
-          } else {
-            vm_push(vm, VM_VOID());
-          }
+          vm_push(vm, VM_VOID());
         }
         DISPATCH();
       }
