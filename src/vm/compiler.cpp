@@ -631,6 +631,38 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
       compile_expression(compiler, node->arguments[2]); // replacement
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
       emit_byte(compiler, 113, node->line);
+    } else if (strcmp(node->name, "arena_save") == 0) {
+      // No args. Returns int (arena watermark).
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 117, node->line);
+    } else if (strcmp(node->name, "arena_restore") == 0) {
+      compile_expression(compiler, node->arguments[0]); // idx
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 118, node->line);
+    } else if (strcmp(node->name, "string_pin") == 0) {
+      compile_expression(compiler, node->arguments[0]); // str
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 119, node->line);
+    } else if (strcmp(node->name, "cpu_count") == 0) {
+      // No args.
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 121, node->line);
+    } else if (strcmp(node->name, "timestamp") == 0) {
+      // No args.
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 122, node->line);
+    } else if (strcmp(node->name, "time_ms") == 0) {
+      // No args.
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 123, node->line);
+    } else if (strcmp(node->name, "input_int") == 0) {
+      compile_expression(compiler, node->arguments[0]); // prompt
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 124, node->line);
+    } else if (strcmp(node->name, "input_float") == 0) {
+      compile_expression(compiler, node->arguments[0]); // prompt
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 125, node->line);
     } else if (strcmp(node->name, "csv_parse") == 0) {
       compile_expression(compiler, node->arguments[0]); // str
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);

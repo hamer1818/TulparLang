@@ -65,6 +65,14 @@ extern "C" VMValue aot_math_min(VMValue a, VMValue b);
 extern "C" VMValue aot_math_max(VMValue a, VMValue b);
 extern "C" VMValue aot_math_mod(VMValue a, VMValue b);
 extern "C" VMValue aot_math_random(void);
+extern "C" VMValue aot_arena_save(void);
+extern "C" VMValue aot_arena_restore(VMValue idxVal);
+extern "C" VMValue aot_string_pin(VMValue strVal);
+extern "C" VMValue aot_cpu_count(void);
+extern "C" VMValue aot_timestamp(void);
+extern "C" VMValue aot_time_ms(void);
+extern "C" VMValue aot_input_int(VMValue promptVal);
+extern "C" VMValue aot_input_float(VMValue promptVal);
 extern "C" VMValue aot_http_create_response(VMValue statusVal,
                                             VMValue contentTypeVal,
                                             VMValue bodyVal);
@@ -2691,6 +2699,42 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           VMValue delta = vm_pop(vm);
           VMValue base = vm_pop(vm);
           vm_push(vm, aot_date_add_seconds(base, delta));
+          break;
+        }
+        case 117: { // arena_save() -> int (watermark)
+          vm_push(vm, aot_arena_save());
+          break;
+        }
+        case 118: { // arena_restore(idx) -> int (sentinel)
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_arena_restore(v));
+          break;
+        }
+        case 119: { // string_pin(s) -> str (malloc-promoted copy)
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_string_pin(v));
+          break;
+        }
+        case 121: { // cpu_count() -> int
+          vm_push(vm, aot_cpu_count());
+          break;
+        }
+        case 122: { // timestamp() -> int (epoch seconds)
+          vm_push(vm, aot_timestamp());
+          break;
+        }
+        case 123: { // time_ms() -> int (monotonic-ish ms)
+          vm_push(vm, aot_time_ms());
+          break;
+        }
+        case 124: { // input_int(prompt) -> int (reads a line, parses)
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_input_int(v));
+          break;
+        }
+        case 125: { // input_float(prompt) -> float
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_input_float(v));
           break;
         }
         case 126: { // db_execute(db, sql) -> int (rows affected)
