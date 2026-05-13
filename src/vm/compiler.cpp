@@ -587,6 +587,29 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
       compile_expression(compiler, node->arguments[0]);
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
       emit_byte(compiler, 18, node->line);
+    } else if (strcmp(node->name, "round") == 0) {
+      compile_expression(compiler, node->arguments[0]);
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 105, node->line);
+    } else if (strcmp(node->name, "min") == 0) {
+      compile_expression(compiler, node->arguments[0]);
+      compile_expression(compiler, node->arguments[1]);
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 106, node->line);
+    } else if (strcmp(node->name, "max") == 0) {
+      compile_expression(compiler, node->arguments[0]);
+      compile_expression(compiler, node->arguments[1]);
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 107, node->line);
+    } else if (strcmp(node->name, "mod") == 0) {
+      compile_expression(compiler, node->arguments[0]);
+      compile_expression(compiler, node->arguments[1]);
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 108, node->line);
+    } else if (strcmp(node->name, "random") == 0) {
+      // No args.
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 109, node->line);
     } else if (strcmp(node->name, "socket_server") == 0) {
       compile_expression(compiler, node->arguments[0]); // host
       compile_expression(compiler, node->arguments[1]); // port
