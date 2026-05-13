@@ -644,6 +644,10 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
       compile_expression(compiler, node->arguments[0]); // val
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
       emit_byte(compiler, 55, node->line);
+    } else if (strcmp(node->name, "keys") == 0) {
+      compile_expression(compiler, node->arguments[0]); // obj
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 56, node->line);
     } else if (strcmp(node->name, "exit") == 0) {
       if (node->argument_count > 0)
         compile_expression(compiler, node->arguments[0]);

@@ -37,12 +37,11 @@ static void value_to_json(VMValue v, char **buf, size_t *pos, size_t *capacity);
 // External function from runtime_bindings.cpp (C ABI)
 extern "C" void print_vm_value(VMValue value);
 
-// JSON parser shared with the AOT runtime. Defined in runtime_bindings.cpp
-// inside its `extern "C" {` block (line 38) — match that linkage here so
-// the VM's `fromJson` opcode resolves to the same recursive-descent parser
-// `tulpar build` uses. Without this, `tulpar --vm` (and the REPL) silently
-// returned an empty object for every `fromJson(...)` call.
+// Shared AOT runtime entry points. Defined in runtime_bindings.cpp inside
+// its `extern "C" {` block — match that linkage here so the VM opcodes
+// below resolve to the same implementations `tulpar build` uses.
 extern "C" VMValue aot_from_json(VMValue jsonStr);
+extern "C" VMValue aot_keys(VMValue objVal);
 
 static void ensure_capacity(char **buf, size_t *capacity, size_t needed) {
   while (*capacity < needed) {
@@ -1684,6 +1683,11 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           } else {
             vm_push(vm, VM_BOOL(1)); // Objects are truthy
           }
+          break;
+        }
+        case 56: { // keys(obj) -> array<str>
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_keys(v));
           break;
         }
         case 60: { // exit(code)
