@@ -610,6 +610,19 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
       // No args.
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
       emit_byte(compiler, 109, node->line);
+    } else if (strcmp(node->name, "csv_parse") == 0) {
+      compile_expression(compiler, node->arguments[0]); // str
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 114, node->line);
+    } else if (strcmp(node->name, "csv_emit") == 0) {
+      compile_expression(compiler, node->arguments[0]); // rows
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 115, node->line);
+    } else if (strcmp(node->name, "date_add_seconds") == 0) {
+      compile_expression(compiler, node->arguments[0]); // base
+      compile_expression(compiler, node->arguments[1]); // delta
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 116, node->line);
     } else if (strcmp(node->name, "socket_server") == 0) {
       compile_expression(compiler, node->arguments[0]); // host
       compile_expression(compiler, node->arguments[1]); // port

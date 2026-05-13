@@ -77,6 +77,9 @@ extern "C" VMValue aot_http_create_response_keepalive(VMValue statusVal,
                                                       VMValue bodyVal,
                                                       VMValue headersVal,
                                                       VMValue keepaliveVal);
+extern "C" VMValue aot_csv_parse(VMValue strVal);
+extern "C" VMValue aot_csv_emit(VMValue rowsVal);
+extern "C" VMValue aot_date_add_seconds(VMValue baseVal, VMValue deltaVal);
 
 static void runtime_error(VM *vm, const char *format, ...) {
   va_list args;
@@ -2602,6 +2605,22 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         }
         case 109: { // random() -> float in [0.0, 1.0)
           vm_push(vm, aot_math_random());
+          break;
+        }
+        case 114: { // csv_parse(str) -> array<array<str>>
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_csv_parse(v));
+          break;
+        }
+        case 115: { // csv_emit(rows) -> str
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_csv_emit(v));
+          break;
+        }
+        case 116: { // date_add_seconds(base, delta) -> int (epoch seconds)
+          VMValue delta = vm_pop(vm);
+          VMValue base = vm_pop(vm);
+          vm_push(vm, aot_date_add_seconds(base, delta));
           break;
         }
 
