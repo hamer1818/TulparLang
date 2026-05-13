@@ -51,16 +51,16 @@ static void runtime_error(VM *vm, const char *format, ...) {
   for (int i = vm->frame_count - 1; i >= 0; i--) {
     CallFrame *frame = &vm->frames[i];
     ObjFunction *function = frame->function;
-    // Instruction pointer offset - 1 (because ip is already advanced)
-    size_t instruction = frame->ip - function->chunk.code - 1;
-    if (instruction < (size_t)function->chunk.code_length) { // Bounds check
-      // Simple line lookup (can be optimized)
-      // For now assume lines array matches instructions 1:1 roughly or use RLE
-      // logic if implemented Since we used rough RLE in byteocde.c, let's just
-      // create a helper later. For now just print "in function"
-    }
+    // `ip` points one past the byte being executed (dispatcher pre-advances
+    // before running the handler), so the offset of the faulting byte is
+    // `ip - code - 1`. Clamp into range in case the trap is at offset 0 of
+    // an empty/synthetic chunk.
+    size_t instruction = (size_t)(frame->ip - function->chunk.code);
+    if (instruction > 0)
+      instruction--;
+    int line = chunk_line_at(&function->chunk, instruction);
 
-    fprintf(stderr, "[line %d] in ", -1); // Line lookup TODO
+    fprintf(stderr, "[line %d] in ", line);
     if (function->name == nullptr) {
       fprintf(stderr, "script\n");
     } else {
@@ -404,6 +404,7 @@ ObjFunction *vm_new_function(VM *vm) {
   func->chunk.code_length = 0;
   func->chunk.code_capacity = 0;
   func->chunk.lines = nullptr;
+  func->chunk.line_offsets = nullptr;
   func->chunk.line_count = 0;
   func->chunk.line_capacity = 0;
   func->chunk.constants = nullptr;
@@ -479,6 +480,8 @@ static void free_object(Obj *obj) {
       free(func->chunk.code);
     if (func->chunk.lines)
       free(func->chunk.lines);
+    if (func->chunk.line_offsets)
+      free(func->chunk.line_offsets);
     if (func->chunk.constants) {
       free(func->chunk.constants);
     }
@@ -845,10 +848,18 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           dest->code_capacity = src->code_length;
         }
 
-        // Copy lines
+        // Copy line info. Both arrays are parallel — copying one without
+        // the other leaves chunk_line_at dereferencing a null pointer
+        // whenever a runtime error fires inside the cloned function.
         if (src->line_count > 0) {
           dest->lines = static_cast<int*>(malloc(src->line_count * sizeof(int)));
           memcpy(dest->lines, src->lines, src->line_count * sizeof(int));
+          if (src->line_offsets) {
+            dest->line_offsets =
+                static_cast<int*>(malloc(src->line_count * sizeof(int)));
+            memcpy(dest->line_offsets, src->line_offsets,
+                   src->line_count * sizeof(int));
+          }
           dest->line_count = src->line_count;
           dest->line_capacity = src->line_count;
         }

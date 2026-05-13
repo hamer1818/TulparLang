@@ -206,8 +206,13 @@ typedef struct {
   int const_count;
   int const_capacity;
 
-  // Line number info (debugging)
+  // Line number info — one entry per contiguous run of bytecode emitted
+  // from the same source line. `line_offsets[i]` is the byte offset where
+  // run `i` begins; `lines[i]` is the line number it covers. `chunk_line_at`
+  // binary-searches these for instruction → line lookup (used by VM
+  // runtime_error stack traces).
   int *lines;
+  int *line_offsets;
   int line_count;
   int line_capacity;
 
@@ -236,6 +241,10 @@ void chunk_free(Chunk *chunk);
 
 // Write byte to chunk
 void chunk_write(Chunk *chunk, uint8_t byte, int line);
+
+// Look up the source line that produced the byte at `instruction_offset`.
+// Returns -1 when the chunk has no line info (e.g. synthetic init code).
+int chunk_line_at(const Chunk *chunk, size_t instruction_offset);
 
 // Write multi-byte values
 void chunk_write_int64(Chunk *chunk, long long value, int line);

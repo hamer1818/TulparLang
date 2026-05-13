@@ -18,6 +18,7 @@ Chunk *chunk_create() {
   chunk->const_capacity = 0;
 
   chunk->lines = nullptr;
+  chunk->line_offsets = nullptr;
   chunk->line_count = 0;
   chunk->line_capacity = 0;
 
@@ -48,6 +49,8 @@ void chunk_free(Chunk *chunk) {
   // Free line info
   if (chunk->lines)
     free(chunk->lines);
+  if (chunk->line_offsets)
+    free(chunk->line_offsets);
 
   // Free local names
   for (int i = 0; i < chunk->local_count; i++) {
@@ -71,18 +74,42 @@ void chunk_write(Chunk *chunk, uint8_t byte, int line) {
 
   chunk->code[chunk->code_length++] = byte;
 
-  // Track line numbers (RLE encoding for efficiency)
+  // Track line numbers as (offset, line) pairs — one entry per contiguous
+  // run of bytecode emitted from the same source line. `chunk_line_at` then
+  // binary-searches these for instruction → line lookup.
   if (chunk->line_count > 0 && chunk->lines[chunk->line_count - 1] == line) {
-    // Same line, no need to add
+    // Same source line as previous byte — extends the current run.
   } else {
     if (chunk->line_count >= chunk->line_capacity) {
       chunk->line_capacity =
           chunk->line_capacity == 0 ? 64 : chunk->line_capacity * 2;
       chunk->lines = static_cast<int *>(
           realloc(chunk->lines, chunk->line_capacity * sizeof(int)));
+      chunk->line_offsets = static_cast<int *>(
+          realloc(chunk->line_offsets, chunk->line_capacity * sizeof(int)));
     }
-    chunk->lines[chunk->line_count++] = line;
+    chunk->lines[chunk->line_count] = line;
+    chunk->line_offsets[chunk->line_count] = chunk->code_length - 1;
+    chunk->line_count++;
   }
+}
+
+int chunk_line_at(const Chunk *chunk, size_t instruction_offset) {
+  if (!chunk || chunk->line_count == 0 || !chunk->line_offsets ||
+      !chunk->lines)
+    return -1;
+  // Binary search for the largest `line_offsets[i]` <= instruction_offset.
+  int lo = 0;
+  int hi = chunk->line_count - 1;
+  while (lo < hi) {
+    int mid = (lo + hi + 1) / 2;
+    if ((size_t)chunk->line_offsets[mid] <= instruction_offset) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return chunk->lines[lo];
 }
 
 void chunk_write_int64(Chunk *chunk, long long value, int line) {
