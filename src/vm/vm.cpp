@@ -65,7 +65,7 @@ static void value_to_json(VMValue v, char **buf, size_t *pos,
   } else if (IS_BOOL(v)) {
     append_str(buf, pos, capacity, AS_BOOL(v) ? "true" : "false");
   } else if (IS_VOID(v)) {
-    append_str(buf, pos, capacity, "nullptr");
+    append_str(buf, pos, capacity, "null");
   } else if (IS_STRING(v)) {
     append_str(buf, pos, capacity, "\"");
     append_str(buf, pos, capacity, AS_STRING(v)->chars);
@@ -75,7 +75,7 @@ static void value_to_json(VMValue v, char **buf, size_t *pos,
     append_str(buf, pos, capacity, "[");
     for (int i = 0; i < arr->count; i++) {
       if (i > 0)
-        append_str(buf, pos, capacity, ", ");
+        append_str(buf, pos, capacity, ",");
       value_to_json(arr->items[i], buf, pos, capacity);
     }
     append_str(buf, pos, capacity, "]");
@@ -84,15 +84,15 @@ static void value_to_json(VMValue v, char **buf, size_t *pos,
     append_str(buf, pos, capacity, "{");
     for (int i = 0; i < obj->count; i++) {
       if (i > 0)
-        append_str(buf, pos, capacity, ", ");
+        append_str(buf, pos, capacity, ",");
       append_str(buf, pos, capacity, "\"");
       append_str(buf, pos, capacity, obj->keys[i]->chars);
-      append_str(buf, pos, capacity, "\": ");
+      append_str(buf, pos, capacity, "\":");
       value_to_json(obj->values[i], buf, pos, capacity);
     }
     append_str(buf, pos, capacity, "}");
   } else {
-    append_str(buf, pos, capacity, "nullptr");
+    append_str(buf, pos, capacity, "null");
   }
 }
 
