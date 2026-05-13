@@ -769,6 +769,13 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_keys =
       LLVMAddFunction(backend->module, "aot_keys", fmt_iso_type);
 
+  // aot_object_clone(obj) -> obj (shallow). Same 1-arg VMValue→VMValue
+  // shape as keys; can reuse `fmt_iso_type`. Exposed as the user-level
+  // `clone(obj)` builtin and used by the VM compiler's typed-struct
+  // pass-by-value prologue.
+  backend->func_aot_object_clone =
+      LLVMAddFunction(backend->module, "aot_object_clone", fmt_iso_type);
+
   // Regex (std::regex) builtins. Two-arg: match/search/capture; three-arg: replace.
   LLVMTypeRef regex2_params[] = {backend->vm_value_type, backend->vm_value_type};
   LLVMTypeRef regex2_type =
@@ -3436,6 +3443,16 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_keys,
                                     args, 1, "keys");
+    }
+    // clone(obj) -> obj — shallow copy of a JSON object. The VM compiler
+    // also emits this opcode-sequence as the function-entry by-value
+    // prologue for typed-struct params; surfacing it as a user-callable
+    // builtin lets `.tpr` code request explicit copies too.
+    if (node->name && strcmp(node->name, "clone") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_object_clone,
+                                    args, 1, "clone");
     }
     // http_request(method, url, body) — outbound HTTP/1.0 client.
     if (node->name && strcmp(node->name, "http_request") == 0 &&

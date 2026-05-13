@@ -180,6 +180,7 @@ typedef struct {
   LLVMValueRef func_aot_csv_parse;
   LLVMValueRef func_aot_csv_emit;
   LLVMValueRef func_aot_keys;
+  LLVMValueRef func_aot_object_clone;
   LLVMValueRef func_aot_http_request;
   LLVMValueRef func_aot_trim;
   LLVMValueRef func_aot_replace;

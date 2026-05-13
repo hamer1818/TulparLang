@@ -1,0 +1,67 @@
+// Guards the VM struct-by-value param fix.
+//
+// Pre-fix: VM bound typed-struct params by reference (the caller's
+// ObjObject pointer was shared with the callee), so
+// `func _translate(Point p, int dx) { p.x = p.x + dx; return p; }`
+// mutated the CALLER'S struct. AOT's Plan 04 native-struct codegen
+// (alloca + per-field GEP/store) had always given the test
+// `tests/struct_native.test.tpr struct_arg_pass_by_value` real
+// pass-by-value semantics; only the VM diverged.
+//
+// Fix: VM compiler emits a `LOAD_LOCAL N; clone; STORE_LOCAL N`
+// prologue for every TYPE_CUSTOM parameter. The new VM opcode 129
+// (`clone`) delegates to `aot_object_clone`, which shallow-copies
+// the ObjObject — sufficient for primitive-field structs (the
+// dominant use case driving this), with nested objects still shared
+// by reference (a follow-up could deep-clone if needed).
+//
+// Smoke checks below mirror `tests/struct_native.test.tpr` cases
+// but isolate them so the fix is regression-tested even if the
+// upstream suite changes shape.
+
+import "test";
+
+struct Point {
+    int x;
+    int y;
+}
+
+func _translate_x(Point p, int dx): Point {
+    p.x = p.x + dx;
+    return p;
+}
+
+func caller_intact() {
+    Point p = { x: 1, y: 2 };
+    Point t = _translate_x(p, 100);
+    assert_eq_int(t.x, 101);
+    assert_eq_int(t.y, 2);
+    assert_eq_int(p.x, 1);   // caller unchanged (by-value)
+    assert_eq_int(p.y, 2);
+}
+
+func returned_struct_distinct() {
+    // Two struct-returning calls in sequence; each return should be its
+    // own object, so mutating the second doesn't bleed back.
+    Point a = _translate_x({x: 1, y: 1}, 10);
+    Point b = _translate_x({x: 1, y: 1}, 20);
+    assert_eq_int(a.x, 11);
+    assert_eq_int(b.x, 21);
+}
+
+// `clone(obj)` is exposed as a user-callable builtin too — the same
+// helper the function prologue uses.
+func clone_builtin_basic() {
+    json src = {"a": 1, "b": 2};
+    json dst = clone(src);
+    // Mutating dst doesn't bleed back to src.
+    dst["a"] = 99;
+    assert_eq_int(src["a"], 1);
+    assert_eq_int(dst["a"], 99);
+}
+
+test("typed struct: caller stays intact", "caller_intact");
+test("typed struct: returned structs are distinct",
+     "returned_struct_distinct");
+test("clone() shallow-copies objects", "clone_builtin_basic");
+test_summary();
