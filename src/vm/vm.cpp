@@ -31,9 +31,6 @@
 // HELPERS
 // ============================================================================
 
-// Forward declarations for JSON serialization
-static void value_to_json(VMValue v, char **buf, size_t *pos, size_t *capacity);
-
 // External function from runtime_bindings.cpp (C ABI)
 extern "C" void print_vm_value(VMValue value);
 
@@ -41,66 +38,8 @@ extern "C" void print_vm_value(VMValue value);
 // its `extern "C" {` block — match that linkage here so the VM opcodes
 // below resolve to the same implementations `tulpar build` uses.
 extern "C" VMValue aot_from_json(VMValue jsonStr);
+extern "C" VMValue aot_to_json(VMValue value);
 extern "C" VMValue aot_keys(VMValue objVal);
-
-static void ensure_capacity(char **buf, size_t *capacity, size_t needed) {
-  while (*capacity < needed) {
-    *capacity *= 2;
-    *buf = static_cast<char *>(realloc(*buf, *capacity));
-  }
-}
-
-static void append_str(char **buf, size_t *pos, size_t *capacity,
-                       const char *str) {
-  size_t len = strlen(str);
-  ensure_capacity(buf, capacity, *pos + len + 1);
-  strcpy(*buf + *pos, str);
-  *pos += len;
-}
-
-static void value_to_json(VMValue v, char **buf, size_t *pos,
-                          size_t *capacity) {
-  if (IS_INT(v)) {
-    char tmp[64];
-    snprintf(tmp, 64, "%lld", AS_INT(v));
-    append_str(buf, pos, capacity, tmp);
-  } else if (IS_FLOAT(v)) {
-    char tmp[64];
-    snprintf(tmp, 64, "%g", AS_FLOAT(v));
-    append_str(buf, pos, capacity, tmp);
-  } else if (IS_BOOL(v)) {
-    append_str(buf, pos, capacity, AS_BOOL(v) ? "true" : "false");
-  } else if (IS_VOID(v)) {
-    append_str(buf, pos, capacity, "null");
-  } else if (IS_STRING(v)) {
-    append_str(buf, pos, capacity, "\"");
-    append_str(buf, pos, capacity, AS_STRING(v)->chars);
-    append_str(buf, pos, capacity, "\"");
-  } else if (IS_OBJ(v) && AS_OBJ(v)->type == OBJ_ARRAY) {
-    ObjArray *arr = (ObjArray *)AS_OBJ(v);
-    append_str(buf, pos, capacity, "[");
-    for (int i = 0; i < arr->count; i++) {
-      if (i > 0)
-        append_str(buf, pos, capacity, ",");
-      value_to_json(arr->items[i], buf, pos, capacity);
-    }
-    append_str(buf, pos, capacity, "]");
-  } else if (IS_OBJ(v) && AS_OBJ(v)->type == OBJ_OBJECT) {
-    ObjObject *obj = (ObjObject *)AS_OBJ(v);
-    append_str(buf, pos, capacity, "{");
-    for (int i = 0; i < obj->count; i++) {
-      if (i > 0)
-        append_str(buf, pos, capacity, ",");
-      append_str(buf, pos, capacity, "\"");
-      append_str(buf, pos, capacity, obj->keys[i]->chars);
-      append_str(buf, pos, capacity, "\":");
-      value_to_json(obj->values[i], buf, pos, capacity);
-    }
-    append_str(buf, pos, capacity, "}");
-  } else {
-    append_str(buf, pos, capacity, "null");
-  }
-}
 
 static void runtime_error(VM *vm, const char *format, ...) {
   va_list args;
@@ -1610,18 +1549,12 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           vm_push(vm, VM_OBJ(vm_alloc_string(vm, buf, strlen(buf))));
           break;
         }
-        case 51: { // toJson(val) -> String (recursive, supports nested
-                   // objects/arrays)
+        case 51: { // toJson(val) -> String. Shares the AOT serializer
+                   // (JSBuilder / js_escape_string), so embedded quotes,
+                   // backslashes, and control chars survive a `--vm`
+                   // toJson → fromJson round-trip.
           VMValue v = vm_pop(vm);
-          size_t capacity = 256;
-          size_t pos = 0;
-          char *buf = static_cast<char *>(malloc(capacity));
-          buf[0] = '\0';
-
-          value_to_json(v, &buf, &pos, &capacity);
-
-          vm_push(vm, VM_OBJ(vm_alloc_string(vm, buf, pos)));
-          free(buf);
+          vm_push(vm, aot_to_json(v));
           break;
         }
 
