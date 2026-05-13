@@ -4894,6 +4894,29 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     LLVMValueRef init;
     if (node->right) {
       init = codegen_expression(backend, node->right);
+      // Honour the declared type for the int case. `int x = <bool expr>`
+      // (e.g. `int ok = db_execute(db, sql)` — sqlite helpers return
+      // VM_BOOL) needs to land as VM_VAL_INT so toString(x) prints "1"
+      // and `assert_eq_int(x, 1)` matches by value, not by tag. Slot 2 of
+      // the boxed VMValue holds the int payload for both VM_VAL_INT and
+      // VM_VAL_BOOL (1 for true, 0 for false), so rewriting only the
+      // type-tag field is safe and lossless. Floats/strings/objects are
+      // left alone — typeinfer's pre-pass already warned about those
+      // mismatches.
+      if (node->data_type == TYPE_INT && init) {
+        LLVMValueRef tag = LLVMBuildExtractValue(backend->builder, init, 0,
+                                                 "decl.tag");
+        LLVMValueRef is_bool = LLVMBuildICmp(
+            backend->builder, LLVMIntEQ, tag,
+            LLVMConstInt(backend->int32_type, /*VM_VAL_BOOL=*/2, 0),
+            "decl.is_bool");
+        LLVMValueRef new_tag = LLVMBuildSelect(
+            backend->builder, is_bool,
+            LLVMConstInt(backend->int32_type, /*VM_VAL_INT=*/0, 0),
+            tag, "decl.tag.coerced");
+        init = LLVMBuildInsertValue(backend->builder, init, new_tag, 0,
+                                    "decl.bool_to_int");
+      }
     } else if (node->data_type == TYPE_CUSTOM) {
       // `Point p;` form: allocate an empty Object so subsequent `p.x = ...`
       // (which desugars to `p["x"] = ...`) hits the object set path

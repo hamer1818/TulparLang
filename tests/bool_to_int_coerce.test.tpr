@@ -1,0 +1,42 @@
+// Guards the AOT `int x = <bool>` coercion fix. Without it,
+// `int ok = db_execute(db, "BOGUS SQL")` left `ok` as `VM_VAL_BOOL`
+// under AOT, so toString(ok) printed "true" and
+// `assert_eq_int(ok, 0)` failed with `expected 0 got false`. VM was
+// fine (its assert_eq_int compares numerically), AOT lost type
+// tracking at the local-decl boundary.
+//
+// Fix: in `case AST_VARIABLE_DECL`'s boxed local fallback
+// (llvm_backend.cpp ~line 4894), when the user declared `int` and
+// the rhs is `VM_VAL_BOOL`, rewrite the type tag to `VM_VAL_INT`
+// before storing. Slot 2 of the boxed VMValue holds the int payload
+// for both tags (1 for true, 0 for false), so the rewrite is
+// lossless.
+
+import "test";
+
+func bool_literal_decl() {
+    int x = true;
+    int y = false;
+    assert_eq_int(x, 1);
+    assert_eq_int(y, 0);
+}
+
+func db_execute_bool_decl() {
+    int db = db_open(":memory:");
+    int ok = db_execute(db, "BOGUS SQL");
+    assert_eq_int(ok, 0);
+    int ok2 = db_execute(db, "CREATE TABLE t(x INT)");
+    assert_eq_int(ok2, 1);
+    db_close(db);
+}
+
+func string_compare_decl() {
+    // contains() returns int 0/1 — should remain int after decl.
+    int has = contains("hello", "ll");
+    assert_eq_int(has, 1);
+}
+
+test("int x = true/false literal", "bool_literal_decl");
+test("int ok = db_execute(...) bool->int", "db_execute_bool_decl");
+test("int has = contains(...)", "string_compare_decl");
+test_summary();
