@@ -62,6 +62,31 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 - **Sunset turu (2026-05-04, PR #30+#31):** Tree-walk interpreter
   (−6109 satır), x64 JIT (−2162 satır). REPL artık VM compiler'a
   feed eder.
+- **VM/AOT builtin paritesi (2026-05-13, PR'lar #243 → #264):** Sunset
+  sonrası VM, `tulpar build`'in dispatch ettiği ~40 builtin için ya
+  hiç bağlı değildi ya da paralel — ama tutarsız — bir
+  implementasyon taşıyordu. Tüm yol şu şekle indirildi: compiler.cpp
+  `OP_CALL_BUILTIN <slot>` çıkartır, vm.cpp ilgili `case`
+  doğrudan `extern "C" aot_X(...)` çağırır, AOT impl'i tek doğruluk
+  kaynağı olur. Kapsam: array `pop`, JSON (`fromJson`/`toJson`
+  duplicate VM serializer'ın silinmesi + escape düzeltmesi), `keys`,
+  HTTP (`http_parse_request`/`http_status_text`/`http_should_keepalive`/
+  `path_match`/`http_create_response` 3/4/5-arity), regex (4), math
+  (`pow`/`round`/`min`/`max`/`mod`/`random` + `abs` artık int
+  korur), datetime (`format`/`parse_iso8601`, `now_iso8601`,
+  `weekday`, `date_add_seconds`), string (`repeat`), csv, db
+  (`db_execute`/`db_error`/`db_last_insert_id`), arena, time
+  (`time_ms`/`timestamp`/`cpu_count`), input (`input_int`/
+  `input_float`), `string_pin`, `parse_cookies`/`parse_query`. Aynı
+  turda runtime_error stack trace'lerindeki `[line -1]` placeholder'ı
+  `chunk_line_at()` binary search'üyle gerçek satır numarasına
+  yükseldi (PR #251); `Chunk::line_offsets[]` yan dizisi RLE'ye
+  yer-offset ekledi. Etki: `--vm` altında `tests/break/errors/http/
+  json/json_edges/methods/router/datetime/strings/math/stdlib_extras/
+  stdlib_phase_a` paketlerinin builtin'e dayalı failure'ları
+  kapandı — geriye sadece `struct_native`'in by-value param
+  semantiği kaldı, o native struct desteğini VM'ye getirmeyi
+  gerektirir (ayrı plan).
 
 ### HTTP runtime (Wings/Router native)
 
@@ -405,6 +430,32 @@ girildiğinde ne yapacağımı bilelim.
     kullanılıyor; tek-i64 alan ayrı bir signature deneyebilir,
     veya çağrı taraflı `LLVMBuildAlloca` + value-by-pointer
     ABI'ye geç.
+
+- 🟢 **VM'de native struct desteği yok.** `tests/struct_native.test.tpr`
+  altında 17/19 yeşil ama `_translate_x(Point p, int dx)` gibi
+  "typed struct param + field mutation + return" yolu fail ediyor:
+  expected 101 got 1 — yani mutasyon hiç oluşmadan dönüyor. AOT
+  Plan 04 native struct codegen'i tamam, VM tarafında karşılığı yok
+  (her şey boxed VMValue üzerinden ilerliyor).
+  - **Sıradaki adım:** VM'ye typed-struct lokal slot kavramını
+    getir — `Chunk::struct_layouts[]` benzeri bir yapı + her
+    typed param için kopya semantiği. Önce typed-int field
+    okuma/yazmayı düzelt, sonra by-value parametre kopyalamayı
+    ekle. Düşük öncelik: AOT primary path, VM kullanıcıları struct
+    yoluyla geçmiyor.
+
+- 🟢 **AOT bool→int variable-decl coercion divergence.**
+  `int ok = db_execute(...);` AOT'ta `ok`'i bool olarak tutuyor
+  (`toString` "true" diyor); VM aynı kodu int'e coerce ediyor
+  ("1"). PR #264 db_execute wiring sırasında ortaya çıktı —
+  yeni bug değil, davranış ayrılığı.
+  - **Sıradaki adım:** AOT `AST_VARIABLE_DECL` (llvm_backend.cpp
+    ~4698) typed-int yolunda `INFERRED_BOOL` RHS için bool→int
+    extension üret. Şu an "tv.type == INFERRED_INT ||
+    INFERRED_BOOL" ile `tv.value`'i olduğu gibi stelliyor; bool
+    durumunda i1→i64 zext gerek. Tek satırlık fix
+    olmalı; davranış değişikliği sadece açıkça `int` tipli local'lere
+    bool atayan kullanıcı kodunu etkiler.
 
 ### Tooling
 
