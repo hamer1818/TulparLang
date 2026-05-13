@@ -648,6 +648,18 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
       compile_expression(compiler, node->arguments[0]); // obj
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
       emit_byte(compiler, 56, node->line);
+    } else if (strcmp(node->name, "pop") == 0) {
+      compile_expression(compiler, node->arguments[0]); // arr
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 57, node->line);
+    } else if (strcmp(node->name, "parse_cookies") == 0) {
+      compile_expression(compiler, node->arguments[0]); // str
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 58, node->line);
+    } else if (strcmp(node->name, "parse_query") == 0) {
+      compile_expression(compiler, node->arguments[0]); // str
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 59, node->line);
     } else if (strcmp(node->name, "exit") == 0) {
       if (node->argument_count > 0)
         compile_expression(compiler, node->arguments[0]);

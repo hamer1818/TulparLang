@@ -40,6 +40,9 @@ extern "C" void print_vm_value(VMValue value);
 extern "C" VMValue aot_from_json(VMValue jsonStr);
 extern "C" VMValue aot_to_json(VMValue value);
 extern "C" VMValue aot_keys(VMValue objVal);
+extern "C" VMValue aot_array_pop(VMValue arr_val);
+extern "C" VMValue aot_parse_cookies(VMValue strVal);
+extern "C" VMValue aot_parse_query(VMValue strVal);
 
 static void runtime_error(VM *vm, const char *format, ...) {
   va_list args;
@@ -1632,6 +1635,21 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         case 56: { // keys(obj) -> array<str>
           VMValue v = vm_pop(vm);
           vm_push(vm, aot_keys(v));
+          break;
+        }
+        case 57: { // pop(arr) -> any (removes and returns last element)
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_array_pop(v));
+          break;
+        }
+        case 58: { // parse_cookies(str) -> json
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_parse_cookies(v));
+          break;
+        }
+        case 59: { // parse_query(str) -> json
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_parse_query(v));
           break;
         }
         case 60: { // exit(code)
