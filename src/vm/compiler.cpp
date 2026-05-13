@@ -623,6 +623,19 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
       compile_expression(compiler, node->arguments[1]); // delta
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
       emit_byte(compiler, 116, node->line);
+    } else if (strcmp(node->name, "db_execute") == 0) {
+      compile_expression(compiler, node->arguments[0]); // db
+      compile_expression(compiler, node->arguments[1]); // sql
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 126, node->line);
+    } else if (strcmp(node->name, "db_error") == 0) {
+      compile_expression(compiler, node->arguments[0]); // db
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 127, node->line);
+    } else if (strcmp(node->name, "db_last_insert_id") == 0) {
+      compile_expression(compiler, node->arguments[0]); // db
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 128, node->line);
     } else if (strcmp(node->name, "socket_server") == 0) {
       compile_expression(compiler, node->arguments[0]); // host
       compile_expression(compiler, node->arguments[1]); // port

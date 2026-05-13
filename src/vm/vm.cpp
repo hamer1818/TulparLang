@@ -80,6 +80,9 @@ extern "C" VMValue aot_http_create_response_keepalive(VMValue statusVal,
 extern "C" VMValue aot_csv_parse(VMValue strVal);
 extern "C" VMValue aot_csv_emit(VMValue rowsVal);
 extern "C" VMValue aot_date_add_seconds(VMValue baseVal, VMValue deltaVal);
+extern "C" VMValue aot_db_execute(VMValue dbVal, VMValue sqlVal);
+extern "C" VMValue aot_db_error(VMValue dbVal);
+extern "C" VMValue aot_db_last_insert_id(VMValue dbVal);
 
 static void runtime_error(VM *vm, const char *format, ...) {
   va_list args;
@@ -2621,6 +2624,22 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
           VMValue delta = vm_pop(vm);
           VMValue base = vm_pop(vm);
           vm_push(vm, aot_date_add_seconds(base, delta));
+          break;
+        }
+        case 126: { // db_execute(db, sql) -> int (rows affected)
+          VMValue sql = vm_pop(vm);
+          VMValue db = vm_pop(vm);
+          vm_push(vm, aot_db_execute(db, sql));
+          break;
+        }
+        case 127: { // db_error(db) -> str ("" when no error)
+          VMValue db = vm_pop(vm);
+          vm_push(vm, aot_db_error(db));
+          break;
+        }
+        case 128: { // db_last_insert_id(db) -> int (rowid of last INSERT)
+          VMValue db = vm_pop(vm);
+          vm_push(vm, aot_db_last_insert_id(db));
           break;
         }
 
