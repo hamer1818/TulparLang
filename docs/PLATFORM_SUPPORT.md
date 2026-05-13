@@ -89,8 +89,8 @@ wsl --install
 
 ### Linux/macOS
 ```bash
-git clone https://github.com/hamer1818/OLang.git
-cd OLang
+git clone https://github.com/hamer1818/TulparLang.git
+cd TulparLang
 ./build.sh
 ```
 
