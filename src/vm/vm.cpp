@@ -91,6 +91,7 @@ extern "C" VMValue aot_date_add_seconds(VMValue baseVal, VMValue deltaVal);
 extern "C" VMValue aot_db_execute(VMValue dbVal, VMValue sqlVal);
 extern "C" VMValue aot_db_error(VMValue dbVal);
 extern "C" VMValue aot_db_last_insert_id(VMValue dbVal);
+extern "C" VMValue aot_object_clone(VMValue val);
 extern "C" VMValue aot_math_pow(VMValue base, VMValue exp);
 extern "C" VMValue aot_format_iso8601(VMValue secsVal);
 extern "C" VMValue aot_parse_iso8601(VMValue strVal);
@@ -2751,6 +2752,15 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         case 128: { // db_last_insert_id(db) -> int (rowid of last INSERT)
           VMValue db = vm_pop(vm);
           vm_push(vm, aot_db_last_insert_id(db));
+          break;
+        }
+        case 129: { // clone(obj) -> obj (shallow copy; non-object passthrough)
+          // Used by the function-entry "deep-clone typed-struct params"
+          // prologue the VM compiler emits — gives `func f(Point p)`
+          // the by-value semantics AOT's Plan 04 native-struct codegen
+          // gets for free. Reachable from user code too.
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_object_clone(v));
           break;
         }
 

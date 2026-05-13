@@ -2320,6 +2320,44 @@ VMValue aot_keys(VMValue objVal) {
     return VM_OBJ((Obj *)a);
 }
 
+// AOT Builtin: clone(obj) -> obj  (shallow copy of a JSON object)
+//
+// Allocates a fresh ObjObject and copies the keys + value VMValues
+// from the source. Strings are NOT re-allocated (the new keys array
+// holds the same ObjString pointers — they're immutable). Nested
+// objects / arrays remain shared by reference, so this is a shallow
+// clone — adequate for primitive-field structs (`Point { int x; int
+// y; }` etc.) which is the by-value-param use case driving this
+// helper. Non-object inputs pass through unchanged (lets the VM
+// emit-once "clone every typed-struct param" prologue stay
+// conservative — if the caller passed an int, clone just returns
+// the int).
+VMValue aot_object_clone(VMValue val) {
+  if (!IS_OBJECT(val)) return val;
+  ObjObject *src = (ObjObject *)AS_OBJECT(val);
+  ObjObject *dst = (ObjObject *)aot_arena_alloc(sizeof(ObjObject));
+  dst->obj.type = OBJ_OBJECT;
+  dst->obj.arena_allocated = 1;
+  dst->obj.next = nullptr;
+  dst->obj.ref_count = 1;
+  dst->obj.is_moved = 0;
+  int n = src->count;
+  dst->count = n;
+  dst->capacity = n;
+  if (n > 0) {
+    dst->keys = (ObjString **)aot_arena_alloc(sizeof(ObjString *) * n);
+    dst->values = (VMValue *)aot_arena_alloc(sizeof(VMValue) * n);
+    for (int i = 0; i < n; i++) {
+      dst->keys[i] = src->keys[i];
+      dst->values[i] = src->values[i];
+    }
+  } else {
+    dst->keys = nullptr;
+    dst->values = nullptr;
+  }
+  return VM_OBJ((Obj *)dst);
+}
+
 // AOT Builtin: weekday(unix_seconds) -> int  (0=Sunday … 6=Saturday)
 //
 // Matches the POSIX `tm_wday` convention. Most apps want this for

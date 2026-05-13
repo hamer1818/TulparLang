@@ -654,6 +654,9 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       // Object/json keys — returns a string array of field names.
       {"keys", TYPE_ARRAY_STR, {TYPE_UNKNOWN}},
       {"values", TYPE_ARRAY, {TYPE_UNKNOWN}},
+      // clone(obj) — shallow copy. Underlies the VM's typed-struct
+      // pass-by-value prologue; surfaced as a user-callable builtin.
+      {"clone", TYPE_UNKNOWN, {TYPE_UNKNOWN}},
       // Array mutation
       {"push", TYPE_VOID, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
       {"pop", TYPE_UNKNOWN, {TYPE_UNKNOWN}},

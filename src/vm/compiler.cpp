@@ -689,6 +689,10 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
       compile_expression(compiler, node->arguments[0]); // db
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
       emit_byte(compiler, 128, node->line);
+    } else if (strcmp(node->name, "clone") == 0) {
+      compile_expression(compiler, node->arguments[0]); // obj
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 129, node->line);
     } else if (strcmp(node->name, "socket_server") == 0) {
       compile_expression(compiler, node->arguments[0]); // host
       compile_expression(compiler, node->arguments[1]); // port
@@ -1709,6 +1713,34 @@ void compile_statement(Compiler *compiler, ASTNode_C *node) {
       compiler_add_local_typed(func_compiler, param->name, param_type);
       // We don't need to emit STORE because arguments are already on stack when
       // called
+    }
+
+    // Typed-struct params land here by reference (caller's object is on the
+    // stack and bound directly to the local slot), which gives shared-mutable
+    // semantics — `p.x = ...` inside the callee mutates the caller's
+    // object. AOT's Plan 04 native-struct codegen passes typed structs by
+    // value (alloca + per-field GEP/store), so the VM and AOT used to
+    // disagree on `tests/struct_native.test.tpr struct_arg_pass_by_value`.
+    // Emit a per-param `LOAD_LOCAL N; CALL_BUILTIN 129 /*clone*/;
+    // STORE_LOCAL N` prologue for every TYPE_CUSTOM parameter so the
+    // callee gets its own copy. Non-object inputs (e.g. user passed an
+    // int) flow through `aot_object_clone` unchanged — the prologue is
+    // safe even when the runtime value isn't actually a struct.
+    //
+    // Slot 0 is the reserved dummy local at compiler_add_local(""), so
+    // param `i` lives at local slot `i + 1`.
+    for (int i = 0; i < node->param_count; i++) {
+      ASTNode_C *param = node->parameters[i];
+      if (param->data_type == TYPE_CUSTOM) {
+        uint16_t slot = (uint16_t)(i + 1);
+        emit_byte(func_compiler, OP_LOAD_LOCAL, node->line);
+        emit_short(func_compiler, slot, node->line);
+        emit_byte(func_compiler, OP_CALL_BUILTIN, node->line);
+        emit_byte(func_compiler, 129, node->line); // clone
+        emit_byte(func_compiler, OP_STORE_LOCAL, node->line);
+        emit_short(func_compiler, slot, node->line);
+        emit_byte(func_compiler, OP_POP, node->line); // STORE_LOCAL leaves value on stack
+      }
     }
 
     // 4. Compile function body
