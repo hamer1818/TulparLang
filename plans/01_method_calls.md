@@ -1,6 +1,9 @@
 # Plan 01 — Real Object Method Calls (`p.greet("x")`)
 
-**Durum:** PROPOSED
+**Durum:** COMPLETED (2026-05-05, PR #44) — `parse_postfix` hibrit
+çözücüsü modül alias değilse `m.f(args)` → `f(m, args)` rewrite'ı
+yapıyor; serbest-fn dispatch'i üzerinden çalışıyor. Bkz. STATUS §
+"Çekirdek dil + derleme zinciri".
 **Tahmin:** 2-3 PR
 **Risk:** Düşük-Orta (parser tek nokta + codegen fallback; runtime değişikliği yok)
 **Mottoya katkı:** Python kolay (idiomatic OOP-style yazım)

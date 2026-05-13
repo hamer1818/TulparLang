@@ -1,7 +1,11 @@
 # Plan 07 — Debugger MVP (DWARF + DAP)
 
-**Durum:** IN PROGRESS — Parça A (DWARF emit) tamamlandı. Parça B
-(DAP server + VS Code integration) bekliyor.
+**Durum:** COMPLETED (2026-05) — Parça A (DWARF emit) PR'lar #160–#173,
+Parça B (DAP server) PR'lar #178/#180/#186/#188/#190 + polish bundle'ları
+\#199–#223, VS Code entegrasyonu tulpar-ext PR #1. `tulpar debug
+<file.tpr>` gdb-MI3 köprüsü üzerinden breakpoint/step/watch/condition/
+hit-count/logpoint/data+instruction breakpoint. Bkz. STATUS §
+"Çekirdek dil".
 **Tahmin:** 5-7 PR (Parça A için 7 PR açıldı, kapandı; Parça B için
 3-4 PR daha)
 **Risk:** Yüksek — yeni codegen path (DWARF emit) + yeni TCP protokol

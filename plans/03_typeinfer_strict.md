@@ -1,6 +1,9 @@
 # Plan 03 — typeinfer Strict Mode
 
-**Durum:** PROPOSED
+**Durum:** COMPLETED (2026-05, PR #43 + PR #32 pre-pass çerçevesi) —
+`tulpar typecheck` standalone subcommand + her `build`/`run`/`--vm`
+çağrısında `[typecheck]` uyarıları (`--no-typecheck`/
+`TULPAR_NO_TYPECHECK=1` opt-out). Bkz. STATUS § "Çekirdek dil".
 **Tahmin:** 1-2 PR (false-positive cleanup ayrı PR)
 **Risk:** Düşük (mevcut altyapı %90 hazır, opt-in flag)
 **Mottoya katkı:** Python kolay (erken hata, runtime'a kalmadan)

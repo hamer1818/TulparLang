@@ -531,7 +531,7 @@ TulparLang/
 | **Bytecode VM**    | Active   | Fast startup; powers `--vm` and the REPL, plus AOT-failure fallback. |
 
 The legacy tree-walk interpreter and x64 JIT were retired in May 2026
-(PRs #30 and #31 — see [EKSIKLER.md](EKSIKLER.md)). Single execution
+(PRs #30 and #31 — see [STATUS.md](STATUS.md)). Single execution
 path means bug fixes apply uniformly to AOT and VM.
 
 ## Examples
