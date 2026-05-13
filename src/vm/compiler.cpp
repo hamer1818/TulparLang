@@ -660,6 +660,39 @@ void compile_expression(Compiler *compiler, ASTNode_C *node) {
       compile_expression(compiler, node->arguments[0]); // str
       emit_byte(compiler, OP_CALL_BUILTIN, node->line);
       emit_byte(compiler, 59, node->line);
+    } else if (strcmp(node->name, "http_parse_request") == 0) {
+      compile_expression(compiler, node->arguments[0]); // raw
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 63, node->line);
+    } else if (strcmp(node->name, "http_status_text") == 0) {
+      compile_expression(compiler, node->arguments[0]); // code
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 64, node->line);
+    } else if (strcmp(node->name, "http_should_keepalive") == 0) {
+      compile_expression(compiler, node->arguments[0]); // req
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 65, node->line);
+    } else if (strcmp(node->name, "path_match") == 0) {
+      compile_expression(compiler, node->arguments[0]); // pattern
+      compile_expression(compiler, node->arguments[1]); // path
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      emit_byte(compiler, 66, node->line);
+    } else if (strcmp(node->name, "http_create_response") == 0) {
+      // Three arities mirror the AOT dispatcher
+      // (llvm_backend.cpp ~line 3805):
+      //   3 args → status + content_type + body
+      //   4 args → + headers
+      //   5 args → + keepalive flag
+      for (int i = 0; i < node->argument_count && i < 5; i++) {
+        compile_expression(compiler, node->arguments[i]);
+      }
+      emit_byte(compiler, OP_CALL_BUILTIN, node->line);
+      if (node->argument_count >= 5)
+        emit_byte(compiler, 69, node->line);
+      else if (node->argument_count >= 4)
+        emit_byte(compiler, 68, node->line);
+      else
+        emit_byte(compiler, 67, node->line);
     } else if (strcmp(node->name, "exit") == 0) {
       if (node->argument_count > 0)
         compile_expression(compiler, node->arguments[0]);
