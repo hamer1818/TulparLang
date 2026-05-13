@@ -43,6 +43,22 @@ extern "C" VMValue aot_keys(VMValue objVal);
 extern "C" VMValue aot_array_pop(VMValue arr_val);
 extern "C" VMValue aot_parse_cookies(VMValue strVal);
 extern "C" VMValue aot_parse_query(VMValue strVal);
+extern "C" VMValue aot_http_parse_request(VMValue rawRequest);
+extern "C" VMValue aot_http_status_text(VMValue statusVal);
+extern "C" VMValue aot_http_should_keepalive(VMValue requestVal);
+extern "C" VMValue aot_path_match(VMValue patternVal, VMValue pathVal);
+extern "C" VMValue aot_http_create_response(VMValue statusVal,
+                                            VMValue contentTypeVal,
+                                            VMValue bodyVal);
+extern "C" VMValue aot_http_create_response_full(VMValue statusVal,
+                                                 VMValue contentTypeVal,
+                                                 VMValue bodyVal,
+                                                 VMValue headersVal);
+extern "C" VMValue aot_http_create_response_keepalive(VMValue statusVal,
+                                                      VMValue contentTypeVal,
+                                                      VMValue bodyVal,
+                                                      VMValue headersVal,
+                                                      VMValue keepaliveVal);
 
 static void runtime_error(VM *vm, const char *format, ...) {
   va_list args;
@@ -1650,6 +1666,55 @@ VMResult vm_run(VM *vm, ObjFunction *function) {
         case 59: { // parse_query(str) -> json
           VMValue v = vm_pop(vm);
           vm_push(vm, aot_parse_query(v));
+          break;
+        }
+        case 63: { // http_parse_request(raw) -> json (parsed request)
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_http_parse_request(v));
+          break;
+        }
+        case 64: { // http_status_text(code) -> str
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_http_status_text(v));
+          break;
+        }
+        case 65: { // http_should_keepalive(req) -> int (0/1)
+          VMValue v = vm_pop(vm);
+          vm_push(vm, aot_http_should_keepalive(v));
+          break;
+        }
+        case 66: { // path_match(pattern, path) -> {matched, params}
+          // Args were pushed pattern, path → pop in reverse.
+          VMValue path = vm_pop(vm);
+          VMValue pattern = vm_pop(vm);
+          vm_push(vm, aot_path_match(pattern, path));
+          break;
+        }
+        case 67: { // http_create_response(status, content_type, body)
+          VMValue body = vm_pop(vm);
+          VMValue content_type = vm_pop(vm);
+          VMValue status = vm_pop(vm);
+          vm_push(vm, aot_http_create_response(status, content_type, body));
+          break;
+        }
+        case 68: { // http_create_response(status, content_type, body, headers)
+          VMValue headers = vm_pop(vm);
+          VMValue body = vm_pop(vm);
+          VMValue content_type = vm_pop(vm);
+          VMValue status = vm_pop(vm);
+          vm_push(vm, aot_http_create_response_full(status, content_type,
+                                                    body, headers));
+          break;
+        }
+        case 69: { // http_create_response(status, ct, body, headers, keepalive)
+          VMValue keepalive = vm_pop(vm);
+          VMValue headers = vm_pop(vm);
+          VMValue body = vm_pop(vm);
+          VMValue content_type = vm_pop(vm);
+          VMValue status = vm_pop(vm);
+          vm_push(vm,
+                  aot_http_create_response_keepalive(
+                      status, content_type, body, headers, keepalive));
           break;
         }
         case 60: { // exit(code)
