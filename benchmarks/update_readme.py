@@ -52,14 +52,14 @@ README_LANG_COLUMNS = [
 def render_meta(payload: dict) -> str:
     run = payload["run"]
     runner = run["runner"]
-    cpu_model = runner.get("cpu_model", "shared CI runner")
+    cpu_model = runner.get("cpu_model", "developer machine")
     return (
-        f"> _Auto-updated by CI on every push to `main`. "
+        f"> _Baked from local benchmark run (best of 5). "
         f"Last run: **{run['timestamp_utc']}** UTC · "
         f"commit [`{run['git_short']}`](../../commit/{run['git_sha']}) · "
         f"runner `{runner.get('os', '?')}` · `{cpu_model}` "
         f"({runner.get('cpu_count', '?')} CPUs). "
-        f"Methodology: [benchmarks/CI.md](benchmarks/CI.md)._"
+        f"Methodology + Local Run instructions: [benchmarks/CI.md](benchmarks/CI.md)._"
     )
 
 
@@ -85,8 +85,17 @@ def render_cpu_table(payload: dict) -> str:
     lines.append("")
     lines.append(header)
     lines.append(sep)
-    pretty_label = {"loopsum": "loopsum (ms)", "fib": "fib(35) (ms)"}
-    for bench in ("loopsum", "fib"):
+    pretty_label = {
+        "loopsum": "loopsum (ms)",
+        "fib": "fib(35) (ms)",
+        "ackermann": "ackermann(3,8) (ms)",
+        "tak": "tak(18,12,6) (ms)",
+        "sieve": "sieve(100K) (ms)",
+        "struct_sum": "struct_sum (ms)",
+        "struct_array_push": "struct_arr_push (ms)",
+    }
+    for bench in ("loopsum", "fib", "ackermann", "tak", "sieve",
+                  "struct_sum", "struct_array_push"):
         if bench not in by_bench:
             continue
         rows = by_bench[bench]
@@ -104,7 +113,7 @@ def render_cpu_table(payload: dict) -> str:
 
     def _range(num: dict, den: dict) -> tuple[float, float] | None:
         vals = []
-        for b in ("loopsum", "fib"):
+        for b in by_bench:
             if num.get(b) and den.get(b):
                 vals.append(num[b] / den[b])
         return (min(vals), max(vals)) if vals else None

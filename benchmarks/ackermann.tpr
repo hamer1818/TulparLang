@@ -1,0 +1,17 @@
+// Typed AOT path for Ackermann function.
+// TULPAR_BENCH_N controls the second parameter (default 8, m fixed at 3).
+func ackermann(int m, int n): int {
+    if (m == 0) {
+        return n + 1;
+    }
+    if (n == 0) {
+        return ackermann(m - 1, 1);
+    }
+    return ackermann(m - 1, ackermann(m, n - 1));
+}
+
+int n = toInt(env("TULPAR_BENCH_N"));
+if (n <= 0) {
+    n = 8;
+}
+print(ackermann(3, n));

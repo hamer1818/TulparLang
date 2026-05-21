@@ -126,13 +126,23 @@ def build_natives(skip_java: bool) -> dict[str, bool]:
              "node": False, "python": False, "tulpar_aot": False,
              "tulpar_vm": False}
 
+    # All CPU benchmark names. Adding a new benchmark to the CI suite
+    # means: (1) create <name>.{tpr,c,rs,go,js,py} in benchmarks/,
+    # (2) add the name here, (3) add entries to cpu_table's plan list.
+    CPU_BENCHMARKS = ["loopsum", "fib", "ackermann", "tak", "sieve",
+                      "struct_sum", "struct_array_push"]
+
     # C — required.
     if have("gcc"):
         try:
-            subprocess.run(["gcc", "-O2", "benchmarks/fib.c", "-o", f"benchmarks/fib_c{EXE_SUFFIX}"],
-                           cwd=REPO, check=True, timeout=60)
-            subprocess.run(["gcc", "-O2", "benchmarks/loopsum.c", "-o", f"benchmarks/loopsum_c{EXE_SUFFIX}"],
-                           cwd=REPO, check=True, timeout=60)
+            for name in CPU_BENCHMARKS:
+                src = f"benchmarks/{name}.c"
+                if not (REPO / src).exists():
+                    print(f"[bench] skip C build for {name}: {src} not found")
+                    continue
+                subprocess.run(["gcc", "-O2", src, "-o",
+                                f"benchmarks/{name}_c{EXE_SUFFIX}"],
+                               cwd=REPO, check=True, timeout=60)
             built["c"] = True
         except subprocess.SubprocessError as e:
             print(f"[bench] gcc build failed: {e}", file=sys.stderr)
@@ -140,14 +150,15 @@ def build_natives(skip_java: bool) -> dict[str, bool]:
     # Rust.
     if have("rustc"):
         try:
-            subprocess.run(["rustc", "-C", "opt-level=3", "benchmarks/fib.rs",
-                            "-o", f"benchmarks/fib_rs{EXE_SUFFIX}"],
-                           cwd=REPO, check=True, timeout=120,
-                           stderr=subprocess.DEVNULL)
-            subprocess.run(["rustc", "-C", "opt-level=3", "benchmarks/loopsum.rs",
-                            "-o", f"benchmarks/loopsum_rs{EXE_SUFFIX}"],
-                           cwd=REPO, check=True, timeout=120,
-                           stderr=subprocess.DEVNULL)
+            for name in CPU_BENCHMARKS:
+                src = f"benchmarks/{name}.rs"
+                if not (REPO / src).exists():
+                    print(f"[bench] skip Rust build for {name}: {src} not found")
+                    continue
+                subprocess.run(["rustc", "-C", "opt-level=3", src,
+                                "-o", f"benchmarks/{name}_rs{EXE_SUFFIX}"],
+                               cwd=REPO, check=True, timeout=120,
+                               stderr=subprocess.DEVNULL)
             built["rust"] = True
         except subprocess.SubprocessError as e:
             print(f"[bench] rustc build failed: {e}", file=sys.stderr)
@@ -155,24 +166,29 @@ def build_natives(skip_java: bool) -> dict[str, bool]:
     # Go.
     if have("go", "version"):
         try:
-            subprocess.run(["go", "build", "-o", f"benchmarks/fib_go{EXE_SUFFIX}",
-                            "benchmarks/fib.go"],
-                           cwd=REPO, check=True, timeout=120)
-            subprocess.run(["go", "build", "-o", f"benchmarks/loopsum_go{EXE_SUFFIX}",
-                            "benchmarks/loopsum.go"],
-                           cwd=REPO, check=True, timeout=120)
+            for name in CPU_BENCHMARKS:
+                src = f"benchmarks/{name}.go"
+                if not (REPO / src).exists():
+                    print(f"[bench] skip Go build for {name}: {src} not found")
+                    continue
+                subprocess.run(["go", "build", "-o",
+                                f"benchmarks/{name}_go{EXE_SUFFIX}", src],
+                               cwd=REPO, check=True, timeout=120)
             built["go"] = True
         except subprocess.SubprocessError as e:
             print(f"[bench] go build failed: {e}", file=sys.stderr)
 
     # Java.
     if not skip_java and have("javac"):
-        try:
-            subprocess.run(["javac", "fib.java", "loopsum.java"],
-                           cwd=REPO / "benchmarks", check=True, timeout=120)
-            built["java"] = True
-        except subprocess.SubprocessError as e:
-            print(f"[bench] javac failed: {e}", file=sys.stderr)
+        java_sources = [f"{n}.java" for n in CPU_BENCHMARKS
+                        if (REPO / "benchmarks" / f"{n}.java").exists()]
+        if java_sources:
+            try:
+                subprocess.run(["javac"] + java_sources,
+                               cwd=REPO / "benchmarks", check=True, timeout=120)
+                built["java"] = True
+            except subprocess.SubprocessError as e:
+                print(f"[bench] javac failed: {e}", file=sys.stderr)
 
     # Node, Python — interpreters, no compile step. We just check
     # they're installed.
@@ -183,7 +199,11 @@ def build_natives(skip_java: bool) -> dict[str, bool]:
     if not TULPAR_EXE.exists():
         raise SystemExit(f"[bench] tulpar binary not found at {TULPAR_EXE}")
 
-    for name in ("loopsum", "fib"):
+    for name in CPU_BENCHMARKS:
+        tpr = f"benchmarks/{name}.tpr"
+        if not (REPO / tpr).exists():
+            print(f"[bench] skip Tulpar AOT for {name}: {tpr} not found")
+            continue
         # Wipe stale .o so a previous failed build doesn't poison the
         # next run. The AOT pipeline writes <stem>.o intermediate +
         # <stem>(.exe) final.
@@ -195,7 +215,7 @@ def build_natives(skip_java: bool) -> dict[str, bool]:
                     pass
         try:
             subprocess.run([str(TULPAR_EXE), "build",
-                            f"benchmarks/{name}.tpr",
+                            tpr,
                             f"benchmarks/{name}_tulpar"],
                            cwd=REPO, check=True, timeout=120,
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -254,42 +274,43 @@ def cpu_table(built: dict[str, bool], repeats: int) -> list[dict]:
     """
     pf = lambda *p: str(REPO.joinpath(*p))
 
-    plan: list[tuple[str, str, list[str] | None]] = [
-        # loopsum group
-        ("loopsum", "Tulpar AOT (LLVM)",
-         [pf("benchmarks", f"loopsum_tulpar{EXE_SUFFIX}")] if built["tulpar_aot"] else None),
-        ("loopsum", "Tulpar VM",
-         [str(TULPAR_EXE), "--vm", "benchmarks/loopsum.tpr"] if built["tulpar_vm"] else None),
-        ("loopsum", "C (gcc -O2)",
-         [pf("benchmarks", f"loopsum_c{EXE_SUFFIX}")] if built["c"] else None),
-        ("loopsum", "Rust (-O3)",
-         [pf("benchmarks", f"loopsum_rs{EXE_SUFFIX}")] if built["rust"] else None),
-        ("loopsum", "Go",
-         [pf("benchmarks", f"loopsum_go{EXE_SUFFIX}")] if built["go"] else None),
-        ("loopsum", "Java",
-         ["java", "-cp", "benchmarks", "loopsum"] if built["java"] else None),
-        ("loopsum", "Node.js",
-         ["node", "benchmarks/loopsum.js"] if built["node"] else None),
-        ("loopsum", "Python",
-         [sys.executable, "benchmarks/loopsum.py"]),
-        # fib group
-        ("fib", "Tulpar AOT (LLVM)",
-         [pf("benchmarks", f"fib_tulpar{EXE_SUFFIX}")] if built["tulpar_aot"] else None),
-        ("fib", "Tulpar VM",
-         [str(TULPAR_EXE), "--vm", "benchmarks/fib.tpr"] if built["tulpar_vm"] else None),
-        ("fib", "C (gcc -O2)",
-         [pf("benchmarks", f"fib_c{EXE_SUFFIX}")] if built["c"] else None),
-        ("fib", "Rust (-O3)",
-         [pf("benchmarks", f"fib_rs{EXE_SUFFIX}")] if built["rust"] else None),
-        ("fib", "Go",
-         [pf("benchmarks", f"fib_go{EXE_SUFFIX}")] if built["go"] else None),
-        ("fib", "Java",
-         ["java", "-cp", "benchmarks", "fib"] if built["java"] else None),
-        ("fib", "Node.js",
-         ["node", "benchmarks/fib.js"] if built["node"] else None),
-        ("fib", "Python",
-         [sys.executable, "benchmarks/fib.py"]),
-    ]
+    def _bench_group(name: str) -> list[tuple[str, str, list[str] | None]]:
+        """Generate the 8-language variant list for a single benchmark."""
+        tpr = f"benchmarks/{name}.tpr"
+        js  = f"benchmarks/{name}.js"
+        py  = f"benchmarks/{name}.py"
+        has_tpr = (REPO / tpr).exists()
+        has_js  = (REPO / js).exists()
+        has_py  = (REPO / py).exists()
+        return [
+            (name, "Tulpar AOT (LLVM)",
+             [pf("benchmarks", f"{name}_tulpar{EXE_SUFFIX}")]
+             if built["tulpar_aot"] and has_tpr else None),
+            (name, "Tulpar VM",
+             [str(TULPAR_EXE), "--vm", tpr]
+             if built["tulpar_vm"] and has_tpr else None),
+            (name, "C (gcc -O2)",
+             [pf("benchmarks", f"{name}_c{EXE_SUFFIX}")]
+             if built["c"] and (REPO / f"benchmarks/{name}_c{EXE_SUFFIX}").exists() else None),
+            (name, "Rust (-O3)",
+             [pf("benchmarks", f"{name}_rs{EXE_SUFFIX}")]
+             if built["rust"] and (REPO / f"benchmarks/{name}_rs{EXE_SUFFIX}").exists() else None),
+            (name, "Go",
+             [pf("benchmarks", f"{name}_go{EXE_SUFFIX}")]
+             if built["go"] and (REPO / f"benchmarks/{name}_go{EXE_SUFFIX}").exists() else None),
+            (name, "Java",
+             ["java", "-cp", "benchmarks", name]
+             if built["java"] and (REPO / f"benchmarks/{name}.class").exists() else None),
+            (name, "Node.js",
+             ["node", js] if built["node"] and has_js else None),
+            (name, "Python",
+             [sys.executable, py] if has_py else None),
+        ]
+
+    plan: list[tuple[str, str, list[str] | None]] = []
+    for bench_name in ["loopsum", "fib", "ackermann", "tak", "sieve",
+                       "struct_sum", "struct_array_push"]:
+        plan.extend(_bench_group(bench_name))
 
     rows: list[dict] = []
     for group, lang, cmd in plan:
@@ -329,6 +350,7 @@ def http_table(requests: int, connections: int) -> list[dict]:
     results: list[dict] = []
     env = os.environ.copy()
     env["TULPAR_HTTP_QUIET"] = "1"
+    env["TULPAR_WINGS_HOST"] = "127.0.0.1"
 
     with tempfile.TemporaryDirectory(prefix="tulpar_bench_") as wd:
         # Each Wings variant: write a one-file Tulpar source, build it,
@@ -423,9 +445,9 @@ def render_results_md_section(payload: dict) -> str:
     lines: list[str] = []
     lines.append(RESULTS_START)
     lines.append("")
-    lines.append("> _This block is auto-generated by `benchmarks/ci_run.py` "
-                 "on every push to `main`. Do not hand-edit — your changes "
-                 "will be overwritten by the next CI run. Prose context "
+    lines.append("> _This block is generated by running `benchmarks/ci_run.py` "
+                 "locally. Do not hand-edit — your changes "
+                 "will be overwritten by the next benchmark run. Prose context "
                  "below the END marker is preserved._")
     lines.append("")
     lines.append(f"**Run:** `{run['timestamp_utc']}` UTC · "
@@ -442,7 +464,10 @@ def render_results_md_section(payload: dict) -> str:
                  "**Lower is faster.**")
     lines.append("")
     by_lang = sorted({r["language"] for r in cpu})
-    benches = ["loopsum", "fib"]
+    benches = ["loopsum", "fib", "ackermann", "tak", "sieve",
+               "struct_sum", "struct_array_push"]
+    # Only include benchmarks that actually produced results.
+    benches = [b for b in benches if any(r["benchmark"] == b for r in cpu)]
     header = "| Language | " + " | ".join(b for b in benches) + " |"
     sep = "|" + "---|" * (len(benches) + 1)
     lines.append(header)
@@ -638,6 +663,14 @@ def main() -> int:
             "repeats": args.repeats,
             "loopsum_iterations": 10_000_000,
             "fib_n": 35,
+            "ackermann_m": 3,
+            "ackermann_n": 8,
+            "tak_x": 18,
+            "tak_y": 12,
+            "tak_z": 6,
+            "sieve_n": 100_000,
+            "struct_sum_n": 10_000_000,
+            "struct_array_push_n": 1_000_000,
         },
         "cpu": cpu,
         "http": {

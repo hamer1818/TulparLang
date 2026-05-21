@@ -16,7 +16,10 @@ struct V3 {
 }
 
 V3 acc = { x: 0, y: 0, z: 0 };
-int n = 10000000;
+int n = toInt(env("TULPAR_BENCH_N"));
+if (n <= 0) {
+    n = 10000000;
+}
 int i = 0;
 while (i < n) {
     acc.x = acc.x + i;
