@@ -15,7 +15,10 @@ func make_v3(int a, int b, int c): V3 {
     return v;
 }
 
-int n = 1000000;
+int n = toInt(env("TULPAR_BENCH_N"));
+if (n <= 0) {
+    n = 1000000;
+}
 array points = [];
 
 int i = 0;
