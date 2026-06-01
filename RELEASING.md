@@ -1,38 +1,54 @@
 # Releasing TulparLang
 
-`build.yml` produces two flavours of GitHub Release:
+TulparLang uses **stable-only versioning** — releases are created
+exclusively when a `v*` tag is pushed. Every push to `main` (and
+every PR) builds and tests the code, but **no GitHub Release or tag
+is minted automatically**. This keeps version numbers meaningful and
+avoids the version-number inflation that comes with per-commit
+releases.
 
-1. **Rolling main-channel** — every push to `main` builds Linux/macOS/
-   Windows binaries, mints a `v2.1.0.<run>` tag, and uploads the assets.
-   `tulpar update` (without `--stable`) tracks this channel so users on
-   the rolling channel always have the latest verified main-branch
-   build.
-2. **Tagged stable** — pushing a tag matching `v*` (e.g. `v1.0.0`,
-   `v1.0.0-rc1`) builds the same artifacts but uses the tag name
-   verbatim as the version. Used to mint named milestones that don't
-   get overwritten by the next main commit.
+## Versioning scheme
 
-## Cutting a stable release
+Versions follow [Semantic Versioning](https://semver.org/):
+
+| Bump    | When                                              | Example          |
+| ------- | ------------------------------------------------- | ---------------- |
+| MAJOR   | Breaking language/stdlib/ABI changes              | `v3.0.0`         |
+| MINOR   | New features, backwards-compatible                | `v2.2.0`         |
+| PATCH   | Bug fixes, performance, docs                      | `v2.1.1`         |
+
+Pre-release suffixes (`-rc.N`, `-alpha.N`, `-beta.N`) are valid and
+trigger the same workflow. Edit the `prerelease:` flag in
+`.github/workflows/build.yml` if you want them marked as pre-release
+on GitHub.
+
+## Cutting a release
 
 ```bash
 # 1. Make sure main is in the shape you want to ship.
 git checkout main
 git pull --ff-only
 
-# 2. Tag the commit you want to release. Tag names should be
-#    semver-style: `v1.0.0`, `v1.0.0-rc.1`, etc.
-git tag -a v1.0.0 -m "TulparLang v1.0.0"
+# 2. Tag the commit. Use annotated tags for better `git describe` output.
+git tag -a v2.2.0 -m "TulparLang v2.2.0"
 
-# 3. Push the tag. The CI workflow picks up the `v*` tag pattern
-#    and runs the same build matrix you'd see for a main push, but
-#    publishes under the tag name instead of the rolling auto-version.
-git push origin v1.0.0
+# 3. Push the tag. CI picks up the `v*` pattern, builds all three
+#    platforms, runs tests, and publishes a GitHub Release with the
+#    tag name as the version.
+git push origin v2.2.0
 ```
 
 Within ~10 minutes, `https://github.com/hamer1818/TulparLang/releases`
-should show the new tag with all assets attached. `tulpar update` users
-who explicitly request the stable channel will pick it up on their
-next check.
+should show the new tag with all assets attached. `tulpar update`
+users will see the new version on their next check.
+
+## What CI does on each event
+
+| Event                   | Build + Test | Create Release |
+| ----------------------- | :----------: | :------------: |
+| PR to `main`            | ✅           | ❌             |
+| Push to `main`          | ✅           | ❌             |
+| Push tag `v*`           | ✅           | ✅             |
 
 ## What gets published
 
@@ -58,29 +74,42 @@ to ship" failure mode at CI time.
 
 At build time, the version embedded in the binary (returned by
 `tulpar --version`, compared by `tulpar update --check`) is computed
-once and reused across every job:
+as follows:
 
-- **Tag push** (`refs/tags/v*`): the tag name verbatim — `v1.0.0`.
-- **Branch push**: `v2.1.0.<github.run_number>` — rolling.
+- **Tag push** (`refs/tags/v*`): the tag name verbatim — `v2.2.0`.
+- **Branch push / PR**: CMake's default `<project_version>-dev` (e.g.
+  `2.1.0-dev`). No release is published for these builds.
 
-Both paths flow through the same `TULPAR_VERSION` env var. If you
+The tag-push path flows through the `TULPAR_VERSION` env var. If you
 change the formula, update it everywhere it appears in `build.yml`
 *and* the `Compute release tag` step in `create-release` so the
 embedded version matches the published tag.
 
-## Pre-release / RC tags
-
-`-rc.N`, `-alpha.N`, etc. are valid tag suffixes — they trigger the
-same workflow. The release is created with `prerelease: false` by
-default; if you want a tag marked as pre-release, edit
-`.github/workflows/build.yml`'s `softprops/action-gh-release` step
-under the create-release job and pass `prerelease: true`.
-
 ## Rolling back
 
 Releases can be deleted in the GitHub UI. The tag itself stays unless
-also deleted (`git push --delete origin v1.0.0`). `tulpar update`'s
+also deleted (`git push --delete origin v2.2.0`). `tulpar update`'s
 SHA256SUMS verification means a partial / corrupt release won't be
 silently consumed — but it will still try to fetch and fail loudly,
 which is noisier than a clean rollback. Prefer publishing a fixed
-follow-up release (`v1.0.1`) over deleting `v1.0.0`.
+follow-up release (`v2.2.1`) over deleting `v2.2.0`.
+
+## Cleaning up old rolling tags
+
+The legacy CI model created `v2.1.0.<run_number>` tags on every push
+to main. To clean those up:
+
+```bash
+# List all rolling tags
+git tag -l 'v2.1.0.*'
+
+# Delete them remotely (in batches)
+git tag -l 'v2.1.0.*' | xargs -n 50 git push --delete origin
+
+# Delete them locally
+git tag -l 'v2.1.0.*' | xargs git tag -d
+```
+
+> **Note:** Deleting old tags also removes the corresponding GitHub
+> Releases. Users on `tulpar update` will be unaffected — they'll
+> simply see the latest *stable* release going forward.

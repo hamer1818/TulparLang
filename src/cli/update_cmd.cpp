@@ -474,7 +474,7 @@ int update_cmd_main(int argc, char **argv) {
 
     // Up-to-date when the embedded version string matches the release tag
     // exactly. Release CI passes -DTULPAR_VERSION=<tag> so this works
-    // even though our tags include a build counter (v2.1.0.NN).
+    // for any semver tag (v2.2.0, v3.0.0-rc.1, etc.).
     if (!force && latest == kVersion) {
         std::printf("%s\n",
                     i18n::tr_en("✓ Zaten son sürümdesiniz.",

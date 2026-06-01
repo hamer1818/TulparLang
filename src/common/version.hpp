@@ -6,7 +6,7 @@
 // against the latest GitHub release tag.
 //
 // The CMake build wires TULPAR_VERSION_STRING via -D; release CI passes
-// the actual git/release tag (e.g. "v2.1.0.42"). Local dev builds fall
+// the actual git tag (e.g. "v2.2.0"). Local dev builds fall
 // back to "<project_version>-dev" so they never accidentally match a
 // real release.
 #ifndef TULPAR_VERSION_STRING

@@ -234,12 +234,12 @@ jobs:
           # embedded version (`tulpar --version`) matches the published
           # release tag — which is what `tulpar update --check` compares
           # against.
-          # Tag-pushed builds embed the tag name (so `tulpar --version`
-          # shows e.g. `v1.0.0`); main-pushed builds get the rolling
-          # auto-version. Same expression used by the create-release job
-          # to keep `tulpar update --check` consistent with the embedded
-          # version string.
-          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v2.1.0.{0}', github.run_number) }}
+          # Tag-pushed builds embed the tag name verbatim (so
+          # `tulpar --version` shows e.g. `v2.2.0`). Branch builds
+          # (main, PRs) omit the override and get CMake's default
+          # "<project_version>-dev", which is fine for CI validation
+          # — no release is minted for them.
+          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
         run: |
           mkdir -p build
           cd build
@@ -247,10 +247,13 @@ jobs:
           # through ccache without us having to fiddle with CC/CXX (and
           # without confusing autodetection that sniffs the compiler
           # binary's name).
-          cmake .. -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DTULPAR_VERSION="${TULPAR_VERSION}"
+          cmake_args="-DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+          if [ -n "${TULPAR_VERSION}" ]; then
+            cmake_args="${cmake_args} -DTULPAR_VERSION=${TULPAR_VERSION}"
+          fi
+          cmake .. ${cmake_args}
           cmake --build . --config Release -j$(nproc)
         timeout-minutes: 10
 
@@ -433,12 +436,10 @@ jobs:
       - name: Build with LLVM
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         env:
-          # Tag-pushed builds embed the tag name (so `tulpar --version`
-          # shows e.g. `v1.0.0`); main-pushed builds get the rolling
-          # auto-version. Same expression used by the create-release job
-          # to keep `tulpar update --check` consistent with the embedded
-          # version string.
-          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v2.1.0.{0}', github.run_number) }}
+          # Tag-pushed builds embed the tag name verbatim; branch
+          # builds omit the override and use CMake's default dev
+          # version.
+          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
         run: |
           # Use `brew --prefix` instead of hardcoding /opt/homebrew so
           # this still works if GitHub's macos-latest image switches
@@ -449,10 +450,13 @@ jobs:
           export LLVM_DIR="$LLVM_PREFIX/lib/cmake/llvm"
           mkdir -p build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$LLVM_DIR \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DTULPAR_VERSION="${TULPAR_VERSION}"
+          cmake_args="-DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$LLVM_DIR
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+          if [ -n "${TULPAR_VERSION}" ]; then
+            cmake_args="${cmake_args} -DTULPAR_VERSION=${TULPAR_VERSION}"
+          fi
+          cmake .. ${cmake_args}
           cmake --build . --config Release -j$(sysctl -n hw.ncpu)
         timeout-minutes: 10
 
@@ -653,24 +657,25 @@ jobs:
       - name: Build with LLVM
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         env:
-          # Tag-pushed builds embed the tag name (so `tulpar --version`
-          # shows e.g. `v1.0.0`); main-pushed builds get the rolling
-          # auto-version. Same expression used by the create-release job
-          # to keep `tulpar update --check` consistent with the embedded
-          # version string.
-          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v2.1.0.{0}', github.run_number) }}
+          # Tag-pushed builds embed the tag name verbatim; branch
+          # builds omit the override and use CMake's default dev
+          # version.
+          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
           CCACHE_DIR: ${{ runner.temp }}/ccache
         run: |
           llvm-config --version
           mkdir -p build-windows
           cd build-windows
-          cmake .. -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=gcc \
-            -DCMAKE_CXX_COMPILER=g++ \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DTULPAR_VERSION="${TULPAR_VERSION}"
+          cmake_args="-G Ninja
+            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_C_COMPILER=gcc
+            -DCMAKE_CXX_COMPILER=g++
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+          if [ -n "${TULPAR_VERSION}" ]; then
+            cmake_args="${cmake_args} -DTULPAR_VERSION=${TULPAR_VERSION}"
+          fi
+          cmake .. ${cmake_args}
           cmake --build . --config Release -j
         timeout-minutes: 20
 
@@ -799,15 +804,18 @@ jobs:
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         shell: pwsh
         env:
-          # Tag-pushed builds embed the tag name (so `tulpar --version`
-          # shows e.g. `v1.0.0`); main-pushed builds get the rolling
-          # auto-version. Same expression used by the create-release job
-          # to keep `tulpar update --check` consistent with the embedded
-          # version string.
-          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v2.1.0.{0}', github.run_number) }}
+          # Tag-pushed builds embed the tag name verbatim; branch
+          # builds omit the override and use CMake's default dev
+          # version.
+          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
         run: |
           # Inno Setup's AppVersion expects pure x.y.z[.w], no leading 'v'.
-          $appVersion = $env:TULPAR_VERSION -replace '^v',''
+          # On tag builds TULPAR_VERSION is set (e.g. "v2.2.0"); on
+          # branch builds it's empty — fall back to CMake's project
+          # version so the installer step still succeeds for CI.
+          $ver = $env:TULPAR_VERSION
+          if (-not $ver) { $ver = "2.1.0-dev" }
+          $appVersion = $ver -replace '^v',''
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) {
             throw "ISCC.exe not found at $iscc — runner image changed?"
@@ -837,21 +845,16 @@ jobs:
   create-release:
     needs: [detect-docs-only, build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
-    # Releases come from two paths: every push to main produces a
-    # rolling `v2.1.0.<run>` release (used by `tulpar update` to roll
-    # users forward continuously), and every `v*` tag push produces a
-    # release named after the tag verbatim (used to mint stable
-    # versions like v1.0.0 that we don't want overwriting on the next
-    # main commit).
-    # Skip release publishing on docs-only pushes — the binaries are
-    # identical to the prior run and a duplicate release would only
-    # bump the version number without giving `tulpar update` anything
-    # new to download.
+    # Stable-only versioning: releases are created ONLY when a `v*` tag
+    # is pushed (e.g. `git tag -a v2.2.0 -m "..." && git push origin
+    # v2.2.0`). Main/PR pushes build and test but never mint a release.
+    # This keeps version numbers meaningful — like Python or Go — and
+    # avoids the hundreds of rolling v2.1.0.<N> tags that accumulated
+    # under the old model.
     if: |
       github.event_name == 'push' &&
       needs.detect-docs-only.outputs.docs_only != 'true' &&
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' ||
-       startsWith(github.ref, 'refs/tags/v'))
+      startsWith(github.ref, 'refs/tags/v')
     # No `continue-on-error` — a release-publishing failure must turn the
     # workflow red. Silent failure here meant `tulpar update` would stop
     # seeing new versions while the build itself reported green.
@@ -866,15 +869,9 @@ jobs:
         id: ver
         shell: bash
         run: |
-          # If the workflow was triggered by a tag push, use that tag
-          # name verbatim — that's the explicit "stable v1.0.0" path.
-          # Otherwise fall back to the rolling auto-version we mint on
-          # every push to main.
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-          else
-            TAG="v2.1.0.${GITHUB_RUN_NUMBER}"
-          fi
+          # This job only runs on tag pushes (see the `if:` above), so
+          # GITHUB_REF is always refs/tags/v*. Extract the tag name.
+          TAG="${GITHUB_REF#refs/tags/}"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Using release tag: $TAG"
 

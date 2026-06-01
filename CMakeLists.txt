@@ -283,9 +283,9 @@ add_executable(tulpar ${ALL_SOURCES})
 target_compile_definitions(tulpar PRIVATE TULPAR_AOT_ENABLED)
 
 # Embedded version string. Defaults to "<project_version>-dev" for local
-# builds; the release CI overrides with `-DTULPAR_VERSION=v2.1.0.<run>` so
-# `tulpar --version` matches the actual GitHub release tag, which the
-# in-binary `tulpar update` checker compares against.
+# builds; release CI overrides with `-DTULPAR_VERSION=v2.2.0` (the tag
+# name) so `tulpar --version` matches the GitHub release tag. Only tag
+# pushes create releases; main/PR builds use this default.
 set(TULPAR_VERSION "${PROJECT_VERSION}-dev"
     CACHE STRING "Embedded version string surfaced via tulpar --version")
 target_compile_definitions(tulpar
