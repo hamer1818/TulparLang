@@ -1,0 +1,184 @@
+// ============================================
+// Tulpar Test Framework
+// ============================================
+// Usage:
+//   import "test";
+//
+//   func basic_addition() {
+//     assert_eq_int(1 + 1, 2);
+//     assert_eq_str(upper("hi"), "HI");
+//   }
+//
+//   test("addition works", "basic_addition");
+//   test_summary();
+//
+// Each test runs in isolation by clearing per-test failure flags before
+// invoking the handler via call(). Assertion failures set the flag + a
+// message; the runner records pass/fail and continues so one bad test
+// doesn't hide the rest. test_summary() exits with a non-zero status if
+// any test failed, so the suite plays nicely with CI runners.
+//
+// Type-specialised assertions (assert_eq_int / assert_eq_str / assert_eq_bool)
+// are used instead of a single generic assert_eq because Tulpar's AOT
+// codegen has a known limitation where `json`-typed parameters can lose
+// string identity after toJson round-trip when the call goes through
+// dlsym (i.e. `call()`). The specialised forms compare the values directly
+// without the json round-trip and work uniformly on AOT and VM.
+// ============================================
+
+int _test_pass = 0;
+int _test_fail = 0;
+int _test_current_failed = 0;
+str _test_current_msg = "";
+str _test_current_name = "";
+
+func _test_set_fail(str msg) {
+    _test_current_failed = 1;
+    _test_current_msg = msg;
+}
+
+// ----- Assertions ----------------------------------------------------------
+
+// Generic boolean assertion. `cond` must be truthy (non-zero); otherwise the
+// current test fails with `msg` (or a default message).
+func assert(int cond, str msg) {
+    if (cond == 0) {
+        if (length(msg) > 0) {
+            _test_set_fail(msg);
+        } else {
+            if (length(_test_current_msg) == 0) {
+                _test_set_fail("assert failed");
+            }
+        }
+    }
+}
+
+// Integer equality.
+func assert_eq_int(int actual, int expected) {
+    if (actual != expected) {
+        _test_set_fail("expected " + toString(expected) +
+                       " got " + toString(actual));
+    }
+}
+
+// String equality (byte-exact). `actual` and `expected` are typed as
+// `json` (rather than `str`) so any value flows through the same path
+// — toString first, then byte-equality. This used to be necessary as
+// a workaround for an AOT `!=`-on-strings bug, which was traced to
+// `vm_make_bool` leaving uninitialised bytes in the VMValue payload
+// (#40); the routing through toString is kept because it gives more
+// useful error messages on type mismatches (you see "got 42" instead
+// of "got <object>").
+func assert_eq_str(json actual, json expected) {
+    str sa = toString(actual);
+    str sb = toString(expected);
+    if (sa != sb) {
+        _test_set_fail("expected '" + sb + "' got '" + sa + "'");
+    }
+}
+
+// Boolean (0/1) equality.
+func assert_eq_bool(int actual, int expected) {
+    int a = 0;
+    int e = 0;
+    if (actual != 0) { a = 1; }
+    if (expected != 0) { e = 1; }
+    if (a != e) {
+        _test_set_fail("expected " + toString(e) + " got " + toString(a));
+    }
+}
+
+// String-contains assertion (case-sensitive). Useful for error message tests.
+// `contains` returns a bool (true/false); we negate via if/else rather than
+// comparing to 0, since bool-vs-int equality in Tulpar lands on a slow
+// fallback path that's easier to misread.
+func assert_contains(json haystack, json needle) {
+    str hs = toString(haystack);
+    str nd = toString(needle);
+    if (contains(hs, nd)) {
+        // ok
+    } else {
+        _test_set_fail("expected '" + hs + "' to contain '" + nd + "'");
+    }
+}
+
+// Throws assertion: invokes `handler` (function name, no `t_` prefix) and
+// asserts that it raises an exception. If `expected_msg_contains` is
+// non-empty, also asserts the caught message contains that substring.
+//
+//   func bad() { throw "oops"; }
+//   assert_throws("bad", "oops");
+//
+// Useful for testing the error path of input validation, parse errors,
+// auth failures, etc.
+func assert_throws(str handler, str expected_msg_contains) {
+    int threw = 0;
+    str caught_msg = "";
+    try {
+        call(handler);
+    } catch (e) {
+        threw = 1;
+        caught_msg = toString(e);
+    }
+    if (threw == 0) {
+        _test_set_fail("expected handler '" + handler + "' to throw");
+    } else {
+        if (length(expected_msg_contains) > 0) {
+            if (contains(caught_msg, expected_msg_contains)) {
+                // ok
+            } else {
+                _test_set_fail("threw '" + caught_msg +
+                    "' (expected to contain '" + expected_msg_contains + "')");
+            }
+        }
+    }
+}
+
+// HTTP status assertion: takes a raw response string ("HTTP/1.1 200 OK\r\n...")
+// and asserts the numeric status appears in the status line.
+func assert_status(json response, int expected_status) {
+    str rs = toString(response);
+    str expected_marker = " " + toString(expected_status) + " ";
+    if (contains(rs, expected_marker)) {
+        // ok
+    } else {
+        _test_set_fail("expected status " + toString(expected_status) +
+            " in '" + substring(rs, 0, 32) + "...'");
+    }
+}
+
+// ----- Runner --------------------------------------------------------------
+
+// Run a single test. Resets per-test state, dispatches the handler, then
+// records pass/fail. Output is intentionally Jest-like:
+//   PASS addition works
+//   FAIL int overflow: expected 2147483647 got -2147483648
+//
+// IMPORTANT: handler names should NOT carry the `t_` prefix — call()
+// adds it internally to find the AOT-mangled symbol.
+func test(str name, str handler) {
+    _test_current_failed = 0;
+    _test_current_msg = "";
+    _test_current_name = name;
+    call(handler);
+    if (_test_current_failed == 1) {
+        _test_fail = _test_fail + 1;
+        print("  FAIL " + name + ": " + _test_current_msg);
+    } else {
+        _test_pass = _test_pass + 1;
+        print("  PASS " + name);
+    }
+}
+
+// Print a summary and exit non-zero if any test failed. Call this once at
+// the bottom of the test file.
+func test_summary() {
+    int total = _test_pass + _test_fail;
+    print("");
+    print("Tests: " + toString(total) +
+          " | Pass: " + toString(_test_pass) +
+          " | Fail: " + toString(_test_fail));
+    if (_test_fail > 0) {
+        exit(1);
+    }
+}
