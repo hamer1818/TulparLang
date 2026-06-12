@@ -126,3 +126,8 @@ wasm/build_wasm/
 # (formerly tracked as a stray submodule pointer with no .gitmodules — broke CI checkout cleanup)
 wasm/emsdk/
 git/
+git/
+github/
+vscode/
+wrangler/
+astro/
