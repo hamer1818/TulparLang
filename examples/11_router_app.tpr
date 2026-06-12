@@ -1,0 +1,49 @@
+// ============================================
+// Advanced Features Test
+// Cookies, Sessions, Route Groups
+// ============================================
+
+import "lib/router.tpr";
+
+print("=== Tulpar Advanced Features Test ===\n");
+
+// Middleware'leri ekle
+use_middleware("logger");
+use_middleware("session"); // Session desteği
+
+// Route Groups Testi
+print("Setting up Route Groups...");
+
+// /api/v1 grubu
+router_group_start("/api/v1");
+route_get("/users", "v1_list_users");      // -> /api/v1/users
+route_get("/users/:id", "v1_get_user");    // -> /api/v1/users/:id
+router_group_end();
+
+// /api/v2 grubu
+router_group_start("/api/v2");
+route_get("/users", "v2_list_users");      // -> /api/v2/users
+router_group_end();
+
+// Normal route
+route_get("/", "home");
+
+// Cookie oluşturma testi
+// Helper fonksiyonu test etmek için handler simülasyonu yapamayız
+// O yüzden direk fonksiyonu çağırıp çıktısını görelim
+print("\n-- Cookie Creation Test --");
+str cookie = create_cookie("user_lang", "tr", {
+    "Path": "/",
+    "Max-Age": 3600,
+    "HttpOnly": true
+});
+print("Generated Cookie Header: " + cookie);
+
+
+// Test Bilgisi
+print("\nTest URLs:");
+print("  http://127.0.0.1:8080/api/v1/users");
+print("  http://127.0.0.1:8080/api/v2/users");
+print("");
+
+listen(8080);

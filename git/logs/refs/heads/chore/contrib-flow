@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 36d1aee37d27fc94de5cfd8ecdabcb20f7c85592 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778362808 +0300	branch: Created from origin/main
+36d1aee37d27fc94de5cfd8ecdabcb20f7c85592 6f55f19bb7eb15712aefc4b7f3226c2aa5cd4e13 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778362864 +0300	commit: ci(auto-merge): skip fork PRs cleanly instead of erroring on missing PAT

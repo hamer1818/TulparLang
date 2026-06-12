@@ -1,0 +1,3 @@
+0000000000000000000000000000000000000000 2b4fd9f4424e17b5ce46b3bd581b89e79ed53034 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777807413 +0300	branch: Created from HEAD
+2b4fd9f4424e17b5ce46b3bd581b89e79ed53034 ee953e6dc106448c1c62b0f7b0765acb8668a931 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777807422 +0300	rebase (finish): refs/heads/fix/aot-runtime-library-shipping onto ee953e6dc106448c1c62b0f7b0765acb8668a931
+ee953e6dc106448c1c62b0f7b0765acb8668a931 48688ca03f206922f6d60907ee65f027d4518415 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777807450 +0300	commit: fix(aot): runtime kutuphanesini installer'a ekle, exe yaninda ara

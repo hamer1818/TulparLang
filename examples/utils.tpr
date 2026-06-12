@@ -1,0 +1,30 @@
+// ============================================
+// UTILS MODÜLÜ (Import örneği)
+// ============================================
+
+// Sabit değer
+float PI = 3.14159;
+
+// Matematik fonksiyonları
+func topla(int a, int b) {
+    return a + b;
+}
+
+func carp(int a, int b) {
+    return a * b;
+}
+
+func us_al(int taban, int us) {
+    int sonuc = 1;
+    for (int i = 0; i < us; i = i + 1) {
+        sonuc = sonuc * taban;
+    }
+    return sonuc;
+}
+
+// Tip tanımı
+type Point {
+    int x;
+    int y;
+}
+

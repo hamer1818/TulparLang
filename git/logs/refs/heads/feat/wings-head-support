@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 a3a5d45ae1c720b13128b2dcbd1293e2964dc853 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778105760 +0300	branch: Created from HEAD
+a3a5d45ae1c720b13128b2dcbd1293e2964dc853 5bdf9286f1b946d75df8ac56b77e75f1b206dc95 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778105764 +0300	commit: feat(wings): HTTP HEAD support — auto-route to GET handler, strip body

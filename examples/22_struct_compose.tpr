@@ -1,0 +1,59 @@
+// Plan 04 v2 — typed struct fonksiyon kompozisyonu.
+// PR5 typed struct return'i VAR_DECL contextinde acti
+// (`Point p = make_point();`). Bu PR iki kalan deligi kapatti:
+//
+//   1. Struct-returning fn'in struct-taking fn'e arg olarak gecirilmesi:
+//      `add(origin(), a)` — ic call'in donus pointer'i caller'in
+//      yer ayirdgi temp struct'a pin'leniyor, fn dogrudan icine yaziyor.
+//      Eski yol 16-byte VMValue temp'ini callee'nin 24-byte struct
+//      param'ina iliyordu — okuma stack disina taşip cop ureteyordu.
+//
+//   2. `return make_v3(...)` zinciri: ic call'in pointer'i mevcut
+//      fn'in result_ptr'sine pin'leniyor, ekstra temp+copy kalkti.
+
+struct V3 { int x; int y; int z; }
+
+func origin(): V3 {
+    V3 v = { x: 0, y: 0, z: 0 };
+    return v;
+}
+
+func make_v3(int a, int b, int c): V3 {
+    V3 v = { x: a, y: b, z: c };
+    return v;
+}
+
+func add(V3 a, V3 b): V3 {
+    int rx = a.x + b.x;
+    int ry = a.y + b.y;
+    int rz = a.z + b.z;
+    V3 r = { x: rx, y: ry, z: rz };
+    return r;
+}
+
+// Return zinciri: bu fn'in govdesi tek bir call'a indi.
+func origin_plus(V3 b): V3 {
+    return add(origin(), b);
+}
+
+V3 a = make_v3(1, 2, 3);
+V3 b = make_v3(10, 20, 30);
+
+V3 r1 = add(a, b);
+print(r1.x);                    // 11
+print(r1.y);                    // 22
+print(r1.z);                    // 33
+
+V3 r2 = add(origin(), a);
+print(r2.x);                    // 1
+print(r2.y);                    // 2
+print(r2.z);                    // 3
+
+V3 r3 = origin_plus(b);
+print(r3.x);                    // 10
+print(r3.y);                    // 20
+print(r3.z);                    // 30
+
+// `print(struct_returning_call())` — pin the print's temp struct alloca
+// on the hint, let the call write into it, then format from there.
+print(make_v3(7, 8, 9));        // V3 { x: 7, y: 8, z: 9 }

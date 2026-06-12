@@ -1,0 +1,20 @@
+// Native typed AOT: explicit `: int` return type triggers unboxed
+// LLVM-native i64 codegen path (no vm_binary_op, direct LLVM add).
+//
+// `n` reads from TULPAR_BENCH_N so the recursion depth is opaque to
+// LLVM at compile time — keeps the optimizer from precomputing
+// fibonacci(35) once it gets aggressive enough to do partial
+// evaluation. Defaults to 35 when unset to match the historical
+// micro-benchmark.
+func fibonacci(int n): int {
+    if (n <= 1) {
+        return n;
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+int n = toInt(env("TULPAR_BENCH_N"));
+if (n <= 0) {
+    n = 35;
+}
+print(fibonacci(n));

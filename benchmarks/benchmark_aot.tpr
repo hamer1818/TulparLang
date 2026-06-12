@@ -1,0 +1,271 @@
+// ==============================================
+// TULPAR AOT BENCHMARK
+// Standard workload — same parameters and inner-loop averaging methodology
+// as benchmark.c / benchmark.rs / benchmark.go.
+// ==============================================
+
+print("=======================================================");
+print("       TULPAR AOT PERFORMANS BENCHMARK");
+print("=======================================================");
+print("");
+
+// TEST 1: Fibonacci (Recursive) — typed AOT path emits native i64 arith.
+func fibonacci(int n): int {
+    if(n <= 1) {
+        return n;
+    }
+    return fibonacci(n-1) + fibonacci(n-2);
+}
+
+// TEST 2: Factorial (Recursive)
+func factorial(int n): int {
+    if(n <= 1) {
+        return 1;
+    }
+    return n * factorial(n-1);
+}
+
+// TEST 3: Ackermann (Deep Recursion)
+func ackermann(int m, int n): int {
+    if(m == 0) {
+        return n + 1;
+    }
+    if(n == 0) {
+        return ackermann(m-1, 1);
+    }
+    return ackermann(m-1, ackermann(m, n-1));
+}
+
+// TEST 4: Tak
+func tak(int x, int y, int z): int {
+    if(y < x) {
+        return tak(tak(x-1, y, z), tak(y-1, z, x), tak(z-1, x, y));
+    }
+    return z;
+}
+
+// TEST 5: Loop summation
+func loopTest(int iterations): int {
+    int sum = 0;
+    for(int i = 0; i < iterations; i = i + 1) {
+        sum = sum + i;
+    }
+    return sum;
+}
+
+// TEST 6: Sieve of Eratosthenes — same algorithm as the other languages.
+func sieve(int n): int {
+    json flags = [];
+    for(int i = 0; i <= n; i = i + 1) {
+        push(flags, 0);
+    }
+    int count = 0;
+    for(int i = 2; i <= n; i = i + 1) {
+        if(flags[i] == 0) {
+            count = count + 1;
+            for(int k = i * i; k <= n; k = k + i) {
+                flags[k] = 1;
+            }
+        }
+    }
+    return count;
+}
+
+// TEST 7: Bubble Sort with seed-driven RNG and full checksum.
+func bubbleSort(int size): int {
+    json arr = [];
+    int seed = 12345;
+    for(int i = 0; i < size; i = i + 1) {
+        seed = seed * 1103 + 12345;
+        if(seed < 0) { seed = 0 - seed; }
+        seed = seed - (seed / 32768) * 32768;
+        push(arr, seed);
+    }
+    for(int i = 0; i < size; i = i + 1) {
+        for(int j = 0; j < size - 1; j = j + 1) {
+            if(arr[j] > arr[j+1]) {
+                int t = arr[j];
+                arr[j] = arr[j+1];
+                arr[j+1] = t;
+            }
+        }
+    }
+    int checksum = 0;
+    for(int i = 0; i < size; i = i + 1) {
+        checksum = checksum + arr[i];
+    }
+    return checksum;
+}
+
+// TEST 8: String Concat (single 'a' per iteration)
+func stringConcat(int iterations): int {
+    string result = "";
+    for(int i = 0; i < iterations; i = i + 1) {
+        result = result + "a";
+    }
+    return len(result);
+}
+
+// TEST 9: Array Memory (push then sum)
+func arrayMemory(int size): int {
+    json arr = [];
+    for(int i = 0; i < size; i = i + 1) {
+        push(arr, i);
+    }
+    int sum = 0;
+    for(int i = 0; i < size; i = i + 1) {
+        sum = sum + arr[i];
+    }
+    return sum;
+}
+
+// TEST 10: String Allocation — concatenate "Merhaba Dunya " repeatedly
+func stringAlloc(int iterations): int {
+    string result = "";
+    for(int i = 0; i < iterations; i = i + 1) {
+        result = result + "Merhaba Dunya ";
+    }
+    return len(result);
+}
+
+// TEST 11: JSON Build — array of dict-like records {id, name, value, active}.
+func jsonBuild(int size): int {
+    json data = [];
+    for(int i = 0; i < size; i = i + 1) {
+        json item = {
+            "id": i,
+            "name": "Item",
+            "value": i * 10,
+            "active": 1
+        };
+        push(data, item);
+    }
+    int sum = 0;
+    for(int i = 0; i < size; i = i + 1) {
+        sum = sum + data[i]["value"];
+    }
+    return sum;
+}
+
+// ============================================================
+// RUN BENCHMARKS — inner-loop averaging, report avg ms per call
+// ============================================================
+//
+// Black-box pattern to defeat LLVM constant folding / loop-invariant code
+// motion: pass `i * bb_zero` (always 0 at runtime, opaque at compile time)
+// added to the size argument so each call's input looks loop-variant to
+// LLVM. We also accumulate every result into `sink` and print it at the
+// end, so the function calls are never dead.
+float _bb_clock = clock_ms();
+int bb_zero = 0;
+if(_bb_clock < -1.0) { bb_zero = 1; }
+int sink = 0;
+int result = 0;
+
+print("Test 1: Fibonacci(30)");
+float start1 = clock_ms();
+int i = 0;
+while(i < 100) { result = fibonacci(30 + i * bb_zero); sink = sink + result; i = i + 1; }
+float end1 = clock_ms();
+float avg1 = (end1 - start1) / 100.0;
+print("Sure: " + toString(avg1) + " ms");
+print("--------------------------------");
+
+print("Test 2: Factorial(20)");
+float start2 = clock_ms();
+i = 0;
+while(i < 100000) { result = factorial(20 + i * bb_zero); sink = sink + result; i = i + 1; }
+float end2 = clock_ms();
+float avg2 = (end2 - start2) / 100000.0;
+print("Sure: " + toString(avg2) + " ms");
+print("--------------------------------");
+
+print("Test 3: Ackermann(3, 8)");
+float start3 = clock_ms();
+i = 0;
+while(i < 50) { result = ackermann(3 + i * bb_zero, 8); sink = sink + result; i = i + 1; }
+float end3 = clock_ms();
+float avg3 = (end3 - start3) / 50.0;
+print("Sure: " + toString(avg3) + " ms");
+print("--------------------------------");
+
+print("Test 4: Tak(18, 12, 6)");
+float start4 = clock_ms();
+i = 0;
+while(i < 200) { result = tak(18 + i * bb_zero, 12, 6); sink = sink + result; i = i + 1; }
+float end4 = clock_ms();
+float avg4 = (end4 - start4) / 200.0;
+print("Sure: " + toString(avg4) + " ms");
+print("--------------------------------");
+
+print("Test 5: Loop 1M");
+float start5 = clock_ms();
+i = 0;
+while(i < 1000) { result = loopTest(1000000 + i * bb_zero); sink = sink + result; i = i + 1; }
+float end5 = clock_ms();
+float avg5 = (end5 - start5) / 1000.0;
+print("Sure: " + toString(avg5) + " ms");
+print("--------------------------------");
+
+print("Test 6: Sieve(10K)");
+float start6 = clock_ms();
+i = 0;
+while(i < 50) { result = sieve(10000 + i * bb_zero); sink = sink + result; i = i + 1; }
+float end6 = clock_ms();
+float avg6 = (end6 - start6) / 50.0;
+print("Sure: " + toString(avg6) + " ms");
+print("--------------------------------");
+
+print("Test 7: BubbleSort(1K)");
+float start7 = clock_ms();
+i = 0;
+while(i < 5) { result = bubbleSort(1000 + i * bb_zero); sink = sink + result; i = i + 1; }
+float end7 = clock_ms();
+float avg7 = (end7 - start7) / 5.0;
+print("Sure: " + toString(avg7) + " ms");
+print("--------------------------------");
+
+print("Test 8: StringConcat(1K)");
+float start8 = clock_ms();
+i = 0;
+while(i < 200) { result = stringConcat(1000 + i * bb_zero); sink = sink + result; i = i + 1; }
+float end8 = clock_ms();
+float avg8 = (end8 - start8) / 200.0;
+print("Sure: " + toString(avg8) + " ms");
+print("--------------------------------");
+
+print("Test 9: ArrayMemory(10K)");
+float start9 = clock_ms();
+i = 0;
+while(i < 100) { result = arrayMemory(10000 + i * bb_zero); sink = sink + result; i = i + 1; }
+float end9 = clock_ms();
+float avg9 = (end9 - start9) / 100.0;
+print("Sure: " + toString(avg9) + " ms");
+print("--------------------------------");
+
+print("Test 10: StringAlloc(1K)");
+float start10 = clock_ms();
+i = 0;
+while(i < 100) { result = stringAlloc(1000 + i * bb_zero); sink = sink + result; i = i + 1; }
+float end10 = clock_ms();
+float avg10 = (end10 - start10) / 100.0;
+print("Sure: " + toString(avg10) + " ms");
+print("--------------------------------");
+
+print("Test 11: JSONBuild(1K)");
+float start11 = clock_ms();
+i = 0;
+while(i < 100) { result = jsonBuild(1000 + i * bb_zero); sink = sink + result; i = i + 1; }
+float end11 = clock_ms();
+float avg11 = (end11 - start11) / 100.0;
+print("Sure: " + toString(avg11) + " ms");
+print("--------------------------------");
+
+float total_avg = avg1 + avg2 + avg3 + avg4 + avg5 + avg6 + avg7 + avg8 + avg9 + avg10 + avg11;
+print("=======================================================");
+print("TOPLAM SURE: " + toString(total_avg) + " ms");
+print("=======================================================");
+// Force every accumulated result to be observable so LLVM cannot drop the
+// function calls as dead. Print this AFTER the totals line so the parser
+// (which scans for 'TOPLAM SURE:') is unaffected.
+print("sink:" + toString(sink));

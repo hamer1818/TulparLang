@@ -1,0 +1,21 @@
+// Plan 04 PR3 hedef ornek: native struct codegen.
+// `Point p; p.x = ...; p.x` — GEP+load/store yoluna gecirilir
+// (alanlar int oldugu icin trivially unboxable). Bu yol mevcut
+// box'li `vm_set_element`/`vm_get_element` cagrilarini ortadan
+// kaldiriyor; ayni cikti, daha az runtime overhead.
+
+struct Point {
+    int x;
+    int y;
+}
+
+func sum_squares(int n): int {
+    Point p;
+    p.x = n + 1;
+    p.y = n * 2;
+    return p.x * p.x + p.y * p.y;
+}
+
+print(sum_squares(2));    // 3*3 + 4*4 = 25
+print(sum_squares(0));    // 1*1 + 0*0 = 1
+print(sum_squares(5));    // 6*6 + 10*10 = 136

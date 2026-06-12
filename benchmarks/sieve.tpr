@@ -1,0 +1,24 @@
+// Typed AOT path for Sieve of Eratosthenes.
+// TULPAR_BENCH_N controls the upper bound (default 100000).
+func sieve(int n): int {
+    json flags = [];
+    for (int i = 0; i <= n; i++) {
+        push(flags, 0);
+    }
+    int count = 0;
+    for (int i = 2; i <= n; i++) {
+        if (flags[i] == 0) {
+            count = count + 1;
+            for (int k = i * i; k <= n; k = k + i) {
+                flags[k] = 1;
+            }
+        }
+    }
+    return count;
+}
+
+int n = toInt(env("TULPAR_BENCH_N"));
+if (n <= 0) {
+    n = 100000;
+}
+print(sieve(n));

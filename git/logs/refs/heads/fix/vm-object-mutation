@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 d958f08d5dac6f1e2c3191d13367876d471e09de Hamza ORTATEPE <hortatepe2002@gmail.com> 1777927096 +0300	branch: Created from HEAD
+d958f08d5dac6f1e2c3191d13367876d471e09de 8236492a0878df906b6a14b40b9e65f08c9a62d0 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777927272 +0300	commit: fix(vm): nesne/array property mutasyonu sessizce kayboluyordu

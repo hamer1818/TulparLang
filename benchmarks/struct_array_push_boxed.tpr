@@ -1,0 +1,33 @@
+// struct_array_push'in boxed-json muadili. Plan 04 v2 oncesi tek
+// alternatifi: her struct'i bir json object olarak {x, y, z} sakla,
+// field erisimi `vm_get_element`/`vm_set_element` runtime cagrilarindan
+// gec. Ayni hesaplama, tek fark struct mekanizmasi.
+//
+// Object literal'i fonksiyon icinden donduruyoruz. Top-level loop'ta
+// dogrudan `var p = { ... }` kullanmak Tulpar'in boxed codegen'inde
+// nesne paylasimina yol aciyor (her iterasyon ayni ObjObject'i
+// recyle ediyor — bizim heap struct path'imizden bagimsiz, baska
+// bir bug); fonksiyon her cagrida taze allocation yapiyor.
+
+func make_box(int a, int b, int c) {
+    return { "x": a, "y": b, "z": c };
+}
+
+int n = 1000000;
+array points = [];
+
+int i = 0;
+while (i < n) {
+    push(points, make_box(i, i * 2, i * 3));
+    i = i + 1;
+}
+
+int total = 0;
+i = 0;
+while (i < n) {
+    var p = points[i];
+    total = total + p["x"] + p["y"] + p["z"];
+    i = i + 1;
+}
+
+print(total);

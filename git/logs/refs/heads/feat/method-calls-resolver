@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 b6ea6326ba8cecd7bb7817ddb3b2fd56ac3d8b04 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777966545 +0300	branch: Created from HEAD
+b6ea6326ba8cecd7bb7817ddb3b2fd56ac3d8b04 ce44328c8dfa5940fb47facf99fc72396b366140 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777967314 +0300	commit: feat(parser/codegen): real-object method calls via hybrid resolver

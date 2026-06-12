@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 7b13470b56a06b5add25f4f957accfed64487ad1 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778079154 +0300	branch: Created from HEAD
+7b13470b56a06b5add25f4f957accfed64487ad1 82844ab32f88224581ed882b7cf1a1c5e97e2108 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778079174 +0300	commit: fix(install,windows): bundle OpenSSL DLLs + post-install smoke test

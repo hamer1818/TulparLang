@@ -1,0 +1,23 @@
+// TulparLang Benchmark - Fibonacci Only
+
+print("=== TulparLang LLVM Benchmark ===");
+print("");
+
+func fibonacci(int n) {
+    if (n <= 1) {
+        return n;
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+print("Fibonacci(30):");
+print(fibonacci(30));
+
+print("Fibonacci(35):");
+print(fibonacci(35));
+
+print("Fibonacci(38):");
+print(fibonacci(38));
+
+print("");
+print("=== Benchmark Complete ===");

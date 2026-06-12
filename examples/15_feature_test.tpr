@@ -1,0 +1,163 @@
+// TulparLang Feature Test
+// Tests interpreter functions with current parser syntax
+
+print("=== TulparLang Feature Test ===");
+print("");
+
+// ============================================
+// 1. STRING FUNCTIONS
+// ============================================
+print("--- String Functions ---");
+
+str text = "Hello, Tulpar World!";
+
+print("Original:", text);
+// Note: toUpper/toLower not yet registered as global functions
+print("contains('Tulpar'):", contains(text, "Tulpar"));
+print("startsWith('Hello'):", startsWith(text, "Hello"));
+print("endsWith('!'):", endsWith(text, "!"));
+print("indexOf('Tulpar'):", indexOf(text, "Tulpar"));
+print("substring(7, 13):", substring(text, 7, 13));
+print("trim('  hi  '):", trim("  hi  "));
+print("replace('World', 'Tulpar'):", replace(text, "World", "Tulpar"));
+print("length():", length(text));
+
+// Note: join() not registered as global function
+// array arr = ["a", "b", "c"];
+// print("join('-', arr):", join("-", arr));
+
+print("");
+
+// ============================================
+// 2. MATH FUNCTIONS  
+// ============================================
+print("--- Math Functions ---");
+
+print("abs(-42):", abs(-42));
+print("sqrt(16):", sqrt(16));
+print("floor(3.7):", floor(3.7));
+print("ceil(3.2):", ceil(3.2));
+
+print("");
+
+// ============================================
+// 3. TIME FUNCTIONS
+// ============================================
+print("--- Time Functions ---");
+
+int start = clock_ms();
+print("clock_ms():", clock_ms());
+
+// Small sleep test (10ms)
+sleep(10);
+int elapsed = clock_ms() - start;
+print("sleep(10) elapsed:", elapsed, "ms");
+
+print("");
+
+// ============================================
+// 4. TYPE CHECKING FUNCTIONS
+// ============================================
+print("--- Type Checking ---");
+// Note: typeof() not registered as global function
+// Type checking done through variable declarations
+
+int intVar = 42;
+float floatVar = 3.14;
+str strVar = "hello";
+bool boolVar = true;
+
+print("intVar:", intVar);
+print("floatVar:", floatVar);
+print("strVar:", strVar);
+print("boolVar:", boolVar);
+
+print("");
+
+// ============================================
+// 5. JSON FUNCTIONS
+// ============================================
+print("--- JSON Functions ---");
+
+json person = {"name": "Tulpar", "version": 2.1, "fast": true};
+print("JSON object:", toJson(person));
+print("  name:", person["name"]);
+print("  version:", person["version"]);
+print("  fast:", person["fast"]);
+
+print("");
+
+// Range function not available in VM
+// Skipping range tests
+
+print("");
+
+// ============================================
+// 7. ARRAY FUNCTIONS
+// ============================================
+print("--- Array Functions ---");
+
+array numbers = [3, 1, 4, 1, 5, 9, 2, 6];
+print("Original array:", toJson(numbers));
+print("length:", length(numbers));
+print("First element:", numbers[0]);
+print("Last element:", numbers[length(numbers) - 1]);
+
+// Modification
+numbers[0] = 99;
+print("After numbers[0] = 99:", toJson(numbers));
+
+print("");
+
+// ============================================
+// 8. CONTROL FLOW
+// ============================================
+print("--- Control Flow ---");
+
+int x = 10;
+if (x > 5) {
+    print("x is greater than 5");
+} else {
+    print("x is 5 or less");
+}
+
+print("While loop (0-4):");
+int i = 0;
+while (i < 5) {
+    print("  i =", i);
+    i = i + 1;
+}
+
+print("For loop (0-4):");
+for (int j = 0; j < 5; j++) {
+    print("  j =", j);
+}
+
+print("");
+
+// ============================================
+// 9. FUNCTIONS
+// ============================================
+print("--- Functions ---");
+
+func add(int a, int b) {
+    return a + b;
+}
+
+func factorial(int n) {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+print("add(3, 4):", add(3, 4));
+print("factorial(5):", factorial(5));
+
+print("");
+
+// ============================================
+// SUMMARY
+// ============================================
+print("=== All Tests Completed! ===");
+print("TulparLang interpreter is working correctly!");

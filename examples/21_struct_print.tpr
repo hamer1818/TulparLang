@@ -1,0 +1,30 @@
+// Plan 04 PR6 hedef ornek: print(struct).
+// Typed-struct local'i print()'e verilince `Name { f1: v, f2: v, ... }`
+// formatinda yazdiriliyor — codegen GEP-load ile her alani tek tek
+// alip printf cagirisi yapiyor; runtime helper yok.
+
+struct Point {
+    int x;
+    int y;
+}
+
+struct Box {
+    int width;
+    int height;
+    int depth;
+}
+
+func make_point(int a, int b): Point {
+    Point p = { x: a, y: b };
+    return p;
+}
+
+Point p = make_point(3, 4);
+print(p);                                // Point { x: 3, y: 4 }
+
+Box b = { width: 2, height: 3, depth: 4 };
+print(b);                                // Box { width: 2, height: 3, depth: 4 }
+
+// Bos baslatilan struct: tum alanlar 0.
+Point empty;
+print(empty);                            // Point { x: 0, y: 0 }

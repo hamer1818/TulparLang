@@ -1,0 +1,4 @@
+0000000000000000000000000000000000000000 9b9b48ea1e3d24407a33f42d961440195113b7d6 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778676856 +0300	branch: Created from HEAD
+9b9b48ea1e3d24407a33f42d961440195113b7d6 bc831a438d661e1afc12a373a7137c0f13701e22 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778677054 +0300	commit: fix(vm): wire 8 utility builtins (arena, cpu/time, input, string_pin)
+bc831a438d661e1afc12a373a7137c0f13701e22 67d8a18603b335fe7e0f369163ddbea372f28d5b Hamza ORTATEPE <hortatepe2002@gmail.com> 1778681274 +0300	rebase (finish): refs/heads/fix/vm-utility-builtins onto 411704518c9a4cc154ce13b38d9fe507a640c433
+67d8a18603b335fe7e0f369163ddbea372f28d5b 30a15505a893257ec3ea07bfc5db961b1dfc00e3 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778681503 +0300	rebase (finish): refs/heads/fix/vm-utility-builtins onto c0f85855298e297ffeaddc6b11c40f5eef91ae5b

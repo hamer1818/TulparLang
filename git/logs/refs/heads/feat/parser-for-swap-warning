@@ -1,0 +1,3 @@
+0000000000000000000000000000000000000000 7ec1f17c6a66eb19757b8907241d0d7a626eed1c Hamza ORTATEPE <hortatepe2002@gmail.com> 1777900340 +0300	branch: Created from HEAD
+7ec1f17c6a66eb19757b8907241d0d7a626eed1c b27a6cf4ca91c608b487e4d2933ffd15f48120fd Hamza ORTATEPE <hortatepe2002@gmail.com> 1777900340 +0300	am: feat(parser): for-dongusu yer-degistirmis kosul/guncelleme uyarisi
+b27a6cf4ca91c608b487e4d2933ffd15f48120fd 550e94c49000e35bc44cd0f4144afe1213e09a93 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777900353 +0300	rebase (finish): refs/heads/feat/parser-for-swap-warning onto c95339747db7f8cd54ff9689534cda44a2582c89

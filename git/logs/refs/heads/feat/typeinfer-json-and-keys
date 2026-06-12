@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 7c79767c2894a361bd54c947d7e578f1b319ff22 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778071038 +0300	branch: Created from HEAD
+7c79767c2894a361bd54c947d7e578f1b319ff22 0514eb398a5d68a8304471fa7c84d7a448782b86 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778071410 +0300	commit: feat(typeinfer): recognize `json` as a built-in type + catalog keys/env/push/pop/call

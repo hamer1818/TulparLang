@@ -1,0 +1,5 @@
+// Expected: typeinfer should reject `abs(string)` — abs only accepts
+// numeric (int, float). Same poly-builtin category check as fail/01.
+
+float r = abs("hello");
+print(r);

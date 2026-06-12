@@ -1,0 +1,58 @@
+print("=== TulparLang Basics Demo ===");
+
+print("--- Variables ---");
+int x = 10;
+float pi = 3.14;
+str name = "Tulpar";
+bool active = true;
+
+print("Integer: " + toString(x));
+print("Float: " + toString(pi));
+print("String: " + name);
+if (active) {
+  print("Boolean: true");
+}
+
+print("\n--- Control Flow ---");
+if (x > 5) {
+  print("x is greater than 5");
+} else {
+  print("x is small");
+}
+
+int i = 0;
+while (i < 3) {
+  print("Count: " + toString(i));
+  i = i + 1;
+}
+
+print("\n--- Arrays ---");
+array arr = [1, 2, 3];
+push(arr, 4);
+str jsonArr = toJson(arr);
+print("Array: " + jsonArr);
+
+str lenStr = toString(length(arr));
+print("Length: " + lenStr);
+
+arr[0] = 99;
+str finalJson = toJson(arr);
+print("Modified: " + finalJson);
+
+print("\n--- Functions ---");
+
+func add(int a, int b): int {
+  return a + b;
+}
+
+func greet(str n): str {
+  return "Hello, " + n + "!";
+}
+
+int sum = add(5, 7);
+print("Sum of 5 + 7 = " + toString(sum));
+
+str msg = greet("User");
+print(msg);
+
+print("\nBasics Demo Completed.");

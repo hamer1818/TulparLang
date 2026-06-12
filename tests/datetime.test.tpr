@@ -1,0 +1,24 @@
+// Coverage for the datetime builtins exposed by the runtime.
+import "test";
+
+func epoch_iso() {
+    // Unix epoch should always render as the same canonical string.
+    assert_eq_str(format_iso8601(0), "1970-01-01T00:00:00Z");
+}
+
+func known_timestamp() {
+    // 2026-01-01T00:00:00Z = 1767225600 unix seconds.
+    assert_eq_str(format_iso8601(1767225600), "2026-01-01T00:00:00Z");
+}
+
+func now_shape() {
+    // ISO 8601 in Z form is exactly 20 chars: 4-2-2 T 2:2:2 Z.
+    str s = now_iso8601();
+    assert_eq_int(length(s), 20);
+}
+
+print("=== Tulpar datetime builtins ===");
+test("epoch -> ISO", "epoch_iso");
+test("known timestamp -> ISO", "known_timestamp");
+test("now_iso8601 shape", "now_shape");
+test_summary();

@@ -1,0 +1,155 @@
+// Regression tests for `lib/router.tpr` — covers the path-matching,
+// query parsing, URL-decoding, and JSON-body helpers handlers rely on.
+// The router is on every API request's hot path; a behaviour change
+// here breaks every server example silently if not caught.
+//
+// `match_path` delegates to the native `path_match` builtin; this file
+// also pins that contract so a future move of the implementation
+// between Tulpar and C++ doesn't drift.
+
+import "test";
+import "router";
+
+// ---------- match_path: exact, param, multi-param, wildcard ----------------
+
+func match_exact_hit() {
+    json m = match_path("/users", "/users");
+    assert_eq_int(m["matched"], 1);
+}
+
+func match_exact_miss() {
+    json m = match_path("/users", "/posts");
+    assert_eq_int(m["matched"], 0);
+}
+
+func match_single_param() {
+    json m = match_path("/users/:id", "/users/42");
+    assert_eq_int(m["matched"], 1);
+    assert_eq_str(m["params"]["id"], "42");
+}
+
+func match_two_params() {
+    json m = match_path("/users/:uid/posts/:pid",
+                        "/users/42/posts/abc");
+    assert_eq_int(m["matched"], 1);
+    assert_eq_str(m["params"]["uid"], "42");
+    assert_eq_str(m["params"]["pid"], "abc");
+}
+
+func match_param_segment_count_diff() {
+    // Route expects 2 segments past `/users`, request has 1.
+    json m = match_path("/users/:uid/posts", "/users/42");
+    assert_eq_int(m["matched"], 0);
+}
+
+func match_wildcard() {
+    // `/static/*` should match anything that begins with /static/.
+    json m = match_path("/static/*", "/static/css/app.css");
+    assert_eq_int(m["matched"], 1);
+}
+
+func match_root() {
+    json m = match_path("/", "/");
+    assert_eq_int(m["matched"], 1);
+}
+
+func match_trailing_slash_lenient() {
+    // path_match treats `/users` and `/users/` as the same route —
+    // matches Express / Flask "smart" trailing-slash behaviour. Pinning
+    // the current behaviour so a future "be strict" change is a
+    // deliberate decision rather than an accident.
+    json m = match_path("/users", "/users/");
+    assert_eq_int(m["matched"], 1);
+}
+
+// ---------- parse_query_string: keys, percent-decode, +, multi -----------
+
+func query_simple() {
+    json q = parse_query_string("name=ali&age=25");
+    assert_eq_str(q["name"], "ali");
+    assert_eq_str(q["age"], "25");
+}
+
+func query_url_encoded_value() {
+    // Space encoded as %20 should land as a literal space.
+    json q = parse_query_string("greeting=hello%20world");
+    assert_eq_str(q["greeting"], "hello world");
+}
+
+func query_plus_as_space() {
+    // `+` in form-encoded query strings means space.
+    json q = parse_query_string("city=new+york");
+    assert_eq_str(q["city"], "new york");
+}
+
+func query_empty_value() {
+    json q = parse_query_string("flag=&name=ali");
+    assert_eq_str(q["flag"], "");
+    assert_eq_str(q["name"], "ali");
+}
+
+func query_empty_input() {
+    json q = parse_query_string("");
+    assert_eq_int(length(keys(q)), 0);
+}
+
+// ---------- url_decode helper (router's wrapper, not the native one) -----
+
+func url_decode_common_escapes() {
+    str s = url_decode("a%20b%2Fc%3Ad");
+    assert_eq_str(s, "a b/c:d");
+}
+
+func url_decode_passthrough() {
+    // No escapes — should round-trip verbatim.
+    str s = url_decode("plain-string-123");
+    assert_eq_str(s, "plain-string-123");
+}
+
+// ---------- parse_json_body: empty, valid, invalid -----------------------
+
+func body_empty_returns_empty_object() {
+    json b = parse_json_body("");
+    assert_eq_int(length(keys(b)), 0);
+}
+
+func body_valid_object() {
+    json b = parse_json_body("{\"name\":\"ali\",\"age\":30}");
+    assert_eq_str(b["name"], "ali");
+    assert_eq_int(b["age"], 30);
+}
+
+func body_invalid_returns_empty() {
+    // Malformed JSON — router catches the parse error and returns {}.
+    json b = parse_json_body("{not valid json");
+    assert_eq_int(length(keys(b)), 0);
+}
+
+// ---------- run --------------------------------------------------------
+
+print("=== Router Tests ===");
+print("");
+
+test("match exact path hit", "match_exact_hit");
+test("match exact path miss", "match_exact_miss");
+test("match :param capture", "match_single_param");
+test("match multiple :params", "match_two_params");
+test("match segment-count mismatch fails", "match_param_segment_count_diff");
+test("match /static/* wildcard", "match_wildcard");
+test("match root /", "match_root");
+test("match trailing slash is lenient", "match_trailing_slash_lenient");
+
+test("parse_query simple key=val pairs", "query_simple");
+test("parse_query %20 -> space", "query_url_encoded_value");
+test("parse_query + -> space", "query_plus_as_space");
+test("parse_query empty value", "query_empty_value");
+test("parse_query empty input -> {}", "query_empty_input");
+
+test("url_decode common escapes", "url_decode_common_escapes");
+test("url_decode passthrough", "url_decode_passthrough");
+
+test("parse_json_body empty -> {}", "body_empty_returns_empty_object");
+test("parse_json_body valid object", "body_valid_object");
+test("parse_json_body malformed -> {}", "body_invalid_returns_empty");
+
+test_summary();

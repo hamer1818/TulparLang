@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 e56f622b305b355e66c30607fac04476150a7e67 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778361995 +0300	branch: Created from origin/main
+e56f622b305b355e66c30607fac04476150a7e67 c9262ca0265889925eba9c801dd0c510654428ab Hamza ORTATEPE <hortatepe2002@gmail.com> 1778362079 +0300	commit: ci: bump all actions to Node 24 native versions, drop force flag

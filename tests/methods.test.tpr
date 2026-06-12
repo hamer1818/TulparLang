@@ -1,0 +1,59 @@
+// Method-style call dispatch on a regular json receiver.
+// `obj.greet("x")` desugars to `greet(obj, "x")` because parser
+// stashes `obj` in FunctionCall.receiver and codegen prepends it.
+//
+// Run with: tulpar tests/methods.test.tpr
+
+import "test";
+
+func greet(json self, str name): str {
+    return self["title"] + ": Merhaba " + name + "!";
+}
+
+func area(json rect): int {
+    return rect["w"] * rect["h"];
+}
+
+// `m__priority` exists alongside a free `priority` so the call
+// `m.priority(...)` resolves to the alias path (mangled). Mimics
+// what apply_import_alias would produce for `import "..." as m;`.
+func m__priority(int x): str {
+    return "alias-path";
+}
+
+func priority(int self, int x): str {
+    return "method-path";
+}
+
+// ----- test bodies -----
+
+func method_call_single_arg() {
+    json speaker = { "title": "Tulpar" };
+    str msg = speaker.greet("Ali");
+    assert_eq_str("Tulpar: Merhaba Ali!", msg);
+}
+
+func method_call_no_extra_args() {
+    json rect = { "w": 4, "h": 5 };
+    int a = rect.area();
+    assert_eq_int(20, a);
+}
+
+func free_function_form_still_works() {
+    json speaker = { "title": "Tulpar" };
+    str msg = greet(speaker, "Veli");
+    assert_eq_str("Tulpar: Merhaba Veli!", msg);
+}
+
+func alias_wins_over_method() {
+    int m = 42;
+    str result = m.priority(10);
+    assert_eq_str("alias-path", result);
+}
+
+// ----- registry -----
+
+test("method call on json — single arg", "method_call_single_arg");
+test("method call on json — no extra args", "method_call_no_extra_args");
+test("free-function form still works (parser unchanged)", "free_function_form_still_works");
+test("alias path wins when both resolutions are valid", "alias_wins_over_method");

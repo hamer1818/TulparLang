@@ -1,0 +1,31 @@
+// Plan 04 PR6 — typed struct sum benchmark (Tulpar AOT struct path).
+// Native LLVM struct alloca + alan-alan GEP+load/store; mevcut boxed
+// `vm_get_element` / `vm_set_element` cagrilari atlatiliyor. LLVM O3
+// cogu durumda struct'i tamamen scalarize ediyor.
+//
+// `struct_sum_boxed.tpr` ile birebir ayni hesaplama; tek fark her iki
+// dosyanin kullandigi alan erisim mekanizmasi (typed GEP vs boxed
+// runtime helper). Iki dosyayi top-level'de tutuyoruz, cunku top-level
+// LLVM main'e inip ayni init overhead'ine sahip oluyor — boylece iki
+// path adil sartlarda olculuyor.
+
+struct V3 {
+    int x;
+    int y;
+    int z;
+}
+
+V3 acc = { x: 0, y: 0, z: 0 };
+int n = toInt(env("TULPAR_BENCH_N"));
+if (n <= 0) {
+    n = 10000000;
+}
+int i = 0;
+while (i < n) {
+    acc.x = acc.x + i;
+    acc.y = acc.y + i * 2;
+    acc.z = acc.z + i * 3;
+    i = i + 1;
+}
+
+print(acc.x + acc.y + acc.z);

@@ -1,0 +1,55 @@
+// TulparLang API Server Example
+// Simple inline HTTP server (no function calls)
+
+print("=== Simple HTTP Server ===");
+print("");
+
+// Start HTTP server
+int server = socket_server("127.0.0.1", 8080);
+
+if (server < 0) {
+    print("ERROR: Failed to start server!");
+} else {
+    print("Server listening on http://127.0.0.1:8080");
+    print("Press Ctrl+C to stop");
+    print("");
+    
+    int request_count = 0;
+    
+    while (true) {
+        int client = socket_accept(server);
+        
+        if (client >= 0) {
+            request_count = request_count + 1;
+            print("[" + toString(request_count) + "] Client connected");
+            
+            // Receive request
+            str raw = socket_receive(client, 4096);
+            
+            // Parse first line
+            array lines = split(raw, "\r\n");
+            str first_line = "";
+            if (length(lines) > 0) {
+                first_line = lines[0];
+            }
+            print("  Request: " + first_line);
+            
+            // Build response body
+            str body = "{\"message\": \"Hello from Tulpar!\"}";
+            int bodyLen = length(body);
+            
+            // Build HTTP response - single concatenation to avoid re-assignment bug
+            str response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + toString(bodyLen) + "\r\nConnection: close\r\n\r\n" + body;
+            
+            print("  Body: " + body);
+            print("  Response length: " + toString(length(response)));
+            
+            // Send response
+            socket_send(client, response);
+            
+            // Close connection
+            socket_close(client);
+            print("  Done");
+        }
+    }
+}

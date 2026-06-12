@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 b86e4250e426c3e6afa6fc3075d8f3d5c2562576 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778536230 +0300	branch: Created from HEAD
+b86e4250e426c3e6afa6fc3075d8f3d5c2562576 043e81ddabf76eaf093af82f4b74179a71faf7ad Hamza ORTATEPE <hortatepe2002@gmail.com> 1778536595 +0300	commit: ci: speed up workflows — concurrency cancel, apt+brew cache, fewer bench reps

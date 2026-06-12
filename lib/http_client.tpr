@@ -1,0 +1,66 @@
+// ============================================
+// Tulpar HTTP Client (outbound)
+// ============================================
+//
+// Thin wrappers over the native `http_request(method, url, body)`
+// builtin. The builtin handles URL parsing, DNS, connect, send, recv,
+// and response parsing. These helpers exist so user code can write
+//
+//     json r = http_get("http://api/users/1");
+//     if (r["ok"]) { print(r["body"]); }
+//
+// without remembering the builtin's positional contract.
+//
+// Limitations (current):
+//   * No HTTPS — `https://` URLs return `{ok:0, error:"…"}`.
+//   * No redirects, no chunked encoding, no client-side keep-alive.
+//   * Response body is a raw string; use fromJson() to parse.
+// ============================================
+
+func http_get(str url) {
+    return http_request("GET", url, "");
+}
+
+func http_post(str url, str body) {
+    return http_request("POST", url, body);
+}
+
+func http_put(str url, str body) {
+    return http_request("PUT", url, body);
+}
+
+func http_delete(str url) {
+    return http_request("DELETE", url, "");
+}
+
+// Convenience: http_get_json / http_post_json — response.body is parsed
+// as JSON when the request succeeded. On failure returns the raw error
+// envelope so callers can do `r["ok"]` checks uniformly.
+func http_get_json(str url) {
+    json r = http_get(url);
+    if (r["ok"]) {
+        json out = {
+            "ok": 1,
+            "status": r["status"],
+            "headers": r["headers"],
+            "data": fromJson(r["body"])
+        };
+        return out;
+    }
+    return r;
+}
+
+func http_post_json(str url, json data) {
+    str body = toJson(data);
+    json r = http_post(url, body);
+    if (r["ok"]) {
+        json out = {
+            "ok": 1,
+            "status": r["status"],
+            "headers": r["headers"],
+            "data": fromJson(r["body"])
+        };
+        return out;
+    }
+    return r;
+}

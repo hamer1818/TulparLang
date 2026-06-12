@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 b2f2260ee74e6ec4e571f4ad9abf07e90b146692 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778619544 +0300	branch: Created from HEAD
+b2f2260ee74e6ec4e571f4ad9abf07e90b146692 75e3e67167acc91d62cfb3d531d9e9b0e0ac5f0e Hamza ORTATEPE <hortatepe2002@gmail.com> 1778620166 +0300	commit: feat: TLS client trust-store + sha1/base64 + WebSocket upgrade + SSE helpers

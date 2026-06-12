@@ -1,0 +1,24 @@
+import "test";
+
+func run_basic_lambda() {
+    // IIFE / direct call of lambda
+    int result = ((int a, int b) => a + b)(3, 4);
+    assert_eq_int(result, 7);
+}
+
+func run_block_lambda() {
+    int r2 = ((int x) => { return x * x; })(5);
+    assert_eq_int(r2, 25);
+}
+
+func run_lambda_var() {
+    // Store in variable and call it
+    var fn = (int x, int y) => x - y;
+    assert_eq_int(fn(10, 4), 6);
+}
+
+print("=== basic closure / lambda tests ===");
+test("basic lambda returns value", "run_basic_lambda");
+test("lambda with block body", "run_block_lambda");
+test("lambda stored in variable", "run_lambda_var");
+test_summary();

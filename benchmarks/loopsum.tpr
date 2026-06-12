@@ -1,0 +1,23 @@
+// Typed AOT path: explicit `int` types + `: int` return enable native LLVM
+// codegen (i64 alloca + direct LLVM add/cmp, no vm_binary_op).
+//
+// `n` reads from the TULPAR_BENCH_N env var so LLVM's SCEV / loop-idiom
+// passes can't fold the entire loop into its closed-form result
+// (`n*(n-1)/2`) at O3. Without this opaque-input trick the benchmark
+// would measure printf, not the loop. Defaults to 10M when unset so
+// the script runs without env setup.
+func compute(int n): int {
+    int total = 0;
+    int i = 0;
+    while (i < n) {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+
+int n = toInt(env("TULPAR_BENCH_N"));
+if (n <= 0) {
+    n = 10000000;
+}
+print(compute(n));

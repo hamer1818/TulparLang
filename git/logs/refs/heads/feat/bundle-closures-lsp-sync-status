@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 4d66c1a9fbfe3b0b63ac1baa04a21a8d1250950f Hamza ORTATEPE <hortatepe2002@gmail.com> 1778615321 +0300	branch: Created from HEAD
+4d66c1a9fbfe3b0b63ac1baa04a21a8d1250950f 7121724ce398e0552298db2a56973b21f730d560 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778615946 +0300	commit: feat: closures parser scaffold + LSP incremental sync + STATUS sweep

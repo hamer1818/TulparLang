@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 a09bc188ec76380fa7ca7063e5853a5e83da187a Hamza ORTATEPE <hortatepe2002@gmail.com> 1778448470 +0300	branch: Created from HEAD
+a09bc188ec76380fa7ca7063e5853a5e83da187a e56268914181f967196e7e80553465288ea38e9b Hamza ORTATEPE <hortatepe2002@gmail.com> 1778448519 +0300	commit: chore: drop scratch/stale files and ignore Claude + wasm build dir

@@ -1,0 +1,1233 @@
+// ============================================
+// Tulpar Wings - Fast API Framework
+// "Give your API wings!" 🪶
+//
+// HTTP request parsing and response building are delegated to native
+// runtime builtins (`http_parse_request`, `http_create_response`,
+// `http_status_text`) so the hot path runs in C++ rather than the
+// interpreter. Handlers receive the parsed request via the `_request`
+// global (with .method, .path, .raw_path, .query, .headers, .body fields).
+// ============================================
+
+array _routes = [];
+json _request = {};
+
+// Default response headers shared across the whole server lifetime.
+// Pulled out of the per-connection block so the arena-reset path
+// (`arena_save`/`arena_restore` in listen()) can roll a request's
+// allocations back without freeing this object.
+json _default_headers = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization"
+};
+
+// Server start time + per-request counters. Wings updates these on
+// every request; `metrics_handler` reads them. Keep them tiny — adding
+// a histogram would require either runtime support or a Tulpar-side
+// reduction over an array, both bigger than warranted today.
+//
+// The four `_wings_requests_*` counters are race-free under parallel
+// `listen_async` workers: the AOT codegen recognises the
+// `name = name + delta` pattern against this whitelist and lowers it
+// to `atomicrmw add monotonic` so concurrent threads cannot drop
+// increments. `_wings_started_at` is written exactly once at startup
+// and so doesn't need atomic treatment.
+int _wings_started_at = 0;
+int _wings_requests_total = 0;
+int _wings_requests_2xx = 0;
+int _wings_requests_4xx = 0;
+int _wings_requests_5xx = 0;
+
+// Per-request body cap. The native `http_recv_request` helper grows
+// its receive buffer dynamically up to this ceiling, so values up to
+// ~hundreds of MB are reachable without paying for memory you don't
+// use on small requests. 16 MiB is a reasonable default for API
+// uploads (package tarballs, multi-record JSON imports). Override
+// via `TULPAR_HTTP_MAX_BODY=<bytes>` for stricter or looser caps.
+int _wings_max_body_bytes = 16777216;
+
+// HTTP_QUIET cache. The per-request access log lookup used to call
+// `env("TULPAR_HTTP_QUIET")` on every served request — one getenv
+// syscall + one string allocation per request, in three serve loops
+// (sync, async, evented). Env vars don't change after process start,
+// so we snapshot the truthiness once in `_wings_apply_env_config` and
+// the serve loops read the int directly.
+int _wings_quiet = 0;
+
+// Pulls config overrides from the environment. Today honours
+// `TULPAR_HTTP_MAX_BODY` (bytes) and `TULPAR_HTTP_QUIET` (any
+// non-empty value silences the per-request access log). Future
+// env-based knobs land here too so listen()/listen_async() stay clean.
+// Below 1 KiB is rejected — the static recv buffer is sized to fit at
+// least the header block, anything smaller would just churn rejections.
+func _wings_apply_env_config() {
+    str cap_str = env("TULPAR_HTTP_MAX_BODY");
+    if (length(cap_str) > 0) {
+        int parsed = toInt(cap_str);
+        if (parsed >= 1024) {
+            _wings_max_body_bytes = parsed;
+        }
+    }
+    // Snapshot HTTP_QUIET once so the per-request access log check is
+    // a single int comparison instead of a getenv syscall + length()
+    // round-trip on every served request.
+    if (length(env("TULPAR_HTTP_QUIET")) > 0) {
+        _wings_quiet = 1;
+    }
+}
+
+// Bind address used by every listener variant. Env-driven, default
+// `0.0.0.0` so containerised / production deployments work without
+// configuration. PR #141 had this hardcoded to `127.0.0.1` to keep
+// Windows Firewall from prompting on every fresh dev binary, but that
+// broke every Docker deploy of wings: inside the container 127.0.0.1
+// is the *container's* own loopback, not the host's, so
+// `docker run -p 8080:8080` forwards traffic to the container which
+// never reaches a 127.0.0.1-only listener — the host sees connection
+// refused / 502 Bad Gateway through any reverse proxy.
+//
+// Local-only callers (dev loops, smoke tests, benchmarks) set
+// `TULPAR_WINGS_HOST=127.0.0.1` to keep the firewall-prompt-free
+// path; production / containers leave it unset for the safe default.
+func _wings_bind_host() {
+    str h = env("TULPAR_WINGS_HOST");
+    if (length(h) == 0) {
+        return "0.0.0.0";
+    }
+    return h;
+}
+
+// Cache table for `cached_get`. Indexed by route position in `_routes`
+// — kept the same length as the routes array, so lookup is a plain
+// O(1) array read. Entries default to "" (uncached); the first
+// request to a cached route writes the wire bytes here and every
+// subsequent request short-circuits to a `socket_send` of these bytes.
+//
+// Why parallel array instead of a json-map keyed by index-string:
+// json map lookup is a linear key scan, which would become the
+// per-request cache lookup cost itself. Array index access is O(1).
+array _wings_cache_wires = [];
+
+// ----- Route registration --------------------------------------------------
+// Every registration pushes a `""` placeholder to `_wings_cache_wires`
+// at the same time so the parallel-index invariant holds — even for
+// non-cached routes, where the placeholder is simply never written.
+func get(str path, str handler) {
+    push(_routes, {"method": "GET", "path": path, "handler": handler});
+    push(_wings_cache_wires, "");
+}
+
+func post(str path, str handler) {
+    push(_routes, {"method": "POST", "path": path, "handler": handler});
+    push(_wings_cache_wires, "");
+}
+
+func put(str path, str handler) {
+    push(_routes, {"method": "PUT", "path": path, "handler": handler});
+    push(_wings_cache_wires, "");
+}
+
+func del(str path, str handler) {
+    push(_routes, {"method": "DELETE", "path": path, "handler": handler});
+    push(_wings_cache_wires, "");
+}
+
+// Register a GET route whose response is cached at the wire-byte level
+// after the first hit. The handler is called *once*, the resulting
+// wire bytes (full HTTP response including headers + body) are stored
+// in `_wings_cache_wires[idx]`, and every subsequent request is served
+// from the cache via a single socket_send — skipping handler dispatch,
+// toJson, and response framing entirely. Per-request latency on the
+// cached path is effectively one syscall.
+//
+// Use when the handler's output is a pure function of (method, path)
+// — i.e. doesn't depend on `_request`, query params, cookies, body,
+// or wall-clock time. Examples that fit: static JSON payloads, API
+// version banners, config dumps that change only at restart. Examples
+// that DON'T fit: anything reading `timestamp()` / `now_iso8601()`
+// (the cache freezes that value), and anything that mutates
+// per-request state.
+//
+// No invalidation API yet — re-cache happens at process restart.
+func cached_get(str path, str handler) {
+    push(_routes, {"method": "GET", "path": path, "handler": handler, "cached": 1});
+    push(_wings_cache_wires, "");
+}
+
+// ----- Internals -----------------------------------------------------------
+// Pull `Cookie:` out of the parsed headers object and run it through the
+// native `parse_cookies` builtin. Returns an empty object when the
+// header is absent or empty. Tries both casings — `http_parse_request`
+// preserves wire case, but most browsers send `Cookie` while curl
+// defaults to `cookie`.
+//
+// Public: handlers that want cookies call this themselves with
+// `_request` as the argument:
+//   json cookies = wings_cookies(_request);
+//   str sid = cookies["sid"];
+//
+// We automatically populate `_request["cookies"]` from the dispatcher
+// for all requests. The historical Linux AOT codegen miscompile
+// (where assigning a function-call's object return into a global subscript
+// corrupted the object due to LocalExec TLS vs PIE layout incompatibility)
+// has been resolved by switching the backend to InitialExec TLS.
+func wings_cookies(json req) {
+    json headers = req["headers"];
+    str raw = headers["Cookie"];
+    if (length(raw) == 0) {
+        raw = headers["cookie"];
+    }
+    if (length(raw) == 0) {
+        return {};
+    }
+    return parse_cookies(raw);
+}
+
+// Linear scan over registered routes. Tulpar arrays of small dicts are tight
+// enough that this is dominated by string compare cost; for hundreds of
+// routes a hash table would help, but we avoid the dependency for now.
+func _find_route(str method, str path) {
+    for (int i = 0; i < length(_routes); i++) {
+        json r = _routes[i];
+        if (r["method"] == method && r["path"] == path) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// ----- Path parameters ----------------------------------------------------
+//
+// Routes can include `:name` placeholders that match any single
+// non-`/` segment, e.g. `get("/v1/packages/:name", "show")` matches
+// `/v1/packages/demo` and exposes `_request["params"]["name"] == "demo"`.
+// Multiple params per route work too: `/users/:uid/posts/:pid`.
+//
+// Two-pass dispatch:
+//   1. Exact match (`_find_route`) — O(routes), no param overhead, the
+//      hot path that 99% of static routes take.
+//   2. Pattern match (`_find_route_with_params`) — only consulted when
+//      the exact lookup misses AND the route's path contains a `:`.
+//
+// Falling back per-request keeps the param-free routes free of any
+// extra string ops; param routes pay for split + per-segment compare,
+// which on a typical 3-segment URL is still microseconds.
+
+func _wings_split_path(str path) {
+    // Drop the leading `/` so split doesn't produce an empty first
+    // segment. Trailing `/` is preserved as an empty segment, which
+    // makes `/foo/` ≠ `/foo` — intentional, mirrors most routers.
+    str trimmed = path;
+    if (length(trimmed) > 0 && substring(trimmed, 0, 1) == "/") {
+        trimmed = substring(trimmed, 1, length(trimmed));
+    }
+    return split(trimmed, "/");
+}
+
+// Match a `:name`-bearing pattern against an actual path. Returns
+// {"match": <bool>, "params": <json>} — params is empty when match is
+// false. The two-key shape lets the caller tell "no match" from
+// "matched with zero params" without a sentinel value.
+func _wings_match_pattern(str pattern, str path) {
+    array p_segs = _wings_split_path(pattern);
+    array u_segs = _wings_split_path(path);
+    if (length(p_segs) != length(u_segs)) {
+        return {"match": false, "params": {}};
+    }
+    json params = {};
+    for (int i = 0; i < length(p_segs); i++) {
+        str ps = p_segs[i];
+        str us = u_segs[i];
+        if (length(ps) > 0 && substring(ps, 0, 1) == ":") {
+            // Capture: strip the leading `:`, store value under that name.
+            str pname = substring(ps, 1, length(ps));
+            params[pname] = us;
+        } else {
+            if (ps != us) {
+                return {"match": false, "params": {}};
+            }
+        }
+    }
+    return {"match": true, "params": params};
+}
+
+// Extended dispatch lookup that handles both exact and pattern routes.
+// Returns {"index": <int>, "params": <json>} where index < 0 means no
+// match. Populates _request["params"] downstream so handlers can read
+// captured values via `_request["params"]["name"]`.
+//
+// The native `wings_find_route` builtin folds the exact + pattern
+// two-pass walk into a single C call — replaces N × (`r["method"]`,
+// `r["path"]`, `_wings_match_pattern` …) json hash hits with one
+// memcmp-driven segment walk per request. The Tulpar wrapper is kept
+// so user code calling `_find_route_with_params` directly still
+// resolves, but the wings serve path now incurs a single native call
+// per request.
+func _find_route_with_params(str method, str path) {
+    return wings_find_route(_routes, method, path);
+}
+
+// Raw-response envelope detection. Handlers that need to bypass the
+// default JSON serialisation (e.g. registry bytes, Prometheus
+// exposition, plain-text health probes) return:
+//   {"_raw": "<body>", "_content_type": "text/plain; charset=utf-8"}
+// `_content_type` is optional and defaults to text/plain. Anything else
+// in the dict is ignored — `_raw` is an all-or-nothing escape hatch.
+func _wings_has_raw(json result) {
+    array rk = keys(result);
+    for (int i = 0; i < length(rk); i++) {
+        if (rk[i] == "_raw") {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Optional status-code envelope. Handlers that want to return a
+// non-200 status (`401` for auth failures, `404`s the handler computes
+// itself, `409` for conflicts, `201` for creates, ...) include
+// `"_status": <int>` in the response dict:
+//
+//   return {"error": "conflict", "_status": 409};
+//   return {"ok": true, "_status": 201};
+//
+// Any positive integer is honored verbatim. The field is left in the
+// JSON body — handlers that want it stripped should not include it
+// (or should structure their schema differently). Falls back to the
+// caller-supplied default (200 for handler hits, 404 for no-match)
+// when absent or not an int. Both `_raw` and JSON paths see this.
+func _wings_status_or(json result, int fallback) {
+    array rk = keys(result);
+    for (int i = 0; i < length(rk); i++) {
+        if (rk[i] == "_status") {
+            int s = result["_status"];
+            if (s > 0) {
+                return s;
+            }
+            return fallback;
+        }
+    }
+    return fallback;
+}
+
+// Resolve a matched route to wire-byte response. This is the single
+// dispatch point used by every serve loop (sync, async, evented) so
+// the cache fast-path lives in one place instead of being duplicated
+// across three serve sites.
+//
+// Cache fast path (only for routes registered via `cached_get`):
+//   1. read `_wings_cache_wires[route_idx]`
+//   2. if non-empty, this route's response was built on a prior
+//      request — return the wire bytes directly, skipping the
+//      handler call, toJson serialisation, and HTTP framing.
+//
+// Slow path (every uncached route, or first hit on a cached one):
+//   1. dispatch the handler via `call()`
+//   2. classify status into 2xx/4xx/5xx buckets for /metrics
+//   3. build the wire response
+//   4. on cached routes, store the wire bytes for future hits
+//
+// `_wings_requests_total` is always incremented exactly once per
+// resolved request, regardless of cache hit/miss. Status bucketing
+// on cache hits assumes 2xx — only success responses get cached
+// (404 / 5xx bodies aren't worth pinning and would mask transient
+// upstream failures).
+func _wings_dispatch_cached(int route_idx, int keep) {
+    json route = _routes[route_idx];
+
+    if (route["cached"] == 1) {
+        str cached = _wings_cache_wires[route_idx];
+        if (length(cached) > 0) {
+            _wings_requests_total = _wings_requests_total + 1;
+            _wings_requests_2xx = _wings_requests_2xx + 1;
+            return cached;
+        }
+    }
+
+    json result = call(route["handler"]);
+    _wings_requests_total = _wings_requests_total + 1;
+    // Streaming handlers (SSE / WS upgrade / long-poll) signal
+    // "I've already written to the socket myself; don't try to
+    // build a response envelope" by returning `{"_stream": 1}`.
+    // The serve loop sees the empty-string response and skips its
+    // own socket_send + forces the connection closed (keep-alive
+    // doesn't make sense after a stream — the handler picked the
+    // moment the connection ends). Status is counted as 2xx; the
+    // handler did its job successfully.
+    int is_stream = result["_stream"];
+    if (is_stream == 1) {
+        _wings_requests_2xx = _wings_requests_2xx + 1;
+        return "";
+    }
+    int eff_status = _wings_status_or(result, 200);
+    if (eff_status >= 500) {
+        _wings_requests_5xx = _wings_requests_5xx + 1;
+    } else if (eff_status >= 400) {
+        _wings_requests_4xx = _wings_requests_4xx + 1;
+    } else {
+        _wings_requests_2xx = _wings_requests_2xx + 1;
+    }
+
+    str response = _wings_build_response(result, keep);
+
+    // First-hit cache population. Only 2xx responses get pinned —
+    // pinning a 4xx/5xx would freeze a transient failure into the
+    // hot path. `string_pin` copies the response out of the
+    // per-request arena into permanent (malloc'd) storage so the
+    // subsequent `arena_restore` doesn't reclaim the bytes the cache
+    // points at. The keep flag is baked into the cached bytes; that's
+    // fine because Connection is advisory and a close-requesting
+    // client closes regardless of the server's hint.
+    if (route["cached"] == 1 && eff_status < 400) {
+        _wings_cache_wires[route_idx] = string_pin(response);
+    }
+
+    return response;
+}
+
+// Build the wire response for a dispatched handler. The native
+// `wings_build_response` builtin folds the envelope check + JSON
+// serialisation + response framing into a single C call, replacing
+// three Tulpar function hops per request. Behaviour is identical to
+// the prior all-Tulpar implementation:
+//   * `_status`       overrides the 200 default
+//   * `_raw`          uses the string verbatim as body (no JSON)
+//   * `_content_type` Content-Type when `_raw` is set (else text/plain)
+//   * otherwise       body = toJson(result), Content-Type = application/json
+// The Tulpar wrapper is kept so library consumers calling
+// `_wings_build_response` directly (uncommon, but legal) still resolve.
+func _wings_build_response(json result, int keep) {
+    return wings_build_response(result, _default_headers, keep);
+}
+
+func _wings_build_404(str path, int keep) {
+    str body = "{\"error\":\"" + http_status_text(404) +
+        "\",\"path\":\"" + path + "\"}";
+    return http_create_response(404, "application/json", body,
+        _default_headers, keep);
+}
+
+// HTTP HEAD support — RFC 9110 §9.3.2: "The server SHOULD send the
+// same header fields in response to a HEAD request as it would have
+// sent if the request had been a GET". We build the GET response
+// normally (so Content-Length matches what GET would return) and then
+// truncate everything after the headers / body separator. This also
+// keeps healthcheck probes, uptime monitors and curl -I working
+// without per-route HEAD handler registration.
+func _wings_strip_response_body(str response) {
+    int sep = indexOf(response, "\r\n\r\n");
+    if (sep < 0) {
+        return response;
+    }
+    return substring(response, 0, sep + 4);
+}
+
+// ----- Built-in production helpers -----------------------------------------
+//
+// These are auto-registered when listen() is called: the user's app
+// gets `/healthz` and `/metrics` for free, matching the de-facto k8s
+// convention. Handlers can be replaced by registering the same paths
+// before calling listen().
+
+func _wings_healthz() {
+    return {
+        "status": "ok",
+        "uptime_s": timestamp() - _wings_started_at,
+        "now": now_iso8601()
+    };
+}
+
+func _wings_metrics() {
+    // Auto-detect format=prom in the query string. Routing on the query
+    // string is the cheapest way to expose both shapes from the same path
+    // until full content-negotiation lands.
+    json q = _request["query"];
+    if (q) {
+        str fmt = q["format"];
+        if (fmt == "prom") {
+            // Raw envelope: the dispatcher serves `_raw` as the body
+            // verbatim with `_content_type` as the response Content-Type.
+            // Prom scrapers expect text/plain; version=0.0.4 explicitly.
+            return {
+                "_raw": wings_metrics_prom(),
+                "_content_type": "text/plain; version=0.0.4; charset=utf-8"
+            };
+        }
+    }
+    return {
+        "uptime_s": timestamp() - _wings_started_at,
+        "requests_total": _wings_requests_total,
+        "requests_2xx": _wings_requests_2xx,
+        "requests_4xx": _wings_requests_4xx,
+        "requests_5xx": _wings_requests_5xx,
+        "routes": length(_routes)
+    };
+}
+
+// Prometheus text exposition format. Same numbers, different shape — a
+// scraper can hit `/metrics?format=prom` (or set `Accept: text/plain`,
+// but Wings doesn't have content-negotiation yet so we go with the
+// query-string switch).
+//
+// Format:
+//   # HELP <name> <doc>
+//   # TYPE <name> <gauge|counter>
+//   <name> <value>
+//
+// Returned as a plain string so the user can wrap it in a `text/plain`
+// response. We don't auto-register the prom handler — apps that want
+// it call `wings_metrics_prom()` from their own /metrics handler.
+func wings_metrics_prom() {
+    int uptime = timestamp() - _wings_started_at;
+    str s = "# HELP tulpar_uptime_seconds Wings server uptime\n";
+    s = s + "# TYPE tulpar_uptime_seconds gauge\n";
+    s = s + "tulpar_uptime_seconds " + toString(uptime) + "\n";
+    s = s + "# HELP tulpar_requests_total HTTP requests served\n";
+    s = s + "# TYPE tulpar_requests_total counter\n";
+    s = s + "tulpar_requests_total " + toString(_wings_requests_total) + "\n";
+    s = s + "# HELP tulpar_requests_by_class HTTP requests grouped by status class\n";
+    s = s + "# TYPE tulpar_requests_by_class counter\n";
+    s = s + "tulpar_requests_by_class{class=\"2xx\"} " + toString(_wings_requests_2xx) + "\n";
+    s = s + "tulpar_requests_by_class{class=\"4xx\"} " + toString(_wings_requests_4xx) + "\n";
+    s = s + "tulpar_requests_by_class{class=\"5xx\"} " + toString(_wings_requests_5xx) + "\n";
+    s = s + "# HELP tulpar_routes_total Number of registered HTTP routes\n";
+    s = s + "# TYPE tulpar_routes_total gauge\n";
+    s = s + "tulpar_routes_total " + toString(length(_routes)) + "\n";
+    return s;
+}
+
+// ----- Server-Sent Events (SSE) --------------------------------------------
+//
+// SSE is the half-duplex cousin of WebSockets: a long-lived HTTP/1.1
+// response that streams `data: …\n\n` frames over a `text/event-stream`
+// connection. The browser's `EventSource` API consumes them with one
+// line of JS. Wings exposes two pieces:
+//
+//   1. `wings_sse_headers()` — the response status-line + headers
+//      block. Send it once, immediately after accepting the request,
+//      to upgrade the response to a stream.
+//   2. `wings_sse_event(name, data)` — formats one event frame. Pass
+//      an empty string for `name` to omit the `event:` line (the
+//      browser will fire the default `message` event).
+//
+// Drive the stream by writing both into the connection's fd with
+// `socket_send`. The handler should NOT return a normal envelope —
+// wings can't both stream and build a single response, so SSE handlers
+// `socket_close()` the fd themselves when the stream ends.
+func wings_sse_headers() {
+    str s = "HTTP/1.1 200 OK\r\n";
+    s = s + "Content-Type: text/event-stream\r\n";
+    s = s + "Cache-Control: no-cache\r\n";
+    s = s + "Connection: keep-alive\r\n";
+    s = s + "Access-Control-Allow-Origin: *\r\n";
+    s = s + "\r\n";
+    return s;
+}
+
+func wings_sse_event(str name, str data) {
+    str s = "";
+    if (length(name) > 0) {
+        s = s + "event: " + name + "\r\n";
+    }
+    // Multiline payloads need every line prefixed with `data: `.
+    // For the common single-line JSON case, this is just one prefix
+    // and one trailing blank line.
+    s = s + "data: " + data + "\r\n\r\n";
+    return s;
+}
+
+// ----- WebSocket frame I/O helpers -----------------------------------------
+//
+// Three opcode constants + two send wrappers. The full
+// `wings_ws_send_frame(fd, opcode, payload)` is still available for
+// binary frames, ping/pong, etc.; these wrappers cover the 95% case
+// (send text, send close, receive — and pong any ping we get).
+
+int WS_OPCODE_TEXT   = 1;
+int WS_OPCODE_BINARY = 2;
+int WS_OPCODE_CLOSE  = 8;
+int WS_OPCODE_PING   = 9;
+int WS_OPCODE_PONG   = 10;
+
+func wings_ws_send_text(int fd, str payload) {
+    return wings_ws_send_frame(fd, WS_OPCODE_TEXT, payload);
+}
+
+func wings_ws_send_close(int fd) {
+    return wings_ws_send_frame(fd, WS_OPCODE_CLOSE, "");
+}
+
+func wings_ws_send_pong(int fd, str payload) {
+    return wings_ws_send_frame(fd, WS_OPCODE_PONG, payload);
+}
+
+// ----- WebSocket upgrade helper --------------------------------------------
+//
+// `wings_ws_upgrade(req)` builds the 101 Switching Protocols response a
+// WebSocket client expects after the GET-with-Upgrade-header handshake.
+// The hard part — deriving Sec-WebSocket-Accept from the client's key
+// per RFC 6455 §4.2.2 — is done in the `wings_ws_accept_key` native
+// (sha1 + base64). The rest is plain header assembly.
+//
+// Returns the upgrade response string, ready to `socket_send`. The
+// handler then owns the fd and can read/write frames at the socket
+// level. Frame masking + opcode handling are left to user code today
+// (WebSocket frame structure is documented enough that a 30-line
+// Tulpar implementation is straightforward).
+func wings_ws_upgrade(json req) {
+    json hdrs = req["headers"];
+    str key = "";
+    if (hdrs) {
+        key = hdrs["Sec-WebSocket-Key"];
+        if (length(key) == 0) {
+            key = hdrs["sec-websocket-key"];
+        }
+    }
+    if (length(key) == 0) {
+        return "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
+    }
+    str accept_key = wings_ws_accept_key(key);
+    str s = "HTTP/1.1 101 Switching Protocols\r\n";
+    s = s + "Upgrade: websocket\r\n";
+    s = s + "Connection: Upgrade\r\n";
+    s = s + "Sec-WebSocket-Accept: " + accept_key + "\r\n";
+    s = s + "\r\n";
+    return s;
+}
+
+// Structured access log entry — call from any handler that wants its
+// own log line in the same format as Wings' built-in access log. The
+// shape mirrors common JSON log conventions (`@timestamp`, `level`,
+// `msg`) so log aggregators don't need a custom parser.
+func log_info(str msg) {
+    print(toJson({
+        "@timestamp": now_iso8601(),
+        "level": "info",
+        "msg": msg
+    }));
+}
+
+func log_error(str msg) {
+    print(toJson({
+        "@timestamp": now_iso8601(),
+        "level": "error",
+        "msg": msg
+    }));
+}
+
+// ----- Multi-threaded request serving --------------------------------------
+//
+// `listen_async(port)` accepts on the main thread and spawns a detached
+// worker per accepted TCP connection. Each worker runs the same
+// keep-alive request loop as the synchronous `listen()` and dispatches
+// its handler **without any cross-worker lock** — recv, parse,
+// `_request = req`, the handler call, response build and send all run
+// in parallel across worker threads.
+//
+// What makes this race-free:
+//   * `_request` is marked thread-local at the LLVM level
+//     (`global_needs_tls()` in src/aot/llvm_backend.cpp), so each
+//     worker mutates its own copy. A handler reading `_request["body"]`
+//     sees the request that *its* worker just stored, never the one a
+//     sibling worker is mid-update on.
+//   * `_routes` and `_default_headers` are write-once-at-startup and
+//     read-only during request serving.
+//   * Counter increments (`_wings_requests_total`, `_2xx`, etc.) are
+//     deliberately unlocked — see the comment on their declaration.
+//
+// VM path: `thread_create` in the VM doesn't actually spawn an OS
+// thread (it's an inline call back into the same interpreter), so the
+// VM serves connections sequentially anyway. The lock-free design is
+// safe there too — there are simply no concurrent writers to race on.
+func _wings_serve_connection(json client_arg) {
+    int client = client_arg;
+    int wm = arena_save();
+
+    while (true) {
+        str raw = http_recv_request(client, _wings_max_body_bytes);
+        if (length(raw) == 0) {
+            break;
+        }
+        json req = http_parse_request(raw);
+        int keep = http_should_keepalive(req);
+
+        _request = req;
+        // Surface the connection fd to streaming handlers via a
+        // dedicated thread-local rather than `_request[k] = client`.
+        // The latter shape triggers the (still-open) wings cookies
+        // miscompile: a single `_request[k] = ...` followed by
+        // another subscript write later corrupts the object.
+        wings_set_current_fd(client);
+        str method = req["method"];
+        str path = req["path"];
+        if (_wings_quiet == 0) {
+            print("  " + method + " " + path);
+        }
+        // CORS preflight short-circuit. Browsers send `OPTIONS` before
+        // any "non-simple" request (custom headers like `Authorization`,
+        // PUT/DELETE, JSON body) and require a 2xx response WITH the
+        // Access-Control-Allow-* headers attached, or they reject the
+        // real request as "preflight failed". We don't want every route
+        // to register a manual OPTIONS handler, so wings answers any
+        // preflight with 204 + the default CORS header set.
+        //
+        // Counted as a 2xx (not skipped from /metrics) so the operator
+        // can see preflight traffic if it ever spikes — useful when a
+        // browser client is hammering the API in a tight loop.
+        bool is_options = (method == "OPTIONS");
+        if (is_options) {
+            _request["params"] = {};
+            _request["cookies"] = {};
+            _wings_requests_total = _wings_requests_total + 1;
+            _wings_requests_2xx = _wings_requests_2xx + 1;
+            str preflight = http_create_response(
+                204, "text/plain; charset=utf-8", "", _default_headers, keep);
+            socket_send(client, preflight);
+            arena_restore(wm);
+            if (keep == 0) {
+                break;
+            }
+            continue;
+        }
+
+        // Two-pass dispatch (exact + pattern). Returns
+        // {"index": <int>, "params": <json>}; index < 0 means no match.
+        json route_match = _find_route_with_params(method, path);
+        int route_idx = route_match["index"];
+        // HEAD fallback: if no match for HEAD, retry the lookup as GET
+        // (still pattern-aware) and strip the body before sending.
+        // Standard HTTP behaviour expected by uptime probes / healthcheckers.
+        bool is_head = false;
+        if (route_idx < 0 && method == "HEAD") {
+            route_match = _find_route_with_params("GET", path);
+            route_idx = route_match["index"];
+            is_head = true;
+        }
+        // Captured path params land in _request["params"] for the
+        // handler to read. Empty json when route had no `:name` segments.
+        _request["params"] = route_match["params"];
+        _request["cookies"] = wings_cookies(req);
+        str response = "";
+        if (route_idx >= 0) {
+            // Cache lookup + handler dispatch + counter bump + response
+            // build all live in `_wings_dispatch_cached` so the
+            // sync/async/evented serve loops stay in lockstep.
+            response = _wings_dispatch_cached(route_idx, keep);
+        } else {
+            _wings_requests_total = _wings_requests_total + 1;
+            _wings_requests_4xx = _wings_requests_4xx + 1;
+            response = _wings_build_404(path, keep);
+        }
+        if (is_head) {
+            response = _wings_strip_response_body(response);
+        }
+
+        // Empty response = streaming handler already wrote to the
+        // socket and signalled `{"_stream": 1}`. Skip our send and
+        // force-close: keep-alive across a stream boundary would
+        // strand connection state.
+        if (length(response) == 0) {
+            arena_restore(wm);
+            break;
+        }
+        socket_send(client, response);
+        arena_restore(wm);
+
+        if (keep == 0) {
+            break;
+        }
+    }
+    socket_close(client);
+}
+
+// Single-step request server: receive one request on `client`, dispatch
+// the matching route, send the response, and return the keep-alive
+// flag (1 = caller should keep the fd open in the event-loop poll set,
+// 0 = caller should close it). This is the unit that `listen_evented`
+// drives once per POLLIN event — multiplexing many connections across
+// a single thread without per-connection thread overhead.
+//
+// Internally mirrors the body of `_wings_serve_connection`'s loop —
+// arena save/restore, route lookup, counter increment, response build —
+// but exits after one request instead of looping. When we add real
+// edge-triggered async I/O later, this is the function that grows a
+// state machine; today it stays blocking-per-step which is fine for
+// the typical < 64 KiB JSON request/response we see in practice.
+func _wings_serve_one_request(int client) {
+    int wm = arena_save();
+    str raw = http_recv_request(client, _wings_max_body_bytes);
+    if (length(raw) == 0) {
+        arena_restore(wm);
+        return 0;
+    }
+    json req = http_parse_request(raw);
+    int keep = http_should_keepalive(req);
+
+    _request = req;
+    wings_set_current_fd(client);
+    str method = req["method"];
+    str path = req["path"];
+    if (_wings_quiet == 0) {
+        print("  " + method + " " + path);
+    }
+    bool is_options = (method == "OPTIONS");
+    if (is_options) {
+        _request["params"] = {};
+        _request["cookies"] = {};
+        _wings_requests_total = _wings_requests_total + 1;
+        _wings_requests_2xx = _wings_requests_2xx + 1;
+        str preflight = http_create_response(
+            204, "text/plain; charset=utf-8", "", _default_headers, keep);
+        socket_send(client, preflight);
+        arena_restore(wm);
+        return keep;
+    }
+
+    json route_match = _find_route_with_params(method, path);
+    int route_idx = route_match["index"];
+    bool is_head = false;
+    if (route_idx < 0 && method == "HEAD") {
+        route_match = _find_route_with_params("GET", path);
+        route_idx = route_match["index"];
+        is_head = true;
+    }
+    _request["params"] = route_match["params"];
+    _request["cookies"] = wings_cookies(req);
+
+    str response = "";
+    if (route_idx >= 0) {
+        // Shared dispatch (cache fast-path + handler + counters + build).
+        response = _wings_dispatch_cached(route_idx, keep);
+    } else {
+        _wings_requests_total = _wings_requests_total + 1;
+        _wings_requests_4xx = _wings_requests_4xx + 1;
+        response = _wings_build_404(path, keep);
+    }
+    if (is_head) {
+        response = _wings_strip_response_body(response);
+    }
+    // Empty response from a streaming handler — see the comment in
+    // `_wings_serve_connection`. Force the caller to close by
+    // returning keep=0.
+    if (length(response) == 0) {
+        arena_restore(wm);
+        return 0;
+    }
+    socket_send(client, response);
+    arena_restore(wm);
+    return keep;
+}
+
+// Single-thread, poll()-multiplexed event loop. Cross-platform via
+// WSAPoll on Windows + POSIX poll() everywhere else. Trade-offs vs
+// the other listeners:
+//
+//   * `listen`        — sync, one connection at a time. Simplest, slow.
+//   * `listen_async`  — thread-per-connection. Best for short bursts.
+//   * `listen_pool`   — pre-spawned thread pool. Best sustained RPS.
+//   * `listen_evented`— single thread, multiplexed. Best for many idle
+//                        keep-alive conns (chat clients, dashboards) —
+//                        bounded memory, zero per-conn thread overhead.
+//
+// Blocking semantics inside `_wings_serve_one_request` keep this honest
+// for typical < 64 KiB JSON traffic; while serving conn A, conn B's
+// inbound bytes pool in the kernel buffer until B's slot fires POLLIN
+// next iteration. Real edge-triggered I/O with partial-read state
+// machines is a follow-up — not needed yet for "Python kadar kolay" goals.
+func listen_evented(int port) {
+    if (_find_route("GET", "/healthz") < 0) {
+        get("/healthz", "_wings_healthz");
+    }
+    if (_find_route("GET", "/metrics") < 0) {
+        get("/metrics", "_wings_metrics");
+    }
+    _wings_apply_env_config();
+    _wings_started_at = timestamp();
+
+    print("");
+    print("  ╔═══════════════════════════════════╗");
+    print("  ║       Tulpar Wings v2.3 (event)   ║");
+    print("  ║    Give your API wings! 🪶        ║");
+    print("  ╚═══════════════════════════════════╝");
+    print("");
+    print("  Routes:");
+    for (int i = 0; i < length(_routes); i++) {
+        json r = _routes[i];
+        print("    " + r["method"] + " " + r["path"] + " -> " + r["handler"] + "()");
+    }
+    print("");
+    print("  Server: http://127.0.0.1:" + toString(port) + " (single-thread event loop)");
+    print("  Press Ctrl+C to stop");
+    print("");
+
+    int server = socket_server(_wings_bind_host(), port);
+    if (server < 0) {
+        print("ERROR: Failed to start server!");
+        return;
+    }
+    socket_set_nonblocking(server);
+
+    json fds = [];
+    push(fds, server);  // index 0 = listen socket
+
+    while (true) {
+        // 1s tick gives the loop a chance to bail / be interrupted.
+        json ready = socket_poll(fds, 1000);
+        if (length(ready) == 0) {
+            continue;
+        }
+
+        // Build the next-iteration fd set from scratch — keeps logic
+        // simple at the cost of O(n) per tick. Tracks which slots got
+        // closed this iteration so we don't carry their fd forward.
+        json next_fds = [];
+        push(next_fds, server);
+        json closed = {};
+
+        for (int i = 0; i < length(ready); i++) {
+            int idx = ready[i];
+            if (idx == 0) {
+                // Listen socket fired — drain accept queue.
+                while (true) {
+                    int client = socket_accept(server);
+                    if (client < 0) {
+                        break;
+                    }
+                    push(next_fds, client);
+                }
+            } else {
+                int client_fd = fds[idx];
+                int keep = _wings_serve_one_request(client_fd);
+                if (keep == 0) {
+                    socket_close(client_fd);
+                    closed[toString(idx)] = 1;
+                } else {
+                    push(next_fds, client_fd);
+                }
+            }
+        }
+
+        // Carry over still-open clients that didn't fire this tick.
+        for (int i = 1; i < length(fds); i++) {
+            // Was this slot ready (and thus already handled above)?
+            bool was_ready = false;
+            for (int j = 0; j < length(ready); j++) {
+                if (ready[j] == i) { was_ready = true; break; }
+            }
+            if (was_ready == false) {
+                push(next_fds, fds[i]);
+            }
+        }
+
+        fds = next_fds;
+    }
+}
+
+// Pre-spawned worker pool. Each worker thread is a perpetual
+// `accept()` loop on the shared listening socket. The kernel serialises
+// concurrent accept() across processes/threads, so only one worker
+// wakes per incoming connection — no thundering-herd pause and no
+// thread-creation cost per request.
+//
+// This is the "thread pool" middle ground between sync `listen` (one
+// in-flight request) and `listen_async` (one OS thread per request).
+// At 1k req/s, listen_async creates 1000 threads/sec; listen_pool
+// reuses N. Empirically 4-16 workers saturate a single CPU core's
+// worth of HTTP work; tune to physical cores for CPU-bound handlers.
+//
+// The socket fd is boxed into a `json` parameter because
+// `thread_create` passes its argument through the canonical VMValue
+// ABI rather than a native i64 register; the worker unboxes on entry.
+// This is the same pattern `listen_async` uses for per-conn fds.
+func _wings_pool_worker(json server_box) {
+    int server = server_box;
+    while (true) {
+        int client = socket_accept(server);
+        if (client < 0) {
+            continue;
+        }
+        // Reuse the existing per-connection serve function — keep-alive
+        // loop, arena reset, request counters, etc. all already there.
+        json c = client;
+        _wings_serve_connection(c);
+    }
+}
+
+func listen_pool(int port, int n_workers) {
+    // `n_workers <= 0` -> auto-detect logical CPU count. The previous
+    // fallback was a hardcoded `4` regardless of host; on a 4-vCPU CI
+    // runner that happened to fit, but `listen_pool(port, 8)` would
+    // over-subscribe and degrade by ~25% under high-concurrency load
+    // because 8 threads thrashed for 4 cores. Auto-detect makes the
+    // common case ("pick a sensible default") match the host.
+    if (n_workers < 1) {
+        n_workers = cpu_count();
+    }
+    if (_find_route("GET", "/healthz") < 0) {
+        get("/healthz", "_wings_healthz");
+    }
+    if (_find_route("GET", "/metrics") < 0) {
+        get("/metrics", "_wings_metrics");
+    }
+    _wings_apply_env_config();
+    _wings_started_at = timestamp();
+
+    print("");
+    print("  ╔═══════════════════════════════════╗");
+    print("  ║       Tulpar Wings v2.2 (pool)    ║");
+    print("  ║    Give your API wings! 🪶        ║");
+    print("  ╚═══════════════════════════════════╝");
+    print("");
+    print("  Routes:");
+    for (int i = 0; i < length(_routes); i++) {
+        json r = _routes[i];
+        print("    " + r["method"] + " " + r["path"] + " -> " + r["handler"] + "()");
+    }
+    print("");
+    print("  Server: http://127.0.0.1:" + toString(port) + " (worker pool, " + toString(n_workers) + ")");
+    print("  Press Ctrl+C to stop");
+    print("");
+
+    int server = socket_server(_wings_bind_host(), port);
+    if (server < 0) {
+        print("ERROR: Failed to start server!");
+        return;
+    }
+
+    // Spawn N worker threads, each blocks on accept() of the same
+    // listening socket. The first kernel-delivered connection wakes
+    // exactly one worker.
+    for (int i = 0; i < n_workers; i = i + 1) {
+        json sb = server;
+        int t = thread_create(_wings_pool_worker, sb);
+        thread_detach(t);
+    }
+
+    // Main thread parks. A "Ctrl+C breaks out" loop is enough — no
+    // need to also serve from main. Keeping main idle simplifies
+    // shutdown signalling once we add it.
+    while (true) {
+        sleep(60000);
+    }
+}
+
+func listen_async(int port) {
+    if (_find_route("GET", "/healthz") < 0) {
+        get("/healthz", "_wings_healthz");
+    }
+    if (_find_route("GET", "/metrics") < 0) {
+        get("/metrics", "_wings_metrics");
+    }
+    _wings_apply_env_config();
+    _wings_started_at = timestamp();
+
+    print("");
+    print("  ╔═══════════════════════════════════╗");
+    print("  ║       Tulpar Wings v2.1 (async)   ║");
+    print("  ║    Give your API wings! 🪶        ║");
+    print("  ╚═══════════════════════════════════╝");
+    print("");
+    print("  Routes:");
+    for (int i = 0; i < length(_routes); i++) {
+        json r = _routes[i];
+        print("    " + r["method"] + " " + r["path"] + " -> " + r["handler"] + "()");
+    }
+    print("");
+    print("  Server: http://127.0.0.1:" + toString(port) + " (multi-threaded)");
+    print("  Press Ctrl+C to stop");
+    print("");
+
+    int server = socket_server(_wings_bind_host(), port);
+    if (server < 0) {
+        print("ERROR: Failed to start server!");
+        return;
+    }
+
+    while (true) {
+        int client = socket_accept(server);
+        if (client < 0) {
+            continue;
+        }
+        // Box the fd into a json so `thread_create` passes it through
+        // the canonical VMValue ABI rather than a native i64 register.
+        // The worker unboxes on entry.
+        json c = client;
+        int t = thread_create(_wings_serve_connection, c);
+        thread_detach(t);
+    }
+}
+
+// ----- OpenAPI auto-generation ---------------------------------------------
+//
+// Walks the registered routes and emits a minimal OpenAPI 3.0 document
+// (the JSON Swagger UI / Postman / Insomnia consume directly). We
+// don't infer types or response schemas — just methods and paths plus
+// a placeholder 200 response. Fancier shapes (request/response models,
+// auth) are a richer-route-metadata feature for a later iteration.
+//
+// Usage:
+//   func openapi_handler() { return wings_openapi("My API", "1.0"); }
+//   get("/openapi.json", "openapi_handler");
+//
+// The returned object is a json that toJson()/json_response can turn
+// straight into a wire payload.
+func wings_openapi(str title, str version) {
+    json paths = {};
+    for (int i = 0; i < length(_routes); i++) {
+        json r = _routes[i];
+        str path = r["path"];
+        str method_lc = lower(r["method"]);
+        // OpenAPI keys path objects on the URL; multiple verbs on the
+        // same path land on the same key. We build per-path on-demand.
+        json existing = paths[path];
+        if (!existing) {
+            existing = {};
+        }
+        existing[method_lc] = {
+            "summary": r["handler"],
+            "responses": {"200": {"description": "OK"}}
+        };
+        paths[path] = existing;
+    }
+    return {
+        "openapi": "3.0.0",
+        "info": {"title": title, "version": version},
+        "paths": paths
+    };
+}
+
+// ----- Server loop ---------------------------------------------------------
+func listen(int port) {
+    // Auto-register /healthz and /metrics if the user hasn't already
+    // claimed those paths. This is opt-out: just register your own
+    // GET handler for the same path before calling listen().
+    if (_find_route("GET", "/healthz") < 0) {
+        get("/healthz", "_wings_healthz");
+    }
+    if (_find_route("GET", "/metrics") < 0) {
+        get("/metrics", "_wings_metrics");
+    }
+    _wings_apply_env_config();
+    _wings_started_at = timestamp();
+
+    print("");
+    print("  ╔═══════════════════════════════════╗");
+    print("  ║       Tulpar Wings v2.0           ║");
+    print("  ║    Give your API wings! 🪶        ║");
+    print("  ╚═══════════════════════════════════╝");
+    print("");
+    print("  Routes:");
+    for (int i = 0; i < length(_routes); i++) {
+        json r = _routes[i];
+        print("    " + r["method"] + " " + r["path"] + " -> " + r["handler"] + "()");
+    }
+    print("");
+    print("  Server: http://127.0.0.1:" + toString(port));
+    print("  Press Ctrl+C to stop");
+    print("");
+
+    int server = socket_server(_wings_bind_host(), port);
+    if (server < 0) {
+        print("ERROR: Failed to start server!");
+        return;
+    }
+
+    // Arena watermark taken once at server start. Every request below
+    // saves/restores against this baseline so transient request
+    // allocations (parsed request, response string, JSON serialisation)
+    // are recycled, not accumulated. Routes + _default_headers were
+    // allocated before this point and stay live forever.
+    int _wings_arena_wm = arena_save();
+
+    while (true) {
+        int client = socket_accept(server);
+        if (client < 0) {
+            continue;
+        }
+
+        while (true) {
+            str raw = http_recv_request(client, _wings_max_body_bytes);
+            if (length(raw) == 0) {
+                break;
+            }
+            json req = http_parse_request(raw);
+            _request = req;
+            wings_set_current_fd(client);
+
+            str method = req["method"];
+            str path = req["path"];
+            if (_wings_quiet == 0) {
+                print("  " + method + " " + path);
+            }
+
+            int keep = http_should_keepalive(req);
+
+            // CORS preflight short-circuit — see the matching block
+            // in `listen()` for the full rationale (browsers reject a
+            // 4xx preflight even when CORS headers are present, so
+            // OPTIONS gets a synthetic 204 with the default header set).
+            if (method == "OPTIONS") {
+                _request["params"] = {};
+                _request["cookies"] = {};
+                str preflight = http_create_response(
+                    204, "text/plain; charset=utf-8", "", _default_headers, keep);
+                socket_send(client, preflight);
+                _wings_requests_total = _wings_requests_total + 1;
+                _wings_requests_2xx = _wings_requests_2xx + 1;
+                arena_restore(_wings_arena_wm);
+                if (keep == 0) {
+                    break;
+                }
+                continue;
+            }
+
+            // Two-pass dispatch (exact + pattern). _request gets a
+            // populated `params` key before the handler runs.
+            json route_match = _find_route_with_params(method, path);
+            int route_idx = route_match["index"];
+            // HEAD fallback to (pattern-aware) GET handler; body stripped
+            // after build so Content-Length still matches GET's payload.
+            bool is_head = false;
+            if (route_idx < 0 && method == "HEAD") {
+                route_match = _find_route_with_params("GET", path);
+                route_idx = route_match["index"];
+                is_head = true;
+            }
+            _request["params"] = route_match["params"];
+            _request["cookies"] = wings_cookies(req);
+            str response = "";
+            if (route_idx >= 0) {
+                // Shared dispatch (cache fast-path + handler + counters + build).
+                response = _wings_dispatch_cached(route_idx, keep);
+            } else {
+                _wings_requests_total = _wings_requests_total + 1;
+                _wings_requests_4xx = _wings_requests_4xx + 1;
+                response = _wings_build_404(path, keep);
+            }
+            if (is_head) {
+                response = _wings_strip_response_body(response);
+            }
+
+            // Empty response → streaming handler took over the socket.
+            // Close + bail; keep-alive doesn't survive a stream.
+            if (length(response) == 0) {
+                arena_restore(_wings_arena_wm);
+                break;
+            }
+            socket_send(client, response);
+
+            // Per-request arena reset: keeps memory bounded even on a
+            // single long-lived keep-alive connection. Anything the
+            // handler returned via _request / response is owned by this
+            // arena scope and goes away here. Handlers must NOT stash
+            // arena pointers on globals.
+            arena_restore(_wings_arena_wm);
+
+            if (keep == 0) {
+                break;
+            }
+        }
+        socket_close(client);
+    }
+}

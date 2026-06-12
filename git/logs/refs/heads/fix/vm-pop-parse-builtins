@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 43f9c3c42ecfd5793c941949c57745f4be4ee617 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778673985 +0300	branch: Created from HEAD
+43f9c3c42ecfd5793c941949c57745f4be4ee617 2efac552f8442502b7d676fa638f791f365ae8d6 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778674192 +0300	commit: fix(vm): wire pop / parse_cookies / parse_query builtins to AOT impls

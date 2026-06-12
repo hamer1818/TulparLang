@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 a3a5d45ae1c720b13128b2dcbd1293e2964dc853 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778105992 +0300	branch: Created from HEAD
+a3a5d45ae1c720b13128b2dcbd1293e2964dc853 bb1f7c3f15dbf46e64badde5cf440b3b04452f98 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778105993 +0300	commit: fix(runtime,typeinfer): length(json) returns key count, not 0

@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 425c4de0523b4c02dbfa5c6da741151a6b5f5573 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778361222 +0300	branch: Created from origin/main
+425c4de0523b4c02dbfa5c6da741151a6b5f5573 442c62a3637bd279cc4fa6f982afeee964cf778f Hamza ORTATEPE <hortatepe2002@gmail.com> 1778361389 +0300	commit: ci: cut build wall-time ~60% via MSYS2 cache + ccache + sparse-checkout

@@ -1,0 +1,19 @@
+import "test";
+print("Program started!");
+
+func make_adder(int n) {
+    print("Inside make_adder n = ", n);
+    var lam = (int x) => n + x;
+    print("Lambda created");
+    return lam;
+}
+
+func run_make_adder() {
+    print("Calling make_adder(10)");
+    var adder = make_adder(10);
+    print("make_adder returned");
+    int res = adder(5);
+    print("adder(5) = ", res);
+}
+
+run_make_adder();

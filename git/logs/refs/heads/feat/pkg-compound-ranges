@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 8cae962ecc782193d8c0629beaed07b60053ccc4 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778162388 +0300	branch: Created from HEAD
+8cae962ecc782193d8c0629beaed07b60053ccc4 a642d64be1e9b47c3b3a46aaacdda593c35c8b16 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778162484 +0300	commit: feat(pkg): compound semver ranges — `>=1.0,<2.0` style constraints

@@ -1,0 +1,3 @@
+0000000000000000000000000000000000000000 85ed7a18471dfc8fff3fe0953f899b286294853f Hamza ORTATEPE <hortatepe2002@gmail.com> 1777963583 +0300	branch: Created from HEAD
+85ed7a18471dfc8fff3fe0953f899b286294853f f6ce63c1481bc053475c2cbba985c5efbecc5a28 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777963636 +0300	commit: ci: AOT test runner derlemede fail olursa stderr'i bas
+f6ce63c1481bc053475c2cbba985c5efbecc5a28 a81dd96f56bd31125194c971b7ce0908cfdfb5b0 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777964097 +0300	commit: fix(aot): TULPAR_HAS_TLS aktifken -lssl -lcrypto'yu AOT linker'a gecir

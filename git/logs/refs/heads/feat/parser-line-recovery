@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 f6e5d134961b282aeae31f27566f0ad2527f6fec Hamza ORTATEPE <hortatepe2002@gmail.com> 1778168721 +0300	branch: Created from HEAD
+f6e5d134961b282aeae31f27566f0ad2527f6fec 088942eb49181a52bd0aa1c79ee88e0ee7462cf6 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778168738 +0300	commit: fix(parser): error line points where the user actually broke things

@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 525b7b6993c348710a8b1ef5132b93f657722bd8 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778491866 +0300	branch: Created from HEAD
+525b7b6993c348710a8b1ef5132b93f657722bd8 8a6e5a2ab29cf1a313bee5172c204eabda62ddd8 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778492005 +0300	commit: fix(socket): respect the host argument in socket_server — no more LAN-wide bind, no Windows Firewall prompts

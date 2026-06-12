@@ -1,0 +1,517 @@
+[branch "main"]
+	gk-merge-base = origin/main
+	gk-last-accessed = 2026-06-01T09:30:18.585Z
+	gk-last-modified = 2026-06-01T09:30:21.515Z
+[branch "fix/ci-cross-platform-build"]
+	gk-last-accessed = 2026-05-02T10:59:34.803Z
+	gk-last-modified = 2026-05-02T10:59:34.803Z
+[branch "feat/optional-function-param-types"]
+	gk-last-accessed = 2026-05-02T10:04:19.724Z
+[branch "feat/version-update-cmd"]
+	gk-last-accessed = 2026-05-02T10:49:03.995Z
+	gk-last-modified = 2026-05-02T10:49:03.995Z
+[branch "fix/install-ps1-utf8-encoding"]
+	gk-last-accessed = 2026-05-02T11:24:48.166Z
+	gk-last-modified = 2026-05-02T11:24:48.166Z
+[branch "fix/install-ps1-ascii-output"]
+	gk-last-accessed = 2026-05-02T11:43:45.638Z
+	gk-last-modified = 2026-05-02T11:43:45.638Z
+[branch "feat/custom-domain-tulparlang-dev"]
+	gk-last-accessed = 2026-05-02T12:02:31.999Z
+	gk-last-modified = 2026-05-02T12:02:41.759Z
+[branch "feat/inno-setup-installer"]
+	gk-last-accessed = 2026-05-02T12:29:47.439Z
+	gk-last-modified = 2026-05-02T12:29:47.439Z
+[branch "feat/help-command"]
+	gk-last-accessed = 2026-05-02T12:43:44.035Z
+	gk-last-modified = 2026-05-02T12:43:44.035Z
+[branch "perf/update-curl-fast-path"]
+	gk-last-accessed = 2026-05-02T12:58:20.555Z
+	gk-last-modified = 2026-05-02T12:58:20.555Z
+[branch "docs/readme-refresh"]
+	gk-last-accessed = 2026-05-02T13:57:36.165Z
+	gk-last-modified = 2026-05-02T13:59:20.123Z
+[branch "chore/repo-cleanup"]
+	gk-last-accessed = 2026-05-02T14:45:51.878Z
+	gk-last-modified = 2026-05-02T14:45:51.878Z
+[branch "fix/vm-tulpar-modules-resolution"]
+	gk-last-accessed = 2026-05-03T11:16:30.913Z
+	gk-last-modified = 2026-05-03T11:17:43.263Z
+[branch "docs/refresh-claude-md"]
+	gk-last-accessed = 2026-05-04T11:46:45.324Z
+	gk-last-modified = 2026-05-04T11:46:59.683Z
+[branch "fix/repl-error-recovery"]
+	gk-last-accessed = 2026-05-04T12:17:09.526Z
+	gk-last-modified = 2026-05-04T12:17:33.894Z
+[branch "feat/repl-multiline"]
+	gk-last-accessed = 2026-05-04T13:08:42.424Z
+	gk-last-modified = 2026-05-04T13:08:42.424Z
+[branch "fix/repl-fn-call-segfault"]
+	gk-last-accessed = 2026-05-04T13:12:06.906Z
+[branch "feat/parser-for-swap-warning"]
+	gk-last-accessed = 2026-05-04T13:15:04.514Z
+	gk-last-modified = 2026-05-04T13:16:22.137Z
+[branch "feat/repl-q-shortcut"]
+	gk-last-accessed = 2026-05-04T19:22:39.599Z
+	gk-last-modified = 2026-05-04T13:23:30.856Z
+[branch "fix/repl-bugs"]
+	gk-last-accessed = 2026-05-04T19:44:48.316Z
+	gk-last-modified = 2026-05-04T19:44:48.316Z
+[branch "fix/vm-parity"]
+	gk-last-accessed = 2026-05-04T19:51:15.206Z
+	gk-last-modified = 2026-05-04T19:51:15.206Z
+[branch "feat/repl-line-edit"]
+	gk-last-accessed = 2026-05-04T19:55:32.544Z
+	gk-last-modified = 2026-05-04T19:55:32.544Z
+[branch "feat/typecheck-cmd"]
+	gk-last-accessed = 2026-05-04T20:32:05.232Z
+	gk-last-modified = 2026-05-04T20:32:05.232Z
+[branch "fix/aot-for-in"]
+	gk-last-accessed = 2026-05-04T20:17:57.245Z
+	gk-last-modified = 2026-05-04T20:17:57.245Z
+[branch "fix/vm-object-mutation"]
+	gk-last-accessed = 2026-05-04T20:40:46.723Z
+[branch "feat/typeinfer-fn-args"]
+	gk-last-accessed = 2026-05-04T20:44:15.948Z
+	gk-last-modified = 2026-05-04T20:44:15.948Z
+[branch "feat/repl-vm-backed"]
+	gk-last-accessed = 2026-05-04T20:58:55.999Z
+	gk-last-modified = 2026-05-04T20:58:55.999Z
+[branch "chore/sunset-legacy-interpreter"]
+	gk-last-accessed = 2026-05-04T21:09:36.094Z
+	gk-last-modified = 2026-05-04T21:09:36.094Z
+[branch "chore/sunset-jit"]
+	gk-last-accessed = 2026-05-04T21:22:55.498Z
+	gk-last-modified = 2026-05-04T21:22:55.498Z
+[branch "feat/typeinfer-build-warn"]
+	gk-last-accessed = 2026-05-04T21:47:27.450Z
+	gk-last-modified = 2026-05-04T21:47:27.450Z
+[branch "feat/typeinfer-builtin-catalog"]
+	gk-last-accessed = 2026-05-04T21:51:09.764Z
+	gk-last-modified = 2026-05-04T21:51:09.764Z
+[branch "chore/eksikler-audit"]
+	gk-last-accessed = 2026-05-04T21:55:16.229Z
+[branch "feat/module-namespaces"]
+	gk-last-accessed = 2026-05-04T21:57:57.388Z
+	gk-last-modified = 2026-05-04T21:57:57.388Z
+[branch "fix/vm-string-fn-local"]
+	gk-last-accessed = 2026-05-04T22:07:05.708Z
+	gk-last-modified = 2026-05-04T22:07:05.708Z
+[branch "feat/dot-call-aliased"]
+	gk-last-accessed = 2026-05-04T22:12:09.064Z
+	gk-last-modified = 2026-05-04T22:12:09.064Z
+[branch "feat/typeinfer-poly-builtins"]
+	gk-last-accessed = 2026-05-04T22:24:04.648Z
+	gk-last-modified = 2026-05-04T22:24:04.648Z
+[branch "ci/bump-actions-node24"]
+	gk-last-accessed = 2026-05-04T22:29:59.925Z
+	gk-last-modified = 2026-05-04T22:30:54.679Z
+[branch "ci/debug-failing-tests"]
+	gk-last-accessed = 2026-05-05T06:57:28.276Z
+	gk-last-modified = 2026-05-05T06:57:28.276Z
+[branch "docs/roadmap-plans"]
+	gk-last-accessed = 2026-05-05T07:27:19.325Z
+	gk-last-modified = 2026-05-05T07:27:19.325Z
+[branch "feat/typeinfer-strict-mode"]
+	gk-last-accessed = 2026-05-05T07:30:03.063Z
+	gk-last-modified = 2026-05-05T07:30:03.063Z
+[branch "feat/method-calls-resolver"]
+	gk-last-accessed = 2026-05-05T07:47:08.797Z
+	gk-last-modified = 2026-05-05T07:47:08.797Z
+[branch "feat/struct-types-parsing"]
+	gk-last-accessed = 2026-05-05T07:52:03.618Z
+	gk-last-modified = 2026-05-05T07:52:03.618Z
+[branch "feat/typeinfer-struct-registry"]
+	gk-last-accessed = 2026-05-05T07:57:15.841Z
+	gk-last-modified = 2026-05-05T07:57:15.841Z
+[branch "feat/pkg-lockfile-sha256"]
+	gk-last-accessed = 2026-05-05T08:06:56.718Z
+	gk-last-modified = 2026-05-05T08:08:00.625Z
+[branch "feat/aot-struct-native-codegen"]
+	gk-last-accessed = 2026-05-06T07:04:14.295Z
+	gk-last-modified = 2026-05-06T07:04:14.295Z
+[branch "feat/struct-literal-init-on-pr48"]
+	gk-last-accessed = 2026-05-05T08:52:12.511Z
+	gk-last-modified = 2026-05-05T08:52:12.511Z
+[branch "feat/aot-struct-fn-args"]
+	gk-last-accessed = 2026-05-06T07:08:06.087Z
+	gk-last-modified = 2026-05-06T07:08:06.087Z
+[branch "feat/struct-print-and-bench"]
+	gk-last-accessed = 2026-05-06T10:29:20.687Z
+	gk-last-modified = 2026-05-06T10:29:20.687Z
+[branch "fix/install-static-mingw-runtime"]
+	gk-last-accessed = 2026-05-06T10:46:07.866Z
+	gk-last-modified = 2026-05-06T10:46:07.866Z
+[branch "fix/install-verify-and-update"]
+	gk-last-accessed = 2026-05-06T11:09:47.389Z
+	gk-last-modified = 2026-05-06T11:09:47.389Z
+[branch "fix/aot-try-catch-stdio-crash"]
+	gk-last-accessed = 2026-05-06T11:39:07.006Z
+	gk-last-modified = 2026-05-06T11:39:42.535Z
+[branch "fix/aot-native-int-fn-boxed-json-local"]
+	gk-last-accessed = 2026-05-06T11:54:36.921Z
+	gk-last-modified = 2026-05-06T11:54:36.921Z
+[branch "feat/manifest-strict-typecheck"]
+	gk-last-accessed = 2026-05-06T12:15:33.902Z
+	gk-last-modified = 2026-05-06T12:20:08.423Z
+[branch "feat/struct-call-arg-and-return-chain"]
+	gk-last-accessed = 2026-05-06T12:26:55.875Z
+	gk-last-modified = 2026-05-06T12:27:21.522Z
+[branch "feat/typeinfer-json-and-keys"]
+	gk-last-accessed = 2026-05-06T12:49:52.620Z
+[branch "feat/heap-promoted-objstruct"]
+	gk-last-accessed = 2026-05-06T14:07:44.108Z
+	gk-last-modified = 2026-05-06T14:07:44.108Z
+[branch "feat/multifile-tpkg-and-resolver"]
+	gk-last-accessed = 2026-05-06T14:21:57.842Z
+[branch "feat/wings-raw-response"]
+	gk-last-accessed = 2026-05-06T14:43:31.460Z
+	gk-last-modified = 2026-05-06T14:43:47.864Z
+[branch "fix/aot-linux-vmvalue-arg-abi"]
+	gk-last-accessed = 2026-05-06T21:21:28.630Z
+	gk-last-modified = 2026-05-06T21:21:54.838Z
+[branch "feat/wings-path-params"]
+	gk-last-accessed = 2026-05-07T06:46:02.505Z
+	gk-last-modified = 2026-05-06T22:40:05.635Z
+[branch "ci/runtime-smoke-compile-only"]
+	gk-last-accessed = 2026-05-06T22:36:43.712Z
+	gk-last-modified = 2026-05-06T22:37:06.169Z
+[branch "feat/wings-status-envelope"]
+	gk-last-accessed = 2026-05-07T07:34:45.851Z
+	gk-last-modified = 2026-05-07T07:34:45.851Z
+[branch "feat/pkg-publish-cli"]
+	gk-last-accessed = 2026-05-07T08:05:50.042Z
+	gk-last-modified = 2026-05-07T08:05:50.042Z
+[branch "fix/pkg-install-registry-url"]
+	gk-last-accessed = 2026-05-07T08:30:18.142Z
+	gk-last-modified = 2026-05-07T08:31:19.625Z
+[branch "perf/aot-drop-optnone-enable-o3"]
+	gk-last-accessed = 2026-05-07T09:32:14.813Z
+	gk-last-modified = 2026-05-07T09:32:44.170Z
+[branch "build/windows-tls-auto-openssl"]
+	gk-last-accessed = 2026-05-07T09:48:21.905Z
+	gk-last-modified = 2026-05-07T09:48:47.031Z
+[branch "perf/aot-lto-runtime-inline"]
+	gk-last-accessed = 2026-05-07T11:01:36.873Z
+	gk-last-modified = 2026-05-07T11:04:00.305Z
+[branch "feat/lsp-signature-help"]
+	gk-last-accessed = 2026-05-07T11:55:31.185Z
+	gk-last-modified = 2026-05-07T11:57:52.510Z
+[branch "perf/wings-handler-tls"]
+	gk-last-accessed = 2026-05-07T13:20:06.913Z
+	gk-last-modified = 2026-05-07T13:20:06.913Z
+[branch "perf/wings-counter-atomic"]
+	gk-last-accessed = 2026-05-07T13:42:54.151Z
+	gk-last-modified = 2026-05-07T13:42:54.151Z
+[branch "feat/pkg-semver-ranges"]
+	gk-last-accessed = 2026-05-07T13:55:42.109Z
+	gk-last-modified = 2026-05-07T13:55:42.109Z
+[branch "feat/pkg-compound-ranges"]
+	gk-last-accessed = 2026-05-07T14:02:19.024Z
+	gk-last-modified = 2026-05-07T14:03:55.437Z
+[branch "fix/wings-cookies-segv"]
+	gk-last-accessed = 2026-05-07T15:01:36.416Z
+	gk-last-modified = 2026-05-07T15:01:36.416Z
+[branch "perf/struct-arena-alloc"]
+	gk-last-accessed = 2026-05-07T15:15:08.698Z
+	gk-last-modified = 2026-05-07T15:15:08.698Z
+[branch "ci/runtime-smoke-http-probe"]
+	gk-last-accessed = 2026-05-07T15:31:28.317Z
+	gk-last-modified = 2026-05-07T15:31:28.317Z
+[branch "feat/lsp-variable-hover-completion"]
+	gk-last-accessed = 2026-05-07T15:38:28.543Z
+	gk-last-modified = 2026-05-07T15:38:28.543Z
+[branch "feat/parser-multi-error"]
+	gk-last-accessed = 2026-05-12T19:41:38.218Z
+	gk-last-modified = 2026-05-12T19:41:38.218Z
+[branch "feat/parser-line-recovery"]
+	gk-last-accessed = 2026-05-07T15:47:52.422Z
+	gk-last-modified = 2026-05-07T15:48:09.446Z
+[branch "feat/fmt-edge-cases"]
+	gk-last-accessed = 2026-05-07T15:52:19.463Z
+	gk-last-modified = 2026-05-07T15:52:19.463Z
+[branch "feat/wings-listen-pool"]
+	gk-last-accessed = 2026-05-07T15:56:05.678Z
+	gk-last-modified = 2026-05-07T15:56:05.678Z
+[branch "test/tls-verification"]
+	gk-last-accessed = 2026-05-07T16:17:08.685Z
+	gk-last-modified = 2026-05-07T16:17:08.685Z
+[branch "test/router-json-edges"]
+	gk-last-accessed = 2026-05-07T16:22:52.729Z
+	gk-last-modified = 2026-05-07T16:24:58.804Z
+[branch "feat/wings-tls-listener"]
+	gk-last-accessed = 2026-05-07T16:48:49.363Z
+	gk-last-modified = 2026-05-07T16:48:49.363Z
+[branch "ci/release-tag-trigger"]
+	gk-last-accessed = 2026-05-07T17:20:53.199Z
+	gk-last-modified = 2026-05-07T17:20:53.199Z
+[branch "docs/readme-refresh-v2"]
+	gk-last-accessed = 2026-05-07T17:43:04.646Z
+	gk-last-modified = 2026-05-07T17:43:04.646Z
+[branch "feat/installer-branding"]
+	gk-last-accessed = 2026-05-09T20:06:03.395Z
+	gk-last-modified = 2026-05-09T20:06:55.491Z
+[branch "ci/auto-enable-automerge"]
+	gk-last-accessed = 2026-05-09T20:22:14.746Z
+	gk-last-modified = 2026-05-09T20:22:14.747Z
+[branch "ci/use-pat-for-automerge"]
+	gk-last-accessed = 2026-05-09T21:08:06.561Z
+	gk-last-modified = 2026-05-09T21:08:06.561Z
+[branch "ci/speedup-build-pipeline"]
+	gk-last-accessed = 2026-05-09T21:18:27.305Z
+	gk-last-modified = 2026-05-09T21:20:13.568Z
+[branch "ci/bump-actions-to-node24"]
+	gk-last-accessed = 2026-05-09T21:34:33.067Z
+	gk-last-modified = 2026-05-09T21:34:33.067Z
+[branch "chore/contrib-flow"]
+	gk-last-accessed = 2026-05-09T21:45:37.810Z
+	gk-last-modified = 2026-05-09T21:45:37.810Z
+[branch "docs/readme-honest-claims"]
+	gk-last-accessed = 2026-05-09T22:07:05.416Z
+	gk-last-modified = 2026-05-09T22:07:05.416Z
+[branch "ci/benchmarks-auto-update"]
+	gk-last-accessed = 2026-05-09T22:24:49.910Z
+	gk-last-modified = 2026-05-09T22:24:49.910Z
+[branch "fix/bench-yaml-indentation"]
+	gk-last-accessed = 2026-05-09T22:36:59.634Z
+	gk-last-modified = 2026-05-09T22:36:59.634Z
+[branch "ci/bench-consume-build-artifact"]
+	gk-last-accessed = 2026-05-09T22:56:58.103Z
+	gk-last-modified = 2026-05-09T22:56:58.103Z
+[branch "ci/bench-pr-flow"]
+	gk-last-accessed = 2026-05-09T23:06:22.607Z
+	gk-last-modified = 2026-05-09T23:06:22.607Z
+[branch "ci/bench-use-automerge-pat"]
+	gk-last-accessed = 2026-05-09T23:38:01.725Z
+	gk-last-modified = 2026-05-09T23:38:01.725Z
+[branch "feat/sha256-builtin-2026"]
+	gk-last-accessed = 2026-05-10T21:18:27.312Z
+	gk-last-modified = 2026-05-10T10:45:50.041Z
+[branch "chore/repo-cleanup-2026"]
+	gk-last-accessed = 2026-05-10T21:30:21.122Z
+	gk-last-modified = 2026-05-10T21:31:09.858Z
+[branch "chore/workflow-hardening-2026"]
+	gk-last-accessed = 2026-05-10T21:47:56.191Z
+	gk-last-modified = 2026-05-10T21:47:56.191Z
+[branch "chore/ci-skip-docs-only-builds"]
+	gk-last-accessed = 2026-05-10T21:56:05.682Z
+	gk-last-modified = 2026-05-10T21:57:05.385Z
+[branch "fix/http-bench-backlog"]
+	gk-last-accessed = 2026-05-10T22:12:45.597Z
+	gk-last-modified = 2026-05-10T22:12:45.597Z
+[branch "fix/aot-thread-arg-abi"]
+	gk-last-accessed = 2026-05-10T22:30:48.832Z
+	gk-last-modified = 2026-05-10T22:31:17.200Z
+[branch "perf/clearer-bench-output"]
+	gk-last-accessed = 2026-05-10T22:54:21.711Z
+	gk-last-modified = 2026-05-10T22:54:21.711Z
+[branch "perf/native-wings-build-response"]
+	gk-last-accessed = 2026-05-10T23:09:16.256Z
+	gk-last-modified = 2026-05-10T23:09:16.256Z
+[branch "perf/wings-serve-path-remainder"]
+	gk-last-accessed = 2026-05-11T06:50:02.219Z
+	gk-last-modified = 2026-05-11T06:50:02.219Z
+[branch "perf/wings-response-cache"]
+	gk-last-accessed = 2026-05-11T07:17:46.167Z
+	gk-last-modified = 2026-05-11T07:17:46.167Z
+[branch "perf/native-response-framing"]
+	gk-last-accessed = 2026-05-11T09:13:40.553Z
+	gk-last-modified = 2026-05-11T09:15:45.378Z
+[branch "perf/single-alloc-response"]
+	gk-last-accessed = 2026-05-11T09:27:03.140Z
+	gk-last-modified = 2026-05-11T09:27:03.140Z
+[branch "fix/socket-server-respect-host"]
+	gk-last-accessed = 2026-05-11T09:33:37.188Z
+	gk-last-modified = 2026-05-11T09:35:55.567Z
+[branch "ci/docs-only-skip-still-reports-success"]
+	gk-last-accessed = 2026-05-11T09:50:55.089Z
+	gk-last-modified = 2026-05-11T09:50:55.089Z
+[branch "bench/add-high-concurrency-variant"]
+	gk-last-accessed = 2026-05-11T12:14:51.688Z
+	gk-last-modified = 2026-05-11T12:14:51.688Z
+[branch "perf/listen-pool-auto-cpu-count"]
+	gk-last-accessed = 2026-05-11T14:14:44.165Z
+	gk-last-modified = 2026-05-11T14:14:44.165Z
+[branch "pkg/init-default-registry-url"]
+	gk-last-accessed = 2026-05-11T14:39:45.404Z
+[branch "test/pkg-smoke-default-registry"]
+	gk-last-accessed = 2026-05-11T14:51:23.243Z
+	gk-last-modified = 2026-05-11T14:51:23.243Z
+[branch "pkg/semver-prerelease"]
+	gk-last-accessed = 2026-05-11T16:00:59.159Z
+	gk-last-modified = 2026-05-11T15:04:47.395Z
+[branch "fix/wings-bind-host-env-default"]
+	gk-last-accessed = 2026-05-11T15:58:02.964Z
+	gk-last-modified = 2026-05-11T15:58:02.964Z
+[branch "docs/status-fix-ci-smoke-already-done"]
+	gk-last-accessed = 2026-05-11T16:03:58.843Z
+[branch "plans/06-async-await-rfc"]
+	gk-last-accessed = 2026-05-11T16:10:11.067Z
+	gk-last-modified = 2026-05-11T16:10:11.067Z
+[branch "plans/07-debugger-rfc"]
+	gk-last-accessed = 2026-05-11T16:20:07.946Z
+	gk-last-modified = 2026-05-11T16:20:07.946Z
+[branch "aot/debug-info-dibuilder"]
+	gk-last-accessed = 2026-05-11T20:33:39.499Z
+	gk-last-modified = 2026-05-11T20:33:39.499Z
+[branch "aot/debug-subprogram-and-loc"]
+	gk-last-accessed = 2026-05-11T20:47:29.336Z
+	gk-last-modified = 2026-05-11T20:47:29.336Z
+[branch "ci/bench-checkout-with-pat"]
+	gk-last-accessed = 2026-05-11T20:51:50.536Z
+	gk-last-modified = 2026-05-11T20:52:20.495Z
+[branch "aot/debug-subprograms"]
+	gk-last-accessed = 2026-05-11T20:56:49.733Z
+	gk-last-modified = 2026-05-11T20:56:49.733Z
+[branch "aot/debug-stmt-locations"]
+	gk-last-accessed = 2026-05-11T21:00:05.685Z
+	gk-last-modified = 2026-05-11T21:00:05.685Z
+[branch "aot/debug-body-stmt-locs"]
+	gk-last-accessed = 2026-05-11T21:04:37.821Z
+	gk-last-modified = 2026-05-11T21:04:37.821Z
+[branch "aot/debug-local-vars"]
+	gk-last-accessed = 2026-05-11T21:19:44.166Z
+	gk-last-modified = 2026-05-11T21:19:44.166Z
+[branch "aot/debug-vmvalue-locals"]
+	gk-last-accessed = 2026-05-11T21:31:36.639Z
+	gk-last-modified = 2026-05-11T21:31:36.639Z
+[branch "aot/debug-global-vars"]
+	gk-last-accessed = 2026-05-11T21:41:50.619Z
+	gk-last-modified = 2026-05-11T21:41:50.619Z
+[branch "docs/plan07-progress-marker"]
+	gk-last-accessed = 2026-05-11T21:45:45.835Z
+	gk-last-modified = 2026-05-11T21:45:45.835Z
+[branch "ci/speed-up-workflows"]
+	gk-last-accessed = 2026-05-11T22:04:27.194Z
+	gk-last-modified = 2026-05-11T22:04:27.194Z
+[branch "debug/dap-scaffold"]
+	gk-last-accessed = 2026-05-11T22:09:31.359Z
+	gk-last-modified = 2026-05-11T22:09:31.359Z
+[branch "debug/dap-launch"]
+	gk-last-accessed = 2026-05-11T22:27:59.122Z
+	gk-last-modified = 2026-05-11T22:27:59.122Z
+[branch "ci/windows-pr-fast-path"]
+	gk-last-accessed = 2026-05-11T22:32:38.288Z
+	gk-last-modified = 2026-05-11T22:32:57.696Z
+[branch "ci/windows-reuse-fix"]
+	gk-last-accessed = 2026-05-11T22:43:24.490Z
+	gk-last-modified = 2026-05-11T22:47:10.120Z
+[branch "debug/dap-gdb-run"]
+	gk-last-accessed = 2026-05-12T15:29:57.020Z
+	gk-last-modified = 2026-05-12T15:29:57.020Z
+[branch "debug/dap-stack-variables"]
+	gk-last-accessed = 2026-05-12T15:52:52.146Z
+	gk-last-modified = 2026-05-12T15:52:52.146Z
+[branch "fix/restore-wings-cookies-autopopulate"]
+	gk-last-accessed = 2026-05-12T17:15:44.980Z
+	gk-last-modified = 2026-05-12T17:15:44.980Z
+[branch "docs/wings-cookies-investigation-update"]
+	gk-last-accessed = 2026-05-12T17:20:35.050Z
+	gk-last-modified = 2026-05-12T17:20:52.062Z
+[branch "feat/wings-tls-smoke"]
+	gk-last-accessed = 2026-05-12T17:37:16.828Z
+	gk-last-modified = 2026-05-12T17:37:36.363Z
+[branch "debug/dap-evaluate"]
+	gk-last-accessed = 2026-05-12T17:55:39.372Z
+	gk-last-modified = 2026-05-12T17:55:39.372Z
+[branch "debug/dap-set-variable"]
+	gk-last-accessed = 2026-05-12T18:02:39.513Z
+	gk-last-modified = 2026-05-12T18:02:39.513Z
+[branch "debug/dap-conditional-breakpoints"]
+	gk-last-accessed = 2026-05-12T18:09:54.669Z
+	gk-last-modified = 2026-05-12T18:09:54.669Z
+[branch "debug/dap-logpoints"]
+	gk-last-accessed = 2026-05-12T18:18:00.291Z
+	gk-last-modified = 2026-05-12T18:18:00.291Z
+[branch "debug/dap-restart"]
+	gk-last-accessed = 2026-05-12T18:27:21.583Z
+	gk-last-modified = 2026-05-12T18:27:21.583Z
+[branch "debug/dap-variables-drilldown"]
+	gk-last-accessed = 2026-05-12T18:39:32.997Z
+	gk-last-modified = 2026-05-12T18:39:32.997Z
+[branch "debug/dap-function-breakpoints"]
+	gk-last-accessed = 2026-05-12T18:51:57.919Z
+	gk-last-modified = 2026-05-12T18:51:57.919Z
+[branch "fix/wings-cookies-tls-model"]
+	gk-last-accessed = 2026-05-12T18:58:27.882Z
+	gk-last-modified = 2026-05-12T19:02:32.777Z
+[branch "docs/status-staleness-sweep-2"]
+	gk-last-accessed = 2026-05-12T19:17:04.553Z
+	gk-last-modified = 2026-05-12T19:18:00.018Z
+[branch "feat/tulpar-doc-generator"]
+	gk-last-accessed = 2026-05-12T19:27:03.540Z
+	gk-last-modified = 2026-05-12T19:27:03.540Z
+[branch "docs/status-staleness-sweep-3"]
+	gk-last-accessed = 2026-05-12T19:44:31.892Z
+	gk-last-modified = 2026-05-12T19:44:57.550Z
+[branch "feat/bundle-closures-lsp-sync-status"]
+	gk-last-accessed = 2026-05-12T20:01:37.375Z
+	gk-last-modified = 2026-05-12T20:01:37.375Z
+[branch "feat/bundle-dap-polish-finish"]
+	gk-last-accessed = 2026-05-12T20:51:58.732Z
+	gk-last-modified = 2026-05-12T20:51:58.732Z
+[branch "feat/tls-trust-sse-crypto"]
+	gk-last-accessed = 2026-05-12T21:04:12.982Z
+	gk-last-modified = 2026-05-12T21:04:12.982Z
+[branch "feat/pkg-search-info"]
+	gk-last-accessed = 2026-05-12T21:22:19.482Z
+	gk-last-modified = 2026-05-12T21:22:36.865Z
+[branch "fix/ws-frame-smoke-linux"]
+	gk-last-accessed = 2026-05-12T21:54:00.144Z
+	gk-last-modified = 2026-05-12T21:54:00.144Z
+[branch "feat/sse-streaming-dispatcher"]
+	gk-last-accessed = 2026-05-12T22:01:37.283Z
+	gk-last-modified = 2026-05-12T22:01:37.283Z
+[branch "feat/docs-quickstart"]
+	gk-last-accessed = 2026-05-12T22:23:55.157Z
+[branch "docs/status-followups"]
+	gk-last-accessed = 2026-05-12T22:26:24.651Z
+	gk-last-modified = 2026-05-12T22:26:24.651Z
+[branch "fix/wings-cookies-miscompile-investigation"]
+	gk-last-accessed = 2026-05-13T10:44:29.214Z
+	gk-last-modified = 2026-05-13T10:44:29.214Z
+[branch "chore/repair-stale-docs-install"]
+	gk-last-accessed = 2026-05-13T11:00:35.997Z
+	gk-last-modified = 2026-05-13T10:56:07.202Z
+[branch "chore/mark-completed-plans"]
+	gk-last-accessed = 2026-05-13T11:05:15.794Z
+	gk-last-modified = 2026-05-13T11:05:15.794Z
+[branch "fix/vm-to-json-compact"]
+	gk-last-accessed = 2026-05-13T11:36:27.281Z
+	gk-last-modified = 2026-05-13T11:36:27.281Z
+[branch "fix/vm-keys-builtin"]
+	gk-last-accessed = 2026-05-13T11:44:42.865Z
+	gk-last-modified = 2026-05-13T11:44:42.865Z
+[branch "fix/vm-tojson-delegate-aot"]
+	gk-last-accessed = 2026-05-13T11:51:19.164Z
+	gk-last-modified = 2026-05-13T11:51:19.164Z
+[branch "fix/vm-runtime-error-line-lookup"]
+	gk-last-accessed = 2026-05-13T12:04:48.729Z
+	gk-last-modified = 2026-05-13T12:04:48.729Z
+[branch "fix/vm-pop-parse-builtins"]
+	gk-last-accessed = 2026-05-13T12:08:55.728Z
+	gk-last-modified = 2026-05-13T12:08:55.728Z
+[branch "fix/vm-pow-datetime-repeat-builtins"]
+	gk-last-accessed = 2026-05-13T12:28:18.040Z
+	gk-last-modified = 2026-05-13T12:28:18.040Z
+[branch "fix/vm-csv-date-add-builtins"]
+	gk-last-accessed = 2026-05-13T12:50:23.290Z
+	gk-last-modified = 2026-05-13T12:50:23.290Z
+[branch "fix/vm-utility-builtins"]
+	gk-last-accessed = 2026-05-13T14:50:19.308Z
+	gk-last-modified = 2026-05-13T14:50:19.308Z
+[branch "fix/vm-db-extras"]
+	gk-last-accessed = 2026-05-13T13:03:12.509Z
+	gk-last-modified = 2026-05-13T13:03:12.509Z
+[branch "docs/status-vm-parity-sweep"]
+	gk-last-accessed = 2026-05-13T13:08:35.541Z
+	gk-last-modified = 2026-05-13T13:08:35.541Z
+[branch "fix/vm-regex-builtins"]
+	gk-last-accessed = 2026-05-13T14:02:52.802Z
+	gk-last-modified = 2026-05-13T14:02:52.802Z
+[branch "fix/bulk-vm-aot-correctness"]
+	gk-last-accessed = 2026-05-13T15:16:13.062Z
+	gk-last-modified = 2026-05-13T15:16:13.062Z
+[branch "fix/vm-struct-by-value"]
+	gk-last-accessed = 2026-06-01T09:22:17.315Z
+	gk-last-modified = 2026-05-13T15:31:11.448Z

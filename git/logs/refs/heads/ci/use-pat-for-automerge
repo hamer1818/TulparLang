@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 94c8df0650d83b79916a5291fd0cbabfd5ea90b1 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778360693 +0300	branch: Created from origin/main
+94c8df0650d83b79916a5291fd0cbabfd5ea90b1 b962f160fa4940a883733fd32d0ad84eb3a8b8e1 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778360720 +0300	commit: ci: switch auto-merge to user PAT so main builds re-trigger

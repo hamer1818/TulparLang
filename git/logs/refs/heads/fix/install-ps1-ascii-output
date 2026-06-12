@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 c836a0c01d2d8f974ec482b15433e00ef54f74f3 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777721827 +0300	branch: Created from HEAD
+c836a0c01d2d8f974ec482b15433e00ef54f74f3 7577097389382f3ab2c7e04c6e4ed4497ca349b0 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777721910 +0300	commit: install.ps1: cikis ASCII'ye dusuruldu (encoding'den bagimsiz okunabilir)

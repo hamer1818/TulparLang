@@ -1,0 +1,14 @@
+print("=== Interactive Demo ===");
+print("Note: Run this in a terminal (not background)");
+
+print("What is your name?");
+str name = input();
+
+print("Hello, " + name + "!");
+
+print("Enter a number:");
+str num_str = input();
+int num = toInt(num_str);
+
+print("You entered: " + toString(num));
+print("Square: " + toString(num * num));

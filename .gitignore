@@ -1,0 +1,127 @@
+# ============================================
+# Tulpar Project .gitignore
+# ============================================
+
+# ==== Build Outputs ====
+tulpar
+tulpar.exe
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.pdb
+*.exe
+
+# ==== Build Directories ====
+# build-* glob covers every per-platform / per-toolchain variant
+# (build-windows, build-msys, build-macos, build-windows-mingw, …).
+# A few common names are listed explicitly for clarity.
+build/
+build-*/
+build-win/
+build-linux/
+bin/
+obj/
+out/
+
+# ==== CMake Generated ====
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+!cmake/
+
+# ==== Auto-Generated Files ====
+src/embedded_libs.h
+
+# ==== LLVM IR Files ====
+*.ll
+*.bc
+
+# ==== IDE & Editor ====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-*
+*.code-workspace
+
+# ==== OS Files ====
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# ==== Temporary & Log Files ====
+*.log
+*.tmp
+*.temp
+*.bak
+*.cache
+
+# ==== Database Files ====
+*.db
+*.sqlite
+*.sqlite3
+benchmark_results.txt
+aot_out.txt
+test_file.txt
+
+# ==== Benchmark Outputs ====
+benchmarks/*.exe
+benchmarks/*.ll
+benchmarks/*_test
+benchmarks/a.out*
+benchmarks/bench_*
+benchmarks/sb_test
+benchmarks/qb_test
+benchmarks/verify_test
+benchmarks/c_bench
+
+# ==== Test Outputs ====
+*.out
+a.out
+
+# ==== Python (if any scripts) ====
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+
+# ==== Vendored LLVM headers (now removed from tracking) ====
+# include/ once carried a full vendored LLVM source tree. Every active
+# source uses the system LLVM via find_package (LLVM_INCLUDE_DIRS), so
+# the local copy was orphaned. Ignored to stop a stray LLVM extract or
+# tool-driven auto-vendor from sneaking it back into git.
+include/
+
+# ==== Scratch / debug dumps ====
+# Files that show up from ad-hoc dev sessions: gdb backtrace dumps,
+# example output captures, scratch test programs run from the repo root.
+bt.txt
+bt_full.txt
+test.tpr
+test_results.txt
+
+# ==== WASM build dir ====
+# wasm/build_wasm.sh writes Emscripten outputs here. Underscored name slips
+# past the `build-*/` glob above, so cover it explicitly.
+wasm/build_wasm/
+
+# ==== Claude Code per-project state ====
+# Scheduled-tasks lock + any future .claude/ scratch — local-only, never useful upstream.
+.claude/
+
+# ==== Keep These (not ignored) ====
+# lib/*.tpr - Standard libraries
+# examples/*.tpr - Example files
+# cmake/*.cmake - CMake modules
+# src/embedded_libs.h.in - Template file
+# wasm/emsdk is a local Emscripten SDK install pulled by wasm/build_wasm.sh
+# (formerly tracked as a stray submodule pointer with no .gitmodules — broke CI checkout cleanup)
+wasm/emsdk/

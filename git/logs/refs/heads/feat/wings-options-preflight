@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 e8805b64009f3cabdb86a8c6e7e0032eff3138cc Hamza ORTATEPE <hortatepe2002@gmail.com> 1778148409 +0300	branch: Created from HEAD
+e8805b64009f3cabdb86a8c6e7e0032eff3138cc fa4fc11d5abcb01be8a9c3c314a6f43825c1417c Hamza ORTATEPE <hortatepe2002@gmail.com> 1778148427 +0300	commit: feat(wings): auto-handle CORS preflight (OPTIONS -> 204)

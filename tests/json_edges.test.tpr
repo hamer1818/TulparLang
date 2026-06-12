@@ -1,0 +1,181 @@
+// JSON edge-case regression tests. Companion to `tests/json.test.tpr`
+// which covers the happy path; this file focuses on shapes that have
+// historically broken silently — deeply nested values, empty
+// containers, special characters in strings, large arrays, and
+// roundtrips that must preserve structure exactly.
+//
+// Why: every Wings/Router handler treats `_request` as a json object,
+// so any regression in `toJson`/`fromJson`/indexing here breaks every
+// API endpoint with no editor-visible failure. Catching these at unit
+// scope keeps the request path honest.
+
+import "test";
+
+// ---------- Empty / single-item containers --------------------------------
+
+func empty_object() {
+    json o = {};
+    assert_eq_int(length(keys(o)), 0);
+    str s = toJson(o);
+    assert_eq_str(s, "{}");
+}
+
+func empty_array() {
+    json arr = [];
+    assert_eq_int(length(arr), 0);
+    str s = toJson(arr);
+    assert_eq_str(s, "[]");
+}
+
+func single_item_array() {
+    json arr = [];
+    push(arr, 7);
+    assert_eq_str(toJson(arr), "[7]");
+}
+
+func single_field_object_roundtrip() {
+    json o = {"only": "value"};
+    json back = fromJson(toJson(o));
+    assert_eq_str(back["only"], "value");
+}
+
+// ---------- Deep nesting (5 levels) ---------------------------------------
+
+func deep_nested_get() {
+    json o = {
+        "a": {
+            "b": {
+                "c": {
+                    "d": {
+                        "e": 99
+                    }
+                }
+            }
+        }
+    };
+    assert_eq_int(o["a"]["b"]["c"]["d"]["e"], 99);
+}
+
+func deep_nested_roundtrip() {
+    json o = {"a": {"b": {"c": [1, 2, [3, 4, [5]]]}}};
+    json back = fromJson(toJson(o));
+    assert_eq_int(back["a"]["b"]["c"][0], 1);
+    assert_eq_int(back["a"]["b"]["c"][2][2][0], 5);
+}
+
+// ---------- Special characters in strings ---------------------------------
+
+func string_with_escapes_roundtrip() {
+    // tab + newline + carriage-return inside a value. fromJson must
+    // round-trip these so handlers can read literal whitespace from
+    // request bodies without it being mangled.
+    json o = {"msg": "line1\nline2\twith tab"};
+    json back = fromJson(toJson(o));
+    assert_eq_str(back["msg"], "line1\nline2\twith tab");
+}
+
+func string_with_quotes_roundtrip() {
+    // Embedded double-quote — toJson must escape it as \", fromJson
+    // must un-escape. A regression here used to corrupt every form
+    // payload that contained a quoted string.
+    json o = {"phrase": "she said \"hi\""};
+    json back = fromJson(toJson(o));
+    assert_eq_str(back["phrase"], "she said \"hi\"");
+}
+
+func string_unicode_passthrough() {
+    // Tulpar source files are UTF-8; non-ASCII codepoints must
+    // survive the JSON serialisation roundtrip byte-for-byte.
+    json o = {"name": "Türkçe"};
+    json back = fromJson(toJson(o));
+    assert_eq_str(back["name"], "Türkçe");
+}
+
+// ---------- Numeric edges -------------------------------------------------
+
+func zero_negative_large() {
+    json o = {
+        "zero": 0,
+        "neg": -42,
+        "big": 1000000
+    };
+    str s = toJson(o);
+    json back = fromJson(s);
+    assert_eq_int(back["zero"], 0);
+    assert_eq_int(back["neg"], -42);
+    assert_eq_int(back["big"], 1000000);
+}
+
+// ---------- Array of objects (Wings/Router list endpoint shape) ----------
+
+func array_of_objects_roundtrip() {
+    json users = [];
+    json u1 = {"id": 1, "name": "Ali"};
+    json u2 = {"id": 2, "name": "Ayşe"};
+    push(users, u1);
+    push(users, u2);
+    json back = fromJson(toJson(users));
+    assert_eq_int(length(back), 2);
+    assert_eq_str(back[0]["name"], "Ali");
+    assert_eq_str(back[1]["name"], "Ayşe");
+}
+
+// ---------- Mutation preserves structure ---------------------------------
+
+func mutate_nested_value() {
+    json o = {"user": {"id": 1, "active": 0}};
+    o["user"]["active"] = 1;
+    assert_eq_int(o["user"]["active"], 1);
+    assert_eq_int(o["user"]["id"], 1);  // sibling untouched
+}
+
+func add_field_then_serialise() {
+    json o = {"a": 1};
+    o["b"] = 2;
+    json back = fromJson(toJson(o));
+    assert_eq_int(back["a"], 1);
+    assert_eq_int(back["b"], 2);
+}
+
+// ---------- length() invariants on nested ---------------------------------
+
+func length_keys_count() {
+    json o = {"a": 1, "b": 2, "c": 3, "d": 4};
+    assert_eq_int(length(keys(o)), 4);
+}
+
+func length_array_after_push() {
+    json arr = [10, 20];
+    push(arr, 30);
+    push(arr, 40);
+    assert_eq_int(length(arr), 4);
+}
+
+// ---------- Run -----------------------------------------------------------
+
+print("=== Tulpar JSON Edge-Case Tests ===");
+print("");
+
+test("empty object literal + toJson", "empty_object");
+test("empty array literal + toJson", "empty_array");
+test("single-item array toJson", "single_item_array");
+test("single-field object roundtrip", "single_field_object_roundtrip");
+
+test("deep (5-level) nested get", "deep_nested_get");
+test("deep nested array+object roundtrip", "deep_nested_roundtrip");
+
+test("escape sequences roundtrip", "string_with_escapes_roundtrip");
+test("embedded quotes roundtrip", "string_with_quotes_roundtrip");
+test("unicode passthrough roundtrip", "string_unicode_passthrough");
+
+test("zero / negative / large ints", "zero_negative_large");
+
+test("array of objects roundtrip", "array_of_objects_roundtrip");
+
+test("mutate nested value", "mutate_nested_value");
+test("add field + serialise", "add_field_then_serialise");
+
+test("length(keys(o)) counts fields", "length_keys_count");
+test("length(arr) tracks pushes", "length_array_after_push");
+
+test_summary();

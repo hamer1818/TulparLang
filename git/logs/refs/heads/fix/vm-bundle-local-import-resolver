@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 a3a5d45ae1c720b13128b2dcbd1293e2964dc853 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778106316 +0300	branch: Created from HEAD
+a3a5d45ae1c720b13128b2dcbd1293e2964dc853 d6bab2c85602ad702047a0317581f097c476dea3 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778106316 +0300	commit: fix(vm): bundle-local sibling import resolution (mirror AOT current_import_dir)

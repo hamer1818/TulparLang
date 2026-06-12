@@ -1,0 +1,61 @@
+// Plan 04 v2 — heap-promoted ObjStruct.
+//
+// PR1..PR6 typed struct'lari LLVM scalarize'a uygun stack alloca olarak
+// uretti. C-hizinda ama "kacmiyor" — push(arr, p), obj["k"] = p, return
+// [p, q] gibi escape sitelerinde stack pointer'i array'e/objeye konunca
+// fonksiyon donunce dangling kaliyordu.
+//
+// Bu PR `OBJ_STRUCT` runtime tipini ekliyor:
+//
+//   struct ObjStruct { Obj header; const char *type_name; int field_count;
+//                      int64 fields[]; }
+//
+// Layout stack alloca'siyla birebir ayni — alloc + memcpy promote. Push
+// site'i typed struct identifier'i veya struct-returning call gorunce
+// `aot_struct_alloc_from_fields` ile heap'e tasiyor; VAR_DECL `V3 p =
+// arr[0]` ise `aot_struct_unpack_to` ile heap'ten stack'e geri kopyaliyor,
+// boylece sonraki `.x`/`.y` erisimleri eski GEP+load fast path'inden
+// gidiyor. Field erisim basina runtime cagrisi YOK.
+
+struct V3 { int x; int y; int z; }
+
+func make_v3(int a, int b, int c): V3 {
+    V3 v = { x: a, y: b, z: c };
+    return v;
+}
+
+// Identifier-form push: caller'in alloca'si heap'e kopyalandi, source
+// hala gecerli (pass-by-value semantigi).
+V3 a = make_v3(1, 2, 3);
+array bag = [];
+push(bag, a);
+
+// Call-form push: ic call'in pointer'i temp alloca'ya pin'leniyor,
+// sonra promote.
+push(bag, make_v3(40, 50, 60));
+push(bag, make_v3(700, 800, 900));
+
+print(length(bag));         // 3
+
+// Iteration: VAR_DECL unpack heap struct VMValue'sunu stack alloca'ya
+// dolduruyor, sonra mevcut typed-struct GEP yolundan field okuyoruz.
+int total = 0;
+int i = 0;
+while (i < length(bag)) {
+    V3 cur = bag[i];
+    total = total + cur.x + cur.y + cur.z;
+    i = i + 1;
+}
+print(total);               // 1+2+3 + 40+50+60 + 700+800+900 = 2556
+
+// Pass-by-value korundu — `a` push sonrasi etkilenmedi.
+print(a.x);                 // 1
+print(a.y);                 // 2
+print(a.z);                 // 3
+
+// Print on a heap-struct VMValue (var elt = bag[0]; print(elt))
+// Format: `Type { v0, v1, ... }` — heap struct schema field name'lerini
+// suanki Phase 1'de bilmediginden by-position basiyor. Stack-typed local
+// print'i ise field name'leri kullaniyor (`V3 { x: 1, y: 2, z: 3 }`).
+var first = bag[0];
+print(first);               // V3 { 1, 2, 3 }

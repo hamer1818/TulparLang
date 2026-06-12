@@ -1,0 +1,40 @@
+// Tulpar Dili - Türkçe Sözdizimi Örneği
+// Bu örnek Tulpar dilinin Türkçe anahtar kelimeler ve yerleşik fonksiyonlarla 
+// nasıl kullanılabileceğini göstermektedir.
+
+// Türkçe veri tipleri ve fonksiyon tanımı
+fonksiyon selam_ver(metin isim) {
+    metin mesaj = "Merhaba, " + isim + "!";
+    metin buyuk_metin = upper(mesaj);
+    
+    // Koşullu yapılar
+    eğer (isim == "Tulpar") {
+        print("Büyük harfle: " + buyuk_metin);
+    } yoksa {
+        print("Küçük harfle: " + lower(mesaj));
+    }
+    
+    geri_döndür doğru;
+}
+
+// Değişken tanımlama
+değişken dil_adi = "Tulpar";
+tamsayı versiyon = 2;
+
+print("---------------------------------");
+print("Dil: " + dil_adi + " v" + toString(versiyon));
+print("---------------------------------");
+
+// Fonksiyon çağrısı
+mantıksal basarili = selam_ver("Dünya");
+selam_ver(dil_adi);
+
+// Döngü örneği
+tamsayı sayac = 0;
+iken (sayac < 3) {
+    print("Sayaç: " + toString(sayac));
+    sayac = sayac + 1;
+}
+
+print("=== Program Başarıyla Tamamlandı ===");
+

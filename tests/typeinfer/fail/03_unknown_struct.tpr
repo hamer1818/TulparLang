@@ -1,0 +1,12 @@
+// Expected: typeinfer should flag `Pont` (typo of `Point`) as an
+// unknown struct type at the variable declaration. Codegen would
+// otherwise produce a runtime "field not found" diagnostic instead
+// of a compile-time message.
+
+type Point {
+    int x;
+    int y;
+}
+
+Pont p;
+print(p);

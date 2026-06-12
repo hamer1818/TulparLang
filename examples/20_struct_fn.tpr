@@ -1,0 +1,56 @@
+// Plan 04 PR5 hedef ornek: typed struct fonksiyon arg/return.
+// Struct param: caller typed-alloca pointer'ini dogrudan geciriyor;
+// callee kopyasini local typed-struct alloca olarak aliyor (pass-by-value).
+// Struct return: caller VAR_DECL alloca'yi pin ediyor, callee return'i
+// dogrudan caller'in slot'una yaziyor.
+
+struct Point {
+    int x;
+    int y;
+}
+
+struct Box {
+    int width;
+    int height;
+    int depth;
+}
+
+func dist_sq(Point p): int {
+    return p.x * p.x + p.y * p.y;
+}
+
+func make_point(int a, int b): Point {
+    Point p = { x: a, y: b };
+    return p;
+}
+
+func translate(Point p, int dx, int dy): Point {
+    // Pass-by-value: caller's struct unchanged after this call.
+    p.x = p.x + dx;
+    p.y = p.y + dy;
+    return p;
+}
+
+func volume(Box b): int {
+    return b.width * b.height * b.depth;
+}
+
+// Iki struct: literal arg'i fonksiyon kabul ediyor mu?
+func dist_lit(): int {
+    return dist_sq({ x: 6, y: 8 });
+}
+
+// Struct return'unu dogrudan tipli VAR_DECL alaniyor.
+Point p = make_point(3, 4);
+print(p.x);                         // 3
+print(p.y);                         // 4
+print(dist_sq(p));                  // 25
+
+Point t = translate(p, 10, 20);
+print(t.x);                         // 13
+print(t.y);                         // 24
+print(p.x);                         // 3 — pass-by-value: kaynak degismedi
+print(p.y);                         // 4
+
+print(volume({ width: 2, height: 3, depth: 4 }));  // 24
+print(dist_lit());                                  // 100

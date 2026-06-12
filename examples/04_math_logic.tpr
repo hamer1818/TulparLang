@@ -1,0 +1,29 @@
+print("=== Math & Logic Demo ===");
+
+// 1. Math Functions
+// (Checking if built-in math functions exist like sqrt, pow in interpreter.c?)
+// Looking at interpreter source (grep earlier), we saw BigInt helpers but not explicit math lib binding.
+// But some basic ops might be there.
+// If not, we'll stick to basic arithmetic and BigInt.
+
+print("Basic Math: 10 + 5 * 2 = " + toString(10 + 5 * 2));
+
+// 2. BigInt
+print("\n--- BigInt ---");
+// BigInt 64-bit integer limitini aşan işlemler için
+bigint b1 = 123456789012345678901234567890;
+bigint b2 = 2;
+bigint b3 = b1 * b2;
+
+print("BigInt 1: " + toString(b1));
+print("BigInt 2: " + toString(b2));
+print("Result (Mul): " + toString(b3));
+
+// 3. Logic & Boolean
+print("\n--- Logic ---");
+bool t = true;
+bool f = false;
+
+print("T && F: " + toString(t && f));
+print("T || F: " + toString(t || f));
+print("!T: " + toString(!t));

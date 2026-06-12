@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 8e5f6c6a6fd13ac2c9283fc7a1bae8ce5bd61885 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778063464 +0300	branch: Created from HEAD
+8e5f6c6a6fd13ac2c9283fc7a1bae8ce5bd61885 c5afe4f98bfe5bb89484223c8cda5439e78f338e Hamza ORTATEPE <hortatepe2002@gmail.com> 1778064060 +0300	commit: fix(install): self-contained Windows binaries — no more STATUS_DLL_NOT_FOUND

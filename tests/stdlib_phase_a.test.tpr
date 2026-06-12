@@ -1,0 +1,81 @@
+// Coverage for Phase A stdlib additions: weekday, date_add_seconds,
+// keys, file_glob (smoke), csv_parse/csv_emit, ORM.
+import "test";
+
+// 1) weekday — 1970-01-01 was a Thursday (POSIX tm_wday = 4).
+func wday_epoch() {
+    assert_eq_int(weekday(0), 4);
+}
+
+// 2) date_add_seconds is a stable name for plain int add today.
+func date_add() {
+    assert_eq_int(date_add_seconds(1000, 60), 1060);
+}
+
+// 3) keys returns object key names in insertion order.
+func keys_order() {
+    json o = {"name": "Hamza", "age": 23, "active": true};
+    array k = keys(o);
+    assert_eq_int(length(k), 3);
+    assert_eq_str(k[0], "name");
+    assert_eq_str(k[1], "age");
+    assert_eq_str(k[2], "active");
+}
+
+// 4) csv_parse handles quoted fields + embedded commas.
+func csv_basic() {
+    array rows = csv_parse("a,b,c\n1,\"hello, world\",3");
+    assert_eq_int(length(rows), 2);
+    array r0 = rows[0];
+    array r1 = rows[1];
+    assert_eq_str(r0[1], "b");
+    assert_eq_str(r1[1], "hello, world");
+    assert_eq_str(r1[2], "3");
+}
+
+// 5) csv_emit -> csv_parse round-trip preserves content.
+func csv_round_trip() {
+    array rows = [["id", "name"], ["1", "with,comma"], ["2", "quoted\"q"]];
+    str s = csv_emit(rows);
+    array back = csv_parse(s);
+    assert_eq_int(length(back), 3);
+    array b1 = back[1];
+    array b2 = back[2];
+    assert_eq_str(b1[1], "with,comma");
+    assert_eq_str(b2[1], "quoted\"q");
+}
+
+// 6) ORM round-trip on an in-memory SQLite database.
+import "orm";
+
+func orm_round_trip() {
+    orm_open(":memory:");
+    define_model("users", {
+        "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+        "name": "TEXT NOT NULL",
+        "age": "INTEGER"
+    });
+    int id = orm_create("users", {"name": "Hamza", "age": 23});
+    assert_eq_int(id, 1);
+    json u = orm_find("users", id);
+    assert_eq_str(u["name"], "Hamza");
+    assert_eq_int(u["age"], 23);
+    orm_update("users", id, {"age": 24});
+    json u2 = orm_find("users", id);
+    assert_eq_int(u2["age"], 24);
+    array all = orm_all("users");
+    assert_eq_int(length(all), 1);
+    orm_delete("users", id);
+    array empty = orm_all("users");
+    assert_eq_int(length(empty), 0);
+    orm_close();
+}
+
+print("=== stdlib phase A ===");
+test("weekday epoch=Thursday", "wday_epoch");
+test("date_add_seconds add",   "date_add");
+test("keys insertion order",   "keys_order");
+test("csv_parse quoted",       "csv_basic");
+test("csv emit/parse round-trip","csv_round_trip");
+test("ORM CRUD round-trip",    "orm_round_trip");
+test_summary();

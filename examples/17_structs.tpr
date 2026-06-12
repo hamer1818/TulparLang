@@ -1,0 +1,47 @@
+// ============================================
+// STRUCT (TYPE) DEKLARASYONU
+// ============================================
+// `struct` (veya esdeger `type` / `tip`) C/Rust/Go-stil yapilandirilmis
+// veri tipi tanimlar. Su an icin alanlar JSON-backed boxed VMValue olarak
+// tutuluyor; ileride (Plan 04 PR3) seçili durumlarda LLVM `struct`
+// olarak unboxed lower edilecek. Yazim sozdizimi ayni kalmaya devam
+// edecek.
+
+struct Point {
+    int x;
+    int y;
+}
+
+struct Rectangle {
+    int w;
+    int h;
+}
+
+func area(Rectangle r): int {
+    return r.w * r.h;
+}
+
+func distance_squared(Point a, Point b): int {
+    int dx = a.x - b.x;
+    int dy = a.y - b.y;
+    return dx * dx + dy * dy;
+}
+
+// ----- usage -----
+
+Point origin;
+origin.x = 0;
+origin.y = 0;
+
+Point p;
+p.x = 3;
+p.y = 4;
+
+Rectangle r;
+r.w = 5;
+r.h = 6;
+
+print("origin: (", origin.x, ",", origin.y, ")");
+print("p:      (", p.x, ",", p.y, ")");
+print("r area:", area(r));
+print("|p|^2:", distance_squared(origin, p));

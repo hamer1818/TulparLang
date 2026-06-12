@@ -1,0 +1,4 @@
+0000000000000000000000000000000000000000 1ab6c7a9fbd12d33aaed8464af2778ca19c25114 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778686120 +0300	branch: Created from HEAD
+1ab6c7a9fbd12d33aaed8464af2778ca19c25114 d91f184c4447c2607d73dca070c704faaf87fbf3 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778686459 +0300	commit: fix(vm): typed-struct params pass by value (mirrors AOT Plan 04 semantics)
+d91f184c4447c2607d73dca070c704faaf87fbf3 287e7c777339e6cc901a8a9d73962a7d6eaa5deb Hamza ORTATEPE <hortatepe2002@gmail.com> 1779351961 +0300	commit: perf(benchmarks): remove CI benchmark trigger, bake local results, and add firewall fix
+287e7c777339e6cc901a8a9d73962a7d6eaa5deb 1bc1c2482f0a4155a39ebda592f9080e0513fa8a Hamza ORTATEPE <hortatepe2002@gmail.com> 1779352372 +0300	commit (merge): merge: merge origin/main into fix/vm-struct-by-value, keeping local benchmark results

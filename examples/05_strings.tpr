@@ -1,0 +1,25 @@
+print("=== String Manipulation Demo ===");
+
+str s = "  Hello, Tulpar!  ";
+print("Original: '" + s + "'");
+
+// Built-in functions
+str trimmed = trim(s);
+print("Trimmed: '" + trimmed + "'");
+
+print("Length: " + toString(length(trimmed)));
+
+str replaced = replace(trimmed, "Tulpar", "World");
+print("Replaced: '" + replaced + "'");
+
+// Split
+array parts = split(replaced, ", ");
+print("Split: " + toJson(parts));
+
+// Indexing
+print("First char: " + trimmed[0]);
+print("Substring (manual): " + trimmed[0] + trimmed[1] + trimmed[2] + trimmed[3] + trimmed[4]); 
+
+// Escape chars
+print("Line 1\nLine 2");
+print("Tab\tSeparated");

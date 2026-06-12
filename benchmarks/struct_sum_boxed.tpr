@@ -1,0 +1,23 @@
+// Plan 04 PR6 — boxed-json baseline for struct_sum.
+// Ayni hesaplama, ama her alan erisimi `vm_set_element` /
+// `vm_get_element` runtime cagrilarindan geciyor — Plan 04 oncesi
+// "her sey json" yaklasimi. struct_sum.tpr ile ayni sonucu uretip
+// alan erisim runtime overhead'ini olcer.
+//
+// Top-level'de kosuyoruz (struct_sum.tpr ile ayni — adil olcum
+// icin). LLVM main'e inip ayni init overhead'ine sahip oluyor.
+// PR6'da `int`-return fn icine sarmak crash ediyordu; o bug
+// (eligibility check `var acc = {...}` icin native-AOT path'ini
+// kabul ediyordu) bu PR'da kapandi.
+
+var acc = { "x": 0, "y": 0, "z": 0 };
+int n = 10000000;
+int i = 0;
+while (i < n) {
+    acc["x"] = acc["x"] + i;
+    acc["y"] = acc["y"] + i * 2;
+    acc["z"] = acc["z"] + i * 3;
+    i = i + 1;
+}
+
+print(acc["x"] + acc["y"] + acc["z"]);

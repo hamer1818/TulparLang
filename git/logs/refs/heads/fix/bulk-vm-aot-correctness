@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 248fed8c3014126a6a7954d5140ff153c6c83e00 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778684075 +0300	branch: Created from HEAD
+248fed8c3014126a6a7954d5140ff153c6c83e00 55e0a4bd27a2a2d9ee014c37ea5ba537a1c0b269 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778685440 +0300	commit: fix(aot): coerce bool to int at typed local var decl

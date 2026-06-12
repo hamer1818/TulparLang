@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 1fae7a232ca4fd5e7daf24c13f920051bac45368 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778146184 +0300	branch: Created from HEAD
+1fae7a232ca4fd5e7daf24c13f920051bac45368 e46e4dda3829392645be8e9aba18951944884b01 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778146213 +0300	commit: perf(aot): drop noinline+optnone from typed-int functions, enable real O3

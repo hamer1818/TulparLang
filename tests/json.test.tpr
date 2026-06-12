@@ -1,0 +1,100 @@
+// Tulpar JSON-builtin tests. Guards toJson / fromJson roundtrip,
+// push / pop on json arrays, length / indexing on json objects, and
+// nested access. JSON is the API path's native data type so any
+// regression here breaks every Wings/API handler.
+
+import "test";
+
+// ----- Object literals + indexing -----------------------------------------
+
+func object_basic() {
+    json o = { "name": "Tulpar", "year": 2026 };
+    assert_eq_str(o["name"], "Tulpar");
+    assert_eq_int(o["year"], 2026);
+}
+
+func object_nested() {
+    json o = {
+        "user": { "id": 1, "email": "x@y.z" },
+        "active": 1
+    };
+    assert_eq_int(o["user"]["id"], 1);
+    assert_eq_str(o["user"]["email"], "x@y.z");
+    assert_eq_int(o["active"], 1);
+}
+
+// ----- Array literals + push/pop ------------------------------------------
+
+func array_push_length() {
+    json arr = [];
+    push(arr, 10);
+    push(arr, 20);
+    push(arr, 30);
+    assert_eq_int(length(arr), 3);
+    assert_eq_int(arr[0], 10);
+    assert_eq_int(arr[2], 30);
+}
+
+func array_mixed_types() {
+    json arr = [];
+    push(arr, "hello");
+    push(arr, 42);
+    push(arr, 1);   // bool-like
+    assert_eq_int(length(arr), 3);
+    assert_eq_str(arr[0], "hello");
+    assert_eq_int(arr[1], 42);
+    assert_eq_int(arr[2], 1);
+}
+
+// ----- toJson / fromJson roundtrip -----------------------------------------
+
+func toJson_object() {
+    json o = { "a": 1, "b": 2 };
+    str s = toJson(o);
+    // Don't assert the exact serialisation order (depends on hash
+    // bucket walk); just verify it's a JSON object containing both keys.
+    int has_a = 0; if (contains(s, "\"a\"")) { has_a = 1; }
+    int has_b = 0; if (contains(s, "\"b\"")) { has_b = 1; }
+    assert_eq_int(has_a, 1);
+    assert_eq_int(has_b, 1);
+}
+
+func toJson_array() {
+    json arr = [];
+    push(arr, 1);
+    push(arr, 2);
+    push(arr, 3);
+    str s = toJson(arr);
+    assert_eq_str(s, "[1,2,3]");
+}
+
+func fromJson_basic() {
+    json o = fromJson("{\"x\":42,\"y\":\"hi\"}");
+    assert_eq_int(o["x"], 42);
+    assert_eq_str(o["y"], "hi");
+}
+
+// ----- json fromJson with array -------------------------------------------
+
+func fromJson_array() {
+    json arr = fromJson("[10, 20, 30]");
+    assert_eq_int(length(arr), 3);
+    assert_eq_int(arr[0], 10);
+    assert_eq_int(arr[2], 30);
+}
+
+// ----- Run all tests -------------------------------------------------------
+
+print("=== Tulpar JSON Builtin Tests ===");
+print("");
+
+test("object literal + index", "object_basic");
+test("nested object access", "object_nested");
+test("array push + length + index", "array_push_length");
+test("array of mixed values", "array_mixed_types");
+test("toJson(object) contains keys", "toJson_object");
+test("toJson(array) exact form", "toJson_array");
+test("fromJson basic", "fromJson_basic");
+test("fromJson with array", "fromJson_array");
+
+test_summary();

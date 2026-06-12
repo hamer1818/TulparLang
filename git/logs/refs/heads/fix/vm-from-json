@@ -1,0 +1,2 @@
+0000000000000000000000000000000000000000 ebc0dc90d3a94be99f34be4c9b8ca46da13b7ce4 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778671445 +0300	branch: Created from HEAD
+ebc0dc90d3a94be99f34be4c9b8ca46da13b7ce4 37c809f3ea10e0c752014930a3fa0a7f7440fe09 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778671902 +0300	commit: fix(vm): wire fromJson(str) to the shared recursive-descent parser

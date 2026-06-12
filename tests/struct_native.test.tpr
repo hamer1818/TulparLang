@@ -1,0 +1,223 @@
+// Native struct codegen — `struct Point { int x; int y; }` AOT'da
+// LLVMStructType + getelementptr ile lower'lanir. Field access boxed
+// `vm_get_element`/`vm_set_element` cagrilarini atliyor; LLVM O3 cogu
+// durumda struct'i tamamen inline ediyor.
+//
+// Bu test PR'in dogrulugunu (numerical correctness) garanti altina
+// aliyor — performansi degil. Performans dogrulamasi
+// benchmarks/struct_sum/ Plan 04 PR6'ya dusuyor.
+
+import "test";
+
+struct Point {
+    int x;
+    int y;
+}
+
+struct Box {
+    int width;
+    int height;
+    int depth;
+}
+
+func roundtrip_int_field() {
+    Point p;
+    p.x = 42;
+    assert_eq_int(42, p.x);
+}
+
+func multiple_fields() {
+    Point p;
+    p.x = 3;
+    p.y = 4;
+    assert_eq_int(3, p.x);
+    assert_eq_int(4, p.y);
+}
+
+func arithmetic_on_fields() {
+    Point p;
+    p.x = 3;
+    p.y = 4;
+    assert_eq_int(25, p.x * p.x + p.y * p.y);
+}
+
+func three_field_struct() {
+    Box b;
+    b.width = 2;
+    b.height = 3;
+    b.depth = 4;
+    assert_eq_int(24, b.width * b.height * b.depth);
+}
+
+func default_zero_init() {
+    // `Point p;` baslangicta tum alanlari sifirla doldurur — boxed
+    // `Object` yolundaki "missing key -> 0" davranisini tutarli sekilde
+    // typed yolda da koruyoruz.
+    Point p;
+    assert_eq_int(0, p.x);
+    assert_eq_int(0, p.y);
+}
+
+func reassign_field() {
+    Point p;
+    p.x = 1;
+    p.x = 99;
+    assert_eq_int(99, p.x);
+}
+
+func two_distinct_locals() {
+    Point a;
+    Point b;
+    a.x = 10;
+    b.x = 20;
+    a.y = 30;
+    b.y = 40;
+    assert_eq_int(10, a.x);
+    assert_eq_int(20, b.x);
+    assert_eq_int(30, a.y);
+    assert_eq_int(40, b.y);
+}
+
+func struct_literal_init() {
+    // `Point p = { x: 3, y: 4 };` — bare-identifier keys, typed-alloca path
+    // emits zero-init followed by per-field GEP+store of the i64 payload.
+    Point p = { x: 3, y: 4 };
+    assert_eq_int(3, p.x);
+    assert_eq_int(4, p.y);
+}
+
+func struct_literal_init_partial() {
+    // Missing field defaults to the zero-init pre-fill of the alloca, so
+    // `y` reads back as 0 even though the literal only sets `x`.
+    Point p = { x: 7 };
+    assert_eq_int(7, p.x);
+    assert_eq_int(0, p.y);
+}
+
+func struct_literal_init_three_fields() {
+    Box b = { width: 2, height: 3, depth: 4 };
+    assert_eq_int(24, b.width * b.height * b.depth);
+}
+
+func struct_literal_init_reassign() {
+    // The typed-alloca local should remain mutable after a literal init.
+    Point p = { x: 1, y: 2 };
+    p.x = 99;
+    assert_eq_int(99, p.x);
+    assert_eq_int(2, p.y);
+}
+
+func struct_literal_init_string_keys() {
+    // Backwards-compat: existing `{"x": ...}` syntax still works for
+    // typed-struct init. Same parse path accepts both.
+    Point p = { "x": 5, "y": 6 };
+    assert_eq_int(5, p.x);
+    assert_eq_int(6, p.y);
+}
+
+func struct_literal_init_uses_expressions() {
+    // Field values aren't restricted to literals — any expression that
+    // boxes into an int VMValue is fine; the codegen extracts slot 2.
+    int base = 10;
+    Point p = { x: base + 1, y: base * 2 };
+    assert_eq_int(11, p.x);
+    assert_eq_int(20, p.y);
+}
+
+// ---- Plan 04 PR5: function arg / return as struct ----
+
+func _dist_sq(Point p): int {
+    return p.x * p.x + p.y * p.y;
+}
+
+func _make_point(int a, int b): Point {
+    Point p = { x: a, y: b };
+    return p;
+}
+
+func _translate_x(Point p, int dx): Point {
+    p.x = p.x + dx;
+    return p;
+}
+
+func _box_volume(Box b): int {
+    return b.width * b.height * b.depth;
+}
+
+func struct_arg_local_identifier() {
+    // Pass-by-value typed-struct arg: caller passes the alloca pointer,
+    // callee copies into its own local — `_dist_sq` just reads fields.
+    Point p = { x: 3, y: 4 };
+    assert_eq_int(25, _dist_sq(p));
+}
+
+func struct_arg_object_literal() {
+    // Object literal in arg position: codegen builds a temp struct alloca
+    // populated field-by-field, passes its pointer.
+    assert_eq_int(100, _dist_sq({ x: 6, y: 8 }));
+}
+
+func struct_arg_three_fields_literal() {
+    assert_eq_int(24, _box_volume({ width: 2, height: 3, depth: 4 }));
+}
+
+func struct_return_into_typed_var_decl() {
+    // Struct-returning fn directly fills the typed VAR_DECL alloca.
+    Point p = _make_point(7, 9);
+    assert_eq_int(7, p.x);
+    assert_eq_int(9, p.y);
+}
+
+func struct_arg_pass_by_value() {
+    // Callee mutates its local, caller's struct must be unchanged.
+    Point p = { x: 1, y: 2 };
+    Point t = _translate_x(p, 100);
+    assert_eq_int(101, t.x);
+    assert_eq_int(2, t.y);
+    assert_eq_int(1, p.x);
+    assert_eq_int(2, p.y);
+}
+
+func struct_return_chain() {
+    // Chaining struct returns: each call writes into its own typed local.
+    Point p = _make_point(1, 2);
+    Point q = _translate_x(p, 5);
+    assert_eq_int(6, q.x);
+    assert_eq_int(2, q.y);
+    // First struct still intact — pass-by-value already covered above,
+    // but exercise it again across two struct-returning calls in series.
+    assert_eq_int(1, p.x);
+}
+
+test("typed struct: int field roundtrip", "roundtrip_int_field");
+test("typed struct: multiple int fields", "multiple_fields");
+test("typed struct: arithmetic on fields", "arithmetic_on_fields");
+test("typed struct: three-field struct", "three_field_struct");
+test("typed struct: default zero-initialised fields", "default_zero_init");
+test("typed struct: reassigning a field", "reassign_field");
+test("typed struct: two distinct typed-struct locals do not alias",
+     "two_distinct_locals");
+test("typed struct: literal init `{ x: 3, y: 4 }` populates fields",
+     "struct_literal_init");
+test("typed struct: literal init with missing field zero-defaults",
+     "struct_literal_init_partial");
+test("typed struct: literal init across three fields",
+     "struct_literal_init_three_fields");
+test("typed struct: literal init still allows later reassignment",
+     "struct_literal_init_reassign");
+test("typed struct: literal init accepts string keys (back-compat)",
+     "struct_literal_init_string_keys");
+test("typed struct: literal init accepts arbitrary expressions",
+     "struct_literal_init_uses_expressions");
+test("typed struct: function arg via local identifier",
+     "struct_arg_local_identifier");
+test("typed struct: function arg via object literal",
+     "struct_arg_object_literal");
+test("typed struct: 3-field struct arg via literal",
+     "struct_arg_three_fields_literal");
+test("typed struct: function return into typed VAR_DECL",
+     "struct_return_into_typed_var_decl");
+test("typed struct: function arg passes by value (caller intact)",
+     "struct_arg_pass_by_value");
+test("typed struct: chained struct returns preserve originals",
+     "struct_return_chain");

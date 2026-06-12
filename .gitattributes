@@ -1,0 +1,7 @@
+# Enforce LF endings on shell scripts so Windows checkouts don't break
+# Linux/WSL execution. Without this, `core.autocrlf=true` rewrites the
+# shebang line to `#!/bin/bash\r`, and bash on WSL fails with
+# `build.sh: cannot execute: required file not found`.
+*.sh         text eol=lf
+build.sh     text eol=lf
+run_tests.sh text eol=lf

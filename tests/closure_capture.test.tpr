@@ -1,0 +1,53 @@
+import "test";
+
+func make_adder(int n) {
+    return (int x) => n + x;
+}
+
+func run_make_adder() {
+    var adder = make_adder(10);
+    assert_eq_int(adder(5), 15);
+    
+    var adder2 = make_adder(20);
+    assert_eq_int(adder2(5), 25);
+    assert_eq_int(adder(5), 15); // Check they don't interfere
+}
+
+func run_capture_local() {
+    int x = 42;
+    var get_x = () => x;
+    assert_eq_int(get_x(), 42);
+}
+
+func run_counter_closure() {
+    int count = 0;
+    var tick = () => {
+        count = count + 1;
+        return count;
+    };
+    assert_eq_int(tick(), 1);
+    assert_eq_int(tick(), 2);
+    assert_eq_int(tick(), 3);
+    assert_eq_int(count, 3); // Make sure the original variable was mutated
+}
+
+func make_counter(int start) {
+    int count = start;
+    return () => {
+        count = count + 1;
+        return count;
+    };
+}
+
+func run_nested_counter() {
+    var c = make_counter(100);
+    assert_eq_int(c(), 101);
+    assert_eq_int(c(), 102);
+}
+
+print("=== closure capture tests ===");
+test("make_adder capture", "run_make_adder");
+test("capture local read-only", "run_capture_local");
+test("counter closure read/mutate", "run_counter_closure");
+test("nested counter factory", "run_nested_counter");
+test_summary();
