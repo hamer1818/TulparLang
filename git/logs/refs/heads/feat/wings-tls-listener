@@ -1,3 +1,0 @@
-0000000000000000000000000000000000000000 f899434ea3e3fc87c0e12a1f7b14fbdee910c4d6 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778172481 +0300	branch: Created from HEAD
-f899434ea3e3fc87c0e12a1f7b14fbdee910c4d6 241052f922995a26823175640a96eb9eca7388be Hamza ORTATEPE <hortatepe2002@gmail.com> 1778172510 +0300	commit: feat(wings): wings_tls listener — server-side HTTPS
-241052f922995a26823175640a96eb9eca7388be 7706be2b34b6803bc3de0e80d56bb18602cd1846 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778172557 +0300	rebase (finish): refs/heads/feat/wings-tls-listener onto b150ddc33c5c943f753599b5e7c37596912dd4cb

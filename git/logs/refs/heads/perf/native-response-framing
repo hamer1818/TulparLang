@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 d0d18aef7e0b8785a7697a6f4c1441d0407c7f20 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778490332 +0300	branch: Created from HEAD
-d0d18aef7e0b8785a7697a6f4c1441d0407c7f20 3bde2c65a9b631558eb4729daa92c687df6dd3ff Hamza ORTATEPE <hortatepe2002@gmail.com> 1778490726 +0300	commit: perf(http): replace snprintf with hand-rolled memcpy+itoa in response framing

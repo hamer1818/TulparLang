@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 c169739e449932789f46391afed2e8361f4329bf Hamza ORTATEPE <hortatepe2002@gmail.com> 1778164995 +0300	branch: Created from HEAD
-c169739e449932789f46391afed2e8361f4329bf e0e03df9863df1c8dc39dd9ef7e42ddb4067fb91 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778165941 +0300	commit: fix(wings): drop cookies auto-populate that segfaults on Linux AOT

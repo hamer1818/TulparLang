@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 d37cee5583273665adddaea1906f097a2f676a49 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778358699 +0300	branch: Created from origin/main
-d37cee5583273665adddaea1906f097a2f676a49 e0efab2b7ba2c380dafe7bbd273e42fb7540bbad Hamza ORTATEPE <hortatepe2002@gmail.com> 1778358961 +0300	commit: feat(installer): rebrand wizard, drop /docs URL, detect prior install

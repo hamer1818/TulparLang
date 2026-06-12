@@ -1,3 +1,0 @@
-0000000000000000000000000000000000000000 c0a354ef42a43f1892f6a70b829f850ab2fd9b1b Hamza ORTATEPE <hortatepe2002@gmail.com> 1777932784 +0300	branch: Created from HEAD
-c0a354ef42a43f1892f6a70b829f850ab2fd9b1b 5b230e28f4c71ec250170fdc80885d8ffdc56881 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777932957 +0300	commit: feat(typeinfer): len/abs polimorfizmi icin kategori kontrolu
-5b230e28f4c71ec250170fdc80885d8ffdc56881 bba3b4086091aef57fc3a78dc59d3a78af5ebff7 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777933154 +0300	rebase (finish): refs/heads/feat/typeinfer-poly-builtins onto 4a5b96a13f88f11e6ff87680c4fe0988fd862dc1

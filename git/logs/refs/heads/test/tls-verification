@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 c3ec5182a973e4fb7412922c279aa07c4ce7dc1b Hamza ORTATEPE <hortatepe2002@gmail.com> 1778169637 +0300	branch: Created from HEAD
-c3ec5182a973e4fb7412922c279aa07c4ce7dc1b 7c8d6a218111ee3b93c016dc8ca9a275afa43ce7 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778170478 +0300	commit: test: TLS verification smoke for http_client + OpenSSL link path

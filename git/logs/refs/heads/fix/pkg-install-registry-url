@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 3f50411cf963ad77b7cb93ee5228c6043ebf1236 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778142467 +0300	branch: Created from HEAD
-3f50411cf963ad77b7cb93ee5228c6043ebf1236 c7c2bc1788ed93f1e288f8b6bc33c614e0b0b92c Hamza ORTATEPE <hortatepe2002@gmail.com> 1778142491 +0300	commit: fix(pkg): install URL matches registry's path-param convention

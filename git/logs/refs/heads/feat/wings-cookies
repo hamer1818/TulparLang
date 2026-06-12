@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 82a62bbe1f62fcdcb767020874def1a609c690d9 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778154675 +0300	branch: Created from HEAD
-82a62bbe1f62fcdcb767020874def1a609c690d9 5c6c85326f7671b595d38469e382ed7c956d5c20 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778154675 +0300	commit: feat(wings): parse_cookies builtin + auto _request["cookies"]

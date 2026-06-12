@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 19411f3c321e227666122ed56ca8cb461097264e Hamza ORTATEPE <hortatepe2002@gmail.com> 1778492904 +0300	branch: Created from HEAD
-19411f3c321e227666122ed56ca8cb461097264e 427c4941d442b5c509953e6e60c1aa5355ab02ff Hamza ORTATEPE <hortatepe2002@gmail.com> 1778493140 +0300	commit: ci(build): move docs-only skip from job-level to step-level so required checks still report green

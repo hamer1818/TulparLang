@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 a09bc188ec76380fa7ca7063e5853a5e83da187a Hamza ORTATEPE <hortatepe2002@gmail.com> 1778449129 +0300	branch: Created from HEAD
-a09bc188ec76380fa7ca7063e5853a5e83da187a 82b90b112c02b385ccbb1ae9ba6e8dd1b891e283 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778449225 +0300	commit: ci(build): harden reuse fallback, drop silent release failure, fix macOS prefix

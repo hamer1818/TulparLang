@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 8af589596b51fe3c9a1a9b44d817b6f91d1e2f07 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778535560 +0300	branch: Created from HEAD
-8af589596b51fe3c9a1a9b44d817b6f91d1e2f07 c887d897602f58712cad63f80b9aadd12a45cbed Hamza ORTATEPE <hortatepe2002@gmail.com> 1778535679 +0300	commit: aot(debug): DIGlobalVariableExpression for top-level globals (Plan 07 PR 3g)

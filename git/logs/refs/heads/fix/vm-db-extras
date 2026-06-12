@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 e66d875d3cfe86d563a60cd045bc0705e4469bba Hamza ORTATEPE <hortatepe2002@gmail.com> 1778677241 +0300	branch: Created from HEAD
-e66d875d3cfe86d563a60cd045bc0705e4469bba a5663f3fdfe66846fc2bf9a87a7ffa9f175f3180 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778677494 +0300	commit: fix(vm): wire db_execute / db_error / db_last_insert_id

@@ -1,3 +1,0 @@
-0000000000000000000000000000000000000000 0eb73a28759466998227796c0040a699c9504c8a Hamza ORTATEPE <hortatepe2002@gmail.com> 1777924848 +0300	branch: Created from HEAD
-0eb73a28759466998227796c0040a699c9504c8a 40deb5c15dea425d5429e1bf21f614619694f599 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777925217 +0300	commit: feat(cli): tulpar typecheck — statik tip kontrolu opt-in komut
-40deb5c15dea425d5429e1bf21f614619694f599 a1fbf589003b5ce111ac8d136f1bfe8bbde4f6d5 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777926575 +0300	rebase (finish): refs/heads/feat/typecheck-cmd onto b37596454ea583d631fd0481092b7b9ea918f682

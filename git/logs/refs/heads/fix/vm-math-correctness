@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 88a0e2af9d0914105a5c494485a6a52e6042e39d Hamza ORTATEPE <hortatepe2002@gmail.com> 1778675484 +0300	branch: Created from HEAD
-88a0e2af9d0914105a5c494485a6a52e6042e39d 883f563b8d058e7204aa609b38804ada7722d832 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778675861 +0300	commit: fix(vm): math opcodes delegate to aot_math_X — abs(int) preserves int

@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 f0c4dd902f935ac742aace82c8306e2419c6d961 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778169248 +0300	branch: Created from HEAD
-f0c4dd902f935ac742aace82c8306e2419c6d961 fd501865a336c2eb99e2349aa768311571081e29 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778169596 +0300	commit: feat(wings): listen_pool worker pool + Windows OpenSSL link order fix

@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 e78f7335102bf80f16464711a120ec107e056840 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778672928 +0300	branch: Created from HEAD
-e78f7335102bf80f16464711a120ec107e056840 95b071e1d0d671a00d34fd701253d3f36e3a831d Hamza ORTATEPE <hortatepe2002@gmail.com> 1778673093 +0300	commit: fix(vm): delegate toJson() to aot_to_json — fixes embedded-quote escape

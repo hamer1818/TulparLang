@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 0055ece250e70f13520a00b4a94eb0b5b3905efe Hamza ORTATEPE <hortatepe2002@gmail.com> 1778168157 +0300	branch: Created from HEAD
-0055ece250e70f13520a00b4a94eb0b5b3905efe 8558e8fe7edeff2afeddee1d572c9b3c0852b5a1 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778168157 +0300	commit: feat(lsp): variable hover + scope-aware completion

@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 ebc0dc90d3a94be99f34be4c9b8ca46da13b7ce4 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778672035 +0300	branch: Created from HEAD
-ebc0dc90d3a94be99f34be4c9b8ca46da13b7ce4 46beff7848223ed941993aacf6b32b0877e6775b Hamza ORTATEPE <hortatepe2002@gmail.com> 1778672278 +0300	commit: fix(vm): make toJson() emit compact JSON to match AOT serializer

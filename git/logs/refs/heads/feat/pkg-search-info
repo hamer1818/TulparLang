@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 a949172de158206a8344de89df556d070748c309 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778620788 +0300	branch: Created from HEAD
-a949172de158206a8344de89df556d070748c309 2f0082ed2fae6b70f1a74208fe1e1a39768405d8 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778620806 +0300	commit: feat(pkg): pkg search + pkg info — registry discovery from CLI

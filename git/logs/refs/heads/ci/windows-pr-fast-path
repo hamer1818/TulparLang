@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 ecfbd0f844a41f0a38ceb3d858eb23ab9198d89f Hamza ORTATEPE <hortatepe2002@gmail.com> 1778538536 +0300	branch: Created from HEAD
-ecfbd0f844a41f0a38ceb3d858eb23ab9198d89f a150a951b152b73d2ddd8ed80edf80096f3d7e53 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778538627 +0300	commit: ci(windows): skip Inno installer + slim MSYS2 install list on PR builds

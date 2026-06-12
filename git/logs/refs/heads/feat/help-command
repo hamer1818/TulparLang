@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 eb46d6d391ff89456a49d4d43434f6c28c1fd8c7 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777725543 +0300	branch: Created from HEAD
-eb46d6d391ff89456a49d4d43434f6c28c1fd8c7 53de4b4358d54deaa8dafcb3688829a71bda8f5d Hamza ORTATEPE <hortatepe2002@gmail.com> 1777725638 +0300	commit: cli: add explicit --help / -h / help / ? command

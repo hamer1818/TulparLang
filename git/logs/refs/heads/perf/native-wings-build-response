@@ -1,4 +1,0 @@
-0000000000000000000000000000000000000000 b96323c12504e173e2638bc12ffaf1fba1556784 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778453813 +0300	branch: Created from HEAD
-b96323c12504e173e2638bc12ffaf1fba1556784 e3b800d30363b15d4b03bbe88ea2f146e556339a Hamza ORTATEPE <hortatepe2002@gmail.com> 1778453834 +0300	commit: perf(http): native wings_build_response builtin — fold envelope + toJson + framing into one C call
-e3b800d30363b15d4b03bbe88ea2f146e556339a e38076f13b971d3c0eac4f221e5371669cbac995 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778454209 +0300	commit: perf(http): cache TULPAR_HTTP_QUIET once at startup, drop 3 per-request env() calls
-e38076f13b971d3c0eac4f221e5371669cbac995 4150608a9ab367d59ac3699459492fef7bf4565a Hamza ORTATEPE <hortatepe2002@gmail.com> 1778454624 +0300	commit: perf(http): native wings_find_route builtin — fold route lookup into one C call

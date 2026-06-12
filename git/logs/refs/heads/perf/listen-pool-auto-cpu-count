@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 9d2a002bc7196c3e0481240044660751ed5c90b9 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778508264 +0300	branch: Created from HEAD
-9d2a002bc7196c3e0481240044660751ed5c90b9 026bdc20cc333431d02f475358c4bd94a1d825ec Hamza ORTATEPE <hortatepe2002@gmail.com> 1778508618 +0300	commit: perf(http): listen_pool defaults to cpu_count() workers + new native cpu_count() builtin

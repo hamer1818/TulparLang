@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 c0a354ef42a43f1892f6a70b829f850ab2fd9b1b Hamza ORTATEPE <hortatepe2002@gmail.com> 1777932275 +0300	branch: Created from HEAD
-c0a354ef42a43f1892f6a70b829f850ab2fd9b1b abd2903e35cfdcf99f2cfc63cbf783a019817ce5 Hamza ORTATEPE <hortatepe2002@gmail.com> 1777932546 +0300	commit: fix(vm): fn-local string concat sessizce 0'a indirgeniyordu (#48)

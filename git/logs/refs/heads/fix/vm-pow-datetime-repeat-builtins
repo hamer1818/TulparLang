@@ -1,3 +1,0 @@
-0000000000000000000000000000000000000000 c52923b66c81990a7387bdaacdd59cf758b7b752 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778674912 +0300	branch: Created from HEAD
-c52923b66c81990a7387bdaacdd59cf758b7b752 2e49a6f9264e1a13241bd2f89f7723c48126893e Hamza ORTATEPE <hortatepe2002@gmail.com> 1778675198 +0300	commit: fix(vm): wire pow / repeat / iso8601 / weekday / now_iso8601 builtins
-2e49a6f9264e1a13241bd2f89f7723c48126893e 2c45704ea0e387c13ee2f6eda81e530cfa0bc1bc Hamza ORTATEPE <hortatepe2002@gmail.com> 1778680296 +0300	rebase (finish): refs/heads/fix/vm-pow-datetime-repeat-builtins onto 94bc20705ef4943fca4aa49068a0534e1a17fbd2

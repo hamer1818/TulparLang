@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 bc921f63977fb4c59f02f5fed3680e036c8342f9 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778066890 +0300	branch: Created from HEAD
-bc921f63977fb4c59f02f5fed3680e036c8342f9 f0e6771044dcdab35b435bf7c481472a4bee7066 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778067432 +0300	commit: fix(aot): emit unwind tables on user functions — fixes Issue #53

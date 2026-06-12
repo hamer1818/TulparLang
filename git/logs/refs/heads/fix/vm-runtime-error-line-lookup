@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 526d4da85f79402ca7ff9ea0f109a9928a7b163c Hamza ORTATEPE <hortatepe2002@gmail.com> 1778673365 +0300	branch: Created from HEAD
-526d4da85f79402ca7ff9ea0f109a9928a7b163c b43076c4dcf3b349cf6d0ab4544ba4853a8ccb60 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778673732 +0300	commit: fix(vm): real source-line numbers in runtime_error stack traces

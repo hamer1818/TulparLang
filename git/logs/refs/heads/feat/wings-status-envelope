@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 ef978fe84c75ab7d0fa24d69a751b73fa5116eb6 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778139141 +0300	branch: Created from HEAD
-ef978fe84c75ab7d0fa24d69a751b73fa5116eb6 753114f9f85f7408b14c862ce83ef6ce0d54806e Hamza ORTATEPE <hortatepe2002@gmail.com> 1778139383 +0300	commit: feat(wings): _status envelope — handlers can return non-200 HTTP codes

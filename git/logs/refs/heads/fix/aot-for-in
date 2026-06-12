@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 0eb73a28759466998227796c0040a699c9504c8a Hamza ORTATEPE <hortatepe2002@gmail.com> 1777925260 +0300	branch: Created from HEAD
-0eb73a28759466998227796c0040a699c9504c8a a2bdb094bce60fbb4a6bd4e166183bb940e49c2d Hamza ORTATEPE <hortatepe2002@gmail.com> 1777925726 +0300	commit: fix(for-in): AOT ve legacy'de array iterasyon sessizce hicbir sey yapmiyordu

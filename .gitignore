@@ -125,3 +125,4 @@ wasm/build_wasm/
 # wasm/emsdk is a local Emscripten SDK install pulled by wasm/build_wasm.sh
 # (formerly tracked as a stray submodule pointer with no .gitmodules — broke CI checkout cleanup)
 wasm/emsdk/
+git/

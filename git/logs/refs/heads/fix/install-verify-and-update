@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 2b985fe948fec9aba5be383752c89cb8ca4373d4 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778065133 +0300	branch: Created from HEAD
-2b985fe948fec9aba5be383752c89cb8ca4373d4 96ca9418c430c7b33fe461a476fb75adec068277 Hamza ORTATEPE <hortatepe2002@gmail.com> 1778065728 +0300	commit: fix(install): SHA-256-verified self-update + standalone DLL release assets
