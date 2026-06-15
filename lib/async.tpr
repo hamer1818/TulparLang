@@ -3,9 +3,13 @@
 // Basit asenkron programlama yardımcıları
 // ============================================
 
-// NOT: TulparLang şu anda gerçek asenkron programlama (event loop, callbacks)
-// desteklememektedir. Bu kütüphane, asenkron programlama için temel yapıları
-// tanımlar ve gelecekte interpreter desteği ile genişletilebilir.
+// NOT: TulparLang artık DİL DÜZEYİNDE gerçek async/await destekler (AOT yolu):
+//   async func f() { await sleep_async(10); return 1; }
+//   var p = f(); int r = await p;
+// Bunlar stackful coroutine + event loop ile çalışır (runtime/tulpar_async).
+// Aşağıdaki yardımcılar (Promise-benzeri, timer kaydı, task kuyruğu) bu dil
+// özelliğinden ÖNCE yazılmış saf-Tulpar yapılardır; geriye dönük uyumluluk
+// için bırakıldı. Yeni kod için `async`/`await` + `sleep_async()` tercih edin.
 
 // ============================================
 // Global Timer State
@@ -139,22 +143,25 @@ func is_rejected(arrayJson promise) {
 // ============================================
 
 /*
-Gelecek sürümlerde aşağıdaki sözdizimi desteklenebilir:
+async/await ARTIK DESTEKLENİYOR (AOT yolu). Örnek:
 
-async func fetchData() {
-    arrayJson result = await http_get("https://api.example.com/data");
-    return result;
+async func compute(int n) {
+    await sleep_async(10);   // bloklamayan gecikme — diğer coroutine'ler çalışır
+    return n * 2;
 }
 
-// Callback-based pattern (şu an desteklenen)
-func fetchData_callback(str url, str success_callback, str error_callback) {
-    try {
-        arrayJson result = http_get(url);
-        // success_callback(result);  // First-class functions gerektirir
-    } catch (e) {
-        // error_callback(e);
-    }
-}
+var a = compute(21);   // promise döner (hemen)
+var b = compute(50);   // ikinci coroutine
+int ra = await a;      // 42
+int rb = await b;      // 100
+
+Notlar:
+- `async func` bir coroutine'dir; çağrı bir promise döndürür, gövde await'te
+  askıya alınır.
+- `await p` promise yerleşene kadar bekler; coroutine içindeyse scheduler'a
+  yield eder, ana akıştaysa event loop'u sürer ("block-on").
+- `sleep_async(ms)` bloklamayan timer'dır; `sleep(ms)` ise hâlâ bloklar.
+- Program sonunda kalan tüm task'lar otomatik drenajla tamamlanır.
 */
 
 // ============================================
@@ -189,8 +196,14 @@ func enqueue_task(arrayJson queue, str task_name, arrayJson data) {
 func dequeue_task(arrayJson queue) {
     if (length(queue["tasks"]) > 0) {
         arrayJson task = queue["tasks"][0];
-        // shift() yerine manuel yöntemi için
-        // TODO: Array shift fonksiyonu eklenebilir
+        // shift() builtin'i yok: ilk elemanı al, kalanları yeni diziye taşı.
+        arrayJson rest = [];
+        int i = 1;
+        while (i < length(queue["tasks"])) {
+            push(rest, queue["tasks"][i]);
+            i = i + 1;
+        }
+        queue["tasks"] = rest;
         return task;
     }
     return {};

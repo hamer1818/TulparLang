@@ -99,7 +99,7 @@ typedef enum {
 } VMValueType;
 
 // Object types for heap allocation
-typedef enum { OBJ_STRING, OBJ_ARRAY, OBJ_OBJECT, OBJ_FUNCTION, OBJ_STRUCT, OBJ_CLOSURE } ObjType;
+typedef enum { OBJ_STRING, OBJ_ARRAY, OBJ_OBJECT, OBJ_FUNCTION, OBJ_STRUCT, OBJ_CLOSURE, OBJ_PROMISE } ObjType;
 
 // Base object header - ARC enabled
 typedef struct Obj {
@@ -218,6 +218,8 @@ static inline VMValue vm_make_obj(void *v) {
 #define IS_OBJECT(v) (IS_OBJ(v) && AS_OBJ(v)->type == OBJ_OBJECT)
 #define IS_CLOSURE(v) (IS_OBJ(v) && AS_OBJ(v)->type == OBJ_CLOSURE)
 #define AS_CLOSURE(v) ((ObjClosure *)AS_OBJ(v))
+#define IS_PROMISE(v) (IS_OBJ(v) && AS_OBJ(v)->type == OBJ_PROMISE)
+#define AS_PROMISE(v) ((ObjPromise *)AS_OBJ(v))
 #define AS_ARRAY(v) ((ObjArray *)AS_OBJ(v))
 #define AS_OBJECT(v) ((ObjObject *)AS_OBJ(v))
 
@@ -237,6 +239,22 @@ typedef struct {
   ObjString **keys;
   VMValue *values;
 } ObjObject;
+
+// Promise Object — the value an async function produces and `await` consumes.
+// Settled by the event-loop scheduler in runtime/tulpar_async.cpp. `value`
+// carries the fulfilment value (state==1) or the rejection payload (state==2).
+// `waiters` is an engine-private `Task**` vector of coroutines blocked in
+// `await` on this promise; settling the promise moves them to the ready queue.
+// Promises are created with arena_allocated=1 so ARC never reclaims them while
+// the scheduler still holds raw pointers; the engine owns their lifetime.
+typedef struct ObjPromise {
+  Obj obj;
+  int state; // 0 = pending, 1 = fulfilled, 2 = rejected
+  VMValue value;
+  void *waiters; // Task** (engine-private)
+  int nwaiters;
+  int cap_waiters;
+} ObjPromise;
 
 // Heap-allocated struct (Plan 04 v2 — heap promotion).
 //
@@ -388,9 +406,7 @@ VM *vm_create();
 // Free VM and all resources
 void vm_free(VM *vm);
 
-// Run bytecode chunk
-// Run bytecode function
-VMResult vm_run(VM *vm, ObjFunction *function);
+// vm_run (bytecode interpreter) removed 2026-06-15 — Tulpar is AOT-only.
 
 // Object allocation
 ObjString *vm_alloc_string(VM *vm, const char *chars, int length);

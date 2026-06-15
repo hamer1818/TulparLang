@@ -755,12 +755,15 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_vm_array_get =
       LLVMAddFunction(backend->module, "vm_array_get", get_type);
 
-  // vm_array_set(ObjArray*, int, VMValue)
+  // vm_array_set(ObjArray*, int, VMValue*) — pointer-based wrapper. The
+  // VMValue crosses the C boundary by pointer (like vm_array_push) so the
+  // payload eightbyte survives the struct-arg ABI; passing it by value
+  // silently zeroed every captured closure variable.
   LLVMTypeRef set_params[] = {backend->ptr_type, backend->int32_type,
-                              backend->vm_value_type};
+                              backend->ptr_type};
   LLVMTypeRef set_type = LLVMFunctionType(backend->void_type, set_params, 3, 0);
-  backend->func_vm_array_set =
-      LLVMAddFunction(backend->module, "vm_array_set", set_type);
+  backend->func_vm_array_set = LLVMAddFunction(
+      backend->module, "vm_array_set_aot_ptr_wrapper", set_type);
 
   // Object/Generic Functions
 
@@ -1248,6 +1251,23 @@ void declare_runtime_functions(LLVMBackend *backend) {
   LLVMTypeRef call_cls_params[] = {backend->ptr_type, backend->ptr_type, backend->int32_type};
   LLVMTypeRef call_cls_type = llvm_make_vmvalue_func_type(backend, call_cls_params, 3, 0);
   backend->func_aot_call_closure = LLVMAddFunction(backend->module, "aot_call_closure", call_cls_type);
+
+  // ===== Async runtime (runtime/tulpar_async.cpp) =====
+  // aot_async_spawn(ptr fn, ptr args, int32 argc) -> ptr (ObjPromise*)
+  LLVMTypeRef spawn_params[] = {backend->ptr_type, backend->ptr_type, backend->int32_type};
+  LLVMTypeRef spawn_type = LLVMFunctionType(backend->ptr_type, spawn_params, 3, 0);
+  backend->func_aot_async_spawn = LLVMAddFunction(backend->module, "aot_async_spawn", spawn_type);
+  // aot_await(VMValue) -> VMValue
+  LLVMTypeRef await_params[] = {backend->vm_value_type};
+  LLVMTypeRef await_type = llvm_make_vmvalue_func_type(backend, await_params, 1, 0);
+  backend->func_aot_await = LLVMAddFunction(backend->module, "aot_await", await_type);
+  // aot_sleep_async(int64 ms) -> ptr (ObjPromise*)
+  LLVMTypeRef sleep_async_params[] = {backend->int_type};
+  LLVMTypeRef sleep_async_type = LLVMFunctionType(backend->ptr_type, sleep_async_params, 1, 0);
+  backend->func_aot_sleep_async = LLVMAddFunction(backend->module, "aot_sleep_async", sleep_async_type);
+  // aot_event_loop_run() -> void
+  LLVMTypeRef loop_type = LLVMFunctionType(backend->void_type, nullptr, 0, 0);
+  backend->func_aot_event_loop_run = LLVMAddFunction(backend->module, "aot_event_loop_run", loop_type);
 
   // ====== Fast String Operations ======
   // aot_string_concat_fast_ptr(VMValue*, VMValue*) -> VMValue
@@ -1807,6 +1827,7 @@ void register_function(LLVMBackend *backend, const char *name,
     backend->functions[backend->function_count].param_struct_names = nullptr;
     backend->functions[backend->function_count].param_count = 0;
     backend->functions[backend->function_count].return_struct_name = nullptr;
+    backend->functions[backend->function_count].is_async = 0;
     backend->function_count++;
   }
 }
@@ -2124,6 +2145,21 @@ LocalVar *get_local_var(LLVMBackend *backend, const char *name) {
   return nullptr;
 }
 
+// Store `value` (a VMValue) into closure-env array slot `idx_val`. Goes
+// through vm_array_set_aot_ptr_wrapper, so the value is spilled to a
+// stack slot and passed by pointer — the by-value struct-arg ABI drops
+// the payload eightbyte and corrupts captured variables to 0.
+static void llvm_emit_array_set(LLVMBackend *backend, LLVMValueRef array,
+                                LLVMValueRef idx_val, LLVMValueRef value) {
+  LLVMValueRef vptr = LLVMBuildAlloca(backend->builder, backend->vm_value_type,
+                                      "arr_set_val");
+  LLVMBuildStore(backend->builder, value, vptr);
+  LLVMValueRef args[] = {array, idx_val, vptr};
+  LLVMBuildCall2(backend->builder,
+                 LLVMGlobalGetValueType(backend->func_vm_array_set),
+                 backend->func_vm_array_set, args, 3, "");
+}
+
 void add_local_captured(LLVMBackend *backend, const char *name, LLVMValueRef env_ptr, int slot_index, ASTNode_C *decl_func) {
   if (!backend->current_scope) return;
   Scope *s = backend->current_scope;
@@ -2247,6 +2283,25 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
     return result;
 
   case AST_IDENTIFIER: {
+    // Captured closure variable: read it out of the heap env array. The
+    // typed fast path below can't see it (get_local_native is null for
+    // captured vars and get_local's value pointer is null), so without
+    // this branch `n + x` inside a closure would read `n` as 0. Mirrors
+    // the captured-read branch in codegen_expression's AST_IDENTIFIER.
+    LocalVar *cap_var = get_local_var(backend, node->name);
+    if (cap_var && cap_var->is_captured == 1) {
+      LLVMValueRef env =
+          find_env_for_decl(backend, cap_var->declaring_function);
+      LLVMValueRef idx_val =
+          LLVMConstInt(backend->int32_type, cap_var->slot_index, 0);
+      LLVMValueRef get_args[] = {env, idx_val};
+      result.boxed = llvm_call_vmvalue_func(
+          backend, backend->func_vm_array_get, get_args, 2, node->name);
+      result.value = result.boxed;
+      result.type = INFERRED_UNKNOWN;
+      return result;
+    }
+
     InferredType var_type = get_local_type(backend, node->name);
     LLVMValueRef native = get_local_native(backend, node->name);
 
@@ -2833,7 +2888,6 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     return nullptr;
   }
 
-  // TODO: Binary Ops Update
   case AST_BINARY_OP: {
     LLVMValueRef L = codegen_expression(backend, node->left);
     LLVMValueRef R = codegen_expression(backend, node->right);
@@ -3255,6 +3309,19 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     return phi;
   }
 
+  case AST_AWAIT: {
+    // `await expr` — evaluate the operand (usually a promise) and hand it to
+    // the engine. aot_await suspends the running coroutine until the promise
+    // settles (or drives the loop when awaited on the main thread), then
+    // yields the settled value. A non-promise operand passes straight through.
+    LLVMValueRef awaited = codegen_expression(backend, node->left);
+    if (!awaited)
+      return llvm_vm_val_int(backend, 0);
+    LLVMValueRef args[] = {awaited};
+    return llvm_call_vmvalue_func(backend, backend->func_aot_await, args, 1,
+                                  "await_res");
+  }
+
   case AST_UNARY_OP: {
     LLVMValueRef operand = codegen_expression(backend, node->left);
     if (!operand)
@@ -3331,7 +3398,6 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     return llvm_vm_val_int(backend, 0);
   }
 
-  // TODO: Function Call Update
   case AST_FUNCTION_CALL: {
     // Method-call resolution: when the parser saw `<recv>.<name>(args)`
     // it stored `<recv>` in node->receiver and left node->name as the
@@ -4032,6 +4098,21 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_socket_accept, args, 1, "client_fd");
     }
+    if (strcmp(node->name, "socket_peer_ip") == 0 &&
+        node->argument_count >= 1) {
+      // Declared lazily (no cached backend field): (VMValue) -> VMValue,
+      // same shape as socket_close. Resolves the remote IP of an accepted
+      // fd via the runtime's getpeername+inet_ntop.
+      LLVMValueRef fn =
+          LLVMGetNamedFunction(backend->module, "aot_socket_peer_ip");
+      if (!fn) {
+        LLVMTypeRef p[] = {backend->vm_value_type};
+        LLVMTypeRef ty = llvm_make_vmvalue_func_type(backend, p, 1, 0);
+        fn = LLVMAddFunction(backend->module, "aot_socket_peer_ip", ty);
+      }
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, fn, args, 1, "peer_ip");
+    }
     if (strcmp(node->name, "socket_send") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
@@ -4576,6 +4657,22 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_vm_val_int(backend, 0);
     }
 
+    // sleep_async(ms) -> promise that fulfils after `ms` milliseconds. Unlike
+    // sleep(), this does NOT block: it registers a timer with the event loop,
+    // so other coroutines run while it pends. `await sleep_async(ms)` is the
+    // idiomatic non-blocking delay.
+    if (strcmp(node->name, "sleep_async") == 0 && node->argument_count >= 1) {
+      LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef ms_i64 =
+          LLVMBuildExtractValue(backend->builder, arg, 2, "sleep_async_ms");
+      LLVMValueRef args[] = {ms_i64};
+      LLVMValueRef pr = LLVMBuildCall2(
+          backend->builder,
+          LLVMGlobalGetValueType(backend->func_aot_sleep_async),
+          backend->func_aot_sleep_async, args, 1, "sleep_async_p");
+      return llvm_build_vm_val_obj(backend, pr);
+    }
+
     // ====== JSON Functions ======
     // fromJson(str) -> object/array
     if (strcmp(node->name, "fromJson") == 0 && node->argument_count >= 1) {
@@ -4760,6 +4857,32 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       dummy.name = node->name;
       dummy.line = node->line;
       closure_val = codegen_expression(backend, &dummy);
+    } else if (node->name) {
+      // Top-level closure: `var f = (..) => ..;` lands in a VMValue global
+      // (top-level decls funnel into main), so `f(args)` has no local to
+      // find. Treat it as an indirect call when a VMValue global with this
+      // name exists AND no user function `t_<name>` shadows it (builtins
+      // were already dispatched above). A non-closure global falls through
+      // to aot_call_closure's null/invalid guard at runtime.
+      LLVMValueRef g = LLVMGetNamedGlobal(backend->module, node->name);
+      bool has_user_func = false;
+      for (int i = 0; i < backend->function_count; i++) {
+        if (backend->functions[i].name &&
+            strcmp(backend->functions[i].name, node->name) == 0) {
+          has_user_func = true;
+          break;
+        }
+      }
+      if (g && !has_user_func &&
+          LLVMGlobalGetValueType(g) == backend->vm_value_type) {
+        is_closure_call = true;
+        ASTNode_C dummy;
+        memset(&dummy, 0, sizeof(dummy));
+        dummy.type = AST_IDENTIFIER;
+        dummy.name = node->name;
+        dummy.line = node->line;
+        closure_val = codegen_expression(backend, &dummy);
+      }
     }
 
     if (is_closure_call && closure_val) {
@@ -4784,6 +4907,55 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef argc_val = LLVMConstInt(backend->int32_type, node->argument_count, 0);
       LLVMValueRef call_args[] = {cls_ptr, args_ptr_void, argc_val};
       return llvm_call_vmvalue_func(backend, backend->func_aot_call_closure, call_args, 3, "closure_call_res");
+    }
+
+    // Async call: spawn a coroutine and yield its promise. The callee uses the
+    // boxed `void t_<name>(ret*, args*)` ABI (forced in the predeclare pass),
+    // which is exactly what the engine's call_user_fn expects — so we hand
+    // aot_async_spawn the function pointer plus a flat VMValue arg array.
+    if (node->name) {
+      bool callee_async = false;
+      for (int i = 0; i < backend->function_count; i++) {
+        if (backend->functions[i].name &&
+            strcmp(backend->functions[i].name, node->name) == 0) {
+          callee_async = backend->functions[i].is_async != 0;
+          break;
+        }
+      }
+      if (callee_async) {
+        char async_fn[256];
+        snprintf(async_fn, sizeof(async_fn), "t_%s", node->name);
+        LLVMValueRef afn = LLVMGetNamedFunction(backend->module, async_fn);
+        LLVMValueRef args_ptr_void;
+        if (node->argument_count > 0) {
+          LLVMTypeRef arr_type =
+              LLVMArrayType(backend->vm_value_type, node->argument_count);
+          LLVMValueRef arr =
+              llvm_build_alloca_at_entry(backend, arr_type, "async_args");
+          for (int i = 0; i < node->argument_count; i++) {
+            LLVMValueRef av = codegen_expression(backend, node->arguments[i]);
+            LLVMValueRef idx[] = {LLVMConstInt(backend->int32_type, 0, 0),
+                                  LLVMConstInt(backend->int32_type, i, 0)};
+            LLVMValueRef ep = LLVMBuildGEP2(backend->builder, arr_type, arr, idx,
+                                            2, "async_arg_ep");
+            LLVMBuildStore(backend->builder, av, ep);
+          }
+          args_ptr_void =
+              LLVMBuildBitCast(backend->builder, arr, backend->ptr_type, "async_args_void");
+        } else {
+          args_ptr_void = LLVMConstPointerNull(backend->ptr_type);
+        }
+        LLVMValueRef fn_void =
+            LLVMBuildBitCast(backend->builder, afn, backend->ptr_type, "async_fn_void");
+        LLVMValueRef spawn_args[] = {
+            fn_void, args_ptr_void,
+            LLVMConstInt(backend->int32_type, node->argument_count, 0)};
+        LLVMValueRef promise_ptr = LLVMBuildCall2(
+            backend->builder,
+            LLVMGlobalGetValueType(backend->func_aot_async_spawn),
+            backend->func_aot_async_spawn, spawn_args, 3, "spawn_res");
+        return llvm_build_vm_val_obj(backend, promise_ptr);
+      }
     }
 
     // User-defined or Runtime function call
@@ -5161,10 +5333,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           int slot_idx = cd->slots[node][pname];
           LLVMValueRef val = LLVMBuildLoad2(backend->builder, backend->vm_value_type, arg_ptr, pname);
           LLVMValueRef idx_val = LLVMConstInt(backend->int32_type, slot_idx, 0);
-          LLVMValueRef set_args[] = {backend->current_env_ptr, idx_val, val};
-          LLVMBuildCall2(backend->builder,
-                         LLVMGlobalGetValueType(backend->func_vm_array_set),
-                         backend->func_vm_array_set, set_args, 3, "");
+          llvm_emit_array_set(backend, backend->current_env_ptr, idx_val, val);
           add_local_captured(backend, pname, backend->current_env_ptr, slot_idx, node);
         } else {
           LLVMValueRef val = LLVMBuildLoad2(backend->builder, backend->vm_value_type, arg_ptr, pname);
@@ -5221,6 +5390,104 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     return llvm_build_vm_val_obj(backend, closure_ptr);
   }
 
+  case AST_MATCH: {
+    // Lower `match subject { p1 => b1, _ => bw }` to: evaluate the subject
+    // once into a hidden local, then a chain of `subject == p_i` tests, each
+    // arm storing its value into a result slot, falling through to the
+    // wildcard (else_branch). The comparison reuses the binary-op `==`
+    // codegen via a synthetic node so every literal type works.
+    LLVMValueRef subj = codegen_expression(backend, node->condition);
+    char subj_name[32];
+    snprintf(subj_name, sizeof(subj_name), "__match_%d", backend->match_count++);
+    LLVMValueRef subj_slot = llvm_build_alloca_at_entry(
+        backend, backend->vm_value_type, subj_name);
+    LLVMBuildStore(backend->builder, subj, subj_slot);
+    add_local(backend, subj_name, subj_slot);
+
+    LLVMValueRef res_slot = llvm_build_alloca_at_entry(
+        backend, backend->vm_value_type, "match_res");
+    LLVMBuildStore(backend->builder, llvm_vm_val_int(backend, 0), res_slot);
+
+    LLVMValueRef func = backend->current_function;
+    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlock(func, "match_end");
+
+    // Truthy test for one pattern atom against the bound subject:
+    //   - range `lo..hi`  → (subj >= lo) && (subj <= hi)
+    //   - literal         → subj == atom
+    // Built from synthetic binary-op nodes so the existing typed comparison
+    // codegen handles every literal type.
+    auto atom_truthy = [&](ASTNode_C *atom) -> LLVMValueRef {
+      ASTNode_C subj_ref;
+      memset(&subj_ref, 0, sizeof(subj_ref));
+      subj_ref.type = AST_IDENTIFIER;
+      subj_ref.name = subj_name;
+      subj_ref.line = node->line;
+      if (atom && atom->type == AST_BINARY_OP && atom->op == TOKEN_DOTDOT) {
+        ASTNode_C ge, le;
+        memset(&ge, 0, sizeof(ge));
+        memset(&le, 0, sizeof(le));
+        ge.type = AST_BINARY_OP; ge.op = TOKEN_GREATER_EQUAL;
+        ge.left = &subj_ref; ge.right = atom->left; ge.line = node->line;
+        le.type = AST_BINARY_OP; le.op = TOKEN_LESS_EQUAL;
+        le.left = &subj_ref; le.right = atom->right; le.line = node->line;
+        LLVMValueRef gt = llvm_build_is_truthy(backend, codegen_expression(backend, &ge));
+        LLVMValueRef lt = llvm_build_is_truthy(backend, codegen_expression(backend, &le));
+        return LLVMBuildAnd(backend->builder, gt, lt, "range_match");
+      }
+      ASTNode_C eq;
+      memset(&eq, 0, sizeof(eq));
+      eq.type = AST_BINARY_OP; eq.op = TOKEN_EQUAL;
+      eq.left = &subj_ref; eq.right = atom; eq.line = node->line;
+      return llvm_build_is_truthy(backend, codegen_expression(backend, &eq));
+    };
+
+    for (int i = 0; i < node->element_count; i++) {
+      // A pattern is either a single atom or a Block of `|`-alternatives;
+      // the arm matches if ANY atom matches.
+      ASTNode_C *pat = node->elements[i];
+      LLVMValueRef truthy = nullptr;
+      if (pat && pat->type == AST_BLOCK) {
+        for (int k = 0; k < pat->statement_count; k++) {
+          LLVMValueRef t = atom_truthy(pat->statements[k]);
+          truthy = truthy ? LLVMBuildOr(backend->builder, truthy, t, "alt_or") : t;
+        }
+      }
+      if (!truthy) truthy = atom_truthy(pat);
+
+      LLVMBasicBlockRef then_bb = LLVMAppendBasicBlock(func, "match_arm");
+      LLVMBasicBlockRef next_bb = LLVMAppendBasicBlock(func, "match_next");
+      LLVMBuildCondBr(backend->builder, truthy, then_bb, next_bb);
+
+      LLVMPositionBuilderAtEnd(backend->builder, then_bb);
+      if (node->arguments[i] && node->arguments[i]->type == AST_BLOCK) {
+        codegen_statement(backend, node->arguments[i]);
+      } else {
+        LLVMValueRef bodyval = codegen_expression(backend, node->arguments[i]);
+        LLVMBuildStore(backend->builder, bodyval, res_slot);
+      }
+      if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder)))
+        LLVMBuildBr(backend->builder, merge_bb);
+
+      LLVMPositionBuilderAtEnd(backend->builder, next_bb);
+    }
+
+    // Wildcard arm (builder is positioned at the final fall-through block).
+    if (node->else_branch) {
+      if (node->else_branch->type == AST_BLOCK) {
+        codegen_statement(backend, node->else_branch);
+      } else {
+        LLVMValueRef bodyval = codegen_expression(backend, node->else_branch);
+        LLVMBuildStore(backend->builder, bodyval, res_slot);
+      }
+    }
+    if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder)))
+      LLVMBuildBr(backend->builder, merge_bb);
+
+    LLVMPositionBuilderAtEnd(backend->builder, merge_bb);
+    return LLVMBuildLoad2(backend->builder, backend->vm_value_type, res_slot,
+                          "match_val");
+  }
+
   default:
     return llvm_vm_val_int(backend, 0); // nullptr/void
   }
@@ -5266,6 +5533,37 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
   set_debug_loc_for_node(backend, node);
   switch (node->type) {
   case AST_VARIABLE_DECL: {
+    // Captured-variable declaration. When the enclosing function/lambda
+    // captures this name (a nested closure reads or mutates it), the
+    // backing store must live in the heap env array — not a stack alloca
+    // or native typed-int slot — or the closure's env slot stays at its
+    // default and reads return 0 / mutations don't persist. Mirror the
+    // param-capture path at function/lambda entry: evaluate the
+    // initializer, store it into the env slot, and register the name as a
+    // captured local so subsequent reads/writes in this same scope resolve
+    // through the env too. Runs before the typed-int/global/struct paths
+    // so `int count = 0` captured by a closure also lands in the env.
+    {
+      CaptureData *cap_cd = (CaptureData *)backend->capture_data;
+      ASTNode_C *cap_fn = backend->current_function_node;
+      if (cap_fn && node->name && backend->current_env_ptr && cap_cd &&
+          cap_cd->slots.find(cap_fn) != cap_cd->slots.end() &&
+          cap_cd->slots[cap_fn].find(node->name) !=
+              cap_cd->slots[cap_fn].end()) {
+        int cap_slot = cap_cd->slots[cap_fn][node->name];
+        LLVMValueRef cap_init =
+            node->right ? codegen_expression(backend, node->right)
+                        : llvm_vm_val_int(backend, 0);
+        LLVMValueRef cap_idx =
+            LLVMConstInt(backend->int32_type, cap_slot, 0);
+        llvm_emit_array_set(backend, backend->current_env_ptr, cap_idx,
+                            cap_init);
+        add_local_captured(backend, node->name, backend->current_env_ptr,
+                           cap_slot, cap_fn);
+        return cap_init;
+      }
+    }
+
     // Native typed-int global (registered in Pass 0.1 for `int x = ...;`)?
     LLVMValueRef existing_global =
         LLVMGetNamedGlobal(backend->module, node->name);
@@ -5686,10 +5984,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       if (var && var->is_captured == 1) {
         LLVMValueRef env = find_env_for_decl(backend, var->declaring_function);
         LLVMValueRef idx_val = LLVMConstInt(backend->int32_type, var->slot_index, 0);
-        LLVMValueRef set_args[] = {env, idx_val, val};
-        LLVMBuildCall2(backend->builder,
-                       LLVMGlobalGetValueType(backend->func_vm_array_set),
-                       backend->func_vm_array_set, set_args, 3, "");
+        llvm_emit_array_set(backend, env, idx_val, val);
         return val;
       }
 
@@ -6906,8 +7201,11 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
 }
 
 void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
-  // Check if function has explicit return type - use native codegen
-  if (backend->use_static_typing && node->return_type == TYPE_INT) {
+  // Check if function has explicit return type - use native codegen.
+  // Async functions are exempt: they must use the boxed `t_<name>` ABI (the
+  // coroutine engine calls them through it), matching the predeclare pass.
+  if (!node->is_async && backend->use_static_typing &&
+      node->return_type == TYPE_INT) {
     // Verify all parameters have types
     int all_typed = 1;
     for (int i = 0; i < node->param_count; i++) {
@@ -7162,10 +7460,7 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
       if (has_captures && cd->slots[node].find(pname) != cd->slots[node].end()) {
         int slot_idx = cd->slots[node][pname];
         LLVMValueRef idx_val = LLVMConstInt(backend->int32_type, slot_idx, 0);
-        LLVMValueRef set_args[] = {backend->current_env_ptr, idx_val, val};
-        LLVMBuildCall2(backend->builder,
-                       LLVMGlobalGetValueType(backend->func_vm_array_set),
-                       backend->func_vm_array_set, set_args, 3, "");
+        llvm_emit_array_set(backend, backend->current_env_ptr, idx_val, val);
         add_local_captured(backend, pname, backend->current_env_ptr, slot_idx, node);
       } else {
         LLVMValueRef alloca = llvm_build_alloca_at_entry(
@@ -7239,6 +7534,10 @@ static void predeclare_func_signature(LLVMBackend *backend, ASTNode_C *node) {
   if (native_eligible && !native_codegen_supports_body(node->body)) {
     native_eligible = false;
   }
+  // Async functions must use the boxed `void t_<name>(ret*, args*)` ABI: the
+  // coroutine engine (runtime/tulpar_async.cpp call_user_fn) invokes them
+  // through that exact signature, so the native i64-ABI is never an option.
+  if (node->is_async) native_eligible = false;
 
   if (native_eligible) {
     if (LLVMGetNamedFunction(backend->module, node->name)) return;
@@ -7271,6 +7570,16 @@ static void predeclare_func_signature(LLVMBackend *backend, ASTNode_C *node) {
     // slots carry typed struct memory so the call-site codegen and the
     // function body codegen agree on the dereference shape.
     set_function_struct_info(backend, node->name, node);
+    // Record async-ness so the call site spawns a coroutine instead of a
+    // direct call.
+    if (node->is_async) {
+      for (int i = 0; i < backend->function_count; i++) {
+        if (strcmp(backend->functions[i].name, node->name) == 0) {
+          backend->functions[i].is_async = 1;
+          break;
+        }
+      }
+    }
     LLVMAddAttributeAtIndex(
         f, LLVMAttributeFunctionIndex,
         LLVMCreateEnumAttribute(
@@ -7394,6 +7703,15 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
         codegen_statement(backend, node->statements[i]);
       }
     }
+  }
+
+  // Drain the async event loop before exit so spawned-but-unawaited
+  // coroutines and pending timers still run to completion (Node-style). The
+  // queues are empty for non-async programs, so this is a no-op there.
+  if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder))) {
+    LLVMBuildCall2(backend->builder,
+                   LLVMGlobalGetValueType(backend->func_aot_event_loop_run),
+                   backend->func_aot_event_loop_run, nullptr, 0, "");
   }
 
   if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder)))

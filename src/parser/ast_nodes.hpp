@@ -223,8 +223,9 @@ struct FunctionDecl {
     std::optional<std::string> return_custom_type;
     std::unique_ptr<ASTNode> body;
     std::optional<std::string> receiver_type; // For methods
+    bool is_async = false;                     // `async func` — coroutine
     SourceLocation loc;
-    
+
     FunctionDecl(const std::string& n, std::vector<Parameter> params,
                  DataType ret_type, std::unique_ptr<ASTNode> b, SourceLocation l)
         : name(n), parameters(std::move(params)), return_type(ret_type),
@@ -235,9 +236,26 @@ struct LambdaExpr {
     std::vector<Parameter> parameters;
     std::unique_ptr<ASTNode> body;
     SourceLocation loc;
-    
+
     LambdaExpr(std::vector<Parameter> params, std::unique_ptr<ASTNode> b, SourceLocation l)
         : parameters(std::move(params)), body(std::move(b)), loc(l) {}
+};
+
+// Rust-style `match subject { pattern => body, _ => body }`. v1 patterns
+// are literal expressions (int/str/bool) plus the `_` wildcard. Usable in
+// both expression position (each arm body is an expression that yields the
+// match's value) and statement position (arm bodies may be blocks).
+struct MatchArm {
+    std::unique_ptr<ASTNode> pattern;   // nullptr ⇒ `_` wildcard
+    std::unique_ptr<ASTNode> body;
+};
+struct MatchExpr {
+    std::unique_ptr<ASTNode> subject;
+    std::vector<MatchArm> arms;
+    SourceLocation loc;
+
+    MatchExpr(std::unique_ptr<ASTNode> subj, std::vector<MatchArm> a, SourceLocation l)
+        : subject(std::move(subj)), arms(std::move(a)), loc(l) {}
 };
 
 struct IfStatement {
@@ -406,7 +424,8 @@ struct ASTNode {
         ThrowStatement,
         ImportStatement,
         TypeDecl,
-        LambdaExpr>;
+        LambdaExpr,
+        MatchExpr>;
 
     Variant value;
 

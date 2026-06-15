@@ -70,7 +70,8 @@ const BuiltinEntry kBuiltins[] = {
     {"clock_ms",     "clock_ms(): float",                           "Yüksek hassasiyetli zamanlayıcı (ms)."},
     {"timestamp",    "timestamp(): int",                            "Unix epoch (saniye)."},
     {"time_ms",      "time_ms(): int",                              "Unix epoch (milisaniye)."},
-    {"sleep",        "sleep(ms: int): void",                        "Verilen milisaniye kadar bekler."},
+    {"sleep",        "sleep(ms: int): void",                        "Verilen milisaniye kadar bekler (bloklar)."},
+    {"sleep_async",  "sleep_async(ms: int): promise",               "Bloklamayan timer; `await sleep_async(ms)` ile kullanılır. AOT async."},
 
     // ---- File ----
     {"read_file",    "read_file(path: str): str",                   "Dosyayı tamamen okur."},
@@ -112,6 +113,7 @@ const BuiltinEntry kBuiltins[] = {
     {"socket_send",    "socket_send(client_fd: int, data: str): int", ""},
     {"socket_receive", "socket_receive(client_fd: int, size: int): str", ""},
     {"socket_close",   "socket_close(fd: int): void",               ""},
+    {"socket_peer_ip", "socket_peer_ip(fd: int): str",              "Kabul edilen bağlantının uzak (client) IP'sini döner; hata olursa \"\"."},
 
     // ---- Thread ----
     {"thread_create",  "thread_create(func_name: str, arg: any): int", ""},

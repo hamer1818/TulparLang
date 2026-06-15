@@ -1,0 +1,27 @@
+// async / await — cooperative coroutines on the AOT event loop.
+//
+// An `async func` returns a promise immediately; `await` suspends until it
+// settles. `sleep_async(ms)` is a non-blocking timer: while one coroutine
+// waits, others run. The runtime drains all pending tasks at program exit.
+
+async func slow_double(int n) {
+    // Non-blocking pause — the scheduler runs other tasks meanwhile.
+    await sleep_async(20);
+    return n * 2;
+}
+
+async func greet(str who) {
+    await sleep_async(10);
+    print("merhaba " + who);
+    return 1;
+}
+
+// Spawn two coroutines; they run concurrently while we await.
+var a = slow_double(21);
+var g = greet("dunya");
+
+int result = await a;
+await g;
+
+print("slow_double(21) = " + toString(result));   // 42
+print("bitti");

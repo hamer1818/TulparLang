@@ -89,7 +89,12 @@ func middleware_auth() {
 arrayJson _rate_limit_store = {};
 
 func middleware_rate_limiter() {
-    str client_ip = "127.0.0.1"; // TODO: Gerçek IP'yi al
+    // Dispatcher _request["remote_addr"]'ı socket_peer_ip ile dolduruyor;
+    // yoksa (ör. doğrudan çağrı) "unknown"'a düş.
+    str client_ip = "unknown";
+    if (_request["remote_addr"]) {
+        client_ip = _request["remote_addr"];
+    }
     int max_requests = 100;
     int window_seconds = 60;
     
@@ -133,20 +138,12 @@ func middleware_session() {
         cookie_header = _request["headers"]["Cookie"];
     }
     
-    // Cookie'leri parse et (library fonksiyonu)
-    // Bu fonksiyon henüz router'a dahil edilmediği için buraya kopyalayım veya
-    // import yapısını düzeltmeliyiz. Şimdilik basitleştirilmiş parser:
-    
+    // Cookie'leri native parse_cookies builtin'i ile ayrıştır.
     str session_id = "";
     if (length(cookie_header) > 0) {
-        if (contains(cookie_header, "tulpar_sess=")) {
-            // Basit extraction
-            arrayStr parts = split(cookie_header, "tulpar_sess=");
-            if (length(parts) > 1) {
-                str after = parts[1];
-                arrayStr parts2 = split(after, ";");
-                session_id = parts2[0];
-            }
+        json cookies = parse_cookies(cookie_header);
+        if (cookies["tulpar_sess"]) {
+            session_id = cookies["tulpar_sess"];
         }
     }
     

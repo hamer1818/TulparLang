@@ -458,10 +458,12 @@ int cmd_add(int argc, char **argv) {
 }
 
 // `tulpar pkg install` walks the manifest's [dependencies] table and
-// vendors each dep into `tulpar_modules/<name>/`. The current MVP
-// only handles `path:` deps; other version specs (semver from a
-// registry) print a "not implemented" line so users know the registry
-// is on the roadmap but not wired up yet.
+// vendors each dep into `tulpar_modules/<name>/`. Three spec kinds are
+// handled: `path:` (local dir copy), `url:` (single .tpr over HTTP),
+// and bare semver specs resolved against the `[registry]` url
+// (`<registry>/v1/packages/<name>/versions/<version>/source`). Each
+// remote install records the resolved URL + a SHA-256 in `tulpar.lock`
+// for byte-stable, tamper-detecting re-installs.
 //
 // Path-spec format: `path:./relative/dir` or `path:/absolute/dir`. The
 // referenced directory is copied recursively under

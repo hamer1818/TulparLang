@@ -27,6 +27,9 @@ enum TulparTokenType {
     TOKEN_ELSE,          // "else"
     TOKEN_WHILE,         // "while"
     TOKEN_FOR,           // "for"
+    TOKEN_MATCH,         // "match" — pattern-match expression head
+    TOKEN_ASYNC,         // "async" — marks a coroutine function
+    TOKEN_AWAIT,         // "await" — suspends until a promise settles
     TOKEN_IN,            // "in"
     TOKEN_BREAK,         // "break"
     TOKEN_CONTINUE,      // "continue"
@@ -80,7 +83,9 @@ enum TulparTokenType {
     TOKEN_COMMA,         // ,
     TOKEN_COLON,         // : (for JSON objects)
     TOKEN_DOT,           // . (member access)
-    
+    TOKEN_DOTDOT,        // .. (inclusive range in match patterns)
+    TOKEN_PIPE,          // | (pattern alternative in match arms)
+
     TOKEN_EOF,           // End of file
     TOKEN_ERROR          // Error
 };

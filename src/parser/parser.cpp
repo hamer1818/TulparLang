@@ -337,9 +337,21 @@ std::unique_ptr<ASTNode> Parser::parse_statement() {
         return parse_variable_decl();
     }
     
-    // Function declaration
+    // Function declaration (optionally prefixed with `async`)
     if (check(TOKEN_FUNC)) {
         return parse_function_decl();
+    }
+    if (check(TOKEN_ASYNC)) {
+        advance(); // consume `async`
+        if (!check(TOKEN_FUNC)) {
+            error("'async' yalnizca bir fonksiyon tanimindan once gelebilir / "
+                  "'async' may only precede a function declaration");
+        }
+        auto fn = parse_function_decl();
+        if (fn && std::holds_alternative<FunctionDecl>(fn->value)) {
+            std::get<FunctionDecl>(fn->value).is_async = true;
+        }
+        return fn;
     }
     
     // Type declaration
@@ -357,6 +369,14 @@ std::unique_ptr<ASTNode> Parser::parse_statement() {
     if (check(TOKEN_FOR)) {
         // Need to distinguish for vs for-in
         return parse_for_loop();
+    }
+    // Statement-position match (`match x { ... }`). Block-like: ends with
+    // `}`, so no trailing `;` is required (mirrors if/while). A trailing
+    // `;` is tolerated for the expression-statement style.
+    if (check(TOKEN_MATCH)) {
+        auto m = parse_expression();
+        match(TOKEN_SEMICOLON);
+        return m;
     }
     if (check(TOKEN_RETURN)) {
         return parse_return_statement();
@@ -859,6 +879,14 @@ std::unique_ptr<ASTNode> Parser::parse_unary() {
         auto operand = parse_unary();
         return std::make_unique<ASTNode>(UnaryOp(std::move(operand), op, loc));
     }
+    // `await <expr>` — suspends the current coroutine until the awaited
+    // promise settles, yielding its value. Represented as a UnaryOp with op
+    // TOKEN_AWAIT; the AST→C conversion lowers it to AST_AWAIT.
+    if (match(TOKEN_AWAIT)) {
+        SourceLocation loc(current().line(), current().column());
+        auto operand = parse_unary();
+        return std::make_unique<ASTNode>(UnaryOp(std::move(operand), TOKEN_AWAIT, loc));
+    }
 
     // Postfix (call, index, ++/--) bagdas operand'a ait — binary operandi
     // her zaman primary+postfix bicimde olmali ki 'f(x) + g(y)' calissin.
@@ -867,7 +895,56 @@ std::unique_ptr<ASTNode> Parser::parse_unary() {
 
 std::unique_ptr<ASTNode> Parser::parse_primary() {
     SourceLocation loc(current().line(), current().column());
-    
+
+    // Rust-style match expression: `match subject { pat => body, _ => body }`.
+    // Parsed in primary position so it works both as a statement and as an
+    // expression (e.g. `str g = match score { 90 => "A", _ => "F" };`).
+    if (check(TOKEN_MATCH)) {
+        advance(); // consume 'match'
+        auto subject = parse_expression();
+        expect(TOKEN_LBRACE, "Expected '{' after match subject");
+        std::vector<MatchArm> arms;
+        while (!check(TOKEN_RBRACE) && !check(TOKEN_EOF)) {
+            MatchArm arm;
+            // `_` wildcard (lexes as an identifier), or one-or-more pattern
+            // atoms separated by `|`. Each atom may be a literal or an
+            // inclusive range `lo..hi`. Multiple atoms are wrapped in a Block
+            // (codegen treats it as "match if any atom matches").
+            if (check(TOKEN_IDENTIFIER) && current().value() == "_") {
+                advance();
+                arm.pattern = nullptr;
+            } else {
+                std::vector<std::unique_ptr<ASTNode>> atoms;
+                do {
+                    SourceLocation aloc(current().line(), current().column());
+                    auto atom = parse_expression();
+                    if (check(TOKEN_DOTDOT)) {
+                        advance();
+                        auto hi = parse_expression();
+                        atom = std::make_unique<ASTNode>(
+                            BinaryOp(std::move(atom), std::move(hi), TOKEN_DOTDOT, aloc));
+                    }
+                    atoms.push_back(std::move(atom));
+                } while (match(TOKEN_PIPE));
+                if (atoms.size() == 1) {
+                    arm.pattern = std::move(atoms[0]);
+                } else {
+                    arm.pattern = std::make_unique<ASTNode>(Block(std::move(atoms), loc));
+                }
+            }
+            expect(TOKEN_FAT_ARROW, "Expected '=>' in match arm");
+            if (check(TOKEN_LBRACE)) {
+                arm.body = parse_block();
+            } else {
+                arm.body = parse_expression();
+            }
+            arms.push_back(std::move(arm));
+            match(TOKEN_COMMA); // optional separator/trailing comma
+        }
+        expect(TOKEN_RBRACE, "Expected '}' to close match");
+        return std::make_unique<ASTNode>(MatchExpr(std::move(subject), std::move(arms), loc));
+    }
+
     // Literals
     if (check(TOKEN_INT_LITERAL)) {
         // stoll raises out_of_range/invalid_argument; catch instead of crashing.
@@ -1294,7 +1371,9 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
             out->op = n.op;
             set_loc(out, n.loc);
         } else if constexpr (std::is_same_v<T, UnaryOp>) {
-            out->type = AST_UNARY_OP;
+            // `await x` is carried as a UnaryOp(op=TOKEN_AWAIT); lower it to a
+            // dedicated AST_AWAIT node so the backends can dispatch it cleanly.
+            out->type = (n.op == TOKEN_AWAIT) ? AST_AWAIT : AST_UNARY_OP;
             out->left = convert_ast_node_ptr(n.operand);
             out->op = n.op;
             set_loc(out, n.loc);
@@ -1379,6 +1458,7 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
         } else if constexpr (std::is_same_v<T, FunctionDecl>) {
             out->type = AST_FUNCTION_DECL;
             out->name = dup_cstr(n.name);
+            out->is_async = n.is_async ? 1 : 0;
             out->param_count = static_cast<int>(n.parameters.size());
             out->return_type = n.return_type;
             if (n.return_custom_type.has_value()) {
@@ -1514,6 +1594,32 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
                 }
             }
             out->body = convert_ast_node_ptr(n.body);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, MatchExpr>) {
+            out->type = AST_MATCH;
+            out->condition = convert_ast_node_ptr(n.subject);
+            // Non-wildcard arms land in parallel elements[]/arguments[]
+            // (pattern[i] ⇒ body[i]); the `_` wildcard body goes to
+            // else_branch. Codegen evaluates the subject once and compares
+            // it to each pattern, falling back to the wildcard.
+            int arm_count = 0;
+            for (const auto& arm : n.arms) if (arm.pattern) arm_count++;
+            out->element_count = arm_count;
+            out->argument_count = arm_count;
+            if (arm_count > 0) {
+                out->elements = static_cast<ASTNode_C**>(std::calloc(arm_count, sizeof(ASTNode_C*)));
+                out->arguments = static_cast<ASTNode_C**>(std::calloc(arm_count, sizeof(ASTNode_C*)));
+            }
+            int idx = 0;
+            for (const auto& arm : n.arms) {
+                if (!arm.pattern) {
+                    out->else_branch = convert_ast_node_ptr(arm.body);
+                } else {
+                    out->elements[idx] = convert_ast_node_ptr(arm.pattern);
+                    out->arguments[idx] = convert_ast_node_ptr(arm.body);
+                    idx++;
+                }
+            }
             set_loc(out, n.loc);
         }
     }, node.value);

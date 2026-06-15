@@ -13,8 +13,15 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 - **Çekirdek sözdizimi tam:** statik tipler, fonksiyonlar (opsiyonel
   dönüş-tipi notasyonu), kontrol akışı, modüller (`import "x" as alias`).
-- **İki backend:** LLVM 18 AOT (`tulpar build`) + VM (`--vm`, REPL, AOT
-  fallback). Tree-walk interpreter ve x64 JIT sunset edildi (2026-05).
+- **Tek backend — AOT-only (2026-06-15):** LLVM 18 AOT tek yürütme yolu
+  (C/Rust/Go modeli). Bytecode VM yorumlayıcısı (`vm_run`), bytecode
+  derleyicisi (`compiler.cpp`) ve REPL **kaldırıldı**; `--vm`/`--run`
+  yok sayılır (uyarı), `--repl` çıkış verir. AOT hatası = sert hata
+  (VM yedeği yok). `src/vm/` artık yalnızca **paylaşılan runtime**:
+  `runtime_bindings.cpp` (aot_* builtin'leri), `vm.cpp` (arena +
+  allocator'lar), `vm.hpp` (VMValue/Obj tipleri). Tree-walk interpreter
+  ve x64 JIT zaten 2026-05'te sunset edilmişti. **Yeni dil özelliği
+  yalnızca AOT'ta yazılır — VM/bytecode paritesi aranmaz.**
 - **Cross-platform:** Windows (Inno Setup installer), Linux, macOS,
   WASM. `libtulpar_runtime.a` AOT'a static link.
 - **Stdlib gömülü:** wings, router, http_utils, http_client, async,
@@ -336,32 +343,37 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Dil seviyesi
 
-- 🟡 **Closures / first-class functions.** Nested `func` syntax
-  parse oluyor ama outer scope capture'ı yok; `make_counter() →
-  func tick() { n = n + 1; }` deseni sessizce çöküyor (program
-  output vermiyor). Higher-order patterns için ortam (environment)
-  yapısı ve indirect call gerek.
-  - **Sıradaki adım:** Mini-plan: (1) closure object layout
-    (heap env ptr + fn ptr), (2) AST'ye capture analizi,
-    (3) codegen'de env struct + indirect call site. Lambda PR'ı
-    (aşağıda) parser scaffold'unu hazırladı; closure body'sini
-    onun üzerine kur.
+- ✅ **Lambda + closures (AOT) ÇALIŞIYOR.** `(int a, int b) => a + b`
+  lambda'ları, outer-scope capture'lı closure'lar (`make_counter`,
+  `make_adder`, sayaç mutasyonu), higher-order ve nested kullanım,
+  ayrıca top-level `var f = (..) => ..` hepsi AOT'ta yeşil
+  (`tests/closure_basic.test.tpr` 3/3, `tests/closure_capture.test.tpr`
+  4/4). Closure modeli: heap env array (slot 0 = parent env, slot 1+ =
+  yakalanan değişkenler) + `aot_create_closure`/`aot_call_closure` +
+  `analyze_module_captures` capture analizi.
+  - **Kök bug (çözüldü):** capture analizi + env codegen vardı ama
+    `vm_array_set` 16-baytlık VMValue'yi **değer-geçişiyle** alıyordu;
+    SysV/MinGW struct-arg ABI'sinde payload eightbyte düşüyor → her
+    yakalanan değişken sessizce 0'a sıfırlanıyordu. Fix: env yazımı
+    `vm_array_set_aot_ptr_wrapper` ile **pointer-geçişine** çevrildi
+    (`vm_array_push` gibi); ayrıca `codegen_typed_expr`'in
+    `AST_IDENTIFIER`'ına ve `AST_VARIABLE_DECL`'e captured-var dalları
+    eklendi, `aot_call_closure`'daki `[DEBUG]` print'leri kaldırıldı.
+  - **Not:** AOT tek yürütme yolu (AOT-only); VM kaldırıldığı için
+    "VM closure paritesi" diye bir iş artık yok.
 
-- 🟡 **Lambda ifadeleri.** `(int a, int b) => a + b` parser
-  scaffolding'i yerinde (lexer'a `TOKEN_FAT_ARROW` eklendi,
-  `(<type> ...) =>` deseni ve bare `=>` parser'da "lambda
-  expressions not yet supported" diagnostic'iyle yakalanıyor) —
-  AST node + codegen + env capture follow-up PR'lar için bekliyor.
-  - **Sıradaki adım:** Diagnostic'i kaldır, `AST_LAMBDA` üret.
-    Sıfır-capture lambda'lardan başla (anonim fn olarak codegen,
-    fn pointer döndür); `examples/lambda_zero_capture.tpr` ile
-    smoke. Capture'lı versiyon closures iş başlayınca eklenir.
-
-- 🟢 **Pattern matching / `match` ifadesi.** Switch yok; if-else
-  zinciri ile yapılıyor.
-  - **Sıradaki adım:** Sözdizim kararı (`match x { 1 => …, _ => … }`?).
-    Sonra parser node + AST + codegen — basit literal pattern'larla
-    başla; struct/array destructuring v1.1'e ertelenebilir.
+- ✅ **Pattern matching / `match` ifadesi ÇALIŞIYOR.** Rust-stili
+  `match subject { 1 => "a", _ => "f" }`. Hem ifade (değer döndürür,
+  `str g = match score {…}`) hem statement pozisyonunda; int/str/bool
+  subject + `_` wildcard; arm gövdesi expr veya blok. AOT'ta yeşil
+  (`tests/match.test.tpr` 6/6, `examples/33_match.tpr`).
+  Pattern'lar: literal, `_` wildcard, `|`-alternatif (`1 | 2 | 3`) ve
+  inclusive range (`10 .. 20`). Lowering: subject bir kez değerlendirilir
+  (VM'de temp local slot), her atom `==`/range/OR testiyle if-else
+  zincirine iner. `match` artık ayrılmış keyword (TR: `eşle`/`esle`),
+  `..`=`TOKEN_DOTDOT`, `|`=`TOKEN_PIPE`.
+  - **Kalan (🟢, v1.2):** struct/array destructuring pattern'ları
+    (`Point{x, y} => …`). Şu an pattern'lar skaler değer eşleştirir.
 
 - 🟢 **Generics.** Type system overhaul; `func f<T>(T x): T` parse
   hatası veriyor.
@@ -369,11 +381,23 @@ girildiğinde ne yapacağımı bilelim.
     syntax'ını parse + iz sürebilecek şekilde genişlet,
     monomorphization stratejisini seç.
 
-- 🟢 **`async/await` keywords.** `lib/async.tpr` var ama dil-seviyesi
-  state-machine transform yok.
-  - **Sıradaki adım:** Closures + first-class fn iş bittikten
-    sonra. Async fn'leri state-machine'e çevirmek callback-based
-    runtime üzerine kurulu.
+- ✅ **`async/await` (AOT) ÇALIŞIYOR.** `async func f(){ await sleep_async(10);
+  return 1; }`, `var p = f(); int r = await p;`. Gerçek kooperatif eşzamanlılık:
+  bir coroutine `await`'te askıya alınırken diğerleri çalışır (10ms timer'lı
+  task, 20ms'liden önce yerleşir — `examples/34_async.tpr` çıktısıyla doğrulandı).
+  `tests/async.test.tpr` 4/4 yeşil, `examples/34_async.tpr` suite'te PASS.
+  - **Mimari (state-machine DEĞİL):** stackful coroutine + event loop
+    (`runtime/tulpar_async.{h,cpp}`). POSIX `ucontext` / Windows Fiber ile
+    yığın takası → compiler dokunuşu minimal (CPS/state-machine transform yok).
+    `async func` boxed `t_<name>(ret*,args*)` ABI'ye zorlanır; çağrı
+    `aot_async_spawn` ile coroutine başlatıp promise döndürür; `await`
+    `aot_await` ile yield eder; `sleep_async(ms)` bloklamayan timer; program
+    sonunda `aot_event_loop_run()` kalan task'ları drene eder.
+  - **Promise:** yeni `OBJ_PROMISE` obj tipi (`vm.hpp`), `arena_allocated=1`
+    ile ARC erken-free etmez (scheduler raw pointer tutar).
+  - **Kalan (🟡):** (1) `gather`/`Promise.all`, reject/try üzerinden hata
+    yayılımı, gerçek async I/O (şu an timer + compute) sonraki turlar.
+    (2) `>8` parametreli async fn desteklenmiyor. (VM paritesi yok — AOT-only.)
 
 ### Runtime + codegen
 
@@ -410,18 +434,14 @@ girildiğinde ne yapacağımı bilelim.
     ekle. Düşük öncelik: AOT primary path, VM kullanıcıları struct
     yoluyla geçmiyor.
 
-- 🟢 **AOT bool→int variable-decl coercion divergence.**
-  `int ok = db_execute(...);` AOT'ta `ok`'i bool olarak tutuyor
-  (`toString` "true" diyor); VM aynı kodu int'e coerce ediyor
-  ("1"). PR #264 db_execute wiring sırasında ortaya çıktı —
-  yeni bug değil, davranış ayrılığı.
-  - **Sıradaki adım:** AOT `AST_VARIABLE_DECL` (llvm_backend.cpp
-    ~4698) typed-int yolunda `INFERRED_BOOL` RHS için bool→int
-    extension üret. Şu an "tv.type == INFERRED_INT ||
-    INFERRED_BOOL" ile `tv.value`'i olduğu gibi stelliyor; bool
-    durumunda i1→i64 zext gerek. Tek satırlık fix
-    olmalı; davranış değişikliği sadece açıkça `int` tipli local'lere
-    bool atayan kullanıcı kodunu etkiler.
+- ✅ **AOT bool→int variable-decl coercion divergence (ÇÖZÜLDÜ).**
+  `int ok = db_execute(...);` artık AOT'ta da int olarak tutuluyor
+  (`toString` "1"). Fix `llvm_backend.cpp` AST_VARIABLE_DECL boxed
+  yolunda (~5474): `node->data_type == TYPE_INT` ise boxed VMValue'nun
+  type-tag'i `VM_VAL_BOOL` → `VM_VAL_INT` olarak yeniden yazılıyor
+  (slot 2 payload her iki tag için de aynı int olduğundan kayıpsız).
+  Not: ilk hipotez (i1→i64 zext) yanlıştı — `INFERRED_BOOL` değerleri
+  `codegen_typed_expr`'de zaten i64; sorun store değil type-tag idi.
 
 ### Tooling
 

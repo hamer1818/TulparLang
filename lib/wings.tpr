@@ -708,6 +708,7 @@ func _wings_serve_connection(json client_arg) {
         // handler to read. Empty json when route had no `:name` segments.
         _request["params"] = route_match["params"];
         _request["cookies"] = wings_cookies(req);
+        _request["remote_addr"] = socket_peer_ip(client);
         str response = "";
         if (route_idx >= 0) {
             // Cache lookup + handler dispatch + counter bump + response

@@ -63,6 +63,9 @@ typedef struct {
   // Caller allocates a typed-struct alloca and passes its pointer as
   // the result_ptr; callee writes into it via memcpy on return.
   char *return_struct_name;
+  // 1 when declared `async`: a call site spawns it as a coroutine and yields
+  // a promise instead of calling it directly. See codegen FUNCTION_CALL.
+  int is_async;
 } FunctionEntry;
 
 // User-declared struct (`struct Point { int x; int y; }`) tracked by the
@@ -239,6 +242,12 @@ typedef struct {
   LLVMValueRef func_aot_call_dynamic;
   LLVMValueRef func_aot_create_closure;
   LLVMValueRef func_aot_call_closure;
+
+  // Async runtime (runtime/tulpar_async.cpp)
+  LLVMValueRef func_aot_async_spawn;   // (ptr fn, ptr args, i32 argc) -> ptr
+  LLVMValueRef func_aot_await;         // (VMValue) -> VMValue
+  LLVMValueRef func_aot_sleep_async;   // (i64 ms) -> ptr
+  LLVMValueRef func_aot_event_loop_run;// () -> void
 
   // Fast String Operations
   LLVMValueRef func_aot_string_concat_fast;
@@ -452,6 +461,7 @@ typedef struct {
   } loop_stack[32];
   int loop_depth;
   int lambda_count;
+  int match_count;
 
   // Quiet mode - suppress [AOT] messages during compilation
   int quiet;

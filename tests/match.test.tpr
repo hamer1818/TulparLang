@@ -1,0 +1,87 @@
+import "test";
+
+// Expression-position match with int literals + wildcard.
+func grade(int score) {
+    return match score {
+        90 => "A",
+        80 => "B",
+        70 => "C",
+        _  => "F"
+    };
+}
+
+func run_int_match() {
+    assert_eq_str(grade(90), "A");
+    assert_eq_str(grade(80), "B");
+    assert_eq_str(grade(55), "F");
+}
+
+// String subject.
+func classify(str cmd) {
+    return match cmd { "go" => "moving", "stop" => "halted", _ => "unknown" };
+}
+
+func run_str_match() {
+    assert_eq_str(classify("go"), "moving");
+    assert_eq_str(classify("stop"), "halted");
+    assert_eq_str(classify("xyz"), "unknown");
+}
+
+// Bool subject + match yielding an int.
+func run_bool_match() {
+    bool flag = true;
+    int n = match flag { true => 1, _ => 0 };
+    assert_eq_int(n, 1);
+}
+
+// Statement-position match (no value used).
+func run_stmt_match() {
+    int hits = 0;
+    int x = 2;
+    match x {
+        1 => { hits = 10; },
+        2 => { hits = 20; },
+        _ => { hits = 99; }
+    }
+    assert_eq_int(hits, 20);
+}
+
+// match inside a variable initializer with an expression subject.
+func run_expr_subject() {
+    int a = 3;
+    int b = 4;
+    str sz = match a + b {
+        7 => "seven",
+        _ => "other"
+    };
+    assert_eq_str(sz, "seven");
+}
+
+// v1.1 patterns: `|` alternatives and `..` inclusive ranges.
+func bucket(int n) {
+    return match n {
+        0          => "zero",
+        1 | 2 | 3  => "small",
+        10 .. 20   => "teens",
+        _          => "big"
+    };
+}
+
+func run_alt_range() {
+    assert_eq_str(bucket(0), "zero");
+    assert_eq_str(bucket(2), "small");
+    assert_eq_str(bucket(3), "small");
+    assert_eq_str(bucket(15), "teens");
+    assert_eq_str(bucket(10), "teens");
+    assert_eq_str(bucket(20), "teens");
+    assert_eq_str(bucket(99), "big");
+}
+
+print("=== match expression tests ===");
+test("int literal + wildcard", "run_int_match");
+test("alternatives + ranges", "run_alt_range");
+test("string subject", "run_str_match");
+test("bool subject -> int", "run_bool_match");
+test("statement position", "run_stmt_match");
+test("expression subject", "run_expr_subject");
+test_summary();

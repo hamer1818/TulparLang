@@ -718,6 +718,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"input", TYPE_STRING, {}},
       {"exit", TYPE_VOID, {TYPE_INT}},
       {"sleep", TYPE_VOID, {TYPE_INT}},
+      {"sleep_async", TYPE_JSON, {TYPE_INT}},
       // String utils
       {"split", TYPE_ARRAY_STR, {TYPE_STRING, TYPE_STRING}},
       {"replace", TYPE_STRING, {TYPE_STRING, TYPE_STRING, TYPE_STRING}},
@@ -747,6 +748,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"socket_receive", TYPE_STRING, {TYPE_UNKNOWN, TYPE_INT}},
       {"socket_recv", TYPE_STRING, {TYPE_UNKNOWN, TYPE_INT}},
       {"socket_close", TYPE_VOID, {TYPE_UNKNOWN}},
+      {"socket_peer_ip", TYPE_STRING, {TYPE_UNKNOWN}},
       {"socket_select", TYPE_UNKNOWN, {TYPE_UNKNOWN, TYPE_INT}},
       // Threads
       {"thread_create", TYPE_UNKNOWN, {TYPE_STRING, TYPE_UNKNOWN}},

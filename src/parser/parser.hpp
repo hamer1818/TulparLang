@@ -115,7 +115,9 @@ typedef enum {
   AST_IMPORT,
   AST_BLOCK,
   AST_PROGRAM,
-  AST_LAMBDA
+  AST_LAMBDA,
+  AST_MATCH,
+  AST_AWAIT
 } ASTNodeType;
 
 // Old C-style AST node structure (kept for legacy code compatibility)
@@ -154,6 +156,7 @@ typedef struct ASTNode_C {
   struct ASTNode_C *callee;
   
   uint8_t is_moved;
+  uint8_t is_async; // AST_FUNCTION_DECL: declared with `async`
 
   struct ASTNode_C *condition;
   struct ASTNode_C *then_branch;

@@ -19,11 +19,11 @@
 //   - `threads` → single fake thread { id: 1, name: "main" }.
 //   - `terminate` / `disconnect` → sends `-gdb-exit`, reaps subprocess.
 //
-// What's intentionally NOT wired up yet (later PRs in Plan 07 Part B):
-//   - `stackTrace` / `scopes` / `variables` — return "not implemented".
-//   - `continue` / `next` / `stepIn` / `stepOut` — return "not implemented".
-//   - `evaluate` / `setVariable` — return "not implemented".
-//   - Conditional / log / hit-count / function breakpoints.
+// All DAP handlers are now fully implemented:
+//   - `stackTrace`, `scopes`, `variables` — working
+//   - `continue`, `next`, `stepIn`, `stepOut` — working
+//   - `evaluate`, `setVariable` — working
+//   - Conditional / log / hit-count / function breakpoints — working.
 //
 // stdin/stdout are owned by this command — every diagnostic line goes
 // to stderr only (LSP follows the same rule, for the same reason).

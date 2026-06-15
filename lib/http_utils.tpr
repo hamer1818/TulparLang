@@ -114,20 +114,12 @@ func parse_cookies(str cookie_header) {
     array parts = split(cookie_header, ";");
     
     for (int i = 0; i < length(parts); i++) {
-        str part = parts[i];
-        // Trim whitespace (basit implementasyon)
-        // TODO: string_trim fonksiyonu eklendiğinde güncelle
-        
+        str part = trim(parts[i]);
+
         array kv = split(part, "=");
         if (length(kv) >= 2) {
-            str key = kv[0];
-            str val = kv[1];
-            
-            // Key başındaki boşlukları temizle (basit)
-            if (length(key) > 0 && key[0] == " ") {
-                key = substring(key, 1, length(key));
-            }
-            
+            str key = trim(kv[0]);
+            str val = trim(kv[1]);
             cookies[key] = val;
         }
     }
@@ -176,16 +168,17 @@ json _sessions = {};
 
 // Yeni session oluştur
 func create_session(json user_data) {
-    // Basit session ID oluşturma (random sayı + timestamp)
-    // Not: Gerçek uygulamada daha güvenli UUID kullanılmalı
-    int rand_id = 0; // TODO: random() eklenince güncelle
-    str session_id = "sess_" + toString(_router_port) + "_" + toString(length(_sessions)); 
-    
+    // Session ID: rastgele sayı + timestamp ile çakışma/tahmin direnci.
+    // Not: Gerçek uygulamada daha güvenli UUID kullanılmalı.
+    int rand_id = toInt(random() * 1000000000);
+    int created = timestamp();
+    str session_id = "sess_" + toString(_router_port) + "_" + toString(rand_id) + "_" + toString(created);
+
     _sessions[session_id] = {
         "id": session_id,
         "data": user_data,
-        "created_at": "TODO: timestamp", 
-        "expires_at": "TODO: timestamp + duration"
+        "created_at": created,
+        "expires_at": created + 3600
     };
     
     return session_id;
@@ -194,7 +187,12 @@ func create_session(json user_data) {
 // Session getir
 func get_session(str session_id) {
     if (_sessions[session_id]) {
-        return _sessions[session_id];
+        json sess = _sessions[session_id];
+        // Süresi dolmuşsa geçersiz say.
+        if (sess["expires_at"] < timestamp()) {
+            return {};
+        }
+        return sess;
     }
     return {};
 }
@@ -227,23 +225,19 @@ func get_mime_type(str filename) {
 }
 
 // Dosya oku ve response hazırla
-// Not: read_file fonksiyonu interpreter'da olmalı
 func serve_static_file(str path) {
     // Path traversal koruması (basit)
     if (contains(path, "..")) {
         return json_response(403, {"error": "Forbidden"});
     }
-    
+
     try {
-        // Dosya okuma (Interpreter'da read_file built-in olmalı)
-        // Eğer yoksa, bu fonksiyonu interpreter güncellemesinden sonra aktifleştirin
-        // şimdilik simülasyon
-        
-        // str content = read_file(path); // TODO: implement read_file
-        // return http_create_response(200, get_mime_type(path), content);
-        
-        return json_response(501, {"error": "Not Implemented: File IO pending"});
-        
+        // read_file dosya yoksa boş döner; o durumda 404 ver.
+        str content = read_file(path);
+        if (length(content) == 0) {
+            return json_response(404, {"error": "File not found"});
+        }
+        return http_create_response(200, get_mime_type(path), content);
     } catch (e) {
         return json_response(404, {"error": "File not found"});
     }

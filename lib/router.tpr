@@ -231,12 +231,12 @@ func find_route(str method, str path) {
             }
             
             // Pattern matching for parametric routes
-            json match = match_path(route_path, path);
-            if (match["matched"]) {
+            json mr = match_path(route_path, path);
+            if (mr["matched"]) {
                 return {
                     "found": true,
                     "route": route,
-                    "params": match["params"]
+                    "params": mr["params"]
                 };
             }
         }
@@ -435,7 +435,8 @@ func _router_handle_client(int client) {
                 "headers": headers,
                 "raw_body": raw_body,
                 "params": {},
-                "body": {}
+                "body": {},
+                "remote_addr": socket_peer_ip(client)
             };
 
             // Global _response'u hazırla

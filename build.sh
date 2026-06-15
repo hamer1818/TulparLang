@@ -349,6 +349,12 @@ fi
 
 # Copy executable
 cp tulpar ../tulpar
+# Copy the runtime archive next to the executable too. The AOT linker
+# probes the directory of the running `tulpar` first, so leaving a stale
+# (e.g. Windows/MinGW `.obj`) libtulpar_runtime.a in the repo root makes
+# every `--aot` link fail with undefined `operator new` / `__mingw_*`
+# references even though the build itself succeeded.
+cp libtulpar_runtime.a ../libtulpar_runtime.a
 cd ..
 
 # Make executable

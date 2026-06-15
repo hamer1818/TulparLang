@@ -49,7 +49,8 @@ public:
     virtual ReturnType visit(const ImportStatement& node) = 0;
     virtual ReturnType visit(const TypeDecl& node) = 0;
     virtual ReturnType visit(const LambdaExpr& node) = 0;
-    
+    virtual ReturnType visit(const MatchExpr& node) = 0;
+
     // Apply visitor to any ASTNode
     ReturnType apply(const ASTNode& node) {
         return std::visit([this](const auto& arg) -> ReturnType {
@@ -346,6 +347,18 @@ public:
         printf("LambdaExpr (%zu params):\n", node.parameters.size());
         indent_level_++;
         apply(node.body);
+        indent_level_--;
+    }
+
+    void visit(const MatchExpr& node) override {
+        print_indent();
+        printf("MatchExpr (%zu arms):\n", node.arms.size());
+        indent_level_++;
+        apply(node.subject);
+        for (const auto& arm : node.arms) {
+            if (arm.pattern) apply(arm.pattern);
+            apply(arm.body);
+        }
         indent_level_--;
     }
 };

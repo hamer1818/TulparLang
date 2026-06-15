@@ -1,0 +1,57 @@
+import "test";
+
+// Basic: an async function returns a promise; await yields its value.
+async func double_it(int n) {
+    return n * 2;
+}
+
+func run_basic() {
+    var p = double_it(21);
+    int r = await p;
+    assert_eq_int(r, 42);
+}
+
+// await on a non-promise is the identity function.
+func run_identity() {
+    int z = await 7;
+    assert_eq_int(z, 7);
+}
+
+// Non-blocking timer + interleaving: the 10ms coroutine settles before the
+// 20ms one even though the 20ms task was spawned first.
+async func after(int ms, int val) {
+    await sleep_async(ms);
+    return val;
+}
+
+func run_timer_order() {
+    var slow = after(20, 100);
+    var fast = after(10, 1);
+    int f = await fast;   // fast first
+    int s = await slow;
+    assert_eq_int(f, 1);
+    assert_eq_int(s, 100);
+}
+
+// A coroutine awaiting another coroutine (nested suspension).
+async func inc(int x) {
+    await sleep_async(2);
+    return x + 1;
+}
+async func chain(int x) {
+    int a = await inc(x);
+    int b = await inc(a);
+    return b;
+}
+
+func run_nested() {
+    var c = chain(40);
+    assert_eq_int(await c, 42);
+}
+
+print("=== async/await tests ===");
+test("basic spawn + await", "run_basic");
+test("await non-promise identity", "run_identity");
+test("non-blocking timer ordering", "run_timer_order");
+test("nested coroutines", "run_nested");
+test_summary();

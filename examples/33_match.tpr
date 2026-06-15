@@ -1,0 +1,40 @@
+// Rust-style `match` expressions (literal patterns + `_` wildcard).
+
+// Expression position: the match yields a value.
+func grade(int score) {
+    return match score {
+        90 => "A",
+        80 => "B",
+        70 => "C",
+        _  => "F"
+    };
+}
+
+print("grade(90) = " + grade(90));
+print("grade(80) = " + grade(80));
+print("grade(42) = " + grade(42));
+
+// String subject.
+str cmd = "stop";
+str state = match cmd {
+    "go"   => "moving",
+    "stop" => "halted",
+    _      => "idle"
+};
+print("state = " + state);
+
+// Statement position with block arms.
+int n = 3;
+match n {
+    1 => { print("n is one"); },
+    2 => { print("n is two"); },
+    _ => { print("n is something else"); }
+}
+
+// Subject can be any expression.
+int a = 2;
+int b = 5;
+print("sum class = " + match a + b {
+    7 => "lucky seven",
+    _ => "ordinary"
+});

@@ -4,7 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-TulparLang is a statically-typed scripting language implemented in C++17 with an LLVM 18 backend. Source files use the `.tpr` extension. The project is primarily authored in Turkish; user-facing strings often flow through `src/common/localization.hpp` (`tulpar::i18n::tr_en`) so both Turkish and English messages exist in the source.
+TulparLang is a statically-typed, **AOT-compiled** language implemented in C++17 with an LLVM 18 backend. Source files use the `.tpr` extension. The project is primarily authored in Turkish; user-facing strings often flow through `src/common/localization.hpp` (`tulpar::i18n::tr_en`) so both Turkish and English messages exist in the source.
+
+## ⛔ AOT-ONLY — there is no VM execution engine (read before adding a backend)
+
+**Decision (2026-06-15): Tulpar follows the C/Rust/Go model — a single AOT/LLVM execution path. The bytecode VM interpreter and the REPL were removed.** Do **not** reintroduce them.
+
+- `tulpar foo.tpr` AOT-compiles and runs. **There is no VM fallback** — an AOT failure is a hard error (so "it ran" now genuinely means AOT ran).
+- `--vm` / `--run` are accepted but **ignored with a warning**; `--repl` / `-i` print a removal notice and exit. Do not wire them back to an interpreter.
+- **A new language feature only needs the AOT path.** Implement it once in `src/aot/` (+ lexer/parser/typeinfer). Do **not** add a parallel bytecode-compiler / interpreter case — that was the dual-path maintenance/parity burden this decision exists to kill. (`async/await`, `match`, closures, etc. live only in AOT.)
+- **What survives in `src/vm/` is shared runtime, NOT a VM:** `runtime_bindings.cpp` (every `aot_*` built-in the AOT binary links), `vm.cpp` (arena allocator + object/string allocators — `allocate_object`, `vm_alloc_string`, `vm_allocate_array/object`, `vm_array_push`), and the type definitions in `vm.hpp` (`VMValue`, `Obj*`). The `VMValue`/`Obj` naming is historical — treat it as "the runtime value representation," not "the VM." `bytecode.cpp/.hpp` remain only for the `Chunk` type embedded in `ObjFunction`.
+- **Removed and gone:** `src/vm/compiler.cpp` (AST→bytecode), `vm_run` (the interpreter loop, formerly the bulk of `vm.cpp`), `run_repl`. If you find yourself writing an opcode dispatch, `compile_statement`, or a REPL loop — stop; that's the deleted VM.
 
 ## Build
 
@@ -53,10 +63,9 @@ A multi-language micro-benchmark harness lives in `benchmarks/` — `run_benchma
 ## Running Tulpar programs
 
 ```bash
-./tulpar script.tpr             # Default: AOT compile + run (silent), falls back to VM on failure
-./tulpar --vm script.tpr        # Force VM path (faster startup)
+./tulpar script.tpr             # AOT compile + run (the only execution path; AOT failure = hard error)
 ./tulpar build script.tpr [out] # Emit standalone native binary
-./tulpar --repl                 # Interactive mode (VM-backed)
+# --vm / --run: removed (ignored with a warning). --repl / -i: removed (exits with a notice).
 
 ./tulpar fmt script.tpr         # Source formatter (src/fmt/)
 ./tulpar pkg <init|add|install> # Package manager (src/pkg/)
@@ -65,7 +74,7 @@ A multi-language micro-benchmark harness lives in `benchmarks/` — `run_benchma
 ./tulpar version | --help       # Version / command reference
 ```
 
-CLI dispatch lives in `main()` in [src/main.cpp](src/main.cpp); `--lsp`, `fmt`, `pkg`, `version`, `--help`, and `update` all short-circuit before the run/build path. Default execution calls `aot_compile_and_run_silent()`; on any AOT failure it silently falls through to the VM, so "it runs" is not evidence the AOT path worked — check with `tulpar build` or `--aot` explicitly. `--lsp` owns stdin/stdout for JSON-RPC, so it must dispatch before any banner/REPL output.
+CLI dispatch lives in `main()` in [src/main.cpp](src/main.cpp); `--lsp`, `fmt`, `pkg`, `version`, `--help`, and `update` all short-circuit before the run/build path. Default execution calls `aot_compile_and_run_silent()`; an AOT failure (parse/codegen/emit/link) returns non-zero — there is no fallback, so "it ran" means AOT ran. `--lsp` owns stdin/stdout for JSON-RPC, so it must dispatch before any banner output.
 
 CLI output language follows the system locale; override with `TULPAR_LANG=tr` / `TULPAR_LANG=en`.
 
@@ -75,13 +84,13 @@ Pipeline, top to bottom:
 
 1. **Lexer** (`src/lexer/`) — tokenizes UTF-8 source into `Token*` arrays.
 2. **Parser** (`src/parser/`) — hand-written recursive descent, produces AST nodes defined in `parser/ast_nodes.hpp`. A visitor interface lives in `ast_visitor.hpp`.
-3. **Type inference** (`src/typeinfer/`) — runs over the AST before codegen. Surfaces as `[typecheck]` warnings on every `tulpar`/`tulpar build`/`tulpar --vm` invocation via the `typeinfer_emit_warnings` pre-pass; the standalone `tulpar typecheck` subcommand is the same checker in error mode. Disable the pre-pass with `--no-typecheck` or `TULPAR_NO_TYPECHECK=1` when shaping new rules.
-4. **Backends** — two of them share the same AST:
+3. **Type inference** (`src/typeinfer/`) — runs over the AST before codegen. Surfaces as `[typecheck]` warnings on every `tulpar`/`tulpar build` invocation via the `typeinfer_emit_warnings` pre-pass; the standalone `tulpar typecheck` subcommand is the same checker in error mode. Disable the pre-pass with `--no-typecheck` or `TULPAR_NO_TYPECHECK=1` when shaping new rules.
+4. **Backend — AOT/LLVM only** (the VM/interpreter backends were removed; see "AOT-ONLY" above):
    - **AOT / LLVM** (`src/aot/`, primary): `aot_pipeline.cpp` is the entry point (`aot_compile`, `aot_compile_and_run`, `aot_compile_and_run_silent`). Actual IR generation is split across `llvm_backend.cpp`, `llvm_types.cpp`, `llvm_values.cpp` — that's the full list in `AOT_SOURCES` (CMakeLists.txt). Architecture-specific LLVM components are selected in `CMakeLists.txt` (`x86*` vs `aarch64*`).
-   - **VM** (`src/vm/`): `compiler.cpp` lowers AST → bytecode (`bytecode.cpp`), `vm.cpp` executes it, `runtime_bindings.cpp` implements built-ins (print, sockets, db, threads, etc.). This is also the path AOT'd binaries use at runtime, and the path the REPL uses.
-   - **Tree-walk interpreter** (formerly `src/interpreter/`) — sunset on 2026-05-05. The REPL was the last consumer; it now compiles each input through the VM compiler and runs it on a persistent VM. The `--legacy` CLI flag is gone.
-   - **x64 JIT** (formerly `src/jit/`) — sunset on 2026-05-05. Threshold-triggered tier-1 native code emitter (~2.2k satır) that compiled hot VM functions to x64. ARM64 had it disabled; production AOT path never invoked it; measured perf delta vs pure VM was within noise (<5% on fib(28)). Removed alongside the bytecode hooks (`ObjFunction.jit_code`, `CallSiteCache.cached_jit`, `LoopTrace`, `jit_helper_call`, `jit_interpreter_call`).
-5. **Runtime support** (`runtime/`) — `cJSON`, `tulpar_arc` (automatic reference counting for heap values), `tulpar_native` (FFI).
+   - **Shared runtime** (`src/vm/`, despite the directory name — *not* an execution engine): `runtime_bindings.cpp` implements every `aot_*` built-in (print, sockets, db, threads, async, etc.) that the AOT binary links; `vm.cpp` provides the arena allocator + object/string allocators; `vm.hpp` defines the runtime value types (`VMValue`, `Obj*`); `bytecode.cpp/.hpp` keep the `Chunk` type embedded in `ObjFunction`. The `tulpar_runtime` static library (linked into AOT'd user binaries) is built from this set.
+   - **Bytecode VM + REPL** — **removed 2026-06-15** (AOT-only). `src/vm/compiler.cpp` (AST→bytecode) and `vm_run` (the interpreter dispatch loop) are deleted; `--vm`/`--run`/`--repl` are gone. See "AOT-ONLY" at the top — do not rebuild them.
+   - **Tree-walk interpreter** (formerly `src/interpreter/`) — sunset 2026-05-05. **x64 JIT** (formerly `src/jit/`) — sunset 2026-05-05 (perf delta vs VM was within noise). Both predate the AOT-only move.
+5. **Runtime support** (`runtime/`) — `cJSON`, `tulpar_arc` (automatic reference counting for heap values), `tulpar_native` (FFI), `tulpar_async` (stackful-coroutine event loop behind `async`/`await`).
 
 Auxiliary subsystems share the same AST and live alongside the backends:
 - `src/lsp/` — LSP server (`tulpar --lsp`). `document_index.cpp` reparses on every change; `builtins.cpp` registers the native built-in symbol table for completion/hover.

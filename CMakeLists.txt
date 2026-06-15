@@ -189,13 +189,13 @@ set(RUNTIME_SOURCES
     src/vm/vm.hpp
     src/vm/bytecode.cpp
     src/vm/bytecode.hpp
-    src/vm/compiler.cpp
-    src/vm/compiler.hpp
     runtime/cJSON.c
     runtime/tulpar_arc.cpp
     runtime/tulpar_arc.h
     runtime/tulpar_native.cpp
     runtime/tulpar_native.h
+    runtime/tulpar_async.cpp
+    runtime/tulpar_async.h
 )
 
 set(MAIN_SOURCES
@@ -333,10 +333,10 @@ add_library(tulpar_runtime STATIC
     src/vm/runtime_bindings.cpp
     src/vm/vm.cpp
     src/vm/bytecode.cpp
-    src/vm/compiler.cpp
     runtime/cJSON.c
     runtime/tulpar_arc.cpp
     runtime/tulpar_native.cpp
+    runtime/tulpar_async.cpp
     src/lexer/lexer.cpp
     src/parser/parser.cpp
     src/parser/import_alias.cpp

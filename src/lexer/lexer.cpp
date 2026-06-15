@@ -55,12 +55,19 @@ static const std::unordered_map<std::string, TulparTokenType>& get_keyword_map()
         {"dur", TOKEN_BREAK},
         {"devam_et", TOKEN_CONTINUE},
         {"geri_döndür", TOKEN_RETURN},
+        {"tekrar", TOKEN_WHILE},
         
         // Control Flow - English (aliases)
         {"if", TOKEN_IF},
         {"else", TOKEN_ELSE},
         {"while", TOKEN_WHILE},
         {"for", TOKEN_FOR},
+        {"match", TOKEN_MATCH},
+        {"eşle", TOKEN_MATCH},
+        {"esle", TOKEN_MATCH},
+        {"async", TOKEN_ASYNC},
+        {"await", TOKEN_AWAIT},
+        {"bekle", TOKEN_AWAIT},
         {"in", TOKEN_IN},
         {"break", TOKEN_BREAK},
         {"continue", TOKEN_CONTINUE},
@@ -259,6 +266,7 @@ Token Lexer::read_number() {
            (std::isdigit(current_char_) || current_char_ == '.')) {
         if (current_char_ == '.') {
             if (is_float) break; // Second dot - error
+            if (peek() == '.') break; // `..` range op — leave for the lexer
             is_float = true;
         }
         buffer += current_char_;
@@ -423,7 +431,11 @@ Token Lexer::next_token() {
             advance(); advance();
             return Token(TOKEN_OR, "||", start_line, start_column);
         }
-        
+        if (ch == '.' && next_ch == '.') {
+            advance(); advance();
+            return Token(TOKEN_DOTDOT, "..", start_line, start_column);
+        }
+
         // Single-character operators
         advance();
         std::string value(1, ch);
@@ -447,6 +459,7 @@ Token Lexer::next_token() {
             case ',': return Token(TOKEN_COMMA, value, start_line, start_column);
             case ':': return Token(TOKEN_COLON, value, start_line, start_column);
             case '.': return Token(TOKEN_DOT, value, start_line, start_column);
+            case '|': return Token(TOKEN_PIPE, value, start_line, start_column);
             default:
                 fprintf(stderr, tulpar::i18n::tr_for_en("Lexer Error: Unknown character '%c' at line %d, col %d\n"),
                         ch, start_line, start_column);

@@ -16,8 +16,7 @@
 #include "parser/parser.hpp"
 #include "common/localization.hpp"
 #include "common/platform_sockets.h"
-#include "vm/compiler.hpp"
-#include "vm/vm.hpp"
+#include "vm/vm.hpp" // shared runtime types (VMValue, Obj*) — NOT the VM engine
 #ifdef TULPAR_AOT_ENABLED
 #include "aot/aot_pipeline.hpp"
 #endif
@@ -25,7 +24,6 @@
 #include "fmt/formatter.hpp"
 #include "pkg/manifest.hpp"
 #include "pkg/pkg_cli.hpp"
-#include "cli/line_edit.hpp"
 #include "cli/debug_cmd.hpp"
 #include "cli/doc_cmd.hpp"
 #include "cli/typecheck_cmd.hpp"
@@ -73,12 +71,6 @@ static void print_help() {
   std::printf("  tulpar build <source.tpr> [out]  %s\n",
               tulpar::i18n::tr_en("- Bagimsiz native ikili olustur",
                                   "- Build standalone native binary"));
-  std::printf("  tulpar --vm <source.tpr>         %s\n",
-              tulpar::i18n::tr_en("- VM ile calistir (anlik baslangic)",
-                                  "- Run via VM (instant start)"));
-  std::printf("  tulpar --repl, -i                %s\n",
-              tulpar::i18n::tr_en("- Etkilesimli mod (REPL)",
-                                  "- Interactive mode (REPL)"));
 
   std::printf("\n%s\n",
               tulpar::i18n::tr_en("Aletler:", "Tools:"));
@@ -135,353 +127,6 @@ static void print_help() {
               tulpar::i18n::tr_en(
                   "Daha fazlasi: https://tulparlang.dev",
                   "More info: https://tulparlang.dev"));
-}
-
-// Returns true when the accumulated REPL buffer's brackets/parens/braces
-// are balanced and we aren't sitting inside an unterminated string or
-// block comment — i.e. the user has typed enough source to make a
-// well-formed input attempt. Used to decide between primary (`>>> `) and
-// continuation (`... `) prompts. String / line-comment / block-comment
-// state is tracked so braces inside them don't trick us into prompting
-// early. Tracking is approximate (we don't care about syntactic nesting,
-// only character-level matching) but that's fine for this UX shortcut —
-// the parser still has the final say on validity.
-static int repl_input_complete(const char *s) {
-  int paren = 0, brace = 0, bracket = 0;
-  int in_string = 0, in_line_comment = 0, in_block_comment = 0;
-  char string_quote = 0;
-
-  for (size_t i = 0; s[i]; i++) {
-    char c = s[i];
-    char nx = s[i + 1];
-
-    if (in_line_comment) {
-      if (c == '\n') in_line_comment = 0;
-      continue;
-    }
-    if (in_block_comment) {
-      if (c == '*' && nx == '/') {
-        in_block_comment = 0;
-        i++;
-      }
-      continue;
-    }
-    if (in_string) {
-      if (c == '\\' && nx) { i++; continue; }
-      if (c == string_quote) in_string = 0;
-      continue;
-    }
-
-    if (c == '/' && nx == '/') { in_line_comment = 1; i++; continue; }
-    if (c == '/' && nx == '*') { in_block_comment = 1; i++; continue; }
-    if (c == '"' || c == '\'') { in_string = 1; string_quote = c; continue; }
-
-    if (c == '(') paren++;
-    else if (c == ')') paren--;
-    else if (c == '{') brace++;
-    else if (c == '}') brace--;
-    else if (c == '[') bracket++;
-    else if (c == ']') bracket--;
-  }
-
-  if (paren > 0 || brace > 0 || bracket > 0) return 0;
-  if (in_string || in_block_comment) return 0;
-  return 1;
-}
-
-// Resolves the persistent REPL history file path. Honors $TULPAR_HISTORY,
-// otherwise falls back to ~/.tulpar_history (POSIX) or %USERPROFILE%/.tulpar_history
-// (Windows). Returns a static buffer; "" disables persistence.
-static const char *resolve_history_path() {
-  static char path[1024];
-  const char *override_env = std::getenv("TULPAR_HISTORY");
-  if (override_env && *override_env) {
-    snprintf(path, sizeof(path), "%s", override_env);
-    return path;
-  }
-#ifdef _WIN32
-  const char *home = std::getenv("USERPROFILE");
-#else
-  const char *home = std::getenv("HOME");
-#endif
-  if (!home || !*home) return "";
-  snprintf(path, sizeof(path), "%s/.tulpar_history", home);
-  return path;
-}
-
-// Wraps a bare-expression top-level statement in a synthetic `print(<expr>)`
-// call so the user gets feedback when they type `1 + 2` at the REPL prompt
-// (matching the previous interpreter-backed REPL UX). FUNCTION_CALL is left
-// alone because we can't tell at compile time whether it returns void —
-// auto-printing those would render "void" for every `print(...)` re-print
-// and every void-returning user function.
-static void repl_wrap_bare_expression(ASTNode_C *program) {
-  if (!program || program->type != AST_PROGRAM ||
-      program->statement_count <= 0) {
-    return;
-  }
-  ASTNode_C *stmt = program->statements[0];
-  if (!stmt) return;
-  bool is_bare_expr = stmt->type == AST_IDENTIFIER ||
-                      stmt->type == AST_BINARY_OP ||
-                      stmt->type == AST_UNARY_OP ||
-                      stmt->type == AST_ARRAY_ACCESS;
-  if (!is_bare_expr) return;
-
-  ASTNode_C *call = ast_node_create(AST_FUNCTION_CALL);
-  call->name = strdup("print");
-  call->argument_count = 1;
-  call->arguments =
-      static_cast<ASTNode_C **>(std::calloc(1, sizeof(ASTNode_C *)));
-  call->arguments[0] = stmt;
-  call->line = stmt->line;
-  program->statements[0] = call;
-}
-
-// REPL mode
-static void run_repl() {
-  // Winsock initialization for socket_create() and friends. VM's vm_run
-  // initializes per-call — fine — but we kept the explicit call here from
-  // the legacy-interp era so a regression that drops VM init doesn't
-  // silently break sockets in the REPL on Windows.
-  tulpar_socket_init();
-
-  printf("TulparLang REPL (Interactive Mode)\n");
-  printf("Type 'exit', 'quit', or 'q' to exit, 'help' for help\n");
-  printf("========================================\n\n");
-
-  // The REPL is VM-backed: one VM lives for the whole session; globals
-  // and user functions persist across inputs because vm_run reuses
-  // vm->globals and the function constant pool of each compiled chunk
-  // hands its function value into globals via OP_STORE_GLOBAL.
-  VM *vm = vm_create();
-  // Line editor: arrow-key history + in-line editing on ttys; transparently
-  // falls back to fgets when stdin is piped (test scripts / shebang use).
-  LineEditor *editor = line_editor_create(resolve_history_path());
-  char line[4096];
-
-  // Accumulator for multi-line input. Most interactive sessions stay
-  // tiny, but loops/function bodies/JSON literals do span lines. 64 KB
-  // is plenty for any reasonable typed input; on overflow we reset and
-  // surface a clear message rather than silently truncating.
-  size_t buf_cap = 65536;
-  char *buf = static_cast<char *>(malloc(buf_cap));
-  if (!buf) {
-    printf("error: REPL buffer allocation failed\n");
-    vm_free(vm);
-    return;
-  }
-  buf[0] = '\0';
-  size_t buf_len = 0;
-  int continuation = 0;
-
-  // We retain ASTs across iterations because compiled function objects
-  // hold pointers into them indirectly (constant pool entries reference
-  // the chunk; the chunk references no AST, but type/name strings can
-  // alias the source). Free in a single pass at REPL exit. Bounded per
-  // session — fine.
-  size_t ast_cap = 64;
-  size_t ast_count = 0;
-  ASTNode_C **kept_asts =
-      static_cast<ASTNode_C **>(malloc(sizeof(ASTNode_C *) * ast_cap));
-
-  while (1) {
-    const char *prompt = continuation ? "... " : ">>> ";
-    char *edited = line_editor_readline(editor, prompt);
-    if (!edited) {
-      // EOF (Ctrl-D on POSIX, Ctrl-Z+Enter on Windows, or stdin closed).
-      printf("\n");
-      break;
-    }
-
-    // The rest of the loop expects `line` to look like fgets() output (a
-    // newline-terminated buffer). Copy + append '\n' so we don't have to
-    // touch the multi-line accumulator / trim logic below.
-    size_t edited_len = strlen(edited);
-    if (edited_len + 2 >= sizeof(line)) {
-      printf("error: input too long, ignored\n");
-      free(edited);
-      continue;
-    }
-    memcpy(line, edited, edited_len);
-    line[edited_len] = '\n';
-    line[edited_len + 1] = '\0';
-    free(edited);
-
-    size_t line_len = edited_len + 1;
-
-    // First-line meta-commands. We only intercept `exit`/`quit`/`help`/
-    // `clear` on a fresh prompt; once a multi-line input is in progress
-    // any line goes into the buffer verbatim (so `exit` inside a string
-    // literal isn't hijacked).
-    if (!continuation) {
-      char trimmed[sizeof(line)];
-      memcpy(trimmed, line, line_len + 1);
-      size_t tlen = line_len;
-      if (tlen > 0 && trimmed[tlen - 1] == '\n') {
-        trimmed[tlen - 1] = '\0';
-        tlen--;
-      }
-
-      if (tlen == 0) continue;
-      if (strcmp(trimmed, "exit") == 0 || strcmp(trimmed, "quit") == 0 ||
-          strcmp(trimmed, "q") == 0) break;
-      if (strcmp(trimmed, "help") == 0) {
-        printf("Commands:\n");
-        printf("  exit, quit, q - Exit REPL\n");
-        printf("  help          - Show this help\n");
-        printf("  clear         - Clear screen\n");
-        printf("  Multi-line: '{', '(', '[' open a continuation prompt ('... ')\n");
-        continue;
-      }
-      if (strcmp(trimmed, "clear") == 0) {
-        int clear_status = system("clear");
-        (void)clear_status;
-        continue;
-      }
-    } else {
-      // Continuation mode escape hatch: a literal blank line aborts the
-      // in-progress multi-line buffer instead of forcing the user to
-      // close every brace they've opened by mistake.
-      int only_ws = 1;
-      for (size_t i = 0; line[i]; i++) {
-        if (line[i] != ' ' && line[i] != '\t' && line[i] != '\r' &&
-            line[i] != '\n') {
-          only_ws = 0;
-          break;
-        }
-      }
-      if (only_ws) {
-        buf_len = 0;
-        buf[0] = '\0';
-        continuation = 0;
-        continue;
-      }
-    }
-
-    // Append (with newline preserved so multi-line source-location
-    // diagnostics report the right line number).
-    if (buf_len + line_len + 1 >= buf_cap) {
-      printf("error: input too long, resetting REPL buffer\n");
-      buf_len = 0;
-      buf[0] = '\0';
-      continuation = 0;
-      continue;
-    }
-    memcpy(buf + buf_len, line, line_len);
-    buf_len += line_len;
-    buf[buf_len] = '\0';
-
-    // Need more input?
-    if (!repl_input_complete(buf)) {
-      continuation = 1;
-      continue;
-    }
-
-    // Trim trailing whitespace before the terminator check below.
-    while (buf_len > 0 &&
-           (buf[buf_len - 1] == '\n' || buf[buf_len - 1] == '\r' ||
-            buf[buf_len - 1] == ' ' || buf[buf_len - 1] == '\t')) {
-      buf_len--;
-      buf[buf_len] = '\0';
-    }
-    if (buf_len == 0) {
-      continuation = 0;
-      continue;
-    }
-
-    // Snapshot the user's text BEFORE we append the convenience ';' below;
-    // that's what we want in history (what they actually typed).
-    line_editor_add_history(editor, buf);
-
-    // REPL convenience: forgiving terminator. Tulpar's grammar requires
-    // ';' after expression statements, but typing it on every interactive
-    // line is friction users don't expect (Python/Node REPLs don't ask
-    // for one). If the input doesn't already end with a statement
-    // terminator (`;`) or block closer (`}`), append `;` before lexing.
-    char last = buf[buf_len - 1];
-    if (last != ';' && last != '}' && buf_len + 1 < buf_cap) {
-      buf[buf_len] = ';';
-      buf[buf_len + 1] = '\0';
-      buf_len++;
-    }
-
-    // Execute code
-    Lexer *lexer = lexer_create(buf);
-    int token_capacity = 100;
-    int token_count = 0;
-    Token **tokens = static_cast<Token **>(malloc(sizeof(Token *) * token_capacity));
-
-    Token *token;
-    while ((token = lexer_next_token(lexer))->type() != TOKEN_EOF) {
-      if (token_count >= token_capacity) {
-        token_capacity *= 2;
-        tokens = (Token **)realloc(tokens, sizeof(Token *) * token_capacity);
-      }
-      tokens[token_count++] = token;
-    }
-    tokens[token_count++] = token;
-
-    lexer_free(lexer);
-
-    Parser_C *parser = parser_create(tokens, token_count);
-    ASTNode_C *ast = parser_parse(parser);
-
-    if (ast && ast->type == AST_PROGRAM && ast->statement_count > 0) {
-      // Wrap bare expressions (`1+2`, `x`, `arr[0]`) in `print(...)` so the
-      // REPL gives feedback on naked expressions like every other REPL.
-      // Function calls are intentionally NOT wrapped — see helper comment.
-      repl_wrap_bare_expression(ast);
-
-      // Compile this input's AST into a fresh chunk, wrap as a top-level
-      // function, and execute on the persistent VM. Globals + user-defined
-      // functions registered by previous inputs remain visible — that's the
-      // whole point of REPL state.
-      Chunk *chunk = compile(ast);
-      if (chunk) {
-        ObjFunction *script = vm_new_function(vm);
-        script->chunk = *chunk;  // transfer chunk content
-        free(chunk);             // container only — content owned by script
-        vm_run(vm, script);
-      }
-    }
-
-    // See note above: keep the AST alive until REPL exit. ast can be
-    // null when parsing failed — only retain successful parses.
-    if (ast) {
-      if (ast_count >= ast_cap) {
-        ast_cap *= 2;
-        kept_asts = static_cast<ASTNode_C **>(
-            realloc(kept_asts, sizeof(ASTNode_C *) * ast_cap));
-      }
-      kept_asts[ast_count++] = ast;
-    }
-    parser_free(parser);
-
-    for (int i = 0; i < token_count; i++) {
-      token_free(tokens[i]);
-    }
-    free(tokens);
-
-    // Done with this input — reset the multi-line accumulator so the
-    // next prompt is the primary one again.
-    buf_len = 0;
-    buf[0] = '\0';
-    continuation = 0;
-  }
-
-  // Tear down VM first (it owns ObjFunction allocations whose chunks borrow
-  // from the AST'd-allocated function bodies), then free the retained ASTs.
-  vm_free(vm);
-  for (size_t i = 0; i < ast_count; i++) {
-    ast_node_free(kept_asts[i]);
-  }
-  free(kept_asts);
-  free(buf);
-  // Destroy after we're sure no more history will be added — also flushes
-  // the history file (best-effort).
-  line_editor_destroy(editor);
-  printf("Goodbye!\n");
 }
 
 int main(int argc, char **argv) {
@@ -571,7 +216,6 @@ int main(int argc, char **argv) {
   }
 
   // Flags
-  int force_vm = 0;    // --vm / --run forces VM path, skips AOT
   int build_mode = 0;  // build / --build / --aot: save native binary
   int skip_typecheck = 0;  // --no-typecheck disables the pre-pass warnings
   // Plan 07 PR 1: `tulpar build --debug` (or `-g`) requests an AOT
@@ -613,7 +257,15 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; i++) {
 
     if (strcmp(argv[i], "--vm") == 0 || strcmp(argv[i], "--run") == 0) {
-      force_vm = 1;
+      // AOT-only (see CLAUDE.md): the bytecode VM execution path is gone.
+      // Accept the flag but ignore it so old scripts/CI don't hard-fail;
+      // warn once so the habit fades.
+      fprintf(stderr, "%s\n",
+              tulpar::i18n::tr_en(
+                  "Uyari: --vm/--run kaldirildi (Tulpar yalnizca AOT). "
+                  "Yok sayiliyor; AOT ile calistiriliyor.",
+                  "Warning: --vm/--run removed (Tulpar is AOT-only). "
+                  "Ignoring; running via AOT."));
       arg_offset = i + 1;
     } else if (strcmp(argv[i], "--no-typecheck") == 0) {
       // Suppress the pre-pass typeinfer warnings without touching the
@@ -642,16 +294,24 @@ int main(int argc, char **argv) {
     }
   }
 
-  // Check for REPL mode
+  // REPL / --vm removed: Tulpar is AOT-only (see CLAUDE.md "AOT-ONLY").
+  // The bytecode VM and interactive REPL were retired on 2026-06-15; there is
+  // no interpreter to host them. Surface a clear message instead of silently
+  // doing something else.
   if (argc > 1 &&
       (strcmp(argv[1], "--repl") == 0 || strcmp(argv[1], "-i") == 0)) {
-    run_repl();
-    return 0;
+    fprintf(stderr, "%s\n",
+            tulpar::i18n::tr_en(
+                "REPL kaldirildi: Tulpar artik yalnizca AOT derler. "
+                "Bir .tpr dosyasini dogrudan calistirin: tulpar script.tpr",
+                "REPL removed: Tulpar is now AOT-only. Run a .tpr file "
+                "directly: tulpar script.tpr"));
+    return 2;
   }
 
 #ifdef TULPAR_AOT_ENABLED
   // Build mode: save native binary (tulpar build file.tpr [output])
-  if (!force_vm && build_mode) {
+  if (build_mode) {
     if (arg_offset + 1 >= argc) {
       printf("Usage: tulpar build <source.tpr> [output_name]\n");
       return 1;
@@ -774,28 +434,28 @@ int main(int argc, char **argv) {
     }
 
 #ifdef TULPAR_AOT_ENABLED
-    // Default mode: AOT compile & run (fastest execution).
-    // Fall back to VM only when AOT failed for *infrastructure* reasons
-    // (object emit / link). Source-level errors (parse, codegen) are
-    // already user-visible and re-running them through the VM would just
-    // print the same diagnostic a second time — that's the duplicate
-    // error users used to see on Windows where the runtime archive is
-    // often missing.
-    if (!force_vm) {
-      AOTResult aot_result = aot_compile_and_run_silent_with_filename(
-          source, argv[arg_offset]);
-      if (aot_result == AOT_OK) {
-        free(source);
-        return 0;
-      }
-      if (aot_result == AOT_ERROR_PARSE ||
-          aot_result == AOT_ERROR_CODEGEN) {
-        free(source);
-        return 1;
-      }
-      // AOT_ERROR_EMIT / AOT_ERROR_LINK: clang or libtulpar_runtime.a
-      // missing — fall through to VM silently so the program still runs.
-    }
+    // Tulpar is AOT-only (see CLAUDE.md "AOT-ONLY"): this is the single
+    // execution path. Any AOT failure is a hard error — there is NO VM
+    // fallback. "It ran" therefore always means the AOT path ran.
+    AOTResult aot_result = aot_compile_and_run_silent_with_filename(
+        source, argv[arg_offset]);
+    free(source);
+    if (aot_result == AOT_OK)
+      return 0;
+    if (aot_result == AOT_ERROR_PARSE || aot_result == AOT_ERROR_CODEGEN)
+      return 1; // diagnostic already printed
+    // AOT_ERROR_EMIT / AOT_ERROR_LINK: toolchain or runtime archive missing.
+    fprintf(stderr, "%s\n",
+            tulpar::i18n::tr_en(
+                "AOT derleme/baglama basarisiz: clang ve libtulpar_runtime.a "
+                "mevcut mu? (Tulpar yalnizca AOT calisir; VM yedegi yok.)",
+                "AOT compile/link failed: are clang and libtulpar_runtime.a "
+                "present? (Tulpar is AOT-only; there is no VM fallback.)"));
+    return 1;
+#else
+    free(source);
+    fprintf(stderr, "This build has no AOT backend (TULPAR_AOT_ENABLED off).\n");
+    return 1;
 #endif
   } else {
     // No arguments — fall through to the same help text users reach via
@@ -804,128 +464,8 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  if (!from_file) {
-    printf("========================================\n");
-    printf("   TulparLang v2.1.0 (LLVM Backend)\n");
-    printf("========================================\n\n");
-  }
-
-  // ========================================
-  // 1. LEXER (Tokenization)
-  // ========================================
-  if (!from_file) {
-    printf("1. LEXER (Tokenization)\n");
-    printf("========================\n");
-  }
-  Lexer *lexer = lexer_create(source);
-
-  // Token dizisi oluştur
-  int token_capacity = 100;
-  int token_count = 0;
-  Token **tokens = static_cast<Token **>(malloc(sizeof(Token *) * token_capacity));
-
-  Token *token;
-  while ((token = lexer_next_token(lexer))->type() != TOKEN_EOF) {
-    if (token_count >= token_capacity) {
-      token_capacity *= 2;
-      tokens = (Token **)realloc(tokens, sizeof(Token *) * token_capacity);
-    }
-    tokens[token_count++] = token;
-    if (!from_file) {
-      token_print(token);
-    }
-  }
-  tokens[token_count++] = token; // EOF token'ı ekle
-
-  lexer_free(lexer);
-
-  // ========================================
-  // 2. PARSER (AST Oluşturma)
-  // ========================================
-  if (!from_file) {
-    printf("\n2. PARSER (AST Olusturma)\n");
-    printf("==========================\n");
-  }
-
-  Parser_C *parser = parser_create(tokens, token_count);
-  ASTNode_C *ast = parser_parse(parser);
-  if (!ast) {
-    fprintf(stderr, "%s\n",
-            tulpar::i18n::tr_en("Hata: Parse asamasi basarisiz.",
-                                "Error: Parse phase failed."));
-    parser_free(parser);
-    for (int i = 0; i < token_count; i++) {
-      token_free(tokens[i]);
-    }
-    free(tokens);
-    free(source);
-    return 1;
-  }
-
-  if (!from_file) {
-    printf("Abstract Syntax Tree:\n");
-    ast_print(ast, 0);
-  }
-
-  // ========================================
-  // 3. RUNTIME (VM)
-  // ========================================
-  if (!from_file) {
-    printf("\n3. COMPILER & VM (Bytecode Execution)\n");
-    printf("========================================\n");
-  }
-
-  // Compile AST to Bytecode
-  Chunk *chunk = compile(ast);
-
-  if (!chunk) {
-    printf("%s\n",
-           tulpar::i18n::tr_en("Hata: Derleme basarisiz!",
-                               "Error: Compilation failed!"));
-    return 1;
-  }
-
-  // Initialize VM
-  VM *vm = vm_create();
-
-  // Create main script function
-  ObjFunction *script = vm_new_function(vm);
-
-  // Transfer chunk ownership to script function
-  script->chunk = *chunk; // Copy struct content
-  free(chunk);            // Free the container, keep the content
-
-  // Run VM
-  clock_t start = clock();
-  VMResult result = vm_run(vm, script);
-  clock_t end = clock();
-
-  if (!from_file) {
-    double cpu_time_used = ((double)(end - start)) / CLOCKS_PER_SEC * 1000.0;
-    printf("\nUnpacked Execution Time: %.2f ms\n", cpu_time_used);
-
-    if (result == VM_OK) {
-      printf("\n========================================\n");
-      printf("   Tulpar VM basariyla calisti! ✓\n");
-      printf("========================================\n");
-    } else {
-      printf("\n========================================\n");
-      printf("   Tulpar VM hatayla sonlandi! ✗\n");
-      printf("========================================\n");
-    }
-  }
-
-  vm_free(vm);
-
-  // Temizlik
-  ast_node_free(ast);
-  parser_free(parser);
-
-  for (int i = 0; i < token_count; i++) {
-    token_free(tokens[i]);
-  }
-  free(tokens);
-  free(source);
-
+  // Unreachable: every branch above returns. The legacy bytecode-VM
+  // execution path that used to live here was removed with the VM
+  // (AOT-only, 2026-06-15).
   return 0;
 }

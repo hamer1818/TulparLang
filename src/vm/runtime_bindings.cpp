@@ -878,6 +878,18 @@ void vm_array_set(ObjArray *array, int index, VMValue value) {
   array->items[index] = value;
 }
 
+// Pointer-based wrapper used by AOT closure-env codegen. The 16-byte
+// VMValue must cross the C boundary by pointer (mirroring
+// vm_array_push_aot_ptr_wrapper): passing it by value drops the payload
+// eightbyte on the SysV/MinGW struct-arg ABI, which silently corrupted
+// every captured variable to 0.
+void vm_array_set_aot_ptr_wrapper(ObjArray *array, int index,
+                                  VMValue *value_ptr) {
+  if (!value_ptr)
+    return;
+  vm_array_set(array, index, *value_ptr);
+}
+
 // ============================================================
 // VALUE-BASED ARRAY ACCESS (no alloca needed, stack-safe)
 // These functions take/return VMValue directly for efficiency
@@ -3152,6 +3164,30 @@ VMValue aot_socket_accept(VMValue serverFdVal) {
 #endif
 
   return VM_INT((int64_t)new_socket);
+}
+
+// socket_peer_ip(fd) -> str. Resolves the remote (client) address of an
+// accepted connection via getpeername()+inet_ntop. Used by the wings /
+// router dispatchers to populate `_request["remote_addr"]` so middleware
+// (rate limiter, audit logging) can key on the real client instead of a
+// hardcoded "127.0.0.1". Returns "" on any error (bad fd, unconnected
+// socket, non-IPv4 family) so callers can fall back gracefully.
+VMValue aot_socket_peer_ip(VMValue fdVal) {
+  if (!IS_INT(fdVal))
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  tulpar_socket fd = (tulpar_socket)AS_INT(fdVal);
+
+  struct sockaddr_in addr;
+  socklen_t alen = sizeof(addr);
+  if (getpeername(fd, (struct sockaddr *)&addr, &alen) != 0)
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+
+  char buf[INET_ADDRSTRLEN];
+  const char *ip = inet_ntop(AF_INET, &addr.sin_addr, buf, sizeof(buf));
+  if (!ip)
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+
+  return VM_OBJ((Obj *)aot_allocate_string(ip, (int)strlen(ip)));
 }
 
 VMValue aot_socket_send(VMValue fdVal, VMValue dataVal) {
@@ -6515,14 +6551,12 @@ VMValue aot_is_object(VMValue v) { return VM_BOOL(IS_OBJECT(v)); }
 VMValue aot_is_bool(VMValue v) { return VM_BOOL(IS_BOOL(v)); }
 
 VMValue aot_call_closure(ObjClosure *cls, VMValue *args, int argc) {
-  printf("[DEBUG aot_call_closure] cls=%p, argc=%d\n", cls, argc);
   if (!cls) {
     printf("Calisma Zamani Hatasi: Null closure cagirildi\n");
     VMValue res;
     res.type = VM_VAL_VOID;
     return res;
   }
-  printf("[DEBUG aot_call_closure] cls->arity=%d, cls->func_ptr=%p, cls->env=%p\n", cls->arity, cls->func_ptr, cls->env);
   if (cls->arity != argc) {
     printf("Calisma Zamani Hatasi: Hatali parametre sayisi. Beklenen: %d, Alinan: %d\n", cls->arity, argc);
     VMValue res;
