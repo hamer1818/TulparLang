@@ -372,8 +372,27 @@ girildiğinde ne yapacağımı bilelim.
   (VM'de temp local slot), her atom `==`/range/OR testiyle if-else
   zincirine iner. `match` artık ayrılmış keyword (TR: `eşle`/`esle`),
   `..`=`TOKEN_DOTDOT`, `|`=`TOKEN_PIPE`.
-  - **Kalan (🟢, v1.2):** struct/array destructuring pattern'ları
-    (`Point{x, y} => …`). Şu an pattern'lar skaler değer eşleştirir.
+  - ✅ **Destructuring ÇALIŞIYOR (v1.2).** Array `[a, b]`, `[0, x]`
+    (literal kısıtı), `[head, ..rest]` (rest binding), `[]`; json object
+    `{x, y}` / `{role: "admin", id}`; typed struct varyantları
+    `Point{x, y}` / `Circle{r: 0}`. Bare identifier = binding, literal =
+    kısıt, `_` = yoksay. Lowering iki aşamalı guard'a iner (tip+uzunluk →
+    oku+bind+kısıt); typed-struct subject heap'e box'lanıp alan-indeksiyle
+    okunur (`aot_struct_type_is`/`aot_struct_get_field_ptr`), json key ile
+    (`vm_get_element`), rest `aot_array_slice` ile. Arm-scoped binding'ler
+    bir sonraki arm'a sızmaz. İç içe (nested) destructuring de çalışıyor
+    (`{center: {x, y}, radius}`, `[[a, b], [c, d]]`, derin literal kısıt):
+    matcher özyinelemeli — her seviye okumadan ÖNCE tip-kontrolü yapıp
+    uyuşmazlıkta `fail_bb`'ye dallanır (yanlış-tipli değerden okuma →
+    sahte "invalid index" hatası önlenir). `tests/match_destructure.test.tpr`
+    12/12, `examples/36_match_destructure.tpr` PASS.
+
+- ✅ **Boxed değer üzerinde tekli `-` ÇALIŞIYOR.** `-o["id"]` /
+  `-json_field` (runtime-tipli değer) artık doğru negatifleniyor. Eski
+  hata: unary-minus codegen'i VMValue'nun payload'ı (alan 2) yerine
+  hizalama pad'ini (alan 1, `[4 x i8]`) çıkarıp 4 byte'ı double'a
+  bitcast ediyordu → LLVM "Invalid bitcast". `tests/unary_boxed.test.tpr`
+  4/4.
 
 - 🟢 **Generics.** Type system overhaul; `func f<T>(T x): T` parse
   hatası veriyor.
@@ -385,7 +404,8 @@ girildiğinde ne yapacağımı bilelim.
   return 1; }`, `var p = f(); int r = await p;`. Gerçek kooperatif eşzamanlılık:
   bir coroutine `await`'te askıya alınırken diğerleri çalışır (10ms timer'lı
   task, 20ms'liden önce yerleşir — `examples/34_async.tpr` çıktısıyla doğrulandı).
-  `tests/async.test.tpr` 4/4 yeşil, `examples/34_async.tpr` suite'te PASS.
+  `tests/async.test.tpr` 8/8 yeşil, `examples/34_async.tpr` + `examples/35_gather.tpr`
+  suite'te PASS.
   - **Mimari (state-machine DEĞİL):** stackful coroutine + event loop
     (`runtime/tulpar_async.{h,cpp}`). POSIX `ucontext` / Windows Fiber ile
     yığın takası → compiler dokunuşu minimal (CPS/state-machine transform yok).
@@ -395,9 +415,14 @@ girildiğinde ne yapacağımı bilelim.
     sonunda `aot_event_loop_run()` kalan task'ları drene eder.
   - **Promise:** yeni `OBJ_PROMISE` obj tipi (`vm.hpp`), `arena_allocated=1`
     ile ARC erken-free etmez (scheduler raw pointer tutar).
-  - **Kalan (🟡):** (1) `gather`/`Promise.all`, reject/try üzerinden hata
-    yayılımı, gerçek async I/O (şu an timer + compute) sonraki turlar.
-    (2) `>8` parametreli async fn desteklenmiyor. (VM paritesi yok — AOT-only.)
+  - ✅ **`gather(...)` ÇALIŞIYOR.** `var r = await gather(a, b, c);` — N promise'i
+    eşzamanlı bekler, sonuçları **argüman sırasında** dizi olarak verir (toplam
+    süre `max(task)`, `sum` değil). Promise olmayan argümanlar olduğu gibi geçer.
+    Bir gather-coroutine her çocuğu sırayla `await` eder; çocuklar zaten kuyrukta
+    olduğundan paralel ilerler (`aot_gather`, `runtime/tulpar_async.cpp`).
+  - **Kalan (🟡):** (1) reject/try üzerinden hata yayılımı, gerçek async I/O
+    (şu an timer + compute) sonraki turlar. (2) `>8` parametreli async fn
+    desteklenmiyor. (VM paritesi yok — AOT-only.)
 
 ### Runtime + codegen
 

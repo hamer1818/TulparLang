@@ -1411,6 +1411,14 @@ extern "C" void aot_struct_set_field_ptr(VMValue *vp, int idx, long long val) {
   s->fields[idx] = val;
 }
 
+// 1 if *vp is a heap struct whose type_name equals `name`. Used by the
+// `TypeName{...}` match pattern to discriminate struct variants at runtime.
+extern "C" long long aot_struct_type_is_ptr(VMValue *vp, const char *name) {
+  if (!vp || !name || !IS_STRUCT(*vp)) return 0;
+  ObjStruct *s = AS_STRUCT(*vp);
+  return (s->type_name && strcmp(s->type_name, name) == 0) ? 1 : 0;
+}
+
 // Unpack heap struct fields into a caller-supplied i64 buffer. Used when
 // a typed-struct VAR_DECL takes its RHS from a generic VMValue source
 // (`V3 p = points[0];`). The destination matches the stack-alloca
@@ -2638,6 +2646,21 @@ VMValue aot_split_ptr(VMValue *str_ptr, VMValue *del_ptr) {
   if (!str_ptr || !del_ptr)
     return VM_INT(0);
   return aot_split(*str_ptr, *del_ptr);
+}
+
+// Return a new array holding elements [start, end) of *arr_ptr. Used by the
+// `[head, ..rest]` match destructuring pattern to bind the tail. A non-array
+// input or out-of-range start yields an empty array (matches the codebase's
+// "misuse is silent" convention).
+VMValue aot_array_slice_ptr(VMValue *arr_ptr, long long start) {
+  ObjArray *out = vm_allocate_array_aot_wrapper(nullptr);
+  if (arr_ptr && IS_ARRAY(*arr_ptr)) {
+    ObjArray *src = AS_ARRAY(*arr_ptr);
+    if (start < 0) start = 0;
+    for (int i = (int)start; i < src->count; i++)
+      vm_array_push_aot_wrapper(nullptr, out, src->items[i]);
+  }
+  return VM_OBJ((Obj *)out);
 }
 // ============================================================================
 // File I/O Builtins

@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
@@ -890,6 +891,13 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_struct_set_field = LLVMAddFunction(
       backend->module, "aot_struct_set_field_ptr", struct_set_type);
 
+  // aot_struct_type_is_ptr(VMValue *v, ptr name) -> i64 (match variant guard)
+  LLVMTypeRef struct_typeis_params[] = {backend->ptr_type, backend->ptr_type};
+  LLVMTypeRef struct_typeis_type =
+      LLVMFunctionType(backend->int_type, struct_typeis_params, 2, 0);
+  backend->func_aot_struct_type_is = LLVMAddFunction(
+      backend->module, "aot_struct_type_is_ptr", struct_typeis_type);
+
   // aot_struct_unpack_to(VMValue *v, int field_count, i64 *dst) -> void
   LLVMTypeRef struct_unpack_params[] = {
       backend->ptr_type, backend->int32_type, backend->ptr_type};
@@ -1058,6 +1066,13 @@ void declare_runtime_functions(LLVMBackend *backend) {
       llvm_make_vmvalue_func_type(backend, split_params, 2, 0);
   backend->func_aot_split =
       LLVMAddFunction(backend->module, "aot_split_ptr", split_type);
+
+  // aot_array_slice_ptr(VMValue* arr, i64 start) -> VMValue (match `..rest`)
+  LLVMTypeRef slice_params[] = {backend->ptr_type, backend->int_type};
+  LLVMTypeRef slice_type =
+      llvm_make_vmvalue_func_type(backend, slice_params, 2, 0);
+  backend->func_aot_array_slice =
+      LLVMAddFunction(backend->module, "aot_array_slice_ptr", slice_type);
 
   // File I/O Functions
   // aot_read_file(path) -> VMValue
@@ -1265,6 +1280,10 @@ void declare_runtime_functions(LLVMBackend *backend) {
   LLVMTypeRef sleep_async_params[] = {backend->int_type};
   LLVMTypeRef sleep_async_type = LLVMFunctionType(backend->ptr_type, sleep_async_params, 1, 0);
   backend->func_aot_sleep_async = LLVMAddFunction(backend->module, "aot_sleep_async", sleep_async_type);
+  // aot_gather(ptr args, int32 argc) -> ptr (ObjPromise*)
+  LLVMTypeRef gather_params[] = {backend->ptr_type, backend->int32_type};
+  LLVMTypeRef gather_type = LLVMFunctionType(backend->ptr_type, gather_params, 2, 0);
+  backend->func_aot_gather = LLVMAddFunction(backend->module, "aot_gather", gather_type);
   // aot_event_loop_run() -> void
   LLVMTypeRef loop_type = LLVMFunctionType(backend->void_type, nullptr, 0, 0);
   backend->func_aot_event_loop_run = LLVMAddFunction(backend->module, "aot_event_loop_run", loop_type);
@@ -3371,8 +3390,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMBasicBlockRef int_end = LLVMGetInsertBlock(backend->builder);
 
       LLVMPositionBuilderAtEnd(backend->builder, float_block);
+      // Payload is field 2 (the i64); field 1 is the [4 x i8] alignment pad —
+      // extracting that and bitcasting 4 bytes to an 8-byte double is the
+      // "Invalid bitcast" crash this path used to hit on `-<boxed float>`.
       LLVMValueRef float_bits = LLVMBuildExtractValue(backend->builder, operand,
-                                                      1, "unary_float_bits");
+                                                      2, "unary_float_bits");
       LLVMValueRef float_val = LLVMBuildBitCast(
           backend->builder, float_bits, backend->float_type, "unary_float");
       LLVMValueRef neg_float =
@@ -4673,6 +4695,38 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_build_vm_val_obj(backend, pr);
     }
 
+    // gather(p1, p2, ...) -> promise of [v1, v2, ...]. Awaits every argument
+    // concurrently (each async call already queued its own task) and fulfils
+    // with an array of their results. Idiomatic: `let r = await gather(a, b);`
+    if (strcmp(node->name, "gather") == 0) {
+      LLVMValueRef args_ptr_void;
+      if (node->argument_count > 0) {
+        LLVMTypeRef arr_type =
+            LLVMArrayType(backend->vm_value_type, node->argument_count);
+        LLVMValueRef arr =
+            llvm_build_alloca_at_entry(backend, arr_type, "gather_args");
+        for (int i = 0; i < node->argument_count; i++) {
+          LLVMValueRef av = codegen_expression(backend, node->arguments[i]);
+          LLVMValueRef idx[] = {LLVMConstInt(backend->int32_type, 0, 0),
+                                LLVMConstInt(backend->int32_type, i, 0)};
+          LLVMValueRef ep = LLVMBuildGEP2(backend->builder, arr_type, arr, idx,
+                                          2, "gather_arg_ep");
+          LLVMBuildStore(backend->builder, av, ep);
+        }
+        args_ptr_void = LLVMBuildBitCast(backend->builder, arr,
+                                         backend->ptr_type, "gather_args_void");
+      } else {
+        args_ptr_void = LLVMConstPointerNull(backend->ptr_type);
+      }
+      LLVMValueRef gargs[] = {
+          args_ptr_void,
+          LLVMConstInt(backend->int32_type, node->argument_count, 0)};
+      LLVMValueRef pr = LLVMBuildCall2(
+          backend->builder, LLVMGlobalGetValueType(backend->func_aot_gather),
+          backend->func_aot_gather, gargs, 2, "gather_p");
+      return llvm_build_vm_val_obj(backend, pr);
+    }
+
     // ====== JSON Functions ======
     // fromJson(str) -> object/array
     if (strcmp(node->name, "fromJson") == 0 && node->argument_count >= 1) {
@@ -5396,7 +5450,32 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // arm storing its value into a result slot, falling through to the
     // wildcard (else_branch). The comparison reuses the binary-op `==`
     // codegen via a synthetic node so every literal type works.
-    LLVMValueRef subj = codegen_expression(backend, node->condition);
+    // Typed-struct subjects (`Point p; match p { Point{x,y} => }`) are stored
+    // as a raw LLVM struct alloca, not a VMValue — so box them onto the heap
+    // first (mirrors the push() escape path) so the destructuring arms can
+    // read fields via aot_struct_get_field_ptr and discriminate variants via
+    // aot_struct_type_is. Non-struct subjects take codegen_expression as-is.
+    LLVMValueRef subj = nullptr;
+    if (node->condition && node->condition->type == AST_IDENTIFIER &&
+        node->condition->name) {
+      const char *src_struct =
+          get_local_struct_type(backend, node->condition->name);
+      LLVMValueRef src_alloca = get_local(backend, node->condition->name);
+      if (src_struct && src_alloca) {
+        StructTypeEntry *st = find_struct_type(backend, src_struct);
+        if (st && struct_is_trivially_unboxable(st)) {
+          LLVMValueRef name_str = LLVMBuildGlobalStringPtr(
+              backend->builder, st->name, "match.struct.type");
+          LLVMValueRef field_count =
+              LLVMConstInt(backend->int32_type, (unsigned)st->field_count, 0);
+          LLVMValueRef alloc_args[] = {name_str, field_count, src_alloca};
+          subj = llvm_call_vmvalue_func(
+              backend, backend->func_aot_struct_alloc_from_fields, alloc_args, 3,
+              "match.struct.heap");
+        }
+      }
+    }
+    if (!subj) subj = codegen_expression(backend, node->condition);
     char subj_name[32];
     snprintf(subj_name, sizeof(subj_name), "__match_%d", backend->match_count++);
     LLVMValueRef subj_slot = llvm_build_alloca_at_entry(
@@ -5441,24 +5520,234 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_build_is_truthy(backend, codegen_expression(backend, &eq));
     };
 
-    for (int i = 0; i < node->element_count; i++) {
-      // A pattern is either a single atom or a Block of `|`-alternatives;
-      // the arm matches if ANY atom matches.
-      ASTNode_C *pat = node->elements[i];
-      LLVMValueRef truthy = nullptr;
-      if (pat && pat->type == AST_BLOCK) {
-        for (int k = 0; k < pat->statement_count; k++) {
-          LLVMValueRef t = atom_truthy(pat->statements[k]);
-          truthy = truthy ? LLVMBuildOr(backend->builder, truthy, t, "alt_or") : t;
-        }
+    // ---- Destructuring pattern matcher (recursive) --------------------
+    // Array (`[a, ..rest]`), json-object (`{x, y: 0}`) and typed-struct
+    // (`Point{x, y}`) patterns lower to a recursive matcher. Each level
+    // type-checks BEFORE reading its slots, so a wrong-typed value never
+    // reaches an element read (which would emit a spurious runtime "invalid
+    // index" error); on any mismatch it branches to `fail_bb`, and on success
+    // it falls through with the bindings added. Nesting
+    // (`{center: Point{x, y}}`, `[[a, b], c]`) falls out of the recursion. A
+    // bare identifier BINDS the slot; a literal is a constraint; `_` ignores
+    // it. Opaque pointers mean a VMValue alloca is already a usable `ptr`, so
+    // runtime calls take the alloca directly (no bitcast).
+    auto as_vmval_ptr = [&](LLVMValueRef v, const char *nm) -> LLVMValueRef {
+      LLVMValueRef slot =
+          llvm_build_alloca_at_entry(backend, backend->vm_value_type, nm);
+      LLVMBuildStore(backend->builder, v, slot);
+      return slot;
+    };
+    auto is_literal_node = [](ASTNode_C *n) -> bool {
+      return n && (n->type == AST_INT_LITERAL || n->type == AST_FLOAT_LITERAL ||
+                   n->type == AST_STRING_LITERAL || n->type == AST_BOOL_LITERAL);
+    };
+    auto bind_value = [&](const char *nm, LLVMValueRef v) {
+      LLVMValueRef slot =
+          llvm_build_alloca_at_entry(backend, backend->vm_value_type, nm);
+      LLVMBuildStore(backend->builder, v, slot);
+      add_local(backend, nm, slot);
+    };
+    // Read element `i` of the array whose VMValue lives at `vslot`.
+    auto read_index = [&](LLVMValueRef vslot, int i) -> LLVMValueRef {
+      LLVMValueRef iptr = as_vmval_ptr(llvm_vm_val_int(backend, i), "midx");
+      LLVMValueRef a[] = {vslot, iptr};
+      return llvm_call_vmvalue_func(backend, backend->func_vm_get_element, a, 2,
+                                    "melem");
+    };
+    // Read json key `key` of the object whose VMValue lives at `vslot`.
+    auto read_key = [&](LLVMValueRef vslot, const char *key) -> LLVMValueRef {
+      ASTNode_C k;
+      memset(&k, 0, sizeof(k));
+      k.type = AST_STRING_LITERAL;
+      k.value.string_value = const_cast<char *>(key);
+      k.line = node->line;
+      LLVMValueRef kptr = as_vmval_ptr(codegen_expression(backend, &k), "mkey");
+      LLVMValueRef a[] = {vslot, kptr};
+      return llvm_call_vmvalue_func(backend, backend->func_vm_get_element, a, 2,
+                                    "mfield");
+    };
+    // Read field `key` (by registry index) from the boxed struct at `vslot`.
+    auto read_struct_field = [&](LLVMValueRef vslot, StructTypeEntry *st,
+                                 const char *key) -> LLVMValueRef {
+      int idx = struct_type_field_index(st, key);
+      if (idx < 0) return llvm_vm_val_int(backend, 0);
+      LLVMValueRef ga[] = {vslot, LLVMConstInt(backend->int32_type, idx, 0)};
+      LLVMValueRef raw = LLVMBuildCall2(
+          backend->builder,
+          LLVMGlobalGetValueType(backend->func_aot_struct_get_field),
+          backend->func_aot_struct_get_field, ga, 2, "sfield");
+      if (st->field_types[idx] == TYPE_BOOL) {
+        LLVMValueRef b = LLVMBuildICmp(backend->builder, LLVMIntNE, raw,
+                                       LLVMConstInt(backend->int_type, 0, 0),
+                                       "sfield.b");
+        return llvm_vm_val_bool_val(backend, b);
       }
-      if (!truthy) truthy = atom_truthy(pat);
+      return llvm_vm_val_int_val(backend, raw);
+    };
+    // Truthy test of `<bound-local> == <literal>` via a synthetic binary-op
+    // (same trick as atom_truthy), reusing the typed `==` codegen.
+    auto eq_truthy = [&](const char *lname, ASTNode_C *lit) -> LLVMValueRef {
+      ASTNode_C ref;
+      memset(&ref, 0, sizeof(ref));
+      ref.type = AST_IDENTIFIER;
+      ref.name = const_cast<char *>(lname);
+      ref.line = node->line;
+      ASTNode_C eq;
+      memset(&eq, 0, sizeof(eq));
+      eq.type = AST_BINARY_OP;
+      eq.op = TOKEN_EQUAL;
+      eq.left = &ref;
+      eq.right = lit;
+      eq.line = node->line;
+      return llvm_build_is_truthy(backend, codegen_expression(backend, &eq));
+    };
+    // Branch to fail_bb unless `cond` (i1) holds, then continue in a fresh
+    // block — so subsequent reads only run once the type/constraint passed.
+    auto guard = [&](LLVMValueRef cond, LLVMBasicBlockRef fail_bb,
+                     const char *nm) {
+      LLVMBasicBlockRef cont = LLVMAppendBasicBlock(func, nm);
+      LLVMBuildCondBr(backend->builder, cond, cont, fail_bb);
+      LLVMPositionBuilderAtEnd(backend->builder, cont);
+    };
+    int destr_temp = 0;
+    // Recursively match `val` against `pat`, branching to `fail_bb` on any
+    // mismatch and adding bindings on success. Leaves the builder at the
+    // success continuation.
+    std::function<void(LLVMValueRef, ASTNode_C *, LLVMBasicBlockRef)>
+        match_pattern = [&](LLVMValueRef val, ASTNode_C *pat,
+                            LLVMBasicBlockRef fail_bb) {
+          // Leaf: binding identifier (not `_`).
+          if (pat && pat->type == AST_IDENTIFIER && pat->name &&
+              strcmp(pat->name, "_") != 0) {
+            bind_value(pat->name, val);
+            return;
+          }
+          // Leaf: literal constraint.
+          if (is_literal_node(pat)) {
+            char tn[40];
+            snprintf(tn, sizeof(tn), "__mt%d", destr_temp++);
+            bind_value(tn, val);
+            guard(eq_truthy(tn, pat), fail_bb, "destr_c");
+            return;
+          }
+          // Array pattern.
+          if (pat && pat->type == AST_ARRAY_LITERAL) {
+            LLVMValueRef vslot = as_vmval_ptr(val, "pv_arr");
+            int rest_idx = -1, fixed = 0;
+            for (int e = 0; e < pat->element_count; e++) {
+              ASTNode_C *el = pat->elements[e];
+              if (el && el->type == AST_UNARY_OP && el->op == TOKEN_DOTDOT)
+                rest_idx = e;
+              else
+                fixed++;
+            }
+            LLVMValueRef ia[] = {val};
+            LLVMValueRef isa = llvm_build_is_truthy(
+                backend, llvm_call_vmvalue_func(
+                             backend, backend->func_aot_is_array, ia, 1,
+                             "is_arr"));
+            LLVMValueRef lenargs[] = {vslot};
+            LLVMValueRef len = LLVMBuildCall2(
+                backend->builder, LLVMGlobalGetValueType(backend->func_aot_len),
+                backend->func_aot_len, lenargs, 1, "mlen");
+            LLVMValueRef lenok = LLVMBuildICmp(
+                backend->builder, rest_idx >= 0 ? LLVMIntSGE : LLVMIntEQ, len,
+                LLVMConstInt(backend->int_type, fixed, 0), "lenok");
+            guard(LLVMBuildAnd(backend->builder, isa, lenok, "arr_guard"),
+                  fail_bb, "destr_arr");
+            int slot_i = 0;
+            for (int e = 0; e < pat->element_count; e++) {
+              ASTNode_C *el = pat->elements[e];
+              if (el && el->type == AST_UNARY_OP && el->op == TOKEN_DOTDOT) {
+                ASTNode_C *idn = el->left;
+                if (idn && idn->type == AST_IDENTIFIER && idn->name &&
+                    strcmp(idn->name, "_") != 0) {
+                  LLVMValueRef sa[] = {
+                      vslot, LLVMConstInt(backend->int_type, slot_i, 0)};
+                  bind_value(idn->name, llvm_call_vmvalue_func(
+                                            backend,
+                                            backend->func_aot_array_slice, sa,
+                                            2, "mrest"));
+                }
+                continue; // rest consumes no fixed slot
+              }
+              match_pattern(read_index(vslot, slot_i), el, fail_bb);
+              slot_i++;
+            }
+            return;
+          }
+          // Object / typed-struct pattern.
+          if (pat && pat->type == AST_OBJECT_LITERAL) {
+            LLVMValueRef vslot = as_vmval_ptr(val, "pv_obj");
+            // `TypeName{...}` whose name is a registered trivially-unboxable
+            // struct reads fields by index off a boxed ObjStruct and guards on
+            // the runtime type_name; otherwise it matches a json object by key.
+            StructTypeEntry *pst = nullptr;
+            if (pat->name) {
+              StructTypeEntry *cand = find_struct_type(backend, pat->name);
+              if (cand && struct_is_trivially_unboxable(cand)) pst = cand;
+            }
+            if (pst) {
+              LLVMValueRef name_str = LLVMBuildGlobalStringPtr(
+                  backend->builder, pst->name, "pat.type");
+              LLVMValueRef ta[] = {vslot, name_str};
+              LLVMValueRef is = LLVMBuildCall2(
+                  backend->builder,
+                  LLVMGlobalGetValueType(backend->func_aot_struct_type_is),
+                  backend->func_aot_struct_type_is, ta, 2, "struct_is");
+              guard(LLVMBuildICmp(backend->builder, LLVMIntNE, is,
+                                  LLVMConstInt(backend->int_type, 0, 0),
+                                  "struct_guard"),
+                    fail_bb, "destr_struct");
+            } else {
+              LLVMValueRef ia[] = {val};
+              guard(llvm_build_is_truthy(
+                        backend, llvm_call_vmvalue_func(
+                                     backend, backend->func_aot_is_object, ia,
+                                     1, "is_obj")),
+                    fail_bb, "destr_obj");
+            }
+            for (int f = 0; f < pat->object_count; f++) {
+              const char *key = pat->object_keys[f];
+              ASTNode_C *sub = pat->object_values[f];
+              LLVMValueRef fv = pst ? read_struct_field(vslot, pst, key)
+                                    : read_key(vslot, key);
+              match_pattern(fv, sub, fail_bb);
+            }
+            return;
+          }
+          // `_` wildcard or anything else: matches, no binding.
+        };
 
-      LLVMBasicBlockRef then_bb = LLVMAppendBasicBlock(func, "match_arm");
+    for (int i = 0; i < node->element_count; i++) {
+      // A pattern is either a single atom, a Block of `|`-alternatives (match
+      // if ANY atom matches), or a destructuring pattern (array / struct).
+      ASTNode_C *pat = node->elements[i];
+      int saved_scope =
+          backend->current_scope ? backend->current_scope->count : 0;
+
       LLVMBasicBlockRef next_bb = LLVMAppendBasicBlock(func, "match_next");
-      LLVMBuildCondBr(backend->builder, truthy, then_bb, next_bb);
 
-      LLVMPositionBuilderAtEnd(backend->builder, then_bb);
+      if (pat && (pat->type == AST_ARRAY_LITERAL ||
+                  pat->type == AST_OBJECT_LITERAL)) {
+        // Recursive matcher: mismatch jumps to next_bb, success falls through
+        // (builder ends positioned at the success continuation) with bindings.
+        match_pattern(subj, pat, next_bb);
+      } else {
+        LLVMBasicBlockRef then_bb = LLVMAppendBasicBlock(func, "match_arm");
+        LLVMValueRef truthy = nullptr;
+        if (pat && pat->type == AST_BLOCK) {
+          for (int k = 0; k < pat->statement_count; k++) {
+            LLVMValueRef t = atom_truthy(pat->statements[k]);
+            truthy =
+                truthy ? LLVMBuildOr(backend->builder, truthy, t, "alt_or") : t;
+          }
+        }
+        if (!truthy) truthy = atom_truthy(pat);
+        LLVMBuildCondBr(backend->builder, truthy, then_bb, next_bb);
+        LLVMPositionBuilderAtEnd(backend->builder, then_bb);
+      }
+
       if (node->arguments[i] && node->arguments[i]->type == AST_BLOCK) {
         codegen_statement(backend, node->arguments[i]);
       } else {
@@ -5468,6 +5757,9 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder)))
         LLVMBuildBr(backend->builder, merge_bb);
 
+      // Destructured bindings are arm-scoped: drop them before the next arm.
+      if (backend->current_scope)
+        backend->current_scope->count = saved_scope;
       LLVMPositionBuilderAtEnd(backend->builder, next_bb);
     }
 

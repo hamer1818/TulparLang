@@ -1,0 +1,29 @@
+// gather() — run async tasks concurrently and collect their results.
+//
+// Each `async` call queues its own coroutine, so the three `fetch` tasks
+// below all make progress while gather() awaits them. Total wall time is
+// max(tasks) (~30ms here), not the sum (~60ms). Results come back in
+// ARGUMENT order, regardless of which task finished first.
+
+async func fetch(str name, int ms) {
+    await sleep_async(ms);   // pretend this is network/disk I/O
+    print("  fetched " + name);
+    return ms;
+}
+
+int t0 = time_ms();
+var results = await gather(
+    fetch("slow", 30),
+    fetch("fast", 10),
+    fetch("mid", 20)
+);
+int elapsed = time_ms() - t0;
+
+print("results = [" + toString(results[0]) + ", "
+                    + toString(results[1]) + ", "
+                    + toString(results[2]) + "]");   // [30, 10, 20]
+print("elapsed ~ " + toString(elapsed) + "ms (concurrent: ~30, not ~60)");
+
+// Non-promise arguments pass straight through, so you can mix in ready values.
+var mixed = await gather(fetch("x", 5), 42);
+print("mixed = [" + toString(mixed[0]) + ", " + toString(mixed[1]) + "]");  // [5, 42]

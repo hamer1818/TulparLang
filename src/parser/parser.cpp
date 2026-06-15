@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <stdexcept>
 
 // ============================================================================
@@ -903,6 +904,67 @@ std::unique_ptr<ASTNode> Parser::parse_primary() {
         advance(); // consume 'match'
         auto subject = parse_expression();
         expect(TOKEN_LBRACE, "Expected '{' after match subject");
+        // Destructuring sub-pattern parser (recursive for nesting). Used for
+        // array (`[a, ..rest]`) and struct/object (`Point{x, y: 0}`) patterns.
+        // A bare identifier inside a destructuring pattern is a BINDING (it
+        // names the extracted element/field); a literal is a constraint; `_`
+        // ignores the slot. Nested array/object patterns recurse.
+        std::function<std::unique_ptr<ASTNode>()> parse_pattern =
+            [&]() -> std::unique_ptr<ASTNode> {
+            SourceLocation ploc(current().line(), current().column());
+            // Array pattern: [p0, p1, ..rest]
+            if (check(TOKEN_LBRACKET)) {
+                advance();
+                std::vector<std::unique_ptr<ASTNode>> elems;
+                while (!check(TOKEN_RBRACKET) && !check(TOKEN_EOF)) {
+                    if (check(TOKEN_DOTDOT)) {
+                        // Rest binding `..name` (name optional; defaults to _).
+                        SourceLocation rloc(current().line(), current().column());
+                        advance();
+                        std::string rname = "_";
+                        if (check(TOKEN_IDENTIFIER)) { rname = current().value(); advance(); }
+                        auto id = std::make_unique<ASTNode>(Identifier(rname, rloc));
+                        elems.push_back(std::make_unique<ASTNode>(
+                            UnaryOp(std::move(id), TOKEN_DOTDOT, rloc)));
+                    } else {
+                        elems.push_back(parse_pattern());
+                    }
+                    if (!match(TOKEN_COMMA)) break;
+                }
+                expect(TOKEN_RBRACKET, "Expected ']' to close array pattern");
+                return std::make_unique<ASTNode>(ArrayLiteral(std::move(elems), ploc));
+            }
+            // Struct/object pattern: `TypeName{...}` or anonymous `{...}`.
+            bool named = check(TOKEN_IDENTIFIER) && current().value() != "_" &&
+                         peek().type() == TOKEN_LBRACE;
+            if (check(TOKEN_LBRACE) || named) {
+                std::string type_name;
+                if (named) { type_name = current().value(); advance(); }
+                expect(TOKEN_LBRACE, "Expected '{' in struct pattern");
+                std::vector<std::pair<std::string, std::unique_ptr<ASTNode>>> fields;
+                while (!check(TOKEN_RBRACE) && !check(TOKEN_EOF)) {
+                    std::string key =
+                        expect(TOKEN_IDENTIFIER, "Expected field name in struct pattern").value();
+                    std::unique_ptr<ASTNode> sub;
+                    if (match(TOKEN_COLON)) {
+                        sub = parse_pattern();   // `key: <subpattern>`
+                    } else {
+                        // Shorthand `key` binds a local named `key`.
+                        SourceLocation kloc(current().line(), current().column());
+                        sub = std::make_unique<ASTNode>(Identifier(key, kloc));
+                    }
+                    fields.emplace_back(key, std::move(sub));
+                    if (!match(TOKEN_COMMA)) break;
+                }
+                expect(TOKEN_RBRACE, "Expected '}' to close struct pattern");
+                auto obj = ObjectLiteral(std::move(fields), ploc);
+                obj.type_name = type_name;
+                return std::make_unique<ASTNode>(std::move(obj));
+            }
+            // Leaf: binding identifier, `_`, or a literal constraint.
+            return parse_expression();
+        };
+
         std::vector<MatchArm> arms;
         while (!check(TOKEN_RBRACE) && !check(TOKEN_EOF)) {
             MatchArm arm;
@@ -910,9 +972,16 @@ std::unique_ptr<ASTNode> Parser::parse_primary() {
             // atoms separated by `|`. Each atom may be a literal or an
             // inclusive range `lo..hi`. Multiple atoms are wrapped in a Block
             // (codegen treats it as "match if any atom matches").
+            bool is_destructure =
+                check(TOKEN_LBRACKET) || check(TOKEN_LBRACE) ||
+                (check(TOKEN_IDENTIFIER) && current().value() != "_" &&
+                 peek().type() == TOKEN_LBRACE);
             if (check(TOKEN_IDENTIFIER) && current().value() == "_") {
                 advance();
                 arm.pattern = nullptr;
+            } else if (is_destructure) {
+                // Array / struct / object destructuring pattern (no `|`).
+                arm.pattern = parse_pattern();
             } else {
                 std::vector<std::unique_ptr<ASTNode>> atoms;
                 do {
@@ -1389,6 +1458,8 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
             set_loc(out, n.loc);
         } else if constexpr (std::is_same_v<T, ObjectLiteral>) {
             out->type = AST_OBJECT_LITERAL;
+            // Destructuring pattern type tag (`Point{...}`) rides on `name`.
+            if (!n.type_name.empty()) out->name = dup_cstr(n.type_name);
             out->object_count = static_cast<int>(n.fields.size());
             if (out->object_count > 0) {
                 out->object_keys = static_cast<char**>(std::calloc(out->object_count, sizeof(char*)));

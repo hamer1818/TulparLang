@@ -72,6 +72,7 @@ const BuiltinEntry kBuiltins[] = {
     {"time_ms",      "time_ms(): int",                              "Unix epoch (milisaniye)."},
     {"sleep",        "sleep(ms: int): void",                        "Verilen milisaniye kadar bekler (bloklar)."},
     {"sleep_async",  "sleep_async(ms: int): promise",               "Bloklamayan timer; `await sleep_async(ms)` ile kullanılır. AOT async."},
+    {"gather",       "gather(...promises): promise",                "Tüm promise'leri eşzamanlı bekler, sonuçları dizi olarak verir. `let r = await gather(a, b);`"},
 
     // ---- File ----
     {"read_file",    "read_file(path: str): str",                   "Dosyayı tamamen okur."},

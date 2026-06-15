@@ -49,9 +49,53 @@ func run_nested() {
     assert_eq_int(await c, 42);
 }
 
+// gather(...): await N coroutines concurrently, results in argument order
+// (not completion order). The three tasks below settle 30/10/20ms apart.
+async func wait_val(int ms, int val) {
+    await sleep_async(ms);
+    return val;
+}
+
+func run_gather_order() {
+    var r = await gather(wait_val(30, 1), wait_val(10, 2), wait_val(20, 3));
+    assert_eq_int(length(r), 3);
+    assert_eq_int(r[0], 1);   // argument order, even though this settles last
+    assert_eq_int(r[1], 2);
+    assert_eq_int(r[2], 3);
+}
+
+// gather runs its children concurrently: 3×20ms should finish in ~20ms, not 60.
+func run_gather_concurrent() {
+    int t0 = time_ms();
+    var r = await gather(wait_val(20, 1), wait_val(20, 1), wait_val(20, 1));
+    int dt = time_ms() - t0;
+    assert_eq_int(length(r), 3);
+    assert(dt < 50, "gather should run children concurrently (~20ms, not ~60)");
+}
+
+// Non-promise arguments pass through unchanged.
+func run_gather_passthrough() {
+    var r = await gather(wait_val(5, 7), 99);
+    assert_eq_int(r[0], 7);
+    assert_eq_int(r[1], 99);
+}
+
+// gather called from inside a coroutine (nested suspension).
+async func combo() {
+    var inner = await gather(wait_val(10, 40), wait_val(20, 2));
+    return inner[0] + inner[1];
+}
+func run_gather_nested() {
+    assert_eq_int(await combo(), 42);
+}
+
 print("=== async/await tests ===");
 test("basic spawn + await", "run_basic");
 test("await non-promise identity", "run_identity");
 test("non-blocking timer ordering", "run_timer_order");
 test("nested coroutines", "run_nested");
+test("gather result ordering", "run_gather_order");
+test("gather concurrency", "run_gather_concurrent");
+test("gather non-promise passthrough", "run_gather_passthrough");
+test("gather inside coroutine", "run_gather_nested");
 test_summary();

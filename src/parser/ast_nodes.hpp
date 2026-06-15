@@ -112,8 +112,12 @@ struct ArrayLiteral {
 
 struct ObjectLiteral {
     std::vector<std::pair<std::string, std::unique_ptr<ASTNode>>> fields;
+    // Non-empty only for a `TypeName{...}` destructuring pattern in a match
+    // arm: the named struct type the pattern matches against. Plain object
+    // literals (`{ x: 0 }`) leave this empty.
+    std::string type_name;
     SourceLocation loc;
-    
+
     ObjectLiteral(std::vector<std::pair<std::string, std::unique_ptr<ASTNode>>> f,
                   SourceLocation l)
         : fields(std::move(f)), loc(l) {}

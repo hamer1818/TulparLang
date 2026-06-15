@@ -47,6 +47,13 @@ VMValue aot_await(VMValue awaited);
 // A promise that fulfils with void after `ms` milliseconds.
 ObjPromise *aot_sleep_async(long long ms);
 
+// Await every value in `args` concurrently and fulfil with an array of their
+// results, in argument order. Non-promise args pass through unchanged. The
+// children were already spawned (each `async` call queues its own task), so
+// awaiting them in sequence inside one coroutine still runs them in parallel —
+// total time is max(children), not the sum. Returns the gather promise.
+ObjPromise *aot_gather(VMValue *args, int argc);
+
 // Drive the loop until no tasks and no timers remain (call at program exit so
 // spawned-but-unawaited tasks still complete, Node-style).
 void aot_event_loop_run(void);

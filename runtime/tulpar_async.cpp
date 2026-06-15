@@ -69,11 +69,22 @@ inline void async_sleep_ms(long long ms) {
 extern "C" {
 void arc_retain_vmvalue(VMValue *val);
 void arc_release_vmvalue(VMValue *val);
+// Runtime array allocators (src/vm/runtime_bindings.cpp). The plain
+// vm_allocate_array/vm_array_push deref the VM*, so the AOT runtime (no VM)
+// must go through these null-safe wrappers, which malloc when vm == nullptr.
+ObjArray *vm_allocate_array_aot_wrapper(void *vm);
+void vm_array_push_aot_wrapper(void *vm, ObjArray *array, VMValue value);
 }
 
 namespace {
 
 constexpr size_t kCoroStackSize = 256 * 1024;
+
+// gather() bookkeeping carried by a coroutine that awaits N children.
+struct GatherState {
+  VMValue *items = nullptr; // retained copies of the awaited args
+  int n = 0;
+};
 
 // ---- Task (coroutine) ----------------------------------------------------
 struct Task {
@@ -86,7 +97,8 @@ struct Task {
   void *fn = nullptr;       // user-function pointer (AOT ABI)
   VMValue *args = nullptr;  // heap copy of arguments
   int argc = 0;
-  ObjPromise *result = nullptr; // promise fulfilled on return
+  GatherState *gather = nullptr; // non-null => this is a gather() coroutine
+  ObjPromise *result = nullptr;  // promise fulfilled on return
   bool done = false;
   bool started = false;
 };
@@ -137,9 +149,27 @@ VMValue call_user_fn(void *fn, VMValue *a, int argc) {
   return r;
 }
 
+// The body of a gather() coroutine: await each child in turn (they progress
+// concurrently in the loop) and collect the results into a fresh array.
+VMValue gather_body(GatherState *gs) {
+  ObjArray *arr = vm_allocate_array_aot_wrapper(nullptr);
+  for (int i = 0; i < gs->n; i++) {
+    VMValue v = aot_await(gs->items[i]);
+    vm_array_push_aot_wrapper(nullptr, arr, v);
+  }
+  for (int i = 0; i < gs->n; i++) arc_release_vmvalue(&gs->items[i]);
+  free(gs->items);
+  delete gs;
+  VMValue out;
+  out.type = VM_VAL_OBJ;
+  out.as.obj = (Obj *)arr;
+  return out;
+}
+
 // The body every coroutine runs: call the user function, fulfil the promise.
 void task_body(Task *t) {
-  VMValue rv = call_user_fn(t->fn, t->args, t->argc);
+  VMValue rv = t->gather ? gather_body(t->gather)
+                         : call_user_fn(t->fn, t->args, t->argc);
   t->done = true;
   aot_promise_settle(t->result, rv, /*fulfilled*/ 1);
 }
@@ -342,6 +372,22 @@ ObjPromise *aot_sleep_async(long long ms) {
   tm.promise = p;
   g_timers.push_back(tm);
   return p;
+}
+
+ObjPromise *aot_gather(VMValue *args, int argc) {
+  ensure_scheduler_inited();
+  GatherState *gs = new GatherState();
+  gs->n = argc;
+  if (argc > 0) {
+    gs->items = (VMValue *)malloc(sizeof(VMValue) * argc);
+    memcpy(gs->items, args, sizeof(VMValue) * argc);
+    for (int i = 0; i < argc; i++) arc_retain_vmvalue(&gs->items[i]);
+  }
+  Task *t = new Task();
+  t->gather = gs;
+  t->result = aot_promise_new();
+  g_ready.push_back(t);
+  return t->result;
 }
 
 void aot_event_loop_run(void) {

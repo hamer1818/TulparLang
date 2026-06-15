@@ -1,0 +1,42 @@
+import "test";
+
+// Regression: unary `-` on a boxed (json / unknown-typed) value used to read
+// the VMValue's alignment-pad field instead of the payload and crash LLVM
+// with "Invalid bitcast" (4-byte pad -> 8-byte double). Both int and float
+// payloads must negate correctly through the boxed path.
+
+func run_boxed_int_neg() {
+    json o = {"id": 7};
+    var id = o["id"];           // boxed, type only known at runtime
+    assert_eq_int(-id, -7);
+}
+
+func run_boxed_float_neg() {
+    json o = {"pi": 3.5};
+    var pi = o["pi"];           // boxed float — the crashing case
+    assert_eq_str(toString(-pi), "-3.5");
+}
+
+func run_match_binding_neg() {
+    json o = {"id": 9};
+    var r = match o {
+        {id} => -id,
+        _    => 0
+    };
+    assert_eq_int(r, -9);
+}
+
+// Typed locals keep working (fast path, unaffected by the fix).
+func run_typed_neg() {
+    int a = 5;
+    float b = 2.5;
+    assert_eq_int(-a, -5);
+    assert_eq_str(toString(-b), "-2.5");
+}
+
+print("=== unary minus on boxed values ===");
+test("boxed int negation", "run_boxed_int_neg");
+test("boxed float negation", "run_boxed_float_neg");
+test("match-bound negation", "run_match_binding_neg");
+test("typed negation still works", "run_typed_neg");
+test_summary();

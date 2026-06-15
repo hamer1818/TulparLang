@@ -176,6 +176,7 @@ typedef struct {
   LLVMValueRef func_aot_struct_alloc_from_fields;
   LLVMValueRef func_aot_struct_get_field;
   LLVMValueRef func_aot_struct_set_field;
+  LLVMValueRef func_aot_struct_type_is; // (VMValue* v, ptr name) -> i64
   LLVMValueRef func_aot_struct_unpack_to;
   LLVMValueRef func_aot_to_json;
   LLVMValueRef func_aot_runtime_init;
@@ -201,6 +202,7 @@ typedef struct {
   LLVMValueRef func_aot_trim;
   LLVMValueRef func_aot_replace;
   LLVMValueRef func_aot_split;
+  LLVMValueRef func_aot_array_slice; // (VMValue* arr, i64 start) -> VMValue
 
   LLVMValueRef func_aot_read_file;
   LLVMValueRef func_aot_write_file;
@@ -247,6 +249,7 @@ typedef struct {
   LLVMValueRef func_aot_async_spawn;   // (ptr fn, ptr args, i32 argc) -> ptr
   LLVMValueRef func_aot_await;         // (VMValue) -> VMValue
   LLVMValueRef func_aot_sleep_async;   // (i64 ms) -> ptr
+  LLVMValueRef func_aot_gather;        // (ptr args, i32 argc) -> ptr
   LLVMValueRef func_aot_event_loop_run;// () -> void
 
   // Fast String Operations
