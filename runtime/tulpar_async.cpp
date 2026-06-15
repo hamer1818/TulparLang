@@ -6,6 +6,34 @@
 // never run nested (a task always yields before another runs), a single
 // shared scheduler context is sufficient.
 
+// Platform feature-test macros must be set BEFORE any system header is pulled
+// in (transitively via the project headers below), or they have no effect.
+#if defined(_WIN32)
+// Keep windows.h lean and stop it defining min()/max() macros that wreck the
+// <algorithm>/<chrono>/<limits> we use. Mirror src/common/platform.h.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600 // ensure the Fiber API is declared
+#endif
+#elif defined(__APPLE__)
+// macOS hides getcontext/makecontext/swapcontext behind _XOPEN_SOURCE; in C++
+// an undeclared call is a hard error (not an implicit decl). _DARWIN_C_SOURCE
+// keeps the BSD extensions the rest of the runtime relies on.
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE 1
+#endif
+// ucontext is deprecated on macOS but still the portable POSIX option here.
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 #include "tulpar_async.h"
 #include "tulpar_arc.h"
 
@@ -19,9 +47,6 @@
 
 #if defined(_WIN32)
 #define TULPAR_ASYNC_FIBERS 1
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
 #include <windows.h>
 #else
 #include <ucontext.h>
@@ -130,7 +155,8 @@ void resume(Task *t) {
 #if TULPAR_ASYNC_FIBERS
   if (!t->started) {
     t->started = true;
-    t->fiber = CreateFiber(kCoroStackSize, fiber_trampoline, t);
+    t->fiber = CreateFiber(kCoroStackSize,
+                           (LPFIBER_START_ROUTINE)fiber_trampoline, t);
   }
   SwitchToFiber(t->fiber);
 #else
