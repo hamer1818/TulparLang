@@ -72,7 +72,15 @@ endif()
 include_directories(${LLVM_INCLUDE_DIRS})
 link_directories(${LLVM_LIBRARY_DIRS})
 if(LLVM_DEFINITIONS)
-    add_definitions(${LLVM_DEFINITIONS})
+    # LLVM_DEFINITIONS is a single SPACE-SEPARATED STRING, not a CMake list.
+    # Passing it straight to add_definitions() collapses every flag after the
+    # first into the value of the first -D (e.g. LLVM 22's MinGW config yields
+    #   -D_GLIBCXX_USE_CXX11_ABI="1 -D_FILE_OFFSET_BITS=64 ...")
+    # which makes libstdc++'s `#if _GLIBCXX_USE_CXX11_ABI` see '=' tokens:
+    #   <command-line>: error: token '=' is not valid in preprocessor expressions
+    # Split into proper arguments first (LLVM's own docs recommend this).
+    separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND "${LLVM_DEFINITIONS}")
+    add_definitions(${LLVM_DEFINITIONS_LIST})
 endif()
 
 # C++ Compiler flags (modern, strict)
