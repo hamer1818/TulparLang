@@ -41,16 +41,30 @@
 #include <cstring>
 #include <cstdio>
 #include <vector>
-#include <algorithm>
-#include <chrono>
-#include <thread>
+#include <chrono> // steady_clock only (header-only; safe on all toolchains)
 
+// NOTE: deliberately NOT <thread>/<std::this_thread>. MinGW built with the
+// win32 threads model omits std::thread/std::this_thread, and this codebase
+// otherwise uses native threads (platform_threads.h), so <thread> here broke
+// the Windows (MSYS2) build. We sleep via the OS primitive instead.
 #if defined(_WIN32)
 #define TULPAR_ASYNC_FIBERS 1
 #include <windows.h>
 #else
 #include <ucontext.h>
+#include <unistd.h> // usleep
 #endif
+
+namespace {
+inline void async_sleep_ms(long long ms) {
+  if (ms <= 0) return;
+#if defined(_WIN32)
+  Sleep((DWORD)ms);
+#else
+  usleep((useconds_t)(ms * 1000));
+#endif
+}
+} // namespace
 
 extern "C" {
 void arc_retain_vmvalue(VMValue *val);
@@ -220,7 +234,7 @@ bool loop_step() {
       if (g_timers[i].deadline_ms < g_timers[mn].deadline_ms) mn = i;
     long long wait = g_timers[mn].deadline_ms - now_ms();
     if (wait > 0)
-      std::this_thread::sleep_for(std::chrono::milliseconds(wait));
+      async_sleep_ms(wait);
     long long t_now = now_ms();
     // Collect & fire all due timers (settling moves waiters onto g_ready).
     std::vector<ObjPromise *> fire;
