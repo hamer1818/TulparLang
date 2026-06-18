@@ -894,6 +894,95 @@ std::unique_ptr<ASTNode> Parser::parse_unary() {
     return parse_postfix(parse_primary());
 }
 
+std::unique_ptr<ASTNode> Parser::build_tstring(const std::string& tmpl,
+                                               SourceLocation loc) {
+    // Start the chain with "" so the whole expression is string-typed even when
+    // it begins with (or is only) an interpolation: `"" + expr` coerces expr to
+    // its string form (string-concat coerces non-string operands).
+    std::unique_ptr<ASTNode> acc =
+        std::make_unique<ASTNode>(StringLiteral("", loc));
+
+    auto append = [&](std::unique_ptr<ASTNode> part) {
+        acc = std::make_unique<ASTNode>(
+            BinaryOp(std::move(acc), std::move(part), TOKEN_PLUS, loc));
+    };
+
+    std::string lit; // current literal run (escapes already processed)
+    auto flush_lit = [&]() {
+        if (!lit.empty()) {
+            append(std::make_unique<ASTNode>(StringLiteral(lit, loc)));
+            lit.clear();
+        }
+    };
+
+    size_t i = 0, n = tmpl.size();
+    while (i < n) {
+        char c = tmpl[i];
+        if (c == '\\' && i + 1 < n) {
+            char e = tmpl[i + 1];
+            switch (e) {
+                case 'n': lit += '\n'; break;
+                case 't': lit += '\t'; break;
+                case 'r': lit += '\r'; break;
+                case '\\': lit += '\\'; break;
+                case '"': lit += '"'; break;
+                case 'e': lit += '\x1b'; break; // ESC — ANSI escape sequences
+                case '{': lit += '{'; break; // literal brace via \{
+                case '}': lit += '}'; break;
+                default: lit += e; break;
+            }
+            i += 2;
+            continue;
+        }
+        if (c == '{') {
+            flush_lit();
+            // Capture up to the matching '}', skipping inner string literals so
+            // their braces/quotes don't confuse depth tracking.
+            size_t j = i + 1;
+            int depth = 1;
+            std::string expr;
+            while (j < n && depth > 0) {
+                char d = tmpl[j];
+                if (d == '"') {
+                    expr += d; j++;
+                    while (j < n && tmpl[j] != '"') {
+                        if (tmpl[j] == '\\' && j + 1 < n) {
+                            expr += tmpl[j]; expr += tmpl[j + 1]; j += 2; continue;
+                        }
+                        expr += tmpl[j]; j++;
+                    }
+                    if (j < n) { expr += tmpl[j]; j++; } // closing "
+                    continue;
+                }
+                if (d == '{') { depth++; expr += d; j++; continue; }
+                if (d == '}') { depth--; if (depth == 0) { j++; break; } expr += d; j++; continue; }
+                expr += d; j++;
+            }
+            i = j;
+            // Lex + parse the interpolation expression independently, then splice
+            // its AST into the concat chain.
+            Lexer sub_lexer(expr);
+            std::vector<Token> sub_tokens;
+            Token tk = sub_lexer.next_token();
+            while (tk.type() != TOKEN_EOF) {
+                sub_tokens.push_back(tk);
+                tk = sub_lexer.next_token();
+            }
+            sub_tokens.push_back(tk); // EOF
+            if (sub_tokens.size() > 1) { // skip empty `{}`
+                Parser sub_parser(sub_tokens);
+                auto node = sub_parser.parse_expression();
+                if (node) append(std::move(node));
+            }
+            continue;
+        }
+        lit += c;
+        i++;
+    }
+    flush_lit();
+    return acc;
+}
+
 std::unique_ptr<ASTNode> Parser::parse_primary() {
     SourceLocation loc(current().line(), current().column());
 
@@ -1053,6 +1142,12 @@ std::unique_ptr<ASTNode> Parser::parse_primary() {
         advance();
         return std::make_unique<ASTNode>(StringLiteral(value, loc));
     }
+
+    if (check(TOKEN_TSTRING_LITERAL)) {
+        std::string tmpl = current().value();
+        advance();
+        return build_tstring(tmpl, loc);
+    }
     
     if (check(TOKEN_TRUE)) {
         advance();
@@ -1173,7 +1268,19 @@ std::unique_ptr<ASTNode> Parser::parse_postfix(std::unique_ptr<ASTNode> expr) {
             expr = parse_array_access(std::move(expr));
         } else if (match(TOKEN_DOT)) {
             SourceLocation dot_loc(current().line(), current().column());
-            Token field = expect(TOKEN_IDENTIFIER, "Expected field name after '.'");
+            // Field name is normally an identifier, but reserved type keywords
+            // are also allowed here so `req.json`, `obj.type`, etc. desugar to
+            // `req["json"]` / `obj["type"]` — handy since `json` is a keyword.
+            Token field = current();
+            TulparTokenType ft = field.type();
+            if (ft == TOKEN_IDENTIFIER || ft == TOKEN_JSON_TYPE ||
+                ft == TOKEN_INT_TYPE || ft == TOKEN_FLOAT_TYPE ||
+                ft == TOKEN_STR_TYPE || ft == TOKEN_BOOL_TYPE ||
+                ft == TOKEN_ARRAY_TYPE || ft == TOKEN_TYPE_KW) {
+                advance();
+            } else {
+                field = expect(TOKEN_IDENTIFIER, "Expected field name after '.'");
+            }
 
             // Qualified call: `<head>.<name>(args)` parses as a single
             // FunctionCall whose `name` is the unmangled member identifier

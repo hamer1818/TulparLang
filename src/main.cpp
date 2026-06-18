@@ -444,6 +444,9 @@ int main(int argc, char **argv) {
       return 0;
     if (aot_result == AOT_ERROR_PARSE || aot_result == AOT_ERROR_CODEGEN)
       return 1; // diagnostic already printed
+    if (aot_result == AOT_RAN_NONZERO)
+      return 1; // the program compiled, ran, and exited non-zero — its own
+                // output already explained why; don't print a toolchain error.
     // AOT_ERROR_EMIT / AOT_ERROR_LINK: toolchain or runtime archive missing.
     fprintf(stderr, "%s\n",
             tulpar::i18n::tr_en(

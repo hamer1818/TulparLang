@@ -32,6 +32,9 @@ private:
     // Expression parsing (recursive descent)
     std::unique_ptr<ASTNode> parse_expression(int precedence = 0);
     std::unique_ptr<ASTNode> parse_primary();
+    // Desugar a t-string template ("a {x} b") into a `"" + "a " + x + " b"`
+    // concatenation chain. `tmpl` is the raw inner text from the lexer.
+    std::unique_ptr<ASTNode> build_tstring(const std::string& tmpl, SourceLocation loc);
     std::unique_ptr<ASTNode> parse_binary_op(std::unique_ptr<ASTNode> left, int precedence);
     std::unique_ptr<ASTNode> parse_unary();
     std::unique_ptr<ASTNode> parse_postfix(std::unique_ptr<ASTNode> expr);

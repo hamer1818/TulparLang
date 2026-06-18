@@ -184,6 +184,7 @@ typedef struct {
   LLVMValueRef func_aot_env;
   LLVMValueRef func_aot_arena_save;
   LLVMValueRef func_aot_arena_restore;
+  LLVMValueRef func_aot_arena_drop;
   LLVMValueRef func_aot_now_iso8601;
   LLVMValueRef func_aot_format_iso8601;
   LLVMValueRef func_aot_parse_iso8601;
@@ -198,7 +199,9 @@ typedef struct {
   LLVMValueRef func_aot_csv_emit;
   LLVMValueRef func_aot_keys;
   LLVMValueRef func_aot_object_clone;
+  LLVMValueRef func_aot_persist; // persist(value) -> deep malloc'd copy (survives arena_restore)
   LLVMValueRef func_aot_http_request;
+  LLVMValueRef func_aot_http_request_async; // (method,url,body) -> promise
   LLVMValueRef func_aot_trim;
   LLVMValueRef func_aot_replace;
   LLVMValueRef func_aot_split;
@@ -242,6 +245,7 @@ typedef struct {
 
   // Dynamic Call (Wings support)
   LLVMValueRef func_aot_call_dynamic;
+  LLVMValueRef func_aot_call_dynamic_1; // call(name, arg) — 1-arg dynamic dispatch
   LLVMValueRef func_aot_create_closure;
   LLVMValueRef func_aot_call_closure;
 

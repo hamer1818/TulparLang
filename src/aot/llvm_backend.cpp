@@ -1012,6 +1012,12 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_object_clone =
       LLVMAddFunction(backend->module, "aot_object_clone", fmt_iso_type);
 
+  // aot_persist(value) -> value. Deep malloc'd copy that survives
+  // arena_restore — the `persist()` builtin for stashing request data into
+  // long-lived globals. Same 1-arg VMValue→VMValue shape, reuses fmt_iso_type.
+  backend->func_aot_persist =
+      LLVMAddFunction(backend->module, "aot_persist", fmt_iso_type);
+
   // Regex (std::regex) builtins. Two-arg: match/search/capture; three-arg: replace.
   LLVMTypeRef regex2_params[] = {backend->vm_value_type, backend->vm_value_type};
   LLVMTypeRef regex2_type =
@@ -1038,12 +1044,20 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_http_request =
       LLVMAddFunction(backend->module, "aot_http_request", http_req_type);
 
+  // aot_http_request_async(method, url, body) -> ObjPromise* (as VMValue).
+  // Same 3-VMValue→VMValue signature; the returned value is a promise to await.
+  backend->func_aot_http_request_async =
+      LLVMAddFunction(backend->module, "aot_http_request_async", http_req_type);
+
   // aot_arena_restore(handle) -> int (0)
   LLVMTypeRef arena_restore_params[] = {backend->vm_value_type};
   LLVMTypeRef arena_restore_type =
       llvm_make_vmvalue_func_type(backend, arena_restore_params, 1, 0);
   backend->func_aot_arena_restore =
       LLVMAddFunction(backend->module, "aot_arena_restore", arena_restore_type);
+  // aot_arena_drop(handle) -> int (0) — same signature; releases the checkpoint
+  backend->func_aot_arena_drop =
+      LLVMAddFunction(backend->module, "aot_arena_drop", arena_restore_type);
 
   // aot_trim_ptr(VMValue*) -> VMValue
   LLVMTypeRef trim_params[] = {backend->ptr_type};
@@ -1256,6 +1270,15 @@ void declare_runtime_functions(LLVMBackend *backend) {
       llvm_make_vmvalue_func_type(backend, call_dyn_params, 1, 0);
   backend->func_aot_call_dynamic =
       LLVMAddFunction(backend->module, "aot_call_dynamic", call_dyn_type);
+
+  // aot_call_dynamic_1(handler_name, arg) -> VMValue — dynamic dispatch that
+  // passes one argument to the target (used by Wings to hand handlers `req`).
+  LLVMTypeRef call_dyn1_params[] = {backend->vm_value_type,
+                                    backend->vm_value_type};
+  LLVMTypeRef call_dyn1_type =
+      llvm_make_vmvalue_func_type(backend, call_dyn1_params, 2, 0);
+  backend->func_aot_call_dynamic_1 =
+      LLVMAddFunction(backend->module, "aot_call_dynamic_1", call_dyn1_type);
 
   // aot_create_closure(ptr, ptr, int32) -> ptr
   LLVMTypeRef create_cls_params[] = {backend->ptr_type, backend->ptr_type, backend->int32_type};
@@ -2215,6 +2238,37 @@ LLVMValueRef get_local(LLVMBackend *backend, const char *name) {
   return nullptr;
 }
 
+// ---------------------------------------------------------------------------
+// AUTO-PERSIST write barrier (görünmez kalıcılaştırma)
+//
+// Wings & friends run each request inside a per-request arena and roll it
+// back with `arena_restore()` afterwards. A handler that writes request data
+// (a parsed-body string, a freshly built object) into a *global* — which
+// outlives the request — would leave the global pointing at reclaimed arena
+// memory once the arena rewinds (the silent "NUL-byte" corruption the FastAPI
+// comparison surfaced). The user shouldn't have to remember `persist()`.
+//
+// Fix is purely static: when an assignment / push lvalue is rooted in a
+// global variable, deep-copy the rhs into permanent ARC storage at codegen
+// time. Local-rooted writes (response objects, scratch arrays — which leak
+// or get arena-reclaimed but are never read across requests) are untouched,
+// so the hot path keeps the cheap arena allocation and gains no leak.
+// `aot_persist` is a no-op for scalars, so int/bool/float globals pay nothing.
+// Known gap: aliasing a global element into a local (`let x = g[i]; x[k]=v`)
+// bypasses the barrier — `persist()` stays available for that.
+static bool is_global_var(LLVMBackend *backend, const char *name) {
+  if (!name)
+    return false;
+  for (Scope *s = backend->current_scope; s; s = s->parent) {
+    for (int i = 0; i < s->count; i++) {
+      if (strcmp(s->vars[i].name, name) == 0)
+        return false; // a local shadows the global → not a global write
+    }
+  }
+  return LLVMGetNamedGlobal(backend->module, name) != nullptr;
+}
+
+
 // Get the inferred type of a local variable
 InferredType get_local_type(LLVMBackend *backend, const char *name) {
   Scope *s = backend->current_scope;
@@ -2896,6 +2950,28 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return LLVMBuildLoad2(backend->builder, backend->vm_value_type, val_ptr,
                             node->name);
     }
+    // A bare identifier that names a known top-level function lowers to a
+    // string constant of that name. This makes function references usable as
+    // values — e.g. `get("/users", list_users)`, where handlers are dispatched
+    // by name via call() — while keeping typo detection: an unknown name is
+    // neither a variable nor a function and still errors below. Function
+    // *calls* (`foo()`) are a different AST node, so this never affects them.
+    for (int i = 0; i < backend->function_count; i++) {
+      if (backend->functions[i].name &&
+          strcmp(backend->functions[i].name, node->name) == 0) {
+        LLVMValueRef const_str =
+            LLVMBuildGlobalStringPtr(backend->builder, node->name, "fn_ref");
+        int len = (int)strlen(node->name);
+        LLVMValueRef args[] = {LLVMConstNull(backend->ptr_type), const_str,
+                               LLVMConstInt(backend->int32_type, len, 0)};
+        LLVMValueRef str_obj = LLVMBuildCall2(
+            backend->builder,
+            LLVMGlobalGetValueType(backend->func_vm_alloc_string),
+            backend->func_vm_alloc_string, args, 3, "fn_ref_str");
+        return llvm_build_vm_val_obj(backend, str_obj);
+      }
+    }
+
     {
       char msg[256];
       snprintf(msg, sizeof(msg), "'%s' değişkeni tanımlanmamış", node->name);
@@ -3440,6 +3516,15 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // call(func_name) -> dynamic dispatch
+    // call(name, arg) — dynamic dispatch passing one argument to the target.
+    if (node->name && strcmp(node->name, "call") == 0 &&
+        node->argument_count >= 2) {
+      LLVMValueRef args[] = {
+          codegen_expression(backend, node->arguments[0]),
+          codegen_expression(backend, node->arguments[1])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_call_dynamic_1,
+                                    args, 2, "call1_res");
+    }
     if (node->name && strcmp(node->name, "call") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
@@ -3775,6 +3860,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       }
       if (!arr || !val) return llvm_vm_val_int(backend, 0);
 
+      // (Auto-persist on escape is handled at runtime by the write barrier in
+      // aot_array_push — see wb_persist_escape in runtime_bindings.cpp. It is
+      // value-flow based, so it also covers globals reached through a local
+      // alias, which a compile-time check here would miss.)
+
       // Allocate temps and store values for pointer ABI. Hoist to entry so a
       // tight `for(i=0..N) push(arr, i)` loop doesn't grow the stack frame
       // by 16 bytes per iteration.
@@ -3904,6 +3994,15 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_object_clone,
                                     args, 1, "clone");
     }
+    // persist(value) -> deep malloc'd copy that outlives the per-request
+    // arena. Use it to keep handler-built data in a long-lived global:
+    // `push(_users, persist(u))`.
+    if (node->name && strcmp(node->name, "persist") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_persist,
+                                    args, 1, "persist");
+    }
     // http_request(method, url, body) — outbound HTTP/1.0 client.
     if (node->name && strcmp(node->name, "http_request") == 0 &&
         node->argument_count >= 3) {
@@ -3914,11 +4013,29 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_http_request,
                                     args, 3, "http_req");
     }
+    // http_request_async(method, url, body) — non-blocking client; returns a
+    // promise resolved off a worker pool. `await` it inside an async func.
+    if (node->name && strcmp(node->name, "http_request_async") == 0 &&
+        node->argument_count >= 3) {
+      LLVMValueRef args[] = {
+          codegen_expression(backend, node->arguments[0]),
+          codegen_expression(backend, node->arguments[1]),
+          codegen_expression(backend, node->arguments[2])};
+      return llvm_call_vmvalue_func(backend,
+                                    backend->func_aot_http_request_async, args,
+                                    3, "http_req_async");
+    }
     if (node->name && strcmp(node->name, "arena_restore") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_arena_restore,
                                     args, 1, "arena_restore_res");
+    }
+    if (node->name && strcmp(node->name, "arena_drop") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_arena_drop,
+                                    args, 1, "arena_drop_res");
     }
     if (node->name && strcmp(node->name, "input") == 0) {
       if (!backend->func_aot_input)
@@ -5122,7 +5239,17 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         backend->pending_struct_result_name = nullptr;
 
         // 2. Prepare Args: [ResultPtr, Arg1Ptr, Arg2Ptr...]
-        int call_arg_count = node->argument_count + 1;
+        // Default-argument padding: when the call supplies fewer args than the
+        // callee declares, fill the missing trailing slots with a boxed 0 so
+        // the LLVM call arity matches the signature (without this the module
+        // fails verification). The callee treats 0 as "use my default" — this
+        // is what lets `serve()` mean `serve(<default port>)` while
+        // `serve(8080)` still passes the explicit value.
+        int decl_params =
+            (callee_entry && callee_entry->param_count > node->argument_count)
+                ? callee_entry->param_count
+                : node->argument_count;
+        int call_arg_count = decl_params + 1;
         LLVMValueRef *args =
             static_cast<LLVMValueRef *>(malloc(sizeof(LLVMValueRef) * call_arg_count));
         args[0] = res_ptr;
@@ -5237,6 +5364,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
               backend, backend->vm_value_type, "arg_tmp");
           LLVMBuildStore(backend->builder, val, arg_temp);
           args[i + 1] = arg_temp;
+        }
+
+        // Pad missing trailing args with a boxed 0 (see decl_params above).
+        for (int i = node->argument_count; i < decl_params; i++) {
+          LLVMValueRef pad_tmp = llvm_build_alloca_at_entry(
+              backend, backend->vm_value_type, "arg_default");
+          LLVMBuildStore(backend->builder, llvm_vm_val_int(backend, 0), pad_tmp);
+          args[i + 1] = pad_tmp;
         }
 
         // 3. Call Void Function
@@ -6242,6 +6377,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
 
       LLVMValueRef index = codegen_expression(backend, access->index);
 
+      // (Auto-persist on escape is handled at runtime by the write barrier in
+      // vm_object_set / vm_array_set / aot_array_set_* — see wb_persist_escape.
+      // Runtime value-flow handles aliased globals and transient globals like
+      // `_request` correctly, which a compile-time root check could not.)
+
       if (target && index) {
         // ============================================================
         // SAFE ELEMENT SET - Use runtime function for all set access
@@ -6278,6 +6418,21 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         LLVMValueRef idx_val = LLVMConstInt(backend->int32_type, var->slot_index, 0);
         llvm_emit_array_set(backend, env, idx_val, val);
         return val;
+      }
+
+      // Auto-persist: reassigning a global to request-transient data
+      // (`_users = kept`, `_lastError = "fail: " + reason`) would dangle after
+      // arena_restore — deep-copy first. Whole-variable assignment is an LLVM
+      // store, not a container mutation, so the runtime write barrier can't see
+      // it; this stays compile-time. `_request` is exempt: the wings dispatcher
+      // reassigns it every request to a transient arena object that is only
+      // read within the request, so persisting it would deep-copy (and leak)
+      // the whole request object on every call.
+      if (is_global_var(backend, node->name) &&
+          strcmp(node->name, "_request") != 0) {
+        LLVMValueRef pargs[] = {val};
+        val = llvm_call_vmvalue_func(backend, backend->func_aot_persist, pargs,
+                                     1, "assign.autopersist");
       }
 
       LLVMValueRef target = get_local(backend, node->name);

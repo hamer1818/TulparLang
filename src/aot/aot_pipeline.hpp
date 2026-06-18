@@ -9,7 +9,12 @@ typedef enum {
   AOT_ERROR_PARSE,
   AOT_ERROR_CODEGEN,
   AOT_ERROR_EMIT,
-  AOT_ERROR_LINK
+  AOT_ERROR_LINK,
+  // Compile + link succeeded and the program RAN, but it exited non-zero.
+  // Distinct from AOT_ERROR_LINK so the driver propagates the program's
+  // failure without the misleading "compile/link failed" banner (e.g. a
+  // server killed by Ctrl+C, or a program that called exit(1) itself).
+  AOT_RAN_NONZERO
 } AOTResult;
 
 // Compile Tulpar source to executable (verbose mode).

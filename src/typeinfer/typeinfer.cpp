@@ -225,7 +225,10 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
       const FunctionSignature &sig = sig_it->second;
       const int expected = static_cast<int>(sig.param_types.size());
       const int got = static_cast<int>(arg_types.size());
-      if (expected != got) {
+      // Too MANY args is an error; too FEW is allowed — the codegen pads the
+      // missing trailing slots with a default (0), which is what lets
+      // `serve()` stand in for `serve(<default port>)`.
+      if (got > expected) {
         report_error(ctx,
                      "Function '%s' expects %d argument(s), got %d at line %d",
                      call->name.c_str(), expected, got, call->loc.line);
@@ -260,7 +263,9 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
             (call->name == "len" || call->name == "length");
         const bool poly_numeric = (call->name == "abs");
 
-        for (int i = 0; i < expected; ++i) {
+        // Bounded by `got`: with default-arg padding `got` may be < expected,
+        // and arg_types only holds the supplied args.
+        for (int i = 0; i < got && i < expected; ++i) {
           DataType param_type = sig.param_types[i];
           DataType arg_type = arg_types[i];
 

@@ -61,6 +61,14 @@ void aot_event_loop_run(void);
 // 1 if the value is a promise.
 int aot_is_promise(VMValue v);
 
+// Register a background-I/O completion source with the event loop. Each
+// scheduler tick the loop calls `poll(ud)` on the main thread; a non-zero
+// return means the source has finished — the loop drops it (the callback is
+// responsible for settling its promise before returning non-zero). This is how
+// blocking work offloaded to a worker thread (e.g. async HTTP) rejoins the
+// single-threaded scheduler without ever touching it from the worker.
+void aot_io_register(int (*poll)(void *ud), void *ud);
+
 #ifdef __cplusplus
 }
 #endif

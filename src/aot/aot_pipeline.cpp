@@ -8,6 +8,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#if !PLATFORM_WINDOWS
+#include <csignal>   // SIGINT
+#include <sys/wait.h> // WIFSIGNALED / WTERMSIG on system() status
+#endif
 #include <chrono>
 #include <string>
 
@@ -201,6 +205,16 @@ static std::string build_link_search_dirs() {
   return out;
 }
 
+// Optional extra flags spliced into the final clang++ AOT link command. Set
+// TULPAR_AOT_LINK_FLAGS to forward switches to the link step — e.g.
+// "-fsanitize=address" to leak/UB-check the AOT'd binary against an ASan-built
+// libtulpar_runtime.a. Returns a leading-space-prefixed string (or empty).
+static std::string aot_extra_link_flags() {
+  const char *e = getenv("TULPAR_AOT_LINK_FLAGS");
+  if (!e || !*e) return "";
+  return std::string(" ") + e;
+}
+
 // Parse source code to AST. Caller-provided `source_filename` is
 // optional and only used by parse-time diagnostics for the file path
 // in `--> path:line` headers.
@@ -362,13 +376,15 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   // keeps the CLI surface stable across the PR series.
   printf("[AOT] Linking executable: %s\n", exe_filename);
   std::string search_dirs = build_link_search_dirs();
+  std::string extra_flags = aot_extra_link_flags();
   const char *debug_flag = emit_debug_info ? "-g " : "";
   char link_cmd[2048];
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s%s -o %s%s %s %s%s 2>&1",
+      "clang++ %s%s -o %s%s %s %s%s%s 2>&1",
       debug_flag, obj_filename, exe_filename, AOT_EXE_SUFFIX,
-      AOT_LINK_PIE_FLAG, search_dirs.c_str(), AOT_LINK_LIB_FLAGS);
+      AOT_LINK_PIE_FLAG, search_dirs.c_str(), AOT_LINK_LIB_FLAGS,
+      extra_flags.c_str());
 
   int link_result;
   {
@@ -452,19 +468,22 @@ static AOTResult aot_compile_silent(const char *source,
 
   // Link silently (suppress output)
   std::string silent_search_dirs = build_link_search_dirs();
+  std::string silent_extra_flags = aot_extra_link_flags();
   char link_cmd[2048];
 #if PLATFORM_WINDOWS
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s -o %s%s %s %s%s 2>NUL",
+      "clang++ %s -o %s%s %s %s%s%s 2>NUL",
       obj_filename, exe_filename, AOT_EXE_SUFFIX,
-      AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(), AOT_LINK_LIB_FLAGS);
+      AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(), AOT_LINK_LIB_FLAGS,
+      silent_extra_flags.c_str());
 #else
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s -o %s%s %s %s%s 2>/dev/null",
+      "clang++ %s -o %s%s %s %s%s%s 2>/dev/null",
       obj_filename, exe_filename, AOT_EXE_SUFFIX,
-      AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(), AOT_LINK_LIB_FLAGS);
+      AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(), AOT_LINK_LIB_FLAGS,
+      silent_extra_flags.c_str());
 #endif
 
   int link_result = system(link_cmd);
@@ -513,7 +532,17 @@ AOTResult aot_compile_and_run_silent_with_filename(const char *source,
   remove("/tmp/.tulpar_run.ll");
 #endif
 
-  return (run_result == 0) ? AOT_OK : AOT_ERROR_LINK;
+  // The compile + link already succeeded above (we returned early otherwise),
+  // so a non-zero status here means the PROGRAM ran and exited non-zero — not
+  // a toolchain failure. Report it as AOT_RAN_NONZERO so the driver propagates
+  // the failure without the misleading "compile/link failed" banner.
+#if !PLATFORM_WINDOWS
+  // Ctrl+C (SIGINT) on a long-running server is a normal stop, not a failure.
+  if (WIFSIGNALED(run_result) && WTERMSIG(run_result) == SIGINT) {
+    return AOT_OK;
+  }
+#endif
+  return (run_result == 0) ? AOT_OK : AOT_RAN_NONZERO;
 }
 
 // Check-only pipeline: parse + codegen pass, no optimisation, no object

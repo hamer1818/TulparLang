@@ -96,6 +96,9 @@ static const std::unordered_map<std::string, TulparTokenType>& get_keyword_map()
         // declaration semantics.
         {"struct", TOKEN_TYPE_KW},
         {"var", TOKEN_VAR},
+        // `let` is an alias for `var` (type-inferred local) — familiar to
+        // JS/Rust/Swift users. Same token, same codegen as `var`.
+        {"let", TOKEN_VAR},
         {"move", TOKEN_MOVE},
         
         // Functions - ASCII Turkish (aliases)
@@ -294,6 +297,8 @@ Token Lexer::read_string() {
                 case 'r': buffer += '\r'; break;
                 case '\\': buffer += '\\'; break;
                 case '"': buffer += '"'; break;
+                case 'e': buffer += '\x1b'; break; // ESC — ANSI escape sequences
+                case '0': buffer += '\0'; break;
                 default: buffer += current_char_; break;
             }
         } else {
@@ -307,6 +312,59 @@ Token Lexer::read_string() {
     }
     
     return Token(TOKEN_STRING_LITERAL, buffer, start_line, start_column);
+}
+
+// Scan a t-string body and return its RAW inner template (the text between the
+// outer quotes), with `{...}` interpolations left intact. The only cleverness
+// here is finding the correct closing `"`: braces nest, and an inner string
+// literal inside an interpolation (e.g. `{req["path"]}`) must not be mistaken
+// for the terminator. The parser later splits this into literal + expression
+// parts and desugars to string concatenation.
+Token Lexer::read_tstring() {
+    int start_line = line_;
+    int start_column = column_;
+    std::string buffer;
+
+    advance(); // skip opening "
+
+    int brace_depth = 0;
+    while (current_char_ != '\0') {
+        char c = current_char_;
+        if (brace_depth == 0) {
+            if (c == '"') { advance(); break; }   // end of the t-string
+            if (c == '\\') {
+                // Keep the escape pair verbatim; the parser processes escapes
+                // for literal segments (\n, \", \{, ...).
+                buffer += c; advance();
+                if (current_char_ != '\0') { buffer += current_char_; advance(); }
+                continue;
+            }
+            if (c == '{') { brace_depth = 1; }
+            buffer += c; advance();
+        } else {
+            // Inside an interpolation expression.
+            if (c == '{') { brace_depth++; buffer += c; advance(); continue; }
+            if (c == '}') { brace_depth--; buffer += c; advance(); continue; }
+            if (c == '"') {
+                // Inner string literal — copy verbatim so its `}`/`"` don't
+                // disturb brace tracking or terminate the t-string.
+                buffer += c; advance();
+                while (current_char_ != '\0' && current_char_ != '"') {
+                    if (current_char_ == '\\') {
+                        buffer += current_char_; advance();
+                        if (current_char_ != '\0') { buffer += current_char_; advance(); }
+                        continue;
+                    }
+                    buffer += current_char_; advance();
+                }
+                if (current_char_ == '"') { buffer += current_char_; advance(); }
+                continue;
+            }
+            buffer += c; advance();
+        }
+    }
+
+    return Token(TOKEN_TSTRING_LITERAL, buffer, start_line, start_column);
 }
 
 Token Lexer::read_identifier() {
@@ -353,11 +411,20 @@ Token Lexer::next_token() {
             return read_number();
         }
         
+        // Interpolated t-string: t"...{expr}...". Must be checked before the
+        // identifier branch so the leading `t` isn't lexed as an identifier.
+        // Only `t` immediately followed by `"` triggers it (so `true`, `total`
+        // stay normal identifiers).
+        if (current_char_ == 't' && peek() == '"') {
+            advance(); // consume 't'
+            return read_tstring();
+        }
+
         // Strings
         if (current_char_ == '"') {
             return read_string();
         }
-        
+
         // Identifiers and keywords
         if (std::isalpha(current_char_) || current_char_ == '_' ||
             static_cast<unsigned char>(current_char_) > 127) {

@@ -48,7 +48,8 @@ enum TulparTokenType {
     TOKEN_INT_LITERAL,   // 123
     TOKEN_FLOAT_LITERAL, // 3.14
     TOKEN_STRING_LITERAL,// "merhaba"
-    
+    TOKEN_TSTRING_LITERAL,// t"merhaba {ad}" — interpolated; parser desugars to concat
+
     // Operatörler
     TOKEN_PLUS,          // +
     TOKEN_MINUS,         // -
@@ -133,6 +134,7 @@ private:
     
     Token read_number();
     Token read_string();
+    Token read_tstring();
     Token read_identifier();
 
 public:

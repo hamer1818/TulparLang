@@ -4,6 +4,7 @@
 #include "../common/platform_dl.h"
 #include "../common/platform.h"
 #include "../common/platform_sockets.h"
+#include "../common/platform_threads.h"
 #include "../pkg/sha256.hpp"
 #include "vm.hpp"
 
@@ -25,9 +26,11 @@ typedef SSIZE_T ssize_t;
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <mutex>
 #include <regex>
+#include <unordered_set>
 #include <string>
 #include <vector>
 
@@ -202,6 +205,55 @@ VMValue aot_call_dynamic(VMValue func_name) {
   return result;
 }
 
+// call(name, arg) — dynamic dispatch that passes ONE argument to the target.
+//
+// Resolution is identical to aot_call_dynamic (same `t_<name>` symbol + cache);
+// only the call shape differs. The target is invoked as a 1-param AOT function
+// `void t_name(VMValue* result, VMValue* arg0)`. Passing the arg to a handler
+// that declares NO parameters is ABI-safe on every platform we target — the
+// extra register/word is simply ignored by the callee — so Wings can hand every
+// handler the request object and 0-arg handlers just don't read it. This is what
+// lets you write either `func list_users()` or `func get_user(req)`.
+VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
+  if (!IS_STRING(func_name)) {
+    printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
+                                       "Runtime Error: call() expects string"));
+    return VM_VOID();
+  }
+
+  ObjString *str = AS_STRING(func_name);
+  char *original_name = str->chars;
+  size_t orig_len = (size_t)str->length;
+
+  uint32_t hash = aot_call_hash(original_name, orig_len);
+  void (*func_ptr)(VMValue *) = aot_call_cache_lookup(original_name, orig_len, hash);
+
+  if (!func_ptr) {
+    char name[256];
+    if (strcmp(original_name, "main") == 0) {
+      snprintf(name, sizeof(name), "main");
+    } else {
+      snprintf(name, sizeof(name), "t_%s", original_name);
+    }
+    func_ptr = (void (*)(VMValue *))tulpar_dlsym(TULPAR_RTLD_DEFAULT, name);
+    if (!func_ptr) {
+      func_ptr = (void (*)(VMValue *))tulpar_dlsym(TULPAR_RTLD_DEFAULT, original_name);
+    }
+    if (!func_ptr) {
+      printf("%s '%s' (AOT)\n",
+             tulpar::i18n::tr_en("Calisma Zamani Hatasi: Fonksiyon bulunamadi",
+                                 "Runtime Error: Function not found"),
+             name);
+      return VM_VOID();
+    }
+    aot_call_cache_insert(original_name, orig_len, hash, func_ptr);
+  }
+
+  VMValue result = VM_VOID();
+  ((void (*)(VMValue *, VMValue *))func_ptr)(&result, &arg);
+  return result;
+}
+
 // AOT runtime initialization (locale/UTF-8, console modes)
 void aot_runtime_init(void) {
   static int initialized = 0;
@@ -338,6 +390,7 @@ void aot_arena_reset(void) {
 typedef struct {
   AOTArenaBlock *block;  // block we were appending to at save time
   size_t used;            // its `used` value at save time
+  size_t region_mark;     // g_region size at save time (malloc-object region)
 } AOTArenaCheckpoint;
 
 #define AOT_ARENA_CHECKPOINT_MAX 32
@@ -347,6 +400,69 @@ typedef struct {
 static thread_local AOTArenaCheckpoint g_arena_checkpoints[AOT_ARENA_CHECKPOINT_MAX];
 static thread_local int g_arena_checkpoint_top = 0;
 
+// ---------------------------------------------------------------------------
+// Per-request malloc-object region (leak fix — benchmarks/WINGS_VS_FASTAPI.md)
+//
+// In AOT (vm == nullptr) every object/array LITERAL is malloc'd with
+// arena_allocated = 0 and, with no VM object list to chain into, was never
+// freed: a steady per-request leak. We now chain those malloc'd containers
+// into a per-thread region that arena_save/arena_restore bracket, so a
+// request's transient containers are freed in lockstep with its arena
+// strings. Only literals allocated *inside* an arena scope are tracked —
+// top-level globals (allocated before any save) and the deep copies made by
+// aot_persist / string_pin are never tracked, so persistent data is untouched.
+//
+// `g_region_set` gives the runtime write barrier an O(1) "is this object
+// transient?" test: a store of a transient value into a persistent container
+// (a global, or an already-persisted object) deep-copies the value so it
+// survives the next arena_restore. That barrier — value-flow based — is what
+// makes the freeing safe even when a global is aliased through a local.
+VMValue aot_persist(VMValue v); // defined below; used by the write barrier
+
+static thread_local std::vector<Obj *> g_region;
+static thread_local std::unordered_set<Obj *> g_region_set;
+
+static inline void region_track(Obj *o) {
+  if (g_arena_checkpoint_top <= 0 || !o)
+    return; // outside any request scope → permanent (e.g. top-level globals)
+  g_region.push_back(o);
+  g_region_set.insert(o);
+}
+
+// A value is "transient" if it lives only until the next arena_restore: arena
+// memory, or a malloc container tracked in the current region. Persistent
+// objects (top-level globals, aot_persist/string_pin copies) are neither.
+static inline bool obj_is_transient(Obj *o) {
+  return o && (o->arena_allocated || g_region_set.count(o));
+}
+
+// Free a tracked malloc container plus its own malloc'd backing buffers. Does
+// NOT recurse: nested containers are tracked separately, and element strings
+// are arena-owned (reclaimed by the arena rewind).
+static inline void region_free_one(Obj *o) {
+  if (!o || o->arena_allocated)
+    return;
+  if (o->type == OBJ_OBJECT) {
+    ObjObject *x = (ObjObject *)o;
+    free(x->keys);
+    free(x->values);
+  } else if (o->type == OBJ_ARRAY) {
+    free(((ObjArray *)o)->items);
+  }
+  free(o);
+}
+
+// Runtime write barrier: storing a transient value into a persistent container
+// deep-copies it to permanent storage. No-op on the hot path (transient
+// container ← anything), so building a response costs nothing.
+static inline VMValue wb_persist_escape(Obj *container, VMValue v) {
+  if (!container || obj_is_transient(container))
+    return v; // container itself is transient → freed together with v
+  if (!IS_OBJ(v) || !obj_is_transient(AS_OBJ(v)))
+    return v; // scalar, or value already persistent
+  return aot_persist(v);
+}
+
 VMValue aot_arena_save(void) {
   if (!g_aot_string_arena) aot_arena_init();
   if (!g_aot_string_arena || g_arena_checkpoint_top >= AOT_ARENA_CHECKPOINT_MAX)
@@ -355,13 +471,13 @@ VMValue aot_arena_save(void) {
   g_arena_checkpoints[idx].block = g_aot_string_arena->current;
   g_arena_checkpoints[idx].used =
       g_aot_string_arena->current ? g_aot_string_arena->current->used : 0;
+  g_arena_checkpoints[idx].region_mark = g_region.size();
   return VM_INT(idx);
 }
 
-VMValue aot_arena_restore(VMValue idxVal) {
-  if (!IS_INT(idxVal) || !g_aot_string_arena) return VM_INT(0);
-  int idx = (int)AS_INT(idxVal);
-  if (idx < 0 || idx >= g_arena_checkpoint_top) return VM_INT(0);
+// Roll the arena (and the malloc-object region) back to checkpoint `idx`.
+// Shared by arena_restore (keeps the checkpoint) and arena_drop (releases it).
+static void aot_arena_rewind_to(int idx) {
   AOTArenaCheckpoint *cp = &g_arena_checkpoints[idx];
   if (cp->block) {
     // Zero out every block AFTER the checkpoint's block: keep the
@@ -374,11 +490,45 @@ VMValue aot_arena_restore(VMValue idxVal) {
     cp->block->used = cp->used;
     g_aot_string_arena->current = cp->block;
   }
+  // Free the malloc'd containers tracked since this checkpoint (a request's
+  // transient objects/arrays), in lockstep with the arena string rewind.
+  // Persisted/global objects were never tracked, so they survive untouched.
+  for (size_t i = cp->region_mark; i < g_region.size(); i++) {
+    g_region_set.erase(g_region[i]);
+    region_free_one(g_region[i]);
+  }
+  if (cp->region_mark < g_region.size())
+    g_region.resize(cp->region_mark);
+}
+
+VMValue aot_arena_restore(VMValue idxVal) {
+  if (!IS_INT(idxVal) || !g_aot_string_arena) return VM_INT(0);
+  int idx = (int)AS_INT(idxVal);
+  if (idx < 0 || idx >= g_arena_checkpoint_top) return VM_INT(0);
+  aot_arena_rewind_to(idx);
   // Drop any *nested* checkpoints (idx+1..top) — those scopes have
   // just been wiped — but KEEP the one we restored to so the caller
   // can roll back to it again. Wings/Router relies on this: a single
   // top-of-listen() `arena_save` is restored after every request.
   g_arena_checkpoint_top = idx + 1;
+  return VM_INT(0);
+}
+
+// arena_drop(handle): like arena_restore, but RELEASES the checkpoint (and any
+// nested above it) instead of keeping it. The scope-exit counterpart of
+// arena_save — a function that does `wm = arena_save(); ...; arena_drop(wm)` is
+// balanced, so the 32-slot checkpoint stack does NOT grow when that function is
+// called repeatedly in the same thread. Wings pool workers (one serve call per
+// connection) and the evented loop (one per request) need this: with plain
+// arena_restore the stack exhausted after 32 calls, after which every
+// arena_save returned -1 and every arena_restore no-op'd → the per-request
+// arena/region stopped being reclaimed → unbounded leak under connection churn.
+VMValue aot_arena_drop(VMValue idxVal) {
+  if (!IS_INT(idxVal) || !g_aot_string_arena) return VM_INT(0);
+  int idx = (int)AS_INT(idxVal);
+  if (idx < 0 || idx >= g_arena_checkpoint_top) return VM_INT(0);
+  aot_arena_rewind_to(idx);
+  g_arena_checkpoint_top = idx; // release this checkpoint, not just rewind it
   return VM_INT(0);
 }
 
@@ -471,6 +621,94 @@ ObjString *vm_alloc_string_aot(void *vm, const char *chars, int length) {
   return aot_allocate_string(chars, length);
 }
 
+// persist(value) -> value
+//
+// Deep-copies a value into permanent (malloc'd, ARC-managed) storage that
+// survives an `arena_restore`. This is the escape hatch for handler code that
+// keeps request-built data in a long-lived global — the in-memory "database"
+// pattern: `push(_users, persist(u))`. Without it, the per-request arena reset
+// reclaims `u`'s memory and the global ends up holding a dangling pointer
+// (→ crash on the next read).
+//
+// Scalars (int/float/bool/void) are returned by value — no heap, nothing to
+// copy. Strings, arrays and objects are rebuilt recursively with malloc and
+// `arena_allocated = 0` so the arena reset skips them. They live as long as
+// something references them (today effectively process lifetime; a future GC
+// would reclaim via ref_count).
+static ObjString *aot_persist_string_obj(ObjString *src) {
+  ObjString *p = (ObjString *)malloc(sizeof(ObjString) + src->length + 1);
+  if (!p) return src;
+  p->obj.type = OBJ_STRING;
+  p->obj.arena_allocated = 0;
+  p->obj.next = nullptr;
+  p->obj.ref_count = 1;
+  p->obj.is_moved = 0;
+  p->length = src->length;
+  p->capacity = src->length + 1;
+  p->chars = (char *)(p + 1);
+  memcpy(p->chars, src->chars, src->length);
+  p->chars[src->length] = '\0';
+  p->hash = 0;
+  return p;
+}
+
+VMValue aot_persist(VMValue v) {
+  if (IS_STRING(v)) {
+    return VM_OBJ((Obj *)aot_persist_string_obj(AS_STRING(v)));
+  }
+  if (IS_ARRAY(v)) {
+    ObjArray *src = AS_ARRAY(v);
+    ObjArray *dst = (ObjArray *)malloc(sizeof(ObjArray));
+    if (!dst) return v;
+    dst->obj.type = OBJ_ARRAY;
+    dst->obj.arena_allocated = 0;
+    dst->obj.next = nullptr;
+    dst->obj.ref_count = 1;
+    dst->obj.is_moved = 0;
+    int n = src->count;
+    dst->count = n;
+    dst->capacity = n;
+    dst->items = (n > 0) ? (VMValue *)malloc(sizeof(VMValue) * n) : nullptr;
+    for (int i = 0; i < n; i++) {
+      dst->items[i] = aot_persist(src->items[i]);
+    }
+    return VM_OBJ((Obj *)dst);
+  }
+  if (IS_OBJECT(v)) {
+    ObjObject *src = AS_OBJECT(v);
+    ObjObject *dst = (ObjObject *)malloc(sizeof(ObjObject));
+    if (!dst) return v;
+    dst->obj.type = OBJ_OBJECT;
+    dst->obj.arena_allocated = 0;
+    dst->obj.next = nullptr;
+    dst->obj.ref_count = 1;
+    dst->obj.is_moved = 0;
+    int n = src->count;
+    dst->count = n;
+    dst->capacity = n;
+    if (n > 0) {
+      dst->keys = (ObjString **)malloc(sizeof(ObjString *) * n);
+      dst->values = (VMValue *)malloc(sizeof(VMValue) * n);
+      for (int i = 0; i < n; i++) {
+        dst->keys[i] =
+            src->keys[i] ? aot_persist_string_obj(src->keys[i]) : nullptr;
+        dst->values[i] = aot_persist(src->values[i]);
+      }
+    } else {
+      dst->keys = nullptr;
+      dst->values = nullptr;
+    }
+    return VM_OBJ((Obj *)dst);
+  }
+  // Scalars and any other value type: copy by value, no heap.
+  return v;
+}
+
+VMValue aot_persist_ptr(VMValue *v) {
+  if (!v) return VM_VOID();
+  return aot_persist(*v);
+}
+
 // Wrapper for AOT print (takes pointer to VMValue, calls vm_print_value which
 // takes value)
 #include <cstddef>
@@ -482,13 +720,22 @@ void aot_print_value(VMValue *v) { vm_print_value(*v); }
 // ============================================================
 
 // Fast string append - ultra-optimized version with Arena
+// Defined further down (next to the toString builtin); forward-declared so the
+// concat path can coerce a non-string operand to its string form.
+VMValue aot_to_string(VMValue value);
+
 VMValue aot_string_concat_fast(VMValue a, VMValue b) {
-  if (!IS_STRING(a) || !IS_STRING(b)) {
-    return VM_INT(0);
+  // `+` with a string on either side is concatenation: coerce the other
+  // operand via toString so `"n = " + 5` yields "n = 5" instead of a
+  // silently-wrong 0. (string+string skips coercion — the common fast path.)
+  VMValue sa = IS_STRING(a) ? a : aot_to_string(a);
+  VMValue sb = IS_STRING(b) ? b : aot_to_string(b);
+  if (!IS_STRING(sa) || !IS_STRING(sb)) {
+    return VM_INT(0); // defensive: aot_to_string always returns a string
   }
 
-  ObjString *s1 = AS_STRING(a);
-  ObjString *s2 = AS_STRING(b);
+  ObjString *s1 = AS_STRING(sa);
+  ObjString *s2 = AS_STRING(sb);
 
   int len1 = s1->length;
   int len2 = s2->length;
@@ -616,26 +863,11 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
       *result = VM_FLOAT(AS_FLOAT(a) + (double)AS_INT(b));
       return;
     default: {
-      // String Concatenation
-      if (IS_STRING(a) && IS_STRING(b)) {
-        ObjString *s1 = AS_STRING(a);
-        ObjString *s2 = AS_STRING(b);
-
-        int total_len = s1->length + s2->length;
-        char *buf = static_cast<char*>(malloc(total_len + 1));
-        memcpy(buf, s1->chars, s1->length);
-        memcpy(buf + s1->length, s2->chars, s2->length);
-        buf[total_len] = '\0';
-
-        if (vm) {
-          ObjString *res_str = vm_alloc_string(vm, buf, total_len);
-          *result = VM_OBJ((Obj *)res_str);
-        } else {
-          // AOT mode
-          ObjString *res_str = aot_allocate_string(buf, total_len);
-          *result = VM_OBJ((Obj *)res_str);
-        }
-        free(buf);
+      // String concatenation when either side is a string — the concat
+      // helper coerces the non-string operand (so `"n = " + 5` → "n = 5"
+      // rather than a silently-wrong 0).
+      if (IS_STRING(a) || IS_STRING(b)) {
+        *result = aot_string_concat_fast(a, b);
         return;
       }
       *result = VM_INT(0);
@@ -869,6 +1101,8 @@ VMValue vm_array_get(ObjArray *array, int index) {
 }
 
 void vm_array_set(ObjArray *array, int index, VMValue value) {
+  if (array)
+    value = wb_persist_escape((Obj *)array, value);
   if (!array || index < 0 || index >= array->count) {
     printf("%s\n",
            tulpar::i18n::tr_en("Calisma Zamani Hatasi: Dizi indeksi sinir disinda",
@@ -921,6 +1155,8 @@ VMValue aot_array_get_fast(VMValue arr_val, int64_t index) {
 
 // Fast array set - takes VMValue array, int index, VMValue value
 void aot_array_set_fast(VMValue arr_val, int64_t index, VMValue value) {
+  if (IS_OBJ(arr_val))
+    value = wb_persist_escape(AS_OBJ(arr_val), value);
 #if TULPAR_UNSAFE_ARRAYS
   // UNSAFE MODE: No type check, no bounds check
   ObjArray *arr = AS_ARRAY(arr_val);
@@ -987,13 +1223,17 @@ VMValue aot_array_get_raw_fast(ObjArray *arr, int64_t index) {
 }
 
 void aot_array_set_raw_fast(ObjArray *arr, int64_t index, VMValue value) {
-  arr->items[index] = value;
+  arr->items[index] = wb_persist_escape((Obj *)arr, value);
 }
 
 // Object Wrappers
 void vm_object_set(VM *vm, ObjObject *obj, char *key, VMValue value) {
   if (!obj || !key)
     return;
+
+  // Write barrier: a transient value stored into a persistent object must be
+  // deep-copied so it survives the per-request arena_restore.
+  value = wb_persist_escape((Obj *)obj, value);
 
   // Create string object for key
   int len = strlen(key);
@@ -1074,6 +1314,11 @@ VMValue vm_get_element(VMValue target, VMValue index) {
     if (IS_INT(index)) {
       return vm_array_get(AS_ARRAY(target), (int)AS_INT(index));
     }
+    // Array indexed by a non-int (string) key has no such entry — return 0
+    // silently, matching how a missing object key behaves. (A Wings handler
+    // that returns a raw list makes the dispatcher probe result["_stream"] /
+    // ["_status"] on an array; that should be a quiet "absent", not an error.)
+    return VM_INT(0);
   } else if (IS_OBJECT(target)) {
     if (IS_STRING(index)) {
       return vm_object_get(AS_OBJECT(target), AS_STRING(index)->chars);
@@ -1299,6 +1544,9 @@ void aot_array_push(VMValue *arr_ptr, VMValue *item_ptr) {
   VMValue item = *item_ptr;
   if (IS_ARRAY(arr_val)) {
     ObjArray *arr = AS_ARRAY(arr_val);
+    // Write barrier: a transient item pushed into a persistent array is
+    // deep-copied so it outlives the per-request arena_restore.
+    item = wb_persist_escape((Obj *)arr, item);
     // Inline push without VM
     if (arr->count >= arr->capacity) {
       int old_capacity = arr->capacity;
@@ -1804,6 +2052,7 @@ ObjArray *vm_allocate_array_aot_wrapper(void *vm) {
   arr->count = 0;
   arr->capacity = 0;
   arr->items = nullptr;
+  region_track((Obj *)arr); // request-local literal → freed at arena_restore
   return arr;
 }
 
@@ -1820,6 +2069,7 @@ ObjObject *vm_allocate_object_aot_wrapper(void *vm) {
   obj->capacity = 0;
   obj->keys = nullptr;
   obj->values = nullptr;
+  region_track((Obj *)obj); // request-local literal → freed at arena_restore
   return obj;
 }
 
@@ -2794,26 +3044,40 @@ VMValue aot_sha256_ptr(VMValue *vp) {
 #include <setjmp.h>
 
 #define EH_STACK_MAX 64
-static jmp_buf eh_stack[EH_STACK_MAX];
-static int eh_depth = 0;
-static VMValue eh_exception;
+
+// Exception-handler context: one try-frame stack + the in-flight exception.
+// Historically these were file-scope globals. They are now grouped so each
+// async coroutine can carry its OWN handler stack: the async runtime swaps the
+// active context on every resume/yield (aot_eh_context_swap) so a throw inside
+// a suspended coroutine never longjmps into a sibling's stack frame, and an
+// uncaught throw rejects that coroutine's promise instead of escaping. Plain
+// (non-async) programs only ever use the default `eh_main` context, so their
+// behaviour is unchanged.
+typedef struct EhContext {
+  jmp_buf stack[EH_STACK_MAX];
+  int depth;
+  VMValue exception;
+} EhContext;
+
+static EhContext eh_main = {};
+static EhContext *eh_cur = &eh_main; // active handler context
 
 // Returns pointer to jmp_buf for direct setjmp call
 jmp_buf *aot_try_push(void) {
-  if (eh_depth >= EH_STACK_MAX) {
+  if (eh_cur->depth >= EH_STACK_MAX) {
     fprintf(stderr, "Exception handler stack overflow\n");
     return nullptr;
   }
-  return &eh_stack[eh_depth++];
+  return &eh_cur->stack[eh_cur->depth++];
 }
 
 void aot_try_pop(void) {
-  if (eh_depth > 0)
-    eh_depth--;
+  if (eh_cur->depth > 0)
+    eh_cur->depth--;
 }
 
 void aot_throw(VMValue exception) {
-  if (eh_depth == 0) {
+  if (eh_cur->depth == 0) {
     fprintf(stderr, "Uncaught Exception: ");
     if (IS_STRING(exception)) {
       fprintf(stderr, "%s\n", AS_STRING(exception)->chars);
@@ -2824,10 +3088,26 @@ void aot_throw(VMValue exception) {
     }
     exit(1);
   }
-  eh_exception = exception;
-  int target_depth = eh_depth - 1;
-  eh_depth = target_depth;
-  longjmp(eh_stack[target_depth], 1);
+  eh_cur->exception = exception;
+  int target_depth = eh_cur->depth - 1;
+  eh_cur->depth = target_depth;
+  longjmp(eh_cur->stack[target_depth], 1);
+}
+
+// ---- Per-coroutine EH context management (used by runtime/tulpar_async.cpp) -
+// A fresh context starts with an empty handler stack. swap() installs `ctx` as
+// the active context and returns the previous one, so the async scheduler can
+// bracket each coroutine's execution slice and restore the caller's context.
+void *aot_eh_context_new(void) {
+  EhContext *c = new EhContext();
+  c->depth = 0;
+  return c;
+}
+void aot_eh_context_free(void *ctx) { delete static_cast<EhContext *>(ctx); }
+void *aot_eh_context_swap(void *ctx) {
+  void *prev = eh_cur;
+  eh_cur = ctx ? static_cast<EhContext *>(ctx) : &eh_main;
+  return prev;
 }
 
 void aot_throw_ptr(VMValue *exception_ptr) {
@@ -2836,7 +3116,7 @@ void aot_throw_ptr(VMValue *exception_ptr) {
   aot_throw(*exception_ptr);
 }
 
-VMValue aot_get_exception(void) { return eh_exception; }
+VMValue aot_get_exception(void) { return eh_cur->exception; }
 
 // ============================================
 // Time Functions
@@ -2871,14 +3151,14 @@ VMValue aot_socket_server(VMValue hostVal, VMValue portVal) {
   setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt,
              sizeof(opt));
 
-  // SO_REUSEPORT lets multiple listening sockets share the same port
-  // with kernel-level load balancing across them — exactly what
-  // `listen_pool` wants long-term and harmless for the single-socket
-  // variants. POSIX-only; Windows winsock has no equivalent (its
-  // SO_REUSEADDR already covers the overlap case differently).
-#if !PLATFORM_WINDOWS && defined(SO_REUSEPORT)
-  setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
-#endif
+  // NOTE: SO_REUSEPORT is deliberately NOT set. With it, two unrelated
+  // processes could both bind the same port (kernel load-balances), so a
+  // second `serve()` on a busy default port would silently *share* it instead
+  // of failing — which defeats Wings' "default port busy → try port+1" and
+  // "explicit port busy → tell the user" behaviour. No current path needs it:
+  // `listen_pool` binds ONE socket and has its worker threads accept() that
+  // shared fd, rather than re-binding per worker. SO_REUSEADDR (above) still
+  // covers fast restart through TIME_WAIT.
 
   // Resolve the `host` argument. Previously this was *ignored* and
   // we always bound to `INADDR_ANY`, which is wrong in two ways:
@@ -3059,40 +3339,29 @@ tulpar_socket http_dial(const char *host, int port) {
 
 }  // namespace
 
-VMValue aot_http_request(VMValue methodVal, VMValue urlVal, VMValue bodyVal) {
-    auto err = [](const char *msg) -> VMValue {
-        ObjObject *r = aot_http_make_obj(2);
-        aot_http_obj_set(r, "ok", 2, VM_INT(0));
-        aot_http_obj_set_str(r, "error", 5, msg, (int)strlen(msg));
-        return VM_OBJ((Obj *)r);
-    };
+// Build a { ok:0, error } envelope. Shared by the blocking and async paths.
+static VMValue aot_http_error_obj(const char *msg) {
+    ObjObject *r = aot_http_make_obj(2);
+    aot_http_obj_set(r, "ok", 2, VM_INT(0));
+    aot_http_obj_set_str(r, "error", 5, msg, (int)strlen(msg));
+    return VM_OBJ((Obj *)r);
+}
 
-    if (!IS_STRING(methodVal) || !IS_STRING(urlVal)) return err("bad args");
-    std::string method = AS_STRING(methodVal)->chars;
-    std::string url = AS_STRING(urlVal)->chars;
-    std::string body;
-    if (IS_STRING(bodyVal)) {
-        body.assign(AS_STRING(bodyVal)->chars, AS_STRING(bodyVal)->length);
-    }
-
-    // Delegate to the shared http_fetch implementation so HTTPS
-    // (when TLS is compiled in) is supported uniformly with the
-    // package manager's registry fetch.
-    std::string buf, fetch_err;
-    if (!tulpar::http_request_url(method, url, body, buf, fetch_err)) {
-        return err(fetch_err.c_str());
-    }
-
+// Parse a raw HTTP response buffer (status line + headers + body) into the
+// { ok:1, status, headers, body } object. Shared by aot_http_request (sync)
+// and the async completion path. MUST run on the main thread — it allocates
+// VM objects/strings, which are not safe to touch from a worker thread.
+static VMValue aot_http_build_response(const std::string &buf) {
     // Parse status line
     size_t line_end = buf.find('\n');
-    if (line_end == std::string::npos) return err("malformed response");
+    if (line_end == std::string::npos) return aot_http_error_obj("malformed response");
     std::string status_line = buf.substr(0, line_end);
     if (!status_line.empty() && status_line.back() == '\r') status_line.pop_back();
 
     int status = 0;
     {
         size_t sp = status_line.find(' ');
-        if (sp == std::string::npos) return err("malformed status line");
+        if (sp == std::string::npos) return aot_http_error_obj("malformed status line");
         size_t sp2 = status_line.find(' ', sp + 1);
         std::string code = status_line.substr(sp + 1,
             (sp2 == std::string::npos ? status_line.size() : sp2) - sp - 1);
@@ -3128,6 +3397,143 @@ VMValue aot_http_request(VMValue methodVal, VMValue urlVal, VMValue bodyVal) {
     aot_http_obj_set(out, "headers", 7, VM_OBJ((Obj *)headers));
     aot_http_obj_set_str(out, "body", 4, body_str.data(), (int)body_str.size());
     return VM_OBJ((Obj *)out);
+}
+
+VMValue aot_http_request(VMValue methodVal, VMValue urlVal, VMValue bodyVal) {
+    if (!IS_STRING(methodVal) || !IS_STRING(urlVal))
+        return aot_http_error_obj("bad args");
+    std::string method = AS_STRING(methodVal)->chars;
+    std::string url = AS_STRING(urlVal)->chars;
+    std::string body;
+    if (IS_STRING(bodyVal)) {
+        body.assign(AS_STRING(bodyVal)->chars, AS_STRING(bodyVal)->length);
+    }
+
+    // Delegate to the shared http_fetch implementation so HTTPS
+    // (when TLS is compiled in) is supported uniformly with the
+    // package manager's registry fetch.
+    std::string buf, fetch_err;
+    if (!tulpar::http_request_url(method, url, body, buf, fetch_err)) {
+        return aot_http_error_obj(fetch_err.c_str());
+    }
+    return aot_http_build_response(buf);
+}
+
+// ---------------------------------------------------------------------------
+// Async HTTP — http_request_async(method, url, body) -> promise<json>
+//
+// Offloads the blocking request to a tiny worker pool so the single-threaded
+// async event loop keeps pumping other coroutines while the socket I/O is in
+// flight. Worker threads only do the network leg (http_request_url, filling
+// std::strings); the main thread parses the buffer into VM objects and settles
+// the promise in http_async_poll(). Nothing on the worker side touches the
+// scheduler, so the handoff needs only one atomic flag per job — no locking of
+// the ready queue / timers. Pool size defaults to 4, override TULPAR_HTTP_POOL.
+// ---------------------------------------------------------------------------
+extern "C" {
+ObjPromise *aot_promise_new(void);
+void aot_promise_settle(ObjPromise *p, VMValue value, int state);
+void aot_io_register(int (*poll)(void *ud), void *ud);
+}
+
+namespace {
+
+struct HttpAsyncJob {
+    std::string method, url, body; // input (owned copies, read by worker)
+    std::string buf, err;          // output (written by worker)
+    bool ok = false;
+    std::atomic<int> done{0};      // 0 pending, 1 finished (release/acquire)
+    ObjPromise *promise = nullptr;
+};
+
+tulpar_mutex_t g_http_pool_mtx;
+std::vector<HttpAsyncJob *> g_http_pool_queue; // guarded by g_http_pool_mtx
+bool g_http_pool_inited = false;
+
+#if PLATFORM_WINDOWS
+unsigned __stdcall http_pool_worker(void *) {
+#else
+void *http_pool_worker(void *) {
+#endif
+    for (;;) {
+        HttpAsyncJob *job = nullptr;
+        tulpar_mutex_lock(&g_http_pool_mtx);
+        if (!g_http_pool_queue.empty()) {
+            job = g_http_pool_queue.front();
+            g_http_pool_queue.erase(g_http_pool_queue.begin());
+        }
+        tulpar_mutex_unlock(&g_http_pool_mtx);
+        if (!job) {
+            tulpar_thread_sleep(1); // idle: nothing queued
+            continue;
+        }
+        job->ok = tulpar::http_request_url(job->method, job->url, job->body,
+                                           job->buf, job->err);
+        job->done.store(1, std::memory_order_release);
+    }
+#if PLATFORM_WINDOWS
+    return 0;
+#else
+    return nullptr;
+#endif
+}
+
+// Event-loop completion poll (main thread). Returns 1 once the worker has
+// finished — having first built the response object and settled the promise —
+// so the loop drops this source.
+int http_async_poll(void *ud) {
+    HttpAsyncJob *job = (HttpAsyncJob *)ud;
+    if (job->done.load(std::memory_order_acquire) == 0) return 0;
+    VMValue result = job->ok ? aot_http_build_response(job->buf)
+                             : aot_http_error_obj(job->err.c_str());
+    aot_promise_settle(job->promise, result, 1);
+    delete job;
+    return 1;
+}
+
+void http_pool_init() {
+    if (g_http_pool_inited) return;
+    g_http_pool_inited = true;
+    tulpar_mutex_init(&g_http_pool_mtx);
+    int n = 4;
+    const char *env = getenv("TULPAR_HTTP_POOL");
+    if (env && *env) {
+        n = atoi(env);
+        if (n < 1) n = 1;
+        if (n > 64) n = 64;
+    }
+    for (int i = 0; i < n; i++) {
+        tulpar_thread_t th;
+        if (tulpar_thread_create(&th, (tulpar_thread_func_t)http_pool_worker,
+                                 nullptr) == 0)
+            tulpar_thread_detach(th);
+    }
+}
+
+}  // namespace
+
+VMValue aot_http_request_async(VMValue methodVal, VMValue urlVal,
+                               VMValue bodyVal) {
+    ObjPromise *p = aot_promise_new();
+    if (!IS_STRING(methodVal) || !IS_STRING(urlVal)) {
+        aot_promise_settle(p, aot_http_error_obj("bad args"), 1);
+        return VM_OBJ((Obj *)p);
+    }
+    http_pool_init();
+
+    HttpAsyncJob *job = new HttpAsyncJob();
+    job->promise = p;
+    job->method = AS_STRING(methodVal)->chars;
+    job->url = AS_STRING(urlVal)->chars;
+    if (IS_STRING(bodyVal))
+        job->body.assign(AS_STRING(bodyVal)->chars, AS_STRING(bodyVal)->length);
+
+    tulpar_mutex_lock(&g_http_pool_mtx);
+    g_http_pool_queue.push_back(job);
+    tulpar_mutex_unlock(&g_http_pool_mtx);
+
+    aot_io_register(&http_async_poll, job);
+    return VM_OBJ((Obj *)p);
 }
 
 VMValue aot_socket_client(VMValue hostVal, VMValue portVal) {

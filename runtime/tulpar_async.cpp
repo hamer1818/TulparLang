@@ -40,6 +40,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
+#include <csetjmp>
 #include <vector>
 #include <chrono> // steady_clock only (header-only; safe on all toolchains)
 
@@ -69,6 +70,16 @@ inline void async_sleep_ms(long long ms) {
 extern "C" {
 void arc_retain_vmvalue(VMValue *val);
 void arc_release_vmvalue(VMValue *val);
+// Exception-handler runtime (src/vm/runtime_bindings.cpp). Coroutines get their
+// own handler context so an uncaught throw rejects the promise instead of
+// longjmp'ing across stacks; await re-raises a rejection in the awaiter.
+jmp_buf *aot_try_push(void);
+void aot_try_pop(void);
+void aot_throw_ptr(VMValue *exception_ptr);
+VMValue aot_get_exception(void);
+void *aot_eh_context_new(void);
+void aot_eh_context_free(void *ctx);
+void *aot_eh_context_swap(void *ctx);
 // Runtime array allocators (src/vm/runtime_bindings.cpp). The plain
 // vm_allocate_array/vm_array_push deref the VM*, so the AOT runtime (no VM)
 // must go through these null-safe wrappers, which malloc when vm == nullptr.
@@ -84,6 +95,7 @@ constexpr size_t kCoroStackSize = 256 * 1024;
 struct GatherState {
   VMValue *items = nullptr; // retained copies of the awaited args
   int n = 0;
+  ObjArray *arr = nullptr;  // partial result array (for reject-path cleanup)
 };
 
 // ---- Task (coroutine) ----------------------------------------------------
@@ -99,6 +111,7 @@ struct Task {
   int argc = 0;
   GatherState *gather = nullptr; // non-null => this is a gather() coroutine
   ObjPromise *result = nullptr;  // promise fulfilled on return
+  void *eh_ctx = nullptr;        // this coroutine's exception-handler context
   bool done = false;
   bool started = false;
 };
@@ -109,10 +122,21 @@ struct Timer {
   ObjPromise *promise;
 };
 
+// ---- Background-I/O source -----------------------------------------------
+// A completion callback the loop polls on the main thread (see aot_io_register).
+struct IoSource {
+  int (*poll)(void *ud);
+  void *ud;
+};
+
 // ---- Scheduler state -----------------------------------------------------
-std::vector<Task *> g_ready;     // runnable tasks
-std::vector<Timer> g_timers;     // pending timers (unsorted; min-scanned)
-Task *g_current = nullptr;       // task currently executing (null on main)
+std::vector<Task *> g_ready;        // runnable tasks
+std::vector<Timer> g_timers;        // pending timers (unsorted; min-scanned)
+std::vector<IoSource> g_io_sources; // background-I/O completion polls
+Task *g_current = nullptr;          // task currently executing (null on main)
+
+// How often to poll outstanding background I/O when nothing else is runnable.
+constexpr long long kIoPollMs = 1;
 
 #if TULPAR_ASYNC_FIBERS
 void *g_main_fiber = nullptr;    // scheduler fiber (converted from thread)
@@ -142,8 +166,16 @@ VMValue call_user_fn(void *fn, VMValue *a, int argc) {
     case 6: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5]); break;
     case 7: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6]); break;
     case 8: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7]); break;
+    case 9: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8]); break;
+    case 10: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8], &a[9]); break;
+    case 11: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8], &a[9], &a[10]); break;
+    case 12: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8], &a[9], &a[10], &a[11]); break;
+    case 13: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8], &a[9], &a[10], &a[11], &a[12]); break;
+    case 14: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8], &a[9], &a[10], &a[11], &a[12], &a[13]); break;
+    case 15: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8], &a[9], &a[10], &a[11], &a[12], &a[13], &a[14]); break;
+    case 16: ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fn)(&r, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7], &a[8], &a[9], &a[10], &a[11], &a[12], &a[13], &a[14], &a[15]); break;
     default:
-      fprintf(stderr, "Tulpar async: 8'den fazla parametreli async fonksiyon desteklenmiyor / async functions with >8 params unsupported\n");
+      fprintf(stderr, "Tulpar async: 16'dan fazla parametreli async fonksiyon desteklenmiyor / async functions with >16 params unsupported\n");
       break;
   }
   return r;
@@ -153,6 +185,9 @@ VMValue call_user_fn(void *fn, VMValue *a, int argc) {
 // concurrently in the loop) and collect the results into a fresh array.
 VMValue gather_body(GatherState *gs) {
   ObjArray *arr = vm_allocate_array_aot_wrapper(nullptr);
+  // Publish the array on the state so that if a child rejects (aot_await throws
+  // and longjmps out of this frame), task_body's catch can still free it.
+  gs->arr = arr;
   for (int i = 0; i < gs->n; i++) {
     VMValue v = aot_await(gs->items[i]);
     vm_array_push_aot_wrapper(nullptr, arr, v);
@@ -167,9 +202,37 @@ VMValue gather_body(GatherState *gs) {
 }
 
 // The body every coroutine runs: call the user function, fulfil the promise.
+// A root try-frame catches any throw the user code didn't handle and settles
+// the promise *rejected* (state 2) instead of letting longjmp escape the
+// coroutine. The coroutine's own EH context is already active here (resume()
+// swapped it in), so this frame and any nested user try/catch share it.
 void task_body(Task *t) {
+  jmp_buf *root = aot_try_push();
+  if (root && setjmp(*root) != 0) {
+    // An uncaught throw unwound to here — reject with the thrown value.
+    // gather_body frees its state on the normal path; on this reject path the
+    // throw skipped that, so do the equivalent cleanup (release the retained
+    // child args and the partial result array, free the state).
+    if (t->gather) {
+      GatherState *gs = t->gather;
+      for (int i = 0; i < gs->n; i++) arc_release_vmvalue(&gs->items[i]);
+      if (gs->arr) {
+        VMValue av;
+        av.type = VM_VAL_OBJ;
+        av.as.obj = (Obj *)gs->arr;
+        arc_release_vmvalue(&av); // drops gather's own ref → frees the array
+      }
+      free(gs->items);
+      delete gs;
+      t->gather = nullptr;
+    }
+    t->done = true;
+    aot_promise_settle(t->result, aot_get_exception(), /*rejected*/ 2);
+    return;
+  }
   VMValue rv = t->gather ? gather_body(t->gather)
                          : call_user_fn(t->fn, t->args, t->argc);
+  aot_try_pop(); // pop the root frame on the normal (non-throwing) path
   t->done = true;
   aot_promise_settle(t->result, rv, /*fulfilled*/ 1);
 }
@@ -196,6 +259,11 @@ void ctx_trampoline() {
 // Resume a task: run it until it yields (await) or finishes.
 void resume(Task *t) {
   g_current = t;
+  // Install this coroutine's exception-handler context for the duration of the
+  // slice, restoring the caller's (scheduler / outer coroutine) afterwards so
+  // throws stay isolated to the stack they belong to.
+  if (!t->eh_ctx) t->eh_ctx = aot_eh_context_new();
+  void *prev_eh = aot_eh_context_swap(t->eh_ctx);
 #if TULPAR_ASYNC_FIBERS
   if (!t->started) {
     t->started = true;
@@ -216,6 +284,7 @@ void resume(Task *t) {
   }
   swapcontext(&g_main_ctx, &t->ctx);
 #endif
+  aot_eh_context_swap(prev_eh);
   g_current = nullptr;
   if (t->done) {
 #if TULPAR_ASYNC_FIBERS
@@ -224,6 +293,7 @@ void resume(Task *t) {
     free(t->stack);
 #endif
     if (t->args) free(t->args);
+    if (t->eh_ctx) aot_eh_context_free(t->eh_ctx);
     delete t;
   }
 }
@@ -249,20 +319,45 @@ void ensure_scheduler_inited() {
 #endif
 }
 
+// Poll every registered background-I/O source once; drop the ones that report
+// done (their callback settles its own promise, which may move waiters onto
+// g_ready). Returns true if at least one source finished this tick.
+bool poll_io_sources() {
+  bool any = false;
+  for (size_t i = 0; i < g_io_sources.size();) {
+    if (g_io_sources[i].poll(g_io_sources[i].ud)) {
+      g_io_sources.erase(g_io_sources.begin() + i);
+      any = true;
+    } else {
+      i++;
+    }
+  }
+  return any;
+}
+
 // Run one scheduler step. Returns false when there is nothing left to do.
 bool loop_step() {
+  // Settle any background I/O that finished since the last tick first; this may
+  // queue ready tasks (waiters of the settled promise).
+  bool io_done = poll_io_sources();
+
   if (!g_ready.empty()) {
     Task *t = g_ready.front();
     g_ready.erase(g_ready.begin());
     resume(t);
     return true;
   }
+  if (io_done) return true;
+
+  bool has_io = !g_io_sources.empty();
   if (!g_timers.empty()) {
-    // Find the earliest deadline, sleep until it, fire all that are due.
+    // Find the earliest deadline, sleep until it, fire all that are due. While
+    // background I/O is outstanding, cap the wait so we keep polling it.
     size_t mn = 0;
     for (size_t i = 1; i < g_timers.size(); i++)
       if (g_timers[i].deadline_ms < g_timers[mn].deadline_ms) mn = i;
     long long wait = g_timers[mn].deadline_ms - now_ms();
+    if (has_io && wait > kIoPollMs) wait = kIoPollMs;
     if (wait > 0)
       async_sleep_ms(wait);
     long long t_now = now_ms();
@@ -278,6 +373,12 @@ bool loop_step() {
     v.type = VM_VAL_VOID;
     v.as.int_val = 0;
     for (ObjPromise *p : fire) aot_promise_settle(p, v, 1);
+    return true;
+  }
+  if (has_io) {
+    // No tasks, no timers, but a worker thread is still resolving I/O — poll at
+    // a fine cadence until it completes.
+    async_sleep_ms(kIoPollMs);
     return true;
   }
   return false;
@@ -337,6 +438,14 @@ ObjPromise *aot_async_spawn(void *fn, VMValue *args, int argc) {
 
 int aot_is_promise(VMValue v) { return IS_PROMISE(v) ? 1 : 0; }
 
+void aot_io_register(int (*poll)(void *ud), void *ud) {
+  ensure_scheduler_inited();
+  IoSource s;
+  s.poll = poll;
+  s.ud = ud;
+  g_io_sources.push_back(s);
+}
+
 VMValue aot_await(VMValue awaited) {
   if (!IS_PROMISE(awaited)) return awaited; // await on a plain value is a no-op
   ObjPromise *p = AS_PROMISE(awaited);
@@ -354,6 +463,9 @@ VMValue aot_await(VMValue awaited) {
       ((Task **)p->waiters)[p->nwaiters++] = t;
       yield_to_scheduler(t);
     }
+    // A rejected promise re-raises in the awaiting coroutine (caught by a user
+    // try/catch on its stack, or its task_body root → rejects its own promise).
+    if (p->state == 2) aot_throw_ptr(&p->value);
     return p->value;
   }
 
@@ -361,6 +473,9 @@ VMValue aot_await(VMValue awaited) {
   while (p->state == 0) {
     if (!loop_step()) break; // nothing left to run → would deadlock
   }
+  // Rejection on the main thread surfaces as a throw (caught by a top-level
+  // try/catch, else the uncaught-exception handler exits).
+  if (p->state == 2) aot_throw_ptr(&p->value);
   return p->value;
 }
 
