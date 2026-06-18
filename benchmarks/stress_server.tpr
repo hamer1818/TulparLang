@@ -1,0 +1,53 @@
+import "wings";
+
+// ---- Representative endpoints -------------------------------------------
+// Tiny response — pure routing/serialization overhead.
+func ping(req) { return text("pong"); }
+
+// Small JSON list.
+json _users = [
+    {"id": 1, "name": "Ada"},
+    {"id": 2, "name": "Linus"},
+    {"id": 3, "name": "Grace"}
+];
+func list_users(req) { return ok({"users": _users, "count": 3}); }
+
+// Param route.
+func get_user(req) {
+    int id = toInt(req.params.id);
+    return ok({"id": id, "name": "user", "active": true});
+}
+
+// POST with body parse + validation.
+func create_user(req) {
+    json b = req.json;
+    if (length(b["name"]) == 0) { return bad_request("name required"); }
+    return created({"id": 99, "name": b["name"]});
+}
+
+// Bigger JSON payload — throughput / serialization stress.
+func big(req) {
+    json items = [];
+    for (int i = 0; i < 50; i = i + 1) {
+        push(items, {"id": i, "name": "item", "value": i * 7, "ok": true});
+    }
+    return ok({"items": items, "total": 50});
+}
+
+get("/ping", ping);
+get("/users", list_users);
+get("/users/:id", get_user);
+post("/users", create_user);
+get("/big", big);
+
+int port = 8585;
+str mode = env("WINGS_MODE");
+if (length(mode) == 0) { mode = "serve"; }
+print("MODE=" + mode);
+if (mode == "pool") {
+    listen_pool(port, 0);   // one accept-thread per CPU
+} else if (mode == "evented") {
+    listen_evented(port);   // single-thread poll() multiplexed
+} else {
+    serve(port);            // single-threaded sync loop (the default)
+}

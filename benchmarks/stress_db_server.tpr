@@ -1,0 +1,66 @@
+import "wings";
+
+// ---- DB-backed stress server -------------------------------------------
+// Realistic pattern: ONE global SQLite handle shared by all pool workers
+// (this is exactly what lib/orm.tpr does with `_orm_db`). SQLite's default
+// build is THREADSAFE=1 (serialized), so the shared handle is safe but every
+// db_query/db_execute serializes through SQLite's internal mutex regardless of
+// how many worker threads call it — the bottleneck this test is meant to find.
+int _db = db_open("/tmp/stress.db");
+
+// Optional WAL + busy timeout (set WINGS_DB_WAL=1). For a *shared* handle this
+// changes little (the internal mutex still serializes); it matters for the
+// per-connection-handle pattern, which Tulpar's API doesn't expose yet.
+if (length(env("WINGS_DB_WAL")) > 0) {
+    db_execute(_db, "PRAGMA journal_mode=WAL");
+    db_execute(_db, "PRAGMA synchronous=NORMAL");
+    db_execute(_db, "PRAGMA busy_timeout=5000");
+}
+
+// Seed 1000 rows in one transaction.
+db_execute(_db, "DROP TABLE IF EXISTS users");
+db_execute(_db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)");
+db_execute(_db, "BEGIN");
+for (int i = 0; i < 1000; i = i + 1) {
+    db_execute(_db, "INSERT INTO users (name, email) VALUES ('user" + toString(i) + "', 'u" + toString(i) + "@tulpar.dev')");
+}
+db_execute(_db, "COMMIT");
+print("seeded 1000 users into /tmp/stress.db");
+
+// GET /users/:id  → single-row read by primary key.
+func get_user(req) {
+    int id = toInt(req.params.id);
+    array rows = db_query(_db, "SELECT id, name, email FROM users WHERE id = " + toString(id));
+    if (length(rows) == 0) { return not_found("no such user"); }
+    return ok(rows[0]);
+}
+
+// GET /users  → 50-row list read.
+func list_users(req) {
+    array rows = db_query(_db, "SELECT id, name, email FROM users LIMIT 50");
+    return ok({"users": rows, "count": length(rows)});
+}
+
+// POST /users → write (INSERT). Serializes hardest under concurrency.
+func create_user(req) {
+    json b = req.json;
+    if (length(b["name"]) == 0) { return bad_request("name required"); }
+    db_execute(_db, "INSERT INTO users (name, email) VALUES ('" + b["name"] + "', 'new@tulpar.dev')");
+    return created({"id": db_last_insert_id(_db)});
+}
+
+get("/users/:id", get_user);
+get("/users", list_users);
+post("/users", create_user);
+
+int port = 8585;
+str mode = env("WINGS_MODE");
+if (length(mode) == 0) { mode = "pool"; }
+print("MODE=" + mode);
+if (mode == "pool") {
+    listen_pool(port, 0);
+} else if (mode == "evented") {
+    listen_evented(port);
+} else {
+    serve(port);
+}
