@@ -34,6 +34,10 @@ json _default_headers = {
 // increments. `_wings_started_at` is written exactly once at startup
 // and so doesn't need atomic treatment.
 int _wings_started_at = 0;
+// OpenAPI document metadata, surfaced at /openapi.json and /docs. Override
+// with docs_info(title, version) before serve(); defaults below otherwise.
+str _wings_title = "Tulpar Wings API";
+str _wings_version = "1.0.0";
 int _wings_requests_total = 0;
 int _wings_requests_2xx = 0;
 int _wings_requests_4xx = 0;
@@ -54,6 +58,13 @@ int _wings_max_body_bytes = 16777216;
 // so we snapshot the truthiness once in `_wings_apply_env_config` and
 // the serve loops read the int directly.
 int _wings_quiet = 0;
+// Colorized access log + banner. On by default; snapshot off when NO_COLOR is
+// set (https://no-color.org) so piped/redirected logs stay clean.
+int _wings_color = 1;
+// Status of the most recently dispatched request, so the serve loop can log
+// `method path status` AFTER the handler has run (the status isn't known
+// before dispatch). _wings_dispatch_cached writes this at every return.
+int _wings_last_status = 200;
 
 // Pulls config overrides from the environment. Today honours
 // `TULPAR_HTTP_MAX_BODY` (bytes) and `TULPAR_HTTP_QUIET` (any
@@ -75,6 +86,107 @@ func _wings_apply_env_config() {
     if (length(env("TULPAR_HTTP_QUIET")) > 0) {
         _wings_quiet = 1;
     }
+    // NO_COLOR (any value) disables ANSI colors in the banner + access log.
+    if (length(env("NO_COLOR")) > 0) {
+        _wings_color = 0;
+    }
+}
+
+// ----- Terminal colors -----------------------------------------------------
+// Wrap `text` in an ANSI SGR sequence (`code`), or return it untouched when
+// colors are disabled. `code` is the part between ESC[ and m, e.g. "1;32".
+func _wings_c(str code, str text) {
+    if (_wings_color == 0) {
+        return text;
+    }
+    return "\e[" + code + "m" + text + "\e[0m";
+}
+
+// SGR color per HTTP method, so GET/POST/PUT/DELETE read at a glance.
+func _wings_method_color(str method) {
+    if (method == "GET")     { return "1;32"; } // green
+    if (method == "POST")    { return "1;33"; } // yellow
+    if (method == "PUT")     { return "1;34"; } // blue
+    if (method == "DELETE")  { return "1;31"; } // red
+    if (method == "PATCH")   { return "1;35"; } // magenta
+    if (method == "HEAD")    { return "1;36"; } // cyan
+    if (method == "OPTIONS") { return "1;90"; } // dim
+    return "1;37";                              // white
+}
+
+// SGR color per status class: 2xx green, 3xx cyan, 4xx yellow, 5xx red.
+func _wings_status_color(int status) {
+    if (status >= 500) { return "1;31"; } // red
+    if (status >= 400) { return "1;33"; } // yellow
+    if (status >= 300) { return "1;36"; } // cyan
+    if (status >= 200) { return "1;32"; } // green
+    return "1;37";                        // white (1xx / unknown)
+}
+
+// Format a byte count for the access log: 248B / 1.5KB / 2.3MB.
+func _wings_fmt_bytes(int n) {
+    if (n < 1024) {
+        return toString(n) + "B";
+    }
+    if (n < 1048576) {
+        int kb = (n * 10) / 1024;
+        return toString(kb / 10) + "." + toString(mod(kb, 10)) + "KB";
+    }
+    int mb = (n * 10) / 1048576;
+    return toString(mb / 10) + "." + toString(mod(mb, 10)) + "MB";
+}
+
+// Format request latency. Sub-millisecond requests (the common case for
+// an AOT server) render in microseconds — 142µs — so the speed is visible
+// instead of collapsing to "0.0ms"; everything else is ms with one decimal.
+func _wings_fmt_ms(float ms) {
+    if (ms < 0.0) { ms = 0.0; }
+    if (ms < 1.0) {
+        int us = toInt(round(ms * 1000.0)); // microseconds, as a true int
+        return toString(us) + "µs";
+    }
+    int t = toInt(round(ms * 10.0)); // tenths of a ms, as a true int
+    return toString(t / 10) + "." + toString(mod(t, 10)) + "ms";
+}
+
+// SGR color by latency: <50ms green, <500ms yellow, else red — so a slow
+// request stands out in the log even when method and status read normal.
+func _wings_latency_color(float ms) {
+    if (ms >= 500.0) { return "1;31"; } // red
+    if (ms >= 50.0)  { return "1;33"; } // yellow
+    return "1;32";                      // green
+}
+
+// HH:MM:SS (UTC) sliced out of the ISO-8601 clock, for the log prefix.
+func _wings_now_hms() {
+    str iso = now_iso8601();          // YYYY-MM-DDTHH:MM:SSZ
+    if (length(iso) < 19) {
+        return "";
+    }
+    return substring(iso, 11, 19);
+}
+
+// One access-log line:
+//   [HH:MM:SS] METHOD STATUS /path  → 12.4ms  - 248B
+// timestamp dim, method/status colored by kind, latency colored by
+// threshold, size dim. `ms` is wall time since the request was parsed,
+// `bytes` the size of the response written back to the socket. Method is
+// padded to 7 cols (DELETE + a space) so status codes line up.
+func _wings_log_request(str method, str path, int status, float ms, int bytes) {
+    if (_wings_quiet == 1) {
+        return 0;
+    }
+    str m = method;
+    while (length(m) < 7) {
+        m = m + " ";
+    }
+    str ts   = _wings_c("1;90", "[" + _wings_now_hms() + "] ");
+    str meth = _wings_c(_wings_method_color(method), m);
+    str st   = _wings_c(_wings_status_color(status), toString(status));
+    str lat  = _wings_c(_wings_latency_color(ms), "→ " + _wings_fmt_ms(ms));
+    str sz   = _wings_c("1;90", "- " + _wings_fmt_bytes(bytes));
+    print("  " + ts + meth + st + " " + path + "  " + lat + "  " + sz);
+    return 0;
 }
 
 // Bind address used by every listener variant. Env-driven, default
@@ -96,6 +208,49 @@ func _wings_bind_host() {
         return "0.0.0.0";
     }
     return h;
+}
+
+// Tulpar's signature default port: 8484 — ASCII 'T' (binary 01010100) is 84,
+// so "84-84" is the Tulpar port. Used when serve()/listen() are called with no
+// port (the arg is padded to 0 by the compiler's default-argument support).
+int _WINGS_DEFAULT_PORT = 8484;
+
+// Resolve a listening socket from a requested port. Returns
+// {"fd": <int>, "port": <int>} where fd < 0 means "could not bind".
+//   port <= 0 : no port was given -> use the default; if it's busy, walk up
+//               (8484, 8485, ...) so a second app on the box still starts.
+//   port >  0 : an explicit port -> bind it once; fd < 0 means it's taken and
+//               the caller tells the user (we don't silently move an explicit
+//               port — that would hide a conflict).
+func _wings_bind(int port) {
+    str host = _wings_bind_host();
+    if (port <= 0) {
+        int p = _WINGS_DEFAULT_PORT;
+        int tries = 0;
+        while (tries < 20) {
+            int fd = socket_server(host, p);
+            if (fd >= 0) {
+                return {"fd": fd, "port": p};
+            }
+            p = p + 1;
+            tries = tries + 1;
+        }
+        return {"fd": -1, "port": _WINGS_DEFAULT_PORT};
+    }
+    return {"fd": socket_server(host, port), "port": port};
+}
+
+// Shared "couldn't bind" message. `port` is the value the user asked for
+// (0 = default path). Prints actionable guidance instead of a bare error.
+func _wings_bind_failed(int port) {
+    if (port > 0) {
+        print("  ⚠ Port " + toString(port) + " kullanımda (başka bir süreç tutuyor).");
+        print("    Farklı bir port deneyin, örn:  serve(" + toString(port + 1) + ")");
+    } else {
+        print("  ⚠ Varsayılan port " + toString(_WINGS_DEFAULT_PORT) +
+              " ve sonraki 20 port da dolu.");
+        print("    Açık bir port belirtin, örn:  serve(9090)");
+    }
 }
 
 // Cache table for `cached_get`. Indexed by route position in `_routes`
@@ -155,6 +310,55 @@ func cached_get(str path, str handler) {
     push(_wings_cache_wires, "");
 }
 
+// ----- Request validation --------------------------------------------------
+// Attach a JSON-body schema to the most recently registered route. One schema
+// drives BOTH the auto-422 check (run before the handler — invalid bodies
+// never reach your code) AND the OpenAPI requestBody under /docs.
+//
+//   post("/users", create_user);
+//   body_schema({"name": "str", "age?": "int"});   // trailing ? = optional
+//
+// Field types: "str", "int", "float", "num" (int|float), "bool", "array",
+// "object", "json" (object|array), "any" (present, any type). A missing
+// required field or a type mismatch yields:
+//   422 {"error":"validation failed","fields":{"name":"required", ...}}
+func body_schema(json schema) {
+    int last = length(_routes) - 1;
+    if (last >= 0) {
+        _routes[last]["schema"] = schema;
+    }
+}
+
+// ----- Response helpers ----------------------------------------------------
+// Tiny wrappers so handlers express intent instead of hand-writing the
+// `{"_status": N}` envelope. Each returns a response dict the dispatcher
+// understands. `ok` is the 200 default (return your data directly works too).
+//
+//   func get_user()    { return ok(user); }
+//   func create_user() { return created(user); }
+//   func missing()     { return not_found("no such user"); }
+//
+// Error helpers carry a uniform `{"error": msg}` body so clients can rely on
+// one shape across every 4xx/5xx.
+func ok(json data)              { return data; }
+func created(json data)         { data["_status"] = 201; return data; }
+func no_content()               { return {"_status": 204}; }
+func bad_request(str msg)       { return {"error": msg, "_status": 400}; }
+func unauthorized(str msg)      { return {"error": msg, "_status": 401}; }
+func forbidden(str msg)         { return {"error": msg, "_status": 403}; }
+func not_found(str msg)         { return {"error": msg, "_status": 404}; }
+func conflict(str msg)          { return {"error": msg, "_status": 409}; }
+func server_error(str msg)      { return {"error": msg, "_status": 500}; }
+// Plain-text / custom-status escape hatches.
+func text(str body)             { return {"_raw": body, "_content_type": "text/plain; charset=utf-8"}; }
+func with_status(json data, int status) { data["_status"] = status; return data; }
+
+// Friendly alias for listen() — reads better at the bottom of an app file:
+//   serve(8080);
+func serve(int port) {
+    return listen(port);
+}
+
 // ----- Internals -----------------------------------------------------------
 // Pull `Cookie:` out of the parsed headers object and run it through the
 // native `parse_cookies` builtin. Returns an empty object when the
@@ -182,6 +386,83 @@ func wings_cookies(json req) {
         return {};
     }
     return parse_cookies(raw);
+}
+
+// Parse a JSON request body once, up front, so handlers read
+// `_request["json"]` directly instead of calling `fromJson(_request["body"])`
+// themselves. Returns {} when there is no body or it isn't a JSON object/array
+// (so `_request["json"]["field"]` is always safe to index). The dispatcher
+// calls this right before invoking a matched handler.
+func _wings_parse_body(json req) {
+    str body = req["body"];
+    if (length(body) == 0) {
+        return {};
+    }
+    str first = substring(body, 0, 1);
+    if (first == "{" || first == "[") {
+        return fromJson(body);
+    }
+    return {};
+}
+
+// True when object `obj` has its own key `k`. A missing object key reads back
+// as int 0 (not null), so presence can't be inferred from the value — we scan
+// the key list. Cheap: request bodies have a handful of keys.
+func _wings_has_key(json obj, str k) {
+    for (kk in keys(obj)) {
+        if (kk == k) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Does the runtime typeof() string `got` satisfy the schema type `want`?
+func _wings_type_ok(str want, str got) {
+    if (want == "any")    { return true; }
+    if (want == "str")    { return got == "string"; }
+    if (want == "int")    { return got == "int"; }
+    if (want == "float")  { return got == "float" || got == "int"; }
+    if (want == "num")    { return got == "int" || got == "float"; }
+    if (want == "bool")   { return got == "bool"; }
+    if (want == "array")  { return got == "array"; }
+    if (want == "object") { return got == "object"; }
+    if (want == "json")   { return got == "object" || got == "array"; }
+    return false;
+}
+
+// Validate a parsed body against a schema. Returns {} when valid, or a ready
+// 422 response envelope ({"_status":422, "error":..., "fields":{...}}) listing
+// every offending field so the client sees them all at once (FastAPI-style).
+func _wings_validate(json schema, json body) {
+    json fields = {};
+    int bad = 0;
+    for (k in keys(schema)) {
+        str want = schema[k];
+        str name = k;
+        int optional = 0;
+        int klen = length(k);
+        if (klen > 0 && substring(k, klen - 1, klen) == "?") {
+            name = substring(k, 0, klen - 1);
+            optional = 1;
+        }
+        if (!_wings_has_key(body, name)) {
+            if (optional == 0) {
+                fields[name] = "required";
+                bad = 1;
+            }
+        } else {
+            str got = typeof(body[name]);
+            if (!_wings_type_ok(want, got)) {
+                fields[name] = "expected " + want + ", got " + got;
+                bad = 1;
+            }
+        }
+    }
+    if (bad == 1) {
+        return {"_status": 422, "error": "validation failed", "fields": fields};
+    }
+    return {};
 }
 
 // Linear scan over registered routes. Tulpar arrays of small dicts are tight
@@ -341,11 +622,35 @@ func _wings_dispatch_cached(int route_idx, int keep) {
         if (length(cached) > 0) {
             _wings_requests_total = _wings_requests_total + 1;
             _wings_requests_2xx = _wings_requests_2xx + 1;
+            _wings_last_status = 200;
             return cached;
         }
     }
 
-    json result = call(route["handler"]);
+    // Auto-parse the JSON body so handlers can read `_request["json"]` without
+    // calling fromJson() themselves. Empty/non-JSON bodies yield {}.
+    _request["json"] = _wings_parse_body(_request);
+
+    // Schema validation (opt-in via body_schema()). Runs BEFORE the handler so
+    // a bad body short-circuits to 422 and never reaches user code. Routes with
+    // no schema skip this entirely (route["schema"] reads back as int 0).
+    json _schema = route["schema"];
+    if (_schema) {
+        json _verr = _wings_validate(_schema, _request["json"]);
+        int _vstatus = _verr["_status"];
+        if (_vstatus == 422) {
+            _wings_requests_total = _wings_requests_total + 1;
+            _wings_requests_4xx = _wings_requests_4xx + 1;
+            _wings_last_status = 422;
+            return _wings_build_response(_verr, keep);
+        }
+    }
+
+    // Every handler is handed the request object as its first argument, so it
+    // can be written `func h(req) { req["params"]["id"] }`. Handlers that take
+    // no parameter simply ignore it (ABI-safe) and read the `_request` global
+    // instead — both styles work.
+    json result = call(route["handler"], _request);
     _wings_requests_total = _wings_requests_total + 1;
     // Streaming handlers (SSE / WS upgrade / long-poll) signal
     // "I've already written to the socket myself; don't try to
@@ -358,9 +663,11 @@ func _wings_dispatch_cached(int route_idx, int keep) {
     int is_stream = result["_stream"];
     if (is_stream == 1) {
         _wings_requests_2xx = _wings_requests_2xx + 1;
+        _wings_last_status = 200;
         return "";
     }
     int eff_status = _wings_status_or(result, 200);
+    _wings_last_status = eff_status;
     if (eff_status >= 500) {
         _wings_requests_5xx = _wings_requests_5xx + 1;
     } else if (eff_status >= 400) {
@@ -661,9 +968,7 @@ func _wings_serve_connection(json client_arg) {
         wings_set_current_fd(client);
         str method = req["method"];
         str path = req["path"];
-        if (_wings_quiet == 0) {
-            print("  " + method + " " + path);
-        }
+        float _t0 = clock_ms();
         // CORS preflight short-circuit. Browsers send `OPTIONS` before
         // any "non-simple" request (custom headers like `Authorization`,
         // PUT/DELETE, JSON body) and require a 2xx response WITH the
@@ -684,6 +989,7 @@ func _wings_serve_connection(json client_arg) {
             str preflight = http_create_response(
                 204, "text/plain; charset=utf-8", "", _default_headers, keep);
             socket_send(client, preflight);
+            _wings_log_request(method, path, 204, clock_ms() - _t0, length(preflight));
             arena_restore(wm);
             if (keep == 0) {
                 break;
@@ -710,16 +1016,20 @@ func _wings_serve_connection(json client_arg) {
         _request["cookies"] = wings_cookies(req);
         _request["remote_addr"] = socket_peer_ip(client);
         str response = "";
+        int status = 200;
         if (route_idx >= 0) {
             // Cache lookup + handler dispatch + counter bump + response
             // build all live in `_wings_dispatch_cached` so the
             // sync/async/evented serve loops stay in lockstep.
             response = _wings_dispatch_cached(route_idx, keep);
+            status = _wings_last_status;
         } else {
             _wings_requests_total = _wings_requests_total + 1;
             _wings_requests_4xx = _wings_requests_4xx + 1;
             response = _wings_build_404(path, keep);
+            status = 404;
         }
+        _wings_log_request(method, path, status, clock_ms() - _t0, length(response));
         if (is_head) {
             response = _wings_strip_response_body(response);
         }
@@ -739,6 +1049,11 @@ func _wings_serve_connection(json client_arg) {
             break;
         }
     }
+    // Release this connection's arena checkpoint (not just rewind it). Pool
+    // workers call this once per connection in a persistent thread; without the
+    // drop the 32-slot checkpoint stack exhausts after 32 connections and the
+    // per-request arena reset silently stops → unbounded leak under churn.
+    arena_drop(wm);
     socket_close(client);
 }
 
@@ -759,7 +1074,7 @@ func _wings_serve_one_request(int client) {
     int wm = arena_save();
     str raw = http_recv_request(client, _wings_max_body_bytes);
     if (length(raw) == 0) {
-        arena_restore(wm);
+        arena_drop(wm);
         return 0;
     }
     json req = http_parse_request(raw);
@@ -769,9 +1084,7 @@ func _wings_serve_one_request(int client) {
     wings_set_current_fd(client);
     str method = req["method"];
     str path = req["path"];
-    if (_wings_quiet == 0) {
-        print("  " + method + " " + path);
-    }
+    float _t0 = clock_ms();
     bool is_options = (method == "OPTIONS");
     if (is_options) {
         _request["params"] = {};
@@ -781,7 +1094,8 @@ func _wings_serve_one_request(int client) {
         str preflight = http_create_response(
             204, "text/plain; charset=utf-8", "", _default_headers, keep);
         socket_send(client, preflight);
-        arena_restore(wm);
+        _wings_log_request(method, path, 204, clock_ms() - _t0, length(preflight));
+        arena_drop(wm);
         return keep;
     }
 
@@ -797,14 +1111,18 @@ func _wings_serve_one_request(int client) {
     _request["cookies"] = wings_cookies(req);
 
     str response = "";
+    int status = 200;
     if (route_idx >= 0) {
         // Shared dispatch (cache fast-path + handler + counters + build).
         response = _wings_dispatch_cached(route_idx, keep);
+        status = _wings_last_status;
     } else {
         _wings_requests_total = _wings_requests_total + 1;
         _wings_requests_4xx = _wings_requests_4xx + 1;
         response = _wings_build_404(path, keep);
+        status = 404;
     }
+    _wings_log_request(method, path, status, clock_ms() - _t0, length(response));
     if (is_head) {
         response = _wings_strip_response_body(response);
     }
@@ -812,11 +1130,11 @@ func _wings_serve_one_request(int client) {
     // `_wings_serve_connection`. Force the caller to close by
     // returning keep=0.
     if (length(response) == 0) {
-        arena_restore(wm);
+        arena_drop(wm);
         return 0;
     }
     socket_send(client, response);
-    arena_restore(wm);
+    arena_drop(wm);
     return keep;
 }
 
@@ -843,6 +1161,17 @@ func listen_evented(int port) {
     if (_find_route("GET", "/metrics") < 0) {
         get("/metrics", "_wings_metrics");
     }
+    // Auto-docs: interactive Swagger UI at /docs backed by /openapi.json,
+    // generated from the registered routes + their body_schema()s. Opt-out by
+    // claiming either path yourself, or disable with TULPAR_WINGS_NODOCS=1.
+    if (length(env("TULPAR_WINGS_NODOCS")) == 0) {
+        if (_find_route("GET", "/openapi.json") < 0) {
+            get("/openapi.json", "_wings_openapi_json");
+        }
+        if (_find_route("GET", "/docs") < 0) {
+            get("/docs", "_wings_docs_html");
+        }
+    }
     _wings_apply_env_config();
     _wings_started_at = timestamp();
 
@@ -855,7 +1184,8 @@ func listen_evented(int port) {
     print("  Routes:");
     for (int i = 0; i < length(_routes); i++) {
         json r = _routes[i];
-        print("    " + r["method"] + " " + r["path"] + " -> " + r["handler"] + "()");
+        print("    " + _wings_c(_wings_method_color(r["method"]), r["method"]) +
+              " " + r["path"] + _wings_c("90", "  →  " + r["handler"] + "()"));
     }
     print("");
     print("  Server: http://127.0.0.1:" + toString(port) + " (single-thread event loop)");
@@ -864,7 +1194,7 @@ func listen_evented(int port) {
 
     int server = socket_server(_wings_bind_host(), port);
     if (server < 0) {
-        print("ERROR: Failed to start server!");
+        _wings_bind_failed(port);
         return;
     }
     socket_set_nonblocking(server);
@@ -873,9 +1203,17 @@ func listen_evented(int port) {
     push(fds, server);  // index 0 = listen socket
 
     while (true) {
+        // Per-tick arena scope: the poll result, the rebuilt fd set and the
+        // closed-slot map are all transient and must be reclaimed each
+        // iteration or the poll loop leaks ~per-request. `fds` itself is the
+        // one persistent array (allocated before the loop) — we mutate it in
+        // place at the bottom rather than reassigning it to a transient array,
+        // so arena_drop can't free it out from under the next tick.
+        int _evt_wm = arena_save();
         // 1s tick gives the loop a chance to bail / be interrupted.
         json ready = socket_poll(fds, 1000);
         if (length(ready) == 0) {
+            arena_drop(_evt_wm);
             continue;
         }
 
@@ -921,7 +1259,16 @@ func listen_evented(int port) {
             }
         }
 
-        fds = next_fds;
+        // Commit survivors into the persistent `fds` in place (clear, then
+        // refill) so the transient `next_fds`/`ready`/`closed` are freed by
+        // the arena_drop below instead of accumulating tick after tick.
+        while (length(fds) > 0) {
+            pop(fds);
+        }
+        for (int k = 0; k < length(next_fds); k++) {
+            push(fds, next_fds[k]);
+        }
+        arena_drop(_evt_wm);
     }
 }
 
@@ -971,6 +1318,17 @@ func listen_pool(int port, int n_workers) {
     if (_find_route("GET", "/metrics") < 0) {
         get("/metrics", "_wings_metrics");
     }
+    // Auto-docs: interactive Swagger UI at /docs backed by /openapi.json,
+    // generated from the registered routes + their body_schema()s. Opt-out by
+    // claiming either path yourself, or disable with TULPAR_WINGS_NODOCS=1.
+    if (length(env("TULPAR_WINGS_NODOCS")) == 0) {
+        if (_find_route("GET", "/openapi.json") < 0) {
+            get("/openapi.json", "_wings_openapi_json");
+        }
+        if (_find_route("GET", "/docs") < 0) {
+            get("/docs", "_wings_docs_html");
+        }
+    }
     _wings_apply_env_config();
     _wings_started_at = timestamp();
 
@@ -983,7 +1341,8 @@ func listen_pool(int port, int n_workers) {
     print("  Routes:");
     for (int i = 0; i < length(_routes); i++) {
         json r = _routes[i];
-        print("    " + r["method"] + " " + r["path"] + " -> " + r["handler"] + "()");
+        print("    " + _wings_c(_wings_method_color(r["method"]), r["method"]) +
+              " " + r["path"] + _wings_c("90", "  →  " + r["handler"] + "()"));
     }
     print("");
     print("  Server: http://127.0.0.1:" + toString(port) + " (worker pool, " + toString(n_workers) + ")");
@@ -992,7 +1351,7 @@ func listen_pool(int port, int n_workers) {
 
     int server = socket_server(_wings_bind_host(), port);
     if (server < 0) {
-        print("ERROR: Failed to start server!");
+        _wings_bind_failed(port);
         return;
     }
 
@@ -1020,6 +1379,17 @@ func listen_async(int port) {
     if (_find_route("GET", "/metrics") < 0) {
         get("/metrics", "_wings_metrics");
     }
+    // Auto-docs: interactive Swagger UI at /docs backed by /openapi.json,
+    // generated from the registered routes + their body_schema()s. Opt-out by
+    // claiming either path yourself, or disable with TULPAR_WINGS_NODOCS=1.
+    if (length(env("TULPAR_WINGS_NODOCS")) == 0) {
+        if (_find_route("GET", "/openapi.json") < 0) {
+            get("/openapi.json", "_wings_openapi_json");
+        }
+        if (_find_route("GET", "/docs") < 0) {
+            get("/docs", "_wings_docs_html");
+        }
+    }
     _wings_apply_env_config();
     _wings_started_at = timestamp();
 
@@ -1032,7 +1402,8 @@ func listen_async(int port) {
     print("  Routes:");
     for (int i = 0; i < length(_routes); i++) {
         json r = _routes[i];
-        print("    " + r["method"] + " " + r["path"] + " -> " + r["handler"] + "()");
+        print("    " + _wings_c(_wings_method_color(r["method"]), r["method"]) +
+              " " + r["path"] + _wings_c("90", "  →  " + r["handler"] + "()"));
     }
     print("");
     print("  Server: http://127.0.0.1:" + toString(port) + " (multi-threaded)");
@@ -1041,7 +1412,7 @@ func listen_async(int port) {
 
     int server = socket_server(_wings_bind_host(), port);
     if (server < 0) {
-        print("ERROR: Failed to start server!");
+        _wings_bind_failed(port);
         return;
     }
 
@@ -1073,29 +1444,129 @@ func listen_async(int port) {
 //
 // The returned object is a json that toJson()/json_response can turn
 // straight into a wire payload.
+// Map a body_schema() field type to a JSON-Schema "type" string.
+func _wings_oapi_type(str want) {
+    if (want == "int")    { return "integer"; }
+    if (want == "num")    { return "number"; }
+    if (want == "float")  { return "number"; }
+    if (want == "bool")   { return "boolean"; }
+    if (want == "array")  { return "array"; }
+    if (want == "object") { return "object"; }
+    if (want == "json")   { return "object"; }
+    return "string"; // str, any
+}
+
+// Turn a body_schema() into an OpenAPI requestBody object (properties +
+// required list), so /docs renders the exact shape the validator enforces.
+func _wings_oapi_body(json schema) {
+    json props = {};
+    array required = [];
+    for (k in keys(schema)) {
+        str want = schema[k];
+        str name = k;
+        int klen = length(k);
+        if (klen > 0 && substring(k, klen - 1, klen) == "?") {
+            name = substring(k, 0, klen - 1);
+        } else {
+            push(required, k);
+        }
+        props[name] = {"type": _wings_oapi_type(want)};
+    }
+    json sch = {"type": "object", "properties": props};
+    if (length(required) > 0) {
+        sch["required"] = required;
+    }
+    return {"required": true, "content": {"application/json": {"schema": sch}}};
+}
+
+// Rewrite a Wings route path into OpenAPI form: `/users/:id` -> `/users/{id}`,
+// which is what Swagger UI expects to bind path parameters.
+func _wings_oapi_path(str path) {
+    array segs = _wings_split_path(path);
+    str out = "";
+    for (s in segs) {
+        str seg = s;
+        if (length(s) > 0 && substring(s, 0, 1) == ":") {
+            seg = "{" + substring(s, 1, length(s)) + "}";
+        }
+        out = out + "/" + seg;
+    }
+    return out;
+}
+
+// Derive OpenAPI path-parameter objects from `:name` segments in a route path.
+func _wings_oapi_params(str path) {
+    array params = [];
+    array segs = _wings_split_path(path);
+    for (s in segs) {
+        if (length(s) > 0 && substring(s, 0, 1) == ":") {
+            str pname = substring(s, 1, length(s));
+            push(params, {"name": pname, "in": "path", "required": true,
+                          "schema": {"type": "string"}});
+        }
+    }
+    return params;
+}
+
 func wings_openapi(str title, str version) {
     json paths = {};
     for (int i = 0; i < length(_routes); i++) {
         json r = _routes[i];
         str path = r["path"];
+        str oapi_path = _wings_oapi_path(path);
         str method_lc = lower(r["method"]);
         // OpenAPI keys path objects on the URL; multiple verbs on the
         // same path land on the same key. We build per-path on-demand.
-        json existing = paths[path];
+        json existing = paths[oapi_path];
         if (!existing) {
             existing = {};
         }
-        existing[method_lc] = {
+        json op = {
             "summary": r["handler"],
             "responses": {"200": {"description": "OK"}}
         };
-        paths[path] = existing;
+        // `:id`-style path params become OpenAPI parameters.
+        array pparams = _wings_oapi_params(path);
+        if (length(pparams) > 0) {
+            op["parameters"] = pparams;
+        }
+        // A body_schema() drives both requestBody and the 422 response doc.
+        json rsch = r["schema"];
+        if (rsch) {
+            op["requestBody"] = _wings_oapi_body(rsch);
+            op["responses"]["422"] = {"description": "Validation Error"};
+        }
+        existing[method_lc] = op;
+        paths[oapi_path] = existing;
     }
     return {
         "openapi": "3.0.0",
         "info": {"title": title, "version": version},
         "paths": paths
     };
+}
+
+// Optional: set the title/version shown in /docs and /openapi.json.
+//   docs_info("Users API", "2.1.0");   // call before serve()
+func docs_info(str title, str version) {
+    _wings_title = title;
+    _wings_version = version;
+}
+
+// Auto-route handlers for the built-in docs endpoints (registered by listen()).
+func _wings_openapi_json() {
+    return wings_openapi(_wings_title, _wings_version);
+}
+
+func _wings_docs_html() {
+    str html = "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">" +
+        "<title>" + _wings_title + " — Docs</title>" +
+        "<link rel=\"stylesheet\" href=\"https://unpkg.com/swagger-ui-dist/swagger-ui.css\">" +
+        "</head><body><div id=\"swagger-ui\"></div>" +
+        "<script src=\"https://unpkg.com/swagger-ui-dist/swagger-ui-bundle.js\"></script>" +
+        "<script>window.onload=function(){SwaggerUIBundle({url:'/openapi.json'," +
+        "dom_id:'#swagger-ui'});};</script></body></html>";
+    return {"_raw": html, "_content_type": "text/html; charset=utf-8"};
 }
 
 // ----- Server loop ---------------------------------------------------------
@@ -1109,30 +1580,47 @@ func listen(int port) {
     if (_find_route("GET", "/metrics") < 0) {
         get("/metrics", "_wings_metrics");
     }
+    // Auto-docs: interactive Swagger UI at /docs backed by /openapi.json,
+    // generated from the registered routes + their body_schema()s. Opt-out by
+    // claiming either path yourself, or disable with TULPAR_WINGS_NODOCS=1.
+    if (length(env("TULPAR_WINGS_NODOCS")) == 0) {
+        if (_find_route("GET", "/openapi.json") < 0) {
+            get("/openapi.json", "_wings_openapi_json");
+        }
+        if (_find_route("GET", "/docs") < 0) {
+            get("/docs", "_wings_docs_html");
+        }
+    }
     _wings_apply_env_config();
     _wings_started_at = timestamp();
 
-    print("");
-    print("  ╔═══════════════════════════════════╗");
-    print("  ║       Tulpar Wings v2.0           ║");
-    print("  ║    Give your API wings! 🪶        ║");
-    print("  ╚═══════════════════════════════════╝");
-    print("");
-    print("  Routes:");
-    for (int i = 0; i < length(_routes); i++) {
-        json r = _routes[i];
-        print("    " + r["method"] + " " + r["path"] + " -> " + r["handler"] + "()");
-    }
-    print("");
-    print("  Server: http://127.0.0.1:" + toString(port));
-    print("  Press Ctrl+C to stop");
-    print("");
-
-    int server = socket_server(_wings_bind_host(), port);
+    // Resolve the port + bind first so the banner shows the real port (the
+    // default path may have walked past a busy 8484).
+    json _bind = _wings_bind(port);
+    int server = _bind["fd"];
     if (server < 0) {
-        print("ERROR: Failed to start server!");
+        _wings_bind_failed(port);
         return;
     }
+    int _port = _bind["port"];
+
+    print("");
+    print(_wings_c("36", "  ╔═══════════════════════════════════╗"));
+    print(_wings_c("1;36", "  ║       Tulpar Wings v2.0           ║"));
+    print(_wings_c("36", "  ║    Give your API wings! 🪶        ║"));
+    print(_wings_c("36", "  ╚═══════════════════════════════════╝"));
+    print("");
+    print("  " + _wings_c("1", "Routes:"));
+    for (int i = 0; i < length(_routes); i++) {
+        json r = _routes[i];
+        print("    " + _wings_c(_wings_method_color(r["method"]), r["method"]) +
+              " " + r["path"] + _wings_c("90", "  →  " + r["handler"] + "()"));
+    }
+    print("");
+    print("  " + _wings_c("1", "Server:") + "  " +
+          _wings_c("1;32", "http://127.0.0.1:" + toString(_port)));
+    print(_wings_c("90", "  Press Ctrl+C to stop"));
+    print("");
 
     // Arena watermark taken once at server start. Every request below
     // saves/restores against this baseline so transient request
@@ -1158,9 +1646,7 @@ func listen(int port) {
 
             str method = req["method"];
             str path = req["path"];
-            if (_wings_quiet == 0) {
-                print("  " + method + " " + path);
-            }
+            float _t0 = clock_ms();
 
             int keep = http_should_keepalive(req);
 
@@ -1174,6 +1660,7 @@ func listen(int port) {
                 str preflight = http_create_response(
                     204, "text/plain; charset=utf-8", "", _default_headers, keep);
                 socket_send(client, preflight);
+                _wings_log_request(method, path, 204, clock_ms() - _t0, length(preflight));
                 _wings_requests_total = _wings_requests_total + 1;
                 _wings_requests_2xx = _wings_requests_2xx + 1;
                 arena_restore(_wings_arena_wm);
@@ -1198,14 +1685,18 @@ func listen(int port) {
             _request["params"] = route_match["params"];
             _request["cookies"] = wings_cookies(req);
             str response = "";
+            int status = 200;
             if (route_idx >= 0) {
                 // Shared dispatch (cache fast-path + handler + counters + build).
                 response = _wings_dispatch_cached(route_idx, keep);
+                status = _wings_last_status;
             } else {
                 _wings_requests_total = _wings_requests_total + 1;
                 _wings_requests_4xx = _wings_requests_4xx + 1;
                 response = _wings_build_404(path, keep);
+                status = 404;
             }
+            _wings_log_request(method, path, status, clock_ms() - _t0, length(response));
             if (is_head) {
                 response = _wings_strip_response_body(response);
             }

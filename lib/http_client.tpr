@@ -64,3 +64,36 @@ func http_post_json(str url, json data) {
     }
     return r;
 }
+
+// ============================================
+// Async HTTP client (non-blocking)
+// ============================================
+//
+// `http_request_async(method, url, body)` returns a promise instead of
+// blocking. The request runs on a worker pool while the async event loop
+// keeps pumping other coroutines, so many requests can be in flight at once:
+//
+//     async func fetch_two(str a, str b) {
+//         json r = await gather(http_get_async(a), http_get_async(b));
+//         return r;   // both fetched concurrently — total time ~ max(a, b)
+//     }
+//
+// Each helper returns a promise; `await` it (directly or via gather()). The
+// resolved value is the same { ok, status, headers, body } envelope as the
+// blocking client. Pool size defaults to 4 (TULPAR_HTTP_POOL to override).
+
+func http_get_async(str url) {
+    return http_request_async("GET", url, "");
+}
+
+func http_post_async(str url, str body) {
+    return http_request_async("POST", url, body);
+}
+
+func http_put_async(str url, str body) {
+    return http_request_async("PUT", url, body);
+}
+
+func http_delete_async(str url) {
+    return http_request_async("DELETE", url, "");
+}
