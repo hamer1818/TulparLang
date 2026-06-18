@@ -8,9 +8,10 @@ import "wings";
 // how many worker threads call it — the bottleneck this test is meant to find.
 int _db = db_open("/tmp/stress.db");
 
-// Optional WAL + busy timeout (set WINGS_DB_WAL=1). For a *shared* handle this
-// changes little (the internal mutex still serializes); it matters for the
-// per-connection-handle pattern, which Tulpar's API doesn't expose yet.
+// NOTE: as of 2026-06-18 db_open() already enables WAL + synchronous=NORMAL +
+// busy_timeout=5000 by default for file-backed DBs (opt out: TULPAR_DB_NO_WAL=1),
+// so no PRAGMA is needed here. This block is kept only to force-reaffirm WAL if
+// someone runs with WINGS_DB_WAL=1 while also setting TULPAR_DB_NO_WAL.
 if (length(env("WINGS_DB_WAL")) > 0) {
     db_execute(_db, "PRAGMA journal_mode=WAL");
     db_execute(_db, "PRAGMA synchronous=NORMAL");

@@ -113,23 +113,25 @@ serializes through SQLite's internal mutex.
    contention. Counter-intuitive but it's the shared-handle serialization
    showing through. For DB-bound endpoints, fewer threads can be faster.
 3. **WAL is a big win for writes**: rollback 8.8k → **WAL 20.4k RPS** (2.3×),
-   and tighter p99 (5.1ms → 2.2ms). Enable it
-   (`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=…`).
+   and tighter p99 (5.1ms → 2.2ms). **As of 2026-06-18 `db_open` enables WAL +
+   `synchronous=NORMAL` + `busy_timeout=5000` by default** for file-backed DBs
+   (opt out with `TULPAR_DB_NO_WAL=1`), so this win is now on out of the box.
 4. Even DB-bound, Wings does **24–32k reads / 9–20k writes per second** —
    comfortably above a typical Python+ORM stack (~1–5k). RSS stayed 11–12 MB
    (includes SQLite page cache); no leak in the DB path.
 
 **The real ceiling is SQLite shared-handle serialization, not the HTTP layer.**
-To make DB *reads* scale across cores you need a **handle per thread/connection
-+ WAL** (independent connections read in parallel under WAL) — Tulpar's
-`db_open` API doesn't expose per-thread handles yet, and `db_open` sets no
-`busy_timeout`/WAL by default. Those are the highest-leverage next steps for
-DB-heavy workloads.
+`db_open` now sets `busy_timeout` + WAL by default (above), which lifts writes.
+The remaining highest-leverage step for DB *reads* is a **handle per
+thread/connection** so independent connections read in parallel under WAL —
+Tulpar's `db_open` API doesn't expose per-thread handles yet.
 
-Reproduce: `WINGS_MODE=pool WINGS_DB_WAL=1 ./tulpar benchmarks/stress_db_server.tpr`
-then `benchmarks/loadtest 127.0.0.1 8585 14 5 GET /users/500`.
+Reproduce: `WINGS_MODE=pool ./tulpar benchmarks/stress_db_server.tpr`
+then `benchmarks/loadtest 127.0.0.1 8585 14 5 GET /users/500` (writes:
+`… 14 5 POST /users '{"name":"X"}'`). `TULPAR_DB_NO_WAL=1` reverts to rollback.
 
-> Side note: `db_last_insert_id` emits a benign LLVM "Call parameter type does
-> not match function signature" verifier message at codegen (the call passes a
-> `{i64,i64}` VMValue where a scalar is declared) — output is correct, but the
-> declaration should be fixed.
+> Resolved 2026-06-18: `db_last_insert_id`/`db_error` were declared in codegen
+> with the by-pointer db type while their runtime impls take a VMValue by value,
+> so every DB program failed LLVM module verification with a benign "Call
+> parameter type does not match function signature" (output was still correct).
+> Fixed by declaring them with the by-value signature.

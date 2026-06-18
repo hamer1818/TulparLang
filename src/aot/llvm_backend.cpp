@@ -1738,13 +1738,19 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_db_query =
       LLVMAddFunction(backend->module, "aot_db_query_ptr", db_exec_type);
 
-  // aot_db_last_insert_id(db) -> int64
+  // aot_db_last_insert_id(db) -> int64 and aot_db_error(db) -> string take the
+  // db handle VMValue BY VALUE (their runtime impls are
+  // VMValue aot_db_*(VMValue)), unlike the other db_* fns which use the _ptr
+  // (by-pointer) convention. Declaring them with the ptr type (db_open_type)
+  // while the call site passes a VMValue by value made the module fail LLVM
+  // verification ("Call parameter type does not match function signature").
+  LLVMTypeRef db_byval_params[] = {backend->vm_value_type};
+  LLVMTypeRef db_byval_type =
+      llvm_make_vmvalue_func_type(backend, db_byval_params, 1, 0);
   backend->func_aot_db_last_insert_id =
-      LLVMAddFunction(backend->module, "aot_db_last_insert_id", db_open_type);
-
-  // aot_db_error(db) -> string
+      LLVMAddFunction(backend->module, "aot_db_last_insert_id", db_byval_type);
   backend->func_aot_db_error =
-      LLVMAddFunction(backend->module, "aot_db_error", db_open_type);
+      LLVMAddFunction(backend->module, "aot_db_error", db_byval_type);
 
   // ====== Type Checking Functions ======
   LLVMTypeRef type_check_params[] = {backend->vm_value_type};

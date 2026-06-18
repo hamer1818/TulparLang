@@ -267,8 +267,19 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
     20.4k** (2.3×). Asıl darboğaz **HTTP değil, SQLite paylaşımlı-handle
     serileştirmesi** (THREADSAFE serialized mutex): read'ler pool worker'larıyla
     ölçeklenmiyor, hatta tek-thread evented mutex çekişmesi olmadığı için pool'u
-    geçiyor. Sonraki adım: thread/bağlantı-başına db handle + WAL (paralel read),
-    `db_open`'a varsayılan busy_timeout. Detay → `benchmarks/WINGS_STRESS.md`.
+    geçiyor. Detay → `benchmarks/WINGS_STRESS.md`.
+  - ✅ **DB varsayılanları + `db_last_insert_id`/`db_error` signature fix
+    (2026-06-18):** `db_open` artık server-dostu varsayılanlar uyguluyor —
+    `busy_timeout=5000` (SQLITE_BUSY yerine bekle-tekrar dene) + dosya-tabanlı
+    DB'lerde **WAL + synchronous=NORMAL** (write throughput stres testinde
+    **8.8k → 20.4k RPS / 2.3×**, artık env'siz varsayılan; `:memory:` atlanır,
+    `TULPAR_DB_NO_WAL=1` ile opt-out). `db_close`'da WAL dosyaları temizleniyor.
+    Ayrıca `db_last_insert_id` ve `db_error` codegen'de `db_open_type` (ptr) ile
+    deklare ediliyordu ama runtime impl'leri VMValue-by-value — çağrı by-value
+    geçtiği için LLVM **module verification** her DB programında uyarı basıyordu;
+    by-value tipiyle deklare edilerek düzeltildi (çıktı zaten doğruydu, artık
+    temiz). Kalan DB adımı: thread/bağlantı-başına handle (paralel read).
+    Detay → `benchmarks/WINGS_STRESS.md`.
   - ✅ **Aşama 2 — fonksiyon-referans handler'ları + `req` parametresi
     (codegen/dil):**
     - **Fonksiyon adı değer olarak:** bir bare üst-seviye `func` adı codegen'de
