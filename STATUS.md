@@ -1,6 +1,6 @@
 # TulparLang — Durum ve Yol Haritası
 
-> **Motto:** Python kadar kolay, C kadar hızlı — hızlı API yazma dili.
+> **Motto:** Python kadar kolay, C kadar hızlı — Genel amaçlı dil.
 
 Bu dosya, projenin tek "ne durumda?" referansıdır. Eski `EKSIKLER.md`
 (60 madde, hepsi RESOLVED) ve `OZET.md` (faz-bazlı tarihçe) bu dosyada
@@ -12,7 +12,10 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 ## 📊 Mevcut durum (özet)
 
 - **Çekirdek sözdizimi tam:** statik tipler, fonksiyonlar (opsiyonel
-  dönüş-tipi notasyonu), kontrol akışı, modüller (`import "x" as alias`).
+  dönüş-tipi notasyonu, **eksik trailing arg → 0 ile padlenir**), kontrol akışı,
+  modüller (`import "x" as alias`), **t-string interpolation** (`t"x={n}"`),
+  coerce-eden `+`, `let`/`var`, for-each (`for (x in coll)`), string escape
+  `\e` (ESC, ANSI renkleri için) + `\0`.
 - **Tek backend — AOT-only (2026-06-15):** LLVM 18 AOT tek yürütme yolu
   (C/Rust/Go modeli). Bytecode VM yorumlayıcısı (`vm_run`), bytecode
   derleyicisi (`compiler.cpp`) ve REPL **kaldırıldı**; `--vm`/`--run`
@@ -26,6 +29,22 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   WASM. `libtulpar_runtime.a` AOT'a static link.
 - **Stdlib gömülü:** wings, router, http_utils, http_client, async,
   middleware, socket, tulpar_api, orm, test. SQLite vendored.
+- **Wings ergonomisi (FastAPI seviyesi):** fonksiyon-ref handler'lar
+  (`get("/users", list_users)`, typo=derleme hatası), `req` parametresi
+  (`req.params.id`, `req.json`), response helper'ları (`ok/created/not_found/…`),
+  otomatik body parse, **görünmez auto-persist** (global'e yazım manuel
+  `persist()`'siz kalıcı), **şema doğrulama** (`body_schema({"name":"str"})` →
+  geçersiz gövde handler'a girmeden otomatik 422), **otomatik /docs** (Swagger
+  UI + /openapi.json, route'lardan + şemalardan üretilir) ve **markalı varsayılan
+  port** — `serve()` (port'suz) → 8484 (ASCII 'T'=84, "Tulpar portu"), doluysa
+  otomatik +1; `serve(8080)` açık port → doluysa kullanıcıyı bilgilendirir.
+  Karşılaştırma: `tests/compare_{wings,fastapi}_users_api` +
+  `benchmarks/WINGS_VS_FASTAPI.md`.
+- **async/await v1 tam:** stackful coroutine + event loop, `sleep_async`
+  (non-blocking timer), `gather(...)` (eşzamanlı), **gerçek async I/O** —
+  non-blocking HTTP client (`http_request_async`, worker pool) — ve `reject/try`
+  hata yayılımı (coroutine-aware exception context). 16 parametreye kadar async
+  fn. Detay: Açık eksikler → Dil seviyesi.
 - **Pkg manager:** `init/add/install/publish` + semver (`^`, `~`,
   `>=,<`) + lockfile + `.tpkg` multi-file bundle. Canlı registry
   `api.pkg.tulparlang.dev` (tulpar-be, Tulpar'da yazılmış).
@@ -43,6 +62,23 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Çekirdek dil + derleme zinciri
 
+- **Ergonomi turu (2026-06-16) — "Python kadar kolay" sertleştirmesi:**
+  - ✅ **t-string interpolation:** `t"total: {n} adet"` — her `{expr}`
+    değerlendirilip birleştirilir (Python f-string tarzı). Lexer
+    `TOKEN_TSTRING_LITERAL` (nesting-aware sonlandırma: iç `{req["path"]}`
+    tırnakları/parantezleri doğru atlar), parser coerce-eden `+` zincirine
+    desugar eder (`src/parser/parser.cpp build_tstring`). Her zaman `str`
+    üretir; `\{`/`\}` literal parantez. `examples/38_tstring.tpr`,
+    `tests/tstring.test.tpr` (13/13).
+  - ✅ **`str + <non-string>` artık coerce ediyor** (önceden sessizce `0`
+    dönen footgun). `"n = " + 5` → `"n = 5"`; her iki taraf da çevrilir
+    (`aot_string_concat_fast` + `vm_binary_op` PLUS, `runtime_bindings.cpp`).
+    string+string fast-path korundu.
+  - ✅ **`let` = `var` aliası** — lexer'da `TOKEN_VAR`'a eklendi; artık
+    `[typecheck] Unknown type 'let'` uyarısı yok.
+  - ✅ **for-each doc bug** düzeltildi — reference (EN+TR) `for (x in coll)`'in
+    çalıştığını yanlış "yok" diyordu; gerçek (dizi/string/`range(n)`, object
+    hariç) belgelendi.
 - **Parser/codegen sertleştirmesi (2026-04 turu, EKSIKLER #1-47):**
   postfix-after-unary, recursive forward reference, `func name(...): T`
   syntax, AOT cross-platform (Windows MSYS2, MSVC `gettimeofday`,
@@ -97,6 +133,159 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### HTTP runtime (Wings/Router native)
 
+- **Wings ergonomi turu (2026-06-16) — "az satır" API yazımı:**
+  - ✅ **Response helper'ları** (`lib/wings.tpr`): `ok()`, `created()` (201),
+    `no_content()` (204), `bad_request()` (400), `unauthorized()` (401),
+    `forbidden()` (403), `not_found()` (404), `conflict()` (409),
+    `server_error()` (500), `text()`, `with_status()`. Handler `{"_status":N}`
+    envelope'unu elle yazmak yerine niyeti ifade ediyor.
+  - ✅ **Otomatik JSON body parse:** dispatcher `_request["json"]`'ı handler'dan
+    önce dolduruyor (gövde JSON ise) — `fromJson(_request["body"])` boilerplate'i
+    kalktı. `serve(port)` = `listen(port)` aliası.
+  - ✅ **`persist(value)` builtin'i** (`aot_persist`, runtime_bindings.cpp) — bir
+    değeri kalıcı (malloc, `arena_allocated=0`, ARC) belleğe **recursive derin
+    kopyalar**, böylece istek-handler'ında üretilen veri uzun-ömürlü bir global'e
+    güvenle konabilir: `push(_users, persist(u))`. Bu olmadan per-request
+    `arena_restore` objeyi geri alıp global'i dangling pointer'a düşürüyor →
+    sonraki istekte **segfault** (in-memory CRUD'un klasik footgun'u). `clone`
+    builtin'i aynalanarak codegen'e bağlandı. **ASan ile kanıtlandı:** gerçek
+    POST×2→GET arena-reset senaryosu altında 0 hata; `tests/persist.test.tpr`
+    4/4 (derin-kopya bağımsızlığı dahil). `persist()` artık explicit araç olarak
+    kalıyor; gündelik kod için aşağıdaki **auto-persist** onu gereksizleştirdi.
+  - ✅ **Görünmez auto-persist (2026-06-17) — write-barrier (codegen):** istek
+    verisi bir **global'e** yazıldığında (`push(_users, u)`, `_users[i]["name"]=v`,
+    `_g = v`) derleyici RHS'i otomatik `aot_persist`'ler — manuel `persist()`
+    gerekmez. `src/aot/llvm_backend.cpp`: yeni `is_global_var()` (scope'ta yoksa
+    + `LLVMGetNamedGlobal` varsa global) + `lvalue_root_name()` (atama hedefinin
+    kök identifier'ı, `_users[i]["k"]`→`_users`); push/index-set/var-assign
+    codegen'ine barrier enjekte edildi. **Yalnızca global-köklü yazımlar**
+    persist'lenir → response objeleri / scratch dizileri (yerel) dokunulmaz,
+    sıcak yol bedava ve sızıntısız; skaler global'ler de no-op (`aot_persist`
+    scalar passthrough). Bilinen boşluk: global elemanını yerele alias'layıp
+    yazmak (`let x=g[i]; x[k]=v`) barrier'ı atlar — o durumda `persist()` hâlâ
+    var. `examples/demo_users_api.tpr` ve `tests/compare_wings_users_api.tpr`
+    artık `persist()`'siz; canlı CRUD (PUT→DELETE→sonraki-GET) bozulmasız.
+    `tests/autopersist.test.tpr` 4/4 (arena_save/restore döngüsüyle barrier'ı
+    doğrudan sınar). Tüm örnekler + 24 focused suite yeşil.
+  - ✅ **Şema doğrulama + otomatik /docs (2026-06-17) — FastAPI paritesi
+    (lib/wings.tpr):**
+    - **`body_schema(schema)`** route'a JSON-gövde şeması iliştirir
+      (`{"name":"str","age?":"int"}` — `?` opsiyonel; tipler str/int/float/num/
+      bool/array/object/json/any). Dispatcher handler'dan ÖNCE doğrular; uymazsa
+      **otomatik 422** + tüm hatalı alanları tek seferde döner
+      (`{"error":"validation failed","fields":{...}}`) — geçersiz gövde user
+      koduna hiç girmez. `{"name":123}` → `422 "expected str, got int"` (tam da
+      kıyaslamada Wings'in tek kaybettiği nokta, artık kapandı). Saf Tulpar,
+      C değişikliği yok (`typeof`+`keys`). `tests/validation.test.tpr` 5/5.
+    - **Otomatik `/docs` + `/openapi.json`:** `listen()` artık Swagger UI'yı
+      (`/docs`) ve OpenAPI 3.0 belgesini (`/openapi.json`) otomatik kaydeder
+      (opt-out: `TULPAR_WINGS_NODOCS=1`). Belge route'lardan türer; `:id` path
+      param'ları `{id}`'ye + parametre nesnesine, `body_schema` requestBody +
+      422 yanıtına dönüşür. `docs_info(title, version)` başlığı/sürümü ayarlar.
+  - ✅ **Zengin erişim logu (timestamp + latency + size) + banner (2026-06-18, UI):**
+    Wings access log'u artık `  [HH:MM:SS] <method> <status> <path>  → <latency>  - <size>`
+    formatında ve tamamen renkli — timestamp dim, method'a göre (GET yeşil, POST
+    sarı, PUT mavi, DELETE kırmızı, PATCH magenta, HEAD cyan, OPTIONS dim) +
+    **status sınıfına göre** (2xx yeşil, 3xx cyan, 4xx sarı, 5xx kırmızı), **latency
+    eşiğe göre** (<50ms yeşil, <500ms sarı, ≥500ms kırmızı), size dim. Method 7
+    sütuna padlenip status'ler hizalanıyor
+    (`_wings_log_request(method, path, status, ms, bytes)`). Yardımcılar:
+    `_wings_now_hms` (UTC ISO-8601'den `substring(...,11,19)`), `_wings_fmt_ms`
+    (**adaptif**: <1ms ise mikrosaniye `34µs` — AOT sunucunun hızı 0.0ms'ye
+    çökmeden görünür, üstü `12.4ms`; tenths `mod()`/`toInt(round(...))` ile, çünkü
+    Tulpar'da `/` float operandla float bölme yapıyor ve `%` operatörü yok),
+    `_wings_fmt_bytes` (B/KB/MB), `_wings_latency_color`, `_wings_method_color`,
+    `_wings_status_color`. Latency serve loop'unda `clock_ms()` ile dispatch
+    etrafında, size `length(response)` ile ölçülüyor. Status handler'dan sonra
+    bilindiği için `_wings_dispatch_cached` her return'de `_wings_last_status`'u
+    yazıyor, log serve loop'unda response belirlendikten SONRA basılıyor
+    (matched→dispatch status, 404→404, OPTIONS→204) — 3 serve loop'unda da. Canlı
+    ölçüm: GET 34µs/5µs/4µs, POST 9µs, 404 4µs, 500 18µs (sub-10µs dispatch).
+    Başlangıç banner'ı
+    (kutu cyan, başlık bold, route method'ları renkli + handler dim, Server URL
+    bold yeşil, Ctrl+C dim). `_wings_c(code, text)` SGR sarmalayıcısı; **NO_COLOR**
+    env'i renkleri kapatıyor (`_wings_color`, config'te snapshot —
+    pipe/redirect'te temiz çıktı). Dil tarafı: lexer + t-string parser'a
+    `\e`→ESC (27) escape'i eklendi. Not: `lib/*.tpr` (gömülü stdlib) değişince
+    `./build.sh clean` gerekir — WSL'de incremental build embedded'ı stale
+    bırakabiliyor.
+  - ✅ **Varsayılan parametre + markalı port (2026-06-18):**
+    - **Default-arg desteği (dil, codegen+typeinfer):** bir fonksiyon
+      bildirdiğinden az arg ile çağrılınca eksik trailing slot'lar derleyicide
+      box'lı 0 ile padlenir (`src/aot/llvm_backend.cpp` typed-call yolu); eskiden
+      LLVM modül doğrulaması "Incorrect number of arguments" ile patlıyordu.
+      typeinfer artık yalnızca **fazla** arg'da hata verir (eksik → izinli).
+      `tests/defaultargs.test.tpr` 3/3.
+    - **`serve()` markalı varsayılan port:** port'suz `serve()`/`listen()`
+      (arg 0'a padleniyor) → **8484** (`_WINGS_DEFAULT_PORT`; ASCII 'T'=84,
+      ikili `01010100`, "Tulpar portu"). `_wings_bind(port)`: port≤0 ise 8484'ten
+      başlayıp 20 porta kadar **otomatik +1** (boştakini bağlar, banner gerçek
+      port'u gösterir); port>0 ise tek dener, doluysa `_wings_bind_failed` ile
+      **kullanıcıyı bilgilendirir** (sessizce kaydırmaz). Tüm 4 listen varyantı
+      ortak yardımcı mesajı kullanıyor.
+    - **`socket_server`'dan `SO_REUSEPORT` kaldırıldı** (`runtime_bindings.cpp`):
+      varlığında iki bağımsız süreç aynı portu paylaşıp bind "fail" etmiyordu →
+      fallback/bilgilendirme tetiklenmiyordu. `listen_pool` tek fd'yi worker'lara
+      `accept()` ettirdiği için re-bind yok, REUSEPORT'a ihtiyaç yok;
+      `SO_REUSEADDR` (hızlı restart) kalıyor.
+    - Doğrulandı: `serve()`→8484; 8484 doluyken `serve()`→8485; `serve(8484)`
+      doluyken bilgilendirir; `serve(8080)` (Windows Express dolu) bilgilendirir.
+      `examples/demo_users_api.tpr` + `tests/compare_wings_users_api.tpr` artık
+      `serve()` kullanıyor (port çakışması olmadan çalışır).
+  - 📊 **Benchmark — Wings vs FastAPI (2026-06-17, `benchmarks/`):** aynı CRUD;
+    `wings_vs_fastapi.py` (dep'siz çoklu-proses load client — native wrk/hey
+    yokluğunda RPS yumuşak tavan, latency gerçek sinyal). Sonuç: Wings p50
+    **0.33 ms** vs FastAPI **28 ms** (~85× düşük; Wings işlem ~10 µs, gerisi
+    serial kuyruk); idle RSS **6.7 MB** vs 51 MB; binary **2.1 MB** tek dosya vs
+    Python runtime. RPS ~3000 (Wings serial `serve()` tavanı) vs ~2250 — ikisi de
+    client-bound. Benchmark **istek-başına ~2.6 KB bellek sızıntısı** ortaya
+    çıkardı (RSS sınırsız büyüyordu) — aynı gün **per-request malloc region +
+    runtime write-barrier ile çözüldü** (RSS artık düz; ASan temiz). Detay →
+    Açık eksikler / Runtime + codegen.
+  - 📊 **Stres testi — maksimum yük & latency (2026-06-18, `benchmarks/`):**
+    çok-thread'li C load generator (`loadtest.c`, 1µs histogram, keep-alive +
+    Connection:close modları) + `run_stress.sh`. 14 CPU'da tepe değerler:
+    `serve` (varsayılan, tek bağlantı) **4.2k RPS** / p50 230µs;
+    `listen_pool` (14 worker) çekirdek sayısına **lineer** ölçekleniyor → tepe
+    **~39.8k RPS** / p50 360µs (CPU-bound handler'larda en iyi, en sıkı p99);
+    `listen_evented` (tek thread, poll-multiplexed) hafif handler'da **57.8k
+    RPS** (en yüksek ham RPS). Tüm modlar 200+ eşzamanlı bağlantı ve 500k+ istek
+    altında **6.9–8.4 MB RSS'te düz**, `err=0`. **Kritik bulgu+düzeltme:** close
+    modu **arena-checkpoint tükenmesi** sızıntısını ortaya çıkardı — pool RSS
+    9.1 GB'a fırladı. Kök neden: 32-slot checkpoint stack'i (`arena_restore`
+    checkpoint'i koruyor, `top=idx+1`), pool/evented kalıcı thread'de bağlantı/
+    istek başına `arena_save` yapıp serbest bırakmıyor → 32'den sonra
+    `arena_save` -1 döndürüp tüm reset'ler no-op oluyordu. Çözüm: yeni runtime
+    primitifi **`arena_drop(handle)`** (rewind + checkpoint'i POP eder,
+    `arena_save`'in scope-çıkış eşi) — `_wings_serve_connection`/
+    `_wings_serve_one_request` çıkışta drop ediyor; `listen_evented` ayrıca her
+    poll tick'ini arena scope'una alıp kalıcı `fds` dizisini **yerinde**
+    (clear+refill) güncelliyor. Sonrası: pool 481k istekte **8.4 MB düz**,
+    evented 293k istekte **6.9 MB düz**. **DB-bağlı test** (`stress_db_server.tpr`,
+    SQLite 1000 satır, global paylaşımlı handle — `orm`'in deseni): read-by-PK
+    pool **23.8k** / evented **29–32k RPS**, write rollback **8.8k** → **WAL
+    20.4k** (2.3×). Asıl darboğaz **HTTP değil, SQLite paylaşımlı-handle
+    serileştirmesi** (THREADSAFE serialized mutex): read'ler pool worker'larıyla
+    ölçeklenmiyor, hatta tek-thread evented mutex çekişmesi olmadığı için pool'u
+    geçiyor. Sonraki adım: thread/bağlantı-başına db handle + WAL (paralel read),
+    `db_open`'a varsayılan busy_timeout. Detay → `benchmarks/WINGS_STRESS.md`.
+  - ✅ **Aşama 2 — fonksiyon-referans handler'ları + `req` parametresi
+    (codegen/dil):**
+    - **Fonksiyon adı değer olarak:** bir bare üst-seviye `func` adı codegen'de
+      adının string sabitine indiriliyor (`src/aot/llvm_backend.cpp`
+      AST_IDENTIFIER fallback'i). Böylece `get("/users", list_users)` çalışıyor
+      (dispatch zaten `call(string)`) ve **yanlış isim derleme hatası** —
+      sessiz runtime 404 değil. Forward-reference çalışıyor (handler aşağıda
+      tanımlı olabilir). Fonksiyon *çağrıları* `foo()` etkilenmez (ayrı AST).
+    - **`req` parametresi:** yeni `aot_call_dynamic_1(name, arg)` runtime +
+      `call(h, arg)` 2-arg codegen formu; Wings dispatcher artık her handler'a
+      `_request`'i geçiyor (`call(route["handler"], _request)`). 0-param
+      handler'lar ekstra argümanı **ABI-güvenli** yok sayar, `func h(req)`
+      olanlar alır — ikisi de çalışır.
+    - **Keyword field erişimi:** parser `.field` konumunda tip-keyword'lerini
+      de kabul ediyor (`req.json`, `obj.type` → `["json"]`/`["type"]`).
+    - İdeal API (`examples/demo_users_api.tpr`) uçtan uca canlı doğrulandı;
+      `tests/funcref.test.tpr` 4/4. 23 focused suite + tüm örnekler yeşil.
 - **Native HTTP parser:** `http_parse_request(raw)`,
   `path_match(pattern, path)` (Express-style, `:id` capture, `*`
   wildcard), `parse_query(str)` URL-decoded, `http_status_text(int)`
@@ -183,6 +372,16 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   düşüş — `make_client_tls_ctx` + `apply_tls_hostname_check` hem
   `tulpar pkg install` hem `http_request` builtin'inden geçer,
   handshake hatası mesajında `cert verify: …` detayı taşır.
+- **Async HTTP client (non-blocking):** `http_request_async(method, url, body)`
+  builtin + `lib/http_client.tpr`'de `http_get_async`/`http_post_async`/
+  `http_put_async`/`http_delete_async` sarmalayıcıları. Promise döner; istek bir
+  worker thread pool'da (`TULPAR_HTTP_POOL`, default 4) koşarken async event loop
+  diğer coroutine'leri pompalamaya devam eder — worker yalnız ağ bacağını yapar,
+  ana thread tampondan VM nesnesini kurup promise'i settle eder. Loop
+  entegrasyonu `aot_io_register` ile (`runtime/tulpar_async.cpp`); sonuç sync
+  client ile aynı `{ok, status, headers, body}` zarfı. `examples/37_async_http.tpr`
+  (gerçek concurrency, yerel sunucu thread'i) suite'te PASS. Detay: async/await
+  bölümü.
 - **Kripto / encoding builtins:** `sha1(s)` (20-bayt ikili),
   `sha1_hex(s)` (40 hex), `base64_encode(s)`, `base64_decode(s)`,
   `wings_ws_accept_key(s)` (RFC 6455 §4.2.2 base64+sha1+GUID).
@@ -288,6 +487,20 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   round-trip'i doğruluyor. `vscode-tulpar` v0.4.0
   `contributes.debuggers` (`type: "tulpar"`) + `breakpoints` +
   `tulpar.debug` komutu ile F5 ergonomi.
+- **Editör DX turu (2026-06-16) — `vscode-tulpar` v0.5.0:**
+  - **LSP completion genişledi** (`src/lsp/builtins.cpp`): Wings helper'ları
+    (`ok`/`created`/`not_found`/`bad_request`/`unauthorized`/`forbidden`/
+    `conflict`/`server_error`/`no_content`/`text`/`with_status`),
+    `get`/`post`/`put`/`del`/`serve` ve `persist` artık tamamlamada. LSP
+    smoke (`tests/lsp_smoke.py`) ALL PASSED.
+  - **Snippet'ler** (tulpar-ext): `twings`/`tasync` modern stile güncellendi
+    (fonksiyon-ref + `req` + `ok()` + `serve()`; gerçek `async func`/`await`),
+    13 yeni snippet (`tcrud` tam CRUD, `tget`/`tpost`, `tok`/`tcreated`/`t404`/
+    `t400`, `tpersist`, `tt` t-string, `tmatch`, `tawait`/`tgather`/`thttpgeta`).
+  - **Grammar** (`tulpar.tmLanguage.json`): t-string `t"..{expr}.."` (embedded
+    highlight), `async`/`await`/`match` keyword'leri, 35+ yeni builtin.
+  - Stale AOT-only yorumları + `--vm`/`--repl` notları düzeltildi. (`.vsix`
+    paketleme `vsce` ile yapılır — bu ortamda kurulu değil.)
 
 ### Test harness
 
@@ -420,11 +633,98 @@ girildiğinde ne yapacağımı bilelim.
     süre `max(task)`, `sum` değil). Promise olmayan argümanlar olduğu gibi geçer.
     Bir gather-coroutine her çocuğu sırayla `await` eder; çocuklar zaten kuyrukta
     olduğundan paralel ilerler (`aot_gather`, `runtime/tulpar_async.cpp`).
-  - **Kalan (🟡):** (1) reject/try üzerinden hata yayılımı, gerçek async I/O
-    (şu an timer + compute) sonraki turlar. (2) `>8` parametreli async fn
-    desteklenmiyor. (VM paritesi yok — AOT-only.)
+  - ✅ **Gerçek async I/O — async HTTP client ÇALIŞIYOR.**
+    `http_request_async(method, url, body)` (ve `lib/http_client.tpr`'deki
+    `http_get_async`/`http_post_async`/`http_put_async`/`http_delete_async`
+    sarmalayıcıları) bloklamayan bir promise döner; istek bir **worker thread
+    pool** üzerinde koşarken event loop diğer coroutine'leri pompalamaya devam
+    eder. Worker yalnızca ağ bacağını (`http_request_url`) yapıp std::string
+    doldurur; ana thread tampondan VM nesnesini kurup promise'i settle eder —
+    scheduler'a worker'dan dokunulmaz, devir tek atomik bayrakla olur. Loop
+    entegrasyonu `aot_io_register(poll, ud)` ile (`runtime/tulpar_async.cpp`):
+    `loop_step` her tick I/O kaynaklarını yoklar, hiçbir şey hazır değilken
+    `kIoPollMs`=1ms ile bekler. Havuz boyutu 4 (env `TULPAR_HTTP_POOL`).
+    `examples/37_async_http.tpr` (gerçek concurrency, yerel sunucu thread'i)
+    suite'te PASS; in-flight HTTP sırasında timer-tabanlı coroutine'in
+    ilerlediği doğrulandı.
+  - ✅ **Async fn parametre limiti 8 → 16.** `call_user_fn` (tek arity-bağımlı
+    nokta; codegen zaten flat VMValue array + argc ile çağırıyor)
+    `runtime/tulpar_async.cpp` içinde 9–16 case'leriyle genişletildi. 16 param +
+    karışık tip doğrulandı (`/tmp` smoke). >16 hâlâ net hata mesajı verir.
+  - ✅ **reject/try hata yayılımı ÇALIŞIYOR.** Bir `async func` içindeki
+    yakalanmayan `throw` promise'i **reject** eder (state=2); `await` reject'i
+    bekleyen tarafta (coroutine veya main) yeniden fırlatır → normal `try/catch`
+    ile yakalanır, yakalanmazsa "Uncaught Exception" + exit(1). `gather`
+    çocuğunun reject'i de gather-await'inde yayılır. Çözüm: `setjmp/longjmp`
+    exception stack'i **coroutine-aware** yapıldı — her coroutine kendi
+    `EhContext`'ine sahip (`aot_eh_context_new/free/swap`,
+    `src/vm/runtime_bindings.cpp`); `resume()` her dilimde bağlamı takas eder,
+    `task_body` bir kök handler kurar (`runtime/tulpar_async.cpp`). Böylece
+    askıdaki bir coroutine'in throw'u kardeş bir stack'e longjmp etmez ve
+    await-üstü `try` izole çalışır. `tests/async.test.tpr` 12/12 (4 yeni reject
+    testi: main'de yakalama, coroutine boyunca yayılım, self-heal, gather
+    reject). Senkron `try/catch` davranışı değişmedi (yalnız `eh_main` bağlamı).
+  - ✅ **gather reject-yolu ARC temizliği.** Bir `gather` çocuğu reject edince
+    `aot_await` throw'u `gather_body`'den longjmp ile çıkıp normal-yol temizliğini
+    atlıyordu (retained child arg'ları + kısmi sonuç dizisi sızıyordu). `task_body`
+    kök-handler catch dalı artık eşdeğer temizliği yapıyor: N child ref release,
+    `items` free, kısmi diziyi (`gs->arr`, `arena_allocated=0 ref=1`) arc_release
+    ile serbest bırak, `GatherState` delete. Normal yol değişmedi. **ASan/LSan
+    ile kanıtlandı:** 200-iterasyon gather-reject döngüsünde (a) bellek-güvenliği
+    çalışması double-free/UAF göstermedi, (b) LSan'de promise'ler (`aot_promise_new`,
+    tasarımca arena sızıntısı) bastırılınca **sıfır** kalan sızıntı — yani
+    `GatherState`/items/kısmi dizi tamamen serbest bırakılıyor; bastırmasız
+    çalışma yalnız 598 promise sızıntısı raporluyor (gather promise'i dahil hepsi
+    `aot_promise_new` kaynaklı). Tarama için AOT link adımına env hook eklendi:
+    `TULPAR_AOT_LINK_FLAGS` (örn. `-fsanitize=address`) final clang++ link'ine
+    forward edilir (`src/aot/aot_pipeline.cpp`); set edilmezse no-op.
+  - **Kalan (🟡):** yok — async/await v1 tamam (timer + gather + gerçek async
+    HTTP I/O + reject/try, reject-yolu temizliği dahil). Not: `>16` parametreli
+    async fn ileride. (VM paritesi yok — AOT-only.)
 
 ### Runtime + codegen
+
+- 🟢 **Per-request bellek sızıntısı (Wings hot path) — ÇÖZÜLDÜ (2026-06-17).**
+  Benchmark ortaya çıkarmıştı: salt-okuma `GET /users/1` altında bile RSS lineer
+  ve sınırsız büyüyordu (~2.6 KB/istek; 6.7→33 MB / 10k istek). **Kök neden:**
+  AOT'ta her obje/dizi `malloc`'lanıyor (`arena_allocated = 0`) ve istek
+  sınırında ARC/GC sweep yok; arena yalnızca string'leri geri alıyordu →
+  container'lar (request objesi, ara dict'ler, response envelope) sızıyordu.
+  - **Çözüm — per-request malloc region + runtime write-barrier**
+    (`runtime_bindings.cpp`): AOT'ta malloc'lanan obje/dizi LITERAL'leri
+    per-thread bir region'a (`g_region` vektör + `g_region_set`) zincirlenir;
+    `aot_arena_save` region işaretini snapshot'lar, `aot_arena_restore` o
+    işaretten sonraki container'ları (+ kendi malloc buffer'larını) arena
+    string-rewind'iyle birlikte serbest bırakır. Yalnızca **arena-scope içinde**
+    (checkpoint_top>0) yaratılanlar izlenir → top-level global'ler ve
+    `aot_persist`/`string_pin` kopyaları izlenmez, dokunulmaz.
+  - **Kaçışlar güvenli:** container mutator'larına (`vm_object_set`,
+    `aot_array_push`, `vm_array_set`, `aot_array_set_fast/raw_fast`) **runtime
+    write-barrier** eklendi (`wb_persist_escape`): transient bir değer kalıcı bir
+    container'a (global / persist-kopyası) yazılırken otomatik derin kopyalanır.
+    Value-flow tabanlı olduğu için global'i **local'e alias'layıp** yazmayı da
+    yakalar (compile-time check'in kaçırdığı boşluk). Compile-time push/index
+    barrier'ları kaldırıldı (runtime üstlendi); whole-var atama barrier'ı kaldı,
+    `_request` (transient çerçeve global'i) muaf — eskiden her istekte tüm
+    request objesini persist'leyip sızdırıyordu.
+  - **Doğrulama:** leak probe'ları 476 MB → düz (~6.7 MB); CRUD `GET /users/1`
+    500 istek boyunca RSS düz; **ASan** ağır karışık CRUD altında **0 bellek
+    ihlali** (UAF/double-free/overflow yok); tüm örnekler + 6 focused suite yeşil.
+  - Yan düzeltme: ham dizi dönen handler'larda (`ok(_users)`) dispatcher
+    `result["_stream"]`'i diziyle indeksleyince stdout'a zararsız "Invalid index"
+    basıyordu. `vm_get_element` artık diziyi non-int (string) key ile
+    indekslemeyi — objedeki olmayan key gibi — **sessizce 0** döndürüyor;
+    gürültü kalktı, liste yanıtları çalışmaya devam ediyor.
+
+- 🟢 **Ctrl+C / sıfır-olmayan çıkışta yanıltıcı "compile/link failed"
+  mesajı (2026-06-18) — ÇÖZÜLDÜ.** `tulpar script.tpr` derleyip programı
+  çalıştırıyor; program sıfır-olmayan çıkınca (ör. sunucuya Ctrl+C) sürücü bunu
+  "AOT derleme/baglama basarisiz" sanıp yanıltıcı mesaj basıyordu
+  (`aot_compile_and_run_silent` `run_result != 0` için `AOT_ERROR_LINK`
+  döndürüyordu). Yeni `AOT_RAN_NONZERO` durumu eklendi: derleme+link zaten
+  başarılı, program çalıştı → sürücü çıkış kodunu mesajsız iletir. SIGINT
+  (Ctrl+C, sunucu için normal durdurma) `WIFSIGNALED`+`SIGINT` ile temiz çıkışa
+  (exit 0) eşlenir. `aot_pipeline.cpp/.hpp` + `main.cpp`.
 
 - 🟢 **Wings cookies miscompile.** Çözüldü ve yeşil yapıldı.
   - **Kök Neden:** AOT/HTTP ayrıştırıcısı (HTTP parser) tarafından oluşturulan yerel HTTP istek nesneleri (request objects/arrays) AOT arena alanında (`aot_arena_alloc`) tahsis edilmektedir ve `arena_allocated = 1` bayrağı taşımaktadır. `lib/wings.tpr` içerisinde bu nesnelere ardışık yeni anahtarlar eklendiğinde (`_request["params"]`, `_request["cookies"]`), nesnenin kapasitesi dolduğu için runtime üzerindeki `vm_object_set` veya `vm_object_set_aot_wrapper` fonksiyonları nesneyi yeniden boyutlandırmaya (resize) çalışıyordu. Orijinal kod, arena üzerinde tahsis edilmiş olan bu nesnelerin `keys`/`values` veya `items` işaretçilerini standart `realloc` ile büyütmeye çalışıyordu. Arena bellek alanları doğrudan `malloc` ile alınmadığı için, `realloc` çağrısı doğrudan heap bozulmasına (`STATUS_HEAP_CORRUPTION` - `0xC0000374`) ve çökmeye yol açıyordu.
@@ -507,18 +807,38 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Dokümantasyon
 
-- 🟡 **`tulparlang.dev/docs/` deep dives.** README'de Quick start +
-  Build a REST API + Streaming (SSE/WS) + Package management
-  bölümleri var (PR #234 ile), CLI reference + Standard library
-  tablosu güncel — fakat tulparlang.dev/docs/ altındaki tam dil
-  reference, derleyici flag matrisi, OS-spesifik kurulum
-  kılavuzları hâlâ eksik. README "quickstart" eşiğini karşılıyor;
-  reference + pkg/wings derinlemesine kılavuzları için ayrı bir
-  docs commit turu gerek.
-  - **Sıradaki adım:** `pkg.tulparlang.dev` Astro repo'sunu klonla
-    (veya yeni `docs.tulparlang.dev` aç), `docs/` collection'ı
-    ekle, README içeriğini bölümlere ayır + genişlet. v1.0
-    release blocker.
+- 🟡 **`tulparlang.dev/docs/` deep dives.** Docs sitesi (`tulpar-lang-web`,
+  Astro **Starlight**, EN+TR bilingual) zaten kapsamlı: Introduction,
+  Language Guide, Standard Library, Ecosystem & Tooling, Reference. Bu
+  turda kapatılan boşluklar:
+  - ✅ **async/await dokümantasyonu** — yeni `guide/async.mdx` (EN+TR):
+    async func/await, `sleep_async`, `gather`, reject/try, bloklamayan
+    HTTP client, sınırlar (stackful coroutine, 16 param, AOT-only),
+    async-vs-thread tablosu. Sidebar'a eklendi. `guide/concurrency`'nin
+    artık yanlış "no green-thread runtime" iddiası düzeltilip async'e
+    cross-ref verildi. `ecosystem/http-client`'a async bölümü.
+  - ✅ **Derleyici flag + env-var matrisi** — `reference/cli.mdx` (EN+TR):
+    per-invocation flag tablosu (`--aot/--build/--debug/--no-typecheck/
+    --strict/--vm/--repl`) + kategorize env-var matrisi (~16 değişken,
+    kaynaktan doğrulandı). `TULPAR_LANG` aslında implement değil →
+    gerçek mekanizma `LANG`/`LC_*` olarak düzeltildi.
+  - ✅ **`reference/language.mdx` syntax highlighting** — ```tpr fence'leri
+    kayıtlı ```tulpar diline çevrildi (highlight artık çalışıyor).
+  - ✅ **OS-spesifik kurulum kılavuzları** — `intro/installation.mdx` (EN+TR)
+    "Build from source" bölümüne per-OS toolchain kurulumu eklendi
+    (Ubuntu/Debian apt `llvm-18-dev`, Fedora dnf, Arch pacman, macOS Homebrew
+    + `LLVM_DIR` keg-only gotcha, Windows MSYS2 — resmi LLVM installer'ın dev
+    lib'leri içermediği notuyla). CI workflow'undan doğrulandı. "native MSVC"
+    yanlış çerçevesi düzeltildi (build.bat MSVC↔MSYS2 auto-detect eder).
+  - ✅ **Dil reference güncel** — `reference/language.mdx` (EN+TR) yeni
+    özelliklerle: **match destructuring** (dizi `[head, ..tail]`, json/struct
+    alanları `{role: "admin", name}`, tipli varyant `Circle{r}`, iç içe) ve
+    yeni **async/await** bölümü (`examples/36_match_destructure.tpr`'den
+    doğrulandı). TR reference'ta `match` bölümü tamamen eksikti → eklendi
+    (EN paritesi).
+  - **Kalan:** pkg/wings derinlemesine guide'lar (mevcut ama daha
+    genişletilebilir). Site canlı deploy (Cloudflare Pages/wrangler) ayrı
+    adım. v1.0 release blocker'ının büyük kısmı kapandı.
 
 ---
 

@@ -131,3 +131,5 @@ github/
 vscode/
 wrangler/
 astro/
+benchmarks/loadtest
+tags

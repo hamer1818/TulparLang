@@ -1,0 +1,13 @@
+Bu proje TulparLang derleyicisidir (C++17, LLVM-18 backend).
+
+## Dosya Okuma Stratejisi
+- CLAUDE.md'yi oku (özet için yeterli)
+- Büyük dosyaları (llvm_backend.cpp gibi) TAM OKUMA — sadece ilgili satır aralığını oku
+- grep veya search tool kullan, dosyanın tamamını okuma
+- src/aot/llvm_backend.cpp ~7200 satır — asla baştan sona okuma
+
+## Proje Kuralları
+- Değişiklik yapmadan önce plan söyle, onay iste
+- Build: ./build.sh
+- C++17, harici bağımlılık ekleme
+- Lexer → Parser → AOT cascade kontrolü yap
