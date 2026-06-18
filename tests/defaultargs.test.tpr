@@ -1,0 +1,44 @@
+// Default-argument support: calling a function with fewer args than it
+// declares pads the missing trailing params with 0 (instead of failing LLVM
+// module verification). This is what lets Wings' serve() stand in for
+// serve(<default port>) while serve(8080) still passes the explicit value.
+
+import "test";
+
+func one(int x) {
+    return x;
+}
+
+func two(int a, int b) {
+    return a + b;
+}
+
+func zero_args_pads_to_default() {
+    assert_eq_int(one(), 0);     // missing arg -> 0
+    assert_eq_int(one(7), 7);    // explicit still works
+}
+
+func partial_args_pad_rest() {
+    assert_eq_int(two(3, 4), 7); // both supplied
+    assert_eq_int(two(3), 3);    // b padded to 0 -> 3 + 0
+    assert_eq_int(two(), 0);     // both padded -> 0
+}
+
+// The Wings idiom this enables: a sentinel-0 means "use the default".
+func default_via_sentinel() {
+    assert_eq_int(resolve_port(), 8484);   // no arg -> default
+    assert_eq_int(resolve_port(9090), 9090); // explicit honoured
+}
+
+func resolve_port(int port) {
+    if (port <= 0) {
+        return 8484;
+    }
+    return port;
+}
+
+print("=== default-argument tests ===");
+test("zero args pad to default", "zero_args_pads_to_default");
+test("partial args pad the rest", "partial_args_pad_rest");
+test("default via sentinel-0 (serve() pattern)", "default_via_sentinel");
+test_summary();

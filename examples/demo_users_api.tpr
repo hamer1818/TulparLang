@@ -1,0 +1,42 @@
+// Basit bir REST API — Wings ile. Az satır, okunur, güçlü.
+// Çalıştır:  tulpar examples/demo_users_api.tpr   (sonra http://127.0.0.1:8080)
+
+import "wings";
+
+json _users = [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Hamza"}];
+int _next_id = 3;
+
+// Handler'lar isteği `req` parametresi olarak alır; req.params / req.json
+// gibi noktalı erişim çalışır. (Parametre yazmazsan global _request da var.)
+
+func list_users(req) {
+    return ok(_users);
+}
+
+func get_user(req) {
+    int id = toInt(req.params.id);
+    for (u in _users) {
+        if (u["id"] == id) { return ok(u); }
+    }
+    return not_found(t"user {id} not found");
+}
+
+func create_user(req) {
+    json body = req.json;                       // gövde otomatik parse edildi
+    if (length(body["name"]) == 0) {
+        return bad_request("name required");
+    }
+    // Not: global'e (push/atama) yazılan istek verisi otomatik kalıcılaşır —
+    // manuel persist() gerekmez.
+    json u = {"id": _next_id, "name": body["name"]};
+    _next_id = _next_id + 1;
+    push(_users, u);                            // global'e push → otomatik kalıcı
+    return created(u);                          // 201
+}
+
+// Route'lar handler'a fonksiyon adıyla bağlanır (string değil) — yanlış
+// isim yazarsan DERLEME hatası alırsın, runtime'da sessiz 404 değil.
+get("/users", list_users);
+get("/users/:id", get_user);
+post("/users", create_user);
+serve();                                        // varsayılan port 8484 (doluysa +1)

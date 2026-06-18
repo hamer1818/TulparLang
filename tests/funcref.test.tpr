@@ -1,0 +1,41 @@
+// Function references as values, call(name, arg) dynamic dispatch, and
+// keyword field access — the language pieces behind Wings' ergonomic API.
+// (Wrong-name → compile error is covered by examples/demo_users_api.tpr.)
+
+import "test";
+
+func answer() { return 42; }
+func echo_name(json req) { return req["name"]; }
+func no_param() { return "ignored-arg-ok"; }
+
+// A bare top-level function name is a value (its name); call() dispatches it.
+func ref_as_value() {
+    var f = answer;
+    assert_eq_int(call(f), 42);
+}
+
+// call(name, arg) hands one argument to the target.
+func call_with_arg() {
+    json r = {"name": "Ada"};
+    assert_eq_str(call(echo_name, r), "Ada");
+}
+
+// A 0-param target ignores the extra argument (ABI-safe).
+func call_arg_ignored() {
+    json r = {"x": 1};
+    assert_eq_str(call(no_param, r), "ignored-arg-ok");
+}
+
+// Reserved type keywords work as field names: obj.json / obj.type.
+func keyword_field_access() {
+    json o = {"json": {"k": "v"}, "type": "user"};
+    assert_eq_str(o.json["k"], "v");
+    assert_eq_str(o.type, "user");
+}
+
+print("=== function reference / dynamic dispatch tests ===");
+test("bare func name as value", "ref_as_value");
+test("call(name, arg) passes arg", "call_with_arg");
+test("0-param target ignores arg", "call_arg_ignored");
+test("keyword field access", "keyword_field_access");
+test_summary();

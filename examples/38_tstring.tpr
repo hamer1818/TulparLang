@@ -1,0 +1,39 @@
+// t-string interpolation — Python-f-string-style, with `t"..."`.
+//
+// Each `{expr}` inside a t-string is evaluated and stitched into the result.
+// Plain `+` concatenation also coerces now, so "n = " + 5 is "n = 5" (no
+// toString needed). A t-string always yields a str.
+
+str name = "Hamza";
+int age = 24;
+float pi = 3.14159;
+
+// Basic interpolation — mix any types.
+print(t"{name} is {age} years old (pi ~ {pi})");
+
+// Expressions, not just variables.
+int a = 7;
+int b = 5;
+print(t"{a} + {b} = {a + b}, and {a} > {b} is {a > b}");
+
+// Index access works inside braces (inner quotes are fine).
+json user = { "name": "Ada", "role": "admin" };
+print(t"user {user["name"]} has role {user["role"]}");
+
+// Build a small report by looping — t-strings shine in string-heavy code.
+json scores = [90, 72, 58];
+for (s in scores) {
+    str grade = match s {
+        80 .. 100 => "A",
+        60 .. 79  => "B",
+        _         => "F"
+    };
+    print(t"score {s} -> grade {grade}");
+}
+
+// A literal brace is escaped with \{ ... \}
+print(t"\{ literal braces \} around {name}");
+
+// Plain `+` concatenation now coerces too (was a silent 0 before).
+int total = 42;
+print("plain concat: total = " + total + " items");

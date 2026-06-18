@@ -89,6 +89,66 @@ func run_gather_nested() {
     assert_eq_int(await combo(), 42);
 }
 
+// ---- Rejection / error propagation ----------------------------------------
+// An uncaught throw inside an async function rejects its promise; awaiting it
+// re-raises the thrown value so it can be caught like any synchronous throw.
+async func throw_after(int ms, str msg) {
+    await sleep_async(ms);
+    throw msg;
+}
+
+// Reject re-raises on the awaiting main thread.
+func run_reject_caught() {
+    str got = "none";
+    try {
+        await throw_after(2, "boom");
+    } catch (e) {
+        got = e;
+    }
+    assert_eq_str(got, "boom");
+}
+
+// Reject propagates out of a wrapping coroutine and is caught inside it.
+async func wrap_catch() {
+    try {
+        await throw_after(2, "inner");
+        return "no-throw";
+    } catch (e) {
+        return "caught:" + e;
+    }
+}
+func run_reject_propagates() {
+    assert_eq_str(await wrap_catch(), "caught:inner");
+}
+
+// A coroutine that catches its own throw fulfils normally (no rejection).
+async func self_heal() {
+    try {
+        await throw_after(2, "x");
+    } catch (e) {
+        return "healed";
+    }
+    return "unreached";
+}
+func run_reject_self_heal() {
+    assert_eq_str(await self_heal(), "healed");
+}
+
+// A rejecting gather child re-raises on the gather await.
+async func ok_after(int ms, int v) {
+    await sleep_async(ms);
+    return v;
+}
+func run_gather_reject() {
+    str got = "none";
+    try {
+        await gather(ok_after(5, 1), throw_after(2, "gboom"));
+    } catch (e) {
+        got = e;
+    }
+    assert_eq_str(got, "gboom");
+}
+
 print("=== async/await tests ===");
 test("basic spawn + await", "run_basic");
 test("await non-promise identity", "run_identity");
@@ -98,4 +158,8 @@ test("gather result ordering", "run_gather_order");
 test("gather concurrency", "run_gather_concurrent");
 test("gather non-promise passthrough", "run_gather_passthrough");
 test("gather inside coroutine", "run_gather_nested");
+test("reject re-raises on await", "run_reject_caught");
+test("reject propagates through coroutine", "run_reject_propagates");
+test("coroutine catches own throw", "run_reject_self_heal");
+test("gather child rejection re-raises", "run_gather_reject");
 test_summary();

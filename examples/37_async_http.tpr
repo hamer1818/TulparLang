@@ -1,0 +1,82 @@
+// Async HTTP client — non-blocking outbound requests on the event loop.
+//
+// `http_request_async(...)` (and the http_get_async/http_post_async helpers in
+// the `http_client` stdlib) return a promise instead of blocking. The request
+// runs on a worker pool while the async scheduler keeps pumping; `gather()`
+// fires several at once so total time is ~max(requests), not the sum.
+//
+// This example is self-contained: a background thread runs a tiny HTTP server
+// that answers two connections, and an async coroutine fetches both URLs
+// concurrently and checks the bodies.
+
+import "http_client";
+
+// One-shot HTTP server: accept `n` connections, reply 200 with a JSON body
+// that echoes which request index it served. Sequential accept is fine — the
+// two client requests are issued in parallel by the worker pool and queue in
+// the TCP backlog until accepted.
+func serve(json arg) {
+    int server_fd = arg;
+    int i = 0;
+    while (i < 2) {
+        int client = socket_accept(server_fd);
+        if (client < 0) {
+            return 0;
+        }
+        str req = socket_receive(client, 4096);
+        str body = "{\"served\":" + toString(i) + "}";
+        str resp = "HTTP/1.1 200 OK\r\n" +
+                   "Content-Type: application/json\r\n" +
+                   "Content-Length: " + toString(len(body)) + "\r\n" +
+                   "Connection: close\r\n\r\n" + body;
+        socket_send(client, resp);
+        socket_close(client);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Fetch both URLs concurrently and return the gathered responses.
+async func fetch_both(str a, str b) {
+    json results = await gather(http_get_async(a), http_get_async(b));
+    return results;
+}
+
+int port = 18793;
+int server_fd = socket_server("127.0.0.1", port);
+if (server_fd < 0) {
+    print("FAIL bind");
+    exit(1);
+}
+
+int t = thread_create(serve, server_fd);
+
+str base = "http://127.0.0.1:" + toString(port) + "/";
+json out = await fetch_both(base + "a", base + "b");
+
+thread_join(t);
+socket_close(server_fd);
+
+json r0 = out[0];
+json r1 = out[1];
+
+if (r0["ok"] != 1 || r1["ok"] != 1) {
+    print("FAIL ok r0=" + toString(r0["ok"]) + " r1=" + toString(r1["ok"]));
+    exit(1);
+}
+if (r0["status"] != 200 || r1["status"] != 200) {
+    print("FAIL status r0=" + toString(r0["status"]) +
+          " r1=" + toString(r1["status"]));
+    exit(1);
+}
+
+// Each response body is {"served":N}; both indices 0 and 1 must appear once.
+json b0 = fromJson(r0["body"]);
+json b1 = fromJson(r1["body"]);
+int sum = b0["served"] + b1["served"];
+if (sum != 1) {
+    print("FAIL bodies r0=" + r0["body"] + " r1=" + r1["body"]);
+    exit(1);
+}
+
+print("PASS async http: " + r0["body"] + " + " + r1["body"]);

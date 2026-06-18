@@ -1,0 +1,49 @@
+// Wings request-body validation (_wings_validate / _wings_type_ok). The live
+// end-to-end behaviour (auto-422 before the handler) is exercised by
+// tests/compare_wings_users_api.tpr; here we unit-test the schema engine that
+// closes the FastAPI validation gap.
+
+import "wings";
+import "test";
+
+func type_ok_basics() {
+    assert_eq_bool(_wings_type_ok("str", "string"), true);
+    assert_eq_bool(_wings_type_ok("str", "int"), false);
+    assert_eq_bool(_wings_type_ok("int", "int"), true);
+    assert_eq_bool(_wings_type_ok("num", "float"), true);
+    assert_eq_bool(_wings_type_ok("num", "int"), true);
+    assert_eq_bool(_wings_type_ok("bool", "bool"), true);
+    assert_eq_bool(_wings_type_ok("any", "object"), true);
+}
+
+func valid_body_passes() {
+    json r = _wings_validate({"name": "str", "age?": "int"},
+                             {"name": "Ada", "age": 30});
+    // valid → {} (no _status)
+    assert_eq_int(r["_status"], 0);
+}
+
+func optional_field_may_be_absent() {
+    json r = _wings_validate({"name": "str", "age?": "int"}, {"name": "Ada"});
+    assert_eq_int(r["_status"], 0);
+}
+
+func type_mismatch_is_422() {
+    json r = _wings_validate({"name": "str"}, {"name": 123});
+    assert_eq_int(r["_status"], 422);
+    assert_eq_str(r["fields"]["name"], "expected str, got int");
+}
+
+func missing_required_is_422() {
+    json r = _wings_validate({"name": "str"}, {});
+    assert_eq_int(r["_status"], 422);
+    assert_eq_str(r["fields"]["name"], "required");
+}
+
+print("=== wings validation tests ===");
+test("type_ok basics", "type_ok_basics");
+test("valid body passes", "valid_body_passes");
+test("optional field may be absent", "optional_field_may_be_absent");
+test("type mismatch -> 422", "type_mismatch_is_422");
+test("missing required -> 422", "missing_required_is_422");
+test_summary();

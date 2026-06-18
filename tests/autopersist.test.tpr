@@ -1,0 +1,53 @@
+// Auto-persist write barrier: writing per-request arena data into a GLOBAL
+// is deep-copied automatically at codegen time, so it survives arena_restore
+// WITHOUT a manual persist(). This is what makes Wings handlers footgun-free
+// (see tests/compare_wings_users_api.tpr). The corruption it prevents was a
+// silent NUL-byte string once the request arena rewound.
+
+import "test";
+
+json g_arr = [];
+json g_obj = {"name": "init"};
+str g_scalar = "init";
+
+// Returns an ARENA-allocated string (concat result). Stored into a global it
+// would dangle after arena_restore unless the barrier deep-copies it.
+func arena_str(int n) {
+    return "user-" + toString(n);
+}
+
+// --- Simulate one request cycle: save arena, write globals, restore. ---
+int _wm = arena_save();
+push(g_arr, arena_str(1));        // push(global, arena value)
+g_obj["name"] = arena_str(2);     // global[key] = arena value
+g_scalar = arena_str(3);          // global = arena value
+arena_restore(_wm);               // reclaim the request arena
+
+// --- After the arena is gone, the globals must still be intact. ---
+func push_into_global_survives() {
+    assert_eq_str(g_arr[0], "user-1");
+    assert_eq_int(length(g_arr), 1);
+}
+
+func field_set_into_global_survives() {
+    assert_eq_str(g_obj["name"], "user-2");
+}
+
+func global_reassign_survives() {
+    assert_eq_str(g_scalar, "user-3");
+}
+
+// A LOCAL-rooted write must NOT be persisted (no barrier) — still correct
+// because it's read within the same arena scope.
+func local_write_unaffected() {
+    json loc = [];
+    push(loc, "local-0");
+    assert_eq_str(loc[0], "local-0");
+}
+
+print("=== auto-persist tests ===");
+test("push into global survives arena_restore", "push_into_global_survives");
+test("field set into global survives arena_restore", "field_set_into_global_survives");
+test("global reassign survives arena_restore", "global_reassign_survives");
+test("local write still works", "local_write_unaffected");
+test_summary();

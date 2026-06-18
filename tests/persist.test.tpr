@@ -1,0 +1,41 @@
+// persist(value) — deep copy into permanent storage. The server-side payoff
+// (surviving arena_restore) is covered by examples/demo_users_api.tpr; here we
+// verify the copy is deep and INDEPENDENT of the source.
+
+import "test";
+
+func persist_scalar_passthrough() {
+    assert_eq_int(persist(42), 42);
+    assert_eq_str(persist("hi"), "hi");
+}
+
+func persist_deep_copies_object() {
+    json src = {"id": 1, "name": "Ada"};
+    json p = persist(src);
+    assert_eq_int(p["id"], 1);
+    assert_eq_str(p["name"], "Ada");
+}
+
+func persist_is_independent() {
+    json src = {"name": "Ada", "tags": ["x", "y"]};
+    json p = persist(src);
+    // Mutating the source must NOT affect the persisted copy.
+    src["name"] = "CHANGED";
+    src["tags"][0] = "ZZZ";
+    assert_eq_str(p["name"], "Ada");
+    assert_eq_str(p["tags"][0], "x");
+}
+
+func persist_nested_array() {
+    json p = persist([{"k": 1}, {"k": 2}]);
+    assert_eq_int(p[0]["k"], 1);
+    assert_eq_int(p[1]["k"], 2);
+    assert_eq_int(length(p), 2);
+}
+
+print("=== persist tests ===");
+test("scalar passthrough", "persist_scalar_passthrough");
+test("deep copies object", "persist_deep_copies_object");
+test("copy independent of source", "persist_is_independent");
+test("nested array of objects", "persist_nested_array");
+test_summary();

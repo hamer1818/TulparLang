@@ -1,0 +1,86 @@
+// ============================================================
+//  KARŞILAŞTIRMA:  Wings (Tulpar)   —  Users CRUD REST API
+//  Aynı işi yapan FastAPI sürümü:    tests/compare_fastapi_users_api.py
+//  Çalıştır:  tulpar tests/compare_wings_users_api.tpr   →  http://127.0.0.1:8080
+// ============================================================
+
+import "wings";
+
+// --- "Veritabanı" (bellek içi) ---
+json _users = [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Hamza"}];
+int _next_id = 3;
+
+// --- Yardımcı: id'ye göre kullanıcı indexi (yoksa -1) ---
+func _index_of(int id) {
+    int i = 0;
+    for (u in _users) {
+        if (u["id"] == id) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// GET /users  → hepsini listele
+func list_users(req) {
+    return ok(_users);
+}
+
+// GET /users/:id  → tek kullanıcı (yoksa 404)
+func get_user(req) {
+    int id = toInt(req.params.id);
+    int idx = _index_of(id);
+    if (idx == -1) { return not_found(t"user {id} not found"); }
+    return ok(_users[idx]);
+}
+
+// POST /users  → oluştur (name zorunlu, 201 döner)
+func create_user(req) {
+    json body = req.json;
+    if (length(body["name"]) == 0) { return bad_request("name required"); }
+    json u = {"id": _next_id, "name": body["name"]};
+    _next_id = _next_id + 1;
+    push(_users, u);                            // global'e push → otomatik kalıcı
+    return created(u);
+}
+
+// PUT /users/:id  → güncelle (yoksa 404)
+func update_user(req) {
+    int id = toInt(req.params.id);
+    int idx = _index_of(id);
+    if (idx == -1) { return not_found(t"user {id} not found"); }
+    json body = req.json;
+    if (length(body["name"]) == 0) { return bad_request("name required"); }
+    _users[idx]["name"] = body["name"];   // global'e yazma otomatik kalıcılaşır
+    return ok(_users[idx]);
+}
+
+// DELETE /users/:id  → sil (yoksa 404, varsa 204)
+func delete_user(req) {
+    int id = toInt(req.params.id);
+    int idx = _index_of(id);
+    if (idx == -1) { return not_found(t"user {id} not found"); }
+    // basit sil: filtreleyerek yeniden kur
+    json kept = [];
+    for (u in _users) {
+        if (u["id"] != id) { push(kept, u); }
+    }
+    _users = kept;
+    return no_content();
+}
+
+// --- Route'lar: handler'a fonksiyon adıyla bağlanır (typo = derleme hatası) ---
+// body_schema() → istek gövdesi şemaya uymazsa handler'a girmeden otomatik 422
+// (FastAPI'deki Pydantic ile aynı iş). Aynı şema /docs Swagger UI'yı besler.
+docs_info("Users API", "1.0.0");
+get("/users", list_users);
+get("/users/:id", get_user);
+post("/users", create_user);
+body_schema({"name": "str", "age?": "int"});
+put("/users/:id", update_user);
+body_schema({"name": "str"});
+del("/users/:id", delete_user);
+
+// Port yazmadan serve() → varsayılan 8484 (ASCII 'T' = 84, "Tulpar portu");
+// doluysa otomatik 8485, 8486... Açık port da yazabilirsin: serve(9090).
+// İnteraktif dokümanlar otomatik: http://127.0.0.1:8484/docs  (+ /openapi.json)
+serve();

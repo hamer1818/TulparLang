@@ -1,0 +1,78 @@
+// t-string interpolation + string-concat coercion regression suite.
+//   t"... {expr} ..."  desugars to a coercing `+` concatenation.
+// Run: ./tulpar tests/tstring.test.tpr
+
+import "test";
+
+// ---- string + non-string concat coerces (was: silently 0) -----------------
+func concat_int() {
+    int n = 5;
+    assert_eq_str("n = " + n, "n = 5");
+}
+func concat_int_left() {
+    assert_eq_str(7 + " items", "7 items");
+}
+func concat_float_bool() {
+    assert_eq_str("pi=" + 3.14 + " ok=" + true, "pi=3.14 ok=true");
+}
+func concat_chain() {
+    int a = 1; int b = 2;
+    assert_eq_str("user " + a + "-" + b + "!", "user 1-2!");
+}
+
+// ---- t-string basics ------------------------------------------------------
+func tstring_basic() {
+    int n = 5;
+    assert_eq_str(t"total: {n} adet", "total: 5 adet");
+}
+func tstring_types() {
+    str name = "Hamza"; int age = 24; float pi = 3.14;
+    assert_eq_str(t"{name} is {age}, pi={pi}, ok={true}",
+                  "Hamza is 24, pi=3.14, ok=true");
+}
+func tstring_expr() {
+    int a = 3; int b = 4;
+    assert_eq_str(t"sum={a + b} max={a > b}", "sum=7 max=false");
+}
+func tstring_index() {
+    json u = {"name": "Ada", "role": "admin"};
+    assert_eq_str(t"user {u["name"]} ({u["role"]})", "user Ada (admin)");
+}
+func tstring_leading() {
+    int n = 42;
+    assert_eq_str(t"{n} items", "42 items");
+}
+func tstring_only() {
+    int n = 7;
+    assert_eq_str(t"{n}", "7");
+}
+func tstring_escaped_braces() {
+    int n = 1;
+    assert_eq_str(t"\{literal\} {n}", "{literal} 1");
+}
+func tstring_plain() {
+    assert_eq_str(t"no interpolation", "no interpolation");
+}
+
+// ---- let alias (no [typecheck] noise; behaves like var) --------------------
+func let_alias() {
+    let a = 10;
+    let name = "x";
+    assert_eq_str(name + a, "x10");
+}
+
+print("=== t-string / concat tests ===");
+test("concat string+int", "concat_int");
+test("concat int+string", "concat_int_left");
+test("concat float+bool", "concat_float_bool");
+test("concat chain", "concat_chain");
+test("t-string basic", "tstring_basic");
+test("t-string mixed types", "tstring_types");
+test("t-string expressions", "tstring_expr");
+test("t-string index access", "tstring_index");
+test("t-string leading interp", "tstring_leading");
+test("t-string only interp", "tstring_only");
+test("t-string escaped braces", "tstring_escaped_braces");
+test("t-string plain", "tstring_plain");
+test("let alias of var", "let_alias");
+test_summary();
