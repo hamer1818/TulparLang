@@ -278,8 +278,79 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
     deklare ediliyordu ama runtime impl'leri VMValue-by-value — çağrı by-value
     geçtiği için LLVM **module verification** her DB programında uyarı basıyordu;
     by-value tipiyle deklare edilerek düzeltildi (çıktı zaten doğruydu, artık
-    temiz). Kalan DB adımı: thread/bağlantı-başına handle (paralel read).
+    temiz). Detay → `benchmarks/WINGS_STRESS.md`.
+  - ✅ **Thread/bağlantı-başına DB handle — paralel read (2026-06-18,
+    `runtime_bindings.cpp`):** stres testinin bulduğu asıl darboğaz —
+    tek paylaşımlı `sqlite3*` handle'ının SQLite serialized-mutex'inden
+    geçip pool worker'larıyla ölçeklenmemesi — kapatıldı. **DB handle artık
+    ham pointer değil, 1-tabanlı bir `DbConn` descriptor index'i** (kullanıcı
+    API'si değişmedi, hâlâ int64). Dosya-tabanlı DB'lerde **her thread kendi
+    `sqlite3` bağlantısını lazily açıyor** (`db_resolve` + `thread_local`
+    bağlantı cache'i) → WAL altında çok okuyucu paralel ilerliyor.
+    `:memory:`/temp DB'ler **tek paylaşımlı bağlantıda** kalıyor (bağımsız
+    bağlantı diğerinin in-memory DB'sini göremez — serialized, tarihsel
+    davranış). `db_last_insert_id` çağıran thread'in bağlantısına çözülüyor
+    (handler içinde INSERT ile aynı thread → doğru rowid). `db_close`
+    idempotent + `closed` bayrağı: tüm per-thread bağlantıları kapatır,
+    sonrası `db_resolve` null döner (stale pointer kullanılmaz). **Ölçülen
+    kazanım:** read-by-PK pool throughput **23.8k → 35.1k RPS (+~47%)** —
+    paralel okuma artık worker'larla ölçekleniyor, SQLite serialized-mutex
+    darboğazı kalktı; per-istek log'unda 14 worker'ın **14 ayrı `sqlite3`
+    bağlantısı** açtığı ([dbopen] tid/db farklı) ve db_query'nin asla 0-satır
+    dönmediği doğrulandı. Kalan küçük fark (evented tek-thread 37.3k) minik
+    page-cache okumalarında thread-scheduling overhead'inden — mutex
+    çekişmesinden değil. **Bellek düz + ihmal edilebilir:** baseline 9.36 MB →
+    14 worker sonrası 9.9 MB, 900 istekte de 9.9 MB (per-bağlantı ~40 KB,
+    sızıntı yok). Doğrulandı: smoke (insert/query/last_insert_id/close),
+    `examples/13_database.tpr`, `bool_to_int_coerce` 3/3 — hepsi yeşil.
+    **İki dev-environment notu:** (1) RSS'i AOT child `/tmp/.tulpar_run`'da ölç
+    (`./tulpar` driver'ı LLVM yüzünden ~62 MB gösterir, sunucuyu değil).
+    (2) **AOT linker repo kökündeki `libtulpar_runtime.a`'yı önce probe eder** —
+    `runtime_bindings.cpp` değişince hem `./tulpar` hem `./libtulpar_runtime.a`
+    köke kopyalanmalı, yoksa stale runtime linklenir ve değişiklik test edilmez
+    (`build.sh` bunu otomatik yapar; manuel `cmake --build` sonrası elle kopyala).
     Detay → `benchmarks/WINGS_STRESS.md`.
+  - ✅ **`toString()` thread-safety fix — pool'daki ~%1.1 sahte 404'ün kök
+    nedeni (2026-06-18, `runtime_bindings.cpp`):** `listen_pool`/`listen_async`
+    altında handler'ların ~%1.1'i 404 dönüyordu. Uzun teşhisten sonra kök neden
+    bulundu: `aot_to_string` (yani `toString()`) **thread_local olmayan**
+    `static char aot_string_buffer[1024]` paylaşıyordu. İki worker aynı anda
+    `toString()` çağırınca buffer'da yarışıyor, biri diğerinin baytlarını
+    eziyordu. Klasik belirti: bir handler'ın `"... id = " + toString(id)` ile
+    kurduğu SQL'de **`toString()` boş string dönüyor** (`WHERE id = ` — sayı
+    eksik) → 0 satır → handler `not_found()` → sahte 404. Düzeltme tek satır:
+    buffer'ı **`thread_local`** yap. Bu, find_route/db_query'den **bağımsızdı**
+    (her ikisi de temizdi: `[noroute]=0`, `[zero]=0`; teşhis bunu eledikten
+    sonra `toString` kaldı). Doğrulama: fix öncesi pool conc=16/30 ~%1.1 hata
+    → fix sonrası **pool conc=16: 107k istek 0 hata, conc=30: 80k 0 hata,
+    evented: 149k 0 hata**. Not: aynı dosyadaki `base64_decode_buf`'un lazy-init
+    tablosu da non-TLS ama idempotent + cold path (WS accept), zararsız.
+  - ✅ **Concurrency audit — `runtime_bindings.cpp`'deki tüm non-TLS shared
+    mutable state taraması (2026-06-18):** toString fix'inden sonra tüm
+    `static` mutable state sistematik tarandı; iki ek **gerçek** çok-thread bug'ı
+    bulunup kapatıldı (her ikisi de `listen_pool`/`listen_async`'i etkiliyordu):
+    - **Exception handler context (`eh_main`/`eh_cur`) → `thread_local`:** bunlar
+      global'di. Async modeli tek-thread event loop'ta güvenliydi ama bir Wings
+      pool/async handler'ı `try`/`throw` kullanırsa **felaket**: worker'lar aynı
+      `eh_main.stack[]`/`depth`'i paylaşıp bir thread'in `aot_throw`'u **başka
+      thread'in setjmp frame'ine longjmp** ederdi (UB/crash). Stress server
+      try/catch kullanmadığı için gizli kalmıştı. TLS yapıldı → her worker kendi
+      try-frame stack'ine sahip; async swap hâlâ tek-thread'de çalışır.
+      **Doğrulama:** her istekte try/throw/catch yapan pool sunucusu
+      **152k istek, 0 hata, sunucu ayakta** (cross-thread longjmp yok).
+    - **Dynamic-call cache (`g_call_cache`) → acquire/release atomic publish:**
+      lock-free lookup `key`'i okuyup `ptr`'ı kullanıyordu; insert `key`'i en son
+      yazıyordu ama **plain store** ile (x86 TSO'da doğru, ama yorumun da kabul
+      ettiği gibi **ARM/aarch64'te değil** — proje Apple Silicon + aarch64 CMake
+      target'ında çalışıyor). ARM'da lookup `key!=null` görüp **stale `ptr`**
+      okuyup yanlış handler'a/crash'e gidebilirdi. `key` `std::atomic<const
+      char*>` yapıldı: insert release-store, lookup acquire-load → klen/khash/ptr
+      yazımları görünür garanti. x86'da bedava (mov), ARM'da ucuz (ldar/stlr).
+    Diğer non-TLS static'ler güvenli doğrulandı: arena/checkpoint/region/
+    `js_small_buffer`/`g_wings_current_fd` zaten TLS, `g_call_cache`/`g_db_registry`
+    mutex-korumalı, `aot_runtime_init` startup-only. `base64_decode_buf` (cold,
+    idempotent) ve `srand`/`rand` (hot-path değil) bilinçli bırakıldı.
+    **Regresyon:** 27 focused suite + 30 örnek + async/errors testleri yeşil.
   - ✅ **Aşama 2 — fonksiyon-referans handler'ları + `req` parametresi
     (codegen/dil):**
     - **Fonksiyon adı değer olarak:** bir bare üst-seviye `func` adı codegen'de

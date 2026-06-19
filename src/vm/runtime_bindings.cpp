@@ -86,7 +86,11 @@ static thread_local AOTArena *g_aot_string_arena = nullptr;
 // FNV-1a hash + memcmp is plenty.
 // ---------------------------------------------------------------------------
 typedef struct {
-  const char *key;  // strdup'd (small leak on shutdown, fine)
+  // `key` is the publish gate: it is written LAST (release) and read FIRST
+  // (acquire) so a lock-free lookup never sees a slot whose klen/khash/ptr are
+  // still stale. std::atomic makes that ordering correct on weakly-ordered
+  // ARM/aarch64 (Apple Silicon, the aarch64 CMake target) too, not just x86 TSO.
+  std::atomic<const char *> key{nullptr}; // strdup'd (small leak on shutdown)
   size_t klen;
   uint32_t khash;
   void (*ptr)(VMValue *);
@@ -115,9 +119,11 @@ static void (*aot_call_cache_lookup(const char *name, size_t nlen,
   uint32_t i = hash & (AOT_CALL_CACHE_SLOTS - 1);
   for (uint32_t step = 0; step < AOT_CALL_CACHE_SLOTS; step++) {
     AOTCallCacheEntry *e = &g_call_cache[(i + step) & (AOT_CALL_CACHE_SLOTS - 1)];
-    if (!e->key) return nullptr;
-    if (e->khash == hash && e->klen == nlen &&
-        memcmp(e->key, name, nlen) == 0) {
+    // Acquire-load the publish gate: if non-null, the matching klen/khash/ptr
+    // writes that preceded the release-store in insert are guaranteed visible.
+    const char *k = e->key.load(std::memory_order_acquire);
+    if (!k) return nullptr;
+    if (e->khash == hash && e->klen == nlen && memcmp(k, name, nlen) == 0) {
       return e->ptr;
     }
   }
@@ -131,12 +137,14 @@ static void aot_call_cache_insert(const char *name, size_t nlen, uint32_t hash,
   for (uint32_t step = 0; step < AOT_CALL_CACHE_SLOTS; step++) {
     AOTCallCacheEntry *e = &g_call_cache[(i + step) & (AOT_CALL_CACHE_SLOTS - 1)];
     // Re-check inside the lock — another thread may have just inserted
-    // the same key while we were waiting on the mutex.
-    if (e->khash == hash && e->klen == nlen &&
-        e->key && memcmp(e->key, name, nlen) == 0) {
+    // the same key while we were waiting on the mutex. Inserts are serialized
+    // by the mutex, so a relaxed load of our own table is fine here.
+    const char *k = e->key.load(std::memory_order_relaxed);
+    if (e->khash == hash && e->klen == nlen && k &&
+        memcmp(k, name, nlen) == 0) {
       return;
     }
-    if (!e->key) {
+    if (!k) {
       char *copy = (char *)malloc(nlen + 1);
       if (!copy) return;
       memcpy(copy, name, nlen);
@@ -144,11 +152,10 @@ static void aot_call_cache_insert(const char *name, size_t nlen, uint32_t hash,
       e->klen = nlen;
       e->khash = hash;
       e->ptr = ptr;
-      // Publish the key last so concurrent lookups never see a
-      // partially-initialised slot. Plain assignment is enough on
-      // x86 (stores are total-store-order); add a fence if Tulpar
-      // ever ports to weakly-ordered ARM/POWER.
-      e->key = copy;
+      // Publish the key last with a release store so a concurrent acquire-load
+      // in aot_call_cache_lookup sees the klen/khash/ptr writes above. Correct
+      // on weakly-ordered ARM/aarch64, not just x86 TSO.
+      e->key.store(copy, std::memory_order_release);
       return;
     }
   }
@@ -1422,7 +1429,13 @@ void print_newline(void) {
 // ============================================================================
 
 // toString(VMValue) -> VMValue (String Object)
-static char aot_string_buffer[1024];
+// MUST be thread_local: under a multi-threaded listener (listen_pool /
+// listen_async) two workers calling toString() concurrently would otherwise
+// clobber each other's formatted bytes in this scratch buffer. The classic
+// symptom was a wings handler building `"... id = " + toString(id)` getting an
+// EMPTY toString() result (~1% under load) → malformed SQL → 0 rows → a
+// spurious 404. Per-thread storage makes toString() race-free.
+static thread_local char aot_string_buffer[1024];
 
 VMValue aot_to_string(VMValue value) {
   switch (value.type) {
@@ -3053,14 +3066,22 @@ VMValue aot_sha256_ptr(VMValue *vp) {
 // uncaught throw rejects that coroutine's promise instead of escaping. Plain
 // (non-async) programs only ever use the default `eh_main` context, so their
 // behaviour is unchanged.
+//
+// MUST be thread_local: under a multi-threaded listener (listen_pool /
+// listen_async) each worker runs handlers that may use try/reject. With a
+// single shared `eh_main`, two workers would push setjmp frames onto the same
+// stack and one worker's aot_throw could longjmp into ANOTHER worker's stack
+// frame — undefined behaviour / crash. Per-thread storage gives each worker its
+// own try-frame stack. The async event loop runs coroutines on one thread, so
+// aot_eh_context_swap still operates on that thread's eh_cur as before.
 typedef struct EhContext {
   jmp_buf stack[EH_STACK_MAX];
   int depth;
   VMValue exception;
 } EhContext;
 
-static EhContext eh_main = {};
-static EhContext *eh_cur = &eh_main; // active handler context
+static thread_local EhContext eh_main = {};
+static thread_local EhContext *eh_cur = &eh_main; // active handler context
 
 // Returns pointer to jmp_buf for direct setjmp call
 jmp_buf *aot_try_push(void) {
@@ -6722,42 +6743,149 @@ VMValue aot_range(VMValue endVal) {
 // ============================================================================
 #include "../../lib/sqlite3/sqlite3.h"
 
-// db_open(path) -> db_handle (int64)
+// ----------------------------------------------------------------------------
+// Per-thread connection registry (parallel reads under WAL)
+//
+// A db handle is no longer a raw sqlite3* but a 1-based index into a registry
+// of DbConn descriptors. Each worker thread lazily opens its OWN sqlite3
+// connection to the same file, so under WAL many threads read in parallel
+// instead of serializing on one shared connection's internal mutex (the
+// bottleneck the wings stress test exposed: pool reads didn't scale with
+// workers). :memory:/temp DBs can't be shared across independent connections
+// — each open() would see a fresh empty DB — so they keep a single shared
+// connection (the historical serialized behavior).
+// ----------------------------------------------------------------------------
+struct DbConn {
+  std::string path;
+  bool wal = false;             // apply WAL pragmas on each connection
+  bool shared = false;          // :memory:/temp -> one shared connection
+  sqlite3 *shared_conn = nullptr;
+  std::mutex conns_mu;          // guards conns (file-backed mode)
+  std::vector<sqlite3 *> conns; // every per-thread conn opened, for db_close
+  std::atomic<bool> closed{false};
+};
+
+static std::mutex g_db_registry_mu;
+static std::vector<DbConn *> g_db_registry; // index = id (handle - 1)
+
+// Per-thread cache: descriptor id (0-based) -> this thread's connection.
+static thread_local std::vector<sqlite3 *> g_db_tls_conns;
+
+static void db_apply_pragmas(sqlite3 *db, bool wal) {
+  // busy_timeout: on a locked DB, block-and-retry for up to 5s instead of
+  // failing immediately with SQLITE_BUSY (matters now that independent
+  // per-thread connections contend for the single writer slot).
+  sqlite3_busy_timeout(db, 5000);
+  // WAL + synchronous=NORMAL on file-backed DBs: ~2.3x write throughput, and
+  // crucially WAL is what lets readers proceed concurrently with one writer.
+  if (wal) {
+    sqlite3_exec(db, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+                 nullptr, nullptr, nullptr);
+  }
+}
+
+// Open a fresh connection for `desc` and register it for db_close cleanup.
+static sqlite3 *db_open_conn(DbConn *desc) {
+  sqlite3 *db = nullptr;
+  if (sqlite3_open(desc->path.c_str(), &db) != SQLITE_OK) {
+    if (db)
+      sqlite3_close(db);
+    return nullptr;
+  }
+  db_apply_pragmas(db, desc->wal);
+  {
+    std::lock_guard<std::mutex> g(desc->conns_mu);
+    desc->conns.push_back(db);
+  }
+  return db;
+}
+
+// Resolve a handle to the connection THIS thread should use. For file-backed
+// DBs the connection is opened lazily on first use per thread.
+static sqlite3 *db_resolve(VMValue dbVal) {
+  if (!IS_INT(dbVal))
+    return nullptr;
+  int64_t h = AS_INT(dbVal);
+  if (h <= 0)
+    return nullptr;
+  size_t id = (size_t)(h - 1);
+  DbConn *desc = nullptr;
+  {
+    std::lock_guard<std::mutex> g(g_db_registry_mu);
+    if (id >= g_db_registry.size())
+      return nullptr;
+    desc = g_db_registry[id];
+  }
+  // closed checked before consulting the tls cache, so a connection already
+  // closed by db_close (possibly from another thread at shutdown) is never
+  // reused through a stale per-thread pointer.
+  if (!desc || desc->closed.load())
+    return nullptr;
+  if (desc->shared)
+    return desc->shared_conn;
+  if (g_db_tls_conns.size() <= id)
+    g_db_tls_conns.resize(id + 1, nullptr);
+  sqlite3 *db = g_db_tls_conns[id];
+  if (!db) {
+    db = db_open_conn(desc);
+    g_db_tls_conns[id] = db;
+  }
+  return db;
+}
+
+// db_open(path) -> db_handle (int64, 1-based registry index)
 VMValue aot_db_open(VMValue pathVal) {
   if (!IS_STRING(pathVal))
     return VM_INT(0);
 
   ObjString *path = AS_STRING(pathVal);
-  sqlite3 *db = nullptr;
-
-  int rc = sqlite3_open(path->chars, &db);
-  if (rc != SQLITE_OK) {
-    if (db)
-      sqlite3_close(db);
-    return VM_INT(0);
-  }
-
-  // Server-friendly defaults. A shared handle still serializes through
-  // SQLite's internal mutex, but these are pure wins for real workloads:
-  //  - busy_timeout: on a locked DB, block-and-retry for up to 5s instead of
-  //    failing immediately with SQLITE_BUSY (matters once independent
-  //    connections contend, e.g. a future per-worker handle).
-  //  - WAL + synchronous=NORMAL on file-backed DBs: ~2.3x write throughput in
-  //    the wings stress test (8.8k -> 20.4k RPS) — rollback-journal commits
-  //    fsync the whole DB per write; WAL appends and checkpoints lazily.
-  //    Skipped for :memory:/temp DBs where WAL doesn't apply; opt out with
-  //    TULPAR_DB_NO_WAL=1 (e.g. a DB on a network FS that can't do WAL).
-  sqlite3_busy_timeout(db, 5000);
   const char *p = path->chars;
   bool file_backed = p && p[0] != '\0' && strcmp(p, ":memory:") != 0;
   const char *no_wal = getenv("TULPAR_DB_NO_WAL");
-  if (file_backed && (!no_wal || no_wal[0] == '\0')) {
-    sqlite3_exec(db, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
-                 nullptr, nullptr, nullptr);
+  // Opt out of WAL with TULPAR_DB_NO_WAL=1 (e.g. a DB on a network FS that
+  // can't do WAL).
+  bool wal = file_backed && (!no_wal || no_wal[0] == '\0');
+
+  DbConn *desc = new DbConn();
+  desc->path = p ? p : "";
+  desc->wal = wal;
+  desc->shared = !file_backed;
+
+  sqlite3 *first_conn = nullptr;
+  if (desc->shared) {
+    // :memory:/temp — one connection shared by all threads (serialized; an
+    // independent connection can't see another's in-memory DB).
+    if (sqlite3_open(desc->path.c_str(), &first_conn) != SQLITE_OK) {
+      if (first_conn)
+        sqlite3_close(first_conn);
+      delete desc;
+      return VM_INT(0);
+    }
+    db_apply_pragmas(first_conn, false);
+    desc->shared_conn = first_conn;
+  } else {
+    // file-backed — open the calling thread's connection now to validate the
+    // path and put the file into WAL mode; other threads open lazily.
+    first_conn = db_open_conn(desc);
+    if (!first_conn) {
+      delete desc;
+      return VM_INT(0);
+    }
   }
 
-  // Return db pointer as int64
-  return VM_INT((int64_t)(uintptr_t)db);
+  size_t id;
+  {
+    std::lock_guard<std::mutex> g(g_db_registry_mu);
+    id = g_db_registry.size();
+    g_db_registry.push_back(desc);
+  }
+  if (!desc->shared) {
+    // Cache the just-opened connection in this thread's slot.
+    if (g_db_tls_conns.size() <= id)
+      g_db_tls_conns.resize(id + 1, nullptr);
+    g_db_tls_conns[id] = first_conn;
+  }
+  return VM_INT((int64_t)(id + 1));
 }
 
 VMValue aot_db_open_ptr(VMValue *path_ptr) {
@@ -6770,11 +6898,39 @@ VMValue aot_db_open_ptr(VMValue *path_ptr) {
 void aot_db_close(VMValue dbVal) {
   if (!IS_INT(dbVal))
     return;
-
-  sqlite3 *db = (sqlite3 *)(uintptr_t)AS_INT(dbVal);
-  if (db) {
-    sqlite3_close(db);
+  int64_t h = AS_INT(dbVal);
+  if (h <= 0)
+    return;
+  size_t id = (size_t)(h - 1);
+  DbConn *desc = nullptr;
+  {
+    std::lock_guard<std::mutex> g(g_db_registry_mu);
+    if (id >= g_db_registry.size())
+      return;
+    desc = g_db_registry[id];
   }
+  if (!desc)
+    return;
+  // Idempotent: only the first close does the work. db_close is a shutdown
+  // operation — closing connections still cached by other worker threads is
+  // safe only because no request is mid-flight at that point, and db_resolve
+  // gates on `closed` so those threads stop using their cached pointers.
+  if (desc->closed.exchange(true))
+    return;
+  if (desc->shared) {
+    if (desc->shared_conn) {
+      sqlite3_close(desc->shared_conn);
+      desc->shared_conn = nullptr;
+    }
+  } else {
+    std::lock_guard<std::mutex> g(desc->conns_mu);
+    for (sqlite3 *db : desc->conns)
+      if (db)
+        sqlite3_close(db);
+    desc->conns.clear();
+  }
+  if (g_db_tls_conns.size() > id)
+    g_db_tls_conns[id] = nullptr;
 }
 
 void aot_db_close_ptr(VMValue *db_ptr) {
@@ -6785,10 +6941,10 @@ void aot_db_close_ptr(VMValue *db_ptr) {
 
 // db_execute(db_handle, sql) -> bool (success)
 VMValue aot_db_execute(VMValue dbVal, VMValue sqlVal) {
-  if (!IS_INT(dbVal) || !IS_STRING(sqlVal))
+  if (!IS_STRING(sqlVal))
     return VM_BOOL(0);
 
-  sqlite3 *db = (sqlite3 *)(uintptr_t)AS_INT(dbVal);
+  sqlite3 *db = db_resolve(dbVal);
   ObjString *sql = AS_STRING(sqlVal);
 
   if (!db)
@@ -6812,7 +6968,7 @@ VMValue aot_db_execute_ptr(VMValue *db_ptr, VMValue *sql_ptr) {
 
 // db_query(db_handle, sql) -> array of objects (rows)
 VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
-  if (!IS_INT(dbVal) || !IS_STRING(sqlVal)) {
+  if (!IS_STRING(sqlVal)) {
     // Return empty array
     ObjArray *arr = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     arr->obj.type = OBJ_ARRAY;
@@ -6824,7 +6980,7 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
     return VM_OBJ((Obj *)arr);
   }
 
-  sqlite3 *db = (sqlite3 *)(uintptr_t)AS_INT(dbVal);
+  sqlite3 *db = db_resolve(dbVal);
   ObjString *sql = AS_STRING(sqlVal);
 
   // Prepare result array
@@ -6844,13 +7000,16 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
   int rc = sqlite3_prepare_v2(db, sql->chars, -1, &stmt, nullptr);
 
   if (rc != SQLITE_OK || !stmt) {
+    if (getenv("TULPAR_DB_DEBUG"))
+      fprintf(stderr, "[dbq] prepare rc=%d (%s)\n", rc, sqlite3_errmsg(db));
     return VM_OBJ((Obj *)result);
   }
 
   int col_count = sqlite3_column_count(stmt);
 
   // Fetch rows
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
+  int step_rc;
+  while ((step_rc = sqlite3_step(stmt)) == SQLITE_ROW) {
     // Create object for this row
     ObjObject *row = (ObjObject *)aot_arena_alloc(sizeof(ObjObject));
     row->obj.type = OBJ_OBJECT;
@@ -6906,6 +7065,14 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
     result->items[result->count++] = VM_OBJ((Obj *)row);
   }
 
+  // step_rc is SQLITE_DONE on a clean finish; anything else (e.g. a residual
+  // SQLITE_BUSY the busy handler couldn't resolve) means the row set may be
+  // truncated — surface it under TULPAR_DB_DEBUG rather than silently
+  // returning a short/empty result.
+  if (step_rc != SQLITE_DONE && getenv("TULPAR_DB_DEBUG"))
+    fprintf(stderr, "[dbq] step rc=%d (%s) rows=%d\n", step_rc,
+            sqlite3_errmsg(db), result->count);
+
   sqlite3_finalize(stmt);
 
   return VM_OBJ((Obj *)result);
@@ -6918,11 +7085,10 @@ VMValue aot_db_query_ptr(VMValue *db_ptr, VMValue *sql_ptr) {
 }
 
 // db_last_insert_id(db_handle) -> int64
+// Resolves to this thread's connection — the same one that ran the INSERT
+// within a request handler, so the rowid is correct.
 VMValue aot_db_last_insert_id(VMValue dbVal) {
-  if (!IS_INT(dbVal))
-    return VM_INT(0);
-
-  sqlite3 *db = (sqlite3 *)(uintptr_t)AS_INT(dbVal);
+  sqlite3 *db = db_resolve(dbVal);
   if (!db)
     return VM_INT(0);
 
@@ -6934,7 +7100,7 @@ VMValue aot_db_error(VMValue dbVal) {
   if (!IS_INT(dbVal))
     return VM_OBJ((Obj *)aot_allocate_string("Invalid handle", 14));
 
-  sqlite3 *db = (sqlite3 *)(uintptr_t)AS_INT(dbVal);
+  sqlite3 *db = db_resolve(dbVal);
   if (!db)
     return VM_OBJ((Obj *)aot_allocate_string("No database", 11));
 
