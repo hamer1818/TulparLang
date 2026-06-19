@@ -924,10 +924,18 @@ girildiğinde ne yapacağımı bilelim.
 
 ---
 
-## 🎯 v1.0 = "dil tam oldu" kriterleri
+## 🎯 Olgunluk kriterleri (sürüm bağımsız)
+
+> **Sürümleme notu (2026-06-18):** Proje **v1.0'ın çok ötesinde** — yayınlı
+> son tag **`v3.0.0`** (2026-06-15, AOT-only breaking change). main onun 8
+> commit önünde; sıradaki yayın **`v3.1.0`** (geriye-uyumlu feature'lar +
+> fix'ler, bkz. `CHANGELOG.md`). `CMakeLists.txt` `project(VERSION 3.1.0)`
+> ile hizalandı (önceden 2.1.0'da takılıydı → dev build'ler en son release'in
+> gerisini raporluyordu). Aşağıdaki kriterler "dil olgun mu?" kalıcı
+> gate'leridir, bir sürüm numarasına bağlı değil.
 
 1. **Sıfır bilinen davranış regresyonu** — CI compile + runtime gate'leri
-   yeşil; `git log --grep="fix(.*regression"` boş.
+   yeşil (`./build.sh test` 48/48 örnek + 27 focused suite yeşil).
 2. **Motto taşınıyor** — bench'ler C/Rust sınıfında (loopsum 3×C içinde,
    HTTP Node'u 2×+ geçiyor); örnekler Python kadar okunur.
 3. **Ekosistem self-host** — tulpar-be prod'da, kullanıcı `tulpar pkg
@@ -935,12 +943,13 @@ girildiğinde ne yapacağımı bilelim.
    eksik).
 4. **Dokümantasyon eşiği** — quickstart + reference + pkg guide
    `tulparlang.dev/docs/` altında canlı.
-5. **Stable release** — `v1.0.0` git tag + binary release artifacts;
-   `tulpar update` mekanizması bunu çekiyor.
+5. **Stable release süreci** — `v*` git tag + binary release artifact'leri;
+   `tulpar update` bunu çekiyor (✓ v2.2.0 + v3.0.0 yayınlandı).
 
-**Şu an konumumuz:** v0.9 RC yakını. (1) ve (2) büyük ölçüde karşılandı.
-(3) altyapı tam, içerik az. (4) eksik. (5) installer hazır, tag süreci
-hazır.
+**Şu an konumumuz:** v3.0.0 yayınlı, **v3.1.0 yayına hazır**. (1) ve (2)
+karşılandı (tam suite yeşil). (3) altyapı tam, içerik az. (4) reference büyük
+ölçüde hazır, canlı deploy eksik. (5) süreç işliyor — v3.1.0 tag'i atılmayı
+bekliyor.
 
 ---
 

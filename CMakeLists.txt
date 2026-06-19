@@ -4,7 +4,11 @@
 cmake_minimum_required(VERSION 3.14)
 
 # Project name and version - Now using modern C++17
-project(TulparLang VERSION 2.1.0 LANGUAGES C CXX)
+# This is the NEXT (unreleased) version; dev builds report "<version>-dev".
+# Keep it >= the latest git tag (currently v3.0.0) so `tulpar --version` and
+# `tulpar update --check` never report a dev build as older than the last
+# release. Bump here when cutting a release; CI overrides via -DTULPAR_VERSION.
+project(TulparLang VERSION 3.1.0 LANGUAGES C CXX)
 
 # C++17 Standard (required for std::variant, std::optional, std::unique_ptr)
 set(CMAKE_CXX_STANDARD 17)
@@ -291,7 +295,7 @@ add_executable(tulpar ${ALL_SOURCES})
 target_compile_definitions(tulpar PRIVATE TULPAR_AOT_ENABLED)
 
 # Embedded version string. Defaults to "<project_version>-dev" for local
-# builds; release CI overrides with `-DTULPAR_VERSION=v2.2.0` (the tag
+# builds; release CI overrides with `-DTULPAR_VERSION=v3.1.0` (the tag
 # name) so `tulpar --version` matches the GitHub release tag. Only tag
 # pushes create releases; main/PR builds use this default.
 set(TULPAR_VERSION "${PROJECT_VERSION}-dev"
