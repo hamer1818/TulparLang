@@ -233,8 +233,8 @@ with SHA-256 checksums so re-installs are byte-stable.
   all UTF-8. Localised CLI follows the system locale; override with
   `TULPAR_LANG=tr` or `TULPAR_LANG=en`.
 - **Single-binary toolchain.** One `tulpar` executable bundles the
-  AOT compiler, bytecode VM, package manager, formatter, language
-  server, and self-updater.
+  AOT/LLVM compiler, package manager, formatter, language server, and
+  self-updater.
 - **Editor-aware.** A real LSP server (`tulpar --lsp`) drives the
   bundled VS Code extension with Rust-style diagnostics, hover types,
   completion, go-to-definition, find-references, rename, and
@@ -351,11 +351,9 @@ The full list lives at <https://tulparlang.dev/reference/cli/>; the
 short version:
 
 ```bash
-tulpar <file.tpr>             # Run via AOT (default; native speed)
-tulpar --vm <file.tpr>        # Bytecode VM (instant startup)
+tulpar <file.tpr>             # Run via AOT (the only execution path; native speed)
 tulpar build <file.tpr> [out] # Standalone native binary
 
-tulpar --repl                 # Interactive REPL
 tulpar fmt <file.tpr>         # Source formatter
 tulpar typecheck <file.tpr>   # Standalone typechecker
 tulpar pkg <subcommand>       # Package manager:
@@ -511,8 +509,8 @@ TulparLang/
 │   ├── lexer/          # Tokenization
 │   ├── parser/         # Recursive-descent parser, AST nodes
 │   ├── typeinfer/      # Type inference (build pre-pass)
-│   ├── aot/            # LLVM 18 AOT backend (primary execution path)
-│   ├── vm/             # Bytecode VM + compiler (REPL + AOT fallback)
+│   ├── aot/            # LLVM 18 AOT backend (the only execution path)
+│   ├── vm/             # Shared runtime: aot_* builtins, arena allocator, value types
 │   ├── lsp/            # Language Server Protocol
 │   ├── fmt/            # Source formatter
 │   ├── pkg/            # Package manager (tulpar.toml + lockfile)
@@ -520,7 +518,7 @@ TulparLang/
 │   └── common/         # Localization, version, platform shims, TLS plumbing
 ├── lib/                # Standard library (Tulpar source, embedded at build)
 ├── runtime/            # cJSON, ARC heap, native FFI
-├── examples/           # 38 example programs
+├── examples/           # 47 example programs
 ├── benchmarks/         # Multi-language benchmark suite (CPU + HTTP)
 ├── tests/              # Smoke tests + lib/test.tpr regression suites
 ├── installer/          # Inno Setup script for Windows installer
@@ -528,20 +526,25 @@ TulparLang/
 └── cmake/              # CMake modules + EmbedLibraries.cmake
 ```
 
-### Execution backends
+### Execution model
 
-| Backend            | Status   | Notes                                            |
-|--------------------|----------|--------------------------------------------------|
-| **AOT (LLVM 18)**  | Primary  | LLVM IR → native via clang. Default for `tulpar <file>`. |
-| **Bytecode VM**    | Active   | Fast startup; powers `--vm` and the REPL, plus AOT-failure fallback. |
+Tulpar follows the C/Rust/Go model — a **single AOT/LLVM execution path**.
+`tulpar <file>` AOT-compiles and runs; there is no VM fallback, so an AOT
+failure is a hard error.
 
-The legacy tree-walk interpreter and x64 JIT were retired in May 2026
-(PRs #30 and #31 — see [STATUS.md](STATUS.md)). Single execution
-path means bug fixes apply uniformly to AOT and VM.
+| Component          | Role                                                        |
+|--------------------|-------------------------------------------------------------|
+| **AOT (LLVM 18)**  | The only execution path. LLVM IR → native via clang.        |
+| **`src/vm/` runtime** | Shared runtime linked into AOT'd binaries (the `aot_*` builtins, arena allocator, value types) — *not* an interpreter. |
+
+The bytecode VM interpreter and the REPL were removed in **v3.0.0**
+(2026-06-15); `--vm`/`--run` are ignored with a warning and `--repl` prints a
+removal notice. The legacy tree-walk interpreter and x64 JIT were retired
+earlier, in May 2026. See [STATUS.md](STATUS.md).
 
 ## Examples
 
-Thirty-eight example programs live in [examples/](examples/). A few
+Dozens of example programs live in [examples/](examples/). A few
 highlights:
 
 | File                          | Demonstrates                                |
