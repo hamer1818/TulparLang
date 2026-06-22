@@ -318,10 +318,29 @@ func cached_get(str path, str handler) {
 //   post("/users", create_user);
 //   body_schema({"name": "str", "age?": "int"});   // trailing ? = optional
 //
-// Field types: "str", "int", "float", "num" (int|float), "bool", "array",
-// "object", "json" (object|array), "any" (present, any type). A missing
-// required field or a type mismatch yields:
-//   422 {"error":"validation failed","fields":{"name":"required", ...}}
+// A field value is EITHER a simple type string OR a rich spec object:
+//   Types: "str", "int", "float", "num" (int|float), "bool", "array",
+//   "object", "json" (object|array), "any" (present, any type).
+//   Rich spec {type, ...constraints} by type:
+//     str            -> "min"/"max" (length), "regex" (full-string pattern)
+//     int/float/num  -> "min"/"max" (value)
+//     array          -> "min"/"max" (length), "items" (spec applied per element)
+//     object         -> "schema" (nested {field: spec} map; recurses)
+//
+//   body_schema({
+//     "name":  {"type":"str",   "min":3, "max":20},
+//     "email": {"type":"str",   "regex":"^[^@]+@[^@]+$"},
+//     "age?":  {"type":"int",   "min":0, "max":120},
+//     "tags":  {"type":"array", "items":"str", "min":1},
+//     "addr":  {"type":"object","schema":{"city":"str",
+//                  "zip":{"type":"str","regex":"^[0-9]{5}$"}}}
+//   });
+//
+// A missing required field, type mismatch, or violated constraint yields a 422
+// listing every offender; nested/array failures use dotted paths:
+//   422 {"error":"validation failed",
+//        "fields":{"name":"min length 3","addr.zip":"must match ^[0-9]{5}$",
+//                  "tags.0":"expected str, got int"}}
 func body_schema(json schema) {
     int last = length(_routes) - 1;
     if (last >= 0) {
@@ -431,14 +450,76 @@ func _wings_type_ok(str want, str got) {
     return false;
 }
 
-// Validate a parsed body against a schema. Returns {} when valid, or a ready
-// 422 response envelope ({"_status":422, "error":..., "fields":{...}}) listing
-// every offending field so the client sees them all at once (FastAPI-style).
-func _wings_validate(json schema, json body) {
+// Check a single value `val` against a field `spec`, returning a flat map of
+// {dotted-path -> message} (empty when valid). `spec` is either a simple type
+// string ("str", "int?"-style markers live on the KEY, not here) or a rich
+// object spec {type, min, max, regex, items, schema}. Used for both top-level
+// fields and recursion (array items, nested objects), so error paths nest via
+// the `path` prefix (e.g. "addr.zip", "tags.0").
+func _wings_check(json spec, json val, str path) {
     json fields = {};
-    int bad = 0;
+    str st = typeof(spec);
+    if (st == "string") {
+        // Simple type only (backwards-compatible form).
+        str got0 = typeof(val);
+        if (!_wings_type_ok(spec, got0)) {
+            fields[path] = "expected " + spec + ", got " + got0;
+        }
+        return fields;
+    }
+    // Rich object spec. Type-check first; never run constraints on a value of
+    // the wrong type (a wrong type is the more useful single message).
+    str want = spec["type"];
+    str got = typeof(val);
+    if (!_wings_type_ok(want, got)) {
+        fields[path] = "expected " + want + ", got " + got;
+        return fields;
+    }
+    if (want == "str") {
+        int slen = length(val);
+        if (_wings_has_key(spec, "min") && slen < spec["min"]) {
+            fields[path] = "min length " + toString(spec["min"]);
+        } else if (_wings_has_key(spec, "max") && slen > spec["max"]) {
+            fields[path] = "max length " + toString(spec["max"]);
+        } else if (_wings_has_key(spec, "regex") && regex_match(spec["regex"], val) == 0) {
+            fields[path] = "must match " + spec["regex"];
+        }
+    } else if (want == "int" || want == "float" || want == "num") {
+        if (_wings_has_key(spec, "min") && val < spec["min"]) {
+            fields[path] = "min " + toString(spec["min"]);
+        } else if (_wings_has_key(spec, "max") && val > spec["max"]) {
+            fields[path] = "max " + toString(spec["max"]);
+        }
+    } else if (want == "array") {
+        int alen = length(val);
+        if (_wings_has_key(spec, "min") && alen < spec["min"]) {
+            fields[path] = "min items " + toString(spec["min"]);
+        } else if (_wings_has_key(spec, "max") && alen > spec["max"]) {
+            fields[path] = "max items " + toString(spec["max"]);
+        }
+        // Element validation is independent of the length checks above.
+        if (_wings_has_key(spec, "items")) {
+            json items = spec["items"];
+            for (int i = 0; i < length(val); i++) {
+                json ce = _wings_check(items, val[i], path + "." + toString(i));
+                for (ek in keys(ce)) { fields[ek] = ce[ek]; }
+            }
+        }
+    } else if (want == "object") {
+        if (_wings_has_key(spec, "schema")) {
+            json co = _wings_validate_fields(spec["schema"], val, path + ".");
+            for (ok in keys(co)) { fields[ok] = co[ok]; }
+        }
+    }
+    return fields;
+}
+
+// Validate a body's fields against a schema map, accumulating dotted-path
+// errors under `prefix`. Handles the trailing-`?` optional marker on keys.
+func _wings_validate_fields(json schema, json body, str prefix) {
+    json fields = {};
     for (k in keys(schema)) {
-        str want = schema[k];
+        json spec = schema[k];
         str name = k;
         int optional = 0;
         int klen = length(k);
@@ -446,20 +527,27 @@ func _wings_validate(json schema, json body) {
             name = substring(k, 0, klen - 1);
             optional = 1;
         }
+        str path = prefix + name;
         if (!_wings_has_key(body, name)) {
             if (optional == 0) {
-                fields[name] = "required";
-                bad = 1;
+                fields[path] = "required";
             }
         } else {
-            str got = typeof(body[name]);
-            if (!_wings_type_ok(want, got)) {
-                fields[name] = "expected " + want + ", got " + got;
-                bad = 1;
-            }
+            json cf = _wings_check(spec, body[name], path);
+            for (fk in keys(cf)) { fields[fk] = cf[fk]; }
         }
     }
-    if (bad == 1) {
+    return fields;
+}
+
+// Validate a parsed body against a schema. Returns {} when valid, or a ready
+// 422 response envelope ({"_status":422, "error":..., "fields":{...}}) listing
+// every offending field so the client sees them all at once (FastAPI-style).
+// Schema values are either a simple type string or a rich spec object — see
+// body_schema() for the full grammar. Nested/array errors use dotted paths.
+func _wings_validate(json schema, json body) {
+    json fields = _wings_validate_fields(schema, body, "");
+    if (length(keys(fields)) > 0) {
         return {"_status": 422, "error": "validation failed", "fields": fields};
     }
     return {};
@@ -1458,11 +1546,44 @@ func _wings_oapi_type(str want) {
 
 // Turn a body_schema() into an OpenAPI requestBody object (properties +
 // required list), so /docs renders the exact shape the validator enforces.
-func _wings_oapi_body(json schema) {
+// Turn one field spec (simple string or rich object) into a JSON-Schema
+// property, carrying constraints across so /docs stays truthful. Recurses for
+// array `items` and nested `object` schemas.
+func _wings_oapi_prop(json spec) {
+    str st = typeof(spec);
+    if (st == "string") {
+        return {"type": _wings_oapi_type(spec)};
+    }
+    str want = spec["type"];
+    json p = {"type": _wings_oapi_type(want)};
+    if (want == "str") {
+        if (_wings_has_key(spec, "min"))   { p["minLength"] = spec["min"]; }
+        if (_wings_has_key(spec, "max"))   { p["maxLength"] = spec["max"]; }
+        if (_wings_has_key(spec, "regex")) { p["pattern"]   = spec["regex"]; }
+    } else if (want == "int" || want == "float" || want == "num") {
+        if (_wings_has_key(spec, "min")) { p["minimum"] = spec["min"]; }
+        if (_wings_has_key(spec, "max")) { p["maximum"] = spec["max"]; }
+    } else if (want == "array") {
+        if (_wings_has_key(spec, "min"))   { p["minItems"] = spec["min"]; }
+        if (_wings_has_key(spec, "max"))   { p["maxItems"] = spec["max"]; }
+        if (_wings_has_key(spec, "items")) { p["items"] = _wings_oapi_prop(spec["items"]); }
+    } else if (want == "object") {
+        if (_wings_has_key(spec, "schema")) {
+            json inner = _wings_oapi_props(spec["schema"]);
+            p["properties"] = inner["properties"];
+            if (_wings_has_key(inner, "required")) { p["required"] = inner["required"]; }
+        }
+    }
+    return p;
+}
+
+// Turn a {field: spec} schema map into JSON-Schema {properties, required}.
+// Shared by the requestBody builder and nested-object recursion above.
+func _wings_oapi_props(json schema) {
     json props = {};
     array required = [];
     for (k in keys(schema)) {
-        str want = schema[k];
+        json spec = schema[k];
         str name = k;
         int klen = length(k);
         if (klen > 0 && substring(k, klen - 1, klen) == "?") {
@@ -1470,11 +1591,20 @@ func _wings_oapi_body(json schema) {
         } else {
             push(required, k);
         }
-        props[name] = {"type": _wings_oapi_type(want)};
+        props[name] = _wings_oapi_prop(spec);
     }
-    json sch = {"type": "object", "properties": props};
+    json out = {"properties": props};
     if (length(required) > 0) {
-        sch["required"] = required;
+        out["required"] = required;
+    }
+    return out;
+}
+
+func _wings_oapi_body(json schema) {
+    json inner = _wings_oapi_props(schema);
+    json sch = {"type": "object", "properties": inner["properties"]};
+    if (_wings_has_key(inner, "required")) {
+        sch["required"] = inner["required"];
     }
     return {"required": true, "content": {"application/json": {"schema": sch}}};
 }

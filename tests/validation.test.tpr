@@ -40,10 +40,76 @@ func missing_required_is_422() {
     assert_eq_str(r["fields"]["name"], "required");
 }
 
+// ----- rich object-spec constraints ----------------------------------------
+
+func str_min_max() {
+    json sc = {"name": {"type": "str", "min": 3, "max": 8}};
+    assert_eq_int(_wings_validate(sc, {"name": "Ada"})["_status"], 0);
+    json lo = _wings_validate(sc, {"name": "Al"});
+    assert_eq_str(lo["fields"]["name"], "min length 3");
+    json hi = _wings_validate(sc, {"name": "Charliebrown"});
+    assert_eq_str(hi["fields"]["name"], "max length 8");
+}
+
+func str_regex() {
+    json sc = {"email": {"type": "str", "regex": "^[^@]+@[^@]+$"}};
+    assert_eq_int(_wings_validate(sc, {"email": "a@b.com"})["_status"], 0);
+    json bad = _wings_validate(sc, {"email": "nope"});
+    assert_eq_str(bad["fields"]["email"], "must match ^[^@]+@[^@]+$");
+}
+
+func num_min_max() {
+    json sc = {"age": {"type": "int", "min": 0, "max": 120}};
+    assert_eq_int(_wings_validate(sc, {"age": 30})["_status"], 0);
+    assert_eq_str(_wings_validate(sc, {"age": 0 - 1})["fields"]["age"], "min 0");
+    assert_eq_str(_wings_validate(sc, {"age": 200})["fields"]["age"], "max 120");
+}
+
+func array_items_and_len() {
+    json sc = {"tags": {"type": "array", "items": "str", "min": 1}};
+    assert_eq_int(_wings_validate(sc, {"tags": ["a", "b"]})["_status"], 0);
+    // empty -> min items
+    assert_eq_str(_wings_validate(sc, {"tags": []})["fields"]["tags"], "min items 1");
+    // bad element -> dotted path tags.1
+    json be = _wings_validate(sc, {"tags": ["ok", 5]});
+    assert_eq_str(be["fields"]["tags.1"], "expected str, got int");
+}
+
+func nested_object_dotted_path() {
+    json sc = {"addr": {"type": "object", "schema": {
+                  "city": "str",
+                  "zip": {"type": "str", "regex": "^[0-9]{5}$"}}}};
+    assert_eq_int(_wings_validate(sc, {"addr": {"city": "X", "zip": "12345"}})["_status"], 0);
+    json bad = _wings_validate(sc, {"addr": {"city": "X", "zip": "12ab"}});
+    assert_eq_int(bad["_status"], 422);
+    assert_eq_str(bad["fields"]["addr.zip"], "must match ^[0-9]{5}$");
+}
+
+func optional_constrained_field() {
+    json sc = {"age?": {"type": "int", "min": 0}};
+    // absent optional -> ok
+    assert_eq_int(_wings_validate(sc, {})["_status"], 0);
+    // present-but-bad optional -> still validated
+    assert_eq_str(_wings_validate(sc, {"age": 0 - 5})["fields"]["age"], "min 0");
+}
+
+func wrong_type_skips_constraints() {
+    // a wrong-typed value reports the type error, not a constraint error
+    json sc = {"name": {"type": "str", "min": 3}};
+    assert_eq_str(_wings_validate(sc, {"name": 7})["fields"]["name"], "expected str, got int");
+}
+
 print("=== wings validation tests ===");
 test("type_ok basics", "type_ok_basics");
 test("valid body passes", "valid_body_passes");
 test("optional field may be absent", "optional_field_may_be_absent");
 test("type mismatch -> 422", "type_mismatch_is_422");
 test("missing required -> 422", "missing_required_is_422");
+test("str min/max", "str_min_max");
+test("str regex", "str_regex");
+test("num min/max", "num_min_max");
+test("array items + length", "array_items_and_len");
+test("nested object dotted path", "nested_object_dotted_path");
+test("optional constrained field", "optional_constrained_field");
+test("wrong type skips constraints", "wrong_type_skips_constraints");
 test_summary();
