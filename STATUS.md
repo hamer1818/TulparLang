@@ -251,6 +251,18 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
       `libtulpar_runtime.a` kopyalandı. Canlı doğrulandı: text alan (UTF-8) + text
       ve PNG dosya **byte-exact** kaydedildi; 52/52 örnek + 12/12 validation temiz
       (`examples/wings_upload_test.tpr`). Kalan tek paritesi boşluğu: DI (`Depends`).
+    - ✅ **Küçük cila turu (2026-06-22):** (1) **Wings banner tutarlılığı** —
+      tüm serve modları ortak `_wings_print_banner(port, suffix)` helper'ını
+      çağırıyor (renkli kutu + route tablosu her modda aynı, mod Server satırında,
+      sürüm v3.1). (2) **Wings TLS yük testi** (OpenSSL 3.5.5) — 1000 istek/50
+      paralel → 0 hata ~663 req/s, keep-alive ~1.5ms, stabil. (3) **DB
+      per-connection `cache_size`** — `db_apply_pragmas` her bağlantıya
+      `PRAGMA cache_size=-2048` (2 MiB, `TULPAR_DB_CACHE_KB` ile tunable) → pool'da
+      RSS sınırlama. (4) **DB prepared-statement cache** — `db_query` thread-local,
+      bağlantı-başına bounded (64, FIFO) cache; aynı SQL `sqlite3_reset` ile yeniden
+      kullanılır; `prepare_v2` şema-değişiminde auto-reprepare; `db_close` →
+      `sqlite3_close_v2` + cache finalize. Hepsi canlı doğrulandı, 12/12 validation
+      + tüm örnekler temiz.
     - ✅ **Dependency injection — `depends`/`dep` (2026-06-22):** framework
       paritesi turu son adımı (FastAPI `Depends`). `depends("fn")` route'a bir
       bağımlılık-fonksiyon adı iliştirir; handler'dan önce her bağımlılık `req` ile

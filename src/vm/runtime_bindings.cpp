@@ -31,6 +31,7 @@ typedef SSIZE_T ssize_t;
 #include <mutex>
 #include <regex>
 #include <unordered_set>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -6923,6 +6924,61 @@ static std::vector<DbConn *> g_db_registry; // index = id (handle - 1)
 // Per-thread cache: descriptor id (0-based) -> this thread's connection.
 static thread_local std::vector<sqlite3 *> g_db_tls_conns;
 
+// Per-thread prepared-statement cache. Keyed by connection pointer — since
+// connections are per-thread (g_db_tls_conns), this is naturally lock-free on
+// the hot path. db_query reuses a compiled statement via sqlite3_reset instead
+// of re-preparing identical SQL, a win for read-heavy endpoints running the
+// same SELECT repeatedly. Queries are raw SQL strings (no bound params), so
+// only EXACT repeats hit; values baked into the SQL each get their own entry.
+// Bounded with FIFO eviction (the evicted statement is finalized). prepare_v2
+// auto-reprepares cached statements across schema changes, so caching is safe.
+// db_close uses sqlite3_close_v2 so any still-cached statements don't block the
+// close (the connection is reclaimed once they finalize, e.g. on eviction).
+struct StmtCacheEntry {
+  std::string sql;
+  sqlite3_stmt *stmt;
+};
+static const size_t kStmtCacheCap = 64;
+static thread_local std::unordered_map<sqlite3 *, std::vector<StmtCacheEntry>>
+    g_stmt_cache;
+
+// Return a ready-to-step statement for `sql` on `db`: a reset cache hit, or a
+// freshly prepared + cached statement. nullptr on prepare failure. The caller
+// must NOT finalize the result — it stays cached. Call sqlite3_reset after use
+// to release locks (the next reuse resets again, which is harmless).
+static sqlite3_stmt *db_cached_prepare(sqlite3 *db, const char *sql,
+                                       int sql_len) {
+  std::vector<StmtCacheEntry> &cache = g_stmt_cache[db];
+  for (size_t i = 0; i < cache.size(); i++) {
+    if (cache[i].sql.size() == (size_t)sql_len &&
+        memcmp(cache[i].sql.data(), sql, sql_len) == 0) {
+      sqlite3_reset(cache[i].stmt);
+      return cache[i].stmt;
+    }
+  }
+  sqlite3_stmt *stmt = nullptr;
+  if (sqlite3_prepare_v2(db, sql, sql_len, &stmt, nullptr) != SQLITE_OK || !stmt)
+    return nullptr;
+  if (cache.size() >= kStmtCacheCap) {
+    sqlite3_finalize(cache.front().stmt); // FIFO evict
+    cache.erase(cache.begin());
+  }
+  cache.push_back({std::string(sql, (size_t)sql_len), stmt});
+  return stmt;
+}
+
+// Finalize and drop THIS thread's cached statements for `db` (called on close
+// so the common single-thread / shared path is fully leak-free).
+static void db_drop_stmt_cache(sqlite3 *db) {
+  std::unordered_map<sqlite3 *, std::vector<StmtCacheEntry>>::iterator it =
+      g_stmt_cache.find(db);
+  if (it == g_stmt_cache.end())
+    return;
+  for (size_t i = 0; i < it->second.size(); i++)
+    sqlite3_finalize(it->second[i].stmt);
+  g_stmt_cache.erase(it);
+}
+
 static void db_apply_pragmas(sqlite3 *db, bool wal) {
   // busy_timeout: on a locked DB, block-and-retry for up to 5s instead of
   // failing immediately with SQLITE_BUSY (matters now that independent
@@ -6934,6 +6990,23 @@ static void db_apply_pragmas(sqlite3 *db, bool wal) {
     sqlite3_exec(db, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
                  nullptr, nullptr, nullptr);
   }
+  // Per-connection page-cache cap. With the per-thread connection model the
+  // page cache is paid once PER connection, so N worker threads multiply it
+  // — an unbounded default would let RSS balloon under listen_pool. Negative
+  // cache_size = KiB (positive would be pages, which varies with page_size).
+  // Default 2 MiB; override with TULPAR_DB_CACHE_KB to tune the RSS/throughput
+  // trade-off on many-connection servers.
+  int cache_kb = 2048;
+  const char *cache_env = getenv("TULPAR_DB_CACHE_KB");
+  if (cache_env && *cache_env) {
+    int v = atoi(cache_env);
+    if (v > 0)
+      cache_kb = v;
+  }
+  char cache_pragma[64];
+  snprintf(cache_pragma, sizeof(cache_pragma), "PRAGMA cache_size=-%d;",
+           cache_kb);
+  sqlite3_exec(db, cache_pragma, nullptr, nullptr, nullptr);
 }
 
 // Open a fresh connection for `desc` and register it for db_close cleanup.
@@ -7069,16 +7142,24 @@ void aot_db_close(VMValue dbVal) {
   // gates on `closed` so those threads stop using their cached pointers.
   if (desc->closed.exchange(true))
     return;
+  // Finalize this thread's cached prepared statements for the connections being
+  // closed (keeps the common single-thread / shared :memory: path leak-free),
+  // then close. sqlite3_close_v2 tolerates statements still cached by OTHER
+  // worker threads — the connection is reclaimed once those finalize (on
+  // eviction) instead of failing with SQLITE_BUSY.
   if (desc->shared) {
     if (desc->shared_conn) {
-      sqlite3_close(desc->shared_conn);
+      db_drop_stmt_cache(desc->shared_conn);
+      sqlite3_close_v2(desc->shared_conn);
       desc->shared_conn = nullptr;
     }
   } else {
     std::lock_guard<std::mutex> g(desc->conns_mu);
     for (sqlite3 *db : desc->conns)
-      if (db)
-        sqlite3_close(db);
+      if (db) {
+        db_drop_stmt_cache(db);
+        sqlite3_close_v2(db);
+      }
     desc->conns.clear();
   }
   if (g_db_tls_conns.size() > id)
@@ -7148,12 +7229,13 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
   if (!db)
     return VM_OBJ((Obj *)result);
 
-  sqlite3_stmt *stmt = nullptr;
-  int rc = sqlite3_prepare_v2(db, sql->chars, -1, &stmt, nullptr);
+  // Cached prepare: reuse a compiled statement for identical SQL on this
+  // connection instead of prepare+finalize per call.
+  sqlite3_stmt *stmt = db_cached_prepare(db, sql->chars, sql->length);
 
-  if (rc != SQLITE_OK || !stmt) {
+  if (!stmt) {
     if (getenv("TULPAR_DB_DEBUG"))
-      fprintf(stderr, "[dbq] prepare rc=%d (%s)\n", rc, sqlite3_errmsg(db));
+      fprintf(stderr, "[dbq] prepare failed (%s)\n", sqlite3_errmsg(db));
     return VM_OBJ((Obj *)result);
   }
 
@@ -7225,7 +7307,9 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
     fprintf(stderr, "[dbq] step rc=%d (%s) rows=%d\n", step_rc,
             sqlite3_errmsg(db), result->count);
 
-  sqlite3_finalize(stmt);
+  // Cached statement: reset (releases the read lock / WAL snapshot) instead of
+  // finalize, so it stays compiled for the next identical query.
+  sqlite3_reset(stmt);
 
   return VM_OBJ((Obj *)result);
 }

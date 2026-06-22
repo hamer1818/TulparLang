@@ -598,6 +598,33 @@ func serve(int port) {
     return listen(port);
 }
 
+// Shared startup banner — colored box + route table + server line. Every serve
+// mode (listen / listen_pool / listen_evented / listen_async) calls this so they
+// render identically; NO_COLOR is honored via `_wings_c`. `suffix` annotates the
+// serve mode on the Server line ("" = default single-thread accept loop).
+func _wings_print_banner(int port, str suffix) {
+    print("");
+    print(_wings_c("36",   "  ╔═══════════════════════════════════╗"));
+    print(_wings_c("1;36", "  ║       Tulpar Wings v3.1           ║"));
+    print(_wings_c("36",   "  ║    Give your API wings! 🪶        ║"));
+    print(_wings_c("36",   "  ╚═══════════════════════════════════╝"));
+    print("");
+    print("  " + _wings_c("1", "Routes:"));
+    for (int i = 0; i < length(_routes); i++) {
+        json r = _routes[i];
+        print("    " + _wings_c(_wings_method_color(r["method"]), r["method"]) +
+              " " + r["path"] + _wings_c("90", "  →  " + r["handler"] + "()"));
+    }
+    print("");
+    str url = _wings_c("1;32", "http://127.0.0.1:" + toString(port));
+    if (length(suffix) > 0) {
+        url = url + _wings_c("90", "  (" + suffix + ")");
+    }
+    print("  " + _wings_c("1", "Server:") + "  " + url);
+    print(_wings_c("90", "  Press Ctrl+C to stop"));
+    print("");
+}
+
 // ----- Internals -----------------------------------------------------------
 // Pull `Cookie:` out of the parsed headers object and run it through the
 // native `parse_cookies` builtin. Returns an empty object when the
@@ -1623,22 +1650,7 @@ func listen_evented(int port) {
     _wings_apply_env_config();
     _wings_started_at = timestamp();
 
-    print("");
-    print("  ╔═══════════════════════════════════╗");
-    print("  ║       Tulpar Wings v2.3 (event)   ║");
-    print("  ║    Give your API wings! 🪶        ║");
-    print("  ╚═══════════════════════════════════╝");
-    print("");
-    print("  Routes:");
-    for (int i = 0; i < length(_routes); i++) {
-        json r = _routes[i];
-        print("    " + _wings_c(_wings_method_color(r["method"]), r["method"]) +
-              " " + r["path"] + _wings_c("90", "  →  " + r["handler"] + "()"));
-    }
-    print("");
-    print("  Server: http://127.0.0.1:" + toString(port) + " (single-thread event loop)");
-    print("  Press Ctrl+C to stop");
-    print("");
+    _wings_print_banner(port, "single-thread event loop");
 
     int server = socket_server(_wings_bind_host(), port);
     if (server < 0) {
@@ -1780,22 +1792,7 @@ func listen_pool(int port, int n_workers) {
     _wings_apply_env_config();
     _wings_started_at = timestamp();
 
-    print("");
-    print("  ╔═══════════════════════════════════╗");
-    print("  ║       Tulpar Wings v2.2 (pool)    ║");
-    print("  ║    Give your API wings! 🪶        ║");
-    print("  ╚═══════════════════════════════════╝");
-    print("");
-    print("  Routes:");
-    for (int i = 0; i < length(_routes); i++) {
-        json r = _routes[i];
-        print("    " + _wings_c(_wings_method_color(r["method"]), r["method"]) +
-              " " + r["path"] + _wings_c("90", "  →  " + r["handler"] + "()"));
-    }
-    print("");
-    print("  Server: http://127.0.0.1:" + toString(port) + " (worker pool, " + toString(n_workers) + ")");
-    print("  Press Ctrl+C to stop");
-    print("");
+    _wings_print_banner(port, "worker pool, " + toString(n_workers));
 
     int server = socket_server(_wings_bind_host(), port);
     if (server < 0) {
@@ -1841,22 +1838,7 @@ func listen_async(int port) {
     _wings_apply_env_config();
     _wings_started_at = timestamp();
 
-    print("");
-    print("  ╔═══════════════════════════════════╗");
-    print("  ║       Tulpar Wings v2.1 (async)   ║");
-    print("  ║    Give your API wings! 🪶        ║");
-    print("  ╚═══════════════════════════════════╝");
-    print("");
-    print("  Routes:");
-    for (int i = 0; i < length(_routes); i++) {
-        json r = _routes[i];
-        print("    " + _wings_c(_wings_method_color(r["method"]), r["method"]) +
-              " " + r["path"] + _wings_c("90", "  →  " + r["handler"] + "()"));
-    }
-    print("");
-    print("  Server: http://127.0.0.1:" + toString(port) + " (multi-threaded)");
-    print("  Press Ctrl+C to stop");
-    print("");
+    _wings_print_banner(port, "multi-threaded");
 
     int server = socket_server(_wings_bind_host(), port);
     if (server < 0) {
@@ -2094,23 +2076,7 @@ func listen(int port) {
     }
     int _port = _bind["port"];
 
-    print("");
-    print(_wings_c("36", "  ╔═══════════════════════════════════╗"));
-    print(_wings_c("1;36", "  ║       Tulpar Wings v2.0           ║"));
-    print(_wings_c("36", "  ║    Give your API wings! 🪶        ║"));
-    print(_wings_c("36", "  ╚═══════════════════════════════════╝"));
-    print("");
-    print("  " + _wings_c("1", "Routes:"));
-    for (int i = 0; i < length(_routes); i++) {
-        json r = _routes[i];
-        print("    " + _wings_c(_wings_method_color(r["method"]), r["method"]) +
-              " " + r["path"] + _wings_c("90", "  →  " + r["handler"] + "()"));
-    }
-    print("");
-    print("  " + _wings_c("1", "Server:") + "  " +
-          _wings_c("1;32", "http://127.0.0.1:" + toString(_port)));
-    print(_wings_c("90", "  Press Ctrl+C to stop"));
-    print("");
+    _wings_print_banner(_port, "");
 
     // Arena watermark taken once at server start. Every request below
     // saves/restores against this baseline so transient request
