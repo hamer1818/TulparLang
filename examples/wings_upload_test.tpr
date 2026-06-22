@@ -1,0 +1,31 @@
+// ============================================================================
+// Wings — multipart/form-data + dosya yükleme testi (`form` / `uploaded_files`)
+//
+// `parse_multipart` (native builtin) multipart gövdeyi {fields, files}'a ayırır;
+// Wings helper'ları sarmalar:
+//   form(req, name, fallback)  → text alanı
+//   uploaded_files(req)        → [{name, filename, content_type, data, size}]
+// Dosya `data`'sı ham byte'tır (binary-safe — length-tracked string).
+//
+// Çalıştır:  tulpar examples/wings_upload_test.tpr
+//   curl -X POST http://127.0.0.1:8484/upload \
+//        -F 'title=Merhaba' -F 'doc=@dosya.txt' -F 'img=@resim.png;type=image/png'
+// ============================================================================
+import "wings";
+
+func upload(req) {
+    str title = form(req, "title", "(başlık yok)");
+    json saved = [];
+    for (f in uploaded_files(req)) {
+        // Gerçek bir uygulamada güvenli bir dizine yaz (filename'i sanitize et!).
+        str dest = "/tmp/uploads/" + f["filename"];
+        write_file(dest, f["data"]);
+        push(saved, {"filename": f["filename"], "size": f["size"],
+                     "content_type": f["content_type"]});
+    }
+    return created({"title": title, "uploaded": saved});
+}
+
+post("/upload", "upload");
+
+serve();

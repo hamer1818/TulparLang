@@ -1,0 +1,45 @@
+// ============================================================================
+// CONTROLLER katmanı — HTTP isteğini modele bağlar. Kendi bağımlılığını (model)
+// açıkça import eder; Tulpar import'ları dedup ettiği için app de aynı modeli
+// import etse sorun olmaz.
+//
+// NOT: Handler isimleri GLOBAL kalmalı (route'lar bunları fonksiyon adıyla bağlar),
+// bu yüzden düz `import` kullanıyoruz — `import ... as alias` İSİMLERİ mangle eder
+// ve route bağlama bozulurdu.
+// ============================================================================
+import "models/user_model";
+
+func users_index(req) {
+    return ok(user_all());
+}
+
+func users_show(req) {
+    int id = toInt(req.params.id);
+    json u = user_find(id);
+    if (user_has_id(u)) { return ok(u); }
+    return not_found(t"user {id} not found");
+}
+
+func users_store(req) {
+    json body = req.json;                       // gövde otomatik parse (body_schema 422'yi zaten yakaladı)
+    json u = user_create(body["name"]);
+    return created(u);                          // 201
+}
+
+func users_update(req) {
+    int id = toInt(req.params.id);
+    if (user_exists(id) == false) {
+        return not_found(t"user {id} not found");
+    }
+    json u = user_update(id, req.json["name"]);
+    return ok(u);
+}
+
+func users_destroy(req) {
+    int id = toInt(req.params.id);
+    if (user_exists(id) == false) {
+        return not_found(t"user {id} not found");
+    }
+    user_delete(id);
+    return no_content();                        // 204
+}

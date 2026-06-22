@@ -1,0 +1,40 @@
+// ============================================================================
+// Wings — dependency injection testi (`depends` / `dep`) — FastAPI `Depends` tarzı
+//
+// `depends("fn")` route'a bir bağımlılık iliştirir. Handler'dan ÖNCE her bağımlılık
+// `req` ile çağrılır; dönüş değeri enjekte edilir, handler `dep("fn")` ile okur.
+// Bir bağımlılık response dict (`_status`'lı, örn. `unauthorized()`) dönerse
+// kısa-devre olur — middleware gibi ama per-route ve değer-üreten.
+// `_wings_deps` thread-local → listen_pool worker'ları arasında sızmaz.
+//
+// Çalıştır:  tulpar examples/wings_di_test.tpr
+//   GET /profile                          → 401 (current_user dep'i kısa-devre)
+//   GET /profile -H "Authorization: Bearer x" → 200, enjekte edilmiş user+config
+// ============================================================================
+import "wings";
+
+// Bağımlılık: kimlik doğrula → user üret; token yoksa 401.
+func current_user(req) {
+    str t = req["headers"]["Authorization"];
+    if (length(t) == 0) {
+        return unauthorized("token gerekli");
+    }
+    return {"id": 1, "name": "Ada"};
+}
+
+// Bağımlılık: uygulama yapılandırmasını enjekte et.
+func app_config(req) {
+    return {"version": "3.1", "env": "test"};
+}
+
+func profile(req) {
+    json user = dep("current_user");
+    json cfg  = dep("app_config");
+    return ok({"user": user, "config": cfg});
+}
+
+get("/profile", "profile");
+depends("current_user");        // sırayla çalışır
+depends("app_config");
+
+serve();

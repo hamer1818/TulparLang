@@ -1,0 +1,28 @@
+// ============================================================================
+// Wings — route grupları / prefix testi (`group`)
+//
+// `group(prefix, register_fn_name)` — register_fn içindeki tüm get/post/put/del
+// path'lerini `prefix` ile öneklenir; sonra prefix geri alınır (gruplar nest eder).
+//
+// Çalıştır:  tulpar examples/wings_groups_test.tpr
+//   GET /api/v1/users      → 200   (grup prefix'i uygulandı)
+//   GET /api/v1/users/7    → 200   (prefix altında path param çalışır)
+//   GET /health            → 200   (grup dışı)
+//   GET /users             → 404   (prefix'siz hali kayıtlı değil)
+// ============================================================================
+import "wings";
+
+func list_users(req) { return ok({"scope": "v1 users"}); }
+func get_user(req)   { return ok({"id": toInt(req.params.id)}); }
+func health(req)     { return ok({"status": "up"}); }
+
+// /api/v1 altındaki route'lar tek yerde toplanır.
+func api_v1() {
+    get("/users", "list_users");        // → /api/v1/users
+    get("/users/:id", "get_user");      // → /api/v1/users/:id
+}
+
+group("/api/v1", "api_v1");             // prefix uygula + otomatik geri al
+get("/health", "health");               // grup dışı → /health
+
+serve();

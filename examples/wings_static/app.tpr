@@ -1,0 +1,27 @@
+// ============================================================================
+// Wings — static dosya servisi testi (`static`)
+//
+// `static(url_prefix, dir)` bir dizini URL prefix'i altında sunar. Dosyalar
+// 404-fallback olarak servis edilir: önce gerçek route'lar (exact + :param)
+// denenir, hiçbiri eşleşmezse static mount'lar kontrol edilir. Yani gerçek
+// route'lar her zaman kazanır; static catch-all'dur. `..` (path traversal)
+// reddedilir; text asset'lerine doğru Content-Type verilir.
+//
+// ÇALIŞTIRMA — bu dizinden (public/ göreli yol):
+//   cd examples/wings_static && tulpar app.tpr
+//   GET /                    → 200 (gerçek route, JSON)
+//   GET /static/index.html   → 200 text/html
+//   GET /static/style.css    → 200 text/css
+//   GET /static/yok.css      → 404
+//   GET /static/../app.tpr   → 404 (traversal engellendi)
+// ============================================================================
+import "wings";
+
+func home(req) {
+    return ok({"msg": "gerçek route kazanır", "static": "/static/index.html"});
+}
+
+get("/", "home");
+static("/static", "./public");     // ./public/* -> /static/*
+
+serve();

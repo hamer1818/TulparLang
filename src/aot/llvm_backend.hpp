@@ -286,6 +286,7 @@ typedef struct {
   LLVMValueRef func_aot_path_match;
   LLVMValueRef func_aot_parse_query;
   LLVMValueRef func_aot_parse_cookies;
+  LLVMValueRef func_aot_parse_multipart;
   // Wings-level fused response builder — folds the envelope check +
   // toJson + http_create_response_keepalive sequence into one native
   // call (one Tulpar function dispatch instead of three).

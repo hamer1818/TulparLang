@@ -1,0 +1,58 @@
+// ============================================================================
+// MODEL katmanı — veri erişimi. Wings'ten ve HTTP'den habersiz; sadece "user"
+// kayıtları üzerinde CRUD. Bellek-içi liste (gerçek projede db_* ile SQLite).
+// ============================================================================
+
+// Bellek-içi "tablo" (global). Her isim `user_` ile öneklenmiş ki app/controller
+// global ad alanında çakışmasın.
+json user_store = [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Hamza"}];
+int  user_seq   = 3;
+
+func user_all() {
+    return user_store;
+}
+
+func user_find(int id) {
+    for (u in user_store) {
+        if (u["id"] == id) { return u; }
+    }
+    return {};                                  // bulunamadı → boş obje
+}
+
+func user_exists(int id) {
+    json u = user_find(id);
+    return user_has_id(u);
+}
+
+func user_has_id(json u) {
+    return user_keys_count(u) > 0;
+}
+
+func user_keys_count(json u) {
+    return length(keys(u));
+}
+
+func user_create(str name) {
+    json u = {"id": user_seq, "name": name};
+    user_seq = user_seq + 1;
+    push(user_store, u);                        // global'e push → otomatik kalıcı
+    return u;
+}
+
+func user_update(int id, str name) {
+    for (u in user_store) {
+        if (u["id"] == id) {
+            u["name"] = name;
+            return u;
+        }
+    }
+    return {};
+}
+
+func user_delete(int id) {
+    json kept = [];
+    for (u in user_store) {
+        if (u["id"] != id) { push(kept, u); }
+    }
+    user_store = kept;
+}

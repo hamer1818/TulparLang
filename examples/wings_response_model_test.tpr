@@ -1,0 +1,44 @@
+// ============================================================================
+// Wings — response model / çıktı şekillendirme testi (`response_model`)
+//
+// `body_schema`'nın simetrik karşılığı: route'a bir şema iliştirir ve BAŞARILI
+// handler çıktısını yalnız bildirilen alanlara filtreler. Bildirilmeyen alanlar
+// (password, _internal gibi sırlar) serileştirmeden ÖNCE düşürülür → handler tüm
+// satırı dönebilir, sızma olmaz. `_status`/`_raw`/... kontrol key'leri korunur;
+// hatalar (>=400) filtreyi bypass eder (`{error:...}` sıyrılmaz). Obje ve
+// obje-dizisi üzerinde çalışır.
+//
+// Çalıştır:  tulpar examples/wings_response_model_test.tpr
+//   GET  /users/:id → {"id","name"}        (password + _internal düşer)
+//   GET  /users     → her elemanda filtreli
+//   GET  /missing   → 404 {"error":...}    (bypass)
+// ============================================================================
+import "wings";
+
+func show_user(req) {
+    // Handler tam satırı döner — hassas alanlar dahil.
+    return ok({"id": toInt(req.params.id), "name": "Ada",
+               "password_hash": "x9f...", "_internal": "audit"});
+}
+
+func list_users(req) {
+    return ok([
+        {"id": 1, "name": "Ada",   "password_hash": "a"},
+        {"id": 2, "name": "Hamza", "password_hash": "b"}
+    ]);
+}
+
+func missing(req) {
+    return not_found("kullanıcı yok");      // hata → response_model bypass
+}
+
+get("/users/:id", "show_user");
+response_model({"id": "int", "name": "str"});
+
+get("/users", "list_users");
+response_model({"id": "int", "name": "str"});
+
+get("/missing", "missing");
+response_model({"id": "int", "name": "str"});
+
+serve();

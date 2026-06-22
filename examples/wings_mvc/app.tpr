@@ -1,0 +1,29 @@
+// ============================================================================
+// Wings — MVC/klasörlü test. Katmanlar ayrı dosyalarda:
+//
+//   models/user_model.tpr         → veri erişimi (CRUD)
+//   controllers/user_controller.tpr → handler'lar (model'i kullanır)
+//   app.tpr (bu dosya)            → wings + route tanımları + sunucu
+//
+// ÇALIŞTIRMA — bu dizinden çalıştır (import'lar cwd'ye göre çözülür):
+//   cd examples/wings_mvc && tulpar app.tpr
+// Sonra: http://127.0.0.1:8484   (GET/POST/PUT/DELETE /users ...)
+// ============================================================================
+import "wings";                 // gömülü stdlib
+import "models/user_model";     // veri katmanı
+import "controllers/user_controller";  // handler'lar
+
+// --- Route tablosu: REST kaynağı /users -------------------------------------
+get("/users", users_index);
+get("/users/:id", users_show);
+
+post("/users", users_store);
+body_schema({"name": "str"});   // geçersiz gövde → handler'a girmeden otomatik 422
+
+put("/users/:id", users_update);
+body_schema({"name": "str"});
+
+del("/users/:id", users_destroy);
+
+// --- Sunucu (varsayılan 8484; /docs + /openapi.json otomatik) ---------------
+serve();

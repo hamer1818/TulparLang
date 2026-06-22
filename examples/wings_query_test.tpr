@@ -1,0 +1,25 @@
+// ============================================================================
+// Wings — tipli query-param erişimi testi (`query` / `query_int` / `query_bool`)
+//
+// `req["query"]` ham string değerler tutar; bu helper'lar varsayılan-fallback ile
+// coerce eder — pagination/filtre tek satırda, elle presence + toInt kontrolü yok.
+//
+// Çalıştır:  tulpar examples/wings_query_test.tpr
+//   GET /items                              → varsayılanlar
+//   GET /items?page=3&limit=50&sort=name    → coerce
+//   GET /items?desc=true   /  ?desc=0       → bool
+//   GET /items?page=abc                     → toInt güvenli (0)
+// ============================================================================
+import "wings";
+
+func list_items(req) {
+    int page  = query_int(req, "page", 1);
+    int limit = query_int(req, "limit", 20);
+    str sort  = query(req, "sort", "id");
+    bool desc = query_bool(req, "desc", false);
+    return ok({"page": page, "limit": limit, "sort": sort, "desc": desc});
+}
+
+get("/items", "list_items");
+
+serve();

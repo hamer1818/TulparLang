@@ -1,0 +1,82 @@
+// ============================================================================
+// Wings — BASİT tek-dosya test (sadece `import "wings"`)
+// Wings syntax'ını tek bakışta görmek/denemek için. Klasör/modül yok.
+//
+// Çalıştır:  tulpar examples/wings_simple_test.tpr
+// Sonra:     http://127.0.0.1:8484
+//   GET  /                 → karşılama
+//   GET  /users            → liste
+//   GET  /users/:id        → tek kayıt (yoksa 404)
+//   POST /users   {name}   → oluştur (body_schema ile otomatik 422)
+//   PUT  /users/:id {name} → güncelle
+//   DEL  /users/:id        → sil (204)
+// ============================================================================
+import "wings";
+
+// --- "Veritabanı" yerine bellek-içi liste (global) --------------------------
+json _users = [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Hamza"}];
+int _next_id = 3;
+
+// --- Handler'lar: `req` alır; req.params / req.json noktalı erişim çalışır ---
+func home(req) {
+    return ok({"message": "Tulpar Wings", "routes": 6});
+}
+
+func list_users(req) {
+    return ok(_users);
+}
+
+func get_user(req) {
+    int id = toInt(req.params.id);
+    for (u in _users) {
+        if (u["id"] == id) { return ok(u); }
+    }
+    return not_found(t"user {id} not found");           // 404 + t-string
+}
+
+func create_user(req) {
+    json body = req.json;                                // gövde otomatik parse
+    json u = {"id": _next_id, "name": body["name"]};
+    _next_id = _next_id + 1;
+    push(_users, u);                                     // global'e yazım otomatik kalıcı
+    return created(u);                                   // 201
+}
+
+func update_user(req) {
+    int id = toInt(req.params.id);
+    json body = req.json;
+    for (u in _users) {
+        if (u["id"] == id) {
+            u["name"] = body["name"];
+            return ok(u);
+        }
+    }
+    return not_found(t"user {id} not found");
+}
+
+func delete_user(req) {
+    int id = toInt(req.params.id);
+    json kept = [];
+    for (u in _users) {
+        if (u["id"] != id) { push(kept, u); }
+    }
+    _users = kept;
+    return no_content();                                 // 204
+}
+
+// --- Route'lar: handler'a fonksiyon ADIYLA bağlanır (string değil) -----------
+// Yanlış isim yazarsan runtime'da sessiz 404 değil, DERLEME hatası alırsın.
+get("/", home);
+get("/users", list_users);
+get("/users/:id", get_user);
+
+post("/users", create_user);
+body_schema({"name": "str"});                            // route'a şema iliştirir → geçersiz gövde otomatik 422
+
+put("/users/:id", update_user);
+body_schema({"name": "str"});
+
+del("/users/:id", delete_user);
+
+// --- Sunucuyu başlat (varsayılan 8484; doluysa +1). /docs otomatik. ---------
+serve();

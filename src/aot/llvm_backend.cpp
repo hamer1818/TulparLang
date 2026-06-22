@@ -254,7 +254,11 @@ static void analyze_module_captures(LLVMBackend *backend, ASTNode_C *node, int d
 static bool global_needs_tls(const char *name) {
   if (!name)
     return false;
-  return strcmp(name, "_request") == 0;
+  // Per-request state that must not be shared across listen_pool worker
+  // threads. `_wings_deps` holds the current request's resolved dependency
+  // values (Wings DI); like `_request` it is written once per dispatch and
+  // read by the handler on the same thread.
+  return strcmp(name, "_request") == 0 || strcmp(name, "_wings_deps") == 0;
 }
 
 // Counter globals that wings increments from parallel worker threads.
@@ -1502,6 +1506,15 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // reuse http_parse_type rather than declaring a fresh signature.
   backend->func_aot_parse_cookies = LLVMAddFunction(
       backend->module, "aot_parse_cookies", http_parse_type);
+
+  // aot_parse_multipart_ptr(VMValue* body, VMValue* content_type) -> VMValue
+  // 2 pointer-ABI args (same shape as aot_split_ptr) returning the parsed
+  // {fields, files} object.
+  LLVMTypeRef multipart_params[] = {backend->ptr_type, backend->ptr_type};
+  LLVMTypeRef multipart_type =
+      llvm_make_vmvalue_func_type(backend, multipart_params, 2, 0);
+  backend->func_aot_parse_multipart = LLVMAddFunction(
+      backend->module, "aot_parse_multipart_ptr", multipart_type);
 
   // ====== Crypto / encoding helpers ======
   // All take a single VMValue string and return a VMValue string, so
@@ -4104,6 +4117,26 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           backend->builder, del_ptr, backend->ptr_type, "split_del_void");
       LLVMValueRef args[] = {str_void, del_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_split, args, 2, "split_res");
+    }
+
+    // parse_multipart(body, content_type) -> {fields, files}
+    if (node->name && strcmp(node->name, "parse_multipart") == 0 &&
+        node->argument_count >= 2) {
+      LLVMValueRef bodyv = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef ctv = codegen_expression(backend, node->arguments[1]);
+      LLVMValueRef body_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "mp_body_ptr");
+      LLVMBuildStore(backend->builder, bodyv, body_ptr);
+      LLVMValueRef ct_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "mp_ct_ptr");
+      LLVMBuildStore(backend->builder, ctv, ct_ptr);
+      LLVMValueRef body_void = LLVMBuildBitCast(
+          backend->builder, body_ptr, backend->ptr_type, "mp_body_void");
+      LLVMValueRef ct_void = LLVMBuildBitCast(
+          backend->builder, ct_ptr, backend->ptr_type, "mp_ct_void");
+      LLVMValueRef args[] = {body_void, ct_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_parse_multipart,
+                                    args, 2, "parse_multipart_res");
     }
 
     if (strcmp(node->name, "read_file") == 0) {
@@ -8255,6 +8288,16 @@ void llvm_backend_optimize(LLVMBackend *backend) {
   // inliner aggressiveness, vectorization, and SCC-based passes that move
   // fib/struct workloads materially closer to gcc -O2.
   const char *pipeline = backend->emit_debug_info ? "verify" : "default<O3>";
+
+  // Snapshot the pre-optimization module. The codegen output verifies clean,
+  // but LLVM 18's O3 InstCombine can miscompile our comparison fast-path: it
+  // folds the truthiness `icmp ne <as>, 0` into the int/float/fallback merge
+  // (foldOpIntoPhi) and emits an invalid `phi i1` fed the fallback path's raw
+  // i64 — "Global module verification failed". Feeding that to ISel is a latent
+  // landmine, so if the optimized module fails verification we fall back to this
+  // valid (just unoptimized for this compile) snapshot rather than emit bad IR.
+  LLVMModuleRef pre_opt = LLVMCloneModule(backend->module);
+
   LLVMErrorRef error =
       LLVMRunPasses(backend->module, pipeline, nullptr, options);
 
@@ -8263,9 +8306,25 @@ void llvm_backend_optimize(LLVMBackend *backend) {
     fprintf(stderr, tulpar::i18n::tr_for_en("[AOT] Warning: Optimization failed: %s\n"), msg);
     LLVMDisposeErrorMessage(msg);
   } else {
-    if (!backend->quiet)
+    char *verr = nullptr;
+    if (LLVMVerifyModule(backend->module, LLVMReturnStatusAction, &verr) != 0) {
+      // O3 produced invalid IR — adopt the clean pre-O3 snapshot.
+      fprintf(stderr, "%s",
+              tulpar::i18n::tr_for_en(
+                  "[AOT] Warning: O3 produced invalid IR; falling back to "
+                  "unoptimized module for this compile.\n"));
+      LLVMDisposeModule(backend->module);
+      backend->module = pre_opt;
+      pre_opt = nullptr;
+    } else if (!backend->quiet) {
       printf("[AOT] Optimizations (O3) applied successfully.\n");
+    }
+    if (verr)
+      LLVMDisposeMessage(verr);
   }
+
+  if (pre_opt)
+    LLVMDisposeModule(pre_opt);
 
   LLVMDisposePassBuilderOptions(options);
 }

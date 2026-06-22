@@ -1,0 +1,39 @@
+// ============================================================================
+// Wings — global middleware zinciri testi (`use` / short-circuit modeli)
+//
+// Middleware = `func mw(req)`:
+//   • response dict döndür (`_status` set — örn. `unauthorized(...)`) → KISA-DEVRE
+//   • `{}` döndür → bir sonrakine / route handler'a DEVAM
+//   • `req`'i mutate edebilir (örn. `req["user"] = ...`) → handler okur
+// `use("mw_name")` ile kayıt; sırayla, tüm serve modlarında, handler'dan önce çalışır.
+//
+// Çalıştır:  tulpar examples/wings_middleware_test.tpr
+//   GET /me                              → 401 (token yok)
+//   GET /me  -H "Authorization: Bearer x"→ 200 {"user":"alice", ...}
+// ============================================================================
+import "wings";
+
+// 1) Denetim/log middleware — sadece devam eder.
+func audit(req) {
+    return {};
+}
+
+// 2) Auth guard — Authorization header yoksa 401; varsa user'ı req'e iliştirip devam.
+func require_auth(req) {
+    str tok = req["headers"]["Authorization"];
+    if (length(tok) == 0) {
+        return unauthorized("token required");      // kısa-devre → 401
+    }
+    req["user"] = "alice";                          // downstream handler için
+    return {};                                      // devam
+}
+
+func me(req) {
+    return ok({"user": req["user"], "path": req["path"]});
+}
+
+use("audit");           // sıra korunur: önce audit
+use("require_auth");    // sonra auth
+get("/me", me);
+
+serve();

@@ -96,6 +96,7 @@ const BuiltinEntry kBuiltins[] = {
     {"http_request_async",  "http_request_async(method: str, url: str, body: str): promise", "Bloklamayan outbound HTTP; promise döner. `await http_request_async(...)`. Worker pool (TULPAR_HTTP_POOL)."},
     {"path_match",          "path_match(pattern: str, path: str): json", "/users/:id ile gelen path'i eşler."},
     {"parse_query",         "parse_query(qs: str): json",           "?a=1&b=2 → {a: \"1\", b: \"2\"}"},
+    {"parse_multipart",     "parse_multipart(body: str, content_type: str): json", "multipart/form-data → {fields, files}"},
     {"parse_cookies",       "parse_cookies(header: str): json",     "Cookie header'ı parse eder: \"a=1; b=2\" → {a: \"1\", b: \"2\"}"},
 
     // ---- Wings server (lib/wings.tpr) — import \"wings\" ----

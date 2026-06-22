@@ -12,6 +12,25 @@
 array _routes = [];
 json _request = {};
 
+// Global middleware chain (run before every dispatch). Each entry is a
+// function NAME (string). A middleware is `func mw(req)` that either returns a
+// response dict (with `_status`, e.g. `unauthorized(...)`) to SHORT-CIRCUIT the
+// request, or `{}` to continue to the next middleware / the route handler. It
+// may mutate `req` (e.g. `req["user"] = ...`) for downstream handlers. Empty
+// chain = zero per-request cost.
+array _middleware = [];
+
+// Active route-group prefix. `group(prefix, fn)` sets this around a batch of
+// registrations so every get/post/put/del path is prepended with it; nested
+// groups concatenate. Empty = no prefix.
+str _route_prefix = "";
+
+// Resolved dependency values for the in-flight request (Wings DI). Written once
+// per dispatch from the route's `deps`, read by the handler via `dep(name)`.
+// Thread-local at the LLVM level (see global_needs_tls) so listen_pool workers
+// don't share it — mirrors `_request`.
+json _wings_deps = {};
+
 // Default response headers shared across the whole server lifetime.
 // Pulled out of the per-connection block so the arena-reset path
 // (`arena_save`/`arena_restore` in listen()) can roll a request's
@@ -269,23 +288,85 @@ array _wings_cache_wires = [];
 // at the same time so the parallel-index invariant holds — even for
 // non-cached routes, where the placeholder is simply never written.
 func get(str path, str handler) {
-    push(_routes, {"method": "GET", "path": path, "handler": handler});
+    push(_routes, {"method": "GET", "path": _route_prefix + path, "handler": handler});
     push(_wings_cache_wires, "");
 }
 
 func post(str path, str handler) {
-    push(_routes, {"method": "POST", "path": path, "handler": handler});
+    push(_routes, {"method": "POST", "path": _route_prefix + path, "handler": handler});
     push(_wings_cache_wires, "");
 }
 
 func put(str path, str handler) {
-    push(_routes, {"method": "PUT", "path": path, "handler": handler});
+    push(_routes, {"method": "PUT", "path": _route_prefix + path, "handler": handler});
     push(_wings_cache_wires, "");
 }
 
 func del(str path, str handler) {
-    push(_routes, {"method": "DELETE", "path": path, "handler": handler});
+    push(_routes, {"method": "DELETE", "path": _route_prefix + path, "handler": handler});
     push(_wings_cache_wires, "");
+}
+
+// Register a global middleware by function name. Runs (in registration order)
+// before every route's handler across all serve modes.
+//
+//   func require_auth(req) {
+//       if (length(req["headers"]["authorization"]) == 0) {
+//           return unauthorized("token required");   // short-circuit -> 401
+//       }
+//       return {};                                    // continue
+//   }
+//   use("require_auth");
+func use(str mw) {
+    push(_middleware, mw);
+}
+
+// Register a batch of routes under a common path prefix. `register_fn` is the
+// NAME of a function that calls get/post/... ; every path it registers is
+// prepended with `prefix`. The prefix is restored afterwards, so groups nest.
+//
+//   func api_v1() {
+//       get("/users", "list_users");      // -> /api/v1/users
+//       post("/users", "create_user");    // -> /api/v1/users
+//   }
+//   group("/api/v1", "api_v1");
+func group(str prefix, str register_fn) {
+    str _saved = _route_prefix;
+    _route_prefix = _saved + prefix;        // nested groups concatenate
+    call(register_fn, 0);                   // run the registrations
+    _route_prefix = _saved;                 // restore
+}
+
+// ----- Dependency injection (FastAPI `Depends`-style) ----------------------
+// Attach a dependency function NAME to the most recently registered route.
+// Before the handler runs, each dependency is called with `req`; its return
+// value is injected and read by the handler via `dep("name")`. A dependency may
+// short-circuit by returning a response dict (`_status` set, e.g.
+// `unauthorized(...)`), exactly like middleware — but per-route and value-producing.
+//
+//   func current_user(req) {
+//       str t = req["headers"]["Authorization"];
+//       if (length(t) == 0) { return unauthorized("token gerekli"); }
+//       return {"id": 1, "name": "Ada"};
+//   }
+//   func profile(req) { return ok(dep("current_user")); }
+//   get("/profile", "profile");
+//   depends("current_user");
+func depends(str dep_fn) {
+    int last = length(_routes) - 1;
+    if (last >= 0) {
+        json dl = _routes[last]["deps"];
+        if (typeof(dl) != "array") {
+            dl = [];
+        }
+        push(dl, dep_fn);
+        _routes[last]["deps"] = dl;
+    }
+}
+
+// Read a resolved dependency value inside a handler.
+func dep(str name) {
+    return _wings_deps[name];
 }
 
 // Register a GET route whose response is cached at the wire-byte level
@@ -306,7 +387,7 @@ func del(str path, str handler) {
 //
 // No invalidation API yet — re-cache happens at process restart.
 func cached_get(str path, str handler) {
-    push(_routes, {"method": "GET", "path": path, "handler": handler, "cached": 1});
+    push(_routes, {"method": "GET", "path": _route_prefix + path, "handler": handler, "cached": 1});
     push(_wings_cache_wires, "");
 }
 
@@ -348,6 +429,67 @@ func body_schema(json schema) {
     }
 }
 
+// ----- Response model (output shaping) -------------------------------------
+// Symmetric counterpart to body_schema: attach a schema to the most recently
+// registered route to FILTER successful handler output to only the declared
+// fields. Anything not listed (internal/secret keys like password_hash,
+// _internal) is dropped before serialization — so handlers can return their
+// full row without leaking. `_`-prefixed control keys (_status/_raw/...) are
+// always preserved; errors (status >= 400) bypass filtering so {error:...}
+// isn't stripped. Works on a single object or an array of objects.
+//
+//   get("/users/:id", "show_user");
+//   response_model({"id": "int", "name": "str"});   // password etc. dropped
+func response_model(json schema) {
+    int last = length(_routes) - 1;
+    if (last >= 0) {
+        _routes[last]["response_model"] = schema;
+    }
+}
+
+// Keep only `_`-control keys + the schema's declared fields (trailing `?` on a
+// key is stripped). Returns a fresh object.
+func _wings_filter_obj(json schema, json obj) {
+    json out = {};
+    // Preserve ONLY the known control keys — NOT arbitrary `_`-prefixed data
+    // (e.g. a user field named `_internal` must still be dropped if undeclared).
+    if (_wings_has_key(obj, "_status"))       { out["_status"] = obj["_status"]; }
+    if (_wings_has_key(obj, "_raw"))          { out["_raw"] = obj["_raw"]; }
+    if (_wings_has_key(obj, "_content_type")) { out["_content_type"] = obj["_content_type"]; }
+    if (_wings_has_key(obj, "_stream"))       { out["_stream"] = obj["_stream"]; }
+    for (sk in keys(schema)) {
+        str field = sk;
+        int L = length(field);
+        if (L > 0) {
+            if (substring(field, L - 1, L) == "?") {
+                field = substring(field, 0, L - 1);
+            }
+        }
+        if (_wings_has_key(obj, field)) {
+            out[field] = obj[field];
+        }
+    }
+    return out;
+}
+
+// Apply a response model to a result that is either an object or an array of
+// objects (non-object array elements pass through untouched).
+func _wings_apply_response_model(json schema, json result) {
+    if (typeof(result) == "array") {
+        json arr = [];
+        for (el in result) {
+            if (typeof(el) == "object") {
+                push(arr, _wings_filter_obj(schema, el));
+            } else {
+                push(arr, el);
+            }
+        }
+        return arr;
+    } else {
+        return _wings_filter_obj(schema, result);
+    }
+}
+
 // ----- Response helpers ----------------------------------------------------
 // Tiny wrappers so handlers express intent instead of hand-writing the
 // `{"_status": N}` envelope. Each returns a response dict the dispatcher
@@ -371,6 +513,84 @@ func server_error(str msg)      { return {"error": msg, "_status": 500}; }
 // Plain-text / custom-status escape hatches.
 func text(str body)             { return {"_raw": body, "_content_type": "text/plain; charset=utf-8"}; }
 func with_status(json data, int status) { data["_status"] = status; return data; }
+
+// ----- Typed query-param accessors -----------------------------------------
+// `req["query"]` holds raw string values; these coerce with a default fallback
+// so list endpoints can read pagination/filters in one line instead of
+// hand-checking presence + toInt().
+//
+//   int page  = query_int(req, "page", 1);
+//   str sort  = query(req, "sort", "id");
+//   bool desc = query_bool(req, "desc", false);
+func query(json req, str name, str fallback) {
+    json q = req["query"];
+    if (_wings_has_key(q, name)) {
+        return q[name];
+    }
+    return fallback;
+}
+
+func query_int(json req, str name, int fallback) {
+    json q = req["query"];
+    if (_wings_has_key(q, name)) {
+        str v = q[name];
+        if (length(v) > 0) {
+            return toInt(v);
+        }
+    }
+    return fallback;
+}
+
+func query_bool(json req, str name, bool fallback) {
+    json q = req["query"];
+    if (_wings_has_key(q, name)) {
+        str v = lower(q[name]);
+        if (v == "1") { return true; }
+        if (v == "true") { return true; }
+        if (v == "yes") { return true; }
+        if (v == "0") { return false; }
+        if (v == "false") { return false; }
+        if (v == "no") { return false; }
+    }
+    return fallback;
+}
+
+// ----- Multipart / file uploads --------------------------------------------
+// Parse a multipart/form-data request body into `{fields, files}` via the
+// native `parse_multipart` builtin. Lazy — only call from handlers expecting
+// uploads. `files` is an array of {name, filename, content_type, data, size}
+// (data carries the raw bytes, binary-safe). Note: each form()/uploaded_files()
+// call re-parses; for many fields call form_data() once and read it directly.
+//
+//   func upload(req) {
+//       str title = form(req, "title", "");
+//       for (f in uploaded_files(req)) {
+//           write_file("./uploads/" + f["filename"], f["data"]);
+//       }
+//       return created({"title": title});
+//   }
+//   post("/upload", "upload");
+func form_data(json req) {
+    str ct = req["headers"]["Content-Type"];
+    if (length(ct) == 0) {
+        ct = req["headers"]["content-type"];
+    }
+    return parse_multipart(req["body"], ct);
+}
+
+func form(json req, str name, str fallback) {
+    json mp = form_data(req);
+    json f = mp["fields"];
+    if (_wings_has_key(f, name)) {
+        return f[name];
+    }
+    return fallback;
+}
+
+func uploaded_files(json req) {
+    json mp = form_data(req);
+    return mp["files"];
+}
 
 // Friendly alias for listen() — reads better at the bottom of an app file:
 //   serve(8080);
@@ -703,6 +923,30 @@ func _wings_status_or(json result, int fallback) {
 // (404 / 5xx bodies aren't worth pinning and would mask transient
 // upstream failures).
 func _wings_dispatch_cached(int route_idx, int keep) {
+    // Global middleware chain — runs before cache check + handler, for every
+    // serve mode (this is the single dispatch entry point). A middleware that
+    // returns a response dict (`_status` set) short-circuits; `{}` continues.
+    // Empty `_middleware` => the while loop never iterates (zero cost).
+    int _mw_i = 0;
+    int _mw_n = length(_middleware);
+    while (_mw_i < _mw_n) {
+        json _mres = call(_middleware[_mw_i], _request);
+        int _mst = _mres["_status"];
+        if (_mst != 0) {
+            _wings_requests_total = _wings_requests_total + 1;
+            if (_mst >= 500) {
+                _wings_requests_5xx = _wings_requests_5xx + 1;
+            } else if (_mst >= 400) {
+                _wings_requests_4xx = _wings_requests_4xx + 1;
+            } else {
+                _wings_requests_2xx = _wings_requests_2xx + 1;
+            }
+            _wings_last_status = _mst;
+            return _wings_build_response(_mres, keep);
+        }
+        _mw_i = _mw_i + 1;
+    }
+
     json route = _routes[route_idx];
 
     if (route["cached"] == 1) {
@@ -734,6 +978,36 @@ func _wings_dispatch_cached(int route_idx, int keep) {
         }
     }
 
+    // Route dependencies (Wings DI): resolve each before the handler. A
+    // dependency returning a response dict (`_status` set) short-circuits;
+    // otherwise its value is injected into `_wings_deps` for `dep("name")`.
+    json _dl = route["deps"];
+    if (typeof(_dl) == "array") {
+        json _dvals = {};
+        int _di = 0;
+        while (_di < length(_dl)) {
+            str _dname = _dl[_di];
+            json _dres = call(_dname, _request);
+            int _dst = _dres["_status"];
+            if (_dst != 0) {
+                _wings_requests_total = _wings_requests_total + 1;
+                if (_dst >= 500) {
+                    _wings_requests_5xx = _wings_requests_5xx + 1;
+                } else if (_dst >= 400) {
+                    _wings_requests_4xx = _wings_requests_4xx + 1;
+                } else {
+                    _wings_requests_2xx = _wings_requests_2xx + 1;
+                }
+                _wings_last_status = _dst;
+                return _wings_build_response(_dres, keep);
+            } else {
+                _dvals[_dname] = _dres;
+            }
+            _di = _di + 1;
+        }
+        _wings_deps = _dvals;
+    }
+
     // Every handler is handed the request object as its first argument, so it
     // can be written `func h(req) { req["params"]["id"] }`. Handlers that take
     // no parameter simply ignore it (ABI-safe) and read the `_request` global
@@ -762,6 +1036,15 @@ func _wings_dispatch_cached(int route_idx, int keep) {
         _wings_requests_4xx = _wings_requests_4xx + 1;
     } else {
         _wings_requests_2xx = _wings_requests_2xx + 1;
+    }
+
+    // Response model: shape successful output to the declared fields (drop
+    // undeclared/secret keys). Errors (>=400) bypass so {error:...} survives.
+    json _rm = route["response_model"];
+    if (_rm) {
+        if (eff_status < 400) {
+            result = _wings_apply_response_model(_rm, result);
+        }
     }
 
     str response = _wings_build_response(result, keep);
@@ -796,7 +1079,84 @@ func _wings_build_response(json result, int keep) {
     return wings_build_response(result, _default_headers, keep);
 }
 
+// ----- Static file serving -------------------------------------------------
+// Mount a directory under a URL prefix. Files are served as a 404-fallback:
+// after no route (exact or :param) matches, wings checks each mount and, if the
+// path falls under a prefix and the file exists, returns it. So real routes
+// always win; static is the catch-all. Path traversal (`..`) is rejected.
+//
+//   static("/static", "./public");   // GET /static/app.css -> ./public/app.css
+//
+// Text assets (html/css/js/json/svg/txt) get a correct Content-Type; everything
+// else falls back to application/octet-stream. Binary assets (e.g. PNG with
+// embedded NULs) round-trip byte-exact — read_file/http_create_response are
+// length-tracked, not strlen-based.
+array _static_mounts = [];
+
+func static(str url_prefix, str dir) {
+    json mount = {"prefix": url_prefix, "dir": dir};
+    push(_static_mounts, mount);
+}
+
+func _ends_with(str s, str suf) {
+    int sl = length(s);
+    int fl = length(suf);
+    if (fl > sl) {
+        return false;
+    }
+    str substr = substring(s, sl - fl, sl);
+    return substr == suf;
+}
+
+func _wings_content_type(str p) {
+    if (_ends_with(p, ".html")) {
+        return "text/html; charset=utf-8";
+    } else if (_ends_with(p, ".css")) {
+        return "text/css; charset=utf-8";
+    } else if (_ends_with(p, ".js")) {
+        return "application/javascript; charset=utf-8";
+    } else if (_ends_with(p, ".json")) {
+        return "application/json; charset=utf-8";
+    } else if (_ends_with(p, ".svg")) {
+        return "image/svg+xml";
+    } else if (_ends_with(p, ".png")) {
+        return "image/png";
+    } else if (_ends_with(p, ".txt")) {
+        return "text/plain; charset=utf-8";
+    }
+    return "application/octet-stream";
+}
+
+// Returns the file's wire response, or "" when no mount serves `path`.
+func _wings_static_try(str path, int keep) {
+    int i = 0;
+    while (i < length(_static_mounts)) {
+        json m = _static_mounts[i];
+        str prefix = m["prefix"];
+        int plen = length(prefix);
+        if (length(path) >= plen) {
+            if (substring(path, 0, plen) == prefix) {
+                str rel = substring(path, plen, length(path));
+                if (contains(rel, "..") == false) {
+                    str filepath = m["dir"] + rel;
+                    str content = read_file(filepath);
+                    if (length(content) > 0) {
+                        return http_create_response(200, _wings_content_type(rel), content, _default_headers, keep);
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return "";
+}
+
 func _wings_build_404(str path, int keep) {
+    // Static-file fallback: a static() mount may serve this path before 404.
+    str _sw = _wings_static_try(path, keep);
+    if (length(_sw) > 0) {
+        return _sw;
+    }
     str body = "{\"error\":\"" + http_status_text(404) +
         "\",\"path\":\"" + path + "\"}";
     return http_create_response(404, "application/json", body,

@@ -5127,6 +5127,158 @@ VMValue aot_parse_query(VMValue strVal) {
   return VM_OBJ((Obj *)o);
 }
 
+// ---- multipart/form-data parsing ------------------------------------------
+// Binary-safe substring search (bodies carry raw file bytes incl. NULs).
+static const char *aot_memfind(const char *hay, int haylen, const char *needle,
+                               int nlen) {
+  if (nlen <= 0 || haylen < nlen)
+    return nullptr;
+  for (int i = 0; i + nlen <= haylen; i++) {
+    if (memcmp(hay + i, needle, nlen) == 0)
+      return hay + i;
+  }
+  return nullptr;
+}
+
+// Extract a `key="..."` attribute value from [buf, buf+len). `key` includes the
+// trailing `="`. Copies up to cap-1 bytes into out (NUL-terminated), returns the
+// length, or 0 if absent.
+static int aot_mp_attr(const char *buf, int len, const char *key, int klen,
+                       char *out, int cap) {
+  const char *k = aot_memfind(buf, len, key, klen);
+  if (!k)
+    return 0;
+  const char *v = k + klen;
+  int rem = (int)(buf + len - v);
+  int i = 0;
+  while (i < rem && v[i] != '"' && i < cap - 1) {
+    out[i] = v[i];
+    i++;
+  }
+  out[i] = 0;
+  return i;
+}
+
+// aot_parse_multipart(body, content_type) ->
+//   { "fields": {name: value, ...},
+//     "files":  [{name, filename, content_type, data, size}, ...] }
+// Text parts land in `fields`; parts with a filename land in `files` with their
+// raw bytes (binary-safe — arena strings are length-tracked, not strlen).
+VMValue aot_parse_multipart(VMValue body_val, VMValue ct_val) {
+  ObjObject *result = aot_http_make_obj(2);
+  ObjObject *fields = aot_http_make_obj(4);
+  ObjArray *files = vm_allocate_array_aot_wrapper(nullptr);
+  aot_http_obj_set(result, "fields", 6, VM_OBJ((Obj *)fields));
+  aot_http_obj_set(result, "files", 5, VM_OBJ((Obj *)files));
+
+  if (!IS_STRING(body_val) || !IS_STRING(ct_val))
+    return VM_OBJ((Obj *)result);
+
+  const char *ct = AS_STRING(ct_val)->chars;
+  int ctlen = AS_STRING(ct_val)->length;
+  const char *body = AS_STRING(body_val)->chars;
+  int blen = AS_STRING(body_val)->length;
+
+  // boundary= from the content-type header (may be quoted / followed by ;).
+  const char *bp = aot_memfind(ct, ctlen, "boundary=", 9);
+  if (!bp)
+    return VM_OBJ((Obj *)result);
+  const char *bv = bp + 9;
+  int bvlen = (int)(ct + ctlen - bv);
+  if (bvlen > 0 && bv[0] == '"') {
+    bv++;
+    bvlen--;
+  }
+  int be = 0;
+  while (be < bvlen && bv[be] != '"' && bv[be] != ';' && bv[be] != '\r' &&
+         bv[be] != '\n' && bv[be] != ' ')
+    be++;
+  bvlen = be;
+  if (bvlen <= 0 || bvlen > 250)
+    return VM_OBJ((Obj *)result);
+
+  // delimiter = "--" + boundary
+  char delim[256];
+  delim[0] = '-';
+  delim[1] = '-';
+  memcpy(delim + 2, bv, bvlen);
+  int dlen = bvlen + 2;
+
+  const char *p = aot_memfind(body, blen, delim, dlen);
+  while (p) {
+    p += dlen;
+    int rem = (int)(body + blen - p);
+    if (rem >= 2 && p[0] == '-' && p[1] == '-')
+      break; // closing "--boundary--"
+    if (rem >= 2 && p[0] == '\r' && p[1] == '\n')
+      p += 2;
+    else if (rem >= 1 && p[0] == '\n')
+      p += 1;
+
+    const char *next = aot_memfind(p, (int)(body + blen - p), delim, dlen);
+    if (!next)
+      break;
+    int partlen = (int)(next - p);
+
+    const char *he = aot_memfind(p, partlen, "\r\n\r\n", 4);
+    if (he) {
+      int headers_len = (int)(he - p);
+      const char *content = he + 4;
+      int content_len = (int)(next - content);
+      if (content_len >= 2 && content[content_len - 2] == '\r' &&
+          content[content_len - 1] == '\n')
+        content_len -= 2; // strip the CRLF before the next delimiter
+
+      char name[256];
+      int namelen = aot_mp_attr(p, headers_len, "name=\"", 6, name, sizeof(name));
+      char fname[256];
+      int fnamelen =
+          aot_mp_attr(p, headers_len, "filename=\"", 10, fname, sizeof(fname));
+
+      // Optional per-part Content-Type.
+      char pct[128];
+      int pctlen = 0;
+      const char *ctp = aot_memfind(p, headers_len, "Content-Type:", 13);
+      if (ctp) {
+        const char *cv = ctp + 13;
+        int crem = (int)(p + headers_len - cv);
+        while (crem > 0 && (*cv == ' ' || *cv == '\t')) {
+          cv++;
+          crem--;
+        }
+        while (pctlen < crem && cv[pctlen] != '\r' && cv[pctlen] != '\n' &&
+               pctlen < (int)sizeof(pct) - 1) {
+          pct[pctlen] = cv[pctlen];
+          pctlen++;
+        }
+      }
+
+      if (fnamelen > 0) {
+        ObjObject *fo = aot_http_make_obj(5);
+        aot_http_obj_set_str(fo, "name", 4, name, namelen);
+        aot_http_obj_set_str(fo, "filename", 8, fname, fnamelen);
+        aot_http_obj_set_str(fo, "content_type", 12, pct, pctlen);
+        ObjString *data = aot_allocate_string(content, content_len);
+        aot_http_obj_set(fo, "data", 4, VM_OBJ((Obj *)data));
+        aot_http_obj_set(fo, "size", 4, VM_INT(content_len));
+        vm_array_push_aot_wrapper(nullptr, files, VM_OBJ((Obj *)fo));
+      } else if (namelen > 0) {
+        aot_http_obj_set_str(fields, name, namelen, content, content_len);
+      }
+    }
+    p = next;
+  }
+  return VM_OBJ((Obj *)result);
+}
+
+// Pointer-ABI wrapper (matches aot_split_ptr): the AOT backend passes VMValue
+// struct args by pointer to dodge the SysV/MinGW struct-arg payload drop.
+VMValue aot_parse_multipart_ptr(VMValue *body_ptr, VMValue *ct_ptr) {
+  if (!body_ptr || !ct_ptr)
+    return VM_VOID();
+  return aot_parse_multipart(*body_ptr, *ct_ptr);
+}
+
 // Builtin: http_create_response_full(status, content_type, body, headers)
 // Same as http_create_response but accepts a JSON object of extra headers
 // (e.g. {"Access-Control-Allow-Origin": "*", "Set-Cookie": "..."}). Each

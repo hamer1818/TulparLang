@@ -177,6 +177,102 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
       koduna hiç girmez. `{"name":123}` → `422 "expected str, got int"` (tam da
       kıyaslamada Wings'in tek kaybettiği nokta, artık kapandı). Saf Tulpar,
       C değişikliği yok (`typeof`+`keys`). `tests/validation.test.tpr` 5/5.
+    - ✅ **Zengin obje-spec kısıtları (2026-06-22, commit 0d268c7):** alan-bazlı
+      kısıtlar — str `min`/`max` + `regex`, sayı `min`/`max`, dizi `items` (öğe
+      tipi) + `minItems`/`maxItems`, iç içe `{"type":"object","schema":{…}}`
+      (dotted-path hata anahtarı), opsiyonel-ama-kısıtlı alanlar (`age?`; mevcutsa
+      yine doğrulanır), yanlış tip kısıtları atlar. Saf Tulpar (`_wings_validate`/
+      `_wings_type_ok`). `tests/validation.test.tpr` artık **12/12**.
+    - ✅ **Global middleware zinciri — `use()` (2026-06-22):** framework
+      paritesi turu (Express/Gin/FastAPI kıyası) ilk adımı. `use("mw_name")`
+      middleware'i isimle kaydeder; `_wings_dispatch_cached` başında (tek dispatch
+      noktası → `listen`/`listen_pool`/`listen_async` hepsi) sırayla çalışır.
+      Middleware `func mw(req)`: `_status`'lı response dict (örn. `unauthorized()`)
+      → kısa-devre; `{}` → devam; `req`'i mutate edebilir (`req["user"]=…`).
+      Boş zincir = sıfır per-request maliyet. Saf Tulpar, C değişikliği yok
+      (`call(name, req)` by-name dispatch'i kullanır). Canlı doğrulandı:
+      token yok→401, token var→200 + `req.user` handler'a yansıyor
+      (`examples/wings_middleware_test.tpr`). Kalan paritesi boşlukları: route
+      grupları/prefix (🔴 sıradaki), static servis, multipart/upload, param
+      tip-coercion, DI.
+    - ✅ **Route grupları / prefix — `group()` (2026-06-22):** framework
+      paritesi turu 2. adım (Express Router / Gin RouterGroup / FastAPI APIRouter
+      karşılığı). `group("/api/v1", "register_fn")` — `register_fn`'in kaydettiği
+      tüm route path'leri `prefix` ile öneklenir; çağrı sonrası prefix restore
+      edilir, böylece gruplar **nest** eder. `get/post/put/del/cached_get` artık
+      `_route_prefix + path` ile kayıt yapar (boş prefix = değişiklik yok). Saf
+      Tulpar (`call(register_fn, 0)` by-name). Canlı doğrulandı: `/api/v1/users`
+      200 + path param, grup-dışı `/health` 200, prefix'siz `/users` 404
+      (`examples/wings_groups_test.tpr`). Kalan paritesi boşlukları: static servis,
+      multipart/upload, param tip-coercion, DI, response-model.
+    - ✅ **Static dosya servisi — `static()` (2026-06-22):** framework
+      paritesi turu 3. adım (Express `static` / Gin `Static` / FastAPI
+      `StaticFiles`). `static("/static", "./public")` bir dizini URL prefix'i
+      altında sunar. **404-fallback** mimarisi: `_wings_build_404` başına tek
+      `_wings_static_try` enjeksiyonu (3 serve modunu da kaplar) → gerçek
+      route'lar her zaman önce, static catch-all. Path-traversal (`..`) reddi;
+      text asset'lere (html/css/js/json/svg/txt) doğru Content-Type, gerisi
+      octet-stream. Saf Tulpar (`read_file` + `http_create_response`). Canlı
+      doğrulandı: css/html 200 + doğru CT, eksik dosya 404, `/static/../secret`
+      404 (sızmadı), gerçek route kazanır (`examples/wings_static/`). Binary
+      asset (PNG, gömülü-NUL) byte-exact round-trip eder — `read_file`/
+      `http_create_response` length-tracked (strlen değil), ampirik doğrulandı.
+      Kalan paritesi: multipart/upload, param tip-coercion, DI, response-model.
+    - ✅ **Tipli query-param erişimi — `query`/`query_int`/`query_bool` (2026-06-22):**
+      framework paritesi turu 4. adım (FastAPI tipli query parametrelerine yakın).
+      `req["query"]` ham string tutar; bu helper'lar varsayılan-fallback ile coerce
+      eder — `int page = query_int(req,"page",1)`, `bool desc = query_bool(req,"desc",false)`.
+      Eksik-key güvenliği `_wings_has_key`, sayısal coercion `toInt` (bozuk/boşta 0).
+      Saf Tulpar. Canlı doğrulandı: varsayılanlar, `?page=3&limit=50&sort=name`,
+      `?desc=true`/`?desc=0`, `?page=abc`→0 (`examples/wings_query_test.tpr`).
+    - ✅ **Response model / çıktı şekillendirme — `response_model` (2026-06-22):**
+      framework paritesi turu 5. adım (FastAPI `response_model`). `body_schema`'nın
+      simetriği: route'a şema iliştirir, BAŞARILI handler çıktısını yalnız bildirilen
+      alanlara filtreler → password/`_internal` gibi sırlar serileştirmeden önce
+      düşer (handler tüm satırı dönebilir, sızma yok). Yalnız bilinen kontrol
+      key'leri (`_status`/`_raw`/`_content_type`/`_stream`) korunur; hatalar (>=400)
+      filtreyi bypass eder (`{error:...}` sıyrılmaz). Obje + obje-dizisi destekli.
+      Saf Tulpar (`typeof`/`keys`/`_wings_has_key`). Canlı doğrulandı: tekil obje
+      (password+`_internal` düştü), array (eleman-bazlı), `created` 201 `_status`
+      korundu, hata bypass (`examples/wings_response_model_test.tpr`). **Not:**
+      ilk sürümde "tüm `_`-önekli key'leri koru" kuralı `_internal`'ı sızdırıyordu;
+      doğrulama aşamasında yakalandı, kontrol-key whitelist'ine çevrildi.
+    - ✅ **Multipart/form-data + dosya yükleme (2026-06-22):** framework
+      paritesi turu 6. adım (Express multer / Gin `c.FormFile` / FastAPI
+      `UploadFile`) — **bu oturumda C gerektiren tek özellik.** Yeni native builtin
+      `parse_multipart(body, content_type)` → `{fields, files}`; C parser
+      `runtime_bindings.cpp`'de (binary-safe `aot_memfind`, boundary/part/header
+      ayrıştırma, length-tracked arena string'ler). AOT'a `aot_split_ptr` deseninde
+      2-arg pointer-ABI builtin olarak bağlandı: `llvm_backend.hpp` field +
+      `llvm_backend.cpp` decl & dispatch + `builtins.cpp` (LSP). Wings
+      sarmalayıcıları (`lib/wings.tpr`): `form(req,name,fb)` text alanı,
+      `uploaded_files(req)` → `[{name,filename,content_type,data,size}]` (data ham
+      byte). **Her iki target** (tulpar + tulpar_runtime) + repo-kökü
+      `libtulpar_runtime.a` kopyalandı. Canlı doğrulandı: text alan (UTF-8) + text
+      ve PNG dosya **byte-exact** kaydedildi; 52/52 örnek + 12/12 validation temiz
+      (`examples/wings_upload_test.tpr`). Kalan tek paritesi boşluğu: DI (`Depends`).
+    - ✅ **Dependency injection — `depends`/`dep` (2026-06-22):** framework
+      paritesi turu son adımı (FastAPI `Depends`). `depends("fn")` route'a bir
+      bağımlılık-fonksiyon adı iliştirir; handler'dan önce her bağımlılık `req` ile
+      çağrılır, dönüş değeri enjekte edilir, handler `dep("name")` ile okur. Bir
+      bağımlılık response dict (`_status`) dönerse kısa-devre (per-route auth/guard;
+      sayaç/işleyiş middleware ile aynı). Çözülen değerler **thread-local**
+      `_wings_deps`'te tutulur — `global_needs_tls` whitelist'ine eklendi (C, tek
+      satır) → `_request` gibi listen_pool worker'ları arasında izole. Saf Tulpar
+      (`call`/`typeof`). Canlı doğrulandı: token yok→dep 401 kısa-devre, token var→2
+      bağımlılık (user+config) enjekte; **listen_pool 20/20 paralel istek doğru**
+      (TLS izolasyonu). 53/53 örnek + 12/12 validation temiz (`examples/wings_di_test.tpr`).
+      **Bununla framework paritesi turu tamamlandı** — Express/Gin/FastAPI'ye karşı
+      kapatılabilir tüm boşluklar kapandı (middleware, route grupları, static,
+      query-param, response-model, multipart/upload, DI).
+    - ✅ **Yan-buluş: codegen verify hatası kapatıldı (2026-06-22):** karşılaştırma-
+      yoğun validation, eski bir LLVM-18 O3/InstCombine miscompile'ını yüzeye
+      çıkardı — `foldOpIntoPhi` karşılaştırma fast-path merge'inde geçersiz
+      `phi i1` üretiyordu ("Global module verification failed"). `llvm_backend_optimize`
+      artık O3 öncesi modülü `LLVMCloneModule` ile snapshot'lar; optimize sonrası
+      `LLVMVerifyModule` başarısızsa temiz snapshot'a düşer → ISel'e asla geçersiz
+      IR gitmez (tetiklenen modül o derleme için O3 kaybeder; nadir). 47/47 örnek
+      + 12/12 validation temiz.
     - **Otomatik `/docs` + `/openapi.json`:** `listen()` artık Swagger UI'yı
       (`/docs`) ve OpenAPI 3.0 belgesini (`/openapi.json`) otomatik kaydeder
       (opt-out: `TULPAR_WINGS_NODOCS=1`). Belge route'lardan türer; `:id` path
