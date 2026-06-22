@@ -5169,12 +5169,10 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // User-defined or Runtime function call
+    // NB: a user `func main` is mangled to `t_main` like any other function,
+    // so it never collides with the synthesized C `int main()` entrypoint.
     char func_name[256];
-    if (strcmp(node->name, "main") == 0) {
-      snprintf(func_name, sizeof(func_name), "main");
-    } else {
-      snprintf(func_name, sizeof(func_name), "t_%s", node->name);
-    }
+    snprintf(func_name, sizeof(func_name), "t_%s", node->name);
 
     LLVMValueRef func = LLVMGetNamedFunction(backend->module, func_name);
     // Fallback: Check original name (for builtins or non-prefixed)
@@ -7690,8 +7688,11 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
   // Check if function has explicit return type - use native codegen.
   // Async functions are exempt: they must use the boxed `t_<name>` ABI (the
   // coroutine engine calls them through it), matching the predeclare pass.
+  // `main` is forced onto the boxed `t_main` ABI: the native path names the
+  // function by its bare name (`node->name`), which for "main" would clash
+  // with the synthesized C `int main()` entrypoint.
   if (!node->is_async && backend->use_static_typing &&
-      node->return_type == TYPE_INT) {
+      node->return_type == TYPE_INT && strcmp(node->name, "main") != 0) {
     // Verify all parameters have types
     int all_typed = 1;
     for (int i = 0; i < node->param_count; i++) {
@@ -7716,11 +7717,7 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
   int total_params = user_param_count + 1; // +1 for Result Pointer
 
   char func_name[256];
-  if (strcmp(node->name, "main") == 0) {
-    snprintf(func_name, sizeof(func_name), "main");
-  } else {
-    snprintf(func_name, sizeof(func_name), "t_%s", node->name);
-  }
+  snprintf(func_name, sizeof(func_name), "t_%s", node->name);
 
   // Define function type: void func(VMValue* result_ptr, VMValue* arg1, ...)
   // (Assuming Void ABI for user functions)
@@ -8000,15 +7997,17 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
 // forward references / mutual recursion in Pass 1b can resolve.
 static void predeclare_func_signature(LLVMBackend *backend, ASTNode_C *node) {
   if (node->type != AST_FUNCTION_DECL) return;
-  if (strcmp(node->name, "main") == 0) return; // main is built separately
 
   // Native ABI? Must match the eligibility decision in codegen_func_def
   // exactly — predeclare creates the LLVM signature and codegen fills the
   // body, so disagreement between the two passes produces bogus IR (native
-  // signature with VMValue body or vice versa).
+  // signature with VMValue body or vice versa). `main` is forced boxed for
+  // the same reason as in codegen_func_def: the native path would name it
+  // by its bare name and collide with the C `int main()` entrypoint.
   bool native_eligible = backend->use_static_typing
                          && node->return_type == TYPE_INT
-                         && is_all_int_params(node);
+                         && is_all_int_params(node)
+                         && strcmp(node->name, "main") != 0;
   if (native_eligible) {
     for (int i = 0; i < node->param_count; i++) {
       if (node->parameters[i]->data_type == TYPE_UNKNOWN) {
