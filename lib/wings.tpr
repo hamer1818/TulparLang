@@ -1165,7 +1165,27 @@ func _wings_static_try(str path, int keep) {
             if (substring(path, 0, plen) == prefix) {
                 str rel = substring(path, plen, length(path));
                 if (contains(rel, "..") == false) {
-                    str filepath = m["dir"] + rel;
+                    // Directory-style request (mount root, or a trailing "/")
+                    // serves index.html — so `static("/", "./public")` answers
+                    // GET / with public/index.html (SPA at root).
+                    if (length(rel) == 0) {
+                        rel = "/index.html";
+                    } else if (substring(rel, length(rel) - 1, length(rel)) == "/") {
+                        rel = rel + "index.html";
+                    }
+                    // Join dir + rel with exactly one "/" between them. With a
+                    // prefix like "/" the leading slash is consumed from `rel`,
+                    // so without this `"./public" + "index.html"` would become
+                    // the bogus "./publicindex.html".
+                    str dir = m["dir"];
+                    bool dir_slash = _ends_with(dir, "/");
+                    bool rel_slash = (substring(rel, 0, 1) == "/");
+                    if (dir_slash == true && rel_slash == true) {
+                        rel = substring(rel, 1, length(rel));
+                    } else if (dir_slash == false && rel_slash == false) {
+                        dir = dir + "/";
+                    }
+                    str filepath = dir + rel;
                     str content = read_file(filepath);
                     if (length(content) > 0) {
                         return http_create_response(200, _wings_content_type(rel), content, _default_headers, keep);

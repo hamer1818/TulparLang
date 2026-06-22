@@ -71,6 +71,12 @@ struct BoolLiteral {
     BoolLiteral(bool v, SourceLocation l) : value(v), loc(l) {}
 };
 
+struct NullLiteral {
+    SourceLocation loc;
+
+    explicit NullLiteral(SourceLocation l) : loc(l) {}
+};
+
 struct Identifier {
     std::string name;
     SourceLocation loc;
@@ -402,6 +408,7 @@ struct ASTNode {
         FloatLiteral,
         StringLiteral,
         BoolLiteral,
+        NullLiteral,
         Identifier,
         BinaryOp,
         UnaryOp,

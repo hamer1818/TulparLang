@@ -1,0 +1,40 @@
+// The `null` literal (lexer TOKEN_NULL → AST_NULL_LITERAL → VM_VAL_VOID).
+// Serializes to JSON `null`, is falsy, and survives nesting. Regression for
+// the codegen crash where an undefined identifier (and `null`, before it was
+// a real literal) returned nullptr and segfaulted the compiler.
+
+import "test";
+
+func null_in_object() {
+    json o = {"x": null, "y": 1};
+    assert_eq_str(toJson(o), "{\"x\":null,\"y\":1}");
+}
+
+func null_in_array() {
+    json a = [1, null, 3];
+    assert_eq_str(toJson(a), "[1,null,3]");
+}
+
+func null_assigned() {
+    json x = null;
+    assert_eq_str(toJson(x), "null");
+}
+
+func null_is_falsy() {
+    bool hit = false;
+    if (null) { hit = true; }
+    assert_eq_bool(hit, false);
+}
+
+func null_nested() {
+    json o = {"a": {"b": null}};
+    assert_eq_str(toJson(o), "{\"a\":{\"b\":null}}");
+}
+
+print("=== null literal tests ===");
+test("null in object", "null_in_object");
+test("null in array", "null_in_array");
+test("null assigned to var", "null_assigned");
+test("null is falsy", "null_is_falsy");
+test("null nested", "null_nested");
+test_summary();

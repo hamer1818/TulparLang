@@ -145,7 +145,8 @@ static const std::unordered_map<std::string, TulparTokenType>& get_keyword_map()
         // Boolean Literals - English (aliases)
         {"true", TOKEN_TRUE},
         {"false", TOKEN_FALSE},
-        
+        {"null", TOKEN_NULL},
+
         // Boolean Literals - ASCII Turkish (aliases)
         {"dogru", TOKEN_TRUE},
         {"yanlis", TOKEN_FALSE}

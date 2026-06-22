@@ -2561,6 +2561,9 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   case AST_BOOL_LITERAL:
     return llvm_vm_val_bool(backend, node->value.bool_value);
 
+  case AST_NULL_LITERAL:
+    return llvm_vm_val_void(backend);
+
   case AST_STRING_LITERAL: {
     // Call runtime: vm_alloc_string(vm, "str", len)
     // For now passing nullptr as VM context (dangerous but temp)
@@ -2999,7 +3002,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           "değişken adını yanlış yazmış olabilirsiniz veya henüz "
           "tanımlamadınız");
     }
-    return nullptr;
+    // `had_error` is now set, so the driver aborts after codegen. Return a
+    // safe placeholder VMValue rather than nullptr so consumers that don't
+    // null-check (object-literal values, assignment RHS, ...) finish their
+    // IR instead of dereferencing null and crashing the compiler — a typo
+    // must surface as the diagnostic above, never a segfault.
+    return llvm_vm_val_void(backend);
   }
 
   case AST_BINARY_OP: {
@@ -5711,7 +5719,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     };
     auto is_literal_node = [](ASTNode_C *n) -> bool {
       return n && (n->type == AST_INT_LITERAL || n->type == AST_FLOAT_LITERAL ||
-                   n->type == AST_STRING_LITERAL || n->type == AST_BOOL_LITERAL);
+                   n->type == AST_STRING_LITERAL || n->type == AST_BOOL_LITERAL ||
+                   n->type == AST_NULL_LITERAL);
     };
     auto bind_value = [&](const char *nm, LLVMValueRef v) {
       LLVMValueRef slot =

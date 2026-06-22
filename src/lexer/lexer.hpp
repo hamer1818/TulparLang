@@ -40,6 +40,7 @@ enum TulparTokenType {
     TOKEN_IMPORT,        // "import"
     TOKEN_TRUE,          // "true"
     TOKEN_FALSE,         // "false"
+    TOKEN_NULL,          // "null"
     TOKEN_MOVE,          // "move" - ownership transfer
     TOKEN_VAR,           // "var" - type inference
     

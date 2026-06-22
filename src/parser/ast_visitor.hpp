@@ -18,6 +18,7 @@ public:
     virtual ReturnType visit(const FloatLiteral& node) = 0;
     virtual ReturnType visit(const StringLiteral& node) = 0;
     virtual ReturnType visit(const BoolLiteral& node) = 0;
+    virtual ReturnType visit(const NullLiteral& node) = 0;
     virtual ReturnType visit(const Identifier& node) = 0;
     
     // Expression visitors
@@ -102,6 +103,12 @@ public:
     void visit(const BoolLiteral& node) override {
         print_indent();
         printf("BoolLiteral: %s\n", node.value ? "true" : "false");
+    }
+
+    void visit(const NullLiteral& node) override {
+        (void)node;
+        print_indent();
+        printf("NullLiteral: null\n");
     }
     
     void visit(const Identifier& node) override {

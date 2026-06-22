@@ -1158,7 +1158,12 @@ std::unique_ptr<ASTNode> Parser::parse_primary() {
         advance();
         return std::make_unique<ASTNode>(BoolLiteral(false, loc));
     }
-    
+
+    if (check(TOKEN_NULL)) {
+        advance();
+        return std::make_unique<ASTNode>(NullLiteral(loc));
+    }
+
     // Array literal
     if (check(TOKEN_LBRACKET)) {
         return parse_array_literal();
@@ -1535,6 +1540,9 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
         } else if constexpr (std::is_same_v<T, BoolLiteral>) {
             out->type = AST_BOOL_LITERAL;
             out->value.bool_value = n.value ? 1 : 0;
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, NullLiteral>) {
+            out->type = AST_NULL_LITERAL;
             set_loc(out, n.loc);
         } else if constexpr (std::is_same_v<T, Identifier>) {
             out->type = AST_IDENTIFIER;

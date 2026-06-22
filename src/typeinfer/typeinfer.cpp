@@ -80,6 +80,9 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
   if (as_node<BoolLiteral>(expr)) {
     return TYPE_BOOL;
   }
+  if (as_node<NullLiteral>(expr)) {
+    return TYPE_VOID;
+  }
 
   if (const auto *arr = as_node<ArrayLiteral>(expr)) {
     if (arr->elements.empty()) {

@@ -62,6 +62,19 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Çekirdek dil + derleme zinciri
 
+- **`null` literal + codegen crash sertleştirmesi (2026-06-22):**
+  - ✅ **`null` artık gerçek literal** — lexer `TOKEN_NULL` → AST `NullLiteral`
+    / `AST_NULL_LITERAL` → codegen `VM_VAL_VOID` (`llvm_vm_val_void`). JSON'a
+    `null` serialize eder (her iki serializer da hazırdı), falsy, obje/dizi/iç
+    içe her yerde çalışır. `{"cursor": null}` artık `{"cursor":null}` üretir.
+    `tests/null_literal.test.tpr` (5/5). → [[AOT Backend]]
+  - ✅ **Tanımsız identifier artık çökmüyor** — codegen'in `AST_IDENTIFIER`
+    hata yolu `nullptr` döndürüp tüketicilerde (obje-literal değeri, atama RHS)
+    null-deref → segfault'a yol açıyordu. Artık güvenli placeholder
+    (`VM_VAL_VOID`) dönüyor; `had_error` zaten set olduğundan derleme temiz
+    hata mesajıyla durur. Bir typo asla derleyiciyi çökertmez. Bu, daha önce
+    "non-deterministic" sanılan segfault'un asıl köküydü (`null`'mış).
+    → [[AOT Backend]]
 - **Ergonomi turu (2026-06-16) — "Python kadar kolay" sertleştirmesi:**
   - ✅ **t-string interpolation:** `t"total: {n} adet"` — her `{expr}`
     değerlendirilip birleştirilir (Python f-string tarzı). Lexer
@@ -133,6 +146,18 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### HTTP runtime (Wings/Router native)
 
+- **Static root-mount + cookbook doğrulaması (2026-06-22):**
+  - ✅ **`static("/", "./public")` artık çalışıyor** — `_wings_static_try`'da
+    dir+rel birleştirmesi tam bir `/` ayracı garantiliyor (prefix `/` iken
+    `"./public" + "index.html"` → bozuk `"./publicindex.html"` oluyordu).
+    Ayrıca dizin-tarzı istek (mount kökü veya sonu `/`) `index.html` sunuyor →
+    SPA kökten servis edilebiliyor. `/static` prefix formu da aynen çalışıyor
+    (canlı curl ile doğrulandı). → [[Wings]]
+  - ✅ **Wings Cookbook (12 tarif, EN+TR)** — her tarif derlenip canlı sunucuya
+    curl ile doğrulandı; özel yanıtlar `_raw`/`_content_type` envelope'u ya da
+    `wings_current_fd()` + `{_stream:1}` deseni kullanıyor (handler'dan ham
+    `http_create_response` döndürmek dispatcher tarafından JSON'a sarılır).
+    → [[Wings]]
 - **Wings ergonomi turu (2026-06-16) — "az satır" API yazımı:**
   - ✅ **Response helper'ları** (`lib/wings.tpr`): `ok()`, `created()` (201),
     `no_content()` (204), `bad_request()` (400), `unauthorized()` (401),

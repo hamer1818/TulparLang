@@ -37,6 +37,18 @@ LLVMValueRef llvm_vm_val_bool(LLVMBackend *backend, int value) {
   return LLVMConstNamedStruct(backend->vm_value_type, fields, 3);
 }
 
+// The `null` literal — a VM_VAL_VOID (=3) value. Both JSON serializers
+// (js_serialize fast-path + vmvalue_to_cjson) already render a void as
+// JSON `null`, and is_truthy treats it as falsy.
+LLVMValueRef llvm_vm_val_void(LLVMBackend *backend) {
+  LLVMValueRef padding =
+      LLVMConstNull(LLVMArrayType(LLVMInt8TypeInContext(backend->context), 4));
+  LLVMValueRef fields[] = {
+      LLVMConstInt(backend->int32_type, 3, 0), // VM_VAL_VOID = 3
+      padding, LLVMConstInt(backend->int_type, 0, 0)};
+  return LLVMConstNamedStruct(backend->vm_value_type, fields, 3);
+}
+
 // Create tagged BOOL value from runtime i1/i64
 LLVMValueRef llvm_vm_val_bool_val(LLVMBackend *backend, LLVMValueRef value) {
   LLVMValueRef as_i64 =

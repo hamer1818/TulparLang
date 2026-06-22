@@ -1369,7 +1369,9 @@ void vm_set_element(VM *vm, VMValue target, VMValue index, VMValue value) {
 void print_vm_value(VMValue value) {
   switch (value.type) {
   case VM_VAL_VOID:
-    printf("void");
+    // The `null` literal and a value-less (void) result share this tag;
+    // "null" reads better than "void" now that `null` is user-facing.
+    printf("null");
     break;
   case VM_VAL_BOOL:
     printf("%s", AS_BOOL(value) ? "true" : "false");

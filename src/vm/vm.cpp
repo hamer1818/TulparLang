@@ -678,7 +678,9 @@ void vm_print_value(VMValue value) {
     printf(AS_BOOL(value) ? "true" : "false");
     break;
   case VM_VAL_VOID:
-    printf("void");
+    // The `null` literal and a value-less (void) result share this tag;
+    // "null" reads better than "void" now that `null` is user-facing.
+    printf("null");
     break;
   case VM_VAL_OBJ:
     if (IS_STRING(value)) {
