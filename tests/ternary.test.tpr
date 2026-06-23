@@ -1,0 +1,197 @@
+// ============================================================================
+// Ternary conditional operator  `cond ? then : else`
+// ----------------------------------------------------------------------------
+// Çekirdek davranış + kenar durumlar: truthiness, tip çeşitleri, öncelik,
+// sağ-asosiyatif iç içe kullanım, fonksiyon argümanı/return, dizi/nesne/string
+// bağlamları ve EN ÖNEMLİSİ tembel (lazy) değerlendirme — yalnızca seçilen
+// dal çalışır, seçilmeyen dalın yan etkisi TETİKLENMEZ.
+// ============================================================================
+import "test";
+
+// --- Tembel değerlendirme için sayaçlar (global) ---------------------------
+int _then_hits = 0;
+int _else_hits = 0;
+func bump_then() { _then_hits = _then_hits + 1; return 1; }
+func bump_else() { _else_hits = _else_hits + 1; return 2; }
+
+// --- Temel ------------------------------------------------------------------
+func basic_true_false() {
+    assert_eq_int(true  ? 10 : 20, 10);
+    assert_eq_int(false ? 10 : 20, 20);
+}
+
+func condition_from_comparison() {
+    assert_eq_int((5 > 3) ? 1 : 0, 1);
+    assert_eq_int((5 < 3) ? 1 : 0, 0);
+}
+
+func condition_int_truthiness() {
+    // 0 yanlış, sıfır olmayan doğru — if ile aynı truthiness.
+    assert_eq_int(5 ? 100 : 200, 100);
+    assert_eq_int(0 ? 100 : 200, 200);
+}
+
+// --- Dal tipleri ------------------------------------------------------------
+func string_branches() {
+    str a = true  ? "yes" : "no";
+    str b = false ? "yes" : "no";
+    assert_eq_str(a, "yes");
+    assert_eq_str(b, "no");
+}
+
+func bool_branches() {
+    assert_eq_bool(true  ? true : false, true);
+    assert_eq_bool(false ? true : false, false);
+}
+
+func float_branches() {
+    float r = (2 > 1) ? 1.5 : 2.5;
+    assert(r > 1.4, "float then-branch ~1.5 beklenir");
+    assert(r < 1.6, "float then-branch ~1.5 beklenir");
+}
+
+// --- Öncelik (aritmetik ternary'den sıkı bağlar) ----------------------------
+func precedence_with_arithmetic() {
+    // 2 + 3 = 5; 5 > 4 doğru → 100
+    assert_eq_int(2 + 3 > 4 ? 100 : 200, 100);
+    // else dalı 2 + 10 = 12 olarak gruplanır
+    assert_eq_int(false ? 1 : 2 + 10, 12);
+    // then dalı da: true ? 5 + 5 : 0 → 10
+    assert_eq_int(true ? 5 + 5 : 0, 10);
+}
+
+func condition_with_logical_ops() {
+    // && / || ternary'den sıkı bağlar → tüm ifade koşul olur
+    assert_eq_str((1 == 1 && 2 == 2) ? "ok" : "no", "ok");
+    assert_eq_str((1 == 1 || 2 == 3) ? "ok" : "no", "ok");
+    assert_eq_str((1 == 2 && 2 == 2) ? "ok" : "no", "no");
+}
+
+// --- İç içe (sağ-asosiyatif) ------------------------------------------------
+func nested_in_else() {
+    // n==1 ? "one" : (n==2 ? "two" : "many")
+    assert_eq_str(classify(1), "one");
+    assert_eq_str(classify(2), "two");
+    assert_eq_str(classify(7), "many");
+}
+func classify(int n) {
+    return n == 1 ? "one" : n == 2 ? "two" : "many";
+}
+
+func nested_in_then() {
+    // a ? (b ? 1 : 2) : 3
+    assert_eq_int(pick(true,  true),  1);
+    assert_eq_int(pick(true,  false), 2);
+    assert_eq_int(pick(false, true),  3);
+    assert_eq_int(pick(false, false), 3);
+}
+func pick(bool a, bool b) {
+    return a ? b ? 1 : 2 : 3;
+}
+
+func deeply_nested_chain() {
+    // grade ladder, sağ-asosiyatif zincir
+    assert_eq_str(grade(95), "A");
+    assert_eq_str(grade(85), "B");
+    assert_eq_str(grade(75), "C");
+    assert_eq_str(grade(50), "F");
+}
+func grade(int s) {
+    return s >= 90 ? "A" : s >= 80 ? "B" : s >= 70 ? "C" : "F";
+}
+
+// --- Fonksiyon argümanı / return --------------------------------------------
+func as_function_argument() {
+    assert_eq_int(dbl(true ? 3 : 4), 6);
+    assert_eq_int(dbl(false ? 3 : 4), 8);
+}
+func dbl(int x) { return x * 2; }
+
+func in_return_position() {
+    assert_eq_str(sign_word(5),  "pos");
+    assert_eq_str(sign_word(0 - 2), "neg");
+    assert_eq_str(sign_word(0),  "zero");
+}
+func sign_word(int n) {
+    return n > 0 ? "pos" : n < 0 ? "neg" : "zero";
+}
+
+// --- Bağlamlar: dizi / nesne / string ---------------------------------------
+func in_array_literal() {
+    array a = [true ? 1 : 9, false ? 8 : 2, 3];
+    assert_eq_int(a[0], 1);
+    assert_eq_int(a[1], 2);
+    assert_eq_int(a[2], 3);
+}
+
+func in_object_value() {
+    json o = {"label": (3 > 2) ? "big" : "small", "n": 42};
+    assert_eq_str(o["label"], "big");
+    assert_eq_int(o["n"], 42);
+}
+
+func in_string_concat() {
+    bool on = true;
+    str msg = "durum: " + (on ? "açık" : "kapalı");
+    assert_eq_str(msg, "durum: açık");
+}
+
+// --- Değişkene atama + yeniden kullanım -------------------------------------
+func assign_and_reuse() {
+    int n = 7;
+    int parity_is_odd = mod(n, 2) == 1 ? 1 : 0;
+    assert_eq_int(parity_is_odd, 1);
+    str label = parity_is_odd == 1 ? "tek" : "çift";
+    assert_eq_str(label, "tek");
+}
+
+// --- Döngü içinde -----------------------------------------------------------
+func inside_loop() {
+    int evens = 0;
+    int odds = 0;
+    for (int i = 0; i < 10; i++) {
+        int is_even = mod(i, 2) == 0 ? 1 : 0;
+        evens = evens + (is_even == 1 ? 1 : 0);
+        odds  = odds  + (is_even == 1 ? 0 : 1);
+    }
+    assert_eq_int(evens, 5);
+    assert_eq_int(odds, 5);
+}
+
+// --- TEMBEL (LAZY) DEĞERLENDİRME — en kritik test ---------------------------
+func lazy_only_taken_branch_runs() {
+    _then_hits = 0;
+    _else_hits = 0;
+
+    int r1 = true ? bump_then() : bump_else();
+    assert_eq_int(r1, 1);
+    assert_eq_int(_then_hits, 1);
+    assert_eq_int(_else_hits, 0);   // else dalı HİÇ çalışmadı
+
+    int r2 = false ? bump_then() : bump_else();
+    assert_eq_int(r2, 2);
+    assert_eq_int(_then_hits, 1);   // then sayacı değişmedi
+    assert_eq_int(_else_hits, 1);
+}
+
+// --- Çalıştırma -------------------------------------------------------------
+test("basic true/false",            "basic_true_false");
+test("condition from comparison",   "condition_from_comparison");
+test("int truthiness condition",    "condition_int_truthiness");
+test("string branches",             "string_branches");
+test("bool branches",               "bool_branches");
+test("float branches",              "float_branches");
+test("precedence with arithmetic",  "precedence_with_arithmetic");
+test("condition with && / ||",      "condition_with_logical_ops");
+test("nested in else (right-assoc)","nested_in_else");
+test("nested in then",              "nested_in_then");
+test("deeply nested chain",         "deeply_nested_chain");
+test("as function argument",        "as_function_argument");
+test("in return position",          "in_return_position");
+test("in array literal",            "in_array_literal");
+test("in object value",             "in_object_value");
+test("in string concat",            "in_string_concat");
+test("assign and reuse",            "assign_and_reuse");
+test("inside loop",                 "inside_loop");
+test("lazy: only taken branch runs","lazy_only_taken_branch_runs");
+test_summary();

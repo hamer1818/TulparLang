@@ -5961,6 +5961,43 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                           "match_val");
   }
 
+  case AST_TERNARY: {
+    // `cond ? then : else` as a value-producing expression. Evaluate the
+    // condition, branch, and let exactly ONE branch run (lazy — side effects
+    // in the untaken branch don't fire), storing its VMValue into a result
+    // slot that the merge block loads. Branches are evaluated with the full
+    // expression codegen, so they may themselves be ternaries / calls / etc.;
+    // because each branch can append its own basic blocks, the store+branch
+    // use the builder's CURRENT block after codegen (not the entry block).
+    LLVMValueRef cond_val = codegen_expression(backend, node->condition);
+    LLVMValueRef cond_bool = llvm_build_is_truthy(backend, cond_val);
+
+    LLVMValueRef res_slot = llvm_build_alloca_at_entry(
+        backend, backend->vm_value_type, "tern_res");
+
+    LLVMValueRef func = backend->current_function;
+    LLVMBasicBlockRef then_bb = LLVMAppendBasicBlock(func, "tern_then");
+    LLVMBasicBlockRef else_bb = LLVMAppendBasicBlock(func, "tern_else");
+    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlock(func, "tern_end");
+    LLVMBuildCondBr(backend->builder, cond_bool, then_bb, else_bb);
+
+    LLVMPositionBuilderAtEnd(backend->builder, then_bb);
+    LLVMValueRef tval = codegen_expression(backend, node->then_branch);
+    LLVMBuildStore(backend->builder, tval, res_slot);
+    if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder)))
+      LLVMBuildBr(backend->builder, merge_bb);
+
+    LLVMPositionBuilderAtEnd(backend->builder, else_bb);
+    LLVMValueRef eval = codegen_expression(backend, node->else_branch);
+    LLVMBuildStore(backend->builder, eval, res_slot);
+    if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder)))
+      LLVMBuildBr(backend->builder, merge_bb);
+
+    LLVMPositionBuilderAtEnd(backend->builder, merge_bb);
+    return LLVMBuildLoad2(backend->builder, backend->vm_value_type, res_slot,
+                          "tern_val");
+  }
+
   default:
     return llvm_vm_val_int(backend, 0); // nullptr/void
   }

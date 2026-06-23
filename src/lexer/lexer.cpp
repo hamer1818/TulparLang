@@ -526,6 +526,7 @@ Token Lexer::next_token() {
             case ';': return Token(TOKEN_SEMICOLON, value, start_line, start_column);
             case ',': return Token(TOKEN_COMMA, value, start_line, start_column);
             case ':': return Token(TOKEN_COLON, value, start_line, start_column);
+            case '?': return Token(TOKEN_QUESTION, value, start_line, start_column);
             case '.': return Token(TOKEN_DOT, value, start_line, start_column);
             case '|': return Token(TOKEN_PIPE, value, start_line, start_column);
             default:

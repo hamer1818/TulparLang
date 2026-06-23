@@ -170,6 +170,19 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     return promote_types(left_type, right_type);
   }
 
+  if (const auto *tern = as_node<TernaryOp>(expr)) {
+    // Walk the condition for coverage, then unify the two branch types. When
+    // both branches agree, that's the ternary's type; otherwise fall back to
+    // numeric promotion (int/float) and, failing that, the then-branch type.
+    infer_expr(ctx, tern->condition.get());
+    DataType then_type = infer_expr(ctx, tern->then_branch.get());
+    DataType else_type = infer_expr(ctx, tern->else_branch.get());
+    if (then_type == else_type) {
+      return then_type;
+    }
+    return promote_types(then_type, else_type);
+  }
+
   if (const auto *un = as_node<UnaryOp>(expr)) {
     DataType operand_type = infer_expr(ctx, un->operand.get());
     if (un->op == TOKEN_BANG) {

@@ -121,7 +121,8 @@ typedef enum {
   AST_PROGRAM,
   AST_LAMBDA,
   AST_MATCH,
-  AST_AWAIT
+  AST_AWAIT,
+  AST_TERNARY
 } ASTNodeType;
 
 // Old C-style AST node structure (kept for legacy code compatibility)

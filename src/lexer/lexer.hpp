@@ -83,7 +83,8 @@ enum TulparTokenType {
     TOKEN_RBRACKET,      // ]
     TOKEN_SEMICOLON,     // ;
     TOKEN_COMMA,         // ,
-    TOKEN_COLON,         // : (for JSON objects)
+    TOKEN_COLON,         // : (for JSON objects + ternary else)
+    TOKEN_QUESTION,      // ? (ternary conditional: cond ? a : b)
     TOKEN_DOT,           // . (member access)
     TOKEN_DOTDOT,        // .. (inclusive range in match patterns)
     TOKEN_PIPE,          // | (pattern alternative in match arms)

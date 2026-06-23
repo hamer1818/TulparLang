@@ -1,0 +1,57 @@
+// ============================================================================
+// Ternary (üçlü) koşul operatörü:  cond ? then : else
+// ----------------------------------------------------------------------------
+// if/else'in ifade biçimi: bir DEĞER üretir, böylece atama/argüman/return
+// içinde tek satırda kullanılır. Yalnızca seçilen dal çalışır (tembel).
+// ============================================================================
+
+// 1) Temel: bir değer seç
+int yas = 20;
+str durum = yas >= 18 ? "yetişkin" : "çocuk";
+print(durum);                       // yetişkin
+
+// 2) Sayısal seçim + aritmetikle birlikte (aritmetik ternary'den sıkı bağlar)
+int a = 7;
+int b = 3;
+int buyuk = a > b ? a : b;          // max(a, b)
+print(buyuk);                       // 7
+
+// 3) İç içe — sağ-asosiyatif zincir (grade ladder)
+func grade(int puan) {
+    return puan >= 90 ? "A" : puan >= 80 ? "B" : puan >= 70 ? "C" : "F";
+}
+print(grade(95));                   // A
+print(grade(82));                   // B
+print(grade(60));                   // F
+
+// 4) Fonksiyon argümanı içinde
+func mutlak(int n) {
+    return n < 0 ? 0 - n : n;       // abs
+}
+print(mutlak(0 - 42));              // 42
+print(mutlak(13));                  // 13
+
+// 5) String birleştirme + çoğul eki gibi gündelik kullanım
+func bildir(int n) {
+    str ek = n == 1 ? "" : "lar";
+    print(t"{n} mesaj{ek}");
+}
+bildir(1);                          // 1 mesaj
+bildir(5);                          // 5 mesajlar
+
+// 6) Tembel değerlendirme: seçilmeyen dal HİÇ çalışmaz
+func patla() {
+    print("BU ASLA YAZILMAMALI");
+    return 0;
+}
+int guvenli = true ? 1 : patla();   // patla() çağrılmaz
+print(guvenli);                     // 1
+
+// 7) Döngüde — tek/çift say
+int tek = 0;
+int cift = 0;
+for (int i = 0; i < 10; i++) {
+    cift = cift + (mod(i, 2) == 0 ? 1 : 0);
+    tek  = tek  + (mod(i, 2) == 0 ? 0 : 1);
+}
+print(t"çift={cift} tek={tek}");    // çift=5 tek=5

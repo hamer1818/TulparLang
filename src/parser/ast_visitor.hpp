@@ -23,6 +23,7 @@ public:
     
     // Expression visitors
     virtual ReturnType visit(const BinaryOp& node) = 0;
+    virtual ReturnType visit(const TernaryOp& node) = 0;
     virtual ReturnType visit(const UnaryOp& node) = 0;
     virtual ReturnType visit(const ArrayLiteral& node) = 0;
     virtual ReturnType visit(const ObjectLiteral& node) = 0;

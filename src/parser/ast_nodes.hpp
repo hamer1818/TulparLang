@@ -99,6 +99,18 @@ struct BinaryOp {
         : left(std::move(l)), right(std::move(r)), op(o), loc(location) {}
 };
 
+struct TernaryOp {
+    std::unique_ptr<ASTNode> condition;
+    std::unique_ptr<ASTNode> then_branch;
+    std::unique_ptr<ASTNode> else_branch;
+    SourceLocation loc;
+
+    TernaryOp(std::unique_ptr<ASTNode> c, std::unique_ptr<ASTNode> t,
+              std::unique_ptr<ASTNode> e, SourceLocation location)
+        : condition(std::move(c)), then_branch(std::move(t)),
+          else_branch(std::move(e)), loc(location) {}
+};
+
 struct UnaryOp {
     std::unique_ptr<ASTNode> operand;
     TulparTokenType op;
@@ -411,6 +423,7 @@ struct ASTNode {
         NullLiteral,
         Identifier,
         BinaryOp,
+        TernaryOp,
         UnaryOp,
         ArrayLiteral,
         ObjectLiteral,

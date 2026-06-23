@@ -14,6 +14,7 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 - **Çekirdek sözdizimi tam:** statik tipler, fonksiyonlar (opsiyonel
   dönüş-tipi notasyonu, **eksik trailing arg → 0 ile padlenir**), kontrol akışı,
   modüller (`import "x" as alias`), **t-string interpolation** (`t"x={n}"`),
+  **ternary** (`cond ? a : b` — tembel, sağ-asosiyatif, en gevşek öncelik),
   coerce-eden `+`, `let`/`var`, for-each (`for (x in coll)`), string escape
   `\e` (ESC, ANSI renkleri için) + `\0`.
 - **Tek backend — AOT-only (2026-06-15):** LLVM 18 AOT tek yürütme yolu
@@ -33,7 +34,10 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   (`get("/users", list_users)`, typo=derleme hatası), `req` parametresi
   (`req.params.id`, `req.json`), response helper'ları (`ok/created/not_found/…`),
   otomatik body parse, **görünmez auto-persist** (global'e yazım manuel
-  `persist()`'siz kalıcı), **şema doğrulama** (`body_schema({"name":"str"})` →
+  `persist()`'siz kalıcı — array `push` **ve** global dict key-write dâhil,
+  2026-06-23), **temiz cevap gövdesi** (envelope meta-anahtarları `_status`/
+  `_raw`/… JSON gövdeye sızmaz; `created(x)`→`{"id":1}` + `201`), **şema
+  doğrulama** (`body_schema({"name":"str"})` →
   geçersiz gövde handler'a girmeden otomatik 422), **otomatik /docs** (Swagger
   UI + /openapi.json, route'lardan + şemalardan üretilir) ve **markalı varsayılan
   port** — `serve()` (port'suz) → 8484 (ASCII 'T'=84, "Tulpar portu"), doluysa
@@ -62,6 +66,26 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Çekirdek dil + derleme zinciri
 
+- **Ternary (üçlü) koşul operatörü `cond ? then : else` (2026-06-23):**
+  - ✅ **Tam zincir eklendi** — lexer `TOKEN_QUESTION` (`?`), AST `TernaryOp`
+    (+ variant + visitor + converter → C-tarafı `AST_TERNARY`, if-node'unun
+    condition/then/else slotlarını yeniden kullanır), typeinfer (iki dalı unify
+    eder), AOT codegen `AST_TERNARY` (değer üreten ifade: koşul → CondBr →
+    iki blok res_slot'a yazar → merge load; AST_MATCH phi kalıbıyla aynı).
+  - ✅ **Tembel (lazy) semantik:** yalnızca seçilen dal değerlendirilir —
+    seçilmeyen dalın yan etkisi (fonksiyon çağrısı vb.) tetiklenmez. Birim
+    testle kanıtlandı (global sayaç: untaken dal sayacı 0 kalır).
+  - ✅ **Öncelik + asosiyatiflik:** en gevşek operatör (binary `||`'ın da
+    altında) — yalnız `precedence==0` (üst seviye) çağrıda toplanır, böylece
+    binary operandlar `?`'i yutmaz. Her iki dal `parse_expression(0)` ile
+    ayrıştırılır → sağ-asosiyatif iç içe (`a?b:c?d:e` = `a?b:(c?d:e)`,
+    `a?b?c:d:e` = `a?(b?c:d):e`). Eksik `:` → net iki dilli parse hatası.
+  - ✅ **Test + örnek:** `tests/ternary.test.tpr` **19/19** (temel, truthiness,
+    tip çeşitleri, öncelik, &&/|| koşul, iç içe, fonksiyon-arg/return,
+    dizi/nesne/string bağlamı, döngü, tembellik). `examples/39_ternary.tpr`
+    (Türkçe yorumlu kullanıcı örneği). `tulpar fmt` ternary'i bozmadan korur
+    (metin-tabanlı). Doc sitesi: `guide/control-flow` (EN+TR) Ternary bölümü.
+    Tüm örnekler + 29 focused suite yeşil (regresyon yok). → [[AOT Backend]]
 - **`null` literal + codegen crash sertleştirmesi (2026-06-22):**
   - ✅ **`null` artık gerçek literal** — lexer `TOKEN_NULL` → AST `NullLiteral`
     / `AST_NULL_LITERAL` → codegen `VM_VAL_VOID` (`llvm_vm_val_void`). JSON'a
@@ -146,6 +170,42 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### HTTP runtime (Wings/Router native)
 
+- **Global dict key-persist + temiz cevap gövdesi + 3 örnek uygulama + Wings
+  Öğreticisi (2026-06-23):**
+  - ✅ **Global obje key-write artık istekler arası kalıcı (runtime fix):**
+    `_tokens[token] = uid` gibi bir **global json nesnesine key yazımı**
+    `arena_restore` sonrası bozuluyordu — değer (write-barrier ile codegen'de)
+    kalıcılaşıyor ama **key string'i** `vm_object_set`'te per-request arena'da
+    ayrılıp reclaim ediliyordu → dangling key, sonraki istekte key adı çöpe
+    dönüyor (`{"k":42}` → `{"obj":42}`). `src/vm/runtime_bindings.cpp` →
+    `vm_object_set`: codegen değer-barrier'ının runtime ikizi — container kalıcı
+    ve key transient ise key `aot_persist_string_obj` ile malloc'a kopyalanır;
+    request-scoped objeler (params/cookies/json) `obj_transient=1` olduğundan
+    sıcak yol dokunulmaz/bedava. **Etki:** global dict artık gerçek bir
+    in-memory session/token/cache tablosu (auth akışı bunsuz çöküyordu). Array
+    `push` zaten kalıcıydı; artık dict de simetrik. Minimal izole test + 3
+    örnekte canlı curl + tam `build.sh test` yeşil ile doğrulandı.
+  - ✅ **Cevap gövdesinden envelope meta-anahtarları ayıklandı:** `created(x)`
+    artık `{"id":1}` (`201` status satırıyla) döndürüyor — eskiden gövdeye
+    `_status:201` sızıyordu. `aot_wings_build_response` zarfı (`status`/`_raw`/
+    `_content_type`) yine okuyor ama JSON gövdeyi `aot_wings_strip_meta` ile
+    serialize ediyor: `_status`/`_stream`/`_raw`/`_content_type` atılır. Meta
+    yoksa (sıradan `ok(data)`) **sıfır kopya** — sığ kopya yalnızca meta varken,
+    arena-tracked. Cookbook'un gösterdiği temiz çıktıyla artık birebir uyumlu.
+  - ✅ **3 tam örnek uygulama (`examples/`, baştan sona Türkçe yorumlu, hepsi
+    derlenip canlı curl ile doğrulandı):** `wings_todo_api.tpr` (REST CRUD +
+    `:id` param + `req.json` + `body_schema` 422 + `query_int/bool` filtre +
+    otomatik /docs), `wings_auth_api.tpr` (login→token→korumalı uçlar:
+    `depends`/`dep` DI, `group("/api",…)`, `response_model` ile password gizleme,
+    401/403/422 + logout token-invalidation), `wings_notes_db.tpr` (SQLite
+    kalıcılık: `db_open/db_execute/db_query/db_last_insert_id`, `sql_str` ile
+    tek-tırnak escape/enjeksiyon önleme, restart-sonrası veri kalıcı). Üçü de
+    `COMPILE_ONLY_TESTS` (build.sh) + `$compileOnly` (run_tests.ps1) listelerine
+    eklendi. → [[Wings]]
+  - ✅ **Wings Öğreticisi (doc sitesi, EN+TR):** `ecosystem/wings-tutorial` —
+    üç örneği ilerlemeli bir öğrenme yolu olarak işleyen rehberli walkthrough
+    (REST → auth/DI → SQLite). Sidebar'a HTTP Server'dan sonra eklendi; astro
+    build temiz (72 sayfa). → [[Wings]]
 - **Static root-mount + cookbook doğrulaması (2026-06-22):**
   - ✅ **`static("/", "./public")` artık çalışıyor** — `_wings_static_try`'da
     dir+rel birleştirmesi tam bir `/` ayracı garantiliyor (prefix `/` iken

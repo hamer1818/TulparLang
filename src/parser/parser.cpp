@@ -870,6 +870,26 @@ std::unique_ptr<ASTNode> Parser::parse_expression(int precedence) {
         );
     }
 
+    // Ternary conditional `cond ? then : else` — the loosest operator (binds
+    // below `||`), so it is recognised only at the top-level call (precedence
+    // floor 0); the RHS of any binary operator runs with precedence > 0 and
+    // therefore never swallows a `?`. Both branches are parsed with the full
+    // (precedence 0) expression parser, which makes nesting right-associative:
+    //   `a ? b : c ? d : e`  →  `a ? b : (c ? d : e)`
+    //   `a ? b ? c : d : e`  →  `a ? (b ? c : d) : e`
+    if (precedence == 0 && current().type() == TOKEN_QUESTION) {
+        SourceLocation loc(current().line(), current().column());
+        advance(); // consume '?'
+        auto then_branch = parse_expression();          // full expr (allows nesting)
+        expect(TOKEN_COLON, "Ternary ifadesinde '?' sonrası ':' bekleniyor "
+                            "(cond ? a : b) / Ternary expression expects ':' after '?'");
+        auto else_branch = parse_expression();          // right-associative
+        left = std::make_unique<ASTNode>(
+            TernaryOp(std::move(left), std::move(then_branch),
+                      std::move(else_branch), loc)
+        );
+    }
+
     return left;
 }
 
@@ -1670,6 +1690,14 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
             set_loc(out, n.loc);
         } else if constexpr (std::is_same_v<T, IfStatement>) {
             out->type = AST_IF;
+            out->condition = convert_ast_node_ptr(n.condition);
+            out->then_branch = convert_ast_node_ptr(n.then_branch);
+            out->else_branch = convert_ast_node_ptr(n.else_branch);
+            set_loc(out, n.loc);
+        } else if constexpr (std::is_same_v<T, TernaryOp>) {
+            // Conditional expression — reuses the if-node's condition/then/else
+            // slots; the backend lowers AST_TERNARY to a value-producing phi.
+            out->type = AST_TERNARY;
             out->condition = convert_ast_node_ptr(n.condition);
             out->then_branch = convert_ast_node_ptr(n.then_branch);
             out->else_branch = convert_ast_node_ptr(n.else_branch);
