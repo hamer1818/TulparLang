@@ -1,0 +1,161 @@
+// ============================================================================
+// Tulpar Wings — Token tabanlı kimlik doğrulama (auth) örneği
+// ----------------------------------------------------------------------------
+// "Giriş yap, token al, korumalı uçları o token'la çağır" akışının tamamı.
+// Gösterdikleri:
+//
+//   • group(prefix, fn) ............. route'ları ortak /api öneki altında topla
+//   • depends("fn") ................. route'a bağımlılık (DI) — handler'dan ÖNCE
+//                                     çalışır, değer üretir veya 401'le keser
+//   • dep("fn") ..................... handler içinde o değeri oku
+//   • response_model(...) ........... cevaptan "password" gibi gizli alanları at
+//   • unauthorized / forbidden ...... hazır 401/403 yardımcıları
+//
+// Token modeli KASITEN basittir (öğretim amaçlı): giriş başarılıysa
+// "token-<id>" üretiriz ve bunu bellekteki bir tabloda tutarız. Gerçek
+// hayatta JWT veya imzalı oturum kullanırsın — akış birebir aynıdır.
+//
+// ÇALIŞTIRMA:
+//   tulpar examples/wings_auth_api.tpr
+//
+//   # 1) Giriş yap → token al
+//   curl -X POST http://127.0.0.1:8484/login -d '{"username":"ada","password":"1234"}'
+//   #   → {"token":"token-1", ...}
+//
+//   # 2) Korumalı ucu token'sız çağır → 401
+//   curl -i http://127.0.0.1:8484/api/me
+//
+//   # 3) Token'la çağır → profil (password ALANI GÖRÜNMEZ — response_model)
+//   curl http://127.0.0.1:8484/api/me -H "Authorization: Bearer token-1"
+//
+//   # 4) Sadece admin ucu — ada normal kullanıcı → 403
+//   curl http://127.0.0.1:8484/api/admin -H "Authorization: Bearer token-1"
+// ============================================================================
+import "wings";
+
+// ----------------------------------------------------------------------------
+// Bellek içi kullanıcı tablosu + aktif token'lar.
+// password DÜZ METİN sadece örnek sade kalsın diye; gerçek uygulamada hash'le!
+// ----------------------------------------------------------------------------
+array _users = [];
+json  _tokens = {};        // "token-1" -> user_id
+
+func seed() {
+    push(_users, {"id": 1, "username": "ada",  "password": "1234", "role": "user"});
+    push(_users, {"id": 2, "username": "root", "password": "admin","role": "admin"});
+}
+seed();
+
+func user_by_name(str name) {
+    for (u in _users) {
+        if (u["username"] == name) { return u; }
+    }
+    return {};
+}
+
+func user_by_id(int id) {
+    for (u in _users) {
+        if (u["id"] == id) { return u; }
+    }
+    return {};
+}
+
+// ----------------------------------------------------------------------------
+// DI bağımlılığı: "şu anki kullanıcı". Authorization başlığını okur,
+// token'ı çözer ve kullanıcıyı döndürür. Token yoksa/geçersizse 401 döndürür
+// ve handler HİÇ çağrılmaz (depends, response dict dönerse kısa devre yapar).
+// ----------------------------------------------------------------------------
+func current_user(req) {
+    str auth = req["headers"]["Authorization"];
+    if (length(auth) == 0) {
+        auth = req["headers"]["authorization"];     // curl küçük harf yollayabilir
+    }
+    // "Bearer token-1" → "token-1"
+    str prefix = "Bearer ";
+    if (length(auth) <= length(prefix)) {
+        return unauthorized("Authorization: Bearer <token> gerekli");
+    }
+    str token = substring(auth, length(prefix), length(auth));
+    if (_wings_has_key(_tokens, token) == false) {
+        return unauthorized("geçersiz veya süresi dolmuş token");
+    }
+    int uid = _tokens[token];
+    return user_by_id(uid);                          // bu değer dep("current_user")
+}
+
+// ----------------------------------------------------------------------------
+// Açık (public) uç: giriş. Doğru kimlikse token üretir.
+// ----------------------------------------------------------------------------
+func login(req) {
+    json body = req.json;                            // {"username","password"}
+    json u = user_by_name(body["username"]);
+    if (_wings_has_key(u, "id") == false) {
+        return unauthorized("kullanıcı bulunamadı");
+    }
+    if (u["password"] != body["password"]) {
+        return unauthorized("şifre hatalı");
+    }
+    str token = "token-" + toString(u["id"]);
+    _tokens[token] = u["id"];
+    return {"token": token, "user": u["username"], "role": u["role"]};
+}
+
+// ----------------------------------------------------------------------------
+// Korumalı uçlar: hepsi current_user'a bağımlı. Handler'lar dep() ile
+// doğrulanmış kullanıcıyı okur — token çözme mantığını tekrar etmezler.
+// ----------------------------------------------------------------------------
+
+// GET /api/me — profilim. response_model "password"i ELEYECEK.
+func me(req) {
+    return ok(dep("current_user"));
+}
+
+// GET /api/admin — sadece admin rolü. Aksi halde 403 (kimliği var ama yetkisi yok).
+func admin_panel(req) {
+    json u = dep("current_user");
+    if (u["role"] != "admin") {
+        return forbidden("bu uç sadece admin içindir");
+    }
+    return ok({"secret": "nükleer fırlatma kodları 🔐", "for": u["username"]});
+}
+
+// POST /api/logout — token'ı geçersiz kıl.
+func logout(req) {
+    json u = dep("current_user");
+    // Bu kullanıcının token'ını tablodan düş.
+    str token = "token-" + toString(u["id"]);
+    json kept = {};
+    for (k in keys(_tokens)) {
+        if (k != token) { kept[k] = _tokens[k]; }
+    }
+    _tokens = kept;
+    return {"message": "çıkış yapıldı"};
+}
+
+// ----------------------------------------------------------------------------
+// Korumalı route'ları tek bir /api grubu altında kaydeden fonksiyon.
+// group() bunu çağırır ve her path'in başına "/api" ekler.
+// depends() ve response_model() her zaman EN SON kaydedilen route'a takılır,
+// bu yüzden ilgili get/post satırının hemen ALTINA yazılırlar.
+// ----------------------------------------------------------------------------
+func protected_routes() {
+    get("/me", "me");
+    depends("current_user");
+    response_model({"id": "int", "username": "str", "role": "str"});  // password DIŞARI
+
+    get("/admin", "admin_panel");
+    depends("current_user");
+
+    post("/logout", "logout");
+    depends("current_user");
+}
+
+// --- Route tablosu ----------------------------------------------------------
+post("/login", "login");
+body_schema({"username": "str", "password": "str"});   // eksik alan → 422
+
+group("/api", "protected_routes");                     // /api/me, /api/admin, /api/logout
+
+// --- Sunucu -----------------------------------------------------------------
+print("Auth API hazır. Önce POST /login ile token al, sonra /api/* dene.");
+serve();

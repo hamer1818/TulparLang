@@ -1,0 +1,175 @@
+// ============================================================================
+// Tulpar Wings — SQLite destekli Notlar REST API  ("kalıcı veritabanlı API")
+// ----------------------------------------------------------------------------
+// wings_todo_api.tpr'deki Todo API'sinin AYNISI, ama veriyi bellekte değil
+// gerçek bir SQLite dosyasında (notes.db) tutar. Sunucuyu kapatıp tekrar
+// açsan bile notların yerinde durur — işte "kalıcılık" (persistence) budur.
+//
+// Gösterdikleri:
+//   • db_open / db_execute / db_query / db_last_insert_id — gömülü SQLite
+//   • db_execute(...) ............... INSERT/UPDATE/DELETE (etkilenen satır sayısı)
+//   • db_query(...) ................. SELECT (satır-dict dizisi döner)
+//   • db_last_insert_id(...) ........ yeni eklenen kaydın id'si
+//   • SQL'i güvenle kurma ........... parametreli sorgu YOK; metni sql_str() ile
+//                                     kaçışla (' → '') ve sayıyı toInt'le temizle
+//
+// NOT: Tulpar'ın db_query'sinde "?" parametre bağlama yoktur — SQL'i string
+// birleştirerek kurarız. Bu yüzden kullanıcıdan gelen METNİ asla doğrudan
+// gömME: sql_str() tek tırnakları ikileyip enjeksiyonu önler. Sayısal id'leri
+// toInt()'ten geçirmek de onları güvenli kılar.
+//
+// ÇALIŞTIRMA:
+//   tulpar examples/wings_notes_db.tpr
+//   # Ayrı bir terminalde:
+//   curl http://127.0.0.1:8484/notes
+//   curl -X POST http://127.0.0.1:8484/notes -d '{"title":"süt al"}'
+//   curl http://127.0.0.1:8484/notes/1
+//   curl -X PUT http://127.0.0.1:8484/notes/1 -d '{"title":"süt al","done":true}'
+//   curl -X DELETE http://127.0.0.1:8484/notes/1
+//   # Sunucuyu Ctrl+C ile kapat, tekrar başlat → notlar HÂLÂ orada (notes.db).
+//   # Tarayıcıda dokümanlar:  http://127.0.0.1:8484/docs
+// ============================================================================
+import "wings";
+
+// ----------------------------------------------------------------------------
+// Veritabanını bir KEZ aç (global handle). Tablo yoksa oluştur. AUTOINCREMENT
+// id'yi SQLite yönetir; "done" SQLite'ta ayrı bir bool tipi olmadığı için
+// 0/1 tamsayı olarak saklanır (okurken bool'a çeviririz).
+// ----------------------------------------------------------------------------
+int _db = db_open("notes.db");
+db_execute(_db, "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0);");
+
+// Yardımcı: tablodaki kayıt sayısı. SELECT COUNT(*) tek satır/tek sütun döner;
+// sütuna "n" takma adı verip okumayı kolaylaştırırız.
+func note_count() {
+    array rows = db_query(_db, "SELECT COUNT(*) AS n FROM notes;");
+    return toInt(rows[0]["n"]);
+}
+
+// Yardımcı: kullanıcı metnini SQL-string literaline çevir. Tek tırnağı ikiler
+// ('ada's note' → 'ada''s note') ve tırnak içine alır → enjeksiyon kapalı.
+func sql_str(str s) {
+    return "'" + replace(s, "'", "''") + "'";
+}
+
+// Yardımcı: ham DB satırını temiz bir nota çevir. done sütunu 0/1 int gelir;
+// API'de bool olarak sunmak daha doğru.
+func row_to_note(json row) {
+    return {
+        "id":    toInt(row["id"]),
+        "title": row["title"],
+        "done":  (toInt(row["done"]) == 1)
+    };
+}
+
+// Açılışta tablo boşsa birkaç örnek not ekle (boş API'yi denemek can sıkıcı).
+func seed() {
+    if (note_count() == 0) {
+        db_execute(_db, "INSERT INTO notes (title, done) VALUES ('Tulpar ile SQLite dene', 1);");
+        db_execute(_db, "INSERT INTO notes (title, done) VALUES ('Kalıcı API yaz', 0);");
+    }
+}
+seed();
+
+// ----------------------------------------------------------------------------
+// Handler'lar — her biri `req` alır, bir cevap sözlüğü döndürür.
+// ----------------------------------------------------------------------------
+
+// GET /  — karşılama + kaç not var.
+func index(req) {
+    return {
+        "name": "Tulpar Wings Notes API (SQLite)",
+        "note_count": note_count(),
+        "try": ["GET /notes", "POST /notes", "GET /docs"]
+    };
+}
+
+// GET /notes  — tüm notları listele.
+func list_notes(req) {
+    array rows = db_query(_db, "SELECT * FROM notes ORDER BY id;");
+    array out = [];
+    for (row in rows) {
+        push(out, row_to_note(row));
+    }
+    return {"data": out, "count": length(out)};
+}
+
+// GET /notes/:id  — tek not. Yoksa 404.
+func show_note(req) {
+    int id = toInt(req.params.id);
+    array rows = db_query(_db, t"SELECT * FROM notes WHERE id = {toString(id)};");
+    if (length(rows) == 0) {
+        return not_found(t"not {id} bulunamadı");
+    }
+    return ok(row_to_note(rows[0]));
+}
+
+// POST /notes  — yeni not. body_schema sayesinde "title" string'i GARANTİ var.
+func create_note(req) {
+    json body = req.json;
+    int done = 0;
+    if (_wings_has_key(body, "done")) {
+        if (body["done"] == true) { done = 1; }
+    }
+    // t-string interpolasyonunu sade tutmak için değerleri önce hazırla.
+    str title_sql = sql_str(body["title"]);
+    str done_sql  = toString(done);
+    db_execute(_db, t"INSERT INTO notes (title, done) VALUES ({title_sql}, {done_sql});");
+    int new_id = db_last_insert_id(_db);
+    array rows = db_query(_db, t"SELECT * FROM notes WHERE id = {toString(new_id)};");
+    return created(row_to_note(rows[0]));   // 201 Created
+}
+
+// PUT /notes/:id  — var olan notu güncelle. Yoksa 404.
+func update_note(req) {
+    int id = toInt(req.params.id);
+    array rows = db_query(_db, t"SELECT * FROM notes WHERE id = {toString(id)};");
+    if (length(rows) == 0) {
+        return not_found(t"not {id} bulunamadı");
+    }
+    json body = req.json;
+    // "done" gönderilmemişse mevcut değeri koru.
+    int done = toInt(rows[0]["done"]);
+    if (_wings_has_key(body, "done")) {
+        done = 0;
+        if (body["done"] == true) { done = 1; }
+    }
+    str title_sql = sql_str(body["title"]);
+    str done_sql  = toString(done);
+    str id_sql    = toString(id);
+    db_execute(_db, t"UPDATE notes SET title = {title_sql}, done = {done_sql} WHERE id = {id_sql};");
+    array updated = db_query(_db, t"SELECT * FROM notes WHERE id = {id_sql};");
+    return ok(row_to_note(updated[0]));
+}
+
+// DELETE /notes/:id  — sil. Başarılıysa gövdesiz 204; yoksa 404.
+func delete_note(req) {
+    int id = toInt(req.params.id);
+    array rows = db_query(_db, t"SELECT * FROM notes WHERE id = {toString(id)};");
+    if (length(rows) == 0) {
+        return not_found(t"not {id} bulunamadı");
+    }
+    db_execute(_db, t"DELETE FROM notes WHERE id = {toString(id)};");
+    return no_content();                    // 204 No Content
+}
+
+// ----------------------------------------------------------------------------
+// Route tablosu — kaynak: /notes  (klasik REST eşlemesi)
+// ----------------------------------------------------------------------------
+get("/",           "index");
+get("/notes",      "list_notes");
+get("/notes/:id",  "show_note");
+
+post("/notes",     "create_note");
+body_schema({"title": "str", "done?": "bool"});   // title zorunlu, done opsiyonel
+
+put("/notes/:id",  "update_note");
+body_schema({"title": "str", "done?": "bool"});
+
+del("/notes/:id",  "delete_note");
+
+// ----------------------------------------------------------------------------
+// Sunucuyu başlat. Veriler notes.db'de — sunucu yeniden başlasa bile kalıcı.
+// ----------------------------------------------------------------------------
+print("Notlar API hazır (SQLite: notes.db) — " + toString(note_count()) + " kayıt var.");
+serve();

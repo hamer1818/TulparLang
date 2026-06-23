@@ -1,0 +1,174 @@
+// ============================================================================
+// Tulpar Wings — Todo REST API  (yeni başlayanlar için "ilk gerçek uygulama")
+// ----------------------------------------------------------------------------
+// Bu örnek bir web framework'ünden beklediğin HER ŞEYİ tek dosyada gösterir:
+//
+//   • get / post / put / del ........ REST route'ları
+//   • :id yol parametresi ........... req.params.id
+//   • req.json ...................... gövdeyi otomatik parse eder (JSON)
+//   • body_schema(...) .............. geçersiz gövde handler'a girmeden 422
+//   • query_int / query_bool ........ ?done=true&limit=10 gibi filtreler
+//   • ok / created / not_found ...... niyet belli eden cevap yardımcıları
+//   • /docs + /openapi.json ......... otomatik üretilen API dokümanı
+//
+// ÇALIŞTIRMA:
+//   tulpar examples/wings_todo_api.tpr
+//   # Sonra ayrı bir terminalde:
+//   curl http://127.0.0.1:8484/todos
+//   curl -X POST http://127.0.0.1:8484/todos -d '{"title":"süt al"}'
+//   curl http://127.0.0.1:8484/todos/1
+//   curl -X PUT http://127.0.0.1:8484/todos/1 -d '{"title":"süt al","done":true}'
+//   curl -X DELETE http://127.0.0.1:8484/todos/1
+//   curl "http://127.0.0.1:8484/todos?done=false&limit=5"
+//   # Tarayıcıda dokümanlar:  http://127.0.0.1:8484/docs
+// ============================================================================
+import "wings";
+
+// ----------------------------------------------------------------------------
+// "Veritabanı" — bellek içi liste. Gerçek bir uygulamada burası SQLite olurdu
+// (bkz. wings_notes_db.tpr); öğrenmek için basit bir dizi yeterli.
+// ----------------------------------------------------------------------------
+array _todos  = [];
+int   _next_id = 1;
+
+// Açılışta birkaç örnek kayıt — boş bir API'yi denemek can sıkıcı olur.
+func seed() {
+    push(_todos, {"id": 1, "title": "Tulpar'ı öğren",  "done": true});
+    push(_todos, {"id": 2, "title": "Wings ile API yaz", "done": false});
+    push(_todos, {"id": 3, "title": "Dünyaya duyur",    "done": false});
+    _next_id = 4;
+}
+seed();
+
+// Yardımcı: id'ye göre todo'nun _todos içindeki indeksini bul (-1 = yok).
+// Tulpar'da referansla "pointer" tutmak yerine indeks döndürmek en sade yol.
+func find_index(int id) {
+    for (int i = 0; i < length(_todos); i++) {
+        if (_todos[i]["id"] == id) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// ----------------------------------------------------------------------------
+// Handler'lar — her biri `req` alır ve bir cevap sözlüğü döndürür.
+// Düz sözlük döndürmek = 200 OK + JSON. Yardımcılar (created/not_found...)
+// sadece doğru _status'u ekleyen ince sarmalayıcılardır.
+// ----------------------------------------------------------------------------
+
+// GET /  — API'nin ne sunduğunu özetleyen karşılama sayfası.
+func index(req) {
+    return {
+        "name": "Tulpar Wings Todo API",
+        "todo_count": length(_todos),
+        "try": ["GET /todos", "POST /todos", "GET /docs"]
+    };
+}
+
+// GET /todos  — tüm todo'ları listele. ?done=true|false ile filtrele,
+// ?limit=N ile kısıtla. Sayfalama/filtre okumanın tipik kalıbı budur.
+func list_todos(req) {
+    // query_bool, parametre yoksa veya boşsa fallback döner — burada -1
+    // yerine "filtre yok" demek için iki ayrı bayrak kullanıyoruz.
+    bool want_filter = _wings_has_key(req["query"], "done");
+    bool want_done   = query_bool(req, "done", false);
+    int  limit       = query_int(req, "limit", 100);
+
+    array out = [];
+    for (t in _todos) {
+        if (want_filter == true && t["done"] != want_done) {
+            continue;                       // filtreye uymuyor → atla
+        }
+        if (length(out) >= limit) {
+            break;                          // limit doldu → dur
+        }
+        push(out, t);
+    }
+    return {"data": out, "count": length(out)};
+}
+
+// GET /todos/:id  — tek bir todo. Yoksa 404.
+func show_todo(req) {
+    int id  = toInt(req.params.id);         // params daima string → toInt
+    int idx = find_index(id);
+    if (idx < 0) {
+        return not_found(t"todo {id} bulunamadı");
+    }
+    return ok(_todos[idx]);
+}
+
+// POST /todos  — yeni todo oluştur. body_schema sayesinde buraya gelen
+// gövdede "title" string'i GARANTİ var (yoksa wings 422 döndürmüştü).
+func create_todo(req) {
+    json body = req.json;                   // {"title": "...", "done"?: bool}
+    json todo = {
+        "id":    _next_id,
+        "title": body["title"],
+        "done":  false
+    };
+    if (_wings_has_key(body, "done")) {     // "done" opsiyonel
+        todo["done"] = body["done"];
+    }
+    push(_todos, todo);
+    _next_id = _next_id + 1;
+    return created(todo);                   // 201 Created
+}
+
+// PUT /todos/:id  — var olan bir todo'yu tümüyle güncelle.
+func update_todo(req) {
+    int id  = toInt(req.params.id);
+    int idx = find_index(id);
+    if (idx < 0) {
+        return not_found(t"todo {id} bulunamadı");
+    }
+    json body = req.json;
+    json todo = _todos[idx];
+    todo["title"] = body["title"];
+    if (_wings_has_key(body, "done")) {
+        todo["done"] = body["done"];
+    }
+    _todos[idx] = todo;
+    return ok(todo);
+}
+
+// DELETE /todos/:id  — sil. Başarılıysa gövdesiz 204.
+func delete_todo(req) {
+    int id  = toInt(req.params.id);
+    int idx = find_index(id);
+    if (idx < 0) {
+        return not_found(t"todo {id} bulunamadı");
+    }
+    // Tulpar'da diziden indeksli silme: yeniden inşa et (liste küçük).
+    array kept = [];
+    for (int i = 0; i < length(_todos); i++) {
+        if (i != idx) {
+            push(kept, _todos[i]);
+        }
+    }
+    _todos = kept;
+    return no_content();                    // 204 No Content
+}
+
+// ----------------------------------------------------------------------------
+// Route tablosu — kaynak: /todos  (klasik REST eşlemesi)
+// ----------------------------------------------------------------------------
+get("/",            "index");
+get("/todos",       "list_todos");
+get("/todos/:id",   "show_todo");
+
+post("/todos",      "create_todo");
+body_schema({"title": "str", "done?": "bool"});   // title zorunlu, done opsiyonel
+
+put("/todos/:id",   "update_todo");
+body_schema({"title": "str", "done?": "bool"});
+
+del("/todos/:id",   "delete_todo");
+
+// ----------------------------------------------------------------------------
+// Sunucuyu başlat. serve() = listen(); port verilmezse varsayılan 8484.
+// /docs ve /openapi.json otomatik gelir — yukarıdaki body_schema'lar oradaki
+// şemalara dönüşür. Tarayıcıda http://127.0.0.1:8484/docs deneyebilirsin.
+// ----------------------------------------------------------------------------
+print("Todo API hazır — " + toString(length(_todos)) + " örnek kayıt yüklendi.");
+serve();

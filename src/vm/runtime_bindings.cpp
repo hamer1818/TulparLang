@@ -1248,6 +1248,18 @@ void vm_object_set(VM *vm, ObjObject *obj, char *key, VMValue value) {
   ObjString *keyObj =
       vm ? vm_alloc_string(vm, key, len) : aot_allocate_string(key, len);
 
+  // Write barrier for the KEY (mirrors the value barrier above): storing into a
+  // persistent container with a transient key string would leave a dangling key
+  // pointer once the per-request arena is rewound by arena_restore. The value
+  // survives via wb_persist_escape, but without this the key name does not —
+  // the global reads back with a corrupted/garbage key on the next request
+  // (e.g. a global session/token dict `_t[token] = uid` loses its keys). Only
+  // copy when the container is persistent and the key is actually transient, so
+  // the hot path (transient response objects) stays free.
+  if (!obj_is_transient((Obj *)obj) && obj_is_transient((Obj *)keyObj)) {
+    keyObj = aot_persist_string_obj(keyObj);
+  }
+
   // Check if key exists
   for (int i = 0; i < obj->count; i++) {
     if (strcmp(obj->keys[i]->chars, key) == 0) {
@@ -5816,6 +5828,43 @@ VMValue aot_http_create_response(VMValue statusVal, VMValue contentTypeVal,
 //   * `_raw`          — body string is `_raw` verbatim (skip toJson)
 //   * `_content_type` — Content-Type when `_raw` is set
 //                       (defaults to "text/plain; charset=utf-8")
+// True for the Wings response-envelope meta keys. These are read to build the
+// HTTP envelope (status, raw body, content-type) but must NOT leak into the
+// serialised JSON body — otherwise `created(x)` returns {"...":..,"_status":201}
+// and clients see framework internals.
+static inline bool wings_is_meta_key(const char *k) {
+  return k[0] == '_' &&
+         (strcmp(k, "_status") == 0 || strcmp(k, "_stream") == 0 ||
+          strcmp(k, "_raw") == 0 || strcmp(k, "_content_type") == 0);
+}
+
+// Return `v` with the Wings meta keys stripped, for JSON-body serialisation.
+// Fast path: when the object carries no meta key (the common case — a plain
+// `ok(data)` whose data has none) the original value is returned untouched, so
+// no copy is made. Only when a meta key is present do we build a request-local
+// shallow copy (arena-tracked, freed at the next arena_restore) without them.
+static VMValue aot_wings_strip_meta(VMValue v) {
+  if (!IS_OBJECT(v))
+    return v;
+  ObjObject *src = (ObjObject *)AS_OBJECT(v);
+  bool has_meta = false;
+  for (int i = 0; i < src->count; i++) {
+    if (src->keys[i] && wings_is_meta_key(src->keys[i]->chars)) {
+      has_meta = true;
+      break;
+    }
+  }
+  if (!has_meta)
+    return v;
+  ObjObject *dst = vm_allocate_object_aot_wrapper(nullptr);
+  for (int i = 0; i < src->count; i++) {
+    if (!src->keys[i] || wings_is_meta_key(src->keys[i]->chars))
+      continue;
+    vm_object_set(nullptr, dst, src->keys[i]->chars, src->values[i]);
+  }
+  return VM_OBJ((Obj *)dst);
+}
+
 VMValue aot_wings_build_response(VMValue resultVal, VMValue defaultHeadersVal,
                                  VMValue keepVal) {
   int status = 200;
@@ -5852,7 +5901,7 @@ VMValue aot_wings_build_response(VMValue resultVal, VMValue defaultHeadersVal,
     // Normal handler path: serialise the whole result to JSON. We
     // reuse aot_to_json (JSBuilder fast-path) rather than cJSON.
     content_type_str = "application/json";
-    body_val = aot_to_json(resultVal);
+    body_val = aot_to_json(aot_wings_strip_meta(resultVal));
   }
 
   // Stash content_type in a VMValue string so we can delegate the

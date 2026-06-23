@@ -135,6 +135,8 @@ if [ "$ACTION" = "test" ]; then
                         "wings_middleware_test.tpr" "wings_groups_test.tpr" \
                         "wings_query_test.tpr" "wings_response_model_test.tpr" \
                         "wings_upload_test.tpr" "wings_di_test.tpr" \
+                        "wings_todo_api.tpr" "wings_auth_api.tpr" \
+                        "wings_notes_db.tpr" \
                         "tulpar_api_demo.tpr" "utils.tpr")
 
     # HTTP smoke probes. The 2-second alive check above only verifies the

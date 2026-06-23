@@ -908,11 +908,13 @@ func _wings_has_raw(json result) {
 //   return {"error": "conflict", "_status": 409};
 //   return {"ok": true, "_status": 201};
 //
-// Any positive integer is honored verbatim. The field is left in the
-// JSON body — handlers that want it stripped should not include it
-// (or should structure their schema differently). Falls back to the
-// caller-supplied default (200 for handler hits, 404 for no-match)
-// when absent or not an int. Both `_raw` and JSON paths see this.
+// Any positive integer is honored verbatim. The `_status` field (along
+// with the other envelope meta keys `_stream`/`_raw`/`_content_type`) is
+// read here for the HTTP status, then STRIPPED from the serialised JSON
+// body by the native response builder — so `created(x)` returns a clean
+// `{"id":1}` body with a `201` status line, not `{"id":1,"_status":201}`.
+// Falls back to the caller-supplied default (200 for handler hits, 404
+// for no-match) when absent or not an int. Both `_raw` and JSON paths see this.
 func _wings_status_or(json result, int fallback) {
     array rk = keys(result);
     for (int i = 0; i < length(rk); i++) {
