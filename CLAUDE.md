@@ -54,7 +54,7 @@ It invokes `./tulpar --aot <file>`, expects an `a.out`/`<base>.exe` to be produc
 
 A separate `tests/` directory holds focused regression suites that are **not** run by `./build.sh test`:
 - `*.test.tpr` — Tulpar source using the embedded `test` library (`import "test"`, jest-style assertions). Run with `./tulpar tests/<file>.test.tpr`.
-- `*_smoke.py` / `lsp_smoke.py` — Python harnesses that drive the LSP / formatter / package manager subprocesses. Manual; not yet wired into CI.
+- `wings_tls_smoke.py` — the remaining Python harness, drives the compiled `tulpar` binary as a subprocess to exercise the TLS serve path. Manual; not run by CI. (The other `*_smoke.py` harnesses for LSP / formatter / pkg / serve-modes were removed — they were never wired into CI.)
 
 CI (`.github/workflows/build.yml`) builds on Ubuntu, macOS, and Windows; only the Linux job runs `./build.sh test` (and it is `continue-on-error`).
 
