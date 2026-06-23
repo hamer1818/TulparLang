@@ -1,0 +1,25 @@
+// wings redirect demo — real HTTP 302 with a Location header.
+//
+// The `redirect()` / `redirect_status()` helpers return a response envelope
+// carrying the `_headers` meta key, which the dispatcher now threads onto the
+// wire (merged over the default headers). This is a genuine 3xx, not an HTML
+// meta-refresh — `curl -i` shows the status line + `Location:` header.
+import "wings";
+
+func home() {
+    return text("GET /go -> 302 https://tulparlang.dev\n");
+}
+
+func go() {
+    return redirect("https://tulparlang.dev");
+}
+
+func go_permanent() {
+    return redirect_status("https://tulparlang.dev/intro/getting-started/", 301);
+}
+
+get("/", "home");
+get("/go", "go");
+get("/go-permanent", "go_permanent");
+
+listen(8092);

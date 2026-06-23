@@ -5835,7 +5835,8 @@ VMValue aot_http_create_response(VMValue statusVal, VMValue contentTypeVal,
 static inline bool wings_is_meta_key(const char *k) {
   return k[0] == '_' &&
          (strcmp(k, "_status") == 0 || strcmp(k, "_stream") == 0 ||
-          strcmp(k, "_raw") == 0 || strcmp(k, "_content_type") == 0);
+          strcmp(k, "_raw") == 0 || strcmp(k, "_content_type") == 0 ||
+          strcmp(k, "_headers") == 0);
 }
 
 // Return `v` with the Wings meta keys stripped, for JSON-body serialisation.
@@ -5870,6 +5871,9 @@ VMValue aot_wings_build_response(VMValue resultVal, VMValue defaultHeadersVal,
   int status = 200;
   const char *content_type_str = nullptr;
   ObjString *raw_body = nullptr;
+  // Per-response extra headers (e.g. Location for redirect(), Set-Cookie).
+  // Threaded into the keep-alive builder below, merged over the defaults.
+  ObjObject *extra_headers = nullptr;
 
   if (IS_OBJECT(resultVal)) {
     ObjObject *obj = (ObjObject *)AS_OBJECT(resultVal);
@@ -5884,6 +5888,8 @@ VMValue aot_wings_build_response(VMValue resultVal, VMValue defaultHeadersVal,
         raw_body = AS_STRING(v);
       } else if (strcmp(key, "_content_type") == 0 && IS_STRING(v)) {
         content_type_str = AS_STRING(v)->chars;
+      } else if (strcmp(key, "_headers") == 0 && IS_OBJECT(v)) {
+        extra_headers = (ObjObject *)AS_OBJECT(v);
       }
     }
   }
@@ -5914,8 +5920,30 @@ VMValue aot_wings_build_response(VMValue resultVal, VMValue defaultHeadersVal,
   ObjString *ct_str = aot_allocate_string(content_type_str, (int)ct_len);
   VMValue ct_val = VM_OBJ((Obj *)ct_str);
 
+  // When the handler supplied `_headers`, merge them over the default
+  // headers so the keep-alive builder (which emits each header line and
+  // already skips the Content-Type/Length/Connection it owns) writes
+  // them onto the wire. Defaults first, per-response keys overlay.
+  VMValue headers_val = defaultHeadersVal;
+  if (extra_headers && extra_headers->count > 0) {
+    ObjObject *merged = vm_allocate_object_aot_wrapper(nullptr);
+    if (IS_OBJECT(defaultHeadersVal)) {
+      ObjObject *dh = (ObjObject *)AS_OBJECT(defaultHeadersVal);
+      for (int i = 0; i < dh->count; i++) {
+        if (dh->keys[i])
+          vm_object_set(nullptr, merged, dh->keys[i]->chars, dh->values[i]);
+      }
+    }
+    for (int i = 0; i < extra_headers->count; i++) {
+      if (extra_headers->keys[i])
+        vm_object_set(nullptr, merged, extra_headers->keys[i]->chars,
+                      extra_headers->values[i]);
+    }
+    headers_val = VM_OBJ((Obj *)merged);
+  }
+
   return aot_http_create_response_keepalive(VM_INT(status), ct_val, body_val,
-                                            defaultHeadersVal, keepVal);
+                                            headers_val, keepVal);
 }
 
 // ============================================================================

@@ -457,6 +457,7 @@ func _wings_filter_obj(json schema, json obj) {
     if (_wings_has_key(obj, "_raw"))          { out["_raw"] = obj["_raw"]; }
     if (_wings_has_key(obj, "_content_type")) { out["_content_type"] = obj["_content_type"]; }
     if (_wings_has_key(obj, "_stream"))       { out["_stream"] = obj["_stream"]; }
+    if (_wings_has_key(obj, "_headers"))      { out["_headers"] = obj["_headers"]; }
     for (sk in keys(schema)) {
         str field = sk;
         int L = length(field);
@@ -513,6 +514,19 @@ func server_error(str msg)      { return {"error": msg, "_status": 500}; }
 // Plain-text / custom-status escape hatches.
 func text(str body)             { return {"_raw": body, "_content_type": "text/plain; charset=utf-8"}; }
 func with_status(json data, int status) { data["_status"] = status; return data; }
+
+// Redirect helpers — emit a real HTTP 3xx with a `Location` header. The
+// dispatcher honours the `_headers` envelope key (merged over the default
+// headers in wings_build_response), so this is a genuine 302, not an HTML
+// meta-refresh. Body is empty.
+//
+//   func go() { return redirect("https://example.com"); }            // 302
+//   func perma() { return redirect_status("https://x.com", 301); }   // any 3xx
+func redirect(str url)                  { return {"_status": 302, "_raw": "", "_headers": {"Location": url}}; }
+func redirect_status(str url, int code) { return {"_status": code, "_raw": "", "_headers": {"Location": url}}; }
+// Attach arbitrary response headers (Set-Cookie, Cache-Control, ...) to any
+// result dict. Returns the same dict for chaining.
+func with_headers(json data, json headers) { data["_headers"] = headers; return data; }
 
 // ----- Typed query-param accessors -----------------------------------------
 // `req["query"]` holds raw string values; these coerce with a default fallback
