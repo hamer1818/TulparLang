@@ -5,10 +5,10 @@ cmake_minimum_required(VERSION 3.14)
 
 # Project name and version - Now using modern C++17
 # This is the NEXT (unreleased) version; dev builds report "<version>-dev".
-# Keep it >= the latest git tag (currently v3.2.0) so `tulpar --version` and
+# Keep it >= the latest git tag (currently v3.2.1) so `tulpar --version` and
 # `tulpar update --check` never report a dev build as older than the last
 # release. Bump here when cutting a release; CI overrides via -DTULPAR_VERSION.
-project(TulparLang VERSION 3.2.0 LANGUAGES C CXX)
+project(TulparLang VERSION 3.2.1 LANGUAGES C CXX)
 
 # C++17 Standard (required for std::variant, std::optional, std::unique_ptr)
 set(CMAKE_CXX_STANDARD 17)

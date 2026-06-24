@@ -1879,18 +1879,29 @@ void llvm_backend_destroy(LLVMBackend *backend) {
 
 void register_function(LLVMBackend *backend, const char *name,
                        LLVMTypeRef type) {
-  if (backend->function_count < 128) {
-    backend->functions[backend->function_count].name = my_strdup(name);
-    backend->functions[backend->function_count].type = type;
-    // Struct info defaults: NULL slots mean "not a struct param/return".
-    // Populated by set_function_struct_info() right after register_function
-    // when the caller (predeclare / codegen_func_def) has the AST in hand.
-    backend->functions[backend->function_count].param_struct_names = nullptr;
-    backend->functions[backend->function_count].param_count = 0;
-    backend->functions[backend->function_count].return_struct_name = nullptr;
-    backend->functions[backend->function_count].is_async = 0;
-    backend->function_count++;
+  // Cap must match the `functions[]` array size in llvm_backend.hpp. Overflowing
+  // it used to silently drop the registration, after which a later call to the
+  // dropped function null-derefs and crashes codegen (segfault, no diagnostic).
+  // A program that links a big stdlib module (e.g. wings) plus its own handlers
+  // can legitimately approach this — fail loudly rather than miscompile.
+  const int kMaxFunctions = 512;
+  if (backend->function_count >= kMaxFunctions) {
+    fprintf(stderr,
+            "[AOT] Fatal: function table overflow (> %d functions). "
+            "Raise FunctionEntry functions[] in llvm_backend.hpp.\n",
+            kMaxFunctions);
+    exit(1);
   }
+  backend->functions[backend->function_count].name = my_strdup(name);
+  backend->functions[backend->function_count].type = type;
+  // Struct info defaults: NULL slots mean "not a struct param/return".
+  // Populated by set_function_struct_info() right after register_function
+  // when the caller (predeclare / codegen_func_def) has the AST in hand.
+  backend->functions[backend->function_count].param_struct_names = nullptr;
+  backend->functions[backend->function_count].param_count = 0;
+  backend->functions[backend->function_count].return_struct_name = nullptr;
+  backend->functions[backend->function_count].is_async = 0;
+  backend->function_count++;
 }
 
 // Populate per-function struct info from the AST. Walks parameters and the

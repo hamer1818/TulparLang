@@ -66,7 +66,14 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Çekirdek dil + derleme zinciri
 
-- **Ternary (üçlü) koşul operatörü `cond ? then : else` (2026-06-23):**
+- **AOT fonksiyon tablosu 128 → 512 + sessiz taşma yerine sert hata (v3.2.1, 2026-06-24):**
+  `LLVMBackend.functions[]` 128 slotluk sabit diziydi; büyük bir stdlib modülü
+  (ör. `wings`) + kullanıcının kendi handler'ları bu sınırı aşınca
+  `register_function` kaydı **sessizce düşürüyor**, sonra o fonksiyona yapılan
+  çağrı codegen'de null-deref ile segfault veriyordu (teşhissiz). Kapasite 512'ye
+  çıkarıldı ve taşmada artık `[AOT] Fatal: function table overflow` ile yüksek
+  sesle çıkılıyor (yanlış derleme yerine). Gerçek dünya tetikleyicisi: iurl
+  link-kısaltıcı API'si (`wings` + ~bir düzine route handler).
   - ✅ **Tam zincir eklendi** — lexer `TOKEN_QUESTION` (`?`), AST `TernaryOp`
     (+ variant + visitor + converter → C-tarafı `AST_TERNARY`, if-node'unun
     condition/then/else slotlarını yeniden kullanır), typeinfer (iki dalı unify

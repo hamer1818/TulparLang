@@ -141,7 +141,7 @@ typedef struct {
   Scope *current_scope;
   FuncStackNode *func_stack;
 
-  FunctionEntry functions[128];
+  FunctionEntry functions[512];
   int function_count;
 
   StructTypeEntry struct_types[64];
