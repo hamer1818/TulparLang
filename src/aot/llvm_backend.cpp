@@ -1119,6 +1119,13 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_sha256 =
       LLVMAddFunction(backend->module, "aot_sha256_ptr", read_type);
 
+  // password_hash(str)->str (1 ptr arg, like sha256); password_verify(str,str)
+  // ->bool (2 ptr args, like write_file). PBKDF2-HMAC-SHA256 under the hood.
+  backend->func_aot_password_hash =
+      LLVMAddFunction(backend->module, "aot_password_hash_ptr", read_type);
+  backend->func_aot_password_verify =
+      LLVMAddFunction(backend->module, "aot_password_verify_ptr", write_type);
+
   // Exception Handling Functions
   // aot_try_push() -> jmp_buf* (ptr)
   LLVMTypeRef try_push_type = LLVMFunctionType(backend->ptr_type, nullptr, 0, 0);
@@ -1750,6 +1757,17 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // aot_db_query_ptr(db, sql) -> array
   backend->func_aot_db_query =
       LLVMAddFunction(backend->module, "aot_db_query_ptr", db_exec_type);
+
+  // Parameterized variants: (db, sql, params) -> bool / array. Three by-pointer
+  // VMValue args (the params array is bound to `?` placeholders at runtime).
+  LLVMTypeRef db_params_args[] = {backend->ptr_type, backend->ptr_type,
+                                  backend->ptr_type};
+  LLVMTypeRef db_params_type =
+      llvm_make_vmvalue_func_type(backend, db_params_args, 3, 0);
+  backend->func_aot_db_execute_params = LLVMAddFunction(
+      backend->module, "aot_db_execute_params_ptr", db_params_type);
+  backend->func_aot_db_query_params = LLVMAddFunction(
+      backend->module, "aot_db_query_params_ptr", db_params_type);
 
   // aot_db_last_insert_id(db) -> int64 and aot_db_error(db) -> string take the
   // db handle VMValue BY VALUE (their runtime impls are
@@ -4221,6 +4239,34 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_sha256, args, 1, "sha256_res");
     }
 
+    if (strcmp(node->name, "password_hash") == 0 && node->argument_count >= 1) {
+      LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "pwhash_arg_ptr");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "pwhash_arg_void");
+      LLVMValueRef args[] = {arg_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_password_hash, args, 1, "pwhash_res");
+    }
+
+    if (strcmp(node->name, "password_verify") == 0 && node->argument_count >= 2) {
+      LLVMValueRef pw = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef stored = codegen_expression(backend, node->arguments[1]);
+      LLVMValueRef pw_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "pwverify_pw_ptr");
+      LLVMBuildStore(backend->builder, pw, pw_ptr);
+      LLVMValueRef stored_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "pwverify_stored_ptr");
+      LLVMBuildStore(backend->builder, stored, stored_ptr);
+      LLVMValueRef pw_void = LLVMBuildBitCast(
+          backend->builder, pw_ptr, backend->ptr_type, "pwverify_pw_void");
+      LLVMValueRef stored_void = LLVMBuildBitCast(
+          backend->builder, stored_ptr, backend->ptr_type, "pwverify_stored_void");
+      LLVMValueRef args[] = {pw_void, stored_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_password_verify, args, 2, "pwverify_res");
+    }
+
     if (strcmp(node->name, "db_open") == 0) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
@@ -4259,6 +4305,18 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           backend->builder, db_ptr, backend->ptr_type, "db_exec_db_void");
       LLVMValueRef sql_void = LLVMBuildBitCast(
           backend->builder, sql_ptr, backend->ptr_type, "db_exec_sql_void");
+      // Optional 3rd arg → parameterized execute (values bound, not interpolated).
+      if (node->argument_count >= 3) {
+        LLVMValueRef params = codegen_expression(backend, node->arguments[2]);
+        LLVMValueRef params_ptr = llvm_build_alloca_at_entry(
+            backend, backend->vm_value_type, "db_exec_params_ptr");
+        LLVMBuildStore(backend->builder, params, params_ptr);
+        LLVMValueRef params_void = LLVMBuildBitCast(
+            backend->builder, params_ptr, backend->ptr_type, "db_exec_params_void");
+        LLVMValueRef pargs[] = {db_void, sql_void, params_void};
+        return llvm_call_vmvalue_func(backend, backend->func_aot_db_execute_params,
+                                      pargs, 3, "db_exec_p_res");
+      }
       LLVMValueRef args[] = {db_void, sql_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_execute, args, 2, "db_exec_res");
     }
@@ -4276,6 +4334,18 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           backend->builder, db_ptr, backend->ptr_type, "db_query_db_void");
       LLVMValueRef sql_void = LLVMBuildBitCast(
           backend->builder, sql_ptr, backend->ptr_type, "db_query_sql_void");
+      // Optional 3rd arg → parameterized query.
+      if (node->argument_count >= 3) {
+        LLVMValueRef params = codegen_expression(backend, node->arguments[2]);
+        LLVMValueRef params_ptr = llvm_build_alloca_at_entry(
+            backend, backend->vm_value_type, "db_query_params_ptr");
+        LLVMBuildStore(backend->builder, params, params_ptr);
+        LLVMValueRef params_void = LLVMBuildBitCast(
+            backend->builder, params_ptr, backend->ptr_type, "db_query_params_void");
+        LLVMValueRef pargs[] = {db_void, sql_void, params_void};
+        return llvm_call_vmvalue_func(backend, backend->func_aot_db_query_params,
+                                      pargs, 3, "db_query_p_res");
+      }
       LLVMValueRef args[] = {db_void, sql_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_query, args, 2, "db_query_res");
     }

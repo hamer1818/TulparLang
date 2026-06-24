@@ -369,6 +369,27 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
       **Bununla framework paritesi turu tamamlandı** — Express/Gin/FastAPI'ye karşı
       kapatılabilir tüm boşluklar kapandı (middleware, route grupları, static,
       query-param, response-model, multipart/upload, DI).
+    - ✅ **HTTP fiilleri `patch`/`head`/`options` (2026-06-25, v3.3.0):**
+      `get`/`post`/`put`/`del` yanına eklendi (saf Tulpar, `lib/wings.tpr`).
+      Dispatcher (`wings_find_route`) method string'ini generic memcmp ile
+      eşleştirdiği için yeni fiiller doğrudan çalışır. iurl PATCH yerine PUT
+      kullanmak zorunda kalmıştı — artık gerek yok. `tests/wings_verbs.test.tpr`
+      4/4 (patch+param, method ayrımı, head/options eşleşme, yanlış-eşleşme yok).
+
+- ✅ **Parametreli SQL + şifre KDF (2026-06-25, v3.3.0) — güvenlik.** iurl gibi
+  web/DB uygulamalarının ısırdığı iki gerçek boşluk kapatıldı:
+  - **`db_query(db, sql, params)` / `db_execute(db, sql, params)`** — opsiyonel
+    bound-params dizisi `?` yer tutucularına `sqlite3_bind_*` ile bağlanır →
+    injection-safe, elle quote-escape yok. 2-arg formlar değişmedi (typeinfer'de
+    3. param wildcard + "eksik arg serbest" kuralıyla). Codegen `argument_count>=3`
+    dalı + yeni `aot_db_{query,execute}_params` runtime fonksiyonları (prepared-
+    statement cache yeniden kullanılır, sabit SQL = tek cache girdisi).
+  - **`password_hash(pw)` / `password_verify(pw, stored)`** — PBKDF2-HMAC-SHA256
+    (100k iter, rastgele 16-byte salt, kendini tanımlayan `pbkdf2_sha256$iters$salt$dk`,
+    sabit-zamanlı doğrulama). In-tree SHA-256 üstüne (`sha256_raw` eklendi),
+    OpenSSL bağımlılığı yok. Auth'ta bare `sha256` yerine bu kullanılmalı.
+  - `tests/db_params.test.tpr` 3/3, `tests/password_kdf.test.tpr` 3/3,
+    `examples/40_db_params_password.tpr`; 52/52 örnek regresyon temiz.
     - ✅ **Yan-buluş: codegen verify hatası kapatıldı (2026-06-22):** karşılaştırma-
       yoğun validation, eski bir LLVM-18 O3/InstCombine miscompile'ını yüzeye
       çıkardı — `foldOpIntoPhi` karşılaştırma fast-path merge'inde geçersiz

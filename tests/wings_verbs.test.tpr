@@ -1,0 +1,45 @@
+import "test";
+import "wings";
+
+// patch / head / options route helpers. The dispatcher (wings_find_route)
+// matches on the method string, so these are first-class verbs. We exercise
+// registration + matching without starting a server.
+patch("/api/items/:id", "h_patch");
+head("/status", "h_head");
+options("/api/items", "h_opts");
+get("/api/items/:id", "h_get");
+
+func run_patch_match() {
+    json r = wings_find_route(_routes, "PATCH", "/api/items/42");
+    assert(r["index"] >= 0, "PATCH route should match");
+    assert_eq_str(r["params"]["id"], "42");
+}
+
+// Same path, different method → different route (GET vs PATCH).
+func run_method_distinct() {
+    json g = wings_find_route(_routes, "GET", "/api/items/42");
+    json p = wings_find_route(_routes, "PATCH", "/api/items/42");
+    assert(g["index"] >= 0, "GET route should match");
+    assert(p["index"] >= 0, "PATCH route should match");
+    assert_eq_bool(g["index"] == p["index"], false);
+}
+
+func run_head_options() {
+    json h = wings_find_route(_routes, "HEAD", "/status");
+    assert(h["index"] >= 0, "HEAD route should match");
+    json o = wings_find_route(_routes, "OPTIONS", "/api/items");
+    assert(o["index"] >= 0, "OPTIONS route should match");
+}
+
+// A method with no registered route does not match.
+func run_no_match() {
+    json r = wings_find_route(_routes, "PATCH", "/status");
+    assert(r["index"] < 0, "unregistered PATCH /status should not match");
+}
+
+print("=== wings patch/head/options ===");
+test("patch matches + params", "run_patch_match");
+test("methods are distinct", "run_method_distinct");
+test("head + options match", "run_head_options");
+test("no false match", "run_no_match");
+test_summary();

@@ -7,11 +7,28 @@ language/stdlib/ABI changes, MINOR for backwards-compatible features, PATCH for
 fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md));
 `tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
 
-## [Unreleased] — v3.1.0 (candidate)
+## [Unreleased] — v3.3.0 (candidate)
 
-Backwards-compatible features + fixes on top of v3.0.0. No breaking changes.
+Backwards-compatible features on top of v3.2.1. No breaking changes.
 
-### Added
+### Added (v3.3.0)
+- **Parameterized SQL queries.** `db_query(db, sql, params)` and
+  `db_execute(db, sql, params)` now accept an optional array of bound values for
+  `?` placeholders (`sqlite3_bind_*`), so user input never touches the SQL text —
+  injection-safe without manual quote-escaping. The 2-arg forms are unchanged;
+  the cached prepared-statement path is reused (constant SQL = one cache entry).
+  `db_execute` returns a success bool.
+- **Password hashing KDF.** New `password_hash(pw)` and
+  `password_verify(pw, stored)` builtins implementing PBKDF2-HMAC-SHA256
+  (100k iterations, random 16-byte salt, self-describing
+  `pbkdf2_sha256$iters$salt$dk` string, constant-time verify). Built on the
+  in-tree SHA-256 — no OpenSSL dependency. Use these for auth instead of bare
+  `sha256`.
+- **Wings `patch` / `head` / `options` route helpers.** First-class verbs
+  alongside `get`/`post`/`put`/`del` (the router matches the method string
+  generically, so PATCH/HEAD/OPTIONS requests dispatch correctly).
+
+### Added (earlier, v3.1.0–v3.2.1)
 - **SQLite parallel reads under WAL.** A DB handle is now a `DbConn` descriptor
   index (user API unchanged); file-backed databases open a per-thread `sqlite3`
   connection lazily so `listen_pool` workers read in parallel instead of

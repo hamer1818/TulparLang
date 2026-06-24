@@ -25,6 +25,7 @@ typedef SSIZE_T ssize_t;
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <random>
 #include <algorithm>
 #include <atomic>
 #include <filesystem>
@@ -3064,6 +3065,168 @@ VMValue aot_sha256_ptr(VMValue *vp) {
   if (!vp)
     return VM_OBJ((Obj *)aot_allocate_string("", 0));
   return aot_sha256(*vp);
+}
+
+// ----- Password KDF: PBKDF2-HMAC-SHA256 -------------------------------------
+// Real password hashing (not bare sha256). Self-describing string format:
+//   pbkdf2_sha256$<iters>$<salt_hex>$<dk_hex>
+// so verify() reads the salt + iteration count back out of the stored value.
+// Built on the in-tree SHA-256 (no OpenSSL dependency) so it always works.
+
+static const int kPwIters = 100000; // ~tens of ms; bump over time
+static const int kPwSaltLen = 16;
+static const int kPwDkLen = 32; // one HMAC-SHA256 block
+
+static void hmac_sha256(const uint8_t *key, size_t keylen, const uint8_t *msg,
+                        size_t msglen, uint8_t out[32]) {
+  uint8_t k[64];
+  memset(k, 0, sizeof(k));
+  if (keylen > 64) {
+    tulpar::sha256_raw(key, keylen, k); // key = H(key), rest stays 0-padded
+  } else {
+    memcpy(k, key, keylen);
+  }
+  uint8_t ipad[64], opad[64];
+  for (int i = 0; i < 64; i++) {
+    ipad[i] = k[i] ^ 0x36;
+    opad[i] = k[i] ^ 0x5c;
+  }
+  // inner = H(ipad || msg)
+  std::string inner_in;
+  inner_in.reserve(64 + msglen);
+  inner_in.append((const char *)ipad, 64);
+  inner_in.append((const char *)msg, msglen);
+  uint8_t inner[32];
+  tulpar::sha256_raw(inner_in.data(), inner_in.size(), inner);
+  // out = H(opad || inner)
+  uint8_t outer_in[64 + 32];
+  memcpy(outer_in, opad, 64);
+  memcpy(outer_in + 64, inner, 32);
+  tulpar::sha256_raw(outer_in, 96, out);
+}
+
+// PBKDF2 with dkLen == 32 (single block, so T = U1 ^ U2 ^ ... ^ Uc).
+static void pbkdf2_sha256(const uint8_t *pw, size_t pwlen, const uint8_t *salt,
+                          size_t saltlen, int iters, uint8_t out[32]) {
+  std::string blk;
+  blk.reserve(saltlen + 4);
+  blk.append((const char *)salt, saltlen);
+  const uint8_t idx[4] = {0, 0, 0, 1}; // INT_32_BE(1)
+  blk.append((const char *)idx, 4);
+  uint8_t u[32];
+  hmac_sha256(pw, pwlen, (const uint8_t *)blk.data(), blk.size(), u);
+  uint8_t t[32];
+  memcpy(t, u, 32);
+  for (int i = 1; i < iters; i++) {
+    hmac_sha256(pw, pwlen, u, 32, u);
+    for (int j = 0; j < 32; j++)
+      t[j] ^= u[j];
+  }
+  memcpy(out, t, 32);
+}
+
+static std::string to_hex(const uint8_t *b, size_t n) {
+  static const char *h = "0123456789abcdef";
+  std::string s;
+  s.resize(n * 2);
+  for (size_t i = 0; i < n; i++) {
+    s[i * 2] = h[b[i] >> 4];
+    s[i * 2 + 1] = h[b[i] & 0xf];
+  }
+  return s;
+}
+
+static bool from_hex(const std::string &s, std::vector<uint8_t> &out) {
+  if (s.size() % 2 != 0)
+    return false;
+  out.resize(s.size() / 2);
+  auto nib = [](char c) -> int {
+    if (c >= '0' && c <= '9')
+      return c - '0';
+    if (c >= 'a' && c <= 'f')
+      return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+      return c - 'A' + 10;
+    return -1;
+  };
+  for (size_t i = 0; i < out.size(); i++) {
+    int hi = nib(s[i * 2]), lo = nib(s[i * 2 + 1]);
+    if (hi < 0 || lo < 0)
+      return false;
+    out[i] = (uint8_t)((hi << 4) | lo);
+  }
+  return true;
+}
+
+// password_hash(password: str) -> str  (pbkdf2_sha256$iters$salt$dk)
+VMValue aot_password_hash(VMValue pwVal) {
+  if (!IS_STRING(pwVal))
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  ObjString *pw = AS_STRING(pwVal);
+
+  uint8_t salt[kPwSaltLen];
+  std::random_device rd;
+  for (int i = 0; i < kPwSaltLen; i++)
+    salt[i] = (uint8_t)(rd() & 0xff);
+
+  uint8_t dk[kPwDkLen];
+  pbkdf2_sha256((const uint8_t *)pw->chars, (size_t)pw->length, salt, kPwSaltLen,
+                kPwIters, dk);
+
+  std::string out = "pbkdf2_sha256$" + std::to_string(kPwIters) + "$" +
+                    to_hex(salt, kPwSaltLen) + "$" + to_hex(dk, kPwDkLen);
+  return VM_OBJ((Obj *)aot_allocate_string(out.data(), (int)out.size()));
+}
+
+VMValue aot_password_hash_ptr(VMValue *vp) {
+  if (!vp)
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  return aot_password_hash(*vp);
+}
+
+// password_verify(password: str, stored: str) -> bool. Constant-time compare.
+VMValue aot_password_verify(VMValue pwVal, VMValue storedVal) {
+  if (!IS_STRING(pwVal) || !IS_STRING(storedVal))
+    return VM_BOOL(0);
+  ObjString *pw = AS_STRING(pwVal);
+  ObjString *stored = AS_STRING(storedVal);
+  std::string s(stored->chars, (size_t)stored->length);
+
+  // Parse pbkdf2_sha256$iters$salt_hex$dk_hex
+  const std::string prefix = "pbkdf2_sha256$";
+  if (s.size() < prefix.size() || s.compare(0, prefix.size(), prefix) != 0)
+    return VM_BOOL(0);
+  size_t p1 = s.find('$', prefix.size());
+  if (p1 == std::string::npos)
+    return VM_BOOL(0);
+  size_t p2 = s.find('$', p1 + 1);
+  if (p2 == std::string::npos)
+    return VM_BOOL(0);
+  int iters = atoi(s.substr(prefix.size(), p1 - prefix.size()).c_str());
+  if (iters < 1 || iters > 10000000)
+    return VM_BOOL(0);
+  std::vector<uint8_t> salt, dk;
+  if (!from_hex(s.substr(p1 + 1, p2 - p1 - 1), salt))
+    return VM_BOOL(0);
+  if (!from_hex(s.substr(p2 + 1), dk))
+    return VM_BOOL(0);
+  if (dk.size() != kPwDkLen || salt.empty())
+    return VM_BOOL(0);
+
+  uint8_t calc[kPwDkLen];
+  pbkdf2_sha256((const uint8_t *)pw->chars, (size_t)pw->length, salt.data(),
+                salt.size(), iters, calc);
+
+  uint8_t diff = 0;
+  for (int i = 0; i < kPwDkLen; i++)
+    diff |= (uint8_t)(calc[i] ^ dk[i]);
+  return VM_BOOL(diff == 0);
+}
+
+VMValue aot_password_verify_ptr(VMValue *pw_ptr, VMValue *stored_ptr) {
+  if (!pw_ptr || !stored_ptr)
+    return VM_BOOL(0);
+  return aot_password_verify(*pw_ptr, *stored_ptr);
 }
 
 // ============================================================================
@@ -7397,6 +7560,161 @@ VMValue aot_db_query_ptr(VMValue *db_ptr, VMValue *sql_ptr) {
   if (!db_ptr || !sql_ptr)
     return VM_INT(0);
   return aot_db_query(*db_ptr, *sql_ptr);
+}
+
+// Bind a Tulpar array of scalars to the `?`/`?N` placeholders of `stmt`
+// (1-based). Strings are copied (SQLITE_TRANSIENT) so the VM value may be
+// freed/reused afterwards. Non-array params or unsupported element types bind
+// NULL. This is what makes parameterized queries injection-safe: values never
+// touch the SQL text.
+static void db_bind_params(sqlite3_stmt *stmt, VMValue paramsVal) {
+  if (!IS_ARRAY(paramsVal))
+    return;
+  ObjArray *arr = AS_ARRAY(paramsVal);
+  for (int i = 0; i < arr->count; i++) {
+    VMValue p = arr->items[i];
+    int idx = i + 1; // sqlite placeholders are 1-based
+    if (IS_INT(p)) {
+      sqlite3_bind_int64(stmt, idx, (sqlite3_int64)AS_INT(p));
+    } else if (IS_FLOAT(p)) {
+      sqlite3_bind_double(stmt, idx, AS_FLOAT(p));
+    } else if (IS_BOOL(p)) {
+      sqlite3_bind_int(stmt, idx, AS_BOOL(p) ? 1 : 0);
+    } else if (IS_STRING(p)) {
+      ObjString *s = AS_STRING(p);
+      sqlite3_bind_text(stmt, idx, s->chars, s->length, SQLITE_TRANSIENT);
+    } else {
+      sqlite3_bind_null(stmt, idx);
+    }
+  }
+}
+
+// db_execute(db, sql, params) -> bool. Parameterized variant: `sql` carries
+// `?` placeholders, `params` is an array of scalars bound positionally. Same
+// success-bool return as the 2-arg form.
+VMValue aot_db_execute_params(VMValue dbVal, VMValue sqlVal, VMValue paramsVal) {
+  if (!IS_STRING(sqlVal))
+    return VM_BOOL(0);
+  sqlite3 *db = db_resolve(dbVal);
+  if (!db)
+    return VM_BOOL(0);
+  ObjString *sql = AS_STRING(sqlVal);
+  sqlite3_stmt *stmt = db_cached_prepare(db, sql->chars, sql->length);
+  if (!stmt) {
+    if (getenv("TULPAR_DB_DEBUG"))
+      fprintf(stderr, "[dbe] prepare failed (%s)\n", sqlite3_errmsg(db));
+    return VM_BOOL(0);
+  }
+  sqlite3_clear_bindings(stmt);
+  db_bind_params(stmt, paramsVal);
+  int rc;
+  while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    // statement may return rows (e.g. RETURNING); drain them
+  }
+  bool ok = (rc == SQLITE_DONE);
+  if (!ok && getenv("TULPAR_DB_DEBUG"))
+    fprintf(stderr, "[dbe] step rc=%d (%s)\n", rc, sqlite3_errmsg(db));
+  sqlite3_reset(stmt);
+  sqlite3_clear_bindings(stmt);
+  return VM_BOOL(ok);
+}
+
+VMValue aot_db_execute_params_ptr(VMValue *db_ptr, VMValue *sql_ptr,
+                                  VMValue *params_ptr) {
+  if (!db_ptr || !sql_ptr)
+    return VM_BOOL(0);
+  return aot_db_execute_params(*db_ptr, *sql_ptr,
+                              params_ptr ? *params_ptr : VM_INT(0));
+}
+
+// db_query(db, sql, params) -> array of row objects. Parameterized variant of
+// aot_db_query — `?` placeholders bound from the `params` array.
+VMValue aot_db_query_params(VMValue dbVal, VMValue sqlVal, VMValue paramsVal) {
+  ObjArray *result = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
+  result->obj.type = OBJ_ARRAY;
+  result->obj.arena_allocated = 1;
+  result->obj.next = nullptr;
+  result->capacity = 16;
+  result->count = 0;
+  result->items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * result->capacity);
+
+  if (!IS_STRING(sqlVal))
+    return VM_OBJ((Obj *)result);
+  sqlite3 *db = db_resolve(dbVal);
+  if (!db)
+    return VM_OBJ((Obj *)result);
+  ObjString *sql = AS_STRING(sqlVal);
+
+  sqlite3_stmt *stmt = db_cached_prepare(db, sql->chars, sql->length);
+  if (!stmt) {
+    if (getenv("TULPAR_DB_DEBUG"))
+      fprintf(stderr, "[dbq] prepare failed (%s)\n", sqlite3_errmsg(db));
+    return VM_OBJ((Obj *)result);
+  }
+  sqlite3_clear_bindings(stmt);
+  db_bind_params(stmt, paramsVal);
+
+  int col_count = sqlite3_column_count(stmt);
+  int step_rc;
+  while ((step_rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    ObjObject *row = (ObjObject *)aot_arena_alloc(sizeof(ObjObject));
+    row->obj.type = OBJ_OBJECT;
+    row->obj.arena_allocated = 1;
+    row->obj.next = nullptr;
+    row->capacity = col_count;
+    row->count = 0;
+    row->keys = (ObjString **)aot_arena_alloc(sizeof(ObjString *) * col_count);
+    row->values = (VMValue *)aot_arena_alloc(sizeof(VMValue) * col_count);
+    for (int i = 0; i < col_count; i++) {
+      const char *col_name = sqlite3_column_name(stmt, i);
+      row->keys[row->count] = aot_allocate_string(col_name, strlen(col_name));
+      int col_type = sqlite3_column_type(stmt, i);
+      VMValue val;
+      switch (col_type) {
+      case SQLITE_INTEGER:
+        val = VM_INT(sqlite3_column_int64(stmt, i));
+        break;
+      case SQLITE_FLOAT:
+        val = VM_FLOAT(sqlite3_column_double(stmt, i));
+        break;
+      case SQLITE_TEXT: {
+        const char *text = (const char *)sqlite3_column_text(stmt, i);
+        int len = sqlite3_column_bytes(stmt, i);
+        val = VM_OBJ((Obj *)aot_allocate_string(text, len));
+        break;
+      }
+      case SQLITE_BLOB:
+      case SQLITE_NULL:
+      default:
+        val = VM_INT(0);
+        break;
+      }
+      row->values[row->count] = val;
+      row->count++;
+    }
+    if (result->count >= result->capacity) {
+      int new_cap = result->capacity * 2;
+      VMValue *new_items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * new_cap);
+      memcpy(new_items, result->items, sizeof(VMValue) * result->count);
+      result->items = new_items;
+      result->capacity = new_cap;
+    }
+    result->items[result->count++] = VM_OBJ((Obj *)row);
+  }
+  if (step_rc != SQLITE_DONE && getenv("TULPAR_DB_DEBUG"))
+    fprintf(stderr, "[dbq] step rc=%d (%s) rows=%d\n", step_rc,
+            sqlite3_errmsg(db), result->count);
+  sqlite3_reset(stmt);
+  sqlite3_clear_bindings(stmt);
+  return VM_OBJ((Obj *)result);
+}
+
+VMValue aot_db_query_params_ptr(VMValue *db_ptr, VMValue *sql_ptr,
+                                VMValue *params_ptr) {
+  if (!db_ptr || !sql_ptr)
+    return VM_INT(0);
+  return aot_db_query_params(*db_ptr, *sql_ptr,
+                            params_ptr ? *params_ptr : VM_INT(0));
 }
 
 // db_last_insert_id(db_handle) -> int64

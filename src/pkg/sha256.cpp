@@ -62,7 +62,7 @@ void process_block(uint32_t state[8], const uint8_t block[64]) {
 
 namespace tulpar {
 
-std::string sha256_hex(const void *data, size_t size) {
+void sha256_raw(const void *data, size_t size, uint8_t out[32]) {
   uint32_t state[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
                        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
 
@@ -91,9 +91,23 @@ std::string sha256_hex(const void *data, size_t size) {
     process_block(state, final_block + 64);
   }
 
-  char hex[65];
+  // Serialize the 8 state words big-endian → 32 raw bytes.
   for (int i = 0; i < 8; ++i) {
-    std::snprintf(hex + i * 8, 9, "%08x", state[i]);
+    out[i * 4 + 0] = (uint8_t)(state[i] >> 24);
+    out[i * 4 + 1] = (uint8_t)(state[i] >> 16);
+    out[i * 4 + 2] = (uint8_t)(state[i] >> 8);
+    out[i * 4 + 3] = (uint8_t)(state[i]);
+  }
+}
+
+std::string sha256_hex(const void *data, size_t size) {
+  uint8_t digest[32];
+  sha256_raw(data, size, digest);
+  static const char *hexchars = "0123456789abcdef";
+  char hex[65];
+  for (int i = 0; i < 32; ++i) {
+    hex[i * 2] = hexchars[digest[i] >> 4];
+    hex[i * 2 + 1] = hexchars[digest[i] & 0xf];
   }
   hex[64] = '\0';
   return std::string(hex);

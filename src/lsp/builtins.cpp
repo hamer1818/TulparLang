@@ -83,8 +83,8 @@ const BuiltinEntry kBuiltins[] = {
     // ---- DB ----
     {"db_open",      "db_open(path: str): int",                     "SQLite veritabanı açar."},
     {"db_close",     "db_close(handle: int): void",                 ""},
-    {"db_execute",   "db_execute(handle: int, sql: str): int",      "INSERT/UPDATE/DELETE yürütür."},
-    {"db_query",     "db_query(handle: int, sql: str): array<json>", "SELECT döner."},
+    {"db_execute",   "db_execute(handle: int, sql: str, params?: array): bool",      "INSERT/UPDATE/DELETE yürütür. Opsiyonel params dizisi ? yer tutucularına bağlanır (injection-safe)."},
+    {"db_query",     "db_query(handle: int, sql: str, params?: array): array<json>", "SELECT döner. Opsiyonel params dizisi ? yer tutucularına bağlanır (injection-safe)."},
     {"db_last_insert_id", "db_last_insert_id(handle: int): int",    ""},
     {"db_error",     "db_error(handle: int): str",                  "Son hatayı döner."},
 
@@ -119,6 +119,8 @@ const BuiltinEntry kBuiltins[] = {
     {"persist",             "persist(value): value",                "Bir değeri kalıcı belleğe derin kopyalar (arena reset'ten sağ çıkar). In-memory global'lerde sakla: push(_users, persist(u))."},
 
     // ---- Crypto / encoding ----
+    {"password_hash",       "password_hash(password: str): str",            "Şifreyi PBKDF2-HMAC-SHA256 ile hash'ler (kendini tanımlayan `pbkdf2_sha256$iters$salt$dk` string). Auth için sha256 yerine bunu kullan."},
+    {"password_verify",     "password_verify(password: str, stored: str): bool", "Şifreyi password_hash çıktısına karşı sabit-zamanlı doğrular."},
     {"sha1",                "sha1(s: str): str",                    "20-baytlık ikili SHA-1 özeti döner."},
     {"sha1_hex",            "sha1_hex(s: str): str",                "40 karakter küçük-harf hex SHA-1."},
     {"base64_encode",       "base64_encode(s: str): str",           "Bayt dizisini base64'e çevirir (padding `=` ile)."},

@@ -212,6 +212,8 @@ typedef struct {
   LLVMValueRef func_aot_append_file;
   LLVMValueRef func_aot_file_exists;
   LLVMValueRef func_aot_sha256;
+  LLVMValueRef func_aot_password_hash;
+  LLVMValueRef func_aot_password_verify;
 
   // Exception Handling
   LLVMValueRef func_aot_try_push;
@@ -409,6 +411,8 @@ typedef struct {
   LLVMValueRef func_aot_db_close;
   LLVMValueRef func_aot_db_execute;
   LLVMValueRef func_aot_db_query;
+  LLVMValueRef func_aot_db_execute_params;
+  LLVMValueRef func_aot_db_query_params;
   LLVMValueRef func_aot_db_last_insert_id;
   LLVMValueRef func_aot_db_error;
 

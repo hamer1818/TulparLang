@@ -16,6 +16,10 @@
 
 namespace tulpar {
 
+// Raw 32-byte SHA-256 digest of `data` written to `out`. Used by the password
+// KDF (HMAC-SHA256 / PBKDF2) which needs binary digests, not hex.
+void sha256_raw(const void *data, size_t size, uint8_t out[32]);
+
 // Hex-encoded (lowercase, 64 chars) SHA-256 digest of `data`.
 std::string sha256_hex(const void *data, size_t size);
 

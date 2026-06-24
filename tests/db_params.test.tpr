@@ -1,0 +1,36 @@
+import "test";
+
+// Parameterized db_query / db_execute (bound `?` placeholders).
+int db = db_open(":memory:");
+db_execute(db, "CREATE TABLE u (id INTEGER PRIMARY KEY, name TEXT, age INTEGER);");
+
+func run_insert_query() {
+    db_execute(db, "INSERT INTO u (name, age) VALUES (?, ?);", ["alice", 30]);
+    db_execute(db, "INSERT INTO u (name, age) VALUES (?, ?);", ["bob", 25]);
+    array rows = db_query(db, "SELECT name, age FROM u WHERE age > ? ORDER BY age;", [26]);
+    assert_eq_int(length(rows), 1);
+    assert_eq_str(rows[0]["name"], "alice");
+    assert_eq_int(toInt(toString(rows[0]["age"])), 30);
+}
+
+// A value with a quote + SQL is BOUND, never interpolated → no injection.
+func run_injection_safe() {
+    db_execute(db, "INSERT INTO u (name, age) VALUES (?, ?);", ["o'brien'; DROP TABLE u;--", 40]);
+    array rows = db_query(db, "SELECT name FROM u WHERE name = ?;", ["o'brien'; DROP TABLE u;--"]);
+    assert_eq_int(length(rows), 1);
+    // Table still exists and all 3 rows are intact (DROP did not run).
+    array all = db_query(db, "SELECT id FROM u;", []);
+    assert_eq_int(length(all), 3);
+}
+
+// 2-arg form still works unchanged (back-compat).
+func run_backcompat() {
+    array rows = db_query(db, "SELECT COUNT(*) AS c FROM u;");
+    assert_eq_int(toInt(toString(rows[0]["c"])), 3);
+}
+
+print("=== db parameterized queries ===");
+test("insert + query with params", "run_insert_query");
+test("injection-safe binding", "run_injection_safe");
+test("2-arg back-compat", "run_backcompat");
+test_summary();

@@ -307,6 +307,26 @@ func del(str path, str handler) {
     push(_wings_cache_wires, "");
 }
 
+// PATCH — partial update. The dispatcher matches on the method string, so this
+// is a first-class verb (the router/find_route compares methods generically).
+func patch(str path, str handler) {
+    push(_routes, {"method": "PATCH", "path": _route_prefix + path, "handler": handler});
+    push(_wings_cache_wires, "");
+}
+
+// HEAD — like GET but the framework's response writer omits the body for HEAD
+// requests at the transport layer; the handler may return its normal payload.
+func head(str path, str handler) {
+    push(_routes, {"method": "HEAD", "path": _route_prefix + path, "handler": handler});
+    push(_wings_cache_wires, "");
+}
+
+// OPTIONS — preflight / capability probe (commonly paired with CORS headers).
+func options(str path, str handler) {
+    push(_routes, {"method": "OPTIONS", "path": _route_prefix + path, "handler": handler});
+    push(_wings_cache_wires, "");
+}
+
 // Register a global middleware by function name. Runs (in registration order)
 // before every route's handler across all serve modes.
 //
