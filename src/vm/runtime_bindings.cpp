@@ -3229,6 +3229,37 @@ VMValue aot_password_verify_ptr(VMValue *pw_ptr, VMValue *stored_ptr) {
   return aot_password_verify(*pw_ptr, *stored_ptr);
 }
 
+// secure_token(n: int) -> str
+// Cryptographically secure random base62 string of length n. Backed by
+// std::random_device (CSPRNG / OS entropy: /dev/urandom etc.) — NOT the
+// non-crypto rand()/randint path. Unbiased via rejection sampling (drop bytes
+// >= 248 = 4*62 before the % 62). Use for session tokens, salts, etc.
+VMValue aot_secure_token(VMValue nVal) {
+  int64_t n = IS_INT(nVal) ? AS_INT(nVal)
+                           : (IS_FLOAT(nVal) ? (int64_t)AS_FLOAT(nVal) : 32);
+  if (n < 1) n = 1;
+  if (n > 4096) n = 4096;
+  static const char abc[] =
+      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  std::random_device rd;
+  std::string out;
+  out.reserve((size_t)n);
+  while ((int64_t)out.size() < n) {
+    unsigned int v = rd();
+    for (int b = 0; b < 4 && (int64_t)out.size() < n; b++) {
+      unsigned char byte = (unsigned char)((v >> (b * 8)) & 0xff);
+      if (byte < 248) // 4*62, discard the biased tail
+        out += abc[byte % 62];
+    }
+  }
+  return VM_OBJ((Obj *)aot_allocate_string(out.data(), (int)out.size()));
+}
+
+VMValue aot_secure_token_ptr(VMValue *n_ptr) {
+  VMValue n = n_ptr ? *n_ptr : VM_INT(32);
+  return aot_secure_token(n);
+}
+
 // ============================================================================
 // Exception Handling Runtime (setjmp/longjmp based)
 // ============================================================================

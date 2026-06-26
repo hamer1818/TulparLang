@@ -376,6 +376,15 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
       kullanmak zorunda kalmıştı — artık gerek yok. `tests/wings_verbs.test.tpr`
       4/4 (patch+param, method ayrımı, head/options eşleşme, yanlış-eşleşme yok).
 
+- ✅ **`secure_token(n)` — kriptografik rastgelelik (2026-06-26, v3.4.0) — güvenlik.**
+  `randint`/`random` kriptografik DEĞİL (`rand()`, `srand(time())` ile tohumlanmış,
+  tahmin edilebilir) — oturum token'ı/tuz gibi güvenlik değerleri için kullanılmamalı.
+  `secure_token(n: int) -> str`, `std::random_device` (OS CSPRNG / `/dev/urandom`)
+  ile rejection-sampling'li (modulo bias yok) n karakterlik base62 token üretir.
+  5 noktada bağlandı (runtime `aot_secure_token`+`_ptr`, llvm_backend hpp/cpp,
+  typeinfer, lsp). iurl `_rand_str` artık buna delege ediyor → öngörülebilir-token
+  oturum-kaçırma açığı kapatıldı.
+
 - ✅ **Parametreli SQL + şifre KDF (2026-06-25, v3.3.0) — güvenlik.** iurl gibi
   web/DB uygulamalarının ısırdığı iki gerçek boşluk kapatıldı:
   - **`db_query(db, sql, params)` / `db_execute(db, sql, params)`** — opsiyonel

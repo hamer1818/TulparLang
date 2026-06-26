@@ -214,6 +214,7 @@ typedef struct {
   LLVMValueRef func_aot_sha256;
   LLVMValueRef func_aot_password_hash;
   LLVMValueRef func_aot_password_verify;
+  LLVMValueRef func_aot_secure_token;
 
   // Exception Handling
   LLVMValueRef func_aot_try_push;

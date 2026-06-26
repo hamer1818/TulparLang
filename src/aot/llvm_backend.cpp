@@ -1125,6 +1125,9 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMAddFunction(backend->module, "aot_password_hash_ptr", read_type);
   backend->func_aot_password_verify =
       LLVMAddFunction(backend->module, "aot_password_verify_ptr", write_type);
+  // secure_token(int)->str (1 ptr arg, like sha256) — CSPRNG base62 token.
+  backend->func_aot_secure_token =
+      LLVMAddFunction(backend->module, "aot_secure_token_ptr", read_type);
 
   // Exception Handling Functions
   // aot_try_push() -> jmp_buf* (ptr)
@@ -4248,6 +4251,17 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           backend->builder, arg_ptr, backend->ptr_type, "pwhash_arg_void");
       LLVMValueRef args[] = {arg_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_password_hash, args, 1, "pwhash_res");
+    }
+
+    if (strcmp(node->name, "secure_token") == 0 && node->argument_count >= 1) {
+      LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "sectok_arg_ptr");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "sectok_arg_void");
+      LLVMValueRef args[] = {arg_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_secure_token, args, 1, "sectok_res");
     }
 
     if (strcmp(node->name, "password_verify") == 0 && node->argument_count >= 2) {

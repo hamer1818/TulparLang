@@ -763,6 +763,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       // Password KDF (PBKDF2-HMAC-SHA256)
       {"password_hash", TYPE_STRING, {TYPE_STRING}},
       {"password_verify", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
+      {"secure_token", TYPE_STRING, {TYPE_INT}},
       // Sockets — handles + buffers are opaque to typeinfer; we still
       // catch arg-count typos via the wildcard params.
       {"socket_server", TYPE_UNKNOWN, {TYPE_STRING, TYPE_INT}},

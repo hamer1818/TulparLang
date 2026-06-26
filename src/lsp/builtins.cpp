@@ -121,6 +121,7 @@ const BuiltinEntry kBuiltins[] = {
     // ---- Crypto / encoding ----
     {"password_hash",       "password_hash(password: str): str",            "Şifreyi PBKDF2-HMAC-SHA256 ile hash'ler (kendini tanımlayan `pbkdf2_sha256$iters$salt$dk` string). Auth için sha256 yerine bunu kullan."},
     {"password_verify",     "password_verify(password: str, stored: str): bool", "Şifreyi password_hash çıktısına karşı sabit-zamanlı doğrular."},
+    {"secure_token",        "secure_token(n: int): str",                    "Kriptografik olarak güvenli, n karakterlik base62 rastgele string (CSPRNG / std::random_device). Oturum token'ları, tuzlar vb. için randint yerine bunu kullan."},
     {"sha1",                "sha1(s: str): str",                    "20-baytlık ikili SHA-1 özeti döner."},
     {"sha1_hex",            "sha1_hex(s: str): str",                "40 karakter küçük-harf hex SHA-1."},
     {"base64_encode",       "base64_encode(s: str): str",           "Bayt dizisini base64'e çevirir (padding `=` ile)."},

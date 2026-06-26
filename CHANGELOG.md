@@ -7,6 +7,18 @@ language/stdlib/ABI changes, MINOR for backwards-compatible features, PATCH for
 fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md));
 `tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
 
+## [v3.4.0]
+
+Backwards-compatible feature on top of v3.3.0. No breaking changes.
+
+### Added
+- **`secure_token(n: int) -> str`** — cryptographically secure random base62
+  string of length `n`, backed by `std::random_device` (OS CSPRNG / `/dev/urandom`),
+  unbiased via rejection sampling. Use this — **not** `randint`/`random` (the
+  non-crypto `rand()` seeded with `time()`) — for session tokens, salts and any
+  other security-sensitive randomness. Wired through runtime, AOT codegen,
+  typeinfer and the LSP builtin table.
+
 ## [Unreleased] — v3.3.0 (candidate)
 
 Backwards-compatible features on top of v3.2.1. No breaking changes.
