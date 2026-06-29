@@ -1,0 +1,132 @@
+// wings_jwt — HMAC-SHA256 signed tokens for TulparLang / wings apps.
+//
+// Compact `header.payload.signature` tokens with base64url-encoded JSON
+// segments, signed with HS256 (HMAC-SHA256). Built entirely on the
+// runtime's `hmac_sha256` + `base64_encode/decode` primitives — no
+// external dependency, no DB, no FFI.
+//
+// Token shape (Tulpar-native HS256 variant):
+//   base64url({"alg":"HS256","typ":"JWT"})
+//   . base64url(<claims JSON>)
+//   . base64url(hmac_sha256(secret, "<header>.<payload>"))
+//
+// The signature segment encodes the *hex* HMAC digest, so tokens are
+// self-issued + self-verified by Tulpar services. (Wire-interop with
+// external RFC-7519 validators — which base64url the *raw* MAC bytes —
+// is a roadmap item; it needs a raw-bytes base64 path in the runtime.)
+//
+// Typical use (wings):
+//   import "wings";
+//   import "wings_jwt" as jwt;
+//
+//   func login(req) {
+//       // ... verify credentials ...
+//       str token = jwt.sign_ttl({"sub": "42", "role": "admin"}, SECRET, 3600);
+//       return ok({"token": token});
+//   }
+//
+//   func me(req) {
+//       json v = jwt.verify(jwt.from_header(req), SECRET);
+//       if (v["ok"] == 0) { return unauthorized({"error": v["error"]}); }
+//       return ok({"user": v["claims"]["sub"]});
+//   }
+
+// ---- internal: key presence (a missing JSON key reads back as int 0,
+// so we can't distinguish "absent" from "0" without an explicit check) ----
+func _jwt_has(json obj, str k) {
+    if (typeof(obj) != "object") { return false; }
+    for (kk in keys(obj)) {
+        if (kk == k) { return true; }
+    }
+    return false;
+}
+
+// ---- base64url (RFC 4648 §5) — standard base64 with +/ → -_ and no `=` ----
+func _jwt_b64url_encode(str s) {
+    str b = base64_encode(s);
+    b = replace(b, "+", "-");
+    b = replace(b, "/", "_");
+    b = replace(b, "=", "");
+    return b;
+}
+
+func _jwt_b64url_decode(str s) {
+    str b = replace(s, "-", "+");
+    b = replace(b, "_", "/");
+    int r = mod(length(b), 4);
+    if (r == 2) { b = b + "=="; }
+    if (r == 3) { b = b + "="; }
+    return base64_decode(b);
+}
+
+// Signature segment for a given signing input ("<header>.<payload>").
+func _jwt_signature(str signing_input, str secret) {
+    return _jwt_b64url_encode(hmac_sha256(secret, signing_input));
+}
+
+// sign(claims, secret) -> compact token. Claims are any JSON object.
+func sign(json claims, str secret) {
+    str header = _jwt_b64url_encode("{\"alg\":\"HS256\",\"typ\":\"JWT\"}");
+    str payload = _jwt_b64url_encode(toJson(claims));
+    str signing_input = header + "." + payload;
+    return signing_input + "." + _jwt_signature(signing_input, secret);
+}
+
+// sign_ttl(claims, secret, ttl_seconds) -> token with `iat` + `exp` stamped.
+// `exp` is checked automatically by verify().
+func sign_ttl(json claims, str secret, int ttl_seconds) {
+    int now = timestamp();
+    claims["iat"] = now;
+    claims["exp"] = now + ttl_seconds;
+    return sign(claims, secret);
+}
+
+// verify(token, secret) -> {"ok": 1, "claims": {...}}
+//                        | {"ok": 0, "error": "<reason>"}
+// Reasons: "malformed token", "bad signature", "expired".
+func verify(str token, str secret) {
+    json parts = split(token, ".");
+    if (length(parts) != 3) {
+        return {"ok": 0, "error": "malformed token"};
+    }
+    str signing_input = parts[0] + "." + parts[1];
+    str expected = _jwt_signature(signing_input, secret);
+    if (parts[2] != expected) {
+        return {"ok": 0, "error": "bad signature"};
+    }
+    json claims = fromJson(_jwt_b64url_decode(parts[1]));
+    if (_jwt_has(claims, "exp")) {
+        if (timestamp() >= claims["exp"]) {
+            return {"ok": 0, "error": "expired"};
+        }
+    }
+    return {"ok": 1, "claims": claims};
+}
+
+// decode(token) -> claims object WITHOUT verifying the signature.
+// For inspection/logging only — never trust these claims for auth.
+// Returns {} on a malformed token.
+func decode(str token) {
+    json parts = split(token, ".");
+    if (length(parts) < 2) { return {}; }
+    return fromJson(_jwt_b64url_decode(parts[1]));
+}
+
+// from_header(req) -> bearer token string, or "" if absent.
+// Tolerates "Authorization" / "authorization" casing and strips "Bearer ".
+func from_header(json req) {
+    json h = req["headers"];
+    if (typeof(h) != "object") { return ""; }
+    str auth = "";
+    if (_jwt_has(h, "Authorization")) { auth = h["Authorization"]; }
+    if (length(auth) == 0) {
+        if (_jwt_has(h, "authorization")) { auth = h["authorization"]; }
+    }
+    if (length(auth) == 0) { return ""; }
+    if (length(auth) > 7) {
+        if (substring(auth, 0, 7) == "Bearer ") {
+            return substring(auth, 7, length(auth));
+        }
+    }
+    return auth;
+}

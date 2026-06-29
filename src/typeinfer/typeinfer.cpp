@@ -763,6 +763,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       // Password KDF (PBKDF2-HMAC-SHA256)
       {"password_hash", TYPE_STRING, {TYPE_STRING}},
       {"password_verify", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
+      {"hmac_sha256", TYPE_STRING, {TYPE_STRING, TYPE_STRING}},
       {"secure_token", TYPE_STRING, {TYPE_INT}},
       // Sockets — handles + buffers are opaque to typeinfer; we still
       // catch arg-count typos via the wildcard params.
@@ -786,7 +787,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       // 3rd param (optional bound-params array) is wildcard; too-few-args is
       // allowed, so both db_query(db,sql) and db_query(db,sql,params) pass.
       {"db_query", TYPE_UNKNOWN, {TYPE_UNKNOWN, TYPE_STRING, TYPE_UNKNOWN}},
-      {"db_execute", TYPE_INT, {TYPE_UNKNOWN, TYPE_STRING, TYPE_UNKNOWN}},
+      {"db_execute", TYPE_BOOL, {TYPE_UNKNOWN, TYPE_STRING, TYPE_UNKNOWN}},
       // Array mutation — `push(arr, val)` accepts any value type.
       {"push", TYPE_VOID, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
   };

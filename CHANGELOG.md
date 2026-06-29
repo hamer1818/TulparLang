@@ -7,6 +7,38 @@ language/stdlib/ABI changes, MINOR for backwards-compatible features, PATCH for
 fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md));
 `tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
 
+## [v3.5.0]
+
+Backwards-compatible feature on top of v3.4.0. No breaking changes.
+
+### Added
+- **`hmac_sha256(key: str, msg: str) -> str`** — keyed message
+  authentication (HMAC-SHA256, RFC 2104) as a lowercase 64-char hex digest,
+  built on the in-tree SHA-256 (no OpenSSL). The signing/verification
+  building block for signed cookies, webhook signatures and JWT-style
+  tokens — verify by recomputing the MAC and comparing. Wired through
+  runtime, AOT codegen, typeinfer and the LSP builtin table. Validated
+  against the RFC 4231 test vectors.
+- **First registry package: `wings_jwt`** (`packages/wings_jwt/`) — HS256
+  signed session tokens for wings apps (`sign` / `sign_ttl` / `verify` /
+  `decode` / `from_header`), zero dependencies, 8/8 tests. Built on
+  `hmac_sha256` + `base64_encode`. The first real, installable content for
+  the `api.pkg.tulparlang.dev` registry beyond smoke packages.
+
+### Fixed
+- **`db_execute` typecheck return type** restored to `bool` (was wrongly
+  changed to `int` in v3.3.0 when the parameterized-SQL overload was added).
+  The runtime always returned `VM_BOOL(rc == SQLITE_OK)`, so the catalog lied
+  — under `strict = true` this rejected the idiomatic `bool ok = db_execute(…)`
+  with "expected bool, got int", which silently broke strict-mode builds of
+  the `tulpar-be` registry. `int ok = db_execute(…)` still works (AOT bool→int
+  decl coercion is unaffected).
+
+### Docs
+- New **Crypto & security** section in the built-ins reference (EN + TR)
+  documenting `sha256` / `hmac_sha256` / `password_hash` / `password_verify`
+  / `secure_token` / base64 with guidance on which to use where.
+
 ## [v3.4.0]
 
 Backwards-compatible feature on top of v3.3.0. No breaking changes.

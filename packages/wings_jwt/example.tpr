@@ -1,0 +1,33 @@
+// wings_jwt example — login issues a token, /me requires it.
+//
+//   tulpar build example.tpr && ./example
+//   curl -s -X POST localhost:8484/login
+//   curl -s localhost:8484/me -H "Authorization: Bearer <token>"
+//
+// (Run from this directory so `import "wings_jwt"` resolves the sibling
+//  wings_jwt.tpr; once published, `tulpar pkg add wings_jwt` handles it.)
+
+import "wings";
+import "wings_jwt" as jwt;
+
+str SECRET = "demo-secret-change-me";
+
+// In a real app you'd check credentials here; we just mint a token.
+func login(req) {
+    str token = jwt.sign_ttl({"sub": "42", "role": "admin"}, SECRET, 3600);
+    return ok({"token": token});
+}
+
+func me(req) {
+    json v = jwt.verify(jwt.from_header(req), SECRET);
+    if (v["ok"] == 0) {
+        return unauthorized({"error": v["error"]});
+    }
+    return ok({"user": v["claims"]["sub"], "role": v["claims"]["role"]});
+}
+
+func main() {
+    post("/login", login);
+    get("/me", me);
+    serve();
+}

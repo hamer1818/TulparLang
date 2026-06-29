@@ -51,7 +51,11 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   fn. Detay: Açık eksikler → Dil seviyesi.
 - **Pkg manager:** `init/add/install/publish` + semver (`^`, `~`,
   `>=,<`) + lockfile + `.tpkg` multi-file bundle. Canlı registry
-  `api.pkg.tulparlang.dev` (tulpar-be, Tulpar'da yazılmış).
+  `api.pkg.tulparlang.dev` (tulpar-be, Tulpar'da yazılmış). İlk gerçek
+  paket `wings_jwt` (`packages/wings_jwt/`) hazır — canlı publish bekliyor.
+- **Güvenlik primitifleri:** `sha256`, **`hmac_sha256`** (RFC 2104, v3.5.0),
+  `password_hash`/`verify` (PBKDF2), `secure_token` (CSPRNG), parametreli SQL —
+  hepsi ağaç-içi (OpenSSL'siz).
 - **Tooling:** `tulpar fmt`, `tulpar --lsp`, `tulpar typecheck`,
   `tulpar update`. VS Code eklentisi (`vscode-tulpar` v0.3+) LSP
   client.
@@ -66,6 +70,18 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Çekirdek dil + derleme zinciri
 
+- **Cila turu — diagnostik + CLI gürültüsü (2026-06-29):** iki "bilinen ufak
+  konu" kapatıldı (detay → Notlar):
+  - ✅ **Parse error satır no off-by-one (EOF).** Kapanmamış ifade EOF'a
+    çarpınca raporlanan satır içerik taşıyan son satıra clamp ediliyor
+    (`render_parse_error_pretty` + yeni `clamp_line_to_source`); lexer'a
+    dokunulmadı, LSP sink de aynı clamp'i kullanıyor.
+  - ✅ **`tulpar build` artık sessiz.** Ara `[AOT]` progress satırları
+    `TULPAR_AOT_VERBOSE=1` arkasına alındı; varsayılan build yalnız son
+    "Successfully created" + hataları basıyor.
+  - 🔍 **String `==` incelendi → gerçek bug değil** (cross-type coerce yok,
+    tutarlı). Regresyon yok: örnekler + `errors/ternary/match/strings`
+    suite'leri yeşil. → [[AOT Backend]]
 - **AOT fonksiyon tablosu 128 → 512 + sessiz taşma yerine sert hata (v3.2.1, 2026-06-24):**
   `LLVMBackend.functions[]` 128 slotluk sabit diziydi; büyük bir stdlib modülü
   (ör. `wings`) + kullanıcının kendi handler'ları bu sınırı aşınca
@@ -375,6 +391,24 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
       eşleştirdiği için yeni fiiller doğrudan çalışır. iurl PATCH yerine PUT
       kullanmak zorunda kalmıştı — artık gerek yok. `tests/wings_verbs.test.tpr`
       4/4 (patch+param, method ayrımı, head/options eşleşme, yanlış-eşleşme yok).
+
+- ✅ **`hmac_sha256(key, msg)` + ilk registry paketi `wings_jwt` (2026-06-29, v3.5.0) — güvenlik & ekosistem.**
+  - **Yeni runtime primitifi `hmac_sha256(key: str, msg: str) -> str`** —
+    anahtarlı MAC (HMAC-SHA256, RFC 2104), 64-karakter hex. Ağaç-içi SHA-256
+    üstüne (OpenSSL yok); PBKDF2'yi besleyen mevcut C `hmac_sha256()` helper'ı
+    .tpr koduna açıldı. İmzalı çerez / webhook imzası / JWT-tarzı token yapı taşı.
+    5 noktada bağlandı (runtime `aot_hmac_sha256`+`_ptr`, llvm_backend hpp/cpp
+    dispatch, typeinfer, lsp). **RFC 4231 test vektörleriyle doğrulandı**
+    (Jefe/what-do-ya-want → tam eşleşme). 32 focused suite + 32 örnek regresyon temiz.
+  - **İlk gerçek registry paketi: `wings_jwt`** (`packages/wings_jwt/`, saf Tulpar,
+    sıfır bağımlılık) — HS256 imzalı oturum token'ları: `sign`/`sign_ttl`/`verify`/
+    `decode`/`from_header`. base64url JSON segmentleri + `hmac_sha256` imza. Token
+    Tulpar-native varyant (imza = base64url(hex MAC); RFC-7519 wire-interop roadmap'te,
+    raw-bytes base64 yolu gerekir — README'de dürüstçe belgelendi). `wings_jwt.test.tpr`
+    8/8 (round-trip, yanlış-secret, payload-tamper, malformed, exp/iat, decode,
+    bearer-header), örnek wings app derleniyor, `tulpar pkg publish --dry-run`
+    bundle'ı doğruluyor. Canlı publish dışa-dönük (bearer token kullanıcıda).
+  - **Docs:** `stdlib/builtins.mdx`'e Kriptografi & güvenlik bölümü (EN+TR). → [[tulpar-v330-security-apis]]
 
 - ✅ **`secure_token(n)` — kriptografik rastgelelik (2026-06-26, v3.4.0) — güvenlik.**
   `randint`/`random` kriptografik DEĞİL (`rand()`, `srand(time())` ile tohumlanmış,
@@ -1057,6 +1091,12 @@ girildiğinde ne yapacağımı bilelim.
     kullanılıyor; tek-i64 alan ayrı bir signature deneyebilir,
     veya çağrı taraflı `LLVMBuildAlloca` + value-by-pointer
     ABI'ye geç.
+  - **İnceleme notu (2026-06-29):** runtime impl (`aot_wings_ws_recv_frame`)
+    doğru; semptom **yalnızca MinGW64/Windows** ABI'sinde (ikinci çağrı
+    `fdVal`'i yanlış slottan okuyor). **Linux WSL'de reprodüke/dogrulanamaz**
+    olduğundan ve doğrulama kapısı zorunlu olduğundan, çalışan Linux yolunu
+    bozma riskiyle körlemesine ABI değişikliği yapılmadı — Windows test
+    erişimi gelene kadar açık bırakıldı.
 
 - 🟢 **VM'de native struct desteği yok.** `tests/struct_native.test.tpr`
   altında 17/19 yeşil ama `_translate_x(Point p, int dx)` gibi
@@ -1064,12 +1104,11 @@ girildiğinde ne yapacağımı bilelim.
   expected 101 got 1 — yani mutasyon hiç oluşmadan dönüyor. AOT
   Plan 04 native struct codegen'i tamam, VM tarafında karşılığı yok
   (her şey boxed VMValue üzerinden ilerliyor).
-  - **Sıradaki adım:** VM'ye typed-struct lokal slot kavramını
-    getir — `Chunk::struct_layouts[]` benzeri bir yapı + her
-    typed param için kopya semantiği. Önce typed-int field
-    okuma/yazmayı düzelt, sonra by-value parametre kopyalamayı
-    ekle. Düşük öncelik: AOT primary path, VM kullanıcıları struct
-    yoluyla geçmiyor.
+  - **Karar (2026-06-29) — YAPILMAYACAK (ölü madde).** Proje AOT-only
+    (2026-06-15); "VM için özellik yeniden yazma" proje kararına aykırı.
+    `src/vm/` artık yalnızca paylaşılan runtime, yürütme motoru değil — hiçbir
+    kullanıcı struct'ı VM yolundan geçmiyor. Bu madde STATUS'ta tarihsel kayıt
+    olarak kalıyor; iş listesinden düşürüldü.
 
 - ✅ **AOT bool→int variable-decl coercion divergence (ÇÖZÜLDÜ).**
   `int ok = db_execute(...);` artık AOT'ta da int olarak tutuluyor
@@ -1100,9 +1139,17 @@ girildiğinde ne yapacağımı bilelim.
   `demo` + `multipkg` smoke-test paketleri var. Stdlib paketleri
   (`wings`, `router`, `http_utils`, vb.) eski markdown listelerinde
   geçiyor ama registry'de publish edilmemiş.
-  - **Sıradaki adım:** v1.0 release sonrası gerçek kullanıcı
-    paketlerini bekle; veya kendi wings-extension'larımızı
-    (`wings_jwt`, `wings_postgres` vb.) publish et.
+  - ✅ **İlk gerçek paket oluşturuldu: `wings_jwt` (2026-06-29).**
+    `packages/wings_jwt/` — HS256 imzalı oturum token'ları (`sign`/`sign_ttl`/
+    `verify`/`decode`/`from_header`), sıfır bağımlılık, `hmac_sha256` +
+    `base64_encode` üstüne saf Tulpar. 8/8 test yeşil, örnek wings app derleniyor,
+    `tulpar pkg publish --dry-run` bundle'ı doğruluyor (3 dosya, sha256). Bunu
+    mümkün kılan yeni runtime primitifi **`hmac_sha256(key, msg)`** (RFC 4231
+    vektörleriyle doğrulandı) — bkz. Yapılanlar / Çekirdek + [[tulpar-v330-security-apis]].
+  - **Sıradaki adım (dışa-dönük, credential gerekir):** canlı registry'ye
+    publish — `cd packages/wings_jwt && tulpar pkg publish --token <PUBLISH_TOKEN>`
+    (`api.pkg.tulparlang.dev`, bearer token kullanıcıda). Sonra `wings_postgres`
+    vb. ek eklentiler.
 
 - 🟢 **Server-side `/v1/search` endpoint.** Bugün `pkg search`
   client-side filtreliyor — registry catalog'u büyüdüğünde
@@ -1148,9 +1195,18 @@ girildiğinde ne yapacağımı bilelim.
     yeni **async/await** bölümü (`examples/36_match_destructure.tpr`'den
     doğrulandı). TR reference'ta `match` bölümü tamamen eksikti → eklendi
     (EN paritesi).
+  - ✅ **Kriptografi & güvenlik bölümü (2026-06-29, EN+TR)** —
+    `stdlib/builtins.mdx`'e yeni bölüm: `sha256` / `hmac_sha256` /
+    `password_hash` / `password_verify` / `secure_token` / base64, hangisini
+    nerede kullan rehberiyle + `wings_jwt` örneği. (Daha önce crypto
+    builtin'lerinin hiçbir doc bölümü yoktu — gerçek bir boşluktu.) Astro
+    build temiz (72 sayfa, EN+TR indexlendi).
   - **Kalan:** pkg/wings derinlemesine guide'lar (mevcut ama daha
-    genişletilebilir). Site canlı deploy (Cloudflare Pages/wrangler) ayrı
-    adım. v1.0 release blocker'ının büyük kısmı kapandı.
+    genişletilebilir; örn. tam JWT-auth cookbook tarifi). **Site canlı deploy
+    (Cloudflare Pages/wrangler) — dışa-dönük, credential gerekir:** `astro build`
+    lokalde temiz çalışıyor (`./node_modules/.bin/astro build` → `dist/`);
+    deploy adımı kullanıcının CF hesabı/wrangler auth'unu istiyor
+    (`wrangler pages deploy dist`). v1.0 release blocker'ının büyük kısmı kapandı.
 
 ---
 
@@ -1186,10 +1242,26 @@ bekliyor.
 ## Notlar
 
 - Bilinen ufak konular:
-  - Parse error recovery satır no'su occasionally bir satır kayık.
-  - `[AOT]` mesajları verbose build modunda çıkıyor (silent path temiz).
-  - `assert_throws` çalışıyor, string `==` edge case'lerinde toString
-    roundtrip gerekebilir.
+  - ✅ **Parse error satır no off-by-one — ÇÖZÜLDÜ (2026-06-29).** EOF'taki
+    bir hata (kapanmamış ifade vb.) lexer'ın trailing-newline sonrası
+    artırdığı satır sayacını taşıyordu → 4 satırlık dosyada "line 5" + boş
+    fantom excerpt. `render_parse_error_pretty` artık `clamp_line_to_source`
+    ile raporlanan satırı içerik taşıyan son satıra sıkıştırıyor (lexer'a
+    dokunulmadı → başka diagnostik kaymadı). LSP sink yolu da aynı clamp'i
+    kullanır. Doğrulandı: EOF hatası artık doğru satırı + excerpt'i gösteriyor,
+    orta-dosya hataları değişmedi, `errors/ternary/match/strings` suite'leri
+    yeşil.
+  - ✅ **`[AOT]` progress mesajları artık opt-in — ÇÖZÜLDÜ (2026-06-29).**
+    `tulpar build` artık yalnız `[AOT] Successfully created: <exe>` (+ hata)
+    basıyor; ara adımlar (Parsing/Codegen/Optimizing/Linking + "O3 applied")
+    `TULPAR_AOT_VERBOSE=1` arkasına alındı (`aot_pipeline.cpp` `AOT_PROGRESS`
+    makrosu + `llvm_backend.cpp` O3 satırı env-gate). Silent run yolu zaten
+    temizdi. Doğrulandı: quiet vs verbose çıktı.
+  - `assert_throws` çalışıyor; **string `==` incelendi (2026-06-29) — gerçek
+    bug değil:** literal/concat/UTF-8/obje-değeri/dizi-elemanı eşitliği ve
+    cross-type karşılaştırmalar (int↔str implicit coerce yok — statik dil için
+    doğru) tutarlı çalışıyor. Belgelenen "toString roundtrip" edge case'i
+    reprodüke edilemedi; not güncellendi.
 - `tulpar-be` ayrı bir repo (`d:/yazilim/tulpar-be`); Tulpar dilinde
   yazılmış (`registry.tpr`, ~60 KB), Docker'da deploy.
 - `pkg.tulparlang.dev` Astro static site, ayrı bir repo.

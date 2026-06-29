@@ -116,10 +116,29 @@ extern "C" int parser_get_error_count(void) { return g_parser_error_count; }
 // null/empty to skip the caret. `hint` is optional. `column_hint` (1-based)
 // disambiguates the caret when the same lexeme appears multiple times on
 // the line; pass <=0 to fall back to first-occurrence search.
+// An error at EOF carries the lexer's line counter, which has already been
+// bumped past a trailing newline — so it points one line beyond the last
+// line that has any content (rendering an empty phantom excerpt). Clamp the
+// reported line to the last line that actually contains a character.
+static int clamp_line_to_source(int line) {
+    if (!g_parser_source_text || line <= 1) return line;
+    int cur = 1;
+    int last_content = 1;
+    for (const char *p = g_parser_source_text; *p; p++) {
+        if (*p == '\n') {
+            cur++;
+        } else if (*p != '\r') {
+            last_content = cur;
+        }
+    }
+    return line > last_content ? last_content : line;
+}
+
 static void render_parse_error_pretty(int line, const std::string& message,
                                       const char *caret_token,
                                       const char *hint,
                                       int column_hint = 0) {
+    line = clamp_line_to_source(line);
     // LSP / structured-collection mode: push a record and skip stderr
     // entirely so the JSON-RPC transport stays clean.
     if (tulpar::diag_sink_active()) {

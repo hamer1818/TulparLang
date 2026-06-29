@@ -1,0 +1,8 @@
+name = "wings_jwt"
+version = "0.1.0"
+description = "HMAC-SHA256 (HS256) signed tokens for TulparLang wings apps — sign, verify, expiry, bearer extraction. Zero dependencies."
+author = "TulparLang"
+license = "MIT"
+
+[registry]
+url = "https://api.pkg.tulparlang.dev"

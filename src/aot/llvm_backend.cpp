@@ -1125,6 +1125,10 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMAddFunction(backend->module, "aot_password_hash_ptr", read_type);
   backend->func_aot_password_verify =
       LLVMAddFunction(backend->module, "aot_password_verify_ptr", write_type);
+  // hmac_sha256(str,str)->str (2 ptr args, like password_verify) — keyed
+  // MAC hex digest; building block for JWT HS256 / signed cookies.
+  backend->func_aot_hmac_sha256 =
+      LLVMAddFunction(backend->module, "aot_hmac_sha256_ptr", write_type);
   // secure_token(int)->str (1 ptr arg, like sha256) — CSPRNG base62 token.
   backend->func_aot_secure_token =
       LLVMAddFunction(backend->module, "aot_secure_token_ptr", read_type);
@@ -4279,6 +4283,23 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           backend->builder, stored_ptr, backend->ptr_type, "pwverify_stored_void");
       LLVMValueRef args[] = {pw_void, stored_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_password_verify, args, 2, "pwverify_res");
+    }
+
+    if (strcmp(node->name, "hmac_sha256") == 0 && node->argument_count >= 2) {
+      LLVMValueRef key = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef msg = codegen_expression(backend, node->arguments[1]);
+      LLVMValueRef key_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "hmac_key_ptr");
+      LLVMBuildStore(backend->builder, key, key_ptr);
+      LLVMValueRef msg_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "hmac_msg_ptr");
+      LLVMBuildStore(backend->builder, msg, msg_ptr);
+      LLVMValueRef key_void = LLVMBuildBitCast(
+          backend->builder, key_ptr, backend->ptr_type, "hmac_key_void");
+      LLVMValueRef msg_void = LLVMBuildBitCast(
+          backend->builder, msg_ptr, backend->ptr_type, "hmac_msg_void");
+      LLVMValueRef args[] = {key_void, msg_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_hmac_sha256, args, 2, "hmac_res");
     }
 
     if (strcmp(node->name, "db_open") == 0) {
@@ -8457,7 +8478,11 @@ void llvm_backend_optimize(LLVMBackend *backend) {
       backend->module = pre_opt;
       pre_opt = nullptr;
     } else if (!backend->quiet) {
-      printf("[AOT] Optimizations (O3) applied successfully.\n");
+      // Progress chatter — only when TULPAR_AOT_VERBOSE is set, so a plain
+      // `tulpar build` shows just the final "Successfully created" line.
+      const char *v = getenv("TULPAR_AOT_VERBOSE");
+      if (v && *v && *v != '0')
+        printf("[AOT] Optimizations (O3) applied successfully.\n");
     }
     if (verr)
       LLVMDisposeMessage(verr);

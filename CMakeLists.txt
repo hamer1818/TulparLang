@@ -8,7 +8,7 @@ cmake_minimum_required(VERSION 3.14)
 # Keep it >= the latest git tag (currently v3.2.1) so `tulpar --version` and
 # `tulpar update --check` never report a dev build as older than the last
 # release. Bump here when cutting a release; CI overrides via -DTULPAR_VERSION.
-project(TulparLang VERSION 3.4.0 LANGUAGES C CXX)
+project(TulparLang VERSION 3.5.0 LANGUAGES C CXX)
 
 # C++17 Standard (required for std::variant, std::optional, std::unique_ptr)
 set(CMAKE_CXX_STANDARD 17)

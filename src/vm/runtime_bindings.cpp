@@ -3229,6 +3229,30 @@ VMValue aot_password_verify_ptr(VMValue *pw_ptr, VMValue *stored_ptr) {
   return aot_password_verify(*pw_ptr, *stored_ptr);
 }
 
+// hmac_sha256(key: str, msg: str) -> str (lowercase 64-char hex digest).
+// Keyed message-authentication primitive (RFC 2104) on top of the in-tree
+// SHA-256 — the building block for token signing (JWT HS256, webhook /
+// signed-cookie signatures). Deterministic: same (key, msg) → same hex, so
+// callers verify by recomputing and constant-time comparing. The raw HMAC
+// already backs PBKDF2 above; this just exposes it to .tpr code.
+VMValue aot_hmac_sha256(VMValue keyVal, VMValue msgVal) {
+  if (!IS_STRING(keyVal) || !IS_STRING(msgVal))
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  ObjString *key = AS_STRING(keyVal);
+  ObjString *msg = AS_STRING(msgVal);
+  uint8_t mac[32];
+  hmac_sha256((const uint8_t *)key->chars, (size_t)key->length,
+              (const uint8_t *)msg->chars, (size_t)msg->length, mac);
+  std::string hex = to_hex(mac, 32);
+  return VM_OBJ((Obj *)aot_allocate_string(hex.data(), (int)hex.size()));
+}
+
+VMValue aot_hmac_sha256_ptr(VMValue *key_ptr, VMValue *msg_ptr) {
+  if (!key_ptr || !msg_ptr)
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  return aot_hmac_sha256(*key_ptr, *msg_ptr);
+}
+
 // secure_token(n: int) -> str
 // Cryptographically secure random base62 string of length n. Backed by
 // std::random_device (CSPRNG / OS entropy: /dev/urandom etc.) — NOT the

@@ -1,0 +1,83 @@
+import "test";
+import "wings_jwt";
+
+// Round-trip: a signed token verifies and returns the original claims.
+func run_roundtrip() {
+    str tok = sign({"sub": "42", "role": "admin"}, "topsecret");
+    json v = verify(tok, "topsecret");
+    assert_eq_bool(v["ok"] == 1, true);
+    assert_eq_str(v["claims"]["sub"], "42");
+    assert_eq_str(v["claims"]["role"], "admin");
+}
+
+// A token has exactly three dot-separated segments.
+func run_shape() {
+    str tok = sign({"a": 1}, "k");
+    json parts = split(tok, ".");
+    assert_eq_int(length(parts), 3);
+}
+
+// Wrong secret → signature mismatch, not a false accept.
+func run_wrong_secret() {
+    str tok = sign({"sub": "x"}, "right");
+    json v = verify(tok, "wrong");
+    assert_eq_bool(v["ok"] == 0, true);
+    assert_eq_str(v["error"], "bad signature");
+}
+
+// Tampering with the payload invalidates the signature.
+func run_tamper() {
+    str tok = sign({"role": "user"}, "k");
+    json parts = split(tok, ".");
+    // swap in a forged "admin" payload, keep the original signature
+    str forged = parts[0] + "." + base64_encode("{\"role\":\"admin\"}") + "." + parts[2];
+    json v = verify(forged, "k");
+    assert_eq_bool(v["ok"] == 0, true);
+}
+
+// Malformed tokens are rejected, never crash.
+func run_malformed() {
+    assert_eq_bool(verify("", "k")["ok"] == 0, true);
+    assert_eq_bool(verify("only.two", "k")["ok"] == 0, true);
+    assert_eq_str(verify("a.b.c.d", "k")["error"], "malformed token");
+}
+
+// sign_ttl stamps exp/iat; a positive ttl verifies, a past ttl is expired.
+func run_expiry() {
+    str fresh = sign_ttl({"sub": "1"}, "k", 3600);
+    assert_eq_bool(verify(fresh, "k")["ok"] == 1, true);
+
+    str stale = sign_ttl({"sub": "1"}, "k", 0 - 10);
+    json v = verify(stale, "k");
+    assert_eq_bool(v["ok"] == 0, true);
+    assert_eq_str(v["error"], "expired");
+}
+
+// decode() reads claims without verifying (inspection only).
+func run_decode() {
+    str tok = sign({"sub": "99", "n": 7}, "k");
+    json c = decode(tok);
+    assert_eq_str(c["sub"], "99");
+    assert_eq_int(c["n"], 7);
+}
+
+// from_header() pulls the bearer token out of a request's headers.
+func run_from_header() {
+    json req = {"headers": {"Authorization": "Bearer abc.def.ghi"}};
+    assert_eq_str(from_header(req), "abc.def.ghi");
+    json req2 = {"headers": {"authorization": "xyz"}};
+    assert_eq_str(from_header(req2), "xyz");
+    json req3 = {"headers": {}};
+    assert_eq_str(from_header(req3), "");
+}
+
+print("=== wings_jwt (HS256 signed tokens) ===");
+test("round-trip sign/verify", "run_roundtrip");
+test("token has 3 segments", "run_shape");
+test("wrong secret rejected", "run_wrong_secret");
+test("payload tamper rejected", "run_tamper");
+test("malformed token rejected", "run_malformed");
+test("ttl iat/exp + expiry", "run_expiry");
+test("decode without verify", "run_decode");
+test("bearer from header", "run_from_header");
+test_summary();

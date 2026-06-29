@@ -32,6 +32,22 @@ static int aot_timing_enabled() {
   }
   return cached;
 }
+
+// Per-phase `[AOT] …` progress chatter. Off by default so `tulpar build`
+// prints only the final "Successfully created" confirmation (and any
+// errors); set TULPAR_AOT_VERBOSE=1 to see the parse/codegen/link steps.
+// The silent run path (`tulpar foo.tpr`) builds its own quiet backend and
+// never reaches these prints.
+static int aot_verbose_enabled() {
+  static int cached = -1;
+  if (cached < 0) {
+    const char *e = getenv("TULPAR_AOT_VERBOSE");
+    cached = (e && *e && *e != '0') ? 1 : 0;
+  }
+  return cached;
+}
+#define AOT_PROGRESS(...) do { if (aot_verbose_enabled()) printf(__VA_ARGS__); } while (0)
+
 struct AOTPhaseTimer {
   const char *name;
   std::chrono::steady_clock::time_point start;
@@ -280,7 +296,7 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   ASTNode_C *ast;
   {
     AOTPhaseTimer t("parse");
-    printf("[AOT] Parsing source...\n");
+    AOT_PROGRESS("[AOT] Parsing source...\n");
     ast = parse_source(source, source_filename);
   }
   if (!ast) {
@@ -291,7 +307,7 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   LLVMBackend *backend;
   {
     AOTPhaseTimer t("backend-init");
-    printf("[AOT] Creating LLVM backend...\n");
+    AOT_PROGRESS("[AOT] Creating LLVM backend...\n");
     backend = llvm_backend_create("tulpar_aot_module");
   }
   if (!backend) {
@@ -313,7 +329,7 @@ AOTResult aot_compile_with_filename_debug(const char *source,
 
   {
     AOTPhaseTimer t("codegen");
-    printf("[AOT] Generating LLVM IR...\n");
+    AOT_PROGRESS("[AOT] Generating LLVM IR...\n");
     llvm_backend_compile(backend, ast);
   }
 
@@ -327,7 +343,7 @@ AOTResult aot_compile_with_filename_debug(const char *source,
 
   {
     AOTPhaseTimer t("optimize");
-    printf("[AOT] Optimizing...\n");
+    AOT_PROGRESS("[AOT] Optimizing...\n");
     llvm_backend_optimize(backend);
   }
 
@@ -358,7 +374,7 @@ AOTResult aot_compile_with_filename_debug(const char *source,
 
   {
     AOTPhaseTimer t("emit-obj");
-    printf("[AOT] Emitting object file: %s\n", obj_filename);
+    AOT_PROGRESS("[AOT] Emitting object file: %s\n", obj_filename);
     if (llvm_backend_emit_object(backend, obj_filename) != 0) {
       fprintf(stderr, "%s", tulpar::i18n::tr_for_en("[AOT] Error: Failed to emit object file\n"));
       llvm_backend_destroy(backend);
@@ -374,7 +390,7 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   // (Plan 07 PR 2 wires up LLVMDIBuilder), so `-g` is effectively
   // a no-op until that lands — but plumbing the switch through now
   // keeps the CLI surface stable across the PR series.
-  printf("[AOT] Linking executable: %s\n", exe_filename);
+  AOT_PROGRESS("[AOT] Linking executable: %s\n", exe_filename);
   std::string search_dirs = build_link_search_dirs();
   std::string extra_flags = aot_extra_link_flags();
   const char *debug_flag = emit_debug_info ? "-g " : "";
@@ -416,7 +432,7 @@ AOTResult aot_compile_and_run(const char *source) {
   }
 
   // Try to execute
-  printf("[AOT] Executing generated binary...\n");
+  AOT_PROGRESS("[AOT] Executing generated binary...\n");
 #if PLATFORM_WINDOWS
   // cmd.exe does not auto-search the current directory unless an explicit
   // path is given, so prefix with .\ to ensure the binary is found.
