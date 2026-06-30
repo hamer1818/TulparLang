@@ -1047,6 +1047,15 @@ void declare_runtime_functions(LLVMBackend *backend) {
       llvm_make_vmvalue_func_type(backend, http_req_params, 3, 0);
   backend->func_aot_http_request =
       LLVMAddFunction(backend->module, "aot_http_request", http_req_type);
+  // aot_http_request_h(method, url, body, headers) -> json — 4-arg form
+  // with a {name: value} headers object.
+  LLVMTypeRef http_req_h_params[] = {
+      backend->vm_value_type, backend->vm_value_type, backend->vm_value_type,
+      backend->vm_value_type};
+  LLVMTypeRef http_req_h_type =
+      llvm_make_vmvalue_func_type(backend, http_req_h_params, 4, 0);
+  backend->func_aot_http_request_h =
+      LLVMAddFunction(backend->module, "aot_http_request_h", http_req_h_type);
 
   // aot_http_request_async(method, url, body) -> ObjPromise* (as VMValue).
   // Same 3-VMValue→VMValue signature; the returned value is a promise to await.
@@ -4067,6 +4076,17 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     args, 1, "persist");
     }
     // http_request(method, url, body) — outbound HTTP/1.0 client.
+    if (node->name && strcmp(node->name, "http_request") == 0 &&
+        node->argument_count >= 4) {
+      // 4-arg form: method, url, body, headers (object).
+      LLVMValueRef args[] = {
+          codegen_expression(backend, node->arguments[0]),
+          codegen_expression(backend, node->arguments[1]),
+          codegen_expression(backend, node->arguments[2]),
+          codegen_expression(backend, node->arguments[3])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_http_request_h,
+                                    args, 4, "http_req_h");
+    }
     if (node->name && strcmp(node->name, "http_request") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef args[] = {

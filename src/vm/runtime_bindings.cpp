@@ -3673,6 +3673,48 @@ VMValue aot_http_request(VMValue methodVal, VMValue urlVal, VMValue bodyVal) {
     return aot_http_build_response(buf);
 }
 
+// http_request(method, url, body, headers) -> json. Same as the 3-arg
+// form, but `headers` is a {name: value} object appended verbatim to the
+// request (after the auto Host/User-Agent/Content-Length). Needed for
+// APIs that require an `Authorization` / `Accept` header (e.g. GitHub).
+// Non-object `headers` (incl. a 0 from a 3-arg call padded to 4) → none.
+// Header names/values containing CR/LF are dropped (no header injection).
+VMValue aot_http_request_h(VMValue methodVal, VMValue urlVal, VMValue bodyVal,
+                           VMValue headersVal) {
+    if (!IS_STRING(methodVal) || !IS_STRING(urlVal))
+        return aot_http_error_obj("bad args");
+    std::string method = AS_STRING(methodVal)->chars;
+    std::string url = AS_STRING(urlVal)->chars;
+    std::string body;
+    if (IS_STRING(bodyVal)) {
+        body.assign(AS_STRING(bodyVal)->chars, AS_STRING(bodyVal)->length);
+    }
+    std::string extra;
+    if (IS_OBJECT(headersVal)) {
+        ObjObject *h = AS_OBJECT(headersVal);
+        for (int i = 0; i < h->count; i++) {
+            if (!h->keys[i]) continue;
+            std::string nm(h->keys[i]->chars, (size_t)h->keys[i]->length);
+            VMValue v = h->values[i];
+            if (!IS_STRING(v)) continue; // only string header values
+            std::string val(AS_STRING(v)->chars, (size_t)AS_STRING(v)->length);
+            if (nm.find('\r') != std::string::npos || nm.find('\n') != std::string::npos)
+                continue;
+            if (val.find('\r') != std::string::npos || val.find('\n') != std::string::npos)
+                continue;
+            extra += nm;
+            extra += ": ";
+            extra += val;
+            extra += "\r\n";
+        }
+    }
+    std::string buf, fetch_err;
+    if (!tulpar::http_request_url(method, url, body, buf, fetch_err, extra)) {
+        return aot_http_error_obj(fetch_err.c_str());
+    }
+    return aot_http_build_response(buf);
+}
+
 // ---------------------------------------------------------------------------
 // Async HTTP — http_request_async(method, url, body) -> promise<json>
 //

@@ -92,7 +92,7 @@ const BuiltinEntry kBuiltins[] = {
     {"http_parse_request",  "http_parse_request(raw: str): json",   "Ham HTTP isteğini parçalar."},
     {"http_create_response","http_create_response(status: int, ct: str, body: str): str", "HTTP yanıtı oluşturur."},
     {"http_status_text",    "http_status_text(code: int): str",     "200→\"OK\", 404→\"Not Found\", …"},
-    {"http_request",        "http_request(method: str, url: str, body: str): json", "Bloklayan outbound HTTP isteği → {ok, status, headers, body}."},
+    {"http_request",        "http_request(method: str, url: str, body: str, headers?: json): json", "Bloklayan outbound HTTP isteği → {ok, status, headers, body}. Opsiyonel 4. arg {name: value} ek istek başlıkları (örn. Authorization, Accept) gönderir."},
     {"http_request_async",  "http_request_async(method: str, url: str, body: str): promise", "Bloklamayan outbound HTTP; promise döner. `await http_request_async(...)`. Worker pool (TULPAR_HTTP_POOL)."},
     {"path_match",          "path_match(pattern: str, path: str): json", "/users/:id ile gelen path'i eşler."},
     {"parse_query",         "parse_query(qs: str): json",           "?a=1&b=2 → {a: \"1\", b: \"2\"}"},

@@ -201,6 +201,7 @@ typedef struct {
   LLVMValueRef func_aot_object_clone;
   LLVMValueRef func_aot_persist; // persist(value) -> deep malloc'd copy (survives arena_restore)
   LLVMValueRef func_aot_http_request;
+  LLVMValueRef func_aot_http_request_h;
   LLVMValueRef func_aot_http_request_async; // (method,url,body) -> promise
   LLVMValueRef func_aot_trim;
   LLVMValueRef func_aot_replace;
