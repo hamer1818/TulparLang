@@ -7,6 +7,85 @@ language/stdlib/ABI changes, MINOR for backwards-compatible features, PATCH for
 fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md));
 `tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
 
+## [v3.6.0]
+
+Backwards-compatible feature round on top of v3.5.0: **wings completeness**
+(the framework-parity follow-up from HANDOFF §2). No breaking changes.
+
+### Added — wings (lib/wings.tpr, pure Tulpar)
+- **Cookie SET side:** `set_cookie(res, name, val, opts)` /
+  `delete_cookie(res, name)` build the `Set-Cookie` response header
+  (opts: `path`, `domain`, `max_age`, `same_site`, `secure`, `http_only` —
+  HttpOnly + SameSite=Lax + Path=/ by default). One cookie per response
+  (response headers are a dict; last call wins).
+- **Signed cookies:** `set_signed_cookie(res, name, val, secret, opts)` /
+  `get_signed_cookie(req, name, secret)` — value carries an
+  `hmac_sha256(secret, name + "." + value)` MAC (name-bound, so cookies
+  can't be swapped); tampered/absent → `""`. MAC comparison is
+  double-HMAC'd so string-compare timing reveals nothing.
+- **Server-side sessions:** `session_start(req, secret)` (existing valid
+  signed `tsid` cookie or fresh `secure_token(32)` id),
+  `session_attach(res, sid, secret)`, `session_set/get(sid, key[, val])`,
+  `session_destroy(sid)`. In-memory (`_wings_sessions` global, auto-persist);
+  process-lifetime only.
+- **Configurable CORS:** `cors(origin, {credentials, methods, headers,
+  expose, max_age})` replaces the static wildcard defaults; sets
+  `Vary: Origin` for specific origins and supports
+  `Access-Control-Allow-Credentials: true` (the wildcard can't — the exact
+  gap the registry frontend hit). Startup-only, covers the automatic
+  OPTIONS/preflight 204.
+- **Rate limiting:** `rate_limit(max, window_s)` — fixed-window,
+  `use()`-based middleware keyed on `X-Forwarded-For`/`X-Real-IP` (first
+  hop) with a global-bucket fallback; over-limit → 429 + `Retry-After`.
+  Table resets each window, so memory stays bounded.
+- **JWT guard:** `jwt_guard(secret)` — bearer-token middleware
+  wire-compatible with the `wings_jwt` package (HS256, base64url segments,
+  hex-MAC signature). Missing/bad/expired → 401; valid → claims injected as
+  `req["jwt"]`. `jwt_public(path)` exempts paths (exact or trailing-`*`
+  prefix); `/healthz`, `/metrics`, `/docs`, `/openapi.json` exempt by
+  default. Also flags bearer auth in the OpenAPI doc.
+- **HTML + templates:** `html(body)` (text/html response) and
+  `render(tpl, vars)` — `{{key}}` substitution over a vars dict.
+- **Typed path params:** `param(req, name, fb)` / `param_int` /
+  `param_bool` — mirrors of the query helpers for `:name` route params.
+- **ETag / conditional requests:** `cached_get` routes now serve a strong
+  body-derived `ETag` and answer a matching `If-None-Match` with an empty
+  `304` instead of the cached body.
+- **Response compression:** `enable_gzip(min_bytes)` — transparent gzip for
+  responses ≥ threshold when the client sends `Accept-Encoding: gzip`
+  (adds `Content-Encoding: gzip` + `Vary: Accept-Encoding`; skips
+  `cached_get` routes, whose pinned bytes are shared by all clients; skips
+  when compression doesn't shrink the body).
+- **OpenAPI completeness:** `response_model` schemas now document the 200
+  response body in `/openapi.json`; `jwt_guard()` (or
+  `docs_security("bearer")`) advertises a `bearerAuth` security scheme so
+  Swagger UI shows Authorize.
+
+### Added — runtime / language
+- **`gzip_compress(s: str) -> str`** — gzip (RFC 1952) stream of the input
+  bytes via a new **in-tree DEFLATE** (`runtime/tulpar_gzip.cpp`: fixed
+  Huffman + greedy LZ77 over a 32K window + CRC-32). No zlib dependency —
+  AOT user binaries stay self-contained. Binary-safe both directions
+  (length-tracked strings). Wired through runtime, AOT codegen, typeinfer,
+  LSP. Verified byte-exact against Python `gzip.decompress` and
+  `curl --compressed` (CRC checked) on text, full-byte-range binary and
+  random payloads; 16.4 KB HTML compresses to 274 B (1.7%).
+
+### Fixed
+- **`response_model` no longer drops `_headers`** — the output filter now
+  preserves the `_headers` envelope key, so `set_cookie(...)` /
+  `redirect(...)` headers survive response-model filtering.
+
+### Tests / examples
+- `tests/wings_features.test.tpr` — 13/13 (cookie builder, signed-cookie
+  round-trip + tamper, sessions, CORS, rate-limit buckets, path params,
+  JWT verify + middleware, html/render, `_headers` preservation, OpenAPI
+  extensions, gzip).
+- `examples/wings_features_api.tpr` — live showcase of the whole round
+  (compile-only in CI; every endpoint verified with curl: sessions
+  visits 1→2, tamper → 401, 100×200 → 429 + per-IP isolation, ETag → 304,
+  gzip byte-exact).
+
 ## [v3.5.0]
 
 Backwards-compatible feature on top of v3.4.0. No breaking changes.

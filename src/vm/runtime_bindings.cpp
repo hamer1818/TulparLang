@@ -6,6 +6,7 @@
 #include "../common/platform_sockets.h"
 #include "../common/platform_threads.h"
 #include "../pkg/sha256.hpp"
+#include "../../runtime/tulpar_gzip.h"
 #include "vm.hpp"
 
 // Windows MSVC compatibility: ssize_t is not standard on Windows
@@ -3065,6 +3066,33 @@ VMValue aot_sha256_ptr(VMValue *vp) {
   if (!vp)
     return VM_OBJ((Obj *)aot_allocate_string("", 0));
   return aot_sha256(*vp);
+}
+
+// gzip_compress(s: str) -> str — gzip (RFC 1952) stream of the input bytes,
+// via the in-tree fixed-Huffman DEFLATE in runtime/tulpar_gzip.cpp (no zlib
+// dependency, so AOT user binaries stay self-contained). Binary-safe both
+// ways: the input is read length-tracked and the compressed bytes (which
+// contain NULs) come back as a length-tracked runtime string. Empty result
+// on allocation failure or non-string input. Primary consumer: wings
+// response compression (Content-Encoding: gzip).
+VMValue aot_gzip_compress(VMValue v) {
+  if (!IS_STRING(v))
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  ObjString *s = AS_STRING(v);
+  unsigned char *out = nullptr;
+  size_t out_len = 0;
+  if (tulpar_gzip_compress((const unsigned char *)s->chars, (size_t)s->length,
+                           &out, &out_len) != 0)
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  VMValue r = VM_OBJ((Obj *)aot_allocate_string((const char *)out, (int)out_len));
+  free(out);
+  return r;
+}
+
+VMValue aot_gzip_compress_ptr(VMValue *vp) {
+  if (!vp)
+    return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  return aot_gzip_compress(*vp);
 }
 
 // ----- Password KDF: PBKDF2-HMAC-SHA256 -------------------------------------

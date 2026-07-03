@@ -30,6 +30,20 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   WASM. `libtulpar_runtime.a` AOT'a static link.
 - **Stdlib gömülü:** wings, router, http_utils, http_client, async,
   middleware, socket, tulpar_api, orm, test. SQLite vendored.
+- **Wings tamamlık turu (v3.6.0, 2026-07-02):** HANDOFF §2'deki tüm boşluklar
+  kapandı — çerez SET tarafı (`set_cookie`/`delete_cookie`), **imzalı çerezler**
+  (`set_signed_cookie`/`get_signed_cookie`, HMAC name-bound), **sunucu-taraflı
+  session** (`session_start/attach/get/set/destroy`), **yapılandırılabilir CORS**
+  (`cors(origin, {credentials,…})` — credentialed origin artık mümkün),
+  **rate-limit middleware** (`rate_limit(max, window)` → 429+Retry-After),
+  **JWT guard** (`jwt_guard(secret)` + `jwt_public`, wings_jwt formatıyla
+  birebir interop, claims → `req["jwt"]`), **html()/render()** template,
+  **tipli path param** (`param`/`param_int`/`param_bool`), **ETag→304**
+  (`cached_get` üstünde `If-None-Match`), **gzip yanıt sıkıştırma**
+  (`enable_gzip` + yeni `gzip_compress` builtin'i — ağaç-içi DEFLATE,
+  zlib'siz) ve **OpenAPI tamamlama** (response_model → 200 şeması,
+  bearerAuth security scheme). `tests/wings_features.test.tpr` 13/13;
+  `examples/wings_features_api.tpr` canlı curl ile uçtan uca doğrulandı.
 - **Wings ergonomisi (FastAPI seviyesi):** fonksiyon-ref handler'lar
   (`get("/users", list_users)`, typo=derleme hatası), `req` parametresi
   (`req.params.id`, `req.json`), response helper'ları (`ok/created/not_found/…`),
@@ -192,6 +206,73 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   gerektirir (ayrı plan).
 
 ### HTTP runtime (Wings/Router native)
+
+- ✅ **Wings tamamlık turu (v3.6.0, 2026-07-02)** — HANDOFF §2'nin P1/P2/P3
+  listesi tek turda kapatıldı (WS-recv Windows ABI maddesi hariç; o Windows
+  test erişimi bekliyor). Hepsi `lib/wings.tpr` (saf Tulpar) + bir C builtin:
+  - ✅ **Çerez SET + imzalı çerez:** `_wings_cookie_str` builder
+    (Path=/ + SameSite=Lax + HttpOnly varsayılan; path/domain/max_age/
+    same_site/secure/http_only opsiyonları), `set_cookie`/`delete_cookie`,
+    `set_signed_cookie`/`get_signed_cookie` — değer `hmac_sha256(secret,
+    name+"."+value)` MAC taşır (name-bound: bir çerezin değeri diğerine
+    takılamaz); MAC karşılaştırması çifte-HMAC (timing-safe). Yanıt başlığı
+    dict olduğundan yanıt başına TEK Set-Cookie (son çağrı kazanır) —
+    belgelendi.
+  - ✅ **Sunucu-taraflı session:** `session_start(req, secret)` (geçerli
+    imzalı `tsid` çerezi varsa onu, yoksa `secure_token(32)` üretir),
+    `session_attach(res, sid, secret)`, `session_set/get/destroy`.
+    Depo in-memory `_wings_sessions` global'i (auto-persist yazımları
+    kalıcılaştırır); süreç ömürlü — kalıcı veri DB'ye.
+  - ✅ **Yapılandırılabilir CORS:** `cors(origin, opts)` startup'ta
+    `_default_headers`'ı değiştirir (write-once → tüm listen modlarında
+    thread-safe, otomatik OPTIONS/preflight 204'ü de kapsar). Spesifik
+    origin'de `Vary: Origin`; `credentials:true` →
+    `Access-Control-Allow-Credentials` (registry'nin proxy workaround'ına
+    neden olan boşluk buydu). methods/headers/expose/max_age opsiyonları.
+  - ✅ **Rate-limit middleware:** `rate_limit(max, window_s)` — fixed-window,
+    `use()` zinciri üstünden (3 serve modunu da kapsar). Anahtar:
+    X-Forwarded-For/X-Real-IP ilk hop, yoksa global bucket. Pencere
+    devrilince tablo sıfırlanır (bellek sınırlı). Aşımda 429 +
+    `Retry-After`. Canlı: aynı IP'den tam 100×200 → 5×429, farklı IP 200.
+  - ✅ **JWT guard:** `jwt_guard(secret)` — `wings_jwt` paketiyle birebir
+    wire-interop (HS256, base64url segmentler, imza=base64url(hex MAC));
+    doğrulama `_wings_jwt_verify` (çifte-HMAC imza karşılaştırma + exp).
+    Geçerli token → `req["jwt"]` claims; yoksa/bozuk/expired → 401.
+    `jwt_public(path)` muafiyeti: tam eşleşme veya sondaki-`*` prefix
+    (`/items/*`); healthz/metrics/docs/openapi.json varsayılan muaf.
+  - ✅ **html()/render():** `html(body)` text/html `_raw` yanıtı;
+    `render(tpl, vars)` `{{key}}` ikamesi (t-string tek-ifade, render
+    "şablon+dict" durumunu kapatır).
+  - ✅ **Tipli path param:** `param`/`param_int`/`param_bool` — query
+    helper'larının `req["params"]` aynası.
+  - ✅ **ETag → 304:** `cached_get` cache doldururken gövdeden güçlü ETag
+    üretir (`"sha256[:16]"`), header'a enjekte edip wire'a pinler
+    (`_wings_cache_etags` paralel dizisi); cache hit'te `If-None-Match`
+    eşleşirse boş 304 döner. Canlı: doğru etag → 304, yanlış → 200.
+  - ✅ **gzip yanıt sıkıştırma:** yeni runtime builtin **`gzip_compress(s)`**
+    — `runtime/tulpar_gzip.cpp` **ağaç-içi DEFLATE** (sabit Huffman +
+    greedy LZ77 32K pencere + CRC-32, RFC 1951/1952). Bilinçli karar:
+    zlib/miniz bağımlılığı YOK — AOT kullanıcı binary'leri self-contained
+    kalır (miniz vendorlaması güvenlik sınıflandırıcısına takıldı; in-tree
+    yazım hem o endişeyi hem -lz link zorunluluğunu çözdü). 5 noktada
+    bağlandı (runtime `aot_gzip_compress`+`_ptr`, llvm hpp/cpp, typeinfer,
+    lsp). Wings tarafı `enable_gzip(min_bytes)`: Accept-Encoding: gzip +
+    gövde ≥ eşik → `Content-Encoding: gzip` + `Vary`; `cached_get` hariç
+    (pinli wire tüm istemcilere ortak); büyümeyen çıktıda düz gönderim.
+    **Doğrulama:** Python `gzip.decompress` + `curl --compressed` (CRC
+    denetimli) ile **byte-exact** — UTF-8 metin (16.4 KB → 274 B, %1.7),
+    tam bayt-aralığı + rastgele + run'lı 19 KB ikili girdi.
+  - ✅ **OpenAPI tamamlama:** `response_model` şeması artık 200 yanıt
+    gövdesini belgeler; `jwt_guard`/`docs_security("bearer")` →
+    `components.securitySchemes.bearerAuth` + global `security` (Swagger
+    Authorize butonu).
+  - ✅ **Yan düzeltme:** `_wings_filter_obj` artık `_headers`'ı koruyor —
+    önceden response_model, Set-Cookie/Location başlıklarını düşürüyordu.
+  - **Testler:** `tests/wings_features.test.tpr` **13/13**;
+    `examples/wings_features_api.tpr` (COMPILE_ONLY_TESTS + $compileOnly'ye
+    eklendi) canlı curl ile uçtan uca: session visits 1→2, tamper→401,
+    JWT 401/200, ETag 304, gzip byte-exact, rate-limit 429. Regresyon:
+    tüm örnekler + 33 focused suite yeşil. → [[Wings]]
 
 - **Global dict key-persist + temiz cevap gövdesi + 3 örnek uygulama + Wings
   Öğreticisi (2026-06-23):**
@@ -1118,6 +1199,29 @@ girildiğinde ne yapacağımı bilelim.
   (slot 2 payload her iki tag için de aynı int olduğundan kayıpsız).
   Not: ilk hipotez (i1→i64 zext) yanlıştı — `INFERRED_BOOL` değerleri
   `codegen_typed_expr`'de zaten i64; sorun store değil type-tag idi.
+
+### Stdlib DX (Wings/ORM)
+
+- 🟡 **Wings/ORM yazım kolaylığı turu — tasarım hazır, uygulama bekliyor.**
+  Detaylı çalışma: [WINGS_DX.md](WINGS_DX.md) (2026-07-03). Özet: (1) **ORM v2**
+  — model handle + UFCS (`Note.find(1)`, `Note.create({...})`), parametreli
+  SQL'e geçiş (bugünkü `lib/orm.tpr` hâlâ quote-escape kullanıyor ve
+  `{"done": 0}` gibi 0/boş değerleri **sessizce düşürüyor** — gerçek bug),
+  `body_schema` ile ortak tip kısayolları (`"pk"`, `"str!"`, `"bool"`), satır
+  cast'i; eski `orm_*` isimleri sarmalayıcı kalır. (2) **`resource("/notes",
+  Note)`** — 5 route + 422 şema + /docs otomatik: kalıcı CRUD API 175 satırdan
+  **7 satıra** iner (motto vitrini). (3) **Adlandırma standardı** — public'te
+  `wings_` öneki kalkar (`cookies`, `ws_send`, `sse_event`…), `enable_gzip`→
+  `gzip`, `del`→`delete` alias, `body_schema`/`response_model`→`accepts`/
+  `returns`, sunucu girişi tekleşir: `serve(port, workers)`; hepsi kırılmasız
+  (eski adlar alias). (4) **Keşfedilebilirlik** — ORM bugün LSP'de hiç kayıtlı
+  değil; yeni adlar + ORM sembolleri `src/lsp/builtins.cpp`'ye, örnekler
+  modernize (`wings_notes_db.tpr` yorumları "parametreli sorgu YOK" diyor —
+  v3.3.0'dan beri yanlış), UFCS-first cheatsheet. Derleyici değişikliği
+  gerektirmiyor (UFCS/funcref/param-SQL/default-arg zaten testli).
+  - **Sıradaki adım:** WINGS_DX.md §6 Faz 1 — `lib/orm.tpr` v2 yeniden yazımı
+    + `tests/orm.test.tpr`; öncesinde §6'daki 5 doğrulama maddesi (çift import
+    dedup, `delete` fn adı smoke, lambda-handler, model-handle auto-persist).
 
 ### Tooling
 

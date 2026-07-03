@@ -1141,6 +1141,10 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // secure_token(int)->str (1 ptr arg, like sha256) — CSPRNG base62 token.
   backend->func_aot_secure_token =
       LLVMAddFunction(backend->module, "aot_secure_token_ptr", read_type);
+  // gzip_compress(str)->str (1 ptr arg, like sha256) — in-tree gzip stream,
+  // binary-safe length-tracked result. Wings response compression.
+  backend->func_aot_gzip_compress =
+      LLVMAddFunction(backend->module, "aot_gzip_compress_ptr", read_type);
 
   // Exception Handling Functions
   // aot_try_push() -> jmp_buf* (ptr)
@@ -4264,6 +4268,16 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           backend->builder, arg_ptr, backend->ptr_type, "sha256_arg_void");
       LLVMValueRef args[] = {arg_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_sha256, args, 1, "sha256_res");
+    }
+    if (strcmp(node->name, "gzip_compress") == 0) {
+      LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "gzip_arg_ptr");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "gzip_arg_void");
+      LLVMValueRef args[] = {arg_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_gzip_compress, args, 1, "gzip_res");
     }
 
     if (strcmp(node->name, "password_hash") == 0 && node->argument_count >= 1) {

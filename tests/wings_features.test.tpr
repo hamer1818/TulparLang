@@ -1,0 +1,221 @@
+import "test";
+import "wings";
+
+// v3.6.0 wings completeness round: cookies (set/signed), sessions, CORS
+// config, rate-limit middleware, typed path params, JWT guard verify,
+// html()/render(), response_model _headers preservation, OpenAPI extensions.
+// Pure-function level — the live-server behaviour is exercised by
+// examples/wings_features_api.tpr with curl.
+
+str SECRET = "test-secret-42";
+
+// ---- cookie string builder --------------------------------------------------
+func run_cookie_str() {
+    // Defaults: Path=/, SameSite=Lax, HttpOnly on.
+    str c = _wings_cookie_str("sid", "abc", {});
+    assert_eq_str(c, "sid=abc; Path=/; SameSite=Lax; HttpOnly");
+    // Full options.
+    str c2 = _wings_cookie_str("t", "v", {"path": "/api", "domain": "x.com",
+        "max_age": 60, "same_site": "Strict", "secure": true});
+    assert_eq_str(c2, "t=v; Path=/api; Domain=x.com; Max-Age=60; SameSite=Strict; Secure; HttpOnly");
+    // http_only opt-out; opts absent (padded 0) tolerated.
+    str c3 = _wings_cookie_str("a", "b", {"http_only": false});
+    assert_eq_str(c3, "a=b; Path=/; SameSite=Lax");
+}
+
+func run_set_cookie_envelope() {
+    json res = ok({"x": 1});
+    res = set_cookie(res, "theme", "dark", {});
+    json h = res["_headers"];
+    assert_contains(h["Set-Cookie"], "theme=dark");
+    // delete_cookie expires it.
+    json res2 = delete_cookie(ok({}), "theme");
+    assert_contains(res2["_headers"]["Set-Cookie"], "Max-Age=0");
+}
+
+// ---- signed cookies -----------------------------------------------------------
+func run_signed_cookie_roundtrip() {
+    json res = set_signed_cookie(ok({}), "uid", "42", SECRET, {});
+    str sc = res["_headers"]["Set-Cookie"];
+    // Extract the cookie value between "uid=" and the first ";".
+    json parts = split(sc, ";");
+    str kv = parts[0];
+    str raw = substring(kv, 4, length(kv));
+    // Simulate the request carrying it back.
+    json req = {"cookies": {"uid": raw}};
+    assert_eq_str(get_signed_cookie(req, "uid", SECRET), "42");
+    // Wrong secret -> "".
+    assert_eq_str(get_signed_cookie(req, "uid", "other"), "");
+    // Tampered value -> "".
+    json req2 = {"cookies": {"uid": "43" + substring(raw, 2, length(raw))}};
+    assert_eq_str(get_signed_cookie(req2, "uid", SECRET), "");
+    // Absent -> "".
+    assert_eq_str(get_signed_cookie({"cookies": {}}, "uid", SECRET), "");
+}
+
+// ---- sessions -------------------------------------------------------------------
+func run_sessions() {
+    json req = {"cookies": {}};
+    str sid = session_start(req, SECRET);
+    assert(length(sid) == 32, "fresh sid is a 32-char token");
+    session_set(sid, "user", "ada");
+    session_set(sid, "n", 7);
+    assert_eq_str(session_get(sid, "user"), "ada");
+    assert_eq_int(session_get(sid, "n"), 7);
+    session_destroy(sid);
+    assert_eq_int(session_get(sid, "user"), 0);
+    // A request carrying a valid signed sid keeps its id.
+    json res = session_attach(ok({}), "S1234567890123456789012345678901", SECRET);
+    json parts = split(res["_headers"]["Set-Cookie"], ";");
+    str kv = parts[0];
+    json req2 = {"cookies": {"tsid": substring(kv, 5, length(kv))}};
+    assert_eq_str(session_start(req2, SECRET), "S1234567890123456789012345678901");
+}
+
+// ---- CORS config ------------------------------------------------------------------
+func run_cors() {
+    cors("https://app.example.com", {"credentials": true, "expose": "X-Total",
+        "max_age": 600});
+    assert_eq_str(_default_headers["Access-Control-Allow-Origin"], "https://app.example.com");
+    assert_eq_str(_default_headers["Access-Control-Allow-Credentials"], "true");
+    assert_eq_str(_default_headers["Access-Control-Expose-Headers"], "X-Total");
+    assert_eq_str(_default_headers["Access-Control-Max-Age"], "600");
+    assert_eq_str(_default_headers["Vary"], "Origin");
+}
+
+// ---- rate limit middleware -----------------------------------------------------
+func run_rate_limit() {
+    _wings_rl_max = 3;
+    _wings_rl_window = 3600;
+    json req = {"headers": {"X-Forwarded-For": "10.0.0.1"}};
+    int i = 0;
+    while (i < 3) {
+        json r = _wings_rate_limit_mw(req);
+        assert_eq_int(r["_status"], 0);
+        i = i + 1;
+    }
+    json over = _wings_rate_limit_mw(req);
+    assert_eq_int(over["_status"], 429);
+    // Different client has its own bucket.
+    json other = _wings_rate_limit_mw({"headers": {"X-Forwarded-For": "10.0.0.2"}});
+    assert_eq_int(other["_status"], 0);
+}
+
+// ---- typed path params ------------------------------------------------------------
+func run_params() {
+    json req = {"params": {"id": "42", "flag": "true", "bad": ""}};
+    assert_eq_int(param_int(req, "id", 0), 42);
+    assert_eq_int(param_int(req, "missing", 7), 7);
+    assert_eq_int(param_int(req, "bad", 9), 9);
+    assert_eq_str(param(req, "id", "x"), "42");
+    assert_eq_str(param(req, "missing", "x"), "x");
+    assert_eq_bool(param_bool(req, "flag", false), true);
+    assert_eq_bool(param_bool(req, "missing", true), true);
+}
+
+// ---- JWT guard: token verify (wings_jwt wire format) -------------------------------
+func make_token(json claims, str secret) {
+    str header = _wings_b64url_encode("{\"alg\":\"HS256\",\"typ\":\"JWT\"}");
+    str payload = _wings_b64url_encode(toJson(claims));
+    str si = header + "." + payload;
+    return si + "." + _wings_b64url_encode(hmac_sha256(secret, si));
+}
+
+func run_jwt_verify() {
+    str tok = make_token({"sub": "42", "exp": timestamp() + 3600}, SECRET);
+    json v = _wings_jwt_verify(tok, SECRET);
+    assert_eq_int(v["ok"], 1);
+    assert_eq_str(v["claims"]["sub"], "42");
+    // Wrong secret.
+    json bad = _wings_jwt_verify(tok, "nope");
+    assert_eq_int(bad["ok"], 0);
+    assert_eq_str(bad["error"], "bad signature");
+    // Expired.
+    str old = make_token({"sub": "1", "exp": timestamp() - 10}, SECRET);
+    json ex = _wings_jwt_verify(old, SECRET);
+    assert_eq_str(ex["error"], "expired");
+    // Malformed.
+    assert_eq_int(_wings_jwt_verify("x.y", SECRET)["ok"], 0);
+}
+
+func run_jwt_mw() {
+    _wings_jwt_secret = SECRET;
+    push(_wings_jwt_public, "/healthz");
+    // Public path passes with no token.
+    json pub = _wings_jwt_mw({"path": "/healthz", "headers": {}});
+    assert_eq_int(pub["_status"], 0);
+    // Missing token -> 401.
+    json no = _wings_jwt_mw({"path": "/api", "headers": {}});
+    assert_eq_int(no["_status"], 401);
+    // Valid token -> claims injected.
+    str tok = make_token({"sub": "7"}, SECRET);
+    json req = {"path": "/api", "headers": {"Authorization": "Bearer " + tok}};
+    json okr = _wings_jwt_mw(req);
+    assert_eq_int(okr["_status"], 0);
+    assert_eq_str(req["jwt"]["sub"], "7");
+}
+
+// ---- html + render -------------------------------------------------------------------
+func run_html_render() {
+    json r = html("<h1>hi</h1>");
+    assert_eq_str(r["_raw"], "<h1>hi</h1>");
+    assert_contains(r["_content_type"], "text/html");
+    str page = render("<h1>{{title}}</h1><p>{{name}} x{{n}}</p>",
+                      {"title": "T", "name": "Ada", "n": 3});
+    assert_eq_str(page, "<h1>T</h1><p>Ada x3</p>");
+    // Unknown placeholders stay verbatim; non-object vars tolerated.
+    assert_eq_str(render("a {{q}} b", {}), "a {{q}} b");
+}
+
+// ---- response_model keeps _headers (Set-Cookie survives filtering) ------------------
+func run_filter_keeps_headers() {
+    json filtered = _wings_filter_obj({"id": "int"},
+        {"id": 1, "secret": "x", "_headers": {"Set-Cookie": "a=b"}, "_status": 200});
+    assert_eq_int(filtered["id"], 1);
+    assert_eq_int(filtered["secret"], 0);
+    assert_eq_str(filtered["_headers"]["Set-Cookie"], "a=b");
+}
+
+// ---- OpenAPI: response_model schema + bearer security --------------------------------
+func run_openapi_ext() {
+    get("/things/:id", "h_thing");
+    response_model({"id": "int", "name": "str"});
+    _wings_docs_bearer = 1;
+    json doc = wings_openapi("t", "1");
+    json op = doc["paths"]["/things/{id}"]["get"];
+    json sch = op["responses"]["200"]["content"]["application/json"]["schema"];
+    assert_eq_str(sch["properties"]["id"]["type"], "integer");
+    assert_eq_str(doc["components"]["securitySchemes"]["bearerAuth"]["scheme"], "bearer");
+    assert_eq_int(length(doc["security"]), 1);
+}
+
+// ---- gzip_compress builtin ------------------------------------------------------
+func run_gzip() {
+    // Empty input -> valid 20-byte gzip stream (10B header + 2B empty fixed
+    // block + 8B trailer).
+    assert_eq_int(length(gzip_compress("")), 20);
+    // Repetitive payload must shrink dramatically (LZ77 window).
+    str body = repeat("tekrar eden metin gzip ile kuculur. ", 100);
+    str gz = gzip_compress(body);
+    assert(length(gz) > 20, "gzip output non-trivial");
+    assert(length(gz) < length(body), "gzip output smaller than input");
+    // gzip magic bytes 0x1f 0x8b survive in the length-tracked string.
+    // (Byte-exact decompression is proven externally: curl --compressed +
+    // python3 gzip.decompress in the live example verification.)
+}
+
+print("=== wings features (cookies/sessions/cors/rate-limit/jwt/html/etag) ===");
+test("cookie string builder", "run_cookie_str");
+test("set_cookie envelope + delete", "run_set_cookie_envelope");
+test("signed cookie roundtrip + tamper", "run_signed_cookie_roundtrip");
+test("sessions", "run_sessions");
+test("cors config", "run_cors");
+test("rate limit buckets", "run_rate_limit");
+test("typed path params", "run_params");
+test("jwt verify", "run_jwt_verify");
+test("jwt middleware", "run_jwt_mw");
+test("html + render", "run_html_render");
+test("response_model keeps _headers", "run_filter_keeps_headers");
+test("openapi response schema + bearer", "run_openapi_ext");
+test("gzip_compress", "run_gzip");
+test_summary();

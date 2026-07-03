@@ -57,6 +57,9 @@ int _wings_started_at = 0;
 // with docs_info(title, version) before serve(); defaults below otherwise.
 str _wings_title = "Tulpar Wings API";
 str _wings_version = "1.0.0";
+// When 1, /openapi.json advertises a bearerAuth (JWT) security scheme. Set
+// automatically by jwt_guard(), or manually via docs_security("bearer").
+int _wings_docs_bearer = 0;
 int _wings_requests_total = 0;
 int _wings_requests_2xx = 0;
 int _wings_requests_4xx = 0;
@@ -283,6 +286,12 @@ func _wings_bind_failed(int port) {
 // per-request cache lookup cost itself. Array index access is O(1).
 array _wings_cache_wires = [];
 
+// Parallel to `_wings_cache_wires`: the strong ETag (quoted, sha256-derived)
+// of the cached body for `cached_get` routes. Written once at cache
+// population; read on every cache hit to answer `If-None-Match` with a 304.
+// Same parallel-index invariant: every registration pushes a "" placeholder.
+array _wings_cache_etags = [];
+
 // ----- Route registration --------------------------------------------------
 // Every registration pushes a `""` placeholder to `_wings_cache_wires`
 // at the same time so the parallel-index invariant holds — even for
@@ -290,21 +299,25 @@ array _wings_cache_wires = [];
 func get(str path, str handler) {
     push(_routes, {"method": "GET", "path": _route_prefix + path, "handler": handler});
     push(_wings_cache_wires, "");
+    push(_wings_cache_etags, "");
 }
 
 func post(str path, str handler) {
     push(_routes, {"method": "POST", "path": _route_prefix + path, "handler": handler});
     push(_wings_cache_wires, "");
+    push(_wings_cache_etags, "");
 }
 
 func put(str path, str handler) {
     push(_routes, {"method": "PUT", "path": _route_prefix + path, "handler": handler});
     push(_wings_cache_wires, "");
+    push(_wings_cache_etags, "");
 }
 
 func del(str path, str handler) {
     push(_routes, {"method": "DELETE", "path": _route_prefix + path, "handler": handler});
     push(_wings_cache_wires, "");
+    push(_wings_cache_etags, "");
 }
 
 // PATCH — partial update. The dispatcher matches on the method string, so this
@@ -312,6 +325,7 @@ func del(str path, str handler) {
 func patch(str path, str handler) {
     push(_routes, {"method": "PATCH", "path": _route_prefix + path, "handler": handler});
     push(_wings_cache_wires, "");
+    push(_wings_cache_etags, "");
 }
 
 // HEAD — like GET but the framework's response writer omits the body for HEAD
@@ -319,12 +333,14 @@ func patch(str path, str handler) {
 func head(str path, str handler) {
     push(_routes, {"method": "HEAD", "path": _route_prefix + path, "handler": handler});
     push(_wings_cache_wires, "");
+    push(_wings_cache_etags, "");
 }
 
 // OPTIONS — preflight / capability probe (commonly paired with CORS headers).
 func options(str path, str handler) {
     push(_routes, {"method": "OPTIONS", "path": _route_prefix + path, "handler": handler});
     push(_wings_cache_wires, "");
+    push(_wings_cache_etags, "");
 }
 
 // Register a global middleware by function name. Runs (in registration order)
@@ -409,6 +425,7 @@ func dep(str name) {
 func cached_get(str path, str handler) {
     push(_routes, {"method": "GET", "path": _route_prefix + path, "handler": handler, "cached": 1});
     push(_wings_cache_wires, "");
+    push(_wings_cache_etags, "");
 }
 
 // ----- Request validation --------------------------------------------------
@@ -477,6 +494,7 @@ func _wings_filter_obj(json schema, json obj) {
     if (_wings_has_key(obj, "_raw"))          { out["_raw"] = obj["_raw"]; }
     if (_wings_has_key(obj, "_content_type")) { out["_content_type"] = obj["_content_type"]; }
     if (_wings_has_key(obj, "_stream"))       { out["_stream"] = obj["_stream"]; }
+    if (_wings_has_key(obj, "_headers"))      { out["_headers"] = obj["_headers"]; }
     if (_wings_has_key(obj, "_headers"))      { out["_headers"] = obj["_headers"]; }
     for (sk in keys(schema)) {
         str field = sk;
@@ -547,6 +565,480 @@ func redirect_status(str url, int code) { return {"_status": code, "_raw": "", "
 // Attach arbitrary response headers (Set-Cookie, Cache-Control, ...) to any
 // result dict. Returns the same dict for chaining.
 func with_headers(json data, json headers) { data["_headers"] = headers; return data; }
+
+// ----- Cookies (SET side) ---------------------------------------------------
+// `wings_cookies(req)` / `req["cookies"]` cover the READ side; these build the
+// `Set-Cookie` response header. One cookie per response (response headers are
+// a dict — one value per header name); the LAST set_cookie() call wins.
+//
+//   func login(req) {
+//       json res = ok({"ok": true});
+//       return set_cookie(res, "theme", "dark", {"max_age": 86400});
+//   }
+//
+// opts (json, all optional — pass {} or omit entirely):
+//   path (default "/"), domain, max_age (seconds), same_site (default "Lax"),
+//   secure (bool, default off — turn ON behind HTTPS), http_only (default ON,
+//   pass false to allow document.cookie access).
+func _wings_cookie_str(str name, str val, json opts) {
+    str c = name + "=" + val;
+    json o = opts;
+    if (typeof(o) != "object") {
+        o = {};
+    }
+    if (_wings_has_key(o, "path")) {
+        c = c + "; Path=" + o["path"];
+    } else {
+        c = c + "; Path=/";
+    }
+    if (_wings_has_key(o, "domain")) {
+        c = c + "; Domain=" + o["domain"];
+    }
+    if (_wings_has_key(o, "max_age")) {
+        c = c + "; Max-Age=" + toString(o["max_age"]);
+    }
+    if (_wings_has_key(o, "same_site")) {
+        c = c + "; SameSite=" + o["same_site"];
+    } else {
+        c = c + "; SameSite=Lax";
+    }
+    if (_wings_has_key(o, "secure")) {
+        if (o["secure"]) {
+            c = c + "; Secure";
+        }
+    }
+    bool ho = true;
+    if (_wings_has_key(o, "http_only")) {
+        if (o["http_only"] == false) {
+            ho = false;
+        }
+    }
+    if (ho) {
+        c = c + "; HttpOnly";
+    }
+    return c;
+}
+
+func set_cookie(json res, str name, str val, json opts) {
+    json h = res["_headers"];
+    if (typeof(h) != "object") {
+        h = {};
+    }
+    h["Set-Cookie"] = _wings_cookie_str(name, val, opts);
+    res["_headers"] = h;
+    return res;
+}
+
+// Expire a cookie on the client (Max-Age=0).
+func delete_cookie(json res, str name) {
+    return set_cookie(res, name, "", {"max_age": 0});
+}
+
+// ----- Signed cookies (tamper-proof via hmac_sha256) ------------------------
+// Wire format: `<value>.<64-hex-hmac>` where the MAC covers `<name>.<value>`
+// (binding the name prevents swapping one cookie's value into another).
+// The value itself must be cookie-safe (tokens/ids — no `;`, no spaces).
+//
+//   return set_signed_cookie(res, "uid", "42", SECRET, {});
+//   str uid = get_signed_cookie(req, "uid", SECRET);   // "" if absent/tampered
+func set_signed_cookie(json res, str name, str val, str secret, json opts) {
+    str mac = hmac_sha256(secret, name + "." + val);
+    return set_cookie(res, name, val + "." + mac, opts);
+}
+
+func get_signed_cookie(json req, str name, str secret) {
+    json c = req["cookies"];
+    if (typeof(c) != "object") {
+        c = wings_cookies(req);
+    }
+    if (_wings_has_key(c, name) == false) {
+        return "";
+    }
+    str raw = c[name];
+    int n = length(raw);
+    // Shortest valid: 1-char value + "." + 64 hex chars.
+    if (n < 66) {
+        return "";
+    }
+    str val = substring(raw, 0, n - 65);
+    str dot = substring(raw, n - 65, n - 64);
+    str mac = substring(raw, n - 64, n);
+    if (dot != ".") {
+        return "";
+    }
+    str expect = hmac_sha256(secret, name + "." + val);
+    // Compare MACs through a second HMAC so the string compare's timing
+    // reveals nothing about the expected digest.
+    if (hmac_sha256(secret, mac) != hmac_sha256(secret, expect)) {
+        return "";
+    }
+    return val;
+}
+
+// ----- Server-side sessions --------------------------------------------------
+// Minimal in-memory session store for server-rendered apps: the client holds
+// only a signed random session id (cookie "tsid"); the data lives in the
+// `_wings_sessions` global (auto-persist keeps writes durable across requests).
+// Sessions vanish at process restart — put anything durable in a DB.
+//
+//   func page(req) {
+//       str sid = session_start(req, SECRET);          // existing or fresh id
+//       int seen = session_get(sid, "seen");
+//       session_set(sid, "seen", seen + 1);
+//       json res = ok({"visits": seen + 1});
+//       return session_attach(res, sid, SECRET);       // (re)issue the cookie
+//   }
+json _wings_sessions = {};
+
+func session_start(json req, str secret) {
+    str sid = get_signed_cookie(req, "tsid", secret);
+    if (length(sid) == 0) {
+        sid = secure_token(32);
+    }
+    return sid;
+}
+
+// Attach the session cookie to a response (call on every response that may
+// have created a fresh session id).
+func session_attach(json res, str sid, str secret) {
+    return set_signed_cookie(res, "tsid", sid, secret, {"path": "/", "http_only": true});
+}
+
+func session_set(str sid, str key, json val) {
+    json s = _wings_sessions[sid];
+    if (typeof(s) != "object") {
+        s = {};
+    }
+    s[key] = val;
+    _wings_sessions[sid] = s;
+}
+
+func session_get(str sid, str key) {
+    json s = _wings_sessions[sid];
+    if (typeof(s) != "object") {
+        return 0;
+    }
+    return s[key];
+}
+
+func session_destroy(str sid) {
+    _wings_sessions[sid] = 0;
+}
+
+// ----- CORS configuration ----------------------------------------------------
+// Replace the default wildcard CORS headers. Call once, before serve().
+// `origin` is a single origin ("https://app.example.com") or "*".
+// Credentialed cross-origin (cookies / Authorization across sites) REQUIRES a
+// specific origin — browsers reject `*` + credentials.
+//
+//   cors("https://app.example.com", {"credentials": true,
+//        "methods": "GET, POST, PUT, DELETE, OPTIONS",
+//        "headers": "Content-Type, Authorization",
+//        "expose": "X-Total-Count", "max_age": 600});
+//
+// Startup-only mutation of `_default_headers` (write-once before the serve
+// loop), so it is thread-safe under every listen mode and covers the automatic
+// OPTIONS/preflight 204 response too.
+func cors(str origin, json opts) {
+    _default_headers["Access-Control-Allow-Origin"] = origin;
+    if (origin != "*") {
+        // Caches must key the response on the requesting origin.
+        _default_headers["Vary"] = "Origin";
+    }
+    json o = opts;
+    if (typeof(o) != "object") {
+        o = {};
+    }
+    if (_wings_has_key(o, "methods")) {
+        _default_headers["Access-Control-Allow-Methods"] = o["methods"];
+    }
+    if (_wings_has_key(o, "headers")) {
+        _default_headers["Access-Control-Allow-Headers"] = o["headers"];
+    }
+    if (_wings_has_key(o, "expose")) {
+        _default_headers["Access-Control-Expose-Headers"] = o["expose"];
+    }
+    if (_wings_has_key(o, "max_age")) {
+        _default_headers["Access-Control-Max-Age"] = toString(o["max_age"]);
+    }
+    if (_wings_has_key(o, "credentials")) {
+        if (o["credentials"]) {
+            _default_headers["Access-Control-Allow-Credentials"] = "true";
+        }
+    }
+}
+
+// ----- Rate limiting ----------------------------------------------------------
+// Fixed-window limiter as a use()-able middleware. Keyed on the client IP from
+// X-Forwarded-For / X-Real-IP (first hop) when present, else one global bucket
+// (fine behind a proxy; direct exposure without those headers = global limit).
+// The whole table resets when the window rolls over, so memory stays bounded.
+//
+//   rate_limit(100, 60);   // max 100 requests per 60s per client
+json _wings_rl_hits = {};
+int _wings_rl_max = 60;
+int _wings_rl_window = 60;
+int _wings_rl_epoch = 0;
+
+func rate_limit(int max_req, int window_s) {
+    if (max_req > 0) {
+        _wings_rl_max = max_req;
+    }
+    if (window_s > 0) {
+        _wings_rl_window = window_s;
+    }
+    use("_wings_rate_limit_mw");
+}
+
+func _wings_rl_key(json req) {
+    json h = req["headers"];
+    str ip = h["X-Forwarded-For"];
+    if (length(ip) == 0) {
+        ip = h["x-forwarded-for"];
+    }
+    if (length(ip) == 0) {
+        ip = h["X-Real-IP"];
+    }
+    if (length(ip) == 0) {
+        ip = h["x-real-ip"];
+    }
+    if (length(ip) == 0) {
+        return "global";
+    }
+    json parts = split(ip, ",");
+    return trim(parts[0]);
+}
+
+func _wings_rate_limit_mw(req) {
+    int now = timestamp();
+    int epoch = toInt(now / _wings_rl_window);
+    if (epoch != _wings_rl_epoch) {
+        _wings_rl_epoch = epoch;
+        _wings_rl_hits = {};
+    }
+    str k = _wings_rl_key(req);
+    int c = _wings_rl_hits[k];
+    c = c + 1;
+    _wings_rl_hits[k] = c;
+    if (c > _wings_rl_max) {
+        return {"error": "rate limit exceeded", "_status": 429,
+                "_headers": {"Retry-After": toString(_wings_rl_window)}};
+    }
+    return {};
+}
+
+// ----- Response compression (gzip) --------------------------------------------
+// Opt-in: enable_gzip(min_bytes) turns on transparent gzip for responses whose
+// serialized body is at least `min_bytes` (default 1024) when the client sent
+// `Accept-Encoding: gzip`. Uses the in-tree `gzip_compress` builtin — no zlib
+// dependency. Compressed responses carry `Content-Encoding: gzip` +
+// `Vary: Accept-Encoding`; if compression doesn't shrink the body (already-
+// compressed data) the plain response is sent. `cached_get` routes are never
+// compressed — their pinned wire bytes are shared by every client, including
+// ones that can't decode gzip.
+//
+//   enable_gzip(0);      // default threshold (1024 bytes)
+//   enable_gzip(256);    // compress anything >= 256 bytes
+int _wings_gzip = 0;
+int _wings_gzip_min = 1024;
+
+func enable_gzip(int min_bytes) {
+    _wings_gzip = 1;
+    if (min_bytes > 0) {
+        _wings_gzip_min = min_bytes;
+    }
+}
+
+// ----- JWT guard middleware ---------------------------------------------------
+// use()-able bearer-token guard, wire-compatible with the `wings_jwt` package
+// (HS256, base64url JSON segments, signature = base64url(hex HMAC)). Verifies
+// `Authorization: Bearer <token>` on every request, rejects with 401 on
+// missing/bad/expired tokens, and injects the claims as `req["jwt"]` for
+// handlers. Also flags /docs so the OpenAPI doc advertises bearerAuth.
+//
+//   jwt_guard(SECRET);                  // protect everything...
+//   jwt_public("/login");               // ...except these paths
+//   func me(req) { return ok({"sub": req["jwt"]["sub"]}); }
+//
+// /healthz, /metrics, /docs and /openapi.json are public by default.
+str _wings_jwt_secret = "";
+array _wings_jwt_public = [];
+
+func jwt_guard(str secret) {
+    _wings_jwt_secret = secret;
+    if (length(_wings_jwt_public) == 0) {
+        push(_wings_jwt_public, "/healthz");
+        push(_wings_jwt_public, "/metrics");
+        push(_wings_jwt_public, "/docs");
+        push(_wings_jwt_public, "/openapi.json");
+    }
+    use("_wings_jwt_mw");
+    _wings_docs_bearer = 1;
+}
+
+// Exempt a path from the JWT guard. Exact match, or a trailing `*` for a
+// prefix match: jwt_public("/items/*") exempts every path under /items/.
+func jwt_public(str path) {
+    push(_wings_jwt_public, path);
+}
+
+func _wings_jwt_is_public(str p) {
+    int i = 0;
+    while (i < length(_wings_jwt_public)) {
+        str pat = _wings_jwt_public[i];
+        int pl = length(pat);
+        if (pl > 0 && substring(pat, pl - 1, pl) == "*") {
+            str prefix = substring(pat, 0, pl - 1);
+            if (length(p) >= length(prefix)) {
+                if (substring(p, 0, length(prefix)) == prefix) {
+                    return true;
+                }
+            }
+        } else if (pat == p) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+func _wings_b64url_decode(str s) {
+    str b = replace(s, "-", "+");
+    b = replace(b, "_", "/");
+    int r = mod(length(b), 4);
+    if (r == 2) {
+        b = b + "==";
+    }
+    if (r == 3) {
+        b = b + "=";
+    }
+    return base64_decode(b);
+}
+
+func _wings_b64url_encode(str s) {
+    str b = base64_encode(s);
+    b = replace(b, "+", "-");
+    b = replace(b, "/", "_");
+    b = replace(b, "=", "");
+    return b;
+}
+
+// Verify a wings_jwt-format HS256 token. Returns {"ok":1,"claims":{...}} or
+// {"ok":0,"error":"<reason>"} — same contract as wings_jwt.verify().
+func _wings_jwt_verify(str token, str secret) {
+    json parts = split(token, ".");
+    if (length(parts) != 3) {
+        return {"ok": 0, "error": "malformed token"};
+    }
+    str signing_input = parts[0] + "." + parts[1];
+    str expected = _wings_b64url_encode(hmac_sha256(secret, signing_input));
+    // Double-HMAC so the comparison is timing-safe.
+    if (hmac_sha256(secret, parts[2]) != hmac_sha256(secret, expected)) {
+        return {"ok": 0, "error": "bad signature"};
+    }
+    json claims = fromJson(_wings_b64url_decode(parts[1]));
+    if (_wings_has_key(claims, "exp")) {
+        if (timestamp() >= claims["exp"]) {
+            return {"ok": 0, "error": "expired"};
+        }
+    }
+    return {"ok": 1, "claims": claims};
+}
+
+func _wings_jwt_mw(req) {
+    if (_wings_jwt_is_public(req["path"])) {
+        return {};
+    }
+    json h = req["headers"];
+    str auth = h["Authorization"];
+    if (length(auth) == 0) {
+        auth = h["authorization"];
+    }
+    if (length(auth) < 8) {
+        return unauthorized("missing bearer token");
+    }
+    str scheme = lower(substring(auth, 0, 7));
+    if (scheme != "bearer ") {
+        return unauthorized("missing bearer token");
+    }
+    str tok = trim(substring(auth, 7, length(auth)));
+    json v = _wings_jwt_verify(tok, _wings_jwt_secret);
+    if (v["ok"] == 0) {
+        return unauthorized(v["error"]);
+    }
+    req["jwt"] = v["claims"];
+    return {};
+}
+
+// ----- HTML responses + tiny template render ----------------------------------
+// `html(body)` returns a text/html response; `render(tpl, vars)` substitutes
+// every `{{key}}` in the template with `toString(vars[key])` — enough for
+// server-rendered pages without a template engine. t-strings cover the
+// single-expression cases; render() covers "template + data dict".
+//
+//   func home(req) {
+//       str page = render("<h1>{{title}}</h1><p>Hi {{name}}!</p>",
+//                         {"title": "Wings", "name": "Ada"});
+//       return html(page);
+//   }
+func html(str body) {
+    return {"_raw": body, "_content_type": "text/html; charset=utf-8"};
+}
+
+func render(str tpl, json vars) {
+    str out = tpl;
+    if (typeof(vars) != "object") {
+        return out;
+    }
+    for (k in keys(vars)) {
+        out = replace(out, "{{" + k + "}}", toString(vars[k]));
+    }
+    return out;
+}
+
+// ----- Typed path-param accessors ----------------------------------------------
+// Mirrors of query/query_int/query_bool for `:name` route params.
+//
+//   get("/users/:id", "show");
+//   func show(req) { int id = param_int(req, "id", 0); ... }
+func param(json req, str name, str fallback) {
+    json p = req["params"];
+    if (typeof(p) == "object") {
+        if (_wings_has_key(p, name)) {
+            return p[name];
+        }
+    }
+    return fallback;
+}
+
+func param_int(json req, str name, int fallback) {
+    json p = req["params"];
+    if (typeof(p) == "object") {
+        if (_wings_has_key(p, name)) {
+            str v = p[name];
+            if (length(v) > 0) {
+                return toInt(v);
+            }
+        }
+    }
+    return fallback;
+}
+
+func param_bool(json req, str name, bool fallback) {
+    json p = req["params"];
+    if (typeof(p) == "object") {
+        if (_wings_has_key(p, name)) {
+            str v = lower(p[name]);
+            if (v == "1") { return true; }
+            if (v == "true") { return true; }
+            if (v == "yes") { return true; }
+            if (v == "0") { return false; }
+            if (v == "false") { return false; }
+            if (v == "no") { return false; }
+        }
+    }
+    return fallback;
+}
 
 // ----- Typed query-param accessors -----------------------------------------
 // `req["query"]` holds raw string values; these coerce with a default fallback
@@ -639,7 +1131,7 @@ func serve(int port) {
 func _wings_print_banner(int port, str suffix) {
     print("");
     print(_wings_c("36",   "  ╔═══════════════════════════════════╗"));
-    print(_wings_c("1;36", "  ║       Tulpar Wings v3.1           ║"));
+    print(_wings_c("1;36", "  ║       Tulpar Wings v3.6           ║"));
     print(_wings_c("36",   "  ║    Give your API wings! 🪶        ║"));
     print(_wings_c("36",   "  ╚═══════════════════════════════════╝"));
     print("");
@@ -1015,6 +1507,23 @@ func _wings_dispatch_cached(int route_idx, int keep) {
     if (route["cached"] == 1) {
         str cached = _wings_cache_wires[route_idx];
         if (length(cached) > 0) {
+            // Conditional request: a client re-sending the ETag we served
+            // gets an empty 304 instead of the full cached body.
+            str _et = _wings_cache_etags[route_idx];
+            if (length(_et) > 0) {
+                json _rh = _request["headers"];
+                str _inm = _rh["If-None-Match"];
+                if (length(_inm) == 0) {
+                    _inm = _rh["if-none-match"];
+                }
+                if (length(_inm) > 0 && trim(_inm) == _et) {
+                    _wings_requests_total = _wings_requests_total + 1;
+                    _wings_requests_2xx = _wings_requests_2xx + 1;
+                    _wings_last_status = 304;
+                    return http_create_response(304, "application/json", "",
+                        {"ETag": _et}, keep);
+                }
+            }
             _wings_requests_total = _wings_requests_total + 1;
             _wings_requests_2xx = _wings_requests_2xx + 1;
             _wings_last_status = 200;
@@ -1110,6 +1619,67 @@ func _wings_dispatch_cached(int route_idx, int keep) {
         }
     }
 
+    // Response compression (opt-in via enable_gzip()). Non-cached routes only:
+    // cached_get pins ONE wire response for every client, and baking gzip into
+    // it would serve compressed bytes to clients that never advertised
+    // Accept-Encoding: gzip.
+    if (_wings_gzip == 1 && route["cached"] != 1) {
+        json _gh0 = _request["headers"];
+        str _ae = _gh0["Accept-Encoding"];
+        if (length(_ae) == 0) {
+            _ae = _gh0["accept-encoding"];
+        }
+        if (contains(lower(_ae), "gzip")) {
+            str _gbody = "";
+            str _gct = "application/json";
+            if (_wings_has_raw(result)) {
+                _gbody = result["_raw"];
+                str _ct0 = result["_content_type"];
+                if (length(_ct0) > 0) {
+                    _gct = _ct0;
+                } else {
+                    _gct = "text/plain; charset=utf-8";
+                }
+            } else {
+                _gbody = toJson(result);
+            }
+            if (length(_gbody) >= _wings_gzip_min) {
+                str _gz = gzip_compress(_gbody);
+                if (length(_gz) > 0 && length(_gz) < length(_gbody)) {
+                    result["_raw"] = _gz;
+                    result["_content_type"] = _gct;
+                    json _ghh = result["_headers"];
+                    if (typeof(_ghh) != "object") {
+                        _ghh = {};
+                    }
+                    _ghh["Content-Encoding"] = "gzip";
+                    _ghh["Vary"] = "Accept-Encoding";
+                    result["_headers"] = _ghh;
+                }
+            }
+        }
+    }
+
+    // Cached routes get a strong ETag derived from the body, injected as a
+    // response header BEFORE framing so the cached wire bytes carry it. The
+    // etag is remembered in `_wings_cache_etags` for If-None-Match -> 304.
+    str _etag = "";
+    if (route["cached"] == 1 && eff_status < 400) {
+        str _ebody = "";
+        if (_wings_has_raw(result)) {
+            _ebody = result["_raw"];
+        } else {
+            _ebody = toJson(result);
+        }
+        _etag = "\"" + substring(sha256(_ebody), 0, 16) + "\"";
+        json _eh = result["_headers"];
+        if (typeof(_eh) != "object") {
+            _eh = {};
+        }
+        _eh["ETag"] = _etag;
+        result["_headers"] = _eh;
+    }
+
     str response = _wings_build_response(result, keep);
 
     // First-hit cache population. Only 2xx responses get pinned —
@@ -1122,6 +1692,7 @@ func _wings_dispatch_cached(int route_idx, int keep) {
     // client closes regardless of the server's hint.
     if (route["cached"] == 1 && eff_status < 400) {
         _wings_cache_wires[route_idx] = string_pin(response);
+        _wings_cache_etags[route_idx] = string_pin(_etag);
     }
 
     return response;
@@ -2064,14 +2635,42 @@ func wings_openapi(str title, str version) {
             op["requestBody"] = _wings_oapi_body(rsch);
             op["responses"]["422"] = {"description": "Validation Error"};
         }
+        // A response_model() documents the 200 body shape (the exact fields
+        // the output filter lets through).
+        json rmod = r["response_model"];
+        if (rmod) {
+            json rin = _wings_oapi_props(rmod);
+            json rsch200 = {"type": "object", "properties": rin["properties"]};
+            if (_wings_has_key(rin, "required")) {
+                rsch200["required"] = rin["required"];
+            }
+            op["responses"]["200"] = {"description": "OK",
+                "content": {"application/json": {"schema": rsch200}}};
+        }
         existing[method_lc] = op;
         paths[oapi_path] = existing;
     }
-    return {
+    json doc = {
         "openapi": "3.0.0",
         "info": {"title": title, "version": version},
         "paths": paths
     };
+    // jwt_guard() (or docs_security("bearer")) advertises bearer auth so
+    // Swagger UI shows the Authorize button and sends the header.
+    if (_wings_docs_bearer == 1) {
+        doc["components"] = {"securitySchemes": {"bearerAuth":
+            {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}}};
+        doc["security"] = [{"bearerAuth": []}];
+    }
+    return doc;
+}
+
+// Manually advertise a security scheme in /openapi.json (jwt_guard does this
+// automatically). Today only "bearer" is recognised.
+func docs_security(str scheme) {
+    if (scheme == "bearer") {
+        _wings_docs_bearer = 1;
+    }
 }
 
 // Optional: set the title/version shown in /docs and /openapi.json.

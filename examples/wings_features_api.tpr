@@ -1,0 +1,114 @@
+// ============================================================
+// Wings tamamlık turu (v3.6.0) — canlı özellik vitrini:
+//   • cors(origin, opts)        — kimlikli (credentialed) CORS
+//   • rate_limit(max, window)   — istemci başına istek limiti (429)
+//   • jwt_guard(secret)         — bearer-token koruması (+ jwt_public)
+//   • set_cookie / set_signed_cookie / get_signed_cookie
+//   • session_start/get/set/attach — sunucu-taraflı oturum
+//   • html() + render()         — sunucu-taraflı HTML sayfası
+//   • param_int(req, "id")      — tipli path parametresi
+//   • cached_get + ETag         — If-None-Match → 304
+//
+// Deneme:
+//   curl -i localhost:8497/                     # HTML sayfa
+//   curl -i localhost:8497/visit                # session çerezi + sayaç
+//   curl -i localhost:8497/login -X POST        # token + imzalı çerez
+//   curl -i localhost:8497/api/me               # 401 (token yok)
+//   curl -i -H "Authorization: Bearer <t>" localhost:8497/api/me
+//   curl -i localhost:8497/items/42             # param_int
+//   curl -i localhost:8497/about                # ETag'li cache'li yanıt
+//   curl -i -H 'If-None-Match: "<etag>"' localhost:8497/about   # 304
+// ============================================================
+import "wings";
+
+str SECRET = "wings-demo-secret";
+
+// --- HTML ana sayfa: render() + html() --------------------------------------
+func home(req) {
+    str page = render(
+        "<!DOCTYPE html><html><body><h1>{{title}}</h1><p>Merhaba {{user}}! Bu sayfa render() ile üretildi.</p></body></html>",
+        {"title": "Tulpar Wings", "user": "misafir"});
+    return html(page);
+}
+
+// --- Oturum: her ziyarette sayaç artar, id imzalı çerezde taşınır ------------
+func visit(req) {
+    str sid = session_start(req, SECRET);
+    int seen = session_get(sid, "seen");
+    session_set(sid, "seen", seen + 1);
+    json res = ok({"sid_len": length(sid), "visits": seen + 1});
+    return session_attach(res, sid, SECRET);
+}
+
+// --- Login: wings_jwt formatında token üret + imzalı uid çerezi --------------
+func login(req) {
+    // Token'ı guard'ın doğrulayacağı biçimde üretiyoruz (wings_jwt formatı).
+    str header = _wings_b64url_encode("{\"alg\":\"HS256\",\"typ\":\"JWT\"}");
+    str payload = _wings_b64url_encode(toJson({"sub": "42", "role": "admin",
+                                               "exp": timestamp() + 3600}));
+    str si = header + "." + payload;
+    str token = si + "." + _wings_b64url_encode(hmac_sha256(SECRET, si));
+    json res = ok({"token": token});
+    return set_signed_cookie(res, "uid", "42", SECRET, {});
+}
+
+// --- Korumalı uç: guard'ın enjekte ettiği claims'i okur ----------------------
+func me(req) {
+    json claims = req["jwt"];
+    return ok({"sub": claims["sub"], "role": claims["role"]});
+}
+
+// --- İmzalı çerezi geri oku ---------------------------------------------------
+func whoami(req) {
+    str uid = get_signed_cookie(req, "uid", SECRET);
+    if (length(uid) == 0) {
+        return unauthorized("gecerli uid cerezi yok");
+    }
+    return ok({"uid": uid});
+}
+
+// --- Tipli path param ---------------------------------------------------------
+func show_item(req) {
+    int id = param_int(req, "id", -1);
+    return ok({"id": id, "dogru_tip": id + 1});
+}
+
+// --- ETag'li cache'li statik içerik -------------------------------------------
+func about(req) {
+    return ok({"name": "Tulpar Wings", "feature_round": "v3.6.0"});
+}
+
+// --- gzip: büyük gövde, Accept-Encoding: gzip ile sıkışık döner ----------------
+func big(req) {
+    str line = "Tulpar Wings gzip sıkıştırması: tekrar eden içerik DEFLATE ile küçülür. ";
+    return html("<html><body><p>" + repeat(line, 200) + "</p></body></html>");
+}
+
+get("/", "home");
+get("/visit", "visit");
+post("/login", "login");
+get("/whoami", "whoami");
+get("/items/:id", "show_item");
+cached_get("/about", "about");
+get("/big", "big");
+
+func api_routes() {
+    get("/me", "me");
+}
+group("/api", "api_routes");
+
+// Konfig: belirli origin + kimlik bilgili CORS; dakikada 100 istek limiti;
+// JWT koruması (login/ana sayfa/ziyaret/çerez/item/about hariç).
+cors("https://app.example.com", {"credentials": true, "max_age": 600});
+rate_limit(100, 60);
+enable_gzip(256);          // >=256 bayt gövdeler Accept-Encoding'e göre gzip'lenir
+jwt_guard(SECRET);
+jwt_public("/");
+jwt_public("/visit");
+jwt_public("/login");
+jwt_public("/whoami");
+jwt_public("/about");
+jwt_public("/items/*");   // dinamik path'ler için sondaki-* prefix eşleşmesi
+jwt_public("/big");
+
+serve(8497);
