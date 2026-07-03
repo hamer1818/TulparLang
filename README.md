@@ -134,12 +134,12 @@ performance (see [Performance](#performance) for the actual numbers).
 ```tulpar
 import "wings";
 
-func home() {
+func home(req) {
     return {"hello": "world", "ts": now_iso8601()};
 }
 
-get("/", "home");
-listen(8080);
+get("/", home);
+serve(8080);
 ```
 
 ```bash
@@ -148,7 +148,30 @@ curl http://127.0.0.1:8080/
 # {"hello":"world","ts":"2026-05-07T18:30:00Z"}
 ```
 
-Need HTTPS? Swap `listen(8080)` for
+### A persistent CRUD API in 7 lines
+
+`model()` creates the SQLite table, `resource()` wires five REST routes
+plus request validation (422) and Swagger `/docs` — all queries run as
+bound-parameter SQL:
+
+```tulpar
+import "wings";
+import "orm";
+
+database("notes.db");
+json Note = model("notes", {"id": "pk", "title": "str!", "done": "bool"});
+
+resource("/notes", Note);   // GET/POST /notes, GET/PUT/DELETE /notes/:id
+serve();                    // :8484 + /docs
+```
+
+Custom endpoints live right next to it, with ActiveRecord-style calls:
+`Note.find(3)`, `Note.where("done = ?", [0])`, `Note.create({...})`,
+`Note.save(obj)`. See
+[`examples/wings_orm_resource.tpr`](examples/wings_orm_resource.tpr)
+and the full cheatsheet in [WINGS_CHEATSHEET.md](WINGS_CHEATSHEET.md).
+
+Need HTTPS? Swap `serve(8080)` for
 `wings_tls(8443, "server.crt", "server.key")` and you're terminating
 TLS via OpenSSL with the same handler API. Wings auto-registers
 `/healthz` + `/metrics` and answers CORS preflights so a browser can
@@ -323,8 +346,11 @@ Reproduce locally: see [benchmarks/CI.md](benchmarks/CI.md) for how to run the f
 
 ## Wings — four ways to listen
 
-Wings is the embedded HTTP framework. The handler API stays the same;
-the listener you pick changes the scheduling model:
+Wings is the embedded HTTP framework. The front door is `serve()`:
+`serve()` picks the branded default port 8484, `serve(8080)` binds an
+explicit port, and `serve(8080, 4)` runs a 4-worker thread pool. The
+listeners below are the advanced modes behind it; the handler API stays
+the same, only the scheduling model changes:
 
 | Listener          | Best for                                     |
 |-------------------|----------------------------------------------|

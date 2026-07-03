@@ -1,0 +1,144 @@
+// ============================================================
+// Wings DX katmanı — alias'lar + resource() regresyon paketi (WINGS_DX Faz 2)
+// Saf-fonksiyon seviyesi (wings_features.test.tpr ile aynı yaklaşım):
+// handler'lar sahte `req` dict'leriyle doğrudan çağrılır, canlı sunucu yok.
+// Çalıştır: ./tulpar tests/wings_dx.test.tpr
+// ============================================================
+import "test";
+import "wings";
+import "orm";
+
+// --- resource() kurulumu: gerçek :memory: SQLite üstünde -----------------------
+database(":memory:");
+json Note = model("notes", {"id": "pk", "title": "str!", "done": "bool"});
+resource("/notes", Note);
+
+json Item = model("items", {"id": "pk", "name": "str!"});
+resource("/items", Item, {"only": ["index", "show"]});
+
+json Post = model("posts", {"id": "pk", "name": "str!"});
+resource("/posts", Post, {"except": ["destroy"]});
+
+// ---- route kaydı: tam set + only/except filtreleri ------------------------------
+func run_resource_routes() {
+    assert(_find_route("GET", "/notes") >= 0, "GET /notes kayıtlı");
+    assert(_find_route("GET", "/notes/:id") >= 0, "GET /notes/:id kayıtlı");
+    assert(_find_route("POST", "/notes") >= 0, "POST /notes kayıtlı");
+    assert(_find_route("PUT", "/notes/:id") >= 0, "PUT /notes/:id kayıtlı");
+    assert(_find_route("DELETE", "/notes/:id") >= 0, "DELETE /notes/:id kayıtlı");
+    // only: [index, show] → yazma uçları yok.
+    assert(_find_route("GET", "/items") >= 0, "only: GET /items var");
+    assert(_find_route("POST", "/items") < 0, "only: POST /items YOK");
+    assert(_find_route("DELETE", "/items/:id") < 0, "only: DELETE yok");
+    // except: [destroy] → sadece DELETE eksik.
+    assert(_find_route("POST", "/posts") >= 0, "except: POST /posts var");
+    assert(_find_route("DELETE", "/posts/:id") < 0, "except: DELETE yok");
+}
+
+// ---- şema türetme: "tip!" zorunlu, tip opsiyonel, pk dışarıda ---------------------
+func run_resource_schema() {
+    json s = _wings_res_schema(Note);
+    assert_eq_str(s["title"], "str");
+    assert_eq_str(s["done?"], "bool");
+    assert(!_wings_has_key(s, "id"), "pk şemaya girmez");
+    assert(!_wings_has_key(s, "title?"), "zorunlu alanın ?'li kopyası yok");
+}
+
+// ---- CRUD handler'ları uçtan uca (sahte req ile) -----------------------------------
+func run_resource_crud() {
+    // create → 201 + taze satır
+    json res = _wings_res_create({"path": "/notes", "json": {"title": "ilk", "done": false}});
+    assert_eq_int(res["_status"], 201);
+    assert_eq_str(res["title"], "ilk");
+    int id = toInt(toString(res["id"]));
+    assert(id > 0, "create id atadı");
+
+    // index → data + count, bool cast'li
+    json lst = _wings_res_index({"path": "/notes"});
+    assert_eq_int(lst["count"], 1);
+    assert_eq_str(toString(lst["data"][0]["done"]), "false");
+
+    // show → satır; olmayan id → 404
+    json one = _wings_res_show({"path": "/notes/" + toString(id), "params": {"id": toString(id)}});
+    assert_eq_str(one["title"], "ilk");
+    json yok = _wings_res_show({"path": "/notes/99999", "params": {"id": "99999"}});
+    assert_eq_int(yok["_status"], 404);
+
+    // update → done=true; sonra done=false (0-değer wings yolundan da yazılır)
+    json up = _wings_res_update({"path": "/notes/" + toString(id),
+        "params": {"id": toString(id)}, "json": {"done": true}});
+    assert_eq_str(toString(up["done"]), "true");
+    json up2 = _wings_res_update({"path": "/notes/" + toString(id),
+        "params": {"id": toString(id)}, "json": {"done": false}});
+    assert_eq_str(toString(up2["done"]), "false");
+
+    // destroy → 204; ardından show → 404
+    json gone = _wings_res_destroy({"path": "/notes/" + toString(id),
+        "params": {"id": toString(id)}});
+    assert_eq_int(gone["_status"], 204);
+    json sonra = _wings_res_show({"path": "/notes/" + toString(id),
+        "params": {"id": toString(id)}});
+    assert_eq_int(sonra["_status"], 404);
+}
+
+// ---- kayıtsız path → 500 (patlamak yerine düzgün hata) ------------------------------
+func run_resource_unregistered() {
+    json res = _wings_res_index({"path": "/tanimsiz"});
+    assert_eq_int(res["_status"], 500);
+}
+
+// ---- kısa isim alias'ları: delege ettikleri fonksiyonla birebir ---------------------
+func run_alias_cookies() {
+    json req = {"headers": {"Cookie": "sid=abc; theme=dark"}};
+    json a = cookies(req);
+    json b = wings_cookies(req);
+    assert_eq_str(a["sid"], b["sid"]);
+    assert_eq_str(a["theme"], "dark");
+}
+
+func run_alias_sse() {
+    assert_contains(sse_headers(), "text/event-stream");
+    str ev = sse_event("tick", "{\"n\":1}");
+    assert_contains(ev, "event: tick");
+    assert_contains(ev, "data: {\"n\":1}");
+    assert_eq_str(ev, wings_sse_event("tick", "{\"n\":1}"));
+}
+
+func run_alias_metrics() {
+    assert_contains(metrics_prom(), "# TYPE");
+}
+
+func run_alias_gzip() {
+    gzip(2048);
+    assert_eq_int(_wings_gzip, 1);
+    assert_eq_int(_wings_gzip_min, 2048);
+}
+
+func run_alias_delete_route() {
+    delete("/eski/:id", "_wings_res_destroy");
+    assert(_find_route("DELETE", "/eski/:id") >= 0, "delete() route kaydeder");
+}
+
+func run_alias_accepts_returns() {
+    post("/tmp_dx", "_wings_res_index");
+    accepts({"name": "str", "age?": "int"});
+    int last = length(_routes) - 1;
+    assert_eq_str(_routes[last]["schema"]["name"], "str");
+    get("/tmp_dx2", "_wings_res_index");
+    returns({"id": "int"});
+    last = length(_routes) - 1;
+    assert_eq_str(_routes[last]["response_model"]["id"], "int");
+}
+
+print("=== wings DX (alias'lar + resource) ===");
+test("resource route kaydı + only/except", "run_resource_routes");
+test("resource şema türetme", "run_resource_schema");
+test("resource CRUD (201/404/204 + bool cast)", "run_resource_crud");
+test("kayıtsız resource → 500", "run_resource_unregistered");
+test("cookies() aliası", "run_alias_cookies");
+test("sse_headers/sse_event aliasları", "run_alias_sse");
+test("metrics_prom() aliası", "run_alias_metrics");
+test("gzip() aliası", "run_alias_gzip");
+test("delete() route aliası", "run_alias_delete_route");
+test("accepts()/returns() aliasları", "run_alias_accepts_returns");
+test_summary();

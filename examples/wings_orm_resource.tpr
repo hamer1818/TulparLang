@@ -1,0 +1,31 @@
+// ============================================================================
+// Tulpar Wings + ORM — resource(): 7 satırda kalıcı CRUD API
+// ----------------------------------------------------------------------------
+// wings_notes_db.tpr'deki 175 satırlık SQLite Notlar API'sinin TAM eşdeğeri.
+// model() tabloyu kurar, resource() beş REST route'unu + şema doğrulamayı
+// (422) + Swagger /docs'u otomatik bağlar. "Python kadar kolay" bu demek.
+//
+// ÇALIŞTIRMA:
+//   tulpar examples/wings_orm_resource.tpr
+//   curl http://127.0.0.1:8484/notes
+//   curl -X POST http://127.0.0.1:8484/notes -d '{"title":"süt al"}'
+//   curl http://127.0.0.1:8484/notes/1
+//   curl -X PUT http://127.0.0.1:8484/notes/1 -d '{"title":"süt al","done":true}'
+//   curl -X DELETE http://127.0.0.1:8484/notes/1
+//   # Dokümanlar: http://127.0.0.1:8484/docs
+// ============================================================================
+import "wings";
+import "orm";
+
+database("notes.db");
+json Note = model("notes", {"id": "pk", "title": "str!", "done": "bool"});
+
+resource("/notes", Note);   // GET/POST /notes, GET/PUT/DELETE /notes/:id
+
+// resource() tekel değil — yanına istediğin route'u eklersin (UFCS ile ORM):
+func stats(req) {
+    return ok({"toplam": Note.count(), "acik": length(Note.where("done = ?", [0]))});
+}
+get("/stats", stats);
+
+serve();                    // 8484; serve(8080) veya serve(8080, 4) da olur

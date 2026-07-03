@@ -1,42 +1,53 @@
 // ============================================
-// Tulpar ORM — minimal Active-Record style helpers over SQLite.
+// Tulpar ORM v2 — model handle + UFCS üstünde Active-Record tarzı katman.
 // ============================================
 //
-// Goal: turn the verbose `db_execute` / `db_query` dance into something
-// that reads like:
+// Hedef (WINGS_DX.md §2): veritabanı kodu şöyle okunmalı —
 //
-//     orm_open("app.db");
-//     define_model("users", {
-//         "id":   "INTEGER PRIMARY KEY AUTOINCREMENT",
-//         "name": "TEXT NOT NULL",
-//         "age":  "INTEGER"
+//     import "orm";
+//
+//     database("app.db");
+//     json Note = model("notes", {
+//         "id":    "pk",        // INTEGER PRIMARY KEY AUTOINCREMENT
+//         "title": "str!",      // TEXT NOT NULL
+//         "done":  "bool"       // INTEGER 0/1 — okurken true/false döner
 //     });
 //
-//     int id = orm_create("users", {"name": "Hamza", "age": 23});
-//     json u = orm_find("users", id);
-//     array all = orm_all("users");
-//     orm_update("users", id, {"age": 24});
-//     orm_delete("users", id);
+//     int id     = Note.create({"title": "süt al"});
+//     json n     = Note.find(id);              // {} = bulunamadı
+//     array all  = Note.all();
+//     array open = Note.where("done = ?", [0]); // HER ZAMAN bağlı parametre
+//     json f     = Note.first("done = ?", [0]);
+//     int c      = Note.count();
+//     Note.update(id, {"done": 0});            // 0/"" değerler de YAZILIR
+//     json row   = Note.save({"id": 3, "title": "x"});  // upsert
+//     Note.remove(id);
 //
-// Schema definitions are stored in `_orm_models` so `orm_create` and
-// `orm_update` know which columns are valid; values that don't match
-// a known column are dropped (ignore-extra rather than error so user
-// code can pass through full request bodies).
+// `Note.find(1)` UFCS ile `find(Note, 1)`'e çözünür; model handle sıradan
+// bir json'dur: {"table": ..., "db": <handle>, "schema": {...}}.
 //
-// Implementation is dictionary-friendly rather than type-aware: every
-// value is run through `toString()` and SQL-escaped with a single
-// quoted-string serialisation. SQLite is tolerant about coerced types
-// on `INSERT`, so this gives correct results without needing
-// `typeof()` reflection (which complicates the parser).
+// Güvenlik: üretilen her SQL `?` + params ile 3-arg db_query/db_execute'a
+// gider (v3.3.0 parametreli SQL). Tek kaçış kapısı `raw(m, where_sql)` —
+// adı üstünde: içine kullanıcı girdisi GÖMME.
+//
+// v1 API'si (orm_open / define_model / orm_create / orm_find / orm_all /
+// orm_where / orm_update / orm_delete) dosyanın sonunda ince sarmalayıcı
+// olarak yaşıyor — eski kod kırılmaz. v1'den farklı olarak 0/boş değerler
+// artık sessizce düşürülmez (bilinen MVP bug'ı kapandı).
 // ============================================
 
 int _orm_db = -1;
-json _orm_models = {};
+json _orm_handles = {};
 
-func orm_open(str path) {
+// ----- bağlantı ---------------------------------------------------------------
+
+// database(path) — SQLite dosyasını açar ve SONRAKİ model() çağrılarının
+// varsayılan bağlantısı yapar. Birden çok kez çağrılabilir; her model
+// kendi handle'ını taşıdığı için eski modeller eski veritabanında kalır.
+func database(str path) {
     _orm_db = db_open(path);
     if (_orm_db < 0) {
-        throw "orm_open: db_open(" + path + ") failed";
+        throw "database(): db_open(" + path + ") başarısız / failed";
     }
     return _orm_db;
 }
@@ -48,141 +59,279 @@ func orm_close() {
     }
 }
 
-// Register a table + create it on disk if missing. `columns` is a
-// `{col_name: sql_type_clause}` map preserving insertion order so the
-// generated CREATE TABLE matches what the user typed.
-func define_model(str table, json columns) {
-    _orm_models[table] = columns;
+// ----- yardımcılar --------------------------------------------------------------
 
-    str sql = "CREATE TABLE IF NOT EXISTS " + table + " (";
-    array names = keys(columns);
-    int n = length(names);
-    int i = 0;
-    while (i < n) {
-        if (i > 0) {
-            sql = sql + ", ";
-        }
-        str col = names[i];
-        sql = sql + col + " " + columns[col];
-        i = i + 1;
-    }
-    sql = sql + ")";
-    db_execute(_orm_db, sql);
-}
-
-// SQL identifier quoting. SQLite uses double quotes for identifiers;
-// embedded `"` is escaped as `""`. We keep this private — callers
-// pass identifiers through the typed `table`/`column` name slots, not
-// raw SQL — but build_value below also needs it for column lists.
+// SQL identifier quoting — SQLite çift tırnak, içteki `"` ikilenir.
 func _orm_quote_ident(str s) {
     return "\"" + replace(s, "\"", "\"\"") + "\"";
 }
 
-// SQL literal serialisation. We always emit a single-quoted string
-// with `'` doubled; SQLite coerces string<->numeric on INSERT for
-// affinity-typed columns, so this is correct for INTEGER/REAL/TEXT
-// without needing reflection. The empty string is emitted as `''`.
-func _orm_quote_value(json v) {
-    return "'" + replace(toString(v), "'", "''") + "'";
-}
-
-// ----- CRUD ------------------------------------------------------------------
-
-// orm_create(table, attrs) -> int (last_insert_id)
-func orm_create(str table, json attrs) {
-    json schema = _orm_models[table];
-    array col_names = keys(schema);
-    int n = length(col_names);
-
-    str cols = "";
-    str vals = "";
-    bool first = true;
-    int i = 0;
-    while (i < n) {
-        str col = col_names[i];
-        json v = attrs[col];
-        // Tulpar's truthy check covers "absent" (returns 0) AND empty
-        // string AND zero. To allow legitimate zero/empty values, we
-        // need to check the attrs map's `keys()` rather than the
-        // value's truthiness. For the MVP we accept the limitation:
-        // explicit zero/empty integer columns must be set to a non-
-        // empty value in the dict (handlers usually default these).
-        if (v) {
-            if (!first) {
-                cols = cols + ", ";
-                vals = vals + ", ";
-            }
-            cols = cols + _orm_quote_ident(col);
-            vals = vals + _orm_quote_value(v);
-            first = false;
-        }
-        i = i + 1;
+// obj `k` anahtarını gerçekten taşıyor mu? (obj[k] yokken 0 döndüğü için
+// truthiness güvenilmez — v1'in 0/boş değer bug'ının kökü buydu.)
+func _orm_has(json obj, str k) {
+    array ks = keys(obj);
+    for (x in ks) {
+        if (x == k) { return true; }
     }
-    str sql = "INSERT INTO " + table + " (" + cols + ") VALUES (" + vals + ")";
-    db_execute(_orm_db, sql);
-    return db_last_insert_id(_orm_db);
+    return false;
 }
 
-// orm_find(table, id) -> json (single row, or empty object on not-found)
-func orm_find(str table, int id) {
-    str sql = "SELECT * FROM " + table + " WHERE id = " +
-        _orm_quote_value(id) + " LIMIT 1";
-    array rows = db_query(_orm_db, sql);
+// Tip kısayolu → SQL kolon tanımı. body_schema ile ORTAK kelime hazinesi:
+// pk / int / float / bool / str (+ `!` = NOT NULL). Tanınmayan her şey ham
+// SQL olarak geçer ("TEXT UNIQUE" gibi) — v1'in raw tanımları da böylece
+// çalışmaya devam eder.
+func _orm_sql_type(str t) {
+    if (t == "pk")     { return "INTEGER PRIMARY KEY AUTOINCREMENT"; }
+    if (t == "int")    { return "INTEGER"; }
+    if (t == "int!")   { return "INTEGER NOT NULL"; }
+    if (t == "float")  { return "REAL"; }
+    if (t == "float!") { return "REAL NOT NULL"; }
+    if (t == "bool")   { return "INTEGER NOT NULL DEFAULT 0"; }
+    if (t == "str")    { return "TEXT"; }
+    if (t == "str!")   { return "TEXT NOT NULL"; }
+    return t;
+}
+
+// Tek değer cast'i. db_query INTEGER/REAL kolonları zaten int/float döndürür;
+// tek gerçek dönüşüm "bool" kolonlarının 0/1'ini true/false yapmak.
+func _orm_cast_val(str t, json v) {
+    if (t == "bool") { return toInt(toString(v)) == 1; }
+    return v;
+}
+
+// Ham DB satırı → şemaya göre cast'lenmiş satır. Şemada olmayan kolonlar
+// (COUNT(*) AS n gibi hesaplananlar) dokunulmadan geçer.
+func _orm_cast_row(json m, json row) {
+    json schema = m["schema"];
+    json out = {};
+    array rks = keys(row);
+    for (k in rks) {
+        if (_orm_has(schema, k)) {
+            str t = schema[k];
+            out[k] = _orm_cast_val(t, row[k]);
+        }
+        if (!_orm_has(schema, k)) {
+            out[k] = row[k];
+        }
+    }
+    return out;
+}
+
+func _orm_cast_rows(json m, array rows) {
+    array out = [];
+    for (r in rows) {
+        push(out, _orm_cast_row(m, r));
+    }
+    return out;
+}
+
+// CREATE TABLE IF NOT EXISTS — model() kısayolları çevirir, define_model
+// (v1) ham tanımları olduğu gibi geçirir.
+func _orm_create_table(json m, bool translate) {
+    json schema = m["schema"];
+    array names = keys(schema);
+    str sql = "CREATE TABLE IF NOT EXISTS " + _orm_quote_ident(m["table"]) + " (";
+    bool firstc = true;
+    for (col in names) {
+        if (!firstc) { sql = sql + ", "; }
+        str def = schema[col];
+        if (translate) { def = _orm_sql_type(def); }
+        sql = sql + _orm_quote_ident(col) + " " + def;
+        firstc = false;
+    }
+    sql = sql + ")";
+    db_execute(m["db"], sql);
+}
+
+// ----- model ---------------------------------------------------------------------
+
+// model(table, schema) → model handle. Tabloyu yoksa oluşturur. Handle'ı
+// bir global'e ata (`json Note = model(...)`) ve UFCS ile kullan.
+func model(str table, json schema) {
+    if (_orm_db < 0) {
+        throw "model(): önce database(\"dosya.db\") çağır / call database(path) first";
+    }
+    json m = {"table": table, "db": _orm_db, "schema": schema};
+    _orm_handles[table] = m;
+    _orm_create_table(m, true);
+    return m;
+}
+
+// ----- CRUD ------------------------------------------------------------------------
+
+// create(m, attrs) → int (yeni kaydın id'si). Şemada olmayan anahtarlar
+// düşürülür (request body'yi olduğu gibi geçirebil), pk dışarıda tutulur,
+// 0/""/false dâhil şemadaki HER mevcut anahtar yazılır.
+func create(json m, json attrs) {
+    json schema = m["schema"];
+    str cols = "";
+    str qs = "";
+    array vals = [];
+    bool first_col = true;
+    array aks = keys(attrs);
+    for (k in aks) {
+        if (_orm_has(schema, k)) {
+            str t = schema[k];
+            if (t != "pk") {
+                if (!first_col) {
+                    cols = cols + ", ";
+                    qs = qs + ", ";
+                }
+                cols = cols + _orm_quote_ident(k);
+                qs = qs + "?";
+                push(vals, attrs[k]);
+                first_col = false;
+            }
+        }
+    }
+    str sql = "INSERT INTO " + _orm_quote_ident(m["table"]) +
+        " (" + cols + ") VALUES (" + qs + ")";
+    db_execute(m["db"], sql, vals);
+    return db_last_insert_id(m["db"]);
+}
+
+// find(m, id) → tek satır (cast'li) ya da {} (bulunamadı).
+func find(json m, int id) {
+    str sql = "SELECT * FROM " + _orm_quote_ident(m["table"]) + " WHERE id = ? LIMIT 1";
+    array rows = db_query(m["db"], sql, [id]);
     if (length(rows) == 0) {
         json empty = {};
         return empty;
     }
-    return rows[0];
+    return _orm_cast_row(m, rows[0]);
 }
 
-// orm_all(table) -> array<json>
-func orm_all(str table) {
-    return db_query(_orm_db, "SELECT * FROM " + table);
+// all(m) → array<json> (cast'li).
+func all(json m) {
+    array rows = db_query(m["db"], "SELECT * FROM " + _orm_quote_ident(m["table"]), []);
+    return _orm_cast_rows(m, rows);
 }
 
-// orm_where(table, where_sql) -> array<json>
-//
-// `where_sql` is a raw fragment ("age >= 18 AND active = 1"). User
-// input that flows in here MUST be sanitised by the caller; the ORM
-// makes no attempt to validate. This is the pragmatic escape hatch
-// before we add a typed query builder.
-func orm_where(str table, str where_sql) {
-    return db_query(_orm_db, "SELECT * FROM " + table + " WHERE " + where_sql);
+// where(m, cond, params) → array<json>. Koşul `?` yer tutucuları taşır,
+// değerler HER ZAMAN bağlanır: Note.where("done = ? AND id > ?", [0, 5]).
+func where(json m, str cond, array params) {
+    str sql = "SELECT * FROM " + _orm_quote_ident(m["table"]) + " WHERE " + cond;
+    array rows = db_query(m["db"], sql, params);
+    return _orm_cast_rows(m, rows);
 }
 
-// orm_update(table, id, attrs) -> int (rows touched approximation)
-func orm_update(str table, int id, json attrs) {
-    json schema = _orm_models[table];
-    array col_names = keys(schema);
-    int n = length(col_names);
+// first(m, cond, params) → ilk eşleşen satır ya da {}.
+func first(json m, str cond, array params) {
+    str sql = "SELECT * FROM " + _orm_quote_ident(m["table"]) +
+        " WHERE " + cond + " LIMIT 1";
+    array rows = db_query(m["db"], sql, params);
+    if (length(rows) == 0) {
+        json empty = {};
+        return empty;
+    }
+    return _orm_cast_row(m, rows[0]);
+}
 
+// count(m) → tablodaki kayıt sayısı. Koşullu sayım: length(m.where(...)).
+func count(json m) {
+    str sql = "SELECT COUNT(*) AS n FROM " + _orm_quote_ident(m["table"]);
+    array rows = db_query(m["db"], sql, []);
+    return toInt(toString(rows[0]["n"]));
+}
+
+// update(m, id, attrs) → 1 (bir şey yazıldı) / 0 (yazacak alan yoktu).
+// create ile aynı kolon seçimi: keys(attrs) ∩ schema, pk hariç —
+// {"done": 0} artık gerçekten yazılır (v1 bunu sessizce düşürüyordu).
+func update(json m, int id, json attrs) {
+    json schema = m["schema"];
     str sets = "";
-    bool first = true;
-    int i = 0;
-    while (i < n) {
-        str col = col_names[i];
-        json v = attrs[col];
-        if (v) {
-            if (!first) {
-                sets = sets + ", ";
+    array vals = [];
+    bool first_col = true;
+    array aks = keys(attrs);
+    for (k in aks) {
+        if (_orm_has(schema, k)) {
+            str t = schema[k];
+            if (t != "pk") {
+                if (!first_col) { sets = sets + ", "; }
+                sets = sets + _orm_quote_ident(k) + " = ?";
+                push(vals, attrs[k]);
+                first_col = false;
             }
-            sets = sets + _orm_quote_ident(col) + " = " + _orm_quote_value(v);
-            first = false;
         }
-        i = i + 1;
     }
-    if (first) {
-        return 0;  // nothing to update
+    if (first_col) {
+        return 0;
     }
-    str sql = "UPDATE " + table + " SET " + sets +
-        " WHERE id = " + _orm_quote_value(id);
-    db_execute(_orm_db, sql);
+    push(vals, id);
+    str sql = "UPDATE " + _orm_quote_ident(m["table"]) + " SET " + sets + " WHERE id = ?";
+    db_execute(m["db"], sql, vals);
     return 1;
 }
 
-// orm_delete(table, id) -> int (rows touched approximation)
-func orm_delete(str table, int id) {
-    str sql = "DELETE FROM " + table + " WHERE id = " + _orm_quote_value(id);
-    db_execute(_orm_db, sql);
+// save(m, obj) → upsert: obj "id" taşıyor ve kayıt varsa update, yoksa
+// create. Her iki yolda da taze satırı döndürür (id'si dolu).
+func save(json m, json obj) {
+    if (_orm_has(obj, "id")) {
+        int id = toInt(toString(obj["id"]));
+        json existing = find(m, id);
+        if (length(keys(existing)) > 0) {
+            update(m, id, obj);
+            return find(m, id);
+        }
+    }
+    int nid = create(m, obj);
+    return find(m, nid);
+}
+
+// remove(m, id) → 1. (SQLite affected-count döndürmediğimiz için yaklaşık.)
+func remove(json m, int id) {
+    str sql = "DELETE FROM " + _orm_quote_ident(m["table"]) + " WHERE id = ?";
+    db_execute(m["db"], sql, [id]);
     return 1;
+}
+
+// raw(m, where_sql) → array<json>. HAM where parçası — parametre BAĞLANMAZ.
+// Kaçış kapısıdır: içine kullanıcı girdisi gömme; mümkünse where() kullan.
+func raw(json m, str where_sql) {
+    str sql = "SELECT * FROM " + _orm_quote_ident(m["table"]) + " WHERE " + where_sql;
+    return _orm_cast_rows(m, db_query(m["db"], sql, []));
+}
+
+// ============================================
+// v1 uyumluluk katmanı — eski API, yeni çekirdeğe delege eder.
+// Tek davranış farkı (bilerek): 0/"" değerler artık yazılır.
+// ============================================
+
+func orm_open(str path) {
+    return database(path);
+}
+
+// v1 define_model ham SQL kolon tanımları alır ("INTEGER PRIMARY KEY
+// AUTOINCREMENT" gibi) — çeviri yapılmadan geçer; kısayollar da çalışır.
+func define_model(str table, json columns) {
+    if (_orm_db < 0) {
+        throw "define_model(): önce orm_open(path) çağır / call orm_open(path) first";
+    }
+    json m = {"table": table, "db": _orm_db, "schema": columns};
+    _orm_handles[table] = m;
+    _orm_create_table(m, false);
+}
+
+func orm_create(str table, json attrs) {
+    return create(_orm_handles[table], attrs);
+}
+
+func orm_find(str table, int id) {
+    return find(_orm_handles[table], id);
+}
+
+func orm_all(str table) {
+    return all(_orm_handles[table]);
+}
+
+func orm_where(str table, str where_sql) {
+    return raw(_orm_handles[table], where_sql);
+}
+
+func orm_update(str table, int id, json attrs) {
+    return update(_orm_handles[table], id, attrs);
+}
+
+func orm_delete(str table, int id) {
+    return remove(_orm_handles[table], id);
 }

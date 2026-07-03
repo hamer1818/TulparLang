@@ -1120,7 +1120,17 @@ func uploaded_files(json req) {
 
 // Friendly alias for listen() — reads better at the bottom of an app file:
 //   serve(8080);
-func serve(int port) {
+// serve([port[, workers]]) — sunucunun TEK öğretilen kapısı (WINGS_DX §4).
+//   serve();          → 8484 ("Tulpar portu"), tek thread
+//   serve(8080);      → açık port
+//   serve(8080, 4);   → 4 worker'lı thread pool (listen_pool)
+// Eksik argümanlar 0'a pad'lenir (default-arg semantiği); workers <= 1 tek
+// thread demektir. listen/listen_pool/listen_evented/listen_async "gelişmiş
+// modlar" olarak kalır.
+func serve(int port, int workers) {
+    if (workers > 1) {
+        return listen_pool(port, workers);
+    }
     return listen(port);
 }
 
@@ -2832,5 +2842,297 @@ func listen(int port) {
             }
         }
         socket_close(client);
+    }
+}
+
+// ============================================================================
+// Wings DX katmanı (WINGS_DX.md) — kısa isimler + resource()
+// ----------------------------------------------------------------------------
+// Adlandırma standardı (WINGS_DX §4): public API'de `wings_` öneki yok; istek
+// okuyanlar UFCS ile `req.x(...)` diye okunur; özellik açan çağrı özelliğin
+// adıdır. Eski isimler kırılmaz — aşağıdaki sarmalayıcılar delege eder.
+// ============================================================================
+
+// --- kısa isim alias'ları ----------------------------------------------------
+func cookies(json req)              { return wings_cookies(req); }
+func ws_upgrade(json req)           { return wings_ws_upgrade(req); }
+func ws_send(int fd, str payload)   { return wings_ws_send_text(fd, payload); }
+func ws_close(int fd)               { return wings_ws_send_close(fd); }
+func ws_pong(int fd, str payload)   { return wings_ws_send_pong(fd, payload); }
+func sse_headers()                  { return wings_sse_headers(); }
+func sse_event(str name, str data)  { return wings_sse_event(name, data); }
+func metrics_prom()                 { return wings_metrics_prom(); }
+
+// gzip([min_bytes]) — enable_gzip'in isim-stili karşılığı (cors/rate_limit
+// gibi). gzip() → varsayılan eşik, gzip(256) → 256 bayt üstünü sıkıştır.
+func gzip(int min_bytes)            { return enable_gzip(min_bytes); }
+
+// delete(path, handler) — HTTP fiiliyle birebir route kaydı (del aliası).
+func delete(str path, str handler)  { return del(path, handler); }
+
+// accepts/returns — istek/cevap şeması çifti (body_schema/response_model'in
+// tek-kelimeli karşılığı):
+//   post("/users", create_user);  accepts({"name": "str", "age?": "int"});
+//   get("/users/:id", show_user); returns({"id": "int", "name": "str"});
+func accepts(json schema)           { return body_schema(schema); }
+func returns(json schema)           { return response_model(schema); }
+
+// ============================================================================
+// resource(path, Model[, opts]) — model handle'dan otomatik REST CRUD
+// ----------------------------------------------------------------------------
+//   import "wings";
+//   import "orm";
+//   database("notes.db");
+//   json Note = model("notes", {"id": "pk", "title": "str!", "done": "bool"});
+//   resource("/notes", Note);   // 5 route + 422 şema + /docs otomatik
+//   serve();
+//
+// Kaydedilenler: GET path (index), GET path/:id (show), POST path (create —
+// modelden türetilmiş body_schema ile), PUT path/:id (update), DELETE
+// path/:id (destroy). opts: {"only": ["index", "show"]} ya da
+// {"except": ["destroy"]}.
+//
+// wings orm'u import ETMEZ: Model = {"table", "db", "schema"} sözleşmesine
+// uyan her handle çalışır; CRUD'u `_wings_res_db_*` iç helper'ları db_*
+// builtin'leriyle (her zaman parametreli SQL) yapar.
+// ============================================================================
+
+array _wings_resources = [];
+
+func _wings_res_qident(str s) {
+    return "\"" + replace(s, "\"", "\"\"") + "\"";
+}
+
+// bool kolonları true/false'a çevir (orm _orm_cast_row ile aynı sözleşme).
+func _wings_res_db_cast(json m, json row) {
+    json schema = m["schema"];
+    json out = {};
+    for (k in keys(row)) {
+        bool casted = false;
+        if (_wings_has_key(schema, k)) {
+            str t = schema[k];
+            if (t == "bool") {
+                out[k] = toInt(toString(row[k])) == 1;
+                casted = true;
+            }
+        }
+        if (!casted) {
+            out[k] = row[k];
+        }
+    }
+    return out;
+}
+
+func _wings_res_db_all(json m) {
+    array rows = db_query(m["db"], "SELECT * FROM " + _wings_res_qident(m["table"]), []);
+    array out = [];
+    for (r in rows) {
+        push(out, _wings_res_db_cast(m, r));
+    }
+    return out;
+}
+
+func _wings_res_db_find(json m, int id) {
+    str sql = "SELECT * FROM " + _wings_res_qident(m["table"]) + " WHERE id = ? LIMIT 1";
+    array rows = db_query(m["db"], sql, [id]);
+    if (length(rows) == 0) {
+        json empty = {};
+        return empty;
+    }
+    return _wings_res_db_cast(m, rows[0]);
+}
+
+// keys(attrs) ∩ schema, pk hariç — 0/""/false dâhil her mevcut anahtar
+// yazılır, şema dışı anahtarlar düşer (request body passthrough).
+func _wings_res_db_insert(json m, json attrs) {
+    json schema = m["schema"];
+    str cols = "";
+    str qs = "";
+    array vals = [];
+    bool first_col = true;
+    for (k in keys(attrs)) {
+        if (_wings_has_key(schema, k)) {
+            str t = schema[k];
+            if (t != "pk") {
+                if (!first_col) {
+                    cols = cols + ", ";
+                    qs = qs + ", ";
+                }
+                cols = cols + _wings_res_qident(k);
+                qs = qs + "?";
+                push(vals, attrs[k]);
+                first_col = false;
+            }
+        }
+    }
+    str sql = "INSERT INTO " + _wings_res_qident(m["table"]) +
+        " (" + cols + ") VALUES (" + qs + ")";
+    db_execute(m["db"], sql, vals);
+    return db_last_insert_id(m["db"]);
+}
+
+func _wings_res_db_update(json m, int id, json attrs) {
+    json schema = m["schema"];
+    str sets = "";
+    array vals = [];
+    bool first_col = true;
+    for (k in keys(attrs)) {
+        if (_wings_has_key(schema, k)) {
+            str t = schema[k];
+            if (t != "pk") {
+                if (!first_col) { sets = sets + ", "; }
+                sets = sets + _wings_res_qident(k) + " = ?";
+                push(vals, attrs[k]);
+                first_col = false;
+            }
+        }
+    }
+    if (first_col) {
+        return 0;
+    }
+    push(vals, id);
+    str sql = "UPDATE " + _wings_res_qident(m["table"]) + " SET " + sets + " WHERE id = ?";
+    db_execute(m["db"], sql, vals);
+    return 1;
+}
+
+func _wings_res_db_delete(json m, int id) {
+    str sql = "DELETE FROM " + _wings_res_qident(m["table"]) + " WHERE id = ?";
+    db_execute(m["db"], sql, [id]);
+}
+
+// Kayıtlı resource'u base path'iyle bul ({} = yok).
+func _wings_res_model(str base) {
+    for (r in _wings_resources) {
+        if (r["base"] == base) {
+            return r["model"];
+        }
+    }
+    json empty = {};
+    return empty;
+}
+
+// "/notes/3" → "/notes" (son segmenti at) — show/update/destroy kendi
+// resource'unu istek path'inden bulur.
+func _wings_res_parent(str path) {
+    array parts = split(path, "/");
+    int n = length(parts) - 1;
+    str out = "";
+    int i = 0;
+    while (i < n) {
+        if (i > 0) { out = out + "/"; }
+        out = out + parts[i];
+        i = i + 1;
+    }
+    return out;
+}
+
+// Model şemasından body_schema türet: "tip!" → zorunlu, tip → opsiyonel
+// ("kolon?"); pk ve ham SQL tanımları doğrulamaya girmez.
+func _wings_res_schema(json m) {
+    json schema = m["schema"];
+    json out = {};
+    for (k in keys(schema)) {
+        str t = schema[k];
+        if (t == "str!")   { out[k] = "str"; }
+        if (t == "int!")   { out[k] = "int"; }
+        if (t == "float!") { out[k] = "float"; }
+        if (t == "str")    { out[k + "?"] = "str"; }
+        if (t == "int")    { out[k + "?"] = "int"; }
+        if (t == "float")  { out[k + "?"] = "float"; }
+        if (t == "bool")   { out[k + "?"] = "bool"; }
+    }
+    return out;
+}
+
+func _wings_res_in(json arr, str s) {
+    for (x in arr) {
+        if (x == s) { return true; }
+    }
+    return false;
+}
+
+// opts {"only": [...]} / {"except": [...]} filtresi. opts verilmemişse
+// (default-arg 0 pad'i) tüm aksiyonlar açık.
+func _wings_res_on(json opts, str action) {
+    if (!opts) { return true; }
+    if (_wings_has_key(opts, "only")) {
+        return _wings_res_in(opts["only"], action);
+    }
+    if (_wings_has_key(opts, "except")) {
+        return !_wings_res_in(opts["except"], action);
+    }
+    return true;
+}
+
+// --- jenerik handler'lar ------------------------------------------------------
+
+func _wings_res_index(req) {
+    json m = _wings_res_model(req["path"]);
+    if (length(keys(m)) == 0) { return server_error("resource not registered"); }
+    array rows = _wings_res_db_all(m);
+    return ok({"data": rows, "count": length(rows)});
+}
+
+func _wings_res_show(req) {
+    json m = _wings_res_model(_wings_res_parent(req["path"]));
+    if (length(keys(m)) == 0) { return server_error("resource not registered"); }
+    int id = toInt(req.params.id);
+    json row = _wings_res_db_find(m, id);
+    if (length(keys(row)) == 0) { return not_found("record " + toString(id) + " not found"); }
+    return ok(row);
+}
+
+func _wings_res_create(req) {
+    json m = _wings_res_model(req["path"]);
+    if (length(keys(m)) == 0) { return server_error("resource not registered"); }
+    int id = _wings_res_db_insert(m, req.json);
+    return created(_wings_res_db_find(m, id));
+}
+
+func _wings_res_update(req) {
+    json m = _wings_res_model(_wings_res_parent(req["path"]));
+    if (length(keys(m)) == 0) { return server_error("resource not registered"); }
+    int id = toInt(req.params.id);
+    json row = _wings_res_db_find(m, id);
+    if (length(keys(row)) == 0) { return not_found("record " + toString(id) + " not found"); }
+    _wings_res_db_update(m, id, req.json);
+    return ok(_wings_res_db_find(m, id));
+}
+
+func _wings_res_destroy(req) {
+    json m = _wings_res_model(_wings_res_parent(req["path"]));
+    if (length(keys(m)) == 0) { return server_error("resource not registered"); }
+    int id = toInt(req.params.id);
+    json row = _wings_res_db_find(m, id);
+    if (length(keys(row)) == 0) { return not_found("record " + toString(id) + " not found"); }
+    _wings_res_db_delete(m, id);
+    return no_content();
+}
+
+// --- kayıt ---------------------------------------------------------------------
+
+func resource(str path, json m, json opts) {
+    // Sondaki "/" normalize edilir; group() prefix'i base'e dahil edilir.
+    str p = path;
+    if (length(p) > 1) {
+        if (substring(p, length(p) - 1, length(p)) == "/") {
+            p = substring(p, 0, length(p) - 1);
+        }
+    }
+    push(_wings_resources, {"base": _route_prefix + p, "model": m});
+
+    if (_wings_res_on(opts, "index"))  { get(p, "_wings_res_index"); }
+    if (_wings_res_on(opts, "show"))   { get(p + "/:id", "_wings_res_show"); }
+    if (_wings_res_on(opts, "create")) {
+        post(p, "_wings_res_create");
+        body_schema(_wings_res_schema(m));
+    }
+    if (_wings_res_on(opts, "update")) {
+        put(p + "/:id", "_wings_res_update");
+        body_schema(_wings_res_schema(m));
+    }
+    if (_wings_res_on(opts, "destroy")) {
+        del(p + "/:id", "_wings_res_destroy");
     }
 }

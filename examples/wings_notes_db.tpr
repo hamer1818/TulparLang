@@ -1,22 +1,21 @@
 // ============================================================================
-// Tulpar Wings — SQLite destekli Notlar REST API  ("kalıcı veritabanlı API")
+// Tulpar Wings — SQLite destekli Notlar REST API  ("elle SQL" öğretici sürüm)
 // ----------------------------------------------------------------------------
 // wings_todo_api.tpr'deki Todo API'sinin AYNISI, ama veriyi bellekte değil
 // gerçek bir SQLite dosyasında (notes.db) tutar. Sunucuyu kapatıp tekrar
 // açsan bile notların yerinde durur — işte "kalıcılık" (persistence) budur.
 //
+// NOT: Aynı API'nin 7 satırlık kısayolu var → examples/wings_orm_resource.tpr
+// (model() + resource()). Bu dosya SQL katmanını ELLE kurmayı öğretir; ORM'in
+// senin yerine ne yaptığını görmek için ikisini yan yana oku.
+//
 // Gösterdikleri:
 //   • db_open / db_execute / db_query / db_last_insert_id — gömülü SQLite
-//   • db_execute(...) ............... INSERT/UPDATE/DELETE (etkilenen satır sayısı)
-//   • db_query(...) ................. SELECT (satır-dict dizisi döner)
-//   • db_last_insert_id(...) ........ yeni eklenen kaydın id'si
-//   • SQL'i güvenle kurma ........... parametreli sorgu YOK; metni sql_str() ile
-//                                     kaçışla (' → '') ve sayıyı toInt'le temizle
-//
-// NOT: Tulpar'ın db_query'sinde "?" parametre bağlama yoktur — SQL'i string
-// birleştirerek kurarız. Bu yüzden kullanıcıdan gelen METNİ asla doğrudan
-// gömME: sql_str() tek tırnakları ikileyip enjeksiyonu önler. Sayısal id'leri
-// toInt()'ten geçirmek de onları güvenli kılar.
+//   • db_execute(db, sql, [params]) ..... INSERT/UPDATE/DELETE, `?` bağlı değer
+//   • db_query(db, sql, [params]) ....... SELECT (satır-dict dizisi döner)
+//   • db_last_insert_id(db) ............. yeni eklenen kaydın id'si
+//   • SQL'i güvenle kurma ............... değerler `?` ile BAĞLANIR (v3.3.0+),
+//                                         asla string birleştirmeyle gömülmez
 //
 // ÇALIŞTIRMA:
 //   tulpar examples/wings_notes_db.tpr
@@ -46,14 +45,9 @@ func note_count() {
     return toInt(rows[0]["n"]);
 }
 
-// Yardımcı: kullanıcı metnini SQL-string literaline çevir. Tek tırnağı ikiler
-// ('ada's note' → 'ada''s note') ve tırnak içine alır → enjeksiyon kapalı.
-func sql_str(str s) {
-    return "'" + replace(s, "'", "''") + "'";
-}
-
 // Yardımcı: ham DB satırını temiz bir nota çevir. done sütunu 0/1 int gelir;
-// API'de bool olarak sunmak daha doğru.
+// API'de bool olarak sunmak daha doğru. (ORM'in model() şeması bunu otomatik
+// yapar — burada elle yapıyoruz ki ne olduğu görünsün.)
 func row_to_note(json row) {
     return {
         "id":    toInt(row["id"]),
@@ -63,10 +57,11 @@ func row_to_note(json row) {
 }
 
 // Açılışta tablo boşsa birkaç örnek not ekle (boş API'yi denemek can sıkıcı).
+// Değerler `?` ile bağlanıyor — SQL metnine hiçbir kullanıcı verisi girmez.
 func seed() {
     if (note_count() == 0) {
-        db_execute(_db, "INSERT INTO notes (title, done) VALUES ('Tulpar ile SQLite dene', 1);");
-        db_execute(_db, "INSERT INTO notes (title, done) VALUES ('Kalıcı API yaz', 0);");
+        db_execute(_db, "INSERT INTO notes (title, done) VALUES (?, ?);", ["Tulpar ile SQLite dene", 1]);
+        db_execute(_db, "INSERT INTO notes (title, done) VALUES (?, ?);", ["Kalıcı API yaz", 0]);
     }
 }
 seed();
@@ -94,36 +89,35 @@ func list_notes(req) {
     return {"data": out, "count": length(out)};
 }
 
-// GET /notes/:id  — tek not. Yoksa 404.
+// GET /notes/:id  — tek not. Yoksa 404. id değeri `?` ile bağlanır.
 func show_note(req) {
     int id = toInt(req.params.id);
-    array rows = db_query(_db, t"SELECT * FROM notes WHERE id = {toString(id)};");
+    array rows = db_query(_db, "SELECT * FROM notes WHERE id = ?;", [id]);
     if (length(rows) == 0) {
         return not_found(t"not {id} bulunamadı");
     }
     return ok(row_to_note(rows[0]));
 }
 
-// POST /notes  — yeni not. body_schema sayesinde "title" string'i GARANTİ var.
+// POST /notes  — yeni not. accepts() sayesinde "title" string'i GARANTİ var.
+// Kullanıcı metni SQL'e GÖMÜLMEZ — parametre olarak bağlanır; enjeksiyon
+// yapısal olarak imkânsız.
 func create_note(req) {
     json body = req.json;
     int done = 0;
     if (_wings_has_key(body, "done")) {
         if (body["done"] == true) { done = 1; }
     }
-    // t-string interpolasyonunu sade tutmak için değerleri önce hazırla.
-    str title_sql = sql_str(body["title"]);
-    str done_sql  = toString(done);
-    db_execute(_db, t"INSERT INTO notes (title, done) VALUES ({title_sql}, {done_sql});");
+    db_execute(_db, "INSERT INTO notes (title, done) VALUES (?, ?);", [body["title"], done]);
     int new_id = db_last_insert_id(_db);
-    array rows = db_query(_db, t"SELECT * FROM notes WHERE id = {toString(new_id)};");
+    array rows = db_query(_db, "SELECT * FROM notes WHERE id = ?;", [new_id]);
     return created(row_to_note(rows[0]));   // 201 Created
 }
 
 // PUT /notes/:id  — var olan notu güncelle. Yoksa 404.
 func update_note(req) {
     int id = toInt(req.params.id);
-    array rows = db_query(_db, t"SELECT * FROM notes WHERE id = {toString(id)};");
+    array rows = db_query(_db, "SELECT * FROM notes WHERE id = ?;", [id]);
     if (length(rows) == 0) {
         return not_found(t"not {id} bulunamadı");
     }
@@ -134,39 +128,37 @@ func update_note(req) {
         done = 0;
         if (body["done"] == true) { done = 1; }
     }
-    str title_sql = sql_str(body["title"]);
-    str done_sql  = toString(done);
-    str id_sql    = toString(id);
-    db_execute(_db, t"UPDATE notes SET title = {title_sql}, done = {done_sql} WHERE id = {id_sql};");
-    array updated = db_query(_db, t"SELECT * FROM notes WHERE id = {id_sql};");
+    db_execute(_db, "UPDATE notes SET title = ?, done = ? WHERE id = ?;", [body["title"], done, id]);
+    array updated = db_query(_db, "SELECT * FROM notes WHERE id = ?;", [id]);
     return ok(row_to_note(updated[0]));
 }
 
 // DELETE /notes/:id  — sil. Başarılıysa gövdesiz 204; yoksa 404.
 func delete_note(req) {
     int id = toInt(req.params.id);
-    array rows = db_query(_db, t"SELECT * FROM notes WHERE id = {toString(id)};");
+    array rows = db_query(_db, "SELECT * FROM notes WHERE id = ?;", [id]);
     if (length(rows) == 0) {
         return not_found(t"not {id} bulunamadı");
     }
-    db_execute(_db, t"DELETE FROM notes WHERE id = {toString(id)};");
+    db_execute(_db, "DELETE FROM notes WHERE id = ?;", [id]);
     return no_content();                    // 204 No Content
 }
 
 // ----------------------------------------------------------------------------
-// Route tablosu — kaynak: /notes  (klasik REST eşlemesi)
+// Route tablosu — kaynak: /notes  (klasik REST eşlemesi). Handler'lar
+// fonksiyon referansıyla bağlanır: yazım hatası = derleme hatası.
 // ----------------------------------------------------------------------------
-get("/",           "index");
-get("/notes",      "list_notes");
-get("/notes/:id",  "show_note");
+get("/",           index);
+get("/notes",      list_notes);
+get("/notes/:id",  show_note);
 
-post("/notes",     "create_note");
-body_schema({"title": "str", "done?": "bool"});   // title zorunlu, done opsiyonel
+post("/notes",     create_note);
+accepts({"title": "str", "done?": "bool"});   // title zorunlu, done opsiyonel
 
-put("/notes/:id",  "update_note");
-body_schema({"title": "str", "done?": "bool"});
+put("/notes/:id",  update_note);
+accepts({"title": "str", "done?": "bool"});
 
-del("/notes/:id",  "delete_note");
+delete("/notes/:id", delete_note);
 
 // ----------------------------------------------------------------------------
 // Sunucuyu başlat. Veriler notes.db'de — sunucu yeniden başlasa bile kalıcı.

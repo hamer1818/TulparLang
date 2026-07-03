@@ -21,11 +21,11 @@ func seed_data() {
 seed_data();
 
 // ============================================
-// API Handlers
+// API Handlers — her handler `req` alır, cevap sözlüğü döndürür.
 // ============================================
 
 // GET / - API info
-func api_info() {
+func api_info(req) {
     return {
         "name": "Tulpar Wings CRUD API",
         "version": "1.0.0",
@@ -41,7 +41,7 @@ func api_info() {
 }
 
 // GET /health - Health check
-func health_check() {
+func health_check(req) {
     return {
         "status": "healthy",
         "uptime_ms": clock_ms(),
@@ -50,7 +50,7 @@ func health_check() {
 }
 
 // GET /users - List all users
-func list_users() {
+func list_users(req) {
     return {
         "success": true,
         "data": _users,
@@ -59,7 +59,7 @@ func list_users() {
 }
 
 // GET /stats - API statistics
-func get_stats() {
+func get_stats(req) {
     return {
         "total_users": length(_users),
         "next_id": _next_id,
@@ -68,62 +68,52 @@ func get_stats() {
     };
 }
 
-// POST /users - Create a new user
-func create_user() {
-    str body = _request["body"];
+// POST /users - Create a new user. Gövde otomatik parse edilir: req.json.
+// accepts() şeması sayesinde "name" garantili; email/role opsiyonel.
+func create_user(req) {
+    json body = req.json;
     json new_user = {
         "id": _next_id,
-        "name": "NewUser",
+        "name": body["name"],
         "email": "new@tulpar.dev",
         "role": "user"
     };
+    if (_wings_has_key(body, "email")) { new_user["email"] = body["email"]; }
+    if (_wings_has_key(body, "role"))  { new_user["role"]  = body["role"]; }
 
-    // Try to parse body if available
-    if (length(body) > 0) {
-        json parsed = fromJson(body);
-        if (parsed["name"]) {
-            new_user["name"] = parsed["name"];
-        }
-        if (parsed["email"]) {
-            new_user["email"] = parsed["email"];
-        }
-        if (parsed["role"]) {
-            new_user["role"] = parsed["role"];
-        }
-    }
-
-    push(_users, new_user);
+    push(_users, new_user);           // global'e push → otomatik kalıcı
     _next_id = _next_id + 1;
 
-    return {
+    return created({
         "success": true,
         "message": "User created",
         "data": new_user
-    };
+    });
 }
 
 // POST /echo - Echo back request data
-func echo_handler() {
+func echo_handler(req) {
     return {
-        "method": _request["method"],
-        "path": _request["path"],
-        "body": _request["body"],
+        "method": req["method"],
+        "path": req["path"],
+        "body": req["body"],
         "echo": true
     };
 }
 
 // ============================================
-// Route Registration
+// Route Registration — fonksiyon referansıyla (typo = derleme hatası).
 // ============================================
-get("/", "api_info");
-get("/health", "health_check");
-get("/users", "list_users");
-get("/stats", "get_stats");
-post("/users", "create_user");
-post("/echo", "echo_handler");
+get("/", api_info);
+get("/health", health_check);
+get("/users", list_users);
+get("/stats", get_stats);
+post("/users", create_user);
+accepts({"name": "str", "email?": "str", "role?": "str"});
+post("/echo", echo_handler);
 
 // ============================================
 // Start Server
 // ============================================
 print("Seed data loaded: " + toString(length(_users)) + " users");
-listen(3000);
+serve(3000);

@@ -1,0 +1,169 @@
+// ============================================================
+// ORM v2 — model handle + UFCS regresyon paketi (WINGS_DX.md Faz 1)
+// Çalıştır: ./tulpar tests/orm.test.tpr
+// ============================================================
+import "test";
+import "orm";
+
+// Tek :memory: bağlantısı; her test kendi tablosunu kullanır ki
+// sıra bağımlılığı olmasın.
+database(":memory:");
+
+json Note = model("notes", {
+    "id":    "pk",
+    "title": "str!",
+    "done":  "bool",
+    "score": "float"
+});
+
+// ---- create + find + tip cast'i ------------------------------------------------
+func run_create_find() {
+    int id = Note.create({"title": "süt al", "done": false, "score": 1.5});
+    assert(id > 0, "create pozitif id döndürür");
+    json n = Note.find(id);
+    assert_eq_str(n["title"], "süt al");
+    assert(n["done"] == false, "bool kolonu false olarak cast'lenir");
+    assert_eq_str(toString(n["done"]), "false");
+    assert(n["score"] > 1.0, "float kolonu sayı döner");
+    // bulunamayan id → {}
+    json yok = Note.find(999999);
+    assert_eq_int(length(keys(yok)), 0);
+}
+
+// ---- 0 / boş değer yazımı (v1'in bug'ı) -----------------------------------------
+func run_zero_value_update() {
+    int id = Note.create({"title": "kapat beni", "done": true});
+    json n = Note.find(id);
+    assert(n["done"] == true, "önce done=true");
+    // v1 bunu sessizce düşürüyordu — v2'de 0/false gerçekten yazılır.
+    Note.update(id, {"done": false});
+    json n2 = Note.find(id);
+    assert(n2["done"] == false, "done=false YAZILDI (0-değer bug'ı kapalı)");
+    assert_eq_str(toString(n2["done"]), "false");
+    // boş string de yazılır (str! değil, düz str kolonda).
+    json Memo = model("memos", {"id": "pk", "body": "str"});
+    int mid = Memo.create({"body": "dolu"});
+    Memo.update(mid, {"body": ""});
+    json m2 = Memo.find(mid);
+    assert_eq_int(length(m2["body"]), 0);
+}
+
+// ---- şemada olmayan anahtar düşer (body passthrough) ------------------------------
+func run_unknown_keys_dropped() {
+    int id = Note.create({"title": "temiz", "_status": 201, "evil": "x"});
+    json n = Note.find(id);
+    assert_eq_str(n["title"], "temiz");
+    assert(!_orm_has(n, "evil"), "şema dışı kolon yazılmaz");
+}
+
+// ---- where / first / count: bağlı parametreler ------------------------------------
+func run_where_first_count() {
+    json T = model("todos", {"id": "pk", "title": "str!", "done": "bool"});
+    T.create({"title": "a", "done": false});
+    T.create({"title": "b", "done": true});
+    T.create({"title": "c", "done": false});
+    array open = T.where("done = ?", [0]);
+    assert_eq_int(length(open), 2);
+    assert(open[0]["done"] == false, "where sonuçları da cast'li");
+    json ilk = T.first("done = ?", [1]);
+    assert_eq_str(ilk["title"], "b");
+    json hic = T.first("title = ?", ["yok-böyle-başlık"]);
+    assert_eq_int(length(keys(hic)), 0);
+    assert_eq_int(T.count(), 3);
+    assert_eq_int(length(T.all()), 3);
+}
+
+// ---- injection: değer her zaman bağlanır -------------------------------------------
+func run_injection_safe() {
+    json U = model("users_inj", {"id": "pk", "name": "str!"});
+    str evil = "o'brien'; DROP TABLE users_inj;--";
+    int id = U.create({"name": evil});
+    json u = U.first("name = ?", [evil]);
+    assert_eq_int(toInt(toString(u["id"])), id);
+    // Tablo hayatta ve tek kayıt var (DROP çalışmadı).
+    assert_eq_int(U.count(), 1);
+}
+
+// ---- save: upsert iki yol -----------------------------------------------------------
+func run_save_upsert() {
+    json S = model("save_t", {"id": "pk", "title": "str!"});
+    // id'siz → create yolu; taze satır id'li döner.
+    json created_row = S.save({"title": "yeni"});
+    int id = toInt(toString(created_row["id"]));
+    assert(id > 0, "save-create id atar");
+    // id'li + kayıt var → update yolu.
+    json updated_row = S.save({"id": id, "title": "güncel"});
+    assert_eq_str(updated_row["title"], "güncel");
+    assert_eq_int(S.count(), 1);
+}
+
+// ---- remove ---------------------------------------------------------------------------
+func run_remove() {
+    json R = model("rm_t", {"id": "pk", "title": "str!"});
+    int id = R.create({"title": "silinecek"});
+    assert_eq_int(R.count(), 1);
+    R.remove(id);
+    assert_eq_int(R.count(), 0);
+    assert_eq_int(length(keys(R.find(id))), 0);
+}
+
+// ---- raw kaçış kapısı -------------------------------------------------------------------
+func run_raw_escape_hatch() {
+    json W = model("raw_t", {"id": "pk", "n": "int"});
+    W.create({"n": 5});
+    W.create({"n": 15});
+    array big = W.raw("n > 10");
+    assert_eq_int(length(big), 1);
+}
+
+// ---- ham SQL tip geçişi (kısayol olmayan tanım) -------------------------------------------
+func run_raw_sql_type_passthrough() {
+    json X = model("uniq_t", {"id": "pk", "email": "TEXT UNIQUE"});
+    X.create({"email": "a@b.c"});
+    assert_eq_int(X.count(), 1);
+}
+
+// ---- v1 uyumluluk katmanı ------------------------------------------------------------------
+func run_v1_compat() {
+    orm_open(":memory:");
+    define_model("legacy", {
+        "id":   "INTEGER PRIMARY KEY AUTOINCREMENT",
+        "name": "TEXT NOT NULL",
+        "age":  "INTEGER"
+    });
+    int id = orm_create("legacy", {"name": "Hamza", "age": 23});
+    json u = orm_find("legacy", id);
+    assert_eq_str(u["name"], "Hamza");
+    assert_eq_int(toInt(toString(u["age"])), 23);
+    orm_update("legacy", id, {"age": 24});
+    assert_eq_int(toInt(toString(orm_find("legacy", id)["age"])), 24);
+    // v1'de yazılamayan 0 değeri artık yazılıyor (bilinçli davranış farkı).
+    orm_update("legacy", id, {"age": 0});
+    assert_eq_int(toInt(toString(orm_find("legacy", id)["age"])), 0);
+    array rows = orm_where("legacy", "age >= 0");
+    assert_eq_int(length(rows), 1);
+    orm_delete("legacy", id);
+    assert_eq_int(length(orm_all("legacy")), 0);
+}
+
+// ---- çoklu veritabanı: handle kendi db'sini taşır --------------------------------------------
+// (run_v1_compat ikinci bir :memory: açtı — Note hâlâ İLK db'de yaşamalı.)
+func run_multi_db() {
+    int once = Note.count();
+    Note.create({"title": "hala ilk db'deyim"});
+    assert_eq_int(Note.count(), once + 1);
+}
+
+print("=== ORM v2 (model handle + UFCS) ===");
+test("create/find + bool-float cast", "run_create_find");
+test("0/boş değer update (v1 bug fix)", "run_zero_value_update");
+test("şema dışı anahtarlar düşer", "run_unknown_keys_dropped");
+test("where/first/count/all param'lı", "run_where_first_count");
+test("injection: bağlı parametre", "run_injection_safe");
+test("save upsert (create+update yolu)", "run_save_upsert");
+test("remove", "run_remove");
+test("raw() kaçış kapısı", "run_raw_escape_hatch");
+test("ham SQL tip geçişi (TEXT UNIQUE)", "run_raw_sql_type_passthrough");
+test("v1 orm_* uyumluluğu", "run_v1_compat");
+test("çoklu db: handle kendi db'sini taşır", "run_multi_db");
+test_summary();

@@ -7,6 +7,71 @@ language/stdlib/ABI changes, MINOR for backwards-compatible features, PATCH for
 fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md));
 `tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
 
+## [v3.7.0]
+
+Backwards-compatible **developer-experience round** (design doc:
+[WINGS_DX.md](WINGS_DX.md), cheatsheet: [WINGS_CHEATSHEET.md](WINGS_CHEATSHEET.md)).
+No breaking changes — every rename keeps the old name as a delegating wrapper.
+
+### Added — ORM v2 (lib/orm.tpr, pure Tulpar)
+- **Model handles + UFCS:** `database(path)` + `model(table, schema)` return a
+  plain-json handle used method-style — `Note.create({...})`, `Note.find(id)`,
+  `Note.all()`, `Note.where("done = ?", [0])`, `Note.first(cond, params)`,
+  `Note.count()`, `Note.update(id, {...})`, `Note.save(obj)` (upsert),
+  `Note.remove(id)`, `Note.raw(where_sql)` (escape hatch).
+- **Schema shorthands** shared with `body_schema` vocabulary: `"pk"`, `"str"`,
+  `"int"`, `"float"`, `"bool"` (+ `!` = NOT NULL); anything unrecognized passes
+  through as raw SQL (`"TEXT UNIQUE"`). `"bool"` columns are cast to
+  `true`/`false` on read — no more hand-written `row_to_note()` converters.
+- **Parameterized SQL everywhere:** every generated statement binds values via
+  the 3-arg `db_query`/`db_execute` (`?` placeholders); nothing is ever
+  string-interpolated into SQL. Multiple databases work — each handle carries
+  its own connection.
+- New regression suite `tests/orm.test.tpr` (11 cases).
+
+### Fixed — ORM
+- **Zero/empty values are no longer silently dropped.** v1 selected columns by
+  value truthiness, so `orm_update(id, {"done": 0})` (or `""`/`false`) wrote
+  nothing. Column selection now iterates `keys(attrs)` — explicit `0`/`""`/
+  `false` persist. Applies to the v1 wrappers too (intentional behavior fix).
+
+### Added — wings DX layer (lib/wings.tpr, pure Tulpar)
+- **`resource(path, Model[, opts])`** — automatic REST CRUD from an ORM model
+  handle: `GET/POST path`, `GET/PUT/DELETE path/:id`, request schema derived
+  from the model (`"str!"` → required, others optional → auto-422), rows
+  bool-cast, `/docs` + OpenAPI fed automatically.
+  `opts: {"only": [...]}` / `{"except": [...]}`
+  (actions: index/show/create/update/destroy). A persistent CRUD API is now
+  7 lines (`examples/wings_orm_resource.tpr`).
+- **`serve(port, workers)`** — one front door for the server:
+  `serve()` → 8484, `serve(8080)` → explicit port, `serve(8080, 4)` →
+  `listen_pool`. The `listen*` family remains as advanced modes.
+- **Short names (old names still work):** `cookies(req)` (`wings_cookies`),
+  `ws_upgrade/ws_send/ws_close/ws_pong` (`wings_ws_*`), `sse_headers/sse_event`
+  (`wings_sse_*`), `metrics_prom()` (`wings_metrics_prom`), `gzip(min?)`
+  (`enable_gzip`), `delete(path, h)` (`del`), `accepts(schema)` (`body_schema`),
+  `returns(schema)` (`response_model`).
+- New regression suite `tests/wings_dx.test.tpr` (10 cases: route wiring,
+  only/except filters, schema derivation, CRUD envelope statuses, aliases).
+
+### Changed — tooling & docs
+- LSP builtin table (`src/lsp/builtins.cpp`): added the wings DX layer, the
+  previously unregistered `patch/head/options`/`body_schema`/`response_model`
+  and request readers (`param`/`query`/`form`), and the **entire ORM v2
+  surface** (ORM had zero LSP presence before) — everything now shows up in
+  completion/hover.
+- `examples/wings_notes_db.tpr` modernized: bound-parameter SQL (its comments
+  wrongly claimed parameterized queries don't exist — stale since v3.3.0),
+  function-ref handlers, `accepts()`/`delete()`; repositioned as the
+  "hand-rolled SQL" teaching counterpart to `wings_orm_resource.tpr`.
+- `examples/api_wings_crud.tpr` modernized: `req` parameter + `req.json`
+  instead of the `_request` global, function-ref handlers, `accepts()` schema,
+  `serve(3000)`.
+- README: modern 8-line hello (function refs + `serve`), new 7-line
+  persistent-CRUD showcase, `serve()` documented as the front door.
+- New docs: `WINGS_DX.md` (design study), `WINGS_CHEATSHEET.md` (one-page
+  UFCS-first API map).
+
 ## [v3.6.0]
 
 Backwards-compatible feature round on top of v3.5.0: **wings completeness**

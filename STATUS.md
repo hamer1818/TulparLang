@@ -30,6 +30,18 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   WASM. `libtulpar_runtime.a` AOT'a static link.
 - **Stdlib gömülü:** wings, router, http_utils, http_client, async,
   middleware, socket, tulpar_api, orm, test. SQLite vendored.
+- **Wings/ORM DX turu (v3.7.0, 2026-07-03):** [WINGS_DX.md](WINGS_DX.md)
+  çalışmasının tamamı uygulandı — **ORM v2** (model handle + UFCS:
+  `Note.find(1)`, `Note.where("done = ?", [0])`, `Note.save(obj)`; her SQL
+  parametreli; `bool` kolon cast'i; v1'in 0/""/false-düşürme bug'ı kapandı;
+  `orm_*` eski adlar sarmalayıcı), **`resource("/notes", Note)`** (5 CRUD
+  route + türetilmiş 422 şeması + /docs — kalıcı CRUD API **7 satır**,
+  `examples/wings_orm_resource.tpr`), **`serve(port, workers)`** tek kapı,
+  **kısa isimler** (`cookies/ws_*/sse_*/metrics_prom/gzip/delete/accepts/
+  returns` — eskiler kırılmadı), LSP tablosuna DX + tüm ORM sembolleri.
+  `tests/orm.test.tpr` 11/11, `tests/wings_dx.test.tpr` 10/10; canlı curl
+  ile uçtan uca + restart-kalıcılık doğrulandı. Cheatsheet:
+  [WINGS_CHEATSHEET.md](WINGS_CHEATSHEET.md).
 - **Wings tamamlık turu (v3.6.0, 2026-07-02):** HANDOFF §2'deki tüm boşluklar
   kapandı — çerez SET tarafı (`set_cookie`/`delete_cookie`), **imzalı çerezler**
   (`set_signed_cookie`/`get_signed_cookie`, HMAC name-bound), **sunucu-taraflı
@@ -207,6 +219,41 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### HTTP runtime (Wings/Router native)
 
+- ✅ **Wings/ORM DX turu (v3.7.0, 2026-07-03)** — [WINGS_DX.md](WINGS_DX.md)
+  tasarımının dört ayağı da uygulandı, hepsi geriye-uyumlu (rename = yeni ad +
+  eski ad sarmalayıcı):
+  - ✅ **ORM v2 (`lib/orm.tpr` yeniden yazım):** `database(path)` +
+    `model(table, schema)` → sıradan-json model handle; UFCS ile
+    `Note.create/find/all/where/first/count/update/save/remove/raw`.
+    Tip kısayolları `body_schema` kelime hazinesiyle ortak (`"pk"`,
+    `"str!"`, `"bool"`…; tanınmayan tanım ham SQL geçer), `bool` kolonlar
+    okurken true/false'a cast'lenir, üretilen her SQL 3-arg
+    `db_query/db_execute` ile bağlı parametreli. **v1 bug fix:** kolon seçimi
+    truthiness yerine `keys(attrs)` — `{"done": 0}` / `""` / `false` artık
+    gerçekten yazılıyor (v1 sessizce düşürüyordu; `orm_*` sarmalayıcılar da
+    düzeltmeyi alır). Çoklu-db: her handle kendi bağlantısını taşır.
+    `tests/orm.test.tpr` **11/11**.
+  - ✅ **`resource(path, Model[, opts])` (`lib/wings.tpr`):** modelden 5 REST
+    route (index/show/create/update/destroy) + modelden türetilmiş
+    `body_schema` (`"str!"` → zorunlu; otomatik 422) + /docs beslemesi.
+    `opts {"only"/"except"}` filtreleri. wings orm'u **import etmez** —
+    `{"table","db","schema"}` sözleşmesi + `_wings_res_db_*` iç helper'ları
+    (db_* builtin'leri, parametreli SQL). Kalıcı CRUD API 175 satırdan
+    **7 satıra** indi (`examples/wings_orm_resource.tpr`); canlı curl ile
+    201/422/204/404 zarfları + restart-sonrası kalıcılık doğrulandı.
+  - ✅ **Adlandırma standardı:** `serve(port, workers)` tek kapı (workers>1 →
+    listen_pool; default-arg 0-pad sayesinde `serve()`/`serve(8080)` aynen);
+    kısa adlar `cookies`, `ws_upgrade/ws_send/ws_close/ws_pong`,
+    `sse_headers/sse_event`, `metrics_prom`, `gzip`, `delete`, `accepts`,
+    `returns`. Kural seti [WINGS_CHEATSHEET.md](WINGS_CHEATSHEET.md) sonunda.
+    `tests/wings_dx.test.tpr` **10/10**.
+  - ✅ **Keşfedilebilirlik:** LSP builtin tablosuna DX katmanı + eksik
+    `patch/head/options`/`body_schema`/`response_model`/`param`/`query`/`form`
+    + **tüm ORM v2 yüzeyi** eklendi (ORM'in LSP'de hiç kaydı yoktu).
+    `wings_notes_db.tpr` modernize (yorumları v3.3.0'dan beri "parametreli
+    sorgu YOK" diyordu — düzeltildi; bağlı parametre + funcref + accepts),
+    `api_wings_crud.tpr` modernize (`_request` globali → `req` parametresi),
+    README'ye 7-satır vitrin. → [[Wings]]
 - ✅ **Wings tamamlık turu (v3.6.0, 2026-07-02)** — HANDOFF §2'nin P1/P2/P3
   listesi tek turda kapatıldı (WS-recv Windows ABI maddesi hariç; o Windows
   test erişimi bekliyor). Hepsi `lib/wings.tpr` (saf Tulpar) + bir C builtin:
@@ -1202,26 +1249,19 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Stdlib DX (Wings/ORM)
 
-- 🟡 **Wings/ORM yazım kolaylığı turu — tasarım hazır, uygulama bekliyor.**
-  Detaylı çalışma: [WINGS_DX.md](WINGS_DX.md) (2026-07-03). Özet: (1) **ORM v2**
-  — model handle + UFCS (`Note.find(1)`, `Note.create({...})`), parametreli
-  SQL'e geçiş (bugünkü `lib/orm.tpr` hâlâ quote-escape kullanıyor ve
-  `{"done": 0}` gibi 0/boş değerleri **sessizce düşürüyor** — gerçek bug),
-  `body_schema` ile ortak tip kısayolları (`"pk"`, `"str!"`, `"bool"`), satır
-  cast'i; eski `orm_*` isimleri sarmalayıcı kalır. (2) **`resource("/notes",
-  Note)`** — 5 route + 422 şema + /docs otomatik: kalıcı CRUD API 175 satırdan
-  **7 satıra** iner (motto vitrini). (3) **Adlandırma standardı** — public'te
-  `wings_` öneki kalkar (`cookies`, `ws_send`, `sse_event`…), `enable_gzip`→
-  `gzip`, `del`→`delete` alias, `body_schema`/`response_model`→`accepts`/
-  `returns`, sunucu girişi tekleşir: `serve(port, workers)`; hepsi kırılmasız
-  (eski adlar alias). (4) **Keşfedilebilirlik** — ORM bugün LSP'de hiç kayıtlı
-  değil; yeni adlar + ORM sembolleri `src/lsp/builtins.cpp`'ye, örnekler
-  modernize (`wings_notes_db.tpr` yorumları "parametreli sorgu YOK" diyor —
-  v3.3.0'dan beri yanlış), UFCS-first cheatsheet. Derleyici değişikliği
-  gerektirmiyor (UFCS/funcref/param-SQL/default-arg zaten testli).
-  - **Sıradaki adım:** WINGS_DX.md §6 Faz 1 — `lib/orm.tpr` v2 yeniden yazımı
-    + `tests/orm.test.tpr`; öncesinde §6'daki 5 doğrulama maddesi (çift import
-    dedup, `delete` fn adı smoke, lambda-handler, model-handle auto-persist).
+- ✅ **Wings/ORM yazım kolaylığı turu — TAMAMLANDI (v3.7.0, 2026-07-03).**
+  [WINGS_DX.md](WINGS_DX.md)'deki dört ayak da uygulandı; detay:
+  Yapılanlar → HTTP runtime → "Wings/ORM DX turu". Testler:
+  `tests/orm.test.tpr` 11/11, `tests/wings_dx.test.tpr` 10/10 + canlı curl.
+  Faz-0 doğrulamaları: `delete` fn adı ✓, orm+wings çift import ✓, lambda
+  route **kaydı** derleniyor ✓ (canlı dispatch'i ayrıca doğrulanmadı — docs
+  funcref stilini öğretiyor), param-binder bool'u native bind ediyor ✓.
+- 🟢 **ORM v2 sonrası fikirler (talep görürse):** ilişkiler (`has_many`),
+  migration sistemi, tipli query-builder (`Note.q().eq(...)`), `where`'siz
+  `first(m)` overload'u. WINGS_DX.md "Kapsam dışı" bölümünde gerekçeli.
+  - **Sıradaki adım:** kullanım geri bildirimi bekle; ilk aday muhtemelen
+    `order/limit` opsiyonları (`Note.where(cond, params, {"order": "id DESC",
+    "limit": 20})`).
 
 ### Tooling
 
