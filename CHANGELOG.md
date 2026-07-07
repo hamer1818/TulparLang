@@ -7,6 +7,29 @@ language/stdlib/ABI changes, MINOR for backwards-compatible features, PATCH for
 fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md));
 `tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
 
+## [v3.8.0]
+
+New backwards-compatible builtin plus a native-codegen correctness fix.
+
+### Added
+- **`sys_run(cmd: str): int`** — runs a shell command with inherited stdio (its
+  output streams live) and returns the process exit code (`0` = success). Lets
+  Tulpar programs drive external tools such as `winget`, `git`, or any CLI.
+  Wired through the standard builtin path: runtime binding (`aot_sys_run`),
+  typeinfer signature, LSP doc, and LLVM codegen dispatch.
+- `TULPAR_AOT_EMIT_LL_PRE=1` — dump the pre-optimization LLVM IR (debug aid,
+  companion to `TULPAR_AOT_EMIT_LL`).
+
+### Fixed
+- Native (all-int) fast-path codegen mis-compiled two cases exposed by
+  value-returning functions that read globals:
+  - `while` / `for` conditions that come back boxed (e.g. `i < length(arr)`)
+    were emitted as `br i1 true` — an infinite loop. The boxed payload is now
+    tested `!= 0`, matching the `if`-condition path.
+  - reading an array/object subscript (`arr[i]`) inside a native function
+    returned garbage; such statements now fall back to the boxed VMValue
+    codegen, mirroring the existing subscript-assignment bail.
+
 ## [v3.7.0]
 
 Backwards-compatible **developer-experience round** (design doc:
