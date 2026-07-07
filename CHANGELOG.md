@@ -7,6 +7,17 @@ language/stdlib/ABI changes, MINOR for backwards-compatible features, PATCH for
 fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md));
 `tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
 
+## [v3.8.1]
+
+### Fixed
+- **Windows console UTF-8 for AOT programs.** AOT-compiled binaries run their
+  own entry point and call `aot_runtime_init()`, which set the UTF-8 locale and
+  started Winsock but never switched the console code page. On Windows this made
+  `print(...)` output with box-drawing, emoji, or Turkish characters render as
+  code-page mojibake. `aot_runtime_init()` now calls `SetConsoleOutputCP(CP_UTF8)`
+  / `SetConsoleCP(CP_UTF8)` (the compiler driver already did this for itself), so
+  every compiled program renders UTF-8 correctly with no per-program workaround.
+
 ## [v3.8.0]
 
 New backwards-compatible builtin plus a native-codegen correctness fix.

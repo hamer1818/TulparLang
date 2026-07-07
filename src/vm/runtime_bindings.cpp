@@ -277,6 +277,14 @@ void aot_runtime_init(void) {
   setlocale(LC_ALL, ".UTF8");
 
 #if PLATFORM_WINDOWS
+  // Make the console speak UTF-8 so box-drawing, emoji, and Turkish
+  // characters in `print(...)` render correctly instead of code-page
+  // mojibake. The compiler driver (src/main.cpp) already does this for
+  // itself; AOT-compiled user binaries have their own entry point and
+  // must set it here too.
+  SetConsoleOutputCP(CP_UTF8);
+  SetConsoleCP(CP_UTF8);
+
   // Winsock must be started before any socket() call. Without this,
   // socket() in aot_socket_server / aot_socket_client returns
   // WSANOTINITIALISED (10093) and every wings/router server example
