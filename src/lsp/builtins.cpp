@@ -82,6 +82,7 @@ const BuiltinEntry kBuiltins[] = {
 
     // ---- System ----
     {"sys_run",      "sys_run(cmd: str): int",                      "Kabuk komutunu çalıştırır; çıktı canlı akar, exit code döner (0=başarı)."},
+    {"read_key",     "read_key(): str",                             "Tek tuş okur (Enter'sız, ekrana yansımadan). Ok tuşları: up/down/left/right; ayrıca enter/esc/space/tab/backspace; diğerleri karakterin kendisi."},
 
     // ---- DB ----
     {"db_open",      "db_open(path: str): int",                     "SQLite veritabanı açar."},

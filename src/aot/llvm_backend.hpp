@@ -181,6 +181,7 @@ typedef struct {
   LLVMValueRef func_aot_to_json;
   LLVMValueRef func_aot_runtime_init;
   LLVMValueRef func_aot_input;
+  LLVMValueRef func_aot_read_key; // read_key()->str : single keypress, no echo
   LLVMValueRef func_aot_env;
   LLVMValueRef func_aot_arena_save;
   LLVMValueRef func_aot_arena_restore;

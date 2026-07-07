@@ -954,6 +954,10 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_input =
       LLVMAddFunction(backend->module, "aot_input", input_type);
 
+  // aot_read_key() -> VMValue (single keypress, no echo) — same 0-arg ABI.
+  backend->func_aot_read_key =
+      LLVMAddFunction(backend->module, "aot_read_key", input_type);
+
   // aot_env(name) -> VMValue (string)
   LLVMTypeRef env_params[] = {backend->vm_value_type};
   LLVMTypeRef env_type =
@@ -4133,6 +4137,9 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       if (!backend->func_aot_input)
         fprintf(stderr, "Fatal: func_aot_input is nullptr\n");
       return llvm_call_vmvalue_func(backend, backend->func_aot_input, nullptr, 0, "input_res");
+    }
+    if (node->name && strcmp(node->name, "read_key") == 0) {
+      return llvm_call_vmvalue_func(backend, backend->func_aot_read_key, nullptr, 0, "readkey_res");
     }
 
     // trim(str) -> String
