@@ -7,6 +7,20 @@ language/stdlib/ABI changes, MINOR for backwards-compatible features, PATCH for
 fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md));
 `tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
 
+## [v3.9.0]
+
+New backwards-compatible builtin for interactive terminal UIs.
+
+### Added
+- **`read_key(): str`** — blocks for a single keypress with no Enter and no echo,
+  and returns its name. Arrow keys resolve to `"up"` / `"down"` / `"left"` /
+  `"right"`; other special keys to `"enter"` / `"esc"` / `"space"` / `"tab"` /
+  `"backspace"`; printable keys return the character itself. Backed by `_getch`
+  on Windows and a `termios` raw-mode read on POSIX (with a graceful plain-read
+  fallback when stdin is not a TTY). This is the missing primitive for building
+  real app-like TUIs — arrow-key navigation, live selection, in-place repaint —
+  instead of line-based `input()` prompts.
+
 ## [v3.8.1]
 
 ### Fixed

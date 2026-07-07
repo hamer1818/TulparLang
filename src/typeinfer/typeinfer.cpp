@@ -737,6 +737,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"toBool", TYPE_BOOL, {TYPE_UNKNOWN}},
       // I/O
       {"input", TYPE_STRING, {}},
+      {"read_key", TYPE_STRING, {}},
       {"exit", TYPE_VOID, {TYPE_INT}},
       {"sleep", TYPE_VOID, {TYPE_INT}},
       {"sleep_async", TYPE_JSON, {TYPE_INT}},

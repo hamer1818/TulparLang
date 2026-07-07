@@ -36,8 +36,12 @@ typedef SSIZE_T ssize_t;
 #include <unordered_map>
 #include <string>
 #include <vector>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <conio.h>     // _getch — single-key (raw) input for read_key
+#else
 #include <sys/wait.h>  // WEXITSTATUS — decode system() status in aot_sys_run
+#include <termios.h>   // raw-mode single-key input for read_key
+#include <unistd.h>    // read / STDIN_FILENO
 #endif
 
 // EXTERN "C" BLOCK - AOT Runtime Functions (called from LLVM compiled code)
@@ -3019,6 +3023,91 @@ VMValue aot_sys_run_ptr(VMValue *cmd_ptr) {
   if (!cmd_ptr)
     return VM_INT(-1);
   return aot_sys_run(*cmd_ptr);
+}
+
+// aot_read_key() -> str : block for a single keypress (no Enter, no echo) and
+// return its name. Arrow keys -> "up"/"down"/"left"/"right"; other specials ->
+// "enter"/"esc"/"backspace"/"tab"/"space"; printable keys -> the character
+// itself. Backs the `read_key(): str` builtin used to build interactive TUIs.
+VMValue aot_read_key() {
+  char name[16];
+  name[0] = '\0';
+
+#ifdef _WIN32
+  int c = _getch();
+  if (c == 0 || c == 0xE0) {
+    // Extended key: a second _getch() carries the scan code.
+    int c2 = _getch();
+    switch (c2) {
+      case 72: strcpy(name, "up");    break;
+      case 80: strcpy(name, "down");  break;
+      case 75: strcpy(name, "left");  break;
+      case 77: strcpy(name, "right"); break;
+      default: name[0] = '\0';        break;
+    }
+  } else if (c == 13) strcpy(name, "enter");
+  else if (c == 27)   strcpy(name, "esc");
+  else if (c == 8)    strcpy(name, "backspace");
+  else if (c == 9)    strcpy(name, "tab");
+  else if (c == 32)   strcpy(name, "space");
+  else if (c == 3)    strcpy(name, "esc");   // Ctrl-C -> treat as quit signal
+  else { name[0] = (char)c; name[1] = '\0'; }
+#else
+  struct termios oldt, newt;
+  if (tcgetattr(STDIN_FILENO, &oldt) != 0) {
+    // Not a TTY (e.g. piped stdin): fall back to a plain byte read.
+    int ch = getchar();
+    if (ch == EOF) { ObjString *e = aot_allocate_string("", 0); return VM_OBJ((Obj *)e); }
+    if (ch == '\n' || ch == '\r') strcpy(name, "enter");
+    else if (ch == 32) strcpy(name, "space");
+    else { name[0] = (char)ch; name[1] = '\0'; }
+    ObjString *s0 = aot_allocate_string(name, (int)strlen(name));
+    return VM_OBJ((Obj *)s0);
+  }
+  newt = oldt;
+  newt.c_lflag &= ~(ICANON | ECHO);
+  newt.c_cc[VMIN] = 1;
+  newt.c_cc[VTIME] = 0;
+  tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+
+  unsigned char c = 0;
+  if (read(STDIN_FILENO, &c, 1) != 1) {
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    ObjString *e = aot_allocate_string("", 0);
+    return VM_OBJ((Obj *)e);
+  }
+
+  if (c == 27) {
+    // Escape: maybe an arrow-key CSI sequence (ESC [ A/B/C/D). Read the rest
+    // with a short timeout so a bare ESC still resolves to "esc".
+    newt.c_cc[VMIN] = 0;
+    newt.c_cc[VTIME] = 1;  // 100ms
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    unsigned char seq0 = 0, seq1 = 0;
+    int n0 = read(STDIN_FILENO, &seq0, 1);
+    int n1 = (n0 == 1) ? read(STDIN_FILENO, &seq1, 1) : 0;
+    if (n0 == 1 && n1 == 1 && seq0 == '[') {
+      switch (seq1) {
+        case 'A': strcpy(name, "up");    break;
+        case 'B': strcpy(name, "down");  break;
+        case 'C': strcpy(name, "right"); break;
+        case 'D': strcpy(name, "left");  break;
+        default:  strcpy(name, "esc");   break;
+      }
+    } else {
+      strcpy(name, "esc");
+    }
+  } else if (c == '\n' || c == '\r') strcpy(name, "enter");
+  else if (c == 127 || c == 8)       strcpy(name, "backspace");
+  else if (c == 9)                   strcpy(name, "tab");
+  else if (c == 32)                  strcpy(name, "space");
+  else { name[0] = (char)c; name[1] = '\0'; }
+
+  tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+#endif
+
+  ObjString *str = aot_allocate_string(name, (int)strlen(name));
+  return VM_OBJ((Obj *)str);
 }
 
 VMValue aot_write_file(VMValue path_val, VMValue content_val) {
