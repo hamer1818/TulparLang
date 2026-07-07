@@ -36,6 +36,9 @@ typedef SSIZE_T ssize_t;
 #include <unordered_map>
 #include <string>
 #include <vector>
+#ifndef _WIN32
+#include <sys/wait.h>  // WEXITSTATUS — decode system() status in aot_sys_run
+#endif
 
 // EXTERN "C" BLOCK - AOT Runtime Functions (called from LLVM compiled code)
 // ============================================================================
@@ -2983,6 +2986,31 @@ VMValue aot_read_file_ptr(VMValue *path_ptr) {
   if (!path_ptr)
     return VM_VOID();
   return aot_read_file(*path_ptr);
+}
+
+// aot_sys_run(cmd) -> int : run a shell command, stream its output live to the
+// inherited stdio, and return the process exit code (0 = success, -1 on
+// launch failure). Backs the `sys_run(cmd: str): int` builtin (drives winget).
+VMValue aot_sys_run(VMValue cmd_val) {
+  if (!IS_STRING(cmd_val))
+    return VM_INT(-1);
+  const char *cmd = AS_STRING(cmd_val)->chars;
+  int rc = system(cmd);
+  if (rc == -1)
+    return VM_INT(-1);
+#ifdef _WIN32
+  // system() already yields the command's exit code on Windows.
+  return VM_INT(rc);
+#else
+  // POSIX: unwrap the wait-status into the plain exit code.
+  return VM_INT(WEXITSTATUS(rc));
+#endif
+}
+
+VMValue aot_sys_run_ptr(VMValue *cmd_ptr) {
+  if (!cmd_ptr)
+    return VM_INT(-1);
+  return aot_sys_run(*cmd_ptr);
 }
 
 VMValue aot_write_file(VMValue path_val, VMValue content_val) {

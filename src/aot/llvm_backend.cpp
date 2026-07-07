@@ -1123,6 +1123,11 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_file_exists =
       LLVMAddFunction(backend->module, "aot_file_exists_ptr", read_type);
 
+  // aot_sys_run(cmd) -> int : run a shell command, return its exit code.
+  // Same single-VMValue-pointer ABI as read_file.
+  backend->func_aot_sys_run =
+      LLVMAddFunction(backend->module, "aot_sys_run_ptr", read_type);
+
   // aot_sha256(str) -> VMValue (lowercase 64-char hex digest as str).
   // Same single-VMValue-pointer ABI as read_file/file_exists.
   backend->func_aot_sha256 =
@@ -4217,6 +4222,16 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {arg_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_read_file, args, 1, "read_res");
     }
+    if (strcmp(node->name, "sys_run") == 0) {
+      LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "sysrun_arg_ptr");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "sysrun_arg_void");
+      LLVMValueRef args[] = {arg_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_sys_run, args, 1, "sysrun_res");
+    }
     if (strcmp(node->name, "write_file") == 0) {
       LLVMValueRef p = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef c = codegen_expression(backend, node->arguments[1]);
@@ -7293,6 +7308,31 @@ char *get_native_func_name(const char *name) {
 // Forward declared; defined recursively with the body version below.
 static int native_codegen_supports_stmt(ASTNode_C *stmt);
 
+// Whether an expression subtree reads an array/object subscript (`arr[i]`).
+// The native path allocates every local as a bare i64, so it cannot faithfully
+// read a boxed VMValue element out of a global array — the value comes back
+// garbage (see the subscript-*assignment* bail at AST_ASSIGNMENT below, which
+// this mirrors for reads). Any statement whose condition/RHS reaches into a
+// subscript must fall back to the boxed VMValue codegen.
+static int expr_has_subscript(ASTNode_C *n) {
+  if (!n) return 0;
+  if (n->type == AST_ARRAY_ACCESS) return 1;
+  if (expr_has_subscript(n->left)) return 1;
+  if (expr_has_subscript(n->right)) return 1;
+  if (expr_has_subscript(n->index)) return 1;
+  if (expr_has_subscript(n->condition)) return 1;
+  if (expr_has_subscript(n->return_value)) return 1;
+  if (expr_has_subscript(n->receiver)) return 1;
+  if (expr_has_subscript(n->callee)) return 1;
+  if (n->arguments)
+    for (int i = 0; i < n->argument_count; i++)
+      if (expr_has_subscript(n->arguments[i])) return 1;
+  if (n->elements)
+    for (int i = 0; i < n->element_count; i++)
+      if (expr_has_subscript(n->elements[i])) return 1;
+  return 0;
+}
+
 // Whether the native codegen path can correctly emit every statement in `body`.
 // `body` is expected to be an AST_BLOCK. The native path's body walker handles
 // only a fixed set of statement types (return / if / var-decl / assignment /
@@ -7314,8 +7354,11 @@ static int native_codegen_supports_stmt(ASTNode_C *stmt) {
   if (!stmt) return 1;
   switch (stmt->type) {
   case AST_RETURN:
-    return 1;
+    return !expr_has_subscript(stmt->return_value);
   case AST_ASSIGNMENT:
+    // `x = arr[i]` / `x = f(a[i])`: RHS reads a subscript the native i64 path
+    // can't box — bail to the VMValue codegen.
+    if (expr_has_subscript(stmt->right)) return 0;
     // Native locals are i64. `acc[key] = value` needs `acc` loaded as a
     // 16-byte VMValue, which OOB-reads off our 8-byte alloca and crashes
     // codegen (the parser sets `node->name` for plain `x = v` and leaves
@@ -7327,6 +7370,7 @@ static int native_codegen_supports_stmt(ASTNode_C *stmt) {
     if (stmt->left && stmt->left->type == AST_ARRAY_ACCESS) return 0;
     return 1;
   case AST_VARIABLE_DECL:
+    if (expr_has_subscript(stmt->right)) return 0;
     // Native locals are unconditionally allocated as i64, so only
     // int/bool decls survive the round-trip. `json arr = []`,
     // `string s = "..."`, `Point p;`, etc. silently lose their tag info.
@@ -7355,11 +7399,14 @@ static int native_codegen_supports_stmt(ASTNode_C *stmt) {
     }
     return 0;
   case AST_IF:
+    if (expr_has_subscript(stmt->condition)) return 0;
     return native_codegen_supports_body(stmt->then_branch) &&
            native_codegen_supports_body(stmt->else_branch);
   case AST_WHILE:
+    if (expr_has_subscript(stmt->condition)) return 0;
     return native_codegen_supports_body(stmt->body);
   case AST_FOR:
+    if (expr_has_subscript(stmt->condition)) return 0;
     // The for-init is a single VAR_DECL/ASSIGNMENT and the increment is an
     // ASSIGNMENT — all already covered by the recursive checks above when we
     // descend into the body, but explicitly verify here for clarity.
@@ -7629,6 +7676,16 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
           wcond_bool =
               LLVMBuildICmp(backend->builder, LLVMIntNE, wcond.value,
                             LLVMConstInt(backend->int_type, 0, 0), "w_cond");
+        } else if (wcond.boxed) {
+          // Condition came back boxed as a VMValue (e.g. `i < length(arr)`,
+          // where the builtin makes the comparison boxed). Test the payload
+          // (field 2) != 0 rather than defaulting to `true`, which would spin
+          // the loop forever.
+          LLVMValueRef payload = LLVMBuildExtractValue(
+              backend->builder, wcond.boxed, 2, "w_cond_payload");
+          wcond_bool =
+              LLVMBuildICmp(backend->builder, LLVMIntNE, payload,
+                            LLVMConstInt(backend->int_type, 0, 0), "w_cond");
         } else {
           wcond_bool = LLVMConstInt(backend->bool_type, 1, 0);
         }
@@ -7711,6 +7768,14 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
         if (cond.type == INFERRED_INT || cond.type == INFERRED_BOOL) {
           cond_bool =
               LLVMBuildICmp(backend->builder, LLVMIntNE, cond.value,
+                            LLVMConstInt(backend->int_type, 0, 0), "for_cond");
+        } else if (cond.boxed) {
+          // Boxed VMValue condition (e.g. `i < length(arr)`): test payload
+          // (field 2) != 0 instead of defaulting to `true` (infinite loop).
+          LLVMValueRef payload = LLVMBuildExtractValue(
+              backend->builder, cond.boxed, 2, "for_cond_payload");
+          cond_bool =
+              LLVMBuildICmp(backend->builder, LLVMIntNE, payload,
                             LLVMConstInt(backend->int_type, 0, 0), "for_cond");
         } else {
           cond_bool = LLVMConstInt(backend->bool_type, 1, 0);

@@ -341,6 +341,17 @@ AOTResult aot_compile_with_filename_debug(const char *source,
     return AOT_ERROR_CODEGEN;
   }
 
+  // Debug: dump raw front-end IR BEFORE optimization. Enable with
+  // TULPAR_AOT_EMIT_LL_PRE=1 to inspect codegen output pre-opt.
+  {
+    const char *e = getenv("TULPAR_AOT_EMIT_LL_PRE");
+    if (e && *e && *e != '0') {
+      char ir_file[256];
+      snprintf(ir_file, sizeof(ir_file), "%s.pre.ll", output_name);
+      llvm_backend_emit_ir_file(backend, ir_file);
+    }
+  }
+
   {
     AOTPhaseTimer t("optimize");
     AOT_PROGRESS("[AOT] Optimizing...\n");
