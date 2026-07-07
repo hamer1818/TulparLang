@@ -110,6 +110,19 @@ bt_full.txt
 test.tpr
 test_results.txt
 
+# Compiled example binaries: `tulpar --aot examples/<name>.tpr` drops an
+# extensionless `<name>` binary into the working dir, so running the examples
+# from the repo root leaves them behind. Linux AOT output has no extension, so
+# the `*.exe` / `tulpar` rules above miss them. Anchored to the repo root —
+# the sources live under examples/*.tpr and are never matched by these.
+/[0-9][0-9]_*
+/api_*
+/wings_*
+/demo_*
+/benchmark
+/tulpar_api_demo
+/utils
+
 # ==== WASM build dir ====
 # wasm/build_wasm.sh writes Emscripten outputs here. Underscored name slips
 # past the `build-*/` glob above, so cover it explicitly.

@@ -80,6 +80,9 @@ const BuiltinEntry kBuiltins[] = {
     {"append_file",  "append_file(path: str, data: str): bool",     "Dosyaya ekler."},
     {"file_exists",  "file_exists(path: str): bool",                "Dosya/dizin var mı?"},
 
+    // ---- System ----
+    {"sys_run",      "sys_run(cmd: str): int",                      "Kabuk komutunu çalıştırır; çıktı canlı akar, exit code döner (0=başarı)."},
+
     // ---- DB ----
     {"db_open",      "db_open(path: str): int",                     "SQLite veritabanı açar."},
     {"db_close",     "db_close(handle: int): void",                 ""},

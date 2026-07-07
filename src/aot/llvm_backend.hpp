@@ -212,6 +212,7 @@ typedef struct {
   LLVMValueRef func_aot_write_file;
   LLVMValueRef func_aot_append_file;
   LLVMValueRef func_aot_file_exists;
+  LLVMValueRef func_aot_sys_run; // sys_run(cmd)->int : run shell cmd, exit code
   LLVMValueRef func_aot_sha256;
   LLVMValueRef func_aot_password_hash;
   LLVMValueRef func_aot_password_verify;

@@ -758,6 +758,8 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"read_file", TYPE_STRING, {TYPE_STRING}},
       {"append_file", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
       {"file_exists", TYPE_BOOL, {TYPE_STRING}},
+      // System / process
+      {"sys_run", TYPE_INT, {TYPE_STRING}},
       // Crypto / content integrity
       {"sha256", TYPE_STRING, {TYPE_STRING}},
       // Password KDF (PBKDF2-HMAC-SHA256)
