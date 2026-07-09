@@ -755,6 +755,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"split", TYPE_ARRAY_STR, {TYPE_STRING, TYPE_STRING}},
       {"replace", TYPE_STRING, {TYPE_STRING, TYPE_STRING, TYPE_STRING}},
       {"substring", TYPE_STRING, {TYPE_STRING, TYPE_INT, TYPE_INT}},
+      {"ord", TYPE_INT, {TYPE_STRING, TYPE_INT}},
       {"indexOf", TYPE_INT, {TYPE_STRING, TYPE_STRING}},
       {"contains", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
       {"startsWith", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},

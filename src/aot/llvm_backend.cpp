@@ -1156,6 +1156,10 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_fit_width =
       LLVMAddFunction(backend->module, "aot_fit_width_ptr", write_type);
 
+  // aot_ord(s, i) -> int : unsigned byte value at index i (two-ptr ABI).
+  backend->func_aot_ord =
+      LLVMAddFunction(backend->module, "aot_ord_ptr", write_type);
+
   // aot_screen_open()/aot_screen_close() -> VMValue (void) : 0-arg ABI.
   backend->func_aot_screen_open =
       LLVMAddFunction(backend->module, "aot_screen_open", input_type);
@@ -4266,6 +4270,24 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {s_void, w_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_fit_width, args,
                                     2, "fw_res");
+    }
+    if (node->name && strcmp(node->name, "ord") == 0 &&
+        node->argument_count >= 2) {
+      LLVMValueRef sv = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef iv = codegen_expression(backend, node->arguments[1]);
+      LLVMValueRef s_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "ord_s_ptr");
+      LLVMBuildStore(backend->builder, sv, s_ptr);
+      LLVMValueRef i_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "ord_i_ptr");
+      LLVMBuildStore(backend->builder, iv, i_ptr);
+      LLVMValueRef s_void = LLVMBuildBitCast(
+          backend->builder, s_ptr, backend->ptr_type, "ord_s_void");
+      LLVMValueRef i_void = LLVMBuildBitCast(
+          backend->builder, i_ptr, backend->ptr_type, "ord_i_void");
+      LLVMValueRef args[] = {s_void, i_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_ord, args,
+                                    2, "ord_res");
     }
     if (node->name && strcmp(node->name, "screen_open") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_screen_open,

@@ -33,6 +33,22 @@ func indexOf_basic() {
     assert_eq_int(indexOf("hello", ""), 0);
 }
 
+// ----- ord (unsigned byte value at index) ----------------------------------
+
+func ord_basic() {
+    assert_eq_int(ord("A", 0), 65);
+    assert_eq_int(ord("abc", 1), 98);
+    assert_eq_int(ord("", 0), -1);       // out of range
+    assert_eq_int(ord("A", 5), -1);      // out of range
+    assert_eq_int(ord("A", -1), -1);     // negative index
+    // Multi-byte UTF-8: "ı" (U+0131) encodes to 0xC4 0xB1 — a lead byte plus a
+    // continuation byte (0x80-0xBF). This is what makes byte-wise backspace need
+    // ord: to delete the whole code point you walk back over the continuation.
+    assert_eq_int(length("ı"), 2);
+    assert_eq_int(ord("ı", 0), 196);     // 0xC4 lead byte
+    assert_eq_int(ord("ı", 1), 177);     // 0xB1 continuation byte
+}
+
 // ----- contains / startsWith / endsWith -----------------------------------
 
 func contains_basic() {
@@ -133,6 +149,7 @@ test("length", "len_basic");
 test("upper / lower", "upper_lower");
 test("substring", "substring_basic");
 test("indexOf", "indexOf_basic");
+test("ord", "ord_basic");
 test("contains", "contains_basic");
 test("startsWith / endsWith", "starts_ends_with");
 test("split + join roundtrip", "split_join_roundtrip");
