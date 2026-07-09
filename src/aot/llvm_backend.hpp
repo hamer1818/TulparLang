@@ -182,6 +182,16 @@ typedef struct {
   LLVMValueRef func_aot_runtime_init;
   LLVMValueRef func_aot_input;
   LLVMValueRef func_aot_read_key; // read_key()->str : single keypress, no echo
+  LLVMValueRef func_aot_sys_lang; // sys_lang()->str : OS UI language (iso-639)
+  LLVMValueRef func_aot_read_key_timeout; // read_key_timeout(ms)->str : timed key
+  LLVMValueRef func_aot_term_width;       // term_width()->int : terminal columns
+  LLVMValueRef func_aot_term_height;      // term_height()->int : terminal rows
+  LLVMValueRef func_aot_display_width;    // display_width(s)->int : column width
+  LLVMValueRef func_aot_fit_width;        // fit_width(s,w)->str : pad/truncate
+  LLVMValueRef func_aot_screen_open;      // screen_open() : enter TUI screen
+  LLVMValueRef func_aot_screen_close;     // screen_close() : restore screen
+  LLVMValueRef func_aot_screen_render;    // screen_render(frame) : atomic draw
+  LLVMValueRef func_aot_style;            // style(s,spec)->str : ANSI styling
   LLVMValueRef func_aot_env;
   LLVMValueRef func_aot_arena_save;
   LLVMValueRef func_aot_arena_restore;

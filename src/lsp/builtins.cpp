@@ -83,6 +83,16 @@ const BuiltinEntry kBuiltins[] = {
     // ---- System ----
     {"sys_run",      "sys_run(cmd: str): int",                      "Kabuk komutunu çalıştırır; çıktı canlı akar, exit code döner (0=başarı)."},
     {"read_key",     "read_key(): str",                             "Tek tuş okur (Enter'sız, ekrana yansımadan). Ok tuşları: up/down/left/right; ayrıca enter/esc/space/tab/backspace; diğerleri karakterin kendisi."},
+    {"sys_lang",     "sys_lang(): str",                             "İşletim sistemi arayüz dilini küçük harf ISO-639 kodu olarak döner (\"tr\", \"en\", ...). Yerelleştirme için. Belirlenemezse \"\"."},
+    {"read_key_timeout", "read_key_timeout(ms: int): str",          "read_key gibi ama en fazla ms milisaniye bekler; süre dolarsa \"\" (boş) döner. Canlı/animasyonlu TUI (spinner, ilerleme, otomatik yenileme) için."},
+    {"term_width",   "term_width(): int",                           "Terminal genişliği (sütun sayısı). Belirlenemezse 80. Responsive TUI düzeni için."},
+    {"term_height",  "term_height(): int",                          "Terminal yüksekliği (satır sayısı). Belirlenemezse 24. Responsive TUI düzeni için."},
+    {"display_width","display_width(s: str): int",                  "s'nin terminaldeki görünür sütun genişliği. ANSI renk kodları 0; geniş/emoji 2; birleşen işaretler 0; UTF-8 farkında. length()'in aksine hizalama için doğru."},
+    {"fit_width",    "fit_width(s: str, width: int): str",          "s'yi tam olarak width sütuna oturtur: uzunsa kod-noktası sınırında keser ve … ekler, kısaysa boşlukla sağa doldurur. TUI kolonları için."},
+    {"screen_open",  "screen_open(): void",                         "TUI için alt-ekrana geçer, imleci gizler, satır kaydırmayı kapatır ve ekranı temizler. Ham ANSI yazmadan tam ekran uygulama başlatır."},
+    {"screen_close", "screen_close(): void",                        "screen_open()'ın tersi: normal ekrana döner, imleci ve satır kaydırmayı geri açar."},
+    {"screen_render","screen_render(frame: str): void",             "Bir kareyi titremesiz (senkronize çıktı) ve kaymadan atomik olarak çizer. Uygulama hiç escape kodu yazmaz; kareyi normal string olarak kurar."},
+    {"style",        "style(s: str, spec: str): str",               "s'yi ANSI stilleriyle sarar. spec boşlukla ayrılmış: bold dim italic underline invert; renk adları (red green yellow blue magenta cyan white gray); bright-<renk>; arka plan için on-<renk>. Ham escape yerine okunur isimler."},
 
     // ---- DB ----
     {"db_open",      "db_open(path: str): int",                     "SQLite veritabanı açar."},

@@ -299,7 +299,41 @@ Token Lexer::read_string() {
                 case '\\': buffer += '\\'; break;
                 case '"': buffer += '"'; break;
                 case 'e': buffer += '\x1b'; break; // ESC — ANSI escape sequences
-                case '0': buffer += '\0'; break;
+                case 'x': case 'X': {
+                    // \xHH — up to two hex digits (e.g. "\x1b" == ESC).
+                    int val = 0, cnt = 0;
+                    while (cnt < 2) {
+                        char p = peek();
+                        int d;
+                        if (p >= '0' && p <= '9') d = p - '0';
+                        else if (p >= 'a' && p <= 'f') d = p - 'a' + 10;
+                        else if (p >= 'A' && p <= 'F') d = p - 'A' + 10;
+                        else break;
+                        advance();
+                        val = val * 16 + d;
+                        cnt++;
+                    }
+                    if (cnt == 0) buffer += 'x';        // no hex digits: literal x
+                    else buffer += static_cast<char>(val);
+                    break;
+                }
+                case '0': case '1': case '2': case '3':
+                case '4': case '5': case '6': case '7': {
+                    // Octal \NNN — up to three octal digits (e.g. "\033" == ESC,
+                    // "\0" == NUL). Prevents the old footgun where "\033" was
+                    // read as NUL + "33", silently truncating ANSI strings.
+                    int val = current_char_ - '0';
+                    int cnt = 1;
+                    while (cnt < 3) {
+                        char p = peek();
+                        if (p < '0' || p > '7') break;
+                        advance();
+                        val = val * 8 + (p - '0');
+                        cnt++;
+                    }
+                    buffer += static_cast<char>(val & 0xFF);
+                    break;
+                }
                 default: buffer += current_char_; break;
             }
         } else {

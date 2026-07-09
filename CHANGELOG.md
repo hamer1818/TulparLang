@@ -7,6 +7,64 @@ language/stdlib/ABI changes, MINOR for backwards-compatible features, PATCH for
 fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md));
 `tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
 
+## [v3.10.0]
+
+A terminal-UI builtin suite for building flicker-free, app-like TUIs in pure
+TulparLang, a locale probe, string-escape parsing, and an AOT codegen
+correctness fix for comparison-heavy programs on LLVM 22. All
+backwards-compatible.
+
+### Added
+- **Full-screen TUI builtins.** The flicker-free details (alternate screen,
+  synchronized output, cursor home, line-wrap off) are hidden behind clean
+  builtins so apps read like Python and never write raw ANSI themselves:
+  - **`screen_open(): void`** — enter the alternate screen, hide the cursor,
+    disable line-wrap, clear. **`screen_close(): void`** — the inverse (restore
+    the normal screen, cursor, and wrap).
+  - **`screen_render(frame: str): void`** — draw one frame atomically via
+    synchronized output with the cursor homed, so a full repaint never tears or
+    scrolls. The app builds the frame as a normal string; unlike `print()` it
+    adds no trailing newline.
+  - **`style(s: str, spec: str): str`** — wrap `s` in ANSI styles from a
+    space-separated spec (`bold dim italic underline invert`; color names
+    `red green yellow blue magenta cyan white gray`; `bright-<color>`;
+    `on-<color>` backgrounds) instead of hand-written escapes.
+  - **`display_width(s: str): int`** — visible terminal column width of `s`,
+    ANSI- and UTF-8-aware (color codes count 0, wide/emoji 2, combining marks 0).
+    Correct for alignment where byte-based `length()` is not.
+  - **`fit_width(s: str, width: int): str`** — fit `s` to exactly `width`
+    columns: truncate at a code-point boundary with `…`, or right-pad with
+    spaces. For laying out TUI columns.
+  - **`term_width(): int` / `term_height(): int`** — controlling-terminal size
+    (columns / rows), falling back to 80 / 24 when it can't be queried. For
+    responsive layout.
+  - **`read_key_timeout(ms: int): str`** — like `read_key()` but waits at most
+    `ms` milliseconds, returning `""` on timeout. Turns a blocking key read into
+    the event loop a live/animated TUI (spinners, progress, auto-refresh) needs.
+- **`sys_lang(): str`** — the OS UI language as a lowercase ISO-639 code
+  (`"tr"`, `"en"`, …), or `""` when undeterminable. For app localization.
+- **Octal and hex string escapes.** String literals now accept `\NNN` (octal,
+  e.g. `\033`) and `\xNN` (hex, e.g. `\x1b`) alongside the existing
+  `\n \t \r \e \\ \"`, so ANSI/control sequences can be written directly.
+
+### Fixed
+- **Invalid O3 IR for comparison-heavy programs on LLVM 22.** The AOT backend's
+  boxed-comparison fast-path merge (int / float / runtime-fallback) built its
+  boolean result three different ways, so when a later truthiness check let
+  LLVM 22's InstCombine `foldOpIntoPhi` sink the compare through the merge phi,
+  it could leave a transient PHI with mismatched operand types
+  (`phi i1 [ i1, i1, i64 ]`). It is self-correcting at InstCombine fixpoint, but
+  the O1/O2/O3 pipelines run InstCombine with a bounded iteration count, so the
+  invalid state could reach the verifier and force the whole module down to
+  unoptimized. Two changes fix it: (1) the runtime-fallback path now rebuilds a
+  comparison's boolean as the same `zext(i1)` shape as the fast paths, so all
+  three phi operands are uniform and the fold is clean; and (2) if the
+  in-process verifier still rejects the transient state, `llvm_backend_optimize`
+  recovers by round-tripping the module through the IR printer/parser and
+  re-verifying, keeping the full optimization level (it only ever emits a module
+  that passes the verifier). LLVM 18 was unaffected; the toolchain-specific
+  `TULPAR_AOT_DEBUG_O3=1` hook remains for diagnosis.
+
 ## [v3.9.0]
 
 New backwards-compatible builtin for interactive terminal UIs.

@@ -11,6 +11,7 @@
 #include "llvm_types.hpp"
 #include "llvm_values.hpp"
 #include <llvm-c/Analysis.h>
+#include <llvm-c/IRReader.h>
 #include <llvm-c/Target.h>
 #include <llvm-c/Transforms/PassBuilder.h>
 #include <cstdio>
@@ -958,6 +959,16 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_read_key =
       LLVMAddFunction(backend->module, "aot_read_key", input_type);
 
+  // aot_sys_lang() -> VMValue (str) — same 0-arg ABI as read_key.
+  backend->func_aot_sys_lang =
+      LLVMAddFunction(backend->module, "aot_sys_lang", input_type);
+
+  // aot_term_width()/aot_term_height() -> VMValue (int) — same 0-arg ABI.
+  backend->func_aot_term_width =
+      LLVMAddFunction(backend->module, "aot_term_width", input_type);
+  backend->func_aot_term_height =
+      LLVMAddFunction(backend->module, "aot_term_height", input_type);
+
   // aot_env(name) -> VMValue (string)
   LLVMTypeRef env_params[] = {backend->vm_value_type};
   LLVMTypeRef env_type =
@@ -1131,6 +1142,33 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // Same single-VMValue-pointer ABI as read_file.
   backend->func_aot_sys_run =
       LLVMAddFunction(backend->module, "aot_sys_run_ptr", read_type);
+
+  // aot_read_key_timeout(ms) -> str : timed single keypress ("" on timeout).
+  // Same single-VMValue-pointer ABI as read_file/sys_run.
+  backend->func_aot_read_key_timeout =
+      LLVMAddFunction(backend->module, "aot_read_key_timeout_ptr", read_type);
+
+  // aot_display_width(s) -> int : terminal column width (single-ptr ABI).
+  backend->func_aot_display_width =
+      LLVMAddFunction(backend->module, "aot_display_width_ptr", read_type);
+
+  // aot_fit_width(s, width) -> str : pad/truncate to width (two-ptr ABI).
+  backend->func_aot_fit_width =
+      LLVMAddFunction(backend->module, "aot_fit_width_ptr", write_type);
+
+  // aot_screen_open()/aot_screen_close() -> VMValue (void) : 0-arg ABI.
+  backend->func_aot_screen_open =
+      LLVMAddFunction(backend->module, "aot_screen_open", input_type);
+  backend->func_aot_screen_close =
+      LLVMAddFunction(backend->module, "aot_screen_close", input_type);
+
+  // aot_screen_render(frame) -> VMValue (void) : single-ptr ABI.
+  backend->func_aot_screen_render =
+      LLVMAddFunction(backend->module, "aot_screen_render_ptr", read_type);
+
+  // aot_style(s, spec) -> str : two-ptr ABI.
+  backend->func_aot_style =
+      LLVMAddFunction(backend->module, "aot_style_ptr", write_type);
 
   // aot_sha256(str) -> VMValue (lowercase 64-char hex digest as str).
   // Same single-VMValue-pointer ABI as read_file/file_exists.
@@ -3453,6 +3491,43 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                      backend->func_vm_binary_op, args, 5, "");
       fallback_res = LLVMBuildLoad2(backend->builder, backend->vm_value_type,
                                     res_ptr, "fallback_res");
+
+      // O3 uniformity fix (LLVM 22 InstCombine). The int/float fast paths above
+      // build a comparison's boolean result as `insertvalue({BOOL}, zext(i1
+      // cmp), 2)`, so their payload is a *visible* `zext i1`. The fallback's
+      // payload, in contrast, is an opaque i64 loaded from vm_binary_op. When
+      // the boxed-comparison merge phi is later consumed by a truthiness
+      // `icmp ne 0`, InstCombine's foldOpIntoPhi sinks the compare through a phi
+      // whose incomings mix foldable (`zext i1`) and opaque (i64) values; on
+      // LLVM 22 this can leave a transient PHI with mismatched operand types
+      // (`phi i1 [ i1, i1, i64 ]`). It is self-correcting at unbounded
+      // InstCombine fixpoint, but the default O1/O2/O3 pipelines run InstCombine
+      // with a bounded iteration count, so the invalid state can persist to the
+      // verifier and fail the whole optimization (see llvm_backend_optimize's
+      // graduated fallback). Rebuilding the fallback boolean as the SAME
+      // `zext(i1)` shape makes all three payload incomings uniform, so the fold
+      // is clean and every op level verifies. Only comparison / logical ops
+      // yield a BOOL from vm_binary_op.
+      int fb_op_is_bool =
+          (node->op == TOKEN_EQUAL || node->op == TOKEN_NOT_EQUAL ||
+           node->op == TOKEN_LESS || node->op == TOKEN_GREATER ||
+           node->op == TOKEN_LESS_EQUAL || node->op == TOKEN_GREATER_EQUAL ||
+           node->op == TOKEN_AND || node->op == TOKEN_OR);
+      if (fb_op_is_bool) {
+        LLVMValueRef fb_payload = LLVMBuildExtractValue(
+            backend->builder, fallback_res, 2, "fb_payload");
+        LLVMValueRef fb_bool =
+            LLVMBuildICmp(backend->builder, LLVMIntNE, fb_payload,
+                          LLVMConstInt(backend->int_type, 0, 0), "fb_bool");
+        LLVMValueRef fb_zext = LLVMBuildZExt(backend->builder, fb_bool,
+                                             backend->int_type, "fb_bool_zext");
+        LLVMValueRef fb_s = LLVMGetUndef(backend->vm_value_type);
+        fb_s = LLVMBuildInsertValue(backend->builder, fb_s,
+                                    LLVMConstInt(backend->int32_type, 2, 0), 0,
+                                    "");  // VM_VAL_BOOL = 2
+        fb_s = LLVMBuildInsertValue(backend->builder, fb_s, fb_zext, 2, "");
+        fallback_res = fb_s;
+      }
     }
 
     LLVMBuildBr(backend->builder, merge_block);
@@ -4140,6 +4215,95 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
     if (node->name && strcmp(node->name, "read_key") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_read_key, nullptr, 0, "readkey_res");
+    }
+    if (node->name && strcmp(node->name, "sys_lang") == 0) {
+      return llvm_call_vmvalue_func(backend, backend->func_aot_sys_lang, nullptr, 0, "syslang_res");
+    }
+    if (node->name && strcmp(node->name, "term_width") == 0) {
+      return llvm_call_vmvalue_func(backend, backend->func_aot_term_width, nullptr, 0, "termw_res");
+    }
+    if (node->name && strcmp(node->name, "term_height") == 0) {
+      return llvm_call_vmvalue_func(backend, backend->func_aot_term_height, nullptr, 0, "termh_res");
+    }
+    if (node->name && strcmp(node->name, "read_key_timeout") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "rkt_arg_ptr");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "rkt_arg_void");
+      LLVMValueRef args[] = {arg_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_read_key_timeout,
+                                    args, 1, "rkt_res");
+    }
+    if (node->name && strcmp(node->name, "display_width") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "dw_arg_ptr");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "dw_arg_void");
+      LLVMValueRef args[] = {arg_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_display_width,
+                                    args, 1, "dw_res");
+    }
+    if (node->name && strcmp(node->name, "fit_width") == 0 &&
+        node->argument_count >= 2) {
+      LLVMValueRef sv = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef wv = codegen_expression(backend, node->arguments[1]);
+      LLVMValueRef s_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "fw_s_ptr");
+      LLVMBuildStore(backend->builder, sv, s_ptr);
+      LLVMValueRef w_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "fw_w_ptr");
+      LLVMBuildStore(backend->builder, wv, w_ptr);
+      LLVMValueRef s_void = LLVMBuildBitCast(
+          backend->builder, s_ptr, backend->ptr_type, "fw_s_void");
+      LLVMValueRef w_void = LLVMBuildBitCast(
+          backend->builder, w_ptr, backend->ptr_type, "fw_w_void");
+      LLVMValueRef args[] = {s_void, w_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_fit_width, args,
+                                    2, "fw_res");
+    }
+    if (node->name && strcmp(node->name, "screen_open") == 0) {
+      return llvm_call_vmvalue_func(backend, backend->func_aot_screen_open,
+                                    nullptr, 0, "scropen_res");
+    }
+    if (node->name && strcmp(node->name, "screen_close") == 0) {
+      return llvm_call_vmvalue_func(backend, backend->func_aot_screen_close,
+                                    nullptr, 0, "scrclose_res");
+    }
+    if (node->name && strcmp(node->name, "screen_render") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "scr_arg_ptr");
+      LLVMBuildStore(backend->builder, arg, arg_ptr);
+      LLVMValueRef arg_void = LLVMBuildBitCast(
+          backend->builder, arg_ptr, backend->ptr_type, "scr_arg_void");
+      LLVMValueRef args[] = {arg_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_screen_render,
+                                    args, 1, "scr_res");
+    }
+    if (node->name && strcmp(node->name, "style") == 0 &&
+        node->argument_count >= 2) {
+      LLVMValueRef sv = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef pv = codegen_expression(backend, node->arguments[1]);
+      LLVMValueRef s_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "sty_s_ptr");
+      LLVMBuildStore(backend->builder, sv, s_ptr);
+      LLVMValueRef p_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "sty_p_ptr");
+      LLVMBuildStore(backend->builder, pv, p_ptr);
+      LLVMValueRef s_void = LLVMBuildBitCast(
+          backend->builder, s_ptr, backend->ptr_type, "sty_s_void");
+      LLVMValueRef p_void = LLVMBuildBitCast(
+          backend->builder, p_ptr, backend->ptr_type, "sty_p_void");
+      LLVMValueRef args[] = {s_void, p_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_style, args, 2,
+                                    "sty_res");
     }
 
     // trim(str) -> String
@@ -8554,48 +8718,138 @@ void llvm_backend_optimize(LLVMBackend *backend) {
   // With that gag removed, the pipeline level actually matters; O3 buys
   // inliner aggressiveness, vectorization, and SCC-based passes that move
   // fib/struct workloads materially closer to gcc -O2.
-  const char *pipeline = backend->emit_debug_info ? "verify" : "default<O3>";
+  // Debug builds keep the codegen IR 1:1 (verifier-only) so the debugger's
+  // line mapping survives; inlining/vectorization would shred it.
+  if (backend->emit_debug_info) {
+    LLVMErrorRef error =
+        LLVMRunPasses(backend->module, "verify", nullptr, options);
+    if (error) {
+      char *msg = LLVMGetErrorMessage(error);
+      fprintf(stderr,
+              tulpar::i18n::tr_for_en("[AOT] Warning: Optimization failed: %s\n"),
+              msg);
+      LLVMDisposeErrorMessage(msg);
+    }
+    LLVMDisposePassBuilderOptions(options);
+    return;
+  }
 
-  // Snapshot the pre-optimization module. The codegen output verifies clean,
-  // but LLVM 18's O3 InstCombine can miscompile our comparison fast-path: it
-  // folds the truthiness `icmp ne <as>, 0` into the int/float/fallback merge
-  // (foldOpIntoPhi) and emits an invalid `phi i1` fed the fallback path's raw
-  // i64 — "Global module verification failed". Feeding that to ISel is a latent
-  // landmine, so if the optimized module fails verification we fall back to this
-  // valid (just unoptimized for this compile) snapshot rather than emit bad IR.
-  LLVMModuleRef pre_opt = LLVMCloneModule(backend->module);
+  // Release builds: optimize with a GRADUATED FALLBACK. The codegen output
+  // verifies clean, but some LLVM versions' aggressive O3 passes (InstCombine
+  // foldOpIntoPhi folding the truthiness `icmp ne, 0` into our boxed-comparison
+  // int/float/fallback merge) emit an invalid `phi` whose operands don't match
+  // the result type. Instead of dropping straight to unoptimized, try
+  // O3 → O2 → O1 on a fresh clone of the codegen IR and keep the first level
+  // that verifies clean; only use the unoptimized module if every level fails.
+  LLVMModuleRef codegen_ir = backend->module;
 
-  LLVMErrorRef error =
-      LLVMRunPasses(backend->module, pipeline, nullptr, options);
+  // A "safe" options set with the forced vectorizers / mergefunc / unroll left
+  // OFF. On some LLVM versions those aggressive passes are what turn our
+  // boxed-comparison merge into an invalid PHI; a plain pipeline sidesteps it
+  // while still delivering most of the win.
+  LLVMPassBuilderOptionsRef safe_options = LLVMCreatePassBuilderOptions();
+  LLVMPassBuilderOptionsSetVerifyEach(safe_options, 0);
 
-  if (error) {
-    char *msg = LLVMGetErrorMessage(error);
-    fprintf(stderr, tulpar::i18n::tr_for_en("[AOT] Warning: Optimization failed: %s\n"), msg);
-    LLVMDisposeErrorMessage(msg);
-  } else {
-    char *verr = nullptr;
-    if (LLVMVerifyModule(backend->module, LLVMReturnStatusAction, &verr) != 0) {
-      // O3 produced invalid IR — adopt the clean pre-O3 snapshot.
-      fprintf(stderr, "%s",
-              tulpar::i18n::tr_for_en(
-                  "[AOT] Warning: O3 produced invalid IR; falling back to "
-                  "unoptimized module for this compile.\n"));
-      LLVMDisposeModule(backend->module);
-      backend->module = pre_opt;
-      pre_opt = nullptr;
+  // Fallback ladder: aggressive O3/O2 → plain (safe) O2/O1 → unoptimized.
+  const char *att_level[4] = {"default<O3>", "default<O2>", "default<O2>",
+                              "default<O1>"};
+  int att_safe[4] = {0, 0, 1, 1};
+  LLVMModuleRef chosen = nullptr;
+  int chosen_idx = -1;
+  int ai = 0;
+  while (ai < 4 && !chosen) {
+    LLVMPassBuilderOptionsRef opt = att_safe[ai] ? safe_options : options;
+    LLVMModuleRef trial = LLVMCloneModule(codegen_ir);
+    LLVMErrorRef error = LLVMRunPasses(trial, att_level[ai], nullptr, opt);
+    if (error) {
+      char *msg = LLVMGetErrorMessage(error);
+      fprintf(stderr, "[AOT] Warning: %s optimization failed: %s\n",
+              att_level[ai], msg);
+      LLVMDisposeErrorMessage(msg);
+      LLVMDisposeModule(trial);
+    } else {
+      char *verr = nullptr;
+      if (LLVMVerifyModule(trial, LLVMReturnStatusAction, &verr) == 0) {
+        chosen = trial;
+        chosen_idx = ai;
+      } else {
+        const char *dbg = getenv("TULPAR_AOT_DEBUG_O3");
+        if (dbg && *dbg && *dbg != '0') {
+          fprintf(stderr, "[AOT] attempt %d (%s%s) verifier: %s\n", ai,
+                  att_level[ai], att_safe[ai] ? " safe" : "",
+                  verr ? verr : "(null)");
+        }
+        // Recovery via IR round-trip. Some LLVM 22 InstCombine folds
+        // (foldOpIntoPhi sinking a truthiness compare through our boxed-
+        // comparison int/float/fallback merge) leave the *in-memory* module in
+        // a transient state the in-process verifier rejects, even though the IR
+        // is actually well-formed: printing it and re-parsing yields a module
+        // that verifies clean and emits correct code. If that sanitized
+        // round-trip verifies, use it — we keep the full optimization level
+        // instead of dropping to a lower one, and we only ever emit a module
+        // that has passed the verifier.
+        char *ir_text = LLVMPrintModuleToString(trial);
+        LLVMModuleRef reparsed = nullptr;
+        if (ir_text) {
+          LLVMMemoryBufferRef buf = LLVMCreateMemoryBufferWithMemoryRangeCopy(
+              ir_text, strlen(ir_text), "tulpar_reparse");
+          char *perr = nullptr;
+          if (LLVMParseIRInContext(backend->context, buf, &reparsed, &perr) !=
+              0) {
+            if (reparsed) {
+              LLVMDisposeModule(reparsed);
+              reparsed = nullptr;
+            }
+          }
+          if (perr)
+            LLVMDisposeMessage(perr);
+          LLVMDisposeMessage(ir_text);
+        }
+        if (reparsed) {
+          char *rverr = nullptr;
+          if (LLVMVerifyModule(reparsed, LLVMReturnStatusAction, &rverr) == 0) {
+            chosen = reparsed;
+            chosen_idx = ai;
+            if (dbg && *dbg && *dbg != '0')
+              fprintf(stderr,
+                      "[AOT] attempt %d (%s%s) recovered via IR round-trip.\n",
+                      ai, att_level[ai], att_safe[ai] ? " safe" : "");
+          } else {
+            LLVMDisposeModule(reparsed);
+          }
+          if (rverr)
+            LLVMDisposeMessage(rverr);
+        }
+        LLVMDisposeModule(trial);
+      }
+      if (verr)
+        LLVMDisposeMessage(verr);
+    }
+    ai = ai + 1;
+  }
+
+  LLVMDisposePassBuilderOptions(safe_options);
+
+  if (chosen) {
+    if (chosen_idx > 0) {
+      fprintf(stderr,
+              "[AOT] Note: aggressive O3 IR invalid on this toolchain; "
+              "optimized with %s%s instead.\n",
+              att_level[chosen_idx], att_safe[chosen_idx] ? " (safe)" : "");
     } else if (!backend->quiet) {
-      // Progress chatter — only when TULPAR_AOT_VERBOSE is set, so a plain
-      // `tulpar build` shows just the final "Successfully created" line.
       const char *v = getenv("TULPAR_AOT_VERBOSE");
       if (v && *v && *v != '0')
         printf("[AOT] Optimizations (O3) applied successfully.\n");
     }
-    if (verr)
-      LLVMDisposeMessage(verr);
+    LLVMDisposeModule(codegen_ir);
+    backend->module = chosen;
+  } else {
+    fprintf(stderr, "%s",
+            tulpar::i18n::tr_for_en(
+                "[AOT] Warning: optimization produced invalid IR at every "
+                "level; using the unoptimized module for this compile.\n"));
+    // keep codegen_ir (still backend->module) as-is
   }
-
-  if (pre_opt)
-    LLVMDisposeModule(pre_opt);
 
   LLVMDisposePassBuilderOptions(options);
 }
