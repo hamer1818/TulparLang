@@ -46,6 +46,12 @@ backwards-compatible.
 - **Octal and hex string escapes.** String literals now accept `\NNN` (octal,
   e.g. `\033`) and `\xNN` (hex, e.g. `\x1b`) alongside the existing
   `\n \t \r \e \\ \"`, so ANSI/control sequences can be written directly.
+- **`ord(s: str, i: int): int`** — the unsigned byte value (0–255) at byte index
+  `i` of `s`, or `-1` if out of range. Strings are UTF-8 byte sequences and
+  `length()` / `substring()` are byte-based, so `ord` is the missing primitive
+  for hand-rolled UTF-8 handling — e.g. deleting a whole multi-byte code point by
+  walking back over continuation bytes (`0x80`–`0xBF`), which a naive
+  drop-one-byte would corrupt.
 
 ### Fixed
 - **Invalid O3 IR for comparison-heavy programs on LLVM 22.** The AOT backend's

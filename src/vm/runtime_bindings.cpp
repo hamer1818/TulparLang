@@ -3463,6 +3463,28 @@ VMValue aot_fit_width_ptr(VMValue *a, VMValue *b) {
   return aot_fit_width(*a, *b);
 }
 
+// aot_ord(s, i) -> int : the unsigned byte value (0-255) at byte index i of s,
+// or -1 if i is out of range. Byte-level access — TulparLang strings are UTF-8
+// byte sequences and length()/substring() are byte-based, so `ord` is the
+// missing primitive for hand-rolled UTF-8 handling (e.g. deleting a whole
+// multi-byte code point: walk back over continuation bytes 0x80-0xBF).
+// Backs `ord(s: str, i: int): int`.
+VMValue aot_ord(VMValue s_val, VMValue i_val) {
+  if (!IS_STRING(s_val))
+    return VM_INT(-1);
+  ObjString *s = AS_STRING(s_val);
+  int idx = IS_INT(i_val) ? (int)AS_INT(i_val) : -1;
+  if (idx < 0 || idx >= s->length)
+    return VM_INT(-1);
+  return VM_INT((int64_t)(unsigned char)s->chars[idx]);
+}
+
+VMValue aot_ord_ptr(VMValue *a, VMValue *b) {
+  if (!a || !b)
+    return VM_INT(-1);
+  return aot_ord(*a, *b);
+}
+
 // ---------------------------------------------------------------------------
 // High-level terminal / TUI helpers. These hide all raw ANSI escape sequences
 // behind clean builtins so TulparLang apps read like Python: screen_open(),
