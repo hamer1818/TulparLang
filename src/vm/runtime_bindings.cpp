@@ -42,6 +42,8 @@ typedef SSIZE_T ssize_t;
 #include <sys/wait.h>  // WEXITSTATUS — decode system() status in aot_sys_run
 #include <termios.h>   // raw-mode single-key input for read_key
 #include <unistd.h>    // read / STDIN_FILENO
+#include <sys/ioctl.h> // TIOCGWINSZ / winsize — terminal size for term_width/height
+#include <sys/select.h>// select() — timed key wait for read_key_timeout
 #endif
 
 // EXTERN "C" BLOCK - AOT Runtime Functions (called from LLVM compiled code)
@@ -3025,6 +3027,38 @@ VMValue aot_sys_run_ptr(VMValue *cmd_ptr) {
   return aot_sys_run(*cmd_ptr);
 }
 
+// aot_sys_lang() -> str : the OS UI language as a lowercase ISO-639 code
+// ("tr", "en", "de", ...). Backs sys_lang(), used for app localization.
+// Returns "" if it can't be determined.
+VMValue aot_sys_lang(void) {
+  char code[16];
+  code[0] = '\0';
+#ifdef _WIN32
+  LANGID lid = GetUserDefaultUILanguage();
+  wchar_t wbuf[16];
+  if (GetLocaleInfoW(MAKELCID(lid, SORT_DEFAULT), LOCALE_SISO639LANGNAME, wbuf,
+                     16) > 0) {
+    int k = 0;
+    while (wbuf[k] && k < 15) { code[k] = (char)wbuf[k]; k++; }
+    code[k] = '\0';
+  }
+#else
+  const char *l = getenv("LC_ALL");
+  if (!l || !*l) l = getenv("LC_MESSAGES");
+  if (!l || !*l) l = getenv("LANG");
+  if (l && *l) {
+    int k = 0;
+    while (l[k] && l[k] != '_' && l[k] != '.' && k < 15) { code[k] = l[k]; k++; }
+    code[k] = '\0';
+  }
+#endif
+  for (int k = 0; code[k]; k++) {
+    if (code[k] >= 'A' && code[k] <= 'Z') code[k] = (char)(code[k] + 32);
+  }
+  ObjString *s = aot_allocate_string(code, (int)strlen(code));
+  return VM_OBJ((Obj *)s);
+}
+
 // aot_read_key() -> str : block for a single keypress (no Enter, no echo) and
 // return its name. Arrow keys -> "up"/"down"/"left"/"right"; other specials ->
 // "enter"/"esc"/"backspace"/"tab"/"space"; printable keys -> the character
@@ -3108,6 +3142,461 @@ VMValue aot_read_key() {
 
   ObjString *str = aot_allocate_string(name, (int)strlen(name));
   return VM_OBJ((Obj *)str);
+}
+
+// aot_term_width() -> int : column count of the controlling terminal. Backs the
+// `term_width(): int` builtin used for responsive TUI layout. Returns 80 when
+// the size can't be queried (piped/non-TTY, redirected output).
+VMValue aot_term_width(void) {
+#ifdef _WIN32
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+    int w = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+    if (w > 0) return VM_INT((int64_t)w);
+  }
+  return VM_INT(80);
+#else
+  struct winsize ws;
+  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+    return VM_INT((int64_t)ws.ws_col);
+  return VM_INT(80);
+#endif
+}
+
+// aot_term_height() -> int : row count of the controlling terminal. Backs the
+// `term_height(): int` builtin. Returns 24 when the size can't be queried.
+VMValue aot_term_height(void) {
+#ifdef _WIN32
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+    int h = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    if (h > 0) return VM_INT((int64_t)h);
+  }
+  return VM_INT(24);
+#else
+  struct winsize ws;
+  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0)
+    return VM_INT((int64_t)ws.ws_row);
+  return VM_INT(24);
+#endif
+}
+
+// aot_read_key_timeout(ms) -> str : like aot_read_key(), but waits at most `ms`
+// milliseconds for a keypress. Returns "" (empty string) if the timeout elapses
+// with no key. Backs `read_key_timeout(ms: int): str`, which turns a blocking
+// menu loop into a live/animated render loop (spinners, progress, auto-refresh).
+VMValue aot_read_key_timeout(VMValue ms_val) {
+  int ms = IS_INT(ms_val) ? (int)AS_INT(ms_val) : 0;
+  if (ms < 0) ms = 0;
+  char name[16];
+  name[0] = '\0';
+
+#ifdef _WIN32
+  // Poll _kbhit() in small slices until a key is waiting or the budget runs out.
+  int waited = 0;
+  while (!_kbhit()) {
+    if (waited >= ms) {
+      ObjString *e = aot_allocate_string("", 0);
+      return VM_OBJ((Obj *)e);
+    }
+    int step = (ms - waited < 10) ? (ms - waited) : 10;
+    if (step <= 0) step = 1;
+    Sleep((DWORD)step);
+    waited += step;
+  }
+  int c = _getch();
+  if (c == 0 || c == 0xE0) {
+    int c2 = _getch();
+    switch (c2) {
+      case 72: strcpy(name, "up");    break;
+      case 80: strcpy(name, "down");  break;
+      case 75: strcpy(name, "left");  break;
+      case 77: strcpy(name, "right"); break;
+      default: name[0] = '\0';        break;
+    }
+  } else if (c == 13) strcpy(name, "enter");
+  else if (c == 27)   strcpy(name, "esc");
+  else if (c == 8)    strcpy(name, "backspace");
+  else if (c == 9)    strcpy(name, "tab");
+  else if (c == 32)   strcpy(name, "space");
+  else if (c == 3)    strcpy(name, "esc");   // Ctrl-C -> quit signal
+  else { name[0] = (char)c; name[1] = '\0'; }
+#else
+  struct termios oldt, newt;
+  if (tcgetattr(STDIN_FILENO, &oldt) != 0) {
+    // Not a TTY: timed single-key input isn't meaningful; report empty.
+    ObjString *e = aot_allocate_string("", 0);
+    return VM_OBJ((Obj *)e);
+  }
+  newt = oldt;
+  newt.c_lflag &= ~(ICANON | ECHO);
+  newt.c_cc[VMIN] = 0;
+  newt.c_cc[VTIME] = 0;
+  tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+
+  fd_set fds;
+  FD_ZERO(&fds);
+  FD_SET(STDIN_FILENO, &fds);
+  struct timeval tv;
+  tv.tv_sec = ms / 1000;
+  tv.tv_usec = (ms % 1000) * 1000;
+  int r = select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv);
+  if (r <= 0) {
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    ObjString *e = aot_allocate_string("", 0);
+    return VM_OBJ((Obj *)e);
+  }
+
+  unsigned char c = 0;
+  if (read(STDIN_FILENO, &c, 1) != 1) {
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    ObjString *e = aot_allocate_string("", 0);
+    return VM_OBJ((Obj *)e);
+  }
+
+  if (c == 27) {
+    // Possible arrow-key CSI (ESC [ A/B/C/D); gather the tail with a short wait.
+    newt.c_cc[VMIN] = 0;
+    newt.c_cc[VTIME] = 1;  // 100ms
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    unsigned char seq0 = 0, seq1 = 0;
+    int n0 = read(STDIN_FILENO, &seq0, 1);
+    int n1 = (n0 == 1) ? read(STDIN_FILENO, &seq1, 1) : 0;
+    if (n0 == 1 && n1 == 1 && seq0 == '[') {
+      switch (seq1) {
+        case 'A': strcpy(name, "up");    break;
+        case 'B': strcpy(name, "down");  break;
+        case 'C': strcpy(name, "right"); break;
+        case 'D': strcpy(name, "left");  break;
+        default:  strcpy(name, "esc");   break;
+      }
+    } else {
+      strcpy(name, "esc");
+    }
+  } else if (c == '\n' || c == '\r') strcpy(name, "enter");
+  else if (c == 127 || c == 8)       strcpy(name, "backspace");
+  else if (c == 9)                   strcpy(name, "tab");
+  else if (c == 32)                  strcpy(name, "space");
+  else { name[0] = (char)c; name[1] = '\0'; }
+
+  tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+#endif
+
+  ObjString *str = aot_allocate_string(name, (int)strlen(name));
+  return VM_OBJ((Obj *)str);
+}
+
+VMValue aot_read_key_timeout_ptr(VMValue *ms_ptr) {
+  if (!ms_ptr) {
+    ObjString *e = aot_allocate_string("", 0);
+    return VM_OBJ((Obj *)e);
+  }
+  return aot_read_key_timeout(*ms_ptr);
+}
+
+// ---------------------------------------------------------------------------
+// Terminal display-width helpers (wcwidth-like). TulparLang strings are raw
+// UTF-8 bytes, so length()/substring() are byte-oriented and can't be used to
+// align columns that contain non-ASCII text, box-drawing glyphs, emoji, or
+// ANSI colour escapes. These back display_width()/fit_width(), the building
+// blocks for correct TUI layout.
+// ---------------------------------------------------------------------------
+
+// Column width of a single Unicode code point (0 for combining/zero-width,
+// 2 for East-Asian-Wide & most emoji, 1 otherwise).
+static int tulpar_cp_width(unsigned int cp) {
+  if (cp == 0)
+    return 0;
+  if ((cp >= 0x0300 && cp <= 0x036F) || // combining diacritical marks
+      (cp >= 0x0483 && cp <= 0x0489) || (cp >= 0x1AB0 && cp <= 0x1AFF) ||
+      (cp >= 0x1DC0 && cp <= 0x1DFF) || (cp >= 0x20D0 && cp <= 0x20FF) ||
+      (cp >= 0xFE20 && cp <= 0xFE2F) || cp == 0x200B || cp == 0x200C ||
+      cp == 0x200D || cp == 0xFEFF)
+    return 0;
+  if ((cp >= 0x1100 && cp <= 0x115F) || // Hangul Jamo
+      (cp >= 0x2E80 && cp <= 0x303E) || // CJK radicals .. symbols
+      (cp >= 0x3041 && cp <= 0x33FF) || // Hiragana .. CJK compat
+      (cp >= 0x3400 && cp <= 0x4DBF) || // CJK Ext A
+      (cp >= 0x4E00 && cp <= 0x9FFF) || // CJK Unified
+      (cp >= 0xA000 && cp <= 0xA4CF) || // Yi
+      (cp >= 0xAC00 && cp <= 0xD7A3) || // Hangul syllables
+      (cp >= 0xF900 && cp <= 0xFAFF) || // CJK compat ideographs
+      (cp >= 0xFE30 && cp <= 0xFE4F) || // CJK compat forms
+      (cp >= 0xFF00 && cp <= 0xFF60) || // Fullwidth forms
+      (cp >= 0xFFE0 && cp <= 0xFFE6) ||
+      (cp >= 0x1F000 && cp <= 0x1FAFF) || // emoji, symbols, pictographs
+      (cp >= 0x20000 && cp <= 0x3FFFD))   // CJK Ext B+
+    return 2;
+  return 1;
+}
+
+// Decode one UTF-8 code point at s[i]; returns bytes consumed, writes *cp.
+static int tulpar_utf8_decode(const char *s, int len, int i, unsigned int *cp) {
+  unsigned char c = (unsigned char)s[i];
+  if (c < 0x80) {
+    *cp = c;
+    return 1;
+  }
+  if ((c >> 5) == 0x6 && i + 1 < len) {
+    *cp = ((c & 0x1F) << 6) | ((unsigned char)s[i + 1] & 0x3F);
+    return 2;
+  }
+  if ((c >> 4) == 0xE && i + 2 < len) {
+    *cp = ((c & 0x0F) << 12) | (((unsigned char)s[i + 1] & 0x3F) << 6) |
+          ((unsigned char)s[i + 2] & 0x3F);
+    return 3;
+  }
+  if ((c >> 3) == 0x1E && i + 3 < len) {
+    *cp = ((c & 0x07) << 18) | (((unsigned char)s[i + 1] & 0x3F) << 12) |
+          (((unsigned char)s[i + 2] & 0x3F) << 6) |
+          ((unsigned char)s[i + 3] & 0x3F);
+    return 4;
+  }
+  *cp = c; // invalid lead byte: treat as one width-1 unit
+  return 1;
+}
+
+// If s[i] begins an ANSI escape (ESC or ESC [ ... final), return its byte
+// length; otherwise 0. Escapes contribute 0 display columns.
+static int tulpar_ansi_len(const char *s, int len, int i) {
+  if ((unsigned char)s[i] != 0x1b)
+    return 0;
+  int j = i + 1;
+  if (j < len && s[j] == '[') {
+    j++;
+    while (j < len &&
+           !((unsigned char)s[j] >= 0x40 && (unsigned char)s[j] <= 0x7E))
+      j++;
+    if (j < len)
+      j++; // consume final byte
+  } else if (j < len) {
+    j++; // lone ESC + next byte
+  }
+  return j - i;
+}
+
+static int tulpar_display_width_impl(const char *s, int len) {
+  int w = 0, i = 0;
+  while (i < len) {
+    int a = tulpar_ansi_len(s, len, i);
+    if (a > 0) {
+      i += a;
+      continue;
+    }
+    unsigned int cp = 0;
+    int n = tulpar_utf8_decode(s, len, i, &cp);
+    w += tulpar_cp_width(cp);
+    i += n;
+  }
+  return w;
+}
+
+// aot_display_width(s) -> int : terminal column width of s (ANSI-aware,
+// UTF-8/wide-char-aware). Backs `display_width(s: str): int`.
+VMValue aot_display_width(VMValue s_val) {
+  if (!IS_STRING(s_val))
+    return VM_INT(0);
+  ObjString *s = AS_STRING(s_val);
+  return VM_INT((int64_t)tulpar_display_width_impl(s->chars, s->length));
+}
+
+VMValue aot_display_width_ptr(VMValue *p) {
+  if (!p)
+    return VM_INT(0);
+  return aot_display_width(*p);
+}
+
+// aot_fit_width(s, width) -> str : return s fitted to exactly `width` display
+// columns — truncated at a code-point boundary with a trailing "…" if too
+// long, or right-padded with spaces if too short. ANSI escapes pass through
+// and count as 0. Backs `fit_width(s: str, width: int): str`.
+VMValue aot_fit_width(VMValue s_val, VMValue w_val) {
+  if (!IS_STRING(s_val))
+    return s_val;
+  int width = IS_INT(w_val) ? (int)AS_INT(w_val) : 0;
+  if (width < 0)
+    width = 0;
+  ObjString *s = AS_STRING(s_val);
+  const char *p = s->chars;
+  int len = s->length;
+  int total = tulpar_display_width_impl(p, len);
+
+  std::string out;
+  if (total <= width) {
+    out.append(p, (size_t)len);
+    for (int k = total; k < width; k++)
+      out.push_back(' ');
+  } else {
+    int budget = width > 0 ? width - 1 : 0; // reserve 1 col for the ellipsis
+    int w = 0, i = 0;
+    while (i < len) {
+      int a = tulpar_ansi_len(p, len, i);
+      if (a > 0) {
+        out.append(p + i, (size_t)a);
+        i += a;
+        continue;
+      }
+      unsigned int cp = 0;
+      int n = tulpar_utf8_decode(p, len, i, &cp);
+      int cw = tulpar_cp_width(cp);
+      if (w + cw > budget)
+        break;
+      out.append(p + i, (size_t)n);
+      w += cw;
+      i += n;
+    }
+    if (width > 0) {
+      out.append("\xE2\x80\xA6"); // U+2026 HORIZONTAL ELLIPSIS
+      w += 1;
+    }
+    for (int k = w; k < width; k++)
+      out.push_back(' ');
+  }
+
+  ObjString *res = aot_allocate_string(out.c_str(), (int)out.size());
+  return VM_OBJ((Obj *)res);
+}
+
+VMValue aot_fit_width_ptr(VMValue *a, VMValue *b) {
+  if (!a || !b)
+    return VM_VOID();
+  return aot_fit_width(*a, *b);
+}
+
+// ---------------------------------------------------------------------------
+// High-level terminal / TUI helpers. These hide all raw ANSI escape sequences
+// behind clean builtins so TulparLang apps read like Python: screen_open(),
+// screen_render(frame), screen_close(), style(text, "bold cyan"). The tricky
+// flicker-free details (alternate screen, synchronized output, cursor home,
+// no trailing newline, line-wrap off) live here in one place, not in user code.
+// ---------------------------------------------------------------------------
+
+// aot_screen_open() : enter the alternate screen buffer, disable line-wrap,
+// clear it and hide the cursor — the correct setup for a full-screen TUI.
+VMValue aot_screen_open(void) {
+  fputs("\x1b[?1049h\x1b[?7l\x1b[2J\x1b[H\x1b[?25l", stdout);
+  fflush(stdout);
+  return VM_VOID();
+}
+
+// aot_screen_close() : restore line-wrap, leave the alternate screen and show
+// the cursor again.
+VMValue aot_screen_close(void) {
+  fputs("\x1b[?7h\x1b[?1049l\x1b[?25h", stdout);
+  fflush(stdout);
+  return VM_VOID();
+}
+
+// aot_screen_render(frame) : draw one full frame with zero flicker. The frame
+// is wrapped in a synchronized-output block (the terminal swaps it atomically,
+// no tearing), the cursor is homed first (so the frame overwrites in place with
+// no scroll), and anything left below is cleared. The frame is written verbatim
+// with NO trailing newline, so it can never scroll the screen.
+VMValue aot_screen_render(VMValue s_val) {
+  if (!IS_STRING(s_val))
+    return VM_VOID();
+  ObjString *s = AS_STRING(s_val);
+  fputs("\x1b[?2026h\x1b[H", stdout);
+  fwrite(s->chars, 1, (size_t)s->length, stdout);
+  fputs("\x1b[J\x1b[?2026l", stdout);
+  fflush(stdout);
+  return VM_VOID();
+}
+
+VMValue aot_screen_render_ptr(VMValue *p) {
+  if (!p)
+    return VM_VOID();
+  return aot_screen_render(*p);
+}
+
+// Map a colour name to its SGR base code (foreground unless bg). -1 if unknown.
+static int tulpar_sgr_color(const std::string &name, bool bg) {
+  static const char *n8[] = {"black", "red",     "green", "yellow",
+                             "blue",  "magenta", "cyan",  "white"};
+  for (int i = 0; i < 8; i++)
+    if (name == n8[i])
+      return (bg ? 40 : 30) + i;
+  if (name == "gray" || name == "grey")
+    return bg ? 100 : 90;
+  return -1;
+}
+
+// aot_style(text, spec) : wrap text in ANSI SGR attributes named by a
+// space-separated spec, then reset. Recognised tokens: bold, dim, italic,
+// underline, invert/reverse; colour names (black red green yellow blue magenta
+// cyan white gray); bright-<colour> for the fg bright variant; on-<colour> for
+// the background. Unknown tokens are ignored. Lets apps colour text without
+// ever writing an escape sequence.
+VMValue aot_style(VMValue s_val, VMValue spec_val) {
+  if (!IS_STRING(s_val))
+    return s_val;
+  std::string spec = IS_STRING(spec_val) ? AS_STRING(spec_val)->chars : "";
+  std::string codes;
+  auto add = [&](const std::string &c) {
+    if (!codes.empty())
+      codes += ";";
+    codes += c;
+  };
+
+  size_t i = 0, n = spec.size();
+  while (i < n) {
+    while (i < n && spec[i] == ' ')
+      i++;
+    size_t j = i;
+    while (j < n && spec[j] != ' ')
+      j++;
+    std::string tok = spec.substr(i, j - i);
+    i = j;
+    if (tok.empty())
+      continue;
+    if (tok == "bold")
+      add("1");
+    else if (tok == "dim")
+      add("2");
+    else if (tok == "italic")
+      add("3");
+    else if (tok == "underline")
+      add("4");
+    else if (tok == "invert" || tok == "reverse")
+      add("7");
+    else if (tok.rfind("on-", 0) == 0) {
+      int c = tulpar_sgr_color(tok.substr(3), true);
+      if (c >= 0)
+        add(std::to_string(c));
+    } else if (tok.rfind("bright-", 0) == 0) {
+      static const char *n8[] = {"black", "red",     "green", "yellow",
+                                 "blue",  "magenta", "cyan",  "white"};
+      std::string cn = tok.substr(7);
+      for (int k = 0; k < 8; k++)
+        if (cn == n8[k]) {
+          add(std::to_string(90 + k));
+          break;
+        }
+    } else {
+      int c = tulpar_sgr_color(tok, false);
+      if (c >= 0)
+        add(std::to_string(c));
+    }
+  }
+
+  std::string out;
+  if (!codes.empty()) {
+    out = "\x1b[";
+    out += codes;
+    out += "m";
+  }
+  out.append(AS_STRING(s_val)->chars, (size_t)AS_STRING(s_val)->length);
+  if (!codes.empty())
+    out += "\x1b[0m";
+
+  ObjString *res = aot_allocate_string(out.c_str(), (int)out.size());
+  return VM_OBJ((Obj *)res);
+}
+
+VMValue aot_style_ptr(VMValue *a, VMValue *b) {
+  if (!a || !b)
+    return VM_VOID();
+  return aot_style(*a, *b);
 }
 
 VMValue aot_write_file(VMValue path_val, VMValue content_val) {
