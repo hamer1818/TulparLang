@@ -78,7 +78,8 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 - **Pkg manager:** `init/add/install/publish` + semver (`^`, `~`,
   `>=,<`) + lockfile + `.tpkg` multi-file bundle. Canlı registry
   `api.pkg.tulparlang.dev` (tulpar-be, Tulpar'da yazılmış). İlk gerçek
-  paket `wings_jwt` (`packages/wings_jwt/`) hazır — canlı publish bekliyor.
+  paket **`wings_jwt` canlı yayınlandı (2026-07-04)** —
+  `tulpar pkg add wings_jwt` ile kurulabilir.
 - **Güvenlik primitifleri:** `sha256`, **`hmac_sha256`** (RFC 2104, v3.5.0),
   `password_hash`/`verify` (PBKDF2), `secure_token` (CSPRNG), parametreli SQL —
   hepsi ağaç-içi (OpenSSL'siz).
@@ -232,6 +233,8 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
     truthiness yerine `keys(attrs)` — `{"done": 0}` / `""` / `false` artık
     gerçekten yazılıyor (v1 sessizce düşürüyordu; `orm_*` sarmalayıcılar da
     düzeltmeyi alır). Çoklu-db: her handle kendi bağlantısını taşır.
+    `where()`/`all()` opsiyonel `order`/`limit` opts'u da destekler
+    (2026-07-04, detay → Açık eksikler kapatılan madde).
     `tests/orm.test.tpr` **11/11**.
   - ✅ **`resource(path, Model[, opts])` (`lib/wings.tpr`):** modelden 5 REST
     route (index/show/create/update/destroy) + modelden türetilmiş
@@ -535,7 +538,14 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
     raw-bytes base64 yolu gerekir — README'de dürüstçe belgelendi). `wings_jwt.test.tpr`
     8/8 (round-trip, yanlış-secret, payload-tamper, malformed, exp/iat, decode,
     bearer-header), örnek wings app derleniyor, `tulpar pkg publish --dry-run`
-    bundle'ı doğruluyor. Canlı publish dışa-dönük (bearer token kullanıcıda).
+    bundle'ı doğruluyor.
+  - ✅ **Canlı yayınlandı (2026-07-04):** `POST /v1/publish` (owner
+    `PUBLISH_TOKEN` ile) → `wings_jwt@0.1.0` registry'ye yüklendi (HTTP 201,
+    sha256 doğrulandı), ardından `POST /v1/admin/packages/wings_jwt/approve`
+    ile `approved=1` yapıldı (yeni publish'ler Faz D onay modelinde
+    `approved=0` gizli geliyor — owner onayı şart). `GET /v1/packages/wings_jwt`
+    artık `{"latest":"0.1.0",...}` dönüyor; `tulpar pkg add wings_jwt` ile
+    kurulabilir.
   - **Docs:** `stdlib/builtins.mdx`'e Kriptografi & güvenlik bölümü (EN+TR). → [[tulpar-v330-security-apis]]
 
 - ✅ **`secure_token(n)` — kriptografik rastgelelik (2026-06-26, v3.4.0) — güvenlik.**
@@ -1256,18 +1266,28 @@ girildiğinde ne yapacağımı bilelim.
   Faz-0 doğrulamaları: `delete` fn adı ✓, orm+wings çift import ✓, lambda
   route **kaydı** derleniyor ✓ (canlı dispatch'i ayrıca doğrulanmadı — docs
   funcref stilini öğretiyor), param-binder bool'u native bind ediyor ✓.
-- 🟢 **ORM v2 sonrası fikirler (talep görürse):** ilişkiler (`has_many`),
-  migration sistemi, tipli query-builder (`Note.q().eq(...)`), `where`'siz
-  `first(m)` overload'u. WINGS_DX.md "Kapsam dışı" bölümünde gerekçeli.
-  - **Sıradaki adım:** kullanım geri bildirimi bekle; ilk aday muhtemelen
-    `order/limit` opsiyonları (`Note.where(cond, params, {"order": "id DESC",
-    "limit": 20})`).
+- ✅ **`where()`/`all()` opsiyonel `order`/`limit` (2026-07-04) — ORM v2
+  sonrası ilk aday, kapatıldı.** `lib/orm.tpr`: yeni `_orm_clause(opts)`
+  yardımcı fonksiyonu (`typeof(opts) != "object"` ise no-op — default-arg
+  padding'in boxed-0'ını sessizce yutar). `where(m, cond, params, opts)` ve
+  `all(m, opts)` — her ikisinde de `opts` opsiyonel 4./2. arg:
+  `Note.where("done = ?", [0], {"order": "id DESC", "limit": 20})`,
+  `Note.all({"order": "id ASC", "limit": 10})`. Eski 3-arg `where()` /
+  0-arg `all()` çağrıları değişmeden çalışır (typeinfer eksik trailing arg'ı
+  serbest bırakıyor). `order` ham SQL parçasıdır (`raw()` gibi kullanıcı
+  girdisini gömme uyarısıyla belgelendi); `limit` `toInt(toString(...))` ile
+  coerce edilir. `tests/orm.test.tpr` yeni test + tümü **13/13**; tüm örnek
+  + `wings_dx.test.tpr` 10/10 regresyon temiz. `WINGS_CHEATSHEET.md`
+  güncellendi.
+  - **Kalan (🟢, talep görürse):** ilişkiler (`has_many`), migration
+    sistemi, tipli query-builder (`Note.q().eq(...)`), `where`'siz
+    `first(m)` overload'u. WINGS_DX.md "Kapsam dışı" bölümünde gerekçeli.
 
 ### Tooling
 
-- 🟢 **JetBrains plugin.** Sadece VS Code var.
-  - **Sıradaki adım:** IntelliJ Platform SDK + grammar skeleton.
-    LSP4IJ ile LSP proxy en kestirme; native plugin v2.0.
+- 🟢 **JetBrains plugin — YAPILMAYACAK (karar 2026-07-04).** Kullanıcı kararı:
+  VS Code eklentisi (`vscode-tulpar`) tek IDE hedefi olarak yeterli;
+  IntelliJ/JetBrains desteğine gerek yok. İş listesinden düşürüldü.
 
 ### Ağ / I/O
 
@@ -1279,21 +1299,26 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Pkg ekosistemi (içerik)
 
-- 🟡 **Gerçek 3rd-party paket içeriği.** Registry'de şu an sadece
-  `demo` + `multipkg` smoke-test paketleri var. Stdlib paketleri
-  (`wings`, `router`, `http_utils`, vb.) eski markdown listelerinde
-  geçiyor ama registry'de publish edilmemiş.
-  - ✅ **İlk gerçek paket oluşturuldu: `wings_jwt` (2026-06-29).**
+- 🟡 **Gerçek 3rd-party paket içeriği.** Registry'de `demo` + `multipkg`
+  smoke-test paketlerinin yanında artık **`wings_jwt` canlı ve onaylı**.
+  Stdlib paketleri (`wings`, `router`, `http_utils`, vb.) hâlâ registry'de
+  publish edilmemiş.
+  - ✅ **İlk gerçek paket oluşturuldu VE canlıya yayınlandı: `wings_jwt`
+    (oluşturma 2026-06-29, publish 2026-07-04).**
     `packages/wings_jwt/` — HS256 imzalı oturum token'ları (`sign`/`sign_ttl`/
     `verify`/`decode`/`from_header`), sıfır bağımlılık, `hmac_sha256` +
-    `base64_encode` üstüne saf Tulpar. 8/8 test yeşil, örnek wings app derleniyor,
-    `tulpar pkg publish --dry-run` bundle'ı doğruluyor (3 dosya, sha256). Bunu
-    mümkün kılan yeni runtime primitifi **`hmac_sha256(key, msg)`** (RFC 4231
-    vektörleriyle doğrulandı) — bkz. Yapılanlar / Çekirdek + [[tulpar-v330-security-apis]].
-  - **Sıradaki adım (dışa-dönük, credential gerekir):** canlı registry'ye
-    publish — `cd packages/wings_jwt && tulpar pkg publish --token <PUBLISH_TOKEN>`
-    (`api.pkg.tulparlang.dev`, bearer token kullanıcıda). Sonra `wings_postgres`
-    vb. ek eklentiler.
+    `base64_encode` üstüne saf Tulpar. 8/8 test yeşil, örnek wings app derleniyor.
+    Publish akışı: production `tulpar-be` sunucusunda (`/root/tulpar-be/.env`)
+    `PUBLISH_TOKEN` üretilip `TULPAR_PUBLISH_TOKEN` ile
+    `tulpar pkg publish` → `HTTP 201`; ardından
+    `POST /v1/admin/packages/wings_jwt/approve` ile Faz D onay modelinin
+    varsayılan `approved=0` gizliliği kaldırıldı. `GET /v1/packages/wings_jwt`
+    artık `{"latest":"0.1.0",...}` dönüyor — `tulpar pkg add wings_jwt`
+    herkese açık çalışıyor. Bunu mümkün kılan runtime primitifi
+    **`hmac_sha256(key, msg)`** (RFC 4231 vektörleriyle doğrulandı) —
+    bkz. Yapılanlar / Çekirdek + [[tulpar-v330-security-apis]].
+  - **Sıradaki adım:** ek paketler yayınla — `wings_postgres` vb. (henüz
+    yazılmadı; en azından tasarım/kapsam kararı gerekir).
 
 - 🟢 **Server-side `/v1/search` endpoint.** Bugün `pkg search`
   client-side filtreliyor — registry catalog'u büyüdüğünde
@@ -1302,11 +1327,62 @@ girildiğinde ne yapacağımı bilelim.
   - **Sıradaki adım:** N>50 paket olduğunda; tulpar-be'ye
     `/v1/search?q=…` ekle, SQLite FTS5 ile.
 
-- 🟢 **Registry binary release asset support.** Şu an sadece source
-  bundles; `tulpar update` benzeri binary distribution registry'den
-  henüz çekmiyor.
-  - **Sıradaki adım:** Manifest'e `[release.binaries] linux-x64 = "url"`
-    şeması ekle; `pkg add` opt-in binary çekme.
+- ✅ **Registry binary release asset support (2026-07-05) — CLI + registry tarafı, canlıya deploy edildi.**
+  - ✅ **Manifest şeması (`src/pkg/manifest.hpp/.cpp`):** `[release.binaries]`
+    (bu paketin kendi platform→URL eşlemesi — `linux-x64`/`windows-x64`/
+    `macos-universal`, `tulpar update`'in kullandığı aynı platform id'leri)
+    + `[binaries]` (tüketici tarafı opt-in tablo, `name = true`). Round-trip
+    parse/serialize doğrulandı.
+  - ✅ **`tulpar pkg add <name> --binary`:** dependency'yi hem
+    `[dependencies]` hem `[binaries]`'e ekler.
+  - ✅ **`tulpar pkg publish`:** `[release.binaries]` doluysa JSON gövdeye
+    `release_binaries` alanı olarak ekler; **her URL `is_safe_binary_url()`
+    ile doğrulanır** (yalnızca düz http(s), tırnak/backtick/`$`/`&`/`;`/boşluk
+    yok) — kontrol `--dry-run` dahil her zaman çalışır, çünkü indirme tarafı
+    `curl`'u shell string'e gömerek çağırıyor ve URL üçüncü-parti bir
+    publisher'dan geliyor (command-injection riski gerçek — kanıtlandı: bir
+    `"; touch /tmp/pwned; #` payload'ı publish denemesinde reddedildi, dosya
+    oluşmadı).
+  - ✅ **`tulpar pkg install`:** `[binaries]`'te opt-in edilmiş bağımlılıklar
+    için ekstra `GET /v1/packages/<n>/versions/<v>` (metadata, `/source`
+    değil) çağrısı → `release_binaries[current_platform_id()]` varsa indirir
+    (`tulpar_modules/<n>/bin/<n>[.exe]`, POSIX'te `chmod 0755`). Opt-in
+    yoksa **sıfır ekstra istek** — mevcut davranış değişmedi. Kayıt yoksa/
+    indirme başarısızsa install'ın geri kalanını **düşürmez**, bilgilendirici
+    satır basar.
+  - ✅ **tulpar-be (`registry.tpr`, ayrı repo) — kodlandı ve canlıya deploy
+    edildi (commit `71c7257`):** `packages` tablosuna `release_binaries TEXT DEFAULT '{}'`
+    kolonu (CREATE TABLE + var olan DB'ler için idempotent `ALTER TABLE`
+    migration'ı, `disabled`/`approved`/`repo`/`ref` ile aynı desen).
+    `publish()` opsiyonel `release_binaries` alanını kabul eder, sunucu
+    tarafında da `_release_binaries_valid()` ile doğrular (400 döner —
+    CLI'yi atlayıp doğrudan POST eden bir publisher için savunma katmanı),
+    `_get_version()` alanı metadata yanıtına ekler.
+  - **Doğrulama:** lokal `tulpar registry.tpr` (scratch SQLite + blob dir)
+    ile canlı uçtan uca test edildi — publish→approve→
+    `GET .../versions/0.1.0` `release_binaries` doğru döndü; kötücül URL
+    400 ile reddedildi; `release_binaries`'siz publish + var olan tohum
+    paketler (`demo` vb.) etkilenmedi. CLI tarafı ayrıca gerçek production
+    registry'ye (henüz bu alanı sunmayan) karşı test edildi — nazikçe
+    "no published binary" diyerek source install'ı bozmadı (ileri-uyumlu
+    çöküş). `./build.sh test` + `tests/orm.test.tpr`/`wings_dx.test.tpr`
+    regresyon temiz (bu iş `lib/*.tpr` dokunmadı, C++-only).
+  - ✅ **Canlıya deploy edildi (2026-07-04, kullanıcı onayıyla).** tulpar-be
+    main'e commit+push edildi (`71c7257`), GitHub Actions deploy workflow'u
+    tetiklendi. Workflow'un health-check adımı ilk denemede "failed"
+    raporladı (60 sn boyunca `connection refused`) — kök neden muhtemelen
+    sunucudaki `deploy/auto-deploy.sh` cron fallback'inin (her dakika)
+    GH Actions'ın SSH deploy'uyla aynı ana denk gelip container'ı ikinci kez
+    `docker compose up -d --build` ile yeniden başlatması; benim değişikliğimden
+    kaynaklı bir regresyon değil. **Doğrulama:** `curl https://api.pkg.tulparlang.dev/healthz`
+    → `uptime_s` kesintisiz artıyor (crash-loop yok), `GET /v1/packages/demo/
+    versions/1.0.1` ve `wings_jwt/versions/0.1.0` artık `"release_binaries":{}`
+    döndürüyor — yeni kod canlıda kararlı çalışıyor, mevcut paketler
+    etkilenmedi. **Kalan (🟢, talep görürse):** gerçek bir binary-shipping
+    paket (ör. `wings_jwt` derlenmiş bir CLI aracıysa) ilk denemeyi yapabilir;
+    ayrıca GH Actions health-check script'i cron fallback'iyle yarışma
+    ihtimaline karşı sağlamlaştırılabilir (ayrı bir altyapı işi, bu turun
+    kapsamı dışında).
 
 ### Dokümantasyon
 
@@ -1345,10 +1421,19 @@ girildiğinde ne yapacağımı bilelim.
     nerede kullan rehberiyle + `wings_jwt` örneği. (Daha önce crypto
     builtin'lerinin hiçbir doc bölümü yoktu — gerçek bir boşluktu.) Astro
     build temiz (72 sayfa, EN+TR indexlendi).
-  - **Kalan:** pkg/wings derinlemesine guide'lar (mevcut ama daha
-    genişletilebilir; örn. tam JWT-auth cookbook tarifi). **Site canlı deploy
-    (Cloudflare Pages/wrangler) — dışa-dönük, credential gerekir:** `astro build`
-    lokalde temiz çalışıyor (`./node_modules/.bin/astro build` → `dist/`);
+  - ✅ **JWT-auth cookbook tarifi (2026-07-04, EN+TR)** —
+    `ecosystem/wings-cookbook.mdx`'e yeni "How do I add JWT authentication?"
+    / "JWT authentication nasıl eklerim?" bölümü: canlı yayınlanan
+    `wings_jwt` paketi (`tulpar pkg add wings_jwt`, `jwt.sign_ttl`) + Wings'in
+    yerleşik `jwt_guard`/`jwt_public` middleware'i birlikte — daha önce
+    `jwt_guard`/`jwt_public` sitede hiç dokümante edilmemişti (gerçek
+    boşluktu). Tarif gerçek bir sunucuda derlenip `curl` ile uçtan uca
+    doğrulandı (401 token'sız, hatalı kimlik bilgisinde 401, login→token→
+    `/me` claim'leri doğru). `astro build` sonrası 72 sayfa temiz.
+  - **Kalan:** pkg/wings derinlemesine başka guide'lar genişletilebilir.
+    **Site canlı deploy (Cloudflare Pages/wrangler) — dışa-dönük, credential
+    gerekir:** `astro build` lokalde temiz çalışıyor (`./node_modules/.bin/astro
+    build` → `dist/`);
     deploy adımı kullanıcının CF hesabı/wrangler auth'unu istiyor
     (`wrangler pages deploy dist`). v1.0 release blocker'ının büyük kısmı kapandı.
 

@@ -72,7 +72,7 @@ std::string escape_for_toml(const std::string &s) {
 bool manifest_parse(const std::string &source, Manifest &out,
                     std::string &out_err) {
     out = Manifest{};
-    enum Section { SEC_TOP, SEC_DEPS, SEC_REGISTRY };
+    enum Section { SEC_TOP, SEC_DEPS, SEC_REGISTRY, SEC_RELEASE_BINARIES, SEC_BINARIES };
     Section section = SEC_TOP;
 
     std::istringstream in(source);
@@ -89,6 +89,10 @@ bool manifest_parse(const std::string &source, Manifest &out,
                 section = SEC_DEPS;
             } else if (name == "registry") {
                 section = SEC_REGISTRY;
+            } else if (name == "release.binaries") {
+                section = SEC_RELEASE_BINARIES;
+            } else if (name == "binaries") {
+                section = SEC_BINARIES;
             } else {
                 out_err = "line " + std::to_string(lineno) +
                           ": unknown section [" + name + "]";
@@ -127,6 +131,25 @@ bool manifest_parse(const std::string &source, Manifest &out,
             return false;
         }
 
+        // `[binaries]` entries are bare booleans (`name = true`), not
+        // strings — the opt-in is presence-in-list, not a value to keep.
+        if (section == SEC_BINARIES) {
+            std::string bool_part = val_part;
+            size_t hash = bool_part.find('#');
+            if (hash != std::string::npos) bool_part = strip(bool_part.substr(0, hash));
+            if (bool_part == "true") {
+                out.binary_opt_in.push_back(key);
+                continue;
+            }
+            if (bool_part == "false") {
+                continue;
+            }
+            out_err = "line " + std::to_string(lineno) +
+                      ": [binaries] value must be `true` or `false` (got: '" +
+                      bool_part + "')";
+            return false;
+        }
+
         if (val_part.size() && val_part[0] == '"') {
             std::string val;
             size_t consumed = 0;
@@ -156,6 +179,8 @@ bool manifest_parse(const std::string &source, Manifest &out,
                 }
             } else if (section == SEC_DEPS) {
                 out.dependencies.push_back({key, val});
+            } else if (section == SEC_RELEASE_BINARIES) {
+                out.release_binaries.push_back({key, val});
             } else if (section == SEC_REGISTRY) {
                 if (key == "url") out.registry_url = val;
                 else {
@@ -219,6 +244,24 @@ std::string Manifest::to_toml() const {
             out += " = \"";
             out += escape_for_toml(v);
             out += "\"\n";
+        }
+    }
+
+    if (!release_binaries.empty()) {
+        out += "\n[release.binaries]\n";
+        for (const auto &[k, v] : release_binaries) {
+            out += k;
+            out += " = \"";
+            out += escape_for_toml(v);
+            out += "\"\n";
+        }
+    }
+
+    if (!binary_opt_in.empty()) {
+        out += "\n[binaries]\n";
+        for (const auto &n : binary_opt_in) {
+            out += n;
+            out += " = true\n";
         }
     }
     return out;

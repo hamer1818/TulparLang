@@ -109,7 +109,9 @@ json User = model("users", {
 | `User.create({...})` | Parametreli INSERT → yeni id. Şema dışı anahtar düşer; `0`/`""`/`false` da yazılır |
 | `User.find(id)` | Tek satır (tipler cast'li) ya da `{}` |
 | `User.all()` | Tüm satırlar |
+| `User.all({"order": "id DESC", "limit": 20})` | opsiyonel sıralama/limit — opts'suz eski hâli çalışmaya devam eder |
 | `User.where("age > ? AND vip = ?", [18, 1])` | Bağlı parametreli filtre — değer SQL'e asla gömülmez |
+| `User.where(cond, params, {"order": "id DESC", "limit": 20})` | opsiyonel 4. arg — sıralama + limit |
 | `User.first(cond, params)` | İlk eşleşen ya da `{}` |
 | `User.count()` | Satır sayısı |
 | `User.update(id, {...})` | Parametreli UPDATE |

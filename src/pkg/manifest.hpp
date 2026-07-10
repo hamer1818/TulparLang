@@ -25,6 +25,12 @@ namespace tulpar {
 //   [dependencies]
 //   wings = "^0.2.0"
 //   sqlite_helpers = "0.1.0"
+//
+//   [binaries]
+//   mytool = true
+//
+//   [release.binaries]
+//   linux-x64 = "https://example.com/releases/mytool-linux-x64"
 struct Manifest {
     std::string name;
     std::string version;
@@ -45,6 +51,19 @@ struct Manifest {
     // when run from the project root. CLI `--strict` and env
     // `TULPAR_STRICT=1` still take precedence (in that order).
     bool strict_typecheck = false;
+    // `[release.binaries]` — THIS package's own prebuilt binaries, one
+    // per supported platform id ("linux-x64", "windows-x64",
+    // "macos-universal" — same ids `tulpar update` uses), pointing at a
+    // plain HTTPS download URL (e.g. a GitHub Release asset). Only
+    // meaningful when publishing a binary-shipping package; consumers
+    // read it back from the registry, not from their own tulpar.toml.
+    std::vector<std::pair<std::string, std::string>> release_binaries;
+    // `[binaries]` — consumer-side opt-in. Dependency names for which
+    // `tulpar pkg install` should ALSO fetch a prebuilt binary (into
+    // `tulpar_modules/<name>/bin/`) alongside the vendored .tpr source,
+    // set via `tulpar pkg add <name> --binary`. Absence = source-only
+    // (the default — no extra network round-trip).
+    std::vector<std::string> binary_opt_in;
 
     // Round-trip serialise this manifest back to the TOML subset we
     // accept on input. Idempotent — reading a manifest, serialising it,

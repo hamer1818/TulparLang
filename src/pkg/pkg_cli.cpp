@@ -347,6 +347,165 @@ std::string pick_best_match(const std::string &spec,
     return best;
 }
 
+bool wants_binary(const Manifest &m, const std::string &name) {
+    for (const auto &n : m.binary_opt_in) {
+        if (n == name) return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Binary release assets (`[release.binaries]` / `tulpar pkg add --binary`).
+//
+// Same platform-id convention `tulpar update` already uses
+// (src/cli/update_cmd.cpp `assets_for_platform()`), so a package author
+// publishing binaries only needs to pick names consumers already expect.
+const char *current_platform_id() {
+#if defined(_WIN32)
+    return "windows-x64";
+#elif defined(__APPLE__)
+    return "macos-universal";
+#else
+    return "linux-x64";
+#endif
+}
+
+// `release.binaries` values are attacker-controlled the moment a THIRD
+// PARTY publishes a package — the registry just echoes back whatever
+// URL string that publisher put in their tulpar.toml. Since the actual
+// download shells out to curl (see download_binary_to_file), an
+// unvalidated URL is a command-injection vector (a value like
+// `https://x/f"; rm -rf ~; #` would break out of the quoted argument).
+// Reject anything outside a plain-path HTTPS/HTTP URL character set —
+// no quotes, backticks, `$`, `&`, `;`, pipes, redirects, or whitespace.
+// This does forbid query strings with `&`-joined params, which is fine:
+// a static release-asset URL doesn't need one.
+bool is_safe_binary_url(const std::string &url) {
+    if (url.empty() || url.size() > 2048) return false;
+    if (url.rfind("https://", 0) != 0 && url.rfind("http://", 0) != 0) {
+        return false;
+    }
+    for (unsigned char c : url) {
+        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                  (c >= '0' && c <= '9') ||
+                  c == '-' || c == '.' || c == '_' || c == '~' ||
+                  c == ':' || c == '/' || c == '?' || c == '#' ||
+                  c == '@' || c == '%' || c == '[' || c == ']' ||
+                  c == '+' || c == ',' || c == '=';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+// Download `url` (already validated by is_safe_binary_url) to
+// `dest_path` via curl — mirrors `download_to_file` in update_cmd.cpp
+// (TLS via the platform's stock curl instead of growing a TLS dep in
+// http_fetch.hpp). `url` is allowlist-validated by the caller so it is
+// free of shell metacharacters; `dest_path` is built by us from the
+// dependency name, never from the network response.
+bool download_binary_to_file(const std::string &url,
+                             const std::string &dest_path,
+                             std::string &err) {
+#ifdef _WIN32
+    std::string cmd = "curl.exe -fsSL --retry 3 -A \"tulpar-pkg\" -o \"" +
+                       dest_path + "\" \"" + url + "\" 2>NUL";
+#else
+    std::string cmd = "curl -fsSL --retry 3 -A 'tulpar-pkg' -o '" +
+                       dest_path + "' '" + url + "'";
+#endif
+    int rc = std::system(cmd.c_str());
+    if (rc != 0) {
+        err = "download failed (curl exit " + std::to_string(rc) + "): " + url;
+        return false;
+    }
+    return true;
+}
+
+// GET <registry>/v1/packages/<name>/versions/<version> — the METADATA
+// endpoint (sha256/description/download_count/…), distinct from
+// `/source` which returns raw package bytes. Used only for the opt-in
+// binary-fetch path, so normal source-only installs never pay this
+// extra round-trip. Returns an owned cJSON root the caller must
+// cJSON_Delete, or nullptr on failure.
+cJSON *fetch_version_metadata(const std::string &registry_url,
+                              const std::string &name,
+                              const std::string &version,
+                              std::string &err) {
+    std::string url = registry_url;
+    if (!url.empty() && url.back() == '/') url.pop_back();
+    url += "/v1/packages/" + name + "/versions/" + version;
+    std::string body;
+    int status = 0;
+    if (!tulpar::http_fetch_url(url, body, status, err)) return nullptr;
+    if (status < 200 || status >= 300) {
+        err = "HTTP " + std::to_string(status);
+        return nullptr;
+    }
+    cJSON *doc = cJSON_Parse(body.c_str());
+    if (!doc) {
+        err = "registry response is not valid JSON";
+        return nullptr;
+    }
+    return doc;
+}
+
+// Fetch + install the prebuilt binary for `name`@`version` into
+// `tulpar_modules/<name>/bin/<name>[.exe]`, if the registry published
+// one for `current_platform_id()`. Best-effort: any failure (no
+// release_binaries field, no entry for this platform, download error)
+// prints an informative message and returns without touching the
+// overall install's exit code — an opted-in binary that isn't
+// available yet shouldn't fail an otherwise-successful source install.
+void try_fetch_binary(const std::string &registry_url, const std::string &name,
+                      const std::string &version, const fs::path &dest_dir) {
+    std::string err;
+    cJSON *doc = fetch_version_metadata(registry_url, name, version, err);
+    if (!doc) {
+        std::fprintf(stdout,
+                     "  ~ %s: binary opt-in set but metadata fetch failed (%s) "
+                     "— source install kept\n",
+                     name.c_str(), err.c_str());
+        return;
+    }
+    cJSON *bins = cJSON_GetObjectItem(doc, "release_binaries");
+    cJSON *entry = bins ? cJSON_GetObjectItem(bins, current_platform_id()) : nullptr;
+    if (!entry || !cJSON_IsString(entry) || !entry->valuestring ||
+        !entry->valuestring[0]) {
+        std::fprintf(stdout,
+                     "  ~ %s: no published binary for platform '%s'\n",
+                     name.c_str(), current_platform_id());
+        cJSON_Delete(doc);
+        return;
+    }
+    std::string url = entry->valuestring;
+    cJSON_Delete(doc);
+    if (!is_safe_binary_url(url)) {
+        std::fprintf(stdout,
+                     "  ~ %s: published binary URL rejected (not a plain "
+                     "http(s) path) — refusing to download\n",
+                     name.c_str());
+        return;
+    }
+    fs::path bin_dir = dest_dir / "bin";
+    std::error_code ec;
+    fs::create_directories(bin_dir, ec);
+    std::string bin_name = name;
+#ifdef _WIN32
+    bin_name += ".exe";
+#endif
+    fs::path bin_path = bin_dir / bin_name;
+    std::string derr;
+    if (!download_binary_to_file(url, bin_path.string(), derr)) {
+        std::fprintf(stdout, "  ~ %s: %s\n", name.c_str(), derr.c_str());
+        return;
+    }
+#ifndef _WIN32
+    chmod(bin_path.string().c_str(), 0755);
+#endif
+    std::fprintf(stdout, "  + %s: binary -> %s\n", name.c_str(),
+                 bin_path.string().c_str());
+}
+
 int cmd_init(int argc, char **argv) {
     const char *name = (argc > 0) ? argv[0] : nullptr;
     if (file_exists(kManifestFile)) {
@@ -419,8 +578,27 @@ void split_spec(const std::string &spec, std::string &name,
 }
 
 int cmd_add(int argc, char **argv) {
-    if (argc < 1) {
-        std::fprintf(stderr, "Usage: tulpar pkg add <name>[@<version>]\n");
+    // `--binary` opts the dependency into `tulpar pkg install` also
+    // fetching a prebuilt binary (if the package published one for the
+    // running platform) — see Manifest::binary_opt_in.
+    bool want_binary = false;
+    std::string spec_arg;
+    for (int i = 0; i < argc; i++) {
+        std::string a = argv[i];
+        if (a == "--binary") {
+            want_binary = true;
+        } else if (spec_arg.empty()) {
+            spec_arg = a;
+        } else {
+            std::fprintf(stderr,
+                         "tulpar pkg add: unknown argument '%s'\n"
+                         "Usage: tulpar pkg add <name>[@<version>] [--binary]\n",
+                         a.c_str());
+            return 2;
+        }
+    }
+    if (spec_arg.empty()) {
+        std::fprintf(stderr, "Usage: tulpar pkg add <name>[@<version>] [--binary]\n");
         return 2;
     }
     Manifest m;
@@ -431,7 +609,7 @@ int cmd_add(int argc, char **argv) {
         return 1;
     }
     std::string name, version;
-    split_spec(argv[0], name, version);
+    split_spec(spec_arg, name, version);
     if (name.empty()) {
         std::fprintf(stderr, "tulpar pkg add: empty package name\n");
         return 2;
@@ -447,13 +625,21 @@ int cmd_add(int argc, char **argv) {
     if (!replaced) {
         m.dependencies.push_back({name, version});
     }
+    if (want_binary) {
+        bool already = false;
+        for (const auto &n : m.binary_opt_in) {
+            if (n == name) { already = true; break; }
+        }
+        if (!already) m.binary_opt_in.push_back(name);
+    }
     if (!manifest_save(kManifestFile, m, err)) {
         std::fprintf(stderr, "tulpar pkg add: %s\n", err.c_str());
         return 1;
     }
-    std::fprintf(stdout, "%s %s = \"%s\"\n",
+    std::fprintf(stdout, "%s %s = \"%s\"%s\n",
                  replaced ? "updated" : "added",
-                 name.c_str(), version.c_str());
+                 name.c_str(), version.c_str(),
+                 want_binary ? " (+ binary opt-in)" : "");
     return 0;
 }
 
@@ -746,6 +932,10 @@ int cmd_install() {
                              name.c_str(), spec.c_str());
                 lock_entries.push_back({name, url, prev_sha[name]});
                 installed++;
+                if (wants_binary(m, name)) {
+                    try_fetch_binary(m.registry_url, name, resolved_version,
+                                     modules_dir / name);
+                }
                 continue;
             }
 
@@ -837,6 +1027,9 @@ int cmd_install() {
             }
             lock_entries.push_back({name, url, body_sha});
             installed++;
+            if (wants_binary(m, name)) {
+                try_fetch_binary(m.registry_url, name, resolved_version, dest_dir);
+            }
             continue;
         }
         std::string raw = spec.substr(5);
@@ -1219,6 +1412,23 @@ int cmd_publish(int argc, char **argv) {
     std::fprintf(stdout, "  source size: %zu bytes\n", source.size());
     std::fprintf(stdout, "  sha256:      %s\n", sha.c_str());
 
+    // [release.binaries] URLs get downloaded verbatim by every consumer
+    // that opts in (`tulpar pkg add --binary`) — reject anything that
+    // wouldn't pass is_safe_binary_url() now rather than let it reach
+    // the registry and fail (or worse, get "fixed" by a consumer running
+    // an older CLI without the same validation). Checked even in
+    // --dry-run so an author catches a bad URL before ever publishing.
+    for (const auto &[platform, bin_url] : m.release_binaries) {
+        if (!is_safe_binary_url(bin_url)) {
+            std::fprintf(stderr,
+                         "tulpar pkg publish: [release.binaries] %s = \"%s\" "
+                         "is not a plain http(s) URL (no quotes/spaces/shell "
+                         "metacharacters) — refusing to publish\n",
+                         platform.c_str(), bin_url.c_str());
+            return 1;
+        }
+    }
+
     if (dry_run) {
         std::fprintf(stdout, "dry-run: not posting to registry\n");
         return 0;
@@ -1233,6 +1443,13 @@ int cmd_publish(int argc, char **argv) {
     cJSON_AddStringToObject(body_json, "sha256", sha.c_str());
     cJSON_AddStringToObject(body_json, "source", source.c_str());
     cJSON_AddStringToObject(body_json, "description", m.description.c_str());
+    if (!m.release_binaries.empty()) {
+        cJSON *bins = cJSON_CreateObject();
+        for (const auto &[platform, bin_url] : m.release_binaries) {
+            cJSON_AddStringToObject(bins, platform.c_str(), bin_url.c_str());
+        }
+        cJSON_AddItemToObject(body_json, "release_binaries", bins);
+    }
     char *printed = cJSON_PrintUnformatted(body_json);
     std::string body_str(printed ? printed : "");
     if (printed) std::free(printed);

@@ -17,6 +17,7 @@
 //     json n     = Note.find(id);              // {} = bulunamadı
 //     array all  = Note.all();
 //     array open = Note.where("done = ?", [0]); // HER ZAMAN bağlı parametre
+//     array recent = Note.where("done = ?", [0], {"order": "id DESC", "limit": 20});
 //     json f     = Note.first("done = ?", [0]);
 //     int c      = Note.count();
 //     Note.update(id, {"done": 0});            // 0/"" değerler de YAZILIR
@@ -201,16 +202,37 @@ func find(json m, int id) {
     return _orm_cast_row(m, rows[0]);
 }
 
-// all(m) → array<json> (cast'li).
-func all(json m) {
-    array rows = db_query(m["db"], "SELECT * FROM " + _orm_quote_ident(m["table"]), []);
+// opts → " ORDER BY ..." + " LIMIT ..." kuyruğu. `opts` eksik bırakılırsa
+// (default-arg padding) boxed int 0 olarak gelir — typeof kontrolü onu
+// sessizce hiçbir-şey'e çevirir. `order` ham SQL parçasıdır (kolon adı +
+// isteğe bağlı ASC/DESC) — `raw()` gibi kullanıcı girdisini doğrudan gömme.
+func _orm_clause(json opts) {
+    str s = "";
+    if (typeof(opts) != "object") {
+        return s;
+    }
+    if (_orm_has(opts, "order")) {
+        s = s + " ORDER BY " + toString(opts["order"]);
+    }
+    if (_orm_has(opts, "limit")) {
+        s = s + " LIMIT " + toString(toInt(toString(opts["limit"])));
+    }
+    return s;
+}
+
+// all(m[, opts]) → array<json> (cast'li). opts: {"order": "id DESC", "limit": 20}.
+func all(json m, json opts) {
+    str sql = "SELECT * FROM " + _orm_quote_ident(m["table"]) + _orm_clause(opts);
+    array rows = db_query(m["db"], sql, []);
     return _orm_cast_rows(m, rows);
 }
 
-// where(m, cond, params) → array<json>. Koşul `?` yer tutucuları taşır,
-// değerler HER ZAMAN bağlanır: Note.where("done = ? AND id > ?", [0, 5]).
-func where(json m, str cond, array params) {
-    str sql = "SELECT * FROM " + _orm_quote_ident(m["table"]) + " WHERE " + cond;
+// where(m, cond, params[, opts]) → array<json>. Koşul `?` yer tutucuları
+// taşır, değerler HER ZAMAN bağlanır: Note.where("done = ? AND id > ?", [0, 5]).
+// opts (opsiyonel): {"order": "id DESC", "limit": 20} — sayfalama/sıralama
+// için where()'e ayrı bir query-builder gerekmeden.
+func where(json m, str cond, array params, json opts) {
+    str sql = "SELECT * FROM " + _orm_quote_ident(m["table"]) + " WHERE " + cond + _orm_clause(opts);
     array rows = db_query(m["db"], sql, params);
     return _orm_cast_rows(m, rows);
 }

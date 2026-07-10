@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-TulparLang is a statically-typed, **AOT-compiled** language implemented in C++17 with an LLVM 18 backend. Source files use the `.tpr` extension. The project is primarily authored in Turkish; user-facing strings often flow through `src/common/localization.hpp` (`tulpar::i18n::tr_en`) so both Turkish and English messages exist in the source.
+TulparLang is a statically-typed, **AOT-compiled** language implemented in C++17 with an LLVM backend. Source files use the `.tpr` extension. The project is primarily authored in Turkish; user-facing strings often flow through `src/common/localization.hpp` (`tulpar::i18n::tr_en`) so both Turkish and English messages exist in the source.
+
+The tree builds against **LLVM 18 through 22** — CMake exposes the major version as `TULPAR_LLVM_MAJOR` and codegen `#if`-gates the API spellings LLVM renamed across releases (e.g. `LLVMDIBuilderInsertDeclareAtEnd` ≤ 18 vs `…RecordAtEnd` ≥ 19 in `llvm_backend.cpp`). Don't hardcode a single LLVM version's API; guard it on `TULPAR_LLVM_MAJOR`. CI runs 18 (Linux apt / macOS brew); MSYS2 ships 19; recent MinGW configs ship 22.
 
 ## ⛔ AOT-ONLY — there is no VM execution engine (read before adding a backend)
 
@@ -68,11 +70,16 @@ A multi-language micro-benchmark harness lives in `benchmarks/` — `run_benchma
 # --vm / --run: removed (ignored with a warning). --repl / -i: removed (exits with a notice).
 
 ./tulpar fmt script.tpr         # Source formatter (src/fmt/)
+./tulpar typecheck script.tpr   # Standalone type checker in error mode (src/cli/typecheck_cmd.cpp)
+./tulpar doc script.tpr         # Markdown reference from leading-comment docstrings (src/cli/doc_cmd.cpp)
+./tulpar debug script.tpr       # Experimental DAP debug adapter (src/cli/debug_cmd.cpp)
 ./tulpar pkg <init|add|install> # Package manager (src/pkg/)
 ./tulpar update [--check]       # Self-update from tulparlang.dev (src/cli/update_cmd.cpp)
 ./tulpar --lsp                  # LSP server on stdio (src/lsp/)
 ./tulpar version | --help       # Version / command reference
 ```
+
+`--no-typecheck` (or `TULPAR_NO_TYPECHECK=1`) skips the pre-build `[typecheck]` pass; `--strict` promotes those warnings to hard errors (persist it with `strict = true` in `tulpar.toml`).
 
 CLI dispatch lives in `main()` in [src/main.cpp](src/main.cpp); `--lsp`, `fmt`, `pkg`, `version`, `--help`, and `update` all short-circuit before the run/build path. Default execution calls `aot_compile_and_run_silent()`; an AOT failure (parse/codegen/emit/link) returns non-zero — there is no fallback, so "it ran" means AOT ran. `--lsp` owns stdin/stdout for JSON-RPC, so it must dispatch before any banner output.
 
@@ -90,13 +97,13 @@ Pipeline, top to bottom:
    - **Shared runtime** (`src/vm/`, despite the directory name — *not* an execution engine): `runtime_bindings.cpp` implements every `aot_*` built-in (print, sockets, db, threads, async, etc.) that the AOT binary links; `vm.cpp` provides the arena allocator + object/string allocators; `vm.hpp` defines the runtime value types (`VMValue`, `Obj*`); `bytecode.cpp/.hpp` keep the `Chunk` type embedded in `ObjFunction`. The `tulpar_runtime` static library (linked into AOT'd user binaries) is built from this set.
    - **Bytecode VM + REPL** — **removed 2026-06-15** (AOT-only). `src/vm/compiler.cpp` (AST→bytecode) and `vm_run` (the interpreter dispatch loop) are deleted; `--vm`/`--run`/`--repl` are gone. See "AOT-ONLY" at the top — do not rebuild them.
    - **Tree-walk interpreter** (formerly `src/interpreter/`) — sunset 2026-05-05. **x64 JIT** (formerly `src/jit/`) — sunset 2026-05-05 (perf delta vs VM was within noise). Both predate the AOT-only move.
-5. **Runtime support** (`runtime/`) — `cJSON`, `tulpar_arc` (automatic reference counting for heap values), `tulpar_native` (FFI), `tulpar_async` (stackful-coroutine event loop behind `async`/`await`).
+5. **Runtime support** (`runtime/`) — `cJSON`, `tulpar_arc` (automatic reference counting for heap values), `tulpar_native` (FFI), `tulpar_async` (stackful-coroutine event loop behind `async`/`await`), `tulpar_gzip` (in-tree DEFLATE/gzip — fixed Huffman + LZ77 + CRC-32, no zlib dependency, so AOT'd binaries stay self-contained).
 
 Auxiliary subsystems share the same AST and live alongside the backends:
 - `src/lsp/` — LSP server (`tulpar --lsp`). `document_index.cpp` reparses on every change; `builtins.cpp` registers the native built-in symbol table for completion/hover.
 - `src/fmt/` — source formatter (`tulpar fmt`).
 - `src/pkg/` — package manager (`tulpar pkg`). `manifest.cpp` reads `tulpar.toml`; `pkg_cli.cpp` vendors `path:` deps into `tulpar_modules/<name>/` (registry deps are still TODO).
-- `src/cli/` — extra subcommands (currently `update_cmd.cpp` for `tulpar update`).
+- `src/cli/` — extra subcommands: `update_cmd.cpp` (`tulpar update`), `typecheck_cmd.cpp` (`tulpar typecheck`, the pre-pass checker in error mode), `doc_cmd.cpp` (`tulpar doc`), `debug_cmd.cpp` (`tulpar debug`, experimental DAP), plus `line_edit.cpp` (shared line editor).
 
 ### Standard library is embedded at build time
 
@@ -111,6 +118,18 @@ SQLite (`lib/sqlite3/sqlite3.c`) is vendored and compiled straight into both `tu
 `import "name" as alias;` namespaces the imported module — every top-level `func` defined in the module is renamed to `<alias>__<name>` and intra-module calls are rewritten in lockstep, so two libraries that both export `route` (or `helper`, etc.) can coexist. Built-ins (`print`, `len`, ...) and references to the importer's own functions are not touched. The rewrite lives in `src/parser/import_alias.cpp` and is invoked from both the AOT (`AST_IMPORT` codegen) and VM (`OP_IMPORT` runtime) paths. Plain `import "name";` (no alias) preserves the historical "all names land in global scope" behaviour.
 
 Call sites can be written either way: `m.func(args)` (Python-style) and `m__func(args)` (literal mangled form) are equivalent. `parse_postfix` rewrites `<identifier>.<identifier>(args)` to a single `FunctionCall("<id1>__<id2>", args)` at parse time; standard `obj.field` reads / writes (`p.x`, `cfg.host`) keep falling through to the existing ArrayAccess desugar. Method-style calls on real objects (`obj.method(x)` where `obj` isn't a module alias) still aren't supported — the rewrite optimistically assumes module qualification, so the call resolves at codegen / runtime as if the user had typed `<id1>__<id2>` directly.
+
+### Adding a runtime built-in (the "5-point binding")
+
+A native built-in (`print`, `ord`, `gzip_compress`, `secure_token`, `hmac_sha256`, …) is not one edit — STATUS.md calls this "5 noktada bağlandı" and every builtin follows the same wiring. To add `aot_foo`, touch all five or codegen/typecheck/tooling drift out of sync:
+
+1. **`src/vm/runtime_bindings.cpp`** — the actual `extern "C"` implementation `aot_foo(...)` plus its `aot_foo_ptr` address accessor. This is the single source of truth (it links into `tulpar_runtime`, so AOT'd binaries call it directly).
+2. **`src/aot/llvm_backend.hpp`** — declare the LLVMValueRef field / entry for the function.
+3. **`src/aot/llvm_backend.cpp`** — declare the LLVM function signature and wire the call dispatch so `foo(...)` in source emits a call to `aot_foo`. Pointer-ABI builtins (returning heap strings/objects) follow the existing `aot_*_ptr` split pattern (see `aot_split_ptr`, `parse_multipart`).
+4. **`src/typeinfer/typeinfer.cpp`** — add the signature to the builtin table (e.g. `{"foo", TYPE_INT, {TYPE_STRING, TYPE_INT}}`) so type inference knows the return/arg types.
+5. **`src/lsp/builtins.cpp`** — register the symbol (signature + doc string) for LSP completion/hover.
+
+Then rebuild **both** `tulpar` and `tulpar_runtime`, and refresh the repo-root `libtulpar_runtime.a` if AOT link probing needs it. Pure-Tulpar helpers (most of Wings/ORM) don't need any of this — they live in `lib/*.tpr` and only require a `./build.sh clean` to re-embed.
 
 ### Cross-platform shims
 
