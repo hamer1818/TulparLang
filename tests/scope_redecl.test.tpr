@@ -1,0 +1,100 @@
+import "test";
+
+// Aynı adlı yerel değişken KARDEŞ bloklarda yeniden tanımlandığında, sonraki
+// tanımın başlatıcısı (initializer) uygulanmalı.
+//
+// Regresyon: `if`/`else` blokları kendi scope'unu açmaz, bu yüzden iki tanım da
+// aynı fonksiyon scope'una düşüyordu. add_local yeni bir kayıt EKLİYOR, arama
+// ise baştan tarayıp İLK kaydı döndürüyordu; sonuç olarak ikinci tanımın
+// store'u kimsenin okumadığı bir alloca'ya gidiyor, okuma ise ilk tanımın
+// slot'unu (ilk blok hiç çalışmadıysa: yazılmamış yığın çöpü) görüyordu.
+// Gerçek etki: arcade platformer'da `float s = _espeed[i]` çöp okuyordu ve
+// oyuncu saçma bir hızla ekran kenarına yapışıyordu.
+//
+// NOT: parametreler bilerek tipsiz — tipli parametre + tipli dönüş + blok
+// içinde yerel tanımı ayrı (bu düzeltmeden önce de var olan) bir derleyici
+// çökmesini tetikliyor.
+
+func f_float(mode) {
+    if (mode == 1) {
+        float s = 111.0;
+        return toInt(s);
+    } else if (mode == 2) {
+        float s = 222.0;      // kardeş blokta AYNI ad
+        return toInt(s);
+    }
+    return 0;
+}
+
+func f_int(mode) {
+    if (mode == 1) { int s = 111; return s; }
+    else if (mode == 2) { int s = 222; return s; }
+    return 0;
+}
+
+func f_str(mode) {
+    if (mode == 1) { str s = "bir"; return s; }
+    else if (mode == 2) { str s = "iki"; return s; }
+    return "";
+}
+
+// Ayrı ayrı if'ler (else-if değil) — aynı hata sınıfı.
+func f_seq(mode) {
+    if (mode == 1) { int s = 111; return s; }
+    if (mode == 2) { int s = 222; return s; }
+    return 0;
+}
+
+// Başlatıcı bir çağrının sonucu olduğunda da geçerli olmalı
+// (arcade'deki `float s = _espeed[_ar_i];` bu biçimdeydi).
+func speed() { return 200.0; }
+func f_call(mode) {
+    if (mode == 1) {
+        float s = 5.0;
+        return toInt(s);
+    } else if (mode == 2) {
+        float s = speed();
+        return toInt(s);
+    }
+    return 0;
+}
+
+func run_float() {
+    assert_eq_int(f_float(1), 111);
+    assert_eq_int(f_float(2), 222);   // hata varken 111 dönerdi
+}
+
+func run_int() {
+    assert_eq_int(f_int(1), 111);
+    assert_eq_int(f_int(2), 222);
+}
+
+func run_str() {
+    assert_eq_str(f_str(1), "bir");
+    assert_eq_str(f_str(2), "iki");   // hata varken çöp (double bit deseni) dönerdi
+}
+
+func run_seq() {
+    assert_eq_int(f_seq(1), 111);
+    assert_eq_int(f_seq(2), 222);
+}
+
+func run_call() {
+    assert_eq_int(f_call(1), 5);
+    assert_eq_int(f_call(2), 200);
+}
+
+// İlk blok hiç çalışmamışken de ikinci tanım kendi değerini görmeli
+// (hata varken hiç yazılmamış yığın çöpü okunuyordu).
+func run_cold() {
+    assert_eq_int(f_float(2), 222);
+    assert_eq_int(f_int(2), 222);
+}
+
+test("float: kardes blokta yeniden tanim", "run_float");
+test("int: kardes blokta yeniden tanim", "run_int");
+test("str: kardes blokta yeniden tanim", "run_str");
+test("ardisik if'lerde yeniden tanim", "run_seq");
+test("cagri sonucuyla yeniden tanim", "run_call");
+test("ilk blok hic calismadan yeniden tanim", "run_cold");
+test_summary();

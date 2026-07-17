@@ -1,0 +1,792 @@
+// ============================================
+// Tulpar Arcade — "Preset" oyun katmanı  🎮🧩
+//
+// tame'in üstünde, Unreal-blueprint / blok mantığıyla ÇOK KISA kod yazarak
+// oyun yapmayı sağlayan üst-seviye motor. Kullanıcı döngü/çarpışma/fizik/çizim
+// yazmaz; hazır "blokları" birleştirir:
+//
+//   import "arcade";
+//   func kur() {
+//       temizle();
+//       oyuncu(320, 240, 24, 24, BLUE);      // ok/WASD ile hareket hazır
+//       dusman(100, 100, 24, 24, RED);
+//   }
+//   sahne(640, 480, "Kac");
+//   baslangicta(kur);
+//   carpisinca(TAG_PLAYER, TAG_ENEMY, oyun_bitti);
+//   oyna();                                   // döngü + çizim + çarpışma otomatik
+//
+// Her fonksiyonun hem Türkçe hem İngilizce adı var (alias). İngilizce eşleri:
+//   scene / on_start / on_hit / play, player / enemy / item / wall / bullet ...
+//
+// TASARIM NOTLARI (Tulpar kısıtları — deneyle sabitlendi):
+//  * Entity'ler PARALEL DİZİLERde tutulur (dizi elemanına struct geri-yazma
+//    çalışmıyor; int/float eleman yazımı çalışıyor). Bir entity = bir index.
+//  * TÜM callback'ler 0-ARG'dır (call() ile parametre geçmek segfault ediyor).
+//    Callback içinde çarpışan taraflar me()/other() ile, context globallerinden
+//    okunur; oyun durumu index'li setter'larla (kill, hiz_ver...) değiştirilir.
+//  * Döngülerde while yerine for kullanılır (2+ değişkenli while + builtin çağrı
+//    bir codegen bug'ını tetikliyor).  Modülo için mod() (`%` operatörü yok).
+// ============================================
+
+import "tame";
+
+// ---- Sabitler ---------------------------------------------------------------
+
+// Hareket presetleri (entity başına _emove)
+int MV_NONE     = 0;   // hareketsiz — kullanıcı on_frame içinde sürer
+int MV_TOPDOWN  = 1;   // ok tuşları / WASD → 8 yön, hız px/sn
+int MV_PLATFORM = 2;   // yatay giriş + yerçekimi + zıplama
+int MV_VELOCITY = 3;   // sadece kendi hızıyla entegre (mermi/sabit hızlı)
+
+// Hazır tag'ler — kendi int tag'lerini de verebilirsin.
+int TAG_PLAYER = 1;
+int TAG_ENEMY  = 2;
+int TAG_ITEM   = 3;
+int TAG_WALL   = 4;
+int TAG_BULLET = 5;
+
+// Oyun durumu
+int _ar_state = 0;    // 0 = oynanıyor, 1 = oyun bitti, 2 = kazandın (R ile yeniden)
+
+// ---- Bölümler (level) -------------------------------------------------------
+//
+// Hiç `bolum()` kaydedilmemişse motor bugünkü tek-sahne davranışını korur
+// (_has_levels false → HUD göstergesi yok, KAZANDIN state'i hiç oluşmaz).
+array _levels = [];        // bölüm kurulum fonksiyonları (0-arg), index = bölüm-1
+int _level_n = 0;          // kayıtlı en yüksek bölüm numarası
+int _cur_level = 1;        // şu anki bölüm (1-tabanlı)
+bool _has_levels = false;
+float _banner_t = 0.0;     // "Bölüm N" afişi için kalan süre (sn)
+int _lvl_pending = 0;      // 1 = bölüm geçişi bekliyor (bkz. bolum_gec notu)
+
+// ---- Entity paralel dizileri ------------------------------------------------
+array _ex = [];      // konum x (float)
+array _ey = [];      // konum y (float)
+array _ew = [];      // genişlik
+array _eh = [];      // yükseklik
+array _evx = [];     // hız x (px/sn)
+array _evy = [];     // hız y (px/sn)
+array _etag = [];    // tag (int)
+array _ecolor = [];  // renk (paketli int) — sprite yoksa dikdörtgen bu renkte
+array _esprite = []; // texture handle (-1 = yok)
+array _emove = [];   // hareket preseti
+array _espeed = [];  // topdown/platform taban hız (px/sn)
+array _ealive = [];  // 1 = canlı
+array _eground = []; // 1 = platformer'da zeminde
+array _egen = [];    // slot üretim sayacı (bayat handle tespiti — aşağıya bak)
+int _n = 0;          // AYRILMIŞ slot sayısı (ölüler dahil; canlı sayısı değil)
+
+// ---- Slot geri kazanımı (boş-slot yığını) ----------------------------------
+//
+// Ölen entity'nin slot'u geri kullanılır; aksi halde sürekli mermi/düşman üreten
+// bir oyunda paralel diziler sınırsız büyürdü.
+//
+// Tuzak: slot'u çıplak index olarak geri vermek, ölmüş bir entity'nin id'sini
+// elinde tutan kodun slot yeniden kullanılınca SESSİZCE başka bir entity'yi
+// oynatmasına yol açar. Bu yüzden dışarıya verilen id bir **handle**'dır:
+//
+//     handle = _egen[slot] * _ID_STRIDE + slot
+//
+// Öldürmede `_egen[slot]` artar → o slot'a ait tüm eski handle'lar anında
+// bayatlar. Bayat handle ile yapılan her çağrı sessizce yok sayılır ve
+// `yasiyor(h)` dürüstçe false döner (aliasing yerine dürüst "öldü" cevabı).
+array _efree = [];   // boş slot yığını
+int _free_n = 0;     // yığın tepesi (_efree kırpılmaz; bu sayaç sınırlar)
+int _ID_STRIDE = 1048576;   // 2^20 slot/oyun — pratikte tavan yok
+
+// Slot -> dışarıya verilen handle.
+func _mk_handle(slot): int { return _egen[slot] * _ID_STRIDE + slot; }
+
+// Handle -> slot; bayat/geçersizse -1. Tüm public id API'si bundan geçer.
+func _slot_of(h): int {
+    if (h < 0) { return -1; }
+    int slot = mod(h, _ID_STRIDE);
+    if (slot >= _n) { return -1; }
+    int gen = toInt((h - slot) / _ID_STRIDE);
+    if (gen != _egen[slot]) { return -1; }   // slot geri kullanılmış → bayat
+    return slot;
+}
+int _ar_i = 0;       // fizik döngüsünün GÜNCEL entity index'i (GLOBAL — bkz.
+                     // _ar_apply_movement'taki codegen notu; poison workaround)
+
+// ---- Dünya / fizik ayarları -------------------------------------------------
+float _world_w = 640.0;
+float _world_h = 480.0;
+float _gravity = 0.0;     // px/sn^2 (0 = kapalı); platformer bunu kullanır
+float _jump_v  = 520.0;   // zıplama başlangıç hızı (px/sn, yukarı)
+bool  _clamp_world = true; // topdown'da entity'yi dünya sınırında tut
+
+// ---- Çarpışma kuralları (registry) ------------------------------------------
+array _ca  = [];   // tag A
+array _cb  = [];   // tag B
+array _cfn = [];   // 0-arg callback fonksiyonu
+
+// ---- Callback context'i (me()/other() bunları okur) -------------------------
+int _hit_self  = -1;
+int _hit_other = -1;
+
+// ---- Sahne callback'leri ----------------------------------------------------
+var _start_fn = 0;   // baslangicta(fn): kurulum + R sonrası yeniden
+var _frame_fn = 0;   // her_kare(fn): kare başı kullanıcı mantığı (opsiyonel)
+var _draw_fn  = 0;   // ciz_ustune(fn): otomatik çizim üstüne ek çizim
+bool _has_start = false;
+bool _has_frame = false;
+bool _has_draw  = false;
+
+// ---- Dil / language ---------------------------------------------------------
+// Motorun ürettiği HUD metinleri (skor öneki, "Bölüm n/N", OYUN BITTI/KAZANDIN,
+// yeniden-başla ipucu) bu koda göre TR ya da EN çizilir. Varsayılan: sistem dili
+// (`sys_lang()` "en" ise İngilizce, aksi halde Türkçe). `dil("en")`/`language("tr")`
+// ile açıkça ezilir. `bilgi()/controls()` şeridi oyun tarafından verilir — onun
+// dili çağıran oyuna aittir, motor karışmaz.
+str _lang = "";           // "" = henüz çözülmedi (ilk _lang_now'da sys_lang'dan gelir)
+
+// Etkin dili döndür; ilk çağrıda sistem dilinden çözer (ve önbelleğe alır).
+func _lang_now(): str {
+    if (_lang == "") {
+        if (sys_lang() == "en") { _lang = "en"; }
+        else { _lang = "tr"; }
+    }
+    return _lang;
+}
+func language(code) { if (code == "en") { _lang = "en"; } else { _lang = "tr"; } }
+func dil(code)      { language(code); }
+
+// HUD
+str _hud_prefix = "";     // "" = dile göre varsayılan ("Skor: " / "Score: ")
+bool _hud_set = false;    // hud()/hud_prefix() ile açıkça ayarlandı mı?
+int _score = 0;
+bool _show_score = true;
+str _hint = "";           // üst bilgilendirme şeridi (kontroller vb.)
+bool _has_hint = false;
+
+// ============================================================================
+//  KURULUM / DÖNGÜ
+// ============================================================================
+
+// Pencereyi açar, 60 FPS ayarlar, dünyayı entity'nin sığacağı boyuta kurar.
+func scene(w, h, title): bool {
+    _world_w = w * 1.0;
+    _world_h = h * 1.0;
+    set_fps(60);
+    return window(w, h, title);
+}
+func sahne(w, h, title): bool { return scene(w, h, title); }
+
+// Kurulum callback'i: oyun başında ve her R (yeniden başlat) çağrılır.
+func on_start(fn)     { _start_fn = fn; _has_start = true; }
+func baslangicta(fn)  { on_start(fn); }
+
+// Kare başı kullanıcı mantığı (opsiyonel, 0-arg).
+func on_frame(fn)  { _frame_fn = fn; _has_frame = true; }
+func her_kare(fn)  { on_frame(fn); }
+
+// Otomatik çizimin üstüne ek çizim (opsiyonel, 0-arg).
+func on_draw(fn)    { _draw_fn = fn; _has_draw = true; }
+func ciz_ustune(fn) { on_draw(fn); }
+
+// Yönetilen ana döngü: giriş + fizik + çarpışma + otomatik çizim + HUD +
+// oyun-bitti/R-yeniden hepsi burada. Bundan sonra kod yazmana gerek yok.
+func play() {
+    _ar_reset();
+    var wm = arena_save();
+    while (running()) {
+        _ar_update();
+        frame_begin();
+        _ar_draw_all();
+        frame_end();
+        arena_restore(wm);
+    }
+    arena_drop(wm);
+    close_window();
+}
+func oyna() { play(); }
+
+// Baştan kur: entity'leri temizler, skoru sıfırlar, 1. bölüme döner.
+// R (yeniden başla) hem "oyun bitti" hem "kazandın" durumundan buraya gelir:
+// skor 0 + bölüm 1. (Sadece bulunduğun bölümü tekrarlamak kasten YOK — oyuncu
+// "yeniden" deyince baştan başlamayı bekler; en tahmin edilebilir olan bu.)
+func _ar_reset() {
+    _score = 0;
+    _ar_state = 0;
+    _cur_level = 1;
+    _banner_t = 0.0;
+    _lvl_pending = 0;
+    _ar_load_level();
+}
+
+// Güncel bölümü kur: entity'leri sil → global kurulum (_start_fn) → bölüm fn'i.
+// Bölüm kaydı yoksa bu tam olarak eski _ar_reset gövdesidir (geriye uyum).
+func _ar_load_level() {
+    clear_entities();
+    if (_has_start) { call(_start_fn); }
+    if (_has_levels) {
+        if (_cur_level >= 1 && _cur_level <= _level_n) {
+            var lfn = _levels[_cur_level - 1];
+            if (lfn != 0) { call(lfn); }
+        }
+    }
+}
+
+// ============================================================================
+//  BÖLÜMLER (level)
+// ============================================================================
+
+// Bölüm kurulum fonksiyonu kaydet (n 1-tabanlı, fn 0-arg).
+// Aynı n iki kez kaydedilirse sonuncusu kazanır. Kayıtlar `temizle()` ile
+// SİLİNMEZ — bölümler entity değil, oyun tanımının parçasıdır.
+func level(n, fn) {
+    if (n < 1) { return; }
+    // Diziyi n'e kadar 0 ile büyüt (araya boş bölüm kaydı bırakılabilir).
+    for (int i = length(_levels); i < n; i = i + 1) { push(_levels, 0); }
+    _levels[n - 1] = fn;
+    if (n > _level_n) { _level_n = n; }
+    _has_levels = true;
+}
+func bolum(n, fn) { level(n, fn); }
+
+// Sıradaki bölüme geç. Son bölümdeyse → KAZANDIN (_ar_state = 2).
+//
+// DİKKAT: geçişi burada YAPMAZ, sadece işaretler. Bu fonksiyon tipik olarak bir
+// çarpışma callback'inden çağrılır ve o sırada `_ar_collisions()` paralel
+// dizilerin üstünde dönüyordur; hemen `clear_entities()` çağırmak o döngünün
+// altındaki diziyi değiştirirdi. Geçiş güvenli noktada (kare sonunda,
+// _ar_update/step içinde) uygulanır.
+func next_level() { _lvl_pending = 1; }
+func bolum_gec()  { next_level(); }
+
+// Bekleyen bölüm geçişini uygula (motor içi, kare sonunda çağrılır).
+func _ar_advance_level() {
+    if (_cur_level + 1 > _level_n) { _ar_state = 2; return; }   // son bölüm → kazandın
+    _cur_level = _cur_level + 1;
+    _banner_t = 1.2;              // "Bölüm N" afişi ~1.2 sn
+    _ar_load_level();             // skor KORUNUR (oyuncunun toplam skoru)
+}
+
+func level_no(): int    { return _cur_level; }
+func bolum_no(): int    { return _cur_level; }
+func level_count(): int { return _level_n; }
+func bolum_sayisi(): int { return _level_n; }
+
+// ============================================================================
+//  ENTITY OLUŞTURMA ("bloklar")
+// ============================================================================
+
+// Genel oluşturucu — entity handle'ı döner (çıplak index DEĞİL; bkz _mk_handle).
+// Önce ölmüş bir slot varsa onu geri kullanır, yoksa dizileri büyütür.
+func spawn(x, y, w, h, color, tag, mv): int {
+    if (_free_n > 0) {
+        _free_n = _free_n - 1;
+        int s = _efree[_free_n];
+        _ex[s] = x * 1.0;
+        _ey[s] = y * 1.0;
+        _ew[s] = w * 1.0;
+        _eh[s] = h * 1.0;
+        _evx[s] = 0.0;
+        _evy[s] = 0.0;
+        _etag[s] = tag;
+        _ecolor[s] = color;
+        _esprite[s] = -1;
+        _emove[s] = mv;
+        _espeed[s] = 200.0;
+        _ealive[s] = 1;
+        _eground[s] = 0;
+        return _mk_handle(s);       // _egen[s] öldürmede artmıştı → yeni kimlik
+    }
+    push(_ex, x * 1.0);
+    push(_ey, y * 1.0);
+    push(_ew, w * 1.0);
+    push(_eh, h * 1.0);
+    push(_evx, 0.0);
+    push(_evy, 0.0);
+    push(_etag, tag);
+    push(_ecolor, color);
+    push(_esprite, -1);
+    push(_emove, mv);
+    push(_espeed, 200.0);
+    push(_ealive, 1);
+    push(_eground, 0);
+    push(_egen, 1);
+    int slot = _n;
+    _n = _n + 1;
+    return _mk_handle(slot);
+}
+
+// Slot'u öldür + boş yığına geri koy (MOTOR İÇİ — slot alır, handle değil).
+// Üretim sayacını artırır: o slot'a ait eski handle'lar burada bayatlar.
+func _kill_slot(slot) {
+    if (slot < 0) { return; }
+    if (_ealive[slot] == 0) { return; }        // çift-free koruması
+    _ealive[slot] = 0;
+    _egen[slot] = _egen[slot] + 1;
+    if (_free_n < len(_efree)) { _efree[_free_n] = slot; }
+    else { push(_efree, slot); }
+    _free_n = _free_n + 1;
+}
+func uret(x, y, w, h, color, tag, mv): int { return spawn(x, y, w, h, color, tag, mv); }
+
+// Oyuncu: ok tuşları / WASD ile hareket hazır gelir (topdown).
+func player(x, y, w, h, color): int { return spawn(x, y, w, h, color, TAG_PLAYER, MV_TOPDOWN); }
+func oyuncu(x, y, w, h, color): int { return player(x, y, w, h, color); }
+
+// Platformer oyuncusu: yatay giriş + yerçekimi + zıplama (yercekimi() ile aç).
+func platformer(x, y, w, h, color): int { return spawn(x, y, w, h, color, TAG_PLAYER, MV_PLATFORM); }
+func oyuncu_p(x, y, w, h, color): int { return platformer(x, y, w, h, color); }
+
+// Düşman: hareketsiz başlar (hiz_ver ile ya da on_frame ile sürersin).
+func enemy(x, y, w, h, color): int { return spawn(x, y, w, h, color, TAG_ENEMY, MV_NONE); }
+func dusman(x, y, w, h, color): int { return enemy(x, y, w, h, color); }
+
+// Toplanabilir eşya (hareketsiz).
+func item(x, y, w, h, color): int { return spawn(x, y, w, h, color, TAG_ITEM, MV_NONE); }
+func esya(x, y, w, h, color): int { return item(x, y, w, h, color); }
+
+// Katı duvar/platform (hareketsiz; platformer entity'leri buna basar/çarpar).
+func wall(x, y, w, h, color): int { return spawn(x, y, w, h, color, TAG_WALL, MV_NONE); }
+func duvar(x, y, w, h, color): int { return wall(x, y, w, h, color); }
+
+// Mermi: verilen hızla kendi başına uçar (velocity preset).
+func bullet(x, y, w, h, color, vx, vy): int {
+    int id = spawn(x, y, w, h, color, TAG_BULLET, MV_VELOCITY);
+    int s = _slot_of(id);          // spawn handle döner — diziler slot'la indekslenir
+    _evx[s] = vx * 1.0;
+    _evy[s] = vy * 1.0;
+    return id;
+}
+func mermi(x, y, w, h, color, vx, vy): int { return bullet(x, y, w, h, color, vx, vy); }
+
+// Tüm entity'leri sil (yeniden başlatmada _ar_reset çağırır).
+func clear_entities() {
+    _ex = [];  _ey = [];  _ew = [];  _eh = [];
+    _evx = []; _evy = []; _etag = []; _ecolor = [];
+    _esprite = []; _emove = []; _espeed = []; _ealive = []; _eground = [];
+    _egen = []; _efree = [];
+    _n = 0;
+    _free_n = 0;
+}
+func temizle() { clear_entities(); }
+
+// ============================================================================
+//  ENTITY KONTROL (index ile — callback'lerin "kasları")
+// ============================================================================
+
+// NOT: buradaki `id` bir handle'dır (çıplak index değil) — hepsi önce
+// `_slot_of` ile slot'a çevirir. Bayat handle (slot geri kullanılmış) sessizce
+// yok sayılır: setter'lar hiçbir şey yapmaz, getter'lar nötr değer döner.
+func set_vel(id, vx, vy) { int s = _slot_of(id); if (s < 0) { return; } _evx[s] = vx * 1.0; _evy[s] = vy * 1.0; }
+func hiz_ver(id, vx, vy) { set_vel(id, vx, vy); }
+
+func set_pos(id, x, y) { int s = _slot_of(id); if (s < 0) { return; } _ex[s] = x * 1.0; _ey[s] = y * 1.0; }
+func konumla(id, x, y) { set_pos(id, x, y); }
+
+func get_x(id): float { int s = _slot_of(id); if (s < 0) { return 0.0; } return _ex[s]; }
+func get_y(id): float { int s = _slot_of(id); if (s < 0) { return 0.0; } return _ey[s]; }
+func x_of(id): float { int s = _slot_of(id); if (s < 0) { return 0.0; } return _ex[s]; }
+func y_of(id): float { int s = _slot_of(id); if (s < 0) { return 0.0; } return _ey[s]; }
+
+// Hız okuma. `_evx[id]` ile DOĞRUDAN okumak yanlıştır: id bir handle'dır,
+// diziler slot ile indekslenir (handle = gen*1048576 + slot → dizi dışı).
+func get_vx(id): float { int s = _slot_of(id); if (s < 0) { return 0.0; } return _evx[s]; }
+func get_vy(id): float { int s = _slot_of(id); if (s < 0) { return 0.0; } return _evy[s]; }
+func vx_of(id): float { return get_vx(id); }
+func vy_of(id): float { return get_vy(id); }
+
+// Topdown/platform taban hızını ayarla (px/sn).
+// (slot değişkeni `sl` — `s` zaten hız parametresi)
+func move_speed(id, s) { int sl = _slot_of(id); if (sl < 0) { return; } _espeed[sl] = s * 1.0; }
+func hiz_ayarla(id, s) { move_speed(id, s); }
+
+func set_color(id, c) { int s = _slot_of(id); if (s < 0) { return; } _ecolor[s] = c; }
+func renk_ata(id, c)  { set_color(id, c); }
+
+func set_sprite(id, tex) { int s = _slot_of(id); if (s < 0) { return; } _esprite[s] = tex; }
+func resim_ata(id, tex)  { set_sprite(id, tex); }
+
+func kill(id)   { _kill_slot(_slot_of(id)); }
+func oldur(id)  { kill(id); }
+
+func alive(id): bool  { int s = _slot_of(id); if (s < 0) { return false; } return _ealive[s] == 1; }
+func yasiyor(id): bool { int s = _slot_of(id); if (s < 0) { return false; } return _ealive[s] == 1; }
+
+func tag_of(id): int { int s = _slot_of(id); if (s < 0) { return -1; } return _etag[s]; }
+func tag_al(id): int { int s = _slot_of(id); if (s < 0) { return -1; } return _etag[s]; }
+
+// AYRILMIŞ slot sayısı — canlı entity sayısı DEĞİL. Ölen slot'lar geri
+// kullanıldığı için bu sayı eşzamanlı en yüksek entity sayısına oturur
+// (sürekli mermi üreten bir oyunda sonsuza dek büyümez).
+func entity_count(): int { return _n; }
+func entity_sayisi(): int { return _n; }
+
+// Şu an canlı olan entity sayısı.
+func live_count(): int {
+    int c = 0;
+    for (int i = 0; i < _n; i = i + 1) {
+        if (_ealive[i] == 1) { c = c + 1; }
+    }
+    return c;
+}
+func canli_sayisi(): int { return live_count(); }
+
+// Belirli tag'e sahip canlı entity sayısı — "tüm eşyalar toplandı mı?" gibi
+// bölüm bitiş koşulları için (live_count() oyuncuyu/duvarları da sayar).
+func tag_count(t): int {
+    int c = 0;
+    for (int i = 0; i < _n; i = i + 1) {
+        if (_ealive[i] == 1 && _etag[i] == t) { c = c + 1; }
+    }
+    return c;
+}
+func tag_sayisi(t): int { return tag_count(t); }
+
+// ============================================================================
+//  ÇARPIŞMA
+// ============================================================================
+
+// tagA'lı bir entity tagB'li bir entity'ye değince fn (0-arg) çağrılır.
+// fn içinde ben()=tagA tarafı, oteki()=tagB tarafı. Kural yönlüdür ama motor
+// simetriği de dener (B→A eşleşmesi de tetikler, me/other buna göre ayarlanır).
+func on_hit(tagA, tagB, fn) {
+    push(_ca, tagA);
+    push(_cb, tagB);
+    push(_cfn, fn);
+}
+func carpisinca(tagA, tagB, fn) { on_hit(tagA, tagB, fn); }
+
+// Callback context'i.
+// Çarpışan taraflar — handle döner (_hit_* içeride slot tutar).
+func me(): int    { if (_hit_self < 0)  { return -1; } return _mk_handle(_hit_self); }
+func ben(): int   { return me(); }
+func other(): int { if (_hit_other < 0) { return -1; } return _mk_handle(_hit_other); }
+func oteki(): int { return other(); }
+
+// İki entity çakışıyor mu? (manuel test)
+// a/b handle'dır → slot'a çözülür (diziye doğrudan handle ile girmek dizi dışını
+// okur; bkz. get_vx notu). Bayat/ölü handle → false.
+func overlaps(a, b): bool {
+    int sa = _slot_of(a);
+    int sb = _slot_of(b);
+    if (sa < 0 || sb < 0) { return false; }
+    return rect_overlap(_ex[sa], _ey[sa], _ew[sa], _eh[sa], _ex[sb], _ey[sb], _ew[sb], _eh[sb]);
+}
+func degiyor(a, b): bool { return overlaps(a, b); }
+
+// ============================================================================
+//  FİZİK / SAHNE AYARLARI
+// ============================================================================
+
+// Platformer yerçekimini aç (px/sn^2). 0 = kapalı (topdown/arcade).
+func gravity(g)    { _gravity = g * 1.0; }
+func yercekimi(g)  { gravity(g); }
+
+// Zıplama hızını ayarla (yukarı, px/sn).
+func jump_power(v) { _jump_v = v * 1.0; }
+func ziplama(v)    { jump_power(v); }
+
+// Dünya sınırında tutmayı aç/kapat (topdown).
+func clamp_to_world(on) { _clamp_world = on; }
+
+// ---- Skor / oyun-bitti ------------------------------------------------------
+func score_add(n) { _score = _score + n; }
+func skor_ekle(n) { score_add(n); }
+func score(): int { return _score; }
+func skor(): int  { return _score; }
+func set_score(n) { _score = n; }
+func skor_ata(n)  { _score = n; }
+
+func game_over()  { _ar_state = 1; }
+func oyun_bitti() { _ar_state = 1; }
+
+// "Oyun artık oynanmıyor mu?" — kaybetmek (1) de kazanmak (2) da bitiştir.
+// Bölüm kaydı olmayan oyunlarda state 2 hiç oluşmaz → eski davranışla aynı.
+func is_over(): bool  { return _ar_state != 0; }
+func bitti_mi(): bool { return _ar_state != 0; }
+
+// Sadece "son bölüm de bitti" (kazandın) durumu.
+func is_won(): bool    { return _ar_state == 2; }
+func kazandin_mi(): bool { return _ar_state == 2; }
+
+// HUD skor metnini özelleştir / gizle.
+func hud(prefix)  { _hud_prefix = prefix; _hud_set = true; }
+func hud_gizle()  { _show_score = false; }
+func hide_hud()   { _show_score = false; }
+
+// Ekranın üstünde kontrol/etkileşim bilgilendirme şeridi (ör.
+//   bilgi("Ok/WASD: hareket   SPACE: ates")). Skorun altında çizilir.
+func bilgi(s)    { _hint = s; _has_hint = true; }
+func controls(s) { _hint = s; _has_hint = true; }
+func help_text(s){ _hint = s; _has_hint = true; }
+
+// ============================================================================
+//  MOTOR İÇİ — kare güncelleme
+// ============================================================================
+
+func _ar_update() {
+    // Oyun bitti (1) ya da kazandın (2): fizik durur, sadece R dinlenir.
+    if (_ar_state != 0) {
+        if (key_pressed("R")) { _ar_reset(); }
+        return;
+    }
+
+    float dt = frame_time();
+    // Headless/ilk kare 0 gelirse sabit adım kullan.
+    if (dt <= 0.0) { dt = 0.0166667; }
+    // İlk kare / takılma sonrası büyük dt platform arasından tünelleme yapabilir
+    // (cisim tek karede platformu atlar) — sınırla.
+    if (dt > 0.05) { dt = 0.05; }
+
+    if (_banner_t > 0.0) { _banner_t = _banner_t - dt; }
+
+    _ar_apply_movement(dt);
+    _ar_collisions();
+
+    if (_has_frame) { call(_frame_fn); }
+
+    // Bekleyen bölüm geçişini burada uygula — çarpışma/kare callback'leri bitti,
+    // artık paralel dizileri değiştirmek güvenli.
+    if (_lvl_pending == 1) { _lvl_pending = 0; _ar_advance_level(); }
+}
+
+// Hareket presetlerini uygula + konumu entegre et.
+//
+// Entity index'i GLOBAL `_ar_i`'de tutulur; duvar çözümü (`_ar_resolve_walls`)
+// da bu global index üzerinden okur/yazar. (Tasarım tercihi — çarpışma
+// callback'lerinin me()/other() global context deseniyle tutarlı.) Konum
+// entegre edilip sonra katı duvarlardan MTV ile çözülür.
+func _ar_apply_movement(dt) {
+    for (_ar_i = 0; _ar_i < _n; _ar_i = _ar_i + 1) {
+        if (_ealive[_ar_i] == 0) { continue; }
+        int mv = _emove[_ar_i];
+
+        if (mv == MV_TOPDOWN) {
+            float s = _espeed[_ar_i];
+            float vx = 0.0;
+            float vy = 0.0;
+            if (key_down("LEFT")  || key_down("A")) { vx = vx - s; }
+            if (key_down("RIGHT") || key_down("D")) { vx = vx + s; }
+            if (key_down("UP")    || key_down("W")) { vy = vy - s; }
+            if (key_down("DOWN")  || key_down("S")) { vy = vy + s; }
+            _evx[_ar_i] = vx;
+            _evy[_ar_i] = vy;
+            _ex[_ar_i] = _ex[_ar_i] + vx * dt;
+            _ey[_ar_i] = _ey[_ar_i] + vy * dt;
+            _ar_resolve_walls();            // katı duvarlardan MTV ile it
+            // Dünya sınırına kıstır
+            if (_clamp_world) {
+                if (_ex[_ar_i] < 0.0) { _ex[_ar_i] = 0.0; }
+                if (_ey[_ar_i] < 0.0) { _ey[_ar_i] = 0.0; }
+                float mxt = _world_w - _ew[_ar_i];
+                float myt = _world_h - _eh[_ar_i];
+                if (_ex[_ar_i] > mxt) { _ex[_ar_i] = mxt; }
+                if (_ey[_ar_i] > myt) { _ey[_ar_i] = myt; }
+            }
+        } else if (mv == MV_PLATFORM) {
+            float s = _espeed[_ar_i];
+            float vx = 0.0;
+            if (key_down("LEFT")  || key_down("A")) { vx = vx - s; }
+            if (key_down("RIGHT") || key_down("D")) { vx = vx + s; }
+            _evx[_ar_i] = vx;
+            // Yerçekimi
+            _evy[_ar_i] = _evy[_ar_i] + _gravity * dt;
+            // Zıplama (zemindeyken)
+            if (_eground[_ar_i] == 1) {
+                if (key_pressed("SPACE") || key_pressed("UP") || key_pressed("W")) {
+                    _evy[_ar_i] = 0.0 - _jump_v;
+                    _eground[_ar_i] = 0;
+                }
+            }
+            _eground[_ar_i] = 0;
+            // X ve Y ilerle, sonra katı duvarlardan MTV ile çöz (iniş/tavan/yan).
+            _ex[_ar_i] = _ex[_ar_i] + _evx[_ar_i] * dt;
+            _ey[_ar_i] = _ey[_ar_i] + _evy[_ar_i] * dt;
+            _ar_resolve_walls();
+            // Dünya sınırları: zemin (grounded), yanlar, tavan
+            float floor_y = _world_h - _eh[_ar_i];
+            if (_ey[_ar_i] >= floor_y) {
+                _ey[_ar_i] = floor_y;
+                _evy[_ar_i] = 0.0;
+                _eground[_ar_i] = 1;
+            }
+            if (_ey[_ar_i] < 0.0) { _ey[_ar_i] = 0.0; _evy[_ar_i] = 0.0; }
+            if (_ex[_ar_i] < 0.0) { _ex[_ar_i] = 0.0; }
+            float mxp = _world_w - _ew[_ar_i];
+            if (_ex[_ar_i] > mxp) { _ex[_ar_i] = mxp; }
+        } else if (mv == MV_VELOCITY) {
+            _ex[_ar_i] = _ex[_ar_i] + _evx[_ar_i] * dt;
+            _ey[_ar_i] = _ey[_ar_i] + _evy[_ar_i] * dt;
+            // Dünyanın dışına 64px taşan velocity entity'lerini (mermi/engel)
+            // otomatik öldür — slot boş yığına döner ve yeniden kullanılır.
+            if (_ex[_ar_i] < 0.0 - 64.0 || _ex[_ar_i] > _world_w + 64.0 ||
+                _ey[_ar_i] < 0.0 - 64.0 || _ey[_ar_i] > _world_h + 64.0) {
+                _kill_slot(_ar_i);
+            }
+        }
+        // MV_NONE: kullanıcı sürer.
+    }
+}
+
+// Güncel entity'yi (global _ar_i) tüm katı TAG_WALL entity'lerinden iterek çöz.
+// MTV (minimum translation vector): her çakışan duvar için X ve Y penetrasyon
+// derinliklerini ölç, DAHA SIĞ eksende it. Bu, üstünde durulan platforma minik
+// dikey batmanın yanlışlıkla YATAY itmeye (cismi platform kenarına ışınlama)
+// dönüşmesini önler — eksen-ayrık yaklaşımın klasik "zemin platformunda sağa
+// gidememe" bug'ının doğru çözümü. Yukarı iten (üste oturan) durum grounded.
+func _ar_resolve_walls() {
+    for (int w = 0; w < _n; w = w + 1) {
+        if (_ealive[w] == 0) { continue; }
+        if (_etag[w] != TAG_WALL) { continue; }
+
+        float px = _ex[_ar_i];  float py = _ey[_ar_i];
+        float pw = _ew[_ar_i];  float ph = _eh[_ar_i];
+        float wx = _ex[w];      float wy = _ey[w];
+        float ww = _ew[w];      float wh = _eh[w];
+
+        // Çakışma yoksa geç.
+        if (px + pw <= wx) { continue; }
+        if (wx + ww <= px) { continue; }
+        if (py + ph <= wy) { continue; }
+        if (wy + wh <= py) { continue; }
+
+        // X penetrasyonu = kesişimin genişliği.
+        float rx = px + pw;  if (wx + ww < rx) { rx = wx + ww; }
+        float lx = px;       if (wx > lx)      { lx = wx; }
+        float ox = rx - lx;
+        // Y penetrasyonu = kesişimin yüksekliği.
+        float ry = py + ph;  if (wy + wh < ry) { ry = wy + wh; }
+        float ly = py;       if (wy > ly)      { ly = wy; }
+        float oy = ry - ly;
+
+        if (ox < oy) {
+            // Yatay it — hangi tarafa yakınsa oraya.
+            float pcx = px + pw * 0.5;
+            float wcx = wx + ww * 0.5;
+            if (pcx < wcx) { _ex[_ar_i] = wx - pw; }   // duvarın soluna
+            else { _ex[_ar_i] = wx + ww; }             // duvarın sağına
+        } else {
+            // Dikey it.
+            float pcy = py + ph * 0.5;
+            float wcy = wy + wh * 0.5;
+            if (pcy < wcy) {
+                _ey[_ar_i] = wy - ph;                  // üstüne otur
+                _evy[_ar_i] = 0.0;
+                _eground[_ar_i] = 1;
+            } else {
+                _ey[_ar_i] = wy + wh;                  // altına (tavan)
+                _evy[_ar_i] = 0.0;
+            }
+        }
+    }
+}
+
+// Tüm canlı çiftler için çarpışma kurallarını değerlendir + callback tetikle.
+func _ar_collisions() {
+    int rules = length(_ca);
+    if (rules == 0) { return; }
+
+    for (int a = 0; a < _n; a = a + 1) {
+        if (_ealive[a] == 0) { continue; }
+        for (int b = a + 1; b < _n; b = b + 1) {
+            if (_ealive[b] == 0) { continue; }
+            if (!rect_overlap(_ex[a], _ey[a], _ew[a], _eh[a], _ex[b], _ey[b], _ew[b], _eh[b])) { continue; }
+
+            int ta = _etag[a];
+            int tb = _etag[b];
+            for (int r = 0; r < rules; r = r + 1) {
+                // İleri yön: kural (ca,cb) == (ta,tb)
+                if (_ca[r] == ta && _cb[r] == tb) {
+                    _hit_self = a; _hit_other = b;
+                    call(_cfn[r]);
+                }
+                // Simetrik: kural (ca,cb) == (tb,ta)
+                else if (_ca[r] == tb && _cb[r] == ta) {
+                    _hit_self = b; _hit_other = a;
+                    call(_cfn[r]);
+                }
+            }
+        }
+    }
+}
+
+// Tek kare mantığı — HEADLESS TEST için (pencere/çizim olmadan advance).
+// dt saniye. Testler bunu doğrudan çağırır.
+func step(dt) {
+    if (_ar_state != 0) { return; }
+    if (_banner_t > 0.0) { _banner_t = _banner_t - dt * 1.0; }
+    _ar_apply_movement(dt * 1.0);
+    _ar_collisions();
+    if (_has_frame) { call(_frame_fn); }
+    if (_lvl_pending == 1) { _lvl_pending = 0; _ar_advance_level(); }
+}
+func adim(dt) { step(dt); }
+
+// ============================================================================
+//  MOTOR İÇİ — çizim
+// ============================================================================
+
+func _ar_draw_all() {
+    clear(rgb(18, 20, 28));
+
+    // Entity'ler
+    for (int i = 0; i < _n; i = i + 1) {
+        if (_ealive[i] == 0) { continue; }
+        if (_esprite[i] >= 0) {
+            draw_texture(_esprite[i], _ex[i], _ey[i]);
+        } else {
+            rect(_ex[i], _ey[i], _ew[i], _eh[i], _ecolor[i]);
+        }
+    }
+
+    // Kullanıcı ek çizimi
+    if (_has_draw) { call(_draw_fn); }
+
+    // HUD skor
+    str L = _lang_now();
+    if (_show_score) {
+        str pre = _hud_prefix;
+        if (!_hud_set) { if (L == "en") { pre = "Score: "; } else { pre = "Skor: "; } }
+        text(pre + toString(_score), 12, 10, 24, WHITE);
+        // Bölüm göstergesi sağ üstte — skor (12,10) ve hint (12,38) ile çakışmaz.
+        if (_has_levels) {
+            str lw = "Bolum ";
+            if (L == "en") { lw = "Level "; }
+            str lv = lw + toString(_cur_level) + "/" + toString(_level_n);
+            text(lv, screen_width() - measure_text(lv, 20) - 12, 10, 20, GOLD);
+        }
+    }
+    // Üst bilgilendirme şeridi (kontroller) — skorun altında, ekranı geçmesin
+    // diye küçük punto ile.
+    if (_has_hint) {
+        text(_hint, 12, 38, 16, SKYBLUE);
+    }
+
+    // "Bölüm N" afişi (geçişten sonra ~1.2 sn)
+    if (_banner_t > 0.0) {
+        str bw = "Bolum ";
+        if (L == "en") { bw = "Level "; }
+        str bn = bw + toString(_cur_level);
+        text(bn, (screen_width() - measure_text(bn, 40)) / 2, screen_height() / 2 - 20, 40, GOLD);
+    }
+
+    // Oyun bitti ekranı
+    if (_ar_state == 1) {
+        str go = "OYUN BITTI";
+        str hint = "R: yeniden basla";
+        if (L == "en") { go = "GAME OVER"; hint = "R: restart"; }
+        text(go, (screen_width() - measure_text(go, 44)) / 2, screen_height() / 2 - 40, 44, RED);
+        text(hint, (screen_width() - measure_text(hint, 24)) / 2, screen_height() / 2 + 20, 24, WHITE);
+    }
+
+    // Kazandın ekranı (son bölüm de bitti)
+    // NOT: yerel adlar yukarıdaki daldan farklı (go/hint değil) — if/else blokları
+    // scope AÇMAZ, kardeş dallarda aynı ad aynı slot'u paylaşır.
+    if (_ar_state == 2) {
+        str wn = "KAZANDIN";
+        str wsp = "Toplam skor: ";
+        str whint = "R: bastan basla";
+        if (L == "en") { wn = "YOU WIN"; wsp = "Total score: "; whint = "R: restart"; }
+        text(wn, (screen_width() - measure_text(wn, 44)) / 2, screen_height() / 2 - 60, 44, LIME);
+        str wsc = wsp + toString(_score);
+        text(wsc, (screen_width() - measure_text(wsc, 26)) / 2, screen_height() / 2 + 4, 26, GOLD);
+        text(whint, (screen_width() - measure_text(whint, 24)) / 2, screen_height() / 2 + 44, 24, WHITE);
+    }
+}

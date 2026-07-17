@@ -106,9 +106,22 @@ typedef struct {
   size_t klen;
   uint32_t khash;
   void (*ptr)(VMValue *);
+  // User-parameter count of the target (result ptr excluded). WebAssembly's
+  // call_indirect is strictly type-checked, so the dispatcher MUST invoke the
+  // pointer through a signature whose arity matches the callee exactly or the
+  // module traps ("function signature mismatch"). Seeded by aot_register_func;
+  // -1 means "unknown" (the native dlsym fallback path, where ABI slack lets a
+  // mismatched arity pass harmlessly anyway).
+  int arity;
 } AOTCallCacheEntry;
 
-#define AOT_CALL_CACHE_SLOTS 256
+// 2048 slots: since aot_register_func() now pre-registers every top-level
+// boxed function at program start (so call()/run() resolve without dlsym —
+// the only option on wasm, where dlsym can't see the static module's
+// exports), the table must comfortably exceed the 512-function codegen cap
+// (register_function's kMaxFunctions). 2048 keeps the load factor <0.25 even
+// for a maxed-out program, so open-addressing probe chains stay short.
+#define AOT_CALL_CACHE_SLOTS 2048
 static AOTCallCacheEntry g_call_cache[AOT_CALL_CACHE_SLOTS];
 // Worker-pool servers can have several threads racing into
 // `aot_call_dynamic` for the same handler name. A spinlock on insert
@@ -126,8 +139,11 @@ static inline uint32_t aot_call_hash(const char *s, size_t len) {
   return h;
 }
 
+// Look up a cached entry. Returns the entry pointer (nullptr on miss) and, on
+// hit, writes the target's arity through `out_arity` so the dispatcher can pick
+// a wasm-type-correct call signature.
 static void (*aot_call_cache_lookup(const char *name, size_t nlen,
-                                     uint32_t hash))(VMValue *) {
+                                     uint32_t hash, int *out_arity))(VMValue *) {
   uint32_t i = hash & (AOT_CALL_CACHE_SLOTS - 1);
   for (uint32_t step = 0; step < AOT_CALL_CACHE_SLOTS; step++) {
     AOTCallCacheEntry *e = &g_call_cache[(i + step) & (AOT_CALL_CACHE_SLOTS - 1)];
@@ -136,6 +152,7 @@ static void (*aot_call_cache_lookup(const char *name, size_t nlen,
     const char *k = e->key.load(std::memory_order_acquire);
     if (!k) return nullptr;
     if (e->khash == hash && e->klen == nlen && memcmp(k, name, nlen) == 0) {
+      if (out_arity) *out_arity = e->arity;
       return e->ptr;
     }
   }
@@ -143,7 +160,7 @@ static void (*aot_call_cache_lookup(const char *name, size_t nlen,
 }
 
 static void aot_call_cache_insert(const char *name, size_t nlen, uint32_t hash,
-                                  void (*ptr)(VMValue *)) {
+                                  void (*ptr)(VMValue *), int arity) {
   std::lock_guard<std::mutex> guard(g_call_cache_mu);
   uint32_t i = hash & (AOT_CALL_CACHE_SLOTS - 1);
   for (uint32_t step = 0; step < AOT_CALL_CACHE_SLOTS; step++) {
@@ -154,6 +171,10 @@ static void aot_call_cache_insert(const char *name, size_t nlen, uint32_t hash,
     const char *k = e->key.load(std::memory_order_relaxed);
     if (e->khash == hash && e->klen == nlen && k &&
         memcmp(k, name, nlen) == 0) {
+      // Already present. If a real arity is now known (register path) but the
+      // slot was seeded with -1 by a prior dlsym-path insert, upgrade it so
+      // subsequent wasm dispatches pick the exact signature.
+      if (arity >= 0 && e->arity < 0) e->arity = arity;
       return;
     }
     if (!k) {
@@ -164,15 +185,34 @@ static void aot_call_cache_insert(const char *name, size_t nlen, uint32_t hash,
       e->klen = nlen;
       e->khash = hash;
       e->ptr = ptr;
+      e->arity = arity;
       // Publish the key last with a release store so a concurrent acquire-load
-      // in aot_call_cache_lookup sees the klen/khash/ptr writes above. Correct
-      // on weakly-ordered ARM/aarch64, not just x86 TSO.
+      // in aot_call_cache_lookup sees the klen/khash/ptr/arity writes above.
+      // Correct on weakly-ordered ARM/aarch64, not just x86 TSO.
       e->key.store(copy, std::memory_order_release);
       return;
     }
   }
-  // Table full — silently drop. With 256 slots and typical handler counts
-  // (<50) this never trips.
+  // Table full — silently drop. With 2048 slots and the 512-function codegen
+  // cap this never trips.
+}
+
+// Invoke a resolved boxed entry point through a signature whose arity matches
+// the callee, so WebAssembly's strictly-typed call_indirect never traps. `fp`
+// is `void t_name(VMValue* result, [VMValue* arg0, ...])`; `arg` is the single
+// value call()/call(name,arg) supplies. arity is the callee's user-parameter
+// count (-1 = unknown → native ABI slack, use the 1-arg shape).
+static VMValue aot_invoke_boxed(void (*fp)(VMValue *), int arity, VMValue arg) {
+  VMValue result = VM_VOID();
+  if (arity == 0) {
+    fp(&result); // callee: void(VMValue*) — no user params
+  } else {
+    // arity >= 1 (or unknown): pass the single arg. 0-param handlers on native
+    // ignored it via ABI slack; on wasm arity is always known so we only reach
+    // here for genuine 1-param callees, whose signature this matches exactly.
+    ((void (*)(VMValue *, VMValue *))fp)(&result, &arg);
+  }
+  return result;
 }
 
 // AOT Dynamic Call Support
@@ -190,7 +230,9 @@ VMValue aot_call_dynamic(VMValue func_name) {
   // Hash the original name; cache key is the unprefixed form so we don't
   // need to allocate the prefixed buffer on every cache hit.
   uint32_t hash = aot_call_hash(original_name, orig_len);
-  void (*func_ptr)(VMValue *) = aot_call_cache_lookup(original_name, orig_len, hash);
+  int arity = -1;
+  void (*func_ptr)(VMValue *) =
+      aot_call_cache_lookup(original_name, orig_len, hash, &arity);
 
   if (!func_ptr) {
     char name[256];
@@ -214,25 +256,28 @@ VMValue aot_call_dynamic(VMValue func_name) {
       }
       return VM_VOID();
     }
-    aot_call_cache_insert(original_name, orig_len, hash, func_ptr);
+    // Native dlsym fallback: arity unknown (-1). This path is never taken on
+    // wasm, where aot_register_func pre-seeds every function with a real arity.
+    aot_call_cache_insert(original_name, orig_len, hash, func_ptr, -1);
   }
 
-  // Call function
-  // AOT functions signature: void func(VMValue* result_ptr)
-  VMValue result = VM_VOID();
-  func_ptr(&result);
-  return result;
+  // No-argument dispatch: a 0-param callee is invoked as void(VMValue*); a
+  // 1-param callee (called with no arg) gets a VOID placeholder so the wasm
+  // signature still matches. aot_invoke_boxed picks the shape from arity.
+  return aot_invoke_boxed(func_ptr, arity, VM_VOID());
 }
 
 // call(name, arg) — dynamic dispatch that passes ONE argument to the target.
 //
 // Resolution is identical to aot_call_dynamic (same `t_<name>` symbol + cache);
-// only the call shape differs. The target is invoked as a 1-param AOT function
-// `void t_name(VMValue* result, VMValue* arg0)`. Passing the arg to a handler
-// that declares NO parameters is ABI-safe on every platform we target — the
-// extra register/word is simply ignored by the callee — so Wings can hand every
-// handler the request object and 0-arg handlers just don't read it. This is what
-// lets you write either `func list_users()` or `func get_user(req)`.
+// only the call shape differs. A 1-param callee is invoked as
+// `void t_name(VMValue* result, VMValue* arg0)`; a 0-param callee is invoked as
+// `void t_name(VMValue* result)` with the arg dropped. On native, passing the
+// extra arg to a 0-param handler was ABI-safe (the callee ignored the extra
+// register); on wasm the call_indirect type must match exactly, so we branch on
+// the callee's arity (aot_invoke_boxed). Either way Wings can hand every handler
+// the request object and 0-arg handlers just don't read it — you can write
+// `func list_users()` or `func get_user(req)`.
 VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
   if (!IS_STRING(func_name)) {
     printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
@@ -245,7 +290,9 @@ VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
   size_t orig_len = (size_t)str->length;
 
   uint32_t hash = aot_call_hash(original_name, orig_len);
-  void (*func_ptr)(VMValue *) = aot_call_cache_lookup(original_name, orig_len, hash);
+  int arity = -1;
+  void (*func_ptr)(VMValue *) =
+      aot_call_cache_lookup(original_name, orig_len, hash, &arity);
 
   if (!func_ptr) {
     char name[256];
@@ -265,12 +312,31 @@ VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
              name);
       return VM_VOID();
     }
-    aot_call_cache_insert(original_name, orig_len, hash, func_ptr);
+    // Native dlsym fallback: arity unknown (-1) → invoke with the 1-arg shape,
+    // matching the historical ABI-slack behaviour. Never reached on wasm.
+    aot_call_cache_insert(original_name, orig_len, hash, func_ptr, -1);
   }
 
-  VMValue result = VM_VOID();
-  ((void (*)(VMValue *, VMValue *))func_ptr)(&result, &arg);
-  return result;
+  return aot_invoke_boxed(func_ptr, arity, arg);
+}
+
+// Pre-register a top-level function's name -> boxed entry point so call()
+// (and therefore tame's run()/wings' listen()) resolves it from the call
+// cache without ever touching dlsym. Native builds resolved by-name handlers
+// via dlsym(RTLD_DEFAULT) + `-rdynamic`; that path does not exist under
+// Emscripten (a static wasm module exposes no symbol table to dlsym), so the
+// managed game loop `run(update, draw)` printed "Function not found 't_...'"
+// on every frame. The AOT backend now emits one aot_register_func() call per
+// boxed function into main's prologue; here we simply seed the same cache the
+// lookup consults. `name` is the unprefixed source name (e.g. "guncelle") to
+// match aot_call_dynamic's cache key; `ptr` is the `void t_name(VMValue*,...)`
+// entry point; `arity` is its user-parameter count (result ptr excluded), used
+// to pick a wasm-type-correct call signature. Idempotent and thread-safe.
+extern "C" void aot_register_func(const char *name, void *ptr, int arity) {
+  if (!name || !ptr) return;
+  size_t len = strlen(name);
+  uint32_t hash = aot_call_hash(name, len);
+  aot_call_cache_insert(name, len, hash, (void (*)(VMValue *))ptr, arity);
 }
 
 // AOT runtime initialization (locale/UTF-8, console modes)

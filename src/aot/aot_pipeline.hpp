@@ -17,6 +17,13 @@ typedef enum {
   AOT_RAN_NONZERO
 } AOTResult;
 
+// Web hedefi anahtarı (`tulpar build --target=web`): 1 verilirse sonraki
+// aot_compile* çağrıları wasm32-unknown-emscripten objesi üretir ve em++
+// ile wasm/dist arşivlerine (build_tame_web.sh) linkler — çıktı
+// <out>.html + .js + .wasm. VMValue çağrı ABI'sini de değiştirir (sret;
+// bkz. llvm_values.cpp), o yüzden codegen başlamadan önce çağrılmalıdır.
+void aot_set_target_web(int enable);
+
 // Compile Tulpar source to executable (verbose mode).
 // Returns AOT_OK on success, error code otherwise.
 // `source_filename` is optional — when provided, codegen errors include

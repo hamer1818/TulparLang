@@ -151,6 +151,19 @@ typedef struct {
   char *imported_files[128];
   int imported_count;
 
+  // `import "tame"` veya bir tm_* builtin çağrısı görüldü — AOT link
+  // satırına libtulpar_tame.a + platform pencere/GL bayrakları eklenmeli
+  // (bkz. tame_link_flags() / aot_pipeline.cpp). calloc ile 0 başlar.
+  int uses_tame;
+
+  // Hedef web (wasm32-unknown-emscripten). declare_runtime_functions
+  // llvm_backend_create İÇİNDE koştuğu için bu alan doğrudan set edilemez:
+  // create'ten önce llvm_backend_set_target_web(1) çağrılır (aot_set_target_web
+  // bunu yapar), create alanı oradan devralır. VMValue çağrı ABI'sini
+  // değiştirir (sret+byval, Win64 gibi; bkz. vmvalue_abi_uses_sret /
+  // llvm_values.cpp) ve emit'te triple'ı wasm32'ye çevirir.
+  int target_web;
+
   // Plan 02 PR3 multi-file paket: when processing an import statement
   // from inside a multi-file bundled package, sibling imports (`import
   // "util"` from `tulpar_modules/foo/main.tpr`) need to find the
@@ -180,6 +193,7 @@ typedef struct {
   LLVMValueRef func_aot_struct_unpack_to;
   LLVMValueRef func_aot_to_json;
   LLVMValueRef func_aot_runtime_init;
+  LLVMValueRef func_aot_register_func; // (name, ptr) -> void; seeds call() cache
   LLVMValueRef func_aot_input;
   LLVMValueRef func_aot_read_key; // read_key()->str : single keypress, no echo
   LLVMValueRef func_aot_sys_lang; // sys_lang()->str : OS UI language (iso-639)
@@ -544,6 +558,8 @@ typedef struct {
 } LLVMBackend;
 
 LLVMBackend *llvm_backend_create(const char *module_name);
+// Web hedefini create'ten ÖNCE kur (bkz. target_web alanının notu).
+void llvm_backend_set_target_web(int enable);
 void llvm_backend_destroy(LLVMBackend *backend);
 void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node);
 void llvm_backend_optimize(LLVMBackend *backend);

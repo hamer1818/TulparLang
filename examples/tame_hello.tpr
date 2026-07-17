@@ -1,0 +1,51 @@
+// tame — merhaba dünya: zıplayan kare + klavye/fare girdisi.
+//
+// Çalıştır:  ./tulpar examples/tame_hello.tpr
+// (Pencere açılır; ESC veya kapatma düğmesi çıkar. WASD/ok tuşları kareyi,
+//  fare tıklaması daireyi taşır.)
+//
+// Not: test koşucusunda COMPILE_ONLY — pencere döngüsü CI'da bloklar.
+
+import "tame";
+
+window(800, 450, "Tulpar Tame — merhaba!");
+
+float x = 100.0;
+float y = 100.0;
+float dx = 4.0;
+float dy = 3.0;
+int size = 60;
+
+while (running()) {
+    // Zıplayan kare fiziği
+    x = x + dx;
+    y = y + dy;
+    if (x < 0.0) { dx = 0.0 - dx; x = 0.0; }
+    if (y < 0.0) { dy = 0.0 - dy; y = 0.0; }
+    if (x + 60.0 > 800.0) { dx = 0.0 - dx; x = 740.0; }
+    if (y + 60.0 > 450.0) { dy = 0.0 - dy; y = 390.0; }
+
+    frame_begin();
+      clear(rgb(20, 20, 30));
+
+      // Zıplayan kare + çerçevesi
+      rect(x, y, 60, 60, GOLD);
+      rect_lines(x, y, 60, 60, WHITE);
+
+      // Fare ile taşınan daire (sol tık basılıyken izler)
+      if (mouse_down(0)) {
+          circle(mouse_x(), mouse_y(), 24, SKYBLUE);
+      }
+
+      // Bilgi yazıları
+      text("Tulpar Tame calisiyor!", 20, 20, 24, WHITE);
+      text("ESC: cikis | sol tik: daire", 20, 52, 18, LIGHTGRAY);
+      text("FPS: " + toString(get_fps()), 20, 80, 18, GREEN);
+
+      // Alt çizgi süsü
+      line(0, 440, 800, 440, DARKGRAY);
+    frame_end();
+}
+
+close_window();
+print("tame_hello bitti.");

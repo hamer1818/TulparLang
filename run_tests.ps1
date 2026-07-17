@@ -12,6 +12,12 @@ $compileOnly = @(
   '09_socket_simple.tpr','09_socket_server.tpr','09_socket_client.tpr',
   '11_router_app.tpr','12_threaded_server.tpr','14_api_server.tpr',
   'api_wings.tpr','api_wings_crud.tpr','api_wings_tls.tpr','api_wings_sse.tpr','api_router_crud.tpr','demo_users_api.tpr','wings_simple_test.tpr','wings_middleware_test.tpr','wings_groups_test.tpr','wings_query_test.tpr','wings_response_model_test.tpr','wings_upload_test.tpr','wings_di_test.tpr','wings_todo_api.tpr','wings_auth_api.tpr','wings_notes_db.tpr','wings_redirect.tpr','wings_features_api.tpr','wings_orm_resource.tpr','tulpar_api_demo.tpr',
+  # tame_*.tpr: display'li makinede pencere acip kullanici kapatana dek
+  # bloklar (headless'ta zarif hatayla cikar) — deterministik olsun diye
+  # compile-only; derlemeleri libtulpar_tame.a link zincirini dogrular.
+  'tame_hello.tpr','tame_sprite_demo.tpr','tame_run_demo.tpr','tame_web_mini.tpr','tame_snake.tpr',
+  'arcade_topla.tpr','arcade_zipla.tpr','arcade_nisan.tpr',
+  'arcade_tugla.tpr','arcade_uzay.tpr','arcade_labirent.tpr','arcade_karsiya.tpr',
   # utils.tpr is a module designed to be imported by 07_modules.tpr; running
   # it standalone is meaningless (no top-level program), but it should still
   # parse + lower cleanly so we at least catch compile-side regressions.

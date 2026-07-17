@@ -1,0 +1,35 @@
+// tame web mini — tarayıcı hedefinin en yalın doğrulaması.
+// Elle yazılmış `while (running())` döngüsü, varlıksız. (Yönetilen `run()`
+// döngüsü de artık web'de çalışır — bkz. tame_run_demo.tpr — ama bu örnek
+// bilerek en yalın hâli gösterir.)
+//
+//   source wasm/emsdk/emsdk_env.sh
+//   ./tulpar build --target=web examples/tame_web_mini.tpr mini
+//   python3 -m http.server 8787   # http://localhost:8787/mini.html
+//
+// Not: test koşucusunda COMPILE_ONLY (pencere döngüsü).
+
+import "tame";
+
+window(640, 360, "Tulpar Tame — web mini");
+
+float x = 40.0;
+float dx = 4.0;
+int kare = 0;
+
+while (running()) {
+    kare = kare + 1;
+    x = x + dx;
+    if (x < 0.0) { dx = 0.0 - dx; x = 0.0; }
+    if (x > 580.0) { dx = 0.0 - dx; x = 580.0; }
+
+    frame_begin();
+      clear(rgb(18, 18, 30));
+      rect(x, 150.0, 60, 60, GOLD);
+      text("Tulpar tarayicida!", 20, 20, 24, WHITE);
+      text("kare: " + toString(kare), 20, 52, 18, LIGHTGRAY);
+      text("fps: " + toString(get_fps()), 20, 78, 18, GREEN);
+    frame_end();
+}
+
+close_window();

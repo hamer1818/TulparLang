@@ -34,9 +34,10 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j   # Dir
 
 The build script leaves a `./tulpar` (or `tulpar.exe`) copied out of the build directory; developer tooling assumes that copy exists. Different OSes use **different build directories** (`build-linux`, `build-macos`, `build-windows`) — the repo already contains stale copies of several; don't assume one is current.
 
-Two CMake targets are built:
+Three CMake targets are built:
 - `tulpar` — the compiler/driver executable.
 - `tulpar_runtime` — static library (`libtulpar_runtime.a` / `.lib`) that AOT-compiled user binaries link against. It is compiled with `-DTULPAR_RUNTIME_ONLY` and contains a different source subset from `tulpar` itself. When editing runtime-visible code (anything in `src/vm/runtime_bindings.cpp`, `runtime/*`, lexer, parser, `vm/`, `jit/`, SQLite), both targets must stay buildable.
+- `tulpar_tame` — static library (`libtulpar_tame.a`) with the Tame 2D game runtime: vendored raylib (`lib/raylib/`) + the 49 `aot_tm_*` bindings (`runtime/tame_impl.c` + `runtime/tame_bindings.cpp` — a deliberate two-TU split so raylib.h never meets the runtime/windows headers). Linked into a user binary **only** when the program imports `"tame"` or calls a `tm_*` builtin (`tame_link_flags()` in `aot_pipeline.cpp`, spliced before `-ltulpar_runtime`); ordinary binaries keep zero GL/window dependency. Tame builtins are table-driven — to add one, add a row to `k_tame_builtins` in `llvm_backend.cpp` (declare+dispatch come free) instead of hand-rolling the usual 5-point wiring's codegen part; the other points (impl, typeinfer, LSP) still apply.
 
 The AOT linker resolves `libtulpar_runtime.a` at runtime via `build_link_search_dirs()` in `src/aot/aot_pipeline.cpp` — it probes the directory containing the running `tulpar` binary first (so the installer can drop the archive next to `tulpar.exe`), then `<exe_dir>/lib`, then the dev-tree `build-<platform>/` directories. The Windows installer (`installer/tulpar.iss`, Inno Setup) ships both `tulpar.exe` and `libtulpar_runtime.a` into `%LOCALAPPDATA%\Programs\Tulpar`; CI passes `/DSourceBinary` and `/DSourceRuntimeLib` to `iscc`.
 
@@ -107,9 +108,9 @@ Auxiliary subsystems share the same AST and live alongside the backends:
 
 ### Standard library is embedded at build time
 
-`lib/*.tpr` files are read by `cmake/EmbedLibraries.cmake` and baked into `src/embedded_libs.h` via `configure_file()` from `src/embedded_libs.h.in`. Currently embedded: `wings`, `router`, `http_utils`, `async`, `middleware`, `socket`, `tulpar_api`, `test`, `http_client`, `orm` — i.e. every `.tpr` in `lib/`. To add a new stdlib module, drop it in `lib/`, add an `embed_library(...)` call in `cmake/EmbedLibraries.cmake`, **and** a slot in `embedded_libs.h.in`. `src/embedded_libs.h` is generated build output (gitignored) — never hand-edit; edit the `.in` template and the `lib/*.tpr` source instead.
+`lib/*.tpr` files are read by `cmake/EmbedLibraries.cmake` and baked into `src/embedded_libs.h` via `configure_file()` from `src/embedded_libs.h.in`. Currently embedded: `wings`, `router`, `http_utils`, `async`, `middleware`, `socket`, `tulpar_api`, `test`, `http_client`, `orm`, `wings_tls`, `tame` — i.e. every `.tpr` in `lib/`. To add a new stdlib module, drop it in `lib/`, add an `embed_library(...)` call in `cmake/EmbedLibraries.cmake`, **and** a slot in `embedded_libs.h.in`. `src/embedded_libs.h` is generated build output (gitignored) — never hand-edit; edit the `.in` template and the `lib/*.tpr` source instead.
 
-SQLite (`lib/sqlite3/sqlite3.c`) is vendored and compiled straight into both `tulpar` and `tulpar_runtime`.
+SQLite (`lib/sqlite3/sqlite3.c`) is vendored and compiled straight into both `tulpar` and `tulpar_runtime`. raylib 5.5 (`lib/raylib/`, zlib license, pruned + carrying a `TULPAR PATCH`-marked InitWindow fix in `rcore.c` and MIT X11 compat headers in `x11_compat/`) is vendored the same way but compiles only into `tulpar_tame`.
 
 ### Imports and `tulpar_modules`
 
@@ -137,7 +138,7 @@ Platform detection goes through `src/common/platform.h`, `platform_sockets.h`, `
 
 ### WASM target
 
-`wasm/` is a separate build (Emscripten), driven by `wasm/build_wasm.sh`. The `wasm/emsdk/` subtree is a vendored Emscripten SDK — treat it as read-only and do not grep / index it. It is not referenced by the main CMake build.
+`tulpar build --target=web game.tpr` (or `--web`) emits a `wasm32-unknown-emscripten` object from the normal LLVM backend and links it with `em++` (`source wasm/emsdk/emsdk_env.sh` first) against the archives in `wasm/dist/` — build those once with `wasm/build_tame_web.sh` (async-free runtime + raylib `PLATFORM_WEB` + tame bindings). Output: `game.html + .js + .wasm`; serve over HTTP (not `file://`). Assets embed via `TULPAR_WEB_ASSETS=<dir>`. The output name is a **base** — the `.html`/`.js`/`.wasm` are appended, and a trailing `.html` you write yourself is stripped, so `-o game` and `-o game.html` are equivalent. The output **directory must already exist** or the object emit fails with a bare "No such file or directory". `import "arcade"` works on the web target unchanged (verified 2026-07-17: input, physics, and the `call()`-based hook/collision registry all behave in-browser). Maintainer notes: on wasm32 the VMValue C ABI is sret+byval like Win64 (`vmvalue_abi_uses_sret()` in `llvm_values.cpp` picks at runtime; `backend->target_web` must be set before `declare_runtime_functions`), and `tulpar_async` is excluded from the web runtime (ucontext). The `wasm/emsdk/` subtree is a vendored Emscripten SDK — treat it as read-only and do not grep / index it; if `emcc` reports "clang executable not found", the `upstream/bin` symlinks (clang→clang-23, wasm-ld→lld, ...) were lost in a copy and must be recreated. The legacy `wasm/CMakeLists.txt` playground references deleted VM sources and is dead — do not revive it.
 
 ## Working with this codebase
 

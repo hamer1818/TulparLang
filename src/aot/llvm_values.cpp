@@ -170,10 +170,25 @@ LLVMValueRef llvm_convert_ret_pair_to_vmvalue(LLVMBackend *backend,
 // in IR with `byval(%vm_value_type)` so LLVM matches what gcc/clang produce
 // for the C-side declaration `aot_foo(VMValue v)`. Without byval LLVM lowers
 // the struct into register pairs (SysV-style) and the args land garbled.
+//
+// wasm32 (--target=web): clang'ın WebAssembly C ABI'si agregatları Win64
+// gibi indirekt taşır — dönüş sret pointer'ı, VMValue arg'ları byval
+// pointer. Bu yüzden seçim derleme-zamanı #if yerine çalışma zamanında
+// yapılır: Windows'ta hep sret; diğer host'larda backend->target_web
+// işaretliyse sret (emcc'nin derlediği runtime'la eşleşir), değilse SysV.
+static int vmvalue_abi_uses_sret(const LLVMBackend *backend) {
+#if PLATFORM_WINDOWS
+  (void)backend;
+  return 1;
+#else
+  return backend->target_web;
+#endif
+}
+
 LLVMValueRef llvm_call_vmvalue_func(LLVMBackend *backend, LLVMValueRef func,
                                     LLVMValueRef *args, unsigned arg_count,
                                     const char *name) {
-#if PLATFORM_WINDOWS
+  if (vmvalue_abi_uses_sret(backend)) {
   // sret slot + per-VMValue-arg byval slots are allocated for every
   // VMValue-returning runtime call on Windows. On a hot loop (e.g. bubble
   // sort: arr[j] > arr[j+1]) that's 3 allocas per inner-iter × 250K iters
@@ -215,7 +230,7 @@ LLVMValueRef llvm_call_vmvalue_func(LLVMBackend *backend, LLVMValueRef func,
   }
   free(all);
   return LLVMBuildLoad2(backend->builder, backend->vm_value_type, out, name);
-#else
+  }
   // Coerce each VMValue arg to {i64, i64} via memory aliasing — the
   // function type was declared with `ret_pair_type` for VMValue args
   // (see llvm_make_vmvalue_func_type SysV branch). The bitcast through
@@ -241,7 +256,6 @@ LLVMValueRef llvm_call_vmvalue_func(LLVMBackend *backend, LLVMValueRef func,
       arg_count, name);
   free(coerced);
   return llvm_convert_ret_pair_to_vmvalue(backend, ret_pair);
-#endif
 }
 
 // Helper: build a function type for a runtime function that returns VMValue.
@@ -249,9 +263,10 @@ LLVMTypeRef llvm_make_vmvalue_func_type(LLVMBackend *backend,
                                         LLVMTypeRef *arg_types,
                                         unsigned arg_count,
                                         int is_vararg) {
-#if PLATFORM_WINDOWS
+  if (vmvalue_abi_uses_sret(backend)) {
   // void(ptr sret, ptr byval(VMValue) args...)  — see llvm_call_vmvalue_func
-  // for why VMValue args become pointers on Win64.
+  // for why VMValue args become pointers on Win64 (ve wasm32'de — clang'ın
+  // WebAssembly ABI'si agregatları aynı şekilde indirekt taşır).
   unsigned total = arg_count + 1;
   LLVMTypeRef *all = static_cast<LLVMTypeRef*>(
       malloc(sizeof(LLVMTypeRef) * total));
@@ -267,7 +282,7 @@ LLVMTypeRef llvm_make_vmvalue_func_type(LLVMBackend *backend,
       LLVMFunctionType(backend->void_type, all, total, is_vararg);
   free(all);
   return ft;
-#else
+  }
   // SysV (Linux/macOS): for VMValue args, declare them as the coerced
   // {i64, i64} pair (`ret_pair_type`) — same shape we use for the return.
   // Why: passing {i32, [4xi8], i64} as a struct value works for one arg
@@ -290,5 +305,4 @@ LLVMTypeRef llvm_make_vmvalue_func_type(LLVMBackend *backend,
                                     is_vararg);
   free(all);
   return ft;
-#endif
 }

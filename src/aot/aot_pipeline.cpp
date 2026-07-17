@@ -231,6 +231,117 @@ static std::string aot_extra_link_flags() {
   return std::string(" ") + e;
 }
 
+// --- Web hedefi (wasm32-unknown-emscripten) ---------------------------------
+// `tulpar build --target=web` main.cpp'den bu bayrağı kurar. Codegen'e
+// backend->target_web olarak taşınır (VMValue ABI'sini sret+byval'a çevirir
+// ve emit'te wasm32 triple'ı seçer); link adımı clang++ yerine em++ ile
+// wasm/dist arşivlerine (build_tame_web.sh çıktıları) yapılır.
+static int g_target_web = 0;
+
+void aot_set_target_web(int enable) {
+  g_target_web = enable ? 1 : 0;
+  // Backend'e de kur: declare_runtime_functions llvm_backend_create'in
+  // İÇİNDE koşar, tip şekilleri (sret vs SysV) o anda belirlenir.
+  llvm_backend_set_target_web(g_target_web);
+}
+
+// em++'ın -L arama yolları: dev-tree wasm/dist + tulpar exe'sinin yanı +
+// TULPAR_WEB_LIB_DIR ortam değişkeni.
+static std::string build_web_link_search_dirs() {
+  std::string out;
+  auto add = [&](const std::string &dir) {
+    if (dir.empty()) return;
+    out += "-L\"";
+    out += dir;
+    out += "\" ";
+  };
+  std::string exe_dir = get_executable_dir();
+  if (!exe_dir.empty()) {
+    add(exe_dir + "/wasm/dist"); // kurulum yanına kopyalanmış layout
+    add(exe_dir + "/lib");
+  }
+  add("./wasm/dist"); // dev-tree (repo kökünden çalıştırma)
+  if (const char *env = getenv("TULPAR_WEB_LIB_DIR"); env && *env) add(env);
+  return out;
+}
+
+// Web hedefinin HTML kabuğu. em++'a .html ürettirmiyoruz: emcc'nin HTML
+// çıktısı html-minifier-terser (npm) ister ve vendored SDK'larda yoktur;
+// kendi kabuğumuz hem bağımlılıksız hem de oyuna uygun (koyu, ortalanmış
+// canvas). Emscripten GLFW canvas'ı Module.canvas'tan bulur.
+static void write_web_shell_html(const char *exe_filename) {
+  char html_path[512];
+  snprintf(html_path, sizeof(html_path), "%s.html", exe_filename);
+  const char *base = strrchr(exe_filename, '/');
+#if PLATFORM_WINDOWS
+  const char *base2 = strrchr(exe_filename, '\\');
+  if (base2 && (!base || base2 > base)) base = base2;
+#endif
+  base = base ? base + 1 : exe_filename;
+  FILE *f = fopen(html_path, "wb");
+  if (!f) return;
+  fprintf(f,
+          "<!doctype html>\n<html lang=\"tr\">\n<head>\n"
+          "<meta charset=\"utf-8\">\n"
+          "<meta name=\"viewport\" content=\"width=device-width,"
+          "initial-scale=1\">\n"
+          "<title>%s — Tulpar Tame</title>\n"
+          "<style>html,body{margin:0;height:100%%;background:#14141e;"
+          "display:flex;align-items:center;justify-content:center;"
+          "overflow:hidden}canvas{max-width:100%%;max-height:100%%;"
+          "outline:none}#err{position:fixed;left:0;right:0;bottom:0;"
+          "max-height:45%%;overflow:auto;background:#300;color:#faa;"
+          "font:12px monospace;padding:8px;white-space:pre-wrap;"
+          "display:none;z-index:9}</style>\n"
+          "</head>\n<body>\n"
+          "<canvas id=\"canvas\" oncontextmenu=\"event.preventDefault()\" "
+          "tabindex=\"-1\"></canvas>\n"
+          "<pre id=\"err\"></pre>\n"
+          "<script>\n"
+          "// Hata/stderr'i sayfada goster — konsol acmadan teshis icin.\n"
+          "var errBox=document.getElementById('err');\n"
+          "function showErr(m){errBox.style.display='block';"
+          "errBox.textContent+=m+'\\n';}\n"
+          "window.onerror=function(m,s,l,c,e)"
+          "{showErr('[onerror] '+m+' @'+s+':'+l);};\n"
+          "window.addEventListener('unhandledrejection',function(ev)"
+          "{showErr('[promise] '+ev.reason);});\n"
+          "var Module={canvas:document.getElementById('canvas'),"
+          "printErr:function(t){console.error(t);showErr(t);},"
+          "onAbort:function(w){showErr('[abort] '+w);}};\n"
+          "</script>\n"
+          "<script src=\"%s.js\"></script>\n"
+          "</body>\n</html>\n",
+          base, base);
+  fclose(f);
+}
+
+// tame (2D oyun kütüphanesi) link bayrakları — yalnız program "tame" import
+// ettiğinde (veya doğrudan bir tm_* builtin çağırdığında) eklenir; sıradan
+// binary'ler GL/pencere bağımlılığı almaz. libtulpar_tame.a = vendored raylib
+// + aot_tm_* binding'leri (bkz. CMakeLists "Tame" bölümü).
+//
+// Sıralama: tame, AOT_LINK_LIB_FLAGS'ten (yani -ltulpar_runtime'dan) ÖNCE
+// gelmeli — GNU ld arşivleri soldan sağa çözer; kullanıcı objesinin aot_tm_*
+// referanslarını tame karşılar, tame'in vm_make_* referanslarını sağındaki
+// libtulpar_runtime.a karşılar.
+//
+// Linux'ta -lX11/-lGL gerekmez: raylib'in GLFW'si X11 kütüphanelerini ve GL'i
+// çalışma zamanında dlopen'lar (glad + GLFW modül yükleyicisi); -ldl zaten
+// temel bayraklarda var.
+static const char *tame_link_flags(int uses_tame) {
+  if (!uses_tame) return "";
+#if PLATFORM_WINDOWS
+  return " -ltulpar_tame -lopengl32 -lgdi32 -lwinmm";
+#elif PLATFORM_MACOS
+  return " -ltulpar_tame -framework Cocoa -framework IOKit"
+         " -framework CoreVideo -framework OpenGL"
+         " -framework CoreAudio -framework AudioToolbox";
+#else
+  return " -ltulpar_tame";
+#endif
+}
+
 // Parse source code to AST. Caller-provided `source_filename` is
 // optional and only used by parse-time diagnostics for the file path
 // in `--> path:line` headers.
@@ -321,6 +432,9 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   backend->source_text = source;
   backend->source_filename = source_filename;
   backend->emit_debug_info = emit_debug_info;
+  // Web hedefi declare_runtime_functions'tan ÖNCE set edilmeli — VMValue
+  // çağrı tiplerinin şekli (sret+byval vs SysV) buna bağlı.
+  backend->target_web = g_target_web;
 
   // Plan 07 PR 2: open the debug-info graph before codegen runs so
   // subsequent passes can hang `DISubprogram` / `!dbg` metadata off
@@ -366,6 +480,23 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   llvm_backend_finalize_debug_info(backend);
 
   // Generate output filename
+  //
+  // Web hedefinde çıktı adı bir taban addır: `.html` (kabuk), `.js` ve `.wasm`
+  // hep buna EKLENİR. Kullanıcı doğal olarak `-o game.html` yazdığında bu
+  // `game.html.html` + `game.html.js` üretiyordu. Sondaki `.html`'i bir kez
+  // soy: `game` ve `game.html` artık aynı (doğru) çıktıyı verir.
+  std::string web_base;
+  if (g_target_web && output_name) {
+    web_base = output_name;
+    const std::string dot_html = ".html";
+    if (web_base.size() > dot_html.size() &&
+        web_base.compare(web_base.size() - dot_html.size(), dot_html.size(),
+                         dot_html) == 0) {
+      web_base.erase(web_base.size() - dot_html.size());
+      output_name = web_base.c_str();
+    }
+  }
+
   char obj_filename[256];
   char exe_filename[256];
   snprintf(obj_filename, sizeof(obj_filename), "%s.o", output_name);
@@ -406,12 +537,53 @@ AOTResult aot_compile_with_filename_debug(const char *source,
   std::string extra_flags = aot_extra_link_flags();
   const char *debug_flag = emit_debug_info ? "-g " : "";
   char link_cmd[2048];
+  if (g_target_web) {
+    // Web hedefi: em++ (Emscripten) linkler → <out>.html + .js + .wasm.
+    // - USE_GLFW=3: raylib PLATFORM_WEB, Emscripten'in GLFW JS
+    //   implementasyonunu kullanır (rglfw.c web arşivinde yok).
+    // - ASYNCIFY: Tulpar oyunları bloklu `while (running())` döngüsü yazar;
+    //   raylib'in EndDrawing'i web'de emscripten_sleep çağırır — ASYNCIFY
+    //   bunu tarayıcının event-loop'una çevirir.
+    // - Arşiv sırası native ile aynı: tame, runtime'dan önce.
+    // - TULPAR_WEB_ASSETS=<dizin> → --preload-file (oyun varlıkları sanal
+    //   dosya sistemine aynı yolda gömülür).
+    std::string web_dirs = build_web_link_search_dirs();
+    std::string preload;
+    if (const char *assets = getenv("TULPAR_WEB_ASSETS"); assets && *assets) {
+      preload = std::string(" --preload-file ") + assets;
+    }
+    // Çıktı .js (+ .wasm): emcc'nin .html üreticisi npm bağımlılığı ister;
+    // HTML kabuğunu link sonrası write_web_shell_html kendimiz yazarız.
+    // ASYNCIFY_STACK_SIZE: unwind sırasında canlı wasm local'leri bu
+    // tampona yazılır; Tulpar main'i entry-hoisted VMValue alloca'larıyla
+    // dolu olduğundan varsayılan 4KB kolayca taşar ("Aborted(Asyncify
+    // stack overflow)") — 128KB güvenli.
+    // EXPORTED_RUNTIME_METHODS=HEAPF32: raylib'in ses arka ucu (miniaudio,
+    // raudio.c) ScriptProcessorNode geri-çağrısında `Module.HEAPF32.buffer`
+    // okur. Emscripten (>=3.x, burada 5.0) HEAP view'lerini artık Module'e
+    // OTOMATİK bağlamaz → `Module.HEAPF32` undefined → ses açan her oyun
+    // (load_sound/load_music) her audio-frame'de "Cannot read properties of
+    // undefined (reading 'buffer')" ile çöker. HEAPF32'yi Module'e export
+    // etmek (büyümede otomatik yeniden atanır) bunu giderir; sessiz oyunlar
+    // için de zararsız.
+    snprintf(
+        link_cmd, sizeof(link_cmd),
+        "em++ %s -o %s.js -O2 -sUSE_GLFW=3 -sASYNCIFY "
+        "-sASYNCIFY_STACK_SIZE=131072 "
+        "-sALLOW_MEMORY_GROWTH -sSTACK_SIZE=2097152 "
+        "-sEXPORTED_RUNTIME_METHODS=HEAPF32 "
+        "%s-ltulpar_tame_web -ltulpar_runtime_web%s%s 2>&1",
+        obj_filename, exe_filename, web_dirs.c_str(), preload.c_str(),
+        extra_flags.c_str());
+  } else {
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s%s -o %s%s %s %s%s%s 2>&1",
+      "clang++ %s%s -o %s%s %s %s%s%s%s 2>&1",
       debug_flag, obj_filename, exe_filename, AOT_EXE_SUFFIX,
-      AOT_LINK_PIE_FLAG, search_dirs.c_str(), AOT_LINK_LIB_FLAGS,
+      AOT_LINK_PIE_FLAG, search_dirs.c_str(),
+      tame_link_flags(backend->uses_tame), " " AOT_LINK_LIB_FLAGS,
       extra_flags.c_str());
+  }
 
   int link_result;
   {
@@ -422,11 +594,28 @@ AOTResult aot_compile_with_filename_debug(const char *source,
     fprintf(stderr, tulpar::i18n::tr_for_en(
             "[AOT] Error: Linking failed (code %d). Check clang installation and libraries.\n"),
             link_result);
+    if (g_target_web) {
+      fprintf(stderr, "%s\n",
+              tulpar::i18n::tr_en(
+                  "[AOT] Web hedefi icin em++ gerekir: 'source "
+                  "wasm/emsdk/emsdk_env.sh' calistirin ve wasm/dist "
+                  "arsivlerinin (wasm/build_tame_web.sh) mevcut olduguna "
+                  "emin olun.",
+                  "[AOT] The web target needs em++: run 'source "
+                  "wasm/emsdk/emsdk_env.sh' and make sure the wasm/dist "
+                  "archives (wasm/build_tame_web.sh) exist."));
+    }
     llvm_backend_destroy(backend);
     ast_node_free(ast);
     return AOT_ERROR_LINK;
   } else {
-    printf("[AOT] Successfully created: %s\n", exe_filename);
+    if (g_target_web) {
+      write_web_shell_html(exe_filename);
+      printf("[AOT] Successfully created: %s.html (+ .js, .wasm)\n",
+             exe_filename);
+    } else {
+      printf("[AOT] Successfully created: %s\n", exe_filename);
+    }
   }
 
   llvm_backend_destroy(backend);
@@ -500,16 +689,18 @@ static AOTResult aot_compile_silent(const char *source,
 #if PLATFORM_WINDOWS
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s -o %s%s %s %s%s%s 2>NUL",
+      "clang++ %s -o %s%s %s %s%s%s%s 2>NUL",
       obj_filename, exe_filename, AOT_EXE_SUFFIX,
-      AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(), AOT_LINK_LIB_FLAGS,
+      AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(),
+      tame_link_flags(backend->uses_tame), " " AOT_LINK_LIB_FLAGS,
       silent_extra_flags.c_str());
 #else
   snprintf(
       link_cmd, sizeof(link_cmd),
-      "clang++ %s -o %s%s %s %s%s%s 2>/dev/null",
+      "clang++ %s -o %s%s %s %s%s%s%s 2>/dev/null",
       obj_filename, exe_filename, AOT_EXE_SUFFIX,
-      AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(), AOT_LINK_LIB_FLAGS,
+      AOT_LINK_PIE_FLAG, silent_search_dirs.c_str(),
+      tame_link_flags(backend->uses_tame), " " AOT_LINK_LIB_FLAGS,
       silent_extra_flags.c_str());
 #endif
 

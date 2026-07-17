@@ -77,6 +77,18 @@ static const char *EMBEDDED_WINGS_TLS =
 @EMBEDDED_WINGS_TLS_CONTENT@;
 
 // ========================================
+// lib/tame.tpr
+// ========================================
+static const char *EMBEDDED_TAME =
+@EMBEDDED_TAME_CONTENT@;
+
+// ========================================
+// lib/arcade.tpr
+// ========================================
+static const char *EMBEDDED_ARCADE =
+@EMBEDDED_ARCADE_CONTENT@;
+
+// ========================================
 // Library Lookup
 // ========================================
 static const char* get_embedded_lib(const char *name) {
@@ -92,6 +104,8 @@ static const char* get_embedded_lib(const char *name) {
     if (strcmp(name, "http_client") == 0) return EMBEDDED_HTTP_CLIENT;
     if (strcmp(name, "orm") == 0) return EMBEDDED_ORM;
     if (strcmp(name, "wings_tls") == 0) return EMBEDDED_WINGS_TLS;
+    if (strcmp(name, "tame") == 0) return EMBEDDED_TAME;
+    if (strcmp(name, "arcade") == 0) return EMBEDDED_ARCADE;
     return NULL;
 }
 

@@ -138,7 +138,18 @@ if [ "$ACTION" = "test" ]; then
                         "wings_todo_api.tpr" "wings_auth_api.tpr" \
                         "wings_notes_db.tpr" "wings_redirect.tpr" \
                         "wings_features_api.tpr" "wings_orm_resource.tpr" \
-                        "tulpar_api_demo.tpr" "utils.tpr")
+                        "tulpar_api_demo.tpr" "utils.tpr" \
+                        "tame_hello.tpr" "tame_sprite_demo.tpr" \
+                        "tame_run_demo.tpr" "tame_web_mini.tpr" \
+                        "tame_snake.tpr" \
+                        "arcade_topla.tpr" "arcade_zipla.tpr" \
+                        "arcade_nisan.tpr" "arcade_tugla.tpr" \
+                        "arcade_uzay.tpr" "arcade_labirent.tpr" \
+                        "arcade_karsiya.tpr")
+    # tame_*.tpr: display'li makinede pencere açıp kullanıcı kapatana
+    # dek bloklar (headless'ta zarif hata ile hemen çıkar) — deterministik
+    # olsun diye compile-only. Derlemeleri libtulpar_tame.a link zincirini
+    # (vendored raylib + aot_tm_* binding'leri) uçtan uca doğrular.
 
     # HTTP smoke probes. The 2-second alive check above only verifies the
     # process didn't crash during startup — wings/router examples block
@@ -294,7 +305,17 @@ if [ "$ACTION" = "test" ]; then
             echo -e "${RED}ERROR: Test file '$TARGET' not found.${NC}"
             exit 1
         fi
-        run_test "$TARGET" 0
+        # Honor the COMPILE_ONLY list for single-file runs too, so a windowed
+        # / blocking example (tame_*, arcade_*) is compiled but not executed.
+        target_file=$(basename "$TARGET")
+        compile_only=0
+        for co_file in "${COMPILE_ONLY_TESTS[@]}"; do
+            if [ "$target_file" = "$co_file" ]; then
+                compile_only=1
+                break
+            fi
+        done
+        run_test "$TARGET" "$compile_only"
     else
         for example in examples/*.tpr; do
             [ -f "$example" ] || continue
@@ -362,6 +383,9 @@ cp tulpar ../tulpar
 # every `--aot` link fail with undefined `operator new` / `__mingw_*`
 # references even though the build itself succeeded.
 cp libtulpar_runtime.a ../libtulpar_runtime.a
+# tame (2D oyun) arşivi de aynı sebeple köke kopyalanır — `import "tame"`
+# eden programların linki bunu exe'nin yanında arar.
+cp libtulpar_tame.a ../libtulpar_tame.a
 cd ..
 
 # Make executable

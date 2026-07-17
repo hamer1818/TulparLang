@@ -1,0 +1,44 @@
+// tame Faz 5 demo — run(update, draw) yönetilen döngüsü.
+//
+// Döngüyü, kare zamanlamasını ve KARE BELLEĞİNİ tame yönetir: her kare
+// sonunda arena checkpoint'e geri sarılır, yani update/draw içinde üretilen
+// geçici string/objeler birikmez. Kural: kareler arası yaşayacak durum
+// GLOBAL'lerde tutulur (aşağıdaki x/dx gibi) — wings ile aynı model.
+//
+// Çalıştır:  ./tulpar examples/tame_run_demo.tpr   (ESC: çıkış)
+//
+// Web (tarayıcı) hedefi — yönetilen run() döngüsü web'de de çalışır:
+//   source wasm/emsdk/emsdk_env.sh
+//   ./tulpar build --target=web examples/tame_run_demo.tpr rundemo
+//   python3 -m http.server 8787   # http://localhost:8787/rundemo.html
+//
+// Not: test koşucusunda COMPILE_ONLY.
+
+import "tame";
+
+// Oyun durumu — global (kareler arası kalıcı)
+float x = 60.0;
+float dx = 4.0;
+int skor = 0;
+
+func guncelle() {
+    x = x + dx;
+    if (x < 0.0) { dx = 0.0 - dx; x = 0.0; skor = skor + 1; }
+    if (x > 740.0) { dx = 0.0 - dx; x = 740.0; skor = skor + 1; }
+    if (key_pressed("SPACE")) { dx = dx * 1.5; }
+    if (key_pressed("R")) { dx = 4.0; }
+}
+
+func ciz() {
+    clear(rgb(20, 30, 20));
+    rect(x, 200.0, 60, 60, LIME);
+    // Bu string'ler her kare üretilir; run() kare sonunda geri sardığı
+    // için bellek sabit kalır.
+    text("skor: " + toString(skor), 20, 20, 24, WHITE);
+    text("SPACE: hizlan | R: sifirla | ESC: cikis", 20, 52, 18, LIGHTGRAY);
+    text("FPS: " + toString(get_fps()), 20, 80, 18, GREEN);
+}
+
+window(800, 450, "Tulpar Tame — run() yonetilen dongu");
+run(guncelle, ciz);
+print("tame_run_demo bitti. skor=" + toString(skor));
