@@ -1,0 +1,128 @@
+// Uzay Istilasi (Space Invaders) — arcade preset motoru, 3 BÖLÜM.
+//
+//   ./tulpar examples/arcade_uzay.tpr
+//
+// Sol/Sağ (A/D) ile gemiyi sür, SPACE ile ateş et. Filoyu temizle (+10) →
+// sıradaki bölüm. 3 bölümü de bitir → KAZANDIN. Filo sana inerse ya da
+// mor mermilerine değersen kaybedersin. R ile baştan.
+//
+// Bölümler: 1) 3x5 yavaş   2) 4x6 hızlı   3) 4x7 en hızlı + filo GERİ ATEŞ eder
+//
+// Filo tek parça hareket eder (kenara değince yön değişir + bir kademe iner),
+// bu yüzden düşmanlar MV_NONE ve hareketi her_kare içinde biz sürüyoruz.
+// Ölen düşmanın handle'ı `filo` dizisinde kalır ama bayatladığı için
+// `yasiyor()` false döner → ayrıca temizlemeye gerek yok.
+
+import "arcade";
+
+int TAG_EBULLET = 6;    // düşman mermisi (hazır tag'ler 1..5; kendi int'ini verebilirsin)
+
+int gemi = 0;
+array filo = [];        // bölümün düşman handle'ları
+int fdir = 1;           // filo yönü (+1 sağ, -1 sol)
+float fspeed = 55.0;    // filo yatay hızı (px/sn)
+int f_atis = 0;         // 1 = filo geri ateş eder (bölüm 3)
+int t = 0;              // kare sayacı
+
+int GEMI_Y = 430;
+
+// Global kurulum — her bölüm yüklemesinde bölüm fn'inden ÖNCE çalışır.
+func kur() {
+    temizle();
+    filo = [];
+    fdir = 1;
+    t = 0;
+    gemi = uret(304, GEMI_Y, 32, 18, SKYBLUE, TAG_PLAYER, MV_NONE);
+}
+
+// Ortalanmış filo diz. (Sarma fonksiyon — callback değil, argüman alabilir.)
+func filo_kur(satir, sutun, y0, renk) {
+    int sp = 76;
+    int genislik = (sutun - 1) * sp + 32;
+    int x0 = toInt((640 - genislik) / 2);
+    for (int r = 0; r < satir; r = r + 1) {
+        for (int c = 0; c < sutun; c = c + 1) {
+            int e = uret(x0 + c * sp, y0 + r * 40, 32, 24, renk, TAG_ENEMY, MV_NONE);
+            push(filo, e);
+        }
+    }
+}
+
+// --- Bölümler ---------------------------------------------------------------
+func b1() { fspeed = 55.0;  f_atis = 0; filo_kur(3, 5, 70, LIME); }
+func b2() { fspeed = 85.0;  f_atis = 0; filo_kur(4, 6, 60, GOLD); }
+func b3() { fspeed = 115.0; f_atis = 1; filo_kur(4, 7, 55, RED);  }
+
+func her_kare_is() {
+    float dt = frame_time();
+    if (dt <= 0.0) { dt = 0.0166667; }
+    if (dt > 0.05) { dt = 0.05; }
+    t = t + 1;
+
+    // --- Gemi: sadece yatay --------------------------------------------------
+    float gx = x_of(gemi);
+    if (key_down("LEFT")  || key_down("A")) { gx = gx - 390.0 * dt; }
+    if (key_down("RIGHT") || key_down("D")) { gx = gx + 390.0 * dt; }
+    if (gx < 0.0) { gx = 0.0; }
+    if (gx > 608.0) { gx = 608.0; }
+    konumla(gemi, gx, GEMI_Y);
+
+    if (key_pressed("SPACE")) {
+        mermi(gx + 13.0, GEMI_Y - 6.0, 6, 14, GOLD, 0, 0 - 470);
+    }
+
+    // --- Filo: kenara değen varsa yön değiştir + bir kademe in ---------------
+    bool kenarda = false;
+    for (int i = 0; i < len(filo); i = i + 1) {
+        int e = filo[i];
+        if (!yasiyor(e)) { continue; }
+        float ex = x_of(e);
+        if (ex < 8.0   && fdir < 0) { kenarda = true; }
+        if (ex > 600.0 && fdir > 0) { kenarda = true; }
+    }
+    if (kenarda) { fdir = 0 - fdir; }
+
+    for (int i = 0; i < len(filo); i = i + 1) {
+        int e = filo[i];
+        if (!yasiyor(e)) { continue; }
+        float ny = y_of(e);
+        if (kenarda) { ny = ny + 22.0; }
+        konumla(e, x_of(e) + fdir * fspeed * dt, ny);
+        if (ny > 396.0) { oyun_bitti(); }   // filo gemi hizasına indi
+    }
+
+    // --- Filo geri ateşi (bölüm 3) ------------------------------------------
+    if (f_atis == 1 && mod(t, 38) == 0) {
+        array canli = [];
+        for (int i = 0; i < len(filo); i = i + 1) {
+            if (yasiyor(filo[i])) { push(canli, filo[i]); }
+        }
+        if (len(canli) > 0) {
+            int e = canli[randint(0, len(canli) - 1)];
+            int m = uret(x_of(e) + 13.0, y_of(e) + 24.0, 6, 14, MAGENTA, TAG_EBULLET, MV_VELOCITY);
+            hiz_ver(m, 0, 280);
+        }
+    }
+}
+
+// Mermi düşmana değince: ikisi de ölür, +10. Filo bittiyse sıradaki bölüm.
+func vur_cb() {
+    oldur(oteki());                          // ben()=mermi (TAG_BULLET), oteki()=düşman
+    oldur(ben());
+    skor_ekle(10);
+    if (tag_sayisi(TAG_ENEMY) == 0) { bolum_gec(); }
+}
+
+func kaybet_cb() { oyun_bitti(); }
+
+sahne(640, 480, "Uzay Istilasi");
+bilgi("Sol/Sag veya A/D: gemi   SPACE: ates   |   Filoyu temizle (+10)");
+baslangicta(kur);
+bolum(1, b1);
+bolum(2, b2);
+bolum(3, b3);
+her_kare(her_kare_is);
+carpisinca(TAG_BULLET, TAG_ENEMY,   vur_cb);
+carpisinca(TAG_PLAYER, TAG_ENEMY,   kaybet_cb);
+carpisinca(TAG_PLAYER, TAG_EBULLET, kaybet_cb);
+oyna();

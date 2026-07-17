@@ -29,7 +29,189 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 - **Cross-platform:** Windows (Inno Setup installer), Linux, macOS,
   WASM. `libtulpar_runtime.a` AOT'a static link.
 - **Stdlib gömülü:** wings, router, http_utils, http_client, async,
-  middleware, socket, tulpar_api, orm, test. SQLite vendored.
+  middleware, socket, tulpar_api, orm, test, wings_tls, tame. SQLite
+  ve raylib vendored.
+- **Tame — 2D oyun kütüphanesi (v3.10.0, 2026-07-12, Faz 0-5):**
+  `import "tame"` ile saf Tulpar'dan pencere + şekil/yazı çizimi +
+  klavye/fare/**gamepad** girdisi + **sprite/texture + TTF font + ses/müzik +
+  `run(update, draw)` yönetilen döngüsü** — Pong sınıfı oyun ~40 satır.
+  Native katman vendored **raylib 5.5** (`lib/raylib/`) + 49 `aot_tm_*`
+  builtin'i **ayrı** `libtulpar_tame.a` arşivinde; link satırına yalnız
+  tame import edilince eklenir → sıradan binary'ler GL/pencere bağımlılığı
+  almaz. Gömülü `lib/tame.tpr` kısa isimler, `rgb()/rgba()` + adlı raylib
+  paleti, kaynak handle'ları (`load_texture/load_sound/load_music`,
+  DB-handle deseni), `screenshot()` ve oyun yardımcıları sunar; `run()`
+  kare belleğini arena bracket'iyle sabitler. Headless'ta zarif hata.
+  **Pencereli canlı doğrulama yapıldı** (WSLg): tüm çizim türleri + sprite
+  + ölçek/döndürme ekran görüntüsüyle piksel-kanıtlı, 60 FPS pacing,
+  `run()` 480 kare stabil. **Web (WASM) hedefi de tarayıcıda canlı doğrulandı
+  (2026-07-14): mini/sprite/run örnekleri 60 FPS; `run()`/`call()` web'de
+  bozuktu — dlsym yerine `aot_register_func` + arity'li dağıtımla düzeltildi.**
+  Örnekler: `tame_hello`, `tame_sprite_demo`, `tame_run_demo`, `tame_web_mini`.
+  Detay: Stdlib + tooling bölümü.
+- **Arcade — "preset" üst-seviye oyun motoru (v3.10.0, 2026-07-14):**
+  `import "arcade"` — tame'in üstünde, Unreal-blueprint/blok mantığıyla **çok
+  kısa kodla** oyun yaptıran katman (gömülü `lib/arcade.tpr`, transitively
+  `import "tame"` → tame linki otomatik). Kullanıcı döngü/çarpışma/fizik/çizim
+  YAZMAZ; hazır blokları birleştirir: `oyuncu()/player`, `dusman()/enemy`,
+  `esya()/item`, `duvar()/wall`, `mermi()/bullet`, `oyuncu_p()` (platformer),
+  hareket presetleri (topdown/platform/velocity), `carpisinca(tagA,tagB,fn)`
+  tag tabanlı 0-arg çarpışma callback'i (`me()/other()` context'i), `yercekimi()`
+  + zemin/platforma iniş, `baslangicta()/her_kare()/ciz_ustune()` kancaları,
+  otomatik skor HUD + oyun-bitti/R-yeniden ekranı, `oyna()/play()` yönetilen
+  döngü. **Her API çift dilli (TR+EN alias).** Ekrandan çıkan velocity
+  entity'leri otomatik ölür. Motor **paralel dizi** tabanlı (Tulpar'da dizi
+  elemanına struct geri-yazma yok; ayrıca callback'ler 0-arg — `call()` ile arg
+  geçmek segfault). Çekirdek headless doğrulandı (`step()` API'siyle: velocity
+  hareket + AABB çarpışma dispatch + kill/skor + yerçekimi+zemine iniş) ve
+  pencereli render ekran görüntüsüyle kanıtlandı (WSLg). Örnekler:
+  `arcade_topla` (toplama+kaç), `arcade_zipla` (platformer), `arcade_nisan`
+  (atış) — hepsi ~15-25 satır oyun kodu, COMPILE_ONLY.
+  Fizik + duvarlar (2026-07-16): `yercekimi/gravity` + `ziplama/jump_power` +
+  **katı `duvar()` çarpışması** (AABB: duvara dayanma/yan-engelleme/platforma
+  iniş; çözüm aşağıdaki MTV) + dünya-zemini/sınırları — hepsi
+  deterministik çalışıyor (headless kanıt: p duvar tepesine y=80, q platforma
+  y=180; çoklu-entity + on_frame poison + 3/3 tekrar). `arcade_zipla` gerçek
+  platformer (zemin + 2 platform + zıplayıp hedefe ulaş). Hareket döngüsü global
+  index kullanır (param-index de çalışır). Çarpışma çözümü **MTV (minimum
+  translation vector)**: her çakışan duvar için en sığ eksende itilir — bu,
+  tam-genişlik zemin platformunda yatay hareketin cismi platform kenarına
+  ışınlaması bug'ını çözer (eksen-ayrık yaklaşımın klasik hatası). Büyük ilk-kare
+  dt'si `_ar_update`'te 0.05'e sınırlanır (tünelleme koruması). HUD: skorun
+  altında `bilgi()/controls()` ile kontrol bilgilendirme şeridi (3 örnekte de
+  var). Not: oturum içinde önce bir "codegen bug'ı" sanılıp duvarlar geri
+  çekilmişti — o iddia ÖYLE DEĞİLDİ (neden: bayat WSL build'i + repro fizik
+  hatası); duvarlar geri getirildi.
+  **Yatay hareket düzeltmesi (2026-07-17):** Kullanıcı "zıplama tamam ama sağa
+  sola gidemiyorum" dedi. Neden arcade'de değil, **derleyicideydi**:
+  `_ar_apply_movement`'ta MV_TOPDOWN ve MV_PLATFORM dalları aynı adlı yerelleri
+  (`float s`, `float vx`) tanımlıyor; `if` blokları scope açmadığı için ikinci
+  tanımın başlatıcısı düşüyor ve `s`/`vx` **yazılmamış yığın çöpü** okuyordu
+  (zıplama globalleri kullandığı için çalışıyordu — semptom tam da buydu).
+  Teşhis: XTest ile pencereye tuş enjekte edilip motor stdout'a döküldü
+  (`s=140730080902816`, `evx=448`, oyuncu x=612'ye yapışıyor). Derleyici
+  düzeltildi (aşağıya bak); arcade kodu değişmedi. Doğrulama: tuşsuz `evx=0` +
+  y=420'de duruyor, SAĞ basılıyken `evx=200` ve x düzgün ilerliyor.
+  **WASM (2026-07-17): arcade web'de ÇALIŞIYOR — kod değişikliği gerekmedi.**
+  `tulpar build --target=web examples/arcade_zipla.tpr out` → `.html/.js/.wasm`;
+  üç örnek de (zipla/topla/nişan) tarayıcıda doğru render ediyor (headless
+  Chrome + swiftshader ekran görüntüsüyle kanıtlı: HUD + kontrol şeridi +
+  platformlar + entity'ler). CDP ile konsol okunup tuş enjekte edilerek
+  **davranış** da doğrulandı: boştayken `evx=0` ve oyuncu y=420'de duruyor;
+  ArrowRight basılıyken `R=1`, `evx=200`, x 93→326 düzgün ilerliyor (yani
+  `key_down` web'de çalışıyor); çarpışma callback'i tam bir kez tetikleniyor
+  (`skor=100`, `oldur(oteki())` eşyayı öldürüyor → `me()/other()` context'i
+  web'de de doğru); JS hatası yok. Yani `call()` tabanlı kanca + registry
+  deseninin tamamı web'de sağlam.
+  **Slot geri kazanımı + handle'lar (2026-07-17, son açık madde kapandı):** ölen
+  entity'nin slot'u artık boş-slot yığınına dönüp yeniden kullanılıyor —
+  sürekli mermi üreten oyunda paralel diziler sonsuza dek büyümüyor (kanıt:
+  600 karede ~133 entity üretilen nişan oyununda `_n` 22'de sabitleniyor; 500
+  üret+öldür sonrası `_n=2`). Naif index geri-kullanımının tuzağı (ölmüş bir
+  id'yi tutan kodun sessizce BAŞKA entity'yi oynatması) **generation'lı handle**
+  ile kapatıldı: dışarıya verilen id = `_egen[slot] * 2^20 + slot`; öldürmede
+  `_egen` artar → o slot'a ait eski handle'lar anında bayatlar. Tüm public id
+  API'si `_slot_of()` ile çözer; bayat handle sessizce yok sayılır (setter no-op,
+  getter nötr, `yasiyor()` dürüstçe false). Kanıt: bayat handle'la `konumla`
+  yeni entity'yi bozmuyor, bayat `oldur` onu öldürmüyor. `entity_sayisi()` =
+  ayrılmış slot (canlı değil); yeni `canli_sayisi()/live_count()` canlıyı verir.
+  Web'de de doğrulandı (360 karede `_n=9` sabit, bayat tespiti wasm'de çalışıyor).
+  **Bölüm (level) sistemi (2026-07-17):** motora çift dilli bölüm API'si eklendi —
+  `bolum(n, fn)/level`, `bolum_gec()/next_level`, `bolum_no()/level_no`,
+  `bolum_sayisi()/level_count`, `kazandin_mi()/is_won` + tag bazlı sayım
+  `tag_sayisi(tag)/tag_count` ve hız okuma `vx_of()/vy_of()`. Semantik: her oyunda
+  yeniden yazılmaz, motorda; `_ar_state` **2 = kazandın** ile genişledi (0 oynanıyor,
+  1 bitti); bölüm yüklemesi `clear_entities()` → global `baslangicta` fn'i → o bölümün
+  fn'i sırasıyla; **skor bölümler arası korunur**, R ise skoru sıfırlayıp bölüm 1'e
+  döner (en tahmin edilebilir davranış); HUD'da sağ üstte `Bolum n/N` göstergesi +
+  geçişte ~1.2 sn "Bölüm N" afişi + KAZANDIN ekranı (toplam skor). `is_over()/bitti_mi()`
+  artık `state != 0` (kazanmak da bitiştir) — bölüm kaydı olmayan oyunlarda state 2 hiç
+  oluşmadığı için **geriye tam uyumlu**. **Kritik tasarım:** `bolum_gec()` geçişi hemen
+  YAPMAZ, `_lvl_pending` ile işaretler ve geçiş kare sonunda (`_ar_update`/`step`)
+  uygulanır — çünkü tipik çağrı yeri bir çarpışma callback'idir ve `_ar_collisions()`
+  o sırada paralel dizilerin üstünde döner; hemen `clear_entities()` çağırmak altındaki
+  diziyi değiştirirdi. Kayıtlar `temizle()` ile silinmez (kurallar gibi, oyun tanımının
+  parçası). Kanıt: `tests/arcade_levels.test.tpr` (8/8, headless `adim()` ile: kayıt,
+  1→2→3 ilerleme, her bölümün kendi düzeni, skor korunumu, son bölümde KAZANDIN +
+  fizik durur, R sonrası skor 0/bölüm 1, 60 yükleme sonrası slot şişmemesi `_n=4`).
+  Yan düzeltme: `arcade_topla` düşman sekmesi `_evx[enemy_id]` ile **handle**'ı slot
+  indeksi sanıp dizi dışını okuyordu → yeni `vx_of()/vy_of()` getter'ları ile düzeltildi.
+  **4 oyunun 3'er bölümü (2026-07-17):** `arcade_zipla` (kolay → zikzak tırmanış →
+  dar platform + gidip gelen ölümcül engel; düzenler zıplama payına göre ≤80px dikey /
+  ≤140px yatay açıklıkla kuruldu), `arcade_topla` (3 eşya/1 düşman → 5/2 → 6/3 hızlı;
+  bölüm bitişi `tag_sayisi(TAG_ITEM)==0`), `arcade_nisan` (kümülatif hedef skor 30 →
+  60 → 100, tempo/hız artar), `tame_snake` (arcade DEĞİL, doğrudan tame → bölüm akışı
+  elle: bölüm başına 5 yem, `MOVE_FRAMES` 8→6→4, 3. bölümde engel duvarları + KAZANDIN).
+  4'ü de web'e derlendi (`web_demo/`), headless Chrome + CDP ile render + HUD doğrulandı
+  (yılanda tuş enjekte edilip oyunun gerçekten başladığı/hareket ettiği görüldü).
+  **4 oyun daha (2026-07-17, kullanıcı isteği) — her biri motorun farklı bir yanını sürer:**
+  `arcade_tugla` (Breakout: tuğlalar `esya()`, top TAG_BULLET+MV_VELOCITY, raket MV_NONE +
+  `her_kare`'de yatay sürülür — MV_TOPDOWN 4 yöne giderdi; düz duvar → piramit → boşluklu
+  duvar), `arcade_uzay` (Space Invaders: filo tek parça hareket ettiği için düşmanlar
+  MV_NONE + elle sürülür; 3x5 → 4x6 → 4x7 + filo geri ateş eder, düşman mermisi için özel
+  tag `6`), `arcade_labirent` (harita ASCII satırlar + `ord()` ile okunur: `#/P/A/E` →
+  bölüm eklemek = 15 string yazmak; oyuncu MV_TOPDOWN → motorun MTV duvar çözümünü kullanır,
+  devriyeler MV_VELOCITY duvar takmadığı için koridor sınırları kurulumda harita taranarak
+  hesaplanır), `arcade_karsiya` (Frogger: MV_VELOCITY şeritler ±660'ta sarılır — motorun
+  "dünyanın 64px dışında otomatik öldür" kuralından ÖNCE sarmak zorunlu). Dördü de
+  COMPILE_ONLY listelerinde (build.sh + run_tests.ps1), web'e derli ve tarayıcıda
+  doğrulandı. **Bu turda yakalanan iki tuzak:** (1) `don` REZERVE kelime (`return`'ün
+  Türkçesi) — `bool don` parse hatası verdi (`move` gibi, ama bu sessiz değil sert hata);
+  (2) tam-ekran oyun alanı HUD ile çakışıyor — labirent 32px hücreyle tüm ekranı kaplayıp
+  oyuncuyu bilgi şeridinin altında bırakıyordu (28px hücre + OX=40/OY=60 ile çözüldü),
+  karşıya'nın altın hedef bandı skor yazısının altında kalıyordu (y=10 → y=58).
+  Labirent haritaları flood-fill ile doğrulandı (P'den tüm A'lara ulaşım + devriye
+  koridoru ≥3 hücre); doğrulayıcı M1'de ulaşılamayan anahtar, M2/M3'te 2 ve 1 hücrelik
+  sıkışık devriye koridoru yakaladı — üçü de düzeltildi.
+  **İki dillilik (2026-07-17, kullanıcı isteği — tulparlang.dev hem TR hem EN yayın yapıyor):**
+  (1) **Motor HUD'u çift dilli** — `dil()/language()` ile motorun çizdiği metinler (skor öneki,
+  `Bolum n/N`/`Level n/N`, afiş, OYUN BITTI/GAME OVER, KAZANDIN/YOU WIN, R ipucu) TR ya da EN
+  çizilir; varsayılan sistem dili (`sys_lang()`), TR eski çıktının bit-bit aynısı → geriye tam
+  uyumlu. `bilgi()/controls()` şeridi oyuna ait. (2) **8 oyunun tam İngilizce ikizi** (`examples/en/`:
+  jump/collect/shooter/snake/breakout/invaders/maze/crossing) — İngilizce API alias'ları + yorum +
+  başlık + `language("en")`; `examples/*.tpr` koşucusu ikizleri saymasın diye alt dizinde,
+  derleme+ekran görüntüsüyle doğrulandı. (3) **`web_demo` iki dilli** — `index.html` (oyun
+  kaynaklarından bir üretici betikle üretilir → senkron kalır) sayfa düzeyinde TR/EN anahtarı,
+  oyun başına Oyna(TR)/Oyna(EN) (iki dil sürümü de yayınlı: `zipla.html`+`jump.html` …) ve gömülü
+  gerçek kaynağı gösteren TR/EN sekmeli "Kodu gör" paneli içerir. CDP ile etkileşim doğrulandı
+  (EN'e geç → kartı aç → EN sekmesi `language("en")`li İngilizce kaynağı gösteriyor). Not: lokal
+  işçiye (qwen2.5-coder:14b) 3 ikizin mekanik çevirisi verildi ama çıktısı bozuktu (`bolum_gec`
+  düşmüş, `oyun_biti` yazım hatası, `start/frame/collision` uydurma API, string'ler çevrilmemiş)
+  → doğrulama kapısında yakalanıp 8 ikiz de elle yazıldı.
+- **AOT codegen doğruluk düzeltmeleri (v3.10.0, 2026-07-17):** Arcade'in yatay
+  hareket hatası iki **gerçek** derleyici bug'ını ortaya çıkardı; ikisi de
+  sıradan tipli Tulpar kodunu sessizce bozuyordu:
+  - **Kardeş blokta yeniden tanım başlatıcıyı kaybediyordu.** `if`/`else`
+    blokları scope AÇMAZ (yalnız fonksiyon/lambda/`for`/main açar) → aynı adlı
+    iki tanım aynı scope'a düşüyor; `add_local` ikinci bir kayıt EKLİYOR, arama
+    ise baştan tarayıp İLK kaydı buluyordu. Sonuç: ikinci tanımın store'u
+    okunmayan bir alloca'ya gidiyor; okuma ilk dalın değerini (o dal hiç
+    çalışmadıysa yığın çöpünü) görüyordu. Artık tanım mevcut slot'u yeniden
+    kullanıyor → **en son tanım kazanır**. `tests/scope_redecl.test.tpr`.
+  - **Native (tümü-int) hızlı yolu sessizce yanlış kod üretiyordu.**
+    `func f(int p): int` fonksiyonları `codegen_native_func_def`'in elle yazılmış
+    i64 alt-küme emitter'ına giriyor; bu emitter **case'i olmayan deyimi hatasız
+    ATIYOR**. Kapısı (`native_codegen_supports_stmt`) emitter'dan çok daha
+    genişti: (a) `if/else`'in **else dalı hiç emit edilmiyordu** → else'e düşen
+    her girdi **0** dönüyordu; (b) `if (c) { int a = 1; return a; }` tanımı
+    atıyor, `a` kayıtsız kalıyor ve **derleyici çöküyordu**; (c) `while`/`for`
+    gövdesindeki iç içe `if` atılıyordu (gövde yalnız atama/tanım emit ediyor) →
+    birikim döngüleri yanlış sonuç veriyordu. Kapı artık emitter ile birebir;
+    karşılanmayan biçimler tam dili işleyen kutulu (boxed) yola düşer. Korumalı
+    özyineleme (`fib`'deki `if (n < 2) { return n; }`) native kalır.
+    `tests/native_fastpath.test.tpr`. **Ders:** bu yolda kapıyı emitter'dan
+    geniş tutmak = teşhissiz yanlış kod; şüphede 0 döndür.
+  - **Native döngü gövdesinde builtin çağrısı sessizce ATILIYORDU** (2026-07-03'ten
+    beri açık olan bug — nihayet kapandı). Native yerel i64'tür ama
+    `codegen_typed_expr` statik-int olmayan (tipik olarak çağrı içeren) ifade
+    için **kutulu** VMValue döner; while/for gövde emitter'ı yalnız
+    INFERRED_INT/BOOL durumunu store edip gerisini teşhissiz atıyordu → store
+    hiç olmuyordu: `toplam = toplam + mod(n,10)` birikimi **0** kalıyor;
+    `while (b != 0) { b = mod(a,b); ... }` (Euclid OBEB) b'yi güncellemeyip
+    **segfault**; `n = toInt(n/10)` n'i güncellemeyip **sonsuz döngü**. Artık
+    gövde de payload'ı (alan 2) açıyor — döngü **koşulunun** zaten yaptığı şey.
+    Bu, "fonksiyon içinde while + builtin çağrısı bozuk, `for`/özyineleme kullan"
+    diye taşınan eski workaround'un ta kendisiydi; **artık gerekmiyor**.
 - **Wings/ORM DX turu (v3.7.0, 2026-07-03):** [WINGS_DX.md](WINGS_DX.md)
   çalışmasının tamamı uygulandı — **ORM v2** (model handle + UFCS:
   `Note.find(1)`, `Note.where("done = ?", [0])`, `Note.save(obj)`; her SQL
@@ -844,6 +1026,81 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Stdlib + tooling
 
+- **Tame — 2D oyun kütüphanesi (`import "tame"`, v3.10.0, 2026-07-12):**
+  Wings'in oyun kardeşi; iki katman, Wings ile aynı model:
+  - **Native katman:** vendored **raylib 5.5** (`lib/raylib/`, zlib lisansı,
+    SQLite ile aynı vendor deseni; GLFW derlemesi için eksik X11 uzantı
+    header'ları `lib/raylib/x11_compat/` altında — MIT, ABI-stabil) + 26
+    `aot_tm_*_ptr` builtin'i. Binding iki TU'ya ayrık: `runtime/tame_impl.c`
+    (yalnız raylib.h görür, düz-skaler API + tuş-adı eşleme) ve
+    `runtime/tame_bindings.cpp` (yalnız vm.hpp görür, VMValue ABI) —
+    raylib.h ile windows.h aynı TU'da asla buluşmaz (Rectangle/CloseWindow/
+    DrawText çakışmaları). Hepsi **ayrı `libtulpar_tame.a`** arşivinde:
+    `tame_link_flags()` (aot_pipeline.cpp) linki yalnız `backend->uses_tame`
+    işaretliyken ekler (import "tame" VEYA doğrudan tm_* çağrısı) → sıradan
+    binary'lerin ldd'si değişmez; tame binary'si bile X11/GL'i runtime'da
+    dlopen'lar (GLFW modül yükleyici + glad) → taşınabilir kalır.
+  - **Codegen:** `k_tame_builtins` tablosu (`llvm_backend.cpp`) — 26 ayrı
+    dispatch bloğu yerine tablo-güdümlü declare (döngü) + dispatch
+    (`LLVMGetNamedFunction`); N-ptr VMValue ABI'si (`aot_ord_ptr` genellemesi),
+    eksik trailing arg int 0 padlenir. Typeinfer koordinat pozisyonlarında
+    int|float polimorfik (`TYPE_UNKNOWN`), renk/boyut int, tuş str; 26 sembol
+    LSP hover/completion tablosunda TR dokümanlı.
+  - **Tulpar katmanı (`lib/tame.tpr`, gömülü):** `window(w,h,title)`,
+    `running()`, `frame_begin()/frame_end()`, `clear/rect/rect_lines/circle/
+    line/pixel/text`, `key_down/key_pressed/key_released` (tuşlar adla:
+    `"W"`, `"SPACE"`, `"LEFT"`, `"F1"`...), `mouse_x/y/down/pressed/wheel`,
+    `set_fps/get_fps/frame_time/elapsed/screen_width/screen_height`,
+    `rgb()/rgba()` + 25 adlı raylib rengi (paketlenmiş `0xRRGGBBAA` int) ve
+    oyun yardımcıları `rect_overlap` (AABB çarpışma), `point_in_rect`,
+    `clamp`. Varsayılan 60 FPS, ESC ile çıkış.
+  - **Headless davranışı:** DISPLAY yoksa `window()` iki dilli hata basar,
+    false döner, `running()` false → program temiz biter. Vendored raylib'e
+    upstream-master'la birebir `InitWindow`/`InitPlatform` yaması (5.5
+    dönüşü yok sayıp `rlglInit`'te segfault ediyordu — `lib/raylib/rcore.c`,
+    "TULPAR PATCH" işaretli).
+  - **Faz 3 — sprite/texture/font (2026-07-12):** `load_texture(path): int`
+    (handle registry, DB-handle deseninin kopyası; 256 slot),
+    `draw_texture(tex,x,y)` / `draw_texture_ex(tex,x,y,scale,rotation)`,
+    `texture_width/height`, `unload_texture`; `load_font(path,size)` (TTF,
+    64 slot) + `text_font(...)`; `measure_text(s,size)` (ortalamak için).
+    Kaynaklar `close_window()`'da otomatik bırakılır (GL context / ses
+    aygıtı kapanmadan — sıralı teardown).
+  - **Faz 4 — ses/müzik (2026-07-12):** `load_sound/play_sound/stop_sound/
+    sound_volume` (128 slot) + `load_music/play_music/stop_music/
+    music_volume` (16 slot). Ses aygıtı ilk yüklemede otomatik açılır;
+    **çalan müzik stream'leri `frame_end()` içinde otomatik pompalanır**
+    (kullanıcıya "her karede update çağır" kuralı yıkılmaz).
+  - **Faz 5 — `run(update, draw)` yönetilen döngüsü (2026-07-12):** Wings
+    `listen()` modeli — fonksiyon-ref alır (`call(fn, 0)` dispatch, group()
+    deseni), döngüyü + kare zamanlamasını + **kare belleğini** yönetir:
+    döngü öncesi `arena_save`, her kare sonu `arena_restore` (tek-save-çok-
+    restore), çıkışta `arena_drop` + pencere kapatma. Kural wings'le aynı:
+    kalıcı oyun durumu global'lerde. Ek: `triangle()` (köşe sarımı işaretli
+    alanla otomatik düzeltilir — raylib CCW tuzağı kapalı), `screenshot()`
+    (PNG, CWD'ye — raylib yol kırpar).
+  - **Gamepad (2026-07-13):** `gamepad_available(id)` / `gamepad_name(id)` /
+    `gamepad_down(id, btn)` / `gamepad_pressed(id, btn)` /
+    `gamepad_axis(id, axis)` — klavyedeki tuş-adı deseni gamepad'e taşındı:
+    butonlar `"A"/"B"/"X"/"Y"` (PS eş anlamlıları `"CROSS"/"CIRCLE"/...`),
+    `"UP"/"DOWN"/...`, `"LB"/"RB"/"LT"/"RT"` (`"L1"/"L2"...`),
+    `"START"/"SELECT"/"GUIDE"`, `"L3"/"R3"`; eksenler `"LX"/"LY"/"RX"/"RY"`
+    (-1..1) + `"LT"/"RT"` tetikler. `gamepad_name` string döndüren ilk tame
+    builtin'i (`vm_alloc_string_aot` deseni). Donanımsız zarif yol
+    (false/""/0.0, bozuk ad 0) canlı doğrulandı.
+  - **Test + canlı doğrulama:** `tame_hello` / `tame_sprite_demo` /
+    `tame_run_demo` suite'lerde compile-only (pencere bloklar); derlemeleri
+    import → codegen → link zincirini doğrular. **WSLg altında pencereli
+    canlı doğrulama yapıldı (2026-07-12):** tüm çizim türleri + sprite
+    (normal & 3x/30° döndürülmüş) + ortalanmış yazı `tm_screenshot`
+    çıktısıyla piksel-kanıtlı; ters-sarım üçgen auto-fix'i görüldü; 60 FPS
+    pacing (`frame_time=0.0167`); ses aygıtı açıldı; `run()` 480 kare
+    çökmesiz. Headless: iki dilli zarif hata + exit 0. Test varlıkları
+    (`examples/tame_assets/ship.png` 239B + `beep.wav`) python stdlib ile
+    üretildi. **WASM/web hedefi de tarayıcıda canlı doğrulandı (2026-07-14):
+    mini/sprite/`run()` örnekleri headless Chromium'da 60 FPS render; `run()`/
+    `call()` web'de bozuktu (dlsym sembol tablosu yok) — `aot_register_func` +
+    arity'li dağıtımla düzeltildi (bkz. v1.0 kriterleri → Tame WASM).**
 - **Test framework (`lib/test.tpr`):** jest-style `assert`,
   `assert_eq_int/str/bool`, `assert_contains`, `assert_status`,
   `assert_throws`. Runner: `test()` + `test_summary()`.
@@ -1259,6 +1516,48 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Stdlib DX (Wings/ORM)
 
+- ✅ **Tame WASM — `tulpar build --target=web` (2026-07-13):** derleyici
+  wasm32-unknown-emscripten objesi üretir (CMake her mimaride WebAssembly
+  LLVM bileşenlerini bağlar), em++ `wasm/dist` arşivlerine linkler
+  (`wasm/build_tame_web.sh`: async'siz runtime + raylib PLATFORM_WEB +
+  tame) → `oyun.html + .js + .wasm`; ASYNCIFY bloklu oyun döngüsünü
+  tarayıcı event-loop'una çevirir. ⚠️ wasm32'de VMValue C ABI'si Win64
+  gibi sret+byval — `vmvalue_abi_uses_sret()` çalışma zamanında seçer ve
+  bayrak `llvm_backend_create`'ten ÖNCE kurulmalı (declare create içinde;
+  aksi halde wasm'da bozuk bitcast-thunk'ları üretilir — canlı yakalandı,
+  kapatıldı). HTML kabuğunu em++ değil Tulpar yazar (npm bağımlılığı yok).
+  Varlıklar `TULPAR_WEB_ASSETS=<dizin>` ile gömülür. **Tarayıcıda canlı
+  doğrulandı (2026-07-14, headless Chromium + swiftshader WebGL):**
+  `tame_web_mini` (elle döngü), `tame_sprite_demo` (gömülü ship.png/beep.wav —
+  texture + ses yüklendi) ve `tame_run_demo` (yönetilen `run()` döngüsü) üçü de
+  60 FPS render ediyor; global durum kareler arası korunuyor.
+  ⚠️ **`run()`/`call()`/wings `listen()` web'de bozuktu — düzeltildi
+  (2026-07-14):** isimle dağıtım (`aot_call_dynamic`) native'de `dlsym(RTLD_
+  DEFAULT)` + `-rdynamic`'e dayanıyordu; statik wasm modülü dlsym'e sembol
+  tablosu açmadığından `run(guncelle, ciz)` her karede "Function not found
+  't_...'" veriyordu. Çözüm: AOT backend main prolog'una her boxed top-level
+  fonksiyon için `aot_register_func(ad, ptr, arity)` emit ediyor → call()
+  önbelleği dlsym olmadan dolduruluyor (native de artık `-rdynamic`'ten
+  bağımsız). Ayrıca wasm `call_indirect` katı tip denetimi yüzünden 0-param
+  hedefi 2-ptr imzayla çağırmak "function signature mismatch" trap'ı veriyordu;
+  önbellek artık **arity** tutuyor ve dağıtıcı (`aot_invoke_boxed`) hedefin
+  gerçek imzasıyla eşleşen çağrıyı seçiyor. Önbellek 256→2048 slot (512-fonk
+  codegen sınırının üstünde).
+  ⚠️ **Ses açan oyunlar web'de çöküyordu — düzeltildi (2026-07-14):** raylib
+  ses arka ucu (miniaudio) ScriptProcessorNode geri-çağrısında
+  `Module.HEAPF32.buffer` okur; Emscripten 5.0 HEAP view'lerini artık Module'e
+  otomatik bağlamadığından `Module.HEAPF32` undefined → `load_sound`/
+  `load_music` kullanan her oyun her audio-frame'de "Cannot read properties of
+  undefined (reading 'buffer')" ile çöküyordu. Çözüm: web link satırına
+  `-sEXPORTED_RUNTIME_METHODS=HEAPF32` (aot_pipeline.cpp) — büyümede otomatik
+  yeniden atanır, sessiz oyunlara zararsız. Detay: docs/mindmap/Tame.md
+  "Web hedefi".
+- ✅ **Tame Faz 0-5 + gamepad — çekirdek + çizim + girdi (klavye/fare/
+  gamepad) + sprite/font + ses/müzik + `run()` yönetilen döngü: TAMAMLANDI
+  ve pencereli canlı doğrulandı (v3.10.0, 2026-07-12/13).** Adlı gamepad:
+  `gamepad_available/name/down/pressed/axis` — buton/eksen adla ("A"/"LB"/
+  "START", "LX"/"RT"; PS eş anlamlıları "CROSS"... dahil); donanımsız zarif
+  yol (false/""/0.0) doğrulandı. Detay: Yapılanlar → Stdlib + tooling → "Tame".
 - ✅ **Wings/ORM yazım kolaylığı turu — TAMAMLANDI (v3.7.0, 2026-07-03).**
   [WINGS_DX.md](WINGS_DX.md)'deki dört ayak da uygulandı; detay:
   Yapılanlar → HTTP runtime → "Wings/ORM DX turu". Testler:

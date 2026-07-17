@@ -1,0 +1,185 @@
+// Labirent (Kacis) — arcade preset motoru, 3 BÖLÜM.
+//
+//   ./tulpar examples/arcade_labirent.tpr
+//
+// Ok tuşları / WASD ile labirentte dolaş, tüm altın anahtarları topla (+10) →
+// sıradaki bölüm. 3 bölümü de bitir → KAZANDIN. Koridorlarda devriye gezen
+// kırmızılara değersen oyun biter, R ile baştan.
+//
+// Bölümler: 1) geniş labirent / 1 devriye   2) simetrik / 2 devriye
+//           3) sık labirent / 3 hızlı devriye
+//
+// Harita ASCII olarak yazılır ve `ord()` ile okunur — 20x15 hücre × 32px = 640x480.
+//   '#' duvar   '.' boşluk   'P' oyuncu   'A' anahtar   'E' devriye
+// Bu sayede bölüm eklemek = bir dizi string yazmak.
+//
+// Oyuncu MV_TOPDOWN olduğu için duvarlardan motorun MTV çözümü geçirmez.
+// Devriyeler MV_VELOCITY (duvar takmaz) → koridor sınırlarını kurulumda
+// haritayı tarayarak hesaplayıp her_kare içinde geri döndürüyoruz.
+
+import "arcade";
+
+// Izgara 20x15. Hücre 28px → 560x420; ekranın (640x480) üst 60px'i HUD'a
+// (skor y=10, bilgi şeridi y=38) bırakılır, labirent x'te ortalanır.
+// 32px hücreyle labirent tüm ekranı kaplıyor ve oyuncu HUD yazısının altında
+// kalıyordu — o yüzden hücre küçültülüp aşağı kaydırıldı.
+int HUC = 28;    // hücre boyutu (px)
+int ENT = 20;    // oyuncu/devriye boyutu — koridorda paylı sığsın
+int OFS = 4;     // hücre içi ortalama payı
+int OX  = 40;    // labirentin sol kenarı ((640 - 20*28) / 2)
+int OY  = 60;    // labirentin üst kenarı (HUD'un altı)
+
+array M1 = [
+    "####################",
+    "#P.......#........A#",
+    "#.#####..#..#####..#",
+    "#.....#..#......#..#",
+    "#####.#..####...#..#",
+    "#........#..#...#..#",
+    "#.####...#..#...#..#",
+    "#.#..E...#..#......#",
+    "#.#..#####..######.#",
+    "#.#.............#..#",
+    "#.#####.#######.#..#",
+    "#.......#.....#....#",
+    "#.#######.....#.####",
+    "#A............#...A#",
+    "####################"
+];
+
+array M2 = [
+    "####################",
+    "#P...#........#....#",
+    "#.##.#.######.#.##.#",
+    "#.#..#.#....#.#..#.#",
+    "#.#.##.#.##.#.##.#.#",
+    "#.#....#.#..#....#.#",
+    "#.######.#..######.#",
+    "#A..E....#.......A.#",
+    "#.######.#..######.#",
+    "#.#....#.#..#....#.#",
+    "#.#.##.#.####.##.#.#",
+    "#.#..#.#....E.#..#.#",
+    "#.##.#.######.#.##.#",
+    "#A...#........#...A#",
+    "####################"
+];
+
+array M3 = [
+    "####################",
+    "#P..#....E....#...A#",
+    "##..#.####.##.#.##.#",
+    "#...#.#..#..#.#..#.#",
+    "#.###.#.##..#.##.#.#",
+    "#.#...#..#..#....#.#",
+    "#.#.###..#..####.#.#",
+    "#E..#....#.......#.#",
+    "#.###.####.#####.#.#",
+    "#.#...#....#...#.#.#",
+    "#.#.###.####.#.#.#.#",
+    "#.#.....#....#...#.#",
+    "#.#######.####.###.#",
+    "#A......E.....#....#",
+    "####################"
+];
+
+array harita = [];       // güncel bölümün haritası
+int oyuncu_id = 0;
+
+array devriye = [];      // devriye handle'ları
+array d_min = [];        // devriyenin koridor sol sınırı (px)
+array d_max = [];        // devriyenin koridor sağ sınırı (px)
+
+// Hücre duvar mı? (harita dışı = duvar)
+func hucre_duvar(cx, cy): bool {
+    if (cx < 0 || cx > 19 || cy < 0 || cy > 14) { return true; }
+    return ord(harita[cy], cx) == 35;         // '#'
+}
+
+// (c,r) hücresindeki devriyenin yatay koridor sınırları — duvara dayanana dek tara.
+func sol_sinir(c, r): int {
+    for (int i = c; i >= 0; i = i - 1) {
+        if (hucre_duvar(i, r)) { return (i + 1) * HUC + OX + OFS; }
+    }
+    return OX + OFS;
+}
+func sag_sinir(c, r): int {
+    for (int i = c; i < 20; i = i + 1) {
+        if (hucre_duvar(i, r)) { return (i - 1) * HUC + OX + OFS; }
+    }
+    return 19 * HUC + OX + OFS;
+}
+
+// Haritayı entity'lere çevir. (Sarma fonksiyon — callback değil, argüman alabilir.)
+func harita_kur(m, dhiz) {
+    harita = m;                               // sol/sag_sinir bunu okur → önce ata
+    for (int r = 0; r < 15; r = r + 1) {
+        for (int c = 0; c < 20; c = c + 1) {
+            int ch = ord(harita[r], c);
+            if (ch == 35) {                   // '#' duvar
+                duvar(c * HUC + OX, r * HUC + OY, HUC, HUC, DARKBLUE);
+            }
+            if (ch == 65) {                   // 'A' anahtar
+                esya(c * HUC + OX + 6, r * HUC + OY + 6, 16, 16, GOLD);
+            }
+            if (ch == 80) {                   // 'P' oyuncu
+                oyuncu_id = oyuncu(c * HUC + OX + OFS, r * HUC + OY + OFS, ENT, ENT, SKYBLUE);
+                hiz_ayarla(oyuncu_id, 210);
+            }
+            if (ch == 69) {                   // 'E' devriye
+                int e = uret(c * HUC + OX + OFS, r * HUC + OY + OFS, ENT, ENT, RED, TAG_ENEMY, MV_VELOCITY);
+                hiz_ver(e, dhiz, 0);
+                push(devriye, e);
+                push(d_min, sol_sinir(c, r));
+                push(d_max, sag_sinir(c, r));
+            }
+        }
+    }
+}
+
+// Global kurulum — her bölüm yüklemesinde bölüm fn'inden ÖNCE çalışır.
+// (Oyuncu/duvar/anahtarların hepsini harita kurar, burada sadece sıfırlıyoruz.)
+func kur() {
+    temizle();
+    devriye = [];
+    d_min = [];
+    d_max = [];
+}
+
+func b1() { harita_kur(M1, 110); }
+func b2() { harita_kur(M2, 150); }
+func b3() { harita_kur(M3, 190); }
+
+// Devriyeleri koridor sınırında geri döndür (MV_VELOCITY duvar takmaz).
+func her_kare_is() {
+    for (int i = 0; i < len(devriye); i = i + 1) {
+        int e = devriye[i];
+        if (!yasiyor(e)) { continue; }
+        float ex  = x_of(e);
+        float evx = vx_of(e);
+        float lo  = d_min[i] * 1.0;
+        float hi  = d_max[i] * 1.0;
+        if (ex < lo && evx < 0.0) { konumla(e, lo, y_of(e)); hiz_ver(e, 0.0 - evx, 0); }
+        if (ex > hi && evx > 0.0) { konumla(e, hi, y_of(e)); hiz_ver(e, 0.0 - evx, 0); }
+    }
+}
+
+// Anahtar toplandı; bölümün sonuncusuysa sıradaki bölüm.
+func topla_cb() {
+    oldur(oteki());
+    skor_ekle(10);
+    if (tag_sayisi(TAG_ITEM) == 0) { bolum_gec(); }
+}
+
+func kaybet_cb() { oyun_bitti(); }
+
+sahne(640, 480, "Labirent");
+bilgi("Ok tuslari / WASD: hareket   |   Tum anahtarlari topla (+10), devriyelere degme");
+baslangicta(kur);
+bolum(1, b1);
+bolum(2, b2);
+bolum(3, b3);
+her_kare(her_kare_is);
+carpisinca(TAG_PLAYER, TAG_ITEM,  topla_cb);
+carpisinca(TAG_PLAYER, TAG_ENEMY, kaybet_cb);
+oyna();

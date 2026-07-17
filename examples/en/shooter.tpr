@@ -1,0 +1,69 @@
+// Shooter — top-down shooting game, 3 LEVELS.
+// English twin of examples/arcade_nisan.tpr.
+//
+//   ./tulpar examples/en/shooter.tpr
+//
+// Arrow/WASD to move, SPACE to fire. Shoot the reds falling from the top (+10).
+// Reach the target score → next level; clear all 3 → YOU WIN. A red touching
+// you ends the game, R to restart.
+//
+// Levels (score is kept across levels, so targets are cumulative):
+//   1) slow/sparse, target 30   2) denser/faster, target 60   3) fastest, target 100
+//
+// A bullet() that leaves the screen is auto-killed by the engine. No loop/collision/draw.
+
+import "arcade";
+
+int player_id = 0;
+int t = 0;              // frame counter (for periodic enemy spawns)
+
+int spawn_period = 45;  // spawn one enemy every N frames
+int enemy_vy     = 120; // enemy fall speed (px/s)
+int target       = 30;  // (cumulative) score that clears this level
+
+// Global setup — runs before every level's function on each (re)load.
+func setup() {
+    clear_entities();
+    t = 0;
+    player_id = player(300, 420, 28, 28, SKYBLUE);
+}
+
+// --- Levels: same layout, changing tempo/target -----------------------------
+func l1() { spawn_period = 45; enemy_vy = 120; target = 30;  }
+func l2() { spawn_period = 30; enemy_vy = 170; target = 60;  }
+func l3() { spawn_period = 20; enemy_vy = 220; target = 100; }
+
+func on_frame_fn() {
+    t = t + 1;
+
+    // Drop a random enemy from the top at this level's tempo.
+    if (mod(t, spawn_period) == 0) {
+        int ex = randint(20, 600);
+        int e = spawn(ex, 0 - 20, 26, 26, RED, TAG_ENEMY, MV_VELOCITY);
+        set_vel(e, 0, enemy_vy);
+    }
+
+    // SPACE → an upward bullet.
+    if (key_pressed("SPACE")) {
+        bullet(get_x(player_id) + 10.0, get_y(player_id), 8, 14, GOLD, 0, 0 - 420);
+    }
+
+    // Reached the target score → next level (on the last level → YOU WIN).
+    if (score() >= target) { next_level(); }
+}
+
+func hit_cb()  { kill(other()); score_add(10); }   // bullet touches enemy
+func lose_cb() { game_over(); }                     // enemy touches player
+
+language("en");
+scene(640, 480, "Shooter");
+// The strip must fit 640px — long text gets clipped (level/target are in the HUD).
+controls("Arrows/WASD: move   SPACE: fire   |   Shoot the reds (+10)");
+on_start(setup);
+level(1, l1);
+level(2, l2);
+level(3, l3);
+on_frame(on_frame_fn);
+on_hit(TAG_BULLET, TAG_ENEMY,  hit_cb);
+on_hit(TAG_PLAYER, TAG_ENEMY,  lose_cb);
+play();

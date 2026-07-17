@@ -1,0 +1,82 @@
+// Jump — platformer preset (gravity + platforms + jumping), 3 LEVELS.
+// English twin of examples/arcade_zipla.tpr — same game, English API + strings.
+//
+//   ./tulpar examples/en/jump.tpr
+//
+// Left/Right (A/D) to walk, SPACE / UP to jump. Gravity, ground and `wall()`
+// platforms come ready. Climb to the gold target → +100 and next level.
+// Clear all 3 levels → YOU WIN. No physics/collision/loop/draw code; the level
+// functions just place the layout.
+//
+// Levels:  1) easy, 2 platforms   2) higher/farther zigzag climb, 4 platforms
+//          3) narrow platforms + a moving lethal obstacle
+//
+// Jump budget (gravity 1400 / jump_power 640): apex ~146px, ~0.91s airborne →
+// ~180px horizontal. Layouts use <=80px vertical / <=140px horizontal gaps.
+
+import "arcade";
+
+int obstacle = 0;      // the moving obstacle in level 3
+
+// Global setup — runs before every level's function on each (re)load.
+func setup() {
+    clear_entities();
+    platformer(40, 380, 28, 28, SKYBLUE);        // platformer player (one line)
+    wall(0, 448, 640, 32, DARKGRAY);             // ground strip (every level)
+    obstacle = 0;
+}
+
+// --- Level 1: two platforms, relaxed jumps ----------------------------------
+func l1() {
+    wall(160, 350, 130, 20, BROWN);
+    wall(380, 250, 130, 20, BROWN);
+    item(430, 212, 24, 24, GOLD);                // target: on top of upper platform
+}
+
+// --- Level 2: four platforms, zigzag climb ----------------------------------
+func l2() {
+    wall(150, 372, 110, 20, BROWN);
+    wall(330, 292, 110, 20, BROWN);
+    wall(140, 212, 110, 20, BROWN);
+    wall(320, 140, 110, 20, BROWN);
+    item(365, 102, 24, 24, GOLD);
+}
+
+// --- Level 3: narrow platforms + lethal obstacle ----------------------------
+func l3() {
+    wall(150, 372, 76, 20, BROWN);
+    wall(300, 300, 76, 20, BROWN);
+    wall(460, 228, 76, 20, BROWN);
+    wall(250, 156, 76, 20, BROWN);
+    item(288, 118, 24, 24, GOLD);
+    // Horizontal patrolling obstacle — cuts the climb line (ignores walls).
+    obstacle = spawn(60, 250, 24, 24, RED, TAG_ENEMY, MV_VELOCITY);
+    set_vel(obstacle, 170, 0);
+}
+
+// Bounce the obstacle at the screen edges (the engine won't clamp MV_VELOCITY).
+func on_frame_fn() {
+    if (obstacle == 0) { return; }
+    if (!alive(obstacle)) { return; }
+    float ex = get_x(obstacle);
+    float evx = get_vx(obstacle);
+    if (ex < 20.0  && evx < 0.0) { set_vel(obstacle, 0.0 - evx, 0); }
+    if (ex > 596.0 && evx > 0.0) { set_vel(obstacle, 0.0 - evx, 0); }
+}
+
+func target_cb() { score_add(100); next_level(); }   // reach target → next level
+func lose_cb()   { game_over(); }                    // touch obstacle → game over
+
+language("en");
+gravity(1400);
+jump_power(640);
+scene(640, 480, "Jump");
+controls("Left/Right or A/D: walk   SPACE/UP: jump   |   Reach the gold target");
+on_start(setup);
+level(1, l1);
+level(2, l2);
+level(3, l3);
+on_frame(on_frame_fn);
+on_hit(TAG_PLAYER, TAG_ITEM,  target_cb);
+on_hit(TAG_PLAYER, TAG_ENEMY, lose_cb);
+play();

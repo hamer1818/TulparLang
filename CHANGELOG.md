@@ -10,11 +10,88 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 ## [v3.10.0]
 
 A terminal-UI builtin suite for building flicker-free, app-like TUIs in pure
-TulparLang, a locale probe, string-escape parsing, and an AOT codegen
-correctness fix for comparison-heavy programs on LLVM 22. All
+TulparLang, a locale probe, string-escape parsing, an AOT codegen
+correctness fix for comparison-heavy programs on LLVM 22, and **Tame — the
+2D game library** (`import "tame"`, vendored raylib). All
 backwards-compatible.
 
 ### Added
+- **Tame — 2D game library (`import "tame"`).** Open a window, draw shapes
+  and text, and read keyboard/mouse input from pure TulparLang — Pong-class
+  games in ~40 lines (`examples/tame_hello.tpr`):
+  - **Native layer:** vendored raylib 5.5 (`lib/raylib/`, zlib license, same
+    model as SQLite) + 26 `aot_tm_*` builtins in a **separate**
+    `libtulpar_tame.a` (`runtime/tame_impl.c` + `tame_bindings.cpp`, two-TU
+    split so raylib.h never meets the runtime/windows headers). The AOT
+    pipeline links it **only when the program imports "tame"** (or calls a
+    `tm_*` builtin), so ordinary binaries gain no GL/window dependency —
+    and even a tame binary dlopens X11/GL at runtime rather than linking
+    them (GLFW module loader + glad), so it stays portable.
+  - **Tulpar layer:** embedded `lib/tame.tpr` wraps the `tm_*` builtins with
+    game-friendly names — `window/running/frame_begin/frame_end/clear/rect/
+    circle/line/pixel/text/key_down/key_pressed/mouse_x/...` — plus
+    `rgb()/rgba()`, the full named raylib palette (`GOLD`, `SKYBLUE`, ...,
+    packed `0xRRGGBBAA` ints), and helpers (`rect_overlap`, `point_in_rect`,
+    `clamp`). Keys are addressed by name (`"W"`, `"SPACE"`, `"LEFT"`,
+    `"F1"`...), no key-constant table to learn.
+  - Codegen binds the family table-driven (`k_tame_builtins` in
+    `llvm_backend.cpp` — one row per builtin instead of 26 hand-rolled
+    dispatch blocks); type inference accepts int **or** float for
+    coordinates; all 26 symbols documented in the LSP hover/completion table.
+  - Headless/no-DISPLAY runs fail gracefully (bilingual error, clean exit)
+    instead of crashing — includes an upstream-matching patch to vendored
+    raylib's `InitWindow` (5.5 ignored `InitPlatform()` failure and
+    segfaulted in `rlglInit`).
+  - **Sprites, fonts, audio (Phases 3-4):** `load_texture/draw_texture/
+    draw_texture_ex(scale, rotation)/texture_width/height/unload_texture`,
+    `load_font` (TTF) + `text_font`, `measure_text` (centering);
+    `load_sound/play_sound/stop_sound/sound_volume` and
+    `load_music/play_music/stop_music/music_volume`. Resources are int
+    handles in slot registries (the DB-handle pattern); the audio device
+    opens automatically on first load, playing music streams are pumped
+    automatically inside `frame_end()`, and `close_window()` tears
+    everything down in the right order (GL resources before the context,
+    sounds before the device).
+  - **Managed game loop (Phase 5):** `run(update, draw)` — the Wings
+    `listen()` model for games. Takes two function refs, owns the loop,
+    frame pacing, **and frame memory**: one `arena_save` before the loop,
+    `arena_restore` every frame, `arena_drop` + window close on exit, so
+    per-frame strings/objects never accumulate. Same rule as Wings:
+    persistent game state lives in globals. Plus `triangle()` (vertex
+    winding auto-corrected — raylib's silent CCW-only trap is closed) and
+    `screenshot(path)` (PNG, written to the working directory).
+  - **Named gamepad input:** `gamepad_available(id)`, `gamepad_name(id)`,
+    `gamepad_down(id, btn)`, `gamepad_pressed(id, btn)`,
+    `gamepad_axis(id, axis)` — the keyboard's name-based pattern extended
+    to controllers: buttons `"A"/"B"/"X"/"Y"` (PS synonyms
+    `"CROSS"/"CIRCLE"/...`), dpad `"UP"/"DOWN"/...`, shoulders/triggers
+    `"LB"/"RB"/"LT"/"RT"` (`"L1"/"L2"...`), `"START"/"SELECT"/"GUIDE"`,
+    stick clicks `"L3"/"R3"`; axes `"LX"/"LY"/"RX"/"RY"` (-1..1) plus
+    `"LT"/"RT"` triggers. Without a controller everything degrades
+    gracefully (false / `""` / 0.0).
+  - Verified live under WSLg: every draw primitive, sprite scaling and
+    rotation, and centered text confirmed pixel-level via `tm_screenshot`
+    output; 60 FPS pacing (`frame_time` = 0.0167 s); reversed-winding
+    triangle rendered; audio device opened; `run()` ran 480 frames stable.
+  - `tame_hello.tpr`, `tame_sprite_demo.tpr`, and `tame_run_demo.tpr` are
+    compile-only in the test suites (a window would block on machines with
+    a display); compiling them end-to-end exercises the whole
+    import → codegen → link chain. Test assets live in
+    `examples/tame_assets/`.
+- **Web target: `tulpar build --target=web` (or `--web`).** Compiles the
+  program to a `wasm32-unknown-emscripten` object with the same LLVM
+  backend (WebAssembly components now linked on every arch) and links it
+  with `em++` against the `wasm/dist` archives produced by
+  `wasm/build_tame_web.sh` (async-free runtime + raylib `PLATFORM_WEB` +
+  the tame bindings) → `game.html + .js + .wasm`, runnable in a browser.
+  `-sASYNCIFY` turns Tulpar's blocking `while (running())` game loop into
+  browser-friendly cooperative yielding (raylib's web backend calls
+  `emscripten_sleep` in `EndDrawing`). Game assets are embedded with
+  `TULPAR_WEB_ASSETS=<dir>` (`--preload-file`). Two ABI notes for
+  maintainers: on wasm32 the VMValue C ABI is sret+byval like Win64 — the
+  codegen picks it at runtime via `vmvalue_abi_uses_sret()`
+  (`llvm_values.cpp`) — and `tulpar_async` is excluded from the web
+  runtime (stackful ucontext coroutines don't exist under Emscripten).
 - **Full-screen TUI builtins.** The flicker-free details (alternate screen,
   synchronized output, cursor home, line-wrap off) are hidden behind clean
   builtins so apps read like Python and never write raw ANSI themselves:
@@ -53,7 +130,156 @@ backwards-compatible.
   walking back over continuation bytes (`0x80`–`0xBF`), which a naive
   drop-one-byte would corrupt.
 
+### Added
+- **Arcade: entity slot recycling + generation-tagged handles.** A killed
+  entity's slot now returns to a free-list and is reused, so a game that spawns
+  bullets forever no longer grows the parallel arrays without bound (a shooter
+  creating ~133 entities over 600 frames now plateaus at 22 slots). Reusing a
+  raw index would silently alias: code holding a dead entity's id would start
+  driving whoever took the slot. So ids handed out are now **handles** —
+  `_egen[slot] * 2^20 + slot` — and killing bumps the slot's generation, making
+  every existing handle to it stale at once. The whole public id API resolves
+  through `_slot_of()`; a stale handle is ignored (setters no-op, getters return
+  a neutral value, `alive()/yasiyor()` honestly returns false) instead of
+  corrupting the new occupant. `entity_count()/entity_sayisi()` counts *allocated
+  slots*, not live entities — new `live_count()/canli_sayisi()` gives the live
+  count. Verified on native and web.
+- **Arcade: levels (`bolum()/level()`).** Multi-level games are now an engine
+  feature instead of something each game re-implements — register a 0-arg setup
+  function per level and call `next_level()/bolum_gec()` when its win condition
+  is met. New (bilingual, as everything in arcade): `level(n, fn)/bolum`,
+  `next_level()/bolum_gec`, `level_no()/bolum_no`, `level_count()/bolum_sayisi`,
+  `is_won()/kazandin_mi`, plus `tag_count(tag)/tag_sayisi` (live entities with a
+  tag — for "all items collected?" conditions, since `live_count()` also counts
+  the player and walls) and `get_vx()/get_vy()` (`vx_of`/`vy_of`).
+  - **Semantics:** loading a level runs `clear_entities()` → the global
+    `on_start`/`baslangicta` function → that level's function. **Score is kept
+    across levels** (it's the player's running total); `R` restarts from level 1
+    with score 0. `_ar_state` gained `2 = won`, drawn as a KAZANDIN screen with
+    the total score; the HUD gains a `Bolum n/N` indicator (top-right) and a
+    ~1.2 s "Bölüm N" banner on each transition. `is_over()/bitti_mi()` now means
+    `state != 0` (winning is also an ending).
+  - **Backwards compatible:** with no level registered, state 2 never occurs and
+    behaviour is exactly as before (`on_start` + OYUN BITTI + R). Level
+    registrations survive `clear_entities()/temizle()` — like collision rules,
+    they are part of the game's definition, not its entities.
+  - **`next_level()` defers the switch** (a `_lvl_pending` flag applied at end of
+    frame in `_ar_update`/`step`) rather than swapping levels in place: it is
+    typically called from a collision callback, i.e. while `_ar_collisions()` is
+    iterating the parallel arrays — calling `clear_entities()` right there would
+    mutate the array being walked.
+  - Regression suite: `tests/arcade_levels.test.tpr` (headless via `step()/adim()`).
+- **Levels in the four bundled games (3 each).** `arcade_zipla` (easy → zigzag
+  climb → narrow platforms + a moving lethal obstacle), `arcade_topla` (3 items/1
+  enemy → 5/2 → 6/3 fast), `arcade_nisan` (cumulative target score 30 → 60 → 100
+  as spawn rate and speed rise), and `tame_snake` (built on raw tame, not arcade,
+  so its level flow is hand-rolled: 5 food per level, `MOVE_FRAMES` 8→6→4, plus
+  obstacle walls and a win screen in level 3). All four are also built for the
+  web in `web_demo/` with a refreshed index page.
+- **Four more arcade games, 3 levels each** — each one exercises a different part
+  of the engine, so together they double as a feature sweep:
+  - `arcade_tugla.tpr` (Breakout): bricks are `item()`s, the ball is a
+    `TAG_BULLET` + `MV_VELOCITY` entity, the paddle is `MV_NONE` driven
+    horizontally from `on_frame` (`MV_TOPDOWN` would move in 4 directions).
+    Levels: flat wall → pyramid → gapped wall + faster ball.
+  - `arcade_uzay.tpr` (Space Invaders): a fleet that moves as one body (reverses
+    and drops a step at the edge), so the invaders are `MV_NONE` and driven from
+    `on_frame`. Levels: 3×5 slow → 4×6 fast → 4×7 + the fleet shoots back (a
+    custom tag `6` for enemy bullets, alongside the built-in `TAG_*`).
+  - `arcade_labirent.tpr` (maze): layouts are written as ASCII rows and read with
+    `ord()` (`#` wall, `P` player, `A` key, `E` patrol), so adding a level means
+    writing 15 strings. The player is `MV_TOPDOWN` and rides the engine's MTV wall
+    resolution; patrols are `MV_VELOCITY` (which ignores walls), so their corridor
+    bounds are computed at setup by scanning the map. Levels: open → symmetric /
+    2 patrols → dense / 3 fast patrols.
+  - `arcade_karsiya.tpr` (Frogger): lanes of `MV_VELOCITY` traffic wrapped around
+    at ±660 — the wrap has to happen *before* the engine's own "64px outside the
+    world" auto-kill. Levels: 3 slow lanes → 4 → 5 fast.
+- **Arcade: engine-drawn HUD is bilingual (`language()/dil()`).** The strings the
+  engine renders itself — the score prefix, the `Level n/N` indicator, the
+  `Level N` banner, GAME OVER / YOU WIN and the restart hint — are now drawn in
+  Turkish or English by a language code. It defaults to the system UI language
+  (`sys_lang()`), and `language("en")` / `dil("tr")` overrides it. Turkish stays
+  the default and byte-for-byte the old output, so existing games are unchanged.
+  The `controls()/bilgi()` strip is game-supplied, so its language is the calling
+  game's choice.
+- **English twins of all eight games (`examples/en/`).** Each Turkish game has a
+  full English counterpart — English API aliases (`player()`, `level()`,
+  `next_level()`, …; every arcade function already has a TR+EN name), English
+  comments, English `scene()` title and `controls()` text, and a `language("en")`
+  call. `jump`, `collect`, `shooter`, `snake`, `breakout`, `invaders`, `maze`,
+  `crossing`. They live in `examples/en/` so the `examples/*.tpr` test runner
+  doesn't double-count them; verified by direct compile + browser screenshot.
+- **`web_demo` is bilingual.** `web_demo/index.html` (generated by a small script
+  from the game sources, so it stays in sync) has a page-level TR/EN switch, a
+  Play (TR) / Play (EN) button per game — both language builds are published
+  (`zipla.html` + `jump.html`, …) — and a "See code / Kodu gör" panel with TR/EN
+  tabs showing the actual embedded source, so a visitor sees each game written in
+  both languages.
+
 ### Fixed
+- **Arcade: `arcade_topla` read enemy velocity with a handle.** The bounce logic
+  indexed the engine's parallel arrays directly (`_evx[enemy_id]`), but ids are
+  handles (`gen * 2^20 + slot`), so it read past the array rather than the
+  enemy's velocity. Use the new `vx_of()/vy_of()` getters, which resolve the
+  handle to a slot.
+- **Arcade: `overlaps()/degiyor()` had the same handle bug.** It took entity ids
+  but indexed the parallel arrays with them directly, so the manual overlap test
+  read out of bounds for every id (every id is a handle since slot recycling
+  landed). It now resolves through `_slot_of()` and returns false for a stale or
+  dead handle.
+- **`tulpar build --target=web -o game.html` produced `game.html.html`.** The web
+  output name is a *base*: the `.html` shell, `.js` and `.wasm` are all appended
+  to it, so spelling the extension (the natural thing to write) doubled it and
+  also produced `game.html.js`. A trailing `.html` is now stripped once, so
+  `-o game` and `-o game.html` both emit `game.html` + `game.js` + `game.wasm`.
+- **A local redeclared in a sibling block lost its initializer.** `if`/`else`
+  blocks don't open a scope (only functions, lambdas, `for` and main do), so two
+  declarations of the same name in sibling branches landed in the *same* scope.
+  `add_local` appended a second entry while every lookup scans front-to-back and
+  returns the first hit, so the later declaration's initializer store went to an
+  alloca nothing ever read: the variable read back as the first branch's value,
+  or — when that branch never ran — as uninitialised stack garbage. A
+  declaration now reuses the existing slot, so the most recent one wins.
+  Surfaced as the arcade platformer reading a garbage speed
+  (`float s = _espeed[i]`) and slamming the player into the screen edge.
+  Regression suite: `tests/scope_redecl.test.tpr`.
+- **Silently wrong code from the native (all-int) fast path.** Functions typed
+  `func f(int p): int` are emitted by `codegen_native_func_def`, a hand-rolled
+  i64 statement subset that **silently drops** any statement it has no explicit
+  case for. Its eligibility gate (`native_codegen_supports_stmt`) was far more
+  permissive than the emitter, so ordinary typed code was miscompiled with no
+  diagnostic:
+  - `if (c) { return 1; } else { return 2; }` never emitted the else branch —
+    every input taking the else returned **0**.
+  - `if (c) { int a = 1; return a; }` dropped the declaration, leaving `a`
+    unregistered and **crashing the compiler** (segfault).
+  - a nested `if` inside a `while`/`for` body was dropped (loop bodies only
+    emitted assignments and declarations), so accumulator loops computed the
+    wrong result.
+
+  The gate now mirrors the emitter exactly; anything richer falls back to the
+  boxed VMValue codegen, which handles the full language. Guarded recursion
+  (`if (n < 2) { return n; }` in `fib`) still takes the native path.
+  Regression suite: `tests/native_fastpath.test.tpr`.
+- **A builtin call in a native loop body was silently dropped** (open since
+  2026-07-03). Native locals are i64, but `codegen_typed_expr` returns a *boxed*
+  VMValue whenever an expression isn't statically int — typically when it
+  contains a call. The while/for body emitters stored only the
+  `INFERRED_INT`/`BOOL` case and discarded anything else without a diagnostic,
+  so the store never happened:
+  - `while (i < 3) { toplam = toplam + mod(n, 10); i = i + 1; }` returned **0** —
+    the accumulator kept its old value.
+  - `while (b != 0) { b = mod(a, b); ... }` (iterative Euclid GCD) never updated
+    `b` → **segfault**.
+  - `while (n > 0) { n = toInt(n / 10); ... }` never updated `n` → **infinite
+    hang**.
+
+  Loop bodies now unbox the payload (field 2), the same treatment the loop
+  *condition* already applied to a boxed compare. `for` bodies had the identical
+  defect and got the identical fix. This is the long-standing "while loop +
+  builtin call miscompiles, use `for`/recursion instead" workaround — it is no
+  longer needed.
 - **Invalid O3 IR for comparison-heavy programs on LLVM 22.** The AOT backend's
   boxed-comparison fast-path merge (int / float / runtime-fallback) built its
   boolean result three different ways, so when a later truthiness check let

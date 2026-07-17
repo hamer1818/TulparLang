@@ -1,0 +1,8 @@
+# Emscripten build outputs — regenerate with:
+#   ./tulpar build --target=web examples/<game>.tpr web_demo/<name>
+# index.html (the entry page) and gen_index.py are the tracked source of truth.
+*.wasm
+*.js
+*.data
+*.html
+!index.html

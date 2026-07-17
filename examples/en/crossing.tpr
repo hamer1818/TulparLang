@@ -1,0 +1,95 @@
+// Crossing (Frogger) — arcade preset engine, 3 LEVELS.
+// English twin of examples/arcade_karsiya.tpr.
+//
+//   ./tulpar examples/en/crossing.tpr
+//
+// Arrow keys / WASD to move; reach the gold strip at the top (+50) without
+// touching the flowing traffic → next level. Clear all 3 → YOU WIN.
+// Touching a car ends the game, R to restart.
+//
+// Levels: 1) 3 slow lanes   2) 4 lanes   3) 5 fast lanes
+//
+// Each lane is a few MV_VELOCITY entities driven by the engine at their own
+// speed; we only wrap the ones that leave the screen back around. Since the
+// engine auto-kills velocity entities more than 64px outside the world, the
+// wrap must happen BEFORE that bound (±660).
+
+import "arcade";
+
+int player_id = 0;
+array cars = [];         // this level's car handles
+
+int START_X = 308;
+int START_Y = 440;
+
+// Global setup — runs before every level's function on each (re)load.
+func setup() {
+    clear_entities();
+    cars = [];
+    player_id = player(START_X, START_Y, 24, 24, LIME);
+    move_speed(player_id, 230);
+    // Goal strip (one wide band). y=58: it must sit BELOW the HUD (score y=10,
+    // hint y=38..54) — at y=10 the score text overlapped the band.
+    item(8, 58, 624, 26, GOLD);
+}
+
+// Lay out one lane: `count` cars evenly spaced, all flowing at `speed`.
+// (A wrapper — not a callback, so it may take arguments.)
+func lane(y, speed, count, color) {
+    int gap = toInt(640 / count);
+    for (int i = 0; i < count; i = i + 1) {
+        int c = spawn(i * gap, y, 56, 28, color, TAG_ENEMY, MV_VELOCITY);
+        set_vel(c, speed, 0);
+        push(cars, c);
+    }
+}
+
+// --- Level 1: 3 lanes, slow -------------------------------------------------
+func l1() {
+    lane(340, 90,       3, RED);
+    lane(250, 0 - 110,  3, ORANGE);
+    lane(160, 130,      3, MAROON);
+}
+
+// --- Level 2: 4 lanes -------------------------------------------------------
+func l2() {
+    lane(370, 130,      4, RED);
+    lane(290, 0 - 150,  3, ORANGE);
+    lane(210, 170,      4, MAROON);
+    lane(130, 0 - 140,  3, PINK);
+}
+
+// --- Level 3: 5 lanes, fast -------------------------------------------------
+func l3() {
+    lane(390, 180,      4, RED);
+    lane(320, 0 - 200,  4, ORANGE);
+    lane(250, 220,      5, MAROON);
+    lane(180, 0 - 190,  4, PINK);
+    lane(110, 240,      5, VIOLET);
+}
+
+// Wrap a car that leaves the screen back in from the other side (no engine wrap).
+func on_frame_fn() {
+    for (int i = 0; i < len(cars); i = i + 1) {
+        int c = cars[i];
+        if (!alive(c)) { continue; }
+        float cx = get_x(c);
+        if (get_vx(c) > 0.0 && cx > 660.0)       { set_pos(c, 0.0 - 60.0, get_y(c)); }
+        if (get_vx(c) < 0.0 && cx < 0.0 - 60.0)  { set_pos(c, 660.0, get_y(c)); }
+    }
+}
+
+func goal_cb() { score_add(50); next_level(); }   // reached the gold strip
+func lose_cb() { game_over(); }                    // touched a car
+
+language("en");
+scene(640, 480, "Crossing");
+controls("Arrow keys / WASD: move   |   Reach the gold strip (+50) without touching cars");
+on_start(setup);
+level(1, l1);
+level(2, l2);
+level(3, l3);
+on_frame(on_frame_fn);
+on_hit(TAG_PLAYER, TAG_ITEM,  goal_cb);
+on_hit(TAG_PLAYER, TAG_ENEMY, lose_cb);
+play();

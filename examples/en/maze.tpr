@@ -1,0 +1,187 @@
+// Maze (Escape) — arcade preset engine, 3 LEVELS.
+// English twin of examples/arcade_labirent.tpr.
+//
+//   ./tulpar examples/en/maze.tpr
+//
+// Arrow keys / WASD to move through the maze, collect all the gold keys (+10) →
+// next level. Clear all 3 → YOU WIN. Touching a red patrol roaming the corridors
+// ends the game, R to restart.
+//
+// Levels: 1) open maze / 1 patrol   2) symmetric / 2 patrols
+//         3) dense maze / 3 fast patrols
+//
+// Layouts are written as ASCII and read with `ord()` — 20x15 cells (28px each),
+// centered under a 60px HUD band. '#' wall  '.' space  'P' player  'A' key  'E' patrol.
+// So adding a level means writing 15 strings.
+//
+// The player is MV_TOPDOWN, so the engine's MTV resolution keeps it out of walls.
+// Patrols are MV_VELOCITY (which ignores walls), so their corridor bounds are
+// computed at setup by scanning the map, and reversed in on_frame.
+
+import "arcade";
+
+// 20x15 grid. 28px cell → 560x420; the screen's (640x480) top 60px is left to the
+// HUD (score y=10, hint strip y=38), maze centered in x. A 32px cell covered the
+// whole screen and left the player under the HUD text — so the cell was shrunk
+// and pushed down.
+int CELL = 28;   // cell size (px)
+int ENT  = 20;   // player/patrol size — fits a corridor with margin
+int OFS  = 4;    // in-cell centering margin
+int OX   = 40;   // maze left edge ((640 - 20*28) / 2)
+int OY   = 60;   // maze top edge (below the HUD)
+
+array M1 = [
+    "####################",
+    "#P.......#........A#",
+    "#.#####..#..#####..#",
+    "#.....#..#......#..#",
+    "#####.#..####...#..#",
+    "#........#..#...#..#",
+    "#.####...#..#...#..#",
+    "#.#..E...#..#......#",
+    "#.#..#####..######.#",
+    "#.#.............#..#",
+    "#.#####.#######.#..#",
+    "#.......#.....#....#",
+    "#.#######.....#.####",
+    "#A............#...A#",
+    "####################"
+];
+
+array M2 = [
+    "####################",
+    "#P...#........#....#",
+    "#.##.#.######.#.##.#",
+    "#.#..#.#....#.#..#.#",
+    "#.#.##.#.##.#.##.#.#",
+    "#.#....#.#..#....#.#",
+    "#.######.#..######.#",
+    "#A..E....#.......A.#",
+    "#.######.#..######.#",
+    "#.#....#.#..#....#.#",
+    "#.#.##.#.####.##.#.#",
+    "#.#..#.#....E.#..#.#",
+    "#.##.#.######.#.##.#",
+    "#A...#........#...A#",
+    "####################"
+];
+
+array M3 = [
+    "####################",
+    "#P..#....E....#...A#",
+    "##..#.####.##.#.##.#",
+    "#...#.#..#..#.#..#.#",
+    "#.###.#.##..#.##.#.#",
+    "#.#...#..#..#....#.#",
+    "#.#.###..#..####.#.#",
+    "#E..#....#.......#.#",
+    "#.###.####.#####.#.#",
+    "#.#...#....#...#.#.#",
+    "#.#.###.####.#.#.#.#",
+    "#.#.....#....#...#.#",
+    "#.#######.####.###.#",
+    "#A......E.....#....#",
+    "####################"
+];
+
+array grid = [];        // current level's map
+int player_id = 0;
+
+array patrols = [];     // patrol handles
+array p_min = [];       // patrol corridor left bound (px)
+array p_max = [];       // patrol corridor right bound (px)
+
+// Is this cell a wall? (outside the map = wall)
+func cell_wall(cx, cy): bool {
+    if (cx < 0 || cx > 19 || cy < 0 || cy > 14) { return true; }
+    return ord(grid[cy], cx) == 35;           // '#'
+}
+
+// Horizontal corridor bounds of the patrol at (c,r) — scan until a wall.
+func left_bound(c, r): int {
+    for (int i = c; i >= 0; i = i - 1) {
+        if (cell_wall(i, r)) { return (i + 1) * CELL + OX + OFS; }
+    }
+    return OX + OFS;
+}
+func right_bound(c, r): int {
+    for (int i = c; i < 20; i = i + 1) {
+        if (cell_wall(i, r)) { return (i - 1) * CELL + OX + OFS; }
+    }
+    return 19 * CELL + OX + OFS;
+}
+
+// Turn the map into entities. (A wrapper — not a callback, so it may take args.)
+func build_map(m, pspeed) {
+    grid = m;                                 // left/right_bound read this → assign first
+    for (int r = 0; r < 15; r = r + 1) {
+        for (int c = 0; c < 20; c = c + 1) {
+            int ch = ord(grid[r], c);
+            if (ch == 35) {                   // '#' wall
+                wall(c * CELL + OX, r * CELL + OY, CELL, CELL, DARKBLUE);
+            }
+            if (ch == 65) {                   // 'A' key
+                item(c * CELL + OX + 6, r * CELL + OY + 6, 16, 16, GOLD);
+            }
+            if (ch == 80) {                   // 'P' player
+                player_id = player(c * CELL + OX + OFS, r * CELL + OY + OFS, ENT, ENT, SKYBLUE);
+                move_speed(player_id, 210);
+            }
+            if (ch == 69) {                   // 'E' patrol
+                int e = spawn(c * CELL + OX + OFS, r * CELL + OY + OFS, ENT, ENT, RED, TAG_ENEMY, MV_VELOCITY);
+                set_vel(e, pspeed, 0);
+                push(patrols, e);
+                push(p_min, left_bound(c, r));
+                push(p_max, right_bound(c, r));
+            }
+        }
+    }
+}
+
+// Global setup — runs before every level's function on each (re)load.
+// (The map builds player/walls/keys; here we just reset.)
+func setup() {
+    clear_entities();
+    patrols = [];
+    p_min = [];
+    p_max = [];
+}
+
+func l1() { build_map(M1, 110); }
+func l2() { build_map(M2, 150); }
+func l3() { build_map(M3, 190); }
+
+// Reverse patrols at their corridor bounds (MV_VELOCITY ignores walls).
+func on_frame_fn() {
+    for (int i = 0; i < len(patrols); i = i + 1) {
+        int e = patrols[i];
+        if (!alive(e)) { continue; }
+        float ex  = get_x(e);
+        float evx = get_vx(e);
+        float lo  = p_min[i] * 1.0;
+        float hi  = p_max[i] * 1.0;
+        if (ex < lo && evx < 0.0) { set_pos(e, lo, get_y(e)); set_vel(e, 0.0 - evx, 0); }
+        if (ex > hi && evx > 0.0) { set_pos(e, hi, get_y(e)); set_vel(e, 0.0 - evx, 0); }
+    }
+}
+
+// Key collected; if it was the last, next level.
+func collect_cb() {
+    kill(other());
+    score_add(10);
+    if (tag_count(TAG_ITEM) == 0) { next_level(); }
+}
+
+func lose_cb() { game_over(); }
+
+language("en");
+scene(640, 480, "Maze");
+controls("Arrow keys / WASD: move   |   Collect all keys (+10), avoid the patrols");
+on_start(setup);
+level(1, l1);
+level(2, l2);
+level(3, l3);
+on_frame(on_frame_fn);
+on_hit(TAG_PLAYER, TAG_ITEM,  collect_cb);
+on_hit(TAG_PLAYER, TAG_ENEMY, lose_cb);
+play();

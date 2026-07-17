@@ -1,0 +1,142 @@
+// Tugla Kirma (Breakout) — arcade preset motoru, 3 BÖLÜM.
+//
+//   ./tulpar examples/arcade_tugla.tpr
+//
+// Sol/Sağ (A/D) ile raketi sür, topu düşürme. Tüm tuğlaları kır (+10) →
+// sıradaki bölüm. 3 bölümü de bitir → KAZANDIN. R ile baştan.
+//
+// Bölümler: 1) 3 sıra düz duvar   2) piramit   3) boşluklu duvar + hızlı top
+//
+// Motorla eşleşme: tuğlalar `esya()` (TAG_ITEM), top `TAG_BULLET` + MV_VELOCITY,
+// raket `TAG_PLAYER` + MV_NONE (yatay hareketi her_kare içinde sürüyoruz —
+// MV_TOPDOWN 4 yöne giderdi, raket sadece sağa/sola gitmeli).
+
+import "arcade";
+
+int raket = 0;
+int top   = 0;
+int bounced = 0;        // top bu karede zaten sektirildi mi? (bkz. kir_cb)
+
+int RAKET_W = 100;
+int RAKET_Y = 440;
+
+// Global kurulum — her bölüm yüklemesinde bölüm fn'inden ÖNCE çalışır.
+func kur() {
+    temizle();
+    raket = uret(270, RAKET_Y, RAKET_W, 14, SKYBLUE, TAG_PLAYER, MV_NONE);
+    top   = uret(316, 300, 12, 12, GOLD, TAG_BULLET, MV_VELOCITY);
+}
+
+// Bir sıra tuğla diz. (Sarma fonksiyon — callback değil, argüman alabilir;
+// 0-arg kısıtı yalnız call() ile çağrılanlar için.)
+func tugla_satir(y, adet, x0, renk) {
+    for (int i = 0; i < adet; i = i + 1) {
+        esya(x0 + i * 72, y, 68, 18, renk);
+    }
+}
+
+// --- Bölüm 1: 3 sıra düz duvar ----------------------------------------------
+func b1() {
+    hiz_ver(top, 190, 0 - 250);
+    tugla_satir(80,  8, 32, RED);
+    tugla_satir(104, 8, 32, ORANGE);
+    tugla_satir(128, 8, 32, GOLD);
+}
+
+// --- Bölüm 2: piramit -------------------------------------------------------
+func b2() {
+    hiz_ver(top, 220, 0 - 290);
+    tugla_satir(72,  8, 32,  MAROON);
+    tugla_satir(96,  6, 104, RED);
+    tugla_satir(120, 4, 176, ORANGE);
+    tugla_satir(144, 2, 248, GOLD);
+}
+
+// --- Bölüm 3: boşluklu duvar + hızlı top ------------------------------------
+func b3() {
+    hiz_ver(top, 250, 0 - 330);
+    tugla_satir(72,  8, 32,  PURPLE);
+    // Ortası boş sıra — topun yukarı kaçıp arkadan kırmasına izin verir.
+    tugla_satir(96,  3, 32,  VIOLET);
+    tugla_satir(96,  3, 248, VIOLET);
+    tugla_satir(120, 8, 32,  RED);
+    tugla_satir(144, 3, 104, ORANGE);
+    tugla_satir(144, 3, 320, ORANGE);
+}
+
+func her_kare_is() {
+    float dt = frame_time();
+    if (dt <= 0.0) { dt = 0.0166667; }
+    if (dt > 0.05) { dt = 0.05; }
+    bounced = 0;
+
+    // --- Raket: sadece yatay -------------------------------------------------
+    float rx = x_of(raket);
+    if (key_down("LEFT")  || key_down("A")) { rx = rx - 430.0 * dt; }
+    if (key_down("RIGHT") || key_down("D")) { rx = rx + 430.0 * dt; }
+    if (rx < 0.0) { rx = 0.0; }
+    float rmax = 640.0 - RAKET_W;
+    if (rx > rmax) { rx = rmax; }
+    konumla(raket, rx, RAKET_Y);
+
+    // --- Top: kenarlardan sek ------------------------------------------------
+    // Yön kontrolü (`&& bvx < 0.0`) kenarda titremeyi önler: sınırın dışındayken
+    // her karede tekrar ters çevirmek topu oraya kilitlerdi.
+    float bx  = x_of(top);
+    float by  = y_of(top);
+    float bvx = vx_of(top);
+    float bvy = vy_of(top);
+    if (bx < 0.0   && bvx < 0.0) { bvx = 0.0 - bvx; }
+    if (bx > 628.0 && bvx > 0.0) { bvx = 0.0 - bvx; }
+    if (by < 0.0   && bvy < 0.0) { bvy = 0.0 - bvy; }
+    hiz_ver(top, bvx, bvy);
+
+    // Alt sınırı geçti → kaybettin.
+    if (by > 474.0) { oyun_bitti(); }
+}
+
+// Top rakete değince: yukarı sek + rakete göre sapma ver (merkezden uzaklaştıkça
+// daha yatay) — klasik breakout nişan alma hissi.
+func raket_cb() {
+    int b = oteki();                       // ben()=raket (TAG_PLAYER), oteki()=top
+    float bx = x_of(b);
+    float sapma = (bx + 6.0) - (x_of(raket) + RAKET_W * 0.5);
+    float nvx = sapma * 5.0;
+    if (nvx > 320.0) { nvx = 320.0; }
+    if (nvx < 0.0 - 320.0) { nvx = 0.0 - 320.0; }
+    float hiz = 0.0 - abs_f(vy_of(b));     // her zaman YUKARI
+    hiz_ver(b, nvx, hiz);
+    konumla(b, bx, RAKET_Y - 14.0);        // rakete gömülüp kilitlenmesin
+}
+
+// Top tuğlaya değince: tuğlayı kır, +10, dikey sek. Son tuğlaysa bölüm geç.
+//
+// `bounced` koruması: bir karede iki tuğlaya birden değince iki kez ters
+// çevirmek topu eski yönüne döndürür (tuğlaların içinden geçer gibi görünür).
+func kir_cb() {
+    int b = ben();                         // ben()=top (TAG_BULLET), oteki()=tuğla
+    oldur(oteki());
+    skor_ekle(10);
+    if (bounced == 0) {
+        hiz_ver(b, vx_of(b), 0.0 - vy_of(b));
+        bounced = 1;
+    }
+    if (tag_sayisi(TAG_ITEM) == 0) { bolum_gec(); }
+}
+
+// Mutlak değer (float) — tame'de yok.
+func abs_f(v): float {
+    if (v < 0.0) { return 0.0 - v; }
+    return v;
+}
+
+sahne(640, 480, "Tugla Kirma");
+bilgi("Sol/Sag veya A/D: raket   |   Tum tuglalari kir (+10), topu dusurme");
+baslangicta(kur);
+bolum(1, b1);
+bolum(2, b2);
+bolum(3, b3);
+her_kare(her_kare_is);
+carpisinca(TAG_PLAYER, TAG_BULLET, raket_cb);
+carpisinca(TAG_BULLET, TAG_ITEM,   kir_cb);
+oyna();
