@@ -1,0 +1,102 @@
+// Meteor Dodge — arcade preset engine, 3 LEVELS.
+// English twin of examples/arcade_goktasi.tpr — same game, English API + strings.
+//
+//   ./tulpar examples/en/dodge.tpr
+//
+// Left/Right (A/D) to run; avoid the meteors falling from above. Survive the
+// level's stated time → next level. Clear all 3 → YOU WIN. Touch a meteor → game
+// over, R to restart. Every meteor you dodge is +1.
+//
+// Levels: 1) 12s / sparse-slow   2) 15s / dense-fast   3) 18s / densest
+//
+// Meteors are TAG_ENEMY + MV_VELOCITY (fall down); the engine auto-kills anything
+// 64px off-screen. For the "dodged" count we keep meteor handles in our own array
+// and score them once they leave the bottom (they stop being alive before dying).
+
+import "arcade";
+
+int player_id = 0;
+array rocks = [];         // falling meteor handles (for the dodge count)
+float elapsed = 0.0;      // time elapsed in this level (s)
+int t = 0;                // frame counter
+
+// Level settings
+float TARGET_TIME = 12.0; // time to survive (s)
+int spawn_period = 26;    // a meteor every N frames
+int rock_speed = 210;     // fall speed (px/s)
+int rock_min = 22;        // meteor size lower/upper bound
+int rock_max = 40;
+
+// Global setup — runs before every level's function on each (re)load.
+func setup() {
+    clear_entities();
+    rocks = [];
+    elapsed = 0.0;
+    t = 0;
+    player_id = player(300, 430, 30, 24, SKYBLUE);
+    move_speed(player_id, 300);          // topdown base speed (we use it horizontally)
+}
+
+// --- Levels -----------------------------------------------------------------
+func l1() { TARGET_TIME = 12.0; spawn_period = 28; rock_speed = 200; }
+func l2() { TARGET_TIME = 15.0; spawn_period = 20; rock_speed = 260; }
+func l3() { TARGET_TIME = 18.0; spawn_period = 14; rock_speed = 320; }
+
+func on_frame_fn() {
+    float dt = frame_time();
+    if (dt <= 0.0) { dt = 0.0166667; }
+    if (dt > 0.05) { dt = 0.05; }
+    t = t + 1;
+    elapsed = elapsed + dt;
+
+    // --- Player: horizontal only (topdown would move in 4 directions) -------
+    float px = get_x(player_id);
+    if (key_down("LEFT")  || key_down("A")) { px = px - 300.0 * dt; }
+    if (key_down("RIGHT") || key_down("D")) { px = px + 300.0 * dt; }
+    if (px < 0.0) { px = 0.0; }
+    if (px > 610.0) { px = 610.0; }
+    set_pos(player_id, px, 430);
+
+    // --- Meteor spawn -------------------------------------------------------
+    if (mod(t, spawn_period) == 0) {
+        int size = randint(rock_min, rock_max);
+        int tx = randint(0, 640 - size);
+        int e = spawn(tx, 0 - size, size, size, MAROON, TAG_ENEMY, MV_VELOCITY);
+        set_vel(e, 0, rock_speed);
+        push(rocks, e);
+    }
+
+    // --- Dodge count: a meteor past the bottom (now dead) is +1 -------------
+    for (int i = 0; i < len(rocks); i = i + 1) {
+        int e = rocks[i];
+        if (e < 0) { continue; }             // already counted (marked)
+        if (!alive(e)) {                     // engine killed it off-screen → dodged
+            score_add(1);
+            rocks[i] = 0 - 1;                // don't count again
+        }
+    }
+
+    // --- Time's up → next level ---------------------------------------------
+    if (elapsed >= TARGET_TIME) { next_level(); }
+}
+
+// Draw the remaining time (over the automatic draw, next to the auto score).
+func draw_extra() {
+    int remaining = toInt(TARGET_TIME - elapsed) + 1;
+    if (remaining < 0) { remaining = 0; }
+    text("Time: " + toString(remaining) + " s", 240, 12, 20, SKYBLUE);
+}
+
+func lose_cb() { game_over(); }
+
+language("en");
+scene(640, 480, "Meteor Dodge");
+controls("Left/Right or A/D: run   |   Avoid the meteors, run out the clock");
+on_start(setup);
+level(1, l1);
+level(2, l2);
+level(3, l3);
+on_frame(on_frame_fn);
+on_draw(draw_extra);
+on_hit(TAG_PLAYER, TAG_ENEMY, lose_cb);
+play();

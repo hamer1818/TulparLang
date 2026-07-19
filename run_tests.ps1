@@ -18,6 +18,7 @@ $compileOnly = @(
   'tame_hello.tpr','tame_sprite_demo.tpr','tame_run_demo.tpr','tame_web_mini.tpr','tame_snake.tpr',
   'arcade_topla.tpr','arcade_zipla.tpr','arcade_nisan.tpr',
   'arcade_tugla.tpr','arcade_uzay.tpr','arcade_labirent.tpr','arcade_karsiya.tpr',
+  'arcade_ucus.tpr','arcade_goktasi.tpr',
   # utils.tpr is a module designed to be imported by 07_modules.tpr; running
   # it standalone is meaningless (no top-level program), but it should still
   # parse + lower cleanly so we at least catch compile-side regressions.

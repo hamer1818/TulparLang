@@ -56,6 +56,18 @@ games = [
          d_en="Arrow keys / WASD; reach the gold strip without touching the flowing cars.",
          lv_tr="3 şerit yavaş → 4 şerit → 5 şerit hızlı",
          lv_en="3 lanes slow → 4 lanes → 5 fast lanes"),
+    dict(tr="ucus", en="flight", emoji="🐦", name_tr="Uçuş", name_en="Flight",
+         src_tr="arcade_ucus.tpr", src_en="en/flight.tpr",
+         d_tr="SPACE / YUKARI: kanat çırp; boruların arasından geç.",
+         d_en="SPACE / UP: flap; fly through the pipe gaps.",
+         lv_tr="geniş boşluk / yavaş → dar / hızlı → en dar / en hızlı",
+         lv_en="wide gap / slow → narrow / fast → narrowest / fastest"),
+    dict(tr="goktasi", en="dodge", emoji="☄️", name_tr="Göktaşı", name_en="Meteor Dodge",
+         src_tr="arcade_goktasi.tpr", src_en="en/dodge.tpr",
+         d_tr="Sol/Sağ veya A/D; düşen göktaşlarından sakın, süreyi doldur.",
+         d_en="Left/Right or A/D; avoid the falling meteors, run out the clock.",
+         lv_tr="12 sn / seyrek → 15 sn / sık → 18 sn / en yoğun",
+         lv_en="12s / sparse → 15s / dense → 18s / densest"),
 ]
 
 # Kaynakları oku ve gömülecek JSON'u kur (anahtar = html taban adı).

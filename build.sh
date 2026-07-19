@@ -145,7 +145,8 @@ if [ "$ACTION" = "test" ]; then
                         "arcade_topla.tpr" "arcade_zipla.tpr" \
                         "arcade_nisan.tpr" "arcade_tugla.tpr" \
                         "arcade_uzay.tpr" "arcade_labirent.tpr" \
-                        "arcade_karsiya.tpr")
+                        "arcade_karsiya.tpr" "arcade_ucus.tpr" \
+                        "arcade_goktasi.tpr")
     # tame_*.tpr: display'li makinede pencere açıp kullanıcı kapatana
     # dek bloklar (headless'ta zarif hata ile hemen çıkar) — deterministik
     # olsun diye compile-only. Derlemeleri libtulpar_tame.a link zincirini

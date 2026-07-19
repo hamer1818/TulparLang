@@ -1,0 +1,138 @@
+// Flight (Flappy) — arcade preset engine, 3 LEVELS.
+// English twin of examples/arcade_ucus.tpr — same game, English API + strings.
+//
+//   ./tulpar examples/en/flight.tpr
+//
+// SPACE / UP to flap; fly through the pipe gaps. Each pass +1. Clear the level's
+// target number of pipes → next level. Clear all 3 → YOU WIN. Hit a pipe, the
+// ceiling or the ground → game over, R to restart.
+//
+// Levels: 1) wide gap / slow   2) narrow / fast   3) narrowest / fastest
+//
+// The bird is MV_NONE: gravity + flap are driven by hand in on_frame (the engine's
+// MV_PLATFORM jump only works when grounded; flappy flaps mid-air). Pipes are
+// TAG_ENEMY + MV_VELOCITY, NOT solid wall() — walls would let the engine push the
+// bird out via MTV; we want it to die on contact. The engine auto-kills velocity
+// entities 64px off-screen → pipe cleanup is free.
+
+import "arcade";
+
+int bird = 0;
+float bird_vy = 0.0;      // bird vertical velocity (px/s, + down)
+int started = 0;          // 0 = waiting for first flap (bird hovers, no physics/pipes)
+
+// Physics (tuned by hand — flappy feel): ~0.9s from rest to ground (comfortable
+// reaction margin), a flap draws a ~0.7s arc → ~1.4 flaps/s. Too much GRAV and the
+// bird slams into the ground before the first pipe (the first version, 1500, did).
+float GRAV = 1050.0;      // gravity (px/s^2)
+float FLAP = 400.0;       // flap instantaneous upward speed (px/s)
+int BIRD_X = 120;
+int GROUND = 452;         // y of the ground strip (bird dies past it)
+
+// Pipe tracking (parallel arrays — our own state, not engine-internal).
+array pipe_top = [];      // top pipe handle
+array pipe_x   = [];      // pair's x (for scoring)
+array pipe_passed = [];   // 1 = this pair was scored
+int t = 0;                // frame counter (periodic pipe spawn)
+
+// Level settings
+int gap = 150;            // pipe gap (px)
+int pipe_speed = 150;     // pipes' leftward flow speed (px/s)
+int spawn_period = 95;    // spawn a pipe pair every N frames
+int target = 5;           // pipes that clear this level
+int passed = 0;           // pipes passed in this level
+
+// Global setup — runs before every level's function on each (re)load.
+func setup() {
+    clear_entities();
+    pipe_top = [];
+    pipe_x = [];
+    pipe_passed = [];
+    t = 0;
+    passed = 0;
+    bird_vy = 0.0;
+    started = 0;
+    bird = spawn(BIRD_X, 220, 26, 20, GOLD, TAG_PLAYER, MV_NONE);
+    wall(0, GROUND, 640, 28, DARKGRAY);          // ground (visual only; death is manual)
+}
+
+// --- Levels -----------------------------------------------------------------
+func l1() { gap = 160; pipe_speed = 150; spawn_period = 100; target = 5; }
+func l2() { gap = 135; pipe_speed = 195; spawn_period = 82;  target = 7; }
+func l3() { gap = 115; pipe_speed = 240; spawn_period = 68;  target = 9; }
+
+// Spawn a pipe pair: two green columns, top and bottom, with a gap between.
+func spawn_pipe() {
+    int gy = randint(90, GROUND - gap - 40);      // top edge of the gap
+    int toph = gy;                                // top pipe height
+    int botY = gy + gap;
+    int both = GROUND - botY;
+    int u = spawn(660, 0, 52, toph, LIME, TAG_ENEMY, MV_VELOCITY);
+    set_vel(u, 0 - pipe_speed, 0);
+    int a = spawn(660, botY, 52, both, LIME, TAG_ENEMY, MV_VELOCITY);
+    set_vel(a, 0 - pipe_speed, 0);
+    push(pipe_top, u);
+    push(pipe_x, 660);
+    push(pipe_passed, 0);
+}
+
+func on_frame_fn() {
+    float dt = frame_time();
+    if (dt <= 0.0) { dt = 0.0166667; }
+    if (dt > 0.05) { dt = 0.05; }
+    bool flap = key_pressed("SPACE") || key_pressed("UP") || key_pressed("W");
+
+    // Ready state: the bird hovers until the first flap, no physics/pipes yet
+    // (real Flappy — gives the player a reaction margin). First flap starts play.
+    if (started == 0) {
+        if (flap) { started = 1; bird_vy = 0.0 - FLAP; }
+        return;
+    }
+
+    // --- Bird: gravity + flap -----------------------------------------------
+    if (flap) { bird_vy = 0.0 - FLAP; }
+    bird_vy = bird_vy + GRAV * dt;
+    float ny = get_y(bird) + bird_vy * dt;
+    if (ny < 0.0) { ny = 0.0; bird_vy = 0.0; }
+    set_pos(bird, BIRD_X, ny);
+    if (ny + 20.0 >= GROUND * 1.0) { game_over(); }   // hit the ground
+
+    // --- Pipe spawn + score (only once play started) ------------------------
+    t = t + 1;
+    if (mod(t, spawn_period) == 0) { spawn_pipe(); }
+
+    for (int i = 0; i < len(pipe_top); i = i + 1) {
+        int u = pipe_top[i];
+        if (!alive(u)) { continue; }
+        // Did the pipe pass the bird? (score once)
+        if (pipe_passed[i] == 0 && get_x(u) + 52.0 < BIRD_X * 1.0) {
+            pipe_passed[i] = 1;
+            score_add(1);
+            passed = passed + 1;
+            if (passed >= target) { next_level(); }
+        }
+    }
+}
+
+// "Start" hint in the ready state (over the automatic draw).
+func draw_extra() {
+    if (started == 0) {
+        str h = "Press SPACE / UP to start";
+        text(h, (screen_width() - measure_text(h, 22)) / 2, 200, 22, WHITE);
+    }
+}
+
+// Bird hits a pipe → game over.
+func lose_cb() { game_over(); }
+
+language("en");
+scene(640, 480, "Flight");
+controls("SPACE / UP: flap   |   Fly through the pipe gaps (+1)");
+on_start(setup);
+level(1, l1);
+level(2, l2);
+level(3, l3);
+on_frame(on_frame_fn);
+on_draw(draw_extra);
+on_hit(TAG_PLAYER, TAG_ENEMY, lose_cb);
+play();

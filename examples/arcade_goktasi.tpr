@@ -1,0 +1,100 @@
+// Goktasi (dodge) — arcade preset motoru, 3 BÖLÜM.
+//
+//   ./tulpar examples/arcade_goktasi.tpr
+//
+// Sol/Sağ (A/D) ile kaç; yukarıdan düşen göktaşlarından sakın. Her bölümde
+// belirtilen süre hayatta kal → sıradaki bölüm. 3 bölümü de bitir → KAZANDIN.
+// Bir göktaşına değersen oyun biter, R ile baştan. Kaçtığın her taş +1.
+//
+// Bölümler: 1) 12 sn / seyrek-yavaş   2) 15 sn / sık-hızlı   3) 18 sn / en yoğun
+//
+// Göktaşları TAG_ENEMY + MV_VELOCITY (aşağı düşer); motor ekrandan 64px çıkanı
+// otomatik öldürür. "Kaçıldı" sayımı için taş handle'larını kendi dizimizde
+// tutup ekranın altını geçince skorluyoruz (ölmeden önce yaşamıyor olurlar).
+
+import "arcade";
+
+int oyuncu_id = 0;
+array taslar = [];        // düşen göktaşı handle'ları (kaçış sayımı için)
+float sure = 0.0;         // bu bölümde geçen süre (sn)
+int t = 0;                // kare sayacı
+
+// Bölüm ayarları
+float HEDEF_SURE = 12.0;  // hayatta kalınacak süre (sn)
+int spawn_period = 26;    // kaç karede bir taş
+int tas_hiz = 210;        // düşme hızı (px/sn)
+int tas_min = 22;         // taş boyut alt/üst sınırı
+int tas_max = 40;
+
+// Global kurulum — her bölüm yüklemesinde bölüm fn'inden ÖNCE çalışır.
+func kur() {
+    temizle();
+    taslar = [];
+    sure = 0.0;
+    t = 0;
+    oyuncu_id = oyuncu(300, 430, 30, 24, SKYBLUE);
+    hiz_ayarla(oyuncu_id, 300);          // topdown taban hız (yatay kullanacağız)
+}
+
+// --- Bölümler ---------------------------------------------------------------
+func b1() { HEDEF_SURE = 12.0; spawn_period = 28; tas_hiz = 200; }
+func b2() { HEDEF_SURE = 15.0; spawn_period = 20; tas_hiz = 260; }
+func b3() { HEDEF_SURE = 18.0; spawn_period = 14; tas_hiz = 320; }
+
+func her_kare_is() {
+    float dt = frame_time();
+    if (dt <= 0.0) { dt = 0.0166667; }
+    if (dt > 0.05) { dt = 0.05; }
+    t = t + 1;
+    sure = sure + dt;
+
+    // --- Oyuncu: sadece yatay (motor topdown 4 yöne giderdi) -----------------
+    float px = x_of(oyuncu_id);
+    if (key_down("LEFT")  || key_down("A")) { px = px - 300.0 * dt; }
+    if (key_down("RIGHT") || key_down("D")) { px = px + 300.0 * dt; }
+    if (px < 0.0) { px = 0.0; }
+    if (px > 610.0) { px = 610.0; }
+    konumla(oyuncu_id, px, 430);
+
+    // --- Göktaşı üretimi -----------------------------------------------------
+    if (mod(t, spawn_period) == 0) {
+        int boyut = randint(tas_min, tas_max);
+        int tx = randint(0, 640 - boyut);
+        int e = uret(tx, 0 - boyut, boyut, boyut, MAROON, TAG_ENEMY, MV_VELOCITY);
+        hiz_ver(e, 0, tas_hiz);
+        push(taslar, e);
+    }
+
+    // --- Kaçış sayımı: altı geçen (artık ölü) taş +1 ------------------------
+    for (int i = 0; i < len(taslar); i = i + 1) {
+        int e = taslar[i];
+        if (e < 0) { continue; }             // zaten sayıldı (işaretlendi)
+        if (!yasiyor(e)) {                   // motor ekran dışında öldürdü → kaçıldı
+            skor_ekle(1);
+            taslar[i] = 0 - 1;               // bir daha sayma
+        }
+    }
+
+    // --- Süre doldu → sıradaki bölüm ----------------------------------------
+    if (sure >= HEDEF_SURE) { bolum_gec(); }
+}
+
+// Kalan süreyi ekrana yaz (HUD'un altına, otomatik skorun yanına ek).
+func ciz_ek() {
+    int kalan = toInt(HEDEF_SURE - sure) + 1;
+    if (kalan < 0) { kalan = 0; }
+    text("Kalan: " + toString(kalan) + " sn", 240, 12, 20, SKYBLUE);
+}
+
+func kaybet_cb() { oyun_bitti(); }
+
+sahne(640, 480, "Goktasi");
+bilgi("Sol/Sag veya A/D: kac   |   Goktaslarindan sakin, sureyi doldur");
+baslangicta(kur);
+bolum(1, b1);
+bolum(2, b2);
+bolum(3, b3);
+her_kare(her_kare_is);
+ciz_ustune(ciz_ek);
+carpisinca(TAG_PLAYER, TAG_ENEMY, kaybet_cb);
+oyna();
