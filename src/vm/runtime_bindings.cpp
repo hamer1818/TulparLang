@@ -1015,6 +1015,22 @@ void aot_stringbuilder_append(StringBuilder *sb, const char *str, int len) {
   sb->buffer[sb->length] = '\0';
 }
 
+// Format a Tulpar float for display. Tulpar's float carries 32-bit (float)
+// precision — the LLVM backend uses a 32-bit float type — so a plain "%g" at
+// 6 sig-figs both loses precision (1000000.5 -> "1e+06") and, at higher fixed
+// precision, exposes the float32 rounding noise (3.14 -> "3.14000010490417").
+// Instead find the SHORTEST decimal that round-trips to the same float32:
+// 3.14 -> "3.14", 1000000.5 -> "1000000.5", 0.1+0.2 -> "0.3". Mirrors what
+// Python/Go/Rust print for their floats. Returns the written length.
+static int aot_format_float(char *buf, size_t n, double value) {
+  float f = (float)value;
+  for (int prec = 1; prec <= 9; prec++) {  // 9 sig-figs round-trips any float32
+    int len = snprintf(buf, n, "%.*g", prec, (double)f);
+    if ((float)strtod(buf, nullptr) == f) return len;
+  }
+  return snprintf(buf, n, "%.9g", (double)f);
+}
+
 // Append VMValue to StringBuilder (handles any type)
 void aot_stringbuilder_append_vmvalue(StringBuilder *sb, VMValue val) {
   if (IS_STRING(val)) {
@@ -1026,7 +1042,7 @@ void aot_stringbuilder_append_vmvalue(StringBuilder *sb, VMValue val) {
     aot_stringbuilder_append(sb, buf, len);
   } else if (IS_FLOAT(val)) {
     char buf[64];
-    int len = snprintf(buf, sizeof(buf), "%g", AS_FLOAT(val));
+    int len = aot_format_float(buf, sizeof(buf), AS_FLOAT(val));
     aot_stringbuilder_append(sb, buf, len);
   } else if (IS_BOOL(val)) {
     const char *s = AS_BOOL(val) ? "true" : "false";
@@ -1607,9 +1623,12 @@ void print_vm_value(VMValue value) {
   case VM_VAL_INT:
     printf("%lld", AS_INT(value));
     break;
-  case VM_VAL_FLOAT:
-    printf("%g", AS_FLOAT(value));
+  case VM_VAL_FLOAT: {
+    char fbuf[64];
+    aot_format_float(fbuf, sizeof(fbuf), AS_FLOAT(value));
+    printf("%s", fbuf);
     break;
+  }
   case VM_VAL_OBJ:
     if (IS_STRING(value)) {
       printf("%s", AS_STRING(value)->chars);
@@ -1675,8 +1694,8 @@ VMValue aot_to_string(VMValue value) {
              AS_INT(value));
     break;
   case VM_VAL_FLOAT:
-    snprintf(aot_string_buffer, sizeof(aot_string_buffer), "%g",
-             AS_FLOAT(value));
+    aot_format_float(aot_string_buffer, sizeof(aot_string_buffer),
+                     AS_FLOAT(value));
     break;
   case VM_VAL_BOOL:
     snprintf(aot_string_buffer, sizeof(aot_string_buffer), "%s",
@@ -2205,7 +2224,7 @@ static void js_serialize(JSBuilder *b, VMValue v, int depth) {
     js_append_n(b, tmp, len);
   } else if (IS_FLOAT(v)) {
     char tmp[64];
-    int len = snprintf(tmp, sizeof(tmp), "%g", AS_FLOAT(v));
+    int len = aot_format_float(tmp, sizeof(tmp), AS_FLOAT(v));
     js_append_n(b, tmp, len);
   } else if (IS_BOOL(v)) {
     if (AS_BOOL(v)) {

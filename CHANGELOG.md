@@ -218,6 +218,16 @@ backwards-compatible.
   both languages.
 
 ### Fixed
+- **Float-to-string lost precision and printed scientific notation
+  (`toString(1000000.5)` → `"1e+06"`).** Float formatting used `"%g"` (6
+  significant figures), which dropped the fraction of larger values and
+  switched to scientific notation. Tulpar floats carry 32-bit precision, so a
+  naive bump to higher fixed precision instead exposed float32 rounding noise
+  (`3.14` → `"3.14000010490417"`). Float display now prints the **shortest
+  decimal that round-trips to the same float32** (new `aot_format_float`, used
+  by toString / print / string-concat / JSON alike): `3.14` → `"3.14"`,
+  `1000000.5` → `"1000000.5"`, `0.1 + 0.2` → `"0.3"` — matching how Python/Go/Rust
+  render floats.
 - **String ordering comparisons (`<`, `>`, `<=`, `>=`) were always false.** In
   `vm_binary_op` the string/string type pair fell through to a
   `default: VM_BOOL(0)` for the four ordering operators, so any `"a" < "b"`

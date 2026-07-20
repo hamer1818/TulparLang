@@ -1301,6 +1301,11 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Dil seviyesi
 
+- ✅ **Float→string en-kısa-round-trip (düzeltildi 2026-07-20).** `toString(1000000.5)`
+  → "1e+06" veriyordu (`%g` 6 basamak → kesir kaybı + bilimsel gösterim); float 32-bit
+  olduğu için sabit yüksek precision da gürültü gösteriyordu (3.14 → "3.14000010490417").
+  Artık aynı float32'ye round-trip eden en kısa ondalık basılıyor (`aot_format_float`;
+  toString/print/concat/JSON ortak): 3.14→"3.14", 1000000.5→"1000000.5", 0.1+0.2→"0.3".
 - ✅ **String sıralama karşılaştırması (`<`,`>`,`<=`,`>=`) ÇALIŞIYOR (düzeltildi 2026-07-20).**
   `vm_binary_op`'ta string/string çifti `default: VM_BOOL(0)`'a düşüyordu → sıralama
   operatörleri hep false, string dizisi sıralama sessizce hiçbir şey yapmıyordu
