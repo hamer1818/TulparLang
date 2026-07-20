@@ -215,6 +215,73 @@ static VMValue aot_invoke_boxed(void (*fp)(VMValue *), int arity, VMValue arg) {
   return result;
 }
 
+// Maximum user-parameter count call(name, a, b, ...) can forward. 8 covers
+// every realistic callback (arcade/game hooks take 0-3); the codegen and the
+// switch below must agree on this cap.
+#define AOT_CALL_MAX_ARGS 8
+
+// N-argument generalisation of aot_invoke_boxed. `fp` is the boxed entry
+// `void t_name(VMValue* result, [VMValue* arg0, ...])`; `args`/`argc` are the
+// values call(name, a, b, ...) supplied. We call through the signature the
+// callee ACTUALLY has (its registered `arity`), padding missing params with
+// VOID and dropping extras — so the pointer count always matches the callee
+// and wasm's typed call_indirect never traps. When arity is unknown (-1, the
+// native dlsym fallback) we trust argc.
+static VMValue aot_invoke_boxed_n(void (*fp)(VMValue *), int arity,
+                                  const VMValue *args, int argc) {
+  VMValue result = VM_VOID();
+  int n = (arity >= 0) ? arity : argc;
+  if (n < 0) n = 0;
+  if (n > AOT_CALL_MAX_ARGS) n = AOT_CALL_MAX_ARGS;
+  // Materialise exactly `n` param slots so each `&slots[i]` is a valid pointer
+  // even when the caller passed fewer values than the callee declares.
+  VMValue slots[AOT_CALL_MAX_ARGS];
+  for (int i = 0; i < n; i++) slots[i] = (i < argc) ? args[i] : VM_VOID();
+  switch (n) {
+  case 0:
+    fp(&result);
+    break;
+  case 1:
+    ((void (*)(VMValue *, VMValue *))fp)(&result, &slots[0]);
+    break;
+  case 2:
+    ((void (*)(VMValue *, VMValue *, VMValue *))fp)(&result, &slots[0],
+                                                    &slots[1]);
+    break;
+  case 3:
+    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *))fp)(
+        &result, &slots[0], &slots[1], &slots[2]);
+    break;
+  case 4:
+    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fp)(
+        &result, &slots[0], &slots[1], &slots[2], &slots[3]);
+    break;
+  case 5:
+    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *,
+               VMValue *))fp)(&result, &slots[0], &slots[1], &slots[2],
+                              &slots[3], &slots[4]);
+    break;
+  case 6:
+    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *,
+               VMValue *))fp)(&result, &slots[0], &slots[1], &slots[2],
+                              &slots[3], &slots[4], &slots[5]);
+    break;
+  case 7:
+    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *,
+               VMValue *, VMValue *))fp)(&result, &slots[0], &slots[1],
+                                        &slots[2], &slots[3], &slots[4],
+                                        &slots[5], &slots[6]);
+    break;
+  default: // 8
+    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *,
+               VMValue *, VMValue *, VMValue *))fp)(
+        &result, &slots[0], &slots[1], &slots[2], &slots[3], &slots[4],
+        &slots[5], &slots[6], &slots[7]);
+    break;
+  }
+  return result;
+}
+
 // AOT Dynamic Call Support
 VMValue aot_call_dynamic(VMValue func_name) {
   if (!IS_STRING(func_name)) {
@@ -318,6 +385,53 @@ VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
   }
 
   return aot_invoke_boxed(func_ptr, arity, arg);
+}
+
+// call(name, a, b, ...) — dynamic dispatch forwarding N arguments (N >= 2) to
+// the target. Resolution is identical to aot_call_dynamic/_1 (same `t_<name>`
+// symbol + cache); only the number of forwarded params differs. `args` points
+// at `argc` contiguous VMValues the codegen stored in a stack array. The
+// callee's registered arity drives the exact call signature (aot_invoke_boxed_n),
+// so a `func on_hit(a, b)` collision handler can finally be call()'d with its
+// two context args instead of smuggling them through globals.
+VMValue aot_call_dynamic_n(VMValue func_name, VMValue *args, int argc) {
+  if (!IS_STRING(func_name)) {
+    printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
+                                       "Runtime Error: call() expects string"));
+    return VM_VOID();
+  }
+
+  ObjString *str = AS_STRING(func_name);
+  char *original_name = str->chars;
+  size_t orig_len = (size_t)str->length;
+
+  uint32_t hash = aot_call_hash(original_name, orig_len);
+  int arity = -1;
+  void (*func_ptr)(VMValue *) =
+      aot_call_cache_lookup(original_name, orig_len, hash, &arity);
+
+  if (!func_ptr) {
+    char name[256];
+    if (strcmp(original_name, "main") == 0) {
+      snprintf(name, sizeof(name), "main");
+    } else {
+      snprintf(name, sizeof(name), "t_%s", original_name);
+    }
+    func_ptr = (void (*)(VMValue *))tulpar_dlsym(TULPAR_RTLD_DEFAULT, name);
+    if (!func_ptr) {
+      func_ptr = (void (*)(VMValue *))tulpar_dlsym(TULPAR_RTLD_DEFAULT, original_name);
+    }
+    if (!func_ptr) {
+      printf("%s '%s' (AOT)\n",
+             tulpar::i18n::tr_en("Calisma Zamani Hatasi: Fonksiyon bulunamadi",
+                                 "Runtime Error: Function not found"),
+             name);
+      return VM_VOID();
+    }
+    aot_call_cache_insert(original_name, orig_len, hash, func_ptr, -1);
+  }
+
+  return aot_invoke_boxed_n(func_ptr, arity, args, argc);
 }
 
 // Pre-register a top-level function's name -> boxed entry point so call()

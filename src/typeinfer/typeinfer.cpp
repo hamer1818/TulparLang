@@ -244,7 +244,10 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
       // Too MANY args is an error; too FEW is allowed — the codegen pads the
       // missing trailing slots with a default (0), which is what lets
       // `serve()` stand in for `serve(<default port>)`.
-      if (got > expected) {
+      // `call(name, ...)` is genuinely variadic (it forwards a callee's args by
+      // name), so registering it with one param must not flag the extra args.
+      const bool is_variadic_builtin = (effective_name == "call");
+      if (got > expected && !is_variadic_builtin) {
         report_error(ctx,
                      "Function '%s' expects %d argument(s), got %d at line %d",
                      call->name.c_str(), expected, got, call->loc.line);

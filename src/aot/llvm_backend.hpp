@@ -279,6 +279,7 @@ typedef struct {
   // Dynamic Call (Wings support)
   LLVMValueRef func_aot_call_dynamic;
   LLVMValueRef func_aot_call_dynamic_1; // call(name, arg) — 1-arg dynamic dispatch
+  LLVMValueRef func_aot_call_dynamic_n; // call(name, a, b, ...) — N-arg dynamic dispatch
   LLVMValueRef func_aot_create_closure;
   LLVMValueRef func_aot_call_closure;
 

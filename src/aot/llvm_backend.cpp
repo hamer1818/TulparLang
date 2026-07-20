@@ -1478,6 +1478,17 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_call_dynamic_1 =
       LLVMAddFunction(backend->module, "aot_call_dynamic_1", call_dyn1_type);
 
+  // aot_call_dynamic_n(handler_name, VMValue* args, int32 argc) -> VMValue —
+  // dispatch forwarding N (>=2) arguments. `args` is a plain pointer + count,
+  // NOT a VMValue, so it passes through llvm_make_vmvalue_func_type's coercion
+  // untouched (only vm_value_type params get the sret/byval treatment).
+  LLVMTypeRef call_dynn_params[] = {backend->vm_value_type, backend->ptr_type,
+                                    backend->int32_type};
+  LLVMTypeRef call_dynn_type =
+      llvm_make_vmvalue_func_type(backend, call_dynn_params, 3, 0);
+  backend->func_aot_call_dynamic_n =
+      LLVMAddFunction(backend->module, "aot_call_dynamic_n", call_dynn_type);
+
   // aot_create_closure(ptr, ptr, int32) -> ptr
   LLVMTypeRef create_cls_params[] = {backend->ptr_type, backend->ptr_type, backend->int32_type};
   LLVMTypeRef create_cls_type = LLVMFunctionType(backend->ptr_type, create_cls_params, 3, 0);
@@ -2355,6 +2366,53 @@ int struct_is_trivially_unboxable(StructTypeEntry *st) {
   return 1;
 }
 
+// Box a native (trivially-unboxable) struct's fields into a plain key-value
+// VM_OBJECT, keyed by field NAME. This is what lets a typed `struct` value
+// survive insertion into a dynamically-typed array/object: once the static
+// type is gone, `arr[i].field` is a runtime string-key lookup (vm_get/set_
+// element), which only works on an OBJECT — not on the compact int-indexed
+// ObjStruct that `aot_struct_alloc_from_fields` produces. Non-unboxable
+// (float-carrying) structs already live as objects, so this makes int/bool
+// structs behave identically in arrays. `alloca` points at the native
+// `{i64,...}` aggregate; `st` supplies the ordered field names/types.
+static LLVMValueRef box_native_struct_as_object(LLVMBackend *backend,
+                                                LLVMValueRef alloca,
+                                                StructTypeEntry *st) {
+  LLVMValueRef obj_args[] = {LLVMConstPointerNull(backend->ptr_type)};
+  LLVMValueRef obj = LLVMBuildCall2(
+      backend->builder,
+      LLVMGlobalGetValueType(backend->func_vm_allocate_object),
+      backend->func_vm_allocate_object, obj_args, 1, "struct.box.obj");
+  for (int i = 0; i < st->field_count; i++) {
+    LLVMValueRef fp = LLVMBuildStructGEP2(backend->builder, st->llvm_type,
+                                          alloca, (unsigned)i, "struct.box.fp");
+    LLVMValueRef fv = LLVMBuildLoad2(backend->builder, backend->int_type, fp,
+                                     "struct.box.fv");
+    LLVMValueRef boxed;
+    if (st->field_types[i] == TYPE_BOOL) {
+      LLVMValueRef as_bool = LLVMBuildICmp(
+          backend->builder, LLVMIntNE, fv,
+          LLVMConstInt(backend->int_type, 0, 0), "struct.box.tobool");
+      boxed = llvm_vm_val_bool_val(backend, as_bool);
+    } else {
+      boxed = llvm_vm_val_int_val(backend, fv);
+    }
+    LLVMValueRef key = LLVMBuildGlobalStringPtr(
+        backend->builder, st->field_names[i], "struct.box.key");
+    LLVMValueRef vptr = llvm_build_alloca_at_entry(
+        backend, backend->vm_value_type, "struct.box.vptr");
+    LLVMBuildStore(backend->builder, boxed, vptr);
+    LLVMValueRef vvoid = LLVMBuildBitCast(backend->builder, vptr,
+                                          backend->ptr_type, "struct.box.vvoid");
+    LLVMValueRef set_args[] = {LLVMConstPointerNull(backend->ptr_type), obj, key,
+                               vvoid};
+    LLVMBuildCall2(backend->builder,
+                   LLVMGlobalGetValueType(backend->func_vm_object_set),
+                   backend->func_vm_object_set, set_args, 4, "");
+  }
+  return llvm_build_vm_val_obj(backend, obj);
+}
+
 StructTypeEntry *register_struct_type(LLVMBackend *backend, ASTNode_C *type_decl) {
   if (!backend || !type_decl || type_decl->type != AST_TYPE_DECL) return nullptr;
   if (!type_decl->name || !type_decl->field_names || type_decl->field_count <= 0)
@@ -2846,7 +2904,21 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // 2. Loop elements and push: vm_array_push_wrapper(vm, arr, val)
     if (node->elements) {
       for (int i = 0; i < node->element_count; i++) {
-        LLVMValueRef val = codegen_expression(backend, node->elements[i]);
+        ASTNode_C *el = node->elements[i];
+        LLVMValueRef val = nullptr;
+        // A native (int/bool) struct element must be boxed as a string-keyed
+        // object here too — otherwise `[a][0].x` reinterprets the aggregate's
+        // bytes as a VMValue. Mirrors the push() escape path.
+        if (el && el->type == AST_IDENTIFIER && el->name) {
+          const char *es = get_local_struct_type(backend, el->name);
+          LLVMValueRef ea = es ? get_local(backend, el->name) : nullptr;
+          if (es && ea) {
+            StructTypeEntry *st = find_struct_type(backend, es);
+            if (st && struct_is_trivially_unboxable(st))
+              val = box_native_struct_as_object(backend, ea, st);
+          }
+        }
+        if (!val) val = codegen_expression(backend, el);
         LLVMValueRef val_ptr = LLVMBuildAlloca(
             backend->builder, backend->vm_value_type, "arr_lit_val_ptr");
         LLVMBuildStore(backend->builder, val, val_ptr);
@@ -3834,6 +3906,33 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // call(func_name) -> dynamic dispatch
+    // call(name, a, b, ...) — forward 2+ arguments. Stash the actual args in a
+    // stack VMValue array and hand the runtime a pointer + count; it invokes
+    // the target through its true (registered) arity. Must be checked BEFORE
+    // the 1-arg case below, which would otherwise swallow the extra args.
+    if (node->name && strcmp(node->name, "call") == 0 &&
+        node->argument_count >= 3) {
+      int actual = node->argument_count - 1; // arguments[0] is the name
+      LLVMValueRef name_v = codegen_expression(backend, node->arguments[0]);
+      LLVMTypeRef arr_ty = LLVMArrayType(backend->vm_value_type, actual);
+      LLVMValueRef arr =
+          llvm_build_alloca_at_entry(backend, arr_ty, "call_args");
+      LLVMValueRef zero = LLVMConstInt(backend->int32_type, 0, 0);
+      for (int i = 0; i < actual; i++) {
+        LLVMValueRef v = codegen_expression(backend, node->arguments[i + 1]);
+        LLVMValueRef idx[] = {zero, LLVMConstInt(backend->int32_type, i, 0)};
+        LLVMValueRef ep =
+            LLVMBuildGEP2(backend->builder, arr_ty, arr, idx, 2, "call_arg_ep");
+        LLVMBuildStore(backend->builder, v, ep);
+      }
+      LLVMValueRef zidx[] = {zero, zero};
+      LLVMValueRef args_ptr = LLVMBuildGEP2(backend->builder, arr_ty, arr, zidx,
+                                            2, "call_args_ptr");
+      LLVMValueRef argc_v = LLVMConstInt(backend->int32_type, actual, 0);
+      LLVMValueRef cargs[] = {name_v, args_ptr, argc_v};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_call_dynamic_n,
+                                    cargs, 3, "calln_res");
+    }
     // call(name, arg) — dynamic dispatch passing one argument to the target.
     if (node->name && strcmp(node->name, "call") == 0 &&
         node->argument_count >= 2) {
@@ -4130,14 +4229,9 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         if (src_struct && src_alloca) {
           StructTypeEntry *st = find_struct_type(backend, src_struct);
           if (st && struct_is_trivially_unboxable(st)) {
-            LLVMValueRef name_str = LLVMBuildGlobalStringPtr(
-                backend->builder, st->name, "struct.type.name");
-            LLVMValueRef field_count = LLVMConstInt(
-                backend->int32_type, (unsigned)st->field_count, 0);
-            LLVMValueRef alloc_args[] = {name_str, field_count, src_alloca};
-            val = llvm_call_vmvalue_func(
-                backend, backend->func_aot_struct_alloc_from_fields,
-                alloc_args, 3, "push.struct.heap");
+            // Box as a string-keyed VM_OBJECT (not an int-indexed ObjStruct)
+            // so `arr[i].field` — a dynamic key lookup — resolves afterwards.
+            val = box_native_struct_as_object(backend, src_alloca, st);
           }
         }
       } else if (val_arg && val_arg->type == AST_FUNCTION_CALL &&
@@ -4161,14 +4255,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
             (void)codegen_expression(backend, val_arg);
             backend->pending_struct_result_ptr = nullptr;
             backend->pending_struct_result_name = nullptr;
-            LLVMValueRef name_str = LLVMBuildGlobalStringPtr(
-                backend->builder, st->name, "struct.type.name");
-            LLVMValueRef field_count = LLVMConstInt(
-                backend->int32_type, (unsigned)st->field_count, 0);
-            LLVMValueRef alloc_args[] = {name_str, field_count, tmp};
-            val = llvm_call_vmvalue_func(
-                backend, backend->func_aot_struct_alloc_from_fields,
-                alloc_args, 3, "push.struct.call.heap");
+            // Same string-keyed boxing as the identifier case above.
+            val = box_native_struct_as_object(backend, tmp, st);
           }
         }
       }

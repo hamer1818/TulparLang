@@ -218,6 +218,29 @@ backwards-compatible.
   both languages.
 
 ### Fixed
+- **`call(fn, a, b, …)` forwards N arguments (was a segfault).** Dynamic
+  dispatch only knew the 0- and 1-argument shapes; calling a by-name function
+  with 2+ args silently dropped the extras, so the boxed callee read an
+  unpassed pointer parameter as garbage and crashed. Added `aot_call_dynamic_n`
+  / `aot_invoke_boxed_n` (`runtime_bindings.cpp`), which invoke the target
+  through its *registered arity* (0–8), padding missing params with VOID and
+  ignoring extras so the pointer count always matches the callee (wasm's typed
+  `call_indirect` included); a codegen branch (`argument_count >= 3`) stashes
+  the args in a stack VMValue array, and `call` is now treated as variadic in
+  the type checker. Callbacks no longer have to be 0-arg + global context — a
+  `func on_hit(a, b)` handler can be `call()`-ed directly. The existing
+  1-argument path (Wings `call(handler, req)`) is unchanged.
+- **A native (int/bool) `struct` stored in an array lost field access.**
+  `push(arr, s)` then `arr[i].x` reported "Invalid index or target". Trivially
+  unboxable structs (all int/bool fields) lower to a native LLVM aggregate;
+  once the static type is gone inside a dynamically-typed array, `arr[i].x` is
+  a runtime string-key lookup, which the compact int-indexed `ObjStruct` can't
+  serve. Float-carrying structs already lived as key-value objects and worked.
+  The push/array-literal boxing now converts a native struct to the same
+  string-keyed `VM_OBJECT` (`box_native_struct_as_object` in `llvm_backend.cpp`),
+  so `struct Ent { int x; int y; }` works in an array with `ents[i].x = …` —
+  no more parallel-array workaround. Static `s.x` on a typed local is
+  unchanged; no regression across the 76-example suite.
 - **Arcade: `arcade_topla` read enemy velocity with a handle.** The bounce logic
   indexed the engine's parallel arrays directly (`_evx[enemy_id]`), but ids are
   handles (`gen * 2^20 + slot`), so it read past the array rather than the

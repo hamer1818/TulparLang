@@ -60,9 +60,13 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   + zemin/platforma iniş, `baslangicta()/her_kare()/ciz_ustune()` kancaları,
   otomatik skor HUD + oyun-bitti/R-yeniden ekranı, `oyna()/play()` yönetilen
   döngü. **Her API çift dilli (TR+EN alias).** Ekrandan çıkan velocity
-  entity'leri otomatik ölür. Motor **paralel dizi** tabanlı (Tulpar'da dizi
-  elemanına struct geri-yazma yok; ayrıca callback'ler 0-arg — `call()` ile arg
-  geçmek segfault). Çekirdek headless doğrulandı (`step()` API'siyle: velocity
+  entity'leri otomatik ölür. Motor **paralel dizi** tabanlı — bu iki dil
+  kısıtından doğmuştu ama **ikisi de 2026-07-20'de düzeltildi:** artık dizideki
+  int/bool struct'a alan geri-yazma çalışıyor (`box_native_struct_as_object`)
+  ve `call(fn, a, b, …)` N-argüman geçiyor (`aot_call_dynamic_n`), yani
+  callback'ler 0-arg olmak zorunda değil. (Arcade bu düzeltmelerden önce
+  yazıldığından hâlâ paralel dizi kullanıyor; yeni bir motor `struct Ent`
+  dizisi + arg'lı callback kullanabilir.) Çekirdek headless doğrulandı (`step()` API'siyle: velocity
   hareket + AABB çarpışma dispatch + kill/skor + yerçekimi+zemine iniş) ve
   pencereli render ekran görüntüsüyle kanıtlandı (WSLg). Örnekler:
   `arcade_topla` (toplama+kaç), `arcade_zipla` (platformer), `arcade_nisan`
@@ -1297,6 +1301,23 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Dil seviyesi
 
+- ✅ **`call(fn, a, b, …)` N-argüman dispatch ÇALIŞIYOR (düzeltildi 2026-07-20).**
+  Eskiden dinamik dispatch yalnızca 0/1 argüman biliyordu; 2+ arg segfault'tu
+  (codegen fazlalıkları yutuyor, boxed hedef geçilmeyen pointer'ı çöp okuyordu).
+  `aot_call_dynamic_n` + `aot_invoke_boxed_n` (runtime_bindings.cpp) hedefin
+  **kayıtlı arity**'sine göre 0–8 arg dispatch eder (eksik→VOID, fazla→atılır,
+  wasm tipli `call_indirect` dahil güvenli); codegen `argument_count>=3` dalı +
+  typeinfer'de `call` variadic. Wings `call(handler, req)` (tek-arg) regresyonsuz.
+  **Sonuç:** callback'ler artık 0-arg olmak zorunda değil. Repro + 76 örnek yeşil.
+- ✅ **Dizideki (int/bool) struct'a alan geri-yazma ÇALIŞIYOR (düzeltildi 2026-07-20).**
+  `push(ents, mk()); ents[i].x = ents[i].x + 5` artık çalışıyor. Trivially-unboxable
+  struct (tümü int/bool) native LLVM aggregate'e iner; diziye girince statik tip
+  kaybolur ve `arr[i].x` dinamik string-key araması olur — compact ObjStruct bunu
+  karşılamaz. Float-alanlı struct'lar zaten VM_OBJECT olduğu için çalışıyordu; fix
+  int/bool struct'ı push/array-literal boxlamasında **aynı string-key'li VM_OBJECT**'e
+  çevirir (`box_native_struct_as_object`, llvm_backend.cpp). Statik `s.x` yolu
+  değişmedi → regresyon yok (76 örnek + 8 arcade testi yeşil). Kalan: diziden typed
+  struct'a GERİ çıkarma (`Ent e = ents[i]`) ayrı bir iş.
 - ✅ **Lambda + closures (AOT) ÇALIŞIYOR.** `(int a, int b) => a + b`
   lambda'ları, outer-scope capture'lı closure'lar (`make_counter`,
   `make_adder`, sayaç mutasyonu), higher-order ve nested kullanım,
