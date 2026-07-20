@@ -2645,6 +2645,52 @@ static bool is_global_var(LLVMBackend *backend, const char *name) {
   return LLVMGetNamedGlobal(backend->module, name) != nullptr;
 }
 
+// If `arg` is an expression producing a trivially-unboxable struct VALUE — a
+// struct-typed local (`ent`) or a struct-returning call (`mk(3,5)`) —
+// materialize it and box it into a string-keyed VM_OBJECT so it survives
+// storage in a dynamically-typed container. Returns the boxed VMValue, or
+// nullptr when `arg` is not such a struct expression (caller falls back to a
+// plain codegen_expression). Shared by push(), array literals, and
+// `arr[i] = <struct>` / `obj["k"] = <struct>` assignment.
+static LLVMValueRef codegen_struct_expr_as_object(LLVMBackend *backend,
+                                                  ASTNode_C *arg) {
+  if (!arg) return nullptr;
+  if (arg->type == AST_IDENTIFIER && arg->name) {
+    const char *sn = get_local_struct_type(backend, arg->name);
+    LLVMValueRef alloca = sn ? get_local(backend, arg->name) : nullptr;
+    if (sn && alloca) {
+      StructTypeEntry *st = find_struct_type(backend, sn);
+      if (st && struct_is_trivially_unboxable(st))
+        return box_native_struct_as_object(backend, alloca, st);
+    }
+    return nullptr;
+  }
+  if (arg->type == AST_FUNCTION_CALL && arg->name) {
+    const char *rn = nullptr;
+    for (int j = 0; j < backend->function_count; j++) {
+      if (backend->functions[j].name &&
+          strcmp(backend->functions[j].name, arg->name) == 0) {
+        rn = backend->functions[j].return_struct_name;
+        break;
+      }
+    }
+    if (rn) {
+      StructTypeEntry *st = find_struct_type(backend, rn);
+      if (st && struct_is_trivially_unboxable(st)) {
+        LLVMValueRef tmp = llvm_build_alloca_at_entry(backend, st->llvm_type,
+                                                      "struct.expr.tmp");
+        LLVMBuildStore(backend->builder, LLVMConstNull(st->llvm_type), tmp);
+        backend->pending_struct_result_ptr = tmp;
+        backend->pending_struct_result_name = st->name;
+        (void)codegen_expression(backend, arg);
+        backend->pending_struct_result_ptr = nullptr;
+        backend->pending_struct_result_name = nullptr;
+        return box_native_struct_as_object(backend, tmp, st);
+      }
+    }
+  }
+  return nullptr;
+}
 
 // Get the inferred type of a local variable
 InferredType get_local_type(LLVMBackend *backend, const char *name) {
@@ -2951,19 +2997,10 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     if (node->elements) {
       for (int i = 0; i < node->element_count; i++) {
         ASTNode_C *el = node->elements[i];
-        LLVMValueRef val = nullptr;
-        // A native (int/bool) struct element must be boxed as a string-keyed
+        // A native (int/bool) struct element is boxed as a string-keyed
         // object here too — otherwise `[a][0].x` reinterprets the aggregate's
         // bytes as a VMValue. Mirrors the push() escape path.
-        if (el && el->type == AST_IDENTIFIER && el->name) {
-          const char *es = get_local_struct_type(backend, el->name);
-          LLVMValueRef ea = es ? get_local(backend, el->name) : nullptr;
-          if (es && ea) {
-            StructTypeEntry *st = find_struct_type(backend, es);
-            if (st && struct_is_trivially_unboxable(st))
-              val = box_native_struct_as_object(backend, ea, st);
-          }
-        }
+        LLVMValueRef val = codegen_struct_expr_as_object(backend, el);
         if (!val) val = codegen_expression(backend, el);
         LLVMValueRef val_ptr = LLVMBuildAlloca(
             backend->builder, backend->vm_value_type, "arr_lit_val_ptr");
@@ -4268,44 +4305,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       // VMValue" placeholder and the array would silently lose the data —
       // exactly what Plan 04 PR1..PR6 deferred to this PR.
       ASTNode_C *val_arg = node->arguments[1];
-      LLVMValueRef val = nullptr;
-      if (val_arg && val_arg->type == AST_IDENTIFIER && val_arg->name) {
-        const char *src_struct = get_local_struct_type(backend, val_arg->name);
-        LLVMValueRef src_alloca = get_local(backend, val_arg->name);
-        if (src_struct && src_alloca) {
-          StructTypeEntry *st = find_struct_type(backend, src_struct);
-          if (st && struct_is_trivially_unboxable(st)) {
-            // Box as a string-keyed VM_OBJECT (not an int-indexed ObjStruct)
-            // so `arr[i].field` — a dynamic key lookup — resolves afterwards.
-            val = box_native_struct_as_object(backend, src_alloca, st);
-          }
-        }
-      } else if (val_arg && val_arg->type == AST_FUNCTION_CALL &&
-                 val_arg->name) {
-        const char *ret_struct = nullptr;
-        for (int j = 0; j < backend->function_count; j++) {
-          if (strcmp(backend->functions[j].name, val_arg->name) == 0) {
-            ret_struct = backend->functions[j].return_struct_name;
-            break;
-          }
-        }
-        if (ret_struct) {
-          StructTypeEntry *st = find_struct_type(backend, ret_struct);
-          if (st && struct_is_trivially_unboxable(st)) {
-            LLVMValueRef tmp = llvm_build_alloca_at_entry(
-                backend, st->llvm_type, "push.struct.call.tmp");
-            LLVMBuildStore(backend->builder,
-                           LLVMConstNull(st->llvm_type), tmp);
-            backend->pending_struct_result_ptr = tmp;
-            backend->pending_struct_result_name = st->name;
-            (void)codegen_expression(backend, val_arg);
-            backend->pending_struct_result_ptr = nullptr;
-            backend->pending_struct_result_name = nullptr;
-            // Same string-keyed boxing as the identifier case above.
-            val = box_native_struct_as_object(backend, tmp, st);
-          }
-        }
-      }
+      // A struct value pushed into an array is boxed as a string-keyed
+      // VM_OBJECT (not an int-indexed ObjStruct) so `arr[i].field` — a
+      // dynamic key lookup — resolves afterwards. nullptr = not a struct
+      // expression → fall through to the plain codegen below.
+      LLVMValueRef val = codegen_struct_expr_as_object(backend, val_arg);
       LLVMValueRef arr = codegen_expression(backend, node->arguments[0]);
       if (!val) {
         val = codegen_expression(backend, val_arg);
@@ -7078,7 +7082,19 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       }
     }
 
-    LLVMValueRef val = codegen_expression(backend, node->right);
+    // Struct value assigned into a dynamic container element
+    // (`arr[i] = mk()`, `obj["k"] = ent`): box it as a string-keyed object,
+    // like push()/array-literals — otherwise the element would get the struct
+    // call's zero placeholder and reads afterwards fail. Scoped to an
+    // element-target LHS (AST_ARRAY_ACCESS); a `struct.field = <int>` write
+    // returns nullptr here and keeps its unboxed fast path below.
+    LLVMValueRef val = nullptr;
+    if (node->left && node->left->type == AST_ARRAY_ACCESS) {
+      val = codegen_struct_expr_as_object(backend, node->right);
+    }
+    if (!val) {
+      val = codegen_expression(backend, node->right);
+    }
 
     // Typed-struct fast path mirror of the AST_ARRAY_ACCESS reader: when
     // assigning to `<typed_struct>.<field>` (parser desugars to

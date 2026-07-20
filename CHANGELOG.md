@@ -249,6 +249,13 @@ backwards-compatible.
   subject keeps working); codegen emits the declaration-ordered field-name
   table. `Ent e = ents[i]` now copies the stored fields with value semantics
   (mutating `e` leaves `ents[i]` untouched).
+- **Assigning a struct value into an array element (`arr[i] = mk(…)`) stored a
+  zero placeholder.** A struct-returning call / struct local on the RHS of an
+  element assignment now boxes through the same string-keyed object path as
+  `push`, via the shared `codegen_struct_expr_as_object` helper (which also
+  backs `push` and array literals — deduplicated). As a side benefit, an array
+  literal of struct-returning calls (`[mk(3,4), mk(5,6)]`) now works too (the
+  old push/array-literal code only recognised struct *identifiers*).
 - **Method-style calls now work on any receiver, not just a bare identifier.**
   `r.area()` worked, but `ents[i].area()` (array element) and `mk(3,5).area()`
   (call result) fell through to a field-closure call and crashed with "Null

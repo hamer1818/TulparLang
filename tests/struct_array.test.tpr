@@ -63,10 +63,26 @@ func run_bool_field() {
     assert_eq_int(e.alive, 0);
 }
 
+func run_element_assign() {
+    var ents = [];
+    push(ents, mk(1, 2));
+    ents[0] = mk(9, 8);              // replace a whole element with a struct
+    assert_eq_int(ents[0].x, 9);
+    assert_eq_int(ents[0].y, 8);
+}
+
+func run_literal_with_calls() {
+    var vs = [mk(3, 4), mk(5, 6)];   // array literal of struct-returning calls
+    assert_eq_int(vs[0].x, 3);
+    assert_eq_int(vs[1].y, 6);
+}
+
 print("=== native struct <-> array round-trip ===");
 test("push + read fields", "run_push_read");
 test("field writeback on array element", "run_field_writeback");
 test("struct in array literal", "run_array_literal");
 test("extract back out (value semantics)", "run_extract_value_semantics");
 test("flag field round-trips", "run_bool_field");
+test("assign struct to element", "run_element_assign");
+test("array literal of struct calls", "run_literal_with_calls");
 test_summary();
