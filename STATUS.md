@@ -1301,6 +1301,11 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Dil seviyesi
 
+- ✅ **String sıralama karşılaştırması (`<`,`>`,`<=`,`>=`) ÇALIŞIYOR (düzeltildi 2026-07-20).**
+  `vm_binary_op`'ta string/string çifti `default: VM_BOOL(0)`'a düşüyordu → sıralama
+  operatörleri hep false, string dizisi sıralama sessizce hiçbir şey yapmıyordu
+  (`==`/`!=` zaten strcmp kullanıyordu). Dördü artık `strcmp` ile lexicographic
+  karşılaştırıyor; `"apple" < "banana"` true, string dizisi bubble/insertion sort çalışıyor.
 - ✅ **Non-trivially-unboxable struct dönüşü + iç içe struct ÇALIŞIYOR (düzeltildi 2026-07-20).**
   float/string/nested alanlı struct boxed VM_OBJECT'tir; call-site ve `return`
   codegen'i native res-ptr ABI varsayıyordu → `P e = mk(1.5,2.5)`, `push(a, mk())`,

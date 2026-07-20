@@ -218,6 +218,13 @@ backwards-compatible.
   both languages.
 
 ### Fixed
+- **String ordering comparisons (`<`, `>`, `<=`, `>=`) were always false.** In
+  `vm_binary_op` the string/string type pair fell through to a
+  `default: VM_BOOL(0)` for the four ordering operators, so any `"a" < "b"`
+  returned false regardless of the operands — and sorting an array of strings
+  silently did nothing. (`==`/`!=` already used `strcmp`.) The four operators
+  now compare lexicographically via `strcmp`, so `"apple" < "banana"` is true,
+  `"abc" <= "abc"` is true, and bubble/insertion sorts over string arrays work.
 - **Returning a non-trivially-unboxable struct from a function returned zeros —
   and this also unblocked nested structs.** A struct with float / string /
   nested-struct fields is a boxed `VM_OBJECT`, not a native aggregate, but both

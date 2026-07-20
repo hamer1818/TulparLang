@@ -1160,6 +1160,11 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
       *result = VM_BOOL(AS_FLOAT(a) < (double)AS_INT(b));
       return;
     default:
+      // Lexicographic string ordering (was: always false).
+      if (IS_STRING(a) && IS_STRING(b)) {
+        *result = VM_BOOL(strcmp(AS_STRING(a)->chars, AS_STRING(b)->chars) < 0);
+        return;
+      }
       *result = VM_BOOL(0);
       return;
     }
@@ -1179,6 +1184,10 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
       *result = VM_BOOL(AS_FLOAT(a) > (double)AS_INT(b));
       return;
     default:
+      if (IS_STRING(a) && IS_STRING(b)) {
+        *result = VM_BOOL(strcmp(AS_STRING(a)->chars, AS_STRING(b)->chars) > 0);
+        return;
+      }
       *result = VM_BOOL(0);
       return;
     }
@@ -1198,6 +1207,10 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
       *result = VM_BOOL(AS_FLOAT(a) <= (double)AS_INT(b));
       return;
     default:
+      if (IS_STRING(a) && IS_STRING(b)) {
+        *result = VM_BOOL(strcmp(AS_STRING(a)->chars, AS_STRING(b)->chars) <= 0);
+        return;
+      }
       *result = VM_BOOL(0);
       return;
     }
@@ -1217,6 +1230,10 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
       *result = VM_BOOL(AS_FLOAT(a) >= (double)AS_INT(b));
       return;
     default:
+      if (IS_STRING(a) && IS_STRING(b)) {
+        *result = VM_BOOL(strcmp(AS_STRING(a)->chars, AS_STRING(b)->chars) >= 0);
+        return;
+      }
       *result = VM_BOOL(0);
       return;
     }
