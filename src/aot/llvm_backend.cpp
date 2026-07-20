@@ -1014,6 +1014,16 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_struct_unpack_to = LLVMAddFunction(
       backend->module, "aot_struct_unpack_to", struct_unpack_type);
 
+  // aot_struct_unpack_named(VMValue *v, int field_count, char **names,
+  //                         i64 *dst) -> void — name-resolving unpack for the
+  // string-keyed VM_OBJECT a struct becomes inside a dynamic array.
+  LLVMTypeRef struct_unpackn_params[] = {backend->ptr_type, backend->int32_type,
+                                         backend->ptr_type, backend->ptr_type};
+  LLVMTypeRef struct_unpackn_type =
+      LLVMFunctionType(backend->void_type, struct_unpackn_params, 4, 0);
+  backend->func_aot_struct_unpack_named = LLVMAddFunction(
+      backend->module, "aot_struct_unpack_named", struct_unpackn_type);
+
   // ====== Fast Array Access (value-based, no alloca) ======
   // aot_array_get_fast(VMValue arr, i64 index) -> VMValue
   LLVMTypeRef get_fast_params[] = {backend->vm_value_type, backend->int_type};
@@ -6883,11 +6893,34 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
             LLVMBuildStore(backend->builder, rhs_val, rhs_tmp);
             LLVMValueRef field_count = LLVMConstInt(
                 backend->int32_type, (unsigned)st->field_count, 0);
-            LLVMValueRef unpack_args[] = {rhs_tmp, field_count, typed_alloca};
+            // Build a `[N x i8*]` of declaration-ordered field names so the
+            // runtime can resolve fields by key when the boxed source is a
+            // string-keyed VM_OBJECT (a struct pulled back out of a dynamic
+            // array). The int-indexed ObjStruct path ignores it.
+            LLVMTypeRef names_arr_ty =
+                LLVMArrayType(backend->ptr_type, st->field_count);
+            LLVMValueRef names_arr = llvm_build_alloca_at_entry(
+                backend, names_arr_ty, "unpack.names");
+            LLVMValueRef zero0 = LLVMConstInt(backend->int32_type, 0, 0);
+            for (int fi = 0; fi < st->field_count; fi++) {
+              LLVMValueRef nm = LLVMBuildGlobalStringPtr(
+                  backend->builder, st->field_names[fi], "unpack.name");
+              LLVMValueRef nidx[] = {
+                  zero0, LLVMConstInt(backend->int32_type, fi, 0)};
+              LLVMValueRef nep = LLVMBuildGEP2(backend->builder, names_arr_ty,
+                                               names_arr, nidx, 2, "unpack.nep");
+              LLVMBuildStore(backend->builder, nm, nep);
+            }
+            LLVMValueRef nzidx[] = {zero0, zero0};
+            LLVMValueRef names_ptr = LLVMBuildGEP2(
+                backend->builder, names_arr_ty, names_arr, nzidx, 2,
+                "unpack.names.ptr");
+            LLVMValueRef unpack_args[] = {rhs_tmp, field_count, names_ptr,
+                                          typed_alloca};
             LLVMBuildCall2(
                 backend->builder,
-                LLVMGlobalGetValueType(backend->func_aot_struct_unpack_to),
-                backend->func_aot_struct_unpack_to, unpack_args, 3, "");
+                LLVMGlobalGetValueType(backend->func_aot_struct_unpack_named),
+                backend->func_aot_struct_unpack_named, unpack_args, 4, "");
           }
         }
         add_local_struct(backend, node->name, typed_alloca, st->name);

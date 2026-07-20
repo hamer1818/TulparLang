@@ -241,6 +241,14 @@ backwards-compatible.
   so `struct Ent { int x; int y; }` works in an array with `ents[i].x = …` —
   no more parallel-array workaround. Static `s.x` on a typed local is
   unchanged; no regression across the 76-example suite.
+- **Pulling a struct back out of a dynamic array (`Ent e = arr[i]`) read
+  zeros.** The extraction path unpacked an int-indexed `ObjStruct`, but after
+  the fix above a struct in an array is a string-keyed `VM_OBJECT`, so the
+  fields didn't line up. `aot_struct_unpack_named` now resolves fields BY NAME
+  from an object (and still copies an `ObjStruct` by position, so a `match`
+  subject keeps working); codegen emits the declaration-ordered field-name
+  table. `Ent e = ents[i]` now copies the stored fields with value semantics
+  (mutating `e` leaves `ents[i]` untouched).
 - **Arcade: `arcade_topla` read enemy velocity with a handle.** The bounce logic
   indexed the engine's parallel arrays directly (`_evx[enemy_id]`), but ids are
   handles (`gen * 2^20 + slot`), so it read past the array rather than the

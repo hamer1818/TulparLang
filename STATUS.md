@@ -1316,8 +1316,10 @@ girildiğinde ne yapacağımı bilelim.
   karşılamaz. Float-alanlı struct'lar zaten VM_OBJECT olduğu için çalışıyordu; fix
   int/bool struct'ı push/array-literal boxlamasında **aynı string-key'li VM_OBJECT**'e
   çevirir (`box_native_struct_as_object`, llvm_backend.cpp). Statik `s.x` yolu
-  değişmedi → regresyon yok (76 örnek + 8 arcade testi yeşil). Kalan: diziden typed
-  struct'a GERİ çıkarma (`Ent e = ents[i]`) ayrı bir iş.
+  değişmedi → regresyon yok (76 örnek + 8 arcade testi yeşil). **Geri çıkarma da
+  tamam:** `Ent e = ents[i]` artık saklı alanları değer-semantiğiyle kopyalıyor
+  (`aot_struct_unpack_named` — string-key VM_OBJECT'i ada göre çözer, `match`
+  öznesinin ObjStruct'ını konuma göre; codegen alan-adı tablosu emit eder).
 - ✅ **Lambda + closures (AOT) ÇALIŞIYOR.** `(int a, int b) => a + b`
   lambda'ları, outer-scope capture'lı closure'lar (`make_counter`,
   `make_adder`, sayaç mutasyonu), higher-order ve nested kullanım,

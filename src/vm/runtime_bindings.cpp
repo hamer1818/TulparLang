@@ -1918,6 +1918,43 @@ extern "C" void aot_struct_unpack_to(VMValue *vp, int field_count,
   }
 }
 
+// Unpack a boxed struct into a native `{i64,...}` aggregate, resolving fields
+// BY NAME when the source is a string-keyed VM_OBJECT — the representation a
+// struct now takes once it enters a dynamically-typed array (see
+// box_native_struct_as_object). This is what makes `Ent e = ents[i]` read the
+// stored fields instead of zeros. Two source shapes are handled:
+//   * int-indexed ObjStruct (still produced for a `match` subject) → copy by
+//     position, exactly like aot_struct_unpack_to;
+//   * key-value VM_OBJECT → look each declared field name up in the object.
+// `names[i]` is the i-th field's name (declaration order == aggregate order);
+// int/bool payloads land in dst[i] (bool as 0/1). Anything else → 0.
+extern "C" void aot_struct_unpack_named(VMValue *vp, int field_count,
+                                        const char *const *names,
+                                        long long *dst) {
+  if (!dst || field_count <= 0) return;
+  if (vp && IS_STRUCT(*vp)) {
+    ObjStruct *s = AS_STRUCT(*vp);
+    int n = field_count < s->field_count ? field_count : s->field_count;
+    for (int i = 0; i < n; i++) dst[i] = s->fields[i];
+    for (int i = n; i < field_count; i++) dst[i] = 0;
+    return;
+  }
+  if (vp && IS_OBJECT(*vp) && names) {
+    ObjObject *o = AS_OBJECT(*vp);
+    for (int i = 0; i < field_count; i++) {
+      long long v = 0;
+      if (names[i]) {
+        VMValue fv = vm_object_get(o, const_cast<char *>(names[i]));
+        if (IS_INT(fv)) v = AS_INT(fv);
+        else if (IS_BOOL(fv)) v = AS_BOOL(fv) ? 1 : 0;
+      }
+      dst[i] = v;
+    }
+    return;
+  }
+  for (int i = 0; i < field_count; i++) dst[i] = 0;
+}
+
 // ============================================================================
 // JSON Serialization - Optimized for Performance
 // ============================================================================
