@@ -249,6 +249,16 @@ backwards-compatible.
   subject keeps working); codegen emits the declaration-ordered field-name
   table. `Ent e = ents[i]` now copies the stored fields with value semantics
   (mutating `e` leaves `ents[i]` untouched).
+- **Method-style calls now work on any receiver, not just a bare identifier.**
+  `r.area()` worked, but `ents[i].area()` (array element) and `mk(3,5).area()`
+  (call result) fell through to a field-closure call and crashed with "Null
+  closure". The parser now rewrites `<expr>.<name>(args)` for any head, and
+  `resolve_qualified_call` sends a non-identifier receiver straight to method
+  dispatch (`name(recv, args)`) — it can never be a module alias. A boxed
+  struct receiver (e.g. an array element) is unpacked into the struct
+  parameter (`emit_unpack_boxed_struct_into`), so `ents[i].area()`,
+  `rs[0].scaled(4)`, and `js[0].wide()` all resolve. Existing identifier /
+  json / module-alias call sites are unchanged.
 - **Arcade: `arcade_topla` read enemy velocity with a handle.** The bounce logic
   indexed the engine's parallel arrays directly (`_evx[enemy_id]`), but ids are
   handles (`gen * 2^20 + slot`), so it read past the array rather than the

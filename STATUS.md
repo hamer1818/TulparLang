@@ -1301,6 +1301,15 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Dil seviyesi
 
+- ✅ **Metot çağrısı her alıcıda ÇALIŞIYOR (düzeltildi 2026-07-20).**
+  `recv.method(args)` artık düz kimlik dışında dizi-elemanı (`ents[i].area()`)
+  ve çağrı-sonucu (`mk(3,5).area()`) alıcılarda da çalışıyor (eskiden "Null
+  closure" çökmesi). Parser `<expr>.<name>(args)`'ı her alıcı için yeniden
+  yazar; `resolve_qualified_call` kimlik-olmayan alıcıyı doğrudan metot-dispatch'e
+  (`name(recv, args)`) yönlendirir (alias olamaz). Boxed struct alıcı (dizi
+  elemanı) struct parametresine unpack edilir (`emit_unpack_boxed_struct_into`).
+  Not: field'da saklı closure'ı `.()` ile çağırmak desteklenmez (metot-dispatch
+  olur → "fonksiyon bulunamadı").
 - ✅ **`call(fn, a, b, …)` N-argüman dispatch ÇALIŞIYOR (düzeltildi 2026-07-20).**
   Eskiden dinamik dispatch yalnızca 0/1 argüman biliyordu; 2+ arg segfault'tu
   (codegen fazlalıkları yutuyor, boxed hedef geçilmeyen pointer'ı çöp okuyordu).

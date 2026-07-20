@@ -2423,6 +2423,42 @@ static LLVMValueRef box_native_struct_as_object(LLVMBackend *backend,
   return llvm_build_vm_val_obj(backend, obj);
 }
 
+// Unpack a boxed struct VMValue into an already-allocated native struct
+// alloca `dst` (caller zero-inits it) via aot_struct_unpack_named. Emits the
+// declaration-ordered field-name table so the runtime can resolve fields by
+// key from a string-keyed VM_OBJECT (a struct pulled out of a dynamic array),
+// and copies an int-indexed ObjStruct by position. Shared by the
+// `Ent e = arr[i]` VAR_DECL path and the `f(arr[i])` struct-arg path.
+static void emit_unpack_boxed_struct_into(LLVMBackend *backend,
+                                          LLVMValueRef boxed_val,
+                                          StructTypeEntry *st,
+                                          LLVMValueRef dst) {
+  LLVMValueRef rhs_tmp = llvm_build_alloca_at_entry(
+      backend, backend->vm_value_type, "struct.unpack.rhs");
+  LLVMBuildStore(backend->builder, boxed_val, rhs_tmp);
+  LLVMTypeRef names_arr_ty = LLVMArrayType(backend->ptr_type, st->field_count);
+  LLVMValueRef names_arr =
+      llvm_build_alloca_at_entry(backend, names_arr_ty, "struct.unpack.names");
+  LLVMValueRef z0 = LLVMConstInt(backend->int32_type, 0, 0);
+  for (int fi = 0; fi < st->field_count; fi++) {
+    LLVMValueRef nm = LLVMBuildGlobalStringPtr(
+        backend->builder, st->field_names[fi], "struct.unpack.name");
+    LLVMValueRef nidx[] = {z0, LLVMConstInt(backend->int32_type, fi, 0)};
+    LLVMValueRef nep = LLVMBuildGEP2(backend->builder, names_arr_ty, names_arr,
+                                     nidx, 2, "struct.unpack.nep");
+    LLVMBuildStore(backend->builder, nm, nep);
+  }
+  LLVMValueRef nz[] = {z0, z0};
+  LLVMValueRef names_ptr = LLVMBuildGEP2(backend->builder, names_arr_ty,
+                                         names_arr, nz, 2, "struct.unpack.nptr");
+  LLVMValueRef fc =
+      LLVMConstInt(backend->int32_type, (unsigned)st->field_count, 0);
+  LLVMValueRef ua[] = {rhs_tmp, fc, names_ptr, dst};
+  LLVMBuildCall2(backend->builder,
+                 LLVMGlobalGetValueType(backend->func_aot_struct_unpack_named),
+                 backend->func_aot_struct_unpack_named, ua, 4, "");
+}
+
 StructTypeEntry *register_struct_type(LLVMBackend *backend, ASTNode_C *type_decl) {
   if (!backend || !type_decl || type_decl->type != AST_TYPE_DECL) return nullptr;
   if (!type_decl->name || !type_decl->field_names || type_decl->field_count <= 0)
@@ -6034,6 +6070,25 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                 }
               }
             }
+            // General expression yielding a boxed struct as a struct arg
+            // (`area(rects[0])`, `area(mk(...))` already handled above, a
+            // ternary, etc.): evaluate to a VMValue and unpack into a temp
+            // struct alloca, then pass the alloca. This is what makes
+            // method-style calls on an array element — `ents[i].area()`,
+            // which the parser rewrites to `area(ents[i])` — work.
+            {
+              StructTypeEntry *st = find_struct_type(backend, expected_struct);
+              if (st && struct_is_trivially_unboxable(st)) {
+                LLVMValueRef boxed = codegen_expression(backend, arg);
+                LLVMValueRef dst = llvm_build_alloca_at_entry(
+                    backend, st->llvm_type, "arg.struct.unpack");
+                LLVMBuildStore(backend->builder, LLVMConstNull(st->llvm_type),
+                               dst);
+                emit_unpack_boxed_struct_into(backend, boxed, st, dst);
+                args[i + 1] = dst;
+                continue;
+              }
+            }
             // Fall through to the boxed VMValue path on any mismatch —
             // the call will likely misbehave at runtime, but preserving
             // the existing path keeps the rest of the program compilable
@@ -6888,39 +6943,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           // runtime call.
           LLVMValueRef rhs_val = codegen_expression(backend, node->right);
           if (rhs_val) {
-            LLVMValueRef rhs_tmp = llvm_build_alloca_at_entry(
-                backend, backend->vm_value_type, "unpack.rhs.tmp");
-            LLVMBuildStore(backend->builder, rhs_val, rhs_tmp);
-            LLVMValueRef field_count = LLVMConstInt(
-                backend->int32_type, (unsigned)st->field_count, 0);
-            // Build a `[N x i8*]` of declaration-ordered field names so the
-            // runtime can resolve fields by key when the boxed source is a
-            // string-keyed VM_OBJECT (a struct pulled back out of a dynamic
-            // array). The int-indexed ObjStruct path ignores it.
-            LLVMTypeRef names_arr_ty =
-                LLVMArrayType(backend->ptr_type, st->field_count);
-            LLVMValueRef names_arr = llvm_build_alloca_at_entry(
-                backend, names_arr_ty, "unpack.names");
-            LLVMValueRef zero0 = LLVMConstInt(backend->int32_type, 0, 0);
-            for (int fi = 0; fi < st->field_count; fi++) {
-              LLVMValueRef nm = LLVMBuildGlobalStringPtr(
-                  backend->builder, st->field_names[fi], "unpack.name");
-              LLVMValueRef nidx[] = {
-                  zero0, LLVMConstInt(backend->int32_type, fi, 0)};
-              LLVMValueRef nep = LLVMBuildGEP2(backend->builder, names_arr_ty,
-                                               names_arr, nidx, 2, "unpack.nep");
-              LLVMBuildStore(backend->builder, nm, nep);
-            }
-            LLVMValueRef nzidx[] = {zero0, zero0};
-            LLVMValueRef names_ptr = LLVMBuildGEP2(
-                backend->builder, names_arr_ty, names_arr, nzidx, 2,
-                "unpack.names.ptr");
-            LLVMValueRef unpack_args[] = {rhs_tmp, field_count, names_ptr,
-                                          typed_alloca};
-            LLVMBuildCall2(
-                backend->builder,
-                LLVMGlobalGetValueType(backend->func_aot_struct_unpack_named),
-                backend->func_aot_struct_unpack_named, unpack_args, 4, "");
+            // typed_alloca is already zero-initialized above; unpack the
+            // boxed RHS into it (by name for a VM_OBJECT, by position for an
+            // ObjStruct).
+            emit_unpack_boxed_struct_into(backend, rhs_val, st, typed_alloca);
           }
         }
         add_local_struct(backend, node->name, typed_alloca, st->name);

@@ -1340,27 +1340,29 @@ std::unique_ptr<ASTNode> Parser::parse_postfix(std::unique_ptr<ASTNode> expr) {
             //   3. Otherwise, "function not found" with the raw method
             //      name.
             //
-            // Trigger still fires only when the chain head is a bare
-            // Identifier and the next token is `(`. Field access
-            // (`p.x` without parens) keeps falling through to the
-            // ArrayAccess desugar below.
+            // Trigger fires whenever the next token is `(`, for ANY head
+            // expression — a bare identifier (`r.area()`), an array element
+            // (`ents[i].area()`), or a call result (`mk(3,5).area()`). The
+            // resolver decides: an identifier head may be a module alias
+            // (`<head>__<name>`); everything else can only be method dispatch
+            // (`<name>(<head>, args...)`), since a non-identifier head can
+            // never name an import alias. Field access (`p.x`, no parens)
+            // keeps falling through to the ArrayAccess desugar below.
             if (check(TOKEN_LPAREN)) {
-                if (std::get_if<Identifier>(&expr->value)) {
-                    std::string method_name = field.value();
-                    auto receiver_node = std::move(expr);
-                    advance(); // consume '('
-                    std::vector<std::unique_ptr<ASTNode>> arguments;
-                    if (!check(TOKEN_RPAREN)) {
-                        do {
-                            arguments.push_back(parse_expression());
-                        } while (match(TOKEN_COMMA));
-                    }
-                    expect(TOKEN_RPAREN, "Expected ')' after arguments");
-                    FunctionCall fc(method_name, std::move(arguments), dot_loc);
-                    fc.receiver = std::move(receiver_node);
-                    expr = std::make_unique<ASTNode>(std::move(fc));
-                    continue;
+                std::string method_name = field.value();
+                auto receiver_node = std::move(expr);
+                advance(); // consume '('
+                std::vector<std::unique_ptr<ASTNode>> arguments;
+                if (!check(TOKEN_RPAREN)) {
+                    do {
+                        arguments.push_back(parse_expression());
+                    } while (match(TOKEN_COMMA));
                 }
+                expect(TOKEN_RPAREN, "Expected ')' after arguments");
+                FunctionCall fc(method_name, std::move(arguments), dot_loc);
+                fc.receiver = std::move(receiver_node);
+                expr = std::make_unique<ASTNode>(std::move(fc));
+                continue;
             }
 
             // Member access: obj.field  -->  obj["field"]
