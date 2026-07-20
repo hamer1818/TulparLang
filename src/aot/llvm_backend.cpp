@@ -5932,6 +5932,16 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           ret_st = find_struct_type(backend,
                                      callee_entry->return_struct_name);
         }
+        // Native res-ptr ABI (alloca of the struct layout + zero placeholder)
+        // only applies to trivially-unboxable (int/bool) struct returns. A
+        // struct with float/string/nested fields is returned as a boxed
+        // VM_OBJECT, so let it flow through the normal VMValue path below —
+        // res_ptr is a VMValue slot and the loaded VMValue (the object) is
+        // returned to the caller, which is what makes `P e = mk()`,
+        // `push(a, mk())`, etc. work for such structs.
+        if (ret_st && !struct_is_trivially_unboxable(ret_st)) {
+          ret_st = nullptr;
+        }
         // VAR_DECL hint: when `Point p = make_point();` is being lowered,
         // VAR_DECL has already allocated a typed-struct local for `p` and
         // pinned its alloca on backend->pending_struct_result_ptr (with
@@ -7389,7 +7399,13 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           backend, backend->current_function_returns_struct);
       LLVMValueRef res_ptr = LLVMGetParam(backend->current_function, 0);
       ASTNode_C *rv = node->return_value;
-      if (st && rv->type == AST_IDENTIFIER && rv->name) {
+      // Only trivially-unboxable (int/bool) structs use the native res-ptr
+      // write ABI. A float/string/nested-field struct local is already a
+      // boxed VM_OBJECT, so none of these branches fire and the boxed
+      // fallback below stores that object VMValue into res_ptr — matching the
+      // caller, which now treats such returns as plain VMValue results.
+      if (st && struct_is_trivially_unboxable(st) &&
+          rv->type == AST_IDENTIFIER && rv->name) {
         const char *sn = get_local_struct_type(backend, rv->name);
         LLVMValueRef src = get_local(backend, rv->name);
         if (sn && src && strcmp(sn, st->name) == 0) {
@@ -7403,7 +7419,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       // result pointer (param 0) instead of doing a load+store dance via
       // the boxed VMValue fallback. Same pin-the-hint trick as the
       // VAR_DECL and struct-arg paths.
-      if (st && rv->type == AST_FUNCTION_CALL && rv->name) {
+      if (st && struct_is_trivially_unboxable(st) &&
+          rv->type == AST_FUNCTION_CALL && rv->name) {
         const char *inner_ret_struct = nullptr;
         for (int i = 0; i < backend->function_count; i++) {
           if (strcmp(backend->functions[i].name, rv->name) == 0) {
@@ -7420,7 +7437,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           return LLVMBuildRetVoid(backend->builder);
         }
       }
-      if (st && rv->type == AST_OBJECT_LITERAL) {
+      if (st && struct_is_trivially_unboxable(st) &&
+          rv->type == AST_OBJECT_LITERAL) {
         // `return { x: 1, y: 2 };` — same field-validation + zero-init +
         // GEP+store pattern as the VAR_DECL literal path, but we write
         // straight into the caller-supplied result pointer.

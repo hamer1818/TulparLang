@@ -1,0 +1,73 @@
+// Regression: returning a non-trivially-unboxable struct from a function.
+//
+// A struct with float / string / nested-struct fields is a boxed VM_OBJECT,
+// not a native aggregate. Before 2026-07-20 such structs returned a zero
+// placeholder from a call, so `P e = mk(1.5,2.5)`, `push(a, mk())`, and
+// `arr[i] = mk()` all yielded zeros — and nested structs didn't work at all.
+// The native res-ptr ABI is now gated on trivially-unboxable structs; the rest
+// flow as normal boxed VMValue returns. Run: ./tulpar tests/struct_nontrivial.test.tpr
+import "test";
+
+struct P { float x; float y; }
+func mkp(float a, float b): P { P p; p.x = a; p.y = b; return p; }
+
+struct Player { str name; int hp; }
+func mkpl(str n, int h): Player { Player p; p.name = n; p.hp = h; return p; }
+
+struct Mix { int id; float val; }
+func mkm(int i, float v): Mix { Mix m; m.id = i; m.val = v; return m; }
+
+struct V { int x; int y; }
+struct Body { V pos; int mass; }
+func mkb(int x, int y, int m): Body {
+    Body b; V p; p.x = x; p.y = y; b.pos = p; b.mass = m; return b;
+}
+
+func run_float_return() {
+    P e = mkp(1.5, 2.5);              // was 0,0
+    assert_eq_int(toInt(e.x), 1);
+    assert_eq_int(toInt(e.y * 2.0), 5);
+}
+
+func run_float_in_array() {
+    var ps = [];
+    push(ps, mkp(1.5, 2.5));          // struct-returning call as push arg
+    assert_eq_int(toInt(ps[0].x), 1);
+}
+
+func run_string_struct() {
+    var ps = [];
+    push(ps, mkpl("a", 100));
+    ps[0] = mkpl("kral", 50);         // assign a boxed struct into an element
+    assert_eq_str(ps[0].name, "kral");
+    assert_eq_int(ps[0].hp, 50);
+    Player e = ps[0];                 // extract back out
+    assert_eq_str(e.name, "kral");
+}
+
+func run_mixed_fields() {
+    var ms = [];
+    push(ms, mkm(7, 3.5));
+    assert_eq_int(ms[0].id, 7);
+    assert_eq_int(toInt(ms[0].val * 2.0), 7);
+}
+
+func run_nested_struct() {
+    Body b = mkb(3, 4, 10);           // nested struct direct
+    assert_eq_int(b.pos.x, 3);
+    assert_eq_int(b.mass, 10);
+    var bs = [];
+    push(bs, mkb(5, 6, 20));          // nested struct in an array
+    assert_eq_int(bs[0].pos.x, 5);
+    assert_eq_int(bs[0].mass, 20);
+    bs[0].mass = 99;
+    assert_eq_int(bs[0].mass, 99);
+}
+
+print("=== non-trivially-unboxable struct returns ===");
+test("float-field struct return", "run_float_return");
+test("float struct via call into array", "run_float_in_array");
+test("string-field struct round-trip", "run_string_struct");
+test("mixed int/float fields", "run_mixed_fields");
+test("nested struct (struct-in-struct)", "run_nested_struct");
+test_summary();

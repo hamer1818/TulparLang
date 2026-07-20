@@ -218,6 +218,19 @@ backwards-compatible.
   both languages.
 
 ### Fixed
+- **Returning a non-trivially-unboxable struct from a function returned zeros —
+  and this also unblocked nested structs.** A struct with float / string /
+  nested-struct fields is a boxed `VM_OBJECT`, not a native aggregate, but both
+  the call site and the `return` codegen assumed the native res-pointer ABI, so
+  `P e = mk(1.5, 2.5)`, `push(a, mk())`, and `arr[i] = mk()` all yielded a zero
+  placeholder, and a struct containing a struct (`Body { V pos; }`) didn't work
+  at all. The native res-ptr write ABI (and its zero-placeholder fallback) is
+  now gated on `struct_is_trivially_unboxable`; every other struct flows as a
+  normal boxed `VMValue` return — the function stores its boxed object into the
+  result slot and the caller loads it. Nested structs now round-trip
+  (`bs[0].pos.x`, `bs[0].mass = 99`), as do float/string/mixed-field structs
+  returned from constructors. Trivially-unboxable (int/bool) struct returns keep
+  the native fast path unchanged.
 - **`call(fn, a, b, …)` forwards N arguments (was a segfault).** Dynamic
   dispatch only knew the 0- and 1-argument shapes; calling a by-name function
   with 2+ args silently dropped the extras, so the boxed callee read an

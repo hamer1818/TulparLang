@@ -1301,6 +1301,14 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Dil seviyesi
 
+- ✅ **Non-trivially-unboxable struct dönüşü + iç içe struct ÇALIŞIYOR (düzeltildi 2026-07-20).**
+  float/string/nested alanlı struct boxed VM_OBJECT'tir; call-site ve `return`
+  codegen'i native res-ptr ABI varsayıyordu → `P e = mk(1.5,2.5)`, `push(a, mk())`,
+  `arr[i] = mk()` sıfır dönüyordu ve struct-alanlı struct (`Body{V pos}`) hiç
+  çalışmıyordu. Native res-ptr yolu artık yalnız `struct_is_trivially_unboxable`'a
+  gate'li; diğerleri normal boxed VMValue dönüşü olarak akıyor. İç içe struct
+  round-trip yapıyor (`bs[0].pos.x`, `bs[0].mass=99`); float/string/mixed struct
+  constructor'dan dönebiliyor. int/bool struct native hızlı yolu değişmedi.
 - ✅ **Metot çağrısı her alıcıda ÇALIŞIYOR (düzeltildi 2026-07-20).**
   `recv.method(args)` artık düz kimlik dışında dizi-elemanı (`ents[i].area()`)
   ve çağrı-sonucu (`mk(3,5).area()`) alıcılarda da çalışıyor (eskiden "Null
