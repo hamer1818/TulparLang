@@ -1,0 +1,68 @@
+// Regression: call(fn, a, b, ...) N-argument dynamic dispatch.
+//
+// Before the 2026-07-20 fix, call() only knew the 0- and 1-argument shapes;
+// forwarding 2+ args segfaulted (the boxed callee read an unpassed pointer
+// param as garbage). aot_call_dynamic_n / aot_invoke_boxed_n now invoke the
+// target through its registered arity. Run: ./tulpar tests/call_nargs.test.tpr
+import "test";
+
+// Callees write their observable result into globals so the 0-arg test
+// handlers (call() dispatches them with no args) can assert on it.
+int g_sum = 0;
+str g_str = "";
+int g_hits = 0;
+
+func noarg()               { g_hits = g_hits + 1; }
+func one(int a)            { g_sum = a; }
+func two(int a, int b)     { g_sum = a + b; }
+func three(int a, int b, int c) { g_sum = a + b + c; }
+func greet(str a, str b)   { g_str = a + "-" + b; }
+
+func run_zero_arg() {
+    g_hits = 0;
+    call(noarg);
+    call(noarg);
+    assert_eq_int(g_hits, 2);        // 0-arg dispatch still fires
+}
+
+func run_one_arg() {
+    g_sum = -1;
+    call(one, 42);
+    assert_eq_int(g_sum, 42);        // the historical 1-arg path (Wings)
+}
+
+func run_two_args() {
+    g_sum = -1;
+    call(two, 3, 4);
+    assert_eq_int(g_sum, 7);         // was a segfault before the fix
+}
+
+func run_three_args() {
+    g_sum = -1;
+    call(three, 10, 20, 30);
+    assert_eq_int(g_sum, 60);
+}
+
+func run_string_args() {
+    g_str = "";
+    call(greet, "alfa", "beta");
+    assert_eq_str(g_str, "alfa-beta");
+}
+
+func run_via_registry() {
+    // call() a name pulled from an array (callback-registry pattern).
+    var reg = [];
+    push(reg, "three");
+    g_sum = -1;
+    call(reg[0], 1, 2, 3);
+    assert_eq_int(g_sum, 6);
+}
+
+print("=== call() N-argument dispatch ===");
+test("0-arg dispatch fires", "run_zero_arg");
+test("1-arg dispatch (Wings path)", "run_one_arg");
+test("2-arg dispatch (was segfault)", "run_two_args");
+test("3-arg dispatch", "run_three_args");
+test("string args forwarded", "run_string_args");
+test("name from array + args", "run_via_registry");
+test_summary();

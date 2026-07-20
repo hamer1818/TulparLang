@@ -1,0 +1,72 @@
+// Regression: native (int/bool) struct <-> dynamic array round-trip.
+//
+// Before the 2026-07-20 fix, a trivially-unboxable struct pushed into an array
+// lost field access (arr[i].x -> "Invalid index or target"), and reading one
+// back out (Ent e = arr[i]) yielded zeros. Fixes: box_native_struct_as_object
+// (in) + aot_struct_unpack_named (out). Run: ./tulpar tests/struct_array.test.tpr
+import "test";
+
+struct Ent { int x; int y; int alive; }
+
+func mk(int a, int b): Ent {
+    Ent e;
+    e.x = a;
+    e.y = b;
+    e.alive = 1;
+    return e;
+}
+
+func run_push_read() {
+    var ents = [];
+    push(ents, mk(10, 20));
+    push(ents, mk(30, 40));
+    assert_eq_int(ents[0].x, 10);
+    assert_eq_int(ents[0].y, 20);
+    assert_eq_int(ents[1].x, 30);
+    assert_eq_int(ents[1].y, 40);
+}
+
+func run_field_writeback() {
+    var ents = [];
+    push(ents, mk(1, 2));
+    ents[0].x = 99;                  // was a no-op / runtime error before
+    ents[0].y = ents[0].y + 5;       // read-modify-write on an array element
+    assert_eq_int(ents[0].x, 99);
+    assert_eq_int(ents[0].y, 7);
+}
+
+func run_array_literal() {
+    Ent a = mk(5, 6);
+    var ents = [a];                  // struct in an array literal (not push)
+    assert_eq_int(ents[0].x, 5);
+    ents[0].x = 8;
+    assert_eq_int(ents[0].x, 8);
+}
+
+func run_extract_value_semantics() {
+    var ents = [];
+    push(ents, mk(30, 40));
+    Ent e = ents[0];                 // pull the struct back out
+    assert_eq_int(e.x, 30);
+    assert_eq_int(e.y, 40);
+    assert_eq_int(e.alive, 1);       // bool-ish flag field survives
+    e.x = 99;                        // local copy is independent
+    assert_eq_int(e.x, 99);
+    assert_eq_int(ents[0].x, 30);    // original untouched (value semantics)
+}
+
+func run_bool_field() {
+    var ents = [];
+    push(ents, mk(1, 1));
+    ents[0].alive = 0;
+    Ent e = ents[0];
+    assert_eq_int(e.alive, 0);
+}
+
+print("=== native struct <-> array round-trip ===");
+test("push + read fields", "run_push_read");
+test("field writeback on array element", "run_field_writeback");
+test("struct in array literal", "run_array_literal");
+test("extract back out (value semantics)", "run_extract_value_semantics");
+test("flag field round-trips", "run_bool_field");
+test_summary();
