@@ -68,6 +68,12 @@ games = [
          d_en="Left/Right or A/D; avoid the falling meteors, run out the clock.",
          lv_tr="12 sn / seyrek → 15 sn / sık → 18 sn / en yoğun",
          lv_en="12s / sparse → 15s / dense → 18s / densest"),
+    dict(tr="kac", en="blockdodge", emoji="🟦", name_tr="Kaç — struct", name_en="Dodge — struct",
+         src_tr="41_struct_entities.tpr", src_en="en/struct_entities.tpr",
+         d_tr="Sol/Sağ veya A/D; düşen bloklardan kaç. arcade motoru DEĞİL, doğrudan tame + gerçek struct entity'ler.",
+         d_en="Left/Right or A/D; dodge the falling blocks. NOT the arcade engine — direct tame + real struct entities.",
+         lv_tr="paralel dizi / handle / context-global HİLESİ YOK — struct Entity bir dizide, üstünde metotlar, iç içe Vec alanları (kodu aç, gör).",
+         lv_en="NO parallel-array / handle / context-global tricks — a struct Entity in an array, methods on it, nested Vec fields (open the code and see)."),
 ]
 
 # Kaynakları oku ve gömülecek JSON'u kur (anahtar = html taban adı).
