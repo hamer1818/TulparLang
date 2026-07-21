@@ -157,3 +157,4 @@ tags
 # docs/mindmap/ is a personal Obsidian vault for quick orientation; the
 # single source of truth stays STATUS.md / CLAUDE.md. Local-only, not upstream.
 docs/mindmap/
+_fio_t*.txt
