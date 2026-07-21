@@ -114,25 +114,11 @@ static void collect_free_variables(ASTNode_C *node,
   }
 }
 
-static void analyze_module_captures(LLVMBackend *backend, ASTNode_C *node, int depth, ASTNode_C *current_func) {
-  if (!node) return;
-  if (node->type == AST_PROGRAM) {
-    for (int i = 0; i < node->statement_count; i++) {
-      if (node->statements[i]->type == AST_FUNCTION_DECL) {
-        analyze_module_captures(backend, node->statements[i], 0, node->statements[i]);
-      } else {
-        analyze_module_captures(backend, node->statements[i], 0, node);
-      }
-    }
-    return;
-  }
-  CaptureData *cd = (CaptureData*)backend->capture_data;
-  if (node->type == AST_FUNCTION_DECL || node->type == AST_LAMBDA) {
-    cd->depths[node] = depth;
-    std::unordered_set<std::string> declared;
-    collect_function_declared_vars(node, declared);
-    std::unordered_set<std::string> captured;
-    struct NestedVisitor {
+// Finds every lambda/function nested under `curr` and records which of
+// `outer_declared`'s names appear free in it — i.e. which outer locals the
+// nested function captures. Used per enclosing function AND (since the
+// 2026-07-21 top-level fix) per program root.
+struct NestedVisitor {
       static void visit(ASTNode_C *curr, const std::unordered_set<std::string> &outer_declared, std::unordered_set<std::string> &captured_vars) {
         if (!curr) return;
         if (curr->type == AST_FUNCTION_DECL || curr->type == AST_LAMBDA) {
@@ -172,7 +158,107 @@ static void analyze_module_captures(LLVMBackend *backend, ASTNode_C *node, int d
         for (int i = 0; i < curr->element_count; i++) visit(curr->elements[i], outer_declared, captured_vars);
         for (int i = 0; i < curr->object_count; i++) visit(curr->object_values[i], outer_declared, captured_vars);
       }
-    };
+};
+
+// Walks `curr` in declaration order and assigns an env slot to every
+// VARIABLE_DECL whose name is in `captured_vars` (skipping nested
+// function/lambda subtrees — their decls belong to their own frame).
+// Formerly the function-branch-local DeclVisitor; hoisted so the program
+// root can assign slots to captured top-level scope-locals too.
+static void assign_capture_decl_slots(ASTNode_C *curr,
+                                      const std::unordered_set<std::string> &captured_vars,
+                                      std::unordered_map<std::string, int> &func_slots,
+                                      int &slot_idx) {
+  if (!curr) return;
+  if (curr->type == AST_VARIABLE_DECL && curr->name) {
+    std::string name = curr->name;
+    if (captured_vars.find(name) != captured_vars.end() && func_slots.find(name) == func_slots.end()) {
+      func_slots[name] = slot_idx++;
+    }
+  }
+  if (curr->type != AST_FUNCTION_DECL && curr->type != AST_LAMBDA) {
+    assign_capture_decl_slots(curr->left, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->right, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->body, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->condition, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->then_branch, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->else_branch, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->init, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->increment, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->iterable, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->return_value, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->index, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->receiver, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->callee, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->try_block, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->catch_block, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->finally_block, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->throw_expr, captured_vars, func_slots, slot_idx);
+    for (int i = 0; i < curr->statement_count; i++) assign_capture_decl_slots(curr->statements[i], captured_vars, func_slots, slot_idx);
+    for (int i = 0; i < curr->argument_count; i++) assign_capture_decl_slots(curr->arguments[i], captured_vars, func_slots, slot_idx);
+    for (int i = 0; i < curr->element_count; i++) assign_capture_decl_slots(curr->elements[i], captured_vars, func_slots, slot_idx);
+    for (int i = 0; i < curr->object_count; i++) assign_capture_decl_slots(curr->object_values[i], captured_vars, func_slots, slot_idx);
+  }
+}
+
+static void analyze_module_captures(LLVMBackend *backend, ASTNode_C *node, int depth, ASTNode_C *current_func) {
+  if (!node) return;
+  if (node->type == AST_PROGRAM) {
+    // Top-level capture analysis (2026-07-21). Direct-child var decls become
+    // real globals (Pass 0.1) that lambdas read without capture machinery,
+    // but a var declared in a NESTED top-level scope — a for-init
+    // (`for (int k = ...)`), an if/while-block local — lives on main's
+    // stack. Before this, no cd->slots entry was ever computed for the
+    // program node, so a top-level lambda referencing such a var found
+    // nothing and its body read nullptr/garbage. Mirror the per-function
+    // analysis with the program root as "the function" and its nested
+    // (non-global, non-function) decls as the capturable set.
+    CaptureData *pcd = (CaptureData*)backend->capture_data;
+    pcd->depths[node] = 0;
+    std::unordered_set<std::string> top_declared;
+    std::unordered_set<std::string> top_globals;
+    for (int i = 0; i < node->statement_count; i++) {
+      ASTNode_C *st = node->statements[i];
+      if (!st) continue;
+      if (st->type == AST_VARIABLE_DECL) {
+        if (st->name) top_globals.insert(st->name);
+        continue;  // globals need no capture; initializer lambdas are fine
+      }
+      if (st->type == AST_FUNCTION_DECL) continue;
+      collect_declared_locals(st, top_declared);
+    }
+    for (const auto &g : top_globals) top_declared.erase(g);
+    if (!top_declared.empty()) {
+      std::unordered_set<std::string> top_captured;
+      for (int i = 0; i < node->statement_count; i++) {
+        ASTNode_C *st = node->statements[i];
+        if (!st || st->type == AST_FUNCTION_DECL) continue;
+        NestedVisitor::visit(st, top_declared, top_captured);
+      }
+      if (!top_captured.empty()) {
+        int pslot = 1;  // slot 0 is the parent-env pointer, as everywhere
+        for (int i = 0; i < node->statement_count; i++) {
+          ASTNode_C *st = node->statements[i];
+          if (!st || st->type == AST_FUNCTION_DECL) continue;
+          assign_capture_decl_slots(st, top_captured, pcd->slots[node], pslot);
+        }
+      }
+    }
+    for (int i = 0; i < node->statement_count; i++) {
+      if (node->statements[i]->type == AST_FUNCTION_DECL) {
+        analyze_module_captures(backend, node->statements[i], 0, node->statements[i]);
+      } else {
+        analyze_module_captures(backend, node->statements[i], 0, node);
+      }
+    }
+    return;
+  }
+  CaptureData *cd = (CaptureData*)backend->capture_data;
+  if (node->type == AST_FUNCTION_DECL || node->type == AST_LAMBDA) {
+    cd->depths[node] = depth;
+    std::unordered_set<std::string> declared;
+    collect_function_declared_vars(node, declared);
+    std::unordered_set<std::string> captured;
     NestedVisitor::visit(node->body, declared, captured);
     int slot = 1;
     for (int i = 0; i < node->param_count; i++) {
@@ -183,41 +269,7 @@ static void analyze_module_captures(LLVMBackend *backend, ASTNode_C *node, int d
         }
       }
     }
-    struct DeclVisitor {
-      static void visit(ASTNode_C *curr, const std::unordered_set<std::string> &captured_vars, std::unordered_map<std::string, int> &func_slots, int &slot_idx) {
-        if (!curr) return;
-        if (curr->type == AST_VARIABLE_DECL && curr->name) {
-          std::string name = curr->name;
-          if (captured_vars.find(name) != captured_vars.end() && func_slots.find(name) == func_slots.end()) {
-            func_slots[name] = slot_idx++;
-          }
-        }
-        if (curr->type != AST_FUNCTION_DECL && curr->type != AST_LAMBDA) {
-          visit(curr->left, captured_vars, func_slots, slot_idx);
-          visit(curr->right, captured_vars, func_slots, slot_idx);
-          visit(curr->body, captured_vars, func_slots, slot_idx);
-          visit(curr->condition, captured_vars, func_slots, slot_idx);
-          visit(curr->then_branch, captured_vars, func_slots, slot_idx);
-          visit(curr->else_branch, captured_vars, func_slots, slot_idx);
-          visit(curr->init, captured_vars, func_slots, slot_idx);
-          visit(curr->increment, captured_vars, func_slots, slot_idx);
-          visit(curr->iterable, captured_vars, func_slots, slot_idx);
-          visit(curr->return_value, captured_vars, func_slots, slot_idx);
-          visit(curr->index, captured_vars, func_slots, slot_idx);
-          visit(curr->receiver, captured_vars, func_slots, slot_idx);
-          visit(curr->callee, captured_vars, func_slots, slot_idx);
-          visit(curr->try_block, captured_vars, func_slots, slot_idx);
-          visit(curr->catch_block, captured_vars, func_slots, slot_idx);
-          visit(curr->finally_block, captured_vars, func_slots, slot_idx);
-          visit(curr->throw_expr, captured_vars, func_slots, slot_idx);
-          for (int i = 0; i < curr->statement_count; i++) visit(curr->statements[i], captured_vars, func_slots, slot_idx);
-          for (int i = 0; i < curr->argument_count; i++) visit(curr->arguments[i], captured_vars, func_slots, slot_idx);
-          for (int i = 0; i < curr->element_count; i++) visit(curr->elements[i], captured_vars, func_slots, slot_idx);
-          for (int i = 0; i < curr->object_count; i++) visit(curr->object_values[i], captured_vars, func_slots, slot_idx);
-        }
-      }
-    };
-    DeclVisitor::visit(node->body, captured, cd->slots[node], slot);
+    assign_capture_decl_slots(node->body, captured, cd->slots[node], slot);
     analyze_module_captures(backend, node->body, depth + 1, node);
     return;
   }
@@ -7944,6 +7996,30 @@ static int expr_has_subscript(ASTNode_C *n) {
   return 0;
 }
 
+// Whether an expression subtree contains a lambda literal. The native path
+// has no closure support at all — a `var f = () => i;` decl "fits" the i64
+// gate shape (TYPE_UNKNOWN decl) but the emitter can neither build the
+// closure nor call it, so the function silently computes garbage. Any
+// value-position lambda must force the boxed VMValue codegen.
+static int expr_has_lambda(ASTNode_C *n) {
+  if (!n) return 0;
+  if (n->type == AST_LAMBDA) return 1;
+  if (expr_has_lambda(n->left)) return 1;
+  if (expr_has_lambda(n->right)) return 1;
+  if (expr_has_lambda(n->index)) return 1;
+  if (expr_has_lambda(n->condition)) return 1;
+  if (expr_has_lambda(n->return_value)) return 1;
+  if (expr_has_lambda(n->receiver)) return 1;
+  if (expr_has_lambda(n->callee)) return 1;
+  if (n->arguments)
+    for (int i = 0; i < n->argument_count; i++)
+      if (expr_has_lambda(n->arguments[i])) return 1;
+  if (n->elements)
+    for (int i = 0; i < n->element_count; i++)
+      if (expr_has_lambda(n->elements[i])) return 1;
+  return 0;
+}
+
 // Whether the native codegen path can correctly emit every statement in `body`.
 // `body` is expected to be an AST_BLOCK. The native path's body walker handles
 // only a fixed set of statement types (return / if / var-decl / assignment /
@@ -7984,11 +8060,13 @@ static int native_codegen_supports_stmt(ASTNode_C *stmt) {
   if (!stmt) return 1;
   switch (stmt->type) {
   case AST_RETURN:
+    if (expr_has_lambda(stmt->return_value)) return 0;
     return !expr_has_subscript(stmt->return_value);
   case AST_ASSIGNMENT:
     // `x = arr[i]` / `x = f(a[i])`: RHS reads a subscript the native i64 path
     // can't box — bail to the VMValue codegen.
     if (expr_has_subscript(stmt->right)) return 0;
+    if (expr_has_lambda(stmt->right)) return 0;
     // Native locals are i64. `acc[key] = value` needs `acc` loaded as a
     // 16-byte VMValue, which OOB-reads off our 8-byte alloca and crashes
     // codegen (the parser sets `node->name` for plain `x = v` and leaves
@@ -8001,6 +8079,7 @@ static int native_codegen_supports_stmt(ASTNode_C *stmt) {
     return 1;
   case AST_VARIABLE_DECL:
     if (expr_has_subscript(stmt->right)) return 0;
+    if (expr_has_lambda(stmt->right)) return 0;
     // Native locals are unconditionally allocated as i64, so only
     // int/bool decls survive the round-trip. `json arr = []`,
     // `string s = "..."`, `Point p;`, etc. silently lose their tag info.
@@ -9042,6 +9121,44 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   LLVMBuildCall2(backend->builder,
                  LLVMGlobalGetValueType(backend->func_aot_runtime_init),
                  backend->func_aot_runtime_init, nullptr, 0, "");
+
+  // Top-level closure env (2026-07-21): if the capture analysis found
+  // lambdas capturing main's scope-locals (for-init vars, block locals —
+  // NOT globals), give main an env array exactly like a regular function
+  // with captures gets one. current_function_node is already the program
+  // node, so the VARIABLE_DECL captured path and add_local_* slot marking
+  // work unchanged downstream.
+  {
+    CaptureData *mcd = (CaptureData *)backend->capture_data;
+    if (mcd && mcd->slots.find(node) != mcd->slots.end() &&
+        !mcd->slots[node].empty()) {
+      int env_size = (int)mcd->slots[node].size() + 1; // +1 parent-env slot
+      LLVMValueRef alloc_args[] = {LLVMConstNull(backend->ptr_type)};
+      LLVMValueRef env_obj = LLVMBuildCall2(
+          backend->builder,
+          LLVMGlobalGetValueType(backend->func_vm_allocate_array),
+          backend->func_vm_allocate_array, alloc_args, 1, "main_alloc_env");
+      backend->current_env_ptr = env_obj;
+      // Slot 0: null parent env (main IS the top level), then default-init
+      // one slot per captured var, mirroring the function-entry pattern.
+      for (int i = 0; i < env_size; i++) {
+        LLVMValueRef def_val =
+            (i == 0) ? llvm_build_vm_val_obj(backend,
+                                             LLVMConstNull(backend->ptr_type))
+                     : llvm_vm_val_int(backend, 0);
+        LLVMValueRef slot_ptr = LLVMBuildAlloca(
+            backend->builder, backend->vm_value_type, "main_env_def_ptr");
+        LLVMBuildStore(backend->builder, def_val, slot_ptr);
+        LLVMValueRef slot_void = LLVMBuildBitCast(
+            backend->builder, slot_ptr, backend->ptr_type, "main_env_def_void");
+        LLVMValueRef push_args[] = {LLVMConstNull(backend->ptr_type), env_obj,
+                                    slot_void};
+        LLVMBuildCall2(backend->builder,
+                       LLVMGlobalGetValueType(backend->func_vm_array_push),
+                       backend->func_vm_array_push, push_args, 3, "");
+      }
+    }
+  }
 
   if (node->statements) {
     // Pass 0.0: Register user-defined struct types so subsequent passes
