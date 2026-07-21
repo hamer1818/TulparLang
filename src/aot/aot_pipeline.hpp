@@ -23,6 +23,11 @@ typedef enum {
 // <out>.html + .js + .wasm. VMValue çağrı ABI'sini de değiştirir (sret;
 // bkz. llvm_values.cpp), o yüzden codegen başlamadan önce çağrılmalıdır.
 void aot_set_target_web(int enable);
+// `tulpar build --target=android`: emit arm64-v8a + x86_64 objects, link
+// them with the NDK toolchain into per-ABI libtulpargame.so files and
+// write an APK staging dir (<out>_apk/). Packaging into a signed .apk is
+// android/package_apk.sh's job.
+void aot_set_target_android(int enable);
 
 // Compile Tulpar source to executable (verbose mode).
 // Returns AOT_OK on success, error code otherwise.

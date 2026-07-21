@@ -310,25 +310,18 @@ target_compile_definitions(tulpar
 # --target=web` emits wasm32-unknown-emscripten objects from the same
 # driver (linked by em++ against the wasm/dist archives — see
 # wasm/build_tame_web.sh and the web path in aot_pipeline.cpp).
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64|ARM64")
-    # ARM64/AArch64 architecture (Apple Silicon, Linux ARM)
-    llvm_map_components_to_libnames(llvm_libs
-        support core irreader
-        aarch64asmparser aarch64codegen aarch64desc aarch64info
-        webassemblyasmparser webassemblycodegen webassemblydesc webassemblyinfo
-        passes asmparser asmprinter
-        target mc
-    )
-else()
-    # x86_64 architecture (Intel/AMD)
-    llvm_map_components_to_libnames(llvm_libs
-        support core irreader
-        x86asmparser x86codegen x86desc x86info
-        webassemblyasmparser webassemblycodegen webassemblydesc webassemblyinfo
-        passes asmparser asmprinter
-        target mc
-    )
-endif()
+# BOTH x86 and AArch64 backends are linked on every host since the
+# Android target (`tulpar build --target=android`): one driver emits
+# arm64-v8a (real devices) AND x86_64 (Android Studio emulator) objects
+# regardless of what CPU it runs on.
+llvm_map_components_to_libnames(llvm_libs
+    support core irreader
+    aarch64asmparser aarch64codegen aarch64desc aarch64info
+    x86asmparser x86codegen x86desc x86info
+    webassemblyasmparser webassemblycodegen webassemblydesc webassemblyinfo
+    passes asmparser asmprinter
+    target mc
+)
 
 # Windows-specific linking requirements (applies to MSVC and MinGW)
 if(WIN32)

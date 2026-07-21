@@ -571,6 +571,15 @@ typedef struct {
 LLVMBackend *llvm_backend_create(const char *module_name);
 // Web hedefini create'ten ÖNCE kur (bkz. target_web alanının notu).
 void llvm_backend_set_target_web(int enable);
+
+// Emit an object for an EXPLICIT target triple (Android cross-compile:
+// aarch64-linux-android34 / x86_64-linux-android34). Initializes both the
+// AArch64 and X86 LLVM backends — CMake links both on every host. The
+// module's triple/datalayout are (re)set per call, so the same compiled
+// module can be emitted for several ABIs in sequence.
+int llvm_backend_emit_object_for_triple(LLVMBackend *backend,
+                                        const char *filename,
+                                        const char *triple_str);
 void llvm_backend_destroy(LLVMBackend *backend);
 void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node);
 void llvm_backend_optimize(LLVMBackend *backend);

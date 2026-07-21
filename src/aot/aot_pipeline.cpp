@@ -11,6 +11,7 @@
 #if !PLATFORM_WINDOWS
 #include <csignal>   // SIGINT
 #include <sys/wait.h> // WIFSIGNALED / WTERMSIG on system() status
+#include <dirent.h>  // find_android_ndk: ~/Android/android-ndk-* taraması
 #endif
 #include <chrono>
 #include <string>
@@ -243,6 +244,96 @@ void aot_set_target_web(int enable) {
   // Backend'e de kur: declare_runtime_functions llvm_backend_create'in
   // İÇİNDE koşar, tip şekilleri (sret vs SysV) o anda belirlenir.
   llvm_backend_set_target_web(g_target_web);
+}
+
+// --- Android hedefi (aarch64/x86_64-linux-android) --------------------------
+// `tulpar build --target=android` main.cpp'den bu bayrağı kurar. Aynı
+// derlenmiş modülden İKİ obje emit edilir (arm64-v8a = gerçek cihaz,
+// x86_64 = Android Studio emülatörü), her biri NDK clang++'ıyla kendi
+// libtulpargame.so'suna linklenir ve <out>_apk/ altına APK staging düzeni
+// (lib/<abi>/ + AndroidManifest.xml) yazılır. İmzalı .apk üretimi
+// android/package_apk.sh'nin işi. VMValue ABI'si Linux'taki {i64,i64}
+// coercion'ıyla aynı kalır (AAPCS64 ve android-x86_64 SysV bunu bekler),
+// o yüzden web'in aksine backend'e ayrı bir bayrak taşınmaz.
+static int g_target_android = 0;
+
+void aot_set_target_android(int enable) { g_target_android = enable ? 1 : 0; }
+
+// NDK kökü: TULPAR_ANDROID_NDK env'i, yoksa ~/Android/android-ndk-* (en
+// yenisi). Boş dönerse çağıran hata basar. Android hedefi şimdilik yalnız
+// Linux/macOS host'tan derleniyor (Windows host'ta VMValue codegen'i sret
+// ABI'sine kayar — NDK arşivleriyle uyumsuz olur), Windows'ta boş döner.
+static std::string find_android_ndk() {
+#if PLATFORM_WINDOWS
+  return "";
+#else
+  if (const char *env = getenv("TULPAR_ANDROID_NDK"); env && *env) return env;
+  const char *home = getenv("HOME");
+  if (!home || !*home) return "";
+  std::string base = std::string(home) + "/Android";
+  DIR *d = opendir(base.c_str());
+  if (!d) return "";
+  std::string best;
+  while (struct dirent *e = readdir(d)) {
+    if (strncmp(e->d_name, "android-ndk-", 12) == 0) {
+      std::string cand = base + "/" + e->d_name;
+      if (cand > best) best = cand;
+    }
+  }
+  closedir(d);
+  return best;
+#endif
+}
+
+// android/dist/<abi> arama yolu: dev-tree, exe yanı, TULPAR_ANDROID_LIB_DIR.
+static std::string build_android_link_search_dirs(const char *abi) {
+  std::string out;
+  auto add = [&](const std::string &dir) {
+    if (dir.empty()) return;
+    out += "-L\"";
+    out += dir;
+    out += "\" ";
+  };
+  std::string exe_dir = get_executable_dir();
+  if (!exe_dir.empty()) add(exe_dir + "/android/dist/" + abi);
+  add(std::string("./android/dist/") + abi);
+  if (const char *env = getenv("TULPAR_ANDROID_LIB_DIR"); env && *env)
+    add(std::string(env) + "/" + abi);
+  return out;
+}
+
+// Staging dizinine minimal NativeActivity manifesti yazar. hasCode=false:
+// APK'da hiç Java/DEX yok — NativeActivity framework'ten gelir, oyun
+// libtulpargame.so'dur (meta-data android.app.lib_name).
+static void write_android_manifest(const std::string &stage,
+                                   const char *app_label) {
+  std::string path = stage + "/AndroidManifest.xml";
+  FILE *f = fopen(path.c_str(), "wb");
+  if (!f) return;
+  fprintf(f,
+          "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+          "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"\n"
+          "    package=\"dev.tulparlang.game\"\n"
+          "    android:versionCode=\"1\" android:versionName=\"1.0\">\n"
+          "  <uses-sdk android:minSdkVersion=\"26\" "
+          "android:targetSdkVersion=\"34\"/>\n"
+          "  <application android:label=\"%s\" android:hasCode=\"false\"\n"
+          "      android:extractNativeLibs=\"true\">\n"
+          "    <activity android:name=\"android.app.NativeActivity\"\n"
+          "        android:configChanges=\"orientation|keyboardHidden|screenSize\"\n"
+          "        android:screenOrientation=\"landscape\"\n"
+          "        android:exported=\"true\">\n"
+          "      <meta-data android:name=\"android.app.lib_name\" "
+          "android:value=\"tulpargame\"/>\n"
+          "      <intent-filter>\n"
+          "        <action android:name=\"android.intent.action.MAIN\"/>\n"
+          "        <category android:name=\"android.intent.category.LAUNCHER\"/>\n"
+          "      </intent-filter>\n"
+          "    </activity>\n"
+          "  </application>\n"
+          "</manifest>\n",
+          app_label);
+  fclose(f);
 }
 
 // em++'ın -L arama yolları: dev-tree wasm/dist + tulpar exe'sinin yanı +
@@ -562,6 +653,107 @@ AOTResult aot_compile_with_filename_debug(const char *source,
       snprintf(ir_file, sizeof(ir_file), "%s.ll", output_name);
       llvm_backend_emit_ir_file(backend, ir_file);
     }
+  }
+
+  // Android hedefi: iki ABI için obje + NDK linki + APK staging, sonra çık.
+  if (g_target_android) {
+    std::string ndk = find_android_ndk();
+    std::string tc = ndk + "/toolchains/llvm/prebuilt/linux-x86_64/bin/";
+    if (ndk.empty()) {
+      fprintf(stderr, "%s\n",
+              tulpar::i18n::tr_en(
+                  "[AOT] Android hedefi icin NDK gerekir: TULPAR_ANDROID_NDK "
+                  "ayarlayin ya da ~/Android/android-ndk-* kurun "
+                  "(android/build_tame_android.sh ayni NDK'yi kullanir).",
+                  "[AOT] The android target needs the NDK: set "
+                  "TULPAR_ANDROID_NDK or install ~/Android/android-ndk-* "
+                  "(android/build_tame_android.sh uses the same NDK)."));
+      llvm_backend_destroy(backend);
+      ast_node_free(ast);
+      return AOT_ERROR_LINK;
+    }
+    struct AbiSpec {
+      const char *abi;
+      const char *clangxx;
+      const char *triple;
+    };
+    const AbiSpec abis[] = {
+        {"arm64-v8a", "aarch64-linux-android34-clang++",
+         "aarch64-linux-android34"},
+        {"x86_64", "x86_64-linux-android34-clang++", "x86_64-linux-android34"},
+    };
+    std::string stage = std::string(output_name) + "_apk";
+    std::string extra = aot_extra_link_flags();
+    for (const AbiSpec &a : abis) {
+      std::string libdir = stage + "/lib/" + a.abi;
+      {
+        std::string mk = "mkdir -p \"" + libdir + "\"";
+        if (system(mk.c_str()) != 0) { /* emit asamasi zaten hata verir */ }
+      }
+      std::string obj = stage + "/" + a.abi + ".o";
+      AOT_PROGRESS("[AOT] Emitting %s object: %s\n", a.abi, obj.c_str());
+      if (llvm_backend_emit_object_for_triple(backend, obj.c_str(),
+                                              a.triple) != 0) {
+        fprintf(stderr, "%s",
+                tulpar::i18n::tr_for_en(
+                    "[AOT] Error: Failed to emit object file\n"));
+        llvm_backend_destroy(backend);
+        ast_node_free(ast);
+        return AOT_ERROR_EMIT;
+      }
+      // -u ANativeActivity_onCreate: sembol native_app_glue arşivinde;
+      //   çekilmezse Android loader aktiviteyi başlatamaz.
+      // -Wl,-z,max-page-size=16384: Android 15+ 16KB sayfa imajları
+      //   (emülatör dahil) 16K hizali .so ister.
+      std::string cmd = tc + a.clangxx + " -shared -static-libstdc++" +
+                        " -u ANativeActivity_onCreate" +
+                        // --no-undefined: eksik sembolü dlopen anında değil
+                        // LİNK anında yakala (async stub'ları eksikse burada
+                        // patlar, cihazda UnsatisfiedLinkError yerine).
+                        " -Wl,--no-undefined" +
+                        " -Wl,-z,max-page-size=16384" + " -o \"" + libdir +
+                        "/libtulpargame.so\" \"" + obj + "\" " +
+                        build_android_link_search_dirs(a.abi) +
+                        "-ltulpar_tame_android -ltulpar_runtime_android "
+                        "-landroid -llog -lEGL -lGLESv2 -lOpenSLES -lm -ldl" +
+                        extra + " 2>&1";
+      AOT_PROGRESS("[AOT] Linking %s: libtulpargame.so\n", a.abi);
+      int rc;
+      {
+        AOTPhaseTimer t("link-android");
+        rc = system(cmd.c_str());
+      }
+      if (rc != 0) {
+        fprintf(stderr,
+                tulpar::i18n::tr_for_en(
+                    "[AOT] Error: Linking failed (code %d). Check clang "
+                    "installation and libraries.\n"),
+                rc);
+        fprintf(stderr, "%s\n",
+                tulpar::i18n::tr_en(
+                    "[AOT] Android linki icin android/dist arsivleri gerekir: "
+                    "once android/build_tame_android.sh calistirin.",
+                    "[AOT] The android link needs the android/dist archives: "
+                    "run android/build_tame_android.sh first."));
+        llvm_backend_destroy(backend);
+        ast_node_free(ast);
+        return AOT_ERROR_LINK;
+      }
+    }
+    // Manifest etiketi: çıktı adının taban kısmı.
+    const char *label = output_name;
+    if (const char *slash = strrchr(output_name, '/')) label = slash + 1;
+    write_android_manifest(stage, label);
+    printf("[AOT] Successfully created: %s/ (lib/arm64-v8a + lib/x86_64 + "
+           "AndroidManifest.xml)\n",
+           stage.c_str());
+    printf("%s\n",
+           tulpar::i18n::tr_en(
+               "[AOT] APK icin: android/package_apk.sh ile paketleyin.",
+               "[AOT] To get an .apk: package with android/package_apk.sh."));
+    llvm_backend_destroy(backend);
+    ast_node_free(ast);
+    return AOT_OK;
   }
 
   {

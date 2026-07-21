@@ -221,9 +221,16 @@ int main(int argc, char **argv) {
   // anlamlı — çıktı <out>.html + .js + .wasm, yerelde koşacak binary yok).
   // Konum bağımsız taranır: `tulpar build oyun.tpr --web` de çalışır.
   int web_target = 0;
+  // --target=android / --android: iki ABI'lik (arm64-v8a + x86_64) APK
+  // staging'i üret (NDK linki). Yalnız `build` ile anlamlı; ayrıntı
+  // aot_pipeline.cpp android yolunda.
+  int android_target = 0;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--target=web") == 0 || strcmp(argv[i], "--web") == 0)
       web_target = 1;
+    if (strcmp(argv[i], "--target=android") == 0 ||
+        strcmp(argv[i], "--android") == 0)
+      android_target = 1;
   }
   int skip_typecheck = 0;  // --no-typecheck disables the pre-pass warnings
   // Plan 07 PR 1: `tulpar build --debug` (or `-g`) requests an AOT
@@ -328,9 +335,19 @@ int main(int argc, char **argv) {
                 "tulpar build --target=web game.tpr [output]"));
     return 1;
   }
+  if (android_target && !build_mode) {
+    fprintf(stderr, "%s\n",
+            tulpar::i18n::tr_en(
+                "--target=android yalnizca 'tulpar build' ile kullanilir: "
+                "tulpar build --target=android oyun.tpr [cikti]",
+                "--target=android only works with 'tulpar build': "
+                "tulpar build --target=android game.tpr [output]"));
+    return 1;
+  }
 
   if (build_mode) {
     if (web_target) aot_set_target_web(1);
+    if (android_target) aot_set_target_android(1);
     // Pozisyonel argümanlar: bayraklar (`--target=web`, `--debug`, ...)
     // build'den sonra da gelebilir; '-' ile başlayanları atla.
     const char *src_arg = nullptr;

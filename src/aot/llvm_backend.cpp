@@ -9321,31 +9321,19 @@ int llvm_backend_emit_ir_file(LLVMBackend *backend, const char *filename) {
   return 0;
 }
 
-int llvm_backend_emit_object(LLVMBackend *backend, const char *filename) {
-  char *triple;
-  if (backend->target_web) {
-    // Web hedefi (tulpar build --target=web): wasm32 objesi üret; em++
-    // linkler (bkz. aot_pipeline web yolu). CMake, WebAssembly LLVM
-    // bileşenlerini her zaman bağlar.
-    LLVMInitializeWebAssemblyTargetInfo();
-    LLVMInitializeWebAssemblyTarget();
-    LLVMInitializeWebAssemblyTargetMC();
-    LLVMInitializeWebAssemblyAsmPrinter();
-    LLVMInitializeWebAssemblyAsmParser();
-    triple = LLVMCreateMessage("wasm32-unknown-emscripten");
-  } else {
-    // Initialize only native target (X86 on Linux/Windows)
-    LLVMInitializeNativeTarget();
-    LLVMInitializeNativeAsmParser();
-    LLVMInitializeNativeAsmPrinter();
-    triple = LLVMGetDefaultTargetTriple();
-  }
+// Common tail of object emission: target machine + datalayout for `triple`
+// (ownership taken — LLVMDisposeMessage'd here), verify, emit. `reloc` is
+// LLVMRelocDefault for executables and LLVMRelocPIC for the Android
+// shared-library objects (a non-PIC x86_64 object aborts the .so link with
+// "relocation R_X86_64_32 cannot be used against local symbol").
+static int emit_object_with_triple(LLVMBackend *backend, const char *filename,
+                                   char *triple, LLVMRelocMode reloc) {
   LLVMTargetRef target;
   char *error = nullptr;
   if (LLVMGetTargetFromTriple(triple, &target, &error) != 0)
     return 1;
   LLVMTargetMachineRef machine = LLVMCreateTargetMachine(
-      target, triple, "generic", "", LLVMCodeGenLevelDefault, LLVMRelocDefault,
+      target, triple, "generic", "", LLVMCodeGenLevelDefault, reloc,
       LLVMCodeModelDefault);
   LLVMSetModuleDataLayout(backend->module, LLVMCreateTargetDataLayout(machine));
   LLVMSetTarget(backend->module, triple);
@@ -9368,6 +9356,48 @@ int llvm_backend_emit_object(LLVMBackend *backend, const char *filename) {
   LLVMDisposeTargetMachine(machine);
   LLVMDisposeMessage(triple);
   return 0;
+}
+
+int llvm_backend_emit_object(LLVMBackend *backend, const char *filename) {
+  char *triple;
+  if (backend->target_web) {
+    // Web hedefi (tulpar build --target=web): wasm32 objesi üret; em++
+    // linkler (bkz. aot_pipeline web yolu). CMake, WebAssembly LLVM
+    // bileşenlerini her zaman bağlar.
+    LLVMInitializeWebAssemblyTargetInfo();
+    LLVMInitializeWebAssemblyTarget();
+    LLVMInitializeWebAssemblyTargetMC();
+    LLVMInitializeWebAssemblyAsmPrinter();
+    LLVMInitializeWebAssemblyAsmParser();
+    triple = LLVMCreateMessage("wasm32-unknown-emscripten");
+  } else {
+    // Initialize only native target (X86 on Linux/Windows)
+    LLVMInitializeNativeTarget();
+    LLVMInitializeNativeAsmParser();
+    LLVMInitializeNativeAsmPrinter();
+    triple = LLVMGetDefaultTargetTriple();
+  }
+  return emit_object_with_triple(backend, filename, triple, LLVMRelocDefault);
+}
+
+int llvm_backend_emit_object_for_triple(LLVMBackend *backend,
+                                        const char *filename,
+                                        const char *triple_str) {
+  // Android cross-compile: both device (AArch64) and emulator (X86) ABIs
+  // are emitted from the same module, so initialize both backends — CMake
+  // links both component sets on every host arch.
+  LLVMInitializeAArch64TargetInfo();
+  LLVMInitializeAArch64Target();
+  LLVMInitializeAArch64TargetMC();
+  LLVMInitializeAArch64AsmPrinter();
+  LLVMInitializeAArch64AsmParser();
+  LLVMInitializeX86TargetInfo();
+  LLVMInitializeX86Target();
+  LLVMInitializeX86TargetMC();
+  LLVMInitializeX86AsmPrinter();
+  LLVMInitializeX86AsmParser();
+  return emit_object_with_triple(backend, filename,
+                                 LLVMCreateMessage(triple_str), LLVMRelocPIC);
 }
 
 // Optimization Pass enabling using new LLVM Pass Manager

@@ -158,3 +158,9 @@ tags
 # single source of truth stays STATUS.md / CLAUDE.md. Local-only, not upstream.
 docs/mindmap/
 _fio_t*.txt
+
+# Android build outputs (android/build_tame_android.sh)
+android/dist/
+*_apk/
+*.apk
+*.keystore
