@@ -108,6 +108,17 @@ foreach ($f in (Get-ChildItem examples\*.tpr | Sort-Object Name)) {
   # but segfaulted at socket_server() — would have caught it here at
   # CI time instead of silently shipping in a release.
   if ($compileOnly -contains $f.Name) {
+    # Game examples (tame/arcade) open a REAL game window on Windows —
+    # there is no DISPLAY to scrub like the Linux runner does — so their
+    # smoke phase is skipped entirely: compiling them already validates
+    # the libtulpar_tame link chain, which is what compile-only is for.
+    if ($f.Name -like 'tame_*' -or $f.Name -like 'arcade_*' -or
+        $f.Name -eq '41_struct_entities.tpr') {
+      Write-Host ("PASS(compile-only, window example - smoke skipped) {0} [compile {1}ms]" -f $f.Name, $compileTime)
+      $compileOnlyPass++
+      Remove-Item -ErrorAction SilentlyContinue -Force "$base.exe","$base.ll","$base.o"
+      continue
+    }
     $smokeProc = $null
     $smokeFailed = $false
     $smokeMsg = ""

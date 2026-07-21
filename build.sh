@@ -215,7 +215,13 @@ if [ "$ACTION" = "test" ]; then
                 # runtime failure.
                 local smoke_log
                 smoke_log=$(mktemp)
-                "./$out_path" > "$smoke_log" 2>&1 &
+                # DISPLAY/WAYLAND_DISPLAY scrubbed: on WSLg/desktop the
+                # tame/arcade examples would otherwise open a real game
+                # window for the 2-second smoke — 15 windows popping over
+                # whatever the user is doing on every test run. Headless,
+                # tame fails gracefully with exit 0 (the InitWindow patch),
+                # and the wings/router examples never used a display.
+                DISPLAY= WAYLAND_DISPLAY= "./$out_path" > "$smoke_log" 2>&1 &
                 local smoke_pid=$!
                 sleep 2
                 if kill -0 "$smoke_pid" 2>/dev/null; then
