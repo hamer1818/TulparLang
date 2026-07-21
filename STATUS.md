@@ -27,7 +27,9 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   ve x64 JIT zaten 2026-05'te sunset edilmişti. **Yeni dil özelliği
   yalnızca AOT'ta yazılır — VM/bytecode paritesi aranmaz.**
 - **Cross-platform:** Windows (Inno Setup installer), Linux, macOS,
-  WASM. `libtulpar_runtime.a` AOT'a static link.
+  WASM, **native Android** (`tulpar build --target=android` → NativeActivity
+  APK; arm64-v8a + x86_64; canlı emülatörde render+animasyon+dokunma
+  doğrulandı). `libtulpar_runtime.a` AOT'a static link.
 - **Stdlib gömülü:** wings, router, http_utils, http_client, async,
   middleware, socket, tulpar_api, orm, test, wings_tls, tame. SQLite
   ve raylib vendored.
@@ -1649,6 +1651,32 @@ girildiğinde ne yapacağımı bilelim.
   mevcut tam-case kullanıcı kodu kırılmaz. `wings_features` 13→14 + canlı
   curl smoke (COOKIE/CONTENT-TYPE/ACCEPT-ENCODING büyük harf: çerez çözüldü,
   gzip yanıtı geldi).
+- ✅ **Native Android — `tulpar build --target=android` (2026-07-21):**
+  tame/arcade oyunları gerçek Android APK'sine (NativeActivity + raylib
+  GLES2) derlenir; **canlı emülatörde render + 60 FPS animasyon + dokunma
+  girdisi doğrulandı** (altın top zıplama örneği + parmak-takip oyunu +
+  tam arcade_goktasi motoru — entity/çarpışma/bölüm/HUD/oyun-bitti/`call()`
+  kancaları hepsi cihazda). Web hedefinin kardeşi: tek derlenmiş modülden
+  İKİ ABI objesi (arm64-v8a = cihaz, x86_64 = emülatör;
+  `llvm_backend_emit_object_for_triple`, PIC reloc) → NDK clang++'ıyla
+  `lib/<abi>/libtulpargame.so` linki → `<out>_apk/` staging + NativeActivity
+  manifesti. `android/build_tame_android.sh` runtime+raylib
+  PLATFORM_ANDROID+native_app_glue+tame'i ABI başına statik arşive derler
+  (wasm/dist kardeşi); `android/package_apk.sh` aapt2+zipalign(-P 16, 16KB
+  sayfa)+apksigner (WSL'de Windows SDK araçlarını interop ile sürer);
+  `android/install_run.sh` adb install+başlat+screencap. CMake artık her
+  host'ta HEM AArch64 HEM X86 LLVM backend'ini linkler. Yük taşıyan ince
+  noktalar: bionic'te makecontext/swapcontext yok → tulpar_async.cpp
+  derlenmez (web gibi), `android_stubs.cpp` runtime'ın async-HTTP yolundaki
+  `aot_promise_new/settle/io_register` referanslarını karşılar (çağrılırsa
+  abort — async Android'de desteklenmiyor); `.so` linki `-Wl,--no-undefined`
+  (eksik sembol link'te patlar, cihazda UnsatisfiedLinkError değil);
+  x86_64 objesi PIC olmalı (yoksa "R_X86_64_32 cannot be used against local
+  symbol"); `-Wl,-z,max-page-size=16384` (Android 15+ 16KB sayfa). Dokunma
+  API'si tame'e eklendi (`touch_count/touch_x/touch_y/touched`, 52 tm_*).
+  **Bilinen sınır:** arcade hareket presetleri hâlâ klavye okur — mobilde
+  oyuncu hareket edemez (dokunma-kontrol arcade'e henüz bağlanmadı; sonraki
+  iş). tame ham `touch_*` mobilde tam çalışır.
 - ✅ **Tame WASM — `tulpar build --target=web` (2026-07-13):** derleyici
   wasm32-unknown-emscripten objesi üretir (CMake her mimaride WebAssembly
   LLVM bileşenlerini bağlar), em++ `wasm/dist` arşivlerine linkler

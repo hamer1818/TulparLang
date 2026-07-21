@@ -16,6 +16,27 @@ correctness fix for comparison-heavy programs on LLVM 22, and **Tame — the
 backwards-compatible.
 
 ### Added
+- **Native Android target — `tulpar build --target=android game.tpr out`.**
+  Tame/arcade games now compile to real Android apps (NativeActivity +
+  raylib GLES2), verified rendering + animating + reading touch on the
+  Android Studio emulator. One compiled module is emitted for both ABIs
+  (arm64-v8a for devices, x86_64 for the emulator) and linked with the NDK
+  into `lib/<abi>/libtulpargame.so`, then an APK is staged with a
+  NativeActivity manifest. Mirrors the web target's architecture:
+  `android/build_tame_android.sh` cross-compiles the runtime + raylib
+  `PLATFORM_ANDROID` + `native_app_glue` + tame bindings into per-ABI
+  static archives; `android/package_apk.sh` runs aapt2 + zipalign (16KB
+  pages) + apksigner (driving the Windows SDK tools over WSL interop when
+  there's no Linux SDK); `android/install_run.sh` does adb install + launch
+  + screencap. The whole arcade preset engine (`import "arcade"` — entity
+  store, MTV collision, level system, `call()`-based hooks) runs on-device
+  unchanged. `async` is unsupported on Android (bionic has no
+  makecontext/swapcontext, same as web).
+- **Tame touch input — `touch_count()` / `touch_x(i)` / `touch_y(i)` /
+  `touched()`** (bilingual: `dokunma_sayisi`/`dokunma_x`/`dokunma_y`/
+  `dokunuldu`). Multi-touch finger positions for mobile games; on desktop a
+  single touch still maps to the mouse so existing `mouse_*` code keeps
+  working. 52 `aot_tm_*` bindings now.
 - **Tame — 2D game library (`import "tame"`).** Open a window, draw shapes
   and text, and read keyboard/mouse input from pure TulparLang — Pong-class
   games in ~40 lines (`examples/tame_hello.tpr`):
