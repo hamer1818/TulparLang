@@ -17,8 +17,33 @@ func now_shape() {
     assert_eq_int(length(s), 20);
 }
 
+func round_trip() {
+    assert_eq_str(format_iso8601(parse_iso8601("2026-07-21T14:30:00Z")),
+                  "2026-07-21T14:30:00Z");
+}
+
+func invalid_calendar_days() {
+    // Regression (2026-07-21): day was only range-checked 1..31, so
+    // impossible dates normalised into the next month (Feb 30 -> Mar 2)
+    // instead of failing. They must return -1 like every other bad input.
+    assert_eq_int(parse_iso8601("2026-02-30T00:00:00Z"), -1);
+    assert_eq_int(parse_iso8601("2026-04-31T00:00:00Z"), -1);
+    assert_eq_int(parse_iso8601("2025-02-29T00:00:00Z"), -1);  // not a leap year
+    assert_eq_int(parse_iso8601("1900-02-29T00:00:00Z"), -1);  // 100-rule: not leap
+}
+
+func leap_days_accepted() {
+    assert_eq_str(format_iso8601(parse_iso8601("2024-02-29T12:00:00Z")),
+                  "2024-02-29T12:00:00Z");
+    assert_eq_str(format_iso8601(parse_iso8601("2000-02-29T00:00:00Z")),
+                  "2000-02-29T00:00:00Z");  // 400-rule: leap
+}
+
 print("=== Tulpar datetime builtins ===");
 test("epoch -> ISO", "epoch_iso");
 test("known timestamp -> ISO", "known_timestamp");
 test("now_iso8601 shape", "now_shape");
+test("parse<->format round trip", "round_trip");
+test("invalid calendar days rejected", "invalid_calendar_days");
+test("real leap days accepted", "leap_days_accepted");
 test_summary();

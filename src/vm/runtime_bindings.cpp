@@ -2633,6 +2633,19 @@ VMValue aot_parse_iso8601(VMValue strVal) {
   int sec = two(17);
   if (sec < 0 || sec > 60) return VM_INT(-1);
 
+  // Reject days the month doesn't have (Feb 30, Apr 31, Feb 29 outside a
+  // leap year). Without this the days-from-civil formula below silently
+  // normalises them into the next month — "2026-02-30" parsed as Mar 2,
+  // which is a data-corruption trap for a parser that returns -1 for every
+  // other malformed input.
+  static const int mdays[12] = {31, 28, 31, 30, 31, 30,
+                                31, 31, 30, 31, 30, 31};
+  int dim = mdays[month - 1];
+  if (month == 2 &&
+      (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)))
+    dim = 29;
+  if (day > dim) return VM_INT(-1);
+
   // Convert to UTC unix seconds without depending on `timegm` (not on
   // Windows' standard CRT) — formula adapted from POSIX/Howard Hinnant's
   // days-from-civil. Handles 1970..9999 safely.
