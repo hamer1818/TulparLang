@@ -949,11 +949,7 @@ func _wings_jwt_mw(req) {
     if (_wings_jwt_is_public(req["path"])) {
         return {};
     }
-    json h = req["headers"];
-    str auth = h["Authorization"];
-    if (length(auth) == 0) {
-        auth = h["authorization"];
-    }
+    str auth = _hdr_ci(req["headers"], "Authorization");
     if (length(auth) < 8) {
         return unauthorized("missing bearer token");
     }
@@ -1097,10 +1093,7 @@ func query_bool(json req, str name, bool fallback) {
 //   }
 //   post("/upload", "upload");
 func form_data(json req) {
-    str ct = req["headers"]["Content-Type"];
-    if (length(ct) == 0) {
-        ct = req["headers"]["content-type"];
-    }
+    str ct = _hdr_ci(req["headers"], "Content-Type");
     return parse_multipart(req["body"], ct);
 }
 
@@ -1178,12 +1171,33 @@ func _wings_print_banner(int port, str suffix) {
 // (where assigning a function-call's object return into a global subscript
 // corrupted the object due to LocalExec TLS vs PIE layout incompatibility)
 // has been resolved by switching the backend to InitialExec TLS.
-func wings_cookies(json req) {
-    json headers = req["headers"];
-    str raw = headers["Cookie"];
-    if (length(raw) == 0) {
-        raw = headers["cookie"];
+// Case-insensitive header lookup (RFC 7230: field names are
+// case-insensitive). Request headers are stored with the client's exact
+// casing, so `headers["Authorization"]` misses when a client/proxy sends
+// `AUTHORIZATION` or `authorization`. Fast path: try the given casing and
+// its lowercase form directly; only then scan the keys. Returns "" when
+// the header is absent.
+func _hdr_ci(json headers, str name) {
+    str direct = headers[name];
+    if (length(direct) > 0) { return direct; }
+    str want = lower(name);
+    direct = headers[want];
+    if (length(direct) > 0) { return direct; }
+    for (k in keys(headers)) {
+        if (lower(k) == want) { return headers[k]; }
     }
+    return "";
+}
+
+// Public accessor: `req_header(req, "content-type")` finds the header no
+// matter how the client cased it. Prefer this over indexing
+// `req["headers"]` directly.
+func req_header(json req, str name) {
+    return _hdr_ci(req["headers"], name);
+}
+
+func wings_cookies(json req) {
+    str raw = _hdr_ci(req["headers"], "Cookie");
     if (length(raw) == 0) {
         return {};
     }
@@ -1521,11 +1535,7 @@ func _wings_dispatch_cached(int route_idx, int keep) {
             // gets an empty 304 instead of the full cached body.
             str _et = _wings_cache_etags[route_idx];
             if (length(_et) > 0) {
-                json _rh = _request["headers"];
-                str _inm = _rh["If-None-Match"];
-                if (length(_inm) == 0) {
-                    _inm = _rh["if-none-match"];
-                }
+                str _inm = _hdr_ci(_request["headers"], "If-None-Match");
                 if (length(_inm) > 0 && trim(_inm) == _et) {
                     _wings_requests_total = _wings_requests_total + 1;
                     _wings_requests_2xx = _wings_requests_2xx + 1;
@@ -1634,11 +1644,7 @@ func _wings_dispatch_cached(int route_idx, int keep) {
     // it would serve compressed bytes to clients that never advertised
     // Accept-Encoding: gzip.
     if (_wings_gzip == 1 && route["cached"] != 1) {
-        json _gh0 = _request["headers"];
-        str _ae = _gh0["Accept-Encoding"];
-        if (length(_ae) == 0) {
-            _ae = _gh0["accept-encoding"];
-        }
+        str _ae = _hdr_ci(_request["headers"], "Accept-Encoding");
         if (contains(lower(_ae), "gzip")) {
             str _gbody = "";
             str _gct = "application/json";
