@@ -1,0 +1,127 @@
+// Regression: try/catch handler-stack hygiene (2026-07-21 fix).
+//
+// try/catch is setjmp/longjmp based: AST_TRY_CATCH pushes a jmp_buf via
+// aot_try_push(). Before the fix the matching aot_try_pop() was emitted ONLY
+// on normal fall-through of the try block — leaving the try via `return`,
+// `break`, or `continue` leaked the handler frame, so a later throw could
+// longjmp into a stack frame that no longer existed ("longjmp causes
+// uninitialized stack frame" abort). A bare `throw` followed by more
+// statements also corrupted its basic block ("Terminator found in the middle
+// of a basic block" verification failure).
+// Run: ./tulpar tests/try_catch.test.tpr
+import "test";
+
+func run_basic() {
+    int r = 0;
+    try {
+        throw "hata";
+    } catch (e) {
+        r = 1;
+    }
+    assert_eq_int(r, 1);
+}
+
+func early_return(int x): int {
+    try {
+        if (x > 0) { return x + 100; }
+    } catch (e) {
+        return -2;
+    }
+    return -1;
+}
+
+func run_return_from_try() {
+    // The return above leaks a handler frame without the fix; this
+    // follow-up throw must land in THIS try, not the dead frame.
+    assert_eq_int(early_return(5), 105);
+    int caught = 0;
+    try {
+        throw "sonraki";
+    } catch (e) {
+        caught = 1;
+    }
+    assert_eq_int(caught, 1);
+}
+
+func loop_mix(): int {
+    int toplam = 0;
+    int i = 0;
+    while (i < 10) {
+        i = i + 1;
+        try {
+            if (i == 3) { continue; }
+            if (i == 7) { break; }
+            if (i == 5) { throw "bes"; }
+            toplam = toplam + i;
+        } catch (e) {
+            toplam = toplam + 100;
+        }
+    }
+    // 1+2+4+100+6 = 113 (3 skipped, broke at 7)
+    return toplam;
+}
+
+func run_break_continue_from_try() {
+    assert_eq_int(loop_mix(), 113);
+    // handler stack must be balanced afterwards
+    int caught = 0;
+    try {
+        throw "denge";
+    } catch (e) {
+        caught = 1;
+    }
+    assert_eq_int(caught, 1);
+}
+
+func nested_returns(): int {
+    try {
+        try {
+            return 1;
+        } catch (e2) {
+            return -2;
+        }
+    } catch (e1) {
+        return -1;
+    }
+    return 0;
+}
+
+func rethrower(): str {
+    try {
+        throw "orijinal";
+    } catch (e) {
+        throw "sarilmis: " + toString(e);
+    }
+    return "olamaz";
+}
+
+func run_nested_and_rethrow() {
+    assert_eq_int(nested_returns(), 1);
+    str got = "";
+    try {
+        rethrower();
+    } catch (e2) {
+        got = toString(e2);
+    }
+    assert_eq_str(got, "sarilmis: orijinal");
+}
+
+func run_finally() {
+    int sira = 0;
+    try {
+        sira = 1;
+    } catch (e) {
+        sira = -1;
+    } finally {
+        sira = sira + 10;
+    }
+    assert_eq_int(sira, 11);
+}
+
+print("=== try/catch handler hygiene ===");
+test("basic throw/catch", "run_basic");
+test("return from try does not leak handler", "run_return_from_try");
+test("break/continue from try keep stack balanced", "run_break_continue_from_try");
+test("nested try returns + rethrow to outer", "run_nested_and_rethrow");
+test("finally runs on clean path", "run_finally");
+test_summary();

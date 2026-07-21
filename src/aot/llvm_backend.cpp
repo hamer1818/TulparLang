@@ -2058,6 +2058,7 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
   backend->current_scope = nullptr;
   backend->func_stack = nullptr;
   backend->loop_depth = 0;
+  backend->try_depth = 0;
   backend->lambda_count = 0;
   backend->function_count = 0;
   backend->imported_count = 0;
@@ -6210,6 +6211,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     const char *prev_returns_struct = backend->current_function_returns_struct;
     LLVMValueRef prev_env_ptr = backend->current_env_ptr;
     LLVMValueRef prev_parent_env = backend->current_parent_env;
+    // A lambda body is a fresh function frame: it must not inherit the
+    // enclosing function's loop targets (a stray `break` would branch
+    // cross-function) or its open-try count (a `return` in the lambda would
+    // pop handler frames the lambda never pushed).
+    int prev_loop_depth = backend->loop_depth;
+    int prev_try_depth = backend->try_depth;
+    backend->loop_depth = 0;
+    backend->try_depth = 0;
 
     // 5. Set up compiler stack
     FuncStackNode stack_node = { node, backend->func_stack };
@@ -6309,6 +6318,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     backend->current_function_returns_struct = prev_returns_struct;
     backend->current_env_ptr = prev_env_ptr;
     backend->current_parent_env = prev_parent_env;
+    backend->loop_depth = prev_loop_depth;
+    backend->try_depth = prev_try_depth;
     LLVMPositionBuilderAtEnd(backend->builder, prev_block);
 
     // 12. Create ObjClosure and wrap it
@@ -6735,6 +6746,18 @@ static void set_debug_loc_for_node(LLVMBackend *backend, ASTNode_C *node) {
       backend->context, (unsigned)node->line, col, scope,
       /*InlinedAt=*/nullptr);
   LLVMSetCurrentDebugLocation2(backend->builder, loc);
+}
+
+// Emit `count` aot_try_pop() calls. Used by return/break/continue when they
+// transfer control out of one or more enclosing `try` scopes: the setjmp
+// frames those scopes pushed must come off the runtime handler stack, or a
+// later throw longjmps into a stack frame that no longer exists.
+static void emit_try_pops(LLVMBackend *backend, int count) {
+  for (int i = 0; i < count; i++) {
+    LLVMBuildCall2(backend->builder,
+                   LLVMGlobalGetValueType(backend->func_aot_try_pop),
+                   backend->func_aot_try_pop, nullptr, 0, "");
+  }
 }
 
 LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
@@ -7295,6 +7318,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     if (backend->loop_depth < 32) {
       backend->loop_stack[backend->loop_depth].continue_block = condB;
       backend->loop_stack[backend->loop_depth].break_block = exitB;
+      backend->loop_stack[backend->loop_depth].try_depth_at_entry =
+          backend->try_depth;
       backend->loop_depth++;
     }
     codegen_statement(backend, node->body);
@@ -7344,6 +7369,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     if (backend->loop_depth < 32) {
       backend->loop_stack[backend->loop_depth].continue_block = incrB;
       backend->loop_stack[backend->loop_depth].break_block = exitB;
+      backend->loop_stack[backend->loop_depth].try_depth_at_entry =
+          backend->try_depth;
       backend->loop_depth++;
     }
     codegen_statement(backend, node->body);
@@ -7364,6 +7391,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
   }
   case AST_BREAK: {
     if (backend->loop_depth > 0) {
+      // Leaving any try scopes opened inside this loop: pop their handlers.
+      emit_try_pops(backend,
+                    backend->try_depth -
+                        backend->loop_stack[backend->loop_depth - 1]
+                            .try_depth_at_entry);
       LLVMBuildBr(backend->builder,
                   backend->loop_stack[backend->loop_depth - 1].break_block);
       // Builder is now positioned at a terminated block; the next
@@ -7378,6 +7410,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
   }
   case AST_CONTINUE: {
     if (backend->loop_depth > 0) {
+      emit_try_pops(backend,
+                    backend->try_depth -
+                        backend->loop_stack[backend->loop_depth - 1]
+                            .try_depth_at_entry);
       LLVMBuildBr(backend->builder,
                   backend->loop_stack[backend->loop_depth - 1].continue_block);
       LLVMBasicBlockRef dead = LLVMAppendBasicBlock(
@@ -7412,6 +7448,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           LLVMValueRef loaded = LLVMBuildLoad2(
               backend->builder, st->llvm_type, src, "ret.struct.load");
           LLVMBuildStore(backend->builder, loaded, res_ptr);
+          emit_try_pops(backend, backend->try_depth);
           return LLVMBuildRetVoid(backend->builder);
         }
       }
@@ -7434,6 +7471,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           (void)codegen_expression(backend, rv);
           backend->pending_struct_result_ptr = nullptr;
           backend->pending_struct_result_name = nullptr;
+          emit_try_pops(backend, backend->try_depth);
           return LLVMBuildRetVoid(backend->builder);
         }
       }
@@ -7465,6 +7503,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                 (unsigned)idx, "ret.lit.field.ptr");
             LLVMBuildStore(backend->builder, i64_val, field_ptr);
           }
+          emit_try_pops(backend, backend->try_depth);
           return LLVMBuildRetVoid(backend->builder);
         }
       }
@@ -7480,6 +7519,9 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // ABI Change: Store to Result Pointer (Param 0)
     LLVMValueRef res_ptr = LLVMGetParam(backend->current_function, 0);
     LLVMBuildStore(backend->builder, ret, res_ptr);
+    // Pops go AFTER evaluating the return expression: `return f();` inside a
+    // try must still route f's throw to this try's handler.
+    emit_try_pops(backend, backend->try_depth);
     return LLVMBuildRetVoid(backend->builder);
   }
   case AST_TRY_CATCH: {
@@ -7527,9 +7569,14 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
 
     LLVMBuildCondBr(backend->builder, is_try, tryB, catchB);
 
-    // Try block
+    // Try block. try_depth brackets the body codegen so any return/break/
+    // continue emitted inside knows how many handler frames to pop on the
+    // way out (see emit_try_pops). Catch/finally run with the handler
+    // already off the stack (aot_throw pops it), so they use the outer depth.
     LLVMPositionBuilderAtEnd(backend->builder, tryB);
+    backend->try_depth++;
     codegen_statement(backend, node->try_block);
+    backend->try_depth--;
 
     // Pop handler on normal exit ONLY if not terminated
     if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder))) {
@@ -7584,6 +7631,12 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                    LLVMGlobalGetValueType(backend->func_aot_throw),
                    backend->func_aot_throw, args, 1, "");
     LLVMBuildUnreachable(backend->builder);
+    // Same as break/continue: the block now has a terminator, so give any
+    // following (dead) statements a fresh block — appending after the
+    // `unreachable` corrupts the block and fails module verification.
+    LLVMBasicBlockRef dead =
+        LLVMAppendBasicBlock(backend->current_function, "after_throw");
+    LLVMPositionBuilderAtEnd(backend->builder, dead);
     return nullptr;
   }
   case AST_FUNCTION_DECL:

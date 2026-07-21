@@ -503,8 +503,17 @@ typedef struct {
   struct LoopContext {
     LLVMBasicBlockRef continue_block;  // where `continue;` jumps to
     LLVMBasicBlockRef break_block;     // where `break;` jumps to
+    int try_depth_at_entry;            // EH scopes open when the loop began
   } loop_stack[32];
   int loop_depth;
+
+  // Number of setjmp try-frames pushed (aot_try_push) and not yet popped at
+  // the current codegen position, per function. Any control transfer that
+  // exits a try scope abnormally — `return` (pops all), `break`/`continue`
+  // (pops down to the loop's try_depth_at_entry) — must emit matching
+  // aot_try_pop() calls, or the runtime handler stack keeps a jmp_buf whose
+  // stack frame is gone and the next throw longjmps into freed memory.
+  int try_depth;
   int lambda_count;
   int match_count;
 
