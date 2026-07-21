@@ -37,6 +37,16 @@ backwards-compatible.
   `dokunuldu`). Multi-touch finger positions for mobile games; on desktop a
   single touch still maps to the mouse so existing `mouse_*` code keeps
   working. 52 `aot_tm_*` bindings now.
+- **Arcade touch controls — on-screen D-pad + action button.** The `import
+  "arcade"` preset engine now draws and reads a translucent control overlay
+  (bottom-left 4-way D-pad, bottom-right action/jump/fire button), auto-
+  enabled on the first touch, so all 10 shipped arcade games are playable
+  on touch-only devices — verified on-device. Movement presets read combined
+  keyboard-OR-touch input (desktop keyboard play unchanged); game-over
+  restart accepts a screen tap; `action_pressed()`/`action_held()` and
+  `fire_pressed()`/`ates_basildi()` (+ TR aliases) let games read the action
+  button (the two shooter examples adopt it). `touch_controls(true/false)`
+  forces the overlay.
 - **Tame — 2D game library (`import "tame"`).** Open a window, draw shapes
   and text, and read keyboard/mouse input from pure TulparLang — Pong-class
   games in ~40 lines (`examples/tame_hello.tpr`):

@@ -1674,9 +1674,14 @@ girildiğinde ne yapacağımı bilelim.
   x86_64 objesi PIC olmalı (yoksa "R_X86_64_32 cannot be used against local
   symbol"); `-Wl,-z,max-page-size=16384` (Android 15+ 16KB sayfa). Dokunma
   API'si tame'e eklendi (`touch_count/touch_x/touch_y/touched`, 52 tm_*).
-  **Bilinen sınır:** arcade hareket presetleri hâlâ klavye okur — mobilde
-  oyuncu hareket edemez (dokunma-kontrol arcade'e henüz bağlanmadı; sonraki
-  iş). tame ham `touch_*` mobilde tam çalışır.
+  **Arcade dokunmatik kontrol (2026-07-21):** arcade motoru artık ekran-üstü
+  yarı-saydam D-pad (sol alt, 4 ok — MV_TOPDOWN 8-yön / MV_PLATFORM sol-sağ) +
+  aksiyon butonu (sağ alt — zıpla/ateş) çizip okur; ilk dokunuşta otomatik
+  açılır (masaüstü klavye değişmez, girdi = klavye VEYA dokunma). Oyun-bitti
+  ekrana dokununca yeniden başlar; `fire_pressed()/ates_basildi()` (SPACE/UP
+  VEYA aksiyon butonu) nişancılara eklendi. **10 arcade oyunu da artık tam
+  dokunmatik oynanabilir — kullanıcı cihazda labirent oyununu D-pad ile
+  oynayıp doğruladı.** Kalan iş yok; native Android + mobil kontrol tamam.
 - ✅ **Tame WASM — `tulpar build --target=web` (2026-07-13):** derleyici
   wasm32-unknown-emscripten objesi üretir (CMake her mimaride WebAssembly
   LLVM bileşenlerini bağlar), em++ `wasm/dist` arşivlerine linkler
