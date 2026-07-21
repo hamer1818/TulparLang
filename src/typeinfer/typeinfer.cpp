@@ -825,8 +825,9 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm_gamepad_down", TYPE_BOOL, {TYPE_INT, TYPE_STRING}},
       {"tm_gamepad_pressed", TYPE_BOOL, {TYPE_INT, TYPE_STRING}},
       {"tm_gamepad_axis", TYPE_FLOAT, {TYPE_INT, TYPE_STRING}},
-      {"indexOf", TYPE_INT, {TYPE_STRING, TYPE_STRING}},
-      {"contains", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
+      // Polymorphic: string haystack (substring) OR array haystack (membership).
+      {"indexOf", TYPE_INT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"contains", TYPE_BOOL, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
       {"startsWith", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
       {"endsWith", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
       {"trim", TYPE_STRING, {TYPE_STRING}},

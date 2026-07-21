@@ -218,6 +218,13 @@ backwards-compatible.
   both languages.
 
 ### Fixed
+- **`contains()` / `indexOf()` silently failed on arrays.** Both were
+  string-only: `contains([1,2,3], 2)` returned false and `indexOf` returned -1
+  (with a spurious `expected str` typecheck warning), so the only way to test
+  array membership was a manual loop. They now also search arrays by value
+  (int/float/bool/string) — `contains([1,2,3], 2)` → true,
+  `indexOf(["a","b"], "b")` → 1 — while the string-substring behaviour is
+  unchanged. Signatures are now polymorphic in the type checker.
 - **Float-to-string lost precision and printed scientific notation
   (`toString(1000000.5)` → `"1e+06"`).** Float formatting used `"%g"` (6
   significant figures), which dropped the fraction of larger values and

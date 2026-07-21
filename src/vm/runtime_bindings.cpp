@@ -7526,7 +7526,32 @@ VMValue aot_string_lower_ptr(VMValue *v_ptr) {
   return aot_string_lower(*v_ptr);
 }
 
+// Value equality for int/float/bool/string (mirrors the `==` operator).
+// Used for array membership in contains() / indexOf().
+static bool vm_values_equal(VMValue a, VMValue b) {
+  switch (TYPE_PAIR(a, b)) {
+  case TYPE_INT_INT:     return AS_INT(a) == AS_INT(b);
+  case TYPE_FLOAT_FLOAT: return AS_FLOAT(a) == AS_FLOAT(b);
+  case TYPE_BOOL_BOOL:   return AS_BOOL(a) == AS_BOOL(b);
+  case TYPE_INT_FLOAT:   return (double)AS_INT(a) == AS_FLOAT(b);
+  case TYPE_FLOAT_INT:   return AS_FLOAT(a) == (double)AS_INT(b);
+  default:
+    if (IS_STRING(a) && IS_STRING(b))
+      return strcmp(AS_STRING(a)->chars, AS_STRING(b)->chars) == 0;
+    return false;
+  }
+}
+
+// contains(haystack, needle): substring test for a string haystack, element
+// membership for an array haystack (`contains([1,2,3], 2)` → true). An array
+// haystack used to silently return false (the string-only guard rejected it).
 VMValue aot_string_contains(VMValue haystack, VMValue needle) {
+  if (IS_ARRAY(haystack)) {
+    ObjArray *arr = AS_ARRAY(haystack);
+    for (int i = 0; i < arr->count; i++)
+      if (vm_values_equal(arr->items[i], needle)) return VM_BOOL(1);
+    return VM_BOOL(0);
+  }
   if (!IS_STRING(haystack) || !IS_STRING(needle))
     return VM_BOOL(0);
   ObjString *h = AS_STRING(haystack);
@@ -7572,7 +7597,17 @@ VMValue aot_string_ends_with_ptr(VMValue *s_ptr, VMValue *x_ptr) {
   return aot_string_ends_with(*s_ptr, *x_ptr);
 }
 
+// indexOf(haystack, needle): byte offset of a substring in a string, or the
+// index of the first matching element in an array (`indexOf([9,8,7], 8)` → 1).
+// Returns -1 when absent. An array haystack used to be rejected by the
+// string-only guard.
 VMValue aot_string_index_of(VMValue haystack, VMValue needle) {
+  if (IS_ARRAY(haystack)) {
+    ObjArray *arr = AS_ARRAY(haystack);
+    for (int i = 0; i < arr->count; i++)
+      if (vm_values_equal(arr->items[i], needle)) return VM_INT(i);
+    return VM_INT(-1);
+  }
   if (!IS_STRING(haystack) || !IS_STRING(needle))
     return VM_INT(-1);
   ObjString *h = AS_STRING(haystack);

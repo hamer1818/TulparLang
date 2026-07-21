@@ -1301,6 +1301,11 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Dil seviyesi
 
+- ✅ **`contains()`/`indexOf()` dizide çalışıyor (düzeltildi 2026-07-20).** İkisi de
+  string-only'di; dizi haystack sessizce reddediliyordu (`contains([1,2,3],2)`→false,
+  indexOf→-1 + yanlış typecheck uyarısı). Artık diziyi değere göre de arıyorlar
+  (int/float/bool/string) — `contains([1,2,3],2)`→true, `indexOf(["a","b"],"b")`→1;
+  string-substring davranışı değişmedi. Typeinfer imzaları polymorphic.
 - ✅ **Float→string en-kısa-round-trip (düzeltildi 2026-07-20).** `toString(1000000.5)`
   → "1e+06" veriyordu (`%g` 6 basamak → kesir kaybı + bilimsel gösterim); float 32-bit
   olduğu için sabit yüksek precision da gürültü gösteriyordu (3.14 → "3.14000010490417").
