@@ -1598,12 +1598,16 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_stringbuilder_new =
       LLVMAddFunction(backend->module, "aot_stringbuilder_new", sb_new_type);
 
-  // aot_stringbuilder_append_vmvalue(ptr, VMValue) -> void
-  LLVMTypeRef sb_append_params[] = {backend->ptr_type, backend->vm_value_type};
+  // aot_stringbuilder_append_vmvalue_ptr(ptr, VMValue*) -> void
+  // Pointer-ABI (aot_*_ptr pattern): passing the raw vm_value_type aggregate
+  // by value hits the SysV lowering trap documented at
+  // llvm_make_vmvalue_func_type — the callee read a corrupted VMValue and
+  // segfaulted. The value now travels via a stack slot pointer.
+  LLVMTypeRef sb_append_params[] = {backend->ptr_type, backend->ptr_type};
   LLVMTypeRef sb_append_type =
       LLVMFunctionType(backend->void_type, sb_append_params, 2, 0);
   backend->func_aot_stringbuilder_append_vmvalue = LLVMAddFunction(
-      backend->module, "aot_stringbuilder_append_vmvalue", sb_append_type);
+      backend->module, "aot_stringbuilder_append_vmvalue_ptr", sb_append_type);
 
   // aot_stringbuilder_to_string(ptr) -> VMValue
   LLVMTypeRef sb_tostring_params[] = {backend->ptr_type};
@@ -5757,7 +5761,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef ptr_int = llvm_extract_vm_val_int(backend, sb_val);
       LLVMValueRef sb_ptr = LLVMBuildIntToPtr(backend->builder, ptr_int,
                                               backend->ptr_type, "sb_ptr");
-      LLVMValueRef args[] = {sb_ptr, val};
+      // Spill the VMValue to a stack slot and pass its pointer (aot_*_ptr
+      // ABI) — see the declaration comment for why by-value corrupts.
+      LLVMValueRef val_slot = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "sb_val_slot");
+      LLVMBuildStore(backend->builder, val, val_slot);
+      LLVMValueRef args[] = {sb_ptr, val_slot};
       LLVMBuildCall2(backend->builder,
                      LLVMGlobalGetValueType(
                          backend->func_aot_stringbuilder_append_vmvalue),
