@@ -7,12 +7,17 @@ language/stdlib/ABI changes, MINOR for backwards-compatible features, PATCH for
 fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md));
 `tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
 
-## [v3.10.0]
+## [v3.11.0]
 
-A terminal-UI builtin suite for building flicker-free, app-like TUIs in pure
-TulparLang, a locale probe, string-escape parsing, an AOT codegen
-correctness fix for comparison-heavy programs on LLVM 22, and **Tame — the
-2D game library** (`import "tame"`, vendored raylib). All
+The Tame 2D game library and its two new compile targets — WebAssembly
+(`tulpar build --target=web`) and **native Android**
+(`tulpar build --target=android`) — land together, turning pure-TulparLang
+games into browser and mobile apps. The `import "arcade"` preset engine gains a
+level system, entity slot recycling, generation-tagged handles, and on-screen
+touch controls, so all 10 bundled games are touch-playable on-device. Alongside
+the game work, a batch of language/runtime correctness fixes — struct↔array
+round-trips, `call()` N-argument dispatch, method-style calls on any receiver,
+closures on the native fast path, and `try`/`catch` handler-stack hygiene. All
 backwards-compatible.
 
 ### Added
@@ -123,45 +128,6 @@ backwards-compatible.
   codegen picks it at runtime via `vmvalue_abi_uses_sret()`
   (`llvm_values.cpp`) — and `tulpar_async` is excluded from the web
   runtime (stackful ucontext coroutines don't exist under Emscripten).
-- **Full-screen TUI builtins.** The flicker-free details (alternate screen,
-  synchronized output, cursor home, line-wrap off) are hidden behind clean
-  builtins so apps read like Python and never write raw ANSI themselves:
-  - **`screen_open(): void`** — enter the alternate screen, hide the cursor,
-    disable line-wrap, clear. **`screen_close(): void`** — the inverse (restore
-    the normal screen, cursor, and wrap).
-  - **`screen_render(frame: str): void`** — draw one frame atomically via
-    synchronized output with the cursor homed, so a full repaint never tears or
-    scrolls. The app builds the frame as a normal string; unlike `print()` it
-    adds no trailing newline.
-  - **`style(s: str, spec: str): str`** — wrap `s` in ANSI styles from a
-    space-separated spec (`bold dim italic underline invert`; color names
-    `red green yellow blue magenta cyan white gray`; `bright-<color>`;
-    `on-<color>` backgrounds) instead of hand-written escapes.
-  - **`display_width(s: str): int`** — visible terminal column width of `s`,
-    ANSI- and UTF-8-aware (color codes count 0, wide/emoji 2, combining marks 0).
-    Correct for alignment where byte-based `length()` is not.
-  - **`fit_width(s: str, width: int): str`** — fit `s` to exactly `width`
-    columns: truncate at a code-point boundary with `…`, or right-pad with
-    spaces. For laying out TUI columns.
-  - **`term_width(): int` / `term_height(): int`** — controlling-terminal size
-    (columns / rows), falling back to 80 / 24 when it can't be queried. For
-    responsive layout.
-  - **`read_key_timeout(ms: int): str`** — like `read_key()` but waits at most
-    `ms` milliseconds, returning `""` on timeout. Turns a blocking key read into
-    the event loop a live/animated TUI (spinners, progress, auto-refresh) needs.
-- **`sys_lang(): str`** — the OS UI language as a lowercase ISO-639 code
-  (`"tr"`, `"en"`, …), or `""` when undeterminable. For app localization.
-- **Octal and hex string escapes.** String literals now accept `\NNN` (octal,
-  e.g. `\033`) and `\xNN` (hex, e.g. `\x1b`) alongside the existing
-  `\n \t \r \e \\ \"`, so ANSI/control sequences can be written directly.
-- **`ord(s: str, i: int): int`** — the unsigned byte value (0–255) at byte index
-  `i` of `s`, or `-1` if out of range. Strings are UTF-8 byte sequences and
-  `length()` / `substring()` are byte-based, so `ord` is the missing primitive
-  for hand-rolled UTF-8 handling — e.g. deleting a whole multi-byte code point by
-  walking back over continuation bytes (`0x80`–`0xBF`), which a naive
-  drop-one-byte would corrupt.
-
-### Added
 - **Arcade: entity slot recycling + generation-tagged handles.** A killed
   entity's slot now returns to a free-list and is reused, so a game that spawns
   bullets forever no longer grows the parallel arrays without bound (a shooter
@@ -451,6 +417,54 @@ backwards-compatible.
   defect and got the identical fix. This is the long-standing "while loop +
   builtin call miscompiles, use `for`/recursion instead" workaround — it is no
   longer needed.
+
+## [v3.10.0]
+
+A terminal-UI builtin suite for building flicker-free, app-like TUIs in pure
+TulparLang, a locale probe, string-escape parsing, and an AOT codegen
+correctness fix for comparison-heavy programs on LLVM 22. All
+backwards-compatible.
+
+### Added
+- **Full-screen TUI builtins.** The flicker-free details (alternate screen,
+  synchronized output, cursor home, line-wrap off) are hidden behind clean
+  builtins so apps read like Python and never write raw ANSI themselves:
+  - **`screen_open(): void`** — enter the alternate screen, hide the cursor,
+    disable line-wrap, clear. **`screen_close(): void`** — the inverse (restore
+    the normal screen, cursor, and wrap).
+  - **`screen_render(frame: str): void`** — draw one frame atomically via
+    synchronized output with the cursor homed, so a full repaint never tears or
+    scrolls. The app builds the frame as a normal string; unlike `print()` it
+    adds no trailing newline.
+  - **`style(s: str, spec: str): str`** — wrap `s` in ANSI styles from a
+    space-separated spec (`bold dim italic underline invert`; color names
+    `red green yellow blue magenta cyan white gray`; `bright-<color>`;
+    `on-<color>` backgrounds) instead of hand-written escapes.
+  - **`display_width(s: str): int`** — visible terminal column width of `s`,
+    ANSI- and UTF-8-aware (color codes count 0, wide/emoji 2, combining marks 0).
+    Correct for alignment where byte-based `length()` is not.
+  - **`fit_width(s: str, width: int): str`** — fit `s` to exactly `width`
+    columns: truncate at a code-point boundary with `…`, or right-pad with
+    spaces. For laying out TUI columns.
+  - **`term_width(): int` / `term_height(): int`** — controlling-terminal size
+    (columns / rows), falling back to 80 / 24 when it can't be queried. For
+    responsive layout.
+  - **`read_key_timeout(ms: int): str`** — like `read_key()` but waits at most
+    `ms` milliseconds, returning `""` on timeout. Turns a blocking key read into
+    the event loop a live/animated TUI (spinners, progress, auto-refresh) needs.
+- **`sys_lang(): str`** — the OS UI language as a lowercase ISO-639 code
+  (`"tr"`, `"en"`, …), or `""` when undeterminable. For app localization.
+- **Octal and hex string escapes.** String literals now accept `\NNN` (octal,
+  e.g. `\033`) and `\xNN` (hex, e.g. `\x1b`) alongside the existing
+  `\n \t \r \e \\ \"`, so ANSI/control sequences can be written directly.
+- **`ord(s: str, i: int): int`** — the unsigned byte value (0–255) at byte index
+  `i` of `s`, or `-1` if out of range. Strings are UTF-8 byte sequences and
+  `length()` / `substring()` are byte-based, so `ord` is the missing primitive
+  for hand-rolled UTF-8 handling — e.g. deleting a whole multi-byte code point by
+  walking back over continuation bytes (`0x80`–`0xBF`), which a naive
+  drop-one-byte would corrupt.
+
+### Fixed
 - **Invalid O3 IR for comparison-heavy programs on LLVM 22.** The AOT backend's
   boxed-comparison fast-path merge (int / float / runtime-fallback) built its
   boolean result three different ways, so when a later truthiness check let
