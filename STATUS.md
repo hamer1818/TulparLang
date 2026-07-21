@@ -1324,7 +1324,15 @@ girildiğinde ne yapacağımı bilelim.
   boş→0, diziler referans tipi), thread+mutex (2×1000 artış = 2000 doğru),
   base64/sha1/gzip/secure_token/randint(inclusive)/env, 10K özyineleme,
   100K dizi, 1K-key json round-trip. `range(n)` tek-arg (0..n-1) — typecheck
-  2-arg çağrıyı yakalıyor. Ayrıca regex ailesi (match=tam-eşleşme,
+  2-arg çağrıyı yakalıyor. **Etkileşimli katmanlar da ölçüldü (2026-07-21,
+  temiz):** TUI PTY altında uçtan uca (`tests/tui_pty_smoke.sh` 10/10 —
+  alt-ekran/imleç/senkronize-çıktı ANSI'leri, 80x24 boyut, kuyruklu tuş,
+  ok-tuşu decode, read_key_timeout gerçekten bekliyor: stdin-EOF'ta erken
+  dönüş sadece kapalı stdin'de); WebSocket maskeli istemci frame'i
+  (`tests/ws_masked_client_smoke.py` — RFC 6455 zorunlu client-masking'i
+  unmask edilip eko ediliyor; accept-key RFC vektörü birebir); `tulpar
+  debug` DAP initialize el sıkışması düzgün Content-Length framing'iyle
+  yanıt veriyor. Ayrıca regex ailesi (match=tam-eşleşme,
   search=alt-dize, capture grupları, bozuk desen güvenli — davranış doğru ama
   typeinfer+LSP kaydı eksikti, tamamlandı: `tests/regex.test.tpr` 4/4), TUI
   metin yardımcıları (display_width UTF-8 doğru, fit_width elipsli kesme,
