@@ -218,6 +218,17 @@ backwards-compatible.
   both languages.
 
 ### Fixed
+- **StringBuilder was dead on arrival — the first `sb_append` segfaulted.**
+  Its VMValue argument was declared as the raw by-value aggregate — the SysV
+  lowering trap documented at `llvm_make_vmvalue_func_type` — so the callee
+  read a corrupted value and dereferenced garbage. The argument now travels
+  through the `aot_*_ptr` pointer ABI; all `sb_*` entry points gained
+  null-handle guards (`sb_append(0, …)` is a no-op, not a crash); and the
+  undocumented creator `StringBuilder(capacity)` is now in the LSP table.
+- **`write_file`/`append_file` now actually return the documented bool.** Both
+  are typed `-> bool` (type checker + LSP) but returned VOID unconditionally —
+  a failed write (bad directory, no permission) was indistinguishable from
+  success. True only when the file opened and every byte landed.
 - **Wings: request-header lookup is now case-insensitive (RFC 7230).** Headers
   are stored with the client's exact casing and every internal read was a
   hand-rolled 2-case probe (`"Cookie"` then `"cookie"`) — any other casing

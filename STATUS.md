@@ -1301,6 +1301,30 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Dil seviyesi
 
+- ✅ **StringBuilder canlandırıldı (düzeltildi 2026-07-21).** `sb_append`
+  VMValue argümanını ham {i32,i64} aggregate deklarasyonuyla değerle
+  geçiriyordu — `llvm_make_vmvalue_func_type`'ta belgelenen SysV lowering
+  tuzağı (socket_server'ı vaktiyle çökerten aynı sınıf) — callee bozuk değer
+  alıp ilk `sb_append`'te segfault ediyordu. lib/examples hiç kullanmadığı
+  için görünmezdi (ölçünce çıktı). Artık `aot_*_ptr` pointer ABI'siyle
+  geçiyor; tüm `sb_*` girişleri null-handle korumalı; belgelenmemiş
+  `StringBuilder(capacity)` yaratıcısı LSP tablosuna eklendi.
+  `tests/stringbuilder.test.tpr` 4/4.
+- ✅ **write_file/append_file bool sözleşmesi (düzeltildi 2026-07-21).**
+  İkisi de typeinfer+LSP'de `-> bool` ama runtime koşulsuz VOID dönüyordu —
+  başarısız yazma (olmayan dizin, izin yok) başarıdan ayırt edilemiyordu.
+  Artık yalnız dosya açılıp her byte yazılınca true. `tests/file_io.test.tpr`
+  4/4.
+- ✅ **Ölçüldü, bug ÇIKMADI (2026-07-21 taraması):** sıfıra bölme (int→0
+  sessiz, float→inf IEEE, mod(x,0)→0 — tanımlı davranış), int64 wraparound,
+  toInt/toFloat strtol-önek semantiği, sqrt(-1)→NaN, round-half-away,
+  string kenarları (split boş parça korunur, replace boş-needle no-op,
+  substring ters→"" / taşma clamp, ord sınır→-1), dizi kenarları
+  (out-of-bounds oku/yaz "Runtime Error" mesajı + nötr değer/no-op, pop
+  boş→0, diziler referans tipi), thread+mutex (2×1000 artış = 2000 doğru),
+  base64/sha1/gzip/secure_token/randint(inclusive)/env, 10K özyineleme,
+  100K dizi, 1K-key json round-trip. `range(n)` tek-arg (0..n-1) — typecheck
+  2-arg çağrıyı yakalıyor.
 - ✅ **try/catch handler hijyeni (düzeltildi 2026-07-21).** try'dan `return`/
   `break`/`continue` ile çıkış setjmp handler frame'ini stack'te bırakıyordu →
   sonraki `throw` yok olmuş stack frame'e longjmp ediyordu ("longjmp causes
