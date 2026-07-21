@@ -1301,6 +1301,37 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Dil seviyesi
 
+- ✅ **try/catch handler hijyeni (düzeltildi 2026-07-21).** try'dan `return`/
+  `break`/`continue` ile çıkış setjmp handler frame'ini stack'te bırakıyordu →
+  sonraki `throw` yok olmuş stack frame'e longjmp ediyordu ("longjmp causes
+  uninitialized stack frame" abort). Codegen artık açık try sayısını izliyor
+  (`backend->try_depth`): `return` hepsini pop eder (ifade değerlendirildikten
+  SONRA — `return f();` kendi try'ına throw edebilir), `break`/`continue`
+  döngü-girişindeki derinliğe kadar pop eder, lambda gövdesi try+loop takibini
+  sıfırlar (dış frame'i pop edemez / dış döngüye branch edemez). Ayrıca çıplak
+  `throw` sonrası aynı block'a kod üretimi "Terminator in middle of basic
+  block" verification hatası veriyordu — throw artık break gibi ölü devam
+  block'u açar. `tests/try_catch.test.tpr` 5/5.
+- ✅ **Closure'lar native-yol fonksiyonlarında ve top-level'da ÇALIŞIYOR
+  (düzeltildi 2026-07-21).** İki sessiz-yanlış-sonuç bug'ı: (1) tüm-int imzalı
+  fonksiyon (`func f(): int`) gövdesinde lambda varken native i64 hızlı yola
+  giriyordu — native yolun closure desteği yok, çöp sayı üretiyordu; yeni
+  `expr_has_lambda` gate'i değer-pozisyonunda lambda görünce boxed codegen'e
+  düşürür. (2) capture slot'ları yalnız fonksiyon/lambda düğümleri için
+  hesaplanıyordu, program kökü için asla — top-level for-init değişkenini
+  (`for (int k…) { var g = () => k; }`) yakalayan lambda hiçbir şey çözemeyip
+  nullptr dönüyordu (globaller zaten çalışıyordu). Program kökü artık aynı
+  capture analizini alıyor ve `main` gerekirse env array ayırıyor. Semantik
+  not: döngüde üretilen closure'lar frame'in TEK slotunu paylaşır (JS-`var`/
+  Python gibi son değeri görürler). `tests/closure_edges.test.tpr` 5/5 +
+  top-level kontrol.
+- ✅ **`parse_iso8601` imkânsız takvim gününü reddediyor (düzeltildi
+  2026-07-21).** Gün yalnız 1..31 aralık-kontrollüydü; days-from-civil formülü
+  "2026-02-30"u sessizce 2 Mart'a normalize ediyordu (diğer her bozuk girişe -1
+  veren parser için veri-bozulması tuzağı). Artık ayın gerçek uzunluğu + tam
+  Gregoryen artık-yıl kuralı (4 evet / 100 hayır / 400 evet) doğrulanıyor:
+  2024-02-29 ve 2000-02-29 geçer; 2025-02-29, 1900-02-29, Nisan 31, Şubat 30
+  → -1. `tests/datetime.test.tpr` 3→6.
 - ✅ **`contains()`/`indexOf()` dizide çalışıyor (düzeltildi 2026-07-20).** İkisi de
   string-only'di; dizi haystack sessizce reddediliyordu (`contains([1,2,3],2)`→false,
   indexOf→-1 + yanlış typecheck uyarısı). Artık diziyi değere göre de arıyorlar
@@ -1571,6 +1602,17 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Stdlib DX (Wings/ORM)
 
+- ✅ **Wings header lookup case-insensitive (düzeltildi 2026-07-21, RFC 7230).**
+  Request header'ları istemcinin gönderdiği casing ile saklanır ve her iç okuma
+  elle 2-case probe'du ("Cookie" sonra "cookie") — başka her casing (COOKIE,
+  AUTHORIZATION, CONTENT-TYPE…) sessizce kaçıyordu: çerez düşer, `jwt_guard`
+  geçerli token'a 401 verir, gzip devreye girmez, ETag 304 eşleşmez. Yeni
+  `req_header(req, name)` public erişimcisi (+ iç `_hdr_ci`: tam-case hızlı yol
+  → lowercase key → key taraması) ve beş iç site (cookies, jwt, form_data,
+  If-None-Match, Accept-Encoding) ona geçti. Saklanan casing değişmedi →
+  mevcut tam-case kullanıcı kodu kırılmaz. `wings_features` 13→14 + canlı
+  curl smoke (COOKIE/CONTENT-TYPE/ACCEPT-ENCODING büyük harf: çerez çözüldü,
+  gzip yanıtı geldi).
 - ✅ **Tame WASM — `tulpar build --target=web` (2026-07-13):** derleyici
   wasm32-unknown-emscripten objesi üretir (CMake her mimaride WebAssembly
   LLVM bileşenlerini bağlar), em++ `wasm/dist` arşivlerine linkler

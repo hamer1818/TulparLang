@@ -218,6 +218,44 @@ backwards-compatible.
   both languages.
 
 ### Fixed
+- **Wings: request-header lookup is now case-insensitive (RFC 7230).** Headers
+  are stored with the client's exact casing and every internal read was a
+  hand-rolled 2-case probe (`"Cookie"` then `"cookie"`) — any other casing
+  (`COOKIE`, `AUTHORIZATION`, `CONTENT-TYPE`, …) silently missed: cookies
+  dropped, `jwt_guard` 401'd valid bearer tokens, gzip never engaged, ETag 304s
+  never matched. New `req_header(req, name)` public accessor (+ internal
+  `_hdr_ci`) resolves case-insensitively; all five internal sites (cookies,
+  jwt, `form_data`, If-None-Match, Accept-Encoding) use it. Stored casing is
+  untouched, so existing exact-case reads keep working.
+- **Closures created in a native-fast-path function computed garbage.** The
+  all-int-signature fast path has no closure support, but its gate accepted
+  lambda-initialized decls (`var f = () => i;` fits the i64 decl shape), so
+  `func f(): int` bodies with a lambda silently produced wrong numbers. A new
+  `expr_has_lambda` check bails return/assignment/decl statements with a
+  value-position lambda to the boxed codegen.
+- **Top-level lambdas couldn't capture top-level scope-locals.** Capture slots
+  were only computed for function/lambda nodes, never the program root, so a
+  lambda capturing a top-level for-init var (`for (int k …) { var g = () => k; }`)
+  resolved nothing and returned nullptr (globals were always fine). The program
+  root now gets the same capture analysis and `main` allocates an env array
+  like any capturing function. Loop-created closures share the frame's one
+  slot per variable (JS-`var`/Python semantics: they see the final value).
+- **`try`/`catch`: leaving a `try` via `return`/`break`/`continue` leaked the
+  handler frame.** The setjmp frame was only popped on normal fall-through, so
+  a later `throw` could longjmp into a stack frame that no longer existed
+  ("longjmp causes uninitialized stack frame" abort). Codegen now tracks open
+  try scopes: `return` pops them all (after evaluating its expression),
+  `break`/`continue` pop down to the loop's entry depth, and lambdas
+  save/reset both try and loop tracking so a nested body can't pop the outer
+  function's frames. A bare `throw` followed by more statements also corrupted
+  its basic block ("Terminator found in the middle of a basic block") — throw
+  now spawns a dead continuation block like `break` does.
+- **`parse_iso8601` accepted impossible calendar days.** The day was only
+  range-checked 1..31, so `"2026-02-30…"` silently normalised to March 2
+  instead of failing — a data-corruption trap for a parser that returns -1 on
+  every other malformed input. Days are now validated against the month's real
+  length with the full Gregorian leap rule (2024-02-29 and 2000-02-29 parse;
+  2025-02-29, 1900-02-29, Apr 31, Feb 30 → -1).
 - **`contains()` / `indexOf()` silently failed on arrays.** Both were
   string-only: `contains([1,2,3], 2)` returned false and `indexOf` returned -1
   (with a spurious `expected str` typecheck warning), so the only way to test
