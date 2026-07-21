@@ -67,7 +67,7 @@ func her_kare_is() {
     if (gx > 608.0) { gx = 608.0; }
     konumla(gemi, gx, GEMI_Y);
 
-    if (key_pressed("SPACE")) {
+    if (ates_basildi()) {
         mermi(gx + 13.0, GEMI_Y - 6.0, 6, 14, GOLD, 0, 0 - 470);
     }
 

@@ -117,6 +117,24 @@ float _gravity = 0.0;     // px/sn^2 (0 = kapalı); platformer bunu kullanır
 float _jump_v  = 520.0;   // zıplama başlangıç hızı (px/sn, yukarı)
 bool  _clamp_world = true; // topdown'da entity'yi dünya sınırında tut
 
+// ---- Dokunmatik kontrol (mobil) ---------------------------------------------
+// Ekranın altına yarı-saydam bir D-pad (sol) + aksiyon butonu (sağ) çizilir ve
+// okunur. İlk dokunuşta OTOMATİK açılır; masaüstünde klavye çalışmaya devam
+// eder (girdi = klavye VEYA dokunma). raylib touch koordinatlarını oyun-dünyası
+// uzayına ölçekler (Android'de doğrulandı), bu yüzden zone'lar _world_w/_world_h
+// ile tanımlı. touch_controls(false) ile kapatılabilir / (true) ile zorlanabilir.
+bool _ar_touch_ui   = false;  // overlay çiz + oku (ilk dokunuşta açılır)
+bool _ar_touch_force = false; // touch_controls(true): dokunma olmadan da aç
+bool _ar_act_now    = false;  // aksiyon butonu bu kare basılı mı
+bool _ar_act_prev   = false;
+bool _ar_act_edge   = false;  // aksiyon butonu bu kare YENİ basıldı (jump/fire)
+bool _ar_td_left    = false;  // D-pad yön durumları (bu kare)
+bool _ar_td_right   = false;
+bool _ar_td_up      = false;
+bool _ar_td_down    = false;
+bool _ar_tap_edge   = false;  // herhangi bir parmak 0→>0 (oyun-bitti'de restart)
+int  _ar_touch_prevn = 0;
+
 // ---- Çarpışma kuralları (registry) ------------------------------------------
 array _ca  = [];   // tag A
 array _cb  = [];   // tag B
@@ -521,10 +539,112 @@ func help_text(s){ _hint = s; _has_hint = true; }
 //  MOTOR İÇİ — kare güncelleme
 // ============================================================================
 
+// ---- Dokunmatik: kontrol yerleşimi (oyun-dünyası uzayında) ------------------
+func _ar_dpad_cx(): float { return _world_h * 0.28; }
+func _ar_dpad_cy(): float { return _world_h * 0.70; }
+func _ar_dpad_r(): float  { return _world_h * 0.17; }
+func _ar_act_cx(): float  { return _world_w - _world_h * 0.24; }
+func _ar_act_cy(): float  { return _world_h * 0.72; }
+func _ar_act_r(): float   { return _world_h * 0.15; }
+
+// Her kare bir kez: touch zone'larını oku → yön + aksiyon-edge + tap-edge kur.
+func _ar_read_touch() {
+    _ar_td_left = false; _ar_td_right = false;
+    _ar_td_up = false; _ar_td_down = false;
+    _ar_act_now = false;
+    int n = touch_count();
+    if (n > 0) { _ar_touch_ui = true; } // ilk dokunuşta overlay'i kalıcı aç
+    float dcx = _ar_dpad_cx(); float dcy = _ar_dpad_cy(); float dr = _ar_dpad_r();
+    float acx = _ar_act_cx();  float acy = _ar_act_cy();  float ar = _ar_act_r();
+    float dead = dr * 0.35;
+    float grab = dr * 2.2;     // D-pad yakalama yarıçapı (biraz geniş)
+    int i = 0;
+    while (i < n) {
+        float tx = touch_x(i) * 1.0;
+        float ty = touch_y(i) * 1.0;
+        float adx = tx - acx; float ady = ty - acy;
+        if (adx * adx + ady * ady <= ar * ar) {
+            _ar_act_now = true;
+        } else {
+            float dx = tx - dcx; float dy = ty - dcy;
+            if (dx * dx + dy * dy <= grab * grab) {
+                float axx = dx; if (axx < 0.0) { axx = 0.0 - axx; }
+                float ayy = dy; if (ayy < 0.0) { ayy = 0.0 - ayy; }
+                if (dx < 0.0 - dead && axx >= ayy * 0.5) { _ar_td_left = true; }
+                if (dx > dead && axx >= ayy * 0.5)       { _ar_td_right = true; }
+                if (dy < 0.0 - dead && ayy >= axx * 0.5) { _ar_td_up = true; }
+                if (dy > dead && ayy >= axx * 0.5)       { _ar_td_down = true; }
+            }
+        }
+        i = i + 1;
+    }
+    _ar_act_edge = _ar_act_now && !_ar_act_prev;
+    _ar_act_prev = _ar_act_now;
+    _ar_tap_edge = (n > 0) && (_ar_touch_prevn == 0);
+    _ar_touch_prevn = n;
+}
+
+// Klavye + dokunma birleşik girdi — movement presetleri bunları kullanır.
+func _ar_in_left(): bool  { return key_down("LEFT")  || key_down("A") || _ar_td_left; }
+func _ar_in_right(): bool { return key_down("RIGHT") || key_down("D") || _ar_td_right; }
+func _ar_in_up(): bool    { return key_down("UP")    || key_down("W") || _ar_td_up; }
+func _ar_in_down(): bool  { return key_down("DOWN")  || key_down("S") || _ar_td_down; }
+// Zıplama: klavye edge VEYA aksiyon butonu edge.
+func _ar_in_jump(): bool  { return key_pressed("SPACE") || key_pressed("UP") || key_pressed("W") || _ar_act_edge; }
+
+// ---- Herkese açık: aksiyon butonu (ateş/etkileşim; nişancı oyunları için) ----
+// Oyun kodunda `key_pressed("SPACE")` yerine `action_pressed()` kullanılırsa
+// hem klavye hem dokunma çalışır. action_held(): basılı tutuluyor mu.
+func action_pressed(): bool { return _ar_act_edge; }
+func aksiyon_basildi(): bool { return _ar_act_edge; }
+func action_held(): bool    { return _ar_act_now; }
+func aksiyon_basili(): bool  { return _ar_act_now; }
+
+// Ateş/zıpla için birleşik edge: SPACE/UP klavye VEYA aksiyon butonu. Nişancı
+// oyunları `key_pressed("SPACE")` yerine bunu kullanırsa dokunmatikte de ateş eder.
+func fire_pressed(): bool  { return key_pressed("SPACE") || key_pressed("UP") || _ar_act_edge; }
+func ates_basildi(): bool  { return fire_pressed(); }
+
+// Dokunmatik overlay'i zorla aç/kapat (varsayılan: ilk dokunuşta otomatik).
+func touch_controls(on)   { _ar_touch_force = on; _ar_touch_ui = on; }
+func dokunma_kontrol(on)  { touch_controls(on); }
+
+// Dokunmatik kontrol overlay'ini çiz: sol alt D-pad (4 ok) + sağ alt aksiyon
+// butonu. Basılı yönler/buton parlar. Yarı-saydam (rgba) — oyunu kapatmaz.
+func _ar_draw_touch_ui() {
+    float dcx = _ar_dpad_cx(); float dcy = _ar_dpad_cy(); float dr = _ar_dpad_r();
+    float acx = _ar_act_cx();  float acy = _ar_act_cy();  float ar = _ar_act_r();
+    int base = rgba(210, 214, 230, 45);
+    int hot  = rgba(255, 255, 255, 225);
+    int dim  = rgba(255, 255, 255, 90);
+    float a = dr * 0.8;   // ok ucu uzaklığı
+    float b = dr * 0.36;  // ok tabanı yarısı
+    circle(toInt(dcx), toInt(dcy), toInt(dr), base);
+    // sol
+    triangle(dcx - a, dcy, dcx - b, dcy - b, dcx - b, dcy + b,
+             _ar_td_left ? hot : dim);
+    // sağ
+    triangle(dcx + a, dcy, dcx + b, dcy - b, dcx + b, dcy + b,
+             _ar_td_right ? hot : dim);
+    // yukarı
+    triangle(dcx, dcy - a, dcx - b, dcy - b, dcx + b, dcy - b,
+             _ar_td_up ? hot : dim);
+    // aşağı
+    triangle(dcx, dcy + a, dcx - b, dcy + b, dcx + b, dcy + b,
+             _ar_td_down ? hot : dim);
+    // aksiyon butonu
+    circle(toInt(acx), toInt(acy), toInt(ar),
+           _ar_act_now ? rgba(255, 130, 120, 200) : rgba(230, 120, 110, 70));
+    circle(toInt(acx), toInt(acy), toInt(ar * 0.45),
+           _ar_act_now ? hot : dim);
+}
+
 func _ar_update() {
-    // Oyun bitti (1) ya da kazandın (2): fizik durur, sadece R dinlenir.
+    _ar_read_touch();
+    // Oyun bitti (1) ya da kazandın (2): fizik durur; R ya da ekrana dokunma
+    // yeniden başlatır (mobilde klavye yok).
     if (_ar_state != 0) {
-        if (key_pressed("R")) { _ar_reset(); }
+        if (key_pressed("R") || _ar_tap_edge) { _ar_reset(); }
         return;
     }
 
@@ -562,10 +682,10 @@ func _ar_apply_movement(dt) {
             float s = _espeed[_ar_i];
             float vx = 0.0;
             float vy = 0.0;
-            if (key_down("LEFT")  || key_down("A")) { vx = vx - s; }
-            if (key_down("RIGHT") || key_down("D")) { vx = vx + s; }
-            if (key_down("UP")    || key_down("W")) { vy = vy - s; }
-            if (key_down("DOWN")  || key_down("S")) { vy = vy + s; }
+            if (_ar_in_left())  { vx = vx - s; }
+            if (_ar_in_right()) { vx = vx + s; }
+            if (_ar_in_up())    { vy = vy - s; }
+            if (_ar_in_down())  { vy = vy + s; }
             _evx[_ar_i] = vx;
             _evy[_ar_i] = vy;
             _ex[_ar_i] = _ex[_ar_i] + vx * dt;
@@ -583,14 +703,14 @@ func _ar_apply_movement(dt) {
         } else if (mv == MV_PLATFORM) {
             float s = _espeed[_ar_i];
             float vx = 0.0;
-            if (key_down("LEFT")  || key_down("A")) { vx = vx - s; }
-            if (key_down("RIGHT") || key_down("D")) { vx = vx + s; }
+            if (_ar_in_left())  { vx = vx - s; }
+            if (_ar_in_right()) { vx = vx + s; }
             _evx[_ar_i] = vx;
             // Yerçekimi
             _evy[_ar_i] = _evy[_ar_i] + _gravity * dt;
             // Zıplama (zemindeyken)
             if (_eground[_ar_i] == 1) {
-                if (key_pressed("SPACE") || key_pressed("UP") || key_pressed("W")) {
+                if (_ar_in_jump()) {
                     _evy[_ar_i] = 0.0 - _jump_v;
                     _eground[_ar_i] = 0;
                 }
@@ -738,6 +858,11 @@ func _ar_draw_all() {
 
     // Kullanıcı ek çizimi
     if (_has_draw) { call(_draw_fn); }
+
+    // Dokunmatik kontrol overlay'i (oynanırken, dokunma modu açıksa)
+    if (_ar_touch_ui) {
+        if (_ar_state == 0) { _ar_draw_touch_ui(); }
+    }
 
     // HUD skor
     str L = _lang_now();

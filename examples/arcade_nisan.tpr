@@ -42,8 +42,8 @@ func her_kare_is() {
         hiz_ver(e, 0, enemy_vy);
     }
 
-    // SPACE → yukarı doğru mermi.
-    if (key_pressed("SPACE")) {
+    // SPACE / aksiyon butonu → yukarı doğru mermi (klavye + dokunmatik).
+    if (ates_basildi()) {
         mermi(x_of(player_id) + 10.0, y_of(player_id), 8, 14, GOLD, 0, 0 - 420);
     }
 
