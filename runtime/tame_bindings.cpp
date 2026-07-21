@@ -53,6 +53,9 @@ int tame_impl_mouse_y(void);
 int tame_impl_mouse_down(int b);
 int tame_impl_mouse_pressed(int b);
 double tame_impl_mouse_wheel(void);
+int tame_impl_touch_count(void);
+int tame_impl_touch_x(int i);
+int tame_impl_touch_y(int i);
 // Faz 3-4: kaynak registry'leri (texture/font/ses/müzik) + ekran görüntüsü
 int tame_impl_load_texture(const char *path);
 void tame_impl_draw_texture(int h, double x, double y);
@@ -227,6 +230,16 @@ VMValue aot_tm_mouse_pressed_ptr(VMValue *b) {
 
 VMValue aot_tm_mouse_wheel_ptr(void) {
   return VM_FLOAT(tame_impl_mouse_wheel());
+}
+
+VMValue aot_tm_touch_count_ptr(void) {
+  return VM_INT(tame_impl_touch_count());
+}
+VMValue aot_tm_touch_x_ptr(VMValue *i) {
+  return VM_INT(tame_impl_touch_x((int)tm_int(i)));
+}
+VMValue aot_tm_touch_y_ptr(VMValue *i) {
+  return VM_INT(tame_impl_touch_y((int)tm_int(i)));
 }
 
 // --- Faz 3: texture / font -------------------------------------------------

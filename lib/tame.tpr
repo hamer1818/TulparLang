@@ -85,6 +85,18 @@ func mouse_down(b): bool { return tm_mouse_down(b); }
 func mouse_pressed(b): bool { return tm_mouse_pressed(b); }
 func mouse_wheel(): float { return tm_mouse_wheel(); }
 
+// Dokunma (mobil). Çok parmak desteklenir; parmak index'i 0'dan başlar.
+// Masaüstünde raylib tek dokunuşu fareye maplediği için mouse_* de çalışır,
+// ama mobilde ASIL girdi budur. touched()/dokunuldu(): en az bir parmak var mı.
+func touch_count(): int { return tm_touch_count(); }
+func dokunma_sayisi(): int { return tm_touch_count(); }
+func touch_x(i): int { return tm_touch_x(i); }
+func dokunma_x(i): int { return tm_touch_x(i); }
+func touch_y(i): int { return tm_touch_y(i); }
+func dokunma_y(i): int { return tm_touch_y(i); }
+func touched(): bool { return tm_touch_count() > 0; }
+func dokunuldu(): bool { return tm_touch_count() > 0; }
+
 // Gamepad (id 0'dan başlar). Butonlar adla: "A"/"B"/"X"/"Y" (Xbox) veya
 // "CROSS"/"CIRCLE"/"SQUARE"/"TRIANGLE" (PS), "UP"/"DOWN"/"LEFT"/"RIGHT",
 // "LB"/"RB" ("L1"/"R1"), "LT"/"RT" ("L2"/"R2"), "START"/"SELECT"/"GUIDE",

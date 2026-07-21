@@ -549,3 +549,10 @@ int tame_impl_mouse_y(void) { return GetMouseY(); }
 int tame_impl_mouse_down(int b) { return IsMouseButtonDown(b); }
 int tame_impl_mouse_pressed(int b) { return IsMouseButtonPressed(b); }
 double tame_impl_mouse_wheel(void) { return (double)GetMouseWheelMove(); }
+
+// Input — touch (mobil). raylib masaüstünde tek dokunuşu fareye maplediği
+// için mouse_* zaten çalışır; bu API çok-parmak (multi-touch) ve açık parmak
+// konumu verir. Index geçersizse (0,0) döner.
+int tame_impl_touch_count(void) { return GetTouchPointCount(); }
+int tame_impl_touch_x(int i) { return (int)GetTouchPosition(i).x; }
+int tame_impl_touch_y(int i) { return (int)GetTouchPosition(i).y; }

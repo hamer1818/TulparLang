@@ -790,6 +790,10 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm_mouse_down", "aot_tm_mouse_down_ptr", 1},
     {"tm_mouse_pressed", "aot_tm_mouse_pressed_ptr", 1},
     {"tm_mouse_wheel", "aot_tm_mouse_wheel_ptr", 0},
+    // Touch (mobil çok-parmak); masaüstünde mouse_* tek dokunuşu zaten alır.
+    {"tm_touch_count", "aot_tm_touch_count_ptr", 0},
+    {"tm_touch_x", "aot_tm_touch_x_ptr", 1},
+    {"tm_touch_y", "aot_tm_touch_y_ptr", 1},
     // Faz 3 — texture / font (int handle registry'si, DB-handle deseni)
     {"tm_load_texture", "aot_tm_load_texture_ptr", 1},
     {"tm_draw_texture", "aot_tm_draw_texture_ptr", 3},

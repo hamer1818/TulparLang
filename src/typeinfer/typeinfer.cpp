@@ -795,6 +795,9 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm_mouse_down", TYPE_BOOL, {TYPE_INT}},
       {"tm_mouse_pressed", TYPE_BOOL, {TYPE_INT}},
       {"tm_mouse_wheel", TYPE_FLOAT, {}},
+      {"tm_touch_count", TYPE_INT, {}},
+      {"tm_touch_x", TYPE_INT, {TYPE_INT}},
+      {"tm_touch_y", TYPE_INT, {TYPE_INT}},
       // tame Faz 3-4: kaynak handle'ları int'tir (-1 = yükleme başarısız).
       {"tm_load_texture", TYPE_INT, {TYPE_STRING}},
       {"tm_draw_texture", TYPE_VOID, {TYPE_INT, TYPE_UNKNOWN, TYPE_UNKNOWN}},
