@@ -842,6 +842,11 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"file_exists", TYPE_BOOL, {TYPE_STRING}},
       // System / process
       {"sys_run", TYPE_INT, {TYPE_STRING}},
+      // Regex (std::regex ECMAScript; match = full-string, search = substring)
+      {"regex_match", TYPE_INT, {TYPE_STRING, TYPE_STRING}},
+      {"regex_search", TYPE_INT, {TYPE_STRING, TYPE_STRING}},
+      {"regex_capture", TYPE_ARRAY, {TYPE_STRING, TYPE_STRING}},
+      {"regex_replace", TYPE_STRING, {TYPE_STRING, TYPE_STRING, TYPE_STRING}},
       // Crypto / content integrity
       {"sha256", TYPE_STRING, {TYPE_STRING}},
       // Password KDF (PBKDF2-HMAC-SHA256)

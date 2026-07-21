@@ -136,6 +136,10 @@ const BuiltinEntry kBuiltins[] = {
 
     // ---- System ----
     {"sys_run",      "sys_run(cmd: str): int",                      "Kabuk komutunu çalıştırır; çıktı canlı akar, exit code döner (0=başarı)."},
+    {"regex_match",  "regex_match(pattern: str, s: str): int",      "TÜM string desene uyuyorsa 1 (std::regex_match; alt-dize için regex_search)."},
+    {"regex_search", "regex_search(pattern: str, s: str): int",     "Desen string içinde herhangi bir yerde geçiyorsa 1."},
+    {"regex_capture","regex_capture(pattern: str, s: str): array",  "İlk eşleşmenin yakalama gruplarını dizi olarak döner (0 = tüm eşleşme)."},
+    {"regex_replace","regex_replace(pattern: str, s: str, repl: str): str", "Desene uyan her parçayı değiştirir; bozuk desende s'i aynen döner."},
     {"read_key",     "read_key(): str",                             "Tek tuş okur (Enter'sız, ekrana yansımadan). Ok tuşları: up/down/left/right; ayrıca enter/esc/space/tab/backspace; diğerleri karakterin kendisi."},
     {"sys_lang",     "sys_lang(): str",                             "İşletim sistemi arayüz dilini küçük harf ISO-639 kodu olarak döner (\"tr\", \"en\", ...). Yerelleştirme için. Belirlenemezse \"\"."},
     {"read_key_timeout", "read_key_timeout(ms: int): str",          "read_key gibi ama en fazla ms milisaniye bekler; süre dolarsa \"\" (boş) döner. Canlı/animasyonlu TUI (spinner, ilerleme, otomatik yenileme) için."},
