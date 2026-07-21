@@ -1324,7 +1324,11 @@ girildiğinde ne yapacağımı bilelim.
   boş→0, diziler referans tipi), thread+mutex (2×1000 artış = 2000 doğru),
   base64/sha1/gzip/secure_token/randint(inclusive)/env, 10K özyineleme,
   100K dizi, 1K-key json round-trip. `range(n)` tek-arg (0..n-1) — typecheck
-  2-arg çağrıyı yakalıyor.
+  2-arg çağrıyı yakalıyor. Ayrıca regex ailesi (match=tam-eşleşme,
+  search=alt-dize, capture grupları, bozuk desen güvenli — davranış doğru ama
+  typeinfer+LSP kaydı eksikti, tamamlandı: `tests/regex.test.tpr` 4/4), TUI
+  metin yardımcıları (display_width UTF-8 doğru, fit_width elipsli kesme,
+  style ANSI) ve parse_query (%20 decode, boş değer korunur) ölçüldü — temiz.
 - ✅ **try/catch handler hijyeni (düzeltildi 2026-07-21).** try'dan `return`/
   `break`/`continue` ile çıkış setjmp handler frame'ini stack'te bırakıyordu →
   sonraki `throw` yok olmuş stack frame'e longjmp ediyordu ("longjmp causes

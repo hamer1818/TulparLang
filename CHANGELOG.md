@@ -218,6 +218,12 @@ backwards-compatible.
   both languages.
 
 ### Fixed
+- **The regex builtin family is now registered in the type checker and LSP.**
+  `regex_match` / `regex_search` / `regex_capture` / `regex_replace` worked at
+  runtime but were invisible to tooling (no completion/hover, unknown to
+  inference) and had zero test coverage. Registered with real signatures and
+  documented semantics: `regex_match` is full-string match, `regex_search` is
+  substring, an uncompilable pattern is a safe no-op.
 - **StringBuilder was dead on arrival — the first `sb_append` segfaulted.**
   Its VMValue argument was declared as the raw by-value aggregate — the SysV
   lowering trap documented at `llvm_make_vmvalue_func_type` — so the callee
