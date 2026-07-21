@@ -1005,6 +1005,11 @@ StringBuilder *aot_stringbuilder_new(int initial_capacity) {
 }
 
 void aot_stringbuilder_append(StringBuilder *sb, const char *str, int len) {
+  // Null handle (sb_append(0, ...) or a stale/freed handle stored as 0):
+  // ignore instead of segfaulting the process. Same guard on every sb_*
+  // entry point — a bad handle is a caller bug, but a builtin must not
+  // take the whole program down for it.
+  if (!sb || !str || len <= 0) return;
   if (sb->length + len >= sb->capacity) {
     // Double capacity
     sb->capacity = (sb->length + len + 1) * 2;
@@ -1033,6 +1038,7 @@ static int aot_format_float(char *buf, size_t n, double value) {
 
 // Append VMValue to StringBuilder (handles any type)
 void aot_stringbuilder_append_vmvalue(StringBuilder *sb, VMValue val) {
+  if (!sb) return;
   if (IS_STRING(val)) {
     ObjString *str = AS_STRING(val);
     aot_stringbuilder_append(sb, str->chars, str->length);
@@ -1050,12 +1056,25 @@ void aot_stringbuilder_append_vmvalue(StringBuilder *sb, VMValue val) {
   }
 }
 
+// Pointer-ABI wrapper (the aot_*_ptr pattern): codegen passes the VMValue
+// through a stack slot instead of by value. The old by-value call was
+// declared with the raw {i32,i64} aggregate — the SysV lowering trap the
+// llvm_make_vmvalue_func_type comment documents — so the callee received a
+// corrupted VMValue and AS_STRING dereferenced garbage (segfault on the
+// very first sb_append).
+void aot_stringbuilder_append_vmvalue_ptr(StringBuilder *sb, VMValue *val) {
+  if (!val) return;
+  aot_stringbuilder_append_vmvalue(sb, *val);
+}
+
 VMValue aot_stringbuilder_to_string(StringBuilder *sb) {
+  if (!sb) return VM_OBJ((Obj *)aot_allocate_string("", 0));
   ObjString *str = aot_allocate_string(sb->buffer, sb->length);
   return VM_OBJ((Obj *)str);
 }
 
 void aot_stringbuilder_free(StringBuilder *sb) {
+  if (!sb) return;
   free(sb->buffer);
   free(sb);
 }
@@ -3889,43 +3908,46 @@ VMValue aot_style_ptr(VMValue *a, VMValue *b) {
 
 VMValue aot_write_file(VMValue path_val, VMValue content_val) {
   if (!IS_STRING(path_val) || !IS_STRING(content_val))
-    return VM_VOID();
+    return VM_BOOL(false);
   const char *path = AS_STRING(path_val)->chars;
   const char *content = AS_STRING(content_val)->chars;
   int len = AS_STRING(content_val)->length;
 
+  // The documented contract (typeinfer + LSP) is `-> bool`; returning VOID
+  // made a failed write (bad path, no permission, disk full) look identical
+  // to success. True only when the file opened AND every byte landed.
   FILE *f = fopen(path, "wb");
-  if (f) {
-    fwrite(content, 1, len, f);
-    fclose(f);
-  }
-  return VM_VOID();
+  if (!f)
+    return VM_BOOL(false);
+  size_t wrote = fwrite(content, 1, len, f);
+  int close_ok = (fclose(f) == 0);
+  return VM_BOOL(wrote == (size_t)len && close_ok);
 }
 
 VMValue aot_write_file_ptr(VMValue *path_ptr, VMValue *content_ptr) {
   if (!path_ptr || !content_ptr)
-    return VM_VOID();
+    return VM_BOOL(false);
   return aot_write_file(*path_ptr, *content_ptr);
 }
 
 VMValue aot_append_file(VMValue path_val, VMValue content_val) {
   if (!IS_STRING(path_val) || !IS_STRING(content_val))
-    return VM_VOID();
+    return VM_BOOL(false);
   const char *path = AS_STRING(path_val)->chars;
   const char *content = AS_STRING(content_val)->chars;
   int len = AS_STRING(content_val)->length;
 
   FILE *f = fopen(path, "ab");
-  if (f) {
-    fwrite(content, 1, len, f);
-    fclose(f);
-  }
-  return VM_VOID();
+  if (!f)
+    return VM_BOOL(false);
+  size_t wrote = fwrite(content, 1, len, f);
+  int close_ok = (fclose(f) == 0);
+  return VM_BOOL(wrote == (size_t)len && close_ok);
 }
 
 VMValue aot_append_file_ptr(VMValue *path_ptr, VMValue *content_ptr) {
   if (!path_ptr || !content_ptr)
-    return VM_VOID();
+    return VM_BOOL(false);
   return aot_append_file(*path_ptr, *content_ptr);
 }
 

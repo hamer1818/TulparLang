@@ -1,0 +1,40 @@
+// Regression: file I/O builtins honour their documented contracts.
+//
+// write_file/append_file are documented (typeinfer + LSP) as `-> bool` but
+// the runtime returned VOID unconditionally (2026-07-21 fix) — a failed
+// write (bad path, no permission) was indistinguishable from success. They
+// now return true only when the file opened and every byte landed.
+// Run: ./tulpar tests/file_io.test.tpr
+import "test";
+
+func run_write_read_roundtrip() {
+    assert_eq_bool(write_file("_fio_t1.txt", "merhaba\ndunya"), true);
+    assert_eq_str(read_file("_fio_t1.txt"), "merhaba\ndunya");
+    assert_eq_bool(append_file("_fio_t1.txt", "+ek"), true);
+    assert_eq_str(read_file("_fio_t1.txt"), "merhaba\ndunya+ek");
+}
+
+func run_failure_reporting() {
+    // Nonexistent directory / unwritable pseudo-fs: must report false.
+    assert_eq_bool(write_file("/olmayan_dizin_xyz/f.txt", "a"), false);
+    assert_eq_bool(append_file("/olmayan_dizin_xyz/f.txt", "a"), false);
+}
+
+func run_exists_and_empty() {
+    assert_eq_bool(file_exists("_fio_t1.txt"), true);
+    assert_eq_bool(file_exists("_fio_olmayan.txt"), false);
+    assert_eq_bool(write_file("_fio_t2.txt", ""), true);
+    assert_eq_str(read_file("_fio_t2.txt"), "");
+}
+
+func run_utf8_roundtrip() {
+    assert_eq_bool(write_file("_fio_t3.txt", "türkçe ğüşiöç"), true);
+    assert_eq_str(read_file("_fio_t3.txt"), "türkçe ğüşiöç");
+}
+
+print("=== file I/O contracts ===");
+test("write/read/append round-trip", "run_write_read_roundtrip");
+test("failed writes report false", "run_failure_reporting");
+test("exists + empty file", "run_exists_and_empty");
+test("utf-8 content round-trip", "run_utf8_roundtrip");
+test_summary();
