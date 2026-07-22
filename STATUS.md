@@ -11,6 +11,13 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ## 📊 Mevcut durum (özet)
 
+> **Güncel yayın: v3.11.0** (2026-07-22) — Tame 2D oyun kütüphanesi +
+> `--target=web` (WASM) & `--target=android` (native NativeActivity APK) +
+> arcade bölüm/dokunma-kontrol sistemleri + `struct↔array` yuvarlak-yolu /
+> `call()` N-arg / method-on-any-receiver / native-fast-path closure /
+> `try`/`catch` düzeltmeleri. GitHub Release'te 3-OS ikilileri + Windows
+> installer + GPG-imzalı SHA256SUMS.
+
 - **Çekirdek sözdizimi tam:** statik tipler, fonksiyonlar (opsiyonel
   dönüş-tipi notasyonu, **eksik trailing arg → 0 ile padlenir**), kontrol akışı,
   modüller (`import "x" as alias`), **t-string interpolation** (`t"x={n}"`),
@@ -33,7 +40,7 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 - **Stdlib gömülü:** wings, router, http_utils, http_client, async,
   middleware, socket, tulpar_api, orm, test, wings_tls, tame. SQLite
   ve raylib vendored.
-- **Tame — 2D oyun kütüphanesi (v3.10.0, 2026-07-12, Faz 0-5):**
+- **Tame — 2D oyun kütüphanesi (v3.11.0, 2026-07-12, Faz 0-5):**
   `import "tame"` ile saf Tulpar'dan pencere + şekil/yazı çizimi +
   klavye/fare/**gamepad** girdisi + **sprite/texture + TTF font + ses/müzik +
   `run(update, draw)` yönetilen döngüsü** — Pong sınıfı oyun ~40 satır.
@@ -51,7 +58,7 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   bozuktu — dlsym yerine `aot_register_func` + arity'li dağıtımla düzeltildi.**
   Örnekler: `tame_hello`, `tame_sprite_demo`, `tame_run_demo`, `tame_web_mini`.
   Detay: Stdlib + tooling bölümü.
-- **Arcade — "preset" üst-seviye oyun motoru (v3.10.0, 2026-07-14):**
+- **Arcade — "preset" üst-seviye oyun motoru (v3.11.0, 2026-07-14):**
   `import "arcade"` — tame'in üstünde, Unreal-blueprint/blok mantığıyla **çok
   kısa kodla** oyun yaptıran katman (gömülü `lib/arcade.tpr`, transitively
   `import "tame"` → tame linki otomatik). Kullanıcı döngü/çarpışma/fizik/çizim
@@ -184,7 +191,7 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   işçiye (qwen2.5-coder:14b) 3 ikizin mekanik çevirisi verildi ama çıktısı bozuktu (`bolum_gec`
   düşmüş, `oyun_biti` yazım hatası, `start/frame/collision` uydurma API, string'ler çevrilmemiş)
   → doğrulama kapısında yakalanıp 8 ikiz de elle yazıldı.
-- **AOT codegen doğruluk düzeltmeleri (v3.10.0, 2026-07-17):** Arcade'in yatay
+- **AOT codegen doğruluk düzeltmeleri (v3.11.0, 2026-07-17):** Arcade'in yatay
   hareket hatası iki **gerçek** derleyici bug'ını ortaya çıkardı; ikisi de
   sıradan tipli Tulpar kodunu sessizce bozuyordu:
   - **Kardeş blokta yeniden tanım başlatıcıyı kaybediyordu.** `if`/`else`
