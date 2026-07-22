@@ -114,25 +114,11 @@ static void collect_free_variables(ASTNode_C *node,
   }
 }
 
-static void analyze_module_captures(LLVMBackend *backend, ASTNode_C *node, int depth, ASTNode_C *current_func) {
-  if (!node) return;
-  if (node->type == AST_PROGRAM) {
-    for (int i = 0; i < node->statement_count; i++) {
-      if (node->statements[i]->type == AST_FUNCTION_DECL) {
-        analyze_module_captures(backend, node->statements[i], 0, node->statements[i]);
-      } else {
-        analyze_module_captures(backend, node->statements[i], 0, node);
-      }
-    }
-    return;
-  }
-  CaptureData *cd = (CaptureData*)backend->capture_data;
-  if (node->type == AST_FUNCTION_DECL || node->type == AST_LAMBDA) {
-    cd->depths[node] = depth;
-    std::unordered_set<std::string> declared;
-    collect_function_declared_vars(node, declared);
-    std::unordered_set<std::string> captured;
-    struct NestedVisitor {
+// Finds every lambda/function nested under `curr` and records which of
+// `outer_declared`'s names appear free in it — i.e. which outer locals the
+// nested function captures. Used per enclosing function AND (since the
+// 2026-07-21 top-level fix) per program root.
+struct NestedVisitor {
       static void visit(ASTNode_C *curr, const std::unordered_set<std::string> &outer_declared, std::unordered_set<std::string> &captured_vars) {
         if (!curr) return;
         if (curr->type == AST_FUNCTION_DECL || curr->type == AST_LAMBDA) {
@@ -172,7 +158,107 @@ static void analyze_module_captures(LLVMBackend *backend, ASTNode_C *node, int d
         for (int i = 0; i < curr->element_count; i++) visit(curr->elements[i], outer_declared, captured_vars);
         for (int i = 0; i < curr->object_count; i++) visit(curr->object_values[i], outer_declared, captured_vars);
       }
-    };
+};
+
+// Walks `curr` in declaration order and assigns an env slot to every
+// VARIABLE_DECL whose name is in `captured_vars` (skipping nested
+// function/lambda subtrees — their decls belong to their own frame).
+// Formerly the function-branch-local DeclVisitor; hoisted so the program
+// root can assign slots to captured top-level scope-locals too.
+static void assign_capture_decl_slots(ASTNode_C *curr,
+                                      const std::unordered_set<std::string> &captured_vars,
+                                      std::unordered_map<std::string, int> &func_slots,
+                                      int &slot_idx) {
+  if (!curr) return;
+  if (curr->type == AST_VARIABLE_DECL && curr->name) {
+    std::string name = curr->name;
+    if (captured_vars.find(name) != captured_vars.end() && func_slots.find(name) == func_slots.end()) {
+      func_slots[name] = slot_idx++;
+    }
+  }
+  if (curr->type != AST_FUNCTION_DECL && curr->type != AST_LAMBDA) {
+    assign_capture_decl_slots(curr->left, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->right, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->body, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->condition, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->then_branch, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->else_branch, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->init, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->increment, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->iterable, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->return_value, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->index, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->receiver, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->callee, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->try_block, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->catch_block, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->finally_block, captured_vars, func_slots, slot_idx);
+    assign_capture_decl_slots(curr->throw_expr, captured_vars, func_slots, slot_idx);
+    for (int i = 0; i < curr->statement_count; i++) assign_capture_decl_slots(curr->statements[i], captured_vars, func_slots, slot_idx);
+    for (int i = 0; i < curr->argument_count; i++) assign_capture_decl_slots(curr->arguments[i], captured_vars, func_slots, slot_idx);
+    for (int i = 0; i < curr->element_count; i++) assign_capture_decl_slots(curr->elements[i], captured_vars, func_slots, slot_idx);
+    for (int i = 0; i < curr->object_count; i++) assign_capture_decl_slots(curr->object_values[i], captured_vars, func_slots, slot_idx);
+  }
+}
+
+static void analyze_module_captures(LLVMBackend *backend, ASTNode_C *node, int depth, ASTNode_C *current_func) {
+  if (!node) return;
+  if (node->type == AST_PROGRAM) {
+    // Top-level capture analysis (2026-07-21). Direct-child var decls become
+    // real globals (Pass 0.1) that lambdas read without capture machinery,
+    // but a var declared in a NESTED top-level scope — a for-init
+    // (`for (int k = ...)`), an if/while-block local — lives on main's
+    // stack. Before this, no cd->slots entry was ever computed for the
+    // program node, so a top-level lambda referencing such a var found
+    // nothing and its body read nullptr/garbage. Mirror the per-function
+    // analysis with the program root as "the function" and its nested
+    // (non-global, non-function) decls as the capturable set.
+    CaptureData *pcd = (CaptureData*)backend->capture_data;
+    pcd->depths[node] = 0;
+    std::unordered_set<std::string> top_declared;
+    std::unordered_set<std::string> top_globals;
+    for (int i = 0; i < node->statement_count; i++) {
+      ASTNode_C *st = node->statements[i];
+      if (!st) continue;
+      if (st->type == AST_VARIABLE_DECL) {
+        if (st->name) top_globals.insert(st->name);
+        continue;  // globals need no capture; initializer lambdas are fine
+      }
+      if (st->type == AST_FUNCTION_DECL) continue;
+      collect_declared_locals(st, top_declared);
+    }
+    for (const auto &g : top_globals) top_declared.erase(g);
+    if (!top_declared.empty()) {
+      std::unordered_set<std::string> top_captured;
+      for (int i = 0; i < node->statement_count; i++) {
+        ASTNode_C *st = node->statements[i];
+        if (!st || st->type == AST_FUNCTION_DECL) continue;
+        NestedVisitor::visit(st, top_declared, top_captured);
+      }
+      if (!top_captured.empty()) {
+        int pslot = 1;  // slot 0 is the parent-env pointer, as everywhere
+        for (int i = 0; i < node->statement_count; i++) {
+          ASTNode_C *st = node->statements[i];
+          if (!st || st->type == AST_FUNCTION_DECL) continue;
+          assign_capture_decl_slots(st, top_captured, pcd->slots[node], pslot);
+        }
+      }
+    }
+    for (int i = 0; i < node->statement_count; i++) {
+      if (node->statements[i]->type == AST_FUNCTION_DECL) {
+        analyze_module_captures(backend, node->statements[i], 0, node->statements[i]);
+      } else {
+        analyze_module_captures(backend, node->statements[i], 0, node);
+      }
+    }
+    return;
+  }
+  CaptureData *cd = (CaptureData*)backend->capture_data;
+  if (node->type == AST_FUNCTION_DECL || node->type == AST_LAMBDA) {
+    cd->depths[node] = depth;
+    std::unordered_set<std::string> declared;
+    collect_function_declared_vars(node, declared);
+    std::unordered_set<std::string> captured;
     NestedVisitor::visit(node->body, declared, captured);
     int slot = 1;
     for (int i = 0; i < node->param_count; i++) {
@@ -183,41 +269,7 @@ static void analyze_module_captures(LLVMBackend *backend, ASTNode_C *node, int d
         }
       }
     }
-    struct DeclVisitor {
-      static void visit(ASTNode_C *curr, const std::unordered_set<std::string> &captured_vars, std::unordered_map<std::string, int> &func_slots, int &slot_idx) {
-        if (!curr) return;
-        if (curr->type == AST_VARIABLE_DECL && curr->name) {
-          std::string name = curr->name;
-          if (captured_vars.find(name) != captured_vars.end() && func_slots.find(name) == func_slots.end()) {
-            func_slots[name] = slot_idx++;
-          }
-        }
-        if (curr->type != AST_FUNCTION_DECL && curr->type != AST_LAMBDA) {
-          visit(curr->left, captured_vars, func_slots, slot_idx);
-          visit(curr->right, captured_vars, func_slots, slot_idx);
-          visit(curr->body, captured_vars, func_slots, slot_idx);
-          visit(curr->condition, captured_vars, func_slots, slot_idx);
-          visit(curr->then_branch, captured_vars, func_slots, slot_idx);
-          visit(curr->else_branch, captured_vars, func_slots, slot_idx);
-          visit(curr->init, captured_vars, func_slots, slot_idx);
-          visit(curr->increment, captured_vars, func_slots, slot_idx);
-          visit(curr->iterable, captured_vars, func_slots, slot_idx);
-          visit(curr->return_value, captured_vars, func_slots, slot_idx);
-          visit(curr->index, captured_vars, func_slots, slot_idx);
-          visit(curr->receiver, captured_vars, func_slots, slot_idx);
-          visit(curr->callee, captured_vars, func_slots, slot_idx);
-          visit(curr->try_block, captured_vars, func_slots, slot_idx);
-          visit(curr->catch_block, captured_vars, func_slots, slot_idx);
-          visit(curr->finally_block, captured_vars, func_slots, slot_idx);
-          visit(curr->throw_expr, captured_vars, func_slots, slot_idx);
-          for (int i = 0; i < curr->statement_count; i++) visit(curr->statements[i], captured_vars, func_slots, slot_idx);
-          for (int i = 0; i < curr->argument_count; i++) visit(curr->arguments[i], captured_vars, func_slots, slot_idx);
-          for (int i = 0; i < curr->element_count; i++) visit(curr->elements[i], captured_vars, func_slots, slot_idx);
-          for (int i = 0; i < curr->object_count; i++) visit(curr->object_values[i], captured_vars, func_slots, slot_idx);
-        }
-      }
-    };
-    DeclVisitor::visit(node->body, captured, cd->slots[node], slot);
+    assign_capture_decl_slots(node->body, captured, cd->slots[node], slot);
     analyze_module_captures(backend, node->body, depth + 1, node);
     return;
   }
@@ -687,6 +739,101 @@ static void report_codegen_error(LLVMBackend *backend, int line,
   }
 }
 
+// ---------------------------------------------------------------------------
+// tame (2D oyun kütüphanesi) builtin ailesi — tablo-güdümlü bağlama.
+//
+// 26 `aot_tm_*_ptr` builtin'inin hepsi aynı N-pointer VMValue ABI'sini
+// kullanır (aot_ord_ptr ile birebir aynı çağrı düzeni), o yüzden tek tek
+// struct alanı + declare + dispatch bloğu yerine bu tablo üzerinden
+// declare_runtime_functions bir döngüyle bildirir, codegen_expression
+// LLVMGetNamedFunction ile bulup çağırır. Yeni bir tame builtin'i eklemek =
+// buraya bir satır + runtime/tame_bindings.cpp'ye impl + typeinfer + LSP.
+// Implementasyonlar libtulpar_tame.a'da yaşar; link satırına yalnız
+// backend->uses_tame işaretliyken eklenir (bkz. aot_pipeline.cpp).
+// ---------------------------------------------------------------------------
+typedef struct {
+  const char *name; // Tulpar kaynak adı (tm_*)
+  const char *sym;  // runtime sembolü (aot_tm_*_ptr)
+  int argc;
+} TameBuiltin;
+
+#define TAME_MAX_ARGS 8
+
+static const TameBuiltin k_tame_builtins[] = {
+    // pencere / döngü
+    {"tm_window", "aot_tm_window_ptr", 3},
+    {"tm_running", "aot_tm_running_ptr", 0},
+    {"tm_close", "aot_tm_close_ptr", 0},
+    {"tm_set_fps", "aot_tm_set_fps_ptr", 1},
+    {"tm_begin", "aot_tm_begin_ptr", 0},
+    {"tm_end", "aot_tm_end_ptr", 0},
+    {"tm_fps", "aot_tm_fps_ptr", 0},
+    {"tm_frame_time", "aot_tm_frame_time_ptr", 0},
+    {"tm_time", "aot_tm_time_ptr", 0},
+    {"tm_width", "aot_tm_width_ptr", 0},
+    {"tm_height", "aot_tm_height_ptr", 0},
+    // çizim
+    {"tm_clear", "aot_tm_clear_ptr", 1},
+    {"tm_rect", "aot_tm_rect_ptr", 5},
+    {"tm_rect_lines", "aot_tm_rect_lines_ptr", 5},
+    {"tm_circle", "aot_tm_circle_ptr", 4},
+    {"tm_line", "aot_tm_line_ptr", 5},
+    {"tm_pixel", "aot_tm_pixel_ptr", 3},
+    {"tm_text", "aot_tm_text_ptr", 5},
+    // girdi — klavye
+    {"tm_key_down", "aot_tm_key_down_ptr", 1},
+    {"tm_key_pressed", "aot_tm_key_pressed_ptr", 1},
+    {"tm_key_released", "aot_tm_key_released_ptr", 1},
+    // girdi — fare
+    {"tm_mouse_x", "aot_tm_mouse_x_ptr", 0},
+    {"tm_mouse_y", "aot_tm_mouse_y_ptr", 0},
+    {"tm_mouse_down", "aot_tm_mouse_down_ptr", 1},
+    {"tm_mouse_pressed", "aot_tm_mouse_pressed_ptr", 1},
+    {"tm_mouse_wheel", "aot_tm_mouse_wheel_ptr", 0},
+    // Touch (mobil çok-parmak); masaüstünde mouse_* tek dokunuşu zaten alır.
+    {"tm_touch_count", "aot_tm_touch_count_ptr", 0},
+    {"tm_touch_x", "aot_tm_touch_x_ptr", 1},
+    {"tm_touch_y", "aot_tm_touch_y_ptr", 1},
+    // Faz 3 — texture / font (int handle registry'si, DB-handle deseni)
+    {"tm_load_texture", "aot_tm_load_texture_ptr", 1},
+    {"tm_draw_texture", "aot_tm_draw_texture_ptr", 3},
+    {"tm_draw_texture_ex", "aot_tm_draw_texture_ex_ptr", 5},
+    {"tm_texture_width", "aot_tm_texture_width_ptr", 1},
+    {"tm_texture_height", "aot_tm_texture_height_ptr", 1},
+    {"tm_unload_texture", "aot_tm_unload_texture_ptr", 1},
+    {"tm_load_font", "aot_tm_load_font_ptr", 2},
+    {"tm_text_font", "aot_tm_text_font_ptr", 6},
+    {"tm_measure_text", "aot_tm_measure_text_ptr", 2},
+    // Faz 4 — ses / müzik (müzik stream'leri tm_end'de otomatik pompalanır)
+    {"tm_load_sound", "aot_tm_load_sound_ptr", 1},
+    {"tm_play_sound", "aot_tm_play_sound_ptr", 1},
+    {"tm_stop_sound", "aot_tm_stop_sound_ptr", 1},
+    {"tm_sound_volume", "aot_tm_sound_volume_ptr", 2},
+    {"tm_load_music", "aot_tm_load_music_ptr", 1},
+    {"tm_play_music", "aot_tm_play_music_ptr", 1},
+    {"tm_stop_music", "aot_tm_stop_music_ptr", 1},
+    {"tm_music_volume", "aot_tm_music_volume_ptr", 2},
+    // ek çizim / araç
+    {"tm_triangle", "aot_tm_triangle_ptr", 7},
+    {"tm_screenshot", "aot_tm_screenshot_ptr", 1},
+    // girdi — gamepad (buton/eksen adla: "A"/"LB"/"START", "LX"/"RT"...)
+    {"tm_gamepad_available", "aot_tm_gamepad_available_ptr", 1},
+    {"tm_gamepad_name", "aot_tm_gamepad_name_ptr", 1},
+    {"tm_gamepad_down", "aot_tm_gamepad_down_ptr", 2},
+    {"tm_gamepad_pressed", "aot_tm_gamepad_pressed_ptr", 2},
+    {"tm_gamepad_axis", "aot_tm_gamepad_axis_ptr", 2},
+};
+
+#define TAME_BUILTIN_COUNT \
+  ((int)(sizeof(k_tame_builtins) / sizeof(k_tame_builtins[0])))
+
+static const TameBuiltin *tame_builtin_lookup(const char *name) {
+  for (int i = 0; i < TAME_BUILTIN_COUNT; i++) {
+    if (strcmp(k_tame_builtins[i].name, name) == 0) return &k_tame_builtins[i];
+  }
+  return nullptr;
+}
+
 // Declare external runtime functions
 void declare_runtime_functions(LLVMBackend *backend) {
   // printf: i32 printf(i8*, ...)
@@ -819,6 +966,18 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_runtime_init =
       LLVMAddFunction(backend->module, "aot_runtime_init", rt_init_type);
 
+  // aot_register_func(const char* name, void* ptr, int32 arity) -> void
+  // Seeds the call() dispatch cache with each top-level boxed function so
+  // run()/listen()/call() resolve by name without dlsym (essential on wasm).
+  // `arity` (user param count) lets the dispatcher pick a wasm-type-correct
+  // call_indirect signature.
+  LLVMTypeRef reg_func_params[] = {backend->ptr_type, backend->ptr_type,
+                                   backend->int32_type};
+  LLVMTypeRef reg_func_type =
+      LLVMFunctionType(backend->void_type, reg_func_params, 3, 0);
+  backend->func_aot_register_func =
+      LLVMAddFunction(backend->module, "aot_register_func", reg_func_type);
+
   // aot_to_int_ptr(VMValue*) -> int64
   LLVMTypeRef to_int_params[] = {backend->ptr_type};
   LLVMTypeRef to_int_type =
@@ -910,6 +1069,16 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMFunctionType(backend->void_type, struct_unpack_params, 3, 0);
   backend->func_aot_struct_unpack_to = LLVMAddFunction(
       backend->module, "aot_struct_unpack_to", struct_unpack_type);
+
+  // aot_struct_unpack_named(VMValue *v, int field_count, char **names,
+  //                         i64 *dst) -> void — name-resolving unpack for the
+  // string-keyed VM_OBJECT a struct becomes inside a dynamic array.
+  LLVMTypeRef struct_unpackn_params[] = {backend->ptr_type, backend->int32_type,
+                                         backend->ptr_type, backend->ptr_type};
+  LLVMTypeRef struct_unpackn_type =
+      LLVMFunctionType(backend->void_type, struct_unpackn_params, 4, 0);
+  backend->func_aot_struct_unpack_named = LLVMAddFunction(
+      backend->module, "aot_struct_unpack_named", struct_unpackn_type);
 
   // ====== Fast Array Access (value-based, no alloca) ======
   // aot_array_get_fast(VMValue arr, i64 index) -> VMValue
@@ -1160,6 +1329,19 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_ord =
       LLVMAddFunction(backend->module, "aot_ord_ptr", write_type);
 
+  // tame (2D oyun) builtin ailesi — k_tame_builtins tablosundan tek
+  // döngüyle bildirilir; hepsi N-ptr VMValue ABI'si. Dispatch tarafı
+  // LLVMGetNamedFunction ile bulur, struct alanı tutulmaz.
+  {
+    LLVMTypeRef tm_params[TAME_MAX_ARGS];
+    for (int i = 0; i < TAME_MAX_ARGS; i++) tm_params[i] = backend->ptr_type;
+    for (int i = 0; i < TAME_BUILTIN_COUNT; i++) {
+      LLVMTypeRef tm_ft = llvm_make_vmvalue_func_type(
+          backend, tm_params, k_tame_builtins[i].argc, 0);
+      LLVMAddFunction(backend->module, k_tame_builtins[i].sym, tm_ft);
+    }
+  }
+
   // aot_screen_open()/aot_screen_close() -> VMValue (void) : 0-arg ABI.
   backend->func_aot_screen_open =
       LLVMAddFunction(backend->module, "aot_screen_open", input_type);
@@ -1362,6 +1544,17 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_call_dynamic_1 =
       LLVMAddFunction(backend->module, "aot_call_dynamic_1", call_dyn1_type);
 
+  // aot_call_dynamic_n(handler_name, VMValue* args, int32 argc) -> VMValue —
+  // dispatch forwarding N (>=2) arguments. `args` is a plain pointer + count,
+  // NOT a VMValue, so it passes through llvm_make_vmvalue_func_type's coercion
+  // untouched (only vm_value_type params get the sret/byval treatment).
+  LLVMTypeRef call_dynn_params[] = {backend->vm_value_type, backend->ptr_type,
+                                    backend->int32_type};
+  LLVMTypeRef call_dynn_type =
+      llvm_make_vmvalue_func_type(backend, call_dynn_params, 3, 0);
+  backend->func_aot_call_dynamic_n =
+      LLVMAddFunction(backend->module, "aot_call_dynamic_n", call_dynn_type);
+
   // aot_create_closure(ptr, ptr, int32) -> ptr
   LLVMTypeRef create_cls_params[] = {backend->ptr_type, backend->ptr_type, backend->int32_type};
   LLVMTypeRef create_cls_type = LLVMFunctionType(backend->ptr_type, create_cls_params, 3, 0);
@@ -1409,12 +1602,16 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_stringbuilder_new =
       LLVMAddFunction(backend->module, "aot_stringbuilder_new", sb_new_type);
 
-  // aot_stringbuilder_append_vmvalue(ptr, VMValue) -> void
-  LLVMTypeRef sb_append_params[] = {backend->ptr_type, backend->vm_value_type};
+  // aot_stringbuilder_append_vmvalue_ptr(ptr, VMValue*) -> void
+  // Pointer-ABI (aot_*_ptr pattern): passing the raw vm_value_type aggregate
+  // by value hits the SysV lowering trap documented at
+  // llvm_make_vmvalue_func_type — the callee read a corrupted VMValue and
+  // segfaulted. The value now travels via a stack slot pointer.
+  LLVMTypeRef sb_append_params[] = {backend->ptr_type, backend->ptr_type};
   LLVMTypeRef sb_append_type =
       LLVMFunctionType(backend->void_type, sb_append_params, 2, 0);
   backend->func_aot_stringbuilder_append_vmvalue = LLVMAddFunction(
-      backend->module, "aot_stringbuilder_append_vmvalue", sb_append_type);
+      backend->module, "aot_stringbuilder_append_vmvalue_ptr", sb_append_type);
 
   // aot_stringbuilder_to_string(ptr) -> VMValue
   LLVMTypeRef sb_tostring_params[] = {backend->ptr_type};
@@ -1875,6 +2072,18 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMAddFunction(backend->module, "aot_is_bool", type_check_type);
 }
 
+// Web hedefi varsayılanı. llvm_backend_create, declare_runtime_functions'ı
+// KENDİ İÇİNDE çağırdığı için target_web create'ten önce bilinmek zorunda —
+// aksi halde runtime fonksiyonları SysV tipiyle bildirilir, çağrılar sret
+// tipiyle üretilir ve wasm backend'i araya bozuk ".L*_bitcast" thunk'ları
+// sokar (dönen VMValue'lar {INT,0} okunur — v3.10.0 web PoC'sinde canlı
+// yakalandı). aot_set_target_web (aot_pipeline.cpp) burayı kurar.
+static int g_backend_target_web = 0;
+
+void llvm_backend_set_target_web(int enable) {
+  g_backend_target_web = enable ? 1 : 0;
+}
+
 LLVMBackend *llvm_backend_create(const char *module_name) {
   // calloc instead of malloc: every counter / pointer field defaults to 0 /
   // NULL. Previously this struct grew via malloc and each new counter had
@@ -1909,6 +2118,7 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
   backend->current_scope = nullptr;
   backend->func_stack = nullptr;
   backend->loop_depth = 0;
+  backend->try_depth = 0;
   backend->lambda_count = 0;
   backend->function_count = 0;
   backend->imported_count = 0;
@@ -1927,6 +2137,10 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
   backend->di_compile_unit = nullptr;
   backend->di_int_type = nullptr;
   backend->di_vmvalue_type = nullptr;
+
+  // Web hedefi — MUTLAKA declare_runtime_functions'tan önce (VMValue
+  // fonksiyon tiplerinin şekli buna bağlı; bkz. g_backend_target_web notu).
+  backend->target_web = g_backend_target_web;
 
   // Declare Runtime
   declare_runtime_functions(backend);
@@ -2069,32 +2283,56 @@ void exit_scope(LLVMBackend *backend) {
   }
 }
 
+// Reserve the scope slot a declaration of `name` should write into.
+//
+// Blocks (`if` / `else` / `while` bodies) do NOT open a scope — only
+// functions, lambdas, `for` and main do. So two declarations of the same name
+// in sibling blocks land in the *same* scope. Appending a second entry made
+// every lookup (which scans front-to-back and returns the first hit) keep
+// resolving to the *first* declaration's slot, so the later declaration's
+// initializer store went to an alloca nobody ever read — the variable read
+// back as stale/uninitialised stack. Reuse the existing slot instead, so the
+// most recent declaration wins.
+//
+// Returns -1 when the scope is full (caller drops the registration, as before).
+static int scope_decl_slot(Scope *s, const char *name) {
+  for (int i = 0; i < s->count; i++) {
+    if (strcmp(s->vars[i].name, name) == 0) {
+      free(s->vars[i].name);
+      if (s->vars[i].struct_type_name) free(s->vars[i].struct_type_name);
+      s->vars[i].struct_type_name = nullptr;
+      return i;
+    }
+  }
+  if (s->count >= 256) return -1;
+  return s->count++;
+}
+
 void add_local(LLVMBackend *backend, const char *name, LLVMValueRef val) {
   if (!backend->current_scope)
     return;
   Scope *s = backend->current_scope;
-  if (s->count < 256) {
-    s->vars[s->count].name = my_strdup(name);
-    s->vars[s->count].value = val;
-    s->vars[s->count].known_type = INFERRED_UNKNOWN;
-    s->vars[s->count].native_value = nullptr;
-    s->vars[s->count].struct_type_name = nullptr;
-    
+  int si = scope_decl_slot(s, name);
+  if (si >= 0) {
+    s->vars[si].name = my_strdup(name);
+    s->vars[si].value = val;
+    s->vars[si].known_type = INFERRED_UNKNOWN;
+    s->vars[si].native_value = nullptr;
+    s->vars[si].struct_type_name = nullptr;
+
     CaptureData *cd = (CaptureData*)backend->capture_data;
     ASTNode_C *curr_func = backend->current_function_node;
     if (cd && curr_func && cd->slots.find(curr_func) != cd->slots.end() &&
         cd->slots[curr_func].find(name) != cd->slots[curr_func].end()) {
-      s->vars[s->count].is_captured = 1;
-      s->vars[s->count].slot_index = cd->slots[curr_func][name];
-      s->vars[s->count].env_ptr = backend->current_env_ptr;
+      s->vars[si].is_captured = 1;
+      s->vars[si].slot_index = cd->slots[curr_func][name];
+      s->vars[si].env_ptr = backend->current_env_ptr;
     } else {
-      s->vars[s->count].is_captured = 0;
-      s->vars[s->count].slot_index = 0;
-      s->vars[s->count].env_ptr = nullptr;
+      s->vars[si].is_captured = 0;
+      s->vars[si].slot_index = 0;
+      s->vars[si].env_ptr = nullptr;
     }
-    s->vars[s->count].declaring_function = curr_func;
-    
-    s->count++;
+    s->vars[si].declaring_function = curr_func;
   }
 }
 
@@ -2104,28 +2342,27 @@ void add_local_typed(LLVMBackend *backend, const char *name, LLVMValueRef val,
   if (!backend->current_scope)
     return;
   Scope *s = backend->current_scope;
-  if (s->count < 256) {
-    s->vars[s->count].name = my_strdup(name);
-    s->vars[s->count].value = val;
-    s->vars[s->count].known_type = type;
-    s->vars[s->count].native_value = native_val;
-    s->vars[s->count].struct_type_name = nullptr;
-    
+  int si = scope_decl_slot(s, name);
+  if (si >= 0) {
+    s->vars[si].name = my_strdup(name);
+    s->vars[si].value = val;
+    s->vars[si].known_type = type;
+    s->vars[si].native_value = native_val;
+    s->vars[si].struct_type_name = nullptr;
+
     CaptureData *cd = (CaptureData*)backend->capture_data;
     ASTNode_C *curr_func = backend->current_function_node;
     if (cd && curr_func && cd->slots.find(curr_func) != cd->slots.end() &&
         cd->slots[curr_func].find(name) != cd->slots[curr_func].end()) {
-      s->vars[s->count].is_captured = 1;
-      s->vars[s->count].slot_index = cd->slots[curr_func][name];
-      s->vars[s->count].env_ptr = backend->current_env_ptr;
+      s->vars[si].is_captured = 1;
+      s->vars[si].slot_index = cd->slots[curr_func][name];
+      s->vars[si].env_ptr = backend->current_env_ptr;
     } else {
-      s->vars[s->count].is_captured = 0;
-      s->vars[s->count].slot_index = 0;
-      s->vars[s->count].env_ptr = nullptr;
+      s->vars[si].is_captured = 0;
+      s->vars[si].slot_index = 0;
+      s->vars[si].env_ptr = nullptr;
     }
-    s->vars[s->count].declaring_function = curr_func;
-    
-    s->count++;
+    s->vars[si].declaring_function = curr_func;
   }
 }
 
@@ -2136,28 +2373,27 @@ void add_local_struct(LLVMBackend *backend, const char *name,
                       LLVMValueRef alloca_ptr, const char *struct_name) {
   if (!backend->current_scope) return;
   Scope *s = backend->current_scope;
-  if (s->count < 256) {
-    s->vars[s->count].name = my_strdup(name);
-    s->vars[s->count].value = alloca_ptr;
-    s->vars[s->count].known_type = INFERRED_UNKNOWN;
-    s->vars[s->count].native_value = nullptr;
-    s->vars[s->count].struct_type_name = my_strdup(struct_name);
-    
+  int si = scope_decl_slot(s, name);
+  if (si >= 0) {
+    s->vars[si].name = my_strdup(name);
+    s->vars[si].value = alloca_ptr;
+    s->vars[si].known_type = INFERRED_UNKNOWN;
+    s->vars[si].native_value = nullptr;
+    s->vars[si].struct_type_name = my_strdup(struct_name);
+
     CaptureData *cd = (CaptureData*)backend->capture_data;
     ASTNode_C *curr_func = backend->current_function_node;
     if (cd && curr_func && cd->slots.find(curr_func) != cd->slots.end() &&
         cd->slots[curr_func].find(name) != cd->slots[curr_func].end()) {
-      s->vars[s->count].is_captured = 1;
-      s->vars[s->count].slot_index = cd->slots[curr_func][name];
-      s->vars[s->count].env_ptr = backend->current_env_ptr;
+      s->vars[si].is_captured = 1;
+      s->vars[si].slot_index = cd->slots[curr_func][name];
+      s->vars[si].env_ptr = backend->current_env_ptr;
     } else {
-      s->vars[s->count].is_captured = 0;
-      s->vars[s->count].slot_index = 0;
-      s->vars[s->count].env_ptr = nullptr;
+      s->vars[si].is_captured = 0;
+      s->vars[si].slot_index = 0;
+      s->vars[si].env_ptr = nullptr;
     }
-    s->vars[s->count].declaring_function = curr_func;
-    
-    s->count++;
+    s->vars[si].declaring_function = curr_func;
   }
 }
 
@@ -2199,6 +2435,89 @@ int struct_is_trivially_unboxable(StructTypeEntry *st) {
     if (ft != TYPE_INT && ft != TYPE_BOOL) return 0;
   }
   return 1;
+}
+
+// Box a native (trivially-unboxable) struct's fields into a plain key-value
+// VM_OBJECT, keyed by field NAME. This is what lets a typed `struct` value
+// survive insertion into a dynamically-typed array/object: once the static
+// type is gone, `arr[i].field` is a runtime string-key lookup (vm_get/set_
+// element), which only works on an OBJECT — not on the compact int-indexed
+// ObjStruct that `aot_struct_alloc_from_fields` produces. Non-unboxable
+// (float-carrying) structs already live as objects, so this makes int/bool
+// structs behave identically in arrays. `alloca` points at the native
+// `{i64,...}` aggregate; `st` supplies the ordered field names/types.
+static LLVMValueRef box_native_struct_as_object(LLVMBackend *backend,
+                                                LLVMValueRef alloca,
+                                                StructTypeEntry *st) {
+  LLVMValueRef obj_args[] = {LLVMConstPointerNull(backend->ptr_type)};
+  LLVMValueRef obj = LLVMBuildCall2(
+      backend->builder,
+      LLVMGlobalGetValueType(backend->func_vm_allocate_object),
+      backend->func_vm_allocate_object, obj_args, 1, "struct.box.obj");
+  for (int i = 0; i < st->field_count; i++) {
+    LLVMValueRef fp = LLVMBuildStructGEP2(backend->builder, st->llvm_type,
+                                          alloca, (unsigned)i, "struct.box.fp");
+    LLVMValueRef fv = LLVMBuildLoad2(backend->builder, backend->int_type, fp,
+                                     "struct.box.fv");
+    LLVMValueRef boxed;
+    if (st->field_types[i] == TYPE_BOOL) {
+      LLVMValueRef as_bool = LLVMBuildICmp(
+          backend->builder, LLVMIntNE, fv,
+          LLVMConstInt(backend->int_type, 0, 0), "struct.box.tobool");
+      boxed = llvm_vm_val_bool_val(backend, as_bool);
+    } else {
+      boxed = llvm_vm_val_int_val(backend, fv);
+    }
+    LLVMValueRef key = LLVMBuildGlobalStringPtr(
+        backend->builder, st->field_names[i], "struct.box.key");
+    LLVMValueRef vptr = llvm_build_alloca_at_entry(
+        backend, backend->vm_value_type, "struct.box.vptr");
+    LLVMBuildStore(backend->builder, boxed, vptr);
+    LLVMValueRef vvoid = LLVMBuildBitCast(backend->builder, vptr,
+                                          backend->ptr_type, "struct.box.vvoid");
+    LLVMValueRef set_args[] = {LLVMConstPointerNull(backend->ptr_type), obj, key,
+                               vvoid};
+    LLVMBuildCall2(backend->builder,
+                   LLVMGlobalGetValueType(backend->func_vm_object_set),
+                   backend->func_vm_object_set, set_args, 4, "");
+  }
+  return llvm_build_vm_val_obj(backend, obj);
+}
+
+// Unpack a boxed struct VMValue into an already-allocated native struct
+// alloca `dst` (caller zero-inits it) via aot_struct_unpack_named. Emits the
+// declaration-ordered field-name table so the runtime can resolve fields by
+// key from a string-keyed VM_OBJECT (a struct pulled out of a dynamic array),
+// and copies an int-indexed ObjStruct by position. Shared by the
+// `Ent e = arr[i]` VAR_DECL path and the `f(arr[i])` struct-arg path.
+static void emit_unpack_boxed_struct_into(LLVMBackend *backend,
+                                          LLVMValueRef boxed_val,
+                                          StructTypeEntry *st,
+                                          LLVMValueRef dst) {
+  LLVMValueRef rhs_tmp = llvm_build_alloca_at_entry(
+      backend, backend->vm_value_type, "struct.unpack.rhs");
+  LLVMBuildStore(backend->builder, boxed_val, rhs_tmp);
+  LLVMTypeRef names_arr_ty = LLVMArrayType(backend->ptr_type, st->field_count);
+  LLVMValueRef names_arr =
+      llvm_build_alloca_at_entry(backend, names_arr_ty, "struct.unpack.names");
+  LLVMValueRef z0 = LLVMConstInt(backend->int32_type, 0, 0);
+  for (int fi = 0; fi < st->field_count; fi++) {
+    LLVMValueRef nm = LLVMBuildGlobalStringPtr(
+        backend->builder, st->field_names[fi], "struct.unpack.name");
+    LLVMValueRef nidx[] = {z0, LLVMConstInt(backend->int32_type, fi, 0)};
+    LLVMValueRef nep = LLVMBuildGEP2(backend->builder, names_arr_ty, names_arr,
+                                     nidx, 2, "struct.unpack.nep");
+    LLVMBuildStore(backend->builder, nm, nep);
+  }
+  LLVMValueRef nz[] = {z0, z0};
+  LLVMValueRef names_ptr = LLVMBuildGEP2(backend->builder, names_arr_ty,
+                                         names_arr, nz, 2, "struct.unpack.nptr");
+  LLVMValueRef fc =
+      LLVMConstInt(backend->int32_type, (unsigned)st->field_count, 0);
+  LLVMValueRef ua[] = {rhs_tmp, fc, names_ptr, dst};
+  LLVMBuildCall2(backend->builder,
+                 LLVMGlobalGetValueType(backend->func_aot_struct_unpack_named),
+                 backend->func_aot_struct_unpack_named, ua, 4, "");
 }
 
 StructTypeEntry *register_struct_type(LLVMBackend *backend, ASTNode_C *type_decl) {
@@ -2324,17 +2643,17 @@ static void llvm_emit_array_set(LLVMBackend *backend, LLVMValueRef array,
 void add_local_captured(LLVMBackend *backend, const char *name, LLVMValueRef env_ptr, int slot_index, ASTNode_C *decl_func) {
   if (!backend->current_scope) return;
   Scope *s = backend->current_scope;
-  if (s->count < 256) {
-    s->vars[s->count].name = my_strdup(name);
-    s->vars[s->count].value = nullptr;
-    s->vars[s->count].known_type = INFERRED_UNKNOWN;
-    s->vars[s->count].native_value = nullptr;
-    s->vars[s->count].struct_type_name = nullptr;
-    s->vars[s->count].is_captured = 1;
-    s->vars[s->count].slot_index = slot_index;
-    s->vars[s->count].env_ptr = env_ptr;
-    s->vars[s->count].declaring_function = decl_func;
-    s->count++;
+  int si = scope_decl_slot(s, name);
+  if (si >= 0) {
+    s->vars[si].name = my_strdup(name);
+    s->vars[si].value = nullptr;
+    s->vars[si].known_type = INFERRED_UNKNOWN;
+    s->vars[si].native_value = nullptr;
+    s->vars[si].struct_type_name = nullptr;
+    s->vars[si].is_captured = 1;
+    s->vars[si].slot_index = slot_index;
+    s->vars[si].env_ptr = env_ptr;
+    s->vars[si].declaring_function = decl_func;
   }
 }
 
@@ -2387,6 +2706,52 @@ static bool is_global_var(LLVMBackend *backend, const char *name) {
   return LLVMGetNamedGlobal(backend->module, name) != nullptr;
 }
 
+// If `arg` is an expression producing a trivially-unboxable struct VALUE — a
+// struct-typed local (`ent`) or a struct-returning call (`mk(3,5)`) —
+// materialize it and box it into a string-keyed VM_OBJECT so it survives
+// storage in a dynamically-typed container. Returns the boxed VMValue, or
+// nullptr when `arg` is not such a struct expression (caller falls back to a
+// plain codegen_expression). Shared by push(), array literals, and
+// `arr[i] = <struct>` / `obj["k"] = <struct>` assignment.
+static LLVMValueRef codegen_struct_expr_as_object(LLVMBackend *backend,
+                                                  ASTNode_C *arg) {
+  if (!arg) return nullptr;
+  if (arg->type == AST_IDENTIFIER && arg->name) {
+    const char *sn = get_local_struct_type(backend, arg->name);
+    LLVMValueRef alloca = sn ? get_local(backend, arg->name) : nullptr;
+    if (sn && alloca) {
+      StructTypeEntry *st = find_struct_type(backend, sn);
+      if (st && struct_is_trivially_unboxable(st))
+        return box_native_struct_as_object(backend, alloca, st);
+    }
+    return nullptr;
+  }
+  if (arg->type == AST_FUNCTION_CALL && arg->name) {
+    const char *rn = nullptr;
+    for (int j = 0; j < backend->function_count; j++) {
+      if (backend->functions[j].name &&
+          strcmp(backend->functions[j].name, arg->name) == 0) {
+        rn = backend->functions[j].return_struct_name;
+        break;
+      }
+    }
+    if (rn) {
+      StructTypeEntry *st = find_struct_type(backend, rn);
+      if (st && struct_is_trivially_unboxable(st)) {
+        LLVMValueRef tmp = llvm_build_alloca_at_entry(backend, st->llvm_type,
+                                                      "struct.expr.tmp");
+        LLVMBuildStore(backend->builder, LLVMConstNull(st->llvm_type), tmp);
+        backend->pending_struct_result_ptr = tmp;
+        backend->pending_struct_result_name = st->name;
+        (void)codegen_expression(backend, arg);
+        backend->pending_struct_result_ptr = nullptr;
+        backend->pending_struct_result_name = nullptr;
+        return box_native_struct_as_object(backend, tmp, st);
+      }
+    }
+  }
+  return nullptr;
+}
 
 // Get the inferred type of a local variable
 InferredType get_local_type(LLVMBackend *backend, const char *name) {
@@ -2692,7 +3057,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // 2. Loop elements and push: vm_array_push_wrapper(vm, arr, val)
     if (node->elements) {
       for (int i = 0; i < node->element_count; i++) {
-        LLVMValueRef val = codegen_expression(backend, node->elements[i]);
+        ASTNode_C *el = node->elements[i];
+        // A native (int/bool) struct element is boxed as a string-keyed
+        // object here too — otherwise `[a][0].x` reinterprets the aggregate's
+        // bytes as a VMValue. Mirrors the push() escape path.
+        LLVMValueRef val = codegen_struct_expr_as_object(backend, el);
+        if (!val) val = codegen_expression(backend, el);
         LLVMValueRef val_ptr = LLVMBuildAlloca(
             backend->builder, backend->vm_value_type, "arr_lit_val_ptr");
         LLVMBuildStore(backend->builder, val, val_ptr);
@@ -3680,6 +4050,33 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // call(func_name) -> dynamic dispatch
+    // call(name, a, b, ...) — forward 2+ arguments. Stash the actual args in a
+    // stack VMValue array and hand the runtime a pointer + count; it invokes
+    // the target through its true (registered) arity. Must be checked BEFORE
+    // the 1-arg case below, which would otherwise swallow the extra args.
+    if (node->name && strcmp(node->name, "call") == 0 &&
+        node->argument_count >= 3) {
+      int actual = node->argument_count - 1; // arguments[0] is the name
+      LLVMValueRef name_v = codegen_expression(backend, node->arguments[0]);
+      LLVMTypeRef arr_ty = LLVMArrayType(backend->vm_value_type, actual);
+      LLVMValueRef arr =
+          llvm_build_alloca_at_entry(backend, arr_ty, "call_args");
+      LLVMValueRef zero = LLVMConstInt(backend->int32_type, 0, 0);
+      for (int i = 0; i < actual; i++) {
+        LLVMValueRef v = codegen_expression(backend, node->arguments[i + 1]);
+        LLVMValueRef idx[] = {zero, LLVMConstInt(backend->int32_type, i, 0)};
+        LLVMValueRef ep =
+            LLVMBuildGEP2(backend->builder, arr_ty, arr, idx, 2, "call_arg_ep");
+        LLVMBuildStore(backend->builder, v, ep);
+      }
+      LLVMValueRef zidx[] = {zero, zero};
+      LLVMValueRef args_ptr = LLVMBuildGEP2(backend->builder, arr_ty, arr, zidx,
+                                            2, "call_args_ptr");
+      LLVMValueRef argc_v = LLVMConstInt(backend->int32_type, actual, 0);
+      LLVMValueRef cargs[] = {name_v, args_ptr, argc_v};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_call_dynamic_n,
+                                    cargs, 3, "calln_res");
+    }
     // call(name, arg) — dynamic dispatch passing one argument to the target.
     if (node->name && strcmp(node->name, "call") == 0 &&
         node->argument_count >= 2) {
@@ -3969,55 +4366,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       // VMValue" placeholder and the array would silently lose the data —
       // exactly what Plan 04 PR1..PR6 deferred to this PR.
       ASTNode_C *val_arg = node->arguments[1];
-      LLVMValueRef val = nullptr;
-      if (val_arg && val_arg->type == AST_IDENTIFIER && val_arg->name) {
-        const char *src_struct = get_local_struct_type(backend, val_arg->name);
-        LLVMValueRef src_alloca = get_local(backend, val_arg->name);
-        if (src_struct && src_alloca) {
-          StructTypeEntry *st = find_struct_type(backend, src_struct);
-          if (st && struct_is_trivially_unboxable(st)) {
-            LLVMValueRef name_str = LLVMBuildGlobalStringPtr(
-                backend->builder, st->name, "struct.type.name");
-            LLVMValueRef field_count = LLVMConstInt(
-                backend->int32_type, (unsigned)st->field_count, 0);
-            LLVMValueRef alloc_args[] = {name_str, field_count, src_alloca};
-            val = llvm_call_vmvalue_func(
-                backend, backend->func_aot_struct_alloc_from_fields,
-                alloc_args, 3, "push.struct.heap");
-          }
-        }
-      } else if (val_arg && val_arg->type == AST_FUNCTION_CALL &&
-                 val_arg->name) {
-        const char *ret_struct = nullptr;
-        for (int j = 0; j < backend->function_count; j++) {
-          if (strcmp(backend->functions[j].name, val_arg->name) == 0) {
-            ret_struct = backend->functions[j].return_struct_name;
-            break;
-          }
-        }
-        if (ret_struct) {
-          StructTypeEntry *st = find_struct_type(backend, ret_struct);
-          if (st && struct_is_trivially_unboxable(st)) {
-            LLVMValueRef tmp = llvm_build_alloca_at_entry(
-                backend, st->llvm_type, "push.struct.call.tmp");
-            LLVMBuildStore(backend->builder,
-                           LLVMConstNull(st->llvm_type), tmp);
-            backend->pending_struct_result_ptr = tmp;
-            backend->pending_struct_result_name = st->name;
-            (void)codegen_expression(backend, val_arg);
-            backend->pending_struct_result_ptr = nullptr;
-            backend->pending_struct_result_name = nullptr;
-            LLVMValueRef name_str = LLVMBuildGlobalStringPtr(
-                backend->builder, st->name, "struct.type.name");
-            LLVMValueRef field_count = LLVMConstInt(
-                backend->int32_type, (unsigned)st->field_count, 0);
-            LLVMValueRef alloc_args[] = {name_str, field_count, tmp};
-            val = llvm_call_vmvalue_func(
-                backend, backend->func_aot_struct_alloc_from_fields,
-                alloc_args, 3, "push.struct.call.heap");
-          }
-        }
-      }
+      // A struct value pushed into an array is boxed as a string-keyed
+      // VM_OBJECT (not an int-indexed ObjStruct) so `arr[i].field` — a
+      // dynamic key lookup — resolves afterwards. nullptr = not a struct
+      // expression → fall through to the plain codegen below.
+      LLVMValueRef val = codegen_struct_expr_as_object(backend, val_arg);
       LLVMValueRef arr = codegen_expression(backend, node->arguments[0]);
       if (!val) {
         val = codegen_expression(backend, val_arg);
@@ -4288,6 +4641,33 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {s_void, i_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_ord, args,
                                     2, "ord_res");
+    }
+    // tame (2D oyun) builtin ailesi — tablo-güdümlü dispatch. Her arg bir
+    // entry-alloca'ya konup pointer'ı geçirilir (ord'un N-ptr ABI'sinin
+    // genellemesi). Eksik trailing arg'lar dilin genel kuralıyla uyumlu
+    // olarak int 0 ile padlenir. Bir tm_* çağrısı görülmesi, link satırına
+    // libtulpar_tame.a eklenmesi için yeterli sinyaldir (uses_tame).
+    if (node->name && strncmp(node->name, "tm_", 3) == 0) {
+      const TameBuiltin *tb = tame_builtin_lookup(node->name);
+      if (tb) {
+        backend->uses_tame = 1;
+        LLVMValueRef tm_fn =
+            LLVMGetNamedFunction(backend->module, tb->sym);
+        LLVMValueRef tm_args[TAME_MAX_ARGS];
+        for (int i = 0; i < tb->argc; i++) {
+          LLVMValueRef v = (i < node->argument_count)
+                               ? codegen_expression(backend,
+                                                    node->arguments[i])
+                               : llvm_vm_val_int(backend, 0);
+          LLVMValueRef slot = llvm_build_alloca_at_entry(
+              backend, backend->vm_value_type, "tm_arg");
+          LLVMBuildStore(backend->builder, v, slot);
+          tm_args[i] = LLVMBuildBitCast(backend->builder, slot,
+                                        backend->ptr_type, "tm_arg_void");
+        }
+        return llvm_call_vmvalue_func(backend, tm_fn, tm_args,
+                                      (unsigned)tb->argc, "tm_res");
+      }
     }
     if (node->name && strcmp(node->name, "screen_open") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_screen_open,
@@ -5385,7 +5765,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef ptr_int = llvm_extract_vm_val_int(backend, sb_val);
       LLVMValueRef sb_ptr = LLVMBuildIntToPtr(backend->builder, ptr_int,
                                               backend->ptr_type, "sb_ptr");
-      LLVMValueRef args[] = {sb_ptr, val};
+      // Spill the VMValue to a stack slot and pass its pointer (aot_*_ptr
+      // ABI) — see the declaration comment for why by-value corrupts.
+      LLVMValueRef val_slot = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "sb_val_slot");
+      LLVMBuildStore(backend->builder, val, val_slot);
+      LLVMValueRef args[] = {sb_ptr, val_slot};
       LLVMBuildCall2(backend->builder,
                      LLVMGlobalGetValueType(
                          backend->func_aot_stringbuilder_append_vmvalue),
@@ -5613,6 +5998,16 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           ret_st = find_struct_type(backend,
                                      callee_entry->return_struct_name);
         }
+        // Native res-ptr ABI (alloca of the struct layout + zero placeholder)
+        // only applies to trivially-unboxable (int/bool) struct returns. A
+        // struct with float/string/nested fields is returned as a boxed
+        // VM_OBJECT, so let it flow through the normal VMValue path below —
+        // res_ptr is a VMValue slot and the loaded VMValue (the object) is
+        // returned to the caller, which is what makes `P e = mk()`,
+        // `push(a, mk())`, etc. work for such structs.
+        if (ret_st && !struct_is_trivially_unboxable(ret_st)) {
+          ret_st = nullptr;
+        }
         // VAR_DECL hint: when `Point p = make_point();` is being lowered,
         // VAR_DECL has already allocated a typed-struct local for `p` and
         // pinned its alloca on backend->pending_struct_result_ptr (with
@@ -5755,6 +6150,25 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                 }
               }
             }
+            // General expression yielding a boxed struct as a struct arg
+            // (`area(rects[0])`, `area(mk(...))` already handled above, a
+            // ternary, etc.): evaluate to a VMValue and unpack into a temp
+            // struct alloca, then pass the alloca. This is what makes
+            // method-style calls on an array element — `ents[i].area()`,
+            // which the parser rewrites to `area(ents[i])` — work.
+            {
+              StructTypeEntry *st = find_struct_type(backend, expected_struct);
+              if (st && struct_is_trivially_unboxable(st)) {
+                LLVMValueRef boxed = codegen_expression(backend, arg);
+                LLVMValueRef dst = llvm_build_alloca_at_entry(
+                    backend, st->llvm_type, "arg.struct.unpack");
+                LLVMBuildStore(backend->builder, LLVMConstNull(st->llvm_type),
+                               dst);
+                emit_unpack_boxed_struct_into(backend, boxed, st, dst);
+                args[i + 1] = dst;
+                continue;
+              }
+            }
             // Fall through to the boxed VMValue path on any mismatch —
             // the call will likely misbehave at runtime, but preserving
             // the existing path keeps the rest of the program compilable
@@ -5862,6 +6276,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     const char *prev_returns_struct = backend->current_function_returns_struct;
     LLVMValueRef prev_env_ptr = backend->current_env_ptr;
     LLVMValueRef prev_parent_env = backend->current_parent_env;
+    // A lambda body is a fresh function frame: it must not inherit the
+    // enclosing function's loop targets (a stray `break` would branch
+    // cross-function) or its open-try count (a `return` in the lambda would
+    // pop handler frames the lambda never pushed).
+    int prev_loop_depth = backend->loop_depth;
+    int prev_try_depth = backend->try_depth;
+    backend->loop_depth = 0;
+    backend->try_depth = 0;
 
     // 5. Set up compiler stack
     FuncStackNode stack_node = { node, backend->func_stack };
@@ -5961,6 +6383,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     backend->current_function_returns_struct = prev_returns_struct;
     backend->current_env_ptr = prev_env_ptr;
     backend->current_parent_env = prev_parent_env;
+    backend->loop_depth = prev_loop_depth;
+    backend->try_depth = prev_try_depth;
     LLVMPositionBuilderAtEnd(backend->builder, prev_block);
 
     // 12. Create ObjClosure and wrap it
@@ -6389,6 +6813,18 @@ static void set_debug_loc_for_node(LLVMBackend *backend, ASTNode_C *node) {
   LLVMSetCurrentDebugLocation2(backend->builder, loc);
 }
 
+// Emit `count` aot_try_pop() calls. Used by return/break/continue when they
+// transfer control out of one or more enclosing `try` scopes: the setjmp
+// frames those scopes pushed must come off the runtime handler stack, or a
+// later throw longjmps into a stack frame that no longer exists.
+static void emit_try_pops(LLVMBackend *backend, int count) {
+  for (int i = 0; i < count; i++) {
+    LLVMBuildCall2(backend->builder,
+                   LLVMGlobalGetValueType(backend->func_aot_try_pop),
+                   backend->func_aot_try_pop, nullptr, 0, "");
+  }
+}
+
 LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
   if (!node)
     return nullptr;
@@ -6609,16 +7045,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           // runtime call.
           LLVMValueRef rhs_val = codegen_expression(backend, node->right);
           if (rhs_val) {
-            LLVMValueRef rhs_tmp = llvm_build_alloca_at_entry(
-                backend, backend->vm_value_type, "unpack.rhs.tmp");
-            LLVMBuildStore(backend->builder, rhs_val, rhs_tmp);
-            LLVMValueRef field_count = LLVMConstInt(
-                backend->int32_type, (unsigned)st->field_count, 0);
-            LLVMValueRef unpack_args[] = {rhs_tmp, field_count, typed_alloca};
-            LLVMBuildCall2(
-                backend->builder,
-                LLVMGlobalGetValueType(backend->func_aot_struct_unpack_to),
-                backend->func_aot_struct_unpack_to, unpack_args, 3, "");
+            // typed_alloca is already zero-initialized above; unpack the
+            // boxed RHS into it (by name for a VM_OBJECT, by position for an
+            // ObjStruct).
+            emit_unpack_boxed_struct_into(backend, rhs_val, st, typed_alloca);
           }
         }
         add_local_struct(backend, node->name, typed_alloca, st->name);
@@ -6750,7 +7180,19 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       }
     }
 
-    LLVMValueRef val = codegen_expression(backend, node->right);
+    // Struct value assigned into a dynamic container element
+    // (`arr[i] = mk()`, `obj["k"] = ent`): box it as a string-keyed object,
+    // like push()/array-literals — otherwise the element would get the struct
+    // call's zero placeholder and reads afterwards fail. Scoped to an
+    // element-target LHS (AST_ARRAY_ACCESS); a `struct.field = <int>` write
+    // returns nullptr here and keeps its unboxed fast path below.
+    LLVMValueRef val = nullptr;
+    if (node->left && node->left->type == AST_ARRAY_ACCESS) {
+      val = codegen_struct_expr_as_object(backend, node->right);
+    }
+    if (!val) {
+      val = codegen_expression(backend, node->right);
+    }
 
     // Typed-struct fast path mirror of the AST_ARRAY_ACCESS reader: when
     // assigning to `<typed_struct>.<field>` (parser desugars to
@@ -6941,6 +7383,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     if (backend->loop_depth < 32) {
       backend->loop_stack[backend->loop_depth].continue_block = condB;
       backend->loop_stack[backend->loop_depth].break_block = exitB;
+      backend->loop_stack[backend->loop_depth].try_depth_at_entry =
+          backend->try_depth;
       backend->loop_depth++;
     }
     codegen_statement(backend, node->body);
@@ -6990,6 +7434,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     if (backend->loop_depth < 32) {
       backend->loop_stack[backend->loop_depth].continue_block = incrB;
       backend->loop_stack[backend->loop_depth].break_block = exitB;
+      backend->loop_stack[backend->loop_depth].try_depth_at_entry =
+          backend->try_depth;
       backend->loop_depth++;
     }
     codegen_statement(backend, node->body);
@@ -7010,6 +7456,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
   }
   case AST_BREAK: {
     if (backend->loop_depth > 0) {
+      // Leaving any try scopes opened inside this loop: pop their handlers.
+      emit_try_pops(backend,
+                    backend->try_depth -
+                        backend->loop_stack[backend->loop_depth - 1]
+                            .try_depth_at_entry);
       LLVMBuildBr(backend->builder,
                   backend->loop_stack[backend->loop_depth - 1].break_block);
       // Builder is now positioned at a terminated block; the next
@@ -7024,6 +7475,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
   }
   case AST_CONTINUE: {
     if (backend->loop_depth > 0) {
+      emit_try_pops(backend,
+                    backend->try_depth -
+                        backend->loop_stack[backend->loop_depth - 1]
+                            .try_depth_at_entry);
       LLVMBuildBr(backend->builder,
                   backend->loop_stack[backend->loop_depth - 1].continue_block);
       LLVMBasicBlockRef dead = LLVMAppendBasicBlock(
@@ -7045,13 +7500,20 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           backend, backend->current_function_returns_struct);
       LLVMValueRef res_ptr = LLVMGetParam(backend->current_function, 0);
       ASTNode_C *rv = node->return_value;
-      if (st && rv->type == AST_IDENTIFIER && rv->name) {
+      // Only trivially-unboxable (int/bool) structs use the native res-ptr
+      // write ABI. A float/string/nested-field struct local is already a
+      // boxed VM_OBJECT, so none of these branches fire and the boxed
+      // fallback below stores that object VMValue into res_ptr — matching the
+      // caller, which now treats such returns as plain VMValue results.
+      if (st && struct_is_trivially_unboxable(st) &&
+          rv->type == AST_IDENTIFIER && rv->name) {
         const char *sn = get_local_struct_type(backend, rv->name);
         LLVMValueRef src = get_local(backend, rv->name);
         if (sn && src && strcmp(sn, st->name) == 0) {
           LLVMValueRef loaded = LLVMBuildLoad2(
               backend->builder, st->llvm_type, src, "ret.struct.load");
           LLVMBuildStore(backend->builder, loaded, res_ptr);
+          emit_try_pops(backend, backend->try_depth);
           return LLVMBuildRetVoid(backend->builder);
         }
       }
@@ -7059,7 +7521,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       // result pointer (param 0) instead of doing a load+store dance via
       // the boxed VMValue fallback. Same pin-the-hint trick as the
       // VAR_DECL and struct-arg paths.
-      if (st && rv->type == AST_FUNCTION_CALL && rv->name) {
+      if (st && struct_is_trivially_unboxable(st) &&
+          rv->type == AST_FUNCTION_CALL && rv->name) {
         const char *inner_ret_struct = nullptr;
         for (int i = 0; i < backend->function_count; i++) {
           if (strcmp(backend->functions[i].name, rv->name) == 0) {
@@ -7073,10 +7536,12 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           (void)codegen_expression(backend, rv);
           backend->pending_struct_result_ptr = nullptr;
           backend->pending_struct_result_name = nullptr;
+          emit_try_pops(backend, backend->try_depth);
           return LLVMBuildRetVoid(backend->builder);
         }
       }
-      if (st && rv->type == AST_OBJECT_LITERAL) {
+      if (st && struct_is_trivially_unboxable(st) &&
+          rv->type == AST_OBJECT_LITERAL) {
         // `return { x: 1, y: 2 };` — same field-validation + zero-init +
         // GEP+store pattern as the VAR_DECL literal path, but we write
         // straight into the caller-supplied result pointer.
@@ -7103,6 +7568,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                 (unsigned)idx, "ret.lit.field.ptr");
             LLVMBuildStore(backend->builder, i64_val, field_ptr);
           }
+          emit_try_pops(backend, backend->try_depth);
           return LLVMBuildRetVoid(backend->builder);
         }
       }
@@ -7118,6 +7584,9 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // ABI Change: Store to Result Pointer (Param 0)
     LLVMValueRef res_ptr = LLVMGetParam(backend->current_function, 0);
     LLVMBuildStore(backend->builder, ret, res_ptr);
+    // Pops go AFTER evaluating the return expression: `return f();` inside a
+    // try must still route f's throw to this try's handler.
+    emit_try_pops(backend, backend->try_depth);
     return LLVMBuildRetVoid(backend->builder);
   }
   case AST_TRY_CATCH: {
@@ -7165,9 +7634,14 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
 
     LLVMBuildCondBr(backend->builder, is_try, tryB, catchB);
 
-    // Try block
+    // Try block. try_depth brackets the body codegen so any return/break/
+    // continue emitted inside knows how many handler frames to pop on the
+    // way out (see emit_try_pops). Catch/finally run with the handler
+    // already off the stack (aot_throw pops it), so they use the outer depth.
     LLVMPositionBuilderAtEnd(backend->builder, tryB);
+    backend->try_depth++;
     codegen_statement(backend, node->try_block);
+    backend->try_depth--;
 
     // Pop handler on normal exit ONLY if not terminated
     if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder))) {
@@ -7222,6 +7696,12 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                    LLVMGlobalGetValueType(backend->func_aot_throw),
                    backend->func_aot_throw, args, 1, "");
     LLVMBuildUnreachable(backend->builder);
+    // Same as break/continue: the block now has a terminator, so give any
+    // following (dead) statements a fresh block — appending after the
+    // `unreachable` corrupts the block and fails module verification.
+    LLVMBasicBlockRef dead =
+        LLVMAppendBasicBlock(backend->current_function, "after_throw");
+    LLVMPositionBuilderAtEnd(backend->builder, dead);
     return nullptr;
   }
   case AST_FUNCTION_DECL:
@@ -7230,6 +7710,9 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     return codegen_expression(backend, node);
   case AST_IMPORT: {
     const char *rel_path = node->value.string_value;
+    // "tame" (2D oyun kütüphanesi) importu — link satırına libtulpar_tame.a
+    // eklenmesi gerektiğini işaretle (dup-import erken dönse de idempotent).
+    if (rel_path && strcmp(rel_path, "tame") == 0) backend->uses_tame = 1;
     // Check duplication
     for (int i = 0; i < backend->imported_count; i++) {
       if (strcmp(backend->imported_files[i], rel_path) == 0)
@@ -7526,6 +8009,30 @@ static int expr_has_subscript(ASTNode_C *n) {
   return 0;
 }
 
+// Whether an expression subtree contains a lambda literal. The native path
+// has no closure support at all — a `var f = () => i;` decl "fits" the i64
+// gate shape (TYPE_UNKNOWN decl) but the emitter can neither build the
+// closure nor call it, so the function silently computes garbage. Any
+// value-position lambda must force the boxed VMValue codegen.
+static int expr_has_lambda(ASTNode_C *n) {
+  if (!n) return 0;
+  if (n->type == AST_LAMBDA) return 1;
+  if (expr_has_lambda(n->left)) return 1;
+  if (expr_has_lambda(n->right)) return 1;
+  if (expr_has_lambda(n->index)) return 1;
+  if (expr_has_lambda(n->condition)) return 1;
+  if (expr_has_lambda(n->return_value)) return 1;
+  if (expr_has_lambda(n->receiver)) return 1;
+  if (expr_has_lambda(n->callee)) return 1;
+  if (n->arguments)
+    for (int i = 0; i < n->argument_count; i++)
+      if (expr_has_lambda(n->arguments[i])) return 1;
+  if (n->elements)
+    for (int i = 0; i < n->element_count; i++)
+      if (expr_has_lambda(n->elements[i])) return 1;
+  return 0;
+}
+
 // Whether the native codegen path can correctly emit every statement in `body`.
 // `body` is expected to be an AST_BLOCK. The native path's body walker handles
 // only a fixed set of statement types (return / if / var-decl / assignment /
@@ -7533,6 +8040,25 @@ static int expr_has_subscript(ASTNode_C *n) {
 // statements (`push(...)`, `print(...)`), throws, try/catch, etc. would turn
 // into a no-op exe with no diagnostic. Returning 0 here forces the caller to
 // fall back to the regular VMValue codegen.
+// Does every statement in this loop body have an emitter case?
+//
+// codegen_native_func_def emits while/for bodies with an inner loop that only
+// handles AST_ASSIGNMENT and AST_VARIABLE_DECL; anything else is skipped
+// without a diagnostic. Mirror that exactly — a broader answer here means
+// silently dropped statements.
+static int native_loop_body_supported(ASTNode_C *body) {
+  if (!body) return 1;
+  if (body->type != AST_BLOCK) return 0;
+  if (!body->statements) return 1;
+  for (int i = 0; i < body->statement_count; i++) {
+    ASTNode_C *s = body->statements[i];
+    if (!s) continue;
+    if (s->type != AST_ASSIGNMENT && s->type != AST_VARIABLE_DECL) return 0;
+    if (!native_codegen_supports_stmt(s)) return 0;
+  }
+  return 1;
+}
+
 static int native_codegen_supports_body(ASTNode_C *body) {
   if (!body) return 1;
   if (body->type != AST_BLOCK) return native_codegen_supports_stmt(body);
@@ -7547,11 +8073,13 @@ static int native_codegen_supports_stmt(ASTNode_C *stmt) {
   if (!stmt) return 1;
   switch (stmt->type) {
   case AST_RETURN:
+    if (expr_has_lambda(stmt->return_value)) return 0;
     return !expr_has_subscript(stmt->return_value);
   case AST_ASSIGNMENT:
     // `x = arr[i]` / `x = f(a[i])`: RHS reads a subscript the native i64 path
     // can't box — bail to the VMValue codegen.
     if (expr_has_subscript(stmt->right)) return 0;
+    if (expr_has_lambda(stmt->right)) return 0;
     // Native locals are i64. `acc[key] = value` needs `acc` loaded as a
     // 16-byte VMValue, which OOB-reads off our 8-byte alloca and crashes
     // codegen (the parser sets `node->name` for plain `x = v` and leaves
@@ -7564,6 +8092,7 @@ static int native_codegen_supports_stmt(ASTNode_C *stmt) {
     return 1;
   case AST_VARIABLE_DECL:
     if (expr_has_subscript(stmt->right)) return 0;
+    if (expr_has_lambda(stmt->right)) return 0;
     // Native locals are unconditionally allocated as i64, so only
     // int/bool decls survive the round-trip. `json arr = []`,
     // `string s = "..."`, `Point p;`, etc. silently lose their tag info.
@@ -7591,27 +8120,76 @@ static int native_codegen_supports_stmt(ASTNode_C *stmt) {
       return 1;
     }
     return 0;
+  // NOTE: the cases below must mirror what codegen_native_func_def actually
+  // emits, not what looks reasonable. The native path is a hand-rolled
+  // statement subset: whatever it doesn't have an explicit case for is
+  // *silently dropped* rather than diagnosed, so a gate that is more
+  // permissive than the emitter produces wrong code with no error. Keep this
+  // function and the emitter in lockstep; when in doubt, return 0 and let the
+  // boxed VMValue codegen (which handles the full language) take the body.
   case AST_IF:
     if (expr_has_subscript(stmt->condition)) return 0;
-    return native_codegen_supports_body(stmt->then_branch) &&
-           native_codegen_supports_body(stmt->else_branch);
+    // The emitter only implements `if (cond) { return expr; }`: it scans the
+    // then-branch for the first AST_RETURN and ignores every other statement,
+    // and it never emits the else-branch at all (`// Similar handling for
+    // else...`). Previously the gate recursed into both branches, so
+    // `if (m == 1) { int a = 1; return a; }` reached the native path and
+    // crashed codegen (the decl was skipped, leaving `a` unregistered), and
+    // `if (...) { return 1; } else { return 2; }` silently returned 0 for
+    // every input that took the else. Accept only the exact emitted shape.
+    if (stmt->else_branch) return 0;
+    if (!stmt->then_branch) return 0;
+    if (stmt->then_branch->type == AST_RETURN)
+      return !expr_has_subscript(stmt->then_branch->return_value);
+    if (stmt->then_branch->type == AST_BLOCK && stmt->then_branch->statements &&
+        stmt->then_branch->statement_count == 1 &&
+        stmt->then_branch->statements[0]->type == AST_RETURN)
+      return !expr_has_subscript(
+          stmt->then_branch->statements[0]->return_value);
+    return 0;
   case AST_WHILE:
     if (expr_has_subscript(stmt->condition)) return 0;
-    return native_codegen_supports_body(stmt->body);
+    // Loop bodies are emitted by an inner loop that only handles ASSIGNMENT
+    // and VARIABLE_DECL — a nested if/return/call inside the body was dropped
+    // (e.g. `while (n > 0) { if (n == 3) { acc = acc + 100; } ... }` lost the
+    // if entirely and computed the wrong sum).
+    return native_loop_body_supported(stmt->body);
   case AST_FOR:
     if (expr_has_subscript(stmt->condition)) return 0;
-    // The for-init is a single VAR_DECL/ASSIGNMENT and the increment is an
-    // ASSIGNMENT — all already covered by the recursive checks above when we
-    // descend into the body, but explicitly verify here for clarity.
+    // The emitter's for-init only handles a VARIABLE_DECL (an assignment-init
+    // is skipped, leaving the loop variable unregistered).
+    if (stmt->init && stmt->init->type != AST_VARIABLE_DECL) return 0;
     if (stmt->init && !native_codegen_supports_stmt(stmt->init)) return 0;
     if (stmt->increment && !native_codegen_supports_stmt(stmt->increment))
       return 0;
-    return native_codegen_supports_body(stmt->body);
+    return native_loop_body_supported(stmt->body);
   default:
     // Any AST_FUNCTION_CALL / AST_PRINT / AST_THROW / AST_TRY_CATCH /
     // AST_BLOCK / unknown statement type — bail.
     return 0;
   }
+}
+
+// Lower a native-path loop-body value to the i64 the surrounding alloca wants.
+//
+// Native locals are i64, but codegen_typed_expr hands back a *boxed* VMValue
+// whenever the expression isn't statically int — most commonly when it contains
+// a builtin call (`toplam = toplam + mod(n, 10)`, `n = toInt(n / 10)`). The
+// loop-body emitters used to store only the INFERRED_INT/BOOL case and drop
+// everything else on the floor, with no diagnostic: accumulators kept their old
+// value (sum came out 0) and loop-carried updates never happened, so
+// `while (b != 0) { b = mod(a, b); ... }` spun forever or crashed. Unbox the
+// payload (field 2) instead — the same treatment the loop *condition* above
+// already gives a boxed compare.
+//
+// `have_default`: declarations must store something, so fall back to 0 as
+// before; assignments return null to mean "nothing to store".
+static LLVMValueRef native_loop_int_value(LLVMBackend *backend, TypedValue v,
+                                          int have_default) {
+  if (v.type == INFERRED_INT || v.type == INFERRED_BOOL) return v.value;
+  if (v.boxed)
+    return LLVMBuildExtractValue(backend->builder, v.boxed, 2, "loop_int");
+  return have_default ? LLVMConstInt(backend->int_type, 0, 0) : nullptr;
 }
 
 // Generate a pure native function with i64 parameters and return
@@ -7895,21 +8473,20 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
                   body_stmt->left ? body_stmt->left->name : body_stmt->name);
               if (var_ptr) {
                 TypedValue val = codegen_typed_expr(backend, body_stmt->right);
-                if (val.type == INFERRED_INT || val.type == INFERRED_BOOL) {
-                  LLVMBuildStore(backend->builder, val.value, var_ptr);
-                }
+                LLVMValueRef store_val =
+                    native_loop_int_value(backend, val, /*have_default=*/0);
+                if (store_val)
+                  LLVMBuildStore(backend->builder, store_val, var_ptr);
               }
             } else if (body_stmt->type == AST_VARIABLE_DECL) {
               LLVMValueRef alloca = LLVMBuildAlloca(
                   backend->builder, backend->int_type, body_stmt->name);
               if (body_stmt->right) {
                 TypedValue init = codegen_typed_expr(backend, body_stmt->right);
-                if (init.type == INFERRED_INT) {
-                  LLVMBuildStore(backend->builder, init.value, alloca);
-                } else {
-                  LLVMBuildStore(backend->builder,
-                                 LLVMConstInt(backend->int_type, 0, 0), alloca);
-                }
+                LLVMBuildStore(backend->builder,
+                               native_loop_int_value(backend, init,
+                                                     /*have_default=*/1),
+                               alloca);
               } else {
                 LLVMBuildStore(backend->builder,
                                LLVMConstInt(backend->int_type, 0, 0), alloca);
@@ -7986,9 +8563,10 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
                   body_stmt->left ? body_stmt->left->name : body_stmt->name);
               if (var_ptr) {
                 TypedValue val = codegen_typed_expr(backend, body_stmt->right);
-                if (val.type == INFERRED_INT || val.type == INFERRED_BOOL) {
-                  LLVMBuildStore(backend->builder, val.value, var_ptr);
-                }
+                LLVMValueRef store_val =
+                    native_loop_int_value(backend, val, /*have_default=*/0);
+                if (store_val)
+                  LLVMBuildStore(backend->builder, store_val, var_ptr);
               }
             } else if (body_stmt->type == AST_VARIABLE_DECL) {
               // Variable declaration inside loop body
@@ -7996,12 +8574,10 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
                   backend->builder, backend->int_type, body_stmt->name);
               if (body_stmt->right) {
                 TypedValue init = codegen_typed_expr(backend, body_stmt->right);
-                if (init.type == INFERRED_INT) {
-                  LLVMBuildStore(backend->builder, init.value, alloca);
-                } else {
-                  LLVMBuildStore(backend->builder,
-                                 LLVMConstInt(backend->int_type, 0, 0), alloca);
-                }
+                LLVMBuildStore(backend->builder,
+                               native_loop_int_value(backend, init,
+                                                     /*have_default=*/1),
+                               alloca);
               } else {
                 LLVMBuildStore(backend->builder,
                                LLVMConstInt(backend->int_type, 0, 0), alloca);
@@ -8559,6 +9135,44 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
                  LLVMGlobalGetValueType(backend->func_aot_runtime_init),
                  backend->func_aot_runtime_init, nullptr, 0, "");
 
+  // Top-level closure env (2026-07-21): if the capture analysis found
+  // lambdas capturing main's scope-locals (for-init vars, block locals —
+  // NOT globals), give main an env array exactly like a regular function
+  // with captures gets one. current_function_node is already the program
+  // node, so the VARIABLE_DECL captured path and add_local_* slot marking
+  // work unchanged downstream.
+  {
+    CaptureData *mcd = (CaptureData *)backend->capture_data;
+    if (mcd && mcd->slots.find(node) != mcd->slots.end() &&
+        !mcd->slots[node].empty()) {
+      int env_size = (int)mcd->slots[node].size() + 1; // +1 parent-env slot
+      LLVMValueRef alloc_args[] = {LLVMConstNull(backend->ptr_type)};
+      LLVMValueRef env_obj = LLVMBuildCall2(
+          backend->builder,
+          LLVMGlobalGetValueType(backend->func_vm_allocate_array),
+          backend->func_vm_allocate_array, alloc_args, 1, "main_alloc_env");
+      backend->current_env_ptr = env_obj;
+      // Slot 0: null parent env (main IS the top level), then default-init
+      // one slot per captured var, mirroring the function-entry pattern.
+      for (int i = 0; i < env_size; i++) {
+        LLVMValueRef def_val =
+            (i == 0) ? llvm_build_vm_val_obj(backend,
+                                             LLVMConstNull(backend->ptr_type))
+                     : llvm_vm_val_int(backend, 0);
+        LLVMValueRef slot_ptr = LLVMBuildAlloca(
+            backend->builder, backend->vm_value_type, "main_env_def_ptr");
+        LLVMBuildStore(backend->builder, def_val, slot_ptr);
+        LLVMValueRef slot_void = LLVMBuildBitCast(
+            backend->builder, slot_ptr, backend->ptr_type, "main_env_def_void");
+        LLVMValueRef push_args[] = {LLVMConstNull(backend->ptr_type), env_obj,
+                                    slot_void};
+        LLVMBuildCall2(backend->builder,
+                       LLVMGlobalGetValueType(backend->func_vm_array_push),
+                       backend->func_vm_array_push, push_args, 3, "");
+      }
+    }
+  }
+
   if (node->statements) {
     // Pass 0.0: Register user-defined struct types so subsequent passes
     // (variable decls, field accesses) can resolve `struct Point { ... }`
@@ -8627,6 +9241,46 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
     if (saved_block) LLVMPositionBuilderAtEnd(backend->builder, saved_block);
     backend->current_function = saved_func;
 
+    // Pass 1a.5: Register every top-level BOXED function's name -> entry point
+    // in the call() dispatch cache at program start, so call() (and thus
+    // tame's run()/wings' listen()) resolves handlers by name WITHOUT dlsym.
+    // dlsym(RTLD_DEFAULT) worked natively only because of `-rdynamic`; under
+    // Emscripten a static wasm module exposes no symbol table, so the managed
+    // loop `run(update, draw)` failed every frame ("Function not found
+    // 't_...'"). Seeding the cache up front is portable and also frees the
+    // native path from depending on -rdynamic. Only boxed `t_<name>` functions
+    // are valid call() targets (native-ABI int functions use a different
+    // calling convention and were never call()-able), so we skip the rest.
+    for (int i = 0; i < backend->function_count; i++) {
+      const char *fname = backend->functions[i].name;
+      if (!fname) continue;
+      // Dedup: functions[] can carry a name more than once; emit at most one
+      // registration per name (aot_register_func is idempotent regardless).
+      int dup = 0;
+      for (int j = 0; j < i; j++) {
+        if (backend->functions[j].name &&
+            strcmp(backend->functions[j].name, fname) == 0) { dup = 1; break; }
+      }
+      if (dup) continue;
+      char boxed[256];
+      snprintf(boxed, sizeof(boxed), "t_%s", fname);
+      LLVMValueRef target = LLVMGetNamedFunction(backend->module, boxed);
+      if (!target) continue; // native-ABI or not emitted; not a call() target
+      // Arity = user param count: the boxed signature is
+      // void(VMValue* result, [VMValue* arg0, ...]), so subtract the result ptr.
+      // The dispatcher uses this to pick a wasm-type-correct call_indirect.
+      int arity = (int)LLVMCountParams(target) - 1;
+      if (arity < 0) arity = 0;
+      LLVMValueRef name_str =
+          LLVMBuildGlobalStringPtr(backend->builder, fname, "fn_reg_name");
+      LLVMValueRef reg_args[] = {
+          name_str, target,
+          LLVMConstInt(backend->int32_type, (unsigned long long)arity, 0)};
+      LLVMBuildCall2(backend->builder,
+                     LLVMGlobalGetValueType(backend->func_aot_register_func),
+                     backend->func_aot_register_func, reg_args, 3, "");
+    }
+
     // Pass 1b: Emit function bodies
     for (int i = 0; i < node->statement_count; i++) {
       if (node->statements[i]->type == AST_FUNCTION_DECL)
@@ -8671,18 +9325,19 @@ int llvm_backend_emit_ir_file(LLVMBackend *backend, const char *filename) {
   return 0;
 }
 
-int llvm_backend_emit_object(LLVMBackend *backend, const char *filename) {
-  // Initialize only native target (X86 on Linux/Windows)
-  LLVMInitializeNativeTarget();
-  LLVMInitializeNativeAsmParser();
-  LLVMInitializeNativeAsmPrinter();
-  char *triple = LLVMGetDefaultTargetTriple();
+// Common tail of object emission: target machine + datalayout for `triple`
+// (ownership taken — LLVMDisposeMessage'd here), verify, emit. `reloc` is
+// LLVMRelocDefault for executables and LLVMRelocPIC for the Android
+// shared-library objects (a non-PIC x86_64 object aborts the .so link with
+// "relocation R_X86_64_32 cannot be used against local symbol").
+static int emit_object_with_triple(LLVMBackend *backend, const char *filename,
+                                   char *triple, LLVMRelocMode reloc) {
   LLVMTargetRef target;
   char *error = nullptr;
   if (LLVMGetTargetFromTriple(triple, &target, &error) != 0)
     return 1;
   LLVMTargetMachineRef machine = LLVMCreateTargetMachine(
-      target, triple, "generic", "", LLVMCodeGenLevelDefault, LLVMRelocDefault,
+      target, triple, "generic", "", LLVMCodeGenLevelDefault, reloc,
       LLVMCodeModelDefault);
   LLVMSetModuleDataLayout(backend->module, LLVMCreateTargetDataLayout(machine));
   LLVMSetTarget(backend->module, triple);
@@ -8705,6 +9360,48 @@ int llvm_backend_emit_object(LLVMBackend *backend, const char *filename) {
   LLVMDisposeTargetMachine(machine);
   LLVMDisposeMessage(triple);
   return 0;
+}
+
+int llvm_backend_emit_object(LLVMBackend *backend, const char *filename) {
+  char *triple;
+  if (backend->target_web) {
+    // Web hedefi (tulpar build --target=web): wasm32 objesi üret; em++
+    // linkler (bkz. aot_pipeline web yolu). CMake, WebAssembly LLVM
+    // bileşenlerini her zaman bağlar.
+    LLVMInitializeWebAssemblyTargetInfo();
+    LLVMInitializeWebAssemblyTarget();
+    LLVMInitializeWebAssemblyTargetMC();
+    LLVMInitializeWebAssemblyAsmPrinter();
+    LLVMInitializeWebAssemblyAsmParser();
+    triple = LLVMCreateMessage("wasm32-unknown-emscripten");
+  } else {
+    // Initialize only native target (X86 on Linux/Windows)
+    LLVMInitializeNativeTarget();
+    LLVMInitializeNativeAsmParser();
+    LLVMInitializeNativeAsmPrinter();
+    triple = LLVMGetDefaultTargetTriple();
+  }
+  return emit_object_with_triple(backend, filename, triple, LLVMRelocDefault);
+}
+
+int llvm_backend_emit_object_for_triple(LLVMBackend *backend,
+                                        const char *filename,
+                                        const char *triple_str) {
+  // Android cross-compile: both device (AArch64) and emulator (X86) ABIs
+  // are emitted from the same module, so initialize both backends — CMake
+  // links both component sets on every host arch.
+  LLVMInitializeAArch64TargetInfo();
+  LLVMInitializeAArch64Target();
+  LLVMInitializeAArch64TargetMC();
+  LLVMInitializeAArch64AsmPrinter();
+  LLVMInitializeAArch64AsmParser();
+  LLVMInitializeX86TargetInfo();
+  LLVMInitializeX86Target();
+  LLVMInitializeX86TargetMC();
+  LLVMInitializeX86AsmPrinter();
+  LLVMInitializeX86AsmParser();
+  return emit_object_with_triple(backend, filename,
+                                 LLVMCreateMessage(triple_str), LLVMRelocPIC);
 }
 
 // Optimization Pass enabling using new LLVM Pass Manager

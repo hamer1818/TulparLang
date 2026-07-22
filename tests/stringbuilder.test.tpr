@@ -1,0 +1,57 @@
+// Regression: StringBuilder builtins (2026-07-21 fix).
+//
+// sb_append was declared with the raw VMValue aggregate as a by-value
+// parameter — the SysV lowering trap documented at
+// llvm_make_vmvalue_func_type — so the callee received a corrupted VMValue
+// and the very first sb_append segfaulted (the feature was dead on arrival;
+// nothing in lib/ or examples/ exercised it). It now goes through the
+// aot_*_ptr pointer ABI. The sb_* entry points also gained null-handle
+// guards: sb_append(0, ...) is ignored instead of crashing the process.
+// Run: ./tulpar tests/stringbuilder.test.tpr
+import "test";
+
+func run_basic_append() {
+    var sb = StringBuilder(64);
+    sb_append(sb, "merhaba");
+    sb_append(sb, " ");
+    sb_append(sb, "dunya");
+    assert_eq_str(sb_tostring(sb), "merhaba dunya");
+    sb_free(sb);
+}
+
+func run_mixed_types() {
+    var sb = StringBuilder(16);
+    sb_append(sb, "n=");
+    sb_append(sb, 42);
+    sb_append(sb, " f=");
+    sb_append(sb, 3.5);
+    sb_append(sb, " b=");
+    sb_append(sb, true);
+    assert_eq_str(sb_tostring(sb), "n=42 f=3.5 b=true");
+    sb_free(sb);
+}
+
+func run_growth() {
+    // Force several capacity doublings past the initial 64 bytes.
+    var sb = StringBuilder(64);
+    for (int i = 0; i < 1000; i = i + 1) {
+        sb_append(sb, "x");
+    }
+    assert_eq_int(length(sb_tostring(sb)), 1000);
+    sb_free(sb);
+}
+
+func run_null_handle_safe() {
+    // A zero/invalid handle must be a no-op, not a segfault.
+    sb_append(0, "x");
+    assert_eq_str(sb_tostring(0), "");
+    sb_free(0);
+    assert_eq_bool(true, true);
+}
+
+print("=== StringBuilder ===");
+test("basic append + tostring", "run_basic_append");
+test("mixed-type appends", "run_mixed_types");
+test("capacity growth to 1000", "run_growth");
+test("null handle is safe", "run_null_handle_safe");
+test_summary();

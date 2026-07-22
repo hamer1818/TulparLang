@@ -1,0 +1,95 @@
+// Regression: closure capture edges (2026-07-21 fixes).
+//
+// Two real bugs lived here:
+// 1. Native fast path: `func f(): int` bodies containing a lambda literal
+//    passed the i64 gate (`var f = () => i;` is a TYPE_UNKNOWN decl) but the
+//    native emitter has no closure support — the function silently computed
+//    garbage. The gate now bails to the boxed codegen on any value-position
+//    lambda (expr_has_lambda).
+// 2. Top-level scope-locals: capture slots were only ever computed for
+//    FUNCTION_DECL/LAMBDA nodes, never for the program root. A top-level
+//    lambda capturing a for-init var (`for (int k = ...) { var g = () => k; }`)
+//    found nothing and returned nullptr. The program root now gets the same
+//    capture analysis + main gets an env array (globals stay direct-access).
+//
+// Semantics note (deliberate, like JS `var`/Python): closures created in a
+// loop share the enclosing frame's ONE slot per variable — after the loop
+// they all see the final value. Copy the loop var into a fresh local inside
+// an inner function if per-iteration capture is wanted.
+// Run: ./tulpar tests/closure_edges.test.tpr
+import "test";
+
+func native_sig_with_lambda(): int {
+    // all-int signature — the exact shape that used to take the native path
+    int acc = 0;
+    for (int i = 0; i < 3; i = i + 1) {
+        var f = () => i;
+        acc = acc + f();
+    }
+    return acc;  // 0+1+2
+}
+
+func run_native_path_lambda() {
+    assert_eq_int(native_sig_with_lambda(), 3);
+}
+
+func run_apply_and_curry() {
+    var kare = (int n) => n * n;
+    var uygula = (f, int x) => f(x);
+    assert_eq_int(uygula(kare, 7), 49);
+    var topla = (int a) => (int b) => a + b;
+    var t5 = topla(5);
+    assert_eq_int(t5(3), 8);
+}
+
+func run_mutating_capture() {
+    int sayac = 0;
+    var art = () => { sayac = sayac + 1; return sayac; };
+    art();
+    art();
+    assert_eq_int(art(), 3);
+    assert_eq_int(sayac, 3);
+}
+
+func run_array_roundtrip() {
+    var kare = (int n) => n * n;
+    var fns = [kare];
+    var h = fns[0];
+    assert_eq_int(h(4), 16);
+    assert_eq_int(fns[0](5), 25);
+}
+
+func run_shared_loop_capture() {
+    // Documented shared-slot semantics: all three closures see i's final
+    // value (3) — like JS `var`, not per-iteration.
+    var fns = [];
+    for (int i = 0; i < 3; i = i + 1) {
+        var f = () => i * 10;
+        push(fns, f);
+    }
+    var f0 = fns[0];
+    var f2 = fns[2];
+    assert_eq_int(f0(), 30);
+    assert_eq_int(f2(), 30);
+}
+
+print("=== closure capture edges ===");
+test("native-signature func with lambda bails to boxed", "run_native_path_lambda");
+test("higher-order apply + curry", "run_apply_and_curry");
+test("closure mutates captured local", "run_mutating_capture");
+test("closure through array round-trip", "run_array_roundtrip");
+test("loop closures share the captured slot", "run_shared_loop_capture");
+test_summary();
+
+// --- top-level captures (outside any function; the second bug's shape) ---
+int toplam = 0;
+for (int k = 1; k <= 3; k = k + 1) {
+    var g = () => k * 100;
+    toplam = toplam + g();
+}
+// 100+200+300
+if (toplam != 600) {
+    print("TOP-LEVEL CAPTURE FAIL: " + toString(toplam));
+    exit(1);
+}
+print("top-level for-var capture OK (600)");

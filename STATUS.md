@@ -27,9 +27,197 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   ve x64 JIT zaten 2026-05'te sunset edilmişti. **Yeni dil özelliği
   yalnızca AOT'ta yazılır — VM/bytecode paritesi aranmaz.**
 - **Cross-platform:** Windows (Inno Setup installer), Linux, macOS,
-  WASM. `libtulpar_runtime.a` AOT'a static link.
+  WASM, **native Android** (`tulpar build --target=android` → NativeActivity
+  APK; arm64-v8a + x86_64; canlı emülatörde render+animasyon+dokunma
+  doğrulandı). `libtulpar_runtime.a` AOT'a static link.
 - **Stdlib gömülü:** wings, router, http_utils, http_client, async,
-  middleware, socket, tulpar_api, orm, test. SQLite vendored.
+  middleware, socket, tulpar_api, orm, test, wings_tls, tame. SQLite
+  ve raylib vendored.
+- **Tame — 2D oyun kütüphanesi (v3.10.0, 2026-07-12, Faz 0-5):**
+  `import "tame"` ile saf Tulpar'dan pencere + şekil/yazı çizimi +
+  klavye/fare/**gamepad** girdisi + **sprite/texture + TTF font + ses/müzik +
+  `run(update, draw)` yönetilen döngüsü** — Pong sınıfı oyun ~40 satır.
+  Native katman vendored **raylib 5.5** (`lib/raylib/`) + 49 `aot_tm_*`
+  builtin'i **ayrı** `libtulpar_tame.a` arşivinde; link satırına yalnız
+  tame import edilince eklenir → sıradan binary'ler GL/pencere bağımlılığı
+  almaz. Gömülü `lib/tame.tpr` kısa isimler, `rgb()/rgba()` + adlı raylib
+  paleti, kaynak handle'ları (`load_texture/load_sound/load_music`,
+  DB-handle deseni), `screenshot()` ve oyun yardımcıları sunar; `run()`
+  kare belleğini arena bracket'iyle sabitler. Headless'ta zarif hata.
+  **Pencereli canlı doğrulama yapıldı** (WSLg): tüm çizim türleri + sprite
+  + ölçek/döndürme ekran görüntüsüyle piksel-kanıtlı, 60 FPS pacing,
+  `run()` 480 kare stabil. **Web (WASM) hedefi de tarayıcıda canlı doğrulandı
+  (2026-07-14): mini/sprite/run örnekleri 60 FPS; `run()`/`call()` web'de
+  bozuktu — dlsym yerine `aot_register_func` + arity'li dağıtımla düzeltildi.**
+  Örnekler: `tame_hello`, `tame_sprite_demo`, `tame_run_demo`, `tame_web_mini`.
+  Detay: Stdlib + tooling bölümü.
+- **Arcade — "preset" üst-seviye oyun motoru (v3.10.0, 2026-07-14):**
+  `import "arcade"` — tame'in üstünde, Unreal-blueprint/blok mantığıyla **çok
+  kısa kodla** oyun yaptıran katman (gömülü `lib/arcade.tpr`, transitively
+  `import "tame"` → tame linki otomatik). Kullanıcı döngü/çarpışma/fizik/çizim
+  YAZMAZ; hazır blokları birleştirir: `oyuncu()/player`, `dusman()/enemy`,
+  `esya()/item`, `duvar()/wall`, `mermi()/bullet`, `oyuncu_p()` (platformer),
+  hareket presetleri (topdown/platform/velocity), `carpisinca(tagA,tagB,fn)`
+  tag tabanlı 0-arg çarpışma callback'i (`me()/other()` context'i), `yercekimi()`
+  + zemin/platforma iniş, `baslangicta()/her_kare()/ciz_ustune()` kancaları,
+  otomatik skor HUD + oyun-bitti/R-yeniden ekranı, `oyna()/play()` yönetilen
+  döngü. **Her API çift dilli (TR+EN alias).** Ekrandan çıkan velocity
+  entity'leri otomatik ölür. Motor **paralel dizi** tabanlı — bu iki dil
+  kısıtından doğmuştu ama **ikisi de 2026-07-20'de düzeltildi:** artık dizideki
+  int/bool struct'a alan geri-yazma çalışıyor (`box_native_struct_as_object`)
+  ve `call(fn, a, b, …)` N-argüman geçiyor (`aot_call_dynamic_n`), yani
+  callback'ler 0-arg olmak zorunda değil. (Arcade bu düzeltmelerden önce
+  yazıldığından hâlâ paralel dizi kullanıyor; yeni bir motor `struct Ent`
+  dizisi + arg'lı callback kullanabilir.) Çekirdek headless doğrulandı (`step()` API'siyle: velocity
+  hareket + AABB çarpışma dispatch + kill/skor + yerçekimi+zemine iniş) ve
+  pencereli render ekran görüntüsüyle kanıtlandı (WSLg). Örnekler:
+  `arcade_topla` (toplama+kaç), `arcade_zipla` (platformer), `arcade_nisan`
+  (atış) — hepsi ~15-25 satır oyun kodu, COMPILE_ONLY.
+  Fizik + duvarlar (2026-07-16): `yercekimi/gravity` + `ziplama/jump_power` +
+  **katı `duvar()` çarpışması** (AABB: duvara dayanma/yan-engelleme/platforma
+  iniş; çözüm aşağıdaki MTV) + dünya-zemini/sınırları — hepsi
+  deterministik çalışıyor (headless kanıt: p duvar tepesine y=80, q platforma
+  y=180; çoklu-entity + on_frame poison + 3/3 tekrar). `arcade_zipla` gerçek
+  platformer (zemin + 2 platform + zıplayıp hedefe ulaş). Hareket döngüsü global
+  index kullanır (param-index de çalışır). Çarpışma çözümü **MTV (minimum
+  translation vector)**: her çakışan duvar için en sığ eksende itilir — bu,
+  tam-genişlik zemin platformunda yatay hareketin cismi platform kenarına
+  ışınlaması bug'ını çözer (eksen-ayrık yaklaşımın klasik hatası). Büyük ilk-kare
+  dt'si `_ar_update`'te 0.05'e sınırlanır (tünelleme koruması). HUD: skorun
+  altında `bilgi()/controls()` ile kontrol bilgilendirme şeridi (3 örnekte de
+  var). Not: oturum içinde önce bir "codegen bug'ı" sanılıp duvarlar geri
+  çekilmişti — o iddia ÖYLE DEĞİLDİ (neden: bayat WSL build'i + repro fizik
+  hatası); duvarlar geri getirildi.
+  **Yatay hareket düzeltmesi (2026-07-17):** Kullanıcı "zıplama tamam ama sağa
+  sola gidemiyorum" dedi. Neden arcade'de değil, **derleyicideydi**:
+  `_ar_apply_movement`'ta MV_TOPDOWN ve MV_PLATFORM dalları aynı adlı yerelleri
+  (`float s`, `float vx`) tanımlıyor; `if` blokları scope açmadığı için ikinci
+  tanımın başlatıcısı düşüyor ve `s`/`vx` **yazılmamış yığın çöpü** okuyordu
+  (zıplama globalleri kullandığı için çalışıyordu — semptom tam da buydu).
+  Teşhis: XTest ile pencereye tuş enjekte edilip motor stdout'a döküldü
+  (`s=140730080902816`, `evx=448`, oyuncu x=612'ye yapışıyor). Derleyici
+  düzeltildi (aşağıya bak); arcade kodu değişmedi. Doğrulama: tuşsuz `evx=0` +
+  y=420'de duruyor, SAĞ basılıyken `evx=200` ve x düzgün ilerliyor.
+  **WASM (2026-07-17): arcade web'de ÇALIŞIYOR — kod değişikliği gerekmedi.**
+  `tulpar build --target=web examples/arcade_zipla.tpr out` → `.html/.js/.wasm`;
+  üç örnek de (zipla/topla/nişan) tarayıcıda doğru render ediyor (headless
+  Chrome + swiftshader ekran görüntüsüyle kanıtlı: HUD + kontrol şeridi +
+  platformlar + entity'ler). CDP ile konsol okunup tuş enjekte edilerek
+  **davranış** da doğrulandı: boştayken `evx=0` ve oyuncu y=420'de duruyor;
+  ArrowRight basılıyken `R=1`, `evx=200`, x 93→326 düzgün ilerliyor (yani
+  `key_down` web'de çalışıyor); çarpışma callback'i tam bir kez tetikleniyor
+  (`skor=100`, `oldur(oteki())` eşyayı öldürüyor → `me()/other()` context'i
+  web'de de doğru); JS hatası yok. Yani `call()` tabanlı kanca + registry
+  deseninin tamamı web'de sağlam.
+  **Slot geri kazanımı + handle'lar (2026-07-17, son açık madde kapandı):** ölen
+  entity'nin slot'u artık boş-slot yığınına dönüp yeniden kullanılıyor —
+  sürekli mermi üreten oyunda paralel diziler sonsuza dek büyümüyor (kanıt:
+  600 karede ~133 entity üretilen nişan oyununda `_n` 22'de sabitleniyor; 500
+  üret+öldür sonrası `_n=2`). Naif index geri-kullanımının tuzağı (ölmüş bir
+  id'yi tutan kodun sessizce BAŞKA entity'yi oynatması) **generation'lı handle**
+  ile kapatıldı: dışarıya verilen id = `_egen[slot] * 2^20 + slot`; öldürmede
+  `_egen` artar → o slot'a ait eski handle'lar anında bayatlar. Tüm public id
+  API'si `_slot_of()` ile çözer; bayat handle sessizce yok sayılır (setter no-op,
+  getter nötr, `yasiyor()` dürüstçe false). Kanıt: bayat handle'la `konumla`
+  yeni entity'yi bozmuyor, bayat `oldur` onu öldürmüyor. `entity_sayisi()` =
+  ayrılmış slot (canlı değil); yeni `canli_sayisi()/live_count()` canlıyı verir.
+  Web'de de doğrulandı (360 karede `_n=9` sabit, bayat tespiti wasm'de çalışıyor).
+  **Bölüm (level) sistemi (2026-07-17):** motora çift dilli bölüm API'si eklendi —
+  `bolum(n, fn)/level`, `bolum_gec()/next_level`, `bolum_no()/level_no`,
+  `bolum_sayisi()/level_count`, `kazandin_mi()/is_won` + tag bazlı sayım
+  `tag_sayisi(tag)/tag_count` ve hız okuma `vx_of()/vy_of()`. Semantik: her oyunda
+  yeniden yazılmaz, motorda; `_ar_state` **2 = kazandın** ile genişledi (0 oynanıyor,
+  1 bitti); bölüm yüklemesi `clear_entities()` → global `baslangicta` fn'i → o bölümün
+  fn'i sırasıyla; **skor bölümler arası korunur**, R ise skoru sıfırlayıp bölüm 1'e
+  döner (en tahmin edilebilir davranış); HUD'da sağ üstte `Bolum n/N` göstergesi +
+  geçişte ~1.2 sn "Bölüm N" afişi + KAZANDIN ekranı (toplam skor). `is_over()/bitti_mi()`
+  artık `state != 0` (kazanmak da bitiştir) — bölüm kaydı olmayan oyunlarda state 2 hiç
+  oluşmadığı için **geriye tam uyumlu**. **Kritik tasarım:** `bolum_gec()` geçişi hemen
+  YAPMAZ, `_lvl_pending` ile işaretler ve geçiş kare sonunda (`_ar_update`/`step`)
+  uygulanır — çünkü tipik çağrı yeri bir çarpışma callback'idir ve `_ar_collisions()`
+  o sırada paralel dizilerin üstünde döner; hemen `clear_entities()` çağırmak altındaki
+  diziyi değiştirirdi. Kayıtlar `temizle()` ile silinmez (kurallar gibi, oyun tanımının
+  parçası). Kanıt: `tests/arcade_levels.test.tpr` (8/8, headless `adim()` ile: kayıt,
+  1→2→3 ilerleme, her bölümün kendi düzeni, skor korunumu, son bölümde KAZANDIN +
+  fizik durur, R sonrası skor 0/bölüm 1, 60 yükleme sonrası slot şişmemesi `_n=4`).
+  Yan düzeltme: `arcade_topla` düşman sekmesi `_evx[enemy_id]` ile **handle**'ı slot
+  indeksi sanıp dizi dışını okuyordu → yeni `vx_of()/vy_of()` getter'ları ile düzeltildi.
+  **4 oyunun 3'er bölümü (2026-07-17):** `arcade_zipla` (kolay → zikzak tırmanış →
+  dar platform + gidip gelen ölümcül engel; düzenler zıplama payına göre ≤80px dikey /
+  ≤140px yatay açıklıkla kuruldu), `arcade_topla` (3 eşya/1 düşman → 5/2 → 6/3 hızlı;
+  bölüm bitişi `tag_sayisi(TAG_ITEM)==0`), `arcade_nisan` (kümülatif hedef skor 30 →
+  60 → 100, tempo/hız artar), `tame_snake` (arcade DEĞİL, doğrudan tame → bölüm akışı
+  elle: bölüm başına 5 yem, `MOVE_FRAMES` 8→6→4, 3. bölümde engel duvarları + KAZANDIN).
+  4'ü de web'e derlendi (`web_demo/`), headless Chrome + CDP ile render + HUD doğrulandı
+  (yılanda tuş enjekte edilip oyunun gerçekten başladığı/hareket ettiği görüldü).
+  **4 oyun daha (2026-07-17, kullanıcı isteği) — her biri motorun farklı bir yanını sürer:**
+  `arcade_tugla` (Breakout: tuğlalar `esya()`, top TAG_BULLET+MV_VELOCITY, raket MV_NONE +
+  `her_kare`'de yatay sürülür — MV_TOPDOWN 4 yöne giderdi; düz duvar → piramit → boşluklu
+  duvar), `arcade_uzay` (Space Invaders: filo tek parça hareket ettiği için düşmanlar
+  MV_NONE + elle sürülür; 3x5 → 4x6 → 4x7 + filo geri ateş eder, düşman mermisi için özel
+  tag `6`), `arcade_labirent` (harita ASCII satırlar + `ord()` ile okunur: `#/P/A/E` →
+  bölüm eklemek = 15 string yazmak; oyuncu MV_TOPDOWN → motorun MTV duvar çözümünü kullanır,
+  devriyeler MV_VELOCITY duvar takmadığı için koridor sınırları kurulumda harita taranarak
+  hesaplanır), `arcade_karsiya` (Frogger: MV_VELOCITY şeritler ±660'ta sarılır — motorun
+  "dünyanın 64px dışında otomatik öldür" kuralından ÖNCE sarmak zorunlu). Dördü de
+  COMPILE_ONLY listelerinde (build.sh + run_tests.ps1), web'e derli ve tarayıcıda
+  doğrulandı. **Bu turda yakalanan iki tuzak:** (1) `don` REZERVE kelime (`return`'ün
+  Türkçesi) — `bool don` parse hatası verdi (`move` gibi, ama bu sessiz değil sert hata);
+  (2) tam-ekran oyun alanı HUD ile çakışıyor — labirent 32px hücreyle tüm ekranı kaplayıp
+  oyuncuyu bilgi şeridinin altında bırakıyordu (28px hücre + OX=40/OY=60 ile çözüldü),
+  karşıya'nın altın hedef bandı skor yazısının altında kalıyordu (y=10 → y=58).
+  Labirent haritaları flood-fill ile doğrulandı (P'den tüm A'lara ulaşım + devriye
+  koridoru ≥3 hücre); doğrulayıcı M1'de ulaşılamayan anahtar, M2/M3'te 2 ve 1 hücrelik
+  sıkışık devriye koridoru yakaladı — üçü de düzeltildi.
+  **İki dillilik (2026-07-17, kullanıcı isteği — tulparlang.dev hem TR hem EN yayın yapıyor):**
+  (1) **Motor HUD'u çift dilli** — `dil()/language()` ile motorun çizdiği metinler (skor öneki,
+  `Bolum n/N`/`Level n/N`, afiş, OYUN BITTI/GAME OVER, KAZANDIN/YOU WIN, R ipucu) TR ya da EN
+  çizilir; varsayılan sistem dili (`sys_lang()`), TR eski çıktının bit-bit aynısı → geriye tam
+  uyumlu. `bilgi()/controls()` şeridi oyuna ait. (2) **8 oyunun tam İngilizce ikizi** (`examples/en/`:
+  jump/collect/shooter/snake/breakout/invaders/maze/crossing) — İngilizce API alias'ları + yorum +
+  başlık + `language("en")`; `examples/*.tpr` koşucusu ikizleri saymasın diye alt dizinde,
+  derleme+ekran görüntüsüyle doğrulandı. (3) **`web_demo` iki dilli** — `index.html` (oyun
+  kaynaklarından bir üretici betikle üretilir → senkron kalır) sayfa düzeyinde TR/EN anahtarı,
+  oyun başına Oyna(TR)/Oyna(EN) (iki dil sürümü de yayınlı: `zipla.html`+`jump.html` …) ve gömülü
+  gerçek kaynağı gösteren TR/EN sekmeli "Kodu gör" paneli içerir. CDP ile etkileşim doğrulandı
+  (EN'e geç → kartı aç → EN sekmesi `language("en")`li İngilizce kaynağı gösteriyor). Not: lokal
+  işçiye (qwen2.5-coder:14b) 3 ikizin mekanik çevirisi verildi ama çıktısı bozuktu (`bolum_gec`
+  düşmüş, `oyun_biti` yazım hatası, `start/frame/collision` uydurma API, string'ler çevrilmemiş)
+  → doğrulama kapısında yakalanıp 8 ikiz de elle yazıldı.
+- **AOT codegen doğruluk düzeltmeleri (v3.10.0, 2026-07-17):** Arcade'in yatay
+  hareket hatası iki **gerçek** derleyici bug'ını ortaya çıkardı; ikisi de
+  sıradan tipli Tulpar kodunu sessizce bozuyordu:
+  - **Kardeş blokta yeniden tanım başlatıcıyı kaybediyordu.** `if`/`else`
+    blokları scope AÇMAZ (yalnız fonksiyon/lambda/`for`/main açar) → aynı adlı
+    iki tanım aynı scope'a düşüyor; `add_local` ikinci bir kayıt EKLİYOR, arama
+    ise baştan tarayıp İLK kaydı buluyordu. Sonuç: ikinci tanımın store'u
+    okunmayan bir alloca'ya gidiyor; okuma ilk dalın değerini (o dal hiç
+    çalışmadıysa yığın çöpünü) görüyordu. Artık tanım mevcut slot'u yeniden
+    kullanıyor → **en son tanım kazanır**. `tests/scope_redecl.test.tpr`.
+  - **Native (tümü-int) hızlı yolu sessizce yanlış kod üretiyordu.**
+    `func f(int p): int` fonksiyonları `codegen_native_func_def`'in elle yazılmış
+    i64 alt-küme emitter'ına giriyor; bu emitter **case'i olmayan deyimi hatasız
+    ATIYOR**. Kapısı (`native_codegen_supports_stmt`) emitter'dan çok daha
+    genişti: (a) `if/else`'in **else dalı hiç emit edilmiyordu** → else'e düşen
+    her girdi **0** dönüyordu; (b) `if (c) { int a = 1; return a; }` tanımı
+    atıyor, `a` kayıtsız kalıyor ve **derleyici çöküyordu**; (c) `while`/`for`
+    gövdesindeki iç içe `if` atılıyordu (gövde yalnız atama/tanım emit ediyor) →
+    birikim döngüleri yanlış sonuç veriyordu. Kapı artık emitter ile birebir;
+    karşılanmayan biçimler tam dili işleyen kutulu (boxed) yola düşer. Korumalı
+    özyineleme (`fib`'deki `if (n < 2) { return n; }`) native kalır.
+    `tests/native_fastpath.test.tpr`. **Ders:** bu yolda kapıyı emitter'dan
+    geniş tutmak = teşhissiz yanlış kod; şüphede 0 döndür.
+  - **Native döngü gövdesinde builtin çağrısı sessizce ATILIYORDU** (2026-07-03'ten
+    beri açık olan bug — nihayet kapandı). Native yerel i64'tür ama
+    `codegen_typed_expr` statik-int olmayan (tipik olarak çağrı içeren) ifade
+    için **kutulu** VMValue döner; while/for gövde emitter'ı yalnız
+    INFERRED_INT/BOOL durumunu store edip gerisini teşhissiz atıyordu → store
+    hiç olmuyordu: `toplam = toplam + mod(n,10)` birikimi **0** kalıyor;
+    `while (b != 0) { b = mod(a,b); ... }` (Euclid OBEB) b'yi güncellemeyip
+    **segfault**; `n = toInt(n/10)` n'i güncellemeyip **sonsuz döngü**. Artık
+    gövde de payload'ı (alan 2) açıyor — döngü **koşulunun** zaten yaptığı şey.
+    Bu, "fonksiyon içinde while + builtin çağrısı bozuk, `for`/özyineleme kullan"
+    diye taşınan eski workaround'un ta kendisiydi; **artık gerekmiyor**.
 - **Wings/ORM DX turu (v3.7.0, 2026-07-03):** [WINGS_DX.md](WINGS_DX.md)
   çalışmasının tamamı uygulandı — **ORM v2** (model handle + UFCS:
   `Note.find(1)`, `Note.where("done = ?", [0])`, `Note.save(obj)`; her SQL
@@ -78,7 +266,8 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 - **Pkg manager:** `init/add/install/publish` + semver (`^`, `~`,
   `>=,<`) + lockfile + `.tpkg` multi-file bundle. Canlı registry
   `api.pkg.tulparlang.dev` (tulpar-be, Tulpar'da yazılmış). İlk gerçek
-  paket `wings_jwt` (`packages/wings_jwt/`) hazır — canlı publish bekliyor.
+  paket **`wings_jwt` canlı yayınlandı (2026-07-04)** —
+  `tulpar pkg add wings_jwt` ile kurulabilir.
 - **Güvenlik primitifleri:** `sha256`, **`hmac_sha256`** (RFC 2104, v3.5.0),
   `password_hash`/`verify` (PBKDF2), `secure_token` (CSPRNG), parametreli SQL —
   hepsi ağaç-içi (OpenSSL'siz).
@@ -232,6 +421,8 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
     truthiness yerine `keys(attrs)` — `{"done": 0}` / `""` / `false` artık
     gerçekten yazılıyor (v1 sessizce düşürüyordu; `orm_*` sarmalayıcılar da
     düzeltmeyi alır). Çoklu-db: her handle kendi bağlantısını taşır.
+    `where()`/`all()` opsiyonel `order`/`limit` opts'u da destekler
+    (2026-07-04, detay → Açık eksikler kapatılan madde).
     `tests/orm.test.tpr` **11/11**.
   - ✅ **`resource(path, Model[, opts])` (`lib/wings.tpr`):** modelden 5 REST
     route (index/show/create/update/destroy) + modelden türetilmiş
@@ -535,7 +726,14 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
     raw-bytes base64 yolu gerekir — README'de dürüstçe belgelendi). `wings_jwt.test.tpr`
     8/8 (round-trip, yanlış-secret, payload-tamper, malformed, exp/iat, decode,
     bearer-header), örnek wings app derleniyor, `tulpar pkg publish --dry-run`
-    bundle'ı doğruluyor. Canlı publish dışa-dönük (bearer token kullanıcıda).
+    bundle'ı doğruluyor.
+  - ✅ **Canlı yayınlandı (2026-07-04):** `POST /v1/publish` (owner
+    `PUBLISH_TOKEN` ile) → `wings_jwt@0.1.0` registry'ye yüklendi (HTTP 201,
+    sha256 doğrulandı), ardından `POST /v1/admin/packages/wings_jwt/approve`
+    ile `approved=1` yapıldı (yeni publish'ler Faz D onay modelinde
+    `approved=0` gizli geliyor — owner onayı şart). `GET /v1/packages/wings_jwt`
+    artık `{"latest":"0.1.0",...}` dönüyor; `tulpar pkg add wings_jwt` ile
+    kurulabilir.
   - **Docs:** `stdlib/builtins.mdx`'e Kriptografi & güvenlik bölümü (EN+TR). → [[tulpar-v330-security-apis]]
 
 - ✅ **`secure_token(n)` — kriptografik rastgelelik (2026-06-26, v3.4.0) — güvenlik.**
@@ -834,6 +1032,81 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Stdlib + tooling
 
+- **Tame — 2D oyun kütüphanesi (`import "tame"`, v3.10.0, 2026-07-12):**
+  Wings'in oyun kardeşi; iki katman, Wings ile aynı model:
+  - **Native katman:** vendored **raylib 5.5** (`lib/raylib/`, zlib lisansı,
+    SQLite ile aynı vendor deseni; GLFW derlemesi için eksik X11 uzantı
+    header'ları `lib/raylib/x11_compat/` altında — MIT, ABI-stabil) + 26
+    `aot_tm_*_ptr` builtin'i. Binding iki TU'ya ayrık: `runtime/tame_impl.c`
+    (yalnız raylib.h görür, düz-skaler API + tuş-adı eşleme) ve
+    `runtime/tame_bindings.cpp` (yalnız vm.hpp görür, VMValue ABI) —
+    raylib.h ile windows.h aynı TU'da asla buluşmaz (Rectangle/CloseWindow/
+    DrawText çakışmaları). Hepsi **ayrı `libtulpar_tame.a`** arşivinde:
+    `tame_link_flags()` (aot_pipeline.cpp) linki yalnız `backend->uses_tame`
+    işaretliyken ekler (import "tame" VEYA doğrudan tm_* çağrısı) → sıradan
+    binary'lerin ldd'si değişmez; tame binary'si bile X11/GL'i runtime'da
+    dlopen'lar (GLFW modül yükleyici + glad) → taşınabilir kalır.
+  - **Codegen:** `k_tame_builtins` tablosu (`llvm_backend.cpp`) — 26 ayrı
+    dispatch bloğu yerine tablo-güdümlü declare (döngü) + dispatch
+    (`LLVMGetNamedFunction`); N-ptr VMValue ABI'si (`aot_ord_ptr` genellemesi),
+    eksik trailing arg int 0 padlenir. Typeinfer koordinat pozisyonlarında
+    int|float polimorfik (`TYPE_UNKNOWN`), renk/boyut int, tuş str; 26 sembol
+    LSP hover/completion tablosunda TR dokümanlı.
+  - **Tulpar katmanı (`lib/tame.tpr`, gömülü):** `window(w,h,title)`,
+    `running()`, `frame_begin()/frame_end()`, `clear/rect/rect_lines/circle/
+    line/pixel/text`, `key_down/key_pressed/key_released` (tuşlar adla:
+    `"W"`, `"SPACE"`, `"LEFT"`, `"F1"`...), `mouse_x/y/down/pressed/wheel`,
+    `set_fps/get_fps/frame_time/elapsed/screen_width/screen_height`,
+    `rgb()/rgba()` + 25 adlı raylib rengi (paketlenmiş `0xRRGGBBAA` int) ve
+    oyun yardımcıları `rect_overlap` (AABB çarpışma), `point_in_rect`,
+    `clamp`. Varsayılan 60 FPS, ESC ile çıkış.
+  - **Headless davranışı:** DISPLAY yoksa `window()` iki dilli hata basar,
+    false döner, `running()` false → program temiz biter. Vendored raylib'e
+    upstream-master'la birebir `InitWindow`/`InitPlatform` yaması (5.5
+    dönüşü yok sayıp `rlglInit`'te segfault ediyordu — `lib/raylib/rcore.c`,
+    "TULPAR PATCH" işaretli).
+  - **Faz 3 — sprite/texture/font (2026-07-12):** `load_texture(path): int`
+    (handle registry, DB-handle deseninin kopyası; 256 slot),
+    `draw_texture(tex,x,y)` / `draw_texture_ex(tex,x,y,scale,rotation)`,
+    `texture_width/height`, `unload_texture`; `load_font(path,size)` (TTF,
+    64 slot) + `text_font(...)`; `measure_text(s,size)` (ortalamak için).
+    Kaynaklar `close_window()`'da otomatik bırakılır (GL context / ses
+    aygıtı kapanmadan — sıralı teardown).
+  - **Faz 4 — ses/müzik (2026-07-12):** `load_sound/play_sound/stop_sound/
+    sound_volume` (128 slot) + `load_music/play_music/stop_music/
+    music_volume` (16 slot). Ses aygıtı ilk yüklemede otomatik açılır;
+    **çalan müzik stream'leri `frame_end()` içinde otomatik pompalanır**
+    (kullanıcıya "her karede update çağır" kuralı yıkılmaz).
+  - **Faz 5 — `run(update, draw)` yönetilen döngüsü (2026-07-12):** Wings
+    `listen()` modeli — fonksiyon-ref alır (`call(fn, 0)` dispatch, group()
+    deseni), döngüyü + kare zamanlamasını + **kare belleğini** yönetir:
+    döngü öncesi `arena_save`, her kare sonu `arena_restore` (tek-save-çok-
+    restore), çıkışta `arena_drop` + pencere kapatma. Kural wings'le aynı:
+    kalıcı oyun durumu global'lerde. Ek: `triangle()` (köşe sarımı işaretli
+    alanla otomatik düzeltilir — raylib CCW tuzağı kapalı), `screenshot()`
+    (PNG, CWD'ye — raylib yol kırpar).
+  - **Gamepad (2026-07-13):** `gamepad_available(id)` / `gamepad_name(id)` /
+    `gamepad_down(id, btn)` / `gamepad_pressed(id, btn)` /
+    `gamepad_axis(id, axis)` — klavyedeki tuş-adı deseni gamepad'e taşındı:
+    butonlar `"A"/"B"/"X"/"Y"` (PS eş anlamlıları `"CROSS"/"CIRCLE"/...`),
+    `"UP"/"DOWN"/...`, `"LB"/"RB"/"LT"/"RT"` (`"L1"/"L2"...`),
+    `"START"/"SELECT"/"GUIDE"`, `"L3"/"R3"`; eksenler `"LX"/"LY"/"RX"/"RY"`
+    (-1..1) + `"LT"/"RT"` tetikler. `gamepad_name` string döndüren ilk tame
+    builtin'i (`vm_alloc_string_aot` deseni). Donanımsız zarif yol
+    (false/""/0.0, bozuk ad 0) canlı doğrulandı.
+  - **Test + canlı doğrulama:** `tame_hello` / `tame_sprite_demo` /
+    `tame_run_demo` suite'lerde compile-only (pencere bloklar); derlemeleri
+    import → codegen → link zincirini doğrular. **WSLg altında pencereli
+    canlı doğrulama yapıldı (2026-07-12):** tüm çizim türleri + sprite
+    (normal & 3x/30° döndürülmüş) + ortalanmış yazı `tm_screenshot`
+    çıktısıyla piksel-kanıtlı; ters-sarım üçgen auto-fix'i görüldü; 60 FPS
+    pacing (`frame_time=0.0167`); ses aygıtı açıldı; `run()` 480 kare
+    çökmesiz. Headless: iki dilli zarif hata + exit 0. Test varlıkları
+    (`examples/tame_assets/ship.png` 239B + `beep.wav`) python stdlib ile
+    üretildi. **WASM/web hedefi de tarayıcıda canlı doğrulandı (2026-07-14):
+    mini/sprite/`run()` örnekleri headless Chromium'da 60 FPS render; `run()`/
+    `call()` web'de bozuktu (dlsym sembol tablosu yok) — `aot_register_func` +
+    arity'li dağıtımla düzeltildi (bkz. v1.0 kriterleri → Tame WASM).**
 - **Test framework (`lib/test.tpr`):** jest-style `assert`,
   `assert_eq_int/str/bool`, `assert_contains`, `assert_status`,
   `assert_throws`. Runner: `test()` + `test_summary()`.
@@ -1030,6 +1303,124 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Dil seviyesi
 
+- ✅ **StringBuilder canlandırıldı (düzeltildi 2026-07-21).** `sb_append`
+  VMValue argümanını ham {i32,i64} aggregate deklarasyonuyla değerle
+  geçiriyordu — `llvm_make_vmvalue_func_type`'ta belgelenen SysV lowering
+  tuzağı (socket_server'ı vaktiyle çökerten aynı sınıf) — callee bozuk değer
+  alıp ilk `sb_append`'te segfault ediyordu. lib/examples hiç kullanmadığı
+  için görünmezdi (ölçünce çıktı). Artık `aot_*_ptr` pointer ABI'siyle
+  geçiyor; tüm `sb_*` girişleri null-handle korumalı; belgelenmemiş
+  `StringBuilder(capacity)` yaratıcısı LSP tablosuna eklendi.
+  `tests/stringbuilder.test.tpr` 4/4.
+- ✅ **write_file/append_file bool sözleşmesi (düzeltildi 2026-07-21).**
+  İkisi de typeinfer+LSP'de `-> bool` ama runtime koşulsuz VOID dönüyordu —
+  başarısız yazma (olmayan dizin, izin yok) başarıdan ayırt edilemiyordu.
+  Artık yalnız dosya açılıp her byte yazılınca true. `tests/file_io.test.tpr`
+  4/4.
+- ✅ **Ölçüldü, bug ÇIKMADI (2026-07-21 taraması):** sıfıra bölme (int→0
+  sessiz, float→inf IEEE, mod(x,0)→0 — tanımlı davranış), int64 wraparound,
+  toInt/toFloat strtol-önek semantiği, sqrt(-1)→NaN, round-half-away,
+  string kenarları (split boş parça korunur, replace boş-needle no-op,
+  substring ters→"" / taşma clamp, ord sınır→-1), dizi kenarları
+  (out-of-bounds oku/yaz "Runtime Error" mesajı + nötr değer/no-op, pop
+  boş→0, diziler referans tipi), thread+mutex (2×1000 artış = 2000 doğru),
+  base64/sha1/gzip/secure_token/randint(inclusive)/env, 10K özyineleme,
+  100K dizi, 1K-key json round-trip. `range(n)` tek-arg (0..n-1) — typecheck
+  2-arg çağrıyı yakalıyor. **Etkileşimli katmanlar da ölçüldü (2026-07-21,
+  temiz):** TUI PTY altında uçtan uca (`tests/tui_pty_smoke.sh` 10/10 —
+  alt-ekran/imleç/senkronize-çıktı ANSI'leri, 80x24 boyut, kuyruklu tuş,
+  ok-tuşu decode, read_key_timeout gerçekten bekliyor: stdin-EOF'ta erken
+  dönüş sadece kapalı stdin'de); WebSocket maskeli istemci frame'i
+  (`tests/ws_masked_client_smoke.py` — RFC 6455 zorunlu client-masking'i
+  unmask edilip eko ediliyor; accept-key RFC vektörü birebir); `tulpar
+  debug` DAP initialize el sıkışması düzgün Content-Length framing'iyle
+  yanıt veriyor. Ayrıca regex ailesi (match=tam-eşleşme,
+  search=alt-dize, capture grupları, bozuk desen güvenli — davranış doğru ama
+  typeinfer+LSP kaydı eksikti, tamamlandı: `tests/regex.test.tpr` 4/4), TUI
+  metin yardımcıları (display_width UTF-8 doğru, fit_width elipsli kesme,
+  style ANSI) ve parse_query (%20 decode, boş değer korunur) ölçüldü — temiz.
+- ✅ **try/catch handler hijyeni (düzeltildi 2026-07-21).** try'dan `return`/
+  `break`/`continue` ile çıkış setjmp handler frame'ini stack'te bırakıyordu →
+  sonraki `throw` yok olmuş stack frame'e longjmp ediyordu ("longjmp causes
+  uninitialized stack frame" abort). Codegen artık açık try sayısını izliyor
+  (`backend->try_depth`): `return` hepsini pop eder (ifade değerlendirildikten
+  SONRA — `return f();` kendi try'ına throw edebilir), `break`/`continue`
+  döngü-girişindeki derinliğe kadar pop eder, lambda gövdesi try+loop takibini
+  sıfırlar (dış frame'i pop edemez / dış döngüye branch edemez). Ayrıca çıplak
+  `throw` sonrası aynı block'a kod üretimi "Terminator in middle of basic
+  block" verification hatası veriyordu — throw artık break gibi ölü devam
+  block'u açar. `tests/try_catch.test.tpr` 5/5.
+- ✅ **Closure'lar native-yol fonksiyonlarında ve top-level'da ÇALIŞIYOR
+  (düzeltildi 2026-07-21).** İki sessiz-yanlış-sonuç bug'ı: (1) tüm-int imzalı
+  fonksiyon (`func f(): int`) gövdesinde lambda varken native i64 hızlı yola
+  giriyordu — native yolun closure desteği yok, çöp sayı üretiyordu; yeni
+  `expr_has_lambda` gate'i değer-pozisyonunda lambda görünce boxed codegen'e
+  düşürür. (2) capture slot'ları yalnız fonksiyon/lambda düğümleri için
+  hesaplanıyordu, program kökü için asla — top-level for-init değişkenini
+  (`for (int k…) { var g = () => k; }`) yakalayan lambda hiçbir şey çözemeyip
+  nullptr dönüyordu (globaller zaten çalışıyordu). Program kökü artık aynı
+  capture analizini alıyor ve `main` gerekirse env array ayırıyor. Semantik
+  not: döngüde üretilen closure'lar frame'in TEK slotunu paylaşır (JS-`var`/
+  Python gibi son değeri görürler). `tests/closure_edges.test.tpr` 5/5 +
+  top-level kontrol.
+- ✅ **`parse_iso8601` imkânsız takvim gününü reddediyor (düzeltildi
+  2026-07-21).** Gün yalnız 1..31 aralık-kontrollüydü; days-from-civil formülü
+  "2026-02-30"u sessizce 2 Mart'a normalize ediyordu (diğer her bozuk girişe -1
+  veren parser için veri-bozulması tuzağı). Artık ayın gerçek uzunluğu + tam
+  Gregoryen artık-yıl kuralı (4 evet / 100 hayır / 400 evet) doğrulanıyor:
+  2024-02-29 ve 2000-02-29 geçer; 2025-02-29, 1900-02-29, Nisan 31, Şubat 30
+  → -1. `tests/datetime.test.tpr` 3→6.
+- ✅ **`contains()`/`indexOf()` dizide çalışıyor (düzeltildi 2026-07-20).** İkisi de
+  string-only'di; dizi haystack sessizce reddediliyordu (`contains([1,2,3],2)`→false,
+  indexOf→-1 + yanlış typecheck uyarısı). Artık diziyi değere göre de arıyorlar
+  (int/float/bool/string) — `contains([1,2,3],2)`→true, `indexOf(["a","b"],"b")`→1;
+  string-substring davranışı değişmedi. Typeinfer imzaları polymorphic.
+- ✅ **Float→string en-kısa-round-trip (düzeltildi 2026-07-20).** `toString(1000000.5)`
+  → "1e+06" veriyordu (`%g` 6 basamak → kesir kaybı + bilimsel gösterim); float 32-bit
+  olduğu için sabit yüksek precision da gürültü gösteriyordu (3.14 → "3.14000010490417").
+  Artık aynı float32'ye round-trip eden en kısa ondalık basılıyor (`aot_format_float`;
+  toString/print/concat/JSON ortak): 3.14→"3.14", 1000000.5→"1000000.5", 0.1+0.2→"0.3".
+- ✅ **String sıralama karşılaştırması (`<`,`>`,`<=`,`>=`) ÇALIŞIYOR (düzeltildi 2026-07-20).**
+  `vm_binary_op`'ta string/string çifti `default: VM_BOOL(0)`'a düşüyordu → sıralama
+  operatörleri hep false, string dizisi sıralama sessizce hiçbir şey yapmıyordu
+  (`==`/`!=` zaten strcmp kullanıyordu). Dördü artık `strcmp` ile lexicographic
+  karşılaştırıyor; `"apple" < "banana"` true, string dizisi bubble/insertion sort çalışıyor.
+- ✅ **Non-trivially-unboxable struct dönüşü + iç içe struct ÇALIŞIYOR (düzeltildi 2026-07-20).**
+  float/string/nested alanlı struct boxed VM_OBJECT'tir; call-site ve `return`
+  codegen'i native res-ptr ABI varsayıyordu → `P e = mk(1.5,2.5)`, `push(a, mk())`,
+  `arr[i] = mk()` sıfır dönüyordu ve struct-alanlı struct (`Body{V pos}`) hiç
+  çalışmıyordu. Native res-ptr yolu artık yalnız `struct_is_trivially_unboxable`'a
+  gate'li; diğerleri normal boxed VMValue dönüşü olarak akıyor. İç içe struct
+  round-trip yapıyor (`bs[0].pos.x`, `bs[0].mass=99`); float/string/mixed struct
+  constructor'dan dönebiliyor. int/bool struct native hızlı yolu değişmedi.
+- ✅ **Metot çağrısı her alıcıda ÇALIŞIYOR (düzeltildi 2026-07-20).**
+  `recv.method(args)` artık düz kimlik dışında dizi-elemanı (`ents[i].area()`)
+  ve çağrı-sonucu (`mk(3,5).area()`) alıcılarda da çalışıyor (eskiden "Null
+  closure" çökmesi). Parser `<expr>.<name>(args)`'ı her alıcı için yeniden
+  yazar; `resolve_qualified_call` kimlik-olmayan alıcıyı doğrudan metot-dispatch'e
+  (`name(recv, args)`) yönlendirir (alias olamaz). Boxed struct alıcı (dizi
+  elemanı) struct parametresine unpack edilir (`emit_unpack_boxed_struct_into`).
+  Not: field'da saklı closure'ı `.()` ile çağırmak desteklenmez (metot-dispatch
+  olur → "fonksiyon bulunamadı").
+- ✅ **`call(fn, a, b, …)` N-argüman dispatch ÇALIŞIYOR (düzeltildi 2026-07-20).**
+  Eskiden dinamik dispatch yalnızca 0/1 argüman biliyordu; 2+ arg segfault'tu
+  (codegen fazlalıkları yutuyor, boxed hedef geçilmeyen pointer'ı çöp okuyordu).
+  `aot_call_dynamic_n` + `aot_invoke_boxed_n` (runtime_bindings.cpp) hedefin
+  **kayıtlı arity**'sine göre 0–8 arg dispatch eder (eksik→VOID, fazla→atılır,
+  wasm tipli `call_indirect` dahil güvenli); codegen `argument_count>=3` dalı +
+  typeinfer'de `call` variadic. Wings `call(handler, req)` (tek-arg) regresyonsuz.
+  **Sonuç:** callback'ler artık 0-arg olmak zorunda değil. Repro + 76 örnek yeşil.
+- ✅ **Dizideki (int/bool) struct'a alan geri-yazma ÇALIŞIYOR (düzeltildi 2026-07-20).**
+  `push(ents, mk()); ents[i].x = ents[i].x + 5` artık çalışıyor. Trivially-unboxable
+  struct (tümü int/bool) native LLVM aggregate'e iner; diziye girince statik tip
+  kaybolur ve `arr[i].x` dinamik string-key araması olur — compact ObjStruct bunu
+  karşılamaz. Float-alanlı struct'lar zaten VM_OBJECT olduğu için çalışıyordu; fix
+  int/bool struct'ı push/array-literal boxlamasında **aynı string-key'li VM_OBJECT**'e
+  çevirir (`box_native_struct_as_object`, llvm_backend.cpp). Statik `s.x` yolu
+  değişmedi → regresyon yok (76 örnek + 8 arcade testi yeşil). **Geri çıkarma da
+  tamam:** `Ent e = ents[i]` artık saklı alanları değer-semantiğiyle kopyalıyor
+  (`aot_struct_unpack_named` — string-key VM_OBJECT'i ada göre çözer, `match`
+  öznesinin ObjStruct'ını konuma göre; codegen alan-adı tablosu emit eder).
 - ✅ **Lambda + closures (AOT) ÇALIŞIYOR.** `(int a, int b) => a + b`
   lambda'ları, outer-scope capture'lı closure'lar (`make_counter`,
   `make_adder`, sayaç mutasyonu), higher-order ve nested kullanım,
@@ -1249,6 +1640,90 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Stdlib DX (Wings/ORM)
 
+- ✅ **Wings header lookup case-insensitive (düzeltildi 2026-07-21, RFC 7230).**
+  Request header'ları istemcinin gönderdiği casing ile saklanır ve her iç okuma
+  elle 2-case probe'du ("Cookie" sonra "cookie") — başka her casing (COOKIE,
+  AUTHORIZATION, CONTENT-TYPE…) sessizce kaçıyordu: çerez düşer, `jwt_guard`
+  geçerli token'a 401 verir, gzip devreye girmez, ETag 304 eşleşmez. Yeni
+  `req_header(req, name)` public erişimcisi (+ iç `_hdr_ci`: tam-case hızlı yol
+  → lowercase key → key taraması) ve beş iç site (cookies, jwt, form_data,
+  If-None-Match, Accept-Encoding) ona geçti. Saklanan casing değişmedi →
+  mevcut tam-case kullanıcı kodu kırılmaz. `wings_features` 13→14 + canlı
+  curl smoke (COOKIE/CONTENT-TYPE/ACCEPT-ENCODING büyük harf: çerez çözüldü,
+  gzip yanıtı geldi).
+- ✅ **Native Android — `tulpar build --target=android` (2026-07-21):**
+  tame/arcade oyunları gerçek Android APK'sine (NativeActivity + raylib
+  GLES2) derlenir; **canlı emülatörde render + 60 FPS animasyon + dokunma
+  girdisi doğrulandı** (altın top zıplama örneği + parmak-takip oyunu +
+  tam arcade_goktasi motoru — entity/çarpışma/bölüm/HUD/oyun-bitti/`call()`
+  kancaları hepsi cihazda). Web hedefinin kardeşi: tek derlenmiş modülden
+  İKİ ABI objesi (arm64-v8a = cihaz, x86_64 = emülatör;
+  `llvm_backend_emit_object_for_triple`, PIC reloc) → NDK clang++'ıyla
+  `lib/<abi>/libtulpargame.so` linki → `<out>_apk/` staging + NativeActivity
+  manifesti. `android/build_tame_android.sh` runtime+raylib
+  PLATFORM_ANDROID+native_app_glue+tame'i ABI başına statik arşive derler
+  (wasm/dist kardeşi); `android/package_apk.sh` aapt2+zipalign(-P 16, 16KB
+  sayfa)+apksigner (WSL'de Windows SDK araçlarını interop ile sürer);
+  `android/install_run.sh` adb install+başlat+screencap. CMake artık her
+  host'ta HEM AArch64 HEM X86 LLVM backend'ini linkler. Yük taşıyan ince
+  noktalar: bionic'te makecontext/swapcontext yok → tulpar_async.cpp
+  derlenmez (web gibi), `android_stubs.cpp` runtime'ın async-HTTP yolundaki
+  `aot_promise_new/settle/io_register` referanslarını karşılar (çağrılırsa
+  abort — async Android'de desteklenmiyor); `.so` linki `-Wl,--no-undefined`
+  (eksik sembol link'te patlar, cihazda UnsatisfiedLinkError değil);
+  x86_64 objesi PIC olmalı (yoksa "R_X86_64_32 cannot be used against local
+  symbol"); `-Wl,-z,max-page-size=16384` (Android 15+ 16KB sayfa). Dokunma
+  API'si tame'e eklendi (`touch_count/touch_x/touch_y/touched`, 52 tm_*).
+  **Arcade dokunmatik kontrol (2026-07-21):** arcade motoru artık ekran-üstü
+  yarı-saydam D-pad (sol alt, 4 ok — MV_TOPDOWN 8-yön / MV_PLATFORM sol-sağ) +
+  aksiyon butonu (sağ alt — zıpla/ateş) çizip okur; ilk dokunuşta otomatik
+  açılır (masaüstü klavye değişmez, girdi = klavye VEYA dokunma). Oyun-bitti
+  ekrana dokununca yeniden başlar; `fire_pressed()/ates_basildi()` (SPACE/UP
+  VEYA aksiyon butonu) nişancılara eklendi. **10 arcade oyunu da artık tam
+  dokunmatik oynanabilir — kullanıcı cihazda labirent oyununu D-pad ile
+  oynayıp doğruladı.** Kalan iş yok; native Android + mobil kontrol tamam.
+- ✅ **Tame WASM — `tulpar build --target=web` (2026-07-13):** derleyici
+  wasm32-unknown-emscripten objesi üretir (CMake her mimaride WebAssembly
+  LLVM bileşenlerini bağlar), em++ `wasm/dist` arşivlerine linkler
+  (`wasm/build_tame_web.sh`: async'siz runtime + raylib PLATFORM_WEB +
+  tame) → `oyun.html + .js + .wasm`; ASYNCIFY bloklu oyun döngüsünü
+  tarayıcı event-loop'una çevirir. ⚠️ wasm32'de VMValue C ABI'si Win64
+  gibi sret+byval — `vmvalue_abi_uses_sret()` çalışma zamanında seçer ve
+  bayrak `llvm_backend_create`'ten ÖNCE kurulmalı (declare create içinde;
+  aksi halde wasm'da bozuk bitcast-thunk'ları üretilir — canlı yakalandı,
+  kapatıldı). HTML kabuğunu em++ değil Tulpar yazar (npm bağımlılığı yok).
+  Varlıklar `TULPAR_WEB_ASSETS=<dizin>` ile gömülür. **Tarayıcıda canlı
+  doğrulandı (2026-07-14, headless Chromium + swiftshader WebGL):**
+  `tame_web_mini` (elle döngü), `tame_sprite_demo` (gömülü ship.png/beep.wav —
+  texture + ses yüklendi) ve `tame_run_demo` (yönetilen `run()` döngüsü) üçü de
+  60 FPS render ediyor; global durum kareler arası korunuyor.
+  ⚠️ **`run()`/`call()`/wings `listen()` web'de bozuktu — düzeltildi
+  (2026-07-14):** isimle dağıtım (`aot_call_dynamic`) native'de `dlsym(RTLD_
+  DEFAULT)` + `-rdynamic`'e dayanıyordu; statik wasm modülü dlsym'e sembol
+  tablosu açmadığından `run(guncelle, ciz)` her karede "Function not found
+  't_...'" veriyordu. Çözüm: AOT backend main prolog'una her boxed top-level
+  fonksiyon için `aot_register_func(ad, ptr, arity)` emit ediyor → call()
+  önbelleği dlsym olmadan dolduruluyor (native de artık `-rdynamic`'ten
+  bağımsız). Ayrıca wasm `call_indirect` katı tip denetimi yüzünden 0-param
+  hedefi 2-ptr imzayla çağırmak "function signature mismatch" trap'ı veriyordu;
+  önbellek artık **arity** tutuyor ve dağıtıcı (`aot_invoke_boxed`) hedefin
+  gerçek imzasıyla eşleşen çağrıyı seçiyor. Önbellek 256→2048 slot (512-fonk
+  codegen sınırının üstünde).
+  ⚠️ **Ses açan oyunlar web'de çöküyordu — düzeltildi (2026-07-14):** raylib
+  ses arka ucu (miniaudio) ScriptProcessorNode geri-çağrısında
+  `Module.HEAPF32.buffer` okur; Emscripten 5.0 HEAP view'lerini artık Module'e
+  otomatik bağlamadığından `Module.HEAPF32` undefined → `load_sound`/
+  `load_music` kullanan her oyun her audio-frame'de "Cannot read properties of
+  undefined (reading 'buffer')" ile çöküyordu. Çözüm: web link satırına
+  `-sEXPORTED_RUNTIME_METHODS=HEAPF32` (aot_pipeline.cpp) — büyümede otomatik
+  yeniden atanır, sessiz oyunlara zararsız. Detay: docs/mindmap/Tame.md
+  "Web hedefi".
+- ✅ **Tame Faz 0-5 + gamepad — çekirdek + çizim + girdi (klavye/fare/
+  gamepad) + sprite/font + ses/müzik + `run()` yönetilen döngü: TAMAMLANDI
+  ve pencereli canlı doğrulandı (v3.10.0, 2026-07-12/13).** Adlı gamepad:
+  `gamepad_available/name/down/pressed/axis` — buton/eksen adla ("A"/"LB"/
+  "START", "LX"/"RT"; PS eş anlamlıları "CROSS"... dahil); donanımsız zarif
+  yol (false/""/0.0) doğrulandı. Detay: Yapılanlar → Stdlib + tooling → "Tame".
 - ✅ **Wings/ORM yazım kolaylığı turu — TAMAMLANDI (v3.7.0, 2026-07-03).**
   [WINGS_DX.md](WINGS_DX.md)'deki dört ayak da uygulandı; detay:
   Yapılanlar → HTTP runtime → "Wings/ORM DX turu". Testler:
@@ -1256,18 +1731,28 @@ girildiğinde ne yapacağımı bilelim.
   Faz-0 doğrulamaları: `delete` fn adı ✓, orm+wings çift import ✓, lambda
   route **kaydı** derleniyor ✓ (canlı dispatch'i ayrıca doğrulanmadı — docs
   funcref stilini öğretiyor), param-binder bool'u native bind ediyor ✓.
-- 🟢 **ORM v2 sonrası fikirler (talep görürse):** ilişkiler (`has_many`),
-  migration sistemi, tipli query-builder (`Note.q().eq(...)`), `where`'siz
-  `first(m)` overload'u. WINGS_DX.md "Kapsam dışı" bölümünde gerekçeli.
-  - **Sıradaki adım:** kullanım geri bildirimi bekle; ilk aday muhtemelen
-    `order/limit` opsiyonları (`Note.where(cond, params, {"order": "id DESC",
-    "limit": 20})`).
+- ✅ **`where()`/`all()` opsiyonel `order`/`limit` (2026-07-04) — ORM v2
+  sonrası ilk aday, kapatıldı.** `lib/orm.tpr`: yeni `_orm_clause(opts)`
+  yardımcı fonksiyonu (`typeof(opts) != "object"` ise no-op — default-arg
+  padding'in boxed-0'ını sessizce yutar). `where(m, cond, params, opts)` ve
+  `all(m, opts)` — her ikisinde de `opts` opsiyonel 4./2. arg:
+  `Note.where("done = ?", [0], {"order": "id DESC", "limit": 20})`,
+  `Note.all({"order": "id ASC", "limit": 10})`. Eski 3-arg `where()` /
+  0-arg `all()` çağrıları değişmeden çalışır (typeinfer eksik trailing arg'ı
+  serbest bırakıyor). `order` ham SQL parçasıdır (`raw()` gibi kullanıcı
+  girdisini gömme uyarısıyla belgelendi); `limit` `toInt(toString(...))` ile
+  coerce edilir. `tests/orm.test.tpr` yeni test + tümü **13/13**; tüm örnek
+  + `wings_dx.test.tpr` 10/10 regresyon temiz. `WINGS_CHEATSHEET.md`
+  güncellendi.
+  - **Kalan (🟢, talep görürse):** ilişkiler (`has_many`), migration
+    sistemi, tipli query-builder (`Note.q().eq(...)`), `where`'siz
+    `first(m)` overload'u. WINGS_DX.md "Kapsam dışı" bölümünde gerekçeli.
 
 ### Tooling
 
-- 🟢 **JetBrains plugin.** Sadece VS Code var.
-  - **Sıradaki adım:** IntelliJ Platform SDK + grammar skeleton.
-    LSP4IJ ile LSP proxy en kestirme; native plugin v2.0.
+- 🟢 **JetBrains plugin — YAPILMAYACAK (karar 2026-07-04).** Kullanıcı kararı:
+  VS Code eklentisi (`vscode-tulpar`) tek IDE hedefi olarak yeterli;
+  IntelliJ/JetBrains desteğine gerek yok. İş listesinden düşürüldü.
 
 ### Ağ / I/O
 
@@ -1279,21 +1764,26 @@ girildiğinde ne yapacağımı bilelim.
 
 ### Pkg ekosistemi (içerik)
 
-- 🟡 **Gerçek 3rd-party paket içeriği.** Registry'de şu an sadece
-  `demo` + `multipkg` smoke-test paketleri var. Stdlib paketleri
-  (`wings`, `router`, `http_utils`, vb.) eski markdown listelerinde
-  geçiyor ama registry'de publish edilmemiş.
-  - ✅ **İlk gerçek paket oluşturuldu: `wings_jwt` (2026-06-29).**
+- 🟡 **Gerçek 3rd-party paket içeriği.** Registry'de `demo` + `multipkg`
+  smoke-test paketlerinin yanında artık **`wings_jwt` canlı ve onaylı**.
+  Stdlib paketleri (`wings`, `router`, `http_utils`, vb.) hâlâ registry'de
+  publish edilmemiş.
+  - ✅ **İlk gerçek paket oluşturuldu VE canlıya yayınlandı: `wings_jwt`
+    (oluşturma 2026-06-29, publish 2026-07-04).**
     `packages/wings_jwt/` — HS256 imzalı oturum token'ları (`sign`/`sign_ttl`/
     `verify`/`decode`/`from_header`), sıfır bağımlılık, `hmac_sha256` +
-    `base64_encode` üstüne saf Tulpar. 8/8 test yeşil, örnek wings app derleniyor,
-    `tulpar pkg publish --dry-run` bundle'ı doğruluyor (3 dosya, sha256). Bunu
-    mümkün kılan yeni runtime primitifi **`hmac_sha256(key, msg)`** (RFC 4231
-    vektörleriyle doğrulandı) — bkz. Yapılanlar / Çekirdek + [[tulpar-v330-security-apis]].
-  - **Sıradaki adım (dışa-dönük, credential gerekir):** canlı registry'ye
-    publish — `cd packages/wings_jwt && tulpar pkg publish --token <PUBLISH_TOKEN>`
-    (`api.pkg.tulparlang.dev`, bearer token kullanıcıda). Sonra `wings_postgres`
-    vb. ek eklentiler.
+    `base64_encode` üstüne saf Tulpar. 8/8 test yeşil, örnek wings app derleniyor.
+    Publish akışı: production `tulpar-be` sunucusunda (`/root/tulpar-be/.env`)
+    `PUBLISH_TOKEN` üretilip `TULPAR_PUBLISH_TOKEN` ile
+    `tulpar pkg publish` → `HTTP 201`; ardından
+    `POST /v1/admin/packages/wings_jwt/approve` ile Faz D onay modelinin
+    varsayılan `approved=0` gizliliği kaldırıldı. `GET /v1/packages/wings_jwt`
+    artık `{"latest":"0.1.0",...}` dönüyor — `tulpar pkg add wings_jwt`
+    herkese açık çalışıyor. Bunu mümkün kılan runtime primitifi
+    **`hmac_sha256(key, msg)`** (RFC 4231 vektörleriyle doğrulandı) —
+    bkz. Yapılanlar / Çekirdek + [[tulpar-v330-security-apis]].
+  - **Sıradaki adım:** ek paketler yayınla — `wings_postgres` vb. (henüz
+    yazılmadı; en azından tasarım/kapsam kararı gerekir).
 
 - 🟢 **Server-side `/v1/search` endpoint.** Bugün `pkg search`
   client-side filtreliyor — registry catalog'u büyüdüğünde
@@ -1302,11 +1792,62 @@ girildiğinde ne yapacağımı bilelim.
   - **Sıradaki adım:** N>50 paket olduğunda; tulpar-be'ye
     `/v1/search?q=…` ekle, SQLite FTS5 ile.
 
-- 🟢 **Registry binary release asset support.** Şu an sadece source
-  bundles; `tulpar update` benzeri binary distribution registry'den
-  henüz çekmiyor.
-  - **Sıradaki adım:** Manifest'e `[release.binaries] linux-x64 = "url"`
-    şeması ekle; `pkg add` opt-in binary çekme.
+- ✅ **Registry binary release asset support (2026-07-05) — CLI + registry tarafı, canlıya deploy edildi.**
+  - ✅ **Manifest şeması (`src/pkg/manifest.hpp/.cpp`):** `[release.binaries]`
+    (bu paketin kendi platform→URL eşlemesi — `linux-x64`/`windows-x64`/
+    `macos-universal`, `tulpar update`'in kullandığı aynı platform id'leri)
+    + `[binaries]` (tüketici tarafı opt-in tablo, `name = true`). Round-trip
+    parse/serialize doğrulandı.
+  - ✅ **`tulpar pkg add <name> --binary`:** dependency'yi hem
+    `[dependencies]` hem `[binaries]`'e ekler.
+  - ✅ **`tulpar pkg publish`:** `[release.binaries]` doluysa JSON gövdeye
+    `release_binaries` alanı olarak ekler; **her URL `is_safe_binary_url()`
+    ile doğrulanır** (yalnızca düz http(s), tırnak/backtick/`$`/`&`/`;`/boşluk
+    yok) — kontrol `--dry-run` dahil her zaman çalışır, çünkü indirme tarafı
+    `curl`'u shell string'e gömerek çağırıyor ve URL üçüncü-parti bir
+    publisher'dan geliyor (command-injection riski gerçek — kanıtlandı: bir
+    `"; touch /tmp/pwned; #` payload'ı publish denemesinde reddedildi, dosya
+    oluşmadı).
+  - ✅ **`tulpar pkg install`:** `[binaries]`'te opt-in edilmiş bağımlılıklar
+    için ekstra `GET /v1/packages/<n>/versions/<v>` (metadata, `/source`
+    değil) çağrısı → `release_binaries[current_platform_id()]` varsa indirir
+    (`tulpar_modules/<n>/bin/<n>[.exe]`, POSIX'te `chmod 0755`). Opt-in
+    yoksa **sıfır ekstra istek** — mevcut davranış değişmedi. Kayıt yoksa/
+    indirme başarısızsa install'ın geri kalanını **düşürmez**, bilgilendirici
+    satır basar.
+  - ✅ **tulpar-be (`registry.tpr`, ayrı repo) — kodlandı ve canlıya deploy
+    edildi (commit `71c7257`):** `packages` tablosuna `release_binaries TEXT DEFAULT '{}'`
+    kolonu (CREATE TABLE + var olan DB'ler için idempotent `ALTER TABLE`
+    migration'ı, `disabled`/`approved`/`repo`/`ref` ile aynı desen).
+    `publish()` opsiyonel `release_binaries` alanını kabul eder, sunucu
+    tarafında da `_release_binaries_valid()` ile doğrular (400 döner —
+    CLI'yi atlayıp doğrudan POST eden bir publisher için savunma katmanı),
+    `_get_version()` alanı metadata yanıtına ekler.
+  - **Doğrulama:** lokal `tulpar registry.tpr` (scratch SQLite + blob dir)
+    ile canlı uçtan uca test edildi — publish→approve→
+    `GET .../versions/0.1.0` `release_binaries` doğru döndü; kötücül URL
+    400 ile reddedildi; `release_binaries`'siz publish + var olan tohum
+    paketler (`demo` vb.) etkilenmedi. CLI tarafı ayrıca gerçek production
+    registry'ye (henüz bu alanı sunmayan) karşı test edildi — nazikçe
+    "no published binary" diyerek source install'ı bozmadı (ileri-uyumlu
+    çöküş). `./build.sh test` + `tests/orm.test.tpr`/`wings_dx.test.tpr`
+    regresyon temiz (bu iş `lib/*.tpr` dokunmadı, C++-only).
+  - ✅ **Canlıya deploy edildi (2026-07-04, kullanıcı onayıyla).** tulpar-be
+    main'e commit+push edildi (`71c7257`), GitHub Actions deploy workflow'u
+    tetiklendi. Workflow'un health-check adımı ilk denemede "failed"
+    raporladı (60 sn boyunca `connection refused`) — kök neden muhtemelen
+    sunucudaki `deploy/auto-deploy.sh` cron fallback'inin (her dakika)
+    GH Actions'ın SSH deploy'uyla aynı ana denk gelip container'ı ikinci kez
+    `docker compose up -d --build` ile yeniden başlatması; benim değişikliğimden
+    kaynaklı bir regresyon değil. **Doğrulama:** `curl https://api.pkg.tulparlang.dev/healthz`
+    → `uptime_s` kesintisiz artıyor (crash-loop yok), `GET /v1/packages/demo/
+    versions/1.0.1` ve `wings_jwt/versions/0.1.0` artık `"release_binaries":{}`
+    döndürüyor — yeni kod canlıda kararlı çalışıyor, mevcut paketler
+    etkilenmedi. **Kalan (🟢, talep görürse):** gerçek bir binary-shipping
+    paket (ör. `wings_jwt` derlenmiş bir CLI aracıysa) ilk denemeyi yapabilir;
+    ayrıca GH Actions health-check script'i cron fallback'iyle yarışma
+    ihtimaline karşı sağlamlaştırılabilir (ayrı bir altyapı işi, bu turun
+    kapsamı dışında).
 
 ### Dokümantasyon
 
@@ -1345,10 +1886,19 @@ girildiğinde ne yapacağımı bilelim.
     nerede kullan rehberiyle + `wings_jwt` örneği. (Daha önce crypto
     builtin'lerinin hiçbir doc bölümü yoktu — gerçek bir boşluktu.) Astro
     build temiz (72 sayfa, EN+TR indexlendi).
-  - **Kalan:** pkg/wings derinlemesine guide'lar (mevcut ama daha
-    genişletilebilir; örn. tam JWT-auth cookbook tarifi). **Site canlı deploy
-    (Cloudflare Pages/wrangler) — dışa-dönük, credential gerekir:** `astro build`
-    lokalde temiz çalışıyor (`./node_modules/.bin/astro build` → `dist/`);
+  - ✅ **JWT-auth cookbook tarifi (2026-07-04, EN+TR)** —
+    `ecosystem/wings-cookbook.mdx`'e yeni "How do I add JWT authentication?"
+    / "JWT authentication nasıl eklerim?" bölümü: canlı yayınlanan
+    `wings_jwt` paketi (`tulpar pkg add wings_jwt`, `jwt.sign_ttl`) + Wings'in
+    yerleşik `jwt_guard`/`jwt_public` middleware'i birlikte — daha önce
+    `jwt_guard`/`jwt_public` sitede hiç dokümante edilmemişti (gerçek
+    boşluktu). Tarif gerçek bir sunucuda derlenip `curl` ile uçtan uca
+    doğrulandı (401 token'sız, hatalı kimlik bilgisinde 401, login→token→
+    `/me` claim'leri doğru). `astro build` sonrası 72 sayfa temiz.
+  - **Kalan:** pkg/wings derinlemesine başka guide'lar genişletilebilir.
+    **Site canlı deploy (Cloudflare Pages/wrangler) — dışa-dönük, credential
+    gerekir:** `astro build` lokalde temiz çalışıyor (`./node_modules/.bin/astro
+    build` → `dist/`);
     deploy adımı kullanıcının CF hesabı/wrangler auth'unu istiyor
     (`wrangler pages deploy dist`). v1.0 release blocker'ının büyük kısmı kapandı.
 

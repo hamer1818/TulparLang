@@ -209,12 +209,23 @@ jobs:
       # list, so warm restores skip both the download and the dpkg
       # configure step (~50-60s → ~5-8s). build-essential + cmake are
       # also in here but they're tiny — the win is dominated by LLVM.
+      #
+      # libx11-dev (+ the libx*-dev extras) provide the core X11 headers
+      # (X11/Xlib.h, keysym.h, XKBlib.h, Xatom.h, Xresource.h, Xmd.h, …)
+      # that raylib's GLFW X11 backend — compiled into tulpar_tame — needs
+      # on Linux. The X11 *extension* headers (Xrandr/Xinerama/XInput2/
+      # Xcursor/shape) are vendored in lib/raylib/x11_compat and shadow the
+      # system copies via -I; only the core headers come from apt. This is
+      # the same set a local dev box already has, so CI now reproduces the
+      # working local build. The tame binary still dlopens X11/GL at
+      # runtime, so this is a build-time-only header dep — it does not
+      # reduce the output binary's portability.
       - name: Cache apt packages
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
         uses: awalsh128/cache-apt-pkgs-action@v1.4.3
         with:
-          packages: build-essential cmake llvm-18-dev
-          version: 1.0
+          packages: build-essential cmake llvm-18-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev
+          version: 1.1
 
       - name: Verify apt packages installed
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
@@ -226,6 +237,9 @@ jobs:
           # before CMake tries to find_package(LLVM).
           which llvm-config-18 cmake gcc g++
           llvm-config-18 --version
+          # raylib/tame X11 build dep — fail loudly here, not 100 lines deep
+          # in a raylib compile, if libx11-dev didn't land.
+          test -f /usr/include/X11/Xlib.h || { echo "::error::libx11-dev missing (X11/Xlib.h) — tame build will fail"; exit 1; }
 
       - name: Build with LLVM
         if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'

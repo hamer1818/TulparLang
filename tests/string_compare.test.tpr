@@ -1,0 +1,54 @@
+// Regression: lexicographic string ordering (<, >, <=, >=).
+//
+// Before the 2026-07-20 fix, vm_binary_op's ordering ops fell through to a
+// `default: VM_BOOL(0)` for the string/string type pair — so `<`/`>`/`<=`/`>=`
+// on strings were ALWAYS false, and sorting strings silently did nothing.
+// (`==`/`!=` already used strcmp.) Now they compare via strcmp.
+// Run: ./tulpar tests/string_compare.test.tpr
+import "test";
+
+func run_less() {
+    assert_eq_bool("apple" < "banana", true);
+    assert_eq_bool("banana" < "apple", false);
+    assert_eq_bool("a" < "ab", true);          // prefix is smaller
+    assert_eq_bool("Z" < "a", true);           // ASCII: 'Z'(90) < 'a'(97)
+}
+
+func run_greater() {
+    assert_eq_bool("dog" > "cat", true);
+    assert_eq_bool("cat" > "dog", false);
+}
+
+func run_equal_bounds() {
+    assert_eq_bool("abc" <= "abc", true);
+    assert_eq_bool("abc" >= "abc", true);
+    assert_eq_bool("abc" < "abc", false);
+    assert_eq_bool("abc" > "abc", false);
+}
+
+func run_sort() {
+    var w = ["cherry", "apple", "banana", "date"];
+    int n = len(w);
+    int i = 0;
+    while (i < n) {
+        int j = 0;
+        while (j < n - 1) {
+            if (w[j + 1] < w[j]) {
+                var tmp = w[j]; w[j] = w[j + 1]; w[j + 1] = tmp;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    assert_eq_str(w[0], "apple");
+    assert_eq_str(w[1], "banana");
+    assert_eq_str(w[2], "cherry");
+    assert_eq_str(w[3], "date");
+}
+
+print("=== lexicographic string ordering ===");
+test("< compares lexically", "run_less");
+test("> compares lexically", "run_greater");
+test("<= / >= at equality", "run_equal_bounds");
+test("bubble sort of strings", "run_sort");
+test_summary();

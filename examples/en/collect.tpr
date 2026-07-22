@@ -1,0 +1,108 @@
+// Collect — "block"-style game on the arcade preset engine, 3 LEVELS.
+// English twin of examples/arcade_topla.tpr.
+//
+//   ./tulpar examples/en/collect.tpr
+//
+// Arrow keys / WASD to drive the (blue) player. Collect the yellow items (+10).
+// Grab ALL the items in a level to advance; clear all 3 → YOU WIN. Touching a
+// red enemy ends the game, R to restart.
+//
+// Levels:  1) 3 items / 1 enemy   2) 5 items / 2 enemies   3) 6 items / 3 fast
+//
+// Note: NO game loop, collision code or drawing. The engine does all of it;
+// you just place the blocks.
+
+import "arcade";
+
+array enemies = [];    // this level's enemy handles (for the bounce logic)
+
+// Spawn an enemy and remember it for bouncing. (A wrapper — not a callback, so
+// it may take arguments; the 0-arg rule only applies to call()-dispatched fns.)
+func add_enemy(x, y, vx, vy) {
+    int e = spawn(x, y, 24, 24, RED, TAG_ENEMY, MV_VELOCITY);
+    set_vel(e, vx, vy);
+    push(enemies, e);
+}
+
+// Global setup — runs before every level's function on each (re)load.
+func setup() {
+    clear_entities();
+    enemies = [];
+    player(300, 220, 24, 24, BLUE);               // arrows/WASD ready
+}
+
+// --- Level 1: 3 items, 1 enemy ----------------------------------------------
+func l1() {
+    item(80,  80,  18, 18, GOLD);
+    item(520, 90,  18, 18, GOLD);
+    item(120, 380, 18, 18, GOLD);
+    add_enemy(300, 40, 180, 140);
+}
+
+// --- Level 2: 5 items, 2 enemies --------------------------------------------
+func l2() {
+    item(80,  80,  18, 18, GOLD);
+    item(520, 90,  18, 18, GOLD);
+    item(120, 380, 18, 18, GOLD);
+    item(500, 360, 18, 18, GOLD);
+    item(300, 60,  18, 18, GOLD);
+    add_enemy(300, 40,  200, 160);
+    add_enemy(60,  440, 0 - 170, 190);
+}
+
+// --- Level 3: 6 items, 3 fast enemies ---------------------------------------
+func l3() {
+    item(80,  80,  18, 18, GOLD);
+    item(520, 90,  18, 18, GOLD);
+    item(120, 380, 18, 18, GOLD);
+    item(500, 360, 18, 18, GOLD);
+    item(300, 60,  18, 18, GOLD);
+    item(60,  220, 18, 18, GOLD);
+    add_enemy(300, 40,  250, 210);
+    add_enemy(60,  440, 0 - 230, 240);
+    add_enemy(600, 240, 260, 0 - 220);
+}
+
+// Bounce enemies off the walls (the engine won't clamp MV_VELOCITY).
+//
+// NOTE: velocity is read with get_vx() — `_evx[id]` is WRONG: an id is a handle
+// (gen*1048576 + slot) while the parallel arrays are indexed by slot. The
+// direction guard (`&& vx < 0.0`) avoids edge jitter: flipping every frame while
+// outside the bound would lock the entity there.
+func on_frame_fn() {
+    for (int i = 0; i < len(enemies); i = i + 1) {
+        int e = enemies[i];
+        if (!alive(e)) { continue; }
+        float x = get_x(e);
+        float y = get_y(e);
+        float vx = get_vx(e);
+        float vy = get_vy(e);
+        if (x < 0.0   && vx < 0.0) { vx = 0.0 - vx; }
+        if (x > 616.0 && vx > 0.0) { vx = 0.0 - vx; }
+        if (y < 0.0   && vy < 0.0) { vy = 0.0 - vy; }
+        if (y > 456.0 && vy > 0.0) { vy = 0.0 - vy; }
+        set_vel(e, vx, vy);
+    }
+}
+
+// Player touches an item: collect it, +10. If it was the last, next level.
+func collect_cb() {
+    kill(other());
+    score_add(10);
+    if (tag_count(TAG_ITEM) == 0) { next_level(); }
+}
+
+// Player touches an enemy: game over.
+func lose_cb() { game_over(); }
+
+language("en");
+scene(640, 480, "Collect");
+controls("Arrow keys / WASD: move   |   Collect all the yellows (+10), avoid red");
+on_start(setup);
+level(1, l1);
+level(2, l2);
+level(3, l3);
+on_frame(on_frame_fn);
+on_hit(TAG_PLAYER, TAG_ITEM,  collect_cb);
+on_hit(TAG_PLAYER, TAG_ENEMY, lose_cb);
+play();

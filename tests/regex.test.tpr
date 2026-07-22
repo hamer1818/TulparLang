@@ -1,0 +1,44 @@
+// Coverage: the regex builtin family (regex_match / regex_search /
+// regex_capture / regex_replace — std::regex ECMAScript).
+//
+// These were wired in codegen + runtime but missing from the type checker
+// and LSP tables (fixed 2026-07-21) — and had zero test coverage. Semantics:
+// regex_match is FULL-string match (std::regex_match), regex_search is
+// substring; a pattern that fails to compile is a safe no-op (match/search
+// 0, replace returns the input unchanged).
+// Run: ./tulpar tests/regex.test.tpr
+import "test";
+
+func run_match_vs_search() {
+    assert_eq_int(regex_match("[0-9]+", "12345"), 1);
+    assert_eq_int(regex_match("[0-9]+", "abc123"), 0);  // full-match: fails
+    assert_eq_int(regex_search("[0-9]+", "abc123"), 1); // substring: hits
+    assert_eq_int(regex_search("[0-9]+", "abcdef"), 0);
+}
+
+func run_capture_groups() {
+    var caps = regex_capture("([a-z]+)([0-9]+)", "xx abc123 yy");
+    assert_eq_int(length(caps), 3);
+    assert_eq_str(toString(caps[0]), "abc123");  // whole match
+    assert_eq_str(toString(caps[1]), "abc");
+    assert_eq_str(toString(caps[2]), "123");
+}
+
+func run_replace() {
+    assert_eq_str(regex_replace("[0-9]+", "a1b22c333", "N"), "aNbNcN");
+    assert_eq_str(regex_replace("\\s+", "a  b   c", "_"), "a_b_c");
+}
+
+func run_bad_pattern_safe() {
+    // Uncompilable pattern: no crash, neutral results.
+    assert_eq_int(regex_match("[invalid(", "abc"), 0);
+    assert_eq_int(regex_search("[invalid(", "abc"), 0);
+    assert_eq_str(regex_replace("[invalid(", "abc", "X"), "abc");
+}
+
+print("=== regex builtins ===");
+test("match (full) vs search (substring)", "run_match_vs_search");
+test("capture groups", "run_capture_groups");
+test("replace", "run_replace");
+test("bad pattern is a safe no-op", "run_bad_pattern_safe");
+test_summary();

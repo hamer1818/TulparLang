@@ -1,0 +1,307 @@
+// Yilan (Snake) — tame ile klavye kontrollü ızgara oyunu, 3 BÖLÜM.
+//
+// Çalıştır (masaüstü):  ./tulpar examples/tame_snake.tpr
+// Web (tarayıcı):
+//   source wasm/emsdk/emsdk_env.sh
+//   ./tulpar build --target=web examples/tame_snake.tpr yilan
+//   python3 -m http.server 8090   # http://localhost:8090/yilan.html
+//
+// Kontroller: Ok tuşları veya WASD ile yönlendir. Yem (kırmızı) ye → büyü.
+// Duvara, engele ya da kendine çarpma. Oyun bitince R ile yeniden başla. ESC: çıkış.
+//
+// Bölümler: her bölümde 5 yem ye → sıradaki bölüm. 1) yavaş  2) hızlı
+// 3) en hızlı + engel duvarları. 3'ünü de bitir → KAZANDIN. Skor bölümler
+// arası korunur (arcade motorundaki bölüm semantiğiyle aynı).
+//
+// NOT: bu oyun `arcade` motorunu DEĞİL, doğrudan `tame`'i kullanıyor — motorun
+// bolum() API'si burada yok, bölüm akışı elle kuruldu.
+//
+// Not: test koşucusunda COMPILE_ONLY (pencere döngüsü CI'da bloklar).
+
+import "tame";
+
+// ---- Izgara / pencere ölçüleri ----------------------------------------------
+int COLS = 20;      // yatay hücre
+int ROWS = 15;      // dikey hücre
+int CELL = 32;      // hücre piksel boyutu
+int OY   = 40;      // üstteki skor şeridi yüksekliği (oyun alanı bunun altında)
+int MOVE_FRAMES = 8; // her N karede bir adım — bölüm kurulumunda ayarlanır
+
+// ---- Bölümler ---------------------------------------------------------------
+int LEVELS = 3;            // toplam bölüm
+int FOOD_PER_LEVEL = 5;    // bir bölümü bitiren yem sayısı
+int level = 1;             // şu anki bölüm (1-tabanlı)
+int level_food = 0;        // bu bölümde yenen yem
+float banner_t = 0.0;      // "Bölüm N" afişi için kalan süre (sn)
+
+// Engel hücreleri (sadece 3. bölümde dolu) — paralel diziler.
+array walls_x = [];
+array walls_y = [];
+
+// ---- Oyun durumu (global — kareler arası kalıcı) ----------------------------
+array sx = [10, 9, 8];   // yılan gövdesi hücre X'leri (index 0 = baş)
+array sy = [7, 7, 7];    // yılan gövdesi hücre Y'leri
+int snake_len = 3;
+
+int dir_x = 1;   // uygulanan yön
+int dir_y = 0;
+int next_dx = 1; // sıradaki yön (tuşla kuyruğa alınır, adımda uygulanır)
+int next_dy = 0;
+
+int food_x = 5;
+int food_y = 5;
+
+int score = 0;
+int state = 2;   // 0 = oynanıyor, 1 = oyun bitti, 2 = hazır, 3 = kazandın
+int tick  = 0;
+
+// ---- Yardımcılar ------------------------------------------------------------
+
+// Verilen hücre engel mi?
+func is_wall(cx, cy) {
+    for (int i = 0; i < len(walls_x); i++) {
+        if (walls_x[i] == cx && walls_y[i] == cy) { return true; }
+    }
+    return false;
+}
+
+// 3. bölümün engelleri: iki dikey duvar. Yılanın başlangıç satırını (7) ve
+// başlangıç gövdesini (8..10, satır 7) BİLEREK boş bırakır — yoksa bölüm
+// başlar başlamaz ölürsün.
+func build_walls() {
+    walls_x = [];
+    walls_y = [];
+    for (int i = 1; i < 6; i++) { push(walls_x, 5);  push(walls_y, i); }
+    for (int i = 9; i < 14; i++) { push(walls_x, 14); push(walls_y, i); }
+}
+
+// Bölüm kurulumu: tempo + engeller.
+func level_setup() {
+    if (level == 1) { MOVE_FRAMES = 8; walls_x = []; walls_y = []; }
+    if (level == 2) { MOVE_FRAMES = 6; walls_x = []; walls_y = []; }
+    if (level == 3) { MOVE_FRAMES = 4; build_walls(); }
+}
+
+// Yılanı başlangıç konumuna al (bölüm başında ve R'de).
+func reset_snake() {
+    sx = [10, 9, 8];
+    sy = [7, 7, 7];
+    snake_len = 3;
+    dir_x = 1;  dir_y = 0;
+    next_dx = 1; next_dy = 0;
+}
+
+// Yeme yılanın ya da engelin üstüne denk gelmeyecek boş bir hücre seç.
+func place_food() {
+    for (int t = 0; t < 300; t++) {
+        int fx = randint(0, COLS - 1);
+        int fy = randint(0, ROWS - 1);
+        bool onsnake = false;
+        for (int i = 0; i < snake_len; i++) {
+            if (sx[i] == fx && sy[i] == fy) { onsnake = true; }
+        }
+        if (is_wall(fx, fy)) { onsnake = true; }
+        if (!onsnake) {
+            food_x = fx;
+            food_y = fy;
+            return;
+        }
+    }
+    // (neredeyse hiç ulaşılmaz) alan doluysa herhangi bir hücre
+    food_x = randint(0, COLS - 1);
+    food_y = randint(0, ROWS - 1);
+}
+
+// Baştan başlat — R hem "oyun bitti"den hem "kazandın"dan buraya gelir:
+// skor 0, bölüm 1.
+func reset_game() {
+    level = 1;
+    level_food = 0;
+    banner_t = 0.0;
+    score = 0;
+    state = 2;   // hazır — ilk yön tuşunu bekle (hem başlangıç hem R sonrası)
+    tick = 0;
+    level_setup();
+    reset_snake();
+    place_food();
+}
+
+// Bölümün yem kotası doldu → sıradaki bölüm (ya da kazandın).
+func next_level() {
+    if (level >= LEVELS) {
+        state = 3;              // son bölüm de bitti
+        return;
+    }
+    level = level + 1;
+    level_food = 0;
+    banner_t = 1.2;
+    level_setup();
+    reset_snake();              // engeller değişti — yılanı güvenli başlangıca al
+    place_food();
+}
+
+// Bir adım ilerle: çarpışma, büyüme ve gövde kaydırma.
+func do_move() {
+    int nhx = sx[0] + dir_x;
+    int nhy = sy[0] + dir_y;
+
+    // Duvar çarpışması
+    if (nhx < 0 || nhx >= COLS || nhy < 0 || nhy >= ROWS) {
+        state = 1;
+        return;
+    }
+    // Engel çarpışması (3. bölüm)
+    if (is_wall(nhx, nhy)) {
+        state = 1;
+        return;
+    }
+    // Kendine çarpma (kuyruk bu adımda yer değiştireceği için son parça hariç)
+    for (int i = 0; i < snake_len - 1; i++) {
+        if (sx[i] == nhx && sy[i] == nhy) {
+            state = 1;
+            return;
+        }
+    }
+
+    bool grew = (nhx == food_x && nhy == food_y);
+    if (grew) {
+        // Kuyruğun bir kopyasını ekle; aşağıdaki kaydırma onu doğru konuma taşır.
+        push(sx, sx[snake_len - 1]);
+        push(sy, sy[snake_len - 1]);
+        snake_len = snake_len + 1;
+        score = score + 1;
+        level_food = level_food + 1;
+    }
+
+    // Gövdeyi kuyruğa doğru bir kaydır (her parça öndekinin yerine geçer).
+    for (int i = snake_len - 1; i > 0; i--) {
+        sx[i] = sx[i - 1];
+        sy[i] = sy[i - 1];
+    }
+    sx[0] = nhx;
+    sy[0] = nhy;
+
+    if (grew) {
+        // Kota dolduysa bölüm geç (yılan/engel/yem yeniden kurulur),
+        // yoksa sadece yeni yem koy.
+        if (level_food >= FOOD_PER_LEVEL) { next_level(); }
+        else { place_food(); }
+    }
+}
+
+// ---- Kare güncelleme: girdi + zamanlama + hareket ---------------------------
+// Bütün oyun mantığı run()'ın çağırdığı bu fonksiyonda (wings/rundemo deseni).
+// Mantığı tek büyük while döngüsüne gömmek yerine fonksiyona almak, yönetilen
+// döngünün kare belleğini düzgün yönetmesini sağlar ve top-level döngü
+// tuzaklarından kaçınır.
+func guncelle() {
+    if (banner_t > 0.0) { banner_t = banner_t - frame_time(); }
+
+    // Hazır durumu: ilk yön tuşuna basılınca oyun başlar. (Sol yön yok —
+    // yılan başlangıçta sağa bakar, gövde sola uzanır; sola basmak intihar.)
+    if (state == 2) {
+        if (key_pressed("UP")    || key_pressed("W")) { dir_x = 0; dir_y = -1; next_dx = 0; next_dy = -1; state = 0; }
+        if (key_pressed("DOWN")  || key_pressed("S")) { dir_x = 0; dir_y = 1;  next_dx = 0; next_dy = 1;  state = 0; }
+        if (key_pressed("RIGHT") || key_pressed("D")) { dir_x = 1; dir_y = 0;  next_dx = 1; next_dy = 0;  state = 0; }
+        return;
+    }
+
+    // Girdi — ters yöne dönüşü uygulanan yöne göre engelle.
+    if (key_pressed("UP")    && dir_y != 1)  { next_dx = 0;  next_dy = -1; }
+    if (key_pressed("DOWN")  && dir_y != -1) { next_dx = 0;  next_dy = 1;  }
+    if (key_pressed("LEFT")  && dir_x != 1)  { next_dx = -1; next_dy = 0;  }
+    if (key_pressed("RIGHT") && dir_x != -1) { next_dx = 1;  next_dy = 0;  }
+    if (key_pressed("W")     && dir_y != 1)  { next_dx = 0;  next_dy = -1; }
+    if (key_pressed("S")     && dir_y != -1) { next_dx = 0;  next_dy = 1;  }
+    if (key_pressed("A")     && dir_x != 1)  { next_dx = -1; next_dy = 0;  }
+    if (key_pressed("D")     && dir_x != -1) { next_dx = 1;  next_dy = 0;  }
+
+    if (state == 0) {
+        tick = tick + 1;
+        if (mod(tick, MOVE_FRAMES) == 0) {
+            dir_x = next_dx;
+            dir_y = next_dy;
+            do_move();
+        }
+    } else {
+        // state 1 (bitti) veya 3 (kazandın) → R ile baştan
+        if (key_pressed("R")) { reset_game(); }
+    }
+}
+
+// ---- Kare çizimi ------------------------------------------------------------
+func ciz() {
+    clear(rgb(18, 20, 28));
+
+    // Oyun alanı çerçevesi
+    rect_lines(0, OY, COLS * CELL, ROWS * CELL, DARKGRAY);
+
+    // Engeller (3. bölüm)
+    for (int i = 0; i < len(walls_x); i++) {
+        rect(walls_x[i] * CELL + 1, OY + walls_y[i] * CELL + 1, CELL - 2, CELL - 2, BROWN);
+    }
+
+    // Yem
+    rect(food_x * CELL + 3, OY + food_y * CELL + 3, CELL - 6, CELL - 6, RED);
+
+    // Yılan (baş açık yeşil, gövde yeşil)
+    for (int i = 0; i < snake_len; i++) {
+        int c = GREEN;
+        if (i == 0) { c = LIME; }
+        rect(sx[i] * CELL + 1, OY + sy[i] * CELL + 1, CELL - 2, CELL - 2, c);
+    }
+
+    // Skor şeridi
+    text("Skor: " + toString(score), 12, 8, 26, WHITE);
+    text("uzunluk: " + toString(snake_len), 220, 12, 18, LIGHTGRAY);
+    // Bölüm göstergesi + bu bölümde kalan yem
+    str lv = "Bolum " + toString(level) + "/" + toString(LEVELS);
+    text(lv, 360, 12, 18, GOLD);
+    str kalan = "kalan yem: " + toString(FOOD_PER_LEVEL - level_food);
+    text(kalan, 470, 12, 18, SKYBLUE);
+
+    // Hazır ekranı — ilk tuşu bekle
+    if (state == 2) {
+        str rdy = "YILAN";
+        text(rdy, (COLS * CELL - measure_text(rdy, 48)) / 2, OY + 140, 48, LIME);
+        str rh = "Baslamak icin ok tusuna bas";
+        text(rh, (COLS * CELL - measure_text(rh, 22)) / 2, OY + 205, 22, WHITE);
+        str rh2 = "3 bolum — her bolumde 5 yem ye";
+        text(rh2, (COLS * CELL - measure_text(rh2, 18)) / 2, OY + 240, 18, LIGHTGRAY);
+    }
+
+    // "Bölüm N" afişi (geçişten sonra ~1.2 sn)
+    if (banner_t > 0.0) {
+        str bn = "Bolum " + toString(level);
+        text(bn, (COLS * CELL - measure_text(bn, 44)) / 2, OY + 170, 44, GOLD);
+    }
+
+    // Oyun bitti ekranı
+    if (state == 1) {
+        str go = "OYUN BITTI";
+        text(go, (COLS * CELL - measure_text(go, 44)) / 2, OY + 150, 44, RED);
+        str hint = "R: yeniden basla";
+        text(hint, (COLS * CELL - measure_text(hint, 24)) / 2, OY + 210, 24, WHITE);
+        str sc = "Skorun: " + toString(score);
+        text(sc, (COLS * CELL - measure_text(sc, 24)) / 2, OY + 245, 24, GOLD);
+    }
+
+    // Kazandın ekranı (3 bölüm de bitti)
+    // NOT: yerel adlar diğer dallardan farklı — if blokları scope açmaz,
+    // kardeş dallarda aynı ad aynı slot'u paylaşır.
+    if (state == 3) {
+        str wn = "KAZANDIN";
+        text(wn, (COLS * CELL - measure_text(wn, 48)) / 2, OY + 150, 48, LIME);
+        str wsc = "Toplam skor: " + toString(score);
+        text(wsc, (COLS * CELL - measure_text(wsc, 26)) / 2, OY + 215, 26, GOLD);
+        str wh = "R: bastan basla";
+        text(wh, (COLS * CELL - measure_text(wh, 24)) / 2, OY + 252, 24, WHITE);
+    }
+}
+
+// ---- Ana --------------------------------------------------------------------
+window(COLS * CELL, OY + ROWS * CELL, "Tulpar Tame — Yilan");
+set_fps(60);
+reset_game();
+run(guncelle, ciz);
+print("Yilan bitti. Skor: " + toString(score));

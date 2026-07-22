@@ -73,6 +73,31 @@ func run_where_first_count() {
     assert_eq_int(length(T.all()), 3);
 }
 
+// ---- where/all + opts: order/limit --------------------------------------------------
+func run_order_limit() {
+    json P = model("posts", {"id": "pk", "title": "str!", "prio": "int"});
+    P.create({"title": "a", "prio": 3});
+    P.create({"title": "b", "prio": 1});
+    P.create({"title": "c", "prio": 2});
+    // where() opts'suz — eski 3-arg çağrı hâlâ çalışır (default-arg padding).
+    assert_eq_int(length(P.where("prio > ?", [0])), 3);
+    // order: ORDER BY prio DESC
+    array desc = P.where("prio > ?", [0], {"order": "prio DESC"});
+    assert_eq_str(desc[0]["title"], "a");
+    assert_eq_str(desc[2]["title"], "b");
+    // limit: en yüksek 2 öncelik
+    array top2 = P.where("prio > ?", [0], {"order": "prio DESC", "limit": 2});
+    assert_eq_int(length(top2), 2);
+    assert_eq_str(top2[0]["title"], "a");
+    assert_eq_str(top2[1]["title"], "c");
+    // all() da aynı opts'u kabul eder (koşulsuz sıralama/sayfalama).
+    array all_asc = P.all({"order": "prio ASC", "limit": 1});
+    assert_eq_int(length(all_asc), 1);
+    assert_eq_str(all_asc[0]["title"], "b");
+    // opts'suz all() eskisi gibi çalışır.
+    assert_eq_int(length(P.all()), 3);
+}
+
 // ---- injection: değer her zaman bağlanır -------------------------------------------
 func run_injection_safe() {
     json U = model("users_inj", {"id": "pk", "name": "str!"});
@@ -159,6 +184,7 @@ test("create/find + bool-float cast", "run_create_find");
 test("0/boş değer update (v1 bug fix)", "run_zero_value_update");
 test("şema dışı anahtarlar düşer", "run_unknown_keys_dropped");
 test("where/first/count/all param'lı", "run_where_first_count");
+test("where/all opts: order/limit", "run_order_limit");
 test("injection: bağlı parametre", "run_injection_safe");
 test("save upsert (create+update yolu)", "run_save_upsert");
 test("remove", "run_remove");

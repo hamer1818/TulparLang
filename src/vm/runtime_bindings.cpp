@@ -106,9 +106,22 @@ typedef struct {
   size_t klen;
   uint32_t khash;
   void (*ptr)(VMValue *);
+  // User-parameter count of the target (result ptr excluded). WebAssembly's
+  // call_indirect is strictly type-checked, so the dispatcher MUST invoke the
+  // pointer through a signature whose arity matches the callee exactly or the
+  // module traps ("function signature mismatch"). Seeded by aot_register_func;
+  // -1 means "unknown" (the native dlsym fallback path, where ABI slack lets a
+  // mismatched arity pass harmlessly anyway).
+  int arity;
 } AOTCallCacheEntry;
 
-#define AOT_CALL_CACHE_SLOTS 256
+// 2048 slots: since aot_register_func() now pre-registers every top-level
+// boxed function at program start (so call()/run() resolve without dlsym —
+// the only option on wasm, where dlsym can't see the static module's
+// exports), the table must comfortably exceed the 512-function codegen cap
+// (register_function's kMaxFunctions). 2048 keeps the load factor <0.25 even
+// for a maxed-out program, so open-addressing probe chains stay short.
+#define AOT_CALL_CACHE_SLOTS 2048
 static AOTCallCacheEntry g_call_cache[AOT_CALL_CACHE_SLOTS];
 // Worker-pool servers can have several threads racing into
 // `aot_call_dynamic` for the same handler name. A spinlock on insert
@@ -126,8 +139,11 @@ static inline uint32_t aot_call_hash(const char *s, size_t len) {
   return h;
 }
 
+// Look up a cached entry. Returns the entry pointer (nullptr on miss) and, on
+// hit, writes the target's arity through `out_arity` so the dispatcher can pick
+// a wasm-type-correct call signature.
 static void (*aot_call_cache_lookup(const char *name, size_t nlen,
-                                     uint32_t hash))(VMValue *) {
+                                     uint32_t hash, int *out_arity))(VMValue *) {
   uint32_t i = hash & (AOT_CALL_CACHE_SLOTS - 1);
   for (uint32_t step = 0; step < AOT_CALL_CACHE_SLOTS; step++) {
     AOTCallCacheEntry *e = &g_call_cache[(i + step) & (AOT_CALL_CACHE_SLOTS - 1)];
@@ -136,6 +152,7 @@ static void (*aot_call_cache_lookup(const char *name, size_t nlen,
     const char *k = e->key.load(std::memory_order_acquire);
     if (!k) return nullptr;
     if (e->khash == hash && e->klen == nlen && memcmp(k, name, nlen) == 0) {
+      if (out_arity) *out_arity = e->arity;
       return e->ptr;
     }
   }
@@ -143,7 +160,7 @@ static void (*aot_call_cache_lookup(const char *name, size_t nlen,
 }
 
 static void aot_call_cache_insert(const char *name, size_t nlen, uint32_t hash,
-                                  void (*ptr)(VMValue *)) {
+                                  void (*ptr)(VMValue *), int arity) {
   std::lock_guard<std::mutex> guard(g_call_cache_mu);
   uint32_t i = hash & (AOT_CALL_CACHE_SLOTS - 1);
   for (uint32_t step = 0; step < AOT_CALL_CACHE_SLOTS; step++) {
@@ -154,6 +171,10 @@ static void aot_call_cache_insert(const char *name, size_t nlen, uint32_t hash,
     const char *k = e->key.load(std::memory_order_relaxed);
     if (e->khash == hash && e->klen == nlen && k &&
         memcmp(k, name, nlen) == 0) {
+      // Already present. If a real arity is now known (register path) but the
+      // slot was seeded with -1 by a prior dlsym-path insert, upgrade it so
+      // subsequent wasm dispatches pick the exact signature.
+      if (arity >= 0 && e->arity < 0) e->arity = arity;
       return;
     }
     if (!k) {
@@ -164,15 +185,101 @@ static void aot_call_cache_insert(const char *name, size_t nlen, uint32_t hash,
       e->klen = nlen;
       e->khash = hash;
       e->ptr = ptr;
+      e->arity = arity;
       // Publish the key last with a release store so a concurrent acquire-load
-      // in aot_call_cache_lookup sees the klen/khash/ptr writes above. Correct
-      // on weakly-ordered ARM/aarch64, not just x86 TSO.
+      // in aot_call_cache_lookup sees the klen/khash/ptr/arity writes above.
+      // Correct on weakly-ordered ARM/aarch64, not just x86 TSO.
       e->key.store(copy, std::memory_order_release);
       return;
     }
   }
-  // Table full — silently drop. With 256 slots and typical handler counts
-  // (<50) this never trips.
+  // Table full — silently drop. With 2048 slots and the 512-function codegen
+  // cap this never trips.
+}
+
+// Invoke a resolved boxed entry point through a signature whose arity matches
+// the callee, so WebAssembly's strictly-typed call_indirect never traps. `fp`
+// is `void t_name(VMValue* result, [VMValue* arg0, ...])`; `arg` is the single
+// value call()/call(name,arg) supplies. arity is the callee's user-parameter
+// count (-1 = unknown → native ABI slack, use the 1-arg shape).
+static VMValue aot_invoke_boxed(void (*fp)(VMValue *), int arity, VMValue arg) {
+  VMValue result = VM_VOID();
+  if (arity == 0) {
+    fp(&result); // callee: void(VMValue*) — no user params
+  } else {
+    // arity >= 1 (or unknown): pass the single arg. 0-param handlers on native
+    // ignored it via ABI slack; on wasm arity is always known so we only reach
+    // here for genuine 1-param callees, whose signature this matches exactly.
+    ((void (*)(VMValue *, VMValue *))fp)(&result, &arg);
+  }
+  return result;
+}
+
+// Maximum user-parameter count call(name, a, b, ...) can forward. 8 covers
+// every realistic callback (arcade/game hooks take 0-3); the codegen and the
+// switch below must agree on this cap.
+#define AOT_CALL_MAX_ARGS 8
+
+// N-argument generalisation of aot_invoke_boxed. `fp` is the boxed entry
+// `void t_name(VMValue* result, [VMValue* arg0, ...])`; `args`/`argc` are the
+// values call(name, a, b, ...) supplied. We call through the signature the
+// callee ACTUALLY has (its registered `arity`), padding missing params with
+// VOID and dropping extras — so the pointer count always matches the callee
+// and wasm's typed call_indirect never traps. When arity is unknown (-1, the
+// native dlsym fallback) we trust argc.
+static VMValue aot_invoke_boxed_n(void (*fp)(VMValue *), int arity,
+                                  const VMValue *args, int argc) {
+  VMValue result = VM_VOID();
+  int n = (arity >= 0) ? arity : argc;
+  if (n < 0) n = 0;
+  if (n > AOT_CALL_MAX_ARGS) n = AOT_CALL_MAX_ARGS;
+  // Materialise exactly `n` param slots so each `&slots[i]` is a valid pointer
+  // even when the caller passed fewer values than the callee declares.
+  VMValue slots[AOT_CALL_MAX_ARGS];
+  for (int i = 0; i < n; i++) slots[i] = (i < argc) ? args[i] : VM_VOID();
+  switch (n) {
+  case 0:
+    fp(&result);
+    break;
+  case 1:
+    ((void (*)(VMValue *, VMValue *))fp)(&result, &slots[0]);
+    break;
+  case 2:
+    ((void (*)(VMValue *, VMValue *, VMValue *))fp)(&result, &slots[0],
+                                                    &slots[1]);
+    break;
+  case 3:
+    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *))fp)(
+        &result, &slots[0], &slots[1], &slots[2]);
+    break;
+  case 4:
+    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *))fp)(
+        &result, &slots[0], &slots[1], &slots[2], &slots[3]);
+    break;
+  case 5:
+    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *,
+               VMValue *))fp)(&result, &slots[0], &slots[1], &slots[2],
+                              &slots[3], &slots[4]);
+    break;
+  case 6:
+    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *,
+               VMValue *))fp)(&result, &slots[0], &slots[1], &slots[2],
+                              &slots[3], &slots[4], &slots[5]);
+    break;
+  case 7:
+    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *,
+               VMValue *, VMValue *))fp)(&result, &slots[0], &slots[1],
+                                        &slots[2], &slots[3], &slots[4],
+                                        &slots[5], &slots[6]);
+    break;
+  default: // 8
+    ((void (*)(VMValue *, VMValue *, VMValue *, VMValue *, VMValue *, VMValue *,
+               VMValue *, VMValue *, VMValue *))fp)(
+        &result, &slots[0], &slots[1], &slots[2], &slots[3], &slots[4],
+        &slots[5], &slots[6], &slots[7]);
+    break;
+  }
+  return result;
 }
 
 // AOT Dynamic Call Support
@@ -190,7 +297,9 @@ VMValue aot_call_dynamic(VMValue func_name) {
   // Hash the original name; cache key is the unprefixed form so we don't
   // need to allocate the prefixed buffer on every cache hit.
   uint32_t hash = aot_call_hash(original_name, orig_len);
-  void (*func_ptr)(VMValue *) = aot_call_cache_lookup(original_name, orig_len, hash);
+  int arity = -1;
+  void (*func_ptr)(VMValue *) =
+      aot_call_cache_lookup(original_name, orig_len, hash, &arity);
 
   if (!func_ptr) {
     char name[256];
@@ -214,25 +323,28 @@ VMValue aot_call_dynamic(VMValue func_name) {
       }
       return VM_VOID();
     }
-    aot_call_cache_insert(original_name, orig_len, hash, func_ptr);
+    // Native dlsym fallback: arity unknown (-1). This path is never taken on
+    // wasm, where aot_register_func pre-seeds every function with a real arity.
+    aot_call_cache_insert(original_name, orig_len, hash, func_ptr, -1);
   }
 
-  // Call function
-  // AOT functions signature: void func(VMValue* result_ptr)
-  VMValue result = VM_VOID();
-  func_ptr(&result);
-  return result;
+  // No-argument dispatch: a 0-param callee is invoked as void(VMValue*); a
+  // 1-param callee (called with no arg) gets a VOID placeholder so the wasm
+  // signature still matches. aot_invoke_boxed picks the shape from arity.
+  return aot_invoke_boxed(func_ptr, arity, VM_VOID());
 }
 
 // call(name, arg) — dynamic dispatch that passes ONE argument to the target.
 //
 // Resolution is identical to aot_call_dynamic (same `t_<name>` symbol + cache);
-// only the call shape differs. The target is invoked as a 1-param AOT function
-// `void t_name(VMValue* result, VMValue* arg0)`. Passing the arg to a handler
-// that declares NO parameters is ABI-safe on every platform we target — the
-// extra register/word is simply ignored by the callee — so Wings can hand every
-// handler the request object and 0-arg handlers just don't read it. This is what
-// lets you write either `func list_users()` or `func get_user(req)`.
+// only the call shape differs. A 1-param callee is invoked as
+// `void t_name(VMValue* result, VMValue* arg0)`; a 0-param callee is invoked as
+// `void t_name(VMValue* result)` with the arg dropped. On native, passing the
+// extra arg to a 0-param handler was ABI-safe (the callee ignored the extra
+// register); on wasm the call_indirect type must match exactly, so we branch on
+// the callee's arity (aot_invoke_boxed). Either way Wings can hand every handler
+// the request object and 0-arg handlers just don't read it — you can write
+// `func list_users()` or `func get_user(req)`.
 VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
   if (!IS_STRING(func_name)) {
     printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
@@ -245,7 +357,9 @@ VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
   size_t orig_len = (size_t)str->length;
 
   uint32_t hash = aot_call_hash(original_name, orig_len);
-  void (*func_ptr)(VMValue *) = aot_call_cache_lookup(original_name, orig_len, hash);
+  int arity = -1;
+  void (*func_ptr)(VMValue *) =
+      aot_call_cache_lookup(original_name, orig_len, hash, &arity);
 
   if (!func_ptr) {
     char name[256];
@@ -265,12 +379,78 @@ VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
              name);
       return VM_VOID();
     }
-    aot_call_cache_insert(original_name, orig_len, hash, func_ptr);
+    // Native dlsym fallback: arity unknown (-1) → invoke with the 1-arg shape,
+    // matching the historical ABI-slack behaviour. Never reached on wasm.
+    aot_call_cache_insert(original_name, orig_len, hash, func_ptr, -1);
   }
 
-  VMValue result = VM_VOID();
-  ((void (*)(VMValue *, VMValue *))func_ptr)(&result, &arg);
-  return result;
+  return aot_invoke_boxed(func_ptr, arity, arg);
+}
+
+// call(name, a, b, ...) — dynamic dispatch forwarding N arguments (N >= 2) to
+// the target. Resolution is identical to aot_call_dynamic/_1 (same `t_<name>`
+// symbol + cache); only the number of forwarded params differs. `args` points
+// at `argc` contiguous VMValues the codegen stored in a stack array. The
+// callee's registered arity drives the exact call signature (aot_invoke_boxed_n),
+// so a `func on_hit(a, b)` collision handler can finally be call()'d with its
+// two context args instead of smuggling them through globals.
+VMValue aot_call_dynamic_n(VMValue func_name, VMValue *args, int argc) {
+  if (!IS_STRING(func_name)) {
+    printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
+                                       "Runtime Error: call() expects string"));
+    return VM_VOID();
+  }
+
+  ObjString *str = AS_STRING(func_name);
+  char *original_name = str->chars;
+  size_t orig_len = (size_t)str->length;
+
+  uint32_t hash = aot_call_hash(original_name, orig_len);
+  int arity = -1;
+  void (*func_ptr)(VMValue *) =
+      aot_call_cache_lookup(original_name, orig_len, hash, &arity);
+
+  if (!func_ptr) {
+    char name[256];
+    if (strcmp(original_name, "main") == 0) {
+      snprintf(name, sizeof(name), "main");
+    } else {
+      snprintf(name, sizeof(name), "t_%s", original_name);
+    }
+    func_ptr = (void (*)(VMValue *))tulpar_dlsym(TULPAR_RTLD_DEFAULT, name);
+    if (!func_ptr) {
+      func_ptr = (void (*)(VMValue *))tulpar_dlsym(TULPAR_RTLD_DEFAULT, original_name);
+    }
+    if (!func_ptr) {
+      printf("%s '%s' (AOT)\n",
+             tulpar::i18n::tr_en("Calisma Zamani Hatasi: Fonksiyon bulunamadi",
+                                 "Runtime Error: Function not found"),
+             name);
+      return VM_VOID();
+    }
+    aot_call_cache_insert(original_name, orig_len, hash, func_ptr, -1);
+  }
+
+  return aot_invoke_boxed_n(func_ptr, arity, args, argc);
+}
+
+// Pre-register a top-level function's name -> boxed entry point so call()
+// (and therefore tame's run()/wings' listen()) resolves it from the call
+// cache without ever touching dlsym. Native builds resolved by-name handlers
+// via dlsym(RTLD_DEFAULT) + `-rdynamic`; that path does not exist under
+// Emscripten (a static wasm module exposes no symbol table to dlsym), so the
+// managed game loop `run(update, draw)` printed "Function not found 't_...'"
+// on every frame. The AOT backend now emits one aot_register_func() call per
+// boxed function into main's prologue; here we simply seed the same cache the
+// lookup consults. `name` is the unprefixed source name (e.g. "guncelle") to
+// match aot_call_dynamic's cache key; `ptr` is the `void t_name(VMValue*,...)`
+// entry point; `arity` is its user-parameter count (result ptr excluded), used
+// to pick a wasm-type-correct call signature. Idempotent and thread-safe.
+extern "C" void aot_register_func(const char *name, void *ptr, int arity) {
+  if (!name || !ptr) return;
+  size_t len = strlen(name);
+  uint32_t hash = aot_call_hash(name, len);
+  aot_call_cache_insert(name, len, hash, (void (*)(VMValue *))ptr, arity);
 }
 
 // AOT runtime initialization (locale/UTF-8, console modes)
@@ -825,6 +1005,11 @@ StringBuilder *aot_stringbuilder_new(int initial_capacity) {
 }
 
 void aot_stringbuilder_append(StringBuilder *sb, const char *str, int len) {
+  // Null handle (sb_append(0, ...) or a stale/freed handle stored as 0):
+  // ignore instead of segfaulting the process. Same guard on every sb_*
+  // entry point — a bad handle is a caller bug, but a builtin must not
+  // take the whole program down for it.
+  if (!sb || !str || len <= 0) return;
   if (sb->length + len >= sb->capacity) {
     // Double capacity
     sb->capacity = (sb->length + len + 1) * 2;
@@ -835,8 +1020,25 @@ void aot_stringbuilder_append(StringBuilder *sb, const char *str, int len) {
   sb->buffer[sb->length] = '\0';
 }
 
+// Format a Tulpar float for display. Tulpar's float carries 32-bit (float)
+// precision — the LLVM backend uses a 32-bit float type — so a plain "%g" at
+// 6 sig-figs both loses precision (1000000.5 -> "1e+06") and, at higher fixed
+// precision, exposes the float32 rounding noise (3.14 -> "3.14000010490417").
+// Instead find the SHORTEST decimal that round-trips to the same float32:
+// 3.14 -> "3.14", 1000000.5 -> "1000000.5", 0.1+0.2 -> "0.3". Mirrors what
+// Python/Go/Rust print for their floats. Returns the written length.
+static int aot_format_float(char *buf, size_t n, double value) {
+  float f = (float)value;
+  for (int prec = 1; prec <= 9; prec++) {  // 9 sig-figs round-trips any float32
+    int len = snprintf(buf, n, "%.*g", prec, (double)f);
+    if ((float)strtod(buf, nullptr) == f) return len;
+  }
+  return snprintf(buf, n, "%.9g", (double)f);
+}
+
 // Append VMValue to StringBuilder (handles any type)
 void aot_stringbuilder_append_vmvalue(StringBuilder *sb, VMValue val) {
+  if (!sb) return;
   if (IS_STRING(val)) {
     ObjString *str = AS_STRING(val);
     aot_stringbuilder_append(sb, str->chars, str->length);
@@ -846,7 +1048,7 @@ void aot_stringbuilder_append_vmvalue(StringBuilder *sb, VMValue val) {
     aot_stringbuilder_append(sb, buf, len);
   } else if (IS_FLOAT(val)) {
     char buf[64];
-    int len = snprintf(buf, sizeof(buf), "%g", AS_FLOAT(val));
+    int len = aot_format_float(buf, sizeof(buf), AS_FLOAT(val));
     aot_stringbuilder_append(sb, buf, len);
   } else if (IS_BOOL(val)) {
     const char *s = AS_BOOL(val) ? "true" : "false";
@@ -854,12 +1056,25 @@ void aot_stringbuilder_append_vmvalue(StringBuilder *sb, VMValue val) {
   }
 }
 
+// Pointer-ABI wrapper (the aot_*_ptr pattern): codegen passes the VMValue
+// through a stack slot instead of by value. The old by-value call was
+// declared with the raw {i32,i64} aggregate — the SysV lowering trap the
+// llvm_make_vmvalue_func_type comment documents — so the callee received a
+// corrupted VMValue and AS_STRING dereferenced garbage (segfault on the
+// very first sb_append).
+void aot_stringbuilder_append_vmvalue_ptr(StringBuilder *sb, VMValue *val) {
+  if (!val) return;
+  aot_stringbuilder_append_vmvalue(sb, *val);
+}
+
 VMValue aot_stringbuilder_to_string(StringBuilder *sb) {
+  if (!sb) return VM_OBJ((Obj *)aot_allocate_string("", 0));
   ObjString *str = aot_allocate_string(sb->buffer, sb->length);
   return VM_OBJ((Obj *)str);
 }
 
 void aot_stringbuilder_free(StringBuilder *sb) {
+  if (!sb) return;
   free(sb->buffer);
   free(sb);
 }
@@ -980,6 +1195,11 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
       *result = VM_BOOL(AS_FLOAT(a) < (double)AS_INT(b));
       return;
     default:
+      // Lexicographic string ordering (was: always false).
+      if (IS_STRING(a) && IS_STRING(b)) {
+        *result = VM_BOOL(strcmp(AS_STRING(a)->chars, AS_STRING(b)->chars) < 0);
+        return;
+      }
       *result = VM_BOOL(0);
       return;
     }
@@ -999,6 +1219,10 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
       *result = VM_BOOL(AS_FLOAT(a) > (double)AS_INT(b));
       return;
     default:
+      if (IS_STRING(a) && IS_STRING(b)) {
+        *result = VM_BOOL(strcmp(AS_STRING(a)->chars, AS_STRING(b)->chars) > 0);
+        return;
+      }
       *result = VM_BOOL(0);
       return;
     }
@@ -1018,6 +1242,10 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
       *result = VM_BOOL(AS_FLOAT(a) <= (double)AS_INT(b));
       return;
     default:
+      if (IS_STRING(a) && IS_STRING(b)) {
+        *result = VM_BOOL(strcmp(AS_STRING(a)->chars, AS_STRING(b)->chars) <= 0);
+        return;
+      }
       *result = VM_BOOL(0);
       return;
     }
@@ -1037,6 +1265,10 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
       *result = VM_BOOL(AS_FLOAT(a) >= (double)AS_INT(b));
       return;
     default:
+      if (IS_STRING(a) && IS_STRING(b)) {
+        *result = VM_BOOL(strcmp(AS_STRING(a)->chars, AS_STRING(b)->chars) >= 0);
+        return;
+      }
       *result = VM_BOOL(0);
       return;
     }
@@ -1410,9 +1642,12 @@ void print_vm_value(VMValue value) {
   case VM_VAL_INT:
     printf("%lld", AS_INT(value));
     break;
-  case VM_VAL_FLOAT:
-    printf("%g", AS_FLOAT(value));
+  case VM_VAL_FLOAT: {
+    char fbuf[64];
+    aot_format_float(fbuf, sizeof(fbuf), AS_FLOAT(value));
+    printf("%s", fbuf);
     break;
+  }
   case VM_VAL_OBJ:
     if (IS_STRING(value)) {
       printf("%s", AS_STRING(value)->chars);
@@ -1478,8 +1713,8 @@ VMValue aot_to_string(VMValue value) {
              AS_INT(value));
     break;
   case VM_VAL_FLOAT:
-    snprintf(aot_string_buffer, sizeof(aot_string_buffer), "%g",
-             AS_FLOAT(value));
+    aot_format_float(aot_string_buffer, sizeof(aot_string_buffer),
+                     AS_FLOAT(value));
     break;
   case VM_VAL_BOOL:
     snprintf(aot_string_buffer, sizeof(aot_string_buffer), "%s",
@@ -1738,6 +1973,43 @@ extern "C" void aot_struct_unpack_to(VMValue *vp, int field_count,
   }
 }
 
+// Unpack a boxed struct into a native `{i64,...}` aggregate, resolving fields
+// BY NAME when the source is a string-keyed VM_OBJECT — the representation a
+// struct now takes once it enters a dynamically-typed array (see
+// box_native_struct_as_object). This is what makes `Ent e = ents[i]` read the
+// stored fields instead of zeros. Two source shapes are handled:
+//   * int-indexed ObjStruct (still produced for a `match` subject) → copy by
+//     position, exactly like aot_struct_unpack_to;
+//   * key-value VM_OBJECT → look each declared field name up in the object.
+// `names[i]` is the i-th field's name (declaration order == aggregate order);
+// int/bool payloads land in dst[i] (bool as 0/1). Anything else → 0.
+extern "C" void aot_struct_unpack_named(VMValue *vp, int field_count,
+                                        const char *const *names,
+                                        long long *dst) {
+  if (!dst || field_count <= 0) return;
+  if (vp && IS_STRUCT(*vp)) {
+    ObjStruct *s = AS_STRUCT(*vp);
+    int n = field_count < s->field_count ? field_count : s->field_count;
+    for (int i = 0; i < n; i++) dst[i] = s->fields[i];
+    for (int i = n; i < field_count; i++) dst[i] = 0;
+    return;
+  }
+  if (vp && IS_OBJECT(*vp) && names) {
+    ObjObject *o = AS_OBJECT(*vp);
+    for (int i = 0; i < field_count; i++) {
+      long long v = 0;
+      if (names[i]) {
+        VMValue fv = vm_object_get(o, const_cast<char *>(names[i]));
+        if (IS_INT(fv)) v = AS_INT(fv);
+        else if (IS_BOOL(fv)) v = AS_BOOL(fv) ? 1 : 0;
+      }
+      dst[i] = v;
+    }
+    return;
+  }
+  for (int i = 0; i < field_count; i++) dst[i] = 0;
+}
+
 // ============================================================================
 // JSON Serialization - Optimized for Performance
 // ============================================================================
@@ -1971,7 +2243,7 @@ static void js_serialize(JSBuilder *b, VMValue v, int depth) {
     js_append_n(b, tmp, len);
   } else if (IS_FLOAT(v)) {
     char tmp[64];
-    int len = snprintf(tmp, sizeof(tmp), "%g", AS_FLOAT(v));
+    int len = aot_format_float(tmp, sizeof(tmp), AS_FLOAT(v));
     js_append_n(b, tmp, len);
   } else if (IS_BOOL(v)) {
     if (AS_BOOL(v)) {
@@ -2379,6 +2651,19 @@ VMValue aot_parse_iso8601(VMValue strVal) {
   if (min < 0 || min > 59 || c[16] != ':') return VM_INT(-1);
   int sec = two(17);
   if (sec < 0 || sec > 60) return VM_INT(-1);
+
+  // Reject days the month doesn't have (Feb 30, Apr 31, Feb 29 outside a
+  // leap year). Without this the days-from-civil formula below silently
+  // normalises them into the next month — "2026-02-30" parsed as Mar 2,
+  // which is a data-corruption trap for a parser that returns -1 for every
+  // other malformed input.
+  static const int mdays[12] = {31, 28, 31, 30, 31, 30,
+                                31, 31, 30, 31, 30, 31};
+  int dim = mdays[month - 1];
+  if (month == 2 &&
+      (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)))
+    dim = 29;
+  if (day > dim) return VM_INT(-1);
 
   // Convert to UTC unix seconds without depending on `timegm` (not on
   // Windows' standard CRT) — formula adapted from POSIX/Howard Hinnant's
@@ -3623,43 +3908,46 @@ VMValue aot_style_ptr(VMValue *a, VMValue *b) {
 
 VMValue aot_write_file(VMValue path_val, VMValue content_val) {
   if (!IS_STRING(path_val) || !IS_STRING(content_val))
-    return VM_VOID();
+    return VM_BOOL(false);
   const char *path = AS_STRING(path_val)->chars;
   const char *content = AS_STRING(content_val)->chars;
   int len = AS_STRING(content_val)->length;
 
+  // The documented contract (typeinfer + LSP) is `-> bool`; returning VOID
+  // made a failed write (bad path, no permission, disk full) look identical
+  // to success. True only when the file opened AND every byte landed.
   FILE *f = fopen(path, "wb");
-  if (f) {
-    fwrite(content, 1, len, f);
-    fclose(f);
-  }
-  return VM_VOID();
+  if (!f)
+    return VM_BOOL(false);
+  size_t wrote = fwrite(content, 1, len, f);
+  int close_ok = (fclose(f) == 0);
+  return VM_BOOL(wrote == (size_t)len && close_ok);
 }
 
 VMValue aot_write_file_ptr(VMValue *path_ptr, VMValue *content_ptr) {
   if (!path_ptr || !content_ptr)
-    return VM_VOID();
+    return VM_BOOL(false);
   return aot_write_file(*path_ptr, *content_ptr);
 }
 
 VMValue aot_append_file(VMValue path_val, VMValue content_val) {
   if (!IS_STRING(path_val) || !IS_STRING(content_val))
-    return VM_VOID();
+    return VM_BOOL(false);
   const char *path = AS_STRING(path_val)->chars;
   const char *content = AS_STRING(content_val)->chars;
   int len = AS_STRING(content_val)->length;
 
   FILE *f = fopen(path, "ab");
-  if (f) {
-    fwrite(content, 1, len, f);
-    fclose(f);
-  }
-  return VM_VOID();
+  if (!f)
+    return VM_BOOL(false);
+  size_t wrote = fwrite(content, 1, len, f);
+  int close_ok = (fclose(f) == 0);
+  return VM_BOOL(wrote == (size_t)len && close_ok);
 }
 
 VMValue aot_append_file_ptr(VMValue *path_ptr, VMValue *content_ptr) {
   if (!path_ptr || !content_ptr)
-    return VM_VOID();
+    return VM_BOOL(false);
   return aot_append_file(*path_ptr, *content_ptr);
 }
 
@@ -7273,7 +7561,32 @@ VMValue aot_string_lower_ptr(VMValue *v_ptr) {
   return aot_string_lower(*v_ptr);
 }
 
+// Value equality for int/float/bool/string (mirrors the `==` operator).
+// Used for array membership in contains() / indexOf().
+static bool vm_values_equal(VMValue a, VMValue b) {
+  switch (TYPE_PAIR(a, b)) {
+  case TYPE_INT_INT:     return AS_INT(a) == AS_INT(b);
+  case TYPE_FLOAT_FLOAT: return AS_FLOAT(a) == AS_FLOAT(b);
+  case TYPE_BOOL_BOOL:   return AS_BOOL(a) == AS_BOOL(b);
+  case TYPE_INT_FLOAT:   return (double)AS_INT(a) == AS_FLOAT(b);
+  case TYPE_FLOAT_INT:   return AS_FLOAT(a) == (double)AS_INT(b);
+  default:
+    if (IS_STRING(a) && IS_STRING(b))
+      return strcmp(AS_STRING(a)->chars, AS_STRING(b)->chars) == 0;
+    return false;
+  }
+}
+
+// contains(haystack, needle): substring test for a string haystack, element
+// membership for an array haystack (`contains([1,2,3], 2)` → true). An array
+// haystack used to silently return false (the string-only guard rejected it).
 VMValue aot_string_contains(VMValue haystack, VMValue needle) {
+  if (IS_ARRAY(haystack)) {
+    ObjArray *arr = AS_ARRAY(haystack);
+    for (int i = 0; i < arr->count; i++)
+      if (vm_values_equal(arr->items[i], needle)) return VM_BOOL(1);
+    return VM_BOOL(0);
+  }
   if (!IS_STRING(haystack) || !IS_STRING(needle))
     return VM_BOOL(0);
   ObjString *h = AS_STRING(haystack);
@@ -7319,7 +7632,17 @@ VMValue aot_string_ends_with_ptr(VMValue *s_ptr, VMValue *x_ptr) {
   return aot_string_ends_with(*s_ptr, *x_ptr);
 }
 
+// indexOf(haystack, needle): byte offset of a substring in a string, or the
+// index of the first matching element in an array (`indexOf([9,8,7], 8)` → 1).
+// Returns -1 when absent. An array haystack used to be rejected by the
+// string-only guard.
 VMValue aot_string_index_of(VMValue haystack, VMValue needle) {
+  if (IS_ARRAY(haystack)) {
+    ObjArray *arr = AS_ARRAY(haystack);
+    for (int i = 0; i < arr->count; i++)
+      if (vm_values_equal(arr->items[i], needle)) return VM_INT(i);
+    return VM_INT(-1);
+  }
   if (!IS_STRING(haystack) || !IS_STRING(needle))
     return VM_INT(-1);
   ObjString *h = AS_STRING(haystack);

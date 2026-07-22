@@ -1,0 +1,126 @@
+// Struct-based game — DODGE the falling blocks.
+//
+// Run (desktop):  ./tulpar examples/en/struct_entities.tpr
+// Web (browser):
+//   source wasm/emsdk/emsdk_env.sh
+//   ./tulpar build --target=web examples/en/struct_entities.tpr dodge
+//   python3 -m http.server 8090   # http://localhost:8090/dodge.html
+//
+// Controls: LEFT/RIGHT arrows or A/D to slide. Don't touch the red blocks.
+// Press R to restart when it's over. ESC: quit.
+//
+// NOTE: this example uses `tame` directly (NOT the `arcade` engine) and models
+// entities with REAL structs — no parallel arrays, generation handles, or
+// context-global tricks. A `struct Entity` lives in an array, `step()/hits()`
+// "methods" are called on it, and `blocks[i]` is written back in place. This
+// pattern (nested struct + struct return + array-element write + method call)
+// did not work before the 2026-07 language fixes.
+//
+// Note: COMPILE_ONLY in the test runner (the window loop blocks CI).
+
+import "tame";
+
+int W = 480;
+int H = 640;
+
+// --- Data model: real (nested) structs --------------------------------------
+struct Vec { float x; float y; }
+struct Entity { Vec pos; Vec vel; int w; int h; int alive; }
+
+func mk(float x, float y, float vx, float vy, int w, int h): Entity {
+    Entity e;
+    Vec p; p.x = x; p.y = y;
+    Vec v; v.x = vx; v.y = vy;
+    e.pos = p; e.vel = v; e.w = w; e.h = h; e.alive = 1;
+    return e;
+}
+
+// --- Pure logic (tame-independent -> headless-testable) ---------------------
+func step(Entity e): Entity {             // "method": e.step()
+    e.pos.x = e.pos.x + e.vel.x;
+    e.pos.y = e.pos.y + e.vel.y;
+    return e;
+}
+
+func hits(Entity a, Entity b): bool {     // AABB overlap: a.hits(b)
+    if (a.pos.x + toFloat(a.w) < b.pos.x) { return false; }
+    if (b.pos.x + toFloat(b.w) < a.pos.x) { return false; }
+    if (a.pos.y + toFloat(a.h) < b.pos.y) { return false; }
+    if (b.pos.y + toFloat(b.h) < a.pos.y) { return false; }
+    return true;
+}
+
+// Simple LCG — deterministic "random" x position (0..W-40)
+int _seed = 12345;
+func random_x(): float {
+    _seed = toInt(mod(toFloat(_seed) * 1103.0 + 12345.0, 2147483.0));
+    return mod(toFloat(_seed), toFloat(W - 40));
+}
+
+// --- Game state (global) ----------------------------------------------------
+Entity player = mk(220.0, 580.0, 0.0, 0.0, 40, 40);
+var blocks = [];
+int score = 0;
+int lives = 3;
+int spawn_timer = 0;
+
+func setup() {
+    player = mk(220.0, 580.0, 0.0, 0.0, 40, 40);
+    blocks = [];
+    score = 0;
+    lives = 3;
+    spawn_timer = 0;
+}
+
+window(W, H, "Dodge — struct entity");
+setup();
+
+while (running()) {
+    // --- input: slide the player ---
+    if (key_down("LEFT") || key_down("A")) { player.pos.x = player.pos.x - 6.0; }
+    if (key_down("RIGHT") || key_down("D")) { player.pos.x = player.pos.x + 6.0; }
+    if (player.pos.x < 0.0) { player.pos.x = 0.0; }
+    if (player.pos.x > toFloat(W - 40)) { player.pos.x = toFloat(W - 40); }
+
+    // --- spawn a new block ---
+    if (lives > 0) {
+        spawn_timer = spawn_timer + 1;
+        if (spawn_timer >= 30) {
+            spawn_timer = 0;
+            push(blocks, mk(random_x(), -40.0, 0.0, 3.5, 40, 40));
+        }
+    }
+
+    // --- advance blocks + collision/cleanup ---
+    int i = 0;
+    while (i < len(blocks)) {
+        Entity b = blocks[i];         // read a struct out of the array
+        b = b.step();                 // method-style call
+        if (b.alive == 1 && player.hits(b)) {   // method: player.hits(b)
+            b.alive = 0;
+            lives = lives - 1;
+        }
+        if (b.pos.y > toFloat(H)) { b.alive = 0; score = score + 1; }
+        blocks[i] = b;                // write the struct back
+        i = i + 1;
+    }
+
+    // --- restart ---
+    if (lives <= 0 && key_pressed("R")) { setup(); }
+
+    // --- draw ---
+    frame_begin();
+      clear(rgb(18, 18, 28));
+      rect(player.pos.x, player.pos.y, 40, 40, SKYBLUE);
+      int j = 0;
+      while (j < len(blocks)) {
+          Entity b = blocks[j];
+          if (b.alive == 1) { rect(b.pos.x, b.pos.y, 40, 40, RED); }
+          j = j + 1;
+      }
+      text("Score: " + toString(score) + "   Lives: " + toString(lives), 12, 12, 22, WHITE);
+      if (lives <= 0) { text("GAME OVER — press R", 130, 300, 24, GOLD); }
+    frame_end();
+}
+
+close_window();

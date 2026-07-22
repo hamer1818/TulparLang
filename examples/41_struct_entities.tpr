@@ -1,0 +1,129 @@
+// Struct-tabanlı oyun — düşen bloklardan KAÇ.
+//
+// Çalıştır (masaüstü):  ./tulpar examples/41_struct_entities.tpr
+// Web (tarayıcı):
+//   source wasm/emsdk/emsdk_env.sh
+//   ./tulpar build --target=web examples/41_struct_entities.tpr kac
+//   python3 -m http.server 8090   # http://localhost:8090/kac.html
+//
+// Kontroller: SOL/SAĞ ok veya A/D ile kay. Düşen kırmızı bloklara değme.
+// Oyun bitince R ile yeniden başla. ESC: çıkış.
+//
+// NOT: Bu örnek `arcade` motorunu DEĞİL, doğrudan `tame`'i kullanıyor ve
+// entity'leri GERÇEK struct'larla modelliyor — paralel dizi, generation-handle
+// veya context-global HİLESİ YOK. `struct Entity` bir dizide durur, üstünde
+// `ilerle()/carpisti()` "metotları" çağrılır, `bloklar[i]` yerinde yazılır.
+// Bu desen (iç içe struct + struct dönüşü + dizi elemanına yazma + metot
+// çağrısı) 2026-07 dil düzeltmelerinden önce çalışmıyordu.
+//
+// Not: test koşucusunda COMPILE_ONLY (pencere döngüsü CI'da bloklar).
+
+import "tame";
+
+int W = 480;
+int H = 640;
+
+// --- Veri modeli: gerçek struct'lar (iç içe) --------------------------------
+struct Vec { float x; float y; }
+struct Entity { Vec pos; Vec vel; int w; int h; int alive; }
+
+func mk(float x, float y, float vx, float vy, int w, int h): Entity {
+    Entity e;
+    Vec p; p.x = x; p.y = y;
+    Vec v; v.x = vx; v.y = vy;
+    e.pos = p; e.vel = v; e.w = w; e.h = h; e.alive = 1;
+    return e;
+}
+
+// --- Saf mantık (tame'den bağımsız → headless test edilebilir) --------------
+func ilerle(Entity e): Entity {            // "metot": e.ilerle()
+    e.pos.x = e.pos.x + e.vel.x;
+    e.pos.y = e.pos.y + e.vel.y;
+    return e;
+}
+
+func carpisti(Entity a, Entity b): bool {  // AABB örtüşme: a.carpisti(b)
+    if (a.pos.x + toFloat(a.w) < b.pos.x) { return false; }
+    if (b.pos.x + toFloat(b.w) < a.pos.x) { return false; }
+    if (a.pos.y + toFloat(a.h) < b.pos.y) { return false; }
+    if (b.pos.y + toFloat(b.h) < a.pos.y) { return false; }
+    return true;
+}
+
+// Basit LCG — deterministik "rastgele" x konumu (0..W-40)
+int _seed = 12345;
+func rastgele_x(): float {
+    _seed = toInt(mod(toFloat(_seed) * 1103.0 + 12345.0, 2147483.0));
+    return mod(toFloat(_seed), toFloat(W - 40));
+}
+
+// --- Oyun durumu (global) ---------------------------------------------------
+Entity oyuncu = mk(220.0, 580.0, 0.0, 0.0, 40, 40);
+var bloklar = [];
+int skor = 0;
+int can = 3;
+int spawn_sayaci = 0;
+
+func kur() {
+    oyuncu = mk(220.0, 580.0, 0.0, 0.0, 40, 40);
+    bloklar = [];
+    skor = 0;
+    can = 3;
+    spawn_sayaci = 0;
+}
+
+window(W, H, "Kac — struct entity");
+kur();
+
+while (running()) {
+    // --- girdi: oyuncuyu kaydır ---
+    if (key_down("LEFT") || key_down("A")) { oyuncu.pos.x = oyuncu.pos.x - 6.0; }
+    if (key_down("RIGHT") || key_down("D")) { oyuncu.pos.x = oyuncu.pos.x + 6.0; }
+    if (oyuncu.pos.x < 0.0) { oyuncu.pos.x = 0.0; }
+    if (oyuncu.pos.x > toFloat(W - 40)) { oyuncu.pos.x = toFloat(W - 40); }
+
+    // --- yeni blok üret ---
+    if (can > 0) {
+        spawn_sayaci = spawn_sayaci + 1;
+        if (spawn_sayaci >= 30) {
+            spawn_sayaci = 0;
+            push(bloklar, mk(rastgele_x(), -40.0, 0.0, 3.5, 40, 40));
+        }
+    }
+
+    // --- blokları ilerlet + çarpışma/temizlik ---
+    int i = 0;
+    while (i < len(bloklar)) {
+        Entity b = bloklar[i];        // diziden struct oku
+        b = b.ilerle();               // metot-stili çağrı
+        if (b.alive == 1 && oyuncu.carpisti(b)) {   // metot: oyuncu.carpisti(b)
+            b.alive = 0;
+            can = can - 1;
+        }
+        if (b.pos.y > toFloat(H)) { b.alive = 0; skor = skor + 1; }
+        bloklar[i] = b;               // diziye geri yaz
+        i = i + 1;
+    }
+
+    // --- yeniden başlat ---
+    if (can <= 0 && key_pressed("R")) { kur(); }
+
+    // --- çizim ---
+    frame_begin();
+      clear(rgb(18, 18, 28));
+      // oyuncu
+      rect(oyuncu.pos.x, oyuncu.pos.y, 40, 40, SKYBLUE);
+      // bloklar
+      int j = 0;
+      while (j < len(bloklar)) {
+          Entity b = bloklar[j];
+          if (b.alive == 1) { rect(b.pos.x, b.pos.y, 40, 40, RED); }
+          j = j + 1;
+      }
+      // HUD
+      text("Skor: " + toString(skor) + "   Can: " + toString(can), 12, 12, 22, WHITE);
+      if (can <= 0) { text("BITTI — R ile tekrar", 120, 300, 24, GOLD); }
+    frame_end();
+}
+
+close_window();

@@ -1,0 +1,43 @@
+// Regression: contains() / indexOf() work on arrays, not just strings.
+//
+// Before the 2026-07-20 fix these were string-only (typed {str,str}); an array
+// haystack was silently rejected — contains([1,2,3], 2) returned false and
+// indexOf returned -1 (plus a spurious typecheck warning). They now also do
+// element membership on arrays, comparing by value (int/float/bool/string).
+// Run: ./tulpar tests/array_membership.test.tpr
+import "test";
+
+func run_int_array() {
+    var a = [1, 2, 3, 4, 5];
+    assert_eq_bool(contains(a, 3), true);
+    assert_eq_bool(contains(a, 9), false);
+    assert_eq_int(indexOf(a, 4), 3);
+    assert_eq_int(indexOf(a, 9), -1);
+}
+
+func run_string_array() {
+    var s = ["ali", "veli", "ayse"];
+    assert_eq_bool(contains(s, "veli"), true);
+    assert_eq_bool(contains(s, "yok"), false);
+    assert_eq_int(indexOf(s, "ayse"), 2);
+}
+
+func run_float_array() {
+    var f = [1.5, 2.5, 3.5];
+    assert_eq_bool(contains(f, 2.5), true);
+    assert_eq_int(indexOf(f, 3.5), 2);
+}
+
+func run_string_haystack_still_works() {
+    // The original string-substring behaviour is unchanged.
+    assert_eq_bool(contains("merhaba", "rha"), true);
+    assert_eq_bool(contains("merhaba", "xyz"), false);
+    assert_eq_int(indexOf("merhaba", "ha"), 3);
+}
+
+print("=== contains/indexOf on arrays ===");
+test("int array membership", "run_int_array");
+test("string array membership", "run_string_array");
+test("float array membership", "run_float_array");
+test("string haystack unchanged", "run_string_haystack_still_works");
+test_summary();

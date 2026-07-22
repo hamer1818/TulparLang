@@ -1,0 +1,144 @@
+// Breakout — arcade preset engine, 3 LEVELS.
+// English twin of examples/arcade_tugla.tpr.
+//
+//   ./tulpar examples/en/breakout.tpr
+//
+// Left/Right (A/D) to move the paddle, don't drop the ball. Break all the bricks
+// (+10) → next level. Clear all 3 → YOU WIN. R to restart.
+//
+// Levels: 1) 3 flat rows   2) pyramid   3) gapped wall + faster ball
+//
+// Engine mapping: bricks are `item()` (TAG_ITEM), the ball is `TAG_BULLET` +
+// MV_VELOCITY, the paddle is `TAG_PLAYER` + MV_NONE (we drive it horizontally in
+// on_frame — MV_TOPDOWN would move in 4 directions; the paddle only goes L/R).
+
+import "arcade";
+
+int paddle = 0;
+int ball   = 0;
+int bounced = 0;        // has the ball already bounced this frame? (see break_cb)
+
+int PADDLE_W = 100;
+int PADDLE_Y = 440;
+
+// Global setup — runs before every level's function on each (re)load.
+func setup() {
+    clear_entities();
+    paddle = spawn(270, PADDLE_Y, PADDLE_W, 14, SKYBLUE, TAG_PLAYER, MV_NONE);
+    ball   = spawn(316, 300, 12, 12, GOLD, TAG_BULLET, MV_VELOCITY);
+}
+
+// Lay out one row of bricks. (A wrapper — not a callback, so it may take args;
+// the 0-arg rule only applies to call()-dispatched fns.)
+func brick_row(y, count, x0, color) {
+    for (int i = 0; i < count; i = i + 1) {
+        item(x0 + i * 72, y, 68, 18, color);
+    }
+}
+
+// --- Level 1: 3 flat rows ---------------------------------------------------
+func l1() {
+    set_vel(ball, 190, 0 - 250);
+    brick_row(80,  8, 32, RED);
+    brick_row(104, 8, 32, ORANGE);
+    brick_row(128, 8, 32, GOLD);
+}
+
+// --- Level 2: pyramid -------------------------------------------------------
+func l2() {
+    set_vel(ball, 220, 0 - 290);
+    brick_row(72,  8, 32,  MAROON);
+    brick_row(96,  6, 104, RED);
+    brick_row(120, 4, 176, ORANGE);
+    brick_row(144, 2, 248, GOLD);
+}
+
+// --- Level 3: gapped wall + faster ball -------------------------------------
+func l3() {
+    set_vel(ball, 250, 0 - 330);
+    brick_row(72,  8, 32,  PURPLE);
+    // Row with a gap in the middle — lets the ball slip up and break from behind.
+    brick_row(96,  3, 32,  VIOLET);
+    brick_row(96,  3, 248, VIOLET);
+    brick_row(120, 8, 32,  RED);
+    brick_row(144, 3, 104, ORANGE);
+    brick_row(144, 3, 320, ORANGE);
+}
+
+func on_frame_fn() {
+    float dt = frame_time();
+    if (dt <= 0.0) { dt = 0.0166667; }
+    if (dt > 0.05) { dt = 0.05; }
+    bounced = 0;
+
+    // --- Paddle: horizontal only ---------------------------------------------
+    float rx = get_x(paddle);
+    if (key_down("LEFT")  || key_down("A")) { rx = rx - 430.0 * dt; }
+    if (key_down("RIGHT") || key_down("D")) { rx = rx + 430.0 * dt; }
+    if (rx < 0.0) { rx = 0.0; }
+    float rmax = 640.0 - PADDLE_W;
+    if (rx > rmax) { rx = rmax; }
+    set_pos(paddle, rx, PADDLE_Y);
+
+    // --- Ball: bounce off the edges ------------------------------------------
+    // The direction guard (`&& bvx < 0.0`) avoids edge jitter: flipping every
+    // frame while outside the bound would lock the ball there.
+    float bx  = get_x(ball);
+    float by  = get_y(ball);
+    float bvx = get_vx(ball);
+    float bvy = get_vy(ball);
+    if (bx < 0.0   && bvx < 0.0) { bvx = 0.0 - bvx; }
+    if (bx > 628.0 && bvx > 0.0) { bvx = 0.0 - bvx; }
+    if (by < 0.0   && bvy < 0.0) { bvy = 0.0 - bvy; }
+    set_vel(ball, bvx, bvy);
+
+    // Fell past the bottom → you lose.
+    if (by > 474.0) { game_over(); }
+}
+
+// Ball hits the paddle: bounce up + deflect by hit offset (farther from center →
+// more horizontal) — the classic breakout aiming feel.
+func paddle_cb() {
+    int b = other();                       // me()=paddle (TAG_PLAYER), other()=ball
+    float bx = get_x(b);
+    float offset = (bx + 6.0) - (get_x(paddle) + PADDLE_W * 0.5);
+    float nvx = offset * 5.0;
+    if (nvx > 320.0) { nvx = 320.0; }
+    if (nvx < 0.0 - 320.0) { nvx = 0.0 - 320.0; }
+    float sp = 0.0 - abs_f(get_vy(b));     // always UPWARD
+    set_vel(b, nvx, sp);
+    set_pos(b, bx, PADDLE_Y - 14.0);       // keep it from sinking into the paddle
+}
+
+// Ball hits a brick: break it, +10, bounce vertically. If it was the last, next level.
+//
+// The `bounced` guard: touching two bricks in one frame would flip twice and
+// return the ball to its old direction (looks like it passes through the bricks).
+func break_cb() {
+    int b = me();                          // me()=ball (TAG_BULLET), other()=brick
+    kill(other());
+    score_add(10);
+    if (bounced == 0) {
+        set_vel(b, get_vx(b), 0.0 - get_vy(b));
+        bounced = 1;
+    }
+    if (tag_count(TAG_ITEM) == 0) { next_level(); }
+}
+
+// Absolute value (float) — not in tame.
+func abs_f(v): float {
+    if (v < 0.0) { return 0.0 - v; }
+    return v;
+}
+
+language("en");
+scene(640, 480, "Breakout");
+controls("Left/Right or A/D: paddle   |   Break all bricks (+10), don't drop the ball");
+on_start(setup);
+level(1, l1);
+level(2, l2);
+level(3, l3);
+on_frame(on_frame_fn);
+on_hit(TAG_PLAYER, TAG_BULLET, paddle_cb);
+on_hit(TAG_BULLET, TAG_ITEM,   break_cb);
+play();

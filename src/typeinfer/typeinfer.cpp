@@ -244,7 +244,10 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
       // Too MANY args is an error; too FEW is allowed — the codegen pads the
       // missing trailing slots with a default (0), which is what lets
       // `serve()` stand in for `serve(<default port>)`.
-      if (got > expected) {
+      // `call(name, ...)` is genuinely variadic (it forwards a callee's args by
+      // name), so registering it with one param must not flag the extra args.
+      const bool is_variadic_builtin = (effective_name == "call");
+      if (got > expected && !is_variadic_builtin) {
         report_error(ctx,
                      "Function '%s' expects %d argument(s), got %d at line %d",
                      call->name.c_str(), expected, got, call->loc.line);
@@ -756,8 +759,78 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"replace", TYPE_STRING, {TYPE_STRING, TYPE_STRING, TYPE_STRING}},
       {"substring", TYPE_STRING, {TYPE_STRING, TYPE_INT, TYPE_INT}},
       {"ord", TYPE_INT, {TYPE_STRING, TYPE_INT}},
-      {"indexOf", TYPE_INT, {TYPE_STRING, TYPE_STRING}},
-      {"contains", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
+      // tame (2D oyun) builtin ailesi — import "tame" sarmalayıcılarının
+      // altındaki tm_* native katmanı. Koordinat pozisyonları int VEYA float
+      // kabul eder (oyunlar `x + dx` float'larıyla literal int'leri serbestçe
+      // karıştırır) → TYPE_UNKNOWN; renk her zaman paketlenmiş int
+      // (0xRRGGBBAA, bkz. lib/tame.tpr rgb()/rgba()).
+      {"tm_window", TYPE_BOOL, {TYPE_INT, TYPE_INT, TYPE_STRING}},
+      {"tm_running", TYPE_BOOL, {}},
+      {"tm_close", TYPE_VOID, {}},
+      {"tm_set_fps", TYPE_VOID, {TYPE_INT}},
+      {"tm_begin", TYPE_VOID, {}},
+      {"tm_end", TYPE_VOID, {}},
+      {"tm_fps", TYPE_INT, {}},
+      {"tm_frame_time", TYPE_FLOAT, {}},
+      {"tm_time", TYPE_FLOAT, {}},
+      {"tm_width", TYPE_INT, {}},
+      {"tm_height", TYPE_INT, {}},
+      {"tm_clear", TYPE_VOID, {TYPE_INT}},
+      {"tm_rect", TYPE_VOID,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_INT}},
+      {"tm_rect_lines", TYPE_VOID,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_INT}},
+      {"tm_circle", TYPE_VOID,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_INT}},
+      {"tm_line", TYPE_VOID,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_INT}},
+      {"tm_pixel", TYPE_VOID, {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_INT}},
+      {"tm_text", TYPE_VOID,
+       {TYPE_STRING, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_INT, TYPE_INT}},
+      {"tm_key_down", TYPE_BOOL, {TYPE_STRING}},
+      {"tm_key_pressed", TYPE_BOOL, {TYPE_STRING}},
+      {"tm_key_released", TYPE_BOOL, {TYPE_STRING}},
+      {"tm_mouse_x", TYPE_INT, {}},
+      {"tm_mouse_y", TYPE_INT, {}},
+      {"tm_mouse_down", TYPE_BOOL, {TYPE_INT}},
+      {"tm_mouse_pressed", TYPE_BOOL, {TYPE_INT}},
+      {"tm_mouse_wheel", TYPE_FLOAT, {}},
+      {"tm_touch_count", TYPE_INT, {}},
+      {"tm_touch_x", TYPE_INT, {TYPE_INT}},
+      {"tm_touch_y", TYPE_INT, {TYPE_INT}},
+      // tame Faz 3-4: kaynak handle'ları int'tir (-1 = yükleme başarısız).
+      {"tm_load_texture", TYPE_INT, {TYPE_STRING}},
+      {"tm_draw_texture", TYPE_VOID, {TYPE_INT, TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm_draw_texture_ex", TYPE_VOID,
+       {TYPE_INT, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm_texture_width", TYPE_INT, {TYPE_INT}},
+      {"tm_texture_height", TYPE_INT, {TYPE_INT}},
+      {"tm_unload_texture", TYPE_VOID, {TYPE_INT}},
+      {"tm_load_font", TYPE_INT, {TYPE_STRING, TYPE_INT}},
+      {"tm_text_font", TYPE_VOID,
+       {TYPE_INT, TYPE_STRING, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_INT,
+        TYPE_INT}},
+      {"tm_measure_text", TYPE_INT, {TYPE_STRING, TYPE_INT}},
+      {"tm_load_sound", TYPE_INT, {TYPE_STRING}},
+      {"tm_play_sound", TYPE_VOID, {TYPE_INT}},
+      {"tm_stop_sound", TYPE_VOID, {TYPE_INT}},
+      {"tm_sound_volume", TYPE_VOID, {TYPE_INT, TYPE_UNKNOWN}},
+      {"tm_load_music", TYPE_INT, {TYPE_STRING}},
+      {"tm_play_music", TYPE_VOID, {TYPE_INT}},
+      {"tm_stop_music", TYPE_VOID, {TYPE_INT}},
+      {"tm_music_volume", TYPE_VOID, {TYPE_INT, TYPE_UNKNOWN}},
+      {"tm_triangle", TYPE_VOID,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_UNKNOWN, TYPE_INT}},
+      {"tm_screenshot", TYPE_VOID, {TYPE_STRING}},
+      {"tm_gamepad_available", TYPE_BOOL, {TYPE_INT}},
+      {"tm_gamepad_name", TYPE_STRING, {TYPE_INT}},
+      {"tm_gamepad_down", TYPE_BOOL, {TYPE_INT, TYPE_STRING}},
+      {"tm_gamepad_pressed", TYPE_BOOL, {TYPE_INT, TYPE_STRING}},
+      {"tm_gamepad_axis", TYPE_FLOAT, {TYPE_INT, TYPE_STRING}},
+      // Polymorphic: string haystack (substring) OR array haystack (membership).
+      {"indexOf", TYPE_INT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"contains", TYPE_BOOL, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
       {"startsWith", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
       {"endsWith", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
       {"trim", TYPE_STRING, {TYPE_STRING}},
@@ -772,6 +845,11 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"file_exists", TYPE_BOOL, {TYPE_STRING}},
       // System / process
       {"sys_run", TYPE_INT, {TYPE_STRING}},
+      // Regex (std::regex ECMAScript; match = full-string, search = substring)
+      {"regex_match", TYPE_INT, {TYPE_STRING, TYPE_STRING}},
+      {"regex_search", TYPE_INT, {TYPE_STRING, TYPE_STRING}},
+      {"regex_capture", TYPE_ARRAY, {TYPE_STRING, TYPE_STRING}},
+      {"regex_replace", TYPE_STRING, {TYPE_STRING, TYPE_STRING, TYPE_STRING}},
       // Crypto / content integrity
       {"sha256", TYPE_STRING, {TYPE_STRING}},
       // Password KDF (PBKDF2-HMAC-SHA256)

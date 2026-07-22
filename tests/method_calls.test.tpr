@@ -1,0 +1,48 @@
+// Regression: method-style calls `recv.method(args)` on ANY receiver.
+//
+// The parser rewrites `recv.name(args)` -> `name(recv, args)` (or a module
+// alias `recv__name` when recv is an import alias). Before 2026-07-20 the
+// rewrite only fired for a bare-identifier receiver; an array element
+// (`ents[i].area()`) or a call result (`mk(...).area()`) fell through to a
+// field-closure call and crashed ("Null closure"). Now any receiver works,
+// and a boxed-struct receiver is unpacked into the struct param.
+// Run: ./tulpar tests/method_calls.test.tpr
+import "test";
+
+struct Rect { int w; int h; }
+func area(Rect r): int { return r.w * r.h; }
+func scaled(Rect r, int k): int { return r.w * r.h * k; }
+func mk(int w, int h): Rect { Rect r; r.w = w; r.h = h; return r; }
+
+// json receiver (16_methods pattern) — no struct unpack, receiver passed as-is
+func wide(json box): int { return box["w"]; }
+
+func run_identifier_receiver() {
+    Rect r = mk(3, 5);
+    assert_eq_int(r.area(), 15);        // bare-identifier receiver (was ok)
+    assert_eq_int(r.scaled(2), 30);     // ...with an extra arg
+}
+
+func run_array_element_receiver() {
+    var rs = [];
+    push(rs, mk(3, 5));
+    assert_eq_int(rs[0].area(), 15);    // array element — was "Null closure"
+    assert_eq_int(rs[0].scaled(4), 60); // ...with an extra arg
+}
+
+func run_call_result_receiver() {
+    assert_eq_int(mk(4, 6).area(), 24); // call result as receiver
+}
+
+func run_json_array_element() {
+    var js = [];
+    push(js, { "w": 2, "h": 7 });
+    assert_eq_int(js[0].wide(), 2);     // json receiver from an array element
+}
+
+print("=== method-style calls on any receiver ===");
+test("identifier receiver", "run_identifier_receiver");
+test("array-element receiver", "run_array_element_receiver");
+test("call-result receiver", "run_call_result_receiver");
+test("json array-element receiver", "run_json_array_element");
+test_summary();

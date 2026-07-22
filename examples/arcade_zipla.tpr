@@ -1,0 +1,81 @@
+// Zipla — platformer preset'i (yerçekimi + platformlar + zıplama), 3 BÖLÜM.
+//
+//   ./tulpar examples/arcade_zipla.tpr
+//
+// Sol/Sağ (A/D) ile yürü, SPACE / YUKARI ile zıpla. Yerçekimi, zemin ve
+// `duvar()` platformlarına iniş hazır gelir. Platformları tırmanıp altın hedefe
+// ulaş → +100 ve sıradaki bölüm. 3 bölümü de bitir → KAZANDIN.
+// Fizik/çarpışma/döngü/çizim kodu YOK; bölüm fn'leri sadece düzeni kurar.
+//
+// Bölümler:  1) kolay, 2 platform   2) daha uzak/yüksek atlayışlar, 4 platform
+//            3) dar platformlar + gidip gelen ölümcül engel
+//
+// Zıplama payı (yercekimi 1400 / ziplama 640): tepe yüksekliği ~146px, havada
+// kalma ~0.91sn → ~180px yatay. Düzenler bu yüzden ≤80px dikey / ≤140px yatay
+// açıklıkla kuruldu; bu sınırları aşarsan bölüm bitirilemez hale gelir.
+
+import "arcade";
+
+int engel_id = 0;      // 3. bölümdeki gidip gelen engel
+
+// Global kurulum — her bölüm yüklemesinde bölüm fn'inden ÖNCE çalışır.
+func kur() {
+    temizle();
+    oyuncu_p(40, 380, 28, 28, SKYBLUE);          // platformer oyuncusu (tek satır)
+    duvar(0, 448, 640, 32, DARKGRAY);            // zemin şeridi (her bölümde var)
+    engel_id = 0;
+}
+
+// --- Bölüm 1: iki platform, rahat atlayış -----------------------------------
+func b1() {
+    duvar(160, 350, 130, 20, BROWN);
+    duvar(380, 250, 130, 20, BROWN);
+    esya(430, 212, 24, 24, GOLD);                // hedef: üst platformun üstünde
+}
+
+// --- Bölüm 2: dört platform, zikzak tırmanış --------------------------------
+func b2() {
+    duvar(150, 372, 110, 20, BROWN);
+    duvar(330, 292, 110, 20, BROWN);
+    duvar(140, 212, 110, 20, BROWN);
+    duvar(320, 140, 110, 20, BROWN);
+    esya(365, 102, 24, 24, GOLD);
+}
+
+// --- Bölüm 3: dar platformlar + ölümcül engel -------------------------------
+func b3() {
+    duvar(150, 372, 76, 20, BROWN);
+    duvar(300, 300, 76, 20, BROWN);
+    duvar(460, 228, 76, 20, BROWN);
+    duvar(250, 156, 76, 20, BROWN);
+    esya(288, 118, 24, 24, GOLD);
+    // Yatay gidip gelen engel — tırmanış hattını keser (duvarları takmaz).
+    engel_id = uret(60, 250, 24, 24, RED, TAG_ENEMY, MV_VELOCITY);
+    hiz_ver(engel_id, 170, 0);
+}
+
+// Engeli ekran kenarlarında geri döndür (motor MV_VELOCITY'yi sınırda tutmaz).
+func her_kare_is() {
+    if (engel_id == 0) { return; }
+    if (!yasiyor(engel_id)) { return; }
+    float ex = x_of(engel_id);
+    float evx = vx_of(engel_id);
+    if (ex < 20.0    && evx < 0.0) { hiz_ver(engel_id, 0.0 - evx, 0); }
+    if (ex > 596.0   && evx > 0.0) { hiz_ver(engel_id, 0.0 - evx, 0); }
+}
+
+func hedef_cb() { skor_ekle(100); bolum_gec(); }   // hedefe ulaş → sıradaki bölüm
+func kaybet_cb() { oyun_bitti(); }                 // engele değ → oyun biter
+
+yercekimi(1400);
+ziplama(640);
+sahne(640, 480, "Zipla");
+bilgi("Sol/Sag veya A/D: yuru   SPACE/YUKARI: zipla   |   Altin hedefe ulas");
+baslangicta(kur);
+bolum(1, b1);
+bolum(2, b2);
+bolum(3, b3);
+her_kare(her_kare_is);
+carpisinca(TAG_PLAYER, TAG_ITEM,  hedef_cb);
+carpisinca(TAG_PLAYER, TAG_ENEMY, kaybet_cb);
+oyna();

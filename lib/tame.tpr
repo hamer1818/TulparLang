@@ -1,0 +1,239 @@
+// ============================================
+// Tulpar Tame — 2D Oyun Kütüphanesi
+// "Tulpar'ın T'si, Game'in ame'si." 🎮
+//
+// Native katman: aot_tm_* builtin'leri (runtime/tame_bindings.cpp +
+// runtime/tame_impl.c — vendored raylib, lib/raylib/). Bu dosya o katmanın
+// üstündeki ergonomik sarmalayıcıdır: kısa isimler, adlı renkler, ufak
+// oyun yardımcıları. `import "tame"` eden program otomatik olarak
+// libtulpar_tame.a ile linklenir; tame kullanmayan binary'ler pencere/GL
+// bağımlılığı almaz.
+//
+// Kullanım:
+//   import "tame";
+//   window(800, 450, "Oyunum");
+//   while (running()) {
+//       frame_begin();
+//       clear(DARKBLUE);
+//       rect(100, 100, 50, 50, GOLD);
+//       text("merhaba!", 20, 20, 24, WHITE);
+//       frame_end();
+//   }
+//   close_window();
+//
+// Renkler paketlenmiş int'tir: 0xRRGGBBAA. rgb(r,g,b) / rgba(r,g,b,a) ile
+// üret ya da aşağıdaki adlı renkleri (raylib paleti) kullan.
+// Koordinatlar int veya float olabilir — native katman ikisini de kabul eder.
+// ============================================
+
+// ---- Pencere / döngü -------------------------------------------------------
+
+// Oyun penceresini açar (varsayılan hedef 60 FPS). Görüntü ortamı yoksa
+// false döner ve stderr'e açıklama basılır.
+func window(w, h, title): bool { return tm_window(w, h, title); }
+
+// Ana oyun döngüsünün koşulu: pencere açık ve kapatılmak istenmemiş.
+// (Varsayılan olarak ESC veya pencere kapatma düğmesi döngüyü bitirir.)
+func running(): bool { return tm_running(); }
+
+// Pencereyi kapatır (döngüden sonra çağır).
+func close_window() { tm_close(); }
+
+// Hedef kare hızını değiştirir (varsayılan 60).
+func set_fps(n) { tm_set_fps(n); }
+
+// Kare çizimini başlat / bitir. frame_end() ekrana basar ve FPS bekler.
+func frame_begin() { tm_begin(); }
+func frame_end() { tm_end(); }
+
+func get_fps(): int { return tm_fps(); }
+
+// Son karenin süresi (saniye) — kare-bağımsız hareket için hızla çarp:
+//   x = x + 120.0 * frame_time();
+func frame_time(): float { return tm_frame_time(); }
+
+// Pencere açıldığından beri geçen süre (saniye).
+func elapsed(): float { return tm_time(); }
+
+func screen_width(): int { return tm_width(); }
+func screen_height(): int { return tm_height(); }
+
+// ---- Çizim -----------------------------------------------------------------
+// Hepsi frame_begin() ile frame_end() arasında çağrılır.
+
+func clear(color) { tm_clear(color); }
+func rect(x, y, w, h, color) { tm_rect(x, y, w, h, color); }
+func rect_lines(x, y, w, h, color) { tm_rect_lines(x, y, w, h, color); }
+func circle(x, y, radius, color) { tm_circle(x, y, radius, color); }
+func line(x1, y1, x2, y2, color) { tm_line(x1, y1, x2, y2, color); }
+func pixel(x, y, color) { tm_pixel(x, y, color); }
+func text(s, x, y, size, color) { tm_text(s, x, y, size, color); }
+
+// ---- Girdi -----------------------------------------------------------------
+// Tuş adları: "A".."Z", "0".."9", "SPACE", "ENTER", "ESC", "TAB",
+// "BACKSPACE", "DELETE", "LEFT", "RIGHT", "UP", "DOWN", "SHIFT", "CTRL",
+// "ALT", "HOME", "END", "PAGEUP", "PAGEDOWN", "F1".."F12" (büyük/küçük fark etmez).
+
+func key_down(k): bool { return tm_key_down(k); }       // şu an basılı mı
+func key_pressed(k): bool { return tm_key_pressed(k); } // bu karede basıldı (tek tetik)
+func key_released(k): bool { return tm_key_released(k); }
+
+// Fare düğmeleri: 0 = sol, 1 = sağ, 2 = orta.
+func mouse_x(): int { return tm_mouse_x(); }
+func mouse_y(): int { return tm_mouse_y(); }
+func mouse_down(b): bool { return tm_mouse_down(b); }
+func mouse_pressed(b): bool { return tm_mouse_pressed(b); }
+func mouse_wheel(): float { return tm_mouse_wheel(); }
+
+// Dokunma (mobil). Çok parmak desteklenir; parmak index'i 0'dan başlar.
+// Masaüstünde raylib tek dokunuşu fareye maplediği için mouse_* de çalışır,
+// ama mobilde ASIL girdi budur. touched()/dokunuldu(): en az bir parmak var mı.
+func touch_count(): int { return tm_touch_count(); }
+func dokunma_sayisi(): int { return tm_touch_count(); }
+func touch_x(i): int { return tm_touch_x(i); }
+func dokunma_x(i): int { return tm_touch_x(i); }
+func touch_y(i): int { return tm_touch_y(i); }
+func dokunma_y(i): int { return tm_touch_y(i); }
+func touched(): bool { return tm_touch_count() > 0; }
+func dokunuldu(): bool { return tm_touch_count() > 0; }
+
+// Gamepad (id 0'dan başlar). Butonlar adla: "A"/"B"/"X"/"Y" (Xbox) veya
+// "CROSS"/"CIRCLE"/"SQUARE"/"TRIANGLE" (PS), "UP"/"DOWN"/"LEFT"/"RIGHT",
+// "LB"/"RB" ("L1"/"R1"), "LT"/"RT" ("L2"/"R2"), "START"/"SELECT"/"GUIDE",
+// "L3"/"R3". Eksenler: "LX"/"LY"/"RX"/"RY" (-1..1), "LT"/"RT" (tetik).
+func gamepad_available(id): bool { return tm_gamepad_available(id); }
+func gamepad_name(id): str { return tm_gamepad_name(id); }
+func gamepad_down(id, btn): bool { return tm_gamepad_down(id, btn); }
+func gamepad_pressed(id, btn): bool { return tm_gamepad_pressed(id, btn); }
+func gamepad_axis(id, axis): float { return tm_gamepad_axis(id, axis); }
+
+// ---- Sprite / texture (Faz 3) ----------------------------------------------
+// Kaynaklar int handle'dır (-1 = yükleme başarısız). window() sonrası yükle;
+// close_window() canlı kalan her şeyi kendisi bırakır.
+
+func load_texture(path): int { return tm_load_texture(path); }
+func draw_texture(tex, x, y) { tm_draw_texture(tex, x, y); }
+// scale: 1.0 = orijinal boyut; rotation: derece (saat yönü).
+func draw_texture_ex(tex, x, y, scale, rotation) { tm_draw_texture_ex(tex, x, y, scale, rotation); }
+func texture_width(tex): int { return tm_texture_width(tex); }
+func texture_height(tex): int { return tm_texture_height(tex); }
+func unload_texture(tex) { tm_unload_texture(tex); }
+
+// TTF/OTF font (boyut yüklemede sabitlenir; en iyi sonuç için çizim boyutuyla
+// aynı tut).
+func load_font(path, size): int { return tm_load_font(path, size); }
+func text_font(f, s, x, y, size, color) { tm_text_font(f, s, x, y, size, color); }
+// Varsayılan fontla yazının piksel genişliği — ortalamak için:
+//   text(s, (screen_width() - measure_text(s, 24)) / 2, y, 24, WHITE);
+func measure_text(s, size): int { return tm_measure_text(s, size); }
+
+// ---- Ses / müzik (Faz 4) -----------------------------------------------------
+// Ses aygıtı ilk load_sound/load_music'te otomatik açılır. Çalan müzik
+// stream'leri frame_end() içinde otomatik beslenir — update çağrısı gerekmez.
+
+func load_sound(path): int { return tm_load_sound(path); }
+func play_sound(s) { tm_play_sound(s); }
+func stop_sound(s) { tm_stop_sound(s); }
+func sound_volume(s, v) { tm_sound_volume(s, v); }
+
+func load_music(path): int { return tm_load_music(path); }
+func play_music(m) { tm_play_music(m); }
+func stop_music(m) { tm_stop_music(m); }
+func music_volume(m, v) { tm_music_volume(m, v); }
+
+// ---- Ek çizim / araç ----------------------------------------------------------
+
+// Dolu üçgen — köşe sırası önemsiz (sarım otomatik düzeltilir).
+func triangle(x1, y1, x2, y2, x3, y3, color) { tm_triangle(x1, y1, x2, y2, x3, y3, color); }
+
+// Pencerenin anlık görüntüsünü PNG olarak kaydeder. Not: raylib dosyayı
+// her zaman ÇALIŞMA DİZİNİNE yazar; path'teki dizin kısmı kırpılır
+// (yalnız dosya adı kullanılır).
+func screenshot(path) { tm_screenshot(path); }
+
+// ---- Yönetilen oyun döngüsü (Faz 5) -------------------------------------------
+// Wings'in listen() modeli: update/draw fonksiyonlarını verirsin, döngüyü,
+// kare zamanlamasını VE kare belleğini tame yönetir — her kare sonunda arena
+// checkpoint'e geri sarılır (tek-save-çok-restore deseni), döngü bitince
+// checkpoint bırakılır ve pencere kapanır.
+//
+//   func guncelle() { x = x + 2; }          // oyun mantığı
+//   func ciz() { clear(BLACK); rect(x, 100, 50, 50, GOLD); }
+//   window(800, 450, "Oyunum");
+//   run(guncelle, ciz);
+//
+// KURAL (wings ile aynı): kareler arası yaşayacak oyun durumunu GLOBAL
+// değişkenlerde tut — global'e yazılan değer otomatik kalıcılaşır; update
+// içindeki yerel string/objeler kare sonunda geri sarılır.
+func run(update_fn, draw_fn) {
+    var _tame_wm = arena_save();
+    while (tm_running()) {
+        call(update_fn, 0);
+        tm_begin();
+        call(draw_fn, 0);
+        tm_end();
+        arena_restore(_tame_wm);
+    }
+    arena_drop(_tame_wm);
+    tm_close();
+}
+
+// ---- Renkler ---------------------------------------------------------------
+
+// r,g,b,a ∈ [0,255] → paketlenmiş 0xRRGGBBAA int'i.
+func rgb(r, g, b): int { return r * 16777216 + g * 65536 + b * 256 + 255; }
+func rgba(r, g, b, a): int { return r * 16777216 + g * 65536 + b * 256 + a; }
+
+// raylib paleti — önceden paketlenmiş değerler (a=255).
+int LIGHTGRAY = 3368601855;  // 200,200,200
+int GRAY = 2189591295;       // 130,130,130
+int DARKGRAY = 1347440895;   // 80,80,80
+int YELLOW = 4260954367;     // 253,249,0
+int GOLD = 4291494143;       // 255,203,0
+int ORANGE = 4288741631;     // 255,161,0
+int PINK = 4285383423;       // 255,109,194
+int RED = 3861460991;        // 230,41,55
+int MAROON = 3189848063;     // 190,33,55
+int GREEN = 14954751;        // 0,228,48
+int LIME = 10366975;         // 0,158,47
+int DARKGREEN = 7679231;     // 0,117,44
+int SKYBLUE = 1723858943;    // 102,191,255
+int BLUE = 7991807;          // 0,121,241
+int DARKBLUE = 5418239;      // 0,82,172
+int PURPLE = 3363504127;     // 200,122,255
+int VIOLET = 2268905215;     // 135,60,190
+int DARKPURPLE = 1881112319; // 112,31,126
+int BEIGE = 3551560703;      // 211,176,131
+int BROWN = 2137673727;      // 127,106,79
+int DARKBROWN = 1279209471;  // 76,63,47
+int WHITE = 4294967295;      // 255,255,255
+int BLACK = 255;             // 0,0,0
+int MAGENTA = 4278255615;    // 255,0,255
+int RAYWHITE = 4126537215;   // 245,245,245
+
+// ---- Oyun yardımcıları -------------------------------------------------------
+
+// AABB çakışma testi — iki dikdörtgen kesişiyor mu? (çarpışma tespiti)
+func rect_overlap(x1, y1, w1, h1, x2, y2, w2, h2): bool {
+    if (x1 + w1 <= x2) { return false; }
+    if (x2 + w2 <= x1) { return false; }
+    if (y1 + h1 <= y2) { return false; }
+    if (y2 + h2 <= y1) { return false; }
+    return true;
+}
+
+// Nokta dikdörtgenin içinde mi? (buton/tıklama testi)
+func point_in_rect(px, py, x, y, w, h): bool {
+    if (px < x) { return false; }
+    if (py < y) { return false; }
+    if (px >= x + w) { return false; }
+    if (py >= y + h) { return false; }
+    return true;
+}
+
+// Değeri [lo, hi] aralığına kıstırır.
+func clamp(v, lo, hi) {
+    if (v < lo) { return lo; }
+    if (v > hi) { return hi; }
+    return v;
+}

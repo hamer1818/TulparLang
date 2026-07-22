@@ -1,0 +1,306 @@
+// Snake — a keyboard-controlled grid game with tame, 3 LEVELS.
+// English twin of examples/tame_snake.tpr.
+//
+// Run (desktop):  ./tulpar examples/en/snake.tpr
+// Web (browser):
+//   source wasm/emsdk/emsdk_env.sh
+//   ./tulpar build --target=web examples/en/snake.tpr snake
+//   python3 -m http.server 8090   # http://localhost:8090/snake.html
+//
+// Controls: Arrow keys or WASD to steer. Eat food (red) → grow. Don't hit a
+// wall, an obstacle or yourself. R restarts after game over. ESC: quit.
+//
+// Levels: eat 5 food per level → next level. 1) slow  2) fast  3) fastest +
+// obstacle walls. Clear all 3 → YOU WIN. Score is kept across levels (same
+// level semantics as the arcade engine).
+//
+// NOTE: this game uses `tame` directly, NOT the `arcade` engine — there is no
+// level() API here, the level flow is hand-rolled.
+//
+// Note: COMPILE_ONLY in the test runner (the window loop blocks in CI).
+
+import "tame";
+
+// ---- Grid / window dimensions -----------------------------------------------
+int COLS = 20;      // horizontal cells
+int ROWS = 15;      // vertical cells
+int CELL = 32;      // cell size in pixels
+int OY   = 40;      // top score-strip height (the play field is below it)
+int MOVE_FRAMES = 8; // one step every N frames — set per level
+
+// ---- Levels -----------------------------------------------------------------
+int LEVELS = 3;            // total levels
+int FOOD_PER_LEVEL = 5;    // food count that clears a level
+int level = 1;             // current level (1-based)
+int level_food = 0;        // food eaten in this level
+float banner_t = 0.0;      // remaining time for the "Level N" banner (s)
+
+// Obstacle cells (only filled in level 3) — parallel arrays.
+array walls_x = [];
+array walls_y = [];
+
+// ---- Game state (global — persists across frames) ---------------------------
+array sx = [10, 9, 8];   // snake body cell X's (index 0 = head)
+array sy = [7, 7, 7];    // snake body cell Y's
+int snake_len = 3;
+
+int dir_x = 1;   // applied direction
+int dir_y = 0;
+int next_dx = 1; // queued direction (set by keys, applied on a step)
+int next_dy = 0;
+
+int food_x = 5;
+int food_y = 5;
+
+int score = 0;
+int state = 2;   // 0 = playing, 1 = game over, 2 = ready, 3 = won
+int tick  = 0;
+
+// ---- Helpers ----------------------------------------------------------------
+
+// Is the given cell an obstacle?
+func is_wall(cx, cy) {
+    for (int i = 0; i < len(walls_x); i++) {
+        if (walls_x[i] == cx && walls_y[i] == cy) { return true; }
+    }
+    return false;
+}
+
+// Level 3 obstacles: two vertical walls. It DELIBERATELY leaves the snake's
+// starting row (7) and starting body (8..10, row 7) clear — otherwise you'd die
+// the moment the level begins.
+func build_walls() {
+    walls_x = [];
+    walls_y = [];
+    for (int i = 1; i < 6; i++) { push(walls_x, 5);  push(walls_y, i); }
+    for (int i = 9; i < 14; i++) { push(walls_x, 14); push(walls_y, i); }
+}
+
+// Level setup: tempo + obstacles.
+func level_setup() {
+    if (level == 1) { MOVE_FRAMES = 8; walls_x = []; walls_y = []; }
+    if (level == 2) { MOVE_FRAMES = 6; walls_x = []; walls_y = []; }
+    if (level == 3) { MOVE_FRAMES = 4; build_walls(); }
+}
+
+// Put the snake at its starting position (at level start and on R).
+func reset_snake() {
+    sx = [10, 9, 8];
+    sy = [7, 7, 7];
+    snake_len = 3;
+    dir_x = 1;  dir_y = 0;
+    next_dx = 1; next_dy = 0;
+}
+
+// Pick an empty cell for the food, not on the snake or an obstacle.
+func place_food() {
+    for (int t = 0; t < 300; t++) {
+        int fx = randint(0, COLS - 1);
+        int fy = randint(0, ROWS - 1);
+        bool onsnake = false;
+        for (int i = 0; i < snake_len; i++) {
+            if (sx[i] == fx && sy[i] == fy) { onsnake = true; }
+        }
+        if (is_wall(fx, fy)) { onsnake = true; }
+        if (!onsnake) {
+            food_x = fx;
+            food_y = fy;
+            return;
+        }
+    }
+    // (almost never reached) if the field is full, any cell
+    food_x = randint(0, COLS - 1);
+    food_y = randint(0, ROWS - 1);
+}
+
+// Restart — R comes here from both "game over" and "won": score 0, level 1.
+func reset_game() {
+    level = 1;
+    level_food = 0;
+    banner_t = 0.0;
+    score = 0;
+    state = 2;   // ready — wait for the first arrow key (both start and post-R)
+    tick = 0;
+    level_setup();
+    reset_snake();
+    place_food();
+}
+
+// Level's food quota filled → next level (or won).
+func next_level() {
+    if (level >= LEVELS) {
+        state = 3;              // last level cleared too
+        return;
+    }
+    level = level + 1;
+    level_food = 0;
+    banner_t = 1.2;
+    level_setup();
+    reset_snake();              // obstacles changed — put the snake at a safe start
+    place_food();
+}
+
+// Advance one step: collision, growth and body shift.
+func do_move() {
+    int nhx = sx[0] + dir_x;
+    int nhy = sy[0] + dir_y;
+
+    // Wall collision
+    if (nhx < 0 || nhx >= COLS || nhy < 0 || nhy >= ROWS) {
+        state = 1;
+        return;
+    }
+    // Obstacle collision (level 3)
+    if (is_wall(nhx, nhy)) {
+        state = 1;
+        return;
+    }
+    // Self collision (except the last segment, which vacates this step)
+    for (int i = 0; i < snake_len - 1; i++) {
+        if (sx[i] == nhx && sy[i] == nhy) {
+            state = 1;
+            return;
+        }
+    }
+
+    bool grew = (nhx == food_x && nhy == food_y);
+    if (grew) {
+        // Append a copy of the tail; the shift below moves it into place.
+        push(sx, sx[snake_len - 1]);
+        push(sy, sy[snake_len - 1]);
+        snake_len = snake_len + 1;
+        score = score + 1;
+        level_food = level_food + 1;
+    }
+
+    // Shift the body one toward the tail (each segment takes the one ahead of it).
+    for (int i = snake_len - 1; i > 0; i--) {
+        sx[i] = sx[i - 1];
+        sy[i] = sy[i - 1];
+    }
+    sx[0] = nhx;
+    sy[0] = nhy;
+
+    if (grew) {
+        // If the quota is filled advance the level (snake/obstacles/food reset),
+        // otherwise just place new food.
+        if (level_food >= FOOD_PER_LEVEL) { next_level(); }
+        else { place_food(); }
+    }
+}
+
+// ---- Frame update: input + timing + movement --------------------------------
+// All game logic is in this function called by run() (the wings/rundemo pattern).
+// Putting the logic in a function rather than one big while loop lets the managed
+// loop handle frame memory properly and avoids top-level loop traps.
+func update() {
+    if (banner_t > 0.0) { banner_t = banner_t - frame_time(); }
+
+    // Ready state: the game starts on the first direction key. (No LEFT — the
+    // snake faces right at the start with its body to the left; pressing left is suicide.)
+    if (state == 2) {
+        if (key_pressed("UP")    || key_pressed("W")) { dir_x = 0; dir_y = -1; next_dx = 0; next_dy = -1; state = 0; }
+        if (key_pressed("DOWN")  || key_pressed("S")) { dir_x = 0; dir_y = 1;  next_dx = 0; next_dy = 1;  state = 0; }
+        if (key_pressed("RIGHT") || key_pressed("D")) { dir_x = 1; dir_y = 0;  next_dx = 1; next_dy = 0;  state = 0; }
+        return;
+    }
+
+    // Input — block reversing based on the applied direction.
+    if (key_pressed("UP")    && dir_y != 1)  { next_dx = 0;  next_dy = -1; }
+    if (key_pressed("DOWN")  && dir_y != -1) { next_dx = 0;  next_dy = 1;  }
+    if (key_pressed("LEFT")  && dir_x != 1)  { next_dx = -1; next_dy = 0;  }
+    if (key_pressed("RIGHT") && dir_x != -1) { next_dx = 1;  next_dy = 0;  }
+    if (key_pressed("W")     && dir_y != 1)  { next_dx = 0;  next_dy = -1; }
+    if (key_pressed("S")     && dir_y != -1) { next_dx = 0;  next_dy = 1;  }
+    if (key_pressed("A")     && dir_x != 1)  { next_dx = -1; next_dy = 0;  }
+    if (key_pressed("D")     && dir_x != -1) { next_dx = 1;  next_dy = 0;  }
+
+    if (state == 0) {
+        tick = tick + 1;
+        if (mod(tick, MOVE_FRAMES) == 0) {
+            dir_x = next_dx;
+            dir_y = next_dy;
+            do_move();
+        }
+    } else {
+        // state 1 (game over) or 3 (won) → R restarts
+        if (key_pressed("R")) { reset_game(); }
+    }
+}
+
+// ---- Frame draw -------------------------------------------------------------
+func draw() {
+    clear(rgb(18, 20, 28));
+
+    // Play field frame
+    rect_lines(0, OY, COLS * CELL, ROWS * CELL, DARKGRAY);
+
+    // Obstacles (level 3)
+    for (int i = 0; i < len(walls_x); i++) {
+        rect(walls_x[i] * CELL + 1, OY + walls_y[i] * CELL + 1, CELL - 2, CELL - 2, BROWN);
+    }
+
+    // Food
+    rect(food_x * CELL + 3, OY + food_y * CELL + 3, CELL - 6, CELL - 6, RED);
+
+    // Snake (head light green, body green)
+    for (int i = 0; i < snake_len; i++) {
+        int c = GREEN;
+        if (i == 0) { c = LIME; }
+        rect(sx[i] * CELL + 1, OY + sy[i] * CELL + 1, CELL - 2, CELL - 2, c);
+    }
+
+    // Score strip
+    text("Score: " + toString(score), 12, 8, 26, WHITE);
+    text("length: " + toString(snake_len), 220, 12, 18, LIGHTGRAY);
+    // Level indicator + food left in this level
+    str lv = "Level " + toString(level) + "/" + toString(LEVELS);
+    text(lv, 360, 12, 18, GOLD);
+    str left = "food left: " + toString(FOOD_PER_LEVEL - level_food);
+    text(left, 470, 12, 18, SKYBLUE);
+
+    // Ready screen — wait for the first key
+    if (state == 2) {
+        str rdy = "SNAKE";
+        text(rdy, (COLS * CELL - measure_text(rdy, 48)) / 2, OY + 140, 48, LIME);
+        str rh = "Press an arrow key to start";
+        text(rh, (COLS * CELL - measure_text(rh, 22)) / 2, OY + 205, 22, WHITE);
+        str rh2 = "3 levels — eat 5 food each";
+        text(rh2, (COLS * CELL - measure_text(rh2, 18)) / 2, OY + 240, 18, LIGHTGRAY);
+    }
+
+    // "Level N" banner (~1.2 s after a transition)
+    if (banner_t > 0.0) {
+        str bn = "Level " + toString(level);
+        text(bn, (COLS * CELL - measure_text(bn, 44)) / 2, OY + 170, 44, GOLD);
+    }
+
+    // Game over screen
+    if (state == 1) {
+        str go = "GAME OVER";
+        text(go, (COLS * CELL - measure_text(go, 44)) / 2, OY + 150, 44, RED);
+        str hint = "R: restart";
+        text(hint, (COLS * CELL - measure_text(hint, 24)) / 2, OY + 210, 24, WHITE);
+        str sc = "Your score: " + toString(score);
+        text(sc, (COLS * CELL - measure_text(sc, 24)) / 2, OY + 245, 24, GOLD);
+    }
+
+    // Won screen (all 3 levels cleared)
+    // NOTE: local names differ from the other branches — if blocks don't open a
+    // scope, so sibling branches share the same slot for a same-named local.
+    if (state == 3) {
+        str wn = "YOU WIN";
+        text(wn, (COLS * CELL - measure_text(wn, 48)) / 2, OY + 150, 48, LIME);
+        str wsc = "Total score: " + toString(score);
+        text(wsc, (COLS * CELL - measure_text(wsc, 26)) / 2, OY + 215, 26, GOLD);
+        str wh = "R: restart";
+        text(wh, (COLS * CELL - measure_text(wh, 24)) / 2, OY + 252, 24, WHITE);
+    }
+}
+
+// ---- Main -------------------------------------------------------------------
+window(COLS * CELL, OY + ROWS * CELL, "Tulpar Tame — Snake");
+set_fps(60);
+reset_game();
+run(update, draw);
+print("Snake done. Score: " + toString(score));

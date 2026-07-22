@@ -217,6 +217,21 @@ int main(int argc, char **argv) {
 
   // Flags
   int build_mode = 0;  // build / --build / --aot: save native binary
+  // --target=web / --web: wasm32 üret, em++ ile linkle (yalnız `build` ile
+  // anlamlı — çıktı <out>.html + .js + .wasm, yerelde koşacak binary yok).
+  // Konum bağımsız taranır: `tulpar build oyun.tpr --web` de çalışır.
+  int web_target = 0;
+  // --target=android / --android: iki ABI'lik (arm64-v8a + x86_64) APK
+  // staging'i üret (NDK linki). Yalnız `build` ile anlamlı; ayrıntı
+  // aot_pipeline.cpp android yolunda.
+  int android_target = 0;
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--target=web") == 0 || strcmp(argv[i], "--web") == 0)
+      web_target = 1;
+    if (strcmp(argv[i], "--target=android") == 0 ||
+        strcmp(argv[i], "--android") == 0)
+      android_target = 1;
+  }
   int skip_typecheck = 0;  // --no-typecheck disables the pre-pass warnings
   // Plan 07 PR 1: `tulpar build --debug` (or `-g`) requests an AOT
   // build that keeps debug symbols. Today this just forwards `-g` to
@@ -311,12 +326,42 @@ int main(int argc, char **argv) {
 
 #ifdef TULPAR_AOT_ENABLED
   // Build mode: save native binary (tulpar build file.tpr [output])
+  if (web_target && !build_mode) {
+    fprintf(stderr, "%s\n",
+            tulpar::i18n::tr_en(
+                "--target=web yalnizca 'tulpar build' ile kullanilir: "
+                "tulpar build --target=web oyun.tpr [cikti]",
+                "--target=web only works with 'tulpar build': "
+                "tulpar build --target=web game.tpr [output]"));
+    return 1;
+  }
+  if (android_target && !build_mode) {
+    fprintf(stderr, "%s\n",
+            tulpar::i18n::tr_en(
+                "--target=android yalnizca 'tulpar build' ile kullanilir: "
+                "tulpar build --target=android oyun.tpr [cikti]",
+                "--target=android only works with 'tulpar build': "
+                "tulpar build --target=android game.tpr [output]"));
+    return 1;
+  }
+
   if (build_mode) {
-    if (arg_offset + 1 >= argc) {
+    if (web_target) aot_set_target_web(1);
+    if (android_target) aot_set_target_android(1);
+    // Pozisyonel argümanlar: bayraklar (`--target=web`, `--debug`, ...)
+    // build'den sonra da gelebilir; '-' ile başlayanları atla.
+    const char *src_arg = nullptr;
+    const char *out_arg = nullptr;
+    for (int i = arg_offset + 1; i < argc; i++) {
+      if (argv[i][0] == '-') continue;
+      if (!src_arg) src_arg = argv[i];
+      else if (!out_arg) out_arg = argv[i];
+    }
+    if (!src_arg) {
       printf("Usage: tulpar build <source.tpr> [output_name]\n");
       return 1;
     }
-    char *source = read_file(argv[arg_offset + 1]);
+    char *source = read_file(src_arg);
     if (!source) {
       return 1;
     }
@@ -328,7 +373,7 @@ int main(int argc, char **argv) {
     // we keep the same `[typecheck]` format but treat any warning as
     // an exit-blocking error.
     if (!skip_typecheck) {
-      int n = tulpar::typeinfer_emit_warnings(source, argv[arg_offset + 1]);
+      int n = tulpar::typeinfer_emit_warnings(source, src_arg);
       if (strict_typecheck && n > 0) {
         fprintf(stderr,
                 "[typecheck] %d %s (strict mode); aborting build.\n",
@@ -346,12 +391,12 @@ int main(int argc, char **argv) {
     char default_output_name[256];
     const char *output_name;
 
-    if (arg_offset + 2 < argc) {
+    if (out_arg) {
       // User provided explicit output name
-      output_name = argv[arg_offset + 2];
+      output_name = out_arg;
     } else {
       // Derive from input file
-      const char *input_path = argv[arg_offset + 1];
+      const char *input_path = src_arg;
       const char *base_name = strrchr(input_path, '/');
       if (!base_name)
         base_name = input_path;
@@ -380,7 +425,9 @@ int main(int argc, char **argv) {
     // `tulpar build` path; the silent run path uses a temp output.
     {
       const char *nocache = getenv("TULPAR_AOT_NOCACHE");
-      if (!(nocache && *nocache && *nocache != '0')) {
+      // Web hedefinde cache atlanır: stat edilecek dosya .html/.js/.wasm
+      // üçlüsü ve buradaki native yol yanlış pozitif "up-to-date" üretir.
+      if (!web_target && !(nocache && *nocache && *nocache != '0')) {
         char exe_path[512];
 #ifdef _WIN32
         snprintf(exe_path, sizeof(exe_path), "%s.exe", output_name);
@@ -389,7 +436,7 @@ int main(int argc, char **argv) {
 #endif
         struct stat src_st, exe_st, drv_st;
         if (stat(exe_path, &exe_st) == 0 &&
-            stat(argv[arg_offset + 1], &src_st) == 0) {
+            stat(src_arg, &src_st) == 0) {
           int driver_ok = (stat(argv[0], &drv_st) == 0);
           if (exe_st.st_mtime >= src_st.st_mtime &&
               (!driver_ok || exe_st.st_mtime >= drv_st.st_mtime)) {
@@ -402,7 +449,7 @@ int main(int argc, char **argv) {
     }
 
     AOTResult result = aot_compile_with_filename_debug(
-        source, output_name, argv[arg_offset + 1], emit_debug);
+        source, output_name, src_arg, emit_debug);
     free(source);
     return (result == AOT_OK) ? 0 : 1;
   }

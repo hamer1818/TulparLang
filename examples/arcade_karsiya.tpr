@@ -1,0 +1,93 @@
+// Karsiya Gec (Frogger) — arcade preset motoru, 3 BÖLÜM.
+//
+//   ./tulpar examples/arcade_karsiya.tpr
+//
+// Ok tuşları / WASD ile hareket et; akan araçlara değmeden en üstteki altın
+// şeride ulaş (+50) → sıradaki bölüm. 3 bölümü de bitir → KAZANDIN.
+// Bir araca değersen oyun biter, R ile baştan.
+//
+// Bölümler: 1) 3 şerit yavaş   2) 4 şerit   3) 5 şerit hızlı
+//
+// Her şerit birkaç MV_VELOCITY entity'si; motor onları kendi hızlarıyla sürer,
+// biz sadece ekrandan çıkanı diğer taraftan geri sokuyoruz (sarma). Motor
+// dünyanın 64px dışına taşan velocity entity'lerini otomatik öldürdüğü için
+// sarmayı o sınırdan ÖNCE (±660) yapmak zorundayız.
+
+import "arcade";
+
+int oyuncu_id = 0;
+array arabalar = [];     // bölümün araç handle'ları
+
+int BASLA_X = 308;
+int BASLA_Y = 440;
+
+// Global kurulum — her bölüm yüklemesinde bölüm fn'inden ÖNCE çalışır.
+func kur() {
+    temizle();
+    arabalar = [];
+    oyuncu_id = oyuncu(BASLA_X, BASLA_Y, 24, 24, LIME);
+    hiz_ayarla(oyuncu_id, 230);
+    // Hedef şerit (tek geniş bant). y=58: HUD'un (skor y=10, bilgi y=38..54)
+    // ALTINDA kalmalı — y=10'dayken skor yazısı bandın üstüne biniyordu.
+    esya(8, 58, 624, 26, GOLD);
+}
+
+// Bir şerit araç diz: `adet` araç eşit aralıklı, hepsi `hiz` ile akar.
+// (Sarma fonksiyon — callback değil, argüman alabilir.)
+func serit(y, hiz, adet, renk) {
+    int aralik = toInt(640 / adet);
+    for (int i = 0; i < adet; i = i + 1) {
+        int c = uret(i * aralik, y, 56, 28, renk, TAG_ENEMY, MV_VELOCITY);
+        hiz_ver(c, hiz, 0);
+        push(arabalar, c);
+    }
+}
+
+// --- Bölüm 1: 3 şerit, yavaş ------------------------------------------------
+func b1() {
+    serit(340, 90,       3, RED);
+    serit(250, 0 - 110,  3, ORANGE);
+    serit(160, 130,      3, MAROON);
+}
+
+// --- Bölüm 2: 4 şerit -------------------------------------------------------
+func b2() {
+    serit(370, 130,      4, RED);
+    serit(290, 0 - 150,  3, ORANGE);
+    serit(210, 170,      4, MAROON);
+    serit(130, 0 - 140,  3, PINK);
+}
+
+// --- Bölüm 3: 5 şerit, hızlı ------------------------------------------------
+func b3() {
+    serit(390, 180,      4, RED);
+    serit(320, 0 - 200,  4, ORANGE);
+    serit(250, 220,      5, MAROON);
+    serit(180, 0 - 190,  4, PINK);
+    serit(110, 240,      5, VIOLET);
+}
+
+// Ekrandan çıkan aracı diğer taraftan geri sok (motor sarma yapmaz).
+func her_kare_is() {
+    for (int i = 0; i < len(arabalar); i = i + 1) {
+        int c = arabalar[i];
+        if (!yasiyor(c)) { continue; }
+        float cx = x_of(c);
+        if (vx_of(c) > 0.0 && cx > 660.0)       { konumla(c, 0.0 - 60.0, y_of(c)); }
+        if (vx_of(c) < 0.0 && cx < 0.0 - 60.0)  { konumla(c, 660.0, y_of(c)); }
+    }
+}
+
+func hedef_cb()  { skor_ekle(50); bolum_gec(); }   // altın şeride ulaştın
+func kaybet_cb() { oyun_bitti(); }                 // araca değdin
+
+sahne(640, 480, "Karsiya Gec");
+bilgi("Ok tuslari / WASD: hareket   |   Araclara degmeden altin serite ulas (+50)");
+baslangicta(kur);
+bolum(1, b1);
+bolum(2, b2);
+bolum(3, b3);
+her_kare(her_kare_is);
+carpisinca(TAG_PLAYER, TAG_ITEM,  hedef_cb);
+carpisinca(TAG_PLAYER, TAG_ENEMY, kaybet_cb);
+oyna();

@@ -1,0 +1,145 @@
+import "test";
+import "arcade";
+
+// Arcade bölüm (level) API'si — headless: pencere açmadan, adim(dt) ile.
+//
+// Entity'ler bilerek MV_NONE: pencere yokken key_down() çağırmamak için
+// (adim() zaten frame_time() kullanmaz, yani bütün akış pencere-bağımsız).
+//
+// Kritik nokta: bolum_gec() bir ÇARPIŞMA callback'inden çağrılıyor. Geçiş
+// hemen uygulansaydı clear_entities() _ar_collisions()'ın altındaki paralel
+// dizileri değiştirirdi; motor bu yüzden geçişi kare sonuna erteler. Bu test
+// tam olarak o yolu sürüyor.
+
+int player_id = 0;
+int global_setup_calls = 0;
+
+// Global kurulum — her bölüm yüklemesinde bölüm fn'inden ÖNCE çalışır.
+func kur_global() {
+    global_setup_calls = global_setup_calls + 1;
+    player_id = uret(100, 100, 24, 24, BLUE, TAG_PLAYER, MV_NONE);
+}
+
+// Bölüm kurulumları: N eşya, hepsi oyuncunun üstünde → tek karede toplanır.
+func kur_b1() { esya(100, 100, 16, 16, GOLD); }
+func kur_b2() { esya(100, 100, 16, 16, GOLD); esya(104, 100, 16, 16, GOLD); }
+func kur_b3() { esya(100, 100, 16, 16, GOLD); esya(104, 100, 16, 16, GOLD); esya(108, 100, 16, 16, GOLD); }
+
+// Eşyayı topla; bölümün son eşyasıysa sıradaki bölüme geç.
+func topla_cb() {
+    oldur(oteki());
+    skor_ekle(10);
+    if (tag_sayisi(TAG_ITEM) == 0) { bolum_gec(); }
+}
+
+baslangicta(kur_global);
+bolum(1, kur_b1);
+bolum(2, kur_b2);
+bolum(3, kur_b3);
+carpisinca(TAG_PLAYER, TAG_ITEM, topla_cb);
+
+// ---- Testler ----------------------------------------------------------------
+
+func run_kayit() {
+    assert_eq_int(bolum_sayisi(), 3);
+}
+
+func run_ilk_bolum() {
+    _ar_reset();
+    assert_eq_int(bolum_no(), 1);
+    assert_eq_int(skor(), 0);
+    assert_eq_int(tag_sayisi(TAG_ITEM), 1);      // bölüm 1 düzeni kuruldu
+    assert_eq_int(tag_sayisi(TAG_PLAYER), 1);    // global kurulum da çalıştı
+    assert_eq_bool(bitti_mi(), false);
+}
+
+// 1 → 2 → 3 ilerleme; her bölüm KENDİ düzenini kurmalı.
+func run_ilerleme() {
+    _ar_reset();
+
+    adim(0.016);                                 // bölüm 1'in tek eşyası toplandı
+    assert_eq_int(bolum_no(), 2);
+    assert_eq_int(tag_sayisi(TAG_ITEM), 2);      // bölüm 2 düzeni
+
+    adim(0.016);
+    assert_eq_int(bolum_no(), 3);
+    assert_eq_int(tag_sayisi(TAG_ITEM), 3);      // bölüm 3 düzeni
+}
+
+// Skor bölümler arası KORUNUR (sıfırlanmaz).
+func run_skor_korunur() {
+    _ar_reset();
+    adim(0.016);
+    assert_eq_int(skor(), 10);                   // 1 eşya
+    adim(0.016);
+    assert_eq_int(skor(), 30);                   // + 2 eşya
+    adim(0.016);
+    assert_eq_int(skor(), 60);                   // + 3 eşya
+}
+
+// Son bölümde bolum_gec() → KAZANDIN; fizik durur.
+func run_kazandin() {
+    _ar_reset();
+    adim(0.016);
+    adim(0.016);
+    adim(0.016);                                 // son bölümün eşyaları da bitti
+    assert_eq_bool(kazandin_mi(), true);
+    assert_eq_bool(bitti_mi(), true);                     // kazanmak da "bitiş"
+    assert_eq_int(skor(), 60);                   // toplam skor duruyor
+
+    int lvl = bolum_no();
+    adim(0.016);                                 // state != 0 → no-op olmalı
+    assert_eq_int(bolum_no(), lvl);
+    assert_eq_int(skor(), 60);
+}
+
+// R semantiği: skor 0 + bölüm 1 (hem kaybedince hem kazanınca).
+func run_yeniden_basla() {
+    _ar_reset();
+    adim(0.016);
+    adim(0.016);
+    assert_eq_int(bolum_no(), 3);
+
+    _ar_reset();                                 // R'nin yaptığı
+    assert_eq_int(bolum_no(), 1);
+    assert_eq_int(skor(), 0);
+    assert_eq_bool(bitti_mi(), false);
+    assert_eq_int(tag_sayisi(TAG_ITEM), 1);
+}
+
+// Bölüm geçişinde slot'lar geri kazanılmalı — paralel diziler şişmemeli.
+// Bölüm 3 = oyuncu + 3 eşya = 4 slot; onlarca geçişten sonra da bu tavanda kalmalı.
+func run_slot_sismiyor() {
+    for (int r = 0; r < 20; r = r + 1) {
+        _ar_reset();
+        adim(0.016);
+        adim(0.016);
+        adim(0.016);
+    }
+    // 20 tur × 3 bölüm = 60 yükleme; slot geri kazanımı olmasaydı diziler şişerdi.
+    // Tavan = en kalabalık bölümün slot sayısı (oyuncu + 3 eşya).
+    assert_eq_int(entity_sayisi(), 4);
+    // Kazanma anında son bölümün eşyaları toplanmış, yeni bölüm YÜKLENMEZ →
+    // ayakta kalan tek entity oyuncu.
+    assert_eq_int(canli_sayisi(), 1);
+}
+
+// game_over() eski davranışını korumalı (state 1, kazanma değil).
+func run_oyun_bitti() {
+    _ar_reset();
+    oyun_bitti();
+    assert_eq_bool(bitti_mi(), true);
+    assert_eq_bool(kazandin_mi(), false);
+    _ar_reset();
+    assert_eq_bool(bitti_mi(), false);
+}
+
+test("bolum kaydi", "run_kayit");
+test("ilk bolum kurulur", "run_ilk_bolum");
+test("bolum 1->2->3 ilerler", "run_ilerleme");
+test("skor bolumler arasi korunur", "run_skor_korunur");
+test("son bolumde kazandin", "run_kazandin");
+test("R: skor 0 + bolum 1", "run_yeniden_basla");
+test("bolum gecisinde slot sismez", "run_slot_sismiyor");
+test("oyun_bitti() eski davranis", "run_oyun_bitti");
+test_summary();

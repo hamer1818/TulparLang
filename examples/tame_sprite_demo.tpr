@@ -1,0 +1,53 @@
+// tame Faz 3-4 demo — sprite, ölçek/döndürme, üçgen, ortalanmış yazı, ses.
+//
+// Çalıştır (repo kökünden):  ./tulpar examples/tame_sprite_demo.tpr
+// Sol tık: bip sesi + geminin olduğu yere daire. ESC: çıkış.
+//
+// Not: test koşucusunda COMPILE_ONLY — pencere döngüsü bloklar.
+
+import "tame";
+
+window(800, 450, "Tulpar Tame — sprite & ses");
+
+int ship = load_texture("examples/tame_assets/ship.png");
+int beep = load_sound("examples/tame_assets/beep.wav");
+
+float sx = 100.0;
+float sdx = 3.0;
+
+while (running()) {
+    sx = sx + sdx;
+    if (sx < 0.0) { sdx = 0.0 - sdx; sx = 0.0; }
+    if (sx > 700.0) { sdx = 0.0 - sdx; sx = 700.0; }
+
+    if (mouse_pressed(0)) {
+        play_sound(beep);
+    }
+
+    frame_begin();
+      clear(rgb(15, 15, 35));
+
+      // Başlığı measure_text ile ortala
+      str title = "Tame Sprite Demo";
+      text(title, (800 - measure_text(title, 30)) / 2, 20, 30, WHITE);
+
+      // Sprite: normal + 3x ölçekli/45 derece döndürülmüş
+      if (ship >= 0) {
+          draw_texture(ship, sx, 120.0);
+          draw_texture_ex(ship, 340.0, 220.0, 3.0, 45.0);
+          text("boyut: " + toString(texture_width(ship)) + "x" + toString(texture_height(ship)), 20, 410, 18, LIGHTGRAY);
+      } else {
+          // Varlık bulunamazsa demo yine ayakta kalsın
+          rect(sx, 120.0, 32, 32, GOLD);
+          text("ship.png yuklenemedi — dikdortgen fallback", 20, 410, 18, ORANGE);
+      }
+
+      // Üçgen (köşe sırası önemsiz — sarım otomatik düzeltilir)
+      triangle(600, 320, 700, 180, 760, 340, GREEN);
+
+      text("sol tik: bip | ESC: cikis", 20, 60, 18, SKYBLUE);
+    frame_end();
+}
+
+close_window();
+print("tame_sprite_demo bitti.");

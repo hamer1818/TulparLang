@@ -12,6 +12,13 @@ $compileOnly = @(
   '09_socket_simple.tpr','09_socket_server.tpr','09_socket_client.tpr',
   '11_router_app.tpr','12_threaded_server.tpr','14_api_server.tpr',
   'api_wings.tpr','api_wings_crud.tpr','api_wings_tls.tpr','api_wings_sse.tpr','api_router_crud.tpr','demo_users_api.tpr','wings_simple_test.tpr','wings_middleware_test.tpr','wings_groups_test.tpr','wings_query_test.tpr','wings_response_model_test.tpr','wings_upload_test.tpr','wings_di_test.tpr','wings_todo_api.tpr','wings_auth_api.tpr','wings_notes_db.tpr','wings_redirect.tpr','wings_features_api.tpr','wings_orm_resource.tpr','tulpar_api_demo.tpr',
+  # tame_*.tpr: display'li makinede pencere acip kullanici kapatana dek
+  # bloklar (headless'ta zarif hatayla cikar) — deterministik olsun diye
+  # compile-only; derlemeleri libtulpar_tame.a link zincirini dogrular.
+  'tame_hello.tpr','tame_sprite_demo.tpr','tame_run_demo.tpr','tame_web_mini.tpr','tame_snake.tpr',
+  'arcade_topla.tpr','arcade_zipla.tpr','arcade_nisan.tpr',
+  'arcade_tugla.tpr','arcade_uzay.tpr','arcade_labirent.tpr','arcade_karsiya.tpr',
+  'arcade_ucus.tpr','arcade_goktasi.tpr','41_struct_entities.tpr',
   # utils.tpr is a module designed to be imported by 07_modules.tpr; running
   # it standalone is meaningless (no top-level program), but it should still
   # parse + lower cleanly so we at least catch compile-side regressions.
@@ -101,6 +108,17 @@ foreach ($f in (Get-ChildItem examples\*.tpr | Sort-Object Name)) {
   # but segfaulted at socket_server() — would have caught it here at
   # CI time instead of silently shipping in a release.
   if ($compileOnly -contains $f.Name) {
+    # Game examples (tame/arcade) open a REAL game window on Windows —
+    # there is no DISPLAY to scrub like the Linux runner does — so their
+    # smoke phase is skipped entirely: compiling them already validates
+    # the libtulpar_tame link chain, which is what compile-only is for.
+    if ($f.Name -like 'tame_*' -or $f.Name -like 'arcade_*' -or
+        $f.Name -eq '41_struct_entities.tpr') {
+      Write-Host ("PASS(compile-only, window example - smoke skipped) {0} [compile {1}ms]" -f $f.Name, $compileTime)
+      $compileOnlyPass++
+      Remove-Item -ErrorAction SilentlyContinue -Force "$base.exe","$base.ll","$base.o"
+      continue
+    }
     $smokeProc = $null
     $smokeFailed = $false
     $smokeMsg = ""

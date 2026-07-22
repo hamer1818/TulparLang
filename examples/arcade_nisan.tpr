@@ -1,0 +1,67 @@
+// Nisanci — yukarıdan-bakış atış oyunu, 3 BÖLÜM. ~35 satır oyun kodu.
+//
+//   ./tulpar examples/arcade_nisan.tpr
+//
+// Ok/WASD ile hareket, SPACE ile ateş et. Yukarıdan inen kırmızıları vur (+10).
+// Hedef skora ulaş → sıradaki bölüm; 3 bölümü de bitir → KAZANDIN.
+// Bir düşman sana değerse oyun biter, R ile baştan.
+//
+// Bölümler (skor bölümler arası KORUNDUĞU için hedefler kümülatiftir):
+//   1) yavaş/seyrek, hedef 30   2) daha sık/hızlı, hedef 60   3) en hızlı, hedef 100
+//
+// mermi() ekrandan çıkınca motor onu kendisi siler. Döngü/çarpışma/çizim YOK.
+
+import "arcade";
+
+int player_id = 0;
+int t = 0;              // kare sayacı (periyodik düşman üretimi için)
+
+int spawn_period = 45;  // her N karede bir düşman
+int enemy_vy     = 120; // düşman iniş hızı (px/sn)
+int hedef        = 30;  // bu bölümü bitiren (kümülatif) skor
+
+// Global kurulum — her bölüm yüklemesinde bölüm fn'inden ÖNCE çalışır.
+func kur() {
+    temizle();
+    t = 0;
+    player_id = oyuncu(300, 420, 28, 28, SKYBLUE);
+}
+
+// --- Bölümler: düzen aynı, tempo/hedef değişir ------------------------------
+func b1() { spawn_period = 45; enemy_vy = 120; hedef = 30;  }
+func b2() { spawn_period = 30; enemy_vy = 170; hedef = 60;  }
+func b3() { spawn_period = 20; enemy_vy = 220; hedef = 100; }
+
+func her_kare_is() {
+    t = t + 1;
+
+    // Bölümün temposuna göre tepeden rastgele bir düşman düşür.
+    if (mod(t, spawn_period) == 0) {
+        int ex = randint(20, 600);
+        int e = uret(ex, 0 - 20, 26, 26, RED, TAG_ENEMY, MV_VELOCITY);
+        hiz_ver(e, 0, enemy_vy);
+    }
+
+    // SPACE / aksiyon butonu → yukarı doğru mermi (klavye + dokunmatik).
+    if (ates_basildi()) {
+        mermi(x_of(player_id) + 10.0, y_of(player_id), 8, 14, GOLD, 0, 0 - 420);
+    }
+
+    // Hedef skora ulaşıldıysa sıradaki bölüm (son bölümde → KAZANDIN).
+    if (skor() >= hedef) { bolum_gec(); }
+}
+
+func vur_cb()    { oldur(oteki()); skor_ekle(10); }   // mermi düşmana değince
+func kaybet_cb() { oyun_bitti(); }                    // düşman oyuncuya değince
+
+sahne(640, 480, "Nisanci");
+// Şerit 640px'e sığmalı — uzun metin sağdan kırpılır (bölüm/hedef zaten HUD'da).
+bilgi("Ok/WASD: hareket   SPACE: ates   |   Kirmizilari vur (+10)");
+baslangicta(kur);
+bolum(1, b1);
+bolum(2, b2);
+bolum(3, b3);
+her_kare(her_kare_is);
+carpisinca(TAG_BULLET, TAG_ENEMY,  vur_cb);
+carpisinca(TAG_PLAYER, TAG_ENEMY,  kaybet_cb);
+oyna();

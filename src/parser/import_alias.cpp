@@ -86,26 +86,32 @@ int resolve_qualified_call(ASTNode_C *node,
                            tulpar_function_exists_fn function_exists,
                            void *ctx) {
   if (!node || node->type != AST_FUNCTION_CALL) return 0;
-  if (!node->receiver || node->receiver->type != AST_IDENTIFIER) return 0;
-  if (!node->receiver->name || !node->name) return 0;
-  if (!function_exists) return 0;
+  if (!node->receiver || !node->name) return 0;
 
-  std::string mangled;
-  mangled.reserve(std::strlen(node->receiver->name) + 2 +
-                  std::strlen(node->name));
-  mangled.append(node->receiver->name);
-  mangled.append("__");
-  mangled.append(node->name);
+  // Alias path only applies to a bare-identifier receiver (a possible
+  // `import "..." as <alias>` name). A non-identifier receiver — an array
+  // element (`ents[i].area()`), a call result (`mk().area()`), etc. — can
+  // never be a module alias, so it falls straight through to the method
+  // path below.
+  if (function_exists && node->receiver->type == AST_IDENTIFIER &&
+      node->receiver->name) {
+    std::string mangled;
+    mangled.reserve(std::strlen(node->receiver->name) + 2 +
+                    std::strlen(node->name));
+    mangled.append(node->receiver->name);
+    mangled.append("__");
+    mangled.append(node->name);
 
-  // Alias path: <recv>__<name> already registered (apply_import_alias
-  // path). Rewrite node->name and free the now-redundant receiver.
-  if (function_exists(mangled.c_str(), ctx)) {
-    std::free(node->name);
-    node->name = static_cast<char *>(std::malloc(mangled.size() + 1));
-    std::memcpy(node->name, mangled.c_str(), mangled.size() + 1);
-    ast_node_free(node->receiver);
-    node->receiver = nullptr;
-    return 1;
+    // Alias path: <recv>__<name> already registered (apply_import_alias
+    // path). Rewrite node->name and free the now-redundant receiver.
+    if (function_exists(mangled.c_str(), ctx)) {
+      std::free(node->name);
+      node->name = static_cast<char *>(std::malloc(mangled.size() + 1));
+      std::memcpy(node->name, mangled.c_str(), mangled.size() + 1);
+      ast_node_free(node->receiver);
+      node->receiver = nullptr;
+      return 1;
+    }
   }
 
   // Method path: prepend receiver as the first positional argument. We

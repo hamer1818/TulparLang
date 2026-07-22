@@ -8,7 +8,7 @@ cmake_minimum_required(VERSION 3.14)
 # Keep it >= the latest git tag (currently v3.10.0) so `tulpar --version` and
 # `tulpar update --check` never report a dev build as older than the last
 # release. Bump here when cutting a release; CI overrides via -DTULPAR_VERSION.
-project(TulparLang VERSION 3.10.0 LANGUAGES C CXX)
+project(TulparLang VERSION 3.11.0 LANGUAGES C CXX)
 
 # C++17 Standard (required for std::variant, std::optional, std::unique_ptr)
 set(CMAKE_CXX_STANDARD 17)
@@ -306,23 +306,22 @@ target_compile_definitions(tulpar
     PRIVATE TULPAR_VERSION_STRING="${TULPAR_VERSION}")
 
 # LLVM Linking - Cross-platform support (x86_64 + AArch64)
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64|ARM64")
-    # ARM64/AArch64 architecture (Apple Silicon, Linux ARM)
-    llvm_map_components_to_libnames(llvm_libs 
-        support core irreader 
-        aarch64asmparser aarch64codegen aarch64desc aarch64info
-        passes asmparser asmprinter
-        target mc
-    )
-else()
-    # x86_64 architecture (Intel/AMD)
-    llvm_map_components_to_libnames(llvm_libs 
-        support core irreader 
-        x86asmparser x86codegen x86desc x86info
-        passes asmparser asmprinter
-        target mc
-    )
-endif()
+# WebAssembly components ride along on every arch: `tulpar build
+# --target=web` emits wasm32-unknown-emscripten objects from the same
+# driver (linked by em++ against the wasm/dist archives — see
+# wasm/build_tame_web.sh and the web path in aot_pipeline.cpp).
+# BOTH x86 and AArch64 backends are linked on every host since the
+# Android target (`tulpar build --target=android`): one driver emits
+# arm64-v8a (real devices) AND x86_64 (Android Studio emulator) objects
+# regardless of what CPU it runs on.
+llvm_map_components_to_libnames(llvm_libs
+    support core irreader
+    aarch64asmparser aarch64codegen aarch64desc aarch64info
+    x86asmparser x86codegen x86desc x86info
+    webassemblyasmparser webassemblycodegen webassemblydesc webassemblyinfo
+    passes asmparser asmprinter
+    target mc
+)
 
 # Windows-specific linking requirements (applies to MSVC and MinGW)
 if(WIN32)
@@ -381,6 +380,77 @@ if(WIN32)
             _CRT_SECURE_NO_WARNINGS
             _WINSOCK_DEPRECATED_NO_WARNINGS
         )
+    endif()
+endif()
+
+# ============================================
+# Tame — 2D game runtime (vendored raylib)
+# ============================================
+# libtulpar_tame.a = vendored raylib (lib/raylib/, zlib license) + the
+# aot_tm_* VMValue bindings (runtime/tame_bindings.cpp + tame_impl.c,
+# two-TU split so raylib.h never meets the runtime/windows headers).
+# It is a SEPARATE archive from libtulpar_runtime.a on purpose: the AOT
+# pipeline links it only when the program imports "tame" (see
+# tame_link_flags() in src/aot/aot_pipeline.cpp), so ordinary binaries
+# never gain a GL/window dependency.
+set(RAYLIB_DIR ${PROJECT_SOURCE_DIR}/lib/raylib)
+add_library(raylib_objs OBJECT
+    ${RAYLIB_DIR}/rcore.c
+    ${RAYLIB_DIR}/rshapes.c
+    ${RAYLIB_DIR}/rtextures.c
+    ${RAYLIB_DIR}/rtext.c
+    ${RAYLIB_DIR}/rmodels.c
+    ${RAYLIB_DIR}/raudio.c
+    ${RAYLIB_DIR}/utils.c
+    ${RAYLIB_DIR}/rglfw.c
+)
+target_include_directories(raylib_objs PRIVATE
+    ${RAYLIB_DIR}
+    ${RAYLIB_DIR}/external/glfw/include
+)
+target_compile_definitions(raylib_objs PRIVATE
+    PLATFORM_DESKTOP
+    GRAPHICS_API_OPENGL_33
+)
+if(WIN32)
+    target_compile_definitions(raylib_objs PRIVATE _GLFW_WIN32)
+elseif(APPLE)
+    target_compile_definitions(raylib_objs PRIVATE _GLFW_COCOA)
+    # rglfw.c pulls the Cocoa platform files in as Objective-C on macOS.
+    set_source_files_properties(${RAYLIB_DIR}/rglfw.c PROPERTIES
+        COMPILE_FLAGS "-x objective-c")
+else()
+    target_compile_definitions(raylib_objs PRIVATE _GLFW_X11)
+    # x11_compat vendors the X11 extension headers GLFW needs at compile
+    # time (Xrandr/Xinerama/Xcursor/XInput2 — MIT-licensed, ABI-stable) so
+    # the build works on hosts without the lib*-dev packages. It is listed
+    # after the raylib dirs, and system dirs still come last, so these
+    # shadow /usr/include copies — harmless, the headers are identical.
+    target_include_directories(raylib_objs PRIVATE ${RAYLIB_DIR}/x11_compat)
+endif()
+# Vendored 3rd-party — silence its warnings so they don't drown ours
+# (same treatment as the SQLite amalgamation above).
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(raylib_objs PRIVATE -w)
+elseif(MSVC)
+    target_compile_options(raylib_objs PRIVATE /w)
+endif()
+
+add_library(tulpar_tame STATIC
+    runtime/tame_impl.c
+    runtime/tame_bindings.cpp
+    $<TARGET_OBJECTS:raylib_objs>
+)
+target_include_directories(tulpar_tame PRIVATE
+    ${RAYLIB_DIR}
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_compile_definitions(tulpar_tame PRIVATE TULPAR_RUNTIME_ONLY)
+if(WIN32)
+    target_compile_definitions(tulpar_tame PRIVATE PLATFORM_WINDOWS)
+    if(MSVC)
+        target_compile_options(tulpar_tame PRIVATE /utf-8 /wd4996 /wd4244 /wd4267)
+        target_compile_definitions(tulpar_tame PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
 endif()
 
@@ -450,6 +520,7 @@ endif()
 # ============================================
 install(TARGETS tulpar RUNTIME DESTINATION bin)
 install(TARGETS tulpar_runtime ARCHIVE DESTINATION lib)
+install(TARGETS tulpar_tame ARCHIVE DESTINATION lib)
 
 install(DIRECTORY examples/
     DESTINATION share/tulpar/examples

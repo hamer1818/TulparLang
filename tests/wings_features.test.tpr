@@ -204,6 +204,25 @@ func run_gzip() {
     // python3 gzip.decompress in the live example verification.)
 }
 
+// ---- case-insensitive header lookup (RFC 7230) --------------------------------
+func run_header_case_insensitive() {
+    // Regression (2026-07-21): request headers are stored with the client's
+    // exact casing and lookups were hand-rolled 2-case probes ("Cookie" then
+    // "cookie") — COOKIE / CoOkIe / AUTHORIZATION silently missed, dropping
+    // cookies and bearer tokens. _hdr_ci / req_header now scan
+    // case-insensitively; internal sites (cookies, jwt, form_data, ETag,
+    // gzip) all go through it.
+    json c1 = wings_cookies({"headers": {"COOKIE": "a=1; b=2"}});
+    assert_eq_str(toString(c1["a"]), "1");
+    json c2 = wings_cookies({"headers": {"CoOkIe": "x=9"}});
+    assert_eq_str(toString(c2["x"]), "9");
+    json c3 = wings_cookies({"headers": {"Cookie": "z=5"}});
+    assert_eq_str(toString(c3["z"]), "5");
+    assert_eq_str(req_header({"headers": {"CONTENT-TYPE": "text/html"}}, "Content-Type"),
+                  "text/html");
+    assert_eq_str(req_header({"headers": {}}, "X-Missing"), "");
+}
+
 print("=== wings features (cookies/sessions/cors/rate-limit/jwt/html/etag) ===");
 test("cookie string builder", "run_cookie_str");
 test("set_cookie envelope + delete", "run_set_cookie_envelope");
@@ -218,4 +237,5 @@ test("html + render", "run_html_render");
 test("response_model keeps _headers", "run_filter_keeps_headers");
 test("openapi response schema + bearer", "run_openapi_ext");
 test("gzip_compress", "run_gzip");
+test("case-insensitive header lookup", "run_header_case_insensitive");
 test_summary();

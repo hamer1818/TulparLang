@@ -1,0 +1,167 @@
+import "test";
+
+// `func f(int p): int` (tümü int parametre + int dönüş) fonksiyonları
+// codegen_native_func_def'in elle yazılmış i64 "hızlı yol"una girer. Bu yol
+// bir ALT KÜME emitter'ıdır: kendisinde açık `case`'i olmayan deyimi hata
+// vermeden SESSİZCE ATAR. native_codegen_supports_stmt kapısı emitter'dan daha
+// geniş olduğu için hızlı yola giren ama derlenmeyen kodlar sessizce yanlış
+// sonuç üretiyordu. Kapı artık emitter ile birebir; karşılanmayan biçimler
+// kutulu (boxed) yola düşer.
+//
+// Bu testler hızlı yolun DAVRANIŞINI kilitler — hangi yolu seçtiğini değil.
+
+// Regresyon: else dalı hiç emit edilmiyordu → else'e düşen her girdi 0 dönerdi.
+func secim(int m): int {
+    if (m == 1) { return 111; }
+    else { return 222; }
+}
+
+// Regresyon: if dalındaki return dışındaki deyimler atılıyordu; `int a = 1`
+// atlanınca `a` kayıtsız kalıyor ve DERLEYİCİ ÇÖKÜYORDU (segfault).
+func blok_yerel(int m): int {
+    if (m == 1) {
+        int a = 111;
+        return a;
+    }
+    return 0;
+}
+
+// Regresyon: while gövdesi yalnız atama/tanım emit ediyordu; içteki if
+// atılıyor ve toplam yanlış çıkıyordu (5 yerine 105).
+func birikim(int n): int {
+    int acc = 0;
+    while (n > 0) {
+        if (n == 3) { acc = acc + 100; }
+        acc = acc + 1;
+        n = n - 1;
+    }
+    return acc;
+}
+
+// for döngüsü + gövdede atama (hızlı yolun gerçekten emit ettiği biçim).
+func topla(int n): int {
+    int acc = 0;
+    for (int i = 1; i <= n; i = i + 1) { acc = acc + i; }
+    return acc;
+}
+
+// Korumalı erken dönüş — hızlı yolun desteklediği tam biçim; native kalmalı.
+func fib(int n): int {
+    if (n < 2) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+
+// else-if zinciri (her dal return).
+func kademe(int n): int {
+    if (n == 1) { return 10; }
+    else if (n == 2) { return 20; }
+    else { return 30; }
+}
+
+// --- Döngü gövdesinde builtin çağrısı (2026-07-03'ten beri açık olan bug) ----
+// Native yerel = i64; ama içinde builtin çağrısı olan ifade codegen_typed_expr'den
+// KUTULU (boxed) VMValue döner. Döngü gövdesi emitter'ı yalnız INFERRED_INT
+// durumunu store ediyor, kutulu değeri sessizce ATIYORDU:
+//   - birikim eski değerinde kalıyordu (toplam 0 çıkıyordu)
+//   - döngü değişkeni hiç güncellenmiyordu → sonsuz döngü / segfault
+// Artık kutulu değerin payload'ı (alan 2) açılıyor.
+
+// Regresyon: 0 dönerdi.
+func basamak_topla(int n): int {
+    int i = 0;
+    int toplam = 0;
+    while (i < 3) {
+        toplam = toplam + mod(n, 10);
+        i = i + 1;
+    }
+    return toplam;
+}
+
+// Regresyon: segfault ederdi (b güncellenmediği için).
+func obeb(int a, int b): int {
+    while (b != 0) {
+        int gecici = b;
+        b = mod(a, b);
+        a = gecici;
+    }
+    return a;
+}
+
+// Regresyon: sonsuz döngüde asılırdı (n güncellenmediği için).
+func basamak_sayisi(int n): int {
+    int sayac = 0;
+    while (n > 0) {
+        sayac = sayac + 1;
+        n = toInt(n / 10);
+    }
+    return sayac;
+}
+
+// for gövdesinde builtin çağrısı — aynı sınıf.
+func mod_topla(int n): int {
+    int acc = 0;
+    for (int i = 1; i <= n; i = i + 1) { acc = acc + mod(i, 3); }
+    return acc;
+}
+
+func run_else() {
+    assert_eq_int(secim(1), 111);
+    assert_eq_int(secim(2), 222);   // hata varken 0 dönerdi
+}
+
+func run_blok_yerel() {
+    assert_eq_int(blok_yerel(1), 111);   // hata varken derleyici çökerdi
+    assert_eq_int(blok_yerel(2), 0);
+}
+
+func run_birikim() {
+    assert_eq_int(birikim(5), 105);   // hata varken 5 dönerdi
+    assert_eq_int(birikim(2), 2);
+}
+
+func run_topla() {
+    assert_eq_int(topla(5), 15);
+    assert_eq_int(topla(0), 0);
+}
+
+func run_fib() {
+    assert_eq_int(fib(10), 55);
+    assert_eq_int(fib(1), 1);
+}
+
+func run_kademe() {
+    assert_eq_int(kademe(1), 10);
+    assert_eq_int(kademe(2), 20);
+    assert_eq_int(kademe(9), 30);   // hata varken 0 dönerdi
+}
+
+func run_birikim_builtin() {
+    assert_eq_int(basamak_topla(7), 21);   // hata varken 0 dönerdi
+}
+
+func run_obeb() {
+    assert_eq_int(obeb(48, 18), 6);        // hata varken segfault
+    assert_eq_int(obeb(17, 5), 1);
+}
+
+func run_basamak_sayisi() {
+    assert_eq_int(basamak_sayisi(12345), 5);   // hata varken sonsuz döngü
+    assert_eq_int(basamak_sayisi(7), 1);
+}
+
+func run_mod_topla() {
+    // 1..6 icin mod(i,3): 1+2+0+1+2+0 = 6
+    assert_eq_int(mod_topla(6), 6);
+}
+
+test("if/else: else dali emit edilmeli", "run_else");
+test("if blogunda yerel tanim", "run_blok_yerel");
+test("while govdesinde ic ice if", "run_birikim");
+test("for govdesinde birikim", "run_topla");
+test("korumali erken donus (fib)", "run_fib");
+test("else-if zinciri", "run_kademe");
+test("while govdesinde builtin cagrisi (birikim)", "run_birikim_builtin");
+test("while + builtin: Euclid OBEB", "run_obeb");
+test("while + builtin: basamak sayisi", "run_basamak_sayisi");
+test("for govdesinde builtin cagrisi", "run_mod_topla");
+test_summary();

@@ -7,6 +7,417 @@ language/stdlib/ABI changes, MINOR for backwards-compatible features, PATCH for
 fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md));
 `tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
 
+## [v3.11.0]
+
+The Tame 2D game library and its two new compile targets — WebAssembly
+(`tulpar build --target=web`) and **native Android**
+(`tulpar build --target=android`) — land together, turning pure-TulparLang
+games into browser and mobile apps. The `import "arcade"` preset engine gains a
+level system, entity slot recycling, generation-tagged handles, and on-screen
+touch controls, so all 10 bundled games are touch-playable on-device. Alongside
+the game work, a batch of language/runtime correctness fixes — struct↔array
+round-trips, `call()` N-argument dispatch, method-style calls on any receiver,
+closures on the native fast path, and `try`/`catch` handler-stack hygiene. All
+backwards-compatible.
+
+### Added
+- **Native Android target — `tulpar build --target=android game.tpr out`.**
+  Tame/arcade games now compile to real Android apps (NativeActivity +
+  raylib GLES2), verified rendering + animating + reading touch on the
+  Android Studio emulator. One compiled module is emitted for both ABIs
+  (arm64-v8a for devices, x86_64 for the emulator) and linked with the NDK
+  into `lib/<abi>/libtulpargame.so`, then an APK is staged with a
+  NativeActivity manifest. Mirrors the web target's architecture:
+  `android/build_tame_android.sh` cross-compiles the runtime + raylib
+  `PLATFORM_ANDROID` + `native_app_glue` + tame bindings into per-ABI
+  static archives; `android/package_apk.sh` runs aapt2 + zipalign (16KB
+  pages) + apksigner (driving the Windows SDK tools over WSL interop when
+  there's no Linux SDK); `android/install_run.sh` does adb install + launch
+  + screencap. The whole arcade preset engine (`import "arcade"` — entity
+  store, MTV collision, level system, `call()`-based hooks) runs on-device
+  unchanged. `async` is unsupported on Android (bionic has no
+  makecontext/swapcontext, same as web).
+- **Tame touch input — `touch_count()` / `touch_x(i)` / `touch_y(i)` /
+  `touched()`** (bilingual: `dokunma_sayisi`/`dokunma_x`/`dokunma_y`/
+  `dokunuldu`). Multi-touch finger positions for mobile games; on desktop a
+  single touch still maps to the mouse so existing `mouse_*` code keeps
+  working. 52 `aot_tm_*` bindings now.
+- **Arcade touch controls — on-screen D-pad + action button.** The `import
+  "arcade"` preset engine now draws and reads a translucent control overlay
+  (bottom-left 4-way D-pad, bottom-right action/jump/fire button), auto-
+  enabled on the first touch, so all 10 shipped arcade games are playable
+  on touch-only devices — verified on-device. Movement presets read combined
+  keyboard-OR-touch input (desktop keyboard play unchanged); game-over
+  restart accepts a screen tap; `action_pressed()`/`action_held()` and
+  `fire_pressed()`/`ates_basildi()` (+ TR aliases) let games read the action
+  button (the two shooter examples adopt it). `touch_controls(true/false)`
+  forces the overlay.
+- **Tame — 2D game library (`import "tame"`).** Open a window, draw shapes
+  and text, and read keyboard/mouse input from pure TulparLang — Pong-class
+  games in ~40 lines (`examples/tame_hello.tpr`):
+  - **Native layer:** vendored raylib 5.5 (`lib/raylib/`, zlib license, same
+    model as SQLite) + 26 `aot_tm_*` builtins in a **separate**
+    `libtulpar_tame.a` (`runtime/tame_impl.c` + `tame_bindings.cpp`, two-TU
+    split so raylib.h never meets the runtime/windows headers). The AOT
+    pipeline links it **only when the program imports "tame"** (or calls a
+    `tm_*` builtin), so ordinary binaries gain no GL/window dependency —
+    and even a tame binary dlopens X11/GL at runtime rather than linking
+    them (GLFW module loader + glad), so it stays portable.
+  - **Tulpar layer:** embedded `lib/tame.tpr` wraps the `tm_*` builtins with
+    game-friendly names — `window/running/frame_begin/frame_end/clear/rect/
+    circle/line/pixel/text/key_down/key_pressed/mouse_x/...` — plus
+    `rgb()/rgba()`, the full named raylib palette (`GOLD`, `SKYBLUE`, ...,
+    packed `0xRRGGBBAA` ints), and helpers (`rect_overlap`, `point_in_rect`,
+    `clamp`). Keys are addressed by name (`"W"`, `"SPACE"`, `"LEFT"`,
+    `"F1"`...), no key-constant table to learn.
+  - Codegen binds the family table-driven (`k_tame_builtins` in
+    `llvm_backend.cpp` — one row per builtin instead of 26 hand-rolled
+    dispatch blocks); type inference accepts int **or** float for
+    coordinates; all 26 symbols documented in the LSP hover/completion table.
+  - Headless/no-DISPLAY runs fail gracefully (bilingual error, clean exit)
+    instead of crashing — includes an upstream-matching patch to vendored
+    raylib's `InitWindow` (5.5 ignored `InitPlatform()` failure and
+    segfaulted in `rlglInit`).
+  - **Sprites, fonts, audio (Phases 3-4):** `load_texture/draw_texture/
+    draw_texture_ex(scale, rotation)/texture_width/height/unload_texture`,
+    `load_font` (TTF) + `text_font`, `measure_text` (centering);
+    `load_sound/play_sound/stop_sound/sound_volume` and
+    `load_music/play_music/stop_music/music_volume`. Resources are int
+    handles in slot registries (the DB-handle pattern); the audio device
+    opens automatically on first load, playing music streams are pumped
+    automatically inside `frame_end()`, and `close_window()` tears
+    everything down in the right order (GL resources before the context,
+    sounds before the device).
+  - **Managed game loop (Phase 5):** `run(update, draw)` — the Wings
+    `listen()` model for games. Takes two function refs, owns the loop,
+    frame pacing, **and frame memory**: one `arena_save` before the loop,
+    `arena_restore` every frame, `arena_drop` + window close on exit, so
+    per-frame strings/objects never accumulate. Same rule as Wings:
+    persistent game state lives in globals. Plus `triangle()` (vertex
+    winding auto-corrected — raylib's silent CCW-only trap is closed) and
+    `screenshot(path)` (PNG, written to the working directory).
+  - **Named gamepad input:** `gamepad_available(id)`, `gamepad_name(id)`,
+    `gamepad_down(id, btn)`, `gamepad_pressed(id, btn)`,
+    `gamepad_axis(id, axis)` — the keyboard's name-based pattern extended
+    to controllers: buttons `"A"/"B"/"X"/"Y"` (PS synonyms
+    `"CROSS"/"CIRCLE"/...`), dpad `"UP"/"DOWN"/...`, shoulders/triggers
+    `"LB"/"RB"/"LT"/"RT"` (`"L1"/"L2"...`), `"START"/"SELECT"/"GUIDE"`,
+    stick clicks `"L3"/"R3"`; axes `"LX"/"LY"/"RX"/"RY"` (-1..1) plus
+    `"LT"/"RT"` triggers. Without a controller everything degrades
+    gracefully (false / `""` / 0.0).
+  - Verified live under WSLg: every draw primitive, sprite scaling and
+    rotation, and centered text confirmed pixel-level via `tm_screenshot`
+    output; 60 FPS pacing (`frame_time` = 0.0167 s); reversed-winding
+    triangle rendered; audio device opened; `run()` ran 480 frames stable.
+  - `tame_hello.tpr`, `tame_sprite_demo.tpr`, and `tame_run_demo.tpr` are
+    compile-only in the test suites (a window would block on machines with
+    a display); compiling them end-to-end exercises the whole
+    import → codegen → link chain. Test assets live in
+    `examples/tame_assets/`.
+- **Web target: `tulpar build --target=web` (or `--web`).** Compiles the
+  program to a `wasm32-unknown-emscripten` object with the same LLVM
+  backend (WebAssembly components now linked on every arch) and links it
+  with `em++` against the `wasm/dist` archives produced by
+  `wasm/build_tame_web.sh` (async-free runtime + raylib `PLATFORM_WEB` +
+  the tame bindings) → `game.html + .js + .wasm`, runnable in a browser.
+  `-sASYNCIFY` turns Tulpar's blocking `while (running())` game loop into
+  browser-friendly cooperative yielding (raylib's web backend calls
+  `emscripten_sleep` in `EndDrawing`). Game assets are embedded with
+  `TULPAR_WEB_ASSETS=<dir>` (`--preload-file`). Two ABI notes for
+  maintainers: on wasm32 the VMValue C ABI is sret+byval like Win64 — the
+  codegen picks it at runtime via `vmvalue_abi_uses_sret()`
+  (`llvm_values.cpp`) — and `tulpar_async` is excluded from the web
+  runtime (stackful ucontext coroutines don't exist under Emscripten).
+- **Arcade: entity slot recycling + generation-tagged handles.** A killed
+  entity's slot now returns to a free-list and is reused, so a game that spawns
+  bullets forever no longer grows the parallel arrays without bound (a shooter
+  creating ~133 entities over 600 frames now plateaus at 22 slots). Reusing a
+  raw index would silently alias: code holding a dead entity's id would start
+  driving whoever took the slot. So ids handed out are now **handles** —
+  `_egen[slot] * 2^20 + slot` — and killing bumps the slot's generation, making
+  every existing handle to it stale at once. The whole public id API resolves
+  through `_slot_of()`; a stale handle is ignored (setters no-op, getters return
+  a neutral value, `alive()/yasiyor()` honestly returns false) instead of
+  corrupting the new occupant. `entity_count()/entity_sayisi()` counts *allocated
+  slots*, not live entities — new `live_count()/canli_sayisi()` gives the live
+  count. Verified on native and web.
+- **Arcade: levels (`bolum()/level()`).** Multi-level games are now an engine
+  feature instead of something each game re-implements — register a 0-arg setup
+  function per level and call `next_level()/bolum_gec()` when its win condition
+  is met. New (bilingual, as everything in arcade): `level(n, fn)/bolum`,
+  `next_level()/bolum_gec`, `level_no()/bolum_no`, `level_count()/bolum_sayisi`,
+  `is_won()/kazandin_mi`, plus `tag_count(tag)/tag_sayisi` (live entities with a
+  tag — for "all items collected?" conditions, since `live_count()` also counts
+  the player and walls) and `get_vx()/get_vy()` (`vx_of`/`vy_of`).
+  - **Semantics:** loading a level runs `clear_entities()` → the global
+    `on_start`/`baslangicta` function → that level's function. **Score is kept
+    across levels** (it's the player's running total); `R` restarts from level 1
+    with score 0. `_ar_state` gained `2 = won`, drawn as a KAZANDIN screen with
+    the total score; the HUD gains a `Bolum n/N` indicator (top-right) and a
+    ~1.2 s "Bölüm N" banner on each transition. `is_over()/bitti_mi()` now means
+    `state != 0` (winning is also an ending).
+  - **Backwards compatible:** with no level registered, state 2 never occurs and
+    behaviour is exactly as before (`on_start` + OYUN BITTI + R). Level
+    registrations survive `clear_entities()/temizle()` — like collision rules,
+    they are part of the game's definition, not its entities.
+  - **`next_level()` defers the switch** (a `_lvl_pending` flag applied at end of
+    frame in `_ar_update`/`step`) rather than swapping levels in place: it is
+    typically called from a collision callback, i.e. while `_ar_collisions()` is
+    iterating the parallel arrays — calling `clear_entities()` right there would
+    mutate the array being walked.
+  - Regression suite: `tests/arcade_levels.test.tpr` (headless via `step()/adim()`).
+- **Levels in the four bundled games (3 each).** `arcade_zipla` (easy → zigzag
+  climb → narrow platforms + a moving lethal obstacle), `arcade_topla` (3 items/1
+  enemy → 5/2 → 6/3 fast), `arcade_nisan` (cumulative target score 30 → 60 → 100
+  as spawn rate and speed rise), and `tame_snake` (built on raw tame, not arcade,
+  so its level flow is hand-rolled: 5 food per level, `MOVE_FRAMES` 8→6→4, plus
+  obstacle walls and a win screen in level 3). All four are also built for the
+  web in `web_demo/` with a refreshed index page.
+- **Four more arcade games, 3 levels each** — each one exercises a different part
+  of the engine, so together they double as a feature sweep:
+  - `arcade_tugla.tpr` (Breakout): bricks are `item()`s, the ball is a
+    `TAG_BULLET` + `MV_VELOCITY` entity, the paddle is `MV_NONE` driven
+    horizontally from `on_frame` (`MV_TOPDOWN` would move in 4 directions).
+    Levels: flat wall → pyramid → gapped wall + faster ball.
+  - `arcade_uzay.tpr` (Space Invaders): a fleet that moves as one body (reverses
+    and drops a step at the edge), so the invaders are `MV_NONE` and driven from
+    `on_frame`. Levels: 3×5 slow → 4×6 fast → 4×7 + the fleet shoots back (a
+    custom tag `6` for enemy bullets, alongside the built-in `TAG_*`).
+  - `arcade_labirent.tpr` (maze): layouts are written as ASCII rows and read with
+    `ord()` (`#` wall, `P` player, `A` key, `E` patrol), so adding a level means
+    writing 15 strings. The player is `MV_TOPDOWN` and rides the engine's MTV wall
+    resolution; patrols are `MV_VELOCITY` (which ignores walls), so their corridor
+    bounds are computed at setup by scanning the map. Levels: open → symmetric /
+    2 patrols → dense / 3 fast patrols.
+  - `arcade_karsiya.tpr` (Frogger): lanes of `MV_VELOCITY` traffic wrapped around
+    at ±660 — the wrap has to happen *before* the engine's own "64px outside the
+    world" auto-kill. Levels: 3 slow lanes → 4 → 5 fast.
+- **Arcade: engine-drawn HUD is bilingual (`language()/dil()`).** The strings the
+  engine renders itself — the score prefix, the `Level n/N` indicator, the
+  `Level N` banner, GAME OVER / YOU WIN and the restart hint — are now drawn in
+  Turkish or English by a language code. It defaults to the system UI language
+  (`sys_lang()`), and `language("en")` / `dil("tr")` overrides it. Turkish stays
+  the default and byte-for-byte the old output, so existing games are unchanged.
+  The `controls()/bilgi()` strip is game-supplied, so its language is the calling
+  game's choice.
+- **English twins of all eight games (`examples/en/`).** Each Turkish game has a
+  full English counterpart — English API aliases (`player()`, `level()`,
+  `next_level()`, …; every arcade function already has a TR+EN name), English
+  comments, English `scene()` title and `controls()` text, and a `language("en")`
+  call. `jump`, `collect`, `shooter`, `snake`, `breakout`, `invaders`, `maze`,
+  `crossing`. They live in `examples/en/` so the `examples/*.tpr` test runner
+  doesn't double-count them; verified by direct compile + browser screenshot.
+- **`web_demo` is bilingual.** `web_demo/index.html` (generated by a small script
+  from the game sources, so it stays in sync) has a page-level TR/EN switch, a
+  Play (TR) / Play (EN) button per game — both language builds are published
+  (`zipla.html` + `jump.html`, …) — and a "See code / Kodu gör" panel with TR/EN
+  tabs showing the actual embedded source, so a visitor sees each game written in
+  both languages.
+
+### Fixed
+- **The regex builtin family is now registered in the type checker and LSP.**
+  `regex_match` / `regex_search` / `regex_capture` / `regex_replace` worked at
+  runtime but were invisible to tooling (no completion/hover, unknown to
+  inference) and had zero test coverage. Registered with real signatures and
+  documented semantics: `regex_match` is full-string match, `regex_search` is
+  substring, an uncompilable pattern is a safe no-op.
+- **StringBuilder was dead on arrival — the first `sb_append` segfaulted.**
+  Its VMValue argument was declared as the raw by-value aggregate — the SysV
+  lowering trap documented at `llvm_make_vmvalue_func_type` — so the callee
+  read a corrupted value and dereferenced garbage. The argument now travels
+  through the `aot_*_ptr` pointer ABI; all `sb_*` entry points gained
+  null-handle guards (`sb_append(0, …)` is a no-op, not a crash); and the
+  undocumented creator `StringBuilder(capacity)` is now in the LSP table.
+- **`write_file`/`append_file` now actually return the documented bool.** Both
+  are typed `-> bool` (type checker + LSP) but returned VOID unconditionally —
+  a failed write (bad directory, no permission) was indistinguishable from
+  success. True only when the file opened and every byte landed.
+- **Wings: request-header lookup is now case-insensitive (RFC 7230).** Headers
+  are stored with the client's exact casing and every internal read was a
+  hand-rolled 2-case probe (`"Cookie"` then `"cookie"`) — any other casing
+  (`COOKIE`, `AUTHORIZATION`, `CONTENT-TYPE`, …) silently missed: cookies
+  dropped, `jwt_guard` 401'd valid bearer tokens, gzip never engaged, ETag 304s
+  never matched. New `req_header(req, name)` public accessor (+ internal
+  `_hdr_ci`) resolves case-insensitively; all five internal sites (cookies,
+  jwt, `form_data`, If-None-Match, Accept-Encoding) use it. Stored casing is
+  untouched, so existing exact-case reads keep working.
+- **Closures created in a native-fast-path function computed garbage.** The
+  all-int-signature fast path has no closure support, but its gate accepted
+  lambda-initialized decls (`var f = () => i;` fits the i64 decl shape), so
+  `func f(): int` bodies with a lambda silently produced wrong numbers. A new
+  `expr_has_lambda` check bails return/assignment/decl statements with a
+  value-position lambda to the boxed codegen.
+- **Top-level lambdas couldn't capture top-level scope-locals.** Capture slots
+  were only computed for function/lambda nodes, never the program root, so a
+  lambda capturing a top-level for-init var (`for (int k …) { var g = () => k; }`)
+  resolved nothing and returned nullptr (globals were always fine). The program
+  root now gets the same capture analysis and `main` allocates an env array
+  like any capturing function. Loop-created closures share the frame's one
+  slot per variable (JS-`var`/Python semantics: they see the final value).
+- **`try`/`catch`: leaving a `try` via `return`/`break`/`continue` leaked the
+  handler frame.** The setjmp frame was only popped on normal fall-through, so
+  a later `throw` could longjmp into a stack frame that no longer existed
+  ("longjmp causes uninitialized stack frame" abort). Codegen now tracks open
+  try scopes: `return` pops them all (after evaluating its expression),
+  `break`/`continue` pop down to the loop's entry depth, and lambdas
+  save/reset both try and loop tracking so a nested body can't pop the outer
+  function's frames. A bare `throw` followed by more statements also corrupted
+  its basic block ("Terminator found in the middle of a basic block") — throw
+  now spawns a dead continuation block like `break` does.
+- **`parse_iso8601` accepted impossible calendar days.** The day was only
+  range-checked 1..31, so `"2026-02-30…"` silently normalised to March 2
+  instead of failing — a data-corruption trap for a parser that returns -1 on
+  every other malformed input. Days are now validated against the month's real
+  length with the full Gregorian leap rule (2024-02-29 and 2000-02-29 parse;
+  2025-02-29, 1900-02-29, Apr 31, Feb 30 → -1).
+- **`contains()` / `indexOf()` silently failed on arrays.** Both were
+  string-only: `contains([1,2,3], 2)` returned false and `indexOf` returned -1
+  (with a spurious `expected str` typecheck warning), so the only way to test
+  array membership was a manual loop. They now also search arrays by value
+  (int/float/bool/string) — `contains([1,2,3], 2)` → true,
+  `indexOf(["a","b"], "b")` → 1 — while the string-substring behaviour is
+  unchanged. Signatures are now polymorphic in the type checker.
+- **Float-to-string lost precision and printed scientific notation
+  (`toString(1000000.5)` → `"1e+06"`).** Float formatting used `"%g"` (6
+  significant figures), which dropped the fraction of larger values and
+  switched to scientific notation. Tulpar floats carry 32-bit precision, so a
+  naive bump to higher fixed precision instead exposed float32 rounding noise
+  (`3.14` → `"3.14000010490417"`). Float display now prints the **shortest
+  decimal that round-trips to the same float32** (new `aot_format_float`, used
+  by toString / print / string-concat / JSON alike): `3.14` → `"3.14"`,
+  `1000000.5` → `"1000000.5"`, `0.1 + 0.2` → `"0.3"` — matching how Python/Go/Rust
+  render floats.
+- **String ordering comparisons (`<`, `>`, `<=`, `>=`) were always false.** In
+  `vm_binary_op` the string/string type pair fell through to a
+  `default: VM_BOOL(0)` for the four ordering operators, so any `"a" < "b"`
+  returned false regardless of the operands — and sorting an array of strings
+  silently did nothing. (`==`/`!=` already used `strcmp`.) The four operators
+  now compare lexicographically via `strcmp`, so `"apple" < "banana"` is true,
+  `"abc" <= "abc"` is true, and bubble/insertion sorts over string arrays work.
+- **Returning a non-trivially-unboxable struct from a function returned zeros —
+  and this also unblocked nested structs.** A struct with float / string /
+  nested-struct fields is a boxed `VM_OBJECT`, not a native aggregate, but both
+  the call site and the `return` codegen assumed the native res-pointer ABI, so
+  `P e = mk(1.5, 2.5)`, `push(a, mk())`, and `arr[i] = mk()` all yielded a zero
+  placeholder, and a struct containing a struct (`Body { V pos; }`) didn't work
+  at all. The native res-ptr write ABI (and its zero-placeholder fallback) is
+  now gated on `struct_is_trivially_unboxable`; every other struct flows as a
+  normal boxed `VMValue` return — the function stores its boxed object into the
+  result slot and the caller loads it. Nested structs now round-trip
+  (`bs[0].pos.x`, `bs[0].mass = 99`), as do float/string/mixed-field structs
+  returned from constructors. Trivially-unboxable (int/bool) struct returns keep
+  the native fast path unchanged.
+- **`call(fn, a, b, …)` forwards N arguments (was a segfault).** Dynamic
+  dispatch only knew the 0- and 1-argument shapes; calling a by-name function
+  with 2+ args silently dropped the extras, so the boxed callee read an
+  unpassed pointer parameter as garbage and crashed. Added `aot_call_dynamic_n`
+  / `aot_invoke_boxed_n` (`runtime_bindings.cpp`), which invoke the target
+  through its *registered arity* (0–8), padding missing params with VOID and
+  ignoring extras so the pointer count always matches the callee (wasm's typed
+  `call_indirect` included); a codegen branch (`argument_count >= 3`) stashes
+  the args in a stack VMValue array, and `call` is now treated as variadic in
+  the type checker. Callbacks no longer have to be 0-arg + global context — a
+  `func on_hit(a, b)` handler can be `call()`-ed directly. The existing
+  1-argument path (Wings `call(handler, req)`) is unchanged.
+- **A native (int/bool) `struct` stored in an array lost field access.**
+  `push(arr, s)` then `arr[i].x` reported "Invalid index or target". Trivially
+  unboxable structs (all int/bool fields) lower to a native LLVM aggregate;
+  once the static type is gone inside a dynamically-typed array, `arr[i].x` is
+  a runtime string-key lookup, which the compact int-indexed `ObjStruct` can't
+  serve. Float-carrying structs already lived as key-value objects and worked.
+  The push/array-literal boxing now converts a native struct to the same
+  string-keyed `VM_OBJECT` (`box_native_struct_as_object` in `llvm_backend.cpp`),
+  so `struct Ent { int x; int y; }` works in an array with `ents[i].x = …` —
+  no more parallel-array workaround. Static `s.x` on a typed local is
+  unchanged; no regression across the 76-example suite.
+- **Pulling a struct back out of a dynamic array (`Ent e = arr[i]`) read
+  zeros.** The extraction path unpacked an int-indexed `ObjStruct`, but after
+  the fix above a struct in an array is a string-keyed `VM_OBJECT`, so the
+  fields didn't line up. `aot_struct_unpack_named` now resolves fields BY NAME
+  from an object (and still copies an `ObjStruct` by position, so a `match`
+  subject keeps working); codegen emits the declaration-ordered field-name
+  table. `Ent e = ents[i]` now copies the stored fields with value semantics
+  (mutating `e` leaves `ents[i]` untouched).
+- **Assigning a struct value into an array element (`arr[i] = mk(…)`) stored a
+  zero placeholder.** A struct-returning call / struct local on the RHS of an
+  element assignment now boxes through the same string-keyed object path as
+  `push`, via the shared `codegen_struct_expr_as_object` helper (which also
+  backs `push` and array literals — deduplicated). As a side benefit, an array
+  literal of struct-returning calls (`[mk(3,4), mk(5,6)]`) now works too (the
+  old push/array-literal code only recognised struct *identifiers*).
+- **Method-style calls now work on any receiver, not just a bare identifier.**
+  `r.area()` worked, but `ents[i].area()` (array element) and `mk(3,5).area()`
+  (call result) fell through to a field-closure call and crashed with "Null
+  closure". The parser now rewrites `<expr>.<name>(args)` for any head, and
+  `resolve_qualified_call` sends a non-identifier receiver straight to method
+  dispatch (`name(recv, args)`) — it can never be a module alias. A boxed
+  struct receiver (e.g. an array element) is unpacked into the struct
+  parameter (`emit_unpack_boxed_struct_into`), so `ents[i].area()`,
+  `rs[0].scaled(4)`, and `js[0].wide()` all resolve. Existing identifier /
+  json / module-alias call sites are unchanged.
+- **Arcade: `arcade_topla` read enemy velocity with a handle.** The bounce logic
+  indexed the engine's parallel arrays directly (`_evx[enemy_id]`), but ids are
+  handles (`gen * 2^20 + slot`), so it read past the array rather than the
+  enemy's velocity. Use the new `vx_of()/vy_of()` getters, which resolve the
+  handle to a slot.
+- **Arcade: `overlaps()/degiyor()` had the same handle bug.** It took entity ids
+  but indexed the parallel arrays with them directly, so the manual overlap test
+  read out of bounds for every id (every id is a handle since slot recycling
+  landed). It now resolves through `_slot_of()` and returns false for a stale or
+  dead handle.
+- **`tulpar build --target=web -o game.html` produced `game.html.html`.** The web
+  output name is a *base*: the `.html` shell, `.js` and `.wasm` are all appended
+  to it, so spelling the extension (the natural thing to write) doubled it and
+  also produced `game.html.js`. A trailing `.html` is now stripped once, so
+  `-o game` and `-o game.html` both emit `game.html` + `game.js` + `game.wasm`.
+- **A local redeclared in a sibling block lost its initializer.** `if`/`else`
+  blocks don't open a scope (only functions, lambdas, `for` and main do), so two
+  declarations of the same name in sibling branches landed in the *same* scope.
+  `add_local` appended a second entry while every lookup scans front-to-back and
+  returns the first hit, so the later declaration's initializer store went to an
+  alloca nothing ever read: the variable read back as the first branch's value,
+  or — when that branch never ran — as uninitialised stack garbage. A
+  declaration now reuses the existing slot, so the most recent one wins.
+  Surfaced as the arcade platformer reading a garbage speed
+  (`float s = _espeed[i]`) and slamming the player into the screen edge.
+  Regression suite: `tests/scope_redecl.test.tpr`.
+- **Silently wrong code from the native (all-int) fast path.** Functions typed
+  `func f(int p): int` are emitted by `codegen_native_func_def`, a hand-rolled
+  i64 statement subset that **silently drops** any statement it has no explicit
+  case for. Its eligibility gate (`native_codegen_supports_stmt`) was far more
+  permissive than the emitter, so ordinary typed code was miscompiled with no
+  diagnostic:
+  - `if (c) { return 1; } else { return 2; }` never emitted the else branch —
+    every input taking the else returned **0**.
+  - `if (c) { int a = 1; return a; }` dropped the declaration, leaving `a`
+    unregistered and **crashing the compiler** (segfault).
+  - a nested `if` inside a `while`/`for` body was dropped (loop bodies only
+    emitted assignments and declarations), so accumulator loops computed the
+    wrong result.
+
+  The gate now mirrors the emitter exactly; anything richer falls back to the
+  boxed VMValue codegen, which handles the full language. Guarded recursion
+  (`if (n < 2) { return n; }` in `fib`) still takes the native path.
+  Regression suite: `tests/native_fastpath.test.tpr`.
+- **A builtin call in a native loop body was silently dropped** (open since
+  2026-07-03). Native locals are i64, but `codegen_typed_expr` returns a *boxed*
+  VMValue whenever an expression isn't statically int — typically when it
+  contains a call. The while/for body emitters stored only the
+  `INFERRED_INT`/`BOOL` case and discarded anything else without a diagnostic,
+  so the store never happened:
+  - `while (i < 3) { toplam = toplam + mod(n, 10); i = i + 1; }` returned **0** —
+    the accumulator kept its old value.
+  - `while (b != 0) { b = mod(a, b); ... }` (iterative Euclid GCD) never updated
+    `b` → **segfault**.
+  - `while (n > 0) { n = toInt(n / 10); ... }` never updated `n` → **infinite
+    hang**.
+
+  Loop bodies now unbox the payload (field 2), the same treatment the loop
+  *condition* already applied to a boxed compare. `for` bodies had the identical
+  defect and got the identical fix. This is the long-standing "while loop +
+  builtin call miscompiles, use `for`/recursion instead" workaround — it is no
+  longer needed.
+
 ## [v3.10.0]
 
 A terminal-UI builtin suite for building flicker-free, app-like TUIs in pure
