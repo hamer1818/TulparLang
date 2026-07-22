@@ -7,6 +7,27 @@ language/stdlib/ABI changes, MINOR for backwards-compatible features, PATCH for
 fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md));
 `tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
 
+## [Unreleased]
+
+### Added
+- **Arcade launcher — multiple games in one window / one APK (`launcher()`).**
+  `import "arcade"` gains a game-registry + menu layer so a single native
+  binary (desktop, web, or Android APK) can hold several games behind a
+  touch/keyboard menu. `oyun_ekle(name, setup)` / `add_game(name, setup)`
+  registers a game as a 0-arg **setup** function — it does the usual
+  `baslangicta`/`her_kare`/`carpisinca`/`bilgi` registrations but *not*
+  `sahne`/`oyna`, because the window and loop belong to the launcher.
+  `launcher()` (alias `oyun_menusu()`) draws a responsive card grid and runs a
+  menu↔game state machine: picking a card (tap, or arrows + ENTER) **fully
+  resets the engine's registration state** — sahne callbacks, level registry,
+  collision rules, hint/HUD, physics — before calling the chosen game's setup,
+  so games never bleed into one another. An on-screen home button (top-right)
+  or ESC returns to the menu; `menu_basligi(s)` / `launcher_title(s)` sets the
+  title. New example `examples/arcade_launcher.tpr` bundles three games
+  (Topla / Kac / Nisan) in one APK. Verified on the Android emulator: menu
+  renders, all three games launch with clean state (distinct player/entities/
+  scoring), and the home button returns to the menu.
+
 ## [v3.11.0]
 
 The Tame 2D game library and its two new compile targets — WebAssembly

@@ -1,0 +1,113 @@
+// Tulpar Arcade — LAUNCHER: tek pencerede / tek APK'da ÜÇ oyun.
+//
+//   ./tulpar examples/arcade_launcher.tpr
+//   tulpar build --target=android examples/arcade_launcher.tpr out   (mobil)
+//
+// Açılışta bir menü ızgarası gelir. Bir karta dokun (ya da ok tuşları + ENTER)
+// → o oyun başlar. Oyun içinde sağ-üst EV butonuna dokun (ya da ESC) → menüye
+// dön. Klavye VE dokunma (D-pad + aksiyon butonu) her oyunda çalışır.
+//
+// Her "oyun" 0-arg bir SETUP fonksiyonudur: normalde top-level yazacağın
+// kayıtları (baslangicta / her_kare / carpisinca / bilgi) yapar ama
+// sahne()/oyna() ÇAĞIRMAZ — pencereyi ve döngüyü launcher sahiplenir.
+
+import "arcade";
+
+// ============================================================================
+//  Oyun 1 — TOPLA: ok/WASD ya da D-pad ile altınları topla (+10), bitmez.
+// ============================================================================
+int tp_p = 0;
+
+func tp_start() {
+    tp_p = oyuncu(300, 220, 26, 26, SKYBLUE);
+    hiz_ayarla(tp_p, 240);
+    int i = 0;
+    while (i < 6) {
+        esya(randint(30, 590), randint(70, 430), 18, 18, GOLD);
+        i = i + 1;
+    }
+}
+func tp_hit() {                       // oyuncu bir altına değince
+    oldur(oteki());                   // ben()=oyuncu, oteki()=altın
+    skor_ekle(10);
+    esya(randint(30, 590), randint(70, 430), 18, 18, GOLD);   // yerine yenisi
+}
+func topla_kur() {
+    bilgi("Ok/WASD ya da D-pad: altinlari topla (+10)");
+    baslangicta(tp_start);
+    carpisinca(TAG_PLAYER, TAG_ITEM, tp_hit);
+}
+
+// ============================================================================
+//  Oyun 2 — KAC: kırmızı bloklar yukarıdan düşer, değme; hayatta kaldıkça skor.
+// ============================================================================
+int   kc_p   = 0;
+float kc_acc = 0.0;
+
+func kc_start() {
+    kc_p = oyuncu(300, 410, 30, 22, LIME);
+    hiz_ayarla(kc_p, 320);
+    kc_acc = 0.0;
+}
+func kc_frame() {
+    float dt = frame_time();
+    if (dt <= 0.0) { dt = 0.0166667; }
+    if (dt > 0.05) { dt = 0.05; }
+    // periyodik düşman (MV_VELOCITY → ekran dışına çıkınca motor otomatik siler)
+    if (randint(0, 100) < 5) {
+        int e = uret(randint(20, 600), 0 - 20, 22, 22, RED, TAG_ENEMY, MV_VELOCITY);
+        hiz_ver(e, 0, randint(180, 320));
+    }
+    // hayatta kalma skoru: her 0.5 sn +1
+    kc_acc = kc_acc + dt;
+    if (kc_acc >= 0.5) { kc_acc = kc_acc - 0.5; skor_ekle(1); }
+}
+func kc_hit() { oyun_bitti(); }
+func kac_kur() {
+    bilgi("Sol/Sag ya da D-pad: kirmizidan kac");
+    baslangicta(kc_start);
+    her_kare(kc_frame);
+    carpisinca(TAG_PLAYER, TAG_ENEMY, kc_hit);
+}
+
+// ============================================================================
+//  Oyun 3 — NISAN: D-pad ile sür, aksiyon (sağ buton)/SPACE ile ateş, düşman vur.
+// ============================================================================
+int ns_p = 0;
+
+func ns_start() {
+    ns_p = oyuncu(300, 400, 34, 22, SKYBLUE);
+    hiz_ayarla(ns_p, 300);
+}
+func ns_frame() {
+    if (ates_basildi()) {
+        mermi(x_of(ns_p) + 14.0, y_of(ns_p) - 6.0, 6, 14, GOLD, 0, 0 - 460);
+    }
+    if (randint(0, 100) < 3) {
+        int e = uret(randint(20, 600), 0 - 20, 26, 22, RED, TAG_ENEMY, MV_VELOCITY);
+        hiz_ver(e, 0, randint(90, 170));
+    }
+}
+func ns_bullet_hit() {                // mermi düşmana değince
+    oldur(ben());                     // ben()=mermi (TAG_BULLET)
+    oldur(oteki());                   // oteki()=düşman
+    skor_ekle(10);
+}
+func ns_enemy_hit() { oyun_bitti(); } // düşman gemine değince
+func nisan_kur() {
+    bilgi("D-pad: sur   |   sag buton / SPACE: ates");
+    baslangicta(ns_start);
+    her_kare(ns_frame);
+    carpisinca(TAG_BULLET, TAG_ENEMY, ns_bullet_hit);
+    carpisinca(TAG_PLAYER, TAG_ENEMY, ns_enemy_hit);
+}
+
+// ============================================================================
+//  Menü + launcher
+// ============================================================================
+sahne(640, 480, "Tulpar Arcade");
+menu_basligi("TULPAR ARCADE");
+oyun_ekle("Topla", topla_kur);
+oyun_ekle("Kac",   kac_kur);
+oyun_ekle("Nisan", nisan_kur);
+launcher();

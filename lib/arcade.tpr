@@ -915,3 +915,246 @@ func _ar_draw_all() {
         text(whint, (screen_width() - measure_text(whint, 24)) / 2, screen_height() / 2 + 44, 24, WHITE);
     }
 }
+
+// ============================================================================
+//  LAUNCHER — tek pencerede / tek APK'da çok oyun (mobil vitrin)
+// ============================================================================
+// Birden çok arcade oyununu tek pencerede toplar: açılışta bir menü ızgarası
+// çizer, bir kart seçilince (dokunma ya da klavye) o oyunun setup fn'ini çağırıp
+// motoru o oyuna hazırlar; oyun içinde sağ-üst EV butonu (ya da ESC) menüye
+// döndürür. Paketleme boru hattı değişmez — hâlâ tek `.tpr`, tek NativeActivity.
+//
+// Kullanım:
+//   sahne(640, 480, "Tulpar Arcade");
+//   oyun_ekle("Topla", topla_kur);   // her oyun = 0-arg bir setup fonksiyonu
+//   oyun_ekle("Kac",   kac_kur);
+//   launcher();                      // menü + oyun geçişi döngüsü burada
+//
+// Bir oyun setup fn'i, normalde top-level yazacağın kayıtları yapar AMA
+// sahne()/oyna() ÇAĞIRMAZ (pencere + döngü launcher'ın): baslangicta(...),
+// bolum(...), her_kare(...), carpisinca(...), bilgi(...), yercekimi(...) vb.
+
+array _apps_name  = [];    // menüde görünen oyun adları
+array _apps_setup = [];    // 0-arg setup fonksiyonları (index eşleşir)
+int   _apps_n     = 0;
+int   _ar_mode    = 0;     // 0 = menü, 1 = oyun oynanıyor
+int   _menu_sel   = 0;     // menüde seçili kart index'i
+str   _menu_title = "";    // "" = varsayılan ("TULPAR ARCADE")
+bool  _lx_home_prev = false;
+
+// Oyun kaydet: ad + 0-arg setup fonksiyonu.
+func add_game(name, setup) {
+    push(_apps_name, name);
+    push(_apps_setup, setup);
+    _apps_n = _apps_n + 1;
+}
+func oyun_ekle(name, setup) { add_game(name, setup); }
+
+// Menü başlığını değiştir (varsayılan "TULPAR ARCADE").
+func launcher_title(s) { _menu_title = s; }
+func menu_basligi(s)   { launcher_title(s); }
+
+// Motoru sıradaki oyuna hazırla: TÜM kayıt durumunu sıfırlar. `_ar_reset()`
+// yalnız skor/entity/bölüm sıfırlar; oyun DEĞİŞTİRİRKEN sahne callback'leri,
+// bölüm kayıtları, çarpışma kuralları, hint/HUD ve fizik de temizlenmeli —
+// yoksa yeni oyun eskisinin handler'larını miras alır.
+func _lx_clear() {
+    _start_fn = 0; _has_start = false;
+    _frame_fn = 0; _has_frame = false;
+    _draw_fn  = 0; _has_draw  = false;
+    _levels = []; _level_n = 0; _cur_level = 1; _has_levels = false;
+    _ca = []; _cb = []; _cfn = [];
+    _hint = ""; _has_hint = false;
+    _hud_prefix = ""; _hud_set = false; _show_score = true;
+    _gravity = 0.0; _jump_v = 520.0; _clamp_world = true;
+    _banner_t = 0.0; _lvl_pending = 0;
+    clear_entities();
+}
+
+// i. oyunu başlat: kayıtları temizle → oyunun setup'ı → yükle → oyun moduna geç.
+func _lx_launch(i) {
+    if (i < 0 || i >= _apps_n) { return; }
+    _lx_clear();
+    call(_apps_setup[i]);
+    _ar_reset();                       // skor/durum/bölüm + _ar_load_level (setup)
+    _menu_sel = i;
+    _ar_mode = 1;
+    // Seçme dokunuşu (parmak hâlâ basılı) oyunun ilk karesinde restart/aksiyon
+    // olarak sayılmasın diye edge sayaçlarını "basılı"ya çek.
+    _ar_touch_prevn = touch_count();
+    _ar_act_prev = true;
+    _lx_home_prev = true;
+}
+
+// ---- Oyun içi EV (menüye geri) butonu — sağ üst köşe -----------------------
+func _lx_home_x(): float { return _world_w - _world_h * 0.11; }
+func _lx_home_y(): float { return _world_h * 0.08; }
+func _lx_home_r(): float { return _world_h * 0.05; }
+
+// Herhangi bir parmak EV butonuna yeni bastı mı (edge).
+func _lx_home_pressed(): bool {
+    float hx = _lx_home_x(); float hy = _lx_home_y();
+    float grab = _lx_home_r() * 1.8;
+    bool now = false;
+    int n = touch_count();
+    int i = 0;
+    while (i < n) {
+        float dx = touch_x(i) * 1.0 - hx;
+        float dy = touch_y(i) * 1.0 - hy;
+        if (dx * dx + dy * dy <= grab * grab) { now = true; }
+        i = i + 1;
+    }
+    bool edge = now && !_lx_home_prev;
+    _lx_home_prev = now;
+    return edge;
+}
+
+func _lx_draw_home() {
+    float hx = _lx_home_x(); float hy = _lx_home_y(); float hr = _lx_home_r();
+    circle(toInt(hx), toInt(hy), toInt(hr), rgba(230, 120, 110, 130));
+    // basit "geri/ev" işareti: içte küçük beyaz kare
+    float s = hr * 0.7;
+    rect(hx - s * 0.5, hy - s * 0.5, s, s, rgba(255, 255, 255, 225));
+}
+
+// ---- Menü ızgara geometrisi ------------------------------------------------
+func _menu_cols(): int {
+    if (_apps_n <= 1) { return 1; }
+    if (_apps_n <= 4) { return 2; }
+    if (_apps_n <= 9) { return 3; }
+    return 4;
+}
+func _menu_rows(): int {
+    int cols = _menu_cols();
+    int rows = toInt((_apps_n + cols - 1) / cols);   // ceil(n/cols)
+    if (rows < 1) { rows = 1; }
+    return rows;
+}
+func _menu_top(): float  { return _world_h * 0.28; }   // başlık için üst boşluk
+func _menu_padh(): float { return _world_w * 0.045; }
+func _menu_padv(): float { return _world_h * 0.05; }
+
+func _menu_card_w(): float {
+    int cols = _menu_cols();
+    float pad = _menu_padh();
+    return (_world_w - pad * (cols + 1)) / (cols * 1.0);
+}
+func _menu_card_h(): float {
+    int rows = _menu_rows();
+    float pad = _menu_padv();
+    return (_world_h - _menu_top() - pad * (rows + 1)) / (rows * 1.0);
+}
+func _menu_card_x(i): float {
+    int cols = _menu_cols();
+    int col = mod(i, cols);
+    float pad = _menu_padh();
+    return pad + col * (_menu_card_w() + pad);
+}
+func _menu_card_y(i): float {
+    int cols = _menu_cols();
+    int row = toInt(i / cols);
+    float pad = _menu_padv();
+    return _menu_top() + pad + row * (_menu_card_h() + pad);
+}
+
+// Klavye ile seçimi ızgarada gezdir.
+func _menu_move(dcol, drow) {
+    int cols = _menu_cols();
+    int col = mod(_menu_sel, cols) + dcol;
+    int row = toInt(_menu_sel / cols) + drow;
+    if (col < 0) { col = 0; }
+    if (col > cols - 1) { col = cols - 1; }
+    if (row < 0) { row = 0; }
+    int ni = row * cols + col;
+    if (ni >= 0 && ni < _apps_n) { _menu_sel = ni; }
+}
+
+// Menü bir karesi: klavye navigasyonu + dokunma ile kart seçme.
+func _menu_step() {
+    if (key_pressed("LEFT")  || key_pressed("A")) { _menu_move(0 - 1, 0); }
+    if (key_pressed("RIGHT") || key_pressed("D")) { _menu_move(1, 0); }
+    if (key_pressed("UP")    || key_pressed("W")) { _menu_move(0, 0 - 1); }
+    if (key_pressed("DOWN")  || key_pressed("S")) { _menu_move(0, 1); }
+    if (key_pressed("ENTER") || key_pressed("SPACE")) { _lx_launch(_menu_sel); return; }
+
+    int n = touch_count();
+    bool tap = (n > 0) && (_ar_touch_prevn == 0);
+    if (tap) {
+        float tx = touch_x(0) * 1.0;
+        float ty = touch_y(0) * 1.0;
+        int i = 0;
+        while (i < _apps_n) {
+            float cx = _menu_card_x(i); float cy = _menu_card_y(i);
+            float cw = _menu_card_w();  float ch = _menu_card_h();
+            if (tx >= cx && tx <= cx + cw && ty >= cy && ty <= cy + ch) {
+                _lx_launch(i);
+                return;
+            }
+            i = i + 1;
+        }
+    }
+    _ar_touch_prevn = n;
+}
+
+// Menü ekranını çiz: başlık + kart ızgarası (seçili kart altın çerçeveli).
+func _menu_draw() {
+    clear(rgb(16, 18, 26));
+    str L = _lang_now();
+    str title = _menu_title;
+    if (title == "") { title = "TULPAR ARCADE"; }
+    int tsz = toInt(_world_h * 0.095);
+    text(title, toInt((_world_w - measure_text(title, tsz)) / 2.0),
+         toInt(_world_h * 0.07), tsz, GOLD);
+    str sub = "Bir oyun sec";
+    if (L == "en") { sub = "Pick a game"; }
+    int ssz = toInt(_world_h * 0.042);
+    text(sub, toInt((_world_w - measure_text(sub, ssz)) / 2.0),
+         toInt(_world_h * 0.185), ssz, SKYBLUE);
+
+    int i = 0;
+    while (i < _apps_n) {
+        float cx = _menu_card_x(i); float cy = _menu_card_y(i);
+        float cw = _menu_card_w();  float ch = _menu_card_h();
+        bool selp = (i == _menu_sel);
+        rect(cx, cy, cw, ch, selp ? rgb(46, 54, 82) : rgb(30, 34, 48));
+        if (selp) {
+            rect_lines(cx, cy, cw, ch, GOLD);
+            rect_lines(cx + 1.0, cy + 1.0, cw - 2.0, ch - 2.0, GOLD);
+        }
+        str nm = _apps_name[i];
+        int nsz = toInt(ch * 0.26);
+        if (nsz < 14) { nsz = 14; }
+        text(nm, toInt(cx + (cw - measure_text(nm, nsz)) / 2.0),
+             toInt(cy + (ch - nsz * 1.0) / 2.0), nsz, WHITE);
+        i = i + 1;
+    }
+}
+
+// Ana launcher döngüsü — menü ↔ oyun durum makinesi. `oyna()`nın çok-oyunlu
+// karşılığı: pencereyi (zaten `sahne()` ile açık) ve döngüyü sahiplenir.
+func launcher() {
+    if (_apps_n == 0) { return; }
+    _ar_mode = 0;
+    _menu_sel = 0;
+    var wm = arena_save();
+    while (running()) {
+        if (_ar_mode == 0) {
+            _menu_step();
+            frame_begin();
+            _menu_draw();
+            frame_end();
+        } else {
+            bool go_home = key_pressed("ESCAPE") || key_pressed("BACKSPACE");
+            _ar_update();
+            frame_begin();
+            _ar_draw_all();
+            _lx_draw_home();
+            frame_end();
+            if (go_home || _lx_home_pressed()) { _ar_mode = 0; }
+        }
+        arena_restore(wm);
+    }
+    arena_drop(wm);
+    close_window();
+}
+func oyun_menusu() { launcher(); }
