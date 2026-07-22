@@ -101,6 +101,12 @@ venv/
 # the local copy was orphaned. Ignored to stop a stray LLVM extract or
 # tool-driven auto-vendor from sneaking it back into git.
 include/
+# ...but the vendored raylib GLFW public headers ARE real source we ship — the
+# tame/raylib build needs them on a fresh checkout (CI) or raylib_objs fails
+# with "GLFW/glfw3.h: No such file or directory". Keep this include/ tracked.
+!lib/raylib/external/glfw/include/
+!lib/raylib/external/glfw/include/GLFW/
+!lib/raylib/external/glfw/include/GLFW/*.h
 
 # ==== Scratch / debug dumps ====
 # Files that show up from ad-hoc dev sessions: gdb backtrace dumps,
