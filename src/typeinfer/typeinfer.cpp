@@ -828,6 +828,10 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm_gamepad_down", TYPE_BOOL, {TYPE_INT, TYPE_STRING}},
       {"tm_gamepad_pressed", TYPE_BOOL, {TYPE_INT, TYPE_STRING}},
       {"tm_gamepad_axis", TYPE_FLOAT, {TYPE_INT, TYPE_STRING}},
+      // Kalıcı kayıt (Android: internal storage; masaüstü: CWD) + titreşim.
+      {"tm_save_data", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
+      {"tm_load_data", TYPE_STRING, {TYPE_STRING}},
+      {"tm_vibrate", TYPE_VOID, {TYPE_INT}},
       // Polymorphic: string haystack (substring) OR array haystack (membership).
       {"indexOf", TYPE_INT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
       {"contains", TYPE_BOOL, {TYPE_UNKNOWN, TYPE_UNKNOWN}},

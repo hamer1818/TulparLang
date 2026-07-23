@@ -270,6 +270,7 @@ func ni_kaybet_cb() { oyun_bitti(); }                    // düşman oyuncuya de
 
 func ni_setup() {
     bilgi("Ok/WASD: hareket   SPACE: ates   |   Kirmizilari vur (+10)");
+    kontrol_semasi("yatay");   // mobilde sag/sol ok butonlari + ates butonu
     baslangicta(ni_kur);
     bolum(1, ni_b1);
     bolum(2, ni_b2);
@@ -355,8 +356,8 @@ func tu_her_kare_is() {
 
     // --- Raket: sadece yatay -------------------------------------------------
     float rx = x_of(tu_raket);
-    if (key_down("LEFT")  || key_down("A")) { rx = rx - 430.0 * dt; }
-    if (key_down("RIGHT") || key_down("D")) { rx = rx + 430.0 * dt; }
+    if (sol()) { rx = rx - 430.0 * dt; }   // klavye VEYA dokunmatik joystick
+    if (sag()) { rx = rx + 430.0 * dt; }
     if (rx < 0.0) { rx = 0.0; }
     float rmax = 640.0 - tu_RAKET_W;
     if (rx > rmax) { rx = rmax; }
@@ -489,8 +490,8 @@ func uz_her_kare_is() {
 
     // --- Gemi: sadece yatay --------------------------------------------------
     float gx = x_of(uz_gemi);
-    if (key_down("LEFT")  || key_down("A")) { gx = gx - 390.0 * dt; }
-    if (key_down("RIGHT") || key_down("D")) { gx = gx + 390.0 * dt; }
+    if (sol()) { gx = gx - 390.0 * dt; }   // klavye VEYA dokunmatik joystick
+    if (sag()) { gx = gx + 390.0 * dt; }
     if (gx < 0.0) { gx = 0.0; }
     if (gx > 608.0) { gx = 608.0; }
     konumla(uz_gemi, gx, uz_GEMI_Y);
@@ -734,6 +735,7 @@ func la_kaybet_cb() { oyun_bitti(); }
 
 func la_setup() {
     bilgi("Ok tuslari / WASD: hareket   |   Tum anahtarlari topla (+10), devriyelere degme");
+    kontrol_semasi("dpad");   // koridor oyununa 4 ok butonu joystick'ten iyi oturur
     baslangicta(la_kur);
     bolum(1, la_b1);
     bolum(2, la_b2);
@@ -830,6 +832,7 @@ func ka_kaybet_cb() { oyun_bitti(); }                 // araca değdin
 
 func ka_setup() {
     bilgi("Ok tuslari / WASD: hareket   |   Araclara degmeden altin serite ulas (+50)");
+    kontrol_semasi("dpad");   // serit serit ilerlemeye 4 ok butonu iyi oturur
     baslangicta(ka_kur);
     bolum(1, ka_b1);
     bolum(2, ka_b2);
@@ -922,7 +925,9 @@ func uc_her_kare_is() {
     float dt = frame_time();
     if (dt <= 0.0) { dt = 0.0166667; }
     if (dt > 0.05) { dt = 0.05; }
-    bool cirp = key_pressed("SPACE") || key_pressed("UP") || key_pressed("W");
+    // Çırpma: SPACE/UP/W klavye VEYA ekranın HERHANGİ bir yerine dokunma
+    // (dokunuldu()). Buton/joystick çizilmez — ekran tamamı kontroldür.
+    bool cirp = dokunuldu() || key_pressed("SPACE") || key_pressed("UP") || key_pressed("W");
 
     // Hazır durumu: ilk çırpışa kadar kuş asılı durur, fizik/boru başlamaz
     // (gerçek Flappy gibi — oyuncuya tepki payı). İlk çırpış oyunu başlatır.
@@ -959,7 +964,7 @@ func uc_her_kare_is() {
 // Hazır durumunda "başla" ipucu (otomatik çizimin üstüne).
 func uc_ciz_ek() {
     if (uc_basladi == 0) {
-        str h = "Baslamak icin SPACE / YUKARI";
+        str h = "Baslamak icin dokun ya da SPACE / YUKARI";
         text(h, (screen_width() - measure_text(h, 22)) / 2, 200, 22, WHITE);
     }
 }
@@ -968,7 +973,7 @@ func uc_ciz_ek() {
 func uc_kaybet_cb() { oyun_bitti(); }
 
 func uc_setup() {
-    bilgi("SPACE / YUKARI: kanat cirp   |   Borularin arasindan gec (+1)");
+    bilgi("Dokun / SPACE / YUKARI: kanat cirp   |   Borularin arasindan gec (+1)");
     baslangicta(uc_kur);
     bolum(1, uc_b1);
     bolum(2, uc_b2);
@@ -1032,8 +1037,8 @@ func go_her_kare_is() {
 
     // --- Oyuncu: sadece yatay (motor topdown 4 yöne giderdi) -----------------
     float px = x_of(go_oyuncu_id);
-    if (key_down("LEFT")  || key_down("A")) { px = px - 300.0 * dt; }
-    if (key_down("RIGHT") || key_down("D")) { px = px + 300.0 * dt; }
+    if (sol()) { px = px - 300.0 * dt; }   // klavye VEYA dokunmatik joystick
+    if (sag()) { px = px + 300.0 * dt; }
     if (px < 0.0) { px = 0.0; }
     if (px > 610.0) { px = 610.0; }
     konumla(go_oyuncu_id, px, 430);
@@ -1072,6 +1077,7 @@ func go_kaybet_cb() { oyun_bitti(); }
 
 func go_setup() {
     bilgi("Sol/Sag veya A/D: kac   |   Goktaslarindan sakin, sureyi doldur");
+    kontrol_semasi("yatay");   // mobilde sag/sol ok butonlari
     baslangicta(go_kur);
     bolum(1, go_b1);
     bolum(2, go_b2);
@@ -1079,6 +1085,181 @@ func go_setup() {
     her_kare(go_her_kare_is);
     ciz_ustune(go_ciz_ek);
     carpisinca(TAG_PLAYER, TAG_ENEMY, go_kaybet_cb);
+}
+
+// ==========================================================================
+//  Yilan  (examples/arcade_yilan.tpr, önek yi_)
+// ==========================================================================
+// Yilan — arcade motoruyla izgara yilani, 3 BOLUM (tame_snake'in arcade esi).
+//
+//   ./tulpar examples/arcade_yilan.tpr
+//
+// Kontroller: ok tuslari/WASD, mobilde dpad butonlari VEYA parmak kaydirma
+// (kaydirildi() jesti — yilana en dogal his). Yem (kirmizi) ye -> buyu.
+// Duvara, engele ya da kendine carpma. Her bolumde 5 yem -> sonraki bolum;
+// 1) yavas  2) hizli  3) en hizli + engel duvarlari. Skor bolumler arasi
+// korunur (motorun bolum semantigi).
+//
+// Motor kullanimi: entity YOK — yilan durumu izgara dizilerinde, cizim
+// ciz_ustune() ile elle. bolum()/skor/oyun-bitti/afis/HUD motordan bedava.
+// Not: test kosucusunda COMPILE_ONLY (pencere dongusu CI'da bloklar).
+
+
+// ---- Izgara ----------------------------------------------------------------
+int yi_COLS = 20;
+int yi_ROWS = 14;
+int yi_CELL = 28;
+int yi_OX = 40;          // oyun alani sol bosluk
+int yi_OY = 64;          // HUD (skor+bilgi) altinda kalsin
+
+// ---- Yilan durumu -----------------------------------------------------------
+array yi_ysx = [];       // govde hucreleri (bas = son eleman)
+array yi_ysy = [];
+int yi_syuz = 0;         // govde uzunlugu
+int yi_ydx = 1;          // aktif yon (hucre/adim)
+int yi_ydy = 0;
+int yi_nydx = 1;         // bekleyen yon (adimda uygulanir; 180 donus engellenir)
+int yi_nydy = 0;
+int yi_adim_kare = 8;    // her N karede bir adim — bolumle hizlanir
+int yi_tik = 0;
+int yi_yem_x = 0;
+int yi_yem_y = 0;
+int yi_yem_sayisi = 0;   // bu bolumde yenen yem (5 = bolum gec)
+array yi_egx = [];       // engel hucreleri (yalniz 3. bolum)
+array yi_egy = [];
+
+func yi_engel_mi(cx, cy): bool {
+    for (int i = 0; i < length(yi_egx); i = i + 1) {
+        if (toInt(yi_egx[i]) == cx && toInt(yi_egy[i]) == cy) { return true; }
+    }
+    return false;
+}
+
+func yi_yilan_mi(cx, cy): bool {
+    for (int i = 0; i < yi_syuz; i = i + 1) {
+        if (toInt(yi_ysx[i]) == cx && toInt(yi_ysy[i]) == cy) { return true; }
+    }
+    return false;
+}
+
+func yi_yem_koy() {
+    // Bos hucre bulana kadar dene (izgara kucuk, hizli biter).
+    int deneme = 0;
+    while (deneme < 500) {
+        int cx = randint(0, yi_COLS - 1);
+        int cy = randint(0, yi_ROWS - 1);
+        if (!yi_yilan_mi(cx, cy) && !yi_engel_mi(cx, cy)) {
+            yi_yem_x = cx; yi_yem_y = cy;
+            return;
+        }
+        deneme = deneme + 1;
+    }
+}
+
+// Yilani baslangic durumuna kur: 3 hucre, satir 7'de saga bakar.
+func yi_yilan_kur() {
+    yi_ysx = []; yi_ysy = []; yi_syuz = 0;
+    push(yi_ysx, 3); push(yi_ysy, 7);
+    push(yi_ysx, 4); push(yi_ysy, 7);
+    push(yi_ysx, 5); push(yi_ysy, 7);
+    yi_syuz = 3;
+    yi_ydx = 1; yi_ydy = 0; yi_nydx = 1; yi_nydy = 0;
+    yi_tik = 0; yi_yem_sayisi = 0;
+    yi_yem_koy();
+}
+
+// 3. bolumun engelleri: iki dikey duvar (sutun 6 ve 13), yilanin baslangic
+// satiri 7 acik birakilir ki dogus guvenli olsun.
+func yi_engel_kur() {
+    yi_egx = []; yi_egy = [];
+    for (int r = 2; r < yi_ROWS - 2; r = r + 1) {
+        if (r != 7) {
+            push(yi_egx, 6);  push(yi_egy, r);
+            push(yi_egx, 13); push(yi_egy, r);
+        }
+    }
+}
+
+// ---- Bolumler ---------------------------------------------------------------
+func yi_b1() { yi_adim_kare = 8; yi_egx = []; yi_egy = []; yi_yilan_kur(); }
+func yi_b2() { yi_adim_kare = 6; yi_egx = []; yi_egy = []; yi_yilan_kur(); }
+func yi_b3() { yi_adim_kare = 4; yi_engel_kur(); yi_yilan_kur(); }
+
+// ---- Kare guncelleme --------------------------------------------------------
+func yi_kare() {
+    // Yon girisi: klavye/dpad butonlari (basili) VEYA kaydirma jesti (kalkis
+    // kenari). 180 derece geri donus yasak.
+    if ((sol() || kaydirildi("sol")) && yi_ydx != 1)             { yi_nydx = 0 - 1; yi_nydy = 0; }
+    else if ((sag() || kaydirildi("sag")) && yi_ydx != 0 - 1)    { yi_nydx = 1; yi_nydy = 0; }
+    else if ((yukari() || kaydirildi("yukari")) && yi_ydy != 1)  { yi_nydx = 0; yi_nydy = 0 - 1; }
+    else if ((asagi() || kaydirildi("asagi")) && yi_ydy != 0 - 1){ yi_nydx = 0; yi_nydy = 1; }
+
+    yi_tik = yi_tik + 1;
+    if (yi_tik < yi_adim_kare) { return; }
+    yi_tik = 0;
+
+    yi_ydx = yi_nydx; yi_ydy = yi_nydy;
+    int bx = toInt(yi_ysx[yi_syuz - 1]) + yi_ydx;
+    int by = toInt(yi_ysy[yi_syuz - 1]) + yi_ydy;
+
+    // Carpma: dis duvar / engel / kendi govdesi -> oyun bitti (titreşimli).
+    if (bx < 0 || bx >= yi_COLS || by < 0 || by >= yi_ROWS
+        || yi_engel_mi(bx, by) || yi_yilan_mi(bx, by)) {
+        titret(200);
+        oyun_bitti();
+        return;
+    }
+
+    bool buyu = (bx == yi_yem_x && by == yi_yem_y);
+    if (buyu) {
+        push(yi_ysx, bx); push(yi_ysy, by);
+        yi_syuz = yi_syuz + 1;
+        skor_ekle(10);
+        titret(60);
+        yi_yem_sayisi = yi_yem_sayisi + 1;
+        if (yi_yem_sayisi >= 5) { bolum_gec(); return; }
+        yi_yem_koy();
+    } else {
+        // Kuyrugu at: govdeyi sola kaydir, basi sona yaz (uzunluk sabit).
+        for (int i = 0; i < yi_syuz - 1; i = i + 1) {
+            yi_ysx[i] = yi_ysx[i + 1];
+            yi_ysy[i] = yi_ysy[i + 1];
+        }
+        yi_ysx[yi_syuz - 1] = bx;
+        yi_ysy[yi_syuz - 1] = by;
+    }
+}
+
+// ---- Cizim ------------------------------------------------------------------
+func yi_ciz() {
+    // Oyun alani cercevesi
+    rect_lines(yi_OX - 2, yi_OY - 2, yi_COLS * yi_CELL + 4, yi_ROWS * yi_CELL + 4, GRAY);
+    // Engeller
+    for (int i = 0; i < length(yi_egx); i = i + 1) {
+        rect(yi_OX + toInt(yi_egx[i]) * yi_CELL, yi_OY + toInt(yi_egy[i]) * yi_CELL,
+             yi_CELL, yi_CELL, rgb(120, 90, 200));
+    }
+    // Yem
+    rect(yi_OX + yi_yem_x * yi_CELL + 3, yi_OY + yi_yem_y * yi_CELL + 3, yi_CELL - 6, yi_CELL - 6, RED);
+    // Yilan (bas altin, govde yesil)
+    for (int i = 0; i < yi_syuz; i = i + 1) {
+        rect(yi_OX + toInt(yi_ysx[i]) * yi_CELL + 1, yi_OY + toInt(yi_ysy[i]) * yi_CELL + 1,
+             yi_CELL - 2, yi_CELL - 2, i == yi_syuz - 1 ? GOLD : LIME);
+    }
+    // Bolum yem sayaci (skorun yaninda kalabalik etmesin diye alt kenarda)
+    text("Yem: " + toString(yi_yem_sayisi) + "/5", yi_OX, yi_OY + yi_ROWS * yi_CELL + 6, 18, SKYBLUE);
+}
+
+// ---- Kayit ------------------------------------------------------------------
+
+func yi_setup() {
+    bilgi("Kaydir / dpad / ok tuslari: yon   |   5 yem = sonraki bolum");
+    kontrol_semasi("dpad");   // mobilde 4 ok butonu; kaydirma jesti de calisir
+    bolum(1, yi_b1);
+    bolum(2, yi_b2);
+    bolum(3, yi_b3);
+    her_kare(yi_kare);
+    ciz_ustune(yi_ciz);
 }
 
 // ==========================================================================
@@ -1095,4 +1276,5 @@ oyun_ekle("Labirent", la_setup);
 oyun_ekle("Karsiya", ka_setup);
 oyun_ekle("Ucus", uc_setup);
 oyun_ekle("Goktasi", go_setup);
+oyun_ekle("Yilan", yi_setup);
 launcher();

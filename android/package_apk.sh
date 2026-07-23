@@ -81,17 +81,35 @@ fi
 rm -rf "$WORK"; mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
-# --- 1) aapt2 link: manifest -> base APK (binary manifest + resources.arsc)
+# --- 1) aapt2 link: manifest (+ varsa res/: uygulama ikonu) -> base APK ----
+# tulpar.toml [android] icon=... verdiyse driver, staging'e res/mipmap/
+# ic_launcher.png koyar ve manifest @mipmap/ic_launcher'a atifta bulunur —
+# o durumda res/ once aapt2 compile ile .flat'lere derlenip link'e girer.
 BASE="$WORK/base.apk"
 echo ""
-echo "[1/4] aapt2 link (manifest -> APK)"
+RES_FLAT=()
+if [ -d "$STAGE/res" ]; then
+    echo "[1/4] aapt2 compile (res/) + link (manifest -> APK)"
+    COMPILED="$WORK/res_flat"
+    mkdir -p "$COMPILED"
+    "$AAPT2" compile --dir "$(winpath "$STAGE/res")" -o "$(winpath "$COMPILED")"
+    for fl in "$COMPILED"/*.flat; do
+        [ -f "$fl" ] && RES_FLAT+=("$(winpath "$fl")")
+    done
+else
+    echo "[1/4] aapt2 link (manifest -> APK)"
+fi
 "$AAPT2" link -o "$(winpath "$BASE")" \
     --manifest "$(winpath "$STAGE/AndroidManifest.xml")" \
     -I "$(winpath "$ANDROID_JAR")" \
-    --min-sdk-version 26 --target-sdk-version 34
+    --min-sdk-version 26 --target-sdk-version 34 \
+    ${RES_FLAT[@]+"${RES_FLAT[@]}"}
 
-# --- 2) native kütüphaneleri ekle (STORED — sıkıştırma yok) ----------------
-echo "[2/4] lib/<abi>/*.so ekleniyor"
+# --- 2) native kütüphaneler (STORED) + oyun asset'leri ---------------------
+# assets/: driver'ın stage'e koyduğu ses/sprite/font dosyaları. aapt2 -A
+# KULLANILMAZ — Windows aapt2'si girdi adlarını ters bölüyle yazıp
+# AAssetManager eşleşmesini bozuyor; python zipfile ile düz '/' garanti.
+echo "[2/4] lib/<abi>/*.so + assets/ ekleniyor"
 python3 - "$BASE" "$STAGE" <<'PY'
 import os, sys, zipfile
 base, stage = sys.argv[1], sys.argv[2]
@@ -107,6 +125,15 @@ with zipfile.ZipFile(base, "a", zipfile.ZIP_STORED) as z:
             with open(so, "rb") as f:
                 z.writestr(zi, f.read())
             print("  +", arc, "(%d bytes)" % os.path.getsize(so))
+    aroot = os.path.join(stage, "assets")
+    if os.path.isdir(aroot):
+        for dirpath, _dirs, files in os.walk(aroot):
+            for fn in sorted(files):
+                full = os.path.join(dirpath, fn)
+                rel = os.path.relpath(full, aroot).replace(os.sep, "/")
+                arc = "assets/" + rel
+                z.write(full, arc, zipfile.ZIP_DEFLATED)
+                print("  +", arc, "(%d bytes)" % os.path.getsize(full))
 PY
 
 # --- 3) zipalign (16KB sayfa hizası: -P 16; .so STORED zaten) --------------
@@ -114,22 +141,43 @@ ALIGNED="$WORK/aligned.apk"
 echo "[3/4] zipalign -P 16"
 "$ZIPALIGN" -P 16 -f 4 "$(winpath "$BASE")" "$(winpath "$ALIGNED")"
 
-# --- 4) debug keystore + imzala --------------------------------------------
-# ~/.android/debug.keystore (yoksa üret). Standart debug parametreleri.
-KS_DIR="$HOME/.android"; mkdir -p "$KS_DIR"
-KS="$KS_DIR/debug.keystore"
-if [ ! -f "$KS" ]; then
-    echo "[4/4] debug.keystore uretiliyor"
-    "$KEYTOOL" -genkeypair -v -keystore "$(winpath "$KS")" \
-        -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-        -storepass android -keypass android \
-        -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1 || true
+# --- 4) imzala: RELEASE keystore (env verilmisse) ya da debug ---------------
+# Play Store'a yuklenebilir imza icin kendi keystore'unu goster:
+#   TULPAR_ANDROID_KEYSTORE=<yol>       (zorunlu — release modunu acar)
+#   TULPAR_ANDROID_KS_PASS=<parola>     (zorunlu)
+#   TULPAR_ANDROID_KEY_ALIAS=<alias>    (zorunlu)
+#   TULPAR_ANDROID_KEY_PASS=<parola>    (opsiyonel; varsayilan: KS_PASS)
+# Keystore uretmek icin (bir kez):
+#   keytool -genkeypair -keystore release.keystore -alias oyunum \
+#           -keyalg RSA -keysize 2048 -validity 10000
+if [ -n "${TULPAR_ANDROID_KEYSTORE:-}" ]; then
+    KS="$TULPAR_ANDROID_KEYSTORE"
+    [ -f "$KS" ] || { echo "HATA: keystore yok: $KS"; exit 1; }
+    KS_PASS="${TULPAR_ANDROID_KS_PASS:?HATA: TULPAR_ANDROID_KS_PASS gerekli}"
+    KEY_ALIAS="${TULPAR_ANDROID_KEY_ALIAS:?HATA: TULPAR_ANDROID_KEY_ALIAS gerekli}"
+    KEY_PASS="${TULPAR_ANDROID_KEY_PASS:-$KS_PASS}"
+    echo "[4/4] apksigner ile imzalaniyor (RELEASE: $(basename "$KS"), alias: $KEY_ALIAS)"
+    "$JAVA" -jar "$(winpath "$BT/lib/apksigner.jar")" sign \
+        --ks "$(winpath "$KS")" --ks-pass "pass:$KS_PASS" \
+        --key-pass "pass:$KEY_PASS" --ks-key-alias "$KEY_ALIAS" \
+        --out "$(winpath "$OUT_APK")" "$(winpath "$ALIGNED")"
+else
+    # ~/.android/debug.keystore (yoksa üret). Standart debug parametreleri.
+    KS_DIR="$HOME/.android"; mkdir -p "$KS_DIR"
+    KS="$KS_DIR/debug.keystore"
+    if [ ! -f "$KS" ]; then
+        echo "[4/4] debug.keystore uretiliyor"
+        "$KEYTOOL" -genkeypair -v -keystore "$(winpath "$KS")" \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1 || true
+    fi
+    echo "[4/4] apksigner ile imzalaniyor (debug)"
+    "$JAVA" -jar "$(winpath "$BT/lib/apksigner.jar")" sign \
+        --ks "$(winpath "$KS")" --ks-pass pass:android --key-pass pass:android \
+        --ks-key-alias androiddebugkey \
+        --out "$(winpath "$OUT_APK")" "$(winpath "$ALIGNED")"
 fi
-echo "[4/4] apksigner ile imzalaniyor"
-"$JAVA" -jar "$(winpath "$BT/lib/apksigner.jar")" sign \
-    --ks "$(winpath "$KS")" --ks-pass pass:android --key-pass pass:android \
-    --ks-key-alias androiddebugkey \
-    --out "$(winpath "$OUT_APK")" "$(winpath "$ALIGNED")"
 
 echo ""
 echo "Tamam: $OUT_APK"

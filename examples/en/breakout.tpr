@@ -73,8 +73,8 @@ func on_frame_fn() {
 
     // --- Paddle: horizontal only ---------------------------------------------
     float rx = get_x(paddle);
-    if (key_down("LEFT")  || key_down("A")) { rx = rx - 430.0 * dt; }
-    if (key_down("RIGHT") || key_down("D")) { rx = rx + 430.0 * dt; }
+    if (left())  { rx = rx - 430.0 * dt; }   // keyboard OR touch joystick
+    if (right()) { rx = rx + 430.0 * dt; }
     if (rx < 0.0) { rx = 0.0; }
     float rmax = 640.0 - PADDLE_W;
     if (rx > rmax) { rx = rmax; }

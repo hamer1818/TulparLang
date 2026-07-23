@@ -64,6 +64,27 @@ struct Manifest {
     // set via `tulpar pkg add <name> --binary`. Absence = source-only
     // (the default — no extra network round-trip).
     std::vector<std::string> binary_opt_in;
+    // `[android]` — app identity for `tulpar build --target=android/--apk`.
+    // All optional; the android pipeline falls back to its historical
+    // defaults when a key is absent:
+    //   package      = "com.example.mygame"   (default dev.tulparlang.game)
+    //   name         = "My Game"              (launcher label; default: output base)
+    //   icon         = "icon.png"             (path; default: none → system icon)
+    //   orientation  = "landscape"|"portrait"|"sensor" (default landscape)
+    //   version_code = "2"                    (integer string; default "1")
+    //   version_name = "1.1"                  (default "1.0")
+    //   assets       = "assets"               (dir copied into the APK's
+    //                  assets/; raylib reads it via AAssetManager with the
+    //                  same relative paths — load_texture("top.png"). Env
+    //                  TULPAR_ANDROID_ASSETS overrides, mirroring the web
+    //                  target's TULPAR_WEB_ASSETS.)
+    std::string android_package;
+    std::string android_label;
+    std::string android_icon;
+    std::string android_orientation;
+    std::string android_version_code;
+    std::string android_version_name;
+    std::string android_assets;
 
     // Round-trip serialise this manifest back to the TOML subset we
     // accept on input. Idempotent — reading a manifest, serialising it,

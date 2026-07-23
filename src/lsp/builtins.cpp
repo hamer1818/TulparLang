@@ -94,6 +94,9 @@ const BuiltinEntry kBuiltins[] = {
     {"tm_gamepad_down", "tm_gamepad_down(id: int, btn: str): bool",     "Gamepad butonu basılı mı? Ad: \"A\"/\"B\"/\"X\"/\"Y\" (veya \"CROSS\"/\"CIRCLE\"...), \"UP\"/\"DOWN\"/\"LEFT\"/\"RIGHT\", \"LB\"/\"RB\", \"LT\"/\"RT\", \"START\"/\"SELECT\"/\"GUIDE\", \"L3\"/\"R3\". Sarmalayıcı: gamepad_down()."},
     {"tm_gamepad_pressed", "tm_gamepad_pressed(id: int, btn: str): bool", "Gamepad butonuna bu karede mi basıldı (tek tetik)? Sarmalayıcı: gamepad_pressed()."},
     {"tm_gamepad_axis", "tm_gamepad_axis(id: int, axis: str): float",   "Analog eksen değeri: \"LX\"/\"LY\"/\"RX\"/\"RY\" (-1..1), \"LT\"/\"RT\" tetikler. Sarmalayıcı: gamepad_axis()."},
+    {"tm_save_data",    "tm_save_data(name: str, text: str): bool",     "Kalıcı kayıt yazar: Android'de uygulama internal storage'ına, masaüstünde çalışma dizinine. Sarmalayıcı: save_data()/kayit_yaz()."},
+    {"tm_load_data",    "tm_load_data(name: str): str",                 "Kalıcı kaydı okur; dosya yoksa \"\" döner. Sarmalayıcı: load_data()/kayit_oku()."},
+    {"tm_vibrate",      "tm_vibrate(ms: int)",                          "Cihazı ms milisaniye titretir (Android; masaüstü/web no-op). Sarmalayıcı: vibrate()/titret()."},
 
     // ---- Conversion ----
     {"toString",     "toString(value: any): str",                   "Herhangi bir değeri string'e çevirir."},

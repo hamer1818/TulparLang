@@ -43,8 +43,8 @@ func on_frame_fn() {
         set_vel(e, 0, enemy_vy);
     }
 
-    // SPACE → an upward bullet.
-    if (key_pressed("SPACE")) {
+    // SPACE (or the touch action button) → an upward bullet.
+    if (fire_pressed()) {
         bullet(get_x(player_id) + 10.0, get_y(player_id), 8, 14, GOLD, 0, 0 - 420);
     }
 
@@ -59,6 +59,7 @@ language("en");
 scene(640, 480, "Shooter");
 // The strip must fit 640px — long text gets clipped (level/target are in the HUD).
 controls("Arrows/WASD: move   SPACE: fire   |   Shoot the reds (+10)");
+control_scheme("horizontal");   // mobile: left/right arrow buttons + fire button
 on_start(setup);
 level(1, l1);
 level(2, l2);

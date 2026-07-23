@@ -177,6 +177,7 @@ func lose_cb() { game_over(); }
 language("en");
 scene(640, 480, "Maze");
 controls("Arrow keys / WASD: move   |   Collect all keys (+10), avoid the patrols");
+control_scheme("dpad");   // corridor game — 4 arrow buttons fit better than a stick
 on_start(setup);
 level(1, l1);
 level(2, l2);

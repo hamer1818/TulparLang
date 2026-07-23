@@ -80,7 +80,9 @@ func on_frame_fn() {
     float dt = frame_time();
     if (dt <= 0.0) { dt = 0.0166667; }
     if (dt > 0.05) { dt = 0.05; }
-    bool flap = key_pressed("SPACE") || key_pressed("UP") || key_pressed("W");
+    // Flap: SPACE/UP/W keyboard OR a tap ANYWHERE on the screen (tapped()).
+    // No button/joystick is drawn — the whole screen is the control.
+    bool flap = tapped() || key_pressed("SPACE") || key_pressed("UP") || key_pressed("W");
 
     // Ready state: the bird hovers until the first flap, no physics/pipes yet
     // (real Flappy — gives the player a reaction margin). First flap starts play.
@@ -117,7 +119,7 @@ func on_frame_fn() {
 // "Start" hint in the ready state (over the automatic draw).
 func draw_extra() {
     if (started == 0) {
-        str h = "Press SPACE / UP to start";
+        str h = "Tap or press SPACE / UP to start";
         text(h, (screen_width() - measure_text(h, 22)) / 2, 200, 22, WHITE);
     }
 }
@@ -127,7 +129,7 @@ func lose_cb() { game_over(); }
 
 language("en");
 scene(640, 480, "Flight");
-controls("SPACE / UP: flap   |   Fly through the pipe gaps (+1)");
+controls("Tap / SPACE / UP: flap   |   Fly through the pipe gaps (+1)");
 on_start(setup);
 level(1, l1);
 level(2, l2);

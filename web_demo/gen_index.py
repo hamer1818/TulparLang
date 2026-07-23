@@ -181,6 +181,25 @@ html = f'''<!doctype html>
   </div>
 </header>
 
+<h2><span data-tr>Android — telefonda oyna</span><span data-en>Android — play on your phone</span></h2>
+<div class="card" style="border-color:var(--gold)">
+  <div class="head"><span class="emoji">📱</span>
+    <h3>Tulpar Arcade</h3></div>
+  <p class="desc">
+    <span data-tr>10 mini oyunun tamamı tek APK'da — telefonunda <b>native</b> çalışır
+      (Play Store gerekmez). Dokunmatik kontroller oyuna göre değişir: joystick,
+      ok butonları ya da kaydırma jestleri; donanım geri tuşu menüye döner.</span>
+    <span data-en>All 10 mini games in a single APK — runs <b>natively</b> on your phone
+      (no Play Store needed). Touch controls adapt per game: joystick, arrow
+      buttons or swipe gestures; the hardware back button returns to the menu.</span></p>
+  <p class="lv">
+    <span data-tr>Kurulum: APK'yı indir → aç → "bilinmeyen uygulamalara izin ver" onayı → kur. Android 8.0+ (arm64).</span>
+    <span data-en>Install: download the APK → open it → allow installs from unknown sources → install. Android 8.0+ (arm64).</span></p>
+  <div class="actions">
+    <a class="play" href="tulpar-arcade.apk" download>⬇ <span data-tr>APK indir</span><span data-en>Download APK</span> · 9&nbsp;MB</a>
+  </div>
+</div>
+
 <h2><span data-tr>Oyunlar</span><span data-en>Games</span></h2>
 {cards_html}
 

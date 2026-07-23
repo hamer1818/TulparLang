@@ -175,6 +175,7 @@ func kaybet_cb() { oyun_bitti(); }
 
 sahne(640, 480, "Labirent");
 bilgi("Ok tuslari / WASD: hareket   |   Tum anahtarlari topla (+10), devriyelere degme");
+kontrol_semasi("dpad");   // koridor oyununa 4 ok butonu joystick'ten iyi oturur
 baslangicta(kur);
 bolum(1, b1);
 bolum(2, b2);

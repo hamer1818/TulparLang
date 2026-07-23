@@ -79,7 +79,9 @@ func her_kare_is() {
     float dt = frame_time();
     if (dt <= 0.0) { dt = 0.0166667; }
     if (dt > 0.05) { dt = 0.05; }
-    bool cirp = key_pressed("SPACE") || key_pressed("UP") || key_pressed("W");
+    // Çırpma: SPACE/UP/W klavye VEYA ekranın HERHANGİ bir yerine dokunma
+    // (dokunuldu()). Buton/joystick çizilmez — ekran tamamı kontroldür.
+    bool cirp = dokunuldu() || key_pressed("SPACE") || key_pressed("UP") || key_pressed("W");
 
     // Hazır durumu: ilk çırpışa kadar kuş asılı durur, fizik/boru başlamaz
     // (gerçek Flappy gibi — oyuncuya tepki payı). İlk çırpış oyunu başlatır.
@@ -116,7 +118,7 @@ func her_kare_is() {
 // Hazır durumunda "başla" ipucu (otomatik çizimin üstüne).
 func ciz_ek() {
     if (basladi == 0) {
-        str h = "Baslamak icin SPACE / YUKARI";
+        str h = "Baslamak icin dokun ya da SPACE / YUKARI";
         text(h, (screen_width() - measure_text(h, 22)) / 2, 200, 22, WHITE);
     }
 }
@@ -125,7 +127,7 @@ func ciz_ek() {
 func kaybet_cb() { oyun_bitti(); }
 
 sahne(640, 480, "Ucus");
-bilgi("SPACE / YUKARI: kanat cirp   |   Borularin arasindan gec (+1)");
+bilgi("Dokun / SPACE / YUKARI: kanat cirp   |   Borularin arasindan gec (+1)");
 baslangicta(kur);
 bolum(1, b1);
 bolum(2, b2);

@@ -1,0 +1,14 @@
+# Resmi "Tulpar Arcade" uygulamasinin Android kimligi.
+# APK uretimi (bu dizinden):
+#   ../../tulpar build --apk ../arcade_launcher.tpr tulpar-arcade
+name = "tulpar-arcade"
+version = "1.0.0"
+description = "Tulpar Arcade - 10 mini oyun tek APK'da (TulparLang ile yazildi)"
+
+[android]
+package = "dev.tulparlang.arcade"
+name = "Tulpar Arcade"
+icon = "icon.png"
+orientation = "landscape"
+version_code = "1"
+version_name = "1.0"

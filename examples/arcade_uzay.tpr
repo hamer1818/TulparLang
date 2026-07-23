@@ -61,8 +61,8 @@ func her_kare_is() {
 
     // --- Gemi: sadece yatay --------------------------------------------------
     float gx = x_of(gemi);
-    if (key_down("LEFT")  || key_down("A")) { gx = gx - 390.0 * dt; }
-    if (key_down("RIGHT") || key_down("D")) { gx = gx + 390.0 * dt; }
+    if (sol()) { gx = gx - 390.0 * dt; }   // klavye VEYA dokunmatik joystick
+    if (sag()) { gx = gx + 390.0 * dt; }
     if (gx < 0.0) { gx = 0.0; }
     if (gx > 608.0) { gx = 608.0; }
     konumla(gemi, gx, GEMI_Y);

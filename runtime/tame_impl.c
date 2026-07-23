@@ -401,6 +401,9 @@ static int tame_key_from_name(const char *name) {
   if (!strcmp(up, "SPACE")) return KEY_SPACE;
   if (!strcmp(up, "ENTER") || !strcmp(up, "RETURN")) return KEY_ENTER;
   if (!strcmp(up, "ESC") || !strcmp(up, "ESCAPE")) return KEY_ESCAPE;
+  // Android donanım GERİ tuşu (raylib bunu OS'a bırakmayıp KEY_BACK olarak
+  // teslim eder — rcore_android "eat BACK_BUTTON"). Masaüstünde hiç basılmaz.
+  if (!strcmp(up, "BACK") || !strcmp(up, "GERI")) return KEY_BACK;
   if (!strcmp(up, "TAB")) return KEY_TAB;
   if (!strcmp(up, "BACKSPACE")) return KEY_BACKSPACE;
   if (!strcmp(up, "DELETE")) return KEY_DELETE;
@@ -556,3 +559,76 @@ double tame_impl_mouse_wheel(void) { return (double)GetMouseWheelMove(); }
 int tame_impl_touch_count(void) { return GetTouchPointCount(); }
 int tame_impl_touch_x(int i) { return (int)GetTouchPosition(i).x; }
 int tame_impl_touch_y(int i) { return (int)GetTouchPosition(i).y; }
+
+// ---------------------------------------------------------------------------
+// Kalıcı kayıt (save/load) — raylib SaveFileText/LoadFileText üzerinden.
+// Android'de raylib fopen'ı yönlendirir: yazma internalDataPath'e gider,
+// okuma önce APK assets/ sonra internal storage'a bakar (utils.c
+// android_fopen). Masaüstünde çalışma dizinine yazar/okur — yani AYNI oyun
+// kodu her platformda kalıcı kayıt alır. İçerik düz metindir (skor için
+// toString/toInt yeter); ad dosya adıdır ("skor" gibi, yol verme).
+// ---------------------------------------------------------------------------
+
+int tame_impl_save_data(const char *name, const char *text) {
+  if (!name || !name[0] || !text) return 0;
+  return SaveFileText(name, (char *)text) ? 1 : 0;
+}
+
+// Dönen tampon LoadFileText'in ayırdığı bellektir; binding kopyaladıktan
+// sonra tame_impl_text_free ile bırakır. Dosya yoksa NULL döner.
+char *tame_impl_load_data(const char *name) {
+  if (!name || !name[0]) return NULL;
+  return LoadFileText(name);
+}
+
+void tame_impl_text_free(char *p) {
+  if (p) UnloadFileText(p);
+}
+
+// ---------------------------------------------------------------------------
+// Titreşim (haptik) — yalnız Android'de gerçek iş yapar. NativeActivity'nin
+// Java tarafına JNI ile geçip Context.getSystemService("vibrator") →
+// Vibrator.vibrate(ms) çağrılır. AndroidManifest'e VIBRATE izni driver
+// tarafından her zaman yazılır (normal izin, kurulum anında verilir).
+// Masaüstü/web: sessiz no-op — oyun kodu platform ayrımı yapmaz.
+// ---------------------------------------------------------------------------
+
+#if defined(PLATFORM_ANDROID)
+#include <jni.h>
+struct android_app;              // native_app_glue tanımı (yalnız işaretçi)
+struct android_app *GetAndroidApp(void);   // rcore_android.c (raylib)
+// native_app_glue'nun android_app yapısından yalnız activity alanına
+// ihtiyacımız var; başlığı çekmemek için ofsetle değil resmi başlıkla gidelim:
+#include <android_native_app_glue.h>
+
+void tame_impl_vibrate(int ms) {
+  if (ms <= 0) return;
+  struct android_app *app = GetAndroidApp();
+  if (!app || !app->activity || !app->activity->vm) return;
+  JavaVM *vm = app->activity->vm;
+  JNIEnv *env = NULL;
+  if ((*vm)->AttachCurrentThread(vm, &env, NULL) != JNI_OK || !env) return;
+  // Not: DetachCurrentThread çağırmıyoruz — render thread'i tekrar tekrar
+  // attach/detach etmek pahalı; attach idempotenttir, thread çıkışında VM
+  // temizler.
+  jobject activity = app->activity->clazz;
+  jclass ctx = (*env)->GetObjectClass(env, activity);
+  jmethodID gss = (*env)->GetMethodID(
+      env, ctx, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
+  jstring svc = (*env)->NewStringUTF(env, "vibrator");
+  jobject vib = gss ? (*env)->CallObjectMethod(env, activity, gss, svc) : NULL;
+  if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+  if (vib) {
+    jclass vibc = (*env)->GetObjectClass(env, vib);
+    jmethodID vibrate = (*env)->GetMethodID(env, vibc, "vibrate", "(J)V");
+    if (vibrate) (*env)->CallVoidMethod(env, vib, vibrate, (jlong)ms);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->DeleteLocalRef(env, vibc);
+    (*env)->DeleteLocalRef(env, vib);
+  }
+  (*env)->DeleteLocalRef(env, svc);
+  (*env)->DeleteLocalRef(env, ctx);
+}
+#else
+void tame_impl_vibrate(int ms) { (void)ms; }
+#endif

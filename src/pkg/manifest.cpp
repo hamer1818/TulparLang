@@ -72,7 +72,7 @@ std::string escape_for_toml(const std::string &s) {
 bool manifest_parse(const std::string &source, Manifest &out,
                     std::string &out_err) {
     out = Manifest{};
-    enum Section { SEC_TOP, SEC_DEPS, SEC_REGISTRY, SEC_RELEASE_BINARIES, SEC_BINARIES };
+    enum Section { SEC_TOP, SEC_DEPS, SEC_REGISTRY, SEC_RELEASE_BINARIES, SEC_BINARIES, SEC_ANDROID };
     Section section = SEC_TOP;
 
     std::istringstream in(source);
@@ -93,6 +93,8 @@ bool manifest_parse(const std::string &source, Manifest &out,
                 section = SEC_RELEASE_BINARIES;
             } else if (name == "binaries") {
                 section = SEC_BINARIES;
+            } else if (name == "android") {
+                section = SEC_ANDROID;
             } else {
                 out_err = "line " + std::to_string(lineno) +
                           ": unknown section [" + name + "]";
@@ -189,6 +191,22 @@ bool manifest_parse(const std::string &source, Manifest &out,
                               "' is not recognised (only 'url' for now)";
                     return false;
                 }
+            } else if (section == SEC_ANDROID) {
+                if (key == "package") out.android_package = val;
+                else if (key == "name") out.android_label = val;
+                else if (key == "icon") out.android_icon = val;
+                else if (key == "orientation") out.android_orientation = val;
+                else if (key == "version_code") out.android_version_code = val;
+                else if (key == "version_name") out.android_version_name = val;
+                else if (key == "assets") out.android_assets = val;
+                else {
+                    out_err = "line " + std::to_string(lineno) +
+                              ": [android] key '" + key +
+                              "' is not recognised (package, name, icon, "
+                              "orientation, version_code, version_name, "
+                              "assets)";
+                    return false;
+                }
             }
         } else {
             out_err = "line " + std::to_string(lineno) +
@@ -263,6 +281,26 @@ std::string Manifest::to_toml() const {
             out += n;
             out += " = true\n";
         }
+    }
+
+    if (!android_package.empty() || !android_label.empty() ||
+        !android_icon.empty() || !android_orientation.empty() ||
+        !android_version_code.empty() || !android_version_name.empty()) {
+        out += "\n[android]\n";
+        auto akv = [&](const char *k, const std::string &v) {
+            if (v.empty()) return;
+            out += k;
+            out += " = \"";
+            out += escape_for_toml(v);
+            out += "\"\n";
+        };
+        akv("package", android_package);
+        akv("name", android_label);
+        akv("icon", android_icon);
+        akv("orientation", android_orientation);
+        akv("version_code", android_version_code);
+        akv("version_name", android_version_name);
+        akv("assets", android_assets);
     }
     return out;
 }

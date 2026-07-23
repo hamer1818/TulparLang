@@ -72,8 +72,8 @@ func her_kare_is() {
 
     // --- Raket: sadece yatay -------------------------------------------------
     float rx = x_of(raket);
-    if (key_down("LEFT")  || key_down("A")) { rx = rx - 430.0 * dt; }
-    if (key_down("RIGHT") || key_down("D")) { rx = rx + 430.0 * dt; }
+    if (sol()) { rx = rx - 430.0 * dt; }   // klavye VEYA dokunmatik joystick
+    if (sag()) { rx = rx + 430.0 * dt; }
     if (rx < 0.0) { rx = 0.0; }
     float rmax = 640.0 - RAKET_W;
     if (rx > rmax) { rx = rmax; }

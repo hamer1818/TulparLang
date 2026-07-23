@@ -85,6 +85,10 @@ const char *tame_impl_gamepad_name(int id);
 int tame_impl_gamepad_down(int id, const char *btn);
 int tame_impl_gamepad_pressed(int id, const char *btn);
 double tame_impl_gamepad_axis(int id, const char *axis);
+int tame_impl_save_data(const char *name, const char *text);
+char *tame_impl_load_data(const char *name);
+void tame_impl_text_free(char *p);
+void tame_impl_vibrate(int ms);
 }
 
 // Tulpar runtime'ının string allocator'ı (libtulpar_runtime.a'dan çözülür;
@@ -365,6 +369,26 @@ VMValue aot_tm_gamepad_pressed_ptr(VMValue *id, VMValue *btn) {
 
 VMValue aot_tm_gamepad_axis_ptr(VMValue *id, VMValue *axis) {
   return VM_FLOAT(tame_impl_gamepad_axis((int)tm_int(id), tm_str(axis)));
+}
+
+// --- Kalıcı kayıt + titreşim --------------------------------------------------
+
+VMValue aot_tm_save_data_ptr(VMValue *name, VMValue *text) {
+  return VM_BOOL(tame_impl_save_data(tm_str(name), tm_str(text)));
+}
+
+// Dosya yoksa "" döner; LoadFileText tamponu kopya sonrası bırakılır.
+VMValue aot_tm_load_data_ptr(VMValue *name) {
+  char *t = tame_impl_load_data(tm_str(name));
+  const char *c = t ? t : "";
+  ObjString *s = vm_alloc_string_aot(nullptr, c, (int)strlen(c));
+  if (t) tame_impl_text_free(t);
+  return VM_OBJ((Obj *)s);
+}
+
+VMValue aot_tm_vibrate_ptr(VMValue *ms) {
+  tame_impl_vibrate((int)tm_int(ms));
+  return VM_VOID();
 }
 
 } // extern "C"

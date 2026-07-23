@@ -14,9 +14,10 @@ GAMES = [
     ("examples/arcade_karsiya.tpr",  "ka", "Karsiya"),
     ("examples/arcade_ucus.tpr",     "uc", "Ucus"),
     ("examples/arcade_goktasi.tpr",  "go", "Goktasi"),
+    ("examples/arcade_yilan.tpr",    "yi", "Yilan"),
 ]
 
-REG_RE  = re.compile(r'\s*(sahne|scene|bilgi|info|baslangicta|on_start|bolum|level|her_kare|on_frame|carpisinca|on_hit|ciz_ustune|dil|language|yercekimi|gravity|hud|hud_gizle|touch_controls|touch_kontrol)\b')
+REG_RE  = re.compile(r'\s*(sahne|scene|bilgi|info|baslangicta|on_start|bolum|level|her_kare|on_frame|carpisinca|on_hit|ciz_ustune|dil|language|yercekimi|gravity|hud|hud_gizle|touch_controls|touch_kontrol|kontrol_semasi|control_scheme)\b')
 DROP_RE = re.compile(r'\s*(sahne|scene|oyna|play)\b')
 
 def mask(line):

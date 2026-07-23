@@ -118,9 +118,10 @@ float _jump_v  = 520.0;   // zıplama başlangıç hızı (px/sn, yukarı)
 bool  _clamp_world = true; // topdown'da entity'yi dünya sınırında tut
 
 // ---- Dokunmatik kontrol (mobil) ---------------------------------------------
-// Ekranın altına yarı-saydam bir D-pad (sol) + aksiyon butonu (sağ) çizilir ve
-// okunur. İlk dokunuşta OTOMATİK açılır; masaüstünde klavye çalışmaya devam
-// eder (girdi = klavye VEYA dokunma). raylib touch koordinatlarını oyun-dünyası
+// Sol tarafta yüzen DİNAMİK analog joystick (yuvarlak içinde yuvarlak) + —yalnızca
+// oyun ateş/aksiyon okuyorsa— sağ altta aksiyon butonu çizilir/okunur. İlk
+// dokunuşta OTOMATİK açılır; masaüstünde klavye çalışmaya devam eder (girdi =
+// klavye VEYA dokunma). raylib touch koordinatlarını oyun-dünyası
 // uzayına ölçekler (Android'de doğrulandı), bu yüzden zone'lar _world_w/_world_h
 // ile tanımlı. touch_controls(false) ile kapatılabilir / (true) ile zorlanabilir.
 bool _ar_touch_ui   = false;  // overlay çiz + oku (ilk dokunuşta açılır)
@@ -128,12 +129,49 @@ bool _ar_touch_force = false; // touch_controls(true): dokunma olmadan da aç
 bool _ar_act_now    = false;  // aksiyon butonu bu kare basılı mı
 bool _ar_act_prev   = false;
 bool _ar_act_edge   = false;  // aksiyon butonu bu kare YENİ basıldı (jump/fire)
-bool _ar_td_left    = false;  // D-pad yön durumları (bu kare)
+bool _ar_td_left    = false;  // yön durumları (bu kare; joystick eşiğinden türetilir)
 bool _ar_td_right   = false;
 bool _ar_td_up      = false;
 bool _ar_td_down    = false;
 bool _ar_tap_edge   = false;  // herhangi bir parmak 0→>0 (oyun-bitti'de restart)
 int  _ar_touch_prevn = 0;
+// Aksiyon/ateş butonu SADECE oyun onu okuyorsa (action_*/fire_*/zıplama preset'i)
+// çizilir/okunur — böylece ateşi olmayan oyunlarda boş buton görünmez.
+bool _ar_wants_action = false;
+// Joystick SADECE oyun yön okuyorsa (left/right/up/down VEYA topdown/platform
+// preset'i) çizilir — sadece-dokunma oyunlarında (ör. flappy) joystick çıkmaz.
+bool _ar_wants_move = false;
+// KONTROL ŞEMASI — oyun türüne göre hazır dokunmatik yerleşimler.
+// 0=auto (oyunun OKUDUĞU yönlerden çıkar: yalnız sağ/sol → yatay butonlar,
+// yalnız yukarı/aşağı → dikey butonlar, iki eksen → joystick, hiç → yok),
+// 1=joystick, 2=dpad (4 ok butonu), 3=yatay (◀▶), 4=dikey (▲▼), 5=yok.
+// kontrol_semasi("dpad") / control_scheme("horizontal") ile oyun elle seçer.
+int  _ar_scheme = 0;
+bool _ar_rd_l = false;   // bu oyun hangi yönleri okudu (auto şema çıkarımı)
+bool _ar_rd_r = false;
+bool _ar_rd_u = false;
+bool _ar_rd_d = false;
+// Modern DİNAMİK analog joystick (yuvarlak içinde yuvarlak, yüzen taban):
+// parmak sol bölgeye basınca taban orada belirir, parmağı sürükledikçe topuz
+// (knob) onu takip eder; parmak çekilene kadar yön girdisi sürer. Taban parmağı
+// halka kadar takip eder ("trailing" his). Yön analogtur ([-1..1]); preset'ler
+// için eşikle 8-yönlü boolean'a çevrilir.
+// Swipe (kaydırma) jesti: parmak inişinden kalkışına vektör; eşik üstü ve
+// baskın eksende ise parmak kalktığı KARE yön bildirir. Joystick/butondan
+// bağımsız izlenir — jest tabanlı oyunlar (yılan tarzı) kontrol çizdirmeden
+// kaydirildi("sol") ile oynanır.
+int   _ar_swipe = 0;           // bu kare: 0 yok, 1 sol, 2 sağ, 3 yukarı, 4 aşağı
+float _ar_sw_x0 = 0.0;         // parmak iniş noktası
+float _ar_sw_y0 = 0.0;
+float _ar_sw_x1 = 0.0;         // son bilinen konum
+float _ar_sw_y1 = 0.0;
+bool  _ar_joy_on = false;      // bu kare joystick etkin (bir parmak sürüyor)
+float _ar_joy_bx = 0.0;        // taban merkezi (yüzer)
+float _ar_joy_by = 0.0;
+float _ar_joy_kx = 0.0;        // topuz (parmak) konumu, halkaya kırpılı
+float _ar_joy_ky = 0.0;
+float _ar_joy_dx = 0.0;        // analog yön x [-1..1]
+float _ar_joy_dy = 0.0;        // analog yön y [-1..1]
 
 // ---- Çarpışma kuralları (registry) ------------------------------------------
 array _ca  = [];   // tag A
@@ -547,96 +585,310 @@ func _ar_act_cx(): float  { return _world_w - _world_h * 0.24; }
 func _ar_act_cy(): float  { return _world_h * 0.72; }
 func _ar_act_r(): float   { return _world_h * 0.15; }
 
-// Her kare bir kez: touch zone'larını oku → yön + aksiyon-edge + tap-edge kur.
+// Her kare bir kez: parmakları oku → analog joystick + aksiyon-edge + tap-edge.
 func _ar_read_touch() {
     _ar_td_left = false; _ar_td_right = false;
     _ar_td_up = false; _ar_td_down = false;
+    _ar_joy_dx = 0.0; _ar_joy_dy = 0.0;
     _ar_act_now = false;
     int n = touch_count();
     if (n > 0) { _ar_touch_ui = true; } // ilk dokunuşta overlay'i kalıcı aç
-    float dcx = _ar_dpad_cx(); float dcy = _ar_dpad_cy(); float dr = _ar_dpad_r();
-    float acx = _ar_act_cx();  float acy = _ar_act_cy();  float ar = _ar_act_r();
-    float dead = dr * 0.35;
-    float grab = dr * 2.2;     // D-pad yakalama yarıçapı (biraz geniş)
+    float acx = _ar_act_cx(); float acy = _ar_act_cy(); float ar = _ar_act_r();
+    float baseR = _ar_dpad_r();          // topuzun taban içindeki azami yürüyüşü
+    // Joystick BÖLGESİ (sol-alt): taban buraya HAPSEDİLİR — ekranda gezemez.
+    // Aktivasyon da bölge + `grab` payı içinde olmalı.
+    float rminx = baseR * 1.15;
+    float rmaxx = _world_w * 0.42;
+    float rminy = _world_h * 0.42;
+    float rmaxy = _world_h - baseR * 1.15;
+    float grab  = baseR;                 // bölge çevresinde rahat yakalama payı
+
+    // Etkin şema + hareket kontrolü açık mı (elle seçim reads'i beklemez).
+    int sc = _ar_scheme_now();
+    bool mv_on = sc != 5 && (_ar_wants_move || _ar_scheme > 0);
+
+    // Yön BUTONU merkezleri (dpad/yatay/dikey şemaları) — sol-alt köşe.
+    float bR  = _ar_btn_r();
+    float bgr = bR * 1.35;               // buton yakalama payı
+    float blx = 0.0; float bly = 0.0;    // sol ◀
+    float brx = 0.0; float bry = 0.0;    // sağ ▶
+    float bux = 0.0; float buy = 0.0;    // yukarı ▲
+    float bdx = 0.0; float bdy = 0.0;    // aşağı ▼
+    bool has_lr = false;
+    bool has_ud = false;
+    if (sc == 3) {                       // yatay: ◀ ▶ yan yana
+        blx = bR * 1.5;  bly = _world_h - bR * 1.5;
+        brx = blx + bR * 2.6;  bry = bly;
+        has_lr = true;
+    } else if (sc == 4) {                // dikey: ▲ üstte, ▼ altta
+        bdx = bR * 1.5;  bdy = _world_h - bR * 1.5;
+        bux = bdx;  buy = bdy - bR * 2.6;
+        has_ud = true;
+    } else if (sc == 2) {                // dpad: 4 buton artı-düzeni
+        float dpcx = bR * 2.8;  float dpcy = _world_h - bR * 2.8;
+        float dpoff = bR * 1.75;
+        blx = dpcx - dpoff;  bly = dpcy;
+        brx = dpcx + dpoff;  bry = dpcy;
+        bux = dpcx;  buy = dpcy - dpoff;
+        bdx = dpcx;  bdy = dpcy + dpoff;
+        has_lr = true;  has_ud = true;
+    }
+
+    // Parmakları sınıflandır: aksiyon butonu / joystick adayı / yön butonları.
+    int joy_i = 0 - 1;
+    float best = 0.0;
+    bool have_best = false;
     int i = 0;
     while (i < n) {
         float tx = touch_x(i) * 1.0;
         float ty = touch_y(i) * 1.0;
         float adx = tx - acx; float ady = ty - acy;
-        if (adx * adx + ady * ady <= ar * ar) {
+        if (_ar_wants_action && adx * adx + ady * ady <= ar * ar) {
             _ar_act_now = true;
-        } else {
-            float dx = tx - dcx; float dy = ty - dcy;
-            if (dx * dx + dy * dy <= grab * grab) {
-                float axx = dx; if (axx < 0.0) { axx = 0.0 - axx; }
-                float ayy = dy; if (ayy < 0.0) { ayy = 0.0 - ayy; }
-                if (dx < 0.0 - dead && axx >= ayy * 0.5) { _ar_td_left = true; }
-                if (dx > dead && axx >= ayy * 0.5)       { _ar_td_right = true; }
-                if (dy < 0.0 - dead && ayy >= axx * 0.5) { _ar_td_up = true; }
-                if (dy > dead && ayy >= axx * 0.5)       { _ar_td_down = true; }
+        } else if (mv_on && sc == 1
+                   && tx >= rminx - grab && tx <= rmaxx + grab
+                   && ty >= rminy - grab && ty <= rmaxy + grab) {
+            float d2 = 0.0;
+            if (_ar_joy_on) {
+                float bx = tx - _ar_joy_bx; float by = ty - _ar_joy_by;
+                d2 = bx * bx + by * by;
+            }
+            if (!have_best || d2 < best) { best = d2; joy_i = i; have_best = true; }
+        } else if (mv_on) {
+            // Yön butonları: dokunulan butonun yönünü bu kare işaretle.
+            if (has_lr) {
+                float lx = tx - blx; float ly = ty - bly;
+                if (lx * lx + ly * ly <= bgr * bgr) { _ar_td_left = true; }
+                float rx2 = tx - brx; float ry2 = ty - bry;
+                if (rx2 * rx2 + ry2 * ry2 <= bgr * bgr) { _ar_td_right = true; }
+            }
+            if (has_ud) {
+                float ux = tx - bux; float uy = ty - buy;
+                if (ux * ux + uy * uy <= bgr * bgr) { _ar_td_up = true; }
+                float dx2 = tx - bdx; float dy2 = ty - bdy;
+                if (dx2 * dx2 + dy2 * dy2 <= bgr * bgr) { _ar_td_down = true; }
             }
         }
         i = i + 1;
     }
+
+    if (joy_i >= 0) {
+        float tx = touch_x(joy_i) * 1.0;
+        float ty = touch_y(joy_i) * 1.0;
+        if (!_ar_joy_on) {
+            // Taban ilk dokunuşta parmak altında doğar ama BÖLGEYE kırpılır;
+            // parmak kalkana dek SABİT kalır (gezmez) — yön topuzdan okunur.
+            float sx = tx; float sy = ty;
+            if (sx < rminx) { sx = rminx; }
+            if (sx > rmaxx) { sx = rmaxx; }
+            if (sy < rminy) { sy = rminy; }
+            if (sy > rmaxy) { sy = rmaxy; }
+            _ar_joy_bx = sx; _ar_joy_by = sy;
+            _ar_joy_on = true;
+        }
+        float ox = tx - _ar_joy_bx; float oy = ty - _ar_joy_by;
+        float mag = sqrt(ox * ox + oy * oy);
+        if (mag > baseR) {               // topuz halkanın dışına çıkamaz
+            float k = baseR / mag;
+            ox = ox * k; oy = oy * k;
+            mag = baseR;
+        }
+        _ar_joy_kx = _ar_joy_bx + ox;
+        _ar_joy_ky = _ar_joy_by + oy;
+        _ar_joy_dx = ox / baseR;         // analog yön [-1..1]
+        _ar_joy_dy = oy / baseR;
+        float dz = 0.28;                 // ölü bölge (küçük merkez titremesini yut)
+        if (_ar_joy_dx < 0.0 - dz) { _ar_td_left = true; }
+        if (_ar_joy_dx > dz)       { _ar_td_right = true; }
+        if (_ar_joy_dy < 0.0 - dz) { _ar_td_up = true; }
+        if (_ar_joy_dy > dz)       { _ar_td_down = true; }
+    } else {
+        _ar_joy_on = false;              // parmak çekildi → nötr
+    }
+
     _ar_act_edge = _ar_act_now && !_ar_act_prev;
     _ar_act_prev = _ar_act_now;
+
+    // Swipe izleme (parmak 0): inişte başlangıç, sürerken son konum, kalkışta
+    // vektör sınıflandırması. Eşik: dünya yüksekliğinin %10'u.
+    _ar_swipe = 0;
+    if (n > 0) {
+        if (_ar_touch_prevn == 0) {
+            _ar_sw_x0 = touch_x(0) * 1.0; _ar_sw_y0 = touch_y(0) * 1.0;
+        }
+        _ar_sw_x1 = touch_x(0) * 1.0; _ar_sw_y1 = touch_y(0) * 1.0;
+    } else if (_ar_touch_prevn > 0) {
+        float swdx = _ar_sw_x1 - _ar_sw_x0;
+        float swdy = _ar_sw_y1 - _ar_sw_y0;
+        float swax = swdx; if (swax < 0.0) { swax = 0.0 - swax; }
+        float sway = swdy; if (sway < 0.0) { sway = 0.0 - sway; }
+        float swthr = _world_h * 0.10;
+        if (swax > sway && swax >= swthr) {
+            if (swdx < 0.0) { _ar_swipe = 1; } else { _ar_swipe = 2; }
+        } else if (sway > swax && sway >= swthr) {
+            if (swdy < 0.0) { _ar_swipe = 3; } else { _ar_swipe = 4; }
+        }
+    }
+
     _ar_tap_edge = (n > 0) && (_ar_touch_prevn == 0);
     _ar_touch_prevn = n;
 }
 
 // Klavye + dokunma birleşik girdi — movement presetleri bunları kullanır.
-func _ar_in_left(): bool  { return key_down("LEFT")  || key_down("A") || _ar_td_left; }
-func _ar_in_right(): bool { return key_down("RIGHT") || key_down("D") || _ar_td_right; }
-func _ar_in_up(): bool    { return key_down("UP")    || key_down("W") || _ar_td_up; }
-func _ar_in_down(): bool  { return key_down("DOWN")  || key_down("S") || _ar_td_down; }
+// İlk çağrı `_ar_wants_move`'u işaretler → joystick yalnız yön okuyan oyunlarda çizilir.
+func _ar_in_left(): bool  { _ar_wants_move = true; _ar_rd_l = true; return key_down("LEFT")  || key_down("A") || _ar_td_left; }
+func _ar_in_right(): bool { _ar_wants_move = true; _ar_rd_r = true; return key_down("RIGHT") || key_down("D") || _ar_td_right; }
+func _ar_in_up(): bool    { _ar_wants_move = true; _ar_rd_u = true; return key_down("UP")    || key_down("W") || _ar_td_up; }
+func _ar_in_down(): bool  { _ar_wants_move = true; _ar_rd_d = true; return key_down("DOWN")  || key_down("S") || _ar_td_down; }
+
+// Etkin şema çözümü: elle seçildiyse o; auto ise oyunun okuduğu yönlerden.
+func _ar_scheme_now(): int {
+    if (_ar_scheme != 0) { return _ar_scheme; }
+    bool lr = _ar_rd_l || _ar_rd_r;
+    bool ud = _ar_rd_u || _ar_rd_d;
+    if (lr && ud)  { return 1; }   // iki eksen → joystick
+    if (lr)        { return 3; }   // yalnız sağ/sol → yatay butonlar
+    if (ud)        { return 4; }   // yalnız yukarı/aşağı → dikey butonlar
+    return 5;                      // yön okunmuyor → hareket kontrolü yok
+}
+
+// Dokunmatik kontrol şemasını elle seç (TR+EN dize):
+//   "auto"/"oto" (varsayılan) | "joystick" | "dpad"/"yon4" | "yatay"/"horizontal"
+//   | "dikey"/"vertical" | "yok"/"none"
+func kontrol_semasi(s) {
+    if (s == "joystick")                        { _ar_scheme = 1; }
+    else if (s == "dpad" || s == "yon4")        { _ar_scheme = 2; }
+    else if (s == "yatay" || s == "horizontal") { _ar_scheme = 3; }
+    else if (s == "dikey" || s == "vertical")   { _ar_scheme = 4; }
+    else if (s == "yok" || s == "none")         { _ar_scheme = 5; }
+    else                                        { _ar_scheme = 0; }
+}
+func control_scheme(s) { kontrol_semasi(s); }
+
+// Yön butonu yarıçapı (dpad/yatay/dikey şemaları)
+func _ar_btn_r(): float { return _world_h * 0.105; }
+
+// ---- Herkese açık yön okuma (klavye VEYA joystick) --------------------------
+// Elle hareket süren oyunlar (raket/gemi/kuş...) `key_down("LEFT")` yerine
+// bunları kullanırsa dokunmatik joystick de çalışır — ve joystick yalnız bu
+// okumaları yapan oyunlarda görünür. TR + EN alias.
+func left(): bool   { return _ar_in_left(); }
+func sol(): bool    { return _ar_in_left(); }
+func right(): bool  { return _ar_in_right(); }
+func sag(): bool    { return _ar_in_right(); }
+func up(): bool     { return _ar_in_up(); }
+func yukari(): bool { return _ar_in_up(); }
+func down(): bool   { return _ar_in_down(); }
+func asagi(): bool  { return _ar_in_down(); }
 // Zıplama: klavye edge VEYA aksiyon butonu edge.
-func _ar_in_jump(): bool  { return key_pressed("SPACE") || key_pressed("UP") || key_pressed("W") || _ar_act_edge; }
+func _ar_in_jump(): bool  { _ar_wants_action = true; return key_pressed("SPACE") || key_pressed("UP") || key_pressed("W") || _ar_act_edge; }
 
 // ---- Herkese açık: aksiyon butonu (ateş/etkileşim; nişancı oyunları için) ----
 // Oyun kodunda `key_pressed("SPACE")` yerine `action_pressed()` kullanılırsa
 // hem klavye hem dokunma çalışır. action_held(): basılı tutuluyor mu.
-func action_pressed(): bool { return _ar_act_edge; }
-func aksiyon_basildi(): bool { return _ar_act_edge; }
-func action_held(): bool    { return _ar_act_now; }
-func aksiyon_basili(): bool  { return _ar_act_now; }
+func action_pressed(): bool { _ar_wants_action = true; return _ar_act_edge; }
+func aksiyon_basildi(): bool { _ar_wants_action = true; return _ar_act_edge; }
+func action_held(): bool    { _ar_wants_action = true; return _ar_act_now; }
+func aksiyon_basili(): bool  { _ar_wants_action = true; return _ar_act_now; }
 
 // Ateş/zıpla için birleşik edge: SPACE/UP klavye VEYA aksiyon butonu. Nişancı
 // oyunları `key_pressed("SPACE")` yerine bunu kullanırsa dokunmatikte de ateş eder.
-func fire_pressed(): bool  { return key_pressed("SPACE") || key_pressed("UP") || _ar_act_edge; }
+func fire_pressed(): bool  { _ar_wants_action = true; return key_pressed("SPACE") || key_pressed("UP") || _ar_act_edge; }
 func ates_basildi(): bool  { return fire_pressed(); }
+
+// Ekranın HERHANGİ bir yerine bu kare yeni dokunuldu mu (parmak 0 → >0 kenarı).
+// Sadece-dokunma oyunları (flappy tarzı) bunu okur: buton/joystick GEREKMEZ,
+// hiçbir kontrol çizilmez — "ekrana tıkla" oyunun kendisidir.
+func dokunuldu(): bool { return _ar_tap_edge; }
+func tapped(): bool    { return _ar_tap_edge; }
+
+// Kaydırma jesti: parmak KALKTIĞI kare yönü bildirir. Yön adı TR ya da EN:
+// "sol"/"left", "sag"/"right", "yukari"/"up", "asagi"/"down". Yılan tarzı
+// oyunlar buton/joystick çizdirmeden jestle oynanır.
+func kaydirildi(yon): bool {
+    if (_ar_swipe == 1) { return yon == "sol" || yon == "left"; }
+    if (_ar_swipe == 2) { return yon == "sag" || yon == "right"; }
+    if (_ar_swipe == 3) { return yon == "yukari" || yon == "up"; }
+    if (_ar_swipe == 4) { return yon == "asagi" || yon == "down"; }
+    return false;
+}
+func swiped(dir): bool { return kaydirildi(dir); }
 
 // Dokunmatik overlay'i zorla aç/kapat (varsayılan: ilk dokunuşta otomatik).
 func touch_controls(on)   { _ar_touch_force = on; _ar_touch_ui = on; }
 func dokunma_kontrol(on)  { touch_controls(on); }
 
-// Dokunmatik kontrol overlay'ini çiz: sol alt D-pad (4 ok) + sağ alt aksiyon
-// butonu. Basılı yönler/buton parlar. Yarı-saydam (rgba) — oyunu kapatmaz.
+// Dokunmatik overlay: DİNAMİK analog joystick (yuvarlak içinde yuvarlak) + —
+// sadece oyun kullanıyorsa— sağ alt aksiyon butonu. Boşta joystick hayalet gibi
+// varsayılan konumda soluk durur; parmak basınca tabanı orada belirir ve topuz
+// parmağı takip eder. Yarı-saydam (rgba) — oyunu kapatmaz.
 func _ar_draw_touch_ui() {
-    float dcx = _ar_dpad_cx(); float dcy = _ar_dpad_cy(); float dr = _ar_dpad_r();
-    float acx = _ar_act_cx();  float acy = _ar_act_cy();  float ar = _ar_act_r();
-    int base = rgba(210, 214, 230, 45);
-    int hot  = rgba(255, 255, 255, 225);
-    int dim  = rgba(255, 255, 255, 90);
-    float a = dr * 0.8;   // ok ucu uzaklığı
-    float b = dr * 0.36;  // ok tabanı yarısı
-    circle(toInt(dcx), toInt(dcy), toInt(dr), base);
-    // sol
-    triangle(dcx - a, dcy, dcx - b, dcy - b, dcx - b, dcy + b,
-             _ar_td_left ? hot : dim);
-    // sağ
-    triangle(dcx + a, dcy, dcx + b, dcy - b, dcx + b, dcy + b,
-             _ar_td_right ? hot : dim);
-    // yukarı
-    triangle(dcx, dcy - a, dcx - b, dcy - b, dcx + b, dcy - b,
-             _ar_td_up ? hot : dim);
-    // aşağı
-    triangle(dcx, dcy + a, dcx - b, dcy + b, dcx + b, dcy + b,
-             _ar_td_down ? hot : dim);
-    // aksiyon butonu
-    circle(toInt(acx), toInt(acy), toInt(ar),
-           _ar_act_now ? rgba(255, 130, 120, 200) : rgba(230, 120, 110, 70));
-    circle(toInt(acx), toInt(acy), toInt(ar * 0.45),
-           _ar_act_now ? hot : dim);
+    float baseR = _ar_dpad_r();
+    float knobR = baseR * 0.5;
+    int hot = rgba(255, 255, 255, 225);
+    int dim = rgba(255, 255, 255, 90);
+
+    // Hareket kontrolü — etkin şemaya göre joystick YA DA yön butonları.
+    int sc = _ar_scheme_now();
+    bool mv_on = sc != 5 && (_ar_wants_move || _ar_scheme > 0);
+    if (mv_on && sc == 1) {
+        float bx = _ar_dpad_cx(); float by = _ar_dpad_cy();  // boşta hayalet konumu
+        float kx = bx; float ky = by;
+        if (_ar_joy_on) { bx = _ar_joy_bx; by = _ar_joy_by; kx = _ar_joy_kx; ky = _ar_joy_ky; }
+
+        // dış halka (taban) + iç topuz
+        circle(toInt(bx), toInt(by), toInt(baseR),
+               _ar_joy_on ? rgba(210, 220, 255, 70) : rgba(210, 214, 230, 40));
+        circle(toInt(kx), toInt(ky), toInt(knobR), _ar_joy_on ? hot : dim);
+    } else if (mv_on && sc != 1) {
+        // Yön butonları — merkezler _ar_read_touch ile AYNI formüller.
+        float bR = _ar_btn_r();
+        float ta = bR * 0.5;    // ok ucu uzaklığı
+        float tb = bR * 0.3;    // ok tabanı yarısı
+        int cOff = rgba(210, 214, 230, 45);
+        int cOn  = rgba(210, 220, 255, 120);
+        if (sc == 3 || sc == 2) {
+            float blx = 0.0; float bly = 0.0; float brx = 0.0; float bry = 0.0;
+            if (sc == 3) {
+                blx = bR * 1.5;  bly = _world_h - bR * 1.5;
+                brx = blx + bR * 2.6;  bry = bly;
+            } else {
+                blx = bR * 2.8 - bR * 1.75;  bly = _world_h - bR * 2.8;
+                brx = bR * 2.8 + bR * 1.75;  bry = bly;
+            }
+            circle(toInt(blx), toInt(bly), toInt(bR), _ar_td_left ? cOn : cOff);
+            triangle(blx - ta, bly, blx + tb, bly - tb, blx + tb, bly + tb,
+                     _ar_td_left ? hot : dim);
+            circle(toInt(brx), toInt(bry), toInt(bR), _ar_td_right ? cOn : cOff);
+            triangle(brx + ta, bry, brx - tb, bry - tb, brx - tb, bry + tb,
+                     _ar_td_right ? hot : dim);
+        }
+        if (sc == 4 || sc == 2) {
+            float bux = 0.0; float buy = 0.0; float bdx = 0.0; float bdy = 0.0;
+            if (sc == 4) {
+                bdx = bR * 1.5;  bdy = _world_h - bR * 1.5;
+                bux = bdx;  buy = bdy - bR * 2.6;
+            } else {
+                bux = bR * 2.8;  buy = _world_h - bR * 2.8 - bR * 1.75;
+                bdx = bR * 2.8;  bdy = _world_h - bR * 2.8 + bR * 1.75;
+            }
+            circle(toInt(bux), toInt(buy), toInt(bR), _ar_td_up ? cOn : cOff);
+            triangle(bux, buy - ta, bux - tb, buy + tb, bux + tb, buy + tb,
+                     _ar_td_up ? hot : dim);
+            circle(toInt(bdx), toInt(bdy), toInt(bR), _ar_td_down ? cOn : cOff);
+            triangle(bdx, bdy + ta, bdx - tb, bdy - tb, bdx + tb, bdy - tb,
+                     _ar_td_down ? hot : dim);
+        }
+    }
+
+    // aksiyon butonu — yalnızca oyun onu okuyorsa
+    if (_ar_wants_action) {
+        float acx = _ar_act_cx(); float acy = _ar_act_cy(); float ar = _ar_act_r();
+        circle(toInt(acx), toInt(acy), toInt(ar),
+               _ar_act_now ? rgba(255, 130, 120, 200) : rgba(230, 120, 110, 70));
+        circle(toInt(acx), toInt(acy), toInt(ar * 0.5),
+               _ar_act_now ? hot : dim);
+    }
 }
 
 func _ar_update() {
@@ -968,6 +1220,12 @@ func _lx_clear() {
     _hud_prefix = ""; _hud_set = false; _show_score = true;
     _gravity = 0.0; _jump_v = 520.0; _clamp_world = true;
     _banner_t = 0.0; _lvl_pending = 0;
+    _ar_wants_action = false;          // buton görünürlüğü oyuna göre sıfırlanır
+    _ar_wants_move = false;            // joystick görünürlüğü de oyuna göre
+    _ar_scheme = 0;                    // kontrol şeması oyuna göre (auto'ya dön)
+    _ar_rd_l = false; _ar_rd_r = false; _ar_rd_u = false; _ar_rd_d = false;
+    _ar_joy_on = false; _ar_joy_dx = 0.0; _ar_joy_dy = 0.0;
+    _ar_swipe = 0;                     // önceki oyunun jesti sızmasın
     clear_entities();
 }
 
@@ -1139,12 +1397,16 @@ func launcher() {
     var wm = arena_save();
     while (running()) {
         if (_ar_mode == 0) {
+            // Android donanım GERİ tuşu: menüdeyken uygulamadan çık.
+            if (key_pressed("BACK")) { break; }
             _menu_step();
             frame_begin();
             _menu_draw();
             frame_end();
         } else {
-            bool go_home = key_pressed("ESCAPE") || key_pressed("BACKSPACE");
+            // GERİ (Android) da EV/ESC gibi menüye döndürür.
+            bool go_home = key_pressed("ESCAPE") || key_pressed("BACKSPACE")
+                        || key_pressed("BACK");
             _ar_update();
             frame_begin();
             _ar_draw_all();

@@ -1,0 +1,171 @@
+// Yilan — arcade motoruyla izgara yilani, 3 BOLUM (tame_snake'in arcade esi).
+//
+//   ./tulpar examples/arcade_yilan.tpr
+//
+// Kontroller: ok tuslari/WASD, mobilde dpad butonlari VEYA parmak kaydirma
+// (kaydirildi() jesti — yilana en dogal his). Yem (kirmizi) ye -> buyu.
+// Duvara, engele ya da kendine carpma. Her bolumde 5 yem -> sonraki bolum;
+// 1) yavas  2) hizli  3) en hizli + engel duvarlari. Skor bolumler arasi
+// korunur (motorun bolum semantigi).
+//
+// Motor kullanimi: entity YOK — yilan durumu izgara dizilerinde, cizim
+// ciz_ustune() ile elle. bolum()/skor/oyun-bitti/afis/HUD motordan bedava.
+// Not: test kosucusunda COMPILE_ONLY (pencere dongusu CI'da bloklar).
+
+import "arcade";
+
+// ---- Izgara ----------------------------------------------------------------
+int COLS = 20;
+int ROWS = 14;
+int CELL = 28;
+int OX = 40;          // oyun alani sol bosluk
+int OY = 64;          // HUD (skor+bilgi) altinda kalsin
+
+// ---- Yilan durumu -----------------------------------------------------------
+array ysx = [];       // govde hucreleri (bas = son eleman)
+array ysy = [];
+int syuz = 0;         // govde uzunlugu
+int ydx = 1;          // aktif yon (hucre/adim)
+int ydy = 0;
+int nydx = 1;         // bekleyen yon (adimda uygulanir; 180 donus engellenir)
+int nydy = 0;
+int adim_kare = 8;    // her N karede bir adim — bolumle hizlanir
+int tik = 0;
+int yem_x = 0;
+int yem_y = 0;
+int yem_sayisi = 0;   // bu bolumde yenen yem (5 = bolum gec)
+array egx = [];       // engel hucreleri (yalniz 3. bolum)
+array egy = [];
+
+func engel_mi(cx, cy): bool {
+    for (int i = 0; i < length(egx); i = i + 1) {
+        if (toInt(egx[i]) == cx && toInt(egy[i]) == cy) { return true; }
+    }
+    return false;
+}
+
+func yilan_mi(cx, cy): bool {
+    for (int i = 0; i < syuz; i = i + 1) {
+        if (toInt(ysx[i]) == cx && toInt(ysy[i]) == cy) { return true; }
+    }
+    return false;
+}
+
+func yem_koy() {
+    // Bos hucre bulana kadar dene (izgara kucuk, hizli biter).
+    int deneme = 0;
+    while (deneme < 500) {
+        int cx = randint(0, COLS - 1);
+        int cy = randint(0, ROWS - 1);
+        if (!yilan_mi(cx, cy) && !engel_mi(cx, cy)) {
+            yem_x = cx; yem_y = cy;
+            return;
+        }
+        deneme = deneme + 1;
+    }
+}
+
+// Yilani baslangic durumuna kur: 3 hucre, satir 7'de saga bakar.
+func yilan_kur() {
+    ysx = []; ysy = []; syuz = 0;
+    push(ysx, 3); push(ysy, 7);
+    push(ysx, 4); push(ysy, 7);
+    push(ysx, 5); push(ysy, 7);
+    syuz = 3;
+    ydx = 1; ydy = 0; nydx = 1; nydy = 0;
+    tik = 0; yem_sayisi = 0;
+    yem_koy();
+}
+
+// 3. bolumun engelleri: iki dikey duvar (sutun 6 ve 13), yilanin baslangic
+// satiri 7 acik birakilir ki dogus guvenli olsun.
+func engel_kur() {
+    egx = []; egy = [];
+    for (int r = 2; r < ROWS - 2; r = r + 1) {
+        if (r != 7) {
+            push(egx, 6);  push(egy, r);
+            push(egx, 13); push(egy, r);
+        }
+    }
+}
+
+// ---- Bolumler ---------------------------------------------------------------
+func b1() { adim_kare = 8; egx = []; egy = []; yilan_kur(); }
+func b2() { adim_kare = 6; egx = []; egy = []; yilan_kur(); }
+func b3() { adim_kare = 4; engel_kur(); yilan_kur(); }
+
+// ---- Kare guncelleme --------------------------------------------------------
+func kare() {
+    // Yon girisi: klavye/dpad butonlari (basili) VEYA kaydirma jesti (kalkis
+    // kenari). 180 derece geri donus yasak.
+    if ((sol() || kaydirildi("sol")) && ydx != 1)             { nydx = 0 - 1; nydy = 0; }
+    else if ((sag() || kaydirildi("sag")) && ydx != 0 - 1)    { nydx = 1; nydy = 0; }
+    else if ((yukari() || kaydirildi("yukari")) && ydy != 1)  { nydx = 0; nydy = 0 - 1; }
+    else if ((asagi() || kaydirildi("asagi")) && ydy != 0 - 1){ nydx = 0; nydy = 1; }
+
+    tik = tik + 1;
+    if (tik < adim_kare) { return; }
+    tik = 0;
+
+    ydx = nydx; ydy = nydy;
+    int bx = toInt(ysx[syuz - 1]) + ydx;
+    int by = toInt(ysy[syuz - 1]) + ydy;
+
+    // Carpma: dis duvar / engel / kendi govdesi -> oyun bitti (titreşimli).
+    if (bx < 0 || bx >= COLS || by < 0 || by >= ROWS
+        || engel_mi(bx, by) || yilan_mi(bx, by)) {
+        titret(200);
+        oyun_bitti();
+        return;
+    }
+
+    bool buyu = (bx == yem_x && by == yem_y);
+    if (buyu) {
+        push(ysx, bx); push(ysy, by);
+        syuz = syuz + 1;
+        skor_ekle(10);
+        titret(60);
+        yem_sayisi = yem_sayisi + 1;
+        if (yem_sayisi >= 5) { bolum_gec(); return; }
+        yem_koy();
+    } else {
+        // Kuyrugu at: govdeyi sola kaydir, basi sona yaz (uzunluk sabit).
+        for (int i = 0; i < syuz - 1; i = i + 1) {
+            ysx[i] = ysx[i + 1];
+            ysy[i] = ysy[i + 1];
+        }
+        ysx[syuz - 1] = bx;
+        ysy[syuz - 1] = by;
+    }
+}
+
+// ---- Cizim ------------------------------------------------------------------
+func ciz() {
+    // Oyun alani cercevesi
+    rect_lines(OX - 2, OY - 2, COLS * CELL + 4, ROWS * CELL + 4, GRAY);
+    // Engeller
+    for (int i = 0; i < length(egx); i = i + 1) {
+        rect(OX + toInt(egx[i]) * CELL, OY + toInt(egy[i]) * CELL,
+             CELL, CELL, rgb(120, 90, 200));
+    }
+    // Yem
+    rect(OX + yem_x * CELL + 3, OY + yem_y * CELL + 3, CELL - 6, CELL - 6, RED);
+    // Yilan (bas altin, govde yesil)
+    for (int i = 0; i < syuz; i = i + 1) {
+        rect(OX + toInt(ysx[i]) * CELL + 1, OY + toInt(ysy[i]) * CELL + 1,
+             CELL - 2, CELL - 2, i == syuz - 1 ? GOLD : LIME);
+    }
+    // Bolum yem sayaci (skorun yaninda kalabalik etmesin diye alt kenarda)
+    text("Yem: " + toString(yem_sayisi) + "/5", OX, OY + ROWS * CELL + 6, 18, SKYBLUE);
+}
+
+// ---- Kayit ------------------------------------------------------------------
+sahne(640, 480, "Yilan");
+bilgi("Kaydir / dpad / ok tuslari: yon   |   5 yem = sonraki bolum");
+kontrol_semasi("dpad");   // mobilde 4 ok butonu; kaydirma jesti de calisir
+bolum(1, b1);
+bolum(2, b2);
+bolum(3, b3);
+her_kare(kare);
+ciz_ustune(ciz);
+oyna();

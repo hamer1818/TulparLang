@@ -51,8 +51,8 @@ func on_frame_fn() {
 
     // --- Player: horizontal only (topdown would move in 4 directions) -------
     float px = get_x(player_id);
-    if (key_down("LEFT")  || key_down("A")) { px = px - 300.0 * dt; }
-    if (key_down("RIGHT") || key_down("D")) { px = px + 300.0 * dt; }
+    if (left())  { px = px - 300.0 * dt; }   // keyboard OR touch joystick
+    if (right()) { px = px + 300.0 * dt; }
     if (px < 0.0) { px = 0.0; }
     if (px > 610.0) { px = 610.0; }
     set_pos(player_id, px, 430);
@@ -92,6 +92,7 @@ func lose_cb() { game_over(); }
 language("en");
 scene(640, 480, "Meteor Dodge");
 controls("Left/Right or A/D: run   |   Avoid the meteors, run out the clock");
+control_scheme("horizontal");   // mobile: left/right arrow buttons
 on_start(setup);
 level(1, l1);
 level(2, l2);

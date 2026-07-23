@@ -71,6 +71,13 @@ static void print_help() {
   std::printf("  tulpar build <source.tpr> [out]  %s\n",
               tulpar::i18n::tr_en("- Bagimsiz native ikili olustur",
                                   "- Build standalone native binary"));
+  std::printf("  tulpar build --target=web|android %s\n",
+              tulpar::i18n::tr_en("- Web (wasm) / Android hedefi",
+                                  "- Web (wasm) / Android target"));
+  std::printf("  tulpar build --apk <src> [out]   %s\n",
+              tulpar::i18n::tr_en(
+                  "- Tek komutta imzali Android APK (android hedefini icerir)",
+                  "- Signed Android APK in one command (implies android)"));
 
   std::printf("\n%s\n",
               tulpar::i18n::tr_en("Aletler:", "Tools:"));
@@ -225,12 +232,19 @@ int main(int argc, char **argv) {
   // staging'i üret (NDK linki). Yalnız `build` ile anlamlı; ayrıntı
   // aot_pipeline.cpp android yolunda.
   int android_target = 0;
+  // --apk: staging'in ardından package_apk.sh de koşsun → tek komutta imzalı
+  // .apk. Android hedefini ima eder (tek başına `tulpar build --apk` yeter).
+  int apk_package = 0;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--target=web") == 0 || strcmp(argv[i], "--web") == 0)
       web_target = 1;
     if (strcmp(argv[i], "--target=android") == 0 ||
         strcmp(argv[i], "--android") == 0)
       android_target = 1;
+    if (strcmp(argv[i], "--apk") == 0) {
+      android_target = 1;
+      apk_package = 1;
+    }
   }
   int skip_typecheck = 0;  // --no-typecheck disables the pre-pass warnings
   // Plan 07 PR 1: `tulpar build --debug` (or `-g`) requests an AOT
@@ -348,6 +362,7 @@ int main(int argc, char **argv) {
   if (build_mode) {
     if (web_target) aot_set_target_web(1);
     if (android_target) aot_set_target_android(1);
+    if (apk_package) aot_set_android_apk(1);
     // Pozisyonel argümanlar: bayraklar (`--target=web`, `--debug`, ...)
     // build'den sonra da gelebilir; '-' ile başlayanları atla.
     const char *src_arg = nullptr;
