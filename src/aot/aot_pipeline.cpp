@@ -9,10 +9,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+// stat(): apk betiği / asset dizini var mı — HER platformda gerekir
+// (MinGW/MSVC de sys/stat.h sağlar; sys/wait.h'nin aksine Windows'ta var).
+#include <sys/stat.h>
+#ifndef S_ISDIR  // MSVC S_ISDIR makrosunu tanımlamaz
+#define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#endif
 #if !PLATFORM_WINDOWS
 #include <csignal>   // SIGINT
 #include <sys/wait.h> // WIFSIGNALED / WTERMSIG on system() status
-#include <sys/stat.h> // find_package_apk_script: stat() ile betik var mı
 #include <dirent.h>  // find_android_ndk: ~/Android/android-ndk-* taraması
 #endif
 #include <chrono>
