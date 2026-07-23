@@ -50,8 +50,8 @@ func her_kare_is() {
 
     // --- Oyuncu: sadece yatay (motor topdown 4 yöne giderdi) -----------------
     float px = x_of(oyuncu_id);
-    if (key_down("LEFT")  || key_down("A")) { px = px - 300.0 * dt; }
-    if (key_down("RIGHT") || key_down("D")) { px = px + 300.0 * dt; }
+    if (sol()) { px = px - 300.0 * dt; }   // klavye VEYA dokunmatik joystick
+    if (sag()) { px = px + 300.0 * dt; }
     if (px < 0.0) { px = 0.0; }
     if (px > 610.0) { px = 610.0; }
     konumla(oyuncu_id, px, 430);
@@ -90,6 +90,7 @@ func kaybet_cb() { oyun_bitti(); }
 
 sahne(640, 480, "Goktasi");
 bilgi("Sol/Sag veya A/D: kac   |   Goktaslarindan sakin, sureyi doldur");
+kontrol_semasi("yatay");   // mobilde sag/sol ok butonlari
 baslangicta(kur);
 bolum(1, b1);
 bolum(2, b2);

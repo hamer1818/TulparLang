@@ -61,13 +61,13 @@ func on_frame_fn() {
 
     // --- Ship: horizontal only -----------------------------------------------
     float gx = get_x(ship);
-    if (key_down("LEFT")  || key_down("A")) { gx = gx - 390.0 * dt; }
-    if (key_down("RIGHT") || key_down("D")) { gx = gx + 390.0 * dt; }
+    if (left())  { gx = gx - 390.0 * dt; }   // keyboard OR touch joystick
+    if (right()) { gx = gx + 390.0 * dt; }
     if (gx < 0.0) { gx = 0.0; }
     if (gx > 608.0) { gx = 608.0; }
     set_pos(ship, gx, SHIP_Y);
 
-    if (key_pressed("SPACE")) {
+    if (fire_pressed()) {   // SPACE keyboard OR the touch action button
         bullet(gx + 13.0, SHIP_Y - 6.0, 6, 14, GOLD, 0, 0 - 470);
     }
 

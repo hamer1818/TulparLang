@@ -3,11 +3,18 @@
 #include "../parser/parser.hpp"
 #include "../common/localization.hpp"
 #include "../common/platform.h"
+#include "../pkg/manifest.hpp"  // [android] bölümü: paket adi/ikon/yon/surum
 #include "../lsp/document_index.hpp"
 #include "llvm_backend.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+// stat(): apk betiği / asset dizini var mı — HER platformda gerekir
+// (MinGW/MSVC de sys/stat.h sağlar; sys/wait.h'nin aksine Windows'ta var).
+#include <sys/stat.h>
+#ifndef S_ISDIR  // MSVC S_ISDIR makrosunu tanımlamaz
+#define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#endif
 #if !PLATFORM_WINDOWS
 #include <csignal>   // SIGINT
 #include <sys/wait.h> // WIFSIGNALED / WTERMSIG on system() status
@@ -259,6 +266,32 @@ static int g_target_android = 0;
 
 void aot_set_target_android(int enable) { g_target_android = enable ? 1 : 0; }
 
+// `--apk`: staging'in ardından android/package_apk.sh'yi de çalıştır → tek
+// komutta imzalı, kurulabilir .apk. Betik WSL/Windows-interop ayrıntılarını
+// zaten çözüyor; driver yalnızca onu bulup çağırır.
+static int g_android_apk = 0;
+
+void aot_set_android_apk(int enable) { g_android_apk = enable ? 1 : 0; }
+
+// package_apk.sh'yi bul: TULPAR_ANDROID_TOOLS ortam değişkeni (dizin), sonra
+// tulpar'ın yanı (kurulum düzeni), sonra çalışma dizini (dev-tree).
+static std::string find_package_apk_script() {
+  auto ok = [](const std::string &p) {
+    struct stat st;
+    return stat(p.c_str(), &st) == 0 ? p : std::string();
+  };
+  if (const char *env = getenv("TULPAR_ANDROID_TOOLS"); env && *env) {
+    std::string p = ok(std::string(env) + "/package_apk.sh");
+    if (!p.empty()) return p;
+  }
+  std::string exe_dir = get_executable_dir();
+  if (!exe_dir.empty()) {
+    std::string p = ok(exe_dir + "/android/package_apk.sh");
+    if (!p.empty()) return p;
+  }
+  return ok("./android/package_apk.sh");
+}
+
 // NDK kökü: TULPAR_ANDROID_NDK env'i, yoksa ~/Android/android-ndk-* (en
 // yenisi). Boş dönerse çağıran hata basar. Android hedefi şimdilik yalnız
 // Linux/macOS host'tan derleniyor (Windows host'ta VMValue codegen'i sret
@@ -302,26 +335,56 @@ static std::string build_android_link_search_dirs(const char *abi) {
   return out;
 }
 
+// Uygulama kimliği — tulpar.toml [android] bölümünden doldurulur; her alanın
+// tarihi varsayılanı vardır, yani toml'suz davranış birebir aynı kalır.
+struct AndroidAppConfig {
+  std::string package = "dev.tulparlang.game";
+  std::string label;                       // boş → çıktı taban adı
+  std::string orientation = "landscape";   // landscape | portrait | sensor
+  std::string version_code = "1";
+  std::string version_name = "1.0";
+  bool has_icon = false;                   // res/mipmap/ic_launcher.png kondu
+};
+
+// Manifest metin değerleri için minimal XML kaçışı (label kullanıcıdan gelir).
+static std::string xml_escape(const std::string &s) {
+  std::string out;
+  for (char c : s) {
+    switch (c) {
+      case '&': out += "&amp;"; break;
+      case '<': out += "&lt;"; break;
+      case '>': out += "&gt;"; break;
+      case '"': out += "&quot;"; break;
+      default: out += c; break;
+    }
+  }
+  return out;
+}
+
 // Staging dizinine minimal NativeActivity manifesti yazar. hasCode=false:
 // APK'da hiç Java/DEX yok — NativeActivity framework'ten gelir, oyun
 // libtulpargame.so'dur (meta-data android.app.lib_name).
 static void write_android_manifest(const std::string &stage,
-                                   const char *app_label) {
+                                   const AndroidAppConfig &cfg) {
   std::string path = stage + "/AndroidManifest.xml";
   FILE *f = fopen(path.c_str(), "wb");
   if (!f) return;
+  std::string icon_attr;
+  if (cfg.has_icon) icon_attr = " android:icon=\"@mipmap/ic_launcher\"";
   fprintf(f,
           "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
           "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"\n"
-          "    package=\"dev.tulparlang.game\"\n"
-          "    android:versionCode=\"1\" android:versionName=\"1.0\">\n"
+          "    package=\"%s\"\n"
+          "    android:versionCode=\"%s\" android:versionName=\"%s\">\n"
           "  <uses-sdk android:minSdkVersion=\"26\" "
           "android:targetSdkVersion=\"34\"/>\n"
+          // titret()/vibrate() için; normal izin — kurulumda otomatik verilir.
+          "  <uses-permission android:name=\"android.permission.VIBRATE\"/>\n"
           "  <application android:label=\"%s\" android:hasCode=\"false\"\n"
-          "      android:extractNativeLibs=\"true\">\n"
+          "      android:extractNativeLibs=\"true\"%s>\n"
           "    <activity android:name=\"android.app.NativeActivity\"\n"
           "        android:configChanges=\"orientation|keyboardHidden|screenSize\"\n"
-          "        android:screenOrientation=\"landscape\"\n"
+          "        android:screenOrientation=\"%s\"\n"
           "        android:exported=\"true\">\n"
           "      <meta-data android:name=\"android.app.lib_name\" "
           "android:value=\"tulpargame\"/>\n"
@@ -332,8 +395,127 @@ static void write_android_manifest(const std::string &stage,
           "    </activity>\n"
           "  </application>\n"
           "</manifest>\n",
-          app_label);
+          xml_escape(cfg.package).c_str(), xml_escape(cfg.version_code).c_str(),
+          xml_escape(cfg.version_name).c_str(), xml_escape(cfg.label).c_str(),
+          icon_attr.c_str(), xml_escape(cfg.orientation).c_str());
   fclose(f);
+}
+
+// Oyun asset'lerini (ses/sprite/font dosyaları) staging assets/'ine kopyala.
+// package_apk.sh bunu `aapt2 link -A` ile APK'ya koyar; raylib Android'de
+// AAssetManager üzerinden AYNI göreceli yollarla okur — yani masaüstünde
+// çalışan `load_texture("top.png")` cihazda değişiklik istemez. Kaynak dizin:
+// TULPAR_ANDROID_ASSETS env'i (web'in TULPAR_WEB_ASSETS'inin eşi) ya da
+// tulpar.toml [android] assets anahtarı.
+static void stage_android_assets(const std::string &stage,
+                                 const std::string &dir) {
+  if (dir.empty()) return;
+  struct stat st;
+  if (stat(dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+    fprintf(stderr,
+            tulpar::i18n::tr_en(
+                "[AOT] [android] assets dizini bulunamadi: %s (atlaniyor)\n",
+                "[AOT] [android] assets dir not found: %s (skipping)\n"),
+            dir.c_str());
+    return;
+  }
+  // Montaj noktası = dizinin YAZILDIĞI göreceli yol (web'in --preload-file
+  // davranışıyla aynı): assets="assets" iken oyun "assets/top.png" okur →
+  // APK'da assets/assets/top.png. Mutlak yol verilirse taban adı kullanılır
+  // (göreceli referans ancak öyle eşleşebilir).
+  std::string mount = dir;
+  while (!mount.empty() && mount.back() == '/') mount.pop_back();
+  if (!mount.empty() && mount[0] == '/') {
+    size_t slash = mount.find_last_of('/');
+    mount = mount.substr(slash + 1);
+  }
+  std::string cmd = "mkdir -p \"" + stage + "/assets/" + mount +
+                    "\" && cp -a \"" + dir + "/.\" \"" + stage + "/assets/" +
+                    mount + "/\"";
+  if (system(cmd.c_str()) != 0) {
+    fprintf(stderr,
+            tulpar::i18n::tr_en(
+                "[AOT] [android] assets kopyalanamadi: %s\n",
+                "[AOT] [android] assets copy failed: %s\n"),
+            dir.c_str());
+    return;
+  }
+  AOT_PROGRESS("[AOT] Assets staged: %s -> %s/assets/%s/\n", dir.c_str(),
+               stage.c_str(), mount.c_str());
+}
+
+// tulpar.toml [android] bölümünü oku (varsa) + ikon ve asset'leri staging'e
+// kopyala. Dönen cfg her durumda geçerli varsayılanlarla doludur.
+static AndroidAppConfig load_android_app_config(const std::string &stage,
+                                                const char *fallback_label) {
+  AndroidAppConfig cfg;
+  cfg.label = fallback_label;
+  struct stat st;
+  if (stat("tulpar.toml", &st) != 0) {
+    // toml yok — asset'ler yine env ile verilebilir.
+    if (const char *env = getenv("TULPAR_ANDROID_ASSETS"); env && *env)
+      stage_android_assets(stage, env);
+    return cfg;
+  }
+  tulpar::Manifest m;
+  std::string err;
+  if (!tulpar::manifest_load("tulpar.toml", m, err)) {
+    fprintf(stderr, "[AOT] tulpar.toml: %s\n", err.c_str());
+    if (const char *env = getenv("TULPAR_ANDROID_ASSETS"); env && *env)
+      stage_android_assets(stage, env);
+    return cfg;
+  }
+  {
+    // env > toml (web hedefiyle aynı öncelik).
+    const char *env = getenv("TULPAR_ANDROID_ASSETS");
+    if (env && *env) stage_android_assets(stage, env);
+    else stage_android_assets(stage, m.android_assets);
+  }
+  if (!m.android_package.empty()) cfg.package = m.android_package;
+  if (!m.android_label.empty()) cfg.label = m.android_label;
+  if (!m.android_version_code.empty()) cfg.version_code = m.android_version_code;
+  if (!m.android_version_name.empty()) cfg.version_name = m.android_version_name;
+  if (!m.android_orientation.empty()) {
+    if (m.android_orientation == "landscape" ||
+        m.android_orientation == "portrait" ||
+        m.android_orientation == "sensor") {
+      cfg.orientation = m.android_orientation;
+    } else {
+      fprintf(stderr, "%s\n",
+              tulpar::i18n::tr_en(
+                  "[AOT] [android] orientation landscape|portrait|sensor "
+                  "olmali; landscape kullaniliyor.",
+                  "[AOT] [android] orientation must be "
+                  "landscape|portrait|sensor; using landscape."));
+    }
+  }
+  if (!m.android_icon.empty()) {
+    FILE *src = fopen(m.android_icon.c_str(), "rb");
+    if (!src) {
+      fprintf(stderr,
+              tulpar::i18n::tr_en(
+                  "[AOT] [android] icon bulunamadi: %s (varsayilan ikon "
+                  "kullanilacak)\n",
+                  "[AOT] [android] icon not found: %s (falling back to the "
+                  "default icon)\n"),
+              m.android_icon.c_str());
+    } else {
+      std::string dir = stage + "/res/mipmap";
+      std::string mk = "mkdir -p \"" + dir + "\"";
+      if (system(mk.c_str()) != 0) { /* fopen asagida zaten hata verir */ }
+      std::string dst_path = dir + "/ic_launcher.png";
+      FILE *dst = fopen(dst_path.c_str(), "wb");
+      if (dst) {
+        char buf[65536];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), src)) > 0) fwrite(buf, 1, n, dst);
+        fclose(dst);
+        cfg.has_icon = true;
+      }
+      fclose(src);
+    }
+  }
+  return cfg;
 }
 
 // em++'ın -L arama yolları: dev-tree wasm/dist + tulpar exe'sinin yanı +
@@ -740,17 +922,67 @@ AOTResult aot_compile_with_filename_debug(const char *source,
         return AOT_ERROR_LINK;
       }
     }
-    // Manifest etiketi: çıktı adının taban kısmı.
+    // Uygulama kimliği: tulpar.toml [android] (yoksa tarihi varsayılanlar;
+    // etiket çıktı adının taban kısmı). İkon varsa staging res/'ine kopyalanır.
     const char *label = output_name;
     if (const char *slash = strrchr(output_name, '/')) label = slash + 1;
-    write_android_manifest(stage, label);
+    AndroidAppConfig app_cfg = load_android_app_config(stage, label);
+    write_android_manifest(stage, app_cfg);
     printf("[AOT] Successfully created: %s/ (lib/arm64-v8a + lib/x86_64 + "
            "AndroidManifest.xml)\n",
            stage.c_str());
-    printf("%s\n",
-           tulpar::i18n::tr_en(
-               "[AOT] APK icin: android/package_apk.sh ile paketleyin.",
-               "[AOT] To get an .apk: package with android/package_apk.sh."));
+    if (g_android_apk) {
+      // --apk: tek komut akışı — staging'i hemen imzalı .apk'ya paketle.
+      std::string script = find_package_apk_script();
+      if (script.empty()) {
+        fprintf(stderr, "%s\n",
+                tulpar::i18n::tr_en(
+                    "[AOT] --apk icin android/package_apk.sh bulunamadi: "
+                    "TULPAR_ANDROID_TOOLS ile betigin dizinini gosterin ya da "
+                    "depo kokunden calistirin.",
+                    "[AOT] --apk needs android/package_apk.sh: point "
+                    "TULPAR_ANDROID_TOOLS at its directory or run from the "
+                    "repo root."));
+        llvm_backend_destroy(backend);
+        ast_node_free(ast);
+        return AOT_ERROR_LINK;
+      }
+      std::string apk = std::string(output_name) + ".apk";
+      std::string cmd =
+          "bash \"" + script + "\" \"" + stage + "\" \"" + apk + "\"";
+      AOT_PROGRESS("[AOT] Packaging APK: %s\n", apk.c_str());
+      int rc;
+      {
+        AOTPhaseTimer t("package-apk");
+        rc = system(cmd.c_str());
+      }
+      if (rc != 0) {
+        fprintf(stderr,
+                tulpar::i18n::tr_en(
+                    "[AOT] Hata: APK paketleme basarisiz (kod %d) — "
+                    "aapt2/zipalign/apksigner kurulumunu kontrol edin "
+                    "(Android SDK build-tools).\n",
+                    "[AOT] Error: APK packaging failed (code %d) — check "
+                    "aapt2/zipalign/apksigner (Android SDK build-tools).\n"),
+                rc);
+        llvm_backend_destroy(backend);
+        ast_node_free(ast);
+        return AOT_ERROR_LINK;
+      }
+      printf("[AOT] APK: %s\n", apk.c_str());
+      printf("%s\n",
+             tulpar::i18n::tr_en(
+                 "[AOT] Kurulum: adb install -r <apk>  (ya da "
+                 "android/install_run.sh <apk>).",
+                 "[AOT] Install: adb install -r <apk>  (or "
+                 "android/install_run.sh <apk>)."));
+    } else {
+      printf("%s\n",
+             tulpar::i18n::tr_en(
+                 "[AOT] APK icin: --apk bayragi ya da android/package_apk.sh.",
+                 "[AOT] To get an .apk: pass --apk or run "
+                 "android/package_apk.sh."));
+    }
     llvm_backend_destroy(backend);
     ast_node_free(ast);
     return AOT_OK;

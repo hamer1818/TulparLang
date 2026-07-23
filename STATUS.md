@@ -11,12 +11,17 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ## 📊 Mevcut durum (özet)
 
-> **Güncel yayın: v3.11.0** (2026-07-22) — Tame 2D oyun kütüphanesi +
-> `--target=web` (WASM) & `--target=android` (native NativeActivity APK) +
-> arcade bölüm/dokunma-kontrol sistemleri + `struct↔array` yuvarlak-yolu /
-> `call()` N-arg / method-on-any-receiver / native-fast-path closure /
-> `try`/`catch` düzeltmeleri. GitHub Release'te 3-OS ikilileri + Windows
-> installer + GPG-imzalı SHA256SUMS.
+> **Güncel yayın: v3.12.0** (2026-07-23) — Mobil paket: **Tulpar Arcade**
+> resmi 10-oyunlu launcher uygulaması (+ yılan arcade motorunda), tek komut
+> `tulpar build --apk` + `tulpar.toml [android]` kimliği (paket adı/ikon/yön/
+> sürüm/assets) + release imzalama, APK'ya ses+sprite asset gömme, kalıcı
+> kayıt (`kayit_yaz/oku`), titreşim (`titret`), donanım GERİ tuşu, kaydırma
+> jestleri (`kaydirildi`), oyun başına dokunmatik **kontrol şeması**
+> (joystick/dpad/yatay/dikey/auto) + dinamik analog joystick, portre oyunlar.
+> Hepsi Android emülatöründe canlı doğrulandı; tulparlang.dev/oyunlar'da
+> "APK indir". Önceki v3.11.0: Tame 2D + web/android hedefleri + arcade
+> bölüm sistemi + codegen düzeltmeleri. GitHub Release'te 3-OS ikilileri +
+> Windows installer + GPG-imzalı SHA256SUMS.
 
 - **Çekirdek sözdizimi tam:** statik tipler, fonksiyonlar (opsiyonel
   dönüş-tipi notasyonu, **eksik trailing arg → 0 ile padlenir**), kontrol akışı,
@@ -38,8 +43,27 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   APK; arm64-v8a + x86_64; canlı emülatörde render+animasyon+dokunma
   doğrulandı). `libtulpar_runtime.a` AOT'a static link.
 - **Stdlib gömülü:** wings, router, http_utils, http_client, async,
-  middleware, socket, tulpar_api, orm, test, wings_tls, tame. SQLite
+  middleware, socket, tulpar_api, orm, test, wings_tls, tame, arcade. SQLite
   ve raylib vendored.
+- **Mobil paket (v3.12.0, 2026-07-23) — hepsi emülatörde canlı doğrulandı:**
+  (1) **Tulpar Arcade** — 10 oyunlu resmi launcher uygulaması (`launcher()`
+  menü katmanı; yılan da arcade motorunda yeniden yazıldı: entity'siz ızgara
+  + `kaydirildi()` jest yönlendirme); kimlik `examples/arcade_app/`.
+  (2) **Tek komut APK**: `tulpar build --apk` → aapt2+zipalign+apksigner
+  otomatik; `tulpar.toml [android]` ile paket adı/uygulama adı/ikon/yön/
+  version/assets — iki Tulpar oyunu artık yan yana kurulur; release imza
+  `TULPAR_ANDROID_KEYSTORE` env'leriyle. (3) **Asset gömme**: `[android]
+  assets` dizini APK'ya girer, raylib AAssetManager ile aynı göreceli yoldan
+  okur → oyunlar cihazda **sesli + sprite'lı** (aapt2 -A KULLANILMAZ:
+  Windows aapt2 ters bölü yazıp eşleşmeyi bozar; python zipfile ile eklenir).
+  (4) **Mobil API'ler**: `kayit_yaz/kayit_oku` (kalıcı kayıt — internal
+  storage/CWD), `titret(ms)` (JNI Vibrator + otomatik VIBRATE izni),
+  `"BACK"/"GERI"` tuşu (launcher: oyunda menüye, menüde çıkış),
+  `dokunuldu()/tapped` + `kaydirildi()/swiped` jestleri, portre yön.
+  (5) **Kontrol şemaları**: `kontrol_semasi("joystick|dpad|yatay|dikey|yok")`
+  ya da auto (oyunun okuduğu yönlerden çıkarım); dinamik sol-alt-hapsli
+  analog joystick; aksiyon butonu yalnız kullanan oyunda. Site:
+  tulparlang.dev/oyunlar'da "APK indir" kartı.
 - **Tame — 2D oyun kütüphanesi (v3.11.0, 2026-07-12, Faz 0-5):**
   `import "tame"` ile saf Tulpar'dan pencere + şekil/yazı çizimi +
   klavye/fare/**gamepad** girdisi + **sprite/texture + TTF font + ses/müzik +

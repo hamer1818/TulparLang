@@ -822,6 +822,10 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm_gamepad_down", "aot_tm_gamepad_down_ptr", 2},
     {"tm_gamepad_pressed", "aot_tm_gamepad_pressed_ptr", 2},
     {"tm_gamepad_axis", "aot_tm_gamepad_axis_ptr", 2},
+    // kalıcı kayıt (Android'de internal storage, masaüstünde CWD) + titreşim
+    {"tm_save_data", "aot_tm_save_data_ptr", 2},
+    {"tm_load_data", "aot_tm_load_data_ptr", 1},
+    {"tm_vibrate", "aot_tm_vibrate_ptr", 1},
 };
 
 #define TAME_BUILTIN_COUNT \

@@ -141,6 +141,18 @@ func play_music(m) { tm_play_music(m); }
 func stop_music(m) { tm_stop_music(m); }
 func music_volume(m, v) { tm_music_volume(m, v); }
 
+// ---- Kalıcı kayıt + titreşim (mobil-dostu) ----------------------------------
+// save/load: Android'de uygulamanın internal storage'ına, masaüstünde çalışma
+// dizinine yazar/okur — AYNI oyun kodu her platformda kalıcı kayıt alır.
+// İçerik düz metin: skor için toString/toInt yeterli. Dosya yoksa "" döner.
+func save_data(name, text): bool { return tm_save_data(name, text); }
+func kayit_yaz(name, text): bool { return tm_save_data(name, text); }
+func load_data(name): str { return tm_load_data(name); }
+func kayit_oku(name): str { return tm_load_data(name); }
+// Titreşim: Android'de cihazı ms milisaniye titretir; masaüstü/web no-op.
+func vibrate(ms) { tm_vibrate(ms); }
+func titret(ms)  { tm_vibrate(ms); }
+
 // ---- Ek çizim / araç ----------------------------------------------------------
 
 // Dolu üçgen — köşe sırası önemsiz (sarım otomatik düzeltilir).

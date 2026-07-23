@@ -83,6 +83,7 @@ func kaybet_cb() { oyun_bitti(); }                 // araca değdin
 
 sahne(640, 480, "Karsiya Gec");
 bilgi("Ok tuslari / WASD: hareket   |   Araclara degmeden altin serite ulas (+50)");
+kontrol_semasi("dpad");   // serit serit ilerlemeye 4 ok butonu iyi oturur
 baslangicta(kur);
 bolum(1, b1);
 bolum(2, b2);

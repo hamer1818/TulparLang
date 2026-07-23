@@ -7,6 +7,159 @@ language/stdlib/ABI changes, MINOR for backwards-compatible features, PATCH for
 fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md));
 `tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
 
+## [v3.12.0]
+
+Tulpar goes properly mobile: the arcade launcher becomes the official
+ten-game **Tulpar Arcade** app, Android packaging collapses to a single
+`tulpar build --apk` command with full app identity from `tulpar.toml`,
+games gain assets/sound, persistent saves, haptics, swipe gestures,
+per-game touch control schemes and hardware-back handling — every item
+verified live on the Android emulator.
+
+### Changed
+- **Modern mobile touch controls in `arcade` — dynamic analog joystick +
+  context-aware action button.** The fixed 4-arrow D-pad is replaced by a
+  **floating analog joystick** (circle-within-a-circle): pressing anywhere in
+  the movement zone spawns the base under the finger, the knob follows the
+  finger, and the base *trails* the finger past the ring so a long drag never
+  loses control — direction persists as long as the finger stays down (modern
+  virtual-stick feel). The analog vector is thresholded into the same 8-way
+  booleans the movement presets already consume, so every game and the desktop
+  keyboard path are unchanged. The **action/fire button now only appears in
+  games that actually read it** (`action_pressed`/`action_held`/`fire_pressed`
+  or the platformer jump preset lazily flag intent) — collector/dodge/maze
+  games (Topla, Tugla, Labirent, Karsiya, Goktasi) no longer show a dead
+  button. **The joystick is context-aware too**: it only appears in games that
+  read directional input, so a tap-only game (Ucus/flight) shows just the
+  action button. And the joystick is **corralled to a bottom-left region** —
+  the base spawns under the finger clamped into that region and stays fixed
+  until release, so it can never wander across the screen. New public
+  direction readers `left()/sol()`, `right()/sag()`, `up()/yukari()`,
+  `down()/asagi()` (keyboard OR joystick) let games that drive movement
+  manually join in: Tugla/Uzay/Goktasi (+ EN twins breakout/invaders/dodge)
+  switched from raw `key_down("LEFT")` to them — making those games
+  touch-playable for the first time — and Ucus/flight + shooter/invaders
+  fire now goes through `fire_pressed()`. The launcher resets both flags per
+  game so one game's controls don't linger on the next. Verified on the
+  Android emulator: Nisan shows joystick+fire, Topla joystick-only, Ucus
+  button-only (tap flaps), and Tugla's paddle moves by touch with the
+  joystick pinned to the bottom-left corral.
+- **Per-game control schemes (`kontrol_semasi` / `control_scheme`).** A
+  joystick doesn't fit every game, so the touch layout is now a preset picked
+  per game: `"joystick"`, `"dpad"` (4 arrow buttons in a cross), `"yatay"`/
+  `"horizontal"` (◀ ▶ only), `"dikey"`/`"vertical"` (▲ ▼ only), `"yok"`/
+  `"none"`, or the default `"auto"` — which infers the layout from the
+  directions the game actually reads: left/right only → ◀ ▶ buttons, up/down
+  only → ▲ ▼, both axes → joystick, none → no movement control. Buttons are
+  round, semi-transparent, bottom-left, with pressed-state highlight, and
+  hold-to-move semantics. Labirent + Karsiya (and EN maze/crossing) opt into
+  `"dpad"`; everything else relies on auto (Tugla/Uzay/Goktasi/Zipla get
+  ◀ ▶, Topla/Nisan the joystick, Ucus nothing but the flap button). The
+  launcher resets the scheme per game; `tools/make_arcade_launcher.py` folds
+  `kontrol_semasi`/`control_scheme` into generated setups. Verified on the
+  Android emulator: Tugla shows ◀ ▶ (auto) and the held ▶ drives the paddle,
+  Karsiya shows the 4-button dpad with ▲ climbing lanes, Topla still gets the
+  joystick. A companion `dokunuldu()`/`tapped()` reader (any-finger tap edge)
+  lets tap-only games use the whole screen as the control: Ucus/flight flaps
+  on a tap anywhere — no button, no joystick, nothing drawn. Nisan/shooter and
+  Goktasi/dodge pin `"yatay"`/`"horizontal"` explicitly (◀ ▶ buttons; Nisan
+  keeps the fire button next to them).
+
+### Added
+- **One-command Android packaging + app identity (`tulpar build --apk`,
+  `tulpar.toml [android]`).** `tulpar build --apk game.tpr out` now goes all
+  the way to an installable **signed `out.apk`** in a single command (it
+  implies `--target=android`, then drives `android/package_apk.sh` — aapt2 →
+  zipalign → apksigner — automatically; `TULPAR_ANDROID_TOOLS` points at the
+  script dir for non-repo layouts). App identity comes from a new
+  `[android]` section in `tulpar.toml`: `package` (applicationId — finally
+  lets two Tulpar games install side by side; default stays
+  `dev.tulparlang.game`), `name` (launcher label), `icon` (a PNG the driver
+  copies into `res/mipmap/ic_launcher.png` and package_apk.sh compiles via
+  `aapt2 compile`), `orientation` (`landscape`/`portrait`/`sensor`), and
+  `version_code`/`version_name`. Release distribution: pointing
+  `TULPAR_ANDROID_KEYSTORE` (+ `_KS_PASS`, `_KEY_ALIAS`, optional
+  `_KEY_PASS`) at your own keystore signs with it instead of the debug key —
+  a Play-Store-uploadable APK. Verified on the emulator: a
+  `dev.tulparlang.arcade` / "Tulpar Arcade" build with a custom icon
+  installed **alongside** the default-identity APK, shows its own icon+label
+  in the app drawer, and `apksigner verify` prints the release certificate.
+- **Game assets inside the APK — Android games get sound and sprites.**
+  `[android] assets = "<dir>"` in `tulpar.toml` (or `TULPAR_ANDROID_ASSETS`,
+  mirroring the web target's `TULPAR_WEB_ASSETS`) stages a directory into the
+  APK's `assets/` **preserving the path as written** — the same relative
+  paths the game uses on desktop (`load_texture("assets/top.png")`) resolve
+  on-device through raylib's AAssetManager integration, so no code changes
+  per platform. Files are added to the zip by the packer itself rather than
+  `aapt2 -A` because Windows aapt2 writes backslashed entry names that
+  AAssetManager can never match. Verified on the emulator: a PNG loaded from
+  the APK renders at its true 64×64 size (rotating, scaled, alpha intact)
+  and a WAV `load_sound`/`play_sound` opens an AAudio output stream with
+  zero raylib file warnings.
+- **Mobile quality-of-life batch: persistent saves, haptics, hardware back,
+  swipe gestures, portrait games.** Five additions that make Tulpar games
+  feel native on a phone, all verified on the emulator:
+  - `save_data`/`kayit_yaz(name, text)` + `load_data`/`kayit_oku(name)`
+    (tame): persistent key-file storage through raylib's file layer — on
+    Android it lands in the app's internal storage, on desktop in the CWD,
+    so a high score written with the same two lines survives force-stop and
+    relaunch on-device (proved: counter 3 → kill → relaunch → still 3).
+  - `vibrate`/`titret(ms)` (tame): real device vibration via JNI from the
+    NativeActivity (`getSystemService("vibrator")`); the driver always adds
+    the `VIBRATE` permission to the manifest; desktop/web are silent no-ops.
+    The vibrator service recorded our exact 150 ms step. Gotcha fixed on the
+    way: `android/build_tame_android.sh` compiled `tame_impl.c` without
+    `-DPLATFORM_ANDROID`, silently no-op'ing every Android-only branch — it
+    now uses the same flags as raylib.
+  - **Hardware BACK button** (`"BACK"`/`"GERI"` key name in tame; raylib
+    keeps it away from the OS): the arcade launcher now treats BACK like
+    ESC in-game (returns to the menu) and exits the app from the menu
+    (focus verifiably returns to the previous task).
+  - `kaydirildi`/`swiped("sol|sag|yukari|asagi|left|right|up|down")`
+    (arcade): touch swipe gesture, classified on finger release with a
+    dominant-axis threshold — snake-style games play with no on-screen
+    controls at all (a right-swipe moved the test box exactly +80 world px).
+  - **Portrait games**: `[android] orientation = "portrait"` + a portrait
+    `window(480, 800)` render a proper vertical game (verified full-screen
+    portrait on-device). `dokunuldu()`-style tap games pair naturally.
+- **Yilan (Snake) rewritten on the arcade engine + official "Tulpar Arcade"
+  app + APK download on the website.** `examples/arcade_yilan.tpr` is a full
+  arcade-engine snake (grid state in plain arrays, zero entities, drawing via
+  `ciz_ustune`, 3 levels with speed-up + obstacle walls, haptic feedback on
+  eat/crash) steered by **swipe gestures, dpad buttons or arrow keys** — the
+  launcher now bundles **ten** games (the menu grid auto-flows to 4 columns).
+  `examples/arcade_app/` holds the official app identity (tulpar.toml:
+  `dev.tulparlang.arcade` / "Tulpar Arcade" + icon) so
+  `tulpar build --apk ../arcade_launcher.tpr tulpar-arcade` reproduces the
+  shipping APK. The games page generator (`web_demo/gen_index.py`) gained a
+  bilingual "Android — play on your phone" card linking `tulpar-arcade.apk`,
+  and the site repo carries the APK + regenerated index (Astro build passes;
+  publish pending). Emulator-verified: 10-card menu, snake turns via swipe
+  and via the held ▲ dpad button, wall crash → engine game-over, tap
+  restarts.
+- **Arcade launcher — multiple games in one window / one APK (`launcher()`).**
+  `import "arcade"` gains a game-registry + menu layer so a single native
+  binary (desktop, web, or Android APK) can hold several games behind a
+  touch/keyboard menu. `oyun_ekle(name, setup)` / `add_game(name, setup)`
+  registers a game as a 0-arg **setup** function — it does the usual
+  `baslangicta`/`her_kare`/`carpisinca`/`bilgi` registrations but *not*
+  `sahne`/`oyna`, because the window and loop belong to the launcher.
+  `launcher()` (alias `oyun_menusu()`) draws a responsive card grid and runs a
+  menu↔game state machine: picking a card (tap, or arrows + ENTER) **fully
+  resets the engine's registration state** — sahne callbacks, level registry,
+  collision rules, hint/HUD, physics — before calling the chosen game's setup,
+  so games never bleed into one another. An on-screen home button (top-right)
+  or ESC returns to the menu; `menu_basligi(s)` / `launcher_title(s)` sets the
+  title. Example `examples/arcade_launcher.tpr` bundles **all nine shipped
+  arcade games** (Topla / Zipla / Nisan / Tugla / Uzay / Labirent / Karsiya /
+  Ucus / Goktasi) in one APK — generated by `tools/make_arcade_launcher.py`,
+  which namespaces each `examples/arcade_*.tpr` game's top-level functions +
+  globals with a per-game prefix and folds its registration block into a
+  `<prefix>_setup()` (the source games still run standalone). Verified on the
+  Android emulator: the 3×3 menu renders, games launch with clean per-game state
+  (e.g. Uzay's custom-tag fleet, Goktasi's countdown), and the home button /
+  ESC return to the menu.
+
 ## [v3.11.0]
 
 The Tame 2D game library and its two new compile targets — WebAssembly

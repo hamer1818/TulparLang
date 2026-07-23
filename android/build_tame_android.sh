@@ -100,7 +100,10 @@ build_abi() {
     "$CC" -O2 -fPIC -I"$GLUE" -c "$GLUE/android_native_app_glue.c" \
         -o "$OBJ/tame/android_native_app_glue.o"
     echo "  CC  tame_impl.c"
-    "$CC" -O2 -fPIC -I"$RAYLIB_DIR" -c "$ROOT/runtime/tame_impl.c" \
+    # RAYFLAGS şart: -DPLATFORM_ANDROID olmadan tame_impl'in Android'e özgü
+    # kısımları (JNI titreşim vb.) no-op şubeye düşer; -I$GLUE de
+    # android_native_app_glue.h için gerekli.
+    "$CC" $RAYFLAGS -c "$ROOT/runtime/tame_impl.c" \
         -o "$OBJ/tame/tame_impl.o"
     echo "  CXX tame_bindings.cpp"
     "$CXX" $CXXFLAGS -c "$ROOT/runtime/tame_bindings.cpp" -o "$OBJ/tame/tame_bindings.o"

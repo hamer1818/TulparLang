@@ -85,6 +85,7 @@ func lose_cb() { game_over(); }                    // touched a car
 language("en");
 scene(640, 480, "Crossing");
 controls("Arrow keys / WASD: move   |   Reach the gold strip (+50) without touching cars");
+control_scheme("dpad");   // lane-by-lane hops — 4 arrow buttons fit better than a stick
 on_start(setup);
 level(1, l1);
 level(2, l2);

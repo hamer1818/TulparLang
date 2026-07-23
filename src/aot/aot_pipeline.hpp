@@ -28,6 +28,10 @@ void aot_set_target_web(int enable);
 // write an APK staging dir (<out>_apk/). Packaging into a signed .apk is
 // android/package_apk.sh's job.
 void aot_set_target_android(int enable);
+// `tulpar build --apk`: after the android staging dir is written, also run
+// android/package_apk.sh (aapt2 + zipalign + apksigner) so a single command
+// yields an installable signed <out>.apk. Implies the android target.
+void aot_set_android_apk(int enable);
 
 // Compile Tulpar source to executable (verbose mode).
 // Returns AOT_OK on success, error code otherwise.
