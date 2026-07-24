@@ -32,6 +32,10 @@ void aot_set_target_android(int enable);
 // android/package_apk.sh (aapt2 + zipalign + apksigner) so a single command
 // yields an installable signed <out>.apk. Implies the android target.
 void aot_set_android_apk(int enable);
+// `tulpar build --aab`: staging'in ardından android/package_aab.sh koşar →
+// Play Store'a yüklenebilir imzalı <out>.aab (bundletool). Android hedefini ima
+// eder; --apk yerine geçer (ikisi verilirse --aab kazanır).
+void aot_set_android_aab(int enable);
 
 // Compile Tulpar source to executable (verbose mode).
 // Returns AOT_OK on success, error code otherwise.

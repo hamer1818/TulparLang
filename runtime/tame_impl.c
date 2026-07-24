@@ -17,12 +17,33 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>   // malloc/free (tm_beep dalga tamponu)
+#include <math.h>     // sin (tm_beep sinüs sentezi)
 
 // ---------------------------------------------------------------------------
 // Window / loop
 // ---------------------------------------------------------------------------
 
 static int tame_window_ready = 0;
+
+// --- Sanal dünya + kamera (Android) ----------------------------------------
+// Android'de window(w,h) GERÇEKTE tam ekran açılır (InitWindow(0,0) → display
+// çözünürlüğü) ve oyunun w×h dünyası Camera2D (zoom+offset) ile ortalanır.
+// Neden: raylib'in kendi letterbox'ında bantlara çizim YAPILAMAZ (ortho
+// projeksiyon dünya boyutunda) — kamera modelinde tüm ekran çizilebilir olur,
+// dokunmatik kontroller gerçek ekran kenarına demirlenebilir (tm_view_*).
+// Masaüstü/web'de kamera kapalıdır (pencere zaten w×h) → davranış birebir eski.
+static int tame_world_w = 0, tame_world_h = 0;
+static float tame_cam_zoom = 1.0f;
+static float tame_cam_offx = 0.0f, tame_cam_offy = 0.0f;
+static int tame_cam_on = 0;
+
+static double tame_to_world_x(double x) {
+  return tame_cam_on ? (x - (double)tame_cam_offx) / (double)tame_cam_zoom : x;
+}
+static double tame_to_world_y(double y) {
+  return tame_cam_on ? (y - (double)tame_cam_offy) / (double)tame_cam_zoom : y;
+}
 
 static Color tame_color(int64_t packed) {
   Color c;
@@ -36,8 +57,26 @@ static Color tame_color(int64_t packed) {
 int tame_impl_window(int w, int h, const char *title) {
   if (tame_window_ready) return 1; // ikinci çağrı no-op / second call is a no-op
   SetTraceLogLevel(LOG_WARNING);   // oyun konsolunu raylib INFO spam'inden koru
+  tame_world_w = w;
+  tame_world_h = h;
+#if defined(PLATFORM_ANDROID)
+  // Tam ekran aç; w×h dünyası kamerayla ortalanır (yukarıdaki nota bak).
+  InitWindow(0, 0, title ? title : "tame");
+  if (!IsWindowReady()) return 0;
+  {
+    float sw = (float)GetScreenWidth();
+    float sh = (float)GetScreenHeight();
+    float zx = sw / (float)w;
+    float zy = sh / (float)h;
+    tame_cam_zoom = (zx < zy) ? zx : zy;
+    tame_cam_offx = (sw - (float)w * tame_cam_zoom) * 0.5f;
+    tame_cam_offy = (sh - (float)h * tame_cam_zoom) * 0.5f;
+    tame_cam_on = 1;
+  }
+#else
   InitWindow(w, h, title ? title : "tame");
   if (!IsWindowReady()) return 0;
+#endif
   SetTargetFPS(60); // varsayılan; tm_set_fps ile değiştirilebilir
   tame_window_ready = 1;
   return 1;
@@ -62,24 +101,46 @@ void tame_impl_close(void) {
 
 void tame_impl_set_fps(int fps) { SetTargetFPS(fps); }
 
-void tame_impl_begin(void) { BeginDrawing(); }
+void tame_impl_begin(void) {
+  BeginDrawing();
+  if (tame_cam_on) {
+    Camera2D cam = { 0 };
+    cam.offset.x = tame_cam_offx;
+    cam.offset.y = tame_cam_offy;
+    cam.zoom = tame_cam_zoom;
+    BeginMode2D(cam);   // bundan sonrası dünya koordinatı — eski kod değişmez
+  }
+}
 
 // Müzik pompası tame_impl_end içinde — bkz. registry bölümü. Çalan her
 // stream her karede beslenmezse ses birkaç saniyede susar; bunu kullanıcıya
 // "her karede update_music çağır" kuralı olarak yıkmak yerine frame_end'in
 // zaten her karede çağrıldığı gerçeğine yaslanıyoruz.
 static void tame_pump_music(void);
+static void tame_pump_sensor(void);   // ivmeölçer kuyruğu (Android; else no-op)
 
 void tame_impl_end(void) {
+  if (tame_cam_on) EndMode2D();
   EndDrawing();
   tame_pump_music();
+  tame_pump_sensor();   // ivmeölçer kuyruğunu boşalt (Android; başka yerde no-op)
 }
 
 int tame_impl_fps(void) { return GetFPS(); }
 double tame_impl_frame_time(void) { return (double)GetFrameTime(); }
 double tame_impl_time(void) { return GetTime(); }
-int tame_impl_width(void) { return GetScreenWidth(); }
-int tame_impl_height(void) { return GetScreenHeight(); }
+// Kamera modunda OYUN DÜNYASI boyutu döner (oyun kodu hep w×h'ye göre yazılır);
+// gerçek ekranın dünya-uzayı kenarları için tm_view_* kullan.
+int tame_impl_width(void) { return tame_cam_on ? tame_world_w : GetScreenWidth(); }
+int tame_impl_height(void) { return tame_cam_on ? tame_world_h : GetScreenHeight(); }
+
+// Görünür ekranın DÜNYA koordinatındaki kenarları. Masaüstü/web: 0..w, 0..h.
+// Android (kamera): sol/üst negatif, sağ/alt w/h'den büyük olabilir — dokunmatik
+// kontrolleri gerçek ekran kenarına demirlemek için.
+double tame_impl_view_left(void)   { return tame_to_world_x(0.0); }
+double tame_impl_view_top(void)    { return tame_to_world_y(0.0); }
+double tame_impl_view_right(void)  { return tame_to_world_x((double)GetScreenWidth()); }
+double tame_impl_view_bottom(void) { return tame_to_world_y((double)GetScreenHeight()); }
 
 // ---------------------------------------------------------------------------
 // Drawing
@@ -547,8 +608,8 @@ double tame_impl_gamepad_axis(int id, const char *axis) {
 // Input — mouse. Button: 0=sol/left, 1=sağ/right, 2=orta/middle (raylib'le aynı)
 // ---------------------------------------------------------------------------
 
-int tame_impl_mouse_x(void) { return GetMouseX(); }
-int tame_impl_mouse_y(void) { return GetMouseY(); }
+int tame_impl_mouse_x(void) { return (int)tame_to_world_x((double)GetMouseX()); }
+int tame_impl_mouse_y(void) { return (int)tame_to_world_y((double)GetMouseY()); }
 int tame_impl_mouse_down(int b) { return IsMouseButtonDown(b); }
 int tame_impl_mouse_pressed(int b) { return IsMouseButtonPressed(b); }
 double tame_impl_mouse_wheel(void) { return (double)GetMouseWheelMove(); }
@@ -557,8 +618,163 @@ double tame_impl_mouse_wheel(void) { return (double)GetMouseWheelMove(); }
 // için mouse_* zaten çalışır; bu API çok-parmak (multi-touch) ve açık parmak
 // konumu verir. Index geçersizse (0,0) döner.
 int tame_impl_touch_count(void) { return GetTouchPointCount(); }
-int tame_impl_touch_x(int i) { return (int)GetTouchPosition(i).x; }
-int tame_impl_touch_y(int i) { return (int)GetTouchPosition(i).y; }
+
+// ---------------------------------------------------------------------------
+// İvmeölçer (accelerometer) — telefonu eğerek kontrol. Android'de NDK
+// ASensorManager ile (JNI YOK); değerler m/s^2, cihaz doğal yönüne göre
+// x=sağ, y=yukarı, z=ekrandan dışarı. Masaüstü/web: 0 (nötr) — "egim" şeması
+// klavyeye düşer. tame_pump_sensor her kare (frame_end) kuyruğu boşaltır.
+// ---------------------------------------------------------------------------
+static double tame_ax = 0.0, tame_ay = 0.0, tame_az = 0.0;
+static int tame_accel_on = 0;   // 0=denenmedi, 1=aktif, -1=yok/başarısız
+
+#if defined(PLATFORM_ANDROID)
+#include <android/sensor.h>
+#include <android/looper.h>
+static ASensorManager    *tame_sensor_mgr = NULL;
+static const ASensor     *tame_sensor_acc = NULL;
+static ASensorEventQueue *tame_sensor_q   = NULL;
+
+// Kuyruk CALLBACK'i: raylib zaten her kare ALooper_pollOnce çağırır; sensör
+// fd'si hazır olunca looper bu callback'i OTOMATİK çalıştırır (getEvents
+// zamanlamasını raylib'in poll döngüsüne bağlamak yerine). Son okumayı saklar.
+// Dönüş 1 = beslemeyi sürdür.
+static int tame_sensor_cb(int fd, int events, void *data) {
+  (void)fd; (void)events; (void)data;
+  if (!tame_sensor_q) return 1;
+  ASensorEvent ev;
+  while (ASensorEventQueue_getEvents(tame_sensor_q, &ev, 1) > 0) {
+    tame_ax = (double)ev.acceleration.x;
+    tame_ay = (double)ev.acceleration.y;
+    tame_az = (double)ev.acceleration.z;
+  }
+  return 1;
+}
+
+static void tame_sensor_init(void) {
+  if (tame_accel_on != 0) return;
+  tame_accel_on = -1;                       // aksi kanıtlanana dek "yok"
+#if __ANDROID_API__ >= 26
+  tame_sensor_mgr = ASensorManager_getInstanceForPackage("dev.tulparlang.game");
+#else
+  tame_sensor_mgr = ASensorManager_getInstance();
+#endif
+  if (!tame_sensor_mgr) return;
+  tame_sensor_acc = ASensorManager_getDefaultSensor(
+      tame_sensor_mgr, ASENSOR_TYPE_ACCELEROMETER);
+  if (!tame_sensor_acc) return;
+  ALooper *looper = ALooper_forThread();
+  if (!looper) looper = ALooper_prepare(ALOOPER_PREPARE_ALLOW_NON_CALLBACKS);
+  if (!looper) return;
+  // Callback'li kuyruk: ident yerine callback → pollOnce olayı bize iletir.
+  tame_sensor_q = ASensorManager_createEventQueue(
+      tame_sensor_mgr, looper, 3 /*ident*/, tame_sensor_cb, NULL);
+  if (!tame_sensor_q) return;
+  ASensorEventQueue_enableSensor(tame_sensor_q, tame_sensor_acc);
+  ASensorEventQueue_setEventRate(tame_sensor_q, tame_sensor_acc,
+                                 (1000L * 1000L) / 60);   // ~60 Hz (mikro-sn)
+  tame_accel_on = 1;
+}
+
+static void tame_pump_sensor(void) {
+  // Init (ilk kare). Drenaj callback'te — burada bir şey yapmaya gerek yok;
+  // yine de callback bir sebeple çalışmazsa güvenlik ağı olarak kuyruğu çek.
+  if (tame_accel_on == 0) tame_sensor_init();
+  if (tame_accel_on != 1 || !tame_sensor_q) return;
+  ASensorEvent ev;
+  while (ASensorEventQueue_getEvents(tame_sensor_q, &ev, 1) > 0) {
+    tame_ax = (double)ev.acceleration.x;
+    tame_ay = (double)ev.acceleration.y;
+    tame_az = (double)ev.acceleration.z;
+  }
+}
+#else
+static void tame_pump_sensor(void) {}
+#endif
+
+double tame_impl_accel_x(void) {
+#if defined(PLATFORM_ANDROID)
+  if (tame_accel_on == 0) tame_sensor_init();
+#endif
+  return tame_ax;
+}
+double tame_impl_accel_y(void) {
+#if defined(PLATFORM_ANDROID)
+  if (tame_accel_on == 0) tame_sensor_init();
+#endif
+  return tame_ay;
+}
+double tame_impl_accel_z(void) { return tame_az; }
+int tame_impl_accel_available(void) {
+#if defined(PLATFORM_ANDROID)
+  if (tame_accel_on == 0) tame_sensor_init();
+  return tame_accel_on == 1 ? 1 : 0;
+#else
+  return 0;
+#endif
+}
+
+// Uygulama önde/odakta mı (arka plana atılınca 0). G2: oyunlar buna göre
+// "PAUSED" gösterebilir; motor zaten döngüyü Android'de otomatik dondurur.
+int tame_impl_active(void) {
+  if (!tame_window_ready) return 0;
+  return IsWindowFocused() ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// tm_beep(frekans_hz, sure_ms) — dosyasız ses efekti. Anlık bir sinüs dalgası
+// üretip çalar; kısa oyun sesleri (zıpla/vur/topla) için asset taşımadan.
+// Çalan Sound'lar bir havuzda tutulur (round-robin) — PlaySound async olduğu
+// için ses bitene dek veri canlı kalmalı; slot yeniden kullanılınca eski
+// Sound boşaltılır. Masaüstü/web/Android'de aynı (saf raylib audio).
+// ---------------------------------------------------------------------------
+#define TAME_BEEP_POOL 8
+static Sound tame_beep_pool[TAME_BEEP_POOL];
+static int   tame_beep_used[TAME_BEEP_POOL];
+static int   tame_beep_next = 0;
+static int   tame_beep_audio_ready = 0;
+
+void tame_impl_beep(double freq, int ms) {
+  if (freq <= 0.0 || ms <= 0) return;
+  if (!tame_beep_audio_ready) {
+    if (!IsAudioDeviceReady()) InitAudioDevice();
+    if (!IsAudioDeviceReady()) return;
+    tame_beep_audio_ready = 1;
+  }
+  int rate = 22050;
+  if (ms > 3000) ms = 3000;                 // makul tavan
+  unsigned int n = (unsigned int)((long)rate * ms / 1000);
+  if (n < 1) return;
+  short *pcm = (short *)malloc((size_t)n * sizeof(short));
+  if (!pcm) return;
+  double step = 6.28318530718 * freq / (double)rate;
+  unsigned int atk = n / 20; if (atk < 1) atk = 1;   // ~%5 attack/decay (tık önle)
+  for (unsigned int i = 0; i < n; i++) {
+    double env = 1.0;
+    if (i < atk) env = (double)i / (double)atk;
+    else if (i > n - atk) env = (double)(n - i) / (double)atk;
+    double s = sin(step * (double)i) * env * 0.35;   // 0.35 → kulak dostu düzey
+    pcm[i] = (short)(s * 32767.0);
+  }
+  Wave w;
+  w.frameCount = n;
+  w.sampleRate = (unsigned int)rate;
+  w.sampleSize = 16;
+  w.channels = 1;
+  w.data = pcm;
+  Sound snd = LoadSoundFromWave(w);
+  free(pcm);
+  int slot = tame_beep_next;
+  tame_beep_next = (tame_beep_next + 1) % TAME_BEEP_POOL;
+  if (tame_beep_used[slot]) UnloadSound(tame_beep_pool[slot]);  // önceki biti/kesildi
+  tame_beep_pool[slot] = snd;
+  tame_beep_used[slot] = 1;
+  PlaySound(snd);
+}
+// Kamera modunda display pikselini dünya koordinatına çeviririz (screen==display
+// olduğundan raylib'in kendi ölçeklemesi kimliktir; dönüşüm tek elde — burada).
+int tame_impl_touch_x(int i) { return (int)tame_to_world_x((double)GetTouchPosition(i).x); }
+int tame_impl_touch_y(int i) { return (int)tame_to_world_y((double)GetTouchPosition(i).y); }
 
 // ---------------------------------------------------------------------------
 // Kalıcı kayıt (save/load) — raylib SaveFileText/LoadFileText üzerinden.

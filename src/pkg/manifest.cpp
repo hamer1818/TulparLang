@@ -199,12 +199,13 @@ bool manifest_parse(const std::string &source, Manifest &out,
                 else if (key == "version_code") out.android_version_code = val;
                 else if (key == "version_name") out.android_version_name = val;
                 else if (key == "assets") out.android_assets = val;
+                else if (key == "splash_color") out.android_splash_color = val;
                 else {
                     out_err = "line " + std::to_string(lineno) +
                               ": [android] key '" + key +
                               "' is not recognised (package, name, icon, "
                               "orientation, version_code, version_name, "
-                              "assets)";
+                              "assets, splash_color)";
                     return false;
                 }
             }
@@ -285,7 +286,8 @@ std::string Manifest::to_toml() const {
 
     if (!android_package.empty() || !android_label.empty() ||
         !android_icon.empty() || !android_orientation.empty() ||
-        !android_version_code.empty() || !android_version_name.empty()) {
+        !android_version_code.empty() || !android_version_name.empty() ||
+        !android_assets.empty() || !android_splash_color.empty()) {
         out += "\n[android]\n";
         auto akv = [&](const char *k, const std::string &v) {
             if (v.empty()) return;
@@ -301,6 +303,7 @@ std::string Manifest::to_toml() const {
         akv("version_code", android_version_code);
         akv("version_name", android_version_name);
         akv("assets", android_assets);
+        akv("splash_color", android_splash_color);
     }
     return out;
 }

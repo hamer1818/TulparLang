@@ -169,4 +169,13 @@ _fio_t*.txt
 android/dist/
 *_apk/
 *.apk
+*.apk.idsig
+*.aab
 *.keystore
+
+# Arcade oyunlarının çalışma-zamanı kalıcı en iyi-skor dosyaları (CWD'ye yazılır)
+arcade_best_*.txt
+arcade_snd.txt
+arcade_hap.txt
+arcade_fps.txt
+arcade_lang.txt

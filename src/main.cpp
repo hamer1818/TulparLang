@@ -78,6 +78,10 @@ static void print_help() {
               tulpar::i18n::tr_en(
                   "- Tek komutta imzali Android APK (android hedefini icerir)",
                   "- Signed Android APK in one command (implies android)"));
+  std::printf("  tulpar build --aab <src> [out]   %s\n",
+              tulpar::i18n::tr_en(
+                  "- Play Store'a yuklenebilir Android App Bundle (.aab)",
+                  "- Play Store-ready Android App Bundle (.aab)"));
 
   std::printf("\n%s\n",
               tulpar::i18n::tr_en("Aletler:", "Tools:"));
@@ -235,6 +239,9 @@ int main(int argc, char **argv) {
   // --apk: staging'in ardından package_apk.sh de koşsun → tek komutta imzalı
   // .apk. Android hedefini ima eder (tek başına `tulpar build --apk` yeter).
   int apk_package = 0;
+  // --aab: staging'in ardından package_aab.sh koşsun → Play Store'a yüklenebilir
+  // imzalı .aab. Android hedefini ima eder; --apk yerine geçer.
+  int aab_package = 0;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--target=web") == 0 || strcmp(argv[i], "--web") == 0)
       web_target = 1;
@@ -244,6 +251,10 @@ int main(int argc, char **argv) {
     if (strcmp(argv[i], "--apk") == 0) {
       android_target = 1;
       apk_package = 1;
+    }
+    if (strcmp(argv[i], "--aab") == 0) {
+      android_target = 1;
+      aab_package = 1;
     }
   }
   int skip_typecheck = 0;  // --no-typecheck disables the pre-pass warnings
@@ -363,6 +374,7 @@ int main(int argc, char **argv) {
     if (web_target) aot_set_target_web(1);
     if (android_target) aot_set_target_android(1);
     if (apk_package) aot_set_android_apk(1);
+    if (aab_package) aot_set_android_aab(1);
     // Pozisyonel argümanlar: bayraklar (`--target=web`, `--debug`, ...)
     // build'den sonra da gelebilir; '-' ile başlayanları atla.
     const char *src_arg = nullptr;
