@@ -11,6 +11,54 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ## 📊 Mevcut durum (özet)
 
+> **Geliştirme dalı (yayınlanmadı): ÜÇÜNCÜ mobil dalga** — app kabuğu + juice +
+> 3 yeni oyun + full-stack global skor tablosu; hepsi Android emülatöründe
+> canlı doğrulandı. (0) **Per-game efekt**: 10 oyunun tamamı çarpışma/skor/ölüm
+> noktalarında `patlama()` parçacığı; **ses/haptik merkezî** (motorda tek yer:
+> puan/oyun-bitti/bölüm/rekor tonları + ölüm titreşimi), `ses_ac()/titresim_ac()`
+> ile kapılı. (1) **App kabuğu**: in-app **Ayarlar** (Ses/Titreşim/Dil TR↔EN,
+> kalıcı, canlı yeniden çeviri), **Duraklat** menüsü (Android GERİ tuşu →
+> Devam/Yeniden/Menü). (2) **Juice**: uçan `+N` skor, görsel combo/seri,
+> menü↔oyun fade. (3) **3 yeni oyun (launcher 13)**: **2048** (kaydırma), **Pong**
+> (AI'ya karşı), **Vur** (refleks). (4) **Global skor tablosu (full-stack Tulpar)**:
+> `examples/arcade_app/skor_sunucu.tpr` Wings sunucusu (POST /skor, /tablo→top-10)
+> + oyunlar `skor_tablosu_url()` ile oyun-bitişinde skoru gönderip top-5'i
+> game-over ekranında gösterir (emülatör→sunucu uçtan uca kanıtlı; varsayılan
+> KAPALI, `TULPAR_LB_URL` ile açılır — global için sunucu deploy'u gerekir).
+> Ayrıca EV↔dişli aynı-konum dokunma-kaskad bug'ı düzeltildi. (5) **Sonradan
+> eklenenler**: **FPS sayacı** (Ayarlar'dan aç-kapa, kalıcı `arcade_fps.txt`,
+> oyun-içi üst-orta `tm_fps()`); **Rekorları Sıfırla** (Ayarlar'da 5. satır, tüm
+> oyunların en iyi skorunu iki-dokunuş onayıyla `Sil→Emin?` siler); **Pong** artık
+> dikey ▲▼ dokunma şeması (4-buton dpad yerine); **2048** kaydırma-only (ekranda
+> buton yok). Ayarlar ekranı 5 satıra göre yeniden ölçeklendi; Ayarlar'da yalnız
+> sağdaki değer kutusu toggle eder (sol etikete basmak değiştirmez). (6)
+> **Profesyonel oyun-bitti ekranı**: oyun bitince tam-ekran örtü + büyük skor +
+> rekor + **Tekrar Oyna** / **Ana Menu** butonları (standalone'da "Cikis");
+> ekrana gelişigüzel dokunma artık oyunu BAŞLATMAZ (yalnız butonlar), biten oyun
+> duraklatılamaz, menüye-dönüş yolları tek `_lx_goto_menu()`'de birleşti. (7)
+> **Sabit joystick**: dokunmatik joystick tabanı artık parmağın altında doğup
+> gezmiyor; sol-altta sabit çıpada (`_ar_dpad_cx/cy`) duruyor (bazı telefonlarda
+> ortaya kayıp eli görüşü kapatıyordu) — yön sabit merkezden sapmayla okunuyor.
+> Aktivasyon alanı da sabit tabanın çevresindeki KÜÇÜK daireye daraltıldı (eskiden
+> tüm sol-alt çeyrekti) → ekranın ortasına / joystick dışına basınca artık oluşmuyor. Teslim APK: `Downloads\tulpar-arcade.apk`. Commit
+> bekliyor (kullanıcı isteğiyle). NOT: oyun **oynanış** denemesini kullanıcı yapar
+> ([[user-tests-gameplay-himself]]); ben build+kur+tek statik ekranla doğrularım.
+>
+> **Geliştirme dalı (yayınlanmadı): ikinci mobil dalga** — "juice" + gerçek
+> sensörler + mağaza paketi, hepsi Android emülatöründe canlı doğrulandı.
+> **Efektler** (`arcade`, saf Tulpar): parçacık `patlama()`, ekran sarsıntısı
+> `sars()`, flaş `parla()` (oyun bitince otomatik) + kalıcı **en iyi skor**
+> rozeti (bitiş ekranı + launcher kartları). **F1 ivmeölçer**
+> (`tm_accel_*`/`kontrol_semasi("egim")`, NDK ASensorManager, JNI'siz,
+> nötr-baseline kalibrasyonlu). **F2 dosyasız ses** `tm_beep(freq,ms)` (sinüs
+> sentezi + ses havuzu). **G1** ekran uyanık (`KEEP_SCREEN_ON`). **G2** arka
+> planda ses sustur (`SetMasterVolume` odak callback'i) + `tm_active()`. **G3**
+> splash rengi + adaptive/round ikon (`[android] splash_color`). **G4**
+> `tulpar build --aab` (bundletool → Play Store bundle, validate geçti).
+> **H1** Android'de senkron HTTP (INTERNET izni + status 200). **Dokunmatik
+> kontroller artık GERÇEK ekran kenarına demirli** (Android kamera modeli:
+> tam ekran + `Camera2D` ortalama + `tm_view_*`; oyun kodu değişmez).
+>
 > **Güncel yayın: v3.12.0** (2026-07-23) — Mobil paket: **Tulpar Arcade**
 > resmi 10-oyunlu launcher uygulaması (+ yılan arcade motorunda), tek komut
 > `tulpar build --apk` + `tulpar.toml [android]` kimliği (paket adı/ikon/yön/
