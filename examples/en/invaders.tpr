@@ -107,6 +107,8 @@ func on_frame_fn() {
 
 // Bullet hits an invader: both die, +10. If the fleet is cleared, next level.
 func hit_cb() {
+    // Read the position BEFORE killing (stale handles return 0) — burst at center.
+    explode(x_of(other()) + 16.0, y_of(other()) + 12.0, ORANGE);
     kill(other());                           // me()=bullet (TAG_BULLET), other()=invader
     kill(me());
     score_add(10);

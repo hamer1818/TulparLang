@@ -166,12 +166,16 @@ func her_kare_is() {
 
 // Anahtar toplandı; bölümün sonuncusuysa sıradaki bölüm.
 func topla_cb() {
+    patlama(x_of(oteki()) + 8.0, y_of(oteki()) + 8.0, GOLD);  // anahtar parçacığı
     oldur(oteki());
     skor_ekle(10);
     if (tag_sayisi(TAG_ITEM) == 0) { bolum_gec(); }
 }
 
-func kaybet_cb() { oyun_bitti(); }
+func kaybet_cb() {
+    patlama(x_of(oyuncu_id) + 10.0, y_of(oyuncu_id) + 10.0, ORANGE);
+    oyun_bitti();
+}
 
 sahne(640, 480, "Labirent");
 bilgi("Ok tuslari / WASD: hareket   |   Tum anahtarlari topla (+10), devriyelere degme");

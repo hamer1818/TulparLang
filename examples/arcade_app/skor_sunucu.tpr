@@ -1,0 +1,64 @@
+// Tulpar Arcade — Global Skor Tablosu SUNUCUSU (Tulpar Wings ile)
+//
+//   ./tulpar examples/arcade_app/skor_sunucu.tpr        # 3000 portunda dinler
+//
+// İki uç nokta (ikisi de JSON gövdeli POST — istemci http_request ile çağırır):
+//   POST /skor   {oyun, isim, skor}  → skoru kaydeder, {ok:true} döner
+//   POST /tablo  {oyun}              → o oyunun en yüksek 10 skorunu döner
+//
+// Skorlar süreç belleğinde tutulur (wings global'leri istekler arası korunur).
+// Kalıcı istersen SQLite'a taşınabilir; demo/self-host için bu yeterli.
+//
+// Oyun tarafı: lib/arcade.tpr içinde skor_tablosu_url(...) + oyuncu_adi(...)
+// ayarlanınca her oyun-bitişinde skor GÖNDERİLİR ve tablo ÇEKİLİP gösterilir.
+
+import "wings";
+
+array _skorlar = [];       // her eleman: {oyun, isim, skor}
+
+// Sağlık ucu — sunucu ayakta mı diye bakmak için.
+func saglik(req) {
+    return {"ok": true, "kayit": length(_skorlar)};
+}
+
+// POST /skor — yeni skoru ekle.
+func skor_gonder(req) {
+    json b = req.json;
+    push(_skorlar, {"oyun": b["oyun"], "isim": b["isim"], "skor": b["skor"]});
+    return {"ok": true};
+}
+
+// POST /tablo — bir oyunun en yüksek 10 skorunu (azalan) döndür.
+func skor_tablo(req) {
+    json b = req.json;
+    str oyun = b["oyun"];
+
+    array liste = [];
+    for (int i = 0; i < length(_skorlar); i = i + 1) {
+        if (_skorlar[i]["oyun"] == oyun) { push(liste, _skorlar[i]); }
+    }
+    // Seçmeli sıralama (azalan) — liste kısa, yeterli.
+    for (int i = 0; i < length(liste); i = i + 1) {
+        int en = i;
+        for (int j = i + 1; j < length(liste); j = j + 1) {
+            if (toInt(liste[j]["skor"]) > toInt(liste[en]["skor"])) { en = j; }
+        }
+        if (en != i) {
+            json t = liste[i];
+            liste[i] = liste[en];
+            liste[en] = t;
+        }
+    }
+    array top = [];
+    for (int i = 0; i < length(liste) && i < 10; i = i + 1) { push(top, liste[i]); }
+    return {"ok": true, "tablo": top};
+}
+
+get("/", saglik);
+get("/health", saglik);
+post("/skor", skor_gonder);
+accepts({"oyun": "str", "isim": "str", "skor": "int"});
+post("/tablo", skor_tablo);
+
+print("Tulpar Arcade skor sunucusu — http://0.0.0.0:3000");
+serve(3000);

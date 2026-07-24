@@ -1,0 +1,169 @@
+// 2048 — arcade motoru (ızgara + kaydırma). Sonsuz oynanır, skor birleşen
+// sayıların toplamı; hamle kalmayınca oyun biter.
+//
+//   ./tulpar examples/arcade_2048.tpr
+//
+// Kaydır (mobil) ya da ok tuşları / WASD ile tüm taşları bir yöne it. Yan yana
+// gelen aynı sayılar toplanır (2+2=4 ...). Her hamlede boş bir kareye yeni taş
+// (%90 "2", %10 "4") düşer. Tahta dolup hamle kalmayınca oyun biter.
+//
+// Motor kullanımı yılan gibi: entity YOK — durum 4x4 dizide, çizim ciz_ustune
+// ile elle. sahne/skor/oyun-bitti/HUD motordan bedava gelir.
+
+import "arcade";
+
+int GRID = 4;
+array grid = [];       // 4x4 (row-major); 0 = boş
+int moved = 0;         // son hamlede bir şey oynadı mı?
+int gain = 0;          // son hamlenin puanı (birleşmelerin toplamı)
+
+// Kare tahta, 640x480 dünyada ortalanmış.
+int CELL = 92;
+int GAP = 8;
+int OX = 124;          // (640 - (4*92+3*8)) / 2 ≈ 116, +gap payı
+int OY = 74;
+
+// Boş kareye rastgele yeni taş koy (%10 "4", %90 "2").
+func yeni_tas() {
+    array boslar = [];
+    for (int i = 0; i < 16; i = i + 1) {
+        if (toInt(grid[i]) == 0) { push(boslar, i); }
+    }
+    if (length(boslar) == 0) { return; }
+    int idx = toInt(boslar[randint(0, length(boslar) - 1)]);
+    int v = 2;
+    if (randint(0, 9) == 0) { v = 4; }
+    grid[idx] = v;
+}
+
+// Her (re)başlatmada çağrılır: tahtayı sıfırla + iki taş koy.
+func kur() {
+    grid = [];
+    for (int i = 0; i < 16; i = i + 1) { push(grid, 0); }
+    moved = 0;
+    gain = 0;
+    yeni_tas();
+    yeni_tas();
+}
+
+// Verilen 4 index'i (gidiş yönünde) sıkıştır + birleştir + geri yaz.
+// Global `moved`/`gain` güncellenir (dört yön aynı ilkeli çağırır).
+func satir(i0, i1, i2, i3) {
+    array v = [];
+    if (toInt(grid[i0]) != 0) { push(v, toInt(grid[i0])); }
+    if (toInt(grid[i1]) != 0) { push(v, toInt(grid[i1])); }
+    if (toInt(grid[i2]) != 0) { push(v, toInt(grid[i2])); }
+    if (toInt(grid[i3]) != 0) { push(v, toInt(grid[i3])); }
+    array out = [];
+    int k = 0;
+    while (k < length(v)) {
+        if (k + 1 < length(v) && toInt(v[k]) == toInt(v[k + 1])) {
+            int m = toInt(v[k]) * 2;
+            push(out, m);
+            gain = gain + m;
+            k = k + 2;
+        } else {
+            push(out, toInt(v[k]));
+            k = k + 1;
+        }
+    }
+    while (length(out) < 4) { push(out, 0); }
+    if (toInt(grid[i0]) != toInt(out[0])) { moved = 1; }
+    if (toInt(grid[i1]) != toInt(out[1])) { moved = 1; }
+    if (toInt(grid[i2]) != toInt(out[2])) { moved = 1; }
+    if (toInt(grid[i3]) != toInt(out[3])) { moved = 1; }
+    grid[i0] = toInt(out[0]); grid[i1] = toInt(out[1]);
+    grid[i2] = toInt(out[2]); grid[i3] = toInt(out[3]);
+}
+
+// yon: 0=sol 1=sag 2=yukari 3=asagi
+func hamle(yon) {
+    moved = 0;
+    gain = 0;
+    if (yon == 0)      { satir(0,1,2,3);   satir(4,5,6,7);   satir(8,9,10,11);  satir(12,13,14,15); }
+    else if (yon == 1) { satir(3,2,1,0);   satir(7,6,5,4);   satir(11,10,9,8);  satir(15,14,13,12); }
+    else if (yon == 2) { satir(0,4,8,12);  satir(1,5,9,13);  satir(2,6,10,14);  satir(3,7,11,15); }
+    else               { satir(12,8,4,0);  satir(13,9,5,1);  satir(14,10,6,2);  satir(15,11,7,3); }
+    if (moved == 1) {
+        if (gain > 0) { skor_ekle(gain); }
+        yeni_tas();
+    }
+}
+
+// Hâlâ hamle var mı? (boş kare ya da birleşebilir komşu)
+func hamle_var(): bool {
+    for (int i = 0; i < 16; i = i + 1) {
+        if (toInt(grid[i]) == 0) { return true; }
+    }
+    for (int r = 0; r < 4; r = r + 1) {
+        for (int c = 0; c < 3; c = c + 1) {
+            if (toInt(grid[r * 4 + c]) == toInt(grid[r * 4 + c + 1])) { return true; }
+        }
+    }
+    for (int c = 0; c < 4; c = c + 1) {
+        for (int r = 0; r < 3; r = r + 1) {
+            if (toInt(grid[r * 4 + c]) == toInt(grid[(r + 1) * 4 + c])) { return true; }
+        }
+    }
+    return false;
+}
+
+func kare() {
+    int yon = 0 - 1;
+    if (kaydirildi("sol")    || key_pressed("LEFT")  || key_pressed("A")) { yon = 0; }
+    else if (kaydirildi("sag")    || key_pressed("RIGHT") || key_pressed("D")) { yon = 1; }
+    else if (kaydirildi("yukari") || key_pressed("UP")    || key_pressed("W")) { yon = 2; }
+    else if (kaydirildi("asagi")  || key_pressed("DOWN")  || key_pressed("S")) { yon = 3; }
+    if (yon >= 0) {
+        hamle(yon);
+        if (!hamle_var()) { oyun_bitti(); }
+    }
+}
+
+// Taş rengi (değere göre).
+func tas_renk(v): int {
+    if (v == 0)    { return rgb(40, 44, 60); }
+    if (v == 2)    { return rgb(120, 160, 220); }
+    if (v == 4)    { return rgb(100, 200, 180); }
+    if (v == 8)    { return rgb(230, 180, 90); }
+    if (v == 16)   { return rgb(235, 150, 70); }
+    if (v == 32)   { return rgb(235, 110, 80); }
+    if (v == 64)   { return rgb(230, 80, 80); }
+    if (v == 128)  { return rgb(240, 210, 100); }
+    if (v == 256)  { return rgb(240, 205, 70); }
+    if (v == 512)  { return rgb(240, 200, 50); }
+    if (v == 1024) { return rgb(245, 195, 30); }
+    return rgb(250, 190, 0);
+}
+
+func ciz() {
+    // Tahta çerçevesi
+    rect(OX - GAP, OY - GAP, GRID * CELL + (GRID + 1) * GAP,
+         GRID * CELL + (GRID + 1) * GAP, rgb(28, 30, 42));
+    for (int r = 0; r < 4; r = r + 1) {
+        for (int c = 0; c < 4; c = c + 1) {
+            int v = toInt(grid[r * 4 + c]);
+            int x = OX + c * (CELL + GAP);
+            int y = OY + r * (CELL + GAP);
+            rect(x, y, CELL, CELL, tas_renk(v));
+            if (v != 0) {
+                str t = toString(v);
+                int sz = 40;
+                if (v >= 1000) { sz = 26; }
+                else if (v >= 100) { sz = 34; }
+                int col = rgb(30, 30, 40);
+                if (v <= 4) { col = WHITE; }
+                text(t, toInt(x + (CELL - measure_text(t, sz)) / 2.0),
+                     toInt(y + (CELL - sz * 1.0) / 2.0), sz, col);
+            }
+        }
+    }
+}
+
+sahne(640, 480, "2048");
+bilgi("Parmaginla KAYDIR (mobil) / ok tuslari (masaustu)  |  Ayni sayilar toplanir");
+kontrol_semasi("yok");    // ekranda buton YOK — sadece kaydirma jesti (+masaustu ok tuslari)
+baslangicta(kur);
+her_kare(kare);
+ciz_ustune(ciz);
+oyna();

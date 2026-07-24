@@ -1,0 +1,87 @@
+// Vur (köstebek/refleks) — arcade motoru, 3x3 ızgara. Yanan kareye zamanında
+// dokun (+1); köstebek kaçarsa (süre biterse) oyun biter. Her vuruşta süre
+// kısalır → giderek hızlanır. Skor = kaç köstebeğe zamanında vurduğun.
+//
+//   ./tulpar examples/arcade_vur.tpr
+//
+// Saf dokunma (masaüstünde fare de dokunma sayılır). Hareket/joystick YOK.
+// Motor kullanımı yılan/2048 gibi: durum global, çizim ciz_ustune ile elle.
+
+import "arcade";
+
+int GC = 3;            // 3x3
+int CELL = 120;
+int GAP = 16;
+int OX = 116;          // (640 - (3*120+2*16)) / 2 = 116
+int OY = 70;
+int mole = 0;          // aktif hücre (0..8), -1 = yok
+float mtimer = 0.0;    // bu köstebeğin kalan süresi (sn)
+float mlimit = 1.10;   // güncel süre limiti (her vuruşta kısalır)
+int prevn = 0;         // dokunma edge sayacı
+
+func hucre_x(i): int { return OX + mod(i, GC) * (CELL + GAP); }
+func hucre_y(i): int { return OY + toInt(i / GC) * (CELL + GAP); }
+
+// Yeni köstebek: rastgele hücre (aynı yere düşme), süreyi sıfırla.
+func yeni_mole() {
+    int m = randint(0, 8);
+    if (m == mole) { m = mod(m + 1, 9); }
+    mole = m;
+    mtimer = mlimit;
+}
+
+func kur() {
+    mlimit = 1.10;
+    mole = 0 - 1;
+    prevn = 0;
+    yeni_mole();
+}
+
+func kare() {
+    float dt = frame_time();
+    if (dt <= 0.0) { dt = 0.0166667; }
+    if (dt > 0.05) { dt = 0.05; }
+
+    mtimer = mtimer - dt;
+    if (mtimer <= 0.0) { oyun_bitti(); return; }   // köstebek kaçtı
+
+    int n = touch_count();
+    bool tap = (n > 0) && (prevn == 0);
+    if (tap) {
+        float tx = touch_x(0) * 1.0;
+        float ty = touch_y(0) * 1.0;
+        int mx = hucre_x(mole);
+        int my = hucre_y(mole);
+        if (tx >= mx * 1.0 && tx <= mx + CELL && ty >= my * 1.0 && ty <= my + CELL) {
+            skor_ekle(1);
+            patlama(mx + CELL / 2, my + CELL / 2, GOLD);
+            if (mlimit > 0.45) { mlimit = mlimit - 0.03; }   // hızlan
+            yeni_mole();
+        }
+    }
+    prevn = n;
+}
+
+func ciz() {
+    for (int i = 0; i < 9; i = i + 1) {
+        int x = hucre_x(i);
+        int y = hucre_y(i);
+        if (i == mole) {
+            // Kalan süreye göre uyarı rengi (yeşilden kırmızıya)
+            float k = mtimer / mlimit;
+            if (k < 0.0) { k = 0.0; }
+            if (k > 1.0) { k = 1.0; }
+            rect(x, y, CELL, CELL, rgb(toInt(90 + 150 * (1.0 - k)), toInt(70 + 120 * k), 50));
+            circle(x + CELL / 2, y + CELL / 2, toInt(CELL / 3), rgb(240, 175, 60));
+        } else {
+            rect(x, y, CELL, CELL, rgb(38, 42, 58));
+        }
+    }
+}
+
+sahne(640, 480, "Vur");
+bilgi("Yanan kareye dokun (+1)  |  Kostebek kacmadan vur, giderek hizlanir");
+baslangicta(kur);
+her_kare(kare);
+ciz_ustune(ciz);
+oyna();
