@@ -51,8 +51,15 @@ func her_kare_is() {
     if (skor() >= hedef) { bolum_gec(); }
 }
 
-func vur_cb()    { oldur(oteki()); skor_ekle(10); }   // mermi düşmana değince
-func kaybet_cb() { oyun_bitti(); }                    // düşman oyuncuya değince
+func vur_cb() {                                       // mermi düşmana değince
+    patlama(x_of(oteki()) + 13.0, y_of(oteki()) + 13.0, ORANGE);
+    oldur(oteki());
+    skor_ekle(10);
+}
+func kaybet_cb() {                                    // düşman oyuncuya değince
+    patlama(x_of(player_id) + 14.0, y_of(player_id) + 14.0, ORANGE);
+    oyun_bitti();
+}
 
 sahne(640, 480, "Nisanci");
 // Şerit 640px'e sığmalı — uzun metin sağdan kırpılır (bölüm/hedef zaten HUD'da).

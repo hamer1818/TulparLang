@@ -114,8 +114,7 @@ func kare() {
     // Carpma: dis duvar / engel / kendi govdesi -> oyun bitti (titreşimli).
     if (bx < 0 || bx >= COLS || by < 0 || by >= ROWS
         || engel_mi(bx, by) || yilan_mi(bx, by)) {
-        titret(200);
-        oyun_bitti();
+        oyun_bitti();          // ölüm titreşimi + sesi motorda merkezî (game_over)
         return;
     }
 
@@ -125,6 +124,7 @@ func kare() {
         syuz = syuz + 1;
         skor_ekle(10);
         titret(60);
+        patlama(OX + bx * CELL + 14, OY + by * CELL + 14, GOLD);  // yem parçacığı
         yem_sayisi = yem_sayisi + 1;
         if (yem_sayisi >= 5) { bolum_gec(); return; }
         yem_koy();

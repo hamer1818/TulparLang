@@ -86,7 +86,10 @@ func ciz_ek() {
     text("Kalan: " + toString(kalan) + " sn", 240, 12, 20, SKYBLUE);
 }
 
-func kaybet_cb() { oyun_bitti(); }
+func kaybet_cb() {
+    patlama(x_of(oyuncu_id) + 15.0, y_of(oyuncu_id) + 12.0, ORANGE);  // çarpışma parçacığı
+    oyun_bitti();
+}
 
 sahne(640, 480, "Goktasi");
 bilgi("Sol/Sag veya A/D: kac   |   Goktaslarindan sakin, sureyi doldur");

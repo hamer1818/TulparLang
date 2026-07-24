@@ -78,8 +78,15 @@ func her_kare_is() {
     }
 }
 
-func hedef_cb()  { skor_ekle(50); bolum_gec(); }   // altın şeride ulaştın
-func kaybet_cb() { oyun_bitti(); }                 // araca değdin
+func hedef_cb()  {                                 // altın şeride ulaştın
+    patlama(x_of(oyuncu_id) + 12.0, y_of(oyuncu_id) + 12.0, GOLD);
+    skor_ekle(50);
+    bolum_gec();
+}
+func kaybet_cb() {                                 // araca değdin
+    patlama(x_of(oyuncu_id) + 12.0, y_of(oyuncu_id) + 12.0, ORANGE);
+    oyun_bitti();
+}
 
 sahne(640, 480, "Karsiya Gec");
 bilgi("Ok tuslari / WASD: hareket   |   Araclara degmeden altin serite ulas (+50)");

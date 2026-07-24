@@ -85,6 +85,7 @@ struct Manifest {
     std::string android_version_code;
     std::string android_version_name;
     std::string android_assets;
+    std::string android_splash_color;   // "#RRGGBB" — açılış/splash arka planı
 
     // Round-trip serialise this manifest back to the TOML subset we
     // accept on input. Idempotent — reading a manifest, serialising it,

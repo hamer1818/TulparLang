@@ -1,0 +1,76 @@
+import "test";
+import "arcade";
+
+// Efekt + rekor katmanı — HEADLESS (pencere açılmaz; save/load raylib dosya
+// API'si pencere istemez). patlama/sars/parla + kalıcı en-iyi-skor mantığı.
+
+// Parçacık: 16 saçılır, ömür bitince slotlar geri kullanılır (dizi şişmez).
+func run_parcacik() {
+    _pt_clear();
+    patlama(100, 100, 12345);
+    assert_eq_int(_pt_n, 16);
+    // ~1 sn güncelle → tüm ömürler (azami 0.75 sn) biter.
+    for (int i = 0; i < 60; i = i + 1) { _pt_update(0.0166667); }
+    int sag_kalan = 0;
+    for (int i2 = 0; i2 < _pt_n; i2 = i2 + 1) {
+        if (_pt_life[i2] > 0.0) { sag_kalan = sag_kalan + 1; }
+    }
+    assert_eq_int(sag_kalan, 0);
+    // Yeni patlama ölü slotları GERİ KULLANMALI.
+    patlama_n(50, 50, 999, 10);
+    assert_eq_int(_pt_n, 16);
+}
+
+// Sarsıntı + flash: ofset üretir, süre bitince tam söner.
+func run_sars() {
+    sars();
+    parla();
+    bool ofset_gordu = false;
+    for (int i = 0; i < 60; i = i + 1) {
+        _fx_update(0.0166667);
+        if (_fx_ox != 0.0) { ofset_gordu = true; }
+    }
+    assert_eq_bool(ofset_gordu, true);        // en az bir kare sahne titredi
+    assert_eq_bool(_fx_sh_t <= 0.0, true);    // 1 sn sonra sönmüş
+    assert_eq_bool(_fx_fl_t <= 0.0, true);
+    _fx_update(0.016);
+    assert_eq_bool(_fx_ox == 0.0, true);      // sarsıntı yokken ofset 0
+}
+
+// Rekor: yüksek skor kaydedilir + diskten geri okunur; düşük skor ezmez.
+func run_rekor() {
+    _ar_title = "TestOyun";
+    save_data(_ar_best_key(), "0");
+    _ar_load_best();
+    assert_eq_int(best_score(), 0);
+    skor_ata(120);
+    _ar_check_record();
+    assert_eq_int(best_score(), 120);
+    _best = 0;
+    _ar_load_best();                          // diskten geri gelmeli
+    assert_eq_int(best_score(), 120);
+    skor_ata(50);
+    _new_record = false;
+    _ar_check_record();                       // 50 < 120 → rekor DEĞİL
+    assert_eq_int(best_score(), 120);
+    assert_eq_bool(_new_record, false);
+}
+
+// oyun_bitti(): rekoru işler + otomatik sarsıntı/flash tetikler.
+func run_bitis_rekor() {
+    _ar_title = "TestOyun2";
+    save_data(_ar_best_key(), "10");
+    _ar_reset();
+    skor_ata(30);
+    oyun_bitti();
+    assert_eq_bool(_new_record, true);
+    assert_eq_int(best_score(), 30);
+    assert_eq_bool(_fx_sh_t > 0.0, true);     // otomatik juice
+    assert_eq_bool(_fx_fl_t > 0.0, true);
+}
+
+test("parcacik: 16 sacilir + slot geri kullanimi", "run_parcacik");
+test("sars/parla: ofset + sonme", "run_sars");
+test("rekor: kaydet/oku/ezme", "run_rekor");
+test("oyun_bitti: rekor + otomatik juice", "run_bitis_rekor");
+test_summary();

@@ -2,7 +2,7 @@
 # Combine all arcade games into one launcher .tpr by namespacing each game's
 # top-level functions + globals with a per-game prefix, converting the trailing
 # registration block into a `func <prefix>_setup()` (dropping sahne/oyna).
-import re, sys
+import re, sys, os
 
 GAMES = [
     ("examples/arcade_topla.tpr",    "tp", "Topla"),
@@ -15,6 +15,9 @@ GAMES = [
     ("examples/arcade_ucus.tpr",     "uc", "Ucus"),
     ("examples/arcade_goktasi.tpr",  "go", "Goktasi"),
     ("examples/arcade_yilan.tpr",    "yi", "Yilan"),
+    ("examples/arcade_2048.tpr",     "tf", "2048"),
+    ("examples/arcade_pong.tpr",     "pg", "Pong"),
+    ("examples/arcade_vur.tpr",      "vr", "Vur"),
 ]
 
 REG_RE  = re.compile(r'\s*(sahne|scene|bilgi|info|baslangicta|on_start|bolum|level|her_kare|on_frame|carpisinca|on_hit|ciz_ustune|dil|language|yercekimi|gravity|hud|hud_gizle|touch_controls|touch_kontrol|kontrol_semasi|control_scheme)\b')
@@ -102,6 +105,13 @@ out.append("//  Menü + launcher")
 out.append("// " + "=" * 74)
 out.append('sahne(640, 480, "Tulpar Arcade");')
 out.append('menu_basligi("TULPAR ARCADE");')
+# Global skor tablosu (opsiyonel). TULPAR_LB_URL ortam değişkeni ile açılır;
+# boşsa tamamen kapalı (hiçbir ağ çağrısı yapılmaz). Kendi sunucunu deploy edip
+# bu URL'yi (ör. https://oyun.tulparlang.dev) verince "global" olur.
+lb_url = os.environ.get("TULPAR_LB_URL", "")
+if lb_url:
+    out.append(f'skor_tablosu_url("{lb_url}");')
+    out.append('oyuncu_adi("Oyuncu");')
 for path, prefix, name in GAMES:
     out.append(f'oyun_ekle("{name}", {prefix}_setup);')
 out.append("launcher();")

@@ -1,0 +1,112 @@
+// Pong — arcade motoru, yapay zekâya karşı ralli. Sonsuz: her başarılı iaden
+// +1; topu kaçırınca oyun biter. Skor = üst üste kaç kez iade ettiğin.
+//
+//   ./tulpar examples/arcade_pong.tpr
+//
+// Yukarı/Aşağı (W/S) ya da mobilde ok butonlarıyla sol raketi sür. Top hızlanır;
+// AI raketi topu takip eder ama sınırlı hızda (yenilebilir). AI ıskalarsa top
+// sağ duvardan seker (oyun sürer) — yalnız SEN ıskalayınca biter.
+//
+// Motor kullanımı: raketler + top entity; hareket/AI her_kare içinde, çarpışma
+// callback'leri iade + sekme yapar.
+
+import "arcade";
+
+int player = 0;
+int ai = 0;
+int ball = 0;
+float bspeed = 260.0;   // top hızı (px/sn) — her iadede biraz artar
+int PW = 14;            // raket genişliği
+int PH = 90;            // raket yüksekliği
+
+// Topu ortadan `dir` yönüne (−1 sol / +1 sağ) hafif dikey açıyla servis et.
+func servis(dir) {
+    konumla(ball, 313, 233);
+    float ay = (random() - 0.5) * 1.2;
+    hiz_ver(ball, dir * bspeed, sin(ay) * bspeed);
+}
+
+func kur() {
+    temizle();
+    bspeed = 260.0;
+    player = uret(20,  195, PW, PH, SKYBLUE, TAG_PLAYER, MV_NONE);
+    ai     = uret(606, 195, PW, PH, RED,     TAG_ENEMY,  MV_NONE);
+    ball   = uret(313, 233, 14, 14, GOLD,    TAG_BULLET, MV_VELOCITY);
+    servis(0 - 1);
+}
+
+func abs_f(v): float { if (v < 0.0) { return 0.0 - v; } return v; }
+
+func kare() {
+    float dt = frame_time();
+    if (dt <= 0.0) { dt = 0.0166667; }
+    if (dt > 0.05) { dt = 0.05; }
+
+    // Oyuncu raketi: yukarı/aşağı (klavye VEYA dokunmatik)
+    float py = y_of(player);
+    if (yukari()) { py = py - 380.0 * dt; }
+    if (asagi())  { py = py + 380.0 * dt; }
+    if (py < 0.0) { py = 0.0; }
+    if (py > 480.0 - PH * 1.0) { py = 480.0 - PH; }
+    konumla(player, 20, py);
+
+    // AI raketi: topu takip et (sınırlı hız → yenilebilir)
+    float ay = y_of(ai);
+    float hedef = y_of(ball) - PH * 0.5;
+    float d = hedef - ay;
+    float lim = 250.0 * dt;
+    if (d > lim) { d = lim; }
+    if (d < 0.0 - lim) { d = 0.0 - lim; }
+    ay = ay + d;
+    if (ay < 0.0) { ay = 0.0; }
+    if (ay > 480.0 - PH * 1.0) { ay = 480.0 - PH; }
+    konumla(ai, 606, ay);
+
+    // Top: üst/alt duvardan sek
+    float bx = x_of(ball);
+    float by = y_of(ball);
+    float bvx = vx_of(ball);
+    float bvy = vy_of(ball);
+    if (by < 0.0 && bvy < 0.0) { bvy = 0.0 - bvy; }
+    if (by > 480.0 - 14.0 && bvy > 0.0) { bvy = 0.0 - bvy; }
+    hiz_ver(ball, bvx, bvy);
+
+    // Oyuncu ıskaladı → oyun biter
+    if (bx < 0.0 - 14.0) { oyun_bitti(); return; }
+    // AI ıskaladı → sağ duvardan sek (oyun sürer)
+    if (bx > 640.0 && bvx > 0.0) {
+        konumla(ball, 640.0 - 16.0, by);
+        hiz_ver(ball, 0.0 - abs_f(bvx), bvy);
+    }
+}
+
+// Top oyuncu raketine değince: sağa sek + rakete göre açı + hızlan, +1.
+func vur_cb() {
+    int b = oteki();
+    float rel = (y_of(b) + 7.0) - (y_of(player) + PH * 0.5);
+    bspeed = bspeed + 10.0;
+    if (bspeed > 470.0) { bspeed = 470.0; }
+    float nvy = (rel / (PH * 0.5)) * bspeed * 0.8;
+    hiz_ver(b, bspeed, nvy);
+    konumla(b, 20.0 + PW, y_of(b));
+    skor_ekle(1);
+    patlama(20.0 + PW + 7.0, y_of(b) + 7.0, SKYBLUE);
+}
+
+// Top AI raketine değince: sola sek + açı (skor yok).
+func ai_cb() {
+    int b = oteki();
+    float rel = (y_of(b) + 7.0) - (y_of(ai) + PH * 0.5);
+    float nvy = (rel / (PH * 0.5)) * bspeed * 0.8;
+    hiz_ver(b, 0.0 - bspeed, nvy);
+    konumla(b, 606.0 - 14.0, y_of(b));
+}
+
+sahne(640, 480, "Pong");
+bilgi("Yukari/Asagi veya W/S: raket  |  Topu kacirma, her iade +1");
+kontrol_semasi("dikey");  // mobilde YUKARI/ASAGI ok butonlari (raket dikey hareket)
+baslangicta(kur);
+her_kare(kare);
+carpisinca(TAG_PLAYER, TAG_BULLET, vur_cb);
+carpisinca(TAG_ENEMY,  TAG_BULLET, ai_cb);
+oyna();

@@ -7,6 +7,140 @@ language/stdlib/ABI changes, MINOR for backwards-compatible features, PATCH for
 fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md));
 `tulpar --version` reports the tag at release time and `<version>-dev` otherwise.
 
+## [Unreleased]
+
+Third mobile wave — full app shell, per-game juice, three new games, and a
+full-stack global leaderboard. All verified live on the Android emulator.
+
+### Added (third wave)
+- **Per-game effects + centralized audio across all games.** Every arcade game
+  now sprays a `patlama()` particle burst at its scoring/collision/death points
+  (10 games). Sound + haptics are centralized in the engine (DRY): `skor_ekle`
+  blips, `game_over` plays a lose tone + death rumble, level-up / win / new-record
+  each get their own tone — so all games gained audio with one edit, not ten.
+- **App shell.** In-app **Settings** screen (Sound / Haptics / Language TR↔EN
+  toggles, persisted via `save_data`, live-retranslates the whole shell UI),
+  a **Pause** overlay (Resume / Restart / Menu, opened with the Android **Back**
+  button / ESC), and a gear button on the menu. `sound_on()/ses_ac()`,
+  `haptics_on()/titresim_ac()` gate every engine beep/vibrate.
+- **Juice.** Floating `+N` score popups (anchored at the collision point),
+  a purely-visual **combo/streak** indicator (`SERI x3` — never changes the
+  score, so best-scores stay fair), and a short **menu↔game fade** transition.
+- **Three new games** (13 total in the launcher): **2048** (swipe/arrow merge,
+  colored tiles), **Pong** (vs a beatable AI, endless rally = score), and
+  **Vur** (whack-a-mole reaction, pure tap, speeds up).
+- **Global leaderboard (full-stack Tulpar).** `examples/arcade_app/skor_sunucu.tpr`
+  is a Tulpar Wings server (`POST /skor`, `POST /tablo` → top-10). The engine's
+  `skor_tablosu_url(url)` + `oyuncu_adi(name)` make every game submit its score
+  on game-over and fetch + render the global top-5 on the game-over screen — a
+  Tulpar game talking to a Tulpar backend, verified end-to-end (emulator →
+  server). Off by default (`_lb_url==""` → no network); the launcher enables it
+  from the `TULPAR_LB_URL` env var at generation time.
+
+### Added (third wave, follow-ups)
+- **Fixed joystick.** The touch joystick base is now anchored at a fixed
+  bottom-left position instead of spawning under (and drifting with) the finger —
+  on some phones it could creep toward the screen center and the player's hand
+  would block the view. Direction is read as the finger's offset from the fixed
+  center; the base no longer moves. Its activation area is now a small circle
+  around the fixed base (was the whole bottom-left quadrant), so touching the
+  screen center — or anywhere off the joystick — no longer spawns a stick.
+- **Professional game-over / win screen.** Ending a game now shows a full-screen
+  overlay with the big score, best/record line, optional global top-4, and two
+  buttons — **Tekrar Oyna / Play Again** and **Ana Menu / Menu** (in standalone
+  `play()` the second is **Cikis / Quit**). Tapping the screen at random no longer
+  restarts the game (only the buttons act; keyboard R/Enter = restart, Esc/Back =
+  menu). A finished game can no longer be paused. The three go-to-menu paths
+  (home button, pause→Menu, game-over→Menu) share one `_lx_goto_menu()` helper.
+- **FPS counter (Settings-toggled).** A 4th Settings row (**FPS**, off by
+  default, persisted via `arcade_fps.txt`) shows the live frame rate top-center
+  during play (`tm_fps()` = raylib `GetFPS`; no C++ change needed). Public
+  `show_fps()/fps_goster()`.
+- **Reset records (Settings).** A 5th Settings row (**Rekorlar / Records**) wipes
+  every game's persisted best score, with a two-tap confirm (`Sil`→`Emin?`→wiped)
+  so it can't fire by accident; menu best-badges clear immediately.
+
+### Fixed (third wave)
+- **Launcher HOME↔gear tap cascade.** The in-game HOME button and the menu's
+  gear (Settings) button share the top-right corner; tapping HOME used to
+  cascade into opening Settings the same frame. Going home now consumes the
+  touch (`_ar_touch_prevn`). Caught by on-emulator testing.
+
+### Changed (third wave)
+- **Pong now uses the vertical (▲▼) touch scheme** instead of the 4-button dpad —
+  a paddle only moves up/down, so the horizontal buttons were dead. `kontrol_semasi("dikey")`.
+- **2048 is swipe-only on mobile** (`kontrol_semasi("yok")`): no on-screen
+  buttons, the swipe gesture drives it (arrow keys still work on desktop).
+
+---
+
+Second mobile wave — "juice", real device sensors, and store-ready packaging.
+Every item below was verified live on the Android emulator (screencap /
+logcat / dumpsys / bundletool validate).
+
+### Added
+- **Particle + screen-shake + flash effects in `arcade` (pure Tulpar).**
+  `patlama(x,y,renk)` / `explode` (+ `patlama_n` count variant) spray
+  gravity-affected sparks from a slot-recycling parallel-array pool; `sars()`
+  / `shake()` (damped random offset — the whole scene shudders) and `parla()`
+  / `flash()` (white full-screen). `game_over()` now auto-triggers shake+flash,
+  so all ten games gained impact feedback with zero code changes. Effects keep
+  animating on the game-over screen. `sars_x()/sars_y()` expose the offset for
+  games that draw their own scene (snake).
+- **Persistent per-game high scores in `arcade`.** The engine saves each game's
+  best score (`save_data`, keyed by scene/launcher title) and shows a gold
+  "NEW RECORD!" / "En iyi: N" badge on the game-over screen **and** on the
+  launcher menu cards (loaded once at launch, no per-frame IO). Survives cold
+  boot + reinstall (verified).
+- **F1 — accelerometer / tilt controls.** `tm_accel_x/y/z`,
+  `tm_accel_available` (NDK `ASensorManager`, **no JNI**, callback-driven event
+  queue drained through raylib's existing looper poll) + `accel_x()/egim_x()`
+  … wrappers; arcade `kontrol_semasi("egim")` (scheme 6) reads tilt as a
+  **deviation from a captured neutral baseline** (auto-calibrates to however
+  the phone is held, so gravity doesn't false-trigger). Desktop/web return 0 →
+  keyboard still drives.
+- **F2 — `tm_beep(freq, ms)` / `beep()` / `bip()`.** Fileless SFX: synthesises a
+  sine wave (with attack/decay envelope) on the fly and plays it through a
+  round-robin `Sound` pool — short game sounds with no asset shipping. Same on
+  desktop/web/Android (pure raylib audio); AAudio stream open verified on device.
+- **G1 — screen stays awake.** `AWINDOW_FLAG_KEEP_SCREEN_ON` set alongside
+  fullscreen in the vendored `rcore_android.c` (TULPAR PATCH); the device no
+  longer dims/sleeps mid-game (`dumpsys` shows `fl=KEEP_SCREEN_ON`).
+- **G2 — background lifecycle.** On `APP_CMD_LOST_FOCUS`/`GAINED_FOCUS` the
+  Android backend now `SetMasterVolume(0/1)` so audio mutes when the app is
+  backgrounded and resumes on return (the loop already freezes = auto-pause).
+  `tm_active()` / `aktif_mi()` exposes foreground state to game code.
+- **G3 — splash background + adaptive/round icon.** The driver writes a
+  `TulparSplash` theme (window background = splash colour, killing the black
+  cold-start flash) plus an `res/mipmap-anydpi-v26/ic_launcher.xml`
+  adaptive-icon (foreground = your PNG, background = splash colour) and
+  `android:roundIcon`. Colour via `tulpar.toml [android] splash_color="#RRGGBB"`.
+- **G4 — `tulpar build --aab`.** Emits a Play-Store-ready **Android App
+  Bundle** via `android/package_aab.sh` (aapt2 `--proto-format` link →
+  bundletool `build-bundle` → jarsigner). bundletool is invoked from the
+  gradle-cached jar with an assembled classpath when no fat jar is present;
+  `bundletool validate` passes (base module carries both ABIs + adaptive icon).
+- **H1 — synchronous HTTP on Android.** `INTERNET` permission is now always
+  written to the manifest; the existing blocking `http_request`/`http_get`
+  works on-device over bionic sockets (verified: live `GET` returns status 200).
+- **`tm_view_left/right/top/bottom` + `view_left()`/`ekran_sol()` … wrappers.**
+  Report the visible screen's edges in world coordinates.
+
+### Changed
+- **Touch controls now anchor to the real screen edges (Android camera model).**
+  Previously raylib letterboxed the scene and the ortho projection was the game
+  world's size, so the on-screen joystick/buttons were cramped into the world's
+  small inner area instead of reaching the phone's real corners. Now on Android
+  `window(w,h)` opens **fullscreen** and centres the `w×h` world via a
+  `Camera2D` (zoom+offset); `frame_begin/end` wrap `BeginMode2D/EndMode2D` and
+  touch/mouse read back through the inverse transform — **no game code
+  changes**. arcade anchors the joystick, ◀▶/dpad/vertical buttons, action
+  button, home button and full-screen flash to `tm_view_*` (the real
+  bottom-left / bottom-right / top-right corners). Desktop/web keep the camera
+  off → byte-identical behaviour.
+- `examples/arcade_uzay.tpr` (+ EN `invaders`) burst an orange explosion when an
+  invader is shot; `examples/arcade_yilan.tpr` sparks gold when food is eaten.
+
 ## [v3.12.0]
 
 Tulpar goes properly mobile: the arcade launcher becomes the official

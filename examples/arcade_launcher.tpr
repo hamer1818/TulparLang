@@ -104,6 +104,7 @@ func tp_her_kare_is() {
 
 // Oyuncu eşyaya değince: topla, +10 puan. Bölümün son eşyasıysa sıradaki bölüm.
 func tp_topla_cb() {
+    patlama(x_of(oteki()) + 9.0, y_of(oteki()) + 9.0, GOLD);  // eşya parçacığı
     oldur(oteki());
     skor_ekle(10);
     if (tag_sayisi(TAG_ITEM) == 0) { bolum_gec(); }
@@ -191,8 +192,15 @@ func zp_her_kare_is() {
     if (ex > 596.0   && evx > 0.0) { hiz_ver(zp_engel_id, 0.0 - evx, 0); }
 }
 
-func zp_hedef_cb() { skor_ekle(100); bolum_gec(); }   // hedefe ulaş → sıradaki bölüm
-func zp_kaybet_cb() { oyun_bitti(); }                 // engele değ → oyun biter
+func zp_hedef_cb() {                                  // hedefe ulaş → sıradaki bölüm
+    patlama(x_of(oteki()) + 12.0, y_of(oteki()) + 12.0, GOLD);
+    skor_ekle(100);
+    bolum_gec();
+}
+func zp_kaybet_cb() {                                 // engele değ → oyun biter
+    patlama(x_of(ben()) + 14.0, y_of(ben()) + 14.0, ORANGE);
+    oyun_bitti();
+}
 
 ziplama(640);
 
@@ -263,8 +271,15 @@ func ni_her_kare_is() {
     if (skor() >= ni_hedef) { bolum_gec(); }
 }
 
-func ni_vur_cb()    { oldur(oteki()); skor_ekle(10); }   // mermi düşmana değince
-func ni_kaybet_cb() { oyun_bitti(); }                    // düşman oyuncuya değince
+func ni_vur_cb() {                                       // mermi düşmana değince
+    patlama(x_of(oteki()) + 13.0, y_of(oteki()) + 13.0, ORANGE);
+    oldur(oteki());
+    skor_ekle(10);
+}
+func ni_kaybet_cb() {                                    // düşman oyuncuya değince
+    patlama(x_of(ni_player_id) + 14.0, y_of(ni_player_id) + 14.0, ORANGE);
+    oyun_bitti();
+}
 
 // Şerit 640px'e sığmalı — uzun metin sağdan kırpılır (bölüm/hedef zaten HUD'da).
 
@@ -399,6 +414,7 @@ func tu_raket_cb() {
 // çevirmek topu eski yönüne döndürür (tuğlaların içinden geçer gibi görünür).
 func tu_kir_cb() {
     int b = ben();                         // ben()=top (TAG_BULLET), oteki()=tuğla
+    patlama(x_of(oteki()) + 34.0, y_of(oteki()) + 9.0, ORANGE);  // tuğla parçacığı
     oldur(oteki());
     skor_ekle(10);
     if (tu_bounced == 0) {
@@ -536,6 +552,8 @@ func uz_her_kare_is() {
 
 // Mermi düşmana değince: ikisi de ölür, +10. Filo bittiyse sıradaki bölüm.
 func uz_vur_cb() {
+    // Konumu ÖLDÜRMEDEN önce oku (bayat handle 0 döner) — düşman merkezinde patlama.
+    patlama(x_of(oteki()) + 16.0, y_of(oteki()) + 12.0, ORANGE);
     oldur(oteki());                          // ben()=mermi (TAG_BULLET), oteki()=düşman
     oldur(ben());
     skor_ekle(10);
@@ -726,12 +744,16 @@ func la_her_kare_is() {
 
 // Anahtar toplandı; bölümün sonuncusuysa sıradaki bölüm.
 func la_topla_cb() {
+    patlama(x_of(oteki()) + 8.0, y_of(oteki()) + 8.0, GOLD);  // anahtar parçacığı
     oldur(oteki());
     skor_ekle(10);
     if (tag_sayisi(TAG_ITEM) == 0) { bolum_gec(); }
 }
 
-func la_kaybet_cb() { oyun_bitti(); }
+func la_kaybet_cb() {
+    patlama(x_of(la_oyuncu_id) + 10.0, y_of(la_oyuncu_id) + 10.0, ORANGE);
+    oyun_bitti();
+}
 
 func la_setup() {
     bilgi("Ok tuslari / WASD: hareket   |   Tum anahtarlari topla (+10), devriyelere degme");
@@ -827,8 +849,15 @@ func ka_her_kare_is() {
     }
 }
 
-func ka_hedef_cb()  { skor_ekle(50); bolum_gec(); }   // altın şeride ulaştın
-func ka_kaybet_cb() { oyun_bitti(); }                 // araca değdin
+func ka_hedef_cb()  {                                 // altın şeride ulaştın
+    patlama(x_of(ka_oyuncu_id) + 12.0, y_of(ka_oyuncu_id) + 12.0, GOLD);
+    skor_ekle(50);
+    bolum_gec();
+}
+func ka_kaybet_cb() {                                 // araca değdin
+    patlama(x_of(ka_oyuncu_id) + 12.0, y_of(ka_oyuncu_id) + 12.0, ORANGE);
+    oyun_bitti();
+}
 
 func ka_setup() {
     bilgi("Ok tuslari / WASD: hareket   |   Araclara degmeden altin serite ulas (+50)");
@@ -954,6 +983,7 @@ func uc_her_kare_is() {
         // Boru kuşu geçti mi? (bir kez skorla)
         if (uc_boru_gecti[i] == 0 && x_of(u) + 52.0 < uc_KUS_X * 1.0) {
             uc_boru_gecti[i] = 1;
+            patlama(uc_KUS_X + 13.0, y_of(uc_kus) + 10.0, GOLD);   // boru-geçiş parçacığı
             skor_ekle(1);
             uc_gecen = uc_gecen + 1;
             if (uc_gecen >= uc_hedef) { bolum_gec(); }
@@ -1073,7 +1103,10 @@ func go_ciz_ek() {
     text("Kalan: " + toString(kalan) + " sn", 240, 12, 20, SKYBLUE);
 }
 
-func go_kaybet_cb() { oyun_bitti(); }
+func go_kaybet_cb() {
+    patlama(x_of(go_oyuncu_id) + 15.0, y_of(go_oyuncu_id) + 12.0, ORANGE);  // çarpışma parçacığı
+    oyun_bitti();
+}
 
 func go_setup() {
     bilgi("Sol/Sag veya A/D: kac   |   Goktaslarindan sakin, sureyi doldur");
@@ -1205,8 +1238,7 @@ func yi_kare() {
     // Carpma: dis duvar / engel / kendi govdesi -> oyun bitti (titreşimli).
     if (bx < 0 || bx >= yi_COLS || by < 0 || by >= yi_ROWS
         || yi_engel_mi(bx, by) || yi_yilan_mi(bx, by)) {
-        titret(200);
-        oyun_bitti();
+        oyun_bitti();          // ölüm titreşimi + sesi motorda merkezî (game_over)
         return;
     }
 
@@ -1216,6 +1248,7 @@ func yi_kare() {
         yi_syuz = yi_syuz + 1;
         skor_ekle(10);
         titret(60);
+        patlama(yi_OX + bx * yi_CELL + 14, yi_OY + by * yi_CELL + 14, GOLD);  // yem parçacığı
         yi_yem_sayisi = yi_yem_sayisi + 1;
         if (yi_yem_sayisi >= 5) { bolum_gec(); return; }
         yi_yem_koy();
@@ -1263,6 +1296,383 @@ func yi_setup() {
 }
 
 // ==========================================================================
+//  2048  (examples/arcade_2048.tpr, önek tf_)
+// ==========================================================================
+// 2048 — arcade motoru (ızgara + kaydırma). Sonsuz oynanır, skor birleşen
+// sayıların toplamı; hamle kalmayınca oyun biter.
+//
+//   ./tulpar examples/arcade_2048.tpr
+//
+// Kaydır (mobil) ya da ok tuşları / WASD ile tüm taşları bir yöne it. Yan yana
+// gelen aynı sayılar toplanır (2+2=4 ...). Her hamlede boş bir kareye yeni taş
+// (%90 "2", %10 "4") düşer. Tahta dolup hamle kalmayınca oyun biter.
+//
+// Motor kullanımı yılan gibi: entity YOK — durum 4x4 dizide, çizim ciz_ustune
+// ile elle. sahne/skor/oyun-bitti/HUD motordan bedava gelir.
+
+
+int tf_GRID = 4;
+array tf_grid = [];       // 4x4 (row-major); 0 = boş
+int tf_moved = 0;         // son hamlede bir şey oynadı mı?
+int tf_gain = 0;          // son hamlenin puanı (birleşmelerin toplamı)
+
+// Kare tahta, 640x480 dünyada ortalanmış.
+int tf_CELL = 92;
+int tf_GAP = 8;
+int tf_OX = 124;          // (640 - (4*92+3*8)) / 2 ≈ 116, +gap payı
+int tf_OY = 74;
+
+// Boş kareye rastgele yeni taş koy (%10 "4", %90 "2").
+func tf_yeni_tas() {
+    array boslar = [];
+    for (int i = 0; i < 16; i = i + 1) {
+        if (toInt(tf_grid[i]) == 0) { push(boslar, i); }
+    }
+    if (length(boslar) == 0) { return; }
+    int idx = toInt(boslar[randint(0, length(boslar) - 1)]);
+    int v = 2;
+    if (randint(0, 9) == 0) { v = 4; }
+    tf_grid[idx] = v;
+}
+
+// Her (re)başlatmada çağrılır: tahtayı sıfırla + iki taş koy.
+func tf_kur() {
+    tf_grid = [];
+    for (int i = 0; i < 16; i = i + 1) { push(tf_grid, 0); }
+    tf_moved = 0;
+    tf_gain = 0;
+    tf_yeni_tas();
+    tf_yeni_tas();
+}
+
+// Verilen 4 index'i (gidiş yönünde) sıkıştır + birleştir + geri yaz.
+// Global `moved`/`gain` güncellenir (dört yön aynı ilkeli çağırır).
+func tf_satir(i0, i1, i2, i3) {
+    array v = [];
+    if (toInt(tf_grid[i0]) != 0) { push(v, toInt(tf_grid[i0])); }
+    if (toInt(tf_grid[i1]) != 0) { push(v, toInt(tf_grid[i1])); }
+    if (toInt(tf_grid[i2]) != 0) { push(v, toInt(tf_grid[i2])); }
+    if (toInt(tf_grid[i3]) != 0) { push(v, toInt(tf_grid[i3])); }
+    array out = [];
+    int k = 0;
+    while (k < length(v)) {
+        if (k + 1 < length(v) && toInt(v[k]) == toInt(v[k + 1])) {
+            int m = toInt(v[k]) * 2;
+            push(out, m);
+            tf_gain = tf_gain + m;
+            k = k + 2;
+        } else {
+            push(out, toInt(v[k]));
+            k = k + 1;
+        }
+    }
+    while (length(out) < 4) { push(out, 0); }
+    if (toInt(tf_grid[i0]) != toInt(out[0])) { tf_moved = 1; }
+    if (toInt(tf_grid[i1]) != toInt(out[1])) { tf_moved = 1; }
+    if (toInt(tf_grid[i2]) != toInt(out[2])) { tf_moved = 1; }
+    if (toInt(tf_grid[i3]) != toInt(out[3])) { tf_moved = 1; }
+    tf_grid[i0] = toInt(out[0]); tf_grid[i1] = toInt(out[1]);
+    tf_grid[i2] = toInt(out[2]); tf_grid[i3] = toInt(out[3]);
+}
+
+// yon: 0=sol 1=sag 2=yukari 3=asagi
+func tf_hamle(yon) {
+    tf_moved = 0;
+    tf_gain = 0;
+    if (yon == 0)      { tf_satir(0,1,2,3);   tf_satir(4,5,6,7);   tf_satir(8,9,10,11);  tf_satir(12,13,14,15); }
+    else if (yon == 1) { tf_satir(3,2,1,0);   tf_satir(7,6,5,4);   tf_satir(11,10,9,8);  tf_satir(15,14,13,12); }
+    else if (yon == 2) { tf_satir(0,4,8,12);  tf_satir(1,5,9,13);  tf_satir(2,6,10,14);  tf_satir(3,7,11,15); }
+    else               { tf_satir(12,8,4,0);  tf_satir(13,9,5,1);  tf_satir(14,10,6,2);  tf_satir(15,11,7,3); }
+    if (tf_moved == 1) {
+        if (tf_gain > 0) { skor_ekle(tf_gain); }
+        tf_yeni_tas();
+    }
+}
+
+// Hâlâ hamle var mı? (boş kare ya da birleşebilir komşu)
+func tf_hamle_var(): bool {
+    for (int i = 0; i < 16; i = i + 1) {
+        if (toInt(tf_grid[i]) == 0) { return true; }
+    }
+    for (int r = 0; r < 4; r = r + 1) {
+        for (int c = 0; c < 3; c = c + 1) {
+            if (toInt(tf_grid[r * 4 + c]) == toInt(tf_grid[r * 4 + c + 1])) { return true; }
+        }
+    }
+    for (int c = 0; c < 4; c = c + 1) {
+        for (int r = 0; r < 3; r = r + 1) {
+            if (toInt(tf_grid[r * 4 + c]) == toInt(tf_grid[(r + 1) * 4 + c])) { return true; }
+        }
+    }
+    return false;
+}
+
+func tf_kare() {
+    int yon = 0 - 1;
+    if (kaydirildi("sol")    || key_pressed("LEFT")  || key_pressed("A")) { yon = 0; }
+    else if (kaydirildi("sag")    || key_pressed("RIGHT") || key_pressed("D")) { yon = 1; }
+    else if (kaydirildi("yukari") || key_pressed("UP")    || key_pressed("W")) { yon = 2; }
+    else if (kaydirildi("asagi")  || key_pressed("DOWN")  || key_pressed("S")) { yon = 3; }
+    if (yon >= 0) {
+        tf_hamle(yon);
+        if (!tf_hamle_var()) { oyun_bitti(); }
+    }
+}
+
+// Taş rengi (değere göre).
+func tf_tas_renk(v): int {
+    if (v == 0)    { return rgb(40, 44, 60); }
+    if (v == 2)    { return rgb(120, 160, 220); }
+    if (v == 4)    { return rgb(100, 200, 180); }
+    if (v == 8)    { return rgb(230, 180, 90); }
+    if (v == 16)   { return rgb(235, 150, 70); }
+    if (v == 32)   { return rgb(235, 110, 80); }
+    if (v == 64)   { return rgb(230, 80, 80); }
+    if (v == 128)  { return rgb(240, 210, 100); }
+    if (v == 256)  { return rgb(240, 205, 70); }
+    if (v == 512)  { return rgb(240, 200, 50); }
+    if (v == 1024) { return rgb(245, 195, 30); }
+    return rgb(250, 190, 0);
+}
+
+func tf_ciz() {
+    // Tahta çerçevesi
+    rect(tf_OX - tf_GAP, tf_OY - tf_GAP, tf_GRID * tf_CELL + (tf_GRID + 1) * tf_GAP,
+         tf_GRID * tf_CELL + (tf_GRID + 1) * tf_GAP, rgb(28, 30, 42));
+    for (int r = 0; r < 4; r = r + 1) {
+        for (int c = 0; c < 4; c = c + 1) {
+            int v = toInt(tf_grid[r * 4 + c]);
+            int x = tf_OX + c * (tf_CELL + tf_GAP);
+            int y = tf_OY + r * (tf_CELL + tf_GAP);
+            rect(x, y, tf_CELL, tf_CELL, tf_tas_renk(v));
+            if (v != 0) {
+                str t = toString(v);
+                int sz = 40;
+                if (v >= 1000) { sz = 26; }
+                else if (v >= 100) { sz = 34; }
+                int col = rgb(30, 30, 40);
+                if (v <= 4) { col = WHITE; }
+                text(t, toInt(x + (tf_CELL - measure_text(t, sz)) / 2.0),
+                     toInt(y + (tf_CELL - sz * 1.0) / 2.0), sz, col);
+            }
+        }
+    }
+}
+
+func tf_setup() {
+    bilgi("Parmaginla KAYDIR (mobil) / ok tuslari (masaustu)  |  Ayni sayilar toplanir");
+    kontrol_semasi("yok");    // ekranda buton YOK — sadece kaydirma jesti (+masaustu ok tuslari)
+    baslangicta(tf_kur);
+    her_kare(tf_kare);
+    ciz_ustune(tf_ciz);
+}
+
+// ==========================================================================
+//  Pong  (examples/arcade_pong.tpr, önek pg_)
+// ==========================================================================
+// Pong — arcade motoru, yapay zekâya karşı ralli. Sonsuz: her başarılı iaden
+// +1; topu kaçırınca oyun biter. Skor = üst üste kaç kez iade ettiğin.
+//
+//   ./tulpar examples/arcade_pong.tpr
+//
+// Yukarı/Aşağı (W/S) ya da mobilde ok butonlarıyla sol raketi sür. Top hızlanır;
+// AI raketi topu takip eder ama sınırlı hızda (yenilebilir). AI ıskalarsa top
+// sağ duvardan seker (oyun sürer) — yalnız SEN ıskalayınca biter.
+//
+// Motor kullanımı: raketler + top entity; hareket/AI her_kare içinde, çarpışma
+// callback'leri iade + sekme yapar.
+
+
+int pg_player = 0;
+int pg_ai = 0;
+int pg_ball = 0;
+float pg_bspeed = 260.0;   // top hızı (px/sn) — her iadede biraz artar
+int pg_PW = 14;            // raket genişliği
+int pg_PH = 90;            // raket yüksekliği
+
+// Topu ortadan `dir` yönüne (−1 sol / +1 sağ) hafif dikey açıyla servis et.
+func pg_servis(dir) {
+    konumla(pg_ball, 313, 233);
+    float ay = (random() - 0.5) * 1.2;
+    hiz_ver(pg_ball, dir * pg_bspeed, sin(ay) * pg_bspeed);
+}
+
+func pg_kur() {
+    temizle();
+    pg_bspeed = 260.0;
+    pg_player = uret(20,  195, pg_PW, pg_PH, SKYBLUE, TAG_PLAYER, MV_NONE);
+    pg_ai     = uret(606, 195, pg_PW, pg_PH, RED,     TAG_ENEMY,  MV_NONE);
+    pg_ball   = uret(313, 233, 14, 14, GOLD,    TAG_BULLET, MV_VELOCITY);
+    pg_servis(0 - 1);
+}
+
+func pg_abs_f(v): float { if (v < 0.0) { return 0.0 - v; } return v; }
+
+func pg_kare() {
+    float dt = frame_time();
+    if (dt <= 0.0) { dt = 0.0166667; }
+    if (dt > 0.05) { dt = 0.05; }
+
+    // Oyuncu raketi: yukarı/aşağı (klavye VEYA dokunmatik)
+    float py = y_of(pg_player);
+    if (yukari()) { py = py - 380.0 * dt; }
+    if (asagi())  { py = py + 380.0 * dt; }
+    if (py < 0.0) { py = 0.0; }
+    if (py > 480.0 - pg_PH * 1.0) { py = 480.0 - pg_PH; }
+    konumla(pg_player, 20, py);
+
+    // AI raketi: topu takip et (sınırlı hız → yenilebilir)
+    float ay = y_of(pg_ai);
+    float hedef = y_of(pg_ball) - pg_PH * 0.5;
+    float d = hedef - ay;
+    float lim = 250.0 * dt;
+    if (d > lim) { d = lim; }
+    if (d < 0.0 - lim) { d = 0.0 - lim; }
+    ay = ay + d;
+    if (ay < 0.0) { ay = 0.0; }
+    if (ay > 480.0 - pg_PH * 1.0) { ay = 480.0 - pg_PH; }
+    konumla(pg_ai, 606, ay);
+
+    // Top: üst/alt duvardan sek
+    float bx = x_of(pg_ball);
+    float by = y_of(pg_ball);
+    float bvx = vx_of(pg_ball);
+    float bvy = vy_of(pg_ball);
+    if (by < 0.0 && bvy < 0.0) { bvy = 0.0 - bvy; }
+    if (by > 480.0 - 14.0 && bvy > 0.0) { bvy = 0.0 - bvy; }
+    hiz_ver(pg_ball, bvx, bvy);
+
+    // Oyuncu ıskaladı → oyun biter
+    if (bx < 0.0 - 14.0) { oyun_bitti(); return; }
+    // AI ıskaladı → sağ duvardan sek (oyun sürer)
+    if (bx > 640.0 && bvx > 0.0) {
+        konumla(pg_ball, 640.0 - 16.0, by);
+        hiz_ver(pg_ball, 0.0 - pg_abs_f(bvx), bvy);
+    }
+}
+
+// Top oyuncu raketine değince: sağa sek + rakete göre açı + hızlan, +1.
+func pg_vur_cb() {
+    int b = oteki();
+    float rel = (y_of(b) + 7.0) - (y_of(pg_player) + pg_PH * 0.5);
+    pg_bspeed = pg_bspeed + 10.0;
+    if (pg_bspeed > 470.0) { pg_bspeed = 470.0; }
+    float nvy = (rel / (pg_PH * 0.5)) * pg_bspeed * 0.8;
+    hiz_ver(b, pg_bspeed, nvy);
+    konumla(b, 20.0 + pg_PW, y_of(b));
+    skor_ekle(1);
+    patlama(20.0 + pg_PW + 7.0, y_of(b) + 7.0, SKYBLUE);
+}
+
+// Top AI raketine değince: sola sek + açı (skor yok).
+func pg_ai_cb() {
+    int b = oteki();
+    float rel = (y_of(b) + 7.0) - (y_of(pg_ai) + pg_PH * 0.5);
+    float nvy = (rel / (pg_PH * 0.5)) * pg_bspeed * 0.8;
+    hiz_ver(b, 0.0 - pg_bspeed, nvy);
+    konumla(b, 606.0 - 14.0, y_of(b));
+}
+
+func pg_setup() {
+    bilgi("Yukari/Asagi veya W/S: raket  |  Topu kacirma, her iade +1");
+    kontrol_semasi("dikey");  // mobilde YUKARI/ASAGI ok butonlari (raket dikey hareket)
+    baslangicta(pg_kur);
+    her_kare(pg_kare);
+    carpisinca(TAG_PLAYER, TAG_BULLET, pg_vur_cb);
+    carpisinca(TAG_ENEMY,  TAG_BULLET, pg_ai_cb);
+}
+
+// ==========================================================================
+//  Vur  (examples/arcade_vur.tpr, önek vr_)
+// ==========================================================================
+// Vur (köstebek/refleks) — arcade motoru, 3x3 ızgara. Yanan kareye zamanında
+// dokun (+1); köstebek kaçarsa (süre biterse) oyun biter. Her vuruşta süre
+// kısalır → giderek hızlanır. Skor = kaç köstebeğe zamanında vurduğun.
+//
+//   ./tulpar examples/arcade_vur.tpr
+//
+// Saf dokunma (masaüstünde fare de dokunma sayılır). Hareket/joystick YOK.
+// Motor kullanımı yılan/2048 gibi: durum global, çizim ciz_ustune ile elle.
+
+
+int vr_GC = 3;            // 3x3
+int vr_CELL = 120;
+int vr_GAP = 16;
+int vr_OX = 116;          // (640 - (3*120+2*16)) / 2 = 116
+int vr_OY = 70;
+int vr_mole = 0;          // aktif hücre (0..8), -1 = yok
+float vr_mtimer = 0.0;    // bu köstebeğin kalan süresi (sn)
+float vr_mlimit = 1.10;   // güncel süre limiti (her vuruşta kısalır)
+int vr_prevn = 0;         // dokunma edge sayacı
+
+func vr_hucre_x(i): int { return vr_OX + mod(i, vr_GC) * (vr_CELL + vr_GAP); }
+func vr_hucre_y(i): int { return vr_OY + toInt(i / vr_GC) * (vr_CELL + vr_GAP); }
+
+// Yeni köstebek: rastgele hücre (aynı yere düşme), süreyi sıfırla.
+func vr_yeni_mole() {
+    int m = randint(0, 8);
+    if (m == vr_mole) { m = mod(m + 1, 9); }
+    vr_mole = m;
+    vr_mtimer = vr_mlimit;
+}
+
+func vr_kur() {
+    vr_mlimit = 1.10;
+    vr_mole = 0 - 1;
+    vr_prevn = 0;
+    vr_yeni_mole();
+}
+
+func vr_kare() {
+    float dt = frame_time();
+    if (dt <= 0.0) { dt = 0.0166667; }
+    if (dt > 0.05) { dt = 0.05; }
+
+    vr_mtimer = vr_mtimer - dt;
+    if (vr_mtimer <= 0.0) { oyun_bitti(); return; }   // köstebek kaçtı
+
+    int n = touch_count();
+    bool tap = (n > 0) && (vr_prevn == 0);
+    if (tap) {
+        float tx = touch_x(0) * 1.0;
+        float ty = touch_y(0) * 1.0;
+        int mx = vr_hucre_x(vr_mole);
+        int my = vr_hucre_y(vr_mole);
+        if (tx >= mx * 1.0 && tx <= mx + vr_CELL && ty >= my * 1.0 && ty <= my + vr_CELL) {
+            skor_ekle(1);
+            patlama(mx + vr_CELL / 2, my + vr_CELL / 2, GOLD);
+            if (vr_mlimit > 0.45) { vr_mlimit = vr_mlimit - 0.03; }   // hızlan
+            vr_yeni_mole();
+        }
+    }
+    vr_prevn = n;
+}
+
+func vr_ciz() {
+    for (int i = 0; i < 9; i = i + 1) {
+        int x = vr_hucre_x(i);
+        int y = vr_hucre_y(i);
+        if (i == vr_mole) {
+            // Kalan süreye göre uyarı rengi (yeşilden kırmızıya)
+            float k = vr_mtimer / vr_mlimit;
+            if (k < 0.0) { k = 0.0; }
+            if (k > 1.0) { k = 1.0; }
+            rect(x, y, vr_CELL, vr_CELL, rgb(toInt(90 + 150 * (1.0 - k)), toInt(70 + 120 * k), 50));
+            circle(x + vr_CELL / 2, y + vr_CELL / 2, toInt(vr_CELL / 3), rgb(240, 175, 60));
+        } else {
+            rect(x, y, vr_CELL, vr_CELL, rgb(38, 42, 58));
+        }
+    }
+}
+
+func vr_setup() {
+    bilgi("Yanan kareye dokun (+1)  |  Kostebek kacmadan vur, giderek hizlanir");
+    baslangicta(vr_kur);
+    her_kare(vr_kare);
+    ciz_ustune(vr_ciz);
+}
+
+// ==========================================================================
 //  Menü + launcher
 // ==========================================================================
 sahne(640, 480, "Tulpar Arcade");
@@ -1277,4 +1687,7 @@ oyun_ekle("Karsiya", ka_setup);
 oyun_ekle("Ucus", uc_setup);
 oyun_ekle("Goktasi", go_setup);
 oyun_ekle("Yilan", yi_setup);
+oyun_ekle("2048", tf_setup);
+oyun_ekle("Pong", pg_setup);
+oyun_ekle("Vur", vr_setup);
 launcher();

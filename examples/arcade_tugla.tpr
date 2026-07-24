@@ -115,6 +115,7 @@ func raket_cb() {
 // çevirmek topu eski yönüne döndürür (tuğlaların içinden geçer gibi görünür).
 func kir_cb() {
     int b = ben();                         // ben()=top (TAG_BULLET), oteki()=tuğla
+    patlama(x_of(oteki()) + 34.0, y_of(oteki()) + 9.0, ORANGE);  // tuğla parçacığı
     oldur(oteki());
     skor_ekle(10);
     if (bounced == 0) {

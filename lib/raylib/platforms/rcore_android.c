@@ -717,7 +717,10 @@ int InitPlatform(void)
     CORE.Window.currentFbo.height = CORE.Window.screen.height;
 
     // Set desired windows flags before initializing anything
-    ANativeActivity_setWindowFlags(platform.app->activity, AWINDOW_FLAG_FULLSCREEN, 0);  //AWINDOW_FLAG_SCALED, AWINDOW_FLAG_DITHER
+    // TULPAR PATCH: KEEP_SCREEN_ON (0x80) — oyun oynanırken ekran kararmasın /
+    // cihaz uykuya dalmasın (G1). FULLSCREEN ile birlikte tek çağrıda set edilir.
+    ANativeActivity_setWindowFlags(platform.app->activity,
+        AWINDOW_FLAG_FULLSCREEN | AWINDOW_FLAG_KEEP_SCREEN_ON, 0);  //AWINDOW_FLAG_SCALED, AWINDOW_FLAG_DITHER
 
     int orientation = AConfiguration_getOrientation(platform.app->config);
 
@@ -1049,14 +1052,22 @@ static void AndroidCommandCallback(struct android_app *app, int32_t cmd)
         {
             platform.appEnabled = true;
             CORE.Window.flags &= ~FLAG_WINDOW_UNFOCUSED;
-            //ResumeMusicStream();
+            // TULPAR PATCH (G2): uygulama öne gelince sesi geri aç. Master
+            // volume kısma tüm sesi (müzik+SFX) anında etkiler; stream stream
+            // dolaşmaya gerek yok. Bu callback pollOnce içinde ANA thread'de
+            // koşar → SetMasterVolume güvenli.
+            if (IsAudioDeviceReady()) SetMasterVolume(1.0f);
         } break;
         case APP_CMD_PAUSE: break;
         case APP_CMD_LOST_FOCUS:
         {
             platform.appEnabled = false;
             CORE.Window.flags |= FLAG_WINDOW_UNFOCUSED;
-            //PauseMusicStream();
+            // TULPAR PATCH (G2): arka plana atılınca sesi sustur. Oyun döngüsü
+            // zaten pollOnce(-1)'de BLOKE olur (auto-pause), ama miniaudio aygıt
+            // thread'i çalan sesi mikslemeye devam eder → arka planda müzik
+            // duyulur. Master volume 0 bunu keser; öne gelince geri açılır.
+            if (IsAudioDeviceReady()) SetMasterVolume(0.0f);
         } break;
         case APP_CMD_TERM_WINDOW:
         {

@@ -108,6 +108,7 @@ func her_kare_is() {
         // Boru kuşu geçti mi? (bir kez skorla)
         if (boru_gecti[i] == 0 && x_of(u) + 52.0 < KUS_X * 1.0) {
             boru_gecti[i] = 1;
+            patlama(KUS_X + 13.0, y_of(kus) + 10.0, GOLD);   // boru-geçiş parçacığı
             skor_ekle(1);
             gecen = gecen + 1;
             if (gecen >= hedef) { bolum_gec(); }

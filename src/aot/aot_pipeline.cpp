@@ -270,26 +270,30 @@ void aot_set_target_android(int enable) { g_target_android = enable ? 1 : 0; }
 // komutta imzalı, kurulabilir .apk. Betik WSL/Windows-interop ayrıntılarını
 // zaten çözüyor; driver yalnızca onu bulup çağırır.
 static int g_android_apk = 0;
+// `--aab`: .apk yerine Play Store'a yüklenebilir .aab üret (android/package_aab.sh).
+static int g_android_aab = 0;
 
 void aot_set_android_apk(int enable) { g_android_apk = enable ? 1 : 0; }
+void aot_set_android_aab(int enable) { g_android_aab = enable ? 1 : 0; }
 
-// package_apk.sh'yi bul: TULPAR_ANDROID_TOOLS ortam değişkeni (dizin), sonra
-// tulpar'ın yanı (kurulum düzeni), sonra çalışma dizini (dev-tree).
-static std::string find_package_apk_script() {
+// Paketleme betiğini bul: TULPAR_ANDROID_TOOLS ortam değişkeni (dizin), sonra
+// tulpar'ın yanı (kurulum düzeni), sonra çalışma dizini (dev-tree). `name` =
+// "package_apk.sh" ya da "package_aab.sh".
+static std::string find_android_script(const char *name) {
   auto ok = [](const std::string &p) {
     struct stat st;
     return stat(p.c_str(), &st) == 0 ? p : std::string();
   };
   if (const char *env = getenv("TULPAR_ANDROID_TOOLS"); env && *env) {
-    std::string p = ok(std::string(env) + "/package_apk.sh");
+    std::string p = ok(std::string(env) + "/" + name);
     if (!p.empty()) return p;
   }
   std::string exe_dir = get_executable_dir();
   if (!exe_dir.empty()) {
-    std::string p = ok(exe_dir + "/android/package_apk.sh");
+    std::string p = ok(exe_dir + "/android/" + name);
     if (!p.empty()) return p;
   }
-  return ok("./android/package_apk.sh");
+  return ok(std::string("./android/") + name);
 }
 
 // NDK kökü: TULPAR_ANDROID_NDK env'i, yoksa ~/Android/android-ndk-* (en
@@ -344,7 +348,21 @@ struct AndroidAppConfig {
   std::string version_code = "1";
   std::string version_name = "1.0";
   bool has_icon = false;                   // res/mipmap/ic_launcher.png kondu
+  std::string splash_color = "#10121A";    // açılış/splash arka planı (koyu lacivert)
 };
+
+// "#RRGGBB" doğrula (aksi halde varsayılana dön) — aapt2 color kaynağına
+// düz gireceği için basit bir #hex kontrolü yeterli.
+static bool valid_hex_color(const std::string &s) {
+  if (s.size() != 7 || s[0] != '#') return false;
+  for (size_t i = 1; i < s.size(); i++) {
+    char c = s[i];
+    bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+               (c >= 'A' && c <= 'F');
+    if (!hex) return false;
+  }
+  return true;
+}
 
 // Manifest metin değerleri için minimal XML kaçışı (label kullanıcıdan gelir).
 static std::string xml_escape(const std::string &s) {
@@ -370,7 +388,11 @@ static void write_android_manifest(const std::string &stage,
   FILE *f = fopen(path.c_str(), "wb");
   if (!f) return;
   std::string icon_attr;
-  if (cfg.has_icon) icon_attr = " android:icon=\"@mipmap/ic_launcher\"";
+  // İkon varsa hem klasik hem yuvarlak (roundIcon) slotu — ikisi de adaptive
+  // ic_launcher'ı gösterir (res/mipmap-anydpi-v26/ic_launcher.xml).
+  if (cfg.has_icon)
+    icon_attr = " android:icon=\"@mipmap/ic_launcher\""
+                " android:roundIcon=\"@mipmap/ic_launcher\"";
   fprintf(f,
           "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
           "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"\n"
@@ -380,9 +402,14 @@ static void write_android_manifest(const std::string &stage,
           "android:targetSdkVersion=\"34\"/>\n"
           // titret()/vibrate() için; normal izin — kurulumda otomatik verilir.
           "  <uses-permission android:name=\"android.permission.VIBRATE\"/>\n"
+          // İnternet: online skor tablosu / http_get gibi ağ çağrıları için
+          // (normal izin, kurulumda otomatik verilir; kullanılmasa da zararsız).
+          "  <uses-permission android:name=\"android.permission.INTERNET\"/>\n"
           "  <application android:label=\"%s\" android:hasCode=\"false\"\n"
+          "      android:theme=\"@style/TulparSplash\"\n"
           "      android:extractNativeLibs=\"true\"%s>\n"
           "    <activity android:name=\"android.app.NativeActivity\"\n"
+          "        android:theme=\"@style/TulparSplash\"\n"
           "        android:configChanges=\"orientation|keyboardHidden|screenSize\"\n"
           "        android:screenOrientation=\"%s\"\n"
           "        android:exported=\"true\">\n"
@@ -399,6 +426,70 @@ static void write_android_manifest(const std::string &stage,
           xml_escape(cfg.version_name).c_str(), xml_escape(cfg.label).c_str(),
           icon_attr.c_str(), xml_escape(cfg.orientation).c_str());
   fclose(f);
+}
+
+// Splash teması + renk kaynakları + (ikon varsa) adaptive-icon yaz. Bunlar
+// res/ altına gider; package_apk.sh res/ görürse `aapt2 compile --dir res` ile
+// derler. Splash: activity teması windowBackground'ı splash rengine boyar →
+// soğuk başlatmadaki SİYAH flaş yerine markalı arka plan (G3). minSdk 26 olduğu
+// için adaptive-icon (res/mipmap-anydpi-v26) her cihazda geçerli.
+static void write_android_resources(const std::string &stage,
+                                    const AndroidAppConfig &cfg) {
+  std::string color = valid_hex_color(cfg.splash_color) ? cfg.splash_color
+                                                        : std::string("#10121A");
+  std::string vdir = stage + "/res/values";
+  std::string mk = "mkdir -p \"" + vdir + "\"";
+  if (system(mk.c_str()) != 0) return;
+
+  // colors.xml — splash + adaptive-icon arka planı aynı renk.
+  {
+    std::string p = vdir + "/colors.xml";
+    if (FILE *f = fopen(p.c_str(), "wb")) {
+      fprintf(f,
+              "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n"
+              "  <color name=\"tulpar_splash_bg\">%s</color>\n"
+              "</resources>\n",
+              color.c_str());
+      fclose(f);
+    }
+  }
+  // styles.xml — tam ekran, başlıksız; windowBackground = splash rengi.
+  {
+    std::string p = vdir + "/styles.xml";
+    if (FILE *f = fopen(p.c_str(), "wb")) {
+      fprintf(f,
+              "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n"
+              "  <style name=\"TulparSplash\" "
+              "parent=\"@android:style/Theme.NoTitleBar.Fullscreen\">\n"
+              "    <item name=\"android:windowBackground\">"
+              "@color/tulpar_splash_bg</item>\n"
+              "  </style>\n</resources>\n");
+      fclose(f);
+    }
+  }
+  // Adaptive icon (ikon varsa): ön plan = kullanıcının PNG'si, arka plan =
+  // splash rengi. PNG'yi foreground adı (ic_fg) ile de kopyala — ic_launcher
+  // API26+'da bu XML'e çözülür, foreground kendine referans veremez.
+  if (cfg.has_icon) {
+    std::string cp = "cp \"" + stage + "/res/mipmap/ic_launcher.png\" \"" +
+                     stage + "/res/mipmap/ic_fg.png\" 2>/dev/null";
+    (void)!system(cp.c_str());
+    std::string adir = stage + "/res/mipmap-anydpi-v26";
+    std::string mk2 = "mkdir -p \"" + adir + "\"";
+    if (system(mk2.c_str()) == 0) {
+      std::string p = adir + "/ic_launcher.xml";
+      if (FILE *f = fopen(p.c_str(), "wb")) {
+        fprintf(f,
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+                "<adaptive-icon "
+                "xmlns:android=\"http://schemas.android.com/apk/res/android\">\n"
+                "  <background android:drawable=\"@color/tulpar_splash_bg\"/>\n"
+                "  <foreground android:drawable=\"@mipmap/ic_fg\"/>\n"
+                "</adaptive-icon>\n");
+        fclose(f);
+      }
+    }
+  }
 }
 
 // Oyun asset'lerini (ses/sprite/font dosyaları) staging assets/'ine kopyala.
@@ -475,6 +566,18 @@ static AndroidAppConfig load_android_app_config(const std::string &stage,
   if (!m.android_label.empty()) cfg.label = m.android_label;
   if (!m.android_version_code.empty()) cfg.version_code = m.android_version_code;
   if (!m.android_version_name.empty()) cfg.version_name = m.android_version_name;
+  if (!m.android_splash_color.empty()) {
+    if (valid_hex_color(m.android_splash_color)) {
+      cfg.splash_color = m.android_splash_color;
+    } else {
+      fprintf(stderr, "%s\n",
+              tulpar::i18n::tr_en(
+                  "[AOT] [android] splash_color '#RRGGBB' olmali; varsayilan "
+                  "kullaniliyor.",
+                  "[AOT] [android] splash_color must be '#RRGGBB'; using the "
+                  "default."));
+    }
+  }
   if (!m.android_orientation.empty()) {
     if (m.android_orientation == "landscape" ||
         m.android_orientation == "portrait" ||
@@ -928,12 +1031,56 @@ AOTResult aot_compile_with_filename_debug(const char *source,
     if (const char *slash = strrchr(output_name, '/')) label = slash + 1;
     AndroidAppConfig app_cfg = load_android_app_config(stage, label);
     write_android_manifest(stage, app_cfg);
+    write_android_resources(stage, app_cfg);   // splash teması + adaptive ikon
     printf("[AOT] Successfully created: %s/ (lib/arm64-v8a + lib/x86_64 + "
            "AndroidManifest.xml)\n",
            stage.c_str());
-    if (g_android_apk) {
+    if (g_android_aab) {
+      // --aab: staging'i Play Store'a yüklenebilir imzalı .aab'a paketle.
+      std::string script = find_android_script("package_aab.sh");
+      if (script.empty()) {
+        fprintf(stderr, "%s\n",
+                tulpar::i18n::tr_en(
+                    "[AOT] --aab icin android/package_aab.sh bulunamadi: "
+                    "TULPAR_ANDROID_TOOLS ile betigin dizinini gosterin ya da "
+                    "depo kokunden calistirin.",
+                    "[AOT] --aab needs android/package_aab.sh: point "
+                    "TULPAR_ANDROID_TOOLS at its directory or run from the "
+                    "repo root."));
+        llvm_backend_destroy(backend);
+        ast_node_free(ast);
+        return AOT_ERROR_LINK;
+      }
+      std::string aab = std::string(output_name) + ".aab";
+      std::string cmd =
+          "bash \"" + script + "\" \"" + stage + "\" \"" + aab + "\"";
+      AOT_PROGRESS("[AOT] Packaging AAB: %s\n", aab.c_str());
+      int rc;
+      {
+        AOTPhaseTimer t("package-aab");
+        rc = system(cmd.c_str());
+      }
+      if (rc != 0) {
+        fprintf(stderr,
+                tulpar::i18n::tr_en(
+                    "[AOT] Hata: AAB paketleme basarisiz (kod %d) — "
+                    "aapt2/bundletool/java kurulumunu kontrol edin.\n",
+                    "[AOT] Error: AAB packaging failed (code %d) — check "
+                    "aapt2/bundletool/java.\n"),
+                rc);
+        llvm_backend_destroy(backend);
+        ast_node_free(ast);
+        return AOT_ERROR_LINK;
+      }
+      printf("[AOT] AAB: %s\n", aab.c_str());
+      printf("%s\n",
+             tulpar::i18n::tr_en(
+                 "[AOT] Play Console'a yukle (kendi upload anahtarinla imzala).",
+                 "[AOT] Upload to Play Console (sign with your own upload "
+                 "key)."));
+    } else if (g_android_apk) {
       // --apk: tek komut akışı — staging'i hemen imzalı .apk'ya paketle.
-      std::string script = find_package_apk_script();
+      std::string script = find_android_script("package_apk.sh");
       if (script.empty()) {
         fprintf(stderr, "%s\n",
                 tulpar::i18n::tr_en(

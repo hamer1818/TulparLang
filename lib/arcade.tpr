@@ -48,6 +48,7 @@ int TAG_BULLET = 5;
 
 // Oyun durumu
 int _ar_state = 0;    // 0 = oynanıyor, 1 = oyun bitti, 2 = kazandın (R ile yeniden)
+bool _ar_standalone = false;  // play() = true (tek oyun) / launcher = false; oyun-bitti "Ana Menu" vs "Cikis" etiketi
 
 // ---- Bölümler (level) -------------------------------------------------------
 //
@@ -144,9 +145,18 @@ bool _ar_wants_move = false;
 // KONTROL ŞEMASI — oyun türüne göre hazır dokunmatik yerleşimler.
 // 0=auto (oyunun OKUDUĞU yönlerden çıkar: yalnız sağ/sol → yatay butonlar,
 // yalnız yukarı/aşağı → dikey butonlar, iki eksen → joystick, hiç → yok),
-// 1=joystick, 2=dpad (4 ok butonu), 3=yatay (◀▶), 4=dikey (▲▼), 5=yok.
+// 1=joystick, 2=dpad (4 ok butonu), 3=yatay (◀▶), 4=dikey (▲▼), 5=yok,
+// 6=egim (telefonu eğerek — ivmeölçer; sensör yoksa/masaüstünde klavyeye düşer).
 // kontrol_semasi("dpad") / control_scheme("horizontal") ile oyun elle seçer.
 int  _ar_scheme = 0;
+// Eğim (tilt) eşiği (m/s^2) — nötrden bu kadar sapınca yön tetiklenir (~13°).
+float _ar_tilt_thr = 2.2;
+// Taban çizgisi kalibrasyonu: moda ilk girişte "nötr tutuş" yakalanır; yön
+// bu NÖTRDEN SAPMAYLA ölçülür → cihaz yönelimi/tutuş açısından bağımsız
+// (yerçekimi hangi eksene düşerse düşsün sıfırlanır). _lx_clear/_ar_reset sıfırlar.
+bool  _ar_tilt_cal = false;
+float _ar_tilt_ax0 = 0.0;
+float _ar_tilt_ay0 = 0.0;
 bool _ar_rd_l = false;   // bu oyun hangi yönleri okudu (auto şema çıkarımı)
 bool _ar_rd_r = false;
 bool _ar_rd_u = false;
@@ -166,7 +176,7 @@ float _ar_sw_y0 = 0.0;
 float _ar_sw_x1 = 0.0;         // son bilinen konum
 float _ar_sw_y1 = 0.0;
 bool  _ar_joy_on = false;      // bu kare joystick etkin (bir parmak sürüyor)
-float _ar_joy_bx = 0.0;        // taban merkezi (yüzer)
+float _ar_joy_bx = 0.0;        // taban merkezi (SABİT — sol-alt köşede demirli)
 float _ar_joy_by = 0.0;
 float _ar_joy_kx = 0.0;        // topuz (parmak) konumu, halkaya kırpılı
 float _ar_joy_ky = 0.0;
@@ -209,11 +219,69 @@ func _lang_now(): str {
 func language(code) { if (code == "en") { _lang = "en"; } else { _lang = "tr"; } }
 func dil(code)      { language(code); }
 
+// ---- Ses / haptik ayarları (kalıcı, in-app Ayarlar ekranından değişir) ------
+// Motorun ürettiği tüm ses (tm_beep) ve titreşim (tm_vibrate) bu bayraklardan
+// geçer; oyuncu Ayarlar'dan kapatırsa sessiz/titremesiz oynar. Ayarlar üç
+// küçük dosyada kalıcıdır (en iyi-skor deseniyle aynı: save_data/load_data).
+bool _snd_on = true;
+bool _hap_on = true;
+bool _fps_on = false;      // FPS sayacı (Ayarlar'dan aç-kapa; varsayılan kapalı)
+bool _cfg_loaded = false;
+bool  _cfg_reset_armed = false;  // "Rekorları Sıfırla" iki-dokunuş onayı bekliyor mu
+float _cfg_reset_msg   = 0.0;    // >0 → "Silindi" geri bildirimi (frame_time ile azalır)
+
+func _ar_load_settings() {
+    if (_cfg_loaded) { return; }
+    _cfg_loaded = true;
+    str s = load_data("arcade_snd.txt");  if (s == "0") { _snd_on = false; }
+    str h = load_data("arcade_hap.txt");  if (h == "0") { _hap_on = false; }
+    str f = load_data("arcade_fps.txt");  if (f == "1") { _fps_on = true; }
+    str l = load_data("arcade_lang.txt"); if (l == "en") { _lang = "en"; } else if (l == "tr") { _lang = "tr"; }
+}
+func _ar_save_settings() {
+    if (_snd_on) { save_data("arcade_snd.txt", "1"); } else { save_data("arcade_snd.txt", "0"); }
+    if (_hap_on) { save_data("arcade_hap.txt", "1"); } else { save_data("arcade_hap.txt", "0"); }
+    if (_fps_on) { save_data("arcade_fps.txt", "1"); } else { save_data("arcade_fps.txt", "0"); }
+    save_data("arcade_lang.txt", _lang_now());
+}
+
+// Motor-içi ses/haptik kapıları — merkezî çağrılar bunları kullanır (doğrudan
+// tm_beep/tm_vibrate DEĞİL) ki Ayarlar aç-kapa'sı her yere işlesin.
+func _snd(freq, ms) { if (_snd_on) { tm_beep(freq, ms); } }
+func _hap(ms)       { if (_hap_on) { tm_vibrate(ms); } }
+
+// Public aç-kapa (oyun kodu da isterse kullanabilir).
+func sound_on(on)  { _snd_on = on; }
+func ses_ac(on)    { _snd_on = on; }
+func haptics_on(on){ _hap_on = on; }
+func titresim_ac(on){ _hap_on = on; }
+func show_fps(on)  { _fps_on = on; }
+func fps_goster(on){ _fps_on = on; }
+
 // HUD
 str _hud_prefix = "";     // "" = dile göre varsayılan ("Skor: " / "Score: ")
 bool _hud_set = false;    // hud()/hud_prefix() ile açıkça ayarlandı mı?
 int _score = 0;
 bool _show_score = true;
+bool _ar_paused = false;   // oyun-içi duraklatma (play/launcher döngüsü okur; erken tanım)
+
+// Juice durumu — score_add / _pt_spawn (yukarıda) bunları kullandığı için erken.
+array _pop_x = []; array _pop_y = []; array _pop_t = []; array _pop_txt = []; array _pop_kind = [];
+int _pop_n = 0;
+float _fx_last_x = 0.0;    // son patlama konumu (popup çıpası)
+float _fx_last_y = 0.0;
+float _fx_last_t = 0.0;    // > 0 ise son patlama bu kareye yakın
+int   _combo = 0;          // ardışık seri sayacı (görsel; skoru bozmaz)
+float _combo_t = 0.0;      // seri penceresi (sn); 0'a inince sıfırlanır
+float _trans_t = 0.0;      // menü↔oyun geçiş fade'i (sn)
+
+// Global skor tablosu (opsiyonel; skor_tablosu_url ile açılır). Oyun-bitişinde
+// skoru bir Tulpar Wings sunucusuna GÖNDERİR ve top-10'u ÇEKİP gösterir.
+// _lb_url == "" ise tamamen kapalı (varsayılan) → hiçbir ağ çağrısı yapılmaz.
+str  _lb_url  = "";
+str  _lb_name = "Oyuncu";
+array _lb_data = [];       // son çekilen tablo (isim/skor kayıtları)
+bool _lb_has = false;      // bu oyun-bitişinde tablo çekilebildi mi?
 str _hint = "";           // üst bilgilendirme şeridi (kontroller vb.)
 bool _has_hint = false;
 
@@ -225,6 +293,7 @@ bool _has_hint = false;
 func scene(w, h, title): bool {
     _world_w = w * 1.0;
     _world_h = h * 1.0;
+    _ar_title = title;          // kalıcı en-iyi-skor kayıt anahtarı
     set_fps(60);
     return window(w, h, title);
 }
@@ -245,13 +314,43 @@ func ciz_ustune(fn) { on_draw(fn); }
 // Yönetilen ana döngü: giriş + fizik + çarpışma + otomatik çizim + HUD +
 // oyun-bitti/R-yeniden hepsi burada. Bundan sonra kod yazmana gerek yok.
 func play() {
+    _ar_load_settings();               // kalıcı ses/haptik/dil ayarları
+    _ar_standalone = true;             // oyun-bitti ekranında ikinci buton = "Cikis"
     _ar_reset();
+    _trans_start();                    // açılışta kısa fade-in
     var wm = arena_save();
     while (running()) {
-        _ar_update();
-        frame_begin();
-        _ar_draw_all();
-        frame_end();
+        // Tek oyun (launcher yok): GERİ / ESC → duraklat. Menü olmadığı için
+        // duraklat menüsünün 3. seçeneği "Çıkış"tır (pencereyi kapatır).
+        // Yalnız aktif oynanırken duraklanır (biten oyun duraklatılamaz).
+        if (!_ar_paused && _ar_state == 0) {
+            if (key_pressed("ESCAPE") || key_pressed("BACKSPACE") || key_pressed("BACK")) {
+                _pause_enter();
+            }
+        }
+        if (_ar_paused) {
+            str ql = "Cikis"; if (_lang_now() == "en") { ql = "Quit"; }
+            frame_begin();
+            _ar_draw_all();
+            _pause_draw(ql);
+            frame_end();
+            int act = _pause_step();
+            if (act == 1) { _ar_paused = false; }
+            else if (act == 2) { _ar_reset(); _ar_paused = false; }
+            else if (act == 3) { break; }
+        } else {
+            _ar_update();
+            frame_begin();
+            _ar_draw_all();
+            _trans_draw();
+            frame_end();
+            // Oyun-bitti ekranı: yalnız butonlar iş yapar (ekrana dokunma başlatmaz).
+            if (_ar_state != 0) {
+                int oa = _ar_over_step();
+                if (oa == 1) { _ar_reset(); _trans_start(); }
+                else if (oa == 2) { break; }   // tek oyunda "Cikis" → pencere kapanır
+            }
+        }
         arena_restore(wm);
     }
     arena_drop(wm);
@@ -269,6 +368,10 @@ func _ar_reset() {
     _cur_level = 1;
     _banner_t = 0.0;
     _lvl_pending = 0;
+    _ar_paused = false;
+    _fx_reset();
+    _new_record = false;
+    _ar_load_best();
     _ar_load_level();
 }
 
@@ -314,9 +417,16 @@ func bolum_gec()  { next_level(); }
 
 // Bekleyen bölüm geçişini uygula (motor içi, kare sonunda çağrılır).
 func _ar_advance_level() {
-    if (_cur_level + 1 > _level_n) { _ar_state = 2; return; }   // son bölüm → kazandın
+    if (_cur_level + 1 > _level_n) {            // son bölüm → kazandın
+        _ar_state = 2;
+        _snd(1046.0, 220);    // KAZANDIN — zafer tonu (C6)
+        _ar_check_record();
+        _lb_submit_fetch();   // global tablo açıksa: skoru gönder + top-10 çek
+        return;
+    }
     _cur_level = _cur_level + 1;
     _banner_t = 1.2;              // "Bölüm N" afişi ~1.2 sn
+    _snd(680.0, 90);          // bölüm-geçiş "yükselen" tonu
     _ar_load_level();             // skor KORUNUR (oyuncunun toplam skoru)
 }
 
@@ -543,15 +653,43 @@ func ziplama(v)    { jump_power(v); }
 func clamp_to_world(on) { _clamp_world = on; }
 
 // ---- Skor / oyun-bitti ------------------------------------------------------
-func score_add(n) { _score = _score + n; }
+// Skor artışı yumuşak bir "blip" çalar (tüm oyunlara bedava işitsel geri
+// bildirim). tm_beep ses cihazı yoksa güvenle no-op'tur (headless test/CI).
+func score_add(n) {
+    _score = _score + n;
+    _snd(720.0, 40);
+    // Seri (combo) — yalnız görsel; skoru değiştirmez → rekorlar adil kalır.
+    if (_combo_t > 0.0) { _combo = _combo + 1; } else { _combo = 1; }
+    _combo_t = 1.1;
+    // "+N" baloncuğu: son patlama konumunda (çarpışma yeri), yoksa üst-orta.
+    float px = _world_w * 0.5; float py = _world_h * 0.30;
+    if (_fx_last_t > 0.0) { px = _fx_last_x; py = _fx_last_y; }
+    _pop_spawn(px, py, "+" + toString(n), 0);
+    if (_combo >= 3) {
+        str cw = "SERI x"; if (_lang_now() == "en") { cw = "STREAK x"; }
+        _pop_spawn(px, py - 24.0, cw + toString(_combo), 1);
+    }
+}
 func skor_ekle(n) { score_add(n); }
 func score(): int { return _score; }
 func skor(): int  { return _score; }
 func set_score(n) { _score = n; }
 func skor_ata(n)  { _score = n; }
 
-func game_over()  { _ar_state = 1; }
-func oyun_bitti() { _ar_state = 1; }
+// Oyun bitişi otomatik "juice" alır: sarsıntı + flash (tüm oyunlara bedava).
+// İlk çağrıda rekor kontrolü de yapılır; tekrar çağrılar durumu bozmaz.
+func game_over() {
+    if (_ar_state == 0) {
+        sars();
+        parla();
+        _snd(150.0, 240);      // düşük "kayıp" tonu (tüm oyunlara bedava)
+        _hap(220);             // ölüm titreşimi (Android; masaüstü/web no-op)
+        _ar_check_record();
+        _lb_submit_fetch();    // global tablo açıksa: skoru gönder + top-10 çek
+    }
+    _ar_state = 1;
+}
+func oyun_bitti() { game_over(); }
 
 // "Oyun artık oynanmıyor mu?" — kaybetmek (1) de kazanmak (2) da bitiştir.
 // Bölüm kaydı olmayan oyunlarda state 2 hiç oluşmaz → eski davranışla aynı.
@@ -574,15 +712,278 @@ func controls(s) { _hint = s; _has_hint = true; }
 func help_text(s){ _hint = s; _has_hint = true; }
 
 // ============================================================================
+//  EFEKTLER — parçacık + sarsıntı + flash ("juice", saf Tulpar)
+// ============================================================================
+// patlama(x,y,renk) bir çarpışma callback'inden çağrılır; sars()/parla() da
+// öyle. Motor bunları kare sonunda kendisi günceller/çizer. Parçacıklar da
+// entity'ler gibi PARALEL DİZİ + slot geri kazanımı kullanır (ölü slot = life<=0).
+// Solma alpha ile değil KÜÇÜLME ile yapılır (paketli renk int'inden alpha
+// bileşenini çıkarmak için helper yok — küçülme aynı hissi bedavaya verir).
+
+array _pt_x = [];    // konum
+array _pt_y = [];
+array _pt_vx = [];   // hız (px/sn)
+array _pt_vy = [];
+array _pt_life = []; // kalan ömür (sn); <= 0 → slot ölü, yeniden kullanılabilir
+array _pt_max = [];  // başlangıç ömrü (küçülme oranı için)
+array _pt_col = [];  // renk (paketli int)
+array _pt_size = []; // yarıçap (px)
+int _pt_n = 0;
+
+// n adet parçacık saç: rastgele yön, hafif yukarı eğilim, yerçekimiyle düşer.
+func _pt_spawn(x, y, col, n) {
+    _fx_last_x = x * 1.0; _fx_last_y = y * 1.0; _fx_last_t = 0.12;  // popup çıpası
+    for (int j = 0; j < n; j = j + 1) {
+        float ang = random() * 6.2831853;
+        float spd = 60.0 + random() * 180.0;
+        float pvx = cos(ang) * spd;
+        float pvy = sin(ang) * spd - 40.0;
+        float plife = 0.35 + random() * 0.4;
+        float psize = 2.0 + random() * 3.0;
+        // Önce ölü slot ara (parçacık sayısı küçük — lineer tarama yeterli).
+        int slot = 0 - 1;
+        for (int i = 0; i < _pt_n; i = i + 1) {
+            if (slot < 0 && _pt_life[i] <= 0.0) { slot = i; }
+        }
+        if (slot >= 0) {
+            _pt_x[slot] = x * 1.0;  _pt_y[slot] = y * 1.0;
+            _pt_vx[slot] = pvx;     _pt_vy[slot] = pvy;
+            _pt_life[slot] = plife; _pt_max[slot] = plife;
+            _pt_col[slot] = col;    _pt_size[slot] = psize;
+        } else {
+            push(_pt_x, x * 1.0);  push(_pt_y, y * 1.0);
+            push(_pt_vx, pvx);     push(_pt_vy, pvy);
+            push(_pt_life, plife); push(_pt_max, plife);
+            push(_pt_col, col);    push(_pt_size, psize);
+            _pt_n = _pt_n + 1;
+        }
+    }
+}
+
+func _pt_update(dt) {
+    for (int i = 0; i < _pt_n; i = i + 1) {
+        if (_pt_life[i] <= 0.0) { continue; }
+        _pt_life[i] = _pt_life[i] - dt;
+        _pt_x[i] = _pt_x[i] + _pt_vx[i] * dt;
+        _pt_y[i] = _pt_y[i] + _pt_vy[i] * dt;
+        _pt_vy[i] = _pt_vy[i] + 420.0 * dt;   // yerçekimi — kıvılcım hissi
+    }
+}
+
+// Parçacıkları çiz (ox/oy = sarsıntı ofseti). Ömür bitene doğru küçülür.
+func _pt_draw(ox, oy) {
+    for (int i = 0; i < _pt_n; i = i + 1) {
+        if (_pt_life[i] <= 0.0) { continue; }
+        float k = _pt_life[i] / _pt_max[i];
+        if (k > 1.0) { k = 1.0; }
+        float r = _pt_size[i] * k;
+        if (r >= 1.0) {
+            circle(toInt(_pt_x[i] + ox), toInt(_pt_y[i] + oy), toInt(r), _pt_col[i]);
+        }
+    }
+}
+
+func _pt_clear() {
+    _pt_x = []; _pt_y = []; _pt_vx = []; _pt_vy = [];
+    _pt_life = []; _pt_max = []; _pt_col = []; _pt_size = [];
+    _pt_n = 0;
+}
+
+// ---- Uçan "+N" skor baloncukları + combo/seri (saf görsel, skoru DEĞİŞTİRMEZ)
+// Combo yalnız görseldir: seri sayacı skor matematiğini bozmaz → rekorlar adil
+// kalır. "+N" baloncuğu son patlama konumunda (çarpışma yeri) belirir.
+// (Global durum yukarıda erken tanımlı — score_add/_pt_spawn onlardan önce gelir.)
+
+func _pop_spawn(x, y, txt, kind) {
+    int slot = 0 - 1;
+    for (int i = 0; i < _pop_n; i = i + 1) { if (slot < 0 && _pop_t[i] <= 0.0) { slot = i; } }
+    if (slot >= 0) {
+        _pop_x[slot] = x * 1.0; _pop_y[slot] = y * 1.0;
+        _pop_t[slot] = 0.9; _pop_txt[slot] = txt; _pop_kind[slot] = kind;
+    } else {
+        push(_pop_x, x * 1.0); push(_pop_y, y * 1.0);
+        push(_pop_t, 0.9); push(_pop_txt, txt); push(_pop_kind, kind);
+        _pop_n = _pop_n + 1;
+    }
+}
+
+func _pop_update(dt) {
+    for (int i = 0; i < _pop_n; i = i + 1) {
+        if (_pop_t[i] <= 0.0) { continue; }
+        _pop_t[i] = _pop_t[i] - dt;
+        _pop_y[i] = _pop_y[i] - 46.0 * dt;    // yukarı süzül
+    }
+}
+
+func _pop_draw(ox, oy) {
+    for (int i = 0; i < _pop_n; i = i + 1) {
+        if (_pop_t[i] <= 0.0) { continue; }
+        float k = _pop_t[i] / 0.9; if (k > 1.0) { k = 1.0; }
+        int a = toInt(k * 255.0); if (a < 0) { a = 0; } if (a > 255) { a = 255; }
+        int col = rgba(255, 215, 0, a);        // altın "+N"
+        int sz = 20;
+        if (_pop_kind[i] == 1) { col = rgba(255, 170, 60, a); sz = 24; }   // combo
+        str t = _pop_txt[i];
+        text(t, toInt(_pop_x[i] + ox - measure_text(t, sz) / 2.0),
+             toInt(_pop_y[i] + oy), sz, col);
+    }
+}
+
+func _pop_clear() {
+    _pop_x = []; _pop_y = []; _pop_t = []; _pop_txt = []; _pop_kind = [];
+    _pop_n = 0;
+    _combo = 0; _combo_t = 0.0;
+    _fx_last_t = 0.0;
+}
+
+// ---- Menü ↔ oyun geçiş fade'i (kısa siyah örtü) -----------------------------
+// (_trans_t yukarıda erken tanımlı.)
+func _trans_start() { _trans_t = 0.30; }
+func _trans_draw() {
+    if (_trans_t <= 0.0) { return; }
+    float dt = frame_time();
+    if (dt <= 0.0) { dt = 0.0166667; }
+    if (dt > 0.05) { dt = 0.05; }
+    _trans_t = _trans_t - dt;
+    float k = _trans_t / 0.30; if (k < 0.0) { k = 0.0; } if (k > 1.0) { k = 1.0; }
+    int a = toInt(k * 255.0);
+    float vl = tm_view_left(); float vt = tm_view_top();
+    float vr = tm_view_right(); float vb = tm_view_bottom();
+    rect(vl, vt, vr - vl, vb - vt, rgba(10, 12, 18, a));
+}
+
+// ---- Herkese açık parçacık API'si -------------------------------------------
+func explode(x, y, col)       { _pt_spawn(x, y, col, 16); }
+func patlama(x, y, col)       { explode(x, y, col); }
+func explode_n(x, y, col, n)  { _pt_spawn(x, y, col, n); }
+func patlama_n(x, y, col, n)  { _pt_spawn(x, y, col, n); }
+
+// ---- Ekran sarsıntısı + flash ----------------------------------------------
+float _fx_sh_t = 0.0;     // kalan sarsıntı süresi (sn)
+float _fx_sh_dur = 0.0;
+float _fx_sh_mag = 7.0;   // azami ofset (px) — süre bittikçe söner
+float _fx_ox = 0.0;       // BU karenin çizim ofseti (entity + parçacık kayar)
+float _fx_oy = 0.0;
+float _fx_fl_t = 0.0;     // kalan flash süresi (sn)
+float _fx_fl_dur = 0.0;
+
+// Kısa ekran sarsıntısı (~0.28 sn). Çarpışma/patlama anında çağır.
+func shake() { _fx_sh_t = 0.28; _fx_sh_dur = 0.28; _fx_sh_mag = 7.0; }
+func sars()  { shake(); }
+
+// Beyaz tam-ekran flash (~0.16 sn) — hasar/ölüm vurgusu.
+func flash() { _fx_fl_t = 0.16; _fx_fl_dur = 0.16; }
+func parla() { flash(); }
+
+// ciz_ustune ile kendi sahnesini çizen oyunlar (ör. yılan) sarsıntıyı
+// paylaşabilsin diye bu karenin ofseti dışa açık.
+func shake_x(): float { return _fx_ox; }
+func shake_y(): float { return _fx_oy; }
+func sars_x(): float  { return _fx_ox; }
+func sars_y(): float  { return _fx_oy; }
+
+// Kare başı efekt güncellemesi (motor içi) — oyun bittiğinde de çalışır ki
+// son patlama/sarsıntı ekranda donmasın.
+func _fx_update(dt) {
+    _pt_update(dt);
+    _pop_update(dt);
+    // Seri penceresi + son-patlama çıpası zamanlayıcıları.
+    if (_combo_t > 0.0) { _combo_t = _combo_t - dt; if (_combo_t <= 0.0) { _combo_t = 0.0; _combo = 0; } }
+    if (_fx_last_t > 0.0) { _fx_last_t = _fx_last_t - dt; if (_fx_last_t < 0.0) { _fx_last_t = 0.0; } }
+    _fx_ox = 0.0; _fx_oy = 0.0;
+    if (_fx_sh_t > 0.0) {
+        _fx_sh_t = _fx_sh_t - dt;
+        if (_fx_sh_t < 0.0) { _fx_sh_t = 0.0; }
+        float k = 0.0;
+        if (_fx_sh_dur > 0.0) { k = _fx_sh_t / _fx_sh_dur; }
+        float m = _fx_sh_mag * k;
+        _fx_ox = (random() * 2.0 - 1.0) * m;
+        _fx_oy = (random() * 2.0 - 1.0) * m;
+    }
+    if (_fx_fl_t > 0.0) {
+        _fx_fl_t = _fx_fl_t - dt;
+        if (_fx_fl_t < 0.0) { _fx_fl_t = 0.0; }
+    }
+}
+
+func _fx_reset() {
+    _pt_clear();
+    _pop_clear();
+    _fx_sh_t = 0.0; _fx_fl_t = 0.0;
+    _fx_ox = 0.0; _fx_oy = 0.0;
+}
+
+// ============================================================================
+//  EN İYİ SKOR — kalıcı rekor (save_data/load_data → masaüstünde CWD,
+//  Android'de internalDataPath; oyun kodu hiçbir şey yapmaz, motor halleder)
+// ============================================================================
+str  _ar_title = "";      // kayıt anahtarı: sahne başlığı / launcher'da oyun adı
+int  _best = 0;           // bu oyunun kalıcı en iyi skoru
+bool _new_record = false; // bu elde rekor kırıldı (bitiş ekranında rozet)
+
+func _ar_best_key(): str { return "arcade_best_" + _ar_title + ".txt"; }
+
+func _ar_load_best() {
+    _best = 0;
+    if (_ar_title == "") { return; }
+    str s = load_data(_ar_best_key());
+    if (s != "") { _best = toInt(s); }
+}
+
+// Oyun bittiğinde/kazanıldığında çağrılır: rekorsa kaydet + rozeti işaretle.
+func _ar_check_record() {
+    if (_ar_title == "") { return; }
+    if (_score > _best) {
+        _best = _score;
+        _new_record = true;
+        save_data(_ar_best_key(), toString(_best));
+        _snd(1318.0, 130);    // yeni rekor "ping" (E6)
+        _hap(120);
+    }
+}
+
+func best_score(): int { return _best; }
+func en_iyi_skor(): int { return _best; }
+
+// ---- Global skor tablosu (opsiyonel) ---------------------------------------
+// Bir Tulpar Wings sunucusunun kök URL'sini ver (ör. "http://10.0.2.2:3000").
+// "" (varsayılan) → tamamen kapalı, hiçbir ağ çağrısı yapılmaz.
+func leaderboard_url(u)   { _lb_url = u; }
+func skor_tablosu_url(u)  { _lb_url = u; }
+func player_name(n)       { _lb_name = n; }
+func oyuncu_adi(n)        { _lb_name = n; }
+
+// Oyun bitişinde: skoru GÖNDER + o oyunun top-10'unu ÇEK. Senkron HTTP —
+// oyun-bitti ekranında (fizik durmuşken) tek sefer, bir kareyi bloklar.
+// Sunucu yoksa/erişilemezse sessizce atlar (tablo çizilmez).
+func _lb_submit_fetch() {
+    _lb_has = false;
+    _lb_data = [];
+    if (_lb_url == "") { return; }
+    if (_ar_title == "") { return; }
+    json body = {"oyun": _ar_title, "isim": _lb_name, "skor": _score};
+    http_request("POST", _lb_url + "/skor", toJson(body));
+    json r = http_request("POST", _lb_url + "/tablo", toJson({"oyun": _ar_title}));
+    if (toInt(r["ok"]) == 1) {
+        json parsed = fromJson(r["body"]);
+        _lb_data = parsed["tablo"];
+        _lb_has = true;
+    }
+}
+
+// ============================================================================
 //  MOTOR İÇİ — kare güncelleme
 // ============================================================================
 
-// ---- Dokunmatik: kontrol yerleşimi (oyun-dünyası uzayında) ------------------
-func _ar_dpad_cx(): float { return _world_h * 0.28; }
-func _ar_dpad_cy(): float { return _world_h * 0.70; }
+// ---- Dokunmatik: kontrol yerleşimi ------------------------------------------
+// Konumlar GERÇEK ekran kenarlarına demirlenir (tm_view_* — Android'de sahne
+// ortalanır, kenarlar dünyadan taşar; masaüstü/web'de view = dünya, eski
+// davranışla birebir aynı). Boyutlar _world_h'ye göre (sahne ölçeğiyle uyumlu).
+func _ar_dpad_cx(): float { return tm_view_left() + _world_h * 0.28; }
+func _ar_dpad_cy(): float { return tm_view_bottom() - _world_h * 0.30; }
 func _ar_dpad_r(): float  { return _world_h * 0.17; }
-func _ar_act_cx(): float  { return _world_w - _world_h * 0.24; }
-func _ar_act_cy(): float  { return _world_h * 0.72; }
+func _ar_act_cx(): float  { return tm_view_right() - _world_h * 0.24; }
+func _ar_act_cy(): float  { return tm_view_bottom() - _world_h * 0.28; }
 func _ar_act_r(): float   { return _world_h * 0.15; }
 
 // Her kare bir kez: parmakları oku → analog joystick + aksiyon-edge + tap-edge.
@@ -595,17 +996,39 @@ func _ar_read_touch() {
     if (n > 0) { _ar_touch_ui = true; } // ilk dokunuşta overlay'i kalıcı aç
     float acx = _ar_act_cx(); float acy = _ar_act_cy(); float ar = _ar_act_r();
     float baseR = _ar_dpad_r();          // topuzun taban içindeki azami yürüyüşü
-    // Joystick BÖLGESİ (sol-alt): taban buraya HAPSEDİLİR — ekranda gezemez.
-    // Aktivasyon da bölge + `grab` payı içinde olmalı.
-    float rminx = baseR * 1.15;
-    float rmaxx = _world_w * 0.42;
-    float rminy = _world_h * 0.42;
-    float rmaxy = _world_h - baseR * 1.15;
-    float grab  = baseR;                 // bölge çevresinde rahat yakalama payı
+    // Gerçek ekran kenarları (dünya koordinatında) — butonlar buraya demirli.
+    float vl = tm_view_left();
+    float vb = tm_view_bottom();
+    // Joystick AKTİVASYON ALANI: SABİT tabanın (_ar_dpad_cx/cy, sol-alt) etrafında
+    // KÜÇÜK bir daire. Yalnız joystick'in üstüne/yakınına dokununca devreye girer —
+    // ekranın ortasına ya da doğal konumu dışında bir yere basmak joystick OLUŞTURMAZ.
+    // (Eskiden tüm sol-alt çeyrekti; merkeze yakın basınca da açılıyordu → düzeltildi.)
+    float jcx = _ar_dpad_cx();
+    float jcy = _ar_dpad_cy();
+    float jgr = baseR * 1.6;             // dokunması kolay olsun diye ring + biraz pay
+    float jgr2 = jgr * jgr;
 
     // Etkin şema + hareket kontrolü açık mı (elle seçim reads'i beklemez).
     int sc = _ar_scheme_now();
     bool mv_on = sc != 5 && (_ar_wants_move || _ar_scheme > 0);
+
+    // Eğim (tilt) şeması: ivmeölçerden yön türet (dokunma parmağı gerekmez).
+    // Yön NÖTR tutuştan SAPMAYLA ölçülür (yukarıdaki kalibrasyon notu) → cihaz
+    // yönelimi fark etmez. Sağ/sol = accel_y sapması, yukarı/aşağı = accel_x
+    // sapması. Sensör yoksa (masaüstü) sessiz geçilir → klavye zaten çalışır.
+    if (sc == 6 && tm_accel_available()) {
+        float axv = tm_accel_x();
+        float ayv = tm_accel_y();
+        if (!_ar_tilt_cal) {
+            _ar_tilt_ax0 = axv; _ar_tilt_ay0 = ayv; _ar_tilt_cal = true;
+        }
+        float dx = axv - _ar_tilt_ax0;
+        float dy = ayv - _ar_tilt_ay0;
+        if (dy < 0.0 - _ar_tilt_thr) { _ar_td_left = true; }
+        if (dy > _ar_tilt_thr)       { _ar_td_right = true; }
+        if (dx > _ar_tilt_thr)       { _ar_td_up = true; }
+        if (dx < 0.0 - _ar_tilt_thr) { _ar_td_down = true; }
+    }
 
     // Yön BUTONU merkezleri (dpad/yatay/dikey şemaları) — sol-alt köşe.
     float bR  = _ar_btn_r();
@@ -617,15 +1040,15 @@ func _ar_read_touch() {
     bool has_lr = false;
     bool has_ud = false;
     if (sc == 3) {                       // yatay: ◀ ▶ yan yana
-        blx = bR * 1.5;  bly = _world_h - bR * 1.5;
+        blx = vl + bR * 1.5;  bly = vb - bR * 1.5;
         brx = blx + bR * 2.6;  bry = bly;
         has_lr = true;
     } else if (sc == 4) {                // dikey: ▲ üstte, ▼ altta
-        bdx = bR * 1.5;  bdy = _world_h - bR * 1.5;
+        bdx = vl + bR * 1.5;  bdy = vb - bR * 1.5;
         bux = bdx;  buy = bdy - bR * 2.6;
         has_ud = true;
     } else if (sc == 2) {                // dpad: 4 buton artı-düzeni
-        float dpcx = bR * 2.8;  float dpcy = _world_h - bR * 2.8;
+        float dpcx = vl + bR * 2.8;  float dpcy = vb - bR * 2.8;
         float dpoff = bR * 1.75;
         blx = dpcx - dpoff;  bly = dpcy;
         brx = dpcx + dpoff;  bry = dpcy;
@@ -646,8 +1069,7 @@ func _ar_read_touch() {
         if (_ar_wants_action && adx * adx + ady * ady <= ar * ar) {
             _ar_act_now = true;
         } else if (mv_on && sc == 1
-                   && tx >= rminx - grab && tx <= rmaxx + grab
-                   && ty >= rminy - grab && ty <= rmaxy + grab) {
+                   && (tx - jcx) * (tx - jcx) + (ty - jcy) * (ty - jcy) <= jgr2) {
             float d2 = 0.0;
             if (_ar_joy_on) {
                 float bx = tx - _ar_joy_bx; float by = ty - _ar_joy_by;
@@ -675,17 +1097,12 @@ func _ar_read_touch() {
     if (joy_i >= 0) {
         float tx = touch_x(joy_i) * 1.0;
         float ty = touch_y(joy_i) * 1.0;
-        if (!_ar_joy_on) {
-            // Taban ilk dokunuşta parmak altında doğar ama BÖLGEYE kırpılır;
-            // parmak kalkana dek SABİT kalır (gezmez) — yön topuzdan okunur.
-            float sx = tx; float sy = ty;
-            if (sx < rminx) { sx = rminx; }
-            if (sx > rmaxx) { sx = rmaxx; }
-            if (sy < rminy) { sy = rminy; }
-            if (sy > rmaxy) { sy = rmaxy; }
-            _ar_joy_bx = sx; _ar_joy_by = sy;
-            _ar_joy_on = true;
-        }
+        // Taban tamamen SABİT: sol-alt köşede demirli (parmakla GEZMEZ, parmağın
+        // altında DOĞMAZ). Böylece oyuncu karakteri sürerken eli ekranın ortasına
+        // kaymaz → görüşü kapanmaz. Yön, sabit merkezden parmağın sapmasıyla okunur.
+        _ar_joy_bx = _ar_dpad_cx();
+        _ar_joy_by = _ar_dpad_cy();
+        _ar_joy_on = true;
         float ox = tx - _ar_joy_bx; float oy = ty - _ar_joy_by;
         float mag = sqrt(ox * ox + oy * oy);
         if (mag > baseR) {               // topuz halkanın dışına çıkamaz
@@ -761,6 +1178,7 @@ func kontrol_semasi(s) {
     else if (s == "yatay" || s == "horizontal") { _ar_scheme = 3; }
     else if (s == "dikey" || s == "vertical")   { _ar_scheme = 4; }
     else if (s == "yok" || s == "none")         { _ar_scheme = 5; }
+    else if (s == "egim" || s == "tilt")        { _ar_scheme = 6; }
     else                                        { _ar_scheme = 0; }
 }
 func control_scheme(s) { kontrol_semasi(s); }
@@ -841,8 +1259,11 @@ func _ar_draw_touch_ui() {
                _ar_joy_on ? rgba(210, 220, 255, 70) : rgba(210, 214, 230, 40));
         circle(toInt(kx), toInt(ky), toInt(knobR), _ar_joy_on ? hot : dim);
     } else if (mv_on && sc != 1) {
-        // Yön butonları — merkezler _ar_read_touch ile AYNI formüller.
+        // Yön butonları — merkezler _ar_read_touch ile AYNI formüller
+        // (gerçek ekran kenarına demirli).
         float bR = _ar_btn_r();
+        float vl = tm_view_left();
+        float vb = tm_view_bottom();
         float ta = bR * 0.5;    // ok ucu uzaklığı
         float tb = bR * 0.3;    // ok tabanı yarısı
         int cOff = rgba(210, 214, 230, 45);
@@ -850,11 +1271,11 @@ func _ar_draw_touch_ui() {
         if (sc == 3 || sc == 2) {
             float blx = 0.0; float bly = 0.0; float brx = 0.0; float bry = 0.0;
             if (sc == 3) {
-                blx = bR * 1.5;  bly = _world_h - bR * 1.5;
+                blx = vl + bR * 1.5;  bly = vb - bR * 1.5;
                 brx = blx + bR * 2.6;  bry = bly;
             } else {
-                blx = bR * 2.8 - bR * 1.75;  bly = _world_h - bR * 2.8;
-                brx = bR * 2.8 + bR * 1.75;  bry = bly;
+                blx = vl + bR * 2.8 - bR * 1.75;  bly = vb - bR * 2.8;
+                brx = vl + bR * 2.8 + bR * 1.75;  bry = bly;
             }
             circle(toInt(blx), toInt(bly), toInt(bR), _ar_td_left ? cOn : cOff);
             triangle(blx - ta, bly, blx + tb, bly - tb, blx + tb, bly + tb,
@@ -866,11 +1287,11 @@ func _ar_draw_touch_ui() {
         if (sc == 4 || sc == 2) {
             float bux = 0.0; float buy = 0.0; float bdx = 0.0; float bdy = 0.0;
             if (sc == 4) {
-                bdx = bR * 1.5;  bdy = _world_h - bR * 1.5;
+                bdx = vl + bR * 1.5;  bdy = vb - bR * 1.5;
                 bux = bdx;  buy = bdy - bR * 2.6;
             } else {
-                bux = bR * 2.8;  buy = _world_h - bR * 2.8 - bR * 1.75;
-                bdx = bR * 2.8;  bdy = _world_h - bR * 2.8 + bR * 1.75;
+                bux = vl + bR * 2.8;  buy = vb - bR * 2.8 - bR * 1.75;
+                bdx = vl + bR * 2.8;  bdy = vb - bR * 2.8 + bR * 1.75;
             }
             circle(toInt(bux), toInt(buy), toInt(bR), _ar_td_up ? cOn : cOff);
             triangle(bux, buy - ta, bux - tb, buy + tb, bux + tb, buy + tb,
@@ -893,19 +1314,22 @@ func _ar_draw_touch_ui() {
 
 func _ar_update() {
     _ar_read_touch();
-    // Oyun bitti (1) ya da kazandın (2): fizik durur; R ya da ekrana dokunma
-    // yeniden başlatır (mobilde klavye yok).
-    if (_ar_state != 0) {
-        if (key_pressed("R") || _ar_tap_edge) { _ar_reset(); }
-        return;
-    }
-
     float dt = frame_time();
     // Headless/ilk kare 0 gelirse sabit adım kullan.
     if (dt <= 0.0) { dt = 0.0166667; }
     // İlk kare / takılma sonrası büyük dt platform arasından tünelleme yapabilir
     // (cisim tek karede platformu atlar) — sınırla.
     if (dt > 0.05) { dt = 0.05; }
+
+    // Efektler oyun-bitti ekranında da akmaya devam eder (son patlama donmasın).
+    _fx_update(dt);
+
+    // Oyun bitti (1) ya da kazandın (2): fizik durur. Yeniden başlatma/menü
+    // ARTIK ekrana gelişigüzel dokunmayla DEĞİL, oyun-bitti ekranındaki
+    // "Tekrar Oyna" / "Ana Menu" butonlarıyla (_ar_over_step, döngüde ele alınır).
+    if (_ar_state != 0) {
+        return;
+    }
 
     if (_banner_t > 0.0) { _banner_t = _banner_t - dt; }
 
@@ -1083,6 +1507,7 @@ func _ar_collisions() {
 // dt saniye. Testler bunu doğrudan çağırır.
 func step(dt) {
     if (_ar_state != 0) { return; }
+    _fx_update(dt * 1.0);
     if (_banner_t > 0.0) { _banner_t = _banner_t - dt * 1.0; }
     _ar_apply_movement(dt * 1.0);
     _ar_collisions();
@@ -1095,21 +1520,149 @@ func adim(dt) { step(dt); }
 //  MOTOR İÇİ — çizim
 // ============================================================================
 
+// Global tablo (oyun-bitti/kazandın ekranında, çekilebildiyse) — top-4.
+func _lb_draw() {
+    if (!_lb_has) { return; }
+    str L = _lang_now();
+    str t = "Global Tablo";
+    if (L == "en") { t = "Global Top"; }
+    int y0 = toInt(screen_height() * 0.50);
+    text(t, toInt((screen_width() - measure_text(t, 20)) / 2.0), y0, 20, SKYBLUE);
+    int n = length(_lb_data);
+    if (n > 4) { n = 4; }
+    for (int i = 0; i < n; i = i + 1) {
+        json e = _lb_data[i];
+        str line = toString(i + 1) + ". " + toString(e["isim"]) + "   " + toString(e["skor"]);
+        text(line, toInt((screen_width() - measure_text(line, 18)) / 2.0),
+             y0 + 24 + i * 20, 18, WHITE);
+    }
+}
+
+// ---- Oyun-bitti / Kazandın ekranı: skor + "Tekrar Oyna" / "Ana Menu" ----------
+// Ekrana gelişigüzel dokunmak oyunu BAŞLATMAZ; yalnız bu butonlar iş yapar.
+func _ar_over_btn_w(): float { return _world_w * 0.30; }
+func _ar_over_btn_h(): float { return _world_h * 0.12; }
+func _ar_over_btn_gap(): float { return _world_w * 0.04; }
+func _ar_over_btn_y(): float {
+    if (_lb_has) { return _world_h * 0.82; }   // tablo varsa altına
+    return _world_h * 0.62;
+}
+func _ar_over_btn_x(i): float {
+    float bw = _ar_over_btn_w(); float gap = _ar_over_btn_gap();
+    float sx = (_world_w - (bw * 2.0 + gap)) / 2.0;
+    if (i == 0) { return sx; }
+    return sx + bw + gap;
+}
+func _ar_over_menu_label(): str {
+    str L = _lang_now();
+    if (_ar_standalone) { if (L == "en") { return "Quit"; } return "Cikis"; }
+    if (L == "en") { return "Menu"; }
+    return "Ana Menu";
+}
+func _ar_over_draw_btn(i, label, fill) {
+    float bx = _ar_over_btn_x(i); float by = _ar_over_btn_y();
+    float bw = _ar_over_btn_w();  float bh = _ar_over_btn_h();
+    rect(bx, by, bw, bh, fill);
+    rect_lines(bx, by, bw, bh, GOLD);
+    int bsz = toInt(bh * 0.32);
+    text(label, toInt(bx + (bw - measure_text(label, bsz)) / 2.0),
+         toInt(by + (bh - bsz * 1.0) / 2.0), bsz, WHITE);
+}
+
+func _ar_draw_over() {
+    str L = _lang_now();
+    // Tam-ekran karartma (letterbox bantları dahil — pause örtüsüyle aynı desen)
+    float vl = tm_view_left(); float vt = tm_view_top();
+    float vr = tm_view_right(); float vb = tm_view_bottom();
+    rect(vl, vt, vr - vl, vb - vt, rgba(8, 10, 16, 210));
+
+    bool won = (_ar_state == 2);
+    str titl = "OYUN BITTI"; int tcol = RED;
+    if (won) { titl = "KAZANDIN"; tcol = LIME; }
+    if (L == "en") { if (won) { titl = "YOU WIN"; } else { titl = "GAME OVER"; } }
+    int tsz = toInt(_world_h * 0.10);
+    text(titl, toInt((_world_w - measure_text(titl, tsz)) / 2.0),
+         toInt(_world_h * 0.15), tsz, tcol);
+
+    // Skor — büyük ve ortada
+    str spre = "Skor: "; if (L == "en") { spre = "Score: "; }
+    str sline = spre + toString(_score);
+    int ssz = toInt(_world_h * 0.075);
+    text(sline, toInt((_world_w - measure_text(sline, ssz)) / 2.0),
+         toInt(_world_h * 0.32), ssz, WHITE);
+
+    // Rekor / en iyi
+    if (_ar_title != "") {
+        str bl = "";
+        if (_new_record) { bl = "YENI REKOR!"; if (L == "en") { bl = "NEW RECORD!"; } }
+        else if (_best > 0) {
+            bl = "En iyi: " + toString(_best);
+            if (L == "en") { bl = "Best: " + toString(_best); }
+        }
+        if (bl != "") {
+            int rsz = toInt(_world_h * 0.05);
+            text(bl, toInt((_world_w - measure_text(bl, rsz)) / 2.0),
+                 toInt(_world_h * 0.43), rsz, GOLD);
+        }
+    }
+
+    _lb_draw();
+
+    // Butonlar
+    str rl = "Tekrar Oyna"; if (L == "en") { rl = "Play Again"; }
+    _ar_over_draw_btn(0, rl, rgb(40, 110, 70));
+    _ar_over_draw_btn(1, _ar_over_menu_label(), rgb(70, 60, 90));
+}
+
+// Oyun-bitti bir karesi: 0 = bekle, 1 = tekrar oyna, 2 = menü/çıkış.
+func _ar_over_step(): int {
+    if (key_pressed("R") || key_pressed("ENTER") || key_pressed("SPACE")) { return 1; }
+    if (key_pressed("ESCAPE") || key_pressed("BACKSPACE") || key_pressed("BACK")) { return 2; }
+    int act = 0;
+    if (_ar_tap_edge) {
+        float tx = touch_x(0) * 1.0; float ty = touch_y(0) * 1.0;
+        float by = _ar_over_btn_y(); float bh = _ar_over_btn_h(); float bw = _ar_over_btn_w();
+        int i = 0;
+        while (i < 2) {
+            float bx = _ar_over_btn_x(i);
+            if (tx >= bx && tx <= bx + bw && ty >= by && ty <= by + bh) { act = i + 1; }
+            i = i + 1;
+        }
+    }
+    return act;
+}
+
 func _ar_draw_all() {
     clear(rgb(18, 20, 28));
 
-    // Entity'ler
+    // Entity'ler (sarsıntı ofsetiyle — sars() aktifken tüm sahne titrer)
     for (int i = 0; i < _n; i = i + 1) {
         if (_ealive[i] == 0) { continue; }
         if (_esprite[i] >= 0) {
-            draw_texture(_esprite[i], _ex[i], _ey[i]);
+            draw_texture(_esprite[i], _ex[i] + _fx_ox, _ey[i] + _fx_oy);
         } else {
-            rect(_ex[i], _ey[i], _ew[i], _eh[i], _ecolor[i]);
+            rect(_ex[i] + _fx_ox, _ey[i] + _fx_oy, _ew[i], _eh[i], _ecolor[i]);
         }
     }
 
     // Kullanıcı ek çizimi
     if (_has_draw) { call(_draw_fn); }
+
+    // Parçacıklar — kullanıcı çiziminin de ÜSTÜNDE (ızgara çizen oyunlarda
+    // [yılan] parçacıklar tahtanın altında kaybolmasın)
+    _pt_draw(_fx_ox, _fx_oy);
+    // Uçan "+N" / seri baloncukları (parçacıkların üstünde)
+    _pop_draw(_fx_ox, _fx_oy);
+
+    // Flash (hasar/ölüm vurgusu) — GERÇEK ekranın tamamını kaplar (bantlar
+    // dahil); HUD'un altında ki skor okunur kalsın
+    if (_fx_fl_t > 0.0) {
+        float flk = 0.0;
+        if (_fx_fl_dur > 0.0) { flk = _fx_fl_t / _fx_fl_dur; }
+        float fvl = tm_view_left(); float fvt = tm_view_top();
+        rect(fvl, fvt, tm_view_right() - fvl, tm_view_bottom() - fvt,
+             rgba(255, 255, 255, toInt(150.0 * flk)));
+    }
 
     // Dokunmatik kontrol overlay'i (oynanırken, dokunma modu açıksa)
     if (_ar_touch_ui) {
@@ -1136,6 +1689,12 @@ func _ar_draw_all() {
         text(_hint, 12, 38, 16, SKYBLUE);
     }
 
+    // FPS sayacı (Ayarlar'dan açılınca) — üst-orta, skor/bölüm/EV ile çakışmaz.
+    if (_fps_on) {
+        str fps = "FPS " + toString(tm_fps());
+        text(fps, (screen_width() - measure_text(fps, 18)) / 2, 10, 18, rgb(120, 230, 120));
+    }
+
     // "Bölüm N" afişi (geçişten sonra ~1.2 sn)
     if (_banner_t > 0.0) {
         str bw = "Bolum ";
@@ -1144,27 +1703,9 @@ func _ar_draw_all() {
         text(bn, (screen_width() - measure_text(bn, 40)) / 2, screen_height() / 2 - 20, 40, GOLD);
     }
 
-    // Oyun bitti ekranı
-    if (_ar_state == 1) {
-        str go = "OYUN BITTI";
-        str hint = "R: yeniden basla";
-        if (L == "en") { go = "GAME OVER"; hint = "R: restart"; }
-        text(go, (screen_width() - measure_text(go, 44)) / 2, screen_height() / 2 - 40, 44, RED);
-        text(hint, (screen_width() - measure_text(hint, 24)) / 2, screen_height() / 2 + 20, 24, WHITE);
-    }
-
-    // Kazandın ekranı (son bölüm de bitti)
-    // NOT: yerel adlar yukarıdaki daldan farklı (go/hint değil) — if/else blokları
-    // scope AÇMAZ, kardeş dallarda aynı ad aynı slot'u paylaşır.
-    if (_ar_state == 2) {
-        str wn = "KAZANDIN";
-        str wsp = "Toplam skor: ";
-        str whint = "R: bastan basla";
-        if (L == "en") { wn = "YOU WIN"; wsp = "Total score: "; whint = "R: restart"; }
-        text(wn, (screen_width() - measure_text(wn, 44)) / 2, screen_height() / 2 - 60, 44, LIME);
-        str wsc = wsp + toString(_score);
-        text(wsc, (screen_width() - measure_text(wsc, 26)) / 2, screen_height() / 2 + 4, 26, GOLD);
-        text(whint, (screen_width() - measure_text(whint, 24)) / 2, screen_height() / 2 + 44, 24, WHITE);
+    // Oyun bitti / Kazandın: profesyonel örtü (skor + Tekrar Oyna / Ana Menu).
+    if (_ar_state != 0) {
+        _ar_draw_over();
     }
 }
 
@@ -1188,6 +1729,7 @@ func _ar_draw_all() {
 
 array _apps_name  = [];    // menüde görünen oyun adları
 array _apps_setup = [];    // 0-arg setup fonksiyonları (index eşleşir)
+array _apps_best  = [];    // kalıcı en iyi skorlar (launcher açılışında yüklenir)
 int   _apps_n     = 0;
 int   _ar_mode    = 0;     // 0 = menü, 1 = oyun oynanıyor
 int   _menu_sel   = 0;     // menüde seçili kart index'i
@@ -1198,6 +1740,7 @@ bool  _lx_home_prev = false;
 func add_game(name, setup) {
     push(_apps_name, name);
     push(_apps_setup, setup);
+    push(_apps_best, 0);
     _apps_n = _apps_n + 1;
 }
 func oyun_ekle(name, setup) { add_game(name, setup); }
@@ -1226,6 +1769,7 @@ func _lx_clear() {
     _ar_rd_l = false; _ar_rd_r = false; _ar_rd_u = false; _ar_rd_d = false;
     _ar_joy_on = false; _ar_joy_dx = 0.0; _ar_joy_dy = 0.0;
     _ar_swipe = 0;                     // önceki oyunun jesti sızmasın
+    _ar_tilt_cal = false;              // yeni oyun kendi nötr tutuşunu yakalar
     clear_entities();
 }
 
@@ -1233,10 +1777,12 @@ func _lx_clear() {
 func _lx_launch(i) {
     if (i < 0 || i >= _apps_n) { return; }
     _lx_clear();
+    _ar_title = _apps_name[i];         // rekor anahtarı = menüdeki oyun adı
     call(_apps_setup[i]);
     _ar_reset();                       // skor/durum/bölüm + _ar_load_level (setup)
     _menu_sel = i;
     _ar_mode = 1;
+    _trans_start();                    // oyuna girişte kısa fade-in
     // Seçme dokunuşu (parmak hâlâ basılı) oyunun ilk karesinde restart/aksiyon
     // olarak sayılmasın diye edge sayaçlarını "basılı"ya çek.
     _ar_touch_prevn = touch_count();
@@ -1244,9 +1790,9 @@ func _lx_launch(i) {
     _lx_home_prev = true;
 }
 
-// ---- Oyun içi EV (menüye geri) butonu — sağ üst köşe -----------------------
-func _lx_home_x(): float { return _world_w - _world_h * 0.11; }
-func _lx_home_y(): float { return _world_h * 0.08; }
+// ---- Oyun içi EV (menüye geri) butonu — GERÇEK ekranın sağ üst köşesi ------
+func _lx_home_x(): float { return tm_view_right() - _world_h * 0.11; }
+func _lx_home_y(): float { return tm_view_top() + _world_h * 0.08; }
 func _lx_home_r(): float { return _world_h * 0.05; }
 
 // Herhangi bir parmak EV butonuna yeni bastı mı (edge).
@@ -1273,6 +1819,15 @@ func _lx_draw_home() {
     // basit "geri/ev" işareti: içte küçük beyaz kare
     float s = hr * 0.7;
     rect(hx - s * 0.5, hy - s * 0.5, s, s, rgba(255, 255, 255, 225));
+}
+
+// Oyundan menüye dön (EV butonu, oyun-bitti "Ana Menu" ve duraklat-Menü ortak yolu):
+// menüye geç + fade + seçme dokunuşunu tüket (dişli-kaskad koruması) + rozet tazele.
+func _lx_goto_menu() {
+    _ar_mode = 0;
+    _trans_start();
+    _ar_touch_prevn = touch_count();
+    _apps_best[_menu_sel] = _best;
 }
 
 // ---- Menü ızgara geometrisi ------------------------------------------------
@@ -1384,35 +1939,341 @@ func _menu_draw() {
         if (nsz < 14) { nsz = 14; }
         text(nm, toInt(cx + (cw - measure_text(nm, nsz)) / 2.0),
              toInt(cy + (ch - nsz * 1.0) / 2.0), nsz, WHITE);
+        // En iyi skor rozeti — kartın altına, altın renkli.
+        if (_apps_best[i] > 0) {
+            str bh = "En iyi: ";
+            if (L == "en") { bh = "Best: "; }
+            str bt = bh + toString(_apps_best[i]);
+            int bsz = toInt(ch * 0.14);
+            if (bsz < 10) { bsz = 10; }
+            text(bt, toInt(cx + (cw - measure_text(bt, bsz)) / 2.0),
+                 toInt(cy + ch - bsz * 1.5), bsz, GOLD);
+        }
         i = i + 1;
     }
 }
 
 // Ana launcher döngüsü — menü ↔ oyun durum makinesi. `oyna()`nın çok-oyunlu
 // karşılığı: pencereyi (zaten `sahne()` ile açık) ve döngüyü sahiplenir.
+// Bir oyunun kayıtlı en iyi skorunu oku (launcher rozetleri için).
+func _lx_load_best(name): int {
+    str s = load_data("arcade_best_" + name + ".txt");
+    if (s == "") { return 0; }
+    return toInt(s);
+}
+
+// ============================================================================
+//  APP KABUĞU — Ayarlar ekranı + Duraklat örtüsü + geri tuşu
+// ============================================================================
+
+int  _ar_mode_settings = 2;   // launcher modu: 2 = Ayarlar ekranı
+bool _pause_prev = false;     // duraklat düğmesi edge durumu (_ar_paused yukarıda)
+
+// ---- Menüdeki dişli (Ayarlar) düğmesi — sağ üst köşe -----------------------
+func _cfg_btn_x(): float { return tm_view_right() - _world_h * 0.11; }
+func _cfg_btn_y(): float { return tm_view_top()   + _world_h * 0.08; }
+func _cfg_btn_r(): float { return _world_h * 0.055; }
+
+func _cfg_btn_draw() {
+    float bx = _cfg_btn_x(); float by = _cfg_btn_y(); float br = _cfg_btn_r();
+    circle(toInt(bx), toInt(by), toInt(br),        rgba(70, 80, 110, 220));
+    circle(toInt(bx), toInt(by), toInt(br * 0.52), rgb(16, 18, 26));
+    circle(toInt(bx), toInt(by), toInt(br * 0.20), rgba(215, 215, 235, 240));
+}
+
+func _cfg_btn_tapped(): bool {
+    int n = touch_count();
+    if (n == 0 || _ar_touch_prevn != 0) { return false; }   // menü ile aynı edge kaynağı
+    float dx = touch_x(0) * 1.0 - _cfg_btn_x();
+    float dy = touch_y(0) * 1.0 - _cfg_btn_y();
+    float grab = _cfg_btn_r() * 1.6;
+    return dx * dx + dy * dy <= grab * grab;
+}
+
+// ---- Ayarlar ekranı: 3 satır (Ses / Titreşim / Dil) + Geri -----------------
+func _cfg_row_x(): float  { return _world_w * 0.14; }
+func _cfg_row_w(): float  { return _world_w * 0.72; }
+func _cfg_row_h(): float  { return _world_h * 0.10; }
+func _cfg_row_y(i): float { return _world_h * (0.20 + i * 0.115); }
+func _cfg_back_x(): float { return _world_w * 0.35; }
+func _cfg_back_y(): float { return _world_h * 0.83; }
+func _cfg_back_w(): float { return _world_w * 0.30; }
+func _cfg_back_h(): float { return _world_h * 0.10; }
+
+func _cfg_val_onoff(on): str {
+    str L = _lang_now();
+    if (on) { if (L == "en") { return "On"; } return "Acik"; }
+    if (L == "en") { return "Off"; }
+    return "Kapali";
+}
+
+func _cfg_draw_row(i, label, value) {
+    float rx = _cfg_row_x(); float ry = _cfg_row_y(i);
+    float rw = _cfg_row_w(); float rh = _cfg_row_h();
+    rect(rx, ry, rw, rh, rgb(30, 34, 48));
+    int lsz = toInt(rh * 0.38);
+    text(label, toInt(rx + rw * 0.06), toInt(ry + (rh - lsz * 1.0) / 2.0), lsz, WHITE);
+    int vsz = lsz;
+    int vw = measure_text(value, vsz);
+    float pw = vw * 1.0 + rw * 0.10;
+    float px = rx + rw - pw - rw * 0.05;
+    rect(px, ry + rh * 0.18, pw, rh * 0.64, rgb(46, 54, 82));
+    text(value, toInt(px + (pw - vw * 1.0) / 2.0), toInt(ry + (rh - vsz * 1.0) / 2.0), vsz, GOLD);
+}
+
+func _cfg_draw() {
+    clear(rgb(16, 18, 26));
+    str L = _lang_now();
+    str title = "Ayarlar"; if (L == "en") { title = "Settings"; }
+    int tsz = toInt(_world_h * 0.085);
+    text(title, toInt((_world_w - measure_text(title, tsz)) / 2.0),
+         toInt(_world_h * 0.075), tsz, GOLD);
+
+    str l0 = "Ses";      if (L == "en") { l0 = "Sound"; }
+    str l1 = "Titresim"; if (L == "en") { l1 = "Haptics"; }
+    str l2 = "Dil";      if (L == "en") { l2 = "Language"; }
+    str l3 = "FPS";
+    str l4 = "Rekorlar"; if (L == "en") { l4 = "Records"; }
+    str lv = "Turkce";   if (L == "en") { lv = "English"; }
+    str rv = "Sil";      if (L == "en") { rv = "Clear"; }
+    if (_cfg_reset_msg > 0.0) { rv = "Silindi"; if (L == "en") { rv = "Cleared"; } }
+    else if (_cfg_reset_armed) { rv = "Emin?"; if (L == "en") { rv = "Sure?"; } }
+    _cfg_draw_row(0, l0, _cfg_val_onoff(_snd_on));
+    _cfg_draw_row(1, l1, _cfg_val_onoff(_hap_on));
+    _cfg_draw_row(2, l2, lv);
+    _cfg_draw_row(3, l3, _cfg_val_onoff(_fps_on));
+    _cfg_draw_row(4, l4, rv);
+
+    float bx = _cfg_back_x(); float by = _cfg_back_y();
+    float bw = _cfg_back_w(); float bh = _cfg_back_h();
+    rect(bx, by, bw, bh, rgb(46, 54, 82));
+    rect_lines(bx, by, bw, bh, GOLD);
+    str back = "Geri"; if (L == "en") { back = "Back"; }
+    int bsz = toInt(bh * 0.40);
+    text(back, toInt(bx + (bw - measure_text(back, bsz)) / 2.0),
+         toInt(by + (bh - bsz * 1.0) / 2.0), bsz, WHITE);
+}
+
+// Tüm oyunların kalıcı en iyi skorlarını sıfırla (dosyaya "0" yaz + rozetleri düş).
+func _ar_reset_records() {
+    int i = 0;
+    while (i < _apps_n) {
+        save_data("arcade_best_" + _apps_name[i] + ".txt", "0");
+        _apps_best[i] = 0;
+        i = i + 1;
+    }
+    _best = 0;
+    _new_record = false;
+}
+
+func _cfg_toggle(i) {
+    if (i != 4) { _cfg_reset_armed = false; }   // başka satıra dokunmak onayı düşürür
+    if (i == 0) { _snd_on = !_snd_on; if (_snd_on) { _snd(880.0, 60); } }
+    else if (i == 1) { _hap_on = !_hap_on; if (_hap_on) { _hap(80); } }
+    else if (i == 2) { if (_lang_now() == "en") { _lang = "tr"; } else { _lang = "en"; } }
+    else if (i == 3) { _fps_on = !_fps_on; }
+    else if (i == 4) {
+        // İki-dokunuş onayı: 1. dokunuş silahlandırır ("Emin?"), 2. dokunuş siler.
+        if (_cfg_reset_armed) {
+            _ar_reset_records();
+            _cfg_reset_armed = false;
+            _cfg_reset_msg = 1.2;
+            _snd(400.0, 80);
+        } else {
+            _cfg_reset_armed = true;
+        }
+    }
+}
+
+// Ayarlar ekranı bir karesi. true dönerse menüye dönülür (kaydedilir).
+func _cfg_step(): bool {
+    if (_cfg_reset_msg > 0.0) { _cfg_reset_msg = _cfg_reset_msg - frame_time(); }
+    if (key_pressed("BACK") || key_pressed("ESCAPE") || key_pressed("BACKSPACE")) {
+        return true;
+    }
+    int n = touch_count();
+    bool tap = (n > 0) && (_ar_touch_prevn == 0);
+    bool leave = false;
+    if (tap) {
+        float tx = touch_x(0) * 1.0; float ty = touch_y(0) * 1.0;
+        int i = 0;
+        while (i < 5) {
+            float ry = _cfg_row_y(i); float rh = _cfg_row_h();
+            float rx = _cfg_row_x(); float rw = _cfg_row_w();
+            // Yalnız SAĞDAKİ değer kutusu toggle eder; sol etikete/ortaya basmak
+            // ayarı değiştirmez (değer kutusu sağa yaslı, sol ~%23 etiket bölgesi).
+            float valL = rx + rw * 0.58;
+            if (tx >= valL && tx <= rx + rw && ty >= ry && ty <= ry + rh) { _cfg_toggle(i); }
+            i = i + 1;
+        }
+        float bx = _cfg_back_x(); float by = _cfg_back_y();
+        float bw = _cfg_back_w(); float bh = _cfg_back_h();
+        if (tx >= bx && tx <= bx + bw && ty >= by && ty <= by + bh) { leave = true; }
+    }
+    _ar_touch_prevn = n;
+    return leave;
+}
+
+// ---- Oyun-içi Duraklat düğmesi (EV butonunun solunda) ----------------------
+func _pause_btn_x(): float { return tm_view_right() - _world_h * 0.24; }
+func _pause_btn_y(): float { return tm_view_top()   + _world_h * 0.08; }
+func _pause_btn_r(): float { return _world_h * 0.05; }
+
+func _pause_btn_draw() {
+    float bx = _pause_btn_x(); float by = _pause_btn_y(); float br = _pause_btn_r();
+    circle(toInt(bx), toInt(by), toInt(br), rgba(90, 100, 130, 130));
+    float bw = br * 0.24; float bh = br * 0.9;
+    rect(bx - br * 0.42, by - bh * 0.5, bw, bh, rgba(255, 255, 255, 225));
+    rect(bx + br * 0.18, by - bh * 0.5, bw, bh, rgba(255, 255, 255, 225));
+}
+
+// Duraklat düğmesine yeni basıldı mı (edge, kendi durumuyla).
+func _pause_btn_pressed(): bool {
+    float hx = _pause_btn_x(); float hy = _pause_btn_y();
+    float grab = _pause_btn_r() * 1.8;
+    bool now = false;
+    int n = touch_count(); int i = 0;
+    while (i < n) {
+        float dx = touch_x(i) * 1.0 - hx;
+        float dy = touch_y(i) * 1.0 - hy;
+        if (dx * dx + dy * dy <= grab * grab) { now = true; }
+        i = i + 1;
+    }
+    bool edge = now && !_pause_prev;
+    _pause_prev = now;
+    return edge;
+}
+
+// ---- Duraklat örtüsü (3 düğme: Devam / Yeniden / Menü) ----------------------
+func _pause_rect_x(): float { return _world_w * 0.30; }
+func _pause_rect_w(): float { return _world_w * 0.40; }
+func _pause_rect_h(): float { return _world_h * 0.12; }
+func _pause_rect_y(i): float { return _world_h * (0.36 + i * 0.16); }
+
+func _pause_draw(menu_label) {
+    float vl = tm_view_left(); float vt = tm_view_top();
+    float vr = tm_view_right(); float vb = tm_view_bottom();
+    rect(vl, vt, vr - vl, vb - vt, rgba(8, 10, 16, 185));
+    str L = _lang_now();
+    str t = "Duraklatildi"; if (L == "en") { t = "Paused"; }
+    int tsz = toInt(_world_h * 0.09);
+    text(t, toInt((_world_w - measure_text(t, tsz)) / 2.0), toInt(_world_h * 0.18), tsz, GOLD);
+
+    str l0 = "Devam";   if (L == "en") { l0 = "Resume"; }
+    str l1 = "Yeniden"; if (L == "en") { l1 = "Restart"; }
+    _pause_draw_btn(0, l0);
+    _pause_draw_btn(1, l1);
+    _pause_draw_btn(2, menu_label);
+}
+
+func _pause_draw_btn(i, label) {
+    float bx = _pause_rect_x(); float by = _pause_rect_y(i);
+    float bw = _pause_rect_w(); float bh = _pause_rect_h();
+    rect(bx, by, bw, bh, rgb(46, 54, 82));
+    rect_lines(bx, by, bw, bh, GOLD);
+    int bsz = toInt(bh * 0.38);
+    text(label, toInt(bx + (bw - measure_text(label, bsz)) / 2.0),
+         toInt(by + (bh - bsz * 1.0) / 2.0), bsz, WHITE);
+}
+
+// Duraklat bir karesi: 0=yok, 1=devam, 2=yeniden, 3=menü/çıkış.
+func _pause_step(): int {
+    int act = 0;
+    int n = touch_count();
+    bool tap = (n > 0) && (_ar_touch_prevn == 0);
+    if (tap) {
+        float tx = touch_x(0) * 1.0; float ty = touch_y(0) * 1.0;
+        int i = 0;
+        while (i < 3) {
+            float bx = _pause_rect_x(); float bw = _pause_rect_w();
+            float by = _pause_rect_y(i); float bh = _pause_rect_h();
+            if (tx >= bx && tx <= bx + bw && ty >= by && ty <= by + bh) { act = i + 1; }
+            i = i + 1;
+        }
+    }
+    _ar_touch_prevn = n;
+    if (key_pressed("ENTER") || key_pressed("SPACE")) { act = 1; }
+    if (key_pressed("R")) { act = 2; }
+    return act;
+}
+
+func _pause_enter() {
+    _ar_paused = true;
+    _ar_touch_prevn = touch_count();   // örtü girişteki dokunuşu "yeni tap" saymasın
+}
+
 func launcher() {
     if (_apps_n == 0) { return; }
     _ar_mode = 0;
     _menu_sel = 0;
+    _ar_standalone = false;            // oyun-bitti ekranında ikinci buton = "Ana Menu"
+    // Kalıcı rekorları bir kez yükle (kare başına dosya IO'su OLMAZ).
+    for (int bi = 0; bi < _apps_n; bi = bi + 1) {
+        _apps_best[bi] = _lx_load_best(_apps_name[bi]);
+    }
+    _ar_load_settings();               // kalıcı ses/haptik/dil ayarlarını uygula
     var wm = arena_save();
     while (running()) {
         if (_ar_mode == 0) {
-            // Android donanım GERİ tuşu: menüdeyken uygulamadan çık.
-            if (key_pressed("BACK")) { break; }
-            _menu_step();
+            // Menü: dişli → Ayarlar; Android GERİ → uygulamadan çık.
+            if (_cfg_btn_tapped()) {
+                _ar_mode = _ar_mode_settings;
+                _cfg_reset_armed = false;   // ayara her girişte "Rekorları Sıfırla" onayı sıfır
+                _cfg_reset_msg = 0.0;
+                _ar_touch_prevn = touch_count();
+            } else if (key_pressed("BACK")) {
+                break;
+            } else {
+                _menu_step();
+            }
             frame_begin();
             _menu_draw();
+            _cfg_btn_draw();
+            _trans_draw();
             frame_end();
-        } else {
-            // GERİ (Android) da EV/ESC gibi menüye döndürür.
-            bool go_home = key_pressed("ESCAPE") || key_pressed("BACKSPACE")
-                        || key_pressed("BACK");
-            _ar_update();
+        } else if (_ar_mode == _ar_mode_settings) {
+            // Ayarlar ekranı — çıkışta kaydeder.
+            bool leave = _cfg_step();
             frame_begin();
-            _ar_draw_all();
-            _lx_draw_home();
+            _cfg_draw();
+            _trans_draw();
             frame_end();
-            if (go_home || _lx_home_pressed()) { _ar_mode = 0; }
+            if (leave) { _ar_save_settings(); _ar_mode = 0; }
+        } else {
+            // Oyun. GERİ / ESC → duraklat (ilerleme kaybolmasın); EV → anında menü.
+            // Yalnız aktif oynanırken duraklanır (biten oyun duraklatılamaz).
+            if (!_ar_paused && _ar_state == 0) {
+                if (key_pressed("ESCAPE") || key_pressed("BACKSPACE") || key_pressed("BACK")) {
+                    _pause_enter();
+                }
+            }
+            if (_ar_paused) {
+                str ml = "Menu";
+                frame_begin();
+                _ar_draw_all();
+                _lx_draw_home();
+                _pause_draw(ml);
+                frame_end();
+                int act = _pause_step();
+                if (act == 1) { _ar_paused = false; }
+                else if (act == 2) { _ar_reset(); _ar_paused = false; }
+                else if (act == 3) { _ar_paused = false; _lx_goto_menu(); }
+            } else {
+                _ar_update();
+                frame_begin();
+                _ar_draw_all();
+                _lx_draw_home();
+                _trans_draw();
+                frame_end();
+                // Oyun-bitti ekranı: "Tekrar Oyna" / "Ana Menu" butonları (ekrana
+                // gelişigüzel dokunma oyunu BAŞLATMAZ). EV butonu da menüye döndürür.
+                if (_ar_state != 0) {
+                    int oa = _ar_over_step();
+                    if (oa == 1) { _ar_reset(); _trans_start(); }
+                    else if (oa == 2) { _lx_goto_menu(); }
+                }
+                if (_lx_home_pressed()) { _lx_goto_menu(); }
+            }
         }
         arena_restore(wm);
     }

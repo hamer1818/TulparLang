@@ -58,6 +58,38 @@ func elapsed(): float { return tm_time(); }
 func screen_width(): int { return tm_width(); }
 func screen_height(): int { return tm_height(); }
 
+// Görünür ekranın DÜNYA koordinatındaki kenarları. Masaüstü/web'de 0..w / 0..h;
+// Android'de oyun dünyası ekrana ortalandığı için sol/üst NEGATİF, sağ/alt
+// dünyadan BÜYÜK olabilir. Dokunmatik butonları gerçek ekran kenarına
+// demirlemek için kullan (arcade bunu otomatik yapar).
+func view_left(): float    { return tm_view_left(); }
+func ekran_sol(): float    { return tm_view_left(); }
+func view_right(): float   { return tm_view_right(); }
+func ekran_sag(): float    { return tm_view_right(); }
+func view_top(): float     { return tm_view_top(); }
+func ekran_ust(): float    { return tm_view_top(); }
+func view_bottom(): float  { return tm_view_bottom(); }
+func ekran_alt(): float    { return tm_view_bottom(); }
+
+// İvmeölçer (telefonu eğerek kontrol). m/s^2; Android'de gerçek sensör,
+// masaüstü/web'de 0. accel_available() ile sensör var mı öğren.
+func accel_x(): float      { return tm_accel_x(); }
+func egim_x(): float       { return tm_accel_x(); }
+func accel_y(): float      { return tm_accel_y(); }
+func egim_y(): float       { return tm_accel_y(); }
+func accel_z(): float      { return tm_accel_z(); }
+func egim_z(): float       { return tm_accel_z(); }
+func accel_available(): bool { return tm_accel_available(); }
+func egim_var(): bool      { return tm_accel_available(); }
+
+// Uygulama önde/odakta mı (arka plana atılınca false).
+func is_active(): bool     { return tm_active(); }
+func aktif_mi(): bool      { return tm_active(); }
+
+// Dosyasız ses efekti: freq Hz sinüs, ms milisaniye. Kısa oyun sesleri için.
+func beep(freq, ms)        { tm_beep(freq, ms); }
+func bip(freq, ms)         { tm_beep(freq, ms); }
+
 // ---- Çizim -----------------------------------------------------------------
 // Hepsi frame_begin() ile frame_end() arasında çağrılır.
 

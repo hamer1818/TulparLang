@@ -64,8 +64,15 @@ func her_kare_is() {
     if (ex > 596.0   && evx > 0.0) { hiz_ver(engel_id, 0.0 - evx, 0); }
 }
 
-func hedef_cb() { skor_ekle(100); bolum_gec(); }   // hedefe ulaş → sıradaki bölüm
-func kaybet_cb() { oyun_bitti(); }                 // engele değ → oyun biter
+func hedef_cb() {                                  // hedefe ulaş → sıradaki bölüm
+    patlama(x_of(oteki()) + 12.0, y_of(oteki()) + 12.0, GOLD);
+    skor_ekle(100);
+    bolum_gec();
+}
+func kaybet_cb() {                                 // engele değ → oyun biter
+    patlama(x_of(ben()) + 14.0, y_of(ben()) + 14.0, ORANGE);
+    oyun_bitti();
+}
 
 yercekimi(1400);
 ziplama(640);

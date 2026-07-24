@@ -107,6 +107,8 @@ func her_kare_is() {
 
 // Mermi düşmana değince: ikisi de ölür, +10. Filo bittiyse sıradaki bölüm.
 func vur_cb() {
+    // Konumu ÖLDÜRMEDEN önce oku (bayat handle 0 döner) — düşman merkezinde patlama.
+    patlama(x_of(oteki()) + 16.0, y_of(oteki()) + 12.0, ORANGE);
     oldur(oteki());                          // ben()=mermi (TAG_BULLET), oteki()=düşman
     oldur(ben());
     skor_ekle(10);

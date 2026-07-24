@@ -36,6 +36,16 @@ double tame_impl_frame_time(void);
 double tame_impl_time(void);
 int tame_impl_width(void);
 int tame_impl_height(void);
+double tame_impl_view_left(void);
+double tame_impl_view_right(void);
+double tame_impl_view_top(void);
+double tame_impl_view_bottom(void);
+double tame_impl_accel_x(void);
+double tame_impl_accel_y(void);
+double tame_impl_accel_z(void);
+int tame_impl_accel_available(void);
+int tame_impl_active(void);
+void tame_impl_beep(double freq, int ms);
 void tame_impl_clear(int64_t color);
 void tame_impl_rect(double x, double y, double w, double h, int64_t color);
 void tame_impl_rect_lines(double x, double y, double w, double h,
@@ -165,6 +175,12 @@ VMValue aot_tm_frame_time_ptr(void) {
 VMValue aot_tm_time_ptr(void) { return VM_FLOAT(tame_impl_time()); }
 VMValue aot_tm_width_ptr(void) { return VM_INT(tame_impl_width()); }
 VMValue aot_tm_height_ptr(void) { return VM_INT(tame_impl_height()); }
+
+// Görünür ekranın dünya-koordinatlı kenarları (Android'de bantlar dahil).
+VMValue aot_tm_view_left_ptr(void)   { return VM_FLOAT(tame_impl_view_left()); }
+VMValue aot_tm_view_right_ptr(void)  { return VM_FLOAT(tame_impl_view_right()); }
+VMValue aot_tm_view_top_ptr(void)    { return VM_FLOAT(tame_impl_view_top()); }
+VMValue aot_tm_view_bottom_ptr(void) { return VM_FLOAT(tame_impl_view_bottom()); }
 
 VMValue aot_tm_clear_ptr(VMValue *color) {
   tame_impl_clear(tm_int(color));
@@ -388,6 +404,18 @@ VMValue aot_tm_load_data_ptr(VMValue *name) {
 
 VMValue aot_tm_vibrate_ptr(VMValue *ms) {
   tame_impl_vibrate((int)tm_int(ms));
+  return VM_VOID();
+}
+
+VMValue aot_tm_accel_x_ptr(void) { return VM_FLOAT(tame_impl_accel_x()); }
+VMValue aot_tm_accel_y_ptr(void) { return VM_FLOAT(tame_impl_accel_y()); }
+VMValue aot_tm_accel_z_ptr(void) { return VM_FLOAT(tame_impl_accel_z()); }
+VMValue aot_tm_accel_available_ptr(void) {
+  return VM_BOOL(tame_impl_accel_available() != 0);
+}
+VMValue aot_tm_active_ptr(void) { return VM_BOOL(tame_impl_active() != 0); }
+VMValue aot_tm_beep_ptr(VMValue *freq, VMValue *ms) {
+  tame_impl_beep(tm_num(freq), (int)tm_int(ms));
   return VM_VOID();
 }
 

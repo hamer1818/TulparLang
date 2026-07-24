@@ -86,6 +86,7 @@ func her_kare_is() {
 
 // Oyuncu eşyaya değince: topla, +10 puan. Bölümün son eşyasıysa sıradaki bölüm.
 func topla_cb() {
+    patlama(x_of(oteki()) + 9.0, y_of(oteki()) + 9.0, GOLD);  // eşya parçacığı
     oldur(oteki());
     skor_ekle(10);
     if (tag_sayisi(TAG_ITEM) == 0) { bolum_gec(); }
