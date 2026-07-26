@@ -1,13 +1,14 @@
-// Nisanci — yukarıdan-bakış atış oyunu, 3 BÖLÜM. ~35 satır oyun kodu.
+// Nisanci — yukarıdan-bakış atış oyunu, 6 BÖLÜM. ~35 satır oyun kodu.
 //
 //   ./tulpar examples/arcade_nisan.tpr
 //
 // Ok/WASD ile hareket, SPACE ile ateş et. Yukarıdan inen kırmızıları vur (+10).
-// Hedef skora ulaş → sıradaki bölüm; 3 bölümü de bitir → KAZANDIN.
+// Hedef skora ulaş → sıradaki bölüm; 6 bölümü de bitir → KAZANDIN.
 // Bir düşman sana değerse oyun biter, R ile baştan.
 //
 // Bölümler (skor bölümler arası KORUNDUĞU için hedefler kümülatiftir):
-//   1) yavaş/seyrek, hedef 30   2) daha sık/hızlı, hedef 60   3) en hızlı, hedef 100
+//   1) hedef 30   2) hedef 60   3) hedef 100
+//   4) hedef 150  5) hedef 210  6) en hızlı, hedef 290
 //
 // mermi() ekrandan çıkınca motor onu kendisi siler. Döngü/çarpışma/çizim YOK.
 
@@ -31,6 +32,9 @@ func kur() {
 func b1() { spawn_period = 45; enemy_vy = 120; hedef = 30;  }
 func b2() { spawn_period = 30; enemy_vy = 170; hedef = 60;  }
 func b3() { spawn_period = 20; enemy_vy = 220; hedef = 100; }
+func b4() { spawn_period = 16; enemy_vy = 260; hedef = 150; }
+func b5() { spawn_period = 13; enemy_vy = 300; hedef = 210; }
+func b6() { spawn_period = 10; enemy_vy = 340; hedef = 290; }
 
 func her_kare_is() {
     t = t + 1;
@@ -69,6 +73,9 @@ baslangicta(kur);
 bolum(1, b1);
 bolum(2, b2);
 bolum(3, b3);
+bolum(4, b4);
+bolum(5, b5);
+bolum(6, b6);
 her_kare(her_kare_is);
 carpisinca(TAG_BULLET, TAG_ENEMY,  vur_cb);
 carpisinca(TAG_PLAYER, TAG_ENEMY,  kaybet_cb);

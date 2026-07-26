@@ -17,15 +17,16 @@ import "arcade";
 // ==========================================================================
 //  Topla  (examples/arcade_topla.tpr, önek tp_)
 // ==========================================================================
-// Topla — arcade preset motoruyla "blok" tarzı bir oyun, 3 BÖLÜM.
+// Topla — arcade preset motoruyla "blok" tarzı bir oyun, 6 BÖLÜM.
 //
 //   ./tulpar examples/arcade_topla.tpr
 //
 // Ok tuşları / WASD ile oyuncuyu (mavi) sür. Sarı eşyaları topla (+10).
-// Bölümün TÜM eşyalarını toplayınca sıradaki bölüme geçersin; 3 bölümü de
+// Bölümün TÜM eşyalarını toplayınca sıradaki bölüme geçersin; 6 bölümü de
 // bitirince KAZANDIN. Kırmızı düşmana değersen oyun biter, R ile baştan.
 //
 // Bölümler:  1) 3 eşya / 1 düşman   2) 5 eşya / 2 düşman   3) 6 eşya / 3 hızlı düşman
+//            4) 7 eşya / 3 düşman   5) 8 eşya / 4 düşman   6) 9 eşya / 4 çok hızlı
 //
 // Dikkat et: TEK BİR oyun döngüsü, çarpışma kodu ya da çizim YOK. Motor
 // hepsini yapıyor; sen sadece blokları yerleştiriyorsun.
@@ -80,6 +81,53 @@ func tp_b3() {
     tp_dusman_ekle(600, 240, 260, 0 - 220);
 }
 
+// --- Bölüm 4: 7 eşya, 3 daha hızlı düşman -----------------------------------
+func tp_b4() {
+    esya(60,  60,  18, 18, GOLD);
+    esya(300, 60,  18, 18, GOLD);
+    esya(560, 60,  18, 18, GOLD);
+    esya(60,  240, 18, 18, GOLD);
+    esya(560, 240, 18, 18, GOLD);
+    esya(180, 400, 18, 18, GOLD);
+    esya(440, 400, 18, 18, GOLD);
+    tp_dusman_ekle(320, 40,  270, 230);
+    tp_dusman_ekle(60,  440, 0 - 250, 260);
+    tp_dusman_ekle(600, 240, 280, 0 - 240);
+}
+
+// --- Bölüm 5: 8 eşya, 4 düşman ----------------------------------------------
+func tp_b5() {
+    esya(60,  60,  18, 18, GOLD);
+    esya(300, 50,  18, 18, GOLD);
+    esya(560, 60,  18, 18, GOLD);
+    esya(60,  220, 18, 18, GOLD);
+    esya(560, 220, 18, 18, GOLD);
+    esya(60,  400, 18, 18, GOLD);
+    esya(300, 420, 18, 18, GOLD);
+    esya(560, 400, 18, 18, GOLD);
+    tp_dusman_ekle(300, 40,  290, 240);
+    tp_dusman_ekle(60,  440, 0 - 270, 250);
+    tp_dusman_ekle(600, 60,  0 - 280, 270);
+    tp_dusman_ekle(320, 240, 300, 0 - 230);
+}
+
+// --- Bölüm 6: 9 eşya, 4 çok hızlı düşman ------------------------------------
+func tp_b6() {
+    esya(60,  60,  18, 18, GOLD);
+    esya(300, 50,  18, 18, GOLD);
+    esya(560, 60,  18, 18, GOLD);
+    esya(60,  240, 18, 18, GOLD);
+    esya(300, 240, 18, 18, GOLD);
+    esya(560, 240, 18, 18, GOLD);
+    esya(60,  420, 18, 18, GOLD);
+    esya(300, 420, 18, 18, GOLD);
+    esya(560, 420, 18, 18, GOLD);
+    tp_dusman_ekle(300, 40,  320, 270);
+    tp_dusman_ekle(60,  440, 0 - 300, 290);
+    tp_dusman_ekle(600, 60,  0 - 310, 300);
+    tp_dusman_ekle(600, 440, 0 - 300, 0 - 280);
+}
+
 // Düşmanlar duvara çarpınca seksin (motor MV_VELOCITY'yi sınırda tutmaz).
 //
 // NOT: hız `vx_of()` ile okunur — `_evx[id]` YANLIŞTIR: id bir handle'dır
@@ -119,6 +167,9 @@ func tp_setup() {
     bolum(1, tp_b1);
     bolum(2, tp_b2);
     bolum(3, tp_b3);
+    bolum(4, tp_b4);
+    bolum(5, tp_b5);
+    bolum(6, tp_b6);
     her_kare(tp_her_kare_is);
     carpisinca(TAG_PLAYER, TAG_ITEM,  tp_topla_cb);
     carpisinca(TAG_PLAYER, TAG_ENEMY, tp_kaybet_cb);
@@ -127,31 +178,40 @@ func tp_setup() {
 // ==========================================================================
 //  Zipla  (examples/arcade_zipla.tpr, önek zp_)
 // ==========================================================================
-// Zipla — platformer preset'i (yerçekimi + platformlar + zıplama), 3 BÖLÜM.
+// Zipla — platformer preset'i (yerçekimi + platformlar + zıplama), 6 BÖLÜM.
 //
 //   ./tulpar examples/arcade_zipla.tpr
 //
 // Sol/Sağ (A/D) ile yürü, SPACE / YUKARI ile zıpla. Yerçekimi, zemin ve
 // `duvar()` platformlarına iniş hazır gelir. Platformları tırmanıp altın hedefe
-// ulaş → +100 ve sıradaki bölüm. 3 bölümü de bitir → KAZANDIN.
+// ulaş → +100 ve sıradaki bölüm. 6 bölümü de bitir → KAZANDIN.
 // Fizik/çarpışma/döngü/çizim kodu YOK; bölüm fn'leri sadece düzeni kurar.
 //
 // Bölümler:  1) kolay, 2 platform   2) daha uzak/yüksek atlayışlar, 4 platform
 //            3) dar platformlar + gidip gelen ölümcül engel
+//            4) 5 platform zikzak + süpüren engel   5) 5 platform + 2 karşıt engel
+//            6) dar platformlar + 2 hızlı engel (en zor)
 //
 // Zıplama payı (yercekimi 1400 / ziplama 640): tepe yüksekliği ~146px, havada
 // kalma ~0.91sn → ~180px yatay. Düzenler bu yüzden ≤80px dikey / ≤140px yatay
 // açıklıkla kuruldu; bu sınırları aşarsan bölüm bitirilemez hale gelir.
 
 
-int zp_engel_id = 0;      // 3. bölümdeki gidip gelen engel
+array zp_engeller = [];   // gidip gelen ölümcül engeller (bölüm başına)
+
+// Engel üret + kenarda sekmesi için listeye al. vy!=0 ise dikey de gider.
+func zp_engel_ekle(x, y, vx, vy) {
+    int e = uret(x, y, 24, 24, RED, TAG_ENEMY, MV_VELOCITY);
+    hiz_ver(e, vx, vy);
+    push(zp_engeller, e);
+}
 
 // Global kurulum — her bölüm yüklemesinde bölüm fn'inden ÖNCE çalışır.
 func zp_kur() {
     temizle();
     oyuncu_p(40, 380, 28, 28, SKYBLUE);          // platformer oyuncusu (tek satır)
     duvar(0, 448, 640, 32, DARKGRAY);            // zemin şeridi (her bölümde var)
-    zp_engel_id = 0;
+    zp_engeller = [];
 }
 
 // --- Bölüm 1: iki platform, rahat atlayış -----------------------------------
@@ -178,18 +238,56 @@ func zp_b3() {
     duvar(250, 156, 76, 20, BROWN);
     esya(288, 118, 24, 24, GOLD);
     // Yatay gidip gelen engel — tırmanış hattını keser (duvarları takmaz).
-    zp_engel_id = uret(60, 250, 24, 24, RED, TAG_ENEMY, MV_VELOCITY);
-    hiz_ver(zp_engel_id, 170, 0);
+    zp_engel_ekle(60, 250, 170, 0);
 }
 
-// Engeli ekran kenarlarında geri döndür (motor MV_VELOCITY'yi sınırda tutmaz).
+// --- Bölüm 4: beş platform zikzak + orta şeritte süpüren engel ---------------
+func zp_b4() {
+    duvar(140, 376, 96, 20, BROWN);
+    duvar(330, 300, 96, 20, BROWN);
+    duvar(140, 224, 96, 20, BROWN);
+    duvar(330, 148, 96, 20, BROWN);
+    esya(366, 110, 24, 24, GOLD);                // en üst platformun üstünde
+    zp_engel_ekle(300, 340, 200, 0);                // alt-orta şeridi süpürür
+}
+
+// --- Bölüm 5: beş platform + iki karşıt yönlü engel --------------------------
+func zp_b5() {
+    duvar(120, 388, 88, 20, BROWN);
+    duvar(300, 316, 88, 20, BROWN);
+    duvar(120, 244, 88, 20, BROWN);
+    duvar(300, 172, 88, 20, BROWN);
+    duvar(120, 104, 88, 20, BROWN);
+    esya(150, 66, 24, 24, GOLD);
+    zp_engel_ekle(300, 352, 210, 0);                // alt şerit
+    zp_engel_ekle(300, 208, 0 - 190, 0);            // orta şerit (ters yön)
+}
+
+// --- Bölüm 6: dar platformlar + iki hızlı engel (en zor) --------------------
+func zp_b6() {
+    duvar(140, 392, 74, 20, BROWN);
+    duvar(320, 324, 74, 20, BROWN);
+    duvar(140, 256, 74, 20, BROWN);
+    duvar(320, 188, 74, 20, BROWN);
+    duvar(140, 120, 74, 20, BROWN);
+    esya(168, 82, 24, 24, GOLD);
+    zp_engel_ekle(320, 358, 230, 0);                // alt şerit (hızlı)
+    zp_engel_ekle(320, 222, 0 - 210, 0);            // orta şerit (hızlı, ters)
+}
+
+// Engelleri ekran kenarlarında geri döndür (motor MV_VELOCITY'yi sınırda tutmaz).
 func zp_her_kare_is() {
-    if (zp_engel_id == 0) { return; }
-    if (!yasiyor(zp_engel_id)) { return; }
-    float ex = x_of(zp_engel_id);
-    float evx = vx_of(zp_engel_id);
-    if (ex < 20.0    && evx < 0.0) { hiz_ver(zp_engel_id, 0.0 - evx, 0); }
-    if (ex > 596.0   && evx > 0.0) { hiz_ver(zp_engel_id, 0.0 - evx, 0); }
+    for (int i = 0; i < len(zp_engeller); i = i + 1) {
+        int e = zp_engeller[i];
+        if (!yasiyor(e)) { continue; }
+        float ex = x_of(e); float ey = y_of(e);
+        float evx = vx_of(e); float evy = vy_of(e);
+        if (ex < 20.0  && evx < 0.0) { evx = 0.0 - evx; }
+        if (ex > 596.0 && evx > 0.0) { evx = 0.0 - evx; }
+        if (ey < 20.0  && evy < 0.0) { evy = 0.0 - evy; }
+        if (ey > 420.0 && evy > 0.0) { evy = 0.0 - evy; }
+        hiz_ver(e, evx, evy);
+    }
 }
 
 func zp_hedef_cb() {                                  // hedefe ulaş → sıradaki bölüm
@@ -211,6 +309,9 @@ func zp_setup() {
     bolum(1, zp_b1);
     bolum(2, zp_b2);
     bolum(3, zp_b3);
+    bolum(4, zp_b4);
+    bolum(5, zp_b5);
+    bolum(6, zp_b6);
     her_kare(zp_her_kare_is);
     carpisinca(TAG_PLAYER, TAG_ITEM,  zp_hedef_cb);
     carpisinca(TAG_PLAYER, TAG_ENEMY, zp_kaybet_cb);
@@ -219,16 +320,17 @@ func zp_setup() {
 // ==========================================================================
 //  Nisan  (examples/arcade_nisan.tpr, önek ni_)
 // ==========================================================================
-// Nisanci — yukarıdan-bakış atış oyunu, 3 BÖLÜM. ~35 satır oyun kodu.
+// Nisanci — yukarıdan-bakış atış oyunu, 6 BÖLÜM. ~35 satır oyun kodu.
 //
 //   ./tulpar examples/arcade_nisan.tpr
 //
 // Ok/WASD ile hareket, SPACE ile ateş et. Yukarıdan inen kırmızıları vur (+10).
-// Hedef skora ulaş → sıradaki bölüm; 3 bölümü de bitir → KAZANDIN.
+// Hedef skora ulaş → sıradaki bölüm; 6 bölümü de bitir → KAZANDIN.
 // Bir düşman sana değerse oyun biter, R ile baştan.
 //
 // Bölümler (skor bölümler arası KORUNDUĞU için hedefler kümülatiftir):
-//   1) yavaş/seyrek, hedef 30   2) daha sık/hızlı, hedef 60   3) en hızlı, hedef 100
+//   1) hedef 30   2) hedef 60   3) hedef 100
+//   4) hedef 150  5) hedef 210  6) en hızlı, hedef 290
 //
 // mermi() ekrandan çıkınca motor onu kendisi siler. Döngü/çarpışma/çizim YOK.
 
@@ -251,6 +353,9 @@ func ni_kur() {
 func ni_b1() { ni_spawn_period = 45; ni_enemy_vy = 120; ni_hedef = 30;  }
 func ni_b2() { ni_spawn_period = 30; ni_enemy_vy = 170; ni_hedef = 60;  }
 func ni_b3() { ni_spawn_period = 20; ni_enemy_vy = 220; ni_hedef = 100; }
+func ni_b4() { ni_spawn_period = 16; ni_enemy_vy = 260; ni_hedef = 150; }
+func ni_b5() { ni_spawn_period = 13; ni_enemy_vy = 300; ni_hedef = 210; }
+func ni_b6() { ni_spawn_period = 10; ni_enemy_vy = 340; ni_hedef = 290; }
 
 func ni_her_kare_is() {
     ni_t = ni_t + 1;
@@ -290,6 +395,9 @@ func ni_setup() {
     bolum(1, ni_b1);
     bolum(2, ni_b2);
     bolum(3, ni_b3);
+    bolum(4, ni_b4);
+    bolum(5, ni_b5);
+    bolum(6, ni_b6);
     her_kare(ni_her_kare_is);
     carpisinca(TAG_BULLET, TAG_ENEMY,  ni_vur_cb);
     carpisinca(TAG_PLAYER, TAG_ENEMY,  ni_kaybet_cb);
@@ -298,14 +406,15 @@ func ni_setup() {
 // ==========================================================================
 //  Tugla  (examples/arcade_tugla.tpr, önek tu_)
 // ==========================================================================
-// Tugla Kirma (Breakout) — arcade preset motoru, 3 BÖLÜM.
+// Tugla Kirma (Breakout) — arcade preset motoru, 6 BÖLÜM.
 //
 //   ./tulpar examples/arcade_tugla.tpr
 //
 // Sol/Sağ (A/D) ile raketi sür, topu düşürme. Tüm tuğlaları kır (+10) →
-// sıradaki bölüm. 3 bölümü de bitir → KAZANDIN. R ile baştan.
+// sıradaki bölüm. 6 bölümü de bitir → KAZANDIN. R ile baştan.
 //
 // Bölümler: 1) 3 sıra düz duvar   2) piramit   3) boşluklu duvar + hızlı top
+//           4) 4 dolu sıra   5) elmas/piramit karışık   6) yoğun 5 sıra + en hızlı
 //
 // Motorla eşleşme: tuğlalar `esya()` (TAG_ITEM), top `TAG_BULLET` + MV_VELOCITY,
 // raket `TAG_PLAYER` + MV_NONE (yatay hareketi her_kare içinde sürüyoruz —
@@ -361,6 +470,36 @@ func tu_b3() {
     tu_tugla_satir(120, 8, 32,  RED);
     tu_tugla_satir(144, 3, 104, ORANGE);
     tu_tugla_satir(144, 3, 320, ORANGE);
+}
+
+// --- Bölüm 4: dört dolu sıra + daha hızlı top -------------------------------
+func tu_b4() {
+    hiz_ver(tu_top, 270, 0 - 350);
+    tu_tugla_satir(72,  8, 32, RED);
+    tu_tugla_satir(96,  8, 32, ORANGE);
+    tu_tugla_satir(120, 8, 32, GOLD);
+    tu_tugla_satir(144, 8, 32, GREEN);
+}
+
+// --- Bölüm 5: elmas/piramit karışık + boşluklar -----------------------------
+func tu_b5() {
+    hiz_ver(tu_top, 290, 0 - 370);
+    tu_tugla_satir(72,  8, 32,  MAROON);
+    tu_tugla_satir(96,  6, 104, RED);
+    tu_tugla_satir(120, 8, 32,  ORANGE);
+    tu_tugla_satir(144, 6, 104, GOLD);
+    tu_tugla_satir(168, 4, 176, GREEN);
+}
+
+// --- Bölüm 6: yoğun 5 sıra, ortası boş + en hızlı top -----------------------
+func tu_b6() {
+    hiz_ver(tu_top, 320, 0 - 400);
+    tu_tugla_satir(72,  8, 32,  PURPLE);
+    tu_tugla_satir(96,  8, 32,  VIOLET);
+    tu_tugla_satir(120, 3, 32,  RED);
+    tu_tugla_satir(120, 3, 320, RED);
+    tu_tugla_satir(144, 8, 32,  ORANGE);
+    tu_tugla_satir(168, 8, 32,  GOLD);
 }
 
 func tu_her_kare_is() {
@@ -436,6 +575,9 @@ func tu_setup() {
     bolum(1, tu_b1);
     bolum(2, tu_b2);
     bolum(3, tu_b3);
+    bolum(4, tu_b4);
+    bolum(5, tu_b5);
+    bolum(6, tu_b6);
     her_kare(tu_her_kare_is);
     carpisinca(TAG_PLAYER, TAG_BULLET, tu_raket_cb);
     carpisinca(TAG_BULLET, TAG_ITEM,   tu_kir_cb);
@@ -444,15 +586,16 @@ func tu_setup() {
 // ==========================================================================
 //  Uzay  (examples/arcade_uzay.tpr, önek uz_)
 // ==========================================================================
-// Uzay Istilasi (Space Invaders) — arcade preset motoru, 3 BÖLÜM.
+// Uzay Istilasi (Space Invaders) — arcade preset motoru, 6 BÖLÜM.
 //
 //   ./tulpar examples/arcade_uzay.tpr
 //
 // Sol/Sağ (A/D) ile gemiyi sür, SPACE ile ateş et. Filoyu temizle (+10) →
-// sıradaki bölüm. 3 bölümü de bitir → KAZANDIN. Filo sana inerse ya da
+// sıradaki bölüm. 6 bölümü de bitir → KAZANDIN. Filo sana inerse ya da
 // mor mermilerine değersen kaybedersin. R ile baştan.
 //
-// Bölümler: 1) 3x5 yavaş   2) 4x6 hızlı   3) 4x7 en hızlı + filo GERİ ATEŞ eder
+// Bölümler: 1) 3x5 yavaş   2) 4x6 hızlı   3) 4x7 + filo GERİ ATEŞ eder
+//           4) 5x7   5) 5x8 daha sık ateş   6) 6x8 en hızlı + en sık ateş
 //
 // Filo tek parça hareket eder (kenara değince yön değişir + bir kademe iner),
 // bu yüzden düşmanlar MV_NONE ve hareketi her_kare içinde biz sürüyoruz.
@@ -466,7 +609,8 @@ int uz_gemi = 0;
 array uz_filo = [];        // bölümün düşman handle'ları
 int uz_fdir = 1;           // filo yönü (+1 sağ, -1 sol)
 float uz_fspeed = 55.0;    // filo yatay hızı (px/sn)
-int uz_f_atis = 0;         // 1 = filo geri ateş eder (bölüm 3)
+int uz_f_atis = 0;         // 1 = filo geri ateş eder (bölüm 3+)
+int uz_f_period = 38;      // filo geri ateş periyodu (kare) — düştükçe daha sık
 int uz_t = 0;              // kare sayacı
 
 int uz_GEMI_Y = 430;
@@ -494,9 +638,12 @@ func uz_filo_kur(satir, sutun, y0, renk) {
 }
 
 // --- Bölümler ---------------------------------------------------------------
-func uz_b1() { uz_fspeed = 55.0;  uz_f_atis = 0; uz_filo_kur(3, 5, 70, LIME); }
-func uz_b2() { uz_fspeed = 85.0;  uz_f_atis = 0; uz_filo_kur(4, 6, 60, GOLD); }
-func uz_b3() { uz_fspeed = 115.0; uz_f_atis = 1; uz_filo_kur(4, 7, 55, RED);  }
+func uz_b1() { uz_fspeed = 55.0;  uz_f_atis = 0; uz_f_period = 38; uz_filo_kur(3, 5, 70, LIME);   }
+func uz_b2() { uz_fspeed = 85.0;  uz_f_atis = 0; uz_f_period = 38; uz_filo_kur(4, 6, 60, GOLD);   }
+func uz_b3() { uz_fspeed = 115.0; uz_f_atis = 1; uz_f_period = 38; uz_filo_kur(4, 7, 55, RED);    }
+func uz_b4() { uz_fspeed = 145.0; uz_f_atis = 1; uz_f_period = 34; uz_filo_kur(5, 7, 55, GOLD);   }
+func uz_b5() { uz_fspeed = 175.0; uz_f_atis = 1; uz_f_period = 30; uz_filo_kur(5, 8, 50, ORANGE); }
+func uz_b6() { uz_fspeed = 210.0; uz_f_atis = 1; uz_f_period = 24; uz_filo_kur(6, 8, 45, RED);    }
 
 func uz_her_kare_is() {
     float dt = frame_time();
@@ -537,7 +684,7 @@ func uz_her_kare_is() {
     }
 
     // --- Filo geri ateşi (bölüm 3) ------------------------------------------
-    if (uz_f_atis == 1 && mod(uz_t, 38) == 0) {
+    if (uz_f_atis == 1 && mod(uz_t, uz_f_period) == 0) {
         array canli = [];
         for (int i = 0; i < len(uz_filo); i = i + 1) {
             if (yasiyor(uz_filo[i])) { push(canli, uz_filo[i]); }
@@ -568,6 +715,9 @@ func uz_setup() {
     bolum(1, uz_b1);
     bolum(2, uz_b2);
     bolum(3, uz_b3);
+    bolum(4, uz_b4);
+    bolum(5, uz_b5);
+    bolum(6, uz_b6);
     her_kare(uz_her_kare_is);
     carpisinca(TAG_BULLET, TAG_ENEMY,   uz_vur_cb);
     carpisinca(TAG_PLAYER, TAG_ENEMY,   uz_kaybet_cb);
@@ -577,16 +727,18 @@ func uz_setup() {
 // ==========================================================================
 //  Labirent  (examples/arcade_labirent.tpr, önek la_)
 // ==========================================================================
-// Labirent (Kacis) — arcade preset motoru, 3 BÖLÜM.
+// Labirent (Kacis) — arcade preset motoru, 6 BÖLÜM.
 //
 //   ./tulpar examples/arcade_labirent.tpr
 //
 // Ok tuşları / WASD ile labirentte dolaş, tüm altın anahtarları topla (+10) →
-// sıradaki bölüm. 3 bölümü de bitir → KAZANDIN. Koridorlarda devriye gezen
+// sıradaki bölüm. 6 bölümü de bitir → KAZANDIN. Koridorlarda devriye gezen
 // kırmızılara değersen oyun biter, R ile baştan.
 //
 // Bölümler: 1) geniş labirent / 1 devriye   2) simetrik / 2 devriye
-//           3) sık labirent / 3 hızlı devriye
+//           3) sık labirent / 3 hızlı devriye   4-6) dar mükemmel-maze,
+//           artan devriye (2/3/4) ve hız — üreteçle kurulup ulaşılabilirlik
+//           flood-fill ile doğrulandı.
 //
 // Harita ASCII olarak yazılır ve `ord()` ile okunur — 20x15 hücre × 32px = 640x480.
 //   '#' duvar   '.' boşluk   'P' oyuncu   'A' anahtar   'E' devriye
@@ -661,6 +813,63 @@ array la_M3 = [
     "####################"
 ];
 
+// M4/M5/M6: garantili-bağlı maze üreteciyle (recursive backtracker) üretildi;
+// flood-fill ile tüm anahtarların ulaşılabilir, devriyelerin yatay koridorda
+// olduğu doğrulandı (scratchpad/maze_gen.py). Col 19 çift duvar — zararsız.
+array la_M4 = [
+    "####################",
+    "#P#...#.....E.#...##",
+    "#.#.#.#.###.#.#.#.##",
+    "#.#.#.#.#...#.#A#.##",
+    "#.#.#.#.#A###.###.##",
+    "#.#.#.#.#...#.#...##",
+    "#.#.#.#.###.#.#.####",
+    "#...#.#.#...#.#...##",
+    "#####.#.#.###.###.##",
+    "#.E.#.#A#.#A#.....##",
+    "#.#.#.###.#.#####.##",
+    "#.#...#...#.#...#.##",
+    "#.#####.###.#.#.#.##",
+    "#.......#A....#...##",
+    "####################"
+];
+
+array la_M5 = [
+    "####################",
+    "#P....#...E.......##",
+    "#####.#.#########.##",
+    "#.....#.#...#...#.##",
+    "#.#####.#.#.#.#.#.##",
+    "#.#E....#.#.A.#...##",
+    "#.#.#####.#######.##",
+    "#.#AE..A#...#A#...##",
+    "#.#######.#.#.#.####",
+    "#.#.....#.#.#.#.#A##",
+    "#.#.###.#.#.#.#.#.##",
+    "#.#.#...#A#.#.#...##",
+    "#.#.#.#####.#.###.##",
+    "#...#.......#.....##",
+    "####################"
+];
+
+array la_M6 = [
+    "####################",
+    "#P..#A........#...##",
+    "###.#####.###.#.#.##",
+    "#.#.....#...#...#.##",
+    "#.#####.###.#####.##",
+    "#.#...#....E#..A#.##",
+    "#.#.#.#######.###.##",
+    "#...#......A#.....##",
+    "#.#######.###.######",
+    "#..E..#A#.....#...##",
+    "#####.#.#########.##",
+    "#A#...#..........E##",
+    "#.#.#########.###.##",
+    "#........E....#A..##",
+    "####################"
+];
+
 array la_harita = [];       // güncel bölümün haritası
 int la_oyuncu_id = 0;
 
@@ -727,6 +936,9 @@ func la_kur() {
 func la_b1() { la_harita_kur(la_M1, 110); }
 func la_b2() { la_harita_kur(la_M2, 150); }
 func la_b3() { la_harita_kur(la_M3, 190); }
+func la_b4() { la_harita_kur(la_M4, 210); }
+func la_b5() { la_harita_kur(la_M5, 240); }
+func la_b6() { la_harita_kur(la_M6, 270); }
 
 // Devriyeleri koridor sınırında geri döndür (MV_VELOCITY duvar takmaz).
 func la_her_kare_is() {
@@ -762,6 +974,9 @@ func la_setup() {
     bolum(1, la_b1);
     bolum(2, la_b2);
     bolum(3, la_b3);
+    bolum(4, la_b4);
+    bolum(5, la_b5);
+    bolum(6, la_b6);
     her_kare(la_her_kare_is);
     carpisinca(TAG_PLAYER, TAG_ITEM,  la_topla_cb);
     carpisinca(TAG_PLAYER, TAG_ENEMY, la_kaybet_cb);
@@ -770,15 +985,16 @@ func la_setup() {
 // ==========================================================================
 //  Karsiya  (examples/arcade_karsiya.tpr, önek ka_)
 // ==========================================================================
-// Karsiya Gec (Frogger) — arcade preset motoru, 3 BÖLÜM.
+// Karsiya Gec (Frogger) — arcade preset motoru, 6 BÖLÜM.
 //
 //   ./tulpar examples/arcade_karsiya.tpr
 //
 // Ok tuşları / WASD ile hareket et; akan araçlara değmeden en üstteki altın
-// şeride ulaş (+50) → sıradaki bölüm. 3 bölümü de bitir → KAZANDIN.
+// şeride ulaş (+50) → sıradaki bölüm. 6 bölümü de bitir → KAZANDIN.
 // Bir araca değersen oyun biter, R ile baştan.
 //
 // Bölümler: 1) 3 şerit yavaş   2) 4 şerit   3) 5 şerit hızlı
+//           4-6) 5 şerit, artan yoğunluk/hız (boşluk ~50px, geçilebilir)
 //
 // Her şerit birkaç MV_VELOCITY entity'si; motor onları kendi hızlarıyla sürer,
 // biz sadece ekrandan çıkanı diğer taraftan geri sokuyoruz (sarma). Motor
@@ -838,6 +1054,33 @@ func ka_b3() {
     ka_serit(110, 240,      5, VIOLET);
 }
 
+// --- Bölüm 4: 5 şerit, daha yoğun/hızlı -------------------------------------
+func ka_b4() {
+    ka_serit(390, 200,      5, RED);
+    ka_serit(320, 0 - 220,  5, ORANGE);
+    ka_serit(250, 240,      6, MAROON);
+    ka_serit(180, 0 - 210,  5, PINK);
+    ka_serit(110, 260,      6, VIOLET);
+}
+
+// --- Bölüm 5: 5 şerit, çok yoğun --------------------------------------------
+func ka_b5() {
+    ka_serit(390, 230,      5, RED);
+    ka_serit(320, 0 - 250,  6, ORANGE);
+    ka_serit(250, 270,      6, MAROON);
+    ka_serit(180, 0 - 240,  5, PINK);
+    ka_serit(110, 290,      6, VIOLET);
+}
+
+// --- Bölüm 6: 5 şerit, en hızlı + en yoğun (boşluk ~50px, geçilebilir) -------
+func ka_b6() {
+    ka_serit(390, 260,      6, RED);
+    ka_serit(320, 0 - 280,  6, ORANGE);
+    ka_serit(250, 300,      6, MAROON);
+    ka_serit(180, 0 - 270,  6, PINK);
+    ka_serit(110, 300,      6, VIOLET);
+}
+
 // Ekrandan çıkan aracı diğer taraftan geri sok (motor sarma yapmaz).
 func ka_her_kare_is() {
     for (int i = 0; i < len(ka_arabalar); i = i + 1) {
@@ -866,6 +1109,9 @@ func ka_setup() {
     bolum(1, ka_b1);
     bolum(2, ka_b2);
     bolum(3, ka_b3);
+    bolum(4, ka_b4);
+    bolum(5, ka_b5);
+    bolum(6, ka_b6);
     her_kare(ka_her_kare_is);
     carpisinca(TAG_PLAYER, TAG_ITEM,  ka_hedef_cb);
     carpisinca(TAG_PLAYER, TAG_ENEMY, ka_kaybet_cb);
@@ -879,10 +1125,11 @@ func ka_setup() {
 //   ./tulpar examples/arcade_ucus.tpr
 //
 // SPACE / YUKARI ile kanat çırp; boruların arasından geç. Her geçiş +1.
-// Bölümdeki hedef sayıda boru geçince sıradaki bölüm; 3 bölümü de bitir →
+// Bölümdeki hedef sayıda boru geçince sıradaki bölüm; 6 bölümü de bitir →
 // KAZANDIN. Boruya, tavana ya da zemine çarparsan oyun biter, R ile baştan.
 //
-// Bölümler: 1) geniş boşluk / yavaş   2) dar / hızlı   3) en dar / en hızlı
+// Bölümler: 1) geniş boşluk/yavaş  2) dar/hızlı  3) en dar/en hızlı
+//           4-6) giderek daralan boşluk + hızlanan/daha sık boru, hedef 11/13/15
 //
 // Kuş MV_NONE: yerçekimi + kanat çırpma her_kare içinde ELLE sürülür (motorun
 // MV_PLATFORM zıplaması sadece zemindeyken çalışır; flappy havada çırpar).
@@ -931,9 +1178,12 @@ func uc_kur() {
 }
 
 // --- Bölümler ---------------------------------------------------------------
-func uc_b1() { uc_bosluk = 160; uc_boru_hiz = 150; uc_spawn_period = 100; uc_hedef = 5; }
-func uc_b2() { uc_bosluk = 135; uc_boru_hiz = 195; uc_spawn_period = 82;  uc_hedef = 7; }
-func uc_b3() { uc_bosluk = 115; uc_boru_hiz = 240; uc_spawn_period = 68;  uc_hedef = 9; }
+func uc_b1() { uc_bosluk = 160; uc_boru_hiz = 150; uc_spawn_period = 100; uc_hedef = 5;  }
+func uc_b2() { uc_bosluk = 135; uc_boru_hiz = 195; uc_spawn_period = 82;  uc_hedef = 7;  }
+func uc_b3() { uc_bosluk = 115; uc_boru_hiz = 240; uc_spawn_period = 68;  uc_hedef = 9;  }
+func uc_b4() { uc_bosluk = 108; uc_boru_hiz = 270; uc_spawn_period = 62;  uc_hedef = 11; }
+func uc_b5() { uc_bosluk = 100; uc_boru_hiz = 300; uc_spawn_period = 56;  uc_hedef = 13; }
+func uc_b6() { uc_bosluk = 92;  uc_boru_hiz = 330; uc_spawn_period = 50;  uc_hedef = 15; }
 
 // Bir boru çifti üret: üstte ve altta iki yeşil sütun, aralarında boşluk.
 func uc_boru_uret() {
@@ -1008,6 +1258,9 @@ func uc_setup() {
     bolum(1, uc_b1);
     bolum(2, uc_b2);
     bolum(3, uc_b3);
+    bolum(4, uc_b4);
+    bolum(5, uc_b5);
+    bolum(6, uc_b6);
     her_kare(uc_her_kare_is);
     ciz_ustune(uc_ciz_ek);
     carpisinca(TAG_PLAYER, TAG_ENEMY, uc_kaybet_cb);
@@ -1021,10 +1274,11 @@ func uc_setup() {
 //   ./tulpar examples/arcade_goktasi.tpr
 //
 // Sol/Sağ (A/D) ile kaç; yukarıdan düşen göktaşlarından sakın. Her bölümde
-// belirtilen süre hayatta kal → sıradaki bölüm. 3 bölümü de bitir → KAZANDIN.
+// belirtilen süre hayatta kal → sıradaki bölüm. 6 bölümü de bitir → KAZANDIN.
 // Bir göktaşına değersen oyun biter, R ile baştan. Kaçtığın her taş +1.
 //
-// Bölümler: 1) 12 sn / seyrek-yavaş   2) 15 sn / sık-hızlı   3) 18 sn / en yoğun
+// Bölümler: 1) 12 sn / seyrek-yavaş   2) 15 sn / sık-hızlı   3) 18 sn / yoğun
+//           4-6) 21/24/28 sn, giderek daha sık ve hızlı taş
 //
 // Göktaşları TAG_ENEMY + MV_VELOCITY (aşağı düşer); motor ekrandan 64px çıkanı
 // otomatik öldürür. "Kaçıldı" sayımı için taş handle'larını kendi dizimizde
@@ -1057,6 +1311,9 @@ func go_kur() {
 func go_b1() { go_HEDEF_SURE = 12.0; go_spawn_period = 28; go_tas_hiz = 200; }
 func go_b2() { go_HEDEF_SURE = 15.0; go_spawn_period = 20; go_tas_hiz = 260; }
 func go_b3() { go_HEDEF_SURE = 18.0; go_spawn_period = 14; go_tas_hiz = 320; }
+func go_b4() { go_HEDEF_SURE = 21.0; go_spawn_period = 12; go_tas_hiz = 360; }
+func go_b5() { go_HEDEF_SURE = 24.0; go_spawn_period = 11; go_tas_hiz = 400; }
+func go_b6() { go_HEDEF_SURE = 28.0; go_spawn_period = 10; go_tas_hiz = 440; }
 
 func go_her_kare_is() {
     float dt = frame_time();
@@ -1115,6 +1372,9 @@ func go_setup() {
     bolum(1, go_b1);
     bolum(2, go_b2);
     bolum(3, go_b3);
+    bolum(4, go_b4);
+    bolum(5, go_b5);
+    bolum(6, go_b6);
     her_kare(go_her_kare_is);
     ciz_ustune(go_ciz_ek);
     carpisinca(TAG_PLAYER, TAG_ENEMY, go_kaybet_cb);
@@ -1123,15 +1383,16 @@ func go_setup() {
 // ==========================================================================
 //  Yilan  (examples/arcade_yilan.tpr, önek yi_)
 // ==========================================================================
-// Yilan — arcade motoruyla izgara yilani, 3 BOLUM (tame_snake'in arcade esi).
+// Yilan — arcade motoruyla izgara yilani, 6 BOLUM (tame_snake'in arcade esi).
 //
 //   ./tulpar examples/arcade_yilan.tpr
 //
 // Kontroller: ok tuslari/WASD, mobilde dpad butonlari VEYA parmak kaydirma
 // (kaydirildi() jesti — yilana en dogal his). Yem (kirmizi) ye -> buyu.
 // Duvara, engele ya da kendine carpma. Her bolumde 5 yem -> sonraki bolum;
-// 1) yavas  2) hizli  3) en hizli + engel duvarlari. Skor bolumler arasi
-// korunur (motorun bolum semantigi).
+// 1) yavas  2) hizli  3) en hizli + iki dikey duvar   4) yatay bariyerler
+// 5) uc dikey duvar (daha hizli)   6) dort duvarli maze (satir 7 koridoru acik).
+// Skor bolumler arasi korunur (motorun bolum semantigi).
 //
 // Motor kullanimi: entity YOK — yilan durumu izgara dizilerinde, cizim
 // ciz_ustune() ile elle. bolum()/skor/oyun-bitti/afis/HUD motordan bedava.
@@ -1213,10 +1474,51 @@ func yi_engel_kur() {
     }
 }
 
+// 4. bolum: iki yatay bariyer (satir 4 ve 10), ortada 2 hucrelik gecis; dogus
+// satiri 7 tamamen acik.
+func yi_engel_kur_b4() {
+    yi_egx = []; yi_egy = [];
+    for (int c = 3; c < 17; c = c + 1) {
+        if (c != 9 && c != 10) {
+            push(yi_egx, c); push(yi_egy, 4);
+            push(yi_egx, c); push(yi_egy, 10);
+        }
+    }
+}
+
+// 5. bolum: uc dikey duvar (sutun 5/10/15), yalniz orta serit (6/7/8) acik.
+func yi_engel_kur_b5() {
+    yi_egx = []; yi_egy = [];
+    for (int r = 1; r < yi_ROWS - 1; r = r + 1) {
+        if (r != 6 && r != 7 && r != 8) {
+            push(yi_egx, 5);  push(yi_egy, r);
+            push(yi_egx, 10); push(yi_egy, r);
+            push(yi_egx, 15); push(yi_egy, r);
+        }
+    }
+}
+
+// 6. bolum: dort dikey duvar (4/8/12/16), sasirtmali dikey gecisler; satir 7
+// bir uctan bir uca acik koridor kalir (dogus + tas geçişi garanti).
+func yi_engel_kur_b6() {
+    yi_egx = []; yi_egy = [];
+    for (int r = 1; r < yi_ROWS - 1; r = r + 1) {
+        if (r != 7) {
+            if (r != 3)  { push(yi_egx, 4);  push(yi_egy, r); }
+            if (r != 10) { push(yi_egx, 8);  push(yi_egy, r); }
+            if (r != 4)  { push(yi_egx, 12); push(yi_egy, r); }
+            if (r != 9)  { push(yi_egx, 16); push(yi_egy, r); }
+        }
+    }
+}
+
 // ---- Bolumler ---------------------------------------------------------------
 func yi_b1() { yi_adim_kare = 8; yi_egx = []; yi_egy = []; yi_yilan_kur(); }
 func yi_b2() { yi_adim_kare = 6; yi_egx = []; yi_egy = []; yi_yilan_kur(); }
-func yi_b3() { yi_adim_kare = 4; yi_engel_kur(); yi_yilan_kur(); }
+func yi_b3() { yi_adim_kare = 4; yi_engel_kur();    yi_yilan_kur(); }
+func yi_b4() { yi_adim_kare = 4; yi_engel_kur_b4(); yi_yilan_kur(); }
+func yi_b5() { yi_adim_kare = 3; yi_engel_kur_b5(); yi_yilan_kur(); }
+func yi_b6() { yi_adim_kare = 3; yi_engel_kur_b6(); yi_yilan_kur(); }
 
 // ---- Kare guncelleme --------------------------------------------------------
 func yi_kare() {
@@ -1291,6 +1593,9 @@ func yi_setup() {
     bolum(1, yi_b1);
     bolum(2, yi_b2);
     bolum(3, yi_b3);
+    bolum(4, yi_b4);
+    bolum(5, yi_b5);
+    bolum(6, yi_b6);
     her_kare(yi_kare);
     ciz_ustune(yi_ciz);
 }
@@ -1459,6 +1764,8 @@ func tf_ciz() {
     }
 }
 
+yildiz_hedef(100, 400, 1000);   // sonsuz oyun: skor esiginden yildiz (1/2/3)
+
 func tf_setup() {
     bilgi("Parmaginla KAYDIR (mobil) / ok tuslari (masaustu)  |  Ayni sayilar toplanir");
     kontrol_semasi("yok");    // ekranda buton YOK — sadece kaydirma jesti (+masaustu ok tuslari)
@@ -1573,6 +1880,8 @@ func pg_ai_cb() {
     konumla(b, 606.0 - 14.0, y_of(b));
 }
 
+yildiz_hedef(5, 15, 30);        // sonsuz oyun: rally sayisindan yildiz (1/2/3)
+
 func pg_setup() {
     bilgi("Yukari/Asagi veya W/S: raket  |  Topu kacirma, her iade +1");
     kontrol_semasi("dikey");  // mobilde YUKARI/ASAGI ok butonlari (raket dikey hareket)
@@ -1664,6 +1973,8 @@ func vr_ciz() {
         }
     }
 }
+
+yildiz_hedef(10, 25, 50);       // sonsuz oyun: vurus sayisindan yildiz (1/2/3)
 
 func vr_setup() {
     bilgi("Yanan kareye dokun (+1)  |  Kostebek kacmadan vur, giderek hizlanir");

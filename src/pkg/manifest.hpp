@@ -87,6 +87,14 @@ struct Manifest {
     std::string android_assets;
     std::string android_splash_color;   // "#RRGGBB" — açılış/splash arka planı
 
+    // [build] — `tulpar build` bunları CLI bayrağı verilmediğinde kullanır.
+    // target: "desktop" (varsayılan) | "web" | "android" | "apk" | "aab".
+    // entry:  varsayılan kaynak .tpr (manifest dizinine göreli / CWD).
+    // output: varsayılan çıktı adı.
+    std::string build_target;
+    std::string build_entry;
+    std::string build_output;
+
     // Round-trip serialise this manifest back to the TOML subset we
     // accept on input. Idempotent — reading a manifest, serialising it,
     // and re-reading produces the same struct.

@@ -3,10 +3,11 @@
 //   ./tulpar examples/arcade_ucus.tpr
 //
 // SPACE / YUKARI ile kanat çırp; boruların arasından geç. Her geçiş +1.
-// Bölümdeki hedef sayıda boru geçince sıradaki bölüm; 3 bölümü de bitir →
+// Bölümdeki hedef sayıda boru geçince sıradaki bölüm; 6 bölümü de bitir →
 // KAZANDIN. Boruya, tavana ya da zemine çarparsan oyun biter, R ile baştan.
 //
-// Bölümler: 1) geniş boşluk / yavaş   2) dar / hızlı   3) en dar / en hızlı
+// Bölümler: 1) geniş boşluk/yavaş  2) dar/hızlı  3) en dar/en hızlı
+//           4-6) giderek daralan boşluk + hızlanan/daha sık boru, hedef 11/13/15
 //
 // Kuş MV_NONE: yerçekimi + kanat çırpma her_kare içinde ELLE sürülür (motorun
 // MV_PLATFORM zıplaması sadece zemindeyken çalışır; flappy havada çırpar).
@@ -56,9 +57,12 @@ func kur() {
 }
 
 // --- Bölümler ---------------------------------------------------------------
-func b1() { bosluk = 160; boru_hiz = 150; spawn_period = 100; hedef = 5; }
-func b2() { bosluk = 135; boru_hiz = 195; spawn_period = 82;  hedef = 7; }
-func b3() { bosluk = 115; boru_hiz = 240; spawn_period = 68;  hedef = 9; }
+func b1() { bosluk = 160; boru_hiz = 150; spawn_period = 100; hedef = 5;  }
+func b2() { bosluk = 135; boru_hiz = 195; spawn_period = 82;  hedef = 7;  }
+func b3() { bosluk = 115; boru_hiz = 240; spawn_period = 68;  hedef = 9;  }
+func b4() { bosluk = 108; boru_hiz = 270; spawn_period = 62;  hedef = 11; }
+func b5() { bosluk = 100; boru_hiz = 300; spawn_period = 56;  hedef = 13; }
+func b6() { bosluk = 92;  boru_hiz = 330; spawn_period = 50;  hedef = 15; }
 
 // Bir boru çifti üret: üstte ve altta iki yeşil sütun, aralarında boşluk.
 func boru_uret() {
@@ -133,6 +137,9 @@ baslangicta(kur);
 bolum(1, b1);
 bolum(2, b2);
 bolum(3, b3);
+bolum(4, b4);
+bolum(5, b5);
+bolum(6, b6);
 her_kare(her_kare_is);
 ciz_ustune(ciz_ek);
 carpisinca(TAG_PLAYER, TAG_ENEMY, kaybet_cb);

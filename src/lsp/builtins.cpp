@@ -59,6 +59,7 @@ const BuiltinEntry kBuiltins[] = {
     {"tm_accel_available", "tm_accel_available(): bool",                "Cihazda ivmeölçer var ve okunuyor mu. Masaüstü/web: false. Sarmalayıcı: accel_available()/egim_var()."},
     {"tm_active",       "tm_active(): bool",                            "Uygulama önde/odakta mı (arka plana atılınca false). Sarmalayıcı: is_active()/aktif_mi()."},
     {"tm_beep",         "tm_beep(freq: float, ms: int)",                "Dosyasız ses efekti: freq Hz sinüs, ms milisaniye çalar (kısa oyun sesleri). Sarmalayıcı: beep()/bip()."},
+    {"tm_tone",         "tm_tone(freq: float, ms: int, vol: float)",    "tm_beep'in ses-seviyeli hali: vol 0..1 genliği ölçekler. Arka plan müziği notalarını SFX'i bastırmadan kısık çalmak için. Sarmalayıcı: tone()/ton()."},
     {"tm_time",         "tm_time(): float",                             "Pencere açıldığından beri geçen süre (saniye). Sarmalayıcı: elapsed()."},
     {"tm_width",        "tm_width(): int",                              "Pencere genişliği (piksel). Sarmalayıcı: screen_width()."},
     {"tm_height",       "tm_height(): int",                             "Pencere yüksekliği (piksel). Sarmalayıcı: screen_height()."},

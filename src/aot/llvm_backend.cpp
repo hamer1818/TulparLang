@@ -782,6 +782,7 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm_accel_available", "aot_tm_accel_available_ptr", 0},
     {"tm_active", "aot_tm_active_ptr", 0},
     {"tm_beep", "aot_tm_beep_ptr", 2},
+    {"tm_tone", "aot_tm_tone_ptr", 3},
     // çizim
     {"tm_clear", "aot_tm_clear_ptr", 1},
     {"tm_rect", "aot_tm_rect_ptr", 5},
@@ -2201,7 +2202,7 @@ void register_function(LLVMBackend *backend, const char *name,
   // dropped function null-derefs and crashes codegen (segfault, no diagnostic).
   // A program that links a big stdlib module (e.g. wings) plus its own handlers
   // can legitimately approach this — fail loudly rather than miscompile.
-  const int kMaxFunctions = 512;
+  const int kMaxFunctions = 1024;
   if (backend->function_count >= kMaxFunctions) {
     fprintf(stderr,
             "[AOT] Fatal: function table overflow (> %d functions). "

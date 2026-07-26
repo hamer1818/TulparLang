@@ -1,14 +1,51 @@
-# Resmi "Tulpar Arcade" uygulamasinin Android kimligi.
-# APK uretimi (bu dizinden):
-#   ../../tulpar build --apk ../arcade_launcher.tpr tulpar-arcade
+# ============================================================================
+#  Tulpar Arcade — resmi uygulama kimliği (Tulpar'in manifest dosyasi, TOML).
+#  Uygulamayla ilgili TUM meta burada durur; derleyici Android APK'sini bu
+#  dosyadan uretir (paket adi, gorunen isim, ikon, yon, surum...).
+#
+#  NOT: parser satir-ICI yorum (deger  # ...) DESTEKLEMEZ — yorumlar yalniz
+#  kendi satirinda '#' ile. Deger satirlarina yorum EKLEME (kimligi bozar).
+# ============================================================================
+#
+#  APK URETIMI — HER ZAMAN bu kimlikle derle (yoksa generic "out_apk" /
+#  dev.tulparlang.game cikar: android:label cikti klasor adindan gelir):
+#
+#    cd examples/arcade_app
+#    ../../tulpar build --target=android ../arcade_launcher.tpr tulpar-arcade
+#    ../../android/package_apk.sh tulpar-arcade_apk tulpar-arcade.apk
+#    # tek adimda imzali APK: ../../tulpar build --apk ../arcade_launcher.tpr tulpar-arcade
+#
+#  Kurulum:  adb install -r tulpar-arcade.apk   (paket: dev.tulparlang.arcade)
+
 name = "tulpar-arcade"
 version = "1.0.0"
 description = "Tulpar Arcade - 10 mini oyun tek APK'da (TulparLang ile yazildi)"
+author = "TulparLang"
+license = "MIT"
 
+# [android] — cihazda gorunen uygulama kimligi.
+#   package      : Play Store'da benzersiz paket kimligi
+#   name         : cihazda gorunen uygulama adi (android:label)
+#   icon         : baslatici ikonu (bu dizinde)
+#   orientation  : oyunlar yatay
+#   splash_color : acilis/splash arka plani (menu temasi rgb 16,18,26 = #10121A)
+#   version_code : her yayinda ARTIR (Play upgrade + adb -r downgrade'i reddeder)
+#   version_name : kullaniciya gorunen surum
 [android]
 package = "dev.tulparlang.arcade"
 name = "Tulpar Arcade"
 icon = "icon.png"
 orientation = "landscape"
+splash_color = "#10121A"
 version_code = "1"
 version_name = "1.0"
+
+# [build] — `tulpar build` (bu dizinde, bayraksiz) bunlari okur:
+#   target : desktop | web | android | apk | aab   ("apk" = android + imzali .apk)
+#   entry  : varsayilan kaynak .tpr (bu dizine goreli)
+#   output : varsayilan cikti adi (.apk/.html/... eklenir)
+# Boylece guncelleme = sadece:  cd examples/arcade_app && ../../tulpar build
+[build]
+target = "apk"
+entry = "../arcade_launcher.tpr"
+output = "tulpar-arcade"

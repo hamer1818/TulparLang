@@ -1,0 +1,126 @@
+import "test";
+import "arcade";
+
+// Yıldız (ilerleme) + rozet katmanı — HEADLESS (pencere açılmaz; save/load
+// raylib dosya API'si pencere istemez, adim(dt) frame_time kullanmaz).
+//
+// BÖLÜM BAŞINA yıldız: her bölüm geçildikçe O BÖLÜMÜN yıldızı kazanılır
+// (arcade_lvl_<ad>_<k>.txt). Sonsuz oyun: yildiz_hedef(a,b,c) skor eşiklerinden.
+
+int p_id = 0;
+
+func kur_global() {
+    p_id = uret(100, 100, 24, 24, BLUE, TAG_PLAYER, MV_NONE);
+}
+func kur_b1() { esya(100, 100, 16, 16, GOLD); }
+func kur_b2() { esya(100, 100, 16, 16, GOLD); }
+func kur_b3() { esya(100, 100, 16, 16, GOLD); }
+func kur_b4() { esya(100, 100, 16, 16, GOLD); }
+func topla_cb() {
+    oldur(oteki());
+    skor_ekle(10);
+    if (tag_sayisi(TAG_ITEM) == 0) { bolum_gec(); }
+}
+
+// Temiz başlangıç: kalıcı bölüm/en-iyi/rozet dosyalarını sıfırla (hermetik).
+func sifirla_kayit() {
+    int k = 1;
+    while (k <= 4) { save_data("arcade_lvl_YildizTest_" + toString(k) + ".txt", "0"); k = k + 1; }
+    save_data("arcade_best_YildizTest.txt", "0");
+    save_data("arcade_star_SonsuzTest.txt", "0");
+    save_data("arcade_best_SonsuzTest.txt", "0");
+    int i = 0;
+    while (i < 5) { save_data("arcade_badge_" + toString(i) + ".txt", "0"); i = i + 1; }
+    _badges_loaded = false;   // diskten yeniden okusun
+}
+
+// Tek bir 4-bölümlü oyun kaydı (modül yüklenince, main'den önce çalışır).
+baslangicta(kur_global);
+bolum(1, kur_b1);
+bolum(2, kur_b2);
+bolum(3, kur_b3);
+bolum(4, kur_b4);
+carpisinca(TAG_PLAYER, TAG_ITEM, topla_cb);
+
+// ---- Testler ----------------------------------------------------------------
+
+// Bölüm başına yıldız: her adım bir bölümü geçip O BÖLÜMÜN yıldızını yazar.
+func run_bolum_yildizi() {
+    _ar_title = "YildizTest";
+    sifirla_kayit();
+    _lx_load_lvl_done("YildizTest", 4);
+    _ar_reset();
+    assert_eq_int(_count_done_levels("YildizTest", 4), 0);
+
+    adim(0.016);                  // bölüm 1 geçildi → 1. bölümün yıldızı
+    assert_eq_int(bolum_no(), 2);
+    assert_eq_int(_count_done_levels("YildizTest", 4), 1);
+    assert_eq_int(_lvl_done[0], 1);
+
+    adim(0.016);                  // bölüm 2 geçildi
+    assert_eq_int(_count_done_levels("YildizTest", 4), 2);
+    assert_eq_int(_lvl_done[1], 1);
+
+    adim(0.016); adim(0.016);     // bölüm 3 + 4 (son → kazandın)
+    assert_eq_bool(kazandin_mi(), true);
+    assert_eq_int(_count_done_levels("YildizTest", 4), 4);   // hepsi tamamlandı
+}
+
+// Belirli bir bölümden başlama: _ar_start_level = 3 → reset 3. bölüme döner.
+func run_baslangic_bolumu() {
+    _ar_title = "YildizTest";
+    _ar_start_level = 3;
+    _ar_reset();
+    assert_eq_int(bolum_no(), 3);
+    _ar_start_level = 1;          // diğer testleri etkilemesin
+}
+
+// Rozet: kazanma → "İlk Zafer" (0), rekor → "Rekortmen" (1).
+func run_rozet() {
+    _ar_title = "YildizTest";
+    sifirla_kayit();
+    _lx_load_lvl_done("YildizTest", 4);
+    _ar_reset();
+    assert_eq_bool(_badge_has(0), false);
+
+    adim(0.016); adim(0.016); adim(0.016); adim(0.016);   // 4 bölüm → kazan
+    assert_eq_bool(kazandin_mi(), true);
+    assert_eq_bool(_badge_has(0), true);   // İlk Zafer (kazanınca)
+
+    _badges_loaded = false;                // kalıcı: yeniden yükle
+    assert_eq_bool(_badge_has(0), true);
+
+    skor_ata(999);
+    _ar_check_record();
+    assert_eq_bool(_badge_has(1), true);   // Rekortmen (rekor kırınca)
+}
+
+// Sonsuz oyun yıldızı: yildiz_hedef eşiklerinden.
+func run_yildiz_hedef() {
+    _ar_title = "SonsuzTest";
+    save_data("arcade_star_SonsuzTest.txt", "0");
+    _ar_reset();
+    star_goals(10, 50, 100);      // 1★=10, 2★=50, 3★=100
+    _level_n = 0;                 // sonsuz (bölüm yok)
+
+    skor_ata(30);
+    _ar_check_record();
+    assert_eq_int(stars(), 1);    // 30 ≥ 10, < 50
+
+    skor_ata(70);
+    _ar_check_record();
+    assert_eq_int(stars(), 2);    // 70 ≥ 50, < 100
+
+    skor_ata(150);
+    _ar_check_record();
+    assert_eq_int(stars(), 3);    // 150 ≥ 100
+}
+
+func main() {
+    test("bölüm başına yıldız", run_bolum_yildizi);
+    test("belirli bölümden başla", run_baslangic_bolumu);
+    test("rozet — kazanma + rekor", run_rozet);
+    test("yıldız — sonsuz eşik", run_yildiz_hedef);
+}
+
+main();

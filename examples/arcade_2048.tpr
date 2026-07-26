@@ -163,6 +163,7 @@ func ciz() {
 sahne(640, 480, "2048");
 bilgi("Parmaginla KAYDIR (mobil) / ok tuslari (masaustu)  |  Ayni sayilar toplanir");
 kontrol_semasi("yok");    // ekranda buton YOK — sadece kaydirma jesti (+masaustu ok tuslari)
+yildiz_hedef(100, 400, 1000);   // sonsuz oyun: skor esiginden yildiz (1/2/3)
 baslangicta(kur);
 her_kare(kare);
 ciz_ustune(ciz);

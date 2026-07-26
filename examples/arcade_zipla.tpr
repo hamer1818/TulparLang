@@ -1,14 +1,16 @@
-// Zipla — platformer preset'i (yerçekimi + platformlar + zıplama), 3 BÖLÜM.
+// Zipla — platformer preset'i (yerçekimi + platformlar + zıplama), 6 BÖLÜM.
 //
 //   ./tulpar examples/arcade_zipla.tpr
 //
 // Sol/Sağ (A/D) ile yürü, SPACE / YUKARI ile zıpla. Yerçekimi, zemin ve
 // `duvar()` platformlarına iniş hazır gelir. Platformları tırmanıp altın hedefe
-// ulaş → +100 ve sıradaki bölüm. 3 bölümü de bitir → KAZANDIN.
+// ulaş → +100 ve sıradaki bölüm. 6 bölümü de bitir → KAZANDIN.
 // Fizik/çarpışma/döngü/çizim kodu YOK; bölüm fn'leri sadece düzeni kurar.
 //
 // Bölümler:  1) kolay, 2 platform   2) daha uzak/yüksek atlayışlar, 4 platform
 //            3) dar platformlar + gidip gelen ölümcül engel
+//            4) 5 platform zikzak + süpüren engel   5) 5 platform + 2 karşıt engel
+//            6) dar platformlar + 2 hızlı engel (en zor)
 //
 // Zıplama payı (yercekimi 1400 / ziplama 640): tepe yüksekliği ~146px, havada
 // kalma ~0.91sn → ~180px yatay. Düzenler bu yüzden ≤80px dikey / ≤140px yatay
@@ -16,14 +18,21 @@
 
 import "arcade";
 
-int engel_id = 0;      // 3. bölümdeki gidip gelen engel
+array engeller = [];   // gidip gelen ölümcül engeller (bölüm başına)
+
+// Engel üret + kenarda sekmesi için listeye al. vy!=0 ise dikey de gider.
+func engel_ekle(x, y, vx, vy) {
+    int e = uret(x, y, 24, 24, RED, TAG_ENEMY, MV_VELOCITY);
+    hiz_ver(e, vx, vy);
+    push(engeller, e);
+}
 
 // Global kurulum — her bölüm yüklemesinde bölüm fn'inden ÖNCE çalışır.
 func kur() {
     temizle();
     oyuncu_p(40, 380, 28, 28, SKYBLUE);          // platformer oyuncusu (tek satır)
     duvar(0, 448, 640, 32, DARKGRAY);            // zemin şeridi (her bölümde var)
-    engel_id = 0;
+    engeller = [];
 }
 
 // --- Bölüm 1: iki platform, rahat atlayış -----------------------------------
@@ -50,18 +59,56 @@ func b3() {
     duvar(250, 156, 76, 20, BROWN);
     esya(288, 118, 24, 24, GOLD);
     // Yatay gidip gelen engel — tırmanış hattını keser (duvarları takmaz).
-    engel_id = uret(60, 250, 24, 24, RED, TAG_ENEMY, MV_VELOCITY);
-    hiz_ver(engel_id, 170, 0);
+    engel_ekle(60, 250, 170, 0);
 }
 
-// Engeli ekran kenarlarında geri döndür (motor MV_VELOCITY'yi sınırda tutmaz).
+// --- Bölüm 4: beş platform zikzak + orta şeritte süpüren engel ---------------
+func b4() {
+    duvar(140, 376, 96, 20, BROWN);
+    duvar(330, 300, 96, 20, BROWN);
+    duvar(140, 224, 96, 20, BROWN);
+    duvar(330, 148, 96, 20, BROWN);
+    esya(366, 110, 24, 24, GOLD);                // en üst platformun üstünde
+    engel_ekle(300, 340, 200, 0);                // alt-orta şeridi süpürür
+}
+
+// --- Bölüm 5: beş platform + iki karşıt yönlü engel --------------------------
+func b5() {
+    duvar(120, 388, 88, 20, BROWN);
+    duvar(300, 316, 88, 20, BROWN);
+    duvar(120, 244, 88, 20, BROWN);
+    duvar(300, 172, 88, 20, BROWN);
+    duvar(120, 104, 88, 20, BROWN);
+    esya(150, 66, 24, 24, GOLD);
+    engel_ekle(300, 352, 210, 0);                // alt şerit
+    engel_ekle(300, 208, 0 - 190, 0);            // orta şerit (ters yön)
+}
+
+// --- Bölüm 6: dar platformlar + iki hızlı engel (en zor) --------------------
+func b6() {
+    duvar(140, 392, 74, 20, BROWN);
+    duvar(320, 324, 74, 20, BROWN);
+    duvar(140, 256, 74, 20, BROWN);
+    duvar(320, 188, 74, 20, BROWN);
+    duvar(140, 120, 74, 20, BROWN);
+    esya(168, 82, 24, 24, GOLD);
+    engel_ekle(320, 358, 230, 0);                // alt şerit (hızlı)
+    engel_ekle(320, 222, 0 - 210, 0);            // orta şerit (hızlı, ters)
+}
+
+// Engelleri ekran kenarlarında geri döndür (motor MV_VELOCITY'yi sınırda tutmaz).
 func her_kare_is() {
-    if (engel_id == 0) { return; }
-    if (!yasiyor(engel_id)) { return; }
-    float ex = x_of(engel_id);
-    float evx = vx_of(engel_id);
-    if (ex < 20.0    && evx < 0.0) { hiz_ver(engel_id, 0.0 - evx, 0); }
-    if (ex > 596.0   && evx > 0.0) { hiz_ver(engel_id, 0.0 - evx, 0); }
+    for (int i = 0; i < len(engeller); i = i + 1) {
+        int e = engeller[i];
+        if (!yasiyor(e)) { continue; }
+        float ex = x_of(e); float ey = y_of(e);
+        float evx = vx_of(e); float evy = vy_of(e);
+        if (ex < 20.0  && evx < 0.0) { evx = 0.0 - evx; }
+        if (ex > 596.0 && evx > 0.0) { evx = 0.0 - evx; }
+        if (ey < 20.0  && evy < 0.0) { evy = 0.0 - evy; }
+        if (ey > 420.0 && evy > 0.0) { evy = 0.0 - evy; }
+        hiz_ver(e, evx, evy);
+    }
 }
 
 func hedef_cb() {                                  // hedefe ulaş → sıradaki bölüm
@@ -82,6 +129,9 @@ baslangicta(kur);
 bolum(1, b1);
 bolum(2, b2);
 bolum(3, b3);
+bolum(4, b4);
+bolum(5, b5);
+bolum(6, b6);
 her_kare(her_kare_is);
 carpisinca(TAG_PLAYER, TAG_ITEM,  hedef_cb);
 carpisinca(TAG_PLAYER, TAG_ENEMY, kaybet_cb);

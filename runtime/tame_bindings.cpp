@@ -46,6 +46,7 @@ double tame_impl_accel_z(void);
 int tame_impl_accel_available(void);
 int tame_impl_active(void);
 void tame_impl_beep(double freq, int ms);
+void tame_impl_tone(double freq, int ms, double vol);
 void tame_impl_clear(int64_t color);
 void tame_impl_rect(double x, double y, double w, double h, int64_t color);
 void tame_impl_rect_lines(double x, double y, double w, double h,
@@ -416,6 +417,10 @@ VMValue aot_tm_accel_available_ptr(void) {
 VMValue aot_tm_active_ptr(void) { return VM_BOOL(tame_impl_active() != 0); }
 VMValue aot_tm_beep_ptr(VMValue *freq, VMValue *ms) {
   tame_impl_beep(tm_num(freq), (int)tm_int(ms));
+  return VM_VOID();
+}
+VMValue aot_tm_tone_ptr(VMValue *freq, VMValue *ms, VMValue *vol) {
+  tame_impl_tone(tm_num(freq), (int)tm_int(ms), tm_num(vol));
   return VM_VOID();
 }
 

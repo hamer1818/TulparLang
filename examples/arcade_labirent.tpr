@@ -1,13 +1,15 @@
-// Labirent (Kacis) — arcade preset motoru, 3 BÖLÜM.
+// Labirent (Kacis) — arcade preset motoru, 6 BÖLÜM.
 //
 //   ./tulpar examples/arcade_labirent.tpr
 //
 // Ok tuşları / WASD ile labirentte dolaş, tüm altın anahtarları topla (+10) →
-// sıradaki bölüm. 3 bölümü de bitir → KAZANDIN. Koridorlarda devriye gezen
+// sıradaki bölüm. 6 bölümü de bitir → KAZANDIN. Koridorlarda devriye gezen
 // kırmızılara değersen oyun biter, R ile baştan.
 //
 // Bölümler: 1) geniş labirent / 1 devriye   2) simetrik / 2 devriye
-//           3) sık labirent / 3 hızlı devriye
+//           3) sık labirent / 3 hızlı devriye   4-6) dar mükemmel-maze,
+//           artan devriye (2/3/4) ve hız — üreteçle kurulup ulaşılabilirlik
+//           flood-fill ile doğrulandı.
 //
 // Harita ASCII olarak yazılır ve `ord()` ile okunur — 20x15 hücre × 32px = 640x480.
 //   '#' duvar   '.' boşluk   'P' oyuncu   'A' anahtar   'E' devriye
@@ -83,6 +85,63 @@ array M3 = [
     "####################"
 ];
 
+// M4/M5/M6: garantili-bağlı maze üreteciyle (recursive backtracker) üretildi;
+// flood-fill ile tüm anahtarların ulaşılabilir, devriyelerin yatay koridorda
+// olduğu doğrulandı (scratchpad/maze_gen.py). Col 19 çift duvar — zararsız.
+array M4 = [
+    "####################",
+    "#P#...#.....E.#...##",
+    "#.#.#.#.###.#.#.#.##",
+    "#.#.#.#.#...#.#A#.##",
+    "#.#.#.#.#A###.###.##",
+    "#.#.#.#.#...#.#...##",
+    "#.#.#.#.###.#.#.####",
+    "#...#.#.#...#.#...##",
+    "#####.#.#.###.###.##",
+    "#.E.#.#A#.#A#.....##",
+    "#.#.#.###.#.#####.##",
+    "#.#...#...#.#...#.##",
+    "#.#####.###.#.#.#.##",
+    "#.......#A....#...##",
+    "####################"
+];
+
+array M5 = [
+    "####################",
+    "#P....#...E.......##",
+    "#####.#.#########.##",
+    "#.....#.#...#...#.##",
+    "#.#####.#.#.#.#.#.##",
+    "#.#E....#.#.A.#...##",
+    "#.#.#####.#######.##",
+    "#.#AE..A#...#A#...##",
+    "#.#######.#.#.#.####",
+    "#.#.....#.#.#.#.#A##",
+    "#.#.###.#.#.#.#.#.##",
+    "#.#.#...#A#.#.#...##",
+    "#.#.#.#####.#.###.##",
+    "#...#.......#.....##",
+    "####################"
+];
+
+array M6 = [
+    "####################",
+    "#P..#A........#...##",
+    "###.#####.###.#.#.##",
+    "#.#.....#...#...#.##",
+    "#.#####.###.#####.##",
+    "#.#...#....E#..A#.##",
+    "#.#.#.#######.###.##",
+    "#...#......A#.....##",
+    "#.#######.###.######",
+    "#..E..#A#.....#...##",
+    "#####.#.#########.##",
+    "#A#...#..........E##",
+    "#.#.#########.###.##",
+    "#........E....#A..##",
+    "####################"
+];
+
 array harita = [];       // güncel bölümün haritası
 int oyuncu_id = 0;
 
@@ -149,6 +208,9 @@ func kur() {
 func b1() { harita_kur(M1, 110); }
 func b2() { harita_kur(M2, 150); }
 func b3() { harita_kur(M3, 190); }
+func b4() { harita_kur(M4, 210); }
+func b5() { harita_kur(M5, 240); }
+func b6() { harita_kur(M6, 270); }
 
 // Devriyeleri koridor sınırında geri döndür (MV_VELOCITY duvar takmaz).
 func her_kare_is() {
@@ -184,6 +246,9 @@ baslangicta(kur);
 bolum(1, b1);
 bolum(2, b2);
 bolum(3, b3);
+bolum(4, b4);
+bolum(5, b5);
+bolum(6, b6);
 her_kare(her_kare_is);
 carpisinca(TAG_PLAYER, TAG_ITEM,  topla_cb);
 carpisinca(TAG_PLAYER, TAG_ENEMY, kaybet_cb);

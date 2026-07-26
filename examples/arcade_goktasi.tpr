@@ -3,10 +3,11 @@
 //   ./tulpar examples/arcade_goktasi.tpr
 //
 // Sol/Sağ (A/D) ile kaç; yukarıdan düşen göktaşlarından sakın. Her bölümde
-// belirtilen süre hayatta kal → sıradaki bölüm. 3 bölümü de bitir → KAZANDIN.
+// belirtilen süre hayatta kal → sıradaki bölüm. 6 bölümü de bitir → KAZANDIN.
 // Bir göktaşına değersen oyun biter, R ile baştan. Kaçtığın her taş +1.
 //
-// Bölümler: 1) 12 sn / seyrek-yavaş   2) 15 sn / sık-hızlı   3) 18 sn / en yoğun
+// Bölümler: 1) 12 sn / seyrek-yavaş   2) 15 sn / sık-hızlı   3) 18 sn / yoğun
+//           4-6) 21/24/28 sn, giderek daha sık ve hızlı taş
 //
 // Göktaşları TAG_ENEMY + MV_VELOCITY (aşağı düşer); motor ekrandan 64px çıkanı
 // otomatik öldürür. "Kaçıldı" sayımı için taş handle'larını kendi dizimizde
@@ -40,6 +41,9 @@ func kur() {
 func b1() { HEDEF_SURE = 12.0; spawn_period = 28; tas_hiz = 200; }
 func b2() { HEDEF_SURE = 15.0; spawn_period = 20; tas_hiz = 260; }
 func b3() { HEDEF_SURE = 18.0; spawn_period = 14; tas_hiz = 320; }
+func b4() { HEDEF_SURE = 21.0; spawn_period = 12; tas_hiz = 360; }
+func b5() { HEDEF_SURE = 24.0; spawn_period = 11; tas_hiz = 400; }
+func b6() { HEDEF_SURE = 28.0; spawn_period = 10; tas_hiz = 440; }
 
 func her_kare_is() {
     float dt = frame_time();
@@ -98,6 +102,9 @@ baslangicta(kur);
 bolum(1, b1);
 bolum(2, b2);
 bolum(3, b3);
+bolum(4, b4);
+bolum(5, b5);
+bolum(6, b6);
 her_kare(her_kare_is);
 ciz_ustune(ciz_ek);
 carpisinca(TAG_PLAYER, TAG_ENEMY, kaybet_cb);
