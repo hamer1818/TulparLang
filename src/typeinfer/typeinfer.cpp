@@ -782,6 +782,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm_accel_available", TYPE_BOOL, {}},
       {"tm_active", TYPE_BOOL, {}},
       {"tm_beep", TYPE_VOID, {TYPE_FLOAT, TYPE_INT}},
+      {"tm_tone", TYPE_VOID, {TYPE_FLOAT, TYPE_INT, TYPE_FLOAT}},
       {"tm_time", TYPE_FLOAT, {}},
       {"tm_width", TYPE_INT, {}},
       {"tm_height", TYPE_INT, {}},

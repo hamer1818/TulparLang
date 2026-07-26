@@ -734,8 +734,13 @@ static int   tame_beep_used[TAME_BEEP_POOL];
 static int   tame_beep_next = 0;
 static int   tame_beep_audio_ready = 0;
 
-void tame_impl_beep(double freq, int ms) {
+// tm_tone(freq, ms, vol) — beep'in ses-seviyeli kardeşi. vol 0..1, temel 0.35
+// genliği ölçekler; arka plan müziği notaları SFX'i bastırmasın diye kısık
+// (ör. 0.3) çalınır. tm_beep = tone(freq, ms, 1.0).
+void tame_impl_tone(double freq, int ms, double vol) {
   if (freq <= 0.0 || ms <= 0) return;
+  if (vol <= 0.0) return;
+  if (vol > 1.0) vol = 1.0;
   if (!tame_beep_audio_ready) {
     if (!IsAudioDeviceReady()) InitAudioDevice();
     if (!IsAudioDeviceReady()) return;
@@ -749,11 +754,12 @@ void tame_impl_beep(double freq, int ms) {
   if (!pcm) return;
   double step = 6.28318530718 * freq / (double)rate;
   unsigned int atk = n / 20; if (atk < 1) atk = 1;   // ~%5 attack/decay (tık önle)
+  double amp = 0.35 * vol;                            // temel düzey × ses seviyesi
   for (unsigned int i = 0; i < n; i++) {
     double env = 1.0;
     if (i < atk) env = (double)i / (double)atk;
     else if (i > n - atk) env = (double)(n - i) / (double)atk;
-    double s = sin(step * (double)i) * env * 0.35;   // 0.35 → kulak dostu düzey
+    double s = sin(step * (double)i) * env * amp;
     pcm[i] = (short)(s * 32767.0);
   }
   Wave w;
@@ -771,6 +777,9 @@ void tame_impl_beep(double freq, int ms) {
   tame_beep_used[slot] = 1;
   PlaySound(snd);
 }
+
+// tm_beep(freq, ms) — tam-seviye ton (geriye dönük uyum: eski SFX çağrıları).
+void tame_impl_beep(double freq, int ms) { tame_impl_tone(freq, ms, 1.0); }
 // Kamera modunda display pikselini dünya koordinatına çeviririz (screen==display
 // olduğundan raylib'in kendi ölçeklemesi kimliktir; dönüşüm tek elde — burada).
 int tame_impl_touch_x(int i) { return (int)tame_to_world_x((double)GetTouchPosition(i).x); }

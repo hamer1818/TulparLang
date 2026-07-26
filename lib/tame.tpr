@@ -89,6 +89,9 @@ func aktif_mi(): bool      { return tm_active(); }
 // Dosyasız ses efekti: freq Hz sinüs, ms milisaniye. Kısa oyun sesleri için.
 func beep(freq, ms)        { tm_beep(freq, ms); }
 func bip(freq, ms)         { tm_beep(freq, ms); }
+// tone/ton: ses-seviyeli beep (vol 0..1) — kısık arka plan müziği notaları için.
+func tone(freq, ms, vol)   { tm_tone(freq, ms, vol); }
+func ton(freq, ms, vol)    { tm_tone(freq, ms, vol); }
 
 // ---- Çizim -----------------------------------------------------------------
 // Hepsi frame_begin() ile frame_end() arasında çağrılır.
