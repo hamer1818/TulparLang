@@ -1,12 +1,13 @@
-// Uzay Istilasi (Space Invaders) — arcade preset motoru, 3 BÖLÜM.
+// Uzay Istilasi (Space Invaders) — arcade preset motoru, 6 BÖLÜM.
 //
 //   ./tulpar examples/arcade_uzay.tpr
 //
 // Sol/Sağ (A/D) ile gemiyi sür, SPACE ile ateş et. Filoyu temizle (+10) →
-// sıradaki bölüm. 3 bölümü de bitir → KAZANDIN. Filo sana inerse ya da
+// sıradaki bölüm. 6 bölümü de bitir → KAZANDIN. Filo sana inerse ya da
 // mor mermilerine değersen kaybedersin. R ile baştan.
 //
-// Bölümler: 1) 3x5 yavaş   2) 4x6 hızlı   3) 4x7 en hızlı + filo GERİ ATEŞ eder
+// Bölümler: 1) 3x5 yavaş   2) 4x6 hızlı   3) 4x7 + filo GERİ ATEŞ eder
+//           4) 5x7   5) 5x8 daha sık ateş   6) 6x8 en hızlı + en sık ateş
 //
 // Filo tek parça hareket eder (kenara değince yön değişir + bir kademe iner),
 // bu yüzden düşmanlar MV_NONE ve hareketi her_kare içinde biz sürüyoruz.
@@ -21,7 +22,8 @@ int gemi = 0;
 array filo = [];        // bölümün düşman handle'ları
 int fdir = 1;           // filo yönü (+1 sağ, -1 sol)
 float fspeed = 55.0;    // filo yatay hızı (px/sn)
-int f_atis = 0;         // 1 = filo geri ateş eder (bölüm 3)
+int f_atis = 0;         // 1 = filo geri ateş eder (bölüm 3+)
+int f_period = 38;      // filo geri ateş periyodu (kare) — düştükçe daha sık
 int t = 0;              // kare sayacı
 
 int GEMI_Y = 430;
@@ -49,9 +51,12 @@ func filo_kur(satir, sutun, y0, renk) {
 }
 
 // --- Bölümler ---------------------------------------------------------------
-func b1() { fspeed = 55.0;  f_atis = 0; filo_kur(3, 5, 70, LIME); }
-func b2() { fspeed = 85.0;  f_atis = 0; filo_kur(4, 6, 60, GOLD); }
-func b3() { fspeed = 115.0; f_atis = 1; filo_kur(4, 7, 55, RED);  }
+func b1() { fspeed = 55.0;  f_atis = 0; f_period = 38; filo_kur(3, 5, 70, LIME);   }
+func b2() { fspeed = 85.0;  f_atis = 0; f_period = 38; filo_kur(4, 6, 60, GOLD);   }
+func b3() { fspeed = 115.0; f_atis = 1; f_period = 38; filo_kur(4, 7, 55, RED);    }
+func b4() { fspeed = 145.0; f_atis = 1; f_period = 34; filo_kur(5, 7, 55, GOLD);   }
+func b5() { fspeed = 175.0; f_atis = 1; f_period = 30; filo_kur(5, 8, 50, ORANGE); }
+func b6() { fspeed = 210.0; f_atis = 1; f_period = 24; filo_kur(6, 8, 45, RED);    }
 
 func her_kare_is() {
     float dt = frame_time();
@@ -92,7 +97,7 @@ func her_kare_is() {
     }
 
     // --- Filo geri ateşi (bölüm 3) ------------------------------------------
-    if (f_atis == 1 && mod(t, 38) == 0) {
+    if (f_atis == 1 && mod(t, f_period) == 0) {
         array canli = [];
         for (int i = 0; i < len(filo); i = i + 1) {
             if (yasiyor(filo[i])) { push(canli, filo[i]); }
@@ -123,6 +128,9 @@ baslangicta(kur);
 bolum(1, b1);
 bolum(2, b2);
 bolum(3, b3);
+bolum(4, b4);
+bolum(5, b5);
+bolum(6, b6);
 her_kare(her_kare_is);
 carpisinca(TAG_BULLET, TAG_ENEMY,   vur_cb);
 carpisinca(TAG_PLAYER, TAG_ENEMY,   kaybet_cb);

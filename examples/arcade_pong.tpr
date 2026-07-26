@@ -105,6 +105,7 @@ func ai_cb() {
 sahne(640, 480, "Pong");
 bilgi("Yukari/Asagi veya W/S: raket  |  Topu kacirma, her iade +1");
 kontrol_semasi("dikey");  // mobilde YUKARI/ASAGI ok butonlari (raket dikey hareket)
+yildiz_hedef(5, 15, 30);        // sonsuz oyun: rally sayisindan yildiz (1/2/3)
 baslangicta(kur);
 her_kare(kare);
 carpisinca(TAG_PLAYER, TAG_BULLET, vur_cb);

@@ -1,12 +1,13 @@
-// Yilan — arcade motoruyla izgara yilani, 3 BOLUM (tame_snake'in arcade esi).
+// Yilan — arcade motoruyla izgara yilani, 6 BOLUM (tame_snake'in arcade esi).
 //
 //   ./tulpar examples/arcade_yilan.tpr
 //
 // Kontroller: ok tuslari/WASD, mobilde dpad butonlari VEYA parmak kaydirma
 // (kaydirildi() jesti — yilana en dogal his). Yem (kirmizi) ye -> buyu.
 // Duvara, engele ya da kendine carpma. Her bolumde 5 yem -> sonraki bolum;
-// 1) yavas  2) hizli  3) en hizli + engel duvarlari. Skor bolumler arasi
-// korunur (motorun bolum semantigi).
+// 1) yavas  2) hizli  3) en hizli + iki dikey duvar   4) yatay bariyerler
+// 5) uc dikey duvar (daha hizli)   6) dort duvarli maze (satir 7 koridoru acik).
+// Skor bolumler arasi korunur (motorun bolum semantigi).
 //
 // Motor kullanimi: entity YOK — yilan durumu izgara dizilerinde, cizim
 // ciz_ustune() ile elle. bolum()/skor/oyun-bitti/afis/HUD motordan bedava.
@@ -89,10 +90,51 @@ func engel_kur() {
     }
 }
 
+// 4. bolum: iki yatay bariyer (satir 4 ve 10), ortada 2 hucrelik gecis; dogus
+// satiri 7 tamamen acik.
+func engel_kur_b4() {
+    egx = []; egy = [];
+    for (int c = 3; c < 17; c = c + 1) {
+        if (c != 9 && c != 10) {
+            push(egx, c); push(egy, 4);
+            push(egx, c); push(egy, 10);
+        }
+    }
+}
+
+// 5. bolum: uc dikey duvar (sutun 5/10/15), yalniz orta serit (6/7/8) acik.
+func engel_kur_b5() {
+    egx = []; egy = [];
+    for (int r = 1; r < ROWS - 1; r = r + 1) {
+        if (r != 6 && r != 7 && r != 8) {
+            push(egx, 5);  push(egy, r);
+            push(egx, 10); push(egy, r);
+            push(egx, 15); push(egy, r);
+        }
+    }
+}
+
+// 6. bolum: dort dikey duvar (4/8/12/16), sasirtmali dikey gecisler; satir 7
+// bir uctan bir uca acik koridor kalir (dogus + tas geçişi garanti).
+func engel_kur_b6() {
+    egx = []; egy = [];
+    for (int r = 1; r < ROWS - 1; r = r + 1) {
+        if (r != 7) {
+            if (r != 3)  { push(egx, 4);  push(egy, r); }
+            if (r != 10) { push(egx, 8);  push(egy, r); }
+            if (r != 4)  { push(egx, 12); push(egy, r); }
+            if (r != 9)  { push(egx, 16); push(egy, r); }
+        }
+    }
+}
+
 // ---- Bolumler ---------------------------------------------------------------
 func b1() { adim_kare = 8; egx = []; egy = []; yilan_kur(); }
 func b2() { adim_kare = 6; egx = []; egy = []; yilan_kur(); }
-func b3() { adim_kare = 4; engel_kur(); yilan_kur(); }
+func b3() { adim_kare = 4; engel_kur();    yilan_kur(); }
+func b4() { adim_kare = 4; engel_kur_b4(); yilan_kur(); }
+func b5() { adim_kare = 3; engel_kur_b5(); yilan_kur(); }
+func b6() { adim_kare = 3; engel_kur_b6(); yilan_kur(); }
 
 // ---- Kare guncelleme --------------------------------------------------------
 func kare() {
@@ -166,6 +208,9 @@ kontrol_semasi("dpad");   // mobilde 4 ok butonu; kaydirma jesti de calisir
 bolum(1, b1);
 bolum(2, b2);
 bolum(3, b3);
+bolum(4, b4);
+bolum(5, b5);
+bolum(6, b6);
 her_kare(kare);
 ciz_ustune(ciz);
 oyna();

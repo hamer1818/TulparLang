@@ -1,11 +1,12 @@
-// Tugla Kirma (Breakout) — arcade preset motoru, 3 BÖLÜM.
+// Tugla Kirma (Breakout) — arcade preset motoru, 6 BÖLÜM.
 //
 //   ./tulpar examples/arcade_tugla.tpr
 //
 // Sol/Sağ (A/D) ile raketi sür, topu düşürme. Tüm tuğlaları kır (+10) →
-// sıradaki bölüm. 3 bölümü de bitir → KAZANDIN. R ile baştan.
+// sıradaki bölüm. 6 bölümü de bitir → KAZANDIN. R ile baştan.
 //
 // Bölümler: 1) 3 sıra düz duvar   2) piramit   3) boşluklu duvar + hızlı top
+//           4) 4 dolu sıra   5) elmas/piramit karışık   6) yoğun 5 sıra + en hızlı
 //
 // Motorla eşleşme: tuğlalar `esya()` (TAG_ITEM), top `TAG_BULLET` + MV_VELOCITY,
 // raket `TAG_PLAYER` + MV_NONE (yatay hareketi her_kare içinde sürüyoruz —
@@ -62,6 +63,36 @@ func b3() {
     tugla_satir(120, 8, 32,  RED);
     tugla_satir(144, 3, 104, ORANGE);
     tugla_satir(144, 3, 320, ORANGE);
+}
+
+// --- Bölüm 4: dört dolu sıra + daha hızlı top -------------------------------
+func b4() {
+    hiz_ver(top, 270, 0 - 350);
+    tugla_satir(72,  8, 32, RED);
+    tugla_satir(96,  8, 32, ORANGE);
+    tugla_satir(120, 8, 32, GOLD);
+    tugla_satir(144, 8, 32, GREEN);
+}
+
+// --- Bölüm 5: elmas/piramit karışık + boşluklar -----------------------------
+func b5() {
+    hiz_ver(top, 290, 0 - 370);
+    tugla_satir(72,  8, 32,  MAROON);
+    tugla_satir(96,  6, 104, RED);
+    tugla_satir(120, 8, 32,  ORANGE);
+    tugla_satir(144, 6, 104, GOLD);
+    tugla_satir(168, 4, 176, GREEN);
+}
+
+// --- Bölüm 6: yoğun 5 sıra, ortası boş + en hızlı top -----------------------
+func b6() {
+    hiz_ver(top, 320, 0 - 400);
+    tugla_satir(72,  8, 32,  PURPLE);
+    tugla_satir(96,  8, 32,  VIOLET);
+    tugla_satir(120, 3, 32,  RED);
+    tugla_satir(120, 3, 320, RED);
+    tugla_satir(144, 8, 32,  ORANGE);
+    tugla_satir(168, 8, 32,  GOLD);
 }
 
 func her_kare_is() {
@@ -137,6 +168,9 @@ baslangicta(kur);
 bolum(1, b1);
 bolum(2, b2);
 bolum(3, b3);
+bolum(4, b4);
+bolum(5, b5);
+bolum(6, b6);
 her_kare(her_kare_is);
 carpisinca(TAG_PLAYER, TAG_BULLET, raket_cb);
 carpisinca(TAG_BULLET, TAG_ITEM,   kir_cb);

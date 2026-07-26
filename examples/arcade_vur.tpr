@@ -81,6 +81,7 @@ func ciz() {
 
 sahne(640, 480, "Vur");
 bilgi("Yanan kareye dokun (+1)  |  Kostebek kacmadan vur, giderek hizlanir");
+yildiz_hedef(10, 25, 50);       // sonsuz oyun: vurus sayisindan yildiz (1/2/3)
 baslangicta(kur);
 her_kare(kare);
 ciz_ustune(ciz);

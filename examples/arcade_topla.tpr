@@ -1,12 +1,13 @@
-// Topla — arcade preset motoruyla "blok" tarzı bir oyun, 3 BÖLÜM.
+// Topla — arcade preset motoruyla "blok" tarzı bir oyun, 6 BÖLÜM.
 //
 //   ./tulpar examples/arcade_topla.tpr
 //
 // Ok tuşları / WASD ile oyuncuyu (mavi) sür. Sarı eşyaları topla (+10).
-// Bölümün TÜM eşyalarını toplayınca sıradaki bölüme geçersin; 3 bölümü de
+// Bölümün TÜM eşyalarını toplayınca sıradaki bölüme geçersin; 6 bölümü de
 // bitirince KAZANDIN. Kırmızı düşmana değersen oyun biter, R ile baştan.
 //
 // Bölümler:  1) 3 eşya / 1 düşman   2) 5 eşya / 2 düşman   3) 6 eşya / 3 hızlı düşman
+//            4) 7 eşya / 3 düşman   5) 8 eşya / 4 düşman   6) 9 eşya / 4 çok hızlı
 //
 // Dikkat et: TEK BİR oyun döngüsü, çarpışma kodu ya da çizim YOK. Motor
 // hepsini yapıyor; sen sadece blokları yerleştiriyorsun.
@@ -62,6 +63,53 @@ func b3() {
     dusman_ekle(600, 240, 260, 0 - 220);
 }
 
+// --- Bölüm 4: 7 eşya, 3 daha hızlı düşman -----------------------------------
+func b4() {
+    esya(60,  60,  18, 18, GOLD);
+    esya(300, 60,  18, 18, GOLD);
+    esya(560, 60,  18, 18, GOLD);
+    esya(60,  240, 18, 18, GOLD);
+    esya(560, 240, 18, 18, GOLD);
+    esya(180, 400, 18, 18, GOLD);
+    esya(440, 400, 18, 18, GOLD);
+    dusman_ekle(320, 40,  270, 230);
+    dusman_ekle(60,  440, 0 - 250, 260);
+    dusman_ekle(600, 240, 280, 0 - 240);
+}
+
+// --- Bölüm 5: 8 eşya, 4 düşman ----------------------------------------------
+func b5() {
+    esya(60,  60,  18, 18, GOLD);
+    esya(300, 50,  18, 18, GOLD);
+    esya(560, 60,  18, 18, GOLD);
+    esya(60,  220, 18, 18, GOLD);
+    esya(560, 220, 18, 18, GOLD);
+    esya(60,  400, 18, 18, GOLD);
+    esya(300, 420, 18, 18, GOLD);
+    esya(560, 400, 18, 18, GOLD);
+    dusman_ekle(300, 40,  290, 240);
+    dusman_ekle(60,  440, 0 - 270, 250);
+    dusman_ekle(600, 60,  0 - 280, 270);
+    dusman_ekle(320, 240, 300, 0 - 230);
+}
+
+// --- Bölüm 6: 9 eşya, 4 çok hızlı düşman ------------------------------------
+func b6() {
+    esya(60,  60,  18, 18, GOLD);
+    esya(300, 50,  18, 18, GOLD);
+    esya(560, 60,  18, 18, GOLD);
+    esya(60,  240, 18, 18, GOLD);
+    esya(300, 240, 18, 18, GOLD);
+    esya(560, 240, 18, 18, GOLD);
+    esya(60,  420, 18, 18, GOLD);
+    esya(300, 420, 18, 18, GOLD);
+    esya(560, 420, 18, 18, GOLD);
+    dusman_ekle(300, 40,  320, 270);
+    dusman_ekle(60,  440, 0 - 300, 290);
+    dusman_ekle(600, 60,  0 - 310, 300);
+    dusman_ekle(600, 440, 0 - 300, 0 - 280);
+}
+
 // Düşmanlar duvara çarpınca seksin (motor MV_VELOCITY'yi sınırda tutmaz).
 //
 // NOT: hız `vx_of()` ile okunur — `_evx[id]` YANLIŞTIR: id bir handle'dır
@@ -101,6 +149,9 @@ baslangicta(kur);
 bolum(1, b1);
 bolum(2, b2);
 bolum(3, b3);
+bolum(4, b4);
+bolum(5, b5);
+bolum(6, b6);
 her_kare(her_kare_is);
 carpisinca(TAG_PLAYER, TAG_ITEM,  topla_cb);
 carpisinca(TAG_PLAYER, TAG_ENEMY, kaybet_cb);
