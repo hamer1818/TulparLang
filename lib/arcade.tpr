@@ -225,6 +225,7 @@ func dil(code)      { language(code); }
 // küçük dosyada kalıcıdır (en iyi-skor deseniyle aynı: save_data/load_data).
 bool _snd_on = true;
 bool _hap_on = true;
+bool _mus_on = true;       // arka plan müziği (Ayarlar'dan aç-kapa; SFX'ten bağımsız)
 bool _fps_on = false;      // FPS sayacı (Ayarlar'dan aç-kapa; varsayılan kapalı)
 bool _cfg_loaded = false;
 bool  _cfg_reset_armed = false;  // "Rekorları Sıfırla" iki-dokunuş onayı bekliyor mu
@@ -235,12 +236,14 @@ func _ar_load_settings() {
     _cfg_loaded = true;
     str s = load_data("arcade_snd.txt");  if (s == "0") { _snd_on = false; }
     str h = load_data("arcade_hap.txt");  if (h == "0") { _hap_on = false; }
+    str m = load_data("arcade_mus.txt");  if (m == "0") { _mus_on = false; }
     str f = load_data("arcade_fps.txt");  if (f == "1") { _fps_on = true; }
     str l = load_data("arcade_lang.txt"); if (l == "en") { _lang = "en"; } else if (l == "tr") { _lang = "tr"; }
 }
 func _ar_save_settings() {
     if (_snd_on) { save_data("arcade_snd.txt", "1"); } else { save_data("arcade_snd.txt", "0"); }
     if (_hap_on) { save_data("arcade_hap.txt", "1"); } else { save_data("arcade_hap.txt", "0"); }
+    if (_mus_on) { save_data("arcade_mus.txt", "1"); } else { save_data("arcade_mus.txt", "0"); }
     if (_fps_on) { save_data("arcade_fps.txt", "1"); } else { save_data("arcade_fps.txt", "0"); }
     save_data("arcade_lang.txt", _lang_now());
 }
@@ -255,8 +258,55 @@ func sound_on(on)  { _snd_on = on; }
 func ses_ac(on)    { _snd_on = on; }
 func haptics_on(on){ _hap_on = on; }
 func titresim_ac(on){ _hap_on = on; }
+func music_on(on)  { _mus_on = on; if (!on) { _mus_track = -1; } }
+func muzik_ac(on)  { music_on(on); }
 func show_fps(on)  { _fps_on = on; }
 func fps_goster(on){ _fps_on = on; }
+
+// ---- Prosedürel arka plan müziği (dosyasız chiptune sekanslayıcı) -----------
+// tm_tone ile notaları KISIK (SFX'i bastırmadan) çalar; iki parça: 0=menü
+// (sakin A-minör arpej), 1=oyun (hareketli C-majör pentatonik). elapsed()
+// mutlak saatine göre sıradaki notayı tetikler → kare hızından bağımsız tempo.
+// Frekans 0.0 = es (sessiz nota). Parça döngüsel; sona gelince başa sarar.
+float _mus_vol   = 0.26;   // nota ses seviyesi (0..1); SFX=1.0'in altında kalır
+int   _mus_idx   = 0;      // aktif parçadaki sıradaki nota
+float _mus_next  = 0.0;    // elapsed() zamanı: bu nota ne zaman çalınacak
+int   _mus_track = -1;     // -1=yüklü değil, 0=menü, 1=oyun
+array _mus_f = [];         // aktif parça: nota frekansları (Hz; 0=es)
+array _mus_d = [];         // aktif parça: nota süreleri (sn)
+
+func _mus_select(track) {
+    if (track == _mus_track) { return; }
+    _mus_track = track;
+    _mus_idx = 0;
+    _mus_next = elapsed();   // sıradaki karede hemen başla
+    if (track == 0) {
+        // Menü — sakin, geniş arpej (A2 kökü); es'lerle nefes alır.
+        _mus_f = [220.0, 261.63, 329.63, 440.0, 329.63, 261.63, 0.0, 196.0, 246.94, 329.63, 392.0, 329.63, 246.94, 0.0];
+        _mus_d = [0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32];
+    } else {
+        // Oyun — hareketli pentatonik döngü.
+        _mus_f = [523.25, 659.25, 783.99, 659.25, 523.25, 392.0, 523.25, 659.25, 587.33, 440.0, 523.25, 659.25, 783.99, 1046.5, 783.99, 659.25];
+        _mus_d = [0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17];
+    }
+}
+
+// Her karede çağrılır: seçili parçayı kur, sıradaki notanın vakti geldiyse çal.
+func _mus_step(track) {
+    if (!_mus_on) { return; }
+    _mus_select(track);
+    float now = elapsed();
+    if (now >= _mus_next) {
+        int n = len(_mus_f);
+        if (n <= 0) { return; }
+        float f = _mus_f[_mus_idx];
+        float d = _mus_d[_mus_idx];
+        if (f > 0.0) { tm_tone(f, toInt(d * 850.0), _mus_vol); }
+        _mus_next = now + d;
+        _mus_idx = _mus_idx + 1;
+        if (_mus_idx >= n) { _mus_idx = 0; }
+    }
+}
 
 // HUD
 str _hud_prefix = "";     // "" = dile göre varsayılan ("Skor: " / "Score: ")
@@ -316,6 +366,8 @@ func ciz_ustune(fn) { on_draw(fn); }
 func play() {
     _ar_load_settings();               // kalıcı ses/haptik/dil ayarları
     _ar_standalone = true;             // oyun-bitti ekranında ikinci buton = "Cikis"
+    _ar_start_level = 1;               // tek oyun: bölüm seçimi yok, 1'den başla
+    _lx_load_lvl_done(_ar_title, _level_n);   // bölüm yıldızlarını işaretleyebilmek için
     _ar_reset();
     _trans_start();                    // açılışta kısa fade-in
     var wm = arena_save();
@@ -330,6 +382,7 @@ func play() {
         }
         if (_ar_paused) {
             str ql = "Cikis"; if (_lang_now() == "en") { ql = "Quit"; }
+            _mus_step(0);                  // duraklatınca sakin parça
             frame_begin();
             _ar_draw_all();
             _pause_draw(ql);
@@ -340,6 +393,7 @@ func play() {
             else if (act == 3) { break; }
         } else {
             _ar_update();
+            if (_ar_state == 0) { _mus_step(1); } else { _mus_step(0); }
             frame_begin();
             _ar_draw_all();
             _trans_draw();
@@ -362,10 +416,12 @@ func oyna() { play(); }
 // R (yeniden başla) hem "oyun bitti" hem "kazandın" durumundan buraya gelir:
 // skor 0 + bölüm 1. (Sadece bulunduğun bölümü tekrarlamak kasten YOK — oyuncu
 // "yeniden" deyince baştan başlamayı bekler; en tahmin edilebilir olan bu.)
+int _ar_start_level = 1;   // "Tekrar Oyna"/reset bu bölüme döner (bölüm-seçimi ayarlar)
+
 func _ar_reset() {
     _score = 0;
     _ar_state = 0;
-    _cur_level = 1;
+    _cur_level = _ar_start_level;
     _banner_t = 0.0;
     _lvl_pending = 0;
     _ar_paused = false;
@@ -417,8 +473,11 @@ func bolum_gec()  { next_level(); }
 
 // Bekleyen bölüm geçişini uygula (motor içi, kare sonunda çağrılır).
 func _ar_advance_level() {
+    // Bu bölüm geçildi → o bölümün yıldızını kazan (bölüm-başına ilerleme).
+    _ar_mark_level(_cur_level);
     if (_cur_level + 1 > _level_n) {            // son bölüm → kazandın
         _ar_state = 2;
+        _ar_badge_set(0);     // "İlk Zafer" rozeti
         _snd(1046.0, 220);    // KAZANDIN — zafer tonu (C6)
         _ar_check_record();
         _lb_submit_fetch();   // global tablo açıksa: skoru gönder + top-10 çek
@@ -904,6 +963,10 @@ func _fx_update(dt) {
         _fx_fl_t = _fx_fl_t - dt;
         if (_fx_fl_t < 0.0) { _fx_fl_t = 0.0; }
     }
+    if (_badge_toast_t > 0.0) {           // rozet "toast"ı (oyun-bitti'de bile azalır)
+        _badge_toast_t = _badge_toast_t - dt;
+        if (_badge_toast_t < 0.0) { _badge_toast_t = 0.0; }
+    }
 }
 
 func _fx_reset() {
@@ -921,13 +984,152 @@ str  _ar_title = "";      // kayıt anahtarı: sahne başlığı / launcher'da o
 int  _best = 0;           // bu oyunun kalıcı en iyi skoru
 bool _new_record = false; // bu elde rekor kırıldı (bitiş ekranında rozet)
 
+// ---- Yıldız (ilerleme) — BÖLÜM BAŞINA ---------------------------------------
+// Bölümlü oyun: HER BÖLÜM kendi yıldızını kazanır (bölümü geçince). Kalıcı,
+// bölüm başına: arcade_lvl_<ad>_<k>.txt = "1". Menü kartında tamamlanan/tüm
+// bölüm; bölüm-seçim ekranında her bölümün yıldızı. Sonsuz oyun (bölüm yok):
+// yildiz_hedef(a,b,c) skor eşiklerinden 0..3 yıldız (_stars, arcade_star_<ad>).
+int  _stars   = 0;        // sonsuz oyun: kalıcı yıldız derecesi (0..3)
+int  _star_g1 = 0;        // sonsuz oyun skor eşikleri (0 = tanımsız)
+int  _star_g2 = 0;
+int  _star_g3 = 0;
+array _lvl_done = [];     // yüklü oyunun bölüm-tamamlama durumu (1-tabanlı → [k-1])
+
 func _ar_best_key(): str { return "arcade_best_" + _ar_title + ".txt"; }
+func _ar_star_key(): str { return "arcade_star_" + _ar_title + ".txt"; }
+func _ar_lvl_key(name, k): str { return "arcade_lvl_" + name + "_" + toString(k) + ".txt"; }
 
 func _ar_load_best() {
     _best = 0;
+    _stars = 0;
     if (_ar_title == "") { return; }
     str s = load_data(_ar_best_key());
     if (s != "") { _best = toInt(s); }
+    str ss = load_data(_ar_star_key());
+    if (ss != "") { _stars = toInt(ss); }
+}
+
+// Bir oyunun tamamlanan bölüm sayısı (kalıcı dosyalardan).
+func _count_done_levels(name, n): int {
+    int c = 0; int k = 1;
+    while (k <= n) {
+        str s = load_data(_ar_lvl_key(name, k));
+        if (s == "1") { c = c + 1; }
+        k = k + 1;
+    }
+    return c;
+}
+
+// Yüklü oyunun bölüm-tamamlama dizisini diskten doldur (bölüm-seçim ekranı için).
+func _lx_load_lvl_done(name, n) {
+    _lvl_done = [];
+    int k = 1;
+    while (k <= n) {
+        str s = load_data(_ar_lvl_key(name, k));
+        if (s == "1") { push(_lvl_done, 1); } else { push(_lvl_done, 0); }
+        k = k + 1;
+    }
+}
+
+// Bir bölümü TAMAMLANDI işaretle (kalıcı). Yeni ise kartı + rozetleri tazeler.
+func _ar_mark_level(k) {
+    if (_ar_title == "" || k < 1) { return; }
+    if (k <= length(_lvl_done)) { if (_lvl_done[k - 1] == 1) { return; } }   // zaten
+    save_data(_ar_lvl_key(_ar_title, k), "1");
+    if (k <= length(_lvl_done)) { _lvl_done[k - 1] = 1; }
+    if (_ar_mode == 1 && _menu_sel >= 0 && _menu_sel < _apps_n) {
+        _apps_done[_menu_sel] = _count_done_levels(_ar_title, _level_n);
+    }
+    _ar_badge_check();
+}
+
+// Toplam yıldız = bölümlü oyunların tamamlanan bölümleri + sonsuz oyun yıldızları.
+func _total_stars(): int {
+    int t = 0; int i = 0;
+    while (i < _apps_n) {
+        if (_apps_levn[i] > 0) { t = t + _apps_done[i]; }
+        else { t = t + _apps_star[i]; }
+        i = i + 1;
+    }
+    return t;
+}
+
+// Sonsuz oyun: yıldızı k'ya YÜKSELT (asla düşürme), kalıcı yaz + rozet tazele.
+func _ar_grant_stars(k) {
+    if (_ar_title == "") { return; }
+    if (k <= _stars) { return; }
+    _stars = k;
+    save_data(_ar_star_key(), toString(_stars));
+    if (_ar_mode == 1 && _menu_sel >= 0 && _menu_sel < _apps_n) {
+        _apps_star[_menu_sel] = _stars;
+    }
+    _ar_badge_check();
+}
+
+// Sonsuz oyunlar için skor eşikleri (kazanılan yıldız = geçilen eşik sayısı).
+func star_goals(a, b, c) { _star_g1 = a; _star_g2 = b; _star_g3 = c; }
+func yildiz_hedef(a, b, c) { star_goals(a, b, c); }
+func stars(): int  { return _stars; }
+func yildiz(): int { return _stars; }
+
+// ---- Rozetler (başarımlar) --------------------------------------------------
+// 5 kalıcı rozet (her biri arcade_badge_<i>.txt = "1"). Oyun-içi olaylar açar;
+// yeni açılınca kısa "toast" + ses. Menüdeki kupa düğmesinden liste görünür.
+array _badge_on = [];      // 0/1 durum (lazy yüklenir)
+bool  _badges_loaded = false;
+str   _badge_toast_txt = "";
+float _badge_toast_t = 0.0;
+
+func _ar_badges_load() {
+    if (_badges_loaded) { return; }
+    _badges_loaded = true;
+    _badge_on = [0, 0, 0, 0, 0];
+    int i = 0;
+    while (i < 5) {
+        str s = load_data("arcade_badge_" + toString(i) + ".txt");
+        if (s == "1") { _badge_on[i] = 1; }
+        i = i + 1;
+    }
+}
+func _badge_has(idx): bool {
+    _ar_badges_load();
+    return _badge_on[idx] == 1;
+}
+// Bir rozeti kazanılmış işaretle (idempotent). Yeni ise toast + ses tetikler.
+func _ar_badge_set(idx) {
+    _ar_badges_load();
+    if (_badge_on[idx] == 1) { return; }
+    _badge_on[idx] = 1;
+    save_data("arcade_badge_" + toString(idx) + ".txt", "1");
+    _badge_toast_txt = _badge_name(idx);
+    _badge_toast_t = 2.2;
+    _snd(880.0, 70);
+    _snd(1174.0, 90);
+}
+// Türetilmiş rozetleri (mevcut duruma göre) değerlendir — yıldız kazanınca çağrılır.
+func _ar_badge_check() {
+    int total = _total_stars();
+    if (total >= 3)  { _ar_badge_set(2); }
+    if (total >= 15) { _ar_badge_set(3); }
+    if (total >= 30) { _ar_badge_set(4); }
+}
+func _badge_name(idx): str {
+    str L = _lang_now();
+    if (idx == 0) { if (L == "en") { return "First Win"; } return "Ilk Zafer"; }
+    if (idx == 1) { if (L == "en") { return "Record Breaker"; } return "Rekortmen"; }
+    if (idx == 2) { if (L == "en") { return "Three Stars"; } return "Uc Yildiz"; }
+    if (idx == 3) { if (L == "en") { return "Collector"; } return "Koleksiyoncu"; }
+    if (L == "en") { return "Master"; }
+    return "Usta";
+}
+func _badge_desc(idx): str {
+    str L = _lang_now();
+    if (idx == 0) { if (L == "en") { return "Win any game"; } return "Bir oyunu kazan"; }
+    if (idx == 1) { if (L == "en") { return "Break a record"; } return "Bir rekor kir"; }
+    if (idx == 2) { if (L == "en") { return "3 total stars"; } return "Toplam 3 yildiz"; }
+    if (idx == 3) { if (L == "en") { return "15 total stars"; } return "Toplam 15 yildiz"; }
+    if (L == "en") { return "30 total stars"; }
+    return "Toplam 30 yildiz";
 }
 
 // Oyun bittiğinde/kazanıldığında çağrılır: rekorsa kaydet + rozeti işaretle.
@@ -939,6 +1141,15 @@ func _ar_check_record() {
         save_data(_ar_best_key(), toString(_best));
         _snd(1318.0, 130);    // yeni rekor "ping" (E6)
         _hap(120);
+        _ar_badge_set(1);     // "Rekortmen" rozeti
+    }
+    // Sonsuz oyunlarda (bölüm yok) yıldız = en iyi skorun geçtiği eşik sayısı.
+    if (_star_g1 > 0) {
+        int k = 0;
+        if (_best >= _star_g1) { k = 1; }
+        if (_star_g2 > 0 && _best >= _star_g2) { k = 2; }
+        if (_star_g3 > 0 && _best >= _star_g3) { k = 3; }
+        if (k > 0) { _ar_grant_stars(k); }
     }
 }
 
@@ -1707,6 +1918,28 @@ func _ar_draw_all() {
     if (_ar_state != 0) {
         _ar_draw_over();
     }
+
+    // Rozet "toast"ı — her şeyin üstünde (oyun-bitti örtüsü dahil).
+    _badge_draw_toast();
+}
+
+// Yeni kazanılan rozetin kısa üst-orta bildirimi (~2.2 sn). tm_view_* ile gerçek
+// ekranın üstüne demirlenir (Android kamera modelinde bantlar dahil).
+func _badge_draw_toast() {
+    if (_badge_toast_t <= 0.0) { return; }
+    str L = _lang_now();
+    str head = "Rozet! "; if (L == "en") { head = "Badge! "; }
+    str msg = head + _badge_toast_txt;
+    int fs = toInt(_world_h * 0.045);
+    if (fs < 14) { fs = 14; }
+    int tw = measure_text(msg, fs);
+    float bw = tw * 1.0 + _world_h * 0.09;
+    float bh = fs * 1.0 + _world_h * 0.05;
+    float bx = tm_view_left() + (tm_view_right() - tm_view_left() - bw) / 2.0;
+    float by = tm_view_top() + _world_h * 0.06;
+    rect(bx, by, bw, bh, rgba(20, 22, 34, 235));
+    rect_lines(bx, by, bw, bh, GOLD);
+    text(msg, toInt(bx + (bw - tw * 1.0) / 2.0), toInt(by + (bh - fs * 1.0) / 2.0), fs, GOLD);
 }
 
 // ============================================================================
@@ -1730,6 +1963,9 @@ func _ar_draw_all() {
 array _apps_name  = [];    // menüde görünen oyun adları
 array _apps_setup = [];    // 0-arg setup fonksiyonları (index eşleşir)
 array _apps_best  = [];    // kalıcı en iyi skorlar (launcher açılışında yüklenir)
+array _apps_star  = [];    // SONSUZ oyun: kalıcı yıldız 0..3 (kart pip'leri)
+array _apps_levn  = [];    // oyunun toplam bölüm sayısı (0 = sonsuz; init'te keşfedilir)
+array _apps_done  = [];    // tamamlanan bölüm sayısı (bölümlü oyun kart göstergesi)
 int   _apps_n     = 0;
 int   _ar_mode    = 0;     // 0 = menü, 1 = oyun oynanıyor
 int   _menu_sel   = 0;     // menüde seçili kart index'i
@@ -1741,6 +1977,9 @@ func add_game(name, setup) {
     push(_apps_name, name);
     push(_apps_setup, setup);
     push(_apps_best, 0);
+    push(_apps_star, 0);
+    push(_apps_levn, 0);
+    push(_apps_done, 0);
     _apps_n = _apps_n + 1;
 }
 func oyun_ekle(name, setup) { add_game(name, setup); }
@@ -1770,16 +2009,25 @@ func _lx_clear() {
     _ar_joy_on = false; _ar_joy_dx = 0.0; _ar_joy_dy = 0.0;
     _ar_swipe = 0;                     // önceki oyunun jesti sızmasın
     _ar_tilt_cal = false;              // yeni oyun kendi nötr tutuşunu yakalar
+    _star_g1 = 0; _star_g2 = 0; _star_g3 = 0;   // yıldız eşikleri oyuna göre
     clear_entities();
 }
 
 // i. oyunu başlat: kayıtları temizle → oyunun setup'ı → yükle → oyun moduna geç.
-func _lx_launch(i) {
-    if (i < 0 || i >= _apps_n) { return; }
+int _lx_sel_game = -1;   // bölüm-seçim ekranında olduğumuz oyun index'i
+
+// Oyunu HAZIRLA (kayıtları temizle + setup'ı çağır) — pencere/oynatma YOK.
+// Sonrası: _level_n bilinir, _lvl_done doldurulur.
+func _lx_prepare(i) {
     _lx_clear();
     _ar_title = _apps_name[i];         // rekor anahtarı = menüdeki oyun adı
     call(_apps_setup[i]);
-    _ar_reset();                       // skor/durum/bölüm + _ar_load_level (setup)
+    _lx_load_lvl_done(_ar_title, _level_n);
+}
+
+// Hazırlanmış oyunu OYNAT (skor/durum reset + oyun moduna geç).
+func _lx_begin_play(i) {
+    _ar_reset();                       // _ar_start_level'e göre + _ar_load_level
     _menu_sel = i;
     _ar_mode = 1;
     _trans_start();                    // oyuna girişte kısa fade-in
@@ -1788,6 +2036,21 @@ func _lx_launch(i) {
     _ar_touch_prevn = touch_count();
     _ar_act_prev = true;
     _lx_home_prev = true;
+}
+
+// Karta dokununca: bölümlü oyun → önce BÖLÜM SEÇİM ekranı; sonsuz oyun → doğrudan.
+func _lx_launch(i) {
+    if (i < 0 || i >= _apps_n) { return; }
+    _lx_prepare(i);
+    if (_level_n > 0) {
+        _lx_sel_game = i;
+        _menu_sel = i;
+        _ar_mode = _ar_mode_levelsel;
+        _ar_touch_prevn = touch_count();
+    } else {
+        _ar_start_level = 1;           // sonsuz oyun: bölüm yok
+        _lx_begin_play(i);
+    }
 }
 
 // ---- Oyun içi EV (menüye geri) butonu — GERÇEK ekranın sağ üst köşesi ------
@@ -1828,6 +2091,11 @@ func _lx_goto_menu() {
     _trans_start();
     _ar_touch_prevn = touch_count();
     _apps_best[_menu_sel] = _best;
+    if (_apps_levn[_menu_sel] > 0) {
+        _apps_done[_menu_sel] = _count_done_levels(_ar_title, _apps_levn[_menu_sel]);
+    } else {
+        _apps_star[_menu_sel] = _stars;
+    }
 }
 
 // ---- Menü ızgara geometrisi ------------------------------------------------
@@ -1910,6 +2178,107 @@ func _menu_step() {
 }
 
 // Menü ekranını çiz: başlık + kart ızgarası (seçili kart altın çerçeveli).
+// Kartta 3 yıldız pip'i çiz (kazanılan altın, kalan koyu).
+func _menu_draw_pips(cx, cy, cw, ch, st) {
+    float pr = ch * 0.055;
+    if (pr < 3.0) { pr = 3.0; }
+    float gap = pr * 2.8;
+    float sx = cx + cw / 2.0 - gap;      // 3 pip → 2 aralık, ortala
+    float py = cy + ch * 0.58;
+    int j = 0;
+    while (j < 3) {
+        int col = rgb(58, 64, 84);
+        if (j < st) { col = GOLD; }
+        circle(toInt(sx + j * gap), toInt(py), toInt(pr), col);
+        j = j + 1;
+    }
+}
+
+// ---- Bölüm seçim ekranı (mode 4) — kart→bölümler→oyna -----------------------
+func _lsel_cols(): int {
+    if (_level_n <= 3) { return _level_n; }
+    if (_level_n <= 4) { return 2; }
+    return 3;
+}
+func _lsel_bw(): float  { return _world_w * 0.22; }
+func _lsel_bh(): float  { return _world_h * 0.17; }
+func _lsel_gap(): float { return _world_w * 0.045; }
+func _lsel_x0(): float {
+    int c = _lsel_cols(); if (c < 1) { c = 1; }
+    float total = c * _lsel_bw() + (c - 1) * _lsel_gap();
+    return (_world_w - total) / 2.0;
+}
+func _lsel_y0(): float { return _world_h * 0.30; }
+func _lsel_bx(k): float {          // k 0-tabanlı
+    int c = _lsel_cols(); if (c < 1) { c = 1; }
+    int col = mod(k, c);
+    return _lsel_x0() + col * (_lsel_bw() + _lsel_gap());
+}
+func _lsel_by(k): float {
+    int c = _lsel_cols(); if (c < 1) { c = 1; }
+    int row = toInt(k / c);
+    return _lsel_y0() + row * (_lsel_bh() + _lsel_gap());
+}
+
+func _levelsel_draw() {
+    clear(rgb(16, 18, 26));
+    str L = _lang_now();
+    str nm = _apps_name[_lx_sel_game];
+    int tsz = toInt(_world_h * 0.075);
+    text(nm, toInt((_world_w - measure_text(nm, tsz)) / 2.0), toInt(_world_h * 0.075), tsz, GOLD);
+    str sub = "Bolum sec"; if (L == "en") { sub = "Pick a level"; }
+    int ssz = toInt(_world_h * 0.042);
+    text(sub, toInt((_world_w - measure_text(sub, ssz)) / 2.0), toInt(_world_h * 0.185), ssz, SKYBLUE);
+    int k = 0;
+    while (k < _level_n) {
+        float bx = _lsel_bx(k); float by = _lsel_by(k);
+        float bw = _lsel_bw();  float bh = _lsel_bh();
+        bool done = false;
+        if (k < length(_lvl_done)) { if (_lvl_done[k] == 1) { done = true; } }
+        rect(bx, by, bw, bh, done ? rgb(46, 54, 82) : rgb(30, 34, 48));
+        rect_lines(bx, by, bw, bh, done ? GOLD : rgb(60, 66, 86));
+        str num = toString(k + 1);
+        int nsz = toInt(bh * 0.36);
+        text(num, toInt(bx + (bw - measure_text(num, nsz)) / 2.0), toInt(by + bh * 0.16), nsz, WHITE);
+        int pcol = rgb(60, 66, 86); if (done) { pcol = GOLD; }
+        circle(toInt(bx + bw / 2.0), toInt(by + bh * 0.72), toInt(bh * 0.11), pcol);
+        k = k + 1;
+    }
+    float qx = _cfg_back_x(); float qy = _cfg_back_y();
+    float qw = _cfg_back_w(); float qh = _cfg_back_h();
+    rect(qx, qy, qw, qh, rgb(46, 54, 82));
+    rect_lines(qx, qy, qw, qh, GOLD);
+    str back = "Geri"; if (L == "en") { back = "Back"; }
+    int bsz = toInt(qh * 0.40);
+    text(back, toInt(qx + (qw - measure_text(back, bsz)) / 2.0),
+         toInt(qy + (qh - bsz * 1.0) / 2.0), bsz, WHITE);
+}
+
+// Bölüm seçim bir karesi: 0 = yok, -1 = geri, k(1..N) = o bölümü başlat.
+func _levelsel_step(): int {
+    if (key_pressed("BACK") || key_pressed("ESCAPE") || key_pressed("BACKSPACE")) {
+        return 0 - 1;
+    }
+    int n = touch_count();
+    bool tap = (n > 0) && (_ar_touch_prevn == 0);
+    int act = 0;
+    if (tap) {
+        float tx = touch_x(0) * 1.0; float ty = touch_y(0) * 1.0;
+        int k = 0;
+        while (k < _level_n) {
+            float bx = _lsel_bx(k); float by = _lsel_by(k);
+            float bw = _lsel_bw();  float bh = _lsel_bh();
+            if (tx >= bx && tx <= bx + bw && ty >= by && ty <= by + bh) { act = k + 1; }
+            k = k + 1;
+        }
+        float qx = _cfg_back_x(); float qy = _cfg_back_y();
+        float qw = _cfg_back_w(); float qh = _cfg_back_h();
+        if (tx >= qx && tx <= qx + qw && ty >= qy && ty <= qy + qh) { act = 0 - 1; }
+    }
+    _ar_touch_prevn = n;
+    return act;
+}
+
 func _menu_draw() {
     clear(rgb(16, 18, 26));
     str L = _lang_now();
@@ -1935,16 +2304,31 @@ func _menu_draw() {
             rect_lines(cx + 1.0, cy + 1.0, cw - 2.0, ch - 2.0, GOLD);
         }
         str nm = _apps_name[i];
-        int nsz = toInt(ch * 0.26);
-        if (nsz < 14) { nsz = 14; }
+        int nsz = toInt(ch * 0.24);
+        if (nsz < 13) { nsz = 13; }
         text(nm, toInt(cx + (cw - measure_text(nm, nsz)) / 2.0),
-             toInt(cy + (ch - nsz * 1.0) / 2.0), nsz, WHITE);
+             toInt(cy + ch * 0.26), nsz, WHITE);
+        // İlerleme: bölümlü oyun → tamamlanan/tüm bölüm (altın yıldız + N/M),
+        // sonsuz oyun → 0..3 yıldız pip'i.
+        if (_apps_levn[i] > 0) {
+            str pt = toString(_apps_done[i]) + "/" + toString(_apps_levn[i]);
+            int psz = toInt(ch * 0.17); if (psz < 11) { psz = 11; }
+            int ptw = measure_text(pt, psz);
+            float pr = ch * 0.06;
+            float py = cy + ch * 0.56;
+            float gw = pr * 2.0 + ch * 0.05 + ptw * 1.0;   // pip + boşluk + metin
+            float gx = cx + cw / 2.0 - gw / 2.0;
+            circle(toInt(gx + pr), toInt(py + psz * 0.45), toInt(pr), GOLD);
+            text(pt, toInt(gx + pr * 2.0 + ch * 0.05), toInt(py), psz, GOLD);
+        } else {
+            _menu_draw_pips(cx, cy, cw, ch, _apps_star[i]);
+        }
         // En iyi skor rozeti — kartın altına, altın renkli.
         if (_apps_best[i] > 0) {
             str bh = "En iyi: ";
             if (L == "en") { bh = "Best: "; }
             str bt = bh + toString(_apps_best[i]);
-            int bsz = toInt(ch * 0.14);
+            int bsz = toInt(ch * 0.13);
             if (bsz < 10) { bsz = 10; }
             text(bt, toInt(cx + (cw - measure_text(bt, bsz)) / 2.0),
                  toInt(cy + ch - bsz * 1.5), bsz, GOLD);
@@ -1958,6 +2342,11 @@ func _menu_draw() {
 // Bir oyunun kayıtlı en iyi skorunu oku (launcher rozetleri için).
 func _lx_load_best(name): int {
     str s = load_data("arcade_best_" + name + ".txt");
+    if (s == "") { return 0; }
+    return toInt(s);
+}
+func _lx_load_star(name): int {
+    str s = load_data("arcade_star_" + name + ".txt");
     if (s == "") { return 0; }
     return toInt(s);
 }
@@ -1990,11 +2379,97 @@ func _cfg_btn_tapped(): bool {
     return dx * dx + dy * dy <= grab * grab;
 }
 
+// ---- Menüdeki kupa (Rozetler) düğmesi — dişlinin solunda -------------------
+int  _ar_mode_badges = 3;     // launcher modu: 3 = Rozetler ekranı
+int  _ar_mode_levelsel = 4;   // launcher modu: 4 = Bölüm seçim ekranı
+func _bdg_btn_x(): float { return _cfg_btn_x() - _world_h * 0.15; }
+func _bdg_btn_y(): float { return _cfg_btn_y(); }
+func _bdg_btn_r(): float { return _cfg_btn_r(); }
+
+func _bdg_btn_draw() {
+    float bx = _bdg_btn_x(); float by = _bdg_btn_y(); float br = _bdg_btn_r();
+    circle(toInt(bx), toInt(by), toInt(br), rgba(70, 80, 110, 220));
+    // basit altın kupa: kâse + gövde + taban
+    rect(bx - br * 0.35, by - br * 0.45, br * 0.70, br * 0.45, GOLD);   // kâse
+    rect(bx - br * 0.10, by,             br * 0.20, br * 0.28, GOLD);   // gövde
+    rect(bx - br * 0.35, by + br * 0.28, br * 0.70, br * 0.16, GOLD);   // taban
+}
+
+func _bdg_btn_tapped(): bool {
+    int n = touch_count();
+    if (n == 0 || _ar_touch_prevn != 0) { return false; }
+    float dx = touch_x(0) * 1.0 - _bdg_btn_x();
+    float dy = touch_y(0) * 1.0 - _bdg_btn_y();
+    float grab = _bdg_btn_r() * 1.6;
+    return dx * dx + dy * dy <= grab * grab;
+}
+
+// ---- Rozetler ekranı (mode 3) ----------------------------------------------
+func _badges_draw() {
+    clear(rgb(16, 18, 26));
+    str L = _lang_now();
+    str title = "Rozetler"; if (L == "en") { title = "Badges"; }
+    int tsz = toInt(_world_h * 0.082);
+    text(title, toInt((_world_w - measure_text(title, tsz)) / 2.0),
+         toInt(_world_h * 0.055), tsz, GOLD);
+    // Toplam yıldız satırı.
+    int total = 0; int k = 0;
+    while (k < _apps_n) { total = total + _apps_star[k]; k = k + 1; }
+    str stx = "Toplam yildiz: "; if (L == "en") { stx = "Total stars: "; }
+    str sline = stx + toString(total);
+    int ssz = toInt(_world_h * 0.042);
+    text(sline, toInt((_world_w - measure_text(sline, ssz)) / 2.0),
+         toInt(_world_h * 0.150), ssz, SKYBLUE);
+    int i = 0;
+    while (i < 5) {
+        float rx = _world_w * 0.13; float rw = _world_w * 0.74;
+        float rh = _world_h * 0.10;  float ry = _world_h * (0.21 + i * 0.115);
+        bool has = _badge_has(i);
+        rect(rx, ry, rw, rh, has ? rgb(40, 46, 66) : rgb(24, 26, 36));
+        float mr = rh * 0.28;
+        int mcol = rgb(60, 66, 86); if (has) { mcol = GOLD; }
+        circle(toInt(rx + rh * 0.55), toInt(ry + rh * 0.5), toInt(mr), mcol);
+        int ncol = WHITE; if (!has) { ncol = rgb(120, 126, 140); }
+        text(_badge_name(i), toInt(rx + rh * 1.1), toInt(ry + rh * 0.16),
+             toInt(rh * 0.34), ncol);
+        text(_badge_desc(i), toInt(rx + rh * 1.1), toInt(ry + rh * 0.55),
+             toInt(rh * 0.24), rgb(150, 156, 170));
+        i = i + 1;
+    }
+    // Geri düğmesi (Ayarlar geometrisini paylaşır).
+    float bx = _cfg_back_x(); float by = _cfg_back_y();
+    float bw = _cfg_back_w(); float bh = _cfg_back_h();
+    rect(bx, by, bw, bh, rgb(46, 54, 82));
+    rect_lines(bx, by, bw, bh, GOLD);
+    str back = "Geri"; if (L == "en") { back = "Back"; }
+    int bsz = toInt(bh * 0.40);
+    text(back, toInt(bx + (bw - measure_text(back, bsz)) / 2.0),
+         toInt(by + (bh - bsz * 1.0) / 2.0), bsz, WHITE);
+}
+
+// Rozetler ekranı bir karesi. true → menüye dön.
+func _badges_step(): bool {
+    if (key_pressed("BACK") || key_pressed("ESCAPE") || key_pressed("BACKSPACE")) {
+        return true;
+    }
+    int n = touch_count();
+    bool tap = (n > 0) && (_ar_touch_prevn == 0);
+    bool leave = false;
+    if (tap) {
+        float tx = touch_x(0) * 1.0; float ty = touch_y(0) * 1.0;
+        float bx = _cfg_back_x(); float by = _cfg_back_y();
+        float bw = _cfg_back_w(); float bh = _cfg_back_h();
+        if (tx >= bx && tx <= bx + bw && ty >= by && ty <= by + bh) { leave = true; }
+    }
+    _ar_touch_prevn = n;
+    return leave;
+}
+
 // ---- Ayarlar ekranı: 3 satır (Ses / Titreşim / Dil) + Geri -----------------
 func _cfg_row_x(): float  { return _world_w * 0.14; }
 func _cfg_row_w(): float  { return _world_w * 0.72; }
-func _cfg_row_h(): float  { return _world_h * 0.10; }
-func _cfg_row_y(i): float { return _world_h * (0.20 + i * 0.115); }
+func _cfg_row_h(): float  { return _world_h * 0.086; }
+func _cfg_row_y(i): float { return _world_h * (0.185 + i * 0.099); }
 func _cfg_back_x(): float { return _world_w * 0.35; }
 func _cfg_back_y(): float { return _world_h * 0.83; }
 func _cfg_back_w(): float { return _world_w * 0.30; }
@@ -2030,6 +2505,7 @@ func _cfg_draw() {
          toInt(_world_h * 0.075), tsz, GOLD);
 
     str l0 = "Ses";      if (L == "en") { l0 = "Sound"; }
+    str lm = "Muzik";    if (L == "en") { lm = "Music"; }
     str l1 = "Titresim"; if (L == "en") { l1 = "Haptics"; }
     str l2 = "Dil";      if (L == "en") { l2 = "Language"; }
     str l3 = "FPS";
@@ -2039,10 +2515,11 @@ func _cfg_draw() {
     if (_cfg_reset_msg > 0.0) { rv = "Silindi"; if (L == "en") { rv = "Cleared"; } }
     else if (_cfg_reset_armed) { rv = "Emin?"; if (L == "en") { rv = "Sure?"; } }
     _cfg_draw_row(0, l0, _cfg_val_onoff(_snd_on));
-    _cfg_draw_row(1, l1, _cfg_val_onoff(_hap_on));
-    _cfg_draw_row(2, l2, lv);
-    _cfg_draw_row(3, l3, _cfg_val_onoff(_fps_on));
-    _cfg_draw_row(4, l4, rv);
+    _cfg_draw_row(1, lm, _cfg_val_onoff(_mus_on));
+    _cfg_draw_row(2, l1, _cfg_val_onoff(_hap_on));
+    _cfg_draw_row(3, l2, lv);
+    _cfg_draw_row(4, l3, _cfg_val_onoff(_fps_on));
+    _cfg_draw_row(5, l4, rv);
 
     float bx = _cfg_back_x(); float by = _cfg_back_y();
     float bw = _cfg_back_w(); float bh = _cfg_back_h();
@@ -2067,12 +2544,13 @@ func _ar_reset_records() {
 }
 
 func _cfg_toggle(i) {
-    if (i != 4) { _cfg_reset_armed = false; }   // başka satıra dokunmak onayı düşürür
+    if (i != 5) { _cfg_reset_armed = false; }   // başka satıra dokunmak onayı düşürür
     if (i == 0) { _snd_on = !_snd_on; if (_snd_on) { _snd(880.0, 60); } }
-    else if (i == 1) { _hap_on = !_hap_on; if (_hap_on) { _hap(80); } }
-    else if (i == 2) { if (_lang_now() == "en") { _lang = "tr"; } else { _lang = "en"; } }
-    else if (i == 3) { _fps_on = !_fps_on; }
-    else if (i == 4) {
+    else if (i == 1) { _mus_on = !_mus_on; if (!_mus_on) { _mus_track = -1; } }
+    else if (i == 2) { _hap_on = !_hap_on; if (_hap_on) { _hap(80); } }
+    else if (i == 3) { if (_lang_now() == "en") { _lang = "tr"; } else { _lang = "en"; } }
+    else if (i == 4) { _fps_on = !_fps_on; }
+    else if (i == 5) {
         // İki-dokunuş onayı: 1. dokunuş silahlandırır ("Emin?"), 2. dokunuş siler.
         if (_cfg_reset_armed) {
             _ar_reset_records();
@@ -2097,7 +2575,7 @@ func _cfg_step(): bool {
     if (tap) {
         float tx = touch_x(0) * 1.0; float ty = touch_y(0) * 1.0;
         int i = 0;
-        while (i < 5) {
+        while (i < 6) {
             float ry = _cfg_row_y(i); float rh = _cfg_row_h();
             float rx = _cfg_row_x(); float rw = _cfg_row_w();
             // Yalnız SAĞDAKİ değer kutusu toggle eder; sol etikete/ortaya basmak
@@ -2210,13 +2688,28 @@ func launcher() {
     // Kalıcı rekorları bir kez yükle (kare başına dosya IO'su OLMAZ).
     for (int bi = 0; bi < _apps_n; bi = bi + 1) {
         _apps_best[bi] = _lx_load_best(_apps_name[bi]);
+        _apps_star[bi] = _lx_load_star(_apps_name[bi]);
     }
+    // Bölüm sayılarını + tamamlanan bölümleri keşfet: her setup'ı bir kez çağır
+    // (saf kayıt — pencere/entity YOK), _level_n'i oku, sonra temizle. Kartlar +
+    // bölüm-seçim ekranı bunu kullanır (setup'ı tekrar çalıştırmadan).
+    for (int pj = 0; pj < _apps_n; pj = pj + 1) {
+        _lx_clear();
+        _ar_title = _apps_name[pj];
+        call(_apps_setup[pj]);
+        _apps_levn[pj] = _level_n;
+        _apps_done[pj] = _count_done_levels(_apps_name[pj], _level_n);
+    }
+    _lx_clear();
     _ar_load_settings();               // kalıcı ses/haptik/dil ayarlarını uygula
     var wm = arena_save();
     while (running()) {
         if (_ar_mode == 0) {
-            // Menü: dişli → Ayarlar; Android GERİ → uygulamadan çık.
-            if (_cfg_btn_tapped()) {
+            // Menü: kupa → Rozetler; dişli → Ayarlar; Android GERİ → çık.
+            if (_bdg_btn_tapped()) {
+                _ar_mode = _ar_mode_badges;
+                _ar_touch_prevn = touch_count();
+            } else if (_cfg_btn_tapped()) {
                 _ar_mode = _ar_mode_settings;
                 _cfg_reset_armed = false;   // ayara her girişte "Rekorları Sıfırla" onayı sıfır
                 _cfg_reset_msg = 0.0;
@@ -2226,19 +2719,41 @@ func launcher() {
             } else {
                 _menu_step();
             }
+            _mus_step(0);                  // menü müziği (sakin parça)
             frame_begin();
             _menu_draw();
+            _bdg_btn_draw();
             _cfg_btn_draw();
             _trans_draw();
             frame_end();
         } else if (_ar_mode == _ar_mode_settings) {
             // Ayarlar ekranı — çıkışta kaydeder.
             bool leave = _cfg_step();
+            _mus_step(0);                  // ayarlarda da menü müziği sürer
             frame_begin();
             _cfg_draw();
             _trans_draw();
             frame_end();
             if (leave) { _ar_save_settings(); _ar_mode = 0; }
+        } else if (_ar_mode == _ar_mode_badges) {
+            // Rozetler ekranı — sadece görüntüler, Geri ile menüye döner.
+            bool bleave = _badges_step();
+            _mus_step(0);
+            frame_begin();
+            _badges_draw();
+            _trans_draw();
+            frame_end();
+            if (bleave) { _ar_mode = 0; _ar_touch_prevn = touch_count(); }
+        } else if (_ar_mode == _ar_mode_levelsel) {
+            // Bölüm seçim ekranı — bir bölüm seç ya da Geri ile menüye dön.
+            int la = _levelsel_step();
+            _mus_step(0);
+            frame_begin();
+            _levelsel_draw();
+            _trans_draw();
+            frame_end();
+            if (la == 0 - 1) { _lx_clear(); _ar_mode = 0; _ar_touch_prevn = touch_count(); }
+            else if (la > 0) { _ar_start_level = la; _lx_begin_play(_lx_sel_game); }
         } else {
             // Oyun. GERİ / ESC → duraklat (ilerleme kaybolmasın); EV → anında menü.
             // Yalnız aktif oynanırken duraklanır (biten oyun duraklatılamaz).
@@ -2249,6 +2764,7 @@ func launcher() {
             }
             if (_ar_paused) {
                 str ml = "Menu";
+                _mus_step(0);              // duraklatınca sakin parçaya geç
                 frame_begin();
                 _ar_draw_all();
                 _lx_draw_home();
@@ -2260,6 +2776,7 @@ func launcher() {
                 else if (act == 3) { _ar_paused = false; _lx_goto_menu(); }
             } else {
                 _ar_update();
+                if (_ar_state == 0) { _mus_step(1); } else { _mus_step(0); }
                 frame_begin();
                 _ar_draw_all();
                 _lx_draw_home();
