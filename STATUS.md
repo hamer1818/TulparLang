@@ -40,8 +40,41 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > gezmiyor; sol-altta sabit çıpada (`_ar_dpad_cx/cy`) duruyor (bazı telefonlarda
 > ortaya kayıp eli görüşü kapatıyordu) — yön sabit merkezden sapmayla okunuyor.
 > Aktivasyon alanı da sabit tabanın çevresindeki KÜÇÜK daireye daraltıldı (eskiden
-> tüm sol-alt çeyrekti) → ekranın ortasına / joystick dışına basınca artık oluşmuyor. Teslim APK: `Downloads\tulpar-arcade.apk`. Commit
-> bekliyor (kullanıcı isteğiyle). NOT: oyun **oynanış** denemesini kullanıcı yapar
+> tüm sol-alt çeyrekti) → ekranın ortasına / joystick dışına basınca artık oluşmuyor.
+> (8) **Daha fazla bölüm — bölümlü 10 oyun artık 6 bölüm** (3→6; 2048/Pong/Vur
+> sonsuz kalır): parametre oyunları tempo/hız/hedef artışı, düzen oyunları yeni
+> elle-kurulu tahtalar. Labirent M4–M6 üreteçle kurulup **flood-fill ile çözülebilir
+> doğrulandı** (her anahtar ulaşılabilir, her devriye yatay koridorda); zipla
+> zıplama-yayı sınırlarına (≤80px dikey/≤140px yatay) uyuyor. (9) **Config-güdümlü
+> build hedefi**: `tulpar.toml`'a `[build] target/entry/output` eklendi; bayraksız
+> `tulpar build` hedefi/kaynağı/çıktıyı manifest'ten okur (CLI ezer). Mobil
+> güncelleme artık sadece `cd examples/arcade_app && tulpar build` → doğru
+> dev.tulparlang.arcade / "Tulpar Arcade" imzalı APK (out_apk kazası biter).
+> manifest.cpp'ye [build] bölümü + main.cpp'ye çözüm mantığı (desktop|web|android|apk|aab). Teslim APK: `Downloads\tulpar-arcade.apk`. (10)
+> **Prosedürel arka plan müziği (dosyasız chiptune)**: yeni ses-seviyeli sentez
+> builtin'i `tm_tone(freq, ms, vol)` (`tm_beep`'in kardeşi; 5-nokta bağlandı —
+> tame_impl.c/tame_bindings.cpp/llvm_backend tablo satırı/typeinfer/lsp) arcade'de
+> bir müzik sekanslayıcısını sürer: menü/ayarlar/duraklat'ta sakin A-minör arpej,
+> aktif oyunda hareketli pentatonik döngü; `elapsed()` mutlak saatiyle tempo
+> kare-hızından bağımsız. Notalar SFX'in ALTINDA (~0.26 seviye) çalar → efektler
+> duyulur; ses dosyası yok → **APK boyutu artmaz**. Ayarlar'a 6. satır **Muzik**
+> (kalıcı `arcade_mus.txt`, SFX'ten bağımsız; public `music_on()/muzik_ac()`);
+> Ayarlar 6 satıra (Ses/Muzik/Titresim/Dil/FPS/Rekorlar) yeniden ölçeklendi.
+> Android arşivleri (android/dist) tm_tone için yeniden derlendi. (11)
+> **İlerleme sistemi — BÖLÜM BAŞINA yıldız + BÖLÜM SEÇİM ekranı + rozet (kilit YOK)**:
+> bölümlü oyuna dokununca önce **bölüm seçim ekranı** gelir (her bölümün yıldızlı
+> kartı; birini seç ya da Geri). **Her bölüm kendi yıldızını** geçince kazanır,
+> bölüm-başına kalıcı (`arcade_lvl_<ad>_<k>.txt`); menü kartında **tamamlanan/tüm**
+> (★ 4/6). Sonsuz oyunlar (2048/Pong/Vur) bölümsüz → dokununca hemen başlar, kartta
+> `yildiz_hedef(a,b,c)/star_goals` eşiklerinden 0–3 yıldız. Menüde **kupa düğmesi** →
+> **Rozetler** (İlk Zafer / Rekortmen / Üç Yıldız=toplam 3 / Koleksiyoncu 15 / Usta 30),
+> kalıcı + yeni kazanınca toast+ses. Kilit yok → her oyun + her eski bölüm tekrar
+> oynanabilir. Bölüm sayıları launcher açılışında her setup'ı (yan-etkisiz) çağırarak
+> keşfedilir. Headless doğrulandı (`tests/arcade_progression.test.tpr` 4/4:
+> bölüm-başı işaretleme, belirli-bölümden-başla, rozet aç+kalıcı, sonsuz eşik).
+> Launcher fonksiyon tablosu eski 512-sembol AOT sınırını aştı (13 namespace'li oyun
+> + arcade + tame) → `llvm_backend.{hpp,cpp}` 1024'e çıkarıldı. Commit bekliyor.
+> NOT: oyun **oynanış** denemesini kullanıcı yapar
 > ([[user-tests-gameplay-himself]]); ben build+kur+tek statik ekranla doğrularım.
 >
 > **Geliştirme dalı (yayınlanmadı): ikinci mobil dalga** — "juice" + gerçek
