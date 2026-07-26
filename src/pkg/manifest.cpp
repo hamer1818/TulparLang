@@ -72,7 +72,7 @@ std::string escape_for_toml(const std::string &s) {
 bool manifest_parse(const std::string &source, Manifest &out,
                     std::string &out_err) {
     out = Manifest{};
-    enum Section { SEC_TOP, SEC_DEPS, SEC_REGISTRY, SEC_RELEASE_BINARIES, SEC_BINARIES, SEC_ANDROID };
+    enum Section { SEC_TOP, SEC_DEPS, SEC_REGISTRY, SEC_RELEASE_BINARIES, SEC_BINARIES, SEC_ANDROID, SEC_BUILD };
     Section section = SEC_TOP;
 
     std::istringstream in(source);
@@ -95,6 +95,8 @@ bool manifest_parse(const std::string &source, Manifest &out,
                 section = SEC_BINARIES;
             } else if (name == "android") {
                 section = SEC_ANDROID;
+            } else if (name == "build") {
+                section = SEC_BUILD;
             } else {
                 out_err = "line " + std::to_string(lineno) +
                           ": unknown section [" + name + "]";
@@ -208,6 +210,16 @@ bool manifest_parse(const std::string &source, Manifest &out,
                               "assets, splash_color)";
                     return false;
                 }
+            } else if (section == SEC_BUILD) {
+                if (key == "target") out.build_target = val;
+                else if (key == "entry") out.build_entry = val;
+                else if (key == "output") out.build_output = val;
+                else {
+                    out_err = "line " + std::to_string(lineno) +
+                              ": [build] key '" + key +
+                              "' is not recognised (target, entry, output)";
+                    return false;
+                }
             }
         } else {
             out_err = "line " + std::to_string(lineno) +
@@ -304,6 +316,19 @@ std::string Manifest::to_toml() const {
         akv("version_name", android_version_name);
         akv("assets", android_assets);
         akv("splash_color", android_splash_color);
+    }
+    if (!build_target.empty() || !build_entry.empty() || !build_output.empty()) {
+        out += "\n[build]\n";
+        auto bkv = [&](const char *k, const std::string &v) {
+            if (v.empty()) return;
+            out += k;
+            out += " = \"";
+            out += escape_for_toml(v);
+            out += "\"\n";
+        };
+        bkv("target", build_target);
+        bkv("entry", build_entry);
+        bkv("output", build_output);
     }
     return out;
 }

@@ -274,6 +274,9 @@ int main(int argc, char **argv) {
   //   4. CLI --strict flag — always enables.
   // --no-typecheck still overrides everything (no warnings, no exit).
   int strict_typecheck = 0;
+  // tulpar.toml [build] varsayılanları — `tulpar build` CLI'da hedef/kaynak/çıktı
+  // verilmediğinde bunları kullanır (CLI her zaman ezer). Boşsa eski davranış.
+  std::string toml_build_target, toml_build_entry, toml_build_output;
   {
     // Only surface a parse error if the file actually exists — silent
     // skip when there's no manifest at all (most scripts run without one).
@@ -283,6 +286,9 @@ int main(int argc, char **argv) {
       std::string manifest_err;
       if (tulpar::manifest_load("tulpar.toml", cwd_manifest, manifest_err)) {
         if (cwd_manifest.strict_typecheck) strict_typecheck = 1;
+        toml_build_target = cwd_manifest.build_target;
+        toml_build_entry = cwd_manifest.build_entry;
+        toml_build_output = cwd_manifest.build_output;
       } else {
         std::fprintf(stderr, "[manifest] tulpar.toml: %s (ignoring)\n",
                      manifest_err.c_str());
@@ -371,6 +377,32 @@ int main(int argc, char **argv) {
   }
 
   if (build_mode) {
+    // tulpar.toml [build] target — CLI'da bir hedef bayrağı YOKSA uygula.
+    // (`tulpar build` tek başına config'i okur; --target/--web/--android/--apk/
+    //  --aab verilmişse o kazanır.) Değerler: desktop|web|android|apk|aab.
+    bool cli_target_given =
+        web_target || android_target || apk_package || aab_package;
+    if (!cli_target_given && !toml_build_target.empty()) {
+      const std::string &t = toml_build_target;
+      if (t == "web") {
+        web_target = 1;
+      } else if (t == "android") {
+        android_target = 1;
+      } else if (t == "apk") {
+        android_target = 1;
+        apk_package = 1;
+      } else if (t == "aab") {
+        android_target = 1;
+        aab_package = 1;
+      } else if (t == "desktop" || t == "native") {
+        // yerel binary — bayrak gerekmez
+      } else {
+        std::fprintf(stderr,
+                     "[build] tulpar.toml target='%s' taninmadi "
+                     "(desktop|web|android|apk|aab); desktop varsayildi.\n",
+                     t.c_str());
+      }
+    }
     if (web_target) aot_set_target_web(1);
     if (android_target) aot_set_target_android(1);
     if (apk_package) aot_set_android_apk(1);
@@ -384,8 +416,18 @@ int main(int argc, char **argv) {
       if (!src_arg) src_arg = argv[i];
       else if (!out_arg) out_arg = argv[i];
     }
+    // CLI'da kaynak/çıktı verilmediyse tulpar.toml [build] entry/output kullan.
+    // (entry manifest dizinine — yani CWD'ye — göreli yazılır.)
+    if (!src_arg && !toml_build_entry.empty()) src_arg = toml_build_entry.c_str();
+    if (!out_arg && !toml_build_output.empty())
+      out_arg = toml_build_output.c_str();
+    if (src_arg && (web_target || android_target))
+      std::fprintf(stderr, "[build] hedef: %s  kaynak: %s\n",
+                   web_target ? "web" : "android", src_arg);
     if (!src_arg) {
       printf("Usage: tulpar build <source.tpr> [output_name]\n");
+      printf("  veya tulpar.toml icine [build] entry=... target=... yaz, "
+             "sadece 'tulpar build' calistir.\n");
       return 1;
     }
     char *source = read_file(src_arg);
