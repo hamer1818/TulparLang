@@ -288,7 +288,10 @@ jobs:
           chmod +x tulpar
           chmod +x build.sh
           ./build.sh test
-        timeout-minutes: 5
+        # The example suite grew (13+ arcade games, each recompiling the full
+        # arcade+tame engine at O1); 5 min was no longer enough and the step
+        # timed out with every test still passing. Bumped to give headroom.
+        timeout-minutes: 15
 
       # typeinfer regression suite — drives `tulpar --strict <file>` over
       # tests/typeinfer/{pass,fail}/*.tpr. The runner already builds the
