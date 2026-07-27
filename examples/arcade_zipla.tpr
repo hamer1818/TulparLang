@@ -124,6 +124,7 @@ func kaybet_cb() {                                 // engele değ → oyun biter
 yercekimi(1400);
 ziplama(640);
 sahne(640, 480, "Zipla");
+music_theme(2);   // neseli tema (platformer)
 bilgi("Sol/Sag veya A/D: yuru   SPACE/YUKARI: zipla   |   Altin hedefe ulas");
 baslangicta(kur);
 bolum(1, b1);

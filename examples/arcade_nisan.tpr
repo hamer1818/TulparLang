@@ -66,6 +66,7 @@ func kaybet_cb() {                                    // düşman oyuncuya deği
 }
 
 sahne(640, 480, "Nisanci");
+music_theme(1);   // gergin tema (nisanci)
 // Şerit 640px'e sığmalı — uzun metin sağdan kırpılır (bölüm/hedef zaten HUD'da).
 bilgi("Ok/WASD: hareket   SPACE: ates   |   Kirmizilari vur (+10)");
 kontrol_semasi("yatay");   // mobilde sag/sol ok butonlari + ates butonu
