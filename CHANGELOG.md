@@ -38,6 +38,14 @@ full-stack global leaderboard. All verified live on the Android emulator.
   from the `TULPAR_LB_URL` env var at generation time.
 
 ### Added (third wave, follow-ups)
+- **Per-game music themes + larger touch targets + 3 more browser games.**
+  `music_theme(n)` / `muzik_tema(n)` picks one of three in-game tracks (default,
+  tense, bouncy); shooters/space use the tense theme, the platformer the bouncy
+  one. Touch **hit-areas** are enlarged without changing the visuals (direction
+  buttons and the action button are more forgiving to tap). The three endless
+  games (2048, Pong, Whack/Vur) gained **English twins** and joined the bilingual
+  browser gallery — 14 games now, each TR + EN. Diagonal top-down movement is
+  normalized (was ~41% faster diagonally) and the joystick dead-zone is tighter.
 - **Progression: per-level stars + level-select + badges (all games unlocked).**
   Tapping a leveled game now opens a **level-select screen** first — a grid of its
   levels, each showing a gold star if completed — and you pick which level to play
