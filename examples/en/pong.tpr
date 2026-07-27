@@ -17,7 +17,7 @@ import "arcade";
 int player = 0;
 int ai = 0;
 int ball = 0;
-float bspeed = 260.0;   // ball speed (px/s) — grows a little on each return
+float bspeed = 300.0;   // ball speed (px/s) — grows a little on each return
 int PW = 14;            // paddle width
 int PH = 90;            // paddle height
 
@@ -30,7 +30,7 @@ func serve(dir) {
 
 func setup() {
     clear_entities();
-    bspeed = 260.0;
+    bspeed = 300.0;
     player = spawn(20,  195, PW, PH, SKYBLUE, TAG_PLAYER, MV_NONE);
     ai     = spawn(606, 195, PW, PH, RED,     TAG_ENEMY,  MV_NONE);
     ball   = spawn(313, 233, 14, 14, GOLD,    TAG_BULLET, MV_VELOCITY);
@@ -86,8 +86,8 @@ func frame() {
 func hit_cb() {
     int b = other();
     float rel = (y_of(b) + 7.0) - (y_of(player) + PH * 0.5);
-    bspeed = bspeed + 10.0;
-    if (bspeed > 470.0) { bspeed = 470.0; }
+    bspeed = bspeed + 14.0;
+    if (bspeed > 540.0) { bspeed = 540.0; }
     float nvy = (rel / (PH * 0.5)) * bspeed * 0.8;
     set_vel(b, bspeed, nvy);
     set_pos(b, 20.0 + PW, y_of(b));
