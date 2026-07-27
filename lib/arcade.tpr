@@ -1325,7 +1325,7 @@ func _ar_read_touch() {
         _ar_joy_ky = _ar_joy_by + oy;
         _ar_joy_dx = ox / baseR;         // analog yön [-1..1]
         _ar_joy_dy = oy / baseR;
-        float dz = 0.28;                 // ölü bölge (küçük merkez titremesini yut)
+        float dz = 0.16;                 // ölü bölge — küçük; parmak eşiğini erken aşsın (daha tepkisel)
         if (_ar_joy_dx < 0.0 - dz) { _ar_td_left = true; }
         if (_ar_joy_dx > dz)       { _ar_td_right = true; }
         if (_ar_joy_dy < 0.0 - dz) { _ar_td_up = true; }
@@ -1573,6 +1573,13 @@ func _ar_apply_movement(dt) {
             if (_ar_in_right()) { vx = vx + s; }
             if (_ar_in_up())    { vy = vy - s; }
             if (_ar_in_down())  { vy = vy + s; }
+            // Çapraz normalizasyonu: iki eksen de aktifken (vx,vy) büyüklüğü s·√2
+            // olur → çapraz %41 daha hızlı. Her ikisini 1/√2 ile ölçekle ki
+            // çapraz hız da tam s olsun (düz/çapraz aynı hız).
+            if (vx != 0.0 && vy != 0.0) {
+                vx = vx * 0.70710678;
+                vy = vy * 0.70710678;
+            }
             _evx[_ar_i] = vx;
             _evy[_ar_i] = vy;
             _ex[_ar_i] = _ex[_ar_i] + vx * dt;

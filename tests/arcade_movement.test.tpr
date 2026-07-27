@@ -1,0 +1,33 @@
+import "test";
+import "arcade";
+
+// Hareket — HEADLESS (pencere yok; _ar_td_* dokunma-yön bayrakları elle set edilir,
+// klavye pencere olmadan false döner). Çapraz normalizasyonu: düz ve çapraz hız EŞİT.
+
+func run_capraz_hiz() {
+    clamp_to_world(false);            // dünya sınırı testi bozmasın
+    int p = player(300, 220, 20, 20, BLUE);
+    move_speed(p, 100);
+
+    // Ortogonal (sadece SAĞ): dt=1 → büyüklük 100.
+    _ar_td_left = false; _ar_td_right = true; _ar_td_up = false; _ar_td_down = false;
+    set_pos(p, 300, 220);
+    _ar_apply_movement(1.0);
+    float ox = get_x(p) - 300.0;
+    float oy = get_y(p) - 220.0;
+    assert_eq_int(toInt(sqrt(ox*ox + oy*oy) + 0.5), 100);
+
+    // Çapraz (SAĞ + AŞAĞI): büyüklük yine 100 olmalı (√2 katı = 141 DEĞİL).
+    _ar_td_left = false; _ar_td_right = true; _ar_td_up = false; _ar_td_down = true;
+    set_pos(p, 300, 220);
+    _ar_apply_movement(1.0);
+    float dx = get_x(p) - 300.0;
+    float dy = get_y(p) - 220.0;
+    assert_eq_int(toInt(sqrt(dx*dx + dy*dy) + 0.5), 100);
+    // Her eksen ~70.71 olmalı (simetrik).
+    assert_eq_int(toInt(dx + 0.5), 71);
+    assert_eq_int(toInt(dy + 0.5), 71);
+}
+
+func main() { test("çapraz hız = düz hız (normalize)", run_capraz_hiz); }
+main();
