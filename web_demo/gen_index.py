@@ -170,10 +170,10 @@ html = f'''<!doctype html>
   <p class="lead">
     <span data-tr>TulparLang ile yazılıp WebAssembly'ye derlenmiş oyunlar. Her oyunun
       kaynağını <b>hem Türkçe hem İngilizce</b> API ile görebilirsin — TulparLang'in
-      her fonksiyonunun iki dilde adı var. Her oyun 3 bölüm; üçünü de bitir → KAZANDIN.</span>
+      her fonksiyonunun iki dilde adı var. Bölümlü oyunlar 6 bölüm; hepsini bitir → KAZANDIN.</span>
     <span data-en>Games written in TulparLang and compiled to WebAssembly. You can view each
       game's source in <b>both Turkish and English</b> API — every TulparLang function has a
-      name in both languages. Each game has 3 levels; clear all three → YOU WIN.</span>
+      name in both languages. Leveled games have 6 levels; clear them all → YOU WIN.</span>
   </p>
   <div class="langbar">
     <button data-setlang="tr" class="active">Türkçe</button>
