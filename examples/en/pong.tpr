@@ -1,0 +1,115 @@
+// Pong — arcade engine, a rally against the AI. Endless: +1 for each successful
+// return; miss the ball and the game ends. Score = how many returns in a row.
+// English twin of examples/arcade_pong.tpr.
+//
+//   ./tulpar examples/en/pong.tpr
+//
+// Up/Down (W/S) or the on-screen arrow buttons on mobile drive the left paddle.
+// The ball speeds up; the AI paddle tracks it but at a limited speed (beatable).
+// If the AI misses, the ball bounces off the right wall (game continues) — only
+// YOUR miss ends it.
+//
+// Engine use: paddles + ball are entities; movement/AI in on_frame, collision
+// callbacks handle the return + bounce.
+
+import "arcade";
+
+int player = 0;
+int ai = 0;
+int ball = 0;
+float bspeed = 260.0;   // ball speed (px/s) — grows a little on each return
+int PW = 14;            // paddle width
+int PH = 90;            // paddle height
+
+// Serve the ball from center toward `dir` (−1 left / +1 right) with a slight angle.
+func serve(dir) {
+    set_pos(ball, 313, 233);
+    float ay = (random() - 0.5) * 1.2;
+    set_vel(ball, dir * bspeed, sin(ay) * bspeed);
+}
+
+func setup() {
+    clear_entities();
+    bspeed = 260.0;
+    player = spawn(20,  195, PW, PH, SKYBLUE, TAG_PLAYER, MV_NONE);
+    ai     = spawn(606, 195, PW, PH, RED,     TAG_ENEMY,  MV_NONE);
+    ball   = spawn(313, 233, 14, 14, GOLD,    TAG_BULLET, MV_VELOCITY);
+    serve(0 - 1);
+}
+
+func abs_f(v): float { if (v < 0.0) { return 0.0 - v; } return v; }
+
+func frame() {
+    float dt = frame_time();
+    if (dt <= 0.0) { dt = 0.0166667; }
+    if (dt > 0.05) { dt = 0.05; }
+
+    // Player paddle: up/down (keyboard OR touch)
+    float py = y_of(player);
+    if (up())   { py = py - 380.0 * dt; }
+    if (down()) { py = py + 380.0 * dt; }
+    if (py < 0.0) { py = 0.0; }
+    if (py > 480.0 - PH * 1.0) { py = 480.0 - PH; }
+    set_pos(player, 20, py);
+
+    // AI paddle: track the ball (limited speed → beatable)
+    float ay = y_of(ai);
+    float target = y_of(ball) - PH * 0.5;
+    float d = target - ay;
+    float lim = 250.0 * dt;
+    if (d > lim) { d = lim; }
+    if (d < 0.0 - lim) { d = 0.0 - lim; }
+    ay = ay + d;
+    if (ay < 0.0) { ay = 0.0; }
+    if (ay > 480.0 - PH * 1.0) { ay = 480.0 - PH; }
+    set_pos(ai, 606, ay);
+
+    // Ball: bounce off top/bottom walls
+    float bx = x_of(ball);
+    float by = y_of(ball);
+    float bvx = vx_of(ball);
+    float bvy = vy_of(ball);
+    if (by < 0.0 && bvy < 0.0) { bvy = 0.0 - bvy; }
+    if (by > 480.0 - 14.0 && bvy > 0.0) { bvy = 0.0 - bvy; }
+    set_vel(ball, bvx, bvy);
+
+    // Player missed → game ends
+    if (bx < 0.0 - 14.0) { game_over(); return; }
+    // AI missed → bounce off the right wall (game continues)
+    if (bx > 640.0 && bvx > 0.0) {
+        set_pos(ball, 640.0 - 16.0, by);
+        set_vel(ball, 0.0 - abs_f(bvx), bvy);
+    }
+}
+
+// Ball hits the player paddle: bounce right + angle by contact point + speed up, +1.
+func hit_cb() {
+    int b = other();
+    float rel = (y_of(b) + 7.0) - (y_of(player) + PH * 0.5);
+    bspeed = bspeed + 10.0;
+    if (bspeed > 470.0) { bspeed = 470.0; }
+    float nvy = (rel / (PH * 0.5)) * bspeed * 0.8;
+    set_vel(b, bspeed, nvy);
+    set_pos(b, 20.0 + PW, y_of(b));
+    score_add(1);
+    explode(20.0 + PW + 7.0, y_of(b) + 7.0, SKYBLUE);
+}
+
+// Ball hits the AI paddle: bounce left + angle (no score).
+func ai_cb() {
+    int b = other();
+    float rel = (y_of(b) + 7.0) - (y_of(ai) + PH * 0.5);
+    float nvy = (rel / (PH * 0.5)) * bspeed * 0.8;
+    set_vel(b, 0.0 - bspeed, nvy);
+    set_pos(b, 606.0 - 14.0, y_of(b));
+}
+
+scene(640, 480, "Pong");
+controls("Up/Down or W/S: paddle  |  Don't miss the ball, +1 per return");
+control_scheme("vertical");  // on mobile: UP/DOWN arrow buttons (paddle moves vertically)
+star_goals(5, 15, 30);        // endless: stars from rally count (1/2/3)
+on_start(setup);
+on_frame(frame);
+on_hit(TAG_PLAYER, TAG_BULLET, hit_cb);
+on_hit(TAG_ENEMY,  TAG_BULLET, ai_cb);
+play();
