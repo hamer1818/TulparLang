@@ -1,0 +1,89 @@
+// Whack (whack-a-mole / reflex) — arcade engine, 3x3 grid. Tap the lit cell in
+// time (+1); if the mole escapes (timer runs out) the game ends. Each hit
+// shortens the timer → it speeds up. Score = how many moles you hit in time.
+// English twin of examples/arcade_vur.tpr.
+//
+//   ./tulpar examples/en/whack.tpr
+//
+// Pure touch (on desktop, a mouse click counts as touch). No movement/joystick.
+// Engine use is like snake/2048: state is global, drawing is manual via on_draw.
+
+import "arcade";
+
+int GC = 3;            // 3x3
+int CELL = 120;
+int GAP = 16;
+int OX = 116;          // (640 - (3*120+2*16)) / 2 = 116
+int OY = 70;
+int mole = 0;          // active cell (0..8), -1 = none
+float mtimer = 0.0;    // this mole's remaining time (s)
+float mlimit = 1.10;   // current time limit (shrinks each hit)
+int prevn = 0;         // touch edge counter
+
+func cell_x(i): int { return OX + mod(i, GC) * (CELL + GAP); }
+func cell_y(i): int { return OY + toInt(i / GC) * (CELL + GAP); }
+
+// New mole: random cell (avoid same spot), reset the timer.
+func new_mole() {
+    int m = randint(0, 8);
+    if (m == mole) { m = mod(m + 1, 9); }
+    mole = m;
+    mtimer = mlimit;
+}
+
+func setup() {
+    mlimit = 1.10;
+    mole = 0 - 1;
+    prevn = 0;
+    new_mole();
+}
+
+func frame() {
+    float dt = frame_time();
+    if (dt <= 0.0) { dt = 0.0166667; }
+    if (dt > 0.05) { dt = 0.05; }
+
+    mtimer = mtimer - dt;
+    if (mtimer <= 0.0) { game_over(); return; }   // mole escaped
+
+    int n = touch_count();
+    bool tap = (n > 0) && (prevn == 0);
+    if (tap) {
+        float tx = touch_x(0) * 1.0;
+        float ty = touch_y(0) * 1.0;
+        int mx = cell_x(mole);
+        int my = cell_y(mole);
+        if (tx >= mx * 1.0 && tx <= mx + CELL && ty >= my * 1.0 && ty <= my + CELL) {
+            score_add(1);
+            explode(mx + CELL / 2, my + CELL / 2, GOLD);
+            if (mlimit > 0.45) { mlimit = mlimit - 0.03; }   // speed up
+            new_mole();
+        }
+    }
+    prevn = n;
+}
+
+func draw() {
+    for (int i = 0; i < 9; i = i + 1) {
+        int x = cell_x(i);
+        int y = cell_y(i);
+        if (i == mole) {
+            // Warning color by remaining time (green → red)
+            float k = mtimer / mlimit;
+            if (k < 0.0) { k = 0.0; }
+            if (k > 1.0) { k = 1.0; }
+            rect(x, y, CELL, CELL, rgb(toInt(90 + 150 * (1.0 - k)), toInt(70 + 120 * k), 50));
+            circle(x + CELL / 2, y + CELL / 2, toInt(CELL / 3), rgb(240, 175, 60));
+        } else {
+            rect(x, y, CELL, CELL, rgb(38, 42, 58));
+        }
+    }
+}
+
+scene(640, 480, "Whack");
+controls("Tap the lit cell (+1)  |  Hit the mole before it escapes; it speeds up");
+star_goals(10, 25, 50);       // endless: stars from hit count (1/2/3)
+on_start(setup);
+on_frame(frame);
+on_draw(draw);
+play();

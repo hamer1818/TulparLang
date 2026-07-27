@@ -96,6 +96,7 @@ func kaybet_cb() {
 }
 
 sahne(640, 480, "Goktasi");
+music_theme(1);   // gergin tema (goktasi)
 bilgi("Sol/Sag veya A/D: kac   |   Goktaslarindan sakin, sureyi doldur");
 kontrol_semasi("yatay");   // mobilde sag/sol ok butonlari
 baslangicta(kur);

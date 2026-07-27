@@ -272,6 +272,7 @@ float _mus_vol   = 0.26;   // nota ses seviyesi (0..1); SFX=1.0'in altında kal�
 int   _mus_idx   = 0;      // aktif parçadaki sıradaki nota
 float _mus_next  = 0.0;    // elapsed() zamanı: bu nota ne zaman çalınacak
 int   _mus_track = -1;     // -1=yüklü değil, 0=menü, 1=oyun
+int   _mus_gtheme = 0;     // oyun-içi tema (0=varsayılan,1=gergin,2=neşeli)
 array _mus_f = [];         // aktif parça: nota frekansları (Hz; 0=es)
 array _mus_d = [];         // aktif parça: nota süreleri (sn)
 
@@ -284,12 +285,25 @@ func _mus_select(track) {
         // Menü — sakin, geniş arpej (A2 kökü); es'lerle nefes alır.
         _mus_f = [220.0, 261.63, 329.63, 440.0, 329.63, 261.63, 0.0, 196.0, 246.94, 329.63, 392.0, 329.63, 246.94, 0.0];
         _mus_d = [0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32, 0.32];
+    } else if (_mus_gtheme == 1) {
+        // Oyun teması 1 — gergin/hızlı (A-minör; nişancı/uzay için).
+        _mus_f = [440.0, 523.25, 659.25, 523.25, 493.88, 392.0, 440.0, 659.25, 587.33, 523.25, 493.88, 440.0];
+        _mus_d = [0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15];
+    } else if (_mus_gtheme == 2) {
+        // Oyun teması 2 — zıpzıp/neşeli (G-majör; platformer için).
+        _mus_f = [392.0, 493.88, 587.33, 783.99, 587.33, 493.88, 523.25, 659.25, 783.99, 659.25, 587.33, 493.88];
+        _mus_d = [0.16, 0.16, 0.16, 0.16, 0.16, 0.16, 0.16, 0.16, 0.16, 0.16, 0.16, 0.16];
     } else {
-        // Oyun — hareketli pentatonik döngü.
+        // Oyun teması 0 (varsayılan) — hareketli C pentatonik döngü.
         _mus_f = [523.25, 659.25, 783.99, 659.25, 523.25, 392.0, 523.25, 659.25, 587.33, 440.0, 523.25, 659.25, 783.99, 1046.5, 783.99, 659.25];
         _mus_d = [0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17, 0.17];
     }
 }
+
+// Oyun-içi müzik temasını seç (0=varsayılan, 1=gergin, 2=neşeli). Oyun setup'ında
+// çağır; launcher her oyuna geçişte 0'a döner (_lx_clear).
+func music_theme(n) { _mus_gtheme = n; if (_mus_track == 1) { _mus_track = -1; } }
+func muzik_tema(n)  { music_theme(n); }
 
 // Her karede çağrılır: seçili parçayı kur, sıradaki notanın vakti geldiyse çal.
 func _mus_step(track) {
@@ -1243,7 +1257,7 @@ func _ar_read_touch() {
 
     // Yön BUTONU merkezleri (dpad/yatay/dikey şemaları) — sol-alt köşe.
     float bR  = _ar_btn_r();
-    float bgr = bR * 1.35;               // buton yakalama payı
+    float bgr = bR * 1.55;               // buton yakalama payı (erişilebilirlik: cömert)
     float blx = 0.0; float bly = 0.0;    // sol ◀
     float brx = 0.0; float bry = 0.0;    // sağ ▶
     float bux = 0.0; float buy = 0.0;    // yukarı ▲
@@ -1277,7 +1291,8 @@ func _ar_read_touch() {
         float tx = touch_x(i) * 1.0;
         float ty = touch_y(i) * 1.0;
         float adx = tx - acx; float ady = ty - acy;
-        if (_ar_wants_action && adx * adx + ady * ady <= ar * ar) {
+        // Erişilebilirlik: dokunma toleransı görünenden büyük (ar*1.3) — kolay bas.
+        if (_ar_wants_action && adx * adx + ady * ady <= ar * 1.3 * ar * 1.3) {
             _ar_act_now = true;
         } else if (mv_on && sc == 1
                    && (tx - jcx) * (tx - jcx) + (ty - jcy) * (ty - jcy) <= jgr2) {
@@ -2017,6 +2032,7 @@ func _lx_clear() {
     _ar_swipe = 0;                     // önceki oyunun jesti sızmasın
     _ar_tilt_cal = false;              // yeni oyun kendi nötr tutuşunu yakalar
     _star_g1 = 0; _star_g2 = 0; _star_g3 = 0;   // yıldız eşikleri oyuna göre
+    _mus_gtheme = 0;                            // müzik teması oyuna göre (varsayılan)
     clear_entities();
 }
 

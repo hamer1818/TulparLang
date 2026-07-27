@@ -73,7 +73,14 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > keşfedilir. Headless doğrulandı (`tests/arcade_progression.test.tpr` 4/4:
 > bölüm-başı işaretleme, belirli-bölümden-başla, rozet aç+kalıcı, sonsuz eşik).
 > Launcher fonksiyon tablosu eski 512-sembol AOT sınırını aştı (13 namespace'li oyun
-> + arcade + tame) → `llvm_backend.{hpp,cpp}` 1024'e çıkarıldı. Commit bekliyor.
+> + arcade + tame) → `llvm_backend.{hpp,cpp}` 1024'e çıkarıldı. (12) **Çapraz-hareket
+> fix + parlatma + web**: top-down çapraz hızı normalize edildi (eskiden %41 hızlı) +
+> joystick ölü-bölge 0.28→0.16; **per-game müzik teması** (`music_theme(n)`: varsayılan/
+> gergin/neşeli, 3 melodi); dokunma **hit-area'ları büyütüldü** (görünmez, kolay bas);
+> 2048/Pong/Vur'a **EN ikizleri** yazılıp tarayıcı galerisine eklendi → **14 oyun** ×
+> TR/EN = 28 wasm yeniden yayınlandı. Headless doğrulama: `arcade_movement` (çapraz +
+> müzik teması), tüm suite'ler yeşil; QA `move` rezerve-kelime bug'ını yakaladı. CI
+> test-adımı timeout 5→15dk (suite büyüdü). PR #286 (movement, merged), #287 (D/E/F).
 > NOT: oyun **oynanış** denemesini kullanıcı yapar
 > ([[user-tests-gameplay-himself]]); ben build+kur+tek statik ekranla doğrularım.
 >

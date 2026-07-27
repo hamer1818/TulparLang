@@ -123,6 +123,7 @@ func vur_cb() {
 func kaybet_cb() { oyun_bitti(); }
 
 sahne(640, 480, "Uzay Istilasi");
+music_theme(1);   // gergin tema (uzay)
 bilgi("Sol/Sag veya A/D: gemi   SPACE: ates   |   Filoyu temizle (+10)");
 baslangicta(kur);
 bolum(1, b1);

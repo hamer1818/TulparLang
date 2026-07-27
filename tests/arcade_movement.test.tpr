@@ -29,5 +29,19 @@ func run_capraz_hiz() {
     assert_eq_int(toInt(dy + 0.5), 71);
 }
 
-func main() { test("çapraz hız = düz hız (normalize)", run_capraz_hiz); }
+// Müzik teması: music_theme(n) oyun-içi parçayı (track 1) değiştirir.
+// Tema 0=varsayılan (ilk nota 523), 1=gergin (440), 2=neşeli (392).
+func run_muzik_tema() {
+    music_theme(0); _mus_track = 0 - 1; _mus_select(1);
+    assert_eq_int(toInt(_mus_f[0]), 523);
+    music_theme(1); _mus_track = 0 - 1; _mus_select(1);
+    assert_eq_int(toInt(_mus_f[0]), 440);
+    music_theme(2); _mus_track = 0 - 1; _mus_select(1);
+    assert_eq_int(toInt(_mus_f[0]), 392);
+}
+
+func main() {
+    test("çapraz hız = düz hız (normalize)", run_capraz_hiz);
+    test("müzik teması seçimi", run_muzik_tema);
+}
 main();

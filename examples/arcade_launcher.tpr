@@ -301,6 +301,7 @@ func zp_kaybet_cb() {                                 // engele değ → oyun bi
 }
 
 ziplama(640);
+music_theme(2);   // neseli tema (platformer)
 
 func zp_setup() {
     yercekimi(1400);
@@ -386,6 +387,7 @@ func ni_kaybet_cb() {                                    // düşman oyuncuya de
     oyun_bitti();
 }
 
+music_theme(1);   // gergin tema (nisanci)
 // Şerit 640px'e sığmalı — uzun metin sağdan kırpılır (bölüm/hedef zaten HUD'da).
 
 func ni_setup() {
@@ -708,6 +710,8 @@ func uz_vur_cb() {
 }
 
 func uz_kaybet_cb() { oyun_bitti(); }
+
+music_theme(1);   // gergin tema (uzay)
 
 func uz_setup() {
     bilgi("Sol/Sag veya A/D: gemi   SPACE: ates   |   Filoyu temizle (+10)");
@@ -1364,6 +1368,8 @@ func go_kaybet_cb() {
     patlama(x_of(go_oyuncu_id) + 15.0, y_of(go_oyuncu_id) + 12.0, ORANGE);  // çarpışma parçacığı
     oyun_bitti();
 }
+
+music_theme(1);   // gergin tema (goktasi)
 
 func go_setup() {
     bilgi("Sol/Sag veya A/D: kac   |   Goktaslarindan sakin, sureyi doldur");
