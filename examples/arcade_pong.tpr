@@ -15,7 +15,7 @@ import "arcade";
 int player = 0;
 int ai = 0;
 int ball = 0;
-float bspeed = 260.0;   // top hızı (px/sn) — her iadede biraz artar
+float bspeed = 300.0;   // top hızı (px/sn) — her iadede biraz artar
 int PW = 14;            // raket genişliği
 int PH = 90;            // raket yüksekliği
 
@@ -28,7 +28,7 @@ func servis(dir) {
 
 func kur() {
     temizle();
-    bspeed = 260.0;
+    bspeed = 300.0;
     player = uret(20,  195, PW, PH, SKYBLUE, TAG_PLAYER, MV_NONE);
     ai     = uret(606, 195, PW, PH, RED,     TAG_ENEMY,  MV_NONE);
     ball   = uret(313, 233, 14, 14, GOLD,    TAG_BULLET, MV_VELOCITY);
@@ -84,8 +84,8 @@ func kare() {
 func vur_cb() {
     int b = oteki();
     float rel = (y_of(b) + 7.0) - (y_of(player) + PH * 0.5);
-    bspeed = bspeed + 10.0;
-    if (bspeed > 470.0) { bspeed = 470.0; }
+    bspeed = bspeed + 14.0;
+    if (bspeed > 540.0) { bspeed = 540.0; }
     float nvy = (rel / (PH * 0.5)) * bspeed * 0.8;
     hiz_ver(b, bspeed, nvy);
     konumla(b, 20.0 + PW, y_of(b));

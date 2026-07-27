@@ -17,6 +17,15 @@ import "arcade";
 int paddle = 0;
 int ball   = 0;
 int bounced = 0;        // has the ball already bounced this frame? (see break_cb)
+float bspeed = 0.0;     // ball's CURRENT speed magnitude — grows per brick (up to a cap)
+float BSPEED_MAX = 620.0;
+
+// Throw the ball + record its speed magnitude. Level fns call this (direction +
+// starting speed); afterward bounces preserve the magnitude, brick hits grow it.
+func throw_ball(vx, vy) {
+    set_vel(ball, vx, vy);
+    bspeed = sqrt(vx * vx + vy * vy);
+}
 
 int PADDLE_W = 100;
 int PADDLE_Y = 440;
@@ -38,7 +47,7 @@ func brick_row(y, count, x0, color) {
 
 // --- Level 1: 3 flat rows ---------------------------------------------------
 func l1() {
-    set_vel(ball, 190, 0 - 250);
+    throw_ball(228, 0 - 300);
     brick_row(80,  8, 32, RED);
     brick_row(104, 8, 32, ORANGE);
     brick_row(128, 8, 32, GOLD);
@@ -46,7 +55,7 @@ func l1() {
 
 // --- Level 2: pyramid -------------------------------------------------------
 func l2() {
-    set_vel(ball, 220, 0 - 290);
+    throw_ball(264, 0 - 348);
     brick_row(72,  8, 32,  MAROON);
     brick_row(96,  6, 104, RED);
     brick_row(120, 4, 176, ORANGE);
@@ -55,7 +64,7 @@ func l2() {
 
 // --- Level 3: gapped wall + faster ball -------------------------------------
 func l3() {
-    set_vel(ball, 250, 0 - 330);
+    throw_ball(300, 0 - 396);
     brick_row(72,  8, 32,  PURPLE);
     // Row with a gap in the middle — lets the ball slip up and break from behind.
     brick_row(96,  3, 32,  VIOLET);
@@ -103,10 +112,13 @@ func paddle_cb() {
     float bx = get_x(b);
     float offset = (bx + 6.0) - (get_x(paddle) + PADDLE_W * 0.5);
     float nvx = offset * 5.0;
-    if (nvx > 320.0) { nvx = 320.0; }
-    if (nvx < 0.0 - 320.0) { nvx = 0.0 - 320.0; }
-    float sp = 0.0 - abs_f(get_vy(b));     // always UPWARD
-    set_vel(b, nvx, sp);
+    // Cap the horizontal at 85% of the magnitude; the vertical takes the rest, so
+    // the total speed stays `bspeed` (the magnitude we grow with each brick).
+    float capv = bspeed * 0.85;
+    if (nvx > capv) { nvx = capv; }
+    if (nvx < 0.0 - capv) { nvx = 0.0 - capv; }
+    float nvy = 0.0 - sqrt(bspeed * bspeed - nvx * nvx);   // always UPWARD
+    set_vel(b, nvx, nvy);
     set_pos(b, bx, PADDLE_Y - 14.0);       // keep it from sinking into the paddle
 }
 
@@ -119,7 +131,15 @@ func break_cb() {
     kill(other());
     score_add(10);
     if (bounced == 0) {
-        set_vel(b, get_vx(b), 0.0 - get_vy(b));
+        // Speed the ball up on every brick (up to a cap) — keep the direction,
+        // grow the magnitude + bounce vertically, so the game paces up as you go.
+        bspeed = bspeed + 12.0;
+        if (bspeed > BSPEED_MAX) { bspeed = BSPEED_MAX; }
+        float vx = get_vx(b);
+        float vy = 0.0 - get_vy(b);
+        float m = sqrt(vx * vx + vy * vy);
+        if (m > 0.0) { vx = vx / m * bspeed; vy = vy / m * bspeed; }
+        set_vel(b, vx, vy);
         bounced = 1;
     }
     if (tag_count(TAG_ITEM) == 0) { next_level(); }
