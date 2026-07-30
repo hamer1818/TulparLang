@@ -827,6 +827,31 @@ static const TameBuiltin k_tame_builtins[] = {
     // ek çizim / araç
     {"tm_triangle", "aot_tm_triangle_ptr", 7},
     {"tm_screenshot", "aot_tm_screenshot_ptr", 1},
+    // 3D (Faz 0) — tek küresel Camera3D + temel primitifler
+    {"tm3_camera", "aot_tm3_camera_ptr", 7},
+    {"tm3_begin", "aot_tm3_begin_ptr", 0},
+    {"tm3_end", "aot_tm3_end_ptr", 0},
+    {"tm3_cube", "aot_tm3_cube_ptr", 7},
+    {"tm3_cube_wires", "aot_tm3_cube_wires_ptr", 7},
+    {"tm3_grid", "aot_tm3_grid_ptr", 2},
+    // 3D (Faz 1) — primitifler + raycast
+    {"tm3_sphere", "aot_tm3_sphere_ptr", 5},
+    {"tm3_sphere_wires", "aot_tm3_sphere_wires_ptr", 6},
+    {"tm3_cylinder", "aot_tm3_cylinder_ptr", 6},
+    {"tm3_plane", "aot_tm3_plane_ptr", 6},
+    {"tm3_line", "aot_tm3_line_ptr", 7},
+    {"tm3_pick_box", "aot_tm3_pick_box_ptr", 8},
+    {"tm3_pick_sphere", "aot_tm3_pick_sphere_ptr", 6},
+    // 3D (Faz 2) — model yükleme / üretme / çizim / animasyon
+    {"tm3_load_model", "aot_tm3_load_model_ptr", 1},
+    {"tm3_gen", "aot_tm3_gen_ptr", 5},
+    {"tm3_draw_model", "aot_tm3_draw_model_ptr", 6},
+    {"tm3_draw_model_rot", "aot_tm3_draw_model_rot_ptr", 7},
+    {"tm3_model_texture", "aot_tm3_model_texture_ptr", 2},
+    {"tm3_anim_count", "aot_tm3_anim_count_ptr", 1},
+    {"tm3_anim_frames", "aot_tm3_anim_frames_ptr", 2},
+    {"tm3_anim", "aot_tm3_anim_ptr", 3},
+    {"tm3_unload_model", "aot_tm3_unload_model_ptr", 1},
     // girdi — gamepad (buton/eksen adla: "A"/"LB"/"START", "LX"/"RT"...)
     {"tm_gamepad_available", "aot_tm_gamepad_available_ptr", 1},
     {"tm_gamepad_name", "aot_tm_gamepad_name_ptr", 1},
@@ -4662,7 +4687,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // genellemesi). Eksik trailing arg'lar dilin genel kuralıyla uyumlu
     // olarak int 0 ile padlenir. Bir tm_* çağrısı görülmesi, link satırına
     // libtulpar_tame.a eklenmesi için yeterli sinyaldir (uses_tame).
-    if (node->name && strncmp(node->name, "tm_", 3) == 0) {
+    if (node->name && (strncmp(node->name, "tm_", 3) == 0 ||
+                       strncmp(node->name, "tm3_", 4) == 0)) {
       const TameBuiltin *tb = tame_builtin_lookup(node->name);
       if (tb) {
         backend->uses_tame = 1;

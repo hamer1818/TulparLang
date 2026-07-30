@@ -110,6 +110,17 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > "APK indir". Önceki v3.11.0: Tame 2D + web/android hedefleri + arcade
 > bölüm sistemi + codegen düzeltmeleri. GitHub Release'te 3-OS ikilileri +
 > Windows installer + GPG-imzalı SHA256SUMS.
+>
+> **Geliştirme (yayınlanmadı) — 3D oyun katmanı:** TulparLang artık 3D oyun
+> yapabiliyor. Vendored raylib'in zaten derlenen 3D modülü **~28 `tm3_*` builtin**
+> ile açığa çıkarıldı (Faz 0 kamera/küp/ızgara; Faz 1 primitifler + raycast
+> tıklama-seçim; Faz 2 model yükleme OBJ/GLTF/GLB + 7 `gen_*` prosedürel şekil +
+> iskelet animasyonu), üzerine saf-Tulpar **`scene3d` preset motoru** kondu —
+> arcade'in 3D kardeşi, modern `struct Ent3` dizisi, yerçekimi/zemin, AABB
+> çarpışma + duvar itme (MTV), takip kamerası; "~40 satırda 3D toplayıcı"
+> (`examples/scene3d_collector.tpr`). Motor 8/8 headless birim test + 4 sahne
+> WebGL'de görsel + Android `.so` (arm64+x86_64) linki doğrulandı. Detay:
+> CHANGELOG "3D oyun katmanı".
 
 - **Çekirdek sözdizimi tam:** statik tipler, fonksiyonlar (opsiyonel
   dönüş-tipi notasyonu, **eksik trailing arg → 0 ile padlenir**), kontrol akışı,

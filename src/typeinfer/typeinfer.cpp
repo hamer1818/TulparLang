@@ -377,7 +377,8 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     // strict mode (Plan 03) is what turns this into an exit-blocking
     // error.
     if (decl->data_type == TYPE_CUSTOM && decl->custom_type.has_value() &&
-        !ctx->struct_types.count(decl->custom_type.value())) {
+        !ctx->struct_types.count(decl->custom_type.value()) &&
+        !ctx->has_imports) {
       report_error(ctx, "Unknown type '%s' in declaration of '%s' at line %d",
                    decl->custom_type.value().c_str(), decl->name.c_str(),
                    decl->loc.line);
@@ -834,6 +835,52 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
        {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
         TYPE_UNKNOWN, TYPE_INT}},
       {"tm_screenshot", TYPE_VOID, {TYPE_STRING}},
+      {"tm3_camera", TYPE_VOID,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm3_begin", TYPE_VOID, {}},
+      {"tm3_end", TYPE_VOID, {}},
+      {"tm3_cube", TYPE_VOID,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_UNKNOWN, TYPE_INT}},
+      {"tm3_cube_wires", TYPE_VOID,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_UNKNOWN, TYPE_INT}},
+      {"tm3_grid", TYPE_VOID, {TYPE_INT, TYPE_UNKNOWN}},
+      {"tm3_sphere", TYPE_VOID,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_INT}},
+      {"tm3_sphere_wires", TYPE_VOID,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_INT,
+        TYPE_INT}},
+      {"tm3_cylinder", TYPE_VOID,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_INT}},
+      {"tm3_plane", TYPE_VOID,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_INT}},
+      {"tm3_line", TYPE_VOID,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_UNKNOWN, TYPE_INT}},
+      {"tm3_pick_box", TYPE_FLOAT,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm3_pick_sphere", TYPE_FLOAT,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_UNKNOWN}},
+      {"tm3_load_model", TYPE_INT, {TYPE_STRING}},
+      {"tm3_gen", TYPE_INT,
+       {TYPE_INT, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm3_draw_model", TYPE_VOID,
+       {TYPE_INT, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_INT}},
+      {"tm3_draw_model_rot", TYPE_VOID,
+       {TYPE_INT, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_UNKNOWN, TYPE_INT}},
+      {"tm3_model_texture", TYPE_VOID, {TYPE_INT, TYPE_INT}},
+      {"tm3_anim_count", TYPE_INT, {TYPE_INT}},
+      {"tm3_anim_frames", TYPE_INT, {TYPE_INT, TYPE_INT}},
+      {"tm3_anim", TYPE_VOID, {TYPE_INT, TYPE_INT, TYPE_INT}},
+      {"tm3_unload_model", TYPE_VOID, {TYPE_INT}},
       {"tm_gamepad_available", TYPE_BOOL, {TYPE_INT}},
       {"tm_gamepad_name", TYPE_STRING, {TYPE_INT}},
       {"tm_gamepad_down", TYPE_BOOL, {TYPE_INT, TYPE_STRING}},
@@ -944,6 +991,12 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
         info.field_custom_types = type_decl->field_custom_types;
         ctx->struct_types[type_decl->name] = std::move(info);
       }
+    }
+    // Programda import varsa, yerel olmayan custom-type'lar için "Unknown type"
+    // uyarısını bastır (tip import edilen modülden gelmiş olabilir; typeinfer
+    // modül kaynağını parse etmediğinden struct'ını göremez).
+    if (as_node<ImportStatement>(stmt.get())) {
+      ctx->has_imports = true;
     }
   }
 

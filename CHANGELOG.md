@@ -9,6 +9,39 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — 3D oyun katmanı (tame3d + scene3d)
+
+TulparLang artık **3D oyun** yapabiliyor. Vendored raylib'in zaten derlenen 3D
+modülü (`rmodels.c`, kamera/mesh/model) `tm3_*` binding ailesiyle açığa çıkarıldı
+ve üzerine saf-Tulpar bir preset motoru (`scene3d`) kondu. Web (WASM/WebGL) +
+masaüstü + Android link doğrulandı; sahneler headless Chrome/CDP ile görsel teyit
+edildi.
+
+- **~28 yeni `tm3_*` builtin** (5-nokta bağlı, çift dilli TR/EN sarmalayıcı,
+  `tm3_` codegen prefiks kapısı):
+  - **Faz 0 — temel:** `camera3d` · `space_begin/end` · `cube` · `cube_wires` · `grid`.
+  - **Faz 1 — primitifler + raycast:** `sphere` · `sphere_wires` · `cylinder` ·
+    `plane` · `line3d` · **`pick_box`/`pick_sphere`** (ekran ışını ile tıklama-seçim)
+    · `vec3_len`/`vec3_dist`.
+  - **Faz 2 — modeller + animasyon:** `load_model` (OBJ/GLTF/GLB/IQM) · **7 `gen_*`
+    prosedürel şekil** (cube/sphere/plane/cylinder/torus/cone/knot) · `draw_model` ·
+    `draw_model_rot` · `model_texture` · **iskelet animasyonu** (`anim_count`/
+    `anim_frames`/`anim_play`) · `unload_model`. Model registry doku/font registry
+    deseniyle; `close()`'ta otomatik boşaltma.
+- **`lib/scene3d.tpr` — 3D preset motoru (arcade'in kardeşi, saf Tulpar).**
+  Modern `struct Ent3` **dizisi** (paralel-dizi mirası yok — struct-in-array +
+  alan-yazma artık çalışıyor). Motor her kare: girdi → hareket → yerçekimi/zemin →
+  **AABB çarpışma + duvar itme (MTV)** → takip kamerası → shape'e göre çizim → HUD.
+  Kullanıcı yalnız `setup`/`update`/çarpışma kancası yazar (`on_hit3d`,
+  `me3d()`/`other3d()` bağlamı). "~40 satırda 3D toplayıcı".
+- **Örnekler:** `examples/tame3d_cube.tpr` (Faz 0), `tame3d_primitives.tpr` (Faz 1),
+  `tame3d_models.tpr` (Faz 2), `scene3d_collector.tpr` (Faz 3 — yürü/zıpla/topla).
+- **Doğrulama:** scene3d motoru **8/8 headless birim test** (yerçekimi, zemin,
+  zıplama, toplama+skor, duvar itme); 4 sahne WebGL'de görsel; Android `.so`
+  (arm64-v8a + x86_64) `-Wl,--no-undefined` ile linklendi.
+- Prebuilt arşivler (`wasm/dist`, `android/dist/<abi>`) yeni `tm3_*` sembolleriyle
+  yeniden derlendi; `kMaxFunctions` 1024 (launcher + 3D için).
+
 Third mobile wave — full app shell, per-game juice, three new games, and a
 full-stack global leaderboard. All verified live on the Android emulator.
 
