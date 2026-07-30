@@ -1,0 +1,40 @@
+// Tulpar 3D — Faz 0 kanıtı: dönen ızgaralı küp.
+//
+//   ./tulpar examples/tame3d_cube.tpr
+//
+// Kamera, orijindeki küpün çevresinde döner (Faz 0'da DrawCube eksen-hizalı,
+// bu yüzden hareketi kamerayı orbit ettirerek gösteriyoruz). Bu örnek 3D
+// binding ailesinin (camera3d / space_begin / cube / cube_wires / grid) hem
+// masaüstünde hem WASM'da çalıştığını doğrular.
+
+import "tame";
+
+func main() {
+    if (!window(800, 450, "Tulpar 3D — Donen Kup")) { return; }
+    set_fps(60);
+
+    while (running()) {
+        float t = elapsed();
+        float cx = sin(t) * 9.0;      // kamerayı orijin çevresinde orbit et
+        float cz = cos(t) * 9.0;
+
+        frame_begin();
+        clear(rgb(18, 20, 28));
+
+        camera3d(cx, 6.0, cz,   0.0, 1.0, 0.0,   45.0);   // göz, hedef, FOV
+        space_begin();
+            grid(14, 1.0);                                 // XZ referans ızgarası
+            cube(0.0, 1.0, 0.0,  2.0, 2.0, 2.0, GOLD);     // dolu küp
+            cube_wires(0.0, 1.0, 0.0,  2.02, 2.02, 2.02, BLACK);
+            cube(3.5, 0.5, 0.0,  1.0, 1.0, 1.0, rgb(80, 200, 255));
+            cube(0.0, 0.5, 3.5,  1.0, 1.0, 1.0, rgb(255, 120, 90));
+        space_end();
+
+        text("Tulpar 3D — Faz 0", 14, 14, 22, RAYWHITE);
+        text("camera3d / space_begin / cube / grid", 14, 40, 16, rgb(150, 160, 180));
+        frame_end();
+    }
+    close_window();
+}
+
+main();

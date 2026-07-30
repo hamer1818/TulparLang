@@ -1,0 +1,95 @@
+// scene3d motoru regresyon testi — pencere AÇMADAN fizik/çarpışma/kamera mantığı.
+//
+//   ./tulpar tests/scene3d_engine.test.tpr
+//
+// scene3d'nin yönetilen döngüsü (play3d) pencere ister; burada bunun yerine
+// dahili adımları (spawn3 / _s3_physics / _s3_collision) DOĞRUDAN sürüyoruz —
+// böylece motor mantığı grafik ortamı olmadan (CI/headless) doğrulanır.
+// Her test scene3d_reset() ile temiz durumdan başlar.
+
+import "scene3d";
+import "test";
+
+// -- 1) Yerçekimi + zemin: yükseklikten düşen entity zemine oturur ----------
+func t_gravity_ground() {
+    scene3d_reset();
+    int p = spawn3(0.0, 5.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    assert_eq_int(p, 0);
+    int steps = 0;
+    while (steps < 120) { _s3_physics(0.016667); steps = steps + 1; }
+    float y = get3y(p);
+    assert(y > 0.99 && y < 1.01, "yari-yukseklik zeminine oturmali (~1.0)");
+    // Ent3 struct'ı import edilen scene3d modülünde tanımlı — typeinfer artık
+    // import'lu dosyalarda modül-dışı tipleri "Unknown type" diye işaretlemiyor.
+    Ent3 e = _e3[p];
+    assert_eq_int(e.grounded, 1);
+}
+
+// -- 2) Zıplama: yalnız zemindeyken yukarı hız ------------------------------
+func t_jump() {
+    scene3d_reset();
+    int p = spawn3(0.0, 5.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int steps = 0;
+    while (steps < 120) { _s3_physics(0.016667); steps = steps + 1; }  // zemine in
+    jump3d(p, 10.0);
+    Ent3 e = _e3[p];
+    assert(e.vy > 9.0, "zeminde ziplayinca vy>0");
+    // havadayken tekrar zıplama etkisiz
+    e.grounded = 0; _e3[p] = e;
+    jump3d(p, 10.0);
+    Ent3 e2 = _e3[p];
+    assert(e2.vy > 9.0 && e2.vy < 10.1, "havadayken ikinci ziplama etkisiz");
+}
+
+// -- 3) Toplama kancası: player × item örtüşünce fn çağrılır ----------------
+func t_collect() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int it = spawn3(0.0, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    on_hit3d(TAG_PLAYER, TAG_ITEM, _collect_cb);
+    _s3_collision();
+    assert(!alive3(it), "ortusen item toplanmali (oldu)");
+    assert_eq_int(score3d(), 10);
+}
+func _collect_cb() { kill3d(other3d()); score3d_add(10); }
+
+// -- 4) Kanca tetiklenmez: örtüşme yoksa çağrı yok --------------------------
+func t_no_false_hit() {
+    scene3d_reset();
+    spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int it = spawn3(20.0, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    on_hit3d(TAG_PLAYER, TAG_ITEM, _collect_cb);
+    _s3_collision();
+    assert(alive3(it), "uzaktaki item toplanmamali");
+    assert_eq_int(score3d(), 0);
+}
+
+// -- 5) Duvar itme: oyuncu duvara girerse dışarı itilir (MTV) ----------------
+func t_wall_block() {
+    scene3d_reset();
+    int p = spawn3(2.2, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    spawn3(3.0, 1.0, 0.0,  2.0, 3.0, 2.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    _s3_collision();
+    float x = get3x(p);
+    // duvar sol yüzü x=2.0; oyuncu yarısı 0.5 → merkez <= 1.5 olmalı
+    assert(x < 1.51, "duvardan disari itilmeli (x<=1.5)");
+}
+
+// -- 6) reset gerçekten temizler --------------------------------------------
+func t_reset() {
+    scene3d_reset();
+    spawn3(0.0, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    score3d_add(50);
+    scene3d_reset();
+    assert_eq_int(length(_e3), 0);
+    assert_eq_int(score3d(), 0);
+}
+
+print("=== scene3d motor testleri ===");
+test("yercekimi + zemin", "t_gravity_ground");
+test("ziplama (yalniz zeminde)", "t_jump");
+test("toplama kancasi", "t_collect");
+test("yanlis tetik yok", "t_no_false_hit");
+test("duvar itme (MTV)", "t_wall_block");
+test("reset temizler", "t_reset");
+test_summary();

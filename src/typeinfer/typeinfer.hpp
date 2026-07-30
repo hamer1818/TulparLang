@@ -61,6 +61,12 @@ struct TypeInferContext {
   // standalone `tulpar typecheck` subcommand keeps the default error mode.
   bool warning_mode;
   std::string source_path;
+
+  // Program `import "x"` içeriyor mu? İçeriyorsa, yerel struct tablosunda
+  // bulunmayan bir custom-type "Unknown type" uyarısı VERMEZ — tipi import
+  // edilen modülden gelmiş olabilir (typeinfer modül kaynağını parse etmiyor,
+  // aynı sebeple import edilen bilinmeyen fonksiyonlara da uyarı vermez).
+  bool has_imports = false;
 };
 
 // ============================================================================

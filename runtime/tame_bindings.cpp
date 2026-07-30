@@ -87,6 +87,39 @@ int tame_impl_load_music(const char *path);
 void tame_impl_play_music(int h);
 void tame_impl_stop_music(int h);
 void tame_impl_music_volume(int h, double v);
+void tame_impl_cam3(double px, double py, double pz, double tx, double ty,
+                    double tz, double fov);
+void tame_impl_begin3(void);
+void tame_impl_end3(void);
+void tame_impl_cube(double x, double y, double z, double w, double h, double d,
+                    int64_t color);
+void tame_impl_cube_wires(double x, double y, double z, double w, double h,
+                          double d, int64_t color);
+void tame_impl_grid(int slices, double spacing);
+void tame_impl_sphere(double x, double y, double z, double r, int64_t color);
+void tame_impl_sphere_wires(double x, double y, double z, double r, int seg,
+                            int64_t color);
+void tame_impl_cylinder(double x, double y, double z, double r, double h,
+                        int64_t color);
+void tame_impl_plane(double x, double y, double z, double sx, double sz,
+                     int64_t color);
+void tame_impl_line3(double x1, double y1, double z1, double x2, double y2,
+                     double z2, int64_t color);
+double tame_impl_pick_box(double mx, double my, double bx, double by, double bz,
+                          double bw, double bh, double bd);
+double tame_impl_pick_sphere(double mx, double my, double cx, double cy,
+                             double cz, double r);
+int tame_impl_load_model(const char *path);
+int tame_impl_gen(int kind, double a, double b, double c, double d);
+void tame_impl_draw_model(int h, double x, double y, double z, double scale,
+                          int64_t tint);
+void tame_impl_draw_model_rot(int h, double x, double y, double z, double yaw,
+                              double scale, int64_t tint);
+void tame_impl_model_texture(int h, int tex_handle);
+int tame_impl_model_anim_count(int h);
+int tame_impl_anim_frames(int h, int idx);
+void tame_impl_anim(int h, int idx, int frame);
+void tame_impl_unload_model(int h);
 void tame_impl_triangle(double x1, double y1, double x2, double y2, double x3,
                         double y3, int64_t color);
 void tame_impl_screenshot(const char *path);
@@ -361,6 +394,146 @@ VMValue aot_tm_triangle_ptr(VMValue *x1, VMValue *y1, VMValue *x2,
 
 VMValue aot_tm_screenshot_ptr(VMValue *path) {
   tame_impl_screenshot(tm_str(path));
+  return VM_VOID();
+}
+
+// --- 3D (Faz 0) --------------------------------------------------------------
+
+VMValue aot_tm3_camera_ptr(VMValue *px, VMValue *py, VMValue *pz, VMValue *tx,
+                           VMValue *ty, VMValue *tz, VMValue *fov) {
+  tame_impl_cam3(tm_num(px), tm_num(py), tm_num(pz), tm_num(tx), tm_num(ty),
+                 tm_num(tz), tm_num(fov));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_begin_ptr(void) {
+  tame_impl_begin3();
+  return VM_VOID();
+}
+
+VMValue aot_tm3_end_ptr(void) {
+  tame_impl_end3();
+  return VM_VOID();
+}
+
+VMValue aot_tm3_cube_ptr(VMValue *x, VMValue *y, VMValue *z, VMValue *w,
+                         VMValue *h, VMValue *d, VMValue *color) {
+  tame_impl_cube(tm_num(x), tm_num(y), tm_num(z), tm_num(w), tm_num(h),
+                 tm_num(d), tm_int(color));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_cube_wires_ptr(VMValue *x, VMValue *y, VMValue *z, VMValue *w,
+                               VMValue *h, VMValue *d, VMValue *color) {
+  tame_impl_cube_wires(tm_num(x), tm_num(y), tm_num(z), tm_num(w), tm_num(h),
+                       tm_num(d), tm_int(color));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_grid_ptr(VMValue *slices, VMValue *spacing) {
+  tame_impl_grid((int)tm_int(slices), tm_num(spacing));
+  return VM_VOID();
+}
+
+// --- 3D (Faz 1) — primitifler + raycast --------------------------------------
+
+VMValue aot_tm3_sphere_ptr(VMValue *x, VMValue *y, VMValue *z, VMValue *r,
+                           VMValue *color) {
+  tame_impl_sphere(tm_num(x), tm_num(y), tm_num(z), tm_num(r), tm_int(color));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_sphere_wires_ptr(VMValue *x, VMValue *y, VMValue *z, VMValue *r,
+                                 VMValue *seg, VMValue *color) {
+  tame_impl_sphere_wires(tm_num(x), tm_num(y), tm_num(z), tm_num(r),
+                         (int)tm_int(seg), tm_int(color));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_cylinder_ptr(VMValue *x, VMValue *y, VMValue *z, VMValue *r,
+                             VMValue *h, VMValue *color) {
+  tame_impl_cylinder(tm_num(x), tm_num(y), tm_num(z), tm_num(r), tm_num(h),
+                     tm_int(color));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_plane_ptr(VMValue *x, VMValue *y, VMValue *z, VMValue *sx,
+                          VMValue *sz, VMValue *color) {
+  tame_impl_plane(tm_num(x), tm_num(y), tm_num(z), tm_num(sx), tm_num(sz),
+                  tm_int(color));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_line_ptr(VMValue *x1, VMValue *y1, VMValue *z1, VMValue *x2,
+                         VMValue *y2, VMValue *z2, VMValue *color) {
+  tame_impl_line3(tm_num(x1), tm_num(y1), tm_num(z1), tm_num(x2), tm_num(y2),
+                  tm_num(z2), tm_int(color));
+  return VM_VOID();
+}
+
+// Ekran (mx,my)'den kamera ışını ile kutu/küreye tıklama testi. Vurursa çarpışma
+// mesafesini (>=0), ıskalarsa -1 döner. Float döner.
+VMValue aot_tm3_pick_box_ptr(VMValue *mx, VMValue *my, VMValue *bx, VMValue *by,
+                             VMValue *bz, VMValue *bw, VMValue *bh,
+                             VMValue *bd) {
+  return VM_FLOAT(tame_impl_pick_box(tm_num(mx), tm_num(my), tm_num(bx),
+                                     tm_num(by), tm_num(bz), tm_num(bw),
+                                     tm_num(bh), tm_num(bd)));
+}
+
+VMValue aot_tm3_pick_sphere_ptr(VMValue *mx, VMValue *my, VMValue *cx,
+                                VMValue *cy, VMValue *cz, VMValue *r) {
+  return VM_FLOAT(tame_impl_pick_sphere(tm_num(mx), tm_num(my), tm_num(cx),
+                                        tm_num(cy), tm_num(cz), tm_num(r)));
+}
+
+// --- 3D (Faz 2) — model yükleme / üretme / çizim / animasyon -----------------
+
+VMValue aot_tm3_load_model_ptr(VMValue *path) {
+  return VM_INT(tame_impl_load_model(tm_str(path)));
+}
+
+VMValue aot_tm3_gen_ptr(VMValue *kind, VMValue *a, VMValue *b, VMValue *c,
+                        VMValue *d) {
+  return VM_INT(tame_impl_gen((int)tm_int(kind), tm_num(a), tm_num(b), tm_num(c),
+                              tm_num(d)));
+}
+
+VMValue aot_tm3_draw_model_ptr(VMValue *h, VMValue *x, VMValue *y, VMValue *z,
+                               VMValue *scale, VMValue *tint) {
+  tame_impl_draw_model((int)tm_int(h), tm_num(x), tm_num(y), tm_num(z),
+                       tm_num(scale), tm_int(tint));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_draw_model_rot_ptr(VMValue *h, VMValue *x, VMValue *y,
+                                   VMValue *z, VMValue *yaw, VMValue *scale,
+                                   VMValue *tint) {
+  tame_impl_draw_model_rot((int)tm_int(h), tm_num(x), tm_num(y), tm_num(z),
+                           tm_num(yaw), tm_num(scale), tm_int(tint));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_model_texture_ptr(VMValue *h, VMValue *tex) {
+  tame_impl_model_texture((int)tm_int(h), (int)tm_int(tex));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_anim_count_ptr(VMValue *h) {
+  return VM_INT(tame_impl_model_anim_count((int)tm_int(h)));
+}
+
+VMValue aot_tm3_anim_frames_ptr(VMValue *h, VMValue *idx) {
+  return VM_INT(tame_impl_anim_frames((int)tm_int(h), (int)tm_int(idx)));
+}
+
+VMValue aot_tm3_anim_ptr(VMValue *h, VMValue *idx, VMValue *frame) {
+  tame_impl_anim((int)tm_int(h), (int)tm_int(idx), (int)tm_int(frame));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_unload_model_ptr(VMValue *h) {
+  tame_impl_unload_model((int)tm_int(h));
   return VM_VOID();
 }
 

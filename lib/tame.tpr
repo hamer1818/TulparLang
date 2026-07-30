@@ -198,6 +198,122 @@ func triangle(x1, y1, x2, y2, x3, y3, color) { tm_triangle(x1, y1, x2, y2, x3, y
 // (yalnız dosya adı kullanılır).
 func screenshot(path) { tm_screenshot(path); }
 
+// ---- 3D (Faz 0) ---------------------------------------------------------------
+// Tek küresel Camera3D + temel primitifler. Kare akışı:
+//   window(...); ... begin(); clear(BLACK);
+//   camera3d(0,4,8, 0,0,0, 45);   // göz, hedef, FOV
+//   space_begin();                // 3D moda gir
+//     grid(10, 1);                // referans ızgarası
+//     cube(0,0,0, 2,2,2, GOLD);   // dolu küp
+//     cube_wires(0,0,0, 2,2,2, BLACK);
+//   space_end();                  // 3D modu bitir → sonrası 2D HUD
+//   text("Skor", 10, 10, 20, WHITE);
+//   end();
+
+// Kamerayı konumla: göz (px,py,pz), bakış hedefi (tx,ty,tz), dikey FOV (derece).
+func camera3d(px, py, pz, tx, ty, tz, fov) { tm3_camera(px, py, pz, tx, ty, tz, fov); }
+func kamera3d(px, py, pz, tx, ty, tz, fov) { tm3_camera(px, py, pz, tx, ty, tz, fov); }
+
+// 3D çizim modunu başlat/bitir (kamerayı bağlar / çözer).
+func space_begin() { tm3_begin(); }
+func uzay_basla()  { tm3_begin(); }
+func space_end()   { tm3_end(); }
+func uzay_bitir()  { tm3_end(); }
+
+// Merkezi (x,y,z), boyutu (w,h,d) olan dolu küp/kutu.
+func cube(x, y, z, w, h, d, color) { tm3_cube(x, y, z, w, h, d, color); }
+func kup(x, y, z, w, h, d, color)  { tm3_cube(x, y, z, w, h, d, color); }
+
+// Tel-çerçeve küp/kutu.
+func cube_wires(x, y, z, w, h, d, color) { tm3_cube_wires(x, y, z, w, h, d, color); }
+func kup_tel(x, y, z, w, h, d, color)    { tm3_cube_wires(x, y, z, w, h, d, color); }
+
+// XZ düzleminde referans ızgarası.
+func grid(slices, spacing)   { tm3_grid(slices, spacing); }
+func izgara(slices, spacing) { tm3_grid(slices, spacing); }
+
+// -- Faz 1 primitifleri --
+// Dolu küre (merkez x,y,z; yarıçap r).
+func sphere(x, y, z, r, color) { tm3_sphere(x, y, z, r, color); }
+func kure(x, y, z, r, color)   { tm3_sphere(x, y, z, r, color); }
+
+// Tel-çerçeve küre (seg = halka/dilim sayısı, ör. 12).
+func sphere_wires(x, y, z, r, seg, color) { tm3_sphere_wires(x, y, z, r, seg, color); }
+func kure_tel(x, y, z, r, seg, color)     { tm3_sphere_wires(x, y, z, r, seg, color); }
+
+// Taban (x,y,z)'de duran dikey silindir (yarıçap r, yükseklik h).
+func cylinder(x, y, z, r, h, color) { tm3_cylinder(x, y, z, r, h, color); }
+func silindir(x, y, z, r, h, color) { tm3_cylinder(x, y, z, r, h, color); }
+
+// XZ düzleminde dolu düzlem/zemin (merkez x,y,z; boyut sx×sz).
+func plane(x, y, z, sx, sz, color)  { tm3_plane(x, y, z, sx, sz, color); }
+func duzlem(x, y, z, sx, sz, color) { tm3_plane(x, y, z, sx, sz, color); }
+
+// 3D uzayda çizgi.
+func line3d(x1, y1, z1, x2, y2, z2, color) { tm3_line(x1, y1, z1, x2, y2, z2, color); }
+func cizgi3d(x1, y1, z1, x2, y2, z2, color) { tm3_line(x1, y1, z1, x2, y2, z2, color); }
+
+// -- Faz 1 raycast (fare/dokunuş ile tıklama-seçim) --
+// Ekran (mx,my)'den kamera ışını ile kutuya/küreye tıklama testi.
+// Vurursa çarpışma mesafesini (>=0), ıskalarsa -1 döner. Oyun kodu
+// "en küçük pozitif mesafe = tıklanan nesne" ile seçim yapar.
+func pick_box(mx, my, bx, by, bz, bw, bh, bd): float { return tm3_pick_box(mx, my, bx, by, bz, bw, bh, bd); }
+func sec_kutu(mx, my, bx, by, bz, bw, bh, bd): float { return tm3_pick_box(mx, my, bx, by, bz, bw, bh, bd); }
+func pick_sphere(mx, my, cx, cy, cz, r): float { return tm3_pick_sphere(mx, my, cx, cy, cz, r); }
+func sec_kure(mx, my, cx, cy, cz, r): float    { return tm3_pick_sphere(mx, my, cx, cy, cz, r); }
+
+// -- Faz 1 vec3 skaler yardımcıları (saf Tulpar) --
+// Vektör uzunluğu ve iki nokta arası mesafe (Tulpar'da struct dönüşü yok,
+// bu yüzden bileşenler ayrı skaler geçer).
+func vec3_len(x, y, z): float { return sqrt(x * x + y * y + z * z); }
+func vec3_dist(ax, ay, az, bx, by, bz): float {
+    float dx = ax - bx;
+    float dy = ay - by;
+    float dz = az - bz;
+    return sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+// -- Faz 2: model yükleme / üretme / çizim / animasyon --
+// Dosyadan model yükle (OBJ/GLTF/GLB/IQM) — gömülü animasyonlar da yüklenir.
+func load_model(path): int  { return tm3_load_model(path); }
+func model_yukle(path): int { return tm3_load_model(path); }
+
+// Prosedürel mesh üreteçleri (dosyasız) → model handle. GenMesh* örtüleri.
+func gen_cube(w, h, d): int          { return tm3_gen(0, w, h, d, 0); }
+func gen_kup(w, h, d): int           { return tm3_gen(0, w, h, d, 0); }
+func gen_sphere(r, rings, slices): int { return tm3_gen(1, r, rings, slices, 0); }
+func gen_kure(r, rings, slices): int   { return tm3_gen(1, r, rings, slices, 0); }
+func gen_plane(w, len, rx, rz): int  { return tm3_gen(2, w, len, rx, rz); }
+func gen_duzlem(w, len, rx, rz): int { return tm3_gen(2, w, len, rx, rz); }
+func gen_cylinder(r, h, slices): int { return tm3_gen(3, r, h, slices, 0); }
+func gen_silindir(r, h, slices): int { return tm3_gen(3, r, h, slices, 0); }
+func gen_torus(radius, size, seg, sides): int { return tm3_gen(4, radius, size, seg, sides); }
+func gen_cone(r, h, slices): int     { return tm3_gen(5, r, h, slices, 0); }
+func gen_koni(r, h, slices): int     { return tm3_gen(5, r, h, slices, 0); }
+func gen_knot(radius, size, seg, sides): int  { return tm3_gen(6, radius, size, seg, sides); }
+
+// Modeli çiz (dokusu varsa dokulu). tint = renk maskesi (WHITE = dokunun aynısı).
+func draw_model(h, x, y, z, scale, tint) { tm3_draw_model(h, x, y, z, scale, tint); }
+func model_ciz(h, x, y, z, scale, tint)  { tm3_draw_model(h, x, y, z, scale, tint); }
+
+// Y ekseni etrafında yaw (derece) döndürerek çiz.
+func draw_model_rot(h, x, y, z, yaw, scale, tint) { tm3_draw_model_rot(h, x, y, z, yaw, scale, tint); }
+func model_ciz_don(h, x, y, z, yaw, scale, tint)  { tm3_draw_model_rot(h, x, y, z, yaw, scale, tint); }
+
+// Yüklü dokuyu (load_texture handle'ı) modele bağla.
+func model_texture(h, tex) { tm3_model_texture(h, tex); }
+func model_doku(h, tex)    { tm3_model_texture(h, tex); }
+
+// Animasyon: sayı / kare-sayısı / pozu uygula / sil.
+func anim_count(h): int         { return tm3_anim_count(h); }
+func anim_sayisi(h): int        { return tm3_anim_count(h); }
+func anim_frames(h, idx): int   { return tm3_anim_frames(h, idx); }
+func anim_kare_sayisi(h, idx): int { return tm3_anim_frames(h, idx); }
+func anim_play(h, idx, frame)   { tm3_anim(h, idx, frame); }
+func anim_oynat(h, idx, frame)  { tm3_anim(h, idx, frame); }
+func unload_model(h) { tm3_unload_model(h); }
+func model_sil(h)    { tm3_unload_model(h); }
+
 // ---- Yönetilen oyun döngüsü (Faz 5) -------------------------------------------
 // Wings'in listen() modeli: update/draw fonksiyonlarını verirsin, döngüyü,
 // kare zamanlamasını VE kare belleğini tame yönetir — her kare sonunda arena

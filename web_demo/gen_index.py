@@ -94,6 +94,26 @@ games = [
          lv_en="endless — pure reflex (tap); star thresholds 10 / 25 / 50"),
 ]
 
+# 3D demoları (tek dosya, çift dilli API) — arcade oyunlarından ayrı bölüm.
+games3d = [
+    dict(slug="3d_collector", emoji="🧊", name_tr="3D Toplayıcı", name_en="3D Collector",
+         src="scene3d_collector.tpr",
+         d_tr="scene3d motoru — WASD/oklar yürü, SPACE zıpla; altın küreleri topla, duvarlara çarpma. Yerçekimi + AABB çarpışma + takip kamerası motorda.",
+         d_en="scene3d engine — WASD/arrows to walk, SPACE to jump; collect gold spheres, don't hit walls. Gravity + AABB collision + follow camera live in the engine."),
+    dict(slug="3d_robot", emoji="🤖", name_tr="3D Animasyonlu Robot", name_en="3D Animated Robot",
+         src="tame3d_anim.tpr",
+         d_tr="Dosyadan rigged model (robot.glb) + iskelet animasyonu — 14 animasyon, CPU skinning her karede bir frame ilerler. Kamera orbit eder.",
+         d_en="Rigged model from file (robot.glb) + skeletal animation — 14 clips, CPU skinning advances one frame each tick. Orbiting camera."),
+    dict(slug="3d_models", emoji="🍩", name_tr="3D Modeller", name_en="3D Models",
+         src="tame3d_models.tpr",
+         d_tr="Prosedürel GenMesh şekilleri — torus/knot/küre/koni/silindir/küp, hepsi Y ekseninde döner (draw_model_rot).",
+         d_en="Procedural GenMesh shapes — torus/knot/sphere/cone/cylinder/cube, all spinning on the Y axis (draw_model_rot)."),
+    dict(slug="3d_primitives", emoji="🎯", name_tr="3D Primitifler + Raycast", name_en="3D Primitives + Raycast",
+         src="tame3d_primitives.tpr",
+         d_tr="Küre/silindir/tel-küre/3D çizgi + fareyle tıklama-seçim (pick_sphere ekran ışını atar). Bir küreye tıkla → seçilir.",
+         d_en="Sphere/cylinder/wire-sphere/3D line + mouse click-select (pick_sphere casts a screen ray). Click a sphere → it's selected."),
+]
+
 # Kaynakları oku ve gömülecek JSON'u kur (anahtar = html taban adı).
 sources = {}
 for g in games:
@@ -101,6 +121,9 @@ for g in games:
         sources[g["tr"]] = f.read()
     with open(os.path.join(EX, g["src_en"]), encoding="utf-8") as f:
         sources[g["en"]] = f.read()
+for g in games3d:
+    with open(os.path.join(EX, g["src"]), encoding="utf-8") as f:
+        sources[g["slug"]] = f.read()
 
 cards = []
 for g in games:
@@ -128,6 +151,29 @@ for g in games:
   </article>''')
 
 cards_html = "\n".join(cards)
+
+# 3D kartları (tek Play + tek kod görünümü)
+cards3d = []
+for g in games3d:
+    cards3d.append(f'''  <article class="card" data-game style="border-color:#4aa3ff">
+    <div class="head">
+      <span class="emoji">{g["emoji"]}</span>
+      <h3><span data-tr>{g["name_tr"]}</span><span data-en>{g["name_en"]}</span></h3>
+    </div>
+    <p class="desc"><span data-tr>{g["d_tr"]}</span><span data-en>{g["d_en"]}</span></p>
+    <div class="actions">
+      <a class="play" href="{g["slug"]}.html">▶ <span data-tr>Oyna / Aç</span><span data-en>Play / Open</span></a>
+      <button class="codebtn" data-tr-key="{g["slug"]}" data-en-key="{g["slug"]}">&lt;/&gt;
+        <span data-tr>Kodu gör</span><span data-en>See code</span></button>
+    </div>
+    <div class="code" hidden>
+      <div class="tabs">
+        <button class="tab active" data-lang="tr">TulparLang (TR+EN API)</button>
+      </div>
+      <pre class="src"></pre>
+    </div>
+  </article>''')
+cards3d_html = "\n".join(cards3d)
 sources_json = json.dumps(sources, ensure_ascii=False)
 
 html = f'''<!doctype html>
@@ -220,6 +266,10 @@ html = f'''<!doctype html>
 
 <h2><span data-tr>Oyunlar</span><span data-en>Games</span></h2>
 {cards_html}
+
+<h2><span data-tr>3D — yeni (scene3d / tame3d)</span><span data-en>3D — new (scene3d / tame3d)</span></h2>
+<p class="lead"><span data-tr>TulparLang artık 3D oyun da yapabiliyor: kamera, mesh/model, iskelet animasyonu, raycast ve <b>scene3d</b> preset motoru (yerçekimi + çarpışma + takip kamerası). Aşağıdakiler WebGL'de çalışır; masaüstünde WASD/oklar + fare, mobilde dokunmatik.</span><span data-en>TulparLang can do 3D games now: camera, mesh/model, skeletal animation, raycast and the <b>scene3d</b> preset engine (gravity + collision + follow camera). These run on WebGL; desktop uses WASD/arrows + mouse, mobile uses touch.</span></p>
+{cards3d_html}
 
 <h2><span data-tr>Tame demoları</span><span data-en>Tame demos</span></h2>
 <div class="card">

@@ -1,0 +1,65 @@
+// Tulpar 3D — Faz 2 animasyon: dosyadan rigged model + iskelet animasyonu.
+//
+//   ./tulpar examples/tame3d_anim.tpr          (kökten çalıştır — asset yolu göreli)
+//   TULPAR_WEB_ASSETS=examples/assets tulpar build --target=web examples/tame3d_anim.tpr out/anim
+//
+// robot.glb (raylib örnek varlığı, CC0) yüklenir; gömülü animasyonu her karede
+// bir frame ilerletilir (anim_play) → iskelet CPU skinning ile deforme olur.
+// Kamera modelin çevresinde orbit eder.
+
+import "tame";
+
+int robot   = 0;
+int nframes = 0;
+int frame   = 0;
+int ac      = 0;
+
+func main() {
+    if (!window(840, 480, "Tulpar 3D — Animasyonlu Model")) { return; }
+    set_fps(60);
+
+    robot = load_model("examples/assets/robot.glb");
+    if (robot < 0) {
+        while (running()) {
+            frame_begin();
+            clear(rgb(30, 12, 12));
+            text("robot.glb yuklenemedi (examples/assets/ yolu?)", 20, 40, 20, RAYWHITE);
+            frame_end();
+        }
+        close_window();
+        return;
+    }
+    ac = anim_count(robot);
+    if (ac > 0) { nframes = anim_frames(robot, 0); }
+
+    while (running()) {
+        float t = elapsed();
+        float cx = sin(t * 0.4) * 9.0;
+        float cz = cos(t * 0.4) * 9.0;
+
+        // Animasyonu ilerlet (frame sayısına göre döngüle)
+        if (nframes > 0) {
+            frame = frame + 1;
+            if (frame >= nframes) { frame = 0; }
+            anim_play(robot, 0, frame);
+        }
+
+        frame_begin();
+        clear(rgb(18, 20, 30));
+        camera3d(cx, 6.0, cz,  0.0, 2.2, 0.0,  45.0);
+        space_begin();
+            grid(14, 1.0);
+            draw_model(robot, 0.0, 0.0, 0.0,  1.0, WHITE);
+        space_end();
+
+        text("Tulpar 3D — Animasyonlu GLB (robot)", 12, 12, 20, RAYWHITE);
+        text("anim sayisi: " + toString(ac) + "   frame: " + toString(frame) + "/" + toString(nframes),
+             12, 38, 15, rgb(150, 160, 180));
+        frame_end();
+    }
+
+    unload_model(robot);
+    close_window();
+}
+
+main();

@@ -61,6 +61,7 @@ embed_library("orm" "orm.tpr" EMBEDDED_ORM_CONTENT)
 embed_library("wings_tls" "wings_tls.tpr" EMBEDDED_WINGS_TLS_CONTENT)
 embed_library("tame" "tame.tpr" EMBEDDED_TAME_CONTENT)
 embed_library("arcade" "arcade.tpr" EMBEDDED_ARCADE_CONTENT)
+embed_library("scene3d" "scene3d.tpr" EMBEDDED_SCENE3D_CONTENT)
 
 # Generate the header file from template
 configure_file(

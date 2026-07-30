@@ -193,6 +193,124 @@ void tame_impl_triangle(double x1, double y1, double x2, double y2, double x3,
 }
 
 // ---------------------------------------------------------------------------
+// 3D (Faz 0) — tek küresel Camera3D + temel primitifler.
+//
+// Camera3D/Vector3 struct'ları VMValue ABI'sinden GEÇMEZ; kamerayı C tarafında
+// tutuyoruz (doku/font registry'siyle aynı felsefe — Tulpar yalnız düz skaler
+// görür). tm3_begin/tm3_end 3D modunu mevcut begin/end (kare) İÇİNDE sarar:
+// begin() → clear() → tm3_begin() → 3D çizim → tm3_end() → 2D HUD → end().
+//
+// NOT (Android): tame_impl_begin kamera-modunda BeginMode2D uygular (letterbox);
+// 3D oyunda bu 2D dönüşüm istenmez — Faz 5'te 3D oyunlar için cam_on kapatılacak.
+// Masaüstü/web'de cam_on=0 olduğundan Faz 0 PoC etkilenmez.
+// ---------------------------------------------------------------------------
+
+static Camera3D tame_cam3d = {0};
+static int tame_cam3d_init = 0;
+
+static void tame_cam3d_ensure(void) {
+  if (tame_cam3d_init) return;
+  tame_cam3d.position = (Vector3){0.0f, 4.0f, 8.0f};
+  tame_cam3d.target = (Vector3){0.0f, 0.0f, 0.0f};
+  tame_cam3d.up = (Vector3){0.0f, 1.0f, 0.0f};
+  tame_cam3d.fovy = 45.0f;
+  tame_cam3d.projection = CAMERA_PERSPECTIVE;
+  tame_cam3d_init = 1;
+}
+
+// Kamerayı konumla: göz (px,py,pz), bakış hedefi (tx,ty,tz), dikey FOV derece.
+void tame_impl_cam3(double px, double py, double pz, double tx, double ty,
+                    double tz, double fov) {
+  tame_cam3d_ensure();
+  tame_cam3d.position = (Vector3){(float)px, (float)py, (float)pz};
+  tame_cam3d.target = (Vector3){(float)tx, (float)ty, (float)tz};
+  tame_cam3d.fovy = (float)fov;
+}
+
+void tame_impl_begin3(void) {
+  tame_cam3d_ensure();
+  BeginMode3D(tame_cam3d);
+}
+
+void tame_impl_end3(void) { EndMode3D(); }
+
+void tame_impl_cube(double x, double y, double z, double w, double h, double d,
+                    int64_t color) {
+  DrawCube((Vector3){(float)x, (float)y, (float)z}, (float)w, (float)h,
+           (float)d, tame_color(color));
+}
+
+void tame_impl_cube_wires(double x, double y, double z, double w, double h,
+                          double d, int64_t color) {
+  DrawCubeWires((Vector3){(float)x, (float)y, (float)z}, (float)w, (float)h,
+                (float)d, tame_color(color));
+}
+
+void tame_impl_grid(int slices, double spacing) {
+  DrawGrid(slices, (float)spacing);
+}
+
+// --- Faz 1 primitifleri -----------------------------------------------------
+
+void tame_impl_sphere(double x, double y, double z, double r, int64_t color) {
+  DrawSphere((Vector3){(float)x, (float)y, (float)z}, (float)r,
+             tame_color(color));
+}
+
+void tame_impl_sphere_wires(double x, double y, double z, double r, int seg,
+                            int64_t color) {
+  if (seg < 3) seg = 3;
+  DrawSphereWires((Vector3){(float)x, (float)y, (float)z}, (float)r, seg, seg,
+                  tame_color(color));
+}
+
+void tame_impl_cylinder(double x, double y, double z, double r, double h,
+                        int64_t color) {
+  // Taban (x,y,z)'de duran, dikey silindir; radiusTop==radiusBottom==r.
+  DrawCylinder((Vector3){(float)x, (float)y, (float)z}, (float)r, (float)r,
+               (float)h, 20, tame_color(color));
+}
+
+void tame_impl_plane(double x, double y, double z, double sx, double sz,
+                     int64_t color) {
+  DrawPlane((Vector3){(float)x, (float)y, (float)z},
+            (Vector2){(float)sx, (float)sz}, tame_color(color));
+}
+
+void tame_impl_line3(double x1, double y1, double z1, double x2, double y2,
+                     double z2, int64_t color) {
+  DrawLine3D((Vector3){(float)x1, (float)y1, (float)z1},
+             (Vector3){(float)x2, (float)y2, (float)z2}, tame_color(color));
+}
+
+// --- Faz 1 raycast (ekran → dünya, fare/dokunuş ile tıklama-seçim) -----------
+// Global Camera3D'yi kullanır. Vurursa çarpışma MESAFESİNİ döner (dünya birimi,
+// >= 0), ıskalarsa -1. Oyun kodu "en küçük pozitif mesafe = tıklanan nesne"
+// mantığıyla seçim yapar.
+
+double tame_impl_pick_box(double mx, double my, double bx, double by, double bz,
+                          double bw, double bh, double bd) {
+  tame_cam3d_ensure();
+  Ray ray = GetScreenToWorldRay((Vector2){(float)mx, (float)my}, tame_cam3d);
+  BoundingBox box;
+  box.min = (Vector3){(float)(bx - bw * 0.5), (float)(by - bh * 0.5),
+                      (float)(bz - bd * 0.5)};
+  box.max = (Vector3){(float)(bx + bw * 0.5), (float)(by + bh * 0.5),
+                      (float)(bz + bd * 0.5)};
+  RayCollision hit = GetRayCollisionBox(ray, box);
+  return hit.hit ? (double)hit.distance : -1.0;
+}
+
+double tame_impl_pick_sphere(double mx, double my, double cx, double cy,
+                             double cz, double r) {
+  tame_cam3d_ensure();
+  Ray ray = GetScreenToWorldRay((Vector2){(float)mx, (float)my}, tame_cam3d);
+  RayCollision hit = GetRayCollisionSphere(
+      ray, (Vector3){(float)cx, (float)cy, (float)cz}, (float)r);
+  return hit.hit ? (double)hit.distance : -1.0;
+}
+
+// ---------------------------------------------------------------------------
 // Resource registries — textures / fonts / sounds / music.
 //
 // Tulpar sees resources as int handles (slot indexes), same model as the DB
@@ -283,6 +401,141 @@ void tame_impl_unload_texture(int h) {
     UnloadTexture(tame_textures[h]);
     tame_texture_used[h] = 0;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Faz 2 — 3D model registry (yükle/üret + çiz + iskelet animasyonu).
+//
+// Doku/font registry'siyle aynı handle deseni (bu yüzden texture registry'sinden
+// SONRA gelir — tame_textures/tame_texture_ok'a erişir). Bir handle bir Model +
+// o modelin dosyasından yüklenen animasyon dizisini tutar (GLB/IQM animasyonu
+// gömer). GenMesh* üreteçleri de LoadModelFromMesh ile aynı registry'ye model
+// üretir → dosyasız (prosedürel) ve dosyalı modeller tek çizim yolunu paylaşır.
+// ---------------------------------------------------------------------------
+
+#define TAME_MAX_MODELS 128
+
+typedef struct {
+  Model model;
+  ModelAnimation *anims;
+  int anim_count;
+  int used;
+} TameModel;
+
+static TameModel tame_models[TAME_MAX_MODELS];
+
+static int tame_model_slot(void) {
+  for (int i = 0; i < TAME_MAX_MODELS; i++)
+    if (!tame_models[i].used) return i;
+  return -1;
+}
+
+static int tame_model_ok(int h) {
+  return h >= 0 && h < TAME_MAX_MODELS && tame_models[h].used;
+}
+
+// Dosyadan model yükle + (varsa) gömülü animasyonları da yükle. -1 = başarısız.
+int tame_impl_load_model(const char *path) {
+  if (!tame_window_ready) {
+    fprintf(stderr, "[tame] load_model window()'dan once cagrilamaz. / "
+                    "load_model requires window() first.\n");
+    return -1;
+  }
+  int slot = tame_model_slot();
+  if (slot < 0) return -1;
+  Model m = LoadModel(path ? path : "");
+  if (m.meshCount == 0) {
+    UnloadModel(m);
+    return -1;
+  }
+  int ac = 0;
+  ModelAnimation *anims = LoadModelAnimations(path ? path : "", &ac);
+  tame_models[slot].model = m;
+  tame_models[slot].anims = anims;
+  tame_models[slot].anim_count = ac;
+  tame_models[slot].used = 1;
+  return slot;
+}
+
+// Prosedürel mesh üret → model handle. kind ile şekil seçilir (bkz. lib/tame.tpr
+// gen_* sarmalayıcıları). Dosya gerekmez.
+int tame_impl_gen(int kind, double a, double b, double c, double d) {
+  if (!tame_window_ready) return -1;
+  int slot = tame_model_slot();
+  if (slot < 0) return -1;
+  Mesh mesh;
+  int ib = (int)b, ic = (int)c, id = (int)d;
+  if (ib < 1) ib = 1;
+  if (ic < 3) ic = 3;
+  if (id < 3) id = 3;
+  switch (kind) {
+    case 0: mesh = GenMeshCube((float)a, (float)b, (float)c); break;
+    case 1: mesh = GenMeshSphere((float)a, ib, ic); break;
+    case 2: mesh = GenMeshPlane((float)a, (float)b, ic, id); break;
+    case 3: mesh = GenMeshCylinder((float)a, (float)b, ic); break;
+    case 4: mesh = GenMeshTorus((float)a, (float)b, ic, id); break;
+    case 5: mesh = GenMeshCone((float)a, (float)b, ic); break;
+    case 6: mesh = GenMeshKnot((float)a, (float)b, ic, id); break;
+    default: mesh = GenMeshCube((float)a, (float)b, (float)c); break;
+  }
+  Model m = LoadModelFromMesh(mesh);
+  tame_models[slot].model = m;
+  tame_models[slot].anims = NULL;
+  tame_models[slot].anim_count = 0;
+  tame_models[slot].used = 1;
+  return slot;
+}
+
+void tame_impl_draw_model(int h, double x, double y, double z, double scale,
+                          int64_t tint) {
+  if (!tame_model_ok(h)) return;
+  DrawModel(tame_models[h].model, (Vector3){(float)x, (float)y, (float)z},
+            (float)scale, tame_color(tint));
+}
+
+// Y ekseni etrafında yaw (derece) ile döndürerek çiz — karakter/araç için tipik.
+void tame_impl_draw_model_rot(int h, double x, double y, double z, double yaw,
+                              double scale, int64_t tint) {
+  if (!tame_model_ok(h)) return;
+  DrawModelEx(tame_models[h].model, (Vector3){(float)x, (float)y, (float)z},
+              (Vector3){0.0f, 1.0f, 0.0f}, (float)yaw,
+              (Vector3){(float)scale, (float)scale, (float)scale},
+              tame_color(tint));
+}
+
+// Yüklü bir dokuyu (tm_load_texture handle'ı) modelin ilk materyaline bağla.
+void tame_impl_model_texture(int h, int tex_handle) {
+  if (!tame_model_ok(h)) return;
+  if (tame_models[h].model.materialCount < 1) return;
+  if (!tame_texture_ok(tex_handle)) return;
+  SetMaterialTexture(&tame_models[h].model.materials[0], MATERIAL_MAP_DIFFUSE,
+                     tame_textures[tex_handle]);
+}
+
+int tame_impl_model_anim_count(int h) {
+  return tame_model_ok(h) ? tame_models[h].anim_count : 0;
+}
+
+int tame_impl_anim_frames(int h, int idx) {
+  if (!tame_model_ok(h) || idx < 0 || idx >= tame_models[h].anim_count) return 0;
+  return tame_models[h].anims[idx].frameCount;
+}
+
+// Animasyon pozunu uygula (CPU skinning). frame'i oyun kodu her karede artırır
+// ve frame-sayısına göre mod'lar.
+void tame_impl_anim(int h, int idx, int frame) {
+  if (!tame_model_ok(h) || idx < 0 || idx >= tame_models[h].anim_count) return;
+  UpdateModelAnimation(tame_models[h].model, tame_models[h].anims[idx], frame);
+}
+
+void tame_impl_unload_model(int h) {
+  if (!tame_model_ok(h)) return;
+  if (tame_models[h].anims)
+    UnloadModelAnimations(tame_models[h].anims, tame_models[h].anim_count);
+  UnloadModel(tame_models[h].model);
+  tame_models[h].anims = NULL;
+  tame_models[h].anim_count = 0;
+  tame_models[h].used = 0;
 }
 
 int tame_impl_load_font(const char *path, int size) {
@@ -401,6 +654,16 @@ static void tame_pump_music(void) {
 // close() sırasında canlı tüm kaynakları bırak (GL context / ses aygıtı
 // hâlâ açıkken) ve ses aygıtını kapat.
 static void tame_unload_all_resources(void) {
+  for (int i = 0; i < TAME_MAX_MODELS; i++) {
+    if (tame_models[i].used) {
+      if (tame_models[i].anims)
+        UnloadModelAnimations(tame_models[i].anims, tame_models[i].anim_count);
+      UnloadModel(tame_models[i].model);
+      tame_models[i].anims = NULL;
+      tame_models[i].anim_count = 0;
+      tame_models[i].used = 0;
+    }
+  }
   for (int i = 0; i < TAME_MAX_TEXTURES; i++) {
     if (tame_texture_used[i]) {
       UnloadTexture(tame_textures[i]);
