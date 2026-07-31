@@ -83,6 +83,15 @@ int   _shadows3 = 1;
 // Gölge haritasının kapsadığı alanın yarı-genişliği (dünya birimi). Kamera
 // hedefinin çevresini kapsar; küçük = keskin ama dar, büyük = geniş ama kaba.
 float _shadow_area3 = 24.0;
+// Gökyüzü VARSAYILAN KAPALI — ışık/gölgeden farklı olarak bu bir sanat
+// yönü kararı, algı düzeltmesi değil. Karanlık/stilize bir sahnede zorla açık
+// mavi gökyüzü yanlış olur. sky3d(tepe, ufuk) ile açılır.
+int   _sky3 = 0;
+int   _sky_top3 = 0;
+int   _sky_bot3 = 0;
+// Zemin dokusu (opsiyonel). -1 = dokusuz düz renk (varsayılan).
+int   _ground_tex3 = 0 - 1;
+float _ground_tile3 = 1.0;
 
 // callback'ler (0-arg; arcade deseni — call() ile güvenli).
 // fn referansları `var` ile tutulmalı — `int` global fn-değerini bozar.
@@ -377,8 +386,15 @@ func _s3_camera() {
 // ---- Çizim -----------------------------------------------------------------
 func _s3_render() {
     if (_ground_on == 1) {
-        plane(0.0, _ground_y, 0.0,  _ground_sz * 2.0, _ground_sz * 2.0, rgb(30, 34, 46));
-        grid(toInt(_ground_sz), 1.0);
+        if (_ground_tex3 >= 0) {
+            // Dokulu zemin: renk beyaz olmalı, yoksa doku boyanır.
+            texture3d(_ground_tex3, _ground_tile3, _ground_tile3);
+            plane(0.0, _ground_y, 0.0,  _ground_sz * 2.0, _ground_sz * 2.0, WHITE);
+            no_texture3d();
+        } else {
+            plane(0.0, _ground_y, 0.0,  _ground_sz * 2.0, _ground_sz * 2.0, rgb(30, 34, 46));
+            grid(toInt(_ground_sz), 1.0);
+        }
     }
     int n = length(_e3);
     int i = 0;
@@ -427,6 +443,21 @@ func golge3d(on)   { shadows3d(on); }
 func shadow_area3d(a) { _shadow_area3 = a; }
 func golge_alani3d(a) { shadow_area3d(a); }
 
+// Gradyan gökyüzünü aç (setup'tan ÖNCE): top = tepe, bottom = ufuk rengi.
+//   sky3d(rgb(58, 116, 200), rgb(196, 220, 240));
+func sky3d(top, bottom) { _sky3 = 1; _sky_top3 = top; _sky_bot3 = bottom; }
+func gokyuzu3d(top, bottom) { sky3d(top, bottom); }
+func sky3d_off() { _sky3 = 0; }
+func gokyuzu3d_kapat() { sky3d_off(); }
+
+// Zemini dokula. tile = doku, zemin boyunca kaç kez tekrarlansın (ölçek hissi
+// buradan gelir). Doku verilince ızgara çizgileri çizilmez — doku zaten
+// yüzeyin ölçeğini gösteriyor.
+//   int t = checker(128, 128, 8, rgb(158,166,176), rgb(120,128,140));
+//   ground_texture3d(t, 24.0);
+func ground_texture3d(t, tile) { _ground_tex3 = t; _ground_tile3 = tile; }
+func zemin_doku3d(t, tile)     { ground_texture3d(t, tile); }
+
 // ---- Yönetilen döngü -------------------------------------------------------
 func play3d() {
     if (!window(_win_w, _win_h, _win_title)) { return; }
@@ -447,6 +478,7 @@ func play3d() {
             shadow_area(_shadow_area3);
         }
     }
+    if (_sky3 == 1) { sky(_sky_top3, _sky_bot3); }
     if (_has_setup3 == 1) { call(_setup3_fn); }
 
     while (running()) {

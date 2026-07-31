@@ -9,6 +9,46 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — 3D doku, gökyüzü ve materyal (Faz 5)
+
+3B sahneler artık **düz renk olmak zorunda değil**: yüzeylere doku döşenebiliyor,
+arkalarında gradyan bir gökyüzü var ve parlaklıkları ayarlanabiliyor.
+
+- **Doku bir DURUM'dur:** `texture3d(t, tile_u, tile_v)` / `doku3d(...)` bir kez
+  ayarlanır, sonraki her primitif (kutu/küre/silindir/düzlem) onu kullanır;
+  `no_texture3d()` / `doku3d_kapat()` düz renge döner. `tile`, dokunun yüzey
+  boyunca kaç kez tekrarlanacağı — 60×60 birimlik bir zemine tek bir 128×128
+  karo dokusunu 24×24 döşemek böyle olur. Renk (çizim çağrısının son
+  parametresi) dokuyla **çarpılır**: beyaz ver, doku olduğu gibi çıksın; renkli
+  ver, dokuyu boya. Modeller kendi dokularını korur (`model_texture`) — GLB
+  materyalini ezmek yıkıcı olurdu.
+- **Prosedürel damalı doku:** `checker(w, h, cells, c1, c2)` / `damali(...)`
+  dosyasız doku üretir ve normal bir doku handle'ı döner (2B'de de kullanılır).
+  Motorun geri kalanı (gömülü shader'lar, `gen_*` primitifleri) gibi asset
+  gerektirmeme çizgisinde: kimse basit bir zemin karosu için PNG taşımasın.
+- **Materyal:** `material3d(shine, spec)` / `materyal3d(...)` — `shine`
+  specular üssü (büyük = küçük ve keskin parlama, "cilalı"; küçük = geniş ve
+  yayvan, "mat"), `spec` parlamanın gücü (0 = tamamen mat). Hazır iki uç:
+  `mat3d()` / `matte3d()` ve `parlak3d()` / `glossy3d()`. Varsayılan 16 / 1.0,
+  yani **Faz 5 hiçbir mevcut sahnenin görüntüsünü değiştirmez.**
+- **Gökyüzü:** `sky(tepe, ufuk)` / `gokyuzu(...)`, `sky_off()` /
+  `gokyuzu_kapat()`. Cubemap veya 6 resim yok — kameranın konumunda duran büyük
+  bir kürenin rengi **bakış yönüne** göre hesaplanıyor, yani yukarı bakınca
+  zenit, aşağı bakınca ufuk rengi geliyor (2B gradyan arka planın yapamadığı
+  şey bu). Küre derinliğe yazmaz, sahnenin geri kalanından önce çizilir.
+- **`scene3d` entegrasyonu:** `sky3d(tepe, ufuk)` / `gokyuzu3d(...)` ve
+  `ground_texture3d(t, tile)` / `zemin_doku3d(...)`. Işık ve gölgenin aksine
+  gökyüzü **varsayılan kapalı** — o bir sanat yönü kararı, algı düzeltmesi
+  değil; karanlık/stilize bir sahneye zorla açık mavi gökyüzü koymak yanlış
+  olurdu. Zemine doku verilince ızgara çizgileri çizilmez (doku zaten ölçeği
+  gösteriyor).
+- Örnek: `examples/tame3d_texture.tpr` (BOŞLUK / dokunuş ile dokuyu aç-kapat;
+  aynı küre solda parlak, sağda mat).
+
+**6 yeni builtin:** `tm3_texture` · `tm3_material` · `tm3_sky` · `tm3_sky_off` ·
+`tm_checker` (+ Faz 4b'den `tm3_shadows_active`). Masaüstü GL 3.3, web GLES2 ve
+Android GLES2'nin üçünde de derleniyor.
+
 ### Added — 3D gölgeler (shadow mapping)
 
 Yönlü ışık (güneş) için **gölge haritalama**: nesneler zemine ve birbirlerine
