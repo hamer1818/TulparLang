@@ -350,6 +350,25 @@ func isik_sil(idx)  { tm3_light_off(idx); }
 func ambient_light(color) { tm3_ambient(color); }
 func ortam_isik(color)    { tm3_ambient(color); }
 
+// -- Gölgeler (yönlü ışık / güneş için shadow mapping) --
+// lights_on()'dan SONRA çağır. Nesneler zemine gölge düşürür → "yerde duruyor"
+// hissi. Donanım derinlik dokusu desteklemiyorsa false döner, gölgeler kapalı
+// kalır ve ışıklandırma çalışmaya devam eder (sessizce bozulmaz).
+//
+//   lights_on();
+//   sun(0.0-0.6, 0.0-1.0, 0.0-0.4, WHITE);
+//   shadows_on();
+//   shadow_area(24.0);     // kapsanan alanın yarı-genişliği
+//
+// NOT: gölge açıkken sahne iki kez çizilir (ışık gözünden + kameradan), yani
+// maliyeti vardır. Mobilde ağır gelirse shadow_area'yı küçült veya kapat.
+func shadows_on(): bool  { return tm3_shadows(1); }
+func golge_ac(): bool    { return tm3_shadows(1); }
+func shadows_off() { tm3_shadows(0); }
+func golge_kapat() { tm3_shadows(0); }
+func shadow_area(a) { tm3_shadow_area(a); }
+func golge_alani(a) { tm3_shadow_area(a); }
+
 // ---- Yönetilen oyun döngüsü (Faz 5) -------------------------------------------
 // Wings'in listen() modeli: update/draw fonksiyonlarını verirsin, döngüyü,
 // kare zamanlamasını VE kare belleğini tame yönetir — her kare sonunda arena

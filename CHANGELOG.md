@@ -9,6 +9,29 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — 3D gölgeler (shadow mapping)
+
+Yönlü ışık (güneş) için **gölge haritalama**: nesneler zemine ve birbirlerine
+gölge düşürüyor — "havada yüzüyor" hissi gidip "yerde duruyor" hissi geliyor.
+Yumuşak kenar için 3×3 PCF, yüzeyin kendini gölgelemesine (shadow acne) karşı
+eğime göre bias + gölge geçişinde ön-yüz ayıklama.
+
+- **2 yeni builtin:** `tm3_shadows` (aç/kapat) · `tm3_shadow_area` (kapsanan
+  alanın yarı-genişliği). Sarmalayıcılar: `shadows_on`/`golge_ac`,
+  `shadows_off`/`golge_kapat`, `shadow_area`/`golge_alani`.
+- **Zarif bozulma:** `rlLoadTextureDepth` derinlik dokusu desteklenmiyorsa
+  sessizce renderbuffer'a düşer — o örneklenebilir değildir, yani gölge sessizce
+  çalışmazdı. Framebuffer bütünlüğü doğrulanıyor; başarısızsa gölgeler kapatılıp
+  açık bir mesaj basılıyor ve **ışıklandırma çalışmaya devam ediyor**.
+- Örnek: `examples/tame3d_shadows.tpr` (BOŞLUK / dokunuş ile aç-kapat; zıplayan
+  kürenin gölgesi büyüyüp küçülür).
+
+Mimari not: gölge sahneyi **iki kez** çizmeyi gerektirir (ışığın gözünden
+derinlik + kameradan normal geçiş), ama tame'de çizimler `space_begin`/
+`space_end` arasında anında yapılıyordu. Artık **gölge açıkken** çizimler bir
+listeye kaydedilip `space_end` iki geçiş halinde oynatıyor; **gölge kapalıyken
+eski anında-çizim yolu birebir korunuyor** (sıfır maliyet).
+
 ### Added — 3D ışıklandırma (Faz 4)
 
 3D sahneler artık **ışık alıyor**: düz renkli geometri yerine gölgeli yüzeyler,
