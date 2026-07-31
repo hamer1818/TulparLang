@@ -179,3 +179,8 @@ arcade_snd.txt
 arcade_hap.txt
 arcade_fps.txt
 arcade_lang.txt
+# İlerleme sistemi (bölüm yıldızı / rozet / bölüm kilidi) — `./build.sh test`
+# arcade örneklerini 2 sn smoke ile çalıştırdığında bunlar da CWD'ye düşüyor.
+arcade_star_*.txt
+arcade_badge_*.txt
+arcade_lvl_*.txt
