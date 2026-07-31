@@ -138,7 +138,9 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > (ışığın gözünden derinlik + kameradan normal) oynatılıyor; **kapalıyken eski
 > anında-çizim yolu birebir korunuyor**. `tm3_shadows` / `tm3_shadow_area` /
 > `tm3_shadows_active` + TR/EN sarmalayıcılar. Örnek:
-> `examples/tame3d_shadows.tpr`. **Masaüstü + WebGL + Android (emülatörde
+> `examples/tame3d_shadows.tpr`. **`scene3d`'de ışık gibi VARSAYILAN AÇIK**
+> (`golge3d(false)` ile kapanır, `golge_alani3d(a)` ile daralır).
+> **Masaüstü + WebGL + Android (emülatörde
 > kullanıcı tarafından) doğrulandı.** Mobilde dört ayrı hata çıktı (hepsi
 > masaüstünde şans eseri gizliydi): alfa harmanlamanın paketlenmiş derinliği
 > bozması, `mediump`'ın derinlik karşılaştırmasına yetmemesi, GLES2'nin

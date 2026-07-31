@@ -31,6 +31,11 @@ eğime göre bias + gölge geçişinde ön-yüz ayıklama.
   kürenin gölgesi büyüyüp küçülür).
 - Teşhis: `-DTAME_SHADOW_DEBUG` ile derlenirse gölge haritası ekranın sol
   üstünde gösterilir (varsayılan kapalı).
+- **`scene3d`'de gölgeler VARSAYILAN AÇIK** (ışık gibi) — motoru kullanan oyun
+  sıfır konfigürasyonla gölgeli görünür. Işık kapalıysa gölge de çizilmez.
+  `golge3d(false)` / `shadows3d(false)` ile kapanır,
+  `golge_alani3d(a)` / `shadow_area3d(a)` ile alanı daralır (varsayılan 24.0;
+  küçültmek gölgeyi keskinleştirir).
 
 **Mobil/GLES2'de dört ayrı hata çıktı, hepsi düzeltildi** — masaüstünde
 şans eseri gizlenmişlerdi:
