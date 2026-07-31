@@ -211,18 +211,40 @@ if [ "$ACTION" = "test" ]; then
         # temp dir so the redirects below always have somewhere to go.
         local fail_dir="${FAIL_DIR:-$(mktemp -d)}"
 
-        # Use timeout if available
-        TIMEOUT_CMD=""
+        # Separate compile vs run budgets. These used to share one 30s cap,
+        # which was sized for a SERIAL suite: under `xargs -P$(nproc)` the
+        # heaviest example (arcade_launcher — 13 namespaced games + arcade +
+        # tame, ~10s of LLVM work unloaded) competes with N-1 other AOT
+        # compiles for the same cores and blew straight past 30s on a
+        # 4-core CI runner. Compile time legitimately scales with parallel
+        # contention, so it gets a generous ceiling that still catches a
+        # genuinely hung codegen; execution time does NOT scale that way —
+        # a program that runs long is a bug, so it keeps the tight cap.
+        # The step-level CI timeout is the backstop for both.
+        local compile_timeout="${TULPAR_COMPILE_TIMEOUT:-180}"
+        local run_timeout="${TULPAR_RUN_TIMEOUT:-30}"
+        local TIMEOUT_BIN=""
         if command -v timeout &> /dev/null; then
-            TIMEOUT_CMD="timeout 30s"
+            TIMEOUT_BIN="timeout"
         elif command -v gtimeout &> /dev/null; then
-            TIMEOUT_CMD="gtimeout 30s"
+            TIMEOUT_BIN="gtimeout"
+        fi
+        local COMPILE_TIMEOUT_CMD=""
+        local TIMEOUT_CMD=""
+        if [ -n "$TIMEOUT_BIN" ]; then
+            COMPILE_TIMEOUT_CMD="$TIMEOUT_BIN ${compile_timeout}s"
+            TIMEOUT_CMD="$TIMEOUT_BIN ${run_timeout}s"
         fi
 
         # Run AOT compilation and (optionally) execution. Capture stderr+stdout
         # to a tempfile so we can echo it on failure — silent failures here
         # used to hide every diagnostic and turn CI into "all FAIL, no clue why".
-        if $TIMEOUT_CMD ./tulpar --aot "$example" > "$compile_log" 2>&1 && [ -f "$out_path" ]; then
+        # Keep the exit code: `timeout` reports a kill as 124, and a timeout
+        # otherwise looks identical to a compile error with an empty log
+        # (which is exactly how the first parallel CI run presented itself).
+        $COMPILE_TIMEOUT_CMD ./tulpar --aot "$example" > "$compile_log" 2>&1
+        local compile_rc=$?
+        if [ $compile_rc -eq 0 ] && [ -f "$out_path" ]; then
             if [ "$compile_only" = "1" ]; then
                 # Runtime smoke test for COMPILE_ONLY examples: spawn the
                 # binary in the background, give it 2s to either start
@@ -326,6 +348,18 @@ if [ "$ACTION" = "test" ]; then
                 rm -f "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
                 return 1
             fi
+        elif [ $compile_rc -eq 124 ]; then
+            printf "Testing %s... ${RED}FAIL (compile timeout >%ss)${NC}\n" "$example" "$compile_timeout"
+            {
+                echo "----- compile TIMEOUT (${compile_timeout}s): $example -----"
+                echo "    The AOT compile was killed, not rejected — raise"
+                echo "    TULPAR_COMPILE_TIMEOUT or lower TULPAR_TEST_JOBS if"
+                echo "    this box is just heavily loaded."
+                sed 's/^/    /' "$compile_log" | head -n 40
+                echo "----- end log -----"
+            } > "$fail_dir/$name.log" 2>&1
+            rm -f "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+            return 1
         else
             printf "Testing %s... ${RED}FAIL (compilation)${NC}\n" "$example"
             {
@@ -429,17 +463,21 @@ if [ "$ACTION" = "test" ]; then
             bash -c 'run_test "$0" "$1"' < "$work_list" || TEST_FAILED=1
         rm -f "$work_list"
 
-        # Dump the collected failure logs in a deterministic (sorted) order,
-        # after the live PASS/FAIL lines — parallel workers can't print
-        # multi-line blocks safely while others are still writing.
-        if [ -n "$(ls -A "$FAIL_DIR" 2>/dev/null)" ]; then
-            echo ""
-            echo -e "${RED}===== failure details =====${NC}"
-            for log in "$FAIL_DIR"/*.log; do
-                [ -f "$log" ] || continue
-                cat "$log"
-            done
-        fi
+    fi
+
+    # Dump the collected failure logs in a deterministic (sorted) order,
+    # after the live PASS/FAIL lines — parallel workers can't print
+    # multi-line blocks safely while others are still writing. Outside the
+    # if/else on purpose: the single-file path funnels detail through
+    # $FAIL_DIR too, and dumping only in the parallel branch silently threw
+    # away the compile log for `./build.sh test <one-file>`.
+    if [ -n "$(ls -A "$FAIL_DIR" 2>/dev/null)" ]; then
+        echo ""
+        echo -e "${RED}===== failure details =====${NC}"
+        for log in "$FAIL_DIR"/*.log; do
+            [ -f "$log" ] || continue
+            cat "$log"
+        done
     fi
 
     rm -rf "$FAIL_DIR"
