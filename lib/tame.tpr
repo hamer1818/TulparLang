@@ -413,6 +413,21 @@ func gokyuzu(top, bottom): bool { return tm3_sky(top, bottom); }
 func sky_off()        { tm3_sky_off(); }
 func gokyuzu_kapat()  { tm3_sky_off(); }
 
+// Mesafe sisi — gökyüzü ile zemin arasındaki sert ufuk çizgisini kapatır ve
+// derinlik hissi verir. density: 0.02 hafif pus, 0.06 yoğun sis.
+//
+//   sky(rgb(58,116,200), rgb(196,220,240));
+//   fog_sky(0.03);        // sis rengini gökyüzünün UFKUNDAN al (doğrusu bu)
+//
+// Kendi rengini vermek istersen fog(renk, yogunluk). Sis ışık shader'ında
+// hesaplanır, yani lights_off() ile ışığı kapatırsan sis de çizilmez.
+func fog(color, density) { tm3_fog(color, density); }
+func sis(color, density) { tm3_fog(color, density); }
+func fog_sky(density) { tm3_fog(0 - 1, density); }
+func sis_gokyuzu(density) { tm3_fog(0 - 1, density); }
+func fog_off() { tm3_fog(0 - 1, 0.0); }
+func sis_kapat() { tm3_fog(0 - 1, 0.0); }
+
 // ---- Yönetilen oyun döngüsü (Faz 5) -------------------------------------------
 // Wings'in listen() modeli: update/draw fonksiyonlarını verirsin, döngüyü,
 // kare zamanlamasını VE kare belleğini tame yönetir — her kare sonunda arena

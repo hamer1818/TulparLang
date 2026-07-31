@@ -865,6 +865,7 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm3_material", "aot_tm3_material_ptr", 2},
     {"tm3_sky", "aot_tm3_sky_ptr", 2},
     {"tm3_sky_off", "aot_tm3_sky_off_ptr", 0},
+    {"tm3_fog", "aot_tm3_fog_ptr", 2},
     {"tm_checker", "aot_tm_checker_ptr", 5},
     // girdi — gamepad (buton/eksen adla: "A"/"LB"/"START", "LX"/"RT"...)
     {"tm_gamepad_available", "aot_tm_gamepad_available_ptr", 1},

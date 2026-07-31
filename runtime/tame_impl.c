@@ -357,6 +357,14 @@ static int tame_cur_tex = -1;          // -1 = doku yok (düz renk)
 static float tame_cur_tile[2] = {1.0f, 1.0f};
 static float tame_cur_shine = 16.0f;
 static float tame_cur_spec = 1.0f;
+// Sis. Yoğunluk 0 = kapalı (shader'da exp(0)=1 → hiç karışım yok), o yüzden
+// ayrı bir "açık mı" bayrağı yok. Renk gökyüzünün UFUK rengiyle aynı olmalı,
+// yoksa uzaktaki cisimler gökyüzüne değil başka bir renge karışır ve sis
+// "kirli cam" gibi görünür — bu yüzden fog(-1, d) sky()'nin ufkunu kullanır.
+static int tame_loc_fogColor = -1;
+static int tame_loc_fogDensity = -1;
+static float tame_fog_color[4] = {0.75f, 0.84f, 0.93f, 1.0f};
+static float tame_fog_density = 0.0f;
 
 // GLES2 (web/Android) mi, masaüstü GL3.3 mü? Derleyicinin KENDİ tanımladığı
 // __EMSCRIPTEN__/__ANDROID__'i de sayıyoruz, sadece -DGRAPHICS_API_OPENGL_ES2'ye
@@ -420,6 +428,10 @@ static const char *tame_light_fs =
     "uniform vec2  texTile;                      \n"
     "uniform float matShine;                     \n"
     "uniform float matSpec;                      \n"
+    // Sis: yoğunluk 0 iken exp(0)=1 → hiç karışım olmaz, yani ayrı bir
+    // "sis açık mı" bayrağına gerek yok.
+    "uniform vec4  fogColor;                     \n"
+    "uniform float fogDensity;                   \n"
     "float shadowFactor(vec3 n, vec3 l) {        \n"
     "    if (shadowOn == 0) return 1.0;          \n"
     "    vec4 lp = lightVP*vec4(fragPosition, 1.0); \n"
@@ -466,6 +478,11 @@ static const char *tame_light_fs =
     "    }                                       \n"
     "    vec4 finalColor = (texelColor*((colDiffuse + vec4(specular, 1.0))*vec4(lightDot, 1.0))); \n"
     "    finalColor += texelColor*(ambient)*colDiffuse; \n"
+    // Üssel-kare sis: yakında hiç yok, uzakta hızlı doyuyor — düz doğrusal
+    // sisin "her şey biraz soluk" görüntüsünü vermez.
+    "    highp float fd = length(viewPos - fragPosition)*fogDensity; \n"
+    "    float ff = clamp(exp(0.0 - fd*fd), 0.0, 1.0); \n"
+    "    finalColor.rgb = mix(fogColor.rgb, finalColor.rgb, ff); \n"
     "    gl_FragColor = finalColor;           \n"
     "}                                           \n";
 #else
@@ -509,10 +526,12 @@ static const char *tame_light_fs =
     "uniform mat4 lightVP;                       \n"
     "uniform int  shadowOn;                      \n"
     "uniform float shadowTexel;                  \n"
-    // Faz 5 — doku döşeme + materyal (bkz. GLES varyantındaki not).
+    // Faz 5 — doku döşeme + materyal + sis (bkz. GLES varyantındaki notlar).
     "uniform vec2  texTile;                      \n"
     "uniform float matShine;                     \n"
     "uniform float matSpec;                      \n"
+    "uniform vec4  fogColor;                     \n"
+    "uniform float fogDensity;                   \n"
     "float shadowFactor(vec3 n, vec3 l) {        \n"
     "    if (shadowOn == 0) return 1.0;          \n"
     "    vec4 lp = lightVP*vec4(fragPosition, 1.0); \n"
@@ -559,7 +578,10 @@ static const char *tame_light_fs =
     "    }                                       \n"
     "    finalColor = (texelColor*((colDiffuse + vec4(specular, 1.0))*vec4(lightDot, 1.0))); \n"
     "    finalColor += texelColor*(ambient)*colDiffuse; \n"
-
+    // Üssel-kare sis (bkz. GLES varyantı).
+    "    float fd = length(viewPos - fragPosition)*fogDensity; \n"
+    "    float ff = clamp(exp(-fd*fd), 0.0, 1.0); \n"
+    "    finalColor.rgb = mix(fogColor.rgb, finalColor.rgb, ff); \n"
     "}                                           \n";
 #endif
 
@@ -631,6 +653,10 @@ static void tame_material_upload(void) {
                  SHADER_UNIFORM_FLOAT);
   SetShaderValue(tame_light_shader, tame_loc_matSpec, &tame_cur_spec,
                  SHADER_UNIFORM_FLOAT);
+  SetShaderValue(tame_light_shader, tame_loc_fogColor, tame_fog_color,
+                 SHADER_UNIFORM_VEC4);
+  SetShaderValue(tame_light_shader, tame_loc_fogDensity, &tame_fog_density,
+                 SHADER_UNIFORM_FLOAT);
 }
 
 // Işık slot'unun uniform konumlarını (indeksli dizi elemanları) çöz.
@@ -683,6 +709,8 @@ static int tame_light_ensure(void) {
   tame_loc_texTile = GetShaderLocation(tame_light_shader, "texTile");
   tame_loc_matShine = GetShaderLocation(tame_light_shader, "matShine");
   tame_loc_matSpec = GetShaderLocation(tame_light_shader, "matSpec");
+  tame_loc_fogColor = GetShaderLocation(tame_light_shader, "fogColor");
+  tame_loc_fogDensity = GetShaderLocation(tame_light_shader, "fogDensity");
   tame_light_ready = 1;
   tame_material_upload();
   for (int i = 0; i < TAME_MAX_LIGHTS; i++) {
@@ -1444,6 +1472,25 @@ int tame_impl_sky(int64_t top, int64_t bottom) {
 }
 
 void tame_impl_sky_off(void) { tame_sky_on = 0; }
+
+// Mesafe sisi. density 0 = kapalı. color < 0 → gökyüzünün UFUK rengi kullanılır
+// (doğru olan bu: sis, uzaktaki cismi arkasındaki gökyüzüne karıştırmalı).
+//
+// Sis ışık shader'ında hesaplanıyor, yani ışık kapalıyken (lights_off) sis de
+// çizilmez — gölgeyle aynı bağımlılık.
+void tame_impl_fog(int64_t color, double density) {
+  if (color < 0) {
+    for (int i = 0; i < 4; i++) tame_fog_color[i] = tame_sky_bottom[i];
+  } else {
+    Color c = tame_color(color);
+    tame_fog_color[0] = (float)c.r / 255.0f;
+    tame_fog_color[1] = (float)c.g / 255.0f;
+    tame_fog_color[2] = (float)c.b / 255.0f;
+    tame_fog_color[3] = 1.0f;
+  }
+  tame_fog_density = (density > 0.0) ? (float)density : 0.0f;
+  tame_material_upload();
+}
 
 void tame_impl_draw_texture(int h, double x, double y) {
   if (tame_texture_ok(h))
