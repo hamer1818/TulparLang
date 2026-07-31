@@ -112,7 +112,7 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > Windows installer + GPG-imzalı SHA256SUMS.
 >
 > **Geliştirme (yayınlanmadı) — 3D oyun katmanı:** TulparLang artık 3D oyun
-> yapabiliyor. Vendored raylib'in zaten derlenen 3D modülü **30 `tm3_*` builtin**
+> yapabiliyor. Vendored raylib'in zaten derlenen 3D modülü **34 `tm3_*` builtin**
 > ile açığa çıkarıldı (Faz 0 kamera/küp/ızgara; Faz 1 primitifler + raycast
 > tıklama-seçim; Faz 2 model yükleme OBJ/GLTF/GLB + 7 `gen_*` prosedürel şekil +
 > iskelet animasyonu), üzerine saf-Tulpar **`scene3d` preset motoru** kondu —
@@ -146,6 +146,19 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > bozması, `mediump`'ın derinlik karşılaştırmasına yetmemesi, GLES2'nin
 > yalnız-derinlik FBO'yu reddetmesi, paketlenmiş derinliğin bilinear örneklemeye
 > gelmemesi. Detay: CHANGELOG "3D gölgeler".
+>
+> **3D doku / gökyüzü / materyal (Faz 5)** — sahneler artık düz renk olmak
+> zorunda değil. Doku bir DURUM (`texture3d(t, tile_u, tile_v)`, sonraki
+> primitifler kullanır) + döşeme; `checker()` ile **dosyasız** prosedürel karo
+> dokusu (motorun asset gerektirmeme çizgisi); `material3d(shine, spec)` ile
+> parlaklık (`mat3d()` / `parlak3d()` hazır uçlar); `sky(tepe, ufuk)` ile
+> **kameraya duyarlı** gradyan gökyüzü (cubemap/6 resim yok — büyük bir kürenin
+> rengi bakış yönünden hesaplanır). `scene3d`'de `sky3d()` ve
+> `ground_texture3d()`; gökyüzü ışık/gölgenin aksine **varsayılan kapalı**
+> (sanat yönü kararı). Varsayılanlar eski davranışın aynısı, yani mevcut
+> sahnelerin görüntüsü değişmiyor. Örnek: `examples/tame3d_texture.tpr`.
+> Üç hedefte de (masaüstü / web GLES2 / Android GLES2) derleniyor.
+> Detay: CHANGELOG "3D doku, gökyüzü ve materyal".
 
 - **Çekirdek sözdizimi tam:** statik tipler, fonksiyonlar (opsiyonel
   dönüş-tipi notasyonu, **eksik trailing arg → 0 ile padlenir**), kontrol akışı,

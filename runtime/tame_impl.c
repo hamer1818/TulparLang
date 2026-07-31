@@ -247,6 +247,9 @@ static void tame_dl_push(int kind, int handle, double x, double y, double z,
 // Model kayıt defteri aşağıda (doku registry'sinden sonra) — gölge geçişi
 // modelleri çizmek için erişmek zorunda, bu yüzden erişimci ileri bildirimli.
 static Model *tame_model_ptr(int h);
+// Faz 5: gökyüzü kubbesi. begin3 (ve gölgeli yolda scene_end) kamerayı
+// bağladıktan hemen sonra çağırır; tanımı birim mesh'lerin yanında.
+static void tame_sky_draw(void);
 
 // Kamerayı konumla: göz (px,py,pz), bakış hedefi (tx,ty,tz), dikey FOV derece.
 void tame_impl_cam3(double px, double py, double pz, double tx, double ty,
@@ -263,6 +266,7 @@ void tame_impl_begin3(void) {
   // burada kamerayı/shader'ı bağlamayız.
   if (tame_scene_begin()) return;
   BeginMode3D(tame_cam3d);
+  tame_sky_draw();   // sahnenin geri kalanından ÖNCE (derinliğe yazmaz)
   if (tame_lights_active()) {
     // Specular hesabı kameranın dünya konumunu ister; kamera her kare
     // hareket edebildiği için burada güncelliyoruz.
@@ -340,6 +344,20 @@ static TameLight tame_lights[TAME_MAX_LIGHTS];
 static int tame_loc_ambient = -1;
 static float tame_ambient[4] = {0.18f, 0.18f, 0.22f, 1.0f};
 
+// --- Faz 5 durumu: doku + materyal ------------------------------------------
+// "Geçerli materyal" bir DURUM'dur: tm3_texture/tm3_material çağrıldıktan sonra
+// çizilen her 3B primitif onu kullanır (OpenGL'in klasik state machine'i gibi;
+// oyun kodu her çizime 5 parametre daha yazmak zorunda kalmasın diye).
+// Varsayılanlar eski davranışın birebir aynısı: doku yok, tile (1,1),
+// shine 16, spec 1 — yani Faz 5 hiçbir mevcut sahnenin görüntüsünü değiştirmez.
+static int tame_loc_texTile = -1;
+static int tame_loc_matShine = -1;
+static int tame_loc_matSpec = -1;
+static int tame_cur_tex = -1;          // -1 = doku yok (düz renk)
+static float tame_cur_tile[2] = {1.0f, 1.0f};
+static float tame_cur_shine = 16.0f;
+static float tame_cur_spec = 1.0f;
+
 // GLES2 (web/Android) mi, masaüstü GL3.3 mü? Derleyicinin KENDİ tanımladığı
 // __EMSCRIPTEN__/__ANDROID__'i de sayıyoruz, sadece -DGRAPHICS_API_OPENGL_ES2'ye
 // güvenmiyoruz: wasm/build_tame_web.sh tame_impl.c'yi (raylib'in aksine) o
@@ -396,6 +414,12 @@ static const char *tame_light_fs =
     "uniform mat4 lightVP;                       \n"
     "uniform int  shadowOn;                      \n"
     "uniform float shadowTexel;                  \n"
+    // Faz 5 — doku döşeme + materyal. texTile UV'yi çarpar (zeminde tek dokuyu
+    // N kez tekrarlatmak için); matShine specular üssü, matSpec parlamanın
+    // gücü. Varsayılanlar (1,1)/16/1 eski davranışın birebir aynısı.
+    "uniform vec2  texTile;                      \n"
+    "uniform float matShine;                     \n"
+    "uniform float matSpec;                      \n"
     "float shadowFactor(vec3 n, vec3 l) {        \n"
     "    if (shadowOn == 0) return 1.0;          \n"
     "    vec4 lp = lightVP*vec4(fragPosition, 1.0); \n"
@@ -414,7 +438,7 @@ static const char *tame_light_fs =
     "    return 0.25 + 0.75*(lit/9.0);           \n"
     "}                                           \n"
     "void main() {                               \n"
-    "    vec4 texelColor = texture2D(texture0, fragTexCoord); \n"
+    "    vec4 texelColor = texture2D(texture0, fragTexCoord*texTile); \n"
     "    vec3 lightDot = vec3(0.0);              \n"
     "    vec3 normal = normalize(fragNormal);    \n"
     "    vec3 viewD = normalize(viewPos - fragPosition); \n"
@@ -436,8 +460,8 @@ static const char *tame_light_fs =
     "            if (lightsType[i] == 0) sh = shadowFactor(normal, light); \n"
     "            lightDot += lightsColor[i].rgb*NdotL*att*sh; \n"
     "            float specCo = 0.0;             \n"
-    "            if (NdotL > 0.0) specCo = pow(max(0.0, dot(viewD, reflect(-(light), normal))), 16.0); \n"
-    "            specular += specCo*att*sh;      \n"
+    "            if (NdotL > 0.0) specCo = pow(max(0.0, dot(viewD, reflect(-(light), normal))), matShine); \n"
+    "            specular += specCo*att*sh*matSpec; \n"
     "        }                                   \n"
     "    }                                       \n"
     "    vec4 finalColor = (texelColor*((colDiffuse + vec4(specular, 1.0))*vec4(lightDot, 1.0))); \n"
@@ -485,6 +509,10 @@ static const char *tame_light_fs =
     "uniform mat4 lightVP;                       \n"
     "uniform int  shadowOn;                      \n"
     "uniform float shadowTexel;                  \n"
+    // Faz 5 — doku döşeme + materyal (bkz. GLES varyantındaki not).
+    "uniform vec2  texTile;                      \n"
+    "uniform float matShine;                     \n"
+    "uniform float matSpec;                      \n"
     "float shadowFactor(vec3 n, vec3 l) {        \n"
     "    if (shadowOn == 0) return 1.0;          \n"
     "    vec4 lp = lightVP*vec4(fragPosition, 1.0); \n"
@@ -503,7 +531,7 @@ static const char *tame_light_fs =
     "    return 0.25 + 0.75*(lit/9.0);           \n"
     "}                                           \n"
     "void main() {                               \n"
-    "    vec4 texelColor = texture(texture0, fragTexCoord); \n"
+    "    vec4 texelColor = texture(texture0, fragTexCoord*texTile); \n"
     "    vec3 lightDot = vec3(0.0);              \n"
     "    vec3 normal = normalize(fragNormal);    \n"
     "    vec3 viewD = normalize(viewPos - fragPosition); \n"
@@ -525,8 +553,8 @@ static const char *tame_light_fs =
     "            if (lightsType[i] == 0) sh = shadowFactor(normal, light); \n"
     "            lightDot += lightsColor[i].rgb*NdotL*att*sh; \n"
     "            float specCo = 0.0;             \n"
-    "            if (NdotL > 0.0) specCo = pow(max(0.0, dot(viewD, reflect(-(light), normal))), 16.0); \n"
-    "            specular += specCo*att*sh;      \n"
+    "            if (NdotL > 0.0) specCo = pow(max(0.0, dot(viewD, reflect(-(light), normal))), matShine); \n"
+    "            specular += specCo*att*sh*matSpec; \n"
     "        }                                   \n"
     "    }                                       \n"
     "    finalColor = (texelColor*((colDiffuse + vec4(specular, 1.0))*vec4(lightDot, 1.0))); \n"
@@ -534,6 +562,76 @@ static const char *tame_light_fs =
 
     "}                                           \n";
 #endif
+
+// --- Faz 5: gökyüzü ---------------------------------------------------------
+// Kameraya duyarlı gradyan KUBBE — asset yok, cubemap yok, 6 resim yok.
+// Kameranın konumunda duran BÜYÜK bir küre çizilir ve rengi bakış YÖNÜNE göre
+// hesaplanır, yani yukarı bakınca zenit, aşağı bakınca ufuk rengi gelir (2B
+// gradyan arka planın yapamadığı şey bu). Kürenin İÇİNDEYİZ, o yüzden ön yüz
+// ayıklanır; derinliğe YAZMAZ, böylece kürenin yarıçapından uzaktaki cisimler
+// de önünde çizilir.
+#if defined(GRAPHICS_API_OPENGL_ES2) || defined(PLATFORM_WEB) ||               \
+    defined(PLATFORM_ANDROID) || defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+static const char *tame_sky_vs =
+    "#version 100                                \n"
+    "attribute vec3 vertexPosition;              \n"
+    "uniform mat4 mvp;                           \n"
+    "varying vec3 vdir;                          \n"
+    "void main() {                               \n"
+    "    vdir = vertexPosition;                  \n"
+    "    gl_Position = mvp*vec4(vertexPosition, 1.0); \n"
+    "}                                           \n";
+static const char *tame_sky_fs =
+    "#version 100                                \n"
+    "precision mediump float;                    \n"
+    "varying vec3 vdir;                          \n"
+    "uniform vec4 skyTop;                        \n"
+    "uniform vec4 skyBottom;                     \n"
+    "void main() {                               \n"
+    "    float t = clamp(normalize(vdir).y, 0.0, 1.0); \n"
+    "    gl_FragColor = mix(skyBottom, skyTop, pow(t, 0.55)); \n"
+    "}                                           \n";
+#else
+static const char *tame_sky_vs =
+    "#version 330                                \n"
+    "in vec3 vertexPosition;                     \n"
+    "uniform mat4 mvp;                           \n"
+    "out vec3 vdir;                              \n"
+    "void main() {                               \n"
+    "    vdir = vertexPosition;                  \n"
+    "    gl_Position = mvp*vec4(vertexPosition, 1.0); \n"
+    "}                                           \n";
+static const char *tame_sky_fs =
+    "#version 330                                \n"
+    "in vec3 vdir;                               \n"
+    "uniform vec4 skyTop;                        \n"
+    "uniform vec4 skyBottom;                     \n"
+    "out vec4 fc;                                \n"
+    "void main() {                               \n"
+    "    float t = clamp(normalize(vdir).y, 0.0, 1.0); \n"
+    "    fc = mix(skyBottom, skyTop, pow(t, 0.55)); \n"
+    "}                                           \n";
+#endif
+
+static Shader tame_sky_shader = {0};
+static int tame_sky_ready = 0;
+static int tame_sky_on = 0;
+static int tame_loc_skyTop = -1;
+static int tame_loc_skyBottom = -1;
+static float tame_sky_top[4] = {0.29f, 0.51f, 0.82f, 1.0f};
+static float tame_sky_bottom[4] = {0.75f, 0.84f, 0.93f, 1.0f};
+
+// Geçerli doku-döşeme/materyal durumunu GPU'ya gönder. Çizim başına değil,
+// DEĞİŞTİĞİNDE çağrılır (tm3_texture/tm3_material) + shader derlenince bir kez.
+static void tame_material_upload(void) {
+  if (!tame_light_ready) return;
+  SetShaderValue(tame_light_shader, tame_loc_texTile, tame_cur_tile,
+                 SHADER_UNIFORM_VEC2);
+  SetShaderValue(tame_light_shader, tame_loc_matShine, &tame_cur_shine,
+                 SHADER_UNIFORM_FLOAT);
+  SetShaderValue(tame_light_shader, tame_loc_matSpec, &tame_cur_spec,
+                 SHADER_UNIFORM_FLOAT);
+}
 
 // Işık slot'unun uniform konumlarını (indeksli dizi elemanları) çöz.
 static void tame_light_resolve_locs(int i) {
@@ -582,7 +680,11 @@ static int tame_light_ensure(void) {
   tame_light_shader.locs[SHADER_LOC_VECTOR_VIEW] =
       GetShaderLocation(tame_light_shader, "viewPos");
   tame_loc_ambient = GetShaderLocation(tame_light_shader, "ambient");
+  tame_loc_texTile = GetShaderLocation(tame_light_shader, "texTile");
+  tame_loc_matShine = GetShaderLocation(tame_light_shader, "matShine");
+  tame_loc_matSpec = GetShaderLocation(tame_light_shader, "matSpec");
   tame_light_ready = 1;
+  tame_material_upload();
   for (int i = 0; i < TAME_MAX_LIGHTS; i++) {
     tame_light_resolve_locs(i);
     tame_light_upload(i);
@@ -655,6 +757,16 @@ static int tame_lights_active(void) {
 // Düzgün-olmayan (non-uniform) ölçekte normaller bozulmaz: shader matNormal
 // (transpose-inverse model matrisi) kullanıyor, rlgl bunu kendisi kuruyor.
 
+// Doku kaydı (tame_textures) bu noktanın ALTINDA tanımlı — buradan yalnız
+// handle→Texture2D çevirisi lazım, o yüzden tame_model_ptr ile aynı
+// ileri-bildirim desenini kullanıyoruz. Geçersiz handle'da .id == 0 döner.
+static Texture2D tame_texture_get(int h);
+
+// Birim mesh'lerin materyalindeki VARSAYILAN (1×1 beyaz) doku. no_texture3d
+// sonrası buraya dönülür; yoksa "dokuyu kapat" diye bir şey olmazdı.
+static Texture2D tame_white_tex;
+static int tame_white_tex_saved = 0;
+
 static Model tame_unit[4];
 static int tame_unit_ready = 0;
 
@@ -664,6 +776,9 @@ static void tame_unit_ensure(void) {
   tame_unit[1] = LoadModelFromMesh(GenMeshSphere(0.5f, 18, 18));
   tame_unit[2] = LoadModelFromMesh(GenMeshCylinder(0.5f, 1.0f, 24));
   tame_unit[3] = LoadModelFromMesh(GenMeshPlane(1.0f, 1.0f, 1, 1));
+  // Varsayılan (1×1 beyaz) dokuyu sakla — tm3_no_texture buna geri döner.
+  tame_white_tex = tame_unit[0].materials[0].maps[MATERIAL_MAP_DIFFUSE].texture;
+  tame_white_tex_saved = 1;
   tame_unit_ready = 1;
 }
 
@@ -677,6 +792,65 @@ static void tame_model_set_shader(Model *m, Shader s) {
 
 static void tame_model_apply_shader(Model *m) {
   tame_model_set_shader(m, tame_light_shader);
+}
+
+// Bir çizimin materyalini bağla: doku + döşeme + parlaklık. Modeller
+// material.shader üzerinden çizildiği için doku materyale, döşeme/parlaklık
+// ise uniform'a yazılır.
+static void tame_bind_material(Model *m, int tex, const float tile[2],
+                               float shine, float spec) {
+  if (m && tame_white_tex_saved) {
+    Texture2D t = tame_texture_get(tex);
+    m->materials[0].maps[MATERIAL_MAP_DIFFUSE].texture =
+        (t.id != 0) ? t : tame_white_tex;
+  }
+  if (!tame_light_ready) return;
+  SetShaderValue(tame_light_shader, tame_loc_texTile, tile, SHADER_UNIFORM_VEC2);
+  SetShaderValue(tame_light_shader, tame_loc_matShine, &shine,
+                 SHADER_UNIFORM_FLOAT);
+  SetShaderValue(tame_light_shader, tame_loc_matSpec, &spec,
+                 SHADER_UNIFORM_FLOAT);
+}
+
+// --- Faz 5: gökyüzü kubbesi -------------------------------------------------
+static int tame_sky_ensure(void) {
+  if (tame_sky_ready) return 1;
+  if (!tame_window_ready) return 0;
+  tame_sky_shader = LoadShaderFromMemory(tame_sky_vs, tame_sky_fs);
+  if (tame_sky_shader.id == 0) {
+    fprintf(stderr, "[tame] Gokyuzu shader'i derlenemedi. / Sky shader failed "
+                    "to compile.\n");
+    return 0;
+  }
+  tame_loc_skyTop = GetShaderLocation(tame_sky_shader, "skyTop");
+  tame_loc_skyBottom = GetShaderLocation(tame_sky_shader, "skyBottom");
+  tame_sky_ready = 1;
+  return 1;
+}
+
+// Kamerayı merkez alan büyük küreyi çiz. BeginMode3D İÇİNDEN, sahnenin geri
+// kalanından ÖNCE çağrılır.
+static void tame_sky_draw(void) {
+  if (!tame_sky_on || !tame_sky_ready) return;
+  tame_unit_ensure();
+  if (!tame_unit_ready) return;
+
+  SetShaderValue(tame_sky_shader, tame_loc_skyTop, tame_sky_top,
+                 SHADER_UNIFORM_VEC4);
+  SetShaderValue(tame_sky_shader, tame_loc_skyBottom, tame_sky_bottom,
+                 SHADER_UNIFORM_VEC4);
+  // Küre birim mesh'i gökyüzü için ödünç alınıyor; sonraki normal çizimde
+  // tame_model_apply_shader/set_shader zaten ışık shader'ına geri alıyor.
+  tame_model_set_shader(&tame_unit[1], tame_sky_shader);
+  // Kürenin İÇİNDEYİZ → ön yüzleri ayıkla. Derinliğe YAZMA: yarıçapın (50
+  // birim) ötesindeki cisimler yoksa gökyüzü tarafından kırpılırdı.
+  rlDisableDepthMask();
+  rlSetCullFace(RL_CULL_FACE_FRONT);
+  DrawModelEx(tame_unit[1], tame_cam3d.position, (Vector3){0.0f, 1.0f, 0.0f},
+              0.0f, (Vector3){100.0f, 100.0f, 100.0f}, WHITE);
+  rlDrawRenderBatchActive();
+  rlSetCullFace(RL_CULL_FACE_BACK);
+  rlEnableDepthMask();
 }
 
 // ---------------------------------------------------------------------------
@@ -705,6 +879,12 @@ typedef struct {
   float sx, sy, sz;
   float yaw;
   int64_t color;
+  // Faz 5: materyal DURUMU çizim anında dondurulur. Kayıt sırasında değişip
+  // oynatma sırasında farklı olabileceği için komutla birlikte saklanır —
+  // yoksa bir karedeki tüm cisimler son ayarlanan dokuyla çizilirdi.
+  int tex;
+  float tile[2];
+  float shine, spec;
 } TameDrawCmd;
 
 static TameDrawCmd tame_dl[TAME_MAX_DRAWCMD];
@@ -863,6 +1043,11 @@ static void tame_dl_push(int kind, int handle, double x, double y, double z,
   c->sx = (float)sx; c->sy = (float)sy; c->sz = (float)sz;
   c->yaw = (float)yaw;
   c->color = color;
+  c->tex = tame_cur_tex;
+  c->tile[0] = tame_cur_tile[0];
+  c->tile[1] = tame_cur_tile[1];
+  c->shine = tame_cur_shine;
+  c->spec = tame_cur_spec;
 }
 
 // Kaydedilmiş listeyi çiz. `depth_pass` ise yalnız gölge DÜŞÜREN cisimler
@@ -875,6 +1060,10 @@ static void tame_dl_replay(int depth_pass) {
       tame_unit_ensure();
       if (!tame_unit_ready) continue;
       tame_model_set_shader(&tame_unit[c->kind], use);
+      // Derinlik geçişinde materyalin bir anlamı yok (renk yazılmıyor).
+      if (!depth_pass)
+        tame_bind_material(&tame_unit[c->kind], c->tex, c->tile, c->shine,
+                           c->spec);
       DrawModelEx(tame_unit[c->kind], (Vector3){c->x, c->y, c->z},
                   (Vector3){0.0f, 1.0f, 0.0f}, 0.0f,
                   (Vector3){c->sx, c->sy, c->sz}, tame_color(c->color));
@@ -882,6 +1071,11 @@ static void tame_dl_replay(int depth_pass) {
       Model *m = tame_model_ptr(c->handle);
       if (!m) continue;
       tame_model_set_shader(m, use);
+      // Modeller KENDİ dokularını korur (GLB materyalini ezmek yıkıcı olurdu;
+      // model dokusu tm3_model_texture ile ayarlanır) — yalnız döşeme/parlaklık
+      // uygulanır, o yüzden model NULL geçiliyor.
+      if (!depth_pass)
+        tame_bind_material(NULL, -1, c->tile, c->shine, c->spec);
       DrawModelEx(*m, (Vector3){c->x, c->y, c->z},
                   (Vector3){0.0f, 1.0f, 0.0f}, c->yaw,
                   (Vector3){c->sx, c->sy, c->sz}, tame_color(c->color));
@@ -992,6 +1186,7 @@ static void tame_scene_end(void) {
   rlSetUniform(tame_loc_shadowMap, &slot, SHADER_UNIFORM_INT, 1);
 
   BeginMode3D(tame_cam3d);
+  tame_sky_draw();   // gölgeli yolda da sahneden ÖNCE (bkz. begin3)
   float view[3] = {tame_cam3d.position.x, tame_cam3d.position.y,
                    tame_cam3d.position.z};
   SetShaderValue(tame_light_shader,
@@ -1034,6 +1229,8 @@ static int tame_draw_lit(int shape, double x, double y, double z, double sx,
   tame_unit_ensure();
   if (!tame_unit_ready || shape < 0 || shape > 3) return 0;
   tame_model_apply_shader(&tame_unit[shape]);
+  tame_bind_material(&tame_unit[shape], tame_cur_tex, tame_cur_tile,
+                     tame_cur_shine, tame_cur_spec);
   DrawModelEx(tame_unit[shape], (Vector3){(float)x, (float)y, (float)z},
               (Vector3){0.0f, 1.0f, 0.0f}, 0.0f,
               (Vector3){(float)sx, (float)sy, (float)sz}, tame_color(color));
@@ -1165,9 +1362,88 @@ int tame_impl_load_texture(const char *path) {
   return -1;
 }
 
+// Prosedürel damalı doku — dosyasız. Motorun geri kalanı (gömülü shader'lar,
+// GenMesh primitifleri) gibi "asset gerektirmeden çalışsın" çizgisinde:
+// doku desteği varken kimse basit bir zemin karosu için PNG taşımak zorunda
+// kalmasın. Normal doku handle'ı döner, 2B'de de kullanılabilir.
+int tame_impl_checker(int w, int h, int cells, int64_t c1, int64_t c2) {
+  if (!tame_window_ready) {
+    fprintf(stderr, "[tame] checker window()'dan once cagrilamaz. / "
+                    "checker requires window() first.\n");
+    return -1;
+  }
+  if (w < 2) w = 2;
+  if (h < 2) h = 2;
+  if (cells < 1) cells = 1;
+  Image img = GenImageChecked(w, h, w / cells, h / cells, tame_color(c1),
+                              tame_color(c2));
+  Texture2D t = LoadTextureFromImage(img);
+  UnloadImage(img);
+  if (t.id == 0) return -1;
+  // Döşerken karo sınırlarında dikiş olmasın diye tekrarlı sarma + yumuşatma.
+  SetTextureWrap(t, TEXTURE_WRAP_REPEAT);
+  SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
+  for (int i = 0; i < TAME_MAX_TEXTURES; i++) {
+    if (!tame_texture_used[i]) {
+      tame_textures[i] = t;
+      tame_texture_used[i] = 1;
+      return i;
+    }
+  }
+  UnloadTexture(t);
+  return -1;
+}
+
 static int tame_texture_ok(int h) {
   return h >= 0 && h < TAME_MAX_TEXTURES && tame_texture_used[h];
 }
+
+// 3B materyal yolunun ileri-bildirdiği erişimci (bkz. tame_bind_material).
+static Texture2D tame_texture_get(int h) {
+  if (tame_texture_ok(h)) return tame_textures[h];
+  Texture2D none = {0};
+  return none;
+}
+
+// --- Faz 5 API'si: doku / materyal / gökyüzü --------------------------------
+
+// Sonraki 3B primitiflerin dokusunu ayarla. tex < 0 → dokusuz (düz renk).
+// tile, dokunun yüzey boyunca kaç kez tekrarlanacağı — zeminde tek bir 64×64
+// karo dokusunu 20×20 döşemek için tile_u=tile_v=20 ver.
+void tame_impl_texture3(int tex, double tile_u, double tile_v) {
+  tame_cur_tex = tame_texture_ok(tex) ? tex : -1;
+  tame_cur_tile[0] = (tile_u > 0.0) ? (float)tile_u : 1.0f;
+  tame_cur_tile[1] = (tile_v > 0.0) ? (float)tile_v : 1.0f;
+  // Anında-mod çizimleri (ızgara/tel/çizgi) uniform'ları doğrudan okur.
+  tame_material_upload();
+}
+
+// Yüzey parlaklığı. shine = specular üssü (büyük = küçük ve keskin parlama,
+// "cilalı"; küçük = geniş ve yayvan, "mat"). spec = parlamanın gücü, 0 =
+// tamamen mat. Varsayılan 16 / 1.0 — Faz 5 öncesi davranışın aynısı.
+void tame_impl_material3(double shine, double spec) {
+  tame_cur_shine = (shine > 0.05) ? (float)shine : 0.05f;
+  tame_cur_spec = (spec >= 0.0) ? (float)spec : 0.0f;
+  tame_material_upload();
+}
+
+// Gradyan gökyüzünü aç. top = zenit (tepe), bottom = ufuk rengi.
+int tame_impl_sky(int64_t top, int64_t bottom) {
+  if (!tame_sky_ensure()) return 0;
+  Color t = tame_color(top), b = tame_color(bottom);
+  tame_sky_top[0] = (float)t.r / 255.0f;
+  tame_sky_top[1] = (float)t.g / 255.0f;
+  tame_sky_top[2] = (float)t.b / 255.0f;
+  tame_sky_top[3] = 1.0f;
+  tame_sky_bottom[0] = (float)b.r / 255.0f;
+  tame_sky_bottom[1] = (float)b.g / 255.0f;
+  tame_sky_bottom[2] = (float)b.b / 255.0f;
+  tame_sky_bottom[3] = 1.0f;
+  tame_sky_on = 1;
+  return 1;
+}
+
+void tame_impl_sky_off(void) { tame_sky_on = 0; }
 
 void tame_impl_draw_texture(int h, double x, double y) {
   if (tame_texture_ok(h))
@@ -1467,8 +1743,21 @@ static void tame_unload_all_resources(void) {
   // shader'a işaret ediyor olabilir, o yüzden ONLARDAN ÖNCE değil, önce
   // birim mesh'leri bırak, shader'ı en sonda kaldır.
   if (tame_unit_ready) {
-    for (int i = 0; i < 4; i++) UnloadModel(tame_unit[i]);
+    // Materyaldeki kullanıcı dokusunu geri al: doku kaydı birazdan zaten
+    // UnloadTexture edecek, birim mesh'te asılı kalmasın.
+    for (int i = 0; i < 4; i++) {
+      if (tame_white_tex_saved)
+        tame_unit[i].materials[0].maps[MATERIAL_MAP_DIFFUSE].texture =
+            tame_white_tex;
+      UnloadModel(tame_unit[i]);
+    }
     tame_unit_ready = 0;
+    tame_white_tex_saved = 0;
+  }
+  if (tame_sky_ready) {
+    UnloadShader(tame_sky_shader);
+    tame_sky_ready = 0;
+    tame_sky_on = 0;
   }
   for (int i = 0; i < TAME_MAX_MODELS; i++) {
     if (tame_models[i].used) {
