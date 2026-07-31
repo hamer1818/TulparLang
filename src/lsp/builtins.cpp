@@ -127,6 +127,7 @@ const BuiltinEntry kBuiltins[] = {
     {"tm3_light_off",   "tm3_light_off(idx: int)",                      "Belirtilen ışık slot'unu (0-3) kapatır. Sarmalayıcı: isik_sil()/light_off()."},
     {"tm3_ambient",     "tm3_ambient(color: int)",                      "Ortam (ambient) ışık rengini/şiddetini ayarlar — hiçbir ışığın vurmadığı yüzeylerin taban rengi. Sarmalayıcı: ortam_isik()/ambient_light()."},
     {"tm3_shadows",     "tm3_shadows(enable: int): bool",               "Gölgeleri açar/kapatır (yönlü ışık için shadow mapping). Donanım derinlik dokusu desteklemiyorsa false döner ve gölgeler kapalı kalır (ışık çalışmaya devam eder). Sarmalayıcı: golge_ac()/shadows_on(), golge_kapat()/shadows_off()."},
+    {"tm3_shadows_active","tm3_shadows_active(): bool",              "Gölgeler GERÇEKTEN aktif mi (istendi VE donanım destekledi)? tm3_shadows(1) çağırmış olmak yetmez. Sarmalayıcı: golge_aktif()/shadows_active()."},
     {"tm3_shadow_area", "tm3_shadow_area(area)",                        "Gölge haritasının kapsadığı alanın yarı-genişliği (dünya birimi, kamera hedefi çevresinde). Küçük = keskin ama dar, büyük = geniş ama kaba. Sarmalayıcı: golge_alani()/shadow_area()."},
     {"tm_gamepad_available", "tm_gamepad_available(id: int): bool",     "id numaralı gamepad bağlı mı? (0'dan başlar.) Sarmalayıcı: gamepad_available()."},
     {"tm_gamepad_name", "tm_gamepad_name(id: int): str",                "Gamepad'in adı (bağlı değilse \"\"). Sarmalayıcı: gamepad_name()."},

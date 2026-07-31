@@ -115,6 +115,7 @@ void tame_impl_light_set(int idx, int type, double x, double y, double z,
 void tame_impl_light_off(int idx);
 void tame_impl_ambient(int64_t color);
 int tame_impl_shadows(int enable);
+int tame_impl_shadows_active(void);
 void tame_impl_shadow_area(double area);
 int tame_impl_load_model(const char *path);
 int tame_impl_gen(int kind, double a, double b, double c, double d);
@@ -519,6 +520,10 @@ VMValue aot_tm3_ambient_ptr(VMValue *color) {
 
 VMValue aot_tm3_shadows_ptr(VMValue *enable) {
   return VM_BOOL(tame_impl_shadows((int)tm_int(enable)));
+}
+
+VMValue aot_tm3_shadows_active_ptr(void) {
+  return VM_BOOL(tame_impl_shadows_active());
 }
 
 VMValue aot_tm3_shadow_area_ptr(VMValue *area) {

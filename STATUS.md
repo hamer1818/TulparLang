@@ -112,7 +112,7 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > Windows installer + GPG-imzalı SHA256SUMS.
 >
 > **Geliştirme (yayınlanmadı) — 3D oyun katmanı:** TulparLang artık 3D oyun
-> yapabiliyor. Vendored raylib'in zaten derlenen 3D modülü **~28 `tm3_*` builtin**
+> yapabiliyor. Vendored raylib'in zaten derlenen 3D modülü **30 `tm3_*` builtin**
 > ile açığa çıkarıldı (Faz 0 kamera/küp/ızgara; Faz 1 primitifler + raycast
 > tıklama-seçim; Faz 2 model yükleme OBJ/GLTF/GLB + 7 `gen_*` prosedürel şekil +
 > iskelet animasyonu), üzerine saf-Tulpar **`scene3d` preset motoru** kondu —
@@ -131,6 +131,19 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > Yol boyu bir hata da düzeldi: wasm build script'i `tame_impl.c`'yi platform
 > bayrakları olmadan derliyordu (Android veriyordu, web vermiyordu) → shader
 > web'de masaüstü varyantını seçip derlenmiyordu.
+>
+> **3D gölgeler (shadow mapping)** — yönlü ışık için gölge haritalama: nesneler
+> zemine ve birbirlerine gölge düşürüyor, 3×3 PCF + eğime göre bias + ön-yüz
+> ayıklama. Gölge açıkken çizimler bir listeye kaydedilip iki geçiş halinde
+> (ışığın gözünden derinlik + kameradan normal) oynatılıyor; **kapalıyken eski
+> anında-çizim yolu birebir korunuyor**. `tm3_shadows` / `tm3_shadow_area` /
+> `tm3_shadows_active` + TR/EN sarmalayıcılar. Örnek:
+> `examples/tame3d_shadows.tpr`. **Masaüstü + WebGL + Android (emülatörde
+> kullanıcı tarafından) doğrulandı.** Mobilde dört ayrı hata çıktı (hepsi
+> masaüstünde şans eseri gizliydi): alfa harmanlamanın paketlenmiş derinliği
+> bozması, `mediump`'ın derinlik karşılaştırmasına yetmemesi, GLES2'nin
+> yalnız-derinlik FBO'yu reddetmesi, paketlenmiş derinliğin bilinear örneklemeye
+> gelmemesi. Detay: CHANGELOG "3D gölgeler".
 
 - **Çekirdek sözdizimi tam:** statik tipler, fonksiyonlar (opsiyonel
   dönüş-tipi notasyonu, **eksik trailing arg → 0 ile padlenir**), kontrol akışı,

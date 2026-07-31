@@ -21,11 +21,7 @@ func main() {
     lights_on();
     sun(0.0 - 0.55, 0.0 - 1.0, 0.0 - 0.35, rgb(255, 248, 230));
     ambient_light(rgb(52, 56, 74));
-    if (!shadows_on()) {
-        // Donanım derinlik dokusu desteklemiyorsa burada öğreniriz; ışık
-        // yine de çalışır, sahne sadece gölgesiz olur.
-        golgeli = false;
-    }
+    shadows_on();
     shadow_area(20.0);
 
     while (running()) {
@@ -37,6 +33,9 @@ func main() {
             if (golgeli) { shadows_on(); } else { shadows_off(); }
         }
         dokundu_onceki = dokunuluyor;
+        // DÜRÜST durum: shadows_on() çağırmış olmak gölgenin çalıştığı anlamına
+        // gelmez — donanım derinlik dokusu desteklemiyorsa sessizce kapalıdır.
+        bool gercekten = shadows_active();
 
         float cx = sin(t * 0.28) * 15.0;
         float cz = cos(t * 0.28) * 15.0;
@@ -59,10 +58,14 @@ func main() {
         space_end();
 
         text("Tulpar 3D — Golgeler", 14, 12, 22, RAYWHITE);
-        if (golgeli) {
-            text("Golge: ACIK  — BOSLUK / EKRANA DOKUN ile kapat", 14, 40, 16, rgb(150, 230, 150));
+        if (gercekten) {
+            text("Golge: ACIK — BOSLUK / EKRANA DOKUN ile kapat", 14, 40, 16, rgb(150, 230, 150));
         } else {
-            text("Golge: KAPALI — BOSLUK / EKRANA DOKUN ile ac", 14, 40, 16, rgb(230, 150, 150));
+            if (golgeli) {
+                text("Golge: DESTEKLENMIYOR (donanim) — isik calisiyor", 14, 40, 16, rgb(240, 190, 90));
+            } else {
+                text("Golge: KAPALI — BOSLUK / EKRANA DOKUN ile ac", 14, 40, 16, rgb(230, 150, 150));
+            }
         }
         frame_end();
     }

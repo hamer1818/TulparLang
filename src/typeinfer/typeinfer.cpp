@@ -889,6 +889,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm3_ambient", TYPE_VOID, {TYPE_INT}},
       {"tm3_shadows", TYPE_BOOL, {TYPE_INT}},
       {"tm3_shadow_area", TYPE_VOID, {TYPE_UNKNOWN}},
+      {"tm3_shadows_active", TYPE_BOOL, {}},
       {"tm_gamepad_available", TYPE_BOOL, {TYPE_INT}},
       {"tm_gamepad_name", TYPE_STRING, {TYPE_INT}},
       {"tm_gamepad_down", TYPE_BOOL, {TYPE_INT, TYPE_STRING}},
