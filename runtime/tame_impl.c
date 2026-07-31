@@ -1936,6 +1936,14 @@ int tame_impl_key_released(const char *k) {
   return key ? IsKeyReleased(key) : 0;
 }
 
+// Ham raylib tuş kodu ile aynı sorgular. Tulpar tarafı tuşları ADLA
+// adresliyor, ama scene3d gibi kütüphaneler kendi sabitlerini (K_W = 87,
+// K_LEFT = 263 …) tutuyor — sayı verilince ad tablosuna düşmek yerine kodu
+// doğrudan kullanıyoruz.
+int tame_impl_key_down_code(int key) { return key ? IsKeyDown(key) : 0; }
+int tame_impl_key_pressed_code(int key) { return key ? IsKeyPressed(key) : 0; }
+int tame_impl_key_released_code(int key) { return key ? IsKeyReleased(key) : 0; }
+
 // ---------------------------------------------------------------------------
 // Input — gamepad. Klavye gibi adla erişilir: buton "A"/"B"/"X"/"Y" (Xbox)
 // veya "CROSS"/"CIRCLE"/"SQUARE"/"TRIANGLE" (PS), yönler "UP"/"DOWN"/...,
@@ -2041,6 +2049,38 @@ int tame_impl_mouse_y(void) { return (int)tame_to_world_y((double)GetMouseY()); 
 int tame_impl_mouse_down(int b) { return IsMouseButtonDown(b); }
 int tame_impl_mouse_pressed(int b) { return IsMouseButtonPressed(b); }
 double tame_impl_mouse_wheel(void) { return (double)GetMouseWheelMove(); }
+
+// Fare DELTA'sı (bu kare içinde ne kadar hareket etti). İmleç kilitliyken
+// mouse_x/mouse_y sabit kalır (işaretçi ekranın ortasına çakılıdır) — o modda
+// bakış için tek girdi kaynağı budur. Android'in sanal-dünya kamerası açıksa
+// delta da dünya ölçeğine çevrilir, böylece mouse_x/y ile aynı birimde olur.
+double tame_impl_mouse_dx(void) {
+  double d = (double)GetMouseDelta().x;
+  return tame_cam_on ? d / (double)tame_cam_zoom : d;
+}
+double tame_impl_mouse_dy(void) {
+  double d = (double)GetMouseDelta().y;
+  return tame_cam_on ? d / (double)tame_cam_zoom : d;
+}
+
+// İmleci kilitle/serbest bırak (FPS bakışı). Kilitliyken imleç gizlenir ve
+// pencereden çıkamaz; web'de bu tarayıcının Pointer Lock'ıdır (kullanıcı
+// jesti gerekir — tarayıcı ilk tıklamada verir). Pencere yoksa sessiz no-op:
+// headless testte DisableCursor() GLFW handle'ı NULL'ken çağrılmamalı.
+static int tame_cursor_locked = 0;
+
+void tame_impl_cursor_lock(int on) {
+  if (!IsWindowReady()) return;
+  if (on) {
+    DisableCursor();
+    tame_cursor_locked = 1;
+  } else {
+    EnableCursor();
+    tame_cursor_locked = 0;
+  }
+}
+
+int tame_impl_cursor_locked(void) { return tame_cursor_locked; }
 
 // Input — touch (mobil). raylib masaüstünde tek dokunuşu fareye maplediği
 // için mouse_* zaten çalışır; bu API çok-parmak (multi-touch) ve açık parmak

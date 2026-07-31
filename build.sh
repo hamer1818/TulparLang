@@ -154,7 +154,7 @@ if [ "$ACTION" = "test" ]; then
                         "tame3d_cube.tpr" "tame3d_primitives.tpr" \
                         "tame3d_models.tpr" "tame3d_anim.tpr" "tame3d_lights.tpr" \
                         "tame3d_shadows.tpr" "tame3d_texture.tpr" \
-                        "scene3d_collector.tpr" \
+                        "scene3d_collector.tpr" "scene3d_camera.tpr" \
                         "41_struct_entities.tpr")
     # tame_*.tpr: display'li makinede pencere açıp kullanıcı kapatana
     # dek bloklar (headless'ta zarif hata ile hemen çıkar) — deterministik
