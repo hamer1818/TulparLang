@@ -43,6 +43,10 @@ int TAG_PROP   = 5;
 int K_W = 87;   int K_A = 65;   int K_S = 83;   int K_D = 68;
 int K_UP = 265; int K_DOWN = 264; int K_LEFT = 263; int K_RIGHT = 262;
 int K_SPACE = 32;
+int K_Q = 81;   int K_E = 69;   // kamerayı klavyeyle çevir (fare yedeği)
+
+float DEG2RAD3 = 0.01745329;
+float RAD2DEG3 = 57.29578;
 
 // ---- Entity modeli ---------------------------------------------------------
 struct Ent3 {
@@ -70,6 +74,28 @@ int   _cam_target = 0 - 1;  // takip edilen entity (-1 = sabit)
 float _cam_dist   = 12.0;
 float _cam_height = 8.0;
 float _cam_fov    = 45.0;
+
+// Kamera modu. SABİT = motorun ilk günkü kamerası: hedefin hep +Z arkasında
+// durur, HİÇ dönmez — bu yüzden W tuşu her zaman dünya ekseninde -Z demekti.
+// Dönebilen kamera (yörünge/FPS) hem bakışı hem de hareketin yönünü açar:
+// yön girdisi artık kameranın baktığı yere göre çevrilir (bkz. move3d).
+// Varsayılan SABİT kalıyor — eski sahnelerin görüntüsü ve kontrolü değişmesin.
+int CAM_FIXED = 0;
+int CAM_ORBIT = 1;
+int CAM_FPS   = 2;
+
+int   _cam_mode3  = 0;
+// Kamera açıları DERECE. yaw 0 = kamera +Z'de, bakış -Z (sabit kameranın açısı).
+// _cam_pitch3 BAKIŞ eğimidir (+ = yukarı bak); yörüngede kameranın yüksekliği
+// bunun TERSİDİR — fareyi yukarı ittiğinde yukarı bakarsın, yani kamera alçalır.
+float _cam_yaw3   = 0.0;
+float _cam_pitch3 = 0.0;
+float _cam_sens3  = 0.22;   // derece / piksel (fare)
+float _cam_tsens3 = 0.30;   // derece / piksel (dokunmatik — parmak daha kaba)
+float _cam_eye3   = 0.0;    // FPS göz yüksekliği (0 = entity boyundan türet)
+float _cam_min3   = 3.0;    // yörünge zoom sınırları (tekerlek)
+float _cam_max3   = 40.0;
+int   _cam_lock3  = 0;      // imleç kilidi (FPS'te varsayılan açık)
 
 int   _score3 = 0;
 int   _game_over3 = 0;
@@ -155,6 +181,10 @@ func scene3d_reset() {
     _score3 = 0;
     _game_over3 = 0;
     _cam_target = 0 - 1;
+    // Kamera da sıfırlanır: hedef zaten kayboluyor, mod/açı da setup'ta
+    // yeniden kurulur. Bırakılsa yeniden başlatılan sahne önceki turun
+    // bakış açısıyla açılırdı.
+    _cam_mode3 = CAM_FIXED; _cam_yaw3 = 0.0; _cam_pitch3 = 0.0; _cam_lock3 = 0;
     _hit_me = 0; _hit_other = 0;
 }
 
@@ -176,12 +206,23 @@ float _tj_cx = 0.0;     // joystick çıpası (ilk dokunuşta oluşur)
 float _tj_cy = 0.0;
 int   _tj_active = 0;
 
+// Sağ yarı, kamera dönebiliyorken bir BAKIŞ pedidir: sürükleyince kamera döner,
+// dokunup çekince (parmak kaymadan kalkarsa) zıplar. Sabit kamerada eskisi gibi
+// yalnız zıplama düğmesi — o modda döndürecek bir şey yok.
+float _t_lx = 0.0;      // bu kareki bakış deltası (piksel)
+float _t_ly = 0.0;
+float _tl_px = 0.0;     // son parmak konumu (delta için)
+float _tl_py = 0.0;
+int   _tl_active = 0;
+float _tl_moved = 0.0;  // parmak toplam ne kadar kaydı (tap ayrımı)
+
 func _read_touch3() {
     _t_dx = 0.0; _t_dz = 0.0;
+    _t_lx = 0.0; _t_ly = 0.0;
     int n = touch_count();
-    if (n <= 0) { _tj_active = 0; _t_jump = 0; _t_jump_prev = 0; return; }
     float halfw = _win_w * 0.5;
     int move_seen = 0;
+    int look_seen = 0;
     int jump_now = 0;
     int i = 0;
     while (i < n) {
@@ -195,14 +236,40 @@ func _read_touch3() {
             if (dl > 12.0) { _t_dx = dx / dl; _t_dz = dy / dl; }
             move_seen = 1;
         } else {
-            jump_now = 1;   // sağ yarı basılı
+            if (_cam_mode3 == CAM_FIXED) {
+                jump_now = 1;   // sağ yarı basılı
+            } else {
+                if (_tl_active == 0) {
+                    _tl_px = tx; _tl_py = ty; _tl_active = 1; _tl_moved = 0.0;
+                } else {
+                    float lx = tx - _tl_px;
+                    float ly = ty - _tl_py;
+                    _t_lx = lx;
+                    _t_ly = ly;
+                    _tl_moved = _tl_moved + abs_f3(lx) + abs_f3(ly);
+                    _tl_px = tx; _tl_py = ty;
+                }
+                look_seen = 1;
+            }
         }
         i = i + 1;
     }
     if (move_seen == 0) { _tj_active = 0; }
-    // edge: sağ-yarı yeni basıldıysa zıpla (basılı tutmak tekrar tetiklemez)
-    if (jump_now == 1 && _t_jump_prev == 0) { _t_jump = 1; } else { _t_jump = 0; }
-    _t_jump_prev = jump_now;
+    if (_cam_mode3 == CAM_FIXED) {
+        // edge: sağ-yarı yeni basıldıysa zıpla (basılı tutmak tekrar tetiklemez)
+        if (jump_now == 1 && _t_jump_prev == 0) { _t_jump = 1; } else { _t_jump = 0; }
+        _t_jump_prev = jump_now;
+        _tl_active = 0;
+    } else {
+        // bakış pedinde zıplama parmak KALKINCA tetiklenir: kaymadıysa dokunuştur,
+        // kaydıysa bakıştır. (Basma anında tetiklersek her bakış hareketi zıplatır.)
+        _t_jump = 0;
+        if (look_seen == 0) {
+            if (_tl_active == 1 && _tl_moved < 16.0) { _t_jump = 1; }
+            _tl_active = 0;
+        }
+        _t_jump_prev = 0;
+    }
 }
 
 func _in_dx(): float {
@@ -231,21 +298,31 @@ func jump_pressed(): bool { return key_pressed(K_SPACE) || _t_jump == 1; }
 
 // Hareket preset'i: WASD → yatay hız (çapraz normalize). Y hızına dokunmaz
 // (yerçekimi/zıplama onu sürer). Hareket varsa entity o yöne döner (yaw).
+//
+// Yön KAMERAYA GÖREdir: "ileri", kameranın baktığı yöndür — kamerayı çevirip
+// W'ye basınca yeni yöne gidersin. Sabit kamerada yaw hep 0 olduğu için bu
+// dönüşüm birim matristir, yani eski sahnelerde hareket birebir aynı kalır.
 func move3d(i, speed) {
     float dx = _in_dx();
     float dz = _in_dz();
-    float m = sqrt(dx * dx + dz * dz);
+    float cy = _cam_yaw3 * DEG2RAD3;
+    float cs = cos(cy);
+    float sn = sin(cy);
+    float wx = dx * cs - dz * sn;
+    float wz = dx * sn + dz * cs;
+    float m = sqrt(wx * wx + wz * wz);
     Ent3 e = _e3[i];
     if (m > 0.0) {
-        dx = dx / m * speed;
-        dz = dz / m * speed;
-        e.vx = dx;
-        e.vz = dz;
-        e.yaw = atan2(dx, dz) * 57.29578;   // rad→derece, hareket yönüne bak
+        e.vx = wx / m * speed;
+        e.vz = wz / m * speed;
+        e.yaw = atan2(wx, wz) * RAD2DEG3;   // rad→derece, hareket yönüne bak
     } else {
         e.vx = 0.0;
         e.vz = 0.0;
     }
+    // Birinci şahısta gövde hareket yönüne değil, BAKIŞ yönüne döner —
+    // yoksa geri giderken karakter kameranın içinde ters döner.
+    if (_cam_mode3 == CAM_FPS) { e.yaw = _cam_yaw3; }
     _e3[i] = e;
 }
 
@@ -374,15 +451,88 @@ func _s3_collision() {
     }
 }
 
-// ---- Kamera: takip modu ----------------------------------------------------
+// ---- Kamera: bakış girdisi + üç mod ----------------------------------------
+// Bakışı süren üç girdi de aynı açılara yazar:
+//   fare   — FPS'te (imleç kilitli) sürekli, yörüngede SAĞ tuş basılıyken.
+//            Kilitliyken mouse_x() sabit kalır, o yüzden delta okunur.
+//   parmak — ekranın sağ yarısı (bkz. _read_touch3).
+//   Q/E    — klavye yedeği: tarayıcıda Pointer Lock verilmediyse ya da
+//            farenin olmadığı yerde kamera yine de çevrilebilsin.
+func _s3_camera_input(dt) {
+    if (_cam_mode3 == CAM_FIXED) { return; }
+    float dx = 0.0;
+    float dy = 0.0;
+    if (_cam_lock3 == 1 || mouse_down(1)) {
+        dx = mouse_dx() * _cam_sens3;
+        dy = mouse_dy() * _cam_sens3;
+    }
+    dx = dx + _t_lx * _cam_tsens3;
+    dy = dy + _t_ly * _cam_tsens3;
+    if (key_down(K_Q)) { dx = dx - 100.0 * dt; }
+    if (key_down(K_E)) { dx = dx + 100.0 * dt; }
+
+    _cam_yaw3 = _cam_yaw3 + dx;
+    // Ekran Y'si aşağı büyür: fareyi yukarı itmek dy'yi negatif yapar, yani
+    // yukarı bakmak demektir.
+    _cam_pitch3 = _cam_pitch3 - dy;
+
+    if (_cam_yaw3 > 360.0) { _cam_yaw3 = _cam_yaw3 - 360.0; }
+    if (_cam_yaw3 < 0.0)   { _cam_yaw3 = _cam_yaw3 + 360.0; }
+
+    // Eğim sınırı: tam tepeye/dibe gelince kamera "takla atar" (up vektörü
+    // bakışla hizalanır) — 85° öncesinde kesiyoruz. Yörüngede yukarı bakmak
+    // kamerayı yere gömdüğü için üst sınır daha dar.
+    float pmax = 85.0;
+    if (_cam_mode3 == CAM_ORBIT) { pmax = 25.0; }
+    if (_cam_pitch3 > pmax) { _cam_pitch3 = pmax; }
+    if (_cam_pitch3 < 0.0 - 85.0) { _cam_pitch3 = 0.0 - 85.0; }
+
+    // Tekerlekle yakınlaş/uzaklaş (yalnız yörünge — FPS'te mesafe yok).
+    if (_cam_mode3 == CAM_ORBIT) {
+        float w = mouse_wheel();
+        if (w != 0.0) { _cam_dist = _cam_dist - w * 1.5; }
+        if (_cam_dist < _cam_min3) { _cam_dist = _cam_min3; }
+        if (_cam_dist > _cam_max3) { _cam_dist = _cam_max3; }
+    }
+}
+
 func _s3_camera() {
     if (_cam_target < 0) {
         camera3d(_cam_dist, _cam_height, _cam_dist,  0.0, 0.0, 0.0, _cam_fov);
         return;
     }
     Ent3 t = _e3[_cam_target];
-    // Oyuncunun arkasında (+Z) ve yukarıda; oyuncuya bakar.
-    camera3d(t.x, t.y + _cam_height, t.z + _cam_dist,   t.x, t.y, t.z,  _cam_fov);
+    if (_cam_mode3 == CAM_FIXED) {
+        // Oyuncunun arkasında (+Z) ve yukarıda; oyuncuya bakar.
+        camera3d(t.x, t.y + _cam_height, t.z + _cam_dist,   t.x, t.y, t.z,  _cam_fov);
+        return;
+    }
+    // Bakış yönünün yatay bileşeni: yaw 0 → (0,0,-1), yani -Z "ileri".
+    float yr = _cam_yaw3 * DEG2RAD3;
+    float fx = sin(yr);
+    float fz = 0.0 - cos(yr);
+    if (_cam_mode3 == CAM_FPS) {
+        float pr = _cam_pitch3 * DEG2RAD3;
+        float ch = cos(pr);
+        float eye = _cam_eye3;
+        if (eye <= 0.0) { eye = t.sy * 0.35; }   // gövdenin üst tarafı
+        float ex = t.x;
+        float ey = t.y + eye;
+        float ez = t.z;
+        camera3d(ex, ey, ez,   ex + fx * ch, ey + sin(pr), ez + fz * ch,  _cam_fov);
+        return;
+    }
+    // Yörünge: hedefin çevresinde bir küre üzerinde. Bakış eğimi negatifken
+    // (aşağı bakış) kamera yukarıdadır — o yüzden işaret ters çevriliyor.
+    float pr = (0.0 - _cam_pitch3) * DEG2RAD3;
+    float horiz = _cam_dist * cos(pr);
+    float cx = t.x - fx * horiz;
+    float cz = t.z - fz * horiz;
+    float cy = t.y + _cam_dist * sin(pr);
+    // Kamerayı zeminin altına düşürme — oyuncu bir anda yer katmanının
+    // içinden bakmaya başlar (klasik "kamera yere gömüldü" görüntüsü).
+    if (_ground_on == 1 && cy < _ground_y + 0.8) { cy = _ground_y + 0.8; }
+    camera3d(cx, cy, cz,   t.x, t.y, t.z,  _cam_fov);
 }
 
 // ---- Çizim -----------------------------------------------------------------
@@ -402,7 +552,12 @@ func _s3_render() {
     int i = 0;
     while (i < n) {
         Ent3 e = _e3[i];
-        if (e.alive == 1) {
+        int draw_it = 0;
+        if (e.alive == 1) { draw_it = 1; }
+        // Birinci şahısta kamera gövdenin İÇİNDEdir: çizersek ekranı kendi
+        // kutumuzun iç yüzeyi kaplar.
+        if (_cam_mode3 == CAM_FPS && i == _cam_target) { draw_it = 0; }
+        if (draw_it == 1) {
             if (e.shape == SHAPE_CUBE) {
                 cube(e.x, e.y, e.z, e.sx, e.sy, e.sz, e.color);
             } else {
@@ -432,8 +587,67 @@ func on_hit3d(tagA, tagB, fn) { push(_hitA, tagA); push(_hitB, tagB); push(_hitF
 func ground3d(y) { _ground_y = y; _ground_on = 1; }
 func no_ground3d() { _ground_on = 0; }
 func gravity3d(g) { _grav = g; }
-func camera_follow(target, dist, height) { _cam_target = target; _cam_dist = dist; _cam_height = height; }
+func camera_follow(target, dist, height) {
+    _cam_target = target; _cam_dist = dist; _cam_height = height;
+    _cam_mode3 = CAM_FIXED; _cam_yaw3 = 0.0; _cam_pitch3 = 0.0;
+}
 func camera_fov(f) { _cam_fov = f; }
+
+// ---- Kamera modları --------------------------------------------------------
+// YÖRÜNGE (üçüncü şahıs): kamera hedefin çevresinde döner. Fare SAĞ tuşu
+// basılıyken sürükle, ekranın sağ yarısına parmakla sürükle ya da Q/E.
+// Tekerlek yakınlaştırır. Başlangıç açısı camera_follow ile BİREBİR aynı
+// (dist/height aynı anlamda) — fark, artık döndürebilmen.
+func camera_orbit(target, dist, height) {
+    _cam_target = target;
+    _cam_mode3 = CAM_ORBIT;
+    _cam_dist = sqrt(dist * dist + height * height);
+    _cam_pitch3 = 0.0 - atan2(height, dist) * RAD2DEG3;
+    _cam_yaw3 = 0.0;
+    _cam_height = height;
+}
+func kamera_yorunge(target, dist, height) { camera_orbit(target, dist, height); }
+
+// BİRİNCİ ŞAHIS: kamera hedefin gözünde. Hedef çizilmez (içindesin).
+// eye = göz yüksekliği, 0 verirsen gövde boyundan türetilir.
+// Masaüstünde imleci kilitler (fareyle sürekli bakış); Escape'in yerine
+// camera_lock3d(false) ile bırakabilirsin.
+func camera_fps(target, eye) {
+    _cam_target = target;
+    _cam_mode3 = CAM_FPS;
+    _cam_eye3 = eye;
+    _cam_yaw3 = 0.0;
+    _cam_pitch3 = 0.0;
+    _cam_lock3 = 1;
+}
+func kamera_fpv(target, eye) { camera_fps(target, eye); }
+func kamera_birinci_sahis(target, eye) { camera_fps(target, eye); }
+
+// Bakış hassasiyeti (derece / piksel). Fare ve dokunmatik ayrı ayarlanır.
+func camera_sens3d(s) { _cam_sens3 = s; }
+func kamera_hassasiyet3d(s) { camera_sens3d(s); }
+func camera_touch_sens3d(s) { _cam_tsens3 = s; }
+func kamera_dokunma_hassasiyet3d(s) { camera_touch_sens3d(s); }
+
+// Kamerayı belirli bir açıya çevir (derece): yaw 0 = -Z'ye bakar,
+// pitch + = yukarı bakar. Bölüm başında sahneyi çerçevelemek için.
+func camera_look3d(yaw, pitch) { _cam_yaw3 = yaw; _cam_pitch3 = pitch; }
+func kamera_bak3d(yaw, pitch) { camera_look3d(yaw, pitch); }
+func camera_yaw3d(): float { return _cam_yaw3; }
+func kamera_yon3d(): float { return _cam_yaw3; }
+func camera_pitch3d(): float { return _cam_pitch3; }
+func kamera_egim3d(): float { return _cam_pitch3; }
+func camera_dist3d(): float { return _cam_dist; }
+func kamera_mesafe3d(): float { return _cam_dist; }
+
+// Tekerlek zoom sınırları (yörünge).
+func camera_zoom3d(min_d, max_d) { _cam_min3 = min_d; _cam_max3 = max_d; }
+func kamera_zoom3d(min_d, max_d) { camera_zoom3d(min_d, max_d); }
+
+// İmleç kilidi: açıkken fare pencereye hapsolur ve bakış sürekli fareye bağlı
+// olur (FPS'te varsayılan açık). Yörüngede açarsan sağ tuşa basmadan bakarsın.
+func camera_lock3d(on) { if (on) { _cam_lock3 = 1; } else { _cam_lock3 = 0; } }
+func kamera_kilit3d(on) { camera_lock3d(on); }
 // Motorun varsayılan ışığını aç/kapat (setup'tan ÖNCE, kayıt aşamasında çağır).
 // Kapatınca her şey eski düz-renk görünümünde çizilir.
 func lights3d(on) { if (on) { _lights3 = 1; } else { _lights3 = 0; } }
@@ -490,13 +704,20 @@ func play3d() {
     // Sis, gökyüzü ayarlandıktan SONRA — rengini onun ufkundan alıyor.
     if (_fog3 > 0.0) { fog_sky(_fog3); }
     if (_has_setup3 == 1) { call(_setup3_fn); }
+    // İmleç kilidi setup'tan SONRA kuruluyor — kamera modunu setup içinde
+    // seçmek serbest (camera_fps varsayılan olarak kilidi ister).
+    int _lock_was = 0 - 1;
 
     while (running()) {
         float dt = frame_time();
         if (dt <= 0.0) { dt = 0.0166667; }
         if (dt > 0.05) { dt = 0.05; }
 
+        if (_cam_lock3 != _lock_was) { cursor_lock(_cam_lock3); _lock_was = _cam_lock3; }
         _read_touch3();   // dokunmatik durumunu güncelle (move3d/jump_pressed okur)
+        // Bakış, update'ten ÖNCE: oyunun update'i camera_yaw3d() okuyabilsin ve
+        // move3d bu karenin kamera yönünü kullansın (bir kare gecikme olmaz).
+        _s3_camera_input(dt);
         if (_has_update3 == 1 && _game_over3 == 0) { call(_update3_fn); }
         if (_game_over3 == 0) {
             _s3_physics(dt);
@@ -513,12 +734,17 @@ func play3d() {
         text(_win_title, 12, 10, 20, RAYWHITE);
         text("Skor: " + toString(_score3), 12, 34, 18, GOLD);
 
-        // Dokunmatik ipucu (yalnız parmak ekrandayken): sol joystick + sağ zıpla.
+        // Dokunmatik ipucu (yalnız parmak ekrandayken): sol joystick + sağ ped.
         if (_tj_active == 1) {
             circle(toInt(_tj_cx), toInt(_tj_cy), 44.0, rgba(120, 140, 180, 60));
             circle(toInt(_tj_cx + _t_dx * 30.0), toInt(_tj_cy + _t_dz * 30.0), 20.0, rgba(200, 220, 255, 150));
             circle(toInt(_win_w) - 70, toInt(_win_h) - 70, 40.0, rgba(255, 210, 90, 80));
-            text("ZIP", toInt(_win_w) - 92, toInt(_win_h) - 80, 18, RAYWHITE);
+            if (_cam_mode3 == CAM_FIXED) {
+                text("ZIP", toInt(_win_w) - 92, toInt(_win_h) - 80, 18, RAYWHITE);
+            } else {
+                // Bu modda sağ yarı bakış pedi: sürükle = bak, dokun = zıpla.
+                text("BAK", toInt(_win_w) - 92, toInt(_win_h) - 80, 18, RAYWHITE);
+            }
         }
         if (_game_over3 == 1) {
             text("OYUN BITTI", toInt(_win_w * 0.5) - 70, toInt(_win_h * 0.5), 30, rgb(255, 90, 90));

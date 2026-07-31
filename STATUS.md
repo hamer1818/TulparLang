@@ -161,6 +161,26 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > sahnelerin görüntüsü değişmiyor. Örnek: `examples/tame3d_texture.tpr`.
 > Üç hedefte de (masaüstü / web GLES2 / Android GLES2) derleniyor.
 > Detay: CHANGELOG "3D doku, gökyüzü ve materyal".
+>
+> **3D kamera: yörünge + birinci şahıs (Faz 6)** — kamera bugüne kadar hiç
+> DÖNMÜYORDU (oyuncunun sabit +Z arkası), dolayısıyla W hep dünya ekseninde -Z
+> demekti ve yapılabilecek tek şey tek açıdan izlenen sahnelerdi. Artık üç mod
+> var: `camera_follow` (eski, sabit), `camera_orbit` (üçüncü şahıs yörünge —
+> `camera_follow` ile **aynı açıdan başlar**, farkı döndürebilmen) ve
+> `camera_fps` (birinci şahıs; hedef çizilmez, imleç kilitlenir). **Hareket
+> artık kameraya göre** (`move3d` yönü yaw ile döndürür; sabit kamerada yaw 0
+> olduğu için eski sahneler bit-bit aynı). Bakış girdisi: fare (FPS'te sürekli,
+> yörüngede sağ tuş), ekranın **sağ yarısına parmakla sürükleme** (dokun-çek
+> hâlâ zıplatır — zıplama parmak kalkınca ve kaymadıysa), **Q/E** klavye
+> yedeği, tekerlekle zoom. 4 yeni builtin: `tm_mouse_dx` / `tm_mouse_dy` /
+> `tm_cursor_lock` / `tm_cursor_locked`. Örnek: `examples/scene3d_camera.tpr`
+> (1/2/3 ile mod değiştir). Motor testi 10/10 headless; tarayıcıda (WebGL,
+> CDP) yörünge dönüşü + FPS görünümü + FPS'te yürüme + sabit kameraya dönüş
+> ekran görüntüsüyle doğrulandı. **Yol boyu gerçek bir hata çıktı:**
+> `key_down(87)` gibi **sayısal tuş kodu** verilen çağrılar her zaman false
+> dönüyormuş (binding yalnız string ad açıyordu) — yani `scene3d`'nin TÜM
+> klavye girdisi ölüymüş, 3B sahneler yalnız dokunmatikle sürülebiliyormuş.
+> Tuş builtin'leri artık ad VEYA kod kabul ediyor. Detay: CHANGELOG "3D kamera".
 
 - **Çekirdek sözdizimi tam:** statik tipler, fonksiyonlar (opsiyonel
   dönüş-tipi notasyonu, **eksik trailing arg → 0 ile padlenir**), kontrol akışı,
@@ -207,7 +227,7 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   `import "tame"` ile saf Tulpar'dan pencere + şekil/yazı çizimi +
   klavye/fare/**gamepad** girdisi + **sprite/texture + TTF font + ses/müzik +
   `run(update, draw)` yönetilen döngüsü** — Pong sınıfı oyun ~40 satır.
-  Native katman vendored **raylib 5.5** (`lib/raylib/`) + 49 `aot_tm_*`
+  Native katman vendored **raylib 5.5** (`lib/raylib/`) + 106 `aot_tm_*`
   builtin'i **ayrı** `libtulpar_tame.a` arşivinde; link satırına yalnız
   tame import edilince eklenir → sıradan binary'ler GL/pencere bağımlılığı
   almaz. Gömülü `lib/tame.tpr` kısa isimler, `rgb()/rgba()` + adlı raylib

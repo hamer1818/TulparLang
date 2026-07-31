@@ -59,11 +59,18 @@ void tame_impl_text(const char *s, double x, double y, int size,
 int tame_impl_key_down(const char *k);
 int tame_impl_key_pressed(const char *k);
 int tame_impl_key_released(const char *k);
+int tame_impl_key_down_code(int key);
+int tame_impl_key_pressed_code(int key);
+int tame_impl_key_released_code(int key);
 int tame_impl_mouse_x(void);
 int tame_impl_mouse_y(void);
 int tame_impl_mouse_down(int b);
 int tame_impl_mouse_pressed(int b);
 double tame_impl_mouse_wheel(void);
+double tame_impl_mouse_dx(void);
+double tame_impl_mouse_dy(void);
+void tame_impl_cursor_lock(int on);
+int tame_impl_cursor_locked(void);
 int tame_impl_touch_count(void);
 int tame_impl_touch_x(int i);
 int tame_impl_touch_y(int i);
@@ -274,16 +281,25 @@ VMValue aot_tm_text_ptr(VMValue *s, VMValue *x, VMValue *y, VMValue *size,
   return VM_VOID();
 }
 
+// Tuş argümanı AD ("W", "SPACE") ya da ham raylib KODU (87, 32) olabilir.
+// İkincisi kütüphaneler için: scene3d kendi K_* sabitlerini tutuyor. Sayı
+// gelince ad tablosuna sokmak sessizce 0 döndürüyordu (= tuş hiç basılmamış
+// gibi), o yüzden tip burada ayrılıyor.
+static bool tm_is_key_name(const VMValue *v) { return v && IS_STRING(*v); }
+
 VMValue aot_tm_key_down_ptr(VMValue *k) {
-  return VM_BOOL(tame_impl_key_down(tm_str(k)));
+  if (tm_is_key_name(k)) return VM_BOOL(tame_impl_key_down(tm_str(k)));
+  return VM_BOOL(tame_impl_key_down_code((int)tm_int(k)));
 }
 
 VMValue aot_tm_key_pressed_ptr(VMValue *k) {
-  return VM_BOOL(tame_impl_key_pressed(tm_str(k)));
+  if (tm_is_key_name(k)) return VM_BOOL(tame_impl_key_pressed(tm_str(k)));
+  return VM_BOOL(tame_impl_key_pressed_code((int)tm_int(k)));
 }
 
 VMValue aot_tm_key_released_ptr(VMValue *k) {
-  return VM_BOOL(tame_impl_key_released(tm_str(k)));
+  if (tm_is_key_name(k)) return VM_BOOL(tame_impl_key_released(tm_str(k)));
+  return VM_BOOL(tame_impl_key_released_code((int)tm_int(k)));
 }
 
 VMValue aot_tm_mouse_x_ptr(void) { return VM_INT(tame_impl_mouse_x()); }
@@ -299,6 +315,18 @@ VMValue aot_tm_mouse_pressed_ptr(VMValue *b) {
 
 VMValue aot_tm_mouse_wheel_ptr(void) {
   return VM_FLOAT(tame_impl_mouse_wheel());
+}
+
+VMValue aot_tm_mouse_dx_ptr(void) { return VM_FLOAT(tame_impl_mouse_dx()); }
+VMValue aot_tm_mouse_dy_ptr(void) { return VM_FLOAT(tame_impl_mouse_dy()); }
+
+VMValue aot_tm_cursor_lock_ptr(VMValue *on) {
+  tame_impl_cursor_lock((int)tm_int(on));
+  return VM_VOID();
+}
+
+VMValue aot_tm_cursor_locked_ptr(void) {
+  return VM_BOOL(tame_impl_cursor_locked());
 }
 
 VMValue aot_tm_touch_count_ptr(void) {

@@ -120,6 +120,21 @@ func mouse_down(b): bool { return tm_mouse_down(b); }
 func mouse_pressed(b): bool { return tm_mouse_pressed(b); }
 func mouse_wheel(): float { return tm_mouse_wheel(); }
 
+// Fare DELTA'sı — bu karede ne kadar hareket etti. Bakış (mouse-look) için
+// mouse_x/mouse_y farkını kendin hesaplama: imleç kilitliyken konum sabittir,
+// hareket yalnız buradan okunur.
+func mouse_dx(): float { return tm_mouse_dx(); }
+func fare_dx(): float { return tm_mouse_dx(); }
+func mouse_dy(): float { return tm_mouse_dy(); }
+func fare_dy(): float { return tm_mouse_dy(); }
+
+// İmleci kilitle (gizle + pencereye hapset) — FPS bakışı için. Web'de
+// tarayıcının Pointer Lock'ı; kullanıcı jesti (tıklama) sonrası verilir.
+func cursor_lock(on) { tm_cursor_lock(on); }
+func imlec_kilitle(on) { tm_cursor_lock(on); }
+func cursor_locked(): bool { return tm_cursor_locked(); }
+func imlec_kilitli(): bool { return tm_cursor_locked(); }
+
 // Dokunma (mobil). Çok parmak desteklenir; parmak index'i 0'dan başlar.
 // Masaüstünde raylib tek dokunuşu fareye maplediği için mouse_* de çalışır,
 // ama mobilde ASIL girdi budur. touched()/dokunuldu(): en az bir parmak var mı.

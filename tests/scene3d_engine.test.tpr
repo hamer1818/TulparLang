@@ -85,6 +85,71 @@ func t_reset() {
     assert_eq_int(score3d(), 0);
 }
 
+// -- 7) Hareket KAMERAYA GÖRE: aynı girdi, kamera dönünce başka yöne ---------
+// Klavye headless'ta hep boş döner; motorun dokunmatik yedeği (_t_dx/_t_dz)
+// aynı girdi yolunu besliyor, girdiyi oradan veriyoruz.
+func t_cam_relative_move() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    _t_dx = 0.0; _t_dz = 0.0 - 1.0;    // "ileri"
+    // yaw 0 (sabit kameranın açısı): ileri = -Z, yani eski davranış
+    camera_look3d(0.0, 0.0);
+    move3d(p, 8.0);
+    Ent3 a = _e3[p];
+    assert(a.vz < 0.0 - 7.9, "yaw 0'da ileri = -Z");
+    assert(abs_f3(a.vx) < 0.01, "yaw 0'da yanal hiz yok");
+    // kamerayı 90° çevir: ileri artık +X
+    camera_look3d(90.0, 0.0);
+    move3d(p, 8.0);
+    Ent3 b = _e3[p];
+    assert(b.vx > 7.9, "yaw 90'da ileri = +X");
+    assert(abs_f3(b.vz) < 0.01, "yaw 90'da Z hizi yok");
+    _t_dx = 0.0; _t_dz = 0.0;
+}
+
+// -- 8) camera_orbit, camera_follow ile AYNI açıdan başlar -------------------
+func t_cam_orbit_init() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    camera_orbit(p, 12.0, 8.0);
+    // (12, 8) uzaklık/yükseklik → küresel yarıçap sqrt(144+64), eğim -atan(8/12)
+    assert(abs_f3(camera_dist3d() - 14.4222) < 0.01, "yorunge yaricapi dist/height'tan gelmeli");
+    assert(abs_f3(camera_pitch3d() + 33.69) < 0.05, "baslangic egimi height/dist acisi olmali");
+    assert(abs_f3(camera_yaw3d()) < 0.001, "yaw 0'dan baslar (sabit kamerayla ayni yon)");
+}
+
+// -- 9) Bakış girdisi açıyı sürer ve sınırda durur ---------------------------
+func t_cam_look_clamp() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    camera_fps(p, 1.6);
+    _t_lx = 100.0; _t_ly = 0.0;        // sağ yarıda 100px sağa sürükleme
+    _s3_camera_input(0.016667);
+    assert(camera_yaw3d() > 29.0 && camera_yaw3d() < 31.0, "100px * 0.30 = 30 derece yaw");
+    // aşağı doğru çok büyük sürükleme: -85'te durmalı (kamera takla atmasın)
+    _t_lx = 0.0; _t_ly = 100000.0;
+    _s3_camera_input(0.016667);
+    assert(abs_f3(camera_pitch3d() + 85.0) < 0.001, "egim -85'te kilitlenmeli");
+    // yörüngede üst sınır daha dar (kamera yere gömülmesin)
+    camera_orbit(p, 12.0, 8.0);
+    _t_lx = 0.0; _t_ly = 0.0 - 100000.0;
+    _s3_camera_input(0.016667);
+    assert(abs_f3(camera_pitch3d() - 25.0) < 0.001, "yorungede ust sinir 25 derece");
+    _t_lx = 0.0; _t_ly = 0.0;
+}
+
+// -- 10) Sabit kamera modu bakış girdisini YOK SAYAR (eski sahneler) ---------
+func t_cam_fixed_ignores_look() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    camera_follow(p, 12.0, 8.0);
+    _t_lx = 500.0; _t_ly = 500.0;
+    _s3_camera_input(0.016667);
+    assert(abs_f3(camera_yaw3d()) < 0.001, "sabit kamerada yaw donmez");
+    assert(abs_f3(camera_pitch3d()) < 0.001, "sabit kamerada egim donmez");
+    _t_lx = 0.0; _t_ly = 0.0;
+}
+
 print("=== scene3d motor testleri ===");
 test("yercekimi + zemin", "t_gravity_ground");
 test("ziplama (yalniz zeminde)", "t_jump");
@@ -92,4 +157,8 @@ test("toplama kancasi", "t_collect");
 test("yanlis tetik yok", "t_no_false_hit");
 test("duvar itme (MTV)", "t_wall_block");
 test("reset temizler", "t_reset");
+test("hareket kameraya gore", "t_cam_relative_move");
+test("yorunge kamerasi sabitle ayni baslar", "t_cam_orbit_init");
+test("bakis girdisi + sinirlar", "t_cam_look_clamp");
+test("sabit kamera bakisi yok sayar", "t_cam_fixed_ignores_look");
 test_summary();

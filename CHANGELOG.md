@@ -9,6 +9,54 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — 3D kamera: yörünge ve birinci şahıs (Faz 6)
+
+3B sahnenin kamerası bugüne kadar **hiç dönmüyordu**: oyuncunun sabit +Z
+arkasında durup onu izliyordu, dolayısıyla W tuşu her zaman dünya ekseninde
+-Z demekti. Oynanabilir tek tür, tek açıdan izlenen sahnelerdi — oyuncu
+etrafına bakamıyor, arkasını dönemiyordu. Faz 6 kamerayı serbest bırakıyor.
+
+- **Üç kamera modu** (`scene3d`): `camera_follow(hedef, mesafe, yukseklik)`
+  eskisi gibi SABİT; `camera_orbit(...)` / `kamera_yorunge(...)` üçüncü şahıs
+  yörünge; `camera_fps(hedef, goz_yuksekligi)` / `kamera_fpv(...)` birinci
+  şahıs. Yörünge, `camera_follow` ile **birebir aynı açıdan başlar** (aynı
+  mesafe/yükseklik küresel koordinata çevrilir) — fark, artık döndürebilmen.
+  Birinci şahısta hedef entity **çizilmez** (kamera gövdenin içindedir) ve
+  gövde bakış yönüne döner.
+- **Hareket artık kameraya göre:** `move3d` yön girdisini kamera yaw'ıyla
+  döndürüyor — "ileri" kameranın baktığı yön. Sabit kamerada yaw hep 0 olduğu
+  için dönüşüm birim matris kalır, yani **mevcut sahnelerin kontrolü ve
+  görüntüsü değişmez**.
+- **Bakış girdisi üç yoldan:** fare (birinci şahısta imleç kilitli, sürekli;
+  yörüngede SAĞ tuş basılıyken sürükleme), ekranın **sağ yarısına parmakla
+  sürükleme** (mobil — dokunup çekmek hâlâ zıplatır, çünkü zıplama parmak
+  KALKINCA ve parmak kaymadıysa tetiklenir), ve **Q/E** klavye yedeği
+  (tarayıcı Pointer Lock vermediğinde de kamera çevrilebilsin). Tekerlek
+  yörüngede yakınlaştırır. Eğim ±85°'de kırpılır (kamera takla atmasın),
+  yörüngede üst sınır 25° ve kamera zeminin altına düşürülmez.
+- **Yeni API:** `camera_sens3d` / `camera_touch_sens3d` (hassasiyet),
+  `camera_look3d(yaw, pitch)` (sahneyi çerçevele), `camera_yaw3d()` /
+  `camera_pitch3d()` / `camera_dist3d()` (okuma), `camera_zoom3d(min, max)`,
+  `camera_lock3d(on)` (imleç kilidi) — hepsinin Türkçe alias'ı var.
+  `scene3d_reset()` kamerayı da sıfırlar.
+- **4 yeni tame builtin:** `tm_mouse_dx` · `tm_mouse_dy` (kare içi fare
+  deltası — imleç kilitliyken `mouse_x()` sabit kaldığı için bakışın tek girdi
+  kaynağı) · `tm_cursor_lock` · `tm_cursor_locked`. Sarmalayıcılar:
+  `mouse_dx`/`fare_dx`, `mouse_dy`/`fare_dy`, `cursor_lock`/`imlec_kilitle`,
+  `cursor_locked`/`imlec_kilitli`. Web'de imleç kilidi tarayıcının Pointer
+  Lock'ıdır; pencere yokken (headless) sessiz no-op.
+- Örnek: `examples/scene3d_camera.tpr` — 1/2/3 ile üç mod canlı değiştirilir.
+
+### Fixed — tuş sorgusu sayısal kodu yok sayıyordu
+
+`key_down(87)` gibi **ham raylib tuş kodu** verilen çağrılar her zaman `false`
+dönüyordu: binding argümanı yalnız string ad ("W", "SPACE") olarak açıyor,
+sayı gelince `NULL`'a düşüp tuşu "basılı değil" sayıyordu. Kendi tuş
+sabitlerini tutan `scene3d`'nin (`K_W = 87`, `K_LEFT = 263` …) **tüm klavye
+girdisi bu yüzden ölüydü** — 3B sahneler yalnız dokunmatikle sürülebiliyordu.
+`tm_key_down` / `tm_key_pressed` / `tm_key_released` artık ad VEYA kod kabul
+ediyor (tip runtime'da ayrılıyor).
+
 ### Added — 3D doku, gökyüzü ve materyal (Faz 5)
 
 3B sahneler artık **düz renk olmak zorunda değil**: yüzeylere doku döşenebiliyor,
