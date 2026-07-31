@@ -123,6 +123,7 @@ void tame_impl_material3(double shine, double spec);
 int tame_impl_sky(int64_t top, int64_t bottom);
 void tame_impl_sky_off(void);
 int tame_impl_checker(int w, int h, int cells, int64_t c1, int64_t c2);
+void tame_impl_fog(int64_t color, double density);
 int tame_impl_load_model(const char *path);
 int tame_impl_gen(int kind, double a, double b, double c, double d);
 void tame_impl_draw_model(int h, double x, double y, double z, double scale,
@@ -555,6 +556,11 @@ VMValue aot_tm3_sky_ptr(VMValue *top, VMValue *bottom) {
 
 VMValue aot_tm3_sky_off_ptr(void) {
   tame_impl_sky_off();
+  return VM_VOID();
+}
+
+VMValue aot_tm3_fog_ptr(VMValue *color, VMValue *density) {
+  tame_impl_fog(tm_int(color), tm_num(density));
   return VM_VOID();
 }
 

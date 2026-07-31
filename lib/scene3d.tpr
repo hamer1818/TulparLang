@@ -92,6 +92,8 @@ int   _sky_bot3 = 0;
 // Zemin dokusu (opsiyonel). -1 = dokusuz düz renk (varsayılan).
 int   _ground_tex3 = 0 - 1;
 float _ground_tile3 = 1.0;
+// Sis yoğunluğu. 0 = kapalı (varsayılan). Rengi gökyüzünün ufkundan alınır.
+float _fog3 = 0.0;
 
 // callback'ler (0-arg; arcade deseni — call() ile güvenli).
 // fn referansları `var` ile tutulmalı — `int` global fn-değerini bozar.
@@ -458,6 +460,12 @@ func gokyuzu3d_kapat() { sky3d_off(); }
 func ground_texture3d(t, tile) { _ground_tex3 = t; _ground_tile3 = tile; }
 func zemin_doku3d(t, tile)     { ground_texture3d(t, tile); }
 
+// Mesafe sisi (0 = kapalı, 0.02 hafif pus, 0.06 yoğun). Rengi gökyüzünün
+// ufkundan alınır, o yüzden sky3d() ile birlikte kullanılmalı — yoksa
+// uzaktaki cisimler koyu varsayılan ufuk rengine karışır.
+func fog3d(density) { _fog3 = density; }
+func sis3d(density) { fog3d(density); }
+
 // ---- Yönetilen döngü -------------------------------------------------------
 func play3d() {
     if (!window(_win_w, _win_h, _win_title)) { return; }
@@ -479,6 +487,8 @@ func play3d() {
         }
     }
     if (_sky3 == 1) { sky(_sky_top3, _sky_bot3); }
+    // Sis, gökyüzü ayarlandıktan SONRA — rengini onun ufkundan alıyor.
+    if (_fog3 > 0.0) { fog_sky(_fog3); }
     if (_has_setup3 == 1) { call(_setup3_fn); }
 
     while (running()) {

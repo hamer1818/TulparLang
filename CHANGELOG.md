@@ -42,12 +42,21 @@ arkalarında gradyan bir gökyüzü var ve parlaklıkları ayarlanabiliyor.
   değil; karanlık/stilize bir sahneye zorla açık mavi gökyüzü koymak yanlış
   olurdu. Zemine doku verilince ızgara çizgileri çizilmez (doku zaten ölçeği
   gösteriyor).
+- **Mesafe sisi:** `fog(renk, yogunluk)` / `sis(...)`, `fog_off()` /
+  `sis_kapat()`. Üssel-kare eğri — yakında hiç yok, uzakta hızlı doyuyor; düz
+  doğrusal sisin "her şey biraz soluk" görüntüsünü vermez. Sisin doğru rengi
+  gökyüzünün **ufuk** rengidir (uzaktaki cisim arkasındaki gökyüzüne
+  karışmalı, başka bir renge değil — yoksa "kirli cam" gibi görünür), o yüzden
+  `fog_sky(yogunluk)` / `sis_gokyuzu(...)` rengi `sky()`'den kendisi alır. Sis
+  ışık shader'ında hesaplandığı için `lights_off()` ile ışık kapatılırsa sis de
+  çizilmez (gölgeyle aynı bağımlılık). `scene3d`'de `fog3d(yogunluk)` /
+  `sis3d(...)`, varsayılan kapalı.
 - Örnek: `examples/tame3d_texture.tpr` (BOŞLUK / dokunuş ile dokuyu aç-kapat;
   aynı küre solda parlak, sağda mat).
 
-**6 yeni builtin:** `tm3_texture` · `tm3_material` · `tm3_sky` · `tm3_sky_off` ·
-`tm_checker` (+ Faz 4b'den `tm3_shadows_active`). Masaüstü GL 3.3, web GLES2 ve
-Android GLES2'nin üçünde de derleniyor.
+**7 yeni builtin:** `tm3_texture` · `tm3_material` · `tm3_sky` · `tm3_sky_off` ·
+`tm3_fog` · `tm_checker` (+ Faz 4b'den `tm3_shadows_active`). Masaüstü GL 3.3,
+web GLES2 ve Android GLES2'nin üçünde de derleniyor.
 
 ### Added — 3D gölgeler (shadow mapping)
 

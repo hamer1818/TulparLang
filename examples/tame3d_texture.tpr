@@ -6,11 +6,14 @@
 // yüzey. Hiçbir asset dosyası yok: doku checker() ile ÜRETİLİYOR, gökyüzü de
 // gömülü bir shader'ın gradyanı (cubemap/6 resim gerekmez).
 //
-// Üç kavram bir arada:
+// Dört kavram bir arada:
 //   texture3d(t, tu, tv) — DURUM'dur; ayarladıktan sonra çizilen her primitif
 //                          onu kullanır. tu/tv = yüzey boyunca kaç kez döşenir.
 //   material3d(shine, spec) — parlaklık. mat3d() ve parlak3d() hazır uçlar.
 //   sky(tepe, ufuk)      — kameraya duyarlı gradyan gökyüzü.
+//   fog_sky(yogunluk)    — mesafe sisi; rengini gökyüzünün ufkundan alır, o
+//                          yüzden zemin ile gökyüzü arasında sert bir çizgi
+//                          kalmaz ve uzaklık okunur olur.
 
 import "tame";
 
@@ -27,6 +30,9 @@ func main() {
     shadows_on();
     shadow_area(22.0);
     sky(rgb(58, 116, 200), rgb(196, 220, 240));   // zenit, ufuk
+    // Sis rengini gökyüzünün UFKUNDAN al: uzaktaki cisim arkasındaki gökyüzüne
+    // karışsın. Kendi rengini versen "kirli cam" gibi görünürdü.
+    fog_sky(0.022);
 
     // Dokular — dosyasız, çalışma anında üretiliyor.
     int zemin_doku = checker(128, 128, 8, rgb(158, 166, 176), rgb(120, 128, 140));

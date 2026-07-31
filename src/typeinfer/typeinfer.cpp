@@ -894,6 +894,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm3_material", TYPE_VOID, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
       {"tm3_sky", TYPE_BOOL, {TYPE_INT, TYPE_INT}},
       {"tm3_sky_off", TYPE_VOID, {}},
+      {"tm3_fog", TYPE_VOID, {TYPE_INT, TYPE_UNKNOWN}},
       {"tm_checker", TYPE_INT, {TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT}},
       {"tm_gamepad_available", TYPE_BOOL, {TYPE_INT}},
       {"tm_gamepad_name", TYPE_STRING, {TYPE_INT}},
