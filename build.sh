@@ -119,6 +119,9 @@ if [ "$ACTION" = "test" ]; then
 
     TEST_FAILED=0
     INPUT_DIR="examples/inputs"
+    # Parallel workers drop multi-line failure detail here (one <name>.log
+    # per failing example); the driver dumps them, sorted, after the run.
+    FAIL_DIR=$(mktemp -d)
     SKIP_TESTS=()
     # Compile-only smoke tests: server/listener examples that block on
     # listen()/api_run(), plus utils.tpr (module-only — has no top-level
@@ -147,6 +150,10 @@ if [ "$ACTION" = "test" ]; then
                         "arcade_uzay.tpr" "arcade_labirent.tpr" \
                         "arcade_karsiya.tpr" "arcade_ucus.tpr" \
                         "arcade_goktasi.tpr" "arcade_launcher.tpr" "arcade_yilan.tpr" \
+                        "arcade_2048.tpr" "arcade_pong.tpr" "arcade_vur.tpr" \
+                        "tame3d_cube.tpr" "tame3d_primitives.tpr" \
+                        "tame3d_models.tpr" "tame3d_anim.tpr" \
+                        "scene3d_collector.tpr" \
                         "41_struct_entities.tpr")
     # tame_*.tpr: display'li makinede pencere açıp kullanıcı kapatana
     # dek bloklar (headless'ta zarif hata ile hemen çıkar) — deterministik
@@ -175,6 +182,17 @@ if [ "$ACTION" = "test" ]; then
         esac
     }
 
+    # run_test runs ONE example and returns 0 (pass) / 1 (fail).
+    #
+    # It is invoked both serially (single-file `./build.sh test <file>`) and
+    # from parallel `xargs -P` workers, so it must be subshell-safe:
+    #   * NEVER set a parent variable to signal failure (a subshell can't) —
+    #     the exit status is the only channel. xargs turns any non-zero
+    #     worker exit into its own 123 exit, which the driver checks.
+    #   * Print exactly ONE complete line per test via a single printf, so
+    #     concurrent workers can't interleave mid-line. Multi-line failure
+    #     detail goes to $FAIL_DIR/<name>.log instead and is dumped, in
+    #     order, after the whole run finishes.
     run_test() {
         local example="$1"
         local compile_only="$2"
@@ -188,8 +206,10 @@ if [ "$ACTION" = "test" ]; then
         local out_path="$name"
         local compile_log
         compile_log=$(mktemp)
-
-        printf "Testing %s... " "$example"
+        # Failure detail sink. FAIL_DIR is exported by the driver; when
+        # run_test is called outside the driver (defensive) fall back to a
+        # temp dir so the redirects below always have somewhere to go.
+        local fail_dir="${FAIL_DIR:-$(mktemp -d)}"
 
         # Use timeout if available
         TIMEOUT_CMD=""
@@ -252,16 +272,19 @@ if [ "$ACTION" = "test" ]; then
                     wait "$smoke_pid" 2>/dev/null
                     if [ "$probe_status" = "ok" ]; then
                         if [ -n "$probe_url" ]; then
-                            echo -e "${GREEN}PASS (compile-only +smoke +probe)${NC}"
+                            printf "Testing %s... ${GREEN}PASS (compile-only +smoke +probe)${NC}\n" "$example"
                         else
-                            echo -e "${GREEN}PASS (compile-only +smoke)${NC}"
+                            printf "Testing %s... ${GREEN}PASS (compile-only +smoke)${NC}\n" "$example"
                         fi
                     else
-                        echo -e "${RED}FAIL (smoke $probe_status)${NC}"
-                        echo "----- smoke log: $example -----"
-                        sed 's/^/    /' "$smoke_log" | head -n 40
-                        echo "----- end log -----"
-                        TEST_FAILED=1
+                        printf "Testing %s... ${RED}FAIL (smoke %s)${NC}\n" "$example" "$probe_status"
+                        {
+                            echo "----- smoke log: $example -----"
+                            sed 's/^/    /' "$smoke_log" | head -n 40
+                            echo "----- end log -----"
+                        } > "$fail_dir/$name.log" 2>&1
+                        rm -f "$smoke_log" "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+                        return 1
                     fi
                 else
                     # Already exited; check status. Bash's $? after
@@ -272,18 +295,21 @@ if [ "$ACTION" = "test" ]; then
                         # Cleanly exited within 2s — usually a script
                         # that runs to completion and doesn't actually
                         # call listen(). That's still PASS.
-                        echo -e "${GREEN}PASS (compile-only +smoke)${NC}"
+                        printf "Testing %s... ${GREEN}PASS (compile-only +smoke)${NC}\n" "$example"
                     else
-                        echo -e "${RED}FAIL (smoke crashed, exit $smoke_rc)${NC}"
-                        echo "----- smoke log: $example -----"
-                        sed 's/^/    /' "$smoke_log" | head -n 40
-                        echo "----- end log -----"
-                        TEST_FAILED=1
+                        printf "Testing %s... ${RED}FAIL (smoke crashed, exit %s)${NC}\n" "$example" "$smoke_rc"
+                        {
+                            echo "----- smoke log: $example -----"
+                            sed 's/^/    /' "$smoke_log" | head -n 40
+                            echo "----- end log -----"
+                        } > "$fail_dir/$name.log" 2>&1
+                        rm -f "$smoke_log" "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+                        return 1
                     fi
                 fi
                 rm -f "$smoke_log"
-                rm -f "$out_path" "$out_path.ll" "$out_path.o"
-                return
+                rm -f "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+                return 0
             fi
             if [ -f "$input_file" ]; then
                 $TIMEOUT_CMD "./$out_path" < "$input_file" > /dev/null 2>&1
@@ -292,20 +318,27 @@ if [ "$ACTION" = "test" ]; then
             fi
 
             if [ $? -eq 0 ]; then
-                echo -e "${GREEN}PASS${NC}"
+                printf "Testing %s... ${GREEN}PASS${NC}\n" "$example"
             else
-                echo -e "${RED}FAIL (execution)${NC}"
-                TEST_FAILED=1
+                printf "Testing %s... ${RED}FAIL (execution)${NC}\n" "$example"
+                echo "----- execution failed (non-zero exit): $example -----" \
+                    > "$fail_dir/$name.log" 2>&1
+                rm -f "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+                return 1
             fi
         else
-            echo -e "${RED}FAIL (compilation)${NC}"
-            echo "----- compile log: $example -----"
-            sed 's/^/    /' "$compile_log" | head -n 40
-            echo "----- end log -----"
-            TEST_FAILED=1
+            printf "Testing %s... ${RED}FAIL (compilation)${NC}\n" "$example"
+            {
+                echo "----- compile log: $example -----"
+                sed 's/^/    /' "$compile_log" | head -n 40
+                echo "----- end log -----"
+            } > "$fail_dir/$name.log" 2>&1
+            rm -f "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+            return 1
         fi
 
         rm -f "$out_path" "$out_path.ll" "$out_path.o" "$compile_log"
+        return 0
     }
 
     if [ -n "$TARGET" ]; then
@@ -323,8 +356,25 @@ if [ "$ACTION" = "test" ]; then
                 break
             fi
         done
-        run_test "$TARGET" "$compile_only"
+        run_test "$TARGET" "$compile_only" || TEST_FAILED=1
     else
+        # ------------------------------------------------------------------
+        # Parallel example runner.
+        #
+        # Every example is an independent full AOT compile (LLVM codegen +
+        # link against libtulpar_runtime.a, ~4s each) — 87 of them serially
+        # was ~5m45s and made up 87% of the Linux CI job's wall time, while
+        # macOS/Windows finished in under 3 minutes because they never run
+        # this suite at all. The work is embarrassingly parallel:
+        #   * each test's output binary is named after its unique source
+        #     basename, so no two writes collide;
+        #   * the only examples touching shared on-disk state use DIFFERENT
+        #     files (08_file_io -> test_file.txt, 13_database -> test.db);
+        #   * the compile-only server smokes each bind a distinct port,
+        #     and their 34 x `sleep 2` startup waits now overlap instead of
+        #     summing to ~68s of serial idling.
+        # ------------------------------------------------------------------
+        work_list=$(mktemp)
         for example in examples/*.tpr; do
             [ -f "$example" ] || continue
 
@@ -350,9 +400,49 @@ if [ "$ACTION" = "test" ]; then
                 fi
             done
 
-            run_test "$example" "$compile_only"
+            # "<path> <0|1>" per line; xargs -n2 hands both to one worker.
+            # Example paths are plain [a-z0-9_]+.tpr (no spaces/quotes), so
+            # xargs' default word splitting is safe here.
+            printf '%s %s\n' "$example" "$compile_only" >> "$work_list"
         done
+
+        # Default to the machine's core count; TULPAR_TEST_JOBS overrides
+        # (e.g. TULPAR_TEST_JOBS=1 to get the old serial behaviour back when
+        # bisecting a flaky test).
+        if [ -n "$TULPAR_TEST_JOBS" ]; then
+            test_jobs="$TULPAR_TEST_JOBS"
+        else
+            test_jobs=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+        fi
+        echo "Running $(wc -l < "$work_list") examples on $test_jobs parallel jobs..."
+        echo ""
+
+        # Workers are separate bash processes, so run_test + everything it
+        # reads must be exported. FAIL_DIR is where they drop multi-line
+        # failure detail (see run_test's header comment).
+        export INPUT_DIR FAIL_DIR GREEN RED NC
+        export -f run_test smoke_probe_for
+
+        # xargs exits 123 if ANY worker exited non-zero — that is the
+        # failure channel (a worker subshell cannot set TEST_FAILED).
+        xargs -P "$test_jobs" -n 2 \
+            bash -c 'run_test "$0" "$1"' < "$work_list" || TEST_FAILED=1
+        rm -f "$work_list"
+
+        # Dump the collected failure logs in a deterministic (sorted) order,
+        # after the live PASS/FAIL lines — parallel workers can't print
+        # multi-line blocks safely while others are still writing.
+        if [ -n "$(ls -A "$FAIL_DIR" 2>/dev/null)" ]; then
+            echo ""
+            echo -e "${RED}===== failure details =====${NC}"
+            for log in "$FAIL_DIR"/*.log; do
+                [ -f "$log" ] || continue
+                cat "$log"
+            done
+        fi
     fi
+
+    rm -rf "$FAIL_DIR"
 
     echo ""
     if [ $TEST_FAILED -ne 0 ]; then

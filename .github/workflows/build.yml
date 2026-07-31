@@ -288,10 +288,14 @@ jobs:
           chmod +x tulpar
           chmod +x build.sh
           ./build.sh test
-        # The example suite grew (13+ arcade games, each recompiling the full
-        # arcade+tame engine at O1); 5 min was no longer enough and the step
-        # timed out with every test still passing. Bumped to give headroom.
-        timeout-minutes: 15
+        # History: the suite ran serially and grew to 87 examples (each a
+        # full AOT compile + link), hitting ~5m45s — 87% of this job's wall
+        # time — which is why the timeout kept getting raised (5 -> 15 min).
+        # `build.sh test` now fans the examples out over `xargs -P$(nproc)`
+        # (~36s on an 8-core dev box; ~1-2 min on a 4-core runner), so the
+        # generous ceiling is no longer load-bearing — 10 min is still ~5x
+        # headroom while catching a genuine hang sooner.
+        timeout-minutes: 10
 
       # typeinfer regression suite — drives `tulpar --strict <file>` over
       # tests/typeinfer/{pass,fail}/*.tpr. The runner already builds the
@@ -642,8 +646,20 @@ jobs:
           # meta-package for.
           # Dropped `mingw-w64-x86_64-ninja` — CMake generator is
           # `MinGW Makefiles` (see build.bat), make ships with gcc.
+          #
+          # Dropped `git` (2026-07-30): pacman was installing 97 packages on
+          # every run (~46s — 70% of this step, and the "it reinstalls MinGW
+          # every time" symptom). ~35 of those 97 were git's dependency
+          # closure alone: perl-* x30, openssh, heimdal, heimdal-libs,
+          # libcbor, libedit, libfido2. Nothing here needs an MSYS2 git —
+          # CMakeLists.txt has no find_package(Git)/`git describe`, and the
+          # only step that shells out to git (the artifact-reuse step) runs
+          # under `shell: pwsh` against the runner's Windows-native git.
+          # NOTE: setup-msys2's `cache: true` caches the DOWNLOADED package
+          # files, not the installed tree — the install/extract cost is paid
+          # every run regardless of a cache hit, so shrinking the package
+          # list is the only lever that actually moves this number.
           install: >-
-            git
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-llvm
