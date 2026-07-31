@@ -117,6 +117,12 @@ void tame_impl_ambient(int64_t color);
 int tame_impl_shadows(int enable);
 int tame_impl_shadows_active(void);
 void tame_impl_shadow_area(double area);
+// Faz 5 — doku / materyal / gökyüzü
+void tame_impl_texture3(int tex, double tile_u, double tile_v);
+void tame_impl_material3(double shine, double spec);
+int tame_impl_sky(int64_t top, int64_t bottom);
+void tame_impl_sky_off(void);
+int tame_impl_checker(int w, int h, int cells, int64_t c1, int64_t c2);
 int tame_impl_load_model(const char *path);
 int tame_impl_gen(int kind, double a, double b, double c, double d);
 void tame_impl_draw_model(int h, double x, double y, double z, double scale,
@@ -529,6 +535,33 @@ VMValue aot_tm3_shadows_active_ptr(void) {
 VMValue aot_tm3_shadow_area_ptr(VMValue *area) {
   tame_impl_shadow_area(tm_num(area));
   return VM_VOID();
+}
+
+// --- 3D (Faz 5) — doku / materyal / gökyüzü ---------------------------------
+
+VMValue aot_tm3_texture_ptr(VMValue *tex, VMValue *tu, VMValue *tv) {
+  tame_impl_texture3((int)tm_int(tex), tm_num(tu), tm_num(tv));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_material_ptr(VMValue *shine, VMValue *spec) {
+  tame_impl_material3(tm_num(shine), tm_num(spec));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_sky_ptr(VMValue *top, VMValue *bottom) {
+  return VM_BOOL(tame_impl_sky(tm_int(top), tm_int(bottom)));
+}
+
+VMValue aot_tm3_sky_off_ptr(void) {
+  tame_impl_sky_off();
+  return VM_VOID();
+}
+
+VMValue aot_tm_checker_ptr(VMValue *w, VMValue *h, VMValue *cells, VMValue *c1,
+                           VMValue *c2) {
+  return VM_INT(tame_impl_checker((int)tm_int(w), (int)tm_int(h),
+                                  (int)tm_int(cells), tm_int(c1), tm_int(c2)));
 }
 
 // --- 3D (Faz 2) — model yükleme / üretme / çizim / animasyon -----------------
