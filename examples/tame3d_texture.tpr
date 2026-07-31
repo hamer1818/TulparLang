@@ -1,0 +1,95 @@
+// Tulpar 3D — Faz 5: doku, gökyüzü ve materyal.
+//
+//   ./tulpar examples/tame3d_texture.tpr
+//
+// BOŞLUK / EKRANA DOKUN: dokuyu aç/kapat — aynı sahne, düz renk vs döşenmiş
+// yüzey. Hiçbir asset dosyası yok: doku checker() ile ÜRETİLİYOR, gökyüzü de
+// gömülü bir shader'ın gradyanı (cubemap/6 resim gerekmez).
+//
+// Dört kavram bir arada:
+//   texture3d(t, tu, tv) — DURUM'dur; ayarladıktan sonra çizilen her primitif
+//                          onu kullanır. tu/tv = yüzey boyunca kaç kez döşenir.
+//   material3d(shine, spec) — parlaklık. mat3d() ve parlak3d() hazır uçlar.
+//   sky(tepe, ufuk)      — kameraya duyarlı gradyan gökyüzü.
+//   fog_sky(yogunluk)    — mesafe sisi; rengini gökyüzünün ufkundan alır, o
+//                          yüzden zemin ile gökyüzü arasında sert bir çizgi
+//                          kalmaz ve uzaklık okunur olur.
+
+import "tame";
+
+bool dokulu = true;
+bool dokundu_onceki = false;
+
+func main() {
+    if (!window(880, 500, "Tulpar 3D — Doku ve Gokyuzu")) { return; }
+    set_fps(60);
+
+    lights_on();
+    sun(0.0 - 0.5, 0.0 - 1.0, 0.0 - 0.35, rgb(255, 250, 235));
+    ambient_light(rgb(70, 76, 92));
+    shadows_on();
+    shadow_area(22.0);
+    sky(rgb(58, 116, 200), rgb(196, 220, 240));   // zenit, ufuk
+    // Sis rengini gökyüzünün UFKUNDAN al: uzaktaki cisim arkasındaki gökyüzüne
+    // karışsın. Kendi rengini versen "kirli cam" gibi görünürdü.
+    fog_sky(0.022);
+
+    // Dokular — dosyasız, çalışma anında üretiliyor.
+    int zemin_doku = checker(128, 128, 8, rgb(158, 166, 176), rgb(120, 128, 140));
+    int kutu_doku  = checker(64, 64, 4, rgb(220, 180, 110), rgb(170, 130, 70));
+
+    while (running()) {
+        float t = elapsed();
+
+        bool dokunuluyor = touch_count() > 0;
+        if (key_pressed(32) || (dokunuluyor && !dokundu_onceki)) {
+            dokulu = !dokulu;
+        }
+        dokundu_onceki = dokunuluyor;
+
+        float cx = sin(t * 0.25) * 16.0;
+        float cz = cos(t * 0.25) * 16.0;
+
+        frame_begin();
+        clear(rgb(16, 18, 26));
+        camera3d(cx, 8.5, cz,  0.0, 1.0, 0.0,  45.0);
+
+        space_begin();
+            // Zemin: tek 128x128 doku, 24x24 döşenmiş. Doku olmadan aynı
+            // yüzey tek düz renk olurdu — ölçek hissi buradan geliyor.
+            if (dokulu) { texture3d(zemin_doku, 24.0, 24.0); }
+            mat3d();                                   // zemin mat olsun
+            plane(0.0, 0.0, 0.0,  60.0, 60.0, WHITE);
+
+            // Kutular: aynı doku 2x2 döşenmiş + parlak materyal.
+            if (dokulu) { texture3d(kutu_doku, 2.0, 2.0); }
+            parlak3d();
+            cube(0.0 - 5.0, 1.5, 0.0 - 2.0,  3.0, 3.0, 3.0, WHITE);
+            cube(5.5,       1.2, 2.0,        2.4, 2.4, 2.4, WHITE);
+
+            // Renk dokuyla ÇARPILIR: aynı doku, farklı boya.
+            cube(0.0, 1.0, 6.0,  2.0, 2.0, 2.0, rgb(140, 200, 255));
+
+            // Küreler dokusuz — parlaklık farkını en net gösteren yüzey.
+            no_texture3d();
+            parlak3d();
+            sphere(0.0 - 2.0, 1.6, 0.0 - 6.0,  1.6, rgb(230, 90, 90));
+            mat3d();
+            sphere(2.0,       1.6, 0.0 - 6.0,  1.6, rgb(230, 90, 90));
+
+            no_texture3d();
+        space_end();
+
+        text("Tulpar 3D — Doku ve Gokyuzu", 14, 12, 22, RAYWHITE);
+        if (dokulu) {
+            text("Doku: ACIK — BOSLUK / EKRANA DOKUN ile kapat", 14, 40, 16, rgb(150, 230, 150));
+        } else {
+            text("Doku: KAPALI — BOSLUK / EKRANA DOKUN ile ac", 14, 40, 16, rgb(230, 150, 150));
+        }
+        text("Ayni kure, solda parlak / sagda mat", 14, 62, 15, rgb(200, 200, 210));
+        frame_end();
+    }
+    close_window();
+}
+
+main();

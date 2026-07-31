@@ -860,6 +860,13 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm3_shadows", "aot_tm3_shadows_ptr", 1},
     {"tm3_shadow_area", "aot_tm3_shadow_area_ptr", 1},
     {"tm3_shadows_active", "aot_tm3_shadows_active_ptr", 0},
+    // 3D (Faz 5) — doku / materyal / gökyüzü
+    {"tm3_texture", "aot_tm3_texture_ptr", 3},
+    {"tm3_material", "aot_tm3_material_ptr", 2},
+    {"tm3_sky", "aot_tm3_sky_ptr", 2},
+    {"tm3_sky_off", "aot_tm3_sky_off_ptr", 0},
+    {"tm3_fog", "aot_tm3_fog_ptr", 2},
+    {"tm_checker", "aot_tm_checker_ptr", 5},
     // girdi — gamepad (buton/eksen adla: "A"/"LB"/"START", "LX"/"RT"...)
     {"tm_gamepad_available", "aot_tm_gamepad_available_ptr", 1},
     {"tm_gamepad_name", "aot_tm_gamepad_name_ptr", 1},

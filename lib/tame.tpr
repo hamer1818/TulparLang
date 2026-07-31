@@ -375,6 +375,59 @@ func golge_alani(a) { tm3_shadow_area(a); }
 func shadows_active(): bool { return tm3_shadows_active(); }
 func golge_aktif(): bool    { return tm3_shadows_active(); }
 
+// ---- 3D doku / materyal / gökyüzü ------------------------------------------
+//
+// Doku bir DURUM'dur: bir kez ayarlarsın, sonraki primitifler onu kullanır.
+//
+//   int t = load_texture("cimen.png");
+//   texture3d(t, 20.0, 20.0);   // zemin boyunca 20x20 döşe
+//   plane(0.0, 0.0, 0.0, 60.0, 60.0, WHITE);
+//   no_texture3d();             // sonrakiler yine düz renk
+//
+// Renk (son parametre) dokuyla ÇARPILIR — beyaz ver, doku olduğu gibi çıksın;
+// renkli ver, dokuyu boya. Modeller kendi dokularını korur (model_texture).
+// Dosyasız damalı doku — zemin/duvar karosu için PNG taşımaya gerek yok.
+//   int t = checker(128, 128, 8, rgb(150,158,170), rgb(120,128,142));
+func checker(w, h, cells, c1, c2): int { return tm_checker(w, h, cells, c1, c2); }
+func damali(w, h, cells, c1, c2): int  { return tm_checker(w, h, cells, c1, c2); }
+
+func texture3d(t, tu, tv) { tm3_texture(t, tu, tv); }
+func doku3d(t, tu, tv)    { tm3_texture(t, tu, tv); }
+func no_texture3d() { tm3_texture(0 - 1, 1.0, 1.0); }
+func doku3d_kapat() { tm3_texture(0 - 1, 1.0, 1.0); }
+
+// Parlaklık: shine = specular üssü (büyük = küçük/keskin parlama, "cilalı";
+// küçük = geniş/yayvan, "mat"), spec = parlamanın gücü (0 = tamamen mat).
+func material3d(shine, spec) { tm3_material(shine, spec); }
+func materyal3d(shine, spec) { tm3_material(shine, spec); }
+// Hazır iki uç — çoğu oyunun ihtiyacı bu ikisi.
+func matte3d()  { tm3_material(4.0, 0.0); }
+func mat3d()    { tm3_material(4.0, 0.0); }
+func glossy3d() { tm3_material(48.0, 1.4); }
+func parlak3d() { tm3_material(48.0, 1.4); }
+
+// Gökyüzü: kameraya duyarlı gradyan (yukarı bakınca zenit gelir), asset yok.
+//   sky(rgb(74, 130, 210), rgb(190, 214, 238));   // tepe, ufuk
+func sky(top, bottom): bool     { return tm3_sky(top, bottom); }
+func gokyuzu(top, bottom): bool { return tm3_sky(top, bottom); }
+func sky_off()        { tm3_sky_off(); }
+func gokyuzu_kapat()  { tm3_sky_off(); }
+
+// Mesafe sisi — gökyüzü ile zemin arasındaki sert ufuk çizgisini kapatır ve
+// derinlik hissi verir. density: 0.02 hafif pus, 0.06 yoğun sis.
+//
+//   sky(rgb(58,116,200), rgb(196,220,240));
+//   fog_sky(0.03);        // sis rengini gökyüzünün UFKUNDAN al (doğrusu bu)
+//
+// Kendi rengini vermek istersen fog(renk, yogunluk). Sis ışık shader'ında
+// hesaplanır, yani lights_off() ile ışığı kapatırsan sis de çizilmez.
+func fog(color, density) { tm3_fog(color, density); }
+func sis(color, density) { tm3_fog(color, density); }
+func fog_sky(density) { tm3_fog(0 - 1, density); }
+func sis_gokyuzu(density) { tm3_fog(0 - 1, density); }
+func fog_off() { tm3_fog(0 - 1, 0.0); }
+func sis_kapat() { tm3_fog(0 - 1, 0.0); }
+
 // ---- Yönetilen oyun döngüsü (Faz 5) -------------------------------------------
 // Wings'in listen() modeli: update/draw fonksiyonlarını verirsin, döngüyü,
 // kare zamanlamasını VE kare belleğini tame yönetir — her kare sonunda arena
