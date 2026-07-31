@@ -73,6 +73,9 @@ float _cam_fov    = 45.0;
 
 int   _score3 = 0;
 int   _game_over3 = 0;
+// Işıklandırma varsayılan AÇIK (bkz. play3d). lights3d(false) ile kapatılır —
+// düz/ışıksız retro görünüm isteyen oyunlar için.
+int   _lights3 = 1;
 
 // callback'ler (0-arg; arcade deseni — call() ile güvenli).
 // fn referansları `var` ile tutulmalı — `int` global fn-değerini bozar.
@@ -406,11 +409,24 @@ func no_ground3d() { _ground_on = 0; }
 func gravity3d(g) { _grav = g; }
 func camera_follow(target, dist, height) { _cam_target = target; _cam_dist = dist; _cam_height = height; }
 func camera_fov(f) { _cam_fov = f; }
+// Motorun varsayılan ışığını aç/kapat (setup'tan ÖNCE, kayıt aşamasında çağır).
+// Kapatınca her şey eski düz-renk görünümünde çizilir.
+func lights3d(on) { if (on) { _lights3 = 1; } else { _lights3 = 0; } }
+func isik3d(on)   { lights3d(on); }
 
 // ---- Yönetilen döngü -------------------------------------------------------
 func play3d() {
     if (!window(_win_w, _win_h, _win_title)) { return; }
     set_fps(60);
+    // Işıklandırma VARSAYILAN AÇIK — motoru kullanan oyun sıfır konfigürasyonla
+    // düz renkli kutular yerine gölgeli yüzeyler görsün. Kapatmak için oyun
+    // kodunda isik3d(false) çağır; kendi ışığını kurmak istersen setup içinde
+    // sun()/point_light() çağırman yeter (bunlar varsayılanı ezer).
+    if (_lights3 == 1) {
+        lights_on();
+        sun(0.0 - 0.55, 0.0 - 1.0, 0.0 - 0.35, rgb(255, 246, 224));
+        ambient_light(rgb(46, 50, 66));
+    }
     if (_has_setup3 == 1) { call(_setup3_fn); }
 
     while (running()) {

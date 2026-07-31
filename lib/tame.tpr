@@ -314,6 +314,42 @@ func anim_oynat(h, idx, frame)  { tm3_anim(h, idx, frame); }
 func unload_model(h) { tm3_unload_model(h); }
 func model_sil(h)    { tm3_unload_model(h); }
 
+// -- Faz 4: ışıklandırma --
+// Gömülü Blinn-Phong shader (asset dosyası yok; masaüstü GL3.3 + web/Android
+// GLES2 varyantları derleyicinin içinde). Açtığın anda küp/küre/silindir/
+// düzlem ve modeller ışık alır — düz renk yerine gölgeli yüzeyler.
+//
+//   window(800, 450, "3D");
+//   lights_on();                                  // varsayılan güneş gelir
+//   sun(0.0-0.6, 0.0-1.0, 0.0-0.4, WHITE);        // yönlü ışık (YÖN verilir)
+//   point_light(1, 3.0, 4.0, 2.0, GOLD);          // slot 1: nokta ışık
+//   ambient_light(rgb(40, 44, 60));               // taban aydınlık
+//
+// En çok 4 ışık (slot 0-3). type: 0 = yönlü (güneş), 1 = nokta.
+func lights_on(): bool  { return tm3_lights(1); }
+func isik_ac(): bool    { return tm3_lights(1); }
+func lights_off() { tm3_lights(0); }
+func isik_kapat() { tm3_lights(0); }
+
+// Yönlü ışık (güneş): (x,y,z) YÖNdür, konum değil. Slot 0'a yazar.
+func sun(x, y, z, color)   { tm3_light_set(0, 0, x, y, z, color); }
+func gunes(x, y, z, color) { tm3_light_set(0, 0, x, y, z, color); }
+
+// Nokta ışık: (x,y,z) dünya KONUMU. idx = slot (0-3).
+func point_light(idx, x, y, z, color) { tm3_light_set(idx, 1, x, y, z, color); }
+func nokta_isik(idx, x, y, z, color)  { tm3_light_set(idx, 1, x, y, z, color); }
+
+// Yönlü ışığı istediğin slota koymak istersen (sun() slot 0'ı kullanır).
+func dir_light(idx, x, y, z, color) { tm3_light_set(idx, 0, x, y, z, color); }
+func yonlu_isik(idx, x, y, z, color) { tm3_light_set(idx, 0, x, y, z, color); }
+
+func light_off(idx) { tm3_light_off(idx); }
+func isik_sil(idx)  { tm3_light_off(idx); }
+
+// Ortam ışığı — hiçbir ışığın vurmadığı yüzeylerin taban rengi.
+func ambient_light(color) { tm3_ambient(color); }
+func ortam_isik(color)    { tm3_ambient(color); }
+
 // ---- Yönetilen oyun döngüsü (Faz 5) -------------------------------------------
 // Wings'in listen() modeli: update/draw fonksiyonlarını verirsin, döngüyü,
 // kare zamanlamasını VE kare belleğini tame yönetir — her kare sonunda arena

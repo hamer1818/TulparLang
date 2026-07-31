@@ -121,6 +121,16 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > (`examples/scene3d_collector.tpr`). Motor 8/8 headless birim test + 4 sahne
 > WebGL'de görsel + Android `.so` (arm64+x86_64) linki doğrulandı. Detay:
 > CHANGELOG "3D oyun katmanı".
+>
+> **3D ışıklandırma (Faz 4)** — 3D sahneler artık ışık alıyor: gömülü
+> Blinn-Phong shader (asset dosyası yok; masaüstü GLSL 330 + web/Android
+> GLES 100 varyantları kaynağın içinde), en çok 4 ışık (yönlü güneş + mesafeye
+> göre zayıflayan nokta ışıklar) + ortam ışığı. `scene3d`'de VARSAYILAN AÇIK —
+> motoru kullanan oyun sıfır konfigürasyonla gölgeli görünür (`lights3d(false)`
+> ile kapanır). Örnek: `examples/tame3d_lights.tpr`. Web'de görsel doğrulandı.
+> Yol boyu bir hata da düzeldi: wasm build script'i `tame_impl.c`'yi platform
+> bayrakları olmadan derliyordu (Android veriyordu, web vermiyordu) → shader
+> web'de masaüstü varyantını seçip derlenmiyordu.
 
 - **Çekirdek sözdizimi tam:** statik tipler, fonksiyonlar (opsiyonel
   dönüş-tipi notasyonu, **eksik trailing arg → 0 ile padlenir**), kontrol akışı,

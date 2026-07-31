@@ -218,6 +218,21 @@ static void tame_cam3d_ensure(void) {
   tame_cam3d_init = 1;
 }
 
+// Işıklandırma durumu — asıl blok (shader kaynağı, ışık dizisi, API) aşağıda
+// "Faz 4" başlığı altında; bu üçü burada çünkü tame_impl_begin3/end3 (hemen
+// aşağıda) shader'ı bağlamak için görmek zorunda.
+static Shader tame_light_shader = {0};
+static int tame_light_ready = 0;   // shader derlendi mi
+static int tame_lights_on = 0;     // ışıklandırma aktif mi
+
+// Faz 4 bloğunda tanımlı — primitif çizimlerini ışık açıkken normal'i doğru
+// olan birim mesh yoluna saptırmak için ileri bildirim.
+// `shape`: 0=kutu 1=küre 2=silindir 3=düzlem. Işık kapalıysa 0 döner ve
+// çağıran eski immediate-mode yolunu kullanır.
+static int tame_lights_active(void);
+static int tame_draw_lit(int shape, double x, double y, double z, double sx,
+                         double sy, double sz, int64_t color);
+
 // Kamerayı konumla: göz (px,py,pz), bakış hedefi (tx,ty,tz), dikey FOV derece.
 void tame_impl_cam3(double px, double py, double pz, double tx, double ty,
                     double tz, double fov) {
@@ -230,12 +245,29 @@ void tame_impl_cam3(double px, double py, double pz, double tx, double ty,
 void tame_impl_begin3(void) {
   tame_cam3d_ensure();
   BeginMode3D(tame_cam3d);
+  if (tame_lights_active()) {
+    // Specular hesabı kameranın dünya konumunu ister; kamera her kare
+    // hareket edebildiği için burada güncelliyoruz.
+    float view[3] = {tame_cam3d.position.x, tame_cam3d.position.y,
+                     tame_cam3d.position.z};
+    SetShaderValue(tame_light_shader,
+                   tame_light_shader.locs[SHADER_LOC_VECTOR_VIEW], view,
+                   SHADER_UNIFORM_VEC3);
+    // rlgl'in anlık shader'ını değiştirir → DrawCube/DrawGrid gibi
+    // immediate-mode çizimler ışık alır. (Modeller material.shader
+    // kullandığından onlara ayrıca atanır — bkz. tame_model_apply_shader.)
+    BeginShaderMode(tame_light_shader);
+  }
 }
 
-void tame_impl_end3(void) { EndMode3D(); }
+void tame_impl_end3(void) {
+  if (tame_lights_active()) EndShaderMode();
+  EndMode3D();
+}
 
 void tame_impl_cube(double x, double y, double z, double w, double h, double d,
                     int64_t color) {
+  if (tame_draw_lit(0, x, y, z, w, h, d, color)) return;
   DrawCube((Vector3){(float)x, (float)y, (float)z}, (float)w, (float)h,
            (float)d, tame_color(color));
 }
@@ -250,9 +282,341 @@ void tame_impl_grid(int slices, double spacing) {
   DrawGrid(slices, (float)spacing);
 }
 
+// ---------------------------------------------------------------------------
+// Faz 4 — ışıklandırma (yönlü + nokta ışık, Blinn-Phong).
+//
+// Shader GLSL kaynağı BURAYA GÖMÜLÜ (LoadShaderFromMemory) — .vs/.fs dosyası
+// taşımıyoruz, böylece web/Android paketlerine ekstra asset girmiyor ve
+// "oyunu kopyaladım, ışık gitti" sınıfı hata imkânsız. İki varyant var:
+// masaüstü GL 3.3 (#version 330, in/out) ve GLES2 (#version 100,
+// attribute/varying + gl_FragColor) — web ve Android GLES2 yolundan gider.
+//
+// DİKKAT — iki raylib gerçeği bu tasarımı zorunlu kıldı:
+//  1) BeginShaderMode rlgl'in anlık shader'ını değiştirir, ama DrawMesh
+//     material.shader kullanır → MODELLER BeginShaderMode'dan ETKİLENMEZ.
+//     Bu yüzden modellerin materyaline shader'ı ayrıca atıyoruz.
+//  2) DrawCube rlNormal3f üretir (ışık alır), ama DrawSphereEx/DrawCylinder
+//     NORMAL ÜRETMEZ → immediate-mode küre/silindir yanlış gölgelenirdi.
+//     Bu yüzden ışık AÇIKKEN primitifler, normal'i doğru olan cached birim
+//     mesh'ler üzerinden DrawModelEx ile çizilir (aşağıdaki tame_unit_*).
+//     Işık KAPALIYKEN eski immediate-mode yolu birebir korunur (hız + geriye
+//     dönük uyum).
+// ---------------------------------------------------------------------------
+
+#define TAME_MAX_LIGHTS 4
+
+typedef struct {
+  int enabled;
+  int type;          // 0 = yönlü (directional/güneş), 1 = nokta (point)
+  Vector3 position;  // nokta ışık için konum, yönlü için YÖN
+  Color color;
+  int loc_enabled, loc_type, loc_pos, loc_color;
+} TameLight;
+
+// (tame_light_shader / tame_light_ready / tame_lights_on yukarıda, 3D
+// bölümünün başında tanımlı — begin3/end3 onları görmek zorunda.)
+static TameLight tame_lights[TAME_MAX_LIGHTS];
+static int tame_loc_ambient = -1;
+static float tame_ambient[4] = {0.18f, 0.18f, 0.22f, 1.0f};
+
+// GLES2 (web/Android) mi, masaüstü GL3.3 mü? Derleyicinin KENDİ tanımladığı
+// __EMSCRIPTEN__/__ANDROID__'i de sayıyoruz, sadece -DGRAPHICS_API_OPENGL_ES2'ye
+// güvenmiyoruz: wasm/build_tame_web.sh tame_impl.c'yi (raylib'in aksine) o
+// bayrak olmadan derliyordu ve web sessizce MASAÜSTÜ shader'ını seçip
+// "'in' : storage qualifier supported in GLSL ES 3.00 and above only" ile
+// derleme hatası veriyordu — sahne ışıksız çiziliyordu.
+#if defined(GRAPHICS_API_OPENGL_ES2) || defined(PLATFORM_WEB) ||               \
+    defined(PLATFORM_ANDROID) || defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+static const char *tame_light_vs =
+    "#version 100                                \n"
+    "attribute vec3 vertexPosition;              \n"
+    "attribute vec2 vertexTexCoord;              \n"
+    "attribute vec3 vertexNormal;                \n"
+    "attribute vec4 vertexColor;                 \n"
+    "uniform mat4 mvp;                           \n"
+    "uniform mat4 matModel;                      \n"
+    "uniform mat4 matNormal;                     \n"
+    "varying vec3 fragPosition;                  \n"
+    "varying vec2 fragTexCoord;                  \n"
+    "varying vec4 fragColor;                     \n"
+    "varying vec3 fragNormal;                    \n"
+    "void main() {                               \n"
+    "    fragPosition = vec3(matModel*vec4(vertexPosition, 1.0)); \n"
+    "    fragTexCoord = vertexTexCoord;          \n"
+    "    fragColor = vertexColor;                \n"
+    "    fragNormal = normalize(vec3(matNormal*vec4(vertexNormal, 1.0))); \n"
+    "    gl_Position = mvp*vec4(vertexPosition, 1.0); \n"
+    "}                                           \n";
+
+static const char *tame_light_fs =
+    "#version 100                                \n"
+    "precision mediump float;                    \n"
+    "varying vec3 fragPosition;                  \n"
+    "varying vec2 fragTexCoord;                  \n"
+    "varying vec4 fragColor;                     \n"
+    "varying vec3 fragNormal;                    \n"
+    "uniform sampler2D texture0;                 \n"
+    "uniform vec4 colDiffuse;                    \n"
+    "uniform vec4 ambient;                       \n"
+    "uniform vec3 viewPos;                       \n"
+    "uniform int  lightsEnabled[4];              \n"
+    "uniform int  lightsType[4];                 \n"
+    "uniform vec3 lightsPosition[4];             \n"
+    "uniform vec4 lightsColor[4];                \n"
+    "void main() {                               \n"
+    "    vec4 texelColor = texture2D(texture0, fragTexCoord); \n"
+    "    vec3 lightDot = vec3(0.0);              \n"
+    "    vec3 normal = normalize(fragNormal);    \n"
+    "    vec3 viewD = normalize(viewPos - fragPosition); \n"
+    "    vec3 specular = vec3(0.0);              \n"
+    "    for (int i = 0; i < 4; i++) {           \n"
+    "        if (lightsEnabled[i] == 1) {        \n"
+    "            vec3 light = vec3(0.0);         \n"
+    "            float att = 1.0;                \n"
+    "            if (lightsType[i] == 0) {       \n"
+    "                light = -normalize(lightsPosition[i]); \n"
+    "            } else {                        \n"
+    "                vec3 d = lightsPosition[i] - fragPosition; \n"
+    "                float dist = length(d);     \n"
+    "                light = d/max(dist, 0.0001);\n"
+    "                att = 1.0/(1.0 + 0.14*dist + 0.07*dist*dist); \n"
+    "            }                               \n"
+    "            float NdotL = max(dot(normal, light), 0.0); \n"
+    "            lightDot += lightsColor[i].rgb*NdotL*att; \n"
+    "            float specCo = 0.0;             \n"
+    "            if (NdotL > 0.0) specCo = pow(max(0.0, dot(viewD, reflect(-(light), normal))), 16.0); \n"
+    "            specular += specCo*att;         \n"
+    "        }                                   \n"
+    "    }                                       \n"
+    "    vec4 finalColor = (texelColor*((colDiffuse + vec4(specular, 1.0))*vec4(lightDot, 1.0))); \n"
+    "    finalColor += texelColor*(ambient)*colDiffuse; \n"
+    "    gl_FragColor = finalColor;           \n"
+    "}                                           \n";
+#else
+static const char *tame_light_vs =
+    "#version 330                                \n"
+    "in vec3 vertexPosition;                     \n"
+    "in vec2 vertexTexCoord;                     \n"
+    "in vec3 vertexNormal;                       \n"
+    "in vec4 vertexColor;                        \n"
+    "uniform mat4 mvp;                           \n"
+    "uniform mat4 matModel;                      \n"
+    "uniform mat4 matNormal;                     \n"
+    "out vec3 fragPosition;                      \n"
+    "out vec2 fragTexCoord;                      \n"
+    "out vec4 fragColor;                         \n"
+    "out vec3 fragNormal;                        \n"
+    "void main() {                               \n"
+    "    fragPosition = vec3(matModel*vec4(vertexPosition, 1.0)); \n"
+    "    fragTexCoord = vertexTexCoord;          \n"
+    "    fragColor = vertexColor;                \n"
+    "    fragNormal = normalize(vec3(matNormal*vec4(vertexNormal, 1.0))); \n"
+    "    gl_Position = mvp*vec4(vertexPosition, 1.0); \n"
+    "}                                           \n";
+
+static const char *tame_light_fs =
+    "#version 330                                \n"
+    "in vec3 fragPosition;                       \n"
+    "in vec2 fragTexCoord;                       \n"
+    "in vec4 fragColor;                          \n"
+    "in vec3 fragNormal;                         \n"
+    "uniform sampler2D texture0;                 \n"
+    "uniform vec4 colDiffuse;                    \n"
+    "out vec4 finalColor;                        \n"
+    "uniform vec4 ambient;                       \n"
+    "uniform vec3 viewPos;                       \n"
+    "uniform int  lightsEnabled[4];              \n"
+    "uniform int  lightsType[4];                 \n"
+    "uniform vec3 lightsPosition[4];             \n"
+    "uniform vec4 lightsColor[4];                \n"
+    "void main() {                               \n"
+    "    vec4 texelColor = texture(texture0, fragTexCoord); \n"
+    "    vec3 lightDot = vec3(0.0);              \n"
+    "    vec3 normal = normalize(fragNormal);    \n"
+    "    vec3 viewD = normalize(viewPos - fragPosition); \n"
+    "    vec3 specular = vec3(0.0);              \n"
+    "    for (int i = 0; i < 4; i++) {           \n"
+    "        if (lightsEnabled[i] == 1) {        \n"
+    "            vec3 light = vec3(0.0);         \n"
+    "            float att = 1.0;                \n"
+    "            if (lightsType[i] == 0) {       \n"
+    "                light = -normalize(lightsPosition[i]); \n"
+    "            } else {                        \n"
+    "                vec3 d = lightsPosition[i] - fragPosition; \n"
+    "                float dist = length(d);     \n"
+    "                light = d/max(dist, 0.0001);\n"
+    "                att = 1.0/(1.0 + 0.14*dist + 0.07*dist*dist); \n"
+    "            }                               \n"
+    "            float NdotL = max(dot(normal, light), 0.0); \n"
+    "            lightDot += lightsColor[i].rgb*NdotL*att; \n"
+    "            float specCo = 0.0;             \n"
+    "            if (NdotL > 0.0) specCo = pow(max(0.0, dot(viewD, reflect(-(light), normal))), 16.0); \n"
+    "            specular += specCo*att;         \n"
+    "        }                                   \n"
+    "    }                                       \n"
+    "    finalColor = (texelColor*((colDiffuse + vec4(specular, 1.0))*vec4(lightDot, 1.0))); \n"
+    "    finalColor += texelColor*(ambient)*colDiffuse; \n"
+
+    "}                                           \n";
+#endif
+
+// Işık slot'unun uniform konumlarını (indeksli dizi elemanları) çöz.
+static void tame_light_resolve_locs(int i) {
+  char buf[64];
+  snprintf(buf, sizeof(buf), "lightsEnabled[%i]", i);
+  tame_lights[i].loc_enabled = GetShaderLocation(tame_light_shader, buf);
+  snprintf(buf, sizeof(buf), "lightsType[%i]", i);
+  tame_lights[i].loc_type = GetShaderLocation(tame_light_shader, buf);
+  snprintf(buf, sizeof(buf), "lightsPosition[%i]", i);
+  tame_lights[i].loc_pos = GetShaderLocation(tame_light_shader, buf);
+  snprintf(buf, sizeof(buf), "lightsColor[%i]", i);
+  tame_lights[i].loc_color = GetShaderLocation(tame_light_shader, buf);
+}
+
+// Bir ışık slot'unun tüm uniform'larını GPU'ya gönder.
+static void tame_light_upload(int i) {
+  if (!tame_light_ready) return;
+  int en = tame_lights[i].enabled;
+  int ty = tame_lights[i].type;
+  SetShaderValue(tame_light_shader, tame_lights[i].loc_enabled, &en,
+                 SHADER_UNIFORM_INT);
+  SetShaderValue(tame_light_shader, tame_lights[i].loc_type, &ty,
+                 SHADER_UNIFORM_INT);
+  float pos[3] = {tame_lights[i].position.x, tame_lights[i].position.y,
+                  tame_lights[i].position.z};
+  SetShaderValue(tame_light_shader, tame_lights[i].loc_pos, pos,
+                 SHADER_UNIFORM_VEC3);
+  float col[4] = {(float)tame_lights[i].color.r / 255.0f,
+                  (float)tame_lights[i].color.g / 255.0f,
+                  (float)tame_lights[i].color.b / 255.0f,
+                  (float)tame_lights[i].color.a / 255.0f};
+  SetShaderValue(tame_light_shader, tame_lights[i].loc_color, col,
+                 SHADER_UNIFORM_VEC4);
+}
+
+// Shader'ı ilk ihtiyaçta derle (GL context şart → window()'dan sonra).
+static int tame_light_ensure(void) {
+  if (tame_light_ready) return 1;
+  if (!tame_window_ready) return 0;
+  tame_light_shader = LoadShaderFromMemory(tame_light_vs, tame_light_fs);
+  if (tame_light_shader.id == 0) {
+    fprintf(stderr, "[tame] Isik shader'i derlenemedi. / Lighting shader "
+                    "failed to compile.\n");
+    return 0;
+  }
+  tame_light_shader.locs[SHADER_LOC_VECTOR_VIEW] =
+      GetShaderLocation(tame_light_shader, "viewPos");
+  tame_loc_ambient = GetShaderLocation(tame_light_shader, "ambient");
+  tame_light_ready = 1;
+  for (int i = 0; i < TAME_MAX_LIGHTS; i++) {
+    tame_light_resolve_locs(i);
+    tame_light_upload(i);
+  }
+  SetShaderValue(tame_light_shader, tame_loc_ambient, tame_ambient,
+                 SHADER_UNIFORM_VEC4);
+  return 1;
+}
+
+int tame_impl_lights(int enable) {
+  if (enable) {
+    if (!tame_light_ensure()) return 0;
+    tame_lights_on = 1;
+    // Hiç ışık tanımlanmadıysa makul bir güneş ver — "ışığı açtım, ekran
+    // simsiyah" tuzağına düşülmesin.
+    int any = 0;
+    for (int i = 0; i < TAME_MAX_LIGHTS; i++) any |= tame_lights[i].enabled;
+    if (!any) {
+      tame_lights[0].enabled = 1;
+      tame_lights[0].type = 0;
+      tame_lights[0].position = (Vector3){-0.6f, -1.0f, -0.4f};
+      tame_lights[0].color = (Color){255, 244, 214, 255};
+      tame_light_upload(0);
+    }
+  } else {
+    tame_lights_on = 0;
+  }
+  return 1;
+}
+
+void tame_impl_light_set(int idx, int type, double x, double y, double z,
+                         int64_t color) {
+  if (idx < 0 || idx >= TAME_MAX_LIGHTS) return;
+  if (!tame_light_ensure()) return;
+  tame_lights[idx].enabled = 1;
+  tame_lights[idx].type = (type == 1) ? 1 : 0;
+  tame_lights[idx].position = (Vector3){(float)x, (float)y, (float)z};
+  tame_lights[idx].color = tame_color(color);
+  tame_light_upload(idx);
+}
+
+void tame_impl_light_off(int idx) {
+  if (idx < 0 || idx >= TAME_MAX_LIGHTS) return;
+  tame_lights[idx].enabled = 0;
+  tame_light_upload(idx);
+}
+
+void tame_impl_ambient(int64_t color) {
+  Color c = tame_color(color);
+  tame_ambient[0] = (float)c.r / 255.0f;
+  tame_ambient[1] = (float)c.g / 255.0f;
+  tame_ambient[2] = (float)c.b / 255.0f;
+  tame_ambient[3] = 1.0f;
+  if (tame_light_ensure())
+    SetShaderValue(tame_light_shader, tame_loc_ambient, tame_ambient,
+                   SHADER_UNIFORM_VEC4);
+}
+
+static int tame_lights_active(void) {
+  return tame_lights_on && tame_light_ready;
+}
+
+// --- Işıklı primitif yolu (birim mesh önbelleği) ----------------------------
+// DrawSphereEx/DrawCylinder normal üretmediği için ışık altında yanlış
+// gölgelenirdi. Işık açıkken bunun yerine GenMesh* ile üretilmiş (normal'i
+// doğru) BİRİM mesh'leri DrawModelEx ile ölçekleyerek çiziyoruz. Birim
+// seçimleri: kutu 1×1×1, küre r=0.5, silindir r=0.5 h=1 (tabanı y=0'da),
+// düzlem 1×1 (XZ). Böylece ölçek doğrudan istenen boyut olur.
+//
+// Düzgün-olmayan (non-uniform) ölçekte normaller bozulmaz: shader matNormal
+// (transpose-inverse model matrisi) kullanıyor, rlgl bunu kendisi kuruyor.
+
+static Model tame_unit[4];
+static int tame_unit_ready = 0;
+
+static void tame_unit_ensure(void) {
+  if (tame_unit_ready || !tame_window_ready) return;
+  tame_unit[0] = LoadModelFromMesh(GenMeshCube(1.0f, 1.0f, 1.0f));
+  tame_unit[1] = LoadModelFromMesh(GenMeshSphere(0.5f, 18, 18));
+  tame_unit[2] = LoadModelFromMesh(GenMeshCylinder(0.5f, 1.0f, 24));
+  tame_unit[3] = LoadModelFromMesh(GenMeshPlane(1.0f, 1.0f, 1, 1));
+  tame_unit_ready = 1;
+}
+
+// Modelin materyallerine ışık shader'ını bağla (BeginShaderMode modellere
+// işlemez — DrawMesh material.shader kullanır).
+static void tame_model_apply_shader(Model *m) {
+  if (!m) return;
+  for (int i = 0; i < m->materialCount; i++)
+    m->materials[i].shader = tame_light_shader;
+}
+
+static int tame_draw_lit(int shape, double x, double y, double z, double sx,
+                         double sy, double sz, int64_t color) {
+  if (!tame_lights_active()) return 0;
+  tame_unit_ensure();
+  if (!tame_unit_ready || shape < 0 || shape > 3) return 0;
+  tame_model_apply_shader(&tame_unit[shape]);
+  DrawModelEx(tame_unit[shape], (Vector3){(float)x, (float)y, (float)z},
+              (Vector3){0.0f, 1.0f, 0.0f}, 0.0f,
+              (Vector3){(float)sx, (float)sy, (float)sz}, tame_color(color));
+  return 1;
+}
+
 // --- Faz 1 primitifleri -----------------------------------------------------
 
 void tame_impl_sphere(double x, double y, double z, double r, int64_t color) {
+  // Birim küre r=0.5 → ölçek = çap.
+  if (tame_draw_lit(1, x, y, z, r * 2.0, r * 2.0, r * 2.0, color)) return;
   DrawSphere((Vector3){(float)x, (float)y, (float)z}, (float)r,
              tame_color(color));
 }
@@ -267,12 +631,16 @@ void tame_impl_sphere_wires(double x, double y, double z, double r, int seg,
 void tame_impl_cylinder(double x, double y, double z, double r, double h,
                         int64_t color) {
   // Taban (x,y,z)'de duran, dikey silindir; radiusTop==radiusBottom==r.
+  // Birim silindir r=0.5, h=1 ve tabanı y=0'da → ölçek (çap, yükseklik, çap).
+  if (tame_draw_lit(2, x, y, z, r * 2.0, h, r * 2.0, color)) return;
   DrawCylinder((Vector3){(float)x, (float)y, (float)z}, (float)r, (float)r,
                (float)h, 20, tame_color(color));
 }
 
 void tame_impl_plane(double x, double y, double z, double sx, double sz,
                      int64_t color) {
+  // Birim düzlem 1×1 (XZ) → ölçek doğrudan boyut; y ölçeği anlamsız (1).
+  if (tame_draw_lit(3, x, y, z, sx, 1.0, sz, color)) return;
   DrawPlane((Vector3){(float)x, (float)y, (float)z},
             (Vector2){(float)sx, (float)sz}, tame_color(color));
 }
@@ -489,6 +857,9 @@ int tame_impl_gen(int kind, double a, double b, double c, double d) {
 void tame_impl_draw_model(int h, double x, double y, double z, double scale,
                           int64_t tint) {
   if (!tame_model_ok(h)) return;
+  // Işık açıksa materyale shader'ı bağla (BeginShaderMode modellere işlemez).
+  // Çizim anında yapıyoruz ki ışık oyun ortasında açılıp kapanabilsin.
+  if (tame_lights_active()) tame_model_apply_shader(&tame_models[h].model);
   DrawModel(tame_models[h].model, (Vector3){(float)x, (float)y, (float)z},
             (float)scale, tame_color(tint));
 }
@@ -497,6 +868,7 @@ void tame_impl_draw_model(int h, double x, double y, double z, double scale,
 void tame_impl_draw_model_rot(int h, double x, double y, double z, double yaw,
                               double scale, int64_t tint) {
   if (!tame_model_ok(h)) return;
+  if (tame_lights_active()) tame_model_apply_shader(&tame_models[h].model);
   DrawModelEx(tame_models[h].model, (Vector3){(float)x, (float)y, (float)z},
               (Vector3){0.0f, 1.0f, 0.0f}, (float)yaw,
               (Vector3){(float)scale, (float)scale, (float)scale},
@@ -654,6 +1026,13 @@ static void tame_pump_music(void) {
 // close() sırasında canlı tüm kaynakları bırak (GL context / ses aygıtı
 // hâlâ açıkken) ve ses aygıtını kapat.
 static void tame_unload_all_resources(void) {
+  // Işık altyapısı: birim mesh'ler + shader. Modellerin materyalleri bu
+  // shader'a işaret ediyor olabilir, o yüzden ONLARDAN ÖNCE değil, önce
+  // birim mesh'leri bırak, shader'ı en sonda kaldır.
+  if (tame_unit_ready) {
+    for (int i = 0; i < 4; i++) UnloadModel(tame_unit[i]);
+    tame_unit_ready = 0;
+  }
   for (int i = 0; i < TAME_MAX_MODELS; i++) {
     if (tame_models[i].used) {
       if (tame_models[i].anims)
@@ -688,6 +1067,13 @@ static void tame_unload_all_resources(void) {
       UnloadMusicStream(tame_musics[i]);
       tame_music_used[i] = 0;
     }
+  }
+  // Işık shader'ı en sonda — yukarıdaki modellerin materyalleri buna
+  // işaret ediyordu, önce onların bırakılması gerekiyordu.
+  if (tame_light_ready) {
+    UnloadShader(tame_light_shader);
+    tame_light_ready = 0;
+    tame_lights_on = 0;
   }
   if (tame_audio_ready) {
     CloseAudioDevice();
