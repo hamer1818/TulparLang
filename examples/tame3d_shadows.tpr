@@ -1,0 +1,72 @@
+// Tulpar 3D — gölgeler (yönlü ışık için shadow mapping).
+//
+//   ./tulpar examples/tame3d_shadows.tpr
+//
+// BOŞLUK / EKRANA DOKUN: gölgeleri aç/kapat — nesnelerin zeminde "durduğu"
+// hissi gölgeyle gelir; kapatınca havada yüzüyormuş gibi görünürler.
+//
+// Gölge açıkken sahne İKİ KEZ çizilir (ışığın gözünden derinlik haritası +
+// kameradan normal geçiş). Bu yüzden çizimler space_begin/space_end arasında
+// bir listeye kaydedilip iki kez oynatılır — oyun kodu bundan etkilenmez.
+
+import "tame";
+
+bool golgeli = true;
+bool dokundu_onceki = false;
+
+func main() {
+    if (!window(880, 500, "Tulpar 3D — Golgeler")) { return; }
+    set_fps(60);
+
+    lights_on();
+    sun(0.0 - 0.55, 0.0 - 1.0, 0.0 - 0.35, rgb(255, 248, 230));
+    ambient_light(rgb(52, 56, 74));
+    if (!shadows_on()) {
+        // Donanım derinlik dokusu desteklemiyorsa burada öğreniriz; ışık
+        // yine de çalışır, sahne sadece gölgesiz olur.
+        golgeli = false;
+    }
+    shadow_area(20.0);
+
+    while (running()) {
+        float t = elapsed();
+
+        bool dokunuluyor = touch_count() > 0;
+        if (key_pressed(32) || (dokunuluyor && !dokundu_onceki)) {
+            golgeli = !golgeli;
+            if (golgeli) { shadows_on(); } else { shadows_off(); }
+        }
+        dokundu_onceki = dokunuluyor;
+
+        float cx = sin(t * 0.28) * 15.0;
+        float cz = cos(t * 0.28) * 15.0;
+        float zipla = abs(sin(t * 1.6)) * 3.2;    // zıplayan küre
+
+        frame_begin();
+        clear(rgb(16, 18, 26));
+        camera3d(cx, 9.0, cz,  0.0, 1.0, 0.0,  45.0);
+
+        space_begin();
+            plane(0.0, 0.0, 0.0,  30.0, 30.0, rgb(120, 124, 136));  // açık zemin
+            // Zıplayan küre — gölgesi zeminde küçülüp büyür, "yerde duruyor"
+            // hissini en net veren şey bu.
+            sphere(0.0, 1.2 + zipla, 0.0,  1.4, rgb(240, 190, 70));
+            // Sabit cisimler
+            cube(0.0 - 5.0, 1.5, 0.0 - 2.0,  3.0, 3.0, 3.0, rgb(210, 95, 95));
+            cube(5.5,       1.0, 2.0,        2.0, 2.0, 2.0, rgb(95, 170, 240));
+            cylinder(0.0 - 2.0, 0.0, 5.0,  1.1, 4.0, rgb(120, 210, 140));
+            cylinder(4.0,       0.0, 0.0 - 5.5, 1.1, 2.6, rgb(190, 130, 220));
+        space_end();
+
+        text("Tulpar 3D — Golgeler", 14, 12, 22, RAYWHITE);
+        if (golgeli) {
+            text("Golge: ACIK  — BOSLUK / EKRANA DOKUN ile kapat", 14, 40, 16, rgb(150, 230, 150));
+        } else {
+            text("Golge: KAPALI — BOSLUK / EKRANA DOKUN ile ac", 14, 40, 16, rgb(230, 150, 150));
+        }
+        frame_end();
+    }
+    close_window();
+}
+
+main();

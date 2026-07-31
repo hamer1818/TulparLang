@@ -13,6 +13,8 @@
 // and named color globals that produce this packing.
 
 #include "raylib.h"
+#include "raymath.h"   // MatrixOrtho/LookAt/Multiply — gölge ışık-uzayı matrisi
+#include "rlgl.h"      // rlLoadFramebuffer/rlLoadTextureDepth — shadow map FBO
 
 #include <stdint.h>
 #include <stdio.h>
@@ -232,6 +234,19 @@ static int tame_lights_on = 0;     // ışıklandırma aktif mi
 static int tame_lights_active(void);
 static int tame_draw_lit(int shape, double x, double y, double z, double sx,
                          double sy, double sz, int64_t color);
+// Gölge açıkken sahne iki geçişte çizilir; bu ikisi o akışı sarar (tanımları
+// Faz 4b bloğunda). tame_scene_begin 1 dönerse çizimler KAYDEDİLİYOR demektir
+// ve tame_scene_end iki geçişi kendisi yapar.
+static int tame_scene_begin(void);
+static void tame_scene_end(void);
+// Kayıt modunda mı? (kutu-tel/ızgara/çizgi/model çizimleri buna bakar)
+static int tame_recording(void);
+static void tame_dl_push(int kind, int handle, double x, double y, double z,
+                         double sx, double sy, double sz, double yaw,
+                         int64_t color);
+// Model kayıt defteri aşağıda (doku registry'sinden sonra) — gölge geçişi
+// modelleri çizmek için erişmek zorunda, bu yüzden erişimci ileri bildirimli.
+static Model *tame_model_ptr(int h);
 
 // Kamerayı konumla: göz (px,py,pz), bakış hedefi (tx,ty,tz), dikey FOV derece.
 void tame_impl_cam3(double px, double py, double pz, double tx, double ty,
@@ -244,6 +259,9 @@ void tame_impl_cam3(double px, double py, double pz, double tx, double ty,
 
 void tame_impl_begin3(void) {
   tame_cam3d_ensure();
+  // Gölge açıksa çizimler kaydedilir ve space_end iki geçişte oynatır —
+  // burada kamerayı/shader'ı bağlamayız.
+  if (tame_scene_begin()) return;
   BeginMode3D(tame_cam3d);
   if (tame_lights_active()) {
     // Specular hesabı kameranın dünya konumunu ister; kamera her kare
@@ -261,6 +279,7 @@ void tame_impl_begin3(void) {
 }
 
 void tame_impl_end3(void) {
+  if (tame_recording()) { tame_scene_end(); return; }
   if (tame_lights_active()) EndShaderMode();
   EndMode3D();
 }
@@ -274,11 +293,13 @@ void tame_impl_cube(double x, double y, double z, double w, double h, double d,
 
 void tame_impl_cube_wires(double x, double y, double z, double w, double h,
                           double d, int64_t color) {
+  if (tame_recording()) { tame_dl_push(5, -1, x, y, z, w, h, d, 0.0, color); return; }
   DrawCubeWires((Vector3){(float)x, (float)y, (float)z}, (float)w, (float)h,
                 (float)d, tame_color(color));
 }
 
 void tame_impl_grid(int slices, double spacing) {
+  if (tame_recording()) { tame_dl_push(6, -1, 0, 0, 0, slices, spacing, 0, 0.0, 0); return; }
   DrawGrid(slices, (float)spacing);
 }
 
@@ -363,6 +384,26 @@ static const char *tame_light_fs =
     "uniform int  lightsType[4];                 \n"
     "uniform vec3 lightsPosition[4];             \n"
     "uniform vec4 lightsColor[4];                \n"
+    "uniform sampler2D shadowMap;                \n"
+    "uniform mat4 lightVP;                       \n"
+    "uniform int  shadowOn;                      \n"
+    "uniform float shadowTexel;                  \n"
+    "float shadowFactor(vec3 n, vec3 l) {        \n"
+    "    if (shadowOn == 0) return 1.0;          \n"
+    "    vec4 lp = lightVP*vec4(fragPosition, 1.0); \n"
+    "    vec3 proj = lp.xyz/lp.w*0.5 + 0.5;      \n"
+    "    if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0) return 1.0; \n"
+    "    float bias = max(0.0025*(1.0 - dot(n, l)), 0.0006); \n"
+    "    float lit = 0.0;                        \n"
+    "    for (int u = -1; u <= 1; u++) {         \n"
+    "        for (int v = -1; v <= 1; v++) {     \n"
+    "            vec2 o = vec2(float(u), float(v))*shadowTexel; \n"
+    "            float d = texture2D(shadowMap, proj.xy + o).r; \n"
+    "            if (proj.z - bias <= d) lit += 1.0; \n"
+    "        }                                   \n"
+    "    }                                       \n"
+    "    return 0.25 + 0.75*(lit/9.0);           \n"
+    "}                                           \n"
     "void main() {                               \n"
     "    vec4 texelColor = texture2D(texture0, fragTexCoord); \n"
     "    vec3 lightDot = vec3(0.0);              \n"
@@ -382,10 +423,12 @@ static const char *tame_light_fs =
     "                att = 1.0/(1.0 + 0.14*dist + 0.07*dist*dist); \n"
     "            }                               \n"
     "            float NdotL = max(dot(normal, light), 0.0); \n"
-    "            lightDot += lightsColor[i].rgb*NdotL*att; \n"
+    "            float sh = 1.0;                 \n"
+    "            if (lightsType[i] == 0) sh = shadowFactor(normal, light); \n"
+    "            lightDot += lightsColor[i].rgb*NdotL*att*sh; \n"
     "            float specCo = 0.0;             \n"
     "            if (NdotL > 0.0) specCo = pow(max(0.0, dot(viewD, reflect(-(light), normal))), 16.0); \n"
-    "            specular += specCo*att;         \n"
+    "            specular += specCo*att*sh;      \n"
     "        }                                   \n"
     "    }                                       \n"
     "    vec4 finalColor = (texelColor*((colDiffuse + vec4(specular, 1.0))*vec4(lightDot, 1.0))); \n"
@@ -429,6 +472,26 @@ static const char *tame_light_fs =
     "uniform int  lightsType[4];                 \n"
     "uniform vec3 lightsPosition[4];             \n"
     "uniform vec4 lightsColor[4];                \n"
+    "uniform sampler2D shadowMap;                \n"
+    "uniform mat4 lightVP;                       \n"
+    "uniform int  shadowOn;                      \n"
+    "uniform float shadowTexel;                  \n"
+    "float shadowFactor(vec3 n, vec3 l) {        \n"
+    "    if (shadowOn == 0) return 1.0;          \n"
+    "    vec4 lp = lightVP*vec4(fragPosition, 1.0); \n"
+    "    vec3 proj = lp.xyz/lp.w*0.5 + 0.5;      \n"
+    "    if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0) return 1.0; \n"
+    "    float bias = max(0.0025*(1.0 - dot(n, l)), 0.0006); \n"
+    "    float lit = 0.0;                        \n"
+    "    for (int u = -1; u <= 1; u++) {         \n"
+    "        for (int v = -1; v <= 1; v++) {     \n"
+    "            vec2 o = vec2(float(u), float(v))*shadowTexel; \n"
+    "            float d = texture(shadowMap, proj.xy + o).r; \n"
+    "            if (proj.z - bias <= d) lit += 1.0; \n"
+    "        }                                   \n"
+    "    }                                       \n"
+    "    return 0.25 + 0.75*(lit/9.0);           \n"
+    "}                                           \n"
     "void main() {                               \n"
     "    vec4 texelColor = texture(texture0, fragTexCoord); \n"
     "    vec3 lightDot = vec3(0.0);              \n"
@@ -448,10 +511,12 @@ static const char *tame_light_fs =
     "                att = 1.0/(1.0 + 0.14*dist + 0.07*dist*dist); \n"
     "            }                               \n"
     "            float NdotL = max(dot(normal, light), 0.0); \n"
-    "            lightDot += lightsColor[i].rgb*NdotL*att; \n"
+    "            float sh = 1.0;                 \n"
+    "            if (lightsType[i] == 0) sh = shadowFactor(normal, light); \n"
+    "            lightDot += lightsColor[i].rgb*NdotL*att*sh; \n"
     "            float specCo = 0.0;             \n"
     "            if (NdotL > 0.0) specCo = pow(max(0.0, dot(viewD, reflect(-(light), normal))), 16.0); \n"
-    "            specular += specCo*att;         \n"
+    "            specular += specCo*att*sh;      \n"
     "        }                                   \n"
     "    }                                       \n"
     "    finalColor = (texelColor*((colDiffuse + vec4(specular, 1.0))*vec4(lightDot, 1.0))); \n"
@@ -592,16 +657,303 @@ static void tame_unit_ensure(void) {
   tame_unit_ready = 1;
 }
 
-// Modelin materyallerine ışık shader'ını bağla (BeginShaderMode modellere
-// işlemez — DrawMesh material.shader kullanır).
-static void tame_model_apply_shader(Model *m) {
+// Modelin materyallerine bir shader bağla (BeginShaderMode modellere işlemez —
+// DrawMesh material.shader kullanır). Gölge geçişinde derinlik shader'ı, ana
+// geçişte ışık shader'ı bağlanır.
+static void tame_model_set_shader(Model *m, Shader s) {
   if (!m) return;
-  for (int i = 0; i < m->materialCount; i++)
-    m->materials[i].shader = tame_light_shader;
+  for (int i = 0; i < m->materialCount; i++) m->materials[i].shader = s;
+}
+
+static void tame_model_apply_shader(Model *m) {
+  tame_model_set_shader(m, tame_light_shader);
+}
+
+// ---------------------------------------------------------------------------
+// Faz 4b — gölgeler (yönlü ışık için shadow mapping).
+//
+// Gölge, sahneyi İKİ KEZ çizmeyi gerektirir: (1) ışığın gözünden derinlik
+// haritası, (2) normal geçiş + o haritayla "bu piksel gölgede mi" testi. Ama
+// tame'in API'sinde çizimler space_begin/space_end ARASINDA anında yapılıyor —
+// ikinci kez çizecek bir şey kalmıyor.
+//
+// Çözüm: GÖLGE AÇIKKEN çizimler anında yapılmaz, bir listeye kaydedilir ve
+// space_end iki geçiş halinde oynatır. GÖLGE KAPALIYKEN tek satırı bile
+// değişmez — eski anında-çizim yolu aynen kalır (sıfır maliyet, sıfır risk).
+//
+// Yalnız YÖNLÜ ışık (güneş, slot 0) gölge üretir: nokta ışık gölgesi cube-map
+// ister, mobilde maliyeti oyun başına anlamsız. Zaten "nesne yerde duruyor"
+// hissini veren de güneş gölgesidir.
+// ---------------------------------------------------------------------------
+
+#define TAME_MAX_DRAWCMD 2048
+
+typedef struct {
+  int kind;      // 0-3 primitif (birim mesh), 4 model, 5 kutu-tel, 6 ızgara, 7 çizgi
+  int handle;    // kind 4 için model handle
+  float x, y, z;
+  float sx, sy, sz;
+  float yaw;
+  int64_t color;
+} TameDrawCmd;
+
+static TameDrawCmd tame_dl[TAME_MAX_DRAWCMD];
+static int tame_dl_n = 0;
+static int tame_dl_recording = 0;
+
+static unsigned int tame_shadow_fbo = 0;
+static unsigned int tame_shadow_tex = 0;
+static int tame_shadow_res = 1024;
+static int tame_shadows_on = 0;
+static int tame_shadow_ready = 0;
+static float tame_shadow_area = 22.0f;  // ışık ortografik yarı-genişliği
+static Shader tame_depth_shader = {0};
+static int tame_depth_ready = 0;
+static Matrix tame_light_vp;
+static int tame_loc_lightVP = -1, tame_loc_shadowMap = -1;
+static int tame_loc_shadowOn = -1, tame_loc_shadowTexel = -1;
+
+// Derinlik-only shader: sadece pozisyonu dönüştürür, renk yazmaz. GLES2 bir
+// fragment shader zorunlu kıldığı için boş bir tane veriyoruz.
+#if defined(GRAPHICS_API_OPENGL_ES2) || defined(PLATFORM_WEB) ||               \
+    defined(PLATFORM_ANDROID) || defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+static const char *tame_depth_vs =
+    "#version 100                                \n"
+    "attribute vec3 vertexPosition;              \n"
+    "uniform mat4 mvp;                           \n"
+    "void main() { gl_Position = mvp*vec4(vertexPosition, 1.0); } \n";
+static const char *tame_depth_fs =
+    "#version 100                                \n"
+    "precision mediump float;                    \n"
+    "void main() { gl_FragColor = vec4(1.0); }   \n";
+#else
+static const char *tame_depth_vs =
+    "#version 330                                \n"
+    "in vec3 vertexPosition;                     \n"
+    "uniform mat4 mvp;                           \n"
+    "void main() { gl_Position = mvp*vec4(vertexPosition, 1.0); } \n";
+static const char *tame_depth_fs =
+    "#version 330                                \n"
+    "out vec4 c;                                 \n"
+    "void main() { c = vec4(1.0); }              \n";
+#endif
+
+// Shadow map FBO'sunu kur. rlLoadTextureDepth, derinlik DOKUSU desteklenmiyorsa
+// sessizce renderbuffer'a düşer — o örneklenebilir değildir, yani gölge sessizce
+// çalışmazdı. Bu yüzden framebuffer bütünlüğünü DOĞRULUYOR ve başarısızsa
+// gölgeyi kapatıp açık bir mesaj basıyoruz (ışıklandırma çalışmaya devam eder).
+static int tame_shadow_ensure(void) {
+  if (tame_shadow_ready) return 1;
+  if (!tame_window_ready) return 0;
+  if (!tame_light_ensure()) return 0;
+
+  if (!tame_depth_ready) {
+    tame_depth_shader = LoadShaderFromMemory(tame_depth_vs, tame_depth_fs);
+    if (tame_depth_shader.id == 0) {
+      fprintf(stderr, "[tame] Golge derinlik shader'i derlenemedi. / Shadow "
+                      "depth shader failed to compile.\n");
+      return 0;
+    }
+    tame_depth_ready = 1;
+  }
+
+  tame_shadow_fbo = rlLoadFramebuffer();
+  if (tame_shadow_fbo == 0) return 0;
+  rlEnableFramebuffer(tame_shadow_fbo);
+  tame_shadow_tex = rlLoadTextureDepth(tame_shadow_res, tame_shadow_res, false);
+  rlFramebufferAttach(tame_shadow_fbo, tame_shadow_tex, RL_ATTACHMENT_DEPTH,
+                      RL_ATTACHMENT_TEXTURE2D, 0);
+  int ok = rlFramebufferComplete(tame_shadow_fbo);
+  rlDisableFramebuffer();
+  if (!ok) {
+    fprintf(stderr,
+            "[tame] Golge haritasi olusturulamadi (derinlik dokusu "
+            "desteklenmiyor olabilir); golgeler kapatildi, isik calisiyor. / "
+            "Shadow map unavailable (no sampleable depth texture); shadows "
+            "disabled, lighting still on.\n");
+    rlUnloadFramebuffer(tame_shadow_fbo);
+    tame_shadow_fbo = 0;
+    return 0;
+  }
+
+  tame_loc_lightVP = GetShaderLocation(tame_light_shader, "lightVP");
+  tame_loc_shadowMap = GetShaderLocation(tame_light_shader, "shadowMap");
+  tame_loc_shadowOn = GetShaderLocation(tame_light_shader, "shadowOn");
+  tame_loc_shadowTexel = GetShaderLocation(tame_light_shader, "shadowTexel");
+  tame_shadow_ready = 1;
+  return 1;
+}
+
+int tame_impl_shadows(int enable) {
+  if (!enable) {
+    tame_shadows_on = 0;
+    if (tame_light_ready) {
+      int off = 0;
+      SetShaderValue(tame_light_shader, tame_loc_shadowOn, &off,
+                     SHADER_UNIFORM_INT);
+    }
+    return 1;
+  }
+  if (!tame_shadow_ensure()) return 0;
+  tame_shadows_on = 1;
+  return 1;
+}
+
+// Gölgenin kapsadığı alanın yarı-genişliği (dünya birimi). Küçük = keskin ama
+// dar; büyük = geniş ama kaba. Kamera hedefinin çevresini kapsar.
+void tame_impl_shadow_area(double area) {
+  if (area > 0.5) tame_shadow_area = (float)area;
+}
+
+static void tame_dl_push(int kind, int handle, double x, double y, double z,
+                         double sx, double sy, double sz, double yaw,
+                         int64_t color) {
+  if (tame_dl_n >= TAME_MAX_DRAWCMD) return;   // taşarsa sessizce kırp
+  TameDrawCmd *c = &tame_dl[tame_dl_n++];
+  c->kind = kind;
+  c->handle = handle;
+  c->x = (float)x; c->y = (float)y; c->z = (float)z;
+  c->sx = (float)sx; c->sy = (float)sy; c->sz = (float)sz;
+  c->yaw = (float)yaw;
+  c->color = color;
+}
+
+// Kaydedilmiş listeyi çiz. `depth_pass` ise yalnız gölge DÜŞÜREN cisimler
+// (primitifler + modeller) çizilir; ızgara/çizgi/tel-çerçeve atlanır.
+static void tame_dl_replay(int depth_pass) {
+  Shader use = depth_pass ? tame_depth_shader : tame_light_shader;
+  for (int i = 0; i < tame_dl_n; i++) {
+    TameDrawCmd *c = &tame_dl[i];
+    if (c->kind >= 0 && c->kind <= 3) {
+      tame_unit_ensure();
+      if (!tame_unit_ready) continue;
+      tame_model_set_shader(&tame_unit[c->kind], use);
+      DrawModelEx(tame_unit[c->kind], (Vector3){c->x, c->y, c->z},
+                  (Vector3){0.0f, 1.0f, 0.0f}, 0.0f,
+                  (Vector3){c->sx, c->sy, c->sz}, tame_color(c->color));
+    } else if (c->kind == 4) {
+      Model *m = tame_model_ptr(c->handle);
+      if (!m) continue;
+      tame_model_set_shader(m, use);
+      DrawModelEx(*m, (Vector3){c->x, c->y, c->z},
+                  (Vector3){0.0f, 1.0f, 0.0f}, c->yaw,
+                  (Vector3){c->sx, c->sy, c->sz}, tame_color(c->color));
+    } else if (!depth_pass) {
+      if (c->kind == 5) {
+        DrawCubeWires((Vector3){c->x, c->y, c->z}, c->sx, c->sy, c->sz,
+                      tame_color(c->color));
+      } else if (c->kind == 6) {
+        DrawGrid((int)c->sx, c->sy);
+      } else if (c->kind == 7) {
+        DrawLine3D((Vector3){c->x, c->y, c->z}, (Vector3){c->sx, c->sy, c->sz},
+                   tame_color(c->color));
+      }
+    }
+  }
+}
+
+// Güneşin (slot 0, yönlü) gözünden ortografik view-projection matrisi. Kamera
+// hedefinin çevresini kapsar → gölge her zaman oyuncunun olduğu yerde nettir.
+static Matrix tame_light_matrix(void) {
+  Vector3 dir = {-0.6f, -1.0f, -0.4f};
+  for (int i = 0; i < TAME_MAX_LIGHTS; i++) {
+    if (tame_lights[i].enabled && tame_lights[i].type == 0) {
+      dir = tame_lights[i].position;
+      break;
+    }
+  }
+  float len = sqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+  if (len < 0.0001f) { dir = (Vector3){-0.6f, -1.0f, -0.4f}; len = 1.0f; }
+  dir.x /= len; dir.y /= len; dir.z /= len;
+
+  Vector3 center = tame_cam3d.target;
+  float back = tame_shadow_area * 2.0f;
+  Vector3 eye = {center.x - dir.x * back, center.y - dir.y * back,
+                 center.z - dir.z * back};
+  Matrix view = MatrixLookAt(eye, center, (Vector3){0.0f, 1.0f, 0.0f});
+  float a = tame_shadow_area;
+  Matrix proj = MatrixOrtho(-a, a, -a, a, 0.05, back * 2.5f);
+  return MatrixMultiply(view, proj);
+}
+
+static int tame_recording(void) { return tame_dl_recording; }
+
+// Gölge açık ve hazırsa kayıt modunu başlat (1 döner). Aksi halde 0 → çağıran
+// eski anında-çizim yolunu kullanır.
+static int tame_scene_begin(void) {
+  if (!tame_shadows_on || !tame_shadow_ready || !tame_lights_active()) return 0;
+  tame_dl_n = 0;
+  tame_dl_recording = 1;
+  return 1;
+}
+
+// İki geçiş: (1) ışığın gözünden derinlik haritası, (2) kameradan normal
+// geçiş + gölge testi.
+static void tame_scene_end(void) {
+  tame_dl_recording = 0;
+
+  // --- 1. geçiş: shadow map -------------------------------------------------
+  // Derinlik geçişi rlgl'in projeksiyon/modelview matrislerini ezer. BeginMode3D
+  // projeksiyonu push'layıp EndMode3D pop'ladığı için, geri konmazsa pop bizim
+  // ezdiğimiz matrisi geri yükler ve space_end'DEN SONRA çizilen 2D HUD yanlış
+  // projeksiyonla (ekran dışına) çizilir — ilk denemede yazılar kaybolmuştu.
+  Matrix saved_proj = rlGetMatrixProjection();
+  Matrix saved_mv = rlGetMatrixModelview();
+
+  tame_light_vp = tame_light_matrix();
+  rlEnableFramebuffer(tame_shadow_fbo);
+  rlViewport(0, 0, tame_shadow_res, tame_shadow_res);
+  rlClearScreenBuffers();
+  rlEnableDepthTest();
+  rlSetMatrixProjection(MatrixIdentity());
+  rlSetMatrixModelview(tame_light_vp);
+  // Ön yüzleri ayıklamak "shadow acne"yi (yüzeyin kendini gölgelemesi)
+  // belirgin şekilde azaltır; bias ile birlikte kullanılıyor.
+  rlSetCullFace(RL_CULL_FACE_FRONT);
+  tame_dl_replay(1);
+  rlSetCullFace(RL_CULL_FACE_BACK);
+  rlDrawRenderBatchActive();
+  rlDisableFramebuffer();
+
+  // Ekran viewport'unu ve ezdiğimiz matrisleri geri ver.
+  rlViewport(0, 0, GetScreenWidth(), GetScreenHeight());
+  rlSetMatrixProjection(saved_proj);
+  rlSetMatrixModelview(saved_mv);
+
+  // --- 2. geçiş: kamera + gölgeli aydınlatma --------------------------------
+  int on = 1;
+  float texel = 1.0f / (float)tame_shadow_res;
+  SetShaderValue(tame_light_shader, tame_loc_shadowOn, &on, SHADER_UNIFORM_INT);
+  SetShaderValue(tame_light_shader, tame_loc_shadowTexel, &texel,
+                 SHADER_UNIFORM_FLOAT);
+  SetShaderValueMatrix(tame_light_shader, tame_loc_lightVP, tame_light_vp);
+  // Gölge haritasını serbest bir doku birimine bağla (0/1 raylib'in kendi
+  // texture0/specular'ı için ayrılmış).
+  rlEnableShader(tame_light_shader.id);
+  rlActiveTextureSlot(10);
+  rlEnableTexture(tame_shadow_tex);
+  int slot = 10;
+  rlSetUniform(tame_loc_shadowMap, &slot, SHADER_UNIFORM_INT, 1);
+
+  BeginMode3D(tame_cam3d);
+  float view[3] = {tame_cam3d.position.x, tame_cam3d.position.y,
+                   tame_cam3d.position.z};
+  SetShaderValue(tame_light_shader,
+                 tame_light_shader.locs[SHADER_LOC_VECTOR_VIEW], view,
+                 SHADER_UNIFORM_VEC3);
+  BeginShaderMode(tame_light_shader);
+  tame_dl_replay(0);
+  EndShaderMode();
+  EndMode3D();
 }
 
 static int tame_draw_lit(int shape, double x, double y, double z, double sx,
                          double sy, double sz, int64_t color) {
+  // Gölge kaydı önceliklidir: liste modundaysak hiçbir şey çizmeyip kaydet.
+  if (tame_dl_recording) {
+    tame_dl_push(shape, -1, x, y, z, sx, sy, sz, 0.0, color);
+    return 1;
+  }
   if (!tame_lights_active()) return 0;
   tame_unit_ensure();
   if (!tame_unit_ready || shape < 0 || shape > 3) return 0;
@@ -647,6 +999,7 @@ void tame_impl_plane(double x, double y, double z, double sx, double sz,
 
 void tame_impl_line3(double x1, double y1, double z1, double x2, double y2,
                      double z2, int64_t color) {
+  if (tame_recording()) { tame_dl_push(7, -1, x1, y1, z1, x2, y2, z2, 0.0, color); return; }
   DrawLine3D((Vector3){(float)x1, (float)y1, (float)z1},
              (Vector3){(float)x2, (float)y2, (float)z2}, tame_color(color));
 }
@@ -802,6 +1155,12 @@ static int tame_model_ok(int h) {
   return h >= 0 && h < TAME_MAX_MODELS && tame_models[h].used;
 }
 
+// Gölge geçişinin kullandığı erişimci (bkz. yukarıdaki ileri bildirim):
+// geçersiz handle'da NULL.
+static Model *tame_model_ptr(int h) {
+  return tame_model_ok(h) ? &tame_models[h].model : NULL;
+}
+
 // Dosyadan model yükle + (varsa) gömülü animasyonları da yükle. -1 = başarısız.
 int tame_impl_load_model(const char *path) {
   if (!tame_window_ready) {
@@ -857,6 +1216,7 @@ int tame_impl_gen(int kind, double a, double b, double c, double d) {
 void tame_impl_draw_model(int h, double x, double y, double z, double scale,
                           int64_t tint) {
   if (!tame_model_ok(h)) return;
+  if (tame_recording()) { tame_dl_push(4, h, x, y, z, scale, scale, scale, 0.0, tint); return; }
   // Işık açıksa materyale shader'ı bağla (BeginShaderMode modellere işlemez).
   // Çizim anında yapıyoruz ki ışık oyun ortasında açılıp kapanabilsin.
   if (tame_lights_active()) tame_model_apply_shader(&tame_models[h].model);
@@ -868,6 +1228,7 @@ void tame_impl_draw_model(int h, double x, double y, double z, double scale,
 void tame_impl_draw_model_rot(int h, double x, double y, double z, double yaw,
                               double scale, int64_t tint) {
   if (!tame_model_ok(h)) return;
+  if (tame_recording()) { tame_dl_push(4, h, x, y, z, scale, scale, scale, yaw, tint); return; }
   if (tame_lights_active()) tame_model_apply_shader(&tame_models[h].model);
   DrawModelEx(tame_models[h].model, (Vector3){(float)x, (float)y, (float)z},
               (Vector3){0.0f, 1.0f, 0.0f}, (float)yaw,
@@ -1068,6 +1429,12 @@ static void tame_unload_all_resources(void) {
       tame_music_used[i] = 0;
     }
   }
+  if (tame_shadow_ready) {
+    rlUnloadFramebuffer(tame_shadow_fbo);   // bağlı derinlik dokusunu da bırakır
+    tame_shadow_fbo = 0; tame_shadow_tex = 0;
+    tame_shadow_ready = 0; tame_shadows_on = 0;
+  }
+  if (tame_depth_ready) { UnloadShader(tame_depth_shader); tame_depth_ready = 0; }
   // Işık shader'ı en sonda — yukarıdaki modellerin materyalleri buna
   // işaret ediyordu, önce onların bırakılması gerekiyordu.
   if (tame_light_ready) {
