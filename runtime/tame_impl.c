@@ -357,7 +357,7 @@ static const char *tame_light_vs =
     "uniform mat4 mvp;                           \n"
     "uniform mat4 matModel;                      \n"
     "uniform mat4 matNormal;                     \n"
-    "varying vec3 fragPosition;                  \n"
+    "varying highp vec3 fragPosition;            \n"
     "varying vec2 fragTexCoord;                  \n"
     "varying vec4 fragColor;                     \n"
     "varying vec3 fragNormal;                    \n"
@@ -371,8 +371,16 @@ static const char *tame_light_vs =
 
 static const char *tame_light_fs =
     "#version 100                                \n"
+    // Gölge haritası derinlik karşılaştırması mediump'ta (yaklaşık 10 bit
+    // mantis) tamamen bozulur: cismin üstünde bir şeyler tutturur ama geniş
+    // zemin düzleminde gölge hiç oluşmaz. Fragment shader'da highp GLES2'de
+    // opsiyoneldir, bu yüzden GL_FRAGMENT_PRECISION_HIGH ile koşullu.
+    "#ifdef GL_FRAGMENT_PRECISION_HIGH           \n"
+    "precision highp float;                      \n"
+    "#else                                       \n"
     "precision mediump float;                    \n"
-    "varying vec3 fragPosition;                  \n"
+    "#endif                                      \n"
+    "varying highp vec3 fragPosition;            \n"
     "varying vec2 fragTexCoord;                  \n"
     "varying vec4 fragColor;                     \n"
     "varying vec3 fragNormal;                    \n"
@@ -398,7 +406,8 @@ static const char *tame_light_fs =
     "    for (int u = -1; u <= 1; u++) {         \n"
     "        for (int v = -1; v <= 1; v++) {     \n"
     "            vec2 o = vec2(float(u), float(v))*shadowTexel; \n"
-    "            float d = texture2D(shadowMap, proj.xy + o).r; \n"
+    "            highp vec4 pk = texture2D(shadowMap, proj.xy + o); \n"
+    "            highp float d = dot(pk, vec4(1.0, 1.0/255.0, 1.0/65025.0, 1.0/16581375.0)); \n"
     "            if (proj.z - bias <= d) lit += 1.0; \n"
     "        }                                   \n"
     "    }                                       \n"
@@ -486,7 +495,8 @@ static const char *tame_light_fs =
     "    for (int u = -1; u <= 1; u++) {         \n"
     "        for (int v = -1; v <= 1; v++) {     \n"
     "            vec2 o = vec2(float(u), float(v))*shadowTexel; \n"
-    "            float d = texture(shadowMap, proj.xy + o).r; \n"
+    "            vec4 pk = texture(shadowMap, proj.xy + o); \n"
+    "            float d = dot(pk, vec4(1.0, 1.0/255.0, 1.0/65025.0, 1.0/16581375.0)); \n"
     "            if (proj.z - bias <= d) lit += 1.0; \n"
     "        }                                   \n"
     "    }                                       \n"
@@ -702,7 +712,8 @@ static int tame_dl_n = 0;
 static int tame_dl_recording = 0;
 
 static unsigned int tame_shadow_fbo = 0;
-static unsigned int tame_shadow_tex = 0;
+static unsigned int tame_shadow_tex = 0;    // derinlik renderbuffer'ı (z-testi; örneklenmez)
+static unsigned int tame_shadow_color = 0;  // ASIL gölge haritası: derinlik RGBA8'e paketli
 static int tame_shadow_res = 1024;
 static int tame_shadows_on = 0;
 static int tame_shadow_ready = 0;
@@ -724,8 +735,12 @@ static const char *tame_depth_vs =
     "void main() { gl_Position = mvp*vec4(vertexPosition, 1.0); } \n";
 static const char *tame_depth_fs =
     "#version 100                                \n"
-    "precision mediump float;                    \n"
-    "void main() { gl_FragColor = vec4(1.0); }   \n";
+    "precision highp float;                      \n"
+    "void main() {                               \n"
+    "    highp float d = gl_FragCoord.z;         \n"
+    "    highp vec4 c = vec4(d, fract(d*255.0), fract(d*65025.0), fract(d*16581375.0)); \n"
+    "    gl_FragColor = c - c.gbaa*vec4(1.0/255.0, 1.0/255.0, 1.0/255.0, 0.0); \n"
+    "}                                           \n";
 #else
 static const char *tame_depth_vs =
     "#version 330                                \n"
@@ -734,8 +749,12 @@ static const char *tame_depth_vs =
     "void main() { gl_Position = mvp*vec4(vertexPosition, 1.0); } \n";
 static const char *tame_depth_fs =
     "#version 330                                \n"
-    "out vec4 c;                                 \n"
-    "void main() { c = vec4(1.0); }              \n";
+    "out vec4 fc;                                \n"
+    "void main() {                               \n"
+    "    float d = gl_FragCoord.z;               \n"
+    "    vec4 c = vec4(d, fract(d*255.0), fract(d*65025.0), fract(d*16581375.0)); \n"
+    "    fc = c - c.gbaa*vec4(1.0/255.0, 1.0/255.0, 1.0/255.0, 0.0); \n"
+    "}                                           \n";
 #endif
 
 // Shadow map FBO'sunu kur. rlLoadTextureDepth, derinlik DOKUSU desteklenmiyorsa
@@ -760,22 +779,43 @@ static int tame_shadow_ensure(void) {
   tame_shadow_fbo = rlLoadFramebuffer();
   if (tame_shadow_fbo == 0) return 0;
   rlEnableFramebuffer(tame_shadow_fbo);
-  tame_shadow_tex = rlLoadTextureDepth(tame_shadow_res, tame_shadow_res, false);
+  // Gölge haritası bir RENK dokusudur, derinlik dokusu DEĞİL: derinliği
+  // shader'da RGBA8'e paketliyoruz. Sebep — GLES2'de derinlik dokusu yolu
+  // kırılgan: Android emülatörü OES_depth_texture'ı DESTEKLEDİĞİ HALDE
+  // framebuffer "incomplete attachment" veriyordu (raylib boyutlu iç format
+  // kullanıyor, katı GLES2'de internalformat == format olmalı). Renk-dokusu
+  // yöntemi masaüstü/web/Android'de aynı şekilde çalışır ve "donanım
+  // desteklemiyor olabilir" uyarısına gerek bırakmaz.
+  tame_shadow_color = rlLoadTexture(NULL, tame_shadow_res, tame_shadow_res,
+                                    RL_PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1);
+  if (tame_shadow_color == 0) { rlUnloadFramebuffer(tame_shadow_fbo); tame_shadow_fbo = 0; return 0; }
+  // NEAREST ŞART: paketlenmiş derinlik interpolasyona gelmez — bilinear
+  // örnekleme iki komşu paketin ortalamasını alıp anlamsız bir derinlik üretir
+  // (gölge tamamen kaybolur). CLAMP da şart, kenarda tekrarlamasın.
+  rlTextureParameters(tame_shadow_color, RL_TEXTURE_MIN_FILTER,
+                      RL_TEXTURE_FILTER_NEAREST);
+  rlTextureParameters(tame_shadow_color, RL_TEXTURE_MAG_FILTER,
+                      RL_TEXTURE_FILTER_NEAREST);
+  rlTextureParameters(tame_shadow_color, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_CLAMP);
+  rlTextureParameters(tame_shadow_color, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_CLAMP);
+  rlFramebufferAttach(tame_shadow_fbo, tame_shadow_color,
+                      RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_TEXTURE2D, 0);
+  // Z-testi için derinlik RENDERBUFFER'ı (örneklenmeyecek, sadece derinlik
+  // sıralaması yapacak) — her GLES2 uygulamasında güvenli.
+  tame_shadow_tex = rlLoadTextureDepth(tame_shadow_res, tame_shadow_res, true);
   rlFramebufferAttach(tame_shadow_fbo, tame_shadow_tex, RL_ATTACHMENT_DEPTH,
-                      RL_ATTACHMENT_TEXTURE2D, 0);
+                      RL_ATTACHMENT_RENDERBUFFER, 0);
   int ok = rlFramebufferComplete(tame_shadow_fbo);
   rlDisableFramebuffer();
   if (!ok) {
     fprintf(stderr,
-            "[tame] Golge haritasi olusturulamadi (derinlik dokusu "
-            "desteklenmiyor olabilir); golgeler kapatildi, isik calisiyor. / "
-            "Shadow map unavailable (no sampleable depth texture); shadows "
-            "disabled, lighting still on.\n");
+            "[tame] Golge haritasi framebuffer'i olusturulamadi; golgeler "
+            "kapatildi, isik calisiyor. / Shadow map framebuffer incomplete; "
+            "shadows disabled, lighting still on.\n");
     rlUnloadFramebuffer(tame_shadow_fbo);
-    tame_shadow_fbo = 0;
+    tame_shadow_fbo = 0; tame_shadow_tex = 0; tame_shadow_color = 0;
     return 0;
   }
-
   tame_loc_lightVP = GetShaderLocation(tame_light_shader, "lightVP");
   tame_loc_shadowMap = GetShaderLocation(tame_light_shader, "shadowMap");
   tame_loc_shadowOn = GetShaderLocation(tame_light_shader, "shadowOn");
@@ -797,6 +837,13 @@ int tame_impl_shadows(int enable) {
   if (!tame_shadow_ensure()) return 0;
   tame_shadows_on = 1;
   return 1;
+}
+
+// Gölge GERÇEKTEN aktif mi? (istendi + FBO kurulabildi). Oyun kodu buna
+// bakarak kullanıcıya dürüst bilgi gösterebilir — tm3_shadows(1) çağırmış
+// olmak gölgenin çalıştığı anlamına gelmez.
+int tame_impl_shadows_active(void) {
+  return tame_shadows_on && tame_shadow_ready;
 }
 
 // Gölgenin kapsadığı alanın yarı-genişliği (dünya birimi). Küçük = keskin ama
@@ -903,8 +950,16 @@ static void tame_scene_end(void) {
   tame_light_vp = tame_light_matrix();
   rlEnableFramebuffer(tame_shadow_fbo);
   rlViewport(0, 0, tame_shadow_res, tame_shadow_res);
+  // Casteri olmayan bölgeler "en uzak" (derinlik 1.0 = beyaz paket) kalmalı,
+  // yoksa boş alanlar gölgeli sayılır.
+  rlClearColor(255, 255, 255, 255);
   rlClearScreenBuffers();
   rlEnableDepthTest();
+  // HARMANLAMA KAPALI OLMALI: raylib alpha blending'i varsayılan açık tutar,
+  // ama biz derinliği RGBA'ya PAKETLİYORUZ — alfa kanalı da veri taşıyor ve
+  // rastgele bir opaklık gibi yorumlanıyor. Açık bırakınca her fragment beyaz
+  // zeminle harmanlanıp shadow map benekli çıkıyor (gölge de noktalı/kayıp).
+  rlDisableColorBlend();
   rlSetMatrixProjection(MatrixIdentity());
   rlSetMatrixModelview(tame_light_vp);
   // Ön yüzleri ayıklamak "shadow acne"yi (yüzeyin kendini gölgelemesi)
@@ -913,6 +968,7 @@ static void tame_scene_end(void) {
   tame_dl_replay(1);
   rlSetCullFace(RL_CULL_FACE_BACK);
   rlDrawRenderBatchActive();
+  rlEnableColorBlend();
   rlDisableFramebuffer();
 
   // Ekran viewport'unu ve ezdiğimiz matrisleri geri ver.
@@ -931,7 +987,7 @@ static void tame_scene_end(void) {
   // texture0/specular'ı için ayrılmış).
   rlEnableShader(tame_light_shader.id);
   rlActiveTextureSlot(10);
-  rlEnableTexture(tame_shadow_tex);
+  rlEnableTexture(tame_shadow_color);
   int slot = 10;
   rlSetUniform(tame_loc_shadowMap, &slot, SHADER_UNIFORM_INT, 1);
 
@@ -945,6 +1001,26 @@ static void tame_scene_end(void) {
   tame_dl_replay(0);
   EndShaderMode();
   EndMode3D();
+
+// Teşhis: -DTAME_SHADOW_DEBUG ile derlenirse gölge haritasını ekranın sol
+// üstünde gösterir. Gölge yanlış göründüğünde "hangi aşama bozuk?" sorusunu
+// tahminle değil bakarak çözer — harita benekliyse derinlik geçişi, düzgün
+// ama gölge yoksa örnekleme/projeksiyon hatalıdır. (Alfa harmanlama hatası
+// tam olarak böyle bulundu.)
+#ifdef TAME_SHADOW_DEBUG
+  {
+    Texture2D dbg = {0};
+    dbg.id = tame_shadow_color;
+    dbg.width = tame_shadow_res;
+    dbg.height = tame_shadow_res;
+    dbg.mipmaps = 1;
+    dbg.format = RL_PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+    Rectangle src = {0, 0, (float)tame_shadow_res, (float)tame_shadow_res};
+    Rectangle dst = {8, 76, 200, 200};
+    DrawTexturePro(dbg, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
+    DrawRectangleLines(8, 76, 200, 200, RED);
+  }
+#endif
 }
 
 static int tame_draw_lit(int shape, double x, double y, double z, double sx,
@@ -1430,8 +1506,8 @@ static void tame_unload_all_resources(void) {
     }
   }
   if (tame_shadow_ready) {
-    rlUnloadFramebuffer(tame_shadow_fbo);   // bağlı derinlik dokusunu da bırakır
-    tame_shadow_fbo = 0; tame_shadow_tex = 0;
+    rlUnloadFramebuffer(tame_shadow_fbo);   // bağlı dokuları da bırakır
+    tame_shadow_fbo = 0; tame_shadow_tex = 0; tame_shadow_color = 0;
     tame_shadow_ready = 0; tame_shadows_on = 0;
   }
   if (tame_depth_ready) { UnloadShader(tame_depth_shader); tame_depth_ready = 0; }

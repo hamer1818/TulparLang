@@ -16,15 +16,41 @@ gölge düşürüyor — "havada yüzüyor" hissi gidip "yerde duruyor" hissi ge
 Yumuşak kenar için 3×3 PCF, yüzeyin kendini gölgelemesine (shadow acne) karşı
 eğime göre bias + gölge geçişinde ön-yüz ayıklama.
 
-- **2 yeni builtin:** `tm3_shadows` (aç/kapat) · `tm3_shadow_area` (kapsanan
-  alanın yarı-genişliği). Sarmalayıcılar: `shadows_on`/`golge_ac`,
-  `shadows_off`/`golge_kapat`, `shadow_area`/`golge_alani`.
-- **Zarif bozulma:** `rlLoadTextureDepth` derinlik dokusu desteklenmiyorsa
-  sessizce renderbuffer'a düşer — o örneklenebilir değildir, yani gölge sessizce
-  çalışmazdı. Framebuffer bütünlüğü doğrulanıyor; başarısızsa gölgeler kapatılıp
-  açık bir mesaj basılıyor ve **ışıklandırma çalışmaya devam ediyor**.
+- **3 yeni builtin:** `tm3_shadows` (aç/kapat) · `tm3_shadow_area` (kapsanan
+  alanın yarı-genişliği) · `tm3_shadows_active` (gölge GERÇEKTEN çalışıyor mu).
+  Sarmalayıcılar: `shadows_on`/`golge_ac`, `shadows_off`/`golge_kapat`,
+  `shadow_area`/`golge_alani`, `shadows_active`/`golge_aktif`.
+- **Gölge haritası bir RENK dokusudur, derinlik dokusu değil:** derinlik
+  shader'da RGBA8'e paketleniyor. Sebep aşağıda (GLES2) — bu yöntem masaüstü,
+  web ve Android'de aynı kod yolunu kullanır.
+- **Dürüst durum bildirimi:** `shadows_on()` çağırmış olmak gölgenin çalıştığı
+  anlamına gelmez. FBO kurulamazsa gölgeler kapatılıp açık bir mesaj basılıyor,
+  **ışıklandırma çalışmaya devam ediyor**, ve `shadows_active()` oyun koduna
+  gerçeği söylüyor — demo bunu ekranda gösteriyor.
 - Örnek: `examples/tame3d_shadows.tpr` (BOŞLUK / dokunuş ile aç-kapat; zıplayan
   kürenin gölgesi büyüyüp küçülür).
+- Teşhis: `-DTAME_SHADOW_DEBUG` ile derlenirse gölge haritası ekranın sol
+  üstünde gösterilir (varsayılan kapalı).
+
+**Mobil/GLES2'de dört ayrı hata çıktı, hepsi düzeltildi** — masaüstünde
+şans eseri gizlenmişlerdi:
+
+1. **Alfa harmanlama paketlenmiş derinliği bozuyordu.** raylib alpha blending'i
+   varsayılan açık tutar; derinliği RGBA'ya paketlerken alfa kanalı da veri
+   taşıdığı için rastgele bir opaklık gibi yorumlanıp her fragment arka planla
+   harmanlanıyordu → benekli gölge haritası, noktalı/kayıp gölge. Derinlik
+   geçişinde `rlDisableColorBlend()`.
+2. **`mediump` yetmiyordu.** Derinlik karşılaştırması ~10 bit mantiste bozuluyor;
+   gölge cismin üstünde tutuyor ama geniş zemin düzleminde hiç oluşmuyordu.
+   Fragment shader `GL_FRAGMENT_PRECISION_HIGH` varsa `highp`. (Masaüstü GPU'lar
+   `mediump`'ı zaten fp32 işlediği için web'de sorun görünmüyordu.)
+3. **GLES2 yalnız-derinlik FBO'yu kabul etmiyordu.** Android emülatörü
+   `OES_depth_texture`'ı DESTEKLEDİĞİ HALDE framebuffer "incomplete attachment"
+   veriyordu (raylib boyutlu iç format kullanıyor; katı GLES2'de
+   internalformat == format olmalı). Çözüm: renk dokusu + derinlik
+   renderbuffer'ı.
+4. **Paketlenmiş derinlik interpolasyona gelmez.** Bilinear örnekleme iki komşu
+   paketin ortalamasını alıp anlamsız derinlik üretiyordu → `NEAREST` + `CLAMP`.
 
 Mimari not: gölge sahneyi **iki kez** çizmeyi gerektirir (ışığın gözünden
 derinlik + kameradan normal geçiş), ama tame'de çizimler `space_begin`/

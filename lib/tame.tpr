@@ -369,6 +369,12 @@ func golge_kapat() { tm3_shadows(0); }
 func shadow_area(a) { tm3_shadow_area(a); }
 func golge_alani(a) { tm3_shadow_area(a); }
 
+// Gölge GERÇEKTEN çalışıyor mu? shadows_on() çağırmış olmak yetmez — donanım
+// desteklemiyorsa gölge sessizce kapalı kalır. Oyununda "Gölge: açık" yazacaksan
+// bunu sor, kendi bayrağını değil.
+func shadows_active(): bool { return tm3_shadows_active(); }
+func golge_aktif(): bool    { return tm3_shadows_active(); }
+
 // ---- Yönetilen oyun döngüsü (Faz 5) -------------------------------------------
 // Wings'in listen() modeli: update/draw fonksiyonlarını verirsin, döngüyü,
 // kare zamanlamasını VE kare belleğini tame yönetir — her kare sonunda arena
