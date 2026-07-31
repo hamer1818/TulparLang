@@ -9,6 +9,46 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — 3D ışıklandırma (Faz 4)
+
+3D sahneler artık **ışık alıyor**: düz renkli geometri yerine gölgeli yüzeyler,
+specular parlama ve yüze göre parlaklık. Blinn-Phong shader **kaynak içine
+gömülü** (`LoadShaderFromMemory`) — `.vs/.fs` asset'i taşınmıyor, dolayısıyla
+web/Android paketlerine ek dosya girmiyor ve "oyunu kopyaladım, ışık gitti"
+sınıfı hata mümkün değil. Masaüstü (GLSL 330) ve GLES2 (GLSL 100, web+Android)
+varyantları ayrı gömülü.
+
+- **4 yeni builtin:** `tm3_lights` (aç/kapat) · `tm3_light_set` (slot 0-3,
+  yönlü veya nokta) · `tm3_light_off` · `tm3_ambient`. Tulpar sarmalayıcıları
+  çift dilli: `lights_on`/`isik_ac`, `sun`/`gunes`, `point_light`/`nokta_isik`,
+  `dir_light`/`yonlu_isik`, `light_off`/`isik_sil`, `ambient_light`/`ortam_isik`.
+- **En çok 4 ışık**; nokta ışıklar **mesafeye göre zayıflıyor** (yakındaki
+  ışığın sahneyi patlatmasını önler). Işık açıldığında hiç ışık tanımlı değilse
+  makul bir güneş otomatik verilir — "ışığı açtım, ekran simsiyah" tuzağı yok.
+- **`scene3d` motorunda ışık VARSAYILAN AÇIK** (güneş + ortam ışığı): motoru
+  kullanan oyun sıfır konfigürasyonla gölgeli görünür. `lights3d(false)` /
+  `isik3d(false)` ile kapatılıp eski düz-renk görünüme dönülebilir.
+- Örnek: `examples/tame3d_lights.tpr` (BOŞLUK ile ışık aç/kapat — aynı sahnenin
+  iki hali).
+
+Uygulama notu (iki raylib gerçeği bu tasarımı zorunlu kıldı): `BeginShaderMode`
+rlgl'in anlık shader'ını değiştirir ama `DrawMesh` `material.shader` kullanır →
+**modeller BeginShaderMode'dan etkilenmez**, materyallerine ayrıca atanır. Ve
+`DrawSphereEx`/`DrawCylinder` **normal üretmez** → ışık altında yanlış
+gölgelenirdi; bu yüzden ışık açıkken küre/silindir/düzlem/kutu, normal'i doğru
+olan **cached birim mesh'ler** üzerinden `DrawModelEx` ile çizilir (ışık
+kapalıyken eski immediate-mode yolu birebir korunur).
+
+### Fixed
+
+- **Web (wasm) derlemesi `tame_impl.c`'yi platform bayrakları olmadan
+  derliyordu** (`android/build_tame_android.sh` veriyordu, `wasm/build_tame_web.sh`
+  vermiyordu). Sonuç: ışık shader'ı web'de sessizce MASAÜSTÜ varyantını seçiyor
+  ve `'in' : storage qualifier supported in GLSL ES 3.00 and above only` ile
+  derlenmiyordu — sahne ışıksız çiziliyordu. Script artık Android ile aynı
+  bayrakları geçiyor; ayrıca shader seçimi `__EMSCRIPTEN__`/`__ANDROID__` gibi
+  derleyicinin kendi tanımlarına da bakıyor, tek bir build bayrağına güvenmiyor.
+
 ### Added — 3D oyun katmanı (tame3d + scene3d)
 
 TulparLang artık **3D oyun** yapabiliyor. Vendored raylib'in zaten derlenen 3D

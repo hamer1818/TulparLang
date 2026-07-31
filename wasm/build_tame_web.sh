@@ -84,7 +84,10 @@ for m in rcore rshapes rtextures rtext rmodels raudio utils; do
     emcc $RAYFLAGS -c "$RAYLIB_DIR/$m.c" -o "$OBJ/tame/$m.o"
 done
 echo "  CC  tame_impl.c"
-emcc -O2 -I"$RAYLIB_DIR" -c "$ROOT/runtime/tame_impl.c" -o "$OBJ/tame/tame_impl.o"
+# RAYFLAGS şart (android/build_tame_android.sh'in yaptığı gibi): bayraksız
+# derlenince tame_impl.c platform koşullarını göremez — ışık shader'ı sessizce
+# MASAÜSTÜ (GLSL 330) varyantını seçip WebGL'de derlenmiyordu.
+emcc $RAYFLAGS -c "$ROOT/runtime/tame_impl.c" -o "$OBJ/tame/tame_impl.o"
 echo "  CXX tame_bindings.cpp"
 em++ $CXXFLAGS -c "$ROOT/runtime/tame_bindings.cpp" -o "$OBJ/tame/tame_bindings.o"
 

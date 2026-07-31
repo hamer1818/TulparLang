@@ -109,6 +109,11 @@ double tame_impl_pick_box(double mx, double my, double bx, double by, double bz,
                           double bw, double bh, double bd);
 double tame_impl_pick_sphere(double mx, double my, double cx, double cy,
                              double cz, double r);
+int tame_impl_lights(int enable);
+void tame_impl_light_set(int idx, int type, double x, double y, double z,
+                         int64_t color);
+void tame_impl_light_off(int idx);
+void tame_impl_ambient(int64_t color);
 int tame_impl_load_model(const char *path);
 int tame_impl_gen(int kind, double a, double b, double c, double d);
 void tame_impl_draw_model(int h, double x, double y, double z, double scale,
@@ -485,6 +490,29 @@ VMValue aot_tm3_pick_sphere_ptr(VMValue *mx, VMValue *my, VMValue *cx,
                                 VMValue *cy, VMValue *cz, VMValue *r) {
   return VM_FLOAT(tame_impl_pick_sphere(tm_num(mx), tm_num(my), tm_num(cx),
                                         tm_num(cy), tm_num(cz), tm_num(r)));
+}
+
+// --- 3D (Faz 4) — ışıklandırma ----------------------------------------------
+
+VMValue aot_tm3_lights_ptr(VMValue *enable) {
+  return VM_BOOL(tame_impl_lights((int)tm_int(enable)));
+}
+
+VMValue aot_tm3_light_set_ptr(VMValue *idx, VMValue *type, VMValue *x,
+                              VMValue *y, VMValue *z, VMValue *color) {
+  tame_impl_light_set((int)tm_int(idx), (int)tm_int(type), tm_num(x), tm_num(y),
+                      tm_num(z), tm_int(color));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_light_off_ptr(VMValue *idx) {
+  tame_impl_light_off((int)tm_int(idx));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_ambient_ptr(VMValue *color) {
+  tame_impl_ambient(tm_int(color));
+  return VM_VOID();
 }
 
 // --- 3D (Faz 2) — model yükleme / üretme / çizim / animasyon -----------------

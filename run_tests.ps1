@@ -21,7 +21,7 @@ $compileOnly = @(
   'arcade_ucus.tpr','arcade_goktasi.tpr','arcade_launcher.tpr','arcade_yilan.tpr',
   'arcade_2048.tpr','arcade_pong.tpr','arcade_vur.tpr',
   # tame3d_*/scene3d_*: 3D ornekleri de pencere acar — ayni gerekce.
-  'tame3d_cube.tpr','tame3d_primitives.tpr','tame3d_models.tpr','tame3d_anim.tpr',
+  'tame3d_cube.tpr','tame3d_primitives.tpr','tame3d_models.tpr','tame3d_anim.tpr','tame3d_lights.tpr',
   'scene3d_collector.tpr','41_struct_entities.tpr',
   # utils.tpr is a module designed to be imported by 07_modules.tpr; running
   # it standalone is meaningless (no top-level program), but it should still
