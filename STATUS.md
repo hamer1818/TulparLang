@@ -1491,6 +1491,82 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 **"Sıradaki adım"** satırıyla: bir sonraki oturuma cold-start
 girildiğinde ne yapacağımı bilelim.
 
+### 3D oyun katmanı — Faz 7-9 yol haritası
+
+**Durum (2026-08-01, Faz 6 sonrası):** Faz 4-6'nın **üçü render'dı** (ışık,
+gölge, doku/gökyüzü/sis) + kamera. Sahne artık iyi görünüyor ve gezilebiliyor
+ama `scene3d`'nin **oynanış tarafı hâlâ "toplayıcı demo" seviyesinde** —
+kullanıcının değerlendirmesi ("adam akıllı bir kıvama gelmedi") doğru, bu
+yüzden 3B oyun yayınlamak Faz 7'den ÖNCE anlamsız. Motorda gerçekten
+olmayanlar: bölüm sistemi, düşman/AI, mermi, can/hasar, parçacık/billboard,
+karakter animasyonu bağlantısı, kamera-duvar çarpışması, dönen/küresel
+çarpışma gövdesi, eğimli zemin.
+
+Not: `scene3d` saf Tulpar (`lib/scene3d.tpr`) — C wiring'i olmayan her madde
+yalnız `./build.sh clean` re-embed'i ister. C binding'i olan madde 5-nokta
+bağlama + **`wasm/dist` ve `android/dist` yeniden derlemesi** demek.
+
+- 🔴 **Ön koşul — entity slot geri kazanımı.** `spawn3` diziye `push` edip
+  **ham index** dönüyor, `kill3d` yalnız `alive=0` yapıyor; boş slot asla
+  geri kullanılmıyor. Mermi eklendiği anda `_e3` sonsuza kadar büyür.
+  arcade bunu yaşayıp **generation'lı handle**'a geçti (`id = gen*1048576 +
+  slot`, bayat handle sessizce yok sayılır) — aynısı `scene3d`'ye, mermiden
+  ÖNCE. Saf Tulpar, ~60 satır, tüm getter/setter'lardan geçmeli.
+  **Sıradaki adım:** arcade'deki `_slot_of` desenini `Ent3` dizisine uyarla,
+  `tests/scene3d_engine.test.tpr`'ye bayat-handle testi ekle.
+
+- 🔴 **Faz 7 — oynanış paketi (hepsi saf Tulpar).** Dördü birbirine bağlı,
+  tek fazda gitmeli (düşmansız can, cansız mermi anlamsız); dördü de
+  arcade'de kanıtlanmış tasarımlar, sıfırdan icat değil:
+  - **Bölüm:** `bolum3d(n, fn)` / `level3d`, `bolum_gec3d()`,
+    `kazandin_mi3d()`. Geçiş **kare sonuna ERTELENİR** (arcade'in
+    `_lvl_pending` deseni) — çarpışma döngüsü ortasında entity dizisini
+    değiştirmek yasak.
+  - **Düşman AI:** `takip_et3d(i, hedef, hiz)` / `chase3d`,
+    `devriye3d(i, x1,z1, x2,z2, hiz)` / `patrol3d`, `menzilde3d(a, b, r)`.
+  - **Mermi:** `mermi3d(sahip, hiz, omur)` / `bullet3d` — sahibin baktığı
+    yöne çıkar; `Ent3`'e `life` alanı, ömrü dolan/dünya sınırını aşan ölür.
+  - **Can/hasar:** `can3d(i, n)` / `health3d`, `hasar3d(i, n)` / `damage3d`,
+    `olunce3d(tag, fn)` / `on_death3d`, dokunulmazlık kareleri; HUD'da can
+    barı. `Ent3`'e `hp` + `invuln`.
+  Tahmin: `scene3d` ~800 → ~1400 satır, C tarafına dokunmaz.
+  **Sıradaki adım:** slot geri kazanımı → bölüm → düşman → mermi → can
+  sırasıyla; her parça headless birim testiyle (`_s3_physics`/`_s3_collision`
+  doğrudan sürülebiliyor, pencere gerekmiyor).
+
+- 🟡 **Faz 8 — "his" katmanı (C binding gerekir).**
+  - **Parçacık + billboard:** `parcacik3d(x,y,z, sayi, renk, hiz, omur)`,
+    havuzlu, motor günceller/çizer. Kameraya dönük yüzey şart → yeni
+    `tm3_billboard` builtin'i (raylib `DrawBillboard`). Aynı builtin ailesi
+    3B can barı / isim etiketi / hasar sayısını da verir.
+  - **Karakter animasyonu:** `anim_play` builtin'i ZATEN VAR, `scene3d`
+    kullanmıyor — modelli entity donuk duruyor. `Ent3`'e `anim`,
+    `anim_frame`, `anim_speed` + "hız > 0 ise koşu, değilse boşta". Saf
+    Tulpar.
+  - 🟢 Konumsal ses: `ses3d(x,y,z)` — ses zaten var, yalnız mesafe çarpanı.
+  **Sıradaki adım:** `tm3_billboard` 5-nokta bağlaması, sonra saf-Tulpar
+  parçacık havuzu.
+
+- 🟡 **Faz 9 — dünya geometrisi (en zor).**
+  - **Kamera-duvar çarpışması:** hedeften kameraya ışın, duvara çarparsa
+    kamerayı içeri çek. Saf Tulpar ~40 satır — **Faz 9'u beklemesi gerekmez,
+    Faz 7'nin yanına alınabilir.** Bugün yörüngede duvarın içine girilip
+    dışarıdan bakılabiliyor.
+  - **Küre/kapsül çarpışma:** yuvarlak cisimler kutu gibi çarpışmasın.
+  - **Dönen kutu (OBB):** entity `yaw` ile dönüyor ama AABB'si dönmüyor →
+    SAT gerekir.
+  - **Rampa / eğimli zemin / merdiven:** dünya şu an TEK düz düzlem. İki yol:
+    (a) "rampa" entity'si + düzleme izdüşüm (saf Tulpar, sınırlı),
+    (b) gerçek arazi — raylib `GenMeshHeightmap` + yükseklik örnekleme
+    (C binding, çok daha güçlü). (b) önerilir ama tek başına bir faz.
+  **Sıradaki adım:** kamera-duvar çarpışmasını Faz 7'ye iliştir, gerisini
+  Faz 8'den sonraya bırak.
+
+- 🟢 **3B oyun yayınlamak — Faz 7 BİTMEDEN yapılmayacak.** arcade'de 10 oyun
+  var, 3B'de tek demo (`scene3d_collector` + `scene3d_camera`). Karar
+  (2026-08-01): motor "gezilebilir sahne"den "oyun yazılabilir"e geçmeden
+  `tulparlang.dev/oyunlar`'a 3B oyun konmayacak.
+
 ### Dil seviyesi
 
 - ✅ **StringBuilder canlandırıldı (düzeltildi 2026-07-21).** `sb_append`
