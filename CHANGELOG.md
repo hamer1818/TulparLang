@@ -9,6 +9,39 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Removed — natif Windows desteği bırakıldı; Windows artık WSL üzerinden
+
+**3.13.0'dan itibaren TulparLang natif Windows'u desteklemiyor.** Windows
+kullanıcıları **WSL** (Windows Subsystem for Linux) içinde Linux sürümünü
+kullanıyor: `wsl --install`, ardından WSL içinde normal Linux tek-satır
+kurulumu. Derleyici, Wings, `tame`/`arcade`/`scene3d` oyun katmanları ve **web
+ile Android hedefleri** orada olduğu gibi çalışıyor — Android tarafı zaten
+WSL'den Windows SDK araçlarını interop ile sürebiliyor.
+
+Kaldırılanlar:
+- CI'daki `build-windows` işi (MSYS2/MinGW LLVM ile derleme, DLL paketleme,
+  Inno Setup adımı) ve release'lerdeki tüm Windows varlıkları
+  (`tulpar-windows-x64.exe`, `tulpar-setup-windows-x64.exe`,
+  `libtulpar_runtime-windows-x64.a`, beş MinGW/OpenSSL DLL'i).
+- `build.bat`, `build.ps1`, `run_tests.bat`, `run_tests.ps1` ve
+  `installer/` (Inno Setup betiği + sihirbaz görselleri).
+- `COMPILE_ONLY_TESTS` artık **tek yerde**: `build.sh`. Eskiden aynı listenin
+  `run_tests.ps1`'deki `$compileOnly` ile elle senkron tutulması gerekiyordu.
+
+**Kaynak içindeki `PLATFORM_WINDOWS` / `_WIN32` dalları bilerek bırakıldı.**
+`src/common/platform*.h` shim'lerinden sökmek soket/thread/dl/yol katmanlarına
+yayılan büyük ve riskli bir refactor olurdu ve desteklenen platformlarda hiçbir
+kazanç sağlamazdı. Bunlar artık **bakımsız ve test edilmemiş** sayılıyor:
+hiçbir şey onları derlemiyor ya da çalıştırmıyor.
+
+> **Migrasyon:** Windows'ta `tulpar.exe` kullanan varsa WSL'e geçmeli. Mevcut
+> yayınlanmış sürümlerin Windows varlıkları GitHub Releases'te duruyor; yalnız
+> yeni sürümler Windows varlığı içermeyecek.
+
+> **Depo ayarı (elle yapılmalı):** `main`'in branch protection kurallarında
+> `build-windows` hâlâ **zorunlu status check** olarak listeli. Kaldırılmazsa
+> PR'lar hiç raporlanmayacak bir check'i bekleyip kilitlenir.
+
 ### Added — 3D oyun motoru: oynanış, his ve dünya geometrisi (Faz 7-9)
 
 Faz 4-6'nın üçü de render'dı (ışık, gölge, doku) + kamera. Sahne iyi görünüyor

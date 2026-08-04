@@ -111,6 +111,15 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > bölüm sistemi + codegen düzeltmeleri. GitHub Release'te 3-OS ikilileri +
 > Windows installer + GPG-imzalı SHA256SUMS.
 >
+> **Geliştirme (yayınlanmadı) — platform politikası:** 3.13.0'dan itibaren
+> **natif Windows desteklenmiyor**; Windows kullanıcıları **WSL** içinde Linux
+> sürümünü kullanıyor. CI'daki `build-windows` işi, Windows release varlıkları,
+> `build.bat`/`build.ps1`/`run_tests.*` ve Inno Setup installer kaldırıldı.
+> Kaynaktaki `PLATFORM_WINDOWS` dalları bilerek bırakıldı ama artık **bakımsız
+> ve test edilmemiş**. ⚠️ `main`'in branch protection ayarından `build-windows`
+> zorunlu check'i **elle kaldırılmalı**. Detay: CHANGELOG "natif Windows
+> desteği bırakıldı".
+>
 > **Geliştirme (yayınlanmadı) — 3D oyun katmanı:** TulparLang artık 3D oyun
 > yapabiliyor. Vendored raylib'in zaten derlenen 3D modülü **35 `tm3_*` builtin**
 > ile açığa çıkarıldı (Faz 0 kamera/küp/ızgara; Faz 1 primitifler + raycast

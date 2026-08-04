@@ -81,9 +81,14 @@ jobs:
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # Windows'a NATIF destek 3.13.0'da bırakıldı — Windows kullanıcıları WSL
+  # üzerinden Linux yolunu kullanıyor (bkz. CHANGELOG "Windows desteği: WSL").
+  # Bu yüzden burada bir `build-windows` işi YOK; main'in branch protection
+  # ayarından da `build-windows` zorunlu check'i KALDIRILMALI, yoksa PR'lar
+  # hiç raporlanmayacak bir check'i bekler.
   build-linux:
     # Branch protection on this repo lists `build-linux` / `build-macos`
-    # / `build-windows` as *required* status checks, by name. A job-level
+    # as *required* status checks, by name. A job-level
     # `if:` that evaluates to false makes the job "skipped" — which is
     # a separate conclusion from "success", and this repo's branch
     # protection refuses to consider skipped a satisfied requirement.
@@ -502,381 +507,9 @@ jobs:
           name: libtulpar_runtime-macos-universal
           path: dist/libtulpar_runtime-macos-universal.a
 
-  build-windows:
-    # See `build-linux` for why this is unconditional + gated per-step
-    # instead of skipped at the job level.
-    needs: detect-docs-only
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
-    steps:
-      - name: Docs-only skip notice
-        if: needs.detect-docs-only.outputs.docs_only == 'true'
-        shell: pwsh
-        run: Write-Host "Docs-only change detected; build steps will be skipped (job reports success)."
-
-      - uses: actions/checkout@v6
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
-        with:
-          sparse-checkout: |
-            /*
-            !wasm/emsdk
-          sparse-checkout-cone-mode: false
-
-      # MSYS2 mingw64 is the only realistic way to get a full LLVM dev tree
-      # (headers + LLVM*.dll.a libs) on a Windows runner without a 30+ min
-      # vcpkg/source build. The official LLVM Windows installer and Chocolatey
-      # only ship the compiler distribution — the static libs we link against
-      # (LLVMCore, LLVMSupport, …) aren't there.
-      #
-      # `cache: true` snapshots the full MSYS2 install tree keyed on the
-      # `install:` package list — turning a ~90s package-manager run into
-      # a ~10s cache restore. Cache invalidates automatically when the
-      # package list below changes. We dropped `mingw-w64-x86_64-clang`
-      # because the build uses gcc/g++ (see CMAKE_C_COMPILER below); the
-      # only consumer was a `clang --version` diagnostic line we no
-      # longer need.
-      # Same reuse-on-push:main pattern as the Linux/macOS jobs. The
-      # Windows job pulls four artifacts (binary, runtime lib, the
-      # bundled MinGW DLL set, and the Inno Setup installer) instead
-      # of two — the rest of the logic is identical. Run via pwsh
-      # because gh CLI is on the Windows-native PATH and we need
-      # consistent behavior across MSYS2 / pwsh shells.
-      - name: Try to reuse PR's build artifacts
-        id: reuse
-        if: needs.detect-docs-only.outputs.docs_only != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # `git log -1 --format=%s` needs a real subject; default
-          # squash format is "Title (#NN)". If no PR ref present we
-          # fall through to a fresh build.
-          $subject = (git log -1 --format='%s').Trim()
-          $m = [regex]::Match($subject, '\(#([0-9]+)\)')
-          if (-not $m.Success) {
-            Write-Host "No PR reference in commit subject — building from scratch."
-            "reused=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            exit 0
-          }
-          $prNum = $m.Groups[1].Value
-          $headSha = (gh pr view $prNum --json headRefOid --jq '.headRefOid' 2>$null)
-          if (-not $headSha) {
-            Write-Host "PR #$prNum not accessible — building from scratch."
-            "reused=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            exit 0
-          }
-          $runs = gh run list --workflow='Linux & macOS Build (LLVM)' `
-                    --status=success --limit=30 `
-                    --json databaseId,headSha | ConvertFrom-Json
-          $runId = ($runs | Where-Object { $_.headSha -eq $headSha } |
-                    Select-Object -First 1).databaseId
-          if (-not $runId) {
-            Write-Host "No successful build run for PR #$prNum head $headSha — building from scratch."
-            "reused=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            exit 0
-          }
-          Write-Host "Reusing artifacts from PR #$prNum build run $runId"
-          # Wrap the artifact restore in try/catch so a transient download
-          # failure (or a missing-file in a published artifact) falls back
-          # to a fresh build instead of failing the whole job. See the
-          # build-linux job for the bash equivalent and rationale.
-          try {
-            New-Item -ItemType Directory -Force -Path dist, _pr-artifacts | Out-Null
-            $downloads = @(
-              'tulpar-windows-x64',
-              'libtulpar_runtime-windows-x64',
-              'tulpar-windows-runtime-dlls',
-              'tulpar-windows-installer'
-            )
-            foreach ($d in $downloads) {
-              gh run download $runId -n $d -D _pr-artifacts
-              if ($LASTEXITCODE -ne 0) { throw "gh run download failed for $d (exit $LASTEXITCODE)" }
-            }
-            # Flatten artifact subdirs into dist/ at the canonical paths
-            # the existing Upload steps point at. Each artifact may land
-            # either as a flat file (single-file artifact extracted
-            # directly) or inside a name-prefixed subdirectory — try
-            # both shapes.
-            function Move-Stage($name, $target) {
-              $a = Join-Path '_pr-artifacts' $target
-              $b = Join-Path '_pr-artifacts' "$name/$target"
-              if (Test-Path $a) { Copy-Item $a "dist/$target" -Force }
-              elseif (Test-Path $b) { Copy-Item $b "dist/$target" -Force }
-              else { throw "missing $name artifact: neither $a nor $b" }
-            }
-            Move-Stage 'tulpar-windows-x64' 'tulpar-windows-x64.exe'
-            Move-Stage 'libtulpar_runtime-windows-x64' 'libtulpar_runtime-windows-x64.a'
-            Move-Stage 'tulpar-windows-installer' 'tulpar-setup-windows-x64.exe'
-            # The DLL bundle artifact contains 5 files; copy them all.
-            $dllSrc = if (Test-Path '_pr-artifacts/tulpar-windows-runtime-dlls') {
-                        '_pr-artifacts/tulpar-windows-runtime-dlls'
-                      } else { '_pr-artifacts' }
-            foreach ($dll in 'libwinpthread-1.dll','zlib1.dll','libzstd.dll','libssl-3-x64.dll','libcrypto-3-x64.dll') {
-              $src = Join-Path $dllSrc $dll
-              if (-not (Test-Path $src)) { throw "missing DLL in artifact: $dll" }
-              Copy-Item $src "dist/$dll" -Force
-            }
-            Get-ChildItem dist | Format-Table Name, Length
-            "reused=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          } catch {
-            Write-Host "Artifact reuse failed: $_ — falling back to fresh build." -ForegroundColor Yellow
-            "reused=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            exit 0
-          }
-
-      - name: Setup MSYS2
-        id: msys2
-        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: false
-          cache: true
-          # `mingw-w64-x86_64-toolchain` is a meta-package that pulls
-          # the full GCC family (gcc + gcc-fortran + gcc-objc +
-          # gcc-ada + gcc-libgfortran + gdb-multiarch + ...). Tulpar
-          # only needs gcc (which carries g++) + the standard MinGW
-          # runtime; the rest is dead weight that inflates both the
-          # cache size and the install time. Naming `gcc` directly
-          # also gets us `binutils` and `make` via dependency
-          # resolution, which is what we'd otherwise rely on the
-          # meta-package for.
-          # Dropped `mingw-w64-x86_64-ninja` — CMake generator is
-          # `MinGW Makefiles` (see build.bat), make ships with gcc.
-          #
-          # Dropped `git` (2026-07-30): pacman was installing 97 packages on
-          # every run (~46s — 70% of this step, and the "it reinstalls MinGW
-          # every time" symptom). ~35 of those 97 were git's dependency
-          # closure alone: perl-* x30, openssh, heimdal, heimdal-libs,
-          # libcbor, libedit, libfido2. Nothing here needs an MSYS2 git —
-          # CMakeLists.txt has no find_package(Git)/`git describe`, and the
-          # only step that shells out to git (the artifact-reuse step) runs
-          # under `shell: pwsh` against the runner's Windows-native git.
-          # NOTE: setup-msys2's `cache: true` caches the DOWNLOADED package
-          # files, not the installed tree — the install/extract cost is paid
-          # every run regardless of a cache hit, so shrinking the package
-          # list is the only lever that actually moves this number.
-          install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-llvm
-            mingw-w64-x86_64-ccache
-            mingw-w64-x86_64-zlib
-            mingw-w64-x86_64-zstd
-            mingw-w64-x86_64-libxml2
-            mingw-w64-x86_64-openssl
-
-      # ccache cache pinned to a workspace-relative path so both the
-      # msys2 shell and Windows-native actions/cache see the same dir
-      # (otherwise `~` translates differently between shells and the
-      # cache doesn't actually round-trip). actions/cache covers the
-      # cross-run persistence; CMAKE_<LANG>_COMPILER_LAUNCHER below
-      # routes gcc/g++ through it. The cache restore key is a moving
-      # target keyed on the commit SHA so each run writes a fresh entry,
-      # while restore-keys lets us inherit the previous run's cache as
-      # a warm starting point.
-      - name: Restore ccache
-        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
-        uses: actions/cache@v5
-        with:
-          path: ${{ runner.temp }}/ccache
-          key: ${{ runner.os }}-msys2-ccache-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-msys2-ccache-
-
-      - name: Build with LLVM
-        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
-        env:
-          # Tag-pushed builds embed the tag name verbatim; branch
-          # builds omit the override and use CMake's default dev
-          # version.
-          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-          CCACHE_DIR: ${{ runner.temp }}/ccache
-        run: |
-          llvm-config --version
-          mkdir -p build-windows
-          cd build-windows
-          cmake_args="-G Ninja
-            -DCMAKE_BUILD_TYPE=Release
-            -DCMAKE_C_COMPILER=gcc
-            -DCMAKE_CXX_COMPILER=g++
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
-          if [ -n "${TULPAR_VERSION}" ]; then
-            cmake_args="${cmake_args} -DTULPAR_VERSION=${TULPAR_VERSION}"
-          fi
-          cmake .. ${cmake_args}
-          cmake --build . --config Release -j
-        timeout-minutes: 20
-
-      # Print ccache stats so a slow run is easy to triage at a glance —
-      # the Build step above could be slow because nothing was cached
-      # (cold start) or because the cache hit rate was poor (rare, but
-      # would point at flag changes invalidating entries).
-      - name: ccache stats
-        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
-        env:
-          CCACHE_DIR: ${{ runner.temp }}/ccache
-        run: ccache -s
-
-      - name: Prepare artifact
-        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item build-windows\tulpar.exe         dist\tulpar-windows-x64.exe
-          Copy-Item build-windows\libtulpar_runtime.a dist\libtulpar_runtime-windows-x64.a
-          # The MinGW runtime DLLs that the installer bundles are also
-          # published as standalone release assets so the one-line
-          # install.ps1 path (`iwr -useb tulparlang.dev/install.ps1 | iex`)
-          # can fetch them too — without this, curl-installed users hit
-          # STATUS_DLL_NOT_FOUND on first launch. We bundle:
-          #   * libwinpthread-1.dll, zlib1.dll, libzstd.dll — MinGW + LLVM
-          #     transitive deps (PR #52, PR #54)
-          #   * libssl-3-x64.dll, libcrypto-3-x64.dll — OpenSSL 3 from
-          #     mingw-w64-openssl, linked because CMakeLists.txt enables
-          #     OpenSSL when present so `https://` URLs work in
-          #     `tulpar update`, `tulpar pkg install`, and the embedded
-          #     http_client. Discovered missing on a fresh Win10 box.
-          # We assert each source DLL exists before copying so a future
-          # MSYS2 rename (e.g. OpenSSL 4 -> libssl-4-x64.dll) fails the
-          # build loudly instead of silently shipping an installer that
-          # crashes at first launch on user machines.
-          $mingwBin = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin"
-          $bundledDlls = @(
-            'libwinpthread-1.dll',
-            'zlib1.dll',
-            'libzstd.dll',
-            'libssl-3-x64.dll',
-            'libcrypto-3-x64.dll'
-          )
-          foreach ($dll in $bundledDlls) {
-            $src = Join-Path $mingwBin $dll
-            if (-not (Test-Path $src)) {
-              throw "Bundled DLL missing in MSYS2: $src — has the package layout changed?"
-            }
-            Copy-Item $src "dist\$dll"
-          }
-          # Belt-and-suspenders: dump the actual import table of the built
-          # tulpar.exe and fail the build if anything in the import list
-          # isn't either a stock-Windows system DLL or one of the DLLs we
-          # bundle. Catches the "binary picked up a new transitive
-          # dependency we forgot to ship" failure mode at CI time, not
-          # on user machines. System DLL list is the conservative set that
-          # ships on every Windows 10+ box.
-          $systemDlls = @(
-            'kernel32.dll', 'kernelbase.dll', 'ntdll.dll', 'msvcrt.dll',
-            'advapi32.dll', 'user32.dll', 'shell32.dll', 'ole32.dll',
-            'oleaut32.dll', 'ws2_32.dll', 'crypt32.dll', 'secur32.dll',
-            'gdi32.dll', 'rpcrt4.dll', 'shlwapi.dll', 'bcrypt.dll',
-            'iphlpapi.dll', 'userenv.dll', 'version.dll', 'winmm.dll',
-            'powrprof.dll', 'dbghelp.dll', 'imm32.dll'
-          )
-          $allowed = ($systemDlls + $bundledDlls) | ForEach-Object { $_.ToLower() }
-          $imports = & objdump.exe -p dist\tulpar-windows-x64.exe |
-                     Select-String '^\s*DLL Name:\s*(.+)$' |
-                     ForEach-Object { $_.Matches[0].Groups[1].Value.Trim().ToLower() }
-          $missing = $imports | Where-Object { $_ -notin $allowed }
-          if ($missing) {
-            Write-Host "tulpar.exe imports DLLs that are neither system nor bundled:" -ForegroundColor Red
-            $missing | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-            Write-Host "Either add them to `$bundledDlls or to the system whitelist."
-            throw "DLL bundling guard failed."
-          }
-          Write-Host "DLL bundling guard: OK ($($imports.Count) imports, all covered)"
-
-      - name: Upload artifact
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: tulpar-windows-x64
-          path: dist/tulpar-windows-x64.exe
-
-      - name: Upload runtime library
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: libtulpar_runtime-windows-x64
-          path: dist/libtulpar_runtime-windows-x64.a
-
-      - name: Upload bundled MinGW DLLs
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: tulpar-windows-runtime-dlls
-          path: |
-            dist/libwinpthread-1.dll
-            dist/zlib1.dll
-            dist/libzstd.dll
-            dist/libssl-3-x64.dll
-            dist/libcrypto-3-x64.dll
-
-      # ----------------------------------------------------------------
-      # GUI installer (Inno Setup). Pre-installed on GitHub-hosted
-      # `windows-latest` runners at C:\Program Files (x86)\Inno Setup 6\.
-      # We run this in pwsh (not msys2) to avoid path-translation pain
-      # when invoking the Windows-native ISCC.exe.
-      #
-      # Skipped on the reuse path — the installer artifact has
-      # already been downloaded from the PR's build run by the
-      # reuse step at the top of this job.
-      #
-      # NOTE: an earlier attempt (PR #182, reverted in #183) also
-      # skipped this step on PR runs to save ~37s of feedback time.
-      # That broke post-merge reuse-path builds because the reuse
-      # downloader requires the PR-side `tulpar-windows-installer`
-      # artifact, so a missing PR-side installer forced a full fresh
-      # ~190s LLVM rebuild on every push:main. The PR-side ~37s cost
-      # is the smaller of the two; restore the original gating so
-      # post-merge stays on the fast reuse path.
-      # ----------------------------------------------------------------
-      - name: Build GUI installer (Inno Setup)
-        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
-        shell: pwsh
-        env:
-          # Tag-pushed builds embed the tag name verbatim; branch
-          # builds omit the override and use CMake's default dev
-          # version.
-          TULPAR_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-        run: |
-          # Inno Setup's AppVersion expects pure x.y.z[.w], no leading 'v'.
-          # On tag builds TULPAR_VERSION is set (e.g. "v2.2.0"); on
-          # branch builds it's empty — fall back to CMake's project
-          # version so the installer step still succeeds for CI.
-          $ver = $env:TULPAR_VERSION
-          if (-not $ver) { $ver = "2.1.0-dev" }
-          $appVersion = $ver -replace '^v',''
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) {
-            throw "ISCC.exe not found at $iscc — runner image changed?"
-          }
-          # The installer bundles libwinpthread / zlib1 / libzstd from
-          # MSYS2 mingw64; setup-msys2 exposes its install root via the
-          # `msys2-location` output. Joining `\mingw64\bin` gets us the
-          # directory ISCC's Source: lines walk for the bundled DLLs.
-          $mingwBin = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin"
-          & $iscc `
-            "/DAppVersion=$appVersion" `
-            "/DSourceBinary=$pwd\build-windows\tulpar.exe" `
-            "/DSourceRuntimeLib=$pwd\build-windows\libtulpar_runtime.a" `
-            "/DSourceMingwBin=$mingwBin" `
-            "installer\tulpar.iss"
-          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
-          # ISCC writes to installer\Output\<OutputBaseFilename>.exe
-          Copy-Item installer\Output\tulpar-setup-windows-x64.exe dist\
-
-      - name: Upload installer artifact
-        if: needs.detect-docs-only.outputs.docs_only != 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: tulpar-windows-installer
-          path: dist/tulpar-setup-windows-x64.exe
   
   create-release:
-    needs: [detect-docs-only, build-linux, build-macos, build-windows]
+    needs: [detect-docs-only, build-linux, build-macos]
     runs-on: ubuntu-latest
     # Stable-only versioning: releases are created ONLY when a `v*` tag
     # is pushed (e.g. `git tag -a v2.2.0 -m "..." && git push origin
@@ -929,16 +562,8 @@ jobs:
           for f in \
               tulpar-linux-x64 \
               tulpar-macos-universal \
-              tulpar-windows-x64.exe \
-              tulpar-setup-windows-x64.exe \
               libtulpar_runtime-linux-x64.a \
-              libtulpar_runtime-macos-universal.a \
-              libtulpar_runtime-windows-x64.a \
-              libwinpthread-1.dll \
-              zlib1.dll \
-              libzstd.dll \
-              libssl-3-x64.dll \
-              libcrypto-3-x64.dll; do
+              libtulpar_runtime-macos-universal.a; do
             if [ ! -f "$f" ]; then
               echo "ERROR: expected release artifact missing: $f" >&2
               exit 1
@@ -997,52 +622,38 @@ jobs:
             - Cross-platform support
             
             ### Downloads
-            - `tulpar-setup-windows-x64.exe` - **Windows GUI installer** (recommended for Windows users; auto-PATH, Start Menu entry, Uninstall entry)
-            - `tulpar-windows-x64.exe` - Windows raw executable (portable use)
             - `tulpar-linux-x64` - Linux executable
             - `tulpar-macos-universal` - macOS executable
 
             **Runtime libraries** (required for `tulpar build` / AOT, automatically installed by the one-line installer):
             - `libtulpar_runtime-linux-x64.a`
             - `libtulpar_runtime-macos-universal.a`
-            - `libtulpar_runtime-windows-x64.a`
-
-            **Windows runtime DLLs** (bundled by the GUI installer; published as standalone assets so `install.ps1` can fetch them too):
-            - `libwinpthread-1.dll`, `zlib1.dll`, `libzstd.dll` — MinGW + LLVM transitive deps
-            - `libssl-3-x64.dll`, `libcrypto-3-x64.dll` — OpenSSL 3 (required for HTTPS)
 
             **Integrity:**
             - `SHA256SUMS.txt` — `sha256sum -b` manifest covering every asset above. `tulpar update` verifies its downloads against this file; you can also check manually with `sha256sum -c SHA256SUMS.txt`.
             - `SHA256SUMS.txt.asc` — detached GPG signature over `SHA256SUMS.txt`, signed by the [TulparLang Release key](https://github.com/hamer1818/TulparLang/blob/main/release-public.asc) (fingerprint `CE5C 22BD EA61 58BC 8221 3A7E 4396 41B3 0E8D FDEE`). Optional verification: `gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt`. Present only when the workflow has the signing secret; absent on fork builds.
 
-            ### One-line install (Windows / Linux / macOS)
-
-            ```powershell
-            # Windows (PowerShell)
-            iwr -useb https://tulparlang.dev/install.ps1 | iex
-            ```
+            ### One-line install (Linux / macOS)
 
             ```bash
-            # Linux / macOS
             curl -fsSL https://tulparlang.dev/install.sh | bash
             ```
 
-            > **Note**: Windows now has native support! No WSL required.
+            ### Windows
+
+            Native Windows support was **dropped in 3.13.0**. On Windows, run
+            TulparLang inside **WSL** (Windows Subsystem for Linux) and use the
+            Linux build — install WSL with `wsl --install`, then run the Linux
+            one-liner above inside it. Everything works there: the compiler,
+            Wings, the `tame`/`arcade`/`scene3d` game layers, and the web and
+            Android build targets.
           draft: false
           prerelease: false
           files: |
             tulpar-linux-x64
             tulpar-macos-universal
-            tulpar-windows-x64.exe
-            tulpar-setup-windows-x64.exe
             libtulpar_runtime-linux-x64.a
             libtulpar_runtime-macos-universal.a
-            libtulpar_runtime-windows-x64.a
-            libwinpthread-1.dll
-            zlib1.dll
-            libzstd.dll
-            libssl-3-x64.dll
-            libcrypto-3-x64.dll
             SHA256SUMS.txt*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
