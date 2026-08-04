@@ -112,6 +112,10 @@ void tame_impl_plane(double x, double y, double z, double sx, double sz,
                      int64_t color);
 void tame_impl_line3(double x1, double y1, double z1, double x2, double y2,
                      double z2, int64_t color);
+void tame_impl_billboard(int tex, double x, double y, double z, double size,
+                         int64_t color);
+double tame_impl_screen_x(double x, double y, double z);
+double tame_impl_screen_y(double x, double y, double z);
 double tame_impl_pick_box(double mx, double my, double bx, double by, double bz,
                           double bw, double bh, double bd);
 double tame_impl_pick_sphere(double mx, double my, double cx, double cy,
@@ -564,6 +568,23 @@ VMValue aot_tm3_shadows_active_ptr(void) {
 VMValue aot_tm3_shadow_area_ptr(VMValue *area) {
   tame_impl_shadow_area(tm_num(area));
   return VM_VOID();
+}
+
+// --- 3D (Faz 8) — billboard + dünya→ekran izdüşümü --------------------------
+
+VMValue aot_tm3_billboard_ptr(VMValue *tex, VMValue *x, VMValue *y, VMValue *z,
+                              VMValue *size, VMValue *color) {
+  tame_impl_billboard((int)tm_int(tex), tm_num(x), tm_num(y), tm_num(z),
+                      tm_num(size), tm_int(color));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_screen_x_ptr(VMValue *x, VMValue *y, VMValue *z) {
+  return VM_FLOAT(tame_impl_screen_x(tm_num(x), tm_num(y), tm_num(z)));
+}
+
+VMValue aot_tm3_screen_y_ptr(VMValue *x, VMValue *y, VMValue *z) {
+  return VM_FLOAT(tame_impl_screen_y(tm_num(x), tm_num(y), tm_num(z)));
 }
 
 // --- 3D (Faz 5) — doku / materyal / gökyüzü ---------------------------------

@@ -39,10 +39,17 @@ func _test_set_fail(str msg) {
 
 // ----- Assertions ----------------------------------------------------------
 
-// Generic boolean assertion. `cond` must be truthy (non-zero); otherwise the
-// current test fails with `msg` (or a default message).
-func assert(int cond, str msg) {
-    if (cond == 0) {
+// Generic boolean assertion. `cond` must be truthy; otherwise the current test
+// fails with `msg` (or a default message).
+//
+// `cond` is UNTYPED and the check is `!cond`, not `cond == 0`. Bunun sebebi
+// ciddi: parametre `int` ilan edilip `cond == 0` ile bakılınca, çağıran taraf
+// bir BOOL geçtiğinde (yani `assert(x < y, ...)` gibi HER doğal kullanımda)
+// karşılaştırma asla tutmuyordu — bool VMValue'su int 0'a eşit çıkmıyor.
+// Sonuç: assert sessizce hiçbir zaman başarısız olmuyor, test paketi boş
+// yere yeşil yanıyordu. (Aynı aile, assert_eq_str'deki #40 notuyla akraba.)
+func assert(cond, str msg) {
+    if (!cond) {
         if (length(msg) > 0) {
             _test_set_fail(msg);
         } else {

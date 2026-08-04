@@ -1491,7 +1491,28 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 **"Sıradaki adım"** satırıyla: bir sonraki oturuma cold-start
 girildiğinde ne yapacağımı bilelim.
 
-### 3D oyun katmanı — Faz 7-9 yol haritası
+### 3D oyun katmanı — Faz 7-9 yol haritası ✅ TAMAMLANDI (2026-08-04)
+
+**Durum (2026-08-04):** Faz 7, 8 ve 9 bitti; aşağıdaki maddelerin tamamı
+uygulandı ve `tests/scene3d_engine.test.tpr`'de **44 headless test** ile
+korunuyor. Motor artık "gezilebilir sahne" değil, **üstüne oyun yazılabilir**:
+bölüm sistemi, düşman AI, mermi, can/hasar, parçacık, karakter animasyonu,
+konumsal ses, kamera-duvar çarpışması, şekil farkında (küre/kapsül/OBB)
+çarpışma, katı gövde çözümü ve rampalı zemin var. Örnek:
+`examples/scene3d_arena.tpr`. Detay: CHANGELOG "3D oyun motoru (Faz 7-9)".
+
+Uygulama sırasında iki hata çıktı ve düzeltildi (ikisi de CHANGELOG'da):
+`lib/test.tpr`'deki **`assert` bool koşullarda hiç başarısız olmuyordu** (yani
+test paketi yersiz yeşildi) ve **SAT ayırma vektörünün işareti terstiydi**
+(oyuncu duvardan dışarı değil içine itiliyordu).
+
+**Kalan (yeni faz adayları):** gerçek arazi — raylib `GenMeshHeightmap` +
+yükseklik örnekleme (rampa saf-Tulpar ve kademeli çizilen sınırlı yolu
+kullanıyor); dönük kutu ↔ küre için tam OBB testi (şu an kutu eksen-hizalı
+varsayılıyor); 3B oyunun `tulparlang.dev/oyunlar`'a yayınlanması (Faz 7 şartı
+artık sağlandı).
+
+<details><summary>Özgün yol haritası (2026-08-01, Faz 6 sonrası) — tarihsel kayıt</summary>
 
 **Durum (2026-08-01, Faz 6 sonrası):** Faz 4-6'nın **üçü render'dı** (ışık,
 gölge, doku/gökyüzü/sis) + kamera. Sahne artık iyi görünüyor ve gezilebiliyor
@@ -1566,6 +1587,8 @@ bağlama + **`wasm/dist` ve `android/dist` yeniden derlemesi** demek.
   var, 3B'de tek demo (`scene3d_collector` + `scene3d_camera`). Karar
   (2026-08-01): motor "gezilebilir sahne"den "oyun yazılabilir"e geçmeden
   `tulparlang.dev/oyunlar`'a 3B oyun konmayacak.
+
+</details>
 
 ### Dil seviyesi
 

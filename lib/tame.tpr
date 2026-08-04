@@ -406,6 +406,21 @@ func golge_aktif(): bool    { return tm3_shadows_active(); }
 func checker(w, h, cells, c1, c2): int { return tm_checker(w, h, cells, c1, c2); }
 func damali(w, h, cells, c1, c2): int  { return tm_checker(w, h, cells, c1, c2); }
 
+// Billboard: kameraya her zaman dönük dörtgen. tex < 0 → dokusuz düz renk.
+// Parçacık/kıvılcım/duman ve 3B etiketlerin tek doğru çizim yolu.
+func billboard3d(tex, x, y, z, size, color) { tm3_billboard(tex, x, y, z, size, color); }
+func tabela3d(tex, x, y, z, size, color)    { tm3_billboard(tex, x, y, z, size, color); }
+// Dokusuz kısayol — parçacık için tipik kullanım.
+func spark3d(x, y, z, size, color) { tm3_billboard(0 - 1, x, y, z, size, color); }
+func kivilcim3d(x, y, z, size, color) { tm3_billboard(0 - 1, x, y, z, size, color); }
+
+// Dünya → ekran izdüşümü: 3B bir noktaya bağlı 2B çizim (can barı, isim
+// etiketi, hasar sayısı) için. space_end()'den SONRA çizilir.
+func screen_x3d(x, y, z): float { return tm3_screen_x(x, y, z); }
+func screen_y3d(x, y, z): float { return tm3_screen_y(x, y, z); }
+func ekran_x3d(x, y, z): float  { return tm3_screen_x(x, y, z); }
+func ekran_y3d(x, y, z): float  { return tm3_screen_y(x, y, z); }
+
 func texture3d(t, tu, tv) { tm3_texture(t, tu, tv); }
 func doku3d(t, tu, tv)    { tm3_texture(t, tu, tv); }
 func no_texture3d() { tm3_texture(0 - 1, 1.0, 1.0); }

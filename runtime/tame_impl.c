@@ -1492,6 +1492,56 @@ void tame_impl_fog(int64_t color, double density) {
   tame_material_upload();
 }
 
+// --- Faz 8: billboard + dünya→ekran izdüşümü --------------------------------
+//
+// Billboard, HER ZAMAN kameraya dönük duran bir dörtgendir. Parçacık, kıvılcım,
+// duman, 3B etiket gibi şeylerin tek çizim yolu budur: normal bir kutu/küre
+// kameradan yana bakınca incelir, parçacık ise her açıdan aynı görünmelidir.
+//
+// Dokusuz (düz renkli) billboard da istiyoruz — parçacık için tipik durum bu ve
+// kullanıcıyı "önce bir doku yükle" adımına zorlamak anlamsız. raylib
+// DrawBillboard bir Texture2D şart koştuğu için içeride 1×1 beyaz bir doku
+// tutuyoruz; tint ile boyanınca düz renkli kare oluyor.
+static Texture2D tame_white_tex = {0};
+static int tame_white_tex_ready = 0;
+
+static Texture2D tame_white_texture(void) {
+  if (!tame_white_tex_ready) {
+    Image img = GenImageColor(1, 1, WHITE);
+    tame_white_tex = LoadTextureFromImage(img);
+    UnloadImage(img);
+    tame_white_tex_ready = 1;
+  }
+  return tame_white_tex;
+}
+
+// Kameraya dönük dörtgen. tex < 0 (ya da geçersiz) → düz renk.
+// Işıklandırma UYGULANMAZ: parçacıklar ışık kaynağıdır, gölgelenmeleri yanlış
+// olurdu — bu yüzden tame_draw_lit yolundan bilerek geçmiyor.
+void tame_impl_billboard(int tex, double x, double y, double z, double size,
+                         int64_t color) {
+  Texture2D t = tame_texture_ok(tex) ? tame_textures[tex] : tame_white_texture();
+  DrawBillboard(tame_cam3d, t, (Vector3){(float)x, (float)y, (float)z},
+                (float)size, tame_color(color));
+}
+
+// Dünya noktasının EKRAN koordinatı. 3B can barı, isim etiketi ve hasar sayısı
+// gibi şeyler aslında 2B çizimdir — yalnız konumları 3B'de bir cisme bağlıdır.
+// Billboard bunları veremez (yazı tipi/metin 3B dörtgene sığmaz), izdüşüm verir:
+// entity'nin tepesini ekrana çevir, oraya normal text()/rect() çiz.
+// X ve Y ayrı builtin: VMValue ABI'sinden iki değer birden dönmek zahmetli.
+double tame_impl_screen_x(double x, double y, double z) {
+  Vector2 p = GetWorldToScreen((Vector3){(float)x, (float)y, (float)z},
+                               tame_cam3d);
+  return (double)p.x;
+}
+
+double tame_impl_screen_y(double x, double y, double z) {
+  Vector2 p = GetWorldToScreen((Vector3){(float)x, (float)y, (float)z},
+                               tame_cam3d);
+  return (double)p.y;
+}
+
 void tame_impl_draw_texture(int h, double x, double y) {
   if (tame_texture_ok(h))
     DrawTexture(tame_textures[h], (int)x, (int)y, WHITE);

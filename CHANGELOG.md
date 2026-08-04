@@ -9,6 +9,110 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — 3D oyun motoru: oynanış, his ve dünya geometrisi (Faz 7-9)
+
+Faz 4-6'nın üçü de render'dı (ışık, gölge, doku) + kamera. Sahne iyi görünüyor
+ve gezilebiliyordu ama `scene3d`'nin **oynanış tarafı toplayıcı-demo
+seviyesindeydi**: bölüm yok, düşman yok, mermi yok, can yok. Bu üç faz motoru
+"gezilebilir sahne"den "üstüne oyun yazılabilir"e taşıyor.
+
+**Ön koşul — entity slot geri kazanımı.** `spawn3` ham dizi index'i dönüyor,
+`kill3d` yalnız `alive=0` yapıyordu: boş slot asla geri kullanılmıyordu, yani
+mermi eklendiği an entity store sonsuza kadar büyürdü. arcade'in
+**generation'lı handle** deseni (`gen * 2^20 + slot`) `scene3d`'ye taşındı;
+bayat handle sessizce yok sayılıyor, böylece ölmüş bir entity'nin id'sini tutan
+kod, o slot yeniden kullanıldıktan sonra yanlışlıkla YENİ entity'yi oynatmıyor.
+
+**Faz 7 — oynanış (saf Tulpar).**
+- **Bölüm:** `level3d(n, fn)` / `bolum3d`, `next_level3d()` / `bolum_gec3d()`,
+  `goto_level3d`, `won3d()` / `kazandin_mi3d()`. Geçiş **kare sonunda**
+  uygulanır (`_lvl_pending3`) — çarpışma döngüsünün ortasında entity store'u
+  silmek, o döngünün elindeki slot'ları ayağının altından çekmek olurdu.
+  Geçişte entity'ler silinir ama **kancalar korunur**.
+- **Düşman AI:** `chase3d` / `takip_et3d`, `patrol3d` / `devriye3d`,
+  `in_range3d` / `menzilde3d`.
+- **Mermi:** `bullet3d` / `mermi3d` — sahibin baktığı yöne, gövdesinin önünde
+  doğar; yerçekimi ve zemin teması işlemez. Ömrü dolan, dünya sınırını aşan ya
+  da duvara giren mermi ölür. **Mermi sahibine çarpmaz** (sahip handle olarak
+  saklı, karşılaştırma slot üzerinden — bayat handle yanlış eşleşmez).
+- **Can/hasar:** `health3d` / `can3d`, `damage3d` / `hasar3d`, `on_death3d` /
+  `olunce3d`, `invuln3d`. **Dokunulmazlık penceresi varsayılan 0.6 sn** —
+  olmasaydı temas eden düşman 60 FPS'te saniyede 60 hasar vururdu. HUD'da can
+  barı (yalnız `health3d` çağrılmışsa görünür).
+
+**Faz 8 — "his" katmanı.**
+- **`tm3_billboard` builtin'i** (raylib `DrawBillboard`): her zaman kameraya
+  dönük dörtgen. Parçacık küre/kutuyla çizilseydi yandan bakınca incelirdi.
+  Dokusuz billboard destekleniyor (içeride 1×1 beyaz doku) — parçacık için
+  kullanıcıyı "önce doku yükle" adımına zorlamak anlamsızdı. Işık uygulanmaz:
+  parçacık ışık kaynağıdır.
+- **`tm3_screen_x` / `tm3_screen_y`**: dünya→ekran izdüşümü. Billboard 3B can
+  barı / isim etiketi / hasar sayısı veremez (metin dörtgene sığmaz); izdüşüm
+  verir. Yanında `on_hud3d(fn)` / `hud_ciz3` kancası — 2B çizim sahneden sonra.
+- **Parçacık havuzu** (saf Tulpar): `particles3d` / `parcacik3d`, `burst3d` /
+  `patlat3d`, `particle_gravity3d`. Parçacıklar bilinçli olarak entity DEĞİL —
+  oyun onlara tek tek başvurmaz, o yüzden handle makinesi gereksiz. Ölü slot'lar
+  geri kullanılır, 400'lük tavan (dolunca yeni parçacık düşer; kare hızı görsel
+  şıklıktan önemli).
+- **Karakter animasyonu:** `anim3d(id, bosta, kosu, fps)`. `anim_play` builtin'i
+  baştan beri vardı ama `scene3d` kullanmıyordu — modelli entity donuk duruyordu.
+  Motor kare sayacını sürüyor, "yatay hız > 0.35 ise koşu" seçimi otomatik.
+- **Konumsal ses:** `sound3d` / `ses3d`, `sound_range3d`.
+
+**Faz 9 — dünya geometrisi.**
+- **Kamera-duvar çarpışması** (varsayılan AÇIK): hedeften kameraya ışın, duvara
+  çarparsa kamera içeri çekilir. Kameranın duvarın içinden bakması sanat yönü
+  tercihi değil kusurdur (gölge kararıyla aynı gerekçe). `camera_collide3d(false)`
+  ile kapanır; açık alanda maliyeti yok.
+- **Şekil farkında çarpışma:** küre-küre, küre-kutu (en yakın nokta), silindir
+  (dikey kapsül). **İkisi de eksen-hizalı kutuysa eski ucuz AABB yolunda kalır**,
+  yani mevcut sahnelerin davranışı değişmez.
+- **Dönen kutu (OBB):** XZ düzleminde 4 eksenli SAT. Eksen-hizalı test dönük bir
+  duvarda hem yanlış pozitif hem yanlış negatif veriyordu.
+- **Rampa / eğimli zemin:** `ramp3d` / `rampa3d`. Dünya artık tek düz düzlem
+  değil. Çizim kademeli (raylib'de kama primitifi yok) ama **fizik analitik
+  eğimi kullanır**, yani yürüyüş pürüzsüz. Gerçek arazi (heightmap) ayrı bir iş.
+- **Katı gövde sistemi:** `Ent3.solid` + `solid3d` / `kati3d`. Duvar itmesi
+  eskiden **yalnız `TAG_PLAYER`** için çalışıyordu — düşmanlar duvarların
+  içinden geçiyordu. Artık her hareketli katı gövde statik geometriye karşı
+  itiliyor, iki hareketli gövde çarpışınca ayrılma **yarı yarıya** paylaşılıyor
+  (biri diğerini tek başına sürseydi hafif olan duvara sıkışırdı). Toplanabilir,
+  mermi ve rampa katı değil.
+
+Örnek: `examples/scene3d_arena.tpr` — üç fazı birden kullanan 3B arena
+(3 bölüm, kovalayan/devriye gezen düşmanlar, parçacık, 3B'ye bağlı can barları,
+rampa, dönük duvar, kapsül sütun). Motor **44 headless birim test**.
+
+### Fixed — `assert` sessizce hiçbir zaman başarısız olmuyordu
+
+`lib/test.tpr`'deki `func assert(int cond, str msg)` gövdesinde `cond == 0` ile
+bakıyordu. Doğal her kullanım (`assert(x < y, ...)`) bir **bool** geçiriyor ve
+bool VMValue'su `int 0`'a eşit çıkmıyor — sonuç: **`assert` hiçbir koşulda
+başarısız olmuyordu**, yalnız düz `0` tamsayısı çalışıyordu. Projedeki tüm
+`assert(...)` çağrıları boşa çalışıyor, test paketi yersiz yere yeşil yanıyordu.
+`func assert(cond, str msg)` + `if (!cond)` ile düzeltildi; ardından ortaya çıkan
+gerçek test hataları da giderildi. (Aynı aile: `assert_eq_str`'deki #40 notu.)
+
+### Fixed — SAT ayırma vektörünün işareti tersti
+
+Faz 9'un dönük-kutu çarpışmasında minimum ayırma vektörü **ters yöne**
+hesaplanıyordu: `d = merkez_a - merkez_b` olduğu için `dist > 0` iken cisim
+zaten +u tarafındadır ve ayırmak için +u'ya itilmelidir; kod -u'ya itiyordu.
+Sonuç: oyuncu duvardan dışarı değil **içine** sürülüyor, karşı taraftan
+çıkıyordu. `move3d` her karede oyuncunun yaw'ını hareket yönüne çevirdiği için
+bu yol pratikte neredeyse her duvar çarpışmasında devreye giriyordu.
+Regresyon testi artık itmenin YÖNÜNÜ doğruluyor — "artık çakışmıyor" demek
+yetmez, ters işaret de o testi geçer.
+
+### Fixed — Arch/CachyOS gibi dağıtımlarda derleme
+
+`llvm_map_components_to_libnames` statik LLVM bileşen adları üretiyor; Arch'ın
+LLVM 22 paketi statik bileşenleri **göndermiyor** (kalan birkaç `.a` da LTO
+bitcode olduğu için GNU `ld` okuyamıyor). CMake artık LLVM'in kendi
+`LLVM_LINK_LLVM_DYLIB` bayrağına uyuyor: açıksa paylaşımlı `libLLVM`, değilse
+eskisi gibi statik bileşenler. CI'ın LLVM 18 yolu (Ubuntu/macOS/Windows)
+etkilenmiyor.
+
 ### Added — 3D kamera: yörünge ve birinci şahıs (Faz 6)
 
 3B sahnenin kamerası bugüne kadar **hiç dönmüyordu**: oyuncunun sabit +Z

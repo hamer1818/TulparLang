@@ -22,7 +22,7 @@ $compileOnly = @(
   'arcade_2048.tpr','arcade_pong.tpr','arcade_vur.tpr',
   # tame3d_*/scene3d_*: 3D ornekleri de pencere acar — ayni gerekce.
   'tame3d_cube.tpr','tame3d_primitives.tpr','tame3d_models.tpr','tame3d_anim.tpr','tame3d_lights.tpr','tame3d_shadows.tpr','tame3d_texture.tpr',
-  'scene3d_collector.tpr','scene3d_camera.tpr','41_struct_entities.tpr',
+  'scene3d_collector.tpr','scene3d_camera.tpr','scene3d_arena.tpr','41_struct_entities.tpr',
   # utils.tpr is a module designed to be imported by 07_modules.tpr; running
   # it standalone is meaningless (no top-level program), but it should still
   # parse + lower cleanly so we at least catch compile-side regressions.
