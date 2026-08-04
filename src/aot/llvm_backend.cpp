@@ -874,6 +874,11 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm3_billboard", "aot_tm3_billboard_ptr", 6},
     {"tm3_screen_x", "aot_tm3_screen_x_ptr", 3},
     {"tm3_screen_y", "aot_tm3_screen_y_ptr", 3},
+    // 3D (Faz 10) — gerçek arazi (heightmap)
+    {"tm3_terrain_gen", "aot_tm3_terrain_gen_ptr", 7},
+    {"tm3_terrain_load", "aot_tm3_terrain_load_ptr", 5},
+    {"tm3_terrain_height", "aot_tm3_terrain_height_ptr", 2},
+    {"tm3_terrain_off", "aot_tm3_terrain_off_ptr", 0},
     {"tm_checker", "aot_tm_checker_ptr", 5},
     // girdi — gamepad (buton/eksen adla: "A"/"LB"/"START", "LX"/"RT"...)
     {"tm_gamepad_available", "aot_tm_gamepad_available_ptr", 1},

@@ -114,6 +114,12 @@ void tame_impl_line3(double x1, double y1, double z1, double x2, double y2,
                      double z2, int64_t color);
 void tame_impl_billboard(int tex, double x, double y, double z, double size,
                          int64_t color);
+int tame_impl_terrain_gen(int res, double sx, double sy, double sz, double base,
+                          double scale, int seed);
+int tame_impl_terrain_load(const char *path, double sx, double sy, double sz,
+                           double base);
+double tame_impl_terrain_height(double x, double z);
+void tame_impl_terrain_off(void);
 double tame_impl_screen_x(double x, double y, double z);
 double tame_impl_screen_y(double x, double y, double z);
 double tame_impl_pick_box(double mx, double my, double bx, double by, double bz,
@@ -585,6 +591,33 @@ VMValue aot_tm3_screen_x_ptr(VMValue *x, VMValue *y, VMValue *z) {
 
 VMValue aot_tm3_screen_y_ptr(VMValue *x, VMValue *y, VMValue *z) {
   return VM_FLOAT(tame_impl_screen_y(tm_num(x), tm_num(y), tm_num(z)));
+}
+
+// --- 3D (Faz 10) — gerçek arazi (heightmap) ---------------------------------
+// Üretilen mesh NORMAL bir model handle'ı olarak dönüyor; çizim/gölge/ışık
+// mevcut model yolundan geçsin diye (bkz. tame_impl.c'deki not).
+
+VMValue aot_tm3_terrain_gen_ptr(VMValue *res, VMValue *sx, VMValue *sy,
+                                VMValue *sz, VMValue *base, VMValue *scale,
+                                VMValue *seed) {
+  return VM_INT(tame_impl_terrain_gen((int)tm_int(res), tm_num(sx), tm_num(sy),
+                                      tm_num(sz), tm_num(base), tm_num(scale),
+                                      (int)tm_int(seed)));
+}
+
+VMValue aot_tm3_terrain_load_ptr(VMValue *path, VMValue *sx, VMValue *sy,
+                                 VMValue *sz, VMValue *base) {
+  return VM_INT(tame_impl_terrain_load(tm_str(path), tm_num(sx), tm_num(sy),
+                                       tm_num(sz), tm_num(base)));
+}
+
+VMValue aot_tm3_terrain_height_ptr(VMValue *x, VMValue *z) {
+  return VM_FLOAT(tame_impl_terrain_height(tm_num(x), tm_num(z)));
+}
+
+VMValue aot_tm3_terrain_off_ptr(void) {
+  tame_impl_terrain_off();
+  return VM_VOID();
 }
 
 // --- 3D (Faz 5) — doku / materyal / gökyüzü ---------------------------------

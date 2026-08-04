@@ -421,6 +421,25 @@ func screen_y3d(x, y, z): float { return tm3_screen_y(x, y, z); }
 func ekran_x3d(x, y, z): float  { return tm3_screen_x(x, y, z); }
 func ekran_y3d(x, y, z): float  { return tm3_screen_y(x, y, z); }
 
+// Gerçek arazi (heightmap). Model handle'ı döner — çizimi draw_model ile,
+// dolayısıyla gölge/ışık bedava. Arazi XZ'de dünya merkezinde ORTALIdır.
+func terrain_gen3d(res, sx, sy, sz, base, scale, seed): int {
+    return tm3_terrain_gen(res, sx, sy, sz, base, scale, seed);
+}
+func terrain_load3d(path, sx, sy, sz, base): int {
+    return tm3_terrain_load(path, sx, sy, sz, base);
+}
+func terrain_height3d(x, z): float { return tm3_terrain_height(x, z); }
+func terrain_off3d() { tm3_terrain_off(); }
+func arazi_uret3d(res, sx, sy, sz, taban, olcek, tohum): int {
+    return tm3_terrain_gen(res, sx, sy, sz, taban, olcek, tohum);
+}
+func arazi_yukle3d(yol, sx, sy, sz, taban): int {
+    return tm3_terrain_load(yol, sx, sy, sz, taban);
+}
+func arazi_yukseklik3d(x, z): float { return tm3_terrain_height(x, z); }
+func arazi_kapat3d() { tm3_terrain_off(); }
+
 func texture3d(t, tu, tv) { tm3_texture(t, tu, tv); }
 func doku3d(t, tu, tv)    { tm3_texture(t, tu, tv); }
 func no_texture3d() { tm3_texture(0 - 1, 1.0, 1.0); }

@@ -1503,7 +1503,7 @@ girildiğinde ne yapacağımı bilelim.
 ### 3D oyun katmanı — Faz 7-9 yol haritası ✅ TAMAMLANDI (2026-08-04)
 
 **Durum (2026-08-04):** Faz 7, 8 ve 9 bitti; aşağıdaki maddelerin tamamı
-uygulandı ve `tests/scene3d_engine.test.tpr`'de **44 headless test** ile
+uygulandı ve `tests/scene3d_engine.test.tpr`de **49 headless test** ile
 korunuyor. Motor artık "gezilebilir sahne" değil, **üstüne oyun yazılabilir**:
 bölüm sistemi, düşman AI, mermi, can/hasar, parçacık, karakter animasyonu,
 konumsal ses, kamera-duvar çarpışması, şekil farkında (küre/kapsül/OBB)
@@ -1515,11 +1515,15 @@ Uygulama sırasında iki hata çıktı ve düzeltildi (ikisi de CHANGELOG'da):
 test paketi yersiz yeşildi) ve **SAT ayırma vektörünün işareti terstiydi**
 (oyuncu duvardan dışarı değil içine itiliyordu).
 
-**Kalan (yeni faz adayları):** gerçek arazi — raylib `GenMeshHeightmap` +
-yükseklik örnekleme (rampa saf-Tulpar ve kademeli çizilen sınırlı yolu
-kullanıyor); dönük kutu ↔ küre için tam OBB testi (şu an kutu eksen-hizalı
-varsayılıyor); 3B oyunun `tulparlang.dev/oyunlar`'a yayınlanması (Faz 7 şartı
-artık sağlandı).
+**Faz 10 — gerçek arazi ✅ (2026-08-04):** `GenMeshHeightmap` tabanlı yükseklik
+haritası bağlandı; dünya artık sorgulanabilir sürekli bir yüzey. Örnekleme
+mesh'in üçgenlemesini birebir taklit ediyor, yani fizik görselle tam uyuşuyor.
+Yükseklik verisi CPU'da / mesh GPU'da ayrıldığı için arazi fiziği headless test
+edilebiliyor. Örnek: `examples/scene3d_terrain.tpr`.
+
+**Kalan (yeni faz adayları):** dönük kutu ↔ küre için tam OBB testi (şu an kutu
+eksen-hizalı varsayılıyor); arazi üzerinde doku/katman boyama (şu an tek renk);
+3B oyunun `tulparlang.dev/oyunlar`'a yayınlanması (Faz 7 şartı artık sağlandı).
 
 <details><summary>Özgün yol haritası (2026-08-01, Faz 6 sonrası) — tarihsel kayıt</summary>
 

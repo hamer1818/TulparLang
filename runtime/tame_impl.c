@@ -1662,6 +1662,128 @@ int tame_impl_gen(int kind, double a, double b, double c, double d) {
   return slot;
 }
 
+// --- Faz 10: gerçek arazi (heightmap) ---------------------------------------
+//
+// Rampa (Faz 9) dünyayı düz düzlemden kurtardı ama sınırlıydı: kama biçimli
+// entity'ler, kademeli çizim. Arazi gerçek çözüm — bir yükseklik haritasından
+// üretilmiş TEK mesh, her (x,z) için sürekli yükseklik.
+//
+// Mesh, model kayıt defterine NORMAL bir model olarak giriyor. Bunun sebebi
+// önemli: çizim/gölge/ışık/kayıt (gölge geçişi için display list) yollarının
+// hepsi model handle'ı üzerinden çalışıyor, dolayısıyla arazi bedavaya gölge
+// alıyor ve ışıklanıyor. Ayrı bir Model tutsaydık üçünü de elden bağlamak
+// gerekirdi.
+//
+// Yükseklik örneklemesi GenMeshHeightmap'in ÜÇGENLEMESİNİ birebir taklit
+// ediyor (düz bilineer DEĞİL): mesh her hücreyi köşegenden iki üçgene bölüyor
+// ve düz bilineer o köşegende mesh'ten sapar — oyuncu görünürde zeminin biraz
+// altına gömülür ya da üstünde yüzer. Fizik ile görselin uyuşması buna bağlı.
+static float *tame_terr_h = NULL;   // gri değerler (0..255), satır-major
+static int    tame_terr_mx = 0;     // yükseklik haritası çözünürlüğü
+static int    tame_terr_mz = 0;
+static float  tame_terr_sx = 0.0f;  // dünya boyutları
+static float  tame_terr_sy = 0.0f;
+static float  tame_terr_sz = 0.0f;
+static float  tame_terr_base = 0.0f; // taban Y (dünya)
+static int    tame_terr_ready = 0;
+
+void tame_impl_terrain_off(void) {
+  if (tame_terr_h) { free(tame_terr_h); tame_terr_h = NULL; }
+  tame_terr_ready = 0;
+}
+
+// Görüntüden gri değerleri sakla + mesh üret + model kaydına koy.
+//
+// Yükseklik verisi ile MESH kasten ayrı: gri değerleri çıkarmak saf CPU işi,
+// mesh üretmek ise GPU'ya yükleme yapıyor (GenMeshHeightmap sonunda
+// UploadMesh çağırıyor). Pencere yoksa yükseklik verisini yine de saklıyoruz
+// ve -1 dönüyoruz — böylece arazi FİZİĞİ pencere açmadan (headless testte)
+// sürülebiliyor, yalnız çizim devre dışı kalıyor.
+static int tame_terrain_build(Image img, double sx, double sy, double sz,
+                              double base) {
+  Color *px = LoadImageColors(img);
+  if (!px) { UnloadImage(img); return -1; }
+  int mx = img.width, mz = img.height;
+  float *hs = (float *)malloc((size_t)mx * (size_t)mz * sizeof(float));
+  if (!hs) { UnloadImageColors(px); UnloadImage(img); return -1; }
+  for (int i = 0; i < mx * mz; i++) {
+    // GenMeshHeightmap'in GRAY_VALUE'su ile AYNI: (r+g+b)/3
+    hs[i] = ((float)px[i].r + (float)px[i].g + (float)px[i].b) / 3.0f;
+  }
+  UnloadImageColors(px);
+
+  // Yükseklik verisi her durumda saklanır (fizik penceresiz de çalışır).
+  tame_impl_terrain_off();          // önceki araziyi bırak
+  tame_terr_h = hs;
+  tame_terr_mx = mx; tame_terr_mz = mz;
+  tame_terr_sx = (float)sx; tame_terr_sy = (float)sy; tame_terr_sz = (float)sz;
+  tame_terr_base = (float)base;
+  tame_terr_ready = 1;
+
+  // Mesh yalnız pencere varken — GPU'ya yükleme gerekiyor.
+  if (!tame_window_ready) { UnloadImage(img); return -1; }
+  int slot = tame_model_slot();
+  if (slot < 0) { UnloadImage(img); return -1; }
+  Mesh mesh = GenMeshHeightmap(img, (Vector3){(float)sx, (float)sy, (float)sz});
+  UnloadImage(img);
+  Model m = LoadModelFromMesh(mesh);
+  tame_models[slot].model = m;
+  tame_models[slot].anims = NULL;
+  tame_models[slot].anim_count = 0;
+  tame_models[slot].used = 1;
+  return slot;
+}
+
+// Perlin gürültüsünden prosedürel arazi — asset dosyası gerekmez.
+int tame_impl_terrain_gen(int res, double sx, double sy, double sz, double base,
+                          double scale, int seed) {
+  if (res < 2) res = 2;
+  if (res > 512) res = 512;         // 512² = 261k tepe noktası; üstü anlamsız
+  if (scale <= 0.0) scale = 4.0;
+  Image img = GenImagePerlinNoise(res, res, seed, seed, (float)scale);
+  return tame_terrain_build(img, sx, sy, sz, base);
+}
+
+// Dosyadan yükseklik haritası (gri tonlamalı görüntü).
+int tame_impl_terrain_load(const char *path, double sx, double sy, double sz,
+                           double base) {
+  if (!path || !*path) return -1;
+  Image img = LoadImage(path);
+  if (img.data == NULL) return -1;
+  return tame_terrain_build(img, sx, sy, sz, base);
+}
+
+// (x,z) dünya noktasında arazi yüzeyinin Y'si. Arazi yoksa ya da nokta ayak
+// izinin dışındaysa taban Y döner (yani düz zemin gibi davranır).
+double tame_impl_terrain_height(double wx, double wz) {
+  if (!tame_terr_ready || tame_terr_mx < 2 || tame_terr_mz < 2)
+    return tame_terr_base;
+  // Arazi dünyada ORTALI: yerel = dünya + yarı-boy.
+  float lx = (float)wx + tame_terr_sx * 0.5f;
+  float lz = (float)wz + tame_terr_sz * 0.5f;
+  if (lx < 0.0f || lz < 0.0f || lx > tame_terr_sx || lz > tame_terr_sz)
+    return tame_terr_base;
+  // Hücre koordinatlarına çevir (mesh: x*sx/(mx-1), z*sz/(mz-1)).
+  float cx = lx * (float)(tame_terr_mx - 1) / tame_terr_sx;
+  float cz = lz * (float)(tame_terr_mz - 1) / tame_terr_sz;
+  int x0 = (int)cx, z0 = (int)cz;
+  if (x0 >= tame_terr_mx - 1) x0 = tame_terr_mx - 2;
+  if (z0 >= tame_terr_mz - 1) z0 = tame_terr_mz - 2;
+  float fx = cx - (float)x0;
+  float fz = cz - (float)z0;
+  float h00 = tame_terr_h[x0 + z0 * tame_terr_mx];
+  float h10 = tame_terr_h[(x0 + 1) + z0 * tame_terr_mx];
+  float h01 = tame_terr_h[x0 + (z0 + 1) * tame_terr_mx];
+  float h11 = tame_terr_h[(x0 + 1) + (z0 + 1) * tame_terr_mx];
+  // GenMeshHeightmap hücreyi (0,1)-(1,0) köşegeninden bölüyor:
+  //   üçgen 1 = (0,0),(0,1),(1,0)  → fx + fz <= 1
+  //   üçgen 2 = (1,0),(0,1),(1,1)  → fx + fz >  1
+  float g;
+  if (fx + fz <= 1.0f) g = h00 + (h10 - h00) * fx + (h01 - h00) * fz;
+  else g = h11 + (h01 - h11) * (1.0f - fx) + (h10 - h11) * (1.0f - fz);
+  return (double)(tame_terr_base + g * tame_terr_sy / 255.0f);
+}
+
 void tame_impl_draw_model(int h, double x, double y, double z, double scale,
                           int64_t tint) {
   if (!tame_model_ok(h)) return;

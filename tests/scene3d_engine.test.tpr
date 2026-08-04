@@ -798,6 +798,108 @@ func t_camera_ray() {
            "ters yonde duvar yok");
 }
 
+// ===========================================================================
+// Faz 10 — gercek arazi (heightmap)
+// ===========================================================================
+// Arazi mesh'i GPU'ya yuklendigi icin pencere ister, AMA yukseklik verisi saf
+// CPU'da tutuluyor: fizik burada pencere ACMADAN surulebiliyor. Bu ayrim
+// bilincli (bkz. tame_terrain_build) ve bu testlerin var olma sebebi.
+
+// -- 41) Arazi yuksekligi: taban, sinir disi, sureklilik -------------------
+func t_terrain_height() {
+    scene3d_reset();
+    zemin3(0.0);
+    // 33x33 cozunurluk, 64x64 ayak izi, 10 birim en yuksek tepe
+    terrain3d(33, 64.0, 10.0, 64.0, 4.0, 1234);
+    // Ayak izi DISINDA taban Y donmeli (duz zemin gibi davranir)
+    assert(abs_f3(terrain_height3d(500.0, 0.0)) < 0.001, "sinir disinda taban");
+    assert(abs_f3(terrain_height3d(0.0, 0.0 - 500.0)) < 0.001, "sinir disinda taban (z)");
+    // Iceride: 0 ile sy arasinda olmali
+    float h = terrain_height3d(0.0, 0.0);
+    assert(h >= 0.0 && h <= 10.0, "yukseklik 0..sy araliginda");
+    // Sureklilik: cok yakin iki nokta cok yakin yukseklik vermeli.
+    // (Ucgen ici dogrusal interpolasyon → sicrama olmamali.)
+    float a = terrain_height3d(3.0, 3.0);
+    float b = terrain_height3d(3.02, 3.0);
+    assert(abs_f3(a - b) < 0.35, "arazi surekli olmali (sicrama yok)");
+}
+
+// -- 42) Arazi gercekten DUZ DEGIL ----------------------------------------
+// Bu testin varlik sebebi: tum ornekleme yolu sessizce taban Y donduruyor
+// olsaydi yukaridaki testlerin hepsi yine gecerdi.
+func t_terrain_not_flat() {
+    scene3d_reset();
+    zemin3(0.0);
+    terrain3d(65, 80.0, 12.0, 80.0, 5.0, 99);
+    float lo = 99999.0;
+    float hi = 0.0 - 99999.0;
+    int i = 0;
+    while (i < 40) {
+        float px = 0.0 - 35.0 + i * 1.75;
+        float hh = terrain_height3d(px, px * 0.4);
+        if (hh < lo) { lo = hh; }
+        if (hh > hi) { hi = hh; }
+        i = i + 1;
+    }
+    assert(hi - lo > 0.5, "arazide gercek yukseklik farki olmali");
+    assert(hi <= 12.001, "tepe sy'yi asmamali");
+    assert(lo >= 0.0 - 0.001, "cukur tabanin altina inmemeli");
+}
+
+// -- 43) Fizik araziye oturur (duz zemine DEGIL) ---------------------------
+func t_terrain_physics() {
+    scene3d_reset();
+    zemin3(0.0);
+    terrain3d(33, 64.0, 10.0, 64.0, 4.0, 7);
+    // Yuksek bir tepe noktasi bul
+    float bestx = 0.0;
+    float besth = 0.0 - 1.0;
+    int i = 0;
+    while (i < 30) {
+        float px = 0.0 - 25.0 + i * 1.7;
+        float hh = terrain_height3d(px, 0.0);
+        if (hh > besth) { besth = hh; bestx = px; }
+        i = i + 1;
+    }
+    assert(besth > 0.3, "test icin belirgin bir tepe bulunmali");
+    int p = spawn3(bestx, 40.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int steps = 0;
+    while (steps < 300) { _s3_physics(0.016667); steps = steps + 1; }
+    // yari boy 1.0 → merkez = yuzey + 1.0
+    assert(abs_f3(get3y(p) - (besth + 1.0)) < 0.05, "oyuncu ARAZI yuzeyine oturmali");
+    assert(get3y(p) > 1.05, "duz zemine oturmus olamaz (tepe var)");
+}
+
+// -- 44) Rampa arazinin USTUNE binebilir ----------------------------------
+func t_terrain_with_ramp() {
+    scene3d_reset();
+    zemin3(0.0);
+    terrain3d(33, 64.0, 6.0, 64.0, 4.0, 3);
+    float ground = terrain_height3d(0.0, 0.0);
+    // Arazinin epey ustune bir rampa koy
+    ramp3d(0.0, ground + 5.0, 0.0,  6.0, 2.0, 8.0, GRAY, 0.0);
+    float f = zemin_yukseklik3d(0.0, 0.0);
+    // rampanin ortasi: taban(ground+4) + yarim yukseklik(1) = ground+5
+    assert(abs_f3(f - (ground + 5.0)) < 0.01, "rampa arazinin ustune biner");
+    // Rampanin ayak izi disinda yine arazi gecerli
+    float f2 = zemin_yukseklik3d(25.0, 25.0);
+    assert(abs_f3(f2 - terrain_height3d(25.0, 25.0)) < 0.001, "rampa disinda arazi");
+}
+
+// -- 45) Arazi kapatilinca duz zemine donulur ------------------------------
+func t_terrain_off() {
+    scene3d_reset();
+    zemin3(0.0);
+    terrain3d(33, 64.0, 10.0, 64.0, 4.0, 55);
+    terrain_off3d_scene();
+    assert(abs_f3(_floor_at3(3.0, 3.0)) < 0.001, "arazi kapali → duz zemin");
+    // reset de temizlemeli
+    terrain3d(33, 64.0, 10.0, 64.0, 4.0, 55);
+    scene3d_reset();
+    zemin3(0.0);
+    assert(abs_f3(_floor_at3(3.0, 3.0)) < 0.001, "reset araziyi birakir");
+}
+
 print("=== scene3d motor testleri ===");
 test("yercekimi + zemin", "t_gravity_ground");
 test("ziplama (yalniz zeminde)", "t_jump");
@@ -843,4 +945,9 @@ test("rampa yuzey yuksekligi", "t_ramp_height");
 test("rampada yurumek", "t_ramp_walk");
 test("rampa/duvar sabit (dusmez)", "t_static_geometry");
 test("kamera-duvar isini", "t_camera_ray");
+test("arazi yuksekligi + sinirlar", "t_terrain_height");
+test("arazi gercekten duz degil", "t_terrain_not_flat");
+test("fizik araziye oturur", "t_terrain_physics");
+test("rampa arazinin ustune biner", "t_terrain_with_ramp");
+test("arazi kapatilinca duz zemin", "t_terrain_off");
 test_summary();

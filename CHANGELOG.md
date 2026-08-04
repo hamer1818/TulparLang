@@ -9,6 +9,41 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — gerçek arazi: yükseklik haritalı dünya (Faz 10)
+
+Faz 9'un rampası dünyayı düz düzlemden kurtardı ama sınırlıydı: kama biçimli
+entity'ler, kademeli çizim, elle yerleştirme. Arazi gerçek çözüm — bir yükseklik
+haritasından üretilmiş **tek mesh** ve her `(x, z)` için **sürekli yükseklik**.
+
+- **`tm3_terrain_gen(res, sx, sy, sz, base, scale, seed)`** — Perlin
+  gürültüsünden prosedürel arazi; **asset dosyası gerekmez**.
+  **`tm3_terrain_load(path, ...)`** — gri tonlamalı yükseklik haritası
+  dosyasından. İkisi de **normal bir MODEL handle'ı** dönüyor: çizim, gölge,
+  ışık ve gölge geçişinin display-list kaydı zaten model handle'ı üzerinden
+  çalıştığı için arazi üçünü de bedavaya alıyor. Ayrı bir `Model` tutulsaydı
+  hepsini elden bağlamak gerekirdi.
+- **`tm3_terrain_height(x, z)`** — yüzeyin dünya Y'si. Örnekleme
+  `GenMeshHeightmap`'in **üçgenlemesini birebir taklit ediyor**, düz bilineer
+  değil: mesh her hücreyi köşegenden iki üçgene bölüyor ve bilineer o köşegende
+  mesh'ten sapıyor — oyuncu görünürde zeminin altına gömülür ya da üstünde
+  yüzerdi. Fizik ile görselin uyuşması buna bağlı.
+- **`scene3d`:** `terrain3d` / `arazi3d`, `terrain_file3d` / `arazi_dosya3d`,
+  `terrain_color3d`, `zemin_yukseklik3d`. Zemin yüksekliği artık tek bir yerden
+  (`_floor_at3`) geliyor: arazi varsa onun yüzeyi, yoksa düz zemin — **rampalar
+  her iki durumda da üstüne binebiliyor**. Yerçekimi, zıplama ve kamera
+  otomatik uyum sağlıyor; arazi kullanmayan sahneler bit-bit aynı kalıyor.
+
+**Yükseklik verisi ile mesh kasten ayrı tutuluyor.** Gri değerleri çıkarmak saf
+CPU işi, mesh üretmek ise GPU'ya yükleme yapıyor (`GenMeshHeightmap` sonunda
+`UploadMesh` çağırıyor). Pencere yokken yükseklik verisi yine saklanıyor ve
+model handle'ı `-1` dönüyor — böylece **arazi fiziği pencere açmadan headless
+test edilebiliyor**, yalnız çizim devre dışı kalıyor. Motorun arazi testleri
+(5 adet) bu ayrım sayesinde var.
+
+Örnek: `examples/scene3d_terrain.tpr` — 120×120 birimlik prosedürel açık dünya;
+altınlar `arazi_yukseklik3d` ile tam yüzeye oturtuluyor. Motor **49 headless
+birim test**.
+
 ### Removed — natif Windows desteği bırakıldı; Windows artık WSL üzerinden
 
 **3.13.0'dan itibaren TulparLang natif Windows'u desteklemiyor.** Windows

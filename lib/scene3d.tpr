@@ -347,6 +347,9 @@ func scene3d_reset() {
     _deadT = []; _deadF = [];
     _lvlN = []; _lvlF = []; _cur_lvl3 = 0; _lvl_pending3 = 0 - 1; _won3 = 0;
     _s3_particles_clear();
+    // Arazi bayrağı sıfırlanır (yükseklik verisi de bırakılır) — sahne
+    // sıfırlanınca dünya da sıfırlanmalı, yoksa yeni sahne eski tepeleri sürer.
+    _terr_on = 0; _terr_model = 0 - 1; terrain_off3d();
     _score3 = 0;
     _game_over3 = 0;
     _cam_target = 0 - 1;
@@ -875,7 +878,7 @@ func _s3_physics(dt) {
             // yükseklik de zemin sayılır, ikisinin EN YÜKSEĞİ alınır.
             if (is_bullet == 0 && is_static == 0) {
                 float half = e.sy * 0.5;
-                float floor_y = _ramp_floor3(e.x, e.z, _ground_y) + half;
+                float floor_y = _floor_at3(e.x, e.z) + half;
                 if (e.y <= floor_y) {
                     e.y = floor_y;
                     if (e.vy < 0.0) { e.vy = 0.0; }
@@ -1288,6 +1291,50 @@ func _ramp_floor3(px, pz, base): float {
     return best;
 }
 
+// --- Gerçek arazi (Faz 10) --------------------------------------------------
+// Rampa dünyayı düz düzlemden kurtardı ama sınırlıydı (kama entity'leri,
+// kademeli çizim). Arazi gerçek çözüm: yükseklik haritasından üretilmiş TEK
+// mesh, her (x,z) için sürekli yükseklik. XZ'de dünya merkezinde ORTALI.
+//
+// Model handle'ı -1 olabilir: yükseklik verisi CPU'da, mesh ise GPU'da yaşıyor,
+// dolayısıyla pencere yokken (headless test) fizik çalışır ama çizim olmaz.
+int   _terr_on = 0;
+int   _terr_model = 0 - 1;
+float _terr_sx = 0.0;
+float _terr_sz = 0.0;
+int   _terr_color = 0;
+
+// Prosedürel arazi (Perlin) — asset dosyası gerekmez.
+// res: yükseklik haritası çözünürlüğü, sx/sz: ayak izi, sy: en yüksek tepe,
+// scale: gürültü ölçeği (küçük = geniş tepeler), seed: tohum.
+func terrain3d(res, sx, sy, sz, scale, seed) {
+    _terr_model = terrain_gen3d(res, sx, sy, sz, _ground_y, scale, seed);
+    _terr_on = 1;
+    _terr_sx = sx * 1.0;
+    _terr_sz = sz * 1.0;
+    _terr_color = rgb(96, 132, 88);
+}
+
+// Gri tonlamalı yükseklik haritası dosyasından.
+func terrain_file3d(path, sx, sy, sz) {
+    _terr_model = terrain_load3d(path, sx, sy, sz, _ground_y);
+    _terr_on = 1;
+    _terr_sx = sx * 1.0;
+    _terr_sz = sz * 1.0;
+    _terr_color = rgb(96, 132, 88);
+}
+
+func terrain_color3d(c) { _terr_color = c; }
+func terrain_off3d_scene() { _terr_on = 0; terrain_off3d(); }
+
+// (x,z) noktasındaki zemin: arazi varsa onun yüzeyi, yoksa düz zemin.
+// Rampalar HER İKİ durumda da üstüne binebilir (bkz. _ramp_floor3).
+func _floor_at3(px, pz): float {
+    float base = _ground_y;
+    if (_terr_on == 1) { base = terrain_height3d(px, pz); }
+    return _ramp_floor3(px, pz, base);
+}
+
 // Rampa üret: yerel +Z yönünde yükselir, yaw ile döndürülür.
 func ramp3d(x, y, z, sx, sy, sz, color, yaw): int {
     int id = spawn3(x, y, z, sx, sy, sz, color, SHAPE_RAMP, TAG_PROP);
@@ -1511,6 +1558,15 @@ func _s3_camera() {
 
 // ---- Çizim -----------------------------------------------------------------
 func _s3_render() {
+    // Arazi varsa düz zemin/ızgara YERİNE onu çiz. Model handle'ı normal model
+    // olduğu için gölge/ışık yolları bedavaya çalışıyor. Mesh yerel uzayda
+    // 0..sx / 0..sz aralığında, o yüzden yarı-boy kadar geri kaydırıp ortalıyoruz.
+    if (_terr_on == 1) {
+        if (_terr_model >= 0) {
+            draw_model(_terr_model, 0.0 - _terr_sx * 0.5, _ground_y,
+                       0.0 - _terr_sz * 0.5, 1.0, _terr_color);
+        }
+    } else {
     if (_ground_on == 1) {
         if (_ground_tex3 >= 0) {
             // Dokulu zemin: renk beyaz olmalı, yoksa doku boyanır.
@@ -1522,6 +1578,7 @@ func _s3_render() {
             grid(toInt(_ground_sz), 1.0);
         }
     }
+    }   // arazi else'i
     int n = length(_e3);
     int cts = _slot_of3(_cam_target);   // handle → slot (döngü slot'la geziyor)
     int i = 0;
@@ -1869,3 +1926,7 @@ func ses_menzili3d(r) { sound_range3d(r); }
 func rampa3d(x, y, z, sx, sy, sz, renk, yaw): int { return ramp3d(x, y, z, sx, sy, sz, renk, yaw); }
 func don3d(i, yaw) { set3yaw(i, yaw); }
 func yon3d(i): float { return get3yaw(i); }
+func arazi3d(res, sx, sy, sz, olcek, tohum) { terrain3d(res, sx, sy, sz, olcek, tohum); }
+func arazi_dosya3d(yol, sx, sy, sz) { terrain_file3d(yol, sx, sy, sz); }
+func arazi_renk3d(c) { terrain_color3d(c); }
+func zemin_yukseklik3d(x, z): float { return _floor_at3(x, z); }
