@@ -108,10 +108,14 @@ yetmez, ters işaret de o testi geçer.
 
 `llvm_map_components_to_libnames` statik LLVM bileşen adları üretiyor; Arch'ın
 LLVM 22 paketi statik bileşenleri **göndermiyor** (kalan birkaç `.a` da LTO
-bitcode olduğu için GNU `ld` okuyamıyor). CMake artık LLVM'in kendi
-`LLVM_LINK_LLVM_DYLIB` bayrağına uyuyor: açıksa paylaşımlı `libLLVM`, değilse
-eskisi gibi statik bileşenler. CI'ın LLVM 18 yolu (Ubuntu/macOS/Windows)
-etkilenmiyor.
+bitcode olduğu için GNU `ld` okuyamıyor). CMake artık `find_library` ile
+**statik bileşenlerin diskte gerçekten var olup olmadığına** bakıyor: varsa
+eskisi gibi bileşen bileşen, yoksa paylaşımlı `libLLVM`.
+
+Ölçüt olarak LLVM'in `LLVM_LINK_LLVM_DYLIB` bayrağı **yetmiyor** — MSYS2/MinGW
+LLVM 22 paketinde bayrak açık ama statik bileşenler de var; bayrağa uyulunca
+`tulpar.exe` `libllvm-22.dll`'e bağlanıyor ve CI'ın DLL paketleme koruması
+düşüyor. Windows dağıtımı kendi kendine yeten tek dosya olmalı.
 
 ### Added — 3D kamera: yörünge ve birinci şahıs (Faz 6)
 

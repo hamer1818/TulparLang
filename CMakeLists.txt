@@ -326,9 +326,22 @@ target_compile_definitions(tulpar
 #     -lLLVMCore" ya da "file format not recognized" ile patlar.
 # LLVMConfig.cmake bunu LLVM_LINK_LLVM_DYLIB ile kendisi bildiriyor; bayrağa
 # uymak LLVM'in önerdiği yol, sürüm/dağıtım tahmini yapmaktan güvenli.
-if(LLVM_LINK_LLVM_DYLIB)
+#
+# Karar ölçütü, LLVM_LINK_LLVM_DYLIB bayrağı DEĞİL, statik bileşenlerin diskte
+# gerçekten bulunup bulunmadığıdır. Bayrağa bakmak yetmiyor: MSYS2/MinGW LLVM 22
+# paketinde bayrak AÇIK ama statik bileşenler de var; oraya dylib yolunu
+# uygulayınca tulpar.exe libllvm-22.dll'e bağlanıyor ve CI'ın DLL paketleme
+# koruması (haklı olarak) düşüyor — Windows dağıtımı kendi kendine yeten tek
+# dosya olmalı. Statik bileşen varsa onu kullan; yoksa (Arch/CachyOS) dylib'e
+# düş. LLVMCore temsilci: Arch'ta gönderilmeyenler arasında.
+find_library(TULPAR_LLVM_STATIC_PROBE
+    NAMES LLVMCore
+    PATHS ${LLVM_LIBRARY_DIRS}
+    NO_DEFAULT_PATH)
+
+if(NOT TULPAR_LLVM_STATIC_PROBE)
     set(llvm_libs LLVM)
-    message(STATUS "LLVM: paylasimli dylib ile linkleniyor (LLVM_LINK_LLVM_DYLIB=ON)")
+    message(STATUS "LLVM: statik bilesenler yok — paylasimli dylib ile linkleniyor")
 else()
     llvm_map_components_to_libnames(llvm_libs
         support core irreader
