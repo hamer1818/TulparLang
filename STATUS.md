@@ -1521,9 +1521,7 @@ mesh'in üçgenlemesini birebir taklit ediyor, yani fizik görselle tam uyuşuyo
 Yükseklik verisi CPU'da / mesh GPU'da ayrıldığı için arazi fiziği headless test
 edilebiliyor. Örnek: `examples/scene3d_terrain.tpr`.
 
-**Kalan (yeni faz adayları):** dönük kutu ↔ küre için tam OBB testi (şu an kutu
-eksen-hizalı varsayılıyor); arazi üzerinde doku/katman boyama (şu an tek renk);
-3B oyunun `tulparlang.dev/oyunlar`'a yayınlanması (Faz 7 şartı artık sağlandı).
+**Bundan sonrası:** aşağıdaki "Faz 11+ backlog" bölümü.
 
 <details><summary>Özgün yol haritası (2026-08-01, Faz 6 sonrası) — tarihsel kayıt</summary>
 
@@ -1602,6 +1600,115 @@ bağlama + **`wasm/dist` ve `android/dist` yeniden derlemesi** demek.
   `tulparlang.dev/oyunlar`'a 3B oyun konmayacak.
 
 </details>
+
+### 3D oyun katmanı — Faz 11+ backlog
+
+**Yazıldığı an: 2026-08-04, Faz 10 sonrası.** Faz 7-10 motoru "gezilebilir
+sahne"den "üstüne oyun yazılabilir"e taşıdı. Aşağıdakiler o çalışma sırasında
+ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
+öneriyle yazıldı: önce güven altyapısı, sonra motor, sonra içerik.
+
+#### 🔴 Güven altyapısı — motor büyümeden önce
+
+- 🔴 **54 test paketi CI'da hiç koşmuyor.** CI yalnız `./build.sh test`
+  (örnekler), `tests/typeinfer/run.sh` ve bir sha256 smoke'u koşuyor;
+  `tests/*.test.tpr` paketlerinin **hiçbiri** CI'da değil — 49 testlik
+  `scene3d_engine.test.tpr` dahil. `assert` hatası (aşağıda) tam olarak bu
+  körlükte yaşadı: paketler yeşil görünüyordu ama hiçbir şey doğrulamıyordu.
+  **Sıradaki adım:** `build.sh`'ye `tests/*.test.tpr` üzerinde dolaşan bir
+  hedef ekle, `build.yml`'de `./build.sh test`'ten sonra çağır. Dikkat: dördü
+  (`arcade_movement`, `arcade_progression`, `methods`, `struct_native`)
+  `test_summary()` çağırmıyor, yani çıkış kodu üretmiyorlar — önce onlar
+  düzeltilmeli, yoksa hata sessizce yutulur.
+
+- 🔴 **`assert` sınıfı denetimi.** `lib/test.tpr`'de `assert(int cond, ...)`
+  gövdesinde `cond == 0` ile bakıyordu; bool VMValue'su int 0'a eşit çıkmadığı
+  için **hiçbir zaman başarısız olmuyordu** (düzeltildi 2026-08-04). Aynı hata
+  sınıfı — bool'un int/`==` ile karşılaştırılması — başka yerlerde de olabilir.
+  `assert_eq_str`'deki #40 notu akraba bir vakayı anlatıyor.
+  **Sıradaki adım:** `lib/*.tpr` ve `src/` içinde bool değerlerin `== 0` /
+  `== 1` ile karşılaştırıldığı yerleri tara.
+
+- 🟡 **Codegen: fonksiyon yereli aynı adlı GLOBAL'i eziyor.** Açık hata,
+  düzeltilmedi:
+  ```tulpar
+  func inner() { int p = 0; while (p < 5) { p = p + 1; } }
+  int p = 99;  inner();  print(p);   // 99 değil, 5
+  ```
+  Fonksiyondan fonksiyona yereller izole; sorun yalnız üst-düzey global ile.
+  Faz 9'da bir hata ararken yanlış ize sürükledi (üst-düzey `int p` kullanan
+  bir probe yazılmıştı). AOT codegen'de isim çözümlemesi.
+
+#### 🔴 Motor — bilerek bırakılan ödünler
+
+- 🔴 **Çarpışma O(n²), uzamsal bölümleme yok.** `_s3_collision` her kare tüm
+  çiftleri geziyor (duvar itmesi + gövde-gövde + kanca döngüleri). Mermi ve
+  parçacık geldiğine göre gerçek bir oyunda entity sayısı hızla artar.
+  **Sıradaki adım:** basit bir uniform grid (hücre boyu ≈ en büyük entity) —
+  saf Tulpar, entity store zaten slot'lu.
+
+- 🟡 **Küre ↔ DÖNÜK kutu yaklaşık.** `_sph_box3` kutuyu eksen-hizalı
+  varsayıyor; kutu-kutu çifti tam SAT'tan geçiyor ama küre-kutu geçmiyor.
+  Faz 9'da bilerek bırakıldı, kodda not düşülü.
+
+- 🟡 **Arazide eğim sınırı yok.** Oyuncu dik yamaçları da tırmanabiliyor;
+  kayma (sliding) yok. `_floor_at3` yalnız yükseklik veriyor, normal vermiyor.
+  **Sıradaki adım:** `tm3_terrain_normal(x, z)` binding'i (komşu örneklerden
+  türetilebilir), sonra saf Tulpar'da eğim sınırı + kayma.
+
+- 🟡 **Kamera-duvar ışını araziyi görmüyor.** `_cam_clear_t3` yalnız
+  `TAG_WALL` AABB'lerini tarıyor; kamera tepenin içine girebiliyor.
+  **Sıradaki adım:** ışın boyunca arazi yüksekliğini örnekle (yürüyen ışın).
+
+- 🟢 **Rampa artık gereksiz olabilir.** Faz 9'un rampası kademeli çiziliyor
+  (raylib'de kama primitifi yok) ve arazi geldiğine göre çoğu kullanım
+  arazinin işi. Ya gerçek kama mesh'i üretilmeli ya da rampa "arazi yokken
+  kullanılan basit yol" olarak konumlandırılmalı.
+
+#### 🟡 Oyun yapımı — motorun hâlâ vermediği şeyler
+
+- 🟡 **Düşman yol bulma yok.** `chase3d` düz çizgi; düşman duvara toslayıp
+  takılıyor. En az bir "engelden kaç" davranışı (duvara değince yana kay) ya
+  da arazi/duvar ızgarası üzerinde A*.
+- 🟡 **Animasyon geçişi/harmanlama yok.** `anim3d` boşta↔koşu arasında sert
+  geçiyor. Geçiş süresi + harmanlama.
+- 🟡 **Kayıt/yükleme 3B'ye bağlı değil.** `kayit_yaz`/`kayit_oku` tame'de var,
+  `scene3d` kullanmıyor (arcade kullanıyor). Bölüm ilerlemesi, en yüksek skor.
+- 🟡 **Gamepad `scene3d`'de yok.** tame'de binding var (`gamepad_down`,
+  `gamepad_axis`); hareket/kamera preset'lerine bağlanmalı.
+- 🟡 **Menü/UI katmanı yok.** Başlangıç ekranı, duraklat, bölüm sonu.
+  `on_hud3d` var ama her oyun kendi menüsünü elden yazıyor.
+- 🟢 **Tetikleyici bölge** (`solid3d(false)` + kanca ile taklit edilebiliyor)
+  için adı konmuş bir API: `trigger3d(...)`.
+- 🟢 **Konumsal seste yön yok** — yalnız mesafe zayıflatması var, stereo
+  kaydırma (panning) yok.
+
+#### 🟡 Görsel
+
+- 🟡 **Arazi tek renk.** Yüksekliğe/eğime göre katman boyama (çim/kaya/kar)
+  shader işi; `tm3_terrain_*` ailesine doku katmanı eklenmeli.
+- 🟢 Gökyüzü dokusu (şu an yalnız degrade), su yüzeyi, gündüz/gece döngüsü.
+- 🟢 Parçacıklarda dönme/doku atlası yok; tek boy billboard.
+
+#### 🟢 Yayın ve belgeler
+
+- 🟢 **3B oyun `tulparlang.dev/oyunlar`'a konabilir** — Faz 7 şartı sağlandı
+  (karar 2026-08-01'de "Faz 7 bitmeden yayınlanmayacak" idi). Adaylar:
+  `scene3d_arena`, `scene3d_terrain`.
+- 🟢 **`scene3d` API belgesi yok.** arcade'in Starlight sayfası var, 3B'nin
+  yok. ~120 fonksiyon (TR+EN alias'larla).
+- 🟢 **3B örneklerin İngilizce ikizi yok.** `examples/en/` altında arcade
+  ikizleri var, `scene3d_*` için yok.
+
+#### 🟢 Temizlik
+
+- 🟢 **Windows shim'leri ölü kod.** Natif Windows 3.13.0'da bırakıldı ama
+  `src/common/platform*.h` içindeki `PLATFORM_WINDOWS`/`_WIN32` dalları
+  bilerek duruyor (sökmek büyük ve riskli bir refactor). Artık bakımsız ve
+  test edilmemiş sayılıyorlar; istenirse ayrı bir işte temizlenebilir.
+- 🟢 **`%` operatörü dilde yok** — `mod()` var. Faz 8'de animasyon karesini
+  sararken yazıldı ve sözcükleyici hatası verdi; üstelik hata **modülü
+  sessizce kesiyor** ve alakasız bir "fonksiyon bulunamadı" olarak görünüyor.
 
 ### Dil seviyesi
 
