@@ -1621,13 +1621,41 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   olarak bu durumdaydı ve düzeltildi. Koşucunun her iki koruması da bilerek
   hata sokularak doğrulandı.
 
-- 🔴 **`assert` sınıfı denetimi.** `lib/test.tpr`'de `assert(int cond, ...)`
-  gövdesinde `cond == 0` ile bakıyordu; bool VMValue'su int 0'a eşit çıkmadığı
-  için **hiçbir zaman başarısız olmuyordu** (düzeltildi 2026-08-04). Aynı hata
-  sınıfı — bool'un int/`==` ile karşılaştırılması — başka yerlerde de olabilir.
-  `assert_eq_str`'deki #40 notu akraba bir vakayı anlatıyor.
-  **Sıradaki adım:** `lib/*.tpr` ve `src/` içinde bool değerlerin `== 0` /
-  `== 1` ile karşılaştırıldığı yerleri tara.
+- ✅ **`assert` sınıfı denetimi tamamlandı (2026-08-06).** Tarama bir hata daha
+  buldu ve asıl kök nedeni ortaya çıkardı.
+  - **`assert_eq_bool` de no-op'muş.** İmzası `(int actual, int expected)`,
+    normalleştirmesi `actual != 0` idi. Bool için `!= 0` **her zaman true**, yani
+    iki taraf da 1'e normalleşiyor ve iddia asla başarısız olamıyordu. 15
+    dosyada 77 çağrı hiçbir şey doğrulamıyormuş. `assert` ile aynı düzeltme:
+    parametreler tipsiz, kontrol doğruluk-değeri üzerinden (`if (actual)`).
+    Düzeltildikten sonra 54 paket hâlâ geçti — iddialar doğruymuş, sadece
+    denetlenmiyorlarmış.
+  - **Kök neden: typechecker `import`'u takip etmiyordu.** Argüman denetimi
+    zaten vardı ve `assert(x < y, msg)`'yi (`bool` → `int cond`) anında
+    reddederdi; ama typeinfer hiçbir modülün kaynağını açmadığı için `assert`'ün
+    imzasını hiç görmedi. Yani `test`, `wings`, `router`, `orm`, `scene3d`,
+    `arcade` — **tüm stdlib çağrıları denetimsizdi.** `typeinfer_program` artık
+    AOT ile aynı çözüm sırasını kullanarak modülleri parse ediyor ve yalnızca
+    **imzalarını** (fonksiyon + struct) kaydediyor; gövdeler denetlenmiyor.
+  - **Yeni denetim: sabit karşılaştırma.** `==`/`!=` operandları farklı skaler
+    tiplerse uyarı. Çalışma zamanı önce tip etiketine baktığı için `b == 1` hep
+    false, `b != 0` hep **true**'dur. `int`/`float` mutually comparable kalıyor
+    (`1 == 1.0` gerçekten doğru).
+  - **Yol boyunca üç yanlış pozitif ayıklandı:** `json` artık her iki yönde
+    uyumlu (dinamik tip; 461 uyarının 418'i tek başına buydu), `if (<tipsiz
+    parametre>)` ve `if (<json>)` artık uyarı vermiyor (scene3d/arcade/wings'in
+    on/off ev stili), `int x = <bool>` **store**'da serbest — AOT gerçekten
+    dönüştürüyor (`tests/bool_to_int_coerce.test.tpr`), **call**'da değil.
+    Repoda kalan 6 uyarının hepsi bu çalışmadan önce de vardı (`bigint`,
+    `input` arity, `call` arg); ölçüldü ve doğrulandı.
+  - Regresyon: `tests/typeinfer/{pass,fail}/` altına 6 fixture. Üç `fail`
+    fixture'ının **doğru mesajla** reddedildiği tek tek doğrulandı.
+
+- 🟡 **Argüman sınırında bool→int dönüşümü yok.** Yukarıdaki asimetri dilin
+  kendisinde: `int x = true` ve `x = true` doğru dönüşüyor, ama `f(true)` →
+  `int` parametresi dönüşmüyor; değer bool kalıyor. `assert` hatası tam olarak
+  bu boşlukta doğdu. Artık typecheck yakalıyor, ama asıl çözüm codegen'de
+  parametre bağlamayı store ile aynı hale getirmek olurdu.
 
 - 🟡 **Codegen: fonksiyon yereli aynı adlı GLOBAL'i eziyor.** Açık hata,
   düzeltilmedi:

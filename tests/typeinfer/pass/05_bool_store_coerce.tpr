@@ -1,0 +1,27 @@
+// Expected: typeinfer clean.
+//
+// `int x = <bool>` is a supported, tested coercion — the AOT backend rewrites
+// the VMValue tag from VM_VAL_BOOL to VM_VAL_INT at the local store (slot 2
+// already holds 1/0, so it is lossless; tests/bool_to_int_coerce.test.tpr
+// guards the runtime half). Assignment coerces the same way.
+//
+// The asymmetry is the point: this is legal at a STORE and illegal at a CALL
+// (fail/06), because no such rewrite happens when binding an argument. That
+// asymmetry is exactly what made the `assert` bug possible, so both halves are
+// pinned here.
+//
+// Also guards `if (<untyped param>)` — the house style for on/off toggles all
+// through scene3d/arcade/wings. An untyped parameter carries no type
+// information, so demanding bool/int there is a false positive by
+// construction; `if (on)` is the correct form and `on == 1` is the broken one.
+
+func toggle(on): int {
+    if (on) { return 1; }
+    return 0;
+}
+
+int x = true;
+x = false;
+print(x);
+print(toggle(true));
+print(toggle(0));

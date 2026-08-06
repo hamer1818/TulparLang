@@ -84,12 +84,21 @@ func assert_eq_str(json actual, json expected) {
     }
 }
 
-// Boolean (0/1) equality.
-func assert_eq_bool(int actual, int expected) {
+// Boolean equality. Both sides are normalised to 0/1 by TRUTHINESS, so a real
+// bool and an int flag can be compared against each other.
+//
+// Same trap as `assert` above, and it bit here too: the parameters used to be
+// `int` and the normalisation used to be `actual != 0`. For a bool argument —
+// i.e. `assert_eq_bool(kazandin_mi(), false)`, the only natural way to call
+// this — `!= 0` is ALWAYS true, so both sides normalised to 1 and the
+// assertion could never fail. 77 call sites across 15 suites were asserting
+// nothing. The `!x` form is the one that reads the value instead of its type
+// tag; `tulpar typecheck` now rejects the `bool != int` shape outright.
+func assert_eq_bool(actual, expected) {
     int a = 0;
     int e = 0;
-    if (actual != 0) { a = 1; }
-    if (expected != 0) { e = 1; }
+    if (actual) { a = 1; }
+    if (expected) { e = 1; }
     if (a != e) {
         _test_set_fail("expected " + toString(e) + " got " + toString(a));
     }

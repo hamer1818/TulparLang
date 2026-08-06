@@ -9,6 +9,55 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Fixed — typecheck artık `import`'u takip ediyor (`assert` hatasının kök nedeni)
+
+`assert`'in bool koşullarda hiç başarısız olmaması tek bir yazım hatası değildi;
+**yapısal bir körlüğün belirtisiydi.** Denetim onu kovaladı ve zincirin tamamını
+buldu.
+
+- **`assert_eq_bool` de no-op'muş.** İmzası `(int actual, int expected)`,
+  normalleştirmesi `actual != 0`. Bool için `!= 0` **her zaman true** — iki taraf
+  da 1'e normalleşiyor, iddia asla başarısız olamıyor. **15 dosyada 77 çağrı**
+  hiçbir şey doğrulamıyordu. `assert` ile aynı düzeltme: parametreler tipsiz,
+  kontrol doğruluk-değeri üzerinden. Düzeltmeden sonra 54 paket hâlâ geçti —
+  iddialar doğruymuş, yalnızca denetlenmiyorlarmış.
+
+- **Asıl bulgu: typeinfer hiçbir modülün kaynağını açmıyordu.** Argüman denetimi
+  zaten vardı ve `assert(x < y, msg)`'yi (`bool` → `int cond`) ilk görüşte
+  reddederdi — ama `assert`'ün imzasını hiç görmedi. Yani `test`, `wings`,
+  `router`, `orm`, `scene3d`, `arcade`: **tüm stdlib çağrıları denetimsizdi.**
+  `typeinfer_program` artık AOT ile aynı çözüm sırasını (gömülü stdlib → düz yol
+  → `<ad>.tpr` → `tulpar_modules/`) kullanarak modülleri parse ediyor ve yalnızca
+  **imzalarını** kaydediyor. Gövdeler denetlenmiyor: stdlib içini her kullanıcı
+  derlemesinde denetlemek hem yavaş hem gürültülü olurdu, üstelik modülün kendi
+  tanıları onu düzenleyene aittir. Ön-geçiş maliyeti ölçüldü: fark yok (~6ms).
+
+- **Yeni tanı — sabit karşılaştırma.** `==`/`!=` operandları farklı skaler
+  tiplerse uyarı verilir. Çalışma zamanı önce tip etiketine baktığından `b == 1`
+  hep false, `b != 0` hep **true**'dur ve hiçbiri çağrı yerinde görünmez.
+  `int`/`float` bilerek dışarıda: sayısal terfi `1 == 1.0`'ı gerçekten doğru
+  yapar.
+
+- **Üç yanlış pozitif ayıklandı.** İmzalar görünür olunca kod tabanında 461 uyarı
+  belirdi; **418'i tek bir sebeptendi** — `json` katı bir tip gibi ele alınıyordu,
+  oysa Tulpar'ın dinamik tipi. Artık iki yönde de uyumlu. Kalan ikisi: `if
+  (<tipsiz parametre>)` ve `if (<json>)` — scene3d/arcade/wings'in on/off ev
+  stili, tip bilgisi taşımadıkları için uyarmak yapısal olarak yanlış pozitif;
+  ve `int x = <bool>` **store**'da serbest, çünkü AOT gerçekten dönüştürüyor
+  (`tests/bool_to_int_coerce.test.tpr`). 461 → 6, ve kalan 6'nın hepsi bu
+  çalışmadan önce de vardı (ölçülerek doğrulandı). Net etki: `lib/scene3d.tpr`
+  eskiden 5 yanlış pozitif üretiyordu, artık üretmiyor.
+
+**Dilde kalan asimetri:** `int x = true` ve `x = true` dönüşüyor, `f(true)` →
+`int` parametresi **dönüşmüyor**. `assert` hatası tam olarak bu boşlukta doğdu.
+Typecheck artık yakalıyor; asıl çözüm parametre bağlamayı store ile aynı hale
+getirmek olur (STATUS.md backlog'unda 🟡).
+
+Regresyon: `tests/typeinfer/{pass,fail}/` altına 6 fixture — biri doğrudan
+`assert`'in ölüm senaryosu (`assert_eq_int(true, false)` reddedilmeli), biri de
+`int`/`float` ile `json` jokerinin serbest kaldığını sabitliyor. Üç `fail`
+fixture'ının **doğru mesajla** reddedildiği tek tek doğrulandı.
+
 ### Added — gerçek arazi: yükseklik haritalı dünya (Faz 10)
 
 Faz 9'un rampası dünyayı düz düzlemden kurtardı ama sınırlıydı: kama biçimli

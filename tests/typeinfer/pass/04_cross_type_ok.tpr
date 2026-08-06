@@ -1,0 +1,19 @@
+// Expected: typeinfer clean.
+//
+// Guards the boundary of the "different types are never equal" rule added
+// alongside fail/04 and fail/05. int/float must stay mutually comparable —
+// the runtime promotes them, so `1 == 1.0` is genuinely true and flagging it
+// would break ordinary arithmetic code. Same-type comparisons and bool-vs-bool
+// must also stay silent; `contains(...) == false` is a real idiom in
+// lib/wings.tpr.
+
+int n = 1;
+float f = 1.0;
+bool b = true;
+str s = "ab";
+
+if (n == f) { print("int == float is meaningful"); }
+if (f != n) { print("unreachable"); }
+if (b == true) { print("bool vs bool is fine"); }
+if (contains(s, "a") == false) { print("unreachable"); }
+if (s == "ab") { print("str vs str is fine"); }
