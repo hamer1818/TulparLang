@@ -9,6 +9,48 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — 3B menü/UI katmanı: başlangıç ekranı, duraklat, yeniden başla (Faz 11)
+
+Motor Faz 7-10'da "üstüne oyun yazılabilir" hale gelmişti ama **yayınlanabilir**
+değildi. Oyun-bitti ekranı yalnız yazı basıyordu: hiçbir tuş iş yapmıyor,
+yeniden başlamanın yolu yok, tek çıkış pencereyi kapatmak. `arcade`'de bunların
+hepsi vardı; 3B'de yoktu.
+
+**Ön koşul bir tame binding'i çıktı.** raylib `InitWindow`'da çıkış tuşunu ESC'ye
+kuruyor — ESC'ye basıldığında `WindowShouldClose()` true dönüyor ve oyun döngüsü
+bitiyor, yani ESC Tulpar tarafında **hiç yakalanamıyordu**. Duraklat menüsünün
+kurulamamasının tek sebebi buydu. `tm_exit_key(k)` eklendi (sarmalayıcılar
+`exit_key` / `cikis_tusu`); `scene3d` açılışta `exit_key(K_NONE)` çağırarak
+kestirmeyi kapatıyor ve ESC sıradan bir tuşa dönüşüyor.
+
+- **`menu3d(baslik, altbaslik)` / `baslangic3d`** — başlangıç ekranı, **opt-in**.
+  Çağırmayan sahne bit-bit eskisi gibi doğrudan oyuna girer.
+- **Duraklat** (ESC / P / GERİ): Devam · Yeniden · Çıkış. Duraklatınca oyun
+  gerçekten **donar** — bakış, `update`, fizik, çarpışma ve parçacık adımlarının
+  hepsi atlanır; sahne yine çizilir, yalnız ilerlemez.
+- **Oyun-bitti ekranı** artık gerçek bir ekran: skor + "Tekrar Oyna" · "Çıkış".
+- **`restart3d()` / `yeniden3d()`** sırayla: bölüm kaydedilmişse en küçüğüne
+  döner; yoksa `on_restart3d(fn)` kancasını çağırır; o da yoksa yalnız
+  skoru/durumu sıfırlar. Sonuncusu **belgelenmiş bir sınır**: sahneyi kuran şey
+  `setup` ve setup kancaları da kaydediyor — motorun onu tek başına tekrarlaması
+  kancaları çoğaltırdı.
+- Her düğme **klavye + fare + dokunmatik** ile çalışıyor (Android hedefi), ölçüler
+  pencereye oransal. Menü açıkken imleç kilidi otomatik bırakılıyor; FPS modunda
+  imleç kilitli geldiği için aksi hâlde düğmeye tıklanamazdı.
+- Yan kazanç: **`is_over3d()`/`bitti_mi3d()`** ve **`alive_count3d()`** —
+  `arcade`'de karşılıkları vardı, 3B'de yoktu. İkincisi ölü slot'ları saymıyor
+  (`length(_e3)` slot geri kullanımı yüzünden yanıltır).
+
+9 regresyon testi eklendi (`tests/scene3d_engine.test.tpr` 52 → 61). Biri
+yazılırken gerçek bir hata yakaladı: yeniden-başlatma kancası `int` global'de
+saklanıyordu ve fonksiyon referansı natif i64 global'e yazılırken kırpılıyordu,
+`call()` hiçbir şey çağırmıyordu — dosyadaki diğer kancalar (`_setup3_fn`,
+`_update3_fn`, `_hud3_fn`) zaten `var` kullanıyordu.
+
+Üç hedefte de doğrulandı: Linux, Android (arm64 + x86_64, emülatöre kuruldu),
+web (wasm). Yeni binding yüzünden `android/dist` ve `wasm/dist` arşivleri
+yeniden derlendi.
+
 ### Fixed — fonksiyon yereli aynı adlı global'i eziyordu (AOT codegen)
 
 ```tulpar

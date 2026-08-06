@@ -49,6 +49,10 @@ int K_W = 87;   int K_A = 65;   int K_S = 83;   int K_D = 68;
 int K_UP = 265; int K_DOWN = 264; int K_LEFT = 263; int K_RIGHT = 262;
 int K_SPACE = 32;
 int K_Q = 81;   int K_E = 69;   // kamerayı klavyeyle çevir (fare yedeği)
+// Menü/duraklat tuşları. K_NONE (0) raylib'in "çıkış tuşu yok" değeridir —
+// exit_key(K_NONE) olmadan ESC pencereyi kapatır ve hiç yakalanamaz.
+int K_ESC = 256; int K_ENTER = 257; int K_BACKSPACE = 259;
+int K_R = 82;    int K_P = 80;      int K_NONE = 0;
 
 float DEG2RAD3 = 0.01745329;
 float RAD2DEG3 = 57.29578;
@@ -349,6 +353,12 @@ func scene3d_reset() {
     // eski handle'ların hepsi zaten anlamsız, slot 0'dan yeniden başlanabilir.
     _e3gen = []; _e3free = []; _free_n3 = 0;
     _bx = []; _by = []; _bz = []; _br = [];   // geniş faz de sahneyle gider
+    // UI durumu da tam teardown'a dahil: reset kancaları ve bölümleri zaten
+    // siliyor, bekleyen bir "çıkış" isteği ya da açık kalmış duraklat örtüsü
+    // yeni sahneye sızmamalı.
+    _s3_ui = UI_NONE; _s3_quit = 0; _s3_tap_prev = 0;
+    _s3_has_title = 0; _s3_title_txt = ""; _s3_title_sub = "";
+    _s3_has_restart = 0;
     _hitA = []; _hitB = []; _hitF = [];
     _deadT = []; _deadF = [];
     _lvlN = []; _lvlF = []; _cur_lvl3 = 0; _lvl_pending3 = 0 - 1; _won3 = 0;
@@ -369,6 +379,23 @@ func scene3d_reset() {
 func score3d_add(n) { _score3 = _score3 + n; }
 func score3d(): int { return _score3; }
 func game_over3d() { _game_over3 = 1; }
+// Oyun bitti mi (kazanarak ya da kaybederek)? arcade'de `is_over()` vardı,
+// 3B'de yoktu — UI katmanı ve oyunun kendi update'i ikisi de buna bakıyor.
+func is_over3d(): bool { return _game_over3 == 1; }
+
+// Yaşayan entity sayısı. Slot'lar geri kullanıldığı için `length(_e3)` yanıltır:
+// ölü slot'lar orada durur.
+func alive_count3d(): int {
+    int c = 0;
+    int i = 0;
+    int n = length(_e3);
+    while (i < n) {
+        Ent3 e = _e3[i];
+        if (e.alive == 1) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
 
 // ---- Girdi yardımcıları (klavye VEYA dokunmatik) ---------------------------
 // Klavye: WASD/oklar (masaüstü; web'de dokunmatik shell sentetik tuş üretir).
@@ -554,6 +581,217 @@ func _s3_apply_level() {
     _cam_target = 0 - 1;    // kurulum fn'i camera_follow'u yeniden çağırır
     _cur_lvl3 = want;
     call(_lvlF[idx]);
+}
+
+// ===========================================================================
+// Menü / UI katmanı
+// ===========================================================================
+// Motor Faz 7-10'da "üstüne oyun yazılabilir" hale geldi ama YAYINLANABİLİR
+// değildi: başlangıç ekranı, duraklatma ve oyun bittiğinde yeniden başlama yoktu
+// — oyun-bitti ekranı sadece yazı basıyordu, hiçbir tuş iş yapmıyordu, tek çıkış
+// pencereyi kapatmaktı. arcade'de bunların hepsi var; 3B'de yoktu.
+//
+// Üç kural:
+//   • Başlangıç ekranı OPT-IN (`menu3d(...)`). Çağırmayan sahne bit-bit eskisi
+//     gibi, doğrudan oyuna girerek çalışır.
+//   • Duraklat her zaman açık — ESC/P/GERİ. Bunu mümkün kılan şey
+//     `exit_key(K_NONE)`: raylib varsayılanı ESC'ye basılınca pencereyi
+//     kapatmak ve bu Tulpar tarafında yakalanamıyordu.
+//   • Her düğme klavye + fare + DOKUNMATİK ile çalışır (Android hedefi).
+
+int UI_NONE  = 0;   // oyun akıyor
+int UI_TITLE = 1;   // başlangıç ekranı
+int UI_PAUSE = 2;   // duraklat örtüsü
+int _s3_ui = UI_NONE;
+
+int _s3_has_title = 0;
+str _s3_title_txt = "";
+str _s3_title_sub = "";
+// `var`, `int` DEĞİL: fonksiyon referansı boxed bir değer, natif i64 global'e
+// yazılınca kırpılır ve call() hiçbir şey çağırmaz. Dosyadaki diğer kancalar
+// (_setup3_fn, _update3_fn, _hud3_fn) aynı sebeple `var`.
+var _s3_restart_fn = 0;
+int _s3_has_restart = 0;
+int _s3_quit = 0;          // menüden çıkış istendi → oyun döngüsü biter
+
+str _s3_lang_c = "";
+func _s3_lang(): str {
+    if (_s3_lang_c == "") {
+        if (sys_lang() == "en") { _s3_lang_c = "en"; } else { _s3_lang_c = "tr"; }
+    }
+    return _s3_lang_c;
+}
+func _s3_t(tr, en): str { if (_s3_lang() == "en") { return en; } return tr; }
+
+// Başlangıç ekranını aç. Çağrılmazsa oyun doğrudan başlar (eski davranış).
+func menu3d(title, subtitle) {
+    _s3_has_title = 1;
+    _s3_title_txt = title;
+    _s3_title_sub = subtitle;
+    _s3_ui = UI_TITLE;
+}
+
+// Yeniden başlarken çağrılacak kanca. Bölüm kaydedilmiş sahnelerde gerekmez
+// (motor en küçük bölüme döner); bölümsüz tek sahnelerde sahneyi kuran şey
+// `setup` olduğu için motor onu tek başına tekrarlayamaz — setup kancaları da
+// kaydediyor, ikinci kez çalıştırmak onları çoğaltırdı. Bu kanca o boşluğu
+// oyunun kendi bilgisiyle dolduruyor.
+func on_restart3d(fn) { _s3_restart_fn = fn; _s3_has_restart = 1; }
+
+func pause3d()  { if (_game_over3 == 0 && _s3_ui == UI_NONE) { _s3_ui = UI_PAUSE; } }
+func resume3d() { if (_s3_ui == UI_PAUSE) { _s3_ui = UI_NONE; } }
+func paused3d(): bool { return _s3_ui == UI_PAUSE; }
+func quit3d()   { _s3_quit = 1; }
+
+// Baştan başla. Sırayla: bölüm varsa en küçüğüne dön, yoksa on_restart3d
+// kancasını çağır, o da yoksa yalnız skoru/durumu sıfırla (sahne yerinde kalır —
+// belgelenmiş sınır, sessiz değil).
+func restart3d() {
+    _score3 = 0;
+    _game_over3 = 0;
+    _won3 = 0;
+    _s3_ui = UI_NONE;
+    _hit_me = 0 - 1; _hit_other = 0 - 1;
+    if (length(_lvlN) > 0) {
+        int lo = _lvlN[0];
+        int li = 1;
+        while (li < length(_lvlN)) {
+            if (_lvlN[li] < lo) { lo = _lvlN[li]; }
+            li = li + 1;
+        }
+        _lvl_pending3 = lo;
+        _s3_apply_level();
+        return;
+    }
+    if (_s3_has_restart == 1) {
+        _e3 = []; _e3gen = []; _e3free = []; _free_n3 = 0;
+        _bx = []; _by = []; _bz = []; _br = [];
+        _s3_particles_clear();
+        _cam_target = 0 - 1;
+        call(_s3_restart_fn);
+    }
+}
+
+// ---- Düğme çizimi + isabet testi -------------------------------------------
+// Ölçüler pencereye göre oransal: aynı düzen 960x560 masaüstünde de, dar bir
+// telefon ekranında da çalışsın.
+func _s3_btn_w(): float { return _win_w * 0.44; }
+func _s3_btn_h(): float { return _win_h * 0.11; }
+func _s3_btn_x(): float { return (_win_w - _s3_btn_w()) * 0.5; }
+func _s3_btn_y(i): float { return _win_h * (0.44 + i * 0.15); }
+
+func _s3_btn_draw(i, label) {
+    float bx = _s3_btn_x(); float by = _s3_btn_y(i);
+    float bw = _s3_btn_w(); float bh = _s3_btn_h();
+    rect(bx, by, bw, bh, rgba(46, 54, 82, 235));
+    rect_lines(bx, by, bw, bh, GOLD);
+    int sz = toInt(bh * 0.38);
+    text(label, toInt(bx + (bw - measure_text(label, sz)) * 0.5),
+         toInt(by + (bh - sz) * 0.5), sz, RAYWHITE);
+}
+
+// (px,py) i. düğmenin içinde mi?
+func _s3_btn_hit(i, px, pz): bool {
+    float bx = _s3_btn_x(); float by = _s3_btn_y(i);
+    return px >= bx && px <= bx + _s3_btn_w()
+        && pz >= by && pz <= by + _s3_btn_h();
+}
+
+// Bu karede hangi düğmeye BASILDI (kenar tetikli)? Yoksa -1.
+// Fare ve parmak aynı isabet testinden geçer; ikisi de "yeni basıldı" kenarı
+// olduğu için basılı tutmak tekrar tetiklemez.
+int _s3_tap_prev = 0;
+func _s3_btn_pressed(count): int {
+    int hit = 0 - 1;
+    float px = 0.0; float pz = 0.0;
+    int now = 0;
+    if (mouse_pressed(0)) { px = mouse_x() * 1.0; pz = mouse_y() * 1.0; now = 1; }
+    int tn = touch_count();
+    if (tn > 0) {
+        float tx = touch_x(0) * 1.0; float ty = touch_y(0) * 1.0;
+        if (_s3_tap_prev == 0) { px = tx; pz = ty; now = 1; }
+    }
+    if (tn > 0) { _s3_tap_prev = 1; } else { _s3_tap_prev = 0; }
+    if (now == 0) { return 0 - 1; }
+    int i = 0;
+    while (i < count) {
+        if (_s3_btn_hit(i, px, pz)) { hit = i; }
+        i = i + 1;
+    }
+    return hit;
+}
+
+func _s3_dim() {
+    rect(0.0, 0.0, _win_w * 1.0, _win_h * 1.0, rgba(8, 10, 16, 190));
+}
+
+func _s3_center_text(s, y, size, col) {
+    text(s, toInt((_win_w - measure_text(s, size)) * 0.5), toInt(y), size, col);
+}
+
+// ---- Başlangıç ekranı ------------------------------------------------------
+func _s3_title_draw() {
+    _s3_dim();
+    int tsz = toInt(_win_h * 0.10);
+    _s3_center_text(_s3_title_txt, _win_h * 0.16, tsz, GOLD);
+    if (length(_s3_title_sub) > 0) {
+        _s3_center_text(_s3_title_sub, _win_h * 0.30, toInt(_win_h * 0.045), RAYWHITE);
+    }
+    _s3_btn_draw(0, _s3_t("Basla", "Start"));
+    _s3_btn_draw(1, _s3_t("Cikis", "Quit"));
+}
+
+// 1 = başla, 2 = çık, 0 = bekle
+func _s3_title_step(): int {
+    if (key_pressed(K_ENTER) || key_pressed(K_SPACE)) { return 1; }
+    if (key_pressed(K_ESC)) { return 2; }
+    int b = _s3_btn_pressed(2);
+    if (b >= 0) { return b + 1; }
+    return 0;
+}
+
+// ---- Duraklat örtüsü -------------------------------------------------------
+func _s3_pause_draw() {
+    _s3_dim();
+    _s3_center_text(_s3_t("Duraklatildi", "Paused"), _win_h * 0.18,
+                    toInt(_win_h * 0.09), GOLD);
+    _s3_btn_draw(0, _s3_t("Devam", "Resume"));
+    _s3_btn_draw(1, _s3_t("Yeniden", "Restart"));
+    _s3_btn_draw(2, _s3_t("Cikis", "Quit"));
+}
+
+// 1 = devam, 2 = yeniden, 3 = çık, 0 = bekle
+func _s3_pause_step(): int {
+    if (key_pressed(K_ESC) || key_pressed(K_P)) { return 1; }
+    if (key_pressed(K_R)) { return 2; }
+    int b = _s3_btn_pressed(3);
+    if (b >= 0) { return b + 1; }
+    return 0;
+}
+
+// ---- Oyun bitti / kazandın -------------------------------------------------
+func _s3_over_draw() {
+    _s3_dim();
+    if (_won3 == 1) {
+        _s3_center_text(_s3_t("KAZANDIN", "YOU WIN"), _win_h * 0.18,
+                        toInt(_win_h * 0.10), rgb(120, 240, 140));
+    } else {
+        _s3_center_text(_s3_t("OYUN BITTI", "GAME OVER"), _win_h * 0.18,
+                        toInt(_win_h * 0.10), rgb(255, 90, 90));
+    }
+    _s3_center_text(_s3_t("Skor: ", "Score: ") + toString(_score3),
+                    _win_h * 0.32, toInt(_win_h * 0.05), GOLD);
+    _s3_btn_draw(0, _s3_t("Tekrar Oyna", "Play Again"));
+    _s3_btn_draw(1, _s3_t("Cikis", "Quit"));
+}
+
+// 1 = tekrar, 2 = çık, 0 = bekle
+func _s3_over_step(): int {
+    if (key_pressed(K_R) || key_pressed(K_ENTER) || key_pressed(K_SPACE)) { return 1; }
+    if (key_pressed(K_ESC)) { return 2; }
+    int b = _s3_btn_pressed(2);
+    if (b >= 0) { return b + 1; }
+    return 0;
 }
 
 // ---- Düşman AI -------------------------------------------------------------
@@ -1878,22 +2116,44 @@ func play3d() {
     // İmleç kilidi setup'tan SONRA kuruluyor — kamera modunu setup içinde
     // seçmek serbest (camera_fps varsayılan olarak kilidi ister).
     int _lock_was = 0 - 1;
+    // ESC'yi raylib'in elinden al: varsayılanda ESC doğrudan pencereyi kapatır
+    // ve running() false döner, yani duraklat menüsü KURULAMAZDI. Bundan sonra
+    // ESC sıradan bir tuş; çıkış duraklat menüsünün "Cikis" düğmesinde.
+    exit_key(K_NONE);
 
-    while (running()) {
+    while (running() && _s3_quit == 0) {
         float dt = frame_time();
         if (dt <= 0.0) { dt = 0.0166667; }
         if (dt > 0.05) { dt = 0.05; }
 
-        if (_cam_lock3 != _lock_was) { cursor_lock(_cam_lock3); _lock_was = _cam_lock3; }
+        // Menü/duraklat açıkken imleç SERBEST olmalı, yoksa düğmelere
+        // tıklanamaz (FPS modunda imleç kilitli geliyor).
+        int want_lock = _cam_lock3;
+        if (_s3_ui != UI_NONE || _game_over3 == 1) { want_lock = 0; }
+        if (want_lock != _lock_was) { cursor_lock(want_lock); _lock_was = want_lock; }
+
+        // ESC/P/GERİ → duraklat. exit_key(K_NONE) sayesinde ESC artık pencereyi
+        // kapatmıyor, sıradan bir tuş; bu satırın mümkün olmasının tek sebebi o.
+        if (_s3_ui == UI_NONE && _game_over3 == 0) {
+            if (key_pressed(K_ESC) || key_pressed(K_P) || key_pressed(K_BACKSPACE)) {
+                _s3_ui = UI_PAUSE;
+            }
+        }
+
         _read_touch3();   // dokunmatik durumunu güncelle (move3d/jump_pressed okur)
         // Bakış, update'ten ÖNCE: oyunun update'i camera_yaw3d() okuyabilsin ve
         // move3d bu karenin kamera yönünü kullansın (bir kare gecikme olmaz).
-        _s3_camera_input(dt);
-        if (_has_update3 == 1 && _game_over3 == 0) { call(_update3_fn); }
+        // Menü/duraklat açıkken oyun DONAR: bakış, update, fizik ve çarpışma
+        // atlanır. Sahne yine çiziliyor (aşağıda), yalnız ilerlemiyor.
+        int frozen = 0;
+        if (_s3_ui != UI_NONE) { frozen = 1; }
+
+        if (frozen == 0) { _s3_camera_input(dt); }
+        if (_has_update3 == 1 && _game_over3 == 0 && frozen == 0) { call(_update3_fn); }
         // Parçacıklar oyun bitse de sönmeye devam eder — son patlama ekranda
-        // donup kalmasın (arcade'de de aynı gerekçe).
-        _s3_particles(dt);
-        if (_game_over3 == 0) {
+        // donup kalmasın (arcade'de de aynı gerekçe). Duraklatmada ise donar.
+        if (frozen == 0) { _s3_particles(dt); }
+        if (_game_over3 == 0 && frozen == 0) {
             _s3_physics(dt);
             _s3_collision();
             // Bölüm geçişi KARE SONUNDA, çarpışma döngüsü bittikten sonra:
@@ -1949,14 +2209,29 @@ func play3d() {
                 text("BAK", toInt(_win_w) - 92, toInt(_win_h) - 80, 18, RAYWHITE);
             }
         }
-        if (_game_over3 == 1) {
-            if (_won3 == 1) {
-                text("KAZANDIN", toInt(_win_w * 0.5) - 65, toInt(_win_h * 0.5), 30, rgb(120, 240, 140));
-            } else {
-                text("OYUN BITTI", toInt(_win_w * 0.5) - 70, toInt(_win_h * 0.5), 30, rgb(255, 90, 90));
-            }
-        }
+        // Örtüler HUD'ın üstünde: karartma oyunun kendi çizimini de kapatmalı.
+        if (_s3_ui == UI_TITLE)      { _s3_title_draw(); }
+        else if (_s3_ui == UI_PAUSE) { _s3_pause_draw(); }
+        else if (_game_over3 == 1)   { _s3_over_draw(); }
         frame_end();
+
+        // Girdi çizimden SONRA okunuyor: düğmeler bu karede zaten çizilmiş
+        // oldu, yani oyuncunun tıkladığı şey ekranda gördüğü şeyle aynı.
+        if (_s3_ui == UI_TITLE) {
+            int ta = _s3_title_step();
+            if (ta == 1) { _s3_ui = UI_NONE; }
+            else if (ta == 2) { _s3_quit = 1; }
+        } else if (_s3_ui == UI_PAUSE) {
+            int pa = _s3_pause_step();
+            if (pa == 1) { _s3_ui = UI_NONE; }
+            else if (pa == 2) { restart3d(); }
+            else if (pa == 3) { _s3_quit = 1; }
+        } else if (_game_over3 == 1) {
+            int oa = _s3_over_step();
+            if (oa == 1) { restart3d(); }
+            else if (oa == 2) { _s3_quit = 1; }
+        }
+        if (_s3_quit == 1) { break; }
     }
     close_window();
 }
@@ -1986,6 +2261,17 @@ func bolum_gec3d() { next_level3d(); }
 func bolum_git3d(n) { goto_level3d(n); }
 func bolum_no3d(): int { return level_now3d(); }
 func kazandin_mi3d(): bool { return won3d(); }
+
+// -- Menü / UI --
+func baslangic3d(baslik, altbaslik) { menu3d(baslik, altbaslik); }
+func yeniden3d() { restart3d(); }
+func yeniden_baslayinca3d(fn) { on_restart3d(fn); }
+func duraklat3d() { pause3d(); }
+func devam3d() { resume3d(); }
+func duraklatildi_mi3d(): bool { return paused3d(); }
+func cik3d() { quit3d(); }
+func bitti_mi3d(): bool { return is_over3d(); }
+func yasayan_sayi3d(): int { return alive_count3d(); }
 
 func takip_et3d(i, hedef, hiz) { chase3d(i, hedef, hiz); }
 func devriye3d(i, x1, z1, x2, z2, hiz) { patrol3d(i, x1, z1, x2, z2, hiz); }

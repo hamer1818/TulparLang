@@ -804,6 +804,7 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm_mouse_dx", "aot_tm_mouse_dx_ptr", 0},
     {"tm_mouse_dy", "aot_tm_mouse_dy_ptr", 0},
     {"tm_cursor_lock", "aot_tm_cursor_lock_ptr", 1},
+    {"tm_exit_key", "aot_tm_exit_key_ptr", 1},
     {"tm_cursor_locked", "aot_tm_cursor_locked_ptr", 0},
     // Touch (mobil çok-parmak); masaüstünde mouse_* tek dokunuşu zaten alır.
     {"tm_touch_count", "aot_tm_touch_count_ptr", 0},

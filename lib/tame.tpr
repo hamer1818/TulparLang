@@ -134,6 +134,11 @@ func cursor_lock(on) { tm_cursor_lock(on); }
 func imlec_kilitle(on) { tm_cursor_lock(on); }
 func cursor_locked(): bool { return tm_cursor_locked(); }
 func imlec_kilitli(): bool { return tm_cursor_locked(); }
+// Pencereyi kapatan tuş. raylib varsayılanı ESC — yani ESC'ye basıldığında
+// running() false döner ve ESC Tulpar tarafında HİÇ yakalanamaz. exit_key(0)
+// bu kestirmeyi kapatır; duraklat menüsü kurmanın ön koşulu budur.
+func exit_key(k) { tm_exit_key(k); }
+func cikis_tusu(k) { tm_exit_key(k); }
 
 // Dokunma (mobil). Çok parmak desteklenir; parmak index'i 0'dan başlar.
 // Masaüstünde raylib tek dokunuşu fareye maplediği için mouse_* de çalışır,

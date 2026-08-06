@@ -893,6 +893,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm_mouse_dx", TYPE_FLOAT, {}},
       {"tm_mouse_dy", TYPE_FLOAT, {}},
       {"tm_cursor_lock", TYPE_VOID, {TYPE_INT}},
+      {"tm_exit_key", TYPE_VOID, {TYPE_INT}},
       {"tm_cursor_locked", TYPE_BOOL, {}},
       {"tm_touch_count", TYPE_INT, {}},
       {"tm_touch_x", TYPE_INT, {TYPE_INT}},

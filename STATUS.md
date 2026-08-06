@@ -1742,7 +1742,38 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   `scene3d` kullanmıyor (arcade kullanıyor). Bölüm ilerlemesi, en yüksek skor.
 - 🟡 **Gamepad `scene3d`'de yok.** tame'de binding var (`gamepad_down`,
   `gamepad_axis`); hareket/kamera preset'lerine bağlanmalı.
-- 🟡 **Menü/UI katmanı yok.** Başlangıç ekranı, duraklat, bölüm sonu.
+- ✅ **Menü/UI katmanı eklendi (2026-08-06, Faz 11).** Motor Faz 7-10'da
+  "üstüne oyun yazılabilir" olmuştu ama **yayınlanabilir** değildi: oyun-bitti
+  ekranı yalnız yazı basıyordu, hiçbir tuş iş yapmıyordu, tek çıkış pencereyi
+  kapatmaktı.
+  - **Ön koşul bir tame binding'iymiş.** raylib `InitWindow`'da çıkış tuşunu
+    ESC'ye kuruyor: ESC'ye basılınca `WindowShouldClose()` true dönüyor ve
+    döngü bitiyor — yani ESC Tulpar tarafında **yakalanamıyordu**. Duraklat
+    menüsünün kurulamamasının tek sebebi buydu. `tm_exit_key(k)` eklendi
+    (`exit_key`/`cikis_tusu`); `scene3d` `exit_key(K_NONE)` ile kestirmeyi
+    kapatıyor ve ESC sıradan bir tuş oluyor.
+  - **Başlangıç ekranı opt-in** (`menu3d(baslik, altbaslik)` /
+    `baslangic3d`). Çağırmayan sahne bit-bit eskisi gibi doğrudan oyuna girer.
+  - **Duraklat** her zaman açık (ESC/P/GERİ): Devam / Yeniden / Çıkış.
+    Duraklatınca oyun **donar** — bakış, update, fizik, çarpışma ve parçacık
+    hepsi atlanır; sahne yine çizilir.
+  - **Oyun-bitti ekranı** artık gerçek: skor + "Tekrar Oyna" / "Çıkış".
+  - **`restart3d()`** sırayla: bölüm varsa en küçüğüne döner, yoksa
+    `on_restart3d(fn)` kancasını çağırır, o da yoksa yalnız skoru/durumu
+    sıfırlar (belgelenmiş sınır — motor `setup`u tek başına tekrarlayamaz,
+    çünkü setup kancaları da kaydediyor ve ikinci çalıştırma onları çoğaltırdı).
+  - Her düğme **klavye + fare + dokunmatik** ile çalışır; menü açıkken imleç
+    kilidi otomatik bırakılıyor (FPS modunda düğmeye tıklanamazdı).
+  - Yan kazanç: `is_over3d()` / `bitti_mi3d()` ve `alive_count3d()` —
+    arcade'de karşılıkları vardı, 3B'de yoktu.
+  - Regresyon: 9 test (`tests/scene3d_engine.test.tpr`, 52 → 61). Biri
+    yazarken gerçek bir hata yakaladı: kanca `int` global'de saklanıyordu ve
+    fonksiyon referansı natif i64'e kırpılıyordu — dosyadaki diğer kancalar
+    zaten `var` kullanıyordu.
+
+- 🟢 **Menü katmanının vermedikleri.** arcade'de olan ama 3B'ye taşınmayanlar:
+  ayarlar ekranı (ses/dil/FPS), rozet/başarım, skor tablosu, bölüm seçimi.
+  Yayın için şart değil; oyun sayısı artınca değerlenir.
   `on_hud3d` var ama her oyun kendi menüsünü elden yazıyor.
 - 🟢 **Tetikleyici bölge** (`solid3d(false)` + kanca ile taklit edilebiliyor)
   için adı konmuş bir API: `trigger3d(...)`.

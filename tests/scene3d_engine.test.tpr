@@ -1044,7 +1044,134 @@ func t_broadphase_sync_after_push() {
     assert(abs_f3(_bz[s] - 9.0) < 0.0001, "set3pos _bz'yi tazelemeli");
 }
 
+// -- Menü / UI katmanı -------------------------------------------------------
+// Durum makinesi pencereden bağımsız: menu3d/pause3d/restart3d saf durum
+// değiştiriyor, çizim ayrı. O yüzden headless sürülebiliyor — düğmelerin
+// GÖRÜNÜŞÜ ekran testinin işi, ama hangi durumun neye geçtiği burada sabitlenir.
+
+func t_ui_default_is_play() {
+    scene3d_reset();
+    // menu3d() çağrılmayan sahne doğrudan oyuna girer — eski davranış korunuyor.
+    assert_eq_bool(paused3d(), false);
+    assert_eq_int(_s3_ui, UI_NONE);
+}
+
+func t_ui_title_opt_in() {
+    scene3d_reset();
+    menu3d("Test", "alt");
+    assert_eq_int(_s3_ui, UI_TITLE);
+    assert_eq_int(_s3_title_step(), 0);      // girdi yokken bekler
+}
+
+func t_ui_pause_resume() {
+    scene3d_reset();
+    pause3d();
+    assert_eq_bool(paused3d(), true);
+    resume3d();
+    assert_eq_bool(paused3d(), false);
+}
+
+// Biten oyun duraklatılamaz: duraklat örtüsü oyun-bitti örtüsünü gizlerdi ve
+// oyuncu "Tekrar Oyna"ya ulaşamazdı.
+func t_ui_no_pause_when_over() {
+    scene3d_reset();
+    game_over3d();
+    pause3d();
+    assert_eq_bool(paused3d(), false);
+}
+
+// Bölüm kaydedilmiş sahnede yeniden başlamak EN KÜÇÜK bölüme döner ve
+// skoru/oyun-bitti durumunu sıfırlar.
+int _t_lvl_hits = 0;
+func _t_lvl_a() { _t_lvl_hits = _t_lvl_hits + 1;
+                  spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PLAYER); }
+func _t_lvl_b() { spawn3(5.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY); }
+
+func t_ui_restart_with_levels() {
+    scene3d_reset();
+    _t_lvl_hits = 0;
+    level3d(1, _t_lvl_a);
+    level3d(2, _t_lvl_b);
+    goto_level3d(2);
+    _s3_apply_level();
+    score3d_add(500);
+    game_over3d();
+
+    restart3d();
+    assert_eq_int(level_now3d(), 1);          // en kucuk bolume dondu
+    assert_eq_int(score3d(), 0);              // skor sifirlandi
+    assert_eq_bool(is_over3d(), false);       // oyun-bitti temizlendi
+    assert_eq_int(_t_lvl_hits, 1);            // 1. bolum kurulum fn'i kostu
+}
+
+// Bölümsüz sahnede motor `setup`u tek başına tekrarlayamaz (setup kancaları da
+// kaydediyor, ikinci çalıştırma onları çoğaltırdı) — o boşluğu on_restart3d
+// dolduruyor. Kanca çağrılmalı ve entity store temizlenmiş olmalı.
+int _t_re_hits = 0;
+func _t_re_build() { _t_re_hits = _t_re_hits + 1;
+                     spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER); }
+
+func t_ui_restart_hook_without_levels() {
+    scene3d_reset();
+    _t_re_hits = 0;
+    on_restart3d(_t_re_build);
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    spawn3(2.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    score3d_add(70);
+    game_over3d();
+
+    restart3d();
+    assert_eq_int(_t_re_hits, 1);
+    assert_eq_int(alive_count3d(), 1);        // eski entity'ler gitti, kanca 1 tane kurdu
+    assert_eq_int(score3d(), 0);
+    assert_eq_bool(is_over3d(), false);
+}
+
+// Kanca da bölüm de yoksa restart yalnız skoru/durumu sıfırlar ve sahneye
+// dokunmaz. Belgelenmiş sınır; sessizce entity silmemeli.
+func t_ui_restart_bare() {
+    scene3d_reset();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    score3d_add(30);
+    game_over3d();
+
+    restart3d();
+    assert_eq_int(score3d(), 0);
+    assert_eq_bool(is_over3d(), false);
+    assert_eq_int(alive_count3d(), 1);        // sahne yerinde
+}
+
+func t_ui_quit_flag() {
+    scene3d_reset();
+    assert_eq_int(_s3_quit, 0);
+    quit3d();
+    assert_eq_int(_s3_quit, 1);
+    scene3d_reset();
+    assert_eq_int(_s3_quit, 0);               // reset cikis istegini de temizler
+}
+
+// Düğme isabet testi: merkez içeride, kenarların dışı dışarıda olmalı.
+func t_ui_button_hit() {
+    scene3d_reset();
+    float bx = _s3_btn_x(); float by = _s3_btn_y(0);
+    float bw = _s3_btn_w(); float bh = _s3_btn_h();
+    assert_eq_bool(_s3_btn_hit(0, bx + bw * 0.5, by + bh * 0.5), true);
+    assert_eq_bool(_s3_btn_hit(0, bx - 5.0, by + bh * 0.5), false);
+    assert_eq_bool(_s3_btn_hit(0, bx + bw * 0.5, by - 5.0), false);
+    // Düğmeler üst üste binmemeli, yoksa tek dokunuş ikisini birden tetikler.
+    assert_eq_bool(_s3_btn_hit(1, bx + bw * 0.5, by + bh * 0.5), false);
+}
+
 test("genis faz elemesi korumali", "t_broadphase_conservative");
 test("genis faz gercekten eliyor", "t_broadphase_prunes");
 test("genis faz itmeden sonra taze", "t_broadphase_sync_after_push");
+test("UI varsayilani dogrudan oyun", "t_ui_default_is_play");
+test("baslangic ekrani opt-in", "t_ui_title_opt_in");
+test("duraklat/devam", "t_ui_pause_resume");
+test("biten oyun duraklatilamaz", "t_ui_no_pause_when_over");
+test("bolumlu yeniden baslatma", "t_ui_restart_with_levels");
+test("bolumsuz yeniden baslatma kancasi", "t_ui_restart_hook_without_levels");
+test("kancasiz yeniden baslatma sahneye dokunmaz", "t_ui_restart_bare");
+test("cikis bayragi", "t_ui_quit_flag");
+test("dugme isabet testi", "t_ui_button_hit");
 test_summary();

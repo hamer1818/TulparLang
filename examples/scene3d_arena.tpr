@@ -1,8 +1,9 @@
-// scene3d Arena — motorun Faz 7-9 yeteneklerini bir arada gösteren 3B oyun.
+// scene3d Arena — motorun Faz 7-11 yeteneklerini bir arada gösteren 3B oyun.
 //
 //   Faz 7 (oynanış):  bölüm · düşman AI · mermi · can/hasar
 //   Faz 8 (his):      parçacık (billboard) · 3B'ye bağlı 2B can barları
 //   Faz 9 (geometri): rampa · dönük duvar (SAT) · kapsül sütun · kamera ışını
+//   Faz 11 (kabuk):   başlangıç ekranı · duraklat (ESC/P) · yeniden başla
 //
 //   ./tulpar examples/scene3d_arena.tpr
 //   ./tulpar build --target=android examples/scene3d_arena.tpr out
@@ -203,6 +204,11 @@ func draw_hud() {
 }
 
 sahne3d(960, 560, "Tulpar 3B Arena");
+// Başlangıç ekranı isteğe bağlı: çağırmayan sahne doğrudan oyuna girer.
+// Duraklat (ESC/P/GERİ) ve oyun-bitti ekranındaki "Tekrar Oyna" bedava gelir.
+// Bölüm kaydedildiği için yeniden başlamak 1. bölüme döner — ayrı bir
+// on_restart3d kancası gerekmiyor.
+baslangic3d("TULPAR 3B ARENA", "3 bolum · dusmanlari temizle");
 kurulumda3(setup);
 her_kare3(update);
 hud_ciz3(draw_hud);

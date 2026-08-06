@@ -70,6 +70,7 @@ double tame_impl_mouse_wheel(void);
 double tame_impl_mouse_dx(void);
 double tame_impl_mouse_dy(void);
 void tame_impl_cursor_lock(int on);
+void tame_impl_exit_key(int key);
 int tame_impl_cursor_locked(void);
 int tame_impl_touch_count(void);
 int tame_impl_touch_x(int i);
@@ -337,6 +338,11 @@ VMValue aot_tm_cursor_lock_ptr(VMValue *on) {
 
 VMValue aot_tm_cursor_locked_ptr(void) {
   return VM_BOOL(tame_impl_cursor_locked());
+}
+
+VMValue aot_tm_exit_key_ptr(VMValue *key) {
+  tame_impl_exit_key((int)tm_int(key));
+  return VM_VOID();
 }
 
 VMValue aot_tm_touch_count_ptr(void) {

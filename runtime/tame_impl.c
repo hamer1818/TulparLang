@@ -2254,6 +2254,16 @@ void tame_impl_cursor_lock(int on) {
 
 int tame_impl_cursor_locked(void) { return tame_cursor_locked; }
 
+// raylib InitWindow'da çıkış tuşunu ESC'ye kuruyor: ESC'ye basılınca
+// WindowShouldClose() true döner ve oyun döngüsü biter. Bu, ESC'yi Tulpar
+// tarafında YAKALANAMAZ yapıyor — duraklat menüsü kurmanın önündeki tek engel
+// buydu. 0 (KEY_NULL) geçilince raylib'in kestirmesi kapanır ve ESC sıradan bir
+// tuş olur; `key_pressed(K_ESC)` ile okunabilir.
+void tame_impl_exit_key(int key) {
+  if (!IsWindowReady()) return;
+  SetExitKey(key);
+}
+
 // Input — touch (mobil). raylib masaüstünde tek dokunuşu fareye maplediği
 // için mouse_* zaten çalışır; bu API çok-parmak (multi-touch) ve açık parmak
 // konumu verir. Index geçersizse (0,0) döner.

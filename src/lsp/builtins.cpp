@@ -81,6 +81,7 @@ const BuiltinEntry kBuiltins[] = {
     {"tm_mouse_dx",     "tm_mouse_dx(): float",                         "Farenin bu karedeki YATAY hareketi (piksel). İmleç kilitliyken mouse_x() sabit kalır — bakış kontrolünde girdi budur. Sarmalayıcı: mouse_dx()/fare_dx()."},
     {"tm_mouse_dy",     "tm_mouse_dy(): float",                         "Farenin bu karedeki DİKEY hareketi (piksel). Sarmalayıcı: mouse_dy()/fare_dy()."},
     {"tm_cursor_lock",  "tm_cursor_lock(on: int)",                      "İmleci kilitle/serbest bırak (FPS bakışı): kilitliyken imleç gizlenir ve pencereden çıkamaz, web'de tarayıcının Pointer Lock'ı devreye girer. Sarmalayıcı: cursor_lock()/imlec_kilitle()."},
+    {"tm_exit_key",     "tm_exit_key(key: int)",                        "Pencereyi kapatan tuşu ayarlar. raylib varsayılanı ESC'dir; 0 (K_NONE) geçilince kestirme kapanır ve ESC sıradan bir tuş olur — duraklat menüsü kurmanın ön koşulu. Sarmalayıcı: exit_key()/cikis_tusu()."},
     {"tm_cursor_locked","tm_cursor_locked(): bool",                     "İmleç şu an kilitli mi? Sarmalayıcı: cursor_locked()/imlec_kilitli()."},
     {"tm_touch_count",  "tm_touch_count(): int",                        "Ekrandaki aktif parmak (dokunma noktası) sayısı. Sarmalayıcı: touch_count()/touched()."},
     {"tm_touch_x",      "tm_touch_x(i: int): int",                      "i. parmağın X konumu (piksel). Sarmalayıcı: touch_x()."},
