@@ -134,6 +134,11 @@ func cursor_lock(on) { tm_cursor_lock(on); }
 func imlec_kilitle(on) { tm_cursor_lock(on); }
 func cursor_locked(): bool { return tm_cursor_locked(); }
 func imlec_kilitli(): bool { return tm_cursor_locked(); }
+// Pencereyi kapatan tuş. raylib varsayılanı ESC — yani ESC'ye basıldığında
+// running() false döner ve ESC Tulpar tarafında HİÇ yakalanamaz. exit_key(0)
+// bu kestirmeyi kapatır; duraklat menüsü kurmanın ön koşulu budur.
+func exit_key(k) { tm_exit_key(k); }
+func cikis_tusu(k) { tm_exit_key(k); }
 
 // Dokunma (mobil). Çok parmak desteklenir; parmak index'i 0'dan başlar.
 // Masaüstünde raylib tek dokunuşu fareye maplediği için mouse_* de çalışır,
@@ -405,6 +410,40 @@ func golge_aktif(): bool    { return tm3_shadows_active(); }
 //   int t = checker(128, 128, 8, rgb(150,158,170), rgb(120,128,142));
 func checker(w, h, cells, c1, c2): int { return tm_checker(w, h, cells, c1, c2); }
 func damali(w, h, cells, c1, c2): int  { return tm_checker(w, h, cells, c1, c2); }
+
+// Billboard: kameraya her zaman dönük dörtgen. tex < 0 → dokusuz düz renk.
+// Parçacık/kıvılcım/duman ve 3B etiketlerin tek doğru çizim yolu.
+func billboard3d(tex, x, y, z, size, color) { tm3_billboard(tex, x, y, z, size, color); }
+func tabela3d(tex, x, y, z, size, color)    { tm3_billboard(tex, x, y, z, size, color); }
+// Dokusuz kısayol — parçacık için tipik kullanım.
+func spark3d(x, y, z, size, color) { tm3_billboard(0 - 1, x, y, z, size, color); }
+func kivilcim3d(x, y, z, size, color) { tm3_billboard(0 - 1, x, y, z, size, color); }
+
+// Dünya → ekran izdüşümü: 3B bir noktaya bağlı 2B çizim (can barı, isim
+// etiketi, hasar sayısı) için. space_end()'den SONRA çizilir.
+func screen_x3d(x, y, z): float { return tm3_screen_x(x, y, z); }
+func screen_y3d(x, y, z): float { return tm3_screen_y(x, y, z); }
+func ekran_x3d(x, y, z): float  { return tm3_screen_x(x, y, z); }
+func ekran_y3d(x, y, z): float  { return tm3_screen_y(x, y, z); }
+
+// Gerçek arazi (heightmap). Model handle'ı döner — çizimi draw_model ile,
+// dolayısıyla gölge/ışık bedava. Arazi XZ'de dünya merkezinde ORTALIdır.
+func terrain_gen3d(res, sx, sy, sz, base, scale, seed): int {
+    return tm3_terrain_gen(res, sx, sy, sz, base, scale, seed);
+}
+func terrain_load3d(path, sx, sy, sz, base): int {
+    return tm3_terrain_load(path, sx, sy, sz, base);
+}
+func terrain_height3d(x, z): float { return tm3_terrain_height(x, z); }
+func terrain_off3d() { tm3_terrain_off(); }
+func arazi_uret3d(res, sx, sy, sz, taban, olcek, tohum): int {
+    return tm3_terrain_gen(res, sx, sy, sz, taban, olcek, tohum);
+}
+func arazi_yukle3d(yol, sx, sy, sz, taban): int {
+    return tm3_terrain_load(yol, sx, sy, sz, taban);
+}
+func arazi_yukseklik3d(x, z): float { return tm3_terrain_height(x, z); }
+func arazi_kapat3d() { tm3_terrain_off(); }
 
 func texture3d(t, tu, tv) { tm3_texture(t, tu, tv); }
 func doku3d(t, tu, tv)    { tm3_texture(t, tu, tv); }

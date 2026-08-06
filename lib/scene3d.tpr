@@ -32,18 +32,27 @@ int SHAPE_CUBE   = 0;
 int SHAPE_SPHERE = 1;
 int SHAPE_CYL    = 2;
 int SHAPE_MODEL  = 3;
+// Rampa: üst yüzeyi kendi yerel +Z yönünde düz yükselen kama. Dünyanın tek düz
+// düzlem olma kısıtını kaldırır (bkz. _ramp_floor3). Çizimi kademeli — raylib'de
+// kama primitifi yok, gerçek eğik yüzey için üretilmiş mesh (Faz 10) gerekir.
+int SHAPE_RAMP   = 4;
 
 int TAG_PLAYER = 1;
 int TAG_ITEM   = 2;
 int TAG_WALL   = 3;
 int TAG_ENEMY  = 4;
 int TAG_PROP   = 5;
+int TAG_BULLET = 6;
 
 // raylib tuş kodları (tame key constant açığa çıkarmıyor — burada tanımlı).
 int K_W = 87;   int K_A = 65;   int K_S = 83;   int K_D = 68;
 int K_UP = 265; int K_DOWN = 264; int K_LEFT = 263; int K_RIGHT = 262;
 int K_SPACE = 32;
 int K_Q = 81;   int K_E = 69;   // kamerayı klavyeyle çevir (fare yedeği)
+// Menü/duraklat tuşları. K_NONE (0) raylib'in "çıkış tuşu yok" değeridir —
+// exit_key(K_NONE) olmadan ESC pencereyi kapatır ve hiç yakalanamaz.
+int K_ESC = 256; int K_ENTER = 257; int K_BACKSPACE = 259;
+int K_R = 82;    int K_P = 80;      int K_NONE = 0;
 
 float DEG2RAD3 = 0.01745329;
 float RAD2DEG3 = 57.29578;
@@ -60,9 +69,55 @@ struct Ent3 {
     int tag;                          // TAG_*
     int grounded;                     // zeminde mi (zıplama için)
     int alive;                        // 1/0
+    // KATI GÖVDE: 1 ise bu entity başkalarının içinden GEÇEMEZ; motor her kare
+    // örtüşmeyi çözer. Toplanabilirler (TAG_ITEM) ve mermiler katı DEĞİLDİR —
+    // onların işi çarpışma kancasıdır, itilmek değil.
+    int solid;
+    // -- oynanış alanları (Faz 7) --
+    int hp;                           // kalan can (0 = can sistemi kullanılmıyor)
+    int hpmax;                        // başlangıç canı — HUD barının paydası
+    float invuln;                     // kalan dokunulmazlık süresi (sn)
+    float life;                       // kalan ömür (sn); <= 0 = ömürsüz (mermi dışı)
+    int owner;                        // mermiyi atanın handle'ı; mermi değilse -1
+    int pdir;                         // devriye yönü (0 = 2. uca, 1 = 1. uca)
+    // -- karakter animasyonu (Faz 8); yalnız SHAPE_MODEL entity'lerde anlamlı --
+    int anim_idle;                    // boşta animasyon indeksi (-1 = yok)
+    int anim_run;                     // koşu animasyon indeksi (-1 = yok)
+    float anim_fps;                   // kare/sn
+    float anim_t;                     // kesirli kare sayacı (motor sürer)
 }
 
-array _e3 = [];             // entity store
+array _e3 = [];             // entity store (slot ile indekslenir, handle ile DEĞİL)
+
+// ---- Entity kimliği: generation'lı handle ----------------------------------
+// spawn3 eskiden ham dizi index'i dönüyordu ve kill3d yalnız alive=0 yapıyordu:
+// boş slot asla geri kullanılmazdı, yani mermi/parçacık gibi sürekli üreyip
+// ölen bir şey eklendiği an _e3 sonsuza kadar büyürdü. arcade aynı duvara
+// çarpıp generation'lı handle'a geçti; scene3d de aynı deseni kullanıyor.
+//
+//     handle = _e3gen[slot] * _ID_STRIDE3 + slot
+//
+// Öldürmede _e3gen[slot] artar → o slot'a ait TÜM eski handle'lar anında
+// bayatlar. Bayat handle _slot_of3'ten -1 döner ve public API sessizce hiçbir
+// şey yapmaz — ölmüş bir entity'yi tutan kod, slot geri kullanıldıktan sonra
+// yanlışlıkla YENİ entity'yi oynatmaz. Bu, geri kazanımın asıl tehlikesidir.
+array _e3gen  = [];         // slot üretim sayacı (bayat handle tespiti)
+array _e3free = [];         // boş slot yığını
+int   _free_n3 = 0;         // yığın tepesi (_e3free kırpılmaz; bu sayaç sınırlar)
+int   _ID_STRIDE3 = 1048576;   // 2^20 slot/sahne — pratikte tavan yok
+
+// Slot -> dışarıya verilen handle.
+func _mk_handle3(slot): int { return _e3gen[slot] * _ID_STRIDE3 + slot; }
+
+// Handle -> slot; bayat/geçersizse -1. TÜM public id API'si bundan geçer.
+func _slot_of3(h): int {
+    if (h < 0) { return 0 - 1; }
+    int slot = mod(h, _ID_STRIDE3);
+    if (slot >= length(_e3gen)) { return 0 - 1; }
+    int gen = toInt((h - slot) / _ID_STRIDE3);
+    if (gen != _e3gen[slot]) { return 0 - 1; }   // slot geri kullanılmış → bayat
+    return slot;
+}
 
 // ---- Kamera / fizik / durum -----------------------------------------------
 float _grav      = 26.0;    // birim/sn^2
@@ -96,6 +151,11 @@ float _cam_eye3   = 0.0;    // FPS göz yüksekliği (0 = entity boyundan türet
 float _cam_min3   = 3.0;    // yörünge zoom sınırları (tekerlek)
 float _cam_max3   = 40.0;
 int   _cam_lock3  = 0;      // imleç kilidi (FPS'te varsayılan açık)
+// Kamera-duvar çarpışması VARSAYILAN AÇIK: kameranın duvarın içinden bakması
+// bir sanat yönü tercihi değil, kusurdur (gölge gibi — bkz. _shadows3).
+// Açık alanda hiçbir etkisi yok, çünkü ışın hiçbir duvara çarpmıyor.
+int   _cam_collide3 = 1;
+float _cam_margin3  = 0.12;  // çarpma noktasından geri çekilme payı (oran)
 
 int   _score3 = 0;
 int   _game_over3 = 0;
@@ -125,29 +185,94 @@ float _fog3 = 0.0;
 // fn referansları `var` ile tutulmalı — `int` global fn-değerini bozar.
 var _setup3_fn = 0;   int _has_setup3 = 0;
 var _update3_fn = 0;  int _has_update3 = 0;
+// HUD kancası: 3B sahne çizildikten SONRA, 2B katmanda çağrılır. 3B bir cisme
+// bağlı 2B çizimlerin (düşman üstü can barı, hasar sayısı, isim etiketi) tek
+// doğru yeri burasıdır — ekran_x3d/ekran_y3d ile konum alınır.
+var _hud3_fn = 0;     int _has_hud3 = 0;
 
 // çarpışma kancaları (en çok 16): tagA, tagB, fn
 array _hitA = [];
 array _hitB = [];
 array _hitF = [];
 
-// çarpışma bağlamı (kanca içinde me3d()/other3d() okur)
-int _hit_me = 0;
-int _hit_other = 0;
+// ölüm kancaları: canı biten entity'nin tag'i → fn (kanca içinde me3d() ölen)
+array _deadT = [];
+array _deadF = [];
+
+// ---- Bölüm sistemi ---------------------------------------------------------
+// Bölümler numara + kurulum fn olarak kaydedilir; play3d en küçük numaralıyla
+// başlar. Geçiş İSTEK olarak alınır ve KARE SONUNDA uygulanır (_lvl_pending3):
+// çarpışma döngüsünün ortasında entity store'u silmek, o döngünün elindeki
+// slot'ları ayağının altından çekmek demektir. arcade'de aynı desen var ve
+// orada da kasıtlı — bu bir dil kısıtı değil, doğru oyun-döngüsü tasarımı.
+array _lvlN = [];           // bölüm numaraları
+array _lvlF = [];           // bölüm kurulum fn'leri
+int   _cur_lvl3 = 0;        // yürürlükteki bölüm
+int   _lvl_pending3 = 0 - 1; // istenen bölüm (-1 = istek yok)
+int   _won3 = 0;            // kayıtlı son bölüm de bitti mi
+
+// Hasar sonrası dokunulmazlık (sn). Olmazsa 60 FPS'te bir düşmana değmek
+// tek karede tüm canı götürür — çarpışma her kare yeniden tetiklenir.
+float _invuln3 = 0.6;
+// Mermilerin öldüğü dünya yarıçapı (zemin yarı-genişliğinden biraz geniş).
+float _world_r3 = 60.0;
+
+// çarpışma bağlamı (kanca içinde me3d()/other3d() okur) — HANDLE tutar, slot
+// değil: kanca doğrudan kill3d(other3d()) yazabilsin.
+int _hit_me = 0 - 1;
+int _hit_other = 0 - 1;
 
 int _win_w = 800;
 int _win_h = 480;
 string _win_title = "Tulpar 3D";
 
 // ---- Entity oluşturma / erişim ---------------------------------------------
-// Yeni entity üret → dizin döner. sx/sy/sz TAM boyut.
+// Tag'e göre varsayılan katılık. Toplanabilir ve mermi katı değildir: oyuncu
+// altının içinden geçip toplar, mermi hedefe girer — ikisi de kancayla işlenir.
+// Geri kalan her şey (oyuncu, düşman, duvar, prop) katıdır.
+func _default_solid3(tag): int {
+    if (tag == TAG_ITEM || tag == TAG_BULLET) { return 0; }
+    return 1;
+}
+
+// Katılığı sonradan değiştir — hayalet düşman, geçilebilir duvar, tetikleyici
+// bölge gibi şeyler için.
+func solid3d(id, on) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s];
+    if (on) { e.solid = 1; } else { e.solid = 0; }
+    _e3[s] = e;
+}
+func kati3d(id, on) { solid3d(id, on); }
+
+// Boş slot varsa onu geri kullan, yoksa diziyi büyüt. SLOT döner (handle değil).
+// Geri kullanılan slot'ta _e3gen zaten öldürmede artmıştı → yeni kimlik.
+func _alloc_slot3(Ent3 e): int {
+    if (_free_n3 > 0) {
+        _free_n3 = _free_n3 - 1;
+        int s = _e3free[_free_n3];
+        _e3[s] = e;
+        // Geri kullanılan slot: geniş faz dizilerinde ÖLEN entity'nin konumu
+        // duruyor. Bir çarpışma kancası ortasında spawn3 çağrılırsa (patlama,
+        // mermi) o bayat konum kalan kareyi yanlış eleyebilirdi.
+        _bp_sync3(s);
+        return s;
+    }
+    push(_e3, e);
+    push(_e3gen, 1);
+    return length(_e3) - 1;
+}
+
+// Yeni entity üret → HANDLE döner (ham index değil). sx/sy/sz TAM boyut.
 func spawn3(x, y, z, sx, sy, sz, color, shape, tag): int {
     Ent3 e = { x: x, y: y, z: z,  vx: 0.0, vy: 0.0, vz: 0.0,
                sx: sx, sy: sy, sz: sz,  yaw: 0.0,
                shape: shape, model: 0 - 1, color: color, tag: tag,
-               grounded: 0, alive: 1 };
-    push(_e3, e);
-    return length(_e3) - 1;
+               grounded: 0, alive: 1, solid: _default_solid3(tag),
+               hp: 0, hpmax: 0, invuln: 0.0, life: 0.0, owner: 0 - 1, pdir: 0,
+               anim_idle: 0 - 1, anim_run: 0 - 1, anim_fps: 24.0, anim_t: 0.0 };
+    return _mk_handle3(_alloc_slot3(e));
 }
 
 // SHAPE_MODEL entity: yüklü/üretilmiş model handle'ıyla.
@@ -155,21 +280,68 @@ func spawn3_model(x, y, z, scale, model_handle, tag): int {
     Ent3 e = { x: x, y: y, z: z,  vx: 0.0, vy: 0.0, vz: 0.0,
                sx: scale, sy: scale, sz: scale,  yaw: 0.0,
                shape: SHAPE_MODEL, model: model_handle, color: WHITE, tag: tag,
-               grounded: 0, alive: 1 };
-    push(_e3, e);
-    return length(_e3) - 1;
+               grounded: 0, alive: 1, solid: _default_solid3(tag),
+               hp: 0, hpmax: 0, invuln: 0.0, life: 0.0, owner: 0 - 1, pdir: 0,
+               anim_idle: 0 - 1, anim_run: 0 - 1, anim_fps: 24.0, anim_t: 0.0 };
+    return _mk_handle3(_alloc_slot3(e));
 }
 
-func kill3d(i) { Ent3 e = _e3[i]; e.alive = 0; _e3[i] = e; }
-func alive3(i): bool { Ent3 e = _e3[i]; return e.alive == 1; }
+// Öldür + slot'u boş yığına iade. _e3gen artar: bu handle ve aynı slot'a ait
+// tüm eski handle'lar buradan sonra bayattır. Çift-öldürme zararsız.
+func kill3d(id) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s];
+    if (e.alive == 0) { return; }
+    e.alive = 0;
+    _e3[s] = e;
+    _e3gen[s] = _e3gen[s] + 1;
+    if (_free_n3 < length(_e3free)) { _e3free[_free_n3] = s; }
+    else { push(_e3free, s); }
+    _free_n3 = _free_n3 + 1;
+}
 
-func get3x(i): float { Ent3 e = _e3[i]; return e.x; }
-func get3y(i): float { Ent3 e = _e3[i]; return e.y; }
-func get3z(i): float { Ent3 e = _e3[i]; return e.z; }
+// Bayat handle "canlı değil" der — ölmüş entity'yi tutan kod doğal olarak
+// false görür, slot geri kullanılmış olsa bile yeni entity'yi görmez.
+func alive3(id): bool {
+    int s = _slot_of3(id);
+    if (s < 0) { return false; }
+    Ent3 e = _e3[s];
+    return e.alive == 1;
+}
 
-func set3pos(i, x, y, z) { Ent3 e = _e3[i]; e.x = x; e.y = y; e.z = z; _e3[i] = e; }
-func set3vel(i, vx, vy, vz) { Ent3 e = _e3[i]; e.vx = vx; e.vy = vy; e.vz = vz; _e3[i] = e; }
+func get3x(id): float { int s = _slot_of3(id); if (s < 0) { return 0.0; } Ent3 e = _e3[s]; return e.x; }
+func get3y(id): float { int s = _slot_of3(id); if (s < 0) { return 0.0; } Ent3 e = _e3[s]; return e.y; }
+func get3z(id): float { int s = _slot_of3(id); if (s < 0) { return 0.0; } Ent3 e = _e3[s]; return e.z; }
 
+func set3pos(id, x, y, z) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s]; e.x = x; e.y = y; e.z = z; _e3[s] = e;
+    _bp_sync3(s);   // kanca içinden ışınlanma geniş fazı bayat bırakmasın
+}
+func set3vel(id, vx, vy, vz) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s]; e.vx = vx; e.vy = vy; e.vz = vz; _e3[s] = e;
+}
+
+// Y dönüşü (derece). Faz 9'dan beri bu YALNIZ görsel değil: dönük kutular
+// SAT ile gerçek yüzeyleriyle çarpışır (bkz. _obb_overlap3).
+func set3yaw(id, yaw) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s]; e.yaw = yaw; _e3[s] = e;
+}
+func get3yaw(id): float {
+    int s = _slot_of3(id);
+    if (s < 0) { return 0.0; }
+    Ent3 e = _e3[s];
+    return e.yaw;
+}
+
+// Çarpışma kancası bağlamı — HANDLE döner, böylece kanca içinde doğrudan
+// kill3d(other3d()) yazılabilir.
 func me3d(): int { return _hit_me; }
 func other3d(): int { return _hit_other; }
 
@@ -177,7 +349,28 @@ func other3d(): int { return _hit_other; }
 // Restart (R ile yeniden başlat) ve otomatik testler için. setup fn'i saklı kalır.
 func scene3d_reset() {
     _e3 = [];
+    // Generation sayaçları da sıfırlanır: entity store tamamen gittiği için
+    // eski handle'ların hepsi zaten anlamsız, slot 0'dan yeniden başlanabilir.
+    _e3gen = []; _e3free = []; _free_n3 = 0;
+    _bx = []; _by = []; _bz = []; _br = [];   // geniş faz de sahneyle gider
+    // UI durumu da tam teardown'a dahil: reset kancaları ve bölümleri zaten
+    // siliyor, bekleyen bir "çıkış" isteği ya da açık kalmış duraklat örtüsü
+    // yeni sahneye sızmamalı.
+    _s3_ui = UI_NONE; _s3_quit = 0; _s3_tap_prev = 0;
+    _s3_has_title = 0; _s3_title_txt = ""; _s3_title_sub = "";
+    _s3_has_restart = 0;
+    // Eğim sınırı da sahne durumu: reset zemini ve araziyi zaten sıfırlıyor,
+    // yamaç kuralının ayakta kalması tutarsız olurdu (ve testleri sıraya
+    // bağımlı yapıyordu — "varsayılan kapalı" testi bir öncekinin bıraktığı
+    // sınırı ölçüyordu).
+    _slope_lim3 = 0.0; _slope_cos3 = 0.0; _slide_acc3 = 18.0;
     _hitA = []; _hitB = []; _hitF = [];
+    _deadT = []; _deadF = [];
+    _lvlN = []; _lvlF = []; _cur_lvl3 = 0; _lvl_pending3 = 0 - 1; _won3 = 0;
+    _s3_particles_clear();
+    // Arazi bayrağı sıfırlanır (yükseklik verisi de bırakılır) — sahne
+    // sıfırlanınca dünya da sıfırlanmalı, yoksa yeni sahne eski tepeleri sürer.
+    _terr_on = 0; _terr_model = 0 - 1; terrain_off3d();
     _score3 = 0;
     _game_over3 = 0;
     _cam_target = 0 - 1;
@@ -185,12 +378,29 @@ func scene3d_reset() {
     // yeniden kurulur. Bırakılsa yeniden başlatılan sahne önceki turun
     // bakış açısıyla açılırdı.
     _cam_mode3 = CAM_FIXED; _cam_yaw3 = 0.0; _cam_pitch3 = 0.0; _cam_lock3 = 0;
-    _hit_me = 0; _hit_other = 0;
+    _hit_me = 0 - 1; _hit_other = 0 - 1;
 }
 
 func score3d_add(n) { _score3 = _score3 + n; }
 func score3d(): int { return _score3; }
 func game_over3d() { _game_over3 = 1; }
+// Oyun bitti mi (kazanarak ya da kaybederek)? arcade'de `is_over()` vardı,
+// 3B'de yoktu — UI katmanı ve oyunun kendi update'i ikisi de buna bakıyor.
+func is_over3d(): bool { return _game_over3 == 1; }
+
+// Yaşayan entity sayısı. Slot'lar geri kullanıldığı için `length(_e3)` yanıltır:
+// ölü slot'lar orada durur.
+func alive_count3d(): int {
+    int c = 0;
+    int i = 0;
+    int n = length(_e3);
+    while (i < n) {
+        Ent3 e = _e3[i];
+        if (e.alive == 1) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
 
 // ---- Girdi yardımcıları (klavye VEYA dokunmatik) ---------------------------
 // Klavye: WASD/oklar (masaüstü; web'de dokunmatik shell sentetik tuş üretir).
@@ -302,7 +512,9 @@ func jump_pressed(): bool { return key_pressed(K_SPACE) || _t_jump == 1; }
 // Yön KAMERAYA GÖREdir: "ileri", kameranın baktığı yöndür — kamerayı çevirip
 // W'ye basınca yeni yöne gidersin. Sabit kamerada yaw hep 0 olduğu için bu
 // dönüşüm birim matristir, yani eski sahnelerde hareket birebir aynı kalır.
-func move3d(i, speed) {
+func move3d(id, speed) {
+    int i = _slot_of3(id);
+    if (i < 0) { return; }
     float dx = _in_dx();
     float dz = _in_dz();
     float cy = _cam_yaw3 * DEG2RAD3;
@@ -327,9 +539,562 @@ func move3d(i, speed) {
 }
 
 // Zıpla: yalnız zemindeyken.
-func jump3d(i, force) {
+func jump3d(id, force) {
+    int i = _slot_of3(id);
+    if (i < 0) { return; }
     Ent3 e = _e3[i];
     if (e.grounded == 1) { e.vy = force; e.grounded = 0; _e3[i] = e; }
+}
+
+// ---- Bölüm sistemi ---------------------------------------------------------
+// level3d(1, kur_bolum1) ile kaydet; play3d en küçük numaralı bölümle başlar.
+func level3d(n, fn) { push(_lvlN, n); push(_lvlF, fn); }
+
+// Sonraki bölüme geç. İSTEKTİR — kare sonunda uygulanır, çağıran satırda değil.
+// Kayıtlı sonraki bölüm yoksa oyun KAZANILDI sayılır.
+func next_level3d() { _lvl_pending3 = _cur_lvl3 + 1; }
+func goto_level3d(n) { _lvl_pending3 = n; }
+func level_now3d(): int { return _cur_lvl3; }
+func won3d(): bool { return _won3 == 1; }
+
+// Kayıtlı bölümler arasında `n` numaralıyı bul; yoksa -1.
+func _lvl_index3(n): int {
+    int i = 0;
+    int cnt = length(_lvlN);
+    while (i < cnt) {
+        if (_lvlN[i] == n) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Bekleyen bölüm geçişini UYGULA (yalnız kare sonunda çağrılır).
+// Entity store tamamen silinir ama kancalar/callback'ler KALIR — bölüm kurulum
+// fn'i sahneyi sıfırdan kurar, oyunun kuralları yerinde durur.
+func _s3_apply_level() {
+    int want = _lvl_pending3;
+    _lvl_pending3 = 0 - 1;
+    int idx = _lvl_index3(want);
+    if (idx < 0) {
+        _won3 = 1;          // kayıtlı bölüm kalmadı → oyun kazanıldı
+        _game_over3 = 1;
+        return;
+    }
+    _e3 = []; _e3gen = []; _e3free = []; _free_n3 = 0;
+    _s3_particles_clear();  // önceki bölümün patlamaları yeni sahneye taşmasın
+    _hit_me = 0 - 1; _hit_other = 0 - 1;
+    _cam_target = 0 - 1;    // kurulum fn'i camera_follow'u yeniden çağırır
+    _cur_lvl3 = want;
+    call(_lvlF[idx]);
+}
+
+// ===========================================================================
+// Menü / UI katmanı
+// ===========================================================================
+// Motor Faz 7-10'da "üstüne oyun yazılabilir" hale geldi ama YAYINLANABİLİR
+// değildi: başlangıç ekranı, duraklatma ve oyun bittiğinde yeniden başlama yoktu
+// — oyun-bitti ekranı sadece yazı basıyordu, hiçbir tuş iş yapmıyordu, tek çıkış
+// pencereyi kapatmaktı. arcade'de bunların hepsi var; 3B'de yoktu.
+//
+// Üç kural:
+//   • Başlangıç ekranı OPT-IN (`menu3d(...)`). Çağırmayan sahne bit-bit eskisi
+//     gibi, doğrudan oyuna girerek çalışır.
+//   • Duraklat her zaman açık — ESC/P/GERİ. Bunu mümkün kılan şey
+//     `exit_key(K_NONE)`: raylib varsayılanı ESC'ye basılınca pencereyi
+//     kapatmak ve bu Tulpar tarafında yakalanamıyordu.
+//   • Her düğme klavye + fare + DOKUNMATİK ile çalışır (Android hedefi).
+
+int UI_NONE  = 0;   // oyun akıyor
+int UI_TITLE = 1;   // başlangıç ekranı
+int UI_PAUSE = 2;   // duraklat örtüsü
+int _s3_ui = UI_NONE;
+
+int _s3_has_title = 0;
+str _s3_title_txt = "";
+str _s3_title_sub = "";
+// `var`, `int` DEĞİL: fonksiyon referansı boxed bir değer, natif i64 global'e
+// yazılınca kırpılır ve call() hiçbir şey çağırmaz. Dosyadaki diğer kancalar
+// (_setup3_fn, _update3_fn, _hud3_fn) aynı sebeple `var`.
+var _s3_restart_fn = 0;
+int _s3_has_restart = 0;
+int _s3_quit = 0;          // menüden çıkış istendi → oyun döngüsü biter
+
+str _s3_lang_c = "";
+func _s3_lang(): str {
+    if (_s3_lang_c == "") {
+        if (sys_lang() == "en") { _s3_lang_c = "en"; } else { _s3_lang_c = "tr"; }
+    }
+    return _s3_lang_c;
+}
+func _s3_t(tr, en): str { if (_s3_lang() == "en") { return en; } return tr; }
+
+// Başlangıç ekranını aç. Çağrılmazsa oyun doğrudan başlar (eski davranış).
+func menu3d(title, subtitle) {
+    _s3_has_title = 1;
+    _s3_title_txt = title;
+    _s3_title_sub = subtitle;
+    _s3_ui = UI_TITLE;
+}
+
+// Yeniden başlarken çağrılacak kanca. Bölüm kaydedilmiş sahnelerde gerekmez
+// (motor en küçük bölüme döner); bölümsüz tek sahnelerde sahneyi kuran şey
+// `setup` olduğu için motor onu tek başına tekrarlayamaz — setup kancaları da
+// kaydediyor, ikinci kez çalıştırmak onları çoğaltırdı. Bu kanca o boşluğu
+// oyunun kendi bilgisiyle dolduruyor.
+func on_restart3d(fn) { _s3_restart_fn = fn; _s3_has_restart = 1; }
+
+func pause3d()  { if (_game_over3 == 0 && _s3_ui == UI_NONE) { _s3_ui = UI_PAUSE; } }
+func resume3d() { if (_s3_ui == UI_PAUSE) { _s3_ui = UI_NONE; } }
+func paused3d(): bool { return _s3_ui == UI_PAUSE; }
+func quit3d()   { _s3_quit = 1; }
+
+// Baştan başla. Sırayla: bölüm varsa en küçüğüne dön, yoksa on_restart3d
+// kancasını çağır, o da yoksa yalnız skoru/durumu sıfırla (sahne yerinde kalır —
+// belgelenmiş sınır, sessiz değil).
+func restart3d() {
+    _score3 = 0;
+    _game_over3 = 0;
+    _won3 = 0;
+    _s3_ui = UI_NONE;
+    _hit_me = 0 - 1; _hit_other = 0 - 1;
+    if (length(_lvlN) > 0) {
+        int lo = _lvlN[0];
+        int li = 1;
+        while (li < length(_lvlN)) {
+            if (_lvlN[li] < lo) { lo = _lvlN[li]; }
+            li = li + 1;
+        }
+        _lvl_pending3 = lo;
+        _s3_apply_level();
+        return;
+    }
+    if (_s3_has_restart == 1) {
+        _e3 = []; _e3gen = []; _e3free = []; _free_n3 = 0;
+        _bx = []; _by = []; _bz = []; _br = [];
+        _s3_particles_clear();
+        _cam_target = 0 - 1;
+        call(_s3_restart_fn);
+    }
+}
+
+// ---- Düğme çizimi + isabet testi -------------------------------------------
+// Ölçüler pencereye göre oransal: aynı düzen 960x560 masaüstünde de, dar bir
+// telefon ekranında da çalışsın.
+func _s3_btn_w(): float { return _win_w * 0.44; }
+func _s3_btn_h(): float { return _win_h * 0.11; }
+func _s3_btn_x(): float { return (_win_w - _s3_btn_w()) * 0.5; }
+func _s3_btn_y(i): float { return _win_h * (0.44 + i * 0.15); }
+
+func _s3_btn_draw(i, label) {
+    float bx = _s3_btn_x(); float by = _s3_btn_y(i);
+    float bw = _s3_btn_w(); float bh = _s3_btn_h();
+    rect(bx, by, bw, bh, rgba(46, 54, 82, 235));
+    rect_lines(bx, by, bw, bh, GOLD);
+    int sz = toInt(bh * 0.38);
+    text(label, toInt(bx + (bw - measure_text(label, sz)) * 0.5),
+         toInt(by + (bh - sz) * 0.5), sz, RAYWHITE);
+}
+
+// (px,py) i. düğmenin içinde mi?
+func _s3_btn_hit(i, px, pz): bool {
+    float bx = _s3_btn_x(); float by = _s3_btn_y(i);
+    return px >= bx && px <= bx + _s3_btn_w()
+        && pz >= by && pz <= by + _s3_btn_h();
+}
+
+// Bu karede hangi düğmeye BASILDI (kenar tetikli)? Yoksa -1.
+// Fare ve parmak aynı isabet testinden geçer; ikisi de "yeni basıldı" kenarı
+// olduğu için basılı tutmak tekrar tetiklemez.
+int _s3_tap_prev = 0;
+func _s3_btn_pressed(count): int {
+    int hit = 0 - 1;
+    float px = 0.0; float pz = 0.0;
+    int now = 0;
+    if (mouse_pressed(0)) { px = mouse_x() * 1.0; pz = mouse_y() * 1.0; now = 1; }
+    int tn = touch_count();
+    if (tn > 0) {
+        float tx = touch_x(0) * 1.0; float ty = touch_y(0) * 1.0;
+        if (_s3_tap_prev == 0) { px = tx; pz = ty; now = 1; }
+    }
+    if (tn > 0) { _s3_tap_prev = 1; } else { _s3_tap_prev = 0; }
+    if (now == 0) { return 0 - 1; }
+    int i = 0;
+    while (i < count) {
+        if (_s3_btn_hit(i, px, pz)) { hit = i; }
+        i = i + 1;
+    }
+    return hit;
+}
+
+func _s3_dim() {
+    rect(0.0, 0.0, _win_w * 1.0, _win_h * 1.0, rgba(8, 10, 16, 190));
+}
+
+func _s3_center_text(s, y, size, col) {
+    text(s, toInt((_win_w - measure_text(s, size)) * 0.5), toInt(y), size, col);
+}
+
+// ---- Başlangıç ekranı ------------------------------------------------------
+func _s3_title_draw() {
+    _s3_dim();
+    int tsz = toInt(_win_h * 0.10);
+    _s3_center_text(_s3_title_txt, _win_h * 0.16, tsz, GOLD);
+    if (length(_s3_title_sub) > 0) {
+        _s3_center_text(_s3_title_sub, _win_h * 0.30, toInt(_win_h * 0.045), RAYWHITE);
+    }
+    _s3_btn_draw(0, _s3_t("Basla", "Start"));
+    _s3_btn_draw(1, _s3_t("Cikis", "Quit"));
+}
+
+// 1 = başla, 2 = çık, 0 = bekle
+func _s3_title_step(): int {
+    if (key_pressed(K_ENTER) || key_pressed(K_SPACE)) { return 1; }
+    if (key_pressed(K_ESC)) { return 2; }
+    int b = _s3_btn_pressed(2);
+    if (b >= 0) { return b + 1; }
+    return 0;
+}
+
+// ---- Duraklat örtüsü -------------------------------------------------------
+func _s3_pause_draw() {
+    _s3_dim();
+    _s3_center_text(_s3_t("Duraklatildi", "Paused"), _win_h * 0.18,
+                    toInt(_win_h * 0.09), GOLD);
+    _s3_btn_draw(0, _s3_t("Devam", "Resume"));
+    _s3_btn_draw(1, _s3_t("Yeniden", "Restart"));
+    _s3_btn_draw(2, _s3_t("Cikis", "Quit"));
+}
+
+// 1 = devam, 2 = yeniden, 3 = çık, 0 = bekle
+func _s3_pause_step(): int {
+    if (key_pressed(K_ESC) || key_pressed(K_P)) { return 1; }
+    if (key_pressed(K_R)) { return 2; }
+    int b = _s3_btn_pressed(3);
+    if (b >= 0) { return b + 1; }
+    return 0;
+}
+
+// ---- Oyun bitti / kazandın -------------------------------------------------
+func _s3_over_draw() {
+    _s3_dim();
+    if (_won3 == 1) {
+        _s3_center_text(_s3_t("KAZANDIN", "YOU WIN"), _win_h * 0.18,
+                        toInt(_win_h * 0.10), rgb(120, 240, 140));
+    } else {
+        _s3_center_text(_s3_t("OYUN BITTI", "GAME OVER"), _win_h * 0.18,
+                        toInt(_win_h * 0.10), rgb(255, 90, 90));
+    }
+    _s3_center_text(_s3_t("Skor: ", "Score: ") + toString(_score3),
+                    _win_h * 0.32, toInt(_win_h * 0.05), GOLD);
+    _s3_btn_draw(0, _s3_t("Tekrar Oyna", "Play Again"));
+    _s3_btn_draw(1, _s3_t("Cikis", "Quit"));
+}
+
+// 1 = tekrar, 2 = çık, 0 = bekle
+func _s3_over_step(): int {
+    if (key_pressed(K_R) || key_pressed(K_ENTER) || key_pressed(K_SPACE)) { return 1; }
+    if (key_pressed(K_ESC)) { return 2; }
+    int b = _s3_btn_pressed(2);
+    if (b >= 0) { return b + 1; }
+    return 0;
+}
+
+// ---- Düşman AI -------------------------------------------------------------
+// Üçü de HER KARE çağrılmak üzere tasarlandı (update içinden), böylece hiçbiri
+// entity'ye kalıcı durum yazmak zorunda kalmıyor — devriye yönü hariç.
+
+// Hedefe doğru yürü (yatay). Y hızına dokunmaz: yerçekimi/zıplama onun.
+func chase3d(id, target, speed) {
+    int s = _slot_of3(id);
+    int t = _slot_of3(target);
+    if (s < 0 || t < 0) { return; }
+    Ent3 e = _e3[s];
+    Ent3 tg = _e3[t];
+    float dx = tg.x - e.x;
+    float dz = tg.z - e.z;
+    float d = sqrt(dx * dx + dz * dz);
+    if (d > 0.001) {
+        e.vx = dx / d * speed;
+        e.vz = dz / d * speed;
+        e.yaw = atan2(dx, dz) * RAD2DEG3;
+    } else {
+        e.vx = 0.0; e.vz = 0.0;
+    }
+    _e3[s] = e;
+}
+
+// İki nokta arasında gidip gel. Uca varınca yön döner (pdir entity'de saklı).
+func patrol3d(id, x1, z1, x2, z2, speed) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s];
+    float tx = x2;
+    float tz = z2;
+    if (e.pdir == 1) { tx = x1; tz = z1; }
+    float dx = tx - e.x;
+    float dz = tz - e.z;
+    float d = sqrt(dx * dx + dz * dz);
+    if (d < 0.35) {
+        if (e.pdir == 1) { e.pdir = 0; } else { e.pdir = 1; }
+        e.vx = 0.0; e.vz = 0.0;
+    } else {
+        e.vx = dx / d * speed;
+        e.vz = dz / d * speed;
+        e.yaw = atan2(dx, dz) * RAD2DEG3;
+    }
+    _e3[s] = e;
+}
+
+// İki entity r yarıçapı içinde mi (küresel mesafe). Görüş/atış menzili için.
+func in_range3d(a, b, r): bool {
+    int sa = _slot_of3(a);
+    int sb = _slot_of3(b);
+    if (sa < 0 || sb < 0) { return false; }
+    Ent3 ea = _e3[sa];
+    Ent3 eb = _e3[sb];
+    float dx = ea.x - eb.x;
+    float dy = ea.y - eb.y;
+    float dz = ea.z - eb.z;
+    return sqrt(dx * dx + dy * dy + dz * dz) <= r;
+}
+
+// ---- Mermi -----------------------------------------------------------------
+// Sahibin BAKTIĞI yöne (yaw) çıkar, gövdesinin hemen önünde doğar. Yerçekimi
+// ve zemin teması mermilere uygulanmaz (bkz. _s3_physics) — düz uçar.
+// Ömrü dolan ya da dünya sınırını aşan mermi kendiliğinden ölür; bu olmadan
+// ıskalayan her mermi sonsuza kadar entity store'da kalırdı.
+func bullet3d(owner, speed, life): int {
+    int s = _slot_of3(owner);
+    if (s < 0) { return 0 - 1; }
+    Ent3 o = _e3[s];
+    float yr = o.yaw * DEG2RAD3;
+    float fx = sin(yr);
+    float fz = cos(yr);
+    // gövdenin önüne çıkar: yarı-boy + merminin yarıçapı kadar
+    float off = o.sx * 0.5 + 0.45;
+    int id = spawn3(o.x + fx * off, o.y, o.z + fz * off,
+                    0.4, 0.4, 0.4, rgb(255, 220, 90), SHAPE_SPHERE, TAG_BULLET);
+    int bs = _slot_of3(id);
+    Ent3 b = _e3[bs];
+    b.vx = fx * speed;
+    b.vz = fz * speed;
+    b.vy = 0.0;
+    b.yaw = o.yaw;
+    b.life = life;
+    b.owner = owner;
+    _e3[bs] = b;
+    return id;
+}
+
+// Merminin dünya sınırını aştı mı (yatay yarıçap).
+func _out_of_world3(Ent3 e): bool {
+    return sqrt(e.x * e.x + e.z * e.z) > _world_r3;
+}
+
+// ---- Can / hasar -----------------------------------------------------------
+func health3d(id, n) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s];
+    e.hp = n;
+    e.hpmax = n;
+    _e3[s] = e;
+}
+func hp3d(id): int {
+    int s = _slot_of3(id);
+    if (s < 0) { return 0; }
+    Ent3 e = _e3[s];
+    return e.hp;
+}
+
+// Ölünce çağrılacak kanca: kanca içinde me3d() ÖLEN entity'nin handle'ı.
+func on_death3d(tag, fn) { push(_deadT, tag); push(_deadF, fn); }
+
+// Dokunulmazlık süresini ayarla (sn). 0 = kapalı.
+func invuln3d(sec) { _invuln3 = sec; }
+
+// Hasar ver. Dokunulmazlık penceresi açıkken YOK SAYILIR — yoksa temas eden
+// düşman 60 FPS'te saniyede 60 hasar vururdu.
+func damage3d(id, n) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s];
+    if (e.alive == 0) { return; }
+    if (e.invuln > 0.0) { return; }
+    e.hp = e.hp - n;
+    e.invuln = _invuln3;
+    _e3[s] = e;
+    if (e.hp <= 0) { _fire_death3(s); }
+}
+
+// Ölüm kancalarını çalıştır, sonra entity'yi öldür. Kanca kendisi kill3d
+// çağırırsa sorun değil — kill3d çift-öldürmeye karşı korumalı.
+func _fire_death3(s) {
+    Ent3 e = _e3[s];
+    int id = _mk_handle3(s);
+    int h = 0;
+    int hn = length(_deadT);
+    while (h < hn) {
+        if (_deadT[h] == e.tag) {
+            _hit_me = id;
+            _hit_other = 0 - 1;
+            call(_deadF[h]);
+        }
+        h = h + 1;
+    }
+    kill3d(id);
+}
+
+// ---- Parçacıklar (Faz 8) ---------------------------------------------------
+// Parçacıklar entity DEĞİL: oyun onlara asla tek tek başvurmaz, yalnız "şurada
+// patlama olsun" der. Bu yüzden handle/generation makinesine gerek yok —
+// paralel dizili basit bir havuz, ölü slot'ları lineer taramayla geri kullanır
+// (arcade'in 2B parçacık havuzuyla aynı tasarım).
+//
+// Çizim BILLBOARD ile: kameraya dönük dörtgen. Küre/kutu ile çizilseydi yandan
+// bakınca incelir ve "duman/kıvılcım" hissi kaybolurdu.
+array _pt3x = [];    array _pt3y = [];    array _pt3z = [];
+array _pt3vx = [];   array _pt3vy = [];   array _pt3vz = [];
+array _pt3life = []; // kalan ömür (sn); <= 0 → slot ölü
+array _pt3max = [];  // başlangıç ömrü (küçülme/sönme oranı için)
+array _pt3col = [];
+array _pt3size = [];
+float _pt3_grav = 9.0;   // parçacık yerçekimi (sahnenin _grav'ından bağımsız)
+int   _PT3_CAP = 400;    // havuz tavanı — üstünde yeni parçacık sessizce düşer
+
+// n adet parçacık saç: rastgele küresel yön, hafif yukarı eğilim.
+func particles3d(x, y, z, n, color, speed, life) {
+    int j = 0;
+    while (j < n) {
+        // küre üzerinde düzgün-ish yön
+        float ang = random() * 6.2831853;
+        float up  = random();
+        float horiz = sqrt(1.0 - up * up);
+        float spd = speed * (0.45 + random() * 0.75);
+        float pvx = cos(ang) * horiz * spd;
+        float pvz = sin(ang) * horiz * spd;
+        float pvy = up * spd + speed * 0.35;      // yukarı eğilim
+        float plife = life * (0.65 + random() * 0.7);
+        float psize = 0.14 + random() * 0.18;
+        int slot = 0 - 1;
+        int i = 0;
+        int cnt = length(_pt3life);
+        while (i < cnt) {
+            if (slot < 0 && _pt3life[i] <= 0.0) { slot = i; }
+            i = i + 1;
+        }
+        if (slot >= 0) {
+            _pt3x[slot] = x * 1.0; _pt3y[slot] = y * 1.0; _pt3z[slot] = z * 1.0;
+            _pt3vx[slot] = pvx;    _pt3vy[slot] = pvy;    _pt3vz[slot] = pvz;
+            _pt3life[slot] = plife; _pt3max[slot] = plife;
+            _pt3col[slot] = color;  _pt3size[slot] = psize;
+        } else {
+            if (cnt < _PT3_CAP) {
+                push(_pt3x, x * 1.0); push(_pt3y, y * 1.0); push(_pt3z, z * 1.0);
+                push(_pt3vx, pvx);    push(_pt3vy, pvy);    push(_pt3vz, pvz);
+                push(_pt3life, plife); push(_pt3max, plife);
+                push(_pt3col, color);  push(_pt3size, psize);
+            }
+            // havuz dolu → bu parçacık düşer (kare hızı, görsel şıklıktan önemli)
+        }
+        j = j + 1;
+    }
+}
+
+// Bir entity'nin konumunda patlama — ölüm efekti için en sık kullanım.
+func burst3d(id, n, color, speed, life) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s];
+    particles3d(e.x, e.y, e.z, n, color, speed, life);
+}
+
+func particle_gravity3d(g) { _pt3_grav = g; }
+
+func _s3_particles(dt) {
+    int i = 0;
+    int cnt = length(_pt3life);
+    while (i < cnt) {
+        if (_pt3life[i] > 0.0) {
+            _pt3vy[i] = _pt3vy[i] - _pt3_grav * dt;
+            _pt3x[i] = _pt3x[i] + _pt3vx[i] * dt;
+            _pt3y[i] = _pt3y[i] + _pt3vy[i] * dt;
+            _pt3z[i] = _pt3z[i] + _pt3vz[i] * dt;
+            _pt3life[i] = _pt3life[i] - dt;
+        }
+        i = i + 1;
+    }
+}
+
+func _s3_particles_draw() {
+    int i = 0;
+    int cnt = length(_pt3life);
+    while (i < cnt) {
+        if (_pt3life[i] > 0.0) {
+            // ömür tükendikçe küçül — sönme hissi
+            float k = _pt3life[i] / _pt3max[i];
+            spark3d(_pt3x[i], _pt3y[i], _pt3z[i], _pt3size[i] * k, _pt3col[i]);
+        }
+        i = i + 1;
+    }
+}
+
+func _s3_particles_clear() {
+    _pt3x = []; _pt3y = []; _pt3z = [];
+    _pt3vx = []; _pt3vy = []; _pt3vz = [];
+    _pt3life = []; _pt3max = []; _pt3col = []; _pt3size = [];
+}
+
+// ---- Karakter animasyonu (Faz 8) -------------------------------------------
+// tame'in anim_play builtin'i baştan beri vardı ama scene3d kullanmıyordu:
+// modelli entity donuk duruyordu. Motor artık kare sayacını kendisi sürüyor,
+// oyunun yapması gereken tek şey hangi animasyonun boşta/koşu olduğunu söylemek.
+func anim3d(id, idle_idx, run_idx, fps) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s];
+    e.anim_idle = idle_idx;
+    e.anim_run = run_idx;
+    e.anim_fps = fps;
+    e.anim_t = 0.0;
+    _e3[s] = e;
+}
+
+// Entity'nin bu karede oynatacağı animasyon indeksi: yatayda hareket varsa
+// koşu, yoksa boşta. Koşu tanımlı değilse boştaya düşer.
+func _anim_pick3(Ent3 e): int {
+    float sp = sqrt(e.vx * e.vx + e.vz * e.vz);
+    if (sp > 0.35 && e.anim_run >= 0) { return e.anim_run; }
+    return e.anim_idle;
+}
+
+// ---- Konumsal ses (Faz 8) --------------------------------------------------
+// Ses zaten vardı; eksik olan tek şey mesafe çarpanıydı. Kamera hedefine (yoksa
+// dünya merkezine) uzaklığa göre ses seviyesi: uzaktaki patlama kısık duyulur.
+float _snd_range3 = 30.0;   // bu mesafede ses tamamen söner
+
+func sound_range3d(r) { _snd_range3 = r; }
+
+// Mesafeden ses seviyesi. Çalmadan AYRI: ses aygıtı olmadan (headless testte)
+// doğrulanabilsin diye.
+func _snd_vol3(x, y, z): float {
+    float lx = 0.0; float ly = 0.0; float lz = 0.0;
+    int ct = _slot_of3(_cam_target);
+    if (ct >= 0) {
+        Ent3 t = _e3[ct];
+        lx = t.x; ly = t.y; lz = t.z;
+    }
+    float dx = x - lx; float dy = y - ly; float dz = z - lz;
+    float d = sqrt(dx * dx + dy * dy + dz * dz);
+    float v = 1.0 - d / _snd_range3;
+    if (v < 0.0) { v = 0.0; }
+    if (v > 1.0) { v = 1.0; }
+    return v;
+}
+
+func sound3d(handle, x, y, z) {
+    sound_volume(handle, _snd_vol3(x, y, z));
+    play_sound(handle);
 }
 
 // ---- Fizik: hız entegrasyonu + yerçekimi + zemin ---------------------------
@@ -339,24 +1104,67 @@ func _s3_physics(dt) {
     while (i < n) {
         Ent3 e = _e3[i];
         if (e.alive == 1) {
-            // yerçekimi yalnız oyuncu/düşman/prop'a (duvarlar sabit)
-            if (e.tag != TAG_WALL) {
+            // dokunulmazlık penceresi geri sayar
+            if (e.invuln > 0.0) {
+                e.invuln = e.invuln - dt;
+                if (e.invuln < 0.0) { e.invuln = 0.0; }
+            }
+            // Mermi düz uçar: ne yerçekimi ne zemin teması. Yoksa namludan
+            // çıkar çıkmaz yere düşerdi.
+            int is_bullet = 0;
+            if (e.tag == TAG_BULLET) { is_bullet = 1; }
+            // Rampalar duvarlar gibi SABİT dünya geometrisidir: düşmezler.
+            int is_static = 0;
+            if (e.tag == TAG_WALL || e.shape == SHAPE_RAMP) { is_static = 1; }
+            // yerçekimi yalnız oyuncu/düşman/prop'a
+            if (is_static == 0 && is_bullet == 0) {
                 e.vy = e.vy - _grav * dt;
             }
             e.x = e.x + e.vx * dt;
             e.y = e.y + e.vy * dt;
             e.z = e.z + e.vz * dt;
-            // zemin teması
-            float half = e.sy * 0.5;
-            float floor_y = _ground_y + half;
-            if (e.y <= floor_y && e.tag != TAG_WALL) {
-                e.y = floor_y;
-                if (e.vy < 0.0) { e.vy = 0.0; }
-                e.grounded = 1;
-            } else {
-                if (e.tag != TAG_WALL) { e.grounded = 0; }
+            // Zemin teması. Dünya artık tek düzlem değil: rampaların üzerindeki
+            // yükseklik de zemin sayılır, ikisinin EN YÜKSEĞİ alınır.
+            if (is_bullet == 0 && is_static == 0) {
+                float half = e.sy * 0.5;
+                float floor_y = _floor_at3(e.x, e.z) + half;
+                if (e.y <= floor_y) {
+                    e.y = floor_y;
+                    if (e.vy < 0.0) { e.vy = 0.0; }
+                    e.grounded = 1;
+                } else {
+                    e.grounded = 0;
+                }
+                // Eğim sınırı: dik yamaçta zemine basmak yetmiyor, aşağı
+                // kayıyorsun. Normalin YATAY bileşeni tepeden dışarı bakar,
+                // yani doğrudan yamaç aşağı yönü verir — ayrıca hesap gerekmiyor.
+                // Sınır kapalıyken (varsayılan) bu blok hiç çalışmaz.
+                if (_slope_lim3 > 0.0 && _terr_on == 1 && e.grounded == 1) {
+                    _terrain_normal3(e.x, e.z);
+                    if (_tn_y < _slope_cos3) {
+                        float hl = sqrt(_tn_x * _tn_x + _tn_z * _tn_z);
+                        if (hl > 0.0001) {
+                            e.vx = e.vx + (_tn_x / hl) * _slide_acc3 * dt;
+                            e.vz = e.vz + (_tn_z / hl) * _slide_acc3 * dt;
+                        }
+                    }
+                }
+            }
+            // Ömür / dünya sınırı: ıskalayan mermi burada ölür, yoksa entity
+            // store'da sonsuza kadar kalırdı (slot geri kazanımının anlamı bu).
+            int expired = 0;
+            if (e.life > 0.0) {
+                e.life = e.life - dt;
+                if (e.life <= 0.0) { expired = 1; }
+            }
+            if (is_bullet == 1 && _out_of_world3(e)) { expired = 1; }
+            // Animasyon kare sayacı: motor sürer, render yalnız uygular.
+            if (e.anim_idle >= 0 || e.anim_run >= 0) {
+                e.anim_t = e.anim_t + e.anim_fps * dt;
+                if (e.anim_t > 100000.0) { e.anim_t = 0.0; }   // taşma koruması
             }
             _e3[i] = e;
+            if (expired == 1) { kill3d(_mk_handle3(i)); }
         }
         i = i + 1;
     }
@@ -375,53 +1183,669 @@ func _aabb_overlap(a, b): bool {
     return dx < rx && dy < ry && dz < rz;
 }
 
-// Oyuncuyu duvardan en küçük örtüşme ekseni boyunca dışarı it (MTV).
-func _wall_block(p, w) {
-    Ent3 ep = _e3[p];
-    Ent3 ew = _e3[w];
-    float dx = ep.x - ew.x;
-    float dy = ep.y - ew.y;
-    float dz = ep.z - ew.z;
-    float ox = (ep.sx + ew.sx) * 0.5 - abs_f3(dx);
-    float oy = (ep.sy + ew.sy) * 0.5 - abs_f3(dy);
-    float oz = (ep.sz + ew.sz) * 0.5 - abs_f3(dz);
-    if (ox <= 0.0 || oy <= 0.0 || oz <= 0.0) { return; }
-    // en küçük örtüşme eksenini seç, o yönde dışarı it
-    if (ox <= oy && ox <= oz) {
-        if (dx > 0.0) { ep.x = ep.x + ox; } else { ep.x = ep.x - ox; }
-        ep.vx = 0.0;
-    } else {
-        if (oz <= oy) {
-            if (dz > 0.0) { ep.z = ep.z + oz; } else { ep.z = ep.z - oz; }
-            ep.vz = 0.0;
-        } else {
-            if (dy > 0.0) { ep.y = ep.y + oy; if (ep.vy < 0.0) { ep.grounded = 1; } }
-            else { ep.y = ep.y - oy; }
-            ep.vy = 0.0;
-        }
-    }
-    _e3[p] = ep;
+func abs_f3(v): float { if (v < 0.0) { return 0.0 - v; } return v; }
+
+// ===========================================================================
+// Faz 9 — dünya geometrisi
+// ===========================================================================
+// Buraya kadar motor HER ŞEYİ eksen-hizalı kutu sayıyordu: küre kutu gibi
+// çarpışıyor, yaw ile dönen cismin gövdesi dönmüyor, dünya tek düz düzlem
+// oluyordu. Bu bölüm üçünü de düzeltiyor.
+
+// --- Yerel eksenler: yaw YALNIZ Y ekseninde döndürür ------------------------
+// move3d'nin düzeni: yaw = atan2(wx, wz), yani yerel +Z (ileri) dünyada
+// (sin yaw, cos yaw). Buna dik olan yerel +X ise (cos yaw, -sin yaw).
+func _axz3(yaw): float { return cos(yaw * DEG2RAD3); }   // yerel X'in dünya x'i
+func _axx3(yaw): float { return 0.0 - sin(yaw * DEG2RAD3); } // yerel X'in dünya z'si
+func _azx3(yaw): float { return sin(yaw * DEG2RAD3); }   // yerel Z'nin dünya x'i
+func _azz3(yaw): float { return cos(yaw * DEG2RAD3); }   // yerel Z'nin dünya z'si
+
+// --- SAT (dönen kutu) -------------------------------------------------------
+// Sonuç global ile dönüyor — Tulpar'da çoklu dönüş yok.
+// _sat_nx/_sat_nz: a'yı b'den ayıracak birim yön; _sat_d: o yöndeki girme payı.
+float _sat_nx = 0.0;
+float _sat_nz = 0.0;
+float _sat_d  = 0.0;
+
+// Bir kutunun n eksenine izdüşüm yarıçapı.
+func _obb_radius3(hx, hz, yaw, nx, nz): float {
+    float ax = _axz3(yaw); float az = _axx3(yaw);   // yerel X ekseni (dünya)
+    float bx = _azx3(yaw); float bz = _azz3(yaw);   // yerel Z ekseni (dünya)
+    return hx * abs_f3(ax * nx + az * nz) + hz * abs_f3(bx * nx + bz * nz);
 }
 
-func abs_f3(v): float { if (v < 0.0) { return 0.0 - v; } return v; }
+// Tek eksende ayrılma testi. Ayrıksa true; değilse girme payını _sat_* içine
+// yazar (yalnız şimdiye kadarki EN KÜÇÜK pay saklanır → MTV).
+func _sat_axis3(nx, nz, dx, dz, ahx, ahz, ayaw, bhx, bhz, byaw): bool {
+    float ln = sqrt(nx * nx + nz * nz);
+    if (ln < 0.000001) { return false; }        // dejenere eksen — atla
+    float ux = nx / ln;
+    float uz = nz / ln;
+    float ra = _obb_radius3(ahx, ahz, ayaw, ux, uz);
+    float rb = _obb_radius3(bhx, bhz, byaw, ux, uz);
+    float dist = dx * ux + dz * uz;
+    float overlap = ra + rb - abs_f3(dist);
+    if (overlap <= 0.0) { return true; }        // AYRIK → çarpışma yok
+    if (overlap < _sat_d) {
+        _sat_d = overlap;
+        // a'yı b'den UZAKLAŞTIRACAK yön. d = merkez_a - merkez_b olduğu için
+        // dist > 0 ise a zaten +u tarafındadır → ayırmak için DAHA İLERİ +u'ya
+        // itilir. (Ters işaret a'yı b'nin içine sürüyordu.)
+        if (dist < 0.0) { _sat_nx = 0.0 - ux; _sat_nz = 0.0 - uz; }
+        else { _sat_nx = ux; _sat_nz = uz; }
+    }
+    return false;
+}
+
+// İki dönük kutunun XZ düzleminde çakışması (SAT, 4 eksen). Y ayrı bakılır.
+func _obb_overlap3(a, b): bool {
+    Ent3 ea = _e3[a];
+    Ent3 eb = _e3[b];
+    // Y aralığı önce: ucuz ve çoğu ayrık çifti burada eler.
+    if (abs_f3(ea.y - eb.y) >= (ea.sy + eb.sy) * 0.5) { return false; }
+    _sat_d = 1000000.0;
+    float dx = ea.x - eb.x;
+    float dz = ea.z - eb.z;
+    float ahx = ea.sx * 0.5; float ahz = ea.sz * 0.5;
+    float bhx = eb.sx * 0.5; float bhz = eb.sz * 0.5;
+    if (_sat_axis3(_axz3(ea.yaw), _axx3(ea.yaw), dx, dz, ahx, ahz, ea.yaw, bhx, bhz, eb.yaw)) { return false; }
+    if (_sat_axis3(_azx3(ea.yaw), _azz3(ea.yaw), dx, dz, ahx, ahz, ea.yaw, bhx, bhz, eb.yaw)) { return false; }
+    if (_sat_axis3(_axz3(eb.yaw), _axx3(eb.yaw), dx, dz, ahx, ahz, ea.yaw, bhx, bhz, eb.yaw)) { return false; }
+    if (_sat_axis3(_azx3(eb.yaw), _azz3(eb.yaw), dx, dz, ahx, ahz, ea.yaw, bhx, bhz, eb.yaw)) { return false; }
+    return true;
+}
+
+// --- Şekil farkında çakışma -------------------------------------------------
+// Yarıçap: küre/silindir çizimi sx*0.5 kullanıyor (bkz. _s3_render), aynısı.
+func _radius3(Ent3 e): float { return e.sx * 0.5; }
+
+// Küre ↔ küre
+func _sph_sph3(a, b): bool {
+    Ent3 ea = _e3[a];
+    Ent3 eb = _e3[b];
+    float dx = ea.x - eb.x; float dy = ea.y - eb.y; float dz = ea.z - eb.z;
+    float r = _radius3(ea) + _radius3(eb);
+    return dx * dx + dy * dy + dz * dz < r * r;
+}
+
+// Küre ↔ kutu: kutunun küre merkezine EN YAKIN noktası küre içindeyse çarpışma.
+// (Kutu eksen-hizalı varsayılır; dönük kutu + küre pratikte yeterince iyi.)
+func _sph_box3(s, b): bool {
+    Ent3 es = _e3[s];
+    Ent3 eb = _e3[b];
+    float hx = eb.sx * 0.5; float hy = eb.sy * 0.5; float hz = eb.sz * 0.5;
+    float cx = es.x; float cy = es.y; float cz = es.z;
+    if (cx < eb.x - hx) { cx = eb.x - hx; }
+    if (cx > eb.x + hx) { cx = eb.x + hx; }
+    if (cy < eb.y - hy) { cy = eb.y - hy; }
+    if (cy > eb.y + hy) { cy = eb.y + hy; }
+    if (cz < eb.z - hz) { cz = eb.z - hz; }
+    if (cz > eb.z + hz) { cz = eb.z + hz; }
+    float dx = es.x - cx; float dy = es.y - cy; float dz = es.z - cz;
+    float r = _radius3(es);
+    return dx * dx + dy * dy + dz * dz < r * r;
+}
+
+// Silindir = dikey kapsül yaklaşımı: XZ'de daire, Y'de aralık.
+func _cyl_overlap3(a, b): bool {
+    Ent3 ea = _e3[a];
+    Ent3 eb = _e3[b];
+    if (abs_f3(ea.y - eb.y) >= (ea.sy + eb.sy) * 0.5) { return false; }
+    float dx = ea.x - eb.x; float dz = ea.z - eb.z;
+    float r = _radius3(ea) + _radius3(eb);
+    return dx * dx + dz * dz < r * r;
+}
+
+func _is_round3(Ent3 e): bool { return e.shape == SHAPE_SPHERE || e.shape == SHAPE_CYL; }
+
+// Motorun TEK çakışma girişi. Şekle göre doğru testi seçer; ikisi de eksen-hizalı
+// kutuysa eski (ucuz) AABB yolunda kalır — eski sahnelerin davranışı değişmez.
+func _overlap3(a, b): bool {
+    Ent3 ea = _e3[a];
+    Ent3 eb = _e3[b];
+    int ra = 0; if (_is_round3(ea)) { ra = 1; }
+    int rb = 0; if (_is_round3(eb)) { rb = 1; }
+    if (ea.shape == SHAPE_CYL || eb.shape == SHAPE_CYL) {
+        if (ra == 1 && rb == 1) { return _cyl_overlap3(a, b); }
+    }
+    if (ra == 1 && rb == 1) { return _sph_sph3(a, b); }
+    if (ra == 1) { return _sph_box3(a, b); }
+    if (rb == 1) { return _sph_box3(b, a); }
+    // ikisi de kutu: biri dönükse SAT, değilse AABB
+    if (abs_f3(ea.yaw) > 0.01 || abs_f3(eb.yaw) > 0.01) { return _obb_overlap3(a, b); }
+    return _aabb_overlap(a, b);
+}
+
+// --- Katı gövde ayırması (MTV) ----------------------------------------------
+// _mtv3(a, b): a'yı b'den ayırmak için a'ya uygulanacak EN KISA vektör.
+// Çakışma yoksa false. Şekle göre doğru yöntemi seçer — kutu için en sığ eksen,
+// küre için merkezler arası doğrultu, silindir için yatay doğrultu.
+float _mtv_x = 0.0;
+float _mtv_y = 0.0;
+float _mtv_z = 0.0;
+
+func _mtv_box_box3(a, b): bool {
+    Ent3 ea = _e3[a];
+    Ent3 eb = _e3[b];
+    // Dönük çift → SAT (yatay). Y'yi ayrıca kontrol ettik, dikey ayırma yok.
+    if (abs_f3(ea.yaw) > 0.01 || abs_f3(eb.yaw) > 0.01) {
+        if (!_obb_overlap3(a, b)) { return false; }
+        _mtv_x = _sat_nx * _sat_d;
+        _mtv_y = 0.0;
+        _mtv_z = _sat_nz * _sat_d;
+        return true;
+    }
+    float dx = ea.x - eb.x;
+    float dy = ea.y - eb.y;
+    float dz = ea.z - eb.z;
+    float ox = (ea.sx + eb.sx) * 0.5 - abs_f3(dx);
+    float oy = (ea.sy + eb.sy) * 0.5 - abs_f3(dy);
+    float oz = (ea.sz + eb.sz) * 0.5 - abs_f3(dz);
+    if (ox <= 0.0 || oy <= 0.0 || oz <= 0.0) { return false; }
+    _mtv_x = 0.0; _mtv_y = 0.0; _mtv_z = 0.0;
+    if (ox <= oy && ox <= oz) {
+        if (dx > 0.0) { _mtv_x = ox; } else { _mtv_x = 0.0 - ox; }
+    } else {
+        if (oz <= oy) {
+            if (dz > 0.0) { _mtv_z = oz; } else { _mtv_z = 0.0 - oz; }
+        } else {
+            if (dy > 0.0) { _mtv_y = oy; } else { _mtv_y = 0.0 - oy; }
+        }
+    }
+    return true;
+}
+
+// Küre ↔ küre: merkezleri ayıran doğrultu.
+func _mtv_sph_sph3(a, b): bool {
+    Ent3 ea = _e3[a];
+    Ent3 eb = _e3[b];
+    float dx = ea.x - eb.x; float dy = ea.y - eb.y; float dz = ea.z - eb.z;
+    float r = _radius3(ea) + _radius3(eb);
+    float d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 >= r * r) { return false; }
+    float d = sqrt(d2);
+    if (d < 0.00001) { _mtv_x = 0.0; _mtv_y = r; _mtv_z = 0.0; return true; }
+    float k = (r - d) / d;
+    _mtv_x = dx * k; _mtv_y = dy * k; _mtv_z = dz * k;
+    return true;
+}
+
+// Küre ↔ kutu: kutu üzerindeki en yakın noktadan küre merkezine.
+func _mtv_sph_box3(s, b): bool {
+    Ent3 es = _e3[s];
+    Ent3 eb = _e3[b];
+    float hx = eb.sx * 0.5; float hy = eb.sy * 0.5; float hz = eb.sz * 0.5;
+    float cx = es.x; float cy = es.y; float cz = es.z;
+    if (cx < eb.x - hx) { cx = eb.x - hx; }
+    if (cx > eb.x + hx) { cx = eb.x + hx; }
+    if (cy < eb.y - hy) { cy = eb.y - hy; }
+    if (cy > eb.y + hy) { cy = eb.y + hy; }
+    if (cz < eb.z - hz) { cz = eb.z - hz; }
+    if (cz > eb.z + hz) { cz = eb.z + hz; }
+    float dx = es.x - cx; float dy = es.y - cy; float dz = es.z - cz;
+    float r = _radius3(es);
+    float d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 >= r * r) { return false; }
+    float d = sqrt(d2);
+    if (d < 0.00001) {
+        // merkez kutunun tam içinde — en sığ yüzeyden dışarı at
+        return _mtv_box_box3(s, b);
+    }
+    float k = (r - d) / d;
+    _mtv_x = dx * k; _mtv_y = dy * k; _mtv_z = dz * k;
+    return true;
+}
+
+// Silindir çifti: yatay doğrultuda ayrılır (dikey kapsül mantığı).
+func _mtv_cyl3(a, b): bool {
+    Ent3 ea = _e3[a];
+    Ent3 eb = _e3[b];
+    if (abs_f3(ea.y - eb.y) >= (ea.sy + eb.sy) * 0.5) { return false; }
+    float dx = ea.x - eb.x; float dz = ea.z - eb.z;
+    float r = _radius3(ea) + _radius3(eb);
+    float d2 = dx * dx + dz * dz;
+    if (d2 >= r * r) { return false; }
+    float d = sqrt(d2);
+    if (d < 0.00001) { _mtv_x = r; _mtv_y = 0.0; _mtv_z = 0.0; return true; }
+    float k = (r - d) / d;
+    _mtv_x = dx * k; _mtv_y = 0.0; _mtv_z = dz * k;
+    return true;
+}
+
+// Motorun tek ayırma girişi — _overlap3'ün şekil dağıtımıyla AYNI sırayı izler,
+// yoksa "çakışıyor ama ayıramıyorum" gibi tutarsız bir durum çıkardı.
+func _mtv3(a, b): bool {
+    Ent3 ea = _e3[a];
+    Ent3 eb = _e3[b];
+    int ra = 0; if (_is_round3(ea)) { ra = 1; }
+    int rb = 0; if (_is_round3(eb)) { rb = 1; }
+    if (ea.shape == SHAPE_CYL || eb.shape == SHAPE_CYL) {
+        if (ra == 1 && rb == 1) { return _mtv_cyl3(a, b); }
+    }
+    if (ra == 1 && rb == 1) { return _mtv_sph_sph3(a, b); }
+    if (ra == 1) { return _mtv_sph_box3(a, b); }
+    if (rb == 1) {
+        // b yuvarlak: b→a vektörünü hesaplayıp TERSİNİ al
+        if (!_mtv_sph_box3(b, a)) { return false; }
+        _mtv_x = 0.0 - _mtv_x; _mtv_y = 0.0 - _mtv_y; _mtv_z = 0.0 - _mtv_z;
+        return true;
+    }
+    return _mtv_box_box3(a, b);
+}
+
+// Ayırmayı uygula: konumu taşı, itilen eksendeki hızı kes. Yukarı itildiyse
+// zeminde sayılır (kutunun üstüne çıkmak böyle çalışır).
+func _apply_mtv3(s, fx, fy, fz) {
+    Ent3 e = _e3[s];
+    e.x = e.x + fx;
+    e.y = e.y + fy;
+    e.z = e.z + fz;
+    float ax = abs_f3(fx); float ay = abs_f3(fy); float az = abs_f3(fz);
+    if (ay >= ax && ay >= az) {
+        if (fy > 0.0 && e.vy < 0.0) { e.grounded = 1; }
+        e.vy = 0.0;
+    } else {
+        if (ax >= az) { e.vx = 0.0; } else { e.vz = 0.0; }
+    }
+    _e3[s] = e;
+    // Ayırma çözümü ENTITY'Yİ OYNATIR ve çarpışma taraması sürüyor. Geniş faz
+    // konumu burada tazelenmezse aynı karede itilmiş bir gövde, sonraki
+    // çiftlerde eski yerinden değerlendirilir — kaçan çarpışma demek.
+    _bp_sync3(s);
+}
+
+func _is_solid3(Ent3 e): bool { return e.alive == 1 && e.solid == 1; }
+// Statik = dünya geometrisi (itilmez, iter). Hareketli = itilebilir.
+func _is_static_solid3(Ent3 e): bool { return e.solid == 1 && e.tag == TAG_WALL; }
+
+// --- Işın ↔ AABB (kamera-duvar çarpışması için) -----------------------------
+// Parametrik dilim (slab) yöntemi. o + d*t, t ∈ [0,1] doğru parçası kutuyu
+// kesiyorsa ilk kesişme t'sini, kesmiyorsa -1 döner.
+func _seg_aabb3(ox, oy, oz, dx, dy, dz, w): float {
+    Ent3 e = _e3[w];
+    float hx = e.sx * 0.5; float hy = e.sy * 0.5; float hz = e.sz * 0.5;
+    float tmin = 0.0;
+    float tmax = 1.0;
+    // X dilimi
+    if (abs_f3(dx) < 0.000001) {
+        if (ox < e.x - hx || ox > e.x + hx) { return 0.0 - 1.0; }
+    } else {
+        float t1 = (e.x - hx - ox) / dx;
+        float t2 = (e.x + hx - ox) / dx;
+        if (t1 > t2) { float tt = t1; t1 = t2; t2 = tt; }
+        if (t1 > tmin) { tmin = t1; }
+        if (t2 < tmax) { tmax = t2; }
+        if (tmin > tmax) { return 0.0 - 1.0; }
+    }
+    // Y dilimi
+    if (abs_f3(dy) < 0.000001) {
+        if (oy < e.y - hy || oy > e.y + hy) { return 0.0 - 1.0; }
+    } else {
+        float t1 = (e.y - hy - oy) / dy;
+        float t2 = (e.y + hy - oy) / dy;
+        if (t1 > t2) { float tt = t1; t1 = t2; t2 = tt; }
+        if (t1 > tmin) { tmin = t1; }
+        if (t2 < tmax) { tmax = t2; }
+        if (tmin > tmax) { return 0.0 - 1.0; }
+    }
+    // Z dilimi
+    if (abs_f3(dz) < 0.000001) {
+        if (oz < e.z - hz || oz > e.z + hz) { return 0.0 - 1.0; }
+    } else {
+        float t1 = (e.z - hz - oz) / dz;
+        float t2 = (e.z + hz - oz) / dz;
+        if (t1 > t2) { float tt = t1; t1 = t2; t2 = tt; }
+        if (t1 > tmin) { tmin = t1; }
+        if (t2 < tmax) { tmax = t2; }
+        if (tmin > tmax) { return 0.0 - 1.0; }
+    }
+    return tmin;
+}
+
+// Hedeften kameraya giden doğru parçasını duvarlara karşı tara; en yakın
+// kesişme oranını döner (1.0 = engel yok).
+float _CAM_TERR_CLEAR3 = 0.6;   // arazi yüzeyinin bu kadar üstünde kal
+int   _CAM_TERR_STEPS3 = 14;    // ışın boyunca örnek sayısı
+
+func _cam_clear_t3(ox, oy, oz, dx, dy, dz): float {
+    float best = 1.0;
+    int n = length(_e3);
+    int i = 0;
+    while (i < n) {
+        Ent3 e = _e3[i];
+        if (e.alive == 1 && e.tag == TAG_WALL) {
+            float t = _seg_aabb3(ox, oy, oz, dx, dy, dz, i);
+            if (t >= 0.0 && t < best) { best = t; }
+        }
+        i = i + 1;
+    }
+    // ZEMİN. Yukarıdaki tarama yalnız TAG_WALL kutularına bakıyordu, oysa
+    // arazi bir kutu değil sürekli bir yüzey — kamera tepenin İÇİNE girip
+    // sahneyi topraktan gösteriyordu. Arazide kapalı biçimli bir kesişim yok,
+    // o yüzden ışın boyunca yürüyüp zeminin altına düştüğü ilk yeri buluyoruz.
+    // `_floor_at3` kullanıldığı için RAMPALAR da bedavaya kapsanıyor; onlar da
+    // TAG_WALL olmadıkları için kutu taramasının dışında kalıyordu.
+    if (_terr_on == 1 || _ground_on == 1) {
+        float inv = 1.0 / (_CAM_TERR_STEPS3 * 1.0);
+        int k = 1;
+        while (k <= _CAM_TERR_STEPS3) {
+            float t = k * inv;
+            float py = oy + dy * t;
+            if (py < _floor_at3(ox + dx * t, oz + dz * t) + _CAM_TERR_CLEAR3) {
+                // Bir adım geri: son GÜVENLİ örneğe çek.
+                float safe = t - inv;
+                if (safe < best) { best = safe; }
+                k = _CAM_TERR_STEPS3 + 1;
+            } else {
+                k = k + 1;
+            }
+        }
+    }
+    return best;
+}
+
+// --- Rampa / eğimli zemin ---------------------------------------------------
+// Rampa entity'sinin (x,z) noktasındaki ÜST YÜZEY yüksekliği. Nokta rampanın
+// ayak izi dışındaysa -1000000 döner (yani "burada zemin yok").
+// Yüzey, rampanın yerel -Z ucundan +Z ucuna doğrusal yükselir; yaw ile döner.
+func _ramp_h3(r, px, pz): float {
+    Ent3 e = _e3[r];
+    // noktayı rampanın yerel uzayına taşı (ters yaw dönüşü)
+    float rx = px - e.x;
+    float rz = pz - e.z;
+    float c = cos(e.yaw * DEG2RAD3);
+    float s = sin(e.yaw * DEG2RAD3);
+    // yerel = R(-yaw) * dünya; yerel_z = ileri ekseni üzerindeki bileşen
+    float lx = rx * c - rz * s;
+    float lz = rx * s + rz * c;
+    float hx = e.sx * 0.5;
+    float hz = e.sz * 0.5;
+    if (lx < 0.0 - hx || lx > hx) { return 0.0 - 1000000.0; }
+    if (lz < 0.0 - hz || lz > hz) { return 0.0 - 1000000.0; }
+    float k = (lz + hz) / e.sz;          // 0 = alçak uç, 1 = yüksek uç
+    return e.y - e.sy * 0.5 + e.sy * k;
+}
+
+// (x,z) noktasında geçerli zemin yüksekliği: düz zemin ile rampaların EN
+// YÜKSEĞİ. Rampa yoksa sonuç düz zemindir, yani eski davranış birebir korunur.
+func _ramp_floor3(px, pz, base): float {
+    float best = base;
+    int n = length(_e3);
+    int i = 0;
+    while (i < n) {
+        Ent3 e = _e3[i];
+        if (e.alive == 1 && e.shape == SHAPE_RAMP) {
+            float h = _ramp_h3(i, px, pz);
+            if (h > best) { best = h; }
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+// --- Gerçek arazi (Faz 10) --------------------------------------------------
+// Rampa dünyayı düz düzlemden kurtardı ama sınırlıydı (kama entity'leri,
+// kademeli çizim). Arazi gerçek çözüm: yükseklik haritasından üretilmiş TEK
+// mesh, her (x,z) için sürekli yükseklik. XZ'de dünya merkezinde ORTALI.
+//
+// Model handle'ı -1 olabilir: yükseklik verisi CPU'da, mesh ise GPU'da yaşıyor,
+// dolayısıyla pencere yokken (headless test) fizik çalışır ama çizim olmaz.
+int   _terr_on = 0;
+int   _terr_model = 0 - 1;
+float _terr_sx = 0.0;
+float _terr_sz = 0.0;
+int   _terr_color = 0;
+
+// Prosedürel arazi (Perlin) — asset dosyası gerekmez.
+// res: yükseklik haritası çözünürlüğü, sx/sz: ayak izi, sy: en yüksek tepe,
+// scale: gürültü ölçeği (küçük = geniş tepeler), seed: tohum.
+func terrain3d(res, sx, sy, sz, scale, seed) {
+    _terr_model = terrain_gen3d(res, sx, sy, sz, _ground_y, scale, seed);
+    _terr_on = 1;
+    _terr_sx = sx * 1.0;
+    _terr_sz = sz * 1.0;
+    _terr_color = rgb(96, 132, 88);
+}
+
+// Gri tonlamalı yükseklik haritası dosyasından.
+func terrain_file3d(path, sx, sy, sz) {
+    _terr_model = terrain_load3d(path, sx, sy, sz, _ground_y);
+    _terr_on = 1;
+    _terr_sx = sx * 1.0;
+    _terr_sz = sz * 1.0;
+    _terr_color = rgb(96, 132, 88);
+}
+
+func terrain_color3d(c) { _terr_color = c; }
+func terrain_off3d_scene() { _terr_on = 0; terrain_off3d(); }
+
+// (x,z) noktasındaki zemin: arazi varsa onun yüzeyi, yoksa düz zemin.
+// Rampalar HER İKİ durumda da üstüne binebilir (bkz. _ramp_floor3).
+func _floor_at3(px, pz): float {
+    float base = _ground_y;
+    if (_terr_on == 1) { base = terrain_height3d(px, pz); }
+    return _ramp_floor3(px, pz, base);
+}
+
+// ---- Arazi eğimi: yüzey normali, eğim sınırı, kayma ------------------------
+//
+// AYRI BİR C BINDING'İ GEREKMİYOR. STATUS.md `tm3_terrain_normal` öneriyordu,
+// ama `terrain_height3d` zaten mesh'in üçgenlemesini birebir taklit ediyor —
+// komşu örneklerden merkezi farkla türetilen normal yüzeyin GERÇEK eğimini
+// veriyor. Saf Tulpar yol hem 5 noktalık bağlamayı hem de wasm/android
+// arşivlerini yeniden derlemeyi tamamen atlıyor, ve üç hedefte de anında çalışır.
+//
+// Merkezi fark hücre sınırlarını yumuşatıyor: üçgen bazlı kesin normal keskin
+// sıçrardı ve kayma titrerdi. Oynanış için istenen tam da bu yumuşama.
+float _tn_x = 0.0; float _tn_y = 1.0; float _tn_z = 0.0;
+float _TN_EPS3 = 0.5;      // örnekleme adımı (dünya birimi)
+
+func _terrain_normal3(px, pz) {
+    if (_terr_on == 0) { _tn_x = 0.0; _tn_y = 1.0; _tn_z = 0.0; return; }
+    float e = _TN_EPS3;
+    float hl = terrain_height3d(px - e, pz);
+    float hr = terrain_height3d(px + e, pz);
+    float hd = terrain_height3d(px, pz - e);
+    float hu = terrain_height3d(px, pz + e);
+    float nx = hl - hr;
+    float ny = 2.0 * e;
+    float nz = hd - hu;
+    float len = sqrt(nx * nx + ny * ny + nz * nz);
+    if (len < 0.000001) { _tn_x = 0.0; _tn_y = 1.0; _tn_z = 0.0; return; }
+    _tn_x = nx / len; _tn_y = ny / len; _tn_z = nz / len;
+}
+
+// Yüzeyin "düzlüğü": normalin Y bileşeni, yani eğim açısının KOSİNÜSÜ.
+// 1.0 = tam düz, 0.0 = dik duvar. Derece yerine kosinüs veriliyor çünkü dilde
+// `acos` yok ve karşılaştırma zaten kosinüs üzerinden yapılıyor — açıya
+// çevirip geri dönmek hem gereksiz hem kayıplı olurdu.
+func terrain_up3d(px, pz): float { _terrain_normal3(px, pz); return _tn_y; }
+func arazi_duzluk3d(px, pz): float { return terrain_up3d(px, pz); }
+
+// Eğim sınırı DERECE cinsinden; 0 = kapalı (varsayılan).
+// Kapalı gelmesi bilerek: eğim sınırı doğruluk değil TASARIM tercihi — bazı
+// oyunlar serbest tırmanma ister. Açan sahne davranışı seçmiş olur, açmayan
+// sahne bit-bit eskisi gibi çalışır.
+float _slope_lim3 = 0.0;
+float _slope_cos3 = 0.0;
+float _slide_acc3 = 18.0;   // yamaç aşağı ivme (birim/sn²)
+
+func slope_limit3d(deg) {
+    _slope_lim3 = deg;
+    if (deg <= 0.0) { _slope_cos3 = 0.0; return; }
+    _slope_cos3 = cos(deg * DEG2RAD3);
+}
+func egim_siniri3d(derece) { slope_limit3d(derece); }
+func slide_accel3d(a) { _slide_acc3 = a; }
+func kayma_ivmesi3d(a) { slide_accel3d(a); }
+
+// Bu nokta tırmanılamayacak kadar dik mi? Sınır kapalıyken hep false.
+func terrain_steep3d(px, pz): bool {
+    if (_slope_lim3 <= 0.0 || _terr_on == 0) { return false; }
+    return terrain_up3d(px, pz) < _slope_cos3;
+}
+func arazi_dik_mi3d(px, pz): bool { return terrain_steep3d(px, pz); }
+
+// Rampa üret: yerel +Z yönünde yükselir, yaw ile döndürülür.
+func ramp3d(x, y, z, sx, sy, sz, color, yaw): int {
+    int id = spawn3(x, y, z, sx, sy, sz, color, SHAPE_RAMP, TAG_PROP);
+    int s = _slot_of3(id);
+    Ent3 e = _e3[s];
+    e.yaw = yaw;
+    // Rampa katı DEĞİL: üzerine basılır (zemin yüksekliğiyle), itilmez. Katı
+    // olsaydı kutu gövdesi eğik yüzeyle çelişir, oyuncuyu yandan dışarı iterdi.
+    e.solid = 0;
+    _e3[s] = e;
+    return id;
+}
+
+// Mermi kendi sahibine çarpmaz. Bu olmadan hem oyuncunun hem düşmanın ateş
+// ettiği bir oyunda herkes kendi mermisiyle vurulurdu (mermi gövdenin hemen
+// önünde doğuyor). Sahip HANDLE olarak saklı, karşılaştırma slot üzerinden:
+// sahip ölüp slot geri kullanılırsa bayat handle yanlış eşleşme yapmaz.
+func _bullet_owner_pair3(a, b): bool {
+    Ent3 ea = _e3[a];
+    if (ea.tag == TAG_BULLET && _slot_of3(ea.owner) == b) { return true; }
+    Ent3 eb = _e3[b];
+    if (eb.tag == TAG_BULLET && _slot_of3(eb.owner) == a) { return true; }
+    return false;
+}
+
+// --- Geniş faz (broad phase) ------------------------------------------------
+// Çarpışma her kare tüm çiftleri geziyor ve her çift için _overlap3 / _mtv3
+// çağırıyordu. Ölçüm (200 entity = 40.000 çift, headless): boş döngü ~0 ms,
+// çift başına iki struct kopyası 1.8 ms, gerçek _overlap3 **23.7 ms**. Yani
+// maliyet dizide değil, ZİNCİRİN KENDİSİNDE: şekil seçimi, `Ent3`i değerle
+// alan yardımcılar (_is_round3, _radius3) ve tekrar tekrar dizi okuması.
+//
+// O yüzden çözüm zinciri hızlandırmak değil, ÇAĞIRMAMAK. Kareye bir kez düz
+// float dizilerine konum + KAPSAYAN KÜRE yarıçapı yazılır; iki kürenin ayrık
+// olduğu çiftler zincire hiç girmez.
+//
+// Yarıçap kutunun KÖŞEGEN YARISI. Bu üç şeklin de üstünü örtüyor ve eleme bu
+// yüzden korumalı — gerçek bir çakışmayı asla atmaz:
+//   • kutu   → köşegen yarısı kutuyu tanımı gereği kapsar, yaw'dan bağımsız
+//              (döndürme kürenin yarıçapını değiştirmez, OBB/SAT de güvende)
+//   • küre   → yarıçapı sx*0.5, köşegen yarısı ondan büyük
+//   • silindir → XZ'de sx*0.5, Y'de sy; Minkowski eşitsizliği gereği
+//              sqrt(dxz²+dy²) ≤ Ra+Rb olduğunda çakışma zaten mümkün değil
+//
+// Diziler YALNIZCA eleme için. alive/tag/solid kararları hâlâ `_e3`ten
+// okunuyor: bir kanca ortasında kill3d/spawn3 çağırırsa otorite tek yerde
+// kalsın istiyoruz. Konum ise elemeyi doğrudan etkilediği için üç mutasyon
+// noktasında (_apply_mtv3, set3pos, _alloc_slot3) senkron tutuluyor.
+array _bx = [];
+array _by = [];
+array _bz = [];
+array _br = [];
+
+func _bp_build3() {
+    _bx = []; _by = []; _bz = []; _br = [];
+    int n = length(_e3);
+    int i = 0;
+    while (i < n) {
+        Ent3 e = _e3[i];
+        push(_bx, e.x); push(_by, e.y); push(_bz, e.z);
+        float hx = e.sx * 0.5; float hy = e.sy * 0.5; float hz = e.sz * 0.5;
+        push(_br, sqrt(hx * hx + hy * hy + hz * hz));
+        i = i + 1;
+    }
+}
+
+// Tek slot'u tazele. Diziler kurulu değilken (çarpışma dışında) sessizce çıkar,
+// böylece spawn3/set3pos normal akışta hiçbir bedel ödemez.
+func _bp_sync3(s) {
+    if (s < 0 || s >= length(_bx)) { return; }
+    Ent3 e = _e3[s];
+    _bx[s] = e.x; _by[s] = e.y; _bz[s] = e.z;
+    float hx = e.sx * 0.5; float hy = e.sy * 0.5; float hz = e.sz * 0.5;
+    _br[s] = sqrt(hx * hx + hy * hy + hz * hz);
+}
+
+// true → kapsayan küreler ayrık, çakışma İMKÂNSIZ. Sadece bu yönde karar verir;
+// false "çakışıyor" demek değil, "dar faza sor" demektir.
+func _bp_far3(a, b): bool {
+    float dx = _bx[a] - _bx[b];
+    float dy = _by[a] - _by[b];
+    float dz = _bz[a] - _bz[b];
+    float r = _br[a] + _br[b];
+    return dx * dx + dy * dy + dz * dz > r * r;
+}
 
 func _s3_collision() {
     int n = length(_e3);
-    // 1) Duvar itme: her canlı oyuncu vs her canlı duvar (otomatik)
+    _bp_build3();
+    // 1) KATI GÖVDE ÇÖZÜMÜ — dünya geometrisine karşı.
+    // Eskiden yalnız TAG_PLAYER duvarlarla çarpışıyordu; düşmanlar duvarların
+    // içinden geçiyordu. Artık her HAREKETLİ katı gövde (oyuncu, düşman, prop)
+    // her STATİK katı gövdeye (duvar) karşı dışarı itiliyor.
     int p = 0;
     while (p < n) {
         Ent3 ep = _e3[p];
-        if (ep.alive == 1 && ep.tag == TAG_PLAYER) {
+        if (_is_solid3(ep) && !_is_static_solid3(ep)) {
             int w = 0;
             while (w < n) {
-                Ent3 ew = _e3[w];
-                if (ew.alive == 1 && ew.tag == TAG_WALL && _aabb_overlap(p, w)) {
-                    _wall_block(p, w);
+                // Eleme struct kopyasından ÖNCE: uzak çift `_e3[w]`i hiç okumaz.
+                if (p != w && !_bp_far3(p, w)) {
+                    Ent3 ew = _e3[w];
+                    if (_is_solid3(ew) && _is_static_solid3(ew)) {
+                        if (_mtv3(p, w)) { _apply_mtv3(p, _mtv_x, _mtv_y, _mtv_z); }
+                    }
                 }
                 w = w + 1;
             }
         }
         p = p + 1;
+    }
+    // 1a) Hareketli katı gövdeler BİRBİRİNE karşı: ikisi de itilebildiği için
+    // ayırma yarı yarıya paylaşılır — biri diğerini tek başına itseydi hafif
+    // olan sürekli duvara sıkışırdı. Her çift bir kez işlenir (b > a).
+    int ca = 0;
+    while (ca < n) {
+        Ent3 ea2 = _e3[ca];
+        if (_is_solid3(ea2) && !_is_static_solid3(ea2)) {
+            int cb = ca + 1;
+            while (cb < n) {
+                if (!_bp_far3(ca, cb)) {
+                    Ent3 eb2 = _e3[cb];
+                    if (_is_solid3(eb2) && !_is_static_solid3(eb2)) {
+                        if (_mtv3(ca, cb)) {
+                            float hx = _mtv_x * 0.5;
+                            float hy = _mtv_y * 0.5;
+                            float hz = _mtv_z * 0.5;
+                            _apply_mtv3(ca, hx, hy, hz);
+                            _apply_mtv3(cb, 0.0 - hx, 0.0 - hy, 0.0 - hz);
+                        }
+                    }
+                }
+                cb = cb + 1;
+            }
+        }
+        ca = ca + 1;
+    }
+    // 1b) Duvara giren mermi ölür — yoksa duvarların içinden geçip giderdi.
+    int bi = 0;
+    while (bi < n) {
+        Ent3 eb2 = _e3[bi];
+        if (eb2.alive == 1 && eb2.tag == TAG_BULLET) {
+            int w2 = 0;
+            while (w2 < n) {
+                int died = 0;
+                if (!_bp_far3(bi, w2)) {
+                    Ent3 ew2 = _e3[w2];
+                    if (ew2.alive == 1 && ew2.tag == TAG_WALL && _overlap3(bi, w2)) {
+                        kill3d(_mk_handle3(bi));
+                        died = 1;
+                    }
+                }
+                if (died == 1) {
+                    w2 = n;              // bu mermi bitti, duvar taramasını kes
+                } else {
+                    w2 = w2 + 1;
+                }
+            }
+        }
+        bi = bi + 1;
     }
     // 2) Kayıtlı çarpışma kancaları: tagA × tagB örtüşürse fn çağır
     int h = 0;
@@ -436,11 +1860,14 @@ func _s3_collision() {
             if (ea.alive == 1 && ea.tag == ta) {
                 int b = 0;
                 while (b < n) {
-                    Ent3 eb = _e3[b];
-                    if (eb.alive == 1 && eb.tag == tb && a != b && _aabb_overlap(a, b)) {
-                        _hit_me = a;
-                        _hit_other = b;
-                        call(fn);
+                    if (a != b && !_bp_far3(a, b)) {
+                        Ent3 eb = _e3[b];
+                        if (eb.alive == 1 && eb.tag == tb && _overlap3(a, b)
+                            && !_bullet_owner_pair3(a, b)) {
+                            _hit_me = _mk_handle3(a);
+                            _hit_other = _mk_handle3(b);
+                            call(fn);
+                        }
                     }
                     b = b + 1;
                 }
@@ -497,11 +1924,14 @@ func _s3_camera_input(dt) {
 }
 
 func _s3_camera() {
-    if (_cam_target < 0) {
+    // Hedef ölmüşse (handle bayat) genel görünüme düş — ölü slot'u okumak,
+    // slot geri kullanıldığında kamerayı alakasız bir entity'ye kilitlerdi.
+    int ct = _slot_of3(_cam_target);
+    if (ct < 0) {
         camera3d(_cam_dist, _cam_height, _cam_dist,  0.0, 0.0, 0.0, _cam_fov);
         return;
     }
-    Ent3 t = _e3[_cam_target];
+    Ent3 t = _e3[ct];
     if (_cam_mode3 == CAM_FIXED) {
         // Oyuncunun arkasında (+Z) ve yukarıda; oyuncuya bakar.
         camera3d(t.x, t.y + _cam_height, t.z + _cam_dist,   t.x, t.y, t.z,  _cam_fov);
@@ -532,11 +1962,37 @@ func _s3_camera() {
     // Kamerayı zeminin altına düşürme — oyuncu bir anda yer katmanının
     // içinden bakmaya başlar (klasik "kamera yere gömüldü" görüntüsü).
     if (_ground_on == 1 && cy < _ground_y + 0.8) { cy = _ground_y + 0.8; }
+    // Kamera-duvar çarpışması: hedeften kameraya bir ışın at, duvara çarparsa
+    // kamerayı çarpma noktasının biraz önüne çek. Bu olmadan yörünge kamerası
+    // duvarın İÇİNE girip sahneyi dışarıdan gösteriyordu.
+    if (_cam_collide3 == 1) {
+        float rdx = cx - t.x;
+        float rdy = cy - t.y;
+        float rdz = cz - t.z;
+        float ct2 = _cam_clear_t3(t.x, t.y, t.z, rdx, rdy, rdz);
+        if (ct2 < 1.0) {
+            // duvarın hemen berisinde dur; hedefin içine gömülmeyi de engelle
+            float pull = ct2 - _cam_margin3;
+            if (pull < 0.12) { pull = 0.12; }
+            cx = t.x + rdx * pull;
+            cy = t.y + rdy * pull;
+            cz = t.z + rdz * pull;
+        }
+    }
     camera3d(cx, cy, cz,   t.x, t.y, t.z,  _cam_fov);
 }
 
 // ---- Çizim -----------------------------------------------------------------
 func _s3_render() {
+    // Arazi varsa düz zemin/ızgara YERİNE onu çiz. Model handle'ı normal model
+    // olduğu için gölge/ışık yolları bedavaya çalışıyor. Mesh yerel uzayda
+    // 0..sx / 0..sz aralığında, o yüzden yarı-boy kadar geri kaydırıp ortalıyoruz.
+    if (_terr_on == 1) {
+        if (_terr_model >= 0) {
+            draw_model(_terr_model, 0.0 - _terr_sx * 0.5, _ground_y,
+                       0.0 - _terr_sz * 0.5, 1.0, _terr_color);
+        }
+    } else {
     if (_ground_on == 1) {
         if (_ground_tex3 >= 0) {
             // Dokulu zemin: renk beyaz olmalı, yoksa doku boyanır.
@@ -548,7 +2004,9 @@ func _s3_render() {
             grid(toInt(_ground_sz), 1.0);
         }
     }
+    }   // arazi else'i
     int n = length(_e3);
+    int cts = _slot_of3(_cam_target);   // handle → slot (döngü slot'la geziyor)
     int i = 0;
     while (i < n) {
         Ent3 e = _e3[i];
@@ -556,8 +2014,31 @@ func _s3_render() {
         if (e.alive == 1) { draw_it = 1; }
         // Birinci şahısta kamera gövdenin İÇİNDEdir: çizersek ekranı kendi
         // kutumuzun iç yüzeyi kaplar.
-        if (_cam_mode3 == CAM_FPS && i == _cam_target) { draw_it = 0; }
+        if (_cam_mode3 == CAM_FPS && i == cts) { draw_it = 0; }
         if (draw_it == 1) {
+            if (e.shape == SHAPE_RAMP) {
+                // raylib'de kama primitifi yok. Rampayı yerel +Z boyunca
+                // KADEMELİ diliyoruz: her dilim, o noktadaki yüzey yüksekliğine
+                // kadar uzanan bir kutu. Fizik analitik eğimi kullanıyor
+                // (bkz. _ramp_h3), yani yürüyüş pürüzsüz — kademe yalnız görsel.
+                int steps = 12;
+                float c = cos(e.yaw * DEG2RAD3);
+                float s = sin(e.yaw * DEG2RAD3);
+                float base = e.y - e.sy * 0.5;
+                float dz = e.sz / (steps * 1.0);
+                int k = 0;
+                while (k < steps) {
+                    float lz = 0.0 - e.sz * 0.5 + dz * (k + 0.5);
+                    float frac = (lz + e.sz * 0.5) / e.sz;
+                    float h = e.sy * frac;
+                    if (h < 0.02) { h = 0.02; }
+                    // yerel (0, lz) → dünya
+                    float wx = e.x + s * lz;
+                    float wz = e.z + c * lz;
+                    cube(wx, base + h * 0.5, wz, e.sx, h, dz, e.color);
+                    k = k + 1;
+                }
+            } else {
             if (e.shape == SHAPE_CUBE) {
                 cube(e.x, e.y, e.z, e.sx, e.sy, e.sz, e.color);
             } else {
@@ -568,11 +2049,22 @@ func _s3_render() {
                         cylinder(e.x, e.y - e.sy * 0.5, e.z, e.sx * 0.5, e.sy, e.color);
                     } else {
                         if (e.shape == SHAPE_MODEL && e.model >= 0) {
+                            // Animasyon: motor kare sayacını sürüyor, burada
+                            // yalnız poz uygulanıyor. anim3d çağrılmamışsa
+                            // (anim_idle < 0) model eskisi gibi donuk çizilir.
+                            int ai = _anim_pick3(e);
+                            if (ai >= 0) {
+                                int fcount = anim_frames(e.model, ai);
+                                if (fcount > 0) {
+                                    anim_play(e.model, ai, mod(toInt(e.anim_t), fcount));
+                                }
+                            }
                             draw_model_rot(e.model, e.x, e.y - e.sy * 0.5, e.z, e.yaw, e.sx, e.color);
                         }
                     }
                 }
             }
+            }   // SHAPE_RAMP else'i
         }
         i = i + 1;
     }
@@ -582,6 +2074,7 @@ func _s3_render() {
 func scene3d(w, h, title) { _win_w = w; _win_h = h; _win_title = title; }
 func on_setup3d(fn)  { _setup3_fn = fn; _has_setup3 = 1; }
 func on_update3d(fn) { _update3_fn = fn; _has_update3 = 1; }
+func on_hud3d(fn)    { _hud3_fn = fn; _has_hud3 = 1; }
 func on_hit3d(tagA, tagB, fn) { push(_hitA, tagA); push(_hitB, tagB); push(_hitF, fn); }
 
 func ground3d(y) { _ground_y = y; _ground_on = 1; }
@@ -648,6 +2141,12 @@ func kamera_zoom3d(min_d, max_d) { camera_zoom3d(min_d, max_d); }
 // olur (FPS'te varsayılan açık). Yörüngede açarsan sağ tuşa basmadan bakarsın.
 func camera_lock3d(on) { if (on) { _cam_lock3 = 1; } else { _cam_lock3 = 0; } }
 func kamera_kilit3d(on) { camera_lock3d(on); }
+
+// Kamera-duvar çarpışması (varsayılan AÇIK). Kapatınca kamera duvarların
+// içinden geçer — geniş açık sahnelerde tarama maliyetinden kaçmak isteyen
+// ya da eski görüntüyü birebir korumak isteyen oyunlar için.
+func camera_collide3d(on) { if (on) { _cam_collide3 = 1; } else { _cam_collide3 = 0; } }
+func kamera_carpisma3d(on) { camera_collide3d(on); }
 // Motorun varsayılan ışığını aç/kapat (setup'tan ÖNCE, kayıt aşamasında çağır).
 // Kapatınca her şey eski düz-renk görünümünde çizilir.
 func lights3d(on) { if (on) { _lights3 = 1; } else { _lights3 = 0; } }
@@ -704,24 +2203,66 @@ func play3d() {
     // Sis, gökyüzü ayarlandıktan SONRA — rengini onun ufkundan alıyor.
     if (_fog3 > 0.0) { fog_sky(_fog3); }
     if (_has_setup3 == 1) { call(_setup3_fn); }
+    // Bölüm kaydedildiyse EN KÜÇÜK numaralıyla başla. setup, bölümlerin ortak
+    // kurulumu (kamera ayarı, ışık, kancalar) için kalır; sahneyi bölüm fn'i
+    // kurar. Bölüm kaydedilmemişse motor eskisi gibi tek sahne olarak çalışır.
+    if (length(_lvlN) > 0) {
+        int lo = _lvlN[0];
+        int li = 1;
+        while (li < length(_lvlN)) {
+            if (_lvlN[li] < lo) { lo = _lvlN[li]; }
+            li = li + 1;
+        }
+        _lvl_pending3 = lo;
+        _s3_apply_level();
+    }
     // İmleç kilidi setup'tan SONRA kuruluyor — kamera modunu setup içinde
     // seçmek serbest (camera_fps varsayılan olarak kilidi ister).
     int _lock_was = 0 - 1;
+    // ESC'yi raylib'in elinden al: varsayılanda ESC doğrudan pencereyi kapatır
+    // ve running() false döner, yani duraklat menüsü KURULAMAZDI. Bundan sonra
+    // ESC sıradan bir tuş; çıkış duraklat menüsünün "Cikis" düğmesinde.
+    exit_key(K_NONE);
 
-    while (running()) {
+    while (running() && _s3_quit == 0) {
         float dt = frame_time();
         if (dt <= 0.0) { dt = 0.0166667; }
         if (dt > 0.05) { dt = 0.05; }
 
-        if (_cam_lock3 != _lock_was) { cursor_lock(_cam_lock3); _lock_was = _cam_lock3; }
+        // Menü/duraklat açıkken imleç SERBEST olmalı, yoksa düğmelere
+        // tıklanamaz (FPS modunda imleç kilitli geliyor).
+        int want_lock = _cam_lock3;
+        if (_s3_ui != UI_NONE || _game_over3 == 1) { want_lock = 0; }
+        if (want_lock != _lock_was) { cursor_lock(want_lock); _lock_was = want_lock; }
+
+        // ESC/P/GERİ → duraklat. exit_key(K_NONE) sayesinde ESC artık pencereyi
+        // kapatmıyor, sıradan bir tuş; bu satırın mümkün olmasının tek sebebi o.
+        if (_s3_ui == UI_NONE && _game_over3 == 0) {
+            if (key_pressed(K_ESC) || key_pressed(K_P) || key_pressed(K_BACKSPACE)) {
+                _s3_ui = UI_PAUSE;
+            }
+        }
+
         _read_touch3();   // dokunmatik durumunu güncelle (move3d/jump_pressed okur)
         // Bakış, update'ten ÖNCE: oyunun update'i camera_yaw3d() okuyabilsin ve
         // move3d bu karenin kamera yönünü kullansın (bir kare gecikme olmaz).
-        _s3_camera_input(dt);
-        if (_has_update3 == 1 && _game_over3 == 0) { call(_update3_fn); }
-        if (_game_over3 == 0) {
+        // Menü/duraklat açıkken oyun DONAR: bakış, update, fizik ve çarpışma
+        // atlanır. Sahne yine çiziliyor (aşağıda), yalnız ilerlemiyor.
+        int frozen = 0;
+        if (_s3_ui != UI_NONE) { frozen = 1; }
+
+        if (frozen == 0) { _s3_camera_input(dt); }
+        if (_has_update3 == 1 && _game_over3 == 0 && frozen == 0) { call(_update3_fn); }
+        // Parçacıklar oyun bitse de sönmeye devam eder — son patlama ekranda
+        // donup kalmasın (arcade'de de aynı gerekçe). Duraklatmada ise donar.
+        if (frozen == 0) { _s3_particles(dt); }
+        if (_game_over3 == 0 && frozen == 0) {
             _s3_physics(dt);
             _s3_collision();
+            // Bölüm geçişi KARE SONUNDA, çarpışma döngüsü bittikten sonra:
+            // entity store'u döngünün ortasında silmek slot'ları ayağının
+            // altından çekerdi. İstek nereden gelirse gelsin burada uygulanır.
+            if (_lvl_pending3 >= 0) { _s3_apply_level(); }
         }
 
         frame_begin();
@@ -729,10 +2270,35 @@ func play3d() {
         _s3_camera();
         space_begin();
             _s3_render();
+            // Parçacıklar entity'lerden SONRA: billboard'lar saydam çizilir,
+            // arkalarındaki cisimlerin önceden çizilmiş olması gerekir.
+            _s3_particles_draw();
         space_end();
+
+        // Oyunun kendi 2B katmanı — motorun HUD'ından ÖNCE, yani skor/can barı
+        // oyunun çizdiklerinin üstünde kalır.
+        if (_has_hud3 == 1) { call(_hud3_fn); }
 
         text(_win_title, 12, 10, 20, RAYWHITE);
         text("Skor: " + toString(_score3), 12, 34, 18, GOLD);
+        if (length(_lvlN) > 0) {
+            text("Bolum: " + toString(_cur_lvl3), 130, 34, 18, SKYBLUE);
+        }
+        // Can barı: kamera hedefinin (pratikte oyuncunun) canı varsa çizilir.
+        // hpmax health3d ile kuruluyor; can sistemi kullanmayan oyunda 0 kalır
+        // ve bar hiç görünmez — eski sahnelerin HUD'ı değişmez.
+        int hud_s = _slot_of3(_cam_target);
+        if (hud_s >= 0) {
+            Ent3 he = _e3[hud_s];
+            if (he.hpmax > 0) {
+                float frac = he.hp * 1.0 / (he.hpmax * 1.0);
+                if (frac < 0.0) { frac = 0.0; }
+                rect(12.0, 58.0, 160.0, 14.0, rgba(0, 0, 0, 120));
+                rect(12.0, 58.0, 160.0 * frac, 14.0, rgb(90, 220, 110));
+                rect_lines(12.0, 58.0, 160.0, 14.0, RAYWHITE);
+                text(toString(he.hp) + "/" + toString(he.hpmax), 180, 57, 16, RAYWHITE);
+            }
+        }
 
         // Dokunmatik ipucu (yalnız parmak ekrandayken): sol joystick + sağ ped.
         if (_tj_active == 1) {
@@ -746,10 +2312,29 @@ func play3d() {
                 text("BAK", toInt(_win_w) - 92, toInt(_win_h) - 80, 18, RAYWHITE);
             }
         }
-        if (_game_over3 == 1) {
-            text("OYUN BITTI", toInt(_win_w * 0.5) - 70, toInt(_win_h * 0.5), 30, rgb(255, 90, 90));
-        }
+        // Örtüler HUD'ın üstünde: karartma oyunun kendi çizimini de kapatmalı.
+        if (_s3_ui == UI_TITLE)      { _s3_title_draw(); }
+        else if (_s3_ui == UI_PAUSE) { _s3_pause_draw(); }
+        else if (_game_over3 == 1)   { _s3_over_draw(); }
         frame_end();
+
+        // Girdi çizimden SONRA okunuyor: düğmeler bu karede zaten çizilmiş
+        // oldu, yani oyuncunun tıkladığı şey ekranda gördüğü şeyle aynı.
+        if (_s3_ui == UI_TITLE) {
+            int ta = _s3_title_step();
+            if (ta == 1) { _s3_ui = UI_NONE; }
+            else if (ta == 2) { _s3_quit = 1; }
+        } else if (_s3_ui == UI_PAUSE) {
+            int pa = _s3_pause_step();
+            if (pa == 1) { _s3_ui = UI_NONE; }
+            else if (pa == 2) { restart3d(); }
+            else if (pa == 3) { _s3_quit = 1; }
+        } else if (_game_over3 == 1) {
+            int oa = _s3_over_step();
+            if (oa == 1) { restart3d(); }
+            else if (oa == 2) { _s3_quit = 1; }
+        }
+        if (_s3_quit == 1) { break; }
     }
     close_window();
 }
@@ -766,8 +2351,56 @@ func oteki3(): int { return other3d(); }
 func sahne3d(w, h, title) { scene3d(w, h, title); }
 func kurulumda3(fn) { on_setup3d(fn); }
 func her_kare3(fn) { on_update3d(fn); }
+func hud_ciz3(fn) { on_hud3d(fn); }
 func carpisinca3(tagA, tagB, fn) { on_hit3d(tagA, tagB, fn); }
 func zemin3(y) { ground3d(y); }
 func yercekimi3(g) { gravity3d(g); }
 func kamera_takip(target, dist, height) { camera_follow(target, dist, height); }
 func oyna3d() { play3d(); }
+
+// -- Faz 7: bölüm / düşman / mermi / can --
+func bolum3d(n, fn) { level3d(n, fn); }
+func bolum_gec3d() { next_level3d(); }
+func bolum_git3d(n) { goto_level3d(n); }
+func bolum_no3d(): int { return level_now3d(); }
+func kazandin_mi3d(): bool { return won3d(); }
+
+// -- Menü / UI --
+func baslangic3d(baslik, altbaslik) { menu3d(baslik, altbaslik); }
+func yeniden3d() { restart3d(); }
+func yeniden_baslayinca3d(fn) { on_restart3d(fn); }
+func duraklat3d() { pause3d(); }
+func devam3d() { resume3d(); }
+func duraklatildi_mi3d(): bool { return paused3d(); }
+func cik3d() { quit3d(); }
+func bitti_mi3d(): bool { return is_over3d(); }
+func yasayan_sayi3d(): int { return alive_count3d(); }
+
+func takip_et3d(i, hedef, hiz) { chase3d(i, hedef, hiz); }
+func devriye3d(i, x1, z1, x2, z2, hiz) { patrol3d(i, x1, z1, x2, z2, hiz); }
+func menzilde3d(a, b, r): bool { return in_range3d(a, b, r); }
+
+func mermi3d(sahip, hiz, omur): int { return bullet3d(sahip, hiz, omur); }
+
+func can3d(i, n) { health3d(i, n); }
+func can_kac3d(i): int { return hp3d(i); }
+func hasar3d(i, n) { damage3d(i, n); }
+func olunce3d(tag, fn) { on_death3d(tag, fn); }
+func dokunulmazlik3d(sn) { invuln3d(sn); }
+
+// -- Faz 8: parçacık / animasyon / konumsal ses --
+func parcacik3d(x, y, z, n, renk, hiz, omur) { particles3d(x, y, z, n, renk, hiz, omur); }
+func patlat3d(i, n, renk, hiz, omur) { burst3d(i, n, renk, hiz, omur); }
+func parcacik_yercekimi3d(g) { particle_gravity3d(g); }
+func animasyon3d(i, bosta, kosu, fps) { anim3d(i, bosta, kosu, fps); }
+func ses3d(h, x, y, z) { sound3d(h, x, y, z); }
+func ses_menzili3d(r) { sound_range3d(r); }
+
+// -- Faz 9: dünya geometrisi --
+func rampa3d(x, y, z, sx, sy, sz, renk, yaw): int { return ramp3d(x, y, z, sx, sy, sz, renk, yaw); }
+func don3d(i, yaw) { set3yaw(i, yaw); }
+func yon3d(i): float { return get3yaw(i); }
+func arazi3d(res, sx, sy, sz, olcek, tohum) { terrain3d(res, sx, sy, sz, olcek, tohum); }
+func arazi_dosya3d(yol, sx, sy, sz) { terrain_file3d(yol, sx, sy, sz); }
+func arazi_renk3d(c) { terrain_color3d(c); }
+func zemin_yukseklik3d(x, z): float { return _floor_at3(x, z); }

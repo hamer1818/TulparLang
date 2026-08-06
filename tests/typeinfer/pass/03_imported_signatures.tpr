@@ -1,0 +1,24 @@
+// Expected: typeinfer clean.
+//
+// The companion to fail/06: now that module signatures ARE resolved, correct
+// calls into an imported module must stay silent. Two things are guarded here.
+//
+// 1. `assert_eq_int(int, int)` — an ordinary, correctly-typed imported call.
+// 2. `assert_eq_str(json, json)` fed a str and an int. `json` is Tulpar's
+//    dynamic type and lib/test.tpr uses it deliberately as "accept anything,
+//    stringify it". Before json was made compatible in both directions, this
+//    single idiom produced 418 of the 461 false positives that resolving
+//    imports first surfaced across the repo.
+
+import "test";
+
+func t_ok() {
+    assert_eq_int(2 + 2, 4);
+    assert_eq_str("42", "42");
+    assert_eq_str(42, 42);
+    assert_contains("merhaba", "rha");
+    assert_eq_bool(3 < 5, true);
+}
+
+test("imported calls typecheck cleanly", t_ok);
+test_summary();

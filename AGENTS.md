@@ -13,20 +13,20 @@ Requires **CMake 3.14+** and **LLVM 18+** (hard requirement — `find_package(LL
 ```bash
 ./build.sh                     # Linux/macOS — configures + builds in build-linux/ or build-macos/, copies ./tulpar to repo root
 ./build.sh clean               # Wipe build dirs and artifacts
-build.bat                      # Windows (MSVC) — builds in build-windows/, copies tulpar.exe
-build.ps1                      # Windows (PowerShell) — same as build.bat
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j   # Direct CMake
 ```
 
+**Native Windows is not supported** (dropped in 3.13.0). On Windows, develop and run inside **WSL** and use the Linux path above — everything works there, including the web and Android build targets. There is no MSVC/MinGW build, no `build.bat`/`build.ps1`, no Inno Setup installer, and no `build-windows` CI job.
+
 `build.sh` wipes `$BUILD_DIR` on every invocation (no incremental builds). Use direct CMake if you want incremental rebuilds during development.
 
-The build script leaves a `./tulpar` (or `tulpar.exe`) copied out of the build directory; developer tooling assumes that copy exists. Different OSes use **different build directories** (`build-linux`, `build-macos`, `build-windows`) — the repo already contains stale copies of several; don't assume one is current.
+The build script leaves a `./tulpar` (or `tulpar.exe`) copied out of the build directory; developer tooling assumes that copy exists. Different OSes use **different build directories** (`build-linux`, `build-macos`) — the repo may contain stale copies of both; don't assume one is current.
 
 Two CMake targets are built:
 - `tulpar` — the compiler/driver executable.
 - `tulpar_runtime` — static library (`libtulpar_runtime.a` / `.lib`) that AOT-compiled user binaries link against. It is compiled with `-DTULPAR_RUNTIME_ONLY` and contains a different source subset from `tulpar` itself. When editing runtime-visible code (anything in `src/vm/runtime_bindings.cpp`, `runtime/*`, lexer, parser, `vm/`, `jit/`, SQLite), both targets must stay buildable.
 
-The AOT linker resolves `libtulpar_runtime.a` at runtime via `build_link_search_dirs()` in `src/aot/aot_pipeline.cpp` — it probes the directory containing the running `tulpar` binary first (so the installer can drop the archive next to `tulpar.exe`), then `<exe_dir>/lib`, then the dev-tree `build-<platform>/` directories. The Windows installer (`installer/tulpar.iss`, Inno Setup) ships both `tulpar.exe` and `libtulpar_runtime.a` into `%LOCALAPPDATA%\Programs\Tulpar`; CI passes `/DSourceBinary` and `/DSourceRuntimeLib` to `iscc`.
+The AOT linker resolves `libtulpar_runtime.a` at runtime via `build_link_search_dirs()` in `src/aot/aot_pipeline.cpp` — it probes the directory containing the running `tulpar` binary first (so an installer can drop the archive next to it), then `<exe_dir>/lib`, then the dev-tree `build-<platform>/` directories.
 
 ## Tests
 
@@ -35,18 +35,22 @@ The AOT linker resolves `libtulpar_runtime.a` at runtime via `build_link_search_
 ```bash
 ./build.sh test                           # Run every examples/*.tpr through AOT
 ./build.sh test examples/02_basics.tpr    # Run one example
-run_tests.bat                             # Windows wrapper around run_tests.ps1
 ```
 
-It invokes `./tulpar --aot <file>`, expects an `a.out`/`<base>.exe` to be produced, runs it, and compares only the exit status. Interactive examples get stdin from `examples/inputs/<basename>.txt`. The `SKIP_TESTS` array is currently empty; the active filter is `COMPILE_ONLY_TESTS` in `build.sh` (and `$compileOnly` in `run_tests.ps1`) — examples that block on `listen()` / `api_run()` (sockets, router, wings, tulpar_api) plus the import-only `utils.tpr` are compiled but not executed, so a regression in the embedded server/router stdlib path still fails the suite. Update **both** scripts when adding entries.
+It invokes `./tulpar --aot <file>`, expects an `a.out`/`<base>.exe` to be produced, runs it, and compares only the exit status. Interactive examples get stdin from `examples/inputs/<basename>.txt`. The `SKIP_TESTS` array is currently empty; the active filter is `COMPILE_ONLY_TESTS` in `build.sh` — examples that block on `listen()` / `api_run()` (sockets, router, wings, tulpar_api) plus the import-only `utils.tpr` are compiled but not executed, so a regression in the embedded server/router stdlib path still fails the suite. (Until 3.13.0 this list had to be kept in sync with `$compileOnly` in `run_tests.ps1`; that PowerShell runner went away with native Windows support, so `build.sh` is now the single place to update.)
 
-`run_tests.ps1` uses `tulpar build` per file (not `--aot`) and enforces per-test compile/run timeouts (`-CompileTimeoutSec`, `-RunTimeoutSec`, default 30 s each) so a hung example doesn't block the suite.
+A separate `tests/` directory holds focused regression suites, run by their own target:
 
-A separate `tests/` directory holds focused regression suites that are **not** run by `./build.sh test`:
-- `*.test.tpr` — Tulpar source using the embedded `test` library (`import "test"`, jest-style assertions). Run with `./tulpar tests/<file>.test.tpr`.
+```bash
+./build.sh suites                         # Run every tests/*.test.tpr suite
+```
+
+- `*.test.tpr` — Tulpar source using the embedded `test` library (`import "test"`, jest-style assertions). Run one with `./tulpar tests/<file>.test.tpr`, or all with `./build.sh suites`.
+
+`./build.sh suites` treats a suite that prints **no `Tests:` summary** as a failure, not a pass. That guard exists because `test_summary()` is what calls `exit(1)` — a suite that forgets it can never go red. Four suites were in exactly that state until 3.13.0, and these suites ran in **no automation at all** until then; that blindness is where the `assert`-never-fails bug (see `lib/test.tpr`) survived.
 - `*_smoke.py` / `lsp_smoke.py` — Python harnesses that drive the LSP / formatter / package manager subprocesses. Manual; not yet wired into CI.
 
-CI (`.github/workflows/build.yml`) builds on Ubuntu, macOS, and Windows; only the Linux job runs `./build.sh test` (and it is `continue-on-error`).
+CI (`.github/workflows/build.yml`) builds on Ubuntu and macOS; only the Linux job runs the test steps — `./build.sh test`, `./build.sh suites`, the typeinfer runner, and the SHA-256 helper. None of them are `continue-on-error`: a test failure turns CI red. There is no Windows job — see the note under **Build**.
 
 A multi-language micro-benchmark harness lives in `benchmarks/` — `run_benchmarks.sh` / `run_benchmarks.ps1` time `fib`/`loopsum` across C, Rust, Go, JS, Python, Java, and Tulpar AOT, writing into `benchmarks/RESULTS.md`. Not run by CI.
 
@@ -76,6 +80,8 @@ Pipeline, top to bottom:
 1. **Lexer** (`src/lexer/`) — tokenizes UTF-8 source into `Token*` arrays.
 2. **Parser** (`src/parser/`) — hand-written recursive descent, produces AST nodes defined in `parser/ast_nodes.hpp`. A visitor interface lives in `ast_visitor.hpp`.
 3. **Type inference** (`src/typeinfer/`) — runs over the AST before codegen. Surfaces as `[typecheck]` warnings on every `tulpar`/`tulpar build`/`tulpar --vm` invocation via the `typeinfer_emit_warnings` pre-pass; the standalone `tulpar typecheck` subcommand is the same checker in error mode. Disable the pre-pass with `--no-typecheck` or `TULPAR_NO_TYPECHECK=1` when shaping new rules.
+
+   It **resolves `import`s** (since 2026-08-06): `typeinfer_program` parses each imported module with the same resolution order as the AOT backend and registers its exported **signatures only** — functions and struct layouts, never the bodies. Precedence falls out of the ordering: builtins are registered first, then this file's own declarations, then module exports fill the remaining gaps, so a local definition always wins. Before this, every call into `test`/`wings`/`router`/`orm`/`scene3d`/`arcade` was unchecked, which is how `lib/test.tpr`'s `assert` shipped as a silent no-op. Two rules exist specifically to keep that family dead: `==`/`!=` between different scalar types is reported as a constant (the runtime compares type tags first, so `b == 1` is always false and `b != 0` always true), and `bool`→`int` is allowed at a **store** but rejected at a **call** — because that is exactly what codegen does. Regression fixtures live in `tests/typeinfer/{pass,fail}/`, driven by `tests/typeinfer/run.sh`.
 4. **Backends** — two of them share the same AST:
    - **AOT / LLVM** (`src/aot/`, primary): `aot_pipeline.cpp` is the entry point (`aot_compile`, `aot_compile_and_run`, `aot_compile_and_run_silent`). Actual IR generation is split across `llvm_backend.cpp`, `llvm_types.cpp`, `llvm_values.cpp` — that's the full list in `AOT_SOURCES` (CMakeLists.txt). Architecture-specific LLVM components are selected in `CMakeLists.txt` (`x86*` vs `aarch64*`).
    - **VM** (`src/vm/`): `compiler.cpp` lowers AST → bytecode (`bytecode.cpp`), `vm.cpp` executes it, `runtime_bindings.cpp` implements built-ins (print, sockets, db, threads, etc.). This is also the path AOT'd binaries use at runtime, and the path the REPL uses.
@@ -105,7 +111,9 @@ Call sites can be written either way: `m.func(args)` (Python-style) and `m__func
 
 ### Cross-platform shims
 
-Platform detection goes through `src/common/platform.h`, `platform_sockets.h`, `platform_threads.h`, `platform_dl.h`. Always add new syscalls through these headers rather than `#ifdef _WIN32` directly — the Windows port is recent and code that bypasses the shim tends to break the MSVC build. `PLATFORM_WINDOWS`, `PLATFORM_LINUX`, `PLATFORM_MACOS` are defined by CMake.
+Platform detection goes through `src/common/platform.h`, `platform_sockets.h`, `platform_threads.h`, `platform_dl.h`. Always add new syscalls through these headers rather than `#ifdef _WIN32` directly.
+
+The `PLATFORM_WINDOWS` / `_WIN32` branches inside those shims were **deliberately left in place** when native Windows support was dropped in 3.13.0: ripping them out is a large, risky refactor across sockets/threads/dl/paths for no user-visible gain, and keeping them costs nothing on the supported platforms. Treat them as **unmaintained and untested** — nothing builds or exercises them, so don't rely on them being correct, and don't spend effort keeping them current. New code still goes through the shim headers (for `PLATFORM_LINUX` / `PLATFORM_MACOS` hygiene), but a Windows branch is optional.
 
 ### WASM target
 
@@ -118,4 +126,4 @@ Platform detection goes through `src/common/platform.h`, `platform_sockets.h`, `
 - The repo root still keeps a `tulpar.exe` copy (build output) plus `test.db` / `test_file.txt` (left behind by example runs). None of those are build inputs.
 - [STATUS.md](STATUS.md) is the project's single "where do we stand?" reference: current status, what's done (PR-grouped summary), open gaps (priority-tagged 🔴/🟡/🟢), and the v1.0 criteria. Consult it before claiming a feature is broken vs. unimplemented. The legacy `EKSIKLER.md` (60-item running gap list, all RESOLVED) and `OZET.md` (phase-by-phase history) were consolidated into STATUS.md and removed.
 - User-facing diagnostic strings should go through `tr_en("<turkish>", "<english>")` from `src/common/localization.hpp` — don't hardcode only one language.
-- New examples land in `examples/`, numbered roughly by theme. If they need stdin, drop a fixture in `examples/inputs/<name>.txt`. If they block on `listen()` / `api_run()`, add the filename to `COMPILE_ONLY_TESTS` in `build.sh` **and** `$compileOnly` in `run_tests.ps1`.
+- New examples land in `examples/`, numbered roughly by theme. If they need stdin, drop a fixture in `examples/inputs/<name>.txt`. If they block on `listen()` / `api_run()`, add the filename to `COMPILE_ONLY_TESTS` in `build.sh`.

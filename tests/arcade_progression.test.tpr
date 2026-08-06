@@ -124,3 +124,4 @@ func main() {
 }
 
 main();
+test_summary();

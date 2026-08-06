@@ -8,7 +8,7 @@ cmake_minimum_required(VERSION 3.14)
 # Keep it >= the latest git tag (currently v3.10.0) so `tulpar --version` and
 # `tulpar update --check` never report a dev build as older than the last
 # release. Bump here when cutting a release; CI overrides via -DTULPAR_VERSION.
-project(TulparLang VERSION 3.12.0 LANGUAGES C CXX)
+project(TulparLang VERSION 3.13.0 LANGUAGES C CXX)
 
 # C++17 Standard (required for std::variant, std::optional, std::unique_ptr)
 set(CMAKE_CXX_STANDARD 17)
@@ -314,14 +314,45 @@ target_compile_definitions(tulpar
 # Android target (`tulpar build --target=android`): one driver emits
 # arm64-v8a (real devices) AND x86_64 (Android Studio emulator) objects
 # regardless of what CPU it runs on.
-llvm_map_components_to_libnames(llvm_libs
-    support core irreader
-    aarch64asmparser aarch64codegen aarch64desc aarch64info
-    x86asmparser x86codegen x86desc x86info
-    webassemblyasmparser webassemblycodegen webassemblydesc webassemblyinfo
-    passes asmparser asmprinter
-    target mc
-)
+#
+# Dağıtımlar LLVM'i iki farklı şekilde paketliyor ve ikisini de desteklemek
+# gerekiyor:
+#   - Bileşen bileşen STATİK arşivler (libLLVMCore.a, libLLVMX86CodeGen.a, ...)
+#     — Ubuntu/macOS apt+brew paketleri, CI'ın kullandığı yol.
+#   - Tek PAYLAŞIMLI kitaplık (libLLVM.so) — Arch/CachyOS gibi dağıtımlar
+#     statik bileşenleri hiç göndermiyor; LLVM 22 paketinde yalnız birkaç
+#     artık .a kalmış ve onlar da LTO bitcode olduğu için GNU ld okuyamıyor.
+#     Böyle bir ağaçta bileşen adlarıyla linklemek "unable to find library
+#     -lLLVMCore" ya da "file format not recognized" ile patlar.
+# LLVMConfig.cmake bunu LLVM_LINK_LLVM_DYLIB ile kendisi bildiriyor; bayrağa
+# uymak LLVM'in önerdiği yol, sürüm/dağıtım tahmini yapmaktan güvenli.
+#
+# Karar ölçütü, LLVM_LINK_LLVM_DYLIB bayrağı DEĞİL, statik bileşenlerin diskte
+# gerçekten bulunup bulunmadığıdır. Bayrağa bakmak yetmiyor: MSYS2/MinGW LLVM 22
+# paketinde bayrak AÇIK ama statik bileşenler de var; oraya dylib yolunu
+# uygulayınca tulpar.exe libllvm-22.dll'e bağlanıyor ve CI'ın DLL paketleme
+# koruması (haklı olarak) düşüyor — Windows dağıtımı kendi kendine yeten tek
+# dosya olmalı. Statik bileşen varsa onu kullan; yoksa (Arch/CachyOS) dylib'e
+# düş. LLVMCore temsilci: Arch'ta gönderilmeyenler arasında.
+find_library(TULPAR_LLVM_STATIC_PROBE
+    NAMES LLVMCore
+    PATHS ${LLVM_LIBRARY_DIRS}
+    NO_DEFAULT_PATH)
+
+if(NOT TULPAR_LLVM_STATIC_PROBE)
+    set(llvm_libs LLVM)
+    message(STATUS "LLVM: statik bilesenler yok — paylasimli dylib ile linkleniyor")
+else()
+    llvm_map_components_to_libnames(llvm_libs
+        support core irreader
+        aarch64asmparser aarch64codegen aarch64desc aarch64info
+        x86asmparser x86codegen x86desc x86info
+        webassemblyasmparser webassemblycodegen webassemblydesc webassemblyinfo
+        passes asmparser asmprinter
+        target mc
+    )
+    message(STATUS "LLVM: statik bilesenlerle linkleniyor")
+endif()
 
 # Windows-specific linking requirements (applies to MSVC and MinGW)
 if(WIN32)

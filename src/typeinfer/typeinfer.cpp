@@ -3,10 +3,18 @@
 
 #include "typeinfer.hpp"
 #include "../common/localization.hpp"
+#include "../embedded_libs.h"
+#include "../lexer/lexer.hpp"
+#include "../parser/parser.hpp"
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <memory>
+#include <set>
+#include <sstream>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -61,6 +69,47 @@ static DataType function_return_type(TypeInferContext *ctx, const std::string &n
     return TYPE_VOID;
   }
   return it->second.return_type;
+}
+
+// `==` / `!=` between two different scalar types can never be true: the
+// runtime compares the value's type tag first, so `true == 1` is false and —
+// the nastier half — `false != 0` is *true*. Nothing about that is visible at
+// the call site, which is how `assert(x < y, ...)` silently never failed for
+// the entire life of lib/test.tpr: the parameter was declared `int`, the
+// caller passed a bool, and `cond == 0` could not hold. Flagging the constant
+// comparison is what turns that whole bug family into a compile-time error.
+//
+// Deliberately conservative, in the same spirit as `cond_acceptable` below:
+// only the four scalars are judged, int/float stay mutually comparable
+// (numeric promotion makes `1 == 1.0` genuinely true), and anything dynamic
+// or unknown (json, structs, arrays, VOID = "no signature entry") is skipped
+// rather than guessed at.
+static bool is_comparable_scalar(DataType t) {
+  return t == TYPE_INT || t == TYPE_FLOAT || t == TYPE_STRING || t == TYPE_BOOL;
+}
+
+// `int x = <bool>` and `x = <bool>` are a supported, tested coercion: the AOT
+// backend rewrites the VMValue tag from VM_VAL_BOOL to VM_VAL_INT at the local
+// store (llvm_backend.cpp's AST_VARIABLE_DECL boxed-local fallback, guarded by
+// tests/bool_to_int_coerce.test.tpr — slot 2 already holds 1/0, so it is
+// lossless). No such rewrite happens at a CALL boundary, which is exactly why
+// `assert(x < y, msg)` against an `int cond` parameter silently never fired.
+// So this allowance is deliberately scoped to stores; the argument check keeps
+// rejecting the same pair, because there the value really does stay a bool.
+static bool store_coercible(DataType declared, DataType initializer) {
+  return declared == TYPE_INT && initializer == TYPE_BOOL;
+}
+
+static bool comparison_is_constant(DataType a, DataType b) {
+  if (!is_comparable_scalar(a) || !is_comparable_scalar(b)) {
+    return false;
+  }
+  if (a == b) {
+    return false;
+  }
+  bool a_num = (a == TYPE_INT || a == TYPE_FLOAT);
+  bool b_num = (b == TYPE_INT || b == TYPE_FLOAT);
+  return !(a_num && b_num);
 }
 
 DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
@@ -151,6 +200,18 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     switch (bin->op) {
     case TOKEN_EQUAL:
     case TOKEN_NOT_EQUAL:
+      if (comparison_is_constant(left_type, right_type)) {
+        report_error(ctx,
+                     tulpar::i18n::tr_en(
+                         "'%s' ile '%s' karsilastirmasi her zaman %s "
+                         "(farkli tipler asla esit olmaz) - satir %d",
+                         "comparison between '%s' and '%s' is always %s "
+                         "(different types are never equal) at line %d"),
+                     datatype_to_string(left_type),
+                     datatype_to_string(right_type),
+                     bin->op == TOKEN_EQUAL ? "false" : "true", bin->loc.line);
+      }
+      return TYPE_BOOL;
     case TOKEN_LESS:
     case TOKEN_GREATER:
     case TOKEN_LESS_EQUAL:
@@ -400,6 +461,7 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
                t == TYPE_JSON;
       };
       if (!is_unknown(declared_type) && !is_unknown(init_type) &&
+          !store_coercible(declared_type, init_type) &&
           !types_compatible(declared_type, init_type)) {
         report_error(ctx, "Type mismatch in declaration of '%s': expected %s, got %s at line %d",
                      decl->name.c_str(), datatype_to_string(declared_type),
@@ -418,6 +480,7 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
       return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM;
     };
     if (!is_unknown(var_type) && !is_unknown(expr_type) &&
+        !store_coercible(var_type, expr_type) &&
         !types_compatible(var_type, expr_type)) {
       report_error(ctx, "Type mismatch in assignment to '%s': expected %s, got %s at line %d",
                    assign->name.c_str(), datatype_to_string(var_type),
@@ -448,8 +511,15 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
   // and skip the check rather than emit a false positive. Conservative on
   // purpose; we'd rather miss a real bug than annoy users until typeinfer's
   // builtin catalogue is exhaustive.
+  // TYPE_UNKNOWN is an untyped parameter (`func f(on) { if (on) ... }`, the
+  // house style for every on/off toggle in scene3d/arcade/wings) and TYPE_JSON
+  // is the dynamic type whose truthiness is only knowable at runtime. Both are
+  // "no information", same as VOID, so warning on them is a false positive by
+  // construction — `if (on)` is the correct way to read a flag, and the whole
+  // point of the assert fix was that `on == 1` is the broken one.
   auto cond_acceptable = [](DataType t) {
-    return t == TYPE_BOOL || t == TYPE_INT || t == TYPE_VOID;
+    return t == TYPE_BOOL || t == TYPE_INT || t == TYPE_VOID ||
+           t == TYPE_UNKNOWN || t == TYPE_JSON;
   };
 
   if (const auto *if_stmt = as_node<IfStatement>(stmt)) {
@@ -566,6 +636,16 @@ const char *datatype_to_string(DataType type) {
 
 int types_compatible(DataType a, DataType b) {
   if (a == b) {
+    return 1;
+  }
+  // `json` is Tulpar's dynamic type: a json value holds any runtime value, and
+  // any value flows into a json slot. Declaring it compatible in both
+  // directions is what makes signatures like `assert_eq_str(json, json)` — the
+  // deliberate "accept anything, stringify it" idiom in lib/test.tpr — mean
+  // what they say. Nothing exercised this until imported signatures started
+  // being checked; before that, json parameters were essentially all in
+  // modules typeinfer never opened.
+  if (a == TYPE_JSON || b == TYPE_JSON) {
     return 1;
   }
   if ((a == TYPE_INT && b == TYPE_FLOAT) || (a == TYPE_FLOAT && b == TYPE_INT)) {
@@ -813,6 +893,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm_mouse_dx", TYPE_FLOAT, {}},
       {"tm_mouse_dy", TYPE_FLOAT, {}},
       {"tm_cursor_lock", TYPE_VOID, {TYPE_INT}},
+      {"tm_exit_key", TYPE_VOID, {TYPE_INT}},
       {"tm_cursor_locked", TYPE_BOOL, {}},
       {"tm_touch_count", TYPE_INT, {}},
       {"tm_touch_x", TYPE_INT, {TYPE_INT}},
@@ -898,6 +979,20 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm3_shadow_area", TYPE_VOID, {TYPE_UNKNOWN}},
       {"tm3_shadows_active", TYPE_BOOL, {}},
       {"tm3_texture", TYPE_VOID, {TYPE_INT, TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm3_billboard", TYPE_VOID,
+       {TYPE_INT, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_INT}},
+      {"tm3_screen_x", TYPE_FLOAT,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm3_screen_y", TYPE_FLOAT,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm3_terrain_gen", TYPE_INT,
+       {TYPE_INT, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_UNKNOWN, TYPE_INT}},
+      {"tm3_terrain_load", TYPE_INT,
+       {TYPE_STRING, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm3_terrain_height", TYPE_FLOAT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm3_terrain_off", TYPE_VOID, {}},
       {"tm3_material", TYPE_VOID, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
       {"tm3_sky", TYPE_BOOL, {TYPE_INT, TYPE_INT}},
       {"tm3_sky_off", TYPE_VOID, {}},
@@ -976,6 +1071,138 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Import resolution
+//
+// Until now typeinfer never opened a module's source, so every call into the
+// stdlib was unchecked. That is precisely how `assert(x < y, msg)` survived:
+// the argument checker below would have rejected `bool` against `assert`'s
+// declared `int cond` on sight, but it never saw the signature. Pulling the
+// exported signatures in closes the hole for `test`, `wings`, `router`, `orm`,
+// `scene3d`, `arcade` — every module — at once.
+//
+// Only SIGNATURES are imported (functions + struct layouts), never the module
+// body: type-checking stdlib internals on every user build would be both slow
+// and noisy, and the module's own diagnostics belong to whoever edits it.
+// ---------------------------------------------------------------------------
+
+// Same resolution order as the AOT backend (`src/aot/llvm_backend.cpp`):
+// embedded stdlib → literal path → `<name>.tpr` → the two `tulpar_modules/`
+// slots that `tulpar pkg install` populates. Returns false when nothing
+// resolves; that stays silent here on purpose, because the AOT path owns the
+// "Could not import file" error and we must not double-report it.
+static bool load_import_source(const std::string &name, std::string &out) {
+  if (const char *embedded = get_embedded_lib(name.c_str())) {
+    out = embedded;
+    return true;
+  }
+  const std::string candidates[] = {
+      name,
+      name + ".tpr",
+      "tulpar_modules/" + name + "/" + name + ".tpr",
+      "tulpar_modules/" + name + ".tpr",
+  };
+  for (const auto &path : candidates) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+      continue;
+    }
+    std::stringstream ss;
+    ss << in.rdbuf();
+    out = ss.str();
+    return true;
+  }
+  return false;
+}
+
+static std::unique_ptr<ASTNode> parse_module_source(const std::string &source) {
+  try {
+    Lexer lexer(source);
+    std::vector<Token> tokens;
+    while (true) {
+      Token tok = lexer.next_token();
+      bool eof = tok.type() == TOKEN_EOF;
+      tokens.push_back(std::move(tok));
+      if (eof) {
+        break;
+      }
+    }
+    Parser parser(std::move(tokens));
+    return parser.parse();
+  } catch (...) {
+    // A module that won't parse is not this pass's problem to report.
+    return nullptr;
+  }
+}
+
+// Register everything `import "<name>"` brings into scope. Existing entries are
+// never overwritten, which gives the precedence we want without any extra
+// bookkeeping: builtins beat modules (their hand-written signatures are more
+// precise than a wrapper's), and the importing file's own declarations were
+// registered first, so local definitions beat both.
+static void register_module_exports(TypeInferContext *ctx,
+                                    const std::string &module_name,
+                                    const std::string &alias,
+                                    std::set<std::string> &visited, int depth) {
+  // Depth cap and visited set together make an import cycle terminate; the
+  // AOT path guards this separately, so hitting either here is silent.
+  if (depth > 8 || !visited.insert(module_name).second) {
+    return;
+  }
+  std::string source;
+  if (!load_import_source(module_name, source)) {
+    return;
+  }
+  std::unique_ptr<ASTNode> module_ast = parse_module_source(source);
+  if (!module_ast) {
+    return;
+  }
+  const auto *module_prog = as_node<Program>(module_ast.get());
+  if (!module_prog) {
+    return;
+  }
+
+  for (const auto &stmt : module_prog->statements) {
+    if (const auto *func = as_node<FunctionDecl>(stmt.get())) {
+      // `import "m" as a` mangles the module's top-level functions to
+      // `a__<name>` (src/parser/import_alias.cpp); mirror that here or the
+      // aliased call sites would look undefined.
+      std::string name = alias.empty() ? func->name : alias + "__" + func->name;
+      if (ctx->functions.count(name)) {
+        continue;
+      }
+      std::vector<DataType> param_types;
+      param_types.reserve(func->parameters.size());
+      for (const auto &param : func->parameters) {
+        param_types.push_back(param.type);
+      }
+      typeinfer_register_function(
+          ctx, name.c_str(), func->return_type,
+          param_types.empty() ? nullptr : param_types.data(),
+          static_cast<int>(param_types.size()));
+      continue;
+    }
+    if (const auto *type_decl = as_node<TypeDecl>(stmt.get())) {
+      if (ctx->struct_types.count(type_decl->name)) {
+        continue;
+      }
+      StructTypeInfo info;
+      info.field_names = type_decl->field_names;
+      info.field_types = type_decl->field_types;
+      info.field_custom_types = type_decl->field_custom_types;
+      ctx->struct_types[type_decl->name] = std::move(info);
+      continue;
+    }
+    // A module's own imports are transitive for the plain (unaliased) form —
+    // `import "wings"` puts http_utils' helpers in scope too, matching how the
+    // AOT path flattens them into one namespace.
+    if (const auto *nested = as_node<ImportStatement>(stmt.get())) {
+      register_module_exports(ctx, nested->path, nested->alias, visited,
+                              depth + 1);
+    }
+  }
+}
+
 void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
   const auto *prog = as_node<Program>(program);
   if (!prog) {
@@ -1019,6 +1246,18 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
     // modül kaynağını parse etmediğinden struct'ını göremez).
     if (as_node<ImportStatement>(stmt.get())) {
       ctx->has_imports = true;
+    }
+  }
+
+  // Imported signatures come in AFTER the local pre-scan so this file's own
+  // declarations always win a name clash, and the gap-filling in
+  // register_module_exports needs no special case for it.
+  if (ctx->has_imports) {
+    std::set<std::string> visited;
+    for (const auto &stmt : prog->statements) {
+      if (const auto *imp = as_node<ImportStatement>(stmt.get())) {
+        register_module_exports(ctx, imp->path, imp->alias, visited, 0);
+      }
     }
   }
 

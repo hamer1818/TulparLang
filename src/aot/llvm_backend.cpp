@@ -804,6 +804,7 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm_mouse_dx", "aot_tm_mouse_dx_ptr", 0},
     {"tm_mouse_dy", "aot_tm_mouse_dy_ptr", 0},
     {"tm_cursor_lock", "aot_tm_cursor_lock_ptr", 1},
+    {"tm_exit_key", "aot_tm_exit_key_ptr", 1},
     {"tm_cursor_locked", "aot_tm_cursor_locked_ptr", 0},
     // Touch (mobil çok-parmak); masaüstünde mouse_* tek dokunuşu zaten alır.
     {"tm_touch_count", "aot_tm_touch_count_ptr", 0},
@@ -870,6 +871,15 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm3_sky", "aot_tm3_sky_ptr", 2},
     {"tm3_sky_off", "aot_tm3_sky_off_ptr", 0},
     {"tm3_fog", "aot_tm3_fog_ptr", 2},
+    // 3D (Faz 8) — billboard (parçacık/etiket) + dünya→ekran izdüşümü
+    {"tm3_billboard", "aot_tm3_billboard_ptr", 6},
+    {"tm3_screen_x", "aot_tm3_screen_x_ptr", 3},
+    {"tm3_screen_y", "aot_tm3_screen_y_ptr", 3},
+    // 3D (Faz 10) — gerçek arazi (heightmap)
+    {"tm3_terrain_gen", "aot_tm3_terrain_gen_ptr", 7},
+    {"tm3_terrain_load", "aot_tm3_terrain_load_ptr", 5},
+    {"tm3_terrain_height", "aot_tm3_terrain_height_ptr", 2},
+    {"tm3_terrain_off", "aot_tm3_terrain_off_ptr", 0},
     {"tm_checker", "aot_tm_checker_ptr", 5},
     // girdi — gamepad (buton/eksen adla: "A"/"LB"/"START", "LX"/"RT"...)
     {"tm_gamepad_available", "aot_tm_gamepad_available_ptr", 1},
@@ -2714,6 +2724,27 @@ void add_local_captured(LLVMBackend *backend, const char *name, LLVMValueRef env
     s->vars[si].env_ptr = env_ptr;
     s->vars[si].declaring_function = decl_func;
   }
+}
+
+// True only while codegen is emitting a TOP-LEVEL statement.
+//
+// Main's scope is the root: it is pushed first (with no parent) and every
+// function/lambda body pushes its own scope on top of it — which is also why a
+// function can READ a global by falling through the scope chain in get_local.
+// So "no parent" is exactly "this statement belongs to main itself".
+//
+// This is the guard AST_VARIABLE_DECL was missing. Both of its global
+// shortcuts asked only "does a module-level global with this name exist?" and
+// wrote into it — so a function's own `int p = 0;` silently stored into the
+// top-level `int p = 99;` and never allocated a local at all. Parameters were
+// unaffected (they get real allocas at function entry), which is why the bug
+// looked so arbitrary: `func f(p)` was fine, `func f() { int p = ...; }` was not.
+//
+// Top-level `if`/`while` blocks deliberately still count as top level: blocks
+// do not open a scope (see scope_decl_slot), and in a language without block
+// scoping a redeclaration there really is the same variable.
+static bool at_top_level_scope(LLVMBackend *backend) {
+  return backend->current_scope && backend->current_scope->parent == nullptr;
 }
 
 LLVMValueRef get_local(LLVMBackend *backend, const char *name) {
@@ -6929,8 +6960,12 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // Native typed-int global (registered in Pass 0.1 for `int x = ...;`)?
+    // Only when this declaration IS the top-level one — inside a function the
+    // same name is a fresh local that must shadow, not overwrite, the global.
     LLVMValueRef existing_global =
-        LLVMGetNamedGlobal(backend->module, node->name);
+        at_top_level_scope(backend)
+            ? LLVMGetNamedGlobal(backend->module, node->name)
+            : nullptr;
     if (existing_global &&
         LLVMGlobalGetValueType(existing_global) == backend->int_type) {
       LLVMValueRef int_init;

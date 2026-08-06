@@ -1,0 +1,102 @@
+// scene3d Arazi — gerçek yükseklik haritalı açık dünya (Faz 10) + eğim (Faz 11).
+//
+//   ./tulpar examples/scene3d_terrain.tpr
+//   ./tulpar build --target=android examples/scene3d_terrain.tpr out
+//
+// Faz 9'a kadar dünya tek düz düzlemdi; rampa entity'leri onu kısmen kırdı ama
+// kama biçimliydi ve kademeli çiziliyordu. Arazi gerçek çözüm: Perlin
+// gürültüsünden üretilmiş TEK mesh, her (x,z) için sürekli yükseklik.
+//
+// Oynanış: tepelerde dolaş, altınları topla. Altınlar `arazi_yukseklik3d` ile
+// TAM yüzeye oturtuluyor — API'nin asıl gösterdiği şey bu: dünya artık
+// sorgulanabilir, "şu noktada zemin nerede?" sorusunun cevabı var.
+
+import "scene3d";
+
+int player = 0;
+int kalan = 0;
+
+int   RES   = 129;      // yükseklik haritası çözünürlüğü
+float SIZE  = 120.0;    // ayak izi (XZ'de ortalı: -60..+60)
+float PEAK  = 14.0;     // en yüksek tepe
+float NOISE = 4.5;      // gürültü ölçeği (küçük = geniş tepeler)
+int   SEED  = 20260804;
+
+func setup() {
+    gokyuzu3d(rgb(28, 38, 62), rgb(132, 156, 186));
+    sis3d(0.012);
+    zemin3(0.0);
+
+    // Arazi. Bundan sonra zemin yüksekliği her yerde buradan geliyor —
+    // yerçekimi, zıplama ve kamera hepsi otomatik uyum sağlıyor.
+    arazi3d(RES, SIZE, PEAK, SIZE, NOISE, SEED);
+    arazi_renk3d(rgb(104, 138, 92));
+
+    // Eğim sınırı: 38 dereceden dik yamaçlar tırmanılamaz, kayarsın. Bu
+    // OPT-IN — çağırmayan sahne dik duvarları da tırmanabilir (bazı oyunlar
+    // bunu ister). Yamaç aşağı yön arazinin yüzey normalinden geliyor.
+    egim_siniri3d(38.0);
+    kayma_ivmesi3d(16.0);
+
+    player = uret3(0.0, 30.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    kamera_yorunge(player, 16.0, 10.0);
+
+    // Altınları arazi YÜZEYİNE oturt. Yüksekliği sormadan yerleştirseydik
+    // ya havada asılı kalır ya da tepenin içine gömülürlerdi.
+    yerlestir(0.0 - 40.0, 0.0 - 40.0);
+    yerlestir(0.0 - 20.0, 25.0);
+    yerlestir(15.0, 0.0 - 30.0);
+    yerlestir(35.0, 12.0);
+    yerlestir(0.0 - 8.0, 45.0);
+    yerlestir(45.0, 0.0 - 45.0);
+    yerlestir(0.0 - 45.0, 5.0);
+    yerlestir(25.0, 40.0);
+
+    carpisinca3(TAG_PLAYER, TAG_ITEM, topla);
+}
+
+func yerlestir(x, z) {
+    float y = arazi_yukseklik3d(x, z) + 0.6;   // yarıçap kadar yukarı
+    uret3(x, y, z,  1.2, 1.2, 1.2, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    kalan = kalan + 1;
+}
+
+func update() {
+    hareket3(player, 11.0);
+    if (ziplandi()) { zipla3(player, 12.0); }
+
+    // Dünyanın kenarından düşmeyi engelle: ayak izinin dışında zemin taban
+    // Y'ye döner, yani oyuncu bir uçurumdan aşağı kayardı.
+    float px = get3x(player);
+    float pz = get3z(player);
+    float lim = SIZE * 0.5 - 2.0;
+    if (px > lim) { set3pos(player, lim, get3y(player), pz); }
+    if (px < 0.0 - lim) { set3pos(player, 0.0 - lim, get3y(player), pz); }
+    px = get3x(player);
+    if (pz > lim) { set3pos(player, px, get3y(player), lim); }
+    if (pz < 0.0 - lim) { set3pos(player, px, get3y(player), 0.0 - lim); }
+}
+
+func topla() {
+    patlat3d(oteki3(), 14, GOLD, 6.0, 0.5);
+    oldur3(oteki3());
+    skor3_ekle(50);
+    kalan = kalan - 1;
+    if (kalan <= 0) { game_over3d(); }
+}
+
+func hud() {
+    text("Kalan altin: " + toString(kalan), 12, 82, 18, GOLD);
+    text("Yukseklik: " + toString(toInt(get3y(player))), 12, 104, 16, RAYWHITE);
+    // Ayağının altındaki zemin tırmanılamayacak kadar dikse uyar — eğim
+    // sınırının çalıştığını oyun içinde görebilmek için.
+    if (arazi_dik_mi3d(get3x(player), get3z(player))) {
+        text("DIK YAMAC - kayiyorsun", 12, 126, 16, rgb(255, 140, 90));
+    }
+}
+
+sahne3d(960, 560, "Tulpar 3B Arazi");
+kurulumda3(setup);
+her_kare3(update);
+hud_ciz3(hud);
+oyna3d();

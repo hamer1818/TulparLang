@@ -14,14 +14,16 @@ import "test";
 func t_gravity_ground() {
     scene3d_reset();
     int p = spawn3(0.0, 5.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
-    assert_eq_int(p, 0);
+    // spawn3 artık ham index değil HANDLE dönüyor; ilk entity slot 0'a düşer.
+    assert_eq_int(_slot_of3(p), 0);
     int steps = 0;
     while (steps < 120) { _s3_physics(0.016667); steps = steps + 1; }
     float y = get3y(p);
     assert(y > 0.99 && y < 1.01, "yari-yukseklik zeminine oturmali (~1.0)");
     // Ent3 struct'ı import edilen scene3d modülünde tanımlı — typeinfer artık
     // import'lu dosyalarda modül-dışı tipleri "Unknown type" diye işaretlemiyor.
-    Ent3 e = _e3[p];
+    // Store slot ile indekslenir, o yüzden handle önce _slot_of3'ten geçer.
+    Ent3 e = _e3[_slot_of3(p)];
     assert_eq_int(e.grounded, 1);
 }
 
@@ -32,12 +34,13 @@ func t_jump() {
     int steps = 0;
     while (steps < 120) { _s3_physics(0.016667); steps = steps + 1; }  // zemine in
     jump3d(p, 10.0);
-    Ent3 e = _e3[p];
+    int ps = _slot_of3(p);
+    Ent3 e = _e3[ps];
     assert(e.vy > 9.0, "zeminde ziplayinca vy>0");
     // havadayken tekrar zıplama etkisiz
-    e.grounded = 0; _e3[p] = e;
+    e.grounded = 0; _e3[ps] = e;
     jump3d(p, 10.0);
-    Ent3 e2 = _e3[p];
+    Ent3 e2 = _e3[ps];
     assert(e2.vy > 9.0 && e2.vy < 10.1, "havadayken ikinci ziplama etkisiz");
 }
 
@@ -95,13 +98,14 @@ func t_cam_relative_move() {
     // yaw 0 (sabit kameranın açısı): ileri = -Z, yani eski davranış
     camera_look3d(0.0, 0.0);
     move3d(p, 8.0);
-    Ent3 a = _e3[p];
+    int ps = _slot_of3(p);
+    Ent3 a = _e3[ps];
     assert(a.vz < 0.0 - 7.9, "yaw 0'da ileri = -Z");
     assert(abs_f3(a.vx) < 0.01, "yaw 0'da yanal hiz yok");
     // kamerayı 90° çevir: ileri artık +X
     camera_look3d(90.0, 0.0);
     move3d(p, 8.0);
-    Ent3 b = _e3[p];
+    Ent3 b = _e3[ps];
     assert(b.vx > 7.9, "yaw 90'da ileri = +X");
     assert(abs_f3(b.vz) < 0.01, "yaw 90'da Z hizi yok");
     _t_dx = 0.0; _t_dz = 0.0;
@@ -150,6 +154,752 @@ func t_cam_fixed_ignores_look() {
     _t_lx = 0.0; _t_ly = 0.0;
 }
 
+// -- 11) Slot geri kazanımı: ölen entity'nin yeri yeniden kullanılır ---------
+// Asıl derdi bu: eskiden kill3d yalnız alive=0 yapıyordu, slot geri gelmiyordu
+// ve _e3 sonsuza kadar büyüyordu. Mermi/parçacık gelmeden önce kapatılmalıydı.
+func t_slot_reuse() {
+    scene3d_reset();
+    int a = spawn3(0.0, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    int b = spawn3(2.0, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    assert_eq_int(length(_e3), 2);
+    kill3d(a);
+    kill3d(b);
+    // İki slot da boşaldı → sonraki iki spawn store'u BÜYÜTMEMELİ.
+    int c = spawn3(4.0, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    int d = spawn3(6.0, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    assert_eq_int(length(_e3), 2);
+    assert(alive3(c) && alive3(d), "geri kullanilan slottaki entity canli");
+    // Üçüncüsünde boş slot kalmadı → şimdi büyümeli.
+    spawn3(8.0, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    assert_eq_int(length(_e3), 3);
+}
+
+// -- 12) Bayat handle: ölen entity'nin id'si yerine geçeni OYNATMAZ ----------
+// Geri kazanımın tek tehlikeli yanı bu. Ölmüş bir entity'nin handle'ını tutan
+// kod, o slot yeniden kullanıldıktan sonra yanlışlıkla YENİ entity'yi
+// hareket ettirmemeli — generation tam olarak bunun için var.
+func t_stale_handle() {
+    scene3d_reset();
+    int old = spawn3(0.0, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    kill3d(old);
+    int fresh = spawn3(5.0, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    // Aynı slot, farklı kimlik.
+    assert_eq_int(_slot_of3(fresh), 0);
+    assert(old != fresh, "geri kullanilan slot YENI handle almali");
+    assert_eq_int(_slot_of3(old), 0 - 1);   // bayat → çözülmez
+    assert(!alive3(old), "bayat handle canli gorunmemeli");
+    assert(alive3(fresh), "yeni handle canli");
+    // Bayat handle ile yazma denemesi yeni entity'ye DOKUNMAMALI.
+    set3pos(old, 99.0, 99.0, 99.0);
+    assert(abs_f3(get3x(fresh) - 5.0) < 0.001, "bayat handle yeni entity'yi oynatmamali");
+    assert(abs_f3(get3x(old)) < 0.001, "bayat handle okumasi 0 doner");
+    // Çift öldürme ve saçma handle sessizce yutulmalı (çökmemeli).
+    kill3d(old);
+    kill3d(0 - 7);
+    set3vel(123456789, 1.0, 1.0, 1.0);
+    assert(alive3(fresh), "cop handle'lar sahneye zarar vermemeli");
+}
+
+// -- 13) Kamera hedefi ölünce genel görünüme düşer ---------------------------
+// _cam_target artık handle; hedef ölüp slot geri kullanılırsa kamera alakasız
+// bir entity'ye kilitlenmemeli.
+func t_cam_target_stale() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    camera_follow(p, 12.0, 8.0);
+    assert_eq_int(_slot_of3(_cam_target), 0);
+    kill3d(p);
+    assert_eq_int(_slot_of3(_cam_target), 0 - 1);   // hedef bayat → sabit kamera
+    spawn3(9.0, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);  // slot 0
+    assert_eq_int(_slot_of3(_cam_target), 0 - 1);   // yeni entity'ye kilitlenmedi
+}
+
+// -- 14) Çarpışma kancası handle görür (kill3d(other3d()) çalışmaya devam) ---
+func t_hook_handles() {
+    scene3d_reset();
+    spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int it = spawn3(0.0, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    on_hit3d(TAG_PLAYER, TAG_ITEM, _hook_probe_cb);
+    _s3_collision();
+    // Kanca içinde okunan other3d(), spawn3'ün döndürdüğü handle ile AYNI olmalı.
+    assert_eq_int(_probe_other, it);
+    assert(_slot_of3(_probe_me) == 0, "me3d() oyuncunun handle'i");
+    assert(!alive3(it), "kanca kill3d(other3d()) ile oldurebilmeli");
+}
+int _probe_me = 0;
+int _probe_other = 0;
+func _hook_probe_cb() {
+    _probe_me = me3d();
+    _probe_other = other3d();
+    kill3d(other3d());
+}
+
+// ===========================================================================
+// Faz 7 — oynanış paketi: bölüm, düşman AI, mermi, can/hasar
+// ===========================================================================
+
+// -- 15) Can/hasar + dokunulmazlık penceresi --------------------------------
+func t_health_damage() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    health3d(p, 100);
+    assert_eq_int(hp3d(p), 100);
+    damage3d(p, 30);
+    assert_eq_int(hp3d(p), 70);
+    // Dokunulmazlık penceresi açık: ARDIŞIK hasar yok sayılmalı. Bu olmadan
+    // temas eden bir düşman 60 FPS'te saniyede 60 kez vururdu.
+    damage3d(p, 30);
+    assert_eq_int(hp3d(p), 70);
+    // pencere dolunca yine hasar alır
+    int steps = 0;
+    while (steps < 60) { _s3_physics(0.016667); steps = steps + 1; }
+    damage3d(p, 30);
+    assert_eq_int(hp3d(p), 40);
+}
+
+// -- 16) Can bitince ölüm kancası çalışır ve entity ölür --------------------
+func t_death_hook() {
+    scene3d_reset();
+    _died_tag = 0;
+    _died_id = 0 - 1;
+    int e = spawn3(0.0, 1.0, 0.0,  1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    health3d(e, 10);
+    on_death3d(TAG_ENEMY, _death_cb);
+    damage3d(e, 10);
+    assert_eq_int(_died_tag, 1);
+    assert_eq_int(_died_id, e);      // kanca içinde me3d() = ölen
+    assert(!alive3(e), "cani biten entity olmeli");
+}
+int _died_tag = 0;
+int _died_id = 0 - 1;
+func _death_cb() { _died_tag = 1; _died_id = me3d(); }
+
+// -- 17) Mermi: sahibin baktığı yöne çıkar, yerçekimsiz uçar ----------------
+func t_bullet_flight() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    // yaw 0 → ileri = +Z (atan2(x,z) düzeni; move3d ile aynı)
+    int b = bullet3d(p, 20.0, 2.0);
+    assert(alive3(b), "mermi uretilmeli");
+    float z0 = get3z(b);
+    assert(z0 > 0.9, "mermi gövdenin ONUNDE dogmali");
+    float y0 = get3y(b);
+    int steps = 0;
+    while (steps < 6) { _s3_physics(0.016667); steps = steps + 1; }
+    assert(get3z(b) > z0, "mermi ileri gitmeli");
+    assert(abs_f3(get3y(b) - y0) < 0.001, "mermiye yercekimi islememeli");
+}
+
+// -- 18) Mermi ömrü dolunca ölür ve SLOT'U GERI VERIR -----------------------
+// Faz 7'nin ADIM 0'a bagimli oldugu yer tam burasi: omru dolan mermi slot'unu
+// iade etmezse surekli ates eden bir oyunda store sonsuza kadar buyur.
+func t_bullet_expires() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int b = bullet3d(p, 5.0, 0.25);
+    assert_eq_int(length(_e3), 2);
+    int steps = 0;
+    while (steps < 30) { _s3_physics(0.016667); steps = steps + 1; }   // ~0.5 sn
+    assert(!alive3(b), "omru dolan mermi olmeli");
+    // slot iade edildi → yeni mermi store'u BUYUTMEMELI
+    bullet3d(p, 5.0, 1.0);
+    assert_eq_int(length(_e3), 2);
+}
+
+// -- 19) Mermi sahibine çarpmaz ---------------------------------------------
+func t_bullet_not_owner() {
+    scene3d_reset();
+    _bhit = 0;
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    // Mermi oyuncunun hemen onunde dogar; kanca kurulu olsa bile SAHIBINE
+    // carpmamali, yoksa ates eden herkes kendi mermisiyle vurulurdu.
+    int b = bullet3d(p, 0.0, 5.0);      // hiz 0: yerinde dursun, ustuste kalsin
+    set3pos(b, 0.0, 1.0, 0.0);          // tam oyuncunun uzerine tasi
+    on_hit3d(TAG_BULLET, TAG_PLAYER, _bullet_cb);
+    _s3_collision();
+    assert_eq_int(_bhit, 0);
+    // sahibi olmayan bir mermi ise carpar
+    int other = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    int b2 = bullet3d(other, 0.0, 5.0);
+    set3pos(b2, 0.0, 1.0, 0.0);
+    _s3_collision();
+    assert_eq_int(_bhit, 1);
+}
+int _bhit = 0;
+func _bullet_cb() { _bhit = _bhit + 1; }
+
+// -- 20) Düşman AI: takip ve menzil -----------------------------------------
+func t_enemy_chase() {
+    scene3d_reset();
+    int p = spawn3(10.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int e = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    assert(!in_range3d(p, e, 5.0), "10 birim uzak, 5 menzilde degil");
+    assert(in_range3d(p, e, 12.0), "10 birim uzak, 12 menzilde");
+    float x0 = get3x(e);
+    chase3d(e, p, 6.0);
+    int steps = 0;
+    while (steps < 30) { _s3_physics(0.016667); steps = steps + 1; }
+    assert(get3x(e) > x0, "dusman hedefe dogru yaklasmali");
+    assert(get3x(e) < 10.0, "hedefi gecmemeli (bu surede)");
+}
+
+// -- 21) Devriye: uca varinca yon degistirir --------------------------------
+func t_enemy_patrol() {
+    scene3d_reset();
+    int e = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    // 0 -> 4 arasi devriye; ilk yon 2. uca (x=4)
+    int steps = 0;
+    while (steps < 120) {
+        patrol3d(e, 0.0, 0.0, 4.0, 0.0, 8.0);
+        _s3_physics(0.016667);
+        steps = steps + 1;
+    }
+    float xa = get3x(e);
+    assert(xa > 0.0 && xa < 4.5, "devriye iki uc arasinda kalmali");
+    // yeterince kare sonra yon en az bir kez donmus olmali
+    int turned = 0;
+    int s2 = 0;
+    while (s2 < 240) {
+        patrol3d(e, 0.0, 0.0, 4.0, 0.0, 8.0);
+        _s3_physics(0.016667);
+        int sl = _slot_of3(e);
+        Ent3 pe = _e3[sl];
+        if (pe.pdir == 1) { turned = 1; }
+        s2 = s2 + 1;
+    }
+    assert_eq_int(turned, 1);
+}
+
+// -- 22) Bölüm geçişi ERTELENIR: cagirdigin satirda degil, kare sonunda -----
+// Bu testin varlik sebebi: gecis aninda uygulanirsa carpisma dongusunun
+// elindeki slot'lar ayagi altindan cekilir.
+func t_level_deferred() {
+    scene3d_reset();
+    _lvl2_built = 0;
+    level3d(1, _lvl1_setup);
+    level3d(2, _lvl2_setup);
+    _lvl_pending3 = 1;
+    _s3_apply_level();                  // play3d'nin acilisi
+    assert_eq_int(level_now3d(), 1);
+    int before = length(_e3);
+    assert(before > 0, "bolum 1 entity kurmali");
+    next_level3d();                     // ISTEK
+    assert_eq_int(level_now3d(), 1);    // henuz gecmedi
+    assert_eq_int(_lvl2_built, 0);
+    _s3_apply_level();                  // kare sonu
+    assert_eq_int(level_now3d(), 2);
+    assert_eq_int(_lvl2_built, 1);
+}
+int _lvl2_built = 0;
+func _lvl1_setup() {
+    spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    spawn3(3.0, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+}
+func _lvl2_setup() {
+    _lvl2_built = 1;
+    spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+}
+
+// -- 23) Son bolumden sonra KAZANDIN ----------------------------------------
+func t_level_win() {
+    scene3d_reset();
+    level3d(1, _lvl1_setup);
+    _lvl_pending3 = 1;
+    _s3_apply_level();
+    assert(!won3d(), "daha kazanmadi");
+    next_level3d();
+    _s3_apply_level();                  // kayitli bolum 2 yok
+    assert(won3d(), "kayitli bolum bitince kazanildi sayilmali");
+    assert_eq_int(_game_over3, 1);
+}
+
+// -- 24) Bolum gecisi entity'leri siler ama KANCALARI korur -----------------
+func t_level_keeps_hooks() {
+    scene3d_reset();
+    level3d(1, _lvl1_setup);
+    level3d(2, _lvl2_setup);
+    on_hit3d(TAG_PLAYER, TAG_ITEM, _collect_cb);
+    _lvl_pending3 = 1;
+    _s3_apply_level();
+    int hooks_before = length(_hitA);
+    goto_level3d(2);
+    _s3_apply_level();
+    assert_eq_int(length(_hitA), hooks_before);   // kancalar duruyor
+    assert_eq_int(length(_e3), 1);                // sahne bolum 2'nin
+    // Slot sayaclari da sifirlanmali — yeni bolumun ilk entity'si slot 0.
+    assert_eq_int(_slot_of3(_mk_handle3(0)), 0);
+}
+
+// ===========================================================================
+// Faz 8 — "his" katmani: parcacik, karakter animasyonu, konumsal ses
+// ===========================================================================
+
+// -- 25) Parcacik havuzu: uretir, yasar, soner ------------------------------
+func t_particles_life() {
+    scene3d_reset();
+    _s3_particles_clear();
+    particles3d(0.0, 2.0, 0.0, 12, GOLD, 6.0, 0.4);
+    assert_eq_int(length(_pt3life), 12);
+    int alive0 = _pt3_alive_count();
+    assert_eq_int(alive0, 12);
+    // omurler 0.4*(0.65..1.35) araliginda → 1 sn sonra hepsi sonmus olmali
+    int steps = 0;
+    while (steps < 60) { _s3_particles(0.016667); steps = steps + 1; }
+    assert_eq_int(_pt3_alive_count(), 0);
+}
+func _pt3_alive_count(): int {
+    int c = 0;
+    int i = 0;
+    while (i < length(_pt3life)) {
+        if (_pt3life[i] > 0.0) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+
+// -- 26) Havuz slot'lari GERI KULLANILIR (dizi sinirsiz buyumez) ------------
+// Bu testin varlik sebebi: her patlama diziyi buyutseydi, uzun bir oyunda
+// parcacik havuzu bellegi yerdi. Olu slot'lar geri kullanilmali.
+func t_particles_pool_reuse() {
+    scene3d_reset();
+    _s3_particles_clear();
+    particles3d(0.0, 2.0, 0.0, 10, GOLD, 6.0, 0.2);
+    assert_eq_int(length(_pt3life), 10);
+    int steps = 0;
+    while (steps < 60) { _s3_particles(0.016667); steps = steps + 1; }  // hepsi soner
+    assert_eq_int(_pt3_alive_count(), 0);
+    particles3d(0.0, 2.0, 0.0, 10, RED, 6.0, 0.2);
+    assert_eq_int(length(_pt3life), 10);      // BUYUMEDI — slot'lar geri kullanildi
+    assert_eq_int(_pt3_alive_count(), 10);
+}
+
+// -- 27) Havuz tavani asilmaz ----------------------------------------------
+func t_particles_cap() {
+    scene3d_reset();
+    _s3_particles_clear();
+    _PT3_CAP = 40;
+    particles3d(0.0, 2.0, 0.0, 100, GOLD, 6.0, 5.0);   // tavanin ustunde iste
+    assert_eq_int(length(_pt3life), 40);
+    _PT3_CAP = 400;
+}
+
+// -- 28) burst3d entity'nin konumunda patlar --------------------------------
+func t_burst_at_entity() {
+    scene3d_reset();
+    _s3_particles_clear();
+    int e = spawn3(5.0, 3.0, 0.0 - 4.0,  1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    burst3d(e, 6, RED, 5.0, 0.5);
+    assert_eq_int(length(_pt3life), 6);
+    // hepsi entity'nin konumunda dogmali
+    assert(abs_f3(_pt3x[0] - 5.0) < 0.001, "parcacik entity x'inde dogar");
+    assert(abs_f3(_pt3z[0] + 4.0) < 0.001, "parcacik entity z'sinde dogar");
+    // bayat handle ile patlatma sessizce yutulur
+    kill3d(e);
+    burst3d(e, 6, RED, 5.0, 0.5);
+    assert_eq_int(length(_pt3life), 6);
+}
+
+// -- 29) Bolum gecisi parcaciklari temizler ---------------------------------
+func t_particles_cleared_on_level() {
+    scene3d_reset();
+    level3d(1, _lvl1_setup);
+    level3d(2, _lvl2_setup);
+    _lvl_pending3 = 1;
+    _s3_apply_level();
+    particles3d(0.0, 2.0, 0.0, 8, GOLD, 6.0, 9.0);   // uzun omurlu
+    assert(_pt3_alive_count() > 0, "parcaciklar var");
+    goto_level3d(2);
+    _s3_apply_level();
+    assert_eq_int(_pt3_alive_count(), 0);   // onceki bolumun patlamasi tasmaz
+}
+
+// -- 30) Animasyon: motor kare sayacini surer, hiza gore secer --------------
+func t_anim_state() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int s = _slot_of3(p);
+    // anim3d cagrilmadan once: animasyon yok, sayac ilerlemez
+    Ent3 e0 = _e3[s];
+    assert_eq_int(e0.anim_idle, 0 - 1);
+    _s3_physics(0.1);
+    Ent3 e1 = _e3[s];
+    assert(abs_f3(e1.anim_t) < 0.001, "anim3d yokken sayac durur");
+    // bosta 0, kosu 1, 24 fps
+    anim3d(p, 0, 1, 24.0);
+    _s3_physics(0.5);
+    Ent3 e2 = _e3[s];
+    assert(e2.anim_t > 11.0 && e2.anim_t < 13.0, "0.5 sn * 24fps ~ 12 kare");
+    // duruyorken bosta secilir
+    set3vel(p, 0.0, 0.0, 0.0);
+    Ent3 e3 = _e3[s];
+    assert_eq_int(_anim_pick3(e3), 0);
+    // yatayda hareket varsa kosu
+    set3vel(p, 5.0, 0.0, 0.0);
+    Ent3 e4 = _e3[s];
+    assert_eq_int(_anim_pick3(e4), 1);
+}
+
+// -- 31) Konumsal ses: mesafeye gore seviye ---------------------------------
+// play_sound gercek bir ses handle'i ister; burada YALNIZ mesafe->seviye
+// hesabini dogruluyoruz (pencere/ses aygiti yok).
+func t_sound_falloff() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    kamera_takip(p, 12.0, 8.0);
+    sound_range3d(20.0);
+    assert(abs_f3(_snd_vol3(0.0, 1.0, 0.0) - 1.0) < 0.001, "dinleyicide tam ses");
+    assert(abs_f3(_snd_vol3(10.0, 1.0, 0.0) - 0.5) < 0.001, "yari mesafede yari ses");
+    assert(abs_f3(_snd_vol3(50.0, 1.0, 0.0)) < 0.001, "menzil disi sessiz");
+}
+
+// ===========================================================================
+// Faz 9 — dunya geometrisi: kure/kapsul, donen kutu (OBB), rampa, kamera isini
+// ===========================================================================
+
+// -- 32) Kure kutu gibi carpismaz -------------------------------------------
+// Iki birim kurenin KOSE kosesi: AABB'ye gore ortusurler, kureye gore ORTUSMEZ
+// (kose mesafesi 1.27 > yaricap toplami 1.0). Faz 9 oncesi burasi yanlisti.
+func t_sphere_not_box() {
+    scene3d_reset();
+    int a = spawn3(0.0, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    int b = spawn3(0.9, 1.0, 0.9,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    int sa = _slot_of3(a);
+    int sb = _slot_of3(b);
+    assert(_aabb_overlap(sa, sb), "AABB'ye gore ortusuyor (eski davranis)");
+    assert(!_overlap3(sa, sb), "kureye gore ORTUSMEMELI");
+    // merkezler yakinlasinca kureler de carpisir
+    set3pos(b, 0.6, 1.0, 0.0);
+    assert(_overlap3(sa, sb), "yakinlasinca kureler carpisir");
+}
+
+// -- 33) Kure-kutu: en yakin nokta testi ------------------------------------
+func t_sphere_box() {
+    scene3d_reset();
+    int s = spawn3(0.0, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    int b = spawn3(1.4, 1.0, 0.0,  1.0, 1.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int ss = _slot_of3(s); int sb = _slot_of3(b);
+    // kutu sol yuzu x=0.9; kure yaricapi 0.5 → 0.4 bosluk, carpisma yok
+    assert(!_overlap3(ss, sb), "bosluk varken carpisma yok");
+    set3pos(s, 0.5, 1.0, 0.0);
+    assert(_overlap3(ss, sb), "kure kutunun yuzune degince carpisir");
+}
+
+// -- 34) Silindir dikey kapsul gibi davranir --------------------------------
+func t_cylinder_capsule() {
+    scene3d_reset();
+    int a = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, GREEN, SHAPE_CYL, TAG_PROP);
+    int b = spawn3(0.9, 1.0, 0.9,  1.0, 2.0, 1.0, GREEN, SHAPE_CYL, TAG_PROP);
+    int sa = _slot_of3(a); int sb = _slot_of3(b);
+    assert(!_overlap3(sa, sb), "kosegen mesafede silindirler ayrik");
+    // Y'de ayrilinca da carpismamali (dikey aralik)
+    set3pos(b, 0.0, 5.0, 0.0);
+    assert(!_overlap3(sa, sb), "Y'de ayrik silindirler carpismaz");
+    set3pos(b, 0.4, 1.0, 0.0);
+    assert(_overlap3(sa, sb), "yakin ve ayni yukseklikte carpisir");
+}
+
+// -- 35) Donen kutu (OBB/SAT) -----------------------------------------------
+// Uzun ince bir duvar 45 derece dondurulunce, AABB'si kosegeni kapsayacak
+// sekilde SISER. AABB'ye gore carpisan bir nokta, OBB'ye gore carpismayabilir.
+// Merkezi (0,0) olan 10x0.6 duvar 45 derece dondurulur. Donusu YOK SAYAN
+// eksen-hizali test iki yonde de yanilir; SAT ikisini de duzeltir.
+func t_obb_rotated() {
+    scene3d_reset();
+    int wid = spawn3(0.0, 1.0, 0.0,  10.0, 2.0, 0.6, GRAY, SHAPE_CUBE, TAG_WALL);
+    int ws = _slot_of3(wid);
+    Ent3 we = _e3[ws];
+    we.yaw = 45.0;
+    _e3[ws] = we;
+
+    // (a) YANLIS POZITIF: duvar donunce oradan cekildi ama AABB hala "carpisma"
+    //     diyor — oyuncu bos havada gorunmez bir duvara toslardi.
+    int pa = spawn3(3.0, 1.0, 0.3,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int pas = _slot_of3(pa);
+    assert(_aabb_overlap(pas, ws), "donusu yok sayan test carpisma der");
+    assert(!_overlap3(pas, ws), "SAT'a gore AYRIK olmali (yanlis pozitif)");
+    kill3d(pa);
+
+    // (b) YANLIS NEGATIF: oyuncu gercekten donuk duvarin UZERINDE ama AABB
+    //     "carpisma yok" diyor — iste duvarin icinden gecilen durum.
+    int pb = spawn3(2.0, 1.0, 0.0 - 2.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int pbs = _slot_of3(pb);
+    assert(!_aabb_overlap(pbs, ws), "donusu yok sayan test carpismayi KACIRIR");
+    assert(_overlap3(pbs, ws), "SAT gercek yuzeyle carpismayi bulmali");
+}
+
+// -- 36) SAT duvar itmesi oyuncuyu DISARI atar ------------------------------
+// DIKKAT: "artik cakismiyor" demek YETMEZ — ters isaretli bir MTV oyuncuyu
+// duvarin OBUR TARAFINA surer, o da cakismama testini gecer. Bu yuzden itmenin
+// YONU de dogrulanıyor: oyuncu duvardan UZAKLASMALI, icinden gecmemeli.
+func t_obb_push_out() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int w = spawn3(0.3, 1.0, 0.3,  8.0, 2.0, 0.6, GRAY, SHAPE_CUBE, TAG_WALL);
+    int sw = _slot_of3(w);
+    Ent3 ew = _e3[sw];
+    ew.yaw = 45.0;
+    _e3[sw] = ew;
+    assert(_overlap3(_slot_of3(p), sw), "baslangicta ic ice");
+    // Oyuncu duvarin -x/-z tarafinda; itme onu O tarafa dogru goturmeli.
+    float bx = get3x(p);
+    float bz = get3z(p);
+    _s3_collision();
+    assert(!_overlap3(_slot_of3(p), sw), "SAT itmesi sonrasi ayrik olmali");
+    assert(get3x(p) <= bx + 0.001 && get3z(p) <= bz + 0.001,
+           "duvardan UZAGA itilmeli (icinden gecirilmemeli)");
+}
+
+// -- 36b) Duz duvar, YURUYEN oyuncuyu durdurur ------------------------------
+// Gercek oyundaki durum: move3d her karede oyuncunun yaw'ini hareket yonune
+// cevirir, yani duvar carpismasi pratikte HEP donuk (SAT) yoldan gecer. Bu
+// testin varlik sebebi: SAT'in isareti ters oldugunda oyuncu duvarin icine
+// itiliyor ve karsi taraftan cikiyordu.
+func t_moving_player_blocked() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    // +Z'de kalin bir duvar: on yuzu z = 5.5
+    spawn3(0.0, 1.0, 6.0,  20.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    // ileri (+Z) dogru yuru
+    _t_dx = 0.0; _t_dz = 1.0;
+    camera_look3d(0.0, 0.0);
+    int steps = 0;
+    while (steps < 240) {
+        move3d(p, 9.0);
+        _s3_physics(0.016667);
+        _s3_collision();
+        steps = steps + 1;
+    }
+    _t_dx = 0.0; _t_dz = 0.0;
+    float z = get3z(p);
+    // duvar on yuzu 5.5, oyuncu yari derinligi 0.6 → merkez en fazla ~4.9
+    assert(z < 5.0, "oyuncu duvarda durmali (icinden GECMEMELI)");
+    assert(z > 3.5, "duvara kadar gidebilmeli (erken takilmamali)");
+}
+
+// -- 36c) Dusmanlar da duvarlarla carpisir ----------------------------------
+// Eskiden duvar itmesi YALNIZ TAG_PLAYER icin calisiyordu; dusmanlar
+// duvarlarin icinden gecip gidiyordu.
+func t_enemy_blocked_by_wall() {
+    scene3d_reset();
+    int e = spawn3(0.0, 1.0, 0.0,  1.3, 2.0, 1.3, RED, SHAPE_CUBE, TAG_ENEMY);
+    int target = spawn3(0.0, 1.0, 14.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    spawn3(0.0, 1.0, 6.0,  20.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int steps = 0;
+    while (steps < 240) {
+        chase3d(e, target, 6.0);
+        _s3_physics(0.016667);
+        _s3_collision();
+        steps = steps + 1;
+    }
+    assert(get3z(e) < 5.0, "dusman duvarin icinden GECMEMELI");
+}
+
+// -- 36d) Katı gövdeler ic ice GECMEZ (dusman-dusman, oyuncu-dusman) --------
+func t_bodies_dont_overlap() {
+    scene3d_reset();
+    int a = spawn3(0.0, 1.0, 0.0,  1.4, 2.0, 1.4, RED, SHAPE_CUBE, TAG_ENEMY);
+    int b = spawn3(0.3, 1.0, 0.0,  1.4, 2.0, 1.4, RED, SHAPE_CUBE, TAG_ENEMY);
+    assert(_overlap3(_slot_of3(a), _slot_of3(b)), "baslangicta ic ice");
+    int steps = 0;
+    while (steps < 60) { _s3_collision(); _s3_physics(0.016667); steps = steps + 1; }
+    assert(!_overlap3(_slot_of3(a), _slot_of3(b)), "iki dusman ayrilmali");
+    // ikisi de itilmis olmali (biri digerini tek basina surmemeli)
+    assert(get3x(a) < 0.0, "a geriye itilmeli");
+    assert(get3x(b) > 0.3, "b ileriye itilmeli");
+    // oyuncu-dusman de ayni
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int en = spawn3(0.2, 1.0, 0.0,  1.3, 2.0, 1.3, RED, SHAPE_CUBE, TAG_ENEMY);
+    steps = 0;
+    while (steps < 60) { _s3_collision(); _s3_physics(0.016667); steps = steps + 1; }
+    assert(!_overlap3(_slot_of3(p), _slot_of3(en)), "oyuncu ile dusman ic ice gecmemeli");
+}
+
+// -- 36e) Toplanabilirler ve mermiler KATI DEGIL ---------------------------
+// Item itilseydi oyuncu ona degdiginde firlar, toplanamazdi.
+func t_items_not_solid() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int it = spawn3(0.1, 1.0, 0.0,  1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    float ix = get3x(it);
+    int steps = 0;
+    while (steps < 30) { _s3_collision(); _s3_physics(0.016667); steps = steps + 1; }
+    assert(abs_f3(get3x(it) - ix) < 0.001, "item itilmemeli (kati degil)");
+    assert(abs_f3(get3x(p)) < 0.001, "oyuncu da itilmemeli");
+    // solid3d ile katilastirilabilir. Itmenin HANGI eksende olacagi geometriye
+    // baglidir (burada kure oyuncunun ayak hizasinda oldugu icin en sig ayrilma
+    // DIKEY cikiyor) — o yuzden "herhangi bir eksende kimildadi mi" diye bakilir.
+    float iy = get3y(it);
+    float iz = get3z(it);
+    solid3d(it, true);
+    _s3_collision();
+    float moved = abs_f3(get3x(it) - ix) + abs_f3(get3y(it) - iy) + abs_f3(get3z(it) - iz);
+    assert(moved > 0.001, "solid3d sonrasi itilmeli");
+}
+
+// -- 37) Rampa yuzey yuksekligi ---------------------------------------------
+func t_ramp_height() {
+    scene3d_reset();
+    // merkez (0,1,0), 4 genis / 2 yuksek / 8 uzun, yaw 0 → yerel +Z'ye yukselir
+    int r = ramp3d(0.0, 1.0, 0.0,  4.0, 2.0, 8.0, GRAY, 0.0);
+    int sr = _slot_of3(r);
+    float base = 0.0;                       // y - sy/2 = 1 - 1 = 0
+    // alcak uc (z = -4) → taban
+    assert(abs_f3(_ramp_h3(sr, 0.0, 0.0 - 4.0) - base) < 0.01, "alcak uc tabanda");
+    // orta (z = 0) → yarim yukseklik
+    assert(abs_f3(_ramp_h3(sr, 0.0, 0.0) - (base + 1.0)) < 0.01, "ortada yari yukseklik");
+    // yuksek uc (z = 4) → tam yukseklik
+    assert(abs_f3(_ramp_h3(sr, 0.0, 4.0) - (base + 2.0)) < 0.01, "yuksek uc tepede");
+    // ayak izi disi → zemin yok
+    assert(_ramp_h3(sr, 99.0, 0.0) < 0.0 - 1000.0, "ayak izi disinda zemin yok");
+}
+
+// -- 38) Rampada yurumek: dunya artik TEK duz duzlem degil ------------------
+func t_ramp_walk() {
+    scene3d_reset();
+    ramp3d(0.0, 1.0, 0.0,  6.0, 2.0, 8.0, GRAY, 0.0);
+    // oyuncuyu rampanin ortasinin uzerine birak
+    int p = spawn3(0.0, 8.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int steps = 0;
+    while (steps < 180) { _s3_physics(0.016667); steps = steps + 1; }
+    // rampanin ortasinda yuzey y=1.0; oyuncu yari boyu 1.0 → merkez y=2.0
+    assert(abs_f3(get3y(p) - 2.0) < 0.05, "rampanin ustune oturmali (duz zemine DEGIL)");
+    // rampa disinda duz zemine dusmeli
+    set3pos(p, 20.0, 8.0, 20.0);
+    int s2 = 0;
+    while (s2 < 180) { _s3_physics(0.016667); s2 = s2 + 1; }
+    assert(abs_f3(get3y(p) - 1.0) < 0.05, "rampa disinda duz zemin");
+}
+
+// -- 39) Rampa ve duvarlar SABIT: dusmezler ---------------------------------
+func t_static_geometry() {
+    scene3d_reset();
+    int r = ramp3d(0.0, 3.0, 0.0,  4.0, 2.0, 8.0, GRAY, 0.0);
+    int w = spawn3(9.0, 3.0, 0.0,  2.0, 3.0, 2.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int steps = 0;
+    while (steps < 120) { _s3_physics(0.016667); steps = steps + 1; }
+    assert(abs_f3(get3y(r) - 3.0) < 0.001, "rampa dusmez");
+    assert(abs_f3(get3y(w) - 3.0) < 0.001, "duvar dusmez");
+}
+
+// -- 40) Kamera-duvar isini: engel varsa kamera iceri cekilir ---------------
+func t_camera_ray() {
+    scene3d_reset();
+    spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    // acik alanda engel yok → tam mesafe
+    assert(abs_f3(_cam_clear_t3(0.0, 1.0, 0.0,  0.0, 0.0, 10.0) - 1.0) < 0.001,
+           "engel yokken isin serbest");
+    // +Z'de 5 birim otede bir duvar (kalinlik 1 → on yuzu z=4.5)
+    spawn3(0.0, 1.0, 5.0,  6.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    float t = _cam_clear_t3(0.0, 1.0, 0.0,  0.0, 0.0, 10.0);
+    assert(abs_f3(t - 0.45) < 0.01, "duvarin on yuzunde kesilmeli (t=0.45)");
+    // duvarin gerisine bakan isin etkilenmez (ters yon)
+    assert(abs_f3(_cam_clear_t3(0.0, 1.0, 0.0,  0.0, 0.0, 0.0 - 10.0) - 1.0) < 0.001,
+           "ters yonde duvar yok");
+}
+
+// ===========================================================================
+// Faz 10 — gercek arazi (heightmap)
+// ===========================================================================
+// Arazi mesh'i GPU'ya yuklendigi icin pencere ister, AMA yukseklik verisi saf
+// CPU'da tutuluyor: fizik burada pencere ACMADAN surulebiliyor. Bu ayrim
+// bilincli (bkz. tame_terrain_build) ve bu testlerin var olma sebebi.
+
+// -- 41) Arazi yuksekligi: taban, sinir disi, sureklilik -------------------
+func t_terrain_height() {
+    scene3d_reset();
+    zemin3(0.0);
+    // 33x33 cozunurluk, 64x64 ayak izi, 10 birim en yuksek tepe
+    terrain3d(33, 64.0, 10.0, 64.0, 4.0, 1234);
+    // Ayak izi DISINDA taban Y donmeli (duz zemin gibi davranir)
+    assert(abs_f3(terrain_height3d(500.0, 0.0)) < 0.001, "sinir disinda taban");
+    assert(abs_f3(terrain_height3d(0.0, 0.0 - 500.0)) < 0.001, "sinir disinda taban (z)");
+    // Iceride: 0 ile sy arasinda olmali
+    float h = terrain_height3d(0.0, 0.0);
+    assert(h >= 0.0 && h <= 10.0, "yukseklik 0..sy araliginda");
+    // Sureklilik: cok yakin iki nokta cok yakin yukseklik vermeli.
+    // (Ucgen ici dogrusal interpolasyon → sicrama olmamali.)
+    float a = terrain_height3d(3.0, 3.0);
+    float b = terrain_height3d(3.02, 3.0);
+    assert(abs_f3(a - b) < 0.35, "arazi surekli olmali (sicrama yok)");
+}
+
+// -- 42) Arazi gercekten DUZ DEGIL ----------------------------------------
+// Bu testin varlik sebebi: tum ornekleme yolu sessizce taban Y donduruyor
+// olsaydi yukaridaki testlerin hepsi yine gecerdi.
+func t_terrain_not_flat() {
+    scene3d_reset();
+    zemin3(0.0);
+    terrain3d(65, 80.0, 12.0, 80.0, 5.0, 99);
+    float lo = 99999.0;
+    float hi = 0.0 - 99999.0;
+    int i = 0;
+    while (i < 40) {
+        float px = 0.0 - 35.0 + i * 1.75;
+        float hh = terrain_height3d(px, px * 0.4);
+        if (hh < lo) { lo = hh; }
+        if (hh > hi) { hi = hh; }
+        i = i + 1;
+    }
+    assert(hi - lo > 0.5, "arazide gercek yukseklik farki olmali");
+    assert(hi <= 12.001, "tepe sy'yi asmamali");
+    assert(lo >= 0.0 - 0.001, "cukur tabanin altina inmemeli");
+}
+
+// -- 43) Fizik araziye oturur (duz zemine DEGIL) ---------------------------
+func t_terrain_physics() {
+    scene3d_reset();
+    zemin3(0.0);
+    terrain3d(33, 64.0, 10.0, 64.0, 4.0, 7);
+    // Yuksek bir tepe noktasi bul
+    float bestx = 0.0;
+    float besth = 0.0 - 1.0;
+    int i = 0;
+    while (i < 30) {
+        float px = 0.0 - 25.0 + i * 1.7;
+        float hh = terrain_height3d(px, 0.0);
+        if (hh > besth) { besth = hh; bestx = px; }
+        i = i + 1;
+    }
+    assert(besth > 0.3, "test icin belirgin bir tepe bulunmali");
+    int p = spawn3(bestx, 40.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int steps = 0;
+    while (steps < 300) { _s3_physics(0.016667); steps = steps + 1; }
+    // yari boy 1.0 → merkez = yuzey + 1.0
+    assert(abs_f3(get3y(p) - (besth + 1.0)) < 0.05, "oyuncu ARAZI yuzeyine oturmali");
+    assert(get3y(p) > 1.05, "duz zemine oturmus olamaz (tepe var)");
+}
+
+// -- 44) Rampa arazinin USTUNE binebilir ----------------------------------
+func t_terrain_with_ramp() {
+    scene3d_reset();
+    zemin3(0.0);
+    terrain3d(33, 64.0, 6.0, 64.0, 4.0, 3);
+    float ground = terrain_height3d(0.0, 0.0);
+    // Arazinin epey ustune bir rampa koy
+    ramp3d(0.0, ground + 5.0, 0.0,  6.0, 2.0, 8.0, GRAY, 0.0);
+    float f = zemin_yukseklik3d(0.0, 0.0);
+    // rampanin ortasi: taban(ground+4) + yarim yukseklik(1) = ground+5
+    assert(abs_f3(f - (ground + 5.0)) < 0.01, "rampa arazinin ustune biner");
+    // Rampanin ayak izi disinda yine arazi gecerli
+    float f2 = zemin_yukseklik3d(25.0, 25.0);
+    assert(abs_f3(f2 - terrain_height3d(25.0, 25.0)) < 0.001, "rampa disinda arazi");
+}
+
+// -- 45) Arazi kapatilinca duz zemine donulur ------------------------------
+func t_terrain_off() {
+    scene3d_reset();
+    zemin3(0.0);
+    terrain3d(33, 64.0, 10.0, 64.0, 4.0, 55);
+    terrain_off3d_scene();
+    assert(abs_f3(_floor_at3(3.0, 3.0)) < 0.001, "arazi kapali → duz zemin");
+    // reset de temizlemeli
+    terrain3d(33, 64.0, 10.0, 64.0, 4.0, 55);
+    scene3d_reset();
+    zemin3(0.0);
+    assert(abs_f3(_floor_at3(3.0, 3.0)) < 0.001, "reset araziyi birakir");
+}
+
 print("=== scene3d motor testleri ===");
 test("yercekimi + zemin", "t_gravity_ground");
 test("ziplama (yalniz zeminde)", "t_jump");
@@ -161,4 +911,446 @@ test("hareket kameraya gore", "t_cam_relative_move");
 test("yorunge kamerasi sabitle ayni baslar", "t_cam_orbit_init");
 test("bakis girdisi + sinirlar", "t_cam_look_clamp");
 test("sabit kamera bakisi yok sayar", "t_cam_fixed_ignores_look");
+test("slot geri kazanimi", "t_slot_reuse");
+test("bayat handle yeni entity'yi oynatmaz", "t_stale_handle");
+test("olen kamera hedefi genel gorunume duser", "t_cam_target_stale");
+test("carpisma kancasi handle gorur", "t_hook_handles");
+test("can + hasar + dokunulmazlik", "t_health_damage");
+test("olum kancasi", "t_death_hook");
+test("mermi ucusu (yercekimsiz)", "t_bullet_flight");
+test("mermi omru dolunca slot iade", "t_bullet_expires");
+test("mermi sahibine carpmaz", "t_bullet_not_owner");
+test("dusman takibi + menzil", "t_enemy_chase");
+test("devriye yon degistirir", "t_enemy_patrol");
+test("bolum gecisi ertelenir", "t_level_deferred");
+test("son bolumden sonra kazandin", "t_level_win");
+test("bolum gecisi kancalari korur", "t_level_keeps_hooks");
+test("parcacik omru + sonme", "t_particles_life");
+test("parcacik havuzu slot geri kullanir", "t_particles_pool_reuse");
+test("parcacik havuz tavani", "t_particles_cap");
+test("burst3d entity konumunda", "t_burst_at_entity");
+test("bolum gecisi parcaciklari temizler", "t_particles_cleared_on_level");
+test("animasyon sayaci + bosta/kosu secimi", "t_anim_state");
+test("konumsal ses mesafe sonumu", "t_sound_falloff");
+test("kure kutu gibi carpismaz", "t_sphere_not_box");
+test("kure-kutu en yakin nokta", "t_sphere_box");
+test("silindir dikey kapsul", "t_cylinder_capsule");
+test("donen kutu (OBB/SAT)", "t_obb_rotated");
+test("SAT duvar itmesi (yonlu)", "t_obb_push_out");
+test("yuruyen oyuncu duvarda durur", "t_moving_player_blocked");
+test("dusman duvardan gecmez", "t_enemy_blocked_by_wall");
+test("kati govdeler ic ice gecmez", "t_bodies_dont_overlap");
+test("item/mermi kati degil", "t_items_not_solid");
+test("rampa yuzey yuksekligi", "t_ramp_height");
+test("rampada yurumek", "t_ramp_walk");
+test("rampa/duvar sabit (dusmez)", "t_static_geometry");
+test("kamera-duvar isini", "t_camera_ray");
+test("arazi yuksekligi + sinirlar", "t_terrain_height");
+test("arazi gercekten duz degil", "t_terrain_not_flat");
+test("fizik araziye oturur", "t_terrain_physics");
+test("rampa arazinin ustune biner", "t_terrain_with_ramp");
+test("arazi kapatilinca duz zemin", "t_terrain_off");
+// -- Geniş faz (broad phase) -------------------------------------------------
+// Çarpışma artık her çift için _overlap3/_mtv3 zincirini çağırmıyor: önce
+// kapsayan kürelere bakıp uzak çiftleri eliyor (ölçüm: 200 entity'de 15.4 ms →
+// 1.12 ms). Bu optimizasyonun BOZULABİLECEĞİ tek yer elemenin fazla hevesli
+// olması — o yüzden asıl değişmezi doğrudan test ediyoruz:
+//
+//     _bp_far3(a, b) == true  ⟹  _overlap3(a, b) == false
+//
+// Yani eleme yalnız "kesin çakışmıyor" diyebilir. Karışık şekil/boyut/yaw
+// üzerinde TÜM çiftler taranıyor; kapsayan küre matematiği (köşegen yarısı)
+// kutu, küre, silindir ve DÖNÜK kutu için ayrı ayrı burada sınanmış oluyor.
+func t_broadphase_conservative() {
+    scene3d_reset();
+    // Bilerek yakın aralıklı, iç içe geçen, farklı şekil ve boyutlarda bir yığın
+    int i = 0;
+    while (i < 24) {
+        float x = toFloat(mod(i * 5, 11)) - 5.0;
+        float z = toFloat(mod(i * 3, 7)) - 3.0;
+        float s = 0.5 + toFloat(mod(i, 4)) * 0.7;
+        int shape = SHAPE_CUBE;
+        if (mod(i, 3) == 1) { shape = SHAPE_SPHERE; }
+        if (mod(i, 3) == 2) { shape = SHAPE_CYL; }
+        int id = spawn3(x, 1.0 + toFloat(mod(i, 3)), z, s, s * 1.6, s,
+                        RED, shape, TAG_ENEMY);
+        // Her üçüncüsünü döndür: OBB/SAT yolu da elemenin altına girsin.
+        if (mod(i, 3) == 0) { set3yaw(id, toFloat(i * 17)); }
+        i = i + 1;
+    }
+    _bp_build3();
+    int n = length(_e3);
+    int violations = 0;
+    int pairs = 0;
+    int a = 0;
+    while (a < n) {
+        int b = 0;
+        while (b < n) {
+            if (a != b) {
+                pairs = pairs + 1;
+                if (_bp_far3(a, b) && _overlap3(a, b)) { violations = violations + 1; }
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    assert(pairs > 500, "anlamli sayida cift taranmali");
+    assert_eq_int(violations, 0);   // eleme ASLA gercek cakismayi atmamali
+}
+
+// Eleme korumalı olsa da hiçbir şey elemiyorsa optimizasyon yoktur. Dağınık bir
+// sahnede çiftlerin ezici çoğunluğu elenmeli — bu testin asıl işi, birinin
+// _bp_far3'ü sessizce `false` döndürecek şekilde bozmasını yakalamak.
+func t_broadphase_prunes() {
+    scene3d_reset();
+    int i = 0;
+    while (i < 30) {
+        spawn3(toFloat(mod(i * 7, 40)) - 20.0, 1.0, toFloat(mod(i * 13, 40)) - 20.0,
+               1.0, 2.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+        i = i + 1;
+    }
+    _bp_build3();
+    int n = length(_e3);
+    int far = 0;
+    int pairs = 0;
+    int a = 0;
+    while (a < n) {
+        int b = a + 1;
+        while (b < n) {
+            pairs = pairs + 1;
+            if (_bp_far3(a, b)) { far = far + 1; }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    assert(far * 10 > pairs * 8, "dagink sahnede ciftlerin %80+'i elenmeli");
+}
+
+// Ayırma çözümü entity'yi TARAMA SÜRERKEN oynatıyor. _apply_mtv3 geniş faz
+// konumunu tazelemezse, itilmiş bir gövde aynı karedeki sonraki çiftlerde eski
+// yerinden değerlendirilir ve gerçek bir çarpışma kaçar. Burada onu sabitliyoruz:
+// itmeden sonra düz dizideki konum entity'nin gerçek konumuyla aynı olmalı.
+func t_broadphase_sync_after_push() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    _bp_build3();
+    int s = _slot_of3(p);
+    _apply_mtv3(s, 3.0, 0.0, 0.0 - 2.0);
+    assert(abs_f3(_bx[s] - get3x(p)) < 0.0001, "itmeden sonra _bx tazelenmeli");
+    assert(abs_f3(_bz[s] - get3z(p)) < 0.0001, "itmeden sonra _bz tazelenmeli");
+    // set3pos (kanca icinden isinlanma) da senkron tutmali
+    set3pos(p, 0.0 - 7.0, 1.0, 9.0);
+    assert(abs_f3(_bx[s] - (0.0 - 7.0)) < 0.0001, "set3pos _bx'i tazelemeli");
+    assert(abs_f3(_bz[s] - 9.0) < 0.0001, "set3pos _bz'yi tazelemeli");
+}
+
+// -- Menü / UI katmanı -------------------------------------------------------
+// Durum makinesi pencereden bağımsız: menu3d/pause3d/restart3d saf durum
+// değiştiriyor, çizim ayrı. O yüzden headless sürülebiliyor — düğmelerin
+// GÖRÜNÜŞÜ ekran testinin işi, ama hangi durumun neye geçtiği burada sabitlenir.
+
+func t_ui_default_is_play() {
+    scene3d_reset();
+    // menu3d() çağrılmayan sahne doğrudan oyuna girer — eski davranış korunuyor.
+    assert_eq_bool(paused3d(), false);
+    assert_eq_int(_s3_ui, UI_NONE);
+}
+
+func t_ui_title_opt_in() {
+    scene3d_reset();
+    menu3d("Test", "alt");
+    assert_eq_int(_s3_ui, UI_TITLE);
+    assert_eq_int(_s3_title_step(), 0);      // girdi yokken bekler
+}
+
+func t_ui_pause_resume() {
+    scene3d_reset();
+    pause3d();
+    assert_eq_bool(paused3d(), true);
+    resume3d();
+    assert_eq_bool(paused3d(), false);
+}
+
+// Biten oyun duraklatılamaz: duraklat örtüsü oyun-bitti örtüsünü gizlerdi ve
+// oyuncu "Tekrar Oyna"ya ulaşamazdı.
+func t_ui_no_pause_when_over() {
+    scene3d_reset();
+    game_over3d();
+    pause3d();
+    assert_eq_bool(paused3d(), false);
+}
+
+// Bölüm kaydedilmiş sahnede yeniden başlamak EN KÜÇÜK bölüme döner ve
+// skoru/oyun-bitti durumunu sıfırlar.
+int _t_lvl_hits = 0;
+func _t_lvl_a() { _t_lvl_hits = _t_lvl_hits + 1;
+                  spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PLAYER); }
+func _t_lvl_b() { spawn3(5.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY); }
+
+func t_ui_restart_with_levels() {
+    scene3d_reset();
+    _t_lvl_hits = 0;
+    level3d(1, _t_lvl_a);
+    level3d(2, _t_lvl_b);
+    goto_level3d(2);
+    _s3_apply_level();
+    score3d_add(500);
+    game_over3d();
+
+    restart3d();
+    assert_eq_int(level_now3d(), 1);          // en kucuk bolume dondu
+    assert_eq_int(score3d(), 0);              // skor sifirlandi
+    assert_eq_bool(is_over3d(), false);       // oyun-bitti temizlendi
+    assert_eq_int(_t_lvl_hits, 1);            // 1. bolum kurulum fn'i kostu
+}
+
+// Bölümsüz sahnede motor `setup`u tek başına tekrarlayamaz (setup kancaları da
+// kaydediyor, ikinci çalıştırma onları çoğaltırdı) — o boşluğu on_restart3d
+// dolduruyor. Kanca çağrılmalı ve entity store temizlenmiş olmalı.
+int _t_re_hits = 0;
+func _t_re_build() { _t_re_hits = _t_re_hits + 1;
+                     spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER); }
+
+func t_ui_restart_hook_without_levels() {
+    scene3d_reset();
+    _t_re_hits = 0;
+    on_restart3d(_t_re_build);
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    spawn3(2.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    score3d_add(70);
+    game_over3d();
+
+    restart3d();
+    assert_eq_int(_t_re_hits, 1);
+    assert_eq_int(alive_count3d(), 1);        // eski entity'ler gitti, kanca 1 tane kurdu
+    assert_eq_int(score3d(), 0);
+    assert_eq_bool(is_over3d(), false);
+}
+
+// Kanca da bölüm de yoksa restart yalnız skoru/durumu sıfırlar ve sahneye
+// dokunmaz. Belgelenmiş sınır; sessizce entity silmemeli.
+func t_ui_restart_bare() {
+    scene3d_reset();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    score3d_add(30);
+    game_over3d();
+
+    restart3d();
+    assert_eq_int(score3d(), 0);
+    assert_eq_bool(is_over3d(), false);
+    assert_eq_int(alive_count3d(), 1);        // sahne yerinde
+}
+
+func t_ui_quit_flag() {
+    scene3d_reset();
+    assert_eq_int(_s3_quit, 0);
+    quit3d();
+    assert_eq_int(_s3_quit, 1);
+    scene3d_reset();
+    assert_eq_int(_s3_quit, 0);               // reset cikis istegini de temizler
+}
+
+// Düğme isabet testi: merkez içeride, kenarların dışı dışarıda olmalı.
+func t_ui_button_hit() {
+    scene3d_reset();
+    float bx = _s3_btn_x(); float by = _s3_btn_y(0);
+    float bw = _s3_btn_w(); float bh = _s3_btn_h();
+    assert_eq_bool(_s3_btn_hit(0, bx + bw * 0.5, by + bh * 0.5), true);
+    assert_eq_bool(_s3_btn_hit(0, bx - 5.0, by + bh * 0.5), false);
+    assert_eq_bool(_s3_btn_hit(0, bx + bw * 0.5, by - 5.0), false);
+    // Düğmeler üst üste binmemeli, yoksa tek dokunuş ikisini birden tetikler.
+    assert_eq_bool(_s3_btn_hit(1, bx + bw * 0.5, by + bh * 0.5), false);
+}
+
+// -- Arazi eğimi: normal, sınır, kayma ---------------------------------------
+// Normal MEVCUT örnekleyiciden merkezi farkla türetiliyor (ayrı C binding'i
+// yok), o yüzden burada sınanan şey doğrudan o türetmenin doğruluğu.
+
+func t_terrain_normal_flat() {
+    scene3d_reset();
+    zemin3(0.0);
+    // Arazi YOKKEN normal her yerde yukarı olmalı; eğim mantığı düz zemini
+    // yanlışlıkla "dik" saymamalı.
+    assert(terrain_up3d(0.0, 0.0) > 0.999, "arazi yokken duzluk 1.0");
+    slope_limit3d(45.0);
+    assert_eq_bool(terrain_steep3d(0.0, 0.0), false);
+}
+
+// Gerçek arazide: tepe eteği yamacı, tepe/çukur dibi düz olmalı. Tüm ayak izini
+// tarayıp en dik ve en düz noktaları buluyoruz — hangi tohumun nerede tepe
+// yaptığına bağlanmadan.
+func t_terrain_normal_slope() {
+    scene3d_reset();
+    zemin3(0.0);
+    arazi3d(65, 80.0, 22.0, 80.0, 3.0, 20260806);
+
+    float min_up = 2.0;
+    float max_up = 0.0;
+    int i = 0;
+    while (i < 40) {
+        int j = 0;
+        while (j < 40) {
+            float x = 0.0 - 38.0 + i * 1.9;
+            float z = 0.0 - 38.0 + j * 1.9;
+            float u = terrain_up3d(x, z);
+            if (u < min_up) { min_up = u; }
+            if (u > max_up) { max_up = u; }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    // Normal birim vektör: Y bileşeni 0..1 aralığında kalmalı.
+    assert(min_up >= 0.0 && max_up <= 1.0001, "normal birim olmali");
+    // Tepeli arazide hem yamaç hem duze yakin nokta bulunmali.
+    assert(min_up < 0.98, "yamac bulunmali (en dik nokta duz degil)");
+    assert(max_up > 0.995, "duze yakin nokta bulunmali");
+}
+
+// Sınır KAPALI (varsayılan) iken eski davranış: dik yamaçta bile kayma yok.
+func t_slope_limit_off_by_default() {
+    scene3d_reset();
+    zemin3(0.0);
+    arazi3d(65, 80.0, 26.0, 80.0, 2.2, 7);
+    int p = spawn3(6.0, 40.0, 6.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int s = _slot_of3(p);
+    int k = 0;
+    while (k < 200) { _s3_physics(0.016667); k = k + 1; }   // zemine in
+    Ent3 e0 = _e3[s];
+    assert_eq_int(e0.grounded, 1);
+    float vx0 = e0.vx; float vz0 = e0.vz;
+    k = 0;
+    while (k < 60) { _s3_physics(0.016667); k = k + 1; }
+    Ent3 e1 = _e3[s];
+    assert(abs_f3(e1.vx - vx0) < 0.0001, "sinir kapaliyken yatay hiz degismez");
+    assert(abs_f3(e1.vz - vz0) < 0.0001, "sinir kapaliyken yatay hiz degismez");
+}
+
+// Sınır AÇIKKEN dik yamaçta duran entity aşağı kaymalı — ve YÖNÜ yamaç aşağı
+// olmalı. "Hız oluştu" demek yetmez: ters yöne kaysa da hız oluşurdu.
+//
+// İlk yazdığım hâli "bitiş zemini başlangıçtan alçak" diye ölçüyordu ve kayma
+// yönünü TERSİNE çevirince bile geçiyordu: entity yamaç yukarı kayıp arazinin
+// AYAK İZİNDEN çıkıyor, dışarıda yükseklik taban 0'a dönüyor ve "alçaldı"
+// sanılıyordu. O yüzden burada yön DOĞRUDAN ölçülüyor — hareket vektörünün
+// yamaç-aşağı yönüyle iç çarpımı pozitif olmalı — ve entity'nin ayak izinde
+// kaldığı ayrıca sabitleniyor.
+func t_slope_slide_downhill() {
+    scene3d_reset();
+    zemin3(0.0);
+    arazi3d(65, 80.0, 30.0, 80.0, 2.0, 99);
+    slope_limit3d(25.0);      // bilerek dusuk: arazinin cogu "dik" sayilsin
+
+    // En dik noktayı bul — kenardan UZAK dur ki kayma ayak izinden çıkmasın.
+    float bx = 0.0; float bz = 0.0; float worst = 2.0;
+    int i = 0;
+    while (i < 24) {
+        int j = 0;
+        while (j < 24) {
+            float x = 0.0 - 23.0 + i * 2.0;
+            float z = 0.0 - 23.0 + j * 2.0;
+            float u = terrain_up3d(x, z);
+            if (u < worst) { worst = u; bx = x; bz = z; }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    assert(worst < _slope_cos3, "test icin yeterince dik bir nokta bulunmali");
+
+    int p = spawn3(bx, arazi_yukseklik3d(bx, bz) + 1.0, bz,
+                   1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int s = _slot_of3(p);
+    int k = 0;
+    while (k < 30) { _s3_physics(0.016667); k = k + 1; }   // otur
+
+    float x0 = get3x(p); float z0 = get3z(p);
+    float h0 = arazi_yukseklik3d(x0, z0);
+    // Bu noktadaki yamaç-aşağı yönü: normalin yatay bileşeni.
+    _terrain_normal3(x0, z0);
+    float ndx = _tn_x; float ndz = _tn_z;
+    float nl = sqrt(ndx * ndx + ndz * ndz);
+    assert(nl > 0.0001, "yamacta yatay normal bileseni olmali");
+    ndx = ndx / nl; ndz = ndz / nl;
+
+    k = 0;
+    while (k < 45) { _s3_physics(0.016667); k = k + 1; }
+
+    float x1 = get3x(p); float z1 = get3z(p);
+    float mvx = x1 - x0; float mvz = z1 - z0;
+    Ent3 e = _e3[s];
+    assert(abs_f3(e.vx) + abs_f3(e.vz) > 0.5, "dik yamacta kayma hizi olusmali");
+    // ASIL SART: hareket yamac-asagi yonuyle ayni tarafta olmali.
+    assert(mvx * ndx + mvz * ndz > 0.1, "kayma YAMAC ASAGI yonunde olmali");
+    // Ayak izinde kalmali, yoksa yukseklik karsilastirmasi anlamsizlasir.
+    assert(abs_f3(x1) < 39.0 && abs_f3(z1) < 39.0, "arazi ayak izinde kalmali");
+    assert(arazi_yukseklik3d(x1, z1) < h0, "zemin gercekten alcalmali");
+}
+
+// Düz zeminde sınır açık olsa bile kayma olmamalı.
+func t_slope_no_slide_on_flat() {
+    scene3d_reset();
+    zemin3(0.0);
+    slope_limit3d(25.0);
+    int p = spawn3(0.0, 5.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int s = _slot_of3(p);
+    int k = 0;
+    while (k < 200) { _s3_physics(0.016667); k = k + 1; }
+    Ent3 e = _e3[s];
+    assert(abs_f3(e.vx) < 0.0001 && abs_f3(e.vz) < 0.0001, "duz zeminde kayma yok");
+}
+
+// -- Kamera ışını araziyi görüyor --------------------------------------------
+// Eskiden yalnız TAG_WALL kutuları taranıyordu; arazi bir kutu olmadığı için
+// kamera tepenin içine girebiliyordu.
+func t_camera_ray_sees_terrain() {
+    scene3d_reset();
+    zemin3(0.0);
+    arazi3d(65, 80.0, 30.0, 80.0, 2.0, 4242);
+
+    // Tepe noktasını bul; ışını onun İÇİNDEN geçir.
+    float hx = 0.0; float hz = 0.0; float hbest = 0.0 - 10000.0;
+    int i = 0;
+    while (i < 30) {
+        int j = 0;
+        while (j < 30) {
+            float x = 0.0 - 30.0 + i * 2.0;
+            float z = 0.0 - 30.0 + j * 2.0;
+            float h = arazi_yukseklik3d(x, z);
+            if (h > hbest) { hbest = h; hx = x; hz = z; }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    assert(hbest > 2.0, "test icin belirgin bir tepe bulunmali");
+
+    // Tepenin bir yanından öbür yanına, tepe seviyesinin ALTINDAN geçen ışın:
+    // araziye çarpmalı, yani t < 1.0 dönmeli.
+    float y = hbest * 0.4;
+    float ox = hx - 14.0;
+    float dx = 28.0;
+    float t = _cam_clear_t3(ox, y, hz, dx, 0.0, 0.0);
+    assert(t < 1.0, "tepenin icinden gecen isin engellenmeli");
+
+    // Tepenin ÇOK üstünden geçen ışın serbest kalmalı (yanlış pozitif olmasın).
+    float t2 = _cam_clear_t3(ox, hbest + 25.0, hz, dx, 0.0, 0.0);
+    assert(t2 > 0.999, "tepenin ustunden gecen isin serbest olmali");
+}
+
+test("genis faz elemesi korumali", "t_broadphase_conservative");
+test("genis faz gercekten eliyor", "t_broadphase_prunes");
+test("genis faz itmeden sonra taze", "t_broadphase_sync_after_push");
+test("UI varsayilani dogrudan oyun", "t_ui_default_is_play");
+test("baslangic ekrani opt-in", "t_ui_title_opt_in");
+test("duraklat/devam", "t_ui_pause_resume");
+test("biten oyun duraklatilamaz", "t_ui_no_pause_when_over");
+test("bolumlu yeniden baslatma", "t_ui_restart_with_levels");
+test("bolumsuz yeniden baslatma kancasi", "t_ui_restart_hook_without_levels");
+test("kancasiz yeniden baslatma sahneye dokunmaz", "t_ui_restart_bare");
+test("cikis bayragi", "t_ui_quit_flag");
+test("dugme isabet testi", "t_ui_button_hit");
+test("arazi yokken normal yukari", "t_terrain_normal_flat");
+test("arazi normali yamaci gorur", "t_terrain_normal_slope");
+test("egim siniri varsayilan kapali", "t_slope_limit_off_by_default");
+test("dik yamacta yamac asagi kayma", "t_slope_slide_downhill");
+test("duz zeminde kayma yok", "t_slope_no_slide_on_flat");
+test("kamera isini araziyi goruyor", "t_camera_ray_sees_terrain");
 test_summary();

@@ -221,3 +221,4 @@ test("typed struct: function arg passes by value (caller intact)",
      "struct_arg_pass_by_value");
 test("typed struct: chained struct returns preserve originals",
      "struct_return_chain");
+test_summary();

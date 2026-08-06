@@ -101,6 +101,54 @@ echo ""
 # ============================================
 # Build
 # ============================================
+# ---------------------------------------------------------------------------
+# ./build.sh suites — tests/*.test.tpr regresyon paketlerini koşar.
+#
+# `./build.sh test` YALNIZ examples/ üzerinde dolaşır ve orada tek ölçüt çıkış
+# kodudur. tests/ altındaki gömülü `test` kitaplığını kullanan paketler
+# (jest tarzı assert'ler) uzun süre HİÇBİR otomasyonda koşmadı — CI'da da,
+# build.sh'de de. 2026-08-04'te `assert` fonksiyonunun bool koşullarda hiçbir
+# zaman başarısız olmadığı ortaya çıktı; hata tam olarak bu körlükte yaşadı,
+# çünkü paketler elle koşulduğunda yeşil görünüyordu ve hiçbir şey onları
+# sürekli doğrulamıyordu. Bu hedef o boşluğu kapatıyor.
+#
+# Ölçüt çıkış kodu: test_summary() başarısızlıkta exit(1) çağırıyor. Özet
+# çağırmayan bir paket ASLA kırmızı olamaz, o yüzden aşağıda `Tests:` satırı
+# olmayan paket de hata sayılıyor — sessizce yutulmasın.
+if [ "$ACTION" = "suites" ]; then
+    if [ ! -x "./tulpar" ]; then
+        echo -e "${RED}ERROR: ./tulpar yok — önce ./build.sh çalıştırın.${NC}"
+        exit 1
+    fi
+    SUITE_FAILED=0
+    SUITE_N=0
+    for suite in tests/*.test.tpr; do
+        [ -f "$suite" ] || continue
+        SUITE_N=$((SUITE_N + 1))
+        name=$(basename "$suite")
+        out=$(DISPLAY= timeout 180 ./tulpar "$suite" 2>&1)
+        code=$?
+        summary=$(echo "$out" | grep -E '^Tests:' | tail -1)
+        if [ $code -ne 0 ]; then
+            printf "%-42s ${RED}FAIL${NC} %s\n" "$name" "$summary"
+            echo "$out" | grep -E 'FAIL|hata|error' | head -8 | sed 's/^/    /'
+            SUITE_FAILED=1
+        elif [ -z "$summary" ]; then
+            printf "%-42s ${RED}FAIL${NC} (test_summary() cagirmiyor — cikis kodu uretmiyor)\n" "$name"
+            SUITE_FAILED=1
+        else
+            printf "%-42s ${GREEN}PASS${NC} %s\n" "$name" "$summary"
+        fi
+    done
+    echo ""
+    if [ $SUITE_FAILED -ne 0 ]; then
+        echo -e "${RED}Some suites failed!${NC} ($SUITE_N paket)"
+        exit 1
+    fi
+    echo -e "${GREEN}All $SUITE_N suites passed!${NC}"
+    exit 0
+fi
+
 if [ "$ACTION" = "test" ]; then
     # Ensure tulpar exists
     if [ ! -f "tulpar" ]; then
@@ -155,6 +203,7 @@ if [ "$ACTION" = "test" ]; then
                         "tame3d_models.tpr" "tame3d_anim.tpr" "tame3d_lights.tpr" \
                         "tame3d_shadows.tpr" "tame3d_texture.tpr" \
                         "scene3d_collector.tpr" "scene3d_camera.tpr" \
+                        "scene3d_arena.tpr" "scene3d_terrain.tpr" \
                         "41_struct_entities.tpr")
     # tame_*.tpr: display'li makinede pencere açıp kullanıcı kapatana
     # dek bloklar (headless'ta zarif hata ile hemen çıkar) — deterministik
