@@ -1657,15 +1657,32 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   bu boşlukta doğdu. Artık typecheck yakalıyor, ama asıl çözüm codegen'de
   parametre bağlamayı store ile aynı hale getirmek olurdu.
 
-- 🟡 **Codegen: fonksiyon yereli aynı adlı GLOBAL'i eziyor.** Açık hata,
-  düzeltilmedi:
+- ✅ **Codegen: fonksiyon yereli aynı adlı GLOBAL'i eziyordu (düzeltildi
+  2026-08-06).**
   ```tulpar
   func inner() { int p = 0; while (p < 5) { p = p + 1; } }
-  int p = 99;  inner();  print(p);   // 99 değil, 5
+  int p = 99;  inner();  print(p);   // 99 değil, 5 yazıyordu
   ```
-  Fonksiyondan fonksiyona yereller izole; sorun yalnız üst-düzey global ile.
-  Faz 9'da bir hata ararken yanlış ize sürükledi (üst-düzey `int p` kullanan
-  bir probe yazılmıştı). AOT codegen'de isim çözümlemesi.
+  **Sebep:** `AST_VARIABLE_DECL`'in iki global kısayolu da (natif int global
+  ve boxed VMValue global) yalnızca *"bu adda modül-düzeyi global var mı?"*
+  diye soruyor, bildirimin **fonksiyon gövdesi içinde** olup olmadığına
+  bakmıyordu. Fonksiyonun kendi `int p = 0;`i global'e yazıyor ve yerel hiç
+  ayrılmıyordu — sonraki `p = p + 1` de doğal olarak global'i sürüyordu.
+  **Neden bu kadar keyfî görünüyordu:** parametreler etkilenmiyordu (fonksiyon
+  girişinde gerçek alloca alıyorlar), yalnızca okuyan fonksiyonlar da
+  etkilenmiyordu. Ölçülen matris: yerel `int`/`float`/`str` ve `for`-init
+  bozuk, parametre ve salt-okuma sağlam.
+  **Düzeltme:** her iki kısayol da yalnız KÖK SCOPE'ta geçerli. Main'in scope'u
+  kök (parent'ı yok) ve her fonksiyon/lambda gövdesi onun üstüne biniyor —
+  global'i *okumanın* çalışmasının sebebi de bu, yani sinyal zaten oradaydı.
+  Üst düzey `if`/`while` blokları bilerek "üst düzey" sayılıyor: bloklar scope
+  açmıyor ve blok kapsamı olmayan bir dilde oradaki yeniden bildirim gerçekten
+  aynı değişkendir.
+  Regresyon: `tests/global_shadow.test.tpr` (10 test). Yalnız ezilmemeyi değil
+  **ters sözleşmeyi** de sabitliyor — fonksiyon global'i hâlâ okuyabilmeli ve
+  ATAYABİLMELİ (`scene3d`'nin `_lvl_pending3 = n` deseni), aksi hâlde düzeltme
+  fazla hevesli olurdu. Düzeltme geri alınarak doğrulandı: 6 test kırmızıya
+  döndü, 4 ters-sözleşme testi yeşil kaldı.
 
 #### 🔴 Motor — bilerek bırakılan ödünler
 

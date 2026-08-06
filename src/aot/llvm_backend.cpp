@@ -2725,6 +2725,27 @@ void add_local_captured(LLVMBackend *backend, const char *name, LLVMValueRef env
   }
 }
 
+// True only while codegen is emitting a TOP-LEVEL statement.
+//
+// Main's scope is the root: it is pushed first (with no parent) and every
+// function/lambda body pushes its own scope on top of it — which is also why a
+// function can READ a global by falling through the scope chain in get_local.
+// So "no parent" is exactly "this statement belongs to main itself".
+//
+// This is the guard AST_VARIABLE_DECL was missing. Both of its global
+// shortcuts asked only "does a module-level global with this name exist?" and
+// wrote into it — so a function's own `int p = 0;` silently stored into the
+// top-level `int p = 99;` and never allocated a local at all. Parameters were
+// unaffected (they get real allocas at function entry), which is why the bug
+// looked so arbitrary: `func f(p)` was fine, `func f() { int p = ...; }` was not.
+//
+// Top-level `if`/`while` blocks deliberately still count as top level: blocks
+// do not open a scope (see scope_decl_slot), and in a language without block
+// scoping a redeclaration there really is the same variable.
+static bool at_top_level_scope(LLVMBackend *backend) {
+  return backend->current_scope && backend->current_scope->parent == nullptr;
+}
+
 LLVMValueRef get_local(LLVMBackend *backend, const char *name) {
   Scope *s = backend->current_scope;
   while (s) {
@@ -6938,8 +6959,12 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // Native typed-int global (registered in Pass 0.1 for `int x = ...;`)?
+    // Only when this declaration IS the top-level one — inside a function the
+    // same name is a fresh local that must shadow, not overwrite, the global.
     LLVMValueRef existing_global =
-        LLVMGetNamedGlobal(backend->module, node->name);
+        at_top_level_scope(backend)
+            ? LLVMGetNamedGlobal(backend->module, node->name)
+            : nullptr;
     if (existing_global &&
         LLVMGlobalGetValueType(existing_global) == backend->int_type) {
       LLVMValueRef int_init;

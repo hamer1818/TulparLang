@@ -9,6 +9,42 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Fixed — fonksiyon yereli aynı adlı global'i eziyordu (AOT codegen)
+
+```tulpar
+func inner() { int p = 0; while (p < 5) { p = p + 1; } }
+int p = 99;  inner();  print(p);   // 99 değil, 5
+```
+
+Sessizce yanlış sonuç veren bir derleyici hatası; her Tulpar programını
+etkiliyordu, 3B'ye özgü değildi. Faz 9'da bir çarpışma hatası ararken beni bir
+kez yanlış ize sürüklemişti (probe üst-düzey `int p` kullanıyordu).
+
+**Sebep:** `AST_VARIABLE_DECL`'in iki global kısayolu da — natif `int` global ve
+boxed VMValue global — yalnızca *"bu adda bir modül-düzeyi global var mı?"* diye
+soruyor, bildirimin **fonksiyon gövdesi içinde** olup olmadığına bakmıyordu.
+Fonksiyonun kendi `int p = 0;`i doğrudan global'e yazıyor ve yerel hiç
+ayrılmıyordu; sonraki `p = p + 1` de doğal olarak global'i sürüyordu.
+
+**Neden bu kadar keyfî görünüyordu:** parametreler etkilenmiyordu (fonksiyon
+girişinde gerçek alloca alıyorlar), salt-okuyan fonksiyonlar da. Ölçülen matris:
+yerel `int`/`float`/`str` bildirimi ve `for`-init bozuk; parametre ve salt-okuma
+sağlam.
+
+**Düzeltme:** her iki kısayol da yalnız kök scope'ta geçerli. Main'in scope'u
+kök (parent'ı yok) ve her fonksiyon/lambda gövdesi onun üstüne biniyor — bir
+fonksiyonun global'i *okuyabilmesinin* sebebi zaten bu, yani doğru sinyal
+kodda hazırdı. Üst düzey `if`/`while` blokları bilerek "üst düzey" sayılıyor:
+bloklar scope açmıyor ve blok kapsamı olmayan bir dilde oradaki yeniden bildirim
+gerçekten aynı değişkendir.
+
+`tests/global_shadow.test.tpr` (10 test) yalnız ezilmemeyi değil **ters
+sözleşmeyi** de sabitliyor: fonksiyon global'i hâlâ okuyabilmeli ve
+ATAYABİLMELİ — `scene3d`'nin `_lvl_pending3 = n` deseni, `arcade`/`wings`'in
+tamamı buna dayanıyor; fazla hevesli bir düzeltme her şeyi bozardı. Düzeltme
+geri alınarak doğrulandı: 6 test kırmızıya döndü, 4 ters-sözleşme testi yeşil
+kaldı.
+
 ### Performance — çarpışmaya geniş faz: 200 entity'de 15.4 ms → 1.12 ms
 
 `_s3_collision` her kare tüm çiftleri gezip her biri için `_overlap3` / `_mtv3`
