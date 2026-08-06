@@ -494,9 +494,14 @@ int main(int argc, char **argv) {
     // `tulpar build` path; the silent run path uses a temp output.
     {
       const char *nocache = getenv("TULPAR_AOT_NOCACHE");
-      // Web hedefinde cache atlanır: stat edilecek dosya .html/.js/.wasm
-      // üçlüsü ve buradaki native yol yanlış pozitif "up-to-date" üretir.
-      if (!web_target && !(nocache && *nocache && *nocache != '0')) {
+      // Web ve Android hedeflerinde cache atlanır: ikisinde de üretilen şey
+      // `output_name`in kendisi DEĞİL. Web'de .html/.js/.wasm üçlüsü, Android'de
+      // `<output_name>_apk/` dizini çıkıyor. Buradaki native yolu stat etmek
+      // yanlış pozitif "up-to-date" üretir — Android'de bu özellikle sinsiydi,
+      // çünkü kullanıcının önceden `mkdir`lediği çıktı dizini stat'i geçiyor ve
+      // mtime'ı taze olduğu için derleme tamamen atlanıyordu.
+      if (!web_target && !android_target &&
+          !(nocache && *nocache && *nocache != '0')) {
         char exe_path[512];
 #ifdef _WIN32
         snprintf(exe_path, sizeof(exe_path), "%s.exe", output_name);
