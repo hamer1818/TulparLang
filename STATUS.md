@@ -1717,14 +1717,29 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   varsayıyor; kutu-kutu çifti tam SAT'tan geçiyor ama küre-kutu geçmiyor.
   Faz 9'da bilerek bırakıldı, kodda not düşülü.
 
-- 🟡 **Arazide eğim sınırı yok.** Oyuncu dik yamaçları da tırmanabiliyor;
-  kayma (sliding) yok. `_floor_at3` yalnız yükseklik veriyor, normal vermiyor.
-  **Sıradaki adım:** `tm3_terrain_normal(x, z)` binding'i (komşu örneklerden
-  türetilebilir), sonra saf Tulpar'da eğim sınırı + kayma.
+- ✅ **Arazide eğim sınırı + kayma eklendi (2026-08-06).** **Binding
+  gerekmedi.** STATUS `tm3_terrain_normal` öneriyordu, ama `terrain_height3d`
+  zaten mesh'in üçgenlemesini birebir taklit ediyor — normal, komşu
+  örneklerden **merkezi farkla** saf Tulpar'da türetiliyor. Böylece 5 noktalık
+  bağlama da, wasm/android arşivlerini yeniden derlemek de tamamen atlandı ve
+  özellik üç hedefte anında çalıştı. Merkezi fark hücre sınırlarını
+  yumuşatıyor; üçgen bazlı kesin normal keskin sıçrar ve kayma titrerdi.
+  - `slope_limit3d(derece)` / `egim_siniri3d`, `slide_accel3d`, ve sorgular
+    `terrain_up3d` (eğimin **kosinüsü** — dilde `acos` yok ve karşılaştırma
+    zaten kosinüs üzerinden), `terrain_steep3d` / `arazi_dik_mi3d`.
+  - **Varsayılan KAPALI**, bilerek: eğim sınırı doğruluk değil tasarım
+    tercihi (bazı oyunlar serbest tırmanma ister). Açmayan sahne bit-bit
+    eskisi gibi. `examples/scene3d_terrain.tpr` 38° ile açıyor.
+  - Yamaç aşağı yön ayrıca hesaplanmıyor: normalin yatay bileşeni zaten
+    tepeden dışarı bakıyor.
 
-- 🟡 **Kamera-duvar ışını araziyi görmüyor.** `_cam_clear_t3` yalnız
-  `TAG_WALL` AABB'lerini tarıyor; kamera tepenin içine girebiliyor.
-  **Sıradaki adım:** ışın boyunca arazi yüksekliğini örnekle (yürüyen ışın).
+- ✅ **Kamera ışını artık zemini görüyor (2026-08-06).** `_cam_clear_t3` yalnız
+  `TAG_WALL` AABB'lerini tarıyordu; arazi bir kutu olmadığı için kamera
+  tepenin içine girip sahneyi topraktan gösteriyordu. Arazide kapalı biçimli
+  bir kesişim yok, o yüzden ışın boyunca 14 örnek yürünüp zeminin altına
+  düşülen ilk yer bulunuyor. `_floor_at3` kullanıldığı için **rampalar da
+  bedavaya** kapsandı — onlar da `TAG_WALL` olmadıkları için taramanın
+  dışındaydı.
 
 - 🟢 **Rampa artık gereksiz olabilir.** Faz 9'un rampası kademeli çiziliyor
   (raylib'de kama primitifi yok) ve arazi geldiğine göre çoğu kullanım

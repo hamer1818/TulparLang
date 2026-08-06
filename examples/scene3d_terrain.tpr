@@ -1,4 +1,4 @@
-// scene3d Arazi — gerçek yükseklik haritalı açık dünya (Faz 10).
+// scene3d Arazi — gerçek yükseklik haritalı açık dünya (Faz 10) + eğim (Faz 11).
 //
 //   ./tulpar examples/scene3d_terrain.tpr
 //   ./tulpar build --target=android examples/scene3d_terrain.tpr out
@@ -31,6 +31,12 @@ func setup() {
     // yerçekimi, zıplama ve kamera hepsi otomatik uyum sağlıyor.
     arazi3d(RES, SIZE, PEAK, SIZE, NOISE, SEED);
     arazi_renk3d(rgb(104, 138, 92));
+
+    // Eğim sınırı: 38 dereceden dik yamaçlar tırmanılamaz, kayarsın. Bu
+    // OPT-IN — çağırmayan sahne dik duvarları da tırmanabilir (bazı oyunlar
+    // bunu ister). Yamaç aşağı yön arazinin yüzey normalinden geliyor.
+    egim_siniri3d(38.0);
+    kayma_ivmesi3d(16.0);
 
     player = uret3(0.0, 30.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
     kamera_yorunge(player, 16.0, 10.0);
@@ -82,6 +88,11 @@ func topla() {
 func hud() {
     text("Kalan altin: " + toString(kalan), 12, 82, 18, GOLD);
     text("Yukseklik: " + toString(toInt(get3y(player))), 12, 104, 16, RAYWHITE);
+    // Ayağının altındaki zemin tırmanılamayacak kadar dikse uyar — eğim
+    // sınırının çalıştığını oyun içinde görebilmek için.
+    if (arazi_dik_mi3d(get3x(player), get3z(player))) {
+        text("DIK YAMAC - kayiyorsun", 12, 126, 16, rgb(255, 140, 90));
+    }
 }
 
 sahne3d(960, 560, "Tulpar 3B Arazi");

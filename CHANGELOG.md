@@ -9,6 +9,49 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — arazi eğimi: yamaç sınırı, kayma, ve kamerayı tepeden çıkarma
+
+Faz 10 dünyayı sürekli bir yüzey yaptı ama iki ödün bırakmıştı: oyuncu dik
+yamaçları da tırmanabiliyordu ve kamera tepenin içine girip sahneyi topraktan
+gösteriyordu. İkisi de kapandı.
+
+**Yeni bir C binding'i gerekmedi.** STATUS.md `tm3_terrain_normal(x, z)`
+öneriyordu; ama `terrain_height3d` zaten mesh'in üçgenlemesini birebir taklit
+ettiği için yüzey normali komşu örneklerden **merkezi farkla** saf Tulpar'da
+türetilebiliyor. Böylece 5 noktalık bağlama da, `wasm/dist` + `android/dist`
+arşivlerini yeniden derlemek de tamamen atlandı ve özellik üç hedefte anında
+çalıştı. Merkezi fark hücre sınırlarını ayrıca yumuşatıyor — üçgen bazlı kesin
+normal keskin sıçrar ve kayma titrerdi.
+
+- **`slope_limit3d(derece)` / `egim_siniri3d`** — bundan dik yamaçlarda entity
+  tırmanamaz, yamaç aşağı kayar. **Varsayılan kapalı**, bilerek: eğim sınırı
+  doğruluk değil **tasarım tercihi** (bazı oyunlar serbest tırmanma ister).
+  Açmayan sahne bit-bit eskisi gibi çalışır.
+- **`slide_accel3d(a)` / `kayma_ivmesi3d`** — kayma ivmesi.
+- **`terrain_up3d(x, z)`** yüzeyin "düzlüğü": normalin Y bileşeni, yani eğim
+  açısının **kosinüsü** (1 = düz, 0 = dik duvar). Derece değil, çünkü dilde
+  `acos` yok ve karşılaştırma zaten kosinüs üzerinden yapılıyor — açıya çevirip
+  geri dönmek hem gereksiz hem kayıplı olurdu. `terrain_steep3d` /
+  `arazi_dik_mi3d` sınırla karşılaştırıp doğrudan cevap veriyor.
+- Yamaç aşağı yön ayrıca hesaplanmıyor: normalin **yatay bileşeni** zaten
+  tepeden dışarı, yani yamaç aşağı bakıyor.
+- **Kamera ışını artık zemini görüyor.** Arazide kapalı biçimli bir kesişim yok,
+  o yüzden ışın boyunca 14 örnek yürünüp zeminin altına düşülen ilk yer
+  bulunuyor. `_floor_at3` kullanıldığı için **rampalar da bedavaya** kapsandı —
+  onlar da `TAG_WALL` olmadıkları için eski kutu taramasının dışındaydı.
+
+6 regresyon testi eklendi (61 → 67) ve üçü bilerek hata sokularak doğrulandı.
+**Yön testinin ilk hâli yetersizdi ve bu ölçülerek bulundu:** "bitiş zemini
+başlangıçtan alçak" diye ölçüyordu ve kayma yönü tersine çevrilince bile
+geçiyordu — entity yamaç yukarı kayıp arazinin **ayak izinden çıkıyor**, dışarıda
+yükseklik taban 0'a dönüyor ve "alçaldı" sanılıyordu. Test artık yönü doğrudan
+ölçüyor (hareket vektörünün yamaç-aşağı yönüyle iç çarpımı; ters kurulumda
+−9.5) ve entity'nin ayak izinde kaldığını ayrıca sabitliyor.
+
+Yan düzeltme: `scene3d_reset()` eğim durumunu da temizliyor. Temizlemediği için
+testler sıraya bağımlıydı — "varsayılan kapalı" testi bir öncekinin bıraktığı
+sınırı ölçüyordu.
+
 ### Added — 3B menü/UI katmanı: başlangıç ekranı, duraklat, yeniden başla (Faz 11)
 
 Motor Faz 7-10'da "üstüne oyun yazılabilir" hale gelmişti ama **yayınlanabilir**

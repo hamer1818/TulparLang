@@ -359,6 +359,11 @@ func scene3d_reset() {
     _s3_ui = UI_NONE; _s3_quit = 0; _s3_tap_prev = 0;
     _s3_has_title = 0; _s3_title_txt = ""; _s3_title_sub = "";
     _s3_has_restart = 0;
+    // Eğim sınırı da sahne durumu: reset zemini ve araziyi zaten sıfırlıyor,
+    // yamaç kuralının ayakta kalması tutarsız olurdu (ve testleri sıraya
+    // bağımlı yapıyordu — "varsayılan kapalı" testi bir öncekinin bıraktığı
+    // sınırı ölçüyordu).
+    _slope_lim3 = 0.0; _slope_cos3 = 0.0; _slide_acc3 = 18.0;
     _hitA = []; _hitB = []; _hitF = [];
     _deadT = []; _deadF = [];
     _lvlN = []; _lvlF = []; _cur_lvl3 = 0; _lvl_pending3 = 0 - 1; _won3 = 0;
@@ -1130,6 +1135,20 @@ func _s3_physics(dt) {
                 } else {
                     e.grounded = 0;
                 }
+                // Eğim sınırı: dik yamaçta zemine basmak yetmiyor, aşağı
+                // kayıyorsun. Normalin YATAY bileşeni tepeden dışarı bakar,
+                // yani doğrudan yamaç aşağı yönü verir — ayrıca hesap gerekmiyor.
+                // Sınır kapalıyken (varsayılan) bu blok hiç çalışmaz.
+                if (_slope_lim3 > 0.0 && _terr_on == 1 && e.grounded == 1) {
+                    _terrain_normal3(e.x, e.z);
+                    if (_tn_y < _slope_cos3) {
+                        float hl = sqrt(_tn_x * _tn_x + _tn_z * _tn_z);
+                        if (hl > 0.0001) {
+                            e.vx = e.vx + (_tn_x / hl) * _slide_acc3 * dt;
+                            e.vz = e.vz + (_tn_z / hl) * _slide_acc3 * dt;
+                        }
+                    }
+                }
             }
             // Ömür / dünya sınırı: ıskalayan mermi burada ölür, yoksa entity
             // store'da sonsuza kadar kalırdı (slot geri kazanımının anlamı bu).
@@ -1485,6 +1504,9 @@ func _seg_aabb3(ox, oy, oz, dx, dy, dz, w): float {
 
 // Hedeften kameraya giden doğru parçasını duvarlara karşı tara; en yakın
 // kesişme oranını döner (1.0 = engel yok).
+float _CAM_TERR_CLEAR3 = 0.6;   // arazi yüzeyinin bu kadar üstünde kal
+int   _CAM_TERR_STEPS3 = 14;    // ışın boyunca örnek sayısı
+
 func _cam_clear_t3(ox, oy, oz, dx, dy, dz): float {
     float best = 1.0;
     int n = length(_e3);
@@ -1496,6 +1518,28 @@ func _cam_clear_t3(ox, oy, oz, dx, dy, dz): float {
             if (t >= 0.0 && t < best) { best = t; }
         }
         i = i + 1;
+    }
+    // ZEMİN. Yukarıdaki tarama yalnız TAG_WALL kutularına bakıyordu, oysa
+    // arazi bir kutu değil sürekli bir yüzey — kamera tepenin İÇİNE girip
+    // sahneyi topraktan gösteriyordu. Arazide kapalı biçimli bir kesişim yok,
+    // o yüzden ışın boyunca yürüyüp zeminin altına düştüğü ilk yeri buluyoruz.
+    // `_floor_at3` kullanıldığı için RAMPALAR da bedavaya kapsanıyor; onlar da
+    // TAG_WALL olmadıkları için kutu taramasının dışında kalıyordu.
+    if (_terr_on == 1 || _ground_on == 1) {
+        float inv = 1.0 / (_CAM_TERR_STEPS3 * 1.0);
+        int k = 1;
+        while (k <= _CAM_TERR_STEPS3) {
+            float t = k * inv;
+            float py = oy + dy * t;
+            if (py < _floor_at3(ox + dx * t, oz + dz * t) + _CAM_TERR_CLEAR3) {
+                // Bir adım geri: son GÜVENLİ örneğe çek.
+                float safe = t - inv;
+                if (safe < best) { best = safe; }
+                k = _CAM_TERR_STEPS3 + 1;
+            } else {
+                k = k + 1;
+            }
+        }
     }
     return best;
 }
@@ -1582,6 +1626,65 @@ func _floor_at3(px, pz): float {
     if (_terr_on == 1) { base = terrain_height3d(px, pz); }
     return _ramp_floor3(px, pz, base);
 }
+
+// ---- Arazi eğimi: yüzey normali, eğim sınırı, kayma ------------------------
+//
+// AYRI BİR C BINDING'İ GEREKMİYOR. STATUS.md `tm3_terrain_normal` öneriyordu,
+// ama `terrain_height3d` zaten mesh'in üçgenlemesini birebir taklit ediyor —
+// komşu örneklerden merkezi farkla türetilen normal yüzeyin GERÇEK eğimini
+// veriyor. Saf Tulpar yol hem 5 noktalık bağlamayı hem de wasm/android
+// arşivlerini yeniden derlemeyi tamamen atlıyor, ve üç hedefte de anında çalışır.
+//
+// Merkezi fark hücre sınırlarını yumuşatıyor: üçgen bazlı kesin normal keskin
+// sıçrardı ve kayma titrerdi. Oynanış için istenen tam da bu yumuşama.
+float _tn_x = 0.0; float _tn_y = 1.0; float _tn_z = 0.0;
+float _TN_EPS3 = 0.5;      // örnekleme adımı (dünya birimi)
+
+func _terrain_normal3(px, pz) {
+    if (_terr_on == 0) { _tn_x = 0.0; _tn_y = 1.0; _tn_z = 0.0; return; }
+    float e = _TN_EPS3;
+    float hl = terrain_height3d(px - e, pz);
+    float hr = terrain_height3d(px + e, pz);
+    float hd = terrain_height3d(px, pz - e);
+    float hu = terrain_height3d(px, pz + e);
+    float nx = hl - hr;
+    float ny = 2.0 * e;
+    float nz = hd - hu;
+    float len = sqrt(nx * nx + ny * ny + nz * nz);
+    if (len < 0.000001) { _tn_x = 0.0; _tn_y = 1.0; _tn_z = 0.0; return; }
+    _tn_x = nx / len; _tn_y = ny / len; _tn_z = nz / len;
+}
+
+// Yüzeyin "düzlüğü": normalin Y bileşeni, yani eğim açısının KOSİNÜSÜ.
+// 1.0 = tam düz, 0.0 = dik duvar. Derece yerine kosinüs veriliyor çünkü dilde
+// `acos` yok ve karşılaştırma zaten kosinüs üzerinden yapılıyor — açıya
+// çevirip geri dönmek hem gereksiz hem kayıplı olurdu.
+func terrain_up3d(px, pz): float { _terrain_normal3(px, pz); return _tn_y; }
+func arazi_duzluk3d(px, pz): float { return terrain_up3d(px, pz); }
+
+// Eğim sınırı DERECE cinsinden; 0 = kapalı (varsayılan).
+// Kapalı gelmesi bilerek: eğim sınırı doğruluk değil TASARIM tercihi — bazı
+// oyunlar serbest tırmanma ister. Açan sahne davranışı seçmiş olur, açmayan
+// sahne bit-bit eskisi gibi çalışır.
+float _slope_lim3 = 0.0;
+float _slope_cos3 = 0.0;
+float _slide_acc3 = 18.0;   // yamaç aşağı ivme (birim/sn²)
+
+func slope_limit3d(deg) {
+    _slope_lim3 = deg;
+    if (deg <= 0.0) { _slope_cos3 = 0.0; return; }
+    _slope_cos3 = cos(deg * DEG2RAD3);
+}
+func egim_siniri3d(derece) { slope_limit3d(derece); }
+func slide_accel3d(a) { _slide_acc3 = a; }
+func kayma_ivmesi3d(a) { slide_accel3d(a); }
+
+// Bu nokta tırmanılamayacak kadar dik mi? Sınır kapalıyken hep false.
+func terrain_steep3d(px, pz): bool {
+    if (_slope_lim3 <= 0.0 || _terr_on == 0) { return false; }
+    return terrain_up3d(px, pz) < _slope_cos3;
+}
+func arazi_dik_mi3d(px, pz): bool { return terrain_steep3d(px, pz); }
 
 // Rampa üret: yerel +Z yönünde yükselir, yaw ile döndürülür.
 func ramp3d(x, y, z, sx, sy, sz, color, yaw): int {

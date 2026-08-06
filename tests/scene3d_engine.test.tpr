@@ -1162,6 +1162,179 @@ func t_ui_button_hit() {
     assert_eq_bool(_s3_btn_hit(1, bx + bw * 0.5, by + bh * 0.5), false);
 }
 
+// -- Arazi eğimi: normal, sınır, kayma ---------------------------------------
+// Normal MEVCUT örnekleyiciden merkezi farkla türetiliyor (ayrı C binding'i
+// yok), o yüzden burada sınanan şey doğrudan o türetmenin doğruluğu.
+
+func t_terrain_normal_flat() {
+    scene3d_reset();
+    zemin3(0.0);
+    // Arazi YOKKEN normal her yerde yukarı olmalı; eğim mantığı düz zemini
+    // yanlışlıkla "dik" saymamalı.
+    assert(terrain_up3d(0.0, 0.0) > 0.999, "arazi yokken duzluk 1.0");
+    slope_limit3d(45.0);
+    assert_eq_bool(terrain_steep3d(0.0, 0.0), false);
+}
+
+// Gerçek arazide: tepe eteği yamacı, tepe/çukur dibi düz olmalı. Tüm ayak izini
+// tarayıp en dik ve en düz noktaları buluyoruz — hangi tohumun nerede tepe
+// yaptığına bağlanmadan.
+func t_terrain_normal_slope() {
+    scene3d_reset();
+    zemin3(0.0);
+    arazi3d(65, 80.0, 22.0, 80.0, 3.0, 20260806);
+
+    float min_up = 2.0;
+    float max_up = 0.0;
+    int i = 0;
+    while (i < 40) {
+        int j = 0;
+        while (j < 40) {
+            float x = 0.0 - 38.0 + i * 1.9;
+            float z = 0.0 - 38.0 + j * 1.9;
+            float u = terrain_up3d(x, z);
+            if (u < min_up) { min_up = u; }
+            if (u > max_up) { max_up = u; }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    // Normal birim vektör: Y bileşeni 0..1 aralığında kalmalı.
+    assert(min_up >= 0.0 && max_up <= 1.0001, "normal birim olmali");
+    // Tepeli arazide hem yamaç hem duze yakin nokta bulunmali.
+    assert(min_up < 0.98, "yamac bulunmali (en dik nokta duz degil)");
+    assert(max_up > 0.995, "duze yakin nokta bulunmali");
+}
+
+// Sınır KAPALI (varsayılan) iken eski davranış: dik yamaçta bile kayma yok.
+func t_slope_limit_off_by_default() {
+    scene3d_reset();
+    zemin3(0.0);
+    arazi3d(65, 80.0, 26.0, 80.0, 2.2, 7);
+    int p = spawn3(6.0, 40.0, 6.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int s = _slot_of3(p);
+    int k = 0;
+    while (k < 200) { _s3_physics(0.016667); k = k + 1; }   // zemine in
+    Ent3 e0 = _e3[s];
+    assert_eq_int(e0.grounded, 1);
+    float vx0 = e0.vx; float vz0 = e0.vz;
+    k = 0;
+    while (k < 60) { _s3_physics(0.016667); k = k + 1; }
+    Ent3 e1 = _e3[s];
+    assert(abs_f3(e1.vx - vx0) < 0.0001, "sinir kapaliyken yatay hiz degismez");
+    assert(abs_f3(e1.vz - vz0) < 0.0001, "sinir kapaliyken yatay hiz degismez");
+}
+
+// Sınır AÇIKKEN dik yamaçta duran entity aşağı kaymalı — ve YÖNÜ yamaç aşağı
+// olmalı. "Hız oluştu" demek yetmez: ters yöne kaysa da hız oluşurdu.
+//
+// İlk yazdığım hâli "bitiş zemini başlangıçtan alçak" diye ölçüyordu ve kayma
+// yönünü TERSİNE çevirince bile geçiyordu: entity yamaç yukarı kayıp arazinin
+// AYAK İZİNDEN çıkıyor, dışarıda yükseklik taban 0'a dönüyor ve "alçaldı"
+// sanılıyordu. O yüzden burada yön DOĞRUDAN ölçülüyor — hareket vektörünün
+// yamaç-aşağı yönüyle iç çarpımı pozitif olmalı — ve entity'nin ayak izinde
+// kaldığı ayrıca sabitleniyor.
+func t_slope_slide_downhill() {
+    scene3d_reset();
+    zemin3(0.0);
+    arazi3d(65, 80.0, 30.0, 80.0, 2.0, 99);
+    slope_limit3d(25.0);      // bilerek dusuk: arazinin cogu "dik" sayilsin
+
+    // En dik noktayı bul — kenardan UZAK dur ki kayma ayak izinden çıkmasın.
+    float bx = 0.0; float bz = 0.0; float worst = 2.0;
+    int i = 0;
+    while (i < 24) {
+        int j = 0;
+        while (j < 24) {
+            float x = 0.0 - 23.0 + i * 2.0;
+            float z = 0.0 - 23.0 + j * 2.0;
+            float u = terrain_up3d(x, z);
+            if (u < worst) { worst = u; bx = x; bz = z; }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    assert(worst < _slope_cos3, "test icin yeterince dik bir nokta bulunmali");
+
+    int p = spawn3(bx, arazi_yukseklik3d(bx, bz) + 1.0, bz,
+                   1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int s = _slot_of3(p);
+    int k = 0;
+    while (k < 30) { _s3_physics(0.016667); k = k + 1; }   // otur
+
+    float x0 = get3x(p); float z0 = get3z(p);
+    float h0 = arazi_yukseklik3d(x0, z0);
+    // Bu noktadaki yamaç-aşağı yönü: normalin yatay bileşeni.
+    _terrain_normal3(x0, z0);
+    float ndx = _tn_x; float ndz = _tn_z;
+    float nl = sqrt(ndx * ndx + ndz * ndz);
+    assert(nl > 0.0001, "yamacta yatay normal bileseni olmali");
+    ndx = ndx / nl; ndz = ndz / nl;
+
+    k = 0;
+    while (k < 45) { _s3_physics(0.016667); k = k + 1; }
+
+    float x1 = get3x(p); float z1 = get3z(p);
+    float mvx = x1 - x0; float mvz = z1 - z0;
+    Ent3 e = _e3[s];
+    assert(abs_f3(e.vx) + abs_f3(e.vz) > 0.5, "dik yamacta kayma hizi olusmali");
+    // ASIL SART: hareket yamac-asagi yonuyle ayni tarafta olmali.
+    assert(mvx * ndx + mvz * ndz > 0.1, "kayma YAMAC ASAGI yonunde olmali");
+    // Ayak izinde kalmali, yoksa yukseklik karsilastirmasi anlamsizlasir.
+    assert(abs_f3(x1) < 39.0 && abs_f3(z1) < 39.0, "arazi ayak izinde kalmali");
+    assert(arazi_yukseklik3d(x1, z1) < h0, "zemin gercekten alcalmali");
+}
+
+// Düz zeminde sınır açık olsa bile kayma olmamalı.
+func t_slope_no_slide_on_flat() {
+    scene3d_reset();
+    zemin3(0.0);
+    slope_limit3d(25.0);
+    int p = spawn3(0.0, 5.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int s = _slot_of3(p);
+    int k = 0;
+    while (k < 200) { _s3_physics(0.016667); k = k + 1; }
+    Ent3 e = _e3[s];
+    assert(abs_f3(e.vx) < 0.0001 && abs_f3(e.vz) < 0.0001, "duz zeminde kayma yok");
+}
+
+// -- Kamera ışını araziyi görüyor --------------------------------------------
+// Eskiden yalnız TAG_WALL kutuları taranıyordu; arazi bir kutu olmadığı için
+// kamera tepenin içine girebiliyordu.
+func t_camera_ray_sees_terrain() {
+    scene3d_reset();
+    zemin3(0.0);
+    arazi3d(65, 80.0, 30.0, 80.0, 2.0, 4242);
+
+    // Tepe noktasını bul; ışını onun İÇİNDEN geçir.
+    float hx = 0.0; float hz = 0.0; float hbest = 0.0 - 10000.0;
+    int i = 0;
+    while (i < 30) {
+        int j = 0;
+        while (j < 30) {
+            float x = 0.0 - 30.0 + i * 2.0;
+            float z = 0.0 - 30.0 + j * 2.0;
+            float h = arazi_yukseklik3d(x, z);
+            if (h > hbest) { hbest = h; hx = x; hz = z; }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    assert(hbest > 2.0, "test icin belirgin bir tepe bulunmali");
+
+    // Tepenin bir yanından öbür yanına, tepe seviyesinin ALTINDAN geçen ışın:
+    // araziye çarpmalı, yani t < 1.0 dönmeli.
+    float y = hbest * 0.4;
+    float ox = hx - 14.0;
+    float dx = 28.0;
+    float t = _cam_clear_t3(ox, y, hz, dx, 0.0, 0.0);
+    assert(t < 1.0, "tepenin icinden gecen isin engellenmeli");
+
+    // Tepenin ÇOK üstünden geçen ışın serbest kalmalı (yanlış pozitif olmasın).
+    float t2 = _cam_clear_t3(ox, hbest + 25.0, hz, dx, 0.0, 0.0);
+    assert(t2 > 0.999, "tepenin ustunden gecen isin serbest olmali");
+}
+
 test("genis faz elemesi korumali", "t_broadphase_conservative");
 test("genis faz gercekten eliyor", "t_broadphase_prunes");
 test("genis faz itmeden sonra taze", "t_broadphase_sync_after_push");
@@ -1174,4 +1347,10 @@ test("bolumsuz yeniden baslatma kancasi", "t_ui_restart_hook_without_levels");
 test("kancasiz yeniden baslatma sahneye dokunmaz", "t_ui_restart_bare");
 test("cikis bayragi", "t_ui_quit_flag");
 test("dugme isabet testi", "t_ui_button_hit");
+test("arazi yokken normal yukari", "t_terrain_normal_flat");
+test("arazi normali yamaci gorur", "t_terrain_normal_slope");
+test("egim siniri varsayilan kapali", "t_slope_limit_off_by_default");
+test("dik yamacta yamac asagi kayma", "t_slope_slide_downhill");
+test("duz zeminde kayma yok", "t_slope_no_slide_on_flat");
+test("kamera isini araziyi goruyor", "t_camera_ray_sees_terrain");
 test_summary();
