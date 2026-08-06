@@ -950,4 +950,101 @@ test("arazi gercekten duz degil", "t_terrain_not_flat");
 test("fizik araziye oturur", "t_terrain_physics");
 test("rampa arazinin ustune biner", "t_terrain_with_ramp");
 test("arazi kapatilinca duz zemin", "t_terrain_off");
+// -- Geniş faz (broad phase) -------------------------------------------------
+// Çarpışma artık her çift için _overlap3/_mtv3 zincirini çağırmıyor: önce
+// kapsayan kürelere bakıp uzak çiftleri eliyor (ölçüm: 200 entity'de 15.4 ms →
+// 1.12 ms). Bu optimizasyonun BOZULABİLECEĞİ tek yer elemenin fazla hevesli
+// olması — o yüzden asıl değişmezi doğrudan test ediyoruz:
+//
+//     _bp_far3(a, b) == true  ⟹  _overlap3(a, b) == false
+//
+// Yani eleme yalnız "kesin çakışmıyor" diyebilir. Karışık şekil/boyut/yaw
+// üzerinde TÜM çiftler taranıyor; kapsayan küre matematiği (köşegen yarısı)
+// kutu, küre, silindir ve DÖNÜK kutu için ayrı ayrı burada sınanmış oluyor.
+func t_broadphase_conservative() {
+    scene3d_reset();
+    // Bilerek yakın aralıklı, iç içe geçen, farklı şekil ve boyutlarda bir yığın
+    int i = 0;
+    while (i < 24) {
+        float x = toFloat(mod(i * 5, 11)) - 5.0;
+        float z = toFloat(mod(i * 3, 7)) - 3.0;
+        float s = 0.5 + toFloat(mod(i, 4)) * 0.7;
+        int shape = SHAPE_CUBE;
+        if (mod(i, 3) == 1) { shape = SHAPE_SPHERE; }
+        if (mod(i, 3) == 2) { shape = SHAPE_CYL; }
+        int id = spawn3(x, 1.0 + toFloat(mod(i, 3)), z, s, s * 1.6, s,
+                        RED, shape, TAG_ENEMY);
+        // Her üçüncüsünü döndür: OBB/SAT yolu da elemenin altına girsin.
+        if (mod(i, 3) == 0) { set3yaw(id, toFloat(i * 17)); }
+        i = i + 1;
+    }
+    _bp_build3();
+    int n = length(_e3);
+    int violations = 0;
+    int pairs = 0;
+    int a = 0;
+    while (a < n) {
+        int b = 0;
+        while (b < n) {
+            if (a != b) {
+                pairs = pairs + 1;
+                if (_bp_far3(a, b) && _overlap3(a, b)) { violations = violations + 1; }
+            }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    assert(pairs > 500, "anlamli sayida cift taranmali");
+    assert_eq_int(violations, 0);   // eleme ASLA gercek cakismayi atmamali
+}
+
+// Eleme korumalı olsa da hiçbir şey elemiyorsa optimizasyon yoktur. Dağınık bir
+// sahnede çiftlerin ezici çoğunluğu elenmeli — bu testin asıl işi, birinin
+// _bp_far3'ü sessizce `false` döndürecek şekilde bozmasını yakalamak.
+func t_broadphase_prunes() {
+    scene3d_reset();
+    int i = 0;
+    while (i < 30) {
+        spawn3(toFloat(mod(i * 7, 40)) - 20.0, 1.0, toFloat(mod(i * 13, 40)) - 20.0,
+               1.0, 2.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+        i = i + 1;
+    }
+    _bp_build3();
+    int n = length(_e3);
+    int far = 0;
+    int pairs = 0;
+    int a = 0;
+    while (a < n) {
+        int b = a + 1;
+        while (b < n) {
+            pairs = pairs + 1;
+            if (_bp_far3(a, b)) { far = far + 1; }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    assert(far * 10 > pairs * 8, "dagink sahnede ciftlerin %80+'i elenmeli");
+}
+
+// Ayırma çözümü entity'yi TARAMA SÜRERKEN oynatıyor. _apply_mtv3 geniş faz
+// konumunu tazelemezse, itilmiş bir gövde aynı karedeki sonraki çiftlerde eski
+// yerinden değerlendirilir ve gerçek bir çarpışma kaçar. Burada onu sabitliyoruz:
+// itmeden sonra düz dizideki konum entity'nin gerçek konumuyla aynı olmalı.
+func t_broadphase_sync_after_push() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    _bp_build3();
+    int s = _slot_of3(p);
+    _apply_mtv3(s, 3.0, 0.0, 0.0 - 2.0);
+    assert(abs_f3(_bx[s] - get3x(p)) < 0.0001, "itmeden sonra _bx tazelenmeli");
+    assert(abs_f3(_bz[s] - get3z(p)) < 0.0001, "itmeden sonra _bz tazelenmeli");
+    // set3pos (kanca icinden isinlanma) da senkron tutmali
+    set3pos(p, 0.0 - 7.0, 1.0, 9.0);
+    assert(abs_f3(_bx[s] - (0.0 - 7.0)) < 0.0001, "set3pos _bx'i tazelemeli");
+    assert(abs_f3(_bz[s] - 9.0) < 0.0001, "set3pos _bz'yi tazelemeli");
+}
+
+test("genis faz elemesi korumali", "t_broadphase_conservative");
+test("genis faz gercekten eliyor", "t_broadphase_prunes");
+test("genis faz itmeden sonra taze", "t_broadphase_sync_after_push");
 test_summary();

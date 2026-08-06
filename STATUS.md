@@ -1669,11 +1669,32 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 
 #### 🔴 Motor — bilerek bırakılan ödünler
 
-- 🔴 **Çarpışma O(n²), uzamsal bölümleme yok.** `_s3_collision` her kare tüm
-  çiftleri geziyor (duvar itmesi + gövde-gövde + kanca döngüleri). Mermi ve
-  parçacık geldiğine göre gerçek bir oyunda entity sayısı hızla artar.
-  **Sıradaki adım:** basit bir uniform grid (hücre boyu ≈ en büyük entity) —
-  saf Tulpar, entity store zaten slot'lu.
+- 🟡 **Çarpışma hâlâ O(n²) — ama sabiti 14× küçüldü (2026-08-06).** Önce
+  ÖLÇÜLDÜ, sonra optimize edildi; ölçüm beklentiyi yanlışladı.
+  - **Ölçüm (headless, `_s3_collision`):** 50 entity 0.87 ms, 100 → 3.88 ms,
+    200 → **15.4 ms** (60fps bütçesinin %92'si), 400 → 57 ms, 800 → 258 ms.
+  - **Beklenti yanlıştı.** Şüpheli `Ent3` struct kopyalarıydı; mikro-ölçüm
+    (200 entity, 40.000 çift) boş döngü ~0 ms, çift başına iki struct kopyası
+    1.8 ms, gerçek `_overlap3` **23.7 ms** dedi. Yani maliyet kopyada değil,
+    ZİNCİRİN KENDİSİNDE: şekil seçimi, `Ent3`i değerle alan yardımcılar
+    (`_is_round3`, `_radius3`), tekrar tekrar dizi okuması. Doğru hamle zinciri
+    hızlandırmak değil, **çağırmamak**.
+  - **Geniş faz.** Kareye bir kez düz dizilere konum + kapsayan küre yarıçapı
+    (kutunun köşegen yarısı) yazılıyor; kürelerin ayrık olduğu çiftler zincire
+    hiç girmiyor. Eleme struct kopyasından ÖNCE, yani kopya da kazanılıyor.
+    Yarıçap seçimi kutu/küre/silindiri ve **dönük** kutuyu kapsıyor
+    (döndürme kürenin yarıçapını değiştirmez; silindir için Minkowski).
+  - **Sonuç:** 200 entity 15.4 → **1.12 ms** (bütçenin %92'si → %6.7),
+    800 entity 258 → 16.8 ms. Her ölçekte ~14×. Pratik tavan ~200'den
+    ~800 entity'e çıktı.
+  - **Hâlâ O(n²).** Uniform grid asimptotik çözüm olmayı sürdürüyor, ama artık
+    çok daha ucuz: düz konum/yarıçap dizileri grid'in zaten ihtiyaç duyacağı
+    zemin. 800 entity üstüne çıkılmadıkça getirisi yok.
+  - Regresyon: 3 test (`t_broadphase_conservative` tüm çiftlerde
+    `_bp_far3 ⟹ ¬_overlap3` değişmezini karışık şekil/yaw üzerinde tarar,
+    `_prunes` elemenin sessizce kaybolmasını yakalar, `_sync_after_push`
+    itme/ışınlanma sonrası bayatlığı yakalar). Üçü de **bilerek hata
+    sokularak** doğrulandı ve üçü de doğru testle kırmızıya döndü.
 
 - 🟡 **Küre ↔ DÖNÜK kutu yaklaşık.** `_sph_box3` kutuyu eksen-hizalı
   varsayıyor; kutu-kutu çifti tam SAT'tan geçiyor ama küre-kutu geçmiyor.

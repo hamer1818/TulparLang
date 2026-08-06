@@ -9,6 +9,47 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Performance — çarpışmaya geniş faz: 200 entity'de 15.4 ms → 1.12 ms
+
+`_s3_collision` her kare tüm çiftleri gezip her biri için `_overlap3` / `_mtv3`
+çağırıyordu. Önce **ölçüldü**, ve ölçüm beklentiyi yanlışladı.
+
+Maliyet (headless, 60fps bütçesi 16.6 ms): 50 entity 0.87 ms, 100 → 3.88,
+**200 → 15.4** (bütçenin %92'si), 400 → 57, 800 → 258.
+
+Şüpheli `Ent3` struct kopyalarıydı — her çift testi diziden iki struct çekiyor.
+Mikro-ölçüm (200 entity = 40.000 çift) onu çürüttü: boş döngü ~0 ms, çift başına
+iki struct kopyası 1.8 ms, gerçek `_overlap3` **23.7 ms**. Yük kopyada değil,
+zincirin kendisindeydi: şekil seçimi, `Ent3`i **değerle** alan yardımcılar
+(`_is_round3`, `_radius3`), tekrar tekrar dizi okuması. Yani doğru hamle zinciri
+hızlandırmak değil, **hiç çağırmamak**.
+
+- **Geniş faz.** Kareye bir kez düz float dizilerine konum + kapsayan küre
+  yarıçapı yazılıyor; kapsayan küreleri ayrık olan çiftler zincire hiç girmiyor.
+  Eleme struct kopyasından **önce** duruyor, böylece o 1.8 ms de kazanılıyor.
+- **Yarıçap = kutunun köşegen yarısı.** Üç şeklin de üstünü örtüyor, o yüzden
+  eleme korumalı: kutuyu tanımı gereği kapsar ve **yaw'dan bağımsızdır**
+  (döndürme kürenin yarıçapını değiştirmez → OBB/SAT güvende); küreyi kapsar
+  (yarıçapı `sx*0.5`, köşegen yarısı ondan büyük); silindiri Minkowski
+  eşitsizliği gereği kapsar.
+- **Diziler yalnızca eleme için.** `alive`/`tag`/`solid` kararları hâlâ `_e3`ten
+  okunuyor — bir kanca ortasında `kill3d`/`spawn3` çağırırsa otorite tek yerde
+  kalsın. Konum ise elemeyi doğrudan etkilediğinden üç mutasyon noktasında
+  senkron tutuluyor: `_apply_mtv3` (ayırma taramanın ORTASINDA entity oynatır),
+  `set3pos` (kancadan ışınlanma), `_alloc_slot3` (geri kullanılan slot'ta ölen
+  entity'nin konumu duruyordu).
+
+**Sonuç:** 200 entity 15.4 → **1.12 ms** (bütçenin %92'si → %6.7), 800 entity
+258 → 16.8 ms. Her ölçekte ~14×; pratik tavan ~200'den ~800 entity'e çıktı.
+Algoritma **hâlâ O(n²)** — uniform grid asimptotik çözüm olmayı sürdürüyor, ama
+artık çok daha ucuz, çünkü düz konum/yarıçap dizileri grid'in zaten ihtiyaç
+duyacağı zemin.
+
+Üç regresyon testi eklendi ve üçü de **bilerek hata sokularak** doğrulandı:
+elemeyi fazla hevesli yapmak `_bp_far3 ⟹ ¬_overlap3` değişmezini 26 ihlalle
+düşürdü (ve gerçek bir oynanış testini de kırdı), elemeyi sessizce devre dışı
+bırakmak `_prunes`i, senkronu kaldırmak `_sync_after_push`ı kırmızıya döndürdü.
+
 ### Fixed — typecheck artık `import`'u takip ediyor (`assert` hatasının kök nedeni)
 
 `assert`'in bool koşullarda hiç başarısız olmaması tek bir yazım hatası değildi;

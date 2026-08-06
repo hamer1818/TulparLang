@@ -249,6 +249,10 @@ func _alloc_slot3(Ent3 e): int {
         _free_n3 = _free_n3 - 1;
         int s = _e3free[_free_n3];
         _e3[s] = e;
+        // Geri kullanılan slot: geniş faz dizilerinde ÖLEN entity'nin konumu
+        // duruyor. Bir çarpışma kancası ortasında spawn3 çağrılırsa (patlama,
+        // mermi) o bayat konum kalan kareyi yanlış eleyebilirdi.
+        _bp_sync3(s);
         return s;
     }
     push(_e3, e);
@@ -310,6 +314,7 @@ func set3pos(id, x, y, z) {
     int s = _slot_of3(id);
     if (s < 0) { return; }
     Ent3 e = _e3[s]; e.x = x; e.y = y; e.z = z; _e3[s] = e;
+    _bp_sync3(s);   // kanca içinden ışınlanma geniş fazı bayat bırakmasın
 }
 func set3vel(id, vx, vy, vz) {
     int s = _slot_of3(id);
@@ -343,6 +348,7 @@ func scene3d_reset() {
     // Generation sayaçları da sıfırlanır: entity store tamamen gittiği için
     // eski handle'ların hepsi zaten anlamsız, slot 0'dan yeniden başlanabilir.
     _e3gen = []; _e3free = []; _free_n3 = 0;
+    _bx = []; _by = []; _bz = []; _br = [];   // geniş faz de sahneyle gider
     _hitA = []; _hitB = []; _hitF = [];
     _deadT = []; _deadF = [];
     _lvlN = []; _lvlF = []; _cur_lvl3 = 0; _lvl_pending3 = 0 - 1; _won3 = 0;
@@ -1185,6 +1191,10 @@ func _apply_mtv3(s, fx, fy, fz) {
         if (ax >= az) { e.vx = 0.0; } else { e.vz = 0.0; }
     }
     _e3[s] = e;
+    // Ayırma çözümü ENTITY'Yİ OYNATIR ve çarpışma taraması sürüyor. Geniş faz
+    // konumu burada tazelenmezse aynı karede itilmiş bir gövde, sonraki
+    // çiftlerde eski yerinden değerlendirilir — kaçan çarpışma demek.
+    _bp_sync3(s);
 }
 
 func _is_solid3(Ent3 e): bool { return e.alive == 1 && e.solid == 1; }
@@ -1360,8 +1370,70 @@ func _bullet_owner_pair3(a, b): bool {
     return false;
 }
 
+// --- Geniş faz (broad phase) ------------------------------------------------
+// Çarpışma her kare tüm çiftleri geziyor ve her çift için _overlap3 / _mtv3
+// çağırıyordu. Ölçüm (200 entity = 40.000 çift, headless): boş döngü ~0 ms,
+// çift başına iki struct kopyası 1.8 ms, gerçek _overlap3 **23.7 ms**. Yani
+// maliyet dizide değil, ZİNCİRİN KENDİSİNDE: şekil seçimi, `Ent3`i değerle
+// alan yardımcılar (_is_round3, _radius3) ve tekrar tekrar dizi okuması.
+//
+// O yüzden çözüm zinciri hızlandırmak değil, ÇAĞIRMAMAK. Kareye bir kez düz
+// float dizilerine konum + KAPSAYAN KÜRE yarıçapı yazılır; iki kürenin ayrık
+// olduğu çiftler zincire hiç girmez.
+//
+// Yarıçap kutunun KÖŞEGEN YARISI. Bu üç şeklin de üstünü örtüyor ve eleme bu
+// yüzden korumalı — gerçek bir çakışmayı asla atmaz:
+//   • kutu   → köşegen yarısı kutuyu tanımı gereği kapsar, yaw'dan bağımsız
+//              (döndürme kürenin yarıçapını değiştirmez, OBB/SAT de güvende)
+//   • küre   → yarıçapı sx*0.5, köşegen yarısı ondan büyük
+//   • silindir → XZ'de sx*0.5, Y'de sy; Minkowski eşitsizliği gereği
+//              sqrt(dxz²+dy²) ≤ Ra+Rb olduğunda çakışma zaten mümkün değil
+//
+// Diziler YALNIZCA eleme için. alive/tag/solid kararları hâlâ `_e3`ten
+// okunuyor: bir kanca ortasında kill3d/spawn3 çağırırsa otorite tek yerde
+// kalsın istiyoruz. Konum ise elemeyi doğrudan etkilediği için üç mutasyon
+// noktasında (_apply_mtv3, set3pos, _alloc_slot3) senkron tutuluyor.
+array _bx = [];
+array _by = [];
+array _bz = [];
+array _br = [];
+
+func _bp_build3() {
+    _bx = []; _by = []; _bz = []; _br = [];
+    int n = length(_e3);
+    int i = 0;
+    while (i < n) {
+        Ent3 e = _e3[i];
+        push(_bx, e.x); push(_by, e.y); push(_bz, e.z);
+        float hx = e.sx * 0.5; float hy = e.sy * 0.5; float hz = e.sz * 0.5;
+        push(_br, sqrt(hx * hx + hy * hy + hz * hz));
+        i = i + 1;
+    }
+}
+
+// Tek slot'u tazele. Diziler kurulu değilken (çarpışma dışında) sessizce çıkar,
+// böylece spawn3/set3pos normal akışta hiçbir bedel ödemez.
+func _bp_sync3(s) {
+    if (s < 0 || s >= length(_bx)) { return; }
+    Ent3 e = _e3[s];
+    _bx[s] = e.x; _by[s] = e.y; _bz[s] = e.z;
+    float hx = e.sx * 0.5; float hy = e.sy * 0.5; float hz = e.sz * 0.5;
+    _br[s] = sqrt(hx * hx + hy * hy + hz * hz);
+}
+
+// true → kapsayan küreler ayrık, çakışma İMKÂNSIZ. Sadece bu yönde karar verir;
+// false "çakışıyor" demek değil, "dar faza sor" demektir.
+func _bp_far3(a, b): bool {
+    float dx = _bx[a] - _bx[b];
+    float dy = _by[a] - _by[b];
+    float dz = _bz[a] - _bz[b];
+    float r = _br[a] + _br[b];
+    return dx * dx + dy * dy + dz * dz > r * r;
+}
+
 func _s3_collision() {
     int n = length(_e3);
+    _bp_build3();
     // 1) KATI GÖVDE ÇÖZÜMÜ — dünya geometrisine karşı.
     // Eskiden yalnız TAG_PLAYER duvarlarla çarpışıyordu; düşmanlar duvarların
     // içinden geçiyordu. Artık her HAREKETLİ katı gövde (oyuncu, düşman, prop)
@@ -1372,9 +1444,12 @@ func _s3_collision() {
         if (_is_solid3(ep) && !_is_static_solid3(ep)) {
             int w = 0;
             while (w < n) {
-                Ent3 ew = _e3[w];
-                if (_is_solid3(ew) && _is_static_solid3(ew) && p != w) {
-                    if (_mtv3(p, w)) { _apply_mtv3(p, _mtv_x, _mtv_y, _mtv_z); }
+                // Eleme struct kopyasından ÖNCE: uzak çift `_e3[w]`i hiç okumaz.
+                if (p != w && !_bp_far3(p, w)) {
+                    Ent3 ew = _e3[w];
+                    if (_is_solid3(ew) && _is_static_solid3(ew)) {
+                        if (_mtv3(p, w)) { _apply_mtv3(p, _mtv_x, _mtv_y, _mtv_z); }
+                    }
                 }
                 w = w + 1;
             }
@@ -1390,14 +1465,16 @@ func _s3_collision() {
         if (_is_solid3(ea2) && !_is_static_solid3(ea2)) {
             int cb = ca + 1;
             while (cb < n) {
-                Ent3 eb2 = _e3[cb];
-                if (_is_solid3(eb2) && !_is_static_solid3(eb2)) {
-                    if (_mtv3(ca, cb)) {
-                        float hx = _mtv_x * 0.5;
-                        float hy = _mtv_y * 0.5;
-                        float hz = _mtv_z * 0.5;
-                        _apply_mtv3(ca, hx, hy, hz);
-                        _apply_mtv3(cb, 0.0 - hx, 0.0 - hy, 0.0 - hz);
+                if (!_bp_far3(ca, cb)) {
+                    Ent3 eb2 = _e3[cb];
+                    if (_is_solid3(eb2) && !_is_static_solid3(eb2)) {
+                        if (_mtv3(ca, cb)) {
+                            float hx = _mtv_x * 0.5;
+                            float hy = _mtv_y * 0.5;
+                            float hz = _mtv_z * 0.5;
+                            _apply_mtv3(ca, hx, hy, hz);
+                            _apply_mtv3(cb, 0.0 - hx, 0.0 - hy, 0.0 - hz);
+                        }
                     }
                 }
                 cb = cb + 1;
@@ -1412,9 +1489,15 @@ func _s3_collision() {
         if (eb2.alive == 1 && eb2.tag == TAG_BULLET) {
             int w2 = 0;
             while (w2 < n) {
-                Ent3 ew2 = _e3[w2];
-                if (ew2.alive == 1 && ew2.tag == TAG_WALL && _overlap3(bi, w2)) {
-                    kill3d(_mk_handle3(bi));
+                int died = 0;
+                if (!_bp_far3(bi, w2)) {
+                    Ent3 ew2 = _e3[w2];
+                    if (ew2.alive == 1 && ew2.tag == TAG_WALL && _overlap3(bi, w2)) {
+                        kill3d(_mk_handle3(bi));
+                        died = 1;
+                    }
+                }
+                if (died == 1) {
                     w2 = n;              // bu mermi bitti, duvar taramasını kes
                 } else {
                     w2 = w2 + 1;
@@ -1436,12 +1519,14 @@ func _s3_collision() {
             if (ea.alive == 1 && ea.tag == ta) {
                 int b = 0;
                 while (b < n) {
-                    Ent3 eb = _e3[b];
-                    if (eb.alive == 1 && eb.tag == tb && a != b && _overlap3(a, b)
-                        && !_bullet_owner_pair3(a, b)) {
-                        _hit_me = _mk_handle3(a);
-                        _hit_other = _mk_handle3(b);
-                        call(fn);
+                    if (a != b && !_bp_far3(a, b)) {
+                        Ent3 eb = _e3[b];
+                        if (eb.alive == 1 && eb.tag == tb && _overlap3(a, b)
+                            && !_bullet_owner_pair3(a, b)) {
+                            _hit_me = _mk_handle3(a);
+                            _hit_other = _mk_handle3(b);
+                            call(fn);
+                        }
                     }
                     b = b + 1;
                 }
