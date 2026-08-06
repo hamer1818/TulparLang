@@ -302,6 +302,19 @@ jobs:
         # headroom while catching a genuine hang sooner.
         timeout-minutes: 10
 
+      # tests/*.test.tpr regression suites (gömülü `test` kitaplığı,
+      # jest tarzı assert'ler). `./build.sh test` YALNIZ examples/ üzerinde
+      # dolaşır ve orada tek ölçüt çıkış kodudur; bu paketler uzun süre
+      # HİÇBİR otomasyonda koşmadı. 2026-08-04'te `assert`in bool koşullarda
+      # hiçbir zaman başarısız olmadığı ortaya çıktı — hata tam olarak bu
+      # körlükte yaşadı, çünkü paketler yeşil görünürken hiçbir şey
+      # doğrulamıyorlardı. `suites` hedefi özet satırı üretmeyen paketi de
+      # hata sayar, yani bir paket sessizce "koşmuyor" duruma düşemez.
+      - name: Run tests/*.test.tpr suites
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        run: ./build.sh suites
+        timeout-minutes: 15
+
       # typeinfer regression suite — drives `tulpar --strict <file>` over
       # tests/typeinfer/{pass,fail}/*.tpr. The runner already builds the
       # binary above; we just need to make the script executable.

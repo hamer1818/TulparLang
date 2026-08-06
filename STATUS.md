@@ -1610,16 +1610,16 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 
 #### 🔴 Güven altyapısı — motor büyümeden önce
 
-- 🔴 **54 test paketi CI'da hiç koşmuyor.** CI yalnız `./build.sh test`
-  (örnekler), `tests/typeinfer/run.sh` ve bir sha256 smoke'u koşuyor;
-  `tests/*.test.tpr` paketlerinin **hiçbiri** CI'da değil — 49 testlik
-  `scene3d_engine.test.tpr` dahil. `assert` hatası (aşağıda) tam olarak bu
-  körlükte yaşadı: paketler yeşil görünüyordu ama hiçbir şey doğrulamıyordu.
-  **Sıradaki adım:** `build.sh`'ye `tests/*.test.tpr` üzerinde dolaşan bir
-  hedef ekle, `build.yml`'de `./build.sh test`'ten sonra çağır. Dikkat: dördü
-  (`arcade_movement`, `arcade_progression`, `methods`, `struct_native`)
-  `test_summary()` çağırmıyor, yani çıkış kodu üretmiyorlar — önce onlar
-  düzeltilmeli, yoksa hata sessizce yutulur.
+- ✅ **54 test paketi artık CI'da (2026-08-04).** Bu paketler daha önce
+  HİÇBİR otomasyonda koşmuyordu — 49 testlik `scene3d_engine.test.tpr` dahil.
+  `assert` hatası tam olarak bu körlükte yaşadı: paketler yeşil görünüyordu
+  ama hiçbir şey doğrulamıyordu. Yeni `./build.sh suites` hedefi hepsini
+  koşuyor ve `build.yml`'de `./build.sh test`'ten sonra çağrılıyor.
+  Özet satırı üretmeyen paket de **hata** sayılıyor, çünkü `exit(1)`'i çağıran
+  şey `test_summary()`: onu unutan paket asla kırmızı olamaz. Dördü
+  (`arcade_movement`, `arcade_progression`, `methods`, `struct_native`) tam
+  olarak bu durumdaydı ve düzeltildi. Koşucunun her iki koruması da bilerek
+  hata sokularak doğrulandı.
 
 - 🔴 **`assert` sınıfı denetimi.** `lib/test.tpr`'de `assert(int cond, ...)`
   gövdesinde `cond == 0` ile bakıyordu; bool VMValue'su int 0'a eşit çıkmadığı

@@ -52,11 +52,18 @@ The AOT linker resolves `libtulpar_runtime.a` at runtime via `build_link_search_
 
 It invokes `./tulpar --aot <file>`, expects an `a.out`/`<base>.exe` to be produced, runs it, and compares only the exit status. Interactive examples get stdin from `examples/inputs/<basename>.txt`. The `SKIP_TESTS` array is currently empty; the active filter is `COMPILE_ONLY_TESTS` in `build.sh` — examples that block on `listen()` / `api_run()` (sockets, router, wings, tulpar_api) plus the import-only `utils.tpr` are compiled but not executed, so a regression in the embedded server/router stdlib path still fails the suite. (Until 3.13.0 this list had to be kept in sync with `$compileOnly` in `run_tests.ps1`; that PowerShell runner went away with native Windows support, so `build.sh` is now the single place to update.)
 
-A separate `tests/` directory holds focused regression suites that are **not** run by `./build.sh test`:
-- `*.test.tpr` — Tulpar source using the embedded `test` library (`import "test"`, jest-style assertions). Run with `./tulpar tests/<file>.test.tpr`.
+A separate `tests/` directory holds focused regression suites, run by their own target:
+
+```bash
+./build.sh suites                         # Run every tests/*.test.tpr suite
+```
+
+- `*.test.tpr` — Tulpar source using the embedded `test` library (`import "test"`, jest-style assertions). Run one with `./tulpar tests/<file>.test.tpr`, or all with `./build.sh suites`.
+
+`./build.sh suites` treats a suite that prints **no `Tests:` summary** as a failure, not a pass. That guard exists because `test_summary()` is what calls `exit(1)` — a suite that forgets it can never go red. Four suites were in exactly that state until 3.13.0, and these suites ran in **no automation at all** until then; that blindness is where the `assert`-never-fails bug (see `lib/test.tpr`) survived.
 - `wings_tls_smoke.py` — the remaining Python harness, drives the compiled `tulpar` binary as a subprocess to exercise the TLS serve path. Manual; not run by CI. (The other `*_smoke.py` harnesses for LSP / formatter / pkg / serve-modes were removed — they were never wired into CI.)
 
-CI (`.github/workflows/build.yml`) builds on Ubuntu and macOS; only the Linux job runs `./build.sh test` (and it is `continue-on-error`). There is no Windows job — see the note under **Build**.
+CI (`.github/workflows/build.yml`) builds on Ubuntu and macOS; only the Linux job runs the test steps — `./build.sh test`, `./build.sh suites`, the typeinfer runner, and the SHA-256 helper. None of them are `continue-on-error`: a test failure turns CI red. There is no Windows job — see the note under **Build**.
 
 A multi-language micro-benchmark harness lives in `benchmarks/` — `run_benchmarks.sh` / `run_benchmarks.ps1` time `fib`/`loopsum` across C, Rust, Go, JS, Python, Java, and Tulpar AOT, writing into `benchmarks/RESULTS.md`. Not run by CI.
 
