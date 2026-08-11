@@ -80,6 +80,12 @@ struct Ent3 {
     float life;                       // kalan ömür (sn); <= 0 = ömürsüz (mermi dışı)
     int owner;                        // mermiyi atanın handle'ı; mermi değilse -1
     int pdir;                         // devriye yönü (0 = 2. uca, 1 = 1. uca)
+    // Kovalama sırasında SEÇİLEN KAÇINMA TARAFI: 0 = engel yok/serbest,
+    // 1 = sola, -1 = sağa. Durum tutmak şart: simetrik bir duvarın önünde
+    // "hedefe en yakın açık yön" her karede taraf değiştirebiliyor ve düşman
+    // ilerlemek yerine yerinde titriyordu (ölçüldü: vx her kare +6.5 ↔ -6.9).
+    // Bir tarafa bağlanınca duvarı gerçekten dolaşıyor.
+    int avoid;
     // -- karakter animasyonu (Faz 8); yalnız SHAPE_MODEL entity'lerde anlamlı --
     int anim_idle;                    // boşta animasyon indeksi (-1 = yok)
     int anim_run;                     // koşu animasyon indeksi (-1 = yok)
@@ -271,7 +277,8 @@ func spawn3(x, y, z, sx, sy, sz, color, shape, tag): int {
                shape: shape, model: 0 - 1, color: color, tag: tag,
                grounded: 0, alive: 1, solid: _default_solid3(tag),
                hp: 0, hpmax: 0, invuln: 0.0, life: 0.0, owner: 0 - 1, pdir: 0,
-               anim_idle: 0 - 1, anim_run: 0 - 1, anim_fps: 24.0, anim_t: 0.0 };
+               anim_idle: 0 - 1, anim_run: 0 - 1, anim_fps: 24.0, anim_t: 0.0,
+               avoid: 0 };
     return _mk_handle3(_alloc_slot3(e));
 }
 
@@ -282,7 +289,8 @@ func spawn3_model(x, y, z, scale, model_handle, tag): int {
                shape: SHAPE_MODEL, model: model_handle, color: WHITE, tag: tag,
                grounded: 0, alive: 1, solid: _default_solid3(tag),
                hp: 0, hpmax: 0, invuln: 0.0, life: 0.0, owner: 0 - 1, pdir: 0,
-               anim_idle: 0 - 1, anim_run: 0 - 1, anim_fps: 24.0, anim_t: 0.0 };
+               anim_idle: 0 - 1, anim_run: 0 - 1, anim_fps: 24.0, anim_t: 0.0,
+               avoid: 0 };
     return _mk_handle3(_alloc_slot3(e));
 }
 
@@ -364,6 +372,7 @@ func scene3d_reset() {
     // bağımlı yapıyordu — "varsayılan kapalı" testi bir öncekinin bıraktığı
     // sınırı ölçüyordu).
     _slope_lim3 = 0.0; _slope_cos3 = 0.0; _slide_acc3 = 18.0;
+    _chase_avoid3 = 1;   // kaçınma varsayılanı da sahneyle birlikte döner
     _hitA = []; _hitB = []; _hitF = [];
     _deadT = []; _deadF = [];
     _lvlN = []; _lvlF = []; _cur_lvl3 = 0; _lvl_pending3 = 0 - 1; _won3 = 0;
@@ -804,6 +813,84 @@ func _s3_over_step(): int {
 // entity'ye kalıcı durum yazmak zorunda kalmıyor — devriye yönü hariç.
 
 // Hedefe doğru yürü (yatay). Y hızına dokunmaz: yerçekimi/zıplama onun.
+// Engelden kaçınma: AÇIK gelir. Bu bir özellik değil KUSUR DÜZELTMESİ —
+// düz çizgi kovalayan düşman duvara toslayıp orada titriyordu, ve bu bir 3B
+// oyunda en çok göze batan şeydi. Eski davranışı isteyen `chase_direct3d()`
+// diyebilir (ör. uçan/hayalet düşman, ya da duvarsız arena).
+int _chase_avoid3 = 1;
+func chase_avoid3d(on) { if (on) { _chase_avoid3 = 1; } else { _chase_avoid3 = 0; } }
+func chase_direct3d() { _chase_avoid3 = 0; }
+func takip_kacinma3d(on) { chase_avoid3d(on); }
+
+float _CHASE_PROBE3 = 3.2;   // ileriye bakış mesafesi (dünya birimi)
+
+// XZ düzleminde parça ↔ ŞİŞİRİLMİŞ kutu kesişimi (slab yöntemi).
+//
+// Şişirme (`pad`) hareket edenin yarıçapıdır ve LOAD-BEARING: ışın sıfır
+// kalınlıktadır, gövde değil. Şişirmeden, merkezden geçen "açık" bir yol
+// gövdenin duvar köşesine takılmasına yol açıyordu — ölçüldü, düşman köşede
+// tam olarak donuyordu (konum 7 basamağa kadar sabit: fizik ilerletiyor,
+// çarpışma birebir geri itiyordu). Engeli yarıçap kadar büyütmek klasik
+// "konfigürasyon uzayı" numarası: nokta için açık olan yol gövde için de açık.
+func _seg_box_xz3(ox, oz, rx, rz, w, pad): bool {
+    Ent3 e = _e3[w];
+    float hx = e.sx * 0.5 + pad;
+    float hz = e.sz * 0.5 + pad;
+    float tmin = 0.0;
+    float tmax = 1.0;
+    if (abs_f3(rx) < 0.000001) {
+        if (ox < e.x - hx || ox > e.x + hx) { return false; }
+    } else {
+        float t1 = (e.x - hx - ox) / rx;
+        float t2 = (e.x + hx - ox) / rx;
+        if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
+        if (t1 > tmin) { tmin = t1; }
+        if (t2 < tmax) { tmax = t2; }
+        if (tmin > tmax) { return false; }
+    }
+    if (abs_f3(rz) < 0.000001) {
+        if (oz < e.z - hz || oz > e.z + hz) { return false; }
+    } else {
+        float t1 = (e.z - hz - oz) / rz;
+        float t2 = (e.z + hz - oz) / rz;
+        if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
+        if (t1 > tmin) { tmin = t1; }
+        if (t2 < tmax) { tmax = t2; }
+        if (tmin > tmax) { return false; }
+    }
+    return true;
+}
+
+// (x,z)'den (dirx,dirz) yönünde `dist` kadar yatay yol duvarsız mı?
+// `pad` hareket edenin yarıçapı (yukarıdaki nota bakın). Y aralığı örtüşmeyen
+// duvarlar atlanıyor — üst geçit gibi yapılar yolu kapatmasın.
+func _path_clear3(sx, sy, sz, dirx, dirz, dist, pad, syh): bool {
+    float rx = dirx * dist;
+    float rz = dirz * dist;
+    int n = length(_e3);
+    int i = 0;
+    while (i < n) {
+        Ent3 w = _e3[i];
+        if (w.alive == 1 && w.tag == TAG_WALL && w.solid == 1) {
+            float wh = w.sy * 0.5;
+            // dikeyde hiç örtüşmüyorsa bu duvar yolu kapatmıyor
+            if (abs_f3(w.y - sy) < wh + syh) {
+                if (_seg_box_xz3(sx, sz, rx, rz, i, pad)) { return false; }
+            }
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Hedefe doğru yürü; önü kapalıysa AÇIK olan en yakın yöne sap.
+//
+// Navmesh/A* değil, bilerek: bu bir preset motor, sahne tamamen dinamik ve
+// duvarlar da entity. Yön taraması durum tutmuyor, her karede sıfırdan karar
+// veriyor — yani duvar hareket etse, yıkılsa ya da yeni duvar doğsa hiçbir
+// veri yapısını tazelemek gerekmiyor. Bedeli: tek başına bir U biçimli tuzaktan
+// çıkamaz (yerel minimum). Arena/koridor düzenlerinde istenen davranışı veriyor,
+// gerçek labirent isteyen oyun kendi yolunu `set3vel` ile sürebilir.
 func chase3d(id, target, speed) {
     int s = _slot_of3(id);
     int t = _slot_of3(target);
@@ -813,13 +900,77 @@ func chase3d(id, target, speed) {
     float dx = tg.x - e.x;
     float dz = tg.z - e.z;
     float d = sqrt(dx * dx + dz * dz);
-    if (d > 0.001) {
-        e.vx = dx / d * speed;
-        e.vz = dz / d * speed;
-        e.yaw = atan2(dx, dz) * RAD2DEG3;
-    } else {
+    if (d <= 0.001) {
         e.vx = 0.0; e.vz = 0.0;
+        _e3[s] = e;
+        return;
     }
+    float ux = dx / d;
+    float uz = dz / d;
+
+    if (_chase_avoid3 == 1) {
+        // Yalnız hedefe olan mesafeye kadar bak: hedef yakınsa duvarın
+        // ARKASINDAKİ bir engel yüzünden gereksiz sapmayalım.
+        float probe = _CHASE_PROBE3;
+        if (d < probe) { probe = d; }
+        float pad = e.sx * 0.5;
+        if (e.sz * 0.5 > pad) { pad = e.sz * 0.5; }
+        float syh = e.sy * 0.5;
+        if (_path_clear3(e.x, e.y, e.z, ux, uz, probe, pad, syh)) {
+            e.avoid = 0;      // yol açıldı, bağlılık biter
+        } else {
+            // TARAFA BAĞLAN. Engel görünce bir kez taraf seçilir ve yol
+            // açılana kadar o tarafta kalınır. Bağlanmadan, simetrik bir
+            // duvarın önünde "en yakın açık yön" her karede taraf değiştiriyor
+            // ve düşman ilerlemeden titriyordu.
+            int side = e.avoid;
+            if (side == 0) {
+                // İlk karar: iki yanı simetrik tara, hedefe en yakın açık yönü
+                // seç. Simetri önemli — hep aynı yana bakmak düşmanları duvar
+                // boyunca tek sıraya dizerdi.
+                float a0 = 25.0;
+                while (a0 <= 105.0 && side == 0) {
+                    float r0 = a0 * DEG2RAD3;
+                    float c0 = cos(r0); float s0 = sin(r0);
+                    if (_path_clear3(e.x, e.y, e.z,
+                                     ux * c0 - uz * s0, ux * s0 + uz * c0, probe, pad, syh)) {
+                        side = 1;
+                    } else if (_path_clear3(e.x, e.y, e.z,
+                                            ux * c0 + uz * s0, 0.0 - ux * s0 + uz * c0, probe, pad, syh)) {
+                        side = 0 - 1;
+                    }
+                    a0 = a0 + 20.0;
+                }
+                if (side == 0) { side = 1; }   // hiçbiri açık değil → yine de bir yön tut
+            }
+            // Seçili tarafta hedefe EN YAKIN açık açıyı bul.
+            float ang = 25.0;
+            int found = 0;
+            while (ang <= 135.0 && found == 0) {
+                float ra = ang * DEG2RAD3;
+                float c = cos(ra);
+                float sn = sin(ra) * side;      // side = -1 → ayna
+                float nx2 = ux * c - uz * sn;
+                float nz2 = ux * sn + uz * c;
+                if (_path_clear3(e.x, e.y, e.z, nx2, nz2, probe, pad, syh)) {
+                    ux = nx2; uz = nz2; found = 1;
+                }
+                ang = ang + 20.0;
+            }
+            if (found == 0) {
+                // Seçili taraf tamamen kapandı (köşeye sıkıştı) → tarafı çevir;
+                // sonraki kare öbür yanı dener. Böylece kalıcı kilit olmaz.
+                side = 0 - side;
+            }
+            e.avoid = side;
+        }
+    } else {
+        e.avoid = 0;
+    }
+
+    e.vx = ux * speed;
+    e.vz = uz * speed;
+    e.yaw = atan2(ux, uz) * RAD2DEG3;
     _e3[s] = e;
 }
 

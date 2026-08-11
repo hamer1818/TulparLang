@@ -9,6 +9,45 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — düşman engelden kaçınıyor: `chase3d` artık duvara toslamıyor
+
+`chase3d` düz çizgi kovalıyordu: düşman duvara dayanıp orada titriyordu. Bir 3B
+oyunda en çok göze batan kusur buydu. **Varsayılan AÇIK** — bu bir özellik değil
+kusur düzeltmesi; eski davranışı isteyen (uçan düşman, duvarsız arena)
+`chase_direct3d()` / `chase_avoid3d(false)` diyebilir.
+
+Navmesh/A* değil, bilerek: bu bir preset motor, sahne tamamen dinamik ve
+duvarlar da entity. Yön taraması **durum tutmuyor**, her karede sıfırdan karar
+veriyor — duvar hareket etse, yıkılsa ya da yeni duvar doğsa hiçbir veri yapısını
+tazelemek gerekmiyor. Bedeli belgeli: tek başına U biçimli bir tuzaktan çıkamaz
+(yerel minimum); gerçek labirent isteyen oyun kendi yolunu `set3vel` ile sürer.
+
+İki şey **ölçülerek** bulundu, ikisi de load-bearing:
+
+- **Tarafa bağlanma şart.** İlk sürüm her karede "hedefe en yakın açık yön"ü
+  sıfırdan seçiyordu. Simetrik bir duvarın önünde bu taraf değiştirip duruyor,
+  düşman ilerlemeden titriyordu — ölçüldü: `vx` her kare **+6.5 ↔ −6.9**
+  arasında zıplıyordu. Artık seçilen taraf `Ent3.avoid`da saklanıyor ve yol
+  açılana kadar korunuyor; seçili taraf tamamen kapanırsa taraf çevriliyor
+  (köşede kalıcı kilit olmasın).
+- **Engel, hareket edenin yarıçapı kadar ŞİŞİRİLMELİ.** Işın sıfır kalınlıkta,
+  gövde değil: merkezden "açık" görünen yol gövdeyi duvarın köşesine takıyordu.
+  Ölçüldü — düşman köşede **tam olarak** donuyordu (konum 7 basamağa kadar
+  sabit: fizik ilerletiyor, çarpışma birebir geri itiyordu). Klasik
+  "konfigürasyon uzayı" numarası: engeli yarıçap kadar büyüt, nokta için açık
+  olan yol gövde için de açık olsun.
+
+Y aralığı örtüşmeyen duvarlar taramada atlanıyor, yani üst geçit gibi yapılar
+yolu kapatmıyor.
+
+Mevcut bir testin **niyeti ile ölçtüğü şey ayrıştı** ve düzeltildi:
+`t_enemy_blocked_by_wall` "240 kare sonra z < 5" diye bakıyordu, oysa niyeti
+katı-gövde garantisiydi. Kaçınma gelince düşman duvarın **etrafından** dolaşıp
+z > 5'e çıkıyor — hiçbir şeyin içinden geçmeden. Test artık gerçek değişmezi
+ölçüyor (simülasyon boyunca duvarla hiç örtüşmeme) ve ikiye ayrıldı: kaçınma
+kapalıyken geçemez, açıkken dolaşarak geçer. 6 yeni test; üçü bilerek hata
+sokularak doğrulandı (bağlanmayı kaldır, şişirmeyi kaldır, kaçınmayı kapat).
+
 ### Added — arazi eğimi: yamaç sınırı, kayma, ve kamerayı tepeden çıkarma
 
 Faz 10 dünyayı sürekli bir yüzey yaptı ama iki ödün bırakmıştı: oyuncu dik

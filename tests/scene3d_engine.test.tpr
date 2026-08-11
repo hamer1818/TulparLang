@@ -679,19 +679,50 @@ func t_moving_player_blocked() {
 // -- 36c) Dusmanlar da duvarlarla carpisir ----------------------------------
 // Eskiden duvar itmesi YALNIZ TAG_PLAYER icin calisiyordu; dusmanlar
 // duvarlarin icinden gecip gidiyordu.
+// NOT: bu test eskiden "240 kare sonra z < 5" diye bakıyordu. Kovalama
+// engelden kaçınmayı öğrenince o ölçüt yanlışlandı — düşman duvarın
+// ETRAFINDAN dolaşıp z > 5'e çıkıyor, ama hiçbir şeyin içinden geçmiyor.
+// Testin asıl niyeti "katı gövde garantisi"ydi; artık onu doğrudan ölçüyor:
+// (a) kaçınma kapalıyken düz dayanan düşman duvarı GEÇEMEZ,
+// (b) simülasyon boyunca düşman duvarla HİÇBİR karede örtüşmez.
 func t_enemy_blocked_by_wall() {
     scene3d_reset();
+    chase_direct3d();          // kacinma kapali: duz duvara dayansin
     int e = spawn3(0.0, 1.0, 0.0,  1.3, 2.0, 1.3, RED, SHAPE_CUBE, TAG_ENEMY);
     int target = spawn3(0.0, 1.0, 14.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
-    spawn3(0.0, 1.0, 6.0,  20.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int w = spawn3(0.0, 1.0, 6.0,  20.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int overlapped = 0;
     int steps = 0;
     while (steps < 240) {
         chase3d(e, target, 6.0);
         _s3_physics(0.016667);
         _s3_collision();
+        if (_overlap3(_slot_of3(e), _slot_of3(w))) { overlapped = 1; }
         steps = steps + 1;
     }
-    assert(get3z(e) < 5.0, "dusman duvarin icinden GECMEMELI");
+    assert(get3z(e) < 5.0, "duz dayanan dusman duvari GECEMEZ");
+    assert_eq_int(overlapped, 0);
+}
+
+// Kaçınma AÇIKKEN aynı sahnede düşman duvarı dolaşarak geçmeli — ve yine
+// hiçbir karede duvarla örtüşmemeli. "Geçti" ile "içinden geçti" farkı burada.
+func t_enemy_walks_around_wall() {
+    scene3d_reset();
+    int e = spawn3(0.0, 1.0, 0.0,  1.3, 2.0, 1.3, RED, SHAPE_CUBE, TAG_ENEMY);
+    int target = spawn3(0.0, 1.0, 14.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int w = spawn3(0.0, 1.0, 6.0,  20.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int overlapped = 0;
+    int steps = 0;
+    while (steps < 400) {
+        chase3d(e, target, 6.0);
+        _s3_physics(0.016667);
+        _s3_collision();
+        if (_overlap3(_slot_of3(e), _slot_of3(w))) { overlapped = 1; }
+        steps = steps + 1;
+    }
+    assert(get3z(e) > 6.5, "kacinma acikken dusman duvari DOLASARAK gecmeli");
+    assert_eq_int(overlapped, 0);          // dolasti, icinden gecmedi
+    assert(abs_f3(get3x(e)) > 5.0 || get3z(e) > 6.5, "yoldan saparak gecmeli");
 }
 
 // -- 36d) Katı gövdeler ic ice GECMEZ (dusman-dusman, oyuncu-dusman) --------
@@ -938,7 +969,8 @@ test("silindir dikey kapsul", "t_cylinder_capsule");
 test("donen kutu (OBB/SAT)", "t_obb_rotated");
 test("SAT duvar itmesi (yonlu)", "t_obb_push_out");
 test("yuruyen oyuncu duvarda durur", "t_moving_player_blocked");
-test("dusman duvardan gecmez", "t_enemy_blocked_by_wall");
+test("duz dayanan dusman duvari gecemez", "t_enemy_blocked_by_wall");
+test("kacinan dusman duvari dolasir", "t_enemy_walks_around_wall");
 test("kati govdeler ic ice gecmez", "t_bodies_dont_overlap");
 test("item/mermi kati degil", "t_items_not_solid");
 test("rampa yuzey yuksekligi", "t_ramp_height");
@@ -1335,6 +1367,90 @@ func t_camera_ray_sees_terrain() {
     assert(t2 > 0.999, "tepenin ustunden gecen isin serbest olmali");
 }
 
+// -- Düşman yol bulma (engelden kaçınma) -------------------------------------
+
+func t_path_clear_basic() {
+    scene3d_reset();
+    zemin3(0.0);
+    spawn3(0.0, 1.0, 5.0, 8.0, 4.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    // Duvara dogru: kapali. Duvarin yanindan: acik.
+    assert_eq_bool(_path_clear3(0.0, 1.0, 0.0, 0.0, 1.0, 8.0), false);
+    assert_eq_bool(_path_clear3(0.0, 1.0, 0.0, 1.0, 0.0, 8.0), true);
+    // Duvardan KISA kalan bir bakis mesafesi engeli gormemeli.
+    assert_eq_bool(_path_clear3(0.0, 1.0, 0.0, 0.0, 1.0, 2.0), true);
+    // Kati olmayan duvar engel sayilmamali.
+    scene3d_reset();
+    zemin3(0.0);
+    int w = spawn3(0.0, 1.0, 5.0, 8.0, 4.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    solid3d(w, false);
+    assert_eq_bool(_path_clear3(0.0, 1.0, 0.0, 0.0, 1.0, 8.0), true);
+}
+
+// Önü açıkken kaçınma DEVREYE GİRMEMELİ: hız doğrudan hedefe bakmalı.
+func t_chase_direct_when_clear() {
+    scene3d_reset();
+    zemin3(0.0);
+    int p = spawn3(0.0, 1.0, 10.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int en = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    chase3d(en, p, 6.0);
+    int s = _slot_of3(en);
+    Ent3 e = _e3[s];
+    assert(abs_f3(e.vx) < 0.001, "acik yolda yana sapma olmamali");
+    assert(e.vz > 5.9, "acik yolda tam hizla hedefe gitmeli");
+}
+
+// Arada duvar varken kaçınma yana sapmalı — ve sapma HEDEFE DOĞRU ilerlemeyi
+// tamamen bırakmamalı (geri dönmemeli).
+func t_chase_avoids_wall() {
+    scene3d_reset();
+    zemin3(0.0);
+    int p = spawn3(0.0, 1.0, 10.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int en = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    spawn3(0.0, 1.0, 4.0, 6.0, 4.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+
+    chase3d(en, p, 6.0);
+    Ent3 e = _e3[_slot_of3(en)];
+    assert(abs_f3(e.vx) > 0.5, "duvar varken yana sapmali");
+    assert(e.vz > 0.0, "sapma hedeften GERI donmemeli");
+}
+
+// chase_direct3d() eski (düz çizgi) davranışı geri vermeli.
+func t_chase_direct_opt_out() {
+    scene3d_reset();
+    zemin3(0.0);
+    chase_direct3d();
+    int p = spawn3(0.0, 1.0, 10.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int en = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    spawn3(0.0, 1.0, 4.0, 6.0, 4.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    chase3d(en, p, 6.0);
+    Ent3 e = _e3[_slot_of3(en)];
+    assert(abs_f3(e.vx) < 0.001, "kacinma kapaliyken duz gitmeli");
+}
+
+// ASIL DAVRANIŞ TESTİ: duvarın arkasındaki oyuncuyu kovalayan düşman,
+// çarpışma çözümüyle birlikte simüle edildiğinde duvarı GEÇMELİ (etrafından
+// dolaşmalı) — düz çizgi sürümünde duvara yaslanıp orada kalıyordu.
+func t_chase_gets_around_wall() {
+    scene3d_reset();
+    zemin3(0.0);
+    yercekimi3(26.0);
+    int p  = spawn3(0.0, 1.0, 12.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int en = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    // Aradaki duvar: genis ama SONSUZ degil, etrafindan dolasilabilir.
+    spawn3(0.0, 1.5, 6.0, 10.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+
+    int k = 0;
+    while (k < 400) {
+        chase3d(en, p, 7.0);
+        _s3_physics(0.016667);
+        _s3_collision();
+        k = k + 1;
+    }
+    float ez = get3z(en);
+    // Duvar z=6'da (yarim kalinlik 0.5). Dusman onu GECMIS olmali.
+    assert(ez > 6.5, "dusman duvarin arkasina gecmeli (dolasarak)");
+}
+
 test("genis faz elemesi korumali", "t_broadphase_conservative");
 test("genis faz gercekten eliyor", "t_broadphase_prunes");
 test("genis faz itmeden sonra taze", "t_broadphase_sync_after_push");
@@ -1353,4 +1469,9 @@ test("egim siniri varsayilan kapali", "t_slope_limit_off_by_default");
 test("dik yamacta yamac asagi kayma", "t_slope_slide_downhill");
 test("duz zeminde kayma yok", "t_slope_no_slide_on_flat");
 test("kamera isini araziyi goruyor", "t_camera_ray_sees_terrain");
+test("yatay engel isini", "t_path_clear_basic");
+test("acik yolda duz kovalama", "t_chase_direct_when_clear");
+test("duvar varken yana sapma", "t_chase_avoids_wall");
+test("kacinma kapatilabiliyor", "t_chase_direct_opt_out");
+test("dusman duvarin etrafindan dolasiyor", "t_chase_gets_around_wall");
 test_summary();
