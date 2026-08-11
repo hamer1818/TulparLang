@@ -2444,8 +2444,29 @@ int tame_impl_touch_y(int i) { return (int)tame_to_world_y((double)GetTouchPosit
 // toString/toInt yeter); ad dosya adıdır ("skor" gibi, yol verme).
 // ---------------------------------------------------------------------------
 
+// ANDROID'DE pencere hazır olmadan çağrılamaz. Orada raylib'in dosya yolu
+// göreli adlar için AAssetManager'a düşüyor (LoadFileText → android_fopen →
+// AAssetManager_open) ve asset manager ancak aktivite ayağa kalkınca, yani
+// InitWindow sırasında kuruluyor. Öncesinde çağrılırsa NULL mutex üzerinde
+// SIGSEGV — emülatörde birebir bu görüldü: oyun `kayit_ac3d()`yi üst düzeyde,
+// `oyna3d()`den ÖNCE çağırdığı anda çöküyordu. Çökmek yerine "veri yok" demek
+// doğru davranış; scene3d zaten pencereden sonra yeniden okuyor.
+//
+// Guard SADECE Android'de: masaüstünde raylib düz fopen kullanıyor, dosya
+// erişiminin pencereyle ilgisi yok. Guard'ı her platforma koymak motorun
+// headless test edilebilirliğini kırardı (arazi fiziğinde bilerek korunan
+// özellik) — nitekim ilk denemede kalıcılık testleri tam bu yüzden düştü.
+#if defined(PLATFORM_ANDROID) || defined(__ANDROID__)
+#  define TAME_DATA_NEEDS_WINDOW 1
+#else
+#  define TAME_DATA_NEEDS_WINDOW 0
+#endif
+
 int tame_impl_save_data(const char *name, const char *text) {
   if (!name || !name[0] || !text) return 0;
+#if TAME_DATA_NEEDS_WINDOW
+  if (!IsWindowReady()) return 0;
+#endif
   return SaveFileText(name, (char *)text) ? 1 : 0;
 }
 
@@ -2453,6 +2474,9 @@ int tame_impl_save_data(const char *name, const char *text) {
 // sonra tame_impl_text_free ile bırakır. Dosya yoksa NULL döner.
 char *tame_impl_load_data(const char *name) {
   if (!name || !name[0]) return NULL;
+#if TAME_DATA_NEEDS_WINDOW
+  if (!IsWindowReady()) return NULL;
+#endif
   return LoadFileText(name);
 }
 

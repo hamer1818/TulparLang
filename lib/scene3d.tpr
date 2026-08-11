@@ -375,7 +375,7 @@ func scene3d_reset() {
     _chase_avoid3 = 1;   // kaçınma varsayılanı da sahneyle birlikte döner
     // Kalıcılık: BELLEKTEKİ durum sıfırlanır, DİSKTEKİ kayıt durur. reset
     // "sahneyi baştan kur" demek, "oyuncunun rekorunu sil" demek değil.
-    _sav_on = 0; _sav_loaded = 0; _best3 = 0; _new_rec3 = 0; _lvl_done3 = [];
+    _sav_on = 0; _best3 = 0; _new_rec3 = 0; _lvl_done3 = [];
     _hitA = []; _hitB = []; _hitF = [];
     _deadT = []; _deadF = [];
     _lvlN = []; _lvlF = []; _cur_lvl3 = 0; _lvl_pending3 = 0 - 1; _won3 = 0;
@@ -620,7 +620,6 @@ func _s3_apply_level() {
 // Anahtar sahne başlığından türetiliyor, yani iki farklı oyun birbirinin
 // rekorunu ezmez. arcade ile aynı dosya deseni, farklı önek.
 int _sav_on = 0;
-int _sav_loaded = 0;
 int _best3 = 0;
 int _new_rec3 = 0;
 array _lvl_done3 = [];      // 1-tabanlı: _lvl_done3[k-1] == 1 → k. bölüm bitti
@@ -633,7 +632,6 @@ func _sav_lvl_key3(k): str {
 func _s3_load_progress() {
     _best3 = 0;
     _lvl_done3 = [];
-    _sav_loaded = 1;
     if (_sav_on == 0 || length(_win_title) == 0) { return; }
     str s = load_data(_sav_key3());
     if (length(s) > 0) { _best3 = toInt(s); }
@@ -2465,9 +2463,12 @@ func play3d() {
     if (_sky3 == 1) { sky(_sky_top3, _sky_bot3); }
     // Sis, gökyüzü ayarlandıktan SONRA — rengini onun ufkundan alıyor.
     if (_fog3 > 0.0) { fog_sky(_fog3); }
-    // Kalıcılık kayıt aşamasında açıldıysa ama başlık o an henüz yoksa
-    // yükleme boşa düşmüş olabilir; burada başlık kesin belli.
-    if (_sav_on == 1 && _sav_loaded == 0) { _s3_load_progress(); }
+    // Kalıcılığı PENCEREDEN SONRA yeniden yükle — koşul yok, idempotent.
+    // Android'de dosya erişimi asset manager'a bağlı ve o ancak InitWindow ile
+    // kuruluyor; `kayit_ac3d()` üst düzeyde (yani buradan önce) çağrıldığında
+    // okuma boş dönüyor. Tek doğru okuma anı burası. Masaüstünde ilk okuma
+    // zaten çalışıyordu, o yüzden bu yalnız cihazda görünen bir farktı.
+    if (_sav_on == 1) { _s3_load_progress(); }
     if (_has_setup3 == 1) { call(_setup3_fn); }
     // Bölüm kaydedildiyse EN KÜÇÜK numaralıyla başla. setup, bölümlerin ortak
     // kurulumu (kamera ayarı, ışık, kancalar) için kalır; sahneyi bölüm fn'i

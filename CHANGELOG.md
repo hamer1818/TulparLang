@@ -39,6 +39,22 @@ yazmak* demek ve motor bunu istenmeden yapmamalı — aksi hâlde her örnek
 - `scene3d_reset()` **belleği** sıfırlıyor, **diski** değil: "sahneyi baştan kur"
   ≠ "oyuncunun rekorunu sil".
 
+**Android'de gerçek bir çökme çıktı ve emülatör kurulumu olmasa görülmezdi.**
+`kayit_ac3d()` üst düzeyde, yani `oyna3d()`den — dolayısıyla `InitWindow`'dan —
+önce çağrılıyor. Android'de raylib'in dosya yolu göreli adlar için
+`AAssetManager`'a düşüyor (`LoadFileText` → `android_fopen` →
+`AAssetManager_open`) ve asset manager ancak aktivite ayağa kalkınca kuruluyor;
+öncesinde NULL mutex üzerinde SIGSEGV. Masaüstünde raylib düz `fopen` kullandığı
+için 80 testin hepsi geçiyordu — hata yalnız cihazda vardı. İki yerden düzeltildi:
+
+- `tame_impl_save_data`/`load_data` artık **yalnız Android'de** pencere hazır mı
+  diye bakıyor ve hazır değilse çökmek yerine "veri yok" diyor. Guard'ı her
+  platforma koymak motorun **headless test edilebilirliğini** kırardı (arazi
+  fiziğinde bilerek korunan özellik) — nitekim ilk denemede kalıcılık testleri
+  tam bu yüzden düştü, o yüzden `PLATFORM_ANDROID` ile sınırlandı.
+- `play3d()` pencereden **sonra** kalıcılığı koşulsuz yeniden okuyor (idempotent).
+  Doğru okuma anı orası; üst düzeydeki ilk okuma Android'de boş dönüyor.
+
 7 test eklendi; üçü bilerek hata sokularak doğrulandı. **Bir test zayıf çıktı ve
 bu ölçülerek bulundu:** `goto_level3d`'yi "bitti" saydıran bozma testi
 geçiyordu — çünkü test `scene3d_reset()` sonrası doğrudan `goto_level3d(3)`
