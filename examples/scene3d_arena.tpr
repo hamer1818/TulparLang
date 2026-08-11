@@ -30,6 +30,7 @@ float BULLET_LIFE = 1.6;   // sn — ıskalayan mermi burada ölür
 int   BULLET_DMG = 25;
 int   ENEMY_HP = 50;       // 2 isabet
 int   TOUCH_DMG = 12;      // düşmana değmenin bedeli
+int   poison_zone = 0 - 1; // zehir havuzunun bölge no'su (HUD göstergesi okuyor)
 
 // --- Ortak kurulum: her bölümde aynı olan şeyler --------------------------
 func setup() {
@@ -87,8 +88,11 @@ func build_zones() {
     // 2) Zehir havuzu — İÇİNDEYKEN kancası, yani her kare. hasar3d kendi
     // dokunulmazlık penceresini yönettiği için bu "saniyede 60 hasar" değil.
     // Küre bölge: köşesi olmayan bir havuz için kutu kurmak tuhaf olurdu.
-    int pool = bolge_kure3d(11.0, 1.0, 11.0,  3.5, TAG_PLAYER);
-    icindeyken3d(pool, on_poison_pool);
+    poison_zone = bolge_kure3d(11.0, 1.0, 11.0,  3.5, TAG_PLAYER);
+    icindeyken3d(poison_zone, on_poison_pool);
+    // ÇIKINCA kancası: havuzdan çıkmak da bir olay. Taklit yöntemiyle bunu
+    // yazmak için oyunun "geçen kare içinde miydim" bayrağı tutması gerekirdi.
+    cikinca3d(poison_zone, on_poison_exit);
 }
 
 func spawn_player() {
@@ -200,11 +204,19 @@ func enemy_died() {
 func on_bonus_pad() {
     patlat3d(ben3(), 22, rgb(120, 255, 180), 7.0, 0.6);
     skor3_ekle(50);
-    can3d(ben3(), 100);          // canı doldur
+    // `can3d` (health3d) can sistemini YENİDEN KURAR — hp'yi de hpmax'ı da
+    // 100'e yazar. Şifa için doğru araç değil: 120 canlı bir düşmana
+    // uygulansa canını düşürürdü. iyilestir3d hpmax'ı aşmadan ekler ve
+    // dokunulmazlık penceresine dokunmaz.
+    iyilestir3d(ben3(), 40);
 }
 
 func on_poison_pool() {
     hasar3d(ben3(), 6);          // pencere başına bir kez ısırır
+}
+
+func on_poison_exit() {
+    patlat3d(ben3(), 10, rgb(200, 120, 240), 5.0, 0.4);
 }
 
 func player_died() {
@@ -216,6 +228,11 @@ func player_died() {
 // Bunlar 2B çizimdir ama konumları 3B'ye bağlı — ekran_x3d/ekran_y3d ile
 // dünya noktası ekrana çevriliyor. Sahne çizildikten SONRA çağrılır.
 func draw_hud() {
+    // Zehir göstergesi: bölgenin İÇİNDE kaç entity var. Havuza basınca yanar,
+    // çıkınca söner — giriş/çıkışın gerçekten KENAR olduğu buradan görülüyor.
+    if (icinde3d(poison_zone) > 0) {
+        text("ZEHIR!", 12, 78, 20, rgb(200, 120, 240));
+    }
     int i = 0;
     int n = length(enemies);
     while (i < n) {

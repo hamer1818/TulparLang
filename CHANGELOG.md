@@ -51,13 +51,43 @@ giriş/çıkış **kenarı** hesaplanıyor.
 - Sıralama: bölgeler fizik ve çarpışmadan **sonra** (entity duvara itilmiş,
   nihai konumda), bölüm geçişinden **önce** (bir bölge kancası `bolum_gec3d()`
   çağırabilsin).
-- `examples/scene3d_arena.tpr` ikisini de kullanıyor: bölüm başına tek atımlık
-  **bonus pedi** (kutu, +50 skor + can dolumu) ve **zehir havuzu** (küre, her
-  kare `hasar3d` — dokunulmazlık penceresi ısırığı kendisi sınırlıyor).
+- `examples/scene3d_arena.tpr` üç kancayı da kullanıyor: bölüm başına tek atımlık
+  **bonus pedi** (kutu, +50 skor + `iyilestir3d`), **zehir havuzu** (küre, her
+  kare `hasar3d` — dokunulmazlık penceresi ısırığı kendisi sınırlıyor) ve
+  havuzdan **çıkınca** kıvılcım + HUD göstergesinin sönmesi.
 - 12 yeni regresyon testi (`tests/scene3d_engine.test.tpr`, 80 → 93). Hepsi
   bozma enjekte edilerek doğrulandı: kenar tespiti, etiket süzgeci, küre
   bölgenin *gövde* ölçmesi, ölüm-çıkış bastırması, bölüm temizliği, kapatma
   sessizliği ve iki gövdeli tek atım — her biri ilgili bozmada kırmızıya döndü.
+
+### Fixed — kapanan tetikleyici bölge sahte "çıkış" atıyordu
+
+Tek atımlık bir bölge, **tarama ortasında** kapanabiliyor: bölgede zaten duran
+bir gövde işlendikten sonra ikinci bir gövde girip bölgeyi kapatırsa, birincisi
+o karenin üyelik kümesine çoktan yazılmış oluyordu. Sonraki kare onu "artık
+kümede yok" diye görüp `cikinca3d` kancasını çağırıyordu — oyuncu bölgeden hiç
+çıkmamışken. Çıkış geçidi artık bölgenin açık olduğunu da kontrol ediyor:
+**kapalı bölge hiçbir olay üretmez.**
+
+Kapatmanın üyeliği düşürmesi bunu tek başına engellemiyordu; iki ayrı iş
+yapıyorlar (üyelik düşürme `inside3d()`'nin kapanır kapanmaz doğru cevap
+vermesi için). Tek gövdeyle senaryo hiç görünmüyor — mevcut `tek atım` testi
+bu yüzden yakalayamıyordu; iki gövdeli yeni bir regresyon testi eklendi ve
+koruma sökülerek kırmızıya döndüğü doğrulandı.
+
+### Added — `heal3d` / `iyilestir3d`: can vermenin doğru yolu
+
+Şifa için tek yol `damage3d(id, -n)` ya da `health3d(id, n)` idi; ikisi de
+yanlış araçtı:
+
+- `damage3d(-n)` **dokunulmazlık penceresi açıyor**, yani şifa alan oyuncu bir
+  de hasara bağışık kalıyordu. Şifa "vurulmadın" demek değil.
+- `health3d(n)` can sistemini **yeniden kuruyor** (hp *ve* hpmax = n), yani
+  120 canlı bir gövdeye 100 uygulamak canını düşürürdü.
+
+`heal3d` hpmax'ı aşmadan ekler, dokunulmazlığa dokunmaz, can sistemi kurulmamış
+entity'yi yok sayar. `examples/scene3d_arena.tpr` bonus pedi artık bunu
+kullanıyor.
 
 ### Added — 3B kalıcılık: rekor ve bölüm ilerlemesi artık kaydediliyor
 

@@ -1611,6 +1611,46 @@ func t_save_reset_keeps_disk() {
     assert_eq_str(load_data("scene3d_best_t3d_keep.txt"), "250");   // disk duruyor
 }
 
+// Tek atım TARAMA ORTASINDA kapanıyor: A zaten içerideyken B'nin girişi bölgeyi
+// kapatır. A bu karede yeni kümeye çoktan yazılmıştır; kapalı bölge için çıkış
+// bastırılmazsa sonraki kare A'ya SAHTE bir çıkış atar. (Bu senaryo tek gövdeyle
+// hiç görünmüyor — `t_trigger_once` bunu yakalayamıyordu.)
+func t_trigger_once_no_phantom_exit() {
+    scene3d_reset(); _tz_zero();
+    spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int b = spawn3(40.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0,  6.0, 6.0, 6.0, TAG_PLAYER);
+    on_enter3d(z, _tz_cb_in);
+    on_exit3d(z, _tz_cb_out);
+    _s3_triggers();                 // A girdi; uyelik {A}
+    trigger_once3d(z, true);        // bundan sonrasi tek atim
+    set3pos(b, 1.5, 1.0, 0.0);
+    _s3_triggers();                 // B'nin girisi bolgeyi KAPATIR
+    _s3_triggers(); _s3_triggers();
+    assert_eq_int(_tz_out, 0);
+}
+
+// Şifa: hpmax'ı aşmaz ve dokunulmazlık penceresine YAZMAZ. İkincisi asıl
+// mesele — `damage3d(id, -n)` ile şifa vermek oyuncuyu bir de hasara bağışık
+// yapardı, o yüzden ayrı bir yol var.
+func t_heal_caps_and_keeps_vulnerable() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    health3d(p, 100);
+    damage3d(p, 60);
+    assert_eq_int(hp3d(p), 40);
+    Ent3 e0 = _e3[_slot_of3(p)];
+    e0.invuln = 0.0; _e3[_slot_of3(p)] = e0;    // hasarın açtığı pencereyi kapat
+    heal3d(p, 25);
+    assert_eq_int(hp3d(p), 65);
+    heal3d(p, 500);
+    assert_eq_int(hp3d(p), 100);                // hpmax asilmaz
+    Ent3 e1 = _e3[_slot_of3(p)];
+    assert(e1.invuln <= 0.0, "sifa dokunulmazlik penceresi ACMAMALI");
+    damage3d(p, 10);
+    assert_eq_int(hp3d(p), 90);                 // sifadan hemen sonra vurulabilir
+}
+
 // ===========================================================================
 // Tetikleyici bölge
 // ===========================================================================
@@ -1840,6 +1880,8 @@ test("acik yolda duz kovalama", "t_chase_direct_when_clear");
 test("duvar varken yana sapma", "t_chase_avoids_wall");
 test("kacinma kapatilabiliyor", "t_chase_direct_opt_out");
 test("dusman duvarin etrafindan dolasiyor", "t_chase_gets_around_wall");
+test("kapanan bolge sahte cikis atmaz", "t_trigger_once_no_phantom_exit");
+test("sifa tavani ve bagisiklik ayrimi", "t_heal_caps_and_keeps_vulnerable");
 test("bolge girisi bir kez atar", "t_trigger_enter_fires_once");
 test("bolge icindeyken her kare atar", "t_trigger_stay_every_frame");
 test("bolgeden cikis ve yeniden giris", "t_trigger_exit_and_reenter");

@@ -1190,6 +1190,23 @@ func damage3d(id, n) {
     if (e.hp <= 0) { _fire_death3(s); }
 }
 
+// Can ver. İki şeye BİLEREK dokunmuyor:
+//   - hpmax'ı aşmıyor (şifa alanında beklemek canı sonsuza büyütmemeli),
+//   - dokunulmazlık penceresine yazmıyor. `damage3d(id, -n)` ile şifa vermek
+//     mümkün görünüyor ama yanlış: o yol invuln'ü kuruyor, yani şifa alanında
+//     duran oyuncu bir de hasara bağışık olurdu. Şifa "vurulmadın" demek değil.
+// Can sistemi kurulmamış entity (hpmax == 0) yok sayılır.
+func heal3d(id, n) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s];
+    if (e.alive == 0) { return; }
+    if (e.hpmax <= 0) { return; }
+    e.hp = e.hp + n;
+    if (e.hp > e.hpmax) { e.hp = e.hpmax; }
+    _e3[s] = e;
+}
+
 // Ölüm kancalarını çalıştır, sonra entity'yi öldür. Kanca kendisi kill3d
 // çağırırsa sorun değil — kill3d çift-öldürmeye karşı korumalı.
 func _fire_death3(s) {
@@ -2338,9 +2355,12 @@ func _s3_triggers() {
                     } else {
                         _trg_fire3(t, h, _trg_fin[t], _trg_hasin[t]);
                         // Tek atım: girişi işledikten SONRA kapan, yoksa
-                        // kancanın kendisi hiç çalışmazdı. Kapatma yolu
-                        // TEK: trigger_on3d üyeliği de düşürüyor, yoksa
-                        // kapanan bölge arkasında bir ÇIKIŞ bırakırdı.
+                        // kancanın kendisi hiç çalışmazdı. Kapatma tek yoldan
+                        // (trigger_on3d) geçiyor ki "kapalı bölge" her yerde
+                        // aynı anlama gelsin; onun düşürdüğü üyelik `inside3d`
+                        // kapanır kapanmaz doğru cevap versin diye. Sahte
+                        // ÇIKIŞ'ı engelleyen ise aşağıdaki geçidin _trg_on
+                        // kontrolü — ikisi ayrı iş yapıyor (bkz. o yorum).
                         if (_trg_once[t] == 1) { trigger_on3d(t, false); }
                     }
                     // Kanca bölgeyi kapatmış olabilir (tek atım ya da doğrudan
@@ -2367,7 +2387,12 @@ func _s3_triggers() {
         while (j < nn) {
             if (nt[j] == ot && ne[j] == oh) { still = 1; j = nn; } else { j = j + 1; }
         }
-        if (still == 0 && alive3(oh)) {
+        // Kapalı bölge hiç olay üretmez — çıkış da olay. Bu kontrol GEREKLİ,
+        // kapatmanın üyeliği düşürmesi tek başına yetmiyor: bölge tarama
+        // ORTASINDA kapanırsa (tek atım), kapanmadan önce işlenmiş bir gövde
+        // yeni kümeye çoktan yazılmış oluyor. Sonraki kare o gövdeyi "artık
+        // kümede yok" diye görüp SAHTE bir çıkış atıyordu.
+        if (still == 0 && _trg_on[ot] == 1 && alive3(oh)) {
             _trg_fire3(ot, oh, _trg_fout[ot], _trg_hasout[ot]);
         }
         i = i + 1;
@@ -2928,6 +2953,7 @@ func mermi3d(sahip, hiz, omur): int { return bullet3d(sahip, hiz, omur); }
 func can3d(i, n) { health3d(i, n); }
 func can_kac3d(i): int { return hp3d(i); }
 func hasar3d(i, n) { damage3d(i, n); }
+func iyilestir3d(i, n) { heal3d(i, n); }
 func olunce3d(tag, fn) { on_death3d(tag, fn); }
 func dokunulmazlik3d(sn) { invuln3d(sn); }
 

@@ -29,7 +29,10 @@ sonra dil/altyapı borcu.
 - [x] **Tetikleyici bölge geldi.** ✅ 2026-08-11 — `bolge3d`/`bolge_kure3d` +
       `girince3d`/`cikinca3d`/`icindeyken3d`. Giriş/çıkış KENARI hesaplanıyor
       (taklitte kanca her karede atıyordu) ve bölge entity değil. Tek atım,
-      taşınabilirlik, ayıklama çizimi. Detay: CHANGELOG.
+      taşınabilirlik, ayıklama çizimi. Yanında `heal3d`/`iyilestir3d`: şifa
+      hpmax'ı aşmıyor ve dokunulmazlık penceresine YAZMIYOR — `damage3d(-n)`
+      ile şifa vermek oyuncuyu bir de hasara bağışık yapıyordu. Örnek:
+      `scene3d_arena` ortasındaki şifa pedi. Detay: CHANGELOG.
 
 - [ ] **Gamepad `scene3d`'de okunmuyor.** tame'de binding var
       (`gamepad_down`, `gamepad_pressed`), 3B giriş katmanı yalnız klavye +
@@ -89,6 +92,15 @@ boşluklar; backlog'da yoklardı.
       hale getirmek.
 
 - [ ] **`%` operatörü yok** — `mod()` var.
+
+- [ ] **AOT optimizasyonu `scene3d_arena`'da geçersiz IR üretiyor.**
+      `[AOT] Warning: optimization produced invalid IR at every level; using
+      the unoptimized module` — yani örnek OPTİMİZASYONSUZ derleniyor.
+      2026-08-12'de ölçüldü: tetikleyici bölge işinden ÖNCE de vardı (eski ve
+      yeni `lib/scene3d.tpr` ile birebir aynı), yani mevcut borç. Diğer üç
+      scene3d örneği ve arcade temiz — yalnız en büyük program tetikliyor,
+      bu da bir eşik/ölçek hatasına işaret ediyor. Sessiz bir performans
+      kaybı: uyarı geçiyor, kimse bakmıyor.
 
 - [ ] **Optimizasyon `scene3d_arena` için GEÇERSİZ IR üretiyor.** Her derlemede
       `optimization produced invalid IR at every level; using the unoptimized
