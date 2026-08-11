@@ -9,6 +9,42 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — 3B kalıcılık: rekor ve bölüm ilerlemesi artık kaydediliyor
+
+tame `save_data`/`load_data` veriyordu (masaüstünde CWD, Android'de
+`internalDataPath`) ama `scene3d` kullanmıyordu: rekor da, açılan bölüm de oyunla
+birlikte yok oluyordu. arcade'de ikisi de vardı.
+
+**OPT-IN (`save_progress3d()` / `kayit_ac3d()`), bilerek:** kalıcılık *diske
+yazmak* demek ve motor bunu istenmeden yapmamalı — aksi hâlde her örnek
+çalıştırması çalışma dizinine dosya bırakırdı. Açan oyun tek satırla açar.
+
+- **Rekor.** `best_score3d()` / `rekor3d()`, `new_record3d()` /
+  `rekor_kirildi3d()`. Skor **doğal kontrol noktasında** işleniyor —
+  `game_over3d()` içinde, çünkü hem kaybetme hem kazanma oradan geçiyor. Her
+  `score3d_add` için diske yazmak saçma olurdu.
+- **Bölüm ilerlemesi.** `level_done3d(k)` / `bolum_bitti_mi3d`,
+  `unlocked_level3d()` / `acik_bolum3d`. `next_level3d()` çağrılması "bu bölüm
+  TEMİZLENDİ" demektir, işaretleme orada; `goto_level3d(n)` ise serbest atlama
+  (menü, hile, yeniden başlatma) ve **işaretlemiyor** — yoksa oyuncu hiç
+  görmediği bölümü geçmiş sayılırdı.
+- `unlocked_level3d()` **kesintisiz** sayıyor: 3. bölüm bitmiş ama 2. bitmemişse
+  cevap 2. Aksi hâlde oyuncu atladığı bölümü hiç görmezdi.
+- Anahtar sahne başlığından türüyor, yani iki farklı oyun birbirinin rekorunu
+  ezmiyor. arcade ile aynı dosya deseni, farklı önek (`scene3d_best_*`,
+  `scene3d_lvl_*`); `.gitignore`'a arcade'inkilerin yanına eklendi.
+- Menü katmanı bağlandı: başlangıç ekranı rekoru, oyun-bitti ekranı ya rekoru ya
+  da **"YENI REKOR!"** rozetini gösteriyor. `restart3d()` rozeti sıfırlıyor
+  (rozet yeni ele ait), kalıcı rekorun kendisi duruyor.
+- `scene3d_reset()` **belleği** sıfırlıyor, **diski** değil: "sahneyi baştan kur"
+  ≠ "oyuncunun rekorunu sil".
+
+7 test eklendi; üçü bilerek hata sokularak doğrulandı. **Bir test zayıf çıktı ve
+bu ölçülerek bulundu:** `goto_level3d`'yi "bitti" saydıran bozma testi
+geçiyordu — çünkü test `scene3d_reset()` sonrası doğrudan `goto_level3d(3)`
+çağırıyordu ve `_cur_lvl3` hâlâ 0 olduğu için işaretleme zaten erken dönüyordu.
+Test artık önce gerçekten 1. bölüme giriyor, sonra atlıyor.
+
 ### Added — düşman engelden kaçınıyor: `chase3d` artık duvara toslamıyor
 
 `chase3d` düz çizgi kovalıyordu: düşman duvara dayanıp orada titriyordu. Bir 3B

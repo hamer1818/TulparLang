@@ -21,9 +21,10 @@ sonra dil/altyapı borcu.
       ışın testi + tarafa bağlanma. Yerel minimum sınırı belgelendi: tek başına
       U biçimli tuzaktan çıkamaz. Detay: CHANGELOG.
 
-- [ ] **Kayıt/yükleme 3B'ye bağlı değil.** `kayit_yaz`/`kayit_oku` tame'de var
-      ama `scene3d` kullanmıyor: rekor, açılan bölüm, ayarlar kalıcı değil.
-      arcade'de bunların hepsi var.
+- [x] **Kayıt/yükleme 3B'ye bağlandı.** ✅ 2026-08-06 — rekor + bölüm ilerlemesi
+      kalıcı (`kayit_ac3d()` ile OPT-IN, çünkü diske yazıyor). Anahtar sahne
+      başlığından türüyor; `next_level3d` bölümü "bitti" işaretliyor,
+      `goto_level3d` (serbest atlama) işaretlemiyor. Detay: CHANGELOG.
 
 - [ ] **Tetikleyici bölge yok.** "Buraya girince şu olsun" — şu an
       `solid3d(false)` + çarpışma kancasıyla taklit ediliyor. Ucuz ve

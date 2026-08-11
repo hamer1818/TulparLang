@@ -971,6 +971,13 @@ test("SAT duvar itmesi (yonlu)", "t_obb_push_out");
 test("yuruyen oyuncu duvarda durur", "t_moving_player_blocked");
 test("duz dayanan dusman duvari gecemez", "t_enemy_blocked_by_wall");
 test("kacinan dusman duvari dolasir", "t_enemy_walks_around_wall");
+test("kayit varsayilan kapali", "t_save_off_by_default");
+test("rekor diske yazilip okunuyor", "t_save_record_roundtrip");
+test("rekor anahtari basliga ozel", "t_save_key_per_title");
+test("bolum ilerlemesi kalici", "t_save_level_progress");
+test("goto bolumu bitti saymaz", "t_save_goto_does_not_mark");
+test("acik bolum kesintisiz", "t_save_unlock_is_contiguous");
+test("reset diski silmez", "t_save_reset_keeps_disk");
 test("kati govdeler ic ice gecmez", "t_bodies_dont_overlap");
 test("item/mermi kati degil", "t_items_not_solid");
 test("rampa yuzey yuksekligi", "t_ramp_height");
@@ -1449,6 +1456,159 @@ func t_chase_gets_around_wall() {
     float ez = get3z(en);
     // Duvar z=6'da (yarim kalinlik 0.5). Dusman onu GECMIS olmali.
     assert(ez > 6.5, "dusman duvarin arkasina gecmeli (dolasarak)");
+}
+
+// -- Kalıcılık: rekor + bölüm ilerlemesi -------------------------------------
+// Kalıcılık OPT-IN çünkü diske yazıyor. Testler gerçek dosya yazıp okuyor
+// (save_data/load_data), o yüzden her test kendi benzersiz başlığını kullanıyor
+// — aynı anahtarı paylaşan testler birbirinin kaydını görürdü.
+
+func t_save_off_by_default() {
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_off");
+    score3d_add(500);
+    game_over3d();
+    // Kapaliyken rekor BELLEKTE tutulur ama diske yazilmaz.
+    assert_eq_int(best_score3d(), 500);
+    assert_eq_bool(new_record3d(), true);
+    assert_eq_str(load_data("scene3d_best_t3d_off.txt"), "");
+}
+
+func t_save_record_roundtrip() {
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_rec");
+    save_data("scene3d_best_t3d_rec.txt", "");   // temiz baslangic
+    save_progress3d();
+    assert_eq_int(best_score3d(), 0);
+
+    score3d_add(120);
+    game_over3d();
+    assert_eq_int(best_score3d(), 120);
+    assert_eq_bool(new_record3d(), true);
+
+    // Yeni oturum: ayni baslikla acilinca rekor GERI YUKLENMELI.
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_rec");
+    save_progress3d();
+    assert_eq_int(best_score3d(), 120);
+    assert_eq_bool(new_record3d(), false);   // rozet yeni ele ait, sifirlanmali
+
+    // Daha DUSUK skor rekoru ezmemeli.
+    score3d_add(50);
+    game_over3d();
+    assert_eq_int(best_score3d(), 120);
+    assert_eq_bool(new_record3d(), false);
+
+    // Daha yuksek skor gecmeli.
+    restart3d();
+    score3d_add(300);
+    game_over3d();
+    assert_eq_int(best_score3d(), 300);
+    assert_eq_bool(new_record3d(), true);
+    assert_eq_str(load_data("scene3d_best_t3d_rec.txt"), "300");
+}
+
+// İki farklı sahne birbirinin rekorunu ezmemeli (anahtar başlıktan türüyor).
+func t_save_key_per_title() {
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_a");
+    save_data("scene3d_best_t3d_a.txt", "");
+    save_data("scene3d_best_t3d_b.txt", "");
+    save_progress3d();
+    score3d_add(70); game_over3d();
+
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_b");
+    save_progress3d();
+    assert_eq_int(best_score3d(), 0);        // b, a'nin rekorunu GORMEMELI
+    score3d_add(11); game_over3d();
+
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_a");
+    save_progress3d();
+    assert_eq_int(best_score3d(), 70);       // a kendi rekorunu korumus
+}
+
+int _t_p1_hits = 0;
+func _t_p1() { _t_p1_hits = _t_p1_hits + 1; }
+func _t_p2() { }
+func _t_p3() { }
+
+func t_save_level_progress() {
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_lvl");
+    int k = 1;
+    while (k <= 3) { save_data("scene3d_lvl_t3d_lvl_" + toString(k) + ".txt", ""); k = k + 1; }
+    level3d(1, _t_p1); level3d(2, _t_p2); level3d(3, _t_p3);
+    save_progress3d();
+
+    assert_eq_int(unlocked_level3d(), 1);     // hicbiri bitmemis
+    assert_eq_bool(level_done3d(1), false);
+
+    goto_level3d(1); _s3_apply_level();
+    next_level3d();                            // 1. bolum TEMIZLENDI
+    assert_eq_bool(level_done3d(1), true);
+    assert_eq_int(unlocked_level3d(), 2);
+    _s3_apply_level();
+    next_level3d();                            // 2. bolum TEMIZLENDI
+    assert_eq_int(unlocked_level3d(), 3);
+
+    // Yeni oturum: ilerleme diskten geri gelmeli.
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_lvl");
+    level3d(1, _t_p1); level3d(2, _t_p2); level3d(3, _t_p3);
+    save_progress3d();
+    assert_eq_bool(level_done3d(1), true);
+    assert_eq_bool(level_done3d(2), true);
+    assert_eq_bool(level_done3d(3), false);
+    assert_eq_int(unlocked_level3d(), 3);
+}
+
+// goto_level3d SERBEST ATLAMA: atlanan bölümü "bitti" saymamalı, yoksa
+// oyuncu hiç görmediği bölümü geçmiş olurdu.
+func t_save_goto_does_not_mark() {
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_skip");
+    int k = 1;
+    while (k <= 3) { save_data("scene3d_lvl_t3d_skip_" + toString(k) + ".txt", ""); k = k + 1; }
+    level3d(1, _t_p2); level3d(2, _t_p2); level3d(3, _t_p2);
+    save_progress3d();
+    // ÖNCE gerçekten 1. bölümde ol — yoksa _cur_lvl3 = 0 kalır ve işaretleme
+    // zaten erken döner, yani test hiçbir şey sınamamış olur. (İlk hâli tam
+    // bu yüzden zayıftı: goto'yu "bitti" saydıran bir bozma testi geçiyordu.)
+    goto_level3d(1); _s3_apply_level();
+    assert_eq_int(level_now3d(), 1);
+
+    goto_level3d(3); _s3_apply_level();       // SERBEST ATLAMA
+    assert_eq_int(level_now3d(), 3);
+    assert_eq_bool(level_done3d(1), false);   // atlanan bolum bitmis SAYILMAZ
+    assert_eq_bool(level_done3d(2), false);
+    assert_eq_int(unlocked_level3d(), 1);
+}
+
+// unlocked_level3d KESİNTİSİZ olmalı: 3 bitmiş ama 2 bitmemişse cevap 2.
+func t_save_unlock_is_contiguous() {
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_gap");
+    level3d(1, _t_p2); level3d(2, _t_p2); level3d(3, _t_p2);
+    save_progress3d();
+    _s3_mark_level_done(1);
+    _s3_mark_level_done(3);
+    assert_eq_bool(level_done3d(3), true);
+    assert_eq_int(unlocked_level3d(), 2);    // bosluk atlanmaz
+}
+
+// reset BELLEĞİ sıfırlar, DİSKİ değil: "sahneyi baştan kur" ≠ "rekoru sil".
+func t_save_reset_keeps_disk() {
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_keep");
+    save_data("scene3d_best_t3d_keep.txt", "");
+    save_progress3d();
+    score3d_add(250); game_over3d();
+
+    scene3d_reset();
+    assert_eq_int(best_score3d(), 0);         // bellek temiz
+    assert_eq_str(load_data("scene3d_best_t3d_keep.txt"), "250");   // disk duruyor
 }
 
 test("genis faz elemesi korumali", "t_broadphase_conservative");

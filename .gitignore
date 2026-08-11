@@ -184,3 +184,8 @@ arcade_lang.txt
 arcade_star_*.txt
 arcade_badge_*.txt
 arcade_lvl_*.txt
+# scene3d kalıcılığı (rekor + bölüm ilerlemesi) — aynı gerekçe. Anahtar sahne
+# başlığından türediği için ad değişken; `tests/scene3d_engine.test.tpr`
+# kalıcılık testleri de bunları CWD'ye düşürüyor.
+scene3d_best_*.txt
+scene3d_lvl_*.txt

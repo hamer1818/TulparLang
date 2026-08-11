@@ -209,6 +209,9 @@ sahne3d(960, 560, "Tulpar 3B Arena");
 // Bölüm kaydedildiği için yeniden başlamak 1. bölüme döner — ayrı bir
 // on_restart3d kancası gerekmiyor.
 baslangic3d("TULPAR 3B ARENA", "3 bolum · dusmanlari temizle");
+// Kalıcılık OPT-IN (diske yazıyor). Açınca rekor ve tamamlanan bölümler
+// oyun kapansa da kalır; başlangıç ve oyun-bitti ekranları rekoru gösterir.
+kayit_ac3d();
 kurulumda3(setup);
 her_kare3(update);
 hud_ciz3(draw_hud);

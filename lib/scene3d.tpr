@@ -373,6 +373,9 @@ func scene3d_reset() {
     // sınırı ölçüyordu).
     _slope_lim3 = 0.0; _slope_cos3 = 0.0; _slide_acc3 = 18.0;
     _chase_avoid3 = 1;   // kaçınma varsayılanı da sahneyle birlikte döner
+    // Kalıcılık: BELLEKTEKİ durum sıfırlanır, DİSKTEKİ kayıt durur. reset
+    // "sahneyi baştan kur" demek, "oyuncunun rekorunu sil" demek değil.
+    _sav_on = 0; _sav_loaded = 0; _best3 = 0; _new_rec3 = 0; _lvl_done3 = [];
     _hitA = []; _hitB = []; _hitF = [];
     _deadT = []; _deadF = [];
     _lvlN = []; _lvlF = []; _cur_lvl3 = 0; _lvl_pending3 = 0 - 1; _won3 = 0;
@@ -392,7 +395,9 @@ func scene3d_reset() {
 
 func score3d_add(n) { _score3 = _score3 + n; }
 func score3d(): int { return _score3; }
-func game_over3d() { _game_over3 = 1; }
+// Oyunu bitir. Rekor BURADA işleniyor: hem kaybetme hem kazanma bu kapıdan
+// geçiyor, yani skorun kalıcılaşacağı tek doğal kontrol noktası.
+func game_over3d() { _game_over3 = 1; _s3_commit_score(); }
 // Oyun bitti mi (kazanarak ya da kaybederek)? arcade'de `is_over()` vardı,
 // 3B'de yoktu — UI katmanı ve oyunun kendi update'i ikisi de buna bakıyor.
 func is_over3d(): bool { return _game_over3 == 1; }
@@ -561,7 +566,11 @@ func level3d(n, fn) { push(_lvlN, n); push(_lvlF, fn); }
 
 // Sonraki bölüme geç. İSTEKTİR — kare sonunda uygulanır, çağıran satırda değil.
 // Kayıtlı sonraki bölüm yoksa oyun KAZANILDI sayılır.
-func next_level3d() { _lvl_pending3 = _cur_lvl3 + 1; }
+// Sıradaki bölüme geç. `next_level3d()` çağrılması "bu bölüm TEMİZLENDİ"
+// demektir, o yüzden ilerleme burada işaretleniyor. `goto_level3d(n)` ise
+// serbest atlama (menü, hile, yeniden başlatma) — orada işaretleme YOK,
+// yoksa oyuncu atladığı bölümü bitirmiş sayılırdı.
+func next_level3d() { _s3_mark_level_done(_cur_lvl3); _lvl_pending3 = _cur_lvl3 + 1; }
 func goto_level3d(n) { _lvl_pending3 = n; }
 func level_now3d(): int { return _cur_lvl3; }
 func won3d(): bool { return _won3 == 1; }
@@ -595,6 +604,95 @@ func _s3_apply_level() {
     _cam_target = 0 - 1;    // kurulum fn'i camera_follow'u yeniden çağırır
     _cur_lvl3 = want;
     call(_lvlF[idx]);
+}
+
+// ===========================================================================
+// Kalıcılık: rekor + bölüm ilerlemesi
+// ===========================================================================
+// tame `save_data`/`load_data` veriyordu (masaüstünde CWD, Android'de
+// internalDataPath) ama scene3d kullanmıyordu: rekor da, açılan bölüm de
+// oyunla birlikte yok oluyordu. arcade'de ikisi de vardı.
+//
+// OPT-IN (`save_progress3d()`), bilerek: kalıcılık **diske yazmak** demek ve
+// motor bunu istenmeden yapmamalı — aksi hâlde her örnek çalıştırması çalışma
+// dizinine dosya bırakırdı. Açan oyun tek satırla açar.
+//
+// Anahtar sahne başlığından türetiliyor, yani iki farklı oyun birbirinin
+// rekorunu ezmez. arcade ile aynı dosya deseni, farklı önek.
+int _sav_on = 0;
+int _sav_loaded = 0;
+int _best3 = 0;
+int _new_rec3 = 0;
+array _lvl_done3 = [];      // 1-tabanlı: _lvl_done3[k-1] == 1 → k. bölüm bitti
+
+func _sav_key3(): str { return "scene3d_best_" + _win_title + ".txt"; }
+func _sav_lvl_key3(k): str {
+    return "scene3d_lvl_" + _win_title + "_" + toString(k) + ".txt";
+}
+
+func _s3_load_progress() {
+    _best3 = 0;
+    _lvl_done3 = [];
+    _sav_loaded = 1;
+    if (_sav_on == 0 || length(_win_title) == 0) { return; }
+    str s = load_data(_sav_key3());
+    if (length(s) > 0) { _best3 = toInt(s); }
+    // Bölüm bayrakları: kayıtlı bölüm sayısı kadar oku.
+    int n = length(_lvlN);
+    int k = 1;
+    while (k <= n) {
+        str d = load_data(_sav_lvl_key3(k));
+        if (d == "1") { push(_lvl_done3, 1); } else { push(_lvl_done3, 0); }
+        k = k + 1;
+    }
+}
+
+// Kalıcılığı aç. `scene3d(w, h, title)`DAN SONRA çağır — anahtar başlıktan
+// türetiliyor. play3d() de emniyet için yüklenmemişse yükler.
+func save_progress3d() { _sav_on = 1; _s3_load_progress(); }
+func kayit_ac3d() { save_progress3d(); }
+
+func best_score3d(): int { return _best3; }
+func rekor3d(): int { return _best3; }
+func new_record3d(): bool { return _new_rec3 == 1; }
+func rekor_kirildi3d(): bool { return _new_rec3 == 1; }
+
+// Skoru rekora işle. Her puanda değil, DOĞAL KONTROL NOKTALARINDA çağrılıyor
+// (oyun bitişi) — her `score3d_add` için diske yazmak saçma olurdu.
+func _s3_commit_score() {
+    if (_score3 > _best3) {
+        _best3 = _score3;
+        _new_rec3 = 1;
+        if (_sav_on == 1 && length(_win_title) > 0) {
+            save_data(_sav_key3(), toString(_best3));
+        }
+    }
+}
+
+func level_done3d(k): bool {
+    if (k < 1 || k > length(_lvl_done3)) { return false; }
+    return _lvl_done3[k - 1] == 1;
+}
+func bolum_bitti_mi3d(k): bool { return level_done3d(k); }
+
+// Kaldığın yer: 1'den başlayarak KESİNTİSİZ tamamlanan bölümlerin sonrası.
+// Kesintisiz olması önemli — 3. bölüm bitmiş ama 2. bitmemişse oyuncu 2'den
+// devam etmeli, yoksa atladığı bölümü hiç görmez.
+func unlocked_level3d(): int {
+    int k = 1;
+    while (level_done3d(k)) { k = k + 1; }
+    return k;
+}
+func acik_bolum3d(): int { return unlocked_level3d(); }
+
+func _s3_mark_level_done(k) {
+    if (k < 1) { return; }
+    while (length(_lvl_done3) < k) { push(_lvl_done3, 0); }
+    if (_lvl_done3[k - 1] == 1) { return; }      // zaten işaretli, tekrar yazma
+    _lvl_done3[k - 1] = 1;
+    if (_sav_on == 1 && length(_win_title) > 0) {
+        save_data(_sav_lvl_key3(k), "1");
+    }
 }
 
 // ===========================================================================
@@ -664,6 +762,7 @@ func restart3d() {
     _score3 = 0;
     _game_over3 = 0;
     _won3 = 0;
+    _new_rec3 = 0;   // rekor rozeti YENİ ele ait; kalıcı rekorun kendisi durur
     _s3_ui = UI_NONE;
     _hit_me = 0 - 1; _hit_other = 0 - 1;
     if (length(_lvlN) > 0) {
@@ -751,6 +850,10 @@ func _s3_title_draw() {
     if (length(_s3_title_sub) > 0) {
         _s3_center_text(_s3_title_sub, _win_h * 0.30, toInt(_win_h * 0.045), RAYWHITE);
     }
+    if (_sav_on == 1 && _best3 > 0) {
+        _s3_center_text(_s3_t("Rekor: ", "Best: ") + toString(_best3),
+                        _win_h * 0.365, toInt(_win_h * 0.04), GOLD);
+    }
     _s3_btn_draw(0, _s3_t("Basla", "Start"));
     _s3_btn_draw(1, _s3_t("Cikis", "Quit"));
 }
@@ -795,6 +898,15 @@ func _s3_over_draw() {
     }
     _s3_center_text(_s3_t("Skor: ", "Score: ") + toString(_score3),
                     _win_h * 0.32, toInt(_win_h * 0.05), GOLD);
+    if (_sav_on == 1) {
+        if (_new_rec3 == 1) {
+            _s3_center_text(_s3_t("YENI REKOR!", "NEW RECORD!"), _win_h * 0.375,
+                            toInt(_win_h * 0.045), rgb(255, 200, 80));
+        } else {
+            _s3_center_text(_s3_t("Rekor: ", "Best: ") + toString(_best3),
+                            _win_h * 0.375, toInt(_win_h * 0.04), RAYWHITE);
+        }
+    }
     _s3_btn_draw(0, _s3_t("Tekrar Oyna", "Play Again"));
     _s3_btn_draw(1, _s3_t("Cikis", "Quit"));
 }
@@ -2353,6 +2465,9 @@ func play3d() {
     if (_sky3 == 1) { sky(_sky_top3, _sky_bot3); }
     // Sis, gökyüzü ayarlandıktan SONRA — rengini onun ufkundan alıyor.
     if (_fog3 > 0.0) { fog_sky(_fog3); }
+    // Kalıcılık kayıt aşamasında açıldıysa ama başlık o an henüz yoksa
+    // yükleme boşa düşmüş olabilir; burada başlık kesin belli.
+    if (_sav_on == 1 && _sav_loaded == 0) { _s3_load_progress(); }
     if (_has_setup3 == 1) { call(_setup3_fn); }
     // Bölüm kaydedildiyse EN KÜÇÜK numaralıyla başla. setup, bölümlerin ortak
     // kurulumu (kamera ayarı, ışık, kancalar) için kalır; sahneyi bölüm fn'i
