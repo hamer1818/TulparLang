@@ -378,6 +378,7 @@ func scene3d_reset() {
     _sav_on = 0; _best3 = 0; _new_rec3 = 0; _lvl_done3 = [];
     _hitA = []; _hitB = []; _hitF = [];
     _deadT = []; _deadF = [];
+    _trg_clear3(); _trg_show3 = 0;
     _lvlN = []; _lvlF = []; _cur_lvl3 = 0; _lvl_pending3 = 0 - 1; _won3 = 0;
     _s3_particles_clear();
     // Arazi bayrağı sıfırlanır (yükseklik verisi de bırakılır) — sahne
@@ -599,6 +600,7 @@ func _s3_apply_level() {
         return;
     }
     _e3 = []; _e3gen = []; _e3free = []; _free_n3 = 0;
+    _trg_clear3();          // bölgeler yerleştirilmiş geometri: bölümle gider
     _s3_particles_clear();  // önceki bölümün patlamaları yeni sahneye taşmasın
     _hit_me = 0 - 1; _hit_other = 0 - 1;
     _cam_target = 0 - 1;    // kurulum fn'i camera_follow'u yeniden çağırır
@@ -2139,6 +2141,273 @@ func _s3_collision() {
     }
 }
 
+// ===========================================================================
+// Tetikleyici bölge (trigger zone)
+// ===========================================================================
+// "Buraya girince şu olsun" — kapı, kontrol noktası, tuzak, boss arenası,
+// bölüm sonu. Her oyunda lazım olan, kendi başına ucuz olan şey.
+//
+// Şimdiye kadar `solid3d(id, false)` + `carpisinca3` ile TAKLİT ediliyordu.
+// O taklidin iki kusuru vardı ve bu katmanın var olma sebebi ikisi:
+//
+//   1. Kanca ÇAKIŞTIĞI HER KARE çağrılıyor — saniyede 60 kez. İstenen ise
+//      "girince BİR KEZ". Oyunlar bunu kendi bayraklarıyla çözmek zorundaydı
+//      ve o bayrak her oyunda yeniden yazılıyordu.
+//   2. Bölge bir ENTITY oluyordu: çiziliyor (görünmez yapmak ayrı iş), slot
+//      yiyor, geniş faza ve MTV çözümüne giriyor, `alive_count3d()` sayıyor.
+//      Görünmez bir işaret için fazla bedel.
+//
+// Bu katman entity DEĞİL, ayrı düz dizilerde duruyor. Kare başına giriş/çıkış
+// KENARI hesaplanıyor: `girince` bir kez, `cikinca` bir kez atar; sürekli
+// davranış isteyen `icindeyken` kancasını kullanır (eski taklidin davranışı).
+//
+// ÜYELİK düz çift listesinde tutuluyor (bölge indeksi × entity handle) —
+// iç içe dizi yok. Bölge sayısı da içerideki entity sayısı da pratikte tek
+// haneli olduğu için doğrusal tarama en ucuz ve en okunur çözüm.
+array _trg_x = [];   array _trg_y = [];   array _trg_z = [];
+array _trg_sx = [];  array _trg_sy = [];  array _trg_sz = [];  // TAM boy (entity ile aynı sözleşme)
+array _trg_r = [];        // küre bölgenin yarıçapı
+array _trg_shape = [];    // 0 = kutu, 1 = küre
+array _trg_tag = [];      // izlenen etiket
+array _trg_on = [];       // 1 = etkin
+array _trg_once = [];     // 1 = ilk girişten sonra kendini kapat
+array _trg_fin = [];   array _trg_hasin = [];    // girince
+array _trg_fout = [];  array _trg_hasout = [];   // çıkınca
+array _trg_fstay = []; array _trg_hasstay = [];  // içindeyken (her kare)
+
+array _trg_in_t = [];     // üyelik: bölge indeksi
+array _trg_in_e = [];     // üyelik: içerideki entity handle
+int   _trg_cur3 = 0 - 1;  // kanca içinde: hangi bölge tetikledi
+int   _trg_show3 = 0;     // ayıklama çizimi (bölgeler normalde görünmez)
+
+func _trg_new3(shape, x, y, z, sx, sy, sz, r, tag): int {
+    push(_trg_shape, shape);
+    push(_trg_x, x); push(_trg_y, y); push(_trg_z, z);
+    push(_trg_sx, sx); push(_trg_sy, sy); push(_trg_sz, sz);
+    push(_trg_r, r);
+    push(_trg_tag, tag);
+    push(_trg_on, 1);
+    push(_trg_once, 0);
+    push(_trg_fin, 0);   push(_trg_hasin, 0);
+    push(_trg_fout, 0);  push(_trg_hasout, 0);
+    push(_trg_fstay, 0); push(_trg_hasstay, 0);
+    return length(_trg_shape) - 1;
+}
+
+// Kutu bölge: konumu ve TAM boyu entity'ninkiyle aynı sözleşmede.
+func trigger3d(x, y, z, sx, sy, sz, tag): int {
+    return _trg_new3(0, x, y, z, sx, sy, sz, 0.0, tag);
+}
+// Küre bölge: "şunun N birim yakınına gelince". Kutu kurmaktan daha doğal
+// olduğu yerler var (boss menzili, sesli tetik, toplama alanı).
+func trigger_sphere3d(x, y, z, r, tag): int {
+    return _trg_new3(1, x, y, z, 0.0, 0.0, 0.0, r, tag);
+}
+
+func _trg_valid3(t): bool { return t >= 0 && t < length(_trg_shape); }
+
+func on_enter3d(t, fn)  { if (_trg_valid3(t)) { _trg_fin[t] = fn;   _trg_hasin[t] = 1; } }
+func on_exit3d(t, fn)   { if (_trg_valid3(t)) { _trg_fout[t] = fn;  _trg_hasout[t] = 1; } }
+func on_stay3d(t, fn)   { if (_trg_valid3(t)) { _trg_fstay[t] = fn; _trg_hasstay[t] = 1; } }
+
+// Tek atımlık bölge: ilk girişten sonra kendini kapatır. Kontrol noktası,
+// "bir kere anlatılan" mesaj, tek kullanımlık tuzak. Kapandığı için ÇIKIŞ
+// kancası artık atmaz — tek atım demek budur.
+func trigger_once3d(t, on) {
+    if (!_trg_valid3(t)) { return; }
+    if (on) { _trg_once[t] = 1; } else { _trg_once[t] = 0; }
+}
+func trigger_on3d(t, on) {
+    if (!_trg_valid3(t)) { return; }
+    if (on) { _trg_on[t] = 1; } else { _trg_on[t] = 0; _trg_forget3(t); }
+}
+// Bölgeyi taşı: asansör güvertesi, hareketli tuzak, oyuncuyu izleyen aura.
+func trigger_move3d(t, x, y, z) {
+    if (!_trg_valid3(t)) { return; }
+    _trg_x[t] = x; _trg_y[t] = y; _trg_z[t] = z;
+}
+
+func trigger_count3d(): int { return length(_trg_shape); }
+// Kanca içinde: hangi bölge tetikledi. Tek bir callback'i çok bölgeye
+// bağlayabilmek için — `ben3()` giren entity'yi, bu bölgeyi söyler.
+func trigger_id3d(): int { return _trg_cur3; }
+
+// Şu an bölgenin içinde kaç entity var.
+func inside3d(t): int {
+    int c = 0;
+    int i = 0;
+    int n = length(_trg_in_t);
+    while (i < n) {
+        if (_trg_in_t[i] == t) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+
+// Ayıklama çizimi: bölgeler normalde GÖRÜNMEZ (bütün mesele o). Yerleştirirken
+// nereye koyduğunu görmek için aç.
+func trigger_show3d(on) { if (on) { _trg_show3 = 1; } else { _trg_show3 = 0; } }
+
+func _trg_was_in3(t, h): bool {
+    int i = 0;
+    int n = length(_trg_in_t);
+    while (i < n) {
+        if (_trg_in_t[i] == t && _trg_in_e[i] == h) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+// Bir bölgenin üyeliklerini ÇIKIŞ ATMADAN düşür (kapatma / silme yolu).
+func _trg_forget3(t) {
+    array nt = [];
+    array ne = [];
+    int i = 0;
+    int n = length(_trg_in_t);
+    while (i < n) {
+        if (_trg_in_t[i] != t) { push(nt, _trg_in_t[i]); push(ne, _trg_in_e[i]); }
+        i = i + 1;
+    }
+    _trg_in_t = nt; _trg_in_e = ne;
+}
+
+// Entity ↔ bölge çakışması. Entity'nin AABB'si kullanılıyor (küre/silindir
+// için sx yarıçapın iki katı, yani AABB doğru kapsıyor) — tetikleyici bölgede
+// SAT'a gerek yok: bölge eksen hizalı ve amaç "gövde değdi mi", milimetre
+// hassasiyeti değil.
+func _trg_hit3(t, s): bool {
+    Ent3 e = _e3[s];
+    float ex = e.sx * 0.5; float ey = e.sy * 0.5; float ez = e.sz * 0.5;
+    if (_trg_shape[t] == 1) {
+        // Küre bölge ↔ entity kutusu: kutunun bölge merkezine EN YAKIN
+        // noktası bulunup yarıçapla karşılaştırılıyor (kapatma yok, tam).
+        float cx = _trg_x[t]; float cy = _trg_y[t]; float cz = _trg_z[t];
+        if (cx < e.x - ex) { cx = e.x - ex; }
+        if (cx > e.x + ex) { cx = e.x + ex; }
+        if (cy < e.y - ey) { cy = e.y - ey; }
+        if (cy > e.y + ey) { cy = e.y + ey; }
+        if (cz < e.z - ez) { cz = e.z - ez; }
+        if (cz > e.z + ez) { cz = e.z + ez; }
+        float dx = _trg_x[t] - cx; float dy = _trg_y[t] - cy; float dz = _trg_z[t] - cz;
+        float r = _trg_r[t];
+        return dx * dx + dy * dy + dz * dz <= r * r;
+    }
+    float hx = ex + _trg_sx[t] * 0.5;
+    float hy = ey + _trg_sy[t] * 0.5;
+    float hz = ez + _trg_sz[t] * 0.5;
+    return abs_f3(e.x - _trg_x[t]) <= hx
+        && abs_f3(e.y - _trg_y[t]) <= hy
+        && abs_f3(e.z - _trg_z[t]) <= hz;
+}
+
+func _trg_fire3(t, h, fn, has) {
+    if (has == 0) { return; }
+    _trg_cur3 = t;
+    _hit_me = h;
+    // Bölge entity değil, yani `oteki3()` gösterecek bir şey YOK. Bir önceki
+    // çarpışmadan kalan değeri bırakmak sessiz hataya davetiye olurdu.
+    _hit_other = 0 - 1;
+    call(fn);
+    _trg_cur3 = 0 - 1;
+}
+
+// Kare adımı: fizik ve çarpışmadan SONRA çalışır, yani bölgeler entity'lerin
+// bu karedeki NİHAİ konumunu görür (duvara itilme sonrası).
+func _s3_triggers() {
+    int tn = length(_trg_shape);
+    if (tn == 0) { return; }
+    int n = length(_e3);
+    // 1) Bu kareki üyelik + GİRİŞ/İÇİNDEYKEN kenarları.
+    array nt = [];
+    array ne = [];
+    int t = 0;
+    while (t < tn) {
+        if (_trg_on[t] == 1) {
+            int tag = _trg_tag[t];
+            int s = 0;
+            while (s < n) {
+                Ent3 e = _e3[s];
+                // `_trg_on[t]` her entity için YENİDEN okunuyor: bir kanca
+                // (tek atım ya da doğrudan `bolge_etkin3d`) bölgeyi bu taramanın
+                // ORTASINDA kapatmış olabilir. Okunmasaydı "tek atım" bölge,
+                // içindeki her entity için bir kez atardı — yani tek olmazdı.
+                if (_trg_on[t] == 1 && e.alive == 1 && e.tag == tag && _trg_hit3(t, s)) {
+                    int h = _mk_handle3(s);
+                    if (_trg_was_in3(t, h)) {
+                        _trg_fire3(t, h, _trg_fstay[t], _trg_hasstay[t]);
+                    } else {
+                        _trg_fire3(t, h, _trg_fin[t], _trg_hasin[t]);
+                        // Tek atım: girişi işledikten SONRA kapan, yoksa
+                        // kancanın kendisi hiç çalışmazdı. Kapatma yolu
+                        // TEK: trigger_on3d üyeliği de düşürüyor, yoksa
+                        // kapanan bölge arkasında bir ÇIKIŞ bırakırdı.
+                        if (_trg_once[t] == 1) { trigger_on3d(t, false); }
+                    }
+                    // Kanca bölgeyi kapatmış olabilir (tek atım ya da doğrudan
+                    // trigger_on3d). Kapalı bölge üyelik TUTMAZ.
+                    if (_trg_on[t] == 1) { push(nt, t); push(ne, h); }
+                }
+                s = s + 1;
+            }
+        }
+        t = t + 1;
+    }
+    // 2) ÇIKIŞ kenarları: eski kümede olup yenisinde olmayanlar.
+    // ÖLEN entity için çıkış ATILMAZ, üyeliği sessizce düşer: handle zaten
+    // geçersiz, kanca onunla hiçbir şey yapamazdı. Ölümü izlemek isteyen
+    // `olunce3d` kullanır — enter/exit dengesi oraya ait değil.
+    int i = 0;
+    int m = length(_trg_in_t);
+    while (i < m) {
+        int ot = _trg_in_t[i];
+        int oh = _trg_in_e[i];
+        int still = 0;
+        int j = 0;
+        int nn = length(nt);
+        while (j < nn) {
+            if (nt[j] == ot && ne[j] == oh) { still = 1; j = nn; } else { j = j + 1; }
+        }
+        if (still == 0 && alive3(oh)) {
+            _trg_fire3(ot, oh, _trg_fout[ot], _trg_hasout[ot]);
+        }
+        i = i + 1;
+    }
+    _trg_in_t = nt;
+    _trg_in_e = ne;
+}
+
+// Bölge deposunu tamamen boşalt. Bölge YERLEŞTİRİLMİŞ geometridir (kapı, tuzak),
+// kural değil: bölüm değişince entity'lerle birlikte gider. Kancalar
+// (`carpisinca3`, `olunce3d`) ise kural olduğu için bölümü aşar. Ayrım bu.
+func _trg_clear3() {
+    _trg_x = []; _trg_y = []; _trg_z = [];
+    _trg_sx = []; _trg_sy = []; _trg_sz = [];
+    _trg_r = []; _trg_shape = []; _trg_tag = [];
+    _trg_on = []; _trg_once = [];
+    _trg_fin = []; _trg_hasin = [];
+    _trg_fout = []; _trg_hasout = [];
+    _trg_fstay = []; _trg_hasstay = [];
+    _trg_in_t = []; _trg_in_e = [];
+    _trg_cur3 = 0 - 1;
+}
+
+func _trg_draw3() {
+    if (_trg_show3 == 0) { return; }
+    int t = 0;
+    int n = length(_trg_shape);
+    while (t < n) {
+        int col = rgb(90, 220, 160);
+        if (_trg_on[t] == 0) { col = rgb(120, 120, 130); }
+        if (_trg_shape[t] == 1) {
+            sphere_wires(_trg_x[t], _trg_y[t], _trg_z[t], _trg_r[t], 8, col);
+        } else {
+            cube_wires(_trg_x[t], _trg_y[t], _trg_z[t],
+                       _trg_sx[t], _trg_sy[t], _trg_sz[t], col);
+        }
+        t = t + 1;
+    }
+}
+
 // ---- Kamera: bakış girdisi + üç mod ----------------------------------------
 // Bakışı süren üç girdi de aynı açılara yazar:
 //   fare   — FPS'te (imleç kilitli) sürekli, yörüngede SAĞ tuş basılıyken.
@@ -2329,6 +2598,9 @@ func _s3_render() {
         }
         i = i + 1;
     }
+    // Tetikleyici bölgeler entity'lerden SONRA: tel kafes, içindeki cismin
+    // üstünde görünsün. Varsayılan kapalı (bkz. trigger_show3d).
+    _trg_draw3();
 }
 
 // ---- Kayıt / kurulum API'si ------------------------------------------------
@@ -2526,6 +2798,10 @@ func play3d() {
         if (_game_over3 == 0 && frozen == 0) {
             _s3_physics(dt);
             _s3_collision();
+            // Bölgeler çarpışmadan SONRA: entity duvara itilmiş, nihai konumda.
+            // Bölüm geçişinden ÖNCE: bir bölge kancası `bolum_gec3d()` çağırırsa
+            // aşağıdaki satır onu bu karenin sonunda uygular.
+            _s3_triggers();
             // Bölüm geçişi KARE SONUNDA, çarpışma döngüsü bittikten sonra:
             // entity store'u döngünün ortasında silmek slot'ları ayağının
             // altından çekerdi. İstek nereden gelirse gelsin burada uygulanır.
@@ -2654,6 +2930,20 @@ func can_kac3d(i): int { return hp3d(i); }
 func hasar3d(i, n) { damage3d(i, n); }
 func olunce3d(tag, fn) { on_death3d(tag, fn); }
 func dokunulmazlik3d(sn) { invuln3d(sn); }
+
+// -- Tetikleyici bölge --
+func bolge3d(x, y, z, sx, sy, sz, etiket): int { return trigger3d(x, y, z, sx, sy, sz, etiket); }
+func bolge_kure3d(x, y, z, r, etiket): int { return trigger_sphere3d(x, y, z, r, etiket); }
+func girince3d(b, fn) { on_enter3d(b, fn); }
+func cikinca3d(b, fn) { on_exit3d(b, fn); }
+func icindeyken3d(b, fn) { on_stay3d(b, fn); }
+func bolge_bir_kere3d(b, ac) { trigger_once3d(b, ac); }
+func bolge_etkin3d(b, ac) { trigger_on3d(b, ac); }
+func bolge_tasi3d(b, x, y, z) { trigger_move3d(b, x, y, z); }
+func icinde3d(b): int { return inside3d(b); }
+func bolge_no3d(): int { return trigger_id3d(); }
+func bolge_sayisi3d(): int { return trigger_count3d(); }
+func bolge_goster3d(ac) { trigger_show3d(ac); }
 
 // -- Faz 8: parçacık / animasyon / konumsal ses --
 func parcacik3d(x, y, z, n, renk, hiz, omur) { particles3d(x, y, z, n, renk, hiz, omur); }

@@ -4,6 +4,7 @@
 //   Faz 8 (his):      parçacık (billboard) · 3B'ye bağlı 2B can barları
 //   Faz 9 (geometri): rampa · dönük duvar (SAT) · kapsül sütun · kamera ışını
 //   Faz 11 (kabuk):   başlangıç ekranı · duraklat (ESC/P) · yeniden başla
+//   Bölge:            bonus pedi (tek atım) · zehir havuzu (küre, her kare)
 //
 //   ./tulpar examples/scene3d_arena.tpr
 //   ./tulpar build --target=android examples/scene3d_arena.tpr out
@@ -40,6 +41,10 @@ func setup() {
     carpisinca3(TAG_ENEMY, TAG_PLAYER, enemy_touches_player);
     olunce3d(TAG_ENEMY, enemy_died);
     olunce3d(TAG_PLAYER, player_died);
+    // Bölgeler normalde GÖRÜNMEZ. Burada tel kafesleri açıyoruz çünkü oyuncunun
+    // bonus pedini ve zehir havuzunu görmesi gerekiyor — gerçek bir oyunda
+    // yerine bir zemin dokusu/ışık konur, bu ayıklama çizimidir.
+    bolge_goster3d(true);
 }
 
 // --- Bölüm kurulumları ----------------------------------------------------
@@ -64,6 +69,26 @@ func build_arena() {
     // Rampalar: dünya artık tek düz düzlem değil — üstlerine çıkılabiliyor.
     rampa3d(0.0, 0.9, 8.0,   5.0, 1.8, 7.0, rgb(110, 120, 160), 180.0);
     rampa3d(8.5, 0.7, 0.0 - 5.0, 4.0, 1.4, 6.0, rgb(110, 120, 160), 90.0);
+    build_zones();
+}
+
+// Tetikleyici bölgeler. Bunlar ENTITY DEĞİL: çizilmiyorlar (tel kafesi yalnız
+// bolge_goster3d açtığı için görünüyor), çarpışmaya girmiyorlar, oyuncu
+// içlerinden geçiyor. Bölümle birlikte silinip yeniden kuruluyorlar — o yüzden
+// "tek atım" bonus her bölümde bir kez alınabiliyor.
+func build_zones() {
+    // 1) Bonus pedi — GİRİŞ kancası, bölüm başına TEK ATIM. Eski taklitte
+    // (görünmez entity + carpisinca3) bu kanca saniyede 60 kez çağrılırdı;
+    // "bir kez" bayrağını oyunun kendisi tutmak zorundaydı.
+    int pad = bolge3d(0.0 - 10.0, 1.0, 10.0,  4.0, 3.0, 4.0, TAG_PLAYER);
+    girince3d(pad, on_bonus_pad);
+    bolge_bir_kere3d(pad, true);
+
+    // 2) Zehir havuzu — İÇİNDEYKEN kancası, yani her kare. hasar3d kendi
+    // dokunulmazlık penceresini yönettiği için bu "saniyede 60 hasar" değil.
+    // Küre bölge: köşesi olmayan bir havuz için kutu kurmak tuhaf olurdu.
+    int pool = bolge_kure3d(11.0, 1.0, 11.0,  3.5, TAG_PLAYER);
+    icindeyken3d(pool, on_poison_pool);
 }
 
 func spawn_player() {
@@ -168,6 +193,18 @@ func enemy_died() {
     // Son düşman da öldü → sonraki bölüm. Geçiş KARE SONUNDA uygulanır,
     // yani bu kancanın içinde entity dizisi değişmez.
     if (enemies_left <= 0) { bolum_gec3d(); }
+}
+
+// Bölge kancalarında `ben3()` bölgeye GİREN entity'dir (çarpışmadaki gibi).
+// `oteki3()` yoktur — bölge entity değil.
+func on_bonus_pad() {
+    patlat3d(ben3(), 22, rgb(120, 255, 180), 7.0, 0.6);
+    skor3_ekle(50);
+    can3d(ben3(), 100);          // canı doldur
+}
+
+func on_poison_pool() {
+    hasar3d(ben3(), 6);          // pencere başına bir kez ısırır
 }
 
 func player_died() {

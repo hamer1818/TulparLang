@@ -9,6 +9,56 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — 3B tetikleyici bölge: "buraya girince şu olsun"
+
+`scene3d`'de kapı, kontrol noktası, tuzak, bonus pedi, boss arenası yoktu; hepsi
+`solid3d(id, false)` + `carpisinca3` ile **taklit** ediliyordu. O taklidin iki
+kusuru vardı ve bu katmanın var olma sebebi ikisi:
+
+1. **Kanca çakışılan her karede çağrılıyordu** — saniyede 60 kez. İstenen ise
+   "girince bir kez"; her oyun bu bayrağı kendi elinde tutmak zorundaydı.
+2. **Bölge bir entity oluyordu**: çiziliyor, slot yiyor, geniş faza ve MTV
+   çözümüne giriyor, `alive_count3d()` sayıyordu. Görünmez bir işaret için
+   fazla bedel.
+
+Bölgeler artık entity **değil**, ayrı düz dizilerde duruyor ve kare başına
+giriş/çıkış **kenarı** hesaplanıyor.
+
+- `trigger3d(x,y,z, sx,sy,sz, tag)` / `bolge3d` — kutu bölge (entity ile aynı
+  "tam boy" sözleşmesi). `trigger_sphere3d(x,y,z, r, tag)` / `bolge_kure3d` —
+  küre bölge; "şunun N birim yakınına gelince" için kutu kurmak tuhaftı.
+- Üç kanca: `on_enter3d`/`girince3d` (bir kez), `on_exit3d`/`cikinca3d` (bir
+  kez), `on_stay3d`/`icindeyken3d` (her kare — eski taklidin davranışı, artık
+  *seçilerek*). Kanca içinde `ben3()` giren entity'yi, `trigger_id3d()` /
+  `bolge_no3d()` hangi bölgenin tetiklediğini söyler; `oteki3()` **-1**, çünkü
+  bölge entity değil ve önceki çarpışmadan kalan değeri bırakmak sessiz hataya
+  davetiye olurdu.
+- `trigger_once3d`/`bolge_bir_kere3d` — tek atım (kontrol noktası, bir kere
+  anlatılan mesaj). **Tek gerçekten tek**: bölgede aynı anda iki gövde varsa
+  bile giriş bir kez atar, çünkü tarama her entity için `_trg_on` bayrağını
+  yeniden okuyor.
+- `trigger_on3d`/`bolge_etkin3d`, `trigger_move3d`/`bolge_tasi3d` (asansör
+  güvertesi, hareketli tuzak, aura), `inside3d`/`icinde3d`,
+  `trigger_count3d`/`bolge_sayisi3d`, `trigger_show3d`/`bolge_goster3d`
+  (tel kafes ayıklama çizimi — bölgeler normalde görünmez, bütün mesele o).
+- **Kapatmak üyeliği de düşürür ve çıkış atmaz.** Kapalı bölge olay üretmez;
+  aksi hâlde tek atımlık bir bölge arkasında sahte bir "çıkış" bırakırdı.
+- **İçeride ölen entity için çıkış atılmaz**, üyeliği sessizce düşer: handle
+  zaten geçersiz, kanca onunla bir şey yapamazdı. Ölümü izlemek `olunce3d`'nin
+  işi.
+- **Bölgeler bölümle birlikte gider.** Bölge *yerleştirilmiş geometridir* (kapı,
+  tuzak); `carpisinca3`/`olunce3d` ise *kuraldır* ve bölümü aşar. Ayrım bilerek.
+- Sıralama: bölgeler fizik ve çarpışmadan **sonra** (entity duvara itilmiş,
+  nihai konumda), bölüm geçişinden **önce** (bir bölge kancası `bolum_gec3d()`
+  çağırabilsin).
+- `examples/scene3d_arena.tpr` ikisini de kullanıyor: bölüm başına tek atımlık
+  **bonus pedi** (kutu, +50 skor + can dolumu) ve **zehir havuzu** (küre, her
+  kare `hasar3d` — dokunulmazlık penceresi ısırığı kendisi sınırlıyor).
+- 12 yeni regresyon testi (`tests/scene3d_engine.test.tpr`, 80 → 93). Hepsi
+  bozma enjekte edilerek doğrulandı: kenar tespiti, etiket süzgeci, küre
+  bölgenin *gövde* ölçmesi, ölüm-çıkış bastırması, bölüm temizliği, kapatma
+  sessizliği ve iki gövdeli tek atım — her biri ilgili bozmada kırmızıya döndü.
+
 ### Added — 3B kalıcılık: rekor ve bölüm ilerlemesi artık kaydediliyor
 
 tame `save_data`/`load_data` veriyordu (masaüstünde CWD, Android'de

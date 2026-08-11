@@ -26,9 +26,10 @@ sonra dil/altyapı borcu.
       başlığından türüyor; `next_level3d` bölümü "bitti" işaretliyor,
       `goto_level3d` (serbest atlama) işaretlemiyor. Detay: CHANGELOG.
 
-- [ ] **Tetikleyici bölge yok.** "Buraya girince şu olsun" — şu an
-      `solid3d(false)` + çarpışma kancasıyla taklit ediliyor. Ucuz ve
-      her oyunda lazım.
+- [x] **Tetikleyici bölge geldi.** ✅ 2026-08-11 — `bolge3d`/`bolge_kure3d` +
+      `girince3d`/`cikinca3d`/`icindeyken3d`. Giriş/çıkış KENARI hesaplanıyor
+      (taklitte kanca her karede atıyordu) ve bölge entity değil. Tek atım,
+      taşınabilirlik, ayıklama çizimi. Detay: CHANGELOG.
 
 - [ ] **Gamepad `scene3d`'de okunmuyor.** tame'de binding var
       (`gamepad_down`, `gamepad_pressed`), 3B giriş katmanı yalnız klavye +
@@ -88,6 +89,14 @@ boşluklar; backlog'da yoklardı.
       hale getirmek.
 
 - [ ] **`%` operatörü yok** — `mod()` var.
+
+- [ ] **Optimizasyon `scene3d_arena` için GEÇERSİZ IR üretiyor.** Her derlemede
+      `optimization produced invalid IR at every level; using the unoptimized
+      module` uyarısı düşüyor, yani oyun sessizce `-O0` ile çıkıyor. HEAD'de de
+      var (2026-08-11'de bölge katmanından ÖNCE doğrulandı), yani yeni değil —
+      ama diğer üç `scene3d_*` örneğinde yok, yalnız arena'da. Uyarı görünür
+      olduğu için "sessiz" değil, fakat sonuç öyle: en büyük 3B örnek
+      optimizasyonsuz koşuyor. Doğrulayıcının ne dediğine bakılmalı.
 
 - [ ] **Küre ↔ DÖNÜK kutu yaklaşık.** `_sph_box3` kutuyu eksen-hizalı
       varsayıyor; kutu-kutu çifti tam SAT'tan geçiyor, küre-kutu geçmiyor.

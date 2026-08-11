@@ -1611,6 +1611,212 @@ func t_save_reset_keeps_disk() {
     assert_eq_str(load_data("scene3d_best_t3d_keep.txt"), "250");   // disk duruyor
 }
 
+// ===========================================================================
+// Tetikleyici bölge
+// ===========================================================================
+int _tz_in = 0;
+int _tz_out = 0;
+int _tz_stay = 0;
+int _tz_who = 0 - 1;
+int _tz_id = 0 - 1;
+
+func _tz_zero() { _tz_in = 0; _tz_out = 0; _tz_stay = 0; _tz_who = 0 - 1; _tz_id = 0 - 1; }
+func _tz_cb_in()   { _tz_in = _tz_in + 1; _tz_who = me3d(); _tz_id = trigger_id3d(); }
+func _tz_cb_out()  { _tz_out = _tz_out + 1; }
+func _tz_cb_stay() { _tz_stay = _tz_stay + 1; }
+
+// Bu katmanın VAR OLMA SEBEBİ: giriş BİR KEZ atmalı. `carpisinca3` ile taklit
+// edildiğinde kanca her karede çağrılıyordu — testin ölçtüğü tam bu fark.
+func t_trigger_enter_fires_once() {
+    scene3d_reset(); _tz_zero();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0,  4.0, 4.0, 4.0, TAG_PLAYER);
+    on_enter3d(z, _tz_cb_in);
+    _s3_triggers(); _s3_triggers(); _s3_triggers();
+    assert_eq_int(_tz_in, 1);
+    assert_eq_int(inside3d(z), 1);
+    assert_eq_int(_tz_who, p);      // kanca içinde ben3() giren entity
+    assert_eq_int(_tz_id, z);       // ...bolge_no3d() de bölgeyi söyler
+}
+
+// Sürekli davranış isteyen `icindeyken` kullanır: eski taklidin davranışı,
+// artık ayrı bir kanca olarak.
+func t_trigger_stay_every_frame() {
+    scene3d_reset(); _tz_zero();
+    spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0,  4.0, 4.0, 4.0, TAG_PLAYER);
+    on_enter3d(z, _tz_cb_in);
+    on_stay3d(z, _tz_cb_stay);
+    _s3_triggers(); _s3_triggers(); _s3_triggers();
+    assert_eq_int(_tz_in, 1);       // giriş yine tek
+    assert_eq_int(_tz_stay, 2);     // ilk kare giriş, kalan iki kare "içinde"
+}
+
+func t_trigger_exit_and_reenter() {
+    scene3d_reset(); _tz_zero();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0,  4.0, 4.0, 4.0, TAG_PLAYER);
+    on_enter3d(z, _tz_cb_in);
+    on_exit3d(z, _tz_cb_out);
+    _s3_triggers();
+    assert_eq_int(_tz_in, 1); assert_eq_int(_tz_out, 0);
+    set3pos(p, 30.0, 1.0, 0.0); _s3_triggers();
+    assert_eq_int(_tz_out, 1);
+    assert_eq_int(inside3d(z), 0);
+    set3pos(p, 0.0, 1.0, 0.0); _s3_triggers();
+    assert_eq_int(_tz_in, 2);       // yeniden girmek yeniden tetikler
+    assert_eq_int(_tz_out, 1);
+}
+
+// Tek atım: kontrol noktası / bir kere anlatılan mesaj.
+func t_trigger_once() {
+    scene3d_reset(); _tz_zero();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0,  4.0, 4.0, 4.0, TAG_PLAYER);
+    on_enter3d(z, _tz_cb_in);
+    on_exit3d(z, _tz_cb_out);
+    trigger_once3d(z, true);
+    _s3_triggers();
+    assert_eq_int(_tz_in, 1);
+    set3pos(p, 30.0, 1.0, 0.0); _s3_triggers();
+    set3pos(p, 0.0, 1.0, 0.0);  _s3_triggers(); _s3_triggers();
+    assert_eq_int(_tz_in, 1);       // ikinci giriş YOK
+    assert_eq_int(_tz_out, 0);      // kapandığı için çıkış da atmaz
+}
+
+// "Tek atım" TEK demek: bölgede aynı anda iki entity varsa bile giriş bir kez
+// atar. Kapanan bölge geride üyelik de bırakmaz, yoksa ikinci entity için
+// sahte bir ÇIKIŞ üretirdi.
+func t_trigger_once_with_two_bodies() {
+    scene3d_reset(); _tz_zero();
+    spawn3(0.0, 1.0, 0.0,       1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    spawn3(1.0, 1.0, 1.0,       1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0,  6.0, 6.0, 6.0, TAG_PLAYER);
+    on_enter3d(z, _tz_cb_in);
+    on_exit3d(z, _tz_cb_out);
+    trigger_once3d(z, true);
+    _s3_triggers(); _s3_triggers();
+    assert_eq_int(_tz_in, 1);
+    assert_eq_int(_tz_out, 0);
+    assert_eq_int(inside3d(z), 0);
+}
+
+// Etiket süzgeci: bölge yalnız izlediği etiketi görür.
+func t_trigger_tag_filter() {
+    scene3d_reset(); _tz_zero();
+    spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, rgb(230, 80, 80), SHAPE_CUBE, TAG_ENEMY);
+    int z = trigger3d(0.0, 1.0, 0.0,  4.0, 4.0, 4.0, TAG_PLAYER);
+    on_enter3d(z, _tz_cb_in);
+    _s3_triggers(); _s3_triggers();
+    assert_eq_int(_tz_in, 0);
+    assert_eq_int(inside3d(z), 0);
+}
+
+// Küre bölge mesafeyle çalışır ve GÖVDE değdiğinde girer (merkez değil):
+// yarıçap 3.0, entity yarı-genişliği 0.5 → sınır x = 3.5 civarı.
+func t_trigger_sphere_zone() {
+    scene3d_reset(); _tz_zero();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger_sphere3d(0.0, 1.0, 0.0,  3.0, TAG_PLAYER);
+    on_enter3d(z, _tz_cb_in);
+    on_exit3d(z, _tz_cb_out);
+    _s3_triggers();
+    assert_eq_int(_tz_in, 1);
+    set3pos(p, 3.4, 1.0, 0.0); _s3_triggers();     // gövde hâlâ değiyor (2.9 < 3.0)
+    assert_eq_int(_tz_out, 0);
+    set3pos(p, 3.6, 1.0, 0.0); _s3_triggers();     // 3.1 > 3.0 → çıktı
+    assert_eq_int(_tz_out, 1);
+}
+
+func t_trigger_inside_counts() {
+    scene3d_reset(); _tz_zero();
+    spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_ENEMY);
+    spawn3(1.0, 1.0, 1.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_ENEMY);
+    spawn3(30.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_ENEMY);
+    int z = trigger3d(0.0, 1.0, 0.0,  6.0, 6.0, 6.0, TAG_ENEMY);
+    on_enter3d(z, _tz_cb_in);
+    _s3_triggers();
+    assert_eq_int(inside3d(z), 2);
+    assert_eq_int(_tz_in, 2);       // iki ayrı entity → iki giriş
+}
+
+// Kapatmak üyeliği de düşürür ve ÇIKIŞ ATMAZ: kapalı bölge olay üretmez.
+func t_trigger_disable_is_silent() {
+    scene3d_reset(); _tz_zero();
+    spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0,  4.0, 4.0, 4.0, TAG_PLAYER);
+    on_enter3d(z, _tz_cb_in);
+    on_exit3d(z, _tz_cb_out);
+    _s3_triggers();
+    assert_eq_int(_tz_in, 1);
+    trigger_on3d(z, false);
+    _s3_triggers(); _s3_triggers();
+    assert_eq_int(_tz_out, 0);
+    assert_eq_int(inside3d(z), 0);
+    trigger_on3d(z, true);          // yeniden açılınca yeniden girer
+    _s3_triggers();
+    assert_eq_int(_tz_in, 2);
+}
+
+// İçeride ÖLEN entity için çıkış atılmaz: handle zaten geçersiz, kanca onunla
+// hiçbir şey yapamazdı. Üyelik yine de temizlenmeli (yoksa inside3d şişerdi).
+func t_trigger_death_inside_no_exit() {
+    scene3d_reset(); _tz_zero();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0,  4.0, 4.0, 4.0, TAG_PLAYER);
+    on_enter3d(z, _tz_cb_in);
+    on_exit3d(z, _tz_cb_out);
+    _s3_triggers();
+    assert_eq_int(inside3d(z), 1);
+    kill3d(p);
+    _s3_triggers();
+    assert_eq_int(_tz_out, 0);
+    assert_eq_int(inside3d(z), 0);
+}
+
+// Bölge taşınabilir (asansör güvertesi / hareketli tuzak): duran entity'ye
+// bölgeyi getirmek de giriştir.
+func t_trigger_move_zone() {
+    scene3d_reset(); _tz_zero();
+    spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(20.0, 1.0, 0.0,  4.0, 4.0, 4.0, TAG_PLAYER);
+    on_enter3d(z, _tz_cb_in);
+    _s3_triggers();
+    assert_eq_int(_tz_in, 0);
+    trigger_move3d(z, 0.0, 1.0, 0.0);
+    _s3_triggers();
+    assert_eq_int(_tz_in, 1);
+}
+
+// Bölge ENTITY DEĞİL: entity sayısına girmez ve katı gövde çözümünde yok —
+// içinden geçilir. (Taklit edilen hâlinde bunların ikisi de doğru değildi.)
+func t_trigger_is_not_an_entity() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0 - 6.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    trigger3d(0.0, 1.0, 0.0,  4.0, 4.0, 4.0, TAG_PLAYER);
+    assert_eq_int(alive_count3d(), 1);
+    set3vel(p, 0.0, 0.0, 12.0);
+    int steps = 0;
+    while (steps < 60) { _s3_physics(0.016667); _s3_collision(); steps = steps + 1; }
+    assert(get3z(p) > 2.0, "bolge kati degil, icinden gecilmeli");
+}
+
+// Bölge YERLEŞTİRİLMİŞ geometridir: bölüm değişince entity'lerle birlikte
+// gider. Kancalar (kural) ise bölümü aşar — ayrım bilerek.
+func t_trigger_cleared_by_level_and_reset() {
+    scene3d_reset(); _tz_zero();
+    sahne3d(320, 200, "t3d_trg");
+    level3d(1, _t_p2); level3d(2, _t_p2);
+    trigger3d(0.0, 1.0, 0.0,  4.0, 4.0, 4.0, TAG_PLAYER);
+    assert_eq_int(trigger_count3d(), 1);
+    goto_level3d(2); _s3_apply_level();
+    assert_eq_int(trigger_count3d(), 0);
+
+    trigger3d(0.0, 1.0, 0.0,  4.0, 4.0, 4.0, TAG_PLAYER);
+    scene3d_reset();
+    assert_eq_int(trigger_count3d(), 0);
+}
+
 test("genis faz elemesi korumali", "t_broadphase_conservative");
 test("genis faz gercekten eliyor", "t_broadphase_prunes");
 test("genis faz itmeden sonra taze", "t_broadphase_sync_after_push");
@@ -1634,4 +1840,17 @@ test("acik yolda duz kovalama", "t_chase_direct_when_clear");
 test("duvar varken yana sapma", "t_chase_avoids_wall");
 test("kacinma kapatilabiliyor", "t_chase_direct_opt_out");
 test("dusman duvarin etrafindan dolasiyor", "t_chase_gets_around_wall");
+test("bolge girisi bir kez atar", "t_trigger_enter_fires_once");
+test("bolge icindeyken her kare atar", "t_trigger_stay_every_frame");
+test("bolgeden cikis ve yeniden giris", "t_trigger_exit_and_reenter");
+test("tek atimlik bolge", "t_trigger_once");
+test("tek atim iki govdede de tek", "t_trigger_once_with_two_bodies");
+test("bolge etiket suzgeci", "t_trigger_tag_filter");
+test("kure bolge mesafeyle calisiyor", "t_trigger_sphere_zone");
+test("bolge icindekileri sayiyor", "t_trigger_inside_counts");
+test("kapali bolge olay uretmez", "t_trigger_disable_is_silent");
+test("iceride olen icin cikis atilmaz", "t_trigger_death_inside_no_exit");
+test("bolge tasinabiliyor", "t_trigger_move_zone");
+test("bolge entity degil", "t_trigger_is_not_an_entity");
+test("bolge bolum/reset ile temizleniyor", "t_trigger_cleared_by_level_and_reset");
 test_summary();
