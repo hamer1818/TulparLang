@@ -5,6 +5,7 @@
 //   Faz 9 (geometri): rampa · dönük duvar (SAT) · kapsül sütun · kamera ışını
 //   Faz 11 (kabuk):   başlangıç ekranı · duraklat (ESC/P) · yeniden başla
 //   Bölge:            bonus pedi (tek atım) · zehir havuzu (küre, her kare)
+//   Girdi:            klavye+fare · dokunmatik · gamepad (hepsi aynı anda)
 //
 //   ./tulpar examples/scene3d_arena.tpr
 //   ./tulpar build --target=android examples/scene3d_arena.tpr out
@@ -232,6 +233,12 @@ func draw_hud() {
     // çıkınca söner — giriş/çıkışın gerçekten KENAR olduğu buradan görülüyor.
     if (icinde3d(poison_zone) > 0) {
         text("ZEHIR!", 12, 78, 20, rgb(200, 120, 240));
+    }
+    // Kol takılıysa söyle. Motor kolu kendiliğinden okuyor (sol çubuk hareket,
+    // sağ çubuk bakış, A zıpla, START duraklat) — oyunun tek satır bile
+    // girdi kodu yazması gerekmiyor; bu yalnızca bir gösterge.
+    if (kol_bagli_mi3d()) {
+        text("KOL", toInt(_win_w) - 60, 12, 18, rgb(140, 220, 255));
     }
     int i = 0;
     int n = length(enemies);

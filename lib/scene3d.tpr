@@ -365,6 +365,12 @@ func scene3d_reset() {
     // siliyor, bekleyen bir "çıkış" isteği ya da açık kalmış duraklat örtüsü
     // yeni sahneye sızmamalı.
     _s3_ui = UI_NONE; _s3_quit = 0; _s3_tap_prev = 0;
+    _s3_sel3 = 0; _s3_ui_prev3 = 0 - 1;
+    // Kol: ayarlar (hangi kol, ölü bölge, hız) sahne durumu değil, kullanıcı
+    // tercihi — onlar KALIR. Kare tamponu ise sahneyle birlikte sıfırlanır.
+    _gp_dx = 0.0; _gp_dz = 0.0; _gp_lx = 0.0; _gp_ly = 0.0;
+    _gp_jump = 0; _gp_start = 0; _gp_ok = 0; _gp_back = 0;
+    _gp_nav = 0; _gp_nav_prev = 0; _gp_here3 = 0;
     _s3_has_title = 0; _s3_title_txt = ""; _s3_title_sub = "";
     _s3_has_restart = 0;
     // Eğim sınırı da sahne durumu: reset zemini ve araziyi zaten sıfırlıyor,
@@ -497,6 +503,85 @@ func _read_touch3() {
     }
 }
 
+// ---- Gamepad ---------------------------------------------------------------
+// tame'de bağlamalar zaten vardı (`gamepad_down`/`gamepad_axis`/...), 3B giriş
+// katmanı onları hiç okumuyordu: kolla oynanmıyordu.
+//
+// Okuma DOKUNMATİKLE AYNI DESENDE: `_read_gamepad3()` kare başına bir kez
+// `play3d` içinden çağrılıp durumu buraya yazıyor; `_in_dx`/`jump_pressed`
+// yalnız bu tamponu okuyor. Sebebi mimari: motorun fizik/çarpışma katmanı
+// pencere AÇMADAN test edilebiliyor ve raylib'in girdi çağrıları pencere
+// olmadan çağrılamaz. Girdi okumasını tek bir yere hapsetmek testleri
+// grafiksiz tutuyor — aynı gerekçeyle `_read_touch3` de böyle.
+//
+// OTOMATİK: kol takılıysa çalışır, takılı değilse hiçbir şey olmaz. Klavye ve
+// dokunmatik aynı anda açık kalır — biri diğerini kapatmıyor.
+int   _gp_id3   = 0;        // hangi kol (0 = ilk)
+int   _gp_use3  = 1;        // kullanıcı kapatabilir (gamepad3d(false))
+int   _gp_here3 = 0;        // bu karede kol bağlı mı (okuma sonucu)
+float _gp_dead3 = 0.22;     // ölü bölge (çubuk boştayken sürüklenmesin)
+float _gp_sens3 = 180.0;    // bakış hızı: derece / saniye
+
+float _gp_dx = 0.0;   float _gp_dz = 0.0;    // sol çubuk (hareket)
+float _gp_lx = 0.0;   float _gp_ly = 0.0;    // sağ çubuk (bakış)
+int   _gp_jump = 0;   int   _gp_start = 0;   // A / START (kenar)
+int   _gp_ok = 0;     int   _gp_back = 0;    // A / B (menüde onay / geri)
+int   _gp_nav = 0;    int   _gp_nav_prev = 0; // menüde yukarı(-1)/aşağı(+1)
+
+// Ölü bölge + YENİDEN ÖLÇEKLEME: eşiği ham değere uygulayıp bırakmak, çubuk
+// eşiği geçtiği anda hızın 0'dan 0.22'ye sıçraması demekti. Kalan aralık
+// 0..1'e yayılıyor, böylece hafif itiş gerçekten hafif hareket veriyor.
+// SAF eğri: cihazdan okumaz, ham eksen değerini dönüştürür. Cihaz okumasından
+// ayrı durmasının sebebi test edilebilirlik — `gamepad_axis` pencere ister,
+// bu matematik istemez.
+func _gp_curve3(v): float {
+    float a = abs_f3(v);
+    if (a < _gp_dead3) { return 0.0; }
+    float s = (a - _gp_dead3) / (1.0 - _gp_dead3);
+    if (s > 1.0) { s = 1.0; }
+    if (v < 0.0) { return 0.0 - s; }
+    return s;
+}
+
+func _gp_axis3(name): float { return _gp_curve3(gamepad_axis(_gp_id3, name)); }
+
+func _read_gamepad3() {
+    _gp_dx = 0.0; _gp_dz = 0.0; _gp_lx = 0.0; _gp_ly = 0.0;
+    _gp_jump = 0; _gp_start = 0; _gp_ok = 0; _gp_back = 0; _gp_nav = 0;
+    _gp_here3 = 0;
+    if (_gp_use3 == 0) { return; }
+    if (!gamepad_available(_gp_id3)) { _gp_nav_prev = 0; return; }
+    _gp_here3 = 1;
+
+    _gp_dx = _gp_axis3("LX");
+    _gp_dz = _gp_axis3("LY");     // yukarı = -1, ileri de -Z: doğrudan eşleşiyor
+    _gp_lx = _gp_axis3("RX");
+    _gp_ly = _gp_axis3("RY");
+
+    if (gamepad_pressed(_gp_id3, "A")) { _gp_jump = 1; _gp_ok = 1; }
+    if (gamepad_pressed(_gp_id3, "B")) { _gp_back = 1; }
+    if (gamepad_pressed(_gp_id3, "START")) { _gp_start = 1; }
+
+    // Menü gezinme: D-pad KENARI + sol çubuk. Çubuk sürekli bir eksen olduğu
+    // için kenara çevriliyor — yoksa yukarı itip tutmak listeyi bir karede
+    // sonuna kadar kaydırırdı.
+    int nav = 0;
+    if (gamepad_down(_gp_id3, "UP"))   { nav = 0 - 1; }
+    if (gamepad_down(_gp_id3, "DOWN")) { nav = 1; }
+    if (_gp_dz < 0.0 - 0.6) { nav = 0 - 1; }
+    if (_gp_dz > 0.6)       { nav = 1; }
+    if (nav != 0 && _gp_nav_prev == 0) { _gp_nav = nav; }
+    _gp_nav_prev = nav;
+}
+
+// Kolu kapat/aç (varsayılan açık), hangi kol, ölü bölge, bakış hızı.
+func gamepad3d(on) { if (on) { _gp_use3 = 1; } else { _gp_use3 = 0; } }
+func gamepad_id3d(id) { _gp_id3 = id; }
+func stick_deadzone3d(d) { _gp_dead3 = d; }
+func gamepad_look_speed3d(deg_per_sec) { _gp_sens3 = deg_per_sec; }
+// Bu karede kol bağlı mı? (Oyun "kol ipuçlarını göster" diye sorabilsin.)
+func gamepad_active3d(): bool { return _gp_here3 == 1; }
+
 func _in_dx(): float {
     float dx = 0.0;
     if (key_down(K_A)) { dx = dx - 1.0; }
@@ -506,6 +591,7 @@ func _in_dx(): float {
     if (dx > 1.0) { dx = 1.0; }
     if (dx < 0.0 - 1.0) { dx = 0.0 - 1.0; }
     if (dx == 0.0) { dx = _t_dx; }   // klavye yoksa dokunmatik
+    if (dx == 0.0) { dx = _gp_dx; }  // o da yoksa kol (analog: değeri KORUNUR)
     return dx;
 }
 func _in_dz(): float {
@@ -517,9 +603,10 @@ func _in_dz(): float {
     if (dz > 1.0) { dz = 1.0; }
     if (dz < 0.0 - 1.0) { dz = 0.0 - 1.0; }
     if (dz == 0.0) { dz = _t_dz; }   // klavye yoksa dokunmatik
+    if (dz == 0.0) { dz = _gp_dz; }  // o da yoksa kol
     return dz;
 }
-func jump_pressed(): bool { return key_pressed(K_SPACE) || _t_jump == 1; }
+func jump_pressed(): bool { return key_pressed(K_SPACE) || _t_jump == 1 || _gp_jump == 1; }
 
 // Hareket preset'i: WASD → yatay hız (çapraz normalize). Y hızına dokunmaz
 // (yerçekimi/zıplama onu sürer). Hareket varsa entity o yöne döner (yaw).
@@ -540,8 +627,15 @@ func move3d(id, speed) {
     float m = sqrt(wx * wx + wz * wz);
     Ent3 e = _e3[i];
     if (m > 0.0) {
-        e.vx = wx / m * speed;
-        e.vz = wz / m * speed;
+        // Büyüklük 1'i AŞARSA normalize edilir (çapraz klavye = sqrt(2)),
+        // altındaysa KORUNUR: analog çubuğu yarım itmek yarım hız versin.
+        // Eskiden koşulsuz normalize ediliyordu, yani her girdi tam hızdı —
+        // klavye/dokunmatik için farksız (ikisi de zaten 1 üretiyor), kol
+        // için ise analogluğun tamamen kaybı demekti.
+        float k = 1.0;
+        if (m > 1.0) { k = 1.0 / m; }
+        e.vx = wx * k * speed;
+        e.vz = wz * k * speed;
         e.yaw = atan2(wx, wz) * RAD2DEG3;   // rad→derece, hareket yönüne bak
     } else {
         e.vx = 0.0;
@@ -793,14 +887,46 @@ func _s3_btn_h(): float { return _win_h * 0.11; }
 func _s3_btn_x(): float { return (_win_w - _s3_btn_w()) * 0.5; }
 func _s3_btn_y(i): float { return _win_h * (0.44 + i * 0.15); }
 
+// Menüde SEÇİLİ düğme. Fare/parmak doğrudan tıkladığı için buna ihtiyaç
+// duymuyordu; kol ve klavye ise bir imleç olmadan üç düğmeli duraklat
+// menüsünde "Yeniden"i seçemez — Enter hep ilk düğmeye giderdi.
+int _s3_sel3 = 0;
+int _s3_ui_prev3 = 0 - 1;   // imleci sıfırlamak için: bir önceki UI durumu
+
 func _s3_btn_draw(i, label) {
     float bx = _s3_btn_x(); float by = _s3_btn_y(i);
     float bw = _s3_btn_w(); float bh = _s3_btn_h();
-    rect(bx, by, bw, bh, rgba(46, 54, 82, 235));
-    rect_lines(bx, by, bw, bh, GOLD);
+    if (i == _s3_sel3) {
+        rect(bx, by, bw, bh, rgba(86, 102, 150, 245));
+        // Seçiliyi ikinci bir çerçeveyle kalınlaştır: tek renk farkı düşük
+        // kontrastlı ekranda kaybolabiliyor.
+        rect_lines(bx, by, bw, bh, GOLD);
+        rect_lines(bx - 3.0, by - 3.0, bw + 6.0, bh + 6.0, GOLD);
+    } else {
+        rect(bx, by, bw, bh, rgba(46, 54, 82, 235));
+        rect_lines(bx, by, bw, bh, rgba(190, 160, 60, 200));
+    }
     int sz = toInt(bh * 0.38);
     text(label, toInt(bx + (bw - measure_text(label, sz)) * 0.5),
          toInt(by + (bh - sz) * 0.5), sz, RAYWHITE);
+}
+
+// Seçimi yukarı/aşağı taşı (klavye okları + kol D-pad/sol çubuk). Sarmalamıyor:
+// listenin ucunda durmak, kolla hızlı basarken yanlış düğmeye geçmekten iyi.
+func _s3_menu_nav(count) {
+    int d = 0;
+    if (key_pressed(K_UP))   { d = 0 - 1; }
+    if (key_pressed(K_DOWN)) { d = 1; }
+    if (_gp_nav != 0) { d = _gp_nav; }
+    if (d == 0) { return; }
+    _s3_sel3 = _s3_sel3 + d;
+    if (_s3_sel3 < 0) { _s3_sel3 = 0; }
+    if (_s3_sel3 >= count) { _s3_sel3 = count - 1; }
+}
+
+// Onay: Enter/Space ya da kolda A.
+func _s3_confirm3(): bool {
+    return key_pressed(K_ENTER) || key_pressed(K_SPACE) || _gp_ok == 1;
 }
 
 // (px,py) i. düğmenin içinde mi?
@@ -860,8 +986,11 @@ func _s3_title_draw() {
 
 // 1 = başla, 2 = çık, 0 = bekle
 func _s3_title_step(): int {
-    if (key_pressed(K_ENTER) || key_pressed(K_SPACE)) { return 1; }
-    if (key_pressed(K_ESC)) { return 2; }
+    _s3_menu_nav(2);
+    // Enter/Space SEÇİLİ düğmeyi işletir. İmleç 0'da başladığı için eski
+    // "Enter = Basla" davranışı birebir korunuyor.
+    if (_s3_confirm3()) { return _s3_sel3 + 1; }
+    if (key_pressed(K_ESC) || _gp_back == 1) { return 2; }
     int b = _s3_btn_pressed(2);
     if (b >= 0) { return b + 1; }
     return 0;
@@ -879,8 +1008,12 @@ func _s3_pause_draw() {
 
 // 1 = devam, 2 = yeniden, 3 = çık, 0 = bekle
 func _s3_pause_step(): int {
-    if (key_pressed(K_ESC) || key_pressed(K_P)) { return 1; }
+    _s3_menu_nav(3);
+    // ESC/P/B = "devam" kestirmesi: duraklattığın tuş seni geri çıkarmalı,
+    // hangi düğme seçili olursa olsun.
+    if (key_pressed(K_ESC) || key_pressed(K_P) || _gp_back == 1) { return 1; }
     if (key_pressed(K_R)) { return 2; }
+    if (_s3_confirm3()) { return _s3_sel3 + 1; }
     int b = _s3_btn_pressed(3);
     if (b >= 0) { return b + 1; }
     return 0;
@@ -913,8 +1046,10 @@ func _s3_over_draw() {
 
 // 1 = tekrar, 2 = çık, 0 = bekle
 func _s3_over_step(): int {
-    if (key_pressed(K_R) || key_pressed(K_ENTER) || key_pressed(K_SPACE)) { return 1; }
-    if (key_pressed(K_ESC)) { return 2; }
+    _s3_menu_nav(2);
+    if (key_pressed(K_R)) { return 1; }   // R hep "tekrar oyna" kestirmesi
+    if (_s3_confirm3()) { return _s3_sel3 + 1; }
+    if (key_pressed(K_ESC) || _gp_back == 1) { return 2; }
     int b = _s3_btn_pressed(2);
     if (b >= 0) { return b + 1; }
     return 0;
@@ -2452,6 +2587,11 @@ func _s3_camera_input(dt) {
     dy = dy + _t_ly * _cam_tsens3;
     if (key_down(K_Q)) { dx = dx - 100.0 * dt; }
     if (key_down(K_E)) { dx = dx + 100.0 * dt; }
+    // Sağ çubuk. Fare/parmak PİKSEL deltası verir (kare başına yol), çubuk ise
+    // KONUM: itili tuttuğun sürece sabit bir değer okunur. O yüzden tek dt ile
+    // ölçeklenen girdi budur — dt'siz olsaydı bakış hızı kare hızına bağlanırdı.
+    dx = dx + _gp_lx * _gp_sens3 * dt;
+    dy = dy + _gp_ly * _gp_sens3 * dt;
 
     _cam_yaw3 = _cam_yaw3 + dx;
     // Ekran Y'si aşağı büyür: fareyi yukarı itmek dy'yi negatif yapar, yani
@@ -2801,13 +2941,24 @@ func play3d() {
 
         // ESC/P/GERİ → duraklat. exit_key(K_NONE) sayesinde ESC artık pencereyi
         // kapatmıyor, sıradan bir tuş; bu satırın mümkün olmasının tek sebebi o.
+        // Girdi tamponları HER ŞEYDEN ÖNCE: duraklat kestirmesi de, oyunun
+        // update'i de, menü adımı da bu karenin okumasını görsün.
+        _read_touch3();     // dokunmatik (move3d/jump_pressed okur)
+        _read_gamepad3();   // kol — aynı desen, bkz. _read_gamepad3
+
         if (_s3_ui == UI_NONE && _game_over3 == 0) {
-            if (key_pressed(K_ESC) || key_pressed(K_P) || key_pressed(K_BACKSPACE)) {
+            if (key_pressed(K_ESC) || key_pressed(K_P) || key_pressed(K_BACKSPACE)
+                || _gp_start == 1) {
                 _s3_ui = UI_PAUSE;
             }
         }
 
-        _read_touch3();   // dokunmatik durumunu güncelle (move3d/jump_pressed okur)
+        // Menü açılınca imleç başa döner. UI durumundaki HER değişimde
+        // yapılıyor, tek tek açılış noktalarında değil — oyun-bitti ekranı
+        // `_s3_ui` üzerinden gelmiyor, o yüzden kapı burası.
+        int ui_now = _s3_ui;
+        if (_game_over3 == 1) { ui_now = 3; }
+        if (ui_now != _s3_ui_prev3) { _s3_sel3 = 0; _s3_ui_prev3 = ui_now; }
         // Bakış, update'ten ÖNCE: oyunun update'i camera_yaw3d() okuyabilsin ve
         // move3d bu karenin kamera yönünü kullansın (bir kare gecikme olmaz).
         // Menü/duraklat açıkken oyun DONAR: bakış, update, fizik ve çarpışma
@@ -2954,6 +3105,13 @@ func can3d(i, n) { health3d(i, n); }
 func can_kac3d(i): int { return hp3d(i); }
 func hasar3d(i, n) { damage3d(i, n); }
 func iyilestir3d(i, n) { heal3d(i, n); }
+
+// -- Gamepad --
+func kol3d(ac) { gamepad3d(ac); }
+func kol_no3d(id) { gamepad_id3d(id); }
+func kol_olu_bolge3d(d) { stick_deadzone3d(d); }
+func kol_bakis_hizi3d(derece_sn) { gamepad_look_speed3d(derece_sn); }
+func kol_bagli_mi3d(): bool { return gamepad_active3d(); }
 func olunce3d(tag, fn) { on_death3d(tag, fn); }
 func dokunulmazlik3d(sn) { invuln3d(sn); }
 

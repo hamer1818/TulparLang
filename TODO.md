@@ -34,9 +34,11 @@ sonra dil/altyapı borcu.
       ile şifa vermek oyuncuyu bir de hasara bağışık yapıyordu. Örnek:
       `scene3d_arena` ortasındaki şifa pedi. Detay: CHANGELOG.
 
-- [ ] **Gamepad `scene3d`'de okunmuyor.** tame'de binding var
-      (`gamepad_down`, `gamepad_pressed`), 3B giriş katmanı yalnız klavye +
-      dokunmatik okuyor.
+- [x] **Gamepad `scene3d`'ye bağlandı.** ✅ 2026-08-13 — sol çubuk hareket
+      (ANALOG: `move3d` artık büyüklüğü koruyor), sağ çubuk bakış, A zıpla,
+      START duraklat, menülerde imleç + A/B. Okuma `_read_gamepad3()` içinde
+      hapsedildi (dokunmatikle aynı desen) ki motor penceresiz test
+      edilebilir kalsın. Detay: CHANGELOG.
 
 - [ ] **Animasyon geçişi/harmanlama yok.** `anim3d` boşta↔koşu arasında sert
       geçiyor.
@@ -121,6 +123,13 @@ boşluklar; backlog'da yoklardı.
       15.4 → 1.12 ms), ama asimptot duruyor. Uniform grid artık ucuz: düz
       konum/yarıçap dizileri grid'in zaten isteyeceği zemin. ~800 entity
       üstüne çıkılmadıkça getirisi yok.
+
+- [ ] **`lib/test.tpr` yalnız SON hatayı gösteriyor.** Bir test fonksiyonunda
+      birden çok assert düşerse rapor edilen mesaj sonuncusu oluyor; ilk kırılan
+      yer kayboluyor. 2026-08-13'te bir bozma denemesinde çarpıldı: menü imleci
+      testi doğru şekilde kızardı ama mesaj alakasız bir satırı işaret ediyordu.
+      Teşhis kalitesi bu projede ucuz bir konu değil — `assert` hatası tam da
+      "test doğru şeyi söylemiyor" ailesindendi.
 
 - [ ] **`packages/` testleri hiçbir otomasyonda koşmuyor.** `build.sh suites`
       benzeri bir hedef gerekiyor; ayrıca paket dizininden koşulmaları şart

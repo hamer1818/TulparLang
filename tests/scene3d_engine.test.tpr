@@ -1611,6 +1611,112 @@ func t_save_reset_keeps_disk() {
     assert_eq_str(load_data("scene3d_best_t3d_keep.txt"), "250");   // disk duruyor
 }
 
+// ===========================================================================
+// Gamepad
+// ===========================================================================
+// Kol donanımı testte yok; okunabilen kısım kare TAMPONU (`_gp_*`), ki motorun
+// geri kalanı zaten yalnız onu okuyor. Cihaz çağrısı `_read_gamepad3` içinde
+// hapsedilmiş durumda — bu ayrım tam da bunun için var.
+
+// Ölü bölge SIÇRAMADAN çıkmalı: eşiği ham değere uygulayıp bırakmak, çubuk
+// eşiği geçtiği anda hızın 0'dan 0.22'ye fırlaması demekti.
+func t_gamepad_deadzone_curve() {
+    scene3d_reset();
+    stick_deadzone3d(0.2);
+    assert(_gp_curve3(0.0) == 0.0, "bostaki cubuk 0");
+    assert(_gp_curve3(0.15) == 0.0, "olu bolge icinde 0");
+    assert(_gp_curve3(0.0 - 0.15) == 0.0, "olu bolge negatifte de 0");
+    // eşiğin hemen üstü: 0'a YAKIN olmalı, eşiğe değil
+    float just = _gp_curve3(0.22);
+    assert(just > 0.0 && just < 0.05, "esigin hemen ustu sifira yakin");
+    assert(_gp_curve3(1.0) > 0.999, "tam itis tam deger");
+    assert(_gp_curve3(0.0 - 1.0) < 0.0 - 0.999, "negatif tam itis");
+    // aralığın ortası düzgün eşlenmeli: 0.6 ham → (0.6-0.2)/0.8 = 0.5
+    float mid = _gp_curve3(0.6);
+    assert(mid > 0.49 && mid < 0.51, "ara deger yeniden olceklenmeli");
+}
+
+// Analog büyüklük KORUNUR: çubuğu yarım itmek yarım hız. Eskiden move3d her
+// girdiyi koşulsuz normalize ediyordu, yani kol tam gaz dışında bir şey
+// veremezdi.
+func t_gamepad_analog_speed() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    _gp_dx = 0.5; _gp_dz = 0.0;
+    move3d(p, 10.0);
+    Ent3 e = _e3[_slot_of3(p)];
+    assert(e.vx > 4.9 && e.vx < 5.1, "yarim itis yarim hiz");
+    // tam itiş tam hız
+    _gp_dx = 1.0;
+    move3d(p, 10.0);
+    Ent3 e2 = _e3[_slot_of3(p)];
+    assert(e2.vx > 9.9 && e2.vx < 10.1, "tam itis tam hiz");
+    _gp_dx = 0.0; _gp_dz = 0.0;
+}
+
+// Çapraz tam itiş 1'i AŞAR (sqrt(2)) ve normalize edilmeli — yoksa çapraz
+// gitmek düz gitmekten hızlı olurdu (klasik hata).
+func t_gamepad_diagonal_normalized() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    _gp_dx = 1.0; _gp_dz = 1.0;
+    move3d(p, 10.0);
+    Ent3 e = _e3[_slot_of3(p)];
+    float sp = sqrt(e.vx * e.vx + e.vz * e.vz);
+    assert(sp > 9.9 && sp < 10.1, "capraz hiz da tam hiz olmali");
+    _gp_dx = 0.0; _gp_dz = 0.0;
+}
+
+// Kapalıyken cihaz HİÇ okunmuyor: erken çıkış, `gamepad_available`den önce.
+// (Bu testin penceresiz koşabiliyor olması iddianın kendisi.)
+func t_gamepad_off_reads_nothing() {
+    scene3d_reset();
+    gamepad3d(false);
+    _gp_dx = 7.0;              // tampona çöp yaz
+    _read_gamepad3();          // kapalı: temizleyip çıkmalı, cihaza gitmemeli
+    assert(_gp_dx == 0.0, "kapaliyken tampon temizlenir");
+    assert_eq_bool(gamepad_active3d(), false);
+    gamepad3d(true);
+}
+
+// Menü imleci: kol/klavye ile geziniyor ve uçlarda SARMIYOR.
+func t_menu_cursor_nav() {
+    scene3d_reset();
+    _s3_sel3 = 0;
+    _gp_nav = 1;  _s3_menu_nav(3); assert_eq_int(_s3_sel3, 1);
+    _gp_nav = 1;  _s3_menu_nav(3); assert_eq_int(_s3_sel3, 2);
+    _gp_nav = 1;  _s3_menu_nav(3); assert_eq_int(_s3_sel3, 2);   // sonda durur
+    _gp_nav = 0 - 1; _s3_menu_nav(3); assert_eq_int(_s3_sel3, 1);
+    _gp_nav = 0 - 1; _s3_menu_nav(3); assert_eq_int(_s3_sel3, 0);
+    _gp_nav = 0 - 1; _s3_menu_nav(3); assert_eq_int(_s3_sel3, 0);   // basta durur
+    _gp_nav = 0;
+}
+
+// Onay SEÇİLİ düğmeyi işletir. İmleç 0'da başladığı için eski "Enter = ilk
+// düğme" davranışı korunuyor; 1'e taşıyınca ikinci düğme gelmeli.
+func t_menu_confirm_uses_selection() {
+    scene3d_reset();
+    _s3_sel3 = 0; _gp_ok = 1;
+    assert_eq_int(_s3_title_step(), 1);      // Basla
+    _s3_sel3 = 1; _gp_ok = 1;
+    assert_eq_int(_s3_title_step(), 2);      // Cikis
+    // Duraklatta ucuncu duğme yalnız imleçle seçilebiliyor (Enter tek başına
+    // asla oraya gidemezdi — imlecin var olma sebebi bu).
+    _s3_sel3 = 2; _gp_ok = 1;
+    assert_eq_int(_s3_pause_step(), 3);      // Cikis
+    _gp_ok = 0;
+}
+
+// B tuşu "geri": duraklatta devam ettirir, başlangıç/bitiş ekranında çıkar.
+func t_menu_back_button() {
+    scene3d_reset();
+    _s3_sel3 = 2; _gp_back = 1;
+    assert_eq_int(_s3_pause_step(), 1);      // secim ne olursa olsun DEVAM
+    _s3_sel3 = 0; _gp_back = 1;
+    assert_eq_int(_s3_title_step(), 2);
+    _gp_back = 0;
+}
+
 // Tek atım TARAMA ORTASINDA kapanıyor: A zaten içerideyken B'nin girişi bölgeyi
 // kapatır. A bu karede yeni kümeye çoktan yazılmıştır; kapalı bölge için çıkış
 // bastırılmazsa sonraki kare A'ya SAHTE bir çıkış atar. (Bu senaryo tek gövdeyle
@@ -1880,6 +1986,13 @@ test("acik yolda duz kovalama", "t_chase_direct_when_clear");
 test("duvar varken yana sapma", "t_chase_avoids_wall");
 test("kacinma kapatilabiliyor", "t_chase_direct_opt_out");
 test("dusman duvarin etrafindan dolasiyor", "t_chase_gets_around_wall");
+test("kol olu bolge egrisi", "t_gamepad_deadzone_curve");
+test("kol analog hiz veriyor", "t_gamepad_analog_speed");
+test("capraz itis normalize", "t_gamepad_diagonal_normalized");
+test("kol kapaliyken cihaz okunmuyor", "t_gamepad_off_reads_nothing");
+test("menu imleci uclarda sarmiyor", "t_menu_cursor_nav");
+test("onay secili dugmeyi isletiyor", "t_menu_confirm_uses_selection");
+test("kolda B geri", "t_menu_back_button");
 test("kapanan bolge sahte cikis atmaz", "t_trigger_once_no_phantom_exit");
 test("sifa tavani ve bagisiklik ayrimi", "t_heal_caps_and_keeps_vulnerable");
 test("bolge girisi bir kez atar", "t_trigger_enter_fires_once");

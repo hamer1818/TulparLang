@@ -60,6 +60,38 @@ giriş/çıkış **kenarı** hesaplanıyor.
   bölgenin *gövde* ölçmesi, ölüm-çıkış bastırması, bölüm temizliği, kapatma
   sessizliği ve iki gövdeli tek atım — her biri ilgili bozmada kırmızıya döndü.
 
+### Added — 3B'de gamepad: çubuk, tetik, menü
+
+tame'de bağlamalar zaten vardı (`gamepad_down`, `gamepad_axis`, ...); `scene3d`
+onları **hiç okumuyordu**, yani 3B oyunlar kolla oynanmıyordu. Artık kol takılıysa
+kendiliğinden çalışır — oyunun tek satır girdi kodu yazması gerekmez.
+
+- **Sol çubuk hareket, sağ çubuk bakış, A zıpla, START duraklat.** Klavye ve
+  dokunmatik aynı anda açık kalır; biri diğerini kapatmıyor.
+- **`move3d` artık analog büyüklüğü koruyor.** Eskiden girdi vektörü *koşulsuz*
+  normalize ediliyordu, yani her girdi tam hızdı. Klavye/dokunmatik için farksız
+  (ikisi de zaten 1 üretiyor), kol için analogluğun tamamen kaybı demekti —
+  çubuğu yarım itmek koşmakla aynı şeydi. Büyüklük 1'i **aşarsa** hâlâ normalize
+  ediliyor, yani çapraz gitmek düz gitmekten hızlı değil.
+- **Ölü bölge yeniden ölçekliyor.** Eşiği ham değere uygulayıp bırakmak, çubuk
+  eşiği geçtiği anda hızın 0'dan 0.22'ye sıçraması demekti; kalan aralık 0..1'e
+  yayılıyor.
+- **Menülerde imleç.** Duraklat menüsünde üç düğme var ve Enter hep ilkine
+  gidiyordu — kolla "Yeniden" seçilemezdi. Yukarı/aşağı (D-pad, sol çubuk,
+  klavye okları) + A/Enter onay, B/ESC geri. İmleç 0'da başladığı için eski
+  "Enter = ilk düğme" davranışı birebir korunuyor; uçlarda **sarmıyor**.
+- Ayarlar: `gamepad3d`/`kol3d` (kapat/aç), `gamepad_id3d`, `stick_deadzone3d`,
+  `gamepad_look_speed3d`, `gamepad_active3d`/`kol_bagli_mi3d`.
+- **Okuma tek yere hapsedildi** (`_read_gamepad3()`, `play3d` içinden kare başına
+  bir kez) — dokunmatikle birebir aynı desen. Sebebi mimari: raylib'in girdi
+  çağrıları pencere ister, motorun fizik/çarpışma katmanı ise pencere **açmadan**
+  test ediliyor. Ölü bölge matematiği de cihaz okumasından ayrı bir saf
+  fonksiyona (`_gp_curve3`) alındı, aynı gerekçeyle.
+- 7 yeni regresyon testi (95 → 102), hepsi bozma enjekte edilerek doğrulandı:
+  koşulsuz normalize, normalize'ın hiç olmaması, ölçeklenmeyen ölü bölge,
+  sınırsız imleç ve seçimi yok sayan onay — beşi de ilgili testi kırmızıya
+  döndürdü.
+
 ### Fixed — kapanan tetikleyici bölge sahte "çıkış" atıyordu
 
 Tek atımlık bir bölge, **tarama ortasında** kapanabiliyor: bölgede zaten duran
