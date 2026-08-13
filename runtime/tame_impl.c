@@ -489,6 +489,14 @@ static const char *tame_light_fs =
     "    highp float fd = length(viewPos - fragPosition)*fogDensity; \n"
     "    float ff = clamp(exp(0.0 - fd*fd), 0.0, 1.0); \n"
     "    finalColor.rgb = mix(fogColor.rgb, finalColor.rgb, ff); \n"
+    // ALFA'yı açıkça kur. Stok raylib ışık shader'ı opak varsayımıyla yazılmış:
+    // yukarıdaki `colDiffuse + vec4(specular, 1.0)` terimi alfaya 1.0 EKLİYOR,
+    // ambient terimi de üstüne bir pay koyuyor. Sonuçta 70/255 = 0.27'lik bir
+    // tint alfası 1.54'e çıkıp 1.0'a kırpılıyordu — yani saydam çizmek
+    // imkânsızdı (kamera röntgeni bu yüzden görünmüyordu). Doğru alfa yüzeyin
+    // kendi alfası ile tint alfasının çarpımı; opak çizimlerde ikisi de 1
+    // olduğu için mevcut hiçbir görüntü değişmiyor.
+    "    finalColor.a = texelColor.a*colDiffuse.a; \n"
     "    gl_FragColor = finalColor;           \n"
     "}                                           \n";
 #else
@@ -589,6 +597,8 @@ static const char *tame_light_fs =
     "    float fd = length(viewPos - fragPosition)*fogDensity; \n"
     "    float ff = clamp(exp(-fd*fd), 0.0, 1.0); \n"
     "    finalColor.rgb = mix(fogColor.rgb, finalColor.rgb, ff); \n"
+    // Alfa — gerekçe GLES varyantındaki yorumda.
+    "    finalColor.a = texelColor.a*colDiffuse.a; \n"
     "}                                           \n";
 #endif
 

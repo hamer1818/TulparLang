@@ -83,9 +83,19 @@ görünür. Varsayılan AÇIK; eski davranış `kamera_seffaf3d(false)`.
 saydam değil, delik gibi görünür. Saydamlar en sona kalıyor, böylece oyuncunun
 pikselleri tamponda hazırken üstlerine karışıyorlar.
 
-3 yeni test (115 → 118). **Dürüst sınır:** iki geçişin SIRASI penceresiz
-doğrulanamıyor (çizim sırası gözlemlenebilir değil); işaretleme mantığı test
-altında, sıralama ise akıl yürütme + görsel testle doğrulandı.
+**Işık shader'ında alfa düzeltildi — saydamlığın çalışmasının ön koşulu bu.**
+Stok raylib ışık shader'ı opak varsayımıyla yazılmış: `colDiffuse +
+vec4(specular, 1.0)` terimi alfaya 1.0 **ekliyor**, ambient terimi de üstüne
+pay koyuyor. 70/255 = 0.27'lik bir tint alfası böylece 1.54'e çıkıp 1.0'a
+kırpılıyordu, yani saydam çizmek imkânsızdı — röntgen işaretlemesi doğru
+çalıştığı hâlde ekranda hiçbir şey değişmiyordu (kullanıcı bildirimiyle
+yakalandı). Alfa artık açıkça `texelColor.a * colDiffuse.a`: yüzeyin kendi
+alfası çarpı tint alfası. Opak çizimlerde ikisi de 1 olduğu için mevcut
+görüntü değişmiyor; 3B'de alfa kullanan tek yer bu özellik.
+
+3 yeni test (115 → 118). **Dürüst sınır:** iki geçişin SIRASI ve alfa
+karışımının kendisi penceresiz doğrulanamıyor (ikisi de GPU'da); işaretleme
+mantığı test altında, çizim tarafı akıl yürütme + görsel testle doğrulandı.
 
 ### Fixed — arkada engel varken kamera oyuncunun dibine giriyordu
 
