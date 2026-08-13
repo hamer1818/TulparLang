@@ -57,8 +57,16 @@ sonra dil/altyapı borcu.
       kullanmıyordu. `arazi_dogal3d(tepe)` tek satırlık palet,
       `arazi_katmani3d(x,z)` oyun mantığına keskin cevap. Detay: CHANGELOG.
 
-- [ ] **Su yüzeyi / gündüz-gece döngüsü / gökyüzü dokusu.** Gökyüzü şu an
-      yalnız degrade.
+- [x] **Gündüz-gece döngüsü geldi.** ✅ 2026-08-13 — `gunduz_gece3d(saniye)`,
+      `saati_ayarla3d`, `saati_dondur3d`, `gunun_saati3d`, `gece_mi3d`.
+      Gökyüzü + güneş rengi/yönü + ortam ışığı + sis rengi birlikte değişiyor;
+      gölgeler bedava dönüyor (gölge haritası güneşin yönünden türüyor).
+      Tamamen Tulpar tarafında — tek satır C eklenmedi. Detay: CHANGELOG.
+
+- [ ] **Su yüzeyi yok.** Saydam bir düzlem + "su altında mıyım" sorgusu;
+      arazi geldiğinden beri en çok eksik hissettiren şey (vadiler kuru).
+
+- [ ] **Gökyüzü dokusu yok** — degrade + gündüz/gece var, yıldız/bulut yok.
 
 - [ ] **Parçacıklarda dönme ve doku atlası yok** — tek boy düz billboard.
 

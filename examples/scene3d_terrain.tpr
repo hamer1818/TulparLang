@@ -27,6 +27,13 @@ func setup() {
     sis3d(0.012);
     zemin3(0.0);
 
+    // Gündüz-gece döngüsü: iki dakikada bir tam gün. Gökyüzü, güneş rengi,
+    // ortam ışığı ve sis rengi hep birlikte saate göre değişiyor — GÖLGELER
+    // de bedava döner, çünkü gölge haritası güneşin yönünden türüyor.
+    // Sabaha yakın başlıyoruz ki gün doğumu hemen görünsün.
+    gunduz_gece3d(120.0);
+    saati_ayarla3d(5.0);
+
     // Arazi. Bundan sonra zemin yüksekliği her yerde buradan geliyor —
     // yerçekimi, zıplama ve kamera hepsi otomatik uyum sağlıyor.
     arazi3d(RES, SIZE, PEAK, SIZE, NOISE, SEED);
@@ -108,6 +115,17 @@ func hud() {
     if (lay == LAYER_HIGH) { ad = "KAR";    renk = RAYWHITE; }
     if (lay == LAYER_ROCK) { ad = "KAYA";   renk = rgb(180, 180, 185); }
     text("Zemin: " + ad, 12, 148, 16, renk);
+
+    // Saat — döngünün gerçekten döndüğünü sayıyla da görebilmek için.
+    float saat = gunun_saati3d();
+    int sa = toInt(saat);
+    int dk = toInt((saat - sa * 1.0) * 60.0);
+    str dks = toString(dk);
+    if (dk < 10) { dks = "0" + dks; }
+    str gunu = "GUNDUZ";
+    int gr = rgb(255, 230, 140);
+    if (gece_mi3d()) { gunu = "GECE"; gr = rgb(150, 170, 230); }
+    text(toString(sa) + ":" + dks + "  " + gunu, 12, 170, 16, gr);
 }
 
 sahne3d(960, 560, "Tulpar 3B Arazi");

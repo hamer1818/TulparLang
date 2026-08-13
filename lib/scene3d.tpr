@@ -391,6 +391,7 @@ func scene3d_reset() {
     // sıfırlanınca dünya da sıfırlanmalı, yoksa yeni sahne eski tepeleri sürer.
     _terr_on = 0; _terr_model = 0 - 1; terrain_off3d();
     _terr_kind3 = 0; _terr_lay3 = 0; terrain_layers_off3d();
+    _dn_on3 = 0; _dn_h3 = 12.0; _dn_len3 = 120.0; _dn_frozen3 = 0;
     _score3 = 0;
     _game_over3 = 0;
     _cam_target = 0 - 1;
@@ -2964,6 +2965,123 @@ func zemin_doku3d(t, tile)     { ground_texture3d(t, tile); }
 func fog3d(density) { _fog3 = density; }
 func sis3d(density) { fog3d(density); }
 
+// ===========================================================================
+// Gündüz-gece döngüsü
+// ===========================================================================
+// Gökyüzü sabitti: sahne hangi saatte kurulduysa sonsuza kadar o saatte
+// kalıyordu. Oysa gereken her şey zaten vardı — `sun()`, `ambient_light()`,
+// `sky()` ve `fog_sky()` hepsi her kare çağrılabiliyor ve ucuz (gökyüzü
+// kubbesi bir kez kuruluyor, sonrası yalnız birkaç float yazımı). Yani bu
+// katman tamamen Tulpar tarafında: tek satır C eklenmedi.
+//
+// Gölge bedava geliyor: gölge haritası 0 numaralı ışığın yönünden türüyor,
+// o da güneşle birlikte dönüyor. Sabah uzun gölgeler, öğlen kısa.
+int   _dn_on3    = 0;
+float _dn_len3   = 120.0;   // tam bir gün kaç saniye sürsün
+float _dn_h3     = 12.0;    // günün saati, 0..24
+int   _dn_frozen3 = 0;      // saat ilerlemesin (sabit "altın saat" isteyen oyun)
+
+// Paketli renk (r*2^24 + g*2^16 + b*2^8 + a) bileşenleri.
+func _dn_r3(c): int { return mod(toInt(c / 16777216), 256); }
+func _dn_g3(c): int { return mod(toInt(c / 65536), 256); }
+func _dn_b3(c): int { return mod(toInt(c / 256), 256); }
+
+func _dn_mix3(a, b, t): int {
+    float k = t;
+    if (k < 0.0) { k = 0.0; }
+    if (k > 1.0) { k = 1.0; }
+    int r = toInt(_dn_r3(a) * 1.0 + (_dn_r3(b) - _dn_r3(a)) * k);
+    int g = toInt(_dn_g3(a) * 1.0 + (_dn_g3(b) - _dn_g3(a)) * k);
+    int b2 = toInt(_dn_b3(a) * 1.0 + (_dn_b3(b) - _dn_b3(a)) * k);
+    return rgb(r, g, b2);
+}
+
+// Güneşin yüksekliği: +1 tam tepe, 0 ufuk, -1 ayaklar altında.
+// Şafak 6, öğlen 12, gün batımı 18, gece yarısı 0.
+func sun_height3d(): float { return sin((_dn_h3 - 6.0) / 12.0 * 3.14159265); }
+func gunes_yuksekligi3d(): float { return sun_height3d(); }
+
+func is_night3d(): bool { return sun_height3d() <= 0.0; }
+func gece_mi3d(): bool { return is_night3d(); }
+
+func time_of_day3d(): float { return _dn_h3; }
+func gunun_saati3d(): float { return time_of_day3d(); }
+
+// Döngüyü aç. saniye = tam bir günün gerçek süresi.
+func daynight3d(seconds_per_day) {
+    _dn_on3 = 1;
+    _dn_len3 = seconds_per_day * 1.0;
+    _dn_frozen3 = 0;
+}
+func gunduz_gece3d(saniye) { daynight3d(saniye); }
+func daynight_off3d() { _dn_on3 = 0; }
+func gunduz_gece_kapat3d() { daynight_off3d(); }
+
+// Saati doğrudan ayarla (0..24). Döngü kapalıyken de çalışır: "sahnem hep
+// gün batımında olsun" isteyen oyun saati kurup dondurur.
+func set_time3d(hour) {
+    _dn_h3 = hour * 1.0;
+    while (_dn_h3 >= 24.0) { _dn_h3 = _dn_h3 - 24.0; }
+    while (_dn_h3 < 0.0) { _dn_h3 = _dn_h3 + 24.0; }
+    _dn_on3 = 1;
+}
+func saati_ayarla3d(saat) { set_time3d(saat); }
+func freeze_time3d(on) { if (on) { _dn_frozen3 = 1; } else { _dn_frozen3 = 0; } }
+func saati_dondur3d(ac) { freeze_time3d(ac); }
+
+// Saati ilerlet ve gökyüzü/ışık/sisi o saate göre kur.
+func _s3_daynight(dt) {
+    if (_dn_on3 == 0) { return; }
+    if (_dn_frozen3 == 0 && _dn_len3 > 0.0) {
+        _dn_h3 = _dn_h3 + dt * 24.0 / _dn_len3;
+        while (_dn_h3 >= 24.0) { _dn_h3 = _dn_h3 - 24.0; }
+    }
+    float ang = (_dn_h3 - 6.0) / 12.0 * 3.14159265;
+    float ex = cos(ang);          // doğu-batı bileşeni
+    float ey = sin(ang);          // yükseklik
+
+    // Alacakaranlık ağırlığı: ufka yakınken 1, güneş yükselince 0. Şafak ve
+    // gün batımı renklerini bu sürüyor.
+    float dusk = 1.0 - abs_f3(ey) / 0.30;
+    if (dusk < 0.0) { dusk = 0.0; }
+    // Gündüzlük: 0 gece, 1 tam gündüz.
+    float day = ey / 0.30;
+    if (day < 0.0) { day = 0.0; }
+    if (day > 1.0) { day = 1.0; }
+
+    if (ey > 0.0) {
+        // GÜNDÜZ — ışık güneşten. `sun()` ışığın GİTTİĞİ yönü istiyor, yani
+        // güneşin konumunun tersi.
+        int warm = rgb(255, 150, 90);
+        int noon = rgb(255, 246, 224);
+        int sc = _dn_mix3(warm, noon, day);
+        sun(0.0 - ex, 0.0 - ey, 0.0 - 0.25, sc);
+    } else {
+        // GECE — ay: güneşin tam karşısında, sönük ve mavi. Güneşi ufkun
+        // ALTINDA bırakmak cisimleri alttan aydınlatırdı (klasik hata).
+        sun(ex, 0.0 - abs_f3(ey) - 0.15, 0.25, rgb(120, 140, 190));
+    }
+
+    // Ortam ışığı: gece neredeyse yok, gündüz normal.
+    int amb_n = rgb(16, 20, 38);
+    int amb_d = rgb(46, 50, 66);
+    ambient_light(_dn_mix3(amb_n, amb_d, day));
+
+    // Gökyüzü: gece → gündüz, üstüne alacakaranlık karışımı.
+    int top_n = rgb(8, 10, 28);      int bot_n = rgb(22, 26, 54);
+    int top_d = rgb(40, 90, 170);    int bot_d = rgb(150, 190, 230);
+    int top = _dn_mix3(top_n, top_d, day);
+    int bot = _dn_mix3(bot_n, bot_d, day);
+    if (dusk > 0.0) {
+        top = _dn_mix3(top, rgb(70, 50, 110), dusk * 0.8);
+        bot = _dn_mix3(bot, rgb(255, 140, 70), dusk);
+    }
+    sky(top, bot);
+    // Sis rengini ufuktan YENİDEN al: play3d başlangıçta bir kez kuruyor,
+    // güncellenmezse sis bütün gün şafak rengiyle kalırdı.
+    if (_fog3 > 0.0) { fog_sky(_fog3); }
+}
+
 // ---- Yönetilen döngü -------------------------------------------------------
 func play3d() {
     if (!window(_win_w, _win_h, _win_title)) { return; }
@@ -3058,6 +3176,9 @@ func play3d() {
         // Parçacıklar oyun bitse de sönmeye devam eder — son patlama ekranda
         // donup kalmasın (arcade'de de aynı gerekçe). Duraklatmada ise donar.
         if (frozen == 0) { _s3_particles(dt); }
+        // Gökyüzü/ışık saati. Duraklatmada donuyor: oyun durduysa zaman da
+        // durmalı, yoksa menüden çıkınca gece olmuş buluyorsun.
+        if (frozen == 0) { _s3_daynight(dt); }
         if (_game_over3 == 0 && frozen == 0) {
             _s3_physics(dt);
             _s3_collision();

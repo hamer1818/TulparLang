@@ -1612,6 +1612,78 @@ func t_save_reset_keeps_disk() {
 }
 
 // ===========================================================================
+// Gündüz-gece döngüsü
+// ===========================================================================
+// Gökyüzü GPU'da çiziliyor ama saati süren şey saf matematik: saat ilerlemesi,
+// sarma, güneş yüksekliği ve renk karışımı. Hepsi penceresiz doğrulanabiliyor
+// (gökyüzü çağrısı pencere yokken sessizce çıkıyor, çökmüyor).
+
+func t_daynight_sun_height() {
+    scene3d_reset();
+    set_time3d(12.0);
+    assert(sun_height3d() > 0.99, "oglen gunes tepede");
+    assert_eq_bool(is_night3d(), false);
+    set_time3d(0.0);
+    assert(sun_height3d() < 0.0 - 0.99, "gece yarisi gunes ayaklar altinda");
+    assert_eq_bool(is_night3d(), true);
+    // Şafak ve gün batımı ufukta: ikisi de ~0.
+    set_time3d(6.0);
+    assert(abs_f3(sun_height3d()) < 0.001, "safakta gunes ufukta");
+    set_time3d(18.0);
+    assert(abs_f3(sun_height3d()) < 0.001, "gun batiminda gunes ufukta");
+    // 24 ve 0 aynı an olmalı — sarmada süreksizlik olursa gökyüzü zıplar.
+    set_time3d(24.0);
+    assert(abs_f3(sun_height3d() - (0.0 - 1.0)) < 0.001, "24:00 ile 00:00 ayni");
+}
+
+func t_daynight_clock_advances_and_wraps() {
+    scene3d_reset();
+    daynight3d(24.0);          // 1 saniye = 1 saat
+    set_time3d(23.0);
+    _s3_daynight(1.0);
+    assert(time_of_day3d() < 0.001, "23:00 + 1sa = 00:00 (sarmali)");
+    _s3_daynight(1.0);
+    assert(time_of_day3d() > 0.99 && time_of_day3d() < 1.01, "sarma sonrasi devam");
+}
+
+// Saati dondurmak: "sahnem hep gün batımında olsun" isteyen oyun için.
+func t_daynight_freeze() {
+    scene3d_reset();
+    daynight3d(24.0);
+    set_time3d(19.5);
+    freeze_time3d(true);
+    _s3_daynight(5.0);
+    _s3_daynight(5.0);
+    assert(time_of_day3d() > 19.49 && time_of_day3d() < 19.51, "donmus saat ilerlemez");
+    freeze_time3d(false);
+    _s3_daynight(1.0);
+    assert(time_of_day3d() > 20.4, "cozulunce yeniden ilerler");
+}
+
+// Kapalıyken saat HİÇ ilerlememeli — döngü opt-in.
+func t_daynight_off_by_default() {
+    scene3d_reset();
+    assert_eq_bool(is_night3d(), false);   // varsayilan oglen
+    _s3_daynight(10.0);
+    assert(time_of_day3d() > 11.99 && time_of_day3d() < 12.01, "kapaliyken saat durur");
+}
+
+// Renk karışımı: uçlarda tam, ortada yarı. (Paketli renk açma tam sayı
+// bölmesine dayanıyor — sessizce yanlış olursa gökyüzü çamura döner.)
+func t_daynight_color_mix() {
+    scene3d_reset();
+    assert_eq_int(_dn_r3(rgb(255, 150, 90)), 255);
+    assert_eq_int(_dn_g3(rgb(255, 150, 90)), 150);
+    assert_eq_int(_dn_b3(rgb(255, 150, 90)), 90);
+    assert_eq_int(_dn_mix3(rgb(0, 0, 0), rgb(200, 100, 50), 0.0), rgb(0, 0, 0));
+    assert_eq_int(_dn_mix3(rgb(0, 0, 0), rgb(200, 100, 50), 1.0), rgb(200, 100, 50));
+    assert_eq_int(_dn_r3(_dn_mix3(rgb(0, 0, 0), rgb(200, 100, 50), 0.5)), 100);
+    // sınır dışı t kırpılmalı, taşmamalı
+    assert_eq_int(_dn_mix3(rgb(0, 0, 0), rgb(200, 100, 50), 2.0), rgb(200, 100, 50));
+    assert_eq_int(_dn_mix3(rgb(0, 0, 0), rgb(200, 100, 50), 0.0 - 1.0), rgb(0, 0, 0));
+}
+
+// ===========================================================================
 // Arazi katmanları
 // ===========================================================================
 // Mesh boyaması GPU'da olup bitiyor ve penceresiz doğrulanamaz; ama katman
@@ -2071,6 +2143,11 @@ test("acik yolda duz kovalama", "t_chase_direct_when_clear");
 test("duvar varken yana sapma", "t_chase_avoids_wall");
 test("kacinma kapatilabiliyor", "t_chase_direct_opt_out");
 test("dusman duvarin etrafindan dolasiyor", "t_chase_gets_around_wall");
+test("gunes yuksekligi saate gore", "t_daynight_sun_height");
+test("saat ilerliyor ve sariyor", "t_daynight_clock_advances_and_wraps");
+test("saat dondurulabiliyor", "t_daynight_freeze");
+test("dongu varsayilan kapali", "t_daynight_off_by_default");
+test("gokyuzu renk karisimi", "t_daynight_color_mix");
 test("arazi katmani yukseklige gore", "t_terrain_layer_by_height");
 test("egim yuksekligi eziyor", "t_terrain_layer_slope_wins");
 test("egim esigi gercekten etkili", "t_terrain_layer_slope_threshold_matters");

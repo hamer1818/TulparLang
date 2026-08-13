@@ -60,6 +60,36 @@ giriş/çıkış **kenarı** hesaplanıyor.
   bölgenin *gövde* ölçmesi, ölüm-çıkış bastırması, bölüm temizliği, kapatma
   sessizliği ve iki gövdeli tek atım — her biri ilgili bozmada kırmızıya döndü.
 
+### Added — gündüz-gece döngüsü
+
+Gökyüzü sabitti: sahne hangi saatte kurulduysa sonsuza kadar o saatteydi.
+
+- `daynight3d(seconds_per_day)` / `gunduz_gece3d` — tam bir günün gerçek süresi.
+- `set_time3d(hour)` / `saati_ayarla3d`, `freeze_time3d` / `saati_dondur3d` —
+  "sahnem hep gün batımında olsun" isteyen oyun saati kurup dondurur.
+- `time_of_day3d` / `gunun_saati3d`, `is_night3d` / `gece_mi3d`,
+  `sun_height3d` / `gunes_yuksekligi3d` (+1 tepe, 0 ufuk, -1 ayaklar altında).
+
+Gökyüzü gradyanı, güneşin **yönü ve rengi**, ortam ışığı ve sis rengi birlikte
+değişiyor; şafak/gün batımında turuncu bir alacakaranlık bandı devreye giriyor.
+**Gölgeler bedava dönüyor** — gölge haritası 0 numaralı ışığın yönünden türüyor,
+o da güneşle birlikte dönüyor: sabah uzun gölgeler, öğlen kısa.
+
+Gece ışığı güneşten değil, güneşin tam karşısındaki sönük mavi bir "ay"dan
+geliyor. Güneşi ufkun altında bırakmak cisimleri **alttan** aydınlatırdı.
+
+Tamamen `lib/scene3d.tpr` içinde — tek satır C eklenmedi. Gerekli her şey
+zaten vardı (`sun`, `ambient_light`, `sky`, `fog_sky` hepsi her kare
+çağrılabilir ve ucuz: gökyüzü kubbesi bir kez kuruluyor, sonrası birkaç float).
+Sis rengi her kare ufuktan yeniden alınıyor; alınmasaydı sis bütün gün
+şafak rengiyle kalırdı. Saat duraklatmada donuyor — oyun durduysa zaman da
+durmalı, yoksa menüden çıkınca gece olmuş buluyorsun.
+
+5 yeni regresyon testi (105 → 110). Gökyüzü GPU'da çiziliyor ama saati süren
+şey saf matematik ve hepsi penceresiz doğrulanıyor: saat sarmasını kaldırmak,
+dondurmayı yok saymak ve renk karışımının kırpmasını sökmek ilgili testleri
+kırmızıya döndürdü.
+
 ### Added — arazi katman boyama: çim / toprak / kar + eğimde kaya
 
 Arazi tek renkti — yüz yirmi birimlik bir dünyanın tamamı aynı yeşil. Oysa
