@@ -1636,6 +1636,36 @@ func t_daynight_sun_height() {
     assert(abs_f3(sun_height3d() - (0.0 - 1.0)) < 0.001, "24:00 ile 00:00 ayni");
 }
 
+// Işık yönü ufuk geçişinde ATLAMAMALI. İlk sürümde gece ışığı "güneşin tam
+// karşısındaki ay"dı: güneş ufku geçtiği karede yön 180° dönüyor, gölgeler tek
+// karede öbür tarafa sıçrıyordu — ekranda kare düşmüş gibi görünüyordu.
+// Burada saati ince adımlarla 18:00'in iki yanından geçirip ışık yönünün
+// bileşenlerinin kare başına küçük değiştiğini sınıyoruz.
+func t_daynight_light_is_continuous() {
+    scene3d_reset();
+    daynight3d(120.0);
+    float prev_y = 0.0 - 99.0;
+    float prev_e = 0.0 - 99.0;
+    float h = 17.0;
+    while (h < 19.0) {
+        set_time3d(h);
+        float y = light_height3d();
+        float e = sun_east3d();
+        if (prev_y > 0.0 - 90.0) {
+            assert(abs_f3(y - prev_y) < 0.02, "isik yuksekligi atlamamali");
+            assert(abs_f3(e - prev_e) < 0.02, "isik yonu atlamamali");
+        }
+        prev_y = y; prev_e = e;
+        h = h + 0.02;
+    }
+    // Gece yarısı da dahil: ışık ASLA ufkun altına inmemeli, yoksa cisimler
+    // alttan aydınlanır.
+    set_time3d(0.0);
+    assert(light_height3d() >= 0.22, "gece bile isik yukaridan gelir");
+    set_time3d(12.0);
+    assert(light_height3d() > 0.99, "oglen isik tepeden");
+}
+
 func t_daynight_clock_advances_and_wraps() {
     scene3d_reset();
     daynight3d(24.0);          // 1 saniye = 1 saat
@@ -2144,6 +2174,7 @@ test("duvar varken yana sapma", "t_chase_avoids_wall");
 test("kacinma kapatilabiliyor", "t_chase_direct_opt_out");
 test("dusman duvarin etrafindan dolasiyor", "t_chase_gets_around_wall");
 test("gunes yuksekligi saate gore", "t_daynight_sun_height");
+test("isik yonu ufukta atlamiyor", "t_daynight_light_is_continuous");
 test("saat ilerliyor ve sariyor", "t_daynight_clock_advances_and_wraps");
 test("saat dondurulabiliyor", "t_daynight_freeze");
 test("dongu varsayilan kapali", "t_daynight_off_by_default");

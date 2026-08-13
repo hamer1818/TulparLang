@@ -75,8 +75,15 @@ değişiyor; şafak/gün batımında turuncu bir alacakaranlık bandı devreye g
 **Gölgeler bedava dönüyor** — gölge haritası 0 numaralı ışığın yönünden türüyor,
 o da güneşle birlikte dönüyor: sabah uzun gölgeler, öğlen kısa.
 
-Gece ışığı güneşten değil, güneşin tam karşısındaki sönük mavi bir "ay"dan
-geliyor. Güneşi ufkun altında bırakmak cisimleri **alttan** aydınlatırdı.
+**Işık yönü gün boyu kesintisiz dönüyor ve ufkun altına inmiyor.** İlk sürümde
+gece ışığı "güneşin tam karşısındaki ay"dı; bu, güneşin ufku geçtiği **karede**
+ışık yönünü 180° atlatıyordu — gölgeler tek karede öbür tarafa sıçrıyor ve
+ekran kare düşürmüş gibi görünüyordu (kullanıcı bildirimiyle yakalandı). Ayrıca
+ufka paralel ışık gölge haritasını dejenere ediyor, gölgeler uzayıp titriyor;
+şafak ve gün batımı tam o iki an. Işığın yüksekliği artık 0.22'nin altına
+inmiyor, gece/gündüz farkını **renk ve ortam ışığı** taşıyor. Ölçüldü: adımın
+CPU maliyeti kare başına ~0.5 µs, yani hissedilen şey işlem yükü değil bu
+süreksizlikti.
 
 Tamamen `lib/scene3d.tpr` içinde — tek satır C eklenmedi. Gerekli her şey
 zaten vardı (`sun`, `ambient_light`, `sky`, `fog_sky` hepsi her kare
@@ -85,10 +92,12 @@ Sis rengi her kare ufuktan yeniden alınıyor; alınmasaydı sis bütün gün
 şafak rengiyle kalırdı. Saat duraklatmada donuyor — oyun durduysa zaman da
 durmalı, yoksa menüden çıkınca gece olmuş buluyorsun.
 
-5 yeni regresyon testi (105 → 110). Gökyüzü GPU'da çiziliyor ama saati süren
+6 yeni regresyon testi (105 → 111). Gökyüzü GPU'da çiziliyor ama saati süren
 şey saf matematik ve hepsi penceresiz doğrulanıyor: saat sarmasını kaldırmak,
 dondurmayı yok saymak ve renk karışımının kırpmasını sökmek ilgili testleri
-kırmızıya döndürdü.
+kırmızıya döndürdü. Süreksizlik için ayrı bir test var — saati 18:00'in iki
+yanından ince adımlarla geçirip ışık yönünün kare başına küçük değiştiğini
+sınıyor; eski "karşı yöndeki ay" mantığı geri konduğunda kırmızıya dönüyor.
 
 ### Added — arazi katman boyama: çim / toprak / kar + eğimde kaya
 

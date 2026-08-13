@@ -3001,6 +3001,18 @@ func _dn_mix3(a, b, t): int {
 func sun_height3d(): float { return sin((_dn_h3 - 6.0) / 12.0 * 3.14159265); }
 func gunes_yuksekligi3d(): float { return sun_height3d(); }
 
+// Güneşin doğu-batı bileşeni: +1 doğu (şafak), -1 batı (gün batımı).
+// Güneş saati / pusula gibi şeyler için, ve ışık yönünün sürekliliğini
+// sınayabilmek için.
+func sun_east3d(): float { return cos((_dn_h3 - 6.0) / 12.0 * 3.14159265); }
+func gunes_dogu3d(): float { return sun_east3d(); }
+
+// Işığın gerçekte kullanılan yüksekliği: ufka İNMEZ. Yatay ışık gölge
+// haritasını dejenere ediyor, ayrıca eski "gece = karşı yönden ay" kuralı
+// ufuk geçişinde yönü 180° atlatıyordu. Saf fonksiyon — test edilebilir.
+func _dn_elev3(ey): float { if (ey < 0.22) { return 0.22; } return ey; }
+func light_height3d(): float { return _dn_elev3(sun_height3d()); }
+
 func is_night3d(): bool { return sun_height3d() <= 0.0; }
 func gece_mi3d(): bool { return is_night3d(); }
 
@@ -3049,18 +3061,30 @@ func _s3_daynight(dt) {
     if (day < 0.0) { day = 0.0; }
     if (day > 1.0) { day = 1.0; }
 
-    if (ey > 0.0) {
-        // GÜNDÜZ — ışık güneşten. `sun()` ışığın GİTTİĞİ yönü istiyor, yani
-        // güneşin konumunun tersi.
-        int warm = rgb(255, 150, 90);
-        int noon = rgb(255, 246, 224);
-        int sc = _dn_mix3(warm, noon, day);
-        sun(0.0 - ex, 0.0 - ey, 0.0 - 0.25, sc);
-    } else {
-        // GECE — ay: güneşin tam karşısında, sönük ve mavi. Güneşi ufkun
-        // ALTINDA bırakmak cisimleri alttan aydınlatırdı (klasik hata).
-        sun(ex, 0.0 - abs_f3(ey) - 0.15, 0.25, rgb(120, 140, 190));
+    // Işığın rengi gün boyu sürekli: şafak/gün batımında sıcak turuncu,
+    // öğlen beyaza, gece sönük maviye gider. Ufuk geçişinde (ey ~ 0) iki dal
+    // da SICAK renge yakınsıyor, yani renk atlamıyor.
+    int warm = rgb(255, 150, 90);
+    int noon = rgb(255, 246, 224);
+    int moon = rgb(90, 105, 150);
+    int sc = _dn_mix3(warm, noon, day);
+    if (ey <= 0.0) {
+        float night = (0.0 - ey) / 0.30;
+        if (night > 1.0) { night = 1.0; }
+        sc = _dn_mix3(warm, moon, night);
     }
+    // Işık yönü gün boyu KESİNTİSİZ dönüyor ve yüksekliği ufka inmiyor.
+    // İkisi de gözle görülür sebeplerden:
+    //   1. Gece ışığını "güneşin tam karşısındaki ay" yapmak, güneş ufku
+    //      geçtiği KAREDE yönü 180° atlatıyordu — gölgeler tek karede öbür
+    //      tarafa sıçrıyordu. Kullanıcının şafak/gün batımında gördüğü
+    //      "ekran yeniden çizildi" hissinin sebebi buydu.
+    //   2. Yatay ışık gölge haritasını dejenere ediyor: gölgeler ufka doğru
+    //      uzayıp titriyor. Tam da o iki an.
+    // Gece/gündüz farkını artık YÖN değil, renk ve ortam ışığı taşıyor.
+    float ly = ey;
+    if (ly < 0.22) { ly = 0.22; }
+    sun(0.0 - ex, 0.0 - ly, 0.0 - 0.25, sc);
 
     // Ortam ışığı: gece neredeyse yok, gündüz normal.
     int amb_n = rgb(16, 20, 38);
