@@ -1612,6 +1612,58 @@ func t_save_reset_keeps_disk() {
 }
 
 // ===========================================================================
+// Kamera-engel mesafesi
+// ===========================================================================
+// Kamera konumu raylib'e yazıldığı için geri okunamıyor; karar mantığı saf
+// fonksiyonlara ayrıldı ve doğrudan sınanıyor.
+
+func t_camera_no_obstacle_keeps_distance() {
+    scene3d_reset();
+    assert(abs_f3(_cam_allowed3(16.0, 1.0) - 16.0) < 0.001, "engel yoksa tam mesafe");
+}
+
+func t_camera_obstacle_pulls_in_by_world_units() {
+    scene3d_reset();
+    // Işın yarıda çarptı: 16 * 0.5 = 8, pay 0.35 düşülür.
+    assert(abs_f3(_cam_allowed3(16.0, 0.5) - 7.65) < 0.001, "pay DUNYA birimi");
+    // Pay mesafeden bağımsız: 40'lık kamerada da aynı 0.35 düşer.
+    assert(abs_f3(_cam_allowed3(40.0, 0.5) - 19.65) < 0.001, "pay mesafeyle olceklenmez");
+}
+
+// ASIL HATA: taban ORANDI (%12), yani "en yakın mesafe" kameranın ne kadar
+// uzakta kurulduğuna göre değişiyordu — 16'lık yörüngede 1.92 birim, yani
+// oyuncunun içi. Taban artık dünya birimi ve `full`'den BAĞIMSIZ.
+func t_camera_floor_is_absolute_not_relative() {
+    scene3d_reset();
+    float a16 = _cam_allowed3(16.0, 0.02);   // engel dibimizde
+    float a40 = _cam_allowed3(40.0, 0.02);
+    assert(abs_f3(a16 - 2.2) < 0.001, "taban dunya birimi (16)");
+    assert(abs_f3(a40 - 2.2) < 0.001, "taban dunya birimi (40)");
+    assert(abs_f3(a16 - a40) < 0.001, "taban yorunge mesafesinden BAGIMSIZ");
+    // Ayarlanabilir olmalı.
+    camera_near3d(4.0);
+    assert(abs_f3(_cam_allowed3(16.0, 0.02) - 4.0) < 0.001, "taban ayarlanabilir");
+}
+
+// Yumuşatma asimetrik: içeri anında, dışarı kademeli.
+func t_camera_smoothing_is_asymmetric() {
+    scene3d_reset();
+    _cam_cur3 = 0.0;
+    // ilk kare: durum yok → anında yerleşir
+    assert(abs_f3(_cam_smooth3(16.0, 0.016667) - 16.0) < 0.001, "ilk kare aninda");
+    // engel belirdi → ANINDA içeri (bir kare bile duvarın içinde kalmamalı)
+    assert(abs_f3(_cam_smooth3(4.0, 0.016667) - 4.0) < 0.001, "iceri aninda");
+    // engel kalktı → kademeli açılır, tek karede sıçramaz
+    float step1 = _cam_smooth3(16.0, 0.016667);
+    assert(step1 > 4.0, "disari acilmaya baslar");
+    assert(step1 < 6.0, "ama tek karede sicramaz");
+    // yeterince kare sonra hedefe yaklaşır
+    int i = 0;
+    while (i < 120) { _cam_smooth3(16.0, 0.016667); i = i + 1; }
+    assert(_cam_smooth3(16.0, 0.016667) > 15.5, "sonunda tam mesafeye doner");
+}
+
+// ===========================================================================
 // Gündüz-gece döngüsü
 // ===========================================================================
 // Gökyüzü GPU'da çiziliyor ama saati süren şey saf matematik: saat ilerlemesi,
@@ -2173,6 +2225,10 @@ test("acik yolda duz kovalama", "t_chase_direct_when_clear");
 test("duvar varken yana sapma", "t_chase_avoids_wall");
 test("kacinma kapatilabiliyor", "t_chase_direct_opt_out");
 test("dusman duvarin etrafindan dolasiyor", "t_chase_gets_around_wall");
+test("engel yokken tam mesafe", "t_camera_no_obstacle_keeps_distance");
+test("engel dunya biriminde cekiyor", "t_camera_obstacle_pulls_in_by_world_units");
+test("en yakin mesafe mutlak, oransal degil", "t_camera_floor_is_absolute_not_relative");
+test("kamera yumusatmasi asimetrik", "t_camera_smoothing_is_asymmetric");
 test("gunes yuksekligi saate gore", "t_daynight_sun_height");
 test("isik yonu ufukta atlamiyor", "t_daynight_light_is_continuous");
 test("saat ilerliyor ve sariyor", "t_daynight_clock_advances_and_wraps");

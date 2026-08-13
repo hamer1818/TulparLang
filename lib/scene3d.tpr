@@ -161,7 +161,15 @@ int   _cam_lock3  = 0;      // imleç kilidi (FPS'te varsayılan açık)
 // bir sanat yönü tercihi değil, kusurdur (gölge gibi — bkz. _shadows3).
 // Açık alanda hiçbir etkisi yok, çünkü ışın hiçbir duvara çarpmıyor.
 int   _cam_collide3 = 1;
-float _cam_margin3  = 0.12;  // çarpma noktasından geri çekilme payı (oran)
+// Geri çekilme ve en yakın mesafe DÜNYA BİRİMİ. Eskiden ikisi de yörünge
+// mesafesinin ORANIydı: taban %12 olduğu için `kamera_yorunge(p, 16, ...)`
+// diyen bir sahnede kamera, arkada engel varken oyuncunun 1.9 birim yakınına
+// giriyordu — pratikte kafasının içine. Oran, kameranın ne kadar uzakta
+// kurulduğuna göre anlam değiştiriyordu; mesafe değiştirmiyor.
+float _cam_pad3  = 0.35;   // çarpma noktasının bu kadar berisinde dur
+float _cam_near3 = 2.2;    // hedefe en fazla bu kadar yaklaş
+float _cam_ease3 = 8.0;    // engel kalkınca geri açılma hızı (1/sn)
+float _cam_cur3  = 0.0;    // yumuşatma durumu (0 = henüz kurulmadı → anında)
 
 int   _score3 = 0;
 int   _game_over3 = 0;
@@ -399,6 +407,7 @@ func scene3d_reset() {
     // yeniden kurulur. Bırakılsa yeniden başlatılan sahne önceki turun
     // bakış açısıyla açılırdı.
     _cam_mode3 = CAM_FIXED; _cam_yaw3 = 0.0; _cam_pitch3 = 0.0; _cam_lock3 = 0;
+    _cam_cur3 = 0.0; _cam_near3 = 2.2; _cam_pad3 = 0.35; _cam_ease3 = 8.0;
     _hit_me = 0 - 1; _hit_other = 0 - 1;
 }
 
@@ -1919,6 +1928,40 @@ func _seg_aabb3(ox, oy, oz, dx, dy, dz, w): float {
     return tmin;
 }
 
+// Engelin izin verdiği kamera mesafesi. SAF fonksiyon (durum okumaz, ayar
+// dışında) — kamera konumu raylib'e yazıldığı için geri okunamıyor, o yüzden
+// karar mantığı buraya ayrıldı ve doğrudan test ediliyor.
+//
+// `full` = engelsizken olması gereken mesafe, `ct` = ışının çarpma oranı
+// (1.0 = engel yok). Hesap DÜNYA BİRİMİNDE: oran önce mesafeye çevriliyor,
+// pay ve taban da mesafe olarak uygulanıyor. Eskiden taban oran (%12) idi ve
+// bu, kameranın ne kadar uzakta kurulduğuna göre anlam değiştiriyordu —
+// `kamera_yorunge(p, 16, ...)` sahnesinde arkadaki engel kamerayı oyuncunun
+// 1.9 birim yakınına sokuyordu.
+func _cam_allowed3(full, ct): float {
+    float allowed = full;
+    if (ct < 1.0) { allowed = full * ct - _cam_pad3; }
+    // Taban: kamera hedefin içine gömülmez. Engel bundan da yakınsa kamera
+    // duvara biraz girer — bilinçli takas, alternatifi oyuncunun kafasının
+    // içinden bakmak.
+    if (allowed < _cam_near3) { allowed = _cam_near3; }
+    return allowed;
+}
+
+// Yumuşatma ASİMETRİK: içeri ANINDA (yoksa kamera bir kare duvarın içinde
+// kalır), dışarı yavaş. Engelin arkasından çıkarken kameranın geri fırlaması,
+// girmesinden daha rahatsız edici.
+func _cam_smooth3(allowed, dt): float {
+    if (_cam_cur3 <= 0.0 || allowed < _cam_cur3) {
+        _cam_cur3 = allowed;
+    } else {
+        float k = _cam_ease3 * dt;
+        if (k > 1.0) { k = 1.0; }
+        _cam_cur3 = _cam_cur3 + (allowed - _cam_cur3) * k;
+    }
+    return _cam_cur3;
+}
+
 // Hedeften kameraya giden doğru parçasını duvarlara karşı tara; en yakın
 // kesişme oranını döner (1.0 = engel yok).
 float _CAM_TERR_CLEAR3 = 0.6;   // arazi yüzeyinin bu kadar üstünde kal
@@ -2706,7 +2749,7 @@ func _s3_camera_input(dt) {
     }
 }
 
-func _s3_camera() {
+func _s3_camera(dt) {
     // Hedef ölmüşse (handle bayat) genel görünüme düş — ölü slot'u okumak,
     // slot geri kullanıldığında kamerayı alakasız bir entity'ye kilitlerdi.
     int ct = _slot_of3(_cam_target);
@@ -2752,14 +2795,13 @@ func _s3_camera() {
         float rdx = cx - t.x;
         float rdy = cy - t.y;
         float rdz = cz - t.z;
-        float ct2 = _cam_clear_t3(t.x, t.y, t.z, rdx, rdy, rdz);
-        if (ct2 < 1.0) {
-            // duvarın hemen berisinde dur; hedefin içine gömülmeyi de engelle
-            float pull = ct2 - _cam_margin3;
-            if (pull < 0.12) { pull = 0.12; }
-            cx = t.x + rdx * pull;
-            cy = t.y + rdy * pull;
-            cz = t.z + rdz * pull;
+        float full = sqrt(rdx * rdx + rdy * rdy + rdz * rdz);
+        if (full > 0.001) {
+            float ct2 = _cam_clear_t3(t.x, t.y, t.z, rdx, rdy, rdz);
+            float s = _cam_smooth3(_cam_allowed3(full, ct2), dt) / full;
+            cx = t.x + rdx * s;
+            cy = t.y + rdy * s;
+            cz = t.z + rdz * s;
         }
     }
     camera3d(cx, cy, cz,   t.x, t.y, t.z,  _cam_fov);
@@ -2884,7 +2926,22 @@ func camera_orbit(target, dist, height) {
     _cam_pitch3 = 0.0 - atan2(height, dist) * RAD2DEG3;
     _cam_yaw3 = 0.0;
     _cam_height = height;
+    // Yumuşatma durumunu sıfırla: yeni bölüm/yeni hedef, önceki sahnede
+    // sıkışmış mesafeyi miras almasın (kamera açılana kadar bir an dibinde
+    // başlardı).
+    _cam_cur3 = 0.0;
 }
+
+// Kamera-engel davranışının ayarları — hepsi DÜNYA BİRİMİ.
+//   near : hedefe en fazla bu kadar yaklaşır (engel daha yakınsa duvara girer)
+//   pad  : çarpma noktasının bu kadar berisinde durur
+//   ease : engel kalkınca geri açılma hızı (1/sn; büyük = daha çabuk)
+func camera_near3d(d) { if (d > 0.1) { _cam_near3 = d; } }
+func kamera_en_yakin3d(d) { camera_near3d(d); }
+func camera_pad3d(p) { if (p >= 0.0) { _cam_pad3 = p; } }
+func kamera_pay3d(p) { camera_pad3d(p); }
+func camera_ease3d(e) { if (e > 0.0) { _cam_ease3 = e; } }
+func kamera_yumusatma3d(e) { camera_ease3d(e); }
 func kamera_yorunge(target, dist, height) { camera_orbit(target, dist, height); }
 
 // BİRİNCİ ŞAHIS: kamera hedefin gözünde. Hedef çizilmez (içindesin).
@@ -3218,7 +3275,7 @@ func play3d() {
 
         frame_begin();
         clear(rgb(16, 18, 26));
-        _s3_camera();
+        _s3_camera(dt);
         space_begin();
             _s3_render();
             // Parçacıklar entity'lerden SONRA: billboard'lar saydam çizilir,

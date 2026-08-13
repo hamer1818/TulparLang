@@ -60,6 +60,31 @@ giriş/çıkış **kenarı** hesaplanıyor.
   bölgenin *gövde* ölçmesi, ölüm-çıkış bastırması, bölüm temizliği, kapatma
   sessizliği ve iki gövdeli tek atım — her biri ilgili bozmada kırmızıya döndü.
 
+### Fixed — arkada engel varken kamera oyuncunun dibine giriyordu
+
+Kamera-engel çözümünde hem geri çekilme payı hem de "en yakın mesafe" **oran**
+olarak ifade edilmişti: taban `0.12`, yani yörünge mesafesinin %12'si. Sonuç,
+kameranın ne kadar uzakta kurulduğuna göre değişiyordu — `kamera_yorunge(p, 16,
+...)` diyen bir sahnede arkadaki engel kamerayı oyuncunun **1.9 birim** yakınına
+sokuyordu (pratikte kafasının içine), 40'lık bir kamerada ise 4.8 birime.
+"En yakın mesafe" kavramının oranla ifade edilmesi baştan yanlıştı.
+
+- `_cam_near3` (varsayılan 2.2) ve `_cam_pad3` (0.35) artık **dünya birimi** ve
+  yörünge mesafesinden bağımsız. Ayarlanabilir: `camera_near3d`/`kamera_en_yakin3d`,
+  `camera_pad3d`/`kamera_pay3d`, `camera_ease3d`/`kamera_yumusatma3d`.
+- **Yumuşatma eklendi ve bilerek asimetrik:** içeri anında (yoksa kamera bir kare
+  duvarın içinde kalır), dışarı kademeli — engelin arkasından çıkarken kameranın
+  geri fırlaması, girmesinden daha rahatsız edici.
+- Engel `near`'dan da yakınsa kamera duvara biraz girer. Bilinçli takas;
+  alternatifi oyuncunun kafasının içinden bakmak.
+- Kamera hedefi değişince (`camera_orbit`) yumuşatma durumu sıfırlanıyor, yeni
+  bölüm önceki sahnede sıkışmış mesafeyi miras almıyor.
+
+Karar mantığı saf fonksiyonlara ayrıldı (`_cam_allowed3`, `_cam_smooth3`) —
+kamera konumu raylib'e yazıldığı için geri okunamıyor, dolayısıyla test
+edilebilmesinin tek yolu buydu. 4 yeni test (111 → 115); eski oransal mantık
+geri konduğunda ikisi, yumuşatma asimetrisi sökülünce biri kırmızıya dönüyor.
+
 ### Added — gündüz-gece döngüsü
 
 Gökyüzü sabitti: sahne hangi saatte kurulduysa sonsuza kadar o saatteydi.
