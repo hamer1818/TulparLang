@@ -60,6 +60,33 @@ giriş/çıkış **kenarı** hesaplanıyor.
   bölgenin *gövde* ölçmesi, ölüm-çıkış bastırması, bölüm temizliği, kapatma
   sessizliği ve iki gövdeli tek atım — her biri ilgili bozmada kırmızıya döndü.
 
+### Changed — kamera artık engelden kaçmıyor, engeli SAYDAMLAŞTIRIYOR
+
+Kamerayı duvara çarptıkça içeri çekmek yanlış çözümdü: duvara sırtını dayamak
+kamerayı oyuncunun dibine sokuyor, yönelimi tamamen kaybettiriyordu. Aşağıdaki
+mesafe düzeltmesi bunu yumuşattı ama kökten çözmedi — kullanıcı testinde hâlâ
+"kamera engele takılıyor" olarak görüldü.
+
+Üçüncü şahıs oyunlarının standart çözümü uygulandı: **kamera yerinde kalıyor,
+kamerayla oyuncu arasına giren cisim saydam çiziliyor.** Oyuncu her zaman
+görünür. Varsayılan AÇIK; eski davranış `kamera_seffaf3d(false)`.
+
+- `camera_xray3d` / `kamera_seffaf3d`, `xray_alpha3d` / `seffaflik3d` (alfa 70).
+- Röntgen açıkken duvar taraması kamerayı **çekmiyor**; arazi/zemin taraması ise
+  her hâlükârda sürüyor — kameranın yerin altına girmesi saydamlıkla
+  çözülebilecek bir şey değil, orada gerçekten dünyanın altını görürsün.
+- Oyuncunun **kendisi** ve mermiler asla saydamlaşmaz (ilki amacın tersi olurdu,
+  ikincisi yanından geçen her mermide duvarı yanıp söndürürdü).
+
+**Çizim iki geçişe ayrıldı ve bu zorunlu:** saydam cisim opaklardan önce
+çizilirse derinlik tamponuna yazar ve arkasındaki oyuncu elenir — yani duvar
+saydam değil, delik gibi görünür. Saydamlar en sona kalıyor, böylece oyuncunun
+pikselleri tamponda hazırken üstlerine karışıyorlar.
+
+3 yeni test (115 → 118). **Dürüst sınır:** iki geçişin SIRASI penceresiz
+doğrulanamıyor (çizim sırası gözlemlenebilir değil); işaretleme mantığı test
+altında, sıralama ise akıl yürütme + görsel testle doğrulandı.
+
 ### Fixed — arkada engel varken kamera oyuncunun dibine giriyordu
 
 Kamera-engel çözümünde hem geri çekilme payı hem de "en yakın mesafe" **oran**

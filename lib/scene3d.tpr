@@ -171,6 +171,15 @@ float _cam_near3 = 2.2;    // hedefe en fazla bu kadar yaklaş
 float _cam_ease3 = 8.0;    // engel kalkınca geri açılma hızı (1/sn)
 float _cam_cur3  = 0.0;    // yumuşatma durumu (0 = henüz kurulmadı → anında)
 
+// RÖNTGEN: kamerayı içeri çekmek yerine, kamerayla oyuncu ARASINA giren
+// cisimleri saydam çiz. Üçüncü şahıs oyunlarının standart çözümü ve daha
+// doğrusu — kamerayı duvara çarptıkça içeri çekmek, oyuncuyu dev gibi
+// yakınlaştırıp yönelimi kaybettiriyordu (duvara sırtını dayamak yeterliydi).
+// Varsayılan AÇIK; eski davranış `kamera_seffaf3d(false)`.
+int   _cam_xray3 = 1;
+int   _fade_a3   = 70;     // araya giren cismin alfası (0-255)
+array _fade3 = [];         // slot başına 1 = bu kare saydam çiz
+
 int   _score3 = 0;
 int   _game_over3 = 0;
 // Işıklandırma varsayılan AÇIK (bkz. play3d). lights3d(false) ile kapatılır —
@@ -408,6 +417,10 @@ func scene3d_reset() {
     // bakış açısıyla açılırdı.
     _cam_mode3 = CAM_FIXED; _cam_yaw3 = 0.0; _cam_pitch3 = 0.0; _cam_lock3 = 0;
     _cam_cur3 = 0.0; _cam_near3 = 2.2; _cam_pad3 = 0.35; _cam_ease3 = 8.0;
+    // Röntgen de sahne durumu: reset kamerayı zaten sıfırlıyor, saydamlık
+    // kuralının ayakta kalması tutarsız olurdu (ve testleri sıraya bağımlı
+    // yapıyordu — kapatan bir test sonrakini etkiliyordu).
+    _cam_xray3 = 1; _fade_a3 = 70; _fade3 = [];
     _hit_me = 0 - 1; _hit_other = 0 - 1;
 }
 
@@ -1928,6 +1941,41 @@ func _seg_aabb3(ox, oy, oz, dx, dy, dz, w): float {
     return tmin;
 }
 
+// Kamerayla hedef arasına giren cisimleri işaretle (bu kare saydam çizilecek).
+// Hedefin KENDİSİ hariç — oyuncuyu saydamlaştırmak amacın tam tersi olurdu.
+// Mermiler de hariç: yanından geçen her mermi duvarı yanıp sönerdi.
+func _s3_mark_fade3(cx, cy, cz, tx, ty, tz, ts) {
+    _fade3 = [];
+    int n = length(_e3);
+    int i = 0;
+    while (i < n) { push(_fade3, 0); i = i + 1; }
+    if (_cam_xray3 == 0) { return; }
+    float dx = tx - cx; float dy = ty - cy; float dz = tz - cz;
+    i = 0;
+    while (i < n) {
+        if (i != ts) {
+            Ent3 e = _e3[i];
+            if (e.alive == 1 && e.tag != TAG_BULLET) {
+                // `_seg_aabb3` DOĞRU PARÇASI testi: t yalnız 0..1 aralığında
+                // dönüyor, yani kameranın arkasında ya da oyuncunun ötesinde
+                // kalan duvarlar zaten -1 veriyor. Ayrıca `t < 1.0` yazmak
+                // gereksizdi (ve "arkadakileri eliyorum" diye yanlış bir izlenim
+                // veriyordu — elemeyi yapan bu satır değil, ışın testinin
+                // kendisi).
+                float t = _seg_aabb3(cx, cy, cz, dx, dy, dz, i);
+                if (t >= 0.0) { _fade3[i] = 1; }
+            }
+        }
+        i = i + 1;
+    }
+}
+
+func camera_xray3d(on) { if (on) { _cam_xray3 = 1; } else { _cam_xray3 = 0; _fade3 = []; } }
+func kamera_seffaf3d(ac) { camera_xray3d(ac); }
+// Araya giren cismin alfası: 0 tamamen görünmez, 255 opak.
+func xray_alpha3d(a) { _fade_a3 = a; }
+func seffaflik3d(a) { xray_alpha3d(a); }
+
 // Engelin izin verdiği kamera mesafesi. SAF fonksiyon (durum okumaz, ayar
 // dışında) — kamera konumu raylib'e yazıldığı için geri okunamıyor, o yüzden
 // karar mantığı buraya ayrıldı ve doğrudan test ediliyor.
@@ -1971,6 +2019,11 @@ func _cam_clear_t3(ox, oy, oz, dx, dy, dz): float {
     float best = 1.0;
     int n = length(_e3);
     int i = 0;
+    // Röntgen açıkken duvarlar kamerayı ÇEKMEZ; araya girdiklerinde saydam
+    // çiziliyorlar (bkz. _s3_mark_fade3). Aşağıdaki arazi/zemin taraması ise
+    // her hâlükârda çalışıyor: kameranın yerin altına girmesi saydamlıkla
+    // çözülebilecek bir şey değil, orada gerçekten dünyanın altını görürsün.
+    if (_cam_xray3 == 0) {
     while (i < n) {
         Ent3 e = _e3[i];
         if (e.alive == 1 && e.tag == TAG_WALL) {
@@ -1978,6 +2031,7 @@ func _cam_clear_t3(ox, oy, oz, dx, dy, dz): float {
             if (t >= 0.0 && t < best) { best = t; }
         }
         i = i + 1;
+    }
     }
     // ZEMİN. Yukarıdaki tarama yalnız TAG_WALL kutularına bakıyordu, oysa
     // arazi bir kutu değil sürekli bir yüzey — kamera tepenin İÇİNE girip
@@ -2754,12 +2808,15 @@ func _s3_camera(dt) {
     // slot geri kullanıldığında kamerayı alakasız bir entity'ye kilitlerdi.
     int ct = _slot_of3(_cam_target);
     if (ct < 0) {
+        _fade3 = [];   // hedef yok → bayat saydamlık kalmasın
         camera3d(_cam_dist, _cam_height, _cam_dist,  0.0, 0.0, 0.0, _cam_fov);
         return;
     }
     Ent3 t = _e3[ct];
     if (_cam_mode3 == CAM_FIXED) {
         // Oyuncunun arkasında (+Z) ve yukarıda; oyuncuya bakar.
+        _s3_mark_fade3(t.x, t.y + _cam_height, t.z + _cam_dist,
+                       t.x, t.y, t.z, ct);
         camera3d(t.x, t.y + _cam_height, t.z + _cam_dist,   t.x, t.y, t.z,  _cam_fov);
         return;
     }
@@ -2804,6 +2861,7 @@ func _s3_camera(dt) {
             cz = t.z + rdz * s;
         }
     }
+    _s3_mark_fade3(cx, cy, cz, t.x, t.y, t.z, ct);
     camera3d(cx, cy, cz,   t.x, t.y, t.z,  _cam_fov);
 }
 
@@ -2832,15 +2890,30 @@ func _s3_render() {
     }   // arazi else'i
     int n = length(_e3);
     int cts = _slot_of3(_cam_target);   // handle → slot (döngü slot'la geziyor)
+    int fn3 = length(_fade3);
+    // İKİ GEÇİŞ. Saydam cisimler EN SONA kalmak zorunda: kamerayla oyuncu
+    // arasındaki duvar önce çizilirse derinlik tamponuna yazar ve arkasındaki
+    // oyuncu elenir — yani saydamlık hiçbir işe yaramaz, duvar delik gibi
+    // görünür. Sonra çizildiğinde ise oyuncunun pikselleri tamponda hazırdır
+    // ve duvar onların üstüne KARIŞIR.
+    int pass = 0;
+    while (pass < 2) {
     int i = 0;
     while (i < n) {
         Ent3 e = _e3[i];
+        int fade_it = 0;
+        if (i < fn3) { fade_it = _fade3[i]; }
         int draw_it = 0;
-        if (e.alive == 1) { draw_it = 1; }
+        if (e.alive == 1 && fade_it == pass) { draw_it = 1; }
         // Birinci şahısta kamera gövdenin İÇİNDEdir: çizersek ekranı kendi
         // kutumuzun iç yüzeyi kaplar.
         if (_cam_mode3 == CAM_FPS && i == cts) { draw_it = 0; }
         if (draw_it == 1) {
+            int ecol = e.color;
+            if (fade_it == 1) {
+                ecol = rgba(_col_r3(e.color), _col_g3(e.color), _col_b3(e.color),
+                            _fade_a3);
+            }
             if (e.shape == SHAPE_RAMP) {
                 // raylib'de kama primitifi yok. Rampayı yerel +Z boyunca
                 // KADEMELİ diliyoruz: her dilim, o noktadaki yüzey yüksekliğine
@@ -2860,18 +2933,18 @@ func _s3_render() {
                     // yerel (0, lz) → dünya
                     float wx = e.x + s * lz;
                     float wz = e.z + c * lz;
-                    cube(wx, base + h * 0.5, wz, e.sx, h, dz, e.color);
+                    cube(wx, base + h * 0.5, wz, e.sx, h, dz, ecol);
                     k = k + 1;
                 }
             } else {
             if (e.shape == SHAPE_CUBE) {
-                cube(e.x, e.y, e.z, e.sx, e.sy, e.sz, e.color);
+                cube(e.x, e.y, e.z, e.sx, e.sy, e.sz, ecol);
             } else {
                 if (e.shape == SHAPE_SPHERE) {
-                    sphere(e.x, e.y, e.z, e.sx * 0.5, e.color);
+                    sphere(e.x, e.y, e.z, e.sx * 0.5, ecol);
                 } else {
                     if (e.shape == SHAPE_CYL) {
-                        cylinder(e.x, e.y - e.sy * 0.5, e.z, e.sx * 0.5, e.sy, e.color);
+                        cylinder(e.x, e.y - e.sy * 0.5, e.z, e.sx * 0.5, e.sy, ecol);
                     } else {
                         if (e.shape == SHAPE_MODEL && e.model >= 0) {
                             // Animasyon: motor kare sayacını sürüyor, burada
@@ -2884,7 +2957,7 @@ func _s3_render() {
                                     anim_play(e.model, ai, mod(toInt(e.anim_t), fcount));
                                 }
                             }
-                            draw_model_rot(e.model, e.x, e.y - e.sy * 0.5, e.z, e.yaw, e.sx, e.color);
+                            draw_model_rot(e.model, e.x, e.y - e.sy * 0.5, e.z, e.yaw, e.sx, ecol);
                         }
                     }
                 }
@@ -2892,6 +2965,8 @@ func _s3_render() {
             }   // SHAPE_RAMP else'i
         }
         i = i + 1;
+    }
+    pass = pass + 1;
     }
     // Tetikleyici bölgeler entity'lerden SONRA: tel kafes, içindeki cismin
     // üstünde görünsün. Varsayılan kapalı (bkz. trigger_show3d).
@@ -3038,18 +3113,19 @@ float _dn_len3   = 120.0;   // tam bir gün kaç saniye sürsün
 float _dn_h3     = 12.0;    // günün saati, 0..24
 int   _dn_frozen3 = 0;      // saat ilerlemesin (sabit "altın saat" isteyen oyun)
 
-// Paketli renk (r*2^24 + g*2^16 + b*2^8 + a) bileşenleri.
-func _dn_r3(c): int { return mod(toInt(c / 16777216), 256); }
-func _dn_g3(c): int { return mod(toInt(c / 65536), 256); }
-func _dn_b3(c): int { return mod(toInt(c / 256), 256); }
+// Paketli renk (r*2^24 + g*2^16 + b*2^8 + a) bileşenleri. Hem gökyüzü
+// karışımı hem de saydamlaştırma bunları kullanıyor.
+func _col_r3(c): int { return mod(toInt(c / 16777216), 256); }
+func _col_g3(c): int { return mod(toInt(c / 65536), 256); }
+func _col_b3(c): int { return mod(toInt(c / 256), 256); }
 
 func _dn_mix3(a, b, t): int {
     float k = t;
     if (k < 0.0) { k = 0.0; }
     if (k > 1.0) { k = 1.0; }
-    int r = toInt(_dn_r3(a) * 1.0 + (_dn_r3(b) - _dn_r3(a)) * k);
-    int g = toInt(_dn_g3(a) * 1.0 + (_dn_g3(b) - _dn_g3(a)) * k);
-    int b2 = toInt(_dn_b3(a) * 1.0 + (_dn_b3(b) - _dn_b3(a)) * k);
+    int r = toInt(_col_r3(a) * 1.0 + (_col_r3(b) - _col_r3(a)) * k);
+    int g = toInt(_col_g3(a) * 1.0 + (_col_g3(b) - _col_g3(a)) * k);
+    int b2 = toInt(_col_b3(a) * 1.0 + (_col_b3(b) - _col_b3(a)) * k);
     return rgb(r, g, b2);
 }
 

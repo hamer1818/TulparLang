@@ -816,6 +816,10 @@ func t_static_geometry() {
 // -- 40) Kamera-duvar isini: engel varsa kamera iceri cekilir ---------------
 func t_camera_ray() {
     scene3d_reset();
+    // Duvar taraması artık YALNIZ röntgen kapalıyken çalışıyor: varsayılanda
+    // araya giren duvar kamerayı çekmiyor, saydam çiziliyor. Bu test o eski
+    // (hâlâ desteklenen) yolu sınıyor, o yüzden röntgeni kapatıyor.
+    camera_xray3d(false);
     spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
     // acik alanda engel yok → tam mesafe
     assert(abs_f3(_cam_clear_t3(0.0, 1.0, 0.0,  0.0, 0.0, 10.0) - 1.0) < 0.001,
@@ -1617,6 +1621,49 @@ func t_save_reset_keeps_disk() {
 // Kamera konumu raylib'e yazıldığı için geri okunamıyor; karar mantığı saf
 // fonksiyonlara ayrıldı ve doğrudan sınanıyor.
 
+// RÖNTGEN: kamerayla oyuncu arasına giren cisim saydam çizilir, kamera
+// çekilmez. Kullanıcı bildirimi: duvara sırtını dayayınca kamera hâlâ takılıp
+// aşırı yakınlaşıyordu — doğru çözüm kamerayı oynatmak değil, engeli görünmez
+// kılmak.
+func t_camera_xray_marks_blockers() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    // Kamera +Z'de 10 birim ötede; duvar tam aralarında (z=5).
+    int w = spawn3(0.0, 1.0, 5.0,  6.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    // Kameranın ARKASINDA ve oyuncunun ÖTESİNDE kalanlar engel değil: ikisi de
+    // görüşü kapatmıyor, saydamlaştırmak sahneyi sebepsiz delik deşik ederdi.
+    int back = spawn3(0.0, 1.0, 15.0,  6.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int far = spawn3(0.0, 1.0, 0.0 - 6.0,  6.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    _s3_mark_fade3(0.0, 1.0, 10.0,  0.0, 1.0, 0.0,  _slot_of3(p));
+    assert_eq_int(_fade3[_slot_of3(w)], 1);
+    assert_eq_int(_fade3[_slot_of3(back)], 0);
+    assert_eq_int(_fade3[_slot_of3(far)], 0);
+    // Oyuncunun KENDİSİ asla saydamlaşmaz — amacın tam tersi olurdu.
+    assert_eq_int(_fade3[_slot_of3(p)], 0);
+}
+
+// Röntgen kapatılınca hiçbir şey işaretlenmemeli (eski davranışa dönüş).
+func t_camera_xray_can_be_disabled() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int w = spawn3(0.0, 1.0, 5.0,  6.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    camera_xray3d(false);
+    _s3_mark_fade3(0.0, 1.0, 10.0,  0.0, 1.0, 0.0,  _slot_of3(p));
+    assert_eq_int(_fade3[_slot_of3(w)], 0);
+    // ...ve duvar taraması yeniden kamerayı çekiyor
+    float t = _cam_clear_t3(0.0, 1.0, 0.0,  0.0, 0.0, 10.0);
+    assert(t < 0.5, "rontgen kapaliyken duvar kamerayi ceker");
+}
+
+// Röntgen AÇIKKEN duvar kamerayı çekmemeli — bildirilen şikâyetin özü.
+func t_camera_xray_does_not_pull_camera() {
+    scene3d_reset();
+    spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    spawn3(0.0, 1.0, 5.0,  6.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    float t = _cam_clear_t3(0.0, 1.0, 0.0,  0.0, 0.0, 10.0);
+    assert(abs_f3(t - 1.0) < 0.001, "rontgen acikken duvar kamerayi CEKMEZ");
+}
+
 func t_camera_no_obstacle_keeps_distance() {
     scene3d_reset();
     assert(abs_f3(_cam_allowed3(16.0, 1.0) - 16.0) < 0.001, "engel yoksa tam mesafe");
@@ -1754,12 +1801,12 @@ func t_daynight_off_by_default() {
 // bölmesine dayanıyor — sessizce yanlış olursa gökyüzü çamura döner.)
 func t_daynight_color_mix() {
     scene3d_reset();
-    assert_eq_int(_dn_r3(rgb(255, 150, 90)), 255);
-    assert_eq_int(_dn_g3(rgb(255, 150, 90)), 150);
-    assert_eq_int(_dn_b3(rgb(255, 150, 90)), 90);
+    assert_eq_int(_col_r3(rgb(255, 150, 90)), 255);
+    assert_eq_int(_col_g3(rgb(255, 150, 90)), 150);
+    assert_eq_int(_col_b3(rgb(255, 150, 90)), 90);
     assert_eq_int(_dn_mix3(rgb(0, 0, 0), rgb(200, 100, 50), 0.0), rgb(0, 0, 0));
     assert_eq_int(_dn_mix3(rgb(0, 0, 0), rgb(200, 100, 50), 1.0), rgb(200, 100, 50));
-    assert_eq_int(_dn_r3(_dn_mix3(rgb(0, 0, 0), rgb(200, 100, 50), 0.5)), 100);
+    assert_eq_int(_col_r3(_dn_mix3(rgb(0, 0, 0), rgb(200, 100, 50), 0.5)), 100);
     // sınır dışı t kırpılmalı, taşmamalı
     assert_eq_int(_dn_mix3(rgb(0, 0, 0), rgb(200, 100, 50), 2.0), rgb(200, 100, 50));
     assert_eq_int(_dn_mix3(rgb(0, 0, 0), rgb(200, 100, 50), 0.0 - 1.0), rgb(0, 0, 0));
@@ -2225,6 +2272,9 @@ test("acik yolda duz kovalama", "t_chase_direct_when_clear");
 test("duvar varken yana sapma", "t_chase_avoids_wall");
 test("kacinma kapatilabiliyor", "t_chase_direct_opt_out");
 test("dusman duvarin etrafindan dolasiyor", "t_chase_gets_around_wall");
+test("rontgen araya gireni isaretliyor", "t_camera_xray_marks_blockers");
+test("rontgen kapatilabiliyor", "t_camera_xray_can_be_disabled");
+test("rontgen acikken kamera cekilmiyor", "t_camera_xray_does_not_pull_camera");
 test("engel yokken tam mesafe", "t_camera_no_obstacle_keeps_distance");
 test("engel dunya biriminde cekiyor", "t_camera_obstacle_pulls_in_by_world_units");
 test("en yakin mesafe mutlak, oransal degil", "t_camera_floor_is_absolute_not_relative");
