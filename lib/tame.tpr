@@ -445,6 +445,19 @@ func arazi_yukle3d(yol, sx, sy, sz, taban): int {
 func arazi_yukseklik3d(x, z): float { return tm3_terrain_height(x, z); }
 func arazi_kapat3d() { tm3_terrain_off(); }
 
+// Katman boyama: yükseklik + eğime göre çim/toprak/kar/kaya. Araziden ÖNCE
+// çağır — mesh üretim anında boyanıyor.
+func terrain_layers3d(low, mid, high, rock, mid_y, high_y, rock_slope) {
+    tm3_terrain_layers(low, mid, high, rock, mid_y, high_y, rock_slope);
+}
+func terrain_layer3d(x, z): int { return tm3_terrain_layer(x, z); }
+func terrain_layers_off3d() { tm3_terrain_layers_off(); }
+func arazi_katman3d(alt, orta, ust, kaya, orta_y, ust_y, egim) {
+    tm3_terrain_layers(alt, orta, ust, kaya, orta_y, ust_y, egim);
+}
+func arazi_katmani3d(x, z): int { return tm3_terrain_layer(x, z); }
+func arazi_katman_kapat3d() { tm3_terrain_layers_off(); }
+
 func texture3d(t, tu, tv) { tm3_texture(t, tu, tv); }
 func doku3d(t, tu, tv)    { tm3_texture(t, tu, tv); }
 func no_texture3d() { tm3_texture(0 - 1, 1.0, 1.0); }

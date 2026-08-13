@@ -60,6 +60,51 @@ giriş/çıkış **kenarı** hesaplanıyor.
   bölgenin *gövde* ölçmesi, ölüm-çıkış bastırması, bölüm temizliği, kapatma
   sessizliği ve iki gövdeli tek atım — her biri ilgili bozmada kırmızıya döndü.
 
+### Added — arazi katman boyama: çim / toprak / kar + eğimde kaya
+
+Arazi tek renkti — yüz yirmi birimlik bir dünyanın tamamı aynı yeşil. Oysa
+yükseklik de eğim de zaten elimizdeydi (fizik ikisini de kullanıyor), yani bu
+iş yeni **veri** değil, o veriyi göstermeyi istiyordu.
+
+- `terrain_paint3d(low, mid, high, rock, mid_y, high_y, rock_slope)` /
+  `arazi_boya3d` — eşikler **dünya Y'si**, eğim derece. `terrain_natural3d(peak)`
+  / `arazi_dogal3d` tek satırlık hazır palet.
+- `terrain_layer3d(x, z)` / `arazi_katmani3d` — o noktada hangi katman
+  (`LAYER_LOW/MID/HIGH/ROCK`). Oyun mantığı için **keskin** cevap verir (ayak
+  sesi, hız, "karda mısın"); mesh boyaması ise sınırlarda yumuşak geçer. Göz
+  gradyan ister, oyun kesin cevap.
+- **Eğim yüksekliği ezer:** dik yüzeyde çim de kar da tutmaz, kaya çıkar.
+
+Uygulama tarafında iki karar taşıyıcı:
+
+1. **Renk mesh'in tepe noktalarına yazılıyor, shader'a değil.** Arazi sıradan
+   bir model olarak kalıyor: doku, ışık, gölge ve sis yollarının hiçbiri
+   değişmiyor, ayrı materyal yönetilmiyor. Mesh'i kendimiz üretmiyoruz da —
+   `GenMeshHeightmap`'in üçgenlemesi tek doğruluk kaynağı olarak kalsın diye
+   yalnız renk VBO'su ekleniyor (`tm3_terrain_height` o üçgenlemeyi taklit
+   ediyor; ayrışırlarsa fizik görselden kayar).
+2. **Işık shader'ı düzeltildi:** `texelColor` artık `fragColor` ile çarpılıyor.
+   Stok raylib ışık shader'ı tepe rengini vertex'ten fragment'a taşıyıp
+   **kullanmıyordu**, yani boyama görünmezdi. Renk tamponu olmayan mesh'lerde
+   raylib öznitelik varsayılanını beyaz yaptığı için bu değişiklik mevcut
+   hiçbir çizimi etkilemiyor.
+
+**Sıra önemsiz:** katman ayarı mesh üretim anında uygulandığı için "önce
+katman, sonra arazi" zorunluluğu doğardı — yanlış sırada hiçbir şey olmayan,
+hata da vermeyen sessiz bir tuzak. Onun yerine `scene3d` arazi parametrelerini
+saklıyor ve katman değişince araziyi yeniden kuruyor.
+
+Varsayılan eşikler (tepenin %35'i / %62'si) **ölçülerek** seçildi: Perlin
+gürültüsü pratikte `sy`'ye ulaşmıyor, tepe genelde %80 civarında kalıyor —
+oranları doğrudan yüksek tutmak karı "en uç iki noktaya" düşürüyordu. Seçilen
+değerler üç ayrı tohumda da dengeli dağılım veriyor.
+
+3 yeni regresyon testi (102 → 105). Mesh boyaması GPU'da olup bitiyor ve
+penceresiz doğrulanamaz, ama **sınıflandırma** saf matematik ve yükseklik
+verisi pencere olmadan da saklanıyor — boyama ile oyun mantığı aynı eşikleri
+okuduğu için asıl kural test altında. Eşikleri ters çevirmek ve (C tarafında)
+eğim kuralını devre dışı bırakmak ilgili testleri kırmızıya döndürdü.
+
 ### Added — 3B'de gamepad: çubuk, tetik, menü
 
 tame'de bağlamalar zaten vardı (`gamepad_down`, `gamepad_axis`, ...); `scene3d`

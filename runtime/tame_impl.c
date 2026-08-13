@@ -450,7 +450,13 @@ static const char *tame_light_fs =
     "    return 0.25 + 0.75*(lit/9.0);           \n"
     "}                                           \n"
     "void main() {                               \n"
-    "    vec4 texelColor = texture2D(texture0, fragTexCoord*texTile); \n"
+    // fragColor = TEPE NOKTASI rengi. Stok raylib ışık shader'ı bunu vertex
+    // shader'dan taşıyıp fragment'ta HİÇ kullanmıyordu; dokuyla aynı yerde
+    // (yüzeyin albedosu olarak) çarpılması gerekiyor. Renk tamponu olmayan
+    // mesh'lerde raylib öznitelik varsayılanını beyaz yapıyor, yani bu satır
+    // mevcut hiçbir çizimi değiştirmiyor — yalnız renk YAZAN mesh'i etkiliyor
+    // (bkz. arazi katman boyama).
+    "    vec4 texelColor = texture2D(texture0, fragTexCoord*texTile)*fragColor; \n"
     "    vec3 lightDot = vec3(0.0);              \n"
     "    vec3 normal = normalize(fragNormal);    \n"
     "    vec3 viewD = normalize(viewPos - fragPosition); \n"
@@ -550,7 +556,8 @@ static const char *tame_light_fs =
     "    return 0.25 + 0.75*(lit/9.0);           \n"
     "}                                           \n"
     "void main() {                               \n"
-    "    vec4 texelColor = texture(texture0, fragTexCoord*texTile); \n"
+    // Tepe noktası rengi — gerekçe GLES varyantındaki yorumda.
+    "    vec4 texelColor = texture(texture0, fragTexCoord*texTile)*fragColor; \n"
     "    vec3 lightDot = vec3(0.0);              \n"
     "    vec3 normal = normalize(fragNormal);    \n"
     "    vec3 viewD = normalize(viewPos - fragPosition); \n"
@@ -1699,6 +1706,10 @@ void tame_impl_terrain_off(void) {
 // UploadMesh çağırıyor). Pencere yoksa yükseklik verisini yine de saklıyoruz
 // ve -1 dönüyoruz — böylece arazi FİZİĞİ pencere açmadan (headless testte)
 // sürülebiliyor, yalnız çizim devre dışı kalıyor.
+// Katman boyaması aşağıda tanımlı (yükseklik sorgusuna dayanıyor, o da bu
+// fonksiyonun kurduğu duruma) — ileri bildirim.
+static void tame_terrain_paint_mesh(Mesh *mesh);
+
 static int tame_terrain_build(Image img, double sx, double sy, double sz,
                               double base) {
   Color *px = LoadImageColors(img);
@@ -1726,6 +1737,9 @@ static int tame_terrain_build(Image img, double sx, double sy, double sz,
   if (slot < 0) { UnloadImage(img); return -1; }
   Mesh mesh = GenMeshHeightmap(img, (Vector3){(float)sx, (float)sy, (float)sz});
   UnloadImage(img);
+  // Katman boyaması LoadModelFromMesh'ten ÖNCE: Mesh bir DEĞER yapısı, model
+  // onun kopyasını saklıyor — sonra boyasak yerel kopyayı boyamış olurduk.
+  tame_terrain_paint_mesh(&mesh);
   Model m = LoadModelFromMesh(mesh);
   tame_models[slot].model = m;
   tame_models[slot].anims = NULL;
@@ -1783,6 +1797,142 @@ double tame_impl_terrain_height(double wx, double wz) {
   else g = h11 + (h01 - h11) * (1.0f - fx) + (h10 - h11) * (1.0f - fz);
   return (double)(tame_terr_base + g * tame_terr_sy / 255.0f);
 }
+
+// --- Arazi katman boyama ----------------------------------------------------
+// Arazi tek renkti: kırk birimlik bir dünyanın tamamı aynı yeşil. Oysa
+// yükseklik de eğim de zaten elimizde — fizik ikisini de kullanıyor. Katman
+// boyama yeni VERİ istemiyor, o veriyi mesh'in tepe noktalarına RENK olarak
+// yazmayı istiyor.
+//
+// Neden vertex color, neden shader değil: arazi sıradan bir model olarak
+// kalıyor, yani doku/ışık/gölge/sis yollarının hiçbiri değişmiyor ve ayrı bir
+// materyal yönetmek gerekmiyor. (Bunun görünür olması için ışık shader'ında
+// texelColor'ın fragColor ile çarpılması gerekti — stok raylib ışık shader'ı
+// tepe rengini fragment'a taşıyıp kullanmıyordu.)
+static int   tame_terr_lay_on    = 0;
+static Color tame_terr_lay_low   = { 96, 132,  88, 255};   // çim
+static Color tame_terr_lay_mid   = {124, 116,  82, 255};   // toprak
+static Color tame_terr_lay_high  = {238, 242, 250, 255};   // kar
+static Color tame_terr_lay_rock  = {112, 110, 106, 255};   // kaya (eğime göre)
+static float tame_terr_lay_midy  = 3.0f;    // dünya Y: buradan sonra toprak
+static float tame_terr_lay_highy = 7.0f;    // dünya Y: buradan sonra kar
+static float tame_terr_lay_slope = 42.0f;   // derece: bundan dik yüzey kaya
+
+// Yüzey normalinin Y bileşeni (1 = düz, 0'a yaklaştıkça dik). Merkezi
+// farklarla — scene3d'nin Tulpar tarafındaki _terrain_normal3'üyle aynı
+// yöntem, aynı sonuç.
+static float tame_terrain_up(double wx, double wz) {
+  const double e = 0.5;
+  double hl = tame_impl_terrain_height(wx - e, wz);
+  double hr = tame_impl_terrain_height(wx + e, wz);
+  double hd = tame_impl_terrain_height(wx, wz - e);
+  double hu = tame_impl_terrain_height(wx, wz + e);
+  double dx = (hr - hl) / (2.0 * e);
+  double dz = (hu - hd) / (2.0 * e);
+  return (float)(1.0 / sqrt(dx * dx + 1.0 + dz * dz));
+}
+
+// Hangi katman: 0 çim, 1 toprak, 2 kar, 3 kaya. KESKİN sınıflandırma —
+// oyun mantığı için (ayak sesi, hız, "karda mısın?"). Mesh boyaması ise
+// aşağıda YUMUŞAK geçiş kullanıyor: göz gradyan ister, oyun kesin cevap.
+int tame_impl_terrain_layer(double wx, double wz) {
+  if (!tame_terr_ready) return 0;
+  float up = tame_terrain_up(wx, wz);
+  if (up < cosf(tame_terr_lay_slope * (float)(3.14159265358979 / 180.0)))
+    return 3;
+  double h = tame_impl_terrain_height(wx, wz);
+  if (h >= (double)tame_terr_lay_highy) return 2;
+  if (h >= (double)tame_terr_lay_midy) return 1;
+  return 0;
+}
+
+static Color tame_terr_mix(Color a, Color b, float t) {
+  if (t < 0.0f) t = 0.0f;
+  if (t > 1.0f) t = 1.0f;
+  Color c;
+  c.r = (unsigned char)((float)a.r + ((float)b.r - (float)a.r) * t);
+  c.g = (unsigned char)((float)a.g + ((float)b.g - (float)a.g) * t);
+  c.b = (unsigned char)((float)a.b + ((float)b.b - (float)a.b) * t);
+  c.a = 255;
+  return c;
+}
+
+// Mesh için renk: katman sınırlarında YUMUŞAK geçiş. Keskin sınır, arazide
+// çizilmiş bir kontur gibi görünür — doğada öyle bir çizgi yok.
+static Color tame_terrain_color_at(double wx, double wz, double h) {
+  float band = (tame_terr_lay_highy - tame_terr_lay_midy) * 0.28f;
+  if (band < 0.05f) band = 0.05f;
+  Color c;
+  double m = (double)tame_terr_lay_midy;
+  double t = (double)tame_terr_lay_highy;
+  if (h <= m - band)      c = tame_terr_lay_low;
+  else if (h < m + band)  c = tame_terr_mix(tame_terr_lay_low, tame_terr_lay_mid,
+                                            (float)((h - (m - band)) / (2.0 * band)));
+  else if (h <= t - band) c = tame_terr_lay_mid;
+  else if (h < t + band)  c = tame_terr_mix(tame_terr_lay_mid, tame_terr_lay_high,
+                                            (float)((h - (t - band)) / (2.0 * band)));
+  else                    c = tame_terr_lay_high;
+  // Eğim kayayı ÜSTE bindirir: dik yüzeyde çim/kar tutmaz. Bu da bir bant
+  // üzerinden karışıyor, yoksa yamaçta keskin bir kaya lekesi oluşurdu.
+  float up = tame_terrain_up(wx, wz);
+  float sc = cosf(tame_terr_lay_slope * (float)(3.14159265358979 / 180.0));
+  if (up < sc + 0.06f) {
+    float k = (sc + 0.06f - up) / 0.12f;
+    c = tame_terr_mix(c, tame_terr_lay_rock, k);
+  }
+  return c;
+}
+
+// Mesh'e renk tamponu ekle. GenMeshHeightmap zaten yükleme yaptığı için VAO
+// var; yalnız RENK VBO'sunu ekliyoruz. Mesh'i kendimiz üretmiyoruz ki
+// üçgenleme raylib'inkiyle birebir kalsın — tm3_terrain_height o
+// üçgenlemeyi taklit ediyor, ayrışırlarsa fizik görselden kayar.
+static void tame_terrain_paint_mesh(Mesh *mesh) {
+  if (!tame_terr_lay_on || mesh->vertexCount <= 0 || mesh->vertices == NULL)
+    return;
+  int vc = mesh->vertexCount;
+  unsigned char *cols = (unsigned char *)malloc((size_t)vc * 4);
+  if (!cols) return;
+  for (int i = 0; i < vc; i++) {
+    // Mesh yerel uzayda 0..sx / 0..sz; dünyada yarı-boy kadar geri kaydırılıp
+    // çiziliyor (bkz. scene3d _s3_render). Yerel Y'ye taban eklenince dünya Y.
+    float lx = mesh->vertices[i * 3 + 0];
+    float ly = mesh->vertices[i * 3 + 1];
+    float lz = mesh->vertices[i * 3 + 2];
+    double wx = (double)lx - (double)tame_terr_sx * 0.5;
+    double wz = (double)lz - (double)tame_terr_sz * 0.5;
+    Color c = tame_terrain_color_at(wx, wz, (double)ly + (double)tame_terr_base);
+    cols[i * 4 + 0] = c.r; cols[i * 4 + 1] = c.g;
+    cols[i * 4 + 2] = c.b; cols[i * 4 + 3] = 255;
+  }
+  mesh->colors = cols;
+  if (mesh->vaoId > 0) {
+    rlEnableVertexArray(mesh->vaoId);
+    mesh->vboId[RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR] =
+        rlLoadVertexBuffer(cols, vc * 4 * (int)sizeof(unsigned char), false);
+    rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR, 4,
+                         RL_UNSIGNED_BYTE, true, 0, 0);
+    rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR);
+    rlDisableVertexArray();
+  }
+}
+
+// Katmanları ayarla ve AÇ. Mesh üretim zamanında okunduğu için araziden ÖNCE
+// çağrılmalı; sonra çağrılırsa bir sonraki arazi üretiminde geçerli olur.
+void tame_impl_terrain_layers(int64_t low, int64_t mid, int64_t high,
+                              int64_t rock, double mid_y, double high_y,
+                              double rock_slope_deg) {
+  tame_terr_lay_low = tame_color(low);
+  tame_terr_lay_mid = tame_color(mid);
+  tame_terr_lay_high = tame_color(high);
+  tame_terr_lay_rock = tame_color(rock);
+  tame_terr_lay_midy = (float)mid_y;
+  tame_terr_lay_highy = (float)high_y;
+  tame_terr_lay_slope = (float)rock_slope_deg;
+  tame_terr_lay_on = 1;
+}
+
+void tame_impl_terrain_layers_off(void) { tame_terr_lay_on = 0; }
 
 void tame_impl_draw_model(int h, double x, double y, double z, double scale,
                           int64_t tint) {

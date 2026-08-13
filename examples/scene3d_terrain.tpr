@@ -30,7 +30,13 @@ func setup() {
     // Arazi. Bundan sonra zemin yüksekliği her yerde buradan geliyor —
     // yerçekimi, zıplama ve kamera hepsi otomatik uyum sağlıyor.
     arazi3d(RES, SIZE, PEAK, SIZE, NOISE, SEED);
-    arazi_renk3d(rgb(104, 138, 92));
+    // Katman boyama: arazi artık tek renk değil. Yükseklik çim→toprak→kar,
+    // eğim ise kaya veriyor — ikisi de zaten fiziğin kullandığı veri, yeni
+    // bir şey ölçülmüyor. Tek satırlık hazır palet; elle ayarlamak isteyen
+    // `arazi_boya3d(alt, orta, ust, kaya, orta_y, ust_y, egim)` çağırır.
+    // Sıra ÖNEMSİZ: araziden önce de sonra da çağrılabilir (motor gerekirse
+    // araziyi yeniden kuruyor).
+    arazi_dogal3d(PEAK);
 
     // Eğim sınırı: 38 dereceden dik yamaçlar tırmanılamaz, kayarsın. Bu
     // OPT-IN — çağırmayan sahne dik duvarları da tırmanabilir (bazı oyunlar
@@ -93,6 +99,15 @@ func hud() {
     if (arazi_dik_mi3d(get3x(player), get3z(player))) {
         text("DIK YAMAC - kayiyorsun", 12, 126, 16, rgb(255, 140, 90));
     }
+    // Üstünde durduğun katman. Boyama gözle görülür ama oyun mantığı da aynı
+    // eşikleri okuyabiliyor — ayak sesi, hız, "karda mısın" hep bunun işi.
+    int lay = arazi_katmani3d(get3x(player), get3z(player));
+    str ad = "CIM";
+    int renk = rgb(120, 200, 120);
+    if (lay == LAYER_MID)  { ad = "TOPRAK"; renk = rgb(190, 175, 120); }
+    if (lay == LAYER_HIGH) { ad = "KAR";    renk = RAYWHITE; }
+    if (lay == LAYER_ROCK) { ad = "KAYA";   renk = rgb(180, 180, 185); }
+    text("Zemin: " + ad, 12, 148, 16, renk);
 }
 
 sahne3d(960, 560, "Tulpar 3B Arazi");

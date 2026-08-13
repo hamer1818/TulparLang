@@ -1612,6 +1612,91 @@ func t_save_reset_keeps_disk() {
 }
 
 // ===========================================================================
+// Arazi katmanları
+// ===========================================================================
+// Mesh boyaması GPU'da olup bitiyor ve penceresiz doğrulanamaz; ama katman
+// SINIFLANDIRMASI saf yükseklik/eğim matematiği ve yükseklik verisi pencere
+// olmadan da saklanıyor (bkz. tame_terrain_build). Test edilebilen kısım bu —
+// ve zaten anlamlı olan da bu: boyama ile oyun mantığı aynı eşikleri okuyor.
+
+// Düz arazide (eğim yok) katman yalnız YÜKSEKLİĞE bakmalı.
+func t_terrain_layer_by_height() {
+    scene3d_reset();
+    // Bilinen bir yükseklik haritası yerine düz zemin: arazi kurulmadığında
+    // sınıflandırma taban Y'yi görür, yani en alçak katman.
+    assert_eq_int(terrain_layer3d(0.0, 0.0), LAYER_LOW);
+
+    terrain3d(32, 40.0, 12.0, 40.0, 3.5, 7);
+    arazi_dogal3d(12.0);      // orta 4.2, ust 7.44, egim 42 derece
+    // Arazinin gerçek yükseklikleri tohuma bağlı; eşikleri KENDİMİZ ölçüp
+    // sınıflandırmanın onlarla tutarlı olduğunu doğruluyoruz. Böylece test
+    // tohumun ürettiği manzaraya değil, KURALA bağlı kalıyor.
+    int checked = 0;
+    float x = 0.0 - 18.0;
+    while (x < 18.0) {
+        float z = 0.0 - 18.0;
+        while (z < 18.0) {
+            int lay = terrain_layer3d(x, z);
+            float h = terrain_height3d(x, z);
+            // Kaya EĞİMDEN gelir ve yüksekliği ezer; onun dışındaki her nokta
+            // yükseklik kuralına birebir uymalı.
+            if (lay != LAYER_ROCK) {
+                if (h >= 7.44)      { assert_eq_int(lay, LAYER_HIGH); }
+                else if (h >= 4.2)  { assert_eq_int(lay, LAYER_MID); }
+                else                { assert_eq_int(lay, LAYER_LOW); }
+                checked = checked + 1;
+            }
+            z = z + 3.0;
+        }
+        x = x + 3.0;
+    }
+    assert(checked > 20, "anlamli sayida nokta sinanmali");
+}
+
+// Eğim yüksekliği EZER: dik bir yamaç, alçakta bile kaya olmalı.
+func t_terrain_layer_slope_wins() {
+    scene3d_reset();
+    // Dik bir arazi üret (yüksek tepe + küçük ölçek = sık ve dik yamaçlar)
+    // ve kaya eşiğini çok düşük tut: neredeyse her eğimli nokta kaya olmalı.
+    terrain3d(32, 40.0, 30.0, 40.0, 2.0, 3);
+    arazi_boya3d(rgb(0, 200, 0), rgb(0, 150, 0), rgb(255, 255, 255),
+                 rgb(100, 100, 100), 100.0, 200.0, 5.0);
+    // Eşikler (100/200) arazinin tepesinden yüksek, yani EĞİM olmasa hiçbir
+    // nokta LOW'dan çıkamazdı. Kaya çıkıyorsa sebebi yalnızca eğimdir.
+    int rock = 0;
+    float x = 0.0 - 15.0;
+    while (x < 15.0) {
+        float z = 0.0 - 15.0;
+        while (z < 15.0) {
+            if (terrain_layer3d(x, z) == LAYER_ROCK) { rock = rock + 1; }
+            z = z + 2.0;
+        }
+        x = x + 2.0;
+    }
+    assert(rock > 0, "dik yamacta kaya katmani cikmali");
+}
+
+// Eğim eşiği gevşetilince kaya kaybolmalı — kuralın gerçekten eğime baktığını
+// gösteren karşı test. (Tersi olmadan "her yer kaya" da testi geçerdi.)
+func t_terrain_layer_slope_threshold_matters() {
+    scene3d_reset();
+    terrain3d(32, 40.0, 30.0, 40.0, 2.0, 3);
+    arazi_boya3d(rgb(0, 200, 0), rgb(0, 150, 0), rgb(255, 255, 255),
+                 rgb(100, 100, 100), 100.0, 200.0, 89.0);   // neredeyse dikey
+    int rock = 0;
+    float x = 0.0 - 15.0;
+    while (x < 15.0) {
+        float z = 0.0 - 15.0;
+        while (z < 15.0) {
+            if (terrain_layer3d(x, z) == LAYER_ROCK) { rock = rock + 1; }
+            z = z + 2.0;
+        }
+        x = x + 2.0;
+    }
+    assert_eq_int(rock, 0);
+}
+
+// ===========================================================================
 // Gamepad
 // ===========================================================================
 // Kol donanımı testte yok; okunabilen kısım kare TAMPONU (`_gp_*`), ki motorun
@@ -1986,6 +2071,9 @@ test("acik yolda duz kovalama", "t_chase_direct_when_clear");
 test("duvar varken yana sapma", "t_chase_avoids_wall");
 test("kacinma kapatilabiliyor", "t_chase_direct_opt_out");
 test("dusman duvarin etrafindan dolasiyor", "t_chase_gets_around_wall");
+test("arazi katmani yukseklige gore", "t_terrain_layer_by_height");
+test("egim yuksekligi eziyor", "t_terrain_layer_slope_wins");
+test("egim esigi gercekten etkili", "t_terrain_layer_slope_threshold_matters");
 test("kol olu bolge egrisi", "t_gamepad_deadzone_curve");
 test("kol analog hiz veriyor", "t_gamepad_analog_speed");
 test("capraz itis normalize", "t_gamepad_diagonal_normalized");

@@ -390,6 +390,7 @@ func scene3d_reset() {
     // Arazi bayrağı sıfırlanır (yükseklik verisi de bırakılır) — sahne
     // sıfırlanınca dünya da sıfırlanmalı, yoksa yeni sahne eski tepeleri sürer.
     _terr_on = 0; _terr_model = 0 - 1; terrain_off3d();
+    _terr_kind3 = 0; _terr_lay3 = 0; terrain_layers_off3d();
     _score3 = 0;
     _game_over3 = 0;
     _cam_target = 0 - 1;
@@ -2014,7 +2015,22 @@ int   _terr_color = 0;
 // Prosedürel arazi (Perlin) — asset dosyası gerekmez.
 // res: yükseklik haritası çözünürlüğü, sx/sz: ayak izi, sy: en yüksek tepe,
 // scale: gürültü ölçeği (küçük = geniş tepeler), seed: tohum.
+// Son arazi çağrısının parametreleri. Katman boyaması mesh ÜRETİM anında
+// uygulanıyor, yani "önce katman, sonra arazi" sırası zorunlu olurdu — bu
+// sessiz bir tuzak (yanlış sırada hiçbir şey olmaz, hata da vermez). Onun
+// yerine parametreleri saklıyoruz ve katman değişince araziyi yeniden
+// kuruyoruz: sıra artık önemsiz.
+int   _terr_kind3 = 0;      // 0 = yok, 1 = prosedürel, 2 = dosya
+int   _terr_res3  = 0;
+float _terr_sy3   = 0.0;
+float _terr_scale3 = 0.0;
+int   _terr_seed3 = 0;
+str   _terr_path3 = "";
+
 func terrain3d(res, sx, sy, sz, scale, seed) {
+    _terr_kind3 = 1;
+    _terr_res3 = res; _terr_sy3 = sy * 1.0;
+    _terr_scale3 = scale * 1.0; _terr_seed3 = seed;
     _terr_model = terrain_gen3d(res, sx, sy, sz, _ground_y, scale, seed);
     _terr_on = 1;
     _terr_sx = sx * 1.0;
@@ -2024,12 +2040,83 @@ func terrain3d(res, sx, sy, sz, scale, seed) {
 
 // Gri tonlamalı yükseklik haritası dosyasından.
 func terrain_file3d(path, sx, sy, sz) {
+    _terr_kind3 = 2;
+    _terr_path3 = path; _terr_sy3 = sy * 1.0;
     _terr_model = terrain_load3d(path, sx, sy, sz, _ground_y);
     _terr_on = 1;
     _terr_sx = sx * 1.0;
     _terr_sz = sz * 1.0;
     _terr_color = rgb(96, 132, 88);
 }
+
+// ---- Arazi katmanları (çim / toprak / kar + eğimde kaya) -------------------
+// Arazi tek renkti. Yükseklik ve eğim zaten fizikte kullanılıyordu; katman
+// boyama o veriyi mesh'in tepe noktalarına renk olarak yazıyor.
+//
+// Katman boyanınca çizim tinti BEYAZA çekiliyor: `_terr_color` tepe renginin
+// üstüne çarpılıyor, yeşil bir tint bütün katmanları yeşile boyardı.
+int LAYER_LOW  = 0;   // çim
+int LAYER_MID  = 1;   // toprak
+int LAYER_HIGH = 2;   // kar
+int LAYER_ROCK = 3;   // kaya (yükseklikten değil, EĞİMDEN)
+
+int _terr_lay3 = 0;
+
+// Adlar tame'inkilerden AYRI (`terrain_layers3d` orada duruyor ve scene3d onu
+// import ediyor): burada yapılan iş fazladan — tint'i beyaza çekmek ve
+// araziyi yeniden kurmak.
+func terrain_paint3d(low, mid, high, rock, mid_y, high_y, rock_slope) {
+    terrain_layers3d(low, mid, high, rock, mid_y, high_y, rock_slope);
+    _terr_lay3 = 1;
+    _terr_color = WHITE;
+    _s3_terrain_rebuild();
+}
+func arazi_boya3d(alt, orta, ust, kaya, orta_y, ust_y, egim) {
+    terrain_paint3d(alt, orta, ust, kaya, orta_y, ust_y, egim);
+}
+
+// Varsayılan palet — tek satırla makul bir dağ manzarası. Eşikler en yüksek
+// tepenin oranı olarak veriliyor, yani arazinin boyu değişince manzara
+// bozulmuyor.
+//
+// 0.35 / 0.62 ÖLÇÜLEREK seçildi, göz kararı değil: Perlin gürültüsü pratikte
+// 255'e (yani tam `sy`'ye) çıkmıyor, tepe genelde sy'nin %80'i civarında
+// kalıyor. Oranları doğrudan sy'ye göre yüksek tutmak karı "en uç iki noktaya"
+// düşürüyordu. Bu değerler üç ayrı tohumda da dengeli dağılım veriyor
+// (~%10 çim, ~%35 toprak, ~%10 kar, gerisi eğimden kaya).
+func terrain_natural3d(peak_y) {
+    terrain_paint3d(rgb(96, 132, 88), rgb(124, 116, 82),
+                    rgb(238, 242, 250), rgb(112, 110, 106),
+                    peak_y * 0.35, peak_y * 0.62, 42.0);
+}
+func arazi_dogal3d(tepe_y) { terrain_natural3d(tepe_y); }
+
+func terrain_paint_off3d() {
+    terrain_layers_off3d();
+    _terr_lay3 = 0;
+    _terr_color = rgb(96, 132, 88);
+    _s3_terrain_rebuild();
+}
+func arazi_boya_kapat3d() { terrain_paint_off3d(); }
+
+// Araziyi aynı parametrelerle yeniden kur. Katman ayarı mesh'e yazıldığı için
+// değişikliğin görünmesinin tek yolu bu; arazi henüz kurulmadıysa hiçbir şey
+// yapmaz (sonraki terrain3d zaten yeni ayarla üretilir).
+func _s3_terrain_rebuild() {
+    if (_terr_kind3 == 1) {
+        _terr_model = terrain_gen3d(_terr_res3, _terr_sx, _terr_sy3, _terr_sz,
+                                    _ground_y, _terr_scale3, _terr_seed3);
+    } else {
+        if (_terr_kind3 == 2) {
+            _terr_model = terrain_load3d(_terr_path3, _terr_sx, _terr_sy3,
+                                         _terr_sz, _ground_y);
+        }
+    }
+}
+
+// Sorgu için ayrı sarmalayıcı YOK: tame'in `terrain_layer3d(x,z)` /
+// `arazi_katmani3d(x,z)` fonksiyonları scene3d üzerinden zaten kapsamda
+// (terrain_height3d de böyle çalışıyor).
 
 func terrain_color3d(c) { _terr_color = c; }
 func terrain_off3d_scene() { _terr_on = 0; terrain_off3d(); }

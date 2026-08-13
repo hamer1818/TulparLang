@@ -41,16 +41,21 @@ sonra dil/altyapı borcu.
       edilebilir kalsın. Detay: CHANGELOG.
 
 - [ ] **Animasyon geçişi/harmanlama yok.** `anim3d` boşta↔koşu arasında sert
-      geçiyor.
+      geçiyor. **Önce örnek lazım:** `anim3d`'yi hiçbir örnek kullanmıyor
+      (tek animasyonlu model örneği `tame3d_anim.tpr` ham tame ile yazılmış,
+      scene3d değil). Harmanlama yazılsa da bakılacak bir sahne olmadığı için
+      iş, `robot.glb` kullanan bir scene3d örneğiyle birlikte yapılmalı.
 
 ---
 
 ## 2 — Görsel
 
-- [ ] **Arazi tek renk.** Yükseklik + eğime göre katman boyama (çim/kaya/kar).
-      **Maliyetin yarısı ödendi:** eğim sınırı için yazılan yüzey normali
-      (`_terrain_normal3`) zaten gereken veriyi veriyor. Görüntüyü en çok
-      değiştirecek tek iş.
+- [x] **Arazi katman boyama geldi.** ✅ 2026-08-13 — yükseklik çim→toprak→kar,
+      eğim kaya. Renk mesh'in TEPE NOKTALARINA yazılıyor (arazi sıradan bir
+      model olarak kalıyor). Işık shader'ında `texelColor *= fragColor`
+      gerekti: stok raylib ışık shader'ı tepe rengini fragment'a taşıyıp
+      kullanmıyordu. `arazi_dogal3d(tepe)` tek satırlık palet,
+      `arazi_katmani3d(x,z)` oyun mantığına keskin cevap. Detay: CHANGELOG.
 
 - [ ] **Su yüzeyi / gündüz-gece döngüsü / gökyüzü dokusu.** Gökyüzü şu an
       yalnız degrade.
@@ -123,6 +128,13 @@ boşluklar; backlog'da yoklardı.
       15.4 → 1.12 ms), ama asimptot duruyor. Uniform grid artık ucuz: düz
       konum/yarıçap dizileri grid'in zaten isteyeceği zemin. ~800 entity
       üstüne çıkılmadıkça getirisi yok.
+
+- [ ] **`wasm/dist` ve `android/dist` arşivleri bayat kalıyor.** Katman boyama
+      `tame_impl.c`'ye yeni sembol ekledi; bu arşivler elle yeniden
+      derlenmedikçe (`wasm/build_tame_web.sh`, `android/build_tame_android.sh`)
+      web/Android hedefi link hatası verir. Masaüstünde görünmeyen, yalnız o
+      hedeflerde patlayan bir sınıf — arşiv tazeliğini denetleyen bir kontrol
+      (kaynak zaman damgası karşılaştırması) ucuz olur.
 
 - [ ] **`lib/test.tpr` yalnız SON hatayı gösteriyor.** Bir test fonksiyonunda
       birden çok assert düşerse rapor edilen mesaj sonuncusu oluyor; ilk kırılan

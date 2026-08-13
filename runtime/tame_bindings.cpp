@@ -121,6 +121,11 @@ int tame_impl_terrain_load(const char *path, double sx, double sy, double sz,
                            double base);
 double tame_impl_terrain_height(double x, double z);
 void tame_impl_terrain_off(void);
+int tame_impl_terrain_layer(double wx, double wz);
+void tame_impl_terrain_layers(int64_t low, int64_t mid, int64_t high,
+                              int64_t rock, double mid_y, double high_y,
+                              double rock_slope_deg);
+void tame_impl_terrain_layers_off(void);
 double tame_impl_screen_x(double x, double y, double z);
 double tame_impl_screen_y(double x, double y, double z);
 double tame_impl_pick_box(double mx, double my, double bx, double by, double bz,
@@ -619,6 +624,23 @@ VMValue aot_tm3_terrain_load_ptr(VMValue *path, VMValue *sx, VMValue *sy,
 
 VMValue aot_tm3_terrain_height_ptr(VMValue *x, VMValue *z) {
   return VM_FLOAT(tame_impl_terrain_height(tm_num(x), tm_num(z)));
+}
+
+VMValue aot_tm3_terrain_layer_ptr(VMValue *x, VMValue *z) {
+  return VM_INT(tame_impl_terrain_layer(tm_num(x), tm_num(z)));
+}
+
+VMValue aot_tm3_terrain_layers_ptr(VMValue *low, VMValue *mid, VMValue *high,
+                                   VMValue *rock, VMValue *mid_y,
+                                   VMValue *high_y, VMValue *slope) {
+  tame_impl_terrain_layers(tm_int(low), tm_int(mid), tm_int(high), tm_int(rock),
+                           tm_num(mid_y), tm_num(high_y), tm_num(slope));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_terrain_layers_off_ptr(void) {
+  tame_impl_terrain_layers_off();
+  return VM_VOID();
 }
 
 VMValue aot_tm3_terrain_off_ptr(void) {
