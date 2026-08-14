@@ -127,16 +127,10 @@ boşluklar; backlog'da yoklardı.
       2026-08-12'de ölçüldü: tetikleyici bölge işinden ÖNCE de vardı (eski ve
       yeni `lib/scene3d.tpr` ile birebir aynı), yani mevcut borç. Diğer üç
       scene3d örneği ve arcade temiz — yalnız en büyük program tetikliyor,
-      bu da bir eşik/ölçek hatasına işaret ediyor. Sessiz bir performans
-      kaybı: uyarı geçiyor, kimse bakmıyor.
-
-- [ ] **Optimizasyon `scene3d_arena` için GEÇERSİZ IR üretiyor.** Her derlemede
-      `optimization produced invalid IR at every level; using the unoptimized
-      module` uyarısı düşüyor, yani oyun sessizce `-O0` ile çıkıyor. HEAD'de de
-      var (2026-08-11'de bölge katmanından ÖNCE doğrulandı), yani yeni değil —
-      ama diğer üç `scene3d_*` örneğinde yok, yalnız arena'da. Uyarı görünür
-      olduğu için "sessiz" değil, fakat sonuç öyle: en büyük 3B örnek
-      optimizasyonsuz koşuyor. Doğrulayıcının ne dediğine bakılmalı.
+      bu da bir eşik/ölçek hatasına işaret ediyor. Uyarı görünür olduğu için
+      teknik olarak "sessiz" değil, ama sonuç öyle: en büyük 3B örnek
+      optimizasyonsuz koşuyor ve kimse bakmıyor. Doğrulayıcının (verifier) ne
+      dediğine bakılmalı.
 
 - [ ] **Küre ↔ DÖNÜK kutu yaklaşık.** `_sph_box3` kutuyu eksen-hizalı
       varsayıyor; kutu-kutu çifti tam SAT'tan geçiyor, küre-kutu geçmiyor.
