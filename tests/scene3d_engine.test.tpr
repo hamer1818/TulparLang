@@ -1800,19 +1800,36 @@ func t_bullet_follows_camera_aim() {
     assert(eb2.vx > 19.0, "kamera +X'e bakinca mermi +X'e gitmeli");
 }
 
-// Dikey nişan: yukarı bakınca mermi yükselmeli.
-func t_bullet_uses_pitch() {
+// Nişan YATAY: kamerayı eğmek mermiyi yere/göğe çevirmemeli.
+// Üçüncü şahısta kamera eğimi çoğunlukla manzarayı görmek içindir; yere bakmak
+// "yere ateş et" demek değil.
+func t_bullet_aim_is_horizontal_by_default() {
     scene3d_reset();
     no_ground3d();
     int p = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
     camera_orbit(p, 14.0, 9.0);
     _cam_yaw3 = 0.0;
-    _cam_pitch3 = 0.0;
-    Ent3 flat = _e3[_slot_of3(bullet3d(p, 20.0, 2.0))];
-    assert(abs_f3(flat.vy) < 0.01, "duz bakista dikey hiz yok");
+    _cam_pitch3 = 0.0 - 45.0;              // asagi bak
+    Ent3 down = _e3[_slot_of3(bullet3d(p, 20.0, 2.0))];
+    assert(abs_f3(down.vy) < 0.01, "asagi bakista mermi ASAGI GITMEMELI");
+    assert(down.vz > 19.0, "yatay hiz tam olmali (egimle kisalmamali)");
     _cam_pitch3 = 20.0;                    // yukari bak
     Ent3 up = _e3[_slot_of3(bullet3d(p, 20.0, 2.0))];
-    assert(up.vy > 5.0, "yukari bakista mermi yukselmeli");
+    assert(abs_f3(up.vy) < 0.01, "yukari bakista da dikey hiz yok");
+}
+
+// ...ama isteyen oyun dikey nişanı açabilmeli (uçan hedefler).
+func t_bullet_pitch_is_opt_in() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    camera_orbit(p, 14.0, 9.0);
+    _cam_yaw3 = 0.0;
+    _cam_pitch3 = 20.0;
+    dikey_nisan3d(true);
+    Ent3 up = _e3[_slot_of3(bullet3d(p, 20.0, 2.0))];
+    assert(up.vy > 5.0, "acikken yukari bakista mermi yukselmeli");
+    dikey_nisan3d(false);
 }
 
 // Düşman KENDİ yönüne ateş etmeli — kural yalnız kamera hedefine uygulanır.
@@ -2601,7 +2618,8 @@ test("kosede sikisma tutuyor", "t_corner_squeeze_holds");
 test("engele yuruyunce tirmanmiyor", "t_walk_into_obstacle_does_not_climb");
 test("ziplayinca engeli geciyor", "t_jump_clears_low_obstacle");
 test("mermi bakis yonune gidiyor", "t_bullet_follows_camera_aim");
-test("mermi dikey nisani kullaniyor", "t_bullet_uses_pitch");
+test("nisan varsayilan YATAY", "t_bullet_aim_is_horizontal_by_default");
+test("dikey nisan istege bagli", "t_bullet_pitch_is_opt_in");
 test("dusman kendi yonune atiyor", "t_enemy_bullet_uses_own_yaw");
 test("tps kamerasinda fare bakisi acik", "t_orbit_camera_has_mouse_look");
 test("kamera yakinlasmak yerine saydamlastiriyor", "t_camera_prefers_fade_over_zooming_in");

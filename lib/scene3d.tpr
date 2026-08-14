@@ -427,7 +427,7 @@ func scene3d_reset() {
     // Röntgen de sahne durumu: reset kamerayı zaten sıfırlıyor, saydamlık
     // kuralının ayakta kalması tutarsız olurdu (ve testleri sıraya bağımlı
     // yapıyordu — kapatan bir test sonrakini etkiliyordu).
-    _cam_xray3 = 1; _fade_a3 = 70; _fade3 = [];
+    _cam_xray3 = 1; _fade_a3 = 70; _fade3 = []; _aim_pitch_on3 = 0;
     // Tanılama AYARLARI kullanıcı tercihi, kalır; TAMPON sahneyle gider.
     _lg_txt = []; _lg_sev = []; _lg_n = 0;
     _lg_key = []; _lg_t = []; _lg_cnt = [];
@@ -1304,6 +1304,11 @@ func in_range3d(a, b, r): bool {
 // yönlerine ateş etmeli, o yüzden kural yalnız kamera hedefine uygulanıyor.
 // Sabit kamerada bakış yönü diye bir şey yok, orada da gövde yönü kalır.
 float _aim_x3 = 0.0; float _aim_y3 = 0.0; float _aim_z3 = 1.0;
+int   _aim_pitch_on3 = 0;   // dikey nişan (varsayılan KAPALI — bkz. _aim_dir3)
+
+// Dikey nişanı aç/kapat. Kapalıyken mermi kameranın yatay yönüne gider.
+func aim_pitch3d(on) { if (on) { _aim_pitch_on3 = 1; } else { _aim_pitch_on3 = 0; } }
+func dikey_nisan3d(ac) { aim_pitch3d(ac); }
 
 func _aim_dir3(owner) {
     int s = _slot_of3(owner);
@@ -1312,7 +1317,12 @@ func _aim_dir3(owner) {
     if (s >= 0) { Ent3 o = _e3[s]; yaw = o.yaw; }
     if (owner == _cam_target && _cam_mode3 != CAM_FIXED) {
         yaw = _cam_yaw3;
-        pitch = _cam_pitch3;      // dikey nişan: yukarı/aşağı bakış
+        // DİKEY bileşen varsayılan olarak ALINMIYOR: kamerayı yere doğru
+        // eğmek nişanı da yere çeviriyordu, oysa yere bakmak "yere ateş et"
+        // demek değil — üçüncü şahısta kamera eğimi çoğunlukla manzarayı
+        // görmek içindir. Mermi kameranın YATAY yönüne gider.
+        // Uçan hedefi olan oyun `dikey_nisan3d(true)` ile açar.
+        if (_aim_pitch_on3 == 1) { pitch = _cam_pitch3; }
     }
     float pr = pitch * DEG2RAD3;
     float ch = cos(pr);
