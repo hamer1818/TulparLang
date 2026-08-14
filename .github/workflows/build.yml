@@ -325,6 +325,17 @@ jobs:
           ./tests/typeinfer/run.sh
         timeout-minutes: 2
 
+      # Builtin tablosu ↔ codegen ↔ LSP tutarlılık denetimi. Bir builtin üç
+      # yerde birden bilinmek zorunda; bunlar elle senkron tutuluyordu ve
+      # ayrışmışlardı. Ayrışmanın iki yönü de SESSİZ: tabloda olup codegen'de
+      # olmayan çağrı typecheck'ten geçip çalışma anında patlıyor, codegen'de
+      # olup tabloda olmayan çağrı ise HİÇ denetlenmiyor. Kaynak dosyalarını
+      # okur, derleme gerektirmez (~0.1s).
+      - name: Builtin table audit
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        run: python3 tests/builtin_audit.py --list
+        timeout-minutes: 2
+
       # SHA-256 smoke test for the package-manager checksum helper.
       # Compiles the helper standalone against FIPS 180-4 reference
       # vectors. Cheap (~1s) and orthogonal to the main `tulpar` binary

@@ -77,20 +77,26 @@ sonra dil/altyapı borcu.
 Bunlar 2026-08-06 oturumunda motorun içinde çalışırken **bizzat çarpılan**
 boşluklar; backlog'da yoklardı.
 
-- [ ] **Builtin tablosu ↔ codegen ayrışması (İKİ YÖNLÜ).** Ölçüldü, ikisi de
-      gerçek:
-      - **Tabloda var, codegen'de yok:** `clock()` typeinfer builtin tablosunda
-        kayıtlı ama çağırınca "fonksiyon bulunamadı" veriyor. Kullanıcıya
-        çarpan kırık vaat.
-      - **Codegen'de var, tabloda yok:** `acos`, `atan2` çalışıyor ama typeinfer
-        tablosunda yoklar → argümanları/dönüşü denetlenmiyor, dönüş tipi VOID
-        çıkıyor (yani sonraki denetimler sessizce atlanıyor) ve LSP'de
-        tamamlama/hover yok. `chase3d` `atan2`yi zaten kullanıyor.
+- [x] **Builtin tablosu ↔ codegen ayrışması denetime bağlandı.** ✅ 2026-08-14 —
+      `tests/builtin_audit.py` üç listeyi (codegen / typeinfer / LSP) karşılaştırıyor,
+      `build.sh suites` ve CI'da koşuyor. Ayrışmanın iki yönü de ÖLÇÜLDÜ:
+      7 builtin tabloda vardı ama çağrılınca "fonksiyon bulunamadı" veriyordu;
+      96'sı codegen'de vardı ama tabloda yoktu, yani o çağrılar **hiç
+      denetlenmiyordu** (`str s = len("abc")` yakalanıyor, `str s = pow("a","b")`
+      sessizce geçiyordu). 14 matematik builtin'i tabloya, 17'si LSP'ye eklendi.
+      Kalan 47 boşluk `KNOWN_GAPS` içinde **takip ediliyor** — görünmez değil.
+      Detay: CHANGELOG.
 
-      **`assert` hatasıyla aynı sınıf**: tablo gerçekliği yansıtmıyor. İki
-      listeyi karşılaştıran bir tarama tüm aileyi kapatır — ucuz ve doğrudan
-      güven altyapısı. Bulunanlar 5 noktalık bağlamanın eksik ayaklarına eklenir
-      (typeinfer + LSP).
+- [ ] **Builtin denetimindeki 47 bilinen boşluk kapatılmalı.**
+      `tests/builtin_audit.py` → `KNOWN_GAPS`. İki grup:
+      - **Kırık vaat (7):** `clock`, `toBool`, `toLower`, `toUpper`, `values`,
+        `socket_recv`, `socket_select` — tabloda var, codegen'de yok. Ya
+        uygulanmalı ya tablodan çıkarılmalı. (`toLower`/`toUpper` zaten
+        `lower`/`upper` olarak var; muhtemelen ölü takma ad.)
+      - **Denetimsiz (40):** `print`, `random`, `min`, `max`, `mod`, `join`,
+        `is*` ailesi, `base64_*`, tarih/saat yardımcıları… Her biri bir imza
+        satırı; `min`/`max` gibi dönüşü argümana bağlı olanlar dikkat ister
+        (yanlış imza, imzasızlıktan kötüdür).
 
 - [ ] **Tipli dizi yok.** `float[] x = []` ayrıştırma hatası veriyor; yalnız
       `array` var. Geniş fazı yazarken çarpıldı — hem performans hem typecheck

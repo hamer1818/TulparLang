@@ -172,6 +172,28 @@ const BuiltinEntry kBuiltins[] = {
     {"sqrt",         "sqrt(x: float): float",                       "Karekök."},
     {"pow",          "pow(base: float, exp: float): float",         "Üs alma."},
     {"floor",        "floor(x: float): float",                      "Aşağı yuvarlama."},
+    // --- tests/builtin_audit.py'nin bulduğu LSP boşlukları ---
+    // Bu builtin'ler codegen'de ve typeinfer tablosunda vardı ama LSP'de
+    // yoktu: tamamlama ve hover göstermiyordu. Denetim betiği artık bunu
+    // yakalıyor (5 noktalı bağlamanın üçüncü ayağı).
+    {"asin",         "asin(x: float): float",                       "Ark sinüs (radyan)."},
+    {"acos",         "acos(x: float): float",                       "Ark kosinüs (radyan)."},
+    {"atan",         "atan(x: float): float",                       "Ark tanjant (radyan)."},
+    {"atan2",        "atan2(y: float, x: float): float",            "İki argümanlı ark tanjant — (y,x) vektörünün açısı (radyan). Yön hesabında tercih edilir: atan(y/x)'in aksine çeyreği doğru verir."},
+    {"hypot",        "hypot(x: float, y: float): float",            "sqrt(x²+y²) — taşma/alt taşma güvenli."},
+    {"cbrt",         "cbrt(x: float): float",                       "Küp kök."},
+    {"sinh",         "sinh(x: float): float",                       "Hiperbolik sinüs."},
+    {"cosh",         "cosh(x: float): float",                       "Hiperbolik kosinüs."},
+    {"tanh",         "tanh(x: float): float",                       "Hiperbolik tanjant."},
+    {"trunc",        "trunc(x: float): float",                      "Ondalık kısmı at (sıfıra doğru). floor'dan farkı: negatifte yukarı gider."},
+    {"startsWith",   "startsWith(s: str, prefix: str): bool",       "Metin bu önekle mi başlıyor?"},
+    {"endsWith",     "endsWith(s: str, suffix: str): bool",         "Metin bu sonekle mi bitiyor?"},
+    {"indexOf",      "indexOf(s: str, needle: str): int",           "Alt metnin ilk konumu; yoksa -1."},
+    {"keys",         "keys(o: json): array",                        "Nesnenin anahtarları."},
+    {"clone",        "clone(v): any",                               "Derin kopya — kaynağı paylaşmayan yeni değer."},
+    {"env",          "env(name: str): str",                         "Ortam değişkeni; yoksa boş metin."},
+    {"sha256",       "sha256(s: str): str",                         "SHA-256 özeti (onaltılık metin)."},
+
     {"ceil",         "ceil(x: float): float",                       "Yukarı yuvarlama."},
     {"round",        "round(x: float): float",                      "En yakına yuvarlama."},
     {"min",          "min(a, b): float",                            "İki değerin küçüğü."},

@@ -778,6 +778,25 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
   // AST, so the synthetic calls never reach typeinfer.
   const BuiltinSig sigs[] = {
       // Time
+      // --- Matematik: codegen'de VARDI ama tabloda YOKTU ---
+      // Tabloda olmayan bir builtin HİÇ denetlenmiyor: `str s = pow("a","b")`
+      // sessizce geçiyordu (dönüş VOID sayıldığı için sonraki denetimler de
+      // atlanıyordu). Dönüş tipleri runtime_bindings.cpp'den OKUNDU, tahmin
+      // edilmedi — hepsi VM_FLOAT döndürüyor.
+      {"acos", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"asin", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"atan", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"cbrt", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"cosh", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"sinh", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"tanh", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"log2", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"round", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"trunc", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"atan2", TYPE_FLOAT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"hypot", TYPE_FLOAT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"fmod", TYPE_FLOAT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"pow", TYPE_FLOAT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
       {"clock", TYPE_FLOAT, {}},
       {"clock_ms", TYPE_FLOAT, {}},
       // Collection / string size

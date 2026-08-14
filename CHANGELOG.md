@@ -60,6 +60,37 @@ giriş/çıkış **kenarı** hesaplanıyor.
   bölgenin *gövde* ölçmesi, ölüm-çıkış bastırması, bölüm temizliği, kapatma
   sessizliği ve iki gövdeli tek atım — her biri ilgili bozmada kırmızıya döndü.
 
+### Added — builtin tablosu ↔ codegen ↔ LSP tutarlılık denetimi
+
+Bir builtin üç yerde birden bilinmek zorunda (codegen, typeinfer tablosu, LSP)
+ve bunlar **elle** senkron tutuluyordu. Ayrışmışlardı; ayrışmanın iki yönü de
+sessizdi ve ikisi de ölçüldü:
+
+- **Tabloda var, codegen'de yok (7):** `clock`, `toBool`, `toLower`, `toUpper`,
+  `values`, `socket_recv`, `socket_select`. typecheck "sorun yok" diyor,
+  kullanıcı çalışma anında "fonksiyon bulunamadı" alıyor.
+- **Codegen'de var, tabloda yok (96):** o çağrılar **hiç denetlenmiyor**.
+  Ölçülen fark: `str s = len("abc")` yakalanıyor ama `str s = pow("a","b")`
+  sessizce geçiyordu — tabloda olmayan builtin'in dönüşü VOID sayıldığı için
+  sonraki denetimler de atlanıyor.
+
+`assert`'in yıllarca sessiz no-op kalması tam bu aileden bir hataydı: bir liste
+gerçekliği yansıtmıyordu ve bunu söyleyen hiçbir şey yoktu.
+
+- **`tests/builtin_audit.py`** üç listeyi kaynak dosyalarından çıkarıp
+  karşılaştırıyor; `build.sh suites` ve CI'da koşuyor (derleme gerektirmez).
+  Denetimin kendisi de bozma ile doğrulandı: tabloya hayalet bir isim eklemek
+  ve tablodan gerçek bir builtin çıkarmak ayrı ayrı kırmızıya döndürüyor.
+- **14 matematik builtin'i typeinfer tablosuna** eklendi (`pow`, `atan2`,
+  `acos`, `hypot`, `round`, `trunc`, …). Dönüş tipleri `runtime_bindings.cpp`'den
+  **okundu**, tahmin edilmedi — hepsi `VM_FLOAT`.
+- **17 builtin LSP'ye** eklendi (tamamlama/hover yoktu): trigonometri ailesi,
+  `startsWith`/`endsWith`/`indexOf`, `keys`, `clone`, `env`, `sha256`.
+- Kalan **47 boşluk `KNOWN_GAPS` içinde takip ediliyor** — kapatılmadı ama
+  artık görünür ve listeden silmek imza eklemek demek. Kullanıcı yüzü olmayan
+  42 iç sembol (`wings_*`, `tls_*`, `arena_*`, …) `INTERNAL` listesinde,
+  gerekçesiyle.
+
 ### Fixed — kalabalık oyuncuyu duvarın içine sokabiliyordu (duvardan geçme zinciri)
 
 Çarpışma çözümü şu sırayla çalışıyordu: **(1)** hareketli gövdeleri duvarlardan

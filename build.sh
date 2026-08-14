@@ -145,6 +145,14 @@ if [ "$ACTION" = "suites" ]; then
         echo -e "${RED}Some suites failed!${NC} ($SUITE_N paket)"
         exit 1
     fi
+    # Builtin tablosu ↔ codegen ↔ LSP tutarlılık denetimi (derleme gerektirmez).
+    if command -v python3 >/dev/null 2>&1; then
+        echo ""
+        if ! python3 tests/builtin_audit.py; then
+            echo -e "${RED}Builtin denetimi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
     echo -e "${GREEN}All $SUITE_N suites passed!${NC}"
     exit 0
 fi
