@@ -167,8 +167,16 @@ boşluklar; backlog'da yoklardı.
       yanıltıcı link hatasına yol açtı. `build.sh` her çalıştırmada
       tazeleyebilir.
 
-- [ ] **`scene3d` API belgesi yok.** arcade'in Starlight sayfası var, 3B'nin
-      yok. Motoru başkasının kullanabilmesinin ön koşulu.
+- [x] **Oyun belgeleri geldi.** ✅ 2026-08-14 — `tulpar-lang-web`'de yeni
+      **Oyun Geliştirme** bölümü: `games/overview` (üç katman + web/Android
+      hedefleri) ve `games/scene3d` (tam API referansı), ikisi de EN + TR.
+      Not: maddenin iddiasının aksine arcade'in de sayfası YOKTU — sitede
+      oyunla ilgili hiçbir sayfa yoktu. Site 70 sayfa olarak derlendi.
+
+- [ ] **arcade ve tame'in kendi belge sayfaları yok.** `games/overview` ikisine
+      de değiniyor ama API referansları yok; `games/scene3d` deseni izlenerek
+      `games/arcade` ve `games/tame` yazılmalı. (10 yayınlanmış tarayıcı oyunu
+      arcade kullanıyor, yani okuyucu kitlesi hazır.)
 
 - [ ] **3B oyun `tulparlang.dev/oyunlar`'a konulmadı.** Teknik engel kalmadı
       (Faz 7 şartı sağlandı, menü/duraklat/yeniden-başla geldi).
