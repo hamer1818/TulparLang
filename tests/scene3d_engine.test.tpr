@@ -1655,6 +1655,81 @@ func t_camera_xray_can_be_disabled() {
     assert(t < 0.5, "duvar kamerayi her hâlükârda ceker");
 }
 
+// SIKIŞTIRMA: düşmanlar oyuncuyu duvara bastırdığında oyuncu duvarın İÇİNDE
+// kalmamalı. Kullanıcı bildirimi ("duvarların içinden geçiyorum, kamera
+// bozuluyor, ulaşılmaz yerlere çıkıyorum") bu zincirin başlangıcıydı:
+// hareketli-hareketli çözüm oyuncuyu duvara geri itiyor ve o kare bir daha
+// düzeltilmiyordu. Ölçülmüştü: 4 düşmanda 0.15, 8 düşmanda 0.30 birim kalıcı
+// batma. Duvar çözümü artık kare sonunda TEKRAR çalışıyor.
+func t_crowd_cannot_push_player_into_wall() {
+    scene3d_reset();
+    gravity3d(26.0);
+    ground3d(0.0);
+    // Kuzey duvarı: iç yüzü z = -15.5, oyuncu yarı-derinliği 0.6 → doğru dur -14.9
+    spawn3(0.0, 1.5, 0.0 - 16.0,  34.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int p = spawn3(0.0, 1.0, 0.0 - 14.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    array ds = [];
+    int j = 0;
+    while (j < 8) {
+        push(ds, spawn3(0.0 - 3.0 + j * 0.8, 1.0, 0.0 - 11.0 - j * 0.3,
+                        1.3, 2.0, 1.3, RED, SHAPE_CUBE, TAG_ENEMY));
+        j = j + 1;
+    }
+    int i = 0;
+    while (i < 300) {
+        Ent3 e = _e3[_slot_of3(p)];
+        set3vel(p, 0.0, e.vy, 0.0 - 12.0);
+        int k = 0;
+        while (k < length(ds)) {
+            Ent3 de = _e3[_slot_of3(ds[k])];
+            set3vel(ds[k], 0.0, de.vy, 0.0 - 12.0);
+            k = k + 1;
+        }
+        _s3_physics(0.016667);
+        _s3_collision();
+        i = i + 1;
+    }
+    // Duvarın içine BATMAMALI (eskiden 0.30 batıyordu).
+    assert(get3z(p) > 0.0 - 14.95, "kalabalik oyuncuyu duvarin icine itemez");
+    // Ve tırmandırmamalı — sıkışma yukarı kaçışa dönmemeli.
+    assert(get3y(p) < 1.2, "sikisma yukari tirmandirmamali");
+}
+
+// Köşe: iki duvar aynı anda bastırırken de batma olmamalı (MTV çözücülerinin
+// klasik zayıf noktası).
+func t_corner_squeeze_holds() {
+    scene3d_reset();
+    gravity3d(26.0);
+    ground3d(0.0);
+    spawn3(0.0, 1.5, 0.0 - 16.0,  34.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    spawn3(16.0, 1.5, 0.0,        1.0, 3.0, 34.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int p = spawn3(14.0, 1.0, 0.0 - 14.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    array ds = [];
+    int j = 0;
+    while (j < 4) {
+        push(ds, spawn3(11.0 + j * 0.7, 1.0, 0.0 - 11.0,
+                        1.3, 2.0, 1.3, RED, SHAPE_CUBE, TAG_ENEMY));
+        j = j + 1;
+    }
+    int i = 0;
+    while (i < 300) {
+        Ent3 e = _e3[_slot_of3(p)];
+        set3vel(p, 12.0, e.vy, 0.0 - 12.0);
+        int k = 0;
+        while (k < length(ds)) {
+            Ent3 de = _e3[_slot_of3(ds[k])];
+            set3vel(ds[k], 12.0, de.vy, 0.0 - 12.0);
+            k = k + 1;
+        }
+        _s3_physics(0.016667);
+        _s3_collision();
+        i = i + 1;
+    }
+    assert(get3x(p) < 14.95, "kosede dogu duvarina batmamali");
+    assert(get3z(p) > 0.0 - 14.95, "kosede kuzey duvarina batmamali");
+    assert(get3y(p) < 1.2, "kosede yukari tirmanmamali");
+}
+
 // Engele yürümek TIRMANDIRMAMALI: alçak bir kutuya yürüyünce oyuncu önünde
 // durur, üstüne çıkmak için ZIPLAMAK gerekir. (MTV en az batma eksenini seçtiği
 // için yanlış ayarlanmış bir çözüm burada "bedava tırmanma" üretebilir; kullanıcı
@@ -2332,6 +2407,8 @@ test("kacinma kapatilabiliyor", "t_chase_direct_opt_out");
 test("dusman duvarin etrafindan dolasiyor", "t_chase_gets_around_wall");
 test("rontgen araya gireni isaretliyor", "t_camera_xray_marks_blockers");
 test("rontgen kapatilabiliyor", "t_camera_xray_can_be_disabled");
+test("kalabalik duvara sokamiyor", "t_crowd_cannot_push_player_into_wall");
+test("kosede sikisma tutuyor", "t_corner_squeeze_holds");
 test("engele yuruyunce tirmanmiyor", "t_walk_into_obstacle_does_not_climb");
 test("ziplayinca engeli geciyor", "t_jump_clears_low_obstacle");
 test("kamera dunyayi terk etmiyor", "t_camera_never_leaves_world");

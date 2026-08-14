@@ -2374,13 +2374,9 @@ func _bp_far3(a, b): bool {
     return dx * dx + dy * dy + dz * dz > r * r;
 }
 
-func _s3_collision() {
-    int n = length(_e3);
-    _bp_build3();
-    // 1) KATI GÖVDE ÇÖZÜMÜ — dünya geometrisine karşı.
-    // Eskiden yalnız TAG_PLAYER duvarlarla çarpışıyordu; düşmanlar duvarların
-    // içinden geçiyordu. Artık her HAREKETLİ katı gövde (oyuncu, düşman, prop)
-    // her STATİK katı gövdeye (duvar) karşı dışarı itiliyor.
+// Hareketli katı gövdeleri DÜNYA GEOMETRİSİNDEN dışarı it. Ayrı bir fonksiyon
+// çünkü kare başına İKİ KEZ çalışıyor — gerekçe `_s3_collision` içinde.
+func _s3_resolve_walls3(n) {
     int p = 0;
     while (p < n) {
         Ent3 ep = _e3[p];
@@ -2399,6 +2395,16 @@ func _s3_collision() {
         }
         p = p + 1;
     }
+}
+
+func _s3_collision() {
+    int n = length(_e3);
+    _bp_build3();
+    // 1) KATI GÖVDE ÇÖZÜMÜ — dünya geometrisine karşı.
+    // Eskiden yalnız TAG_PLAYER duvarlarla çarpışıyordu; düşmanlar duvarların
+    // içinden geçiyordu. Artık her HAREKETLİ katı gövde (oyuncu, düşman, prop)
+    // her STATİK katı gövdeye (duvar) karşı dışarı itiliyor.
+    _s3_resolve_walls3(n);
     // 1a) Hareketli katı gövdeler BİRBİRİNE karşı: ikisi de itilebildiği için
     // ayırma yarı yarıya paylaşılır — biri diğerini tek başına itseydi hafif
     // olan sürekli duvara sıkışırdı. Her çift bir kez işlenir (b > a).
@@ -2425,6 +2431,16 @@ func _s3_collision() {
         }
         ca = ca + 1;
     }
+    // 1c) DUVARLAR SON SÖZÜ SÖYLER. Bu ikinci geçiş şart: yukarıdaki
+    // hareketli-hareketli çözümü oyuncuyu duvarın İÇİNE geri itebiliyor
+    // (düşmanlar sıkıştırdığında ayırma yarı yarıya paylaşıldığı için oyuncu
+    // duvara doğru yarım adım gidiyor) ve o kare bir daha düzeltilmiyordu.
+    // Ölçüldü: 4 düşman baskısında 0.15, 8 düşmanda 0.30 birim kalıcı batma —
+    // oyuncu duvarın içinde duruyor, kamera ışını geometrinin içinden başlıyor
+    // ve oradan sonrası (kameranın bozulması, ulaşılmaz yerlere çıkma) bunun
+    // zinciri. Duvarlar cisimlerden daha otoriter olmalı; sıralama bunu söyler.
+    _s3_resolve_walls3(n);
+
     // 1b) Duvara giren mermi ölür — yoksa duvarların içinden geçip giderdi.
     int bi = 0;
     while (bi < n) {

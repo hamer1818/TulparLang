@@ -60,6 +60,30 @@ giriş/çıkış **kenarı** hesaplanıyor.
   bölgenin *gövde* ölçmesi, ölüm-çıkış bastırması, bölüm temizliği, kapatma
   sessizliği ve iki gövdeli tek atım — her biri ilgili bozmada kırmızıya döndü.
 
+### Fixed — kalabalık oyuncuyu duvarın içine sokabiliyordu (duvardan geçme zinciri)
+
+Çarpışma çözümü şu sırayla çalışıyordu: **(1)** hareketli gövdeleri duvarlardan
+dışarı it, **(2)** hareketli gövdeleri birbirinden ayır. İkinci adım ayırmayı
+yarı yarıya paylaştığı için, düşmanlar oyuncuyu duvara bastırdığında oyuncu
+duvara doğru yarım adım geri gidiyordu — ve o kare bir daha düzeltilmiyordu.
+
+Ölçüldü: kuzey duvarına bastıran kalabalıkta kalıcı batma **0 düşmanda 0.00,
+4 düşmanda 0.15, 8 düşmanda 0.30 birim** (~0.33'te doyuyor). Köşede ve 45°
+dönük duvarda da ~0.25.
+
+Oyuncu duvarın içinde durunca kamera ışını **geometrinin içinden başlıyor** ve
+kullanıcının bildirdiği zincir buradan geliyor: kameranın bozulması, duvarın
+öbür tarafını görme, ulaşılmaması gereken yerlere çıkma. (Bu, oyunlarda tanıdık
+bir sınıf: kamerayı geometriye sokup dünyanın dışına çıkmak.)
+
+**Duvar çözümü artık kare sonunda TEKRAR çalışıyor** — dünya geometrisi
+cisimlerden daha otoriter olmalı ve bunu söyleyen şey sıralamadır. Ölçüm
+sonrası: 14 düşman ve 20 birim/sn baskıda bile batma 3.6e-07 (kayan nokta
+gürültüsü). Köşeler ve dönük duvar da tam yüzeyde duruyor.
+
+2 yeni test (120 → 122); ikinci geçiş kaldırıldığında ikisi de kırmızıya
+dönüyor.
+
 ### Fixed — kamera dünyanın dışına çıkıyordu ("duvarların içinden geçiyorum")
 
 Röntgen eklenirken duvar taraması kapatılmıştı ("saydamlık zaten görüş
