@@ -1652,16 +1652,74 @@ func t_camera_xray_can_be_disabled() {
     assert_eq_int(_fade3[_slot_of3(w)], 0);
     // ...ve duvar taraması yeniden kamerayı çekiyor
     float t = _cam_clear_t3(0.0, 1.0, 0.0,  0.0, 0.0, 10.0);
-    assert(t < 0.5, "rontgen kapaliyken duvar kamerayi ceker");
+    assert(t < 0.5, "duvar kamerayi her hâlükârda ceker");
 }
 
-// Röntgen AÇIKKEN duvar kamerayı çekmemeli — bildirilen şikâyetin özü.
-func t_camera_xray_does_not_pull_camera() {
+// Engele yürümek TIRMANDIRMAMALI: alçak bir kutuya yürüyünce oyuncu önünde
+// durur, üstüne çıkmak için ZIPLAMAK gerekir. (MTV en az batma eksenini seçtiği
+// için yanlış ayarlanmış bir çözüm burada "bedava tırmanma" üretebilir; kullanıcı
+// bunun olmamasını açıkça istedi.)
+func t_walk_into_obstacle_does_not_climb() {
+    scene3d_reset();
+    gravity3d(26.0);
+    ground3d(0.0);
+    // Ön yüzü z=4.0 olan alçak kutu (yükseklik 1.0)
+    spawn3(0.0, 0.5, 5.0,  4.0, 1.0, 2.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int p = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int i = 0;
+    while (i < 200) {
+        int sl = _slot_of3(p);
+        Ent3 e = _e3[sl];
+        set3vel(p, 0.0, e.vy, 5.0);
+        _s3_physics(0.016667);
+        _s3_collision();
+        i = i + 1;
+    }
+    // kutunun önünde durmalı (4.0 - yarı derinlik 0.6 = 3.4)
+    assert(get3z(p) < 3.5, "alcak engelin ONUNDE durmali");
+    // ve YÜKSELMEMELİ — üstüne çıksaydı y ~ 2.0 olurdu
+    assert(get3y(p) < 1.2, "yuruyerek engelin USTUNE cikmamali");
+}
+
+// ...ama zıplayınca aşabilmeli, yoksa engel duvara dönüşür.
+func t_jump_clears_low_obstacle() {
+    scene3d_reset();
+    gravity3d(26.0);
+    ground3d(0.0);
+    spawn3(0.0, 0.5, 5.0,  4.0, 1.0, 2.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int p = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int i = 0;
+    while (i < 260) {
+        int sl = _slot_of3(p);
+        Ent3 e = _e3[sl];
+        set3vel(p, 0.0, e.vy, 5.0);
+        if (i == 30) { jump3d(p, 13.0); }
+        _s3_physics(0.016667);
+        _s3_collision();
+        i = i + 1;
+    }
+    assert(get3z(p) > 6.0, "ziplayinca engeli GECEBILMELI");
+}
+
+// Kamera duvarı ASLA geçmemeli — röntgen açıkken bile.
+//
+// Bir ara bunun tersi kodlanmıştı ("saydamlık zaten görüş sağlıyor, kamerayı
+// çekmeye gerek yok"). Yanlıştı ve kullanıcı testinde çıktı: saydamlık
+// kamerayla oyuncu ARASINDAKİ cismi çözüyor, kameranın duvarın ARKASINA
+// geçmesini değil. Sırtını duvara dayayınca kamera arenanın dışına çıkıyor,
+// dışarıdan bakınca duvarlar arka yüz ayıklamasıyla kayboluyor ve oyun
+// "duvarların içinden geçiyorum" gibi görünüyor.
+func t_camera_never_leaves_world() {
     scene3d_reset();
     spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
     spawn3(0.0, 1.0, 5.0,  6.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    // Röntgen AÇIK (varsayılan) — yine de duvar ışını kesmeli.
     float t = _cam_clear_t3(0.0, 1.0, 0.0,  0.0, 0.0, 10.0);
-    assert(abs_f3(t - 1.0) < 0.001, "rontgen acikken duvar kamerayi CEKMEZ");
+    assert(t < 0.5, "rontgen acikken de duvar kamerayi durdurur");
+    // Kapalıyken de aynı.
+    camera_xray3d(false);
+    assert(_cam_clear_t3(0.0, 1.0, 0.0,  0.0, 0.0, 10.0) < 0.5,
+           "rontgen kapaliyken de durdurur");
 }
 
 func t_camera_no_obstacle_keeps_distance() {
@@ -2274,7 +2332,9 @@ test("kacinma kapatilabiliyor", "t_chase_direct_opt_out");
 test("dusman duvarin etrafindan dolasiyor", "t_chase_gets_around_wall");
 test("rontgen araya gireni isaretliyor", "t_camera_xray_marks_blockers");
 test("rontgen kapatilabiliyor", "t_camera_xray_can_be_disabled");
-test("rontgen acikken kamera cekilmiyor", "t_camera_xray_does_not_pull_camera");
+test("engele yuruyunce tirmanmiyor", "t_walk_into_obstacle_does_not_climb");
+test("ziplayinca engeli geciyor", "t_jump_clears_low_obstacle");
+test("kamera dunyayi terk etmiyor", "t_camera_never_leaves_world");
 test("engel yokken tam mesafe", "t_camera_no_obstacle_keeps_distance");
 test("engel dunya biriminde cekiyor", "t_camera_obstacle_pulls_in_by_world_units");
 test("en yakin mesafe mutlak, oransal degil", "t_camera_floor_is_absolute_not_relative");

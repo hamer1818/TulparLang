@@ -108,6 +108,13 @@ boşluklar; backlog'da yoklardı.
 
 - [ ] **`%` operatörü yok** — `mod()` var.
 
+- [ ] **Rezerve kelime çarpması teşhis edilemiyor.** `dene` (= `try`) adında bir
+      fonksiyon tanımlayıp çağırınca hata "sözdiziminde bir eksiklik var" diyor;
+      "`dene` rezerve bir kelime" demiyor. 2026-08-14'te bir ölçüm betiği bu
+      yüzden dakikalarca yanlış yerde arattı. `move`/`don` için CLAUDE.md'de not
+      var ama derleyici sessiz. Tanımlayıcı beklenen yerde bir anahtar kelime
+      görüldüğünde mesaj bunu SÖYLEMELİ — ucuz ve doğrudan teşhis kazancı.
+
 - [ ] **AOT optimizasyonu `scene3d_arena`'da geçersiz IR üretiyor.**
       `[AOT] Warning: optimization produced invalid IR at every level; using
       the unoptimized module` — yani örnek OPTİMİZASYONSUZ derleniyor.

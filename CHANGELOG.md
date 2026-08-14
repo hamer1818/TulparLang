@@ -60,6 +60,36 @@ giriş/çıkış **kenarı** hesaplanıyor.
   bölgenin *gövde* ölçmesi, ölüm-çıkış bastırması, bölüm temizliği, kapatma
   sessizliği ve iki gövdeli tek atım — her biri ilgili bozmada kırmızıya döndü.
 
+### Fixed — kamera dünyanın dışına çıkıyordu ("duvarların içinden geçiyorum")
+
+Röntgen eklenirken duvar taraması kapatılmıştı ("saydamlık zaten görüş
+sağlıyor"). Yanlıştı ve kullanıcı testinde çıktı: saydamlık kamerayla oyuncu
+**arasındaki** cismi çözüyor, kameranın duvarın **arkasına** geçmesini değil.
+Sırtını duvara dayayınca kamera arenanın dışına çıkıyor, dışarıdan bakınca
+duvarlar arka yüz ayıklamasıyla kayboluyor — oyun "duvarların içinden
+geçiyorum, yükseklik algım gitti" gibi görünüyor. Kamera dünyanın içinde kalmak
+**zorunda**; saydamlık onun yerine geçemez, yanına gelir.
+
+Duvar taraması geri geldi ve çözüm **iki aşamalı** oldu:
+
+1. **Önce YÜKSELT** — engelin üstünden bakmayı dene (en fazla 74°, beş adım).
+   Oyuncu ekranda aynı boyda kalır, yönelim korunur. Sırtını duvara dayamanın
+   doğal karşılığı kameranın duvarın üstüne çıkmasıdır, oyuncunun ensesine
+   yapışması değil — ilk şikâyet buydu.
+2. **Yetmezse yakınlaştır** (dünya birimi tabanla). Son çare.
+
+Katı gövde çarpışmasının sağlam olduğu ayrıca ölçüldü: arenanın dört duvarı,
+silindir sütunu ve 45° dönük çapraz duvarı oyuncuyu tam yüzeylerinde durduruyor
+(z=−14.9, x=14.9, …). Yani "içinden geçme" tamamen kamera kaynaklıydı.
+
+### Added — engele yürümek tırmandırmıyor, zıplamak gerekiyor
+
+Kullanıcı isteği üzerine davranış ölçüldü ve **regresyon testine bağlandı**:
+alçak bir kutuya yürüyen oyuncu önünde duruyor (0.4, 1.0, 3.0 yüksekliklerinde
+de), üstüne çıkmak için zıplamak gerekiyor. MTV en az batma eksenini seçtiği
+için yanlış ayarlanmış bir çözüm burada "bedava tırmanma" üretebilirdi; iki test
+(tırmanmama ve zıplayarak aşabilme) bunu artık kilitliyor.
+
 ### Changed — kamera artık engelden kaçmıyor, engeli SAYDAMLAŞTIRIYOR
 
 Kamerayı duvara çarptıkça içeri çekmek yanlış çözümdü: duvara sırtını dayamak

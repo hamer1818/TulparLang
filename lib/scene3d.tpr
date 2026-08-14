@@ -2019,11 +2019,14 @@ func _cam_clear_t3(ox, oy, oz, dx, dy, dz): float {
     float best = 1.0;
     int n = length(_e3);
     int i = 0;
-    // Röntgen açıkken duvarlar kamerayı ÇEKMEZ; araya girdiklerinde saydam
-    // çiziliyorlar (bkz. _s3_mark_fade3). Aşağıdaki arazi/zemin taraması ise
-    // her hâlükârda çalışıyor: kameranın yerin altına girmesi saydamlıkla
-    // çözülebilecek bir şey değil, orada gerçekten dünyanın altını görürsün.
-    if (_cam_xray3 == 0) {
+    // Duvar taraması HER ZAMAN çalışır. Bir ara röntgen açıkken kapatılmıştı
+    // ("saydamlık zaten görüş sağlıyor") — yanlıştı: saydamlık, kamerayla
+    // oyuncu ARASINDAKİ cismi çözüyor, kameranın kendisinin duvarın ARKASINA
+    // geçmesini değil. Sırtını duvara dayayınca kamera arenanın dışına çıkıyor,
+    // dışarıdan bakınca duvarlar arka yüz ayıklamasıyla kayboluyor ve oyuncu
+    // "duvarların içinden geçiyorum, yükseklik algım gitti" diyor. Kamera
+    // dünyanın içinde kalmak ZORUNDA; saydamlık onun yerine geçemez, yanına
+    // gelir.
     while (i < n) {
         Ent3 e = _e3[i];
         if (e.alive == 1 && e.tag == TAG_WALL) {
@@ -2031,7 +2034,6 @@ func _cam_clear_t3(ox, oy, oz, dx, dy, dz): float {
             if (t >= 0.0 && t < best) { best = t; }
         }
         i = i + 1;
-    }
     }
     // ZEMİN. Yukarıdaki tarama yalnız TAG_WALL kutularına bakıyordu, oysa
     // arazi bir kutu değil sürekli bir yüzey — kamera tepenin İÇİNE girip
@@ -2842,25 +2844,42 @@ func _s3_camera(dt) {
     float cx = t.x - fx * horiz;
     float cz = t.z - fz * horiz;
     float cy = t.y + _cam_dist * sin(pr);
-    // Kamerayı zeminin altına düşürme — oyuncu bir anda yer katmanının
-    // içinden bakmaya başlar (klasik "kamera yere gömüldü" görüntüsü).
-    if (_ground_on == 1 && cy < _ground_y + 0.8) { cy = _ground_y + 0.8; }
-    // Kamera-duvar çarpışması: hedeften kameraya bir ışın at, duvara çarparsa
-    // kamerayı çarpma noktasının biraz önüne çek. Bu olmadan yörünge kamerası
-    // duvarın İÇİNE girip sahneyi dışarıdan gösteriyordu.
+    // Kamera-duvar çözümü İKİ AŞAMALI ve sırası önemli:
+    //   1. YÜKSELT — engelin üstünden bakmayı dene. Oyuncu ekranda aynı boyda
+    //      kalır, yönelim korunur. Sırtını duvara dayamanın doğal karşılığı
+    //      kameranın duvarın üstüne çıkmasıdır, oyuncunun ensesine yapışması
+    //      değil.
+    //   2. Yükselmek yetmediyse YAKINLAŞTIR (eski davranış, dünya birimi
+    //      tabanla). Son çare, çünkü yakınlaşmak yönelimi bozuyor.
     if (_cam_collide3 == 1) {
+        float ct2 = _cam_clear_t3(t.x, t.y, t.z, cx - t.x, cy - t.y, cz - t.z);
+        float pmax = 74.0 * DEG2RAD3;
+        int tries = 0;
+        while (ct2 < 0.999 && tries < 5 && pr < pmax) {
+            pr = pr + 12.0 * DEG2RAD3;
+            if (pr > pmax) { pr = pmax; }
+            horiz = _cam_dist * cos(pr);
+            cx = t.x - fx * horiz;
+            cz = t.z - fz * horiz;
+            cy = t.y + _cam_dist * sin(pr);
+            ct2 = _cam_clear_t3(t.x, t.y, t.z, cx - t.x, cy - t.y, cz - t.z);
+            tries = tries + 1;
+        }
         float rdx = cx - t.x;
         float rdy = cy - t.y;
         float rdz = cz - t.z;
         float full = sqrt(rdx * rdx + rdy * rdy + rdz * rdz);
         if (full > 0.001) {
-            float ct2 = _cam_clear_t3(t.x, t.y, t.z, rdx, rdy, rdz);
             float s = _cam_smooth3(_cam_allowed3(full, ct2), dt) / full;
             cx = t.x + rdx * s;
             cy = t.y + rdy * s;
             cz = t.z + rdz * s;
         }
     }
+    // Kamerayı zeminin altına düşürme — oyuncu bir anda yer katmanının
+    // içinden bakmaya başlar (klasik "kamera yere gömüldü" görüntüsü).
+    // Çarpışma çözümünden SONRA: çözüm kamerayı aşağı taşımış olabilir.
+    if (_ground_on == 1 && cy < _ground_y + 0.8) { cy = _ground_y + 0.8; }
     _s3_mark_fade3(cx, cy, cz, t.x, t.y, t.z, ct);
     camera3d(cx, cy, cz,   t.x, t.y, t.z,  _cam_fov);
 }
