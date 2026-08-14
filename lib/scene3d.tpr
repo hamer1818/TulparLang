@@ -3094,6 +3094,13 @@ func camera_fov(f) { _cam_fov = f; }
 func camera_orbit(target, dist, height) {
     _cam_target = target;
     _cam_mode3 = CAM_ORBIT;
+    // Fare bakışı VARSAYILAN AÇIK: imleç kilitlenir ve fare doğrudan kamerayı
+    // çevirir — üçüncü şahıs oyunlarının standardı. Eskiden yalnız SAĞ TUŞ
+    // basılıyken dönüyordu, yani "fare çalışmıyor" gibi geliyordu. Menü/duraklat
+    // açıldığında döngü imleci kendiliğinden serbest bırakıyor (düğmelere
+    // tıklanabilsin), oyuna dönünce yeniden kilitliyor.
+    // Kapatmak için: fare_bakis3d(false) — o zaman sağ tuşla sürükleme kalır.
+    _cam_lock3 = 1;
     _cam_dist = sqrt(dist * dist + height * height);
     _cam_pitch3 = 0.0 - atan2(height, dist) * RAD2DEG3;
     _cam_yaw3 = 0.0;
@@ -3155,6 +3162,11 @@ func kamera_zoom3d(min_d, max_d) { camera_zoom3d(min_d, max_d); }
 // İmleç kilidi: açıkken fare pencereye hapsolur ve bakış sürekli fareye bağlı
 // olur (FPS'te varsayılan açık). Yörüngede açarsan sağ tuşa basmadan bakarsın.
 func camera_lock3d(on) { if (on) { _cam_lock3 = 1; } else { _cam_lock3 = 0; } }
+// Serbest fare bakışı (imleç kilidi). Kapalıyken kamera yalnız SAĞ TUŞ
+// sürüklemesiyle, Q/E ile ve sağ çubukla döner.
+func camera_mouse3d(on) { camera_lock3d(on); }
+func fare_bakis3d(ac) { camera_lock3d(ac); }
+func fare_hassasiyet3d(s) { camera_sens3d(s); }
 func kamera_kilit3d(on) { camera_lock3d(on); }
 
 // Kamera-duvar çarpışması (varsayılan AÇIK). Kapatınca kamera duvarların

@@ -1776,6 +1776,24 @@ func t_jump_clears_low_obstacle() {
     assert(get3z(p) > 6.0, "ziplayinca engeli GECEBILMELI");
 }
 
+// Yörünge (TPS) kamerasında fare bakışı VARSAYILAN AÇIK olmalı.
+// Eskiden imleç kilidi kapalıydı, yani kamera yalnız SAĞ TUŞ basılıyken
+// dönüyordu — kullanıcıya "fare hiç çalışmıyor" gibi geliyordu.
+func t_orbit_camera_has_mouse_look() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    camera_orbit(p, 14.0, 9.0);
+    assert_eq_int(_cam_lock3, 1);
+    // Kapatılabilmeli: sağ-tuş sürüklemesini yeğleyen oyun için.
+    fare_bakis3d(false);
+    assert_eq_int(_cam_lock3, 0);
+    // Sabit kamerada bakış yok — kilit de olmamalı.
+    scene3d_reset();
+    int q = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    camera_follow(q, 14.0, 9.0);
+    assert_eq_int(_cam_lock3, 0);
+}
+
 // Engel varken kamera oyuncunun SURATINA girmemeli ve engel saydamlaşmalı.
 //
 // Kullanıcı ekran görüntüsü: engelin dibinde kamera oyuncunun içine giriyor ve
@@ -2530,6 +2548,7 @@ test("kalabalik duvara sokamiyor", "t_crowd_cannot_push_player_into_wall");
 test("kosede sikisma tutuyor", "t_corner_squeeze_holds");
 test("engele yuruyunce tirmanmiyor", "t_walk_into_obstacle_does_not_climb");
 test("ziplayinca engeli geciyor", "t_jump_clears_low_obstacle");
+test("tps kamerasinda fare bakisi acik", "t_orbit_camera_has_mouse_look");
 test("kamera yakinlasmak yerine saydamlastiriyor", "t_camera_prefers_fade_over_zooming_in");
 test("kamera isini donmeyi hesaba katiyor", "t_camera_ray_respects_rotation");
 test("gozcu batmayi goruyor", "t_watch_detects_penetration");
