@@ -63,8 +63,17 @@ sonra dil/altyapı borcu.
       gölgeler bedava dönüyor (gölge haritası güneşin yönünden türüyor).
       Tamamen Tulpar tarafında — tek satır C eklenmedi. Detay: CHANGELOG.
 
-- [ ] **Su yüzeyi yok.** Saydam bir düzlem + "su altında mıyım" sorgusu;
-      arazi geldiğinden beri en çok eksik hissettiren şey (vadiler kuru).
+- [x] **Su yüzeyi geldi.** ✅ 2026-08-14 — `su3d(y)` dünya çapında yatay düzlem,
+      `su_altinda3d(id)` sorgusu, yüzme fiziği (azalmış yerçekimi + sürtünme +
+      `zipla3` = yüzme vuruşu, zemin gerektirmez). Su EN SONDA çiziliyor: opak
+      cisimlerden önce çizilirse derinlik tamponu altındaki her şeyi eler ve su
+      düz bir levhaya döner. Kaldırma kuvveti (yüzdürme) bilerek modellenmedi.
+      Detay: CHANGELOG.
+
+- [ ] **Suda kaldırma kuvveti (yüzdürme) yok.** Cisim suda yavaşça batıyor,
+      yüzeye çıkmak için yüzme vuruşu gerekiyor. Basit ve öngörülebilir ama
+      tahta sandık/varil gibi "kendiliğinden yüzen" nesneler yapılamıyor.
+      Batma derinliğiyle orantılı yukarı ivme yeterdi.
 
 - [ ] **Gökyüzü dokusu yok** — degrade + gündüz/gece var, yıldız/bulut yok.
 

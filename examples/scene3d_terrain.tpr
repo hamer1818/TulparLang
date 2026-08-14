@@ -1,4 +1,5 @@
-// scene3d Arazi — gerçek yükseklik haritalı açık dünya (Faz 10) + eğim (Faz 11).
+// scene3d Arazi — gerçek yükseklik haritalı açık dünya (Faz 10) + eğim (Faz 11)
+// + katman boyama, gündüz-gece döngüsü ve su.
 //
 //   ./tulpar examples/scene3d_terrain.tpr
 //   ./tulpar build --target=android examples/scene3d_terrain.tpr out
@@ -33,6 +34,12 @@ func setup() {
     // Sabaha yakın başlıyoruz ki gün doğumu hemen görünsün.
     gunduz_gece3d(120.0);
     saati_ayarla3d(5.0);
+
+    // Su: dünya çapında tek yatay düzlem. Arazinin bu seviyenin altında kalan
+    // her yeri göl oluyor — vadiler artık kuru değil. Saydam çizilebilmesi
+    // ışık shader'ındaki alfa düzeltmesine bağlıydı.
+    su3d(PEAK * 0.22);
+    su_renk3d(rgb(30, 95, 150), 145);
 
     // Arazi. Bundan sonra zemin yüksekliği her yerde buradan geliyor —
     // yerçekimi, zıplama ve kamera hepsi otomatik uyum sağlıyor.
@@ -114,6 +121,9 @@ func hud() {
     if (lay == LAYER_MID)  { ad = "TOPRAK"; renk = rgb(190, 175, 120); }
     if (lay == LAYER_HIGH) { ad = "KAR";    renk = RAYWHITE; }
     if (lay == LAYER_ROCK) { ad = "KAYA";   renk = rgb(180, 180, 185); }
+    if (su_altinda3d(player)) {
+        ad = "SU"; renk = rgb(110, 200, 255);
+    }
     text("Zemin: " + ad, 12, 148, 16, renk);
 
     // Saat — döngünün gerçekten döndüğünü sayıyla da görebilmek için.

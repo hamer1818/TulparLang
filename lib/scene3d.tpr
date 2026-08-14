@@ -414,6 +414,7 @@ func scene3d_reset() {
     // sıfırlanınca dünya da sıfırlanmalı, yoksa yeni sahne eski tepeleri sürer.
     _terr_on = 0; _terr_model = 0 - 1; terrain_off3d();
     _terr_kind3 = 0; _terr_lay3 = 0; terrain_layers_off3d();
+    _water_on3 = 0; _water_y3 = 0.0; _water_a3 = 150; _water_phys3 = 1;
     _dn_on3 = 0; _dn_h3 = 12.0; _dn_len3 = 120.0; _dn_frozen3 = 0;
     _score3 = 0;
     _game_over3 = 0;
@@ -687,6 +688,14 @@ func jump3d(id, force) {
     int i = _slot_of3(id);
     if (i < 0) { return; }
     Ent3 e = _e3[i];
+    // SUDA: zemine basmak gerekmez, her basış bir yüzme vuruşudur. Yoksa
+    // suya düşen oyuncu dibe çakılıp bir daha çıkamazdı.
+    if (_water_on3 == 1 && _water_phys3 == 1 && e.y < _water_y3) {
+        e.vy = force * _water_swim3;
+        e.grounded = 0;
+        _e3[i] = e;
+        return;
+    }
     if (e.grounded == 1) { e.vy = force; e.grounded = 0; _e3[i] = e; }
 }
 
@@ -1715,9 +1724,25 @@ func _s3_physics(dt) {
             // Rampalar duvarlar gibi SABİT dünya geometrisidir: düşmezler.
             int is_static = 0;
             if (e.tag == TAG_WALL || e.shape == SHAPE_RAMP) { is_static = 1; }
+            // Suda mı? Yerçekimi azalır, sürtünme başlar. Gerçek kaldırma
+            // kuvveti (yüzdürme) MODELLENMİYOR — cisim yavaşça batar, yüzeye
+            // çıkmak için `zipla3` (yüzme vuruşu) gerekir. Basit ve öngörülebilir.
+            int in_water = 0;
+            if (_water_on3 == 1 && _water_phys3 == 1 && is_static == 0
+                && is_bullet == 0 && e.y < _water_y3) { in_water = 1; }
             // yerçekimi yalnız oyuncu/düşman/prop'a
             if (is_static == 0 && is_bullet == 0) {
-                e.vy = e.vy - _grav * dt;
+                float g = _grav;
+                if (in_water == 1) { g = _grav * _water_grav3; }
+                e.vy = e.vy - g * dt;
+            }
+            if (in_water == 1) {
+                // Üstel sönüm: kare hızından bağımsız olsun diye dt ile.
+                float k = 1.0 - _water_drag3 * dt;
+                if (k < 0.0) { k = 0.0; }
+                e.vx = e.vx * k;
+                e.vy = e.vy * k;
+                e.vz = e.vz * k;
             }
             e.x = e.x + e.vx * dt;
             e.y = e.y + e.vy * dt;
@@ -2332,6 +2357,53 @@ func terrain_file3d(path, sx, sy, sz) {
     _terr_sz = sz * 1.0;
     _terr_color = rgb(96, 132, 88);
 }
+
+// ---- Su yüzeyi -------------------------------------------------------------
+// Arazi geldiğinden beri vadiler kuruydu. Su, dünya çapında tek bir YATAY
+// düzlem: göl/deniz seviyesi. Arazinin altında kalan her yer sular altında.
+//
+// Saydam çizilebilmesi bir ön koşula bağlıydı — ışık shader'ı alfayı eziyordu
+// (bkz. CHANGELOG). Düzeltilene kadar su opak bir levha olarak görünürdü.
+int   _water_on3    = 0;
+float _water_y3     = 0.0;
+int   _water_col3   = 0;
+int   _water_a3     = 150;     // alfa (0-255)
+int   _water_phys3  = 1;       // yüzme fiziği
+float _water_grav3  = 0.30;    // suda yerçekimi çarpanı (kaldırma kuvveti yerine)
+float _water_drag3  = 2.6;     // sürtünme katsayısı (1/sn)
+float _water_swim3  = 0.55;    // zıplama kuvvetinin suda kalan oranı
+
+// Suyu aç: y = su seviyesi (dünya Y'si).
+func water3d(y) {
+    _water_on3 = 1;
+    _water_y3 = y * 1.0;
+    if (_water_col3 == 0) { _water_col3 = rgb(40, 110, 170); }
+}
+func su3d(y) { water3d(y); }
+func water_off3d() { _water_on3 = 0; }
+func su_kapat3d() { water_off3d(); }
+func water_color3d(c, alpha) { _water_col3 = c; _water_a3 = alpha; }
+func su_renk3d(renk, alfa) { water_color3d(renk, alfa); }
+func water_level3d(): float { return _water_y3; }
+func su_seviyesi3d(): float { return water_level3d(); }
+func water_physics3d(on) { if (on) { _water_phys3 = 1; } else { _water_phys3 = 0; } }
+func su_fizigi3d(ac) { water_physics3d(ac); }
+
+// Bir NOKTA suyun altında mı?
+func under_water_at3d(x, y, z): bool {
+    if (_water_on3 == 0) { return false; }
+    return y < _water_y3;
+}
+// Bir ENTITY suya girmiş mi? Ölçü MERKEZ: yarı bel hizası. Ayak ucu ölçüsü
+// su kenarında yürürken sürekli açılıp kapanırdı.
+func under_water3d(id): bool {
+    if (_water_on3 == 0) { return false; }
+    int s = _slot_of3(id);
+    if (s < 0) { return false; }
+    Ent3 e = _e3[s];
+    return e.y < _water_y3;
+}
+func su_altinda3d(id): bool { return under_water3d(id); }
 
 // ---- Arazi katmanları (çim / toprak / kar + eğimde kaya) -------------------
 // Arazi tek renkti. Yükseklik ve eğim zaten fizikte kullanılıyordu; katman
@@ -3213,6 +3285,21 @@ func _s3_render() {
         i = i + 1;
     }
     pass = pass + 1;
+    }
+    // SU EN SONDA. Saydam ve dünyanın büyük bir kısmını kaplıyor: opak
+    // cisimlerden önce çizilirse derinlik tamponuna yazar ve suyun ALTINDA
+    // kalan her şey elenir — su, dibi göstermek yerine düz bir levha olur.
+    // (Aynı sebep entity'lerin iki geçişli çizilmesinin de sebebi.)
+    if (_water_on3 == 1) {
+        float sz = _ground_sz * 2.0;
+        if (_terr_on == 1) {
+            // Arazi varsa onun ayak izini kapsa — göl kıyıda kesilmesin.
+            sz = _terr_sx;
+            if (_terr_sz > sz) { sz = _terr_sz; }
+        }
+        plane(0.0, _water_y3, 0.0, sz, sz,
+              rgba(_col_r3(_water_col3), _col_g3(_water_col3),
+                   _col_b3(_water_col3), _water_a3));
     }
     // Tetikleyici bölgeler entity'lerden SONRA: tel kafes, içindeki cismin
     // üstünde görünsün. Varsayılan kapalı (bkz. trigger_show3d).

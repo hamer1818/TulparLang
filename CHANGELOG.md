@@ -60,6 +60,37 @@ giriş/çıkış **kenarı** hesaplanıyor.
   bölgenin *gövde* ölçmesi, ölüm-çıkış bastırması, bölüm temizliği, kapatma
   sessizliği ve iki gövdeli tek atım — her biri ilgili bozmada kırmızıya döndü.
 
+### Added — su yüzeyi
+
+Arazi geldiğinden beri vadiler kuruydu. Su, dünya çapında tek bir **yatay
+düzlem** (göl/deniz seviyesi): arazinin o seviyenin altında kalan her yeri
+sular altında.
+
+- `water3d(y)` / `su3d`, `water_off3d`, `water_color3d(renk, alfa)` / `su_renk3d`
+- `under_water3d(id)` / `su_altinda3d`, `under_water_at3d(x,y,z)`,
+  `water_level3d()` — oyun mantığı için (nefes, hız, ses)
+- **Yüzme fiziği** (`water_physics3d` ile kapatılabilir): suda yerçekimi
+  azalıyor, üstel sürtünme başlıyor ve `jump3d` **zemin gerektirmiyor** —
+  her basış bir yüzme vuruşu. Bu son madde olmadan suya düşen oyuncu dibe
+  çakılıp bir daha çıkamazdı.
+
+**Su en sonda çiziliyor.** Saydam ve dünyanın büyük kısmını kapladığı için,
+opak cisimlerden önce çizilirse derinlik tamponuna yazıyor ve suyun *altında*
+kalan her şey eleniyor — su, dibi göstermek yerine düz bir levhaya dönüyor.
+(Entity'lerin iki geçişli çizilmesinin sebebi de aynı.) Saydam görünebilmesi
+ışık shader'ındaki alfa düzeltmesine bağlıydı; ondan önce su opak bir levhaydı.
+
+Sorgu, entity'nin **merkezini** ölçüyor (yarı bel hizası); ayak ucu ölçüsü su
+kenarında yürürken sürekli açılıp kapanırdı.
+
+Gerçek kaldırma kuvveti bilerek modellenmedi: cisim suda yavaşça batıyor.
+Basit ve öngörülebilir; "kendiliğinden yüzen sandık" TODO'da.
+
+5 yeni test (137 → 142). Çizim GPU'da ve penceresiz doğrulanamıyor ama fizik ve
+sorgu saf matematik: yerçekimi azaltmasını, yüzme vuruşunu ve fizik kapatmasını
+sökmek ilgili testleri kırmızıya döndürüyor. `examples/scene3d_terrain.tpr`
+artık göllü.
+
 ### Added — builtin tablosu ↔ codegen ↔ LSP tutarlılık denetimi
 
 Bir builtin üç yerde birden bilinmek zorunda (codegen, typeinfer tablosu, LSP)

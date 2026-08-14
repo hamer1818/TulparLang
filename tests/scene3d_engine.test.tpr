@@ -2249,6 +2249,106 @@ func t_daynight_color_mix() {
 }
 
 // ===========================================================================
+// Su
+// ===========================================================================
+// Suyun ÇİZİMİ GPU'da ve penceresiz doğrulanamaz; FİZİĞİ ve sorgusu saf
+// matematik, ikisi de burada.
+
+func t_water_query() {
+    scene3d_reset();
+    ground3d(0.0);
+    int p = spawn3(0.0, 5.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    // Su KAPALIYKEN hiçbir şey su altında değil
+    assert_eq_bool(under_water3d(p), false);
+    assert_eq_bool(under_water_at3d(0.0, 0.0 - 100.0, 0.0), false);
+
+    su3d(3.0);
+    assert_eq_bool(under_water3d(p), false);          // y=5 > 3
+    set3pos(p, 0.0, 1.0, 0.0);
+    assert_eq_bool(under_water3d(p), true);           // y=1 < 3
+    assert_eq_bool(under_water_at3d(0.0, 2.9, 0.0), true);
+    assert_eq_bool(under_water_at3d(0.0, 3.1, 0.0), false);
+    assert(abs_f3(su_seviyesi3d() - 3.0) < 0.001, "seviye okunabilmeli");
+
+    su_kapat3d();
+    assert_eq_bool(under_water3d(p), false);
+}
+
+// Suda yerçekimi azalır: aynı sürede daha az düşülür.
+func t_water_slows_fall() {
+    scene3d_reset();
+    no_ground3d();
+    // KURU: 30 kare düş
+    int a = spawn3(0.0, 50.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int i = 0;
+    while (i < 30) { _s3_physics(0.016667); i = i + 1; }
+    float dry_drop = 50.0 - get3y(a);
+
+    // ISLAK: aynı süre, su içinde
+    scene3d_reset();
+    no_ground3d();
+    su3d(100.0);                       // her yer su altı
+    int b = spawn3(0.0, 50.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    i = 0;
+    while (i < 30) { _s3_physics(0.016667); i = i + 1; }
+    float wet_drop = 50.0 - get3y(b);
+
+    assert(wet_drop > 0.0, "suda da batar (kaldirma kuvveti modellenmiyor)");
+    assert(wet_drop < dry_drop * 0.5, "ama kuru dususten belirgin YAVAS");
+}
+
+// Suda yatay hız sönümlenir.
+func t_water_drag() {
+    scene3d_reset();
+    no_ground3d();
+    su3d(100.0);
+    int p = spawn3(0.0, 50.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    set3vel(p, 20.0, 0.0, 0.0);
+    int i = 0;
+    while (i < 30) { _s3_physics(0.016667); i = i + 1; }
+    Ent3 e = _e3[_slot_of3(p)];
+    assert(e.vx < 15.0, "yatay hiz sonumlenmeli");
+    assert(e.vx > 0.0, "ama ters yone donmemeli");
+}
+
+// Suda zıplamak ZEMİN GEREKTİRMEZ — yoksa suya düşen dibe çakılır kalırdı.
+func t_water_swim_stroke() {
+    scene3d_reset();
+    no_ground3d();
+    su3d(100.0);
+    int p = spawn3(0.0, 50.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    Ent3 before = _e3[_slot_of3(p)];
+    assert_eq_int(before.grounded, 0);       // havada/suda
+    jump3d(p, 12.0);
+    Ent3 after = _e3[_slot_of3(p)];
+    assert(after.vy > 0.0, "suda zemine basmadan yukselebilmeli");
+
+    // KURU havada aynı şey ÇALIŞMAMALI (çift zıplama olmaz)
+    scene3d_reset();
+    no_ground3d();
+    int q = spawn3(0.0, 50.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    jump3d(q, 12.0);
+    Ent3 aq = _e3[_slot_of3(q)];
+    assert(aq.vy <= 0.0, "havada zemine basmadan ziplanamaz");
+}
+
+// Su fiziği kapatılabilmeli (yalnız görsel su isteyen oyun).
+func t_water_physics_opt_out() {
+    scene3d_reset();
+    no_ground3d();
+    su3d(100.0);
+    su_fizigi3d(false);
+    int p = spawn3(0.0, 50.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    set3vel(p, 20.0, 0.0, 0.0);
+    int i = 0;
+    while (i < 30) { _s3_physics(0.016667); i = i + 1; }
+    Ent3 e = _e3[_slot_of3(p)];
+    assert(e.vx > 19.9, "fizik kapaliyken surtunme YOK");
+    // ...ama sorgu yine çalışmalı: görsel su da "su altında mıyım" der.
+    assert_eq_bool(under_water3d(p), true);
+}
+
+// ===========================================================================
 // Arazi katmanları
 // ===========================================================================
 // Mesh boyaması GPU'da olup bitiyor ve penceresiz doğrulanamaz; ama katman
@@ -2740,6 +2840,11 @@ test("saat ilerliyor ve sariyor", "t_daynight_clock_advances_and_wraps");
 test("saat dondurulabiliyor", "t_daynight_freeze");
 test("dongu varsayilan kapali", "t_daynight_off_by_default");
 test("gokyuzu renk karisimi", "t_daynight_color_mix");
+test("su sorgusu", "t_water_query");
+test("suda dusus yavaslar", "t_water_slows_fall");
+test("suda yatay surtunme", "t_water_drag");
+test("suda yuzme vurusu", "t_water_swim_stroke");
+test("su fizigi kapatilabiliyor", "t_water_physics_opt_out");
 test("arazi katmani yukseklige gore", "t_terrain_layer_by_height");
 test("egim yuksekligi eziyor", "t_terrain_layer_slope_wins");
 test("egim esigi gercekten etkili", "t_terrain_layer_slope_threshold_matters");
