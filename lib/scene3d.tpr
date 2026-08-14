@@ -1912,6 +1912,30 @@ func _is_static_solid3(Ent3 e): bool { return e.solid == 1 && e.tag == TAG_WALL;
 func _seg_aabb3(ox, oy, oz, dx, dy, dz, w): float {
     Ent3 e = _e3[w];
     float hx = e.sx * 0.5; float hy = e.sy * 0.5; float hz = e.sz * 0.5;
+    // DÖNÜK kutu: ışını cismin YEREL çerçevesine taşı, sonra sıradan dilim
+    // testini uygula. Bu olmadan yaw yok sayılıyordu ve dönük bir duvar için
+    // TAMAMEN YANLIŞ bir hacim sınanıyordu: 45° dönük 9x0.6'lık duvar,
+    // dünya X'i boyunca ince bir dilim sanılıyor. Sonuç, kameranın gerçek
+    // duvarın içinden geçip arkasına oturması — oradan bakınca duvar arka yüz
+    // ayıklamasıyla kayboluyor ve oyun "duvardan geçiyorum" gibi görünüyor.
+    // (Kullanıcının tanılama kaydı bunu duvar#6 = çapraz duvar olarak gösterdi.)
+    float rx = ox - e.x;
+    float rz = oz - e.z;
+    float ldx = dx;
+    float ldz = dz;
+    if (abs_f3(e.yaw) > 0.01) {
+        float c = cos(e.yaw * DEG2RAD3);
+        float sn = sin(e.yaw * DEG2RAD3);
+        float nrx = rx * c - rz * sn;
+        float nrz = rx * sn + rz * c;
+        rx = nrx; rz = nrz;
+        ldx = dx * c - dz * sn;
+        ldz = dx * sn + dz * c;
+    }
+    ox = e.x + rx;
+    oz = e.z + rz;
+    dx = ldx;
+    dz = ldz;
     float tmin = 0.0;
     float tmax = 1.0;
     // X dilimi
@@ -3497,8 +3521,27 @@ func _s3_watch_cam3(cx, cy, cz) {
         Ent3 e = _e3[i];
         if (e.alive == 1 && e.tag == TAG_WALL) {
             float hx = e.sx * 0.5; float hy = e.sy * 0.5; float hz = e.sz * 0.5;
-            if (abs_f3(cx - e.x) < hx && abs_f3(cy - e.y) < hy
-                && abs_f3(cz - e.z) < hz) {
+            // Yaw ve şekil FARKINDA olmalı. İlk sürüm eksen-hizalı kutu
+            // varsayıyordu ve dönük duvarla silindir için YANLIŞ ALARM
+            // veriyordu (kullanıcının kaydındaki uyarıların çoğu buydu).
+            // Yalan söyleyen bir tanılama, tanılama olmaktan çıkar.
+            float rx = cx - e.x;
+            float rz = cz - e.z;
+            if (abs_f3(e.yaw) > 0.01) {
+                float c = cos(e.yaw * DEG2RAD3);
+                float sn = sin(e.yaw * DEG2RAD3);
+                float nrx = rx * c - rz * sn;
+                float nrz = rx * sn + rz * c;
+                rx = nrx; rz = nrz;
+            }
+            int ic = 0;
+            if (_is_round3(e)) {
+                // silindir: XZ'de daire, Y'de aralık
+                if (rx * rx + rz * rz < hx * hx && abs_f3(cy - e.y) < hy) { ic = 1; }
+            } else {
+                if (abs_f3(rx) < hx && abs_f3(cy - e.y) < hy && abs_f3(rz) < hz) { ic = 1; }
+            }
+            if (ic == 1) {
                 _w_cam_in = 1;
                 _lg_once(LOG_WARN, "camin" + toString(i),
                     "KAMERA GEOMETRIDE: duvar#" + toString(i)

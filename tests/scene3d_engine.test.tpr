@@ -1776,6 +1776,31 @@ func t_jump_clears_low_obstacle() {
     assert(get3z(p) > 6.0, "ziplayinca engeli GECEBILMELI");
 }
 
+// Kamera ışını DÖNÜK duvarı doğru hacimde sınamalı.
+//
+// Kullanıcının tanılama kaydı bunu ortaya çıkardı: kamera sürekli "duvar#6"nın
+// (45° dönük çapraz duvar) içindeydi. Işın testi yaw'ı yok sayıyor, 9x0.6'lık
+// dönük duvarı dünya X'i boyunca ince bir dilim sanıyordu — yani tamamen yanlış
+// bir hacim. Kamera gerçek duvarın içinden geçip arkasına oturuyordu.
+func t_camera_ray_respects_rotation() {
+    scene3d_reset();
+    no_ground3d();                 // yalniz duvar sinansin
+    int w = spawn3(0.0, 1.5, 0.0,  9.0, 3.0, 0.6, GRAY, SHAPE_CUBE, TAG_WALL);
+    set3yaw(w, 45.0);
+
+    // (A) GERÇEK duvarı kesen ama dönmemiş AABB'yi ISKALAYAN ışın.
+    // Duvarın uzun ekseni (0.707,-0.707); (2.83,-2.83) noktası duvarın üstünde.
+    // Işın oradan dik geçiyor ve z'si hiç [-0.3,0.3] aralığına girmiyor —
+    // eski (yaw'sız) test bunu "serbest" sanıyordu.
+    float t1 = _cam_clear_t3(1.83, 1.5, 0.0 - 3.83,  2.0, 0.0, 2.0);
+    assert(t1 < 1.0, "donuk duvari kesen isin ENGELLI olmali");
+
+    // (B) Tersi: dönmemiş AABB'yi kesen ama GERÇEK duvarı ıskalayan ışın.
+    // Eski test bunu yanlışlıkla "engelli" sayıp kamerayı sebepsiz çekerdi.
+    float t2 = _cam_clear_t3(0.0 - 4.0, 1.5, 0.0,  2.0, 0.0, 0.0);
+    assert(abs_f3(t2 - 1.0) < 0.001, "duvari iskalayan isin SERBEST olmali");
+}
+
 // ===========================================================================
 // Tanılama gözcüsü
 // ===========================================================================
@@ -2479,6 +2504,7 @@ test("kalabalik duvara sokamiyor", "t_crowd_cannot_push_player_into_wall");
 test("kosede sikisma tutuyor", "t_corner_squeeze_holds");
 test("engele yuruyunce tirmanmiyor", "t_walk_into_obstacle_does_not_climb");
 test("ziplayinca engeli geciyor", "t_jump_clears_low_obstacle");
+test("kamera isini donmeyi hesaba katiyor", "t_camera_ray_respects_rotation");
 test("gozcu batmayi goruyor", "t_watch_detects_penetration");
 test("gozcu kapaliyken sessiz", "t_watch_off_costs_nothing");
 test("kayit seviyesi ve tekrar bastirma", "t_log_level_and_dedup");
