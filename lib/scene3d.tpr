@@ -1310,13 +1310,27 @@ int   _aim_pitch_on3 = 0;   // dikey nişan (varsayılan KAPALI — bkz. _aim_di
 func aim_pitch3d(on) { if (on) { _aim_pitch_on3 = 1; } else { _aim_pitch_on3 = 0; } }
 func dikey_nisan3d(ac) { aim_pitch3d(ac); }
 
+// ⚠️ İKİ AYRI YAW SÖZLEŞMESİ VAR — karıştırmak sessiz 180° hataya yol açar:
+//     GÖVDE yönü : (sin(yaw),  cos(yaw))   ← move3d'nin atan2(wx, wz)'si
+//     KAMERA ileri: (sin(yaw), -cos(yaw))  ← _s3_camera'daki fx/fz
+// Kamera yaw'ını gövde formülüne koymak mermileri TAM TERS yöne atıyordu.
+// O yüzden burada açı değil, doğrudan YÖN VEKTÖRÜ kuruluyor ve her dal kendi
+// sözleşmesini kullanıyor.
 func _aim_dir3(owner) {
     int s = _slot_of3(owner);
-    float yaw = 0.0;
+    float fx = 0.0;
+    float fz = 1.0;
     float pitch = 0.0;
-    if (s >= 0) { Ent3 o = _e3[s]; yaw = o.yaw; }
+    if (s >= 0) {
+        Ent3 o = _e3[s];
+        float br = o.yaw * DEG2RAD3;
+        fx = sin(br);
+        fz = cos(br);                    // GÖVDE sözleşmesi
+    }
     if (owner == _cam_target && _cam_mode3 != CAM_FIXED) {
-        yaw = _cam_yaw3;
+        float cr = _cam_yaw3 * DEG2RAD3;
+        fx = sin(cr);
+        fz = 0.0 - cos(cr);              // KAMERA sözleşmesi (bkz. _s3_camera)
         // DİKEY bileşen varsayılan olarak ALINMIYOR: kamerayı yere doğru
         // eğmek nişanı da yere çeviriyordu, oysa yere bakmak "yere ateş et"
         // demek değil — üçüncü şahısta kamera eğimi çoğunlukla manzarayı
@@ -1326,10 +1340,9 @@ func _aim_dir3(owner) {
     }
     float pr = pitch * DEG2RAD3;
     float ch = cos(pr);
-    float yr = yaw * DEG2RAD3;
-    _aim_x3 = sin(yr) * ch;
+    _aim_x3 = fx * ch;
     _aim_y3 = sin(pr);
-    _aim_z3 = cos(yr) * ch;
+    _aim_z3 = fz * ch;
 }
 
 // Nişan yönü bileşenleri — kendi silahını yazan oyun için.

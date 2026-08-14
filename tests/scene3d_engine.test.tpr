@@ -1779,25 +1779,43 @@ func t_jump_clears_low_obstacle() {
 // Mermi BAKIŞ yönüne gitmeli, gövdenin yürüdüğü yöne değil.
 // `move3d` gövde yaw'ını HAREKET yönünden kuruyor; fare bakışı geldikten sonra
 // dururken/yan giderken mermi son yürünen yöne gidiyordu.
-func t_bullet_follows_camera_aim() {
+// Mermi, oyuncunun İLERİ yönüne gitmeli — yani "W'ye bassam nereye giderdim".
+//
+// Beklenti BİLEREK bağımsız bir kaynaktan alınıyor: `move3d`'nin ürettiği
+// dünya hızı. Önceki sürümde beklentiyi nişan formülünün kendisinden
+// türetmiştim ve test, formüldeki 180° hatayı ONAYLAMIŞTI (kamera ile gövde
+// iki AYRI yaw sözleşmesi kullanıyor). Bir testin beklentisi, sınadığı
+// koddan bağımsız bir yerden gelmeli.
+func _aim_vs_forward(cam_yaw) {
     scene3d_reset();
     no_ground3d();
     int p = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
     camera_orbit(p, 14.0, 9.0);
-    // Gövde +X'e bakıyor (yürüme yönü), kamera ise +Z'ye.
-    set3yaw(p, 90.0);
-    _cam_yaw3 = 0.0;
+    set3yaw(p, 123.0);          // gövde yönü ALAKASIZ olmalı
+    _cam_yaw3 = cam_yaw;
     _cam_pitch3 = 0.0;
-    int b = bullet3d(p, 20.0, 2.0);
-    Ent3 eb = _e3[_slot_of3(b)];
-    assert(eb.vz > 19.0, "mermi KAMERA yonune (+Z) gitmeli");
-    assert(abs_f3(eb.vx) < 1.0, "govde yonune (+X) GITMEMELI");
+    // 1) "İleri" yönü: move3d'ye ileri girdi ver, dünya hızını oku.
+    _gp_dz = 0.0 - 1.0;         // kol ileri (klavye penceresiz okunamaz)
+    move3d(p, 10.0);
+    Ent3 mv = _e3[_slot_of3(p)];
+    float fwx = mv.vx / 10.0;
+    float fwz = mv.vz / 10.0;
+    _gp_dz = 0.0;
+    // 2) Mermi yönü
+    Ent3 eb = _e3[_slot_of3(bullet3d(p, 20.0, 2.0))];
+    float bx = eb.vx / 20.0;
+    float bz = eb.vz / 20.0;
+    // İkisi AYNI yönü göstermeli (nokta çarpım ~ 1)
+    float dot = fwx * bx + fwz * bz;
+    assert(dot > 0.99, "mermi ILERI yonune gitmeli (kamera yaw="
+                       + toString(cam_yaw) + ")");
+}
 
-    // Kamera çevrilince mermi de çevrilmeli.
-    _cam_yaw3 = 90.0;
-    int b2 = bullet3d(p, 20.0, 2.0);
-    Ent3 eb2 = _e3[_slot_of3(b2)];
-    assert(eb2.vx > 19.0, "kamera +X'e bakinca mermi +X'e gitmeli");
+func t_bullet_follows_camera_aim() {
+    _aim_vs_forward(0.0);
+    _aim_vs_forward(90.0);
+    _aim_vs_forward(180.0);
+    _aim_vs_forward(0.0 - 135.0);
 }
 
 // Nişan YATAY: kamerayı eğmek mermiyi yere/göğe çevirmemeli.
@@ -1812,7 +1830,8 @@ func t_bullet_aim_is_horizontal_by_default() {
     _cam_pitch3 = 0.0 - 45.0;              // asagi bak
     Ent3 down = _e3[_slot_of3(bullet3d(p, 20.0, 2.0))];
     assert(abs_f3(down.vy) < 0.01, "asagi bakista mermi ASAGI GITMEMELI");
-    assert(down.vz > 19.0, "yatay hiz tam olmali (egimle kisalmamali)");
+    float sp = sqrt(down.vx * down.vx + down.vz * down.vz);
+    assert(sp > 19.9, "yatay hiz tam olmali (egimle kisalmamali)");
     _cam_pitch3 = 20.0;                    // yukari bak
     Ent3 up = _e3[_slot_of3(bullet3d(p, 20.0, 2.0))];
     assert(abs_f3(up.vy) < 0.01, "yukari bakista da dikey hiz yok");
