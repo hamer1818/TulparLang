@@ -1776,6 +1776,74 @@ func t_jump_clears_low_obstacle() {
     assert(get3z(p) > 6.0, "ziplayinca engeli GECEBILMELI");
 }
 
+// ===========================================================================
+// Tanılama gözcüsü
+// ===========================================================================
+// Gözcü, "duvardan geçiyorum" gibi bir şikâyeti ölçülebilir olguya çeviriyor.
+// Kendisi de test edilmeli: gerçek bir batmayı görmeli, temiz sahnede susmalı.
+func t_watch_detects_penetration() {
+    scene3d_reset();
+    debug3d(true);
+    log_echo3d(false);
+    ground3d(0.0);
+    spawn3(0.0, 1.5, 0.0,  6.0, 3.0, 2.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int p = spawn3(0.0, 1.0, 6.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    _bp_build3();
+    _s3_watch3();
+    assert_eq_int(_w_pen, 0);                 // uzaktayken temiz
+    // oyuncuyu duvarın TAM İÇİNE ışınla — çözüm çalıştırılmadan denetle
+    set3pos(p, 0.0, 1.0, 0.0);
+    _s3_watch3();
+    assert(_w_pen > 0, "gozcu batmayi gormeli");
+    assert(_w_pen_max > 0.5, "batma derinligi raporlanmali");
+    debug3d(false);
+}
+
+// Kapalıyken hiçbir şey yapmamalı — tanılama bedava olmalı.
+func t_watch_off_costs_nothing() {
+    scene3d_reset();
+    ground3d(0.0);
+    spawn3(0.0, 1.5, 0.0,  6.0, 3.0, 2.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int p = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    _bp_build3();
+    _s3_watch3();                              // gozcu KAPALI (varsayilan)
+    assert_eq_int(_w_pen, 0);
+    assert_eq_bool(debug_on3d(), false);
+}
+
+// Kayıt seviyesi süzüyor ve tekrar bastırma çalışıyor mu?
+func t_log_level_and_dedup() {
+    scene3d_reset();
+    debug3d(true);
+    log_echo3d(false);
+    log_level3d(LOG_WARN);                     // BILGI seviyesi elenmeli
+    log3d("bu gecmemeli");
+    assert_eq_int(_lg_n, 0);
+    log_warn3d("bu gecmeli");
+    assert_eq_int(_lg_n, 1);
+    log_err3d("hata da gecmeli");
+    assert_eq_int(_lg_n, 2);
+    // aynı anahtar penceresi içinde bastırılmalı
+    _lg_once(LOG_ERR, "k1", "ilk", 1000.0);
+    assert_eq_int(_lg_n, 3);
+    _lg_once(LOG_ERR, "k1", "ikinci", 1000.0);
+    assert_eq_int(_lg_n, 3);                   // bastirildi
+    debug3d(false);
+}
+
+// Kamera ARENANIN İÇİNDE kalmalı; gözcü dışarı çıkarsa bunu söylemeli.
+func t_watch_camera_inside_geometry() {
+    scene3d_reset();
+    debug3d(true);
+    log_echo3d(false);
+    spawn3(0.0, 1.5, 5.0,  6.0, 3.0, 2.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    _s3_watch_cam3(0.0, 1.5, 5.0);             // tam duvarin icinde
+    assert_eq_int(_w_cam_in, 1);
+    _s3_watch_cam3(0.0, 1.5, 20.0);            // uzakta
+    assert_eq_int(_w_cam_in, 0);
+    debug3d(false);
+}
+
 // Kamera duvarı ASLA geçmemeli — röntgen açıkken bile.
 //
 // Bir ara bunun tersi kodlanmıştı ("saydamlık zaten görüş sağlıyor, kamerayı
@@ -2411,6 +2479,10 @@ test("kalabalik duvara sokamiyor", "t_crowd_cannot_push_player_into_wall");
 test("kosede sikisma tutuyor", "t_corner_squeeze_holds");
 test("engele yuruyunce tirmanmiyor", "t_walk_into_obstacle_does_not_climb");
 test("ziplayinca engeli geciyor", "t_jump_clears_low_obstacle");
+test("gozcu batmayi goruyor", "t_watch_detects_penetration");
+test("gozcu kapaliyken sessiz", "t_watch_off_costs_nothing");
+test("kayit seviyesi ve tekrar bastirma", "t_log_level_and_dedup");
+test("gozcu kamerayi geometride goruyor", "t_watch_camera_inside_geometry");
 test("kamera dunyayi terk etmiyor", "t_camera_never_leaves_world");
 test("engel yokken tam mesafe", "t_camera_no_obstacle_keeps_distance");
 test("engel dunya biriminde cekiyor", "t_camera_obstacle_pulls_in_by_world_units");

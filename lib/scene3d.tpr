@@ -53,6 +53,7 @@ int K_Q = 81;   int K_E = 69;   // kamerayı klavyeyle çevir (fare yedeği)
 // exit_key(K_NONE) olmadan ESC pencereyi kapatır ve hiç yakalanamaz.
 int K_ESC = 256; int K_ENTER = 257; int K_BACKSPACE = 259;
 int K_R = 82;    int K_P = 80;      int K_NONE = 0;
+int K_F1 = 290;  int K_F2 = 291;    int K_F3 = 292;
 
 float DEG2RAD3 = 0.01745329;
 float RAD2DEG3 = 57.29578;
@@ -425,6 +426,10 @@ func scene3d_reset() {
     // kuralının ayakta kalması tutarsız olurdu (ve testleri sıraya bağımlı
     // yapıyordu — kapatan bir test sonrakini etkiliyordu).
     _cam_xray3 = 1; _fade_a3 = 70; _fade3 = [];
+    // Tanılama AYARLARI kullanıcı tercihi, kalır; TAMPON sahneyle gider.
+    _lg_txt = []; _lg_sev = []; _lg_n = 0;
+    _lg_key = []; _lg_t = []; _lg_cnt = [];
+    _w_pen = 0; _w_pen_max = 0.0; _w_cam_in = 0;
     _hit_me = 0 - 1; _hit_other = 0 - 1;
 }
 
@@ -2919,6 +2924,7 @@ func _s3_camera(dt) {
     // Çarpışma çözümünden SONRA: çözüm kamerayı aşağı taşımış olabilir.
     if (_ground_on == 1 && cy < _ground_y + 0.8) { cy = _ground_y + 0.8; }
     _s3_mark_fade3(cx, cy, cz, t.x, t.y, t.z, ct);
+    _s3_watch_cam3(cx, cy, cz);
     camera3d(cx, cy, cz,   t.x, t.y, t.z,  _cam_fov);
 }
 
@@ -3296,6 +3302,278 @@ func _s3_daynight(dt) {
     if (_fog3 > 0.0) { fog_sky(_fog3); }
 }
 
+// ===========================================================================
+// Tanılama: kayıt (log) + ekran örtüsü + gözcüler
+// ===========================================================================
+// Unity'nin Console'u / Unreal'in `stat` komutları gibi: oyunun İÇİNDE ne olup
+// bittiğini görmek için. Bu katmanın var olma sebebi somut — bir çarpışma
+// hatası masaüstünde görülüyor ama penceresiz testlerde YENİDEN ÜRETİLEMİYORDU.
+// Tahmin yürütmek yerine ölçmek gerekiyordu.
+//
+// Üç parça:
+//   1. KAYIT — seviyeli, kategorili, tekrar bastırmalı halka tampon.
+//   2. ÖRTÜ  — ekranda canlı durum (F1) + son kayıtlar.
+//   3. GÖZCÜ — her kare DEĞİŞMEZLERİ denetler ve bozulanı bağırarak bildirir.
+//      Asıl değer burada: "duvarın içinden geçiyorum" gibi bir şikâyet, artık
+//      "hangi kare, hangi entity, ne kadar batmış" cevabına dönüşüyor.
+int LOG_ERR   = 0;
+int LOG_WARN  = 1;
+int LOG_INFO  = 2;
+int LOG_TRACE = 3;
+
+int   _lg_on    = 0;        // kayıt açık mı
+int   _lg_lvl   = 2;        // bu seviyeye kadar kaydet
+int   _lg_echo  = 1;        // konsola da bas
+int   _lg_ovl   = 0;        // ekran örtüsü
+int   _lg_watch = 0;        // gözcüler
+int   _LG_CAP   = 240;      // halka tampon boyu
+array _lg_txt = [];
+array _lg_sev = [];
+int   _lg_n   = 0;          // toplam kayıt (tampon sarabilir)
+
+// Tekrar bastırma: aynı anahtar saniyede bir kez. Çarpışma hatası 60 FPS'te
+// saniyede 60 satır üretir ve gerçek bilgiyi boğar.
+array _lg_key = [];
+array _lg_t   = [];
+array _lg_cnt = [];
+
+func _lg_now(): float { return elapsed(); }
+
+func log_level3d(n) { _lg_lvl = n; }
+func log_seviye3d(n) { log_level3d(n); }
+func log_echo3d(on) { if (on) { _lg_echo = 1; } else { _lg_echo = 0; } }
+
+// Kaydı aç. Örtü ve gözcüler de birlikte gelir — tanılama isteyen hepsini ister.
+func debug3d(on) {
+    if (on) { _lg_on = 1; _lg_ovl = 1; _lg_watch = 1; }
+    else { _lg_on = 0; _lg_ovl = 0; _lg_watch = 0; }
+}
+func hata_ayikla3d(ac) { debug3d(ac); }
+func debug_overlay3d(on) { if (on) { _lg_ovl = 1; } else { _lg_ovl = 0; } }
+func ekran_log3d(ac) { debug_overlay3d(ac); }
+func watch3d(on) { if (on) { _lg_watch = 1; } else { _lg_watch = 0; } }
+func gozcu3d(ac) { watch3d(ac); }
+func debug_on3d(): bool { return _lg_on == 1; }
+
+func _lg_sev_ad(sev): str {
+    if (sev == LOG_ERR)  { return "[HATA] "; }
+    if (sev == LOG_WARN) { return "[UYARI] "; }
+    if (sev == LOG_TRACE) { return "[IZ] "; }
+    return "[BILGI] ";
+}
+
+func _lg_push(sev, msg) {
+    if (_lg_on == 0) { return; }
+    if (sev > _lg_lvl) { return; }
+    str line = _lg_sev_ad(sev) + msg;
+    if (length(_lg_txt) < _LG_CAP) {
+        push(_lg_txt, line); push(_lg_sev, sev);
+    } else {
+        int slot = mod(_lg_n, _LG_CAP);
+        _lg_txt[slot] = line; _lg_sev[slot] = sev;
+    }
+    _lg_n = _lg_n + 1;
+    if (_lg_echo == 1) { print(line); }
+}
+
+// Anahtarlı kayıt: aynı anahtar `sec` saniye içinde yalnız bir kez geçer,
+// bastırılan tekrarlar sayılıp bir sonraki satırda bildirilir.
+func _lg_once(sev, key, msg, sec) {
+    if (_lg_on == 0) { return; }
+    if (sev > _lg_lvl) { return; }
+    float now = _lg_now();
+    int i = 0;
+    int n = length(_lg_key);
+    while (i < n) {
+        if (_lg_key[i] == key) {
+            if (now - _lg_t[i] < sec) {
+                _lg_cnt[i] = _lg_cnt[i] + 1;
+                return;
+            }
+            str ek = "";
+            if (_lg_cnt[i] > 0) { ek = "  (+" + toString(_lg_cnt[i]) + " tekrar)"; }
+            _lg_t[i] = now; _lg_cnt[i] = 0;
+            _lg_push(sev, msg + ek);
+            return;
+        }
+        i = i + 1;
+    }
+    push(_lg_key, key); push(_lg_t, now); push(_lg_cnt, 0);
+    _lg_push(sev, msg);
+}
+
+func log3d(msg) { _lg_push(LOG_INFO, msg); }
+func log_warn3d(msg) { _lg_push(LOG_WARN, msg); }
+func log_err3d(msg) { _lg_push(LOG_ERR, msg); }
+func kayit3d(msg) { log3d(msg); }
+func uyari3d(msg) { log_warn3d(msg); }
+func hata3d(msg) { log_err3d(msg); }
+
+// Halka tamponu dosyaya yaz. Oyun kapanırken de otomatik çağrılabilir.
+func log_dump3d(path) {
+    str all = "";
+    int n = length(_lg_txt);
+    int start = 0;
+    if (_lg_n > _LG_CAP) { start = mod(_lg_n, _LG_CAP); }
+    int i = 0;
+    while (i < n) {
+        all = all + _lg_txt[mod(start + i, n)] + "\n";
+        i = i + 1;
+    }
+    save_data(path, all);
+}
+func log_kaydet3d(yol) { log_dump3d(yol); }
+
+func _lg_f2(v): str {
+    // İki ondalık — ham float ekranda 7 hane basıyor ve okunmuyor.
+    float k = v * 100.0;
+    int r = toInt(k);
+    float f = r * 0.01;
+    return toString(f);
+}
+
+// ---- Gözcüler: kare sonunda DEĞİŞMEZLERİ denetle ---------------------------
+// Bu, log sisteminin asıl işi. Bir şikâyeti ("duvardan geçiyorum") ölçülebilir
+// bir olguya çeviriyor: hangi entity, ne kadar batmış, hangi karede.
+int _w_pen = 0;         // bu kare tespit edilen batma sayısı
+float _w_pen_max = 0.0; // en derin batma
+int _w_cam_in = 0;      // kamera geometrinin içinde mi
+
+func _s3_watch3() {
+    if (_lg_watch == 0) { return; }
+    int n = length(_e3);
+    _w_pen = 0; _w_pen_max = 0.0;
+    // 1) Hareketli katı gövde, statik katının İÇİNDE kalmış mı?
+    // Çarpışma çözümünden SONRA bunun sıfır olması gerekiyor.
+    int a = 0;
+    while (a < n) {
+        Ent3 ea = _e3[a];
+        if (_is_solid3(ea) && !_is_static_solid3(ea)) {
+            int b = 0;
+            while (b < n) {
+                if (a != b && !_bp_far3(a, b)) {
+                    Ent3 eb = _e3[b];
+                    if (_is_solid3(eb) && _is_static_solid3(eb)) {
+                        if (_mtv3(a, b)) {
+                            float d = sqrt(_mtv_x * _mtv_x + _mtv_y * _mtv_y
+                                           + _mtv_z * _mtv_z);
+                            if (d > 0.01) {
+                                _w_pen = _w_pen + 1;
+                                if (d > _w_pen_max) { _w_pen_max = d; }
+                                _lg_once(LOG_ERR, "pen" + toString(a) + "_" + toString(b),
+                                    "BATMA: entity#" + toString(a) + " (etiket "
+                                    + toString(ea.tag) + ") statik#" + toString(b)
+                                    + " icinde, derinlik " + _lg_f2(d)
+                                    + " @ (" + _lg_f2(ea.x) + "," + _lg_f2(ea.y)
+                                    + "," + _lg_f2(ea.z) + ")", 1.0);
+                            }
+                        }
+                    }
+                }
+                b = b + 1;
+            }
+        }
+        a = a + 1;
+    }
+    // 2) Oyuncu zeminin altına düştü mü?
+    int ts = _slot_of3(_cam_target);
+    if (ts >= 0) {
+        Ent3 t = _e3[ts];
+        float floor_y = _floor_at3(t.x, t.z);
+        if (t.y - t.sy * 0.5 < floor_y - 0.5) {
+            _lg_once(LOG_ERR, "under", "ZEMIN ALTI: hedef y=" + _lg_f2(t.y)
+                + " zemin=" + _lg_f2(floor_y), 1.0);
+        }
+    }
+}
+
+// Kamera geometrinin içinde mi? (Ayrı, çünkü kamera çizimden hemen önce kurulur.)
+func _s3_watch_cam3(cx, cy, cz) {
+    if (_lg_watch == 0) { return; }
+    _w_cam_in = 0;
+    int n = length(_e3);
+    int i = 0;
+    while (i < n) {
+        Ent3 e = _e3[i];
+        if (e.alive == 1 && e.tag == TAG_WALL) {
+            float hx = e.sx * 0.5; float hy = e.sy * 0.5; float hz = e.sz * 0.5;
+            if (abs_f3(cx - e.x) < hx && abs_f3(cy - e.y) < hy
+                && abs_f3(cz - e.z) < hz) {
+                _w_cam_in = 1;
+                _lg_once(LOG_WARN, "camin" + toString(i),
+                    "KAMERA GEOMETRIDE: duvar#" + toString(i)
+                    + " icinde @ (" + _lg_f2(cx) + "," + _lg_f2(cy) + ","
+                    + _lg_f2(cz) + ")", 1.0);
+            }
+        }
+        i = i + 1;
+    }
+}
+
+// ---- Ekran örtüsü ----------------------------------------------------------
+func _s3_overlay3() {
+    if (_lg_ovl == 0) { return; }
+    float w = _win_w * 0.42;
+    if (w < 300.0) { w = 300.0; }
+    rect(_win_w - w - 8.0, 8.0, w, _win_h - 16.0, rgba(6, 8, 14, 205));
+    int x = toInt(_win_w - w);
+    int y = 16;
+    text("TANILAMA  (F1 kapat)", x, y, 18, rgb(120, 220, 255));
+    y = y + 24;
+    text("FPS " + toString(get_fps()) + "   entity " + toString(alive_count3d())
+         + "/" + toString(length(_e3)), x, y, 16, RAYWHITE);
+    y = y + 20;
+    int ts = _slot_of3(_cam_target);
+    if (ts >= 0) {
+        Ent3 t = _e3[ts];
+        text("poz  " + _lg_f2(t.x) + " " + _lg_f2(t.y) + " " + _lg_f2(t.z),
+             x, y, 16, GOLD); y = y + 18;
+        text("hiz  " + _lg_f2(t.vx) + " " + _lg_f2(t.vy) + " " + _lg_f2(t.vz),
+             x, y, 16, GOLD); y = y + 18;
+        str g = "havada";
+        if (t.grounded == 1) { g = "zeminde"; }
+        text("durum " + g + "   zemin " + _lg_f2(_floor_at3(t.x, t.z)),
+             x, y, 16, GOLD); y = y + 20;
+    }
+    // Kamera
+    str md = "sabit";
+    if (_cam_mode3 == CAM_ORBIT) { md = "yorunge"; }
+    if (_cam_mode3 == CAM_FPS)   { md = "fpv"; }
+    text("kamera " + md + "  mesafe " + _lg_f2(_cam_cur3) + "/" + _lg_f2(_cam_dist),
+         x, y, 16, SKYBLUE); y = y + 18;
+    text("yukselme " + _lg_f2(_cam_lift3 * RAD2DEG3) + " derece", x, y, 16, SKYBLUE);
+    y = y + 18;
+    int fadec = 0;
+    int fi = 0;
+    while (fi < length(_fade3)) { if (_fade3[fi] == 1) { fadec = fadec + 1; } fi = fi + 1; }
+    text("saydam " + toString(fadec) + "   bolge " + toString(trigger_count3d()),
+         x, y, 16, SKYBLUE); y = y + 20;
+    // Gözcü durumu — kırmızıysa gerçek bir değişmez bozulmuş demektir.
+    int wc = rgb(120, 240, 140);
+    str ws = "gozcu: temiz";
+    if (_w_pen > 0) {
+        wc = rgb(255, 90, 90);
+        ws = "BATMA x" + toString(_w_pen) + "  derinlik " + _lg_f2(_w_pen_max);
+    }
+    if (_w_cam_in == 1) { wc = rgb(255, 170, 60); ws = ws + "  KAMERA ICERIDE"; }
+    text(ws, x, y, 16, wc); y = y + 24;
+    // Son kayıtlar
+    text("--- son kayitlar ---", x, y, 14, rgb(150, 160, 180)); y = y + 18;
+    int cap = length(_lg_txt);
+    int show = 14;
+    int k = 0;
+    while (k < show && k < cap) {
+        int idx = mod(_lg_n - 1 - k + _LG_CAP * 4, cap);
+        int sev = _lg_sev[idx];
+        int c = rgb(200, 205, 215);
+        if (sev == LOG_ERR)  { c = rgb(255, 110, 110); }
+        if (sev == LOG_WARN) { c = rgb(255, 200, 90); }
+        text(_lg_txt[idx], x, y, 13, c);
+        y = y + 15;
+        k = k + 1;
+    }
+}
+
 // ---- Yönetilen döngü -------------------------------------------------------
 func play3d() {
     if (!window(_win_w, _win_h, _win_title)) { return; }
@@ -3365,6 +3643,18 @@ func play3d() {
         _read_touch3();     // dokunmatik (move3d/jump_pressed okur)
         _read_gamepad3();   // kol — aynı desen, bkz. _read_gamepad3
 
+        // F1 tanılama örtüsünü aç/kapar. Duraklatmada da çalışır — donmuş bir
+        // kareyi incelemek tam da gereken şey.
+        // F2: kayıt tamponunu dosyaya dök — hata bildirirken eklenecek şey.
+        if (key_pressed(K_F2)) {
+            log_dump3d("scene3d_log.txt");
+            _lg_push(LOG_INFO, "kayit dosyaya yazildi: scene3d_log.txt");
+        }
+        if (key_pressed(K_F1)) {
+            if (_lg_ovl == 1) { _lg_ovl = 0; }
+            else { _lg_on = 1; _lg_ovl = 1; _lg_watch = 1; }
+        }
+
         if (_s3_ui == UI_NONE && _game_over3 == 0) {
             if (key_pressed(K_ESC) || key_pressed(K_P) || key_pressed(K_BACKSPACE)
                 || _gp_start == 1) {
@@ -3400,6 +3690,9 @@ func play3d() {
             // Bölüm geçişinden ÖNCE: bir bölge kancası `bolum_gec3d()` çağırırsa
             // aşağıdaki satır onu bu karenin sonunda uygular.
             _s3_triggers();
+            // Gözcü EN SONDA: bütün çözümler bittikten sonra hâlâ bozuk olan
+            // bir değişmez varsa, o gerçekten bozuktur.
+            _s3_watch3();
             // Bölüm geçişi KARE SONUNDA, çarpışma döngüsü bittikten sonra:
             // entity store'u döngünün ortasında silmek slot'ları ayağının
             // altından çekerdi. İstek nereden gelirse gelsin burada uygulanır.
@@ -3457,6 +3750,8 @@ func play3d() {
         if (_s3_ui == UI_TITLE)      { _s3_title_draw(); }
         else if (_s3_ui == UI_PAUSE) { _s3_pause_draw(); }
         else if (_game_over3 == 1)   { _s3_over_draw(); }
+        // Tanılama HER ŞEYİN ÜSTÜNDE: menü örtüsü açıkken de okunabilmeli.
+        _s3_overlay3();
         frame_end();
 
         // Girdi çizimden SONRA okunuyor: düğmeler bu karede zaten çizilmiş
