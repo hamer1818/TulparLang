@@ -170,6 +170,9 @@ float _cam_pad3  = 0.35;   // çarpma noktasının bu kadar berisinde dur
 float _cam_near3 = 2.2;    // hedefe en fazla bu kadar yaklaş
 float _cam_ease3 = 8.0;    // engel kalkınca geri açılma hızı (1/sn)
 float _cam_cur3  = 0.0;    // yumuşatma durumu (0 = henüz kurulmadı → anında)
+float _cam_lift3 = 0.0;    // engelin üstüne çıkmak için eklenen eğim (radyan)
+float _CAM_LIFT_MAX3  = 0.52;   // ~30° — kurtarma hamlesi, kuş bakışı değil
+float _CAM_LIFT_STEP3 = 0.17;   // ~10° adım
 
 // RÖNTGEN: kamerayı içeri çekmek yerine, kamerayla oyuncu ARASINA giren
 // cisimleri saydam çiz. Üçüncü şahıs oyunlarının standart çözümü ve daha
@@ -416,7 +419,8 @@ func scene3d_reset() {
     // yeniden kurulur. Bırakılsa yeniden başlatılan sahne önceki turun
     // bakış açısıyla açılırdı.
     _cam_mode3 = CAM_FIXED; _cam_yaw3 = 0.0; _cam_pitch3 = 0.0; _cam_lock3 = 0;
-    _cam_cur3 = 0.0; _cam_near3 = 2.2; _cam_pad3 = 0.35; _cam_ease3 = 8.0;
+    _cam_cur3 = 0.0; _cam_lift3 = 0.0;
+    _cam_near3 = 2.2; _cam_pad3 = 0.35; _cam_ease3 = 8.0;
     // Röntgen de sahne durumu: reset kamerayı zaten sıfırlıyor, saydamlık
     // kuralının ayakta kalması tutarsız olurdu (ve testleri sıraya bağımlı
     // yapıyordu — kapatan bir test sonrakini etkiliyordu).
@@ -2868,19 +2872,37 @@ func _s3_camera(dt) {
     //   2. Yükselmek yetmediyse YAKINLAŞTIR (eski davranış, dünya birimi
     //      tabanla). Son çare, çünkü yakınlaşmak yönelimi bozuyor.
     if (_cam_collide3 == 1) {
+        // Gereken ek eğimi bul: engel temizlenene kadar küçük adımlarla yükselt.
+        // ÜST SINIR DAR (30°) ve sonuç YUMUŞATILIYOR — sınır geniş olduğunda
+        // (74°) kamera çapraz bakıştan kuş bakışına atlıyordu, üstelik kare
+        // kare, çünkü değer doğrudan uygulanıyordu. Yükseltme bir kurtarma
+        // hamlesi olmalı, kamera açısını ele geçiren bir şey değil.
+        float want = 0.0;
         float ct2 = _cam_clear_t3(t.x, t.y, t.z, cx - t.x, cy - t.y, cz - t.z);
-        float pmax = 74.0 * DEG2RAD3;
         int tries = 0;
-        while (ct2 < 0.999 && tries < 5 && pr < pmax) {
-            pr = pr + 12.0 * DEG2RAD3;
-            if (pr > pmax) { pr = pmax; }
-            horiz = _cam_dist * cos(pr);
-            cx = t.x - fx * horiz;
-            cz = t.z - fz * horiz;
-            cy = t.y + _cam_dist * sin(pr);
-            ct2 = _cam_clear_t3(t.x, t.y, t.z, cx - t.x, cy - t.y, cz - t.z);
+        while (ct2 < 0.999 && tries < 3) {
+            want = want + _CAM_LIFT_STEP3;
+            if (want > _CAM_LIFT_MAX3) { want = _CAM_LIFT_MAX3; }
+            float tp = pr + want;
+            float th = _cam_dist * cos(tp);
+            ct2 = _cam_clear_t3(t.x, t.y, t.z,
+                                (t.x - fx * th) - t.x,
+                                (t.y + _cam_dist * sin(tp)) - t.y,
+                                (t.z - fz * th) - t.z);
             tries = tries + 1;
+            if (want >= _CAM_LIFT_MAX3) { tries = 3; }
         }
+        // Yumuşat: yukarı çabuk (görüş açılsın), aşağı yavaş (kamera sallanmasın).
+        float lk = 6.0 * dt;
+        if (want < _cam_lift3) { lk = 2.5 * dt; }
+        if (lk > 1.0) { lk = 1.0; }
+        _cam_lift3 = _cam_lift3 + (want - _cam_lift3) * lk;
+        pr = pr + _cam_lift3;
+        horiz = _cam_dist * cos(pr);
+        cx = t.x - fx * horiz;
+        cz = t.z - fz * horiz;
+        cy = t.y + _cam_dist * sin(pr);
+        ct2 = _cam_clear_t3(t.x, t.y, t.z, cx - t.x, cy - t.y, cz - t.z);
         float rdx = cx - t.x;
         float rdy = cy - t.y;
         float rdz = cz - t.z;
@@ -3039,7 +3061,7 @@ func camera_orbit(target, dist, height) {
     // Yumuşatma durumunu sıfırla: yeni bölüm/yeni hedef, önceki sahnede
     // sıkışmış mesafeyi miras almasın (kamera açılana kadar bir an dibinde
     // başlardı).
-    _cam_cur3 = 0.0;
+    _cam_cur3 = 0.0; _cam_lift3 = 0.0;
 }
 
 // Kamera-engel davranışının ayarları — hepsi DÜNYA BİRİMİ.
