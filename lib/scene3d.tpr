@@ -1296,23 +1296,58 @@ func in_range3d(a, b, r): bool {
 // ve zemin teması mermilere uygulanmaz (bkz. _s3_physics) — düz uçar.
 // Ömrü dolan ya da dünya sınırını aşan mermi kendiliğinden ölür; bu olmadan
 // ıskalayan her mermi sonsuza kadar entity store'da kalırdı.
+// Nişan yönü: OYUNCU için BAKIŞ yönü, başkası için gövdenin yönü.
+//
+// Ayrım şart: `move3d` gövdenin yaw'ını HAREKET yönünden kuruyor, bakıştan
+// değil. Dururken ya da yan giderken mermi son yürünen yöne gidiyordu — fare
+// bakışı geldikten sonra bu iyice yanlış hissettiriyor. Düşmanlar ise kendi
+// yönlerine ateş etmeli, o yüzden kural yalnız kamera hedefine uygulanıyor.
+// Sabit kamerada bakış yönü diye bir şey yok, orada da gövde yönü kalır.
+float _aim_x3 = 0.0; float _aim_y3 = 0.0; float _aim_z3 = 1.0;
+
+func _aim_dir3(owner) {
+    int s = _slot_of3(owner);
+    float yaw = 0.0;
+    float pitch = 0.0;
+    if (s >= 0) { Ent3 o = _e3[s]; yaw = o.yaw; }
+    if (owner == _cam_target && _cam_mode3 != CAM_FIXED) {
+        yaw = _cam_yaw3;
+        pitch = _cam_pitch3;      // dikey nişan: yukarı/aşağı bakış
+    }
+    float pr = pitch * DEG2RAD3;
+    float ch = cos(pr);
+    float yr = yaw * DEG2RAD3;
+    _aim_x3 = sin(yr) * ch;
+    _aim_y3 = sin(pr);
+    _aim_z3 = cos(yr) * ch;
+}
+
+// Nişan yönü bileşenleri — kendi silahını yazan oyun için.
+func aim_x3d(id): float { _aim_dir3(id); return _aim_x3; }
+func aim_y3d(id): float { _aim_dir3(id); return _aim_y3; }
+func aim_z3d(id): float { _aim_dir3(id); return _aim_z3; }
+func nisan_x3d(id): float { return aim_x3d(id); }
+func nisan_y3d(id): float { return aim_y3d(id); }
+func nisan_z3d(id): float { return aim_z3d(id); }
+
 func bullet3d(owner, speed, life): int {
     int s = _slot_of3(owner);
     if (s < 0) { return 0 - 1; }
     Ent3 o = _e3[s];
-    float yr = o.yaw * DEG2RAD3;
-    float fx = sin(yr);
-    float fz = cos(yr);
+    _aim_dir3(owner);
+    float fx = _aim_x3;
+    float fy = _aim_y3;
+    float fz = _aim_z3;
     // gövdenin önüne çıkar: yarı-boy + merminin yarıçapı kadar
     float off = o.sx * 0.5 + 0.45;
-    int id = spawn3(o.x + fx * off, o.y, o.z + fz * off,
+    int id = spawn3(o.x + fx * off, o.y + fy * off, o.z + fz * off,
                     0.4, 0.4, 0.4, rgb(255, 220, 90), SHAPE_SPHERE, TAG_BULLET);
     int bs = _slot_of3(id);
     Ent3 b = _e3[bs];
     b.vx = fx * speed;
+    b.vy = fy * speed;      // mermi yerçekimi almıyor, dikey nişan düz uçar
     b.vz = fz * speed;
-    b.vy = 0.0;
-    b.yaw = o.yaw;
+    b.yaw = atan2(fx, fz) * RAD2DEG3;
     b.life = life;
     b.owner = owner;
     _e3[bs] = b;
