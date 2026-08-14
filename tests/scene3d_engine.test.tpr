@@ -1837,6 +1837,84 @@ func t_bullet_aim_is_horizontal_by_default() {
     assert(abs_f3(up.vy) < 0.01, "yukari bakista da dikey hiz yok");
 }
 
+// AIM_BODY: kameradan BAĞIMSIZ, gövdenin baktığı yön (twin-stick).
+func t_aim_mode_body() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    camera_orbit(p, 14.0, 9.0);
+    _cam_yaw3 = 90.0;              // kamera +X'e bakiyor
+    set3yaw(p, 0.0);               // govde +Z'ye
+    nisan_modu3d(AIM_BODY);
+    Ent3 b = _e3[_slot_of3(bullet3d(p, 20.0, 2.0))];
+    assert(b.vz > 19.0, "AIM_BODY govde yonune atmali");
+    assert(abs_f3(b.vx) < 1.0, "kamera yonune GITMEMELI");
+    nisan_modu3d(AIM_FLAT);
+}
+
+// AIM_LOCK: menzildeki en yakın hedefe kilitlenir, yüksekliğini de tutar.
+func t_aim_mode_lock() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    camera_orbit(p, 14.0, 9.0);
+    _cam_yaw3 = 0.0;
+    // Uzak ve YAKIN iki dusman; yakin olan secilmeli.
+    spawn3(0.0, 1.0, 20.0,  1.3, 2.0, 1.3, RED, SHAPE_CUBE, TAG_ENEMY);
+    spawn3(8.0, 5.0, 0.0,   1.3, 2.0, 1.3, RED, SHAPE_CUBE, TAG_ENEMY);
+    nisan_kilit3d(TAG_ENEMY, 25.0);
+    Ent3 b = _e3[_slot_of3(bullet3d(p, 20.0, 2.0))];
+    assert(b.vx > 15.0, "en yakin hedefe (+X) donmeli");
+    assert(b.vy > 4.0, "kilitlenme hedefin YUKSEKLIGINI de tutmali");
+
+    // Menzil disinda kalirsa yatay kamera yonune duser.
+    nisan_kilit3d(TAG_ENEMY, 2.0);
+    Ent3 b2 = _e3[_slot_of3(bullet3d(p, 20.0, 2.0))];
+    assert(abs_f3(b2.vy) < 0.01, "menzil disinda dikey bilesen olmamali");
+    nisan_modu3d(AIM_FLAT);
+}
+
+// Saçılma: koni açılınca mermiler dağılmalı; AIM_FLAT'te DİKEY saçılma olmamalı
+// (yatay nişanlı oyunda pompalı mermilerinin yere saçılması istenmez).
+func t_aim_spread() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    camera_orbit(p, 14.0, 9.0);
+    _cam_yaw3 = 0.0;
+    nisan_sacilma3d(0.0);
+    Ent3 a1 = _e3[_slot_of3(bullet3d(p, 20.0, 2.0))];
+    Ent3 a2 = _e3[_slot_of3(bullet3d(p, 20.0, 2.0))];
+    assert(abs_f3(a1.vx - a2.vx) < 0.001, "sacilma 0 iken mermiler ayni");
+
+    nisan_sacilma3d(15.0);
+    int farkli = 0;
+    float maxy = 0.0;
+    int i = 0;
+    while (i < 20) {
+        Ent3 b = _e3[_slot_of3(bullet3d(p, 20.0, 2.0))];
+        if (abs_f3(b.vx) > 0.2) { farkli = farkli + 1; }
+        if (abs_f3(b.vy) > maxy) { maxy = abs_f3(b.vy); }
+        i = i + 1;
+    }
+    assert(farkli > 10, "sacilma acikken mermiler dagilmali");
+    assert(maxy < 0.01, "AIM_FLAT'te DIKEY sacilma olmamali");
+    nisan_sacilma3d(0.0);
+}
+
+// Pompalı: tek çağrı n mermi üretmeli.
+func t_shotgun() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    camera_orbit(p, 14.0, 9.0);
+    nisan_sacilma3d(12.0);
+    int before = alive_count3d();
+    pompali3d(p, 20.0, 2.0, 6);
+    assert_eq_int(alive_count3d() - before, 6);
+    nisan_sacilma3d(0.0);
+}
+
 // ...ama isteyen oyun dikey nişanı açabilmeli (uçan hedefler).
 func t_bullet_pitch_is_opt_in() {
     scene3d_reset();
@@ -2639,6 +2717,10 @@ test("ziplayinca engeli geciyor", "t_jump_clears_low_obstacle");
 test("mermi bakis yonune gidiyor", "t_bullet_follows_camera_aim");
 test("nisan varsayilan YATAY", "t_bullet_aim_is_horizontal_by_default");
 test("dikey nisan istege bagli", "t_bullet_pitch_is_opt_in");
+test("nisan modu: govde", "t_aim_mode_body");
+test("nisan modu: kilitlenme", "t_aim_mode_lock");
+test("nisan sacilmasi", "t_aim_spread");
+test("pompali n mermi atiyor", "t_shotgun");
 test("dusman kendi yonune atiyor", "t_enemy_bullet_uses_own_yaw");
 test("tps kamerasinda fare bakisi acik", "t_orbit_camera_has_mouse_look");
 test("kamera yakinlasmak yerine saydamlastiriyor", "t_camera_prefers_fade_over_zooming_in");

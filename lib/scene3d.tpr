@@ -427,7 +427,7 @@ func scene3d_reset() {
     // Röntgen de sahne durumu: reset kamerayı zaten sıfırlıyor, saydamlık
     // kuralının ayakta kalması tutarsız olurdu (ve testleri sıraya bağımlı
     // yapıyordu — kapatan bir test sonrakini etkiliyordu).
-    _cam_xray3 = 1; _fade_a3 = 70; _fade3 = []; _aim_pitch_on3 = 0;
+    _cam_xray3 = 1; _fade_a3 = 70; _fade3 = []; _aim_mode3 = AIM_FLAT; _aim_spread3 = 0.0;
     // Tanılama AYARLARI kullanıcı tercihi, kalır; TAMPON sahneyle gider.
     _lg_txt = []; _lg_sev = []; _lg_n = 0;
     _lg_key = []; _lg_t = []; _lg_cnt = [];
@@ -1296,53 +1296,133 @@ func in_range3d(a, b, r): bool {
 // ve zemin teması mermilere uygulanmaz (bkz. _s3_physics) — düz uçar.
 // Ömrü dolan ya da dünya sınırını aşan mermi kendiliğinden ölür; bu olmadan
 // ıskalayan her mermi sonsuza kadar entity store'da kalırdı.
-// Nişan yönü: OYUNCU için BAKIŞ yönü, başkası için gövdenin yönü.
+// ===========================================================================
+// Nişan mekanikleri
+// ===========================================================================
+// Her oyunun ateş etme hissi farklı: üçüncü şahıs aksiyonda kameranın YATAY
+// yönü doğrudur (yere bakmak "yere ateş et" demek değil), nişancı oyunda tam
+// bakış yönü gerekir, twin-stick'te gövdenin baktığı yön, boss dövüşünde
+// kilitlenme. Motor bunları seçenek olarak veriyor; oyun tek satırla seçiyor.
 //
-// Ayrım şart: `move3d` gövdenin yaw'ını HAREKET yönünden kuruyor, bakıştan
-// değil. Dururken ya da yan giderken mermi son yürünen yöne gidiyordu — fare
-// bakışı geldikten sonra bu iyice yanlış hissettiriyor. Düşmanlar ise kendi
-// yönlerine ateş etmeli, o yüzden kural yalnız kamera hedefine uygulanıyor.
-// Sabit kamerada bakış yönü diye bir şey yok, orada da gövde yönü kalır.
-float _aim_x3 = 0.0; float _aim_y3 = 0.0; float _aim_z3 = 1.0;
-int   _aim_pitch_on3 = 0;   // dikey nişan (varsayılan KAPALI — bkz. _aim_dir3)
-
-// Dikey nişanı aç/kapat. Kapalıyken mermi kameranın yatay yönüne gider.
-func aim_pitch3d(on) { if (on) { _aim_pitch_on3 = 1; } else { _aim_pitch_on3 = 0; } }
-func dikey_nisan3d(ac) { aim_pitch3d(ac); }
-
 // ⚠️ İKİ AYRI YAW SÖZLEŞMESİ VAR — karıştırmak sessiz 180° hataya yol açar:
 //     GÖVDE yönü : (sin(yaw),  cos(yaw))   ← move3d'nin atan2(wx, wz)'si
 //     KAMERA ileri: (sin(yaw), -cos(yaw))  ← _s3_camera'daki fx/fz
-// Kamera yaw'ını gövde formülüne koymak mermileri TAM TERS yöne atıyordu.
-// O yüzden burada açı değil, doğrudan YÖN VEKTÖRÜ kuruluyor ve her dal kendi
-// sözleşmesini kullanıyor.
+// Bir kez karıştırıldı ve mermiler tam ters yöne gitti. O yüzden burada açı
+// değil, doğrudan YÖN VEKTÖRÜ kuruluyor.
+int AIM_FLAT = 0;   // kameranın YATAY yönü — üçüncü şahıs aksiyon (varsayılan)
+int AIM_LOOK = 1;   // kameranın TAM yönü, eğim dahil — nişancı / FPS
+int AIM_BODY = 2;   // gövdenin baktığı yön — kameradan bağımsız, twin-stick
+int AIM_LOCK = 3;   // en yakın hedefe kilitlen; menzilde yoksa AIM_FLAT
+
+float _aim_x3 = 0.0; float _aim_y3 = 0.0; float _aim_z3 = 1.0;
+int   _aim_mode3     = 0;
+int   _aim_lock_tag3 = 4;      // TAG_ENEMY
+float _aim_lock_rng3 = 25.0;
+float _aim_spread3   = 0.0;    // konik sapma (derece); 0 = tam isabet
+
+func aim_mode3d(m) { _aim_mode3 = m; }
+func nisan_modu3d(m) { aim_mode3d(m); }
+// Kilitlenme hedefi ve menzili. Çağırmak modu da AIM_LOCK yapar.
+func aim_lock3d(tag, range) {
+    _aim_lock_tag3 = tag; _aim_lock_rng3 = range; _aim_mode3 = AIM_LOCK;
+}
+func nisan_kilit3d(etiket, menzil) { aim_lock3d(etiket, menzil); }
+// Saçılma: her mermi bu kadar derecelik koni içinde rastgele sapar.
+// Pompalı, otomatik silah geri tepmesi, "acemi nişancı" hissi.
+func aim_spread3d(deg) { _aim_spread3 = deg; }
+func nisan_sacilma3d(derece) { aim_spread3d(derece); }
+// Eski kısayol: dikey nişan = AIM_LOOK, kapalı = AIM_FLAT.
+func aim_pitch3d(on) { if (on) { _aim_mode3 = AIM_LOOK; } else { _aim_mode3 = AIM_FLAT; } }
+func dikey_nisan3d(ac) { aim_pitch3d(ac); }
+
+// Menzildeki en yakın hedefi bul (kilitlenme). Yoksa -1.
+func _aim_nearest3(owner): int {
+    int os = _slot_of3(owner);
+    if (os < 0) { return 0 - 1; }
+    Ent3 o = _e3[os];
+    int best = 0 - 1;
+    float bd = _aim_lock_rng3 * _aim_lock_rng3;
+    int i = 0;
+    int n = length(_e3);
+    while (i < n) {
+        Ent3 e = _e3[i];
+        if (e.alive == 1 && e.tag == _aim_lock_tag3 && i != os) {
+            float dx = e.x - o.x; float dy = e.y - o.y; float dz = e.z - o.z;
+            float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < bd) { bd = d2; best = i; }
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
 func _aim_dir3(owner) {
     int s = _slot_of3(owner);
-    float fx = 0.0;
-    float fz = 1.0;
-    float pitch = 0.0;
+    float fx = 0.0; float fy = 0.0; float fz = 1.0;
+    int vertical = 0;              // bu modda dikey bileşen anlamlı mı
     if (s >= 0) {
         Ent3 o = _e3[s];
         float br = o.yaw * DEG2RAD3;
-        fx = sin(br);
-        fz = cos(br);                    // GÖVDE sözleşmesi
+        fx = sin(br); fz = cos(br);          // GÖVDE sözleşmesi
     }
-    if (owner == _cam_target && _cam_mode3 != CAM_FIXED) {
-        float cr = _cam_yaw3 * DEG2RAD3;
-        fx = sin(cr);
-        fz = 0.0 - cos(cr);              // KAMERA sözleşmesi (bkz. _s3_camera)
-        // DİKEY bileşen varsayılan olarak ALINMIYOR: kamerayı yere doğru
-        // eğmek nişanı da yere çeviriyordu, oysa yere bakmak "yere ateş et"
-        // demek değil — üçüncü şahısta kamera eğimi çoğunlukla manzarayı
-        // görmek içindir. Mermi kameranın YATAY yönüne gider.
-        // Uçan hedefi olan oyun `dikey_nisan3d(true)` ile açar.
-        if (_aim_pitch_on3 == 1) { pitch = _cam_pitch3; }
+    int use_cam = 0;
+    if (owner == _cam_target && _cam_mode3 != CAM_FIXED) { use_cam = 1; }
+
+    if (_aim_mode3 == AIM_BODY || use_cam == 0) {
+        // gövde yönü — yukarıda kuruldu
+    } else {
+        if (_aim_mode3 == AIM_LOCK) {
+            int t = _aim_nearest3(owner);
+            if (t >= 0 && s >= 0) {
+                Ent3 o2 = _e3[s];
+                Ent3 tt = _e3[t];
+                float dx = tt.x - o2.x; float dy = tt.y - o2.y; float dz = tt.z - o2.z;
+                float d = sqrt(dx * dx + dy * dy + dz * dz);
+                if (d > 0.001) {
+                    fx = dx / d; fy = dy / d; fz = dz / d;
+                    vertical = 1;   // kilitlenme hedefin YÜKSEKLİĞİNİ de tutar
+                }
+            } else {
+                float cr = _cam_yaw3 * DEG2RAD3;
+                fx = sin(cr); fz = 0.0 - cos(cr);   // menzilde yok → yatay
+                fy = 0.0;
+            }
+        } else {
+            float cr = _cam_yaw3 * DEG2RAD3;
+            fx = sin(cr); fz = 0.0 - cos(cr);       // KAMERA sözleşmesi
+            fy = 0.0;
+            if (_aim_mode3 == AIM_LOOK) {
+                float pr = _cam_pitch3 * DEG2RAD3;
+                float ch = cos(pr);
+                fx = fx * ch; fz = fz * ch; fy = sin(pr);
+                vertical = 1;
+            }
+        }
     }
-    float pr = pitch * DEG2RAD3;
-    float ch = cos(pr);
-    _aim_x3 = fx * ch;
-    _aim_y3 = sin(pr);
-    _aim_z3 = fz * ch;
+
+    // Saçılma. Yatay sapma her modda; DİKEY sapma yalnız dikeyin anlamlı
+    // olduğu modlarda — yatay nişanlı bir oyunda pompalı mermilerinin yere
+    // saçılması istenen şey değil.
+    if (_aim_spread3 > 0.0) {
+        float sy = (random() - 0.5) * 2.0 * _aim_spread3 * DEG2RAD3;
+        float c = cos(sy); float sn = sin(sy);
+        float nx = fx * c + fz * sn;
+        float nz = 0.0 - fx * sn + fz * c;
+        fx = nx; fz = nz;
+        if (vertical == 1) {
+            float sp = (random() - 0.5) * 2.0 * _aim_spread3 * DEG2RAD3;
+            float h = sqrt(fx * fx + fz * fz);
+            float k = cos(sp);
+            fy = fy * k + h * sin(sp);
+            fx = fx * k; fz = fz * k;
+        }
+    }
+
+    float len = sqrt(fx * fx + fy * fy + fz * fz);
+    if (len < 0.000001) { fx = 0.0; fy = 0.0; fz = 1.0; len = 1.0; }
+    _aim_x3 = fx / len;
+    _aim_y3 = fy / len;
+    _aim_z3 = fz / len;
 }
 
 // Nişan yönü bileşenleri — kendi silahını yazan oyun için.
@@ -1381,6 +1461,17 @@ func bullet3d(owner, speed, life): int {
 func _out_of_world3(Ent3 e): bool {
     return sqrt(e.x * e.x + e.z * e.z) > _world_r3;
 }
+
+// Pompalı: tek tetikte n mermi. Her mermi `_aim_dir3`'ü yeniden çağırdığı için
+// saçılma her birine ayrı uygulanır — `nisan_sacilma3d()` ile koni açılmalı,
+// yoksa n mermi üst üste gider.
+func shotgun3d(owner, speed, life, n): int {
+    int last = 0 - 1;
+    int i = 0;
+    while (i < n) { last = bullet3d(owner, speed, life); i = i + 1; }
+    return last;
+}
+func pompali3d(sahip, hiz, omur, n): int { return shotgun3d(sahip, hiz, omur, n); }
 
 // ---- Can / hasar -----------------------------------------------------------
 func health3d(id, n) {
