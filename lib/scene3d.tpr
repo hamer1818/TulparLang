@@ -168,12 +168,14 @@ int   _cam_collide3 = 1;
 // giriyordu — pratikte kafasının içine. Oran, kameranın ne kadar uzakta
 // kurulduğuna göre anlam değiştiriyordu; mesafe değiştirmiyor.
 float _cam_pad3  = 0.35;   // çarpma noktasının bu kadar berisinde dur
-float _cam_near3 = 2.2;    // hedefe en fazla bu kadar yaklaş
+float _cam_near3 = 5.0;    // hedefe en fazla bu kadar yaklaş (DÜNYA birimi)
+// 2.2 fazla yakındı: 45° FOV'da 2 birimlik gövde ekranı taşırıyor, oyuncu
+// kendi kutusunun içinden bakıyor gibi oluyordu (kullanıcı ekran görüntüsü).
 float _cam_ease3 = 8.0;    // engel kalkınca geri açılma hızı (1/sn)
 float _cam_cur3  = 0.0;    // yumuşatma durumu (0 = henüz kurulmadı → anında)
 float _cam_lift3 = 0.0;    // engelin üstüne çıkmak için eklenen eğim (radyan)
-float _CAM_LIFT_MAX3  = 0.52;   // ~30° — kurtarma hamlesi, kuş bakışı değil
-float _CAM_LIFT_STEP3 = 0.17;   // ~10° adım
+float _CAM_LIFT_MAX3  = 0.79;   // ~45° — yakınlaşmaya YEĞLENİR, ama kuş bakışı değil
+float _CAM_LIFT_STEP3 = 0.157;  // ~9° adım (gerektiği kadar yükselir)
 
 // RÖNTGEN: kamerayı içeri çekmek yerine, kamerayla oyuncu ARASINA giren
 // cisimleri saydam çiz. Üçüncü şahıs oyunlarının standart çözümü ve daha
@@ -421,7 +423,7 @@ func scene3d_reset() {
     // bakış açısıyla açılırdı.
     _cam_mode3 = CAM_FIXED; _cam_yaw3 = 0.0; _cam_pitch3 = 0.0; _cam_lock3 = 0;
     _cam_cur3 = 0.0; _cam_lift3 = 0.0;
-    _cam_near3 = 2.2; _cam_pad3 = 0.35; _cam_ease3 = 8.0;
+    _cam_near3 = 5.0; _cam_pad3 = 0.35; _cam_ease3 = 8.0;
     // Röntgen de sahne durumu: reset kamerayı zaten sıfırlıyor, saydamlık
     // kuralının ayakta kalması tutarsız olurdu (ve testleri sıraya bağımlı
     // yapıyordu — kapatan bir test sonrakini etkiliyordu).
@@ -2909,7 +2911,7 @@ func _s3_camera(dt) {
         float want = 0.0;
         float ct2 = _cam_clear_t3(t.x, t.y, t.z, cx - t.x, cy - t.y, cz - t.z);
         int tries = 0;
-        while (ct2 < 0.999 && tries < 3) {
+        while (ct2 < 0.999 && tries < 5) {
             want = want + _CAM_LIFT_STEP3;
             if (want > _CAM_LIFT_MAX3) { want = _CAM_LIFT_MAX3; }
             float tp = pr + want;
@@ -2919,7 +2921,7 @@ func _s3_camera(dt) {
                                 (t.y + _cam_dist * sin(tp)) - t.y,
                                 (t.z - fz * th) - t.z);
             tries = tries + 1;
-            if (want >= _CAM_LIFT_MAX3) { tries = 3; }
+            if (want >= _CAM_LIFT_MAX3) { tries = 5; }
         }
         // Yumuşat: yukarı çabuk (görüş açılsın), aşağı yavaş (kamera sallanmasın).
         float lk = 6.0 * dt;

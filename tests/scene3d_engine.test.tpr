@@ -1776,6 +1776,29 @@ func t_jump_clears_low_obstacle() {
     assert(get3z(p) > 6.0, "ziplayinca engeli GECEBILMELI");
 }
 
+// Engel varken kamera oyuncunun SURATINA girmemeli ve engel saydamlaşmalı.
+//
+// Kullanıcı ekran görüntüsü: engelin dibinde kamera oyuncunun içine giriyor ve
+// hiçbir şey saydamlaşmıyor. İkisi aynı sebepten — öncelik tersti: kamera önce
+// içeri çekiliyor, çekilince arada cisim kalmıyor, dolayısıyla saydamlaştırılacak
+// bir şey de olmuyordu. Mesafe korunmalı, araya giren saydamlaşmalı.
+func t_camera_prefers_fade_over_zooming_in() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    // Oyuncunun hemen ARKASINDA duvar; kamera yörüngesi oraya bakıyor.
+    int w = spawn3(0.0, 1.5, 3.0,  20.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    camera_orbit(p, 14.0, 9.0);
+    _s3_camera(0.016667);
+
+    // 1) Kamera tabanın altına inmemeli — suratına girmemeli.
+    assert(_cam_cur3 >= 4.99, "kamera taban mesafesinin altina inmemeli");
+    // 2) Araya giren duvar SAYDAM olarak isaretlenmis olmali; yoksa ozellik
+    //    sessizce hicbir sey yapmiyor demektir.
+    assert_eq_int(_fade3[_slot_of3(w)], 1);
+    assert_eq_int(_fade3[_slot_of3(p)], 0);
+}
+
 // Kamera ışını DÖNÜK duvarı doğru hacimde sınamalı.
 //
 // Kullanıcının tanılama kaydı bunu ortaya çıkardı: kamera sürekli "duvar#6"nın
@@ -1910,8 +1933,11 @@ func t_camera_floor_is_absolute_not_relative() {
     scene3d_reset();
     float a16 = _cam_allowed3(16.0, 0.02);   // engel dibimizde
     float a40 = _cam_allowed3(40.0, 0.02);
-    assert(abs_f3(a16 - 2.2) < 0.001, "taban dunya birimi (16)");
-    assert(abs_f3(a40 - 2.2) < 0.001, "taban dunya birimi (40)");
+    // Sınanan ŞEY sayı değil ilke: taban dünya birimi ve yörünge mesafesinden
+    // bağımsız. (Varsayılan 2.2'den 5.0'a çıkarıldı — 2.2'de gövde ekranı
+    // taşırıyordu.)
+    assert(abs_f3(a16 - 5.0) < 0.001, "taban dunya birimi (16)");
+    assert(abs_f3(a40 - 5.0) < 0.001, "taban dunya birimi (40)");
     assert(abs_f3(a16 - a40) < 0.001, "taban yorunge mesafesinden BAGIMSIZ");
     // Ayarlanabilir olmalı.
     camera_near3d(4.0);
@@ -2504,6 +2530,7 @@ test("kalabalik duvara sokamiyor", "t_crowd_cannot_push_player_into_wall");
 test("kosede sikisma tutuyor", "t_corner_squeeze_holds");
 test("engele yuruyunce tirmanmiyor", "t_walk_into_obstacle_does_not_climb");
 test("ziplayinca engeli geciyor", "t_jump_clears_low_obstacle");
+test("kamera yakinlasmak yerine saydamlastiriyor", "t_camera_prefers_fade_over_zooming_in");
 test("kamera isini donmeyi hesaba katiyor", "t_camera_ray_respects_rotation");
 test("gozcu batmayi goruyor", "t_watch_detects_penetration");
 test("gozcu kapaliyken sessiz", "t_watch_off_costs_nothing");
