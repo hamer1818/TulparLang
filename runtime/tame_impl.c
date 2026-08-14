@@ -233,7 +233,7 @@ static int tame_lights_on = 0;     // ışıklandırma aktif mi
 // çağıran eski immediate-mode yolunu kullanır.
 static int tame_lights_active(void);
 static int tame_draw_lit(int shape, double x, double y, double z, double sx,
-                         double sy, double sz, int64_t color);
+                         double sy, double sz, double yaw, int64_t color);
 // Gölge açıkken sahne iki geçişte çizilir; bu ikisi o akışı sarar (tanımları
 // Faz 4b bloğunda). tame_scene_begin 1 dönerse çizimler KAYDEDİLİYOR demektir
 // ve tame_scene_end iki geçişi kendisi yapar.
@@ -290,9 +290,26 @@ void tame_impl_end3(void) {
 
 void tame_impl_cube(double x, double y, double z, double w, double h, double d,
                     int64_t color) {
-  if (tame_draw_lit(0, x, y, z, w, h, d, color)) return;
+  if (tame_draw_lit(0, x, y, z, w, h, d, 0.0, color)) return;
   DrawCube((Vector3){(float)x, (float)y, (float)z}, (float)w, (float)h,
            (float)d, tame_color(color));
+}
+
+// Y ekseni etrafında DÖNMÜŞ kutu. `tm3_cube` dönme almıyordu; yaw'lı bir
+// entity çarpışmada dönük (SAT/OBB) ama ekranda EKSEN HİZALI çiziliyordu.
+// Yani görülen duvar ile çarpışan duvar aynı yerde değildi — oyuncu görünen
+// duvarın içinden geçiyor gibi oluyordu (kullanıcı ekran görüntüsüyle
+// gösterdi). Işıklı yol zaten DrawModelEx kullandığı için dönme bedava;
+// ışıksız yedek yol rlgl matrisiyle döndürüyor.
+void tame_impl_cube_rot(double x, double y, double z, double w, double h,
+                        double d, double yaw, int64_t color) {
+  if (tame_draw_lit(0, x, y, z, w, h, d, yaw, color)) return;
+  rlPushMatrix();
+  rlTranslatef((float)x, (float)y, (float)z);
+  rlRotatef((float)yaw, 0.0f, 1.0f, 0.0f);
+  DrawCube((Vector3){0.0f, 0.0f, 0.0f}, (float)w, (float)h, (float)d,
+           tame_color(color));
+  rlPopMatrix();
 }
 
 void tame_impl_cube_wires(double x, double y, double z, double w, double h,
@@ -1110,7 +1127,7 @@ static void tame_dl_replay(int depth_pass) {
         tame_bind_material(&tame_unit[c->kind], c->tex, c->tile, c->shine,
                            c->spec);
       DrawModelEx(tame_unit[c->kind], (Vector3){c->x, c->y, c->z},
-                  (Vector3){0.0f, 1.0f, 0.0f}, 0.0f,
+                  (Vector3){0.0f, 1.0f, 0.0f}, c->yaw,
                   (Vector3){c->sx, c->sy, c->sz}, tame_color(c->color));
     } else if (c->kind == 4) {
       Model *m = tame_model_ptr(c->handle);
@@ -1264,10 +1281,10 @@ static void tame_scene_end(void) {
 }
 
 static int tame_draw_lit(int shape, double x, double y, double z, double sx,
-                         double sy, double sz, int64_t color) {
+                         double sy, double sz, double yaw, int64_t color) {
   // Gölge kaydı önceliklidir: liste modundaysak hiçbir şey çizmeyip kaydet.
   if (tame_dl_recording) {
-    tame_dl_push(shape, -1, x, y, z, sx, sy, sz, 0.0, color);
+    tame_dl_push(shape, -1, x, y, z, sx, sy, sz, yaw, color);
     return 1;
   }
   if (!tame_lights_active()) return 0;
@@ -1277,7 +1294,7 @@ static int tame_draw_lit(int shape, double x, double y, double z, double sx,
   tame_bind_material(&tame_unit[shape], tame_cur_tex, tame_cur_tile,
                      tame_cur_shine, tame_cur_spec);
   DrawModelEx(tame_unit[shape], (Vector3){(float)x, (float)y, (float)z},
-              (Vector3){0.0f, 1.0f, 0.0f}, 0.0f,
+              (Vector3){0.0f, 1.0f, 0.0f}, (float)yaw,
               (Vector3){(float)sx, (float)sy, (float)sz}, tame_color(color));
   return 1;
 }
@@ -1286,7 +1303,7 @@ static int tame_draw_lit(int shape, double x, double y, double z, double sx,
 
 void tame_impl_sphere(double x, double y, double z, double r, int64_t color) {
   // Birim küre r=0.5 → ölçek = çap.
-  if (tame_draw_lit(1, x, y, z, r * 2.0, r * 2.0, r * 2.0, color)) return;
+  if (tame_draw_lit(1, x, y, z, r * 2.0, r * 2.0, r * 2.0, 0.0, color)) return;
   DrawSphere((Vector3){(float)x, (float)y, (float)z}, (float)r,
              tame_color(color));
 }
@@ -1302,7 +1319,7 @@ void tame_impl_cylinder(double x, double y, double z, double r, double h,
                         int64_t color) {
   // Taban (x,y,z)'de duran, dikey silindir; radiusTop==radiusBottom==r.
   // Birim silindir r=0.5, h=1 ve tabanı y=0'da → ölçek (çap, yükseklik, çap).
-  if (tame_draw_lit(2, x, y, z, r * 2.0, h, r * 2.0, color)) return;
+  if (tame_draw_lit(2, x, y, z, r * 2.0, h, r * 2.0, 0.0, color)) return;
   DrawCylinder((Vector3){(float)x, (float)y, (float)z}, (float)r, (float)r,
                (float)h, 20, tame_color(color));
 }
@@ -1310,7 +1327,7 @@ void tame_impl_cylinder(double x, double y, double z, double r, double h,
 void tame_impl_plane(double x, double y, double z, double sx, double sz,
                      int64_t color) {
   // Birim düzlem 1×1 (XZ) → ölçek doğrudan boyut; y ölçeği anlamsız (1).
-  if (tame_draw_lit(3, x, y, z, sx, 1.0, sz, color)) return;
+  if (tame_draw_lit(3, x, y, z, sx, 1.0, sz, 0.0, color)) return;
   DrawPlane((Vector3){(float)x, (float)y, (float)z},
             (Vector2){(float)sx, (float)sz}, tame_color(color));
 }

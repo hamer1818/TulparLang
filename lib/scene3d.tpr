@@ -3025,7 +3025,15 @@ func _s3_render() {
                 }
             } else {
             if (e.shape == SHAPE_CUBE) {
-                cube(e.x, e.y, e.z, e.sx, e.sy, e.sz, ecol);
+                // Yaw varsa DÖNÜK çiz. Düz `cube()` dönme almıyor; çarpışma
+                // ise SAT ile dönük hacmi kullanıyordu, yani görünen duvar
+                // çarpışan duvarla aynı yerde DEĞİLDİ — oyuncu görünen
+                // duvarın içinden geçiyor gibi oluyordu.
+                if (abs_f3(e.yaw) > 0.01) {
+                    cube_rot(e.x, e.y, e.z, e.sx, e.sy, e.sz, e.yaw, ecol);
+                } else {
+                    cube(e.x, e.y, e.z, e.sx, e.sy, e.sz, ecol);
+                }
             } else {
                 if (e.shape == SHAPE_SPHERE) {
                     sphere(e.x, e.y, e.z, e.sx * 0.5, ecol);

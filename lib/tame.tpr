@@ -245,6 +245,9 @@ func cube(x, y, z, w, h, d, color) { tm3_cube(x, y, z, w, h, d, color); }
 func kup(x, y, z, w, h, d, color)  { tm3_cube(x, y, z, w, h, d, color); }
 
 // Tel-çerçeve küp/kutu.
+// Dönük kutu — yaw'lı cisimler bununla çizilmeli, yoksa görüntü çarpışmadan kayar.
+func cube_rot(x, y, z, w, h, d, yaw, color) { tm3_cube_rot(x, y, z, w, h, d, yaw, color); }
+func kup_donuk(x, y, z, w, h, d, yaw, color) { tm3_cube_rot(x, y, z, w, h, d, yaw, color); }
 func cube_wires(x, y, z, w, h, d, color) { tm3_cube_wires(x, y, z, w, h, d, color); }
 func kup_tel(x, y, z, w, h, d, color)    { tm3_cube_wires(x, y, z, w, h, d, color); }
 

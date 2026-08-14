@@ -101,6 +101,8 @@ void tame_impl_begin3(void);
 void tame_impl_end3(void);
 void tame_impl_cube(double x, double y, double z, double w, double h, double d,
                     int64_t color);
+void tame_impl_cube_rot(double x, double y, double z, double w, double h,
+                        double d, double yaw, int64_t color);
 void tame_impl_cube_wires(double x, double y, double z, double w, double h,
                           double d, int64_t color);
 void tame_impl_grid(int slices, double spacing);
@@ -484,6 +486,14 @@ VMValue aot_tm3_cube_ptr(VMValue *x, VMValue *y, VMValue *z, VMValue *w,
                          VMValue *h, VMValue *d, VMValue *color) {
   tame_impl_cube(tm_num(x), tm_num(y), tm_num(z), tm_num(w), tm_num(h),
                  tm_num(d), tm_int(color));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_cube_rot_ptr(VMValue *x, VMValue *y, VMValue *z, VMValue *w,
+                             VMValue *h, VMValue *d, VMValue *yaw,
+                             VMValue *color) {
+  tame_impl_cube_rot(tm_num(x), tm_num(y), tm_num(z), tm_num(w), tm_num(h),
+                     tm_num(d), tm_num(yaw), tm_int(color));
   return VM_VOID();
 }
 
