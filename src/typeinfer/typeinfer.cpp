@@ -1015,6 +1015,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm3_cube_rot", TYPE_VOID,
        {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
         TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_INT}},
+      {"tm3_sky_stars", TYPE_VOID, {TYPE_UNKNOWN}},
       {"tm3_terrain_layer", TYPE_INT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
       {"tm3_terrain_layers", TYPE_VOID,
        {TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_UNKNOWN, TYPE_UNKNOWN,

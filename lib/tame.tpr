@@ -481,6 +481,9 @@ func parlak3d() { tm3_material(48.0, 1.4); }
 func sky(top, bottom): bool     { return tm3_sky(top, bottom); }
 func gokyuzu(top, bottom): bool { return tm3_sky(top, bottom); }
 func sky_off()        { tm3_sky_off(); }
+// Gökyüzü yıldızları (prosedürel, shader'da): 0 kapalı, 1 tam.
+func sky_stars3d(i)   { tm3_sky_stars(i); }
+func yildiz3d(i)      { tm3_sky_stars(i); }
 func gokyuzu_kapat()  { tm3_sky_off(); }
 
 // Mesafe sisi — gökyüzü ile zemin arasındaki sert ufuk çizgisini kapatır ve

@@ -75,7 +75,16 @@ sonra dil/altyapı borcu.
       tahta sandık/varil gibi "kendiliğinden yüzen" nesneler yapılamıyor.
       Batma derinliğiyle orantılı yukarı ivme yeterdi.
 
-- [ ] **Gökyüzü dokusu yok** — degrade + gündüz/gece var, yıldız/bulut yok.
+- [x] **Yıldızlar geldi.** ✅ 2026-08-14 — gökyüzü shader'ında PROSEDÜREL
+      (bakış yönü hash'lenip eşiği geçen hücre yıldız oluyor): sıfır çizim
+      çağrısı, sıfır asset ve örtüşme kendiliğinden doğru — kubbe en arkada
+      çizildiği için dağlar yıldızları örtüyor. 2B çizilseydi önlerine
+      düşerlerdi. Gündüz-gece döngüsüyle otomatik açılıp kapanıyor;
+      `yildiz3d_sabit(x)` ile elle sabitlenebiliyor. Detay: CHANGELOG.
+
+- [ ] **Bulut yok.** Yıldızlar prosedürel çözümün işe yaradığını gösterdi;
+      aynı shader'a gürültü tabanlı bulut katmanı eklenebilir (yön + zaman
+      uniform'u yeterdi). Gökyüzü hâlâ bulutsuz bir degrade.
 
 - [ ] **Parçacıklarda dönme ve doku atlası yok** — tek boy düz billboard.
 

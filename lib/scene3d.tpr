@@ -416,6 +416,7 @@ func scene3d_reset() {
     _terr_kind3 = 0; _terr_lay3 = 0; terrain_layers_off3d();
     _water_on3 = 0; _water_y3 = 0.0; _water_a3 = 150; _water_phys3 = 1;
     _dn_on3 = 0; _dn_h3 = 12.0; _dn_len3 = 120.0; _dn_frozen3 = 0;
+    _stars3 = 0.0 - 1.0;
     _score3 = 0;
     _game_over3 = 0;
     _cam_target = 0 - 1;
@@ -3457,6 +3458,9 @@ int   _dn_on3    = 0;
 float _dn_len3   = 120.0;   // tam bir gün kaç saniye sürsün
 float _dn_h3     = 12.0;    // günün saati, 0..24
 int   _dn_frozen3 = 0;      // saat ilerlemesin (sabit "altın saat" isteyen oyun)
+// Yıldızlar: gökyüzü shader'ında prosedürel üretiliyor (sıfır çizim çağrısı).
+// -1 = OTOMATİK, yani gece çöktükçe açılır; 0..1 = elle sabitlenmiş yoğunluk.
+float _stars3 = 0.0 - 1.0;
 
 // Paketli renk (r*2^24 + g*2^16 + b*2^8 + a) bileşenleri. Hem gökyüzü
 // karışımı hem de saydamlaştırma bunları kullanıyor.
@@ -3505,6 +3509,28 @@ func daynight3d(seconds_per_day) {
 }
 func gunduz_gece3d(saniye) { daynight3d(saniye); }
 func daynight_off3d() { _dn_on3 = 0; }
+
+// Yıldız yoğunluğu. Varsayılan OTOMATİK: gündüz-gece döngüsü açıkken gece
+// çöktükçe beliriyorlar, gündüz kayboluyorlar. Elle sabitlemek isteyen
+// `yildiz3d_sabit(0.8)` çağırır (döngüsüz sahnede tek yol budur).
+// Otomatik kipte İSTENEN yıldız yoğunluğu. Saf ve okunabilir olması bilerek:
+// shader'a yazılan değer geri okunamıyor, testin sınayabileceği tek şey KARAR.
+float _dn_day3 = 1.0;    // son hesaplanan gündüzlük (0 gece, 1 tam gündüz)
+func _dn_star_want3(): float { return 1.0 - _dn_day3; }
+
+// Shader'a GİDECEK değer: elle sabitlenmişse o, değilse otomatik.
+// Tek karar noktası olması bilerek — shader'a yazılan geri okunamadığı için
+// testin tutunabileceği yer burası. (İlk sürümde karar `if` ile dağıtılmıştı
+// ve "elle sabitleme yok sayılıyor" bozması hiçbir testi kızartmıyordu.)
+func _dn_star_out3(): float {
+    if (_stars3 >= 0.0) { return _stars3; }
+    return _dn_star_want3();
+}
+
+func stars_auto3d() { _stars3 = 0.0 - 1.0; }
+func yildiz_oto3d() { stars_auto3d(); }
+func stars3d(amount) { _stars3 = amount * 1.0; sky_stars3d(_stars3); }
+func yildiz3d_sabit(miktar) { stars3d(miktar); }
 func gunduz_gece_kapat3d() { daynight_off3d(); }
 
 // Saati doğrudan ayarla (0..24). Döngü kapalıyken de çalışır: "sahnem hep
@@ -3538,6 +3564,7 @@ func _s3_daynight(dt) {
     float day = ey / 0.30;
     if (day < 0.0) { day = 0.0; }
     if (day > 1.0) { day = 1.0; }
+    _dn_day3 = day;
 
     // Işığın rengi gün boyu sürekli: şafak/gün batımında sıcak turuncu,
     // öğlen beyaza, gece sönük maviye gider. Ufuk geçişinde (ey ~ 0) iki dal
@@ -3579,6 +3606,9 @@ func _s3_daynight(dt) {
         bot = _dn_mix3(bot, rgb(255, 140, 70), dusk);
     }
     sky(top, bot);
+    // Yıldızlar geceyle birlikte. `day` 0 gece, 1 tam gündüz olduğu için
+    // tersi doğrudan yoğunluk veriyor; alacakaranlıkta da yumuşak sönüyorlar.
+    sky_stars3d(_dn_star_out3());
     // Sis rengini ufuktan YENİDEN al: play3d başlangıçta bir kez kuruyor,
     // güncellenmezse sis bütün gün şafak rengiyle kalırdı.
     if (_fog3 > 0.0) { fog_sky(_fog3); }

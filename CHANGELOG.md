@@ -60,6 +60,32 @@ giriş/çıkış **kenarı** hesaplanıyor.
   bölgenin *gövde* ölçmesi, ölüm-çıkış bastırması, bölüm temizliği, kapatma
   sessizliği ve iki gövdeli tek atım — her biri ilgili bozmada kırmızıya döndü.
 
+### Added — gökyüzünde prosedürel yıldızlar
+
+Gökyüzü düz bir degradeydi; gündüz-gece döngüsü geldikten sonra gecenin boş
+olması iyice göze batıyordu.
+
+Yıldızlar **gökyüzü shader'ında** üretiliyor: bakış yönü bir ızgaraya
+yuvarlanıp hash'leniyor, eşiği geçen hücre bir yıldız oluyor. Parlaklık
+hücreden hücreye değişiyor ve ufka yakın olanlar sönüyor.
+
+Bu yerleşim bilinçli. Alternatif — yıldızları 2B nokta olarak çizmek — **dağların
+önüne düşerdi**: 2B katman 3B sahneden sonra çizildiği için arazi onları
+örtemezdi. Gökyüzü kubbesi zaten en arkada ve derinliğe yazmadan çiziliyor,
+dolayısıyla örtüşme kendiliğinden doğru. Üstelik sıfır çizim çağrısı, sıfır
+asset, ve web/Android'de de çalışıyor (iki shader varyantına da eklendi).
+
+- `sky_stars3d(i)` / `yildiz3d(i)` — tame katmanı (0 kapalı, 1 tam)
+- `stars3d(x)` / `yildiz3d_sabit(x)` — scene3d'de elle sabitleme
+- `stars_auto3d()` / `yildiz_oto3d()` — **varsayılan**: gündüz-gece döngüsü
+  açıkken gece çöktükçe beliriyorlar, gündüz kayboluyorlar
+
+2 yeni test (142 → 144). Shader çıktısı penceresiz doğrulanamıyor; test
+edilebilen şey **karar** — hangi saatte hangi yoğunluğun istendiği. İlk
+sürümde bu karar `if` ile dağıtılmıştı ve "elle sabitleme yok sayılıyor"
+bozması hiçbir testi kızartmıyordu; karar tek bir saf fonksiyona
+(`_dn_star_out3`) alınınca yakalanır oldu.
+
 ### Added — su yüzeyi
 
 Arazi geldiğinden beri vadiler kuruydu. Su, dünya çapında tek bir **yatay

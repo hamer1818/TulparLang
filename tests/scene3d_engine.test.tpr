@@ -2201,6 +2201,48 @@ func t_daynight_light_is_continuous() {
     assert(light_height3d() > 0.99, "oglen isik tepeden");
 }
 
+// Yıldızlar geceyle gelir, gündüz gider. Çizim shader'da ve penceresiz
+// doğrulanamıyor; test edilebilen şey KARARDIR — hangi saatte ne yoğunluk
+// istendiği. `_stars3 < 0` otomatik demek, elle sabitlenince değişmemeli.
+func t_stars_follow_night() {
+    scene3d_reset();
+    daynight3d(120.0);
+    assert(_stars3 < 0.0, "varsayilan OTOMATIK olmali");
+
+    // Öğlen: gündüzlük 1 → yoğunluk 0 istenmeli
+    set_time3d(12.0);
+    _s3_daynight(0.0);
+    assert(abs_f3(_dn_star_out3() - 0.0) < 0.001, "oglen yildiz yok");
+
+    // Gece yarısı: gündüzlük 0 → yoğunluk 1
+    set_time3d(0.0);
+    _s3_daynight(0.0);
+    assert(abs_f3(_dn_star_out3() - 1.0) < 0.001, "gece yarisi tam yildiz");
+
+    // Şafak (ufuk): arada bir yerde — keskin geçiş olmamalı
+    set_time3d(6.0);
+    _s3_daynight(0.0);
+    float dusk = _dn_star_out3();
+    assert(dusk > 0.9, "safakta hala solmakta");
+}
+
+// Elle sabitlenen yoğunluk saatten ETKİLENMEMELİ.
+func t_stars_manual_override() {
+    scene3d_reset();
+    daynight3d(120.0);
+    yildiz3d_sabit(0.5);
+    assert(abs_f3(_stars3 - 0.5) < 0.001, "elle deger tutulmali");
+    set_time3d(12.0);
+    _s3_daynight(0.0);
+    assert(abs_f3(_stars3 - 0.5) < 0.001, "oglen bile degismemeli");
+    // ...ve shader'a GİDEN değer de elle konan olmalı. (Yalnız saklanan değeri
+    // sınamak yetmiyordu: otomatik yazımı elle değere rağmen yapan bir bozma
+    // hiçbir testi kızartmıyordu.)
+    assert(abs_f3(_dn_star_out3() - 0.5) < 0.001, "shader'a giden de elle deger");
+    yildiz_oto3d();
+    assert(_stars3 < 0.0, "otomatige donebilmeli");
+}
+
 func t_daynight_clock_advances_and_wraps() {
     scene3d_reset();
     daynight3d(24.0);          // 1 saniye = 1 saat
@@ -2836,6 +2878,8 @@ test("en yakin mesafe mutlak, oransal degil", "t_camera_floor_is_absolute_not_re
 test("kamera yumusatmasi asimetrik", "t_camera_smoothing_is_asymmetric");
 test("gunes yuksekligi saate gore", "t_daynight_sun_height");
 test("isik yonu ufukta atlamiyor", "t_daynight_light_is_continuous");
+test("yildizlar geceyle geliyor", "t_stars_follow_night");
+test("yildiz elle sabitlenebiliyor", "t_stars_manual_override");
 test("saat ilerliyor ve sariyor", "t_daynight_clock_advances_and_wraps");
 test("saat dondurulabiliyor", "t_daynight_freeze");
 test("dongu varsayilan kapali", "t_daynight_off_by_default");

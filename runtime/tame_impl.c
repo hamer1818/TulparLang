@@ -643,9 +643,31 @@ static const char *tame_sky_fs =
     "varying vec3 vdir;                          \n"
     "uniform vec4 skyTop;                        \n"
     "uniform vec4 skyBottom;                     \n"
+    "uniform float starI;                        \n"
+    // Yıldızlar PROSEDÜREL: bakış yönü bir ızgaraya yuvarlanıp hash'leniyor,
+    // eşiği geçen hücre bir yıldız oluyor. Sıfır çizim çağrısı, sıfır asset ve
+    // örtüşme kendiliğinden doğru — gökyüzü kubbesi zaten en arkada çiziliyor,
+    // yani dağlar yıldızları örtüyor. 2B çizilseydi dağların ÖNÜNE düşerlerdi.
+    // GLES2'de bit işlemi yok, o yüzden float hash.
+    "float tmStarHash(vec3 p) {                  \n"
+    "    return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164)))*43758.5453); \n"
+    "}                                           \n"
     "void main() {                               \n"
-    "    float t = clamp(normalize(vdir).y, 0.0, 1.0); \n"
-    "    gl_FragColor = mix(skyBottom, skyTop, pow(t, 0.55)); \n"
+    "    vec3 d = normalize(vdir);               \n"
+    "    float t = clamp(d.y, 0.0, 1.0);         \n"
+    "    vec4 col = mix(skyBottom, skyTop, pow(t, 0.55)); \n"
+    "    if (starI > 0.001) {                    \n"
+    "        float h = tmStarHash(floor(d*260.0)); \n"
+    "        if (h > 0.9972) {                   \n"
+    // Parlaklık hücreden hücreye değişsin, hepsi aynı beyazlıkta olmasın.
+    "            float b = 0.35 + 0.65*fract(h*137.0); \n"
+    // Ufka yakın yıldızlar sönük: gerçekte atmosfer yutar, ayrıca ufuk
+    // çizgisinde biten yıldız alanı yapay görünür.
+    "            float horiz = smoothstep(0.02, 0.30, d.y); \n"
+    "            col.rgb += vec3(b*starI*horiz);  \n"
+    "        }                                   \n"
+    "    }                                       \n"
+    "    gl_FragColor = col;                     \n"
     "}                                           \n";
 #else
 static const char *tame_sky_vs =
@@ -662,10 +684,25 @@ static const char *tame_sky_fs =
     "in vec3 vdir;                               \n"
     "uniform vec4 skyTop;                        \n"
     "uniform vec4 skyBottom;                     \n"
+    "uniform float starI;                        \n"
     "out vec4 fc;                                \n"
+    // Prosedürel yıldızlar — gerekçe GLES varyantındaki yorumda.
+    "float tmStarHash(vec3 p) {                  \n"
+    "    return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164)))*43758.5453); \n"
+    "}                                           \n"
     "void main() {                               \n"
-    "    float t = clamp(normalize(vdir).y, 0.0, 1.0); \n"
-    "    fc = mix(skyBottom, skyTop, pow(t, 0.55)); \n"
+    "    vec3 d = normalize(vdir);               \n"
+    "    float t = clamp(d.y, 0.0, 1.0);         \n"
+    "    vec4 col = mix(skyBottom, skyTop, pow(t, 0.55)); \n"
+    "    if (starI > 0.001) {                    \n"
+    "        float h = tmStarHash(floor(d*260.0)); \n"
+    "        if (h > 0.9972) {                   \n"
+    "            float b = 0.35 + 0.65*fract(h*137.0); \n"
+    "            float horiz = smoothstep(0.02, 0.30, d.y); \n"
+    "            col.rgb += vec3(b*starI*horiz);  \n"
+    "        }                                   \n"
+    "    }                                       \n"
+    "    fc = col;                               \n"
     "}                                           \n";
 #endif
 
@@ -674,6 +711,8 @@ static int tame_sky_ready = 0;
 static int tame_sky_on = 0;
 static int tame_loc_skyTop = -1;
 static int tame_loc_skyBottom = -1;
+static int tame_loc_starI = -1;
+static float tame_star_intensity = 0.0f;
 static float tame_sky_top[4] = {0.29f, 0.51f, 0.82f, 1.0f};
 static float tame_sky_bottom[4] = {0.75f, 0.84f, 0.93f, 1.0f};
 
@@ -886,6 +925,7 @@ static int tame_sky_ensure(void) {
   }
   tame_loc_skyTop = GetShaderLocation(tame_sky_shader, "skyTop");
   tame_loc_skyBottom = GetShaderLocation(tame_sky_shader, "skyBottom");
+  tame_loc_starI = GetShaderLocation(tame_sky_shader, "starI");
   tame_sky_ready = 1;
   return 1;
 }
@@ -901,6 +941,8 @@ static void tame_sky_draw(void) {
                  SHADER_UNIFORM_VEC4);
   SetShaderValue(tame_sky_shader, tame_loc_skyBottom, tame_sky_bottom,
                  SHADER_UNIFORM_VEC4);
+  SetShaderValue(tame_sky_shader, tame_loc_starI, &tame_star_intensity,
+                 SHADER_UNIFORM_FLOAT);
   // Küre birim mesh'i gökyüzü için ödünç alınıyor; sonraki normal çizimde
   // tame_model_apply_shader/set_shader zaten ışık shader'ına geri alıyor.
   tame_model_set_shader(&tame_unit[1], tame_sky_shader);
@@ -1506,6 +1548,15 @@ int tame_impl_sky(int64_t top, int64_t bottom) {
 }
 
 void tame_impl_sky_off(void) { tame_sky_on = 0; }
+
+// Yıldız yoğunluğu: 0 kapalı, 1 tam. Gökyüzü kubbesi çizilirken uniform olarak
+// gidiyor — yıldızlar gökyüzünün bir parçası, ayrı bir cisim değil.
+void tame_impl_sky_stars(double intensity) {
+  float v = (float)intensity;
+  if (v < 0.0f) v = 0.0f;
+  if (v > 1.0f) v = 1.0f;
+  tame_star_intensity = v;
+}
 
 // Mesafe sisi. density 0 = kapalı. color < 0 → gökyüzünün UFUK rengi kullanılır
 // (doğru olan bu: sis, uzaktaki cismi arkasındaki gökyüzüne karıştırmalı).
