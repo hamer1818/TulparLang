@@ -54,10 +54,14 @@ Mimari kararlar ve gerekçeleri:
       can, davranış listesi + ekle/sil, çoğalt/sil). Anlık-kip widget seti;
       sayı alanları hem sürüklenip hem yazılabiliyor. Detay: CHANGELOG.
 
-- [ ] **Editörde kalan Unity/Unreal parçaları.** Eksen tutamakları (X/Y/Z
-      okları), çoklu seçim, prefab/şablon, dünya ayarları paneli (gökyüzü, sis,
-      arazi, su, gündüz-gece), kural düzenleyici, varlık adı düzenleme,
-      konsol/kayıt paneli.
+- [ ] **Editörde kalan Unity/Unreal parçaları.** Çoklu seçim, prefab/şablon,
+      dünya ayarları paneli (gökyüzü, sis, arazi, su, gündüz-gece), kural
+      düzenleyici, varlık adı düzenleme, konsol/kayıt paneli. (Eksen
+      tutamakları ✅ 2026-08-24.)
+
+- [ ] **Tetikleyici bölgeler sahne biçiminde yok.** Şimdilik yükleme onları
+      KORUYOR (silmek geri konulamaz bir kayıptı), ama bir sahne dosyası
+      bölge tanımlayamıyor — editörden bölge eklenemiyor.
 
 - [ ] **`chr` builtin'i yok** (`ord` var — asimetri). Editörün metin alanı
       şimdilik Tulpar tarafında ASCII tablosundan okuyor.

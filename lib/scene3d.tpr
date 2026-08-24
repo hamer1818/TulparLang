@@ -4055,7 +4055,10 @@ func play3d() {
             else { _lg_on = 1; _lg_ovl = 1; _lg_watch = 1; }
         }
 
-        if (_s3_ui == UI_NONE && _game_over3 == 0) {
+        // Duraklat kestirmesi EDİTÖRDE kapalı. ESC ve BACKSPACE inspector'daki
+        // sayı alanının kendi tuşları: bir rakam silmek duraklat örtüsünü
+        // açıyordu, sonra iki katman aynı fareyi paylaşıyordu.
+        if (_s3_ui == UI_NONE && _game_over3 == 0 && _ed_on3 == 0) {
             if (key_pressed(K_ESC) || key_pressed(K_P) || key_pressed(K_BACKSPACE)
                 || _gp_start == 1) {
                 _s3_ui = UI_PAUSE;
@@ -4075,6 +4078,9 @@ func play3d() {
         // Editör: TAB ile geçilir ve oyunu DONDURUR. Editör bir oyun kipi
         // değil — fizik, davranışlar ve kurallar çalışırsa düzenlediğin şey
         // ayağının altından kayar.
+        // TAB odaklı bir sayı alanı varken de çalışmalı; `editor3d` odağı
+        // temizliyor. Aksi hâlde odak kalıcı takılıyor ve editörün BÜTÜN
+        // klavyesi (uçuş, kip, geri-al, kaydet) sessizce ölüyordu.
         if (key_pressed(K_TAB)) { editor3d(_ed_on3 == 0); }
         int frozen = 0;
         if (_s3_ui != UI_NONE) { frozen = 1; }
@@ -4366,6 +4372,11 @@ func _sc_shape3(s): int {
     if (s == "sphere") { return SHAPE_SPHERE; }
     if (s == "cyl")    { return SHAPE_CYL; }
     if (s == "ramp")   { return SHAPE_RAMP; }
+    // "model" dalı EKSİKTİ ve bu sessiz bir kayıptı: yazıcı `_sc_shape_nm3`
+    // "model" üretiyor, okuyucu onu tanımayıp SHAPE_CUBE'e düşürüyordu. Yani
+    // `spawn3_model` ile kurulmuş her karakter TAB'a basıldığı an gri bir kutu
+    // oluyordu (ölçüldü).
+    if (s == "model")  { return SHAPE_MODEL; }
     return SHAPE_CUBE;
 }
 func _sc_shape_nm3(v): str {
@@ -4539,6 +4550,14 @@ func _sc_load_ent3(e): int {
                     _sc_col3(e, "color", WHITE),
                     _sc_shape3(_sc_s3(e, "shape", "cube")),
                     _sc_tag3(_sc_s3(e, "tag", "prop")));
+    if (_sc_has3(e, "model")) {
+        int sl = _slot_of3(id);
+        Ent3 me = _e3[sl];
+        me.model = _sc_i3(e, "model", 0 - 1);
+        me.anim_idle = _sc_i3(e, "anim_idle", 0 - 1);
+        me.anim_run  = _sc_i3(e, "anim_run", 0 - 1);
+        _e3[sl] = me;
+    }
     if (_sc_has3(e, "yaw"))   { set3yaw(id, _sc_f3(e, "yaw", 0.0)); }
     if (_sc_has3(e, "solid")) { solid3d(id, _sc_bool3(e, "solid", 1)); }
     if (_sc_has3(e, "hp"))    { health3d(id, _sc_i3(e, "hp", 0)); }
@@ -4584,14 +4603,41 @@ func _sc_load_bh3(id, b) {
 // ---- Genel giriş: sahneyi yükle -------------------------------------------
 // Yüklenen entity sayısını döndürür; bozuk/boş JSON'da 0. Sahneyi TAMAMEN
 // değiştirir (önce reset).
+// Sahne biçiminin SAHİP OLDUĞU her şeyi temizler — ve yalnız onları.
+//
+// Eskiden yükleme `scene3d_reset()` çağırıyordu, yani TAM teardown. Ama o
+// teardown sahne JSON'unda KARŞILIĞI OLMAYAN çok şeyi de siliyor: tetikleyici
+// bölgeler, çarpışma/ölüm kancaları, kalıcılık (rekor), nişan modu, yeniden
+// başlat kancası, kamera ayarları. Yükleme onları silerse geri koyamaz.
+//
+// Sonuç ölçüldü: editöre girip çıkmak (TAB TAB) bölge sayısını 1'den 0'a,
+// kayıt durumunu 1'den 0'a, nişan modunu AIM_LOOK'tan AIM_FLAT'e düşürüyordu.
+// Aynı yol her Ctrl+Z'de de işliyordu.
+//
+// Tek tek "şunu da koru" listesi tutmak bu hatayı yeniden üretirdi: motora
+// eklenen her yeni durum listeyi sessizce eskitirdi. Kural yapısal olmalı —
+// yükleme, GERİ YÜKLEYEBİLDİĞİ şeyi temizler.
+func _sc_clear_for_load3() {
+    _e3 = []; _e3gen = []; _e3free = []; _free_n3 = 0;
+    _bx = []; _by = []; _bz = []; _br = [];
+    _bh3 = []; _rl3 = [];
+    _sc_nm = []; _sc_id = [];
+    _s3_particles_clear();
+    _fade3 = [];
+    _hit_me = 0 - 1; _hit_other = 0 - 1;
+    _cam_target = 0 - 1;
+    _game_over3 = 0; _won3 = 0;
+    // Editör seçimi bayat handle olurdu.
+    _ed_sel3e = 0 - 1; _ed_drag3 = 0; _gz_axis3 = 0 - 1;
+}
+
 func scene_load3d(src): int {
     json sc = fromJson(src);
     if (length(keys(sc)) == 0) {
         log_err3d("sahne yuklenemedi: gecersiz JSON");
         return 0;
     }
-    scene3d_reset();
-    _sc_nm = []; _sc_id = [];
+    _sc_clear_for_load3();
     _sc_world_defaults3();
     if (_sc_has3(sc, "world")) { _sc_load_world3(sc["world"]); }
     int n = 0;
@@ -4796,6 +4842,15 @@ func _sc_ent_js3(s): str {
         else { o = o + ", \"solid\": false"; }
     }
     if (e.hpmax > 0) { o = o + ", \"hp\": " + toString(e.hpmax); }
+    // Model tanıtıcısı SÜREÇ İÇİ bir handle; dosyaya yazılması onu taşınabilir
+    // yapmıyor (başka bir çalıştırmada anlamsız). Yine de yazılıyor, çünkü
+    // editörün gidiş-dönüşü (TAB, geri-al) aynı süreçte oluyor ve bu olmadan
+    // modelli varlıklar kutuya dönüşüyordu.
+    if (e.shape == SHAPE_MODEL && e.model >= 0) {
+        o = o + ", \"model\": " + toString(e.model);
+        if (e.anim_idle >= 0) { o = o + ", \"anim_idle\": " + toString(e.anim_idle); }
+        if (e.anim_run >= 0)  { o = o + ", \"anim_run\": " + toString(e.anim_run); }
+    }
     str bs = _sc_bh_js3(_mk_handle3(s));
     if (bs != "") { o = o + ", \"behaviors\": [" + bs + "]"; }
     return o + "}";
@@ -5442,11 +5497,17 @@ func ed_duplicate3d(id): int {
     float off = 1.0;
     if (_ed_grid3 > 0.0) { off = _ed_grid3 * 2.0; }
     int n = spawn3(e.x + off, e.y, e.z + off, e.sx, e.sy, e.sz, e.color, e.shape, e.tag);
+    // Model ve animasyon alanları `spawn3` tarafından -1'e kuruluyor; taşınmazsa
+    // modelli bir varlığın kopyası "şekli MODEL ama modeli yok" oluyordu.
+    int ns = _slot_of3(n);
+    Ent3 ne = _e3[ns];
+    ne.model = e.model; ne.anim_idle = e.anim_idle; ne.anim_run = e.anim_run;
+    ne.anim_fps = e.anim_fps; ne.avoid = e.avoid;
+    _e3[ns] = ne;
     set3yaw(n, e.yaw);
     solid3d(n, e.solid);
     if (e.hpmax > 0) { health3d(n, e.hpmax); }
     // Davranışları da kopyala — çoğaltılan düşmanın kovalamaması sürpriz olurdu.
-    int i = 0;
     int cnt = length(_bh3);
     int k = 0;
     while (k < cnt) {
@@ -5507,20 +5568,14 @@ func _ed_capture3() { _sc_authored3 = scene_json3d(); }
 
 func _ed_apply_json3(js) {
     if (js == "") { return; }
-    array ha = _hitA; array hb = _hitB; array hf = _hitF;
-    array dt = _deadT; array df = _deadF;
-    array ln = _lvlN; array lf = _lvlF;
-    int cl = _cur_lvl3;
-    int sc = _score3;
     // Geçmiş KORUNUR: geri-al/yinele sahnede gezinmektir, yeni sahne açmak
-    // değil. (reset onu temizliyor — doğrusu da o, ama bu yol için değil.)
+    // değil. Geri kalan her şey (kancalar, bölgeler, kayıt, nişan modu) zaten
+    // korunuyor — `scene_load3d` artık tam teardown yapmıyor, yalnız sahne
+    // biçiminin sahip olduğunu temizliyor.
     array un = _ed_undo3; array rd = _ed_redo3;
+    int sc = _score3;
     scene_load3d(js);
     _ed_undo3 = un; _ed_redo3 = rd;
-    _hitA = ha; _hitB = hb; _hitF = hf;
-    _deadT = dt; _deadF = df;
-    _lvlN = ln; _lvlF = lf;
-    _cur_lvl3 = cl;
     _score3 = sc;
 }
 
@@ -5565,8 +5620,15 @@ func ed_redo_count3d(): int { return length(_ed_redo3); }
 
 int _ed_drag3 = 0;        // seçili varlık sürükleniyor mu
 float _ed_dgy3 = 0.0;     // sürükleme düzleminin yüksekliği (yakalandığı an)
+float _ed_ox3 = 0.0;      // kavrama ofseti: merkez - tıklanan nokta
+float _ed_oz3 = 0.0;
 
 func editor3d(on) {
+    // Odak ve sürükleme jestleri kip geçişinde SIFIRLANIR. Odaklı bir alan
+    // ekrandan kalkarsa (seçim gider, panel çizilmez) odağı temizleyecek kimse
+    // kalmıyordu ve editörün tüm klavyesi ölüyordu.
+    _g_focus3 = 0; _g_buf3 = ""; _g_act3 = 0;
+    _gz_axis3 = 0 - 1;
     if (on) {
         // Editöre girmek = Unity'deki "Dur": oyunun ürettiği durum ATILIR ve
         // yazarlık durumuna dönülür. Bunu yapmazsak 30 saniye oynadıktan sonra
@@ -5605,6 +5667,10 @@ func _s3_editor_look(dt) {
 }
 
 func _s3_editor_fly(dt) {
+    // Fare panelin üstündeyken kamera SÜRÜLMEZ. `mouse_wheel()` kare boyunca
+    // sabit bir değer döndürüyor, yani hem burası hem hiyerarşi listesi aynı
+    // karede okuyordu: listeyi kaydırmak aynı anda kamerayı da ileri sürüyordu.
+    if (_ed_over_ui3()) { return; }
     float yr = _ed_yaw3 * DEG2RAD3;
     float fx = sin(yr);
     float fz = 0.0 - cos(yr);
@@ -5664,15 +5730,26 @@ func _s3_editor_mouse(dt) {
                 return;
             }
         }
-        // 2) Sonra seçim. Geri-al işareti JESTİN BAŞINDA konuyor, komutların
-        // içinde değil: sürükleme ed_move3d'yi her karede çağırıyor.
-        ed_mark3d();
+        // 2) Sonra seçim.
         int hit = ed_pick_at3d(mouse_x(), mouse_y());
         if (hit >= 0) {
             _ed_sel3e = hit;
             // Sürükleme düzlemi varlığın KENDİ yüksekliğinde: zemin düzlemini
             // kullanmak, havadaki bir platformu tutunca onu yere düşürürdü.
             _ed_dgy3 = get3y(hit);
+            // KAVRAMA OFSETİ: tıkladığın nokta ile merkez arasındaki fark
+            // saklanıyor. Saklanmasaydı cismin MERKEZİ imlecin altına atlardı —
+            // 24 birimlik bir duvarın ucuna tıklamak onu 12 birim kaydırırdı.
+            _ed_ox3 = 0.0; _ed_oz3 = 0.0;
+            float t0 = _ray_planey3(_ed_cy3, _ed_ry3, _ed_dgy3);
+            if (t0 > 0.0) {
+                _ed_ox3 = get3x(hit) - (_ed_cx3 + _ed_rx3 * t0);
+                _ed_oz3 = get3z(hit) - (_ed_cz3 + _ed_rz3 * t0);
+            }
+            // Geri-al işareti yalnız GERÇEKTEN bir jest başlarken: boşluğa
+            // tıklamak da işaret koysaydı, 40'lık geçmiş boş tıklamalarla
+            // sessizce boşalırdı (ölçüldü).
+            if (_ed_mode3 == ED_MOVE) { ed_mark3d(); }
             _ed_drag3 = 1;
         } else { _ed_sel3e = 0 - 1; _ed_drag3 = 0; }
     }
@@ -5705,7 +5782,8 @@ func _s3_editor_mouse(dt) {
         _ed_ray3(mouse_x(), mouse_y(), screen_width(), screen_height(), _cam_fov);
         float t = _ray_planey3(_ed_cy3, _ed_ry3, _ed_dgy3);
         if (t > 0.0) {
-            ed_move3d(_ed_sel3e, _ed_cx3 + _ed_rx3 * t, _ed_dgy3, _ed_cz3 + _ed_rz3 * t);
+            ed_move3d(_ed_sel3e, _ed_cx3 + _ed_rx3 * t + _ed_ox3, _ed_dgy3,
+                      _ed_cz3 + _ed_rz3 * t + _ed_oz3);
         }
     }
 }
@@ -5811,6 +5889,9 @@ func _s3_editor_hud() {
     if (_ed_on3 == 0) { return; }
     _g_begin();
     _ed_toolbar3();
+    // OYNAT'a basıldıysa editör kapandı: kalan panelleri bu karede çizmek,
+    // oyunun ilk karesinde bir kare boyunca editör arayüzü göstermek olurdu.
+    if (_ed_on3 == 0) { return; }
     _ed_hierarchy3();
     _ed_inspector3();
     // Kısayol satırı görüntü penceresinin altında.
@@ -5965,11 +6046,15 @@ func _g_num(id, x, y, w, h, val, step): float {
 
     if (over && _g_press3 == 1) {
         _g_act3 = id; _g_dv3 = val * 1.0; _g_dx3 = _g_mx3; _g_moved3 = 0;
-        ed_mark3d();          // jestin BAŞI — geri alma noktası
     }
     if (_g_act3 == id && _g_down3 == 1) {
         int dd = _g_mx3 - _g_dx3;
-        if (dd > 3 || dd < 0 - 3) { _g_moved3 = 1; }
+        if (dd > 3 || dd < 0 - 3) {
+            // İşaret sürükleme GERÇEKTEN başladığında konuyor: yazmak için
+            // tıklamak da işaret koysaydı geçmiş boş adımlarla dolardı.
+            if (_g_moved3 == 0) { ed_mark3d(); }
+            _g_moved3 = 1;
+        }
         if (_g_moved3 == 1) { out = _g_dv3 + dd * step; }
     }
     if (_g_act3 == id && _g_rel3 == 1) {
@@ -6124,7 +6209,7 @@ func _ed_hierarchy3() {
         str nm = _sc_nm_of3(hnd);
         if (nm == "") { nm = _sc_tag_nm3(e.tag) + " " + toString(sl); }
         str lbl = nm + "  (" + _sc_shape_nm3(e.shape) + ")";
-        if (_g_item(9200 + r, 4, listy + r * rowh, _ED_HIER_W3 - 8, rowh - 1,
+        if (_g_item(12000 + r, 4, listy + r * rowh, _ED_HIER_W3 - 8, rowh - 1,
                     lbl, hnd == _ed_sel3e)) {
             ed_select3d(hnd);
         }
@@ -6148,8 +6233,12 @@ func _ed_next_tag3(t): int {
     return TAG_PLAYER;
 }
 func _ed_next_shape3(sh): int {
+    // SHAPE_MODEL döngüde YOK ve olmamalı: model bir varlığa dışarıdan
+    // yükleniyor, düğmeyle "model" yapmak modelsiz bir MODEL varlık üretirdi.
+    // Modelli varlık zaten bu döngüye sokulmuyor (çağıran yerde korunuyor).
     if (sh == SHAPE_CUBE)   { return SHAPE_SPHERE; }
     if (sh == SHAPE_SPHERE) { return SHAPE_CYL; }
+    if (sh == SHAPE_CYL)    { return SHAPE_RAMP; }
     return SHAPE_CUBE;
 }
 func _ed_bh_name3(k): str {
@@ -6185,12 +6274,24 @@ func _ed_inspector3() {
     // Etiket / şekil
     if (_g_button(9300, lx, y, 104, 22, "etiket: " + _sc_tag_nm3(e.tag))) {
         ed_mark3d();
-        e = _e3[s]; e.tag = _ed_next_tag3(e.tag); e.solid = _default_solid3(e.tag);
+        // Katılık ELLE değiştirilmişse korunuyor: etiketi çevirmek kullanıcının
+        // "bu duvar hayalet olsun" tercihini sessizce silmemeli.
+        e = _e3[s];
+        int elle = 0;
+        if (e.solid != _default_solid3(e.tag)) { elle = 1; }
+        e.tag = _ed_next_tag3(e.tag);
+        if (elle == 0) { e.solid = _default_solid3(e.tag); }
         _e3[s] = e;
     }
-    if (_g_button(9301, lx + 110, y, 104, 22, "sekil: " + _sc_shape_nm3(e.shape))) {
-        ed_mark3d();
-        e = _e3[s]; e.shape = _ed_next_shape3(e.shape); _e3[s] = e;
+    if (e.shape == SHAPE_MODEL) {
+        // Modelli varlığın şekli düğmeyle değiştirilemez: tek tık onu kutuya
+        // düşürürdü ve modeli geri getirmenin yolu olmazdı.
+        text("sekil: model", lx + 116, y + 5, 14, _G_DIM3());
+    } else {
+        if (_g_button(9301, lx + 110, y, 104, 22, "sekil: " + _sc_shape_nm3(e.shape))) {
+            ed_mark3d();
+            e = _e3[s]; e.shape = _ed_next_shape3(e.shape); _e3[s] = e;
+        }
     }
     y = y + 28;
 
@@ -6265,20 +6366,46 @@ func _ed_inspector3() {
     y = y + 8;
     text("DAVRANISLAR", lx, y, 14, _G_ACC3());
     y = y + 20;
+    // Alanlar TÜRE GÖRE. Eskiden her davranışa iki kutu çiziliyordu ve
+    // ikincisi çoğu tür için ANLAMSIZDI: "don" davranışının b alanı hiç
+    // serileştirilmiyor, yani sürüklenip değiştirilebiliyor ama ilk
+    // kayıt/geri-al/TAB'da sessizce geri dönüyordu (ölçüldü: 7 → 0).
+    // Şimdi yalnız gerçekten saklanan alanlar gösteriliyor.
     int bi = 0;
     int shown = 0;
     while (bi < length(_bh3)) {
         Bh3 b = _bh3[bi];
         if (b.id == id) {
             text(_ed_bh_name3(b.kind), lx + 4, y + 4, 14, _G_TXT3());
-            float pa = _g_num(9400 + shown * 2, lx + 84, y, 54, 20, b.a, 0.1);
-            float pb = _g_num(9401 + shown * 2, lx + 142, y, 54, 20, b.b, 0.1);
-            if (pa != b.a || pb != b.b) {
+            // 1. alan: devriyede HIZ (e), diğerlerinde a.
+            str n1 = "hiz";
+            if (b.kind == BH_BOB)   { n1 = "yuks"; }
+            if (b.kind == BH_SHOOT) { n1 = "arlk"; }
+            float v1 = b.a;
+            if (b.kind == BH_PATROL) { v1 = b.e; }
+            text(n1, lx + 62, y + 4, 12, _G_DIM3());
+            float p1 = _g_num(20000 + shown * 4, lx + 96, y, 48, 20, v1, 0.1);
+            if (p1 != v1) {
                 Bh3 nb = _bh3[bi];
-                nb.a = pa; nb.b = pb;
+                if (b.kind == BH_PATROL) { nb.e = p1; } else { nb.a = p1; }
                 _bh3[bi] = nb;
             }
-            if (_g_button(9450 + shown, lx + 200, y, 22, 20, "x")) {
+            // 2. alan yalnız b'si SERİLEŞTİRİLEN türlerde.
+            if (b.kind == BH_MOVE || b.kind == BH_CHASE || b.kind == BH_BOB ||
+                b.kind == BH_SHOOT) {
+                str n2 = "menzil";
+                if (b.kind == BH_MOVE)  { n2 = "zipla"; }
+                if (b.kind == BH_BOB)   { n2 = "hiz"; }
+                if (b.kind == BH_SHOOT) { n2 = "hiz"; }
+                text(n2, lx + 148, y + 4, 12, _G_DIM3());
+                float p2 = _g_num(20001 + shown * 4, lx + 196, y, 44, 20, b.b, 0.1);
+                if (p2 != b.b) {
+                    Bh3 nb2 = _bh3[bi];
+                    nb2.b = p2;
+                    _bh3[bi] = nb2;
+                }
+            }
+            if (_g_button(20002 + shown * 4, lx + 244, y, 20, 20, "x")) {
                 ed_mark3d();
                 int last = length(_bh3) - 1;
                 if (bi != last) { _bh3[bi] = _bh3[last]; }

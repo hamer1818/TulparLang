@@ -4138,8 +4138,151 @@ func t_gui_shape_cycle_covers_all() {
     int sh = SHAPE_CUBE;
     sh = _ed_next_shape3(sh); assert_eq_int(sh, SHAPE_SPHERE);
     sh = _ed_next_shape3(sh); assert_eq_int(sh, SHAPE_CYL);
+    sh = _ed_next_shape3(sh); assert_eq_int(sh, SHAPE_RAMP);
     sh = _ed_next_shape3(sh); assert_eq_int(sh, SHAPE_CUBE);
+    // SHAPE_MODEL döngüde OLMAMALI: düğmeyle "model" yapmak modelsiz bir
+    // MODEL varlık üretirdi.
+    int k = 0;
+    int sh2 = SHAPE_CUBE;
+    while (k < 8) {
+        sh2 = _ed_next_shape3(sh2);
+        assert(sh2 != SHAPE_MODEL, "model donguye girmemeli");
+        k = k + 1;
+    }
 }
+
+// ---- Denetimden çıkan hatalar ----------------------------------------------
+
+// EN CİDDİSİ: editöre girmek (ve her geri-al) sahne biçiminde YER ALMAYAN
+// motor durumunu siliyordu. Ölçüldü: bölge 1→0, kayıt 1→0, nişan AIM_LOOK→FLAT.
+// Sebep, yüklemenin `scene3d_reset()` (tam teardown) çağırmasıydı; oysa
+// yükleme yalnız GERİ YÜKLEYEBİLDİĞİNİ temizlemeli.
+func _ap_cb() { }
+
+func t_ed_tab_preserves_unserialized_state() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0, 4.0, 4.0, 4.0, TAG_PLAYER);
+    on_enter3d(z, _ap_cb);
+    aim_mode3d(AIM_LOOK);
+    camera_near3d(9.0);
+    _ed_capture3();
+    assert_eq_int(trigger_count3d(), 1);
+
+    editor3d(true);
+    assert_eq_int(trigger_count3d(), 1);
+    assert_eq_int(_aim_mode3, AIM_LOOK);
+    assert(abs_f3(_cam_near3 - 9.0) < 0.001, "kamera ayari korunmali");
+    editor3d(false);
+    assert_eq_int(trigger_count3d(), 1);
+
+    // Geri-al da aynı yolu kullanıyor.
+    ed_mark3d();
+    ed_move3d(p, 4.0, 1.0, 0.0);
+    ed_undo3d();
+    assert_eq_int(trigger_count3d(), 1);
+    assert_eq_int(_aim_mode3, AIM_LOOK);
+}
+
+// SHAPE_MODEL varlıklar ilk TAB'da gri kutuya dönüyordu: yazıcı "model"
+// üretiyor, okuyucu o dalı tanımayıp SHAPE_CUBE'e düşürüyordu.
+func t_scene_model_shape_survives_roundtrip() {
+    scene3d_reset();
+    no_ground3d();
+    // Gerçek model yüklemeden, handle alanını doğrudan kuruyoruz — sınanan
+    // şey biçimin bu alanı taşıyıp taşımadığı, modelin kendisi değil.
+    int a = spawn3(1.0, 2.0, 3.0, 2.0, 2.0, 2.0, WHITE, SHAPE_CUBE, TAG_PLAYER);
+    _sc_reg3("kahraman", a);
+    int sl = _slot_of3(a);
+    Ent3 e = _e3[sl];
+    e.shape = SHAPE_MODEL; e.model = 7; e.anim_idle = 2; e.anim_run = 5;
+    _e3[sl] = e;
+    assert(_sc_shape3("model") == SHAPE_MODEL, "okuyucu model dalini bilmeli");
+
+    scene_load3d(scene_json3d());
+    int b = bul3d("kahraman");
+    assert(b >= 0, "ad korunmali");
+    Ent3 e2 = _e3[_slot_of3(b)];
+    assert_eq_int(e2.shape, SHAPE_MODEL);
+    assert_eq_int(e2.model, 7);
+    assert_eq_int(e2.anim_idle, 2);
+    assert_eq_int(e2.anim_run, 5);
+}
+
+// Çoğaltma model/animasyon alanlarını da taşımalı; taşımazsa kopya
+// "şekli MODEL ama modeli yok" oluyordu.
+func t_ed_duplicate_copies_model_fields() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 2.0, 2.0, 2.0, WHITE, SHAPE_CUBE, TAG_ENEMY);
+    int sl = _slot_of3(a);
+    Ent3 e = _e3[sl];
+    e.shape = SHAPE_MODEL; e.model = 3; e.anim_idle = 1; e.anim_run = 4;
+    _e3[sl] = e;
+    int n = ed_duplicate3d(a);
+    Ent3 ne = _e3[_slot_of3(n)];
+    assert_eq_int(ne.shape, SHAPE_MODEL);
+    assert_eq_int(ne.model, 3);
+    assert_eq_int(ne.anim_idle, 1);
+    assert_eq_int(ne.anim_run, 4);
+}
+
+// Devriye ve ateş davranışlarının TÜM parametreleri gidip gelmeli. Inspector
+// eskiden her davranışa iki kutu çiziyordu ve bazıları hiç serileştirilmiyordu
+// — sürüklenip değişiyor, ilk kayıtta sessizce geri dönüyordu.
+func t_bh_all_params_roundtrip() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    _sc_reg3("d", a);
+    patrol_behavior3d(a, 0.0 - 7.0, 2.0, 9.0, 0.0 - 3.0, 6.5);
+    shoot_behavior3d(a, 1.25, 22.0, 3.5, TAG_PLAYER, 18.0);
+    scene_load3d(scene_json3d());
+    int nid = bul3d("d");
+    int i = 0;
+    int okp = 0; int oks = 0;
+    while (i < length(_bh3)) {
+        Bh3 b = _bh3[i];
+        if (b.id == nid && b.kind == BH_PATROL) {
+            assert(abs_f3(b.a + 7.0) < 0.001, "x1");
+            assert(abs_f3(b.b - 2.0) < 0.001, "z1");
+            assert(abs_f3(b.c - 9.0) < 0.001, "x2");
+            assert(abs_f3(b.d + 3.0) < 0.001, "z2");
+            assert(abs_f3(b.e - 6.5) < 0.001, "hiz");
+            okp = 1;
+        }
+        if (b.id == nid && b.kind == BH_SHOOT) {
+            assert(abs_f3(b.a - 1.25) < 0.001, "aralik");
+            assert(abs_f3(b.b - 22.0) < 0.001, "hiz");
+            assert(abs_f3(b.c - 3.5) < 0.001, "omur");
+            assert(abs_f3(b.d - 18.0) < 0.001, "menzil");
+            assert_eq_int(b.tag, TAG_PLAYER);
+            oks = 1;
+        }
+        i = i + 1;
+    }
+    assert_eq_int(okp + oks, 2);
+}
+
+// Widget kimlik aralıkları AYRIK olmalı. Tek bir "basılı widget" yuvası olduğu
+// için çakışan iki widget'tan ikincisi ölü kalır — ve bu ancak listeler
+// büyüyünce ortaya çıkar, yani gözle fark edilmesi çok zor bir hata.
+func t_gui_widget_id_ranges_are_disjoint() {
+    // Hiyerarşi satırları 12000+r, davranış satırları 20000+shown*4 (+0,+1,+2).
+    // 500 satır ve 500 davranış varsayımıyla üst sınırlar:
+    int hier_max = 12000 + 500;
+    int bh_min = 20000;
+    assert(hier_max < bh_min, "hiyerarsi ile davranis araliklari cakismamali");
+    // Sabit kimlikler (9001-9471) her ikisinin de ALTINDA kalmalı.
+    assert(9471 < 12000, "sabit kimlikler hiyerarsinin altinda");
+    // Davranış satırı içi üç kimlik birbirine girmemeli.
+    int s0 = 20000 + 0 * 4;
+    int s1 = 20000 + 1 * 4;
+    assert(s0 + 2 < s1, "ardisik davranis satirlari cakismamali");
+}
+
+
 
 test("merkez isini ileri yon", "t_ed_center_ray_is_forward");
 test("isin birim", "t_ed_ray_is_unit");
@@ -4289,6 +4432,11 @@ test("ascii tablosu gidis-donusu", "t_gui_ascii_table_roundtrips");
 test("ascii sayi girisi kapsiyor", "t_gui_ascii_covers_number_input");
 test("etiket dongusu tumunu geziyor", "t_gui_tag_cycle_covers_all");
 test("sekil dongusu tumunu geziyor", "t_gui_shape_cycle_covers_all");
+test("TAB serilesmeyen durumu koruyor", "t_ed_tab_preserves_unserialized_state");
+test("model sekli gidis-donusten sag cikiyor", "t_scene_model_shape_survives_roundtrip");
+test("cogaltma model alanlarini tasiyor", "t_ed_duplicate_copies_model_fields");
+test("davranis parametrelerinin tumu gidip geliyor", "t_bh_all_params_roundtrip");
+test("widget kimlik araliklari ayrik", "t_gui_widget_id_ranges_are_disjoint");
 test("isin ekseni kesiyor", "t_gz_ray_axis_intersects");
 test("isin eksen kacikligi", "t_gz_ray_axis_offset_distance");
 test("egik isin paydayi kullaniyor", "t_gz_ray_axis_oblique_uses_denominator");

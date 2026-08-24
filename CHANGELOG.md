@@ -42,6 +42,35 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Fixed — editör denetimi: sahne yüklemesi geri koyamayacağı şeyi siliyordu
+
+Bir alt-ajan denetimi editörde bir dizi hata buldu; en ciddisi sessiz durum
+kaybıydı ve ölçülerek doğrulandı.
+
+**Yükleme artık tam teardown yapmıyor.** `scene_load3d` `scene3d_reset()`
+çağırıyordu, yani sahne JSON'unda KARŞILIĞI OLMAYAN her şeyi de siliyordu:
+tetikleyici bölgeler, kalıcılık (rekor), nişan modu, kamera ayarları. Ölçüm:
+editöre girip çıkmak bölge sayısını 1'den 0'a, kayıt durumunu 1'den 0'a,
+nişan modunu AIM_LOOK'tan AIM_FLAT'e düşürüyordu — ve aynı yol her Ctrl+Z'de
+işliyordu. Düzeltme tek tek "şunu da koru" listesi DEĞİL (o liste motora
+eklenen her yeni durumla sessizce eskirdi); yükleme artık yalnız GERİ
+YÜKLEYEBİLDİĞİNİ temizliyor (`_sc_clear_for_load3`).
+
+**SHAPE_MODEL varlıklar ilk TAB'da gri kutuya dönüyordu:** yazıcı "model"
+üretiyor, okuyucu o dalı tanımayıp SHAPE_CUBE'e düşürüyordu. Model ve
+animasyon tanıtıcıları artık taşınıyor; `ed_duplicate3d` de onları kopyalıyor.
+
+**Diğerleri:** editörde ESC/BACKSPACE artık duraklat menüsü açmıyor (sayı
+alanında bir rakam silmek örtüyü açıyordu); `_g_focus3` kip geçişinde
+temizleniyor (takılırsa editörün tüm klavyesi ölüyordu); sürüklemede KAVRAMA
+OFSETİ saklanıyor (uzun bir duvarın ucuna tıklamak onu merkezi imlece
+gelecek şekilde ışınlıyordu); geri-al işareti yalnız gerçek bir jest
+başlarken konuyor (boş tıklamalar 40'lık geçmişi yiyordu); fare tekerleği
+panel üstündeyken kamerayı sürmüyor (liste kaydırmak aynı anda kamerayı da
+kaydırıyordu); widget kimlik aralıkları ayrıldı; davranış alanları artık
+TÜRE GÖRE gösteriliyor (serileştirilmeyen alanlar düzenlenebiliyor ama ilk
+kayıtta sessizce geri dönüyordu).
+
 ### Added — eksen tutamakları (gizmo)
 
 Seçili varlıkta üç ok: X kırmızı, Y yeşil, Z mavi. Bir oka tutununca hareket
