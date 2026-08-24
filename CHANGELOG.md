@@ -42,6 +42,20 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Changed — arayüz ölçeklenebilir oldu (varsayılan 2x)
+
+Arayüz elemanları çok küçüktü. Yazı tipi yalnız 10/20/30 puntoda net olduğu
+için ara boy sunulamıyor (aradaki her punto harfleri birbirine sokuyor); onun
+yerine **bütün arayüz** aynı katsayıyla ölçekleniyor: 1x / 2x / 3x, varsayılan
+**2x**. Araç çubuğundaki "UI 2x" düğmesi döndürüyor.
+
+Yalnız puntoyu büyütmek yetmezdi: sütun genişlikleri panel genişliğinden
+türüyor, yani metin panelden taşardı. Paneller de ölçekle büyüyor — ama DOĞRU
+ORANTILI değil (3x'te ikisi birden editör penceresinin yarısını yerdi):
+sabit taban + ölçek payı. Bir test her üç ölçekte de sütunların panele
+sığdığını, sayı alanlarının okunabilir kaldığını ve şerit/panel toplamlarının
+pencerenin yarısını geçmediğini sınıyor.
+
 ### Added — kural düzenleyici ve panel kaydırma
 
 **Kurallar artık editörden kurulabiliyor** (DÜNYA panelinin altında): çarpışma

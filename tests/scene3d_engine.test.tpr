@@ -4492,14 +4492,47 @@ func t_ui_app_layout_leaves_viewport() {
     int h = _ed_view_h_at3(820);
     assert_eq_int(h, 820 - _ED_MENU_H3 - _ED_TOOL_H3 - _ED_CONS_H3 - _ED_STAT_H3);
     assert(h > 400, "editor penceresinde sahne gorunumu genis olmali: " + toString(h));
-    // Küçük bir oyun penceresinde (960x560) de kullanılabilir kalmalı.
-    assert(_ed_view_w_at3(960) > 400, "960'ta genislik: " + toString(_ed_view_w_at3(960)));
-    assert(_ed_view_h_at3(560) > 200, "560'ta yukseklik: " + toString(_ed_view_h_at3(560)));
+    // Küçük bir oyun penceresinde (960x560) de kullanılabilir kalmalı. Eşik
+    // editörün kendi penceresininkinden düşük: 2x ölçekte paneller 960'ın
+    // önemli bir kısmını alıyor ve bu kabul edilmiş bir denge.
+    assert(_ed_view_w_at3(960) > 250, "960'ta genislik: " + toString(_ed_view_w_at3(960)));
+    assert(_ed_view_h_at3(560) > 150, "560'ta yukseklik: " + toString(_ed_view_h_at3(560)));
     // Dar/kısa pencerede negatif üretmemeli.
     assert(_ed_view_h_at3(200) >= 80, "kisa pencerede taban yukseklik");
-    // Yatay şeritlerin toplamı pencerenin yarısını geçmemeli.
-    int chrome = _ED_MENU_H3 + _ED_TOOL_H3 + _ED_CONS_H3 + _ED_STAT_H3;
-    assert(chrome < 280, "kabuk cok yer kapliyor: " + toString(chrome));
+}
+
+// Arayüz ölçeği 1x/2x/3x — ÜÇÜNDE DE yerleşim tutmalı. Yalnız puntoyu
+// büyütmek metni panelden taşırırdı (sütunlar panel genişliğinden türüyor),
+// o yüzden paneller de ölçekle büyüyor; bu test o dengeyi koruyor.
+func t_ui_all_scales_are_usable() {
+    int k = 1;
+    while (k <= 3) {
+        editor_ui_scale3d(k);
+        assert_eq_int(editor_ui_scale_now3d(), k);
+        assert_eq_int(_F3, 10 * k);
+        // Editörün kendi penceresinde (1440x820) sahne görünümü geniş kalmalı.
+        assert(_ed_view_w_at3(1440) > 400,
+               toString(k) + "x: goruntu genisligi " + toString(_ed_view_w_at3(1440)));
+        assert(_ed_view_h_at3(820) > 260,
+               toString(k) + "x: goruntu yuksekligi " + toString(_ed_view_h_at3(820)));
+        // Sütunlar panele sığmalı.
+        int fw = _ed_f3w3(_ED_INSP_W3, _us3(26));
+        assert(_ED_PAD3 + _us3(26) + fw * 3 + 8 + _ED_PAD3 <= _ED_INSP_W3,
+               toString(k) + "x: inspector sutunlari tasti");
+        // Sayı alanı okunabilir kalmalı (üç haneli değer sığsın).
+        assert(fw >= 10 * k * 2, toString(k) + "x: sayi alani cok dar: " + toString(fw));
+        // Yatay şeritler (menü + araç + konsol + durum) pencerenin YARISINI
+        // geçmemeli. Ölçeğe doğru orantılı büyüyen bir konsol 3x'te sahne
+        // görünümünü ezerdi ve 1440x820'de bunu görmek zor — sınır burada.
+        int chrome = _ED_MENU_H3 + _ED_TOOL_H3 + _ED_CONS_H3 + _ED_STAT_H3;
+        assert(chrome < 410, toString(k) + "x: kabuk cok yer kapliyor: " + toString(chrome));
+        // Paneller de pencerenin yarısını geçmemeli.
+        assert(_ED_HIER_W3 + _ED_INSP_W3 < 720,
+               toString(k) + "x: paneller cok genis: " +
+               toString(_ED_HIER_W3 + _ED_INSP_W3));
+        k = k + 1;
+    }
+    editor_ui_scale3d(2);   // varsayılana dön
 }
 
 // İmleç kuralı üç durumlu ve üçü de gerekli:
@@ -4766,6 +4799,7 @@ test("renk bileseni sinirli", "t_ui_color_clamp");
 test("punto tam sayi olcekli", "t_ui_font_size_is_crisp");
 test("paneller ekrana sigiyor", "t_ui_panels_fit_screen");
 test("uygulama yerlesimi gorunume yer birakiyor", "t_ui_app_layout_leaves_viewport");
+test("her olcekte yerlesim tutuyor", "t_ui_all_scales_are_usable");
 test("editorde imlec gorunur", "t_ui_cursor_visible_in_editor");
 test("menude imlec serbest", "t_ui_cursor_free_in_menus");
 test("ESC durdurup duzenlemeye donuyor", "t_ui_stop_returns_to_edit");

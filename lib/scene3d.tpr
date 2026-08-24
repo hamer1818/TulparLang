@@ -5990,19 +5990,60 @@ int   _g_down3 = 0; int _g_press3 = 0; int _g_rel3 = 0;
 // 2.0 / 2). Arayüz baştan sona 10 punto; başlıklar puntoyla değil RENK ve
 // zemin şeridiyle ayrılıyor — Godot ve Unity'nin panel başlıkları da
 // gövdeden belirgin biçimde büyük değil.
-int _F3 = 10;
+// Arayüz ÖLÇEĞİ. Yazı tipi yalnız 10/20/30'da net olduğu için ara boy yok;
+// bunun yerine BÜTÜN arayüz aynı katsayıyla ölçekleniyor. 1x küçük ekran,
+// 2x varsayılan (10 punto modern bir ekranda okunamayacak kadar küçük
+// kalıyordu), 3x yüksek DPI.
+//
+// Ölçek değişince paneller de genişliyor: yalnız puntoyu büyütmek metni
+// panelden taşırırdı, çünkü sütun genişlikleri panel genişliğinden türüyor.
+int _ed_ui3 = 2;
+int _F3 = 20;
+
+// Ölçeğe göre büyütülmüş piksel değeri. Panel içindeki bütün sabitler 1x
+// tasarımının değerleri; buradan geçince ölçek uyumlu oluyorlar.
+func _us3(v): int { return v * _ed_ui3; }
 
 // Ölçüler tek bir yerden türüyor; panellerin içindeki hiçbir konum elle
 // yazılmış mutlak sayı değil (ilk sürümde öyleydi ve üç yerde taşıyordu:
 // alt yardım satırı 434 piksel, araç çubuğu durum metni KAYDET düğmesinin
 // üstüne, davranış satırı inspector panelinin dışına).
-int _ED_TOOL_H3 = 24;
-int _ED_HIER_W3 = 168;
-int _ED_INSP_W3 = 224;
-int _ED_ROW3    = 14;    // liste satırı
-int _ED_FLD3    = 16;    // alan/düğme yüksekliği
-int _ED_PAD3    = 6;
+int _ED_TOOL_H3 = 48;
+int _ED_HIER_W3 = 228;
+int _ED_INSP_W3 = 304;
+int _ED_ROW3    = 28;    // liste satırı
+int _ED_FLD3    = 32;    // alan/düğme yüksekliği
+int _ED_PAD3    = 12;
 int _ed_hscroll3 = 0;
+
+// Ölçeği uygula — bütün şerit/panel ölçüleri buradan türüyor. Tek tek elle
+// ayarlamak, birini unutunca sessizce taşan bir yerleşim demekti.
+func editor_ui_scale3d(k) {
+    int n = k;
+    if (n < 1) { n = 1; }
+    if (n > 3) { n = 3; }
+    _ed_ui3 = n;
+    _F3         = 10 * n;
+    _ED_PAD3    =  6 * n;
+    _ED_FLD3    = 16 * n;
+    _ED_ROW3    = 14 * n;
+    _ED_MENU_H3 = 20 * n;
+    _ED_TOOL_H3 = 24 * n;
+    _ED_STAT_H3 = 18 * n;
+    // Konsol ve paneller ölçekle DOĞRU ORANTILI büyümüyor: 3x'te ekranın
+    // yarısını yerlerdi. Sabit bir taban + ölçek payı.
+    _ED_CONS_H3 = 40 + 28 * n;
+    // Paneller ölçekle büyüyor ama DOĞRU ORANTILI değil: 3x'te ikisi birden
+    // editör penceresinin yarısını yerdi. Sabit taban + ölçek payı, ve toplam
+    // 720'nin (1440'ın yarısı) altında kalıyor — bir test bunu koruyor.
+    _ED_HIER_W3 = 84 + 72 * n;
+    _ED_INSP_W3 = 96 + 104 * n;
+    // Kaydırmalar bayatlamasın.
+    _ed_hscroll3 = 0;
+    _ed_iscroll3 = 0;
+}
+func editor_ui_olcek3d(k) { editor_ui_scale3d(k); }
+func editor_ui_scale_now3d(): int { return _ed_ui3; }
 
 func _G_BG3(): int    { return rgba(24, 26, 32, 242); }
 func _G_HEAD3(): int  { return rgb(38, 42, 52); }
@@ -6039,7 +6080,7 @@ func _g_txtc3(s, x, y, w, h, c) {
     text(t, x + toInt((w - text_width(t, _F3)) / 2), y + toInt((h - _F3) / 2), _F3, c);
 }
 // Etiketi olan bir düğmenin doğal genişliği.
-func _g_btnw3(label): int { return text_width(label, _F3) + 14; }
+func _g_btnw3(label): int { return text_width(label, _F3) + _us3(14); }
 
 func _g_begin() {
     _g_mx3 = mouse_x(); _g_my3 = mouse_y();
@@ -6060,15 +6101,15 @@ func _g_in(x, y, w, h): bool {
 // Panel: ince başlık şeridi, punto DEĞİŞMİYOR — ayrım renkte.
 func _g_panel(x, y, w, h, title) {
     rect(x, y, w, h, _G_BG3());
-    rect(x, y, w, 16, _G_HEAD3());
+    rect(x, y, w, _us3(16), _G_HEAD3());
     rect_lines(x, y, w, h, _G_LINE3());
-    _g_txt3(title, x + _ED_PAD3, y + 3, w - _ED_PAD3 * 2, _G_ACC3());
+    _g_txt3(title, x + _ED_PAD3, y + _us3(3), w - _ED_PAD3 * 2, _G_ACC3());
 }
 
 // Panel içinde bir bölüm başlığı.
 func _g_section(x, y, w, title) {
     line(x, y, x + w, y, _G_LINE3());
-    _g_txt3(title, x + 2, y + 4, w - 4, _G_ACC3());
+    _g_txt3(title, x + _us3(2), y + _us3(4), w - _us3(4), _G_ACC3());
 }
 
 func _g_button(id, x, y, w, h, label): bool {
@@ -6236,9 +6277,9 @@ int _ed_rt3      = 0 - 1;
 int _ed_rtw3     = 0;
 int _ed_rth3     = 0;
 
-int _ED_MENU_H3 = 20;
+int _ED_MENU_H3 = 40;
 int _ED_CONS_H3 = 96;
-int _ED_STAT_H3 = 18;
+int _ED_STAT_H3 = 36;
 
 // İmleç kilidi kararı TEK yerde ve saf: döngünün içine gömülü olduğu sürece
 // penceresiz sınanamıyordu ve bir hata tam buradan çıktı — editör sahneyi
@@ -6391,6 +6432,17 @@ func _ed_toolbar3() {
     int w5 = _g_btnw3(gl);
     if (_g_tog(9006, x, by, w5, _ED_FLD3, gl, _ed_grid3 > 0.0)) {
         if (_ed_grid3 > 0.0) { _ed_grid3 = 0.0; } else { _ed_grid3 = 0.5; }
+    }
+    x = x + w5 + _us3(10);
+    // Arayüz ölçeği. Yazı tipi yalnız 10/20/30'da net olduğu için ara boy
+    // sunulamıyor; onun yerine bütün arayüz aynı katsayıyla büyüyor.
+    str us = "UI " + toString(_ed_ui3) + "x";
+    int w9 = _g_btnw3(us);
+    if (_g_button(9012, x, by, w9, _ED_FLD3, us)) {
+        int nk = _ed_ui3 + 1;
+        if (nk > 3) { nk = 1; }
+        editor_ui_scale3d(nk);
+        return;   // ölçüler değişti; bu karenin kalanını çizme
     }
 
     // ORTA: oynatma denetimleri. Unity'nin imzası bu — kullanıcı gözünü
@@ -6670,7 +6722,7 @@ func _ed_rules_panel3(px, y, pw): int {
     int lx = px + _ED_PAD3;
     int inner = pw - _ED_PAD3 * 2;
     int third = toInt((inner - 8) / 3);
-    int xw = 16;
+    int xw = _us3(16);
     int i = 0;
     while (i < length(_rl3)) {
         Rule3 r = _rl3[i];
@@ -6699,7 +6751,7 @@ func _ed_rules_panel3(px, y, pw): int {
             pop(_rl3);
             return y;   // dizi değişti; bu kareyi burada bitir
         }
-        y = y + _ED_FLD3 + 2;
+        y = y + _ED_FLD3 + _us3(2);
         // 2. satır: eylem + miktar
         if (_g_button(21003 + i * 8, lx + third + 4, y, third, _ED_FLD3,
                       _rl_act_nm3(r.act))) {
@@ -6711,7 +6763,7 @@ func _ed_rules_panel3(px, y, pw): int {
                               _ED_FLD3, r.n, 1.0);
             if (nn != r.n) { Rule3 nr5 = _rl3[i]; nr5.n = nn; _rl3[i] = nr5; }
         }
-        y = y + _ED_FLD3 + 5;
+        y = y + _ED_FLD3 + _us3(5);
         i = i + 1;
     }
     int half = toInt((inner - 4) / 2);
@@ -6731,13 +6783,13 @@ func _ed_world_panel3(px, py, pw) {
     int lx = px + _ED_PAD3;
     int inner = pw - _ED_PAD3 * 2;
     int half = toInt((inner - 4) / 2);
-    int labw = 30;
+    int labw = _us3(30);
     int fw = _ed_f3w3(pw, labw);
     int fx = lx + labw;
     int y = py;
 
     _g_section(px + 2, y, pw - 4, "GOKYUZU");
-    y = y + 16;
+    y = y + _us3(16);
     str sk = "gokyuzu: yok";
     if (_sky3 == 1) { sk = "gokyuzu: var"; }
     if (_g_tog(9700, lx, y, inner, _ED_FLD3, sk, _sky3 == 1)) {
@@ -6745,28 +6797,28 @@ func _ed_world_panel3(px, py, pw) {
         if (_sky3 == 1) { sky3d_off(); }
         else { sky3d(rgb(58, 116, 200), rgb(196, 220, 240)); }
     }
-    y = y + _ED_FLD3 + 3;
+    y = y + _ED_FLD3 + _us3(3);
     if (_sky3 == 1) {
         _g_txt3("ust", lx, y + 3, labw - 2, _G_DIM3());
         float tr = _g_num(9701, fx, y, fw, _ED_FLD3, _col_r3(_sky_top3) * 1.0, 1.0);
         float tg = _g_num(9702, fx + fw + 4, y, fw, _ED_FLD3, _col_g3(_sky_top3) * 1.0, 1.0);
         float tb = _g_num(9703, fx + (fw + 4) * 2, y, fw, _ED_FLD3, _col_b3(_sky_top3) * 1.0, 1.0);
         _sky_top3 = rgb(_ed_c255(tr), _ed_c255(tg), _ed_c255(tb));
-        y = y + _ED_FLD3 + 3;
+        y = y + _ED_FLD3 + _us3(3);
         _g_txt3("alt", lx, y + 3, labw - 2, _G_DIM3());
         float br = _g_num(9704, fx, y, fw, _ED_FLD3, _col_r3(_sky_bot3) * 1.0, 1.0);
         float bg = _g_num(9705, fx + fw + 4, y, fw, _ED_FLD3, _col_g3(_sky_bot3) * 1.0, 1.0);
         float bb = _g_num(9706, fx + (fw + 4) * 2, y, fw, _ED_FLD3, _col_b3(_sky_bot3) * 1.0, 1.0);
         _sky_bot3 = rgb(_ed_c255(br), _ed_c255(bg), _ed_c255(bb));
-        y = y + _ED_FLD3 + 3;
+        y = y + _ED_FLD3 + _us3(3);
     }
     _g_txt3("sis", lx, y + 3, labw - 2, _G_DIM3());
     _fog3 = _g_num(9707, fx, y, fw, _ED_FLD3, _fog3, 0.001);
     if (_fog3 < 0.0) { _fog3 = 0.0; }
-    y = y + _ED_FLD3 + 6;
+    y = y + _ED_FLD3 + _us3(6);
 
     _g_section(px + 2, y, pw - 4, "DUNYA");
-    y = y + 16;
+    y = y + _us3(16);
     str gr = "zemin: yok";
     if (_ground_on == 1) { gr = "zemin: var"; }
     if (_g_tog(9710, lx, y, half, _ED_FLD3, gr, _ground_on == 1)) {
@@ -6774,7 +6826,7 @@ func _ed_world_panel3(px, py, pw) {
         if (_ground_on == 1) { no_ground3d(); } else { ground3d(_ground_y); }
     }
     _ground_y = _g_num(9711, lx + half + 4, y, half, _ED_FLD3, _ground_y, 0.1);
-    y = y + _ED_FLD3 + 3;
+    y = y + _ED_FLD3 + _us3(3);
     _g_txt3("yer", lx, y + 3, labw - 2, _G_DIM3());
     _grav = _g_num(9712, fx, y, fw, _ED_FLD3, _grav, 0.2);
     str lt = "isik";
@@ -6786,10 +6838,10 @@ func _ed_world_panel3(px, py, pw) {
         ed_mark3d();
         if (_shadows3 == 1) { _shadows3 = 0; } else { _shadows3 = 1; }
     }
-    y = y + _ED_FLD3 + 6;
+    y = y + _ED_FLD3 + _us3(6);
 
     _g_section(px + 2, y, pw - 4, "SU");
-    y = y + 16;
+    y = y + _us3(16);
     str wt = "su: yok";
     if (_water_on3 == 1) { wt = "su: var"; }
     if (_g_tog(9720, lx, y, half, _ED_FLD3, wt, _water_on3 == 1)) {
@@ -6798,20 +6850,20 @@ func _ed_world_panel3(px, py, pw) {
     }
     if (_water_on3 == 1) {
         _water_y3 = _g_num(9721, lx + half + 4, y, half, _ED_FLD3, _water_y3, 0.1);
-        y = y + _ED_FLD3 + 3;
+        y = y + _ED_FLD3 + _us3(3);
         _g_txt3("renk", lx, y + 3, labw - 2, _G_DIM3());
         float wr = _g_num(9722, fx, y, fw, _ED_FLD3, _col_r3(_water_col3) * 1.0, 1.0);
         float wg = _g_num(9723, fx + fw + 4, y, fw, _ED_FLD3, _col_g3(_water_col3) * 1.0, 1.0);
         float wb = _g_num(9724, fx + (fw + 4) * 2, y, fw, _ED_FLD3, _col_b3(_water_col3) * 1.0, 1.0);
         _water_col3 = rgb(_ed_c255(wr), _ed_c255(wg), _ed_c255(wb));
-        y = y + _ED_FLD3 + 3;
+        y = y + _ED_FLD3 + _us3(3);
         _g_txt3("alfa", lx, y + 3, labw - 2, _G_DIM3());
         _water_a3 = _ed_c255(_g_num(9725, fx, y, fw, _ED_FLD3, _water_a3 * 1.0, 2.0));
     }
-    y = y + _ED_FLD3 + 6;
+    y = y + _ED_FLD3 + _us3(6);
 
     _g_section(px + 2, y, pw - 4, "ARAZI");
-    y = y + 16;
+    y = y + _us3(16);
     str tr2 = "arazi: yok";
     if (_terr_on == 1) { tr2 = "arazi: var"; }
     if (_g_tog(9730, lx, y, inner, _ED_FLD3, tr2, _terr_on == 1)) {
@@ -6819,13 +6871,13 @@ func _ed_world_panel3(px, py, pw) {
         if (_terr_on == 1) { terrain_off3d_scene(); }
         else { terrain3d(65, 120.0, 14.0, 120.0, 4.5, 7); }
     }
-    y = y + _ED_FLD3 + 3;
+    y = y + _ED_FLD3 + _us3(3);
     if (_terr_on == 1) {
         _g_txt3("tepe", lx, y + 3, labw - 2, _G_DIM3());
         float tp = _g_num(9731, fx, y, fw, _ED_FLD3, _terr_sy3, 0.2);
-        _g_txt3("toh", fx + fw + 6, y + 3, 22, _G_DIM3());
-        float sd = _g_num(9732, fx + fw + 30, y, fw, _ED_FLD3, _terr_seed3 * 1.0, 1.0);
-        y = y + _ED_FLD3 + 3;
+        _g_txt3("toh", fx + fw + _us3(6), y + 3, _us3(22), _G_DIM3());
+        float sd = _g_num(9732, fx + fw + _us3(30), y, fw, _ED_FLD3, _terr_seed3 * 1.0, 1.0);
+        y = y + _ED_FLD3 + _us3(3);
         if (_g_button(9733, lx, y, half, _ED_FLD3, "yeniden uret")) {
             ed_mark3d();
             terrain3d(_terr_res3, _terr_sx, tp, _terr_sz, _terr_scale3, toInt(sd));
@@ -6833,12 +6885,12 @@ func _ed_world_panel3(px, py, pw) {
         if (_g_button(9734, lx + half + 4, y, half, _ED_FLD3, "dogal boya")) {
             ed_mark3d(); terrain_natural3d(_terr_sy3);
         }
-        y = y + _ED_FLD3 + 3;
+        y = y + _ED_FLD3 + _us3(3);
     }
     y = y + 3;
 
     _g_section(px + 2, y, pw - 4, "GUNDUZ-GECE");
-    y = y + 16;
+    y = y + _us3(16);
     str dn = "dongu: yok";
     if (_dn_on3 == 1) { dn = "dongu: var"; }
     if (_g_tog(9740, lx, y, half, _ED_FLD3, dn, _dn_on3 == 1)) {
@@ -6849,22 +6901,22 @@ func _ed_world_panel3(px, py, pw) {
         _dn_h3 = _g_num(9741, lx + half + 4, y, half, _ED_FLD3, _dn_h3, 0.1);
         if (_dn_h3 < 0.0) { _dn_h3 = 0.0; }
         if (_dn_h3 >= 24.0) { _dn_h3 = 23.99; }
-        y = y + _ED_FLD3 + 3;
-        _g_txt3("gun s", lx, y + 3, labw + 6, _G_DIM3());
-        _dn_len3 = _g_num(9742, fx + 8, y, fw, _ED_FLD3, _dn_len3, 1.0);
+        y = y + _ED_FLD3 + _us3(3);
+        _g_txt3("gun s", lx, y + 3, labw + _us3(6), _G_DIM3());
+        _dn_len3 = _g_num(9742, fx + _us3(8), y, fw, _ED_FLD3, _dn_len3, 1.0);
         if (_dn_len3 < 1.0) { _dn_len3 = 1.0; }
     }
-    y = y + _ED_FLD3 + 6;
+    y = y + _ED_FLD3 + _us3(6);
 
     _g_section(px + 2, y, pw - 4, "EGIM");
-    y = y + 16;
-    _g_txt3("sinir", lx, y + 3, labw + 4, _G_DIM3());
-    float sl = _g_num(9750, fx + 6, y, fw, _ED_FLD3, _slope_lim3, 0.5);
+    y = y + _us3(16);
+    _g_txt3("sinir", lx, y + 3, labw + _us3(4), _G_DIM3());
+    float sl = _g_num(9750, fx + _us3(6), y, fw, _ED_FLD3, _slope_lim3, 0.5);
     if (sl != _slope_lim3) { slope_limit3d(sl); }
-    y = y + _ED_FLD3 + 6;
+    y = y + _ED_FLD3 + _us3(6);
 
     _g_section(px + 2, y, pw - 4, "KURALLAR");
-    y = y + 16;
+    y = y + _us3(16);
     y = _ed_rules_panel3(px, y, pw);
     _ed_icontent3 = y;
 }
@@ -6927,12 +6979,12 @@ func _ed_inspector3() {
 
     // Ad: kamera hedefi ve kurallar varlıklara ADLA atıfta bulunuyor, yani
     // adsız bir varlık sahne dosyasında hedeflenemiyor.
-    _g_txt3("ad", lx, y + 3, 18, _G_DIM3());
+    _g_txt3("ad", lx, y + 3, _us3(18), _G_DIM3());
     str nm0 = _sc_nm_of3(id);
-    str nm1 = _g_text(9690, lx + 20, y, inner - 20, _ED_FLD3, nm0);
+    str nm1 = _g_text(9690, lx + _us3(20), y, inner - _us3(20), _ED_FLD3, nm0);
     if (nm1 != nm0) { ed_mark3d(); rename3d(id, nm1); }
-    y = y + _ED_FLD3 + 6;
-    int labw = 26;
+    y = y + _ED_FLD3 + _us3(6);
+    int labw = _us3(26);
     int fw = _ed_f3w3(pw, labw);
     int fx = lx + labw;
 
@@ -6954,10 +7006,10 @@ func _ed_inspector3() {
             e = _e3[s]; e.shape = _ed_next_shape3(e.shape); _e3[s] = e;
         }
     }
-    y = y + _ED_FLD3 + 6;
+    y = y + _ED_FLD3 + _us3(6);
 
     _g_section(px + 2, y, pw - 4, "DONUSUM");
-    y = y + 16;
+    y = y + _us3(16);
 
     e = _e3[s];
     _g_txt3("kon", lx, y + 3, labw - 2, _G_DIM3());
@@ -6965,7 +7017,7 @@ func _ed_inspector3() {
     float ny = _g_num(9311, fx + fw + 4, y, fw, _ED_FLD3, e.y, 0.05);
     float nz = _g_num(9312, fx + (fw + 4) * 2, y, fw, _ED_FLD3, e.z, 0.05);
     if (nx != e.x || ny != e.y || nz != e.z) { set3pos(id, nx, ny, nz); }
-    y = y + _ED_FLD3 + 3;
+    y = y + _ED_FLD3 + _us3(3);
 
     e = _e3[s];
     _g_txt3("boy", lx, y + 3, labw - 2, _G_DIM3());
@@ -6973,7 +7025,7 @@ func _ed_inspector3() {
     float sy = _g_num(9321, fx + fw + 4, y, fw, _ED_FLD3, e.sy, 0.05);
     float sz = _g_num(9322, fx + (fw + 4) * 2, y, fw, _ED_FLD3, e.sz, 0.05);
     if (sx != e.sx || sy != e.sy || sz != e.sz) { ed_resize3d(id, sx, sy, sz); }
-    y = y + _ED_FLD3 + 3;
+    y = y + _ED_FLD3 + _us3(3);
 
     e = _e3[s];
     _g_txt3("yaw", lx, y + 3, labw - 2, _G_DIM3());
@@ -6983,14 +7035,14 @@ func _ed_inspector3() {
     if (_g_button(9331, fx + fw + 4, y, dw, _ED_FLD3, "zemine otur")) {
         ed_mark3d(); ed_drop3d(id);
     }
-    y = y + _ED_FLD3 + 6;
+    y = y + _ED_FLD3 + _us3(6);
 
     _g_section(px + 2, y, pw - 4, "GORUNUM");
-    y = y + 16;
+    y = y + _us3(16);
 
     e = _e3[s];
     _g_txt3("rgb", lx, y + 3, labw - 2, _G_DIM3());
-    int sww = 18;
+    int sww = _us3(18);
     int cfw = toInt((inner - labw - sww - 12) / 3);
     float cr = _g_num(9340, fx, y, cfw, _ED_FLD3, _col_r3(e.color) * 1.0, 1.0);
     float cg = _g_num(9341, fx + cfw + 4, y, cfw, _ED_FLD3, _col_g3(e.color) * 1.0, 1.0);
@@ -7007,10 +7059,10 @@ func _ed_inspector3() {
     }
     rect(px + pw - _ED_PAD3 - sww, y, sww, _ED_FLD3, _e3[s].color);
     rect_lines(px + pw - _ED_PAD3 - sww, y, sww, _ED_FLD3, _G_LINE3());
-    y = y + _ED_FLD3 + 6;
+    y = y + _ED_FLD3 + _us3(6);
 
     _g_section(px + 2, y, pw - 4, "FIZIK");
-    y = y + 16;
+    y = y + _us3(16);
 
     e = _e3[s];
     str sl2 = "kati: yok";
@@ -7022,17 +7074,17 @@ func _ed_inspector3() {
         _e3[s] = e;
     }
     e = _e3[s];
-    _g_txt3("can", lx + half + 6, y + 3, 22, _G_DIM3());
-    float hpv = _g_num(9351, lx + half + 30, y, half - 30, _ED_FLD3, e.hpmax * 1.0, 1.0);
+    _g_txt3("can", lx + half + _us3(6), y + 3, _us3(22), _G_DIM3());
+    float hpv = _g_num(9351, lx + half + _us3(30), y, half - _us3(30), _ED_FLD3, e.hpmax * 1.0, 1.0);
     if (toInt(hpv) != e.hpmax) { health3d(id, toInt(hpv)); }
-    y = y + _ED_FLD3 + 6;
+    y = y + _ED_FLD3 + _us3(6);
 
     _g_section(px + 2, y, pw - 4, "DAVRANISLAR");
-    y = y + 16;
+    y = y + _us3(16);
 
     // Satır: ad | alan1 | alan2 | x — hepsi panel genişliğinden türüyor.
-    int xw = 16;
-    int nw2 = 44;
+    int xw = _us3(16);
+    int nw2 = _us3(44);
     int bfw = _ed_bhw3(pw, nw2, xw);
     int bi = 0;
     int shown = 0;
@@ -7068,7 +7120,7 @@ func _ed_inspector3() {
                 pop(_bh3);
                 return;
             }
-            y = y + _ED_FLD3 + 2;
+            y = y + _ED_FLD3 + _us3(2);
             shown = shown + 1;
         }
         bi = bi + 1;
@@ -7084,7 +7136,7 @@ func _ed_inspector3() {
     if (_g_button(9462, lx + (aw + 3) * 2, y, aw, _ED_FLD3, "+don")) {
         ed_mark3d(); spin_behavior3d(id, 60.0);
     }
-    y = y + _ED_FLD3 + 3;
+    y = y + _ED_FLD3 + _us3(3);
     if (_g_button(9463, lx, y, aw, _ED_FLD3, "+salin")) {
         ed_mark3d(); bob_behavior3d(id, 0.35, 1.2);
     }
@@ -7096,7 +7148,7 @@ func _ed_inspector3() {
     if (_g_button(9465, lx + (aw + 3) * 2, y, aw, _ED_FLD3, "+ates")) {
         ed_mark3d(); shoot_behavior3d(id, 1.5, 20.0, 2.5, TAG_PLAYER, 30.0);
     }
-    y = y + _ED_FLD3 + 8;
+    y = y + _ED_FLD3 + _us3(8);
 
     if (_g_button(9470, lx, y, half, _ED_FLD3, "COGALT")) { ed_mark3d(); ed_duplicate3d(id); }
     if (_g_button(9471, lx + half + 4, y, half, _ED_FLD3, "SIL")) { ed_mark3d(); ed_delete3d(id); }
