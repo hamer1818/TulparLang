@@ -42,6 +42,30 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Fixed — editör arayüzü baştan yazıldı: yazı tipi ve taşan yerleşim
+
+Kullanıcı ekranda "yazılar üst üste gelmiş gibi" gördü ve haklıydı. İki ayrı
+sebep vardı, ikisi de ölçülerek doğrulandı.
+
+**Yazı tipi.** raylib'in varsayılan fontu 10 piksel tabanlı bir bitmap ve
+`DrawText` içinde harf aralığı `fontSize/10` ile TAMSAYI, glif ölçeği ise
+`fontSize/10.0` ile KESİRLİ bölmeden geliyor. Yani 13 punto istediğinde
+glifler 1.3 kat büyüyor ama aralık 1 pikselde kalıyor — harfler birbirine
+giriyor. İlk sürüm 12/13/14/15 kullanıyordu. Arayüz artık baştan sona 10
+punto; başlıklar puntoyla değil RENK ve zemin şeridiyle ayrılıyor. Bir test
+puntonun 10/20/30 dışına çıkmasını engelliyor.
+
+**Yerleşim.** Sütun genişlikleri elle yazılmış mutlak sayılardı ve üç yerde
+taşıyordu (960 piksellik pencerede ölçüldü): alt yardım satırı 434 piksel,
+araç çubuğu durum metni KAYDET düğmesinin üstüne, davranış satırı inspector
+panelinin 6 piksel dışına. Artık her konum panel dikdörtgeninden türüyor,
+metinler `text_width` ile ÖLÇÜLEREK yerleştiriliyor ve sığmayan metin
+kesiliyor. Araç çubuğunun durum metni yalnız yer kalırsa çiziliyor.
+
+Yerleşim aritmetiği parametreli fonksiyonlara alındı, böylece penceresiz
+sınanabiliyor — metin genişliği ölçülemiyor (MeasureText pencere istiyor) ama
+taşmanın kaynağı ölçüm değil aritmetikti.
+
 ### Fixed — editör denetimi: sahne yüklemesi geri koyamayacağı şeyi siliyordu
 
 Bir alt-ajan denetimi editörde bir dizi hata buldu; en ciddisi sessiz durum

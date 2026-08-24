@@ -4428,6 +4428,92 @@ func t_gz_length_scales_with_distance() {
     assert(dip >= 0.8, "alt sinir olmali: " + toString(dip));
 }
 
+// ===========================================================================
+//  EDİTÖR YERLEŞİMİ — taşma olmamalı
+// ===========================================================================
+// Kullanıcı ekranda "yazılar üst üste gelmiş" gördü ve haklıydı: alt yardım
+// satırı 960 piksellik pencerede 434 piksel taşıyordu, araç çubuğu durum
+// metni KAYDET düğmesinin üstüne biniyordu, davranış satırı inspector
+// panelinin 6 piksel dışına çıkıyordu.
+//
+// Metin genişliği penceresiz ÖLÇÜLEMİYOR (MeasureText varsayılan yazı tipini
+// istiyor, o da InitWindow ile geliyor). Ama taşmaların kaynağı ölçüm değil
+// ARİTMETİKTİ — sütun genişlikleri elle yazılmış mutlak sayılardı. O aritmetik
+// artık parametreli fonksiyonlarda ve burada sınanıyor.
+
+// Yazı tipi punto kısıtı: raylib'in varsayılan fontunda harf aralığı
+// `fontSize/10` TAMSAYI bölmesinden, glif ölçeği `fontSize/10.0` KESİRLİ
+// bölmeden geliyor. Arada bir punto seçmek harfleri birbirine sokuyor.
+func t_ui_font_size_is_crisp() {
+    assert(_F3 == 10 || _F3 == 20 || _F3 == 30,
+           "punto 10/20/30 olmali (tam sayi olcek+aralik), bulunan: " + toString(_F3));
+}
+
+// Paneller ekranı paylaşmalı ve görüntü penceresine yer kalmalı.
+func t_ui_panels_fit_screen() {
+    assert(_ED_HIER_W3 + _ED_INSP_W3 + 200 < 960,
+           "960 piksellik pencerede goruntu penceresine yer kalmali");
+    assert_eq_int(_ed_view_w_at3(960), 960 - _ED_HIER_W3 - _ED_INSP_W3);
+    // Dar pencerede bile negatif genişlik üretilmemeli.
+    assert(_ed_view_w_at3(320) >= 80, "dar pencerede taban genislik");
+    assert(_ed_view_w_at3(100) >= 80, "cok dar pencerede de");
+    // Paneller KULLANILABİLİR genişlikte kalmalı. Yerleşim daralmaya uyum
+    // sağlıyor (taşma üretmiyor — bozma denemesiyle ölçüldü), ama 30 pikselin
+    // altındaki sayı alanına üç haneli bir değer sığmaz.
+    assert(_ED_INSP_W3 >= 180, "inspector cok dar: " + toString(_ED_INSP_W3));
+    assert(_ED_HIER_W3 >= 120, "hiyerarsi cok dar: " + toString(_ED_HIER_W3));
+    assert(_ed_f3w3(_ED_INSP_W3, 26) >= 30, "sayi alani okunabilir kalmali");
+}
+
+// Inspector'ın üç sayı alanı panelin İÇİNDE bitmeli.
+func t_ui_inspector_columns_fit() {
+    int pw = _ED_INSP_W3;
+    int labw = 26;
+    int fw = _ed_f3w3(pw, labw);
+    assert(fw > 20, "alan kullanilamayacak kadar dar olmamali: " + toString(fw));
+    // sol pay + etiket + 3 alan + 2 boşluk + sağ pay
+    int total = _ED_PAD3 + labw + fw * 3 + 4 * 2 + _ED_PAD3;
+    assert(total <= pw, "3 sutun panele sigmali: " + toString(total) + " > " + toString(pw));
+}
+
+// Davranış satırı (ad | alan | alan | x) panelin içinde bitmeli — ilk sürümde
+// 6 piksel taşıyordu.
+func t_ui_behavior_row_fits() {
+    int pw = _ED_INSP_W3;
+    int namew = 44;
+    int xw = 16;
+    int bfw = _ed_bhw3(pw, namew, xw);
+    assert(bfw > 16, "davranis alani cok dar: " + toString(bfw));
+    int total = _ED_PAD3 + namew + bfw * 2 + 4 + xw + _ED_PAD3;
+    assert(total <= pw, "davranis satiri panele sigmali: " +
+           toString(total) + " > " + toString(pw));
+}
+
+// Hiyerarşi ekleme düğmeleri (4 sütun) panele sığmalı.
+func t_ui_hierarchy_buttons_fit() {
+    int pw = _ED_HIER_W3;
+    int gap = 3;
+    int bw = _ed_addw3(pw, gap);
+    assert(bw > 20, "ekleme dugmesi cok dar: " + toString(bw));
+    int total = _ED_PAD3 + bw * 4 + gap * 3 + _ED_PAD3;
+    assert(total <= pw, "4 dugme panele sigmali: " + toString(total) + " > " + toString(pw));
+}
+
+// Panel genişlikleri değişirse aritmetik yine tutmalı — sabitleri elle
+// oynatan biri sessizce taşma üretmesin.
+func t_ui_layout_holds_for_other_widths() {
+    int w = 180;
+    while (w <= 400) {
+        int fw = _ed_f3w3(w, 26);
+        assert(_ED_PAD3 + 26 + fw * 3 + 8 + _ED_PAD3 <= w,
+               "3 sutun " + toString(w) + " genisliginde tasti");
+        int bfw = _ed_bhw3(w, 44, 16);
+        assert(_ED_PAD3 + 44 + bfw * 2 + 4 + 16 + _ED_PAD3 <= w,
+               "davranis satiri " + toString(w) + " genisliginde tasti");
+        w = w + 20;
+    }
+}
+
 test("ascii tablosu gidis-donusu", "t_gui_ascii_table_roundtrips");
 test("ascii sayi girisi kapsiyor", "t_gui_ascii_covers_number_input");
 test("etiket dongusu tumunu geziyor", "t_gui_tag_cycle_covers_all");
@@ -4446,4 +4532,10 @@ test("arkadaki cozum reddediliyor", "t_gz_ray_axis_behind_is_rejected");
 test("dogru eksen tutuluyor", "t_gz_pick_selects_right_axis");
 test("uzaktaki tiklama eksen tutmuyor", "t_gz_pick_misses_when_far");
 test("tutamak boyu mesafeyle olcekleniyor", "t_gz_length_scales_with_distance");
+test("punto tam sayi olcekli", "t_ui_font_size_is_crisp");
+test("paneller ekrana sigiyor", "t_ui_panels_fit_screen");
+test("inspector sutunlari sigiyor", "t_ui_inspector_columns_fit");
+test("davranis satiri sigiyor", "t_ui_behavior_row_fits");
+test("hiyerarsi dugmeleri sigiyor", "t_ui_hierarchy_buttons_fit");
+test("yerlesim baska genisliklerde de tutuyor", "t_ui_layout_holds_for_other_widths");
 test_summary();
