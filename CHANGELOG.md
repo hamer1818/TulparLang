@@ -42,6 +42,24 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Fixed — gölge geçişi render texture'ı bozuyordu (sahne görünümü boş kalıyordu)
+
+Editörün sahne görünümü paneli koyu mavi bir dikdörtgen olarak kalıyordu ve
+sahne panellerin arkasında çiziliyordu. Sebep tek bir satırdı: gölge geçişi
+kendi framebuffer'ına geçip işi bitince `rlDisableFramebuffer()` çağırıyor,
+yani VARSAYILAN framebuffer'a — ekrana — dönüyordu. Editör sahneyi bir render
+texture'a çizdiği için gölge geçişinden SONRAKİ her şey ekrana gidiyor,
+dokuda yalnız temizleme rengi kalıyordu. "Koyu mavi" tam olarak o temizleme
+rengiydi.
+
+Gölge geçişi artık ÖNCEKİ hedefe dönüyor (`tame_restore_target`): render
+texture etkinse ona, değilse ekrana. Aynı düzeltme framebuffer kurulumundaki
+dönüşe de uygulandı.
+
+Bununla birlikte `screen_width()`/`screen_height()` artık ETKİN HEDEFİN
+ölçüsünü veriyor. Render texture'a çizerken pencere boyutunu döndürmek,
+hedefe göre yerleşen her şeyi (sağa/alta yaslı HUD) dokunun dışına atıyordu.
+
 ### Fixed — sahne görünümü boş görünüyor, sahne editörün arkasına taşıyordu
 
 Üç ayrı kusur aynı belirtiyi üretiyordu.

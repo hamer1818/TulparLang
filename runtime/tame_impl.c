@@ -133,8 +133,16 @@ double tame_impl_frame_time(void) { return (double)GetFrameTime(); }
 double tame_impl_time(void) { return GetTime(); }
 // Kamera modunda OYUN DÜNYASI boyutu döner (oyun kodu hep w×h'ye göre yazılır);
 // gerçek ekranın dünya-uzayı kenarları için tm_view_* kullan.
-int tame_impl_width(void) { return tame_cam_on ? tame_world_w : GetScreenWidth(); }
-int tame_impl_height(void) { return tame_cam_on ? tame_world_h : GetScreenHeight(); }
+// "Ekran" ölçüsü ETKİN HEDEFİN ölçüsüdür. Render texture'a çizerken pencere
+// boyutunu döndürmek, hedefe göre yerleşen her şeyi (sağa/alta yaslı HUD)
+// dokunun dışına atıyordu — editörün sahne görünümü paneli tam olarak böyle
+// bir hedef.
+// (Tanımları dosyanın ilerisinde, render texture kaydının yanında.)
+static int tame_target_w(void);
+static int tame_target_h(void);
+
+int tame_impl_width(void) { return tame_cam_on ? tame_world_w : tame_target_w(); }
+int tame_impl_height(void) { return tame_cam_on ? tame_world_h : tame_target_h(); }
 
 // Görünür ekranın DÜNYA koordinatındaki kenarları. Masaüstü/web: 0..w, 0..h.
 // Android (kamera): sol/üst negatif, sağ/alt w/h'den büyük olabilir — dokunmatik
@@ -995,6 +1003,12 @@ static TameDrawCmd tame_dl[TAME_MAX_DRAWCMD];
 static int tame_dl_n = 0;
 static int tame_dl_recording = 0;
 
+// Etkin render hedefi. Gölge geçişi kendi framebuffer'ına geçip işi bitince
+// ESKİ hedefe dönmek zorunda; "ekrana dön" varsayımı editörde kırılıyordu
+// (aşağıya bak).
+static int tame_cur_rt = -1;
+static void tame_restore_target(void);
+
 static unsigned int tame_shadow_fbo = 0;
 static unsigned int tame_shadow_tex = 0;    // derinlik renderbuffer'ı (z-testi; örneklenmez)
 static unsigned int tame_shadow_color = 0;  // ASIL gölge haritası: derinlik RGBA8'e paketli
@@ -1090,7 +1104,7 @@ static int tame_shadow_ensure(void) {
   rlFramebufferAttach(tame_shadow_fbo, tame_shadow_tex, RL_ATTACHMENT_DEPTH,
                       RL_ATTACHMENT_RENDERBUFFER, 0);
   int ok = rlFramebufferComplete(tame_shadow_fbo);
-  rlDisableFramebuffer();
+  tame_restore_target();
   if (!ok) {
     fprintf(stderr,
             "[tame] Golge haritasi framebuffer'i olusturulamadi; golgeler "
@@ -1267,10 +1281,14 @@ static void tame_scene_end(void) {
   rlSetCullFace(RL_CULL_FACE_BACK);
   rlDrawRenderBatchActive();
   rlEnableColorBlend();
-  rlDisableFramebuffer();
 
-  // Ekran viewport'unu ve ezdiğimiz matrisleri geri ver.
-  rlViewport(0, 0, GetScreenWidth(), GetScreenHeight());
+  // ÖNCEKİ hedefe dön — "ekrana dön" DEĞİL. Gölge geçişi bir render texture'ın
+  // içinden çağrılabiliyor (editörün sahne görünümü paneli böyle çiziliyor) ve
+  // rlDisableFramebuffer() orada varsayılan framebuffer'a, yani EKRANA
+  // dönüyordu. Sonuç sinsiydi: gölge geçişinden SONRAKİ her şey ekrana
+  // çiziliyor, editörün dokusunda yalnız temizleme rengi kalıyordu — panelde
+  // koyu mavi bir dikdörtgen, sahne ise panellerin arkasında.
+  tame_restore_target();
   rlSetMatrixProjection(saved_proj);
   rlSetMatrixModelview(saved_mv);
 
@@ -1491,8 +1509,39 @@ int tame_impl_rt_h(int h) {
 void tame_impl_rt_begin(int h) {
   if (h < 0 || h >= TAME_MAX_RT || !tame_rt_used[h]) return;
   BeginTextureMode(tame_rts[h]);
+  tame_cur_rt = h;
 }
-void tame_impl_rt_end(void) { EndTextureMode(); }
+void tame_impl_rt_end(void) {
+  EndTextureMode();
+  tame_cur_rt = -1;
+}
+
+static int tame_target_w(void) {
+  if (tame_cur_rt >= 0 && tame_cur_rt < TAME_MAX_RT && tame_rt_used[tame_cur_rt]) {
+    return tame_rts[tame_cur_rt].texture.width;
+  }
+  return GetScreenWidth();
+}
+static int tame_target_h(void) {
+  if (tame_cur_rt >= 0 && tame_cur_rt < TAME_MAX_RT && tame_rt_used[tame_cur_rt]) {
+    return tame_rts[tame_cur_rt].texture.height;
+  }
+  return GetScreenHeight();
+}
+
+// Etkin hedefi geri bağla. Gölge geçişi gibi kendi framebuffer'ına geçen
+// kodlar bunu çağırmalı; "ekrana dön" varsayımı render texture içindeyken
+// yanlış.
+static void tame_restore_target(void) {
+  if (tame_cur_rt >= 0 && tame_cur_rt < TAME_MAX_RT && tame_rt_used[tame_cur_rt]) {
+    rlEnableFramebuffer(tame_rts[tame_cur_rt].id);
+    rlViewport(0, 0, tame_rts[tame_cur_rt].texture.width,
+               tame_rts[tame_cur_rt].texture.height);
+    return;
+  }
+  rlDisableFramebuffer();
+  rlViewport(0, 0, GetScreenWidth(), GetScreenHeight());
+}
 
 // Render texture'lar OpenGL'de baş aşağı; kaynak dikdörtgenin yüksekliği
 // negatif verilerek çevriliyor (raylib'in standart yolu).
