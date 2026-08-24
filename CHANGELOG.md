@@ -51,11 +51,12 @@ var?" sorusunun cevabını eksik bırakıyordu. Inspector'daki sekme düğmeleri
 kaldırıldı — iki ayrı seçim yolu (liste + sekme) tutmak hangisinin geçerli
 olduğu konusunda sürekli bir tutarsızlık kaynağı olurdu.
 
-**İmleç kuralı üç durumlu oldu:** düzenlerken serbest (panellere tıklanacak),
-OYNARKEN yakalı (oyun normal davranmalı, fare bakışı çalışmalı), oynarken
-ESC'ye basılınca serbest. Görünüme tıklamak fareyi oyuna geri veriyor.
-Editörde ESC duraklat menüsü açmıyor — orada "duraklat" zaten DUR düğmesi ve
-ona ulaşmak için imlece ihtiyaç var.
+**İmleç:** düzenlerken serbest (panellere tıklanacak), OYNARKEN yakalı (oyun
+normal davranmalı, fare bakışı çalışmalı). Editörde **ESC oyunu DURDURUR** ve
+düzenlemeye döner — duraklat menüsü açmaz. Önce yalnız imleci serbest
+bırakıyordu; fare geri geliyor ama simülasyon sürüyordu ve bu yarım bir
+davranıştı. Durdurmak hem beklenen hem daha az durumlu: düzenlemeye dönünce
+imleç zaten serbest kalıyor.
 
 ### Added — editörde dünya ayarları ve varlık adı
 

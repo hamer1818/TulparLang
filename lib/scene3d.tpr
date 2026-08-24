@@ -4062,12 +4062,12 @@ func play3d() {
         // açıyordu, sonra iki katman aynı fareyi paylaşıyordu.
         if (_s3_ui == UI_NONE && _game_over3 == 0 && _ed_on3 == 0) {
             if (_ed_app3 == 1) {
-                // Editörde oynarken ESC imleci SERBEST bırakır, duraklat
-                // menüsü açmaz: burada "duraklat" zaten DUR düğmesi ve ona
-                // ulaşmak için imlece ihtiyaç var.
-                if (key_pressed(K_ESC)) { _ed_free_cur3 = 1; }
-                // Görünüme tıklamak fareyi oyuna geri verir.
-                if (mouse_pressed(0) && _ed_in_view3()) { _ed_free_cur3 = 0; }
+                // Editörde oynarken ESC OYUNU DURDURUR (DUR düğmesiyle aynı
+                // şey) ve düzenlemeye döner. Önce yalnız imleci serbest
+                // bırakıyordu; fare geri geliyor ama simülasyon sürüyordu ve
+                // bu yarım bir davranıştı. Durdurmak hem beklenen hem daha az
+                // durumlu: düzenlemeye dönünce imleç zaten serbest kalıyor.
+                if (key_pressed(K_ESC)) { ed_stop3d(); }
             } else {
                 if (key_pressed(K_ESC) || key_pressed(K_P) || key_pressed(K_BACKSPACE)
                     || _gp_start == 1) {
@@ -6248,17 +6248,15 @@ int _ED_STAT_H3 = 18;
 // Editör kabuğu açıkken ASLA kilitlenmiyor — oynarken bile. Oyun içi fare
 // bakışı o hâlde sağ tuş sürüklemesine düşüyor; alternatifi "DUR düğmesine
 // ulaşamamak" olurdu ki daha kötü.
-// Editörde OYNARKEN kullanıcı ESC ile imleci serbest bıraktı mı?
-int _ed_free_cur3 = 0;
-
 func _s3_want_lock3(): int {
     if (_s3_ui != UI_NONE || _game_over3 == 1) { return 0; }
     // DÜZENLERKEN imleç daima serbest: panellere tıklanacak.
     if (_ed_on3 == 1) { return 0; }
-    // Editörde OYNARKEN oyun normal davranmalı — fare yakalanır, imleç
-    // gizlenir. Kaçış kapısı ESC: DUR düğmesine ulaşmanın tek yolu o, yoksa
-    // oyun fareyi rehin alırdı. Görünüme tıklamak yeniden yakalıyor.
-    if (_ed_app3 == 1 && _ed_free_cur3 == 1) { return 0; }
+    // Editörde OYNARKEN oyun normal davranır — fare yakalanır, imleç gizlenir.
+    // Kaçış kapısı ESC ve o DURDURUYOR; düzenlemeye dönünce yukarıdaki satır
+    // imleci zaten serbest bırakıyor. Ayrı bir "oynarken imleç serbest"
+    // durumu tutmak fazladan bir kip demekti ve simülasyon sürerken fareyi
+    // bırakmak yarım bir davranıştı.
     return _cam_lock3;
 }
 
@@ -6418,7 +6416,6 @@ func ed_play3d() {
     _ed_playing3 = 1;
     _ed_on3 = 0;
     _g_focus3 = 0;
-    _ed_free_cur3 = 0;   // fare oyuna geçer; ESC geri alır
 }
 func ed_stop3d() {
     if (_ed_playing3 == 0) { return; }
@@ -6472,6 +6469,7 @@ func _ed_statusbar3() {
     _g_txt3(left, _ED_PAD3, sy + 4, toInt(W / 2), _G_DIM3());
     str right = "gorunum " + toString(_ed_view_w3()) + "x" + toString(_ed_view_h3()) +
                 " | rt " + toString(_ed_rt3) + " | sag tus bak | CTRL+Z geri | F5 kaydet";
+    if (_ed_playing3 == 1) { right = "OYNUYOR — ESC durdurur"; }
     if (_ed_msg_t3 > 0.0) { right = _ed_msg3; }
     int rw = text_width(right, _F3);
     if (W - _ED_PAD3 - rw > toInt(W / 2) + 8) {

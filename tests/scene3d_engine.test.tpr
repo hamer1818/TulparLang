@@ -4514,7 +4514,7 @@ func t_ui_cursor_visible_in_editor() {
     int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
     camera_orbit(p, 16.0, 10.0);
     assert_eq_int(_cam_lock3, 1);          // yörünge fare bakışını ister
-    _ed_app3 = 0; _ed_on3 = 0; _ed_free_cur3 = 0;
+    _ed_app3 = 0; _ed_on3 = 0;
     assert_eq_int(_s3_want_lock3(), 1);    // sıradan oyunda kilit AÇIK
 
     _ed_on3 = 1;
@@ -4522,15 +4522,42 @@ func t_ui_cursor_visible_in_editor() {
 
     _ed_on3 = 0; _ed_app3 = 1;
     assert_eq_int(_s3_want_lock3(), 1);    // editörde OYNARKEN fare oyunda
-    _ed_free_cur3 = 1;                      // ESC
-    assert_eq_int(_s3_want_lock3(), 0);    // ...ESC serbest bırakır
-    _ed_free_cur3 = 0;                      // görünüme tıklama
-    assert_eq_int(_s3_want_lock3(), 1);    // ...yeniden yakalar
-
-    // Düzenlemeye dönünce ESC durumu ARTIK ÖNEMLİ DEĞİL: panel tıklaması her
-    // hâlükârda mümkün olmalı.
-    _ed_on3 = 1; _ed_free_cur3 = 0;
+    // ESC oyunu DURDURUR; düzenlemeye dönünce imleç zaten serbest kalıyor.
+    // Ayrı bir "oynarken imleç serbest" kipi yok — simülasyon sürerken fareyi
+    // bırakmak yarım bir davranıştı.
+    _ed_on3 = 1;
     assert_eq_int(_s3_want_lock3(), 0);
+    _ed_app3 = 0; _ed_on3 = 0;
+}
+
+// ESC editörde oynarken DURDURMALI: yalnız imleci bırakmak, fare geri gelip
+// oyunun sürmesi demekti.
+func t_ui_stop_returns_to_edit() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    _sc_reg3("p", p);
+    camera_orbit(p, 16.0, 10.0);
+    _ed_app3 = 1; _ed_on3 = 1; _ed_playing3 = 0;
+    _ed_capture3();
+    ed_play3d();
+    assert_eq_int(_ed_playing3, 1);
+    assert_eq_int(_ed_on3, 0);
+    assert_eq_int(_s3_want_lock3(), 1);     // oynarken fare oyunda
+
+    // Oyun sahneyi DEĞİŞTİRSİN — DUR'un asıl işi bunu geri almak. Yalnız
+    // bayrakları sınamak yetmiyordu: yazarlık durumunu geri yüklemeyi silen
+    // bir bozma hiçbir testi kızartmıyordu (ölçüldü).
+    set3pos(bul3d("p"), 25.0, 1.0, 0.0);
+    assert(abs_f3(get3x(bul3d("p")) - 25.0) < 0.001, "oyun konumu degistirdi");
+
+    ed_stop3d();
+    assert_eq_int(_ed_playing3, 0);
+    assert_eq_int(_ed_on3, 1);
+    assert_eq_int(_s3_want_lock3(), 0);     // durunca imleç geri
+    assert(bul3d("p") >= 0, "ad geri yuklemeden sag cikmali");
+    assert(abs_f3(get3x(bul3d("p"))) < 0.001,
+           "DUR yazarlik konumuna dondurmeli: " + toString(get3x(bul3d("p"))));
     _ed_app3 = 0; _ed_on3 = 0;
 }
 
@@ -4540,7 +4567,7 @@ func t_ui_cursor_free_in_menus() {
     no_ground3d();
     int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
     camera_orbit(p, 16.0, 10.0);
-    _ed_app3 = 0; _ed_on3 = 0; _ed_free_cur3 = 0;
+    _ed_app3 = 0; _ed_on3 = 0;
     _s3_ui = UI_PAUSE;
     assert_eq_int(_s3_want_lock3(), 0);
     _s3_ui = UI_NONE;
@@ -4672,6 +4699,7 @@ test("paneller ekrana sigiyor", "t_ui_panels_fit_screen");
 test("uygulama yerlesimi gorunume yer birakiyor", "t_ui_app_layout_leaves_viewport");
 test("editorde imlec gorunur", "t_ui_cursor_visible_in_editor");
 test("menude imlec serbest", "t_ui_cursor_free_in_menus");
+test("ESC durdurup duzenlemeye donuyor", "t_ui_stop_returns_to_edit");
 test("gorunum kokeni panellerle uyumlu", "t_ui_view_origin_matches_panels");
 test("inspector sutunlari sigiyor", "t_ui_inspector_columns_fit");
 test("davranis satiri sigiyor", "t_ui_behavior_row_fits");
