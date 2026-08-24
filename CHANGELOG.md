@@ -42,6 +42,25 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — eksen tutamakları (gizmo)
+
+Seçili varlıkta üç ok: X kırmızı, Y yeşil, Z mavi. Bir oka tutununca hareket
+(ya da ölçek) O EKSENDE kalıyor. Buna kadar sürükleme yalnız YATAY düzlemdeydi:
+yüksekliği fareyle değiştirmenin yolu yoktu ve hareket tek eksene
+kilitlenemiyordu.
+
+Matematik saf ve pencere istemiyor: ışın ile eksen DOĞRUSU arasındaki en yakın
+yaklaşım kapalı formda. Ekran uzayında çizip piksel mesafesine bakmak kamera
+açısına göre bozulurdu — tepeden bakınca dikey ok bir noktaya çöker ve
+tıklanamaz olurdu.
+
+Tutamak boyu EKRANDA sabit (kamera mesafesiyle ölçekleniyor, alt/üst sınırlı):
+dünya birimi sabit olsaydı uzaktaki varlığın okları görünmez, yakındakinin
+okları ekranı kaplardı.
+
+Üç ok merkezde kesiştiği için "ilk eşleşeni al" kamera açısına göre YANLIŞ
+ekseni verirdi; en yakın olan seçiliyor.
+
 ### Added — tam editör arayüzü (Unity/Unreal düzeni)
 
 Araç çubuğu (Oynat, kip seçimi, ızgara, geri/ileri, kaydet), hiyerarşi paneli

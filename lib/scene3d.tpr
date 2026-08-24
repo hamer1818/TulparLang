@@ -5641,13 +5641,31 @@ func ed_pick_at3d(px, py): int {
 }
 
 func _s3_editor_mouse(dt) {
-    // Panelin üstündeki tıklama ARKADAKİ sahneyi seçmemeli — yoksa her düğme
-    // basışı aynı anda görüntü penceresinde de bir seçim yapardı.
-    if (_ed_over_ui3()) { _ed_drag3 = 0; return; }
+    int s = _slot_of3(_ed_sel3e);
+    // Sürükleme SÜRÜYORSA panel denetimi atlanıyor: imleç panelin üstünden
+    // geçerken sürüklemenin kopması, Unity'de de olmayan bir davranış olurdu.
+    if (_gz_axis3 < 0 && _ed_drag3 == 0 && _ed_over_ui3()) { return; }
+
     if (mouse_pressed(0)) {
-        // Geri-al işareti JESTİN BAŞINDA konuyor, komutların içinde değil:
-        // sürükleme `ed_move3d`'yi her karede çağırıyor, oraya koysaydık
-        // saniyede 60 geri-al adımı birikirdi.
+        // 1) ÖNCE tutamaklar: okun üstündeki tıklama arkadaki varlığı
+        // seçmemeli, yoksa oka basmak seçimi değiştirirdi.
+        if (s >= 0 && (_ed_mode3 == ED_MOVE || _ed_mode3 == ED_SCALE)) {
+            _ed_ray3(mouse_x(), mouse_y(), screen_width(), screen_height(), _cam_fov);
+            Ent3 ge = _e3[s];
+            int ax = _gz_pick3(_ed_cx3, _ed_cy3, _ed_cz3,
+                               _ed_rx3, _ed_ry3, _ed_rz3, ge.x, ge.y, ge.z);
+            if (ax >= 0) {
+                ed_mark3d();
+                _gz_axis3 = ax;
+                _gz_t0_3 = _gz_t3;
+                _gz_px3 = ge.x; _gz_py3 = ge.y; _gz_pz3 = ge.z;
+                _gz_s0x3 = ge.sx; _gz_s0y3 = ge.sy; _gz_s0z3 = ge.sz;
+                _ed_drag3 = 0;
+                return;
+            }
+        }
+        // 2) Sonra seçim. Geri-al işareti JESTİN BAŞINDA konuyor, komutların
+        // içinde değil: sürükleme ed_move3d'yi her karede çağırıyor.
         ed_mark3d();
         int hit = ed_pick_at3d(mouse_x(), mouse_y());
         if (hit >= 0) {
@@ -5658,7 +5676,31 @@ func _s3_editor_mouse(dt) {
             _ed_drag3 = 1;
         } else { _ed_sel3e = 0 - 1; _ed_drag3 = 0; }
     }
-    if (mouse_down(0) == false) { _ed_drag3 = 0; }
+
+    if (mouse_down(0) == false) { _ed_drag3 = 0; _gz_axis3 = 0 - 1; }
+
+    // Eksen sürüklemesi. Referans doğru YAKALANDIĞI andaki konumda sabit —
+    // varlıkla birlikte kaysaydı hareket kendini besleyip kaçardı.
+    if (_gz_axis3 >= 0 && s >= 0) {
+        _ed_ray3(mouse_x(), mouse_y(), screen_width(), screen_height(), _cam_fov);
+        float ax = _gz_ax_x3(_gz_axis3);
+        float ay = _gz_ax_y3(_gz_axis3);
+        float az = _gz_ax_z3(_gz_axis3);
+        float d = _ray_axis3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3, _ed_rz3,
+                             _gz_px3, _gz_py3, _gz_pz3, ax, ay, az);
+        if (d >= 0.0) {
+            float delta = _gz_t3 - _gz_t0_3;
+            if (_ed_mode3 == ED_MOVE) {
+                ed_move3d(_ed_sel3e, _gz_px3 + ax * delta,
+                          _gz_py3 + ay * delta, _gz_pz3 + az * delta);
+            } else {
+                ed_resize3d(_ed_sel3e, _gz_s0x3 + ax * delta,
+                            _gz_s0y3 + ay * delta, _gz_s0z3 + az * delta);
+            }
+        }
+        return;
+    }
+
     if (_ed_drag3 == 1 && _ed_mode3 == ED_MOVE && _slot_of3(_ed_sel3e) >= 0) {
         _ed_ray3(mouse_x(), mouse_y(), screen_width(), screen_height(), _cam_fov);
         float t = _ray_planey3(_ed_cy3, _ed_ry3, _ed_dgy3);
@@ -5669,10 +5711,14 @@ func _s3_editor_mouse(dt) {
 }
 
 // Editörün yazacağı dosya. `sahne_dosya3d` ile yüklenen oyun bunu kendi
-// yoluna kurarsa düzenleme tam bir döngü olur.
+// yoluna kurarsa düzenleme tam bir döngü olur: düzenle → F5 → aynı JSON
+// güncellenir, yeniden derleme yok.
 func editor_file3d(path) { _ed_path3 = path; }
 func editor_dosya3d(yol) { editor_file3d(yol); }
 
+// KAYDEDİLEN, ekrandaki YAZARLIK durumudur. F5 yalnız editör kipinde işliyor
+// (bu fonksiyon `_s3_editor_keys` içinden çağrılıyor), editöre girmek de
+// simülasyonu attığı için oynanmış hâlin diske sızması mümkün değil.
 func editor_save3d(): bool {
     if (_ed_path3 == "") {
         _ed_msg3 = "kayit yolu yok (editor_dosya3d cagir)";
@@ -5758,6 +5804,7 @@ func _s3_editor_draw() {
     float fy = _floor_at3(e.x, e.z) + 0.02;
     cube_wires(e.x, fy, e.z, e.sx, 0.02, e.sz, rgb(255, 160, 40));
     line3d(e.x, fy, e.z, e.x, e.y, e.z, rgb(255, 160, 40));
+    _gz_draw3(s);
 }
 
 func _s3_editor_hud() {
@@ -6270,4 +6317,118 @@ func _ed_inspector3() {
     // Varlık işlemleri
     if (_g_button(9470, lx, y, 100, 24, "COGALT")) { ed_mark3d(); ed_duplicate3d(id); }
     if (_g_button(9471, lx + 108, y, 100, 24, "SIL")) { ed_mark3d(); ed_delete3d(id); }
+}
+
+// ===========================================================================
+// EKSEN TUTAMAKLARI (gizmo) — Faz 13
+// ===========================================================================
+// Sürükleme şimdiye kadar YATAY düzlemdeydi: yüksekliği fareyle değiştirmenin
+// yolu yoktu ve hareket tek bir eksene kilitlenemiyordu. Unity/Unreal'ın
+// çözümü üç ok: X kırmızı, Y yeşil, Z mavi. Bir oka tutununca hareket O
+// EKSENDE kalıyor — "bir şeyi X'te 2 birim kaydır" tam olarak bu.
+//
+// Matematiği saf: ışın ile eksen DOĞRUSU arasındaki en yakın yaklaşım. İki
+// doğru arasındaki en kısa mesafe kapalı formda çözülüyor; ekran uzayında
+// çizip piksel mesafesine bakmak, kamera açısına göre bozulurdu (tepeden
+// bakınca dikey ok bir noktaya çöker ve tıklanamaz olurdu).
+int   _gz_axis3 = 0 - 1;   // sürüklenen eksen: -1 yok, 0=X, 1=Y, 2=Z
+float _gz_t0_3  = 0.0;     // yakalandığı andaki eksen parametresi
+float _gz_px3   = 0.0;     // ...ve varlığın konumu
+float _gz_py3   = 0.0;
+float _gz_pz3   = 0.0;
+float _gz_s0x3  = 0.0;     // ölçek kipinde yakalanan boyut
+float _gz_s0y3  = 0.0;
+float _gz_s0z3  = 0.0;
+float _GZ_PICK3 = 0.32;    // oka tutunma yarıçapı (dünya birimi, ok boyuna oranlı)
+
+// Son çağrının çıktıları.
+float _gz_t3   = 0.0;      // eksen üzerindeki parametre
+float _gz_d3   = 0.0;      // ışına en yakın mesafe
+
+// Işın (o,d) ile eksen doğrusu (p, birim A) arasındaki en yakın yaklaşım.
+// Işının ARKASINDA kalan çözümleri elemek için sc >= 0 aranıyor.
+// Paralel durumda -1 döner.
+func _ray_axis3(ox, oy, oz, dx, dy, dz, px, py, pz, ax, ay, az): float {
+    float wx = ox - px;
+    float wy = oy - py;
+    float wz = oz - pz;
+    float b = dx * ax + dy * ay + dz * az;
+    float dd = dx * wx + dy * wy + dz * wz;
+    float ee = ax * wx + ay * wy + az * wz;
+    float den = 1.0 - b * b;       // a=1, c=1 (ikisi de birim)
+    if (abs_f3(den) < 0.000001) { return 0.0 - 1.0; }
+    float sc = (b * ee - dd) / den;
+    float tc = (ee - b * dd) / den;
+    if (sc < 0.0) { return 0.0 - 1.0; }
+    float cx = (ox + dx * sc) - (px + ax * tc);
+    float cy = (oy + dy * sc) - (py + ay * tc);
+    float cz = (oz + dz * sc) - (pz + az * tc);
+    _gz_t3 = tc;
+    _gz_d3 = sqrt(cx * cx + cy * cy + cz * cz);
+    return _gz_d3;
+}
+
+// Tutamak boyu: EKRANDA sabit görünmeli. Dünya birimi sabit olsaydı uzaktaki
+// bir varlığın okları görünmez, yakındaki ekranı kaplardı.
+func _gz_len3(px, py, pz): float {
+    float dx = px - _ed_cx3;
+    float dy = py - _ed_cy3;
+    float dz = pz - _ed_cz3;
+    float d = sqrt(dx * dx + dy * dy + dz * dz);
+    float l = d * 0.16;
+    if (l < 0.8) { l = 0.8; }
+    if (l > 14.0) { l = 14.0; }
+    return l;
+}
+
+// Fare ışını hangi eksene tutunuyor? -1 = hiçbiri.
+// Eksenlerin hepsi denenip EN YAKIN olan seçiliyor: üç ok merkezde kesiştiği
+// için ilk eşleşeni almak, kamera açısına göre yanlış ekseni verirdi.
+func _gz_pick3(ox, oy, oz, dx, dy, dz, px, py, pz): int {
+    float axlen = _gz_len3(px, py, pz);
+    float lim = axlen * _GZ_PICK3;
+    int best = 0 - 1;
+    float bd = lim;
+    float t_at = 0.0;
+
+    float d0 = _ray_axis3(ox, oy, oz, dx, dy, dz, px, py, pz, 1.0, 0.0, 0.0);
+    if (d0 >= 0.0 && d0 < bd && _gz_t3 > 0.0 && _gz_t3 < axlen) {
+        bd = d0; best = 0; t_at = _gz_t3;
+    }
+    float d1 = _ray_axis3(ox, oy, oz, dx, dy, dz, px, py, pz, 0.0, 1.0, 0.0);
+    if (d1 >= 0.0 && d1 < bd && _gz_t3 > 0.0 && _gz_t3 < axlen) {
+        bd = d1; best = 1; t_at = _gz_t3;
+    }
+    float d2 = _ray_axis3(ox, oy, oz, dx, dy, dz, px, py, pz, 0.0, 0.0, 1.0);
+    if (d2 >= 0.0 && d2 < bd && _gz_t3 > 0.0 && _gz_t3 < axlen) {
+        bd = d2; best = 2; t_at = _gz_t3;
+    }
+    _gz_t3 = t_at;
+    _gz_d3 = bd;
+    return best;
+}
+
+func _gz_ax_x3(a): float { if (a == 0) { return 1.0; } return 0.0; }
+func _gz_ax_y3(a): float { if (a == 1) { return 1.0; } return 0.0; }
+func _gz_ax_z3(a): float { if (a == 2) { return 1.0; } return 0.0; }
+
+// Tutamakların çizimi. Ok gövdesi çizgi, ucu küçük bir küp.
+func _gz_draw3(s) {
+    if (_ed_mode3 != ED_MOVE && _ed_mode3 != ED_SCALE) { return; }
+    Ent3 e = _e3[s];
+    float axlen = _gz_len3(e.x, e.y, e.z);
+    float ucb = axlen * 0.12;
+    int cx = rgb(232, 84, 74);
+    int cy = rgb(112, 214, 112);
+    int cz = rgb(96, 150, 246);
+    // Sürüklenen eksen vurgulanıyor — hangisine tutunduğun belli olsun.
+    if (_gz_axis3 == 0) { cx = _G_ACC3(); }
+    if (_gz_axis3 == 1) { cy = _G_ACC3(); }
+    if (_gz_axis3 == 2) { cz = _G_ACC3(); }
+    line3d(e.x, e.y, e.z, e.x + axlen, e.y, e.z, cx);
+    line3d(e.x, e.y, e.z, e.x, e.y + axlen, e.z, cy);
+    line3d(e.x, e.y, e.z, e.x, e.y, e.z + axlen, cz);
+    cube_wires(e.x + axlen, e.y, e.z, ucb, ucb, ucb, cx);
+    cube_wires(e.x, e.y + axlen, e.z, ucb, ucb, ucb, cy);
+    cube_wires(e.x, e.y, e.z + axlen, ucb, ucb, ucb, cz);
 }

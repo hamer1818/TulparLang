@@ -4169,8 +4169,133 @@ test("geri al sil/ekle kapsiyor", "t_ed_undo_covers_delete_and_add");
 test("yeni duzenleme yinele dalini kesiyor", "t_ed_new_edit_clears_redo");
 test("geri al yigini sinirli", "t_ed_undo_stack_is_bounded");
 test("bos yiginda geri al guvenli", "t_ed_undo_on_empty_is_safe");
+// ---- Eksen tutamakları (gizmo) ---------------------------------------------
+// Beklentiler GEOMETRİDEN: iki doğru arasındaki en kısa mesafe elle
+// kurulabilecek kadar basit durumlarda seçildi, kodun formülünden değil.
+
+func _gz_norm_ray(fx, fy, fz, tx, ty, tz) {
+    float dx = tx - fx; float dy = ty - fy; float dz = tz - fz;
+    float L = sqrt(dx * dx + dy * dy + dz * dz);
+    _ed_rx3 = dx / L; _ed_ry3 = dy / L; _ed_rz3 = dz / L;
+    _ed_cx3 = fx; _ed_cy3 = fy; _ed_cz3 = fz;
+}
+
+// Dikey inen ışın, X eksenini x=5'te kesmeli: mesafe 0, parametre 5.
+func t_gz_ray_axis_intersects() {
+    float d = _ray_axis3(5.0, 3.0, 0.0,  0.0, 0.0 - 1.0, 0.0,
+                         0.0, 0.0, 0.0,  1.0, 0.0, 0.0);
+    assert(d >= 0.0 && d < 0.0001, "kesismeli, mesafe 0: " + toString(d));
+    assert(abs_f3(_gz_t3 - 5.0) < 0.0001, "parametre 5 olmali: " + toString(_gz_t3));
+}
+
+// Z'de 2 birim kaçık inen ışın: en yakın mesafe tam 2, parametre yine x=5.
+func t_gz_ray_axis_offset_distance() {
+    float d = _ray_axis3(5.0, 3.0, 2.0,  0.0, 0.0 - 1.0, 0.0,
+                         0.0, 0.0, 0.0,  1.0, 0.0, 0.0);
+    assert(abs_f3(d - 2.0) < 0.0001, "mesafe 2 olmali: " + toString(d));
+    assert(abs_f3(_gz_t3 - 5.0) < 0.0001, "parametre 5: " + toString(_gz_t3));
+}
+
+// EĞİK ışın: yukarıdaki iki test eksene DİK ışın kullanıyor ve orada payda
+// tam 1 çıkıyor — yani "paydaya bölmeyi unutan" bir bozma onları kızartmıyordu
+// (ölçüldü). 45 derecelik ışında payda 0.5, bölme gerçekten sınanıyor.
+// Beklenti geometrik: (0,4,0)'dan (1,-1,0) yönünde giden ışın y=0 düzlemini
+// (4,0,0)'da geçer, yani X ekseni üzerindeki en yakın nokta x=4.
+func t_gz_ray_axis_oblique_uses_denominator() {
+    float k = 1.0 / sqrt(2.0);
+    float d = _ray_axis3(0.0, 4.0, 0.0,  k, 0.0 - k, 0.0,
+                         0.0, 0.0, 0.0,  1.0, 0.0, 0.0);
+    assert(d >= 0.0 && d < 0.0001, "kesismeli: " + toString(d));
+    assert(abs_f3(_gz_t3 - 4.0) < 0.001,
+           "parametre 4 olmali (payda 0.5): " + toString(_gz_t3));
+}
+
+// İki eksen de tutunma yarıçapı İÇİNDEYKEN daha yakın olan kazanmalı. Önceki
+// seçim testi tek eksene nişanlıydı, yani yarışma yoktu ve "en yakını tut"
+// mantığını silen bir bozma yakalanmıyordu (ölçüldü).
+// Kurulum: dikey inen ışın (x=1, z=0.3). X ekseninden uzaklığı 0.3, Z
+// ekseninden 1.0; Y eksenine PARALEL olduğu için o eleniyor. X kazanmalı.
+func t_gz_pick_prefers_nearest_when_both_in_range() {
+    scene3d_reset();
+    no_ground3d();
+    _ed_cx3 = 0.0; _ed_cy3 = 40.0; _ed_cz3 = 0.0;   // yalnız ok boyu icin
+    int ax = _gz_pick3(1.0, 5.0, 0.3,  0.0, 0.0 - 1.0, 0.0,  0.0, 0.0, 0.0);
+    assert_eq_int(ax, 0);
+}
+
+// Eksene PARALEL ışın çözümsüz (payda sıfır) — -1 dönmeli, sonsuza gitmemeli.
+func t_gz_ray_axis_parallel_is_rejected() {
+    float d = _ray_axis3(0.0, 4.0, 0.0,  1.0, 0.0, 0.0,
+                         0.0, 0.0, 0.0,  1.0, 0.0, 0.0);
+    assert(d < 0.0, "paralel reddedilmeli: " + toString(d));
+}
+
+// Işının ARKASINDAKİ çözüm sayılmamalı: kamera bir eksenden uzaklaşırken
+// arkadaki tutamağa tutunmak "tersine hareket" gibi görünürdü.
+func t_gz_ray_axis_behind_is_rejected() {
+    // (5,3,0)'dan YUKARI bakan ışın; X ekseni aşağıda kalıyor.
+    float d = _ray_axis3(5.0, 3.0, 0.0,  0.0, 1.0, 0.0,
+                         0.0, 0.0, 0.0,  1.0, 0.0, 0.0);
+    assert(d < 0.0, "arkadaki cozum reddedilmeli: " + toString(d));
+}
+
+// Doğru eksen seçilmeli. Üç ok merkezde kesiştiği için "ilk eşleşeni al"
+// kamera açısına göre yanlış ekseni verirdi; en yakın olan seçiliyor.
+func t_gz_pick_selects_right_axis() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    ed_select3d(a);
+    _ed_mode3 = ED_MOVE;
+    // Kamera uzakta ve genel bir açıda; ok boyu mesafeden türüyor.
+    _gz_norm_ray(18.0, 12.0, 18.0,  1.6, 0.0, 0.0);
+    int ax = _gz_pick3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3, _ed_rz3, 0.0, 0.0, 0.0);
+    assert_eq_int(ax, 0);
+    _gz_norm_ray(18.0, 12.0, 18.0,  0.0, 1.6, 0.0);
+    int ay = _gz_pick3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3, _ed_rz3, 0.0, 0.0, 0.0);
+    assert_eq_int(ay, 1);
+    _gz_norm_ray(18.0, 12.0, 18.0,  0.0, 0.0, 1.6);
+    int az = _gz_pick3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3, _ed_rz3, 0.0, 0.0, 0.0);
+    assert_eq_int(az, 2);
+}
+
+// Oklardan uzağa tıklamak hiçbir ekseni tutmamalı — yoksa boşluğa her tıklama
+// varlığı kaydırırdı.
+func t_gz_pick_misses_when_far() {
+    scene3d_reset();
+    no_ground3d();
+    _gz_norm_ray(18.0, 12.0, 18.0,  0.0 - 30.0, 0.0 - 20.0, 0.0);
+    int ax = _gz_pick3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3, _ed_rz3, 0.0, 0.0, 0.0);
+    assert_eq_int(ax, 0 - 1);
+}
+
+// Tutamak EKRANDA sabit boyda görünmeli: dünya birimi sabit olsaydı uzaktaki
+// varlığın okları görünmez, yakındakinin okları ekranı kaplardı.
+func t_gz_length_scales_with_distance() {
+    _ed_cx3 = 0.0; _ed_cy3 = 0.0; _ed_cz3 = 0.0;
+    float yakin = _gz_len3(0.0, 0.0, 10.0);
+    float uzak  = _gz_len3(0.0, 0.0, 60.0);
+    assert(uzak > yakin * 3.0, "uzakta daha uzun olmali: " +
+           toString(yakin) + " -> " + toString(uzak));
+    // Ama sınırsız değil — çok uzakta ekranı kaplamamalı.
+    float cok_uzak = _gz_len3(0.0, 0.0, 4000.0);
+    assert(cok_uzak <= 14.001, "ust sinir olmali: " + toString(cok_uzak));
+    // ...ve çok yakında yok olmamalı.
+    float dip = _gz_len3(0.0, 0.0, 0.2);
+    assert(dip >= 0.8, "alt sinir olmali: " + toString(dip));
+}
+
 test("ascii tablosu gidis-donusu", "t_gui_ascii_table_roundtrips");
 test("ascii sayi girisi kapsiyor", "t_gui_ascii_covers_number_input");
 test("etiket dongusu tumunu geziyor", "t_gui_tag_cycle_covers_all");
 test("sekil dongusu tumunu geziyor", "t_gui_shape_cycle_covers_all");
+test("isin ekseni kesiyor", "t_gz_ray_axis_intersects");
+test("isin eksen kacikligi", "t_gz_ray_axis_offset_distance");
+test("egik isin paydayi kullaniyor", "t_gz_ray_axis_oblique_uses_denominator");
+test("iki eksen menzildeyken en yakin", "t_gz_pick_prefers_nearest_when_both_in_range");
+test("paralel isin reddediliyor", "t_gz_ray_axis_parallel_is_rejected");
+test("arkadaki cozum reddediliyor", "t_gz_ray_axis_behind_is_rejected");
+test("dogru eksen tutuluyor", "t_gz_pick_selects_right_axis");
+test("uzaktaki tiklama eksen tutmuyor", "t_gz_pick_misses_when_far");
+test("tutamak boyu mesafeyle olcekleniyor", "t_gz_length_scales_with_distance");
 test_summary();
