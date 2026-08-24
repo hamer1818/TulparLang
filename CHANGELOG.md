@@ -42,6 +42,17 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Fixed — editörde fare imleci kayboluyordu
+
+Editör sahneyi yörünge kamerasıyla açıyor, o da fare bakışını yani İMLEÇ
+KİLİDİNİ istiyor, kilit de imleci gizliyor. Sonuç: editöre girince imleç
+kayboluyor ve panellere tıklanamıyordu.
+
+Kilit kararı döngünün içine gömülüydü, dolayısıyla penceresiz sınanamıyordu.
+Saf bir fonksiyona (`_s3_want_lock3`) alındı ve editör kabuğu açıkken —
+oynarken bile — hiç kilitlenmiyor. Oyun içi fare bakışı o hâlde sağ tuş
+sürüklemesine düşüyor; alternatifi "DUR düğmesine ulaşamamak" olurdu.
+
 ### Changed — editör artık BAĞIMSIZ UYGULAMA (TAB kaplaması kaldırıldı)
 
 Editör, çalışan oyunun üstüne TAB ile açılan bir kaplamaydı ve bu sektör

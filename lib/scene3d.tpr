@@ -4035,8 +4035,7 @@ func play3d() {
 
         // Menü/duraklat açıkken imleç SERBEST olmalı, yoksa düğmelere
         // tıklanamaz (FPS modunda imleç kilitli geliyor).
-        int want_lock = _cam_lock3;
-        if (_s3_ui != UI_NONE || _game_over3 == 1) { want_lock = 0; }
+        int want_lock = _s3_want_lock3();
         if (want_lock != _lock_was) { cursor_lock(want_lock); _lock_was = want_lock; }
 
         // ESC/P/GERİ → duraklat. exit_key(K_NONE) sayesinde ESC artık pencereyi
@@ -6168,6 +6167,20 @@ int _ed_rth3     = 0;
 int _ED_MENU_H3 = 20;
 int _ED_CONS_H3 = 96;
 int _ED_STAT_H3 = 18;
+
+// İmleç kilidi kararı TEK yerde ve saf: döngünün içine gömülü olduğu sürece
+// penceresiz sınanamıyordu ve bir hata tam buradan çıktı — editör sahneyi
+// yörünge kamerasıyla açıyor, o da fare bakışını (yani imleç kilidini) istiyor,
+// kilit de imleci GİZLİYOR. Editörde imleç kaybolunca panellere tıklanamıyordu.
+//
+// Editör kabuğu açıkken ASLA kilitlenmiyor — oynarken bile. Oyun içi fare
+// bakışı o hâlde sağ tuş sürüklemesine düşüyor; alternatifi "DUR düğmesine
+// ulaşamamak" olurdu ki daha kötü.
+func _s3_want_lock3(): int {
+    if (_ed_chrome3_on()) { return 0; }
+    if (_s3_ui != UI_NONE || _game_over3 == 1) { return 0; }
+    return _cam_lock3;
+}
 
 func editor_app3d(on) {
     if (on) { _ed_app3 = 1; _ed_on3 = 1; } else { _ed_app3 = 0; }

@@ -4484,6 +4484,40 @@ func t_ui_app_layout_leaves_viewport() {
     assert(chrome < 280, "kabuk cok yer kapliyor: " + toString(chrome));
 }
 
+// İmleç editörde GÖRÜNÜR kalmalı. Sahne yörünge kamerasıyla açılıyor, o da
+// fare bakışını (imleç kilidini) istiyor ve kilit imleci gizliyor — editörde
+// imleç kaybolunca panellere tıklanamıyordu.
+func t_ui_cursor_visible_in_editor() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    camera_orbit(p, 16.0, 10.0);
+    assert_eq_int(_cam_lock3, 1);          // yörünge fare bakışını ister
+    _ed_app3 = 0; _ed_on3 = 0;
+    assert_eq_int(_s3_want_lock3(), 1);    // sıradan oyunda kilit AÇIK
+    _ed_on3 = 1;
+    assert_eq_int(_s3_want_lock3(), 0);    // düzenlerken imleç serbest
+    _ed_on3 = 0; _ed_app3 = 1;
+    assert_eq_int(_s3_want_lock3(), 0);    // editörde OYNARKEN de serbest
+    _ed_app3 = 0;
+}
+
+// Menü/duraklat açıkken de serbest olmalı (düğmelere tıklanacak).
+func t_ui_cursor_free_in_menus() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    camera_orbit(p, 16.0, 10.0);
+    _ed_app3 = 0; _ed_on3 = 0;
+    _s3_ui = UI_PAUSE;
+    assert_eq_int(_s3_want_lock3(), 0);
+    _s3_ui = UI_NONE;
+    _game_over3 = 1;
+    assert_eq_int(_s3_want_lock3(), 0);
+    _game_over3 = 0;
+    assert_eq_int(_s3_want_lock3(), 1);
+}
+
 // Sahne görünümü SOL ÜST köşesi panellerin sonrasında başlamalı — seçim ışını
 // bu köşeye göre kuruluyor, kaydırırsa imleçle seçim ayrışır.
 func t_ui_view_origin_matches_panels() {
@@ -4561,6 +4595,8 @@ test("tutamak boyu mesafeyle olcekleniyor", "t_gz_length_scales_with_distance");
 test("punto tam sayi olcekli", "t_ui_font_size_is_crisp");
 test("paneller ekrana sigiyor", "t_ui_panels_fit_screen");
 test("uygulama yerlesimi gorunume yer birakiyor", "t_ui_app_layout_leaves_viewport");
+test("editorde imlec gorunur", "t_ui_cursor_visible_in_editor");
+test("menude imlec serbest", "t_ui_cursor_free_in_menus");
 test("gorunum kokeni panellerle uyumlu", "t_ui_view_origin_matches_panels");
 test("inspector sutunlari sigiyor", "t_ui_inspector_columns_fit");
 test("davranis satiri sigiyor", "t_ui_behavior_row_fits");
