@@ -4127,11 +4127,19 @@ func play3d() {
         // kırpmak yetmezdi: kamera izdüşümü pencerenin en-boy oranını kullanır,
         // görüntü ezik ve merkezi kaymış çıkardı.
         int _rt_on = 0;
+        int _skip3d = 0;
         if (_ed_chrome3_on()) {
             _ed_rt_sync3();
             if (_ed_rt3 >= 0) { _rt_on = 1; render_to(_ed_rt3); clear(rgb(16, 18, 26)); }
+            // Render texture kurulamadıysa sahneyi TAM EKRANA çizmiyoruz.
+            // Eski davranış tam buydu ve sessizdi: sahne pencereyi dolduruyor,
+            // paneller onun üstüne biniyor, görünüm paneli boş görünüyordu —
+            // yani hata "editörün arkasında duran sahne" gibi görünüyordu.
+            // Görünür şekilde başarısız olmak, sessizce yanlış çizmekten iyi.
+            else { _skip3d = 1; }
         }
         _s3_camera(dt);
+        if (_skip3d == 0) {
         space_begin();
             _s3_render();
             // Parçacıklar entity'lerden SONRA: billboard'lar saydam çizilir,
@@ -4142,6 +4150,7 @@ func play3d() {
             // arkasındaki seçim önde görünürdü.
             if (_ed_on3 == 1) { _s3_editor_draw(); }
         space_end();
+        }
 
         // Oyunun kendi 2B katmanı — motorun HUD'ından ÖNCE, yani skor/can barı
         // oyunun çizdiklerinin üstünde kalır. Kabuk açıkken HUD sahne
@@ -4151,6 +4160,7 @@ func play3d() {
         // İÇİNDE kalıyor — Unity'nin Game view'ı gibi. Editördeyken oyun
         // arayüzünü göstermek panellerin üstüne binerdi.
         if (_ed_on3 == 0) {
+            if (_has_hud3 == 1) { call(_hud3_fn); }
             text(_win_title, 12, 10, 20, RAYWHITE);
             text("Skor: " + toString(_score3), 12, 34, 18, GOLD);
             if (length(_lvlN) > 0) {
@@ -6389,7 +6399,8 @@ func _ed_statusbar3() {
                toString(kural_sayisi3d()) + " kural";
     if (_ed_playing3 == 1) { left = "OYNUYOR   " + left; }
     _g_txt3(left, _ED_PAD3, sy + 4, toInt(W / 2), _G_DIM3());
-    str right = "sag tus bak | WASD/QE uc | CTRL+Z geri | F5 kaydet";
+    str right = "gorunum " + toString(_ed_view_w3()) + "x" + toString(_ed_view_h3()) +
+                " | rt " + toString(_ed_rt3) + " | sag tus bak | CTRL+Z geri | F5 kaydet";
     if (_ed_msg_t3 > 0.0) { right = _ed_msg3; }
     int rw = text_width(right, _F3);
     if (W - _ED_PAD3 - rw > toInt(W / 2) + 8) {
@@ -6409,8 +6420,27 @@ func _ed_chrome3() {
     _ed_console3();
     _ed_statusbar3();
     // Sahne görünümünün çerçevesi — panel gibi görünsün.
-    rect_lines(_ed_view_x3() - 1, _ed_view_y3() - 1,
-               _ed_view_w3() + 2, _ed_view_h3() + 2, _G_LINE3());
+    int vx = _ed_view_x3();
+    int vy = _ed_view_y3();
+    int vw = _ed_view_w3();
+    int vh = _ed_view_h3();
+    rect_lines(vx - 1, vy - 1, vw + 2, vh + 2, _G_LINE3());
+    // Görünüm neden boşsa ONU SÖYLE. Sessiz boş bir panel, kullanıcıyı
+    // "editör bozuk" sanmaya götürüyor; sebebi ekranda yazmak gerekiyor.
+    if (_ed_rt3 < 0) {
+        _g_txt3("SAHNE GORUNUMU KURULAMADI (render texture)", vx + 12, vy + 12,
+                vw - 24, rgb(255, 120, 110));
+        _g_txt3("grafik surucusu render texture desteklemiyor olabilir",
+                vx + 12, vy + 26, vw - 24, _G_DIM3());
+        return;
+    }
+    if (yasayan_sayi3d() == 0) {
+        _g_txt3("SAHNE BOS", vx + 12, vy + 12, vw - 24, _G_ACC3());
+        _g_txt3("soldaki kutu/kure/silindir/duvar dugmeleriyle varlik ekle",
+                vx + 12, vy + 26, vw - 24, _G_DIM3());
+        _g_txt3("sahne dosyasi acilamadiysa konsola bak (altta)",
+                vx + 12, vy + 40, vw - 24, _G_DIM3());
+    }
 }
 
 // Inspector davranış satırının alan genişliği (panel genişliğinden türüyor).

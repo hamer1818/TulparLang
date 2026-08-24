@@ -20,7 +20,21 @@
 
 import "scene3d";
 
-str SAHNE = "examples/scenes/toplayici.scene.json";
+// Sahne dosyası ÇALIŞMA DİZİNİNE göre çözülüyor. Editör depo kökünden de,
+// örnek klasöründen de, ikilinin yanından da çalıştırılabilsin diye birkaç
+// aday deneniyor — yoksa "boş sahne" görüp editörü bozuk sanmak çok kolay.
+func sahne_yolu(): str {
+    if (file_exists("examples/scenes/toplayici.scene.json")) {
+        return "examples/scenes/toplayici.scene.json";
+    }
+    if (file_exists("scenes/toplayici.scene.json")) {
+        return "scenes/toplayici.scene.json";
+    }
+    if (file_exists("toplayici.scene.json")) { return "toplayici.scene.json"; }
+    return "";
+}
+
+str SAHNE = sahne_yolu();
 
 // Dosya yoksa boş bir dünya ile açılıyor — editör her hâlükârda açılmalı,
 // eksik dosya yüzünden siyah ekranda kalmamalı.
@@ -30,12 +44,21 @@ str BOS = "{\"v\":1,\"world\":{\"title\":\"Yeni Sahne\"," +
           "\"camera\":{\"mode\":\"orbit\",\"dist\":16,\"height\":11}},\"entities\":[]}";
 
 func kur() {
+    if (SAHNE == "") {
+        // Kaydetmek için yine de bir hedef gerekiyor.
+        editor_dosya3d("sahne.json");
+        sahne_yukle3d(BOS);
+        hata3d("sahne dosyasi bulunamadi — bos sahne acildi.");
+        hata3d("depo kokunden calistir: ./editor");
+        return;
+    }
     editor_dosya3d(SAHNE);
     if (sahne_dosya3d(SAHNE) == 0) {
         sahne_yukle3d(BOS);
-        kayit3d("bos sahne ile acildi: " + SAHNE + " bulunamadi");
+        hata3d("sahne okunamadi: " + SAHNE);
     } else {
-        kayit3d("sahne acildi: " + SAHNE);
+        kayit3d("sahne acildi: " + SAHNE + " — " +
+                toString(yasayan_sayi3d()) + " varlik");
     }
 }
 

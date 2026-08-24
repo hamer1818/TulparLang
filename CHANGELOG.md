@@ -42,6 +42,28 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Fixed — sahne görünümü boş görünüyor, sahne editörün arkasına taşıyordu
+
+Üç ayrı kusur aynı belirtiyi üretiyordu.
+
+**Sessiz geri düşüş.** Render texture kurulamazsa sahne TAM EKRANA çiziliyordu
+ve paneller onun üstüne biniyordu — yani hata tam olarak "görünüm paneli boş,
+sahne editörün arkasında" gibi görünüyordu. Artık öyle bir durumda 3B çizim
+atlanıyor ve görünüm panelinde sebebi yazıyor. Sessizce yanlış çizmektense
+görünür şekilde başarısız olmak.
+
+**Boş sahne sessizdi.** Sahne dosyası bulunamazsa editör boş bir dünya açıp
+yalnız konsola yazıyordu; ekranda hiçbir işaret yoktu. Artık görünüm panelinde
+"SAHNE BOŞ" ve ne yapılacağı yazıyor. Editör ayrıca sahne dosyasını birkaç
+aday yolda arıyor, yani depo kökü dışından çalıştırılınca da buluyor.
+
+**Oyunun kendi HUD'ı çağrılmıyordu.** Çizim bloğunu editör için yeniden
+düzenlerken `call(_hud3_fn)` satırı düştü; oyunların kendi HUD'ı hiç
+çizilmiyordu. Geri kondu.
+
+Durum çubuğu artık görünüm dikdörtgenini ve render hedefi tanıtıcısını
+gösteriyor — bu sınıftan bir sorun bir daha çıkarsa ekrandan teşhis edilebilir.
+
 ### Fixed — editörde fare imleci kayboluyordu
 
 Editör sahneyi yörünge kamerasıyla açıyor, o da fare bakışını yani İMLEÇ
