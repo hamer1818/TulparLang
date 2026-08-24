@@ -9,6 +9,55 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — sahne artık VERİ: JSON sahne biçimi + davranışlar + kurallar
+
+Bir sahne buraya kadar yalnız KOD olarak vardı: `setup()` içinde elle yazılmış
+`spawn3(...)` çağrıları. Bu, motoru kullanmanın tek yolunu "önce Tulpar öğren"
+yapıyordu ve konumları gözle ayarlamak imkânsızdı — sayıyı tahmin et, derle,
+bak, düzelt. Görsel bir editörün ön koşulu sahnenin veri olması.
+
+**Sahne biçimi.** `scene_load3d`/`sahne_yukle3d`, `scene_file3d`, `scene_json3d`,
+`scene_save3d`, `find3d`/`bul3d`. Anahtarlar İngilizce ve tek yazımlı: API'de
+TR+EN ikizler var ama bir VERİ biçiminde iki yazım belirsizlik üretir ve
+ayrıştırıcıyı ikiye katlar.
+
+Kendi sayı yazıcısı var (`_sc_num3`): `toString(120.0)` `"1.2e+02"` veriyor —
+JSON bunu kabul eder ama üretilen Tulpar kodu etmez, insan da okumaz. 3
+ondalıkta yuvarlamak gidiş-dönüşü ayrıca DURAĞAN yapıyor.
+
+Gidiş-dönüş testi gerçek bir hata buldu: `camera_orbit(d,h)` `_cam_dist`'e
+yörünge YARIÇAPINI (`sqrt(d²+h²)`) yazıyor, geçilen yatay mesafeyi değil. Ham
+değeri kaydeden serileştirici her tur kamerayı biraz daha geri itiyordu
+(16 → 18.87 → 21.35). Ters dönüşüm tam: `r²-h² = d²`.
+
+**Davranışlar** — `move`, `chase`, `patrol`, `spin`, `bob`, `shoot`. Hepsi
+motorda ZATEN var olan işlevlerin üstüne biniyor; yeni fizik yazılmadı, yalnız
+veriden sürülüyor. Böylece davranışla kurulmuş oyun ile elle yazılmış oyun aynı
+kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
+
+**Kurallar** — `{"on":"hit","a":"player","b":"item","do":"collect","n":50}` ve
+`{"on":"cleared","tag":"item","do":"win"}`. Tek dağıtıcı mevcut `on_hit3d`'nin
+üstüne biniyor, kurallar için ikinci bir çarpışma taraması yok.
+
+`examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
+satır oynanış kodu içermeyen, oynanabilir bir oyun.
+
+### Fixed — katı-katı temas kancaları hiç atmıyordu
+
+`_s3_collision` önce MTV ile cisimleri TAM ayırıyor, kanca taraması ise ondan
+SONRA çakışma arıyordu — ayrılmış iki cisim tam teğet duruyor, yani çakışma
+yok. Sonuç: `carpisinca3(TAG_ENEMY, TAG_PLAYER, ...)` kaydeden her oyun o
+kancayı hiçbir zaman çağırmıyordu. Gönderilen `scene3d_arena` örneği dahil:
+düşmanlar dokununca hasar vermiyordu, ve kodun kendi yorumu tersini söylüyordu.
+Hata SESSİZDİ çünkü katı-KATISIZ çiftler (eşya, mermi) ayrılmadıkları için
+çalışıyordu.
+
+Düzeltme fizik motorlarının standardı: temas taraması cisimleri küçük bir payla
+(6 cm) şişirerek bakıyor. Pay AABB/küre/silindir/SAT ayrımını bilmiyor —
+boyutlar geçici olarak büyütülüp AYNI `_overlap3` çağrılıyor, çünkü şekil
+matematiği ikinci bir yerde tekrarlansaydı er geç ondan sapardı.
+
+
 ### Added — 3B tetikleyici bölge: "buraya girince şu olsun"
 
 `scene3d`'de kapı, kontrol noktası, tuzak, bonus pedi, boss arenası yoktu; hepsi

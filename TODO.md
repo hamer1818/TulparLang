@@ -14,6 +14,54 @@ sonra dil/altyapı borcu.
 
 ---
 
+## 0 — Sahne editörü (görsel oyun yapımı)
+
+Hedef: isteyen herkes arayüzden, hızlıca oyun yapabilsin. Beş faz; ilk ikisi
+bitti.
+
+Mimari kararlar ve gerekçeleri:
+- **Editör TARAYICIDA çalışacak.** Kurulum gerektirmiyor ("isteyen herkes"),
+  ve headless Chrome ile doğrulanabiliyor — masaüstü raylib editörü olsaydı
+  görsel testi yalnız kullanıcı yapabilirdi, her yineleme onu bekletirdi.
+- **Görüntü penceresi GERÇEK motor olacak** (wasm'a derlenmiş), Three.js gibi
+  bir JS taklidi değil. Motorun görünümünü aynalayan bir izleyici zamanla
+  sapar ve yalan söyler — bu oturumda testlerin aynı şeyi yapması defalarca
+  hataya yol açtı. Aynı ilke.
+- **Kaynak doğruluk tek dosyada:** üretilen `.tpr` içinde editörün sahip
+  olduğu işaretli bölge + kanonik JSON yorumu. Tek dosya, tam gidiş-dönüş,
+  ekstra çalışma zamanı makinesi yok.
+
+- [x] **Faz 1 — Sahne biçimi.** ✅ 2026-08-24 — JSON sahne (dünya + varlıklar),
+      `sahne_yukle3d`/`sahne_json3d`/`sahne_dosya3d`/`sahne_kaydet3d`, `bul3d`.
+      Kendi sayı yazıcısı (`toString(120.0)` = "1.2e+02", üretilen Tulpar
+      kodunda geçersiz). Gidiş-dönüş testi kamera mesafesinde birikimli bir
+      kayma buldu. Detay: CHANGELOG.
+
+- [x] **Faz 2 — Davranışlar + kurallar.** ✅ 2026-08-24 — move/chase/patrol/
+      spin/bob/shoot ve hit/cleared kuralları. `examples/scene3d_data_game.tpr`
+      tek satır oynanış kodu içermiyor. Yan ürün: katı-katı temas kancalarının
+      hiç atmadığı motor hatası bulundu ve düzeltildi. Detay: CHANGELOG.
+
+- [ ] **Faz 3 — Editör kipi (motor içinde).** Serbest uçuş kamerası, fare ile
+      varlık seçme (kameradan ışın → en yakın çarpma), taşıma/ölçekleme
+      tutamakları, ızgaraya oturtma. Seçim matematiği saf fonksiyon olacak ki
+      penceresiz sınanabilsin.
+
+- [ ] **Faz 4 — Köprü.** `tm_bridge_send/recv` (2 bağlama): JS ↔ wasm arasında
+      JSON komut/olay kuyruğu. Masaüstünde stdin/stdout'a düşecek — böylece
+      VS Code eklentisi de yerel bir önizleme penceresi sürebilir.
+
+- [ ] **Faz 5 — Web kabuğu.** Varlık listesi, özellik paneli, davranış/kural
+      seçicileri, canlı kod çıktısı, kaydet/yükle/dışa aktar. tulparlang.dev
+      altında statik — arka uç yok. Doğrulama headless Chrome ekran görüntüsü.
+
+- [ ] **Kod üretimi.** Sahne JSON → okunabilir `.tpr` (işaretli bölge + gömülü
+      kanonik JSON). Denklik testi: üretilen kodun kurduğu varlık tablosu,
+      JSON'dan yüklenenle aynı olmalı.
+
+- [ ] **`wasm/dist` ve `android/dist` arşivleri bayat.** Editörün önizlemesi
+      wasm'a bağlı; web/Android hedefleri bağlanmadan önce yeniden kurulmalı.
+
 ## 1 — Oyun yapımı (3B oyunun eksik hissettiren yerleri)
 
 - [x] **Düşman yol bulma.** ✅ 2026-08-06 — `chase3d` artık engelden kaçınıyor
