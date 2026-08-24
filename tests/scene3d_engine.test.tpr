@@ -2914,4 +2914,241 @@ test("iceride olen icin cikis atilmaz", "t_trigger_death_inside_no_exit");
 test("bolge tasinabiliyor", "t_trigger_move_zone");
 test("bolge entity degil", "t_trigger_is_not_an_entity");
 test("bolge bolum/reset ile temizleniyor", "t_trigger_cleared_by_level_and_reset");
+// ===========================================================================
+//  SAHNE BİÇİMİ — sahne veri olarak (Faz 13)
+// ===========================================================================
+
+// Testlerin ortak kaynağı. Dünya ayarlarının HEPSİNDEN birer örnek içeriyor
+// ki "yükleme tam mı?" sorusu tek sahneyle sınanabilsin.
+func _sc_fixture(): str {
+    return "{\"v\":1,\"world\":{" +
+      "\"sky\":{\"top\":[28,38,62],\"bottom\":[132,156,186]}," +
+      "\"fog\":0.012,\"ground\":0,\"gravity\":26," +
+      "\"daynight\":{\"len\":120,\"time\":5}," +
+      "\"water\":{\"y\":3.08,\"color\":[30,95,150],\"alpha\":145}," +
+      "\"terrain\":{\"res\":33,\"sx\":120,\"sy\":14,\"sz\":120,\"noise\":4.5,\"seed\":7}," +
+      "\"slope\":{\"limit\":38,\"slide\":16}," +
+      "\"camera\":{\"mode\":\"orbit\",\"target\":\"kahraman\",\"dist\":16,\"height\":10}}," +
+      "\"entities\":[" +
+      "{\"name\":\"kahraman\",\"tag\":\"player\",\"shape\":\"cube\",\"x\":0,\"y\":30,\"z\":0," +
+        "\"sx\":1.2,\"sy\":2,\"sz\":1.2,\"color\":[135,206,235],\"hp\":100}," +
+      "{\"tag\":\"item\",\"shape\":\"sphere\",\"x\":-40,\"y\":2.5,\"z\":-40," +
+        "\"sx\":1.2,\"sy\":1.2,\"sz\":1.2,\"color\":[255,203,0]}," +
+      "{\"name\":\"duvar\",\"tag\":\"wall\",\"shape\":\"cube\",\"x\":5,\"y\":1.5,\"z\":0," +
+        "\"sx\":8,\"sy\":3,\"sz\":1,\"color\":[130,130,130],\"yaw\":45}]}";
+}
+
+func t_scene_loads_entities() {
+    int n = scene_load3d(_sc_fixture());
+    assert_eq_int(n, 3);
+    assert_eq_int(alive_count3d(), 3);
+    int p = find3d("kahraman");
+    assert(p >= 0, "adiyla bulunmali");
+    assert(abs_f3(get3y(p) - 30.0) < 0.001, "y yuklenmelii");
+    assert_eq_int(hp3d(p), 100);
+    // Şekil/etiket METİNDEN sayıya çevrildi mi?
+    Ent3 w = _e3[_slot_of3(find3d("duvar"))];
+    assert_eq_int(w.shape, SHAPE_CUBE);
+    assert_eq_int(w.tag, TAG_WALL);
+    assert(abs_f3(w.yaw - 45.0) < 0.001, "yaw yuklenmelii");
+    assert(abs_f3(w.sx - 8.0) < 0.001, "sx yuklenmelii");
+}
+
+func t_scene_loads_world() {
+    scene_load3d(_sc_fixture());
+    assert(abs_f3(_fog3 - 0.012) < 0.0001, "sis");
+    assert_eq_int(_sky3, 1);
+    assert_eq_int(_water_on3, 1);
+    assert(abs_f3(su_seviyesi3d() - 3.08) < 0.001, "su seviyesi");
+    assert_eq_int(_terr_on, 1);
+    assert(abs_f3(_slope_lim3 - 38.0) < 0.001, "egim siniri");
+    assert_eq_int(_dn_on3, 1);
+    assert(abs_f3(gunun_saati3d() - 5.0) < 0.001, "saat");
+    // Kamera hedefi ADLA çözülüyor — entity'lerden SONRA uygulanmalı.
+    assert_eq_int(_cam_target, find3d("kahraman"));
+    assert_eq_int(_cam_mode3, CAM_ORBIT);
+}
+
+// Gidiş-dönüş: serileştir → yükle → yeniden serileştir AYNI metni vermeli.
+// (Beklenti bağımsız bir kaynaktan geliyor: motorun kendi durumu, biçimin
+// kendi formülü değil.)
+func t_scene_roundtrip_is_stable() {
+    scene_load3d(_sc_fixture());
+    str a = scene_json3d();
+    scene_load3d(a);
+    str b = scene_json3d();
+    assert(a == b, "gidis-donus durağan olmali");
+}
+
+// Bu testin kendi bulduğu hata: camera_orbit(d,h) _cam_dist'e sqrt(d*d+h*h)
+// yazıyor. Serileştirici ham _cam_dist'i yazınca her tur mesafe büyüyordu
+// (16 → 18.87 → 21.35 → ...). Yörüngeyi ayrıca sınıyoruz çünkü tek turda
+// fark edilmesi zor, birikimli bir kayma.
+func t_scene_orbit_dist_survives_roundtrip() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    _sc_reg3("p", p);
+    camera_orbit(p, 16.0, 10.0);
+    float r0 = _cam_dist;
+    int turn = 0;
+    while (turn < 3) {
+        scene_load3d(scene_json3d());
+        turn = turn + 1;
+    }
+    assert(abs_f3(_cam_dist - r0) < 0.01,
+           "yorunge yaricapi 3 turda kaymamali: " + toString(_cam_dist));
+}
+
+// Yükleme TAM olmalı: ikinci sahne birincinin dünyasını devralmamalı.
+// (reset() dünya ayarlarının çoğunu bırakıyor — editör saniyede bir yüklüyor.)
+func t_scene_load_is_total() {
+    scene_load3d(_sc_fixture());
+    assert_eq_int(_water_on3, 1);
+    scene_load3d("{\"v\":1,\"entities\":[{\"tag\":\"prop\",\"x\":0,\"y\":1,\"z\":0}]}");
+    assert_eq_int(_water_on3, 0);
+    assert_eq_int(_terr_on, 0);
+    assert_eq_int(_sky3, 0);
+    assert_eq_int(_dn_on3, 0);
+    assert(_fog3 < 0.0001, "sis sifirlanmali");
+    assert(_slope_lim3 < 0.0001, "egim siniri sifirlanmali");
+    assert(abs_f3(_grav - 26.0) < 0.001, "yercekimi varsayilana donmeli");
+}
+
+// _sc_world_defaults3() KENDİ BAŞINA eksiksiz olmalı: "dünyanın tüm ayarları
+// varsayılana döner" sözleşmesi var. Yalnız t_scene_load_is_total'a güvenmek
+// yetmiyordu — scene_load3d önce scene3d_reset() çağırdığı için ayarların bir
+// kısmını ZATEN o sıfırlıyor, dolayısıyla buradan bir satır silmek hiçbir
+// testi kızartmıyordu (bozma denemesiyle ölçüldü). Burada reset ÇAĞRILMIYOR.
+func t_scene_world_defaults_are_total() {
+    scene3d_reset();
+    sky3d(rgb(1, 2, 3), rgb(4, 5, 6));
+    fog3d(0.05);
+    ground3d(9.0);
+    gravity3d(3.0);
+    lights3d(false);
+    shadows3d(false);
+    daynight3d(30.0);
+    set_time3d(2.0);
+    stars3d(0.9);
+    water3d(4.0);
+    water_color3d(rgb(1, 1, 1), 20);
+    water_physics3d(false);
+    slope_limit3d(50.0);
+    camera_fov(80.0);
+    camera_collide3d(false);
+    terrain3d(17, 20.0, 5.0, 20.0, 3.0, 1);
+    terrain_natural3d(5.0);
+
+    _sc_world_defaults3();
+
+    assert_eq_int(_sky3, 0);
+    assert(_fog3 < 0.0001, "sis");
+    assert_eq_int(_ground_on, 1);
+    assert(abs_f3(_ground_y) < 0.001, "zemin y");
+    assert(abs_f3(_grav - 26.0) < 0.001, "yercekimi");
+    assert_eq_int(_lights3, 1);
+    assert_eq_int(_shadows3, 1);
+    assert_eq_int(_dn_on3, 0);
+    assert(abs_f3(_dn_len3 - 120.0) < 0.001, "gun uzunlugu");
+    assert(_stars3 < 0.0, "yildiz otomatige donmeli");
+    assert_eq_int(_water_on3, 0);
+    assert_eq_int(_water_phys3, 1);
+    assert_eq_int(_water_a3, 150);
+    assert(_slope_lim3 < 0.0001, "egim siniri");
+    assert(abs_f3(_cam_fov - 45.0) < 0.001, "fov");
+    assert_eq_int(_cam_collide3, 1);
+    assert_eq_int(_terr_on, 0);
+    assert_eq_int(_terr_lay3, 0);
+}
+
+// Bozuk JSON sahneyi YIKMAMALI: 0 döner ve eldeki sahne yerinde kalır.
+func t_scene_bad_json_is_safe() {
+    scene_load3d(_sc_fixture());
+    int before = alive_count3d();
+    assert_eq_int(scene_load3d("{bozuk"), 0);
+    assert_eq_int(alive_count3d(), before);
+    assert_eq_int(scene_load3d(""), 0);
+    assert_eq_int(alive_count3d(), before);
+}
+
+// "ground" alanının YOKLUĞU anlamlı: zemin düzlemi olmayan sahne.
+func t_scene_ground_absence_means_no_ground() {
+    scene_load3d("{\"v\":1,\"world\":{\"gravity\":26}}");
+    assert_eq_int(_ground_on, 0);
+    scene_load3d("{\"v\":1,\"world\":{\"ground\":2.5}}");
+    assert_eq_int(_ground_on, 1);
+    assert(abs_f3(_ground_y - 2.5) < 0.001, "zemin yuksekligi");
+}
+
+// Eksik alanlar varsayılana düşmeli — biçim ileri uyumlu olsun diye.
+func t_scene_optional_fields_default() {
+    int n = scene_load3d("{\"v\":1,\"entities\":[{\"tag\":\"item\"}]}");
+    assert_eq_int(n, 1);
+    Ent3 e = _e3[0];
+    assert(abs_f3(e.x) < 0.001, "x varsayilan 0");
+    assert(abs_f3(e.sx - 1.0) < 0.001, "sx varsayilan 1");
+    assert_eq_int(e.shape, SHAPE_CUBE);
+    assert_eq_int(e.tag, TAG_ITEM);
+}
+
+// Mermi ÇALIŞMA ZAMANI ürünü — sahne dosyasına yazılmamalı.
+func t_scene_skips_runtime_entities() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    _sc_reg3("p", p);
+    bullet3d(p, 20.0, 2.0);
+    assert_eq_int(alive_count3d(), 2);
+    int n = scene_load3d(scene_json3d());
+    assert_eq_int(n, 1);
+}
+
+// Sayı biçimi: üretilen metin hem JSON hem de TULPAR sayı sözdizimi olmalı.
+// toString(120.0) "1.2e+02" veriyor — bu Tulpar kaynağında geçersiz, o yüzden
+// biçimin kendi yazıcısı var.
+func t_scene_number_format() {
+    assert(_sc_num3(120.0) == "120", "us gosterimi olmamali: " + _sc_num3(120.0));
+    assert(_sc_num3(0.012) == "0.012", "kucuk ondalik: " + _sc_num3(0.012));
+    assert(_sc_num3(1.5) == "1.5", "sondaki sifirlar atilmali: " + _sc_num3(1.5));
+    assert(_sc_num3(0.0 - 2.0) == "-2", "negatif tamsayi: " + _sc_num3(0.0 - 2.0));
+    assert(_sc_num3(0.0) == "0", "sifir: " + _sc_num3(0.0));
+    assert(_sc_num3(1000000.0) == "1000000", "buyuk: " + _sc_num3(1000000.0));
+    assert(_sc_num3(0.25) == "0.25", "iki ondalik: " + _sc_num3(0.25));
+}
+
+// Renk [r,g,b] gidiş-dönüşü — editörde renk seçici doğrudan buna bağlanacak.
+func t_scene_color_roundtrip() {
+    scene_load3d("{\"v\":1,\"entities\":[{\"tag\":\"item\",\"color\":[7,199,42]}]}");
+    Ent3 e = _e3[0];
+    assert_eq_int(_col_r3(e.color), 7);
+    assert_eq_int(_col_g3(e.color), 199);
+    assert_eq_int(_col_b3(e.color), 42);
+}
+
+// Katılık yalnız etiketin BEKLENENİNDEN farklıysa yazılır — ama yazıldığında
+// geri okunmalı (hayalet duvar / katı eşya).
+func t_scene_solid_override_roundtrip() {
+    scene_load3d("{\"v\":1,\"entities\":[" +
+        "{\"name\":\"hayalet\",\"tag\":\"wall\",\"solid\":false}," +
+        "{\"name\":\"kati\",\"tag\":\"item\",\"solid\":true}]}");
+    assert_eq_int(_e3[_slot_of3(find3d("hayalet"))].solid, 0);
+    assert_eq_int(_e3[_slot_of3(find3d("kati"))].solid, 1);
+    scene_load3d(scene_json3d());
+    assert_eq_int(_e3[_slot_of3(find3d("hayalet"))].solid, 0);
+    assert_eq_int(_e3[_slot_of3(find3d("kati"))].solid, 1);
+}
+
+
+test("sahne varliklari yukluyor", "t_scene_loads_entities");
+test("sahne dunyayi yukluyor", "t_scene_loads_world");
+test("sahne gidis-donusu duragan", "t_scene_roundtrip_is_stable");
+test("yorunge mesafesi gidis-donuste kalici", "t_scene_orbit_dist_survives_roundtrip");
+test("sahne yuklemesi tam", "t_scene_load_is_total");
+test("dunya varsayilanlari eksiksiz", "t_scene_world_defaults_are_total");
+test("bozuk JSON sahneyi yikmiyor", "t_scene_bad_json_is_safe");
+test("zemin yoklugu anlamli", "t_scene_ground_absence_means_no_ground");
+test("eksik alanlar varsayilana dusuyor", "t_scene_optional_fields_default");
+test("calisma zamani varliklari yazilmiyor", "t_scene_skips_runtime_entities");
+test("sayi bicimi us gosterimi uretmiyor", "t_scene_number_format");
+test("renk gidis-donusu", "t_scene_color_roundtrip");
+test("katilik istisnasi gidis-donusu", "t_scene_solid_override_roundtrip");
 test_summary();

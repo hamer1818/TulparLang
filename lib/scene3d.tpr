@@ -2422,8 +2422,16 @@ int _terr_lay3 = 0;
 // Adlar tame'inkilerden AYRI (`terrain_layers3d` orada duruyor ve scene3d onu
 // import ediyor): burada yapılan iş fazladan — tint'i beyaza çekmek ve
 // araziyi yeniden kurmak.
+// Boya parametreleri tame'e gidiyor ve orada okunamıyor — sahne biçimi
+// (SCENE_V3) bunları geri yazabilmek için burada da saklıyor.
+int   _terr_pl3  = 0;   int   _terr_pm3  = 0;
+int   _terr_ph3  = 0;   int   _terr_pr3  = 0;
+float _terr_pmy3 = 0.0; float _terr_phy3 = 0.0; float _terr_prs3 = 0.0;
+
 func terrain_paint3d(low, mid, high, rock, mid_y, high_y, rock_slope) {
     terrain_layers3d(low, mid, high, rock, mid_y, high_y, rock_slope);
+    _terr_pl3 = low; _terr_pm3 = mid; _terr_ph3 = high; _terr_pr3 = rock;
+    _terr_pmy3 = mid_y * 1.0; _terr_phy3 = high_y * 1.0; _terr_prs3 = rock_slope * 1.0;
     _terr_lay3 = 1;
     _terr_color = WHITE;
     _s3_terrain_rebuild();
@@ -4193,3 +4201,438 @@ func arazi3d(res, sx, sy, sz, olcek, tohum) { terrain3d(res, sx, sy, sz, olcek, 
 func arazi_dosya3d(yol, sx, sy, sz) { terrain_file3d(yol, sx, sy, sz); }
 func arazi_renk3d(c) { terrain_color3d(c); }
 func zemin_yukseklik3d(x, z): float { return _floor_at3(x, z); }
+
+// ===========================================================================
+// SAHNE BİÇİMİ (Faz 13) — sahne artık VERİ
+// ===========================================================================
+// Buraya kadar bir sahne yalnız KOD olarak vardı: `setup()` içinde elle
+// yazılmış `spawn3(...)` çağrıları. Bu, motoru kullanmanın tek yolunu
+// "önce Tulpar öğren" yapıyordu ve konumları gözle ayarlamak imkânsızdı —
+// sayıyı tahmin et, derle, bak, düzelt.
+//
+// Bu katman sahneyi JSON olarak tanımlanabilir kılıyor. Kazanç üç yönlü:
+//   1. Bir EDİTÖR sahneyi okuyup yazabilir (kod üretmeden önce bile).
+//   2. Bölümler dosya olur — oyunu yeniden derlemeden yeni bölüm eklenir.
+//   3. Aynı sahne hem web'de hem masaüstünde birebir aynı kurulur.
+//
+// Anahtarlar İNGİLİZCE ve TEK yazımlı. API'de TR+EN ikizler var ama bir VERİ
+// biçiminde iki yazım kabul etmek belirsizlik üretir (hangisi kazanır?) ve
+// ayrıştırıcıyı ikiye katlar. Kullanıcıya Türkçe görünen şey editörün
+// etiketleri; dosyanın kendisi tek dilde.
+int SCENE_V3 = 1;
+
+// ---- Sayı biçimleme --------------------------------------------------------
+// toString(120.0) "1.2e+02" veriyor. JSON bunu kabul eder ama ÜRETİLEN TULPAR
+// KODU etmez — ve insan da okumaz. Bu yüzden kendi biçimleyicimiz var:
+// 3 ondalık (dünya birimi metre → 1 mm çözünürlük), sondaki sıfırlar atılır.
+// 3 ondalıkta yuvarlamak gidiş-dönüşü DURAĞAN da yapıyor: bir kez
+// yuvarlandıktan sonra tekrar yuvarlamak değeri değiştirmez.
+func _sc_num3(v): str {
+    float f = v * 1.0;
+    str sg = "";
+    if (f < 0.0) { sg = "-"; f = 0.0 - f; }
+    int ip = toInt(f);
+    int t = toInt((f - ip * 1.0) * 1000.0 + 0.5);
+    if (t >= 1000) { ip = ip + 1; t = 0; }
+    if (t == 0) { return sg + toString(ip); }
+    if (mod(t, 100) == 0) { return sg + toString(ip) + "." + toString(toInt(t / 100)); }
+    if (mod(t, 10) == 0) {
+        int t2 = toInt(t / 10);
+        str p2 = toString(t2);
+        if (t2 < 10) { p2 = "0" + p2; }
+        return sg + toString(ip) + "." + p2;
+    }
+    str p3 = toString(t);
+    if (t < 10) { p3 = "00" + p3; }
+    if (t >= 10 && t < 100) { p3 = "0" + p3; }
+    return sg + toString(ip) + "." + p3;
+}
+
+// ---- Ad kaydı --------------------------------------------------------------
+// JSON'daki "name" alanı → handle. Kurallar ve kamera hedefi entity'lere
+// ADLA atıfta bulunur; handle'lar yükleme sırasına bağlı olurdu, ad değil.
+array _sc_nm = [];
+array _sc_id = [];
+
+func _sc_reg3(nm, id) {
+    if (nm == "") { return; }
+    push(_sc_nm, nm);
+    push(_sc_id, id);
+}
+
+// Adı verilen entity'nin handle'ı; yoksa -1.
+func find3d(nm): int {
+    int i = 0;
+    while (i < length(_sc_nm)) {
+        if (_sc_nm[i] == nm) { return _sc_id[i]; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+func bul3d(nm): int { return find3d(nm); }
+
+// Handle → ad (serileştirme için). Yoksa "".
+func _sc_nm_of3(id): str {
+    int i = 0;
+    while (i < length(_sc_id)) {
+        if (_sc_id[i] == id) { return _sc_nm[i]; }
+        i = i + 1;
+    }
+    return "";
+}
+
+// ---- Sabit ↔ metin ---------------------------------------------------------
+// Biçimde sayı yerine ad kullanmak editörü ve elle düzenlemeyi taşınabilir
+// yapıyor: SHAPE_CUBE'ün 0 olması bir uygulama ayrıntısı, dosyaya sızmamalı.
+func _sc_shape3(s): int {
+    if (s == "sphere") { return SHAPE_SPHERE; }
+    if (s == "cyl")    { return SHAPE_CYL; }
+    if (s == "ramp")   { return SHAPE_RAMP; }
+    return SHAPE_CUBE;
+}
+func _sc_shape_nm3(v): str {
+    if (v == SHAPE_SPHERE) { return "sphere"; }
+    if (v == SHAPE_CYL)    { return "cyl"; }
+    if (v == SHAPE_RAMP)   { return "ramp"; }
+    if (v == SHAPE_MODEL)  { return "model"; }
+    return "cube";
+}
+func _sc_tag3(s): int {
+    if (s == "item")   { return TAG_ITEM; }
+    if (s == "wall")   { return TAG_WALL; }
+    if (s == "enemy")  { return TAG_ENEMY; }
+    if (s == "bullet") { return TAG_BULLET; }
+    if (s == "player") { return TAG_PLAYER; }
+    return TAG_PROP;
+}
+func _sc_tag_nm3(v): str {
+    if (v == TAG_PLAYER) { return "player"; }
+    if (v == TAG_ITEM)   { return "item"; }
+    if (v == TAG_WALL)   { return "wall"; }
+    if (v == TAG_ENEMY)  { return "enemy"; }
+    if (v == TAG_BULLET) { return "bullet"; }
+    return "prop";
+}
+
+// ---- JSON okuma yardımcıları ----------------------------------------------
+// Her alan İSTEĞE BAĞLI: eksikse varsayılan döner. Bu, biçimi ileri uyumlu
+// yapıyor (eski dosya yeni motorda açılır) ve editörün yalnız değiştirilen
+// alanları yazmasına izin veriyor.
+func _sc_has3(o, k): bool { return contains(keys(o), k); }
+func _sc_f3(o, k, d): float {
+    if (_sc_has3(o, k) == false) { return d * 1.0; }
+    return o[k] * 1.0;
+}
+func _sc_i3(o, k, d): int {
+    if (_sc_has3(o, k) == false) { return d; }
+    return toInt(o[k]);
+}
+func _sc_s3(o, k, d): str {
+    if (_sc_has3(o, k) == false) { return d; }
+    return o[k];
+}
+func _sc_bool3(o, k, d): int {
+    if (_sc_has3(o, k) == false) { return d; }
+    if (o[k] == true) { return 1; }
+    if (o[k] == false) { return 0; }
+    return toInt(o[k]);
+}
+// Renk [r,g,b] ya da [r,g,b,a] olarak yazılır — editörde bir renk seçici
+// doğrudan buna denk düşer; paketli tamsayı (0xRRGGBBAA) insan için okunmaz.
+func _sc_col3(o, k, d): int {
+    if (_sc_has3(o, k) == false) { return d; }
+    json c = o[k];
+    if (length(c) < 3) { return d; }
+    int a = 255;
+    if (length(c) > 3) { a = toInt(c[3]); }
+    return rgba(toInt(c[0]), toInt(c[1]), toInt(c[2]), a);
+}
+func _sc_coljs3(c): str {
+    return "[" + toString(_col_r3(c)) + "," + toString(_col_g3(c)) + "," +
+           toString(_col_b3(c)) + "]";
+}
+
+// ---- Dünya varsayılanları --------------------------------------------------
+// Yükleme TAM olmalı: B sahnesini açmak A'nın gökyüzünü devralmamalı.
+// scene3d_reset() entity'leri ve oynanış durumunu siliyor ama dünya
+// ayarlarının çoğunu (gökyüzü, sis, ışık, kamera mesafesi) bırakıyor — çünkü
+// onlar normalde setup'ta bir kez kuruluyor. Editör ise saniyede bir yeniden
+// yüklüyor; bırakılan her ayar sıraya bağımlı bir hata olurdu.
+func _sc_world_defaults3() {
+    _sky3 = 0; _fog3 = 0.0;
+    _ground_on = 1; _ground_y = 0.0;
+    _ground_tex3 = 0 - 1; _ground_tile3 = 1.0;
+    _grav = 26.0;
+    _lights3 = 1; _shadows3 = 1;
+    _cam_dist = 12.0; _cam_height = 8.0; _cam_fov = 45.0;
+    _cam_collide3 = 1; _cam_eye3 = 0.0;
+    _dn_on3 = 0; _dn_h3 = 12.0; _dn_len3 = 120.0; _dn_frozen3 = 0;
+    _stars3 = 0.0 - 1.0;
+    terrain_off3d_scene();
+    _terr_lay3 = 0; terrain_layers_off3d();
+    _water_on3 = 0; _water_col3 = 0; _water_a3 = 150; _water_phys3 = 1;
+    _slope_lim3 = 0.0; _slope_cos3 = 0.0; _slide_acc3 = 18.0;
+}
+
+// ---- Dünya: JSON → motor ---------------------------------------------------
+func _sc_load_world3(w) {
+    if (_sc_has3(w, "sky")) {
+        json sk = w["sky"];
+        sky3d(_sc_col3(sk, "top", rgb(58, 116, 200)),
+              _sc_col3(sk, "bottom", rgb(196, 220, 240)));
+    }
+    fog3d(_sc_f3(w, "fog", 0.0));
+    // "ground" YOKLUĞU anlamlı: zemin düzlemi olmayan sahne (yalnız arazi ya
+    // da boşlukta duran platformlar). Bu yüzden varsayılan değere düşmüyor.
+    if (_sc_has3(w, "ground")) { ground3d(_sc_f3(w, "ground", 0.0)); }
+    else { no_ground3d(); }
+    gravity3d(_sc_f3(w, "gravity", 26.0));
+    lights3d(_sc_bool3(w, "lights", 1));
+    shadows3d(_sc_bool3(w, "shadows", 1));
+
+    if (_sc_has3(w, "daynight")) {
+        json dn = w["daynight"];
+        daynight3d(_sc_f3(dn, "len", 120.0));
+        set_time3d(_sc_f3(dn, "time", 12.0));
+        freeze_time3d(_sc_bool3(dn, "frozen", 0));
+    }
+    // Yıldız: -1 = OTOMATİK (geceye bağlı). Elle sabitlemek isteyen 0..1 yazar.
+    float st = _sc_f3(w, "stars", 0.0 - 1.0);
+    if (st < 0.0) { stars_auto3d(); } else { stars3d(st); }
+
+    if (_sc_has3(w, "terrain")) {
+        json tr = w["terrain"];
+        if (_sc_has3(tr, "file")) {
+            terrain_file3d(_sc_s3(tr, "file", ""), _sc_f3(tr, "sx", 120.0),
+                           _sc_f3(tr, "sy", 14.0), _sc_f3(tr, "sz", 120.0));
+        } else {
+            terrain3d(_sc_i3(tr, "res", 129), _sc_f3(tr, "sx", 120.0),
+                      _sc_f3(tr, "sy", 14.0), _sc_f3(tr, "sz", 120.0),
+                      _sc_f3(tr, "noise", 4.5), _sc_i3(tr, "seed", 1));
+        }
+    }
+    if (_sc_has3(w, "paint")) {
+        json pt = w["paint"];
+        terrain_paint3d(_sc_col3(pt, "low",  rgb(96, 132, 88)),
+                        _sc_col3(pt, "mid",  rgb(124, 116, 82)),
+                        _sc_col3(pt, "high", rgb(238, 242, 250)),
+                        _sc_col3(pt, "rock", rgb(112, 110, 106)),
+                        _sc_f3(pt, "mid_y", 5.0), _sc_f3(pt, "high_y", 9.0),
+                        _sc_f3(pt, "slope", 42.0));
+    }
+    if (_sc_has3(w, "water")) {
+        json wt = w["water"];
+        water3d(_sc_f3(wt, "y", 0.0));
+        water_color3d(_sc_col3(wt, "color", rgb(40, 110, 170)),
+                      _sc_i3(wt, "alpha", 150));
+        water_physics3d(_sc_bool3(wt, "physics", 1));
+    }
+    if (_sc_has3(w, "slope")) {
+        json sl = w["slope"];
+        slope_limit3d(_sc_f3(sl, "limit", 0.0));
+        slide_accel3d(_sc_f3(sl, "slide", 18.0));
+    }
+}
+
+// Kamera AYRI ve SONRA: hedefini adla gösteriyor, entity'ler yüklenmeden
+// çözülemez.
+func _sc_load_camera3(w) {
+    if (_sc_has3(w, "camera") == false) { return; }
+    json cm = w["camera"];
+    int tgt = find3d(_sc_s3(cm, "target", ""));
+    str md = _sc_s3(cm, "mode", "orbit");
+    float ds = _sc_f3(cm, "dist", 12.0);
+    float hg = _sc_f3(cm, "height", 8.0);
+    if (md == "fps")         { camera_fps(tgt, _sc_f3(cm, "eye", 0.0)); }
+    if (md == "follow")      { camera_follow(tgt, ds, hg); }
+    if (md == "orbit")       { camera_orbit(tgt, ds, hg); }
+    camera_fov(_sc_f3(cm, "fov", 45.0));
+    camera_collide3d(_sc_bool3(cm, "collide", 1));
+    if (_sc_has3(cm, "lock")) { camera_lock3d(_sc_bool3(cm, "lock", 1)); }
+}
+
+// ---- Entity: JSON → motor --------------------------------------------------
+func _sc_load_ent3(e): int {
+    int id = spawn3(_sc_f3(e, "x", 0.0), _sc_f3(e, "y", 0.0), _sc_f3(e, "z", 0.0),
+                    _sc_f3(e, "sx", 1.0), _sc_f3(e, "sy", 1.0), _sc_f3(e, "sz", 1.0),
+                    _sc_col3(e, "color", WHITE),
+                    _sc_shape3(_sc_s3(e, "shape", "cube")),
+                    _sc_tag3(_sc_s3(e, "tag", "prop")));
+    if (_sc_has3(e, "yaw"))   { set3yaw(id, _sc_f3(e, "yaw", 0.0)); }
+    if (_sc_has3(e, "solid")) { solid3d(id, _sc_bool3(e, "solid", 1)); }
+    if (_sc_has3(e, "hp"))    { health3d(id, _sc_i3(e, "hp", 0)); }
+    _sc_reg3(_sc_s3(e, "name", ""), id);
+    return id;
+}
+
+// ---- Genel giriş: sahneyi yükle -------------------------------------------
+// Yüklenen entity sayısını döndürür; bozuk/boş JSON'da 0. Sahneyi TAMAMEN
+// değiştirir (önce reset).
+func scene_load3d(src): int {
+    json sc = fromJson(src);
+    if (length(keys(sc)) == 0) {
+        log_err3d("sahne yuklenemedi: gecersiz JSON");
+        return 0;
+    }
+    scene3d_reset();
+    _sc_nm = []; _sc_id = [];
+    _sc_world_defaults3();
+    if (_sc_has3(sc, "world")) { _sc_load_world3(sc["world"]); }
+    int n = 0;
+    if (_sc_has3(sc, "entities")) {
+        json es = sc["entities"];
+        int i = 0;
+        while (i < length(es)) {
+            _sc_load_ent3(es[i]);
+            n = n + 1;
+            i = i + 1;
+        }
+    }
+    if (_sc_has3(sc, "world")) { _sc_load_camera3(sc["world"]); }
+    log3d("sahne yuklendi: " + toString(n) + " varlik");
+    return n;
+}
+func sahne_yukle3d(kaynak): int { return scene_load3d(kaynak); }
+
+// Dosyadan yükle.
+func scene_file3d(path): int {
+    if (file_exists(path) == false) {
+        log_err3d("sahne dosyasi yok: " + path);
+        return 0;
+    }
+    return scene_load3d(read_file(path));
+}
+func sahne_dosya3d(yol): int { return scene_file3d(yol); }
+
+// ---- Motor → JSON ----------------------------------------------------------
+// Yalnız ETKİN olan yazılır: kapalı su, kurulmamış arazi ya da varsayılan
+// gökyüzü dosyaya girmez. Böylece elle yazılmış küçük bir sahne kaydedilince
+// şişmiyor ve git farkı okunur kalıyor.
+//
+// Çıktı satır satır: her entity tek satır. Biçimlendirmenin amacı editörün
+// kaydettiği dosyanın da insan tarafından okunup düzenlenebilmesi.
+func _sc_world_js3(): str {
+    str o = "  \"world\": {\n";
+    if (_sky3 == 1) {
+        o = o + "    \"sky\": {\"top\": " + _sc_coljs3(_sky_top3) +
+            ", \"bottom\": " + _sc_coljs3(_sky_bot3) + "},\n";
+    }
+    if (_fog3 > 0.0) { o = o + "    \"fog\": " + _sc_num3(_fog3) + ",\n"; }
+    if (_ground_on == 1) { o = o + "    \"ground\": " + _sc_num3(_ground_y) + ",\n"; }
+    o = o + "    \"gravity\": " + _sc_num3(_grav) + ",\n";
+    if (_lights3 == 0)  { o = o + "    \"lights\": false,\n"; }
+    if (_shadows3 == 0) { o = o + "    \"shadows\": false,\n"; }
+    if (_dn_on3 == 1) {
+        o = o + "    \"daynight\": {\"len\": " + _sc_num3(_dn_len3) +
+            ", \"time\": " + _sc_num3(_dn_h3);
+        if (_dn_frozen3 == 1) { o = o + ", \"frozen\": true"; }
+        o = o + "},\n";
+    }
+    // -1 (otomatik) varsayılan; yalnız elle sabitlenmişse yazılır.
+    if (_stars3 >= 0.0) { o = o + "    \"stars\": " + _sc_num3(_stars3) + ",\n"; }
+    if (_terr_kind3 == 1) {
+        o = o + "    \"terrain\": {\"res\": " + toString(_terr_res3) +
+            ", \"sx\": " + _sc_num3(_terr_sx) + ", \"sy\": " + _sc_num3(_terr_sy3) +
+            ", \"sz\": " + _sc_num3(_terr_sz) + ", \"noise\": " + _sc_num3(_terr_scale3) +
+            ", \"seed\": " + toString(_terr_seed3) + "},\n";
+    }
+    if (_terr_kind3 == 2) {
+        o = o + "    \"terrain\": {\"file\": \"" + _terr_path3 +
+            "\", \"sx\": " + _sc_num3(_terr_sx) + ", \"sy\": " + _sc_num3(_terr_sy3) +
+            ", \"sz\": " + _sc_num3(_terr_sz) + "},\n";
+    }
+    if (_terr_lay3 == 1) {
+        o = o + "    \"paint\": {\"low\": " + _sc_coljs3(_terr_pl3) +
+            ", \"mid\": " + _sc_coljs3(_terr_pm3) +
+            ", \"high\": " + _sc_coljs3(_terr_ph3) +
+            ", \"rock\": " + _sc_coljs3(_terr_pr3) +
+            ", \"mid_y\": " + _sc_num3(_terr_pmy3) +
+            ", \"high_y\": " + _sc_num3(_terr_phy3) +
+            ", \"slope\": " + _sc_num3(_terr_prs3) + "},\n";
+    }
+    if (_water_on3 == 1) {
+        o = o + "    \"water\": {\"y\": " + _sc_num3(_water_y3) +
+            ", \"color\": " + _sc_coljs3(_water_col3) +
+            ", \"alpha\": " + toString(_water_a3);
+        if (_water_phys3 == 0) { o = o + ", \"physics\": false"; }
+        o = o + "},\n";
+    }
+    if (_slope_lim3 > 0.0) {
+        o = o + "    \"slope\": {\"limit\": " + _sc_num3(_slope_lim3) +
+            ", \"slide\": " + _sc_num3(_slide_acc3) + "},\n";
+    }
+    // Kamera EN SON ve virgülsüz — nesnenin son alanı.
+    str md = "follow";
+    if (_cam_mode3 == CAM_ORBIT) { md = "orbit"; }
+    if (_cam_mode3 == CAM_FPS)   { md = "fps"; }
+    o = o + "    \"camera\": {\"mode\": \"" + md + "\"";
+    str tn = _sc_nm_of3(_cam_target);
+    if (tn != "") { o = o + ", \"target\": \"" + tn + "\""; }
+    if (md == "fps") { o = o + ", \"eye\": " + _sc_num3(_cam_eye3); }
+    else {
+        // YÖRÜNGE modunda _cam_dist YATAY mesafe değil, yörünge YARIÇAPI:
+        // camera_orbit(d,h) onu sqrt(d*d + h*h) olarak kuruyor. Biçimdeki
+        // "dist" ise camera_orbit'in aldığı değer, yani geri çevirmek gerek —
+        // yoksa her kaydet/yükle turunda kamera bir adım daha geri kayardı
+        // (16 → 18.87 → 21.35). Ters dönüşüm tam: r*r - h*h = d*d.
+        float dh = _cam_dist;
+        if (_cam_mode3 == CAM_ORBIT) {
+            float q = _cam_dist * _cam_dist - _cam_height * _cam_height;
+            if (q > 0.0) { dh = sqrt(q); } else { dh = 0.0; }
+        }
+        o = o + ", \"dist\": " + _sc_num3(dh) +
+            ", \"height\": " + _sc_num3(_cam_height);
+    }
+    o = o + ", \"fov\": " + _sc_num3(_cam_fov);
+    if (_cam_collide3 == 0) { o = o + ", \"collide\": false"; }
+    o = o + "}\n";
+    return o + "  }";
+}
+
+func _sc_ent_js3(s): str {
+    Ent3 e = _e3[s];
+    str o = "    {";
+    str nm = _sc_nm_of3(_mk_handle3(s));
+    if (nm != "") { o = o + "\"name\": \"" + nm + "\", "; }
+    o = o + "\"tag\": \"" + _sc_tag_nm3(e.tag) + "\", " +
+        "\"shape\": \"" + _sc_shape_nm3(e.shape) + "\", " +
+        "\"x\": " + _sc_num3(e.x) + ", \"y\": " + _sc_num3(e.y) +
+        ", \"z\": " + _sc_num3(e.z) + ", " +
+        "\"sx\": " + _sc_num3(e.sx) + ", \"sy\": " + _sc_num3(e.sy) +
+        ", \"sz\": " + _sc_num3(e.sz) + ", " +
+        "\"color\": " + _sc_coljs3(e.color);
+    if (e.yaw != 0.0) { o = o + ", \"yaw\": " + _sc_num3(e.yaw); }
+    // Katılık yalnız etikete göre BEKLENENDEN farklıysa yazılır.
+    if (e.solid != _default_solid3(e.tag)) {
+        if (e.solid == 1) { o = o + ", \"solid\": true"; }
+        else { o = o + ", \"solid\": false"; }
+    }
+    if (e.hpmax > 0) { o = o + ", \"hp\": " + toString(e.hpmax); }
+    return o + "}";
+}
+
+// Şu anki sahneyi JSON olarak ver.
+func scene_json3d(): str {
+    str o = "{\n  \"v\": " + toString(SCENE_V3) + ",\n" + _sc_world_js3() + ",\n";
+    o = o + "  \"entities\": [\n";
+    int i = 0;
+    int first = 1;
+    while (i < length(_e3)) {
+        Ent3 e = _e3[i];
+        // Mermi ve ömürlü şeyler ÇALIŞMA ZAMANI ürünü — sahne değil.
+        if (e.alive == 1 && e.tag != TAG_BULLET && e.life <= 0.0) {
+            if (first == 0) { o = o + ",\n"; }
+            o = o + _sc_ent_js3(i);
+            first = 0;
+        }
+        i = i + 1;
+    }
+    return o + "\n  ]\n}\n";
+}
+func sahne_json3d(): str { return scene_json3d(); }
+
+// Diske yaz.
+func scene_save3d(path): bool {
+    return write_file(path, scene_json3d());
+}
+func sahne_kaydet3d(yol): bool { return scene_save3d(yol); }
