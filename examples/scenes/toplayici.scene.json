@@ -1,0 +1,63 @@
+{
+  "v": 1,
+  "world": {
+    "title": "Tulpar 3B — Veriyle Kurulmus Oyun", "w": 960, "h": 560,
+    "sky": {"top": [38, 52, 92], "bottom": [176, 198, 224]},
+    "fog": 0.014,
+    "ground": 0,
+    "gravity": 26,
+    "camera": {"mode": "orbit", "target": "kahraman", "dist": 16, "height": 11, "fov": 45}
+  },
+  "entities": [
+    {"name": "kahraman", "tag": "player", "shape": "cube",
+     "x": 0, "y": 2, "z": 12, "sx": 1.2, "sy": 2, "sz": 1.2,
+     "color": [110, 190, 240], "hp": 100,
+     "behaviors": [{"type": "move", "speed": 12, "jump": 13}]},
+
+    {"tag": "item", "shape": "sphere", "x": -14, "y": 1.4, "z": -12, "sx": 1.2, "sy": 1.2, "sz": 1.2,
+     "color": [255, 205, 60], "behaviors": [{"type": "bob", "height": 0.35, "speed": 1.1}]},
+    {"tag": "item", "shape": "sphere", "x": 15, "y": 1.4, "z": -9, "sx": 1.2, "sy": 1.2, "sz": 1.2,
+     "color": [255, 205, 60], "behaviors": [{"type": "bob", "height": 0.35, "speed": 1.3}]},
+    {"tag": "item", "shape": "sphere", "x": 9, "y": 1.4, "z": 16, "sx": 1.2, "sy": 1.2, "sz": 1.2,
+     "color": [255, 205, 60], "behaviors": [{"type": "bob", "height": 0.35, "speed": 0.9}]},
+    {"tag": "item", "shape": "sphere", "x": -17, "y": 1.4, "z": 14, "sx": 1.2, "sy": 1.2, "sz": 1.2,
+     "color": [255, 205, 60], "behaviors": [{"type": "bob", "height": 0.35, "speed": 1.5}]},
+    {"tag": "item", "shape": "sphere", "x": 0, "y": 1.4, "z": -20, "sx": 1.2, "sy": 1.2, "sz": 1.2,
+     "color": [255, 205, 60], "behaviors": [{"type": "bob", "height": 0.35, "speed": 1.2}]},
+    {"tag": "item", "shape": "sphere", "x": 20, "y": 1.4, "z": 4, "sx": 1.2, "sy": 1.2, "sz": 1.2,
+     "color": [255, 205, 60], "behaviors": [{"type": "bob", "height": 0.35, "speed": 1.0}]},
+
+    {"tag": "enemy", "shape": "cube", "x": -20, "y": 1.5, "z": -20, "sx": 1.4, "sy": 1.6, "sz": 1.4,
+     "color": [222, 82, 74], "hp": 30,
+     "behaviors": [{"type": "chase", "target": "player", "speed": 4.5, "range": 40}]},
+    {"tag": "enemy", "shape": "cube", "x": 21, "y": 1.5, "z": 18, "sx": 1.4, "sy": 1.6, "sz": 1.4,
+     "color": [222, 82, 74], "hp": 30,
+     "behaviors": [{"type": "chase", "target": "player", "speed": 4, "range": 40}]},
+    {"tag": "enemy", "shape": "cube", "x": 0, "y": 1.5, "z": 24, "sx": 1.4, "sy": 1.6, "sz": 1.4,
+     "color": [222, 82, 74], "hp": 30,
+     "behaviors": [{"type": "patrol", "x1": -18, "z1": 24, "x2": 18, "z2": 24, "speed": 7}]},
+
+    {"name": "kule", "tag": "prop", "shape": "cyl", "x": 0, "y": 1.5, "z": 0, "sx": 2, "sy": 3, "sz": 2,
+     "color": [150, 150, 160],
+     "behaviors": [{"type": "shoot", "interval": 1.6, "speed": 18, "life": 2.5,
+                    "target": "player", "range": 26}]},
+
+    {"tag": "prop", "shape": "cube", "x": -8, "y": 1, "z": 6, "sx": 3, "sy": 2, "sz": 3,
+     "color": [120, 156, 120], "behaviors": [{"type": "spin", "speed": 40}]},
+    {"tag": "prop", "shape": "cube", "x": 10, "y": 1, "z": -6, "sx": 3, "sy": 2, "sz": 3,
+     "color": [120, 156, 120], "behaviors": [{"type": "spin", "speed": -55}]},
+
+    {"tag": "wall", "shape": "cube", "x": 0, "y": 2, "z": -30, "sx": 62, "sy": 4, "sz": 2, "color": [126, 126, 134]},
+    {"tag": "wall", "shape": "cube", "x": 0, "y": 2, "z": 30, "sx": 62, "sy": 4, "sz": 2, "color": [126, 126, 134]},
+    {"tag": "wall", "shape": "cube", "x": -30, "y": 2, "z": 0, "sx": 2, "sy": 4, "sz": 62, "color": [126, 126, 134]},
+    {"tag": "wall", "shape": "cube", "x": 30, "y": 2, "z": 0, "sx": 2, "sy": 4, "sz": 62, "color": [126, 126, 134]},
+    {"tag": "wall", "shape": "cube", "x": -6, "y": 1.5, "z": -14, "sx": 10, "sy": 3, "sz": 1.5, "color": [140, 132, 118], "yaw": 30}
+  ],
+  "rules": [
+    {"on": "hit", "a": "player", "b": "item", "do": "collect", "n": 50},
+    {"on": "hit", "a": "player", "b": "enemy", "do": "damage", "n": 12},
+    {"on": "hit", "a": "bullet", "b": "player", "do": "hurt", "n": 8},
+    {"on": "cleared", "tag": "item", "do": "win"},
+    {"on": "cleared", "tag": "player", "do": "lose"}
+  ]
+}

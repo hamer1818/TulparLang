@@ -405,6 +405,8 @@ func scene3d_reset() {
     // Kalıcılık: BELLEKTEKİ durum sıfırlanır, DİSKTEKİ kayıt durur. reset
     // "sahneyi baştan kur" demek, "oyuncunun rekorunu sil" demek değil.
     _sav_on = 0; _best3 = 0; _new_rec3 = 0; _lvl_done3 = [];
+    _bh3 = [];   // veri-davranislar da sahne durumu
+    _rl3 = [];   // veri-kurallar da sahne durumu
     _hitA = []; _hitB = []; _hitF = [];
     _deadT = []; _deadF = [];
     _trg_clear3(); _trg_show3 = 0;
@@ -1925,6 +1927,37 @@ func _is_round3(Ent3 e): bool { return e.shape == SHAPE_SPHERE || e.shape == SHA
 
 // Motorun TEK çakışma girişi. Şekle göre doğru testi seçer; ikisi de eksen-hizalı
 // kutuysa eski (ucuz) AABB yolunda kalır — eski sahnelerin davranışı değişmez.
+// ---- Temas payı (contact skin) ---------------------------------------------
+// KATI-KATI çarpışma kancaları HİÇ atmıyordu ve bu sessiz bir hataydı:
+// `_s3_collision` önce MTV ile cisimleri TAM ayırıyor, kanca taraması ise
+// ondan SONRA çakışma arıyor — ayrılmış iki cisim tam teğet duruyor, yani
+// çakışma yok. Sonuç: `carpisinca3(TAG_ENEMY, TAG_PLAYER, ...)` kaydeden bir
+// oyun (gönderilen scene3d_arena örneği dahil) hiçbir zaman çağrılmıyordu.
+// Yalnız katı-KATISIZ çiftler (eşya, mermi) çalışıyordu, çünkü onlar
+// ayrılmıyor.
+//
+// Çözüm fizik motorlarının standardı: temas taraması cisimleri küçük bir payla
+// şişirerek bakar. Pay AABB/küre/silindir/SAT ayrımını bilmiyor — cisimlerin
+// boyutu geçici olarak büyütülüp AYNI `_overlap3` çağrılıyor. Şekil matematiği
+// ikinci bir yerde tekrarlansaydı er geç ondan sapardı.
+float _hit_skin3 = 0.06;   // dünya birimi (6 cm)
+
+func _overlap_hit3(a, b): bool {
+    Ent3 ea = _e3[a];
+    Ent3 eb = _e3[b];
+    float ax = ea.sx; float ay = ea.sy; float az = ea.sz;
+    float bx = eb.sx; float by = eb.sy; float bz = eb.sz;
+    float g = _hit_skin3 * 2.0;   // yarı-boy pay kadar büyüsün
+    ea.sx = ax + g; ea.sy = ay + g; ea.sz = az + g;
+    eb.sx = bx + g; eb.sy = by + g; eb.sz = bz + g;
+    _e3[a] = ea; _e3[b] = eb;
+    bool r = _overlap3(a, b);
+    ea.sx = ax; ea.sy = ay; ea.sz = az;
+    eb.sx = bx; eb.sy = by; eb.sz = bz;
+    _e3[a] = ea; _e3[b] = eb;
+    return r;
+}
+
 func _overlap3(a, b): bool {
     Ent3 ea = _e3[a];
     Ent3 eb = _e3[b];
@@ -2745,7 +2778,7 @@ func _s3_collision() {
                 while (b < n) {
                     if (a != b && !_bp_far3(a, b)) {
                         Ent3 eb = _e3[b];
-                        if (eb.alive == 1 && eb.tag == tb && _overlap3(a, b)
+                        if (eb.alive == 1 && eb.tag == tb && _overlap_hit3(a, b)
                             && !_bullet_owner_pair3(a, b)) {
                             _hit_me = _mk_handle3(a);
                             _hit_other = _mk_handle3(b);
@@ -4015,6 +4048,9 @@ func play3d() {
         if (_s3_ui != UI_NONE) { frozen = 1; }
 
         if (frozen == 0) { _s3_camera_input(dt); }
+        // Veri-davranislar update'ten ONCE: ayni varliga elle hareket3()
+        // yazan oyun davranisin verdigi hizi EZEBILSIN. Kod veriyi yener.
+        if (_game_over3 == 0 && frozen == 0) { _s3_behaviors(dt); }
         if (_has_update3 == 1 && _game_over3 == 0 && frozen == 0) { call(_update3_fn); }
         // Parçacıklar oyun bitse de sönmeye devam eder — son patlama ekranda
         // donup kalmasın (arcade'de de aynı gerekçe). Duraklatmada ise donar.
@@ -4029,6 +4065,9 @@ func play3d() {
             // Bölüm geçişinden ÖNCE: bir bölge kancası `bolum_gec3d()` çağırırsa
             // aşağıdaki satır onu bu karenin sonunda uygular.
             _s3_triggers();
+            // Veri-kurallar: "bitince" denetimi carpismalardan SONRA, bu karede
+            // toplanan son esya sayilmis olsun diye.
+            _s3_rules();
             // Gözcü EN SONDA: bütün çözümler bittikten sonra hâlâ bozuk olan
             // bir değişmez varsa, o gerçekten bozuktur.
             _s3_watch3();
@@ -4376,6 +4415,9 @@ func _sc_world_defaults3() {
 
 // ---- Dünya: JSON → motor ---------------------------------------------------
 func _sc_load_world3(w) {
+    _sc_title3 = _sc_s3(w, "title", _sc_title3);
+    _sc_w3 = _sc_i3(w, "w", _sc_w3);
+    _sc_h3 = _sc_i3(w, "h", _sc_h3);
     if (_sc_has3(w, "sky")) {
         json sk = w["sky"];
         sky3d(_sc_col3(sk, "top", rgb(58, 116, 200)),
@@ -4462,7 +4504,42 @@ func _sc_load_ent3(e): int {
     if (_sc_has3(e, "solid")) { solid3d(id, _sc_bool3(e, "solid", 1)); }
     if (_sc_has3(e, "hp"))    { health3d(id, _sc_i3(e, "hp", 0)); }
     _sc_reg3(_sc_s3(e, "name", ""), id);
+    if (_sc_has3(e, "behaviors")) {
+        json bs = e["behaviors"];
+        int i = 0;
+        while (i < length(bs)) { _sc_load_bh3(id, bs[i]); i = i + 1; }
+    }
     return id;
+}
+
+// Davranış: JSON → bileşen. "target" bir ETİKET adı (yokluğu = hedefsiz);
+// belirli bir varlığı hedeflemek biçimde YOK, çünkü etiket zaten "en yakın
+// oyuncu" demenin doğal yolu ve adla hedeflemek her karede ad araması
+// gerektirirdi.
+func _sc_load_bh3(id, b) {
+    str k = _sc_s3(b, "type", "");
+    int tg = 0;
+    if (_sc_has3(b, "target")) { tg = _sc_tag3(_sc_s3(b, "target", "player")); }
+    if (k == "move") {
+        move_behavior3d(id, _sc_f3(b, "speed", 8.0), _sc_f3(b, "jump", 0.0));
+    }
+    if (k == "chase") {
+        if (tg == 0) { tg = TAG_PLAYER; }
+        chase_behavior3d(id, tg, _sc_f3(b, "speed", 5.0), _sc_f3(b, "range", 0.0));
+    }
+    if (k == "patrol") {
+        patrol_behavior3d(id, _sc_f3(b, "x1", 0.0), _sc_f3(b, "z1", 0.0),
+                          _sc_f3(b, "x2", 0.0), _sc_f3(b, "z2", 0.0),
+                          _sc_f3(b, "speed", 4.0));
+    }
+    if (k == "spin") { spin_behavior3d(id, _sc_f3(b, "speed", 90.0)); }
+    if (k == "bob") {
+        bob_behavior3d(id, _sc_f3(b, "height", 0.3), _sc_f3(b, "speed", 1.0));
+    }
+    if (k == "shoot") {
+        shoot_behavior3d(id, _sc_f3(b, "interval", 1.0), _sc_f3(b, "speed", 20.0),
+                         _sc_f3(b, "life", 2.0), tg, _sc_f3(b, "range", 0.0));
+    }
 }
 
 // ---- Genel giriş: sahneyi yükle -------------------------------------------
@@ -4489,10 +4566,80 @@ func scene_load3d(src): int {
         }
     }
     if (_sc_has3(sc, "world")) { _sc_load_camera3(sc["world"]); }
+    if (_sc_has3(sc, "rules")) {
+        json rs = sc["rules"];
+        int r = 0;
+        while (r < length(rs)) { _sc_load_rule3(rs[r]); r = r + 1; }
+    }
     log3d("sahne yuklendi: " + toString(n) + " varlik");
     return n;
 }
 func sahne_yukle3d(kaynak): int { return scene_load3d(kaynak); }
+
+// Kural: JSON → motor. "on" alanı kuralın TÜRÜNÜ seçiyor; eylem "do".
+func _sc_load_rule3(r) {
+    str on = _sc_s3(r, "on", "hit");
+    int act = _rl_act3(_sc_s3(r, "do", "collect"));
+    if (on == "cleared") {
+        cleared_rule3d(_sc_tag3(_sc_s3(r, "tag", "item")), act);
+        return;
+    }
+    hit_rule3d(_sc_tag3(_sc_s3(r, "a", "player")),
+               _sc_tag3(_sc_s3(r, "b", "item")),
+               act, _sc_f3(r, "n", 0.0));
+}
+
+// Kurallar → JSON dizisi (girintili, entity'ler gibi satır satır).
+func _sc_rules_js3(): str {
+    if (length(_rl3) == 0) { return ""; }
+    str o = ",\n  \"rules\": [\n";
+    int i = 0;
+    while (i < length(_rl3)) {
+        Rule3 r = _rl3[i];
+        if (i > 0) { o = o + ",\n"; }
+        if (r.kind == RULE_CLEARED) {
+            o = o + "    {\"on\": \"cleared\", \"tag\": \"" + _sc_tag_nm3(r.a) +
+                "\", \"do\": \"" + _rl_act_nm3(r.act) + "\"}";
+        } else {
+            o = o + "    {\"on\": \"hit\", \"a\": \"" + _sc_tag_nm3(r.a) +
+                "\", \"b\": \"" + _sc_tag_nm3(r.b) +
+                "\", \"do\": \"" + _rl_act_nm3(r.act) + "\"";
+            if (r.n != 0.0) { o = o + ", \"n\": " + _sc_num3(r.n); }
+            o = o + "}";
+        }
+        i = i + 1;
+    }
+    return o + "\n  ]";
+}
+
+// ---- Pencere bilgisi -------------------------------------------------------
+// Pencere sahne YÜKLENMEDEN önce açılmak zorunda (sahne3d(...) → oyna3d()),
+// ama başlık/boyut da sahnenin bir parçası. Bu yüzden ayrı ve HAFİF bir
+// okuyucu: yalnız üç alanı alır, sahneye dokunmaz.
+str _sc_title3 = "Tulpar 3B Sahne";
+int _sc_w3 = 960;
+int _sc_h3 = 560;
+
+func scene_meta3d(src) {
+    json sc = fromJson(src);
+    if (length(keys(sc)) == 0) { return; }
+    if (_sc_has3(sc, "world") == false) { return; }
+    json w = sc["world"];
+    _sc_title3 = _sc_s3(w, "title", _sc_title3);
+    _sc_w3 = _sc_i3(w, "w", _sc_w3);
+    _sc_h3 = _sc_i3(w, "h", _sc_h3);
+}
+func scene_meta_file3d(path) {
+    if (file_exists(path)) { scene_meta3d(read_file(path)); }
+}
+func sahne_bilgi3d(kaynak) { scene_meta3d(kaynak); }
+func sahne_bilgi_dosya3d(yol) { scene_meta_file3d(yol); }
+func scene_title3d(): str { return _sc_title3; }
+func scene_w3d(): int { return _sc_w3; }
+func scene_h3d(): int { return _sc_h3; }
+func sahne_basligi3d(): str { return scene_title3d(); }
+func sahne_eni3d(): int { return scene_w3d(); }
+func sahne_boyu3d(): int { return scene_h3d(); }
 
 // Dosyadan yükle.
 func scene_file3d(path): int {
@@ -4513,6 +4660,8 @@ func sahne_dosya3d(yol): int { return scene_file3d(yol); }
 // kaydettiği dosyanın da insan tarafından okunup düzenlenebilmesi.
 func _sc_world_js3(): str {
     str o = "  \"world\": {\n";
+    o = o + "    \"title\": \"" + _sc_title3 + "\", \"w\": " + toString(_sc_w3) +
+        ", \"h\": " + toString(_sc_h3) + ",\n";
     if (_sky3 == 1) {
         o = o + "    \"sky\": {\"top\": " + _sc_coljs3(_sky_top3) +
             ", \"bottom\": " + _sc_coljs3(_sky_bot3) + "},\n";
@@ -4608,7 +4757,62 @@ func _sc_ent_js3(s): str {
         else { o = o + ", \"solid\": false"; }
     }
     if (e.hpmax > 0) { o = o + ", \"hp\": " + toString(e.hpmax); }
+    str bs = _sc_bh_js3(_mk_handle3(s));
+    if (bs != "") { o = o + ", \"behaviors\": [" + bs + "]"; }
     return o + "}";
+}
+
+// Bir varlığın davranışları → JSON dizi gövdesi (köşeli parantezsiz).
+// Her tür yalnız KENDİ alanlarını yazıyor: ortak 5 float alanını hepsi için
+// dökmek dosyayı okunmaz yapardı ve anlamsız alanlar (dönme hızı olan bir
+// "bob") elle düzenleyeni yanıltırdı.
+func _sc_bh_js3(id): str {
+    str o = "";
+    int first = 1;
+    int i = 0;
+    while (i < length(_bh3)) {
+        Bh3 b = _bh3[i];
+        if (b.id == id) {
+            str one = "";
+            if (b.kind == BH_MOVE) {
+                one = "{\"type\": \"move\", \"speed\": " + _sc_num3(b.a);
+                if (b.b > 0.0) { one = one + ", \"jump\": " + _sc_num3(b.b); }
+                one = one + "}";
+            }
+            if (b.kind == BH_CHASE) {
+                one = "{\"type\": \"chase\", \"target\": \"" + _sc_tag_nm3(b.tag) +
+                      "\", \"speed\": " + _sc_num3(b.a);
+                if (b.b > 0.0) { one = one + ", \"range\": " + _sc_num3(b.b); }
+                one = one + "}";
+            }
+            if (b.kind == BH_PATROL) {
+                one = "{\"type\": \"patrol\", \"x1\": " + _sc_num3(b.a) +
+                      ", \"z1\": " + _sc_num3(b.b) + ", \"x2\": " + _sc_num3(b.c) +
+                      ", \"z2\": " + _sc_num3(b.d) + ", \"speed\": " + _sc_num3(b.e) + "}";
+            }
+            if (b.kind == BH_SPIN) {
+                one = "{\"type\": \"spin\", \"speed\": " + _sc_num3(b.a) + "}";
+            }
+            if (b.kind == BH_BOB) {
+                one = "{\"type\": \"bob\", \"height\": " + _sc_num3(b.a) +
+                      ", \"speed\": " + _sc_num3(b.b) + "}";
+            }
+            if (b.kind == BH_SHOOT) {
+                one = "{\"type\": \"shoot\", \"interval\": " + _sc_num3(b.a) +
+                      ", \"speed\": " + _sc_num3(b.b) + ", \"life\": " + _sc_num3(b.c);
+                if (b.tag != 0) { one = one + ", \"target\": \"" + _sc_tag_nm3(b.tag) + "\""; }
+                if (b.d > 0.0) { one = one + ", \"range\": " + _sc_num3(b.d); }
+                one = one + "}";
+            }
+            if (one != "") {
+                if (first == 0) { o = o + ", "; }
+                o = o + one;
+                first = 0;
+            }
+        }
+        i = i + 1;
+    }
+    return o;
 }
 
 // Şu anki sahneyi JSON olarak ver.
@@ -4627,7 +4831,7 @@ func scene_json3d(): str {
         }
         i = i + 1;
     }
-    return o + "\n  ]\n}\n";
+    return o + "\n  ]" + _sc_rules_js3() + "\n}\n";
 }
 func sahne_json3d(): str { return scene_json3d(); }
 
@@ -4636,3 +4840,383 @@ func scene_save3d(path): bool {
     return write_file(path, scene_json3d());
 }
 func sahne_kaydet3d(yol): bool { return scene_save3d(yol); }
+
+// ===========================================================================
+// DAVRANIŞLAR — oynanış da veri (Faz 13)
+// ===========================================================================
+// Sahne biçimi geometriyi veri yaptı ama oyun hâlâ kod istiyordu: `update()`
+// yazmadan hiçbir şey kıpırdamıyor. Bu, bir EDİTÖR için sert bir duvar —
+// tarayıcıda çalışan editörün yanında derleyici yok, kullanıcının yazdığı
+// Tulpar'ı çalıştıramaz. Yani "Oynat" düğmesinin çalışabilmesi için oynanışın
+// da veri olması gerekiyor.
+//
+// Çözüm Unity/Unreal'ın bileşen listesiyle aynı: varlığa hazır davranış tak.
+// Hepsi motorda ZATEN var olan işlevlerin (move3d, chase3d, patrol3d,
+// bullet3d) üstüne bindiriliyor — yeni fizik yazılmadı, yalnız veriden
+// sürülüyor. Böylece davranışla kurulmuş oyun ile elle yazılmış oyun aynı
+// kodu koşturuyor, ikisi ayrışamaz.
+//
+// KOD VERİYİ EZER: davranışlar kullanıcının `update()`inden ÖNCE işliyor, yani
+// aynı varlığa elle `hareket3(p, 15.0)` yazan biri davranışın verdiği hızı
+// eziyor. Aynı öncelik kuralı import'larda da geçerli (yerel tanım kazanır).
+int BH_MOVE   = 0;   // oyuncu girdisiyle hareket (+zıplama)
+int BH_CHASE  = 1;   // en yakın hedefi kovala
+int BH_PATROL = 2;   // iki nokta arasında devriye
+int BH_SPIN   = 3;   // kendi ekseninde dön (süs)
+int BH_BOB    = 4;   // yerinde alçalıp yüksel (toplanabilir parıltısı)
+int BH_SHOOT  = 5;   // aralıkla ateş et
+
+// Metin alanı YOK — hedef daima ETİKET (tag) ya da çözülmüş handle olarak
+// saklanıyor. Bir davranışın hedefini adla tutmak, hedef öldüğünde her karede
+// ad araması yapmayı gerektirirdi; etiket zaten "en yakın oyuncu" demenin
+// doğal yolu.
+struct Bh3 {
+    int id;        // sahibinin handle'ı
+    int kind;      // BH_*
+    int tag;       // hedef etiketi (0 = yok)
+    int hnd;       // belirli hedef handle (-1 = yok)
+    float a; float b; float c; float d; float e;
+    float t;       // dahili sayaç (atış zamanlayıcısı / salınım fazı)
+    float base;    // dahili taban (bob'un başlangıç yüksekliği)
+}
+array _bh3 = [];
+
+func _bh_add3(id, kind, tag, hnd, a, b, c, d, e): int {
+    Bh3 b = { id: id, kind: kind, tag: tag, hnd: hnd,
+              a: a * 1.0, b: b * 1.0, c: c * 1.0, d: d * 1.0, e: e * 1.0,
+              t: 0.0, base: 0.0 };
+    // Bob'un tabanı EKLENDİĞİ andaki yükseklik: sonradan okumak, salınımın
+    // kendi ürettiği yüksekliği taban sanmaya yol açardı.
+    int s = _slot_of3(id);
+    if (s >= 0) { b.base = _e3[s].y; }
+    push(_bh3, b);
+    return length(_bh3) - 1;
+}
+
+// ---- Genel API -------------------------------------------------------------
+// Oyuncu kontrolü: WASD/kol ile hareket, boşlukla zıplama (jump = 0 → zıplama
+// yok, tepeden bakışlı oyunlar için).
+func move_behavior3d(id, speed, jump) { _bh_add3(id, BH_MOVE, 0, 0 - 1, speed, jump, 0.0, 0.0, 0.0); }
+func hareket_davranis3d(id, hiz, zipla) { move_behavior3d(id, hiz, zipla); }
+
+// Kovalama: etiketi verilen en yakın canlıyı kovalar. range = 0 → sınırsız.
+func chase_behavior3d(id, target_tag, speed, range) {
+    _bh_add3(id, BH_CHASE, target_tag, 0 - 1, speed, range, 0.0, 0.0, 0.0);
+}
+func kovala_davranis3d(id, hedef_etiket, hiz, menzil) {
+    chase_behavior3d(id, hedef_etiket, hiz, menzil);
+}
+
+// Devriye: iki nokta arasında gidip gelir (patrol3d zaten uçlarda yön çeviriyor).
+func patrol_behavior3d(id, x1, z1, x2, z2, speed) {
+    _bh_add3(id, BH_PATROL, 0, 0 - 1, x1, z1, x2, z2, speed);
+}
+func devriye_davranis3d(id, x1, z1, x2, z2, hiz) {
+    patrol_behavior3d(id, x1, z1, x2, z2, hiz);
+}
+
+// Dönme (derece/sn) ve salınım (yükseklik birimi, çevrim/sn) — ikisi de süs;
+// fiziğe dokunmuyorlar, yalnız yaw ve y yazıyorlar.
+func spin_behavior3d(id, deg_per_sec) { _bh_add3(id, BH_SPIN, 0, 0 - 1, deg_per_sec, 0.0, 0.0, 0.0, 0.0); }
+func don_davranis3d(id, derece_sn) { spin_behavior3d(id, derece_sn); }
+func bob_behavior3d(id, height, speed) { _bh_add3(id, BH_BOB, 0, 0 - 1, height, speed, 0.0, 0.0, 0.0); }
+func salin_davranis3d(id, yukseklik, hiz) { bob_behavior3d(id, yukseklik, hiz); }
+
+// Ateş: her `interval` saniyede bir mermi. target_tag = 0 ise nişan yönüne
+// (oyuncu), değilse en yakın hedefe döner ve ona atar (düşman kulesi).
+func shoot_behavior3d(id, interval, speed, life, target_tag, range) {
+    _bh_add3(id, BH_SHOOT, target_tag, 0 - 1, interval, speed, life, range, 0.0);
+}
+func ates_davranis3d(id, aralik, hiz, omur, hedef_etiket, menzil) {
+    shoot_behavior3d(id, aralik, hiz, omur, hedef_etiket, menzil);
+}
+
+// Bir varlığın davranışlarını sil (editörde bileşen kaldırma).
+func clear_behaviors3d(id) {
+    int i = 0;
+    while (i < length(_bh3)) {
+        if (_bh3[i].id == id) {
+            int last = length(_bh3) - 1;
+            if (i != last) { _bh3[i] = _bh3[last]; }
+            pop(_bh3);
+        } else { i = i + 1; }
+    }
+}
+func davranislari_sil3d(id) { clear_behaviors3d(id); }
+func behavior_count3d(): int { return length(_bh3); }
+func davranis_sayisi3d(): int { return behavior_count3d(); }
+
+// ---- Hedef seçimi ----------------------------------------------------------
+// Etikete göre EN YAKIN canlı — HANDLE döner (`_aim_nearest3` slot döndürüyor
+// ve global nişan ayarlarını okuyor; davranışların kendi menzili var).
+// range <= 0 → sınırsız.
+func _bh_nearest3(owner, tag, range): int {
+    int os = _slot_of3(owner);
+    if (os < 0) { return 0 - 1; }
+    Ent3 o = _e3[os];
+    int best = 0 - 1;
+    float bd = 0.0 - 1.0;
+    if (range > 0.0) { bd = range * range; }
+    int i = 0;
+    int n = length(_e3);
+    while (i < n) {
+        Ent3 e = _e3[i];
+        if (e.alive == 1 && e.tag == tag && i != os) {
+            float dx = e.x - o.x; float dy = e.y - o.y; float dz = e.z - o.z;
+            float d2 = dx * dx + dy * dy + dz * dz;
+            if (bd < 0.0 || d2 < bd) { bd = d2; best = i; }
+        }
+        i = i + 1;
+    }
+    if (best < 0) { return 0 - 1; }
+    return _mk_handle3(best);
+}
+
+// ---- Tek davranışın karesi -------------------------------------------------
+func _bh_tick3(i, dt) {
+    Bh3 b = _bh3[i];
+    int s = _slot_of3(b.id);
+
+    if (b.kind == BH_MOVE) {
+        move3d(b.id, b.a);
+        if (b.b > 0.0 && jump_pressed()) { jump3d(b.id, b.b); }
+    }
+
+    if (b.kind == BH_CHASE) {
+        int t = _bh_nearest3(b.id, b.tag, b.b);
+        // Menzil dışındaysa DURUYOR, son hızıyla kaymıyor: kovalamayı bırakan
+        // düşmanın süzülerek uzaklaşması hata gibi görünürdü.
+        if (t >= 0) { chase3d(b.id, t, b.a); }
+        else {
+            Ent3 e = _e3[s];
+            e.vx = 0.0; e.vz = 0.0;
+            _e3[s] = e;
+        }
+    }
+
+    if (b.kind == BH_PATROL) { patrol3d(b.id, b.a, b.b, b.c, b.d, b.e); }
+
+    if (b.kind == BH_SPIN) {
+        Ent3 e = _e3[s];
+        e.yaw = e.yaw + b.a * dt;
+        // 0..360'a sar: saatlerce dönen bir süs varlığında yaw büyüyüp
+        // float çözünürlüğünü yerdi.
+        if (e.yaw >= 360.0) { e.yaw = e.yaw - 360.0; }
+        if (e.yaw < 0.0)    { e.yaw = e.yaw + 360.0; }
+        _e3[s] = e;
+    }
+
+    if (b.kind == BH_BOB) {
+        b.t = b.t + dt * b.b;
+        if (b.t >= 1.0) { b.t = b.t - 1.0; }
+        Ent3 e = _e3[s];
+        e.y = b.base + sin(b.t * 360.0 * DEG2RAD3) * b.a;
+        // Salınım KONUM yazıyor, hız değil — bu yüzden yerçekiminin onu geri
+        // çekmemesi için varlık zemine oturmuş sayılıyor.
+        e.vy = 0.0;
+        e.grounded = 1;
+        _e3[s] = e;
+    }
+
+    if (b.kind == BH_SHOOT) {
+        b.t = b.t + dt;
+        if (b.t >= b.a) {
+            b.t = 0.0;
+            int fire = 1;
+            if (b.tag != 0) {
+                int t = _bh_nearest3(b.id, b.tag, b.d);
+                if (t < 0) { fire = 0; }
+                else {
+                    // Hedefe DÖN, sonra gövde yönüne ateş et. bullet3d'yi
+                    // baypas edip mermiyi elle üretmek namlu ofsetini ve sahip
+                    // kaydını ikinci bir yerde tekrarlamak olurdu — sürüklenir.
+                    // Bunun yerine nişan modu geçici olarak AIM_BODY yapılıyor
+                    // ve HEMEN geri konuyor: mod global, oyuncununki bozulmamalı.
+                    int ts = _slot_of3(t);
+                    Ent3 e = _e3[s];
+                    Ent3 tg = _e3[ts];
+                    e.yaw = atan2(tg.x - e.x, tg.z - e.z) * RAD2DEG3;
+                    _e3[s] = e;
+                    int prev = _aim_mode3;
+                    _aim_mode3 = AIM_BODY;
+                    bullet3d(b.id, b.b, b.c);
+                    _aim_mode3 = prev;
+                    fire = 0;      // atış yapıldı, aşağıdaki dal atlanmalı
+                }
+            }
+            if (fire == 1) { bullet3d(b.id, b.b, b.c); }
+        }
+    }
+
+    _bh3[i] = b;
+}
+
+// ---- Kare -------------------------------------------------------------------
+// Sahibi ölen davranış SİLİNİYOR (son elemanla takas + kırp). Yalnız bayrak
+// koymak, düşman öldüren bir oyunda diziyi sonsuza kadar büyütürdü.
+func _s3_behaviors(dt) {
+    int i = 0;
+    while (i < length(_bh3)) {
+        if (_slot_of3(_bh3[i].id) < 0) {
+            int last = length(_bh3) - 1;
+            if (i != last) { _bh3[i] = _bh3[last]; }
+            pop(_bh3);
+        } else {
+            _bh_tick3(i, dt);
+            i = i + 1;
+        }
+    }
+}
+
+// ===========================================================================
+// KURALLAR — "ne olunca ne olur" da veri (Faz 13)
+// ===========================================================================
+// Davranışlar varlıkları hareket ettirdi ama oyunu bir OYUN yapan şey hâlâ
+// koddaydı: altına değince toplansın, düşmana değince canın azalsın, hepsi
+// bitince kazan. Editörün "Oynat"ı bunlar olmadan yalnız bir akvaryum.
+//
+// Kurallar mevcut çarpışma kancasının (`on_hit3d`) üstüne biniyor: her kural
+// için TEK ve AYNI dağıtıcı kaydediliyor, dağıtıcı da çarpışan çiftin
+// etiketlerinden hangi kuralın işlediğini buluyor. Böylece kurallar için
+// ikinci bir çarpışma taraması YOK.
+int RULE_HIT     = 0;   // iki etiket çarpıştığında
+int RULE_CLEARED = 1;   // bir etiketten hiç kalmayınca
+
+int ACT_COLLECT = 0;   // ötekini öldür + skor ekle
+int ACT_DAMAGE  = 1;   // BANA hasar ver (oyuncu düşmana değdi)
+int ACT_KILL    = 2;   // ötekini öldür (skorsuz)
+int ACT_HURT    = 3;   // ötekine hasar ver (mermi düşmana değdi)
+int ACT_WIN     = 4;
+int ACT_LOSE    = 5;
+
+struct Rule3 {
+    int kind;   // RULE_*
+    int a;      // birinci etiket (çarpışmada "ben")
+    int b;      // ikinci etiket (çarpışmada "öteki"); CLEARED'da kullanılmaz
+    int act;    // ACT_*
+    float n;    // skor / hasar miktarı
+    int seen;   // CLEARED: bu etiketten en az bir kez GÖRÜLDÜ mü
+}
+array _rl3 = [];
+
+func _rl_act3(s): int {
+    if (s == "damage")  { return ACT_DAMAGE; }
+    if (s == "kill")    { return ACT_KILL; }
+    if (s == "hurt")    { return ACT_HURT; }
+    if (s == "win")     { return ACT_WIN; }
+    if (s == "lose")    { return ACT_LOSE; }
+    return ACT_COLLECT;
+}
+func _rl_act_nm3(v): str {
+    if (v == ACT_DAMAGE) { return "damage"; }
+    if (v == ACT_KILL)   { return "kill"; }
+    if (v == ACT_HURT)   { return "hurt"; }
+    if (v == ACT_WIN)    { return "win"; }
+    if (v == ACT_LOSE)   { return "lose"; }
+    return "collect";
+}
+
+// Oyunu KAZANILDI olarak bitir. Bölüm sistemi bunu zaten yapıyordu
+// (kayıtlı bölüm kalmayınca) ama dışarıya açık bir yolu yoktu.
+func win3d() { _won3 = 1; game_over3d(); }
+func kazandi3d() { win3d(); }
+
+// Çarpışma kuralı ekle. Aynı etiket çifti için birden çok kural olabilir
+// (hem skor hem hasar) — hepsi işler.
+func hit_rule3d(tag_a, tag_b, act, n) {
+    Rule3 r = { kind: RULE_HIT, a: tag_a, b: tag_b, act: act, n: n * 1.0, seen: 0 };
+    push(_rl3, r);
+    on_hit3d(tag_a, tag_b, _rule_hit3);
+}
+func carpisma_kurali3d(etiket_a, etiket_b, eylem, n) { hit_rule3d(etiket_a, etiket_b, eylem, n); }
+
+// "Bu etiketten hiç kalmayınca" kuralı. Sahne o etiketle BAŞLAMADIYSA
+// tetiklenmez — yoksa altını olmayan bir sahne ilk karede kazanılırdı.
+func cleared_rule3d(tag, act) {
+    Rule3 r = { kind: RULE_CLEARED, a: tag, b: 0, act: act, n: 0.0, seen: 0 };
+    // "Görüldü" KAYIT ANINDA da bakılıyor, yalnız her karede değil: sahne
+    // yüklenirken kurallar varlıklardan SONRA geliyor, ama ilk kare içinde son
+    // eşya toplanırsa `_s3_rules` onu hiç saymadan 0 görürdü — ve "hiç
+    // başlamamış" sayıp kazanmayı sonsuza kadar bastırırdı.
+    int c = 0;
+    int k = 0;
+    while (k < length(_e3)) {
+        if (_e3[k].alive == 1 && _e3[k].tag == tag) { c = c + 1; }
+        k = k + 1;
+    }
+    if (c > 0) { r.seen = 1; }
+    push(_rl3, r);
+}
+func bitince_kurali3d(etiket, eylem) { cleared_rule3d(etiket, eylem); }
+
+func rule_count3d(): int { return length(_rl3); }
+func kural_sayisi3d(): int { return rule_count3d(); }
+
+// ---- Eylemin uygulanması ---------------------------------------------------
+func _rl_apply3(act, n, me, other) {
+    if (act == ACT_COLLECT) {
+        // Slot denetimi ŞART: aynı çift için ikinci bir "topla" kuralı varsa
+        // öteki bu noktada çoktan ölmüş olur ve `_e3[-1]` dizi dışı okuma
+        // olurdu. Aynı denetim skorun iki kez sayılmasını da engelliyor.
+        int so = _slot_of3(other);
+        if (so < 0) { return; }
+        burst3d(other, 12, _e3[so].color, 6.0, 0.5);
+        kill3d(other);
+        score3d_add(toInt(n));
+    }
+    if (act == ACT_KILL)   { kill3d(other); }
+    if (act == ACT_DAMAGE) { damage3d(me, toInt(n)); }
+    if (act == ACT_HURT)   { damage3d(other, toInt(n)); }
+    if (act == ACT_WIN)    { win3d(); }
+    if (act == ACT_LOSE)   { game_over3d(); }
+}
+
+// Tek dağıtıcı: hangi kuralın işlediğini çarpışan çiftin ETİKETLERİNDEN bulur.
+// on_hit3d yönlüdür — "ben" birinci etiketli, "öteki" ikinci etiketli.
+func _rule_hit3() {
+    int me = me3d();
+    int other = other3d();
+    int sm = _slot_of3(me);
+    int so = _slot_of3(other);
+    if (sm < 0 || so < 0) { return; }
+    int ta = _e3[sm].tag;
+    int tb = _e3[so].tag;
+    int i = 0;
+    while (i < length(_rl3)) {
+        Rule3 r = _rl3[i];
+        if (r.kind == RULE_HIT && r.a == ta && r.b == tb) {
+            // Eylem ötekini öldürmüş olabilir; aynı çarpışma için sonraki
+            // kural bayat bir handle ile çağrılır. Burada erken çıkmıyoruz —
+            // korumanın TEK yeri `_rl_apply3`, çünkü iki yerde tutulunca
+            // hangisinin yük taşıdığı sınanamıyordu (bozma denemesi ikisini de
+            // silmeye izin veriyordu).
+            _rl_apply3(r.act, r.n, me, other);
+        }
+        i = i + 1;
+    }
+}
+
+// ---- "Bitince" kuralları ---------------------------------------------------
+// Çarpışmalardan SONRA, kare sonunda: bu karede toplanan son eşya sayılmış
+// olsun. Oyun zaten bittiyse hiç bakılmıyor.
+func _s3_rules() {
+    if (_game_over3 == 1) { return; }
+    int i = 0;
+    while (i < length(_rl3)) {
+        Rule3 r = _rl3[i];
+        if (r.kind == RULE_CLEARED) {
+            int c = 0;
+            int k = 0;
+            while (k < length(_e3)) {
+                if (_e3[k].alive == 1 && _e3[k].tag == r.a) { c = c + 1; }
+                k = k + 1;
+            }
+            if (c > 0) { r.seen = 1; _rl3[i] = r; }
+            if (c == 0 && r.seen == 1) {
+                _rl_apply3(r.act, 0.0, 0 - 1, 0 - 1);
+                return;
+            }
+        }
+        i = i + 1;
+    }
+}

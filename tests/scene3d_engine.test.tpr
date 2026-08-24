@@ -3138,6 +3138,254 @@ func t_scene_solid_override_roundtrip() {
 }
 
 
+// ===========================================================================
+//  DAVRANIŞLAR — oynanış veri olarak
+// ===========================================================================
+
+func _count_tag3(tag): int {
+    int c = 0;
+    int i = 0;
+    while (i < length(_e3)) {
+        if (_e3[i].alive == 1 && _e3[i].tag == tag) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+
+// Kovalama gerçekten MESAFE KAPATMALI. Beklenti davranışın formülünden değil,
+// iki konumun arasındaki ölçülen uzaklıktan geliyor.
+func t_bh_chase_closes_distance() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int en = spawn3(20.0, 1.0, 0.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    chase_behavior3d(en, TAG_PLAYER, 6.0, 0.0);
+    float d0 = 20.0;
+    int i = 0;
+    while (i < 60) { _s3_behaviors(0.016667); _s3_physics(0.016667); i = i + 1; }
+    Ent3 e = _e3[_slot_of3(en)];
+    float d1 = sqrt(e.x * e.x + e.z * e.z);
+    assert(d1 < d0 - 3.0, "kovalayan yaklasmali: " + toString(d1));
+}
+
+// Menzil dışına çıkan kovalayan DURMALI — son hızıyla süzülmemeli.
+//
+// İlk hâli BOŞ bir testti: düşmanı menzilin dışında ÜRETİP hızını sınıyordu,
+// oysa yeni üretilen varlığın hızı zaten sıfır. "Durdurma" dalını silmek
+// testi kızartmıyordu (bozma denemesiyle ölçüldü). Gerçek senaryo şu:
+// kovalarken hız kazanmış bir düşmanın hedefi menzilden çıkıyor.
+func t_bh_chase_range_stops() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int en = spawn3(8.0, 1.0, 0.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    chase_behavior3d(en, TAG_PLAYER, 6.0, 12.0);   // menzil 12, mesafe 8 → içeride
+    _s3_behaviors(0.016667);
+    assert(abs_f3(_e3[_slot_of3(en)].vx) > 1.0, "once kovalamali");
+    // Hedef menzilden kaçıyor.
+    set3pos(p, 0.0 - 90.0, 1.0, 0.0);
+    _s3_behaviors(0.016667);
+    Ent3 e = _e3[_slot_of3(en)];
+    assert(abs_f3(e.vx) < 0.001 && abs_f3(e.vz) < 0.001,
+           "menzil disinda durmali: " + toString(e.vx));
+}
+
+// Devriye uçta yön çevirmeli.
+func t_bh_patrol_reverses() {
+    scene3d_reset();
+    no_ground3d();
+    int g = spawn3(0.0 - 10.0, 1.0, 0.0, 1.0, 2.0, 1.0, ORANGE, SHAPE_CUBE, TAG_ENEMY);
+    patrol_behavior3d(g, 0.0 - 10.0, 0.0, 10.0, 0.0, 8.0);
+    int i = 0;
+    int saw_pos = 0;
+    int saw_neg = 0;
+    while (i < 400) {
+        _s3_behaviors(0.016667);
+        _s3_physics(0.016667);
+        Ent3 e = _e3[_slot_of3(g)];
+        if (e.vx > 1.0)         { saw_pos = 1; }
+        if (e.vx < 0.0 - 1.0)   { saw_neg = 1; }
+        i = i + 1;
+    }
+    assert(saw_pos == 1 && saw_neg == 1, "iki yone de gitmeli");
+}
+
+// Dönme: yaw hıza göre artmalı ve 360'ta sarmalı (saatlerce dönen süs
+// varlığında yaw büyüyüp float çözünürlüğünü yerdi).
+func t_bh_spin_rotates_and_wraps() {
+    scene3d_reset();
+    no_ground3d();
+    int d = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    spin_behavior3d(d, 90.0);            // 90 derece/sn
+    int i = 0;
+    while (i < 60) { _s3_behaviors(0.016667); i = i + 1; }   // ~1 sn
+    float y1 = get3yaw(d);
+    assert(y1 > 88.0 && y1 < 92.0, "1 sn'de ~90 derece: " + toString(y1));
+    i = 0;
+    while (i < 600) { _s3_behaviors(0.016667); i = i + 1; }  // +10 sn = 900 derece
+    float y2 = get3yaw(d);
+    assert(y2 >= 0.0 && y2 < 360.0, "sarmali: " + toString(y2));
+}
+
+// Salınım: tabanın hem ÜSTÜNE hem ALTINA çıkmalı ve taban kaymamalı.
+func t_bh_bob_oscillates() {
+    scene3d_reset();
+    no_ground3d();
+    int it = spawn3(0.0, 5.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    bob_behavior3d(it, 0.5, 1.0);        // 0.5 birim, 1 çevrim/sn
+    float hi = 0.0 - 999.0;
+    float lo = 999.0;
+    int i = 0;
+    while (i < 60) {
+        _s3_behaviors(0.016667);
+        float y = get3y(it);
+        if (y > hi) { hi = y; }
+        if (y < lo) { lo = y; }
+        i = i + 1;
+    }
+    assert(hi > 5.4 && hi < 5.6, "tepe ~5.5: " + toString(hi));
+    assert(lo > 4.4 && lo < 4.6, "dip ~4.5: " + toString(lo));
+    // Yerçekimi tabanı aşağı çekmemeli (salınım konum yazıyor, hız değil).
+    int k = 0;
+    while (k < 300) { _s3_behaviors(0.016667); _s3_physics(0.016667); k = k + 1; }
+    float y3 = get3y(it);
+    assert(y3 > 4.4 && y3 < 5.6, "taban kaymamali: " + toString(y3));
+}
+
+// Ateş aralığı: T saniyede T/aralık kadar mermi.
+func t_bh_shoot_fires_on_interval() {
+    scene3d_reset();
+    no_ground3d();
+    int t = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, GRAY, SHAPE_CYL, TAG_PROP);
+    shoot_behavior3d(t, 0.5, 20.0, 30.0, 0, 0.0);   // 0.5 sn'de bir, uzun ömür
+    int i = 0;
+    while (i < 120) { _s3_behaviors(0.016667); i = i + 1; }   // ~2 sn → 4 mermi
+    int n = _count_tag3(TAG_BULLET);
+    assert(n >= 3 && n <= 5, "2 sn'de ~4 mermi, bulunan: " + toString(n));
+}
+
+// Hedefli ateş HEDEFE gitmeli. Beklenti bağımsız: nişancıdan hedefe olan
+// birim vektör konumlardan hesaplanıyor, merminin hızıyla nokta çarpımı ~1.
+func t_bh_shoot_aims_at_target() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0 - 15.0, 1.0, 8.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int t = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, GRAY, SHAPE_CYL, TAG_ENEMY);
+    shoot_behavior3d(t, 0.1, 20.0, 30.0, TAG_PLAYER, 0.0);
+    _s3_behaviors(0.2);
+    int b = 0 - 1;
+    int i = 0;
+    while (i < length(_e3)) {
+        if (_e3[i].alive == 1 && _e3[i].tag == TAG_BULLET) { b = i; }
+        i = i + 1;
+    }
+    assert(b >= 0, "mermi uretilmeli");
+    Ent3 bl = _e3[b];
+    float ux = 0.0 - 15.0;
+    float uz = 8.0;
+    float ul = sqrt(ux * ux + uz * uz);
+    ux = ux / ul; uz = uz / ul;
+    float bl2 = sqrt(bl.vx * bl.vx + bl.vz * bl.vz);
+    float dot = (bl.vx / bl2) * ux + (bl.vz / bl2) * uz;
+    assert(dot > 0.99, "mermi hedefe gitmeli, dot=" + toString(dot));
+}
+
+// Hedefli atış nişan modunu GLOBAL olarak değiştiriyor (AIM_BODY) — geri
+// koymayı unutmak oyuncunun nişanını sessizce bozardı.
+func t_bh_shoot_restores_aim_mode() {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0 - 10.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int t = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, GRAY, SHAPE_CYL, TAG_ENEMY);
+    aim_mode3d(AIM_LOOK);
+    shoot_behavior3d(t, 0.1, 20.0, 5.0, TAG_PLAYER, 0.0);
+    _s3_behaviors(0.2);
+    assert_eq_int(_aim_mode3, AIM_LOOK);
+}
+
+// Sahibi ölen davranış SİLİNMELİ: yalnız bayrak koymak, düşman öldüren bir
+// oyunda diziyi sonsuza kadar büyütürdü.
+func t_bh_dead_owner_is_culled() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    int b = spawn3(3.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    spin_behavior3d(a, 10.0);
+    spin_behavior3d(b, 10.0);
+    assert_eq_int(behavior_count3d(), 2);
+    kill3d(a);
+    _s3_behaviors(0.016667);
+    assert_eq_int(behavior_count3d(), 1);
+    // Kalan davranış DOĞRU sahibinki olmalı (takas-kırp yanlış elemanı
+    // düşürebilirdi).
+    _s3_behaviors(0.1);
+    assert(get3yaw(b) > 0.5, "kalan davranis calismali");
+}
+
+// KOD VERİYİ EZER: davranış yalnız HIZ yazıyor, entegre etmiyor — bu yüzden
+// sonradan çağrılan move3d üzerine yazabiliyor. (play3d'deki sıralama pencere
+// istediği için burada koşulamıyor; sınanan şey ezmenin MEKANİZMASI.)
+func t_bh_code_overrides_data() {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(100.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int en = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    chase_behavior3d(en, TAG_PLAYER, 6.0, 0.0);
+    _s3_behaviors(0.016667);
+    assert(_e3[_slot_of3(en)].vx > 5.0, "davranis hiz vermeli");
+    _cam_yaw3 = 0.0;
+    _gp_dx = 0.0 - 1.0; _gp_dz = 0.0;
+    move3d(en, 10.0);
+    _gp_dx = 0.0;
+    assert(_e3[_slot_of3(en)].vx < 0.0 - 5.0, "elle hareket davranisi ezmeli");
+}
+
+func t_bh_cleared_by_reset() {
+    scene3d_reset();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    spin_behavior3d(a, 10.0);
+    assert_eq_int(behavior_count3d(), 1);
+    scene3d_reset();
+    assert_eq_int(behavior_count3d(), 0);
+}
+
+// Davranışlar sahne biçiminde gidip gelmeli — editörün "Oynat"ı buna bağlı.
+func t_bh_roundtrip() {
+    int n = scene_load3d("{\"v\":1,\"world\":{\"ground\":0},\"entities\":[" +
+      "{\"name\":\"p\",\"tag\":\"player\",\"x\":0,\"y\":1,\"z\":0," +
+        "\"behaviors\":[{\"type\":\"move\",\"speed\":11,\"jump\":12}]}," +
+      "{\"name\":\"d\",\"tag\":\"enemy\",\"x\":10,\"y\":1,\"z\":0," +
+        "\"behaviors\":[{\"type\":\"chase\",\"target\":\"player\",\"speed\":6,\"range\":40}," +
+                      "{\"type\":\"spin\",\"speed\":45}]}," +
+      "{\"name\":\"k\",\"tag\":\"item\",\"x\":4,\"y\":1,\"z\":0," +
+        "\"behaviors\":[{\"type\":\"bob\",\"height\":0.4,\"speed\":1.5}]}," +
+      "{\"name\":\"t\",\"tag\":\"prop\",\"x\":0,\"y\":1,\"z\":9," +
+        "\"behaviors\":[{\"type\":\"shoot\",\"interval\":1.2,\"speed\":24,\"life\":2," +
+                       "\"target\":\"player\",\"range\":30}]}]}");
+    assert_eq_int(n, 4);
+    assert_eq_int(behavior_count3d(), 5);
+    str a = scene_json3d();
+    scene_load3d(a);
+    assert_eq_int(behavior_count3d(), 5);
+    str b = scene_json3d();
+    assert(a == b, "davranisli gidis-donus duragan olmali");
+    // Değerler de korunmalı, yalnız sayı değil.
+    int en = find3d("d");
+    int i = 0;
+    int found = 0;
+    while (i < length(_bh3)) {
+        Bh3 bh = _bh3[i];
+        if (bh.id == en && bh.kind == BH_CHASE) {
+            assert(abs_f3(bh.a - 6.0) < 0.001, "hiz");
+            assert(abs_f3(bh.b - 40.0) < 0.001, "menzil");
+            assert_eq_int(bh.tag, TAG_PLAYER);
+            found = 1;
+        }
+        i = i + 1;
+    }
+    assert_eq_int(found, 1);
+}
+
 test("sahne varliklari yukluyor", "t_scene_loads_entities");
 test("sahne dunyayi yukluyor", "t_scene_loads_world");
 test("sahne gidis-donusu duragan", "t_scene_roundtrip_is_stable");
@@ -3151,4 +3399,217 @@ test("calisma zamani varliklari yazilmiyor", "t_scene_skips_runtime_entities");
 test("sayi bicimi us gosterimi uretmiyor", "t_scene_number_format");
 test("renk gidis-donusu", "t_scene_color_roundtrip");
 test("katilik istisnasi gidis-donusu", "t_scene_solid_override_roundtrip");
+// ===========================================================================
+//  KURALLAR + VERİ-OYUN (tam yığın: dosya → sahne → oynanış)
+// ===========================================================================
+
+// Penceresiz tam kare: play3d'nin sırasının aynısı.
+func _dg_step(dt) {
+    _s3_behaviors(dt);
+    _s3_physics(dt);
+    _s3_collision();
+    _s3_rules();
+}
+
+// Çarpışma kuralı: oyuncu eşyaya değince toplanmalı ve skor artmalı.
+func t_rule_collect() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    spawn3(0.5, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 50.0);
+    assert_eq_int(score3d(), 0);
+    _dg_step(0.016667);
+    assert_eq_int(score3d(), 50);
+    assert_eq_int(_count_tag3(TAG_ITEM), 0);
+}
+
+// Hasar kuralı: dokunulmazlık penceresi sayesinde saniyede bir kez.
+func t_rule_damage_respects_invuln() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    health3d(p, 100);
+    spawn3(0.6, 1.0, 0.0, 1.2, 2.0, 1.2, RED, SHAPE_CUBE, TAG_ENEMY);
+    hit_rule3d(TAG_PLAYER, TAG_ENEMY, ACT_DAMAGE, 12.0);
+    int i = 0;
+    while (i < 10) { _dg_step(0.016667); i = i + 1; }
+    // 10 karede TEK vuruş: dokunulmazlık olmasa 120 hasar olurdu.
+    assert_eq_int(hp3d(p), 88);
+}
+
+// "Bitince" kuralı: son eşya toplanınca kazanılmalı.
+func t_rule_cleared_wins() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    spawn3(0.5, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 10.0);
+    cleared_rule3d(TAG_ITEM, ACT_WIN);
+    _dg_step(0.016667);
+    _dg_step(0.016667);
+    assert(won3d(), "son esya toplaninca kazanilmali");
+    assert(is_over3d(), "oyun bitmeli");
+}
+
+// Sahne o etiketle HİÇ başlamadıysa "bitince" tetiklenmemeli — altını olmayan
+// bir sahne ilk karede kazanılmış sayılırdı.
+func t_rule_cleared_needs_seen() {
+    scene3d_reset();
+    spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    cleared_rule3d(TAG_ITEM, ACT_WIN);
+    int i = 0;
+    while (i < 30) { _dg_step(0.016667); i = i + 1; }
+    assert(won3d() == false, "hic esya yokken kazanilmamali");
+    assert(is_over3d() == false, "oyun bitmemeli");
+}
+
+// Oyuncu ölünce kaybedilmeli (aynı "bitince" mekanizması, tag = player).
+func t_rule_cleared_player_loses() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    health3d(p, 10);
+    cleared_rule3d(TAG_PLAYER, ACT_LOSE);
+    _dg_step(0.016667);
+    assert(is_over3d() == false, "once yasiyor");
+    damage3d(p, 10);
+    _dg_step(0.016667);
+    assert(is_over3d(), "oyuncu olunce oyun bitmeli");
+    assert(won3d() == false, "kaybederek bitmeli");
+}
+
+// Aynı çift için birden çok kural: hepsi işlemeli, ama eylem ötekini
+// öldürdüyse sonraki kural bayat handle ile çalışmamalı.
+func t_rule_multiple_on_same_pair() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    health3d(p, 100);
+    spawn3(0.5, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_DAMAGE, 5.0);     // önce hasar
+    hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 20.0);   // sonra topla
+    _dg_step(0.016667);
+    assert_eq_int(hp3d(p), 95);
+    assert_eq_int(score3d(), 20);
+}
+
+// Aynı çift için İKİ "topla" kuralı: eylem ötekini öldürdüğü için ikincisi
+// bayat handle ile çağrılıyor. Skor bir kez sayılmalı (ve `_e3[-1]` dizi dışı
+// okuması yapılmamalı).
+func t_rule_double_collect_scores_once() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    spawn3(0.5, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 20.0);
+    hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 20.0);
+    _dg_step(0.016667);
+    assert_eq_int(score3d(), 20);
+    assert_eq_int(_count_tag3(TAG_ITEM), 0);
+}
+
+func t_rules_cleared_by_reset() {
+    scene3d_reset();
+    hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 10.0);
+    assert_eq_int(rule_count3d(), 1);
+    scene3d_reset();
+    assert_eq_int(rule_count3d(), 0);
+}
+
+// Gönderilen sahne DOSYASI geçerli kalmalı ve gerçekten OYNAMALI. Bu test
+// dosyayı depodan okuyor — biçim değişirse ya da sahne bozulursa kızarır.
+func t_data_game_file_plays() {
+    int n = scene_file3d("examples/scenes/toplayici.scene.json");
+    assert_eq_int(n, 18);
+    assert_eq_int(rule_count3d(), 5);
+    int p = bul3d("kahraman");
+    assert(p >= 0, "kahraman bulunmali");
+
+    // Kovalayan düşman YAKLAŞMALI (davranış veriden geldi).
+    int en = 0 - 1;
+    int i = 0;
+    while (i < length(_e3)) {
+        if (_e3[i].alive == 1 && _e3[i].tag == TAG_ENEMY && _e3[i].x < 0.0) { en = i; }
+        i = i + 1;
+    }
+    assert(en >= 0, "kovalayan dusman olmali");
+    Ent3 e0 = _e3[en];
+    Ent3 p0 = _e3[_slot_of3(p)];
+    float d0 = sqrt((e0.x - p0.x) * (e0.x - p0.x) + (e0.z - p0.z) * (e0.z - p0.z));
+
+    int f = 0;
+    while (f < 240) { _dg_step(0.016667); f = f + 1; }   // ~4 sn
+
+    Ent3 e1 = _e3[en];
+    Ent3 p1 = _e3[_slot_of3(p)];
+    float d1 = sqrt((e1.x - p1.x) * (e1.x - p1.x) + (e1.z - p1.z) * (e1.z - p1.z));
+    assert(d1 < d0 - 5.0, "dusman yaklasmali: " + toString(d0) + " -> " + toString(d1));
+
+    // Kule ateş etmiş olmalı (menzil 26, oyuncu 12 birimde).
+    assert(_count_tag3(TAG_BULLET) > 0, "kule ates etmeli");
+    // Ve mermiler oyuncuya hasar vermiş olmalı (kural: bullet→player hurt).
+    assert(hp3d(p) < 100, "oyuncu hasar almali: " + toString(hp3d(p)));
+}
+
+test("kovalama mesafe kapatiyor", "t_bh_chase_closes_distance");
+test("menzil disinda kovalama duruyor", "t_bh_chase_range_stops");
+test("devriye yon ceviriyor", "t_bh_patrol_reverses");
+test("donme sariyor", "t_bh_spin_rotates_and_wraps");
+test("salinim tabanda kaliyor", "t_bh_bob_oscillates");
+test("atis araligi", "t_bh_shoot_fires_on_interval");
+test("hedefli atis hedefe gidiyor", "t_bh_shoot_aims_at_target");
+test("hedefli atis nisan modunu bozmuyor", "t_bh_shoot_restores_aim_mode");
+test("olen sahibin davranisi siliniyor", "t_bh_dead_owner_is_culled");
+test("kod veriyi eziyor", "t_bh_code_overrides_data");
+test("davranislar reset ile temizleniyor", "t_bh_cleared_by_reset");
+test("davranisli gidis-donus", "t_bh_roundtrip");
+// KATI-KATI temas kancası ATMALI. Bu bir motor hatasıydı ve SESSİZDİ:
+// `_s3_collision` önce MTV ile cisimleri tam ayırıyor, kanca taraması sonra
+// çakışma arıyordu — ayrılmış iki cisim tam teğet, çakışma yok. Yani
+// `carpisinca3(TAG_ENEMY, TAG_PLAYER, ...)` kaydeden her oyun (gönderilen
+// scene3d_arena örneği dahil) o kancayı hiç çağırmıyordu. Katı-KATISIZ
+// çiftler (eşya, mermi) çalıştığı için hata fark edilmemişti.
+int _hh_n = 0;
+func _hh_cb() { _hh_n = _hh_n + 1; }
+
+func t_hit_hook_fires_between_solids() {
+    scene3d_reset();
+    no_ground3d();
+    _hh_n = 0;
+    int p = spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int en = spawn3(0.6, 1.0, 0.0, 1.2, 2.0, 1.2, RED, SHAPE_CUBE, TAG_ENEMY);
+    assert_eq_int(_e3[_slot_of3(p)].solid, 1);
+    assert_eq_int(_e3[_slot_of3(en)].solid, 1);
+    on_hit3d(TAG_ENEMY, TAG_PLAYER, _hh_cb);
+    _s3_collision();
+    assert(_hh_n > 0, "ayrilmis iki kati cisim TEMAS etmis sayilmali");
+    // Ayırma yine de yapılmış olmalı — pay çakışmayı hoş görmek için, içine
+    // geçmeye izin vermek için değil.
+    assert(_overlap3(_slot_of3(p), _slot_of3(en)) == false, "yine de ayrilmali");
+}
+
+// Pay TEMASA özel: uzaktaki iki cisim hâlâ çarpışmamış sayılmalı.
+func t_hit_hook_skin_is_not_a_radius() {
+    scene3d_reset();
+    no_ground3d();
+    _hh_n = 0;
+    spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    // 2.4 birim: aradaki boşluk 1.2, yani DOKUNMUYORLAR — ama geniş fazın
+    // eleme yarıçapının içinde. İlk hâli 4.0'daydı ve orada geniş faz çifti
+    // zaten eliyordu, dolayısıyla payı 3.0'a çıkaran bir bozma bile testi
+    // kızartmıyordu (ölçüldü). Pay burada gerçekten sınanıyor.
+    spawn3(2.4, 1.0, 0.0, 1.2, 2.0, 1.2, RED, SHAPE_CUBE, TAG_ENEMY);
+    on_hit3d(TAG_ENEMY, TAG_PLAYER, _hh_cb);
+    _s3_collision();
+    assert_eq_int(_hh_n, 0);
+}
+
+test("kati-kati temas kancasi atiyor", "t_hit_hook_fires_between_solids");
+test("temas payi yaricap degil", "t_hit_hook_skin_is_not_a_radius");
+test("topla kurali", "t_rule_collect");
+test("hasar kurali dokunulmazliga uyuyor", "t_rule_damage_respects_invuln");
+test("bitince kurali kazandiriyor", "t_rule_cleared_wins");
+test("gorulmeden bitince tetiklenmiyor", "t_rule_cleared_needs_seen");
+test("oyuncu olunce kaybediliyor", "t_rule_cleared_player_loses");
+test("ayni cift icin coklu kural", "t_rule_multiple_on_same_pair");
+test("cift topla kurali skoru bir kez sayiyor", "t_rule_double_collect_scores_once");
+test("kurallar reset ile temizleniyor", "t_rules_cleared_by_reset");
+test("gonderilen sahne dosyasi oynuyor", "t_data_game_file_plays");
 test_summary();
