@@ -405,6 +405,14 @@ func scene3d_reset() {
     // Kalıcılık: BELLEKTEKİ durum sıfırlanır, DİSKTEKİ kayıt durur. reset
     // "sahneyi baştan kur" demek, "oyuncunun rekorunu sil" demek değil.
     _sav_on = 0; _best3 = 0; _new_rec3 = 0; _lvl_done3 = [];
+    // Ad kaydı da sahneyle gider. Bırakılınca handle'lar ÇAKIŞIYOR: yeni
+    // sahnenin slot 0 / gen 1 varlığı, eski sahnenin aynı handle'lı adını
+    // devralıyor ve serileştirme onu yanlış adla yazıyor. (Süitte tam bu
+    // oldu: yeni "kutu" varlığı bir önceki testin "kahraman"ı sanıldı.)
+    _sc_nm = []; _sc_id = [];
+    // Geri-al geçmişi de: başka bir sahnenin anlık görüntüsünü "geri almak"
+    // sahneyi alakasız bir şeye çevirirdi.
+    _ed_undo3 = []; _ed_redo3 = [];
     _ed_sel3e = 0 - 1; _ed_drag3 = 0;   // secim sahneyle gider
     _bh3 = [];   // veri-davranislar da sahne durumu
     _rl3 = [];   // veri-kurallar da sahne durumu
@@ -2793,6 +2801,8 @@ func _s3_collision() {
         }
         h = h + 1;
     }
+    // Veri-kuralların KENDİ taraması (kanca tablosundan bağımsız).
+    if (length(_rl3) > 0) { _s3_rule_hits(n); }
 }
 
 // ===========================================================================
@@ -4010,6 +4020,11 @@ func play3d() {
     // ESC sıradan bir tuş; çıkış duraklat menüsünün "Cikis" düğmesinde.
     exit_key(K_NONE);
 
+    // Yazarlık durumunu setup'tan (ve bölüm kurulumundan) SONRA, ilk kareden
+    // ÖNCE yakala. Elle yazılmış bir oyunun "yazılmış hâli" tam olarak budur —
+    // sahne dosyası olmasa da Oynat/Dur ve geri alma çalışsın diye gerekiyor.
+    _ed_capture3();
+
     while (running() && _s3_quit == 0) {
         float dt = frame_time();
         if (dt <= 0.0) { dt = 0.0166667; }
@@ -5147,10 +5162,15 @@ func kazandi3d() { win3d(); }
 
 // Çarpışma kuralı ekle. Aynı etiket çifti için birden çok kural olabilir
 // (hem skor hem hasar) — hepsi işler.
+// Kurallar çarpışma kancası TABLOSUNU kullanmıyor, kendi taramaları var.
+// Sebep Oynat/Dur: `scene3d_reset` kanca tablosunu siliyor (silmeli — bayat
+// kancalar yeni sahneye sızmamalı), ama elle yazılmış bir oyunun `setup()`
+// içinde kaydettiği kancalar sahne biçiminde YER ALMIYOR. Kurallar da o
+// tabloda otursaydı, "Dur"dan sonra ya oyunun kancaları kaybolur ya da
+// kurallar ikinci kez kaydedilip iki kat işlerdi. Ayrı tarama bu bağı kesiyor.
 func hit_rule3d(tag_a, tag_b, act, n) {
     Rule3 r = { kind: RULE_HIT, a: tag_a, b: tag_b, act: act, n: n * 1.0, seen: 0 };
     push(_rl3, r);
-    on_hit3d(tag_a, tag_b, _rule_hit3);
 }
 func carpisma_kurali3d(etiket_a, etiket_b, eylem, n) { hit_rule3d(etiket_a, etiket_b, eylem, n); }
 
@@ -5195,28 +5215,36 @@ func _rl_apply3(act, n, me, other) {
     if (act == ACT_LOSE)   { game_over3d(); }
 }
 
-// Tek dağıtıcı: hangi kuralın işlediğini çarpışan çiftin ETİKETLERİNDEN bulur.
-// on_hit3d yönlüdür — "ben" birinci etiketli, "öteki" ikinci etiketli.
-func _rule_hit3() {
-    int me = me3d();
-    int other = other3d();
-    int sm = _slot_of3(me);
-    int so = _slot_of3(other);
-    if (sm < 0 || so < 0) { return; }
-    int ta = _e3[sm].tag;
-    int tb = _e3[so].tag;
-    int i = 0;
-    while (i < length(_rl3)) {
-        Rule3 r = _rl3[i];
-        if (r.kind == RULE_HIT && r.a == ta && r.b == tb) {
-            // Eylem ötekini öldürmüş olabilir; aynı çarpışma için sonraki
-            // kural bayat bir handle ile çağrılır. Burada erken çıkmıyoruz —
-            // korumanın TEK yeri `_rl_apply3`, çünkü iki yerde tutulunca
-            // hangisinin yük taşıdığı sınanamıyordu (bozma denemesi ikisini de
-            // silmeye izin veriyordu).
-            _rl_apply3(r.act, r.n, me, other);
+// Kuralların çarpışma taraması. Kanca taramasının aynısı, ama etiket çiftini
+// `_rl3`'ten alıyor. `_overlap_hit3` (temas payı) kullanılıyor — kurallar da
+// katı-katı temasları görmeli.
+func _s3_rule_hits(n) {
+    int r = 0;
+    while (r < length(_rl3)) {
+        Rule3 ru = _rl3[r];
+        if (ru.kind == RULE_HIT) {
+            int a = 0;
+            while (a < n) {
+                Ent3 ea = _e3[a];
+                if (ea.alive == 1 && ea.tag == ru.a) {
+                    int b = 0;
+                    while (b < n) {
+                        if (a != b && !_bp_far3(a, b)) {
+                            Ent3 eb = _e3[b];
+                            if (eb.alive == 1 && eb.tag == ru.b && _overlap_hit3(a, b)
+                                && !_bullet_owner_pair3(a, b)) {
+                                _hit_me = _mk_handle3(a);
+                                _hit_other = _mk_handle3(b);
+                                _rl_apply3(ru.act, ru.n, _hit_me, _hit_other);
+                            }
+                        }
+                        b = b + 1;
+                    }
+                }
+                a = a + 1;
+            }
         }
-        i = i + 1;
+        r = r + 1;
     }
 }
 
@@ -5460,11 +5488,91 @@ str   _ed_path3 = "";
 float _ed_msg_t3 = 0.0;
 str   _ed_msg3   = "";
 
+// ---- YAZARLIK DURUMU / Oynat-Dur ------------------------------------------
+// Unity/Unreal modeli: editör sahnenin SAHİBİ. "Oynat" bir KOPYAYI çalıştırır,
+// "Dur" kopyayı atar. Oynarken olanlar hiçbir zaman kaydedilmez.
+//
+// Bu ayrım olmadan editör sinsi bir veri kaybı üretiyor: oyunu bir süre oyna,
+// TAB'a bas, F5 ile kaydet → dosyaya düşmanların KOVALADIĞI, süslerin DÖNDÜĞÜ
+// hâl yazılır. Yazarın kurduğu sahne sessizce gider. (Bu gerçekten oldu:
+// gönderilen sahne dosyası bir kez simüle edilmiş durumla üzerine yazıldı.)
+//
+// Kancalar geri yüklemede KORUNUYOR: elle yazılmış bir oyunun `setup()` içinde
+// kaydettiği çarpışma/ölüm kancaları ve bölüm tablosu sahne biçiminde yer
+// almıyor — `scene3d_reset` onları silseydi Dur'dan sonra oyun sessizce
+// tepkisiz kalırdı.
+str _sc_authored3 = "";
+
+func _ed_capture3() { _sc_authored3 = scene_json3d(); }
+
+func _ed_apply_json3(js) {
+    if (js == "") { return; }
+    array ha = _hitA; array hb = _hitB; array hf = _hitF;
+    array dt = _deadT; array df = _deadF;
+    array ln = _lvlN; array lf = _lvlF;
+    int cl = _cur_lvl3;
+    int sc = _score3;
+    // Geçmiş KORUNUR: geri-al/yinele sahnede gezinmektir, yeni sahne açmak
+    // değil. (reset onu temizliyor — doğrusu da o, ama bu yol için değil.)
+    array un = _ed_undo3; array rd = _ed_redo3;
+    scene_load3d(js);
+    _ed_undo3 = un; _ed_redo3 = rd;
+    _hitA = ha; _hitB = hb; _hitF = hf;
+    _deadT = dt; _deadF = df;
+    _lvlN = ln; _lvlF = lf;
+    _cur_lvl3 = cl;
+    _score3 = sc;
+}
+
+// ---- Geri al / yinele ------------------------------------------------------
+// Anlık görüntü tabanlı: her düzenlemeden ÖNCE sahnenin JSON'u yığına atılıyor.
+// Komut-tabanlı bir geri alma her komut için ayrı bir "tersi" yazmayı
+// gerektirirdi (ve her yeni komut o borcu büyütürdü); serileştirme zaten
+// tam olduğu için anlık görüntü hem daha kısa hem daha güvenilir.
+array _ed_undo3 = [];
+array _ed_redo3 = [];
+int   _ED_UNDO_MAX3 = 40;
+
+func _ed_trim3(a): array {
+    array o = [];
+    int i = 1;
+    while (i < length(a)) { push(o, a[i]); i = i + 1; }
+    return o;
+}
+
+func ed_mark3d() {
+    push(_ed_undo3, scene_json3d());
+    if (length(_ed_undo3) > _ED_UNDO_MAX3) { _ed_undo3 = _ed_trim3(_ed_undo3); }
+    _ed_redo3 = [];   // yeni bir dal açıldı
+}
+
+func ed_undo3d(): bool {
+    if (length(_ed_undo3) == 0) { return false; }
+    push(_ed_redo3, scene_json3d());
+    str js = pop(_ed_undo3);
+    _ed_apply_json3(js);
+    return true;
+}
+func ed_redo3d(): bool {
+    if (length(_ed_redo3) == 0) { return false; }
+    push(_ed_undo3, scene_json3d());
+    str js = pop(_ed_redo3);
+    _ed_apply_json3(js);
+    return true;
+}
+func ed_undo_count3d(): int { return length(_ed_undo3); }
+func ed_redo_count3d(): int { return length(_ed_redo3); }
+
 int _ed_drag3 = 0;        // seçili varlık sürükleniyor mu
 float _ed_dgy3 = 0.0;     // sürükleme düzleminin yüksekliği (yakalandığı an)
 
 func editor3d(on) {
     if (on) {
+        // Editöre girmek = Unity'deki "Dur": oyunun ürettiği durum ATILIR ve
+        // yazarlık durumuna dönülür. Bunu yapmazsak 30 saniye oynadıktan sonra
+        // TAB'a basmak, kovalamış düşmanları ve dönmüş süsleri "yazılmış hâl"
+        // sanmaya yol açıyor — ve F5 onu dosyaya kalıcı yazıyor.
+        if (_ed_on3 == 0) { _ed_apply_json3(_sc_authored3); }
         _ed_on3 = 1;
         // Editöre girerken kamerayı oyunun baktığı yere yakın kur ki
         // "neredeyim?" anı yaşanmasın.
@@ -5474,7 +5582,12 @@ func editor3d(on) {
             _ed_cx3 = e.x; _ed_cy3 = e.y + 14.0; _ed_cz3 = e.z + 26.0;
             _ed_yaw3 = 0.0; _ed_pitch3 = 0.0 - 25.0;
         }
-    } else { _ed_on3 = 0; _ed_drag3 = 0; }
+    } else {
+        // Editörden çıkmak = "Oynat": ekrandaki düzenlenmiş sahne artık
+        // yazarlık durumu; oyun ONUN kopyası üzerinde koşacak.
+        if (_ed_on3 == 1) { _ed_capture3(); }
+        _ed_on3 = 0; _ed_drag3 = 0;
+    }
     // İmleç editörde serbest olmalı (bakış SAĞ tuşla) — kilitli imleçle
     // varlığa tıklanamaz.
     cursor_lock(false);
@@ -5529,6 +5642,10 @@ func ed_pick_at3d(px, py): int {
 
 func _s3_editor_mouse(dt) {
     if (mouse_pressed(0)) {
+        // Geri-al işareti JESTİN BAŞINDA konuyor, komutların içinde değil:
+        // sürükleme `ed_move3d`'yi her karede çağırıyor, oraya koysaydık
+        // saniyede 60 geri-al adımı birikirdi.
+        ed_mark3d();
         int hit = ed_pick_at3d(mouse_x(), mouse_y());
         if (hit >= 0) {
             _ed_sel3e = hit;
@@ -5567,8 +5684,18 @@ func editor_save3d(): bool {
 }
 func editor_kaydet3d(): bool { return editor_save3d(); }
 
+int K_Z = 90; int K_Y = 89;
+
 func _s3_editor_keys() {
     if (key_pressed(K_F5)) { editor_save3d(); }
+    if (key_down(K_LCTRL) && key_pressed(K_Z)) {
+        if (ed_undo3d()) { _ed_msg3 = "geri alindi"; _ed_msg_t3 = 1.2; }
+        return;
+    }
+    if (key_down(K_LCTRL) && key_pressed(K_Y)) {
+        if (ed_redo3d()) { _ed_msg3 = "yinelendi"; _ed_msg_t3 = 1.2; }
+        return;
+    }
     if (key_pressed(K_1)) { _ed_mode3 = ED_SELECT; }
     if (key_pressed(K_2)) { _ed_mode3 = ED_MOVE; }
     if (key_pressed(K_3)) { _ed_mode3 = ED_SCALE; }
@@ -5580,10 +5707,12 @@ func _s3_editor_keys() {
     if (_slot_of3(sel) < 0) { return; }
     float g = 0.5;
     if (_ed_grid3 > 0.0) { g = _ed_grid3; }
-    if (key_pressed(K_DEL)) { ed_delete3d(sel); return; }
-    if (key_pressed(K_D) && key_down(K_LCTRL)) { ed_duplicate3d(sel); return; }
+    if (key_pressed(K_DEL)) { ed_mark3d(); ed_delete3d(sel); return; }
+    if (key_pressed(K_D) && key_down(K_LCTRL)) { ed_mark3d(); ed_duplicate3d(sel); return; }
     if (_ed_mode3 == ED_SCALE) {
         Ent3 e = _e3[_slot_of3(sel)];
+        if (key_pressed(K_UP) || key_pressed(K_DOWN) || key_pressed(K_LEFT) ||
+            key_pressed(K_RIGHT)) { ed_mark3d(); }
         if (key_pressed(K_UP))    { ed_resize3d(sel, e.sx, e.sy + g, e.sz); }
         if (key_pressed(K_DOWN))  { ed_resize3d(sel, e.sx, e.sy - g, e.sz); }
         if (key_pressed(K_RIGHT)) { ed_resize3d(sel, e.sx + g, e.sy, e.sz + g); }
@@ -5597,7 +5726,7 @@ func _s3_editor_keys() {
         if (key_pressed(K_UP))    { ed_nudge3d(sel, 0.0, g, 0.0); }
         if (key_pressed(K_DOWN))  { ed_nudge3d(sel, 0.0, 0.0 - g, 0.0); }
     }
-    if (key_pressed(K_SPACE)) { ed_drop3d(sel); }
+    if (key_pressed(K_SPACE)) { ed_mark3d(); ed_drop3d(sel); }
 }
 
 func _s3_editor(dt) {

@@ -2340,6 +2340,18 @@ int tame_impl_key_released(const char *k) {
 // adresliyor, ama scene3d gibi kütüphaneler kendi sabitlerini (K_W = 87,
 // K_LEFT = 263 …) tutuyor — sayı verilince ad tablosuna düşmek yerine kodu
 // doğrudan kullanıyoruz.
+// Metin genişliği: editörün yerleşimi buna bağlı (panel sütunları, düğme
+// kutuları). Elle "karakter sayısı * kabaca yarım punto" tahmini kullanmak
+// yazı tipi değişince sessizce bozulurdu.
+int tame_impl_text_width(const char *s, int size) {
+  if (!s) return 0;
+  return MeasureText(s, size);
+}
+
+// Klavyeden gelen sıradaki UNICODE karakter (yoksa 0). IsKeyPressed tuş
+// KODU verir, yani düzen/shift bilmez — metin alanı için gereken bu.
+int tame_impl_char_pressed(void) { return GetCharPressed(); }
+
 int tame_impl_key_down_code(int key) { return key ? IsKeyDown(key) : 0; }
 int tame_impl_key_pressed_code(int key) { return key ? IsKeyPressed(key) : 0; }
 int tame_impl_key_released_code(int key) { return key ? IsKeyReleased(key) : 0; }

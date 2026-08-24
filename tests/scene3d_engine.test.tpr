@@ -3922,6 +3922,173 @@ func t_ed_save_without_path_fails() {
     assert(editor_kaydet3d() == false, "yolsuz kayit basarisiz olmali");
 }
 
+// ===========================================================================
+//  OYNAT / DUR ve GERİ AL — editörün yazarlık durumu
+// ===========================================================================
+// Bu testlerin sebebi gerçek bir veri kaybı: gönderilen sahne dosyası bir kez
+// SİMÜLE EDİLMİŞ durumla üzerine yazıldı (kovalamış düşmanlar, dönmüş süsler,
+// çoğaltılmış bir varlık). Editöre girmek oyunun ürettiği durumu atmıyordu,
+// F5 de onu kalıcı yazıyordu. Unity/Unreal modeli: editör sahnenin sahibi,
+// "Oynat" bir KOPYAYI koşturur, "Dur" kopyayı atar.
+
+func t_ed_entering_editor_discards_simulation() {
+    scene_file3d("examples/scenes/toplayici.scene.json");
+    _ed_capture3();                       // yazarlık durumu (play3d bunu yapar)
+    int en = 0 - 1;
+    int i = 0;
+    while (i < length(_e3)) {
+        if (_e3[i].alive == 1 && _e3[i].tag == TAG_ENEMY && _e3[i].x < 0.0) { en = i; }
+        i = i + 1;
+    }
+    assert(en >= 0, "kovalayan dusman olmali");
+    float x0 = _e3[en].x;
+    // Oyun koşuyor: düşmanlar kovalıyor, süsler dönüyor.
+    int f = 0;
+    while (f < 180) { _dg_step(0.016667); f = f + 1; }
+    assert(abs_f3(_e3[en].x - x0) > 1.0, "simulasyon durumu degistirmeli");
+    // Editöre gir = DUR.
+    editor3d(true);
+    int en2 = 0 - 1;
+    i = 0;
+    while (i < length(_e3)) {
+        if (_e3[i].alive == 1 && _e3[i].tag == TAG_ENEMY && _e3[i].x < 0.0) { en2 = i; }
+        i = i + 1;
+    }
+    assert(en2 >= 0, "dusman geri gelmeli");
+    assert(abs_f3(_e3[en2].x - x0) < 0.001,
+           "yazarlik konumuna donmeli: " + toString(_e3[en2].x) + " != " + toString(x0));
+    editor3d(false);
+}
+
+// ASIL HATA: editörde kaydetmek YAZILMIŞ hâli yazmalı, oynanmış hâli değil.
+func t_ed_save_writes_authored_not_simulated() {
+    scene_file3d("examples/scenes/toplayici.scene.json");
+    _ed_capture3();
+    str authored = scene_json3d();
+    int f = 0;
+    while (f < 180) { _dg_step(0.016667); f = f + 1; }
+    assert(scene_json3d() != authored, "simulasyon JSON'u degistirmeli");
+    editor3d(true);
+    editor_dosya3d("/tmp/tulpar_authored_test.json");
+    assert(editor_kaydet3d(), "kaydedilmeli");
+    editor3d(false);
+    str yazilan = read_file("/tmp/tulpar_authored_test.json");
+    assert(yazilan == authored, "diske YAZILMIS hal gitmeli, oynanmis hal degil");
+}
+
+// Elle yazılmış oyunun kancaları Dur'dan sonra da çalışmalı — sahne biçiminde
+// yer almadıkları için `scene3d_reset` onları siler; geri yükleme korumalı.
+int _ps_n = 0;
+func _ps_cb() { _ps_n = _ps_n + 1; }
+
+func t_ed_stop_preserves_hand_written_hooks() {
+    scene3d_reset();
+    no_ground3d();
+    _ps_n = 0;
+    spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    spawn3(0.5, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    on_hit3d(TAG_PLAYER, TAG_ITEM, _ps_cb);
+    _ed_capture3();
+    _s3_collision();
+    assert(_ps_n > 0, "kanca once calismali");
+    int before = _ps_n;
+    editor3d(true);      // DUR → sahne yeniden yuklenir
+    editor3d(false);
+    _s3_collision();
+    assert(_ps_n > before, "kanca Dur'dan sonra da calismali");
+}
+
+// Kurallar sahne biçiminde YER ALIYOR, yani geri yüklemede yeniden gelmeli —
+// ama İKİ KAT olmamalı (kanca tablosunda otursalardı tam bu olurdu).
+func t_ed_stop_does_not_duplicate_rules() {
+    scene_file3d("examples/scenes/toplayici.scene.json");
+    _ed_capture3();
+    assert_eq_int(rule_count3d(), 5);
+    editor3d(true);
+    assert_eq_int(rule_count3d(), 5);
+    editor3d(false);
+    assert_eq_int(rule_count3d(), 5);
+}
+
+// ---- Geri al / yinele ------------------------------------------------------
+
+func t_ed_undo_restores_previous_state() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    _sc_reg3("kutu", a);
+    ed_grid3d(0.0);
+    ed_mark3d();
+    ed_move3d(a, 9.0, 1.0, 0.0);
+    assert(abs_f3(get3x(bul3d("kutu")) - 9.0) < 0.001, "tasindi");
+    assert(ed_undo3d(), "geri alinabilmeli");
+    // ADIN hâlâ çözülüyor olması ayrıca sınanıyor: bul3d(-1) verirse get3x 0
+    // döner ve "eski konuma döndü" iddiası ad kaybolduğunda da GEÇERDİ.
+    // (Gerçekten geçiyordu: reset ad kaydını temizlemediği için varlık yanlış
+    // adla serileşiyordu.)
+    assert(bul3d("kutu") >= 0, "ad gidis-donusten sag cikmali");
+    assert(abs_f3(get3x(bul3d("kutu"))) < 0.001,
+           "eski konuma donmeli: " + toString(get3x(bul3d("kutu"))));
+    assert(ed_redo3d(), "yinelenebilmeli");
+    assert(bul3d("kutu") >= 0, "ad yinelemeden de sag cikmali");
+    assert(abs_f3(get3x(bul3d("kutu")) - 9.0) < 0.001, "yeniden 9 olmali");
+}
+
+func t_ed_undo_covers_delete_and_add() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    int n0 = alive_count3d();
+    ed_mark3d();
+    ed_delete3d(a);
+    assert_eq_int(alive_count3d(), n0 - 1);
+    ed_undo3d();
+    assert_eq_int(alive_count3d(), n0);
+    ed_mark3d();
+    ed_add3d(TAG_WALL, SHAPE_CUBE, 3.0, 1.0, 3.0);
+    assert_eq_int(alive_count3d(), n0 + 1);
+    ed_undo3d();
+    assert_eq_int(alive_count3d(), n0);
+}
+
+// Yeni bir düzenleme yinele dalını kesmeli (aksi hâlde "yinele" alakasız bir
+// geleceğe atlardı).
+func t_ed_new_edit_clears_redo() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    ed_grid3d(0.0);
+    ed_mark3d(); ed_move3d(a, 5.0, 1.0, 0.0);
+    ed_undo3d();
+    assert_eq_int(ed_redo_count3d(), 1);
+    ed_mark3d(); ed_move3d(a, 0.0, 1.0, 7.0);
+    assert_eq_int(ed_redo_count3d(), 0);
+}
+
+// Yığın sınırlı olmalı — sınırsız büyüseydi uzun bir oturum belleği yerdi.
+func t_ed_undo_stack_is_bounded() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    int i = 0;
+    while (i < _ED_UNDO_MAX3 + 12) { ed_mark3d(); i = i + 1; }
+    assert(ed_undo_count3d() <= _ED_UNDO_MAX3,
+           "yigin sinirli olmali: " + toString(ed_undo_count3d()));
+    // En eskiyi atmak, en yenisini bozmamalı.
+    assert(ed_undo3d(), "hala geri alinabilmeli");
+}
+
+// Boş yığında geri al SESSİZCE sahneyi silmemeli.
+func t_ed_undo_on_empty_is_safe() {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    _ed_undo3 = []; _ed_redo3 = [];
+    int n = alive_count3d();
+    assert(ed_undo3d() == false, "bos yiginda false donmeli");
+    assert_eq_int(alive_count3d(), n);
+}
+
 test("merkez isini ileri yon", "t_ed_center_ray_is_forward");
 test("isin birim", "t_ed_ray_is_unit");
 test("dikey kenar fov/2", "t_ed_vertical_edge_matches_fov");
@@ -3941,4 +4108,13 @@ test("zemine oturt yuzeye geliyor", "t_ed_drop_sits_on_surface");
 test("editor secimi reset ile temizleniyor", "t_ed_selection_cleared_by_reset");
 test("duzenle-kaydet-yukle gidis-donusu", "t_ed_edit_save_reload_roundtrip");
 test("yolsuz kayit basarisiz", "t_ed_save_without_path_fails");
+test("editore girmek simulasyonu atiyor", "t_ed_entering_editor_discards_simulation");
+test("kayit yazilmis hali yaziyor", "t_ed_save_writes_authored_not_simulated");
+test("Dur elle yazilan kancalari koruyor", "t_ed_stop_preserves_hand_written_hooks");
+test("Dur kurallari ikilemiyor", "t_ed_stop_does_not_duplicate_rules");
+test("geri al onceki durumu getiriyor", "t_ed_undo_restores_previous_state");
+test("geri al sil/ekle kapsiyor", "t_ed_undo_covers_delete_and_add");
+test("yeni duzenleme yinele dalini kesiyor", "t_ed_new_edit_clears_redo");
+test("geri al yigini sinirli", "t_ed_undo_stack_is_bounded");
+test("bos yiginda geri al guvenli", "t_ed_undo_on_empty_is_safe");
 test_summary();

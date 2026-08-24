@@ -103,6 +103,10 @@ func circle(x, y, radius, color) { tm_circle(x, y, radius, color); }
 func line(x1, y1, x2, y2, color) { tm_line(x1, y1, x2, y2, color); }
 func pixel(x, y, color) { tm_pixel(x, y, color); }
 func text(s, x, y, size, color) { tm_text(s, x, y, size, color); }
+// Metnin piksel genişliği — arayüz yerleşimi (panel sütunu, düğme kutusu)
+// buna dayanıyor; karakter sayısından tahmin etmek yazı tipi değişince bozulur.
+func text_width(s, size): int { return tm_text_width(s, size); }
+func metin_genisligi(s, boy): int { return tm_text_width(s, boy); }
 
 // ---- Girdi -----------------------------------------------------------------
 // Tuş adları: "A".."Z", "0".."9", "SPACE", "ENTER", "ESC", "TAB",
@@ -111,6 +115,11 @@ func text(s, x, y, size, color) { tm_text(s, x, y, size, color); }
 
 func key_down(k): bool { return tm_key_down(k); }       // şu an basılı mı
 func key_pressed(k): bool { return tm_key_pressed(k); } // bu karede basıldı (tek tetik)
+// Klavyeden gelen sıradaki unicode karakter (yoksa 0). Tuş KODU değil KARAKTER
+// verir — yani düzen ve shift uygulanmış hâli; metin alanı için gereken bu.
+// Kuyruk boşalana kadar aynı karede tekrar tekrar çağrılabilir.
+func char_pressed(): int { return tm_char_pressed(); }
+func karakter_geldi(): int { return tm_char_pressed(); }
 func key_released(k): bool { return tm_key_released(k); }
 
 // Fare düğmeleri: 0 = sol, 1 = sağ, 2 = orta.

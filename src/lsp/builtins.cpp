@@ -72,6 +72,8 @@ const BuiltinEntry kBuiltins[] = {
     {"tm_text",         "tm_text(s: str, x, y, size: int, color: int)", "Yazı çizer (varsayılan font). Sarmalayıcı: text()."},
     {"tm_key_down",     "tm_key_down(key: str|int): bool",              "Tuş şu an basılı mı? Ad: \"W\", \"SPACE\", \"LEFT\", \"ESC\", \"F1\"... ya da ham raylib tuş kodu (87 = W). Sarmalayıcı: key_down()."},
     {"tm_key_pressed",  "tm_key_pressed(key: str|int): bool",               "Tuşa bu karede yeni mi basıldı (tek tetik)? Sarmalayıcı: key_pressed()."},
+    {"tm_text_width",   "tm_text_width(s: str, size: int): int",           "Metnin piksel genişliği (MeasureText). Sarmalayıcı: text_width()."},
+    {"tm_char_pressed", "tm_char_pressed(): int",                          "Klavyeden gelen sıradaki unicode karakter, yoksa 0. Sarmalayıcı: char_pressed()."},
     {"tm_key_released", "tm_key_released(key: str|int): bool",              "Tuş bu karede mi bırakıldı? Sarmalayıcı: key_released()."},
     {"tm_mouse_x",      "tm_mouse_x(): int",                            "Fare X konumu (piksel). Sarmalayıcı: mouse_x()."},
     {"tm_mouse_y",      "tm_mouse_y(): int",                            "Fare Y konumu (piksel). Sarmalayıcı: mouse_y()."},

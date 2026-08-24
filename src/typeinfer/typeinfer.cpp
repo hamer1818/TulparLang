@@ -903,6 +903,8 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       // (scene3d'nin K_* sabitleri) yanlış uyarır.
       {"tm_key_down", TYPE_BOOL, {TYPE_UNKNOWN}},
       {"tm_key_pressed", TYPE_BOOL, {TYPE_UNKNOWN}},
+      {"tm_text_width", TYPE_INT, {TYPE_STRING, TYPE_INT}},
+      {"tm_char_pressed", TYPE_INT, {}},
       {"tm_key_released", TYPE_BOOL, {TYPE_UNKNOWN}},
       {"tm_mouse_x", TYPE_INT, {}},
       {"tm_mouse_y", TYPE_INT, {}},

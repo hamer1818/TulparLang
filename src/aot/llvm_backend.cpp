@@ -791,10 +791,12 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm_line", "aot_tm_line_ptr", 5},
     {"tm_pixel", "aot_tm_pixel_ptr", 3},
     {"tm_text", "aot_tm_text_ptr", 5},
+    {"tm_text_width", "aot_tm_text_width_ptr", 2},
     // girdi — klavye
     {"tm_key_down", "aot_tm_key_down_ptr", 1},
     {"tm_key_pressed", "aot_tm_key_pressed_ptr", 1},
     {"tm_key_released", "aot_tm_key_released_ptr", 1},
+    {"tm_char_pressed", "aot_tm_char_pressed_ptr", 0},
     // girdi — fare
     {"tm_mouse_x", "aot_tm_mouse_x_ptr", 0},
     {"tm_mouse_y", "aot_tm_mouse_y_ptr", 0},
