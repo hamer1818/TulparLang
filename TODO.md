@@ -42,10 +42,11 @@ Mimari kararlar ve gerekçeleri:
       tek satır oynanış kodu içermiyor. Yan ürün: katı-katı temas kancalarının
       hiç atmadığı motor hatası bulundu ve düzeltildi. Detay: CHANGELOG.
 
-- [ ] **Faz 3 — Editör kipi (motor içinde).** Serbest uçuş kamerası, fare ile
-      varlık seçme (kameradan ışın → en yakın çarpma), taşıma/ölçekleme
-      tutamakları, ızgaraya oturtma. Seçim matematiği saf fonksiyon olacak ki
-      penceresiz sınanabilsin.
+- [x] **Faz 3 — Editör kipi (motor içinde).** ✅ 2026-08-24 — TAB ile açılıyor
+      (oyun donuyor), serbest uçuş kamerası, fareyle seçme, ızgaraya oturan
+      sürükleme, ölçek/döndürme, sil/çoğalt/zemine-otur, F5 ile sahneyi JSON'a
+      geri yazma. Işın matematiği saf ve fov TANIMINDAN sınanıyor. Detay:
+      CHANGELOG.
 
 - [ ] **Faz 4 — Köprü.** `tm_bridge_send/recv` (2 bağlama): JS ↔ wasm arasında
       JSON komut/olay kuyruğu. Masaüstünde stdin/stdout'a düşecek — böylece

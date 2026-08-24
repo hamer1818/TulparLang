@@ -42,6 +42,26 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — editör kipi: sahneyi gözle kurmak
+
+`TAB` ile açılıyor ve oyunu DONDURUYOR (editör bir oyun kipi değil; fizik
+çalışırsa düzenlediğin şey ayağının altından kayar). Serbest uçuş kamerası,
+fareyle varlık seçme, ızgaraya oturan sürükleme, ölçek/döndürme,
+sil/çoğalt/zemine-otur, ve `F5` ile sahneyi JSON dosyasına geri yazma —
+yeniden derleme yok.
+
+Katman ikiye ayrık: SAF matematik (ışın kurma, seçim, ızgara, düzlem
+kesişimi) ve KOMUTLAR (taşı/ölçekle/döndür/sil/çoğalt). Girdi işleme yalnız
+ince bir kabuk, çünkü tarayıcıdaki editör (Faz 5) aynı komutları çağıracak.
+
+Işın testlerinin beklentisi kodun formülünden değil **fov'un tanımından**
+geliyor: ekranın dikey kenarından geçen ışın ileri yönle tam fov/2 açı yapar.
+Aynı formülü tekrarlayan bir test aynı yanlışı onaylardı.
+
+Seçim, kamera-engel taramasının kullandığı `_seg_aabb3`'ü çağırıyor — ayrı
+bir ışın-kutu testi yazmak aynı geometriyi iki yerde tutmak olurdu. Dönük
+kutuların doğru seçilmesi bu yüzden bedava geldi.
+
 ### Fixed — katı-katı temas kancaları hiç atmıyordu
 
 `_s3_collision` önce MTV ile cisimleri TAM ayırıyor, kanca taraması ise ondan

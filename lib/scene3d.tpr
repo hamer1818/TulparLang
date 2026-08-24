@@ -405,6 +405,7 @@ func scene3d_reset() {
     // Kalıcılık: BELLEKTEKİ durum sıfırlanır, DİSKTEKİ kayıt durur. reset
     // "sahneyi baştan kur" demek, "oyuncunun rekorunu sil" demek değil.
     _sav_on = 0; _best3 = 0; _new_rec3 = 0; _lvl_done3 = [];
+    _ed_sel3e = 0 - 1; _ed_drag3 = 0;   // secim sahneyle gider
     _bh3 = [];   // veri-davranislar da sahne durumu
     _rl3 = [];   // veri-kurallar da sahne durumu
     _hitA = []; _hitB = []; _hitF = [];
@@ -3120,6 +3121,18 @@ func _s3_camera_input(dt) {
 }
 
 func _s3_camera(dt) {
+    // Editör kipinde kamera hedefe bağlı DEĞİL — serbest uçuyor. Takip
+    // kamerasını burada erken kesmek, aşağıdaki bütün hedef/saydamlık/engel
+    // mantığının editörde hiç çalışmaması demek; istenen de bu.
+    if (_ed_on3 == 1) {
+        float yr = _ed_yaw3 * DEG2RAD3;
+        float pr = _ed_pitch3 * DEG2RAD3;
+        float cp = cos(pr);
+        camera3d(_ed_cx3, _ed_cy3, _ed_cz3,
+                 _ed_cx3 + sin(yr) * cp, _ed_cy3 + sin(pr), _ed_cz3 - cos(yr) * cp,
+                 _cam_fov);
+        return;
+    }
     // Hedef ölmüşse (handle bayat) genel görünüme düş — ölü slot'u okumak,
     // slot geri kullanıldığında kamerayı alakasız bir entity'ye kilitlerdi.
     int ct = _slot_of3(_cam_target);
@@ -4044,8 +4057,14 @@ func play3d() {
         // move3d bu karenin kamera yönünü kullansın (bir kare gecikme olmaz).
         // Menü/duraklat açıkken oyun DONAR: bakış, update, fizik ve çarpışma
         // atlanır. Sahne yine çiziliyor (aşağıda), yalnız ilerlemiyor.
+        // Editör: TAB ile geçilir ve oyunu DONDURUR. Editör bir oyun kipi
+        // değil — fizik, davranışlar ve kurallar çalışırsa düzenlediğin şey
+        // ayağının altından kayar.
+        if (key_pressed(K_TAB)) { editor3d(_ed_on3 == 0); }
         int frozen = 0;
         if (_s3_ui != UI_NONE) { frozen = 1; }
+        if (_ed_on3 == 1) { frozen = 1; }
+        if (_ed_on3 == 1) { _s3_editor(dt); }
 
         if (frozen == 0) { _s3_camera_input(dt); }
         // Veri-davranislar update'ten ONCE: ayni varliga elle hareket3()
@@ -4085,11 +4104,16 @@ func play3d() {
             // Parçacıklar entity'lerden SONRA: billboard'lar saydam çizilir,
             // arkalarındaki cisimlerin önceden çizilmiş olması gerekir.
             _s3_particles_draw();
+            // Editör çizimi EN SON ve 3B uzayın İÇİNDE: ızgara ile seçim
+            // çerçevesi sahnenin derinliğini paylaşmalı, yoksa duvarın
+            // arkasındaki seçim önde görünürdü.
+            if (_ed_on3 == 1) { _s3_editor_draw(); }
         space_end();
 
         // Oyunun kendi 2B katmanı — motorun HUD'ından ÖNCE, yani skor/can barı
         // oyunun çizdiklerinin üstünde kalır.
         if (_has_hud3 == 1) { call(_hud3_fn); }
+        _s3_editor_hud();
 
         text(_win_title, 12, 10, 20, RAYWHITE);
         text("Skor: " + toString(_score3), 12, 34, 18, GOLD);
@@ -5219,4 +5243,411 @@ func _s3_rules() {
         }
         i = i + 1;
     }
+}
+
+// ===========================================================================
+// EDİTÖR KİPİ — sahneyi gözle kurmak (Faz 13)
+// ===========================================================================
+// Sahne ve oynanış veri oldu; eksik olan onu GÖZLE düzenlemek. Bu katman
+// motorun içinde duruyor çünkü seçim ışını, ızgara ve tutamaklar sahnenin
+// gerçek geometrisiyle çalışmak zorunda — tarayıcı tarafında bir taklidini
+// yazmak, motorun görünümünü aynalayan bir izleyici yazmakla aynı hata olurdu
+// (zamanla sapar ve yalan söyler).
+//
+// Katman ikiye ayrık:
+//   1. SAF matematik (ışın kurma, seçim, ızgara, düzlem kesişimi) — pencere
+//      istemiyor, doğrudan sınanıyor.
+//   2. KOMUTLAR (taşı, ölçekle, döndür, sil, çoğalt, zemine oturt) — hem
+//      klavye/fare hem de (Faz 4) tarayıcıdan gelen JSON bunları çağıracak.
+// Girdi işleme yalnız ince bir kabuk; asıl iş 1 ve 2'de.
+int ED_SELECT = 0;
+int ED_MOVE   = 1;
+int ED_SCALE  = 2;
+int ED_ROTATE = 3;
+
+int   _ed_on3    = 0;
+float _ed_cx3    = 0.0;    // editör kamerası (serbest uçuş — hedefi yok)
+float _ed_cy3    = 14.0;
+float _ed_cz3    = 26.0;
+float _ed_yaw3   = 0.0;
+float _ed_pitch3 = 0.0 - 22.0;
+float _ed_fly3   = 18.0;   // birim/sn
+int   _ed_sel3e  = 0 - 1;  // seçili HANDLE (-1 = yok)
+int   _ed_mode3  = 0;
+float _ed_grid3  = 0.5;    // ızgara adımı (0 = kapalı)
+float _ed_reach3 = 400.0;  // seçim ışınının menzili
+
+// Son kurulan ışın (saf fonksiyonun çıktısı — testler buradan okuyor).
+float _ed_rx3 = 0.0;
+float _ed_ry3 = 0.0;
+float _ed_rz3 = 0.0 - 1.0;
+
+// ---- 1) SAF MATEMATİK ------------------------------------------------------
+
+// Izgaraya oturt. toInt sıfıra doğru kırptığı için negatifte ayrı yuvarlama
+// gerekiyor — yoksa -1.6 birim, 0.5 adımda -1.5 yerine -1.5'e değil -1.5...
+// (kısaca: yanlış tarafa) düşerdi.
+func _ed_snap3(v, step): float {
+    if (step <= 0.0) { return v * 1.0; }
+    float k = v / step;
+    int n = 0;
+    if (k < 0.0) { n = toInt(k - 0.5); } else { n = toInt(k + 0.5); }
+    return n * step;
+}
+
+// Ekran noktasından ışın YÖNÜ (birim). Kamera tabanı `_s3_camera` ile AYNI
+// evrimi kullanıyor: yaw 0 → (0,0,-1). Sağ vektörü türetmek sadeleşiyor:
+//   ileri = (sin y·cp, sin p, -cos y·cp)  →  sağ = (cos y, 0, sin y)
+// (çapraz çarpımın uzunluğu tam cos(pitch), o yüzden bölme temiz.)
+// raylib'in fov'u DİKEY olduğu için yatayda en-boy oranıyla çarpılıyor.
+func _ed_ray3(px, py, w, h, fov) {
+    float yr = _ed_yaw3 * DEG2RAD3;
+    float pr = _ed_pitch3 * DEG2RAD3;
+    float cp = cos(pr);
+    float fx = sin(yr) * cp;
+    float fy = sin(pr);
+    float fz = 0.0 - cos(yr) * cp;
+    float rx = cos(yr);
+    float rz = sin(yr);
+    float ux = 0.0 - sin(yr) * fy;
+    float uy = cp;
+    float uz = cos(yr) * fy;
+
+    float ndx = 2.0 * px / (w * 1.0) - 1.0;
+    float ndy = 1.0 - 2.0 * py / (h * 1.0);
+    float tf = tan(fov * 0.5 * DEG2RAD3);
+    float asp = (w * 1.0) / (h * 1.0);
+
+    float dx = fx + rx * (ndx * tf * asp) + ux * (ndy * tf);
+    float dy = fy + 0.0        * (ndx * tf * asp) + uy * (ndy * tf);
+    float dz = fz + rz * (ndx * tf * asp) + uz * (ndy * tf);
+    float L = sqrt(dx * dx + dy * dy + dz * dz);
+    if (L < 0.000001) { L = 1.0; }
+    _ed_rx3 = dx / L;
+    _ed_ry3 = dy / L;
+    _ed_rz3 = dz / L;
+}
+
+// Işın × yatay düzlem (y = pl). Işının ilerisinde değilse -1.
+func _ray_planey3(oy, dy, pl): float {
+    if (abs_f3(dy) < 0.000001) { return 0.0 - 1.0; }
+    float t = (pl - oy) / dy;
+    if (t < 0.0) { return 0.0 - 1.0; }
+    return t;
+}
+
+// Işına çarpan EN YAKIN varlığın handle'ı; yoksa -1. `_seg_aabb3` bir PARÇA
+// testi (t 0..1 aralığında) ve dönüşü biliyor — kamera-engel taramasının
+// kullandığı testin aynısı. Ayrı bir ışın-kutu testi yazmak, aynı geometriyi
+// iki yerde tutmak olurdu.
+func _ed_pick3(ox, oy, oz, dx, dy, dz, reach): int {
+    float sx = dx * reach;
+    float sy = dy * reach;
+    float sz = dz * reach;
+    float best = 2.0;
+    int bs = 0 - 1;
+    int i = 0;
+    while (i < length(_e3)) {
+        if (_e3[i].alive == 1) {
+            float t = _seg_aabb3(ox, oy, oz, sx, sy, sz, i);
+            if (t >= 0.0 && t < best) { best = t; bs = i; }
+        }
+        i = i + 1;
+    }
+    if (bs < 0) { return 0 - 1; }
+    return _mk_handle3(bs);
+}
+
+// ---- 2) KOMUTLAR -----------------------------------------------------------
+// Hepsi HANDLE alıyor ve tek başına anlamlı: klavye de, (Faz 4) tarayıcıdan
+// gelen JSON komutu da bunları çağıracak.
+
+func ed_select3d(id) { _ed_sel3e = id; }
+func ed_selected3d(): int { return _ed_sel3e; }
+func ed_deselect3d() { _ed_sel3e = 0 - 1; }
+func ed_mode3d(m) { _ed_mode3 = m; }
+func ed_mode_now3d(): int { return _ed_mode3; }
+func ed_grid3d(step) { _ed_grid3 = step * 1.0; }
+func ed_grid_now3d(): float { return _ed_grid3; }
+
+// Mutlak taşıma — ızgaraya oturtarak.
+func ed_move3d(id, x, y, z) {
+    if (_slot_of3(id) < 0) { return; }
+    set3pos(id, _ed_snap3(x, _ed_grid3), _ed_snap3(y, _ed_grid3), _ed_snap3(z, _ed_grid3));
+}
+// Göreli itme — ızgara adımı kadar ok tuşlarıyla ittirmek için.
+func ed_nudge3d(id, dx, dy, dz) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s];
+    ed_move3d(id, e.x + dx, e.y + dy, e.z + dz);
+}
+
+// Ölçek: TAM boyut, en az bir ızgara adımı (0 boyutlu varlık seçilemez hâle
+// gelirdi — ışın onu hiç kesmez).
+func ed_resize3d(id, sx, sy, sz) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    float lo = 0.1;
+    if (_ed_grid3 > 0.0) { lo = _ed_grid3; }
+    Ent3 e = _e3[s];
+    e.sx = sx; if (e.sx < lo) { e.sx = lo; }
+    e.sy = sy; if (e.sy < lo) { e.sy = lo; }
+    e.sz = sz; if (e.sz < lo) { e.sz = lo; }
+    _e3[s] = e;
+    _bp_sync3(s);
+}
+func ed_rotate3d(id, yaw) { set3yaw(id, yaw); }
+
+func ed_delete3d(id) {
+    if (_ed_sel3e == id) { _ed_sel3e = 0 - 1; }
+    clear_behaviors3d(id);
+    kill3d(id);
+}
+
+// Çoğalt: davranışlarıyla birlikte. Kopyayı bir ızgara adımı yana koyuyor ki
+// üst üste binip "hiçbir şey olmadı" gibi görünmesin.
+func ed_duplicate3d(id): int {
+    int s = _slot_of3(id);
+    if (s < 0) { return 0 - 1; }
+    Ent3 e = _e3[s];
+    float off = 1.0;
+    if (_ed_grid3 > 0.0) { off = _ed_grid3 * 2.0; }
+    int n = spawn3(e.x + off, e.y, e.z + off, e.sx, e.sy, e.sz, e.color, e.shape, e.tag);
+    set3yaw(n, e.yaw);
+    solid3d(n, e.solid);
+    if (e.hpmax > 0) { health3d(n, e.hpmax); }
+    // Davranışları da kopyala — çoğaltılan düşmanın kovalamaması sürpriz olurdu.
+    int i = 0;
+    int cnt = length(_bh3);
+    int k = 0;
+    while (k < cnt) {
+        Bh3 b = _bh3[k];
+        if (b.id == id) { _bh_add3(n, b.kind, b.tag, b.hnd, b.a, b.b, b.c, b.d, b.e); }
+        k = k + 1;
+    }
+    return n;
+}
+
+func ed_add3d(tag, shape, x, y, z): int {
+    int id = spawn3(_ed_snap3(x, _ed_grid3), _ed_snap3(y, _ed_grid3),
+                    _ed_snap3(z, _ed_grid3), 1.0, 1.0, 1.0,
+                    rgb(180, 184, 192), shape, tag);
+    _ed_sel3e = id;
+    return id;
+}
+
+// Zemine/araziye oturt: havada asılı ya da yere gömülü varlıkları elle
+// hizalamak sahne kurmanın en can sıkıcı kısmıydı.
+func ed_drop3d(id) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s];
+    set3pos(id, e.x, _floor_at3(e.x, e.z) + e.sy * 0.5, e.z);
+}
+
+// ---- 3) GİRDİ KABUĞU (masaüstü) --------------------------------------------
+// İnce bir katman: hepsi yukarıdaki komutlara iniyor. Asıl arayüz tarayıcıda
+// olacak (Faz 5) ve o da AYNI komutları çağıracak — bu yüzden buraya oynanış
+// mantığı sızmamalı.
+int K_TAB = 258; int K_DEL = 261; int K_G = 71; int K_F5 = 294;
+int K_1 = 49; int K_2 = 50; int K_3 = 51; int K_4 = 52;
+int K_LSHIFT = 340; int K_LCTRL = 341;
+
+// Kaydetme hedefi. Editörün asıl kapanışı bu: düzenle → F5 → aynı JSON
+// dosyası güncellenir, oyunu yeniden derlemeye gerek yok.
+str   _ed_path3 = "";
+float _ed_msg_t3 = 0.0;
+str   _ed_msg3   = "";
+
+int _ed_drag3 = 0;        // seçili varlık sürükleniyor mu
+float _ed_dgy3 = 0.0;     // sürükleme düzleminin yüksekliği (yakalandığı an)
+
+func editor3d(on) {
+    if (on) {
+        _ed_on3 = 1;
+        // Editöre girerken kamerayı oyunun baktığı yere yakın kur ki
+        // "neredeyim?" anı yaşanmasın.
+        int t = _slot_of3(_cam_target);
+        if (t >= 0) {
+            Ent3 e = _e3[t];
+            _ed_cx3 = e.x; _ed_cy3 = e.y + 14.0; _ed_cz3 = e.z + 26.0;
+            _ed_yaw3 = 0.0; _ed_pitch3 = 0.0 - 25.0;
+        }
+    } else { _ed_on3 = 0; _ed_drag3 = 0; }
+    // İmleç editörde serbest olmalı (bakış SAĞ tuşla) — kilitli imleçle
+    // varlığa tıklanamaz.
+    cursor_lock(false);
+}
+func editor_ac3d(ac) { editor3d(ac); }
+func editor_on3d(): bool { return _ed_on3 == 1; }
+
+func _s3_editor_look(dt) {
+    if (mouse_down(1)) {
+        _ed_yaw3 = _ed_yaw3 + mouse_dx() * _cam_sens3;
+        _ed_pitch3 = _ed_pitch3 - mouse_dy() * _cam_sens3;
+        if (_ed_pitch3 > 88.0) { _ed_pitch3 = 88.0; }
+        if (_ed_pitch3 < 0.0 - 88.0) { _ed_pitch3 = 0.0 - 88.0; }
+    }
+}
+
+func _s3_editor_fly(dt) {
+    float yr = _ed_yaw3 * DEG2RAD3;
+    float fx = sin(yr);
+    float fz = 0.0 - cos(yr);
+    float rx = cos(yr);
+    float rz = sin(yr);
+    float sp = _ed_fly3;
+    if (key_down(K_LSHIFT)) { sp = sp * 3.0; }
+    float mx = 0.0; float mz = 0.0; float my = 0.0;
+    if (key_down(K_W)) { mx = mx + fx; mz = mz + fz; }
+    if (key_down(K_S)) { mx = mx - fx; mz = mz - fz; }
+    if (key_down(K_D)) { mx = mx + rx; mz = mz + rz; }
+    if (key_down(K_A)) { mx = mx - rx; mz = mz - rz; }
+    if (key_down(K_E)) { my = my + 1.0; }
+    if (key_down(K_Q)) { my = my - 1.0; }
+    float L = sqrt(mx * mx + mz * mz);
+    if (L > 0.001) { mx = mx / L; mz = mz / L; }
+    _ed_cx3 = _ed_cx3 + mx * sp * dt;
+    _ed_cy3 = _ed_cy3 + my * sp * dt;
+    _ed_cz3 = _ed_cz3 + mz * sp * dt;
+    float wh = mouse_wheel();
+    if (abs_f3(wh) > 0.01) {
+        float pr = _ed_pitch3 * DEG2RAD3;
+        float cp = cos(pr);
+        _ed_cx3 = _ed_cx3 + sin(yr) * cp * wh * 2.0;
+        _ed_cy3 = _ed_cy3 + sin(pr) * wh * 2.0;
+        _ed_cz3 = _ed_cz3 - cos(yr) * cp * wh * 2.0;
+    }
+}
+
+// Ekran noktasından seç.
+func ed_pick_at3d(px, py): int {
+    _ed_ray3(px, py, screen_width(), screen_height(), _cam_fov);
+    return _ed_pick3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3, _ed_rz3, _ed_reach3);
+}
+
+func _s3_editor_mouse(dt) {
+    if (mouse_pressed(0)) {
+        int hit = ed_pick_at3d(mouse_x(), mouse_y());
+        if (hit >= 0) {
+            _ed_sel3e = hit;
+            // Sürükleme düzlemi varlığın KENDİ yüksekliğinde: zemin düzlemini
+            // kullanmak, havadaki bir platformu tutunca onu yere düşürürdü.
+            _ed_dgy3 = get3y(hit);
+            _ed_drag3 = 1;
+        } else { _ed_sel3e = 0 - 1; _ed_drag3 = 0; }
+    }
+    if (mouse_down(0) == false) { _ed_drag3 = 0; }
+    if (_ed_drag3 == 1 && _ed_mode3 == ED_MOVE && _slot_of3(_ed_sel3e) >= 0) {
+        _ed_ray3(mouse_x(), mouse_y(), screen_width(), screen_height(), _cam_fov);
+        float t = _ray_planey3(_ed_cy3, _ed_ry3, _ed_dgy3);
+        if (t > 0.0) {
+            ed_move3d(_ed_sel3e, _ed_cx3 + _ed_rx3 * t, _ed_dgy3, _ed_cz3 + _ed_rz3 * t);
+        }
+    }
+}
+
+// Editörün yazacağı dosya. `sahne_dosya3d` ile yüklenen oyun bunu kendi
+// yoluna kurarsa düzenleme tam bir döngü olur.
+func editor_file3d(path) { _ed_path3 = path; }
+func editor_dosya3d(yol) { editor_file3d(yol); }
+
+func editor_save3d(): bool {
+    if (_ed_path3 == "") {
+        _ed_msg3 = "kayit yolu yok (editor_dosya3d cagir)";
+        _ed_msg_t3 = 3.0;
+        return false;
+    }
+    bool ok = scene_save3d(_ed_path3);
+    if (ok) { _ed_msg3 = "kaydedildi: " + _ed_path3; }
+    else { _ed_msg3 = "KAYDEDILEMEDI: " + _ed_path3; }
+    _ed_msg_t3 = 3.0;
+    return ok;
+}
+func editor_kaydet3d(): bool { return editor_save3d(); }
+
+func _s3_editor_keys() {
+    if (key_pressed(K_F5)) { editor_save3d(); }
+    if (key_pressed(K_1)) { _ed_mode3 = ED_SELECT; }
+    if (key_pressed(K_2)) { _ed_mode3 = ED_MOVE; }
+    if (key_pressed(K_3)) { _ed_mode3 = ED_SCALE; }
+    if (key_pressed(K_4)) { _ed_mode3 = ED_ROTATE; }
+    if (key_pressed(K_G)) {
+        if (_ed_grid3 > 0.0) { _ed_grid3 = 0.0; } else { _ed_grid3 = 0.5; }
+    }
+    int sel = _ed_sel3e;
+    if (_slot_of3(sel) < 0) { return; }
+    float g = 0.5;
+    if (_ed_grid3 > 0.0) { g = _ed_grid3; }
+    if (key_pressed(K_DEL)) { ed_delete3d(sel); return; }
+    if (key_pressed(K_D) && key_down(K_LCTRL)) { ed_duplicate3d(sel); return; }
+    if (_ed_mode3 == ED_SCALE) {
+        Ent3 e = _e3[_slot_of3(sel)];
+        if (key_pressed(K_UP))    { ed_resize3d(sel, e.sx, e.sy + g, e.sz); }
+        if (key_pressed(K_DOWN))  { ed_resize3d(sel, e.sx, e.sy - g, e.sz); }
+        if (key_pressed(K_RIGHT)) { ed_resize3d(sel, e.sx + g, e.sy, e.sz + g); }
+        if (key_pressed(K_LEFT))  { ed_resize3d(sel, e.sx - g, e.sy, e.sz - g); }
+    }
+    if (_ed_mode3 == ED_ROTATE) {
+        if (key_pressed(K_LEFT))  { ed_rotate3d(sel, get3yaw(sel) - 15.0); }
+        if (key_pressed(K_RIGHT)) { ed_rotate3d(sel, get3yaw(sel) + 15.0); }
+    }
+    if (_ed_mode3 == ED_MOVE) {
+        if (key_pressed(K_UP))    { ed_nudge3d(sel, 0.0, g, 0.0); }
+        if (key_pressed(K_DOWN))  { ed_nudge3d(sel, 0.0, 0.0 - g, 0.0); }
+    }
+    if (key_pressed(K_SPACE)) { ed_drop3d(sel); }
+}
+
+func _s3_editor(dt) {
+    if (_ed_msg_t3 > 0.0) { _ed_msg_t3 = _ed_msg_t3 - dt; }
+    _s3_editor_look(dt);
+    _s3_editor_fly(dt);
+    _s3_editor_mouse(dt);
+    _s3_editor_keys();
+}
+
+// ---- 4) ÇİZİM --------------------------------------------------------------
+// Izgara ve seçim çerçevesi. Seçim TEL KAFES: dolu bir kutu varlığı örterdi.
+func _s3_editor_draw() {
+    if (_ed_grid3 > 0.0) { grid(60, _ed_grid3 * 4.0); }
+    else { grid(60, 2.0); }
+    int s = _slot_of3(_ed_sel3e);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s];
+    // Kenarı bir tık şişir ki cismin yüzeyiyle z-savaşı yapmasın.
+    cube_wires(e.x, e.y, e.z, e.sx + 0.06, e.sy + 0.06, e.sz + 0.06, rgb(255, 220, 60));
+    // Yere iz düşümü: yüksekliği okumak 3B'de gözle zor.
+    float fy = _floor_at3(e.x, e.z) + 0.02;
+    cube_wires(e.x, fy, e.z, e.sx, 0.02, e.sz, rgb(255, 160, 40));
+    line3d(e.x, fy, e.z, e.x, e.y, e.z, rgb(255, 160, 40));
+}
+
+func _s3_editor_hud() {
+    if (_ed_on3 == 0) { return; }
+    str md = "SEC";
+    if (_ed_mode3 == ED_MOVE)   { md = "TASI"; }
+    if (_ed_mode3 == ED_SCALE)  { md = "OLCEK"; }
+    if (_ed_mode3 == ED_ROTATE) { md = "DONDUR"; }
+    str gr = "kapali";
+    if (_ed_grid3 > 0.0) { gr = _sc_num3(_ed_grid3); }
+    text("EDITOR  [" + md + "]  izgara: " + gr, 12, 12, 20, rgb(255, 220, 60));
+    text("TAB oyun  |  1 sec 2 tasi 3 olcek 4 dondur  |  G izgara  |  BOSLUK zemine otur",
+         12, 38, 15, rgb(200, 208, 220));
+    text("SAG TUS bak  |  WASD/QE uc  |  SOL TUS sec+surukle  |  DEL sil  |  CTRL+D cogalt  |  F5 kaydet",
+         12, 58, 15, rgb(200, 208, 220));
+    if (_ed_msg_t3 > 0.0) {
+        text(_ed_msg3, 12, 110, 17, rgb(140, 240, 160));
+    }
+    int s = _slot_of3(_ed_sel3e);
+    if (s < 0) {
+        text("secili yok", 12, 84, 16, rgb(160, 168, 180));
+        return;
+    }
+    Ent3 e = _e3[s];
+    text("secili: " + _sc_tag_nm3(e.tag) + "/" + _sc_shape_nm3(e.shape) +
+         "  konum " + _sc_num3(e.x) + ", " + _sc_num3(e.y) + ", " + _sc_num3(e.z) +
+         "  boyut " + _sc_num3(e.sx) + ", " + _sc_num3(e.sy) + ", " + _sc_num3(e.sz) +
+         "  yaw " + _sc_num3(e.yaw), 12, 84, 16, rgb(255, 236, 160));
 }

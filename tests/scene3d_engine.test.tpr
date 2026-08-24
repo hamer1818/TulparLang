@@ -3601,6 +3601,264 @@ func t_hit_hook_skin_is_not_a_radius() {
     assert_eq_int(_hh_n, 0);
 }
 
+// ===========================================================================
+//  EDİTÖR KİPİ — seçim ışını, ızgara, komutlar
+// ===========================================================================
+// Işın testlerinin beklentisi kodun formülünden DEĞİL, fov'un TANIMINDAN
+// geliyor: ekranın dikey kenarından geçen ışın, ileri yönle tam fov/2 açı
+// yapar. Aynı formülü tekrarlayan bir test, aynı yanlışı onaylardı — bu
+// oturumda mermi yönünde tam olarak bu olmuştu.
+
+func _ed_setcam(x, y, z, yaw, pitch) {
+    _ed_cx3 = x; _ed_cy3 = y; _ed_cz3 = z;
+    _ed_yaw3 = yaw; _ed_pitch3 = pitch;
+}
+
+// Ekranın MERKEZİNDEN geçen ışın, kameranın ileri yönü olmalı.
+// yaw 0 → (0,0,-1) motorun her yerinde geçerli evrim.
+func t_ed_center_ray_is_forward() {
+    scene3d_reset();
+    _ed_setcam(0.0, 0.0, 0.0, 0.0, 0.0);
+    _ed_ray3(400.0, 300.0, 800, 600, 45.0);
+    assert(abs_f3(_ed_rx3) < 0.001, "x sifir: " + toString(_ed_rx3));
+    assert(abs_f3(_ed_ry3) < 0.001, "y sifir: " + toString(_ed_ry3));
+    assert(abs_f3(_ed_rz3 + 1.0) < 0.001, "z -1: " + toString(_ed_rz3));
+    // 90 derece dönünce ileri +X olmalı.
+    _ed_setcam(0.0, 0.0, 0.0, 90.0, 0.0);
+    _ed_ray3(400.0, 300.0, 800, 600, 45.0);
+    assert(abs_f3(_ed_rx3 - 1.0) < 0.001, "yaw 90 -> +X: " + toString(_ed_rx3));
+    assert(abs_f3(_ed_rz3) < 0.001, "yaw 90 -> z 0: " + toString(_ed_rz3));
+}
+
+// Işın BİRİM olmalı — değilse mesafe hesapları sessizce ölçekli çıkar.
+func t_ed_ray_is_unit() {
+    scene3d_reset();
+    _ed_setcam(0.0, 0.0, 0.0, 33.0, 17.0);
+    _ed_ray3(123.0, 456.0, 800, 600, 60.0);
+    float L = sqrt(_ed_rx3 * _ed_rx3 + _ed_ry3 * _ed_ry3 + _ed_rz3 * _ed_rz3);
+    assert(abs_f3(L - 1.0) < 0.0001, "birim olmali: " + toString(L));
+}
+
+// fov TANIMI: ekranın üst kenarının ortasından geçen ışın ile ileri yön
+// arasındaki açı tam fov/2. Nokta çarpımı cos(fov/2) vermeli.
+func t_ed_vertical_edge_matches_fov() {
+    scene3d_reset();
+    _ed_setcam(0.0, 0.0, 0.0, 0.0, 0.0);
+    float fov = 45.0;
+    _ed_ray3(400.0, 0.0, 800, 600, fov);
+    // ileri = (0,0,-1) → nokta çarpımı = -rz
+    float dot = 0.0 - _ed_rz3;
+    float want = cos(fov * 0.5 * DEG2RAD3);
+    assert(abs_f3(dot - want) < 0.001,
+           "dikey kenar fov/2 olmali: " + toString(dot) + " != " + toString(want));
+    assert(_ed_ry3 > 0.0, "ust kenar YUKARI bakmali");
+}
+
+// Yatayda açı atan(tan(fov/2) * en-boy) olmalı — en-boy oranı unutulursa
+// geniş ekranda seçim imlecin yanına düşer.
+func t_ed_horizontal_edge_uses_aspect() {
+    scene3d_reset();
+    _ed_setcam(0.0, 0.0, 0.0, 0.0, 0.0);
+    float fov = 45.0;
+    _ed_ray3(800.0, 300.0, 800, 600, fov);   // sağ kenarın ortası
+    float dot = 0.0 - _ed_rz3;
+    float want = cos(atan(tan(fov * 0.5 * DEG2RAD3) * (800.0 / 600.0)));
+    assert(abs_f3(dot - want) < 0.001,
+           "yatay kenar en-boy kullanmali: " + toString(dot) + " != " + toString(want));
+    assert(_ed_rx3 > 0.0, "sag kenar SAGA bakmali");
+}
+
+// Sol ve sağ kenar simetrik olmalı.
+func t_ed_ray_is_symmetric() {
+    scene3d_reset();
+    _ed_setcam(0.0, 0.0, 0.0, 0.0, 0.0);
+    _ed_ray3(700.0, 300.0, 800, 600, 45.0);
+    float ax = _ed_rx3; float az = _ed_rz3;
+    _ed_ray3(100.0, 300.0, 800, 600, 45.0);
+    assert(abs_f3(ax + _ed_rx3) < 0.001, "x simetrik olmali");
+    assert(abs_f3(az - _ed_rz3) < 0.001, "z ayni olmali");
+}
+
+// Seçim: önündeki kutu seçilmeli, arkasındaki seçilmemeli, yakın olan kazanmalı.
+func t_ed_pick_nearest_in_front() {
+    scene3d_reset();
+    no_ground3d();
+    int uzak = spawn3(0.0, 0.0, 0.0 - 20.0, 2.0, 2.0, 2.0, RED, SHAPE_CUBE, TAG_PROP);
+    int yakin = spawn3(0.0, 0.0, 0.0 - 10.0, 2.0, 2.0, 2.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    int arka = spawn3(0.0, 0.0, 10.0, 2.0, 2.0, 2.0, GRAY, SHAPE_CUBE, TAG_PROP);
+    _ed_setcam(0.0, 0.0, 0.0, 0.0, 0.0);
+    _ed_ray3(400.0, 300.0, 800, 600, 45.0);
+    int hit = _ed_pick3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3, _ed_rz3, 400.0);
+    assert_eq_int(hit, yakin);
+    // Arkaya bakınca arkadaki seçilmeli — ışın YÖNÜ gerçekten kullanılıyor mu?
+    _ed_setcam(0.0, 0.0, 0.0, 180.0, 0.0);
+    _ed_ray3(400.0, 300.0, 800, 600, 45.0);
+    int hit2 = _ed_pick3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3, _ed_rz3, 400.0);
+    assert_eq_int(hit2, arka);
+}
+
+// Boşluğa tıklamak -1 vermeli.
+func t_ed_pick_misses_empty_space() {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 0.0, 0.0 - 10.0, 2.0, 2.0, 2.0, RED, SHAPE_CUBE, TAG_PROP);
+    _ed_setcam(0.0, 0.0, 0.0, 0.0, 0.0);
+    _ed_ray3(10.0, 10.0, 800, 600, 45.0);   // köşe — kutu merkezde
+    int hit = _ed_pick3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3, _ed_rz3, 400.0);
+    assert_eq_int(hit, 0 - 1);
+}
+
+// Merkez dışı seçim: kutuyu ışının GEOMETRİK olarak geçmesi gereken ekran
+// noktasından seçmeli. Beklenen ndc, fov tanımından türetiliyor.
+func t_ed_pick_off_center() {
+    scene3d_reset();
+    no_ground3d();
+    int kutu = spawn3(5.0, 0.0, 0.0 - 10.0, 1.5, 1.5, 1.5, GOLD, SHAPE_CUBE, TAG_PROP);
+    _ed_setcam(0.0, 0.0, 0.0, 0.0, 0.0);
+    float fov = 45.0;
+    float tf = tan(fov * 0.5 * DEG2RAD3);
+    float asp = 800.0 / 600.0;
+    // yatay açının tanjantı = 5/10; ndc = tan / (tf*asp)
+    float ndc = (5.0 / 10.0) / (tf * asp);
+    float px = (ndc + 1.0) * 0.5 * 800.0;
+    _ed_ray3(px, 300.0, 800, 600, fov);
+    int hit = _ed_pick3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3, _ed_rz3, 400.0);
+    assert_eq_int(hit, kutu);
+}
+
+// Dönük kutu: seçim ışını yaw'ı bilmeli (kamera-engel taraması için zaten
+// düzeltilmişti; seçim aynı testi kullanıyor, o yüzden bedava geliyor).
+func t_ed_pick_respects_yaw() {
+    scene3d_reset();
+    no_ground3d();
+    int d = spawn3(0.0, 0.0, 0.0 - 10.0, 12.0, 3.0, 0.6, GRAY, SHAPE_CUBE, TAG_WALL);
+    set3yaw(d, 90.0);   // artık Z boyunca uzun, X'te ince
+    _ed_setcam(9.0, 0.0, 0.0 - 10.0, 0.0 - 90.0, 0.0);   // yandan bak (+X'ten -X'e)
+    _ed_ray3(400.0, 300.0, 800, 600, 45.0);
+    int hit = _ed_pick3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3, _ed_rz3, 400.0);
+    assert_eq_int(hit, d);
+}
+
+// Izgara: negatifte de doğru yuvarlamalı (toInt sıfıra doğru kırpıyor).
+func t_ed_snap_rounds_both_ways() {
+    assert(abs_f3(_ed_snap3(1.2, 0.5) - 1.0) < 0.0001, "1.2 -> 1.0");
+    assert(abs_f3(_ed_snap3(1.3, 0.5) - 1.5) < 0.0001, "1.3 -> 1.5");
+    assert(abs_f3(_ed_snap3(0.0 - 1.2, 0.5) + 1.0) < 0.0001, "-1.2 -> -1.0");
+    assert(abs_f3(_ed_snap3(0.0 - 1.3, 0.5) + 1.5) < 0.0001, "-1.3 -> -1.5");
+    // Kapalı ızgara değeri AYNEN bırakmalı.
+    assert(abs_f3(_ed_snap3(3.14159, 0.0) - 3.14159) < 0.0001, "kapali izgara");
+}
+
+// Işın × yatay düzlem: sürükleme buna dayanıyor.
+func t_ed_ray_plane() {
+    // (0,10,0)'dan aşağı bakan ışın y=2 düzlemini 8 birimde kesmeli.
+    float t = _ray_planey3(10.0, 0.0 - 1.0, 2.0);
+    assert(abs_f3(t - 8.0) < 0.0001, "t 8 olmali: " + toString(t));
+    // Düzlem ARKADA ise kesişim yok.
+    assert(_ray_planey3(10.0, 1.0, 2.0) < 0.0, "arkadaki duzlem kesilmemeli");
+    // Yatay ışın düzleme paralel — kesişim yok.
+    assert(_ray_planey3(10.0, 0.0, 2.0) < 0.0, "paralel isin kesmemeli");
+}
+
+// ---- Komutlar --------------------------------------------------------------
+
+func t_ed_move_snaps_to_grid() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    ed_grid3d(0.5);
+    ed_move3d(a, 1.3, 2.2, 0.0 - 3.4);
+    assert(abs_f3(get3x(a) - 1.5) < 0.001, "x izgaraya: " + toString(get3x(a)));
+    assert(abs_f3(get3y(a) - 2.0) < 0.001, "y izgaraya: " + toString(get3y(a)));
+    assert(abs_f3(get3z(a) + 3.5) < 0.001, "z izgaraya: " + toString(get3z(a)));
+    ed_grid3d(0.0);
+    ed_move3d(a, 1.3, 2.2, 0.0 - 3.4);
+    assert(abs_f3(get3x(a) - 1.3) < 0.001, "izgara kapali: aynen");
+}
+
+// Ölçek 0'ın altına inmemeli: sıfır boyutlu varlığı ışın hiç kesmez, yani bir
+// daha SEÇİLEMEZ — geri alınamaz bir kaza olurdu.
+func t_ed_resize_has_floor() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    ed_grid3d(0.5);
+    ed_resize3d(a, 0.0 - 5.0, 0.0, 0.01);
+    Ent3 e = _e3[_slot_of3(a)];
+    assert(e.sx >= 0.5, "sx taban: " + toString(e.sx));
+    assert(e.sy >= 0.5, "sy taban: " + toString(e.sy));
+    assert(e.sz >= 0.5, "sz taban: " + toString(e.sz));
+}
+
+// Çoğaltma davranışları da kopyalamalı — çoğaltılan düşmanın kovalamaması
+// sessiz bir sürpriz olurdu.
+func t_ed_duplicate_copies_behaviors() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(2.0, 1.0, 3.0, 1.4, 1.6, 1.4, RED, SHAPE_CUBE, TAG_ENEMY);
+    set3yaw(a, 30.0);
+    health3d(a, 40);
+    chase_behavior3d(a, TAG_PLAYER, 6.0, 25.0);
+    int n = ed_duplicate3d(a);
+    assert(n != a, "yeni varlik olmali");
+    Ent3 e = _e3[_slot_of3(n)];
+    assert_eq_int(e.tag, TAG_ENEMY);
+    assert(abs_f3(e.yaw - 30.0) < 0.001, "yaw kopyalanmali");
+    assert_eq_int(hp3d(n), 40);
+    assert_eq_int(behavior_count3d(), 2);
+    // Kopyanın davranışı KENDİSİNE ait olmalı, aslına değil.
+    int i = 0; int mine = 0;
+    while (i < length(_bh3)) {
+        if (_bh3[i].id == n && _bh3[i].kind == BH_CHASE) { mine = 1; }
+        i = i + 1;
+    }
+    assert_eq_int(mine, 1);
+    // Ve üst üste binmemeli.
+    assert(abs_f3(get3x(n) - 2.0) > 0.01, "kopya kaydirilmali");
+}
+
+// Silme seçimi de temizlemeli ve davranışları bırakmamalı.
+func t_ed_delete_clears_selection() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    spin_behavior3d(a, 20.0);
+    ed_select3d(a);
+    assert_eq_int(ed_selected3d(), a);
+    ed_delete3d(a);
+    assert_eq_int(ed_selected3d(), 0 - 1);
+    assert_eq_int(behavior_count3d(), 0);
+    assert(alive3(a) == false, "silinmis olmali");
+}
+
+// Zemine oturt: arazi varken de yüzeye gelmeli (elle hizalamak sahne kurmanın
+// en can sıkıcı kısmıydı).
+func t_ed_drop_sits_on_surface() {
+    scene3d_reset();
+    zemin3(0.0);
+    int a = spawn3(3.0, 40.0, 4.0, 1.0, 2.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    ed_grid3d(0.0);
+    ed_drop3d(a);
+    assert(abs_f3(get3y(a) - 1.0) < 0.001, "duz zemin: " + toString(get3y(a)));
+    // Arazi: yüzey yüksekliği + yarı boy.
+    terrain3d(33, 60.0, 10.0, 60.0, 4.0, 3);
+    int b = spawn3(7.0, 40.0, 0.0 - 5.0, 1.0, 2.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    ed_drop3d(b);
+    float want = zemin_yukseklik3d(7.0, 0.0 - 5.0) + 1.0;
+    assert(abs_f3(get3y(b) - want) < 0.001,
+           "arazi yuzeyi: " + toString(get3y(b)) + " != " + toString(want));
+}
+
+// Editör seçimi sahne durumu — reset'te temizlenmeli, yoksa yeni sahnede
+// bayat bir handle seçili kalırdı.
+func t_ed_selection_cleared_by_reset() {
+    scene3d_reset();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    ed_select3d(a);
+    scene3d_reset();
+    assert_eq_int(ed_selected3d(), 0 - 1);
+}
+
 test("kati-kati temas kancasi atiyor", "t_hit_hook_fires_between_solids");
 test("temas payi yaricap degil", "t_hit_hook_skin_is_not_a_radius");
 test("topla kurali", "t_rule_collect");
@@ -3612,4 +3870,75 @@ test("ayni cift icin coklu kural", "t_rule_multiple_on_same_pair");
 test("cift topla kurali skoru bir kez sayiyor", "t_rule_double_collect_scores_once");
 test("kurallar reset ile temizleniyor", "t_rules_cleared_by_reset");
 test("gonderilen sahne dosyasi oynuyor", "t_data_game_file_plays");
+// Editörün ASIL döngüsü: yükle → düzenle → kaydet → yeniden yükle. Parçaların
+// tek tek çalışması yetmez; bu testin sınadığı şey düzenlemenin diske gidip
+// geri gelmesi. Editörün varlık sebebi bu.
+func t_ed_edit_save_reload_roundtrip() {
+    int n0 = scene_file3d("examples/scenes/toplayici.scene.json");
+    assert(n0 > 0, "kaynak sahne yuklenmeli");
+    ed_grid3d(0.5);
+
+    // 1) Yeni bir duvar ekle, taşı, ölçekle, döndür.
+    int w = ed_add3d(TAG_WALL, SHAPE_CUBE, 7.3, 2.2, 0.0 - 4.4);
+    ed_resize3d(w, 6.0, 3.0, 1.0);
+    ed_rotate3d(w, 25.0);
+    // 2) Var olan bir varlığı sil.
+    int kule = bul3d("kule");
+    assert(kule >= 0, "kule bulunmali");
+    ed_delete3d(kule);
+
+    editor_dosya3d("/tmp/tulpar_scene_edit_test.json");
+    assert(editor_kaydet3d(), "kaydedilmeli");
+
+    int n1 = scene_file3d("/tmp/tulpar_scene_edit_test.json");
+    // Bir eklendi, bir silindi → sayı aynı.
+    assert_eq_int(n1, n0);
+    assert_eq_int(bul3d("kule"), 0 - 1);
+
+    // Eklenen duvar ızgaraya oturmuş ve ölçüleriyle geri gelmiş olmalı.
+    int found = 0;
+    int i = 0;
+    while (i < length(_e3)) {
+        Ent3 e = _e3[i];
+        if (e.alive == 1 && e.tag == TAG_WALL && abs_f3(e.yaw - 25.0) < 0.001) {
+            assert(abs_f3(e.x - 7.5) < 0.001, "x izgaraya oturmali: " + toString(e.x));
+            assert(abs_f3(e.z + 4.5) < 0.001, "z izgaraya oturmali: " + toString(e.z));
+            assert(abs_f3(e.sx - 6.0) < 0.001, "sx");
+            assert(abs_f3(e.sy - 3.0) < 0.001, "sy");
+            found = 1;
+        }
+        i = i + 1;
+    }
+    assert_eq_int(found, 1);
+    // Kurallar ve davranışlar da gidip gelmeli — editör oyunu bozmamalı.
+    assert_eq_int(rule_count3d(), 5);
+    assert(behavior_count3d() > 0, "davranislar korunmali");
+}
+
+// Kayıt yolu kurulmadan kaydetmek SESSİZCE başarılı görünmemeli.
+func t_ed_save_without_path_fails() {
+    scene3d_reset();
+    editor_dosya3d("");
+    assert(editor_kaydet3d() == false, "yolsuz kayit basarisiz olmali");
+}
+
+test("merkez isini ileri yon", "t_ed_center_ray_is_forward");
+test("isin birim", "t_ed_ray_is_unit");
+test("dikey kenar fov/2", "t_ed_vertical_edge_matches_fov");
+test("yatay kenar en-boy kullaniyor", "t_ed_horizontal_edge_uses_aspect");
+test("isin simetrik", "t_ed_ray_is_symmetric");
+test("en yakin onundeki seciliyor", "t_ed_pick_nearest_in_front");
+test("bosluga tiklama secmiyor", "t_ed_pick_misses_empty_space");
+test("merkez disi secim", "t_ed_pick_off_center");
+test("secim donmeyi biliyor", "t_ed_pick_respects_yaw");
+test("izgara iki yone de yuvarliyor", "t_ed_snap_rounds_both_ways");
+test("isin duzlem kesisimi", "t_ed_ray_plane");
+test("tasima izgaraya oturuyor", "t_ed_move_snaps_to_grid");
+test("olcegin tabani var", "t_ed_resize_has_floor");
+test("cogaltma davranislari kopyaliyor", "t_ed_duplicate_copies_behaviors");
+test("silme secimi temizliyor", "t_ed_delete_clears_selection");
+test("zemine oturt yuzeye geliyor", "t_ed_drop_sits_on_surface");
+test("editor secimi reset ile temizleniyor", "t_ed_selection_cleared_by_reset");
+test("duzenle-kaydet-yukle gidis-donusu", "t_ed_edit_save_reload_roundtrip");
+test("yolsuz kayit basarisiz", "t_ed_save_without_path_fails");
 test_summary();
