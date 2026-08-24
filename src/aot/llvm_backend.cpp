@@ -2263,7 +2263,11 @@ void register_function(LLVMBackend *backend, const char *name,
   // dropped function null-derefs and crashes codegen (segfault, no diagnostic).
   // A program that links a big stdlib module (e.g. wings) plus its own handlers
   // can legitimately approach this — fail loudly rather than miscompile.
-  const int kMaxFunctions = 1024;
+  // Sınır DİZİDEN türetiliyor: ayrı bir sabit tutmak, biri büyütülüp diğeri
+  // unutulduğunda ya erken hata ya da taşma demekti (dizi 1024'ten 4096'ya
+  // çıkarıldığında tam bu risk vardı).
+  const int kMaxFunctions =
+      (int)(sizeof(backend->functions) / sizeof(backend->functions[0]));
   if (backend->function_count >= kMaxFunctions) {
     fprintf(stderr,
             "[AOT] Fatal: function table overflow (> %d functions). "

@@ -42,6 +42,35 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — tam editör arayüzü (Unity/Unreal düzeni)
+
+Araç çubuğu (Oynat, kip seçimi, ızgara, geri/ileri, kaydet), hiyerarşi paneli
+(canlı varlık listesi, kaydırma, hızlı ekleme düğmeleri) ve inspector (etiket,
+şekil, konum/boyut/yaw, renk, katılık, can, davranış listesi ve ekle/sil).
+
+Arayüz "anlık kip" (immediate mode): kalıcı widget nesnesi yok, her kare
+yeniden çiziliyor ve tıklama aynı çağrıda dönüyor. Saklanan tek şey odak ve
+sürükleme gibi JESTLER — onlar zaten kareler arası. Widget kimliği çağıran
+tarafından veriliyor; otomatik sayaç, liste uzunluğu değişince kimlikleri
+kaydırır ve yanlış alan odakta kalırdı.
+
+Sayı alanları Unity'deki gibi çift işlevli: SÜRÜKLE değeri tarar, TIKLA yazmaya
+geçer. İkisi tek alanda olmazsa ya ince ayar ya hızlı tarama kaybolur.
+
+Fare panellerin üstündeyken görüntü penceresi seçim ışınını atlıyor, ve bir
+sayı alanına yazılırken klavye kısayolları kapanıyor ("3" yazmak kamerayı
+uçurmamalı, "d" varlığı çoğaltmamalı).
+
+Yeni tame bağlamaları: `tm_text_width` (MeasureText) ve `tm_char_pressed`
+(GetCharPressed) — panel yerleşimi ve metin girişi için.
+
+### Fixed — AOT fonksiyon tablosu 1024'te doluyordu
+
+Editör katmanı eklenince tek bir program sınırı aştı ve derleme "function
+table overflow" ile durdu. Tablo 4096'ya çıkarıldı. Sınır artık DİZİDEN
+türetiliyor: ayrı bir `kMaxFunctions` sabiti tutmak, biri büyütülüp diğeri
+unutulduğunda ya erken hata ya sessiz taşma demekti.
+
 ### Added — editör kipi: sahneyi gözle kurmak
 
 `TAB` ile açılıyor ve oyunu DONDURUYOR (editör bir oyun kipi değil; fizik

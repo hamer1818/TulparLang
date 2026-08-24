@@ -141,7 +141,11 @@ typedef struct {
   Scope *current_scope;
   FuncStackNode *func_stack;
 
-  FunctionEntry functions[1024];
+  // 1024 idi ve gerçekten doldu: scene3d'nin editör katmanı (paneller +
+  // widget'lar) eklenince tek bir programın fonksiyon sayısı sınırı aştı.
+  // Sabit dizi, her girdi birkaç işaretçi — 4096'ya çıkarmak birkaç yüz KB'lik
+  // derleyici-içi bir maliyet, yani kullanıcı ikilisinde iz bırakmıyor.
+  FunctionEntry functions[4096];
   int function_count;
 
   StructTypeEntry struct_types[64];

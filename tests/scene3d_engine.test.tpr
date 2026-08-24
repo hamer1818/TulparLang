@@ -4089,6 +4089,58 @@ func t_ed_undo_on_empty_is_safe() {
     assert_eq_int(alive_count3d(), n);
 }
 
+// ---- Arayüz katmanının penceresiz sınanabilir parçaları --------------------
+
+// Metin alanı ASCII tablosundan okuyor (`ord` var ama `chr` yok). Tek karakter
+// kayması, yazarken yanlış harf üretirdi ve gözle fark edilmesi zor olurdu.
+// Beklenti BAĞIMSIZ kaynaktan: `ord` builtin'i ile gidiş-dönüş.
+func t_gui_ascii_table_roundtrips() {
+    int c = 32;
+    while (c <= 126) {
+        str ch = _g_chr3(c);
+        assert(length(ch) == 1, "tek karakter olmali, kod " + toString(c));
+        assert_eq_int(ord(ch, 0), c);
+        c = c + 1;
+    }
+    // Aralık dışı sessizce boş dönmeli (kontrol karakteri metne sızmasın).
+    assert(_g_chr3(31) == "", "31 bos");
+    assert(_g_chr3(127) == "", "127 bos");
+    assert(_g_chr3(0) == "", "0 bos");
+}
+
+// Sayı yazmak için gereken karakterler tabloda DOĞRU yerde olmalı.
+func t_gui_ascii_covers_number_input() {
+    assert(_g_chr3(48) == "0", "0");
+    assert(_g_chr3(57) == "9", "9");
+    assert(_g_chr3(45) == "-", "eksi");
+    assert(_g_chr3(46) == ".", "nokta");
+}
+
+// Etiket/şekil döngüsel düğmeleri BÜTÜN değerleri gezip başa dönmeli —
+// eksik bir dal, o etiketi editörden erişilemez yapardı.
+func t_gui_tag_cycle_covers_all() {
+    int t = TAG_PLAYER;
+    int seen_item = 0; int seen_wall = 0; int seen_enemy = 0; int seen_prop = 0;
+    int i = 0;
+    while (i < 5) {
+        t = _ed_next_tag3(t);
+        if (t == TAG_ITEM)  { seen_item = 1; }
+        if (t == TAG_WALL)  { seen_wall = 1; }
+        if (t == TAG_ENEMY) { seen_enemy = 1; }
+        if (t == TAG_PROP)  { seen_prop = 1; }
+        i = i + 1;
+    }
+    assert_eq_int(seen_item + seen_wall + seen_enemy + seen_prop, 4);
+    assert_eq_int(t, TAG_PLAYER);   // 5 adimda basa donmeli
+}
+
+func t_gui_shape_cycle_covers_all() {
+    int sh = SHAPE_CUBE;
+    sh = _ed_next_shape3(sh); assert_eq_int(sh, SHAPE_SPHERE);
+    sh = _ed_next_shape3(sh); assert_eq_int(sh, SHAPE_CYL);
+    sh = _ed_next_shape3(sh); assert_eq_int(sh, SHAPE_CUBE);
+}
+
 test("merkez isini ileri yon", "t_ed_center_ray_is_forward");
 test("isin birim", "t_ed_ray_is_unit");
 test("dikey kenar fov/2", "t_ed_vertical_edge_matches_fov");
@@ -4117,4 +4169,8 @@ test("geri al sil/ekle kapsiyor", "t_ed_undo_covers_delete_and_add");
 test("yeni duzenleme yinele dalini kesiyor", "t_ed_new_edit_clears_redo");
 test("geri al yigini sinirli", "t_ed_undo_stack_is_bounded");
 test("bos yiginda geri al guvenli", "t_ed_undo_on_empty_is_safe");
+test("ascii tablosu gidis-donusu", "t_gui_ascii_table_roundtrips");
+test("ascii sayi girisi kapsiyor", "t_gui_ascii_covers_number_input");
+test("etiket dongusu tumunu geziyor", "t_gui_tag_cycle_covers_all");
+test("sekil dongusu tumunu geziyor", "t_gui_shape_cycle_covers_all");
 test_summary();

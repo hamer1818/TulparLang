@@ -48,6 +48,20 @@ Mimari kararlar ve gerekçeleri:
       geri yazma. Işın matematiği saf ve fov TANIMINDAN sınanıyor. Detay:
       CHANGELOG.
 
+- [x] **Tam editör arayüzü.** ✅ 2026-08-24 — araç çubuğu (Oynat / kip / ızgara /
+      geri-ileri / kaydet), hiyerarşi paneli (canlı varlık listesi + ekleme
+      düğmeleri), inspector (etiket, şekil, konum/boyut/yaw, renk, katılık,
+      can, davranış listesi + ekle/sil, çoğalt/sil). Anlık-kip widget seti;
+      sayı alanları hem sürüklenip hem yazılabiliyor. Detay: CHANGELOG.
+
+- [ ] **Editörde kalan Unity/Unreal parçaları.** Eksen tutamakları (X/Y/Z
+      okları), çoklu seçim, prefab/şablon, dünya ayarları paneli (gökyüzü, sis,
+      arazi, su, gündüz-gece), kural düzenleyici, varlık adı düzenleme,
+      konsol/kayıt paneli.
+
+- [ ] **`chr` builtin'i yok** (`ord` var — asimetri). Editörün metin alanı
+      şimdilik Tulpar tarafında ASCII tablosundan okuyor.
+
 - [ ] **Faz 4 — Köprü.** `tm_bridge_send/recv` (2 bağlama): JS ↔ wasm arasında
       JSON komut/olay kuyruğu. Masaüstünde stdin/stdout'a düşecek — böylece
       VS Code eklentisi de yerel bir önizleme penceresi sürebilir.
