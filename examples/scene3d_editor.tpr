@@ -1,0 +1,45 @@
+// Tulpar Sahne Editörü — BAĞIMSIZ UYGULAMA.
+//
+//   ./tulpar examples/scene3d_editor.tpr
+//   ./tulpar build examples/scene3d_editor.tpr editor && ./editor
+//
+// Editör bir oyunun içinden açılmıyor: onu çalıştırırsın, sahneni kurarsın,
+// "OYNAT"a basınca oyun editörün SAHNE GÖRÜNÜMÜ panelinde koşar, "DUR" seni
+// düzenlemeye geri getirir. Unity/Unreal/Godot'un çalışma biçimi budur ve
+// çalışan bir oyunun üstüne kaplama açmaktan farkı şudur: düzenleme birincil
+// iştir, oynatma onun bir aracı.
+//
+// Yerleşim:
+//   menü şeridi            Yeni / Aç / Kaydet / Geri / İleri
+//   araç çubuğu            araçlar solda, OYNAT-DUR ORTADA, ızgara
+//   hiyerarşi | SAHNE GÖRÜNÜMÜ | özellikler
+//   konsol                 motorun tanılama kaydı
+//   durum çubuğu
+//
+// Sahne dosyası ÇALIŞMA DİZİNİNE göre çözülüyor; depo kökünden çalıştır.
+
+import "scene3d";
+
+str SAHNE = "examples/scenes/toplayici.scene.json";
+
+// Dosya yoksa boş bir dünya ile açılıyor — editör her hâlükârda açılmalı,
+// eksik dosya yüzünden siyah ekranda kalmamalı.
+str BOS = "{\"v\":1,\"world\":{\"title\":\"Yeni Sahne\"," +
+          "\"sky\":{\"top\":[38,52,92],\"bottom\":[176,198,224]}," +
+          "\"ground\":0,\"gravity\":26," +
+          "\"camera\":{\"mode\":\"orbit\",\"dist\":16,\"height\":11}},\"entities\":[]}";
+
+func kur() {
+    editor_dosya3d(SAHNE);
+    if (sahne_dosya3d(SAHNE) == 0) {
+        sahne_yukle3d(BOS);
+        kayit3d("bos sahne ile acildi: " + SAHNE + " bulunamadi");
+    } else {
+        kayit3d("sahne acildi: " + SAHNE);
+    }
+}
+
+sahne3d(1440, 820, "Tulpar Sahne Editoru");
+editor_uygulamasi3d(true);
+kurulumda3(kur);
+oyna3d();

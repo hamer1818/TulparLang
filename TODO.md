@@ -54,6 +54,15 @@ Mimari kararlar ve gerekçeleri:
       can, davranış listesi + ekle/sil, çoğalt/sil). Anlık-kip widget seti;
       sayı alanları hem sürüklenip hem yazılabiliyor. Detay: CHANGELOG.
 
+- [x] **Editör bağımsız uygulama oldu.** ✅ 2026-08-24 — `./editor`; menü şeridi,
+      araç çubuğu (OYNAT–DUR ortada), hiyerarşi | sahne görünümü | özellikler,
+      konsol, durum çubuğu. Sahne görünümü render texture. TAB kaplaması
+      kaldırıldı. Detay: CHANGELOG.
+
+- [ ] **`tulpar editor <sahne.json>` alt komutu.** Şimdilik editör bir örnek
+      program (`examples/scene3d_editor.tpr`) ve sahne yolu kaynağa gömülü;
+      CLI'dan dosya açmak gerekiyor.
+
 - [ ] **Editörde kalan Unity/Unreal parçaları.** Çoklu seçim, prefab/şablon,
       dünya ayarları paneli (gökyüzü, sis, arazi, su, gündüz-gece), kural
       düzenleyici, varlık adı düzenleme, konsol/kayıt paneli. (Eksen

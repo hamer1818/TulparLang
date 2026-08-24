@@ -1447,6 +1447,63 @@ static int tame_ensure_audio(void) {
   return tame_audio_ready;
 }
 
+// ---- Render texture (sahne görünümü paneli) --------------------------------
+// Editörün 3B görünümü TAM EKRAN değil, panellerin arasındaki dikdörtgen —
+// Unity/Godot düzeni bu. Sahneyi doğrudan çizip kırpmak (scissor) yetmez:
+// kamera izdüşümü hâlâ pencerenin en-boy oranını kullanır, yani görüntü ezik
+// ve merkezi kaymış çıkar. Render texture'a çizmek en-boy oranını da
+// düzeltiyor, çünkü raylib izdüşümü etkin hedefin boyutundan türetiyor.
+#define TAME_MAX_RT 4
+static RenderTexture2D tame_rts[TAME_MAX_RT];
+static int tame_rt_used[TAME_MAX_RT];
+
+int tame_impl_rt_new(int w, int h) {
+  if (!tame_window_ready) return -1;
+  if (w < 1) w = 1;
+  if (h < 1) h = 1;
+  for (int i = 0; i < TAME_MAX_RT; i++) {
+    if (!tame_rt_used[i]) {
+      tame_rts[i] = LoadRenderTexture(w, h);
+      if (tame_rts[i].texture.id == 0) return -1;
+      SetTextureFilter(tame_rts[i].texture, TEXTURE_FILTER_POINT);
+      tame_rt_used[i] = 1;
+      return i;
+    }
+  }
+  return -1;
+}
+
+void tame_impl_rt_free(int h) {
+  if (h < 0 || h >= TAME_MAX_RT || !tame_rt_used[h]) return;
+  UnloadRenderTexture(tame_rts[h]);
+  tame_rt_used[h] = 0;
+}
+
+int tame_impl_rt_w(int h) {
+  if (h < 0 || h >= TAME_MAX_RT || !tame_rt_used[h]) return 0;
+  return tame_rts[h].texture.width;
+}
+int tame_impl_rt_h(int h) {
+  if (h < 0 || h >= TAME_MAX_RT || !tame_rt_used[h]) return 0;
+  return tame_rts[h].texture.height;
+}
+
+void tame_impl_rt_begin(int h) {
+  if (h < 0 || h >= TAME_MAX_RT || !tame_rt_used[h]) return;
+  BeginTextureMode(tame_rts[h]);
+}
+void tame_impl_rt_end(void) { EndTextureMode(); }
+
+// Render texture'lar OpenGL'de baş aşağı; kaynak dikdörtgenin yüksekliği
+// negatif verilerek çevriliyor (raylib'in standart yolu).
+void tame_impl_rt_draw(int h, int x, int y) {
+  if (h < 0 || h >= TAME_MAX_RT || !tame_rt_used[h]) return;
+  Texture2D t = tame_rts[h].texture;
+  Rectangle src = {0.0f, 0.0f, (float)t.width, -(float)t.height};
+  Vector2 pos = {(float)x, (float)y};
+  DrawTextureRec(t, src, pos, WHITE);
+}
+
 int tame_impl_load_texture(const char *path) {
   if (!tame_window_ready) {
     fprintf(stderr, "[tame] load_texture window()'dan once cagrilamaz. / "

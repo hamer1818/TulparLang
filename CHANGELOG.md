@@ -42,6 +42,30 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Changed — editör artık BAĞIMSIZ UYGULAMA (TAB kaplaması kaldırıldı)
+
+Editör, çalışan oyunun üstüne TAB ile açılan bir kaplamaydı ve bu sektör
+standardı değildi: Unity/Unreal/Godot'ta editör UYGULAMADIR, oyun onun
+içindeki bir panelde koşar. Geçiş de garip duruyordu. TAB yolu kaldırıldı.
+
+`examples/scene3d_editor.tpr` (derlenmiş hâli `./editor`) editörü açıyor:
+menü şeridi (Yeni/Aç/Kaydet/Geri/İleri), araç çubuğu (araçlar solda,
+**OYNAT–DUR ortada** — Unity'nin imzası), solda hiyerarşi, ortada SAHNE
+GÖRÜNÜMÜ, sağda özellikler, altta konsol ve durum çubuğu.
+
+Sahne görünümü artık bir **render texture**: 3B sahne ekrana değil dokuya
+çiziliyor ve panele yerleştiriliyor. Doğrudan çizip kırpmak (scissor)
+yetmezdi — kamera izdüşümü pencerenin en-boy oranını kullanır, görüntü ezik
+ve merkezi kaymış çıkardı. Dokuya çizince raylib izdüşümü hedefin
+boyutundan türetiyor. Seçim ışını da görünüm dikdörtgenine göre kuruluyor.
+
+OYNAT ekrandaki düzenlenmiş sahneyi yazarlık durumu olarak sabitleyip
+KOPYASINI koşturuyor; DUR kopyayı atıyor. Oyunun kendi HUD'ı yalnız
+oynarken ve sahne görünümünün içinde çiziliyor.
+
+Yeni tame bağlamaları (5 nokta, denetim temiz): `tm_rt_new`, `tm_rt_free`,
+`tm_rt_w`, `tm_rt_h`, `tm_rt_begin`, `tm_rt_end`, `tm_rt_draw`.
+
 ### Fixed — editör arayüzü baştan yazıldı: yazı tipi ve taşan yerleşim
 
 Kullanıcı ekranda "yazılar üst üste gelmiş gibi" gördü ve haklıydı. İki ayrı

@@ -4024,6 +4024,9 @@ func play3d() {
     // ÖNCE yakala. Elle yazılmış bir oyunun "yazılmış hâli" tam olarak budur —
     // sahne dosyası olmasa da Oynat/Dur ve geri alma çalışsın diye gerekiyor.
     _ed_capture3();
+    // Editör uygulaması: kamerayı sahnenin üstüne kur (editor3d bunu hedefe
+    // göre yapıyor). Kurulum bittikten SONRA çağrılıyor, yoksa hedef yok.
+    if (_ed_app3 == 1) { editor3d(true); }
 
     while (running() && _s3_quit == 0) {
         float dt = frame_time();
@@ -4078,10 +4081,11 @@ func play3d() {
         // Editör: TAB ile geçilir ve oyunu DONDURUR. Editör bir oyun kipi
         // değil — fizik, davranışlar ve kurallar çalışırsa düzenlediğin şey
         // ayağının altından kayar.
-        // TAB odaklı bir sayı alanı varken de çalışmalı; `editor3d` odağı
-        // temizliyor. Aksi hâlde odak kalıcı takılıyor ve editörün BÜTÜN
-        // klavyesi (uçuş, kip, geri-al, kaydet) sessizce ölüyordu.
-        if (key_pressed(K_TAB)) { editor3d(_ed_on3 == 0); }
+        // TAB ile oyundan editöre geçiş KALDIRILDI. Editör artık ayrı bir
+        // UYGULAMA (bkz. `editor_app3d`) — Unity/Unreal/Godot'ta da böyle:
+        // editörü açarsın, oyun onun içindeki panelde koşar. Çalışan oyunun
+        // üstüne kaplama açmak sektör standardı değil ve geçiş garip
+        // duruyordu.
         int frozen = 0;
         if (_s3_ui != UI_NONE) { frozen = 1; }
         if (_ed_on3 == 1) { frozen = 1; }
@@ -4119,6 +4123,15 @@ func play3d() {
 
         frame_begin();
         clear(rgb(16, 18, 26));
+        // Editör kabuğu açıkken sahne EKRANA değil bir RENDER TEXTURE'a
+        // çiziliyor ve sonra görünüm paneline yerleştiriliyor. Doğrudan çizip
+        // kırpmak yetmezdi: kamera izdüşümü pencerenin en-boy oranını kullanır,
+        // görüntü ezik ve merkezi kaymış çıkardı.
+        int _rt_on = 0;
+        if (_ed_chrome3_on()) {
+            _ed_rt_sync3();
+            if (_ed_rt3 >= 0) { _rt_on = 1; render_to(_ed_rt3); clear(rgb(16, 18, 26)); }
+        }
         _s3_camera(dt);
         space_begin();
             _s3_render();
@@ -4132,49 +4145,61 @@ func play3d() {
         space_end();
 
         // Oyunun kendi 2B katmanı — motorun HUD'ından ÖNCE, yani skor/can barı
-        // oyunun çizdiklerinin üstünde kalır.
-        if (_has_hud3 == 1) { call(_hud3_fn); }
+        // oyunun çizdiklerinin üstünde kalır. Kabuk açıkken HUD sahne
+        // GÖRÜNÜMÜNÜN içine çiziliyor (Unity'nin Game view'ı gibi).
+        // Oyunun 2B katmanı (kendi HUD'ı + motorun skor/can barı + örtüler)
+        // yalnız DÜZENLEME KİPİ KAPALIYKEN çiziliyor ve sahne görünümünün
+        // İÇİNDE kalıyor — Unity'nin Game view'ı gibi. Editördeyken oyun
+        // arayüzünü göstermek panellerin üstüne binerdi.
+        if (_ed_on3 == 0) {
+            text(_win_title, 12, 10, 20, RAYWHITE);
+            text("Skor: " + toString(_score3), 12, 34, 18, GOLD);
+            if (length(_lvlN) > 0) {
+                text("Bolum: " + toString(_cur_lvl3), 130, 34, 18, SKYBLUE);
+            }
+            // Can barı: kamera hedefinin (pratikte oyuncunun) canı varsa çizilir.
+            // hpmax health3d ile kuruluyor; can sistemi kullanmayan oyunda 0 kalır
+            // ve bar hiç görünmez — eski sahnelerin HUD'ı değişmez.
+            int hud_s = _slot_of3(_cam_target);
+            if (hud_s >= 0) {
+                Ent3 he = _e3[hud_s];
+                if (he.hpmax > 0) {
+                    float frac = he.hp * 1.0 / (he.hpmax * 1.0);
+                    if (frac < 0.0) { frac = 0.0; }
+                    rect(12.0, 58.0, 160.0, 14.0, rgba(0, 0, 0, 120));
+                    rect(12.0, 58.0, 160.0 * frac, 14.0, rgb(90, 220, 110));
+                    rect_lines(12.0, 58.0, 160.0, 14.0, RAYWHITE);
+                    text(toString(he.hp) + "/" + toString(he.hpmax), 180, 57, 16, RAYWHITE);
+                }
+            }
+
+            // Dokunmatik ipucu (yalnız parmak ekrandayken): sol joystick + sağ ped.
+            if (_tj_active == 1) {
+                circle(toInt(_tj_cx), toInt(_tj_cy), 44.0, rgba(120, 140, 180, 60));
+                circle(toInt(_tj_cx + _t_dx * 30.0), toInt(_tj_cy + _t_dz * 30.0), 20.0, rgba(200, 220, 255, 150));
+                circle(toInt(_win_w) - 70, toInt(_win_h) - 70, 40.0, rgba(255, 210, 90, 80));
+                if (_cam_mode3 == CAM_FIXED) {
+                    text("ZIP", toInt(_win_w) - 92, toInt(_win_h) - 80, 18, RAYWHITE);
+                } else {
+                    // Bu modda sağ yarı bakış pedi: sürükle = bak, dokun = zıpla.
+                    text("BAK", toInt(_win_w) - 92, toInt(_win_h) - 80, 18, RAYWHITE);
+                }
+            }
+            // Örtüler HUD'ın üstünde: karartma oyunun kendi çizimini de kapatmalı.
+            if (_s3_ui == UI_TITLE)      { _s3_title_draw(); }
+            else if (_s3_ui == UI_PAUSE) { _s3_pause_draw(); }
+            else if (_game_over3 == 1)   { _s3_over_draw(); }
+            // Tanılama HER ŞEYİN ÜSTÜNDE: menü örtüsü açıkken de okunabilmeli.
+            _s3_overlay3();
+        }
+
+        // Sahne dokusunu panele yerleştir, sonra editör kabuğunu ekrana çiz.
+        if (_rt_on == 1) {
+            render_to_screen();
+            render_draw(_ed_rt3, _ed_view_x3(), _ed_view_y3());
+        }
         _s3_editor_hud();
 
-        text(_win_title, 12, 10, 20, RAYWHITE);
-        text("Skor: " + toString(_score3), 12, 34, 18, GOLD);
-        if (length(_lvlN) > 0) {
-            text("Bolum: " + toString(_cur_lvl3), 130, 34, 18, SKYBLUE);
-        }
-        // Can barı: kamera hedefinin (pratikte oyuncunun) canı varsa çizilir.
-        // hpmax health3d ile kuruluyor; can sistemi kullanmayan oyunda 0 kalır
-        // ve bar hiç görünmez — eski sahnelerin HUD'ı değişmez.
-        int hud_s = _slot_of3(_cam_target);
-        if (hud_s >= 0) {
-            Ent3 he = _e3[hud_s];
-            if (he.hpmax > 0) {
-                float frac = he.hp * 1.0 / (he.hpmax * 1.0);
-                if (frac < 0.0) { frac = 0.0; }
-                rect(12.0, 58.0, 160.0, 14.0, rgba(0, 0, 0, 120));
-                rect(12.0, 58.0, 160.0 * frac, 14.0, rgb(90, 220, 110));
-                rect_lines(12.0, 58.0, 160.0, 14.0, RAYWHITE);
-                text(toString(he.hp) + "/" + toString(he.hpmax), 180, 57, 16, RAYWHITE);
-            }
-        }
-
-        // Dokunmatik ipucu (yalnız parmak ekrandayken): sol joystick + sağ ped.
-        if (_tj_active == 1) {
-            circle(toInt(_tj_cx), toInt(_tj_cy), 44.0, rgba(120, 140, 180, 60));
-            circle(toInt(_tj_cx + _t_dx * 30.0), toInt(_tj_cy + _t_dz * 30.0), 20.0, rgba(200, 220, 255, 150));
-            circle(toInt(_win_w) - 70, toInt(_win_h) - 70, 40.0, rgba(255, 210, 90, 80));
-            if (_cam_mode3 == CAM_FIXED) {
-                text("ZIP", toInt(_win_w) - 92, toInt(_win_h) - 80, 18, RAYWHITE);
-            } else {
-                // Bu modda sağ yarı bakış pedi: sürükle = bak, dokun = zıpla.
-                text("BAK", toInt(_win_w) - 92, toInt(_win_h) - 80, 18, RAYWHITE);
-            }
-        }
-        // Örtüler HUD'ın üstünde: karartma oyunun kendi çizimini de kapatmalı.
-        if (_s3_ui == UI_TITLE)      { _s3_title_draw(); }
-        else if (_s3_ui == UI_PAUSE) { _s3_pause_draw(); }
-        else if (_game_over3 == 1)   { _s3_over_draw(); }
-        // Tanılama HER ŞEYİN ÜSTÜNDE: menü örtüsü açıkken de okunabilmeli.
-        _s3_overlay3();
         frame_end();
 
         // Girdi çizimden SONRA okunuyor: düğmeler bu karede zaten çizilmiş
@@ -5701,8 +5726,12 @@ func _s3_editor_fly(dt) {
 }
 
 // Ekran noktasından seç.
+// Seçim ışını GÖRÜNÜM dikdörtgenine göre kuruluyor: sahne artık pencerenin
+// tamamı değil, panellerin arasındaki alan. Pencere koordinatı kullanmak
+// imleçle seçimi kaydırırdı.
 func ed_pick_at3d(px, py): int {
-    _ed_ray3(px, py, screen_width(), screen_height(), _cam_fov);
+    _ed_ray3(px - _ed_view_x3(), py - _ed_view_y3(),
+             _ed_view_w3(), _ed_view_h3(), _cam_fov);
     return _ed_pick3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3, _ed_rz3, _ed_reach3);
 }
 
@@ -5716,7 +5745,8 @@ func _s3_editor_mouse(dt) {
         // 1) ÖNCE tutamaklar: okun üstündeki tıklama arkadaki varlığı
         // seçmemeli, yoksa oka basmak seçimi değiştirirdi.
         if (s >= 0 && (_ed_mode3 == ED_MOVE || _ed_mode3 == ED_SCALE)) {
-            _ed_ray3(mouse_x(), mouse_y(), screen_width(), screen_height(), _cam_fov);
+            _ed_ray3(mouse_x() - _ed_view_x3(), mouse_y() - _ed_view_y3(),
+                     _ed_view_w3(), _ed_view_h3(), _cam_fov);
             Ent3 ge = _e3[s];
             int ax = _gz_pick3(_ed_cx3, _ed_cy3, _ed_cz3,
                                _ed_rx3, _ed_ry3, _ed_rz3, ge.x, ge.y, ge.z);
@@ -5759,7 +5789,8 @@ func _s3_editor_mouse(dt) {
     // Eksen sürüklemesi. Referans doğru YAKALANDIĞI andaki konumda sabit —
     // varlıkla birlikte kaysaydı hareket kendini besleyip kaçardı.
     if (_gz_axis3 >= 0 && s >= 0) {
-        _ed_ray3(mouse_x(), mouse_y(), screen_width(), screen_height(), _cam_fov);
+        _ed_ray3(mouse_x() - _ed_view_x3(), mouse_y() - _ed_view_y3(),
+                 _ed_view_w3(), _ed_view_h3(), _cam_fov);
         float ax = _gz_ax_x3(_gz_axis3);
         float ay = _gz_ax_y3(_gz_axis3);
         float az = _gz_ax_z3(_gz_axis3);
@@ -5779,7 +5810,8 @@ func _s3_editor_mouse(dt) {
     }
 
     if (_ed_drag3 == 1 && _ed_mode3 == ED_MOVE && _slot_of3(_ed_sel3e) >= 0) {
-        _ed_ray3(mouse_x(), mouse_y(), screen_width(), screen_height(), _cam_fov);
+        _ed_ray3(mouse_x() - _ed_view_x3(), mouse_y() - _ed_view_y3(),
+                 _ed_view_w3(), _ed_view_h3(), _cam_fov);
         float t = _ray_planey3(_ed_cy3, _ed_ry3, _ed_dgy3);
         if (t > 0.0) {
             ed_move3d(_ed_sel3e, _ed_cx3 + _ed_rx3 * t + _ed_ox3, _ed_dgy3,
@@ -5886,26 +5918,8 @@ func _s3_editor_draw() {
 }
 
 func _s3_editor_hud() {
-    if (_ed_on3 == 0) { return; }
-    _g_begin();
-    _ed_toolbar3();
-    // OYNAT'a basıldıysa kalan panelleri bu karede çizme.
-    if (_ed_on3 == 0) { return; }
-    _ed_hierarchy3();
-    _ed_inspector3();
-
-    // Kısayol satırı GÖRÜNTÜ PENCERESİNE sığdırılıyor. İlk sürümde tek uzun
-    // bir metindi ve 960 piksellik pencerede 434 piksel taşıyordu; şimdi
-    // panellerin arasında kalan genişliğe göre kesiliyor.
-    int H = screen_height();
-    int vx = _ed_view_x3() + _ED_PAD3;
-    int vw = _ed_view_w3() - _ED_PAD3 * 2;
-    _g_txt3("TAB oyun | sag tus bak | WASD/QE uc | sol tus sec+surukle | " +
-            "CTRL+Z geri | DEL sil | CTRL+D cogalt | BOSLUK zemine otur | F5 kaydet",
-            vx, H - 14, vw, _G_DIM3());
-    if (_ed_msg_t3 > 0.0) {
-        _g_txt3(_ed_msg3, vx, H - 28, vw, rgb(140, 240, 160));
-    }
+    if (_ed_chrome3_on() == false) { return; }
+    _ed_chrome3();
 }
 
 
@@ -6127,47 +6141,148 @@ func _g_item(id, x, y, w, h, label, sel): bool {
 // ===========================================================================
 // Görüntü penceresi panellerin ARASINDA kalan dikdörtgen. Bütün yerleşim
 // bundan türüyor; hiçbir panel içeriği mutlak sayıyla konumlanmıyor.
-func _ed_view_x3(): int { return _ED_HIER_W3; }
-// Ekran genişliği PARAMETRE olarak da alınabiliyor: yerleşim aritmetiği
-// böylece penceresiz sınanabiliyor (kullanıcının gördüğü taşmalar tam olarak
-// bu aritmetikten geliyordu).
+// ===========================================================================
+// EDİTÖR UYGULAMASI — sektör standardı yerleşim (Faz 13)
+// ===========================================================================
+// İlk sürümde editör, çalışan oyunun ÜSTÜNE TAB ile açılan bir kaplamaydı ve
+// bu yanlıştı: Unity/Unreal/Godot'ta editör UYGULAMADIR, oyun onun içindeki
+// bir panelde koşar. "Oynat" bir kip değişimi değil, sahnenin bir kopyasını
+// aynı pencerede çalıştırmak.
+//
+// Yerleşim:
+//   menü şeridi
+//   araç çubuğu           (Oynat/Dur ORTADA — Unity'nin imzası)
+//   hiyerarşi | SAHNE GÖRÜNÜMÜ | özellikler
+//   konsol
+//   durum çubuğu
+//
+// Sahne görünümü bir RENDER TEXTURE. Doğrudan çizip kırpmak yetmezdi: kamera
+// izdüşümü pencerenin en-boy oranını kullanır, görüntü ezik ve merkezi kaymış
+// çıkardı. Dokuya çizince raylib izdüşümü hedefin boyutundan türetiyor.
+int _ed_app3     = 0;    // editör uygulaması yerleşimi açık mı
+int _ed_playing3 = 0;    // sahne görünümünde oyun koşuyor mu
+int _ed_rt3      = 0 - 1;
+int _ed_rtw3     = 0;
+int _ed_rth3     = 0;
+
+int _ED_MENU_H3 = 20;
+int _ED_CONS_H3 = 96;
+int _ED_STAT_H3 = 18;
+
+func editor_app3d(on) {
+    if (on) { _ed_app3 = 1; _ed_on3 = 1; } else { _ed_app3 = 0; }
+}
+func editor_uygulamasi3d(ac) { editor_app3d(ac); }
+func editor_app_on3d(): bool { return _ed_app3 == 1; }
+func ed_playing3d(): bool { return _ed_playing3 == 1; }
+
+// ---- Yerleşim dikdörtgenleri ----------------------------------------------
+// Hepsi pencere boyutundan türüyor; parametreli ikizleri penceresiz sınanıyor.
+func _ed_view_x_at3(W): int { return _ED_HIER_W3; }
+func _ed_view_y_at3(H): int { return _ED_MENU_H3 + _ED_TOOL_H3; }
 func _ed_view_w_at3(W): int {
     int w = W - _ED_HIER_W3 - _ED_INSP_W3;
     if (w < 80) { w = 80; }
     return w;
 }
-func _ed_view_w3(): int { return _ed_view_w_at3(screen_width()); }
-
-// Inspector davranış satırının alan genişliği (panel genişliğinden türüyor).
-func _ed_bhw3(pw, namew, xw): int {
-    return toInt((pw - _ED_PAD3 * 2 - namew - xw - 12) / 2);
+func _ed_view_h_at3(H): int {
+    int h = H - _ED_MENU_H3 - _ED_TOOL_H3 - _ED_CONS_H3 - _ED_STAT_H3;
+    if (h < 80) { h = 80; }
+    return h;
 }
-// Hiyerarşi ekleme düğmelerinin genişliği.
-func _ed_addw3(pw, gap): int {
-    return toInt((pw - _ED_PAD3 * 2 - gap * 3) / 4);
+// Editör kabuğu açık mı? Açıksa sahne görünümü panellerin arasındaki
+// dikdörtgen; kapalıysa oyun tüm pencereyi kaplıyor. Tek bir yerde
+// kararlaştırılıyor ki çizim, seçim ışını ve fare denetimi ayrışmasın.
+func _ed_chrome3_on(): bool { return _ed_on3 == 1 || _ed_app3 == 1; }
+
+func _ed_view_x3(): int {
+    if (_ed_chrome3_on() == false) { return 0; }
+    return _ed_view_x_at3(screen_width());
+}
+func _ed_view_y3(): int {
+    if (_ed_chrome3_on() == false) { return 0; }
+    return _ed_view_y_at3(screen_height());
+}
+func _ed_view_w3(): int {
+    if (_ed_chrome3_on() == false) { return screen_width(); }
+    return _ed_view_w_at3(screen_width());
+}
+func _ed_view_h3(): int {
+    if (_ed_chrome3_on() == false) { return screen_height(); }
+    return _ed_view_h_at3(screen_height());
 }
 
-func _ed_over_ui3(): bool {
-    int W = screen_width();
+// Fare sahne görünümünün İÇİNDE mi? Panel denetimi artık "hangi panelin
+// üstünde" değil, "görünümün dışında mı" — pencere büyüdükçe panel sayısı
+// artabilir, tersini saymak daha az kırılgan.
+func _ed_in_view3(): bool {
     int mx = mouse_x();
     int my = mouse_y();
-    if (my < _ED_TOOL_H3) { return true; }
-    if (mx < _ED_HIER_W3) { return true; }
-    if (mx > W - _ED_INSP_W3) { return true; }
-    return false;
+    int vx = _ed_view_x3();
+    int vy = _ed_view_y3();
+    return mx >= vx && mx < vx + _ed_view_w3() && my >= vy && my < vy + _ed_view_h3();
+}
+func _ed_over_ui3(): bool { return _ed_in_view3() == false; }
+
+// Render texture görünüm boyutunu takip ediyor; pencere yeniden boyutlanırsa
+// yeniden kuruluyor (bayat boyutla çizmek görüntüyü esnetirdi).
+func _ed_rt_sync3() {
+    int w = _ed_view_w3();
+    int h = _ed_view_h3();
+    if (_ed_rt3 >= 0 && _ed_rtw3 == w && _ed_rth3 == h) { return; }
+    if (_ed_rt3 >= 0) { render_hedef_sil(_ed_rt3); }
+    _ed_rt3 = render_hedef(w, h);
+    _ed_rtw3 = w;
+    _ed_rth3 = h;
 }
 
+// ---- Menü şeridi -----------------------------------------------------------
+// Açılır menü YOK: tek kullanımlık bir menü makinesi yazmak, aynı işi yapan
+// düğmelerden çok daha fazla kod ve durum demekti. Şerit doğrudan eylem.
+func _ed_menubar3() {
+    int W = screen_width();
+    rect(0, 0, W, _ED_MENU_H3, rgb(30, 33, 40));
+    line(0, _ED_MENU_H3, W, _ED_MENU_H3, _G_LINE3());
+    int x = _ED_PAD3;
+    int bh = _ED_MENU_H3 - 4;
+    int w0 = _g_btnw3("Yeni");
+    if (_g_button(9600, x, 2, w0, bh, "Yeni")) {
+        ed_mark3d();
+        scene_load3d("{\"v\":1,\"world\":{\"ground\":0},\"entities\":[]}");
+    }
+    x = x + w0 + 2;
+    int w1 = _g_btnw3("Ac");
+    if (_g_button(9601, x, 2, w1, bh, "Ac")) {
+        if (_ed_path3 != "") { scene_file3d(_ed_path3); _ed_capture3(); }
+    }
+    x = x + w1 + 2;
+    int w2 = _g_btnw3("Kaydet");
+    if (_g_button(9602, x, 2, w2, bh, "Kaydet")) { editor_save3d(); }
+    x = x + w2 + 12;
+    int w3 = _g_btnw3("Geri");
+    if (_g_button(9603, x, 2, w3, bh, "Geri")) { ed_undo3d(); }
+    x = x + w3 + 2;
+    int w4 = _g_btnw3("Ileri");
+    if (_g_button(9604, x, 2, w4, bh, "Ileri")) { ed_redo3d(); }
+    // Sağda dosya adı.
+    str f = _ed_path3;
+    if (f == "") { f = "(kaydedilmemis sahne)"; }
+    int fw = text_width(f, _F3);
+    if (W - _ED_PAD3 - fw > x + w4 + 12) {
+        _g_txtr3(f, W - _ED_PAD3, 5, _G_DIM3());
+    }
+}
+
+// ---- Araç çubuğu: Oynat ORTADA --------------------------------------------
 func _ed_toolbar3() {
     int W = screen_width();
-    rect(0, 0, W, _ED_TOOL_H3, _G_HEAD3());
-    line(0, _ED_TOOL_H3, W, _ED_TOOL_H3, _G_LINE3());
-    int by = toInt((_ED_TOOL_H3 - _ED_FLD3) / 2);
+    int ty = _ED_MENU_H3;
+    rect(0, ty, W, _ED_TOOL_H3, _G_HEAD3());
+    line(0, ty + _ED_TOOL_H3, W, ty + _ED_TOOL_H3, _G_LINE3());
+    int by = ty + toInt((_ED_TOOL_H3 - _ED_FLD3) / 2);
+
+    // Sol: dönüşüm araçları.
     int x = _ED_PAD3;
-
-    int w0 = _g_btnw3("OYNAT");
-    if (_g_button(9001, x, by, w0, _ED_FLD3, "OYNAT")) { editor3d(false); return; }
-    x = x + w0 + 10;
-
     int w1 = _g_btnw3("SEC");
     if (_g_tog(9002, x, by, w1, _ED_FLD3, "SEC", _ed_mode3 == ED_SELECT)) { _ed_mode3 = ED_SELECT; }
     x = x + w1 + 2;
@@ -6180,44 +6295,123 @@ func _ed_toolbar3() {
     int w4 = _g_btnw3("DONDUR");
     if (_g_tog(9005, x, by, w4, _ED_FLD3, "DONDUR", _ed_mode3 == ED_ROTATE)) { _ed_mode3 = ED_ROTATE; }
     x = x + w4 + 10;
-
     str gl = "IZGARA " + _sc_num3(_ed_grid3);
     if (_ed_grid3 <= 0.0) { gl = "IZGARA yok"; }
     int w5 = _g_btnw3(gl);
     if (_g_tog(9006, x, by, w5, _ED_FLD3, gl, _ed_grid3 > 0.0)) {
         if (_ed_grid3 > 0.0) { _ed_grid3 = 0.0; } else { _ed_grid3 = 0.5; }
     }
-    x = x + w5 + 10;
 
-    int w6 = _g_btnw3("GERI");
-    if (_g_button(9007, x, by, w6, _ED_FLD3, "GERI")) {
-        if (ed_undo3d()) { _ed_msg3 = "geri alindi"; _ed_msg_t3 = 1.2; }
+    // ORTA: oynatma denetimleri. Unity'nin imzası bu — kullanıcı gözünü
+    // ekranın ortasına atınca "oynat"ı bulur.
+    int pw = _g_btnw3("OYNAT") + 16;
+    int sw = _g_btnw3("DUR") + 16;
+    int cx = toInt(W / 2) - toInt((pw + sw + 4) / 2);
+    str pl = "OYNAT";
+    if (_ed_playing3 == 1) { pl = "OYNUYOR"; }
+    if (_g_tog(9610, cx, by, pw, _ED_FLD3, pl, _ed_playing3 == 1)) {
+        if (_ed_playing3 == 0) { ed_play3d(); }
     }
-    x = x + w6 + 2;
-    int w7 = _g_btnw3("ILERI");
-    if (_g_button(9008, x, by, w7, _ED_FLD3, "ILERI")) {
-        if (ed_redo3d()) { _ed_msg3 = "yinelendi"; _ed_msg_t3 = 1.2; }
-    }
-    x = x + w7 + 10;
-    int w8 = _g_btnw3("KAYDET");
-    if (_g_button(9009, x, by, w8, _ED_FLD3, "KAYDET")) { editor_save3d(); }
-    x = x + w8;
+    if (_g_button(9611, cx + pw + 4, by, sw, _ED_FLD3, "DUR")) { ed_stop3d(); }
+}
 
-    // Durum metni yalnız SIĞIYORSA çiziliyor. İlk sürümde koşulsuz sağa
-    // hizalıydı ve 960 piksellik pencerede KAYDET düğmesinin üstüne biniyordu.
-    str st = toString(yasayan_sayi3d()) + " varlik  " +
-             toString(davranis_sayisi3d()) + " davranis  " +
-             toString(kural_sayisi3d()) + " kural";
-    int stw = text_width(st, _F3);
-    if (W - _ED_PAD3 - stw > x + 12) {
-        _g_txtr3(st, W - _ED_PAD3, by + 3, _G_DIM3());
+// ---- Oynat / Dur -----------------------------------------------------------
+// Unity modeli: Oynat, ekrandaki düzenlenmiş sahneyi yazarlık durumu olarak
+// sabitler ve KOPYASINI koşturur. Dur kopyayı atar. Oynarken yapılan hiçbir
+// değişiklik kaydedilmez.
+func ed_play3d() {
+    if (_ed_playing3 == 1) { return; }
+    _ed_capture3();
+    _ed_playing3 = 1;
+    _ed_on3 = 0;
+    _g_focus3 = 0;
+}
+func ed_stop3d() {
+    if (_ed_playing3 == 0) { return; }
+    _ed_apply_json3(_sc_authored3);
+    _ed_playing3 = 0;
+    _ed_on3 = 1;
+    _g_focus3 = 0;
+}
+func oynat3d() { ed_play3d(); }
+func dur3d() { ed_stop3d(); }
+
+// ---- Konsol ----------------------------------------------------------------
+// Motorun tanılama halka tamponunu gösteriyor. Ayrı bir kayıt sistemi
+// yazılmadı — `log3d`/`uyari3d`/`hata3d` zaten oraya yazıyor.
+func _ed_console3() {
+    int W = screen_width();
+    int H = screen_height();
+    int cy = H - _ED_CONS_H3 - _ED_STAT_H3;
+    _g_panel(0, cy, W, _ED_CONS_H3, "KONSOL");
+    int rows = toInt((_ED_CONS_H3 - 20) / 12);
+    int n = length(_lg_txt);
+    int start = n - rows;
+    if (start < 0) { start = 0; }
+    int i = start;
+    int r = 0;
+    while (i < n) {
+        int c = _G_TXT3();
+        if (_lg_sev[i] == LOG_WARN) { c = rgb(255, 200, 90); }
+        if (_lg_sev[i] == LOG_ERR)  { c = rgb(255, 120, 110); }
+        _g_txt3(_lg_txt[i], _ED_PAD3, cy + 18 + r * 12, W - _ED_PAD3 * 2, c);
+        i = i + 1;
+        r = r + 1;
     }
 }
 
-func _ed_hierarchy3() {
+// ---- Durum çubuğu ----------------------------------------------------------
+func _ed_statusbar3() {
+    int W = screen_width();
     int H = screen_height();
-    int py = _ED_TOOL_H3;
-    int ph = H - _ED_TOOL_H3;
+    int sy = H - _ED_STAT_H3;
+    rect(0, sy, W, _ED_STAT_H3, rgb(30, 33, 40));
+    line(0, sy, W, sy, _G_LINE3());
+    str md = "SEC";
+    if (_ed_mode3 == ED_MOVE)   { md = "TASI"; }
+    if (_ed_mode3 == ED_SCALE)  { md = "OLCEK"; }
+    if (_ed_mode3 == ED_ROTATE) { md = "DONDUR"; }
+    str left = md + "   " + toString(yasayan_sayi3d()) + " varlik   " +
+               toString(davranis_sayisi3d()) + " davranis   " +
+               toString(kural_sayisi3d()) + " kural";
+    if (_ed_playing3 == 1) { left = "OYNUYOR   " + left; }
+    _g_txt3(left, _ED_PAD3, sy + 4, toInt(W / 2), _G_DIM3());
+    str right = "sag tus bak | WASD/QE uc | CTRL+Z geri | F5 kaydet";
+    if (_ed_msg_t3 > 0.0) { right = _ed_msg3; }
+    int rw = text_width(right, _F3);
+    if (W - _ED_PAD3 - rw > toInt(W / 2) + 8) {
+        int c = _G_DIM3();
+        if (_ed_msg_t3 > 0.0) { c = rgb(140, 240, 160); }
+        _g_txtr3(right, W - _ED_PAD3, sy + 4, c);
+    }
+}
+
+// ---- Kabuk -----------------------------------------------------------------
+func _ed_chrome3() {
+    _g_begin();
+    _ed_menubar3();
+    _ed_toolbar3();
+    _ed_hierarchy3();
+    _ed_inspector3();
+    _ed_console3();
+    _ed_statusbar3();
+    // Sahne görünümünün çerçevesi — panel gibi görünsün.
+    rect_lines(_ed_view_x3() - 1, _ed_view_y3() - 1,
+               _ed_view_w3() + 2, _ed_view_h3() + 2, _G_LINE3());
+}
+
+// Inspector davranış satırının alan genişliği (panel genişliğinden türüyor).
+func _ed_bhw3(pw, namew, xw): int {
+    return toInt((pw - _ED_PAD3 * 2 - namew - xw - 12) / 2);
+}
+// Hiyerarşi ekleme düğmelerinin genişliği.
+func _ed_addw3(pw, gap): int {
+    return toInt((pw - _ED_PAD3 * 2 - gap * 3) / 4);
+}
+
+func _ed_hierarchy3() {
+    int py = _ed_view_y3();
+    int ph = _ed_view_h3();
     int pw = _ED_HIER_W3;
     _g_panel(0, py, pw, ph, "HIYERARSI");
 
@@ -6321,8 +6515,8 @@ func _ed_inspector3() {
     int H = screen_height();
     int pw = _ED_INSP_W3;
     int px = W - pw;
-    int py = _ED_TOOL_H3;
-    int ph = H - _ED_TOOL_H3;
+    int py = _ed_view_y3();
+    int ph = _ed_view_h3();
     _g_panel(px, py, pw, ph, "OZELLIKLER");
 
     int s = _slot_of3(_ed_sel3e);

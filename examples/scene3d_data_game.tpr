@@ -19,9 +19,8 @@ import "scene3d";
 str SAHNE = "examples/scenes/toplayici.scene.json";
 
 func kur() {
-    // Editör TAB ile açılıyor; F5 sahneyi BU dosyaya geri yazıyor. Yani oyunu
-    // oynarken düzenleyip kaydedebiliyorsun — yeniden derleme yok.
-    editor_dosya3d(SAHNE);
+    // Bu dosya OYUNU çalıştırıyor. Sahneyi düzenlemek için ayrı bir uygulama
+    // var: `examples/scene3d_editor.tpr` aynı JSON'u açıyor.
     if (sahne_dosya3d(SAHNE) == 0) {
         // Dosya bulunamadıysa sessizce boş bir dünyada kalmak kafa karıştırır.
         hata3d("SAHNE YUKLENEMEDI: " + SAHNE);
@@ -37,7 +36,7 @@ func hud() {
     text("Varlik: " + toString(yasayan_sayi3d()) +
          "   Davranis: " + toString(davranis_sayisi3d()) +
          "   Kural: " + toString(kural_sayisi3d()), 12, 66, 16, RAYWHITE);
-    text("WASD hareket, BOSLUK zipla, fare bak   |   TAB: EDITOR", 12, 90, 15, rgb(180, 190, 205));
+    text("WASD hareket, BOSLUK zipla, fare bak", 12, 90, 15, rgb(180, 190, 205));
 }
 
 sahne_bilgi_dosya3d(SAHNE);

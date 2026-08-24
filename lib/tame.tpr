@@ -106,6 +106,20 @@ func text(s, x, y, size, color) { tm_text(s, x, y, size, color); }
 // Metnin piksel genişliği — arayüz yerleşimi (panel sütunu, düğme kutusu)
 // buna dayanıyor; karakter sayısından tahmin etmek yazı tipi değişince bozulur.
 func text_width(s, size): int { return tm_text_width(s, size); }
+
+// ---- Render texture --------------------------------------------------------
+// Sahneyi ekrana değil bir dokuya çizmek. Editörün 3B görünümü tam ekran değil,
+// panellerin arasındaki dikdörtgen; doğrudan çizip kırpmak yetmez çünkü kamera
+// izdüşümü pencerenin en-boy oranını kullanır ve görüntü ezik çıkar.
+func render_target(w, h): int { return tm_rt_new(w, h); }
+func render_hedef(w, h): int  { return tm_rt_new(w, h); }
+func render_target_free(t) { tm_rt_free(t); }
+func render_hedef_sil(t)   { tm_rt_free(t); }
+func render_target_w(t): int { return tm_rt_w(t); }
+func render_target_h(t): int { return tm_rt_h(t); }
+func render_to(t) { tm_rt_begin(t); }
+func render_to_screen() { tm_rt_end(); }
+func render_draw(t, x, y) { tm_rt_draw(t, x, y); }
 func metin_genisligi(s, boy): int { return tm_text_width(s, boy); }
 
 // ---- Girdi -----------------------------------------------------------------

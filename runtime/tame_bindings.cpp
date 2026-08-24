@@ -62,6 +62,13 @@ int tame_impl_key_released(const char *k);
 int tame_impl_key_down_code(int key);
 int tame_impl_key_pressed_code(int key);
 int tame_impl_text_width(const char *s, int size);
+int tame_impl_rt_new(int w, int h);
+void tame_impl_rt_free(int h);
+int tame_impl_rt_w(int h);
+int tame_impl_rt_h(int h);
+void tame_impl_rt_begin(int h);
+void tame_impl_rt_end(void);
+void tame_impl_rt_draw(int h, int x, int y);
 int tame_impl_char_pressed(void);
 int tame_impl_key_released_code(int key);
 int tame_impl_mouse_x(void);
@@ -321,6 +328,28 @@ VMValue aot_tm_key_pressed_ptr(VMValue *k) {
 VMValue aot_tm_key_released_ptr(VMValue *k) {
   if (tm_is_key_name(k)) return VM_BOOL(tame_impl_key_released(tm_str(k)));
   return VM_BOOL(tame_impl_key_released_code((int)tm_int(k)));
+}
+
+VMValue aot_tm_rt_new_ptr(VMValue *w, VMValue *h) {
+  return VM_INT(tame_impl_rt_new((int)tm_int(w), (int)tm_int(h)));
+}
+VMValue aot_tm_rt_free_ptr(VMValue *h) {
+  tame_impl_rt_free((int)tm_int(h));
+  return VM_VOID();
+}
+VMValue aot_tm_rt_w_ptr(VMValue *h) { return VM_INT(tame_impl_rt_w((int)tm_int(h))); }
+VMValue aot_tm_rt_h_ptr(VMValue *h) { return VM_INT(tame_impl_rt_h((int)tm_int(h))); }
+VMValue aot_tm_rt_begin_ptr(VMValue *h) {
+  tame_impl_rt_begin((int)tm_int(h));
+  return VM_VOID();
+}
+VMValue aot_tm_rt_end_ptr(void) {
+  tame_impl_rt_end();
+  return VM_VOID();
+}
+VMValue aot_tm_rt_draw_ptr(VMValue *h, VMValue *x, VMValue *y) {
+  tame_impl_rt_draw((int)tm_int(h), (int)tm_int(x), (int)tm_int(y));
+  return VM_VOID();
 }
 
 VMValue aot_tm_text_width_ptr(VMValue *s, VMValue *size) {

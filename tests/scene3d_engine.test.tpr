@@ -4465,6 +4465,32 @@ func t_ui_panels_fit_screen() {
     assert(_ed_f3w3(_ED_INSP_W3, 26) >= 30, "sayi alani okunabilir kalmali");
 }
 
+// Editör uygulaması yerleşimi: menü + araç çubuğu + konsol + durum çubuğu
+// sahne görünümüne yer BIRAKMALI. Şeritleri büyütmek görünümü sessizce
+// ezebilirdi (kullanıcı bunu ancak ekranda görürdü).
+func t_ui_app_layout_leaves_viewport() {
+    // Editörün kendi penceresi (1440x820).
+    assert_eq_int(_ed_view_w_at3(1440), 1440 - _ED_HIER_W3 - _ED_INSP_W3);
+    int h = _ed_view_h_at3(820);
+    assert_eq_int(h, 820 - _ED_MENU_H3 - _ED_TOOL_H3 - _ED_CONS_H3 - _ED_STAT_H3);
+    assert(h > 400, "editor penceresinde sahne gorunumu genis olmali: " + toString(h));
+    // Küçük bir oyun penceresinde (960x560) de kullanılabilir kalmalı.
+    assert(_ed_view_w_at3(960) > 400, "960'ta genislik: " + toString(_ed_view_w_at3(960)));
+    assert(_ed_view_h_at3(560) > 200, "560'ta yukseklik: " + toString(_ed_view_h_at3(560)));
+    // Dar/kısa pencerede negatif üretmemeli.
+    assert(_ed_view_h_at3(200) >= 80, "kisa pencerede taban yukseklik");
+    // Yatay şeritlerin toplamı pencerenin yarısını geçmemeli.
+    int chrome = _ED_MENU_H3 + _ED_TOOL_H3 + _ED_CONS_H3 + _ED_STAT_H3;
+    assert(chrome < 280, "kabuk cok yer kapliyor: " + toString(chrome));
+}
+
+// Sahne görünümü SOL ÜST köşesi panellerin sonrasında başlamalı — seçim ışını
+// bu köşeye göre kuruluyor, kaydırırsa imleçle seçim ayrışır.
+func t_ui_view_origin_matches_panels() {
+    assert_eq_int(_ed_view_x_at3(1440), _ED_HIER_W3);
+    assert_eq_int(_ed_view_y_at3(820), _ED_MENU_H3 + _ED_TOOL_H3);
+}
+
 // Inspector'ın üç sayı alanı panelin İÇİNDE bitmeli.
 func t_ui_inspector_columns_fit() {
     int pw = _ED_INSP_W3;
@@ -4534,6 +4560,8 @@ test("uzaktaki tiklama eksen tutmuyor", "t_gz_pick_misses_when_far");
 test("tutamak boyu mesafeyle olcekleniyor", "t_gz_length_scales_with_distance");
 test("punto tam sayi olcekli", "t_ui_font_size_is_crisp");
 test("paneller ekrana sigiyor", "t_ui_panels_fit_screen");
+test("uygulama yerlesimi gorunume yer birakiyor", "t_ui_app_layout_leaves_viewport");
+test("gorunum kokeni panellerle uyumlu", "t_ui_view_origin_matches_panels");
 test("inspector sutunlari sigiyor", "t_ui_inspector_columns_fit");
 test("davranis satiri sigiyor", "t_ui_behavior_row_fits");
 test("hiyerarsi dugmeleri sigiyor", "t_ui_hierarchy_buttons_fit");
