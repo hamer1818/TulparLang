@@ -4502,22 +4502,36 @@ func t_ui_app_layout_leaves_viewport() {
     assert(chrome < 280, "kabuk cok yer kapliyor: " + toString(chrome));
 }
 
-// İmleç editörde GÖRÜNÜR kalmalı. Sahne yörünge kamerasıyla açılıyor, o da
-// fare bakışını (imleç kilidini) istiyor ve kilit imleci gizliyor — editörde
-// imleç kaybolunca panellere tıklanamıyordu.
+// İmleç kuralı üç durumlu ve üçü de gerekli:
+//   DÜZENLERKEN serbest — panellere tıklanacak. (Bu bir hataydı: sahne
+//     yörünge kamerasıyla açılıyor, o da fare bakışını yani imleç kilidini
+//     istiyor, kilit de imleci gizliyor; editörde imleç kayboluyordu.)
+//   OYNARKEN yakalı  — oyun normal davranmalı, fare bakışı çalışmalı.
+//   OYNARKEN + ESC   — serbest; DUR düğmesine ulaşmanın tek yolu bu.
 func t_ui_cursor_visible_in_editor() {
     scene3d_reset();
     no_ground3d();
     int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
     camera_orbit(p, 16.0, 10.0);
     assert_eq_int(_cam_lock3, 1);          // yörünge fare bakışını ister
-    _ed_app3 = 0; _ed_on3 = 0;
+    _ed_app3 = 0; _ed_on3 = 0; _ed_free_cur3 = 0;
     assert_eq_int(_s3_want_lock3(), 1);    // sıradan oyunda kilit AÇIK
+
     _ed_on3 = 1;
     assert_eq_int(_s3_want_lock3(), 0);    // düzenlerken imleç serbest
+
     _ed_on3 = 0; _ed_app3 = 1;
-    assert_eq_int(_s3_want_lock3(), 0);    // editörde OYNARKEN de serbest
-    _ed_app3 = 0;
+    assert_eq_int(_s3_want_lock3(), 1);    // editörde OYNARKEN fare oyunda
+    _ed_free_cur3 = 1;                      // ESC
+    assert_eq_int(_s3_want_lock3(), 0);    // ...ESC serbest bırakır
+    _ed_free_cur3 = 0;                      // görünüme tıklama
+    assert_eq_int(_s3_want_lock3(), 1);    // ...yeniden yakalar
+
+    // Düzenlemeye dönünce ESC durumu ARTIK ÖNEMLİ DEĞİL: panel tıklaması her
+    // hâlükârda mümkün olmalı.
+    _ed_on3 = 1; _ed_free_cur3 = 0;
+    assert_eq_int(_s3_want_lock3(), 0);
+    _ed_app3 = 0; _ed_on3 = 0;
 }
 
 // Menü/duraklat açıkken de serbest olmalı (düğmelere tıklanacak).
@@ -4526,7 +4540,7 @@ func t_ui_cursor_free_in_menus() {
     no_ground3d();
     int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
     camera_orbit(p, 16.0, 10.0);
-    _ed_app3 = 0; _ed_on3 = 0;
+    _ed_app3 = 0; _ed_on3 = 0; _ed_free_cur3 = 0;
     _s3_ui = UI_PAUSE;
     assert_eq_int(_s3_want_lock3(), 0);
     _s3_ui = UI_NONE;

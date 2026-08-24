@@ -42,6 +42,21 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Changed — DÜNYA hiyerarşide bir nesne; oynarken fare oyuna geçiyor
+
+**Dünya artık hiyerarşinin ilk satırı** ve bir nesne gibi seçiliyor (Godot'nun
+WorldEnvironment'ı ile aynı fikir). Yerçekimi, gökyüzü, sis, su, arazi ve
+gündüz-gece de sahnenin parçası; onları ayrı bir sekmede saklamak "sahnede ne
+var?" sorusunun cevabını eksik bırakıyordu. Inspector'daki sekme düğmeleri
+kaldırıldı — iki ayrı seçim yolu (liste + sekme) tutmak hangisinin geçerli
+olduğu konusunda sürekli bir tutarsızlık kaynağı olurdu.
+
+**İmleç kuralı üç durumlu oldu:** düzenlerken serbest (panellere tıklanacak),
+OYNARKEN yakalı (oyun normal davranmalı, fare bakışı çalışmalı), oynarken
+ESC'ye basılınca serbest. Görünüme tıklamak fareyi oyuna geri veriyor.
+Editörde ESC duraklat menüsü açmıyor — orada "duraklat" zaten DUR düğmesi ve
+ona ulaşmak için imlece ihtiyaç var.
+
 ### Added — editörde dünya ayarları ve varlık adı
 
 Inspector artık iki sekmeli: **VARLIK** ve **DÜNYA**. Dünya sekmesinde
