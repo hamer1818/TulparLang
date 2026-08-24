@@ -4276,6 +4276,11 @@ func t_gui_widget_id_ranges_are_disjoint() {
     assert(hier_max < bh_min, "hiyerarsi ile davranis araliklari cakismamali");
     // Sabit kimlikler (9001-9471) her ikisinin de ALTINDA kalmalı.
     assert(9471 < 12000, "sabit kimlikler hiyerarsinin altinda");
+    // Menü/oynat (9600-9611), sekme+ad (9680-9690) ve dünya paneli
+    // (9700-9750) da hiyerarşinin altında ve birbirinden ayrık kalmalı.
+    assert(9750 < 12000, "dunya paneli kimlikleri hiyerarsinin altinda");
+    assert(9611 < 9680, "menu/oynat ile sekme araligi ayrik");
+    assert(9690 < 9700, "ad alani ile dunya paneli ayrik");
     // Davranış satırı içi üç kimlik birbirine girmemeli.
     int s0 = 20000 + 0 * 4;
     int s1 = 20000 + 1 * 4;
@@ -4444,6 +4449,19 @@ func t_gz_length_scales_with_distance() {
 // Yazı tipi punto kısıtı: raylib'in varsayılan fontunda harf aralığı
 // `fontSize/10` TAMSAYI bölmesinden, glif ölçeği `fontSize/10.0` KESİRLİ
 // bölmeden geliyor. Arada bir punto seçmek harfleri birbirine sokuyor.
+// Renk bileşeni 0..255 dışına ÇIKMAMALI. Dünya panelindeki rgb alanları
+// sürüklenerek değiştiriliyor ve sürükleme sınırsız; kırpma olmazsa rgb()
+// bileşenleri taşıp rengi tamamen başka bir şeye çevirirdi.
+func t_ui_color_clamp() {
+    assert_eq_int(_ed_c255(0.0 - 40.0), 0);
+    assert_eq_int(_ed_c255(0.0), 0);
+    assert_eq_int(_ed_c255(128.0), 128);
+    assert_eq_int(_ed_c255(255.0), 255);
+    assert_eq_int(_ed_c255(400.0), 255);
+    // Kırpma OLMASA rgb() bileşenleri taşar: 256 bir üst bileşene taşınır.
+    assert_eq_int(_col_r3(rgb(_ed_c255(300.0), 0, 0)), 255);
+}
+
 func t_ui_font_size_is_crisp() {
     assert(_F3 == 10 || _F3 == 20 || _F3 == 30,
            "punto 10/20/30 olmali (tam sayi olcek+aralik), bulunan: " + toString(_F3));
@@ -4592,6 +4610,49 @@ test("arkadaki cozum reddediliyor", "t_gz_ray_axis_behind_is_rejected");
 test("dogru eksen tutuluyor", "t_gz_pick_selects_right_axis");
 test("uzaktaki tiklama eksen tutmuyor", "t_gz_pick_misses_when_far");
 test("tutamak boyu mesafeyle olcekleniyor", "t_gz_length_scales_with_distance");
+// Varlık adı editörden değiştirilebilmeli: kamera hedefi ve kurallar
+// varlıklara ADLA atıfta bulunuyor, yani adsız varlık hedeflenemiyor.
+func t_ed_rename_replaces_not_appends() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    rename3d(a, "eski");
+    assert_eq_int(bul3d("eski"), a);
+    rename3d(a, "yeni");
+    // Eski ad DÜŞMELİ: aynı handle için iki kayıt kalırsa serileştirme
+    // hangisini yazacağını bilemez ve `_sc_nm_of3` ilk bulduğunu döndürdüğü
+    // için eski ad kazanırdı.
+    assert_eq_int(bul3d("eski"), 0 - 1);
+    assert_eq_int(bul3d("yeni"), a);
+    assert(_sc_nm_of3(a) == "yeni", "geri okuma da yeni ad olmali");
+}
+
+func t_ed_rename_survives_roundtrip() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(2.0, 1.0, 3.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    rename3d(a, "kapi");
+    scene_load3d(scene_json3d());
+    int b = bul3d("kapi");
+    assert(b >= 0, "ad gidis-donusten sag cikmali");
+    assert(abs_f3(get3x(b) - 2.0) < 0.001, "dogru varliga bagli kalmali");
+}
+
+// Adı boşaltmak kaydı düşürmeli — "" adıyla arama yapılamaz.
+func t_ed_rename_to_empty_clears() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    rename3d(a, "x");
+    rename3d(a, "");
+    assert(_sc_nm_of3(a) == "", "ad silinmeli");
+    assert_eq_int(bul3d("x"), 0 - 1);
+}
+
+test("yeniden adlandirma eskiyi dusuruyor", "t_ed_rename_replaces_not_appends");
+test("ad gidis-donusten sag cikiyor", "t_ed_rename_survives_roundtrip");
+test("bos ad kaydi siliyor", "t_ed_rename_to_empty_clears");
+test("renk bileseni sinirli", "t_ui_color_clamp");
 test("punto tam sayi olcekli", "t_ui_font_size_is_crisp");
 test("paneller ekrana sigiyor", "t_ui_panels_fit_screen");
 test("uygulama yerlesimi gorunume yer birakiyor", "t_ui_app_layout_leaves_viewport");

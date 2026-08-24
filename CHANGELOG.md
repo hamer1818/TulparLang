@@ -42,6 +42,20 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — editörde dünya ayarları ve varlık adı
+
+Inspector artık iki sekmeli: **VARLIK** ve **DÜNYA**. Dünya sekmesinde
+gökyüzü (aç/kapa + üst/alt renk), sis, zemin, yerçekimi, ışık/gölge, su
+(seviye/renk/alfa), arazi (tepe/tohum + yeniden üret + doğal boya),
+gündüz-gece (saat + gün uzunluğu) ve eğim sınırı düzenlenebiliyor. Bunların
+hepsi sahne biçiminde zaten taşınıyordu; eksik olan tek şey editörden
+değiştirilebilmeleriydi — elle JSON yazmak gerekiyordu.
+
+Varlık **adı** da düzenlenebiliyor (yeni metin alanı widget'ı). Ad önemli:
+kamera hedefi ve kurallar varlıklara ADLA atıfta bulunuyor, yani adsız bir
+varlık sahne dosyasında hedeflenemiyor. `rename3d`/`ad_ver3d` eski kaydı
+düşürüyor — aynı handle için iki ad kalsaydı serileştirme eskisini yazardı.
+
 ### Fixed — gölge geçişi render texture'ı bozuyordu (sahne görünümü boş kalıyordu)
 
 Editörün sahne görünümü paneli koyu mavi bir dikdörtgen olarak kalıyordu ve
