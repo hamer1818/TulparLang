@@ -4693,6 +4693,75 @@ func t_ed_rename_to_empty_clears() {
 test("yeniden adlandirma eskiyi dusuruyor", "t_ed_rename_replaces_not_appends");
 test("ad gidis-donusten sag cikiyor", "t_ed_rename_survives_roundtrip");
 test("bos ad kaydi siliyor", "t_ed_rename_to_empty_clears");
+// ---- Kural düzenleyici + panel kaydırma ------------------------------------
+
+// Eylem döngüsü BÜTÜN eylemleri gezmeli: eksik bir dal, o eylemi editörden
+// erişilemez yapardı (ve kural olmadan sahne bir oyun değil).
+func t_ed_action_cycle_covers_all() {
+    int a = ACT_COLLECT;
+    int seen = 0;
+    int i = 0;
+    while (i < 6) {
+        a = _ed_next_act3(a);
+        if (a == ACT_DAMAGE) { seen = seen + 1; }
+        if (a == ACT_KILL)   { seen = seen + 1; }
+        if (a == ACT_HURT)   { seen = seen + 1; }
+        if (a == ACT_WIN)    { seen = seen + 1; }
+        if (a == ACT_LOSE)   { seen = seen + 1; }
+        if (a == ACT_COLLECT){ seen = seen + 1; }
+        i = i + 1;
+    }
+    assert_eq_int(seen, 6);
+    assert_eq_int(a, ACT_COLLECT);   // 6 adimda basa donmeli
+}
+
+// Editörden kurulan kurallar diske gidip geri gelmeli — yoksa editörde
+// yapılan oyun kaydedilince oyun olmaktan çıkardı.
+func t_ed_rules_survive_roundtrip() {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    hit_rule3d(TAG_PLAYER, TAG_ENEMY, ACT_DAMAGE, 17.0);
+    cleared_rule3d(TAG_ITEM, ACT_LOSE);
+    assert_eq_int(rule_count3d(), 2);
+    scene_load3d(scene_json3d());
+    assert_eq_int(rule_count3d(), 2);
+    int i = 0;
+    int okh = 0; int okc = 0;
+    while (i < length(_rl3)) {
+        Rule3 r = _rl3[i];
+        if (r.kind == RULE_HIT && r.a == TAG_PLAYER && r.b == TAG_ENEMY) {
+            assert_eq_int(r.act, ACT_DAMAGE);
+            assert(abs_f3(r.n - 17.0) < 0.001, "miktar");
+            okh = 1;
+        }
+        if (r.kind == RULE_CLEARED && r.a == TAG_ITEM) {
+            assert_eq_int(r.act, ACT_LOSE);
+            okc = 1;
+        }
+        i = i + 1;
+    }
+    assert_eq_int(okh + okc, 2);
+}
+
+// Kaydırma sınırı: içerik panele sığıyorsa kaydırma OLMAMALI, sığmıyorsa
+// içeriğin sonunu geçmemeli. Sınırsız kaydırma paneli boşa kaydırırdı.
+func t_ed_scroll_clamp() {
+    // İçerik (200) panele (üst 40 + 100 = 140) sığmıyor → en fazla 60.
+    assert_eq_int(_ed_clamp_scroll3(0, 200, 40, 100), 0);
+    assert_eq_int(_ed_clamp_scroll3(30, 200, 40, 100), 30);
+    assert_eq_int(_ed_clamp_scroll3(60, 200, 40, 100), 60);
+    assert_eq_int(_ed_clamp_scroll3(500, 200, 40, 100), 60);
+    // Negatife inmemeli.
+    assert_eq_int(_ed_clamp_scroll3(0 - 40, 200, 40, 100), 0);
+    // İçerik SIĞIYORSA hiç kaydırılmamalı.
+    assert_eq_int(_ed_clamp_scroll3(50, 100, 40, 100), 0);
+    assert_eq_int(_ed_clamp_scroll3(0, 100, 40, 100), 0);
+}
+
+test("eylem dongusu tumunu geziyor", "t_ed_action_cycle_covers_all");
+test("kurallar gidis-donusten sag cikiyor", "t_ed_rules_survive_roundtrip");
+test("kaydirma siniri", "t_ed_scroll_clamp");
 test("renk bileseni sinirli", "t_ui_color_clamp");
 test("punto tam sayi olcekli", "t_ui_font_size_is_crisp");
 test("paneller ekrana sigiyor", "t_ui_panels_fit_screen");

@@ -111,6 +111,12 @@ func text_width(s, size): int { return tm_text_width(s, size); }
 // Sahneyi ekrana değil bir dokuya çizmek. Editörün 3B görünümü tam ekran değil,
 // panellerin arasındaki dikdörtgen; doğrudan çizip kırpmak yetmez çünkü kamera
 // izdüşümü pencerenin en-boy oranını kullanır ve görüntü ezik çıkar.
+// Çizimi bir dikdörtgene kırp — panel içine kaydırılabilir içerik için.
+func scissor(x, y, w, h) { tm_scissor(x, y, w, h); }
+func kirp(x, y, w, h)    { tm_scissor(x, y, w, h); }
+func scissor_end() { tm_scissor_end(); }
+func kirp_bitir()  { tm_scissor_end(); }
+
 func render_target(w, h): int { return tm_rt_new(w, h); }
 func render_hedef(w, h): int  { return tm_rt_new(w, h); }
 func render_target_free(t) { tm_rt_free(t); }

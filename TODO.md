@@ -64,9 +64,9 @@ Mimari kararlar ve gerekçeleri:
       CLI'dan dosya açmak gerekiyor.
 
 - [ ] **Editörde kalan Unity/Unreal parçaları.** Çoklu seçim, prefab/şablon,
-      kural düzenleyici, tetikleyici bölge düzenleme, sahne görünümü için
-      panel kaydırma (uzun inspector taşabiliyor). (Eksen tutamakları, dünya
-      ayarları paneli, varlık adı, konsol paneli ✅ 2026-08-24.)
+      tetikleyici bölge düzenleme, hiyerarşide sürükle-bırak sıralama.
+      (Eksen tutamakları, dünya ayarları, varlık adı, konsol, kural
+      düzenleyici, panel kaydırma ✅ 2026-08-24.)
 
 - [ ] **Tetikleyici bölgeler sahne biçiminde yok.** Şimdilik yükleme onları
       KORUYOR (silmek geri konulamaz bir kayıptı), ama bir sahne dosyası

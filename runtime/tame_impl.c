@@ -1475,6 +1475,18 @@ static int tame_ensure_audio(void) {
 static RenderTexture2D tame_rts[TAME_MAX_RT];
 static int tame_rt_used[TAME_MAX_RT];
 
+// ---- Kırpma (scissor) ------------------------------------------------------
+// Bir panelin İÇİNE kaydırılabilir içerik çizmek için: dikdörtgenin dışına
+// düşen pikseller yazılmıyor. Alternatif her widget çağrısından önce elle sınır
+// denetimi yapmaktı — her yeni widget o borcu büyütürdü ve yarı görünür
+// satırlar yine kırpılamazdı.
+void tame_impl_scissor(int x, int y, int w, int h) {
+  if (w < 0) w = 0;
+  if (h < 0) h = 0;
+  BeginScissorMode(x, y, w, h);
+}
+void tame_impl_scissor_end(void) { EndScissorMode(); }
+
 int tame_impl_rt_new(int w, int h) {
   if (!tame_window_ready) return -1;
   if (w < 1) w = 1;

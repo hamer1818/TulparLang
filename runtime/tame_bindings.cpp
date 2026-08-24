@@ -63,6 +63,8 @@ int tame_impl_key_down_code(int key);
 int tame_impl_key_pressed_code(int key);
 int tame_impl_text_width(const char *s, int size);
 int tame_impl_rt_new(int w, int h);
+void tame_impl_scissor(int x, int y, int w, int h);
+void tame_impl_scissor_end(void);
 void tame_impl_rt_free(int h);
 int tame_impl_rt_w(int h);
 int tame_impl_rt_h(int h);
@@ -328,6 +330,15 @@ VMValue aot_tm_key_pressed_ptr(VMValue *k) {
 VMValue aot_tm_key_released_ptr(VMValue *k) {
   if (tm_is_key_name(k)) return VM_BOOL(tame_impl_key_released(tm_str(k)));
   return VM_BOOL(tame_impl_key_released_code((int)tm_int(k)));
+}
+
+VMValue aot_tm_scissor_ptr(VMValue *x, VMValue *y, VMValue *w, VMValue *h) {
+  tame_impl_scissor((int)tm_int(x), (int)tm_int(y), (int)tm_int(w), (int)tm_int(h));
+  return VM_VOID();
+}
+VMValue aot_tm_scissor_end_ptr(void) {
+  tame_impl_scissor_end();
+  return VM_VOID();
 }
 
 VMValue aot_tm_rt_new_ptr(VMValue *w, VMValue *h) {

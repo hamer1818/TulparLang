@@ -42,6 +42,24 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — kural düzenleyici ve panel kaydırma
+
+**Kurallar artık editörden kurulabiliyor** (DÜNYA panelinin altında): çarpışma
+kuralı (etiket + etiket → eylem + miktar) ve "bitince" kuralı. Eylemler
+topla/hasar/öldür/vur/kazan/kaybet arasında dönüyor. Kurallar sahneyi OYUN
+yapan şey; şimdiye kadar yalnız JSON'a elle yazılabiliyordu, yani editörde
+kurulan bir sahne oynanabilir bir oyun olamıyordu.
+
+**Inspector kaydırılabiliyor** ve panele KIRPILIYOR. İçerik panelden uzun
+olabiliyor (çok davranışlı varlık, dünya ayarları + kurallar); kırpma olmadan
+taşan satırlar alttaki konsolun üstüne çiziliyordu. İnce bir kaydırma çubuğu
+nerede olunduğunu gösteriyor.
+
+Yeni tame bağlamaları (5 nokta, denetim temiz): `tm_scissor`,
+`tm_scissor_end`. Alternatif her widget çağrısından önce elle sınır denetimi
+yapmaktı — her yeni widget o borcu büyütür ve yarı görünür satırlar yine
+kırpılamazdı.
+
 ### Changed — DÜNYA hiyerarşide bir nesne; oynarken fare oyuna geçiyor
 
 **Dünya artık hiyerarşinin ilk satırı** ve bir nesne gibi seçiliyor (Godot'nun

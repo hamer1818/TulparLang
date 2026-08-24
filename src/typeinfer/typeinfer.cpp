@@ -904,6 +904,8 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm_key_down", TYPE_BOOL, {TYPE_UNKNOWN}},
       {"tm_key_pressed", TYPE_BOOL, {TYPE_UNKNOWN}},
       {"tm_text_width", TYPE_INT, {TYPE_STRING, TYPE_INT}},
+      {"tm_scissor", TYPE_VOID, {TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT}},
+      {"tm_scissor_end", TYPE_VOID, {}},
       {"tm_rt_new", TYPE_INT, {TYPE_INT, TYPE_INT}},
       {"tm_rt_free", TYPE_VOID, {TYPE_INT}},
       {"tm_rt_w", TYPE_INT, {TYPE_INT}},

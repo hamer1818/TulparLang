@@ -73,6 +73,8 @@ const BuiltinEntry kBuiltins[] = {
     {"tm_key_down",     "tm_key_down(key: str|int): bool",              "Tuş şu an basılı mı? Ad: \"W\", \"SPACE\", \"LEFT\", \"ESC\", \"F1\"... ya da ham raylib tuş kodu (87 = W). Sarmalayıcı: key_down()."},
     {"tm_key_pressed",  "tm_key_pressed(key: str|int): bool",               "Tuşa bu karede yeni mi basıldı (tek tetik)? Sarmalayıcı: key_pressed()."},
     {"tm_text_width",   "tm_text_width(s: str, size: int): int",           "Metnin piksel genişliği (MeasureText). Sarmalayıcı: text_width()."},
+    {"tm_scissor",      "tm_scissor(x: int, y: int, w: int, h: int)",       "Çizimi bu dikdörtgene kırp. Sarmalayıcı: kirp()."},
+    {"tm_scissor_end",  "tm_scissor_end()",                                "Kırpmayı bitir. Sarmalayıcı: kirp_bitir()."},
     {"tm_rt_new",       "tm_rt_new(w: int, h: int): int",                  "Render texture oluştur; handle döner (-1 = hata). Sarmalayıcı: render_hedef()."},
     {"tm_rt_free",      "tm_rt_free(h: int)",                              "Render texture'ı serbest bırak."},
     {"tm_rt_w",         "tm_rt_w(h: int): int",                            "Render texture genişliği."},

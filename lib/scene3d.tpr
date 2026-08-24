@@ -6636,6 +6636,93 @@ func _ed_f3w3(pw, labw): int {
 
 // Inspector sekmesi: 0 = seçili varlık, 1 = dünya ayarları.
 int _ed_tab3 = 0;
+// Inspector kaydırması. Panel içeriği (çok davranışlı bir varlık, dünya
+// ayarları + kurallar) panelden uzun olabiliyor; kırpma olmadan alttaki
+// konsolun üstüne taşardı.
+int _ed_iscroll3 = 0;
+int _ed_icontent3 = 0;    // son karede içeriğin bittiği y (kaydırma sınırı)
+
+// Kaydırma sınırı. Döngünün içine gömülü kalsaydı penceresiz sınanamazdı; bu
+// oturumda "sınanamayan yerdeki hata" birkaç kez tekrarlandı.
+func _ed_clamp_scroll3(scroll, content, top, avail): int {
+    int maxs = content - (top + avail);
+    if (maxs < 0) { maxs = 0; }
+    int v = scroll;
+    if (v > maxs) { v = maxs; }
+    if (v < 0) { v = 0; }
+    return v;
+}
+
+func _ed_next_act3(a): int {
+    if (a == ACT_COLLECT) { return ACT_DAMAGE; }
+    if (a == ACT_DAMAGE)  { return ACT_KILL; }
+    if (a == ACT_KILL)    { return ACT_HURT; }
+    if (a == ACT_HURT)    { return ACT_WIN; }
+    if (a == ACT_WIN)     { return ACT_LOSE; }
+    return ACT_COLLECT;
+}
+
+// ---- Kurallar --------------------------------------------------------------
+// Kurallar sahneyi OYUN yapan şey (topla / hasar ver / kazan / kaybet) ve
+// şimdiye kadar yalnız JSON'a elle yazılabiliyordu — yani editörde kurulan bir
+// sahne oynanabilir bir oyun olamıyordu.
+func _ed_rules_panel3(px, y, pw): int {
+    int lx = px + _ED_PAD3;
+    int inner = pw - _ED_PAD3 * 2;
+    int third = toInt((inner - 8) / 3);
+    int xw = 16;
+    int i = 0;
+    while (i < length(_rl3)) {
+        Rule3 r = _rl3[i];
+        if (r.kind == RULE_HIT) {
+            if (_g_button(21000 + i * 8, lx, y, third, _ED_FLD3, _sc_tag_nm3(r.a))) {
+                ed_mark3d();
+                Rule3 nr = _rl3[i]; nr.a = _ed_next_tag3(nr.a); _rl3[i] = nr;
+            }
+            if (_g_button(21001 + i * 8, lx + third + 4, y, third, _ED_FLD3,
+                          _sc_tag_nm3(r.b))) {
+                ed_mark3d();
+                Rule3 nr2 = _rl3[i]; nr2.b = _ed_next_tag3(nr2.b); _rl3[i] = nr2;
+            }
+        } else {
+            _g_txt3("bitince", lx, y + 3, third, _G_DIM3());
+            if (_g_button(21000 + i * 8, lx + third + 4, y, third, _ED_FLD3,
+                          _sc_tag_nm3(r.a))) {
+                ed_mark3d();
+                Rule3 nr3 = _rl3[i]; nr3.a = _ed_next_tag3(nr3.a); _rl3[i] = nr3;
+            }
+        }
+        if (_g_button(21002 + i * 8, px + pw - _ED_PAD3 - xw, y, xw, _ED_FLD3, "x")) {
+            ed_mark3d();
+            int last = length(_rl3) - 1;
+            if (i != last) { _rl3[i] = _rl3[last]; }
+            pop(_rl3);
+            return y;   // dizi değişti; bu kareyi burada bitir
+        }
+        y = y + _ED_FLD3 + 2;
+        // 2. satır: eylem + miktar
+        if (_g_button(21003 + i * 8, lx + third + 4, y, third, _ED_FLD3,
+                      _rl_act_nm3(r.act))) {
+            ed_mark3d();
+            Rule3 nr4 = _rl3[i]; nr4.act = _ed_next_act3(nr4.act); _rl3[i] = nr4;
+        }
+        if (r.kind == RULE_HIT) {
+            float nn = _g_num(21004 + i * 8, lx + (third + 4) * 2, y, third,
+                              _ED_FLD3, r.n, 1.0);
+            if (nn != r.n) { Rule3 nr5 = _rl3[i]; nr5.n = nn; _rl3[i] = nr5; }
+        }
+        y = y + _ED_FLD3 + 5;
+        i = i + 1;
+    }
+    int half = toInt((inner - 4) / 2);
+    if (_g_button(21900, lx, y, half, _ED_FLD3, "+carpisma")) {
+        ed_mark3d(); hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 50.0);
+    }
+    if (_g_button(21901, lx + half + 4, y, half, _ED_FLD3, "+bitince")) {
+        ed_mark3d(); cleared_rule3d(TAG_ITEM, ACT_WIN);
+    }
+    return y + _ED_FLD3;
+}
 
 // ---- Dünya ayarları --------------------------------------------------------
 // Sahne biçimi bunların hepsini zaten taşıyor; editörden düzenlenememeleri tek
@@ -6774,6 +6861,12 @@ func _ed_world_panel3(px, py, pw) {
     _g_txt3("sinir", lx, y + 3, labw + 4, _G_DIM3());
     float sl = _g_num(9750, fx + 6, y, fw, _ED_FLD3, _slope_lim3, 0.5);
     if (sl != _slope_lim3) { slope_limit3d(sl); }
+    y = y + _ED_FLD3 + 6;
+
+    _g_section(px + 2, y, pw - 4, "KURALLAR");
+    y = y + 16;
+    y = _ed_rules_panel3(px, y, pw);
+    _ed_icontent3 = y;
 }
 
 func _ed_c255(v): int {
@@ -6800,16 +6893,33 @@ func _ed_inspector3() {
     // Sekme DÜĞMESİ yok: seçim hiyerarşiden geliyor ve DÜNYA orada bir satır.
     // İki ayrı seçim yolu (liste + sekme) tutmak, hangisinin geçerli olduğu
     // konusunda sürekli bir tutarsızlık kaynağı olurdu.
-    int y = py + 20;
+    //
+    // İçerik panelden UZUN olabiliyor (çok davranışlı varlık, dünya ayarları +
+    // kurallar). Tekerlekle kaydırılıyor ve panele KIRPILIYOR; kırpma olmadan
+    // taşan satırlar alttaki konsolun üstüne çizilirdi.
+    int ctop = py + 16;
+    int cavail = ph - 20;
+    if (_g_in(px, py, pw, ph)) {
+        float wh = mouse_wheel();
+        if (wh > 0.5)        { _ed_iscroll3 = _ed_iscroll3 - 24; }
+        if (wh < 0.0 - 0.5)  { _ed_iscroll3 = _ed_iscroll3 + 24; }
+    }
+    _ed_iscroll3 = _ed_clamp_scroll3(_ed_iscroll3, _ed_icontent3, ctop, cavail);
+    kirp(px, ctop, pw, cavail);
+    int y = py + 20 - _ed_iscroll3;
     if (_ed_tab3 == 1) {
         _g_txt3("DUNYA", lx, y, inner, _G_ACC3());
         _ed_world_panel3(px, y + 14, pw);
+        kirp_bitir();
+        _ed_scrollbar3(px, ctop, pw, cavail);
         return;
     }
     if (s < 0) {
         _g_txt3("secili varlik yok", lx, y, inner, _G_DIM3());
         _g_txt3("sahnede bir cisme tikla,", lx, y + 14, inner, _G_DIM3());
         _g_txt3("ya da soldaki DUNYA satirini sec", lx, y + 28, inner, _G_DIM3());
+        _ed_icontent3 = y + 42;
+        kirp_bitir();
         return;
     }
     Ent3 e = _e3[s];
@@ -6990,6 +7100,23 @@ func _ed_inspector3() {
 
     if (_g_button(9470, lx, y, half, _ED_FLD3, "COGALT")) { ed_mark3d(); ed_duplicate3d(id); }
     if (_g_button(9471, lx + half + 4, y, half, _ED_FLD3, "SIL")) { ed_mark3d(); ed_delete3d(id); }
+    _ed_icontent3 = y + _ED_FLD3 + 6;
+    kirp_bitir();
+    _ed_scrollbar3(px, ctop, pw, cavail);
+}
+
+// İnce kaydırma çubuğu — içerik panelden uzunsa nerede olduğunu gösteriyor.
+func _ed_scrollbar3(px, ctop, pw, cavail) {
+    int total = _ed_icontent3 - ctop + _ed_iscroll3;
+    if (total <= cavail) { return; }
+    int bh = toInt(cavail * cavail / total);
+    if (bh < 12) { bh = 12; }
+    int room = cavail - bh;
+    int span = total - cavail;
+    int by = ctop;
+    if (span > 0) { by = ctop + toInt(room * _ed_iscroll3 / span); }
+    rect(px + pw - 4, ctop, 3, cavail, rgb(34, 38, 46));
+    rect(px + pw - 4, by, 3, bh, rgb(90, 100, 118));
 }
 
 // `ord` var ama `chr` YOK (dilin bir asimetrisi — TODO'da). Metin alanı için
