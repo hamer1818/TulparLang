@@ -1,0 +1,100 @@
+// Tulpar 3D — Phase 5: texture, sky and material.
+// English twin of examples/tame3d_texture.tpr.
+//
+//   ./tulpar examples/en/tame3d_texture.tpr
+//
+// SPACE / TOUCH THE SCREEN: toggle the texture — the same scene, flat colour
+// vs tiled surface. There is no asset file at all: the texture is GENERATED
+// with checker(), and the sky is a gradient from an embedded shader (no
+// cubemap, no six images).
+//
+// Four ideas at once:
+//   texture3d(t, tu, tv)     — it is STATE; every primitive drawn after it
+//                              uses it. tu/tv = how many times it tiles across
+//                              the surface.
+//   material3d(shine, spec)  — shininess. matte3d() and glossy3d() are presets.
+//   sky(top, horizon)        — a camera-aware gradient sky.
+//   fog_sky(density)         — distance fog that takes its colour from the
+//                              sky's HORIZON, so there is no hard line between
+//                              ground and sky and distance stays readable.
+
+import "tame";
+
+bool textured = true;
+bool touched_prev = false;
+
+func main() {
+    if (!window(880, 500, "Tulpar 3D - Texture and Sky")) { return; }
+    set_fps(60);
+
+    lights_on();
+    sun(0.0 - 0.5, 0.0 - 1.0, 0.0 - 0.35, rgb(255, 250, 235));
+    ambient_light(rgb(70, 76, 92));
+    shadows_on();
+    shadow_area(22.0);
+    sky(rgb(58, 116, 200), rgb(196, 220, 240));   // zenith, horizon
+    // Take the fog colour from the sky's HORIZON so a distant body blends into
+    // the sky behind it. Giving fog its own colour would look like dirty glass.
+    fog_sky(0.022);
+
+    // Textures — no files, generated at run time.
+    int ground_tex = checker(128, 128, 8, rgb(158, 166, 176), rgb(120, 128, 140));
+    int box_tex    = checker(64, 64, 4, rgb(220, 180, 110), rgb(170, 130, 70));
+
+    while (running()) {
+        float t = elapsed();
+
+        bool touching = touch_count() > 0;
+        if (key_pressed(32) || (touching && !touched_prev)) {
+            textured = !textured;
+        }
+        touched_prev = touching;
+
+        float cx = sin(t * 0.25) * 16.0;
+        float cz = cos(t * 0.25) * 16.0;
+
+        frame_begin();
+        clear(rgb(16, 18, 26));
+        camera3d(cx, 8.5, cz,  0.0, 1.0, 0.0,  45.0);
+
+        space_begin();
+            // Ground: one 128x128 texture, tiled 24x24. Without a texture the
+            // same surface would be one flat colour — the sense of scale comes
+            // from here.
+            if (textured) { texture3d(ground_tex, 24.0, 24.0); }
+            matte3d();                                 // keep the ground matte
+            plane(0.0, 0.0, 0.0,  60.0, 60.0, WHITE);
+
+            // Boxes: the same texture tiled 2x2 + a shiny material.
+            if (textured) { texture3d(box_tex, 2.0, 2.0); }
+            glossy3d();
+            cube(0.0 - 5.0, 1.5, 0.0 - 2.0,  3.0, 3.0, 3.0, WHITE);
+            cube(5.5,       1.2, 2.0,        2.4, 2.4, 2.4, WHITE);
+
+            // Colour is MULTIPLIED with the texture: same texture, different paint.
+            cube(0.0, 1.0, 6.0,  2.0, 2.0, 2.0, rgb(140, 200, 255));
+
+            // The spheres are untextured — the surface that shows the
+            // shininess difference most clearly.
+            no_texture3d();
+            glossy3d();
+            sphere(0.0 - 2.0, 1.6, 0.0 - 6.0,  1.6, rgb(230, 90, 90));
+            matte3d();
+            sphere(2.0,       1.6, 0.0 - 6.0,  1.6, rgb(230, 90, 90));
+
+            no_texture3d();
+        space_end();
+
+        text("Tulpar 3D - Texture and Sky", 14, 12, 22, RAYWHITE);
+        if (textured) {
+            text("Texture: ON  - SPACE / TOUCH THE SCREEN to turn off", 14, 40, 16, rgb(150, 230, 150));
+        } else {
+            text("Texture: OFF - SPACE / TOUCH THE SCREEN to turn on", 14, 40, 16, rgb(230, 150, 150));
+        }
+        text("Same sphere: glossy on the left, matte on the right", 14, 62, 15, rgb(200, 200, 210));
+        frame_end();
+    }
+    close_window();
+}
+
+main();

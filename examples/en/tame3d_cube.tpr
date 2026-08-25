@@ -1,0 +1,41 @@
+// Tulpar 3D — the Phase 0 proof: a spinning cube with a grid.
+// English twin of examples/tame3d_cube.tpr.
+//
+//   ./tulpar examples/en/tame3d_cube.tpr
+//
+// The camera orbits the cube at the origin (in Phase 0 DrawCube is
+// axis-aligned, so motion is shown by orbiting the camera instead). This
+// example proves the 3D binding family — camera3d / space_begin / cube /
+// cube_wires / grid — works on desktop and in WASM alike.
+
+import "tame";
+
+func main() {
+    if (!window(800, 450, "Tulpar 3D - Spinning Cube")) { return; }
+    set_fps(60);
+
+    while (running()) {
+        float t = elapsed();
+        float cx = sin(t) * 9.0;      // orbit the camera around the origin
+        float cz = cos(t) * 9.0;
+
+        frame_begin();
+        clear(rgb(18, 20, 28));
+
+        camera3d(cx, 6.0, cz,   0.0, 1.0, 0.0,   45.0);   // eye, target, FOV
+        space_begin();
+            grid(14, 1.0);                                 // XZ reference grid
+            cube(0.0, 1.0, 0.0,  2.0, 2.0, 2.0, GOLD);     // solid cube
+            cube_wires(0.0, 1.0, 0.0,  2.02, 2.02, 2.02, BLACK);
+            cube(3.5, 0.5, 0.0,  1.0, 1.0, 1.0, rgb(80, 200, 255));
+            cube(0.0, 0.5, 3.5,  1.0, 1.0, 1.0, rgb(255, 120, 90));
+        space_end();
+
+        text("Tulpar 3D - Phase 0", 14, 14, 22, RAYWHITE);
+        text("camera3d / space_begin / cube / grid", 14, 40, 16, rgb(150, 160, 180));
+        frame_end();
+    }
+    close_window();
+}
+
+main();

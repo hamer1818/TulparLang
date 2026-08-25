@@ -1,0 +1,71 @@
+// Tulpar 3D — Phase 2: procedural models (GenMesh) + drawing with rotation.
+// English twin of examples/tame3d_models.tpr.
+//
+//   ./tulpar examples/en/tame3d_models.tpr
+//
+// The gen_* generators build models with no file on disk (torus / knot /
+// sphere / cone / cylinder / cube); each enters the model registry as a handle
+// and is drawn with draw_model_rot, rotated around the Y axis. This verifies
+// the Phase 2 model path (LoadModelFromMesh + DrawModelEx) end to end.
+// (load_model from a file plus skeletal animation is wired too — try it with
+// a rigged .glb.)
+
+import "tame";
+
+int m_torus = 0;
+int m_knot  = 0;
+int m_sph   = 0;
+int m_cone  = 0;
+int m_cyl   = 0;
+int m_cube  = 0;
+
+func main() {
+    if (!window(860, 480, "Tulpar 3D - Models")) { return; }
+    set_fps(60);
+
+    // Generate the models once (handles are persistent).
+    m_torus = gen_torus(1.0, 0.38, 16, 26);
+    m_knot  = gen_knot(1.0, 0.5, 32, 26);
+    m_sph   = gen_sphere(1.1, 20, 20);
+    m_cone  = gen_cone(1.0, 2.0, 24);
+    m_cyl   = gen_cylinder(0.8, 1.8, 24);
+    m_cube  = gen_cube(1.6, 1.6, 1.6);
+
+    while (running()) {
+        float t = elapsed();
+        float cx = sin(t * 0.35) * 13.0;
+        float cz = cos(t * 0.35) * 13.0;
+        float yaw = t * 60.0;               // degrees/s
+
+        frame_begin();
+        clear(rgb(15, 17, 24));
+        camera3d(cx, 8.0, cz,  0.0, 0.5, 0.0,  45.0);
+
+        space_begin();
+            plane(0.0, 0.0, 0.0,  22.0, 22.0, rgb(28, 32, 45));
+            grid(22, 1.0);
+
+            // Six different procedural models on a circle, all spinning.
+            draw_model_rot(m_torus, 0.0 - 5.0, 1.2, 0.0,      yaw, 1.0, rgb(255, 200, 60));
+            draw_model_rot(m_knot,  0.0,        1.4, 0.0 - 4.5, yaw, 0.8, rgb(120, 220, 255));
+            draw_model_rot(m_sph,   5.0,        1.2, 0.0,      0.0, 1.0, rgb(255, 120, 140));
+            draw_model_rot(m_cone,  0.0,        1.0, 4.5,      yaw, 1.0, rgb(150, 255, 150));
+            draw_model_rot(m_cyl,   0.0 - 3.5,  0.9, 0.0 - 3.5, yaw, 1.0, rgb(200, 160, 255));
+            draw_model_rot(m_cube,  3.5,        0.8, 3.5,      yaw, 1.0, rgb(255, 160, 90));
+        space_end();
+
+        text("Tulpar 3D - Phase 2: procedural models (GenMesh)", 14, 12, 20, RAYWHITE);
+        text("torus / knot / sphere / cone / cylinder / cube - all spinning", 14, 38, 15, rgb(150, 160, 180));
+        frame_end();
+    }
+
+    unload_model(m_torus);
+    unload_model(m_knot);
+    unload_model(m_sph);
+    unload_model(m_cone);
+    unload_model(m_cyl);
+    unload_model(m_cube);
+    close_window();
+}
+
+main();

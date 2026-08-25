@@ -1,0 +1,79 @@
+// Tulpar 3D — shadows (shadow mapping for the directional light).
+// English twin of examples/tame3d_shadows.tpr.
+//
+//   ./tulpar examples/en/tame3d_shadows.tpr
+//
+// SPACE / TOUCH THE SCREEN: toggle shadows — the sense that objects are
+// STANDING on the ground comes from the shadow; turn it off and they look
+// like they are floating.
+//
+// With shadows on the scene is drawn TWICE (a depth map from the light's eye
+// + the normal pass from the camera). That is why the draws between
+// space_begin/space_end are recorded into a list and replayed twice — the
+// game code is not affected.
+
+import "tame";
+
+bool shadowed = true;
+bool touched_prev = false;
+
+func main() {
+    if (!window(880, 500, "Tulpar 3D - Shadows")) { return; }
+    set_fps(60);
+
+    lights_on();
+    sun(0.0 - 0.55, 0.0 - 1.0, 0.0 - 0.35, rgb(255, 248, 230));
+    ambient_light(rgb(52, 56, 74));
+    shadows_on();
+    shadow_area(20.0);
+
+    while (running()) {
+        float t = elapsed();
+
+        bool touching = touch_count() > 0;
+        if (key_pressed(32) || (touching && !touched_prev)) {
+            shadowed = !shadowed;
+            if (shadowed) { shadows_on(); } else { shadows_off(); }
+        }
+        touched_prev = touching;
+        // The HONEST state: having called shadows_on() does not mean shadows
+        // are working — if the hardware has no depth texture support they are
+        // silently off.
+        bool really = shadows_active();
+
+        float cx = sin(t * 0.28) * 15.0;
+        float cz = cos(t * 0.28) * 15.0;
+        float hop = abs(sin(t * 1.6)) * 3.2;    // bouncing sphere
+
+        frame_begin();
+        clear(rgb(16, 18, 26));
+        camera3d(cx, 9.0, cz,  0.0, 1.0, 0.0,  45.0);
+
+        space_begin();
+            plane(0.0, 0.0, 0.0,  30.0, 30.0, rgb(120, 124, 136));  // light ground
+            // The bouncing sphere — its shadow shrinks and grows on the
+            // ground, which is what sells "it is on the floor" most clearly.
+            sphere(0.0, 1.2 + hop, 0.0,  1.4, rgb(240, 190, 70));
+            // Static bodies
+            cube(0.0 - 5.0, 1.5, 0.0 - 2.0,  3.0, 3.0, 3.0, rgb(210, 95, 95));
+            cube(5.5,       1.0, 2.0,        2.0, 2.0, 2.0, rgb(95, 170, 240));
+            cylinder(0.0 - 2.0, 0.0, 5.0,  1.1, 4.0, rgb(120, 210, 140));
+            cylinder(4.0,       0.0, 0.0 - 5.5, 1.1, 2.6, rgb(190, 130, 220));
+        space_end();
+
+        text("Tulpar 3D - Shadows", 14, 12, 22, RAYWHITE);
+        if (really) {
+            text("Shadows: ON  - SPACE / TOUCH THE SCREEN to turn off", 14, 40, 16, rgb(150, 230, 150));
+        } else {
+            if (shadowed) {
+                text("Shadows: NOT SUPPORTED (hardware) - lighting still works", 14, 40, 16, rgb(240, 190, 90));
+            } else {
+                text("Shadows: OFF - SPACE / TOUCH THE SCREEN to turn on", 14, 40, 16, rgb(230, 150, 150));
+            }
+        }
+        frame_end();
+    }
+    close_window();
+}
+
+main();

@@ -1,0 +1,287 @@
+// scene3d Arena — a 3D game that shows the engine's Phase 7-11 features
+// together. English twin of examples/scene3d_arena.tpr.
+//
+//   Phase 7  (play):     levels · enemy AI · bullets · health/damage
+//   Phase 8  (feel):     particles (billboards) · 2D health bars pinned to 3D
+//   Phase 9  (geometry): ramps · rotated wall (SAT) · capsule pillar · camera ray
+//   Phase 11 (shell):    title screen · pause (ESC/P) · restart
+//   Zones:               bonus pad (one shot) · poison pool (sphere, every frame)
+//   Input:               keyboard+mouse · touch · gamepad (all at once)
+//
+//   ./tulpar examples/en/scene3d_arena.tpr
+//   ./tulpar build --target=android examples/en/scene3d_arena.tpr out
+//
+// Play: enemies chase you and cost health on contact. You fire automatically
+// in the direction you are looking; clear every enemy in a level to advance.
+// Finish all three levels to win.
+//
+// WHY firing is automatic: on desktop it would need a key, on touch a button —
+// and the left half is already the stick, the right half the look pad / jump.
+// Automatic fire keeps the game one-finger playable and demonstrates the
+// bullet system just as well.
+
+import "scene3d";
+
+int player = 0;
+array enemies = [];        // this level's enemy handles
+int enemies_left = 0;
+float fire_cd = 0.0;       // fire cooldown counter (s)
+
+float FIRE_EVERY = 0.45;   // fire interval (s)
+float BULLET_SPEED = 26.0;
+float BULLET_LIFE = 1.6;   // s — a missed bullet dies here
+int   BULLET_DMG = 25;
+int   ENEMY_HP = 50;       // 2 hits
+int   TOUCH_DMG = 12;      // cost of touching an enemy
+int   poison_zone = 0 - 1; // poison pool's zone id (the HUD reads it)
+
+// --- Shared setup: the things that are the same in every level ------------
+func setup() {
+    sky3d(rgb(24, 30, 52), rgb(96, 116, 150));
+    fog3d(0.018);
+    gravity3d(26.0);
+    // Hooks SURVIVE level transitions — setting them once is enough.
+    on_hit3d(TAG_BULLET, TAG_ENEMY, bullet_hits_enemy);
+    on_hit3d(TAG_ENEMY, TAG_PLAYER, enemy_touches_player);
+    on_death3d(TAG_ENEMY, enemy_died);
+    on_death3d(TAG_PLAYER, player_died);
+    // Zones are normally INVISIBLE. We turn the wireframes on here because the
+    // player has to see the bonus pad and the poison pool — a real game would
+    // use a floor texture or a light instead; this is a debug draw.
+    trigger_show3d(true);
+}
+
+// --- Level setups ---------------------------------------------------------
+// Each builds the scene FROM SCRATCH: entities are cleared on transition.
+func build_arena() {
+    // four walls — bullets hit these and die too
+    spawn3(0.0, 1.5, 0.0 - 16.0,  34.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    spawn3(0.0, 1.5, 16.0,        34.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    spawn3(0.0 - 16.0, 1.5, 0.0,  1.0, 3.0, 34.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    spawn3(16.0, 1.5, 0.0,        1.0, 3.0, 34.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    // Pillars: they act as cover and stop bullets. Being SHAPE_CYL they now
+    // collide as vertical capsules rather than boxes — hitting the "corner"
+    // of a post that has no corners was strange.
+    spawn3(7.0, 2.0, 7.0,         1.6, 4.0, 1.6, rgb(120, 200, 140), SHAPE_CYL, TAG_WALL);
+    spawn3(0.0 - 7.0, 2.0, 0.0 - 7.0, 1.6, 4.0, 1.6, rgb(120, 200, 140), SHAPE_CYL, TAG_WALL);
+
+    // Diagonal wall: rotated 45 degrees with yaw. Its AABB would swell to
+    // cover the diagonal; thanks to SAT it collides with its real surface.
+    int diag = spawn3(0.0 - 6.0, 1.5, 6.0,  9.0, 3.0, 0.6, rgb(150, 150, 175), SHAPE_CUBE, TAG_WALL);
+    set3yaw(diag, 45.0);
+
+    // Ramps: the world is no longer a single flat plane — you can walk up.
+    ramp3d(0.0, 0.9, 8.0,   5.0, 1.8, 7.0, rgb(110, 120, 160), 180.0);
+    ramp3d(8.5, 0.7, 0.0 - 5.0, 4.0, 1.4, 6.0, rgb(110, 120, 160), 90.0);
+    build_zones();
+}
+
+// Trigger zones. These are NOT entities: they are not drawn (the wireframe is
+// only visible because trigger_show3d turned it on), they do not collide, the
+// player walks through them. They are destroyed and rebuilt with the level —
+// which is why the "one shot" bonus can be taken once per level.
+func build_zones() {
+    // 1) Bonus pad — an ENTER hook, ONE SHOT per level. In the old imitation
+    // (invisible entity + on_hit3d) this hook fired 60 times a second and the
+    // game itself had to keep a "already taken" flag.
+    int pad = trigger3d(0.0 - 10.0, 1.0, 10.0,  4.0, 3.0, 4.0, TAG_PLAYER);
+    on_enter3d(pad, on_bonus_pad);
+    trigger_once3d(pad, true);
+
+    // 2) Poison pool — a WHILE-INSIDE hook, i.e. every frame. Because damage3d
+    // manages its own invulnerability window this is not "60 damage a second".
+    // A sphere zone: building a box for a pool with no corners would be odd.
+    poison_zone = trigger_sphere3d(11.0, 1.0, 11.0,  3.5, TAG_PLAYER);
+    on_stay3d(poison_zone, on_poison_pool);
+    // An EXIT hook: leaving the pool is an event too. Writing this with the
+    // imitation approach would need the game to keep a "was I inside last
+    // frame" flag.
+    on_exit3d(poison_zone, on_poison_exit);
+}
+
+func spawn_player() {
+    player = spawn3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    health3d(player, 100);
+    camera_orbit(player, 14.0, 9.0);
+}
+
+func add_enemy(x, z) {
+    int e = spawn3(x, 1.0, z,  1.3, 2.0, 1.3, rgb(230, 80, 80), SHAPE_CUBE, TAG_ENEMY);
+    health3d(e, ENEMY_HP);
+    push(enemies, e);
+    enemies_left = enemies_left + 1;
+}
+
+func reset_level_state() {
+    enemies = [];
+    enemies_left = 0;
+    fire_cd = 0.0;
+}
+
+func level1() {
+    reset_level_state();
+    build_arena();
+    spawn_player();
+    add_enemy(9.0, 9.0);
+    add_enemy(0.0 - 9.0, 9.0);
+    add_enemy(9.0, 0.0 - 9.0);
+}
+
+func level2() {
+    reset_level_state();
+    build_arena();
+    spawn_player();
+    add_enemy(11.0, 11.0);
+    add_enemy(0.0 - 11.0, 11.0);
+    add_enemy(11.0, 0.0 - 11.0);
+    add_enemy(0.0 - 11.0, 0.0 - 11.0);
+    add_enemy(0.0, 12.0);
+}
+
+func level3() {
+    reset_level_state();
+    build_arena();
+    spawn_player();
+    add_enemy(12.0, 12.0);
+    add_enemy(0.0 - 12.0, 12.0);
+    add_enemy(12.0, 0.0 - 12.0);
+    add_enemy(0.0 - 12.0, 0.0 - 12.0);
+    add_enemy(0.0, 13.0);
+    add_enemy(13.0, 0.0);
+    add_enemy(0.0 - 13.0, 0.0);
+}
+
+// --- Every frame ----------------------------------------------------------
+func update() {
+    move3d(player, 9.0);
+    if (jump_pressed()) { jump3d(player, 11.0); }
+
+    // Enemy AI: chase when close, patrol when far.
+    int i = 0;
+    int n = length(enemies);
+    while (i < n) {
+        int e = enemies[i];
+        if (alive3(e)) {
+            if (in_range3d(e, player, 14.0)) {
+                chase3d(e, player, 4.2);
+            } else {
+                patrol3d(e, 0.0 - 12.0, 12.0, 12.0, 0.0 - 12.0, 3.0);
+            }
+        }
+        i = i + 1;
+    }
+
+    // Automatic fire: in the direction you are looking.
+    fire_cd = fire_cd - frame_time();
+    if (fire_cd <= 0.0) {
+        fire_cd = FIRE_EVERY;
+        bullet3d(player, BULLET_SPEED, BULLET_LIFE);
+    }
+}
+
+// --- Hooks ----------------------------------------------------------------
+func bullet_hits_enemy() {
+    // Hit spark — BEFORE the bullet dies, while its position can still be read.
+    burst3d(me3d(), 6, rgb(255, 230, 120), 5.0, 0.25);
+    kill3d(me3d());                 // the bullet is spent
+    damage3d(other3d(), BULLET_DMG);
+}
+
+func enemy_touches_player() {
+    // damage3d manages the invulnerability window itself — a touching enemy
+    // hits once per window, not 60 times a second.
+    damage3d(other3d(), TOUCH_DMG);
+}
+
+func enemy_died() {
+    // Death burst: inside the hook the entity is still alive, position readable.
+    burst3d(me3d(), 26, rgb(255, 120, 80), 9.0, 0.7);
+    score3d_add(100);
+    enemies_left = enemies_left - 1;
+    // Last enemy died -> next level. The switch is applied AT THE END OF THE
+    // FRAME, so the entity array does not change inside this hook.
+    if (enemies_left <= 0) { next_level3d(); }
+}
+
+// In zone hooks `me3d()` is the entity ENTERING the zone (as in a collision).
+// There is no `other3d()` — a zone is not an entity.
+func on_bonus_pad() {
+    burst3d(me3d(), 22, rgb(120, 255, 180), 7.0, 0.6);
+    score3d_add(50);
+    // `health3d` REBUILDS the health system — it writes both hp and hpmax to
+    // 100. It is the wrong tool for healing: applied to an enemy with 120 hp
+    // it would LOWER their health. heal3d adds without exceeding hpmax and
+    // does not touch the invulnerability window.
+    heal3d(me3d(), 40);
+}
+
+func on_poison_pool() {
+    damage3d(me3d(), 6);          // bites once per window
+}
+
+func on_poison_exit() {
+    burst3d(me3d(), 10, rgb(200, 120, 240), 5.0, 0.4);
+}
+
+func player_died() {
+    burst3d(me3d(), 40, SKYBLUE, 11.0, 1.0);
+    game_over3d();
+}
+
+// --- 2D layer: health bars above the enemies ------------------------------
+// These are 2D draws whose positions are pinned to 3D — screen_x3d/screen_y3d
+// project a world point onto the screen. Called AFTER the scene is drawn.
+func draw_hud() {
+    // Poison indicator: how many entities are INSIDE the zone. It lights up
+    // when you step into the pool and goes out when you leave — which is how
+    // you can see that enter/exit really are EDGES.
+    if (inside3d(poison_zone) > 0) {
+        text("POISON!", 12, 78, 20, rgb(200, 120, 240));
+    }
+    // Say so if a gamepad is attached. The engine reads it by itself (left
+    // stick moves, right stick looks, A jumps, START pauses) — the game does
+    // not write a single line of input code; this is only an indicator.
+    if (gamepad_active3d()) {
+        text("PAD", toInt(_win_w) - 60, 12, 18, rgb(140, 220, 255));
+    }
+    int i = 0;
+    int n = length(enemies);
+    while (i < n) {
+        int e = enemies[i];
+        if (alive3(e)) {
+            // slightly above the body
+            float wx = get3x(e);
+            float wy = get3y(e) + 1.6;
+            float wz = get3z(e);
+            float sx = screen_x3d(wx, wy, wz);
+            float sy = screen_y3d(wx, wy, wz);
+            // Anything behind the camera lands in nonsense places on screen —
+            // a coarse on-screen check is enough.
+            if (sx > 0.0 && sx < 960.0 && sy > 0.0 && sy < 560.0) {
+                float frac = hp3d(e) * 1.0 / (ENEMY_HP * 1.0);
+                if (frac < 0.0) { frac = 0.0; }
+                rect(sx - 22.0, sy, 44.0, 6.0, rgba(0, 0, 0, 140));
+                rect(sx - 22.0, sy, 44.0 * frac, 6.0, rgb(240, 90, 90));
+            }
+        }
+        i = i + 1;
+    }
+}
+
+scene3d(960, 560, "Tulpar 3D Arena");
+// The title screen is optional: a scene that never calls it goes straight in.
+// Pause (ESC/P/BACK) and the "Play Again" on the game-over screen come free.
+// Because the level is saved, restarting returns to level 1 — no separate
+// on_restart3d hook is needed.
+menu3d("TULPAR 3D ARENA", "3 levels - clear the enemies");
+// Persistence is OPT-IN (it writes to disk). With it on, the high score and
+// completed levels survive the game closing; the title and game-over screens
+// show the record.
+save_progress3d();
+on_setup3d(setup);
+on_update3d(update);
+on_hud3d(draw_hud);
+level3d(1, level1);
+level3d(2, level2);
+level3d(3, level3);
+play3d();

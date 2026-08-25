@@ -42,6 +42,23 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — 3B örneklerin İngilizce ikizleri (+ `examples/en/` artık test ediliyor)
+
+`examples/en/` altında arcade oyunlarının ikizleri vardı, 3B'nin yoktu. On beş
+dosya eklendi: sekiz `scene3d_*` (arena, camera, character, collector,
+data_game, editor, export, terrain) ve yedi `tame3d_*`.
+
+Bu iş sırada başka bir boşluk buldu: **`examples/en/` hiç test edilmiyordu.**
+Örnek koşucusu yalnız `examples/*.tpr` üzerinde geziyordu, yani ikizler
+kaynaktan ayrışsa — yeniden adlandırılmış bir API, kaldırılmış bir builtin —
+kimse görmezdi. Hepsi artık compile-only olarak koşuyor; ayrışmanın belirtisi
+zaten "derlenmiyor" oluyor.
+
+İkizleri yazarken İngilizce API adlarının bir kısmı yanlış tahmin edildi
+(`zone3d`, `self3`, `title3d`…). Ölçüm düzeltti: hepsi VAR, yalnız başka
+yazımla (`trigger3d`, `me3d`, `menu3d`). Yani iki dilli API sözü tutulmuş
+durumda; eksik olan yalnız ikiz örneklerdi.
+
 ### Fixed — builtin denetimindeki 47 boşluğun hepsi kapandı
 
 **Kırık vaatler (7).** `values`, `toBool`, `toUpper`, `toLower`, `clock`,

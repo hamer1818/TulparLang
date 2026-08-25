@@ -594,6 +594,19 @@ if [ "$ACTION" = "test" ]; then
             printf '%s %s\n' "$example" "$compile_only" >> "$work_list"
         done
 
+        # examples/en/ — İngilizce ikizler. Bu klasör HİÇ test edilmiyordu:
+        # döngü yalnız `examples/*.tpr` üzerinde geziyordu, yani ikizler
+        # kaynak dilden ayrışsa (yeniden adlandırılmış bir API, kaldırılmış
+        # bir builtin) kimse görmezdi.
+        #
+        # Hepsi COMPILE-ONLY: ikizler oyun, yani pencere açıp kullanıcı
+        # kapatana dek bloklarlar. Derlemeleri yine de gerçek kazanç —
+        # ayrışmanın belirtisi zaten "derlenmiyor" oluyor.
+        for example in examples/en/*.tpr; do
+            [ -f "$example" ] || continue
+            printf '%s %s\n' "$example" "1" >> "$work_list"
+        done
+
         # Default to the machine's core count; TULPAR_TEST_JOBS overrides
         # (e.g. TULPAR_TEST_JOBS=1 to get the old serial behaviour back when
         # bisecting a flaky test).

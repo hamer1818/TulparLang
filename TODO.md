@@ -347,8 +347,19 @@ boşluklar; backlog'da yoklardı.
 - [ ] **3B oyun `tulparlang.dev/oyunlar`'a konulmadı.** Teknik engel kalmadı
       (Faz 7 şartı sağlandı, menü/duraklat/yeniden-başla geldi).
 
-- [ ] **3B örneklerin İngilizce ikizi yok.** `examples/en/` altında arcade
-      oyunlarının ikizleri var, 3B'nin yok.
+- [x] **3B örneklerin İngilizce ikizi geldi.** ✅ 2026-08-25 — 15 dosya:
+      8 `scene3d_*` (arena, camera, character, collector, data_game, editor,
+      export, terrain) + 7 `tame3d_*`.
+
+      Bu iş sırada BAŞKA bir boşluk buldu: `examples/en/` HİÇ test edilmiyordu
+      — koşucu yalnız `examples/*.tpr` üzerinde geziyordu, yani ikizler
+      kaynaktan ayrışsa (yeniden adlandırılmış API, kaldırılmış builtin)
+      kimse görmezdi. Artık hepsi compile-only olarak koşuyor.
+
+      İkizleri yazarken İngilizce API adlarının bir kısmını yanlış tahmin
+      ettim (`zone3d`, `self3`, `title3d`…); gerçekte hepsi VAR ama başka
+      yazımla (`trigger3d`, `me3d`, `menu3d`). Yani iki dilli API sözü
+      tutulmuş — eksik olan yalnız ikizlerdi.
 
 - [ ] **Windows shim'leri ölü kod.** Natif Windows 3.13.0'da bırakıldı;
       `PLATFORM_WINDOWS` dalları bilerek yerinde ama bakımsız ve test edilmiyor.

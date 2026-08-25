@@ -1,0 +1,75 @@
+// Tulpar 3D — Phase 4: lighting (directional sun + point lights).
+// English twin of examples/tame3d_lights.tpr.
+//
+//   ./tulpar examples/en/tame3d_lights.tpr
+//
+// SPACE: toggle the light — the same scene, flat colour vs shaded surface.
+// The Blinn-Phong shader is embedded; there is no asset file, and the desktop
+// GL3.3 and web/Android GLES2 variants both live inside the compiler.
+//
+// Note: with the light on, spheres/cylinders/planes are drawn through unit
+// meshes that have correct normals (raylib's immediate-mode DrawSphere emits
+// no normals and would shade wrongly under light) — tame handles that; the
+// game code does not change.
+
+import "tame";
+
+bool lit = true;
+bool touched_prev = false;   // to read touch as an edge
+
+func main() {
+    if (!window(880, 500, "Tulpar 3D - Lighting")) { return; }
+    set_fps(60);
+
+    lights_on();
+    sun(0.0 - 0.55, 0.0 - 1.0, 0.0 - 0.35, rgb(255, 246, 224));  // sun (DIRECTION)
+    point_light(1, 4.0, 3.0, 0.0 - 4.0, rgb(255, 120, 60));       // warm point
+    point_light(2, 0.0 - 5.0, 2.5, 4.0, rgb(80, 140, 255));       // cool point
+    ambient_light(rgb(40, 44, 60));
+
+    while (running()) {
+        float t = elapsed();
+
+        // SPACE (desktop) or TOUCH THE SCREEN (mobile) -> toggle the light.
+        // Touch is read as an EDGE: holding a finger down must not re-trigger
+        // every frame and make the light flicker.
+        bool touching = touch_count() > 0;
+        if (key_pressed(32) || (touching && !touched_prev)) {
+            lit = !lit;
+            if (lit) { lights_on(); } else { lights_off(); }
+        }
+        touched_prev = touching;
+
+        float cx = sin(t * 0.3) * 13.0;
+        float cz = cos(t * 0.3) * 13.0;
+
+        frame_begin();
+        clear(rgb(14, 16, 24));
+        camera3d(cx, 7.5, cz,  0.0, 1.0, 0.0,  45.0);
+
+        space_begin();
+            plane(0.0, 0.0, 0.0,  26.0, 26.0, rgb(70, 74, 88));   // ground
+            // Spheres — the surface where light reads most clearly (soft ramp).
+            sphere(0.0 - 4.0, 1.6, 0.0,  1.6, rgb(220, 90, 90));
+            sphere(0.0,       1.6, 0.0,  1.6, rgb(90, 200, 120));
+            sphere(4.0,       1.6, 0.0,  1.6, rgb(110, 150, 240));
+            // Boxes — faces at different brightness according to their normals.
+            cube(0.0 - 7.0, 1.2, 0.0 - 5.0,  2.4, 2.4, 2.4, rgb(230, 190, 90));
+            cube(7.0,       1.2, 0.0 - 5.0,  2.4, 2.4, 2.4, rgb(230, 190, 90));
+            // Cylinders
+            cylinder(0.0 - 4.0, 0.0, 5.0,  1.0, 3.2, rgb(190, 120, 220));
+            cylinder(4.0,       0.0, 5.0,  1.0, 3.2, rgb(190, 120, 220));
+        space_end();
+
+        text("Tulpar 3D - Lighting", 14, 12, 22, RAYWHITE);
+        if (lit) {
+            text("Light: ON  - SPACE / TOUCH THE SCREEN to turn off", 14, 40, 16, rgb(150, 230, 150));
+        } else {
+            text("Light: OFF - SPACE / TOUCH THE SCREEN to turn on", 14, 40, 16, rgb(230, 150, 150));
+        }
+        frame_end();
+    }
+    close_window();
+}
+
+main();
