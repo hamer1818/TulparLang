@@ -1,4 +1,5 @@
 #include "parser.hpp"
+#include <cctype>
 #include "ast_visitor.hpp"
 #include "../common/localization.hpp"
 #include "../common/diagnostics.hpp"
@@ -67,6 +68,30 @@ Token Parser::expect(TulparTokenType type, const std::string& error_msg) {
         if (position_ > 0) {
             int prev_line = tokens_[position_ - 1].line();
             if (prev_line > 0) err_line = prev_line;
+        }
+        // AYRILMIŞ KELİME ÇARPMASI: bir ad beklenirken elimizde bir anahtar
+        // kelime varsa, sebebi söylemek gerekiyor. Genel "ad bekleniyordu"
+        // mesajı bu durumda yanıltıcı — kullanıcı adı YAZMIŞ oluyor, ama o
+        // ad dilin bir anahtar kelimesi (`tip`, `len`, `icinde`, `don`,
+        // `dene`, `move`...). Bu oturumda üç kez yaşandı ve her seferinde
+        // yanlış yere bakıldı, çünkü mesaj sorunu değil belirtisini
+        // anlatıyordu.
+        if (type == TOKEN_IDENTIFIER && !check(TOKEN_IDENTIFIER)) {
+            const std::string &lex = current().value();
+            if (!lex.empty() && (std::isalpha((unsigned char)lex[0]) ||
+                                 lex[0] == '_')) {
+                // Mesaj `tr_en` üzerinden: taban metni localization.cpp'nin
+                // tam-eşleşme tablosuna sokmak yerine burada kuruluyor,
+                // çünkü suçlu kelime değişken.
+                std::string m = std::string(tulpar::i18n::tr_en(
+                    "ayrilmis kelime ad olarak kullanilamaz: '",
+                    "reserved word cannot be used as a name: '"));
+                m += lex;
+                m += tulpar::i18n::tr_en("' (baska bir ad sec)",
+                                         "' (choose another name)");
+                error(m + " at line " + std::to_string(err_line));
+                return current();
+            }
         }
         error(error_msg + " at line " + std::to_string(err_line));
     }

@@ -153,6 +153,23 @@ if [ "$ACTION" = "suites" ]; then
             exit 1
         fi
     fi
+    # Ayrılmış kelime tanılaması: `int tip = 5` gibi bir çarpışmada hata
+    # mesajı SUÇLU KELİMEYİ söylemeli. Genel "ad bekleniyordu" mesajı bu
+    # durumda belirtiyi anlatıyor, sebebi değil — ve bu oturumda üç kez yanlış
+    # yere baktırdı.
+    RW_TMP=$(mktemp -d)
+    printf 'int tip = 5;\n' > "$RW_TMP/rw.tpr"
+    RW_OUT=$(./tulpar typecheck "$RW_TMP/rw.tpr" 2>&1 || true)
+    if echo "$RW_OUT" | grep -q "'tip'"; then
+        echo -e "${GREEN}ayrilmis kelime tanilamasi calisiyor${NC}"
+    else
+        echo -e "${RED}Ayrilmis kelime tanilamasi suclu kelimeyi soylemiyor!${NC}"
+        echo "$RW_OUT" | head -3
+        rm -rf "$RW_TMP"
+        exit 1
+    fi
+    rm -rf "$RW_TMP"
+
     # Kod üretimi DENKLİK denetimi: sahne JSON'undan üretilen Tulpar kodu
     # derlenip çalıştırılıyor ve kurduğu sahne yeniden serileştirilerek
     # kaynakla karşılaştırılıyor. "Kod da aynı sahneyi kuruyor" iddiasını

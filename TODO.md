@@ -232,20 +232,11 @@ boşluklar; backlog'da yoklardı.
 
 - [ ] **`%` operatörü yok** — `mod()` var.
 
-- [ ] **Rezerve kelime çarpması teşhis edilemiyor.** `dene` (= `try`) adında bir
-      fonksiyon tanımlayıp çağırınca hata "sözdiziminde bir eksiklik var" diyor;
-      "`dene` rezerve bir kelime" demiyor. 2026-08-14'te bir ölçüm betiği bu
-      yüzden dakikalarca yanlış yerde arattı. `move`/`don` için CLAUDE.md'de not
-      var ama derleyici sessiz. Tanımlayıcı beklenen yerde bir anahtar kelime
-      görüldüğünde mesaj bunu SÖYLEMELİ — ucuz ve doğrudan teşhis kazancı.
-
-- [x] **AOT optimizasyonu `scene3d_arena`'da geçersiz IR üretiyordu.**
-      ✅ 2026-08-24 — doğrulayıcıya bakıldı ve teşhis kondu: sorun ölçekte
-      değil, LLVM 22'deki iki kusurda (O2+ `loop-idiom-recognize` yanlış
-      mangle edilmiş `llvm.memset`; O1 `InstCombine.foldOpIntoPhi` tipsiz
-      phi). Yalnız en büyük programda görünmesinin sebebi tetikleyen kod
-      şeklinin orada bulunması. Muhafazakâr bir optimizasyon basamağı
-      eklendi; ölçüm ~%12 hızlanma. Detay: CHANGELOG.
+- [x] **Ayrılmış kelime çarpması artık teşhis ediliyor.** ✅ 2026-08-24 —
+      hata mesajı SUÇLU KELİMEYİ söylüyor ("ayrilmis kelime ad olarak
+      kullanilamaz: 'tip'"). Genel "ad bekleniyordu" mesajı belirtiyi
+      anlatıyordu, sebebi değil; bu oturumda `len`, `tip` ve `icinde` ile üç
+      kez yanlış yere baktırdı. `build.sh suites` denetliyor.
 
 - [ ] **Küre ↔ DÖNÜK kutu yaklaşık.** `_sph_box3` kutuyu eksen-hizalı
       varsayıyor; kutu-kutu çifti tam SAT'tan geçiyor, küre-kutu geçmiyor.
