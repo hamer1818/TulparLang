@@ -7050,7 +7050,9 @@ func _ed_hierarchy3() {
     _g_panel(0, py, pw, ph, "HIYERARSI");
 
     // Ekleme düğmeleri: dört eşit sütun, panel genişliğinden türetiliyor.
-    int by = py + 20;
+    // İçerik başlık şeridinin ALTINDAN başlıyor. Sabit 20 idi ve 2x ölçekte
+    // şerit 32 piksel olduğu için düğmeler başlığın üstüne biniyordu.
+    int by = py + _us3(16) + _us3(4);
     int gap = 3;
     int bw = _ed_addw3(pw, gap);
     int bx = _ED_PAD3;
@@ -7111,7 +7113,8 @@ func _ed_hierarchy3() {
     // WorldEnvironment'ı ile aynı fikir: yerçekimi, gökyüzü, su, arazi da
     // sahnenin parçası; onları ayrı bir sekmede saklamak "sahnede ne var?"
     // sorusunun cevabını eksik bırakıyordu.
-    if (_g_item(11999, 2, listy, pw - 4, _ED_ROW3 - 1, "DUNYA", _ed_tab3 == 1)) {
+    if (_g_item(11999, _us3(2), listy, pw - _us3(4), _ED_ROW3 - _us3(1),
+                "DUNYA", _ed_tab3 == 1)) {
         _ed_tab3 = 1;
         _ed_sel3e = 0 - 1;
     }
@@ -7125,7 +7128,8 @@ func _ed_hierarchy3() {
         int hnd = _mk_handle3(sl);
         str nm = _sc_nm_of3(hnd);
         if (nm == "") { nm = _sc_tag_nm3(e.tag) + "." + toString(sl); }
-        if (_g_item(12000 + r, 2, listy + r * _ED_ROW3, pw - 4, _ED_ROW3 - 1,
+        if (_g_item(12000 + r, _us3(2), listy + r * _ED_ROW3, pw - _us3(4),
+                    _ED_ROW3 - _us3(1),
                     nm, hnd == _ed_sel3e && _ed_tab3 == 0)) {
             ed_select3d(hnd);
             _ed_tab3 = 0;
@@ -7435,8 +7439,8 @@ func _ed_inspector3() {
     // İçerik panelden UZUN olabiliyor (çok davranışlı varlık, dünya ayarları +
     // kurallar). Tekerlekle kaydırılıyor ve panele KIRPILIYOR; kırpma olmadan
     // taşan satırlar alttaki konsolun üstüne çizilirdi.
-    int ctop = py + 16;
-    int cavail = ph - 20;
+    int ctop = py + _us3(16);
+    int cavail = ph - _us3(20);
     if (_g_in(px, py, pw, ph)) {
         float wh = mouse_wheel();
         if (wh > 0.5)        { _ed_iscroll3 = _ed_iscroll3 - 24; }
@@ -7444,7 +7448,9 @@ func _ed_inspector3() {
     }
     _ed_iscroll3 = _ed_clamp_scroll3(_ed_iscroll3, _ed_icontent3, ctop, cavail);
     kirp(px, ctop, pw, cavail);
-    int y = py + 20 - _ed_iscroll3;
+    // İçerik başlık şeridinin ALTINDAN başlıyor. Sabit 20 idi ve 2x ölçekte
+    // şerit 32 piksel olduğu için ilk satır başlığın üstüne biniyordu.
+    int y = py + _us3(16) + _us3(4) - _ed_iscroll3;
     if (_ed_tab3 == 1) {
         _g_txt3("DUNYA", lx, y, inner, _G_ACC3());
         _ed_world_panel3(px, y + 14, pw);
@@ -7657,8 +7663,8 @@ func _ed_scrollbar3(px, ctop, pw, cavail) {
     int span = total - cavail;
     int by = ctop;
     if (span > 0) { by = ctop + toInt(room * _ed_iscroll3 / span); }
-    rect(px + pw - 4, ctop, 3, cavail, rgb(34, 38, 46));
-    rect(px + pw - 4, by, 3, bh, rgb(90, 100, 118));
+    rect(px + pw - _us3(4), ctop, _us3(3), cavail, rgb(34, 38, 46));
+    rect(px + pw - _us3(4), by, _us3(3), bh, rgb(90, 100, 118));
 }
 
 // `ord` var ama `chr` YOK (dilin bir asimetrisi — TODO'da). Metin alanı için
