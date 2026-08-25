@@ -4968,6 +4968,87 @@ func t_ui_overlap_check_defaults_on() {
     assert_eq_int(_g_ovl_on3, 1);
 }
 
+// SATIR YÜKSEKLİĞİ fonttan büyük olmak ZORUNDA. İhlal edilen değişmez tam
+// buydu: 1x tasarımının sabitleri (r * 12) kaldı, 2x'te font 20 piksele çıktı
+// ve ardışık satırlar 8 piksel ÜST ÜSTE BİNDİ. Widget kutuları çakışmadığı
+// için çakışma dedektörü de sessiz kaldı — kullanıcının gördüğü "iç içe
+// geçmiş yazı" buydu.
+func t_ui_line_height_exceeds_font() {
+    int k = 1;
+    while (k <= 3) {
+        editor_ui_scale3d(k);
+        assert(_g_lh3() > _F3,
+               toString(k) + "x: satir yuksekligi (" + toString(_g_lh3()) +
+               ") fonttan (" + toString(_F3) + ") buyuk olmali");
+        // Aradaki boşluk da ölçekle büyümeli, sabit 1 piksel kalmamalı.
+        assert(_g_lh3() - _F3 >= 4 * k,
+               toString(k) + "x: satir araligi olcekle buyumeli");
+        k = k + 1;
+    }
+    editor_ui_scale3d(2);
+}
+
+// Kutu içi dikey merkez: metin kutunun ortasında olmalı, üstüne yapışmamalı.
+func t_ui_vertical_centering() {
+    editor_ui_scale3d(2);
+    // 32 yüksekliğinde bir alanda 20 punto font → 6 piksel üstten.
+    assert_eq_int(_g_cy3(32), 6);
+    assert_eq_int(_g_cy3(_ED_FLD3), toInt((_ED_FLD3 - _F3) / 2));
+    // Etiket hizası alan yüksekliğine göre.
+    assert_eq_int(_g_ly3(100), 100 + _g_cy3(_ED_FLD3));
+    // Fonttan KÜÇÜK bir kutuda negatife düşmemeli ki metin yukarı kaçmasın.
+    assert(_g_cy3(_F3) >= 0, "esit yukseklikte 0");
+}
+
+// Metinler de denetime GİRMELİ. Dedektör önce yalnız widget kutularını
+// kaydediyordu ve tam bu yüzden sessiz kalmıştı: kutular çakışmıyordu ama
+// içlerindeki ve yanlarındaki yazılar birbirine giriyordu.
+func t_ui_detector_sees_text() {
+    _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+    // İki metin satırı, aralık fonttan KÜÇÜK → binişme.
+    _g_rect3(30000, 10, 100, 80, 20);
+    _g_rect3(30001, 10, 112, 80, 20);
+    assert_eq_int(_g_count_overlaps3(0), 1);
+    // Aralık fonta eşit → biniş yok (kenar teması).
+    _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+    _g_rect3(30000, 10, 100, 80, 20);
+    _g_rect3(30001, 10, 120, 80, 20);
+    assert_eq_int(_g_count_overlaps3(0), 0);
+    // Etiket bir widget'ın İÇİNDE → çakışma değil.
+    _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+    _g_rect3(9001, 0, 0, 120, 32);
+    _g_rect3(30000, 8, 6, 60, 20);
+    assert_eq_int(_g_count_overlaps3(0), 0);
+    // Etiket widget'ın kenarından TAŞIYOR → çakışma.
+    _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+    _g_rect3(9001, 0, 0, 120, 32);
+    _g_rect3(30000, 100, 6, 60, 20);
+    assert_eq_int(_g_count_overlaps3(0), 1);
+    _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+
+    // ...ve `_g_txt3` gerçekten KAYIT YAPIYOR olmalı. Yukarısı dedektörün
+    // mantığını sınıyor; bu satırlar metin yolunun ona bağlı olduğunu.
+    // (Penceresiz `text_width` 0 döndüğü için genişlik ölçülemiyor — sınanan
+    // şey kaydın YAPILDIĞI, boyutu değil.)
+    int once = length(_g_qi3);
+    _g_txt3("deneme", 10, 10, 200, 255);
+    assert(length(_g_qi3) > once, "_g_txt3 dikdortgenini kaydetmeli");
+    _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+}
+
+// Widget'ın KENDİ etiketi kutusunun içinde duruyor ve bu çakışma değil.
+// Saymak, dedektörü her karede yüzlerce sahte uyarıyla kullanılamaz yapardı.
+func t_ui_contained_is_not_overlap() {
+    assert(_g_contains_rect3(0, 0, 100, 40, 10, 10, 50, 20), "iceriyor");
+    assert(_g_contains_rect3(0, 0, 100, 40, 0, 0, 100, 40), "birebir ayni da iceriyor");
+    assert(_g_contains_rect3(0, 0, 100, 40, 90, 10, 20, 20) == false, "tasan icerilmez");
+    assert(_g_contains_rect3(10, 10, 20, 20, 0, 0, 100, 40) == false, "kucuk buyugu iceremez");
+}
+
+test("satir yuksekligi fonttan buyuk", "t_ui_line_height_exceeds_font");
+test("dikey merkezleme", "t_ui_vertical_centering");
+test("dedektor metinleri goruyor", "t_ui_detector_sees_text");
+test("icerilen cakisma degil", "t_ui_contained_is_not_overlap");
 test("cakisma yuklemi", "t_ui_overlap_predicate");
 test("orta grup sola binmiyor", "t_ui_center_group_never_overlaps_left");
 test("cakisma denetimi varsayilan acik", "t_ui_overlap_check_defaults_on");

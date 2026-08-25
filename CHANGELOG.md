@@ -42,6 +42,28 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Fixed — iç içe geçmiş yazılar: satır aralığı ölçekle büyümüyordu
+
+Çakışma dedektörü hiçbir şey bildirmiyordu ama ekrandaki yazılar iç içe
+görünüyordu. İki sebep vardı ve ikisi de aynı kör noktadan geliyordu.
+
+**Satır aralığı sabitti.** Panel içindeki dikey ölçüler 1x tasarımının
+değerleriydi (`y + 3`, `r * 12`) ve ölçeğe bağlanmamıştı. 2x'te font 20
+piksele çıktı ama konsolun satır aralığı 12 kaldı — yani ARDIŞIK SATIRLAR 8
+PİKSEL ÜST ÜSTE BİNDİ. Satır yüksekliği ve dikey merkez artık ölçekten
+türüyor (`_g_lh3` / `_g_cy3` / `_g_ly3`), ve bir test her ölçekte satır
+aralığının fonttan büyük olduğunu sınıyor.
+
+**Dedektör metinleri görmüyordu.** Yalnız widget kutuları kaydediliyordu;
+kutular çakışmadığı için denetim sessiz kalıyordu. Artık düz metinler de
+kaydediliyor. Widget'ın KENDİ etiketi kutusunun içinde durduğu için "içeren"
+durum çakışma sayılmıyor — saymak dedektörü her karede yüzlerce sahte
+uyarıyla kullanılamaz yapardı.
+
+Tespit ile raporlama ayrıldı (`_g_count_overlaps3(report)`): tespit saf, yani
+penceresiz sınanabiliyor. Birleşik olduklarında dedektörün kendisi test
+edilemiyordu — bu oturumda "sınanamayan yerdeki hata" defalarca tekrarlandı.
+
 ### Fixed — arayüz çakışması: artık arayüzün KENDİSİ denetliyor
 
 Editörde bazı düğmeler hâlâ üst üste geliyordu. Tek tek yerleşim formülü

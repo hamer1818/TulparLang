@@ -6126,6 +6126,17 @@ func editor_yazitipi3d(yol) { editor_font3d(yol); }
 // Çizim ve ölçüm TEK kapıdan: font yüklüyse TTF, değilse varsayılan bitmap.
 // İkisinin ayrı yollardan gitmesi, ölçümün çizimden sapmasına ve yerleşimin
 // sessizce kaymasına yol açardı.
+
+// Satır yüksekliği ve dikey merkez ÖLÇEKTEN türüyor. Elle yazılmış sabitler
+// (y + 3, r * 12) 1x tasarımının değerleriydi: 2x'te font 20 piksel ama satır
+// aralığı 12 kalıyordu, yani ARDIŞIK SATIRLAR 8 piksel ÜST ÜSTE BİNİYORDU.
+// Kullanıcının gördüğü "iç içe geçmiş yazı" tam olarak buydu — widget
+// dikdörtgenleri çakışmadığı için çakışma dedektörü de sessiz kalıyordu.
+func _g_lh3(): int { return _F3 + _us3(4); }          // satır yüksekliği
+func _g_cy3(h): int { return toInt((h - _F3) / 2); }  // kutuda dikey merkez
+// Alan yüksekliğindeki bir satırda etiketin dikey merkezi.
+func _g_ly3(y): int { return y + _g_cy3(_ED_FLD3); }
+
 func _g_draw3(t, x, y, size, col) {
     if (_ed_font3 >= 0) { text_font(_ed_font3, t, x, y, size, col); }
     else { text(t, x, y, size, col); }
@@ -6209,13 +6220,27 @@ func _g_fit3(s, maxw): str {
     return "";
 }
 // Sığmayan metin kesiliyor — panelden taşmak yerine kısalıyor.
-func _g_txt3(s, x, y, maxw, c) { _g_draw3(_g_fit3(s, maxw), x, y, _F3, c); }
+// Düz METİN de çakışma denetimine giriyor. Dedektör önce yalnız widget
+// kutularını kaydediyordu ve tam bu yüzden SESSİZ kalmıştı: kutular
+// çakışmıyordu ama içlerindeki ve yanlarındaki yazılar birbirine giriyordu.
+// Kimlikler 30000+ aralığında, yani konsolda "metin mi widget mı" ayırt
+// edilebiliyor.
+int _g_tid3 = 30000;
+
+func _g_txt3(s, x, y, maxw, c) {
+    str t = _g_fit3(s, maxw);
+    if (t != "") {
+        _g_rect3(_g_tid3, x, y, _g_w3(t, _F3), _F3);
+        _g_tid3 = _g_tid3 + 1;
+    }
+    _g_draw3(t, x, y, _F3, c);
+}
 // Sağ kenara hizalı (rx = sağ kenar). Ölçmeden hizalamak imkânsız.
 func _g_txtr3(s, rx, y, c) { _g_draw3(s, rx - _g_w3(s, _F3), y, _F3, c); }
 // Bir kutunun içinde ortalanmış.
 func _g_txtc3(s, x, y, w, h, c) {
     str t = _g_fit3(s, w - 6);
-    _g_draw3(t, x + toInt((w - _g_w3(t, _F3)) / 2), y + toInt((h - _F3) / 2), _F3, c);
+    _g_draw3(t, x + toInt((w - _g_w3(t, _F3)) / 2), y + _g_cy3(h), _F3, c);
 }
 // Etiketi olan bir düğmenin doğal genişliği.
 func _g_btnw3(label): int { return _g_w3(label, _F3) + _us3(14); }
@@ -6283,33 +6308,62 @@ func _g_overlap_rect3(ax, ay, aw, ah, bx, by, bw, bh): bool {
     return true;
 }
 
-func _g_check_overlaps3() {
-    _g_ovl_n3 = 0;
-    if (_g_ovl_on3 == 0) { return; }
+// Bir dikdörtgen diğerini TAMAMEN içeriyor mu? Widget'ın kendi etiketi
+// kutusunun içinde duruyor ve bu bir çakışma değil — onu saymak dedektörü
+// her karede yüzlerce sahte uyarıyla kullanılamaz yapardı.
+func _g_contains_rect3(ax, ay, aw, ah, bx, by, bw, bh): bool {
+    return bx >= ax && by >= ay && bx + bw <= ax + aw && by + bh <= ay + ah;
+}
+
+// TESPİT ile RAPORLAMA ayrı: tespit saf (yalnız sayar), raporlama çizer ve
+// kaydeder. Birleşik olduklarında tespit penceresiz sınanamıyordu — bu
+// oturumda "sınanamayan yerdeki hata" defalarca tekrarlandı.
+//
+// `report` 0 ise hiçbir şey çizilmiyor/kaydedilmiyor; testler bu yolu
+// kullanıyor.
+func _g_count_overlaps3(report): int {
+    int cnt = 0;
     int n = length(_g_qi3);
     int i = 0;
     while (i < n) {
         int j = i + 1;
         while (j < n) {
-            if (_g_overlap_rect3(_g_qx3[i], _g_qy3[i], _g_qw3[i], _g_qh3[i],
+            int kapsiyor = 0;
+            if (_g_contains_rect3(_g_qx3[i], _g_qy3[i], _g_qw3[i], _g_qh3[i],
+                                  _g_qx3[j], _g_qy3[j], _g_qw3[j], _g_qh3[j])) { kapsiyor = 1; }
+            if (_g_contains_rect3(_g_qx3[j], _g_qy3[j], _g_qw3[j], _g_qh3[j],
+                                  _g_qx3[i], _g_qy3[i], _g_qw3[i], _g_qh3[i])) { kapsiyor = 1; }
+            if (kapsiyor == 0 &&
+                _g_overlap_rect3(_g_qx3[i], _g_qy3[i], _g_qw3[i], _g_qh3[i],
                                  _g_qx3[j], _g_qy3[j], _g_qw3[j], _g_qh3[j])) {
-                _g_ovl_n3 = _g_ovl_n3 + 1;
-                // Kırmızı çerçeve: konsolu okumadan da görülsün.
-                rect_lines(_g_qx3[i], _g_qy3[i], _g_qw3[i], _g_qh3[i], rgb(255, 60, 60));
-                rect_lines(_g_qx3[j], _g_qy3[j], _g_qw3[j], _g_qh3[j], rgb(255, 60, 60));
-                _lg_once(LOG_WARN, "ovl" + toString(_g_qi3[i]) + "_" + toString(_g_qi3[j]),
-                         "ARAYUZ CAKISMASI: widget " + toString(_g_qi3[i]) + " ile " +
-                         toString(_g_qi3[j]), 3.0);
+                cnt = cnt + 1;
+                if (report == 1) {
+                    // Kırmızı çerçeve: konsolu okumadan da görülsün.
+                    rect_lines(_g_qx3[i], _g_qy3[i], _g_qw3[i], _g_qh3[i], rgb(255, 60, 60));
+                    rect_lines(_g_qx3[j], _g_qy3[j], _g_qw3[j], _g_qh3[j], rgb(255, 60, 60));
+                    _lg_once(LOG_WARN,
+                             "ovl" + toString(_g_qi3[i]) + "_" + toString(_g_qi3[j]),
+                             "ARAYUZ CAKISMASI: " + toString(_g_qi3[i]) + " ile " +
+                             toString(_g_qi3[j]), 3.0);
+                }
             }
             j = j + 1;
         }
         i = i + 1;
     }
+    return cnt;
+}
+
+func _g_check_overlaps3() {
+    _g_ovl_n3 = 0;
+    if (_g_ovl_on3 == 0) { return; }
+    _g_ovl_n3 = _g_count_overlaps3(1);
 }
 
 func _g_begin() {
     _g_tip3 = "";
     _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+    _g_tid3 = 30000;
     _g_mx3 = mouse_x(); _g_my3 = mouse_y();
     int d = 0;
     if (mouse_down(0)) { d = 1; }
@@ -6330,7 +6384,7 @@ func _g_panel(x, y, w, h, title) {
     rect(x, y, w, h, _G_BG3());
     rect(x, y, w, _us3(16), _G_HEAD3());
     rect_lines(x, y, w, h, _G_LINE3());
-    _g_txt3(title, x + _ED_PAD3, y + _us3(3), w - _ED_PAD3 * 2, _G_ACC3());
+    _g_txt3(title, x + _ED_PAD3, y + _g_cy3(_us3(16)), w - _ED_PAD3 * 2, _G_ACC3());
 }
 
 // Panel içinde bir bölüm başlığı.
@@ -6398,7 +6452,7 @@ func _g_num(id, x, y, w, h, val, step): float {
         if (_g_press3 == 1 && over == false) { out = toFloat(_g_buf3); _g_focus3 = 0; }
         rect(x, y, w, h, rgb(28, 38, 54));
         rect_lines(x, y, w, h, _G_ACC3());
-        _g_txt3(_g_buf3 + "_", x + 3, y + toInt((h - _F3) / 2), w - 6, _G_TXT3());
+        _g_txt3(_g_buf3 + "_", x + _us3(3), y + _g_cy3(h), w - _us3(6), _G_TXT3());
         return out;
     }
 
@@ -6421,7 +6475,7 @@ func _g_num(id, x, y, w, h, val, step): float {
     if (over) { c = rgb(42, 48, 60); }
     rect(x, y, w, h, c);
     rect_lines(x, y, w, h, _G_LINE3());
-    _g_txt3(_sc_num3(out), x + 3, y + toInt((h - _F3) / 2), w - 6, _G_TXT3());
+    _g_txt3(_sc_num3(out), x + _us3(3), y + _g_cy3(h), w - _us3(6), _G_TXT3());
     return out;
 }
 
@@ -6448,7 +6502,7 @@ func _g_text(id, x, y, w, h, val): str {
         if (_g_press3 == 1 && over == false) { out = _g_buf3; _g_focus3 = 0; }
         rect(x, y, w, h, rgb(28, 38, 54));
         rect_lines(x, y, w, h, _G_ACC3());
-        _g_txt3(_g_buf3 + "_", x + 3, y + toInt((h - _F3) / 2), w - 6, _G_TXT3());
+        _g_txt3(_g_buf3 + "_", x + _us3(3), y + _g_cy3(h), w - _us3(6), _G_TXT3());
         return out;
     }
     if (over && _g_press3 == 1) { _g_focus3 = id; _g_buf3 = val; }
@@ -6458,7 +6512,7 @@ func _g_text(id, x, y, w, h, val): str {
     rect_lines(x, y, w, h, _G_LINE3());
     str show = val;
     if (show == "") { show = "(adsiz)"; }
-    _g_txt3(show, x + 3, y + toInt((h - _F3) / 2), w - 6, _G_TXT3());
+    _g_txt3(show, x + _us3(3), y + _g_cy3(h), w - _us3(6), _G_TXT3());
     return out;
 }
 
@@ -6476,7 +6530,7 @@ func _g_item(id, x, y, w, h, label, sel): bool {
     else {
         if (over) { rect(x, y, w, h, rgb(40, 46, 58)); }
     }
-    _g_txt3(label, x + 4, y + toInt((h - _F3) / 2), w - 8, _G_TXT3());
+    _g_txt3(label, x + _us3(4), y + _g_cy3(h), w - _us3(8), _G_TXT3());
     return clicked;
 }
 
@@ -6666,7 +6720,7 @@ func _ed_menubar3() {
     if (_ed_dirty3 == 1) { f = "* " + f; }
     int fw = _g_w3(f, _F3);
     if (W - _ED_PAD3 - fw > x + _us3(12)) {
-        _g_txtr3(f, W - _ED_PAD3, _us3(5), _G_DIM3());
+        _g_txtr3(f, W - _ED_PAD3, _g_cy3(_ED_MENU_H3), _G_DIM3());
     }
 }
 
@@ -6775,7 +6829,7 @@ func _ed_toolbar3() {
              toString(kural_sayisi3d()) + " kural";
     int stw = _g_w3(st, _F3);
     if (W - _ED_PAD3 - stw > cx + cw + sep) {
-        _g_txtr3(st, W - _ED_PAD3, by + _us3(3), _G_DIM3());
+        _g_txtr3(st, W - _ED_PAD3, by + _g_cy3(_ED_FLD3), _G_DIM3());
     }
 }
 
@@ -6808,7 +6862,7 @@ func _ed_console3() {
     int H = screen_height();
     int cy = H - _ED_CONS_H3 - _ED_STAT_H3;
     _g_panel(0, cy, W, _ED_CONS_H3, "KONSOL");
-    int rows = toInt((_ED_CONS_H3 - 20) / 12);
+    int rows = toInt((_ED_CONS_H3 - _us3(18)) / _g_lh3());
     int n = length(_lg_txt);
     int start = n - rows;
     if (start < 0) { start = 0; }
@@ -6818,7 +6872,7 @@ func _ed_console3() {
         int c = _G_TXT3();
         if (_lg_sev[i] == LOG_WARN) { c = rgb(255, 200, 90); }
         if (_lg_sev[i] == LOG_ERR)  { c = rgb(255, 120, 110); }
-        _g_txt3(_lg_txt[i], _ED_PAD3, cy + 18 + r * 12, W - _ED_PAD3 * 2, c);
+        _g_txt3(_lg_txt[i], _ED_PAD3, cy + _us3(16) + r * _g_lh3(), W - _ED_PAD3 * 2, c);
         i = i + 1;
         r = r + 1;
     }
@@ -6849,7 +6903,7 @@ func _ed_statusbar3() {
                    _sc_num3(se.z) + ")   " + left;
         }
     }
-    _g_txt3(left, _ED_PAD3, sy + 4, toInt(W / 2), _G_DIM3());
+    _g_txt3(left, _ED_PAD3, sy + _g_cy3(_ED_STAT_H3), toInt(W / 2), _G_DIM3());
     str right = "gorunum " + toString(_ed_view_w3()) + "x" + toString(_ed_view_h3()) +
                 " | rt " + toString(_ed_rt3) + " | SAG TUS+WASD uc | Q/W/E/R arac | F cercevele | CTRL+Z geri | CTRL+S kaydet";
     if (_ed_playing3 == 1) { right = "OYNUYOR — ESC durdurur"; }
@@ -6858,7 +6912,7 @@ func _ed_statusbar3() {
     if (W - _ED_PAD3 - rw > toInt(W / 2) + 8) {
         int c = _G_DIM3();
         if (_ed_msg_t3 > 0.0) { c = rgb(140, 240, 160); }
-        _g_txtr3(right, W - _ED_PAD3, sy + 4, c);
+        _g_txtr3(right, W - _ED_PAD3, sy + _g_cy3(_ED_STAT_H3), c);
     }
 }
 
@@ -6932,18 +6986,18 @@ func _ed_chrome3() {
     // Görünüm neden boşsa ONU SÖYLE. Sessiz boş bir panel, kullanıcıyı
     // "editör bozuk" sanmaya götürüyor; sebebi ekranda yazmak gerekiyor.
     if (_ed_rt3 < 0) {
-        _g_txt3("SAHNE GORUNUMU KURULAMADI (render texture)", vx + 12, vy + 12,
-                vw - 24, rgb(255, 120, 110));
+        _g_txt3("SAHNE GORUNUMU KURULAMADI (render texture)", vx + _us3(12),
+                vy + _us3(12), vw - _us3(24), rgb(255, 120, 110));
         _g_txt3("grafik surucusu render texture desteklemiyor olabilir",
-                vx + 12, vy + 26, vw - 24, _G_DIM3());
+                vx + _us3(12), vy + _us3(12) + _g_lh3(), vw - _us3(24), _G_DIM3());
         return;
     }
     if (yasayan_sayi3d() == 0) {
-        _g_txt3("SAHNE BOS", vx + 12, vy + 12, vw - 24, _G_ACC3());
-        _g_txt3("soldaki kutu/kure/silindir/duvar dugmeleriyle varlik ekle",
-                vx + 12, vy + 26, vw - 24, _G_DIM3());
+        _g_txt3("SAHNE BOS", vx + _us3(12), vy + _us3(12), vw - _us3(24), _G_ACC3());
+        _g_txt3("soldaki kutu/kure/boru/duvar dugmeleriyle varlik ekle",
+                vx + _us3(12), vy + _us3(12) + _g_lh3(), vw - _us3(24), _G_DIM3());
         _g_txt3("sahne dosyasi acilamadiysa konsola bak (altta)",
-                vx + 12, vy + 40, vw - 24, _G_DIM3());
+                vx + _us3(12), vy + _us3(12) + _g_lh3() * 2, vw - _us3(24), _G_DIM3());
     }
 }
 
@@ -7169,7 +7223,7 @@ func _ed_rules_panel3(px, y, pw): int {
                 Rule3 nr2 = _rl3[i]; nr2.b = _ed_next_tag3(nr2.b); _rl3[i] = nr2;
             }
         } else {
-            _g_txt3("bitince", lx, y + 3, third, _G_DIM3());
+            _g_txt3("bitince", lx, _g_ly3(y), third, _G_DIM3());
             if (_g_button(21000 + i * 8, lx + third + 4, y, third, _ED_FLD3,
                           _sc_tag_nm3(r.a))) {
                 ed_mark3d();
@@ -7231,20 +7285,20 @@ func _ed_world_panel3(px, py, pw) {
     }
     y = y + _ED_FLD3 + _us3(3);
     if (_sky3 == 1) {
-        _g_txt3("ust", lx, y + 3, labw - 2, _G_DIM3());
+        _g_txt3("ust", lx, _g_ly3(y), labw - 2, _G_DIM3());
         float tr = _g_num(9701, fx, y, fw, _ED_FLD3, _col_r3(_sky_top3) * 1.0, 1.0);
         float tg = _g_num(9702, fx + fw + 4, y, fw, _ED_FLD3, _col_g3(_sky_top3) * 1.0, 1.0);
         float tb = _g_num(9703, fx + (fw + 4) * 2, y, fw, _ED_FLD3, _col_b3(_sky_top3) * 1.0, 1.0);
         _sky_top3 = rgb(_ed_c255(tr), _ed_c255(tg), _ed_c255(tb));
         y = y + _ED_FLD3 + _us3(3);
-        _g_txt3("alt", lx, y + 3, labw - 2, _G_DIM3());
+        _g_txt3("alt", lx, _g_ly3(y), labw - 2, _G_DIM3());
         float br = _g_num(9704, fx, y, fw, _ED_FLD3, _col_r3(_sky_bot3) * 1.0, 1.0);
         float bg = _g_num(9705, fx + fw + 4, y, fw, _ED_FLD3, _col_g3(_sky_bot3) * 1.0, 1.0);
         float bb = _g_num(9706, fx + (fw + 4) * 2, y, fw, _ED_FLD3, _col_b3(_sky_bot3) * 1.0, 1.0);
         _sky_bot3 = rgb(_ed_c255(br), _ed_c255(bg), _ed_c255(bb));
         y = y + _ED_FLD3 + _us3(3);
     }
-    _g_txt3("sis", lx, y + 3, labw - 2, _G_DIM3());
+    _g_txt3("sis", lx, _g_ly3(y), labw - 2, _G_DIM3());
     _fog3 = _g_num(9707, fx, y, fw, _ED_FLD3, _fog3, 0.001);
     if (_fog3 < 0.0) { _fog3 = 0.0; }
     y = y + _ED_FLD3 + _us3(6);
@@ -7259,7 +7313,7 @@ func _ed_world_panel3(px, py, pw) {
     }
     _ground_y = _g_num(9711, lx + half + 4, y, half, _ED_FLD3, _ground_y, 0.1);
     y = y + _ED_FLD3 + _us3(3);
-    _g_txt3("yer", lx, y + 3, labw - 2, _G_DIM3());
+    _g_txt3("yer", lx, _g_ly3(y), labw - 2, _G_DIM3());
     _grav = _g_num(9712, fx, y, fw, _ED_FLD3, _grav, 0.2);
     str lt = "isik";
     if (_g_tog(9713, fx + fw + 4, y, fw, _ED_FLD3, lt, _lights3 == 1)) {
@@ -7283,13 +7337,13 @@ func _ed_world_panel3(px, py, pw) {
     if (_water_on3 == 1) {
         _water_y3 = _g_num(9721, lx + half + 4, y, half, _ED_FLD3, _water_y3, 0.1);
         y = y + _ED_FLD3 + _us3(3);
-        _g_txt3("renk", lx, y + 3, labw - 2, _G_DIM3());
+        _g_txt3("renk", lx, _g_ly3(y), labw - 2, _G_DIM3());
         float wr = _g_num(9722, fx, y, fw, _ED_FLD3, _col_r3(_water_col3) * 1.0, 1.0);
         float wg = _g_num(9723, fx + fw + 4, y, fw, _ED_FLD3, _col_g3(_water_col3) * 1.0, 1.0);
         float wb = _g_num(9724, fx + (fw + 4) * 2, y, fw, _ED_FLD3, _col_b3(_water_col3) * 1.0, 1.0);
         _water_col3 = rgb(_ed_c255(wr), _ed_c255(wg), _ed_c255(wb));
         y = y + _ED_FLD3 + _us3(3);
-        _g_txt3("alfa", lx, y + 3, labw - 2, _G_DIM3());
+        _g_txt3("alfa", lx, _g_ly3(y), labw - 2, _G_DIM3());
         _water_a3 = _ed_c255(_g_num(9725, fx, y, fw, _ED_FLD3, _water_a3 * 1.0, 2.0));
     }
     y = y + _ED_FLD3 + _us3(6);
@@ -7305,9 +7359,9 @@ func _ed_world_panel3(px, py, pw) {
     }
     y = y + _ED_FLD3 + _us3(3);
     if (_terr_on == 1) {
-        _g_txt3("tepe", lx, y + 3, labw - 2, _G_DIM3());
+        _g_txt3("tepe", lx, _g_ly3(y), labw - 2, _G_DIM3());
         float tp = _g_num(9731, fx, y, fw, _ED_FLD3, _terr_sy3, 0.2);
-        _g_txt3("toh", fx + fw + _us3(6), y + 3, _us3(22), _G_DIM3());
+        _g_txt3("toh", fx + fw + _us3(6), _g_ly3(y), _us3(22), _G_DIM3());
         float sd = _g_num(9732, fx + fw + _us3(30), y, fw, _ED_FLD3, _terr_seed3 * 1.0, 1.0);
         y = y + _ED_FLD3 + _us3(3);
         if (_g_button(9733, lx, y, half, _ED_FLD3, "yeniden uret")) {
@@ -7334,7 +7388,7 @@ func _ed_world_panel3(px, py, pw) {
         if (_dn_h3 < 0.0) { _dn_h3 = 0.0; }
         if (_dn_h3 >= 24.0) { _dn_h3 = 23.99; }
         y = y + _ED_FLD3 + _us3(3);
-        _g_txt3("gun s", lx, y + 3, labw + _us3(6), _G_DIM3());
+        _g_txt3("gun s", lx, _g_ly3(y), labw + _us3(6), _G_DIM3());
         _dn_len3 = _g_num(9742, fx + _us3(8), y, fw, _ED_FLD3, _dn_len3, 1.0);
         if (_dn_len3 < 1.0) { _dn_len3 = 1.0; }
     }
@@ -7342,7 +7396,7 @@ func _ed_world_panel3(px, py, pw) {
 
     _g_section(px + 2, y, pw - 4, "EGIM");
     y = y + _us3(16);
-    _g_txt3("sinir", lx, y + 3, labw + _us3(4), _G_DIM3());
+    _g_txt3("sinir", lx, _g_ly3(y), labw + _us3(4), _G_DIM3());
     float sl = _g_num(9750, fx + _us3(6), y, fw, _ED_FLD3, _slope_lim3, 0.5);
     if (sl != _slope_lim3) { slope_limit3d(sl); }
     y = y + _ED_FLD3 + _us3(6);
@@ -7400,8 +7454,9 @@ func _ed_inspector3() {
     }
     if (s < 0) {
         _g_txt3("secili varlik yok", lx, y, inner, _G_DIM3());
-        _g_txt3("sahnede bir cisme tikla,", lx, y + 14, inner, _G_DIM3());
-        _g_txt3("ya da soldaki DUNYA satirini sec", lx, y + 28, inner, _G_DIM3());
+        _g_txt3("sahnede bir cisme tikla,", lx, y + _g_lh3(), inner, _G_DIM3());
+        _g_txt3("ya da soldaki DUNYA satirini sec", lx, y + _g_lh3() * 2, inner,
+                _G_DIM3());
         _ed_icontent3 = y + 42;
         kirp_bitir();
         return;
@@ -7411,7 +7466,7 @@ func _ed_inspector3() {
 
     // Ad: kamera hedefi ve kurallar varlıklara ADLA atıfta bulunuyor, yani
     // adsız bir varlık sahne dosyasında hedeflenemiyor.
-    _g_txt3("ad", lx, y + 3, _us3(18), _G_DIM3());
+    _g_txt3("ad", lx, _g_ly3(y), _us3(18), _G_DIM3());
     str nm0 = _sc_nm_of3(id);
     str nm1 = _g_text(9690, lx + _us3(20), y, inner - _us3(20), _ED_FLD3, nm0);
     if (nm1 != nm0) { ed_mark3d(); rename3d(id, nm1); }
@@ -7444,7 +7499,7 @@ func _ed_inspector3() {
     y = y + _us3(16);
 
     e = _e3[s];
-    _g_txt3("kon", lx, y + 3, labw - 2, _G_DIM3());
+    _g_txt3("kon", lx, _g_ly3(y), labw - 2, _G_DIM3());
     float nx = _g_num(9310, fx, y, fw, _ED_FLD3, e.x, 0.05);
     float ny = _g_num(9311, fx + fw + 4, y, fw, _ED_FLD3, e.y, 0.05);
     float nz = _g_num(9312, fx + (fw + 4) * 2, y, fw, _ED_FLD3, e.z, 0.05);
@@ -7452,7 +7507,7 @@ func _ed_inspector3() {
     y = y + _ED_FLD3 + _us3(3);
 
     e = _e3[s];
-    _g_txt3("boy", lx, y + 3, labw - 2, _G_DIM3());
+    _g_txt3("boy", lx, _g_ly3(y), labw - 2, _G_DIM3());
     float sx = _g_num(9320, fx, y, fw, _ED_FLD3, e.sx, 0.05);
     float sy = _g_num(9321, fx + fw + 4, y, fw, _ED_FLD3, e.sy, 0.05);
     float sz = _g_num(9322, fx + (fw + 4) * 2, y, fw, _ED_FLD3, e.sz, 0.05);
@@ -7460,7 +7515,7 @@ func _ed_inspector3() {
     y = y + _ED_FLD3 + _us3(3);
 
     e = _e3[s];
-    _g_txt3("yaw", lx, y + 3, labw - 2, _G_DIM3());
+    _g_txt3("yaw", lx, _g_ly3(y), labw - 2, _G_DIM3());
     float yw = _g_num(9330, fx, y, fw, _ED_FLD3, e.yaw, 0.5);
     if (yw != e.yaw) { ed_rotate3d(id, yw); }
     int dw = inner - labw - fw - 4;
@@ -7474,7 +7529,7 @@ func _ed_inspector3() {
     y = y + _us3(16);
 
     e = _e3[s];
-    _g_txt3("rgb", lx, y + 3, labw - 2, _G_DIM3());
+    _g_txt3("rgb", lx, _g_ly3(y), labw - 2, _G_DIM3());
     int sww = _us3(18);
     int cfw = toInt((inner - labw - sww - 12) / 3);
     float cr = _g_num(9340, fx, y, cfw, _ED_FLD3, _col_r3(e.color) * 1.0, 1.0);
@@ -7507,7 +7562,7 @@ func _ed_inspector3() {
         _e3[s] = e;
     }
     e = _e3[s];
-    _g_txt3("can", lx + half + _us3(6), y + 3, _us3(22), _G_DIM3());
+    _g_txt3("can", lx + half + _us3(6), _g_ly3(y), _us3(22), _G_DIM3());
     float hpv = _g_num(9351, lx + half + _us3(30), y, half - _us3(30), _ED_FLD3, e.hpmax * 1.0, 1.0);
     if (toInt(hpv) != e.hpmax) { health3d(id, toInt(hpv)); }
     y = y + _ED_FLD3 + _us3(6);
@@ -7524,7 +7579,7 @@ func _ed_inspector3() {
     while (bi < length(_bh3)) {
         Bh3 b = _bh3[bi];
         if (b.id == id) {
-            _g_txt3(_ed_bh_name3(b.kind), lx, y + 3, nw2 - 2, _G_TXT3());
+            _g_txt3(_ed_bh_name3(b.kind), lx, _g_ly3(y), nw2 - 2, _G_TXT3());
             float v1 = b.a;
             if (b.kind == BH_PATROL) { v1 = b.e; }
             float p1 = _g_num(20000 + shown * 4, lx + nw2, y, bfw, _ED_FLD3, v1, 0.1);
