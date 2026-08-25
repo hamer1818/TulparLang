@@ -96,8 +96,16 @@ Mimari kararlar ve gerekçeleri:
       ölçülebilsin. `build.sh suites` üretilen kodu derleyip çalıştırıyor ve
       kurduğu sahneyi kaynakla karşılaştırıyor.
 
-- [ ] **`wasm/dist` ve `android/dist` arşivleri bayat.** Editörün önizlemesi
-      wasm'a bağlı; web/Android hedefleri bağlanmadan önce yeniden kurulmalı.
+- [x] **`wasm/dist` arşivleri tazelendi.** ✅ 2026-08-24 — web hedefi bağlanıyor
+      (`scene3d_data_game` .html/.js/.wasm üretiyor). `android/dist` duruyor
+      ama NDK bu makinede kurulu değil, yani doğrulanamadı.
+
+- [ ] **scene3d programlarında OPTİMİZASYON ATLANIYOR.** `[AOT] Warning:
+      optimization produced invalid IR at every level` — yalnız `scene3d`
+      import eden programlarda (ölçüldü: tiny/tame/arcade/02_basics temiz,
+      scene3d_collector kirli). Modül optimizasyondan ÖNCE doğrulanıyor, yani
+      sorun bir LLVM geçişinin ürettiği IR'de. Sonuç: 3B oyunlar
+      optimizasyonsuz derleniyor. Hangi geçişin bozduğu daraltılmalı.
 
 ## 1 — Oyun yapımı (3B oyunun eksik hissettiren yerleri)
 

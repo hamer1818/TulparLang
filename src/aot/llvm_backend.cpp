@@ -1287,10 +1287,16 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMAddFunction(backend->module, "aot_args", arena_save_type);
 
   // aot_set_args(argc, argv): main girişinde çağrılıyor.
-  LLVMTypeRef sa_params[2] = {
-      backend->int32_type,
-      LLVMPointerType(LLVMPointerType(LLVMInt8Type(), 0), 0)};
-  LLVMTypeRef sa_type = LLVMFunctionType(LLVMVoidType(), sa_params, 2, 0);
+  // `char **argv`. Tip MODÜLÜN bağlamından türemeli: LLVMInt8Type() global
+  // bağlamı kullanıyor ve karışım "Function context does not match Module
+  // context" ile modül doğrulamasını düşürüyor — optimizasyon o zaman
+  // tamamen atlanıyor, yani sessizce yavaş kod üretilirdi.
+  LLVMTypeRef sa_params[2] = {backend->int32_type,
+                              LLVMPointerType(backend->ptr_type, 0)};
+  // DÖNÜŞ tipi de bağlamdan: `LLVMVoidType()` global bağlamı kullanıyor ve
+  // tek bir global-bağlam tipi bütün modül doğrulamasını düşürmeye yetiyor.
+  LLVMTypeRef sa_type =
+      LLVMFunctionType(backend->void_type, sa_params, 2, 0);
   backend->func_aot_set_args =
       LLVMAddFunction(backend->module, "aot_set_args", sa_type);
 
@@ -9278,9 +9284,8 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   // main artık (argc, argv) alıyor. `int main()` de `int main(int, char**)`
   // de geçerli C; imzayı genişletmek çağrı yerlerini etkilemiyor ama dile
   // args() verebilmenin tek yolu bu — argv başka türlü elde edilemez.
-  LLVMTypeRef main_params[2] = {
-      backend->int32_type,
-      LLVMPointerType(LLVMPointerType(LLVMInt8Type(), 0), 0)};
+  LLVMTypeRef main_params[2] = {backend->int32_type,
+                                LLVMPointerType(backend->ptr_type, 0)};
   LLVMTypeRef main_type =
       LLVMFunctionType(backend->int32_type, main_params, 2, 0);
   LLVMValueRef main_func = LLVMAddFunction(backend->module, "main", main_type);
