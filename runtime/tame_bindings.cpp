@@ -103,6 +103,7 @@ int tame_impl_load_sound(const char *path);
 void tame_impl_play_sound(int h);
 void tame_impl_stop_sound(int h);
 void tame_impl_sound_volume(int h, double v);
+void tame_impl_sound_pan(int h, double p);
 int tame_impl_load_music(const char *path);
 void tame_impl_play_music(int h);
 void tame_impl_stop_music(int h);
@@ -484,6 +485,11 @@ VMValue aot_tm_stop_sound_ptr(VMValue *snd) {
 
 VMValue aot_tm_sound_volume_ptr(VMValue *snd, VMValue *vol) {
   tame_impl_sound_volume((int)tm_int(snd), tm_num(vol));
+  return VM_VOID();
+}
+
+VMValue aot_tm_sound_pan_ptr(VMValue *snd, VMValue *pan) {
+  tame_impl_sound_pan((int)tm_int(snd), tm_num(pan));
   return VM_VOID();
 }
 

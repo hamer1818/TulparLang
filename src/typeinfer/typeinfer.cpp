@@ -948,6 +948,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm_play_sound", TYPE_VOID, {TYPE_INT}},
       {"tm_stop_sound", TYPE_VOID, {TYPE_INT}},
       {"tm_sound_volume", TYPE_VOID, {TYPE_INT, TYPE_UNKNOWN}},
+      {"tm_sound_pan", TYPE_VOID, {TYPE_INT, TYPE_UNKNOWN}},
       {"tm_load_music", TYPE_INT, {TYPE_STRING}},
       {"tm_play_music", TYPE_VOID, {TYPE_INT}},
       {"tm_stop_music", TYPE_VOID, {TYPE_INT}},

@@ -112,6 +112,7 @@ const BuiltinEntry kBuiltins[] = {
     {"tm_play_sound",   "tm_play_sound(snd: int)",                      "Ses efektini çalar (üst üste tetiklenebilir). Sarmalayıcı: play_sound()."},
     {"tm_stop_sound",   "tm_stop_sound(snd: int)",                      "Ses efektini durdurur. Sarmalayıcı: stop_sound()."},
     {"tm_sound_volume", "tm_sound_volume(snd: int, vol: float)",        "Ses seviyesi 0.0-1.0. Sarmalayıcı: sound_volume()."},
+    {"tm_sound_pan",    "tm_sound_pan(snd: int, pan: float)",           "Stereo kaydirma. DIKKAT, raylib anlami ters: 0.0 SAG, 0.5 merkez, 1.0 SOL. Sarmalayici: sound_pan(). Konumsal ses icin scene3d'nin ses3d/sound3d'si bunu kendisi hesaplar."},
     {"tm_load_music",   "tm_load_music(path: str): int",                "Müzik stream'i yükler (WAV/OGG/MP3), handle döner. Çalan müzik frame_end()'de otomatik beslenir — update çağrısı gerekmez. Sarmalayıcı: load_music()."},
     {"tm_play_music",   "tm_play_music(mus: int)",                      "Müziği başlatır. Sarmalayıcı: play_music()."},
     {"tm_stop_music",   "tm_stop_music(mus: int)",                      "Müziği durdurur. Sarmalayıcı: stop_music()."},

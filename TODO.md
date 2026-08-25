@@ -309,5 +309,12 @@ boşluklar; backlog'da yoklardı.
       arazinin işi. Ya gerçek kama mesh'i üretilmeli ya da rampa "arazi yokken
       kullanılan basit yol" olarak konumlandırılmalı.
 
-- [ ] **Konumsal seste yön yok** — yalnız mesafe zayıflatması var, stereo
-      kaydırma (panning) yok.
+- [x] **Konumsal seste yön geldi.** ✅ 2026-08-25 — `sound3d`/`ses3d` artık
+      mesafe zayıflatmasının yanında stereo kaydırma da uyguluyor
+      (`ses_yon_gucu3d(0..1)` ile ayarlanır, 0 kapatır).
+      raylib'in anlamı TERS (`left = pan; right = 1 - pan`, yani pan=0 SAĞ);
+      çeviri scene3d katmanında, builtin raylib'in anlamını taşıyor.
+      Sağ ekseni `move3d`'nin girdi döndürmesiyle AYNI ifadeden geliyor —
+      ayrışsalar "sağa yürü" ile "sağdan duy" farklı yönler gösterirdi;
+      test tam bunu ölçüyor. Değer çalmadan ayrı (`_snd_pan_val3`), yani
+      ses aygıtı olmadan sınanabiliyor.

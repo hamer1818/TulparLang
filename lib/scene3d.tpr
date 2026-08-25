@@ -1754,8 +1754,47 @@ func _snd_vol3(x, y, z): float {
     return v;
 }
 
+// ---- Stereo yön ------------------------------------------------------------
+// Mesafe zayıflatması "ne kadar uzakta" diyordu ama "hangi yönde" demiyordu:
+// solundaki patlama ile sağındakini ayırt edemiyordun.
+//
+// raylib'in kaydırma anlamı TERS (raudio.c: `left = pan; right = 1 - pan`),
+// yani pan=0 SAĞ kanal. Çeviri BURADA yapılıyor ki oyun kodu ve motorun
+// geri kalanı "sağdaki ses sağdan gelir" diye düşünsün.
+float _snd_pan3 = 1.0;      // 0 = kaydırma kapalı (hep merkez), 1 = tam
+
+func sound_pan_amount3d(k) { _snd_pan3 = k; }
+func ses_yon_gucu3d(k) { sound_pan_amount3d(k); }
+
+// Kaydırma değeri (raylib anlamıyla). Çalmadan AYRI: ses aygıtı olmadan,
+// penceresiz sınanabilsin diye — `_snd_vol3` ile aynı gerekçe.
+func _snd_pan_val3(x, y, z): float {
+    float lx = 0.0; float lz = 0.0;
+    int ct = _slot_of3(_cam_target);
+    if (ct >= 0) {
+        Ent3 t = _e3[ct];
+        lx = t.x; lz = t.z;
+    }
+    float dx = x - lx;
+    float dz = z - lz;
+    float d = sqrt(dx * dx + dz * dz);
+    // Dinleyicinin ÜSTÜNDEKİ ses yönsüzdür; 0'a bölmeyi de bu kapatıyor.
+    if (d < 0.0001) { return 0.5; }
+    // Kameranın SAĞ ekseni. Bakış yönü (sin(yaw), 0, -cos(yaw)) olduğuna
+    // göre sağ = ileri × yukarı = (cos(yaw), 0, sin(yaw)). Aynı ifade
+    // `move3d`'nin girdi döndürmesinde de var — ikisi ayrışırsa "sağa
+    // yürü" ile "sağdan duy" farklı yönleri gösterirdi.
+    float yr = _cam_yaw3 * DEG2RAD3;
+    float u = (dx * cos(yr) + dz * sin(yr)) / d;   // -1 sol .. +1 sağ
+    float p = 0.5 - 0.5 * u * _snd_pan3;
+    if (p < 0.0) { p = 0.0; }
+    if (p > 1.0) { p = 1.0; }
+    return p;
+}
+
 func sound3d(handle, x, y, z) {
     sound_volume(handle, _snd_vol3(x, y, z));
+    sound_pan(handle, _snd_pan_val3(x, y, z));
     play_sound(handle);
 }
 

@@ -838,6 +838,7 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm_play_sound", "aot_tm_play_sound_ptr", 1},
     {"tm_stop_sound", "aot_tm_stop_sound_ptr", 1},
     {"tm_sound_volume", "aot_tm_sound_volume_ptr", 2},
+    {"tm_sound_pan", "aot_tm_sound_pan_ptr", 2},
     {"tm_load_music", "aot_tm_load_music_ptr", 1},
     {"tm_play_music", "aot_tm_play_music_ptr", 1},
     {"tm_stop_music", "aot_tm_stop_music_ptr", 1},

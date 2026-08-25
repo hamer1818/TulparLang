@@ -222,6 +222,9 @@ func load_sound(path): int { return tm_load_sound(path); }
 func play_sound(s) { tm_play_sound(s); }
 func stop_sound(s) { tm_stop_sound(s); }
 func sound_volume(s, v) { tm_sound_volume(s, v); }
+// DİKKAT — raylib anlamı ters: 0.0 SAĞ, 0.5 merkez, 1.0 SOL.
+func sound_pan(s, p) { tm_sound_pan(s, p); }
+func ses_kaydir(s, p) { tm_sound_pan(s, p); }
 
 func load_music(path): int { return tm_load_music(path); }
 func play_music(m) { tm_play_music(m); }

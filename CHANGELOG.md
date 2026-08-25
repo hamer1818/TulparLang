@@ -42,6 +42,26 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — konumsal seste stereo yön
+
+Mesafe zayıflatması "ne kadar uzakta" diyordu ama "hangi yönde" demiyordu:
+solundaki patlama ile sağındakini ayırt edemiyordun. `sound3d`/`ses3d` artık
+kaydırmayı da uyguluyor.
+
+raylib'in kaydırma anlamı TERS ve kolay kaçan bir tuzak — `raudio.c`'de
+`left = pan; right = 1 - pan`, yani **pan=0 SAĞ kanaldır**. Çeviri scene3d
+katmanında yapılıyor; `tm_sound_pan` builtin'i raylib'in anlamını olduğu gibi
+taşıyor, çünkü ham tame kullanan kod raylib belgesine bakacak.
+
+Kameranın sağ ekseni `move3d`'nin girdi döndürmesiyle AYNI ifadeden geliyor.
+Ayrışsalar "sağa yürü" ile "sağdan duy" farklı yönleri gösterirdi ve bu kamera
+döndükçe sessizce büyüyen bir hata olurdu — test iki ekseni keyfi bir açıda
+karşılaştırıyor.
+
+Kaydırma değeri çalmadan AYRI hesaplanıyor (`_snd_pan_val3`), yani ses aygıtı
+olmayan bir makinede de sınanabiliyor — `_snd_vol3` ile aynı gerekçe.
+`ses_yon_gucu3d(0.0)` kaydırmayı tamamen kapatır.
+
 ### Added — animasyon harmanlaması: boşta↔koşu artık sıçramıyor
 
 `anim3d` iki klip arasında TEK KAREDE geçiyordu; karakter yürümeye başlayınca

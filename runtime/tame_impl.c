@@ -2441,6 +2441,15 @@ void tame_impl_sound_volume(int h, double v) {
   if (tame_sound_ok(h)) SetSoundVolume(tame_sounds[h], (float)v);
 }
 
+// Stereo kaydırma. raylib'in anlamı TERS ve bu kolay kaçan bir tuzak:
+// raudio.c'de `left = pan; right = 1 - pan`, yani pan=0 SAĞ kanaldır,
+// pan=1 SOL, 0.5 merkez. Çeviriyi burada YAPMIYORUZ — builtin raylib'in
+// anlamını olduğu gibi taşıyor, "sağdaki ses sağdan gelsin" dönüşümü
+// scene3d'nin konumsal ses katmanında.
+void tame_impl_sound_pan(int h, double p) {
+  if (tame_sound_ok(h)) SetSoundPan(tame_sounds[h], (float)p);
+}
+
 int tame_impl_load_music(const char *path) {
   if (!tame_ensure_audio()) return -1;
   Music m = LoadMusicStream(path ? path : "");

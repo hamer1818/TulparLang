@@ -5806,6 +5806,89 @@ func t_anim_weight_driven_by_engine() {
 }
 
 
+// ---------------------------------------------------------------------------
+// KONUMSAL SESTE YÖN. Ses AYGITI olmadan sınanabilsin diye kaydırma değeri
+// çalmadan ayrı hesaplanıyor (`_snd_vol3` ile aynı gerekçe).
+//
+// raylib'in anlamı ters: 0.0 SAĞ kanal, 0.5 merkez, 1.0 SOL.
+// ---------------------------------------------------------------------------
+
+func t_snd_pan_left_right() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_PLAYER);
+    camera_follow(p, 10.0, 6.0);       // yaw 0 → sağ ekseni +X
+    ses_yon_gucu3d(1.0);
+
+    float sag = _snd_pan_val3(10.0, 0.0, 0.0);
+    float sol = _snd_pan_val3(0.0 - 10.0, 0.0, 0.0);
+    float on  = _snd_pan_val3(0.0, 0.0, 0.0 - 10.0);
+
+    assert(sag < 0.05, "sagdaki ses saga kaymiyor: " + toString(sag));
+    assert(sol > 0.95, "soldaki ses sola kaymiyor: " + toString(sol));
+    assert(on > 0.45 && on < 0.55, "ondeki ses merkezde degil: " + toString(on));
+}
+
+func t_snd_pan_follows_camera_yaw() {
+    // Kamera dönünce SES DE dönmeli: dünyada sabit duran bir ses, kamera
+    // 90 derece dönünce artık başka kanaldan gelmeli.
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_PLAYER);
+    camera_follow(p, 10.0, 6.0);
+    ses_yon_gucu3d(1.0);
+
+    camera_look3d(0.0, 0.0);
+    float once = _snd_pan_val3(10.0, 0.0, 0.0);     // sağda
+    camera_look3d(180.0, 0.0);
+    float sonra = _snd_pan_val3(10.0, 0.0, 0.0);    // artık solda
+
+    assert(once < 0.05, "yaw 0'da sagda degil: " + toString(once));
+    assert(sonra > 0.95, "yaw 180'de sola gecmedi: " + toString(sonra));
+    camera_look3d(0.0, 0.0);
+}
+
+func t_snd_pan_matches_move_axis() {
+    // "Sağa yürü" ile "sağdan duy" AYNI yönü göstermeli. İkisi ayrı
+    // ifadelerden gelseydi kamera döndükçe sessizce ayrışırlardı.
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_PLAYER);
+    camera_follow(p, 10.0, 6.0);
+    ses_yon_gucu3d(1.0);
+    camera_look3d(37.0, 0.0);      // keyfi bir açı
+
+    // move3d'nin sağ ekseni: girdi (dx=1, dz=0) → (cos, sin).
+    float yr = 37.0 * DEG2RAD3;
+    float rx = cos(yr);
+    float rz = sin(yr);
+    // O eksende 10 birim uzaktaki ses TAM SAĞDA olmalı.
+    float pn = _snd_pan_val3(rx * 10.0, 0.0, rz * 10.0);
+    assert(pn < 0.05, "move3d'nin sag ekseni sagdan duyulmuyor: " + toString(pn));
+    camera_look3d(0.0, 0.0);
+}
+
+func t_snd_pan_center_when_disabled() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_PLAYER);
+    camera_follow(p, 10.0, 6.0);
+    ses_yon_gucu3d(0.0);           // kaydırma kapalı
+    assert(_snd_pan_val3(10.0, 0.0, 0.0) == 0.5, "kapaliyken merkez degil");
+    ses_yon_gucu3d(1.0);
+}
+
+func t_snd_pan_on_listener_is_center() {
+    // Dinleyicinin üstündeki sesin yönü yok — ve bu aynı zamanda 0'a
+    // bölmeyi kapatan koruma.
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(3.0, 0.0, 4.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_PLAYER);
+    camera_follow(p, 10.0, 6.0);
+    assert(_snd_pan_val3(3.0, 0.0, 4.0) == 0.5, "dinleyici uzerinde merkez degil");
+}
+
+
 test("satir yuksekligi fonttan buyuk", "t_ui_line_height_exceeds_font");
 test("dikey merkezleme", "t_ui_vertical_centering");
 test("dedektor metinleri goruyor", "t_ui_detector_sees_text");
@@ -5842,4 +5925,9 @@ test("gecis suresi 1/hiz", "t_anim_weight_transition_duration");
 test("harmanlama esigi tek-poz ile ayni", "t_anim_target_matches_single_pose_pick");
 test("kosu klibi yoksa agirlik 0", "t_anim_target_zero_without_run_clip");
 test("agirligi motor suruyor", "t_anim_weight_driven_by_engine");
+test("ses sag-sol ayirimi", "t_snd_pan_left_right");
+test("ses kamerayla donuyor", "t_snd_pan_follows_camera_yaw");
+test("ses ekseni move3d ile ayni", "t_snd_pan_matches_move_axis");
+test("kaydirma kapaliyken merkez", "t_snd_pan_center_when_disabled");
+test("dinleyici uzerinde merkez", "t_snd_pan_on_listener_is_center");
 test_summary();
