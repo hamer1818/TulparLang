@@ -42,6 +42,26 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Changed — editör gerçek bir yazı tipi kullanıyor
+
+raylib'in varsayılan fontu 10 piksel tabanlı bir BITMAP: ölçeklenince
+pikselleşiyor ve uzun süre bakılan bir editör arayüzünde yorucu. Editör artık
+sistemden bir TTF yüklüyor (Noto Sans → DejaVu Sans → Liberation Sans →
+Adwaita Sans sırasıyla; `editor_yazitipi3d(yol)` ile kendi fontun).
+
+Font depoya GÖMÜLMÜYOR: iyi bir UI fontu ~600 KB ve ikiliye gömmek onu editör
+kullanmayan her oyuna da taşırdı. Bulunamazsa varsayılan fonta düşülüyor ve
+konsolda söyleniyor — sessizce çirkinleşmek "editör neden böyle?" sorusunu
+cevapsız bırakırdı.
+
+Çizim ve ölçüm TEK kapıdan geçiyor (`_g_draw3` / `_g_w3`): ikisinin ayrı
+yollardan gitmesi, ölçümün çizimden sapmasına ve yerleşimin sessizce kaymasına
+yol açardı — editörün bütün sütun genişlikleri ölçülen metne dayanıyor. Yeni
+`tm_font_width` bağlaması çizimle aynı harf aralığını kullanıyor.
+
+Ölçek değişince font hedef boyda YENİDEN yükleniyor: TTF rasterize edildiği
+boyda net, eskisini ölçeklemek bulanıklaştırırdı.
+
 ### Changed — editör UX'i sektör standardına çekildi
 
 **Kısayollar.** WASD/QE artık yalnız SAĞ TUŞ BASILIYKEN uçuruyor — Unity,

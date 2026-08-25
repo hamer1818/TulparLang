@@ -4462,6 +4462,10 @@ func t_ui_color_clamp() {
     assert_eq_int(_col_r3(rgb(_ed_c255(300.0), 0, 0)), 255);
 }
 
+// Punto kısıtı. Editör artık gerçek bir TTF yüklüyor ve TTF her boyda net;
+// ama font BULUNAMAZSA varsayılan bitmap fonta düşülüyor ve orada kısıt
+// geçerli (harf aralığı tamsayı, glif ölçeği kesirli bölmeden gelir; arada
+// bir punto harfleri birbirine sokar). Geri düşüş yolu da okunabilir kalmalı.
 func t_ui_font_size_is_crisp() {
     assert(_F3 == 10 || _F3 == 20 || _F3 == 30,
            "punto 10/20/30 olmali (tam sayi olcek+aralik), bulunan: " + toString(_F3));

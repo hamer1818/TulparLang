@@ -2211,6 +2211,16 @@ int tame_impl_load_font(const char *path, int size) {
   return -1;
 }
 
+// Yüklenmiş fontla metnin genişliği. Harf aralığı `tame_impl_text_font` ile
+// AYNI olmak zorunda — ölçüm ve çizim ayrışırsa yerleşim sessizce kayar
+// (editörün bütün sütun genişlikleri ölçülen metne dayanıyor).
+int tame_impl_font_width(int fh, const char *s, int size) {
+  if (fh < 0 || fh >= TAME_MAX_FONTS || !tame_font_used[fh]) return 0;
+  Vector2 m = MeasureTextEx(tame_fonts[fh], s ? s : "", (float)size,
+                            (float)size / 10.0f);
+  return (int)m.x;
+}
+
 void tame_impl_text_font(int fh, const char *s, double x, double y, int size,
                          int64_t color) {
   if (fh < 0 || fh >= TAME_MAX_FONTS || !tame_font_used[fh]) return;

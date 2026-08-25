@@ -207,6 +207,9 @@ func unload_texture(tex) { tm_unload_texture(tex); }
 // aynı tut).
 func load_font(path, size): int { return tm_load_font(path, size); }
 func text_font(f, s, x, y, size, color) { tm_text_font(f, s, x, y, size, color); }
+// Yüklenmiş fontla metnin genişliği — çizimle aynı harf aralığını kullanıyor.
+func font_width(f, s, size): int { return tm_font_width(f, s, size); }
+func font_genisligi(f, s, boy): int { return tm_font_width(f, s, boy); }
 // Varsayılan fontla yazının piksel genişliği — ortalamak için:
 //   text(s, (screen_width() - measure_text(s, 24)) / 2, y, 24, WHITE);
 func measure_text(s, size): int { return tm_measure_text(s, size); }

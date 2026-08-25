@@ -4026,7 +4026,12 @@ func play3d() {
     _ed_capture3();
     // Editör uygulaması: kamerayı sahnenin üstüne kur (editor3d bunu hedefe
     // göre yapıyor). Kurulum bittikten SONRA çağrılıyor, yoksa hedef yok.
-    if (_ed_app3 == 1) { editor3d(true); }
+    if (_ed_app3 == 1) {
+        // Font pencere kurulduktan SONRA yüklenebiliyor (raylib GPU dokusu
+        // oluşturuyor); bu yüzden setup'ta değil burada.
+        _ed_font_load3();
+        editor3d(true);
+    }
 
     while (running() && _s3_quit == 0) {
         float dt = frame_time();
@@ -6071,6 +6076,65 @@ int   _g_down3 = 0; int _g_press3 = 0; int _g_rel3 = 0;
 int _ed_ui3 = 2;
 int _F3 = 20;
 
+// ---- Okunabilir yazı tipi --------------------------------------------------
+// raylib'in varsayılan fontu 10 piksel tabanlı bir BITMAP: ölçeklenince
+// pikselleşiyor ve uzun süre bakılan bir editör arayüzünde yorucu. Gerçek bir
+// TTF hem her boyda net, hem de Türkçe harfleri doğru veriyor.
+//
+// Font DOSYADAN yükleniyor ve depoya gömülmüyor: iyi bir UI fontu ~600 KB ve
+// ikiliye gömmek onu her oyuna taşırdı (editör kullanmayan oyunlara da).
+// Bulunamazsa varsayılan fonta düşülüyor — editör her hâlükârda açılmalı.
+int _ed_font3 = 0 - 1;
+str _ed_font_path3 = "";
+
+// Aday yollar: dağıtımlar fontları farklı yerlere koyuyor.
+func _ed_font_load3() {
+    array yollar = ["/usr/share/fonts/noto/NotoSans-Regular.ttf",
+                    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+                    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                    "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf",
+                    "/Library/Fonts/Arial.ttf"];
+    if (_ed_font_path3 != "") {
+        _ed_font3 = load_font(_ed_font_path3, _F3);
+        if (_ed_font3 >= 0) { return; }
+    }
+    int i = 0;
+    while (i < length(yollar)) {
+        if (file_exists(yollar[i])) {
+            int f = load_font(yollar[i], _F3);
+            if (f >= 0) {
+                _ed_font3 = f;
+                _ed_font_path3 = yollar[i];
+                kayit3d("yazi tipi: " + yollar[i] + " (" + toString(_F3) + " punto)");
+                return;
+            }
+        }
+        i = i + 1;
+    }
+    _ed_font3 = 0 - 1;
+    // Sessizce bitmap fonta düşmek "editör neden çirkin?" sorusunu cevapsız
+    // bırakırdı; konsolda söyleniyor.
+    uyari3d("okunabilir yazi tipi bulunamadi — varsayilan bitmap font");
+}
+
+// Kendi fontunu ver (editörden önce çağrılır).
+func editor_font3d(path) { _ed_font_path3 = path; }
+func editor_yazitipi3d(yol) { editor_font3d(yol); }
+
+// Çizim ve ölçüm TEK kapıdan: font yüklüyse TTF, değilse varsayılan bitmap.
+// İkisinin ayrı yollardan gitmesi, ölçümün çizimden sapmasına ve yerleşimin
+// sessizce kaymasına yol açardı.
+func _g_draw3(t, x, y, size, col) {
+    if (_ed_font3 >= 0) { text_font(_ed_font3, t, x, y, size, col); }
+    else { text(t, x, y, size, col); }
+}
+func _g_w3(t, size): int {
+    if (_ed_font3 >= 0) { return font_width(_ed_font3, t, size); }
+    return text_width(t, size);
+}
+
 // Ölçeğe göre büyütülmüş piksel değeri. Panel içindeki bütün sabitler 1x
 // tasarımının değerleri; buradan geçince ölçek uyumlu oluyorlar.
 func _us3(v): int { return v * _ed_ui3; }
@@ -6112,6 +6176,9 @@ func editor_ui_scale3d(k) {
     // Kaydırmalar bayatlamasın.
     _ed_hscroll3 = 0;
     _ed_iscroll3 = 0;
+    // TTF hedef boyda rasterize ediliyor; eski boyda yüklenmiş fontu
+    // ölçeklemek bulanıklaştırırdı.
+    _ed_font_load3();
 }
 func editor_ui_olcek3d(k) { editor_ui_scale3d(k); }
 func editor_ui_scale_now3d(): int { return _ed_ui3; }
@@ -6132,26 +6199,26 @@ func _G_FLD3(): int   { return rgb(32, 36, 44); }
 // Sabit karakter genişliği varsaymak bu yazı tipinde yanlış (değişken
 // genişlikli) ve taşmanın kaynağıydı.
 func _g_fit3(s, maxw): str {
-    if (text_width(s, _F3) <= maxw) { return s; }
+    if (_g_w3(s, _F3) <= maxw) { return s; }
     int n = length(s);
     while (n > 1) {
         str t = substring(s, 0, n) + ".";
-        if (text_width(t, _F3) <= maxw) { return t; }
+        if (_g_w3(t, _F3) <= maxw) { return t; }
         n = n - 1;
     }
     return "";
 }
 // Sığmayan metin kesiliyor — panelden taşmak yerine kısalıyor.
-func _g_txt3(s, x, y, maxw, c) { text(_g_fit3(s, maxw), x, y, _F3, c); }
+func _g_txt3(s, x, y, maxw, c) { _g_draw3(_g_fit3(s, maxw), x, y, _F3, c); }
 // Sağ kenara hizalı (rx = sağ kenar). Ölçmeden hizalamak imkânsız.
-func _g_txtr3(s, rx, y, c) { text(s, rx - text_width(s, _F3), y, _F3, c); }
+func _g_txtr3(s, rx, y, c) { _g_draw3(s, rx - _g_w3(s, _F3), y, _F3, c); }
 // Bir kutunun içinde ortalanmış.
 func _g_txtc3(s, x, y, w, h, c) {
     str t = _g_fit3(s, w - 6);
-    text(t, x + toInt((w - text_width(t, _F3)) / 2), y + toInt((h - _F3) / 2), _F3, c);
+    _g_draw3(t, x + toInt((w - _g_w3(t, _F3)) / 2), y + toInt((h - _F3) / 2), _F3, c);
 }
 // Etiketi olan bir düğmenin doğal genişliği.
-func _g_btnw3(label): int { return text_width(label, _F3) + _us3(14); }
+func _g_btnw3(label): int { return _g_w3(label, _F3) + _us3(14); }
 
 // Araç ipucu. Kısaltılmış etiketler ("kure", "toh", "arlk") tek başına
 // anlaşılmıyor; her editörde üzerine gelince ne olduğunu söyleyen bir kutu var.
@@ -6165,7 +6232,7 @@ func _g_tip_for3(id, txt) {
 
 func _g_tip_draw3() {
     if (_g_tip3 == "") { return; }
-    int w = text_width(_g_tip3, _F3) + _us3(10);
+    int w = _g_w3(_g_tip3, _F3) + _us3(10);
     int h = _F3 + _us3(8);
     int x = _g_mx3 + _us3(12);
     int y = _g_my3 + _us3(16);
@@ -6174,7 +6241,7 @@ func _g_tip_draw3() {
     if (y + h > screen_height()) { y = _g_my3 - h - _us3(6); }
     rect(x, y, w, h, rgba(12, 14, 20, 240));
     rect_lines(x, y, w, h, _G_ACC3());
-    text(_g_tip3, x + _us3(5), y + _us3(4), _F3, _G_TXT3());
+    _g_draw3(_g_tip3, x + _us3(5), y + _us3(4), _F3, _G_TXT3());
 }
 
 func _g_begin() {
@@ -6512,7 +6579,7 @@ func _ed_menubar3() {
     if (f == "") { f = "(kaydedilmemis sahne)"; }
     // Yıldız = kaydedilmemiş değişiklik. Her editörde standart.
     if (_ed_dirty3 == 1) { f = "* " + f; }
-    int fw = text_width(f, _F3);
+    int fw = _g_w3(f, _F3);
     if (W - _ED_PAD3 - fw > x + w4 + 12) {
         _g_txtr3(f, W - _ED_PAD3, 5, _G_DIM3());
     }
@@ -6654,7 +6721,7 @@ func _ed_statusbar3() {
                 " | rt " + toString(_ed_rt3) + " | SAG TUS+WASD uc | Q/W/E/R arac | F cercevele | CTRL+Z geri | CTRL+S kaydet";
     if (_ed_playing3 == 1) { right = "OYNUYOR — ESC durdurur"; }
     if (_ed_msg_t3 > 0.0) { right = _ed_msg3; }
-    int rw = text_width(right, _F3);
+    int rw = _g_w3(right, _F3);
     if (W - _ED_PAD3 - rw > toInt(W / 2) + 8) {
         int c = _G_DIM3();
         if (_ed_msg_t3 > 0.0) { c = rgb(140, 240, 160); }
@@ -6707,7 +6774,7 @@ func _ed_axis_one3(cx, cy, r, vx, vy, vz, col, lbl) {
     // bir eksen bir noktaya çöker ve harf merkeze yığılırdı.
     float m = sqrt(_ed_axsx3 * _ed_axsx3 + _ed_axsy3 * _ed_axsy3);
     if (m > 0.35) {
-        text(lbl, ex - toInt(_F3 / 4), ey - toInt(_F3 / 2), _F3, col);
+        _g_draw3(lbl, ex - toInt(_F3 / 4), ey - toInt(_F3 / 2), _F3, col);
     }
 }
 

@@ -793,6 +793,7 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm_text", "aot_tm_text_ptr", 5},
     {"tm_text_width", "aot_tm_text_width_ptr", 2},
     // render texture — editörün sahne görünümü paneli
+    {"tm_font_width", "aot_tm_font_width_ptr", 3},
     {"tm_scissor", "aot_tm_scissor_ptr", 4},
     {"tm_scissor_end", "aot_tm_scissor_end_ptr", 0},
     {"tm_rt_new", "aot_tm_rt_new_ptr", 2},
