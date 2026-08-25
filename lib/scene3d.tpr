@@ -6244,8 +6244,72 @@ func _g_tip_draw3() {
     _g_draw3(_g_tip3, x + _us3(5), y + _us3(4), _F3, _G_TXT3());
 }
 
+// ---- Çakışma dedektörü -----------------------------------------------------
+// "Arayüz elemanları üst üste gelmesin" tek tek yerleşim formülü sınayarak
+// GARANTİ EDİLEMEZ: her yeni widget yeni bir formül, ve içerik (metin
+// genişliği, ölçek, pencere boyutu) değiştikçe eski formüller kayabiliyor.
+//
+// Bunun yerine arayüzün KENDİSİ denetliyor: her widget dikdörtgenini
+// kaydediyor, kare sonunda ikili kesişim aranıyor. Çakışma varsa hem konsola
+// yazılıyor hem de suçlu dikdörtgenler KIRMIZI çerçeveyle ekranda
+// gösteriliyor — sessiz kalması, sorunun yeniden gözle bulunmasını
+// gerektirirdi.
+array _g_qx3 = [];
+array _g_qy3 = [];
+array _g_qw3 = [];
+array _g_qh3 = [];
+array _g_qi3 = [];
+int _g_ovl_n3 = 0;      // son karede bulunan çakışma sayısı
+int _g_ovl_on3 = 1;     // denetim açık mı (kapatmak için: editor_cakisma3d(false))
+
+func editor_overlap_check3d(on) { if (on) { _g_ovl_on3 = 1; } else { _g_ovl_on3 = 0; } }
+func editor_cakisma3d(ac) { editor_overlap_check3d(ac); }
+func editor_overlap_count3d(): int { return _g_ovl_n3; }
+
+func _g_rect3(id, x, y, w, h) {
+    if (_g_ovl_on3 == 0) { return; }
+    push(_g_qx3, x); push(_g_qy3, y);
+    push(_g_qw3, w); push(_g_qh3, h);
+    push(_g_qi3, id);
+}
+
+// İki dikdörtgen kesişiyor mu? Kenar teması çakışma DEĞİL — yan yana dizilmiş
+// düğmeler tam bitişik olabiliyor.
+func _g_overlap_rect3(ax, ay, aw, ah, bx, by, bw, bh): bool {
+    if (ax + aw <= bx) { return false; }
+    if (bx + bw <= ax) { return false; }
+    if (ay + ah <= by) { return false; }
+    if (by + bh <= ay) { return false; }
+    return true;
+}
+
+func _g_check_overlaps3() {
+    _g_ovl_n3 = 0;
+    if (_g_ovl_on3 == 0) { return; }
+    int n = length(_g_qi3);
+    int i = 0;
+    while (i < n) {
+        int j = i + 1;
+        while (j < n) {
+            if (_g_overlap_rect3(_g_qx3[i], _g_qy3[i], _g_qw3[i], _g_qh3[i],
+                                 _g_qx3[j], _g_qy3[j], _g_qw3[j], _g_qh3[j])) {
+                _g_ovl_n3 = _g_ovl_n3 + 1;
+                // Kırmızı çerçeve: konsolu okumadan da görülsün.
+                rect_lines(_g_qx3[i], _g_qy3[i], _g_qw3[i], _g_qh3[i], rgb(255, 60, 60));
+                rect_lines(_g_qx3[j], _g_qy3[j], _g_qw3[j], _g_qh3[j], rgb(255, 60, 60));
+                _lg_once(LOG_WARN, "ovl" + toString(_g_qi3[i]) + "_" + toString(_g_qi3[j]),
+                         "ARAYUZ CAKISMASI: widget " + toString(_g_qi3[i]) + " ile " +
+                         toString(_g_qi3[j]), 3.0);
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+}
+
 func _g_begin() {
     _g_tip3 = "";
+    _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
     _g_mx3 = mouse_x(); _g_my3 = mouse_y();
     int d = 0;
     if (mouse_down(0)) { d = 1; }
@@ -6276,6 +6340,7 @@ func _g_section(x, y, w, title) {
 }
 
 func _g_button(id, x, y, w, h, label): bool {
+    _g_rect3(id, x, y, w, h);
     bool over = _g_in(x, y, w, h);
     if (over) { _g_hot3 = id; }
     if (over && _g_press3 == 1) { _g_act3 = id; }
@@ -6294,6 +6359,7 @@ func _g_button(id, x, y, w, h, label): bool {
 }
 
 func _g_tog(id, x, y, w, h, label, on): bool {
+    _g_rect3(id, x, y, w, h);
     bool over = _g_in(x, y, w, h);
     if (over) { _g_hot3 = id; }
     bool clicked = false;
@@ -6314,6 +6380,7 @@ func _g_tog(id, x, y, w, h, label, on): bool {
 // Sayı alanı: SÜRÜKLE tarar, TIKLA yazmaya geçer.
 func _g_num(id, x, y, w, h, val, step): float {
     float out = val * 1.0;
+    _g_rect3(id, x, y, w, h);
     bool over = _g_in(x, y, w, h);
     if (over) { _g_hot3 = id; }
 
@@ -6364,6 +6431,7 @@ func _g_num(id, x, y, w, h, val, step): float {
 // izin verirdi.
 func _g_text(id, x, y, w, h, val): str {
     str out = val;
+    _g_rect3(id, x, y, w, h);
     bool over = _g_in(x, y, w, h);
     if (over) { _g_hot3 = id; }
     if (_g_focus3 == id) {
@@ -6395,6 +6463,7 @@ func _g_text(id, x, y, w, h, val): str {
 }
 
 func _g_item(id, x, y, w, h, label, sel): bool {
+    _g_rect3(id, x, y, w, h);
     bool over = _g_in(x, y, w, h);
     if (over) { _g_hot3 = id; }
     bool clicked = false;
@@ -6538,112 +6607,176 @@ func _ed_menubar3() {
     int W = screen_width();
     rect(0, 0, W, _ED_MENU_H3, rgb(30, 33, 40));
     line(0, _ED_MENU_H3, W, _ED_MENU_H3, _G_LINE3());
-    int x = _ED_PAD3;
     int bh = _ED_MENU_H3 - _us3(4);
+    int gap = _us3(2);
+    int x = _ED_PAD3;
+
     // "Yeni" YIKICI: kaydedilmemiş sahneyi tek tıkla siler. Kipsiz onay —
     // düğme kendisi soruya dönüşüyor. Modal pencere makinesi kurmadan
     // kullanıcıya ikinci bir karar noktası veriyor.
     str nlbl = "Yeni";
     if (_ed_confirm3 > 0.0) { nlbl = "EMIN MISIN?"; }
     int w0 = _g_btnw3(nlbl);
-    if (_g_button(9600, x, _us3(2), w0, bh, nlbl)) {
-        if (_ed_confirm3 > 0.0 || _ed_dirty3 == 0) {
-            ed_mark3d();
-            scene_load3d("{\"v\":1,\"world\":{\"ground\":0},\"entities\":[]}");
-            _ed_confirm3 = 0.0;
-        } else {
-            _ed_confirm3 = 4.0;
+    // Her düğme çizilmeden ÖNCE sığdığı denetleniyor: sığmayan düğme
+    // çizilmiyor, bir sonrakinin üstüne binmiyor.
+    if (x + w0 <= W - _ED_PAD3) {
+        if (_g_button(9600, x, _us3(2), w0, bh, nlbl)) {
+            if (_ed_confirm3 > 0.0 || _ed_dirty3 == 0) {
+                ed_mark3d();
+                scene_load3d("{\"v\":1,\"world\":{\"ground\":0},\"entities\":[]}");
+                _ed_confirm3 = 0.0;
+            } else {
+                _ed_confirm3 = 4.0;
+            }
         }
+        _g_tip_for3(9600, "Bos sahne  —  kaydedilmemis is silinir");
+        _g_tip_for3(9601, "Dosyayi yeniden ac  —  kaydedilmemis is gider");
+        x = x + w0 + gap;
     }
-    _g_tip_for3(9600, "Bos sahne  —  kaydedilmemis is silinir");
-    _g_tip_for3(9601, "Dosyayi yeniden ac  —  kaydedilmemis is gider");
-    x = x + w0 + 2;
     int w1 = _g_btnw3("Ac");
-    if (_g_button(9601, x, _us3(2), w1, bh, "Ac")) {
-        if (_ed_path3 != "") { scene_file3d(_ed_path3); _ed_capture3(); }
+    if (x + w1 <= W - _ED_PAD3) {
+        if (_g_button(9601, x, _us3(2), w1, bh, "Ac")) {
+            if (_ed_path3 != "") { scene_file3d(_ed_path3); _ed_capture3(); }
+        }
+        x = x + w1 + gap;
     }
-    x = x + w1 + 2;
     int w2 = _g_btnw3("Kaydet");
-    if (_g_button(9602, x, _us3(2), w2, bh, "Kaydet")) { editor_save3d(); }
-    _g_tip_for3(9602, "Kaydet  (CTRL+S)");
-    x = x + w2 + 12;
+    if (x + w2 <= W - _ED_PAD3) {
+        if (_g_button(9602, x, _us3(2), w2, bh, "Kaydet")) { editor_save3d(); }
+        _g_tip_for3(9602, "Kaydet  (CTRL+S)");
+        x = x + w2 + _us3(12);
+    }
     int w3 = _g_btnw3("Geri");
-    if (_g_button(9603, x, _us3(2), w3, bh, "Geri")) { ed_undo3d(); }
-    _g_tip_for3(9603, "Geri al  (CTRL+Z)");
-    x = x + w3 + 2;
+    if (x + w3 <= W - _ED_PAD3) {
+        if (_g_button(9603, x, _us3(2), w3, bh, "Geri")) { ed_undo3d(); }
+        _g_tip_for3(9603, "Geri al  (CTRL+Z)");
+        x = x + w3 + gap;
+    }
     int w4 = _g_btnw3("Ileri");
-    if (_g_button(9604, x, _us3(2), w4, bh, "Ileri")) { ed_redo3d(); }
-    _g_tip_for3(9604, "Yinele  (CTRL+Y)");
-    // Sağda dosya adı.
+    if (x + w4 <= W - _ED_PAD3) {
+        if (_g_button(9604, x, _us3(2), w4, bh, "Ileri")) { ed_redo3d(); }
+        _g_tip_for3(9604, "Yinele  (CTRL+Y)");
+        x = x + w4 + gap;
+    }
+
+    // Sağda dosya adı — yalnız son düğmeden SONRA yer kalırsa.
     str f = _ed_path3;
     if (f == "") { f = "(kaydedilmemis sahne)"; }
     // Yıldız = kaydedilmemiş değişiklik. Her editörde standart.
     if (_ed_dirty3 == 1) { f = "* " + f; }
     int fw = _g_w3(f, _F3);
-    if (W - _ED_PAD3 - fw > x + w4 + 12) {
-        _g_txtr3(f, W - _ED_PAD3, 5, _G_DIM3());
+    if (W - _ED_PAD3 - fw > x + _us3(12)) {
+        _g_txtr3(f, W - _ED_PAD3, _us3(5), _G_DIM3());
     }
 }
 
-// ---- Araç çubuğu: Oynat ORTADA --------------------------------------------
+// Ortalanmış bir grubun x'i: ortalanır, ama SOL GRUBUN bittiği yerin gerisine
+// düşemez ve sağdan taşamaz. Sol sınır her zaman kazanıyor — çakışmaktansa
+// merkezden kaymak yeğdir. Saf, yani penceresiz sınanabiliyor.
+func _ed_center_x3(W, cw, floorX, pad): int {
+    int cx = toInt(W / 2) - toInt(cw / 2);
+    // SIRA önemli: önce sağ kenara sığdır, SONRA sol sınırı uygula. Sol sınır
+    // en son geldiği için her zaman kazanıyor — çakışmaktansa sağdan taşmak
+    // yeğ (taşan kısım kırpılır, çakışan iki düğme ise tıklanamaz olur).
+    //
+    // Burada bir de sağ kırpmadan ÖNCE ikinci bir sol denetimi vardı; ölüydü.
+    // İki yerde tutulan koruma, hangisinin yük taşıdığını sınanamaz yapıyor
+    // (bozma denemesi öndekini silmeye izin veriyordu).
+    if (cx + cw > W - pad) { cx = W - pad - cw; }
+    if (cx < floorX) { cx = floorX; }
+    return cx;
+}
+
 func _ed_toolbar3() {
     int W = screen_width();
     int ty = _ED_MENU_H3;
     rect(0, ty, W, _ED_TOOL_H3, _G_HEAD3());
     line(0, ty + _ED_TOOL_H3, W, ty + _ED_TOOL_H3, _G_LINE3());
     int by = ty + toInt((_ED_TOOL_H3 - _ED_FLD3) / 2);
+    int gap = _us3(2);
+    int sep = _us3(10);
 
-    // Sol: dönüşüm araçları.
-    int x = _ED_PAD3;
-    int w1 = _g_btnw3("SEC");
-    if (_g_tog(9002, x, by, w1, _ED_FLD3, "SEC", _ed_mode3 == ED_SELECT)) { _ed_mode3 = ED_SELECT; }
-    _g_tip_for3(9002, "Sec  (Q)");
-    x = x + w1 + 2;
-    int w2 = _g_btnw3("TASI");
-    if (_g_tog(9003, x, by, w2, _ED_FLD3, "TASI", _ed_mode3 == ED_MOVE)) { _ed_mode3 = ED_MOVE; }
-    _g_tip_for3(9003, "Tasi  (W)  —  oklardan surukle");
-    x = x + w2 + 2;
-    int w3 = _g_btnw3("OLCEK");
-    if (_g_tog(9004, x, by, w3, _ED_FLD3, "OLCEK", _ed_mode3 == ED_SCALE)) { _ed_mode3 = ED_SCALE; }
-    _g_tip_for3(9004, "Olcekle  (R)  —  oklardan surukle");
-    x = x + w3 + 2;
-    int w4 = _g_btnw3("DONDUR");
-    if (_g_tog(9005, x, by, w4, _ED_FLD3, "DONDUR", _ed_mode3 == ED_ROTATE)) { _ed_mode3 = ED_ROTATE; }
-    _g_tip_for3(9005, "Dondur  (E)  —  sol/sag oklar");
-    x = x + w4 + 10;
+    // Yerleşim ÖNCE ÖLÇÜLÜYOR, sonra çiziliyor. Eski hâli orta grubu doğrudan
+    // W/2'ye koyuyordu ve solun nerede bittiğine BAKMIYORDU — gerçek yazı
+    // tipiyle 2x ölçekte sol grup ortaya taşıyor ve düğmeler üst üste
+    // biniyordu. Ölçüp yerleştirmek bu sınıfı tümden kapatıyor.
     str gl = "IZGARA " + _sc_num3(_ed_grid3);
     if (_ed_grid3 <= 0.0) { gl = "IZGARA yok"; }
-    int w5 = _g_btnw3(gl);
-    if (_g_tog(9006, x, by, w5, _ED_FLD3, gl, _ed_grid3 > 0.0)) {
-        if (_ed_grid3 > 0.0) { _ed_grid3 = 0.0; } else { _ed_grid3 = 0.5; }
-    }
-    _g_tip_for3(9006, "Izgaraya oturt  (G)");
-    x = x + w5 + _us3(10);
-    // Arayüz ölçeği. Yazı tipi yalnız 10/20/30'da net olduğu için ara boy
-    // sunulamıyor; onun yerine bütün arayüz aynı katsayıyla büyüyor.
     str us = "UI " + toString(_ed_ui3) + "x";
+    str pl = "OYNAT";
+    if (_ed_playing3 == 1) { pl = "OYNUYOR"; }
+
+    int w1 = _g_btnw3("SEC");
+    int w2 = _g_btnw3("TASI");
+    int w3 = _g_btnw3("OLCEK");
+    int w4 = _g_btnw3("DONDUR");
+    int w5 = _g_btnw3(gl);
     int w9 = _g_btnw3(us);
-    if (_g_button(9012, x, by, w9, _ED_FLD3, us)) {
-        int nk = _ed_ui3 + 1;
-        if (nk > 3) { nk = 1; }
-        editor_ui_scale3d(nk);
-        return;   // ölçüler değişti; bu karenin kalanını çizme
+    int pw = _g_btnw3(pl) + _us3(16);
+    int sw = _g_btnw3("DUR") + _us3(16);
+
+    // Zorunlu sol grup: dört araç. Bunlar her zaman çizilir.
+    int coreEnd = _ED_PAD3 + w1 + gap + w2 + gap + w3 + gap + w4;
+    // Orta grup: ortalanır ama SOLUN BİTTİĞİ YERİN gerisine düşemez.
+    int cw = pw + gap + sw;
+    int floorX = coreEnd + sep;
+    int cx = _ed_center_x3(W, cw, floorX, _ED_PAD3);
+
+    // İsteğe bağlı düğmeler yalnız orta gruba ÇARPMADAN sığıyorsa çizilir.
+    // Bir editörde ızgara/ölçek düğmesinin kaybolması, üst üste binmiş iki
+    // düğmeden iyidir (ve ikisinin de kısayolu var: G ve yok).
+    int optX = coreEnd + sep;
+    int showGrid = 0;
+    int showUi = 0;
+    if (optX + w5 + sep <= cx) { showGrid = 1; }
+    if (showGrid == 1 && optX + w5 + gap + w9 + sep <= cx) { showUi = 1; }
+
+    int x = _ED_PAD3;
+    if (_g_tog(9002, x, by, w1, _ED_FLD3, "SEC", _ed_mode3 == ED_SELECT)) { _ed_mode3 = ED_SELECT; }
+    _g_tip_for3(9002, "Sec  (Q)");
+    x = x + w1 + gap;
+    if (_g_tog(9003, x, by, w2, _ED_FLD3, "TASI", _ed_mode3 == ED_MOVE)) { _ed_mode3 = ED_MOVE; }
+    _g_tip_for3(9003, "Tasi  (W)  —  oklardan surukle");
+    x = x + w2 + gap;
+    if (_g_tog(9004, x, by, w3, _ED_FLD3, "OLCEK", _ed_mode3 == ED_SCALE)) { _ed_mode3 = ED_SCALE; }
+    _g_tip_for3(9004, "Olcekle  (R)  —  oklardan surukle");
+    x = x + w3 + gap;
+    if (_g_tog(9005, x, by, w4, _ED_FLD3, "DONDUR", _ed_mode3 == ED_ROTATE)) { _ed_mode3 = ED_ROTATE; }
+    _g_tip_for3(9005, "Dondur  (E)  —  sol/sag oklar");
+
+    if (showGrid == 1) {
+        if (_g_tog(9006, optX, by, w5, _ED_FLD3, gl, _ed_grid3 > 0.0)) {
+            if (_ed_grid3 > 0.0) { _ed_grid3 = 0.0; } else { _ed_grid3 = 0.5; }
+        }
+        _g_tip_for3(9006, "Izgaraya oturt  (G)");
     }
-    _g_tip_for3(9012, "Arayuz boyutu: 1x / 2x / 3x");
+    if (showUi == 1) {
+        if (_g_button(9012, optX + w5 + gap, by, w9, _ED_FLD3, us)) {
+            int nk = _ed_ui3 + 1;
+            if (nk > 3) { nk = 1; }
+            editor_ui_scale3d(nk);
+            return;   // ölçüler değişti; bu karenin kalanını çizme
+        }
+        _g_tip_for3(9012, "Arayuz boyutu: 1x / 2x / 3x");
+    }
 
     // ORTA: oynatma denetimleri. Unity'nin imzası bu — kullanıcı gözünü
     // ekranın ortasına atınca "oynat"ı bulur.
-    int pw = _g_btnw3("OYNAT") + 16;
-    int sw = _g_btnw3("DUR") + 16;
-    int cx = toInt(W / 2) - toInt((pw + sw + 4) / 2);
-    str pl = "OYNAT";
-    if (_ed_playing3 == 1) { pl = "OYNUYOR"; }
     if (_g_tog(9610, cx, by, pw, _ED_FLD3, pl, _ed_playing3 == 1)) {
         if (_ed_playing3 == 0) { ed_play3d(); }
     }
-    if (_g_button(9611, cx + pw + 4, by, sw, _ED_FLD3, "DUR")) { ed_stop3d(); }
+    if (_g_button(9611, cx + pw + gap, by, sw, _ED_FLD3, "DUR")) { ed_stop3d(); }
     _g_tip_for3(9610, "Oyunu sahnenin KOPYASI uzerinde calistir");
     _g_tip_for3(9611, "Durdur  (ESC)  —  oynarken olanlar atilir");
+
+    // SAĞ: durum. Yalnız orta grubun bitişinden SONRA yer kalırsa.
+    str st = toString(yasayan_sayi3d()) + " varlik  " +
+             toString(davranis_sayisi3d()) + " davranis  " +
+             toString(kural_sayisi3d()) + " kural";
+    int stw = _g_w3(st, _F3);
+    if (W - _ED_PAD3 - stw > cx + cw + sep) {
+        _g_txtr3(st, W - _ED_PAD3, by + _us3(3), _G_DIM3());
+    }
 }
 
 // ---- Oynat / Dur -----------------------------------------------------------
@@ -6794,7 +6927,8 @@ func _ed_chrome3() {
     int vh = _ed_view_h3();
     rect_lines(vx - 1, vy - 1, vw + 2, vh + 2, _G_LINE3());
     if (_ed_playing3 == 0) { _ed_axis_widget3(); }
-    _g_tip_draw3();   // EN SON: ipucu her şeyin üstünde
+    _g_check_overlaps3();
+    _g_tip_draw3();   // EN SON: ipucu her şeyin üstünde (denetime girmiyor)
     // Görünüm neden boşsa ONU SÖYLE. Sessiz boş bir panel, kullanıcıyı
     // "editör bozuk" sanmaya götürüyor; sebebi ekranda yazmak gerekiyor.
     if (_ed_rt3 < 0) {

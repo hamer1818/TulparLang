@@ -42,6 +42,30 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Fixed — arayüz çakışması: artık arayüzün KENDİSİ denetliyor
+
+Editörde bazı düğmeler hâlâ üst üste geliyordu. Tek tek yerleşim formülü
+sınamak bunu garanti etmiyor: her yeni widget yeni bir formül, ve içerik
+(metin genişliği, yazı tipi, ölçek, pencere boyutu) değiştikçe eski formüller
+kayıyor. Gerçek font + 2x ölçek tam olarak bunu yaptı.
+
+**Dedektör.** Her widget dikdörtgenini kaydediyor; kare sonunda ikili kesişim
+aranıyor. Çakışma varsa suçlu dikdörtgenler KIRMIZI çerçeveyle gösteriliyor ve
+konsola widget numaralarıyla yazılıyor. Kenar teması çakışma sayılmıyor — yan
+yana dizilmiş düğmeler tam bitişik olabiliyor.
+
+**Araç çubuğu yeniden yazıldı.** Orta grup (OYNAT/DUR) doğrudan `W/2`'ye
+konuyordu ve solun nerede bittiğine BAKMIYORDU. Artık önce ölçülüyor sonra
+yerleştiriliyor: orta grup ortalanıyor ama sol grubun bitişinin gerisine
+düşemiyor. Izgara ve UI düğmeleri yalnız orta gruba çarpmadan sığıyorsa
+çiziliyor — bir editörde ızgara düğmesinin kaybolması, üst üste binmiş iki
+düğmeden iyidir. Durum metni de orta gruptan sonra yer kalırsa çiziliyor.
+
+**Menü şeridi** aynı yaklaşımla: her düğme çizilmeden önce sığdığı
+denetleniyor.
+
+Ölçekle büyümeyen sabit boşluklar (`2`, `10`, `16`) da ölçeğe bağlandı.
+
 ### Changed — editör gerçek bir yazı tipi kullanıyor
 
 raylib'in varsayılan fontu 10 piksel tabanlı bir BITMAP: ölçeklenince

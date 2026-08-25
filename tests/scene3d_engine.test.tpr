@@ -4909,6 +4909,68 @@ func t_ux_hierarchy_filter() {
     assert(_ed_match3("abc", "c"), "son karakter (tek)");
 }
 
+// ===========================================================================
+//  ARAYÜZ ÇAKIŞMASI — "hiçbir şekilde olmasın"
+// ===========================================================================
+// Tek tek yerleşim formülü sınamak bunu GARANTİ ETMİYOR: her yeni widget yeni
+// bir formül, ve içerik (metin genişliği, ölçek, pencere boyutu) değiştikçe
+// eski formüller kayabiliyor. Bu yüzden arayüzün kendisi her karede ikili
+// kesişim arıyor. Burada o denetimin ÇEKİRDEĞİ sınanıyor.
+
+// Kenar teması çakışma DEĞİL — yan yana dizilmiş düğmeler tam bitişik
+// olabiliyor ve onları çakışma saymak dedektörü kullanılamaz yapardı.
+func t_ui_overlap_predicate() {
+    // Ayrık
+    assert(_g_overlap_rect3(0, 0, 10, 10, 20, 0, 10, 10) == false, "yatayda ayrik");
+    assert(_g_overlap_rect3(0, 0, 10, 10, 0, 20, 10, 10) == false, "dikeyde ayrik");
+    // Tam bitişik (kenar teması) — çakışma değil
+    assert(_g_overlap_rect3(0, 0, 10, 10, 10, 0, 10, 10) == false, "yan yana bitisik");
+    assert(_g_overlap_rect3(0, 0, 10, 10, 0, 10, 10, 10) == false, "alt alta bitisik");
+    // Bir piksel binme — ÇAKIŞMA
+    assert(_g_overlap_rect3(0, 0, 10, 10, 9, 0, 10, 10), "1 piksel binme");
+    assert(_g_overlap_rect3(0, 0, 10, 10, 0, 9, 10, 10), "1 piksel dikey binme");
+    // İçine alma
+    assert(_g_overlap_rect3(0, 0, 30, 30, 5, 5, 5, 5), "iceren");
+    assert(_g_overlap_rect3(5, 5, 5, 5, 0, 0, 30, 30), "icerilen");
+    // Aynı dikdörtgen
+    assert(_g_overlap_rect3(3, 4, 8, 9, 3, 4, 8, 9), "ayni");
+}
+
+// Ortalanmış grup SOL GRUBUN üstüne binemez. Araç çubuğunda orta grup
+// (OYNAT/DUR) doğrudan W/2'ye konuyordu ve solun nerede bittiğine BAKMIYORDU;
+// gerçek yazı tipiyle 2x ölçekte sol grup ortaya taşıyor ve düğmeler üst üste
+// biniyordu.
+func t_ui_center_group_never_overlaps_left() {
+    // Bol yer: gerçekten ortalanmalı.
+    int cx = _ed_center_x3(1000, 200, 100, 10);
+    assert_eq_int(cx, 400);
+    // Sol grup ortaya taşıyor: merkez SAĞA itilir.
+    int cx2 = _ed_center_x3(1000, 200, 520, 10);
+    assert_eq_int(cx2, 520);
+    assert(cx2 >= 520, "sol sinirin gerisine dusmemeli");
+    // Dar pencere: sağdan taşma da engellenir ama sol sınır KAZANIR
+    // (çakışmaktansa taşmak yeğ değil; sol sınır korunuyor).
+    int cx3 = _ed_center_x3(600, 400, 300, 10);
+    assert_eq_int(cx3, 300);
+    // Normal dar durumda sağ kenara yaslanır.
+    int cx4 = _ed_center_x3(600, 400, 50, 10);
+    assert(cx4 + 400 <= 600 - 10, "sagdan tasmamali: " + toString(cx4));
+    assert(cx4 >= 50, "sol sinira uymali");
+}
+
+// Dedektör kapatılabilmeli (ölçüm maliyeti isteyen olmayabilir) ama
+// VARSAYILAN AÇIK — kapalı gelen bir denetim hiç olmayan denetimdir.
+func t_ui_overlap_check_defaults_on() {
+    assert(_g_ovl_on3 == 1, "cakisma denetimi varsayilan acik olmali");
+    editor_cakisma3d(false);
+    assert_eq_int(_g_ovl_on3, 0);
+    editor_cakisma3d(true);
+    assert_eq_int(_g_ovl_on3, 1);
+}
+
+test("cakisma yuklemi", "t_ui_overlap_predicate");
+test("orta grup sola binmiyor", "t_ui_center_group_never_overlaps_left");
+test("cakisma denetimi varsayilan acik", "t_ui_overlap_check_defaults_on");
 test("hiyerarsi aramasi", "t_ux_hierarchy_filter");
 test("yon gostergesi izdusumu", "t_ux_axis_projection");
 test("F ile cerceveleme", "t_ux_frame_selected");
