@@ -66,12 +66,15 @@ Mimari kararlar ve gerekçeleri:
       `args()` eklendi (üretilen `main` artık argc/argv alıyor). Bir
       `tulpar editor` alt komutu hâlâ yapılabilir ama artık zorunlu değil.
 
-- [ ] **Editörde kalan Unity/Unreal parçaları.** Çoklu seçim, prefab/şablon,
-      hiyerarşide sürükle-bırak sıralama.
+- [ ] **Editörde kalan Unity/Unreal parçaları.** Prefab/şablon.
+      (Hiyerarşide sürükle-bırak sıralama BİLEREK yapılmadı: bu motorda
+      varlık sırasının oynanışa etkisi yok, yani sıralama kullanıcıya bir şey
+      kazandırmıyor — arama/filtre o ihtiyacı zaten karşılıyor.)
       (Eksen tutamakları, dünya ayarları, varlık adı, konsol, kural
       düzenleyici, panel kaydırma, arayüz ölçeği, standart kısayollar, F ile
       çerçeveleme, hover vurgulama, kaydedilmemiş değişiklik uyarısı, yön
-      göstergesi ✅ 2026-08-24.)
+      göstergesi, sağ tık menüsü, araç ipuçları, arama, çoklu seçim, bölge
+      düzenleme ✅ 2026-08-24.)
 
 - [x] **Tetikleyici bölgeler sahne biçiminde.** ✅ 2026-08-24 — `"zones"`
       alanı; editörde hiyerarşi girdisi + özellik paneli + sağ tık ile ekleme.

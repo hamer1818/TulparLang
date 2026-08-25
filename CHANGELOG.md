@@ -42,6 +42,22 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — çoklu seçim
+
+CTRL+tık (görünümde ve hiyerarşide) kümeye ekliyor/çıkarıyor. Taşıma, silme
+ve çoğaltma kümenin tamamına uygulanıyor.
+
+`_ed_sel3e` BİRİNCİL seçim (inspector onu gösteriyor, tutamaklar onun
+üstünde) ve küme birincili DE içeriyor — iki ayrı gerçek kaynağı tutmak
+"silinen neydi?" sorusunu belirsiz yapardı. Birincil kümeden çıkarılırsa
+yerine kümeden biri geçiyor.
+
+Toplu taşımada birincilin DELTASI ötekilere uygulanıyor; hepsini aynı mutlak
+konuma taşımak onları üst üste yığardı. Çoğaltmada kopyalar seçili kalıyor
+(Unity ve Blender de böyle yapıyor). Ölen handle'lar her karede kümeden
+düşürülüyor — tutulsalardı sonraki toplu işlem geçersiz handle'larla
+çalışırdı.
+
 ### Added — tetikleyici bölgeler sahne biçiminde ve editörde
 
 Bölgeler biçimde YOKTU: editörden eklenemiyor ve bir sahne dosyası "buraya

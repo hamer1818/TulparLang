@@ -4697,7 +4697,7 @@ func _sc_clear_for_load3() {
     _game_over3 = 0; _won3 = 0;
     // Editör seçimi bayat handle olurdu.
     _ed_sel3e = 0 - 1; _ed_drag3 = 0; _gz_axis3 = 0 - 1;
-    _ed_zsel3 = 0 - 1;
+    _ed_zsel3 = 0 - 1; _ed_msel3 = [];
 }
 
 func scene_load3d(src): int {
@@ -5566,9 +5566,134 @@ func _ed_pick3(ox, oy, oz, dx, dy, dz, reach): int {
 // Hepsi HANDLE alıyor ve tek başına anlamlı: klavye de, (Faz 4) tarayıcıdan
 // gelen JSON komutu da bunları çağıracak.
 
-func ed_select3d(id) { _ed_sel3e = id; }
+// ---- Çoklu seçim -----------------------------------------------------------
+// `_ed_sel3e` BİRİNCİL seçim (inspector onu gösteriyor, tutamaklar onun
+// üstünde). `_ed_msel3` ise kümenin tamamı ve birincili DE içeriyor — iki ayrı
+// gerçek kaynağı tutmak "silinen neydi?" sorusunu belirsiz yapardı.
+array _ed_msel3 = [];
+
+func _ed_msel_has3(id): bool {
+    int i = 0;
+    while (i < length(_ed_msel3)) {
+        if (_ed_msel3[i] == id) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+func _ed_msel_add3(id) {
+    if (_ed_msel_has3(id)) { return; }
+    push(_ed_msel3, id);
+}
+
+func _ed_msel_remove3(id) {
+    int i = 0;
+    while (i < length(_ed_msel3)) {
+        if (_ed_msel3[i] == id) {
+            int last = length(_ed_msel3) - 1;
+            if (i != last) { _ed_msel3[i] = _ed_msel3[last]; }
+            pop(_ed_msel3);
+        } else { i = i + 1; }
+    }
+}
+
+// Ölü handle'ları at. Seçili bir varlık silinince küme onu tutmaya devam
+// ederse sonraki toplu işlem geçersiz handle'larla çalışırdı.
+func _ed_msel_prune3() {
+    int i = 0;
+    while (i < length(_ed_msel3)) {
+        if (_slot_of3(_ed_msel3[i]) < 0) {
+            int last = length(_ed_msel3) - 1;
+            if (i != last) { _ed_msel3[i] = _ed_msel3[last]; }
+            pop(_ed_msel3);
+        } else { i = i + 1; }
+    }
+    if (_slot_of3(_ed_sel3e) < 0) {
+        _ed_sel3e = 0 - 1;
+        if (length(_ed_msel3) > 0) { _ed_sel3e = _ed_msel3[0]; }
+    }
+}
+
+func ed_select_count3d(): int { return length(_ed_msel3); }
+
+// Birincili verilen konuma taşı, kümenin GERİ KALANINI aynı delta kadar.
+// Hepsini aynı mutlak konuma taşımak onları üst üste yığardı.
+func _ed_move_group3(nx, ny, nz) {
+    int s = _slot_of3(_ed_sel3e);
+    if (s < 0) { return; }
+    Ent3 pe = _e3[s];
+    float dx = nx - pe.x;
+    float dy = ny - pe.y;
+    float dz = nz - pe.z;
+    ed_move3d(_ed_sel3e, nx, ny, nz);
+    if (length(_ed_msel3) < 2) { return; }
+    int i = 0;
+    while (i < length(_ed_msel3)) {
+        int oid = _ed_msel3[i];
+        if (oid != _ed_sel3e) {
+            int os = _slot_of3(oid);
+            if (os >= 0) {
+                Ent3 oe = _e3[os];
+                ed_move3d(oid, oe.x + dx, oe.y + dy, oe.z + dz);
+            }
+        }
+        i = i + 1;
+    }
+}
+
+// Toplu sil / çoğalt. Tekil komutlar duruyor; bunlar kümeyi geziyor.
+func ed_delete_selected3d() {
+    int i = 0;
+    array kop = [];
+    while (i < length(_ed_msel3)) { push(kop, _ed_msel3[i]); i = i + 1; }
+    i = 0;
+    while (i < length(kop)) { ed_delete3d(kop[i]); i = i + 1; }
+    _ed_msel3 = [];
+    _ed_sel3e = 0 - 1;
+}
+
+func ed_duplicate_selected3d() {
+    array kop = [];
+    int i = 0;
+    while (i < length(_ed_msel3)) { push(kop, _ed_msel3[i]); i = i + 1; }
+    array yeni = [];
+    i = 0;
+    while (i < length(kop)) {
+        int n = ed_duplicate3d(kop[i]);
+        if (n >= 0) { push(yeni, n); }
+        i = i + 1;
+    }
+    // Kopyalar seçili kalsın: hemen taşımak isteyen kullanıcı için doğal olan
+    // bu (ve Unity/Blender de böyle yapıyor).
+    _ed_msel3 = yeni;
+    _ed_sel3e = 0 - 1;
+    if (length(yeni) > 0) { _ed_sel3e = yeni[0]; }
+}
+
+// Tek seçim: kümeyi sıfırlar.
+func ed_select3d(id) {
+    _ed_sel3e = id;
+    _ed_msel3 = [];
+    if (id >= 0) { push(_ed_msel3, id); }
+}
+
+// CTRL+tık: kümeye ekle/çıkar. Birincil daima kümenin İÇİNDE kalıyor.
+func ed_select_toggle3d(id) {
+    if (id < 0) { return; }
+    if (_ed_msel_has3(id)) {
+        _ed_msel_remove3(id);
+        if (_ed_sel3e == id) {
+            _ed_sel3e = 0 - 1;
+            if (length(_ed_msel3) > 0) { _ed_sel3e = _ed_msel3[0]; }
+        }
+        return;
+    }
+    _ed_msel_add3(id);
+    _ed_sel3e = id;
+}
+func ed_secim_ekle3d(id) { ed_select_toggle3d(id); }
 func ed_selected3d(): int { return _ed_sel3e; }
-func ed_deselect3d() { _ed_sel3e = 0 - 1; }
+func ed_deselect3d() { _ed_sel3e = 0 - 1; _ed_msel3 = []; }
 func ed_mode3d(m) { _ed_mode3 = m; }
 func ed_mode_now3d(): int { return _ed_mode3; }
 func ed_grid3d(step) { _ed_grid3 = step * 1.0; }
@@ -6081,7 +6206,15 @@ func _s3_editor_mouse(dt) {
         // 2) Sonra seçim.
         int hit = ed_pick_at3d(mouse_x(), mouse_y());
         if (hit >= 0) {
-            _ed_sel3e = hit;
+            // CTRL basılıysa kümeye ekle/çıkar (her editörde standart).
+            if (key_down(K_LCTRL)) { ed_select_toggle3d(hit); }
+            else {
+                // Zaten kümedeyse seçimi BOZMA: çoklu seçimi sürüklemek için
+                // içindekilerden birine basmak gerekiyor ve bu basış kümeyi
+                // tek varlığa indirseydi çoklu taşıma imkânsız olurdu.
+                if (_ed_msel_has3(hit)) { _ed_sel3e = hit; }
+                else { ed_select3d(hit); }
+            }
             _ed_tab3 = 0;   // görünümden seçim DÜNYA'dan çıkarır
             // Sürükleme düzlemi varlığın KENDİ yüksekliğinde: zemin düzlemini
             // kullanmak, havadaki bir platformu tutunca onu yere düşürürdü.
@@ -6100,7 +6233,10 @@ func _s3_editor_mouse(dt) {
             // sessizce boşalırdı (ölçüldü).
             if (_ed_mode3 == ED_MOVE) { ed_mark3d(); }
             _ed_drag3 = 1;
-        } else { _ed_sel3e = 0 - 1; _ed_drag3 = 0; }
+        } else {
+            if (key_down(K_LCTRL) == false) { ed_deselect3d(); }
+            _ed_drag3 = 0;
+        }
     }
 
     if (mouse_down(0) == false) { _ed_drag3 = 0; _gz_axis3 = 0 - 1; }
@@ -6108,6 +6244,7 @@ func _s3_editor_mouse(dt) {
     // Üzerine gelince vurgulama: tıklamadan ÖNCE neyi seçeceğini göstermek
     // her editörde var ve yokluğu "tıkladım ama yanlış şey seçildi" hissi
     // veriyor. Kare başına bir ışın taraması — seçim taramasının aynısı.
+    _ed_msel_prune3();
     if (_ed_drag3 == 0 && _gz_axis3 < 0) {
         _ed_hover3 = ed_pick_at3d(mouse_x(), mouse_y());
     } else { _ed_hover3 = 0 - 1; }
@@ -6125,8 +6262,8 @@ func _s3_editor_mouse(dt) {
         if (d >= 0.0) {
             float delta = _gz_t3 - _gz_t0_3;
             if (_ed_mode3 == ED_MOVE) {
-                ed_move3d(_ed_sel3e, _gz_px3 + ax * delta,
-                          _gz_py3 + ay * delta, _gz_pz3 + az * delta);
+                _ed_move_group3(_gz_px3 + ax * delta, _gz_py3 + ay * delta,
+                                _gz_pz3 + az * delta);
             } else {
                 ed_resize3d(_ed_sel3e, _gz_s0x3 + ax * delta,
                             _gz_s0y3 + ay * delta, _gz_s0z3 + az * delta);
@@ -6140,8 +6277,8 @@ func _s3_editor_mouse(dt) {
                  _ed_view_w3(), _ed_view_h3(), _cam_fov);
         float t = _ray_planey3(_ed_cy3, _ed_ry3, _ed_dgy3);
         if (t > 0.0) {
-            ed_move3d(_ed_sel3e, _ed_cx3 + _ed_rx3 * t + _ed_ox3, _ed_dgy3,
-                      _ed_cz3 + _ed_rz3 * t + _ed_oz3);
+            _ed_move_group3(_ed_cx3 + _ed_rx3 * t + _ed_ox3, _ed_dgy3,
+                            _ed_cz3 + _ed_rz3 * t + _ed_oz3);
         }
     }
 }
@@ -6203,8 +6340,8 @@ func _s3_editor_keys() {
     if (key_pressed(K_F)) { ed_frame3d(sel); return; }
     float g = 0.5;
     if (_ed_grid3 > 0.0) { g = _ed_grid3; }
-    if (key_pressed(K_DEL)) { ed_mark3d(); ed_delete3d(sel); return; }
-    if (key_pressed(K_D) && key_down(K_LCTRL)) { ed_mark3d(); ed_duplicate3d(sel); return; }
+    if (key_pressed(K_DEL)) { ed_mark3d(); ed_delete_selected3d(); return; }
+    if (key_pressed(K_D) && key_down(K_LCTRL)) { ed_mark3d(); ed_duplicate_selected3d(); return; }
     if (_ed_mode3 == ED_SCALE) {
         Ent3 e = _e3[_slot_of3(sel)];
         if (key_pressed(K_UP) || key_pressed(K_DOWN) || key_pressed(K_LEFT) ||
@@ -6251,6 +6388,18 @@ func _s3_editor_draw() {
         Ent3 he = _e3[hs];
         cube_wires(he.x, he.y, he.z, he.sx + 0.04, he.sy + 0.04, he.sz + 0.04,
                    rgb(150, 170, 200));
+    }
+    // Kümedeki diğer seçimler daha soluk bir çerçeveyle: birincil ile
+    // ötekileri ayırmak "hangisi tutamakların sahibi?" sorusunu cevaplıyor.
+    int mi = 0;
+    while (mi < length(_ed_msel3)) {
+        int ms = _slot_of3(_ed_msel3[mi]);
+        if (ms >= 0 && _ed_msel3[mi] != _ed_sel3e) {
+            Ent3 me = _e3[ms];
+            cube_wires(me.x, me.y, me.z, me.sx + 0.05, me.sy + 0.05, me.sz + 0.05,
+                       rgb(200, 170, 60));
+        }
+        mi = mi + 1;
     }
     int s = _slot_of3(_ed_sel3e);
     if (s < 0) { return; }
@@ -7138,13 +7287,17 @@ func _ed_statusbar3() {
             Ent3 se = _e3[ss];
             str sn = _sc_nm_of3(_ed_sel3e);
             if (sn == "") { sn = _sc_tag_nm3(se.tag); }
-            left = sn + "  (" + _sc_num3(se.x) + ", " + _sc_num3(se.y) + ", " +
-                   _sc_num3(se.z) + ")   " + left;
+            str cok = "";
+            if (ed_select_count3d() > 1) {
+                cok = " +" + toString(ed_select_count3d() - 1);
+            }
+            left = sn + cok + "  (" + _sc_num3(se.x) + ", " + _sc_num3(se.y) +
+                   ", " + _sc_num3(se.z) + ")   " + left;
         }
     }
     _g_txt3(left, _ED_PAD3, sy + _g_cy3(_ED_STAT_H3), toInt(W / 2), _G_DIM3());
     str right = "gorunum " + toString(_ed_view_w3()) + "x" + toString(_ed_view_h3()) +
-                " | rt " + toString(_ed_rt3) + " | SAG TUS+WASD uc | Q/W/E/R arac | F cercevele | CTRL+Z geri | CTRL+S kaydet";
+                " | rt " + toString(_ed_rt3) + " | SAG TUS+WASD uc | Q/W/E/R arac | F cercevele | CTRL+tik coklu secim | CTRL+S kaydet";
     if (_ed_playing3 == 1) { right = "OYNUYOR — ESC durdurur"; }
     if (_ed_msg_t3 > 0.0) { right = _ed_msg3; }
     int rw = _g_w3(right, _F3);
@@ -7382,8 +7535,9 @@ func _ed_hierarchy3() {
         if (nm == "") { nm = _sc_tag_nm3(e.tag) + "." + toString(sl); }
         if (_g_item(12000 + r, _us3(2), listy + r * _ED_ROW3, pw - _us3(4),
                     _ED_ROW3 - _us3(1),
-                    nm, hnd == _ed_sel3e && _ed_tab3 == 0)) {
-            ed_select3d(hnd);
+                    nm, _ed_msel_has3(hnd) && _ed_tab3 == 0)) {
+            if (key_down(K_LCTRL)) { ed_select_toggle3d(hnd); }
+            else { ed_select3d(hnd); }
             _ed_tab3 = 0;
         }
         r = r + 1;
@@ -8040,7 +8194,7 @@ func _ed_inspector3() {
     }
     y = y + _ED_FLD3 + _us3(8);
 
-    if (_g_button(9470, lx, y, half, _ED_FLD3, "COGALT")) { ed_mark3d(); ed_duplicate3d(id); }
+    if (_g_button(9470, lx, y, half, _ED_FLD3, "COGALT")) { ed_mark3d(); ed_duplicate_selected3d(); }
     _g_tip_for3(9470, "Cogalt  (CTRL+D)  —  davranislariyla");
     if (_g_button(9471, lx + half + 4, y, half, _ED_FLD3, "SIL")) { ed_mark3d(); ed_delete3d(id); }
     _g_tip_for3(9471, "Sil  (DEL)  —  CTRL+Z ile geri alinir");

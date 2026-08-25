@@ -3956,6 +3956,118 @@ func t_zone_hooks_survive_editor_reload() {
     assert(_zh_n > before, "kanca yeniden yuklemeden sonra da calismali");
 }
 
+// ===========================================================================
+//  ÇOKLU SEÇİM
+// ===========================================================================
+// `_ed_sel3e` BİRİNCİL seçim (inspector onu gösteriyor, tutamaklar onun
+// üstünde) ve küme birincili DE içeriyor — iki ayrı gerçek kaynağı tutmak
+// "silinen neydi?" sorusunu belirsiz yapardı.
+
+func _ms_three(): int {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    int b = spawn3(5.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    int c = spawn3(10.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    ed_grid3d(0.0);
+    return a;
+}
+
+func t_msel_single_replaces_set() {
+    int a = _ms_three();
+    int b = _e3gen[1] * 1048576 + 1;
+    ed_select3d(a);
+    assert_eq_int(ed_select_count3d(), 1);
+    ed_select3d(b);
+    assert_eq_int(ed_select_count3d(), 1);
+    assert_eq_int(ed_selected3d(), b);
+    assert(_ed_msel_has3(a) == false, "tek secim kumeyi sifirlamali");
+}
+
+func t_msel_toggle_adds_and_removes() {
+    int a = _ms_three();
+    int b = _e3gen[1] * 1048576 + 1;
+    int c = _e3gen[2] * 1048576 + 2;
+    ed_select3d(a);
+    ed_select_toggle3d(b);
+    ed_select_toggle3d(c);
+    assert_eq_int(ed_select_count3d(), 3);
+    assert_eq_int(ed_selected3d(), c);        // son eklenen BİRİNCİL
+    ed_select_toggle3d(c);                    // aynısına tekrar → çıkar
+    assert_eq_int(ed_select_count3d(), 2);
+    assert(_ed_msel_has3(c) == false, "cikarilmali");
+    // Birincil çıkarıldıysa kümeden biri birincil olmalı — inspector'ın boş
+    // kalması, hâlâ iki şey seçiliyken kafa karıştırırdı.
+    assert(ed_selected3d() >= 0, "birincil kumeden secilmeli");
+    assert(_ed_msel_has3(ed_selected3d()), "birincil kumenin ICINDE olmali");
+}
+
+// Toplu taşıma: birincilin DELTASI ötekilere uygulanmalı. Hepsini aynı mutlak
+// konuma taşımak onları üst üste yığardı.
+func t_msel_move_preserves_relative_positions() {
+    int a = _ms_three();
+    int b = _e3gen[1] * 1048576 + 1;
+    ed_select3d(a);
+    ed_select_toggle3d(b);
+    _ed_sel3e = a;                    // birincil a
+    _ed_move_group3(0.0, 1.0, 20.0);  // a'yı z=20'ye taşı
+    assert(abs_f3(get3z(a) - 20.0) < 0.001, "birincil tasindi");
+    assert(abs_f3(get3z(b) - 20.0) < 0.001, "oteki ayni delta kadar tasindi");
+    // ARALARINDAKİ mesafe korunmalı.
+    assert(abs_f3(get3x(b) - get3x(a) - 5.0) < 0.001,
+           "goreli konum korunmali: " + toString(get3x(b) - get3x(a)));
+}
+
+func t_msel_delete_removes_all() {
+    int a = _ms_three();
+    int b = _e3gen[1] * 1048576 + 1;
+    ed_select3d(a);
+    ed_select_toggle3d(b);
+    assert_eq_int(alive_count3d(), 3);
+    ed_delete_selected3d();
+    assert_eq_int(alive_count3d(), 1);
+    assert_eq_int(ed_select_count3d(), 0);
+    assert_eq_int(ed_selected3d(), 0 - 1);
+}
+
+func t_msel_duplicate_selects_copies() {
+    int a = _ms_three();
+    int b = _e3gen[1] * 1048576 + 1;
+    ed_select3d(a);
+    ed_select_toggle3d(b);
+    ed_duplicate_selected3d();
+    assert_eq_int(alive_count3d(), 5);
+    // Kopyalar seçili kalmalı: hemen taşımak isteyen için doğal olan bu.
+    assert_eq_int(ed_select_count3d(), 2);
+    assert(_ed_msel_has3(a) == false, "asillar secimde kalmamali");
+    assert(_ed_msel_has3(ed_selected3d()), "birincil kumenin icinde");
+}
+
+// Seçili bir varlık başka bir yoldan silinirse küme onu TUTMAMALI: sonraki
+// toplu işlem geçersiz handle'larla çalışırdı.
+func t_msel_prunes_dead_handles() {
+    int a = _ms_three();
+    int b = _e3gen[1] * 1048576 + 1;
+    ed_select3d(a);
+    ed_select_toggle3d(b);
+    kill3d(b);
+    _ed_msel_prune3();
+    assert_eq_int(ed_select_count3d(), 1);
+    assert_eq_int(ed_selected3d(), a);
+    // Birincil ölürse yerine kümeden biri geçmeli.
+    ed_select3d(a);
+    kill3d(a);
+    _ed_msel_prune3();
+    assert_eq_int(ed_selected3d(), 0 - 1);
+    assert_eq_int(ed_select_count3d(), 0);
+}
+
+test("tek secim kumeyi sifirliyor", "t_msel_single_replaces_set");
+test("ctrl-tik ekliyor/cikariyor", "t_msel_toggle_adds_and_removes");
+test("toplu tasima goreli konumu koruyor", "t_msel_move_preserves_relative_positions");
+test("toplu silme", "t_msel_delete_removes_all");
+test("toplu cogaltma kopyalari seciyor", "t_msel_duplicate_selects_copies");
+test("olu handle kumeden dusuyor", "t_msel_prunes_dead_handles");
 test("bolge gidis-donusu", "t_zone_roundtrip");
 test("bolge silme tum dizileri kaydiriyor", "t_zone_delete_shifts_all_arrays");
 test("bolge yokken alan yazilmiyor", "t_zone_absent_when_none");
