@@ -4062,6 +4062,108 @@ func t_msel_prunes_dead_handles() {
     assert_eq_int(ed_select_count3d(), 0);
 }
 
+// ===========================================================================
+//  PREFAB (şablon)
+// ===========================================================================
+// Şablon, varlığın KENDİ SERİLEŞTİRMESİ olarak tutuluyor ve yerleştirme aynı
+// yükleyiciden geçiyor. Ayrı bir şablon biçimi yazmak, varlık biçimi her
+// büyüdüğünde ondan sapardı — bu testin asıl sınadığı şey o: yeni alanlar
+// (davranış, can, katılık) şablona kendiliğinden giriyor mu.
+func t_prefab_captures_everything() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(1.0, 2.0, 3.0, 1.4, 1.6, 1.4, rgb(9, 88, 177), SHAPE_SPHERE, TAG_ENEMY);
+    set3yaw(a, 40.0);
+    health3d(a, 55);
+    solid3d(a, false);
+    chase_behavior3d(a, TAG_PLAYER, 7.5, 22.0);
+    assert(prefab_save3d("dusman", a), "sablon kaydedilmeli");
+    assert_eq_int(prefab_count3d(), 1);
+
+    int n = prefab_place3d("dusman", 10.0, 1.0, 0.0 - 5.0);
+    assert(n >= 0, "yerlestirilmeli");
+    Ent3 e = _e3[_slot_of3(n)];
+    assert(abs_f3(e.x - 10.0) < 0.001, "konum EZILMELI");
+    assert(abs_f3(e.z + 5.0) < 0.001, "z ezilmeli");
+    // ...geri kalan her şey şablondan.
+    assert_eq_int(e.tag, TAG_ENEMY);
+    assert_eq_int(e.shape, SHAPE_SPHERE);
+    assert(abs_f3(e.sx - 1.4) < 0.001, "boyut");
+    assert(abs_f3(e.yaw - 40.0) < 0.001, "yaw");
+    assert_eq_int(_col_b3(e.color), 177);
+    assert_eq_int(hp3d(n), 55);
+    assert_eq_int(e.solid, 0);
+    // Davranış da geldi mi?
+    int i = 0;
+    int buldu = 0;
+    while (i < length(_bh3)) {
+        if (_bh3[i].id == n && _bh3[i].kind == BH_CHASE) {
+            assert(abs_f3(_bh3[i].a - 7.5) < 0.001, "kovalama hizi");
+            assert(abs_f3(_bh3[i].b - 22.0) < 0.001, "menzil");
+            buldu = 1;
+        }
+        i = i + 1;
+    }
+    assert_eq_int(buldu, 1);
+}
+
+// Aynı ad ÜZERİNE yazılmalı: iki şablonun aynı adı taşıması "hangisi geldi?"
+// sorusunu doğururdu.
+func t_prefab_same_name_overwrites() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    int b = spawn3(0.0, 1.0, 0.0, 3.0, 3.0, 3.0, RED, SHAPE_SPHERE, TAG_ENEMY);
+    prefab_save3d("x", a);
+    prefab_save3d("x", b);
+    assert_eq_int(prefab_count3d(), 1);
+    int n = prefab_place3d("x", 0.0, 1.0, 0.0);
+    assert_eq_int(_e3[_slot_of3(n)].shape, SHAPE_SPHERE);
+}
+
+// Şablonun ADI kopyaya taşınmamalı: iki varlığın aynı adı taşıması ad
+// aramasını belirsiz yapardı.
+func t_prefab_does_not_copy_name() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    rename3d(a, "asil");
+    prefab_save3d("s", a);
+    int n = prefab_place3d("s", 5.0, 1.0, 0.0);
+    assert_eq_int(bul3d("asil"), a);
+    assert(_sc_nm_of3(n) == "", "kopya adsiz olmali");
+}
+
+func t_prefab_roundtrip_and_delete() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 2.0, 2.0, 2.0, GOLD, SHAPE_CYL, TAG_WALL);
+    prefab_save3d("sutun", a);
+    str js = scene_json3d();
+    scene_load3d(js);
+    assert_eq_int(prefab_count3d(), 1);
+    assert(prefab_name3d(0) == "sutun", "ad korunmali");
+    int n = prefab_place3d("sutun", 4.0, 1.0, 4.0);
+    assert(n >= 0, "yeniden yuklemeden sonra da yerlestirilebilmeli");
+    assert_eq_int(_e3[_slot_of3(n)].shape, SHAPE_CYL);
+    prefab_delete3d("sutun");
+    assert_eq_int(prefab_count3d(), 0);
+    assert_eq_int(prefab_place3d("sutun", 0.0, 0.0, 0.0), 0 - 1);
+}
+
+// Şablonu olmayan sahne "prefabs" yazmamalı.
+func t_prefab_absent_when_none() {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    assert(indexOf(scene_json3d(), "prefabs") < 0, "sablon yokken alan yazilmamali");
+}
+
+test("sablon her seyi yakaliyor", "t_prefab_captures_everything");
+test("ayni ad uzerine yaziyor", "t_prefab_same_name_overwrites");
+test("sablon adi kopyaya gecmiyor", "t_prefab_does_not_copy_name");
+test("sablon gidis-donusu ve silme", "t_prefab_roundtrip_and_delete");
+test("sablon yokken alan yazilmiyor", "t_prefab_absent_when_none");
 test("tek secim kumeyi sifirliyor", "t_msel_single_replaces_set");
 test("ctrl-tik ekliyor/cikariyor", "t_msel_toggle_adds_and_removes");
 test("toplu tasima goreli konumu koruyor", "t_msel_move_preserves_relative_positions");
@@ -4494,6 +4596,13 @@ func t_gui_widget_id_ranges_are_disjoint() {
     assert(9750 < 12000, "dunya paneli kimlikleri hiyerarsinin altinda");
     assert(9611 < 9680, "menu/oynat ile sekme araligi ayrik");
     assert(9690 < 9700, "ad alani ile dunya paneli ayrik");
+    // Şablon satırları 9490 + i*2 (i < 8) → en fazla 9505; dünya panelinin
+    // (9700+) altında kalmalı.
+    assert(9490 + 7 * 2 + 1 < 9600, "sablon satirlari menu araliginin altinda");
+    // Bağlam menüsü 22000+, bölge paneli 23000+, kural satırları 21000+ —
+    // hepsi hiyerarşi (12000+) ve davranış (20000+) aralıklarından ayrık.
+    assert(21901 < 22001, "kural ile baglam menusu ayrik");
+    assert(22015 < 23001, "baglam menusu ile bolge paneli ayrik");
     // Davranış satırı içi üç kimlik birbirine girmemeli.
     int s0 = 20000 + 0 * 4;
     int s1 = 20000 + 1 * 4;

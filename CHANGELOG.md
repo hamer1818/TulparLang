@@ -42,6 +42,21 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — prefab (şablon)
+
+Bir varlığı adlı şablon olarak sakla, istediğin yere yerleştir. Şablon,
+varlığın KENDİ SERİLEŞTİRMESİ olarak tutuluyor (`_sc_ent_js3`) ve yerleştirme
+aynı yükleyiciden (`_sc_load_ent3`) geçiyor. Ayrı bir şablon biçimi yazmak,
+varlık biçimi her büyüdüğünde ondan sapardı — davranışlar, can, katılık,
+model hepsi bedava geliyor ve yeni alanlar kendiliğinden dahil oluyor.
+
+`prefab_save3d` / `prefab_place3d` / `prefab_delete3d` (+ TR ikizleri),
+sahne JSON'unda `"prefabs"`. Aynı ad ÜZERİNE yazılıyor; şablonun adı kopyaya
+TAŞINMIYOR (iki varlığın aynı adı taşıması ad aramasını belirsiz yapardı).
+
+Inspector'da: "seçiliyi ŞABLON yap" ve şablon listesi (tıkla → seçilinin
+yanına yerleştir, x → sil).
+
 ### Added — çoklu seçim
 
 CTRL+tık (görünümde ve hiyerarşide) kümeye ekliyor/çıkarıyor. Taşıma, silme

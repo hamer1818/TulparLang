@@ -66,7 +66,7 @@ Mimari kararlar ve gerekçeleri:
       `args()` eklendi (üretilen `main` artık argc/argv alıyor). Bir
       `tulpar editor` alt komutu hâlâ yapılabilir ama artık zorunlu değil.
 
-- [ ] **Editörde kalan Unity/Unreal parçaları.** Prefab/şablon.
+- [x] **Editörün Unity/Unreal parçaları tamam.** ✅ 2026-08-24 — prefab dahil.
       (Hiyerarşide sürükle-bırak sıralama BİLEREK yapılmadı: bu motorda
       varlık sırasının oynanışa etkisi yok, yani sıralama kullanıcıya bir şey
       kazandırmıyor — arama/filtre o ihtiyacı zaten karşılıyor.)
