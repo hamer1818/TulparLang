@@ -222,6 +222,37 @@ Kaydırma değeri çalmadan AYRI hesaplanıyor (`_snd_pan_val3`), yani ses aygı
 olmayan bir makinede de sınanabiliyor — `_snd_vol3` ile aynı gerekçe.
 `ses_yon_gucu3d(0.0)` kaydırmayı tamamen kapatır.
 
+### Added — animasyon N klibe genelleşti
+
+`anim3d` yalnız iki klip biliyordu (boşta + koşu). Çömelme, saldırı ya da
+rastgele boşta klipleri için oyunun klibi doğrudan söyleyebilmesi gerekiyor.
+
+"İki klip" aslında hiç özel değildi: harmanlama zaten (a, b, w) üçlüsüyle
+çalışıyordu, özel olan yalnız HEDEFİ hesaplayan kuraldı. Şimdi hedef her kare
+hesaplanıyor ve değişirse geçiş yeniden kuruluyor; otomatik locomotion bunun
+bir özel hâli.
+
+`anim_set3d(id, klip)` / `animasyon_sec3d` klibi oyun seçer, `anim_auto3d`
+hıza geri bırakır, `anim_now3d` görünen klibi verir.
+
+Geçiş makinesinin üç dalı da ayrı ayrı ölçülüyor, çünkü üçü de sessizce
+yanlış olabilirdi:
+- **Hedef zaten b ise dokunma.** Her kare sıfırlansaydı ağırlık asla
+  ilerlemez ve sonuç tam olarak "harmanlama hiç çalışmıyor" gibi görünürdü.
+- **Hedef a ise geçişi TERS çevir** (`w = 1-w`). Sıfırdan başlatmak,
+  karakterin yarı yoldan önce tam koşuya gidip sonra dönmesi demek olurdu.
+- **Üçüncü klipte BASKIN pozdan başla.** Üç yönlü harmanlama yok (tek ağırlık
+  var), zayıf olandan başlamak görünür bir sıçrama olurdu.
+
+Elle seçilen klip bir bayrakla korunuyor: otomatik kip her kare hedefi
+yeniden yazdığı için, bayrak olmasa `anim_set3d` bir sonraki karede yok
+olurdu.
+
+Süitteki eski test AĞIRLIK üzerinden iddia kuruyordu; artık GÖRÜNEN KLİP
+üzerinden kuruyor. N klip makinesinde ağırlık geçiş bitince sıfıra dönüyor,
+yani "w == 1" iddiası makinenin iç detayına bağlı olur ve doğru davranışta
+bile kırmızıya dönerdi.
+
 ### Added — animasyon harmanlaması: boşta↔koşu artık sıçramıyor
 
 `anim3d` iki klip arasında TEK KAREDE geçiyordu; karakter yürümeye başlayınca

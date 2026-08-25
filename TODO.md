@@ -163,10 +163,17 @@ Mimari kararlar ve gerekçeleri:
       pozu sonsuza kadar biraz koşu taşırdı (test bunu ölçüyor).
       Örnek: `examples/scene3d_karakter.tpr` (robot.glb, scene3d).
 
-- [ ] **`anim3d` hâlâ İKİ klip biliyor** (boşta + koşu). Yürüme/koşma/çömelme
-      gibi üçüncü bir durum ya da rastgele boşta klipleri için ağırlık
-      tek bir sayı olmaktan çıkmalı. Harmanlama altyapısı (`tm3_anim_blend`)
-      N klibe hazır; eksik olan scene3d'nin durum makinesi.
+- [x] **`anim3d` artık N klip biliyor.** ✅ 2026-08-25 — geçiş (a, b, w)
+      üçlüsü üzerinden yürüyor; "iki klip" hiç özel değildi, yalnız hedefi
+      hesaplayan kural iki seçenekliydi.
+      `animasyon_sec3d(i, klip)` / `anim_set3d` klibi oyunun seçmesini
+      sağlıyor, `anim_auto3d` hızdan türeyen locomotion'a döndürüyor,
+      `anim_now3d` görünen klibi veriyor.
+      Makinenin üç dalı ayrı ayrı ölçülüyor: aynı hedef geçişi SIFIRLAMAZ
+      (sıfırlasaydı ağırlık hiç ilerlemez, "harmanlama hiç çalışmıyor" gibi
+      görünürdü), yarıda GERİ dönüş geçişi ters çevirir (w = 1-w) sıfırdan
+      başlatmaz, üçüncü klibe geçiş BASKIN pozdan başlar.
+      Dört bozma denendi, dördü de yakalandı.
 
 ---
 

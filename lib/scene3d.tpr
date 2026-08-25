@@ -92,10 +92,20 @@ struct Ent3 {
     int anim_run;                     // koşu animasyon indeksi (-1 = yok)
     float anim_fps;                   // kare/sn
     float anim_t;                     // kesirli kare sayacı (motor sürer)
-    // Harmanlama ağırlığı: 0 = tamamen boşta, 1 = tamamen koşu. Motor
-    // sürer, çizim yalnız uygular. ÇALIŞMA durumu — sahne dosyasına
-    // yazılmıyor, çünkü yazarın belirlediği bir şey değil.
+    // Harmanlama durumu: `anim_a` klibinden `anim_b` klibine, ağırlık
+    // `anim_w` (0 = tamamen a, 1 = tamamen b). Motor sürer, çizim yalnız
+    // uygular. ÇALIŞMA durumu — sahne dosyasına yazılmıyor.
+    //
+    // İki klip değil N klip: hedef her kare yeniden hesaplanıyor ve
+    // değişirse geçiş (a,b,w) üçlüsü üzerinden yeniden kuruluyor. Boşta↔koşu
+    // bunun yalnız bir özel hâli.
+    int anim_a;
+    int anim_b;
     float anim_w;
+    // 1 = klibi OYUN seçiyor (`anim_set3d`), 0 = hızdan türeyen otomatik
+    // locomotion. İkisini bir bayrakla ayırmak gerekiyor: otomatik kip her
+    // kare hedefi yeniden yazdığı için elle seçilen klibi anında ezerdi.
+    int anim_manual;
 }
 
 array _e3 = [];             // entity store (slot ile indekslenir, handle ile DEĞİL)
@@ -305,7 +315,7 @@ func spawn3(x, y, z, sx, sy, sz, color, shape, tag): int {
                grounded: 0, alive: 1, solid: _default_solid3(tag),
                hp: 0, hpmax: 0, invuln: 0.0, life: 0.0, owner: 0 - 1, pdir: 0,
                anim_idle: 0 - 1, anim_run: 0 - 1, anim_fps: 24.0, anim_t: 0.0,
-               anim_w: 0.0,
+               anim_a: 0 - 1, anim_b: 0 - 1, anim_w: 0.0, anim_manual: 0,
                avoid: 0 };
     return _mk_handle3(_alloc_slot3(e));
 }
@@ -318,7 +328,7 @@ func spawn3_model(x, y, z, scale, model_handle, tag): int {
                grounded: 0, alive: 1, solid: _default_solid3(tag),
                hp: 0, hpmax: 0, invuln: 0.0, life: 0.0, owner: 0 - 1, pdir: 0,
                anim_idle: 0 - 1, anim_run: 0 - 1, anim_fps: 24.0, anim_t: 0.0,
-               anim_w: 0.0,
+               anim_a: 0 - 1, anim_b: 0 - 1, anim_w: 0.0, anim_manual: 0,
                avoid: 0 };
     return _mk_handle3(_alloc_slot3(e));
 }
@@ -1750,8 +1760,58 @@ func anim3d(id, idle_idx, run_idx, fps) {
     e.anim_run = run_idx;
     e.anim_fps = fps;
     e.anim_t = 0.0;
+    // Boştada BAŞLA: a=b=boşta, w=0. İki ucu da aynı klibe kurmak, ilk
+    // karede yarım bir poz görünmesini engelliyor.
+    e.anim_a = idle_idx;
+    e.anim_b = idle_idx;
     e.anim_w = 0.0;
+    e.anim_manual = 0;
     _e3[s] = e;
+}
+
+// ---- N KLİP: klibi oyun seçiyor --------------------------------------------
+// `anim3d` hızdan türeyen otomatik locomotion; üçüncü bir durum (çömelme,
+// saldırı, rastgele boşta) için oyunun klibi doğrudan söyleyebilmesi gerekiyor.
+//
+// Geçiş makinesi AYNI: hedef değişince (a,b,w) üçlüsü yeniden kuruluyor ve
+// harmanlama aynı yoldan geçiyor. "İki klip" hiç özel değildi, yalnız hedefi
+// hesaplayan kural iki seçenekliydi.
+func anim_set3d(id, clip) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s];
+    e.anim_manual = 1;
+    _e3[s] = _anim_retarget3(e, clip);
+}
+func animasyon_sec3d(i, klip) { anim_set3d(i, klip); }
+
+// Otomatik locomotion'a geri dön (hız boştayı/koşuyu seçsin).
+func anim_auto3d(id) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s];
+    e.anim_manual = 0;
+    _e3[s] = e;
+}
+func animasyon_otomatik3d(i) { anim_auto3d(i); }
+
+// Şu an GÖRÜNEN klip: harmanlamada baskın olan. Oyun mantığı "hangi
+// animasyondayım" diye sorabilsin diye.
+func anim_now3d(id): int {
+    int s = _slot_of3(id);
+    if (s < 0) { return 0 - 1; }
+    Ent3 e = _e3[s];
+    if (e.anim_w > 0.5) { return e.anim_b; }
+    return e.anim_a;
+}
+func animasyon_su_an3d(i): int { return anim_now3d(i); }
+
+// Harmanlama ağırlığı (0 = a, 1 = b). Test ve tanı için.
+func anim_weight3d(id): float {
+    int s = _slot_of3(id);
+    if (s < 0) { return 0.0; }
+    Ent3 e = _e3[s];
+    return e.anim_w;
 }
 
 // Entity'nin bu karede oynatacağı animasyon indeksi: yatayda hareket varsa
@@ -1760,6 +1820,33 @@ func _anim_pick3(Ent3 e): int {
     float sp = sqrt(e.vx * e.vx + e.vz * e.vz);
     if (sp > 0.35 && e.anim_run >= 0) { return e.anim_run; }
     return e.anim_idle;
+}
+
+// Hedef klip değiştiğinde geçişi yeniden kur. SAF (Ent3 alır, Ent3 döner),
+// yani penceresiz sınanabiliyor.
+//
+// Üç durum var ve üçü de ayrı ayrı önemli:
+//   1. Hedef zaten b ise dokunma — yoksa her kare geçiş sıfırlanır ve
+//      ağırlık asla ilerlemez.
+//   2. Hedef a ise (yarıda GERİ dönüş) geçişi TERS çevir: w = 1-w. Sıfırdan
+//      başlatmak, karakterin yarı yoldan tekrar tam koşuya gidip dönmesi
+//      demek olurdu.
+//   3. Üçüncü bir klip ise BASKIN pozdan başla. Ortada üç yönlü harmanlama
+//      yok (VMValue'da tek ağırlık var), o yüzden dominant olanı a yapmak
+//      en az sıçratan seçim.
+func _anim_retarget3(Ent3 e, want): Ent3 {
+    if (want == e.anim_b) { return e; }
+    if (want == e.anim_a) {
+        int tmp = e.anim_a;
+        e.anim_a = e.anim_b;
+        e.anim_b = tmp;
+        e.anim_w = 1.0 - e.anim_w;
+        return e;
+    }
+    if (e.anim_w > 0.5) { e.anim_a = e.anim_b; }
+    e.anim_b = want;
+    e.anim_w = 0.0;
+    return e;
 }
 
 // ---- Animasyon harmanlaması -------------------------------------------------
@@ -1940,12 +2027,27 @@ func _s3_physics(dt) {
             }
             if (is_bullet == 1 && _out_of_world3(e)) { expired = 1; }
             // Animasyon kare sayacı: motor sürer, render yalnız uygular.
-            if (e.anim_idle >= 0 || e.anim_run >= 0) {
+            if (e.anim_idle >= 0 || e.anim_run >= 0 || e.anim_manual == 1) {
                 e.anim_t = e.anim_t + e.anim_fps * dt;
                 if (e.anim_t > 100000.0) { e.anim_t = 0.0; }   // taşma koruması
-                e.anim_w = _anim_step_w3(e.anim_w,
-                                         _anim_target3(e.vx, e.vz, e.anim_run),
-                                         dt);
+                // OTOMATİK kipte hedef hızdan türüyor. ELLE kipte hedefi
+                // `anim_set3d` yazdı, dokunmuyoruz — otomatik kip her kare
+                // hedefi yeniden yazdığı için elle seçileni anında ezerdi.
+                if (e.anim_manual == 0) {
+                    int want = e.anim_idle;
+                    if (_anim_target3(e.vx, e.vz, e.anim_run) > 0.5) {
+                        want = e.anim_run;
+                    }
+                    e = _anim_retarget3(e, want);
+                }
+                e.anim_w = _anim_step_w3(e.anim_w, 1.0, dt);
+                // Geçiş bitti: b artık tek başına geçerli. a'yı da b yapmak,
+                // sonraki hedef değişiminin "geri dönüş" dalına yanlışlıkla
+                // düşmesini engelliyor.
+                if (e.anim_w >= 1.0) {
+                    e.anim_a = e.anim_b;
+                    e.anim_w = 0.0;
+                }
             }
             _e3[i] = e;
             if (expired == 1) { kill3d(_mk_handle3(i)); }
@@ -3505,10 +3607,14 @@ func _s3_render() {
                             // animasyon aynı yürüyüş fazında kalsın diye
                             // (locomotion harmanlamasının standart yolu),
                             // her biri kendi kare sayısına göre mod'lanıyor.
-                            int ai = e.anim_idle;
-                            int bi = e.anim_run;
-                            // Boşta yoksa harmanlanacak bir şey de yok:
-                            // koşu tek başına A rolüne geçiyor.
+                            int ai = e.anim_a;
+                            int bi = e.anim_b;
+                            // Geçiş yoksa (a == b) harmanlamaya gerek yok;
+                            // ikinci klibi -1 vermek C tarafında tek-poz
+                            // yoluna düşürüyor.
+                            if (ai == bi) { bi = 0 - 1; }
+                            // a hiç kurulmamışsa (anim3d çağrılmamış) b'ye
+                            // düş — model eskisi gibi donuk çizilir.
                             if (ai < 0) { ai = bi; bi = 0 - 1; }
                             if (ai >= 0) {
                                 int fa = 0;

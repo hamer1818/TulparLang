@@ -5772,37 +5772,135 @@ func t_anim_target_zero_without_run_clip() {
 }
 
 func t_anim_weight_driven_by_engine() {
-    // Ağırlığı MOTOR sürüyor: oyun kodu hiçbir şey çağırmıyor.
+    // GEÇİŞİ motor sürüyor: oyun kodu hiçbir şey çağırmıyor.
+    //
+    // İddia AĞIRLIK üzerinden değil GÖRÜNEN KLİP üzerinden kuruluyor. N klip
+    // makinesinde `anim_w` a→b geçişinin ilerlemesi ve geçiş bitince sıfıra
+    // dönüyor; yani "w == 1" gibi bir iddia makinenin iç detayına bağlı olur
+    // ve doğru davranışta bile kırmızıya dönerdi. Oyunun umursadığı şey
+    // hangi klibin oynadığı.
+    scene3d_reset();
+    no_ground3d();
+    int m = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_PROP);
+    anim3d(m, 0, 1, 24.0);
+    assert(anim_now3d(m) == 0, "baslangicta bosta degil");
+
+    // Hareket ettir: koşuya geçmeli.
+    int i = 0;
+    while (i < 30) {
+        Ent3 e = _e3[_slot_of3(m)];
+        e.vx = 4.0;
+        _e3[_slot_of3(m)] = e;
+        _s3_physics(1.0 / 60.0);
+        i = i + 1;
+    }
+    assert(anim_now3d(m) == 1,
+           "hareket ederken kosuya gecmedi: " + toString(anim_now3d(m)));
+
+    // Durdur: geri boştaya dönmeli.
+    i = 0;
+    while (i < 40) {
+        Ent3 e = _e3[_slot_of3(m)];
+        e.vx = 0.0; e.vz = 0.0;
+        _e3[_slot_of3(m)] = e;
+        _s3_physics(1.0 / 60.0);
+        i = i + 1;
+    }
+    assert(anim_now3d(m) == 0,
+           "durunca bostaya donmedi: " + toString(anim_now3d(m)));
+}
+
+// ---- N KLİP ---------------------------------------------------------------
+
+func t_anim_manual_clip_wins_over_speed() {
+    // Elle seçilen klip, otomatik locomotion tarafından EZİLMEMELİ. Otomatik
+    // kip her kare hedefi yeniden yazıyor; bayrak olmasaydı `anim_set3d`
+    // bir sonraki karede yok olurdu.
+    scene3d_reset();
+    no_ground3d();
+    int m = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_PROP);
+    anim3d(m, 0, 1, 24.0);
+    animasyon_sec3d(m, 5);            // üçüncü bir klip (çömelme diyelim)
+
+    int i = 0;
+    while (i < 40) {
+        Ent3 e = _e3[_slot_of3(m)];
+        e.vx = 6.0;                   // hızlı KOŞUYOR ama klip elle seçili
+        _e3[_slot_of3(m)] = e;
+        _s3_physics(1.0 / 60.0);
+        i = i + 1;
+    }
+    assert(anim_now3d(m) == 5,
+           "elle secilen klip otomatik locomotion tarafindan ezildi: " +
+           toString(anim_now3d(m)));
+
+    // Otomatik kipe dönünce hız yeniden söz sahibi olmalı.
+    animasyon_otomatik3d(m);
+    i = 0;
+    while (i < 40) {
+        Ent3 e = _e3[_slot_of3(m)];
+        e.vx = 6.0;
+        _e3[_slot_of3(m)] = e;
+        _s3_physics(1.0 / 60.0);
+        i = i + 1;
+    }
+    assert(anim_now3d(m) == 1, "otomatige donunce kosuya gecmedi");
+}
+
+func t_anim_reverse_transition_does_not_restart() {
+    // Yarıda GERİ dönüş geçişi TERS çevirmeli, sıfırdan başlatmamalı.
+    // Sıfırdan başlatmak, karakterin yarı yoldan önce tam koşuya gidip sonra
+    // dönmesi demek olurdu.
+    Ent3 e = _e3[0];                  // şablon olarak herhangi bir Ent3
     scene3d_reset();
     no_ground3d();
     int m = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_PROP);
     anim3d(m, 0, 1, 24.0);
     int sl = _slot_of3(m);
-    assert(_e3[sl].anim_w == 0.0, "baslangic agirligi 0 degil");
 
-    // Hareket ettir: ağırlık koşuya yürümeli.
-    int i = 0;
-    while (i < 30) {
-        Ent3 e = _e3[sl];
-        e.vx = 4.0;
-        _e3[sl] = e;
-        _s3_physics(1.0 / 60.0);
-        i = i + 1;
-    }
-    assert(_e3[sl].anim_w > 0.9,
-           "hareket ederken agirlik kosuya gitmedi: " + toString(_e3[sl].anim_w));
+    Ent3 t = _e3[sl];
+    t.anim_a = 0; t.anim_b = 1; t.anim_w = 0.3;   // 0 -> 1 geçişinin %30'u
+    Ent3 r = _anim_retarget3(t, 0);               // geri dön
+    assert(r.anim_a == 1 && r.anim_b == 0,
+           "geri donuste a/b takas edilmedi");
+    assert(abs_f3(r.anim_w - 0.7) < 0.0001,
+           "geri donuste agirlik ters cevrilmedi: " + toString(r.anim_w));
+}
 
-    // Durdur: geri boştaya inmeli.
-    i = 0;
-    while (i < 40) {
-        Ent3 e = _e3[sl];
-        e.vx = 0.0; e.vz = 0.0;
-        _e3[sl] = e;
-        _s3_physics(1.0 / 60.0);
-        i = i + 1;
-    }
-    assert(_e3[sl].anim_w == 0.0,
-           "durunca agirlik bostaya inmedi: " + toString(_e3[sl].anim_w));
+func t_anim_third_clip_starts_from_dominant() {
+    // Üçüncü bir klibe geçerken BASKIN pozdan başlanmalı. Üç yönlü harmanlama
+    // yok (tek ağırlık var), o yüzden dominant olanı a yapmak en az sıçratan
+    // seçim — zayıf olandan başlamak görünür bir sıçrama olurdu.
+    scene3d_reset();
+    no_ground3d();
+    int m = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_PROP);
+    anim3d(m, 0, 1, 24.0);
+    Ent3 t = _e3[_slot_of3(m)];
+
+    t.anim_a = 0; t.anim_b = 1; t.anim_w = 0.8;   // b baskin
+    Ent3 r = _anim_retarget3(t, 7);
+    assert(r.anim_a == 1, "baskin b iken a=1 olmali, oldu: " + toString(r.anim_a));
+    assert(r.anim_b == 7 && r.anim_w == 0.0, "yeni hedef kurulmadi");
+
+    t.anim_a = 0; t.anim_b = 1; t.anim_w = 0.2;   // a baskin
+    r = _anim_retarget3(t, 7);
+    assert(r.anim_a == 0, "baskin a iken a=0 kalmali, oldu: " + toString(r.anim_a));
+    assert(r.anim_b == 7 && r.anim_w == 0.0, "yeni hedef kurulmadi");
+}
+
+func t_anim_same_target_does_not_reset() {
+    // Hedef zaten b ise dokunulmamalı. Her kare sıfırlansaydı ağırlık asla
+    // ilerlemez, geçiş hiç bitmezdi — sessiz ve tam olarak "hiç harmanlanmıyor"
+    // gibi görünen bir hata.
+    scene3d_reset();
+    no_ground3d();
+    int m = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_PROP);
+    anim3d(m, 0, 1, 24.0);
+    Ent3 t = _e3[_slot_of3(m)];
+    t.anim_a = 0; t.anim_b = 1; t.anim_w = 0.45;
+    Ent3 r = _anim_retarget3(t, 1);
+    assert(r.anim_a == 0 && r.anim_b == 1, "ayni hedefte a/b degisti");
+    assert(r.anim_w == 0.45, "ayni hedefte agirlik sifirlandi");
 }
 
 
@@ -6012,6 +6110,10 @@ test("gecis suresi 1/hiz", "t_anim_weight_transition_duration");
 test("harmanlama esigi tek-poz ile ayni", "t_anim_target_matches_single_pose_pick");
 test("kosu klibi yoksa agirlik 0", "t_anim_target_zero_without_run_clip");
 test("agirligi motor suruyor", "t_anim_weight_driven_by_engine");
+test("elle secilen klip hiza yeniliyor", "t_anim_manual_clip_wins_over_speed");
+test("geri donus gecisi ters cevirir", "t_anim_reverse_transition_does_not_restart");
+test("ucuncu klip baskindan baslar", "t_anim_third_clip_starts_from_dominant");
+test("ayni hedef gecisi sifirlamaz", "t_anim_same_target_does_not_reset");
 test("ses sag-sol ayirimi", "t_snd_pan_left_right");
 test("ses kamerayla donuyor", "t_snd_pan_follows_camera_yaw");
 test("ses ekseni move3d ile ayni", "t_snd_pan_matches_move_axis");
