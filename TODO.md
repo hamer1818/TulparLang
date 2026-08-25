@@ -20,13 +20,15 @@ Hedef: isteyen herkes arayüzden, hızlıca oyun yapabilsin. Beş faz; ilk ikisi
 bitti.
 
 Mimari kararlar ve gerekçeleri:
-- **Editör TARAYICIDA çalışacak.** Kurulum gerektirmiyor ("isteyen herkes"),
-  ve headless Chrome ile doğrulanabiliyor — masaüstü raylib editörü olsaydı
-  görsel testi yalnız kullanıcı yapabilirdi, her yineleme onu bekletirdi.
-- **Görüntü penceresi GERÇEK motor olacak** (wasm'a derlenmiş), Three.js gibi
-  bir JS taklidi değil. Motorun görünümünü aynalayan bir izleyici zamanla
-  sapar ve yalan söyler — bu oturumda testlerin aynı şeyi yapması defalarca
-  hataya yol açtı. Aynı ilke.
+- **Editör MASAÜSTÜ bir uygulama** (`./editor`, motorun kendisiyle aynı ikili
+  yığın). Başta "tarayıcıda çalışsın" planlanmıştı — gerekçe kurulum
+  gerektirmemesi ve headless Chrome ile doğrulanabilmesiydi — ama editör
+  motorun İÇİNDE Tulpar ile yazılınca web sürümü ayrı bir uygulama değil,
+  AYNI kodun wasm'a derlenmiş hâli oluyor. Bu, JS tarafında bir taklit
+  yazmaktan kesinlikle daha iyi: aynalayan bir izleyici zamanla sapar.
+  Bedeli görsel doğrulamanın kullanıcıya kalması (Xvfb kurulu değil).
+- **Görüntü penceresi GERÇEK motor** — sahne bir render texture'a çiziliyor ve
+  panele yerleştiriliyor, yani editördeki görüntü oyunun gördüğünün aynısı.
 - **Kaynak doğruluk tek dosyada:** üretilen `.tpr` içinde editörün sahip
   olduğu işaretli bölge + kanonik JSON yorumu. Tek dosya, tam gidiş-dönüş,
   ekstra çalışma zamanı makinesi yok.

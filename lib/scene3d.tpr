@@ -6153,7 +6153,32 @@ func _g_txtc3(s, x, y, w, h, c) {
 // Etiketi olan bir düğmenin doğal genişliği.
 func _g_btnw3(label): int { return text_width(label, _F3) + _us3(14); }
 
+// Araç ipucu. Kısaltılmış etiketler ("kure", "toh", "arlk") tek başına
+// anlaşılmıyor; her editörde üzerine gelince ne olduğunu söyleyen bir kutu var.
+// Widget imzalarını değiştirmek yerine çağrıdan SONRA soruluyor: `_g_hot3`
+// zaten imlecin altındaki widget'ı tutuyor.
+str _g_tip3 = "";
+
+func _g_tip_for3(id, txt) {
+    if (_g_hot3 == id) { _g_tip3 = txt; }
+}
+
+func _g_tip_draw3() {
+    if (_g_tip3 == "") { return; }
+    int w = text_width(_g_tip3, _F3) + _us3(10);
+    int h = _F3 + _us3(8);
+    int x = _g_mx3 + _us3(12);
+    int y = _g_my3 + _us3(16);
+    // Ekran kenarına sığdır — ipucunun kendisi ekrandan taşarsa okunmaz.
+    if (x + w > screen_width()) { x = screen_width() - w - 2; }
+    if (y + h > screen_height()) { y = _g_my3 - h - _us3(6); }
+    rect(x, y, w, h, rgba(12, 14, 20, 240));
+    rect_lines(x, y, w, h, _G_ACC3());
+    text(_g_tip3, x + _us3(5), y + _us3(4), _F3, _G_TXT3());
+}
+
 func _g_begin() {
+    _g_tip3 = "";
     _g_mx3 = mouse_x(); _g_my3 = mouse_y();
     int d = 0;
     if (mouse_down(0)) { d = 1; }
@@ -6463,6 +6488,8 @@ func _ed_menubar3() {
             _ed_confirm3 = 4.0;
         }
     }
+    _g_tip_for3(9600, "Bos sahne  —  kaydedilmemis is silinir");
+    _g_tip_for3(9601, "Dosyayi yeniden ac  —  kaydedilmemis is gider");
     x = x + w0 + 2;
     int w1 = _g_btnw3("Ac");
     if (_g_button(9601, x, _us3(2), w1, bh, "Ac")) {
@@ -6471,12 +6498,15 @@ func _ed_menubar3() {
     x = x + w1 + 2;
     int w2 = _g_btnw3("Kaydet");
     if (_g_button(9602, x, _us3(2), w2, bh, "Kaydet")) { editor_save3d(); }
+    _g_tip_for3(9602, "Kaydet  (CTRL+S)");
     x = x + w2 + 12;
     int w3 = _g_btnw3("Geri");
     if (_g_button(9603, x, _us3(2), w3, bh, "Geri")) { ed_undo3d(); }
+    _g_tip_for3(9603, "Geri al  (CTRL+Z)");
     x = x + w3 + 2;
     int w4 = _g_btnw3("Ileri");
     if (_g_button(9604, x, _us3(2), w4, bh, "Ileri")) { ed_redo3d(); }
+    _g_tip_for3(9604, "Yinele  (CTRL+Y)");
     // Sağda dosya adı.
     str f = _ed_path3;
     if (f == "") { f = "(kaydedilmemis sahne)"; }
@@ -6500,15 +6530,19 @@ func _ed_toolbar3() {
     int x = _ED_PAD3;
     int w1 = _g_btnw3("SEC");
     if (_g_tog(9002, x, by, w1, _ED_FLD3, "SEC", _ed_mode3 == ED_SELECT)) { _ed_mode3 = ED_SELECT; }
+    _g_tip_for3(9002, "Sec  (Q)");
     x = x + w1 + 2;
     int w2 = _g_btnw3("TASI");
     if (_g_tog(9003, x, by, w2, _ED_FLD3, "TASI", _ed_mode3 == ED_MOVE)) { _ed_mode3 = ED_MOVE; }
+    _g_tip_for3(9003, "Tasi  (W)  —  oklardan surukle");
     x = x + w2 + 2;
     int w3 = _g_btnw3("OLCEK");
     if (_g_tog(9004, x, by, w3, _ED_FLD3, "OLCEK", _ed_mode3 == ED_SCALE)) { _ed_mode3 = ED_SCALE; }
+    _g_tip_for3(9004, "Olcekle  (R)  —  oklardan surukle");
     x = x + w3 + 2;
     int w4 = _g_btnw3("DONDUR");
     if (_g_tog(9005, x, by, w4, _ED_FLD3, "DONDUR", _ed_mode3 == ED_ROTATE)) { _ed_mode3 = ED_ROTATE; }
+    _g_tip_for3(9005, "Dondur  (E)  —  sol/sag oklar");
     x = x + w4 + 10;
     str gl = "IZGARA " + _sc_num3(_ed_grid3);
     if (_ed_grid3 <= 0.0) { gl = "IZGARA yok"; }
@@ -6516,6 +6550,7 @@ func _ed_toolbar3() {
     if (_g_tog(9006, x, by, w5, _ED_FLD3, gl, _ed_grid3 > 0.0)) {
         if (_ed_grid3 > 0.0) { _ed_grid3 = 0.0; } else { _ed_grid3 = 0.5; }
     }
+    _g_tip_for3(9006, "Izgaraya oturt  (G)");
     x = x + w5 + _us3(10);
     // Arayüz ölçeği. Yazı tipi yalnız 10/20/30'da net olduğu için ara boy
     // sunulamıyor; onun yerine bütün arayüz aynı katsayıyla büyüyor.
@@ -6527,6 +6562,7 @@ func _ed_toolbar3() {
         editor_ui_scale3d(nk);
         return;   // ölçüler değişti; bu karenin kalanını çizme
     }
+    _g_tip_for3(9012, "Arayuz boyutu: 1x / 2x / 3x");
 
     // ORTA: oynatma denetimleri. Unity'nin imzası bu — kullanıcı gözünü
     // ekranın ortasına atınca "oynat"ı bulur.
@@ -6539,6 +6575,8 @@ func _ed_toolbar3() {
         if (_ed_playing3 == 0) { ed_play3d(); }
     }
     if (_g_button(9611, cx + pw + 4, by, sw, _ED_FLD3, "DUR")) { ed_stop3d(); }
+    _g_tip_for3(9610, "Oyunu sahnenin KOPYASI uzerinde calistir");
+    _g_tip_for3(9611, "Durdur  (ESC)  —  oynarken olanlar atilir");
 }
 
 // ---- Oynat / Dur -----------------------------------------------------------
@@ -6689,6 +6727,7 @@ func _ed_chrome3() {
     int vh = _ed_view_h3();
     rect_lines(vx - 1, vy - 1, vw + 2, vh + 2, _G_LINE3());
     if (_ed_playing3 == 0) { _ed_axis_widget3(); }
+    _g_tip_draw3();   // EN SON: ipucu her şeyin üstünde
     // Görünüm neden boşsa ONU SÖYLE. Sessiz boş bir panel, kullanıcıyı
     // "editör bozuk" sanmaya götürüyor; sebebi ekranda yazmak gerekiyor.
     if (_ed_rt3 < 0) {
@@ -6716,6 +6755,39 @@ func _ed_addw3(pw, gap): int {
     return toInt((pw - _ED_PAD3 * 2 - gap * 3) / 4);
 }
 
+// ---- Hiyerarşi araması -----------------------------------------------------
+// Sahne büyüdükçe listede gezinmek imkânsızlaşıyor; her editörde arama kutusu
+// var. Eşleşme BÜYÜK/KÜÇÜK HARF duyarsız: "Duvar" ararken "duvar"ı bulamamak
+// sessiz bir hayal kırıklığı olurdu.
+str _ed_filter3 = "";
+
+func _ed_lower3(c): int {
+    if (c >= 65 && c <= 90) { return c + 32; }
+    return c;
+}
+
+// hay içinde needle geçiyor mu? (ASCII, harf duyarsız)
+func _ed_match3(hay, needle): bool {
+    if (needle == "") { return true; }
+    int hn = length(hay);
+    int nn = length(needle);
+    if (nn > hn) { return false; }
+    int i = 0;
+    while (i <= hn - nn) {
+        int j = 0;
+        int ok = 1;
+        while (j < nn) {
+            if (_ed_lower3(ord(hay, i + j)) != _ed_lower3(ord(needle, j))) {
+                ok = 0;
+                j = nn;
+            } else { j = j + 1; }
+        }
+        if (ok == 1) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
 func _ed_hierarchy3() {
     int py = _ed_view_y3();
     int ph = _ed_view_h3();
@@ -6735,7 +6807,7 @@ func _ed_hierarchy3() {
         ed_mark3d(); ed_select3d(ed_add3d(TAG_ITEM, SHAPE_SPHERE, _ed_cx3, 1.0, _ed_cz3));
     }
     bx = bx + bw + gap;
-    if (_g_button(9102, bx, by, bw, _ED_FLD3, "sil.")) {
+    if (_g_button(9102, bx, by, bw, _ED_FLD3, "boru")) {
         ed_mark3d(); ed_select3d(ed_add3d(TAG_PROP, SHAPE_CYL, _ed_cx3, 1.0, _ed_cz3));
     }
     bx = bx + bw + gap;
@@ -6746,7 +6818,13 @@ func _ed_hierarchy3() {
         ed_select3d(nw);
     }
 
-    int listy = by + _ED_FLD3 + 6;
+    // Arama kutusu ekleme düğmelerinin ALTINDA: en çok kullanılan iki şey
+    // (ekle, ara) listeye en yakın yerde.
+    int sy2 = by + _ED_FLD3 + _us3(4);
+    _ed_filter3 = _g_text(11990, _ED_PAD3, sy2, pw - _ED_PAD3 * 2, _ED_FLD3, _ed_filter3);
+    _g_tip_for3(11990, "Ada ya da etikete gore suz");
+
+    int listy = sy2 + _ED_FLD3 + _us3(4);
     int foot = 14;
     int rows = toInt((ph - (listy - py) - foot) / _ED_ROW3);
     if (rows < 1) { rows = 1; }
@@ -6759,7 +6837,13 @@ func _ed_hierarchy3() {
     array slots = [];
     int i = 0;
     while (i < length(_e3)) {
-        if (_e3[i].alive == 1) { push(slots, i); }
+        if (_e3[i].alive == 1) {
+            str rn = _sc_nm_of3(_mk_handle3(i));
+            if (_ed_match3(rn, _ed_filter3) ||
+                _ed_match3(_sc_tag_nm3(_e3[i].tag), _ed_filter3)) {
+                push(slots, i);
+            }
+        }
         i = i + 1;
     }
     int n = length(slots);
@@ -6792,6 +6876,10 @@ func _ed_hierarchy3() {
             _ed_tab3 = 0;
         }
         r = r + 1;
+    }
+    if (n == 0 && _ed_filter3 != "") {
+        _g_txt3("eslesme yok: " + _ed_filter3, _ED_PAD3, listy + _us3(4),
+                pw - _ED_PAD3 * 2, _G_DIM3());
     }
     if (n > rows) {
         _g_txt3(toString(_ed_hscroll3 + 1) + "-" + toString(_ed_hscroll3 + rows) +
@@ -7178,6 +7266,7 @@ func _ed_inspector3() {
     if (_g_button(9331, fx + fw + 4, y, dw, _ED_FLD3, "zemine otur")) {
         ed_mark3d(); ed_drop3d(id);
     }
+    _g_tip_for3(9331, "Zemine/araziye otur  (BOSLUK)");
     y = y + _ED_FLD3 + _us3(6);
 
     _g_section(px + 2, y, pw - 4, "GORUNUM");
@@ -7294,7 +7383,9 @@ func _ed_inspector3() {
     y = y + _ED_FLD3 + _us3(8);
 
     if (_g_button(9470, lx, y, half, _ED_FLD3, "COGALT")) { ed_mark3d(); ed_duplicate3d(id); }
+    _g_tip_for3(9470, "Cogalt  (CTRL+D)  —  davranislariyla");
     if (_g_button(9471, lx + half + 4, y, half, _ED_FLD3, "SIL")) { ed_mark3d(); ed_delete3d(id); }
+    _g_tip_for3(9471, "Sil  (DEL)  —  CTRL+Z ile geri alinir");
     _ed_icontent3 = y + _ED_FLD3 + 6;
     kirp_bitir();
     _ed_scrollbar3(px, ctop, pw, cavail);

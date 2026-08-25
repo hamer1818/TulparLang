@@ -4886,6 +4886,26 @@ func t_ux_dirty_flag_lifecycle() {
     assert_eq_int(_ed_dirty3, 0);
 }
 
+// Hiyerarşi araması: sahne büyüdükçe listede gezinmek imkânsızlaşıyor.
+// Eşleşme HARF DUYARSIZ olmalı — "Duvar" ararken "duvar"ı bulamamak sessiz
+// bir hayal kırıklığı olurdu.
+func t_ux_hierarchy_filter() {
+    assert(_ed_match3("duvar", ""), "bos sorgu her seyi gecirmeli");
+    assert(_ed_match3("duvar", "duv"), "onek");
+    assert(_ed_match3("duvar", "var"), "sonek");
+    assert(_ed_match3("duvar", "uva"), "ortada");
+    assert(_ed_match3("Duvar", "duvar"), "buyuk harf duyarsiz (hedef)");
+    assert(_ed_match3("duvar", "DUVAR"), "buyuk harf duyarsiz (sorgu)");
+    assert(_ed_match3("duvar", "duvar"), "tam esitlik");
+    assert(_ed_match3("duvar", "kapi") == false, "eslesmeyen");
+    assert(_ed_match3("kapi", "kapilar") == false, "sorgu hedeften uzunsa hayir");
+    assert(_ed_match3("", "x") == false, "bos hedefte arama");
+    // Sondaki karakterde eşleşme kaçırılmamalı (döngü sınırı klasik hata).
+    assert(_ed_match3("abcx", "x"), "son karakter");
+    assert(_ed_match3("abc", "c"), "son karakter (tek)");
+}
+
+test("hiyerarsi aramasi", "t_ux_hierarchy_filter");
 test("yon gostergesi izdusumu", "t_ux_axis_projection");
 test("F ile cerceveleme", "t_ux_frame_selected");
 test("kaydedilmemis degisiklik bayragi", "t_ux_dirty_flag_lifecycle");

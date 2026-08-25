@@ -68,7 +68,16 @@ dönüşüyor (modal pencere makinesi kurmadan ikinci bir karar noktası).
 bir kamerada "hangi yöne bakıyorum?" sürekli sorulan soru. İzdüşüm
 ortografik — gösterge yönü anlatıyor, konumu değil.
 
-**Durum çubuğu** seçili varlığın adını ve konumunu gösteriyor.
+**Araç ipuçları.** Kısaltılmış etiketler ("kure", "toh", "arlk") tek başına
+anlaşılmıyordu; üzerine gelince ne olduğunu ve kısayolunu söyleyen bir kutu
+çıkıyor. Widget imzaları değişmedi — ipucu çağrıdan SONRA soruluyor, çünkü
+`_g_hot3` zaten imlecin altındaki widget'ı tutuyor.
+
+**Hiyerarşi araması.** Ada ya da etikete göre süzme; sahne büyüdükçe listede
+gezinmek imkânsızlaşıyordu. Eşleşme büyük/küçük harf duyarsız.
+
+**Durum çubuğu** seçili varlığın adını ve konumunu gösteriyor. Silindir
+ekleme düğmesinin etiketi "sil." idi ve "sil" gibi okunuyordu — "boru" oldu.
 
 ### Changed — arayüz ölçeklenebilir oldu (varsayılan 2x)
 
