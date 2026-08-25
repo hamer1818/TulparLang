@@ -314,10 +314,39 @@ boşluklar; backlog'da yoklardı.
 
 ## 4 — Altyapı ve belge
 
-- [ ] **Çarpışma hâlâ O(n²).** Geniş faz sabiti 14× küçülttü (200 entity
-      15.4 → 1.12 ms), ama asimptot duruyor. Uniform grid artık ucuz: düz
-      konum/yarıçap dizileri grid'in zaten isteyeceği zemin. ~800 entity
-      üstüne çıkılmadıkça getirisi yok.
+- [x] **Çarpışma artık ızgaralı — ve asıl darboğaz başka yerdeydi.**
+      ✅ 2026-08-26. Maddenin "~800 entity üstüne çıkılmadıkça getirisi yok"
+      tahmini ÖLÇÜMLE ÇÜRÜDÜ: gerçek eşik ~300, çünkü 400 entity'de kare
+      15.9 ms sürüyor ve 60 fps bütçesi (16.7 ms) zaten aşılıyor.
+
+      İki ayrı iş çıktı:
+
+      1. **`_ramp_floor3` n² imiş.** Zemin sorgusu entity başına BÜTÜN
+         entity'leri geziyor ve her adımda bir `Ent3` struct kopyası
+         alıyordu. Rampa dizini (kare başına bir kez, O(n)) bunu doğrusala
+         indirdi — `_s3_physics` tek başına, ms/kare:
+         100: 0.99→0.17 · 400: 15.9→0.66 · 800: 69.4→1.28 · 1600: 470→2.55
+         (1600'de **184×**). Bu maliyet ÇARPIŞMADA değildi; ızgara ona hiç
+         dokunmuyordu ve ilk ölçümüm bu yüzden "ızgara işe yaramadı" dedi.
+
+      2. **Uniform ızgara** (sarmalı, 64×64, kare damgalı kovalar) dört
+         taramaya da uygulandı: duvar çözümü, hareketli-hareketli, mermi-duvar,
+         kanca taraması ve veri-kural taraması.
+         `_s3_physics` + `_s3_collision` birlikte, kancalı, ms/kare:
+         100: 1.22→0.49 · 200: 4.23→1.27 · 400: 15.6→3.14 · 800: 60.0→8.92
+         Yani 800 entity artık bütçenin içinde.
+
+      Hücre kenarı = en büyük kapsayan küre ÇAPI; bu 3×3 taramasını korumalı
+      yapıyor. Sarma yalnız uzak cisimleri aynı kovaya düşürebilir (fazladan
+      dar-faz sorgusu, kaçırma değil).
+
+      Doğruluk KABA KUVVETLE karşılaştırılıyor: hem kanca hem kural yolu için
+      ızgaranın bulduğu çakışma kümesi, bütün çiftleri gezen bir taramayla
+      birebir aynı olmak zorunda. Hızlı ve yanlış bir geniş faz, yavaş ve
+      doğru olandan kötüdür — kaçırılan çarpışma sessizdir.
+
+      Kalan: `_grid_near3` her çağrıda yeni bir dizi ayırıyor. 800'ün
+      üstünde tekrar bakılabilir.
 
 - [ ] **`wasm/dist` ve `android/dist` arşivleri bayat kalıyor.** Katman boyama
       `tame_impl.c`'ye yeni sembol ekledi; bu arşivler elle yeniden

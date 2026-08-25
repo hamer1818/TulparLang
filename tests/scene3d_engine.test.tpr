@@ -6074,6 +6074,191 @@ func t_particle_no_atlas_means_whole_texture() {
 }
 
 
+// ---------------------------------------------------------------------------
+// UNIFORM IZGARA — asıl iddia: hiçbir gerçek çakışmayı KAÇIRMAMAK.
+//
+// Hız kazancı ölçüldü (800 entity, fizik+çarpışma: 60.0 → 9.3 ms/kare) ama
+// hızlı ve YANLIŞ bir geniş faz, yavaş ve doğru olandan kötüdür. Kaçırılan
+// çarpışma sessizdir: oyuncu duvardan geçer, mermi düşmanı delip gider, ve
+// hiçbir hata mesajı çıkmaz.
+// ---------------------------------------------------------------------------
+
+int _gt_hits = 0;
+func _gt_say() { _gt_hits = _gt_hits + 1; }
+
+// Kaba kuvvet: bütün çiftleri gezip kanca ölçütünün AYNISINI uygular.
+func _gt_kaba(ta, tb): int {
+    int c = 0;
+    int n = length(_e3);
+    int a = 0;
+    while (a < n) {
+        Ent3 ea = _e3[a];
+        if (ea.alive == 1 && ea.tag == ta) {
+            int b = 0;
+            while (b < n) {
+                if (a != b) {
+                    Ent3 eb = _e3[b];
+                    if (eb.alive == 1 && eb.tag == tb && _overlap_hit3(a, b)
+                        && !_bullet_owner_pair3(a, b)) {
+                        c = c + 1;
+                    }
+                }
+                b = b + 1;
+            }
+        }
+        a = a + 1;
+    }
+    return c;
+}
+
+func t_grid_matches_exhaustive() {
+    // Rastgele ama ÜRETİLEBİLİR bir sahne (tohum sabit) kurup ızgaranın
+    // bulduğu çarpışma sayısını kaba kuvvetle karşılaştır. Konumlar
+    // kasıtlı olarak SIK: hücre sınırlarına oturan çiftler bol olsun.
+    scene3d_reset();
+    no_ground3d();
+    carpisinca3(TAG_ENEMY, TAG_ITEM, "_gt_say");
+
+    int i = 0;
+    while (i < 120) {
+        // Deterministik serpiştirme — random() kullanmıyoruz ki test
+        // koşumdan koşuma aynı sahneyi kursun.
+        float x = mod(i * 37, 41) * 0.5 - 10.0;
+        float z = mod(i * 53, 43) * 0.5 - 10.0;
+        int t = TAG_ENEMY;
+        if (mod(i, 2) == 0) { t = TAG_ITEM; }
+        spawn3(x, 1.0, z, 1.2, 2.0, 1.2, WHITE, SHAPE_CUBE, t);
+        i = i + 1;
+    }
+
+    _bp_build3();
+    int beklenen = _gt_kaba(TAG_ENEMY, TAG_ITEM);
+    assert(beklenen > 0, "sahne hic cakisma uretmedi — test vacuous");
+
+    _gt_hits = 0;
+    _s3_collision();
+    assert(_gt_hits == beklenen,
+           "izgara kaba kuvvetten farkli: izgara=" + toString(_gt_hits) +
+           " kaba=" + toString(beklenen));
+}
+
+func t_grid_rules_match_exhaustive() {
+    // Veri-KURALLARI da ızgaradan geçiyor ve kendi taramaları var (kanca
+    // tablosundan bağımsız). Veriyle kurulmuş bir oyunun bütün oynanışı
+    // buradan geçtiği için ayrı sınanıyor: kancaları doğrulamak kuralları
+    // doğrulamıyor.
+    // İddia SAYIM değil KÜME üzerinden: ACT_COLLECT ötekini öldürüyor, yani
+    // çağrı sayısı sıraya bağlı (ölen eşya sonraki çiftlerde atlanıyor).
+    // Ama ÖLEN EŞYA KÜMESİ sıradan bağımsız: bir eşya, en az bir düşmanla
+    // çakışıyorsa ölür, çakışmıyorsa ölmez. Kaba kuvvetle karşılaştırılacak
+    // şey bu.
+    scene3d_reset();
+    no_ground3d();
+    carpisma_kurali3d(TAG_ENEMY, TAG_ITEM, ACT_COLLECT, 1);
+
+    int i = 0;
+    while (i < 120) {
+        float x = mod(i * 37, 41) * 0.5 - 10.0;
+        float z = mod(i * 53, 43) * 0.5 - 10.0;
+        int t = TAG_ENEMY;
+        if (mod(i, 2) == 0) { t = TAG_ITEM; }
+        spawn3(x, 1.0, z, 1.2, 2.0, 1.2, WHITE, SHAPE_CUBE, t);
+        i = i + 1;
+    }
+
+    _bp_build3();
+    // Kaba kuvvet: en az bir CANLI düşmanla çakışan eşya sayısı.
+    int beklenen = 0;
+    int n = length(_e3);
+    int a = 0;
+    while (a < n) {
+        Ent3 ea = _e3[a];
+        if (ea.alive == 1 && ea.tag == TAG_ITEM) {
+            int b = 0;
+            bool vuruldu = false;
+            while (b < n) {
+                if (a != b) {
+                    Ent3 eb = _e3[b];
+                    if (eb.alive == 1 && eb.tag == TAG_ENEMY
+                        && _overlap_hit3(b, a)) { vuruldu = true; }
+                }
+                b = b + 1;
+            }
+            if (vuruldu) { beklenen = beklenen + 1; }
+        }
+        a = a + 1;
+    }
+    assert(beklenen > 0, "kural sahnesi hic cakisma uretmedi — test vacuous");
+
+    int once = yasayan_sayi3d();
+    _s3_collision();
+    int olen = once - yasayan_sayi3d();
+    assert(olen == beklenen,
+           "kural taramasi kaba kuvvetten farkli: izgara=" + toString(olen) +
+           " kaba=" + toString(beklenen));
+}
+
+func t_grid_finds_pair_across_cell_boundary() {
+    // Hücre kenarı en büyük kapsayan küre ÇAPI. İki cismi tam o sınırın
+    // üstüne oturt: farklı kovalara düşerler ve yalnız 3x3 taraması onları
+    // buluşturur.
+    scene3d_reset();
+    no_ground3d();
+    carpisinca3(TAG_ENEMY, TAG_ITEM, "_gt_say");
+    // hücre = 2 * yariCap; 1x2x1 kutu icin yariCap ~1.22, hucre ~2.45
+    spawn3(2.4, 1.0, 0.0, 1.0, 2.0, 1.0, WHITE, SHAPE_CUBE, TAG_ENEMY);
+    spawn3(3.0, 1.0, 0.0, 1.0, 2.0, 1.0, WHITE, SHAPE_CUBE, TAG_ITEM);
+    _gt_hits = 0;
+    _s3_collision();
+    assert(_gt_hits > 0, "hucre sinirindaki cift bulunamadi");
+}
+
+func t_grid_no_false_pair_when_hashed_together() {
+    // Izgara SARMALI: uzaktaki iki cisim aynı kovaya düşebilir. Bu fazladan
+    // dar-faz sorgusu olmalı, çakışma DEĞİL — sarma bir kısayol değil,
+    // yalnız bellek sınırı.
+    scene3d_reset();
+    no_ground3d();
+    carpisinca3(TAG_ENEMY, TAG_ITEM, "_gt_say");
+    spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, WHITE, SHAPE_CUBE, TAG_ENEMY);
+    // 64 hucre * ~2.45 birim = ~157 birim ilerisi ayni kovaya duser
+    spawn3(157.0, 1.0, 0.0, 1.0, 2.0, 1.0, WHITE, SHAPE_CUBE, TAG_ITEM);
+    _gt_hits = 0;
+    _s3_collision();
+    assert(_gt_hits == 0, "uzaktaki cift sarma yuzunden CAKISTI sayildi");
+}
+
+func t_grid_mixed_sizes() {
+    // Hücre kenarını EN BÜYÜK cisim belirliyor; küçük bir cisim dev bir
+    // duvarla çakışırken kaçırılmamalı.
+    scene3d_reset();
+    no_ground3d();
+    carpisinca3(TAG_ENEMY, TAG_ITEM, "_gt_say");
+    spawn3(0.0, 1.5, 0.0, 40.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_ITEM);
+    spawn3(18.0, 1.5, 0.0, 0.6, 0.6, 0.6, WHITE, SHAPE_CUBE, TAG_ENEMY);
+    _gt_hits = 0;
+    _s3_collision();
+    assert(_gt_hits > 0, "dev cisimle kucuk cismin cakismasi kacirildi");
+}
+
+func t_ramp_index_is_superset_not_sync() {
+    // Rampa dizini bir ÜST KÜME: ölmüş girdiler kalabilir ve `_ramp_floor3`
+    // her girdide alive/shape denetimini yine yapar. Öldürülen bir rampa
+    // zemini yükseltmeye DEVAM ETMEMELİ.
+    scene3d_reset();
+    ground3d(0.0);
+    int r = rampa3d(0.0, 0.9, 0.0, 5.0, 1.8, 7.0, GRAY, 0.0);
+    _ramp_index3();
+    float once = _floor_at3(0.0, 3.0);
+    assert(once > 0.5, "rampa zemini hic yukseltmedi: " + toString(once));
+    kill3d(r);
+    // Dizin YENİDEN kurulmadan sorgula: ölü girdi filtrelenmeli.
+    float sonra = _floor_at3(0.0, 3.0);
+    assert(sonra == 0.0,
+           "olu rampa hala zemini yukseltiyor: " + toString(sonra));
+}
+
+
 test("satir yuksekligi fonttan buyuk", "t_ui_line_height_exceeds_font");
 test("dikey merkezleme", "t_ui_vertical_centering");
 test("dedektor metinleri goruyor", "t_ui_detector_sees_text");
@@ -6114,6 +6299,12 @@ test("elle secilen klip hiza yeniliyor", "t_anim_manual_clip_wins_over_speed");
 test("geri donus gecisi ters cevirir", "t_anim_reverse_transition_does_not_restart");
 test("ucuncu klip baskindan baslar", "t_anim_third_clip_starts_from_dominant");
 test("ayni hedef gecisi sifirlamaz", "t_anim_same_target_does_not_reset");
+test("izgara kaba kuvvetle ayni", "t_grid_matches_exhaustive");
+test("kural taramasi kaba kuvvetle ayni", "t_grid_rules_match_exhaustive");
+test("hucre sinirindaki cift bulunur", "t_grid_finds_pair_across_cell_boundary");
+test("sarma sahte cakisma uretmez", "t_grid_no_false_pair_when_hashed_together");
+test("karisik boyutlar kacirilmaz", "t_grid_mixed_sizes");
+test("rampa dizini ust kume", "t_ramp_index_is_superset_not_sync");
 test("ses sag-sol ayirimi", "t_snd_pan_left_right");
 test("ses kamerayla donuyor", "t_snd_pan_follows_camera_yaw");
 test("ses ekseni move3d ile ayni", "t_snd_pan_matches_move_axis");

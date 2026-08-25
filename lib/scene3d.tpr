@@ -400,6 +400,7 @@ func scene3d_reset() {
     // eski handle'ların hepsi zaten anlamsız, slot 0'dan yeniden başlanabilir.
     _e3gen = []; _e3free = []; _free_n3 = 0;
     _bx = []; _by = []; _bz = []; _br = [];   // geniş faz de sahneyle gider
+    _rampi3 = [];                             // rampa dizini de
     // UI durumu da tam teardown'a dahil: reset kancaları ve bölümleri zaten
     // siliyor, bekleyen bir "çıkış" isteği ya da açık kalmış duraklat örtüsü
     // yeni sahneye sızmamalı.
@@ -1952,6 +1953,9 @@ func sound3d(handle, x, y, z) {
 // ---- Fizik: hız entegrasyonu + yerçekimi + zemin ---------------------------
 func _s3_physics(dt) {
     int n = length(_e3);
+    // Rampa dizini kare başına BİR KEZ kuruluyor (O(n)); eskiden zemin
+    // sorgusu entity başına bütün diziyi geziyordu, yani O(n²).
+    _ramp_index3();
     int i = 0;
     while (i < n) {
         Ent3 e = _e3[i];
@@ -2605,17 +2609,43 @@ func _ramp_h3(r, px, pz): float {
 
 // (x,z) noktasında geçerli zemin yüksekliği: düz zemin ile rampaların EN
 // YÜKSEĞİ. Rampa yoksa sonuç düz zemindir, yani eski davranış birebir korunur.
-func _ramp_floor3(px, pz, base): float {
-    float best = base;
+// RAMPA DİZİNİ. `_ramp_floor3` her entity için BÜTÜN entity'leri geziyordu ve
+// her adımda bir `Ent3` struct kopyası alıyordu; fizik onu entity başına bir
+// kez çağırdığı için maliyet n² idi. Ölçülen tablo (ms/kare, headless):
+// 100→0.99, 200→3.72, 400→15.94, 800→69.4 — yani 400 entity'de 60 fps
+// bütçesi (16.7 ms) zaten aşılıyordu. Geniş faz ve ızgara bu maliyete hiç
+// dokunmuyordu, çünkü maliyet ÇARPIŞMADA değil ZEMİN SORGUSUNDAYDI.
+//
+// Dizin bir ÜST KÜME: ölmüş ya da slot'u yeniden kullanılmış girdiler
+// olabilir, `_ramp_floor3` her girdide `alive`/`shape` denetimini yine
+// yapıyor. Bu, dizini kill3d ile senkron tutma zorunluluğunu kaldırıyor —
+// senkronu kaçırmak sessiz bir hata olurdu, üst küme olmak değil.
+array _rampi3 = [];
+
+func _ramp_index3() {
+    _rampi3 = [];
     int n = length(_e3);
     int i = 0;
     while (i < n) {
+        Ent3 e = _e3[i];
+        if (e.alive == 1 && e.shape == SHAPE_RAMP) { push(_rampi3, i); }
+        i = i + 1;
+    }
+}
+
+func _ramp_floor3(px, pz, base): float {
+    float best = base;
+    int m = length(_rampi3);
+    // Rampasız sahne (çoğu sahne) burada biter: tek bir uzunluk okuması.
+    int j = 0;
+    while (j < m) {
+        int i = _rampi3[j];
         Ent3 e = _e3[i];
         if (e.alive == 1 && e.shape == SHAPE_RAMP) {
             float h = _ramp_h3(i, px, pz);
             if (h > best) { best = h; }
         }
-        i = i + 1;
+        j = j + 1;
     }
     return best;
 }
@@ -2879,6 +2909,9 @@ func ramp3d(x, y, z, sx, sy, sz, color, yaw): int {
     // Pencere yoksa (headless test) -1 döner ve çizim eski kademeli yola
     // düşer — motorun penceresiz sınanabilirliği korunuyor.
     e.model = gen_wedge(sx, sy, sz);
+    // Dizine ekle: fizik henüz koşmamışken de (kurulum sırasında)
+    // `zemin_yukseklik3d` doğru cevap versin.
+    push(_rampi3, s);
     // Rampa katı DEĞİL: üzerine basılır (zemin yüksekliğiyle), itilmez. Katı
     // olsaydı kutu gövdesi eğik yüzeyle çelişir, oyuncuyu yandan dışarı iterdi.
     e.solid = 0;
@@ -2949,6 +2982,114 @@ func _bp_sync3(s) {
     _br[s] = sqrt(hx * hx + hy * hy + hz * hz);
 }
 
+// --- Uniform ızgara ---------------------------------------------------------
+// Kapsayan küre elemesi çift BAŞINA ucuzdu ama çiftlerin SAYISI hâlâ n²'ydi:
+// `_bp_far3` her kare n² kez çağrılıyordu. Ölçüm (headless, 120 kare
+// ortalaması, ms/kare):
+//
+//     100 →  0.99      400 → 15.94   (60 fps bütçesi 16.7 ms — ZATEN AŞILDI)
+//     200 →  3.72      800 → 69.43
+//                     1600 → 470.4   (n²'nin bile üstünde)
+//
+// Yani gerçek eşik ~300 entity, TODO'nun tahmin ettiği 800 değil. 400'de oyun
+// 60 fps tutamıyor. Izgara bu yüzden yazıldı.
+//
+// Hücre kenarı = en büyük kapsayan küre ÇAPI. Bu seçim taramayı KORUMALI
+// yapıyor: iki cisim çakışıyorsa merkezleri arası mesafe yarıçapları
+// toplamından küçüktür, o da bir hücre kenarını aşamaz — dolayısıyla en fazla
+// KOMŞU hücrededirler ve 3×3 taraması hiçbir gerçek çakışmayı kaçırmaz.
+//
+// Izgara SARMALI (mod _GC): dünya ne kadar büyük olursa olsun hücre sayısı
+// sabit kalıyor, yani seyrek yayılmış bir sahne bellekte patlamıyor. Sarma
+// yalnız UZAK cisimleri aynı kovaya düşürebilir — bu fazladan dar-faz
+// sorgusudur, kaçırma değil. Aynı cismin listede İKİ KEZ görünmesi mümkün
+// değil: her cisim tam bir kovada ve 3×3'ün dokuz indeksi _GC ≥ 3 iken
+// birbirinden farklı.
+//
+// Kovalar her kare TEMİZLENMİYOR: her kovada bir kare damgası var, damga eski
+// ise kova boş sayılıyor. 4096 yazımı kareden silmek için.
+int _GC = 64;                  // ızgara kenarı (hücre)
+float _gcell = 4.0;            // hücre kenarı (dünya birimi) — her kare türetilir
+array _ghead = [];             // _GC*_GC — kovadaki ilk slot, -1 boş
+array _gstamp = [];            // kovanın hangi karede yazıldığı
+array _gnext = [];             // slot → aynı kovadaki bir sonraki slot
+int _gframe = 0;
+array _gnear = [];             // yeniden kullanılan aday listesi
+
+func _gidx3(cx, cz): int {
+    int a = mod(cx, _GC);
+    if (a < 0) { a = a + _GC; }
+    int b = mod(cz, _GC);
+    if (b < 0) { b = b + _GC; }
+    return a * _GC + b;
+}
+
+func _grid_build3(n) {
+    float rmax = 0.0;
+    int i = 0;
+    while (i < n) {
+        if (_br[i] > rmax) { rmax = _br[i]; }
+        i = i + 1;
+    }
+    _gcell = rmax * 2.0;
+    // Taban: hepsi noktasal olsa hücre kenarı 0 olur ve bölme patlardı.
+    if (_gcell < 0.5) { _gcell = 0.5; }
+    _gframe = _gframe + 1;
+
+    int cells = _GC * _GC;
+    if (length(_ghead) != cells) {
+        _ghead = []; _gstamp = [];
+        int k = 0;
+        while (k < cells) {
+            push(_ghead, 0 - 1);
+            push(_gstamp, 0);
+            k = k + 1;
+        }
+    }
+    if (length(_gnext) < n) {
+        _gnext = [];
+        int k2 = 0;
+        while (k2 < n) { push(_gnext, 0 - 1); k2 = k2 + 1; }
+    }
+
+    i = 0;
+    while (i < n) {
+        int c = _gidx3(toInt(floor(_bx[i] / _gcell)),
+                       toInt(floor(_bz[i] / _gcell)));
+        if (_gstamp[c] != _gframe) {
+            _gstamp[c] = _gframe;
+            _ghead[c] = 0 - 1;
+        }
+        _gnext[i] = _ghead[c];
+        _ghead[c] = i;
+        i = i + 1;
+    }
+}
+
+// `a`nın 3×3 komşuluğundaki adayları `_gnear`e doldurur. Liste `a`yı da
+// içerir; çağıranlar zaten kendini eliyor.
+func _grid_near3(a) {
+    _gnear = [];
+    int cx = toInt(floor(_bx[a] / _gcell));
+    int cz = toInt(floor(_bz[a] / _gcell));
+    int dx = 0 - 1;
+    while (dx <= 1) {
+        int dz = 0 - 1;
+        while (dz <= 1) {
+            int c = _gidx3(cx + dx, cz + dz);
+            if (_gstamp[c] == _gframe) {
+                int q = _ghead[c];
+                while (q >= 0) {
+                    push(_gnear, q);
+                    q = _gnext[q];
+                }
+            }
+            dz = dz + 1;
+        }
+        dx = dx + 1;
+    }
+}
+
 // true → kapsayan küreler ayrık, çakışma İMKÂNSIZ. Sadece bu yönde karar verir;
 // false "çakışıyor" demek değil, "dar faza sor" demektir.
 func _bp_far3(a, b): bool {
@@ -2962,12 +3103,19 @@ func _bp_far3(a, b): bool {
 // Hareketli katı gövdeleri DÜNYA GEOMETRİSİNDEN dışarı it. Ayrı bir fonksiyon
 // çünkü kare başına İKİ KEZ çalışıyor — gerekçe `_s3_collision` içinde.
 func _s3_resolve_walls3(n) {
+    // Izgara HER FAZIN BAŞINDA kuruluyor: `_apply_mtv3` cisimleri oynatıyor,
+    // yani bir önceki fazın kova ataması bayat. Kurulum O(n), tarama n²'den
+    // kurtardığı için bu bedel görünmüyor.
+    _grid_build3(n);
     int p = 0;
     while (p < n) {
         Ent3 ep = _e3[p];
         if (_is_solid3(ep) && !_is_static_solid3(ep)) {
-            int w = 0;
-            while (w < n) {
+            _grid_near3(p);
+            int gi = 0;
+            int gn = length(_gnear);
+            while (gi < gn) {
+                int w = _gnear[gi];
                 // Eleme struct kopyasından ÖNCE: uzak çift `_e3[w]`i hiç okumaz.
                 if (p != w && !_bp_far3(p, w)) {
                     Ent3 ew = _e3[w];
@@ -2975,7 +3123,7 @@ func _s3_resolve_walls3(n) {
                         if (_mtv3(p, w)) { _apply_mtv3(p, _mtv_x, _mtv_y, _mtv_z); }
                     }
                 }
-                w = w + 1;
+                gi = gi + 1;
             }
         }
         p = p + 1;
@@ -2993,13 +3141,19 @@ func _s3_collision() {
     // 1a) Hareketli katı gövdeler BİRBİRİNE karşı: ikisi de itilebildiği için
     // ayırma yarı yarıya paylaşılır — biri diğerini tek başına itseydi hafif
     // olan sürekli duvara sıkışırdı. Her çift bir kez işlenir (b > a).
+    _grid_build3(n);
     int ca = 0;
     while (ca < n) {
         Ent3 ea2 = _e3[ca];
         if (_is_solid3(ea2) && !_is_static_solid3(ea2)) {
-            int cb = ca + 1;
-            while (cb < n) {
-                if (!_bp_far3(ca, cb)) {
+            _grid_near3(ca);
+            int gj = 0;
+            int gm = length(_gnear);
+            while (gj < gm) {
+                int cb = _gnear[gj];
+                // Her çift BİR KEZ: `cb > ca` koşulu ızgarada da aynı işi
+                // görüyor (eskiden döngü ca+1'den başlıyordu).
+                if (cb > ca && !_bp_far3(ca, cb)) {
                     Ent3 eb2 = _e3[cb];
                     if (_is_solid3(eb2) && !_is_static_solid3(eb2)) {
                         if (_mtv3(ca, cb)) {
@@ -3011,7 +3165,7 @@ func _s3_collision() {
                         }
                     }
                 }
-                cb = cb + 1;
+                gj = gj + 1;
             }
         }
         ca = ca + 1;
@@ -3027,12 +3181,16 @@ func _s3_collision() {
     _s3_resolve_walls3(n);
 
     // 1b) Duvara giren mermi ölür — yoksa duvarların içinden geçip giderdi.
+    _grid_build3(n);
     int bi = 0;
     while (bi < n) {
         Ent3 eb2 = _e3[bi];
         if (eb2.alive == 1 && eb2.tag == TAG_BULLET) {
-            int w2 = 0;
-            while (w2 < n) {
+            _grid_near3(bi);
+            int gk = 0;
+            int gq = length(_gnear);
+            while (gk < gq) {
+                int w2 = _gnear[gk];
                 int died = 0;
                 if (!_bp_far3(bi, w2)) {
                     Ent3 ew2 = _e3[w2];
@@ -3042,15 +3200,24 @@ func _s3_collision() {
                     }
                 }
                 if (died == 1) {
-                    w2 = n;              // bu mermi bitti, duvar taramasını kes
+                    gk = gq;             // bu mermi bitti, duvar taramasını kes
                 } else {
-                    w2 = w2 + 1;
+                    gk = gk + 1;
                 }
             }
         }
         bi = bi + 1;
     }
     // 2) Kayıtlı çarpışma kancaları: tagA × tagB örtüşürse fn çağır
+    // Kanca taraması da ızgaradan geçiyor. Kancalar en pahalı faz: kayıtlı
+    // her kanca için ayrı bir n² tarama yapılıyordu ve gerçek oyunlar birkaç
+    // kanca kaydediyor (arena 4 tane). Ölçüm bunu doğruladı — ızgara yalnız
+    // katı-gövde fazlarına uygulandığında 800 entity hâlâ 19.8 ms sürüyordu.
+    //
+    // Izgara kanca döngüsünün DIŞINDA bir kez kuruluyor: kancalar konum
+    // değiştirmiyor (kanca gövdesi `kill3d`/`hasar3d` çağırıyor, `_apply_mtv3`
+    // değil), yani kova ataması bu faz boyunca geçerli kalıyor.
+    _grid_build3(n);
     int h = 0;
     int hn = length(_hitA);
     while (h < hn) {
@@ -3061,8 +3228,11 @@ func _s3_collision() {
         while (a < n) {
             Ent3 ea = _e3[a];
             if (ea.alive == 1 && ea.tag == ta) {
-                int b = 0;
-                while (b < n) {
+                _grid_near3(a);
+                int gh = 0;
+                int gz = length(_gnear);
+                while (gh < gz) {
+                    int b = _gnear[gh];
                     if (a != b && !_bp_far3(a, b)) {
                         Ent3 eb = _e3[b];
                         if (eb.alive == 1 && eb.tag == tb && _overlap_hit3(a, b)
@@ -3072,7 +3242,7 @@ func _s3_collision() {
                             call(fn);
                         }
                     }
-                    b = b + 1;
+                    gh = gh + 1;
                 }
             }
             a = a + 1;
@@ -6129,12 +6299,19 @@ func _s3_rule_hits(n) {
     while (r < length(_rl3)) {
         Rule3 ru = _rl3[r];
         if (ru.kind == RULE_HIT) {
+            // Kanca taramasıyla AYNI ızgara yolu. Veri-kurallar da kayıtlı
+            // her kural için ayrı bir n² tarama yapıyordu; veriyle kurulmuş
+            // bir oyunun BÜTÜN oynanışı buradan geçtiği için ayrı bırakmak
+            // kancaları hızlandırıp asıl yolu yavaş bırakmak olurdu.
             int a = 0;
             while (a < n) {
                 Ent3 ea = _e3[a];
                 if (ea.alive == 1 && ea.tag == ru.a) {
-                    int b = 0;
-                    while (b < n) {
+                    _grid_near3(a);
+                    int gr = 0;
+                    int gs = length(_gnear);
+                    while (gr < gs) {
+                        int b = _gnear[gr];
                         if (a != b && !_bp_far3(a, b)) {
                             Ent3 eb = _e3[b];
                             if (eb.alive == 1 && eb.tag == ru.b && _overlap_hit3(a, b)
@@ -6144,7 +6321,7 @@ func _s3_rule_hits(n) {
                                 _rl_apply3(ru.act, ru.n, _hit_me, _hit_other);
                             }
                         }
-                        b = b + 1;
+                        gr = gr + 1;
                     }
                 }
                 a = a + 1;

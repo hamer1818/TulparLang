@@ -173,6 +173,58 @@ her yerde değil.
 
 Yeni süit: `tests/bool_to_int_arg.test.tpr` (7 test) + `typeinfer/pass/06`.
 
+### Fixed — çarpışma O(n²)'den çıktı; ve asıl darboğaz çarpışma değilmiş
+
+TODO "~800 entity üstüne çıkılmadıkça getirisi yok" diyordu. Ölçüm bunu
+çürüttü: gerçek eşik ~300, çünkü 400 entity'de kare **15.9 ms** sürüyor ve
+60 fps bütçesi (16.7 ms) zaten aşılıyor.
+
+Ölçüm ayrıca darboğazın nerede OLMADIĞINI gösterdi. Uniform ızgarayı yazıp
+çarpışma taramalarına uyguladım ve tablo **hiç değişmedi**. Sebep:
+`_ramp_floor3`. Zemin sorgusu entity başına BÜTÜN entity'leri geziyor ve her
+adımda bir `Ent3` struct kopyası alıyordu; fizik onu entity başına bir kez
+çağırdığı için maliyet n² idi ve ÇARPIŞMADA değildi.
+
+**1. Rampa dizini** (kare başına bir kez kurulan, O(n)). `_s3_physics` tek
+başına, ms/kare:
+
+| entity | önce | sonra |
+|---|---|---|
+| 100 | 0.99 | 0.17 |
+| 400 | 15.94 | 0.66 |
+| 800 | 69.43 | 1.28 |
+| 1600 | 470.39 | 2.55 |
+
+Dizin bir ÜST KÜME: ölmüş ya da slot'u yeniden kullanılmış girdiler kalabilir
+ve `_ramp_floor3` her girdide `alive`/`shape` denetimini yine yapar. Böylece
+dizini `kill3d` ile senkron tutma zorunluluğu yok — senkronu kaçırmak sessiz
+bir hata olurdu, üst küme olmak değil.
+
+**2. Uniform ızgara** (sarmalı, 64×64, kare damgalı kovalar) beş taramaya
+uygulandı: duvar çözümü, hareketli-hareketli, mermi-duvar, kanca taraması,
+veri-kural taraması. `_s3_physics` + `_s3_collision` birlikte, kancalı:
+
+| entity | önce | sonra |
+|---|---|---|
+| 100 | 1.22 | 0.49 |
+| 200 | 4.23 | 1.27 |
+| 400 | 15.55 | 3.14 |
+| 800 | 59.96 | 8.92 |
+
+Hücre kenarı = en büyük kapsayan küre ÇAPI. Bu seçim 3×3 taramasını KORUMALI
+yapıyor: çakışan iki cismin merkez mesafesi yarıçapları toplamını aşamaz, o
+da bir hücre kenarını — yani en fazla komşu hücrededirler. Izgara sarmalı, o
+yüzden dünya ne kadar büyük olursa olsun kova sayısı sabit; sarma yalnız uzak
+cisimleri aynı kovaya düşürebilir ve bu fazladan bir dar-faz sorgusudur,
+kaçırma değil.
+
+Doğruluk KABA KUVVETLE karşılaştırılıyor — hem kanca hem veri-kural yolu
+için. Hızlı ve yanlış bir geniş faz, yavaş ve doğru olandan kötüdür:
+kaçırılan çarpışma sessizdir (oyuncu duvardan geçer, mermi düşmanı deler) ve
+hiçbir hata mesajı çıkmaz. Kural yolunun iddiası SAYIM değil KÜME üzerinden
+kurulu, çünkü `ACT_COLLECT` ötekini öldürdüğü için çağrı sayısı sıraya bağlı;
+ölen eşya kümesi ise sıradan bağımsız.
+
 ### Fixed — rampa artık gerçek bir kama mesh'i (12 kademeli kutu değil)
 
 raylib'de kama primitifi yok, o yüzden rampa yerel +Z boyunca 12 kademeli
