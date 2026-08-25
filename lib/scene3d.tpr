@@ -4685,6 +4685,10 @@ func _sc_clear_for_load3() {
     _e3 = []; _e3gen = []; _e3free = []; _free_n3 = 0;
     _bx = []; _by = []; _bz = []; _br = [];
     _bh3 = []; _rl3 = [];
+    // Bölgeler artık BİÇİMİN parçası, yani yükleme onları da temizliyor.
+    // (Kancaları biçimde taşınmıyor ama geometrileri taşınıyor; eskisini
+    // bırakmak yeni sahneye yabancı bölgeler sızdırırdı.)
+    _trg_clear3();
     _sc_nm = []; _sc_id = [];
     _s3_particles_clear();
     _fade3 = [];
@@ -4693,6 +4697,7 @@ func _sc_clear_for_load3() {
     _game_over3 = 0; _won3 = 0;
     // Editör seçimi bayat handle olurdu.
     _ed_sel3e = 0 - 1; _ed_drag3 = 0; _gz_axis3 = 0 - 1;
+    _ed_zsel3 = 0 - 1;
 }
 
 func scene_load3d(src): int {
@@ -4716,6 +4721,11 @@ func scene_load3d(src): int {
         }
     }
     if (_sc_has3(sc, "world")) { _sc_load_camera3(sc["world"]); }
+    if (_sc_has3(sc, "zones")) {
+        json zs = sc["zones"];
+        int z = 0;
+        while (z < length(zs)) { _sc_load_zone3(zs[z]); z = z + 1; }
+    }
     if (_sc_has3(sc, "rules")) {
         json rs = sc["rules"];
         int r = 0;
@@ -4725,6 +4735,52 @@ func scene_load3d(src): int {
     return n;
 }
 func sahne_yukle3d(kaynak): int { return scene_load3d(kaynak); }
+
+// Bölge: JSON → motor. Bölgeler sahne biçiminde YOKTU, yani editörden
+// eklenemiyor ve bir sahne dosyası "buraya girince şu olsun" diyemiyordu.
+// Kancaları (girince/çıkınca) biçimde taşınmıyor — onlar KOD; taşınan şey
+// bölgenin GEOMETRİSİ ve etiketi.
+func _sc_load_zone3(z) {
+    int tag = _sc_tag3(_sc_s3(z, "tag", "player"));
+    int id = 0 - 1;
+    if (_sc_s3(z, "shape", "box") == "sphere") {
+        id = trigger_sphere3d(_sc_f3(z, "x", 0.0), _sc_f3(z, "y", 0.0),
+                              _sc_f3(z, "z", 0.0), _sc_f3(z, "r", 2.0), tag);
+    } else {
+        id = trigger3d(_sc_f3(z, "x", 0.0), _sc_f3(z, "y", 0.0), _sc_f3(z, "z", 0.0),
+                       _sc_f3(z, "sx", 4.0), _sc_f3(z, "sy", 4.0), _sc_f3(z, "sz", 4.0),
+                       tag);
+    }
+    if (_sc_has3(z, "once")) { trigger_once3d(id, _sc_bool3(z, "once", 0)); }
+    if (_sc_has3(z, "on"))   { trigger_on3d(id, _sc_bool3(z, "on", 1)); }
+}
+
+// Bölgeler → JSON dizisi.
+func _sc_zones_js3(): str {
+    int n = length(_trg_x);
+    if (n == 0) { return ""; }
+    str o = ",\n  \"zones\": [\n";
+    int i = 0;
+    while (i < n) {
+        if (i > 0) { o = o + ",\n"; }
+        o = o + "    {\"tag\": \"" + _sc_tag_nm3(_trg_tag[i]) + "\"";
+        if (_trg_shape[i] == 1) {
+            o = o + ", \"shape\": \"sphere\", \"r\": " + _sc_num3(_trg_r[i]);
+        } else {
+            o = o + ", \"sx\": " + _sc_num3(_trg_sx[i]) +
+                ", \"sy\": " + _sc_num3(_trg_sy[i]) +
+                ", \"sz\": " + _sc_num3(_trg_sz[i]);
+        }
+        o = o + ", \"x\": " + _sc_num3(_trg_x[i]) +
+            ", \"y\": " + _sc_num3(_trg_y[i]) +
+            ", \"z\": " + _sc_num3(_trg_z[i]);
+        if (_trg_once[i] == 1) { o = o + ", \"once\": true"; }
+        if (_trg_on[i] == 0)   { o = o + ", \"on\": false"; }
+        o = o + "}";
+        i = i + 1;
+    }
+    return o + "\n  ]";
+}
 
 // Kural: JSON → motor. "on" alanı kuralın TÜRÜNÜ seçiyor; eylem "do".
 func _sc_load_rule3(r) {
@@ -4990,7 +5046,7 @@ func scene_json3d(): str {
         }
         i = i + 1;
     }
-    return o + "\n  ]" + _sc_rules_js3() + "\n}\n";
+    return o + "\n  ]" + _sc_zones_js3() + _sc_rules_js3() + "\n}\n";
 }
 func sahne_json3d(): str { return scene_json3d(); }
 
@@ -5639,7 +5695,22 @@ func _ed_apply_json3(js) {
     // biçiminin sahip olduğunu temizliyor.
     array un = _ed_undo3; array rd = _ed_redo3;
     int sc = _score3;
+    // Bölge KANCALARI biçimde taşınmıyor (onlar kod), ama geometrileri
+    // taşınıyor ve aynı sırada yeniden kuruluyor — yani kancaları indeksle
+    // geri koymak doğru. Korumazsak TAB'a basmak "buraya girince şu olsun"
+    // bağlarını sessizce koparırdı.
+    array fi = _trg_fin;  array hi = _trg_hasin;
+    array fo = _trg_fout; array ho = _trg_hasout;
+    array fs = _trg_fstay; array hs = _trg_hasstay;
     scene_load3d(js);
+    int n = length(_trg_x);
+    int i = 0;
+    while (i < n && i < length(fi)) {
+        _trg_fin[i] = fi[i];   _trg_hasin[i] = hi[i];
+        _trg_fout[i] = fo[i];  _trg_hasout[i] = ho[i];
+        _trg_fstay[i] = fs[i]; _trg_hasstay[i] = hs[i];
+        i = i + 1;
+    }
     _ed_undo3 = un; _ed_redo3 = rd;
     _score3 = sc;
 }
@@ -5711,7 +5782,7 @@ func _ed_ctx_close3() { _ed_ctx_on3 = 0; }
 // Menüdeki satır sayısı bağlama göre değişiyor.
 func _ed_ctx_rows3(): int {
     if (_ed_ctx_id3 >= 0) { return 4; }   // cercevele/cogalt/zemine/sil
-    return 4;                              // kutu/kure/boru/duvar
+    return 5;                              // kutu/kure/boru/duvar/bolge
 }
 func _ed_ctx_w3(): int { return _us3(96); }
 func _ed_ctx_h3(): int { return _ed_ctx_rows3() * _ED_FLD3 + _us3(4); }
@@ -5738,6 +5809,9 @@ func editor3d(on) {
         // sanmaya yol açıyor — ve F5 onu dosyaya kalıcı yazıyor.
         if (_ed_on3 == 0) { _ed_apply_json3(_sc_authored3); }
         _ed_on3 = 1;
+        // Bölgeler oyunda GÖRÜNMEZ ama editörde görünmeliler: düzenlenecek
+        // bir şeyin görünmemesi onu düzenlenemez yapıyor.
+        trigger_show3d(true);
         // Editöre girerken kamerayı oyunun baktığı yere yakın kur ki
         // "neredeyim?" anı yaşanmasın.
         int t = _slot_of3(_cam_target);
@@ -5751,6 +5825,7 @@ func editor3d(on) {
         // yazarlık durumu; oyun ONUN kopyası üzerinde koşacak.
         if (_ed_on3 == 1) { _ed_capture3(); }
         _ed_on3 = 0; _ed_drag3 = 0;
+        trigger_show3d(false);   // oyunda bölgeler yine görünmez
     }
     // İmleç editörde serbest olmalı (bakış SAĞ tuşla) — kilitli imleçle
     // varlığa tıklanamaz.
@@ -5845,9 +5920,35 @@ func _ed_ctx_draw3() {
         if (_g_button(22014, x + _us3(2), iy, w - _us3(4), _ED_FLD3, "+ duvar")) {
             _ed_ctx_add3(TAG_WALL, SHAPE_CUBE, 3.0);
         }
+        iy = iy + _ED_FLD3;
+        if (_g_button(22015, x + _us3(2), iy, w - _us3(4), _ED_FLD3, "+ bolge")) {
+            _ed_ctx_zone3();
+        }
     }
     // Dışarıya tıklamak kapatır (menünün kendi düğmeleri zaten kapatıyor).
     if (_g_press3 == 1 && _g_in(x, y, w, h) == false) { _ed_ctx_close3(); }
+}
+
+// Menüden BÖLGE ekle — imlecin altındaki zemine, seçili hâlde.
+func _ed_ctx_zone3() {
+    ed_mark3d();
+    _ed_ray3(_ed_ctx_x3 - _ed_view_x3(), _ed_ctx_y3 - _ed_view_y3(),
+             _ed_view_w3(), _ed_view_h3(), _cam_fov);
+    float t = _ray_planey3(_ed_cy3, _ed_ry3, _ground_y);
+    float px = _ed_cx3;
+    float pz = _ed_cz3;
+    if (t > 0.0) {
+        px = _ed_cx3 + _ed_rx3 * t;
+        pz = _ed_cz3 + _ed_rz3 * t;
+    }
+    trigger3d(px, _ground_y + 2.0, pz, 4.0, 4.0, 4.0, TAG_PLAYER);
+    _ed_tab3 = 2;
+    _ed_zsel3 = length(_trg_x) - 1;
+    _ed_sel3e = 0 - 1;
+    // Bölgeler normalde GÖRÜNMEZ; editörde yeni eklenen bir bölgeyi
+    // göremeden düzenlemek imkânsız olurdu.
+    trigger_show3d(true);
+    _ed_ctx_close3();
 }
 
 // Menüden varlık ekle: imleç ışınının zemini kestiği noktaya.
@@ -7287,6 +7388,25 @@ func _ed_hierarchy3() {
         }
         r = r + 1;
     }
+    // Bölgeler varlıkların ALTINDA, ayrı bir grup: entity değiller (motor
+    // onları ayrı tutuyor) ama sahnenin parçalarılar ve seçilebilmeleri
+    // gerekiyor.
+    int zn = length(_trg_x);
+    int zr = 0;
+    while (zr < zn && r + zr < rows) {
+        str zl = "bolge." + toString(zr) + " (" + _sc_tag_nm3(_trg_tag[zr]) + ")";
+        if (_ed_match3(zl, _ed_filter3)) {
+            if (_g_item(13000 + zr, _us3(2), listy + (r + zr) * _ED_ROW3,
+                        pw - _us3(4), _ED_ROW3 - _us3(1), zl,
+                        _ed_tab3 == 2 && _ed_zsel3 == zr)) {
+                _ed_tab3 = 2;
+                _ed_zsel3 = zr;
+                _ed_sel3e = 0 - 1;
+            }
+        }
+        zr = zr + 1;
+    }
+
     if (n == 0 && _ed_filter3 != "") {
         _g_txt3("eslesme yok: " + _ed_filter3, _ED_PAD3, listy + _us3(4),
                 pw - _ED_PAD3 * 2, _G_DIM3());
@@ -7329,7 +7449,9 @@ func _ed_f3w3(pw, labw): int {
 }
 
 // Inspector sekmesi: 0 = seçili varlık, 1 = dünya ayarları.
+// 0 = seçili varlık, 1 = dünya ayarları, 2 = seçili BÖLGE.
 int _ed_tab3 = 0;
+int _ed_zsel3 = 0 - 1;   // seçili bölge indeksi
 // Inspector kaydırması. Panel içeriği (çok davranışlı bir varlık, dünya
 // ayarları + kurallar) panelden uzun olabiliyor; kırpma olmadan alttaki
 // konsolun üstüne taşardı.
@@ -7570,6 +7692,122 @@ func _ed_c255(v): int {
     return i;
 }
 
+// ---- Bölge özellikleri -----------------------------------------------------
+// Bölgeler entity DEĞİL (motor onları ayrı tutuyor), o yüzden ayrı bir panel.
+// Kancaları burada düzenlenmiyor: onlar kod ve sahne biçiminde taşınmıyorlar.
+func _ed_zone_panel3(px, y, pw) {
+    int lx = px + _ED_PAD3;
+    int inner = pw - _ED_PAD3 * 2;
+    int half = toInt((inner - _us3(4)) / 2);
+    int labw = _us3(30);
+    int fw = _ed_f3w3(pw, labw);
+    int fx = lx + labw;
+    int i = _ed_zsel3;
+    if (i < 0 || i >= length(_trg_x)) {
+        _g_txt3("bolge secili degil", lx, y, inner, _G_DIM3());
+        _ed_icontent3 = y + _g_lh3();
+        return;
+    }
+    _g_txt3("BOLGE " + toString(i), lx, y, inner, _G_ACC3());
+    y = y + _g_lh3() + _us3(4);
+
+    if (_g_button(23001, lx, y, half, _ED_FLD3, _sc_tag_nm3(_trg_tag[i]))) {
+        ed_mark3d();
+        _trg_tag[i] = _ed_next_tag3(_trg_tag[i]);
+    }
+    str shp = "kutu";
+    if (_trg_shape[i] == 1) { shp = "kure"; }
+    if (_g_button(23002, lx + half + _us3(4), y, half, _ED_FLD3, shp)) {
+        ed_mark3d();
+        if (_trg_shape[i] == 1) { _trg_shape[i] = 0; } else { _trg_shape[i] = 1; }
+    }
+    y = y + _ED_FLD3 + _us3(6);
+
+    _g_section(px + _us3(2), y, pw - _us3(4), "KONUM");
+    y = y + _us3(16);
+    _g_txt3("kon", lx, _g_ly3(y), labw - _us3(2), _G_DIM3());
+    _trg_x[i] = _g_num(23010, fx, y, fw, _ED_FLD3, _trg_x[i], 0.05);
+    _trg_y[i] = _g_num(23011, fx + fw + _us3(4), y, fw, _ED_FLD3, _trg_y[i], 0.05);
+    _trg_z[i] = _g_num(23012, fx + (fw + _us3(4)) * 2, y, fw, _ED_FLD3, _trg_z[i], 0.05);
+    y = y + _ED_FLD3 + _us3(3);
+
+    if (_trg_shape[i] == 1) {
+        _g_txt3("r", lx, _g_ly3(y), labw - _us3(2), _G_DIM3());
+        _trg_r[i] = _g_num(23013, fx, y, fw, _ED_FLD3, _trg_r[i], 0.05);
+        if (_trg_r[i] < 0.1) { _trg_r[i] = 0.1; }
+    } else {
+        _g_txt3("boy", lx, _g_ly3(y), labw - _us3(2), _G_DIM3());
+        _trg_sx[i] = _g_num(23014, fx, y, fw, _ED_FLD3, _trg_sx[i], 0.05);
+        _trg_sy[i] = _g_num(23015, fx + fw + _us3(4), y, fw, _ED_FLD3, _trg_sy[i], 0.05);
+        _trg_sz[i] = _g_num(23016, fx + (fw + _us3(4)) * 2, y, fw, _ED_FLD3, _trg_sz[i], 0.05);
+    }
+    y = y + _ED_FLD3 + _us3(6);
+
+    _g_section(px + _us3(2), y, pw - _us3(4), "DAVRANIS");
+    y = y + _us3(16);
+    str ov = "tek atim: yok";
+    if (_trg_once[i] == 1) { ov = "tek atim: var"; }
+    if (_g_tog(23020, lx, y, half, _ED_FLD3, ov, _trg_once[i] == 1)) {
+        ed_mark3d();
+        if (_trg_once[i] == 1) { _trg_once[i] = 0; } else { _trg_once[i] = 1; }
+    }
+    str en = "etkin: yok";
+    if (_trg_on[i] == 1) { en = "etkin: var"; }
+    if (_g_tog(23021, lx + half + _us3(4), y, half, _ED_FLD3, en, _trg_on[i] == 1)) {
+        ed_mark3d();
+        if (_trg_on[i] == 1) { _trg_on[i] = 0; } else { _trg_on[i] = 1; }
+    }
+    y = y + _ED_FLD3 + _us3(8);
+
+    if (_g_button(23030, lx, y, inner, _ED_FLD3, "BOLGEYI SIL")) {
+        ed_mark3d();
+        _ed_zone_delete3(i);
+        _ed_tab3 = 0;
+        _ed_zsel3 = 0 - 1;
+    }
+    _ed_icontent3 = y + _ED_FLD3 + _us3(6);
+}
+
+// Bölgeyi sil: bütün paralel diziler AYNI indeksten düşmeli, yoksa bölge
+// verileri birbirine kayar.
+func _ed_zone_delete3(i) {
+    int n = length(_trg_x);
+    if (i < 0 || i >= n) { return; }
+    int k = i;
+    while (k < n - 1) {
+        _trg_x[k] = _trg_x[k+1]; _trg_y[k] = _trg_y[k+1]; _trg_z[k] = _trg_z[k+1];
+        _trg_sx[k] = _trg_sx[k+1]; _trg_sy[k] = _trg_sy[k+1]; _trg_sz[k] = _trg_sz[k+1];
+        _trg_r[k] = _trg_r[k+1]; _trg_shape[k] = _trg_shape[k+1];
+        _trg_tag[k] = _trg_tag[k+1]; _trg_on[k] = _trg_on[k+1];
+        _trg_once[k] = _trg_once[k+1];
+        _trg_fin[k] = _trg_fin[k+1]; _trg_hasin[k] = _trg_hasin[k+1];
+        _trg_fout[k] = _trg_fout[k+1]; _trg_hasout[k] = _trg_hasout[k+1];
+        _trg_fstay[k] = _trg_fstay[k+1]; _trg_hasstay[k] = _trg_hasstay[k+1];
+        k = k + 1;
+    }
+    pop(_trg_x); pop(_trg_y); pop(_trg_z);
+    pop(_trg_sx); pop(_trg_sy); pop(_trg_sz);
+    pop(_trg_r); pop(_trg_shape); pop(_trg_tag); pop(_trg_on); pop(_trg_once);
+    pop(_trg_fin); pop(_trg_hasin);
+    pop(_trg_fout); pop(_trg_hasout);
+    pop(_trg_fstay); pop(_trg_hasstay);
+    // Üyelik kayıtları bölge indeksine göre; silinen bölgeninkiler gitmeli,
+    // sonrakiler kaymalı — yoksa "içeride" sayılan yanlış bölge olur.
+    array nt = [];
+    array ne = [];
+    int m = 0;
+    while (m < length(_trg_in_t)) {
+        int ti = _trg_in_t[m];
+        if (ti != i) {
+            if (ti > i) { ti = ti - 1; }
+            push(nt, ti); push(ne, _trg_in_e[m]);
+        }
+        m = m + 1;
+    }
+    _trg_in_t = nt;
+    _trg_in_e = ne;
+}
+
 func _ed_inspector3() {
     int W = screen_width();
     int H = screen_height();
@@ -7603,6 +7841,12 @@ func _ed_inspector3() {
     // İçerik başlık şeridinin ALTINDAN başlıyor. Sabit 20 idi ve 2x ölçekte
     // şerit 32 piksel olduğu için ilk satır başlığın üstüne biniyordu.
     int y = py + _us3(16) + _us3(4) - _ed_iscroll3;
+    if (_ed_tab3 == 2) {
+        _ed_zone_panel3(px, y, pw);
+        kirp_bitir();
+        _ed_scrollbar3(px, ctop, pw, cavail);
+        return;
+    }
     if (_ed_tab3 == 1) {
         _g_txt3("DUNYA", lx, y, inner, _G_ACC3());
         _ed_world_panel3(px, y + 14, pw);

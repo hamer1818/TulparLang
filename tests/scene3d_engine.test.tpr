@@ -3859,6 +3859,107 @@ func t_ed_selection_cleared_by_reset() {
     assert_eq_int(ed_selected3d(), 0 - 1);
 }
 
+// ---- Tetikleyici bölgeler sahne biçiminde ---------------------------------
+// Bölgeler biçimde YOKTU: editörden eklenemiyor ve bir sahne dosyası "buraya
+// girince şu olsun" diyemiyordu. Geometrileri artık taşınıyor; KANCALARI
+// taşınmıyor (onlar kod) ama geri yüklemede korunuyor.
+
+func t_zone_roundtrip() {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z1 = trigger3d(3.0, 1.0, 0.0 - 4.0, 6.0, 4.0, 5.0, TAG_PLAYER);
+    int z2 = trigger_sphere3d(0.0 - 8.0, 2.0, 7.0, 3.5, TAG_ENEMY);
+    trigger_once3d(z1, true);
+    trigger_on3d(z2, false);
+    assert_eq_int(trigger_count3d(), 2);
+
+    str a = scene_json3d();
+    scene_load3d(a);
+    assert_eq_int(trigger_count3d(), 2);
+    // Kutu bölge
+    assert(abs_f3(_trg_x[0] - 3.0) < 0.001, "x");
+    assert(abs_f3(_trg_sz[0] - 5.0) < 0.001, "sz");
+    assert_eq_int(_trg_tag[0], TAG_PLAYER);
+    assert_eq_int(_trg_once[0], 1);
+    // Küre bölge
+    assert_eq_int(_trg_shape[1], 1);
+    assert(abs_f3(_trg_r[1] - 3.5) < 0.001, "yaricap");
+    assert_eq_int(_trg_tag[1], TAG_ENEMY);
+    assert_eq_int(_trg_on[1], 0);
+    // Gidiş-dönüş durağan olmalı.
+    assert(scene_json3d() == a, "bolgeli gidis-donus duragan");
+}
+
+// Bölgesi olmayan sahne "zones" yazmamalı — dosya şişmesin.
+func t_zone_absent_when_none() {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    assert(indexOf(scene_json3d(), "zones") < 0, "bolge yokken alan yazilmamali");
+}
+
+// Bölge silme: BÜTÜN paralel diziler aynı indeksten düşmeli, yoksa bölge
+// verileri birbirine kayar (ve üyelik kayıtları yanlış bölgeyi işaret eder).
+func t_zone_delete_shifts_all_arrays() {
+    scene3d_reset();
+    no_ground3d();
+    int a = trigger3d(1.0, 0.0, 0.0, 2.0, 2.0, 2.0, TAG_PLAYER);
+    int b = trigger_sphere3d(2.0, 0.0, 0.0, 5.0, TAG_ENEMY);
+    int c = trigger3d(3.0, 0.0, 0.0, 6.0, 6.0, 6.0, TAG_ITEM);
+    trigger_once3d(c, true);
+    assert_eq_int(trigger_count3d(), 3);
+
+    _ed_zone_delete3(1);          // ortadakini sil
+    assert_eq_int(trigger_count3d(), 2);
+    // Kalanlar: 0 = eski a, 1 = eski c. Bütün diziler birlikte kaymalı.
+    assert(abs_f3(_trg_x[0] - 1.0) < 0.001, "ilk bolge yerinde");
+    assert(abs_f3(_trg_x[1] - 3.0) < 0.001, "ucuncu bolge kaymali: " + toString(_trg_x[1]));
+    assert_eq_int(_trg_tag[1], TAG_ITEM);
+    assert_eq_int(_trg_once[1], 1);
+    assert_eq_int(_trg_shape[1], 0);
+    assert(abs_f3(_trg_sx[1] - 6.0) < 0.001, "boyut da kaymali");
+
+    // Sınır dışı silme zararsız olmalı.
+    _ed_zone_delete3(9);
+    assert_eq_int(trigger_count3d(), 2);
+    _ed_zone_delete3(0 - 1);
+    assert_eq_int(trigger_count3d(), 2);
+}
+
+int _zh_n = 0;
+func _zh_cb() { _zh_n = _zh_n + 1; }
+
+// TAB (ve geri al) bölge KANCALARINI koparmamalı. Kancalar biçimde
+// taşınmıyor; geometriler aynı sırada yeniden kurulduğu için indeksle geri
+// konuyorlar.
+func t_zone_hooks_survive_editor_reload() {
+    scene3d_reset();
+    no_ground3d();
+    _zh_n = 0;
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0, 4.0, 4.0, 4.0, TAG_PLAYER);
+    on_enter3d(z, _zh_cb);
+    _ed_capture3();
+    _s3_triggers();
+    assert(_zh_n > 0, "kanca once calismali");
+    int before = _zh_n;
+
+    editor3d(true);      // DUR → sahne yeniden yüklenir
+    editor3d(false);
+    assert_eq_int(trigger_count3d(), 1);
+    // Yeniden girişi tetiklemek için oyuncuyu dışarı-içeri al.
+    set3pos(p, 40.0, 1.0, 0.0);
+    _s3_triggers();
+    set3pos(p, 0.0, 1.0, 0.0);
+    _s3_triggers();
+    assert(_zh_n > before, "kanca yeniden yuklemeden sonra da calismali");
+}
+
+test("bolge gidis-donusu", "t_zone_roundtrip");
+test("bolge silme tum dizileri kaydiriyor", "t_zone_delete_shifts_all_arrays");
+test("bolge yokken alan yazilmiyor", "t_zone_absent_when_none");
+test("bolge kancalari yeniden yuklemeden sag cikiyor", "t_zone_hooks_survive_editor_reload");
 test("kati-kati temas kancasi atiyor", "t_hit_hook_fires_between_solids");
 test("temas payi yaricap degil", "t_hit_hook_skin_is_not_a_radius");
 test("topla kurali", "t_rule_collect");

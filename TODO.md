@@ -67,16 +67,15 @@ Mimari kararlar ve gerekçeleri:
       `tulpar editor` alt komutu hâlâ yapılabilir ama artık zorunlu değil.
 
 - [ ] **Editörde kalan Unity/Unreal parçaları.** Çoklu seçim, prefab/şablon,
-      tetikleyici bölge düzenleme, sağ tık bağlam menüsü, araç ipuçları
-      (tooltip), varlık arama/filtre, hiyerarşide sürükle-bırak sıralama.
+      hiyerarşide sürükle-bırak sıralama.
       (Eksen tutamakları, dünya ayarları, varlık adı, konsol, kural
       düzenleyici, panel kaydırma, arayüz ölçeği, standart kısayollar, F ile
       çerçeveleme, hover vurgulama, kaydedilmemiş değişiklik uyarısı, yön
       göstergesi ✅ 2026-08-24.)
 
-- [ ] **Tetikleyici bölgeler sahne biçiminde yok.** Şimdilik yükleme onları
-      KORUYOR (silmek geri konulamaz bir kayıptı), ama bir sahne dosyası
-      bölge tanımlayamıyor — editörden bölge eklenemiyor.
+- [x] **Tetikleyici bölgeler sahne biçiminde.** ✅ 2026-08-24 — `"zones"`
+      alanı; editörde hiyerarşi girdisi + özellik paneli + sağ tık ile ekleme.
+      Kancaları biçimde taşınmıyor (kod) ama yeniden yüklemede korunuyor.
 
 - [ ] **`chr` builtin'i yok** (`ord` var — asimetri). Editörün metin alanı
       şimdilik Tulpar tarafında ASCII tablosundan okuyor.

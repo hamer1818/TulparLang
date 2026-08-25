@@ -42,6 +42,22 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — tetikleyici bölgeler sahne biçiminde ve editörde
+
+Bölgeler biçimde YOKTU: editörden eklenemiyor ve bir sahne dosyası "buraya
+girince şu olsun" diyemiyordu. Artık `"zones"` alanı taşıyor — geometri,
+etiket, tek-atım ve etkinlik. KANCALARI taşınmıyor (onlar kod), ama editörün
+yeniden yüklemesinde indeksle korunuyorlar; korunmasaydı TAB'a basmak
+"girince/çıkınca" bağlarını sessizce koparırdı.
+
+Editörde: hiyerarşide varlıkların altında ayrı bir grup, kendi özellik paneli
+(etiket, şekil, konum, boyut/yarıçap, tek-atım, etkin, sil) ve sağ tık
+menüsünde "+ bölge". Bölgeler oyunda görünmez ama editörde görünür yapılıyor
+— düzenlenecek bir şeyin görünmemesi onu düzenlenemez kılar.
+
+Bölge silme bütün paralel dizileri birlikte kaydırıyor ve üyelik kayıtlarını
+düzeltiyor; biri unutulsa bölge verileri birbirine kayardı.
+
 ### Fixed — DERLEYİCİ: kapsam değişken tablosu SESSİZCE taşıyordu
 
 En üst kapsam programın BÜTÜN global değişkenlerini tutuyor ve tablo 256
