@@ -19,6 +19,7 @@ import "scene3d";
 
 int player = 0;
 int robot  = 0 - 1;
+int duman  = 0 - 1;
 
 func setup() {
     // robot.glb — raylib örnek varlığı (CC0). İki gömülü animasyonu var.
@@ -42,6 +43,16 @@ func setup() {
         kayit3d("robot.glb: " + toString(anim_sayisi(robot)) + " animasyon");
     }
 
+    // Duman sayfası: 4×4'lük bir atlas. Parçacık ömrü boyunca kareler
+    // ilerliyor (flipbook), yani duman AÇILIYOR — atlas olmasa aynı resim
+    // yalnız küçülürdü. Dönme de burada anlam kazanıyor: her puf farklı
+    // açıda başlayıp farklı yöne dönünce bulut bir bütün gibi durmuyor.
+    duman = load_texture("examples/assets/smoke.png");
+    if (duman >= 0) {
+        parcacik_doku3d(duman, 4, 4);
+        parcacik_donme3d(120.0);
+    }
+
     camera_follow(player, 11.0, 7.0);
 
     // Koşmaya değer bir alan: köşelerde sütunlar, çevrede duvar.
@@ -58,7 +69,12 @@ func setup() {
 
 func update() {
     move3d(player, 7.0);
-    if (jump_pressed()) { jump3d(player, 11.0); }
+    if (jump_pressed()) {
+        jump3d(player, 11.0);
+        // Ayakların dibinde bir toz pufu — dumanın açılışını görmek için.
+        parcacik3d(get3x(player), get3y(player) - 0.4,
+                   get3z(player), 10, rgb(210, 205, 195), 2.4, 0.9);
+    }
 }
 
 sahne3d(900, 520, "Tulpar 3D — Animasyonlu Karakter");

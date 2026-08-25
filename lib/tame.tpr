@@ -467,6 +467,20 @@ func billboard3d(tex, x, y, z, size, color) { tm3_billboard(tex, x, y, z, size, 
 func tabela3d(tex, x, y, z, size, color)    { tm3_billboard(tex, x, y, z, size, color); }
 // Dokusuz kısayol — parçacık için tipik kullanım.
 func spark3d(x, y, z, size, color) { tm3_billboard(0 - 1, x, y, z, size, color); }
+// Döndürülebilir + atlas kareli billboard. rot DERECE, dönme merkezi
+// dörtgenin ORTASI (köşe olsaydı dönme aynı zamanda yer değiştirme olurdu).
+// frame < 0 → dokunun tamamı.
+func billboard_pro3d(tex, x, y, z, size, rot, frame, color) {
+    tm3_billboard_pro(tex, x, y, z, size, rot, frame, color);
+}
+func tabela_pro3d(tex, x, y, z, boy, aci, kare, renk) {
+    tm3_billboard_pro(tex, x, y, z, boy, aci, kare, renk);
+}
+// Dokuyu cols×rows atlas olarak işaretle — ızgara dokunun özelliği.
+func atlas_grid3d(tex, cols, rows) { tm3_atlas_grid(tex, cols, rows); }
+func atlas_izgara3d(tex, sutun, satir) { tm3_atlas_grid(tex, sutun, satir); }
+func atlas_frames3d(tex): int { return tm3_atlas_frames(tex); }
+func atlas_kare_sayisi3d(tex): int { return tm3_atlas_frames(tex); }
 func kivilcim3d(x, y, z, size, color) { tm3_billboard(0 - 1, x, y, z, size, color); }
 
 // Dünya → ekran izdüşümü: 3B bir noktaya bağlı 2B çizim (can barı, isim

@@ -200,7 +200,18 @@ Mimari kararlar ve gerekçeleri:
       Yıldızlarla aynı çözüm (gökyüzü shader'ı), gündüz-gece ile sönüyor,
       `scene3d_terrain` örneğinde açık. Detay: CHANGELOG.
 
-- [ ] **Parçacıklarda dönme ve doku atlası yok** — tek boy düz billboard.
+- [x] **Parçacıklarda dönme ve doku atlası geldi.** ✅ 2026-08-25 —
+      `tm3_billboard_pro` (döndürülebilir + atlas kareli billboard) ve
+      `tm3_atlas_grid`. Izgara ÇİZİMİN değil DOKUNUN özelliği: her karede
+      söylenseydi 12 argümanlık bir builtin gerekirdi (tavan 8).
+      Parçacıklar `parcacik_doku3d(doku, sutun, satir)` ile flipbook oynatıyor
+      (ömür ilerledikçe kare ilerliyor, son karede KALIYOR — sarsaydı patlama
+      ölürken yeniden başlardı) ve `parcacik_donme3d(derece_sn)` ile dönüyor.
+      **Dönme varsayılan KAPALI**: dokusuz parçacık dolu bir karedir, dönünce
+      silueti de döner — varsayılanı açmak yayınlanmış oyunların görünüşünü
+      haber vermeden değiştirirdi. Regresyon testi bunu koruyor.
+      Örnek: `scene3d_karakter.tpr` (zıplayınca toz pufu; `smoke.png` 4×4
+      atlası bu depoda üretildi).
 
 ---
 

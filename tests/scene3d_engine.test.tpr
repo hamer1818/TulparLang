@@ -5889,6 +5889,93 @@ func t_snd_pan_on_listener_is_center() {
 }
 
 
+// ---------------------------------------------------------------------------
+// PARÇACIK DÖNMESİ VE DOKU ATLASI. Çizim pencere ister; burada ölçülen
+// motorun sürdüğü AÇI ve ömürden türeyen ATLAS KARESİ.
+// ---------------------------------------------------------------------------
+
+func t_particle_spin_varies_per_particle() {
+    // Hepsi aynı yöne/hızda dönseydi bulut bir bütün gibi burgaçlanır,
+    // dağılmazdı — dönmenin bütün amacı parçacıkları BİRBİRİNDEN ayırmak.
+    scene3d_reset();
+    no_ground3d();
+    parcacik_donme3d(180.0);
+    parcacik3d(0.0, 2.0, 0.0, 24, WHITE, 4.0, 1.0);
+
+    float ilk = _pt3spin[0];
+    bool farkli = false;
+    bool ikiyon = false;
+    int i = 0;
+    while (i < 24) {
+        if (_pt3spin[i] != ilk) { farkli = true; }
+        if (_pt3spin[i] * ilk < 0.0) { ikiyon = true; }
+        i = i + 1;
+    }
+    assert(farkli, "butun parcaciklar ayni hizda donuyor");
+    assert(ikiyon, "butun parcaciklar ayni YONE donuyor");
+}
+
+func t_particle_rotation_advances() {
+    scene3d_reset();
+    no_ground3d();
+    parcacik_donme3d(180.0);
+    parcacik3d(0.0, 2.0, 0.0, 4, WHITE, 4.0, 5.0);
+    float once = _pt3rot[0];
+    _s3_particles(0.5);
+    assert(_pt3rot[0] != once, "aci hic ilerlemiyor");
+    // İlerleme hızla TUTARLI olmalı, keyfi değil.
+    float bekl = once + _pt3spin[0] * 0.5;
+    assert(abs_f3(_pt3rot[0] - bekl) < 0.001,
+           "aci acisal hizla tutarsiz: " + toString(_pt3rot[0]));
+}
+
+func t_particle_spin_can_be_disabled() {
+    scene3d_reset();
+    no_ground3d();
+    parcacik_donme3d(0.0);
+    parcacik3d(0.0, 2.0, 0.0, 6, WHITE, 4.0, 5.0);
+    float once = _pt3rot[0];
+    _s3_particles(1.0);
+    assert(_pt3rot[0] == once, "donme kapaliyken aci degisti");
+}
+
+func t_particle_spin_defaults_off() {
+    // VARSAYILAN KAPALI olmak zorunda: dokusuz parçacık dolu bir karedir ve
+    // dolu kare dönünce siluet döner (kare↔baklava). Varsayılanı açmak
+    // yayınlanmış her oyunun parçacıklarını haber vermeden değiştirirdi.
+    scene3d_reset();
+    no_ground3d();
+    parcacik3d(0.0, 2.0, 0.0, 8, WHITE, 4.0, 5.0);
+    float once = _pt3rot[0];
+    _s3_particles(1.0);
+    assert(_pt3rot[0] == once,
+           "parcacik donmesi VARSAYILAN acik — mevcut oyunlarin gorunusu degisir");
+}
+
+func t_particle_atlas_frame_walks_lifetime() {
+    // Flipbook: yeni doğmuş parçacık ilk karede, ölmek üzere olan son karede.
+    assert(_pt3_frame_of3(1.0, 8) == 0, "yeni parcacik ilk karede degil");
+    assert(_pt3_frame_of3(0.0, 8) == 7, "olen parcacik son karede degil");
+    // Ortada monoton artmalı.
+    int a = _pt3_frame_of3(0.9, 8);
+    int b = _pt3_frame_of3(0.5, 8);
+    int c = _pt3_frame_of3(0.2, 8);
+    assert(a < b && b < c, "kareler omurle birlikte ilerlemiyor");
+}
+
+func t_particle_atlas_frame_does_not_wrap() {
+    // Son karede KALMALI. Başa sarsaydı patlama ölürken yeniden başlardı.
+    assert(_pt3_frame_of3(0.0 - 0.5, 8) == 7, "kare basa sardi");
+    assert(_pt3_frame_of3(0.001, 8) == 7, "son karede kalmiyor");
+}
+
+func t_particle_no_atlas_means_whole_texture() {
+    // Izgara yoksa kare -1: billboard dokunun TAMAMINI çizsin.
+    assert(_pt3_frame_of3(0.5, 1) == 0 - 1, "izgarasiz kare -1 degil");
+    assert(_pt3_frame_of3(0.5, 0) == 0 - 1, "sifir kareyle -1 degil");
+}
+
+
 test("satir yuksekligi fonttan buyuk", "t_ui_line_height_exceeds_font");
 test("dikey merkezleme", "t_ui_vertical_centering");
 test("dedektor metinleri goruyor", "t_ui_detector_sees_text");
@@ -5930,4 +6017,15 @@ test("ses kamerayla donuyor", "t_snd_pan_follows_camera_yaw");
 test("ses ekseni move3d ile ayni", "t_snd_pan_matches_move_axis");
 test("kaydirma kapaliyken merkez", "t_snd_pan_center_when_disabled");
 test("dinleyici uzerinde merkez", "t_snd_pan_on_listener_is_center");
+test("parcacik donusu parcaciga gore degisiyor", "t_particle_spin_varies_per_particle");
+test("aci acisal hizla ilerliyor", "t_particle_rotation_advances");
+// SIRA ÖNEMLİ: bu test dönmeyi AÇAN bir testin hemen ardından koşuyor. O
+// zaman iki şeyi birden ölçüyor: varsayılanın kapalı olduğunu VE
+// scene3d_reset'in bırakılmış ayarı geri aldığını. Araya dönmeyi kapatan bir
+// test girerse ikincisi sessizce ölçülmez olur.
+test("donme varsayilan kapali", "t_particle_spin_defaults_off");
+test("donme kapatilabiliyor", "t_particle_spin_can_be_disabled");
+test("atlas karesi omur boyunca yuruyor", "t_particle_atlas_frame_walks_lifetime");
+test("atlas karesi basa sarmiyor", "t_particle_atlas_frame_does_not_wrap");
+test("izgarasiz doku tam cizilir", "t_particle_no_atlas_means_whole_texture");
 test_summary();

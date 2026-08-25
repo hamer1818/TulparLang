@@ -430,6 +430,13 @@ func scene3d_reset() {
     _trg_clear3(); _trg_show3 = 0;
     _lvlN = []; _lvlF = []; _cur_lvl3 = 0; _lvl_pending3 = 0 - 1; _won3 = 0;
     _s3_particles_clear();
+    // Parçacık AYARLARI da sahneyle gider — havuzu boşaltıp dokusunu ve
+    // dönmesini bırakmak yarım bir teardown olurdu. Gerekçe `_slope_lim3` ile
+    // aynı ve orada birebir yaşandı: bırakılan ayar testleri SIRAYA BAĞIMLI
+    // yapıyor. Nitekim dönmeyi varsayılan AÇIK yapan bozma tam bu yüzden
+    // kaçtı — test, varsayılanı değil bir önceki testin bıraktığı 0'ı
+    // ölçüyordu.
+    _pt3_spin_max = 0.0; _pt3_tex = 0 - 1; _pt3_frames = 1; _pt3_grav = 9.0;
     // Arazi bayrağı sıfırlanır (yükseklik verisi de bırakılır) — sahne
     // sıfırlanınca dünya da sıfırlanmalı, yoksa yeni sahne eski tepeleri sürer.
     _terr_on = 0; _terr_model = 0 - 1; terrain_off3d();
@@ -1588,8 +1595,55 @@ array _pt3life = []; // kalan ömür (sn); <= 0 → slot ölü
 array _pt3max = [];  // başlangıç ömrü (küçülme/sönme oranı için)
 array _pt3col = [];
 array _pt3size = [];
+array _pt3rot = [];  // o anki açı (derece)
+array _pt3spin = []; // açısal hız (derece/sn); işaret rastgele
 float _pt3_grav = 9.0;   // parçacık yerçekimi (sahnenin _grav'ından bağımsız)
 int   _PT3_CAP = 400;    // havuz tavanı — üstünde yeni parçacık sessizce düşer
+
+// ---- Dönme ve doku atlası ---------------------------------------------------
+// Parçacıklar tek boy DÜZ bir dörtgendi: yirmi tanesi de birbirinin aynısı
+// duruyordu, çünkü hepsi aynı anda aynı şekilde sönüyordu. Bir toz/duman
+// bulutunun canlı görünmesi, tek tek parçacıkların FARKLI dönmesinden geliyor.
+//
+// Dönme varsayılan olarak KAPALI. Dokusuz parçacık dolu bir KAREDİR ve dolu
+// bir kare dönünce siluet de döner (kare↔baklava) — yani "görünmez" değil,
+// gayet görünür. Varsayılanı açmak, yayınlanmış her oyunun parçacıklarını
+// haber vermeden değiştirirdi. Dokulu parçacıkta ise dönme asıl kazanç:
+// `parcacik_donme3d(180.0)` ile açılır.
+float _pt3_spin_max = 0.0;     // derece/sn tavanı; 0 = dönme yok
+
+// Doku atlası: parçacık ömrü boyunca kareler ilerler (flipbook). Duman ve
+// patlama sprite sayfalarının kullanım biçimi budur — atlas olmadan aynı
+// resim yalnız küçülür, DEĞİŞMEZ.
+int _pt3_tex = 0 - 1;
+int _pt3_frames = 1;
+
+// Parçacıkların dokusu. cols×rows > 1 ise sayfa flipbook olarak oynatılır.
+func particle_texture3d(tex, cols, rows) {
+    _pt3_tex = tex;
+    if (tex >= 0) {
+        atlas_grid3d(tex, cols, rows);
+        _pt3_frames = atlas_frames3d(tex);
+    } else {
+        _pt3_frames = 1;
+    }
+}
+func parcacik_doku3d(doku, sutun, satir) { particle_texture3d(doku, sutun, satir); }
+
+func particle_spin3d(deg_per_sec) { _pt3_spin_max = deg_per_sec; }
+func parcacik_donme3d(derece_sn) { particle_spin3d(derece_sn); }
+
+// Ömür oranından (k = kalan/başlangıç) atlas karesi. SAF: penceresiz
+// sınanabilsin diye çizimden ayrı. k=1 (yeni doğmuş) ilk kare, k→0 son kare;
+// son karede KALIYOR, başa sarmıyor — sayfalar bir kez oynanmak üzere çizilir
+// ve sarmak patlamayı yeniden başlatırdı.
+func _pt3_frame_of3(k, total): int {
+    if (total <= 1) { return 0 - 1; }
+    int f = toInt((1.0 - k) * total);
+    if (f < 0) { f = 0; }
+    if (f >= total) { f = total - 1; }
+    return f;
+}
 
 // n adet parçacık saç: rastgele küresel yön, hafif yukarı eğilim.
 func particles3d(x, y, z, n, color, speed, life) {
@@ -1605,6 +1659,10 @@ func particles3d(x, y, z, n, color, speed, life) {
         float pvy = up * spd + speed * 0.35;      // yukarı eğilim
         float plife = life * (0.65 + random() * 0.7);
         float psize = 0.14 + random() * 0.18;
+        float prot = random() * 360.0;
+        // İşaret rastgele: hepsi aynı yöne dönseydi bulut bir bütün gibi
+        // burgaçlanır, dağılmazdı.
+        float pspin = (random() * 2.0 - 1.0) * _pt3_spin_max;
         int slot = 0 - 1;
         int i = 0;
         int cnt = length(_pt3life);
@@ -1617,12 +1675,14 @@ func particles3d(x, y, z, n, color, speed, life) {
             _pt3vx[slot] = pvx;    _pt3vy[slot] = pvy;    _pt3vz[slot] = pvz;
             _pt3life[slot] = plife; _pt3max[slot] = plife;
             _pt3col[slot] = color;  _pt3size[slot] = psize;
+            _pt3rot[slot] = prot;   _pt3spin[slot] = pspin;
         } else {
             if (cnt < _PT3_CAP) {
                 push(_pt3x, x * 1.0); push(_pt3y, y * 1.0); push(_pt3z, z * 1.0);
                 push(_pt3vx, pvx);    push(_pt3vy, pvy);    push(_pt3vz, pvz);
                 push(_pt3life, plife); push(_pt3max, plife);
                 push(_pt3col, color);  push(_pt3size, psize);
+                push(_pt3rot, prot);   push(_pt3spin, pspin);
             }
             // havuz dolu → bu parçacık düşer (kare hızı, görsel şıklıktan önemli)
         }
@@ -1649,6 +1709,7 @@ func _s3_particles(dt) {
             _pt3x[i] = _pt3x[i] + _pt3vx[i] * dt;
             _pt3y[i] = _pt3y[i] + _pt3vy[i] * dt;
             _pt3z[i] = _pt3z[i] + _pt3vz[i] * dt;
+            _pt3rot[i] = _pt3rot[i] + _pt3spin[i] * dt;
             _pt3life[i] = _pt3life[i] - dt;
         }
         i = i + 1;
@@ -1662,7 +1723,9 @@ func _s3_particles_draw() {
         if (_pt3life[i] > 0.0) {
             // ömür tükendikçe küçül — sönme hissi
             float k = _pt3life[i] / _pt3max[i];
-            spark3d(_pt3x[i], _pt3y[i], _pt3z[i], _pt3size[i] * k, _pt3col[i]);
+            billboard_pro3d(_pt3_tex, _pt3x[i], _pt3y[i], _pt3z[i],
+                            _pt3size[i] * k, _pt3rot[i],
+                            _pt3_frame_of3(k, _pt3_frames), _pt3col[i]);
         }
         i = i + 1;
     }
@@ -1672,6 +1735,7 @@ func _s3_particles_clear() {
     _pt3x = []; _pt3y = []; _pt3z = [];
     _pt3vx = []; _pt3vy = []; _pt3vz = [];
     _pt3life = []; _pt3max = []; _pt3col = []; _pt3size = [];
+    _pt3rot = []; _pt3spin = [];
 }
 
 // ---- Karakter animasyonu (Faz 8) -------------------------------------------

@@ -888,6 +888,9 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm3_fog", "aot_tm3_fog_ptr", 2},
     // 3D (Faz 8) — billboard (parçacık/etiket) + dünya→ekran izdüşümü
     {"tm3_billboard", "aot_tm3_billboard_ptr", 6},
+    {"tm3_billboard_pro", "aot_tm3_billboard_pro_ptr", 8},
+    {"tm3_atlas_grid", "aot_tm3_atlas_grid_ptr", 3},
+    {"tm3_atlas_frames", "aot_tm3_atlas_frames_ptr", 1},
     {"tm3_screen_x", "aot_tm3_screen_x_ptr", 3},
     {"tm3_screen_y", "aot_tm3_screen_y_ptr", 3},
     // 3D (Faz 10) — gerçek arazi (heightmap)

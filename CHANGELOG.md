@@ -42,6 +42,35 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — parçacıklarda dönme ve doku atlası
+
+Parçacıklar tek boy DÜZ bir dörtgendi: yirmi tanesi de birbirinin aynısı
+duruyordu, çünkü hepsi aynı anda aynı şekilde sönüyordu.
+
+`tm3_billboard_pro` döndürülebilir ve atlas kareli billboard çiziyor,
+`tm3_atlas_grid` bir dokuyu cols×rows ızgara olarak işaretliyor. Izgara
+ÇİZİM ÇAĞRISININ değil DOKUNUN özelliği — her karede söylenseydi 12
+argümanlık bir builtin gerekirdi (tame tavanı 8) ve aynı bilgi her çağrıda
+tekrarlanırdı.
+
+Dönme merkezi dörtgenin ORTASI; köşe olsaydı döndürme parçacığı kendi
+konumundan kaydırırdı, yani dönme aynı zamanda yer değiştirme olurdu.
+
+Parçacıklar `parcacik_doku3d(doku, sutun, satir)` ile flipbook oynatıyor:
+ömür ilerledikçe atlas karesi ilerliyor ve son karede KALIYOR. Sarsaydı
+patlama ölürken yeniden başlardı. Atlas olmadan aynı resim yalnız küçülüyor,
+DEĞİŞMİYOR — duman/patlama sayfalarının varlık sebebi bu.
+
+**Dönme varsayılan KAPALI.** Dokusuz parçacık dolu bir karedir ve dolu kare
+dönünce silueti de döner (kare↔baklava): varsayılanı açmak yayınlanmış her
+oyunun parçacıklarını haber vermeden değiştirirdi. Bir regresyon testi bunu
+koruyor — ve o test ilk yazımında SIRAYA BAĞIMLIYDI, bir öncekinin bıraktığı
+değeri ölçüyordu, yani varsayılanı açan bozma ondan kaçtı. Parçacık ayarları
+artık `scene3d_reset()` ile sahneyle birlikte dönüyor (gerekçe `_slope_lim3`
+ile aynı), test de bunu ölçüyor.
+
+`examples/assets/smoke.png` — 4×4 duman sayfası, bu depoda üretildi.
+
 ### Added — konumsal seste stereo yön
 
 Mesafe zayıflatması "ne kadar uzakta" diyordu ama "hangi yönde" demiyordu:

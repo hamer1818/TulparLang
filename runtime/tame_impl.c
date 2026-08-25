@@ -1528,6 +1528,12 @@ double tame_impl_pick_sphere(double mx, double my, double cx, double cy,
 
 static Texture2D tame_textures[TAME_MAX_TEXTURES];
 static int tame_texture_used[TAME_MAX_TEXTURES];
+// DOKU ATLASI ızgarası: kaç sütun × kaç satır. Izgara ÇİZİM ÇAĞRISININ değil
+// DOKUNUN özelliği — her karede yeniden söylenseydi 12 argümanlık bir builtin
+// gerekirdi (tavan 8) ve aynı bilgi her çağrıda tekrarlanırdı.
+// 0 = ızgara yok (doku tek parça).
+static int tame_tex_cols[TAME_MAX_TEXTURES];
+static int tame_tex_rows[TAME_MAX_TEXTURES];
 static Font tame_fonts[TAME_MAX_FONTS];
 static int tame_font_used[TAME_MAX_FONTS];
 static Sound tame_sounds[TAME_MAX_SOUNDS];
@@ -1821,6 +1827,55 @@ void tame_impl_billboard(int tex, double x, double y, double z, double size,
   Texture2D t = tame_texture_ok(tex) ? tame_textures[tex] : tame_white_texture();
   DrawBillboard(tame_cam3d, t, (Vector3){(float)x, (float)y, (float)z},
                 (float)size, tame_color(color));
+}
+
+// Dokuyu cols×rows'luk bir atlas olarak işaretle. cols/rows <= 1 → ızgara yok.
+void tame_impl_atlas_grid(int tex, int cols, int rows) {
+  if (!tame_texture_ok(tex)) return;
+  if (cols < 1) cols = 1;
+  if (rows < 1) rows = 1;
+  tame_tex_cols[tex] = cols;
+  tame_tex_rows[tex] = rows;
+}
+
+int tame_impl_atlas_frames(int tex) {
+  if (!tame_texture_ok(tex)) return 0;
+  int c = tame_tex_cols[tex], r = tame_tex_rows[tex];
+  if (c < 1) c = 1;
+  if (r < 1) r = 1;
+  return c * r;
+}
+
+// Döndürülebilir + atlas kareli billboard. rot DERECE (motorun geri kalanıyla
+// aynı birim), frame < 0 → dokunun tamamı.
+//
+// Origin dörtgenin ORTASI: köşe olsaydı döndürme parçacığı kendi konumundan
+// kaydırırdı, yani dönme aynı zamanda yer değiştirme olurdu.
+void tame_impl_billboard_pro(int tex, double x, double y, double z, double size,
+                             double rot, int frame, int64_t color) {
+  Texture2D t = tame_texture_ok(tex) ? tame_textures[tex] : tame_white_texture();
+  Rectangle src = {0.0f, 0.0f, (float)t.width, (float)t.height};
+  if (tame_texture_ok(tex) && frame >= 0) {
+    int c = tame_tex_cols[tex], r = tame_tex_rows[tex];
+    if (c < 1) c = 1;
+    if (r < 1) r = 1;
+    int total = c * r;
+    if (total > 1) {
+      int f = frame % total;
+      float fw = (float)t.width / (float)c;
+      float fh = (float)t.height / (float)r;
+      src.x = (float)(f % c) * fw;
+      src.y = (float)(f / c) * fh;
+      src.width = fw;
+      src.height = fh;
+    }
+  }
+  Vector2 sz = {(float)size, (float)size};
+  DrawBillboardPro(tame_cam3d, t, src,
+                   (Vector3){(float)x, (float)y, (float)z},
+                   (Vector3){0.0f, 1.0f, 0.0f}, sz,
+                   (Vector2){(float)(size * 0.5), (float)(size * 0.5)},
+                   (float)rot, tame_color(color));
 }
 
 // Dünya noktasının EKRAN koordinatı. 3B can barı, isim etiketi ve hasar sayısı

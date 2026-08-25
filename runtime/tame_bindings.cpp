@@ -128,6 +128,10 @@ void tame_impl_plane(double x, double y, double z, double sx, double sz,
                      int64_t color);
 void tame_impl_line3(double x1, double y1, double z1, double x2, double y2,
                      double z2, int64_t color);
+void tame_impl_atlas_grid(int tex, int cols, int rows);
+int tame_impl_atlas_frames(int tex);
+void tame_impl_billboard_pro(int tex, double x, double y, double z, double size,
+                             double rot, int frame, int64_t color);
 void tame_impl_billboard(int tex, double x, double y, double z, double size,
                          int64_t color);
 int tame_impl_terrain_gen(int res, double sx, double sy, double sz, double base,
@@ -667,6 +671,24 @@ VMValue aot_tm3_billboard_ptr(VMValue *tex, VMValue *x, VMValue *y, VMValue *z,
                               VMValue *size, VMValue *color) {
   tame_impl_billboard((int)tm_int(tex), tm_num(x), tm_num(y), tm_num(z),
                       tm_num(size), tm_int(color));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_atlas_grid_ptr(VMValue *tex, VMValue *cols, VMValue *rows) {
+  tame_impl_atlas_grid((int)tm_int(tex), (int)tm_int(cols), (int)tm_int(rows));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_atlas_frames_ptr(VMValue *tex) {
+  return VM_INT(tame_impl_atlas_frames((int)tm_int(tex)));
+}
+
+VMValue aot_tm3_billboard_pro_ptr(VMValue *tex, VMValue *x, VMValue *y,
+                                  VMValue *z, VMValue *size, VMValue *rot,
+                                  VMValue *frame, VMValue *color) {
+  tame_impl_billboard_pro((int)tm_int(tex), tm_num(x), tm_num(y), tm_num(z),
+                          tm_num(size), tm_num(rot), (int)tm_int(frame),
+                          tm_int(color));
   return VM_VOID();
 }
 
