@@ -358,8 +358,16 @@ boşluklar; backlog'da yoklardı.
       zaman damgası `runtime/tame_impl.c` ve kardeşleriyle karşılaştırılıyor,
       eskiyse tazeleme komutunu söyleyen bir uyarı çıkıyor. Uyarı, hata
       değil: bayat arşivde gereken semboller varsa link tutar.
-      Kalan borç, arşivleri TAZELEMEK hâlâ elle: `android/dist` duruyor
-      (NDK bu makinede kurulu değil).
+      Kalan borç, arşivleri TAZELEMEK hâlâ elle.
+      Durum (ölçüldü 2026-08-26): `wasm/dist` TAZE — bu oturumda üç kez
+      yeniden derlendi (bulut, localStorage/indirme, kama mesh'i).
+      `android/dist` **11 Ağustos'tan kalma**, yani 25-26 Ağustos'ta eklenen
+      sembollerin hiçbiri içinde yok (`tm_download`, `tm_is_web`,
+      `tm3_anim_blend`, `tm3_billboard_pro`, `tm3_atlas_grid`,
+      `tm_sound_pan`, kama). NDK bu makinede kurulu değil — sürücü zaten
+      link'ten ÖNCE "NDK gerekir" diyip çıkıyor, dolayısıyla tazelik uyarısı
+      da o yola hiç varmıyor. NDK'lı bir makinede uyarı çıkacak ve
+      `android/build_tame_android.sh` demesi yeterli olacak.
 
 - [x] **`lib/test.tpr` artık BÜTÜN hataları gösteriyor.** ✅ 2026-08-24 —
       mesaj eziliyordu, yani ilk kırılan iddia (asıl sebebi söyleyen o)
@@ -419,8 +427,13 @@ boşluklar; backlog'da yoklardı.
       yazımla (`trigger3d`, `me3d`, `menu3d`). Yani iki dilli API sözü
       tutulmuş — eksik olan yalnız ikizlerdi.
 
-- [ ] **Windows shim'leri ölü kod.** Natif Windows 3.13.0'da bırakıldı;
-      `PLATFORM_WINDOWS` dalları bilerek yerinde ama bakımsız ve test edilmiyor.
+- [x] **Windows shim'leri: KARAR VERİLDİ, iş yok.** Natif Windows 3.13.0'da
+      bırakıldı; `PLATFORM_WINDOWS` dalları BİLEREK yerinde. Bunu bir görev
+      olarak taşımak yanlış — CLAUDE.md kararı zaten kayıtlı: sökmek
+      soketler/thread'ler/dl/yollar boyunca büyük ve riskli bir refactor,
+      desteklenen platformlarda görünür bir kazancı yok, durmasının maliyeti
+      ise sıfır. Bakımsız ve test edilmemiş sayılıyorlar; yeni kod yine shim
+      başlıkları üzerinden geçiyor ama Windows dalı isteğe bağlı.
 
 - [x] **Rampa artık GERÇEK kama mesh'i.** ✅ 2026-08-25 — iki seçenekten
       birincisi seçildi (konumlandırma değil, düzeltme): raylib'de kama
