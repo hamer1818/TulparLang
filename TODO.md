@@ -239,16 +239,13 @@ boşluklar; backlog'da yoklardı.
       var ama derleyici sessiz. Tanımlayıcı beklenen yerde bir anahtar kelime
       görüldüğünde mesaj bunu SÖYLEMELİ — ucuz ve doğrudan teşhis kazancı.
 
-- [ ] **AOT optimizasyonu `scene3d_arena`'da geçersiz IR üretiyor.**
-      `[AOT] Warning: optimization produced invalid IR at every level; using
-      the unoptimized module` — yani örnek OPTİMİZASYONSUZ derleniyor.
-      2026-08-12'de ölçüldü: tetikleyici bölge işinden ÖNCE de vardı (eski ve
-      yeni `lib/scene3d.tpr` ile birebir aynı), yani mevcut borç. Diğer üç
-      scene3d örneği ve arcade temiz — yalnız en büyük program tetikliyor,
-      bu da bir eşik/ölçek hatasına işaret ediyor. Uyarı görünür olduğu için
-      teknik olarak "sessiz" değil, ama sonuç öyle: en büyük 3B örnek
-      optimizasyonsuz koşuyor ve kimse bakmıyor. Doğrulayıcının (verifier) ne
-      dediğine bakılmalı.
+- [x] **AOT optimizasyonu `scene3d_arena`'da geçersiz IR üretiyordu.**
+      ✅ 2026-08-24 — doğrulayıcıya bakıldı ve teşhis kondu: sorun ölçekte
+      değil, LLVM 22'deki iki kusurda (O2+ `loop-idiom-recognize` yanlış
+      mangle edilmiş `llvm.memset`; O1 `InstCombine.foldOpIntoPhi` tipsiz
+      phi). Yalnız en büyük programda görünmesinin sebebi tetikleyen kod
+      şeklinin orada bulunması. Muhafazakâr bir optimizasyon basamağı
+      eklendi; ölçüm ~%12 hızlanma. Detay: CHANGELOG.
 
 - [ ] **Küre ↔ DÖNÜK kutu yaklaşık.** `_sph_box3` kutuyu eksen-hizalı
       varsayıyor; kutu-kutu çifti tam SAT'tan geçiyor, küre-kutu geçmiyor.
@@ -269,12 +266,10 @@ boşluklar; backlog'da yoklardı.
       hedeflerde patlayan bir sınıf — arşiv tazeliğini denetleyen bir kontrol
       (kaynak zaman damgası karşılaştırması) ucuz olur.
 
-- [ ] **`lib/test.tpr` yalnız SON hatayı gösteriyor.** Bir test fonksiyonunda
-      birden çok assert düşerse rapor edilen mesaj sonuncusu oluyor; ilk kırılan
-      yer kayboluyor. 2026-08-13'te bir bozma denemesinde çarpıldı: menü imleci
-      testi doğru şekilde kızardı ama mesaj alakasız bir satırı işaret ediyordu.
-      Teşhis kalitesi bu projede ucuz bir konu değil — `assert` hatası tam da
-      "test doğru şeyi söylemiyor" ailesindendi.
+- [x] **`lib/test.tpr` artık BÜTÜN hataları gösteriyor.** ✅ 2026-08-24 —
+      mesaj eziliyordu, yani ilk kırılan iddia (asıl sebebi söyleyen o)
+      kayboluyordu. İlk 5 tanesi yazılıyor, sonrası "(+N daha)" olarak
+      özetleniyor — bir döngü içindeki assert yüzlerce satır dökerdi.
 
 - [ ] **`packages/` testleri hiçbir otomasyonda koşmuyor.** `build.sh suites`
       benzeri bir hedef gerekiyor; ayrıca paket dizininden koşulmaları şart

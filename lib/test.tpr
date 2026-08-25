@@ -32,9 +32,24 @@ int _test_current_failed = 0;
 str _test_current_msg = "";
 str _test_current_name = "";
 
+// Bir test fonksiyonunda BİRDEN ÇOK assert düşebilir. Eskiden mesaj her
+// seferinde EZİLİYORDU, yani yalnız SONUNCUSU görünüyordu — ilk kırılan
+// iddia, asıl sebebi söyleyen o olduğu hâlde kayboluyordu. (Bu oturumda tam
+// bunun yüzünden yanlış yere bakıldı.)
+//
+// Artık hepsi birikiyor. İlk `_TEST_MSG_MAX` tanesi yazılıyor; sonrası
+// "(+N daha)" olarak özetleniyor — bir döngü içindeki assert yüzlerce satır
+// dökebilir ve o çıktı okunmaz olurdu.
+int _test_current_n = 0;
+int _TEST_MSG_MAX = 5;
+
 func _test_set_fail(str msg) {
     _test_current_failed = 1;
-    _test_current_msg = msg;
+    _test_current_n = _test_current_n + 1;
+    if (_test_current_n <= _TEST_MSG_MAX) {
+        if (length(_test_current_msg) == 0) { _test_current_msg = msg; }
+        else { _test_current_msg = _test_current_msg + "\n         + " + msg; }
+    }
 }
 
 // ----- Assertions ----------------------------------------------------------
@@ -175,11 +190,17 @@ func assert_status(json response, int expected_status) {
 func test(str name, str handler) {
     _test_current_failed = 0;
     _test_current_msg = "";
+    _test_current_n = 0;
     _test_current_name = name;
     call(handler);
     if (_test_current_failed == 1) {
         _test_fail = _test_fail + 1;
-        print("  FAIL " + name + ": " + _test_current_msg);
+        str ek = "";
+        if (_test_current_n > _TEST_MSG_MAX) {
+            ek = "\n         (+" + toString(_test_current_n - _TEST_MSG_MAX) +
+                 " daha)";
+        }
+        print("  FAIL " + name + ": " + _test_current_msg + ek);
     } else {
         _test_pass = _test_pass + 1;
         print("  PASS " + name);
