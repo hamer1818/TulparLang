@@ -1,0 +1,20 @@
+// Expected: `float[]` / `int[]` must carry the SAME element type as the
+// keyword spelling, so a mismatched array is rejected.
+//
+// EXPECT: Argument 1 of 'sayi_dizi'
+// EXPECT: expected arrayInt, got arrayStr
+//
+// This is where the bracket syntax is actually measurable. At runtime both
+// spellings behave identically (arrays are boxed either way), so a runtime
+// suite cannot tell whether `int[]` resolved to `arrayInt` or silently
+// degraded to untyped `array` — the program would run either way and the
+// typecheck value would be gone without a single visible symptom.
+
+func sayi_dizi(int[] xs): int { return length(xs); }
+
+func main() {
+    str[] s = ["a"];
+    print(sayi_dizi(s));
+}
+
+main();

@@ -1,0 +1,21 @@
+// Expected: the bracket spelling accepts what the keyword spelling accepts.
+//
+// Sibling of fail/09. Both directions matter: a too-strict rule would reject
+// `arrayFloat` where `float[]` is declared, which would make the two spellings
+// non-interchangeable and force a rewrite of existing code.
+
+func topla_kose(float[] xs): float { return xs[0] + xs[1]; }
+func topla_anahtar(arrayFloat xs): float { return xs[0] + xs[1]; }
+
+func main() {
+    float[] a = [1.0, 2.0];
+    arrayFloat b = [3.0, 4.0];
+    print(topla_kose(a));
+    print(topla_kose(b));      // anahtar kelimeyle bildirilen, köşeli parametreye
+    print(topla_anahtar(a));   // köşeliyle bildirilen, anahtar kelime parametresine
+    print(topla_anahtar(b));
+    int[] bos = [];
+    print(length(bos));
+}
+
+main();

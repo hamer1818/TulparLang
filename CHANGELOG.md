@@ -42,6 +42,29 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — `float[] x = []` sözdizimi
+
+Ölçüm, kaydedilmiş şikâyeti düzeltti: tipli diziler dilde ZATEN vardı
+(`arrayFloat`, `diziOndalık`, `arrayInt`, …). Eksik olan yalnız köşeli ayraç
+YAZIMIydı — C, Java, Go ve TypeScript'ten gelen herkesin ilk deneyeceği biçim,
+ve `float[] x = []` ayrıştırma hatası veriyordu.
+
+`parse_type` artık taban tipten sonra `[]` soneklerini tüketiyor. `[`
+görülmezse taban tip olduğu gibi dönüyor, yani mevcut hiçbir bildirim
+etkilenmiyor. `int[][]` gibi iç içe biçimler düz `array`'e düşüyor: motorun
+iç içe dizi için ayrı bir eleman tipi yok ve yanlış bir eleman tipi
+uydurmaktansa tipsiz kalmak doğru.
+
+İki yazımın AYNI tipe çözüldüğü bir typeinfer fixture'ıyla ölçülüyor. Bunu
+çalışma zamanı süiti GÖREMEZ — diziler her iki yazımda da kutulu, program
+ikisinde de çalışır — yani `int[]`'in sessizce tipsiz `array`'e düşmesi
+hiçbir belirti vermeden bütün typecheck kazancını götürürdü. Nitekim tam o
+bozma denendiğinde çalışma zamanı süiti yeşil kaldı, hatayı yalnız fixture
+yakaladı.
+
+Yeni süit: `tests/typed_array_syntax.test.tpr` + typeinfer `fail/09`,
+`pass/08`.
+
 ### Fixed — fonksiyon referansı yanlış yeri gösteriyordu
 
 Ölçüm, beklenenden farklı bir gerçek gösterdi: bir fonksiyon referansı çalışma

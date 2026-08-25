@@ -241,9 +241,19 @@ boşluklar; backlog'da yoklardı.
         satırı; `min`/`max` gibi dönüşü argümana bağlı olanlar dikkat ister
         (yanlış imza, imzasızlıktan kötüdür).
 
-- [ ] **Tipli dizi yok.** `float[] x = []` ayrıştırma hatası veriyor; yalnız
-      `array` var. Geniş fazı yazarken çarpıldı — hem performans hem typecheck
-      kaybı.
+- [x] **`float[]` sözdizimi geldi.** ✅ 2026-08-25 — ölçüm TODO'nun
+      tarifini düzeltti: tipli diziler dilde ZATEN vardı (`arrayFloat` /
+      `diziOndalık`), eksik olan yalnız köşeli ayraç YAZIMIydı — C/Java/Go/
+      TypeScript'ten gelen herkesin ilk deneyeceği biçim.
+      `parse_type` artık taban tipten sonra `[]` soneklerini tüketiyor;
+      `[` görülmezse taban tip olduğu gibi dönüyor, yani hiçbir mevcut
+      bildirim etkilenmiyor.
+      İki yazımın AYNI tipe çözüldüğü typeinfer fixture'ıyla ölçülüyor —
+      çalışma zamanı bunu göremez (diziler her hâlükârda kutulu), yani
+      eleman tipinin sessizce kaybolması hiçbir belirti vermezdi. Nitekim
+      o bozma, çalışma zamanı süiti YEŞİLKEN yalnız fixture'la yakalandı.
+      Yeni süit: tests/typed_array_syntax.test.tpr + typeinfer fail/09,
+      pass/08.
 
 - [x] **Fonksiyon referansı artık modelleniyor.** ✅ 2026-08-25 — ölçüm,
       TODO'nun tarifinden farklı bir gerçek gösterdi: referans çalışma

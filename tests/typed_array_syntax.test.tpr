@@ -1,0 +1,88 @@
+// `float[] x = []` — köşeli ayraç biçimi.
+//
+// Tipli diziler dilde ZATEN vardı (`arrayFloat` / `diziOndalık`); eksik olan
+// yalnız bu yazımdı ve `float[] x = []` ayrıştırma hatası veriyordu. C, Java,
+// Go ve TypeScript'ten gelen herkesin ilk deneyeceği biçim bu.
+//
+// Bu süitin işi iki şeyi ölçmek:
+//   1. Yazım GERÇEKTEN ayrıştırılıyor ve çalışıyor mu (bildirimde, parametrede,
+//      dönüş tipinde).
+//   2. İki yazım AYNI tipi mi veriyor — ayrışsalar, `float[]` sessizce tipsiz
+//      `array`'e düşer ve typecheck kazancı kaybolurdu. Bu, gözle bakınca
+//      görülmeyen bir kayıp olurdu, çünkü program yine çalışırdı.
+
+import "test";
+
+func topla_kose(float[] xs): float {
+    float t = 0.0;
+    int i = 0;
+    while (i < length(xs)) { t = t + xs[i]; i = i + 1; }
+    return t;
+}
+
+func topla_anahtar(arrayFloat xs): float {
+    float t = 0.0;
+    int i = 0;
+    while (i < length(xs)) { t = t + xs[i]; i = i + 1; }
+    return t;
+}
+
+func kose_dondur(): int[] { return [4, 5, 6]; }
+
+func bildirim_calisiyor() {
+    float[] a = [1.5, 2.5];
+    push(a, 3.0);
+    assert_eq_int(length(a), 3);
+    assert(a[0] + a[2] == 4.5, "ondalik dizi elemanlari toplanmiyor");
+
+    int[] b = [1, 2, 3];
+    assert_eq_int(b[1], 2);
+
+    str[] c = ["x", "y"];
+    assert_eq_str(c[1], "y");
+
+    bool[] d = [true, false];
+    assert(d[0], "mantiksal dizi ilk eleman true degil");
+    assert(d[1] == false, "mantiksal dizi ikinci eleman false degil");
+}
+
+func parametrede_calisiyor() {
+    float[] a = [1.0, 2.0, 4.0];
+    assert(topla_kose(a) == 7.0, "kose ayrac parametresi toplamiyor");
+}
+
+func donus_tipinde_calisiyor() {
+    int[] r = kose_dondur();
+    assert_eq_int(length(r), 3);
+    assert_eq_int(r[2], 6);
+}
+
+func iki_yazim_ayni_tip() {
+    // Aynı diziyi iki yazımla bildirilen iki fonksiyona geçirmek: ikisi de
+    // kabul etmeli ve AYNI sonucu vermeli. Yazımlar farklı tiplere çözülseydi
+    // biri tipsiz `array` olurdu.
+    float[] a = [1.25, 2.75];
+    assert(topla_kose(a) == topla_anahtar(a),
+           "kose ayrac ve anahtar kelime yazimlari farkli davraniyor");
+
+    arrayFloat b = [1.25, 2.75];
+    assert(topla_kose(b) == topla_anahtar(b),
+           "anahtar kelimeyle bildirilen dizi kose ayrac parametresine gecmiyor");
+}
+
+func bos_dizi_bildirilebiliyor() {
+    // TODO'nun kaydettiği asıl şikâyet buydu: `float[] x = []`.
+    float[] x = [];
+    assert_eq_int(length(x), 0);
+    push(x, 9.5);
+    assert_eq_int(length(x), 1);
+    assert(x[0] == 9.5, "bos bildirilen diziye eklenen deger tutmuyor");
+}
+
+print("=== tipli dizi sözdizimi ===");
+test("bildirimde", "bildirim_calisiyor");
+test("parametrede", "parametrede_calisiyor");
+test("donus tipinde", "donus_tipinde_calisiyor");
+test("iki yazim ayni tip", "iki_yazim_ayni_tip");
+test("bos dizi bildirilebiliyor", "bos_dizi_bildirilebiliyor");
+test_summary();
