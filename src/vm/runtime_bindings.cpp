@@ -3798,6 +3798,29 @@ VMValue aot_ord(VMValue s_val, VMValue i_val) {
   return VM_INT((int64_t)(unsigned char)s->chars[idx]);
 }
 
+// aot_chr(c) -> str : tek baytlık dize. `ord`un tersi ve dilin bir
+// asimetrisiydi: kod → karakter dönüşümü yoktu, bu yüzden metin girişi yazan
+// kod (sahne editörünün metin alanı) Tulpar tarafında bir ASCII tablosu
+// taşımak zorunda kalıyordu.
+//
+// Bayt düzeyinde: TulparLang dizeleri UTF-8 bayt dizisi ve length()/substring()
+// bayt tabanlı, yani `ord` ile birebir eş. Aralık dışı (0-255 değilse) boş
+// dize — sessizce çöp bayt üretmek metni bozardı.
+VMValue aot_chr(VMValue c_val) {
+  if (!IS_INT(c_val)) return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  int64_t c = AS_INT(c_val);
+  if (c < 0 || c > 255) return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  char buf[2];
+  buf[0] = (char)(unsigned char)c;
+  buf[1] = 0;
+  return VM_OBJ((Obj *)aot_allocate_string(buf, 1));
+}
+
+VMValue aot_chr_ptr(VMValue *a) {
+  if (!a) return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  return aot_chr(*a);
+}
+
 VMValue aot_ord_ptr(VMValue *a, VMValue *b) {
   if (!a || !b)
     return VM_INT(-1);

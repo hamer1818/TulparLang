@@ -80,8 +80,8 @@ Mimari kararlar ve gerekçeleri:
       alanı; editörde hiyerarşi girdisi + özellik paneli + sağ tık ile ekleme.
       Kancaları biçimde taşınmıyor (kod) ama yeniden yüklemede korunuyor.
 
-- [ ] **`chr` builtin'i yok** (`ord` var — asimetri). Editörün metin alanı
-      şimdilik Tulpar tarafında ASCII tablosundan okuyor.
+- [x] **`chr` builtin'i geldi.** ✅ 2026-08-24 — `ord`un tersi; editörün ASCII
+      tablosu silindi.
 
 - [ ] **Faz 4 — Köprü.** `tm_bridge_send/recv` (2 bağlama): JS ↔ wasm arasında
       JSON komut/olay kuyruğu. Masaüstünde stdin/stdout'a düşecek — böylece

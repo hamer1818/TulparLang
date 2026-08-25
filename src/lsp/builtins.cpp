@@ -36,6 +36,7 @@ const BuiltinEntry kBuiltins[] = {
     {"split",        "split(s: str, sep: str): array<str>",         "Ayraç üzerinden böler."},
     {"substring",    "substring(s: str, start: int, end: int): str", "[start, end) aralığını döner."},
     {"ord",          "ord(s: str, i: int): int",                    "s'nin i. byte'ının işaretsiz değeri (0-255); i aralık dışıysa -1. String'ler UTF-8 byte dizisi olduğundan (length/substring byte-tabanlı) elle UTF-8 işleme için — örn. tam bir çok-byte kod noktasını silmek (0x80-0xBF devam byte'larını geri sayarak)."},
+    {"chr",            "chr(c: int): str",                                "Bayt kodundan tek karakterlik dize (ord'un tersi). 0-255 disi bos dize."},
     {"contains",     "contains(s: str, needle: str): bool",         "Alt string araması."},
     {"range",        "range(n: int): array<int>",                   "[0, n) aralığında dizi üretir."},
 

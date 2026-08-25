@@ -860,6 +860,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"replace", TYPE_STRING, {TYPE_STRING, TYPE_STRING, TYPE_STRING}},
       {"substring", TYPE_STRING, {TYPE_STRING, TYPE_INT, TYPE_INT}},
       {"ord", TYPE_INT, {TYPE_STRING, TYPE_INT}},
+      {"chr", TYPE_STRING, {TYPE_INT}},
       // tame (2D oyun) builtin ailesi — import "tame" sarmalayıcılarının
       // altındaki tm_* native katmanı. Koordinat pozisyonları int VEYA float
       // kabul eder (oyunlar `x + dx` float'larıyla literal int'leri serbestçe

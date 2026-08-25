@@ -1430,6 +1430,11 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_ord =
       LLVMAddFunction(backend->module, "aot_ord_ptr", write_type);
 
+  // aot_chr(c) -> str : ord'un tersi. Tek argümanlı ptr ABI'si —
+  // `aot_read_file_ptr` ile aynı şekil.
+  backend->func_aot_chr =
+      LLVMAddFunction(backend->module, "aot_chr_ptr", read_type);
+
   // tame (2D oyun) builtin ailesi — k_tame_builtins tablosundan tek
   // döngüyle bildirilir; hepsi N-ptr VMValue ABI'si. Dispatch tarafı
   // LLVMGetNamedFunction ile bulur, struct alanı tutulmaz.
@@ -4782,6 +4787,18 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {s_void, i_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_ord, args,
                                     2, "ord_res");
+    }
+    if (node->name && strcmp(node->name, "chr") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef cv = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef cslot = LLVMBuildAlloca(backend->builder,
+                                           backend->vm_value_type, "chr_c");
+      LLVMBuildStore(backend->builder, cv, cslot);
+      LLVMValueRef cvoid = LLVMBuildBitCast(backend->builder, cslot,
+                                            backend->ptr_type, "chr_c_void");
+      LLVMValueRef args[] = {cvoid};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_chr, args, 1,
+                                    "chr_res");
     }
     // tame (2D oyun) builtin ailesi — tablo-güdümlü dispatch. Her arg bir
     // entry-alloca'ya konup pointer'ı geçirilir (ord'un N-ptr ABI'sinin

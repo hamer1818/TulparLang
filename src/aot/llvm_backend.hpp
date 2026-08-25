@@ -215,6 +215,7 @@ typedef struct {
   LLVMValueRef func_aot_display_width;    // display_width(s)->int : column width
   LLVMValueRef func_aot_fit_width;        // fit_width(s,w)->str : pad/truncate
   LLVMValueRef func_aot_ord;              // ord(s,i)->int : byte value at index i
+  LLVMValueRef func_aot_chr;              // chr(c)->str : tek baytlık dize
   LLVMValueRef func_aot_screen_open;      // screen_open() : enter TUI screen
   LLVMValueRef func_aot_screen_close;     // screen_close() : restore screen
   LLVMValueRef func_aot_screen_render;    // screen_render(frame) : atomic draw

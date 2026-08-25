@@ -8347,6 +8347,1517 @@ func _ed_scrollbar3(px, ctop, pw, cavail) {
     rect(px + pw - _us3(4), by, _us3(3), bh, rgb(90, 100, 118));
 }
 
+// Kod → karakter. Dilde `chr` YOKTU (yalnız `ord` vardı) ve metin alanı bu
+// yüzden Tulpar tarafında bir ASCII tablosu taşıyordu; artık builtin.
+// Yazdırılamayan kodlar boş dize döner, yani metne çöp bayt sızmıyor.
+func _g_chr3(c): str {
+    if (c < 32 || c > 126) { return ""; }
+    return chr(c);
+}
+
+func _g_begin() {
+    _g_tip3 = "";
+    _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+    _g_tid3 = 30000;
+    _g_mx3 = mouse_x(); _g_my3 = mouse_y();
+    int d = 0;
+    if (mouse_down(0)) { d = 1; }
+    _g_press3 = 0;
+    if (mouse_pressed(0)) { _g_press3 = 1; }
+    _g_rel3 = 0;
+    if (_g_down3 == 1 && d == 0) { _g_rel3 = 1; }
+    _g_down3 = d;
+    _g_hot3 = 0;
+}
+
+func _g_in(x, y, w, h): bool {
+    return _g_mx3 >= x && _g_mx3 < x + w && _g_my3 >= y && _g_my3 < y + h;
+}
+
+// Panel: ince başlık şeridi, punto DEĞİŞMİYOR — ayrım renkte.
+func _g_panel(x, y, w, h, title) {
+    rect(x, y, w, h, _G_BG3());
+    rect(x, y, w, _us3(16), _G_HEAD3());
+    rect_lines(x, y, w, h, _G_LINE3());
+    _g_txt3(title, x + _ED_PAD3, y + _g_cy3(_us3(16)), w - _ED_PAD3 * 2, _G_ACC3());
+}
+
+// Panel içinde bir bölüm başlığı.
+func _g_section(x, y, w, title) {
+    line(x, y, x + w, y, _G_LINE3());
+    _g_txt3(title, x + _us3(2), y + _us3(4), w - _us3(4), _G_ACC3());
+}
+
+func _g_button(id, x, y, w, h, label): bool {
+    _g_rect3(id, x, y, w, h);
+    bool over = _g_in(x, y, w, h);
+    if (over) { _g_hot3 = id; }
+    if (over && _g_press3 == 1) { _g_act3 = id; }
+    bool clicked = false;
+    if (_g_act3 == id && _g_rel3 == 1) {
+        if (over) { clicked = true; }
+        _g_act3 = 0;
+    }
+    int c = _G_BTN3();
+    if (over) { c = _G_BTNH3(); }
+    if (_g_act3 == id) { c = _G_BTNA3(); }
+    rect(x, y, w, h, c);
+    rect_lines(x, y, w, h, _G_LINE3());
+    _g_txtc3(label, x, y, w, h, _G_TXT3());
+    return clicked;
+}
+
+func _g_tog(id, x, y, w, h, label, on): bool {
+    _g_rect3(id, x, y, w, h);
+    bool over = _g_in(x, y, w, h);
+    if (over) { _g_hot3 = id; }
+    bool clicked = false;
+    if (over && _g_press3 == 1) { _g_act3 = id; }
+    if (_g_act3 == id && _g_rel3 == 1) {
+        if (over) { clicked = true; }
+        _g_act3 = 0;
+    }
+    int c = _G_BTN3();
+    if (on) { c = _G_BTNA3(); }
+    if (over && on == false) { c = _G_BTNH3(); }
+    rect(x, y, w, h, c);
+    rect_lines(x, y, w, h, _G_LINE3());
+    _g_txtc3(label, x, y, w, h, _G_TXT3());
+    return clicked;
+}
+
+// Sayı alanı: SÜRÜKLE tarar, TIKLA yazmaya geçer.
+func _g_num(id, x, y, w, h, val, step): float {
+    float out = val * 1.0;
+    _g_rect3(id, x, y, w, h);
+    bool over = _g_in(x, y, w, h);
+    if (over) { _g_hot3 = id; }
+
+    if (_g_focus3 == id) {
+        int ch = char_pressed();
+        while (ch > 0) {
+            if (ch >= 32 && ch < 127) { _g_buf3 = _g_buf3 + _g_chr3(ch); }
+            ch = char_pressed();
+        }
+        if (key_pressed(K_BACKSPACE) && length(_g_buf3) > 0) {
+            _g_buf3 = substring(_g_buf3, 0, length(_g_buf3) - 1);
+        }
+        if (key_pressed(K_ENTER)) { out = toFloat(_g_buf3); _g_focus3 = 0; }
+        if (key_pressed(K_ESC)) { _g_focus3 = 0; }
+        if (_g_press3 == 1 && over == false) { out = toFloat(_g_buf3); _g_focus3 = 0; }
+        rect(x, y, w, h, rgb(28, 38, 54));
+        rect_lines(x, y, w, h, _G_ACC3());
+        _g_txt3(_g_buf3 + "_", x + _us3(3), y + _g_cy3(h), w - _us3(6), _G_TXT3());
+        return out;
+    }
+
+    if (over && _g_press3 == 1) {
+        _g_act3 = id; _g_dv3 = val * 1.0; _g_dx3 = _g_mx3; _g_moved3 = 0;
+    }
+    if (_g_act3 == id && _g_down3 == 1) {
+        int dd = _g_mx3 - _g_dx3;
+        if (dd > 3 || dd < 0 - 3) {
+            if (_g_moved3 == 0) { ed_mark3d(); }
+            _g_moved3 = 1;
+        }
+        if (_g_moved3 == 1) { out = _g_dv3 + dd * step; }
+    }
+    if (_g_act3 == id && _g_rel3 == 1) {
+        if (_g_moved3 == 0 && over) { _g_focus3 = id; _g_buf3 = _sc_num3(val); }
+        _g_act3 = 0;
+    }
+    int c = _G_FLD3();
+    if (over) { c = rgb(42, 48, 60); }
+    rect(x, y, w, h, c);
+    rect_lines(x, y, w, h, _G_LINE3());
+    _g_txt3(_sc_num3(out), x + _us3(3), y + _g_cy3(h), w - _us3(6), _G_TXT3());
+    return out;
+}
+
+// Metin alanı. Sayı alanının aksine sürükleme yok — tıkla, yaz, Enter.
+// Odak yönetimi `_g_num` ile AYNI değişkenleri kullanıyor (`_g_focus3`,
+// `_g_buf3`): iki ayrı odak durumu tutmak, ikisinin aynı anda odaklı kalmasına
+// izin verirdi.
+func _g_text(id, x, y, w, h, val): str {
+    str out = val;
+    _g_rect3(id, x, y, w, h);
+    bool over = _g_in(x, y, w, h);
+    if (over) { _g_hot3 = id; }
+    if (_g_focus3 == id) {
+        int ch = char_pressed();
+        while (ch > 0) {
+            if (ch >= 32 && ch < 127) { _g_buf3 = _g_buf3 + _g_chr3(ch); }
+            ch = char_pressed();
+        }
+        if (key_pressed(K_BACKSPACE) && length(_g_buf3) > 0) {
+            _g_buf3 = substring(_g_buf3, 0, length(_g_buf3) - 1);
+        }
+        if (key_pressed(K_ENTER)) { out = _g_buf3; _g_focus3 = 0; }
+        if (key_pressed(K_ESC)) { _g_focus3 = 0; }
+        if (_g_press3 == 1 && over == false) { out = _g_buf3; _g_focus3 = 0; }
+        rect(x, y, w, h, rgb(28, 38, 54));
+        rect_lines(x, y, w, h, _G_ACC3());
+        _g_txt3(_g_buf3 + "_", x + _us3(3), y + _g_cy3(h), w - _us3(6), _G_TXT3());
+        return out;
+    }
+    if (over && _g_press3 == 1) { _g_focus3 = id; _g_buf3 = val; }
+    int c = _G_FLD3();
+    if (over) { c = rgb(42, 48, 60); }
+    rect(x, y, w, h, c);
+    rect_lines(x, y, w, h, _G_LINE3());
+    str show = val;
+    if (show == "") { show = "(adsiz)"; }
+    _g_txt3(show, x + _us3(3), y + _g_cy3(h), w - _us3(6), _G_TXT3());
+    return out;
+}
+
+func _g_item(id, x, y, w, h, label, sel): bool {
+    _g_rect3(id, x, y, w, h);
+    bool over = _g_in(x, y, w, h);
+    if (over) { _g_hot3 = id; }
+    bool clicked = false;
+    if (over && _g_press3 == 1) { _g_act3 = id; }
+    if (_g_act3 == id && _g_rel3 == 1) {
+        if (over) { clicked = true; }
+        _g_act3 = 0;
+    }
+    if (sel) { rect(x, y, w, h, _G_SEL3()); }
+    else {
+        if (over) { rect(x, y, w, h, rgb(40, 46, 58)); }
+    }
+    _g_txt3(label, x + _us3(4), y + _g_cy3(h), w - _us3(8), _G_TXT3());
+    return clicked;
+}
+
+// ===========================================================================
+// EDİTÖR PANELLERİ — araç çubuğu, hiyerarşi, inspector
+// ===========================================================================
+// Görüntü penceresi panellerin ARASINDA kalan dikdörtgen. Bütün yerleşim
+// bundan türüyor; hiçbir panel içeriği mutlak sayıyla konumlanmıyor.
+// ===========================================================================
+// EDİTÖR UYGULAMASI — sektör standardı yerleşim (Faz 13)
+// ===========================================================================
+// İlk sürümde editör, çalışan oyunun ÜSTÜNE TAB ile açılan bir kaplamaydı ve
+// bu yanlıştı: Unity/Unreal/Godot'ta editör UYGULAMADIR, oyun onun içindeki
+// bir panelde koşar. "Oynat" bir kip değişimi değil, sahnenin bir kopyasını
+// aynı pencerede çalıştırmak.
+//
+// Yerleşim:
+//   menü şeridi
+//   araç çubuğu           (Oynat/Dur ORTADA — Unity'nin imzası)
+//   hiyerarşi | SAHNE GÖRÜNÜMÜ | özellikler
+//   konsol
+//   durum çubuğu
+//
+// Sahne görünümü bir RENDER TEXTURE. Doğrudan çizip kırpmak yetmezdi: kamera
+// izdüşümü pencerenin en-boy oranını kullanır, görüntü ezik ve merkezi kaymış
+// çıkardı. Dokuya çizince raylib izdüşümü hedefin boyutundan türetiyor.
+int _ed_app3     = 0;    // editör uygulaması yerleşimi açık mı
+int _ed_playing3 = 0;    // sahne görünümünde oyun koşuyor mu
+int _ed_rt3      = 0 - 1;
+int _ed_rtw3     = 0;
+int _ed_rth3     = 0;
+
+int _ED_MENU_H3 = 40;
+int _ED_CONS_H3 = 96;
+int _ED_STAT_H3 = 36;
+
+// İmleç kilidi kararı TEK yerde ve saf: döngünün içine gömülü olduğu sürece
+// penceresiz sınanamıyordu ve bir hata tam buradan çıktı — editör sahneyi
+// yörünge kamerasıyla açıyor, o da fare bakışını (yani imleç kilidini) istiyor,
+// kilit de imleci GİZLİYOR. Editörde imleç kaybolunca panellere tıklanamıyordu.
+//
+// Editör kabuğu açıkken ASLA kilitlenmiyor — oynarken bile. Oyun içi fare
+// bakışı o hâlde sağ tuş sürüklemesine düşüyor; alternatifi "DUR düğmesine
+// ulaşamamak" olurdu ki daha kötü.
+func _s3_want_lock3(): int {
+    if (_s3_ui != UI_NONE || _game_over3 == 1) { return 0; }
+    // DÜZENLERKEN imleç daima serbest: panellere tıklanacak.
+    if (_ed_on3 == 1) { return 0; }
+    // Editörde OYNARKEN oyun normal davranır — fare yakalanır, imleç gizlenir.
+    // Kaçış kapısı ESC ve o DURDURUYOR; düzenlemeye dönünce yukarıdaki satır
+    // imleci zaten serbest bırakıyor. Ayrı bir "oynarken imleç serbest"
+    // durumu tutmak fazladan bir kip demekti ve simülasyon sürerken fareyi
+    // bırakmak yarım bir davranıştı.
+    return _cam_lock3;
+}
+
+func editor_app3d(on) {
+    if (on) { _ed_app3 = 1; _ed_on3 = 1; } else { _ed_app3 = 0; }
+}
+func editor_uygulamasi3d(ac) { editor_app3d(ac); }
+func editor_app_on3d(): bool { return _ed_app3 == 1; }
+func ed_playing3d(): bool { return _ed_playing3 == 1; }
+
+// ---- Yerleşim dikdörtgenleri ----------------------------------------------
+// Hepsi pencere boyutundan türüyor; parametreli ikizleri penceresiz sınanıyor.
+func _ed_view_x_at3(W): int { return _ED_HIER_W3; }
+func _ed_view_y_at3(H): int { return _ED_MENU_H3 + _ED_TOOL_H3; }
+func _ed_view_w_at3(W): int {
+    int w = W - _ED_HIER_W3 - _ED_INSP_W3;
+    if (w < 80) { w = 80; }
+    return w;
+}
+func _ed_view_h_at3(H): int {
+    int h = H - _ED_MENU_H3 - _ED_TOOL_H3 - _ED_CONS_H3 - _ED_STAT_H3;
+    if (h < 80) { h = 80; }
+    return h;
+}
+// Editör kabuğu açık mı? Açıksa sahne görünümü panellerin arasındaki
+// dikdörtgen; kapalıysa oyun tüm pencereyi kaplıyor. Tek bir yerde
+// kararlaştırılıyor ki çizim, seçim ışını ve fare denetimi ayrışmasın.
+func _ed_chrome3_on(): bool { return _ed_on3 == 1 || _ed_app3 == 1; }
+
+func _ed_view_x3(): int {
+    if (_ed_chrome3_on() == false) { return 0; }
+    return _ed_view_x_at3(screen_width());
+}
+func _ed_view_y3(): int {
+    if (_ed_chrome3_on() == false) { return 0; }
+    return _ed_view_y_at3(screen_height());
+}
+func _ed_view_w3(): int {
+    if (_ed_chrome3_on() == false) { return screen_width(); }
+    return _ed_view_w_at3(screen_width());
+}
+func _ed_view_h3(): int {
+    if (_ed_chrome3_on() == false) { return screen_height(); }
+    return _ed_view_h_at3(screen_height());
+}
+
+// Fare sahne görünümünün İÇİNDE mi? Panel denetimi artık "hangi panelin
+// üstünde" değil, "görünümün dışında mı" — pencere büyüdükçe panel sayısı
+// artabilir, tersini saymak daha az kırılgan.
+func _ed_in_view3(): bool {
+    int mx = mouse_x();
+    int my = mouse_y();
+    int vx = _ed_view_x3();
+    int vy = _ed_view_y3();
+    return mx >= vx && mx < vx + _ed_view_w3() && my >= vy && my < vy + _ed_view_h3();
+}
+func _ed_over_ui3(): bool { return _ed_in_view3() == false; }
+
+// Render texture görünüm boyutunu takip ediyor; pencere yeniden boyutlanırsa
+// yeniden kuruluyor (bayat boyutla çizmek görüntüyü esnetirdi).
+func _ed_rt_sync3() {
+    int w = _ed_view_w3();
+    int h = _ed_view_h3();
+    if (_ed_rt3 >= 0 && _ed_rtw3 == w && _ed_rth3 == h) { return; }
+    if (_ed_rt3 >= 0) { render_hedef_sil(_ed_rt3); }
+    _ed_rt3 = render_hedef(w, h);
+    _ed_rtw3 = w;
+    _ed_rth3 = h;
+}
+
+// ---- Menü şeridi -----------------------------------------------------------
+// Açılır menü YOK: tek kullanımlık bir menü makinesi yazmak, aynı işi yapan
+// düğmelerden çok daha fazla kod ve durum demekti. Şerit doğrudan eylem.
+func _ed_menubar3() {
+    int W = screen_width();
+    rect(0, 0, W, _ED_MENU_H3, rgb(30, 33, 40));
+    line(0, _ED_MENU_H3, W, _ED_MENU_H3, _G_LINE3());
+    int bh = _ED_MENU_H3 - _us3(4);
+    int gap = _us3(2);
+    int x = _ED_PAD3;
+
+    // "Yeni" YIKICI: kaydedilmemiş sahneyi tek tıkla siler. Kipsiz onay —
+    // düğme kendisi soruya dönüşüyor. Modal pencere makinesi kurmadan
+    // kullanıcıya ikinci bir karar noktası veriyor.
+    str nlbl = "Yeni";
+    if (_ed_confirm3 > 0.0) { nlbl = "EMIN MISIN?"; }
+    int w0 = _g_btnw3(nlbl);
+    // Her düğme çizilmeden ÖNCE sığdığı denetleniyor: sığmayan düğme
+    // çizilmiyor, bir sonrakinin üstüne binmiyor.
+    if (x + w0 <= W - _ED_PAD3) {
+        if (_g_button(9600, x, _us3(2), w0, bh, nlbl)) {
+            if (_ed_confirm3 > 0.0 || _ed_dirty3 == 0) {
+                ed_mark3d();
+                scene_load3d("{\"v\":1,\"world\":{\"ground\":0},\"entities\":[]}");
+                _ed_confirm3 = 0.0;
+            } else {
+                _ed_confirm3 = 4.0;
+            }
+        }
+        _g_tip_for3(9600, "Bos sahne  —  kaydedilmemis is silinir");
+        _g_tip_for3(9601, "Dosyayi yeniden ac  —  kaydedilmemis is gider");
+        x = x + w0 + gap;
+    }
+    int w1 = _g_btnw3("Ac");
+    if (x + w1 <= W - _ED_PAD3) {
+        if (_g_button(9601, x, _us3(2), w1, bh, "Ac")) {
+            if (_ed_path3 != "") { scene_file3d(_ed_path3); _ed_capture3(); }
+        }
+        x = x + w1 + gap;
+    }
+    int w2 = _g_btnw3("Kaydet");
+    if (x + w2 <= W - _ED_PAD3) {
+        if (_g_button(9602, x, _us3(2), w2, bh, "Kaydet")) { editor_save3d(); }
+        _g_tip_for3(9602, "Kaydet  (CTRL+S)");
+        x = x + w2 + _us3(12);
+    }
+    int w3 = _g_btnw3("Geri");
+    if (x + w3 <= W - _ED_PAD3) {
+        if (_g_button(9603, x, _us3(2), w3, bh, "Geri")) { ed_undo3d(); }
+        _g_tip_for3(9603, "Geri al  (CTRL+Z)");
+        x = x + w3 + gap;
+    }
+    int w4 = _g_btnw3("Ileri");
+    if (x + w4 <= W - _ED_PAD3) {
+        if (_g_button(9604, x, _us3(2), w4, bh, "Ileri")) { ed_redo3d(); }
+        _g_tip_for3(9604, "Yinele  (CTRL+Y)");
+        x = x + w4 + gap;
+    }
+
+    // Sağda dosya adı — yalnız son düğmeden SONRA yer kalırsa.
+    str f = _ed_path3;
+    if (f == "") { f = "(kaydedilmemis sahne)"; }
+    // Yıldız = kaydedilmemiş değişiklik. Her editörde standart.
+    if (_ed_dirty3 == 1) { f = "* " + f; }
+    int fw = _g_w3(f, _F3);
+    if (W - _ED_PAD3 - fw > x + _us3(12)) {
+        _g_txtr3(f, W - _ED_PAD3, _g_cy3(_ED_MENU_H3), _G_DIM3());
+    }
+}
+
+// Ortalanmış bir grubun x'i: ortalanır, ama SOL GRUBUN bittiği yerin gerisine
+// düşemez ve sağdan taşamaz. Sol sınır her zaman kazanıyor — çakışmaktansa
+// merkezden kaymak yeğdir. Saf, yani penceresiz sınanabiliyor.
+func _ed_center_x3(W, cw, floorX, pad): int {
+    int cx = toInt(W / 2) - toInt(cw / 2);
+    // SIRA önemli: önce sağ kenara sığdır, SONRA sol sınırı uygula. Sol sınır
+    // en son geldiği için her zaman kazanıyor — çakışmaktansa sağdan taşmak
+    // yeğ (taşan kısım kırpılır, çakışan iki düğme ise tıklanamaz olur).
+    //
+    // Burada bir de sağ kırpmadan ÖNCE ikinci bir sol denetimi vardı; ölüydü.
+    // İki yerde tutulan koruma, hangisinin yük taşıdığını sınanamaz yapıyor
+    // (bozma denemesi öndekini silmeye izin veriyordu).
+    if (cx + cw > W - pad) { cx = W - pad - cw; }
+    if (cx < floorX) { cx = floorX; }
+    return cx;
+}
+
+func _ed_toolbar3() {
+    int W = screen_width();
+    int ty = _ED_MENU_H3;
+    rect(0, ty, W, _ED_TOOL_H3, _G_HEAD3());
+    line(0, ty + _ED_TOOL_H3, W, ty + _ED_TOOL_H3, _G_LINE3());
+    int by = ty + toInt((_ED_TOOL_H3 - _ED_FLD3) / 2);
+    int gap = _us3(2);
+    int sep = _us3(10);
+
+    // Yerleşim ÖNCE ÖLÇÜLÜYOR, sonra çiziliyor. Eski hâli orta grubu doğrudan
+    // W/2'ye koyuyordu ve solun nerede bittiğine BAKMIYORDU — gerçek yazı
+    // tipiyle 2x ölçekte sol grup ortaya taşıyor ve düğmeler üst üste
+    // biniyordu. Ölçüp yerleştirmek bu sınıfı tümden kapatıyor.
+    str gl = "IZGARA " + _sc_num3(_ed_grid3);
+    if (_ed_grid3 <= 0.0) { gl = "IZGARA yok"; }
+    str us = "UI " + toString(_ed_ui3) + "x";
+    str pl = "OYNAT";
+    if (_ed_playing3 == 1) { pl = "OYNUYOR"; }
+
+    int w1 = _g_btnw3("SEC");
+    int w2 = _g_btnw3("TASI");
+    int w3 = _g_btnw3("OLCEK");
+    int w4 = _g_btnw3("DONDUR");
+    int w5 = _g_btnw3(gl);
+    int w9 = _g_btnw3(us);
+    int pw = _g_btnw3(pl) + _us3(16);
+    int sw = _g_btnw3("DUR") + _us3(16);
+
+    // Zorunlu sol grup: dört araç. Bunlar her zaman çizilir.
+    int coreEnd = _ED_PAD3 + w1 + gap + w2 + gap + w3 + gap + w4;
+    // Orta grup: ortalanır ama SOLUN BİTTİĞİ YERİN gerisine düşemez.
+    int cw = pw + gap + sw;
+    int floorX = coreEnd + sep;
+    int cx = _ed_center_x3(W, cw, floorX, _ED_PAD3);
+
+    // İsteğe bağlı düğmeler yalnız orta gruba ÇARPMADAN sığıyorsa çizilir.
+    // Bir editörde ızgara/ölçek düğmesinin kaybolması, üst üste binmiş iki
+    // düğmeden iyidir (ve ikisinin de kısayolu var: G ve yok).
+    int optX = coreEnd + sep;
+    int showGrid = 0;
+    int showUi = 0;
+    if (optX + w5 + sep <= cx) { showGrid = 1; }
+    if (showGrid == 1 && optX + w5 + gap + w9 + sep <= cx) { showUi = 1; }
+
+    int x = _ED_PAD3;
+    if (_g_tog(9002, x, by, w1, _ED_FLD3, "SEC", _ed_mode3 == ED_SELECT)) { _ed_mode3 = ED_SELECT; }
+    _g_tip_for3(9002, "Sec  (Q)");
+    x = x + w1 + gap;
+    if (_g_tog(9003, x, by, w2, _ED_FLD3, "TASI", _ed_mode3 == ED_MOVE)) { _ed_mode3 = ED_MOVE; }
+    _g_tip_for3(9003, "Tasi  (W)  —  oklardan surukle");
+    x = x + w2 + gap;
+    if (_g_tog(9004, x, by, w3, _ED_FLD3, "OLCEK", _ed_mode3 == ED_SCALE)) { _ed_mode3 = ED_SCALE; }
+    _g_tip_for3(9004, "Olcekle  (R)  —  oklardan surukle");
+    x = x + w3 + gap;
+    if (_g_tog(9005, x, by, w4, _ED_FLD3, "DONDUR", _ed_mode3 == ED_ROTATE)) { _ed_mode3 = ED_ROTATE; }
+    _g_tip_for3(9005, "Dondur  (E)  —  sol/sag oklar");
+
+    if (showGrid == 1) {
+        if (_g_tog(9006, optX, by, w5, _ED_FLD3, gl, _ed_grid3 > 0.0)) {
+            if (_ed_grid3 > 0.0) { _ed_grid3 = 0.0; } else { _ed_grid3 = 0.5; }
+        }
+        _g_tip_for3(9006, "Izgaraya oturt  (G)");
+    }
+    if (showUi == 1) {
+        if (_g_button(9012, optX + w5 + gap, by, w9, _ED_FLD3, us)) {
+            int nk = _ed_ui3 + 1;
+            if (nk > 3) { nk = 1; }
+            editor_ui_scale3d(nk);
+            return;   // ölçüler değişti; bu karenin kalanını çizme
+        }
+        _g_tip_for3(9012, "Arayuz boyutu: 1x / 2x / 3x");
+    }
+
+    // ORTA: oynatma denetimleri. Unity'nin imzası bu — kullanıcı gözünü
+    // ekranın ortasına atınca "oynat"ı bulur.
+    if (_g_tog(9610, cx, by, pw, _ED_FLD3, pl, _ed_playing3 == 1)) {
+        if (_ed_playing3 == 0) { ed_play3d(); }
+    }
+    if (_g_button(9611, cx + pw + gap, by, sw, _ED_FLD3, "DUR")) { ed_stop3d(); }
+    _g_tip_for3(9610, "Oyunu sahnenin KOPYASI uzerinde calistir");
+    _g_tip_for3(9611, "Durdur  (ESC)  —  oynarken olanlar atilir");
+
+    // SAĞ: durum. Yalnız orta grubun bitişinden SONRA yer kalırsa.
+    str st = toString(yasayan_sayi3d()) + " varlik  " +
+             toString(davranis_sayisi3d()) + " davranis  " +
+             toString(kural_sayisi3d()) + " kural";
+    int stw = _g_w3(st, _F3);
+    if (W - _ED_PAD3 - stw > cx + cw + sep) {
+        _g_txtr3(st, W - _ED_PAD3, by + _g_cy3(_ED_FLD3), _G_DIM3());
+    }
+}
+
+// ---- Oynat / Dur -----------------------------------------------------------
+// Unity modeli: Oynat, ekrandaki düzenlenmiş sahneyi yazarlık durumu olarak
+// sabitler ve KOPYASINI koşturur. Dur kopyayı atar. Oynarken yapılan hiçbir
+// değişiklik kaydedilmez.
+func ed_play3d() {
+    if (_ed_playing3 == 1) { return; }
+    _ed_capture3();
+    _ed_playing3 = 1;
+    _ed_on3 = 0;
+    _g_focus3 = 0;
+}
+func ed_stop3d() {
+    if (_ed_playing3 == 0) { return; }
+    _ed_apply_json3(_sc_authored3);
+    _ed_playing3 = 0;
+    _ed_on3 = 1;
+    _g_focus3 = 0;
+}
+func oynat3d() { ed_play3d(); }
+func dur3d() { ed_stop3d(); }
+
+// ---- Konsol ----------------------------------------------------------------
+// Motorun tanılama halka tamponunu gösteriyor. Ayrı bir kayıt sistemi
+// yazılmadı — `log3d`/`uyari3d`/`hata3d` zaten oraya yazıyor.
+func _ed_console3() {
+    int W = screen_width();
+    int H = screen_height();
+    int cy = H - _ED_CONS_H3 - _ED_STAT_H3;
+    _g_panel(0, cy, W, _ED_CONS_H3, "KONSOL");
+    int rows = toInt((_ED_CONS_H3 - _us3(18)) / _g_lh3());
+    int n = length(_lg_txt);
+    int start = n - rows;
+    if (start < 0) { start = 0; }
+    int i = start;
+    int r = 0;
+    while (i < n) {
+        int c = _G_TXT3();
+        if (_lg_sev[i] == LOG_WARN) { c = rgb(255, 200, 90); }
+        if (_lg_sev[i] == LOG_ERR)  { c = rgb(255, 120, 110); }
+        _g_txt3(_lg_txt[i], _ED_PAD3, cy + _us3(16) + r * _g_lh3(), W - _ED_PAD3 * 2, c);
+        i = i + 1;
+        r = r + 1;
+    }
+}
+
+// ---- Durum çubuğu ----------------------------------------------------------
+func _ed_statusbar3() {
+    int W = screen_width();
+    int H = screen_height();
+    int sy = H - _ED_STAT_H3;
+    rect(0, sy, W, _ED_STAT_H3, rgb(30, 33, 40));
+    line(0, sy, W, sy, _G_LINE3());
+    str md = "SEC";
+    if (_ed_mode3 == ED_MOVE)   { md = "TASI"; }
+    if (_ed_mode3 == ED_SCALE)  { md = "OLCEK"; }
+    if (_ed_mode3 == ED_ROTATE) { md = "DONDUR"; }
+    str left = md + "   " + toString(yasayan_sayi3d()) + " varlik   " +
+               toString(davranis_sayisi3d()) + " davranis   " +
+               toString(kural_sayisi3d()) + " kural";
+    if (_ed_playing3 == 1) { left = "OYNUYOR   " + left; }
+    else {
+        int ss = _slot_of3(_ed_sel3e);
+        if (ss >= 0) {
+            Ent3 se = _e3[ss];
+            str sn = _sc_nm_of3(_ed_sel3e);
+            if (sn == "") { sn = _sc_tag_nm3(se.tag); }
+            str cok = "";
+            if (ed_select_count3d() > 1) {
+                cok = " +" + toString(ed_select_count3d() - 1);
+            }
+            left = sn + cok + "  (" + _sc_num3(se.x) + ", " + _sc_num3(se.y) +
+                   ", " + _sc_num3(se.z) + ")   " + left;
+        }
+    }
+    _g_txt3(left, _ED_PAD3, sy + _g_cy3(_ED_STAT_H3), toInt(W / 2), _G_DIM3());
+    str right = "gorunum " + toString(_ed_view_w3()) + "x" + toString(_ed_view_h3()) +
+                " | rt " + toString(_ed_rt3) + " | SAG TUS+WASD uc | Q/W/E/R arac | F cercevele | CTRL+tik coklu secim | CTRL+S kaydet";
+    if (_ed_playing3 == 1) { right = "OYNUYOR — ESC durdurur"; }
+    if (_ed_msg_t3 > 0.0) { right = _ed_msg3; }
+    int rw = _g_w3(right, _F3);
+    if (W - _ED_PAD3 - rw > toInt(W / 2) + 8) {
+        int c = _G_DIM3();
+        if (_ed_msg_t3 > 0.0) { c = rgb(140, 240, 160); }
+        _g_txtr3(right, W - _ED_PAD3, sy + _g_cy3(_ED_STAT_H3), c);
+    }
+}
+
+// ---- Yön göstergesi --------------------------------------------------------
+// Sahne görünümünün köşesinde X/Y/Z okları. Serbest uçan bir kamerada "hangi
+// yöne bakıyorum?" sorusu sürekli soruluyor; üç editörde de bu gösterge var.
+//
+// İzdüşüm ORTOGRAFİK: dünya vektörünün kamera sağ/yukarı vektörlerine
+// izdüşümü. Perspektif kullanmak gerekmiyor — gösterge yönü anlatıyor, konumu
+// değil — ve perspektif kameranın arkasındaki eksenleri ters çevirirdi.
+float _ed_axsx3 = 0.0;
+float _ed_axsy3 = 0.0;
+
+func _ed_axis_screen3(vx, vy, vz) {
+    float yr = _ed_yaw3 * DEG2RAD3;
+    float pr = _ed_pitch3 * DEG2RAD3;
+    float sp = sin(pr);
+    // Taban `_ed_ray3` ile AYNI: sağ = (cos y, 0, sin y),
+    // yukarı = (-sin y·sin p, cos p, cos y·sin p).
+    float rx = cos(yr);
+    float rz = sin(yr);
+    float ux = 0.0 - sin(yr) * sp;
+    float uy = cos(pr);
+    float uz = cos(yr) * sp;
+    _ed_axsx3 = vx * rx + vz * rz;
+    // Ekran Y'si aşağı büyüyor.
+    _ed_axsy3 = 0.0 - (vx * ux + vy * uy + vz * uz);
+}
+
+func _ed_axis_widget3() {
+    int r = _us3(26);
+    int cx = _ed_view_x3() + _ed_view_w3() - r - _us3(12);
+    int cy = _ed_view_y3() + r + _us3(12);
+    circle(cx, cy, r * 1.0 + _us3(3), rgba(18, 21, 28, 170));
+    _ed_axis_one3(cx, cy, r, 1.0, 0.0, 0.0, rgb(232, 84, 74), "X");
+    _ed_axis_one3(cx, cy, r, 0.0, 1.0, 0.0, rgb(112, 214, 112), "Y");
+    _ed_axis_one3(cx, cy, r, 0.0, 0.0, 1.0, rgb(96, 150, 246), "Z");
+}
+
+func _ed_axis_one3(cx, cy, r, vx, vy, vz, col, lbl) {
+    _ed_axis_screen3(vx, vy, vz);
+    int ex = cx + toInt(_ed_axsx3 * r);
+    int ey = cy + toInt(_ed_axsy3 * r);
+    line(cx, cy, ex, ey, col);
+    // Etiket yalnız eksen ekrana yeterince yansıyorsa — kameraya doğru bakan
+    // bir eksen bir noktaya çöker ve harf merkeze yığılırdı.
+    float m = sqrt(_ed_axsx3 * _ed_axsx3 + _ed_axsy3 * _ed_axsy3);
+    if (m > 0.35) {
+        _g_draw3(lbl, ex - toInt(_F3 / 4), ey - toInt(_F3 / 2), _F3, col);
+    }
+}
+
+// ---- Kabuk -----------------------------------------------------------------
+func _ed_chrome3() {
+    _g_begin();
+    _ed_menubar3();
+    _ed_toolbar3();
+    _ed_hierarchy3();
+    _ed_inspector3();
+    _ed_console3();
+    _ed_statusbar3();
+    // Sahne görünümünün çerçevesi — panel gibi görünsün.
+    int vx = _ed_view_x3();
+    int vy = _ed_view_y3();
+    int vw = _ed_view_w3();
+    int vh = _ed_view_h3();
+    rect_lines(vx - 1, vy - 1, vw + 2, vh + 2, _G_LINE3());
+    if (_ed_playing3 == 0) { _ed_axis_widget3(); }
+    // Bağlam menüsü panellerin ÜSTÜNDE ama çakışma denetiminden ÖNCE:
+    // menü kasıtlı olarak altındakileri örtüyor, onu çakışma saymak yanlış
+    // olurdu. Denetim menü kapalıyken zaten her şeyi görüyor.
+    if (_ed_ctx_on3 == 1) {
+        _ed_ctx_draw3();
+        _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+    }
+    _g_check_overlaps3();
+    _g_tip_draw3();   // EN SON: ipucu her şeyin üstünde (denetime girmiyor)
+    // Görünüm neden boşsa ONU SÖYLE. Sessiz boş bir panel, kullanıcıyı
+    // "editör bozuk" sanmaya götürüyor; sebebi ekranda yazmak gerekiyor.
+    if (_ed_rt3 < 0) {
+        _g_txt3("SAHNE GORUNUMU KURULAMADI (render texture)", vx + _us3(12),
+                vy + _us3(12), vw - _us3(24), rgb(255, 120, 110));
+        _g_txt3("grafik surucusu render texture desteklemiyor olabilir",
+                vx + _us3(12), vy + _us3(12) + _g_lh3(), vw - _us3(24), _G_DIM3());
+        return;
+    }
+    if (yasayan_sayi3d() == 0) {
+        _g_txt3("SAHNE BOS", vx + _us3(12), vy + _us3(12), vw - _us3(24), _G_ACC3());
+        _g_txt3("soldaki kutu/kure/boru/duvar dugmeleriyle varlik ekle",
+                vx + _us3(12), vy + _us3(12) + _g_lh3(), vw - _us3(24), _G_DIM3());
+        _g_txt3("sahne dosyasi acilamadiysa konsola bak (altta)",
+                vx + _us3(12), vy + _us3(12) + _g_lh3() * 2, vw - _us3(24), _G_DIM3());
+    }
+}
+
+// Inspector davranış satırının alan genişliği (panel genişliğinden türüyor).
+func _ed_bhw3(pw, namew, xw): int {
+    return toInt((pw - _ED_PAD3 * 2 - namew - xw - 12) / 2);
+}
+// Hiyerarşi ekleme düğmelerinin genişliği.
+func _ed_addw3(pw, gap): int {
+    return toInt((pw - _ED_PAD3 * 2 - gap * 3) / 4);
+}
+
+// Alt sayaç için ayrılan yükseklik ve METNİN Y'si. Sabit 14 idi ve 2x'te metin
+// 20 piksel olduğu için sayaç panelin altından taşıp KONSOLUN İÇİNE yazıyordu.
+// Saf, yani "metnin altı paneli aşmıyor" değişmezi penceresiz sınanabiliyor.
+func _ed_foot_h3(): int { return _g_lh3(); }
+func _ed_foot_y3(py, ph): int { return py + ph - _ed_foot_h3() + _us3(2); }
+
+// ---- Hiyerarşi araması -----------------------------------------------------
+// Sahne büyüdükçe listede gezinmek imkânsızlaşıyor; her editörde arama kutusu
+// var. Eşleşme BÜYÜK/KÜÇÜK HARF duyarsız: "Duvar" ararken "duvar"ı bulamamak
+// sessiz bir hayal kırıklığı olurdu.
+str _ed_filter3 = "";
+
+func _ed_lower3(c): int {
+    if (c >= 65 && c <= 90) { return c + 32; }
+    return c;
+}
+
+// hay içinde needle geçiyor mu? (ASCII, harf duyarsız)
+func _ed_match3(hay, needle): bool {
+    if (needle == "") { return true; }
+    int hn = length(hay);
+    int nn = length(needle);
+    if (nn > hn) { return false; }
+    int i = 0;
+    while (i <= hn - nn) {
+        int j = 0;
+        int ok = 1;
+        while (j < nn) {
+            if (_ed_lower3(ord(hay, i + j)) != _ed_lower3(ord(needle, j))) {
+                ok = 0;
+                j = nn;
+            } else { j = j + 1; }
+        }
+        if (ok == 1) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+func _ed_hierarchy3() {
+    int py = _ed_view_y3();
+    int ph = _ed_view_h3();
+    int pw = _ED_HIER_W3;
+    _g_panel(0, py, pw, ph, "HIYERARSI");
+
+    // Ekleme düğmeleri: dört eşit sütun, panel genişliğinden türetiliyor.
+    // İçerik başlık şeridinin ALTINDAN başlıyor. Sabit 20 idi ve 2x ölçekte
+    // şerit 32 piksel olduğu için düğmeler başlığın üstüne biniyordu.
+    int by = py + _us3(16) + _us3(4);
+    int gap = 3;
+    int bw = _ed_addw3(pw, gap);
+    int bx = _ED_PAD3;
+    if (_g_button(9100, bx, by, bw, _ED_FLD3, "kutu")) {
+        ed_mark3d(); ed_select3d(ed_add3d(TAG_PROP, SHAPE_CUBE, _ed_cx3, 1.0, _ed_cz3));
+    }
+    bx = bx + bw + gap;
+    if (_g_button(9101, bx, by, bw, _ED_FLD3, "kure")) {
+        ed_mark3d(); ed_select3d(ed_add3d(TAG_ITEM, SHAPE_SPHERE, _ed_cx3, 1.0, _ed_cz3));
+    }
+    bx = bx + bw + gap;
+    if (_g_button(9102, bx, by, bw, _ED_FLD3, "boru")) {
+        ed_mark3d(); ed_select3d(ed_add3d(TAG_PROP, SHAPE_CYL, _ed_cx3, 1.0, _ed_cz3));
+    }
+    bx = bx + bw + gap;
+    if (_g_button(9103, bx, by, bw, _ED_FLD3, "duvar")) {
+        ed_mark3d();
+        int nw = ed_add3d(TAG_WALL, SHAPE_CUBE, _ed_cx3, 1.5, _ed_cz3);
+        ed_resize3d(nw, 6.0, 3.0, 1.0);
+        ed_select3d(nw);
+    }
+
+    // Arama kutusu ekleme düğmelerinin ALTINDA: en çok kullanılan iki şey
+    // (ekle, ara) listeye en yakın yerde.
+    int sy2 = by + _ED_FLD3 + _us3(4);
+    _ed_filter3 = _g_text(11990, _ED_PAD3, sy2, pw - _ED_PAD3 * 2, _ED_FLD3, _ed_filter3);
+    _g_tip_for3(11990, "Ada ya da etikete gore suz");
+
+    int listy = sy2 + _ED_FLD3 + _us3(4);
+    int foot = _ed_foot_h3();
+    int rows = toInt((ph - (listy - py) - foot) / _ED_ROW3);
+    if (rows < 1) { rows = 1; }
+
+    if (_g_in(0, py, pw, ph)) {
+        float wh = mouse_wheel();
+        if (wh > 0.5) { _ed_hscroll3 = _ed_hscroll3 - 3; }
+        if (wh < 0.0 - 0.5) { _ed_hscroll3 = _ed_hscroll3 + 3; }
+    }
+    array slots = [];
+    int i = 0;
+    while (i < length(_e3)) {
+        if (_e3[i].alive == 1) {
+            str rn = _sc_nm_of3(_mk_handle3(i));
+            if (_ed_match3(rn, _ed_filter3) ||
+                _ed_match3(_sc_tag_nm3(_e3[i].tag), _ed_filter3)) {
+                push(slots, i);
+            }
+        }
+        i = i + 1;
+    }
+    int n = length(slots);
+    int maxs = n - rows;
+    if (maxs < 0) { maxs = 0; }
+    if (_ed_hscroll3 > maxs) { _ed_hscroll3 = maxs; }
+    if (_ed_hscroll3 < 0) { _ed_hscroll3 = 0; }
+
+    // DÜNYA hiyerarşinin ilk satırı ve bir NESNE gibi seçiliyor. Godot'nun
+    // WorldEnvironment'ı ile aynı fikir: yerçekimi, gökyüzü, su, arazi da
+    // sahnenin parçası; onları ayrı bir sekmede saklamak "sahnede ne var?"
+    // sorusunun cevabını eksik bırakıyordu.
+    if (_g_item(11999, _us3(2), listy, pw - _us3(4), _ED_ROW3 - _us3(1),
+                "DUNYA", _ed_tab3 == 1)) {
+        _ed_tab3 = 1;
+        _ed_sel3e = 0 - 1;
+    }
+    listy = listy + _ED_ROW3;
+    rows = rows - 1;
+
+    int r = 0;
+    while (r < rows && r + _ed_hscroll3 < n) {
+        int sl = slots[r + _ed_hscroll3];
+        Ent3 e = _e3[sl];
+        int hnd = _mk_handle3(sl);
+        str nm = _sc_nm_of3(hnd);
+        if (nm == "") { nm = _sc_tag_nm3(e.tag) + "." + toString(sl); }
+        if (_g_item(12000 + r, _us3(2), listy + r * _ED_ROW3, pw - _us3(4),
+                    _ED_ROW3 - _us3(1),
+                    nm, _ed_msel_has3(hnd) && _ed_tab3 == 0)) {
+            if (key_down(K_LCTRL)) { ed_select_toggle3d(hnd); }
+            else { ed_select3d(hnd); }
+            _ed_tab3 = 0;
+        }
+        r = r + 1;
+    }
+    // Bölgeler varlıkların ALTINDA, ayrı bir grup: entity değiller (motor
+    // onları ayrı tutuyor) ama sahnenin parçalarılar ve seçilebilmeleri
+    // gerekiyor.
+    int zn = length(_trg_x);
+    int zr = 0;
+    while (zr < zn && r + zr < rows) {
+        str zl = "bolge." + toString(zr) + " (" + _sc_tag_nm3(_trg_tag[zr]) + ")";
+        if (_ed_match3(zl, _ed_filter3)) {
+            if (_g_item(13000 + zr, _us3(2), listy + (r + zr) * _ED_ROW3,
+                        pw - _us3(4), _ED_ROW3 - _us3(1), zl,
+                        _ed_tab3 == 2 && _ed_zsel3 == zr)) {
+                _ed_tab3 = 2;
+                _ed_zsel3 = zr;
+                _ed_sel3e = 0 - 1;
+            }
+        }
+        zr = zr + 1;
+    }
+
+    if (n == 0 && _ed_filter3 != "") {
+        _g_txt3("eslesme yok: " + _ed_filter3, _ED_PAD3, listy + _us3(4),
+                pw - _ED_PAD3 * 2, _G_DIM3());
+    }
+    if (n > rows) {
+        _g_txt3(toString(_ed_hscroll3 + 1) + "-" + toString(_ed_hscroll3 + rows) +
+                " / " + toString(n), _ED_PAD3, _ed_foot_y3(py, ph),
+                pw - _ED_PAD3 * 2,
+                _G_DIM3());
+    }
+}
+
+func _ed_next_tag3(t): int {
+    if (t == TAG_PLAYER) { return TAG_ITEM; }
+    if (t == TAG_ITEM)   { return TAG_WALL; }
+    if (t == TAG_WALL)   { return TAG_ENEMY; }
+    if (t == TAG_ENEMY)  { return TAG_PROP; }
+    return TAG_PLAYER;
+}
+func _ed_next_shape3(sh): int {
+    // SHAPE_MODEL döngüde YOK: düğmeyle "model" yapmak modelsiz bir MODEL
+    // varlık üretirdi. Modelli varlığın şekli zaten düğmeye bağlanmıyor.
+    if (sh == SHAPE_CUBE)   { return SHAPE_SPHERE; }
+    if (sh == SHAPE_SPHERE) { return SHAPE_CYL; }
+    if (sh == SHAPE_CYL)    { return SHAPE_RAMP; }
+    return SHAPE_CUBE;
+}
+func _ed_bh_name3(k): str {
+    if (k == BH_MOVE)   { return "hareket"; }
+    if (k == BH_CHASE)  { return "kovala"; }
+    if (k == BH_PATROL) { return "devriye"; }
+    if (k == BH_SPIN)   { return "don"; }
+    if (k == BH_BOB)    { return "salin"; }
+    return "ates";
+}
+
+// Üç eşit sayı alanı için sütun genişliği — panel genişliğinden türüyor.
+func _ed_f3w3(pw, labw): int {
+    return toInt((pw - _ED_PAD3 * 2 - labw - 8) / 3);
+}
+
+// Inspector sekmesi: 0 = seçili varlık, 1 = dünya ayarları.
+// 0 = seçili varlık, 1 = dünya ayarları, 2 = seçili BÖLGE.
+int _ed_tab3 = 0;
+int _ed_zsel3 = 0 - 1;   // seçili bölge indeksi
+// Inspector kaydırması. Panel içeriği (çok davranışlı bir varlık, dünya
+// ayarları + kurallar) panelden uzun olabiliyor; kırpma olmadan alttaki
+// konsolun üstüne taşardı.
+int _ed_iscroll3 = 0;
+int _ed_icontent3 = 0;    // son karede içeriğin bittiği y (kaydırma sınırı)
+
+// Kaydırma sınırı. Döngünün içine gömülü kalsaydı penceresiz sınanamazdı; bu
+// oturumda "sınanamayan yerdeki hata" birkaç kez tekrarlandı.
+func _ed_clamp_scroll3(scroll, content, top, avail): int {
+    int maxs = content - (top + avail);
+    if (maxs < 0) { maxs = 0; }
+    int v = scroll;
+    if (v > maxs) { v = maxs; }
+    if (v < 0) { v = 0; }
+    return v;
+}
+
+func _ed_next_act3(a): int {
+    if (a == ACT_COLLECT) { return ACT_DAMAGE; }
+    if (a == ACT_DAMAGE)  { return ACT_KILL; }
+    if (a == ACT_KILL)    { return ACT_HURT; }
+    if (a == ACT_HURT)    { return ACT_WIN; }
+    if (a == ACT_WIN)     { return ACT_LOSE; }
+    return ACT_COLLECT;
+}
+
+// ---- Kurallar --------------------------------------------------------------
+// Kurallar sahneyi OYUN yapan şey (topla / hasar ver / kazan / kaybet) ve
+// şimdiye kadar yalnız JSON'a elle yazılabiliyordu — yani editörde kurulan bir
+// sahne oynanabilir bir oyun olamıyordu.
+func _ed_rules_panel3(px, y, pw): int {
+    int lx = px + _ED_PAD3;
+    int inner = pw - _ED_PAD3 * 2;
+    int third = toInt((inner - 8) / 3);
+    int xw = _us3(16);
+    int i = 0;
+    while (i < length(_rl3)) {
+        Rule3 r = _rl3[i];
+        if (r.kind == RULE_HIT) {
+            if (_g_button(21000 + i * 8, lx, y, third, _ED_FLD3, _sc_tag_nm3(r.a))) {
+                ed_mark3d();
+                Rule3 nr = _rl3[i]; nr.a = _ed_next_tag3(nr.a); _rl3[i] = nr;
+            }
+            if (_g_button(21001 + i * 8, lx + third + 4, y, third, _ED_FLD3,
+                          _sc_tag_nm3(r.b))) {
+                ed_mark3d();
+                Rule3 nr2 = _rl3[i]; nr2.b = _ed_next_tag3(nr2.b); _rl3[i] = nr2;
+            }
+        } else {
+            _g_txt3("bitince", lx, _g_ly3(y), third, _G_DIM3());
+            if (_g_button(21000 + i * 8, lx + third + 4, y, third, _ED_FLD3,
+                          _sc_tag_nm3(r.a))) {
+                ed_mark3d();
+                Rule3 nr3 = _rl3[i]; nr3.a = _ed_next_tag3(nr3.a); _rl3[i] = nr3;
+            }
+        }
+        if (_g_button(21002 + i * 8, px + pw - _ED_PAD3 - xw, y, xw, _ED_FLD3, "x")) {
+            ed_mark3d();
+            int last = length(_rl3) - 1;
+            if (i != last) { _rl3[i] = _rl3[last]; }
+            pop(_rl3);
+            return y;   // dizi değişti; bu kareyi burada bitir
+        }
+        y = y + _ED_FLD3 + _us3(2);
+        // 2. satır: eylem + miktar
+        if (_g_button(21003 + i * 8, lx + third + 4, y, third, _ED_FLD3,
+                      _rl_act_nm3(r.act))) {
+            ed_mark3d();
+            Rule3 nr4 = _rl3[i]; nr4.act = _ed_next_act3(nr4.act); _rl3[i] = nr4;
+        }
+        if (r.kind == RULE_HIT) {
+            float nn = _g_num(21004 + i * 8, lx + (third + 4) * 2, y, third,
+                              _ED_FLD3, r.n, 1.0);
+            if (nn != r.n) { Rule3 nr5 = _rl3[i]; nr5.n = nn; _rl3[i] = nr5; }
+        }
+        y = y + _ED_FLD3 + _us3(5);
+        i = i + 1;
+    }
+    int half = toInt((inner - 4) / 2);
+    if (_g_button(21900, lx, y, half, _ED_FLD3, "+carpisma")) {
+        ed_mark3d(); hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 50.0);
+    }
+    if (_g_button(21901, lx + half + 4, y, half, _ED_FLD3, "+bitince")) {
+        ed_mark3d(); cleared_rule3d(TAG_ITEM, ACT_WIN);
+    }
+    return y + _ED_FLD3;
+}
+
+// ---- Dünya ayarları --------------------------------------------------------
+// Sahne biçimi bunların hepsini zaten taşıyor; editörden düzenlenememeleri tek
+// eksikti. Gökyüzü/sis/su/arazi elle JSON yazmadan ayarlanamıyordu.
+func _ed_world_panel3(px, py, pw) {
+    int lx = px + _ED_PAD3;
+    int inner = pw - _ED_PAD3 * 2;
+    int half = toInt((inner - 4) / 2);
+    int labw = _us3(30);
+    int fw = _ed_f3w3(pw, labw);
+    int fx = lx + labw;
+    int y = py;
+
+    _g_section(px + 2, y, pw - 4, "GOKYUZU");
+    y = y + _us3(16);
+    str sk = "gokyuzu: yok";
+    if (_sky3 == 1) { sk = "gokyuzu: var"; }
+    if (_g_tog(9700, lx, y, inner, _ED_FLD3, sk, _sky3 == 1)) {
+        ed_mark3d();
+        if (_sky3 == 1) { sky3d_off(); }
+        else { sky3d(rgb(58, 116, 200), rgb(196, 220, 240)); }
+    }
+    y = y + _ED_FLD3 + _us3(3);
+    if (_sky3 == 1) {
+        _g_txt3("ust", lx, _g_ly3(y), labw - 2, _G_DIM3());
+        float tr = _g_num(9701, fx, y, fw, _ED_FLD3, _col_r3(_sky_top3) * 1.0, 1.0);
+        float tg = _g_num(9702, fx + fw + 4, y, fw, _ED_FLD3, _col_g3(_sky_top3) * 1.0, 1.0);
+        float tb = _g_num(9703, fx + (fw + 4) * 2, y, fw, _ED_FLD3, _col_b3(_sky_top3) * 1.0, 1.0);
+        _sky_top3 = rgb(_ed_c255(tr), _ed_c255(tg), _ed_c255(tb));
+        y = y + _ED_FLD3 + _us3(3);
+        _g_txt3("alt", lx, _g_ly3(y), labw - 2, _G_DIM3());
+        float br = _g_num(9704, fx, y, fw, _ED_FLD3, _col_r3(_sky_bot3) * 1.0, 1.0);
+        float bg = _g_num(9705, fx + fw + 4, y, fw, _ED_FLD3, _col_g3(_sky_bot3) * 1.0, 1.0);
+        float bb = _g_num(9706, fx + (fw + 4) * 2, y, fw, _ED_FLD3, _col_b3(_sky_bot3) * 1.0, 1.0);
+        _sky_bot3 = rgb(_ed_c255(br), _ed_c255(bg), _ed_c255(bb));
+        y = y + _ED_FLD3 + _us3(3);
+    }
+    _g_txt3("sis", lx, _g_ly3(y), labw - 2, _G_DIM3());
+    _fog3 = _g_num(9707, fx, y, fw, _ED_FLD3, _fog3, 0.001);
+    if (_fog3 < 0.0) { _fog3 = 0.0; }
+    y = y + _ED_FLD3 + _us3(6);
+
+    _g_section(px + 2, y, pw - 4, "DUNYA");
+    y = y + _us3(16);
+    str gr = "zemin: yok";
+    if (_ground_on == 1) { gr = "zemin: var"; }
+    if (_g_tog(9710, lx, y, half, _ED_FLD3, gr, _ground_on == 1)) {
+        ed_mark3d();
+        if (_ground_on == 1) { no_ground3d(); } else { ground3d(_ground_y); }
+    }
+    _ground_y = _g_num(9711, lx + half + 4, y, half, _ED_FLD3, _ground_y, 0.1);
+    y = y + _ED_FLD3 + _us3(3);
+    _g_txt3("yer", lx, _g_ly3(y), labw - 2, _G_DIM3());
+    _grav = _g_num(9712, fx, y, fw, _ED_FLD3, _grav, 0.2);
+    str lt = "isik";
+    if (_g_tog(9713, fx + fw + 4, y, fw, _ED_FLD3, lt, _lights3 == 1)) {
+        ed_mark3d();
+        if (_lights3 == 1) { _lights3 = 0; } else { _lights3 = 1; }
+    }
+    if (_g_tog(9714, fx + (fw + 4) * 2, y, fw, _ED_FLD3, "golge", _shadows3 == 1)) {
+        ed_mark3d();
+        if (_shadows3 == 1) { _shadows3 = 0; } else { _shadows3 = 1; }
+    }
+    y = y + _ED_FLD3 + _us3(6);
+
+    _g_section(px + 2, y, pw - 4, "SU");
+    y = y + _us3(16);
+    str wt = "su: yok";
+    if (_water_on3 == 1) { wt = "su: var"; }
+    if (_g_tog(9720, lx, y, half, _ED_FLD3, wt, _water_on3 == 1)) {
+        ed_mark3d();
+        if (_water_on3 == 1) { water_off3d(); } else { water3d(_water_y3); }
+    }
+    if (_water_on3 == 1) {
+        _water_y3 = _g_num(9721, lx + half + 4, y, half, _ED_FLD3, _water_y3, 0.1);
+        y = y + _ED_FLD3 + _us3(3);
+        _g_txt3("renk", lx, _g_ly3(y), labw - 2, _G_DIM3());
+        float wr = _g_num(9722, fx, y, fw, _ED_FLD3, _col_r3(_water_col3) * 1.0, 1.0);
+        float wg = _g_num(9723, fx + fw + 4, y, fw, _ED_FLD3, _col_g3(_water_col3) * 1.0, 1.0);
+        float wb = _g_num(9724, fx + (fw + 4) * 2, y, fw, _ED_FLD3, _col_b3(_water_col3) * 1.0, 1.0);
+        _water_col3 = rgb(_ed_c255(wr), _ed_c255(wg), _ed_c255(wb));
+        y = y + _ED_FLD3 + _us3(3);
+        _g_txt3("alfa", lx, _g_ly3(y), labw - 2, _G_DIM3());
+        _water_a3 = _ed_c255(_g_num(9725, fx, y, fw, _ED_FLD3, _water_a3 * 1.0, 2.0));
+    }
+    y = y + _ED_FLD3 + _us3(6);
+
+    _g_section(px + 2, y, pw - 4, "ARAZI");
+    y = y + _us3(16);
+    str tr2 = "arazi: yok";
+    if (_terr_on == 1) { tr2 = "arazi: var"; }
+    if (_g_tog(9730, lx, y, inner, _ED_FLD3, tr2, _terr_on == 1)) {
+        ed_mark3d();
+        if (_terr_on == 1) { terrain_off3d_scene(); }
+        else { terrain3d(65, 120.0, 14.0, 120.0, 4.5, 7); }
+    }
+    y = y + _ED_FLD3 + _us3(3);
+    if (_terr_on == 1) {
+        _g_txt3("tepe", lx, _g_ly3(y), labw - 2, _G_DIM3());
+        float tp = _g_num(9731, fx, y, fw, _ED_FLD3, _terr_sy3, 0.2);
+        _g_txt3("toh", fx + fw + _us3(6), _g_ly3(y), _us3(22), _G_DIM3());
+        float sd = _g_num(9732, fx + fw + _us3(30), y, fw, _ED_FLD3, _terr_seed3 * 1.0, 1.0);
+        y = y + _ED_FLD3 + _us3(3);
+        if (_g_button(9733, lx, y, half, _ED_FLD3, "yeniden uret")) {
+            ed_mark3d();
+            terrain3d(_terr_res3, _terr_sx, tp, _terr_sz, _terr_scale3, toInt(sd));
+        }
+        if (_g_button(9734, lx + half + 4, y, half, _ED_FLD3, "dogal boya")) {
+            ed_mark3d(); terrain_natural3d(_terr_sy3);
+        }
+        y = y + _ED_FLD3 + _us3(3);
+    }
+    y = y + 3;
+
+    _g_section(px + 2, y, pw - 4, "GUNDUZ-GECE");
+    y = y + _us3(16);
+    str dn = "dongu: yok";
+    if (_dn_on3 == 1) { dn = "dongu: var"; }
+    if (_g_tog(9740, lx, y, half, _ED_FLD3, dn, _dn_on3 == 1)) {
+        ed_mark3d();
+        if (_dn_on3 == 1) { _dn_on3 = 0; } else { daynight3d(_dn_len3); }
+    }
+    if (_dn_on3 == 1) {
+        _dn_h3 = _g_num(9741, lx + half + 4, y, half, _ED_FLD3, _dn_h3, 0.1);
+        if (_dn_h3 < 0.0) { _dn_h3 = 0.0; }
+        if (_dn_h3 >= 24.0) { _dn_h3 = 23.99; }
+        y = y + _ED_FLD3 + _us3(3);
+        _g_txt3("gun s", lx, _g_ly3(y), labw + _us3(6), _G_DIM3());
+        _dn_len3 = _g_num(9742, fx + _us3(8), y, fw, _ED_FLD3, _dn_len3, 1.0);
+        if (_dn_len3 < 1.0) { _dn_len3 = 1.0; }
+    }
+    y = y + _ED_FLD3 + _us3(6);
+
+    _g_section(px + 2, y, pw - 4, "EGIM");
+    y = y + _us3(16);
+    _g_txt3("sinir", lx, _g_ly3(y), labw + _us3(4), _G_DIM3());
+    float sl = _g_num(9750, fx + _us3(6), y, fw, _ED_FLD3, _slope_lim3, 0.5);
+    if (sl != _slope_lim3) { slope_limit3d(sl); }
+    y = y + _ED_FLD3 + _us3(6);
+
+    _g_section(px + 2, y, pw - 4, "KURALLAR");
+    y = y + _us3(16);
+    y = _ed_rules_panel3(px, y, pw);
+    _ed_icontent3 = y;
+}
+
+func _ed_c255(v): int {
+    int i = toInt(v);
+    if (i < 0) { return 0; }
+    if (i > 255) { return 255; }
+    return i;
+}
+
+// ---- Bölge özellikleri -----------------------------------------------------
+// Bölgeler entity DEĞİL (motor onları ayrı tutuyor), o yüzden ayrı bir panel.
+// Kancaları burada düzenlenmiyor: onlar kod ve sahne biçiminde taşınmıyorlar.
+func _ed_zone_panel3(px, y, pw) {
+    int lx = px + _ED_PAD3;
+    int inner = pw - _ED_PAD3 * 2;
+    int half = toInt((inner - _us3(4)) / 2);
+    int labw = _us3(30);
+    int fw = _ed_f3w3(pw, labw);
+    int fx = lx + labw;
+    int i = _ed_zsel3;
+    if (i < 0 || i >= length(_trg_x)) {
+        _g_txt3("bolge secili degil", lx, y, inner, _G_DIM3());
+        _ed_icontent3 = y + _g_lh3();
+        return;
+    }
+    _g_txt3("BOLGE " + toString(i), lx, y, inner, _G_ACC3());
+    y = y + _g_lh3() + _us3(4);
+
+    if (_g_button(23001, lx, y, half, _ED_FLD3, _sc_tag_nm3(_trg_tag[i]))) {
+        ed_mark3d();
+        _trg_tag[i] = _ed_next_tag3(_trg_tag[i]);
+    }
+    str shp = "kutu";
+    if (_trg_shape[i] == 1) { shp = "kure"; }
+    if (_g_button(23002, lx + half + _us3(4), y, half, _ED_FLD3, shp)) {
+        ed_mark3d();
+        if (_trg_shape[i] == 1) { _trg_shape[i] = 0; } else { _trg_shape[i] = 1; }
+    }
+    y = y + _ED_FLD3 + _us3(6);
+
+    _g_section(px + _us3(2), y, pw - _us3(4), "KONUM");
+    y = y + _us3(16);
+    _g_txt3("kon", lx, _g_ly3(y), labw - _us3(2), _G_DIM3());
+    _trg_x[i] = _g_num(23010, fx, y, fw, _ED_FLD3, _trg_x[i], 0.05);
+    _trg_y[i] = _g_num(23011, fx + fw + _us3(4), y, fw, _ED_FLD3, _trg_y[i], 0.05);
+    _trg_z[i] = _g_num(23012, fx + (fw + _us3(4)) * 2, y, fw, _ED_FLD3, _trg_z[i], 0.05);
+    y = y + _ED_FLD3 + _us3(3);
+
+    if (_trg_shape[i] == 1) {
+        _g_txt3("r", lx, _g_ly3(y), labw - _us3(2), _G_DIM3());
+        _trg_r[i] = _g_num(23013, fx, y, fw, _ED_FLD3, _trg_r[i], 0.05);
+        if (_trg_r[i] < 0.1) { _trg_r[i] = 0.1; }
+    } else {
+        _g_txt3("boy", lx, _g_ly3(y), labw - _us3(2), _G_DIM3());
+        _trg_sx[i] = _g_num(23014, fx, y, fw, _ED_FLD3, _trg_sx[i], 0.05);
+        _trg_sy[i] = _g_num(23015, fx + fw + _us3(4), y, fw, _ED_FLD3, _trg_sy[i], 0.05);
+        _trg_sz[i] = _g_num(23016, fx + (fw + _us3(4)) * 2, y, fw, _ED_FLD3, _trg_sz[i], 0.05);
+    }
+    y = y + _ED_FLD3 + _us3(6);
+
+    _g_section(px + _us3(2), y, pw - _us3(4), "DAVRANIS");
+    y = y + _us3(16);
+    str ov = "tek atim: yok";
+    if (_trg_once[i] == 1) { ov = "tek atim: var"; }
+    if (_g_tog(23020, lx, y, half, _ED_FLD3, ov, _trg_once[i] == 1)) {
+        ed_mark3d();
+        if (_trg_once[i] == 1) { _trg_once[i] = 0; } else { _trg_once[i] = 1; }
+    }
+    str en = "etkin: yok";
+    if (_trg_on[i] == 1) { en = "etkin: var"; }
+    if (_g_tog(23021, lx + half + _us3(4), y, half, _ED_FLD3, en, _trg_on[i] == 1)) {
+        ed_mark3d();
+        if (_trg_on[i] == 1) { _trg_on[i] = 0; } else { _trg_on[i] = 1; }
+    }
+    y = y + _ED_FLD3 + _us3(8);
+
+    if (_g_button(23030, lx, y, inner, _ED_FLD3, "BOLGEYI SIL")) {
+        ed_mark3d();
+        _ed_zone_delete3(i);
+        _ed_tab3 = 0;
+        _ed_zsel3 = 0 - 1;
+    }
+    _ed_icontent3 = y + _ED_FLD3 + _us3(6);
+}
+
+// Bölgeyi sil: bütün paralel diziler AYNI indeksten düşmeli, yoksa bölge
+// verileri birbirine kayar.
+func _ed_zone_delete3(i) {
+    int n = length(_trg_x);
+    if (i < 0 || i >= n) { return; }
+    int k = i;
+    while (k < n - 1) {
+        _trg_x[k] = _trg_x[k+1]; _trg_y[k] = _trg_y[k+1]; _trg_z[k] = _trg_z[k+1];
+        _trg_sx[k] = _trg_sx[k+1]; _trg_sy[k] = _trg_sy[k+1]; _trg_sz[k] = _trg_sz[k+1];
+        _trg_r[k] = _trg_r[k+1]; _trg_shape[k] = _trg_shape[k+1];
+        _trg_tag[k] = _trg_tag[k+1]; _trg_on[k] = _trg_on[k+1];
+        _trg_once[k] = _trg_once[k+1];
+        _trg_fin[k] = _trg_fin[k+1]; _trg_hasin[k] = _trg_hasin[k+1];
+        _trg_fout[k] = _trg_fout[k+1]; _trg_hasout[k] = _trg_hasout[k+1];
+        _trg_fstay[k] = _trg_fstay[k+1]; _trg_hasstay[k] = _trg_hasstay[k+1];
+        k = k + 1;
+    }
+    pop(_trg_x); pop(_trg_y); pop(_trg_z);
+    pop(_trg_sx); pop(_trg_sy); pop(_trg_sz);
+    pop(_trg_r); pop(_trg_shape); pop(_trg_tag); pop(_trg_on); pop(_trg_once);
+    pop(_trg_fin); pop(_trg_hasin);
+    pop(_trg_fout); pop(_trg_hasout);
+    pop(_trg_fstay); pop(_trg_hasstay);
+    // Üyelik kayıtları bölge indeksine göre; silinen bölgeninkiler gitmeli,
+    // sonrakiler kaymalı — yoksa "içeride" sayılan yanlış bölge olur.
+    array nt = [];
+    array ne = [];
+    int m = 0;
+    while (m < length(_trg_in_t)) {
+        int ti = _trg_in_t[m];
+        if (ti != i) {
+            if (ti > i) { ti = ti - 1; }
+            push(nt, ti); push(ne, _trg_in_e[m]);
+        }
+        m = m + 1;
+    }
+    _trg_in_t = nt;
+    _trg_in_e = ne;
+}
+
+func _ed_inspector3() {
+    int W = screen_width();
+    int H = screen_height();
+    int pw = _ED_INSP_W3;
+    int px = W - pw;
+    int py = _ed_view_y3();
+    int ph = _ed_view_h3();
+    _g_panel(px, py, pw, ph, "OZELLIKLER");
+
+    int s = _slot_of3(_ed_sel3e);
+    int lx = px + _ED_PAD3;
+    int inner = pw - _ED_PAD3 * 2;
+    int half = toInt((inner - 4) / 2);
+
+    // Sekme DÜĞMESİ yok: seçim hiyerarşiden geliyor ve DÜNYA orada bir satır.
+    // İki ayrı seçim yolu (liste + sekme) tutmak, hangisinin geçerli olduğu
+    // konusunda sürekli bir tutarsızlık kaynağı olurdu.
+    //
+    // İçerik panelden UZUN olabiliyor (çok davranışlı varlık, dünya ayarları +
+    // kurallar). Tekerlekle kaydırılıyor ve panele KIRPILIYOR; kırpma olmadan
+    // taşan satırlar alttaki konsolun üstüne çizilirdi.
+    int ctop = py + _us3(16);
+    int cavail = ph - _us3(20);
+    if (_g_in(px, py, pw, ph)) {
+        float wh = mouse_wheel();
+        if (wh > 0.5)        { _ed_iscroll3 = _ed_iscroll3 - 24; }
+        if (wh < 0.0 - 0.5)  { _ed_iscroll3 = _ed_iscroll3 + 24; }
+    }
+    _ed_iscroll3 = _ed_clamp_scroll3(_ed_iscroll3, _ed_icontent3, ctop, cavail);
+    kirp(px, ctop, pw, cavail);
+    // İçerik başlık şeridinin ALTINDAN başlıyor. Sabit 20 idi ve 2x ölçekte
+    // şerit 32 piksel olduğu için ilk satır başlığın üstüne biniyordu.
+    int y = py + _us3(16) + _us3(4) - _ed_iscroll3;
+    if (_ed_tab3 == 2) {
+        _ed_zone_panel3(px, y, pw);
+        kirp_bitir();
+        _ed_scrollbar3(px, ctop, pw, cavail);
+        return;
+    }
+    if (_ed_tab3 == 1) {
+        _g_txt3("DUNYA", lx, y, inner, _G_ACC3());
+        _ed_world_panel3(px, y + 14, pw);
+        kirp_bitir();
+        _ed_scrollbar3(px, ctop, pw, cavail);
+        return;
+    }
+    if (s < 0) {
+        _g_txt3("secili varlik yok", lx, y, inner, _G_DIM3());
+        _g_txt3("sahnede bir cisme tikla,", lx, y + _g_lh3(), inner, _G_DIM3());
+        _g_txt3("ya da soldaki DUNYA satirini sec", lx, y + _g_lh3() * 2, inner,
+                _G_DIM3());
+        _ed_icontent3 = y + 42;
+        kirp_bitir();
+        return;
+    }
+    Ent3 e = _e3[s];
+    int id = _ed_sel3e;
+
+    // Ad: kamera hedefi ve kurallar varlıklara ADLA atıfta bulunuyor, yani
+    // adsız bir varlık sahne dosyasında hedeflenemiyor.
+    _g_txt3("ad", lx, _g_ly3(y), _us3(18), _G_DIM3());
+    str nm0 = _sc_nm_of3(id);
+    str nm1 = _g_text(9690, lx + _us3(20), y, inner - _us3(20), _ED_FLD3, nm0);
+    if (nm1 != nm0) { ed_mark3d(); rename3d(id, nm1); }
+    y = y + _ED_FLD3 + _us3(6);
+    int labw = _us3(26);
+    int fw = _ed_f3w3(pw, labw);
+    int fx = lx + labw;
+
+    // Etiket / şekil — iki eşit sütun.
+    if (_g_button(9300, lx, y, half, _ED_FLD3, _sc_tag_nm3(e.tag))) {
+        ed_mark3d();
+        e = _e3[s];
+        int elle = 0;
+        if (e.solid != _default_solid3(e.tag)) { elle = 1; }
+        e.tag = _ed_next_tag3(e.tag);
+        if (elle == 0) { e.solid = _default_solid3(e.tag); }
+        _e3[s] = e;
+    }
+    if (e.shape == SHAPE_MODEL) {
+        _g_txtc3("model", lx + half + 4, y, half, _ED_FLD3, _G_DIM3());
+    } else {
+        if (_g_button(9301, lx + half + 4, y, half, _ED_FLD3, _sc_shape_nm3(e.shape))) {
+            ed_mark3d();
+            e = _e3[s]; e.shape = _ed_next_shape3(e.shape); _e3[s] = e;
+        }
+    }
+    y = y + _ED_FLD3 + _us3(6);
+
+    _g_section(px + 2, y, pw - 4, "DONUSUM");
+    y = y + _us3(16);
+
+    e = _e3[s];
+    _g_txt3("kon", lx, _g_ly3(y), labw - 2, _G_DIM3());
+    float nx = _g_num(9310, fx, y, fw, _ED_FLD3, e.x, 0.05);
+    float ny = _g_num(9311, fx + fw + 4, y, fw, _ED_FLD3, e.y, 0.05);
+    float nz = _g_num(9312, fx + (fw + 4) * 2, y, fw, _ED_FLD3, e.z, 0.05);
+    if (nx != e.x || ny != e.y || nz != e.z) { set3pos(id, nx, ny, nz); }
+    y = y + _ED_FLD3 + _us3(3);
+
+    e = _e3[s];
+    _g_txt3("boy", lx, _g_ly3(y), labw - 2, _G_DIM3());
+    float sx = _g_num(9320, fx, y, fw, _ED_FLD3, e.sx, 0.05);
+    float sy = _g_num(9321, fx + fw + 4, y, fw, _ED_FLD3, e.sy, 0.05);
+    float sz = _g_num(9322, fx + (fw + 4) * 2, y, fw, _ED_FLD3, e.sz, 0.05);
+    if (sx != e.sx || sy != e.sy || sz != e.sz) { ed_resize3d(id, sx, sy, sz); }
+    y = y + _ED_FLD3 + _us3(3);
+
+    e = _e3[s];
+    _g_txt3("yaw", lx, _g_ly3(y), labw - 2, _G_DIM3());
+    float yw = _g_num(9330, fx, y, fw, _ED_FLD3, e.yaw, 0.5);
+    if (yw != e.yaw) { ed_rotate3d(id, yw); }
+    int dw = inner - labw - fw - 4;
+    if (_g_button(9331, fx + fw + 4, y, dw, _ED_FLD3, "zemine otur")) {
+        ed_mark3d(); ed_drop3d(id);
+    }
+    _g_tip_for3(9331, "Zemine/araziye otur  (BOSLUK)");
+    y = y + _ED_FLD3 + _us3(6);
+
+    _g_section(px + 2, y, pw - 4, "GORUNUM");
+    y = y + _us3(16);
+
+    e = _e3[s];
+    _g_txt3("rgb", lx, _g_ly3(y), labw - 2, _G_DIM3());
+    int sww = _us3(18);
+    int cfw = toInt((inner - labw - sww - 12) / 3);
+    float cr = _g_num(9340, fx, y, cfw, _ED_FLD3, _col_r3(e.color) * 1.0, 1.0);
+    float cg = _g_num(9341, fx + cfw + 4, y, cfw, _ED_FLD3, _col_g3(e.color) * 1.0, 1.0);
+    float cb = _g_num(9342, fx + (cfw + 4) * 2, y, cfw, _ED_FLD3, _col_b3(e.color) * 1.0, 1.0);
+    int ir = toInt(cr); int ig = toInt(cg); int ib = toInt(cb);
+    if (ir < 0) { ir = 0; }
+    if (ir > 255) { ir = 255; }
+    if (ig < 0) { ig = 0; }
+    if (ig > 255) { ig = 255; }
+    if (ib < 0) { ib = 0; }
+    if (ib > 255) { ib = 255; }
+    if (ir != _col_r3(e.color) || ig != _col_g3(e.color) || ib != _col_b3(e.color)) {
+        e = _e3[s]; e.color = rgb(ir, ig, ib); _e3[s] = e;
+    }
+    rect(px + pw - _ED_PAD3 - sww, y, sww, _ED_FLD3, _e3[s].color);
+    rect_lines(px + pw - _ED_PAD3 - sww, y, sww, _ED_FLD3, _G_LINE3());
+    y = y + _ED_FLD3 + _us3(6);
+
+    _g_section(px + 2, y, pw - 4, "FIZIK");
+    y = y + _us3(16);
+
+    e = _e3[s];
+    str sl2 = "kati: yok";
+    if (e.solid == 1) { sl2 = "kati: var"; }
+    if (_g_tog(9350, lx, y, half, _ED_FLD3, sl2, e.solid == 1)) {
+        ed_mark3d();
+        e = _e3[s];
+        if (e.solid == 1) { e.solid = 0; } else { e.solid = 1; }
+        _e3[s] = e;
+    }
+    e = _e3[s];
+    _g_txt3("can", lx + half + _us3(6), _g_ly3(y), _us3(22), _G_DIM3());
+    float hpv = _g_num(9351, lx + half + _us3(30), y, half - _us3(30), _ED_FLD3, e.hpmax * 1.0, 1.0);
+    if (toInt(hpv) != e.hpmax) { health3d(id, toInt(hpv)); }
+    y = y + _ED_FLD3 + _us3(6);
+
+    _g_section(px + 2, y, pw - 4, "DAVRANISLAR");
+    y = y + _us3(16);
+
+    // Satır: ad | alan1 | alan2 | x — hepsi panel genişliğinden türüyor.
+    int xw = _us3(16);
+    int nw2 = _us3(44);
+    int bfw = _ed_bhw3(pw, nw2, xw);
+    int bi = 0;
+    int shown = 0;
+    while (bi < length(_bh3)) {
+        Bh3 b = _bh3[bi];
+        if (b.id == id) {
+            _g_txt3(_ed_bh_name3(b.kind), lx, _g_ly3(y), nw2 - 2, _G_TXT3());
+            float v1 = b.a;
+            if (b.kind == BH_PATROL) { v1 = b.e; }
+            float p1 = _g_num(20000 + shown * 4, lx + nw2, y, bfw, _ED_FLD3, v1, 0.1);
+            if (p1 != v1) {
+                Bh3 nb = _bh3[bi];
+                if (b.kind == BH_PATROL) { nb.e = p1; } else { nb.a = p1; }
+                _bh3[bi] = nb;
+            }
+            // 2. alan yalnız b'si SERİLEŞTİRİLEN türlerde: gösterilip de
+            // saklanmayan alan, sürüklenip ilk kayıtta sessizce geri dönerdi.
+            if (b.kind == BH_MOVE || b.kind == BH_CHASE || b.kind == BH_BOB ||
+                b.kind == BH_SHOOT) {
+                float p2 = _g_num(20001 + shown * 4, lx + nw2 + bfw + 4, y, bfw,
+                                  _ED_FLD3, b.b, 0.1);
+                if (p2 != b.b) {
+                    Bh3 nb2 = _bh3[bi];
+                    nb2.b = p2;
+                    _bh3[bi] = nb2;
+                }
+            }
+            if (_g_button(20002 + shown * 4, px + pw - _ED_PAD3 - xw, y, xw,
+                          _ED_FLD3, "x")) {
+                ed_mark3d();
+                int last = length(_bh3) - 1;
+                if (bi != last) { _bh3[bi] = _bh3[last]; }
+                pop(_bh3);
+                return;
+            }
+            y = y + _ED_FLD3 + _us3(2);
+            shown = shown + 1;
+        }
+        bi = bi + 1;
+    }
+
+    int aw = toInt((inner - 6) / 3);
+    if (_g_button(9460, lx, y, aw, _ED_FLD3, "+hareket")) {
+        ed_mark3d(); move_behavior3d(id, 10.0, 12.0);
+    }
+    if (_g_button(9461, lx + aw + 3, y, aw, _ED_FLD3, "+kovala")) {
+        ed_mark3d(); chase_behavior3d(id, TAG_PLAYER, 5.0, 40.0);
+    }
+    if (_g_button(9462, lx + (aw + 3) * 2, y, aw, _ED_FLD3, "+don")) {
+        ed_mark3d(); spin_behavior3d(id, 60.0);
+    }
+    y = y + _ED_FLD3 + _us3(3);
+    if (_g_button(9463, lx, y, aw, _ED_FLD3, "+salin")) {
+        ed_mark3d(); bob_behavior3d(id, 0.35, 1.2);
+    }
+    if (_g_button(9464, lx + aw + 3, y, aw, _ED_FLD3, "+devriye")) {
+        ed_mark3d();
+        Ent3 pe = _e3[s];
+        patrol_behavior3d(id, pe.x - 8.0, pe.z, pe.x + 8.0, pe.z, 5.0);
+    }
+    if (_g_button(9465, lx + (aw + 3) * 2, y, aw, _ED_FLD3, "+ates")) {
+        ed_mark3d(); shoot_behavior3d(id, 1.5, 20.0, 2.5, TAG_PLAYER, 30.0);
+    }
+    y = y + _ED_FLD3 + _us3(8);
+
+    // ŞABLONLAR: seçiliyi şablon yap, ya da var olanı buraya yerleştir.
+    _g_section(px + _us3(2), y, pw - _us3(4), "SABLONLAR");
+    y = y + _us3(16);
+    if (_g_button(9480, lx, y, inner, _ED_FLD3, "seciliyi SABLON yap")) {
+        ed_mark3d();
+        str pn = _sc_nm_of3(id);
+        if (pn == "") { pn = _sc_tag_nm3(e.tag) + toString(prefab_count3d()); }
+        prefab_save3d(pn, id);
+        _ed_msg3 = "sablon: " + pn;
+        _ed_msg_t3 = 2.0;
+    }
+    _g_tip_for3(9480, "Bu varligi adli sablon olarak sakla");
+    y = y + _ED_FLD3 + _us3(3);
+    int pi = 0;
+    int pn2 = prefab_count3d();
+    while (pi < pn2 && pi < 8) {
+        str pnm = prefab_name3d(pi);
+        if (_g_button(9490 + pi * 2, lx, y, inner - _ED_FLD3 - _us3(3), _ED_FLD3, pnm)) {
+            ed_mark3d();
+            Ent3 se = _e3[s];
+            int np = prefab_place3d(pnm, se.x, se.y, se.z + 3.0);
+            if (np >= 0) { ed_select3d(np); }
+        }
+        _g_tip_for3(9490 + pi * 2, "Seciliye gore yerlestir");
+        if (_g_button(9491 + pi * 2, lx + inner - _ED_FLD3, y, _ED_FLD3, _ED_FLD3, "x")) {
+            ed_mark3d();
+            prefab_delete3d(pnm);
+            return;
+        }
+        y = y + _ED_FLD3 + _us3(2);
+        pi = pi + 1;
+    }
+    y = y + _us3(4);
+
+    if (_g_button(9470, lx, y, half, _ED_FLD3, "COGALT")) { ed_mark3d(); ed_duplicate_selected3d(); }
+    _g_tip_for3(9470, "Cogalt  (CTRL+D)  —  davranislariyla");
+    if (_g_button(9471, lx + half + 4, y, half, _ED_FLD3, "SIL")) { ed_mark3d(); ed_delete3d(id); }
+    _g_tip_for3(9471, "Sil  (DEL)  —  CTRL+Z ile geri alinir");
+    _ed_icontent3 = y + _ED_FLD3 + 6;
+    kirp_bitir();
+    _ed_scrollbar3(px, ctop, pw, cavail);
+}
+
+// İnce kaydırma çubuğu — içerik panelden uzunsa nerede olduğunu gösteriyor.
+func _ed_scrollbar3(px, ctop, pw, cavail) {
+    int total = _ed_icontent3 - ctop + _ed_iscroll3;
+    if (total <= cavail) { return; }
+    int bh = toInt(cavail * cavail / total);
+    if (bh < 12) { bh = 12; }
+    int room = cavail - bh;
+    int span = total - cavail;
+    int by = ctop;
+    if (span > 0) { by = ctop + toInt(room * _ed_iscroll3 / span); }
+    rect(px + pw - _us3(4), ctop, _us3(3), cavail, rgb(34, 38, 46));
+    rect(px + pw - _us3(4), by, _us3(3), bh, rgb(90, 100, 118));
+}
+
 // `ord` var ama `chr` YOK (dilin bir asimetrisi — TODO'da). Metin alanı için
 // yazdırılabilir ASCII yeterli olduğundan tablodan okuyoruz.
 // substring(s, bas, son) — son DAHİL DEĞİL.

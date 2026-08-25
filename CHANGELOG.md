@@ -42,6 +42,16 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — `chr(c)` builtin'i
+
+Dilde `ord` vardı ama tersi YOKTU. Bu bir asimetriydi ve pratik bir bedeli
+oldu: metin girişi yazan kod (sahne editörünün metin alanı) Tulpar tarafında
+bir ASCII tablosu taşımak zorunda kaldı. Artık builtin — tablo silindi.
+
+Bayt düzeyinde, `ord` ile birebir eş (TulparLang dizeleri UTF-8 bayt dizisi
+ve `length`/`substring` bayt tabanlı). 0-255 dışı boş dize döner; sessizce
+çöp bayt üretmek metni bozardı.
+
 ### Added — prefab (şablon)
 
 Bir varlığı adlı şablon olarak sakla, istediğin yere yerleştir. Şablon,

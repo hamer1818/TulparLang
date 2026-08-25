@@ -4418,6 +4418,11 @@ func t_gui_ascii_table_roundtrips() {
         c = c + 1;
     }
     // Aralık dışı sessizce boş dönmeli (kontrol karakteri metne sızmasın).
+    // Artık dilin `chr` builtin'i kullanılıyor; onun kendi sınırı da 0-255.
+    assert(chr(65) == "A", "chr builtin");
+    assert(chr(300) == "", "chr aralik disi bos");
+    assert(chr(0 - 1) == "", "chr negatif bos");
+    assert_eq_int(ord(chr(200), 0), 200);
     assert(_g_chr3(31) == "", "31 bos");
     assert(_g_chr3(127) == "", "127 bos");
     assert(_g_chr3(0) == "", "0 bos");
