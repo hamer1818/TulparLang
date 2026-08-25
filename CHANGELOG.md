@@ -89,6 +89,23 @@ ikili argümanları görüyordu ama `tulpar script.tpr ...` yolu görmüyordu.
 Artık iletiliyor (kabuk alıntılaması tek tırnakla; boşluk ve `$` içeren
 yollar bozulmuyor).
 
+### Added — prosedürel bulutlar (`bulut3d`)
+
+Gökyüzü bulutsuz bir degradeydi. Yıldızlarla aynı çözüm: gökyüzü kubbesinin
+shader'ında üretiliyorlar — sıfır çizim çağrısı, sıfır asset ve örtüşme
+kendiliğinden doğru (kubbe en arkada çizildiği için dağlar bulutları örtüyor;
+2B çizilseydi dağların ÖNÜNE düşerlerdi).
+
+Gürültü hash'lenmiş ızgara + üç oktav (fBm). Yön vektörü YATAY düzleme
+izdüşürülüyor (`d.xz/d.y`), yani bulutlar sabit yükseklikte bir tabaka gibi
+görünüyor ve ufka doğru sıkışıyorlar; düz `d.xz` onları kubbeye yapıştırırdı.
+Zamanla sürükleniyorlar.
+
+Gündüz-gece açıkken geceye doğru sönüyorlar — shader onları beyaza
+karıştırıyor ve gece beyaz bulut yanlış görünürdü. Bu karar SAF bir
+fonksiyonda (`_cloud_out3`) ki penceresiz sınanabilsin: yıldızlarda tam bu
+sınanmadığı için bir bozma kaçmıştı.
+
 ### Added — suda kaldırma kuvveti (`yuz_davranis3d`)
 
 Su fiziği cismi yavaşça BATIRIYORDU; kaldırma kuvveti yoktu, yani sandık ya

@@ -3594,6 +3594,29 @@ func _dn_star_out3(): float {
     return _dn_star_want3();
 }
 
+// Bulut kapsaması 0..1 (0 = açık gökyüzü). Prosedürel: gökyüzü kubbesinin
+// shader'ında üretiliyor, ayrı çizim yok — dağlar bulutları doğru örtüyor
+// (2B çizilseydi dağların ÖNÜNE düşerlerdi, yıldızlarla aynı gerekçe).
+float _cloud3 = 0.0;
+
+func clouds3d(coverage) {
+    _cloud3 = coverage * 1.0;
+    if (_cloud3 < 0.0) { _cloud3 = 0.0; }
+    if (_cloud3 > 1.0) { _cloud3 = 1.0; }
+    sky_clouds3d(_cloud_out3());
+}
+func bulut3d(kapsama) { clouds3d(kapsama); }
+func clouds_now3d(): float { return _cloud3; }
+
+// Gündüz-gece açıkken bulutlar geceye doğru SÖNÜYOR: shader onları beyaza
+// karıştırıyor ve gece beyaz bulut yanlış görünürdü. Karar SAF bir fonksiyonda
+// ki penceresiz sınanabilsin — yıldızlarda "shader'a giden değer" sınanmadığı
+// için bir bozma kaçmıştı, aynı hatayı tekrarlamıyoruz.
+func _cloud_out3(): float {
+    if (_dn_on3 == 0) { return _cloud3; }
+    return _cloud3 * (0.15 + 0.85 * _dn_day3);
+}
+
 func stars_auto3d() { _stars3 = 0.0 - 1.0; }
 func yildiz_oto3d() { stars_auto3d(); }
 func stars3d(amount) { _stars3 = amount * 1.0; sky_stars3d(_stars3); }
@@ -3676,6 +3699,7 @@ func _s3_daynight(dt) {
     // Yıldızlar geceyle birlikte. `day` 0 gece, 1 tam gündüz olduğu için
     // tersi doğrudan yoğunluk veriyor; alacakaranlıkta da yumuşak sönüyorlar.
     sky_stars3d(_dn_star_out3());
+    sky_clouds3d(_cloud_out3());
     // Sis rengini ufuktan YENİDEN al: play3d başlangıçta bir kez kuruyor,
     // güncellenmezse sis bütün gün şafak rengiyle kalırdı.
     if (_fog3 > 0.0) { fog_sky(_fog3); }
@@ -4525,6 +4549,7 @@ func _sc_world_defaults3() {
     _cam_collide3 = 1; _cam_eye3 = 0.0;
     _dn_on3 = 0; _dn_h3 = 12.0; _dn_len3 = 120.0; _dn_frozen3 = 0;
     _stars3 = 0.0 - 1.0;
+    _cloud3 = 0.0;
     terrain_off3d_scene();
     _terr_lay3 = 0; terrain_layers_off3d();
     _water_on3 = 0; _water_col3 = 0; _water_a3 = 150; _water_phys3 = 1;
@@ -4559,6 +4584,7 @@ func _sc_load_world3(w) {
     // Yıldız: -1 = OTOMATİK (geceye bağlı). Elle sabitlemek isteyen 0..1 yazar.
     float st = _sc_f3(w, "stars", 0.0 - 1.0);
     if (st < 0.0) { stars_auto3d(); } else { stars3d(st); }
+    clouds3d(_sc_f3(w, "clouds", 0.0));
 
     if (_sc_has3(w, "terrain")) {
         json tr = w["terrain"];
@@ -4899,6 +4925,7 @@ func _sc_world_js3(): str {
     }
     // -1 (otomatik) varsayılan; yalnız elle sabitlenmişse yazılır.
     if (_stars3 >= 0.0) { o = o + "    \"stars\": " + _sc_num3(_stars3) + ",\n"; }
+    if (_cloud3 > 0.0) { o = o + "    \"clouds\": " + _sc_num3(_cloud3) + ",\n"; }
     if (_terr_kind3 == 1) {
         o = o + "    \"terrain\": {\"res\": " + toString(_terr_res3) +
             ", \"sx\": " + _sc_num3(_terr_sx) + ", \"sy\": " + _sc_num3(_terr_sy3) +
@@ -5098,6 +5125,7 @@ func _sc_world_code3(): str {
             _sc_col_code3(_sky_bot3) + ");\n";
     }
     if (_fog3 > 0.0) { o = o + "    sis3d(" + _sc_num3(_fog3) + ");\n"; }
+    if (_cloud3 > 0.0) { o = o + "    bulut3d(" + _sc_num3(_cloud3) + ");\n"; }
     if (_ground_on == 1) { o = o + "    zemin3(" + _sc_f_code3(_ground_y) + ");\n"; }
     else { o = o + "    zemin_yok3d();\n"; }
     o = o + "    yercekimi3(" + _sc_num3(_grav) + ");\n";
@@ -8112,6 +8140,9 @@ func _ed_world_panel3(px, py, pw) {
     _g_txt3("sis", lx, _g_ly3(y), labw - 2, _G_DIM3());
     _fog3 = _g_num(9707, fx, y, fw, _ED_FLD3, _fog3, 0.001);
     if (_fog3 < 0.0) { _fog3 = 0.0; }
+    _g_txt3("bulut", fx + fw + _us3(6), _g_ly3(y), _us3(30), _G_DIM3());
+    float bl = _g_num(9708, fx + fw + _us3(38), y, fw, _ED_FLD3, _cloud3, 0.02);
+    if (bl != _cloud3) { clouds3d(bl); }
     y = y + _ED_FLD3 + _us3(6);
 
     _g_section(px + 2, y, pw - 4, "DUNYA");

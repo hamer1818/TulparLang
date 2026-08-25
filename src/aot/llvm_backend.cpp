@@ -895,6 +895,7 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm3_terrain_off", "aot_tm3_terrain_off_ptr", 0},
     {"tm3_cube_rot", "aot_tm3_cube_rot_ptr", 8},
     {"tm3_sky_stars", "aot_tm3_sky_stars_ptr", 1},
+    {"tm3_sky_clouds", "aot_tm3_sky_clouds_ptr", 1},
     {"tm3_terrain_layer", "aot_tm3_terrain_layer_ptr", 2},
     {"tm3_terrain_layers", "aot_tm3_terrain_layers_ptr", 7},
     {"tm3_terrain_layers_off", "aot_tm3_terrain_layers_off_ptr", 0},

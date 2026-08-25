@@ -174,9 +174,9 @@ Mimari kararlar ve gerekçeleri:
       guc, derinlik)`. Dünya ayarı değil DAVRANIŞ (yüzmek cismin özelliği),
       yani serileşiyor ve editörden eklenebiliyor. Detay: CHANGELOG.
 
-- [ ] **Bulut yok.** Yıldızlar prosedürel çözümün işe yaradığını gösterdi;
-      aynı shader'a gürültü tabanlı bulut katmanı eklenebilir (yön + zaman
-      uniform'u yeterdi). Gökyüzü hâlâ bulutsuz bir degrade.
+- [x] **Prosedürel bulutlar geldi.** ✅ 2026-08-24 — `bulut3d(kapsama)`.
+      Yıldızlarla aynı çözüm (gökyüzü shader'ı), gündüz-gece ile sönüyor,
+      `scene3d_terrain` örneğinde açık. Detay: CHANGELOG.
 
 - [ ] **Parçacıklarda dönme ve doku atlası yok** — tek boy düz billboard.
 

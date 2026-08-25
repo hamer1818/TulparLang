@@ -652,6 +652,8 @@ static const char *tame_sky_fs =
     "uniform vec4 skyTop;                        \n"
     "uniform vec4 skyBottom;                     \n"
     "uniform float starI;                        \n"
+    "uniform float cloudI;                       \n"
+    "uniform float cloudT;                       \n"
     // Yıldızlar PROSEDÜREL: bakış yönü bir ızgaraya yuvarlanıp hash'leniyor,
     // eşiği geçen hücre bir yıldız oluyor. Sıfır çizim çağrısı, sıfır asset ve
     // örtüşme kendiliğinden doğru — gökyüzü kubbesi zaten en arkada çiziliyor,
@@ -659,6 +661,33 @@ static const char *tame_sky_fs =
     // GLES2'de bit işlemi yok, o yüzden float hash.
     "float tmStarHash(vec3 p) {                  \n"
     "    return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164)))*43758.5453); \n"
+    "}                                           \n"
+    // Bulutlar da PROSEDÜREL, yıldızlarla aynı gerekçeyle: sıfır çizim
+    // çağrısı, sıfır asset ve örtüşme kendiliğinden doğru (kubbe en arkada,
+    // dağlar bulutları örtüyor). 2B çizilseydi dağların ÖNÜNE düşerlerdi.
+    //
+    // Yön vektörü YATAY düzleme izdüşürülüyor (d.xz/d.y), yani bulutlar sabit
+    // yükseklikte bir tabaka gibi görünüyor ve ufka doğru sıkışıyorlar —
+    // düz d.xz kullanmak onları kubbeye yapıştırırdı.
+    "float tmCloudHash(vec2 p) {                 \n"
+    "    return fract(sin(dot(p, vec2(127.1, 311.7)))*43758.5453); \n"
+    "}                                           \n"
+    "float tmCloudNoise(vec2 p) {                \n"
+    "    vec2 i = floor(p); vec2 f = fract(p);   \n"
+    "    f = f*f*(3.0-2.0*f);                    \n"
+    "    float a = tmCloudHash(i);               \n"
+    "    float b = tmCloudHash(i+vec2(1.0,0.0)); \n"
+    "    float c = tmCloudHash(i+vec2(0.0,1.0)); \n"
+    "    float e = tmCloudHash(i+vec2(1.0,1.0)); \n"
+    "    return mix(mix(a,b,f.x), mix(c,e,f.x), f.y); \n"
+    "}                                           \n"
+    "float tmCloudFbm(vec2 p) {                  \n"
+    "    float v = 0.0; float amp = 0.5;         \n"
+    "    for (int k = 0; k < 3; k++) {           \n"
+    "        v += amp*tmCloudNoise(p);           \n"
+    "        p *= 2.03; amp *= 0.5;              \n"
+    "    }                                       \n"
+    "    return v;                               \n"
     "}                                           \n"
     "void main() {                               \n"
     "    vec3 d = normalize(vdir);               \n"
@@ -674,6 +703,13 @@ static const char *tame_sky_fs =
     "            float horiz = smoothstep(0.02, 0.30, d.y); \n"
     "            col.rgb += vec3(b*starI*horiz);  \n"
     "        }                                   \n"
+    "    }                                       \n"
+    "    if (cloudI > 0.001 && d.y > 0.02) {     \n"
+    "        vec2 pl = d.xz/max(d.y, 0.05);      \n"
+    "        float n = tmCloudFbm(pl*0.9 + vec2(cloudT*0.02, cloudT*0.01)); \n"
+    "        float cov = smoothstep(0.62 - cloudI*0.35, 0.86 - cloudI*0.25, n); \n"
+    "        float horiz = smoothstep(0.02, 0.35, d.y); \n"
+    "        col.rgb = mix(col.rgb, vec3(1.0), cov*cloudI*horiz*0.85); \n"
     "    }                                       \n"
     "    gl_FragColor = col;                     \n"
     "}                                           \n";
@@ -693,10 +729,39 @@ static const char *tame_sky_fs =
     "uniform vec4 skyTop;                        \n"
     "uniform vec4 skyBottom;                     \n"
     "uniform float starI;                        \n"
+    "uniform float cloudI;                       \n"
+    "uniform float cloudT;                       \n"
     "out vec4 fc;                                \n"
     // Prosedürel yıldızlar — gerekçe GLES varyantındaki yorumda.
     "float tmStarHash(vec3 p) {                  \n"
     "    return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164)))*43758.5453); \n"
+    "}                                           \n"
+    // Bulutlar da PROSEDÜREL, yıldızlarla aynı gerekçeyle: sıfır çizim
+    // çağrısı, sıfır asset ve örtüşme kendiliğinden doğru (kubbe en arkada,
+    // dağlar bulutları örtüyor). 2B çizilseydi dağların ÖNÜNE düşerlerdi.
+    //
+    // Yön vektörü YATAY düzleme izdüşürülüyor (d.xz/d.y), yani bulutlar sabit
+    // yükseklikte bir tabaka gibi görünüyor ve ufka doğru sıkışıyorlar —
+    // düz d.xz kullanmak onları kubbeye yapıştırırdı.
+    "float tmCloudHash(vec2 p) {                 \n"
+    "    return fract(sin(dot(p, vec2(127.1, 311.7)))*43758.5453); \n"
+    "}                                           \n"
+    "float tmCloudNoise(vec2 p) {                \n"
+    "    vec2 i = floor(p); vec2 f = fract(p);   \n"
+    "    f = f*f*(3.0-2.0*f);                    \n"
+    "    float a = tmCloudHash(i);               \n"
+    "    float b = tmCloudHash(i+vec2(1.0,0.0)); \n"
+    "    float c = tmCloudHash(i+vec2(0.0,1.0)); \n"
+    "    float e = tmCloudHash(i+vec2(1.0,1.0)); \n"
+    "    return mix(mix(a,b,f.x), mix(c,e,f.x), f.y); \n"
+    "}                                           \n"
+    "float tmCloudFbm(vec2 p) {                  \n"
+    "    float v = 0.0; float amp = 0.5;         \n"
+    "    for (int k = 0; k < 3; k++) {           \n"
+    "        v += amp*tmCloudNoise(p);           \n"
+    "        p *= 2.03; amp *= 0.5;              \n"
+    "    }                                       \n"
+    "    return v;                               \n"
     "}                                           \n"
     "void main() {                               \n"
     "    vec3 d = normalize(vdir);               \n"
@@ -710,6 +775,13 @@ static const char *tame_sky_fs =
     "            col.rgb += vec3(b*starI*horiz);  \n"
     "        }                                   \n"
     "    }                                       \n"
+    "    if (cloudI > 0.001 && d.y > 0.02) {     \n"
+    "        vec2 pl = d.xz/max(d.y, 0.05);      \n"
+    "        float n = tmCloudFbm(pl*0.9 + vec2(cloudT*0.02, cloudT*0.01)); \n"
+    "        float cov = smoothstep(0.62 - cloudI*0.35, 0.86 - cloudI*0.25, n); \n"
+    "        float horiz = smoothstep(0.02, 0.35, d.y); \n"
+    "        col.rgb = mix(col.rgb, vec3(1.0), cov*cloudI*horiz*0.85); \n"
+    "    }                                       \n"
     "    fc = col;                               \n"
     "}                                           \n";
 #endif
@@ -720,6 +792,9 @@ static int tame_sky_on = 0;
 static int tame_loc_skyTop = -1;
 static int tame_loc_skyBottom = -1;
 static int tame_loc_starI = -1;
+static int tame_loc_cloudI = -1;
+static int tame_loc_cloudT = -1;
+static float tame_cloud_intensity = 0.0f;
 static float tame_star_intensity = 0.0f;
 static float tame_sky_top[4] = {0.29f, 0.51f, 0.82f, 1.0f};
 static float tame_sky_bottom[4] = {0.75f, 0.84f, 0.93f, 1.0f};
@@ -934,6 +1009,8 @@ static int tame_sky_ensure(void) {
   tame_loc_skyTop = GetShaderLocation(tame_sky_shader, "skyTop");
   tame_loc_skyBottom = GetShaderLocation(tame_sky_shader, "skyBottom");
   tame_loc_starI = GetShaderLocation(tame_sky_shader, "starI");
+  tame_loc_cloudI = GetShaderLocation(tame_sky_shader, "cloudI");
+  tame_loc_cloudT = GetShaderLocation(tame_sky_shader, "cloudT");
   tame_sky_ready = 1;
   return 1;
 }
@@ -950,6 +1027,14 @@ static void tame_sky_draw(void) {
   SetShaderValue(tame_sky_shader, tame_loc_skyBottom, tame_sky_bottom,
                  SHADER_UNIFORM_VEC4);
   SetShaderValue(tame_sky_shader, tame_loc_starI, &tame_star_intensity,
+                 SHADER_UNIFORM_FLOAT);
+  SetShaderValue(tame_sky_shader, tame_loc_cloudI, &tame_cloud_intensity,
+                 SHADER_UNIFORM_FLOAT);
+  // Zaman uniform'u: bulutlar sürükleniyor. `GetTime()` kullanılıyor çünkü
+  // gökyüzünün kendi zamanı yok ve oyunun dt'sini buraya taşımak gökyüzü
+  // çizimini oyun döngüsüne bağlardı.
+  float tame_cloud_t = (float)GetTime();
+  SetShaderValue(tame_sky_shader, tame_loc_cloudT, &tame_cloud_t,
                  SHADER_UNIFORM_FLOAT);
   // Küre birim mesh'i gökyüzü için ödünç alınıyor; sonraki normal çizimde
   // tame_model_apply_shader/set_shader zaten ışık shader'ına geri alıyor.
@@ -1669,6 +1754,16 @@ void tame_impl_sky_off(void) { tame_sky_on = 0; }
 
 // Yıldız yoğunluğu: 0 kapalı, 1 tam. Gökyüzü kubbesi çizilirken uniform olarak
 // gidiyor — yıldızlar gökyüzünün bir parçası, ayrı bir cisim değil.
+// Bulut kapsaması. 0 = açık gökyüzü, 1 = tamamen kapalı. Yıldızlarla aynı
+// yol: tek bir float, gökyüzü kubbesinin shader'ına gidiyor — bulutlar
+// gökyüzünün parçası, ayrı bir cisim değil.
+void tame_impl_sky_clouds(double coverage) {
+  float v = (float)coverage;
+  if (v < 0.0f) v = 0.0f;
+  if (v > 1.0f) v = 1.0f;
+  tame_cloud_intensity = v;
+}
+
 void tame_impl_sky_stars(double intensity) {
   float v = (float)intensity;
   if (v < 0.0f) v = 0.0f;

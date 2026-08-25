@@ -41,6 +41,10 @@ func setup() {
     su3d(PEAK * 0.22);
     su_renk3d(rgb(30, 95, 150), 145);
 
+    // Bulutlar: gökyüzü shader'ında prosedürel üretiliyorlar, ayrı çizim yok.
+    // Dolayısıyla dağlar onları doğru örtüyor ve gece kendiliğinden sönüyorlar.
+    bulut3d(0.45);
+
     // Yıldızlar OTOMATİK: gündüz-gece döngüsü açık olduğu için gece çöktükçe
     // beliriyorlar. Gökyüzü shader'ında prosedürel üretiliyorlar — ayrı bir
     // çizim yok, dolayısıyla dağlar onları doğru şekilde örtüyor.

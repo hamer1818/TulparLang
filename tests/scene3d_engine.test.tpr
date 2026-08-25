@@ -2878,6 +2878,66 @@ test("en yakin mesafe mutlak, oransal degil", "t_camera_floor_is_absolute_not_re
 test("kamera yumusatmasi asimetrik", "t_camera_smoothing_is_asymmetric");
 test("gunes yuksekligi saate gore", "t_daynight_sun_height");
 test("isik yonu ufukta atlamiyor", "t_daynight_light_is_continuous");
+// ---- Bulutlar ---------------------------------------------------------------
+// Yıldızlarla aynı prosedürel çözüm: gökyüzü shader'ında üretiliyorlar, ayrı
+// çizim yok, dolayısıyla dağlar onları doğru örtüyor. Burada sınanan şey
+// shader değil, SHADER'A GİDEN DEĞER — yıldızlarda tam bu sınanmadığı için
+// bir bozma kaçmıştı.
+func t_cloud_clamped() {
+    scene3d_reset();
+    clouds3d(0.5);
+    assert(abs_f3(clouds_now3d() - 0.5) < 0.001, "deger tutulmali");
+    clouds3d(3.0);
+    assert(abs_f3(clouds_now3d() - 1.0) < 0.001, "ust sinir 1");
+    clouds3d(0.0 - 2.0);
+    assert(clouds_now3d() < 0.001, "alt sinir 0");
+}
+
+// Gündüz-gece KAPALIYKEN shader'a giden değer aynen kapsama olmalı.
+func t_cloud_without_daynight() {
+    scene3d_reset();
+    clouds3d(0.7);
+    assert_eq_int(_dn_on3, 0);
+    assert(abs_f3(_cloud_out3() - 0.7) < 0.001,
+           "dongu kapaliyken aynen gitmeli: " + toString(_cloud_out3()));
+}
+
+// Gündüz-gece AÇIKKEN geceye doğru sönmeli: shader bulutları beyaza
+// karıştırıyor ve gece beyaz bulut yanlış görünürdü.
+func t_cloud_fades_at_night() {
+    scene3d_reset();
+    daynight3d(120.0);
+    clouds3d(1.0);
+    set_time3d(12.0);
+    _s3_daynight(0.0);
+    float gunduz = _cloud_out3();
+    set_time3d(0.0);
+    _s3_daynight(0.0);
+    float gece = _cloud_out3();
+    assert(gunduz > 0.8, "oglen bulut belirgin: " + toString(gunduz));
+    assert(gece < gunduz * 0.5, "gece sonuk olmali: " + toString(gece) +
+           " vs " + toString(gunduz));
+    assert(gece >= 0.0, "negatife dusmemeli");
+}
+
+func t_cloud_roundtrip() {
+    scene3d_reset();
+    no_ground3d();
+    clouds3d(0.42);
+    str a = scene_json3d();
+    scene_load3d(a);
+    assert(abs_f3(clouds_now3d() - 0.42) < 0.001,
+           "gidis-donus: " + toString(clouds_now3d()));
+    assert(scene_json3d() == a, "duragan olmali");
+    // Bulutsuz sahne alanı yazmamalı.
+    clouds3d(0.0);
+    assert(indexOf(scene_json3d(), "clouds") < 0, "bulutsuzken alan yazilmamali");
+}
+
+test("bulut siniri", "t_cloud_clamped");
+test("dongu kapaliyken bulut aynen", "t_cloud_without_daynight");
+test("bulut gece sonuyor", "t_cloud_fades_at_night");
+test("bulut gidis-donusu", "t_cloud_roundtrip");
 test("yildizlar geceyle geliyor", "t_stars_follow_night");
 test("yildiz elle sabitlenebiliyor", "t_stars_manual_override");
 test("saat ilerliyor ve sariyor", "t_daynight_clock_advances_and_wraps");

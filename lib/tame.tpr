@@ -515,6 +515,11 @@ func gokyuzu(top, bottom): bool { return tm3_sky(top, bottom); }
 func sky_off()        { tm3_sky_off(); }
 // Gökyüzü yıldızları (prosedürel, shader'da): 0 kapalı, 1 tam.
 func sky_stars3d(i)   { tm3_sky_stars(i); }
+// Bulut kapsaması 0..1 (0 = açık gökyüzü). Prosedürel: gökyüzü kubbesinin
+// shader'ında üretiliyor, ayrı çizim yok — dolayısıyla dağlar bulutları
+// doğru şekilde örtüyor.
+func sky_clouds3d(coverage) { tm3_sky_clouds(coverage); }
+func gok_bulut3d(kapsama) { tm3_sky_clouds(kapsama); }
 func yildiz3d(i)      { tm3_sky_stars(i); }
 func gokyuzu_kapat()  { tm3_sky_off(); }
 
