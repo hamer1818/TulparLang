@@ -100,12 +100,14 @@ Mimari kararlar ve gerekçeleri:
       (`scene3d_data_game` .html/.js/.wasm üretiyor). `android/dist` duruyor
       ama NDK bu makinede kurulu değil, yani doğrulanamadı.
 
-- [ ] **scene3d programlarında OPTİMİZASYON ATLANIYOR.** `[AOT] Warning:
-      optimization produced invalid IR at every level` — yalnız `scene3d`
-      import eden programlarda (ölçüldü: tiny/tame/arcade/02_basics temiz,
-      scene3d_collector kirli). Modül optimizasyondan ÖNCE doğrulanıyor, yani
-      sorun bir LLVM geçişinin ürettiği IR'de. Sonuç: 3B oyunlar
-      optimizasyonsuz derleniyor. Hangi geçişin bozduğu daraltılmalı.
+- [x] **scene3d programlarında optimizasyon atlanıyordu.** ✅ 2026-08-24 —
+      teşhis: LLVM 22'de iki ayrı kusur; O2+ `loop-idiom-recognize` yanlış
+      mangle edilmiş `llvm.memset` üretiyor, O1 `InstCombine.foldOpIntoPhi`
+      boxed-karşılaştırma merge'ünden tipsiz phi çıkarıyor. İkisi de bizim
+      IR'imizde değil (modül optimizasyondan ÖNCE doğruluyor). Çözüm:
+      InstCombine ve döngü geçişleri olmayan MUHAFAZAKÂR bir son basamak
+      eklendi. Ölçüm: hesap ağırlıklı 3B yükte 3690 ms → 3270 ms (%12).
+      LLVM yukarı sürümlerinde kusurlar düzelirse O3 kendiliğinden seçilir.
 
 ## 1 — Oyun yapımı (3B oyunun eksik hissettiren yerleri)
 

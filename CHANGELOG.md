@@ -42,6 +42,27 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Fixed — scene3d programları optimizasyonsuz derleniyordu
+
+`[AOT] Warning: optimization produced invalid IR at every level` uyarısı
+`scene3d` import eden HER programda çıkıyordu ve sonucu şuydu: 3B oyunlar
+hiç optimize edilmeden derleniyordu. (Ölçüldü: tiny / tame / arcade /
+02_basics temiz, yalnız scene3d kirli.)
+
+Teşhis — LLVM 22'de iki ayrı kusur, ikisi de bizim IR'imizde değil (modül
+optimizasyondan ÖNCE doğruluyor):
+- **O2+**: `loop-idiom-recognize` yanlış mangle edilmiş bir `llvm.memset`
+  üretiyor
+- **O1**: `InstCombine.foldOpIntoPhi` boxed-karşılaştırma merge'ümüzden
+  tipsiz bir phi çıkarıyor (kod içindeki eski yorum bu aileyi zaten tarif
+  ediyordu)
+
+Çözüm: geri düşüş merdivenine InstCombine ve döngü geçişleri olmayan
+MUHAFAZAKÂR bir son basamak eklendi (`sroa, early-cse, simplifycfg,
+reassociate, gvn, dce`). Ölçüm — hesap ağırlıklı 3B yük (60 düşman, 4000
+kare fizik+çarpışma): **3690 ms → 3270 ms, ~%12**. LLVM yukarı sürümlerinde
+kusurlar düzelirse merdiven O3'ü kendiliğinden seçer.
+
 ### Added — kod üretimi: sahne → okunabilir Tulpar kodu
 
 `sahne_kod3d()` sahneyi Tulpar KODUNA çeviriyor. JSON çalışma zamanı biçimi;

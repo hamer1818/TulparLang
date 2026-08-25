@@ -9655,13 +9655,21 @@ void llvm_backend_optimize(LLVMBackend *backend) {
   LLVMPassBuilderOptionsSetVerifyEach(safe_options, 0);
 
   // Fallback ladder: aggressive O3/O2 → plain (safe) O2/O1 → unoptimized.
-  const char *att_level[4] = {"default<O3>", "default<O2>", "default<O2>",
-                              "default<O1>"};
-  int att_safe[4] = {0, 0, 1, 1};
+  // Son basamak MUHAFAZAKÂR bir boru hattı: InstCombine ve döngü geçişleri
+  // YOK. Bu iki aile, ölçülen iki LLVM kusurunun kaynağı —
+  //   O2+ : loop-idiom-recognize yanlış mangle edilmiş bir llvm.memset üretiyor
+  //   O1  : InstCombine'ın foldOpIntoPhi'si boxed-karşılaştırma merge'ümüzden
+  //         tipsiz bir phi çıkarıyor
+  // — ve ikisi olmadan da mem2reg/SROA/CSE/simplifycfg ciddi kazanç veriyor.
+  // "Hiç optimizasyon yok"tan iyi olması yeterli gerekçe.
+  const char *att_level[5] = {
+      "default<O3>", "default<O2>", "default<O2>", "default<O1>",
+      "function(sroa,early-cse,simplifycfg,reassociate,gvn,dce,simplifycfg)"};
+  int att_safe[5] = {0, 0, 1, 1, 1};
   LLVMModuleRef chosen = nullptr;
   int chosen_idx = -1;
   int ai = 0;
-  while (ai < 4 && !chosen) {
+  while (ai < 5 && !chosen) {
     LLVMPassBuilderOptionsRef opt = att_safe[ai] ? safe_options : options;
     LLVMModuleRef trial = LLVMCloneModule(codegen_ir);
     LLVMErrorRef error = LLVMRunPasses(trial, att_level[ai], nullptr, opt);
@@ -9736,10 +9744,14 @@ void llvm_backend_optimize(LLVMBackend *backend) {
 
   if (chosen) {
     if (chosen_idx > 0) {
+      // Muhafazakâr basamak uzun bir boru hattı dizesi; kullanıcıya adını
+      // dökmek yerine ne olduğunu söylüyoruz.
+      const char *nm = (chosen_idx == 4) ? "muhafazakar (InstCombine'siz)"
+                                         : att_level[chosen_idx];
       fprintf(stderr,
               "[AOT] Note: aggressive O3 IR invalid on this toolchain; "
               "optimized with %s%s instead.\n",
-              att_level[chosen_idx], att_safe[chosen_idx] ? " (safe)" : "");
+              nm, (att_safe[chosen_idx] && chosen_idx != 4) ? " (safe)" : "");
     } else if (!backend->quiet) {
       const char *v = getenv("TULPAR_AOT_VERBOSE");
       if (v && *v && *v != '0')
