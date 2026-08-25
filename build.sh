@@ -153,6 +153,36 @@ if [ "$ACTION" = "suites" ]; then
             exit 1
         fi
     fi
+    # packages/ testleri. Bunlar birinci-taraf yayınlanabilir paketler ve
+    # HİÇBİR otomasyonda koşmuyorlardı. `import "<ad>"` ÇALIŞMA DİZİNİNE göre
+    # çözüldüğü için paketin kendi klasöründen çalıştırılmaları gerekiyor —
+    # depo kökünden koşmak "Import dosyasi acilamadi" veriyor.
+    if [ -d packages ]; then
+        PKG_ROOT="$(pwd)"
+        for pkgtest in packages/*/*.test.tpr; do
+            [ -f "$pkgtest" ] || continue
+            pkgdir=$(dirname "$pkgtest")
+            pkgfile=$(basename "$pkgtest")
+            pkgout=$(cd "$pkgdir" && "$PKG_ROOT/tulpar" "$pkgfile" 2>&1)
+            if echo "$pkgout" | grep -q "^Tests:"; then
+                if echo "$pkgout" | grep -qE "Fail: [1-9]"; then
+                    printf "%-42s ${RED}FAIL${NC} %s\n" "$pkgtest" \
+                        "$(echo "$pkgout" | grep '^Tests:')"
+                    echo "$pkgout" | grep '  FAIL' | head -5
+                    exit 1
+                fi
+                printf "%-42s ${GREEN}PASS${NC} %s\n" "$pkgtest" \
+                    "$(echo "$pkgout" | grep '^Tests:')"
+            else
+                # Özet YOKSA başarısız sayılır — test_summary() çağırmayı
+                # unutan bir süit asla kızaramaz (suites'in kendi kuralı).
+                printf "%-42s ${RED}OZET YOK${NC}\n" "$pkgtest"
+                echo "$pkgout" | tail -3
+                exit 1
+            fi
+        done
+    fi
+
     # Ayrılmış kelime tanılaması: `int tip = 5` gibi bir çarpışmada hata
     # mesajı SUÇLU KELİMEYİ söylemeli. Genel "ad bekleniyordu" mesajı bu
     # durumda belirtiyi anlatıyor, sebebi değil — ve bu oturumda üç kez yanlış

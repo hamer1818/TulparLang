@@ -262,20 +262,14 @@ boşluklar; backlog'da yoklardı.
       kayboluyordu. İlk 5 tanesi yazılıyor, sonrası "(+N daha)" olarak
       özetleniyor — bir döngü içindeki assert yüzlerce satır dökerdi.
 
-- [ ] **`packages/` testleri hiçbir otomasyonda koşmuyor.** `build.sh suites`
-      benzeri bir hedef gerekiyor; ayrıca paket dizininden koşulmaları şart
-      (`import` CWD'ye göre çözülüyor).
+- [x] **`packages/` testleri artık `build.sh suites` içinde.** ✅ 2026-08-24 —
+      paketin kendi klasöründen koşuyorlar (`import` çalışma dizinine göre
+      çözülüyor) ve özet satırı yoksa BAŞARISIZ sayılıyorlar.
 
-- [ ] **Kökteki bayat `.a` arşivleri taze derlemeyi gölgeliyor.** AOT link
-      arama sırası önce çalıştırılabilirin dizinine bakıyor; iki ayrı oturumda
-      yanıltıcı link hatasına yol açtı. `build.sh` her çalıştırmada
-      tazeleyebilir.
-
-- [x] **Oyun belgeleri geldi.** ✅ 2026-08-14 — `tulpar-lang-web`'de yeni
-      **Oyun Geliştirme** bölümü: `games/overview` (üç katman + web/Android
-      hedefleri) ve `games/scene3d` (tam API referansı), ikisi de EN + TR.
-      Not: maddenin iddiasının aksine arcade'in de sayfası YOKTU — sitede
-      oyunla ilgili hiçbir sayfa yoktu. Site 70 sayfa olarak derlendi.
+- [x] **Kökteki bayat `.a` arşivleri artık gölgelemiyor.** ✅ 2026-08-24 —
+      bağlayıcı arama sırası, exe dizinindeki arşiv geliştirme ağacındakinden
+      ESKİYSE ters çevriliyor. `cmake --build` ile artımlı derleyen biri için
+      sinsi bir "undefined reference" kaynağıydı (bu oturumda bir kez yakaladı).
 
 - [ ] **arcade ve tame'in kendi belge sayfaları yok.** `games/overview` ikisine
       de değiniyor ama API referansları yok; `games/scene3d` deseni izlenerek

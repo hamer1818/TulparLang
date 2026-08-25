@@ -17,6 +17,7 @@
 #endif
 #if !PLATFORM_WINDOWS
 #include <csignal>   // SIGINT
+#include <vector>
 #include <sys/wait.h> // WIFSIGNALED / WTERMSIG on system() status
 #include <dirent.h>  // find_android_ndk: ~/Android/android-ndk-* taraması
 #endif
@@ -201,23 +202,52 @@ static std::string build_link_search_dirs() {
     out += "\" ";
   };
 
+  // Geliştirme ağacındaki adaylar. `./build.sh` bunları köke kopyalıyor ama
+  // doğrudan `cmake --build build-linux` kullanan (yani artımlı derleyen)
+  // biri için kökteki kopya BAYAT kalıyor ve exe dizini önce arandığı için
+  // taze arşivi GÖLGELİYOR. Sonuç sinsiydi: yeni eklenen bir builtin
+  // "undefined reference" ile bağlanamıyor, oysa derleme başarılı.
+  //
+  // Çözüm: exe dizinindeki arşiv geliştirme ağacındakinden ESKİYSE, arama
+  // sırası ters çevriliyor. Kurulu bir tulpar'da geliştirme dizini zaten
+  // yok, yani orada davranış değişmiyor.
+  std::vector<std::string> dev_dirs;
+#if PLATFORM_WINDOWS
+  dev_dirs.push_back("./build-windows");
+  dev_dirs.push_back("./build-windows/Release");
+#elif PLATFORM_MACOS
+  dev_dirs.push_back("./build-macos");
+#else
+  dev_dirs.push_back("./build-linux");
+#endif
+  dev_dirs.push_back("./build");
+
   std::string exe_dir = get_executable_dir();
+  bool dev_first = false;
+  if (!exe_dir.empty()) {
+    struct stat se;
+    if (stat((exe_dir + "/libtulpar_runtime.a").c_str(), &se) == 0) {
+      for (const auto &d : dev_dirs) {
+        struct stat sd;
+        if (stat((d + "/libtulpar_runtime.a").c_str(), &sd) == 0 &&
+            sd.st_mtime > se.st_mtime) {
+          dev_first = true;
+          break;
+        }
+      }
+    }
+  }
+
+  if (dev_first) {
+    for (const auto &d : dev_dirs) add(d);
+  }
   if (!exe_dir.empty()) {
     add(exe_dir);          // installer drops libtulpar_runtime.a here
     add(exe_dir + "/lib"); // package-manager-style /lib subdir variant
   }
-
-  // Dev-tree fallbacks — running `tulpar` straight out of the repo
-  // root after `./build.sh` should keep working without TULPAR_HOME.
-#if PLATFORM_WINDOWS
-  add("./build-windows");
-  add("./build-windows/Release");
-#elif PLATFORM_MACOS
-  add("./build-macos");
-#else
-  add("./build-linux");
-#endif
-  add("./build");
+  if (!dev_first) {
+    for (const auto &d : dev_dirs) add(d);
+  }
 
   // Last resort override — operators with custom layouts can set
   // TULPAR_RUNTIME_DIR=/some/path to point at the runtime archive
