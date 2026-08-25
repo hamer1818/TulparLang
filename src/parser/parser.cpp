@@ -282,7 +282,8 @@ int Parser::get_precedence(TulparTokenType op) const {
         case TOKEN_PLUS:
         case TOKEN_MINUS: return 5;
         case TOKEN_MULTIPLY:
-        case TOKEN_DIVIDE: return 6;
+        case TOKEN_DIVIDE:
+        case TOKEN_MODULO: return 6;
         default: return 0;
     }
 }

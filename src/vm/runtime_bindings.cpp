@@ -1180,6 +1180,34 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
       return;
     }
 
+  case TOKEN_MODULO: // %
+    // Kutulu yol. Tam sayıda işaretli kalan (C ile aynı: işaret bölünenden),
+    // ondalıkta `fmod`. Sıfıra bölmede bölmeyle AYNI davranış — iki farklı
+    // hata biçimi tutmak kullanıcı için sürpriz olurdu.
+    switch (type_pair) {
+    case TYPE_INT_INT:
+      if (AS_INT(b) == 0) {
+        printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
+                                           "Runtime Error: Division by zero"));
+        *result = VM_INT(0);
+        return;
+      }
+      *result = VM_INT(AS_INT(a) % AS_INT(b));
+      return;
+    case TYPE_FLOAT_FLOAT:
+      *result = VM_FLOAT(fmod(AS_FLOAT(a), AS_FLOAT(b)));
+      return;
+    case TYPE_INT_FLOAT:
+      *result = VM_FLOAT(fmod((double)AS_INT(a), AS_FLOAT(b)));
+      return;
+    case TYPE_FLOAT_INT:
+      *result = VM_FLOAT(fmod(AS_FLOAT(a), (double)AS_INT(b)));
+      return;
+    default:
+      *result = VM_INT(0);
+      return;
+    }
+
   case TOKEN_LESS: // <
     switch (type_pair) {
     case TYPE_INT_INT:

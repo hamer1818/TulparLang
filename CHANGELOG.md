@@ -89,6 +89,14 @@ ikili argümanları görüyordu ama `tulpar script.tpr ...` yolu görmüyordu.
 Artık iletiliyor (kabuk alıntılaması tek tırnakla; boşluk ve `$` içeren
 yollar bozulmuyor).
 
+### Added — `%` operatörü
+
+`mod()` builtin'i vardı ama `%` yoktu: `7 % 3` sözcükleyici hatası veriyordu.
+İkisi AYNI şeyi yapıyor — `%` yalnız her dilde beklenen, daha okunur yazım.
+İşaret bölünenden geliyor (C ve çoğu dille aynı); farklı bir kural seçmek
+`mod()` ile ayrışırdı. Önceliği `*` ve `/` ile aynı, ondalıkta `fmod`,
+sıfıra bölmede bölmeyle aynı davranış.
+
 ### Added — `chr(c)` builtin'i
 
 Dilde `ord` vardı ama tersi YOKTU. Bu bir asimetriydi ve pratik bir bedeli

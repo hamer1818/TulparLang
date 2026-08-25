@@ -230,13 +230,9 @@ boşluklar; backlog'da yoklardı.
       (sessiz değil), asıl çözüm codegen'de parametre bağlamayı store ile aynı
       hale getirmek.
 
-- [ ] **`%` operatörü yok** — `mod()` var.
-
-- [x] **Ayrılmış kelime çarpması artık teşhis ediliyor.** ✅ 2026-08-24 —
-      hata mesajı SUÇLU KELİMEYİ söylüyor ("ayrilmis kelime ad olarak
-      kullanilamaz: 'tip'"). Genel "ad bekleniyordu" mesajı belirtiyi
-      anlatıyordu, sebebi değil; bu oturumda `len`, `tip` ve `icinde` ile üç
-      kez yanlış yere baktırdı. `build.sh suites` denetliyor.
+- [x] **`%` operatörü geldi.** ✅ 2026-08-24 — `mod()` builtin'i duruyor ve
+      ikisi AYNI sonucu veriyor (işaret bölünenden, C ile aynı). Önceliği
+      `*` ve `/` ile aynı. Ondalıkta `fmod`. Yeni süit: tests/modulo.test.tpr.
 
 - [ ] **Küre ↔ DÖNÜK kutu yaklaşık.** `_sph_box3` kutuyu eksen-hizalı
       varsayıyor; kutu-kutu çifti tam SAT'tan geçiyor, küre-kutu geçmiyor.

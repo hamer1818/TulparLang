@@ -3093,6 +3093,13 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
         result.value = LLVMBuildSDiv(backend->builder, L.value, R.value, "div");
         result.type = INFERRED_INT;
         return result;
+      case TOKEN_MODULO:
+        // İşaretli kalan: C ve çoğu dille aynı (işaret BÖLÜNENDEN gelir).
+        // `mod()` builtin'i duruyor ve aynı şeyi yapıyor; `%` yalnız daha
+        // okunur bir yazım.
+        result.value = LLVMBuildSRem(backend->builder, L.value, R.value, "srem");
+        result.type = INFERRED_INT;
+        return result;
       case TOKEN_LESS:
         result.value = LLVMBuildZExt(
             backend->builder,
