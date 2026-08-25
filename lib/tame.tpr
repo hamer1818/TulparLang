@@ -355,6 +355,10 @@ func gen_cylinder(r, h, slices): int { return tm3_gen(3, r, h, slices, 0); }
 func gen_silindir(r, h, slices): int { return tm3_gen(3, r, h, slices, 0); }
 func gen_torus(radius, size, seg, sides): int { return tm3_gen(4, radius, size, seg, sides); }
 func gen_cone(r, h, slices): int     { return tm3_gen(5, r, h, slices, 0); }
+// KAMA: raylib'de bu primitif yok, mesh'i tame kuruyor. Kutu gibi
+// ORTALANMIŞ; tepe yüzeyi -z ucunda tabanda, +z ucunda tavanda.
+func gen_wedge(w, h, d): int         { return tm3_gen(7, w, h, d, 0); }
+func gen_kama(w, h, d): int          { return tm3_gen(7, w, h, d, 0); }
 func gen_koni(r, h, slices): int     { return tm3_gen(5, r, h, slices, 0); }
 func gen_knot(radius, size, seg, sides): int  { return tm3_gen(6, radius, size, seg, sides); }
 

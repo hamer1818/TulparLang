@@ -371,9 +371,21 @@ boşluklar; backlog'da yoklardı.
 - [ ] **Windows shim'leri ölü kod.** Natif Windows 3.13.0'da bırakıldı;
       `PLATFORM_WINDOWS` dalları bilerek yerinde ama bakımsız ve test edilmiyor.
 
-- [ ] **Rampa artık gereksiz olabilir.** Arazi geldiğine göre çoğu kullanım
-      arazinin işi. Ya gerçek kama mesh'i üretilmeli ya da rampa "arazi yokken
-      kullanılan basit yol" olarak konumlandırılmalı.
+- [x] **Rampa artık GERÇEK kama mesh'i.** ✅ 2026-08-25 — iki seçenekten
+      birincisi seçildi (konumlandırma değil, düzeltme): raylib'de kama
+      primitifi yok, mesh'i tame kuruyor (`gen_wedge` / `tm3_gen` kind 7).
+      Eskiden 12 kademeli kutu çiziliyordu; fizik analitik eğimi kullandığı
+      için yürüyüş pürüzsüzdü ama GÖRÜNTÜ merdivendi.
+      Sarma yönü elle sıralanmıyor: her üçgen istenen normale göre kendini
+      düzeltiyor — ters sarılmış bir yüz arkayüz ayıklamasıyla sessizce
+      GÖRÜNMEZ olur, yani hata "hata yok" gibi durur.
+      Denetim: `tests/wedge_mesh_check.py` (build.sh suites içinde) üçgenleri
+      C KAYNAĞINDAN okuyup sarma yönünü, kapalılığı ve eğimin `_ramp_h3` ile
+      aynı tanımda olduğunu ölçüyor. İlk yazımında eğim normalini kendisi
+      TÜRETİYORDU ve o yüzden normali bozan deneme kaçtı — normal de artık
+      kaynaktan okunuyor, üç bozma da yakalanıyor.
+      Pencere yokken (headless test) mesh üretilemiyor ve çizim eski kademeli
+      yola düşüyor; motorun penceresiz sınanabilirliği korunuyor.
 
 - [x] **Konumsal seste yön geldi.** ✅ 2026-08-25 — `sound3d`/`ses3d` artık
       mesafe zayıflatmasının yanında stereo kaydırma da uyguluyor

@@ -152,6 +152,15 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}Builtin denetimi basarisiz!${NC}"
             exit 1
         fi
+        # Kama mesh'i: rampa artık gerçek bir mesh. GÖZLE doğrulamak pencere
+        # açmayı gerektirir (depoda yasak) ve ters sarılmış bir üçgen
+        # arkayüz ayıklamasıyla sessizce GÖRÜNMEZ olur — yani hata "hata yok"
+        # gibi durur. Denetim üçgenleri C kaynağından okuyup sarma yönünü,
+        # kapalılığı ve eğimin fizikle aynı tanımda olduğunu ölçüyor.
+        if ! python3 tests/wedge_mesh_check.py; then
+            echo -e "${RED}Kama mesh denetimi basarisiz!${NC}"
+            exit 1
+        fi
     fi
     # packages/ testleri. Bunlar birinci-taraf yayınlanabilir paketler ve
     # HİÇBİR otomasyonda koşmuyorlardı. `import "<ad>"` ÇALIŞMA DİZİNİNE göre

@@ -173,6 +173,33 @@ her yerde değil.
 
 Yeni süit: `tests/bool_to_int_arg.test.tpr` (7 test) + `typeinfer/pass/06`.
 
+### Fixed — rampa artık gerçek bir kama mesh'i (12 kademeli kutu değil)
+
+raylib'de kama primitifi yok, o yüzden rampa yerel +Z boyunca 12 kademeli
+kutu olarak çiziliyordu. Fizik analitik eğimi kullandığı için yürüyüş
+pürüzsüzdü — merdiven yalnız GÖRÜNTÜDEYDİ, ama oradaydı.
+
+Mesh'i artık tame kuruyor (`gen_wedge` / `tm3_gen` kind 7). Kutu gibi
+ortalanmış ve eğim tanımı `_ramp_h3` ile birebir aynı; ayrışsalar görünen
+rampa ile basılan rampa farklı yerlerde olurdu.
+
+**Sarma yönü elle sıralanmıyor.** Her üçgen, kendisine verilen normale göre
+köşe sırasını düzeltiyor. Sebebi ölçülebilirlik: bu mesh'i gözle doğrulamak
+pencere açmayı gerektirir (depoda yasak) ve ters sarılmış bir yüz arkayüz
+ayıklamasıyla sessizce GÖRÜNMEZ olur — yani hata "hata yok" gibi durur.
+
+Denetim `tests/wedge_mesh_check.py` ile yapılıyor (`build.sh suites` içinde)
+ve üçgen listesini C KAYNAĞINDAN okuyor, kopyasını tutmuyor: kopya tutsaydı C
+değişince denetim eski hâli doğrulamaya devam ederdi. Üç şeyi ölçüyor — sarma
+yönü, katının kapalı olması, eğimin fizikle aynı tanımda olması.
+
+Denetim ilk yazımında eğim normalini KENDİSİ TÜRETİYORDU, kaynaktan
+okumuyordu; o yüzden normali düz yukarı yapan bozma ondan kaçtı (üç bozmadan
+yalnız ikisi yakalanmıştı). Normal de artık kaynaktan okunuyor.
+
+Pencere yokken (headless test) mesh üretilemiyor ve çizim eski kademeli yola
+düşüyor — motorun penceresiz sınanabilirliği korunuyor.
+
 ### Added — parçacıklarda dönme ve doku atlası
 
 Parçacıklar tek boy DÜZ bir dörtgendi: yirmi tanesi de birbirinin aynısı

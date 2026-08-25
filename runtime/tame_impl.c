@@ -1986,6 +1986,84 @@ int tame_impl_load_model(const char *path) {
   return slot;
 }
 
+// --- Kama (wedge) mesh'i -----------------------------------------------------
+// raylib'de kama primitifi YOK. Rampa bu yüzden 12 kademeli kutu olarak
+// çiziliyordu: fizik analitik eğimi kullandığı için yürüyüş pürüzsüzdü ama
+// GÖRÜNTÜ merdivendi. Gerçek çözüm mesh'i kendimiz kurmak.
+//
+// Kutu gibi ORTALANMIŞ: x ∈ [-a/2, a/2], z ∈ [-c/2, c/2], tepe yüzeyi
+// z = -c/2'de tabanda (y = -b/2), z = +c/2'de tavanda (y = +b/2). scene3d'nin
+// `_ramp_h3` analitik yüksekliğiyle aynı tanım — ikisi ayrışırsa görünen
+// rampa ile basılan rampa farklı olurdu.
+//
+// SARMA YÖNÜ elle sıralanmıyor. Üçgenleri gözle doğrulayamıyorum ve ters
+// sarılmış bir yüz arkayüz-ayıklamasıyla GÖRÜNMEZ olur; o yüzden her üçgen,
+// istenen normale göre kendini düzeltiyor.
+static int tame_wedge_tri(float *v, float *n, float *t, int base,
+                          Vector3 p0, Vector3 p1, Vector3 p2, Vector3 nn) {
+  Vector3 e1 = Vector3Subtract(p1, p0);
+  Vector3 e2 = Vector3Subtract(p2, p0);
+  Vector3 f = Vector3CrossProduct(e1, e2);
+  if (Vector3DotProduct(f, nn) < 0.0f) {
+    Vector3 tmp = p1;
+    p1 = p2;
+    p2 = tmp;
+  }
+  Vector3 ps[3] = {p0, p1, p2};
+  // Doku koordinatı kaba: kama için döşeme değil renk asıl kullanım.
+  float uv[6] = {0.0f, 0.0f, 1.0f, 0.0f, 0.5f, 1.0f};
+  for (int i = 0; i < 3; i++) {
+    v[(base + i) * 3 + 0] = ps[i].x;
+    v[(base + i) * 3 + 1] = ps[i].y;
+    v[(base + i) * 3 + 2] = ps[i].z;
+    n[(base + i) * 3 + 0] = nn.x;
+    n[(base + i) * 3 + 1] = nn.y;
+    n[(base + i) * 3 + 2] = nn.z;
+    t[(base + i) * 2 + 0] = uv[i * 2 + 0];
+    t[(base + i) * 2 + 1] = uv[i * 2 + 1];
+  }
+  return base + 3;
+}
+
+static Mesh tame_gen_wedge(float a, float b, float c) {
+  float hx = a * 0.5f, hy = b * 0.5f, hz = c * 0.5f;
+  // 5 yüz: taban(2) + arka(2) + eğim(2) + iki yan üçgen(1+1) = 8 üçgen.
+  const int tris = 8, verts = tris * 3;
+  Mesh m = {0};
+  m.triangleCount = tris;
+  m.vertexCount = verts;
+  m.vertices = (float *)RL_CALLOC(verts * 3, sizeof(float));
+  m.normals = (float *)RL_CALLOC(verts * 3, sizeof(float));
+  m.texcoords = (float *)RL_CALLOC(verts * 2, sizeof(float));
+  if (!m.vertices || !m.normals || !m.texcoords) return m;
+
+  Vector3 A = {-hx, -hy, -hz}, B = {hx, -hy, -hz};   // ön (alçak) kenar
+  Vector3 C = {hx, -hy, hz},   D = {-hx, -hy, hz};   // arka taban
+  Vector3 E = {hx, hy, hz},    F = {-hx, hy, hz};    // arka tepe
+
+  Vector3 nd = {0.0f, -1.0f, 0.0f};                  // taban
+  Vector3 nb = {0.0f, 0.0f, 1.0f};                   // arka
+  Vector3 nl = {-1.0f, 0.0f, 0.0f};                  // sol yan
+  Vector3 nr = {1.0f, 0.0f, 0.0f};                   // sağ yan
+  // Eğim normali: yüzey +z boyunca c kadar giderken b kadar yükseliyor,
+  // teğet (0, b, c); dışa bakan normal (0, c, -b).
+  float sl = sqrtf(b * b + c * c);
+  Vector3 ns = {0.0f, (sl > 0.0f ? c / sl : 1.0f), (sl > 0.0f ? -b / sl : 0.0f)};
+
+  int k = 0;
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, A, B, C, nd);
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, A, C, D, nd);
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, D, C, E, nb);
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, D, E, F, nb);
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, A, B, E, ns);
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, A, E, F, ns);
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, A, D, F, nl);
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, B, C, E, nr);
+
+  UploadMesh(&m, false);
+  return m;
+}
+
 // Prosedürel mesh üret → model handle. kind ile şekil seçilir (bkz. lib/tame.tpr
 // gen_* sarmalayıcıları). Dosya gerekmez.
 int tame_impl_gen(int kind, double a, double b, double c, double d) {
@@ -2005,6 +2083,7 @@ int tame_impl_gen(int kind, double a, double b, double c, double d) {
     case 4: mesh = GenMeshTorus((float)a, (float)b, ic, id); break;
     case 5: mesh = GenMeshCone((float)a, (float)b, ic); break;
     case 6: mesh = GenMeshKnot((float)a, (float)b, ic, id); break;
+    case 7: mesh = tame_gen_wedge((float)a, (float)b, (float)c); break;
     default: mesh = GenMeshCube((float)a, (float)b, (float)c); break;
   }
   Model m = LoadModelFromMesh(mesh);

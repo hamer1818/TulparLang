@@ -2870,6 +2870,15 @@ func ramp3d(x, y, z, sx, sy, sz, color, yaw): int {
     int s = _slot_of3(id);
     Ent3 e = _e3[s];
     e.yaw = yaw;
+    // GERÇEK kama mesh'i. Eskiden rampa 12 kademeli kutu olarak çiziliyordu:
+    // fizik analitik eğimi kullandığı için yürüyüş pürüzsüzdü ama görüntü
+    // merdivendi. Mesh boyutu rampayla birlikte üretiliyor (ölçek 1.0 ile
+    // çizilecek), çünkü model çizimi tek ölçek alıyor ve rampaların üç
+    // boyutu birbirinden bağımsız.
+    //
+    // Pencere yoksa (headless test) -1 döner ve çizim eski kademeli yola
+    // düşer — motorun penceresiz sınanabilirliği korunuyor.
+    e.model = gen_wedge(sx, sy, sz);
     // Rampa katı DEĞİL: üzerine basılır (zemin yüksekliğiyle), itilmez. Katı
     // olsaydı kutu gövdesi eğik yüzeyle çelişir, oyuncuyu yandan dışarı iterdi.
     e.solid = 0;
@@ -3559,10 +3568,15 @@ func _s3_render() {
                             _fade_a3);
             }
             if (e.shape == SHAPE_RAMP) {
-                // raylib'de kama primitifi yok. Rampayı yerel +Z boyunca
-                // KADEMELİ diliyoruz: her dilim, o noktadaki yüzey yüksekliğine
-                // kadar uzanan bir kutu. Fizik analitik eğimi kullanıyor
-                // (bkz. _ramp_h3), yani yürüyüş pürüzsüz — kademe yalnız görsel.
+                // GERÇEK kama mesh'i varsa tek çağrıda çiz. `ramp3d` onu
+                // rampayla birlikte üretiyor, o yüzden ölçek 1.0.
+                if (e.model >= 0) {
+                    draw_model_rot(e.model, e.x, e.y, e.z, e.yaw, 1.0, ecol);
+                } else {
+                // Mesh üretilemediyse (pencere yokken) ESKİ yol: rampayı yerel
+                // +Z boyunca KADEMELİ dilimle. Fizik analitik eğimi kullanıyor
+                // (bkz. _ramp_h3), yani yürüyüş her iki durumda da pürüzsüz —
+                // kademe yalnız görsel.
                 int steps = 12;
                 float c = cos(e.yaw * DEG2RAD3);
                 float s = sin(e.yaw * DEG2RAD3);
@@ -3580,6 +3594,7 @@ func _s3_render() {
                     cube(wx, base + h * 0.5, wz, e.sx, h, dz, ecol);
                     k = k + 1;
                 }
+                }   // kama mesh'i yoksa else'i
             } else {
             if (e.shape == SHAPE_CUBE) {
                 // Yaw varsa DÖNÜK çiz. Düz `cube()` dönme almıyor; çarpışma
