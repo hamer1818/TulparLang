@@ -346,13 +346,35 @@ boşluklar; backlog'da yoklardı.
       ESKİYSE ters çevriliyor. `cmake --build` ile artımlı derleyen biri için
       sinsi bir "undefined reference" kaynağıydı (bu oturumda bir kez yakaladı).
 
-- [ ] **arcade ve tame'in kendi belge sayfaları yok.** `games/overview` ikisine
-      de değiniyor ama API referansları yok; `games/scene3d` deseni izlenerek
-      `games/arcade` ve `games/tame` yazılmalı. (10 yayınlanmış tarayıcı oyunu
-      arcade kullanıyor, yani okuyucu kitlesi hazır.)
+- [x] **arcade ve tame belge sayfaları ZATEN VAR.** ✅ ölçüldü 2026-08-26 —
+      `origin/master`'da `games/arcade.mdx` (246 satır) ve `games/tame.mdx`
+      (146 satır), TR ikizleriyle birlikte. Madde YANLIŞTI: yerel
+      `tulpar-lang-web` kopyası `docs/debugger-and-tls` adlı ESKİ bir dalda
+      duruyor ve o daldan bakınca dosyalar yok görünüyor.
 
-- [ ] **3B oyun `tulparlang.dev/oyunlar`'a konulmadı.** Teknik engel kalmadı
-      (Faz 7 şartı sağlandı, menü/duraklat/yeniden-başla geldi).
+- [x] **3B oyunlar `tulparlang.dev/oyunlar`'da ZATEN YAYINDA.** ✅ ölçüldü
+      2026-08-26 — `origin/master`, commit `b1808b8`:
+      `public/oyunlar/3d_collector`, `3d_robot`, `3d_models`, `3d_primitives`
+      (.html/.js/.wasm, robot için .data). Bu madde de eski dal yüzünden
+      eksik görünüyordu.
+
+      Bu oturumda dördü de yeniden derlendi (`web_demo/`) ve headless
+      Chrome'da açıldığı doğrulandı: raylib GL bağlamını kuruyor, abort yok.
+      **Görsel denetim YAPILMADI.**
+
+      Yöntem notu: bu sayfalarda `--dump-dom` ASILIYOR (sonsuz oyun döngüsü,
+      ASYNCIFY) ve boş çıktı veriyor — yani "hata metni bulunamadı" ile
+      "hiçbir şey okunamadı" ayırt edilemiyor. Kanıt, akış hâlinde gelen
+      KONSOL satırı (raylib'in kendi GL uyarısı), DOM değil.
+
+- [ ] **`tulpar-lang-web` yerel kopyası ESKİ DALDA ve commit edilmemiş iş
+      taşıyor.** Dal `docs/debugger-and-tls`, `origin/master`'ın atası değil.
+      Çalışma ağacında commit edilmemiş `games/{overview,scene3d,editor}.mdx`
+      (TR+EN) var — master'da bu üçü YOK, master'da olan `arcade`/`tame`
+      ise bu dalda yok. Ayrıca `scene3d.mdx` bu oturumdan ÖNCE yazıldı:
+      harmanlama, `anim_set3d`, parçacık dokusu, stereo ses, `float[]`,
+      web'de kalıcı kayıt ve İNDİR düğmesi orada anlatılmıyor.
+      Ayrı depo — dal/commit kararı kullanıcının.
 
 - [x] **3B örneklerin İngilizce ikizi geldi.** ✅ 2026-08-25 — 15 dosya:
       8 `scene3d_*` (arena, camera, character, collector, data_game, editor,
