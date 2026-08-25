@@ -88,14 +88,17 @@ static bool is_comparable_scalar(DataType t) {
   return t == TYPE_INT || t == TYPE_FLOAT || t == TYPE_STRING || t == TYPE_BOOL;
 }
 
-// `int x = <bool>` and `x = <bool>` are a supported, tested coercion: the AOT
-// backend rewrites the VMValue tag from VM_VAL_BOOL to VM_VAL_INT at the local
-// store (llvm_backend.cpp's AST_VARIABLE_DECL boxed-local fallback, guarded by
-// tests/bool_to_int_coerce.test.tpr — slot 2 already holds 1/0, so it is
-// lossless). No such rewrite happens at a CALL boundary, which is exactly why
-// `assert(x < y, msg)` against an `int cond` parameter silently never fired.
-// So this allowance is deliberately scoped to stores; the argument check keeps
-// rejecting the same pair, because there the value really does stay a bool.
+// `int x = <bool>` is a supported, tested coercion: the AOT backend rewrites
+// the VMValue tag from VM_VAL_BOOL to VM_VAL_INT (slot 2 already holds 1/0, so
+// it is lossless). Guarded by tests/bool_to_int_coerce.test.tpr.
+//
+// This used to be scoped to STORES only, because no such rewrite happened at a
+// CALL boundary — which is exactly why `assert(x < y, msg)` against an
+// `int cond` parameter silently never fired. As of 2026-08-25 the callee's
+// parameter prologue runs the SAME coercion (`llvm_coerce_bool_tag_to_int`),
+// so the pair is now legal in both positions and this predicate is shared by
+// the declaration check and the argument check. Keeping them apart would now
+// reject something that provably works.
 static bool store_coercible(DataType declared, DataType initializer) {
   return declared == TYPE_INT && initializer == TYPE_BOOL;
 }
@@ -368,7 +371,10 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
             }
           }
 
+          // `f(true)` into an `int` parameter: the callee prologue rewrites
+          // the tag, same as a store. See store_coercible.
           if (!is_unknown(param_type) && !is_unknown(arg_type) &&
+              !store_coercible(param_type, arg_type) &&
               !types_compatible(param_type, arg_type)) {
             report_error(ctx,
                          "Argument %d of '%s': expected %s, got %s at line %d",

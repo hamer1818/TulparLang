@@ -1,0 +1,22 @@
+// Expected: typeinfer must ACCEPT a bool argument in an `int` parameter slot.
+//
+// The callee's parameter prologue rewrites the VMValue tag from VM_VAL_BOOL to
+// VM_VAL_INT — the same lossless coercion a store does (slot 2 already holds
+// 1/0). Rejecting this would flag code that provably works: see
+// tests/bool_to_int_arg.test.tpr, which measures that `f(true)` reaches the
+// body as an int, so `x == 1` inside is TRUE.
+//
+// The sibling fail-fixture (fail/06) covers the case that must still be
+// rejected: a string in an int slot, where nothing coerces.
+
+func al(int x): int { return x + 1; }
+func esit_mi(int x): bool { return x == 1; }
+
+func main() {
+    print(al(true));
+    print(esit_mi(true));
+    int y = true;          // pass/05 covers the store side
+    print(al(y));
+}
+
+main();

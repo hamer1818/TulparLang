@@ -249,11 +249,17 @@ boşluklar; backlog'da yoklardı.
       referansı kırpılıyor ve `call()` hiçbir şey yapmıyor; derleyici uyarmıyor.
       typecheck "fonksiyon referansını int'e yazıyorsun" diyebilir.
 
-- [ ] **Argüman sınırında `bool`→`int` dönüşümü yok.** `int x = true` ve
-      `x = true` dönüşüyor, `f(true)` → `int` parametresi dönüşmüyor.
-      `assert` hatası tam bu boşlukta doğmuştu. Artık typecheck yakalıyor
-      (sessiz değil), asıl çözüm codegen'de parametre bağlamayı store ile aynı
-      hale getirmek.
+- [x] **Argüman sınırında `bool`→`int` geldi.** ✅ 2026-08-25 — çağrılan
+      tarafın parametre önsözü artık bildirimle AYNI yardımcıyı çağırıyor
+      (`llvm_coerce_bool_tag_to_int`), yani ikisi ayrışamıyor.
+      Hata SESSİZDİ ve bu yüzden görünmedi: aritmetik yol değeri zaten
+      zorluyordu (`x + 10` doğru çıkıyor), ama karşılaştırma ÖNCE tip
+      etiketine bakıyor — `f(true)` sonrası gövdedeki `x == 1` HER ZAMAN
+      false idi. Ölçüldü. typecheck'in çağrı sınırındaki reddi de kalktı
+      (artık çalışan bir şeyi reddediyordu).
+      Yeni süit: tests/bool_to_int_arg.test.tpr + typeinfer pass/06.
+      TİPSİZ parametrede bool bool kalıyor — dönüşüm `int` BİLDİRİLDİĞİ için
+      oluyor, her yerde değil.
 
 - [x] **`%` operatörü geldi.** ✅ 2026-08-24 — `mod()` builtin'i duruyor ve
       ikisi AYNI sonucu veriyor (işaret bölünenden, C ile aynı). Önceliği

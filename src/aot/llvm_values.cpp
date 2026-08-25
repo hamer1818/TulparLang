@@ -306,3 +306,20 @@ LLVMTypeRef llvm_make_vmvalue_func_type(LLVMBackend *backend,
   free(all);
   return ft;
 }
+
+// Bkz. llvm_values.hpp — bildirim ve parametre bağlama bunu PAYLAŞIYOR.
+LLVMValueRef llvm_coerce_bool_tag_to_int(LLVMBackend *backend,
+                                         LLVMValueRef vm_val) {
+  if (!vm_val) return vm_val;
+  LLVMValueRef tag =
+      LLVMBuildExtractValue(backend->builder, vm_val, 0, "b2i.tag");
+  LLVMValueRef is_bool = LLVMBuildICmp(
+      backend->builder, LLVMIntEQ, tag,
+      LLVMConstInt(backend->int32_type, /*VM_VAL_BOOL=*/2, 0), "b2i.is_bool");
+  LLVMValueRef new_tag = LLVMBuildSelect(
+      backend->builder, is_bool,
+      LLVMConstInt(backend->int32_type, /*VM_VAL_INT=*/0, 0), tag,
+      "b2i.tag.coerced");
+  return LLVMBuildInsertValue(backend->builder, vm_val, new_tag, 0,
+                              "b2i.bool_to_int");
+}

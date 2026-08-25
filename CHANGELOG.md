@@ -42,6 +42,34 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Fixed — `int` PARAMETREYE geçen `bool` gövdede hâlâ bool'du
+
+`func f(int x)` çağrılırken `f(true)` yazılınca değer gövdeye **bool etiketiyle**
+ulaşıyordu. Aritmetik yol bunu zorluyor (`x + 10` doğru sonuç veriyor), o yüzden
+hata görünmedi; görünen yer karşılaştırma: çalışma zamanı ÖNCE tip etiketine
+bakıyor, yani `x == 1` **her zaman false** oluyordu.
+
+`lib/test.tpr`'daki `assert`'in sessiz no-op olması tam bu boşlukta doğmuştu ve
+boşluk hâlâ açıktı — o hata yalnız typecheck tarafında kapatılmıştı, codegen
+tarafında değil.
+
+Çağrılan tarafın parametre önsözü artık bildirimle AYNI yardımcıyı çağırıyor
+(`llvm_coerce_bool_tag_to_int`, `llvm_values.cpp`). Çağıran tarafta değil
+ÇAĞRILAN tarafta: orada tek bir yer var ve doğrudan çağrı, `call()` ile dinamik
+gönderim ve modül-takma-adlı çağrılar hepsi oradan geçiyor.
+
+typecheck'in çağrı sınırındaki reddi de kalktı — kural codegen'in ESKİ
+davranışını yansıtmak için yazılmıştı ve artık provably çalışan bir şeyi
+reddediyordu. `tests/typeinfer/fail/06` bu çifti "kötü argüman" örneği olarak
+kullanıyordu; fixture'ın asıl koruduğu şey içe aktarılmış imzaların
+denetlenmesi olduğu için örnek `str`→`int`'e çevrildi (hiçbir şey string'i
+int'e çevirmiyor), amacı korunarak.
+
+TİPSİZ parametrede bool bool kalıyor: dönüşüm `int` BİLDİRİLDİĞİ için oluyor,
+her yerde değil.
+
+Yeni süit: `tests/bool_to_int_arg.test.tpr` (7 test) + `typeinfer/pass/06`.
+
 ### Added — parçacıklarda dönme ve doku atlası
 
 Parçacıklar tek boy DÜZ bir dörtgendi: yirmi tanesi de birbirinin aynısı

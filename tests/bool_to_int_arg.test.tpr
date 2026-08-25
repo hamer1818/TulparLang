@@ -1,0 +1,67 @@
+// `int` bildirilmiş bir PARAMETREYE bool geçince değerin tip etiketi de int
+// olmalı — yalnız sayısal yükü değil.
+//
+// Neden ayrı bir süit: aritmetik yol değeri zaten zorluyordu (`x + 10` doğru
+// çıkıyor), o yüzden hata yıllarca görünmedi. Görünen yer KARŞILAŞTIRMA:
+// çalışma zamanı önce tip etiketine bakıyor, yani etiketi bool kalmış bir
+// değer için `x == 1` HER ZAMAN false. `lib/test.tpr`'daki `assert`'in sessiz
+// no-op olması tam bu boşlukta doğmuştu — bu süit onun nöbetçisi.
+
+import "test";
+
+func int_esit_mi(int x): bool { return x == 1; }
+func int_sifir_mi(int x): bool { return x == 0; }
+func int_topla(int x): int { return x + 10; }
+func bool_uret(): bool { return true; }
+
+func arg_true_esittir_bir() {
+    assert(int_esit_mi(true), "int parametreye gecen true, 1'e esit degil");
+}
+
+func arg_false_esittir_sifir() {
+    assert(int_sifir_mi(false), "int parametreye gecen false, 0'a esit degil");
+}
+
+func arg_karsilastirma_sonucu() {
+    // Sabit `true` yerine bir KARŞILAŞTIRMA sonucu — aynı yoldan geçmeli.
+    assert(int_esit_mi(3 > 1), "karsilastirma sonucu 1'e esit degil");
+    assert(int_sifir_mi(3 < 1), "karsilastirma sonucu 0'a esit degil");
+}
+
+func arg_fonksiyon_donusu() {
+    assert(int_esit_mi(bool_uret()), "bool donduren fonksiyon 1'e esit degil");
+}
+
+func arg_aritmetik_bozulmadi() {
+    // Zaten çalışan yol: etiket düzeltmesi sayısal yükü BOZMAMALI.
+    assert_eq_int(int_topla(true), 11);
+    assert_eq_int(int_topla(false), 10);
+}
+
+func store_ile_ayni_sonuc() {
+    // Bildirim ve parametre bağlama AYNI yardımcıyı çağırıyor; sonuç da aynı
+    // olmalı. Ayrışırlarsa hangisinin doğru olduğu belirsizleşir.
+    int y = true;
+    assert(int_esit_mi(y) == int_esit_mi(true),
+           "store yolu ile parametre yolu farkli sonuc veriyor");
+}
+
+func tipsiz_parametre_bool_kaliyor() {
+    // TİPSİZ parametre (`var`) bool'u bool bırakmalı: dönüşüm `int`
+    // BİLDİRİLDİĞİ için oluyor, her yerde değil. Farklı tipler arası `==`
+    // zaten sabit — typecheck de bunu ayrıca bildiriyor.
+    assert(gecir_tipsiz(true) == false,
+           "tipsiz parametrede bool sessizce int'e cevrilmis");
+}
+
+func gecir_tipsiz(x): bool { return x == 1; }
+
+print("=== bool -> int argüman sınırı ===");
+test("true, int parametrede 1", "arg_true_esittir_bir");
+test("false, int parametrede 0", "arg_false_esittir_sifir");
+test("karsilastirma sonucu", "arg_karsilastirma_sonucu");
+test("bool donduren fonksiyon", "arg_fonksiyon_donusu");
+test("aritmetik bozulmadi", "arg_aritmetik_bozulmadi");
+test("store yolu ile ayni", "store_ile_ayni_sonuc");
+test("tipsiz parametrede bool kaliyor", "tipsiz_parametre_bool_kaliyor");
+test_summary();

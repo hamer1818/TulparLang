@@ -7254,18 +7254,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       // left alone — typeinfer's pre-pass already warned about those
       // mismatches.
       if (node->data_type == TYPE_INT && init) {
-        LLVMValueRef tag = LLVMBuildExtractValue(backend->builder, init, 0,
-                                                 "decl.tag");
-        LLVMValueRef is_bool = LLVMBuildICmp(
-            backend->builder, LLVMIntEQ, tag,
-            LLVMConstInt(backend->int32_type, /*VM_VAL_BOOL=*/2, 0),
-            "decl.is_bool");
-        LLVMValueRef new_tag = LLVMBuildSelect(
-            backend->builder, is_bool,
-            LLVMConstInt(backend->int32_type, /*VM_VAL_INT=*/0, 0),
-            tag, "decl.tag.coerced");
-        init = LLVMBuildInsertValue(backend->builder, init, new_tag, 0,
-                                    "decl.bool_to_int");
+        init = llvm_coerce_bool_tag_to_int(backend, init);
       }
     } else if (node->data_type == TYPE_CUSTOM) {
       // `Point p;` form: allocate an empty Object so subsequent `p.x = ...`
@@ -9152,6 +9141,22 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef val =
           LLVMBuildLoad2(backend->builder, backend->vm_value_type, arg_ptr,
                          node->parameters[i]->name);
+
+      // `int x` bildirilmiş bir parametreye bool gelirse etiketi int'e
+      // çevriliyor — bildirimdeki (`int x = <bool>`) ile AYNI fonksiyon.
+      //
+      // İkisi ayrışıyordu ve bu SESSİZ bir hataydı: aritmetik yol değeri
+      // zorluyor (x + 10 doğru çıkıyor), ama karşılaştırma yolu ÖNCE tip
+      // etiketine bakıyor, yani `f(true)` çağrısından sonra gövdedeki
+      // `x == 1` her zaman false oluyordu. `lib/test.tpr`'daki `assert`'in
+      // sessiz no-op olması bu boşlukta doğmuştu.
+      //
+      // ÇAĞIRAN tarafta değil ÇAĞRILAN tarafta: burada tek bir yer var ve
+      // doğrudan/`call()` ile dinamik/modül-takma-adlı bütün çağrı yolları
+      // buradan geçiyor.
+      if (node->parameters[i]->data_type == TYPE_INT) {
+        val = llvm_coerce_bool_tag_to_int(backend, val);
+      }
 
       const char *pname = node->parameters[i]->name;
       if (has_captures && cd->slots[node].find(pname) != cd->slots[node].end()) {
