@@ -3548,6 +3548,113 @@ func t_data_game_file_plays() {
     assert(hp3d(p) < 100, "oyuncu hasar almali: " + toString(hp3d(p)));
 }
 
+// ---- Suda kaldırma kuvveti (yüzme) -----------------------------------------
+// Su fiziği cismi yavaşça BATIRIYORDU; kaldırma kuvveti yoktu, yani sandık
+// gibi yüzen bir şey kurmanın yolu da yoktu. Davranış olarak eklendi (dünya
+// ayarı değil) çünkü yüzüp yüzmemek CİSMİN özelliği: aynı suda taş batar,
+// tahta yüzer.
+func t_float_rises_to_surface() {
+    scene3d_reset();
+    zemin3(0.0 - 20.0);
+    su3d(0.0);
+    int k = spawn3(0.0, 0.0 - 8.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    float_behavior3d(k, 8.0, 0.2);
+    int i = 0;
+    while (i < 400) { _s3_behaviors(0.016667); _s3_physics(0.016667); i = i + 1; }
+    float y = get3y(k);
+    // Yüzeyin yakınında dengelenmeli: ne dibe batmalı ne havaya fırlamalı.
+    assert(y > 0.0 - 1.5, "yuzeye cikmali, bulunan " + toString(y));
+    assert(y < 0.5, "havaya firlamamali, bulunan " + toString(y));
+}
+
+// Davranışı OLMAYAN cisim batmaya devam etmeli — kaldırma herkese
+// uygulansaydı su fiziği tümden değişirdi.
+func t_no_float_still_sinks() {
+    scene3d_reset();
+    zemin3(0.0 - 20.0);
+    su3d(0.0);
+    int t = spawn3(0.0, 0.0 - 2.0, 0.0, 1.0, 1.0, 1.0, GRAY, SHAPE_CUBE, TAG_PROP);
+    float y0 = get3y(t);
+    int i = 0;
+    while (i < 200) { _s3_behaviors(0.016667); _s3_physics(0.016667); i = i + 1; }
+    assert(get3y(t) < y0, "kaldirmasiz cisim batmali: " +
+           toString(y0) + " -> " + toString(get3y(t)));
+}
+
+// Su YOKSA kaldırma da olmamalı.
+func t_float_needs_water() {
+    scene3d_reset();
+    zemin3(0.0 - 20.0);
+    su_kapat3d();
+    int k = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    float_behavior3d(k, 8.0, 0.2);
+    int i = 0;
+    while (i < 120) { _s3_behaviors(0.016667); _s3_physics(0.016667); i = i + 1; }
+    assert(get3y(k) < 0.0 - 1.0, "susuz ortamda dusmeli: " + toString(get3y(k)));
+}
+
+// Suyun ÜSTÜNDEKİ cisim aşağı ÇEKİLMEMELİ. Kaldırma bir yay gibi kurulsaydı
+// (hedefin üstünde de uygulansaydı) havadaki cisim suya doğru emilirdi —
+// yerçekimiyle karışıp fark edilmesi zor bir hata. Ölçüm KARŞILAŞTIRMALI:
+// davranışlı cisim, davranışsız ikizinden daha hızlı düşmemeli.
+func t_float_does_not_pull_from_above() {
+    scene3d_reset();
+    no_ground3d();
+    su3d(0.0);
+    int a = spawn3(0.0, 20.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    int b = spawn3(6.0, 20.0, 0.0, 1.0, 1.0, 1.0, GRAY, SHAPE_CUBE, TAG_PROP);
+    float_behavior3d(a, 8.0, 0.2);
+    int i = 0;
+    while (i < 30) { _s3_behaviors(0.016667); _s3_physics(0.016667); i = i + 1; }
+    // İkisi de hâlâ suyun üstünde ve AYNI yükseklikte olmalı.
+    assert(get3y(a) > 1.0, "hala havada olmali: " + toString(get3y(a)));
+    assert(abs_f3(get3y(a) - get3y(b)) < 0.001,
+           "havadayken kaldirma etki etmemeli: " + toString(get3y(a)) +
+           " vs " + toString(get3y(b)));
+}
+
+// Derinlik parametresi: 2 birim altta dengelenmeli.
+func t_float_depth_parameter() {
+    scene3d_reset();
+    zemin3(0.0 - 20.0);
+    su3d(0.0);
+    int k = spawn3(0.0, 0.0 - 10.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    float_behavior3d(k, 8.0, 2.0);
+    int i = 0;
+    while (i < 500) { _s3_behaviors(0.016667); _s3_physics(0.016667); i = i + 1; }
+    float y = get3y(k);
+    assert(y > 0.0 - 3.5 && y < 0.0 - 1.0,
+           "yaklasik 2 birim altta dengelenmeli, bulunan " + toString(y));
+}
+
+func t_float_roundtrip() {
+    scene3d_reset();
+    no_ground3d();
+    su3d(0.0);
+    int k = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    _sc_reg3("sandik", k);
+    float_behavior3d(k, 7.5, 0.6);
+    scene_load3d(scene_json3d());
+    int n = bul3d("sandik");
+    int i = 0;
+    int ok = 0;
+    while (i < length(_bh3)) {
+        if (_bh3[i].id == n && _bh3[i].kind == BH_FLOAT) {
+            assert(abs_f3(_bh3[i].a - 7.5) < 0.001, "guc");
+            assert(abs_f3(_bh3[i].b - 0.6) < 0.001, "derinlik");
+            ok = 1;
+        }
+        i = i + 1;
+    }
+    assert_eq_int(ok, 1);
+}
+
+test("yuzen cisim yuzeye cikiyor", "t_float_rises_to_surface");
+test("kaldirmasiz cisim batiyor", "t_no_float_still_sinks");
+test("kaldirma su istiyor", "t_float_needs_water");
+test("havadaki cisim asagi cekilmiyor", "t_float_does_not_pull_from_above");
+test("derinlik parametresi", "t_float_depth_parameter");
+test("yuzme gidis-donusu", "t_float_roundtrip");
 test("kovalama mesafe kapatiyor", "t_bh_chase_closes_distance");
 test("menzil disinda kovalama duruyor", "t_bh_chase_range_stops");
 test("devriye yon ceviriyor", "t_bh_patrol_reverses");

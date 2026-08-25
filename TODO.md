@@ -170,17 +170,9 @@ Mimari kararlar ve gerekçeleri:
       düz bir levhaya döner. Kaldırma kuvveti (yüzdürme) bilerek modellenmedi.
       Detay: CHANGELOG.
 
-- [ ] **Suda kaldırma kuvveti (yüzdürme) yok.** Cisim suda yavaşça batıyor,
-      yüzeye çıkmak için yüzme vuruşu gerekiyor. Basit ve öngörülebilir ama
-      tahta sandık/varil gibi "kendiliğinden yüzen" nesneler yapılamıyor.
-      Batma derinliğiyle orantılı yukarı ivme yeterdi.
-
-- [x] **Yıldızlar geldi.** ✅ 2026-08-14 — gökyüzü shader'ında PROSEDÜREL
-      (bakış yönü hash'lenip eşiği geçen hücre yıldız oluyor): sıfır çizim
-      çağrısı, sıfır asset ve örtüşme kendiliğinden doğru — kubbe en arkada
-      çizildiği için dağlar yıldızları örtüyor. 2B çizilseydi önlerine
-      düşerlerdi. Gündüz-gece döngüsüyle otomatik açılıp kapanıyor;
-      `yildiz3d_sabit(x)` ile elle sabitlenebiliyor. Detay: CHANGELOG.
+- [x] **Suda kaldırma kuvveti geldi.** ✅ 2026-08-24 — `yuz_davranis3d(id,
+      guc, derinlik)`. Dünya ayarı değil DAVRANIŞ (yüzmek cismin özelliği),
+      yani serileşiyor ve editörden eklenebiliyor. Detay: CHANGELOG.
 
 - [ ] **Bulut yok.** Yıldızlar prosedürel çözümün işe yaradığını gösterdi;
       aynı shader'a gürültü tabanlı bulut katmanı eklenebilir (yön + zaman

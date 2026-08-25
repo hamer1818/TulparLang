@@ -4662,6 +4662,9 @@ func _sc_load_bh3(id, b) {
     if (k == "bob") {
         bob_behavior3d(id, _sc_f3(b, "height", 0.3), _sc_f3(b, "speed", 1.0));
     }
+    if (k == "float") {
+        float_behavior3d(id, _sc_f3(b, "power", 6.0), _sc_f3(b, "depth", 0.2));
+    }
     if (k == "shoot") {
         shoot_behavior3d(id, _sc_f3(b, "interval", 1.0), _sc_f3(b, "speed", 20.0),
                          _sc_f3(b, "life", 2.0), tg, _sc_f3(b, "range", 0.0));
@@ -5023,6 +5026,10 @@ func _sc_bh_js3(id): str {
                 one = "{\"type\": \"bob\", \"height\": " + _sc_num3(b.a) +
                       ", \"speed\": " + _sc_num3(b.b) + "}";
             }
+            if (b.kind == BH_FLOAT) {
+                one = "{\"type\": \"float\", \"power\": " + _sc_num3(b.a) +
+                      ", \"depth\": " + _sc_num3(b.b) + "}";
+            }
             if (b.kind == BH_SHOOT) {
                 one = "{\"type\": \"shoot\", \"interval\": " + _sc_num3(b.a) +
                       ", \"speed\": " + _sc_num3(b.b) + ", \"life\": " + _sc_num3(b.c);
@@ -5178,6 +5185,10 @@ func _sc_bh_code3(sl): str {
             }
             if (b.kind == BH_BOB) {
                 o = o + "    salin_davranis3d(" + v + ", " + _sc_num3(b.a) +
+                    ", " + _sc_num3(b.b) + ");\n";
+            }
+            if (b.kind == BH_FLOAT) {
+                o = o + "    yuz_davranis3d(" + v + ", " + _sc_num3(b.a) +
                     ", " + _sc_num3(b.b) + ");\n";
             }
             if (b.kind == BH_SHOOT) {
@@ -5415,6 +5426,11 @@ int BH_PATROL = 2;   // iki nokta arasında devriye
 int BH_SPIN   = 3;   // kendi ekseninde dön (süs)
 int BH_BOB    = 4;   // yerinde alçalıp yüksel (toplanabilir parıltısı)
 int BH_SHOOT  = 5;   // aralıkla ateş et
+// Suda YÜZ. Su fiziği cismi yavaşça batırıyordu; kaldırma kuvveti yoktu, yani
+// sandık/varil gibi yüzen bir şey kurmanın yolu da yoktu. Davranış olarak
+// eklendi (dünya ayarı değil) çünkü yüzüp yüzmemek CİSMİN özelliği: aynı
+// suda taş batar, tahta yüzer.
+int BH_FLOAT  = 6;   // suda yüzeye çık
 
 // Metin alanı YOK — hedef daima ETİKET (tag) ya da çözülmüş handle olarak
 // saklanıyor. Bir davranışın hedefini adla tutmak, hedef öldüğünde her karede
@@ -5474,6 +5490,13 @@ func salin_davranis3d(id, yukseklik, hiz) { bob_behavior3d(id, yukseklik, hiz); 
 
 // Ateş: her `interval` saniyede bir mermi. target_tag = 0 ise nişan yönüne
 // (oyuncu), değilse en yakın hedefe döner ve ona atar (düşman kulesi).
+// Suda yüz. guc = yüzeye çıkma hızı (batıklıkla orantılı ivme),
+// derinlik = yüzeyin ne kadar ALTINDA dengelensin (0 = tam yüzeyde).
+func float_behavior3d(id, guc, derinlik) {
+    _bh_add3(id, BH_FLOAT, 0, 0 - 1, guc, derinlik, 0.0, 0.0, 0.0);
+}
+func yuz_davranis3d(id, guc, derinlik) { float_behavior3d(id, guc, derinlik); }
+
 func shoot_behavior3d(id, interval, speed, life, target_tag, range) {
     _bh_add3(id, BH_SHOOT, target_tag, 0 - 1, interval, speed, life, range, 0.0);
 }
@@ -5566,6 +5589,26 @@ func _bh_tick3(i, dt) {
         e.vy = 0.0;
         e.grounded = 1;
         _e3[s] = e;
+    }
+
+    if (b.kind == BH_FLOAT) {
+        // Kaldırma kuvveti yalnız SU VARSA ve cisim hedefin ALTINDAysa.
+        // Yukarıdayken uygulamak cismi havaya fırlatırdı; yerçekimi zaten
+        // aşağı çekiyor ve denge yüzeyde kuruluyor.
+        if (_water_on3 == 1) {
+            Ent3 e = _e3[s];
+            float hedef = _water_y3 - b.b;
+            if (e.y < hedef) {
+                float derinlik = hedef - e.y;
+                // Ayrı bir sönümleme YOK: su sürtünmesi (`_water_drag3`)
+                // zaten sönümlüyor. Ölçüldü — 900 karede salınım genliği
+                // sönümlemeyle 1e-08, sönümlemesiz 1e-05 birim; ikisi de
+                // görünmez. İkinci bir sönümleme yükü taşımayan ama
+                // taşıyormuş gibi duran bir satır olurdu.
+                e.vy = e.vy + derinlik * b.a * dt;
+                _e3[s] = e;
+            }
+        }
     }
 
     if (b.kind == BH_SHOOT) {
@@ -7929,6 +7972,7 @@ func _ed_bh_name3(k): str {
     if (k == BH_PATROL) { return "devriye"; }
     if (k == BH_SPIN)   { return "don"; }
     if (k == BH_BOB)    { return "salin"; }
+    if (k == BH_FLOAT)  { return "yuz"; }
     return "ates";
 }
 
@@ -8482,7 +8526,7 @@ func _ed_inspector3() {
             // 2. alan yalnız b'si SERİLEŞTİRİLEN türlerde: gösterilip de
             // saklanmayan alan, sürüklenip ilk kayıtta sessizce geri dönerdi.
             if (b.kind == BH_MOVE || b.kind == BH_CHASE || b.kind == BH_BOB ||
-                b.kind == BH_SHOOT) {
+                b.kind == BH_SHOOT || b.kind == BH_FLOAT) {
                 float p2 = _g_num(20001 + shown * 4, lx + nw2 + bfw + 4, y, bfw,
                                   _ED_FLD3, b.b, 0.1);
                 if (p2 != b.b) {
@@ -8526,6 +8570,10 @@ func _ed_inspector3() {
     }
     if (_g_button(9465, lx + (aw + 3) * 2, y, aw, _ED_FLD3, "+ates")) {
         ed_mark3d(); shoot_behavior3d(id, 1.5, 20.0, 2.5, TAG_PLAYER, 30.0);
+    }
+    y = y + _ED_FLD3 + _us3(3);
+    if (_g_button(9466, lx, y, aw, _ED_FLD3, "+yuz")) {
+        ed_mark3d(); float_behavior3d(id, 6.0, 0.2);
     }
     y = y + _ED_FLD3 + _us3(8);
 
@@ -9440,6 +9488,7 @@ func _ed_bh_name3(k): str {
     if (k == BH_PATROL) { return "devriye"; }
     if (k == BH_SPIN)   { return "don"; }
     if (k == BH_BOB)    { return "salin"; }
+    if (k == BH_FLOAT)  { return "yuz"; }
     return "ates";
 }
 
@@ -9993,7 +10042,7 @@ func _ed_inspector3() {
             // 2. alan yalnız b'si SERİLEŞTİRİLEN türlerde: gösterilip de
             // saklanmayan alan, sürüklenip ilk kayıtta sessizce geri dönerdi.
             if (b.kind == BH_MOVE || b.kind == BH_CHASE || b.kind == BH_BOB ||
-                b.kind == BH_SHOOT) {
+                b.kind == BH_SHOOT || b.kind == BH_FLOAT) {
                 float p2 = _g_num(20001 + shown * 4, lx + nw2 + bfw + 4, y, bfw,
                                   _ED_FLD3, b.b, 0.1);
                 if (p2 != b.b) {
@@ -10037,6 +10086,10 @@ func _ed_inspector3() {
     }
     if (_g_button(9465, lx + (aw + 3) * 2, y, aw, _ED_FLD3, "+ates")) {
         ed_mark3d(); shoot_behavior3d(id, 1.5, 20.0, 2.5, TAG_PLAYER, 30.0);
+    }
+    y = y + _ED_FLD3 + _us3(3);
+    if (_g_button(9466, lx, y, aw, _ED_FLD3, "+yuz")) {
+        ed_mark3d(); float_behavior3d(id, 6.0, 0.2);
     }
     y = y + _ED_FLD3 + _us3(8);
 

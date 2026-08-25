@@ -89,6 +89,25 @@ ikili argümanları görüyordu ama `tulpar script.tpr ...` yolu görmüyordu.
 Artık iletiliyor (kabuk alıntılaması tek tırnakla; boşluk ve `$` içeren
 yollar bozulmuyor).
 
+### Added — suda kaldırma kuvveti (`yuz_davranis3d`)
+
+Su fiziği cismi yavaşça BATIRIYORDU; kaldırma kuvveti yoktu, yani sandık ya
+da varil gibi yüzen bir şey kurmanın yolu da yoktu.
+
+Dünya ayarı değil DAVRANIŞ olarak eklendi, çünkü yüzüp yüzmemek cismin
+özelliği: aynı suda taş batar, tahta yüzer. Dolayısıyla veri — serileşiyor,
+editörden eklenebiliyor, üretilen koda giriyor.
+
+Kaldırma yalnız cisim hedefin ALTINDAYKEN uygulanıyor. Yay gibi kurulsaydı
+(üstte de uygulansaydı) havadaki cisim suya doğru emilirdi — yerçekimiyle
+karışıp fark edilmesi zor bir hata; test bunu davranışsız bir ikizle
+KARŞILAŞTIRARAK yakalıyor.
+
+Ayrı bir sönümleme yok: su sürtünmesi zaten sönümlüyor. Ölçüldü — 900 karede
+salınım genliği sönümlemeyle 1e-08, sönümlemesiz 1e-05 birim, ikisi de
+görünmez. İkinci bir sönümleme yük taşımayan ama taşıyormuş gibi duran bir
+satır olurdu.
+
 ### Added — `%` operatörü
 
 `mod()` builtin'i vardı ama `%` yoktu: `7 % 3` sözcükleyici hatası veriyordu.
