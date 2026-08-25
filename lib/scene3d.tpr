@@ -4907,7 +4907,24 @@ func sahne_eni3d(): int { return scene_w3d(); }
 func sahne_boyu3d(): int { return scene_h3d(); }
 
 // Dosyadan yükle.
+// TARAYICIDA dosya sistemi yok. emscripten'in MEMFS'i sayfa ömürlüdür:
+// yazılan şey sekme yenilenince kaybolur ve write_file yine de BAŞARILI
+// döner — yani sessiz veri kaybı. Ölçüldü (headless Chrome, iki ardışık
+// yükleme). Tarayıcının kalıcı deposu localStorage'dır; scene3d oraya
+// "sahne:<yol>" anahtarıyla yazıyor.
+//
+// Yol yine de ANLAMLI: aynı sayfada birden çok sahne ayrı anahtarlarda durur
+// ve masaüstünde AYNI çağrı gerçek dosyaya gider. Oyun/editör kodu platform
+// ayrımı yapmıyor.
+func _s3_key3(path): str { return "sahne:" + path; }
+
 func scene_file3d(path): int {
+    // Web'de ÖNCE kullanıcının kendi kaydı: paketlenmiş dosya başlangıç
+    // hâlidir, düzenlenmiş hâl onu ezmeli — yoksa her yenileme işi geri alır.
+    if (web_mi()) {
+        str kayitli = kayit_oku(_s3_key3(path));
+        if (kayitli != "") { return scene_load3d(kayitli); }
+    }
     if (file_exists(path) == false) {
         log_err3d("sahne dosyasi yok: " + path);
         return 0;
@@ -5443,10 +5460,18 @@ func scene_json3d(): str {
 }
 func sahne_json3d(): str { return scene_json3d(); }
 
-// Diske yaz.
+// Diske yaz — web'de tarayıcının kalıcı deposuna (bkz. _s3_key3).
 func scene_save3d(path): bool {
+    if (web_mi()) { return kayit_yaz(_s3_key3(path), scene_json3d()); }
     return write_file(path, scene_json3d());
 }
+
+// Sahneyi kullanıcının BİLGİSAYARINA çıkar: web'de tarayıcı indirmesi,
+// masaüstünde dosyaya yazma. localStorage sayfanın içinde kalıyor; web
+// editöründe yapılan işi dışarı almanın (depoya koymanın, paylaşmanın)
+// tek yolu bu.
+func scene_export3d(path): bool { return indir(path, scene_json3d()); }
+func sahne_disari3d(yol): bool { return scene_export3d(yol); }
 func sahne_kaydet3d(yol): bool { return scene_save3d(yol); }
 
 // ===========================================================================
@@ -6899,7 +6924,15 @@ str _ed_font_path3 = "";
 
 // Aday yollar: dağıtımlar fontları farklı yerlere koyuyor.
 func _ed_font_load3() {
-    array yollar = ["/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    // İLK SIRADA varlık-göreli adlar. Web'de sistem font dizini YOK; oradaki
+    // tek yol fontu `TULPAR_WEB_ASSETS` ile pakete koymaktır ve bu üç ad da
+    // o paketin içindeki bir dosyaya denk gelir. Masaüstünde bu adlar normalde
+    // yok — `file_exists` koruyor, yani davranış değişmiyor; bir oyun kendi
+    // fontunu yanına koymuşsa da o kazanıyor ki istenen de bu.
+    array yollar = ["assets/ui.ttf",
+                    "fonts/ui.ttf",
+                    "ui.ttf",
+                    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
                     "/usr/share/fonts/TTF/DejaVuSans.ttf",
                     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                     "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
@@ -6925,8 +6958,12 @@ func _ed_font_load3() {
     }
     _ed_font3 = 0 - 1;
     // Sessizce bitmap fonta düşmek "editör neden çirkin?" sorusunu cevapsız
-    // bırakırdı; konsolda söyleniyor.
+    // bırakırdı; konsolda söyleniyor. Web'de sebep FARKLI (sistem fontu diye
+    // bir şey yok) ve çaresi de farklı, o yüzden mesaj da farklı.
     uyari3d("okunabilir yazi tipi bulunamadi — varsayilan bitmap font");
+    if (web_mi()) {
+        uyari3d("web: fontu pakete koy — TULPAR_WEB_ASSETS=<dizin>, ad: ui.ttf");
+    }
 }
 
 // Kendi fontunu ver (editörden önce çağrılır).
@@ -7513,6 +7550,25 @@ func _ed_menubar3() {
         _g_tip_for3(9602, "Kaydet  (CTRL+S)");
         x = x + w2 + _us3(12);
     }
+    // WEB'DE bir düğme daha: "Kaydet" tarayıcının deposuna yazıyor (kalıcı,
+    // ama sayfanın İÇİNDE). İşi dışarı — depoya, başka bir makineye — almanın
+    // yolu indirmek. Masaüstünde böyle bir ayrım yok: "Kaydet" zaten dosyaya
+    // yazıyor, ikinci düğme yalnız kafa karıştırırdı.
+    if (web_mi()) {
+        int wd = _g_btnw3("Indir");
+        if (x + wd <= W - _ED_PAD3) {
+            if (_g_button(9605, x, _us3(2), wd, bh, "Indir")) {
+                str ad = _ed_path3;
+                if (ad == "") { ad = "sahne.json"; }
+                scene_export3d(ad);
+                _ed_msg3 = "indiriliyor: " + ad;
+                _ed_msg_t3 = 3.0;
+            }
+            _g_tip_for3(9605, "Sahneyi bilgisayarina indir (.json)");
+            x = x + wd + _us3(12);
+        }
+    }
+
     int w3 = _g_btnw3("Geri");
     if (x + w3 <= W - _ED_PAD3) {
         if (_g_button(9603, x, _us3(2), w3, bh, "Geri")) { ed_undo3d(); }

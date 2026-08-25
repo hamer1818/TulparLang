@@ -1049,6 +1049,8 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       // Kalıcı kayıt (Android: internal storage; masaüstü: CWD) + titreşim.
       {"tm_save_data", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
       {"tm_load_data", TYPE_STRING, {TYPE_STRING}},
+      {"tm_download", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
+      {"tm_is_web", TYPE_BOOL, {}},
       {"tm_vibrate", TYPE_VOID, {TYPE_INT}},
       // Polymorphic: string haystack (substring) OR array haystack (membership).
       {"indexOf", TYPE_INT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},

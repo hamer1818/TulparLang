@@ -89,12 +89,26 @@ Mimari kararlar ve gerekçeleri:
       AYNI kodun wasm'a derlenmiş hâli oluyor — köprüye de JS panellerine de
       gerek yok. Kalan gerçek iş aşağıda.
 
-- [ ] **Editörü web'de çalıştır.** `tulpar build --target=web
-      examples/scene3d_editor.tpr`. Bilinen engeller: (a) `load_font` sistem
-      yolu arıyor, web'de dosya sistemi yok → bitmap fonta düşer, (b) sahne
-      dosyası açma/kaydetme tarayıcıda `read_file`/`write_file` değil
-      localStorage/indirme olmalı, (c) `args()` web'de anlamsız. Üçü de
-      çözülebilir; hiçbiri mimari değil.
+- [x] **Editör web'de çalışıyor.** ✅ 2026-08-25 — üç engel de kapandı.
+      (a) font: `assets/ui.ttf`, `fonts/ui.ttf`, `ui.ttf` aday listesinin
+      BAŞINA girdi, yani `TULPAR_WEB_ASSETS=<dizin>` ile paketlenen font
+      bulunuyor; bulunamazsa konsol web'e özgü çareyi söylüyor.
+      (b) dosya: `scene_save3d`/`scene_file3d` web'de localStorage'a gidiyor
+      ("sahne:<yol>"), menü şeridine yalnız web'de görünen **İNDİR** düğmesi
+      eklendi (`scene_export3d` → tarayıcı indirmesi).
+      (c) `args()`: örnek web'de komut satırını hiç yoklamıyor, sabit ada
+      düşüyor ve "depo kökünden çalıştır" mesajını vermiyor.
+
+      Ölçüm: headless Chrome, iki ardışık sayfa yüklemesi — ilki 2 varlık
+      kaydediyor, ikincisi geri okuyor; indirme CDP ile doğrulandı (dosya
+      adı ve içerik birebir). GÖRSEL denetim yapılmadı.
+
+      Kurulum:
+      ```
+      mkdir -p assets && cp <bir>.ttf assets/ui.ttf
+      TULPAR_WEB_ASSETS=assets tulpar build --target=web \
+          examples/scene3d_editor.tpr -o editor
+      ```
 
 - [x] **Kod üretimi.** ✅ 2026-08-24 — `sahne_kod3d()` + `scene3d_export.tpr`.
       Üretilen şey tek bir `kur()` FONKSİYONU (tam program değil) ki denklik
@@ -248,6 +262,9 @@ boşluklar; backlog'da yoklardı.
       web/Android hedefi link hatası verir. Masaüstünde görünmeyen, yalnız o
       hedeflerde patlayan bir sınıf — arşiv tazeliğini denetleyen bir kontrol
       (kaynak zaman damgası karşılaştırması) ucuz olur.
+      `wasm/dist` 2026-08-25'te tazelendi (bulut + localStorage sembolleri);
+      tam bu hataya bir kez daha çarpıldı, yani denetim hâlâ borç.
+      `android/dist` duruyor — NDK bu makinede kurulu değil.
 
 - [x] **`lib/test.tpr` artık BÜTÜN hataları gösteriyor.** ✅ 2026-08-24 —
       mesaj eziliyordu, yani ilk kırılan iddia (asıl sebebi söyleyen o)

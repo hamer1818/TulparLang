@@ -2925,12 +2925,74 @@ int tame_impl_touch_y(int i) { return (int)tame_to_world_y((double)GetTouchPosit
 #  define TAME_DATA_NEEDS_WINDOW 0
 #endif
 
+// WEB'DE raylib'in dosya yolu emscripten'in MEMFS'ine gider ve MEMFS SAYFA
+// ÖMÜRLÜDÜR: yazılan şey sekme yenilenince yok olur. Bu sessiz bir veri
+// kaybıydı — SaveFileText 1 döndürüyor, oyun "kaydettim" diyor, kullanıcı
+// yenileyince skoru gitmiş oluyor. Ölçüldü (headless Chrome, iki ardışık
+// yükleme): ikinci yüklemede okunan değer boş.
+//
+// Tarayıcının kalıcı deposu localStorage'dır; kaynak (origin) başına ayrı,
+// birkaç MB, sayfa yenilemesini ve sekme kapanmasını atlatır. Anahtarlar
+// "tulpar:" ile öneklenir ki aynı kaynakta duran başka bir uygulamanın
+// anahtarlarıyla çarpışmasın.
+//
+// localStorage gizli sekmede ya da site verisi kapalıyken ERİŞİMDE İSTİSNA
+// atar (yalnız boş dönmez), o yüzden her çağrı try/catch içinde: kalıcılığın
+// olmaması oyunun çökmesi anlamına gelmemeli.
+#if defined(PLATFORM_WEB)
+#include <emscripten.h>
+
+EM_JS(int, tame_js_store_set, (const char *k, const char *v), {
+  try {
+    localStorage.setItem("tulpar:" + UTF8ToString(k), UTF8ToString(v));
+    return 1;
+  } catch (e) { return 0; }
+});
+
+// Anahtar yoksa -1; varsa UTF-8 bayt uzunluğu (sonlandırıcı hariç).
+EM_JS(int, tame_js_store_len, (const char *k), {
+  try {
+    var s = localStorage.getItem("tulpar:" + UTF8ToString(k));
+    if (s === null) return -1;
+    return lengthBytesUTF8(s);
+  } catch (e) { return -1; }
+});
+
+EM_JS(void, tame_js_store_read, (const char *k, char *buf, int n), {
+  try {
+    var s = localStorage.getItem("tulpar:" + UTF8ToString(k));
+    if (s === null) { HEAPU8[buf] = 0; return; }
+    stringToUTF8(s, buf, n);
+  } catch (e) { HEAPU8[buf] = 0; }
+});
+
+// Metni kullanıcının BİLGİSAYARINA indirir (tarayıcının indirme akışı).
+// localStorage sayfanın içinde kalıyor; sahne dosyasını web editöründen
+// dışarı çıkarmanın tek yolu bu.
+EM_JS(void, tame_js_download, (const char *name, const char *text), {
+  try {
+    var blob = new Blob([UTF8ToString(text)], { type: "application/json" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = UTF8ToString(name);
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 0);
+  } catch (e) {}
+});
+#endif
+
 int tame_impl_save_data(const char *name, const char *text) {
   if (!name || !name[0] || !text) return 0;
 #if TAME_DATA_NEEDS_WINDOW
   if (!IsWindowReady()) return 0;
 #endif
+#if defined(PLATFORM_WEB)
+  return tame_js_store_set(name, text);
+#else
   return SaveFileText(name, (char *)text) ? 1 : 0;
+#endif
 }
 
 // Dönen tampon LoadFileText'in ayırdığı bellektir; binding kopyaladıktan
@@ -2940,7 +3002,47 @@ char *tame_impl_load_data(const char *name) {
 #if TAME_DATA_NEEDS_WINDOW
   if (!IsWindowReady()) return NULL;
 #endif
+#if defined(PLATFORM_WEB)
+  // Tamponu C ayırıyor: JS tarafından malloc'lu işaretçi döndürmek
+  // emscripten'in _malloc'unu JS'e ihraç etmeye bağlı olurdu.
+  int n = tame_js_store_len(name);
+  if (n < 0) return NULL;
+  // malloc/free çifti: tame_impl_text_free → UnloadFileText → RL_FREE, ve
+  // RL_FREE varsayılanı free.
+  char *buf = (char *)malloc((size_t)n + 1);
+  if (!buf) return NULL;
+  buf[0] = 0;
+  tame_js_store_read(name, buf, n + 1);
+  return buf;
+#else
   return LoadFileText(name);
+#endif
+}
+
+// Web: tarayıcı indirmesi. Diğer platformlarda "indirme" diye bir şey yok,
+// oradaki doğal karşılığı dosyayı yazmaktır — böylece oyun/editör kodu tek
+// bir çağrı yazar ve platform ayrımı yapmaz.
+int tame_impl_download(const char *name, const char *text) {
+  if (!name || !name[0] || !text) return 0;
+#if defined(PLATFORM_WEB)
+  tame_js_download(name, text);
+  return 1;
+#else
+#if TAME_DATA_NEEDS_WINDOW
+  if (!IsWindowReady()) return 0;
+#endif
+  return SaveFileText(name, (char *)text) ? 1 : 0;
+#endif
+}
+
+// Tarayıcıda mıyız? Dosya yolu / komut satırı argümanı gibi web'de anlamsız
+// olan şeyleri oyun kodunun ayırt edebilmesi için.
+int tame_impl_is_web(void) {
+#if defined(PLATFORM_WEB)
+  return 1;
+#else
+  return 0;
+#endif
 }
 
 void tame_impl_text_free(char *p) {

@@ -42,6 +42,65 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Fixed — WEB'DE KAYIT SESSİZCE KAYBOLUYORDU
+
+`kayit_yaz()` (ve onun üstündeki her şey: skorlar, `scene_save3d`) web'de
+emscripten'in MEMFS'ine yazıyordu. MEMFS SAYFA ÖMÜRLÜDÜR: sekme yenilenince
+yazılan her şey yok oluyor — ama çağrı `true` dönüyordu, yani oyun "kaydettim"
+diyor, kullanıcı yenileyince ilerlemesi gitmiş oluyordu. Sessiz veri kaybı.
+
+Ölçüldü (headless Chrome, aynı profille üç ardışık yükleme): düzeltmeden önce
+her yüklemede okunan değer boş; sonra ikinci ve üçüncü yükleme yazılan değeri
+geri veriyor.
+
+Web'de artık localStorage kullanılıyor ("tulpar:" önekiyle, aynı kaynakta
+duran başka uygulamalarla çarpışmasın diye). localStorage gizli sekmede ya da
+site verisi kapalıyken ERİŞİMDE İSTİSNA atıyor — hepsi try/catch içinde:
+kalıcılığın olmaması oyunun çökmesi anlamına gelmemeli.
+
+Bu **bütün web oyunlarını** ilgilendiriyor, yalnız 3B editörü değil.
+
+### Added — 3B EDİTÖR TARAYICIDA çalışıyor
+
+`tulpar build --target=web examples/scene3d_editor.tpr`. Üç engel vardı:
+
+**Font.** Web'de sistem font dizini yok, editör bitmap fonta düşüyordu (tam da
+"okunması kolay değil" denen hâl). Aday listesinin başına varlık-göreli adlar
+girdi — `assets/ui.ttf`, `fonts/ui.ttf`, `ui.ttf` — yani `TULPAR_WEB_ASSETS`
+ile paketlenen font bulunuyor. Masaüstünde bu adlar normalde yok ve
+`file_exists` koruyor, davranış değişmiyor.
+
+**Dosya.** `scene_save3d`/`scene_file3d` web'de tarayıcının kalıcı deposuna
+gidiyor ("sahne:<yol>" anahtarı; yol anlamlı kalıyor ki aynı sayfadaki iki
+sahne birbirini ezmesin). Paketlenmiş dosya BAŞLANGIÇ hâli, kayıtlı iş onu
+eziyor — yoksa her yenileme yapılanı geri alırdı.
+
+Depo sayfanın İÇİNDE kalıyor, oysa asıl istenen sahneyi dışarı almak. Menü
+şeridine yalnız web'de görünen **İNDİR** düğmesi eklendi (`scene_export3d()` /
+`indir()`): web'de tarayıcı indirmesi, masaüstünde dosyaya yazma — oyun kodu
+platform ayrımı yapmıyor. CDP ile doğrulandı: dosya adı ve içerik birebir.
+
+**`args()`.** Tarayıcıda komut satırı yok; örnek web'de onu hiç yoklamıyor,
+sabit bir ada düşüyor ve "depo kökünden çalıştır" mesajını vermiyor.
+
+Yeni builtin'ler: `tm_download` (`download()`/`indir()`) ve `tm_is_web`
+(`is_web()`/`web_mi()`).
+
+**Görsel denetim yapılmadı** — pencere açılıyor ve GL bağlamı kuruluyor
+(headless Chrome + swiftshader, abort yok), arayüzün görünüşü kullanıcının.
+
+### Fixed — ayrılmış kelime PARAMETRE ADI olarak yanlış yeri gösteriyordu
+
+`func indir(ad, metin)` — `metin` dilde `str` demek, yani ayrıştırıcı onu TİP
+sanıp yutuyor ve hata bir sonraki sembolde ")" üzerinde "parametre adı
+bekleniyordu" olarak patlıyordu. Suçlu kelime mesajda HİÇ geçmiyordu.
+
+Değişken bildirimi için bu tanılama zaten vardı; parametre yolu ayrı olduğu
+için kapsam dışıydı ve aynı tuzağa dördüncü kez düşüldü. Artık parametre
+yerinde duran, tanımlayıcı olmayan ama harfle başlayan bir kelimeyi hemen
+"," ya da ")" izliyorsa suçlu kelime adıyla söyleniyor. `build.sh suites`
+ayrıca sınıyor.
+
 ### Fixed — küre ↔ DÖNÜK kutu çarpışması kutuyu eksen-hizalı sanıyordu
 
 `set3yaw` ile döndürülmüş bir kutu, kutu-kutu çiftinde tam SAT'tan geçiyordu

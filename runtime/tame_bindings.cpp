@@ -184,6 +184,8 @@ int tame_impl_gamepad_down(int id, const char *btn);
 int tame_impl_gamepad_pressed(int id, const char *btn);
 double tame_impl_gamepad_axis(int id, const char *axis);
 int tame_impl_save_data(const char *name, const char *text);
+int tame_impl_download(const char *name, const char *text);
+int tame_impl_is_web(void);
 char *tame_impl_load_data(const char *name);
 void tame_impl_text_free(char *p);
 void tame_impl_vibrate(int ms);
@@ -843,6 +845,14 @@ VMValue aot_tm_load_data_ptr(VMValue *name) {
   if (t) tame_impl_text_free(t);
   return VM_OBJ((Obj *)s);
 }
+
+// Web: tarayıcı indirmesi; masaüstü/Android: dosyaya yaz. Aynı çağrı her
+// platformda "bu metni kullanıcıya ver" demek.
+VMValue aot_tm_download_ptr(VMValue *name, VMValue *text) {
+  return VM_BOOL(tame_impl_download(tm_str(name), tm_str(text)));
+}
+
+VMValue aot_tm_is_web_ptr(void) { return VM_BOOL(tame_impl_is_web() != 0); }
 
 VMValue aot_tm_vibrate_ptr(VMValue *ms) {
   tame_impl_vibrate((int)tm_int(ms));

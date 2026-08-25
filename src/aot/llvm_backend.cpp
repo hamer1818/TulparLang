@@ -909,6 +909,8 @@ static const TameBuiltin k_tame_builtins[] = {
     // kalıcı kayıt (Android'de internal storage, masaüstünde CWD) + titreşim
     {"tm_save_data", "aot_tm_save_data_ptr", 2},
     {"tm_load_data", "aot_tm_load_data_ptr", 1},
+    {"tm_download", "aot_tm_download_ptr", 2},
+    {"tm_is_web", "aot_tm_is_web_ptr", 0},
     {"tm_vibrate", "aot_tm_vibrate_ptr", 1},
 };
 

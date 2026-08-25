@@ -198,6 +198,19 @@ if [ "$ACTION" = "suites" ]; then
         rm -rf "$RW_TMP"
         exit 1
     fi
+    # PARAMETRE ADI ayrı bir yol: orada kelime TİP olarak yutuluyor ve hata
+    # ')' üzerinde patlıyordu, yani suçlu kelime hiç geçmiyordu. Dördüncü
+    # kez aynı tuzağa düşülünce ayrıca sınanır oldu.
+    printf 'func f(ad, metin) { print(ad); }\n' > "$RW_TMP/rwp.tpr"
+    RWP_OUT=$(./tulpar typecheck "$RW_TMP/rwp.tpr" 2>&1 || true)
+    if echo "$RWP_OUT" | grep -q "'metin'"; then
+        echo -e "${GREEN}parametre adi tanilamasi calisiyor${NC}"
+    else
+        echo -e "${RED}Parametre adi tanilamasi suclu kelimeyi soylemiyor!${NC}"
+        echo "$RWP_OUT" | head -3
+        rm -rf "$RW_TMP"
+        exit 1
+    fi
     rm -rf "$RW_TMP"
 
     # Kod üretimi DENKLİK denetimi: sahne JSON'undan üretilen Tulpar kodu

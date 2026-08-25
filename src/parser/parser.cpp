@@ -519,6 +519,33 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
             // identifier followed by `,` or `)` is the untyped form.
             // Anything else routes through parse_type() which knows how
             // to consume builtin and custom type names.
+            // AYRILMIŞ KELİME PARAMETRE ADI OLARAK: `func indir(ad, metin)`
+            // — `metin` dilde `str` demek, yani parse_type onu TİP sanıp
+            // yutuyor ve hata ')' üzerinde "parametre adı bekleniyordu"
+            // olarak çıkıyor. Suçlu kelime mesajda GEÇMİYORDU; bu oturumda
+            // dördüncü kez aynı tuzağa düşüldü.
+            //
+            // Ayrım net: bir parametre yerinde duran, tanımlayıcı OLMAYAN
+            // ama harfle başlayan bir kelimeyi hemen ',' ya da ')' izliyorsa
+            // ortada tip yoktur — kullanıcı onu AD olarak yazmıştır.
+            // (`func f(int)` de buraya düşer ve orada da doğru mesaj bu:
+            // tipten sonra ad gerekiyor, `int` ad olamaz.)
+            if (!check(TOKEN_IDENTIFIER) &&
+                (peek(1).type() == TOKEN_COMMA ||
+                 peek(1).type() == TOKEN_RPAREN)) {
+                const std::string &lex = current().value();
+                if (!lex.empty() && (std::isalpha((unsigned char)lex[0]) ||
+                                     lex[0] == '_')) {
+                    std::string m = std::string(tulpar::i18n::tr_en(
+                        "ayrilmis kelime parametre adi olamaz: '",
+                        "reserved word cannot be a parameter name: '"));
+                    m += lex;
+                    m += tulpar::i18n::tr_en("' (baska bir ad sec)",
+                                             "' (choose another name)");
+                    error(m + " at line " +
+                          std::to_string(current().line()));
+                }
+            }
             bool untyped = check(TOKEN_IDENTIFIER) &&
                            (peek(1).type() == TOKEN_COMMA ||
                             peek(1).type() == TOKEN_RPAREN);

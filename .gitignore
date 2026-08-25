@@ -195,3 +195,6 @@ scene3d_lvl_*.txt
 /arena_desktop
 /data_game_desktop
 /terrain_desktop
+# scene3d depo testlerinin proba dosyaları (tests/scene3d_engine.test.tpr)
+/s3_depo_probasi.json
+/s3_indirme_probasi.json

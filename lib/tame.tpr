@@ -236,6 +236,14 @@ func save_data(name, text): bool { return tm_save_data(name, text); }
 func kayit_yaz(name, text): bool { return tm_save_data(name, text); }
 func load_data(name): str { return tm_load_data(name); }
 func kayit_oku(name): str { return tm_load_data(name); }
+// Metni KULLANICIYA verir: web'de tarayıcı indirmesi, masaüstü/Android'de
+// dosyaya yazar. kayit_yaz sayfanın içinde kalır (localStorage); dosyayı
+// tarayıcıdan DIŞARI çıkarmanın yolu budur.
+func download(name, text): bool { return tm_download(name, text); }
+func indir(ad, yazi): bool { return tm_download(ad, yazi); }
+// Tarayıcıda mıyız? Dosya yolu / komut satırı web'de anlamsız.
+func is_web(): bool { return tm_is_web(); }
+func web_mi(): bool { return tm_is_web(); }
 // Titreşim: Android'de cihazı ms milisaniye titretir; masaüstü/web no-op.
 func vibrate(ms) { tm_vibrate(ms); }
 func titret(ms)  { tm_vibrate(ms); }

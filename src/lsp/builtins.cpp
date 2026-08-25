@@ -173,6 +173,8 @@ const BuiltinEntry kBuiltins[] = {
     {"tm_gamepad_axis", "tm_gamepad_axis(id: int, axis: str): float",   "Analog eksen değeri: \"LX\"/\"LY\"/\"RX\"/\"RY\" (-1..1), \"LT\"/\"RT\" tetikler. Sarmalayıcı: gamepad_axis()."},
     {"tm_save_data",    "tm_save_data(name: str, text: str): bool",     "Kalıcı kayıt yazar: Android'de uygulama internal storage'ına, masaüstünde çalışma dizinine. Sarmalayıcı: save_data()/kayit_yaz()."},
     {"tm_load_data",    "tm_load_data(name: str): str",                 "Kalıcı kaydı okur; dosya yoksa \"\" döner. Sarmalayıcı: load_data()/kayit_oku()."},
+    {"tm_download",     "tm_download(name: str, text: str): bool",      "Metni kullanıcıya verir: web'de tarayıcı indirmesi, masaüstü/Android'de dosyaya yazar. Sarmalayıcı: download()/indir()."},
+    {"tm_is_web",       "tm_is_web(): bool",                            "Tarayıcıda mı çalışıyor? Dosya yolu/argüman gibi web'de anlamsız şeyleri ayırmak için. Sarmalayıcı: is_web()/web_mi()."},
     {"tm_vibrate",      "tm_vibrate(ms: int)",                          "Cihazı ms milisaniye titretir (Android; masaüstü/web no-op). Sarmalayıcı: vibrate()/titret()."},
 
     // ---- Conversion ----

@@ -5644,6 +5644,69 @@ func t_ui_contained_is_not_overlap() {
     assert(_g_contains_rect3(10, 10, 20, 20, 0, 0, 100, 40) == false, "kucuk buyugu iceremez");
 }
 
+// ---------------------------------------------------------------------------
+// SAHNE ↔ DEPO: masaüstünde dosya, web'de tarayıcı deposu.
+//
+// Web tarafı burada ÇALIŞTIRILAMAZ (bu süit masaüstü ikilisi). Ölçülen şey
+// web dalının masaüstünü BOZMADIĞI: `web_mi()` burada false olmalı ve
+// scene_save3d/scene_file3d gerçek dosyaya gitmeye devam etmeli. Web'in
+// kendisi headless Chrome'da iki ardışık sayfa yüklemesiyle doğrulandı
+// (ilk yükleme kaydediyor, ikincisi geri okuyor).
+// ---------------------------------------------------------------------------
+
+func t_storage_desktop_is_not_web() {
+    assert(web_mi() == false, "masaustu ikilisi web_mi()=true diyor");
+}
+
+// ÖNCE ÇÜRÜK İÇERİK yazılıyor. `file_exists` tek başına yetmiyor: dosya
+// ÖNCEKİ KOŞUMDAN kalıyor, yani yazma tamamen no-op'a çevrilse bile test
+// yeşil kalıyordu. Ölçüldü — masaüstü yazma dalını devre dışı bırakan iki
+// ayrı bozma bu testlerden KAÇTI. Nöbetçi değer, dosyanın bu koşumda
+// yazıldığını kanıtlıyor.
+str _CURUK = "BU-KOSUMDA-YAZILMADI";
+
+func t_storage_desktop_roundtrip_uses_real_file() {
+    str yol = "s3_depo_probasi.json";
+    write_file(yol, _CURUK);
+
+    scene3d_reset();
+    no_ground3d();
+    spawn3(2.0, 0.0, 3.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ITEM);
+    spawn3(5.0, 0.0, 7.0, 1.0, 1.0, 1.0, BLUE, SHAPE_SPHERE, TAG_ITEM);
+    assert(sahne_kaydet3d(yol), "kaydedilemedi: " + yol);
+
+    // GERÇEKTEN dosya olmalı: web dalı yanlışlıkla masaüstünde de çalışsaydı
+    // JSON tarayıcı deposuna gider, diskteki nöbetçi olduğu gibi kalırdı.
+    assert(file_exists(yol), "diskte dosya yok — depo dali masaustunu ele gecirmis");
+    str j = read_file(yol);
+    assert(j != _CURUK, "dosya BU kosumda yazilmadi (nobetci duruyor)");
+    assert(contains(j, "\"entities\""), "dosya sahne JSON'u degil");
+
+    scene3d_reset();
+    assert(sahne_dosya3d(yol) == 2, "geri okunan varlik sayisi 2 degil");
+    assert(yasayan_sayi3d() == 2, "yasayan sayisi 2 degil");
+}
+
+func t_storage_export_writes_file_on_desktop() {
+    // `indir()` web'de tarayıcı indirmesi; masaüstünde doğal karşılığı
+    // dosyaya yazmak. Oyun/editör kodu tek çağrı yazsın diye böyle.
+    str yol = "s3_indirme_probasi.json";
+    write_file(yol, _CURUK);
+    assert(indir(yol, "{\"proba\":42}"), "indir() masaustunde false dondu");
+    assert(file_exists(yol), "indir() dosya yazmadi");
+    str i = read_file(yol);
+    assert(i != _CURUK, "indir() BU kosumda yazmadi (nobetci duruyor)");
+    assert(i == "{\"proba\":42}", "indir() icerigi bozdu");
+}
+
+func t_storage_key_is_path_scoped() {
+    // Anahtar YOLDAN türüyor: aynı sayfada iki sahne birbirini ezmemeli.
+    assert(_s3_key3("a.json") != _s3_key3("b.json"),
+           "iki farkli sahne ayni depo anahtarini paylasiyor");
+    assert(contains(_s3_key3("a.json"), "a.json"), "anahtar yolu tasimiyor");
+}
+
+
 test("satir yuksekligi fonttan buyuk", "t_ui_line_height_exceeds_font");
 test("dikey merkezleme", "t_ui_vertical_centering");
 test("dedektor metinleri goruyor", "t_ui_detector_sees_text");
@@ -5671,4 +5734,8 @@ test("inspector sutunlari sigiyor", "t_ui_inspector_columns_fit");
 test("davranis satiri sigiyor", "t_ui_behavior_row_fits");
 test("hiyerarsi dugmeleri sigiyor", "t_ui_hierarchy_buttons_fit");
 test("yerlesim baska genisliklerde de tutuyor", "t_ui_layout_holds_for_other_widths");
+test("masaustu web degil", "t_storage_desktop_is_not_web");
+test("masaustu gidis-donusu gercek dosya", "t_storage_desktop_roundtrip_uses_real_file");
+test("indir masaustunde dosya yaziyor", "t_storage_export_writes_file_on_desktop");
+test("depo anahtari yola gore", "t_storage_key_is_path_scoped");
 test_summary();
