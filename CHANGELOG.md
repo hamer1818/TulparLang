@@ -42,6 +42,18 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Fixed — hiyerarşi sayacı konsolun içine taşıyordu
+
+Çakışma dedektörü ilk gerçek bulgusunu verdi: hiyerarşinin alt sayacı
+("1-15 / 18") konsol panelinin içine yazıyor ve kırmızı çerçeveyle
+işaretleniyordu. Sebep yine ölçeklenmemiş bir sabitti — sayaç için ayrılan
+yükseklik 14 piksel, ama 2x'te metin 20 piksel. Konum artık satır
+yüksekliğinden türüyor ve "metnin altı paneli aşmıyor" değişmezi her ölçekte
+sınanıyor.
+
+Konsol yüksekliği de satır SAYISINDAN türüyor: sabit tabanla 3x ölçekte tek
+satır gösteriyordu ve tek satırlık konsol işe yaramıyor.
+
 ### Fixed — iç içe geçmiş yazılar: satır aralığı ölçekle büyümüyordu
 
 Çakışma dedektörü hiçbir şey bildirmiyordu ama ekrandaki yazılar iç içe

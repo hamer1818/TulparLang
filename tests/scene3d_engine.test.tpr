@@ -4531,6 +4531,19 @@ func t_ui_all_scales_are_usable() {
         int chrome = _ED_MENU_H3 + _ED_TOOL_H3 + _ED_CONS_H3 + _ED_STAT_H3;
         assert(chrome < 410, toString(k) + "x: kabuk cok yer kapliyor: " + toString(chrome));
         // Paneller de pencerenin yarısını geçmemeli.
+        // Konsol her ölçekte en az 3 satır göstermeli — tek satırlık konsol
+        // işe yaramıyor ve 3x'te tam bu oluyordu.
+        int crows = toInt((_ED_CONS_H3 - _us3(18)) / _g_lh3());
+        assert(crows >= 3, toString(k) + "x: konsol " + toString(crows) + " satir");
+        // Hiyerarşinin alt sayacı panelin İÇİNDE bitmeli. Ayrılan yükseklik
+        // sabit 14 idi; 2x'te metin 20 piksel olduğu için sayaç panelden taşıp
+        // KONSOLUN İÇİNE yazıyordu (kullanıcı "1-15 konsolda, kırmızı
+        // çizgide" diye bildirdi — çakışma dedektörü de onu işaretledi).
+        int fy = _ed_foot_y3(100, 400);
+        assert(fy + _F3 <= 100 + 400,
+               toString(k) + "x: alt sayac panelden tasiyor (" +
+               toString(fy + _F3) + " > " + toString(500) + ")");
+        assert(fy > 100, toString(k) + "x: sayac panelin icinde olmali");
         assert(_ED_HIER_W3 + _ED_INSP_W3 < 720,
                toString(k) + "x: paneller cok genis: " +
                toString(_ED_HIER_W3 + _ED_INSP_W3));

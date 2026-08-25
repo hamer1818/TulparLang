@@ -6178,7 +6178,10 @@ func editor_ui_scale3d(k) {
     _ED_STAT_H3 = 18 * n;
     // Konsol ve paneller ölçekle DOĞRU ORANTILI büyümüyor: 3x'te ekranın
     // yarısını yerlerdi. Sabit bir taban + ölçek payı.
-    _ED_CONS_H3 = 40 + 28 * n;
+    // Konsol yüksekliği SATIR SAYISINDAN türüyor: sabit bir taban 3x ölçekte
+    // tek satır gösterebiliyordu ve tek satırlık konsol işe yaramıyor.
+    // (satır yüksekliği = 10n + 4n = 14n) * 3 satır + başlık/pay.
+    _ED_CONS_H3 = 14 * n * 3 + 24 * n;
     // Paneller ölçekle büyüyor ama DOĞRU ORANTILI değil: 3x'te ikisi birden
     // editör penceresinin yarısını yerdi. Sabit taban + ölçek payı, ve toplam
     // 720'nin (1440'ın yarısı) altında kalıyor — bir test bunu koruyor.
@@ -7010,6 +7013,12 @@ func _ed_addw3(pw, gap): int {
     return toInt((pw - _ED_PAD3 * 2 - gap * 3) / 4);
 }
 
+// Alt sayaç için ayrılan yükseklik ve METNİN Y'si. Sabit 14 idi ve 2x'te metin
+// 20 piksel olduğu için sayaç panelin altından taşıp KONSOLUN İÇİNE yazıyordu.
+// Saf, yani "metnin altı paneli aşmıyor" değişmezi penceresiz sınanabiliyor.
+func _ed_foot_h3(): int { return _g_lh3(); }
+func _ed_foot_y3(py, ph): int { return py + ph - _ed_foot_h3() + _us3(2); }
+
 // ---- Hiyerarşi araması -----------------------------------------------------
 // Sahne büyüdükçe listede gezinmek imkânsızlaşıyor; her editörde arama kutusu
 // var. Eşleşme BÜYÜK/KÜÇÜK HARF duyarsız: "Duvar" ararken "duvar"ı bulamamak
@@ -7082,7 +7091,7 @@ func _ed_hierarchy3() {
     _g_tip_for3(11990, "Ada ya da etikete gore suz");
 
     int listy = sy2 + _ED_FLD3 + _us3(4);
-    int foot = 14;
+    int foot = _ed_foot_h3();
     int rows = toInt((ph - (listy - py) - foot) / _ED_ROW3);
     if (rows < 1) { rows = 1; }
 
@@ -7142,7 +7151,8 @@ func _ed_hierarchy3() {
     }
     if (n > rows) {
         _g_txt3(toString(_ed_hscroll3 + 1) + "-" + toString(_ed_hscroll3 + rows) +
-                " / " + toString(n), _ED_PAD3, py + ph - foot + 2, pw - _ED_PAD3 * 2,
+                " / " + toString(n), _ED_PAD3, _ed_foot_y3(py, ph),
+                pw - _ED_PAD3 * 2,
                 _G_DIM3());
     }
 }
