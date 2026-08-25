@@ -42,6 +42,25 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Fixed — küre ↔ DÖNÜK kutu çarpışması kutuyu eksen-hizalı sanıyordu
+
+`set3yaw` ile döndürülmüş bir kutu, kutu-kutu çiftinde tam SAT'tan geçiyordu
+ama küre-kutu çiftinde geçmiyordu: `_sph_box3` en yakın noktayı dünya
+eksenlerinde kırpıyordu. Sonuç, döndürülmüş bir duvarın çarpışma kutusunun
+görünen duvarla ayrışmasıydı — oyuncu duvarın içinden geçiyor ya da yanındaki
+boşlukta duruyordu.
+
+Küre merkezi artık kutunun yerel çerçevesine taşınıyor. Dönüş yönü `_seg_aabb3`
+(ışın/kamera) ile AYNI ifadeden geliyor; ikisi ayrışırsa nişan aldığın yer ile
+çarptığın yer farklı olurdu.
+
+Testlerin kendisi bir kez zayıf çıktı: 90°'de kutu simetrik olduğu için dönüş
+yönünü TERS çeviren bozma testlerden kaçtı. Testler 45°'ye taşındı — orada iki
+köşegen ayrışıyor — ve beklenti koda değil, bağımsız yazılmış ışın testine
+bağlandı (`_sph_box3` ile `_seg_aabb3` hemfikir olmak zorunda). Ayrıca iki
+köşegenin gerçekten farklı cevap verdiği doğrulanıyor, yoksa test dönüşü hiç
+sınamamış olurdu.
+
 ### Fixed — scene3d programları optimizasyonsuz derleniyordu
 
 `[AOT] Warning: optimization produced invalid IR at every level` uyarısı

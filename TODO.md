@@ -226,8 +226,12 @@ boşluklar; backlog'da yoklardı.
       ikisi AYNI sonucu veriyor (işaret bölünenden, C ile aynı). Önceliği
       `*` ve `/` ile aynı. Ondalıkta `fmod`. Yeni süit: tests/modulo.test.tpr.
 
-- [ ] **Küre ↔ DÖNÜK kutu yaklaşık.** `_sph_box3` kutuyu eksen-hizalı
-      varsayıyor; kutu-kutu çifti tam SAT'tan geçiyor, küre-kutu geçmiyor.
+- [x] **Küre ↔ DÖNÜK kutu düzeldi.** ✅ 2026-08-25 — `_sph_box3` küre
+      merkezini kutunun yerel çerçevesine taşıyor; dönüş yönü `_seg_aabb3`
+      ile AYNI (çarpışma ile kamera/ışın ayrışamaz). 3 test eklendi.
+      90°'de kutu simetrik olduğu için yön bozması kaçıyordu — ölçüldü,
+      testler 45°'de iki köşegeni ayrıştırıyor ve ışın testini bağımsız
+      referans alıyor.
 
 ---
 

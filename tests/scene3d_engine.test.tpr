@@ -4341,6 +4341,98 @@ test("bolge gidis-donusu", "t_zone_roundtrip");
 test("bolge silme tum dizileri kaydiriyor", "t_zone_delete_shifts_all_arrays");
 test("bolge yokken alan yazilmiyor", "t_zone_absent_when_none");
 test("bolge kancalari yeniden yuklemeden sag cikiyor", "t_zone_hooks_survive_editor_reload");
+// ---- Küre ↔ DÖNÜK kutu ------------------------------------------------------
+// `_sph_box3` kutuyu eksen-hizalı varsayıyordu: kutu-kutu çifti tam SAT'tan
+// geçiyordu ama küre-kutu geçmiyordu. Sonuç, 45 derece dönük ince bir duvarın
+// yanından geçen topun ona çarpmış sayılması (ya da içinden geçmesi).
+//
+// Kurulum GEOMETRİK: 10 x 1 boyutunda ince bir duvar. Dönmemişken uzun ekseni
+// X; 90 derece dönünce uzun ekseni Z olur. Aynı noktadaki küre bu iki durumda
+// FARKLI cevap vermeli — vermiyorsa yaw yok sayılıyor demektir.
+func t_sphere_vs_rotated_box() {
+    scene3d_reset();
+    no_ground3d();
+    int w = spawn3(0.0, 0.0, 0.0, 10.0, 2.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    // (4, 0, 0): dönmemiş duvarın İÇİNDE (uzun eksen X, yarı-uzunluk 5).
+    int top = spawn3(4.0, 0.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    assert(_sph_box3(_slot_of3(top), _slot_of3(w)),
+           "donmemis duvarda x=4 icerde olmali");
+
+    // 90 derece döndür: uzun eksen artık Z, X'te yarı-genişlik 0.5.
+    // x=4 artık DIŞARIDA (0.5 + kure yaricapi 0.5 = 1.0 < 4).
+    set3yaw(w, 90.0);
+    assert(_sph_box3(_slot_of3(top), _slot_of3(w)) == false,
+           "90 derece donunce x=4 disarida olmali");
+
+    // ...ve z=4 artık İÇERİDE.
+    set3pos(top, 0.0, 0.0, 4.0);
+    assert(_sph_box3(_slot_of3(top), _slot_of3(w)),
+           "90 derece donunce z=4 icerde olmali");
+}
+
+// Dönmemiş kutuda davranış DEĞİŞMEMELİ — düzeltme yalnız yaw'lı durumu
+// etkilemeli.
+func t_sphere_vs_axis_box_unchanged() {
+    scene3d_reset();
+    no_ground3d();
+    int b = spawn3(0.0, 0.0, 0.0, 4.0, 4.0, 4.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int i1 = spawn3(1.0, 0.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    assert(_sph_box3(_slot_of3(i1), _slot_of3(b)), "icerde");
+    set3pos(i1, 3.0, 0.0, 0.0);   // yuzeye 0.5, kure yaricapi 0.5 -> tam tegets
+    assert(_sph_box3(_slot_of3(i1), _slot_of3(b)) == false, "tam tegette carpisma yok");
+    set3pos(i1, 10.0, 0.0, 0.0);
+    assert(_sph_box3(_slot_of3(i1), _slot_of3(b)) == false, "uzakta");
+}
+
+// Işın testi (`_seg_aabb3`) ve küre testi AYNI dönüş yönünü kullanmalı —
+// ayrışsalardı aynı duvar için çarpışma ve kamera farklı cevaplar verirdi.
+func t_sphere_and_ray_agree_on_rotation() {
+    scene3d_reset();
+    no_ground3d();
+    int w = spawn3(0.0, 0.0, 0.0, 12.0, 3.0, 0.6, GRAY, SHAPE_CUBE, TAG_WALL);
+    set3yaw(w, 90.0);
+    // Dönük duvar Z boyunca uzun. Z=5'te bir küre içerde olmalı...
+    int top = spawn3(0.0, 0.0, 5.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    assert(_sph_box3(_slot_of3(top), _slot_of3(w)), "kure: z=5 icerde");
+    // ...ve aynı noktaya nişan alan bir ışın da onu kesmeli.
+    float t = _seg_aabb3(0.0 - 20.0, 0.0, 5.0,  40.0, 0.0, 0.0, _slot_of3(w));
+    assert(t >= 0.0, "isin: z=5 hattinda duvari kesmeli");
+    // X boyunca uzak bir hat ikisinde de BOŞ olmalı.
+    set3pos(top, 8.0, 0.0, 0.0);
+    assert(_sph_box3(_slot_of3(top), _slot_of3(w)) == false, "kure: x=8 disarida");
+    float t2 = _seg_aabb3(8.0, 0.0, 0.0 - 20.0,  0.0, 0.0, 40.0, _slot_of3(w));
+    assert(t2 < 0.0, "isin: x=8 hattinda duvar yok");
+
+    // 45 DERECE: 90'da kutu simetrik olduğu için dönüş YÖNÜNÜN ters çevrilmesi
+    // fark etmiyordu (ölçüldü — bozma kaçtı). 45'te iki köşegen ayrışıyor.
+    // Beklenti yine BAĞIMSIZ: ışın testi referans, ikisi hemfikir olmalı.
+    scene3d_reset();
+    no_ground3d();
+    int w2 = spawn3(0.0, 0.0, 0.0, 14.0, 3.0, 0.8, GRAY, SHAPE_CUBE, TAG_WALL);
+    set3yaw(w2, 45.0);
+    int k = spawn3(0.0, 0.0, 0.0, 0.6, 0.6, 0.6, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    int ws = _slot_of3(w2);
+    int ks = _slot_of3(k);
+
+    set3pos(k, 4.0, 0.0, 4.0);
+    bool kure_a = _sph_box3(ks, ws);
+    bool isin_a = _seg_aabb3(4.0, 0.0, 4.0,  0.001, 0.0, 0.0, ws) >= 0.0;
+    assert(kure_a == isin_a,
+           "45 derecede (4,4): kure=" + toString(kure_a) + " isin=" + toString(isin_a));
+
+    set3pos(k, 4.0, 0.0, 0.0 - 4.0);
+    bool kure_b = _sph_box3(ks, ws);
+    bool isin_b = _seg_aabb3(4.0, 0.0, 0.0 - 4.0,  0.001, 0.0, 0.0, ws) >= 0.0;
+    assert(kure_b == isin_b,
+           "45 derecede (4,-4): kure=" + toString(kure_b) + " isin=" + toString(isin_b));
+
+    // İki köşegen AYRIŞMALI, yoksa test dönüş yönünü hiç sınamıyor demektir.
+    assert(kure_a != kure_b, "45 derecede iki kosegen farkli cevap vermeli");
+}
+
+test("kure donuk kutuyla dogru", "t_sphere_vs_rotated_box");
+test("kure eksen-hizali kutuda degismedi", "t_sphere_vs_axis_box_unchanged");
+test("kure ve isin donmede hemfikir", "t_sphere_and_ray_agree_on_rotation");
 test("kati-kati temas kancasi atiyor", "t_hit_hook_fires_between_solids");
 test("temas payi yaricap degil", "t_hit_hook_skin_is_not_a_radius");
 test("topla kurali", "t_rule_collect");

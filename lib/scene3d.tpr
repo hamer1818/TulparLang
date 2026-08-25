@@ -1913,14 +1913,33 @@ func _sph_box3(s, b): bool {
     Ent3 es = _e3[s];
     Ent3 eb = _e3[b];
     float hx = eb.sx * 0.5; float hy = eb.sy * 0.5; float hz = eb.sz * 0.5;
-    float cx = es.x; float cy = es.y; float cz = es.z;
+    // DÖNÜK kutu: kürenin merkezini kutunun YEREL çerçevesine taşı, sonra
+    // sıradan eksen-hizalı en-yakın-nokta testini uygula. Dönme mesafeyi
+    // koruduğu için sonuç KESİN — yaklaşık değil.
+    //
+    // Eskiden yaw yok sayılıyordu: kutu-kutu çifti tam SAT'tan geçiyordu ama
+    // küre-kutu geçmiyordu, yani 45 derece dönük bir duvarın yanından geçen
+    // top ona çarpmış sayılabiliyor (ya da tam tersi, içinden geçebiliyordu).
+    // Dönüş yönü `_seg_aabb3` ile AYNI; iki test ayrışsaydı aynı duvar için
+    // çarpışma ve kamera farklı cevaplar verirdi.
+    float sxp = es.x;
+    float szp = es.z;
+    if (abs_f3(eb.yaw) > 0.01) {
+        float rx = es.x - eb.x;
+        float rz = es.z - eb.z;
+        float c = cos(eb.yaw * DEG2RAD3);
+        float sn = sin(eb.yaw * DEG2RAD3);
+        sxp = eb.x + (rx * c - rz * sn);
+        szp = eb.z + (rx * sn + rz * c);
+    }
+    float cx = sxp; float cy = es.y; float cz = szp;
     if (cx < eb.x - hx) { cx = eb.x - hx; }
     if (cx > eb.x + hx) { cx = eb.x + hx; }
     if (cy < eb.y - hy) { cy = eb.y - hy; }
     if (cy > eb.y + hy) { cy = eb.y + hy; }
     if (cz < eb.z - hz) { cz = eb.z - hz; }
     if (cz > eb.z + hz) { cz = eb.z + hz; }
-    float dx = es.x - cx; float dy = es.y - cy; float dz = es.z - cz;
+    float dx = sxp - cx; float dy = es.y - cy; float dz = szp - cz;
     float r = _radius3(es);
     return dx * dx + dy * dy + dz * dz < r * r;
 }
