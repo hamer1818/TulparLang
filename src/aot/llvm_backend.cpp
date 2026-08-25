@@ -1280,6 +1280,20 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_keys =
       LLVMAddFunction(backend->module, "aot_keys", fmt_iso_type);
 
+  // args() -> array<str>. Argümansız; dönüş ABI'si `aot_arena_save` ile aynı
+  // şekilde `llvm_make_vmvalue_func_type` üzerinden kuruluyor, yani sret
+  // ayrımı tek yerde kalıyor.
+  backend->func_aot_args =
+      LLVMAddFunction(backend->module, "aot_args", arena_save_type);
+
+  // aot_set_args(argc, argv): main girişinde çağrılıyor.
+  LLVMTypeRef sa_params[2] = {
+      backend->int32_type,
+      LLVMPointerType(LLVMPointerType(LLVMInt8Type(), 0), 0)};
+  LLVMTypeRef sa_type = LLVMFunctionType(LLVMVoidType(), sa_params, 2, 0);
+  backend->func_aot_set_args =
+      LLVMAddFunction(backend->module, "aot_set_args", sa_type);
+
   // aot_object_clone(obj) -> obj (shallow). Same 1-arg VMValue→VMValue
   // shape as keys; can reuse `fmt_iso_type`. Exposed as the user-level
   // `clone(obj)` builtin and used by the VM compiler's typed-struct
@@ -4606,6 +4620,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_csv_emit,
                                     args, 1, "csv_e");
+    }
+    if (node->name && strcmp(node->name, "args") == 0 &&
+        node->argument_count == 0) {
+      return llvm_call_vmvalue_func(backend, backend->func_aot_args, nullptr, 0,
+                                    "args");
     }
     if (node->name && strcmp(node->name, "keys") == 0 &&
         node->argument_count >= 1) {
@@ -9229,7 +9248,14 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   // MAIN FUNCTION: int main() -> returns raw i32 (OS exit code)
   // We must create it FIRST so that imports (Pass 0) can emit init code into
   // it.
-  LLVMTypeRef main_type = LLVMFunctionType(backend->int32_type, nullptr, 0, 0);
+  // main artık (argc, argv) alıyor. `int main()` de `int main(int, char**)`
+  // de geçerli C; imzayı genişletmek çağrı yerlerini etkilemiyor ama dile
+  // args() verebilmenin tek yolu bu — argv başka türlü elde edilemez.
+  LLVMTypeRef main_params[2] = {
+      backend->int32_type,
+      LLVMPointerType(LLVMPointerType(LLVMInt8Type(), 0), 0)};
+  LLVMTypeRef main_type =
+      LLVMFunctionType(backend->int32_type, main_params, 2, 0);
   LLVMValueRef main_func = LLVMAddFunction(backend->module, "main", main_type);
   backend->current_function = main_func;
   backend->current_function_node = node;
@@ -9251,6 +9277,16 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   LLVMBuildCall2(backend->builder,
                  LLVMGlobalGetValueType(backend->func_aot_runtime_init),
                  backend->func_aot_runtime_init, nullptr, 0, "");
+
+  // Komut satırı argümanlarını runtime'a ver. Çalışma zamanı başlatıldıktan
+  // HEMEN sonra: args() bir dizi ayırıyor, yani arena hazır olmalı.
+  {
+    LLVMValueRef sa_args[2] = {LLVMGetParam(main_func, 0),
+                               LLVMGetParam(main_func, 1)};
+    LLVMBuildCall2(backend->builder,
+                   LLVMGlobalGetValueType(backend->func_aot_set_args),
+                   backend->func_aot_set_args, sa_args, 2, "");
+  }
 
   // Top-level closure env (2026-07-21): if the capture analysis found
   // lambdas capturing main's scope-locals (for-init vars, block locals —

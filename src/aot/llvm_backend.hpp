@@ -228,6 +228,8 @@ typedef struct {
   LLVMValueRef func_aot_csv_parse;
   LLVMValueRef func_aot_csv_emit;
   LLVMValueRef func_aot_keys;
+  LLVMValueRef func_aot_args;
+  LLVMValueRef func_aot_set_args;
   LLVMValueRef func_aot_object_clone;
   LLVMValueRef func_aot_persist; // persist(value) -> deep malloc'd copy (survives arena_restore)
   LLVMValueRef func_aot_http_request;

@@ -1,0 +1,41 @@
+// args() — komut satırı argümanları.
+//
+//   ./tulpar tests/args.test.tpr
+//
+// Dilde argv erişimi HİÇ yoktu: Tulpar ile yazılmış bir CLI aracı (sahne
+// editörü dahil) hangi dosyayla açıldığını öğrenemiyordu. Üretilen `main`
+// artık (argc, argv) alıyor ve girişte runtime'a veriyor.
+
+import "test";
+
+func t_args_has_program_path() {
+    array a = args();
+    // En az bir öğe VAR: programın kendi yolu. C'nin argv sözleşmesiyle aynı
+    // — başka bir sözleşme uydurmak "neden kaydı?" sorusunu doğururdu.
+    assert(length(a) >= 1, "args() en az bir oge dondurmeli");
+    assert(a[0] != "", "args()[0] bos olmamali");
+}
+
+func t_args_is_stable() {
+    // İki çağrı aynı sonucu vermeli — argv süreç boyunca değişmiyor.
+    array a = args();
+    array b = args();
+    assert_eq_int(length(a), length(b));
+    assert(a[0] == b[0], "ilk oge ayni olmali");
+}
+
+func t_args_elements_are_strings() {
+    array a = args();
+    int i = 0;
+    while (i < length(a)) {
+        // Metin işlemleri patlamadan çalışmalı (öğeler gerçekten str).
+        str s = a[i];
+        assert(length(s) >= 0, "oge metin olmali");
+        i = i + 1;
+    }
+}
+
+test("args programin yolunu iceriyor", "t_args_has_program_path");
+test("args caginmalar arasi kararli", "t_args_is_stable");
+test("args ogeleri metin", "t_args_elements_are_strings");
+test_summary();

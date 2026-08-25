@@ -2927,6 +2927,40 @@ VMValue aot_csv_emit(VMValue rowsVal) {
 // order. The returned array shares no string objects with the original
 // (each key is re-allocated in the arena), so the caller may keep the
 // result around even after the source object is mutated.
+// AOT Builtin: args() -> str[]  (komut satırı argümanları)
+//
+// Üretilen `main` artık (argc, argv) alıyor ve girişte bunları buraya
+// veriyor. Dilde argv erişimi HİÇ yoktu: Tulpar ile yazılmış bir CLI aracı
+// (editör dahil) hangi dosyayla açıldığını öğrenemiyordu.
+//
+// args()[0] programın kendi yolu — C'nin argv sözleşmesiyle aynı, çünkü
+// başka bir sözleşme uydurmak "neden kaydı?" sorusunu doğurur.
+static int aot_g_argc = 0;
+static char **aot_g_argv = nullptr;
+
+extern "C" void aot_set_args(int argc, char **argv) {
+  aot_g_argc = argc;
+  aot_g_argv = argv;
+}
+
+extern "C" VMValue aot_args(void) {
+  int n = aot_g_argc > 0 ? aot_g_argc : 0;
+  ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
+  a->obj.type = OBJ_ARRAY;
+  a->obj.arena_allocated = 1;
+  a->obj.next = nullptr;
+  a->obj.ref_count = 1;
+  a->obj.is_moved = 0;
+  a->capacity = n;
+  a->count = n;
+  a->items = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
+  for (int i = 0; i < n; i++) {
+    const char *sv = (aot_g_argv && aot_g_argv[i]) ? aot_g_argv[i] : "";
+    a->items[i] = VM_OBJ((Obj *)aot_allocate_string(sv, (int)strlen(sv)));
+  }
+  return VM_OBJ((Obj *)a);
+}
+
 VMValue aot_keys(VMValue objVal) {
     auto empty = []() -> VMValue {
         ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));

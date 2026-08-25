@@ -42,6 +42,21 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — `args()`: komut satırı argümanları (dil) ve `./editor <dosya>`
+
+Dilde argv erişimi HİÇ yoktu: Tulpar ile yazılmış bir CLI aracı hangi
+dosyayla açıldığını öğrenemiyordu. Üretilen `main` artık `(argc, argv)`
+alıyor — `int main()` de `int main(int, char**)` de geçerli C, yani imzayı
+genişletmek çağrı yerlerini etkilemiyor — ve girişte runtime'a veriyor.
+
+`args()[0]` programın kendi yolu; C'nin argv sözleşmesiyle aynı, çünkü başka
+bir sözleşme uydurmak "neden kaydı?" sorusunu doğururdu.
+
+Editör bunu kullanıyor: **`./editor benim_sahnem.json`**. Dosya YOKSA bu bir
+hata değil — yeni sahne yaratmanın en doğal yolu (`./editor yeni.json` → boş
+sahne, F5 orayı yazar). Editörün tek bir gömülü dosyayı açabilmesi onu kendi
+iş için kullanılamaz yapıyordu.
+
 ### Fixed — hiyerarşi sayacı konsolun içine taşıyordu
 
 Çakışma dedektörü ilk gerçek bulgusunu verdi: hiyerarşinin alt sayacı

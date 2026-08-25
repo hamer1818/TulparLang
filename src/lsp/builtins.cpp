@@ -203,6 +203,7 @@ const BuiltinEntry kBuiltins[] = {
     {"endsWith",     "endsWith(s: str, suffix: str): bool",         "Metin bu sonekle mi bitiyor?"},
     {"indexOf",      "indexOf(s: str, needle: str): int",           "Alt metnin ilk konumu; yoksa -1."},
     {"keys",         "keys(o: json): array",                        "Nesnenin anahtarları."},
+    {"args",           "args(): str[]",                                   "Komut satırı argümanları. args()[0] programın kendi yolu."},
     {"clone",        "clone(v): any",                               "Derin kopya — kaynağı paylaşmayan yeni değer."},
     {"env",          "env(name: str): str",                         "Ortam değişkeni; yoksa boş metin."},
     {"sha256",       "sha256(s: str): str",                         "SHA-256 özeti (onaltılık metin)."},

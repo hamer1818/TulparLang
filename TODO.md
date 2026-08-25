@@ -61,9 +61,10 @@ Mimari kararlar ve gerekçeleri:
       konsol, durum çubuğu. Sahne görünümü render texture. TAB kaplaması
       kaldırıldı. Detay: CHANGELOG.
 
-- [ ] **`tulpar editor <sahne.json>` alt komutu.** Şimdilik editör bir örnek
-      program (`examples/scene3d_editor.tpr`) ve sahne yolu kaynağa gömülü;
-      CLI'dan dosya açmak gerekiyor.
+- [x] **Editör komut satırından dosya açıyor.** ✅ 2026-08-24 —
+      `./editor benim_sahnem.json`; olmayan dosya yeni sahne demek. Dile
+      `args()` eklendi (üretilen `main` artık argc/argv alıyor). Bir
+      `tulpar editor` alt komutu hâlâ yapılabilir ama artık zorunlu değil.
 
 - [ ] **Editörde kalan Unity/Unreal parçaları.** Çoklu seçim, prefab/şablon,
       tetikleyici bölge düzenleme, sağ tık bağlam menüsü, araç ipuçları
