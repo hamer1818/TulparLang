@@ -83,13 +83,18 @@ Mimari kararlar ve gerekçeleri:
 - [x] **`chr` builtin'i geldi.** ✅ 2026-08-24 — `ord`un tersi; editörün ASCII
       tablosu silindi.
 
-- [ ] **Faz 4 — Köprü.** `tm_bridge_send/recv` (2 bağlama): JS ↔ wasm arasında
-      JSON komut/olay kuyruğu. Masaüstünde stdin/stdout'a düşecek — böylece
-      VS Code eklentisi de yerel bir önizleme penceresi sürebilir.
+- [~] **Faz 4/5 — JS köprüsü ve web kabuğu: GEREKSİZ KALDI.** Özgün plan
+      editörü JS'te yazmak ve wasm'a bir komut köprüsüyle bağlamaktı. Editör
+      motorun İÇİNDE Tulpar ile yazılınca web sürümü ayrı bir uygulama değil,
+      AYNI kodun wasm'a derlenmiş hâli oluyor — köprüye de JS panellerine de
+      gerek yok. Kalan gerçek iş aşağıda.
 
-- [ ] **Faz 5 — Web kabuğu.** Varlık listesi, özellik paneli, davranış/kural
-      seçicileri, canlı kod çıktısı, kaydet/yükle/dışa aktar. tulparlang.dev
-      altında statik — arka uç yok. Doğrulama headless Chrome ekran görüntüsü.
+- [ ] **Editörü web'de çalıştır.** `tulpar build --target=web
+      examples/scene3d_editor.tpr`. Bilinen engeller: (a) `load_font` sistem
+      yolu arıyor, web'de dosya sistemi yok → bitmap fonta düşer, (b) sahne
+      dosyası açma/kaydetme tarayıcıda `read_file`/`write_file` değil
+      localStorage/indirme olmalı, (c) `args()` web'de anlamsız. Üçü de
+      çözülebilir; hiçbiri mimari değil.
 
 - [x] **Kod üretimi.** ✅ 2026-08-24 — `sahne_kod3d()` + `scene3d_export.tpr`.
       Üretilen şey tek bir `kur()` FONKSİYONU (tam program değil) ki denklik
