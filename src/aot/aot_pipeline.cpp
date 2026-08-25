@@ -1023,6 +1023,16 @@ AOTResult aot_compile_with_filename_debug(const char *source,
 
   // Android hedefi: iki ABI için obje + NDK linki + APK staging, sonra çık.
   if (g_target_android) {
+    // Arşiv tazeliği NDK aramasından ÖNCE. Sıra önemli: NDK'sız bir makinede
+    // sürücü "NDK gerekir" deyip çıkıyordu, yani bayat arşiv uyarısı o yola
+    // hiç varmıyordu — üstelik bayatlığı en kolay gözden kaçacağı makine tam
+    // olarak orası. Zaman damgası karşılaştırması hiçbir araç zinciri
+    // istemiyor, o yüzden burada hiçbir şeye mal olmuyor.
+    for (const char *abi : {"arm64-v8a", "x86_64"}) {
+      std::string dist = std::string("android/dist/") + abi;
+      warn_if_prebuilt_archive_stale(dist.c_str(),
+                                     "android/build_tame_android.sh");
+    }
     std::string ndk = find_android_ndk();
     std::string tc = ndk + "/toolchains/llvm/prebuilt/linux-x86_64/bin/";
     if (ndk.empty()) {

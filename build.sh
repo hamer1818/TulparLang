@@ -162,6 +162,33 @@ if [ "$ACTION" = "suites" ]; then
             exit 1
         fi
     fi
+
+    # Önceden derlenmiş arşivlerin TAZELİĞİ. Sürücü bunu web/Android link'i
+    # sırasında zaten uyarıyor, ama o uyarıyı görmek için o hedefi derlemek
+    # gerekiyor — yani arşivler aylarca sessizce çürüyebiliyor (ölçüldü:
+    # android/dist 11 Ağustos'tan kalmıştı ve 25-26 Ağustos'ta eklenen ALTI
+    # sembolün hiçbirini içermiyordu; o arşivle her Android derlemesi link'te
+    # patlardı).
+    #
+    # Burada yalnız zaman damgası karşılaştırılıyor: hiçbir araç zinciri
+    # (emsdk / NDK) gerekmiyor, dolayısıyla her makinede çalışıyor.
+    # HATA DEĞİL uyarı: arşiv yoksa o hedef zaten kullanılmıyor demektir ve
+    # emsdk'sı olmayan bir geliştiriciyi kırmızıya boğmak yanlış olur.
+    DIST_SRC_NEWEST=$(ls -t runtime/tame_impl.c runtime/tame_bindings.cpp                           src/vm/runtime_bindings.cpp src/vm/vm.cpp 2>/dev/null | head -1)
+    if [ -n "$DIST_SRC_NEWEST" ]; then
+        for d in wasm/dist android/dist/arm64-v8a android/dist/x86_64; do
+            [ -d "$d" ] || continue
+            oldest=$(ls -t "$d"/*.a 2>/dev/null | tail -1)
+            [ -n "$oldest" ] || continue
+            if [ "$DIST_SRC_NEWEST" -nt "$oldest" ]; then
+                echo -e "${YELLOW}arsiv BAYAT: $d ($DIST_SRC_NEWEST daha yeni)${NC}"
+                case "$d" in
+                    wasm*) echo "   tazele: wasm/build_tame_web.sh" ;;
+                    *)     echo "   tazele: android/build_tame_android.sh" ;;
+                esac
+            fi
+        done
+    fi
     # packages/ testleri. Bunlar birinci-taraf yayınlanabilir paketler ve
     # HİÇBİR otomasyonda koşmuyorlardı. `import "<ad>"` ÇALIŞMA DİZİNİNE göre
     # çözüldüğü için paketin kendi klasöründen çalıştırılmaları gerekiyor —

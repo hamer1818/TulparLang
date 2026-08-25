@@ -348,26 +348,36 @@ boşluklar; backlog'da yoklardı.
       Kalan: `_grid_near3` her çağrıda yeni bir dizi ayırıyor. 800'ün
       üstünde tekrar bakılabilir.
 
-- [ ] **`wasm/dist` ve `android/dist` arşivleri bayat kalıyor.** Katman boyama
-      `tame_impl.c`'ye yeni sembol ekledi; bu arşivler elle yeniden
-      derlenmedikçe (`wasm/build_tame_web.sh`, `android/build_tame_android.sh`)
-      web/Android hedefi link hatası verir. Masaüstünde görünmeyen, yalnız o
-      hedeflerde patlayan bir sınıf — arşiv tazeliğini denetleyen bir kontrol
-      (kaynak zaman damgası karşılaştırması) ucuz olur.
-      ✅ Denetim geldi (2026-08-25): web ve Android link'inden ÖNCE arşiv
-      zaman damgası `runtime/tame_impl.c` ve kardeşleriyle karşılaştırılıyor,
-      eskiyse tazeleme komutunu söyleyen bir uyarı çıkıyor. Uyarı, hata
-      değil: bayat arşivde gereken semboller varsa link tutar.
-      Kalan borç, arşivleri TAZELEMEK hâlâ elle.
-      Durum (ölçüldü 2026-08-26): `wasm/dist` TAZE — bu oturumda üç kez
-      yeniden derlendi (bulut, localStorage/indirme, kama mesh'i).
-      `android/dist` **11 Ağustos'tan kalma**, yani 25-26 Ağustos'ta eklenen
-      sembollerin hiçbiri içinde yok (`tm_download`, `tm_is_web`,
-      `tm3_anim_blend`, `tm3_billboard_pro`, `tm3_atlas_grid`,
-      `tm_sound_pan`, kama). NDK bu makinede kurulu değil — sürücü zaten
-      link'ten ÖNCE "NDK gerekir" diyip çıkıyor, dolayısıyla tazelik uyarısı
-      da o yola hiç varmıyor. NDK'lı bir makinede uyarı çıkacak ve
-      `android/build_tame_android.sh` demesi yeterli olacak.
+- [x] **Arşiv tazeliği denetimi tamam; `android/dist` bu makinede
+      tazelenemiyor.** ✅ 2026-08-26.
+
+      Denetim İKİ yerde:
+      1. Web/Android **link'inden önce** (sürücü). Android tarafında sıra
+         düzeltildi: kontrol artık NDK aramasından ÖNCE — eskiden NDK'sız bir
+         makinede sürücü "NDK gerekir" deyip çıkıyordu ve uyarı o yola hiç
+         varmıyordu, üstelik bayatlığın en kolay gözden kaçacağı makine tam
+         olarak orası.
+      2. **`build.sh suites`** içinde, her test koşumunda. Yalnız zaman
+         damgası karşılaştırması, hiçbir araç zinciri gerektirmiyor. Uyarı,
+         hata değil: arşiv yoksa o hedef zaten kullanılmıyor demektir ve
+         emsdk'sı olmayan birini kırmızıya boğmak yanlış olur.
+      Bozma ile sınandı: kaynak dosyaya dokununca `wasm/dist` de bayat
+      bildiriliyor, tazeleyince listeden çıkıyor.
+
+      Ölçülen durum: **`wasm/dist` TAZE** (bu oturumda dört kez yeniden
+      derlendi). **`android/dist` 11 Ağustos'tan kalma** ve kullanılamaz
+      olduğu KANITLANDI — `nm` ile bakıldı, 25-26 Ağustos'ta eklenen altı
+      sembolün (`aot_tm3_sky_clouds_ptr`, `aot_tm_download_ptr`,
+      `aot_tm_is_web_ptr`, `aot_tm3_anim_blend_ptr`,
+      `aot_tm3_billboard_pro_ptr`, `aot_tm_sound_pan_ptr`) HİÇBİRİ yok.
+
+      Tazelemek NDK istiyor ve bu makinede NDK YOK: `~/Android/android-ndk-*`,
+      `ndk-build`, `sdkmanager` — üçü de arandı, hiçbiri bulunamadı,
+      `TULPAR_ANDROID_NDK` boş. Yani bu, yapılmamış bir iş değil, bu makinede
+      yapılamayan bir iş; artık her `build.sh suites` koşumunda tazeleme
+      komutuyla birlikte bildiriliyor. Dosyalar gitignore'lu derleme çıktısı
+      olduğu için silinmedi — kullanıcının başka bir makineden senkronlaması
+      mümkün.
 
 - [x] **`lib/test.tpr` artık BÜTÜN hataları gösteriyor.** ✅ 2026-08-24 —
       mesaj eziliyordu, yani ilk kırılan iddia (asıl sebebi söyleyen o)
