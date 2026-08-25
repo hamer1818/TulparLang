@@ -1,0 +1,39 @@
+// Expected: the catalogued builtins accept their real, MEASURED shapes.
+//
+// Sibling of fail/10. These signatures were read off runtime_bindings.cpp and
+// then verified by running the program and inspecting the values with
+// isInt/isFloat/..., because two of them are counter-intuitive and a guessed
+// signature would have been worse than none:
+//
+//   * min/max return FLOAT even for int arguments,
+//   * path_match returns {matched, params} JSON — it is the router's path
+//     matcher, not a boolean predicate.
+//
+// print() is variadic and must not be flagged for "too many arguments".
+
+// Dönüş tipleri TİPLİ DEĞİŞKENE bağlanıyor. Sadece print()'e geçirmek
+// yetmiyordu: print değişken argümanlı ve parametresi UNKNOWN, yani yanlış
+// yazılmış bir dönüş tipi oradan sessizce geçiyor — ölçüldü, `min`'i STRING
+// yapan bir bozma bu fixture'dan kaçtı. Tipli bağlama onu kırmızıya çeviriyor.
+func main() {
+    str birlesik = join("-", ["a", "b"]);
+    float en_kucuk = min(3, 5);            // int argümanlar, FLOAT dönüş
+    float en_buyuk = max(3.5, 5.5);
+    float kalan = mod(7, 3);
+    json m = path_match("/a/*", "/a/b");   // JSON, bool değil
+    bool tamsayi_mi = isInt(3);
+    int kac = count("aa", "a");
+    str yinelenen = repeat("ab", 3);
+    str iso = format_iso8601(0);
+    int saniye = parse_iso8601("1970-01-01T00:00:00Z");
+    str ozet = sha1_hex("ab");
+    array satirlar = csv_parse("a,b");
+    int ms = time_ms();
+
+    print(birlesik, en_kucuk, en_buyuk, kalan, m["matched"]);
+    print(tamsayi_mi, kac, yinelenen, iso, saniye, ozet, length(satirlar), ms > 0);
+    print(isInt(3), isFloat(3.0), isString("x"));   // print değişken argümanlı
+    print(base64_encode("ab"), csv_emit(satirlar));
+}
+
+main();

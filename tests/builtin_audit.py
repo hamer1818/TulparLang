@@ -61,21 +61,25 @@ INTERNAL = {
 # yani gerçek borç. Listeden silmek = tabloya imza eklemek.
 # TODO.md §3'te takip ediliyor.
 KNOWN_GAPS = {
-    # tabloda var, codegen'de YOK (kırık vaat)
-    "clock", "toBool", "toLower", "toUpper", "values",
-    "socket_recv", "socket_select",
-    # codegen'de var, tabloda YOK (denetimsiz)
-    "print", "random", "randint", "min", "max", "mod",
-    "join", "reverse", "repeat", "count", "capitalize",
-    "isAlpha", "isDigit", "isEmpty", "isArray", "isBool", "isFloat",
-    "isInt", "isObject", "isString",
-    "base64_decode", "base64_encode", "sha1", "sha1_hex",
-    "csv_emit", "csv_parse", "file_glob", "path_match", "parse_multipart",
-    "http_request", "http_request_async",
-    "input_float", "input_int",
-    "time_ms", "timestamp", "weekday", "now_iso8601", "format_iso8601",
-    "parse_iso8601", "date_add_seconds",
+    # KIRIK VAATLERİN HEPSİ KAPANDI (2026-08-25). Tabloda olup codegen'de
+    # olmayan yedi ad vardı; çağıran "fonksiyon bulunamadı" alıyordu.
+    #   uygulandı:  values, toBool, toUpper, toLower
+    #   tablodan çıkarıldı: clock (karşılığı time_ms/timestamp),
+    #                       socket_recv (gerçek ad socket_receive),
+    #                       socket_select (karşılığı socket_poll — o da
+    #                       imzasızdı, aynı anda imzalandı)
+    #
+    # DENETİMSİZ 40 AD DA İMZALANDI (2026-08-25). Dönüş tipleri
+    # runtime_bindings.cpp'den okundu VE çalıştırılıp isInt/isFloat/... ile
+    # doğrulandı; iki sürpriz çıktı ve ikisi de tahminle yanlış yazılırdı:
+    #   min/max HER ZAMAN float döndürüyor (int argümanda bile),
+    #   path_match bool değil {matched, params} JSON'u döndürüyor.
+    #
+    # Küme artık BOŞ. Yeni bir builtin imzasız eklenirse denetim kırmızıya
+    # döner — kapanan boşlukların geri açılmasını engelleyen şey bu.
+    # (set() yazılıyor: boş süslü ayraç Python'da dict demek.)
 }
+KNOWN_GAPS = set()
 
 
 def read(path):

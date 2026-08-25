@@ -336,7 +336,11 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
       // `serve()` stand in for `serve(<default port>)`.
       // `call(name, ...)` is genuinely variadic (it forwards a callee's args by
       // name), so registering it with one param must not flag the extra args.
-      const bool is_variadic_builtin = (effective_name == "call");
+      // `call(name, ...)` çağrılanın argümanlarını adıyla iletiyor,
+      // `print(...)` de istediği kadar değer alıyor: ikisi de gerçekten
+      // değişken argümanlı, tek parametreyle kaydedilip burada muaf.
+      const bool is_variadic_builtin =
+          (effective_name == "call" || effective_name == "print");
       if (got > expected && !is_variadic_builtin) {
         report_error(ctx,
                      "Function '%s' expects %d argument(s), got %d at line %d",
@@ -844,6 +848,85 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
   // on the C-bridge AST — those happen after our pre-pass on the std::variant
   // AST, so the synthetic calls never reach typeinfer.
   const BuiltinSig sigs[] = {
+      // --- Denetimsiz kalan 40 builtin (2026-08-25) ---
+      // Tabloda olmayan bir builtin HİÇ denetlenmiyor: dönüşü VOID sayılıyor,
+      // o yüzden hem argümanları hem de sonucu kullanan her satır atlanıyor.
+      //
+      // Dönüş tipleri ÖLÇÜLDÜ — runtime_bindings.cpp okundu ve ayrıca
+      // çalıştırılıp `isInt/isFloat/...` ile doğrulandı. İki sürpriz çıktı ve
+      // ikisi de tahminle yanlış yazılırdı:
+      //   * `min`/`max` HER ZAMAN float döndürüyor, int argümanlarda bile.
+      //   * `path_match` bool değil, `{matched, params}` JSON'u döndürüyor
+      //     (router'ın yol eşleyicisi, bir yüklem değil).
+      // "Yanlış imza, imzasızlıktan kötüdür" — bu yüzden hiçbiri tahmin
+      // edilmedi.
+
+      // Matematik. min/max/mod'un argümanları float yazılı ama int de
+      // geçiyor: types_compatible int↔float'ı karşılıklı kabul ediyor.
+      {"random", TYPE_FLOAT, {}},
+      {"randint", TYPE_INT, {TYPE_FLOAT, TYPE_FLOAT}},
+      {"min", TYPE_FLOAT, {TYPE_FLOAT, TYPE_FLOAT}},
+      {"max", TYPE_FLOAT, {TYPE_FLOAT, TYPE_FLOAT}},
+      // mod int argümanda int, ondalıkta float döndürüyor; float yazmak
+      // int↔float uyumu sayesinde yanlış pozitif üretmiyor.
+      {"mod", TYPE_FLOAT, {TYPE_FLOAT, TYPE_FLOAT}},
+
+      // Dize. join'in ARGÜMAN SIRASI ayırıcı-önce: join("-", dizi).
+      {"join", TYPE_STRING, {TYPE_STRING, TYPE_ARRAY}},
+      {"reverse", TYPE_STRING, {TYPE_STRING}},
+      {"repeat", TYPE_STRING, {TYPE_STRING, TYPE_INT}},
+      {"count", TYPE_INT, {TYPE_STRING, TYPE_STRING}},
+      {"capitalize", TYPE_STRING, {TYPE_STRING}},
+      {"isAlpha", TYPE_BOOL, {TYPE_STRING}},
+      {"isDigit", TYPE_BOOL, {TYPE_STRING}},
+      {"isEmpty", TYPE_BOOL, {TYPE_STRING}},
+
+      // Tip yüklemleri: her şeyi kabul ederler, o yüzden argüman UNKNOWN.
+      {"isArray", TYPE_BOOL, {TYPE_UNKNOWN}},
+      {"isBool", TYPE_BOOL, {TYPE_UNKNOWN}},
+      {"isFloat", TYPE_BOOL, {TYPE_UNKNOWN}},
+      {"isInt", TYPE_BOOL, {TYPE_UNKNOWN}},
+      {"isObject", TYPE_BOOL, {TYPE_UNKNOWN}},
+      {"isString", TYPE_BOOL, {TYPE_UNKNOWN}},
+
+      // Kodlama / özet
+      {"base64_encode", TYPE_STRING, {TYPE_STRING}},
+      {"base64_decode", TYPE_STRING, {TYPE_STRING}},
+      {"sha1", TYPE_STRING, {TYPE_STRING}},
+      {"sha1_hex", TYPE_STRING, {TYPE_STRING}},
+
+      // Veri
+      {"csv_parse", TYPE_ARRAY, {TYPE_STRING}},
+      {"csv_emit", TYPE_STRING, {TYPE_ARRAY}},
+      {"file_glob", TYPE_ARRAY, {TYPE_STRING}},
+      // BOOL DEĞİL: {matched: int, params: json} döndürüyor.
+      {"path_match", TYPE_JSON, {TYPE_STRING, TYPE_STRING}},
+      {"parse_multipart", TYPE_JSON, {TYPE_STRING, TYPE_STRING}},
+      // 3 ve 4 argümanlı iki biçimi var; 4 yazılıyor çünkü EKSİK argüman
+      // serbest, FAZLA argüman hata.
+      {"http_request", TYPE_JSON,
+       {TYPE_STRING, TYPE_STRING, TYPE_STRING, TYPE_JSON}},
+      {"http_request_async", TYPE_UNKNOWN,
+       {TYPE_STRING, TYPE_STRING, TYPE_STRING}},
+
+      // Girdi
+      {"input_int", TYPE_INT, {TYPE_STRING}},
+      {"input_float", TYPE_FLOAT, {TYPE_STRING}},
+
+      // Tarih / saat
+      {"time_ms", TYPE_INT, {}},
+      {"timestamp", TYPE_INT, {}},
+      {"weekday", TYPE_INT, {TYPE_INT}},
+      {"now_iso8601", TYPE_STRING, {}},
+      {"format_iso8601", TYPE_STRING, {TYPE_INT}},
+      {"parse_iso8601", TYPE_INT, {TYPE_STRING}},
+      {"date_add_seconds", TYPE_INT, {TYPE_INT, TYPE_INT}},
+
+      // print DEĞİŞKEN ARGÜMANLI — aşağıdaki is_variadic_builtin listesinde.
+      // Tek parametreyle kaydedilip orada muaf tutuluyor, yoksa `print(a, b)`
+      // "1 argüman bekliyor, 2 aldı" derdi.
+      {"print", TYPE_VOID, {TYPE_UNKNOWN}},
+
       // Time
       // --- Matematik: codegen'de VARDI ama tabloda YOKTU ---
       // Tabloda olmayan bir builtin HİÇ denetlenmiyor: `str s = pow("a","b")`
@@ -864,7 +947,10 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"hypot", TYPE_FLOAT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
       {"fmod", TYPE_FLOAT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
       {"pow", TYPE_FLOAT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
-      {"clock", TYPE_FLOAT, {}},
+      // `clock` KALDIRILDI: tabloda vardı, codegen'de yoktu, yani
+      // çağıran "fonksiyon bulunamadı" alıyordu. Karşılığı zaten var ve
+      // adı da net: `time_ms()` (duvar saati, ms) / `timestamp()`.
+      // Belirsiz bir C adını uygulamaktansa tablodan çıkarmak doğru.
       {"clock_ms", TYPE_FLOAT, {}},
       // Collection / string size
       {"length", TYPE_INT, {TYPE_UNKNOWN}},
@@ -1163,10 +1249,18 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"socket_accept", TYPE_UNKNOWN, {TYPE_UNKNOWN}},
       {"socket_send", TYPE_INT, {TYPE_UNKNOWN, TYPE_STRING}},
       {"socket_receive", TYPE_STRING, {TYPE_UNKNOWN, TYPE_INT}},
-      {"socket_recv", TYPE_STRING, {TYPE_UNKNOWN, TYPE_INT}},
+      // `socket_recv` KALDIRILDI: gerçek ad `socket_receive` (üstte) ve
+      // codegen yalnız onu tanıyor. Aynı şeyin ikinci bir adını
+      // uydurmak yerine tabloyu gerçeğe uyduruyoruz.
       {"socket_close", TYPE_VOID, {TYPE_UNKNOWN}},
       {"socket_peer_ip", TYPE_STRING, {TYPE_UNKNOWN}},
-      {"socket_select", TYPE_UNKNOWN, {TYPE_UNKNOWN, TYPE_INT}},
+      // `socket_select` KALDIRILDI (codegen'de yok). Karşılığı
+      // `socket_poll` ve o codegen'de VAR ama imzasızdı — iki boşluk
+      // tek satırda kapanıyor.
+      // Dönüş DİZİ, int değil (aot_socket_poll her yoldan make_arr
+      // döndürüyor — okundu, tahmin edilmedi). Yanlış imza imzasızlıktan
+      // kötüdür: `int n = socket_poll(...)` gibi bir satırı doğrular.
+      {"socket_poll", TYPE_ARRAY, {TYPE_ARRAY, TYPE_INT}},
       // Threads
       {"thread_create", TYPE_UNKNOWN, {TYPE_STRING, TYPE_UNKNOWN}},
       // HTTP helpers

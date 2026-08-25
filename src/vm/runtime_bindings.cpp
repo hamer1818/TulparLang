@@ -2989,6 +2989,55 @@ extern "C" VMValue aot_args(void) {
   return VM_OBJ((Obj *)a);
 }
 
+// values(obj) -> array. `keys`in ikizi. İkisi AYNI sırayı veriyor (ObjObject
+// ekleme sırasını koruyor), yani `keys(o)[i]` ile `values(o)[i]` eşleşiyor —
+// bu olmasaydı ikisini birlikte gezmek mümkün olmazdı.
+//
+// Tabloda VARDI ama codegen'de yoktu: çağıran "'values' adında bir fonksiyon
+// bulunamadı" alıyordu. Kırık vaat, imzasızlıktan kötü.
+VMValue aot_values(VMValue objVal) {
+    ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
+    a->obj.type = OBJ_ARRAY;
+    a->obj.arena_allocated = 1;
+    a->obj.next = nullptr;
+    a->obj.ref_count = 1;
+    a->obj.is_moved = 0;
+    if (!IS_OBJECT(objVal)) {
+        a->capacity = 0;
+        a->count = 0;
+        a->items = nullptr;
+        return VM_OBJ((Obj *)a);
+    }
+    ObjObject *o = (ObjObject *)AS_OBJECT(objVal);
+    int n = o->count;
+    a->capacity = n;
+    a->count = n;
+    a->items = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
+    for (int i = 0; i < n; i++) {
+        a->items[i] = o->values[i];
+    }
+    return VM_OBJ((Obj *)a);
+}
+
+// toBool(v) -> bool. toInt/toFloat/toString ailesinin eksik üyesiydi.
+// Doğruluk kuralı dilin geri kalanıyla AYNI (`if` koşulunun kullandığı
+// truthiness): 0 / 0.0 / "" / false yanlış, gerisi doğru. Ayrı bir kural
+// uydurmak `toBool(x)` ile `if (x)` arasında sessiz bir ayrışma yaratırdı.
+VMValue aot_to_bool(VMValue v) {
+    switch (v.type) {
+    case VM_VAL_BOOL: return VM_BOOL(AS_BOOL(v));
+    case VM_VAL_INT: return VM_BOOL(AS_INT(v) != 0);
+    case VM_VAL_FLOAT: return VM_BOOL(AS_FLOAT(v) != 0.0);
+    case VM_VAL_VOID: return VM_BOOL(false);
+    default: break;
+    }
+    if (IS_STRING(v)) {
+        ObjString *s = (ObjString *)AS_OBJECT(v);
+        return VM_BOOL(s && s->length > 0);
+    }
+    return VM_BOOL(true);
+}
+
 VMValue aot_keys(VMValue objVal) {
     auto empty = []() -> VMValue {
         ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));

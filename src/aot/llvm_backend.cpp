@@ -1288,6 +1288,14 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_keys =
       LLVMAddFunction(backend->module, "aot_keys", fmt_iso_type);
 
+  // aot_values(obj) -> array — keys'in ikizi, AYNI sırada.
+  backend->func_aot_values =
+      LLVMAddFunction(backend->module, "aot_values", fmt_iso_type);
+
+  // aot_to_bool(v) -> bool — toInt/toFloat/toString ailesinin eksik üyesi.
+  backend->func_aot_to_bool =
+      LLVMAddFunction(backend->module, "aot_to_bool", fmt_iso_type);
+
   // args() -> array<str>. Argümansız; dönüş ABI'si `aot_arena_save` ile aynı
   // şekilde `llvm_make_vmvalue_func_type` üzerinden kuruluyor, yani sret
   // ayrımı tek yerde kalıyor.
@@ -4668,6 +4676,18 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_keys,
                                     args, 1, "keys");
     }
+    if (node->name && strcmp(node->name, "values") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_values,
+                                    args, 1, "values");
+    }
+    if (node->name && strcmp(node->name, "toBool") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_to_bool,
+                                    args, 1, "toBool");
+    }
     // clone(obj) -> obj — shallow copy of a JSON object. The VM compiler
     // also emits this opcode-sequence as the function-entry by-value
     // prologue for typed-struct params; surfacing it as a user-callable
@@ -5673,6 +5693,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     STR1_FUNC("upper", func_aot_string_upper)
     STR1_FUNC("lower", func_aot_string_lower)
+    // toUpper/toLower: JS'ten (`toUpperCase`) gelen refleksin karşılığı.
+    // Tabloda ZATEN vardılar ama codegen'de yoktu, yani yazan kişi
+    // "fonksiyon bulunamadı" alıyordu. Takma ad olarak bağlamak, tablodan
+    // silmekten iyi: ad doğal ve insanlar onu yazıyor.
+    STR1_FUNC("toUpper", func_aot_string_upper)
+    STR1_FUNC("toLower", func_aot_string_lower)
     STR1_FUNC("reverse", func_aot_string_reverse)
     STR1_FUNC("isEmpty", func_aot_string_is_empty)
     STR1_FUNC("capitalize", func_aot_string_capitalize)

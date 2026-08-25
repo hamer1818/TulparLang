@@ -230,16 +230,23 @@ boşluklar; backlog'da yoklardı.
       Kalan 47 boşluk `KNOWN_GAPS` içinde **takip ediliyor** — görünmez değil.
       Detay: CHANGELOG.
 
-- [ ] **Builtin denetimindeki 47 bilinen boşluk kapatılmalı.**
-      `tests/builtin_audit.py` → `KNOWN_GAPS`. İki grup:
-      - **Kırık vaat (7):** `clock`, `toBool`, `toLower`, `toUpper`, `values`,
-        `socket_recv`, `socket_select` — tabloda var, codegen'de yok. Ya
-        uygulanmalı ya tablodan çıkarılmalı. (`toLower`/`toUpper` zaten
-        `lower`/`upper` olarak var; muhtemelen ölü takma ad.)
-      - **Denetimsiz (40):** `print`, `random`, `min`, `max`, `mod`, `join`,
-        `is*` ailesi, `base64_*`, tarih/saat yardımcıları… Her biri bir imza
-        satırı; `min`/`max` gibi dönüşü argümana bağlı olanlar dikkat ister
-        (yanlış imza, imzasızlıktan kötüdür).
+- [x] **Builtin denetimindeki 47 boşluğun HEPSİ kapandı.** ✅ 2026-08-25 —
+      `KNOWN_GAPS` artık boş, yani imzasız yeni bir builtin denetimi kırmızıya
+      çevirir.
+      - **Kırık vaat (7):** `values`, `toBool`, `toUpper`, `toLower`
+        UYGULANDI. `clock` (karşılığı `time_ms`/`timestamp`), `socket_recv`
+        (gerçek ad `socket_receive`) ve `socket_select` (karşılığı
+        `socket_poll`) tablodan ÇIKARILDI — `socket_poll` de imzasızdı,
+        aynı anda imzalandı.
+      - **Denetimsiz (40):** hepsi imzalandı. Dönüş tipleri OKUNDU ve ayrıca
+        çalıştırılıp `isInt/isFloat/...` ile doğrulandı; iki sürpriz çıktı ve
+        ikisi de tahminle yanlış yazılırdı: `min`/`max` int argümanda bile
+        FLOAT döndürüyor, `path_match` bool değil `{matched, params}` JSON'u
+        döndürüyor (router'ın yol eşleyicisi, yüklem değil).
+      - Denetim ayrıca 16 eksik LSP girdisi buldu; onlar da eklendi.
+      - Fixture'lar: typeinfer fail/10, pass/09. pass fixture'ı dönüşleri
+        TİPLİ DEĞİŞKENE bağlıyor — yalnız `print()`'e geçirmek yetmiyordu,
+        `min`'i STRING yapan bir bozma oradan sessizce geçti (ölçüldü).
 
 - [x] **`float[]` sözdizimi geldi.** ✅ 2026-08-25 — ölçüm TODO'nun
       tarifini düzeltti: tipli diziler dilde ZATEN vardı (`arrayFloat` /

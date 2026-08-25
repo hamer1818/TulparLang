@@ -237,6 +237,8 @@ typedef struct {
   LLVMValueRef func_aot_csv_parse;
   LLVMValueRef func_aot_csv_emit;
   LLVMValueRef func_aot_keys;
+  LLVMValueRef func_aot_values;
+  LLVMValueRef func_aot_to_bool;
   LLVMValueRef func_aot_args;
   LLVMValueRef func_aot_set_args;
   LLVMValueRef func_aot_object_clone;

@@ -42,6 +42,43 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Fixed — builtin denetimindeki 47 boşluğun hepsi kapandı
+
+**Kırık vaatler (7).** `values`, `toBool`, `toUpper`, `toLower`, `clock`,
+`socket_recv`, `socket_select` typeinfer tablosunda VARDI ama codegen'de
+yoktu: çağıran "'values' adında bir fonksiyon bulunamadı" alıyordu. Kırık bir
+vaat, imzasızlıktan kötüdür.
+
+Dördü uygulandı: `values(o)` (`keys` ile AYNI sırada, yani `keys(o)[i]` ile
+`values(o)[i]` eşleşiyor), `toBool(v)` (doğruluk kuralı `if` koşuluyla aynı —
+ayrı bir kural uydurmak sessiz bir ayrışma yaratırdı), `toUpper`/`toLower`
+(`upper`/`lower` takma adları; ad doğal ve insanlar onu yazıyor).
+
+Üçü tablodan çıkarıldı: `clock` (karşılığı zaten `time_ms`/`timestamp`),
+`socket_recv` (gerçek ad `socket_receive`), `socket_select` (karşılığı
+`socket_poll` — o da imzasızdı, aynı anda imzalandı ve dönüşü DİZİ, int
+değil).
+
+**Denetimsiz 40.** Tabloda olmayan bir builtin yalnız argümanları denetimsiz
+bırakmıyor: çağrı VOID sayılıyor, o yüzden sonucun kullanıldığı her satır da
+atlanıyor. Kırkı da imzalandı.
+
+Dönüş tipleri okundu VE çalıştırılıp `isInt/isFloat/...` ile doğrulandı. İki
+sürpriz çıktı, ikisi de tahminle yanlış yazılırdı:
+- `min`/`max` **her zaman float** döndürüyor, int argümanlarda bile.
+- `path_match` bool değil, `{matched, params}` JSON'u döndürüyor — router'ın
+  yol eşleyicisi, bir yüklem değil.
+
+En keskin yakalama `join`: argüman sırası ayırıcı-ÖNCE (`join("-", xs)`),
+Python'daki `xs.join(sep)` refleksinin tersi. Ters yazmak hiçbir uyarı
+üretmiyordu.
+
+Denetim bu sırada 16 eksik LSP girdisi de buldu (`join`, `repeat`, `is*`
+ailesi, tarih yardımcıları); onlar da eklendi.
+
+`KNOWN_GAPS` artık **boş**: imzasız yeni bir builtin denetimi kırmızıya
+çevirir.
+
 ### Added — `float[] x = []` sözdizimi
 
 Ölçüm, kaydedilmiş şikâyeti düzeltti: tipli diziler dilde ZATEN vardı

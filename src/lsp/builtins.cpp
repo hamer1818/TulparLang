@@ -27,6 +27,8 @@ const BuiltinEntry kBuiltins[] = {
     {"trim",         "trim(s: str): str",                           "Baş/son boşlukları siler."},
     {"upper",        "upper(s: str): str",                          "Büyük harfe çevirir."},
     {"lower",        "lower(s: str): str",                          "Küçük harfe çevirir."},
+    {"toUpper",      "toUpper(s: str): str",                        "Büyük harfe çevirir (upper takma adı; JS refleksi)."},
+    {"toLower",      "toLower(s: str): str",                        "Küçük harfe çevirir (lower takma adı; JS refleksi)."},
     {"capitalize",   "capitalize(s: str): str",                     "Baş harfi büyük yapar."},
     {"reverse",      "reverse(s: str): str",                        "String'i tersine çevirir."},
     {"isEmpty",      "isEmpty(s: str): bool",                       "Boş string kontrolü."},
@@ -212,6 +214,9 @@ const BuiltinEntry kBuiltins[] = {
     {"endsWith",     "endsWith(s: str, suffix: str): bool",         "Metin bu sonekle mi bitiyor?"},
     {"indexOf",      "indexOf(s: str, needle: str): int",           "Alt metnin ilk konumu; yoksa -1."},
     {"keys",         "keys(o: json): array",                        "Nesnenin anahtarları."},
+    {"values",       "values(o: json): array",                      "Nesnenin değerleri. keys() ile AYNI sırada, yani keys(o)[i] ile values(o)[i] eşleşir."},
+    {"toBool",       "toBool(v): bool",                             "Doğruluk değeri. Kural `if` koşuluyla AYNI: 0 / 0.0 / \"\" / false yanlış, gerisi doğru."},
+    {"socket_poll",  "socket_poll(fds: array, timeout_ms: int): array", "Hazır olan soketleri DİZİ olarak döndürür (sayı değil)."},
     {"args",           "args(): str[]",                                   "Komut satırı argümanları. args()[0] programın kendi yolu."},
     {"clone",        "clone(v): any",                               "Derin kopya — kaynağı paylaşmayan yeni değer."},
     {"env",          "env(name: str): str",                         "Ortam değişkeni; yoksa boş metin."},
@@ -381,6 +386,27 @@ const BuiltinEntry kBuiltins[] = {
     {"sb_append",    "sb_append(sb: int, s: str): void",            "StringBuilder'a ekler."},
     {"sb_tostring",  "sb_tostring(sb: int): str",                   "StringBuilder içeriğini döner."},
     {"sb_free",      "sb_free(sb: int): void",                      ""},
+
+    // --- Denetimin bulduğu eksikler (2026-08-25) ---
+    // Bu adlar hem codegen'de hem typeinfer'da vardı ama LSP'de yoktu, yani
+    // tamamlamada ve hover'da görünmüyorlardı. İmzalar ölçülerek yazıldı.
+    {"join",         "join(sep: str, xs: array): str",              "Diziyi ayırıcıyla birleştirir. ARGÜMAN SIRASI ayırıcı-önce: join(\"-\", dizi)."},
+    {"repeat",       "repeat(s: str, n: int): str",                 "Dizeyi n kez tekrarlar."},
+    {"isInt",        "isInt(v): bool",                              "Değer tamsayı mı?"},
+    {"isFloat",      "isFloat(v): bool",                            "Değer ondalık mı?"},
+    {"isString",     "isString(v): bool",                           "Değer dize mi?"},
+    {"isBool",       "isBool(v): bool",                             "Değer mantıksal mı?"},
+    {"isArray",      "isArray(v): bool",                            "Değer dizi mi?"},
+    {"isObject",     "isObject(v): bool",                           "Değer nesne (json) mi?"},
+    {"csv_parse",    "csv_parse(s: str): array",                    "CSV metnini satır dizisine ayırır."},
+    {"csv_emit",     "csv_emit(rows: array): str",                  "Satır dizisini CSV metnine çevirir."},
+    {"file_glob",    "file_glob(pattern: str): array",              "Desene uyan dosya yollarını döner."},
+    {"time_ms",      "time_ms(): int",                              "Duvar saati, milisaniye."},
+    {"now_iso8601",  "now_iso8601(): str",                          "Şu anı ISO-8601 olarak döner."},
+    {"format_iso8601","format_iso8601(secs: int): str",             "Unix saniyesini ISO-8601'e çevirir."},
+    {"parse_iso8601","parse_iso8601(s: str): int",                  "ISO-8601 metnini Unix saniyesine çevirir."},
+    {"date_add_seconds","date_add_seconds(base: int, delta: int): int", "Unix saniyesine saniye ekler."},
+    {"weekday",      "weekday(secs: int): int",                     "Haftanın günü (Unix saniyesinden)."},
 };
 
 const size_t kBuiltinCount = sizeof(kBuiltins) / sizeof(kBuiltins[0]);
