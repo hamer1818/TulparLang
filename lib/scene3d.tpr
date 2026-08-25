@@ -5685,6 +5685,36 @@ func ed_undo_count3d(): int { return length(_ed_undo3); }
 func ed_redo_count3d(): int { return length(_ed_redo3); }
 
 int _ed_hover3 = 0 - 1;   // imlecin altındaki varlık (vurgulama)
+
+// ---- Sağ tık bağlam menüsü -------------------------------------------------
+// Sağ tuş ZATEN kamera bakışı. Unity/Unreal/Godot'ta ayrım şudur: sağ tuşla
+// SÜRÜKLEMEK bakış, sürüklemeden BIRAKMAK bağlam menüsü. Eşik olmadan
+// menü her bakış hareketinin sonunda açılırdı.
+int _ed_ctx_on3 = 0;      // menü açık mı
+int _ed_ctx_x3  = 0;
+int _ed_ctx_y3  = 0;
+int _ed_ctx_id3 = 0 - 1;  // menünün açıldığı varlık (-1 = boşluk)
+int _ed_rpx3    = 0;      // sağ tuşun basıldığı yer
+int _ed_rpy3    = 0;
+int _ed_rdrag3  = 0;      // sağ tuş sürüklendi mi
+int _ed_rdown3  = 0;      // sağ tuşun önceki kare durumu (bırakma kenarı)
+int _ED_CTX_SLOP3 = 4;    // bu kadar pikselden az hareket "tık" sayılır
+
+func _ed_ctx_open3(x, y, id) {
+    _ed_ctx_on3 = 1;
+    _ed_ctx_x3 = x;
+    _ed_ctx_y3 = y;
+    _ed_ctx_id3 = id;
+}
+func _ed_ctx_close3() { _ed_ctx_on3 = 0; }
+
+// Menüdeki satır sayısı bağlama göre değişiyor.
+func _ed_ctx_rows3(): int {
+    if (_ed_ctx_id3 >= 0) { return 4; }   // cercevele/cogalt/zemine/sil
+    return 4;                              // kutu/kure/boru/duvar
+}
+func _ed_ctx_w3(): int { return _us3(96); }
+func _ed_ctx_h3(): int { return _ed_ctx_rows3() * _ED_FLD3 + _us3(4); }
 // Kaydedilmemiş değişiklik. Editörde en sinsi UX hatası "kaydettim sanmak";
 // her editör bunu başlıkta bir yıldızla söyler.
 int _ed_dirty3 = 0;
@@ -5730,12 +5760,113 @@ func editor_ac3d(ac) { editor3d(ac); }
 func editor_on3d(): bool { return _ed_on3 == 1; }
 
 func _s3_editor_look(dt) {
+    // Sağ tuşun basıldığı yeri ve hareket edip etmediğini izle: bırakışta
+    // "sürükledi mi yoksa tıkladı mı" ayrımı buna dayanıyor.
+    // Bırakma KENARINI kendimiz türetiyoruz: tame `mouse_released` sunmuyor,
+    // sol tuş için de aynı desen (`_g_rel3`) kullanılıyor.
+    int rd = 0;
+    if (mouse_down(1)) { rd = 1; }
+    int rrel = 0;
+    if (_ed_rdown3 == 1 && rd == 0) { rrel = 1; }
+    _ed_rdown3 = rd;
+
+    if (mouse_pressed(1)) {
+        _ed_rpx3 = mouse_x(); _ed_rpy3 = mouse_y(); _ed_rdrag3 = 0;
+    }
+    if (rd == 1) {
+        int ddx = mouse_x() - _ed_rpx3;
+        int ddy = mouse_y() - _ed_rpy3;
+        if (ddx > _ED_CTX_SLOP3 || ddx < 0 - _ED_CTX_SLOP3 ||
+            ddy > _ED_CTX_SLOP3 || ddy < 0 - _ED_CTX_SLOP3) { _ed_rdrag3 = 1; }
+    }
     if (mouse_down(1)) {
         _ed_yaw3 = _ed_yaw3 + mouse_dx() * _cam_sens3;
         _ed_pitch3 = _ed_pitch3 - mouse_dy() * _cam_sens3;
         if (_ed_pitch3 > 88.0) { _ed_pitch3 = 88.0; }
         if (_ed_pitch3 < 0.0 - 88.0) { _ed_pitch3 = 0.0 - 88.0; }
     }
+    // Sürüklemeden bırakma = bağlam menüsü. Yalnız sahne görünümünün içinde;
+    // paneller üzerinde sağ tık bir şey ifade etmiyor.
+    if (rrel == 1 && _ed_rdrag3 == 0 && _ed_in_view3()) {
+        int hit = ed_pick_at3d(mouse_x(), mouse_y());
+        if (hit >= 0) { _ed_sel3e = hit; _ed_tab3 = 0; }
+        _ed_ctx_open3(mouse_x(), mouse_y(), hit);
+    }
+}
+
+// ---- Bağlam menüsünün çizimi ve tıklamaları --------------------------------
+// Menü EN SON çiziliyor ve fareyi yutuyor: altındaki panele/sahneye tıklama
+// geçerse menü seçimi aynı anda bir de arka plan eylemi tetiklerdi.
+func _ed_ctx_draw3() {
+    if (_ed_ctx_on3 == 0) { return; }
+    int w = _ed_ctx_w3();
+    int h = _ed_ctx_h3();
+    int x = _ed_ctx_x3;
+    int y = _ed_ctx_y3;
+    // Ekran kenarına sığdır.
+    if (x + w > screen_width()) { x = screen_width() - w - _us3(2); }
+    if (y + h > screen_height()) { y = screen_height() - h - _us3(2); }
+    rect(x, y, w, h, rgba(24, 26, 32, 246));
+    rect_lines(x, y, w, h, _G_ACC3());
+    int iy = y + _us3(2);
+    if (_ed_ctx_id3 >= 0) {
+        int id = _ed_ctx_id3;
+        if (_g_button(22001, x + _us3(2), iy, w - _us3(4), _ED_FLD3, "Cercevele")) {
+            ed_frame3d(id); _ed_ctx_close3();
+        }
+        iy = iy + _ED_FLD3;
+        if (_g_button(22002, x + _us3(2), iy, w - _us3(4), _ED_FLD3, "Cogalt")) {
+            ed_mark3d(); ed_duplicate3d(id); _ed_ctx_close3();
+        }
+        iy = iy + _ED_FLD3;
+        if (_g_button(22003, x + _us3(2), iy, w - _us3(4), _ED_FLD3, "Zemine otur")) {
+            ed_mark3d(); ed_drop3d(id); _ed_ctx_close3();
+        }
+        iy = iy + _ED_FLD3;
+        if (_g_button(22004, x + _us3(2), iy, w - _us3(4), _ED_FLD3, "Sil")) {
+            ed_mark3d(); ed_delete3d(id); _ed_ctx_close3();
+        }
+    } else {
+        // Boşluğa sağ tık: varlık ekle. Eklenen şey İMLECİN altındaki zemine
+        // konuyor, kameranın konumuna değil — "burada bir kutu olsun"
+        // demenin doğal karşılığı bu.
+        if (_g_button(22011, x + _us3(2), iy, w - _us3(4), _ED_FLD3, "+ kutu")) {
+            _ed_ctx_add3(TAG_PROP, SHAPE_CUBE, 1.0);
+        }
+        iy = iy + _ED_FLD3;
+        if (_g_button(22012, x + _us3(2), iy, w - _us3(4), _ED_FLD3, "+ kure")) {
+            _ed_ctx_add3(TAG_ITEM, SHAPE_SPHERE, 1.0);
+        }
+        iy = iy + _ED_FLD3;
+        if (_g_button(22013, x + _us3(2), iy, w - _us3(4), _ED_FLD3, "+ boru")) {
+            _ed_ctx_add3(TAG_PROP, SHAPE_CYL, 1.0);
+        }
+        iy = iy + _ED_FLD3;
+        if (_g_button(22014, x + _us3(2), iy, w - _us3(4), _ED_FLD3, "+ duvar")) {
+            _ed_ctx_add3(TAG_WALL, SHAPE_CUBE, 3.0);
+        }
+    }
+    // Dışarıya tıklamak kapatır (menünün kendi düğmeleri zaten kapatıyor).
+    if (_g_press3 == 1 && _g_in(x, y, w, h) == false) { _ed_ctx_close3(); }
+}
+
+// Menüden varlık ekle: imleç ışınının zemini kestiği noktaya.
+func _ed_ctx_add3(tag, shape, boy) {
+    ed_mark3d();
+    _ed_ray3(_ed_ctx_x3 - _ed_view_x3(), _ed_ctx_y3 - _ed_view_y3(),
+             _ed_view_w3(), _ed_view_h3(), _cam_fov);
+    float t = _ray_planey3(_ed_cy3, _ed_ry3, _ground_y);
+    float px = _ed_cx3;
+    float pz = _ed_cz3;
+    if (t > 0.0) {
+        px = _ed_cx3 + _ed_rx3 * t;
+        pz = _ed_cz3 + _ed_rz3 * t;
+    }
+    int nid = ed_add3d(tag, shape, px, _ground_y + boy * 0.5, pz);
+    if (boy > 1.5) { ed_resize3d(nid, 6.0, boy, 1.0); }
+    ed_select3d(nid);
+    _ed_tab3 = 0;
+    _ed_ctx_close3();
 }
 
 func _s3_editor_fly(dt) {
@@ -5820,6 +5951,9 @@ func ed_pick_at3d(px, py): int {
 
 func _s3_editor_mouse(dt) {
     int s = _slot_of3(_ed_sel3e);
+    // Bağlam menüsü açıkken görüntü penceresi tıklama ALMIYOR: menüdeki bir
+    // seçim aynı anda arkadaki sahnede de bir şey seçerdi.
+    if (_ed_ctx_on3 == 1) { return; }
     // Sürükleme SÜRÜYORSA panel denetimi atlanıyor: imleç panelin üstünden
     // geçerken sürüklemenin kopması, Unity'de de olmayan bir davranış olurdu.
     if (_gz_axis3 < 0 && _ed_drag3 == 0 && _ed_over_ui3()) { return; }
@@ -5950,6 +6084,7 @@ func _s3_editor_keys() {
     if (key_pressed(K_G)) {
         if (_ed_grid3 > 0.0) { _ed_grid3 = 0.0; } else { _ed_grid3 = 0.5; }
     }
+    if (key_pressed(K_ESC) && _ed_ctx_on3 == 1) { _ed_ctx_close3(); return; }
     if (key_down(K_LCTRL) && key_pressed(K_S)) { editor_save3d(); return; }
     if (key_pressed(K_F5)) { editor_save3d(); return; }
     if (key_down(K_LCTRL) && key_pressed(K_Z)) {
@@ -6984,6 +7119,13 @@ func _ed_chrome3() {
     int vh = _ed_view_h3();
     rect_lines(vx - 1, vy - 1, vw + 2, vh + 2, _G_LINE3());
     if (_ed_playing3 == 0) { _ed_axis_widget3(); }
+    // Bağlam menüsü panellerin ÜSTÜNDE ama çakışma denetiminden ÖNCE:
+    // menü kasıtlı olarak altındakileri örtüyor, onu çakışma saymak yanlış
+    // olurdu. Denetim menü kapalıyken zaten her şeyi görüyor.
+    if (_ed_ctx_on3 == 1) {
+        _ed_ctx_draw3();
+        _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+    }
     _g_check_overlaps3();
     _g_tip_draw3();   // EN SON: ipucu her şeyin üstünde (denetime girmiyor)
     // Görünüm neden boşsa ONU SÖYLE. Sessiz boş bir panel, kullanıcıyı

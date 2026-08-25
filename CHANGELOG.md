@@ -42,6 +42,38 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Fixed — DERLEYİCİ: kapsam değişken tablosu SESSİZCE taşıyordu
+
+En üst kapsam programın BÜTÜN global değişkenlerini tutuyor ve tablo 256
+kayıtlıktı; `scene3d` tek başına 353 tanesine sahip. Taşınca
+`scope_decl_slot` -1 döndürüyor, değişken hiç kaydedilmiyor ve okuması çöp
+veriyordu — **hiçbir hata mesajı yok, derleme başarılı görünüyor.** Yanlış
+çalışan bir ikili üretiliyordu.
+
+Editöre dokuz global eklemek sınırı aştırdı ve hata şu şekilde ortaya çıktı:
+scene3d test süitinin özeti "Fail: 0" yerine **"Fail: nullptr"** yazdı —
+`lib/test.tpr`'nin sayacı, geç kaydolduğu için düşen değişkenlerden biriydi.
+
+Tablo 4096'ya çıkarıldı (kapsam `calloc` ile ayrılıyor, yığın riski yok) ve
+taşma artık **sesli**: fonksiyon tablosundaki gibi ölümcül hata veriyor.
+Sınır dizinin kendisinden türüyor — ayrı bir sabit tutmak ikisinin
+ayrışmasına açıktı. Hata yolunun gerçekten ateşlendiği sınırı 64'e düşürerek
+doğrulandı.
+
+### Added — editörde sağ tık bağlam menüsü
+
+Sağ tuş zaten kamera bakışı. Unity/Unreal/Godot'taki ayrım uygulandı: sağ
+tuşla SÜRÜKLEMEK bakış, sürüklemeden BIRAKMAK bağlam menüsü (4 piksellik
+eşik; eşiksiz menü her bakış hareketinin sonunda açılırdı).
+
+Varlık üzerinde: Çerçevele / Çoğalt / Zemine otur / Sil. Boşlukta: kutu /
+küre / boru / duvar ekle — eklenen şey İMLECİN altındaki zemine konuyor,
+kameranın konumuna değil.
+
+Menü açıkken görüntü penceresi tıklama almıyor (menüdeki seçim aynı anda
+arkadaki sahnede de bir şey seçerdi) ve menü çakışma denetiminin dışında
+tutuluyor (altındakileri kasıtlı örtüyor).
+
 ### Added — `args()`: komut satırı argümanları (dil) ve `./editor <dosya>`
 
 Dilde argv erişimi HİÇ yoktu: Tulpar ile yazılmış bir CLI aracı hangi

@@ -42,7 +42,15 @@ typedef struct FuncStackNode {
 } FuncStackNode;
 
 typedef struct Scope {
-  LocalVar vars[256];
+  // 256 idi ve SESSİZCE taşıyordu. En üst kapsam programın BÜTÜN global
+  // değişkenlerini tutuyor; scene3d tek başına 353 tanesine sahip. Taşınca
+  // `scope_decl_slot` -1 döndürüyor, değişken hiç kaydedilmiyor ve okuması
+  // çöp veriyordu — hata mesajı yok, derleme başarılı görünüyor. (Bulunuş
+  // biçimi: test özetinde "Fail: 0" yerine "Fail: nullptr".)
+  //
+  // Kapsam `calloc` ile ayrılıyor, yani büyütmek yığını riske atmıyor;
+  // 4096 * ~64 bayt = ~256 KB ve kapsamlar derinlemesine az sayıda.
+  LocalVar vars[4096];
   int count;
   struct Scope *parent;
 } Scope;

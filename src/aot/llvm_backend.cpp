@@ -2409,7 +2409,17 @@ static int scope_decl_slot(Scope *s, const char *name) {
       return i;
     }
   }
-  if (s->count >= 256) return -1;
+  // Sınır DİZİDEN türüyor (ayrı sabit tutmak ikisinin ayrışmasına açıktı) ve
+  // taşma SESSİZ DEĞİL: sessizce -1 döndürmek değişkeni yok sayıp okumasını
+  // çöpe çeviriyordu, yani yanlış çalışan bir ikili üretiliyordu.
+  const int kMaxScopeVars = (int)(sizeof(s->vars) / sizeof(s->vars[0]));
+  if (s->count >= kMaxScopeVars) {
+    fprintf(stderr,
+            "[AOT] Fatal: scope variable table overflow (> %d variables). "
+            "Raise LocalVar vars[] in llvm_backend.hpp.\n",
+            kMaxScopeVars);
+    exit(1);
+  }
   return s->count++;
 }
 
