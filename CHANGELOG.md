@@ -42,6 +42,32 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Fixed — fonksiyon referansı yanlış yeri gösteriyordu
+
+Ölçüm, beklenenden farklı bir gerçek gösterdi: bir fonksiyon referansı çalışma
+zamanında fonksiyonun ADIDIR (bir string) — `f + 0` yazınca `"selam0"` çıkması
+bunun kanıtı. Yani `int f = selam; call(f)` **çalışıyor**; bozuk olan TANI idi.
+
+typecheck bildirilen `int`'i doğru sayıyor, hatayı bir satır sonra `call(f)`
+üzerinde "Argument 1 of 'call': expected str, got int" diye veriyordu — masum
+olan `call`'ı gösteren bir mesaj. Artık bildirimin (ve atamanın) kendisi
+işaretleniyor, çare adıyla söyleniyor (`var` kullan), ve sembol GERÇEKTE
+tuttuğu tiple kaydediliyor ki ardından yanıltıcı ikinci hata gelmesin.
+
+Asıl kazanç başka yerde: fonksiyon adı artık `str` olarak çıkarıldığı için
+`sayi_al(selam)` gibi bir çağrı yakalanıyor. Eskiden SESSİZDİ — çalışma
+zamanında string nesnesi üzerinde ham işaretçi aritmetiği yapıp çöp
+üretiyordu (ölçüldü: `140276196302865`).
+
+### Changed — typeinfer fixture'ları artık MESAJI da denetliyor
+
+`tests/typeinfer/fail/*.tpr` içine `// EXPECT: <parça>` satırları konabiliyor;
+her parça çıktıda geçmek zorunda. Yalnız çıkış koduna bakmak yetmiyordu ve bu
+varsayım değil ölçüm: fonksiyon referansı tanısını kasten bozan iki deneme,
+YANLIŞ ama yine de sıfırdan farklı çıkış veren bir hata sayesinde
+fixture'lardan kaçtı. Reddedilmiş olmak, DOĞRU sebeple reddedilmiş olmak
+demek değil.
+
 ### Fixed — `int` PARAMETREYE geçen `bool` gövdede hâlâ bool'du
 
 `func f(int x)` çağrılırken `f(true)` yazılınca değer gövdeye **bool etiketiyle**

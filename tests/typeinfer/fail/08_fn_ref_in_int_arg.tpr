@@ -1,0 +1,22 @@
+// Expected: passing a FUNCTION REFERENCE where an `int` is expected must be
+// reported.
+//
+// EXPECT: Argument 1 of 'sayi_al'
+// EXPECT: expected int, got str
+//
+// This is the payoff of modelling a function reference as `str` (its runtime
+// representation is the function's name). Without that model the reference
+// infers as "unknown", the argument check skips it, and the mistake is
+// SILENT — measured: the program prints 140276196302865, i.e. raw pointer
+// arithmetic on a string object.
+//
+// Sibling pass/07 covers the legitimate uses (`var`/`str` + `call`).
+
+func selam() { print("selam"); }
+func sayi_al(int n): int { return n + 1; }
+
+func main() {
+    print(sayi_al(selam));
+}
+
+main();

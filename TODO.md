@@ -245,9 +245,23 @@ boşluklar; backlog'da yoklardı.
       `array` var. Geniş fazı yazarken çarpıldı — hem performans hem typecheck
       kaybı.
 
-- [ ] **`var` yerine `int` sessiz tuzağı.** `int fn_ref = 0` yazılınca fonksiyon
-      referansı kırpılıyor ve `call()` hiçbir şey yapmıyor; derleyici uyarmıyor.
-      typecheck "fonksiyon referansını int'e yazıyorsun" diyebilir.
+- [x] **Fonksiyon referansı artık modelleniyor.** ✅ 2026-08-25 — ölçüm,
+      TODO'nun tarifinden farklı bir gerçek gösterdi: referans çalışma
+      zamanında fonksiyonun ADI (bir string), yani `int f = selam; call(f)`
+      ÇALIŞIYOR. Bozuk olan TANI idi: typecheck bildirilen `int`'i doğru
+      sayıp hatayı bir satır sonra `call(f)` üzerinde "expected str, got int"
+      diye veriyordu — masum olan `call`'ı gösteriyordu.
+      Artık bildirimin/atamanın kendisi işaretleniyor, çare adıyla söyleniyor
+      (`var` kullan) ve sembol GERÇEKTE tuttuğu tiple kaydediliyor, yani
+      ardından yanıltıcı ikinci hata gelmiyor.
+      Asıl kazanç `sayi_al(selam)` gibi çağrılar: eskiden SESSİZDİ, çalışma
+      zamanında çöp üretiyordu (ölçüldü: 140276196302865). Artık hata.
+      Fixture'lar: typeinfer fail/07, fail/08, pass/07.
+
+- [x] **typeinfer fixture'ları artık MESAJI da denetliyor.** ✅ 2026-08-25 —
+      `// EXPECT: <parça>` satırları. Yalnız çıkış koduna bakmak yetmiyordu:
+      fonksiyon referansı tanısını kasten bozan iki deneme, YANLIŞ ama yine de
+      sıfırdan farklı çıkış veren bir hata sayesinde fixture'lardan kaçtı.
 
 - [x] **Argüman sınırında `bool`→`int` geldi.** ✅ 2026-08-25 — çağrılan
       tarafın parametre önsözü artık bildirimle AYNI yardımcıyı çağırıyor

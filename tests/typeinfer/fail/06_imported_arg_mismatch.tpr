@@ -14,6 +14,8 @@
 // used instead — nothing coerces a string to an int, so the fixture keeps
 // testing what it was written to test.
 
+// EXPECT: Argument 1 of 'assert_eq_int'
+
 import "test";
 
 func t_bad() {

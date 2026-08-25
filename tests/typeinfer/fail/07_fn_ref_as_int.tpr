@@ -1,0 +1,26 @@
+// Expected: declaring a FUNCTION REFERENCE as `int` must be reported, and the
+// message must name the culprit.
+//
+// A function reference is the function's NAME at runtime — a string. `call(f)`
+// finds it by name, so `int f = selam` does not break anything; the type is
+// simply a lie. The damage was the diagnostic: typeinfer took the declared
+// `int` at face value and reported the mismatch one line later, on `call(f)`,
+// as "Argument 1 of 'call': expected str, got int". That points at `call`,
+// which is innocent.
+//
+// Now the declaration itself is flagged, the fix is named (`var`), and the
+// symbol is recorded as what it really holds so no second, misleading error
+// follows.
+
+// EXPECT: FONKSIYON REFERANSI
+// EXPECT: 'f'
+// EXPECT: 'var' kullan
+
+func selam() { print("selam"); }
+
+func main() {
+    int f = selam;
+    call(f);
+}
+
+main();

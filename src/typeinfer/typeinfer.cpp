@@ -55,6 +55,25 @@ static DataType lookup_symbol_type(TypeInferContext *ctx, const std::string &nam
   return it->second.type;
 }
 
+// FONKSİYON REFERANSI: bir üst düzey fonksiyonun adı DEĞER olarak
+// kullanıldığında (`var f = selam; call(f)`), çalışma zamanında taşınan şey
+// fonksiyonun ADIDIR — bir string. `f + 0` yazınca "selam0" çıkması bunun
+// ölçülmüş kanıtı.
+//
+// Değişken adları ÖNCE bakılıyor: yerel bir `selam` değişkeni aynı adlı
+// fonksiyonu gölgeler.
+static bool is_function_ref_name(TypeInferContext *ctx,
+                                 const std::string &name) {
+  if (ctx->symbols.find(name) != ctx->symbols.end()) return false;
+  return ctx->functions.find(name) != ctx->functions.end();
+}
+
+// İfade, çıplak bir fonksiyon adı mı? (`selam`, `selam()` değil.)
+static bool expr_is_function_ref(TypeInferContext *ctx, const ASTNode *expr) {
+  const auto *id = as_node<Identifier>(expr);
+  return id && is_function_ref_name(ctx, id->name);
+}
+
 static bool symbol_is_moved(TypeInferContext *ctx, const std::string &name) {
   auto it = ctx->symbols.find(name);
   if (it == ctx->symbols.end()) {
@@ -192,6 +211,13 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     if (symbol_is_moved(ctx, id->name)) {
       report_error(ctx, "Use of moved variable '%s' at line %d", id->name.c_str(),
                    id->loc.line);
+    }
+    // Fonksiyon adı değer olarak kullanılıyorsa tipi STRING: çalışma
+    // zamanında taşınan şey ad. Bunu bilmeden `call(f)` çağrısı "expected
+    // str, got int" gibi YANLIŞ YERİ gösteren bir hata veriyordu — sorun
+    // `call` değil, referansın `int` bildirilmiş olmasıydı.
+    if (is_function_ref_name(ctx, id->name)) {
+      return TYPE_STRING;
     }
     return lookup_symbol_type(ctx, id->name);
   }
@@ -466,7 +492,27 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
         return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM ||
                t == TYPE_JSON;
       };
-      if (!is_unknown(declared_type) && !is_unknown(init_type) &&
+      // FONKSİYON REFERANSINI `int`'e yazmak: çalışıyor (referans zaten bir
+      // string, `call` onu adıyla buluyor) ama yazılan tip yalan ve hata
+      // BAŞKA yerde patlıyordu — `call(f)` satırında "expected str, got int".
+      // Suçlu satırı ve çareyi burada söylüyoruz.
+      if (expr_is_function_ref(ctx, decl->initializer.get()) &&
+          declared_type != TYPE_STRING && !is_unknown(declared_type)) {
+        report_error(ctx,
+                     tulpar::i18n::tr_en(
+                         "'%s' bir FONKSIYON REFERANSI ama '%s' olarak "
+                         "bildirilmis - 'var' kullan (satir %d)",
+                         "'%s' is a FUNCTION REFERENCE but declared as '%s' "
+                         "- use 'var' at line %d"),
+                     decl->name.c_str(), datatype_to_string(declared_type),
+                     decl->loc.line);
+        // Değişken GERÇEKTE ne tutuyorsa onunla kaydediliyor. Bildirilen
+        // yalanı taşımak, sonraki her kullanımda ("call(f) expected str, got
+        // int") ikinci bir hata üretirdi — asıl sorunu zaten söyledik,
+        // ardından gelen gürültü yalnız suçluyu gizler.
+        typeinfer_add_symbol(ctx, decl->name.c_str(), TYPE_STRING);
+        return;
+      } else if (!is_unknown(declared_type) && !is_unknown(init_type) &&
           !store_coercible(declared_type, init_type) &&
           !types_compatible(declared_type, init_type)) {
         report_error(ctx, "Type mismatch in declaration of '%s': expected %s, got %s at line %d",
@@ -485,6 +531,21 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     auto is_unknown = [](DataType t) {
       return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM;
     };
+    // Bildirimdekiyle aynı tanılama, atama yolunda. `int f = 0; f = selam;`
+    // biçimi de aynı tuzağın kapısı.
+    if (expr_is_function_ref(ctx, assign->value.get()) &&
+        var_type != TYPE_STRING && !is_unknown(var_type)) {
+      report_error(ctx,
+                   tulpar::i18n::tr_en(
+                       "'%s' degiskenine FONKSIYON REFERANSI atanıyor ama "
+                       "'%s' olarak bildirilmis - 'var' kullan (satir %d)",
+                       "assigning a FUNCTION REFERENCE to '%s', declared as "
+                       "'%s' - use 'var' at line %d"),
+                   assign->name.c_str(), datatype_to_string(var_type),
+                   assign->loc.line);
+      typeinfer_add_symbol(ctx, assign->name.c_str(), TYPE_STRING);
+      return;
+    }
     if (!is_unknown(var_type) && !is_unknown(expr_type) &&
         !store_coercible(var_type, expr_type) &&
         !types_compatible(var_type, expr_type)) {
