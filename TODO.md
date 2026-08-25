@@ -414,14 +414,25 @@ boşluklar; backlog'da yoklardı.
       "hiçbir şey okunamadı" ayırt edilemiyor. Kanıt, akış hâlinde gelen
       KONSOL satırı (raylib'in kendi GL uyarısı), DOM değil.
 
-- [ ] **`tulpar-lang-web` yerel kopyası ESKİ DALDA ve commit edilmemiş iş
-      taşıyor.** Dal `docs/debugger-and-tls`, `origin/master`'ın atası değil.
-      Çalışma ağacında commit edilmemiş `games/{overview,scene3d,editor}.mdx`
-      (TR+EN) var — master'da bu üçü YOK, master'da olan `arcade`/`tame`
-      ise bu dalda yok. Ayrıca `scene3d.mdx` bu oturumdan ÖNCE yazıldı:
-      harmanlama, `anim_set3d`, parçacık dokusu, stereo ses, `float[]`,
-      web'de kalıcı kayıt ve İNDİR düğmesi orada anlatılmıyor.
-      Ayrı depo — dal/commit kararı kullanıcının.
+- [x] **Web belgeleri güncellendi ve commit edildi.** ✅ 2026-08-26 —
+      `games/{overview,scene3d,editor}.mdx` (TR+EN) commit edilmemiş
+      duruyordu ve motorun bu haftaki değişikliklerini anlatmıyordu.
+      `scene3d.mdx`'e üç bölüm eklendi (karakter ve animasyon, parçacıklar,
+      konumsal ses), `editor.mdx`'teki "planlanan tarayıcı editörü" dili
+      düzeltildi ve "Tarayıcıda" bölümü yazıldı.
+      Belgelerdeki **197 API adının hepsi motora karşı doğrulandı** — uydurma
+      ad yok. Site derleniyor (72 sayfa).
+      Yerel dalda commit edildi (`f955252`); **push YAPILMADI**.
+
+- [ ] **`tulpar-lang-web` dal birleştirme kararı KULLANICININ.** Yerel dal
+      `docs/debugger-and-tls`, `origin/master`'ın atası değil ve ikisi
+      AYRIŞIK içerik taşıyor: master'da `games/{arcade,tame,build,quickstart}`
+      var, bu dalda yok; bu dalda `games/{overview,scene3d,editor}` var,
+      master'da yok. Ayrıca bu dalın `astro.config.mjs` kenar çubuğu yalnız
+      kendi üç sayfasını listeliyor, master'ın dördünü değil — birleşince
+      kenar çubuğu elle uzlaştırılmalı.
+      Bu bir kod işi değil, bir dal stratejisi kararı; ayrı depoda push/merge
+      da dışa dönük bir işlem. Ölçüm ve seçenekler kayıtlı, karar kullanıcıda.
 
 - [x] **3B örneklerin İngilizce ikizi geldi.** ✅ 2026-08-25 — 15 dosya:
       8 `scene3d_*` (arena, camera, character, collector, data_game, editor,
