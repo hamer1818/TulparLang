@@ -1342,6 +1342,16 @@ static AOTResult aot_compile_silent(const char *source,
 
 // Silent compile and run - used as default execution mode.
 // Compiles to temp binary, runs it, cleans up. No [AOT] output.
+// `tulpar script.tpr a b` çağrısındaki fazladan argümanlar. Program bunları
+// `args()` ile okuyor; iletilmezse Tulpar ile yazılmış hiçbir CLI aracı
+// `tulpar` üzerinden çalıştırıldığında argüman göremiyordu (yalnız `build`
+// ile üretilen ikili görüyordu, ki bu tutarsızlıktı).
+static std::string g_tulpar_run_args;
+
+void aot_set_run_args(const char *quoted) {
+  g_tulpar_run_args = quoted ? quoted : "";
+}
+
 AOTResult aot_compile_and_run_silent(const char *source) {
   return aot_compile_and_run_silent_with_filename(source, nullptr);
 }
@@ -1356,7 +1366,9 @@ AOTResult aot_compile_and_run_silent_with_filename(const char *source,
   }
   // cmd.exe does not auto-search the current directory unless an explicit
   // path is given, so prefix with .\ to ensure the binary is found.
-  int run_result = system(".\\tulpar_run_tmp.exe");
+  std::string run_cmd = ".\\tulpar_run_tmp.exe";
+  if (!g_tulpar_run_args.empty()) run_cmd += " " + g_tulpar_run_args;
+  int run_result = system(run_cmd.c_str());
   remove("tulpar_run_tmp.exe");
   remove("tulpar_run_tmp.ll");
   remove("tulpar_run_tmp.o");
@@ -1366,7 +1378,9 @@ AOTResult aot_compile_and_run_silent_with_filename(const char *source,
   if (result != AOT_OK) {
     return result;
   }
-  int run_result = system("/tmp/.tulpar_run");
+  std::string run_cmd = "/tmp/.tulpar_run";
+  if (!g_tulpar_run_args.empty()) run_cmd += " " + g_tulpar_run_args;
+  int run_result = system(run_cmd.c_str());
   remove("/tmp/.tulpar_run");
   remove("/tmp/.tulpar_run.ll");
 #endif

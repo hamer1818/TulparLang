@@ -4264,6 +4264,7 @@ func her_kare3(fn) { on_update3d(fn); }
 func hud_ciz3(fn) { on_hud3d(fn); }
 func carpisinca3(tagA, tagB, fn) { on_hit3d(tagA, tagB, fn); }
 func zemin3(y) { ground3d(y); }
+func zemin_yok3d() { no_ground3d(); }
 func yercekimi3(g) { gravity3d(g); }
 func kamera_takip(target, dist, height) { camera_follow(target, dist, height); }
 func oyna3d() { play3d(); }
@@ -4845,6 +4846,11 @@ func scene_meta_file3d(path) {
 }
 func sahne_bilgi3d(kaynak) { scene_meta3d(kaynak); }
 func sahne_bilgi_dosya3d(yol) { scene_meta_file3d(yol); }
+// Pencere bilgisini doğrudan kur (üretilen kod bunu kullanıyor; JSON'dan
+// okumak varken ayrıca gerekiyor çünkü kod JSON taşımıyor).
+func scene_meta_set3d(t, w, h) { _sc_title3 = t; _sc_w3 = w; _sc_h3 = h; }
+func sahne_bilgi_ayarla3d(baslik, en, boy) { scene_meta_set3d(baslik, en, boy); }
+
 func scene_title3d(): str { return _sc_title3; }
 func scene_w3d(): int { return _sc_w3; }
 func scene_h3d(): int { return _sc_h3; }
@@ -5034,6 +5040,239 @@ func _sc_bh_js3(id): str {
     }
     return o;
 }
+
+// ---- Kod üretimi -----------------------------------------------------------
+// Sahneyi okunabilir Tulpar KODUNA çevir. JSON çalışma zamanı biçimi; kod ise
+// öğrenme ve devam etme yolu: editörde kurduğun sahneyi açıp "bu böyle
+// yazılıyormuş" diyebilmek, sonra elle geliştirebilmek.
+//
+// Üretilen şey tek bir FONKSİYON (`kur`), tam bir program değil. Sebebi
+// sınanabilirlik: aynı fonksiyon hem oyunun `kurulumda3` kancasına hem de
+// "kur, sonra sahneyi JSON olarak yazdır" biçimindeki bir doğrulayıcıya
+// bağlanabiliyor. Tam program üretseydik denkliği ölçmenin yolu olmazdı.
+func _sc_col_code3(c): str {
+    return "rgb(" + toString(_col_r3(c)) + ", " + toString(_col_g3(c)) +
+           ", " + toString(_col_b3(c)) + ")";
+}
+
+func _sc_shape_code3(v): str {
+    if (v == SHAPE_SPHERE) { return "SHAPE_SPHERE"; }
+    if (v == SHAPE_CYL)    { return "SHAPE_CYL"; }
+    if (v == SHAPE_RAMP)   { return "SHAPE_RAMP"; }
+    if (v == SHAPE_MODEL)  { return "SHAPE_MODEL"; }
+    return "SHAPE_CUBE";
+}
+func _sc_tag_code3(v): str {
+    if (v == TAG_PLAYER) { return "TAG_PLAYER"; }
+    if (v == TAG_ITEM)   { return "TAG_ITEM"; }
+    if (v == TAG_WALL)   { return "TAG_WALL"; }
+    if (v == TAG_ENEMY)  { return "TAG_ENEMY"; }
+    if (v == TAG_BULLET) { return "TAG_BULLET"; }
+    return "TAG_PROP";
+}
+func _sc_act_code3(v): str {
+    if (v == ACT_DAMAGE) { return "ACT_DAMAGE"; }
+    if (v == ACT_KILL)   { return "ACT_KILL"; }
+    if (v == ACT_HURT)   { return "ACT_HURT"; }
+    if (v == ACT_WIN)    { return "ACT_WIN"; }
+    if (v == ACT_LOSE)   { return "ACT_LOSE"; }
+    return "ACT_COLLECT";
+}
+// Negatif sayılar: Tulpar'da tekil eksi yok, `0.0 - x` yazılıyor.
+func _sc_f_code3(v): str {
+    if (v < 0.0) { return "0.0 - " + _sc_num3(0.0 - v); }
+    return _sc_num3(v);
+}
+
+func _sc_world_code3(): str {
+    str o = "";
+    if (_sky3 == 1) {
+        o = o + "    gokyuzu3d(" + _sc_col_code3(_sky_top3) + ", " +
+            _sc_col_code3(_sky_bot3) + ");\n";
+    }
+    if (_fog3 > 0.0) { o = o + "    sis3d(" + _sc_num3(_fog3) + ");\n"; }
+    if (_ground_on == 1) { o = o + "    zemin3(" + _sc_f_code3(_ground_y) + ");\n"; }
+    else { o = o + "    zemin_yok3d();\n"; }
+    o = o + "    yercekimi3(" + _sc_num3(_grav) + ");\n";
+    if (_lights3 == 0)  { o = o + "    isik3d(false);\n"; }
+    if (_shadows3 == 0) { o = o + "    golge3d(false);\n"; }
+    if (_dn_on3 == 1) {
+        o = o + "    gunduz_gece3d(" + _sc_num3(_dn_len3) + ");\n";
+        o = o + "    saati_ayarla3d(" + _sc_num3(_dn_h3) + ");\n";
+    }
+    if (_terr_kind3 == 1) {
+        o = o + "    arazi3d(" + toString(_terr_res3) + ", " + _sc_num3(_terr_sx) +
+            ", " + _sc_num3(_terr_sy3) + ", " + _sc_num3(_terr_sz) + ", " +
+            _sc_num3(_terr_scale3) + ", " + toString(_terr_seed3) + ");\n";
+    }
+    if (_terr_lay3 == 1) {
+        o = o + "    arazi_boya3d(" + _sc_col_code3(_terr_pl3) + ", " +
+            _sc_col_code3(_terr_pm3) + ", " + _sc_col_code3(_terr_ph3) + ", " +
+            _sc_col_code3(_terr_pr3) + ", " + _sc_num3(_terr_pmy3) + ", " +
+            _sc_num3(_terr_phy3) + ", " + _sc_num3(_terr_prs3) + ");\n";
+    }
+    if (_water_on3 == 1) {
+        o = o + "    su3d(" + _sc_f_code3(_water_y3) + ");\n";
+        o = o + "    su_renk3d(" + _sc_col_code3(_water_col3) + ", " +
+            toString(_water_a3) + ");\n";
+    }
+    if (_slope_lim3 > 0.0) {
+        o = o + "    egim_siniri3d(" + _sc_num3(_slope_lim3) + ");\n";
+        o = o + "    kayma_ivmesi3d(" + _sc_num3(_slide_acc3) + ");\n";
+    }
+    return o;
+}
+
+// Varlığın değişkeni: adı varsa o, yoksa `v<slot>`. Ad kullanmak üretilen
+// kodu okunur yapıyor (kamera hedefi ve kurallar zaten adla düşünülüyor).
+func _sc_var_code3(sl): str {
+    str nm = _sc_nm_of3(_mk_handle3(sl));
+    if (nm != "") { return nm; }
+    return "v" + toString(sl);
+}
+
+func _sc_ent_code3(sl): str {
+    Ent3 e = _e3[sl];
+    str v = _sc_var_code3(sl);
+    str o = "    int " + v + " = uret3(" +
+        _sc_f_code3(e.x) + ", " + _sc_f_code3(e.y) + ", " + _sc_f_code3(e.z) + ",  " +
+        _sc_num3(e.sx) + ", " + _sc_num3(e.sy) + ", " + _sc_num3(e.sz) + ",  " +
+        _sc_col_code3(e.color) + ", " + _sc_shape_code3(e.shape) + ", " +
+        _sc_tag_code3(e.tag) + ");\n";
+    if (e.yaw != 0.0) { o = o + "    don3d(" + v + ", " + _sc_f_code3(e.yaw) + ");\n"; }
+    if (e.solid != _default_solid3(e.tag)) {
+        if (e.solid == 1) { o = o + "    kati3d(" + v + ", true);\n"; }
+        else { o = o + "    kati3d(" + v + ", false);\n"; }
+    }
+    if (e.hpmax > 0) { o = o + "    can3d(" + v + ", " + toString(e.hpmax) + ");\n"; }
+    // AD: kamera hedefi ve kurallar varlıklara adla atıfta bulunuyor, yani
+    // adsız üretilen kod aynı sahneyi kurmuyor.
+    str nm = _sc_nm_of3(_mk_handle3(sl));
+    if (nm != "") { o = o + "    ad_ver3d(" + v + ", \"" + nm + "\");\n"; }
+    return o;
+}
+
+func _sc_bh_code3(sl): str {
+    int hnd = _mk_handle3(sl);
+    str v = _sc_var_code3(sl);
+    str o = "";
+    int i = 0;
+    while (i < length(_bh3)) {
+        Bh3 b = _bh3[i];
+        if (b.id == hnd) {
+            if (b.kind == BH_MOVE) {
+                o = o + "    hareket_davranis3d(" + v + ", " + _sc_num3(b.a) +
+                    ", " + _sc_num3(b.b) + ");\n";
+            }
+            if (b.kind == BH_CHASE) {
+                o = o + "    kovala_davranis3d(" + v + ", " + _sc_tag_code3(b.tag) +
+                    ", " + _sc_num3(b.a) + ", " + _sc_num3(b.b) + ");\n";
+            }
+            if (b.kind == BH_PATROL) {
+                o = o + "    devriye_davranis3d(" + v + ", " + _sc_f_code3(b.a) +
+                    ", " + _sc_f_code3(b.b) + ", " + _sc_f_code3(b.c) + ", " +
+                    _sc_f_code3(b.d) + ", " + _sc_num3(b.e) + ");\n";
+            }
+            if (b.kind == BH_SPIN) {
+                o = o + "    don_davranis3d(" + v + ", " + _sc_f_code3(b.a) + ");\n";
+            }
+            if (b.kind == BH_BOB) {
+                o = o + "    salin_davranis3d(" + v + ", " + _sc_num3(b.a) +
+                    ", " + _sc_num3(b.b) + ");\n";
+            }
+            if (b.kind == BH_SHOOT) {
+                o = o + "    ates_davranis3d(" + v + ", " + _sc_num3(b.a) + ", " +
+                    _sc_num3(b.b) + ", " + _sc_num3(b.c) + ", " +
+                    _sc_tag_code3(b.tag) + ", " + _sc_num3(b.d) + ");\n";
+            }
+        }
+        i = i + 1;
+    }
+    return o;
+}
+
+// Sahneyi kuran FONKSİYON. Oyunun `kurulumda3` kancasına da bağlanabiliyor,
+// doğrulayıcıya da — denkliğin ölçülebilmesinin sebebi bu.
+func scene_code3d(): str {
+    str o = "func kur() {\n";
+    // Pencere bilgisi de sahnenin parçası; kod onu da taşımalı yoksa üretilen
+    // program başka bir başlık/boyutla açılır.
+    o = o + "    sahne_bilgi_ayarla3d(\"" + _sc_title3 + "\", " +
+        toString(_sc_w3) + ", " + toString(_sc_h3) + ");\n";
+    o = o + _sc_world_code3();
+    int i = 0;
+    while (i < length(_e3)) {
+        Ent3 e = _e3[i];
+        if (e.alive == 1 && e.tag != TAG_BULLET && e.life <= 0.0) {
+            o = o + _sc_ent_code3(i);
+        }
+        i = i + 1;
+    }
+    // Davranışlar varlıklardan SONRA: hepsi tanımlı olsun.
+    i = 0;
+    while (i < length(_e3)) {
+        Ent3 e2 = _e3[i];
+        if (e2.alive == 1 && e2.tag != TAG_BULLET && e2.life <= 0.0) {
+            o = o + _sc_bh_code3(i);
+        }
+        i = i + 1;
+    }
+    // Bölgeler
+    int z = 0;
+    while (z < length(_trg_x)) {
+        if (_trg_shape[z] == 1) {
+            o = o + "    int b" + toString(z) + " = bolge_kure3d(" +
+                _sc_f_code3(_trg_x[z]) + ", " + _sc_f_code3(_trg_y[z]) + ", " +
+                _sc_f_code3(_trg_z[z]) + ", " + _sc_num3(_trg_r[z]) + ", " +
+                _sc_tag_code3(_trg_tag[z]) + ");\n";
+        } else {
+            o = o + "    int b" + toString(z) + " = bolge3d(" +
+                _sc_f_code3(_trg_x[z]) + ", " + _sc_f_code3(_trg_y[z]) + ", " +
+                _sc_f_code3(_trg_z[z]) + ", " + _sc_num3(_trg_sx[z]) + ", " +
+                _sc_num3(_trg_sy[z]) + ", " + _sc_num3(_trg_sz[z]) + ", " +
+                _sc_tag_code3(_trg_tag[z]) + ");\n";
+        }
+        if (_trg_once[z] == 1) { o = o + "    bolge_bir_kere3d(b" + toString(z) + ", true);\n"; }
+        if (_trg_on[z] == 0)   { o = o + "    bolge_etkin3d(b" + toString(z) + ", false);\n"; }
+        z = z + 1;
+    }
+    // Kurallar
+    int r = 0;
+    while (r < length(_rl3)) {
+        Rule3 ru = _rl3[r];
+        if (ru.kind == RULE_HIT) {
+            o = o + "    carpisma_kurali3d(" + _sc_tag_code3(ru.a) + ", " +
+                _sc_tag_code3(ru.b) + ", " + _sc_act_code3(ru.act) + ", " +
+                _sc_num3(ru.n) + ");\n";
+        } else {
+            o = o + "    bitince_kurali3d(" + _sc_tag_code3(ru.a) + ", " +
+                _sc_act_code3(ru.act) + ");\n";
+        }
+        r = r + 1;
+    }
+    // Kamera EN SON: hedefi bir varlık ve o tanımlı olmalı.
+    int ct = _slot_of3(_cam_target);
+    if (ct >= 0) {
+        str tv = _sc_var_code3(ct);
+        if (_cam_mode3 == CAM_FPS) {
+            o = o + "    kamera_fpv(" + tv + ", " + _sc_num3(_cam_eye3) + ");\n";
+        } else {
+            float dh = _cam_dist;
+            if (_cam_mode3 == CAM_ORBIT) {
+                float q = _cam_dist * _cam_dist - _cam_height * _cam_height;
+                if (q > 0.0) { dh = sqrt(q); } else { dh = 0.0; }
+                o = o + "    kamera_yorunge(" + tv + ", " + _sc_num3(dh) + ", " +
+                    _sc_num3(_cam_height) + ");\n";
+            } else {
+                o = o + "    camera_follow(" + tv + ", " + _sc_num3(dh) + ", " +
+                    _sc_num3(_cam_height) + ");\n";
+            }
+        }
+        o = o + "    camera_fov(" + _sc_num3(_cam_fov) + ");\n";
+    }
+    return o + "}\n";
+}
+func sahne_kod3d(): str { return scene_code3d(); }
 
 // ---- Prefab (şablon) -------------------------------------------------------
 // Bir varlığı ADLI ŞABLON olarak sakla, sonra istediğin yere yerleştir.

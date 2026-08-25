@@ -153,6 +153,39 @@ if [ "$ACTION" = "suites" ]; then
             exit 1
         fi
     fi
+    # Kod üretimi DENKLİK denetimi: sahne JSON'undan üretilen Tulpar kodu
+    # derlenip çalıştırılıyor ve kurduğu sahne yeniden serileştirilerek
+    # kaynakla karşılaştırılıyor. "Kod da aynı sahneyi kuruyor" iddiasını
+    # ölçen tek şey bu — üretilen metni gözle okumak yetmez.
+    CODEGEN_SCENE="examples/scenes/toplayici.scene.json"
+    if [ -f "$CODEGEN_SCENE" ] && [ -f "examples/scene3d_export.tpr" ]; then
+        echo ""
+        CG_TMP=$(mktemp -d)
+        if ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" 2>/dev/null > "$CG_TMP/kur.tpr" \
+           && ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" --dogrula 2>/dev/null > "$CG_TMP/src.json"; then
+            {
+                echo 'import "scene3d";'
+                cat "$CG_TMP/kur.tpr"
+                echo 'kur();'
+                echo 'print(sahne_json3d());'
+            } > "$CG_TMP/verify.tpr"
+            if ./tulpar "$CG_TMP/verify.tpr" 2>/dev/null > "$CG_TMP/gen.json" \
+               && diff -q "$CG_TMP/src.json" "$CG_TMP/gen.json" >/dev/null; then
+                echo -e "${GREEN}kod uretimi denk${NC} (uretilen .tpr ayni sahneyi kuruyor)"
+            else
+                echo -e "${RED}Kod uretimi DENK DEGIL!${NC}"
+                diff "$CG_TMP/src.json" "$CG_TMP/gen.json" | head -20
+                rm -rf "$CG_TMP"
+                exit 1
+            fi
+        else
+            echo -e "${RED}Kod uretimi denetimi calistirilamadi!${NC}"
+            rm -rf "$CG_TMP"
+            exit 1
+        fi
+        rm -rf "$CG_TMP"
+    fi
+
     echo -e "${GREEN}All $SUITE_N suites passed!${NC}"
     exit 0
 fi
@@ -208,6 +241,7 @@ if [ "$ACTION" = "test" ]; then
                         "arcade_goktasi.tpr" "arcade_launcher.tpr" "arcade_yilan.tpr" \
                         "arcade_2048.tpr" "arcade_pong.tpr" "arcade_vur.tpr" \
                         "scene3d_data_game.tpr" "scene3d_editor.tpr" \
+                        "scene3d_export.tpr" \
                         "tame3d_cube.tpr" "tame3d_primitives.tpr" \
                         "tame3d_models.tpr" "tame3d_anim.tpr" "tame3d_lights.tpr" \
                         "tame3d_shadows.tpr" "tame3d_texture.tpr" \

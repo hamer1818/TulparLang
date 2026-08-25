@@ -1,0 +1,43 @@
+// Sahne → Tulpar KODU. JSON çalışma zamanı biçimi; kod ise öğrenme ve devam
+// etme yolu — editörde kurduğun sahneyi açıp "bu böyle yazılıyormuş"
+// diyebilmek, sonra elle geliştirebilmek.
+//
+//   ./tulpar examples/scene3d_export.tpr sahne.json          → ekrana kod
+//   ./tulpar examples/scene3d_export.tpr sahne.json --dogrula → sahne JSON'u
+//
+// İkinci kip DENKLİK ölçümü için: üretilen kodu kurup sahneyi yeniden
+// serileştiriyor. Kabuk tarafında bu çıktı, kaynağın JSON'uyla karşılaştırılıp
+// "üretilen kod aynı sahneyi kuruyor mu?" sorusu ölçülebiliyor.
+
+import "scene3d";
+
+array A = args();
+
+func yol(): str {
+    if (length(A) > 1) { return A[1]; }
+    return "examples/scenes/toplayici.scene.json";
+}
+
+func dogrula_mi(): bool {
+    int i = 2;
+    while (i < length(A)) {
+        if (A[i] == "--dogrula") { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+str P = yol();
+if (file_exists(P) == false) {
+    print("sahne bulunamadi: " + P);
+    exit(1);
+}
+sahne_dosya3d(P);
+
+if (dogrula_mi()) {
+    // Sahne zaten kuruldu; JSON'unu ver. Kod üretiminin denkliği bu çıktının
+    // kaynak JSON ile karşılaştırılmasıyla ölçülüyor.
+    print(sahne_json3d());
+} else {
+    print(sahne_kod3d());
+}

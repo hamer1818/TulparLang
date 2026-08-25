@@ -91,9 +91,10 @@ Mimari kararlar ve gerekçeleri:
       seçicileri, canlı kod çıktısı, kaydet/yükle/dışa aktar. tulparlang.dev
       altında statik — arka uç yok. Doğrulama headless Chrome ekran görüntüsü.
 
-- [ ] **Kod üretimi.** Sahne JSON → okunabilir `.tpr` (işaretli bölge + gömülü
-      kanonik JSON). Denklik testi: üretilen kodun kurduğu varlık tablosu,
-      JSON'dan yüklenenle aynı olmalı.
+- [x] **Kod üretimi.** ✅ 2026-08-24 — `sahne_kod3d()` + `scene3d_export.tpr`.
+      Üretilen şey tek bir `kur()` FONKSİYONU (tam program değil) ki denklik
+      ölçülebilsin. `build.sh suites` üretilen kodu derleyip çalıştırıyor ve
+      kurduğu sahneyi kaynakla karşılaştırıyor.
 
 - [ ] **`wasm/dist` ve `android/dist` arşivleri bayat.** Editörün önizlemesi
       wasm'a bağlı; web/Android hedefleri bağlanmadan önce yeniden kurulmalı.

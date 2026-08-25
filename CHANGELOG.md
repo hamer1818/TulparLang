@@ -42,6 +42,32 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — kod üretimi: sahne → okunabilir Tulpar kodu
+
+`sahne_kod3d()` sahneyi Tulpar KODUNA çeviriyor. JSON çalışma zamanı biçimi;
+kod ise öğrenme ve devam etme yolu — editörde kurduğun sahneyi açıp "bu böyle
+yazılıyormuş" diyebilmek, sonra elle geliştirebilmek.
+
+Üretilen şey tam bir program değil, tek bir FONKSİYON (`kur`). Sebebi
+sınanabilirlik: aynı fonksiyon hem oyunun `kurulumda3` kancasına hem de "kur,
+sonra sahneyi JSON olarak yazdır" biçimindeki bir doğrulayıcıya bağlanabiliyor.
+Tam program üretseydik denkliği ölçmenin yolu olmazdı.
+
+`examples/scene3d_export.tpr` aracı: `./tulpar examples/scene3d_export.tpr
+sahne.json` kodu, `--dogrula` ise sahnenin JSON'unu veriyor.
+
+**`build.sh suites` artık DENKLİĞİ ölçüyor:** üretilen kod derlenip
+çalıştırılıyor ve kurduğu sahne yeniden serileştirilerek kaynakla
+karşılaştırılıyor. Üretilen metni gözle okumak bu iddiayı doğrulamazdı — ilk
+turda adların ve pencere bilgisinin taşınmadığı tam bu denetimle çıktı.
+
+### Fixed — `tulpar script.tpr a b` argümanları programa iletmiyordu
+
+`args()` eklendikten sonra ortaya çıkan tutarsızlık: `build` ile üretilen
+ikili argümanları görüyordu ama `tulpar script.tpr ...` yolu görmüyordu.
+Artık iletiliyor (kabuk alıntılaması tek tırnakla; boşluk ve `$` içeren
+yollar bozulmuyor).
+
 ### Added — `chr(c)` builtin'i
 
 Dilde `ord` vardı ama tersi YOKTU. Bu bir asimetriydi ve pratik bir bedeli

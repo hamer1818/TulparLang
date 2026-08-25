@@ -558,6 +558,23 @@ int main(int argc, char **argv) {
     // Tulpar is AOT-only (see CLAUDE.md "AOT-ONLY"): this is the single
     // execution path. Any AOT failure is a hard error — there is NO VM
     // fallback. "It ran" therefore always means the AOT path ran.
+    // Betikten SONRAKİ argümanları programa ilet. Kabuk alıntılaması tek
+    // tırnakla: boşluk, joker ve `$` içeren yollar bozulmasın. İçindeki tek
+    // tırnak '\'' dizisiyle kaçırılıyor (POSIX sh'de tek tırnağı tek tırnak
+    // içinde kaçırmanın tek yolu).
+    {
+      std::string q;
+      for (int ai = arg_offset + 1; ai < argc; ai++) {
+        if (!q.empty()) q += " ";
+        q += "'";
+        for (const char *c = argv[ai]; *c; c++) {
+          if (*c == '\'') q += "'\\''";
+          else q += *c;
+        }
+        q += "'";
+      }
+      aot_set_run_args(q.c_str());
+    }
     AOTResult aot_result = aot_compile_and_run_silent_with_filename(
         source, argv[arg_offset]);
     free(source);
