@@ -374,6 +374,10 @@ func anim_frames(h, idx): int   { return tm3_anim_frames(h, idx); }
 func anim_kare_sayisi(h, idx): int { return tm3_anim_frames(h, idx); }
 func anim_play(h, idx, frame)   { tm3_anim(h, idx, frame); }
 func anim_oynat(h, idx, frame)  { tm3_anim(h, idx, frame); }
+// İki pozu harmanlar: w=0 → A, w=1 → B. Boşta↔koşu geçişini yumuşatır;
+// tek karede animasyon değiştirmek karakteri sıçratıyordu.
+func anim_blend(h, ia, fa, ib, fb, w)     { tm3_anim_blend(h, ia, fa, ib, fb, w); }
+func anim_harmanla(h, ia, fa, ib, fb, w)  { tm3_anim_blend(h, ia, fa, ib, fb, w); }
 func unload_model(h) { tm3_unload_model(h); }
 func model_sil(h)    { tm3_unload_model(h); }
 

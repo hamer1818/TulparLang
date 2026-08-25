@@ -42,6 +42,46 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Added — animasyon harmanlaması: boşta↔koşu artık sıçramıyor
+
+`anim3d` iki klip arasında TEK KAREDE geçiyordu; karakter yürümeye başlayınca
+ya da durunca poz zıplıyordu — animasyonun "geldiğini" belli eden, oyunu ucuz
+gösteren şey buydu.
+
+Kendi iskelet kodumuz yok. raylib'in `UpdateModelAnimation`'ı pozu
+`anim.framePoses[frame]` üzerinden okuyor; `tm3_anim_blend` tek karelik geçici
+bir `ModelAnimation` kurup framePoses'ini harmanlanmış diziye bakacak şekilde
+ayarlıyor. Skinning, kemik matrisi kurulumu ve GPU yüklemesi raylib'in kendi
+(test edilmiş) yolundan geçiyor. Dönüşte SLERP: bileşen bileşen lerp kısa
+yoldan gitmez ve dördeyin boyunu bozar, yani kemik uzar/kısalır.
+
+Ağırlığı MOTOR sürüyor — oyun kodu yalnız hangi klibin boşta hangisinin koşu
+olduğunu söylüyor. Geçiş **doğrusal**, üstel yumuşatma değil: üstelde ağırlık
+hedefe hiç varmıyor, yani "boşta" pozu sonsuza kadar biraz koşu taşıyor.
+Doğrusal olan uca tam oturuyor ve süresi tahmin edilebilir (1/hız saniye,
+`anim_gecis_hizi3d` ile ayarlanır).
+
+Harmanlamanın hız eşiği tek-poz seçicisiyle AYNI ifadeden geliyor; ayrışsalar
+ağırlık koşuya yürürken seçici boştayı gösterirdi. Test bunu ölçüyor.
+
+`examples/scene3d_karakter.tpr` — robot.glb kullanan ilk scene3d örneği.
+Model bulunamazsa örnek yine de açılıyor (kutu oyuncuyla), çünkü eksik varlık
+siyah ekran değil söylenen bir durum olmalı.
+
+### Fixed — bayat `wasm/dist` / `android/dist` arşivleri artık önceden söyleniyor
+
+Bu arşivler elle derleniyor (emsdk/NDK her makinede yok, CI'da hiç yok).
+`tame_impl.c`'ye yeni bir sembol eklenip arşiv tazelenmeyince link
+`undefined symbol: aot_tm3_...` diyor — sorunun ne olduğunu SÖYLEMEYEN bir
+mesaj: eksik olan kodun kendisi değil, arşivin bayatlığı. Bu oturumda buna
+iki kez daha çarpıldı.
+
+Web ve Android link'inden önce arşiv zaman damgası `runtime/tame_impl.c`,
+`runtime/tame_bindings.cpp`, `src/vm/runtime_bindings.cpp`, `src/vm/vm.cpp`
+ile karşılaştırılıyor; eskiyse tazeleme komutunu söyleyen bir uyarı çıkıyor.
+Uyarı, hata değil — bayat arşivde gereken semboller varsa link tutar ve
+derlemeyi durdurmak gereksiz olurdu.
+
 ### Fixed — WEB'DE KAYIT SESSİZCE KAYBOLUYORDU
 
 `kayit_yaz()` (ve onun üstündeki her şey: skorlar, `scene_save3d`) web'de

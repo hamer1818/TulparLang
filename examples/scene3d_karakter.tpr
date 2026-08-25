@@ -1,0 +1,67 @@
+// scene3d — ANİMASYONLU KARAKTER: iskeletli model + boşta↔koşu harmanlaması.
+//
+//   ./tulpar examples/scene3d_karakter.tpr      (kökten çalıştır — varlık yolu göreli)
+//   TULPAR_WEB_ASSETS=examples/assets tulpar build --target=web \
+//       examples/scene3d_karakter.tpr -o out/karakter
+//
+// WASD/oklar: yürü   |   BOŞLUK: zıpla
+//
+// Bakılacak şey KARAKTERİN DURUŞU. Yürümeye başlayınca ya da durunca poz tek
+// karede değişmiyor, iki animasyonun arası bir çeyrek saniye boyunca
+// harmanlanıyor (`anim_gecis_hizi3d`). Sert geçiş, animasyonun geldiğini
+// belli eden ve oyunu "ucuz" gösteren şeydi.
+//
+// Oyun kodunun animasyon hakkında söylediği tek şey: hangi klip boşta,
+// hangisi koşu (`anim3d`). Kare sayacını, hız eşiğini ve harmanlama
+// ağırlığını motor sürüyor.
+
+import "scene3d";
+
+int player = 0;
+int robot  = 0 - 1;
+
+func setup() {
+    // robot.glb — raylib örnek varlığı (CC0). İki gömülü animasyonu var.
+    robot = model_yukle("examples/assets/robot.glb");
+
+    if (robot < 0) {
+        // Model yoksa örnek yine de AÇILMALI: eksik varlık siyah ekran değil,
+        // söylenen bir durum olmalı. Kutu oyuncuyla oynanabilir kalıyor.
+        hata3d("robot.glb yuklenemedi — depo kokunden calistir");
+        player = spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE,
+                        SHAPE_CUBE, TAG_PLAYER);
+    } else {
+        player = spawn3_model(0.0, 0.0, 0.0, 1.0, robot, TAG_PLAYER);
+        // 0 = boşta, 1 = koşu (robot.glb'nin klip sırası). Klip sayısı
+        // beklenenden azsa koşuyu istemiyoruz: -1 "koşu klibi yok" demek
+        // ve motor o zaman harmanlamayı kendiliğinden kapatıyor.
+        int kosu = 0 - 1;
+        if (anim_sayisi(robot) > 1) { kosu = 1; }
+        anim3d(player, 0, kosu, 30.0);
+        anim_gecis_hizi3d(4.0);        // 0.25 sn'lik geçiş
+        kayit3d("robot.glb: " + toString(anim_sayisi(robot)) + " animasyon");
+    }
+
+    camera_follow(player, 11.0, 7.0);
+
+    // Koşmaya değer bir alan: köşelerde sütunlar, çevrede duvar.
+    spawn3(9.0, 1.5, 9.0,   1.4, 3.0, 1.4, rgb(120, 220, 140), SHAPE_CYL, TAG_PROP);
+    spawn3(0.0 - 9.0, 1.5, 9.0,   1.4, 3.0, 1.4, rgb(120, 220, 140), SHAPE_CYL, TAG_PROP);
+    spawn3(9.0, 1.5, 0.0 - 9.0,   1.4, 3.0, 1.4, rgb(120, 220, 140), SHAPE_CYL, TAG_PROP);
+    spawn3(0.0 - 9.0, 1.5, 0.0 - 9.0, 1.4, 3.0, 1.4, rgb(120, 220, 140), SHAPE_CYL, TAG_PROP);
+
+    spawn3(0.0, 1.5, 0.0 - 14.0,  30.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    spawn3(0.0, 1.5, 14.0,        30.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    spawn3(0.0 - 14.0, 1.5, 0.0,  1.0, 3.0, 30.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    spawn3(14.0, 1.5, 0.0,        1.0, 3.0, 30.0, GRAY, SHAPE_CUBE, TAG_WALL);
+}
+
+func update() {
+    move3d(player, 7.0);
+    if (jump_pressed()) { jump3d(player, 11.0); }
+}
+
+sahne3d(900, 520, "Tulpar 3D — Animasyonlu Karakter");
+kurulumda3(setup);
+her_kare3(update);
+oyna3d();

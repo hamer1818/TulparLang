@@ -671,6 +671,57 @@ static std::string build_web_link_search_dirs() {
   return out;
 }
 
+// ARŞİV TAZELİĞİ: wasm/dist ve android/dist elle derleniyor (bu makinede
+// emsdk/NDK olmayabilir, CI'da hiç yok). `tame_impl.c`'ye yeni bir sembol
+// eklenip arşiv tazelenmeyince link `undefined symbol: aot_tm_...` diyor ve
+// bu, sorunun ne olduğunu SÖYLEMEYEN bir mesaj: eksik olan kodun kendisi
+// değil, arşivin bayatlığı. Aynı hataya en az üç kez çarpıldı.
+//
+// Kaynak arşivden yeniyse link ÖNCESİ söyleniyor. Uyarı, hata değil: arşiv
+// bayat olsa bile içinde gereken semboller varsa link tutar ve derlemeyi
+// durdurmak gereksiz olurdu.
+static void warn_if_prebuilt_archive_stale(const char *dist_dir,
+                                           const char *rebuild_cmd) {
+  static const char *srcs[] = {
+      "runtime/tame_impl.c", "runtime/tame_bindings.cpp",
+      "src/vm/runtime_bindings.cpp", "src/vm/vm.cpp",
+  };
+  struct stat as;
+  time_t oldest_archive = 0;
+  bool found = false;
+  DIR *d = opendir(dist_dir);
+  if (!d) return;  // arşiv yoksa link zaten kendi hatasını verir
+  struct dirent *ent;
+  while ((ent = readdir(d)) != nullptr) {
+    const char *n = ent->d_name;
+    size_t ln = strlen(n);
+    if (ln < 3 || strcmp(n + ln - 2, ".a") != 0) continue;
+    std::string full = std::string(dist_dir) + "/" + n;
+    if (stat(full.c_str(), &as) != 0) continue;
+    if (!found || as.st_mtime < oldest_archive) oldest_archive = as.st_mtime;
+    found = true;
+  }
+  closedir(d);
+  if (!found) return;
+
+  for (const char *src : srcs) {
+    struct stat ss;
+    if (stat(src, &ss) != 0) continue;   // repo kökünden çalışılmıyor
+    if (ss.st_mtime > oldest_archive) {
+      fprintf(stderr,
+              tulpar::i18n::tr_en(
+                  "[AOT] UYARI: %s arsivleri %s dosyasindan ESKI. Yeni bir\n"
+                  "      runtime sembolu eklendiyse link 'undefined symbol'\n"
+                  "      der. Tazele: %s\n",
+                  "[AOT] WARNING: archives in %s are OLDER than %s. If a new\n"
+                  "      runtime symbol was added the link will fail with\n"
+                  "      'undefined symbol'. Refresh with: %s\n"),
+              dist_dir, src, rebuild_cmd);
+      return;   // tek uyarı yeter
+    }
+  }
+}
+
 // Web hedefinin HTML kabuğu. em++'a .html ürettirmiyoruz: emcc'nin HTML
 // çıktısı html-minifier-terser (npm) ister ve vendored SDK'larda yoktur;
 // kendi kabuğumuz hem bağımlılıksız hem de oyuna uygun (koyu, ortalanmış
@@ -1032,6 +1083,11 @@ AOTResult aot_compile_with_filename_debug(const char *source,
                         "-ltulpar_tame_android -ltulpar_runtime_android "
                         "-landroid -llog -lEGL -lGLESv2 -lOpenSLES -lm -ldl" +
                         extra + " 2>&1";
+      {
+        std::string dist = std::string("android/dist/") + a.abi;
+        warn_if_prebuilt_archive_stale(dist.c_str(),
+                                       "android/build_tame_android.sh");
+      }
       AOT_PROGRESS("[AOT] Linking %s: libtulpargame.so\n", a.abi);
       int rc;
       {
@@ -1198,6 +1254,7 @@ AOTResult aot_compile_with_filename_debug(const char *source,
     // - Arşiv sırası native ile aynı: tame, runtime'dan önce.
     // - TULPAR_WEB_ASSETS=<dizin> → --preload-file (oyun varlıkları sanal
     //   dosya sistemine aynı yolda gömülür).
+    warn_if_prebuilt_archive_stale("wasm/dist", "wasm/build_tame_web.sh");
     std::string web_dirs = build_web_link_search_dirs();
     std::string preload;
     if (const char *assets = getenv("TULPAR_WEB_ASSETS"); assets && *assets) {

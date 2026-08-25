@@ -92,6 +92,10 @@ struct Ent3 {
     int anim_run;                     // koşu animasyon indeksi (-1 = yok)
     float anim_fps;                   // kare/sn
     float anim_t;                     // kesirli kare sayacı (motor sürer)
+    // Harmanlama ağırlığı: 0 = tamamen boşta, 1 = tamamen koşu. Motor
+    // sürer, çizim yalnız uygular. ÇALIŞMA durumu — sahne dosyasına
+    // yazılmıyor, çünkü yazarın belirlediği bir şey değil.
+    float anim_w;
 }
 
 array _e3 = [];             // entity store (slot ile indekslenir, handle ile DEĞİL)
@@ -301,6 +305,7 @@ func spawn3(x, y, z, sx, sy, sz, color, shape, tag): int {
                grounded: 0, alive: 1, solid: _default_solid3(tag),
                hp: 0, hpmax: 0, invuln: 0.0, life: 0.0, owner: 0 - 1, pdir: 0,
                anim_idle: 0 - 1, anim_run: 0 - 1, anim_fps: 24.0, anim_t: 0.0,
+               anim_w: 0.0,
                avoid: 0 };
     return _mk_handle3(_alloc_slot3(e));
 }
@@ -313,6 +318,7 @@ func spawn3_model(x, y, z, scale, model_handle, tag): int {
                grounded: 0, alive: 1, solid: _default_solid3(tag),
                hp: 0, hpmax: 0, invuln: 0.0, life: 0.0, owner: 0 - 1, pdir: 0,
                anim_idle: 0 - 1, anim_run: 0 - 1, anim_fps: 24.0, anim_t: 0.0,
+               anim_w: 0.0,
                avoid: 0 };
     return _mk_handle3(_alloc_slot3(e));
 }
@@ -1680,6 +1686,7 @@ func anim3d(id, idle_idx, run_idx, fps) {
     e.anim_run = run_idx;
     e.anim_fps = fps;
     e.anim_t = 0.0;
+    e.anim_w = 0.0;
     _e3[s] = e;
 }
 
@@ -1689,6 +1696,38 @@ func _anim_pick3(Ent3 e): int {
     float sp = sqrt(e.vx * e.vx + e.vz * e.vz);
     if (sp > 0.35 && e.anim_run >= 0) { return e.anim_run; }
     return e.anim_idle;
+}
+
+// ---- Animasyon harmanlaması -------------------------------------------------
+// `_anim_pick3` bir animasyondan diğerine TEK KAREDE atlıyordu: karakter
+// duraklayınca poz sıçrıyordu. Ağırlık artık zamana yayılıyor ve iki poz
+// raylib'in kendi skinning yolundan geçen bir ara pozla karıştırılıyor
+// (tm3_anim_blend).
+//
+// Geçiş DOĞRUSAL, üstel yumuşatma değil. Üstelde ağırlık hedefe hiç
+// varmıyor, yani "boşta" pozu her zaman biraz koşu taşıyor. Doğrusal olan
+// hedefe tam oturuyor ve süresi de tahmin edilebilir: 1/hız saniye.
+float _anim_rate3 = 8.0;      // 1/sn — 0→1 geçişi 0.125 sn
+
+func anim_blend_rate3d(r) { _anim_rate3 = r; }
+func anim_gecis_hizi3d(h) { anim_blend_rate3d(h); }
+
+// Hedef ağırlık: koşu tanımlı ve yatayda hareket varsa 1, yoksa 0.
+// Eşik `_anim_pick3` ile AYNI — ikisi ayrışırsa harmanlama bir yöne,
+// tek-poz yolu diğer yöne karar verirdi.
+func _anim_target3(vx, vz, run_idx): float {
+    if (run_idx < 0) { return 0.0; }
+    if (sqrt(vx * vx + vz * vz) > 0.35) { return 1.0; }
+    return 0.0;
+}
+
+// Ağırlığı hedefe doğru bir adım taşı. Saf: penceresiz sınanabiliyor.
+func _anim_step_w3(w, target, dt): float {
+    float adim = _anim_rate3 * dt;
+    float d = target - w;
+    if (abs_f3(d) <= adim) { return target; }
+    if (d > 0.0) { return w + adim; }
+    return w - adim;
 }
 
 // ---- Konumsal ses (Faz 8) --------------------------------------------------
@@ -1801,6 +1840,9 @@ func _s3_physics(dt) {
             if (e.anim_idle >= 0 || e.anim_run >= 0) {
                 e.anim_t = e.anim_t + e.anim_fps * dt;
                 if (e.anim_t > 100000.0) { e.anim_t = 0.0; }   // taşma koruması
+                e.anim_w = _anim_step_w3(e.anim_w,
+                                         _anim_target3(e.vx, e.vz, e.anim_run),
+                                         dt);
             }
             _e3[i] = e;
             if (expired == 1) { kill3d(_mk_handle3(i)); }
@@ -3355,12 +3397,26 @@ func _s3_render() {
                             // Animasyon: motor kare sayacını sürüyor, burada
                             // yalnız poz uygulanıyor. anim3d çağrılmamışsa
                             // (anim_idle < 0) model eskisi gibi donuk çizilir.
-                            int ai = _anim_pick3(e);
+                            // İki poz da sürülüyor ve anim_w ile
+                            // harmanlanıyor. Kare sayacı ORTAK: iki
+                            // animasyon aynı yürüyüş fazında kalsın diye
+                            // (locomotion harmanlamasının standart yolu),
+                            // her biri kendi kare sayısına göre mod'lanıyor.
+                            int ai = e.anim_idle;
+                            int bi = e.anim_run;
+                            // Boşta yoksa harmanlanacak bir şey de yok:
+                            // koşu tek başına A rolüne geçiyor.
+                            if (ai < 0) { ai = bi; bi = 0 - 1; }
                             if (ai >= 0) {
-                                int fcount = anim_frames(e.model, ai);
-                                if (fcount > 0) {
-                                    anim_play(e.model, ai, mod(toInt(e.anim_t), fcount));
+                                int fa = 0;
+                                int ca = anim_frames(e.model, ai);
+                                if (ca > 0) { fa = mod(toInt(e.anim_t), ca); }
+                                int fb = 0;
+                                if (bi >= 0) {
+                                    int cb = anim_frames(e.model, bi);
+                                    if (cb > 0) { fb = mod(toInt(e.anim_t), cb); }
                                 }
+                                anim_blend(e.model, ai, fa, bi, fb, e.anim_w);
                             }
                             draw_model_rot(e.model, e.x, e.y - e.sy * 0.5, e.z, e.yaw, e.sx, ecol);
                         }

@@ -154,11 +154,19 @@ Mimari kararlar ve gerekçeleri:
       hapsedildi (dokunmatikle aynı desen) ki motor penceresiz test
       edilebilir kalsın. Detay: CHANGELOG.
 
-- [ ] **Animasyon geçişi/harmanlama yok.** `anim3d` boşta↔koşu arasında sert
-      geçiyor. **Önce örnek lazım:** `anim3d`'yi hiçbir örnek kullanmıyor
-      (tek animasyonlu model örneği `tame3d_anim.tpr` ham tame ile yazılmış,
-      scene3d değil). Harmanlama yazılsa da bakılacak bir sahne olmadığı için
-      iş, `robot.glb` kullanan bir scene3d örneğiyle birlikte yapılmalı.
+- [x] **Animasyon harmanlaması geldi.** ✅ 2026-08-25 — `tm3_anim_blend`
+      (`anim_harmanla()`/`anim_blend()`) iki pozu ağırlıkla karıştırıyor;
+      motor ağırlığı hızdan türetip zamana yayıyor (`anim_gecis_hizi3d`,
+      varsayılan 0.125 sn). Kendi iskelet kodumuz YOK: tek karelik geçici bir
+      `ModelAnimation` kurulup raylib'in kendi skinning yolundan geçiliyor.
+      Geçiş DOĞRUSAL — üstel yumuşatmada ağırlık uca hiç varmaz, yani "boşta"
+      pozu sonsuza kadar biraz koşu taşırdı (test bunu ölçüyor).
+      Örnek: `examples/scene3d_karakter.tpr` (robot.glb, scene3d).
+
+- [ ] **`anim3d` hâlâ İKİ klip biliyor** (boşta + koşu). Yürüme/koşma/çömelme
+      gibi üçüncü bir durum ya da rastgele boşta klipleri için ağırlık
+      tek bir sayı olmaktan çıkmalı. Harmanlama altyapısı (`tm3_anim_blend`)
+      N klibe hazır; eksik olan scene3d'nin durum makinesi.
 
 ---
 
@@ -262,9 +270,12 @@ boşluklar; backlog'da yoklardı.
       web/Android hedefi link hatası verir. Masaüstünde görünmeyen, yalnız o
       hedeflerde patlayan bir sınıf — arşiv tazeliğini denetleyen bir kontrol
       (kaynak zaman damgası karşılaştırması) ucuz olur.
-      `wasm/dist` 2026-08-25'te tazelendi (bulut + localStorage sembolleri);
-      tam bu hataya bir kez daha çarpıldı, yani denetim hâlâ borç.
-      `android/dist` duruyor — NDK bu makinede kurulu değil.
+      ✅ Denetim geldi (2026-08-25): web ve Android link'inden ÖNCE arşiv
+      zaman damgası `runtime/tame_impl.c` ve kardeşleriyle karşılaştırılıyor,
+      eskiyse tazeleme komutunu söyleyen bir uyarı çıkıyor. Uyarı, hata
+      değil: bayat arşivde gereken semboller varsa link tutar.
+      Kalan borç, arşivleri TAZELEMEK hâlâ elle: `android/dist` duruyor
+      (NDK bu makinede kurulu değil).
 
 - [x] **`lib/test.tpr` artık BÜTÜN hataları gösteriyor.** ✅ 2026-08-24 —
       mesaj eziliyordu, yani ilk kırılan iddia (asıl sebebi söyleyen o)

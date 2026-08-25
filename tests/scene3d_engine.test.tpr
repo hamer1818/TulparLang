@@ -5707,6 +5707,105 @@ func t_storage_key_is_path_scoped() {
 }
 
 
+// ---------------------------------------------------------------------------
+// ANİMASYON HARMANLAMASI — ağırlık mantığı (poz uygulaması raylib'de,
+// pencere ister; burada ölçülen motorun sürdüğü AĞIRLIK).
+// ---------------------------------------------------------------------------
+
+func t_anim_weight_reaches_endpoints() {
+    // DOĞRUSAL geçişin sebebi bu: üstel yumuşatmada ağırlık hedefe hiç
+    // varmaz, yani "boşta" pozu sonsuza kadar biraz koşu taşır.
+    float w = 0.0;
+    int i = 0;
+    while (i < 200) { w = _anim_step_w3(w, 1.0, 1.0 / 60.0); i = i + 1; }
+    assert(w == 1.0, "agirlik 1'e TAM oturmuyor: " + toString(w));
+    i = 0;
+    while (i < 200) { w = _anim_step_w3(w, 0.0, 1.0 / 60.0); i = i + 1; }
+    assert(w == 0.0, "agirlik 0'a TAM oturmuyor: " + toString(w));
+}
+
+func t_anim_weight_transition_duration() {
+    // Süre 1/hız saniye olmalı — geçişin ne kadar süreceği tahmin edilebilir
+    // olmasaydı `anim_gecis_hizi3d` ayarlanabilir bir şey olmazdı.
+    anim_gecis_hizi3d(4.0);          // 0→1 = 0.25 sn
+    float w = 0.0;
+    float t = 0.0;
+    float dt = 1.0 / 240.0;
+    while (w < 1.0 && t < 2.0) {
+        w = _anim_step_w3(w, 1.0, dt);
+        t = t + dt;
+    }
+    assert(w == 1.0, "hedefe varilmadi");
+    assert(t > 0.24 && t < 0.27, "gecis suresi 0.25 sn degil: " + toString(t));
+    anim_gecis_hizi3d(8.0);          // varsayılana dön
+}
+
+func t_anim_target_matches_single_pose_pick() {
+    // Harmanlamanın eşiği ile tek-poz seçicinin eşiği AYNI olmalı. Ayrışsalar
+    // ağırlık koşuya giderken _anim_pick3 boştayı seçerdi.
+    scene3d_reset();
+    no_ground3d();
+    int m = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_PROP);
+    int sl = _slot_of3(m);
+    Ent3 e = _e3[sl];
+    e.anim_idle = 0;
+    e.anim_run = 1;
+
+    // Eşiğin ALTINDA: ikisi de boştayı istemeli.
+    e.vx = 0.2; e.vz = 0.0;
+    _e3[sl] = e;
+    assert(_anim_pick3(_e3[sl]) == 0, "yavasta pick kosuyu sectI");
+    assert(_anim_target3(0.2, 0.0, 1) == 0.0, "yavasta hedef 0 degil");
+
+    // Eşiğin ÜSTÜNDE: ikisi de koşuyu istemeli.
+    e.vx = 3.0; e.vz = 0.0;
+    _e3[sl] = e;
+    assert(_anim_pick3(_e3[sl]) == 1, "hizlida pick bostayi sectI");
+    assert(_anim_target3(3.0, 0.0, 1) == 1.0, "hizlida hedef 1 degil");
+}
+
+func t_anim_target_zero_without_run_clip() {
+    // Koşu animasyonu yoksa harmanlanacak ikinci poz yok: ağırlık 0 kalmalı,
+    // yoksa var olmayan bir klibe doğru harmanlanırdı.
+    assert(_anim_target3(9.0, 9.0, 0 - 1) == 0.0,
+           "kosu klibi yokken hedef 0 degil");
+}
+
+func t_anim_weight_driven_by_engine() {
+    // Ağırlığı MOTOR sürüyor: oyun kodu hiçbir şey çağırmıyor.
+    scene3d_reset();
+    no_ground3d();
+    int m = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_PROP);
+    anim3d(m, 0, 1, 24.0);
+    int sl = _slot_of3(m);
+    assert(_e3[sl].anim_w == 0.0, "baslangic agirligi 0 degil");
+
+    // Hareket ettir: ağırlık koşuya yürümeli.
+    int i = 0;
+    while (i < 30) {
+        Ent3 e = _e3[sl];
+        e.vx = 4.0;
+        _e3[sl] = e;
+        _s3_physics(1.0 / 60.0);
+        i = i + 1;
+    }
+    assert(_e3[sl].anim_w > 0.9,
+           "hareket ederken agirlik kosuya gitmedi: " + toString(_e3[sl].anim_w));
+
+    // Durdur: geri boştaya inmeli.
+    i = 0;
+    while (i < 40) {
+        Ent3 e = _e3[sl];
+        e.vx = 0.0; e.vz = 0.0;
+        _e3[sl] = e;
+        _s3_physics(1.0 / 60.0);
+        i = i + 1;
+    }
+    assert(_e3[sl].anim_w == 0.0,
+           "durunca agirlik bostaya inmedi: " + toString(_e3[sl].anim_w));
+}
+
+
 test("satir yuksekligi fonttan buyuk", "t_ui_line_height_exceeds_font");
 test("dikey merkezleme", "t_ui_vertical_centering");
 test("dedektor metinleri goruyor", "t_ui_detector_sees_text");
@@ -5738,4 +5837,9 @@ test("masaustu web degil", "t_storage_desktop_is_not_web");
 test("masaustu gidis-donusu gercek dosya", "t_storage_desktop_roundtrip_uses_real_file");
 test("indir masaustunde dosya yaziyor", "t_storage_export_writes_file_on_desktop");
 test("depo anahtari yola gore", "t_storage_key_is_path_scoped");
+test("harmanlama uclara tam oturuyor", "t_anim_weight_reaches_endpoints");
+test("gecis suresi 1/hiz", "t_anim_weight_transition_duration");
+test("harmanlama esigi tek-poz ile ayni", "t_anim_target_matches_single_pose_pick");
+test("kosu klibi yoksa agirlik 0", "t_anim_target_zero_without_run_clip");
+test("agirligi motor suruyor", "t_anim_weight_driven_by_engine");
 test_summary();

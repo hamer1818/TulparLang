@@ -139,6 +139,7 @@ const BuiltinEntry kBuiltins[] = {
     {"tm3_anim_count",  "tm3_anim_count(h: int): int",                  "Modelin dosyasından yüklenen animasyon sayısını döner. Sarmalayıcı: anim_sayisi()/anim_count()."},
     {"tm3_anim_frames", "tm3_anim_frames(h: int, idx: int): int",       "Belirtilen animasyonun kare (frame) sayısını döner (frame'i mod'lamak için). Sarmalayıcı: anim_kare_sayisi()/anim_frames()."},
     {"tm3_anim",        "tm3_anim(h: int, idx: int, frame: int)",       "Animasyon pozunu uygular (iskelet/CPU skinning). frame'i her karede artır + kare-sayısına göre mod'la. Sarmalayıcı: anim_oynat()/anim_play()."},
+    {"tm3_anim_blend",  "tm3_anim_blend(h: int, ia: int, fa: int, ib: int, fb: int, w: float)", "İki animasyon pozunu w ile harmanlar (w=0 → A, w=1 → B). Geçişler sıçramaz. Sarmalayıcı: anim_blend()/anim_harmanla()."},
     {"tm3_unload_model","tm3_unload_model(h: int)",                     "Modeli + animasyonlarını bellekten (RAM/VRAM) siler, handle'ı serbest bırakır. Sarmalayıcı: model_sil()/unload_model()."},
     {"tm3_lights",      "tm3_lights(enable: int): bool",                "3D ışıklandırmayı açar/kapatır (gömülü Blinn-Phong shader). Açıkken hiç ışık tanımlı değilse makul bir güneş otomatik verilir. Sarmalayıcı: isik_ac()/lights_on(), isik_kapat()/lights_off()."},
     {"tm3_light_set",   "tm3_light_set(idx: int, type: int, x, y, z, color: int)", "Işık slot'unu (0-3) ayarlar. type 0 = yönlü/güneş ((x,y,z) YÖN), 1 = nokta ((x,y,z) KONUM). Sarmalayıcı: gunes()/sun(), nokta_isik()/point_light()."},

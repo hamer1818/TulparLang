@@ -2273,6 +2273,87 @@ void tame_impl_anim(int h, int idx, int frame) {
   UpdateModelAnimation(tame_models[h].model, tame_models[h].anims[idx], frame);
 }
 
+// Animasyon HARMANLAMA: iki pozun arasını w ile karıştırıp uygular.
+// w=0 tamamen A, w=1 tamamen B.
+//
+// Neden ayrı bir yol: `tame_impl_anim` tek bir animasyonun pozunu uyguluyor,
+// yani boşta↔koşu geçişi bir KARE içinde oluyor ve karakter sıçrıyordu.
+//
+// Kendi iskelet kodumuzu yazmıyoruz. raylib'in UpdateModelAnimation'ı pozu
+// `anim.framePoses[frame]` üzerinden okuyor; biz tek karelik GEÇİCİ bir
+// ModelAnimation kurup framePoses'ini harmanlanmış diziye bakacak şekilde
+// ayarlıyoruz. Böylece skinning, kemik matrisi kurulumu ve GPU yüklemesi
+// raylib'in kendi (ve test edilmiş) yolundan geçiyor.
+//
+// boneCount'u A'dan alıyoruz: UpdateModelAnimationBones içinde
+// `assert(mesh.boneCount == anim.boneCount)` var.
+static Transform *tame_blend_pose = NULL;
+static int tame_blend_cap = 0;
+
+void tame_impl_anim_blend(int h, int ia, int fa, int ib, int fb, double w) {
+  if (!tame_model_ok(h)) return;
+  int n = tame_models[h].anim_count;
+  if (ia < 0 || ia >= n) return;
+  // B geçersiz ya da ağırlık uçlarda: harmanlamaya gerek yok, tek poz uygula.
+  // Bu aynı zamanda "tek animasyonlu model" durumunun doğal cevabı.
+  if (ib < 0 || ib >= n || w <= 0.001) {
+    UpdateModelAnimation(tame_models[h].model, tame_models[h].anims[ia], fa);
+    return;
+  }
+  if (w >= 0.999) {
+    UpdateModelAnimation(tame_models[h].model, tame_models[h].anims[ib], fb);
+    return;
+  }
+
+  ModelAnimation *A = &tame_models[h].anims[ia];
+  ModelAnimation *B = &tame_models[h].anims[ib];
+  // Kemik sayıları farklıysa harmanlanacak bir eşleşme yok — iki iskelet
+  // farklı demektir. Sessizce A'ya düşmek, çökmekten de yanlış poz
+  // üretmekten de iyi.
+  if (A->boneCount != B->boneCount || A->frameCount <= 0 ||
+      B->frameCount <= 0 || !A->framePoses || !B->framePoses) {
+    UpdateModelAnimation(tame_models[h].model, tame_models[h].anims[ia], fa);
+    return;
+  }
+
+  int bc = A->boneCount;
+  if (bc > tame_blend_cap) {
+    Transform *np = (Transform *)realloc(tame_blend_pose,
+                                         (size_t)bc * sizeof(Transform));
+    if (!np) {
+      UpdateModelAnimation(tame_models[h].model, tame_models[h].anims[ia], fa);
+      return;
+    }
+    tame_blend_pose = np;
+    tame_blend_cap = bc;
+  }
+
+  if (fa < 0) fa = 0;
+  if (fb < 0) fb = 0;
+  fa = fa % A->frameCount;
+  fb = fb % B->frameCount;
+  Transform *pa = A->framePoses[fa];
+  Transform *pb = B->framePoses[fb];
+  float t = (float)w;
+
+  for (int i = 0; i < bc; i++) {
+    tame_blend_pose[i].translation =
+        Vector3Lerp(pa[i].translation, pb[i].translation, t);
+    // Dönüşte SLERP: bileşen bileşen lerp kısa yoldan gitmez ve uzunluğu
+    // bozar, yani kemik boyu oynar.
+    tame_blend_pose[i].rotation =
+        QuaternionSlerp(pa[i].rotation, pb[i].rotation, t);
+    tame_blend_pose[i].scale = Vector3Lerp(pa[i].scale, pb[i].scale, t);
+  }
+
+  ModelAnimation tmp = *A;
+  tmp.frameCount = 1;
+  Transform *rows[1];
+  rows[0] = tame_blend_pose;
+  tmp.framePoses = rows;
+  UpdateModelAnimation(tame_models[h].model, tmp, 0);
+}
+
 void tame_impl_unload_model(int h) {
   if (!tame_model_ok(h)) return;
   if (tame_models[h].anims)

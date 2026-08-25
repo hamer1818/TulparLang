@@ -869,6 +869,7 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm3_anim_count", "aot_tm3_anim_count_ptr", 1},
     {"tm3_anim_frames", "aot_tm3_anim_frames_ptr", 2},
     {"tm3_anim", "aot_tm3_anim_ptr", 3},
+    {"tm3_anim_blend", "aot_tm3_anim_blend_ptr", 6},
     {"tm3_unload_model", "aot_tm3_unload_model_ptr", 1},
     // 3D (Faz 4) — ışıklandırma
     {"tm3_lights", "aot_tm3_lights_ptr", 1},

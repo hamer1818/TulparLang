@@ -1001,6 +1001,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm3_anim_count", TYPE_INT, {TYPE_INT}},
       {"tm3_anim_frames", TYPE_INT, {TYPE_INT, TYPE_INT}},
       {"tm3_anim", TYPE_VOID, {TYPE_INT, TYPE_INT, TYPE_INT}},
+      {"tm3_anim_blend", TYPE_VOID, {TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_FLOAT}},
       {"tm3_unload_model", TYPE_VOID, {TYPE_INT}},
       {"tm3_lights", TYPE_BOOL, {TYPE_INT}},
       {"tm3_light_set", TYPE_VOID,

@@ -173,6 +173,7 @@ void tame_impl_model_texture(int h, int tex_handle);
 int tame_impl_model_anim_count(int h);
 int tame_impl_anim_frames(int h, int idx);
 void tame_impl_anim(int h, int idx, int frame);
+void tame_impl_anim_blend(int h, int ia, int fa, int ib, int fb, double w);
 void tame_impl_unload_model(int h);
 void tame_impl_triangle(double x1, double y1, double x2, double y2, double x3,
                         double y3, int64_t color);
@@ -799,6 +800,13 @@ VMValue aot_tm3_anim_frames_ptr(VMValue *h, VMValue *idx) {
 
 VMValue aot_tm3_anim_ptr(VMValue *h, VMValue *idx, VMValue *frame) {
   tame_impl_anim((int)tm_int(h), (int)tm_int(idx), (int)tm_int(frame));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_anim_blend_ptr(VMValue *h, VMValue *ia, VMValue *fa,
+                               VMValue *ib, VMValue *fb, VMValue *w) {
+  tame_impl_anim_blend((int)tm_int(h), (int)tm_int(ia), (int)tm_int(fa),
+                       (int)tm_int(ib), (int)tm_int(fb), tm_num(w));
   return VM_VOID();
 }
 
