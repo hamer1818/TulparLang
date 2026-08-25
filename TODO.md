@@ -64,9 +64,12 @@ Mimari kararlar ve gerekçeleri:
       CLI'dan dosya açmak gerekiyor.
 
 - [ ] **Editörde kalan Unity/Unreal parçaları.** Çoklu seçim, prefab/şablon,
-      tetikleyici bölge düzenleme, hiyerarşide sürükle-bırak sıralama.
+      tetikleyici bölge düzenleme, sağ tık bağlam menüsü, araç ipuçları
+      (tooltip), varlık arama/filtre, hiyerarşide sürükle-bırak sıralama.
       (Eksen tutamakları, dünya ayarları, varlık adı, konsol, kural
-      düzenleyici, panel kaydırma ✅ 2026-08-24.)
+      düzenleyici, panel kaydırma, arayüz ölçeği, standart kısayollar, F ile
+      çerçeveleme, hover vurgulama, kaydedilmemiş değişiklik uyarısı, yön
+      göstergesi ✅ 2026-08-24.)
 
 - [ ] **Tetikleyici bölgeler sahne biçiminde yok.** Şimdilik yükleme onları
       KORUYOR (silmek geri konulamaz bir kayıptı), ama bir sahne dosyası
