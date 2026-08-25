@@ -9,6 +9,18 @@
 // çalışan bir oyunun üstüne kaplama açmaktan farkı şudur: düzenleme birincil
 // iştir, oynatma onun bir aracı.
 //
+// Kısayollar (sektör standardı):
+//   SAĞ TUŞ basılı + WASD/QE   serbest uçuş, fare ile bakış
+//   Q / W / E / R              seç / taşı / döndür / ölçekle  (1-4 de olur)
+//   F                          seçiliyi çerçevele
+//   G                          ızgara aç/kapat
+//   DEL / CTRL+D               sil / çoğalt
+//   CTRL+Z / CTRL+Y            geri al / yinele
+//   CTRL+S (ya da F5)          kaydet
+//   BOŞLUK                     seçiliyi zemine oturt
+//   ESC                        oynarken: durdur
+// Harf tuşları yalnız SAĞ TUŞ BASILI DEĞİLKEN araç kısayolu; basılıyken uçuş.
+//
 // Yerleşim:
 //   menü şeridi            Yeni / Aç / Kaydet / Geri / İleri
 //   araç çubuğu            araçlar solda, OYNAT-DUR ORTADA, ızgara

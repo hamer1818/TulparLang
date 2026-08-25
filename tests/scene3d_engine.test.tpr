@@ -4792,6 +4792,103 @@ func t_ed_scroll_clamp() {
     assert_eq_int(_ed_clamp_scroll3(0, 100, 40, 100), 0);
 }
 
+// ===========================================================================
+//  EDİTÖR UX — yön göstergesi, çerçeveleme, kaydedilmemiş değişiklik
+// ===========================================================================
+
+// Yön göstergesinin izdüşümü. Beklentiler GEOMETRİDEN: yaw 0 / pitch 0'da
+// kamera -Z'ye bakar, yani dünya +X sağa, +Y yukarı gider ve +Z ekrana
+// dik olduğu için bir noktaya çöker.
+func t_ux_axis_projection() {
+    _ed_yaw3 = 0.0; _ed_pitch3 = 0.0;
+    _ed_axis_screen3(1.0, 0.0, 0.0);
+    assert(abs_f3(_ed_axsx3 - 1.0) < 0.001, "X saga: " + toString(_ed_axsx3));
+    assert(abs_f3(_ed_axsy3) < 0.001, "X dikeyde durmali");
+    _ed_axis_screen3(0.0, 1.0, 0.0);
+    assert(abs_f3(_ed_axsx3) < 0.001, "Y yatayda durmali");
+    // Ekran Y'si AŞAĞI büyüyor: yukarı = negatif.
+    assert(_ed_axsy3 < 0.0 - 0.99, "Y yukari: " + toString(_ed_axsy3));
+    _ed_axis_screen3(0.0, 0.0, 1.0);
+    assert(abs_f3(_ed_axsx3) < 0.001 && abs_f3(_ed_axsy3) < 0.001,
+           "Z ekrana dik, noktaya cokmeli");
+
+    // 90 derece dönünce kamera +X'e bakar; artık +Z sağa gider.
+    _ed_yaw3 = 90.0; _ed_pitch3 = 0.0;
+    _ed_axis_screen3(0.0, 0.0, 1.0);
+    assert(abs_f3(_ed_axsx3 - 1.0) < 0.001, "yaw 90'da Z saga: " + toString(_ed_axsx3));
+    _ed_axis_screen3(1.0, 0.0, 0.0);
+    assert(abs_f3(_ed_axsx3) < 0.001, "yaw 90'da X ekrana dik");
+
+    // Tepeden bakınca (pitch -90) baktığın yön ekranda YUKARI olur, yani
+    // +Z aşağı düşer.
+    _ed_yaw3 = 0.0; _ed_pitch3 = 0.0 - 90.0;
+    _ed_axis_screen3(0.0, 0.0, 1.0);
+    assert(_ed_axsy3 > 0.99, "tepeden bakista Z asagi: " + toString(_ed_axsy3));
+    _ed_yaw3 = 0.0; _ed_pitch3 = 0.0;
+}
+
+// F ile çerçeveleme: kamera cismi ÖNÜNE almalı ve mesafe cismin BOYUTUNDAN
+// türemeli — sabit mesafe küçüğü görünmez, büyüğü kadraj dışı bırakırdı.
+func t_ux_frame_selected() {
+    scene3d_reset();
+    no_ground3d();
+    int kucuk = spawn3(30.0, 2.0, 0.0 - 40.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    _ed_yaw3 = 25.0; _ed_pitch3 = 0.0 - 20.0;
+    _ed_cx3 = 0.0; _ed_cy3 = 0.0; _ed_cz3 = 0.0;
+    ed_frame3d(kucuk);
+    // Cisim kameranın ÖNÜNDE olmalı: bakış yönü ile cisme olan yön aynı.
+    float yr = _ed_yaw3 * DEG2RAD3;
+    float pr = _ed_pitch3 * DEG2RAD3;
+    float cp = cos(pr);
+    float fx = sin(yr) * cp;
+    float fy = sin(pr);
+    float fz = 0.0 - cos(yr) * cp;
+    float dx = 30.0 - _ed_cx3;
+    float dy = 2.0 - _ed_cy3;
+    float dz = (0.0 - 40.0) - _ed_cz3;
+    float L = sqrt(dx * dx + dy * dy + dz * dz);
+    float dot = (dx / L) * fx + (dy / L) * fy + (dz / L) * fz;
+    assert(dot > 0.999, "cisim kameranin onunde olmali, dot=" + toString(dot));
+    float d1 = L;
+
+    // BÜYÜK cisim daha uzaktan çerçevelenmeli.
+    int buyuk = spawn3(30.0, 2.0, 0.0 - 40.0, 12.0, 8.0, 12.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    ed_frame3d(buyuk);
+    float ex = 30.0 - _ed_cx3;
+    float ey = 2.0 - _ed_cy3;
+    float ez = (0.0 - 40.0) - _ed_cz3;
+    float d2 = sqrt(ex * ex + ey * ey + ez * ez);
+    assert(d2 > d1 * 1.8, "buyuk cisim daha uzaktan: " + toString(d1) + " -> " + toString(d2));
+
+    // Bakış AÇISI korunmalı — kullanıcının kurduğu görüşü bozmak sürpriz olurdu.
+    assert(abs_f3(_ed_yaw3 - 25.0) < 0.001, "yaw korunmali");
+    assert(abs_f3(_ed_pitch3 + 20.0) < 0.001, "pitch korunmali");
+    _ed_yaw3 = 0.0; _ed_pitch3 = 0.0;
+}
+
+// Kaydedilmemiş değişiklik bayrağı: düzenleme kirletir, kaydetme temizler,
+// yeni sahne yüklemek temizler. "Kaydettim sanmak" editörde en sinsi kayıp.
+func t_ux_dirty_flag_lifecycle() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    _sc_reg3("k", a);
+    scene_load3d(scene_json3d());        // yükleme temiz sayılır
+    assert_eq_int(_ed_dirty3, 0);
+    ed_mark3d();                          // bir düzenleme jesti
+    assert_eq_int(_ed_dirty3, 1);
+    editor_dosya3d("/tmp/tulpar_dirty_test.json");
+    assert(editor_kaydet3d(), "kaydedilmeli");
+    assert_eq_int(_ed_dirty3, 0);
+    ed_mark3d();
+    assert_eq_int(_ed_dirty3, 1);
+    scene_file3d("/tmp/tulpar_dirty_test.json");
+    assert_eq_int(_ed_dirty3, 0);
+}
+
+test("yon gostergesi izdusumu", "t_ux_axis_projection");
+test("F ile cerceveleme", "t_ux_frame_selected");
+test("kaydedilmemis degisiklik bayragi", "t_ux_dirty_flag_lifecycle");
 test("eylem dongusu tumunu geziyor", "t_ed_action_cycle_covers_all");
 test("kurallar gidis-donusten sag cikiyor", "t_ed_rules_survive_roundtrip");
 test("kaydirma siniri", "t_ed_scroll_clamp");

@@ -42,6 +42,34 @@ kodu koşturuyor. KOD VERİYİ EZER: davranışlar `update()`ten önce işliyor.
 `examples/scene3d_data_game.tpr` + `examples/scenes/toplayici.scene.json`: tek
 satır oynanış kodu içermeyen, oynanabilir bir oyun.
 
+### Changed — editör UX'i sektör standardına çekildi
+
+**Kısayollar.** WASD/QE artık yalnız SAĞ TUŞ BASILIYKEN uçuruyor — Unity,
+Unreal ve Godot'ta ayrım tam budur. Sürekli uçuş harf tuşlarını rehin
+alıyordu: W aynı anda "ileri uç" demek olduğu için standart araç kısayolları
+imkânsızdı. Artık Q/W/E/R seç/taşı/döndür/ölçekle (1-4 de duruyor),
+CTRL+S kaydet, CTRL+Z/Y geri/ileri, G ızgara, DEL/CTRL+D sil/çoğalt.
+
+**F ile çerçeveleme.** Editörlerin en çok kullanılan tuşlarından biriydi ve
+yoktu: uzaktaki bir varlığı seçtikten sonra oraya elle uçmak gerekiyordu.
+Mesafe cismin BOYUTUNDAN türüyor (sabit mesafe küçüğü görünmez, büyüğü kadraj
+dışı bırakırdı) ve kullanıcının kurduğu bakış AÇISI korunuyor.
+
+**Üzerine gelince vurgulama.** İmlecin altındaki varlık soluk bir çerçeveyle
+gösteriliyor; tıklamadan önce neyi seçeceğini bilmek her editörde var ve
+yokluğu "tıkladım ama yanlış şey seçildi" hissi veriyordu.
+
+**Kaydedilmemiş değişiklik.** Menü şeridinde dosya adının önünde yıldız.
+Editörde en sinsi kayıp "kaydettim sanmak"tı. Ayrıca "Yeni" artık yıkıcı
+olduğunu biliyor: kaydedilmemiş sahnede düğme kendisi "EMIN MISIN?"e
+dönüşüyor (modal pencere makinesi kurmadan ikinci bir karar noktası).
+
+**Yön göstergesi.** Sahne görünümünün köşesinde X/Y/Z okları. Serbest uçan
+bir kamerada "hangi yöne bakıyorum?" sürekli sorulan soru. İzdüşüm
+ortografik — gösterge yönü anlatıyor, konumu değil.
+
+**Durum çubuğu** seçili varlığın adını ve konumunu gösteriyor.
+
 ### Changed — arayüz ölçeklenebilir oldu (varsayılan 2x)
 
 Arayüz elemanları çok küçüktü. Yazı tipi yalnız 10/20/30 puntoda net olduğu

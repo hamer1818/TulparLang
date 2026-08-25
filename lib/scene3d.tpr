@@ -4698,6 +4698,7 @@ func scene_load3d(src): int {
     }
     _sc_clear_for_load3();
     _sc_world_defaults3();
+    _ed_dirty3 = 0;   // yeni yüklenen sahne "değişmemiş" sayılır
     if (_sc_has3(sc, "world")) { _sc_load_world3(sc["world"]); }
     int n = 0;
     if (_sc_has3(sc, "entities")) {
@@ -5655,6 +5656,7 @@ func _ed_trim3(a): array {
 }
 
 func ed_mark3d() {
+    _ed_dirty3 = 1;
     push(_ed_undo3, scene_json3d());
     if (length(_ed_undo3) > _ED_UNDO_MAX3) { _ed_undo3 = _ed_trim3(_ed_undo3); }
     _ed_redo3 = [];   // yeni bir dal açıldı
@@ -5676,6 +5678,12 @@ func ed_redo3d(): bool {
 }
 func ed_undo_count3d(): int { return length(_ed_undo3); }
 func ed_redo_count3d(): int { return length(_ed_redo3); }
+
+int _ed_hover3 = 0 - 1;   // imlecin altındaki varlık (vurgulama)
+// Kaydedilmemiş değişiklik. Editörde en sinsi UX hatası "kaydettim sanmak";
+// her editör bunu başlıkta bir yıldızla söyler.
+int _ed_dirty3 = 0;
+float _ed_confirm3 = 0.0; // yıkıcı eylemde onay penceresi (sn)
 
 int _ed_drag3 = 0;        // seçili varlık sürükleniyor mu
 float _ed_dgy3 = 0.0;     // sürükleme düzleminin yüksekliği (yakalandığı an)
@@ -5730,6 +5738,15 @@ func _s3_editor_fly(dt) {
     // sabit bir değer döndürüyor, yani hem burası hem hiyerarşi listesi aynı
     // karede okuyordu: listeyi kaydırmak aynı anda kamerayı da ileri sürüyordu.
     if (_ed_over_ui3()) { return; }
+    // WASD/QE yalnız SAĞ TUŞ BASILIYKEN uçuruyor — Unity, Unreal ve Godot'ta
+    // da böyle. Sürekli uçuş harf tuşlarını rehin alıyordu: W/E/R gibi standart
+    // araç kısayolları imkânsızdı, çünkü W aynı anda "ileri uç" demekti.
+    // Tekerlek serbest kalıyor (yakınlaş/uzaklaş her editörde sağ tuşsuz çalışır).
+    if (mouse_down(1) == false) {
+        float wh0 = mouse_wheel();
+        if (abs_f3(wh0) > 0.01) { _ed_zoom3(wh0); }
+        return;
+    }
     float yr = _ed_yaw3 * DEG2RAD3;
     float fx = sin(yr);
     float fz = 0.0 - cos(yr);
@@ -5750,14 +5767,41 @@ func _s3_editor_fly(dt) {
     _ed_cy3 = _ed_cy3 + my * sp * dt;
     _ed_cz3 = _ed_cz3 + mz * sp * dt;
     float wh = mouse_wheel();
-    if (abs_f3(wh) > 0.01) {
-        float pr = _ed_pitch3 * DEG2RAD3;
-        float cp = cos(pr);
-        _ed_cx3 = _ed_cx3 + sin(yr) * cp * wh * 2.0;
-        _ed_cy3 = _ed_cy3 + sin(pr) * wh * 2.0;
-        _ed_cz3 = _ed_cz3 - cos(yr) * cp * wh * 2.0;
-    }
+    if (abs_f3(wh) > 0.01) { _ed_zoom3(wh); }
 }
+
+// Bakış yönünde yaklaş/uzaklaş.
+func _ed_zoom3(amount) {
+    float yr = _ed_yaw3 * DEG2RAD3;
+    float pr = _ed_pitch3 * DEG2RAD3;
+    float cp = cos(pr);
+    _ed_cx3 = _ed_cx3 + sin(yr) * cp * amount * 2.0;
+    _ed_cy3 = _ed_cy3 + sin(pr) * amount * 2.0;
+    _ed_cz3 = _ed_cz3 - cos(yr) * cp * amount * 2.0;
+}
+
+// Seçili varlığı çerçevele (F). Her editörde en çok kullanılan tuşlardan biri
+// ve yoktu: uzaktaki bir varlığı seçtikten sonra oraya elle uçmak gerekiyordu.
+// Mesafe cismin BOYUTUNDAN türüyor — sabit mesafe, küçük cismi görünmez,
+// büyüğünü kadraj dışı bırakırdı.
+func ed_frame3d(id) {
+    int s = _slot_of3(id);
+    if (s < 0) { return; }
+    Ent3 e = _e3[s];
+    float big = e.sx;
+    if (e.sy > big) { big = e.sy; }
+    if (e.sz > big) { big = e.sz; }
+    float d = big * 2.6 + 4.0;
+    float yr = _ed_yaw3 * DEG2RAD3;
+    float pr = _ed_pitch3 * DEG2RAD3;
+    float cp = cos(pr);
+    // Kamerayı mevcut BAKIŞ AÇISINI koruyarak cismin önüne koy: açıyı da
+    // sıfırlamak kullanıcının kurduğu görüşü mantıksız yere bozardı.
+    _ed_cx3 = e.x - sin(yr) * cp * d;
+    _ed_cy3 = e.y - sin(pr) * d;
+    _ed_cz3 = e.z + cos(yr) * cp * d;
+}
+func cerceveleye3d(id) { ed_frame3d(id); }
 
 // Ekran noktasından seç.
 // Seçim ışını GÖRÜNÜM dikdörtgenine göre kuruluyor: sahne artık pencerenin
@@ -5821,6 +5865,13 @@ func _s3_editor_mouse(dt) {
 
     if (mouse_down(0) == false) { _ed_drag3 = 0; _gz_axis3 = 0 - 1; }
 
+    // Üzerine gelince vurgulama: tıklamadan ÖNCE neyi seçeceğini göstermek
+    // her editörde var ve yokluğu "tıkladım ama yanlış şey seçildi" hissi
+    // veriyor. Kare başına bir ışın taraması — seçim taramasının aynısı.
+    if (_ed_drag3 == 0 && _gz_axis3 < 0) {
+        _ed_hover3 = ed_pick_at3d(mouse_x(), mouse_y());
+    } else { _ed_hover3 = 0 - 1; }
+
     // Eksen sürüklemesi. Referans doğru YAKALANDIĞI andaki konumda sabit —
     // varlıkla birlikte kaysaydı hareket kendini besleyip kaçardı.
     if (_gz_axis3 >= 0 && s >= 0) {
@@ -5871,17 +5922,31 @@ func editor_save3d(): bool {
         return false;
     }
     bool ok = scene_save3d(_ed_path3);
-    if (ok) { _ed_msg3 = "kaydedildi: " + _ed_path3; }
+    if (ok) { _ed_msg3 = "kaydedildi: " + _ed_path3; _ed_dirty3 = 0; }
     else { _ed_msg3 = "KAYDEDILEMEDI: " + _ed_path3; }
     _ed_msg_t3 = 3.0;
     return ok;
 }
 func editor_kaydet3d(): bool { return editor_save3d(); }
 
-int K_Z = 90; int K_Y = 89;
+int K_Z = 90; int K_Y = 89; int K_F = 70;
 
 func _s3_editor_keys() {
-    if (key_pressed(K_F5)) { editor_save3d(); }
+    // SAĞ TUŞ basılıyken harfler UÇUŞ tuşu (WASD/QE); araç kısayolları o
+    // sırada çalışmamalı. Unity, Unreal ve Godot'ta da ayrım tam budur.
+    if (mouse_down(1)) { return; }
+
+    // Araç kısayolları Unity düzeninde: Q seç, W taşı, E döndür, R ölçekle.
+    // 1-4 de duruyor (eski alışkanlık ve rakam tuşları her editörde çalışır).
+    if (key_pressed(K_Q) || key_pressed(K_1)) { _ed_mode3 = ED_SELECT; }
+    if (key_pressed(K_W) || key_pressed(K_2)) { _ed_mode3 = ED_MOVE; }
+    if (key_pressed(K_E) || key_pressed(K_4)) { _ed_mode3 = ED_ROTATE; }
+    if (key_pressed(K_R) || key_pressed(K_3)) { _ed_mode3 = ED_SCALE; }
+    if (key_pressed(K_G)) {
+        if (_ed_grid3 > 0.0) { _ed_grid3 = 0.0; } else { _ed_grid3 = 0.5; }
+    }
+    if (key_down(K_LCTRL) && key_pressed(K_S)) { editor_save3d(); return; }
+    if (key_pressed(K_F5)) { editor_save3d(); return; }
     if (key_down(K_LCTRL) && key_pressed(K_Z)) {
         if (ed_undo3d()) { _ed_msg3 = "geri alindi"; _ed_msg_t3 = 1.2; }
         return;
@@ -5890,15 +5955,11 @@ func _s3_editor_keys() {
         if (ed_redo3d()) { _ed_msg3 = "yinelendi"; _ed_msg_t3 = 1.2; }
         return;
     }
-    if (key_pressed(K_1)) { _ed_mode3 = ED_SELECT; }
-    if (key_pressed(K_2)) { _ed_mode3 = ED_MOVE; }
-    if (key_pressed(K_3)) { _ed_mode3 = ED_SCALE; }
-    if (key_pressed(K_4)) { _ed_mode3 = ED_ROTATE; }
-    if (key_pressed(K_G)) {
-        if (_ed_grid3 > 0.0) { _ed_grid3 = 0.0; } else { _ed_grid3 = 0.5; }
-    }
+
     int sel = _ed_sel3e;
     if (_slot_of3(sel) < 0) { return; }
+    // F: seçiliyi çerçevele. Editörlerde en çok kullanılan tuşlardan biri.
+    if (key_pressed(K_F)) { ed_frame3d(sel); return; }
     float g = 0.5;
     if (_ed_grid3 > 0.0) { g = _ed_grid3; }
     if (key_pressed(K_DEL)) { ed_mark3d(); ed_delete3d(sel); return; }
@@ -5913,18 +5974,19 @@ func _s3_editor_keys() {
         if (key_pressed(K_LEFT))  { ed_resize3d(sel, e.sx - g, e.sy, e.sz - g); }
     }
     if (_ed_mode3 == ED_ROTATE) {
-        if (key_pressed(K_LEFT))  { ed_rotate3d(sel, get3yaw(sel) - 15.0); }
-        if (key_pressed(K_RIGHT)) { ed_rotate3d(sel, get3yaw(sel) + 15.0); }
+        if (key_pressed(K_LEFT))  { ed_mark3d(); ed_rotate3d(sel, get3yaw(sel) - 15.0); }
+        if (key_pressed(K_RIGHT)) { ed_mark3d(); ed_rotate3d(sel, get3yaw(sel) + 15.0); }
     }
     if (_ed_mode3 == ED_MOVE) {
-        if (key_pressed(K_UP))    { ed_nudge3d(sel, 0.0, g, 0.0); }
-        if (key_pressed(K_DOWN))  { ed_nudge3d(sel, 0.0, 0.0 - g, 0.0); }
+        if (key_pressed(K_UP))    { ed_mark3d(); ed_nudge3d(sel, 0.0, g, 0.0); }
+        if (key_pressed(K_DOWN))  { ed_mark3d(); ed_nudge3d(sel, 0.0, 0.0 - g, 0.0); }
     }
     if (key_pressed(K_SPACE)) { ed_mark3d(); ed_drop3d(sel); }
 }
 
 func _s3_editor(dt) {
     if (_ed_msg_t3 > 0.0) { _ed_msg_t3 = _ed_msg_t3 - dt; }
+    if (_ed_confirm3 > 0.0) { _ed_confirm3 = _ed_confirm3 - dt; }
     _s3_editor_look(dt);
     // Bir sayı alanına YAZILIYORSA klavye oraya ait: "duvar genişliği 3" yazmak
     // kamerayı uçurmamalı, "d" harfi de varlığı çoğaltmamalı.
@@ -5940,6 +6002,15 @@ func _s3_editor(dt) {
 func _s3_editor_draw() {
     if (_ed_grid3 > 0.0) { grid(60, _ed_grid3 * 4.0); }
     else { grid(60, 2.0); }
+    // Üzerine gelinen varlık soluk bir çerçeveyle: tıklamadan önce neyi
+    // seçeceğini göstermek. Seçili olanla aynıysa çizilmiyor (seçim zaten
+    // parlak çerçeveli).
+    int hs = _slot_of3(_ed_hover3);
+    if (hs >= 0 && _ed_hover3 != _ed_sel3e) {
+        Ent3 he = _e3[hs];
+        cube_wires(he.x, he.y, he.z, he.sx + 0.04, he.sy + 0.04, he.sz + 0.04,
+                   rgb(150, 170, 200));
+    }
     int s = _slot_of3(_ed_sel3e);
     if (s < 0) { return; }
     Ent3 e = _e3[s];
@@ -6376,29 +6447,41 @@ func _ed_menubar3() {
     rect(0, 0, W, _ED_MENU_H3, rgb(30, 33, 40));
     line(0, _ED_MENU_H3, W, _ED_MENU_H3, _G_LINE3());
     int x = _ED_PAD3;
-    int bh = _ED_MENU_H3 - 4;
-    int w0 = _g_btnw3("Yeni");
-    if (_g_button(9600, x, 2, w0, bh, "Yeni")) {
-        ed_mark3d();
-        scene_load3d("{\"v\":1,\"world\":{\"ground\":0},\"entities\":[]}");
+    int bh = _ED_MENU_H3 - _us3(4);
+    // "Yeni" YIKICI: kaydedilmemiş sahneyi tek tıkla siler. Kipsiz onay —
+    // düğme kendisi soruya dönüşüyor. Modal pencere makinesi kurmadan
+    // kullanıcıya ikinci bir karar noktası veriyor.
+    str nlbl = "Yeni";
+    if (_ed_confirm3 > 0.0) { nlbl = "EMIN MISIN?"; }
+    int w0 = _g_btnw3(nlbl);
+    if (_g_button(9600, x, _us3(2), w0, bh, nlbl)) {
+        if (_ed_confirm3 > 0.0 || _ed_dirty3 == 0) {
+            ed_mark3d();
+            scene_load3d("{\"v\":1,\"world\":{\"ground\":0},\"entities\":[]}");
+            _ed_confirm3 = 0.0;
+        } else {
+            _ed_confirm3 = 4.0;
+        }
     }
     x = x + w0 + 2;
     int w1 = _g_btnw3("Ac");
-    if (_g_button(9601, x, 2, w1, bh, "Ac")) {
+    if (_g_button(9601, x, _us3(2), w1, bh, "Ac")) {
         if (_ed_path3 != "") { scene_file3d(_ed_path3); _ed_capture3(); }
     }
     x = x + w1 + 2;
     int w2 = _g_btnw3("Kaydet");
-    if (_g_button(9602, x, 2, w2, bh, "Kaydet")) { editor_save3d(); }
+    if (_g_button(9602, x, _us3(2), w2, bh, "Kaydet")) { editor_save3d(); }
     x = x + w2 + 12;
     int w3 = _g_btnw3("Geri");
-    if (_g_button(9603, x, 2, w3, bh, "Geri")) { ed_undo3d(); }
+    if (_g_button(9603, x, _us3(2), w3, bh, "Geri")) { ed_undo3d(); }
     x = x + w3 + 2;
     int w4 = _g_btnw3("Ileri");
-    if (_g_button(9604, x, 2, w4, bh, "Ileri")) { ed_redo3d(); }
+    if (_g_button(9604, x, _us3(2), w4, bh, "Ileri")) { ed_redo3d(); }
     // Sağda dosya adı.
     str f = _ed_path3;
     if (f == "") { f = "(kaydedilmemis sahne)"; }
+    // Yıldız = kaydedilmemiş değişiklik. Her editörde standart.
+    if (_ed_dirty3 == 1) { f = "* " + f; }
     int fw = text_width(f, _F3);
     if (W - _ED_PAD3 - fw > x + w4 + 12) {
         _g_txtr3(f, W - _ED_PAD3, 5, _G_DIM3());
@@ -6518,9 +6601,19 @@ func _ed_statusbar3() {
                toString(davranis_sayisi3d()) + " davranis   " +
                toString(kural_sayisi3d()) + " kural";
     if (_ed_playing3 == 1) { left = "OYNUYOR   " + left; }
+    else {
+        int ss = _slot_of3(_ed_sel3e);
+        if (ss >= 0) {
+            Ent3 se = _e3[ss];
+            str sn = _sc_nm_of3(_ed_sel3e);
+            if (sn == "") { sn = _sc_tag_nm3(se.tag); }
+            left = sn + "  (" + _sc_num3(se.x) + ", " + _sc_num3(se.y) + ", " +
+                   _sc_num3(se.z) + ")   " + left;
+        }
+    }
     _g_txt3(left, _ED_PAD3, sy + 4, toInt(W / 2), _G_DIM3());
     str right = "gorunum " + toString(_ed_view_w3()) + "x" + toString(_ed_view_h3()) +
-                " | rt " + toString(_ed_rt3) + " | sag tus bak | CTRL+Z geri | F5 kaydet";
+                " | rt " + toString(_ed_rt3) + " | SAG TUS+WASD uc | Q/W/E/R arac | F cercevele | CTRL+Z geri | CTRL+S kaydet";
     if (_ed_playing3 == 1) { right = "OYNUYOR — ESC durdurur"; }
     if (_ed_msg_t3 > 0.0) { right = _ed_msg3; }
     int rw = text_width(right, _F3);
@@ -6528,6 +6621,55 @@ func _ed_statusbar3() {
         int c = _G_DIM3();
         if (_ed_msg_t3 > 0.0) { c = rgb(140, 240, 160); }
         _g_txtr3(right, W - _ED_PAD3, sy + 4, c);
+    }
+}
+
+// ---- Yön göstergesi --------------------------------------------------------
+// Sahne görünümünün köşesinde X/Y/Z okları. Serbest uçan bir kamerada "hangi
+// yöne bakıyorum?" sorusu sürekli soruluyor; üç editörde de bu gösterge var.
+//
+// İzdüşüm ORTOGRAFİK: dünya vektörünün kamera sağ/yukarı vektörlerine
+// izdüşümü. Perspektif kullanmak gerekmiyor — gösterge yönü anlatıyor, konumu
+// değil — ve perspektif kameranın arkasındaki eksenleri ters çevirirdi.
+float _ed_axsx3 = 0.0;
+float _ed_axsy3 = 0.0;
+
+func _ed_axis_screen3(vx, vy, vz) {
+    float yr = _ed_yaw3 * DEG2RAD3;
+    float pr = _ed_pitch3 * DEG2RAD3;
+    float sp = sin(pr);
+    // Taban `_ed_ray3` ile AYNI: sağ = (cos y, 0, sin y),
+    // yukarı = (-sin y·sin p, cos p, cos y·sin p).
+    float rx = cos(yr);
+    float rz = sin(yr);
+    float ux = 0.0 - sin(yr) * sp;
+    float uy = cos(pr);
+    float uz = cos(yr) * sp;
+    _ed_axsx3 = vx * rx + vz * rz;
+    // Ekran Y'si aşağı büyüyor.
+    _ed_axsy3 = 0.0 - (vx * ux + vy * uy + vz * uz);
+}
+
+func _ed_axis_widget3() {
+    int r = _us3(26);
+    int cx = _ed_view_x3() + _ed_view_w3() - r - _us3(12);
+    int cy = _ed_view_y3() + r + _us3(12);
+    circle(cx, cy, r * 1.0 + _us3(3), rgba(18, 21, 28, 170));
+    _ed_axis_one3(cx, cy, r, 1.0, 0.0, 0.0, rgb(232, 84, 74), "X");
+    _ed_axis_one3(cx, cy, r, 0.0, 1.0, 0.0, rgb(112, 214, 112), "Y");
+    _ed_axis_one3(cx, cy, r, 0.0, 0.0, 1.0, rgb(96, 150, 246), "Z");
+}
+
+func _ed_axis_one3(cx, cy, r, vx, vy, vz, col, lbl) {
+    _ed_axis_screen3(vx, vy, vz);
+    int ex = cx + toInt(_ed_axsx3 * r);
+    int ey = cy + toInt(_ed_axsy3 * r);
+    line(cx, cy, ex, ey, col);
+    // Etiket yalnız eksen ekrana yeterince yansıyorsa — kameraya doğru bakan
+    // bir eksen bir noktaya çöker ve harf merkeze yığılırdı.
+    float m = sqrt(_ed_axsx3 * _ed_axsx3 + _ed_axsy3 * _ed_axsy3);
+    if (m > 0.35) {
+        text(lbl, ex - toInt(_F3 / 4), ey - toInt(_F3 / 2), _F3, col);
     }
 }
 
@@ -6546,6 +6688,7 @@ func _ed_chrome3() {
     int vw = _ed_view_w3();
     int vh = _ed_view_h3();
     rect_lines(vx - 1, vy - 1, vw + 2, vh + 2, _G_LINE3());
+    if (_ed_playing3 == 0) { _ed_axis_widget3(); }
     // Görünüm neden boşsa ONU SÖYLE. Sessiz boş bir panel, kullanıcıyı
     // "editör bozuk" sanmaya götürüyor; sebebi ekranda yazmak gerekiyor.
     if (_ed_rt3 < 0) {
