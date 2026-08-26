@@ -6632,6 +6632,177 @@ func t_ed_level_delete_refuses_last() {
 }
 
 
+// ---------------------------------------------------------------------------
+// OYUN ŞABLONLARI. Boş başlangıç problemi: editörün en çok görülen ilk ekranı
+// bomboştu. Şablonun iddiası "birkaç cisim koydum" değil, "OYNANABİLİR bir
+// oyun kurdum" — testler o iddiayı ölçüyor.
+//
+// En sinsi hata sınıfı burada: kuralı OLAN ama o etikette hiç varlık
+// BULUNMAYAN bir sahne. Böyle bir kural hiç ateşlenmez ya da (kazanma
+// kuralıysa) oyun ANINDA kazanılmış sayılır — ve hiçbir hata çıkmaz.
+// ---------------------------------------------------------------------------
+
+func _tpl_tag_say(t): int {
+    int c = 0;
+    int i = 0;
+    while (i < length(_e3)) {
+        Ent3 e = _e3[i];
+        if (e.alive == 1 && e.tag == t) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+
+func _tpl_win_var(): bool {
+    int i = 0;
+    while (i < length(_rl3)) {
+        Rule3 r = _rl3[i];
+        if (r.act == ACT_WIN) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+// Bir etiket "sahnede karşılığı var mı?" — MERMİ özel: sahneye konmaz,
+// ateş davranışından ÇALIŞMA ZAMANINDA doğar. Bu testi yazarken çıktı:
+// arena şablonu mermi-düşman kuralı içeriyor ve ilk hâli "sahnede mermi yok"
+// diye kırmızıya döndü. Doğru soru "mermi var mı?" değil, "mermi ÜRETEN bir
+// şey var mı?" — yani ateş davranışı. Böylece ateş davranışı olmadan konmuş
+// bir mermi kuralı (hiç ateşlenmeyecek olan) hâlâ yakalanıyor.
+func _tpl_tag_saglanir(t): bool {
+    if (t == TAG_BULLET) {
+        int b = 0;
+        while (b < length(_bh3)) {
+            Bh3 bh = _bh3[b];
+            if (bh.kind == BH_SHOOT) { return true; }
+            b = b + 1;
+        }
+        return false;
+    }
+    return _tpl_tag_say(t) > 0;
+}
+
+// Kuralların dokunduğu HER etiketin sahnede bir karşılığı olmalı.
+func _tpl_kural_etiketleri_dolu(): bool {
+    int i = 0;
+    while (i < length(_rl3)) {
+        Rule3 r = _rl3[i];
+        if (r.kind == RULE_HIT) {
+            if (!_tpl_tag_saglanir(r.a)) { return false; }
+            if (!_tpl_tag_saglanir(r.b)) { return false; }
+        }
+        if (r.kind == RULE_CLEARED) {
+            // "Şu etiket bitince" kuralı: o etiketten HİÇ yoksa oyun daha
+            // başlamadan kazanılmış olur. Burada mermi muafiyeti YOK —
+            // "mermiler bitince kazandın" anlamsız bir kuraldır.
+            if (_tpl_tag_say(r.a) == 0) { return false; }
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+func _tpl_oynanabilir(ad) {
+    int p = bul3d("kahraman");
+    assert(alive3(p), ad + ": oyuncu yok");
+    assert(can_kac3d(p) > 0, ad + ": oyuncunun cani yok");
+    assert(length(_rl3) > 0, ad + ": hic kural yok");
+    assert(_tpl_win_var(), ad + ": KAZANMA sarti yok — oyun bitirilemez");
+    assert(_tpl_kural_etiketleri_dolu(),
+           ad + ": bir kural, sahnede HIC BULUNMAYAN bir etikete bakiyor");
+    assert(davranis_sayisi3d() > 0, ad + ": hic davranis yok");
+}
+
+func t_tpl_all_are_playable() {
+    scene3d_reset();
+    ed_template3d(TPL_TOPLAYICI);
+    _tpl_oynanabilir("toplayici");
+    assert(_tpl_tag_say(TAG_ITEM) >= 3, "toplayici: yeterli altin yok");
+
+    scene3d_reset();
+    ed_template3d(TPL_ARENA);
+    _tpl_oynanabilir("arena");
+    assert(_tpl_tag_say(TAG_ENEMY) >= 2, "arena: yeterli dusman yok");
+
+    scene3d_reset();
+    ed_template3d(TPL_PLATFORM);
+    _tpl_oynanabilir("platform");
+    assert(_tpl_tag_say(TAG_ITEM) >= 3, "platform: yeterli altin yok");
+}
+
+func t_tpl_collector_actually_scores() {
+    // YAPISAL denetim yetmez: kural bağlı görünüp de ateşlenmeyebilir.
+    // Oyuncuyu bir altının üstüne taşıyıp çarpışmayı sürüyoruz.
+    scene3d_reset();
+    ed_template3d(TPL_TOPLAYICI);
+    int p = bul3d("kahraman");
+    // İlk altını bul
+    int hedef = 0 - 1;
+    int i = 0;
+    while (i < length(_e3)) {
+        Ent3 e = _e3[i];
+        if (e.alive == 1 && e.tag == TAG_ITEM && hedef < 0) {
+            hedef = _mk_handle3(i);
+        }
+        i = i + 1;
+    }
+    assert(hedef >= 0, "altin bulunamadi");
+    int once = score3d();
+    set3pos(p, get3x(hedef), get3y(hedef), get3z(hedef));
+    _bp_build3();
+    _s3_collision();
+    assert(score3d() > once,
+           "altina degmek skoru artirmadi — kural bagli ama ATESLENMIYOR");
+}
+
+func t_tpl_arena_enemies_have_health() {
+    // Arena'nın kazanma şartı düşmanların TEMİZLENMESİ; canı olmayan düşman
+    // vurulamaz ve oyun asla bitmez.
+    scene3d_reset();
+    ed_template3d(TPL_ARENA);
+    int i = 0;
+    int canli = 0;
+    while (i < length(_e3)) {
+        Ent3 e = _e3[i];
+        if (e.alive == 1 && e.tag == TAG_ENEMY) {
+            assert(e.hpmax > 0, "arena dusmaninin cani yok — vurulamaz");
+            canli = canli + 1;
+        }
+        i = i + 1;
+    }
+    assert(canli >= 2, "arena'da dusman yok");
+}
+
+func t_tpl_undo_restores_previous_scene() {
+    // Şablon YIKICI ama onay sormuyor; güvenlik ağı geri-al. Çalışmazsa
+    // kullanıcı sahnesini geri alınamaz şekilde kaybeder.
+    scene3d_reset();
+    no_ground3d();
+    spawn3(3.0, 1.0, 4.0, 1.0, 1.0, 1.0, BLUE, SHAPE_CUBE, TAG_PROP);
+    int onceki = yasayan_sayi3d();
+    assert_eq_int(onceki, 1);
+    ed_template3d(TPL_TOPLAYICI);
+    assert(yasayan_sayi3d() > onceki, "sablon sahneyi kurmadi");
+    assert(ed_undo3d(), "geri al basarisiz");
+    assert_eq_int(yasayan_sayi3d(), onceki);
+}
+
+func t_tpl_survives_roundtrip() {
+    // Şablonun anlamı "sonra kaydedeceksin". Gidiş-dönüşte varlık, kural ve
+    // davranış sayıları korunmalı.
+    scene3d_reset();
+    ed_template3d(TPL_ARENA);
+    int v = yasayan_sayi3d();
+    int k = kural_sayisi3d();
+    int d = davranis_sayisi3d();
+    scene_load3d(scene_json3d());
+    assert_eq_int(yasayan_sayi3d(), v);
+    assert_eq_int(kural_sayisi3d(), k);
+    assert_eq_int(davranis_sayisi3d(), d);
+    _tpl_oynanabilir("arena (gidis-donus sonrasi)");
+}
+
+
 test("satir yuksekligi fonttan buyuk", "t_ui_line_height_exceeds_font");
 test("dikey merkezleme", "t_ui_vertical_centering");
 test("dedektor metinleri goruyor", "t_ui_detector_sees_text");
@@ -6689,6 +6860,11 @@ test("bolum degisimi duzenlemeyi koruyor", "t_ed_level_switch_keeps_edits");
 test("+bolum tek bolumluyu cevirir", "t_ed_level_add_converts_single");
 test("bolum silme numaralari yeniler", "t_ed_level_delete_renumbers");
 test("son bolum silinemez", "t_ed_level_delete_refuses_last");
+test("sablonlarin hepsi oynanabilir", "t_tpl_all_are_playable");
+test("toplayici gercekten skor veriyor", "t_tpl_collector_actually_scores");
+test("arena dusmanlarinin cani var", "t_tpl_arena_enemies_have_health");
+test("sablon geri alinabiliyor", "t_tpl_undo_restores_previous_scene");
+test("sablon gidis-donusten sag cikiyor", "t_tpl_survives_roundtrip");
 test("izgara duvarlari isaretliyor", "t_nav_grid_marks_walls");
 test("pad duvari sisiriyor", "t_nav_pad_inflates_walls");
 test("izgarasiz duz kovalamaya duser", "t_nav_falls_back_without_grid");

@@ -6335,6 +6335,120 @@ func _s3_level_data3() {
     _sc_load_level3(_lvl_js3[idx]);
 }
 
+// ===========================================================================
+// OYUN ŞABLONLARI — boş başlangıç problemi
+// ===========================================================================
+// "Yeni sahne" bomboş bir dünya açıyordu. Editörün en çok görülen ilk ekranı
+// hiçbir şey içermiyor, üstelik inceleyicide "secili varlik yok" yazıyordu —
+// yani yeni gelen kişi, oyunun hangi parçalardan yapıldığını hiç görmeden
+// boşluğa bakıyordu.
+//
+// Şablon TAM OYNANABİLİR bir sahne kuruyor: oyuncu, zemin, duvarlar,
+// davranışlar, kurallar ve kazanma şartı. "Oynat"a basınca oyun ÇALIŞIYOR.
+// Öğrenme yolu da bu — çalışan bir şeyi kurcalamak, boş sayfayı doldurmaktan
+// çok daha kolay.
+//
+// Yıkıcı bir işlem (sahneyi değiştiriyor) ama ONAY SORULMUYOR: `ed_mark3d`
+// ile geri-al noktası bırakılıyor, yani CTRL+Z eski sahneyi geri getiriyor.
+// Editörün geri kalanı da kipsiz; bir modal pencere buraya yabancı olurdu.
+int TPL_TOPLAYICI = 0;
+int TPL_ARENA     = 1;
+int TPL_PLATFORM  = 2;
+
+func _tpl_duvarlar3(r) {
+    uret3(0.0, 1.5, 0.0 - r, r * 2.0 + 2.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    uret3(0.0, 1.5, r,       r * 2.0 + 2.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    uret3(0.0 - r, 1.5, 0.0, 1.0, 3.0, r * 2.0 + 2.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    uret3(r, 1.5, 0.0,       1.0, 3.0, r * 2.0 + 2.0, GRAY, SHAPE_CUBE, TAG_WALL);
+}
+
+// Her şablonun ortak açılışı: temiz sahne, dünya ayarları, oyuncu.
+func _tpl_base3(): int {
+    _sc_clear_for_load3();
+    _sc_world_defaults3();
+    zemin3(0.0);
+    gokyuzu3d(rgb(38, 52, 92), rgb(176, 198, 224));
+    sis3d(0.014);
+    yercekimi3(26.0);
+    int p = uret3(0.0, 1.0, 8.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    ad_ver3d(p, "kahraman");
+    can3d(p, 100);
+    hareket_davranis3d(p, 10.0, 12.0);
+    kamera_yorunge(p, 16.0, 11.0);
+    return p;
+}
+
+func ed_template3d(k) {
+    ed_mark3d();
+    if (k == TPL_ARENA) {
+        int p = _tpl_base3();
+        _tpl_duvarlar3(16.0);
+        // Sütunlar: siper. Nişancıda siper olmadan kaçacak yer kalmıyor.
+        uret3(7.0, 2.0, 7.0, 1.6, 4.0, 1.6, rgb(120, 200, 140), SHAPE_CYL, TAG_WALL);
+        uret3(0.0 - 7.0, 2.0, 0.0 - 7.0, 1.6, 4.0, 1.6, rgb(120, 200, 140), SHAPE_CYL, TAG_WALL);
+        // Oyuncu ateş eder; düşmanlar kovalar.
+        ates_davranis3d(p, 0.45, 26.0, 1.6, TAG_ENEMY, 40.0);
+        int i = 0;
+        while (i < 4) {
+            float ax = 10.0;
+            float az = 10.0;
+            if (i == 1) { ax = 0.0 - 10.0; }
+            if (i == 2) { az = 0.0 - 10.0; }
+            if (i == 3) { ax = 0.0 - 10.0; az = 0.0 - 10.0; }
+            int e = uret3(ax, 1.0, az, 1.3, 2.0, 1.3, rgb(230, 80, 80), SHAPE_CUBE, TAG_ENEMY);
+            can3d(e, 50);
+            kovala_davranis3d(e, TAG_PLAYER, 4.2, 40.0);
+            i = i + 1;
+        }
+        carpisma_kurali3d(TAG_BULLET, TAG_ENEMY, ACT_HURT, 25);
+        carpisma_kurali3d(TAG_ENEMY, TAG_PLAYER, ACT_DAMAGE, 12);
+        bitince_kurali3d(TAG_ENEMY, ACT_WIN);
+        kayit3d("sablon: ARENA — dusmanlari temizle");
+        return;
+    }
+    if (k == TPL_PLATFORM) {
+        int p = _tpl_base3();
+        // Zemin ÖLDÜRÜCÜ değil (motorda düşme ölümü yok); platformlar
+        // yükseklik veriyor ve altınlar tepelerinde.
+        _tpl_duvarlar3(14.0);
+        float px2 = 0.0 - 8.0;
+        int i = 0;
+        while (i < 4) {
+            float ph = 2.0 + i * 1.6;
+            int pl = uret3(px2, ph, 0.0 - i * 4.0, 4.0, 0.6, 3.0,
+                           rgb(140, 150, 190), SHAPE_CUBE, TAG_WALL);
+            // Bir platform salınsın: zıplamayı zamanlamak gerekiyor.
+            if (i == 2) { salin_davranis3d(pl, 1.2, 0.8); }
+            uret3(px2, ph + 1.2, 0.0 - i * 4.0, 1.0, 1.0, 1.0, GOLD,
+                  SHAPE_SPHERE, TAG_ITEM);
+            px2 = px2 + 5.5;
+            i = i + 1;
+        }
+        carpisma_kurali3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 10);
+        bitince_kurali3d(TAG_ITEM, ACT_WIN);
+        kayit3d("sablon: PLATFORM — altinlari topla, ziplamayi zamanla");
+        return;
+    }
+    // Varsayılan: TOPLAYICI
+    _tpl_base3();
+    _tpl_duvarlar3(14.0);
+    int i2 = 0;
+    while (i2 < 5) {
+        float ang = i2 * 1.2566;
+        uret3(cos(ang) * 9.0, 1.0, sin(ang) * 9.0, 1.0, 1.0, 1.0,
+              GOLD, SHAPE_SPHERE, TAG_ITEM);
+        i2 = i2 + 1;
+    }
+    int d = uret3(0.0 - 9.0, 1.0, 0.0 - 9.0, 1.3, 2.0, 1.3,
+                  rgb(230, 80, 80), SHAPE_CUBE, TAG_ENEMY);
+    kovala_davranis3d(d, TAG_PLAYER, 3.5, 30.0);
+    carpisma_kurali3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 10);
+    carpisma_kurali3d(TAG_ENEMY, TAG_PLAYER, ACT_DAMAGE, 12);
+    bitince_kurali3d(TAG_ITEM, ACT_WIN);
+    kayit3d("sablon: TOPLAYICI — altinlari topla, kirmiziya degme");
+}
+func sablon_kur3d(k) { ed_template3d(k); }
+
 // --- Editör tarafı: bölümler arasında gezinme ------------------------------
 int _ed_lvl3 = 0;           // düzenlenen bölüm (0-tabanlı)
 
@@ -9601,12 +9715,42 @@ func _ed_inspector3() {
         return;
     }
     if (s < 0) {
+        // Seçim yokken bu panel yalnız "secili varlik yok" yazıyordu — yani
+        // editörün EN ÇOK görülen ilk ekranı boştu. Onun yerine ŞABLONLAR
+        // duruyor: tek tıkla tam oynanabilir bir oyun. Öğrenme yolu da bu,
+        // çalışan bir şeyi kurcalamak boş sayfayı doldurmaktan kolay.
         _g_txt3("secili varlik yok", lx, y, inner, _G_DIM3());
-        _g_txt3("sahnede bir cisme tikla,", lx, y + _g_lh3(), inner, _G_DIM3());
-        _g_txt3("ya da soldaki DUNYA satirini sec", lx, y + _g_lh3() * 2, inner,
-                _G_DIM3());
-        _ed_icontent3 = y + 42;
+        y = y + _g_lh3();
+        _g_txt3("sahnede bir cisme tikla ya da", lx, y, inner, _G_DIM3());
+        y = y + _g_lh3();
+        _g_txt3("soldaki DUNYA satirini sec.", lx, y, inner, _G_DIM3());
+        y = y + _g_lh3() + _us3(8);
+
+        _g_section(px + 2, y, pw - 4, "OYUN SABLONLARI");
+        y = y + _us3(16);
+        _g_txt3("Tek tikla OYNANABILIR bir oyun.", lx, y, inner, _G_DIM3());
+        y = y + _g_lh3();
+        _g_txt3("CTRL+Z eski sahneyi geri getirir.", lx, y, inner, _G_DIM3());
+        y = y + _g_lh3() + _us3(4);
+        if (_g_button(9770, lx, y, inner, _ED_FLD3, "TOPLAYICI")) {
+            ed_template3d(TPL_TOPLAYICI);
+        }
+        _g_tip_for3(9770, "Altinlari topla, kirmizi dusmandan kac");
+        y = y + _ED_FLD3 + _us3(3);
+        if (_g_button(9771, lx, y, inner, _ED_FLD3, "ARENA (nisanci)")) {
+            ed_template3d(TPL_ARENA);
+        }
+        _g_tip_for3(9771, "Otomatik ates, dort dusmani temizle");
+        y = y + _ED_FLD3 + _us3(3);
+        if (_g_button(9772, lx, y, inner, _ED_FLD3, "PLATFORM")) {
+            ed_template3d(TPL_PLATFORM);
+        }
+        _g_tip_for3(9772, "Platformlara zipla, altinlari topla");
+        y = y + _ED_FLD3 + _us3(6);
+
+        _ed_icontent3 = y;
         kirp_bitir();
+        _ed_scrollbar3(px, ctop, pw, cavail);
         return;
     }
     Ent3 e = _e3[s];

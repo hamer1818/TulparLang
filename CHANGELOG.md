@@ -207,6 +207,39 @@ hata çıkıyor.
 Adaylar artık hem çalışma dizinine hem EXE DİZİNİNE göre üretiliyor, yani
 bağlama hangi dizinden çalışıldığından bağımsız.
 
+### Added — OYUN ŞABLONLARI: tek tıkla oynanabilir bir oyun
+
+"Yeni sahne" bomboş bir dünya açıyordu ve inceleyicide yalnız "secili varlik
+yok" yazıyordu — yani editörün EN ÇOK görülen ilk ekranı boştu. Yeni gelen
+kişi, oyunun hangi parçalardan yapıldığını hiç görmeden boşluğa bakıyordu.
+
+Seçim yokken inceleyici artık **OYUN ŞABLONLARI** gösteriyor: `TOPLAYICI`,
+`ARENA (nisanci)`, `PLATFORM`. Her biri TAM OYNANABİLİR bir sahne kuruyor —
+oyuncu, zemin, duvarlar, davranışlar, kurallar ve kazanma şartı. "Oynat"a
+basınca oyun çalışıyor. Öğrenme yolu da bu: çalışan bir şeyi kurcalamak, boş
+sayfayı doldurmaktan çok daha kolay.
+
+Yıkıcı bir işlem ama ONAY SORULMUYOR: `ed_mark3d` geri-al noktası bırakıyor,
+CTRL+Z eski sahneyi geri getiriyor. Editörün geri kalanı da kipsiz; buraya bir
+modal pencere yabancı olurdu. (Geri-alın gerçekten çalıştığı ayrıca test
+ediliyor — çalışmazsa kullanıcı sahnesini geri alınamaz şekilde kaybederdi.)
+
+Testler "birkaç cisim kondu" değil **"oynanabilir mi"** diye soruyor: oyuncu
+var mı, canı var mı, kazanma şartı var mı, davranış var mı, ve en sinsisi —
+her kuralın dokunduğu etiketin sahnede karşılığı var mı. Kuralı olan ama o
+etikette hiç varlık bulunmayan bir sahne sessizdir: kural hiç ateşlenmez ya
+da (kazanma kuralıysa) oyun ANINDA kazanılmış sayılır.
+
+Yapısal denetim tek başına yetmiyor, çünkü kural bağlı görünüp de
+ateşlenmeyebilir; toplayıcı için oyuncu bir altının üstüne taşınıp çarpışma
+sürülüyor ve skorun gerçekten arttığı ölçülüyor.
+
+Bu test yazılırken bir incelik çıktı: arena şablonu mermi-düşman kuralı
+içeriyor ama sahnede MERMİ YOK — mermiler ateş davranışından çalışma
+zamanında doğuyor. Doğru soru "mermi var mı?" değil "mermi ÜRETEN bir şey var
+mı?" oldu; böylece ateş davranışı olmadan konmuş (hiç ateşlenmeyecek) bir
+mermi kuralı hâlâ yakalanıyor.
+
 ### Added — ÇOK BÖLÜMLÜ SAHNE: editörle artık "ekran" değil OYUN yapılıyor
 
 Sahne biçimi tek bir bölüm anlatıyordu: bir dosya = bir ekran. Motorda
