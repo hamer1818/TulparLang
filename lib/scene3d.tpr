@@ -6336,6 +6336,144 @@ func _s3_level_data3() {
 }
 
 // ===========================================================================
+// SAHNE DENETİMİ — sessiz hataları görünür yapmak
+// ===========================================================================
+// Veriyle kurulan bir oyunun hataları SESSİZDİR. Kazanma şartı olmayan bir
+// sahne çalışır ama bitmez. Hiç düşman bulunmayan bir etikete "bunlar bitince
+// kazandın" demek, oyunu daha başlamadan kazandırır. Kovalama davranışı
+// sahnede olmayan bir etiketi hedefliyorsa düşman hiç hareket etmez. Hiçbiri
+// hata mesajı üretmez — oyun "çalışır", sadece oynanmaz.
+//
+// Bu denetimler bir süre YALNIZ TESTLERDE yaşadı. Oysa asıl ihtiyaç duyan
+// kişi editördeki insan; buraya taşındılar.
+//
+// UYARI, hata değil: yarım kalmış bir sahne geçerli bir ara adımdır ve
+// editör insanı durdurmamalı.
+array _chk_msgs3 = [];
+// Denetimin en son hangi sahne sürümünde koştuğu. `_ed_dirty3` bir BAYRAK
+// (0/1), sürüm değil: iki ardışık düzenlemeyi ayırt edemezdi. Ayrı bir sayaç
+// her `ed_mark3d`de artıyor.
+int _chk_stamp3 = 0 - 1;
+int _ed_dirty_seq3 = 0;
+
+func _chk_tag_say3(t): int {
+    int c = 0;
+    int i = 0;
+    while (i < length(_e3)) {
+        Ent3 e = _e3[i];
+        if (e.alive == 1 && e.tag == t) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+
+func _chk_has_bh3(kind): bool {
+    int i = 0;
+    while (i < length(_bh3)) {
+        Bh3 b = _bh3[i];
+        if (b.kind == kind) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+// MERMİ sahneye konmaz, ateş davranışından çalışma zamanında doğar. Doğru
+// soru "mermi var mı?" değil "mermi ÜRETEN bir şey var mı?".
+func _chk_tag_ok3(t): bool {
+    if (t == TAG_BULLET) { return _chk_has_bh3(BH_SHOOT); }
+    return _chk_tag_say3(t) > 0;
+}
+
+func _chk_add3(m) { push(_chk_msgs3, m); }
+
+// Sahneyi denetle; sorun sayısını döndürür, mesajlar `_chk_msgs3`te.
+func scene_check3d(): int {
+    _chk_msgs3 = [];
+    int oyuncu = _chk_tag_say3(TAG_PLAYER);
+    if (oyuncu == 0) {
+        _chk_add3("oyuncu yok (oyuncu etiketli varlik ekle)");
+    }
+
+    // Kazanma şartı: ACT_WIN eylemi olan bir kural.
+    bool win = false;
+    int i = 0;
+    while (i < length(_rl3)) {
+        Rule3 r = _rl3[i];
+        if (r.act == ACT_WIN) { win = true; }
+        i = i + 1;
+    }
+    if (!win) { _chk_add3("kazanma sarti yok — oyun bitirilemez"); }
+
+    // Kuralların etiketleri sahnede karşılığı olan etiketler mi?
+    i = 0;
+    while (i < length(_rl3)) {
+        Rule3 r = _rl3[i];
+        if (r.kind == RULE_HIT) {
+            if (!_chk_tag_ok3(r.a)) {
+                _chk_add3("kural: sahnede '" + _sc_tag_nm3(r.a) + "' yok");
+            }
+            if (!_chk_tag_ok3(r.b)) {
+                _chk_add3("kural: sahnede '" + _sc_tag_nm3(r.b) + "' yok");
+            }
+        }
+        if (r.kind == RULE_CLEARED) {
+            if (_chk_tag_say3(r.a) == 0) {
+                _chk_add3("'" + _sc_tag_nm3(r.a) +
+                          "' bitince kurali ama hic yok — aninda biter");
+            }
+        }
+        i = i + 1;
+    }
+
+    // Davranışların hedef etiketleri.
+    i = 0;
+    while (i < length(_bh3)) {
+        Bh3 b = _bh3[i];
+        if (b.kind == BH_CHASE && _chk_tag_say3(b.tag) == 0) {
+            _chk_add3("kovala: hedef '" + _sc_tag_nm3(b.tag) + "' sahnede yok");
+        }
+        if (b.kind == BH_SHOOT && b.tag != 0 && _chk_tag_say3(b.tag) == 0) {
+            _chk_add3("ates: hedef '" + _sc_tag_nm3(b.tag) + "' sahnede yok");
+        }
+        i = i + 1;
+    }
+
+    // Oyuncu hareket edebiliyor mu? Hareket davranışı olmayan oyuncu
+    // tuşlara cevap vermez ve sahne "donmuş" görünür.
+    if (oyuncu > 0 && !_chk_has_bh3(BH_MOVE)) {
+        _chk_add3("oyuncuda hareket davranisi yok — tuslar islemez");
+    }
+
+    // Var olup HİÇBİR kurala girmeyen etiketler: sahnede duruyorlar ama
+    // oyuna dokunmuyorlar.
+    if (_chk_tag_say3(TAG_ENEMY) > 0 && !_chk_tag_in_rule3(TAG_ENEMY)) {
+        _chk_add3("dusman var ama hicbir kurala girmiyor — zararsizlar");
+    }
+    if (_chk_tag_say3(TAG_ITEM) > 0 && !_chk_tag_in_rule3(TAG_ITEM)) {
+        _chk_add3("esya var ama hicbir kurala girmiyor — toplanamazlar");
+    }
+    return length(_chk_msgs3);
+}
+func sahne_denetle3d(): int { return scene_check3d(); }
+
+func _chk_tag_in_rule3(t): bool {
+    int i = 0;
+    while (i < length(_rl3)) {
+        Rule3 r = _rl3[i];
+        if (r.kind == RULE_HIT && (r.a == t || r.b == t)) { return true; }
+        if (r.kind == RULE_CLEARED && r.a == t) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+func scene_check_count3d(): int { return length(_chk_msgs3); }
+func scene_check_msg3d(i): str {
+    if (i < 0 || i >= length(_chk_msgs3)) { return ""; }
+    return _chk_msgs3[i];
+}
+
+// ===========================================================================
 // OYUN ŞABLONLARI — boş başlangıç problemi
 // ===========================================================================
 // "Yeni sahne" bomboş bir dünya açıyordu. Editörün en çok görülen ilk ekranı
@@ -7424,6 +7562,7 @@ func _ed_trim3(a): array {
 
 func ed_mark3d() {
     _ed_dirty3 = 1;
+    _ed_dirty_seq3 = _ed_dirty_seq3 + 1;
     push(_ed_undo3, scene_json3d());
     if (length(_ed_undo3) > _ED_UNDO_MAX3) { _ed_undo3 = _ed_trim3(_ed_undo3); }
     _ed_redo3 = [];   // yeni bir dal açıldı
@@ -8889,6 +9028,15 @@ func _ed_statusbar3() {
     str left = md + "   " + toString(yasayan_sayi3d()) + " varlik   " +
                toString(davranis_sayisi3d()) + " davranis   " +
                toString(kural_sayisi3d()) + " kural";
+    // Sahne denetimi HER KARE değil, sahne değiştiğinde koşuyor: tarama
+    // varlık × kural × davranış geziyor ve kare başına yapmanın karşılığı yok.
+    if (_ed_playing3 == 0 && _chk_stamp3 != _ed_dirty_seq3) {
+        _chk_stamp3 = _ed_dirty_seq3;
+        scene_check3d();
+    }
+    if (_ed_playing3 == 0 && scene_check_count3d() > 0) {
+        left = left + "   ! " + toString(scene_check_count3d()) + " uyari";
+    }
     if (_ed_playing3 == 1) { left = "OYNUYOR   " + left; }
     else {
         int ss = _slot_of3(_ed_sel3e);
@@ -9408,6 +9556,28 @@ func _ed_world_panel3(px, py, pw) {
     int fw = _ed_f3w3(pw, labw);
     int fx = lx + labw;
     int y = py;
+
+    // SAHNE DENETİMİ en üstte: yarım kalmış bir oyunun neyi eksik olduğu
+    // ilk görülecek şey olmalı. Sorun yoksa tek satır yer kaplıyor.
+    _g_section(px + 2, y, pw - 4, "SAHNE DENETIMI");
+    y = y + _us3(16);
+    int sorun = scene_check_count3d();
+    if (sorun == 0) {
+        _g_txt3("sorun yok — oynanabilir", lx, y, inner, rgb(140, 220, 150));
+        y = y + _g_lh3() + _us3(4);
+    } else {
+        int ci = 0;
+        while (ci < sorun && ci < 8) {
+            _g_txt3("! " + scene_check_msg3d(ci), lx, y, inner, rgb(240, 190, 110));
+            y = y + _g_lh3();
+            ci = ci + 1;
+        }
+        if (sorun > 8) {
+            _g_txt3("(+" + toString(sorun - 8) + " daha)", lx, y, inner, _G_DIM3());
+            y = y + _g_lh3();
+        }
+        y = y + _us3(4);
+    }
 
     _g_section(px + 2, y, pw - 4, "GOKYUZU");
     y = y + _us3(16);

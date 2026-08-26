@@ -207,6 +207,41 @@ hata çıkıyor.
 Adaylar artık hem çalışma dizinine hem EXE DİZİNİNE göre üretiliyor, yani
 bağlama hangi dizinden çalışıldığından bağımsız.
 
+### Added — SAHNE DENETİMİ: sessiz hatalar artık görünür
+
+Veriyle kurulan bir oyunun hataları SESSİZDİR. Kazanma şartı olmayan sahne
+çalışır ama bitmez. Hiç düşman bulunmayan bir etikete "bunlar bitince
+kazandın" demek oyunu daha başlamadan kazandırır. Sahnede olmayan bir etiketi
+kovalayan düşman hiç kımıldamaz. Hiçbiri hata mesajı üretmez — oyun "çalışır",
+sadece oynanmaz.
+
+Editör artık sahneyi denetliyor: durum çubuğunda uyarı sayacı, dünya panelinde
+liste. Denetlenenler:
+- oyuncu yok
+- oyuncuda hareket davranışı yok (tuşlar işlemez)
+- kazanma şartı yok (oyun bitirilemez)
+- bir kural sahnede bulunmayan bir etikete bakıyor
+- "şu bitince kazandın" kuralı ama o etiketten hiç yok (anında biter)
+- kovalama/ateş davranışı sahnede olmayan bir hedefi gösteriyor
+- düşman/eşya var ama hiçbir kurala girmiyor (zararsızlar / toplanamazlar)
+
+MERMİ özel: sahneye konmaz, ateş davranışından çalışma zamanında doğar. Doğru
+soru "mermi var mı?" değil "mermi ÜRETEN bir şey var mı?" — böylece ateş
+davranışı olmadan konmuş, hiç ateşlenmeyecek bir mermi kuralı hâlâ
+yakalanıyor.
+
+UYARI, hata değil: yarım kalmış bir sahne geçerli bir ara adımdır ve editör
+insanı durdurmamalı.
+
+Denetim her kare değil, sahne DEĞİŞTİĞİNDE koşuyor — tarama varlık × kural ×
+davranış geziyor. `_ed_dirty3` bir bayrak (0/1) olduğu için iki ardışık
+düzenlemeyi ayırt edemezdi; ayrı bir sürüm sayacı eklendi.
+
+Bu denetimler bir süre YALNIZ TESTLERDE yaşıyordu; asıl ihtiyaç duyan kişi
+editördeki insan. Her denetim İKİ YÖNLÜ sınanıyor: bozuk sahnede uyarı
+çıkmalı, sağlam sahnede çıkmamalı — hep uyaran bir denetim, hiç uyarmayan
+kadar işe yaramaz.
+
 ### Added — OYUN ŞABLONLARI: tek tıkla oynanabilir bir oyun
 
 "Yeni sahne" bomboş bir dünya açıyordu ve inceleyicide yalnız "secili varlik

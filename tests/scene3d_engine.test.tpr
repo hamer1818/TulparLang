@@ -6803,6 +6803,128 @@ func t_tpl_survives_roundtrip() {
 }
 
 
+// ---------------------------------------------------------------------------
+// SAHNE DENETİMİ. Veriyle kurulan bir oyunun hataları SESSİZDİR: kazanma
+// şartı olmayan sahne çalışır ama bitmez, boş bir etikete "bunlar bitince
+// kazandın" demek oyunu daha başlamadan kazandırır, sahnede olmayan bir
+// etiketi kovalayan düşman hiç kımıldamaz. Hiçbiri hata üretmez.
+//
+// Her denetim İKİ YÖNLÜ sınanıyor: bozuk sahnede uyarı ÇIKMALI, sağlam
+// sahnede ÇIKMAMALI. Tek yön yeterli değil — hep uyaran bir denetim de,
+// hiç uyarmayan kadar işe yaramaz.
+// ---------------------------------------------------------------------------
+
+func _chk_var_mi(parca): bool {
+    int i = 0;
+    while (i < scene_check_count3d()) {
+        if (contains(scene_check_msg3d(i), parca)) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+func t_check_clean_template_is_silent() {
+    // Şablonlar denetimden TEMİZ geçmeli; geçmiyorlarsa ya şablon bozuk ya
+    // denetim fazla hevesli.
+    scene3d_reset();
+    ed_template3d(TPL_TOPLAYICI);
+    assert_eq_int(sahne_denetle3d(), 0);
+    scene3d_reset();
+    ed_template3d(TPL_ARENA);
+    assert_eq_int(sahne_denetle3d(), 0);
+    scene3d_reset();
+    ed_template3d(TPL_PLATFORM);
+    assert_eq_int(sahne_denetle3d(), 0);
+}
+
+func t_check_missing_player() {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    sahne_denetle3d();
+    assert(_chk_var_mi("oyuncu yok"), "oyuncusuz sahne uyarmadi");
+}
+
+func t_check_missing_win_rule() {
+    scene3d_reset();
+    ed_template3d(TPL_TOPLAYICI);
+    assert_eq_int(sahne_denetle3d(), 0);
+    // Kazanma kuralini kaldir
+    _rl3 = [];
+    carpisma_kurali3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 10);
+    sahne_denetle3d();
+    assert(_chk_var_mi("kazanma sarti yok"), "kazanma sarti eksikligi uyarmadi");
+}
+
+func t_check_rule_on_absent_tag() {
+    // ANINDA KAZANMA tuzagi: hic dusman yokken "dusmanlar bitince kazandin".
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    hareket_davranis3d(p, 10.0, 12.0);
+    bitince_kurali3d(TAG_ENEMY, ACT_WIN);
+    sahne_denetle3d();
+    assert(_chk_var_mi("aninda biter"), "bos etikete bitince kurali uyarmadi");
+}
+
+func t_check_chase_target_absent() {
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    hareket_davranis3d(p, 10.0, 12.0);
+    int d = spawn3(5.0, 1.0, 5.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    // Sahnede ESYA yok ama dusman esyayi kovaliyor
+    kovala_davranis3d(d, TAG_ITEM, 4.0, 30.0);
+    sahne_denetle3d();
+    assert(_chk_var_mi("kovala: hedef"), "olmayan hedefi kovalama uyarmadi");
+}
+
+func t_check_bullet_tag_needs_shoot_behavior() {
+    // Mermi sahneye konmaz; kural gecerli SAYILMALI ama yalnizca ates
+    // davranisi VARSA. Iki yonu de sina.
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    hareket_davranis3d(p, 10.0, 12.0);
+    int d = spawn3(5.0, 1.0, 5.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    can3d(d, 50);
+    carpisma_kurali3d(TAG_BULLET, TAG_ENEMY, ACT_HURT, 25);
+    bitince_kurali3d(TAG_ENEMY, ACT_WIN);
+    sahne_denetle3d();
+    // Etiket adi BICIMDEKI ad ("bullet"): editor her yerde onu gosteriyor,
+    // yani dosyada gordugun kelimeyle uyarida gordugun kelime ayni.
+    assert(_chk_var_mi("'bullet' yok"),
+           "ates davranisi yokken mermi kurali uyarmali (olu kural)");
+
+    ates_davranis3d(p, 0.5, 20.0, 1.5, TAG_ENEMY, 30.0);
+    sahne_denetle3d();
+    assert(_chk_var_mi("'bullet' yok") == false,
+           "ates davranisi varken mermi kurali uyarmamali");
+}
+
+func t_check_idle_tags_warned() {
+    // Sahnede duran ama HICBIR kurala girmeyen etiketler.
+    scene3d_reset();
+    no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    hareket_davranis3d(p, 10.0, 12.0);
+    spawn3(5.0, 1.0, 5.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    spawn3(7.0, 1.0, 7.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    sahne_denetle3d();
+    assert(_chk_var_mi("dusman var ama"), "kurala girmeyen dusman uyarmadi");
+    assert(_chk_var_mi("esya var ama"), "kurala girmeyen esya uyarmadi");
+}
+
+func t_check_player_without_move() {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    sahne_denetle3d();
+    assert(_chk_var_mi("hareket davranisi yok"),
+           "hareketsiz oyuncu uyarmadi — tuslar islemez");
+}
+
+
 test("satir yuksekligi fonttan buyuk", "t_ui_line_height_exceeds_font");
 test("dikey merkezleme", "t_ui_vertical_centering");
 test("dedektor metinleri goruyor", "t_ui_detector_sees_text");
@@ -6865,6 +6987,14 @@ test("toplayici gercekten skor veriyor", "t_tpl_collector_actually_scores");
 test("arena dusmanlarinin cani var", "t_tpl_arena_enemies_have_health");
 test("sablon geri alinabiliyor", "t_tpl_undo_restores_previous_scene");
 test("sablon gidis-donusten sag cikiyor", "t_tpl_survives_roundtrip");
+test("temiz sablon uyari vermiyor", "t_check_clean_template_is_silent");
+test("oyuncusuz sahne uyariyor", "t_check_missing_player");
+test("kazanma sarti eksikligi uyariyor", "t_check_missing_win_rule");
+test("bos etikete bitince kurali uyariyor", "t_check_rule_on_absent_tag");
+test("olmayan kovalama hedefi uyariyor", "t_check_chase_target_absent");
+test("mermi kurali ates davranisi istiyor", "t_check_bullet_tag_needs_shoot_behavior");
+test("kurala girmeyen etiketler uyariyor", "t_check_idle_tags_warned");
+test("hareketsiz oyuncu uyariyor", "t_check_player_without_move");
 test("izgara duvarlari isaretliyor", "t_nav_grid_marks_walls");
 test("pad duvari sisiriyor", "t_nav_pad_inflates_walls");
 test("izgarasiz duz kovalamaya duser", "t_nav_falls_back_without_grid");
