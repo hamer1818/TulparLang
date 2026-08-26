@@ -7368,20 +7368,39 @@ func t_act_names_are_distinct_and_directional() {
 
 // Kimlik blogu KAYNAKTAN okunuyor. Sabitleri teste kopyalamak daha once bir
 // cakismayi gizlemisti: adim kucultuldugunde test yesil kalmisti.
+// Anlik-kip arayuzde iki widget ayni kimligi paylasirsa IKINCISI olur:
+// tiklama birinciye gider. Sessiz bir hata, o yuzden kimlik bloklari
+// KAYNAKTAN okunup ayrikligi siniyor. (Sabitleri teste kopyalamak daha once
+// bir cakismayi gizlemisti.)
 func t_rule_widget_ids_do_not_collide() {
     int base = _ed_rl_idbase3();
     int step = _ed_rl_idstep3();
     int used = _ed_rl_idused3();
+    // Blok basina kullanilan widget sayisi adimdan kucuk olmali, yoksa
+    // ARD ARDA iki kural ust uste biner.
     assert(step > used, "adim, blok basina kullanilan widget sayisindan buyuk olmali");
-    // Ard arda iki kural blogu ortusmemeli.
-    int son0 = base + 0 * step + used - 1;
-    int ilk1 = base + 1 * step;
+    int son0 = base + used - 1;
+    int ilk1 = base + step;
     assert(son0 < ilk1, "kural bloklari ust uste binmemeli");
-    // Ve "+carpisma"/"+bitince" dugmeleriyle de carpismamali (21900/21901).
-    int cok = base + 100 * step + used - 1;
-    assert(cok < 21900, "100 kural bile ekleme dugmelerine ulasmamali");
-    // Davranis blogu (30000+) da uzakta durmali.
-    assert(cok < _ed_bh_idbase3(), "kural ve davranis kimlikleri ayrilmali");
+
+    // 200 kurallik gercekci bir ust sinir icin kural araligi, oteki
+    // SABIT bloklarin hicbirine degmemeli.
+    int alt = base;
+    int ust = base + 200 * step + used - 1;
+    // "+carpisma" / "+bitince" ekleme dugmeleri
+    assert(21900 < alt || 21900 > ust, "ekleme dugmesi kural araligina girmemeli");
+    assert(21901 < alt || 21901 > ust, "ekleme dugmesi kural araligina girmemeli");
+    // Ses tarayicisi sabit blogu (base .. base+51)
+    int sb = _ed_snd_idbase3();
+    assert(sb + 51 < alt || sb > ust, "ses tarayicisi kural araligina girmemeli");
+    // Model tarayicisi 50000-50041
+    assert(50041 < alt || 50000 > ust, "model tarayicisi kural araligina girmemeli");
+    // Davranis blogu: 30000 tabanli, adim 12 — 200 davranis 32400'e ulasir.
+    int bh_alt = _ed_bh_idbase3();
+    int bh_ust = bh_alt + 200 * _ed_bh_idstep3() + _ed_bh_idused3() - 1;
+    assert(bh_ust < alt || bh_alt > ust, "kural ve davranis araliklari ayrik olmali");
+    // Ses ve model tarayicilari da birbirine girmemeli.
+    assert(sb > 50041 || sb + 51 < 50000, "iki tarayici blogu ayrik olmali");
 }
 
 func t_check_flags_dead_cleared_action() {
@@ -7448,6 +7467,180 @@ func t_panel_labels_fit_label_column() {
     }
 }
 
+
+// ===========================================================================
+// KURAL SESİ — motorda konumsal ses vardı, HİÇBİR ŞEY onu çağırmıyordu
+//
+// `sound3d()` tanımlıydı ve `scene3d` içinde sıfır kez çağrılıyordu; sahne
+// biçiminde ses anahtarı yoktu; 3B örneklerin hiçbiri ses çalmıyordu. Yani
+// editörle yapılan her oyun sessizdi.
+// ===========================================================================
+
+func t_rule_sound_roundtrips() {
+    scene3d_reset(); ground3d(0.0);
+    hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 10.0);
+    rule_sound3d(0, "sesler/altin.wav");
+    cleared_rule3d(TAG_ITEM, ACT_WIN);
+    rule_sound3d(1, "sesler/kazandin.wav");
+    str js = scene_json3d();
+    assert(_ed_match3(js, "sesler/altin.wav"), "carpisma sesi yazilmali");
+    assert(_ed_match3(js, "sesler/kazandin.wav"), "bitince sesi yazilmali");
+
+    // NÖBETÇİ: yükleme gerçekten dosyadan mı okuyor?
+    scene3d_reset();
+    hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_KILL, 0.0);
+    rule_sound3d(0, "CURUK.wav");
+    scene_load3d(js);
+    assert_eq_int(rule_count3d(), 2);
+    assert_eq_str(rule_sound_path3d(0), "sesler/altin.wav");
+    assert_eq_str(rule_sound_path3d(1), "sesler/kazandin.wav");
+}
+
+// Sessiz kural dosyayı şişirmemeli — ama dönüşte de sessiz kalmalı.
+func t_silent_rule_writes_no_key() {
+    scene3d_reset(); ground3d(0.0);
+    hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 10.0);
+    str js = scene_json3d();
+    assert(!_ed_match3(js, "sound"), "sessiz kural 'sound' yazmamali");
+    scene3d_reset();
+    hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_KILL, 0.0);
+    rule_sound3d(0, "CURUK.wav");
+    scene_load3d(js);
+    assert_eq_str(rule_sound_path3d(0), "");
+}
+
+// Ses ÖTEKİNİN yerinden gelmeli: altını NEREDE topladığın bilgisi bu.
+func t_rule_sound_plays_at_other() {
+    scene3d_reset(); ground3d(0.0);
+    int p = spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    spawn3(0.5, 1.0, 7.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    // Uzakta: bu karede degmesin, ses de calmasin.
+    hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 10.0);
+    rule_sound3d(0, "sesler/altin.wav");
+    _dg_step(0.016667);
+    assert_eq_int(_snd_last_slot3, 0 - 1);
+    // Simdi yanina koy.
+    _e3[1].z = 0.0;
+    _dg_step(0.016667);
+    // ESYANIN slotu (1), oyuncunun (0) DEGIL. Ses cagrisi eylemden SONRA
+    // olsaydi esya coktan olmus olur ve buraya oyuncunun slotu yazilirdi.
+    assert_eq_int(_snd_last_slot3, 1);
+    assert(abs_f3(_snd_last_z3 - 0.0) < 0.001, "ses esyanin yerinde");
+    assert(abs_f3(_snd_last_x3 - 0.5) < 0.001, "ses esyanin x'inde");
+    assert_eq_int(_count_tag3(TAG_ITEM), 0);
+}
+
+// "bitince" kuralinda ortada carpisan cift YOK: ses konumsuz calmali,
+// varlik dizisine uzanmamali.
+func t_cleared_rule_sound_is_positionless() {
+    scene3d_reset(); ground3d(0.0);
+    spawn3(0.0, 1.0, 0.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    spawn3(0.5, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 10.0);
+    cleared_rule3d(TAG_ITEM, ACT_WIN);
+    rule_sound3d(1, "sesler/kazandin.wav");
+    // NÖBETÇİ konum: slot -1 iken `_rl_snd3` varlık dizisine UZANMAMALI.
+    // (`_e3[-1]` dizi dışı okuma; slot iddiası tek başına bunu görmüyordu —
+    // enjeksiyon `sl >= 0`ı `sl >= -1` yapınca test yeşil kalmıştı.)
+    _snd_last_x3 = 0.0 - 999.0;
+    _snd_last_y3 = 0.0 - 999.0;
+    _snd_last_z3 = 0.0 - 999.0;
+    _dg_step(0.016667);
+    _dg_step(0.016667);
+    assert(won3d(), "on kosul: kazanilmis olmali");
+    assert_eq_int(_snd_last_slot3, 0 - 1);
+    assert(abs_f3(_snd_last_x3 + 999.0) < 0.001, "konumsuz seste konum YAZILMAMALI");
+    assert(abs_f3(_snd_last_y3 + 999.0) < 0.001, "konumsuz seste konum YAZILMAMALI");
+    assert(abs_f3(_snd_last_z3 + 999.0) < 0.001, "konumsuz seste konum YAZILMAMALI");
+}
+
+func t_sound_slot_prefers_other_then_me() {
+    scene3d_reset(); ground3d(0.0);
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    int b = spawn3(4.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_ITEM);
+    // Ikisi de varsa OTEKI kazanir.
+    assert_eq_int(_rl_snd_slot3(a, b), _slot_of3(b));
+    // Oteki yoksa BEN.
+    assert_eq_int(_rl_snd_slot3(a, 0 - 1), _slot_of3(a));
+    // Ikisi de yoksa konumsuz.
+    assert_eq_int(_rl_snd_slot3(0 - 1, 0 - 1), 0 - 1);
+}
+
+// Ses de varlik kaydindan geciyor: ayni yol iki kez yuklenmemeli ve
+// model/doku ile AYNI yol farkli kayitlar olmali.
+func t_sound_uses_asset_registry() {
+    int n0 = asset_count3d();
+    asset_sound3d("SES_A.wav");
+    asset_sound3d("SES_A.wav");
+    assert_eq_int(asset_count3d(), n0 + 1);
+    int k = _as_find3("SES_A.wav", AS_SOUND3);
+    assert(k >= 0, "ses kaydi acilmali");
+    assert_eq_int(asset_kind3d(k), AS_SOUND3);
+    // Ayni yol model olarak istenirse AYRI kayit.
+    asset_model3d("SES_A.wav");
+    assert_eq_int(asset_count3d(), n0 + 2);
+    assert(AS_SOUND3 != AS_MODEL3 && AS_SOUND3 != AS_TEX3, "tur sabitleri ayrik olmali");
+}
+
+
+// Şablonlar KUTUDAN ÇIKTIĞI GİBİ duyulmalı: sessiz bir şablon "ses nasıl
+// eklenir" sorusunu hiç sordurmuyordu, ve şablon editörün ilk ekranı.
+func t_templates_have_sounds() {
+    array kk = [TPL_TOPLAYICI, TPL_ARENA, TPL_PLATFORM];
+    int i = 0;
+    while (i < length(kk)) {
+        scene3d_reset();
+        ed_template3d(kk[i]);
+        assert(rule_count3d() > 0, "sablonun kurali olmali");
+        int j = 0;
+        while (j < rule_count3d()) {
+            str sp = rule_sound_path3d(j);
+            assert(sp != "", "sablonun her kuralinin sesi olmali (kural " + toString(j) + ")");
+            // Dosya GERÇEKTEN durmalı — yol yazıp dosyayı koymamak sessiz
+            // bir kırık bağ olurdu. (Depo kökünden çalıştırılıyor.)
+            assert(file_exists(sp), "ses dosyasi depoda olmali: " + sp);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+}
+
+// Şablonun sesi gidiş-dönüşten de sağ çıkmalı: editörde OYNAT sahneyi
+// JSON'a yazıp geri okuyor, sesler orada kaybolsa şablon yine sessizleşirdi.
+func t_template_sounds_survive_roundtrip() {
+    scene3d_reset();
+    ed_template3d(TPL_TOPLAYICI);
+    int once = rule_count3d();
+    str js = scene_json3d();
+    scene3d_reset();
+    scene_load3d(js);
+    assert_eq_int(rule_count3d(), once);
+    int j = 0;
+    while (j < rule_count3d()) {
+        assert(rule_sound_path3d(j) != "", "ses gidis-donuste kaybolmamali");
+        j = j + 1;
+    }
+}
+
+// Kopan ses bağı SESSİZ: eksik model boş bir yer bırakır, eksik ses hiçbir
+// iz bırakmaz. Denetim onu söylemeli.
+func t_check_flags_missing_sound_file() {
+    scene3d_reset(); ground3d(0.0);
+    uret3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, BLUE, SHAPE_CUBE, TAG_PLAYER);
+    uret3(3.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 10.0);
+    rule_sound3d(0, "OLMAYAN_SES.wav");
+    cleared_rule3d(TAG_ITEM, ACT_WIN);
+    // Denetim yalnız DENENMIS sesleri sayiyor; once yuklemeyi tetikle.
+    asset_sound3d("OLMAYAN_SES.wav");
+    scene_check3d();
+    assert(_t_chk_has3("ses dosyasi yuklenemedi"), "yuklenemeyen ses soylenmeli");
+    // Sesi kaldirinca uyari da gitmeli.
+    rule_sound3d(0, "");
+    scene_check3d();
+    assert(!_t_chk_has3("ses dosyasi yuklenemedi"), "ses kaldirilinca uyari da gitmeli");
+}
+
 test("varlik kaydi ayni yolu iki kez yuklemiyor", "t_asset_registry_caches");
 test("varlik kaydi model ve dokuyu ayiriyor", "t_asset_registry_separates_kinds");
 test("model yolu yaziliyor ve gidis-donusten sag cikiyor", "t_asset_src_serialized_and_roundtrips");
@@ -7477,4 +7670,13 @@ test("denetim is gormeyen bitince eylemini soyluyor", "t_check_flags_dead_cleare
 test("eylem adlari alan butcesine siyor", "t_action_names_fit_field_budget");
 test("kural ozeti panel butcesine siyor", "t_rule_summary_fits_panel_budget");
 test("panel etiketleri sutuna siyor", "t_panel_labels_fit_label_column");
+test("kural sesi gidis-donusten sag cikiyor", "t_rule_sound_roundtrips");
+test("sessiz kural dosyaya ses yazmiyor", "t_silent_rule_writes_no_key");
+test("ses otekinin yerinden geliyor", "t_rule_sound_plays_at_other");
+test("bitince sesi konumsuz", "t_cleared_rule_sound_is_positionless");
+test("ses konumu oteki-sonra-ben sirasi", "t_sound_slot_prefers_other_then_me");
+test("ses de varlik kaydindan geciyor", "t_sound_uses_asset_registry");
+test("sablonlarin sesi var ve dosyalar depoda", "t_templates_have_sounds");
+test("sablon sesleri gidis-donusten sag cikiyor", "t_template_sounds_survive_roundtrip");
+test("denetim eksik ses dosyasini soyluyor", "t_check_flags_missing_sound_file");
 test_summary();

@@ -242,6 +242,23 @@ array _as_h3    = [];    // int  — yükleme handle'ı (-1 = yüklenemedi)
 
 int AS_MODEL3 = 0;
 int AS_TEX3   = 1;
+int AS_SOUND3 = 2;
+
+// Türe göre gerçek yükleme.
+//
+// SINANAMAYAN NOKTA: bu dallanmanın DOĞRU yükleyiciyi seçtiği başsız olarak
+// doğrulanamıyor — ses aygıtı ve GL bağlamı yokken `load_sound`,
+// `load_texture` ve `load_model` üçü de -1 dönüyor, yani birbirine
+// karıştırıldıkları test edilemiyor (enjeksiyonla ölçüldü: `load_sound`
+// yerine `load_texture` yazınca hiçbir test kırılmadı). Risk yapısal olarak
+// azaltıldı: üç tür ESKİDEN iki ayrı yerde dallanıyordu (al ve yeniden-dene),
+// şimdi tek yerde — yani unutulacak ikinci bir kopya yok. Gerçek doğrulama
+// aygıtı olan makinede, sesin duyulmasıyla olur.
+func _as_load3(path, kind): int {
+    if (kind == AS_MODEL3) { return load_model(path); }
+    if (kind == AS_TEX3)   { return load_texture(path); }
+    return load_sound(path);
+}
 
 func _as_find3(path, kind): int {
     int i = 0;
@@ -259,9 +276,7 @@ func _as_get3(path, kind): int {
     if (path == "") { return 0 - 1; }
     int k = _as_find3(path, kind);
     if (k >= 0) { return _as_h3[k]; }
-    int h = 0 - 1;
-    if (kind == AS_MODEL3) { h = load_model(path); }
-    else                   { h = load_texture(path); }
+    int h = _as_load3(path, kind);
     push(_as_path3, path);
     push(_as_kind3, kind);
     push(_as_h3, h);
@@ -276,6 +291,11 @@ func varlik_model3d(yol): int   { return _as_get3(yol, AS_MODEL3); }
 // Dokuyu yoldan al.
 func asset_texture3d(path): int { return _as_get3(path, AS_TEX3); }
 func varlik_doku3d(yol): int    { return _as_get3(yol, AS_TEX3); }
+// Sesi yoldan al. Ses aygıtı yoksa (başsız test, sessiz makine) -1 döner ve
+// -1 KAYDEDİLİR: çalma zaten sessiz bir boş işlem, ama her karede yeniden
+// yüklemeye çalışmak diske takılırdı.
+func asset_sound3d(path): int   { return _as_get3(path, AS_SOUND3); }
+func varlik_ses3d(yol): int     { return _as_get3(yol, AS_SOUND3); }
 
 // Kayıttaki girdi sayısı / i. girdinin yolu, türü, handle'ı. Araçlar ve
 // testler kaydın içine bakabilsin diye.
@@ -298,11 +318,8 @@ func asset_reload3d(path, kind): int {
     int k = _as_find3(path, kind);
     if (k < 0) { return _as_get3(path, kind); }
     if (_as_h3[k] >= 0) { return _as_h3[k]; }
-    int h = 0 - 1;
-    if (kind == AS_MODEL3) { h = load_model(path); }
-    else                   { h = load_texture(path); }
-    _as_h3[k] = h;
-    return h;
+    _as_h3[k] = _as_load3(path, kind);
+    return _as_h3[k];
 }
 // Sis yoğunluğu. 0 = kapalı (varsayılan). Rengi gökyüzünün ufkundan alınır.
 float _fog3 = 0.0;
@@ -578,6 +595,7 @@ func scene3d_reset() {
     _ed_sel3e = 0 - 1; _ed_drag3 = 0;   // secim sahneyle gider
     _bh3 = [];   // veri-davranislar da sahne durumu
     _rl3 = [];   // veri-kurallar da sahne durumu
+    _snd_last_slot3 = 0 - 1;   // ses izi de sahneyle gider
     // Şablonlar da sahne biçiminin parçası: bırakılırsa yeni sahneye önceki
     // sahnenin şablonları sızardı (ve testler sıraya bağımlı olurdu).
     _pf_nm3 = []; _pf_js3 = [];
@@ -5844,14 +5862,38 @@ func _sc_zones_js3(): str {
 func _sc_load_rule3(r) {
     str on = _sc_s3(r, "on", "hit");
     int act = _rl_act3(_sc_s3(r, "do", "collect"));
+    str snd = _sc_s3(r, "sound", "");
     if (on == "cleared") {
         cleared_rule3d(_sc_tag3(_sc_s3(r, "tag", "item")), act);
+        _rl_set_snd3(length(_rl3) - 1, snd);
         return;
     }
     hit_rule3d(_sc_tag3(_sc_s3(r, "a", "player")),
                _sc_tag3(_sc_s3(r, "b", "item")),
                act, _sc_f3(r, "n", 0.0));
+    _rl_set_snd3(length(_rl3) - 1, snd);
 }
+
+// Kuralın sesini yoldan kur. `hit_rule3d`/`cleared_rule3d`'ye parametre
+// EKLENMEDİ: ikisi de kamuya açık ve elle yazılmış oyunlarda çağrılıyor,
+// zorunlu bir parametre onları kırardı.
+func _rl_set_snd3(i, path) {
+    if (i < 0 || i >= length(_rl3)) { return; }
+    Rule3 r = _rl3[i];
+    r.snd = path;
+    _rl3[i] = r;
+}
+
+// Kuralın sesini AÇIKÇA kur (oyun kodu ve editör için).
+//
+//   rule_sound3d(0, "sesler/altin.wav");
+func rule_sound3d(i, path) { _rl_set_snd3(i, path); }
+func kural_sesi3d(i, yol)  { _rl_set_snd3(i, yol); }
+func rule_sound_path3d(i): str {
+    if (i < 0 || i >= length(_rl3)) { return ""; }
+    return _rl3[i].snd;
+}
+func rule_count3d(): int { return length(_rl3); }
 
 // Kurallar → JSON dizisi (girintili, entity'ler gibi satır satır).
 func _sc_rules_js3(): str {
@@ -5861,15 +5903,17 @@ func _sc_rules_js3(): str {
     while (i < length(_rl3)) {
         Rule3 r = _rl3[i];
         if (i > 0) { o = o + ",\n"; }
+        str sj = "";
+        if (r.snd != "") { sj = ", \"sound\": " + _sc_q3(r.snd); }
         if (r.kind == RULE_CLEARED) {
             o = o + "    {\"on\": \"cleared\", \"tag\": \"" + _sc_tag_nm3(r.a) +
-                "\", \"do\": \"" + _rl_act_nm3(r.act) + "\"}";
+                "\", \"do\": \"" + _rl_act_nm3(r.act) + "\"" + sj + "}";
         } else {
             o = o + "    {\"on\": \"hit\", \"a\": \"" + _sc_tag_nm3(r.a) +
                 "\", \"b\": \"" + _sc_tag_nm3(r.b) +
                 "\", \"do\": \"" + _rl_act_nm3(r.act) + "\"";
             if (r.n != 0.0) { o = o + ", \"n\": " + _sc_num3(r.n); }
-            o = o + "}";
+            o = o + sj + "}";
         }
         i = i + 1;
     }
@@ -6676,6 +6720,23 @@ func scene_check3d(): int {
     if (eksik > 0) {
         _chk_add3(toString(eksik) + " varligin model dosyasi yuklenemedi");
     }
+
+    // Kural sesleri de kopabilir — model dosyalarıyla aynı gerekçe, ve
+    // sessizlik daha da sinsi: eksik model boş bir yer bırakır, eksik ses
+    // hiçbir iz bırakmaz. Yalnız DENENMİŞ ve olmamış olanlar sayılıyor;
+    // hiç çalınmamış bir ses hakkında bir şey bilinmiyor.
+    int sesyok = 0;
+    i = 0;
+    while (i < length(_rl3)) {
+        Rule3 sr = _rl3[i];
+        if (sr.snd != "" && _as_find3(sr.snd, AS_SOUND3) >= 0) {
+            if (_as_h3[_as_find3(sr.snd, AS_SOUND3)] < 0) { sesyok = sesyok + 1; }
+        }
+        i = i + 1;
+    }
+    if (sesyok > 0) {
+        _chk_add3(toString(sesyok) + " kuralin ses dosyasi yuklenemedi");
+    }
     return length(_chk_msgs3);
 }
 func sahne_denetle3d(): int { return scene_check3d(); }
@@ -6740,6 +6801,16 @@ func _tpl_base3(): int {
     return p;
 }
 
+// Yer tutucu seslerin kök dizini. Şablonlar bunu kullanıyor, yani editörle
+// tek tıkla kurulan oyun kutudan çıktığı gibi DUYULUYOR — sessiz bir şablon
+// "ses nasıl eklenir" sorusunu hiç sordurmuyordu. Yol depo köküne göreli;
+// başka bir dizinden çalıştırılırsa sahne denetimi eksik dosyaları söylüyor.
+func _tpl_ses3(ad): str { return "examples/assets/sesler/" + ad; }
+
+// EN SON eklenen kurala ses bağla — `carpisma_kurali3d`/`bitince_kurali3d`
+// diziye ekliyor, yani "son" her zaman az önce yazılan kural.
+func _tpl_son_ses3(ad) { _rl_set_snd3(length(_rl3) - 1, _tpl_ses3(ad)); }
+
 func ed_template3d(k) {
     ed_mark3d();
     if (k == TPL_ARENA) {
@@ -6763,8 +6834,11 @@ func ed_template3d(k) {
             i = i + 1;
         }
         carpisma_kurali3d(TAG_BULLET, TAG_ENEMY, ACT_HURT, 25);
+        _tpl_son_ses3("vurus.wav");
         carpisma_kurali3d(TAG_ENEMY, TAG_PLAYER, ACT_DAMAGE, 12);
+        _tpl_son_ses3("vurus.wav");
         bitince_kurali3d(TAG_ENEMY, ACT_WIN);
+        _tpl_son_ses3("kazandin.wav");
         kayit3d("sablon: ARENA — dusmanlari temizle");
         return;
     }
@@ -6787,7 +6861,9 @@ func ed_template3d(k) {
             i = i + 1;
         }
         carpisma_kurali3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 10);
+        _tpl_son_ses3("altin.wav");
         bitince_kurali3d(TAG_ITEM, ACT_WIN);
+        _tpl_son_ses3("kazandin.wav");
         kayit3d("sablon: PLATFORM — altinlari topla, ziplamayi zamanla");
         return;
     }
@@ -6805,8 +6881,11 @@ func ed_template3d(k) {
                   rgb(230, 80, 80), SHAPE_CUBE, TAG_ENEMY);
     kovala_davranis3d(d, TAG_PLAYER, 3.5, 30.0);
     carpisma_kurali3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 10);
+    _tpl_son_ses3("altin.wav");
     carpisma_kurali3d(TAG_ENEMY, TAG_PLAYER, ACT_DAMAGE, 12);
+    _tpl_son_ses3("vurus.wav");
     bitince_kurali3d(TAG_ITEM, ACT_WIN);
+    _tpl_son_ses3("kazandin.wav");
     kayit3d("sablon: TOPLAYICI — altinlari topla, kirmiziya degme");
 }
 func sablon_kur3d(k) { ed_template3d(k); }
@@ -7227,6 +7306,9 @@ struct Rule3 {
     int act;    // ACT_*
     float n;    // skor / hasar miktarı
     int seen;   // CLEARED: bu etiketten en az bir kez GÖRÜLDÜ mü
+    // Kural işlerken çalacak sesin YOLU ("" = sessiz). Handle değil yol:
+    // sahne dosyası taşınabilir kalmalı (model yollarıyla aynı gerekçe).
+    str snd;
 }
 array _rl3 = [];
 
@@ -7261,7 +7343,8 @@ func kazandi3d() { win3d(); }
 // tabloda otursaydı, "Dur"dan sonra ya oyunun kancaları kaybolur ya da
 // kurallar ikinci kez kaydedilip iki kat işlerdi. Ayrı tarama bu bağı kesiyor.
 func hit_rule3d(tag_a, tag_b, act, n) {
-    Rule3 r = { kind: RULE_HIT, a: tag_a, b: tag_b, act: act, n: n * 1.0, seen: 0 };
+    Rule3 r = { kind: RULE_HIT, a: tag_a, b: tag_b, act: act, n: n * 1.0, seen: 0,
+                snd: "" };
     push(_rl3, r);
 }
 func carpisma_kurali3d(etiket_a, etiket_b, eylem, n) { hit_rule3d(etiket_a, etiket_b, eylem, n); }
@@ -7269,7 +7352,8 @@ func carpisma_kurali3d(etiket_a, etiket_b, eylem, n) { hit_rule3d(etiket_a, etik
 // "Bu etiketten hiç kalmayınca" kuralı. Sahne o etiketle BAŞLAMADIYSA
 // tetiklenmez — yoksa altını olmayan bir sahne ilk karede kazanılırdı.
 func cleared_rule3d(tag, act) {
-    Rule3 r = { kind: RULE_CLEARED, a: tag, b: 0, act: act, n: 0.0, seen: 0 };
+    Rule3 r = { kind: RULE_CLEARED, a: tag, b: 0, act: act, n: 0.0, seen: 0,
+                snd: "" };
     // "Görüldü" KAYIT ANINDA da bakılıyor, yalnız her karede değil: sahne
     // yüklenirken kurallar varlıklardan SONRA geliyor, ama ilk kare içinde son
     // eşya toplanırsa `_s3_rules` onu hiç saymadan 0 görürdü — ve "hiç
@@ -7289,7 +7373,51 @@ func rule_count3d(): int { return length(_rl3); }
 func kural_sayisi3d(): int { return rule_count3d(); }
 
 // ---- Eylemin uygulanması ---------------------------------------------------
-func _rl_apply3(act, n, me, other) {
+// Kuralın sesi. ÖNCE çalınıyor, sonra eylem uygulanıyor: `ACT_COLLECT`
+// ötekini ÖLDÜRÜYOR ve ölen varlığın konumu okunamaz — sesi sonra çalmak
+// "altını nerede topladın" bilgisini kaybettirirdi (konumsal ses o bilgi).
+//
+// Konum sırası: varsa ÖTEKİ (çarpılan şey), yoksa BEN, yoksa dinleyicinin
+// kendi yeri. "Bitince" kuralında ortada çarpışan bir çift yok (ikisi de -1)
+// ve o zaman ses yönsüz/tam sesle çalıyor — kazanma sesi bir yerden gelmez.
+// Sesin ÇALACAĞI SLOT — çalmadan ayrı. `_snd_vol3`/`_snd_pan_val3` ile aynı
+// gerekçe: ses aygıtı olmadan (başsız test) doğrulanabilsin. -1 = konumsuz.
+func _rl_snd_slot3(me, other): int {
+    int sl = _slot_of3(other);
+    if (sl < 0) { sl = _slot_of3(me); }
+    return sl;
+}
+
+// Sesin en son ÇALINDIĞI yer. Sıra sınanabilsin diye tutuluyor: `_rl_snd3`
+// eylemden SONRA çağrılırsa toplanan varlık çoktan ölmüş olur ve burada
+// oyuncunun konumu görünür — testin yakaladığı fark tam bu.
+float _snd_last_x3 = 0.0;
+float _snd_last_y3 = 0.0;
+float _snd_last_z3 = 0.0;
+int   _snd_last_slot3 = 0 - 1;
+
+func _rl_snd3(path, me, other) {
+    if (path == "") { return; }
+    int sl = _rl_snd_slot3(me, other);
+    _snd_last_slot3 = sl;
+    if (sl >= 0) {
+        Ent3 e = _e3[sl];
+        _snd_last_x3 = e.x; _snd_last_y3 = e.y; _snd_last_z3 = e.z;
+    }
+    // Yükleme ÇALMADAN SONRA değil önce, ama konum kaydı yüklemeden de önce:
+    // ses aygıtı yoksa handle -1 gelir ve çalma sessizce düşer — konumun
+    // doğru hesaplandığı yine de sınanabilir olmalı.
+    int h = asset_sound3d(path);
+    if (h < 0) { return; }
+    if (sl < 0) { play_sound(h); return; }
+    sound3d(h, _snd_last_x3, _snd_last_y3, _snd_last_z3);
+}
+
+func _rl_apply3(act, n, me, other, snd) {
+    // Ses EN BAŞTA: aşağıdaki dallar varlık öldürüyor, sonra çalmak konumu
+    // kaybettirirdi. Sıra garantisi tek yerde dursun diye ses parametre
+    // olarak geçiyor — çağrı yerlerine bırakılsaydı biri unutabilirdi.
+    _rl_snd3(snd, me, other);
     if (act == ACT_COLLECT) {
         // Slot denetimi ŞART: aynı çift için ikinci bir "topla" kuralı varsa
         // öteki bu noktada çoktan ölmüş olur ve `_e3[-1]` dizi dışı okuma
@@ -7334,7 +7462,7 @@ func _s3_rule_hits(n) {
                                 && !_bullet_owner_pair3(a, b)) {
                                 _hit_me = _mk_handle3(a);
                                 _hit_other = _mk_handle3(b);
-                                _rl_apply3(ru.act, ru.n, _hit_me, _hit_other);
+                                _rl_apply3(ru.act, ru.n, _hit_me, _hit_other, ru.snd);
                             }
                         }
                         gr = gr + 1;
@@ -7364,7 +7492,7 @@ func _s3_rules() {
             }
             if (c > 0) { r.seen = 1; _rl3[i] = r; }
             if (c == 0 && r.seen == 1) {
-                _rl_apply3(r.act, 0.0, 0 - 1, 0 - 1);
+                _rl_apply3(r.act, 0.0, 0 - 1, 0 - 1, r.snd);
                 return;
             }
         }
@@ -9678,6 +9806,22 @@ int   _ed_asscroll3 = 0;    // liste kaydırması (satır)
 // kilometrelerce uzatır ve altındaki DAVRANIŞLAR bölümü erişilemez olurdu.
 func _ed_as_rows3(): int { return 6; }
 
+// Ses tarayıcısı — model tarayıcısının kardeşi. Ayrı desen ve ayrı liste
+// tutuyor (sesler .wav/.ogg, modeller .glb), ama AÇIK OLAN kural indeksi
+// tek: iki kuralın tarayıcısı aynı anda açık olsaydı ikisi de aynı widget
+// kimliklerini kullanırdı.
+str   _ed_sndglob3   = "examples/assets/sesler/*.wav";
+array _ed_sndfiles3  = [];
+int   _ed_snddone3   = 0;
+int   _ed_sndopen3   = 0 - 1;   // açık kuralın indeksi (-1 = kapalı)
+int   _ed_sndscroll3 = 0;
+
+func _ed_snd_scan3() {
+    _ed_sndfiles3 = file_glob(_ed_sndglob3);
+    _ed_snddone3 = 1;
+    _ed_sndscroll3 = 0;
+}
+
 // Liste kaydırmasını sınırlara kelepçele. Ayrı fonksiyon: dosya sayısı
 // azalınca (yeni tarama, daha dar desen) eski kaydırma listenin dışında
 // kalıyor ve panel boş görünüyordu — sınanabilir olması bunun için.
@@ -9855,9 +9999,70 @@ func _ed_rule_ozet3(kind, a, b, act, n): str {
 
 // Kimlik bloğu — davranışlardaki gibi kaynaktan okunabilir olsun diye
 // fonksiyon; sabitleri teste kopyalamak bir kimlik çakışmasını gizlemişti.
-func _ed_rl_idbase3(): int { return 21000; }
-func _ed_rl_idstep3(): int { return 8; }
-func _ed_rl_idused3(): int { return 5; }
+// Kural bloğu 21000'den 60000'e taşındı: ses satırı gelince blok başına
+// widget 5'ten 7'ye çıktı ve adım 10 oldu; eski tabanda 100 kural
+// "+carpisma"/"+bitince" düğmelerine (21900/21901) ulaşıyordu. 60000
+// varlık tarayıcısının (50000-51050) da üstünde kalıyor.
+func _ed_rl_idbase3(): int { return 60000; }
+func _ed_rl_idstep3(): int { return 10; }
+func _ed_rl_idused3(): int { return 7; }
+// Ses tarayıcısı SABİT blok: bir anda yalnız TEK kuralın tarayıcısı açık.
+func _ed_snd_idbase3(): int { return 51000; }
+
+// Ses tarayıcısı. Model tarayıcısıyla aynı iskelet; ayrı fonksiyon çünkü
+// kural bloğunun İÇİNDE, seçili kurala yazıyor.
+func _ed_snd_browser3(lx, y, inner, ri): int {
+    int base = _ed_snd_idbase3();
+    int tbw = _us3(38);
+    str g0 = _ed_sndglob3;
+    str g1 = _g_text(base, lx, y, inner - tbw - 4, _ED_FLD3, g0);
+    if (g1 != g0) { _ed_sndglob3 = g1; _ed_snddone3 = 0; }
+    if (_g_button(base + 1, lx + inner - tbw, y, tbw, _ED_FLD3, "TARA")) {
+        _ed_snd_scan3();
+    }
+    _g_tip_for3(base + 1, "Deseni diskte ara (* ve ? calisir)");
+    y = y + _ED_FLD3 + _us3(3);
+
+    int an = length(_ed_sndfiles3);
+    if (an == 0) {
+        str emsg = "eslesme yok";
+        if (_ed_snddone3 == 0) { emsg = "TARA'ya bas"; }
+        _g_txt3(emsg, lx, _g_ly3(y), inner, _G_DIM3());
+        y = y + _g_lh3();
+    }
+    int rows = _ed_as_rows3();
+    _ed_sndscroll3 = _ed_as_clamp3(_ed_sndscroll3, an, rows);
+    int ai = _ed_sndscroll3;
+    int shown = 0;
+    str cur = rule_sound_path3d(ri);
+    while (ai < an && shown < rows) {
+        str apath = _ed_sndfiles3[ai];
+        int rw = base + 10 + shown * 2;
+        if (_g_tog(rw, lx, y, inner, _ED_FLD3, _ed_basename3(apath), apath == cur)) {
+            ed_mark3d();
+            _rl_set_snd3(ri, apath);
+            _ed_sndopen3 = 0 - 1;   // seçince kapan: liste kuralın altını şişirmesin
+        }
+        _g_tip_for3(rw, apath);
+        y = y + _ED_FLD3 + _us3(2);
+        ai = ai + 1;
+        shown = shown + 1;
+    }
+    if (an > rows) {
+        int pbw = _us3(30);
+        if (_g_button(base + 40, lx, y, pbw, _ED_FLD3, "^")) {
+            _ed_sndscroll3 = _ed_sndscroll3 - rows;
+        }
+        if (_g_button(base + 41, lx + pbw + 4, y, pbw, _ED_FLD3, "v")) {
+            _ed_sndscroll3 = _ed_sndscroll3 + rows;
+        }
+        _g_txt3(toString(_ed_sndscroll3 + 1) + "-" + toString(_ed_sndscroll3 + shown) +
+                " / " + toString(an), lx + (pbw + 4) * 2, _g_ly3(y),
+                inner - (pbw + 4) * 2, _G_DIM3());
+        y = y + _ED_FLD3 + _us3(2);
+    }
+    return y + _us3(2);
+}
 
 func _ed_rules_panel3(px, y, pw): int {
     int lx = px + _ED_PAD3;
@@ -9921,6 +10126,41 @@ func _ed_rules_panel3(px, y, pw): int {
             float nn = _g_num(wid + 4, lx + lw, y, fw, _ED_FLD3, r.n, 1.0);
             if (nn != r.n) { Rule3 nr5 = _rl3[i]; nr5.n = nn; _rl3[i] = nr5; }
             y = y + _ED_FLD3 + _us3(2);
+        }
+
+        // -- SES --
+        // Motorun konumsal sesi vardı ve hiçbir şey onu çağırmıyordu: her
+        // oyun sessizdi. Kural motoru zaten "X, Y'ye değince" biliyor;
+        // sesin bağlanacağı doğal yer burası.
+        // Bu satır sütun hizasını BİLEREK kırıyor: içeriği bir dosya adı,
+        // hizalanacak bir sayı değil. Etiket sütununda kalsaydı düğmeye 126
+        // piksel düşüyordu (ölçüldü) ve sıradan bir ses adı bile kırpılıyordu;
+        // tam genişlikte 244 piksel var.
+        int sxw = _us3(16);
+        str scur = "ses: yok";
+        if (r.snd != "") { scur = "ses: " + _ed_basename3(r.snd); }
+        if (_g_button(wid + 5, lx, y, inner - sxw - 4, _ED_FLD3, scur)) {
+            if (_ed_sndopen3 == i) { _ed_sndopen3 = 0 - 1; }
+            else {
+                _ed_sndopen3 = i;
+                if (_ed_snddone3 == 0) { _ed_snd_scan3(); }
+            }
+        }
+        // İpucu YOLU gösteriyor: uzun bir ad düğmede kırpılıyor, tam hâlini
+        // görecek bir yer kalmalı.
+        str stip = "Kural islerken calacak ses";
+        if (r.snd != "") { stip = r.snd; }
+        _g_tip_for3(wid + 5, stip);
+        if (r.snd != "") {
+            if (_g_button(wid + 6, lx + inner - sxw, y, sxw, _ED_FLD3, "x")) {
+                ed_mark3d();
+                _rl_set_snd3(i, "");
+            }
+        }
+        y = y + _ED_FLD3 + _us3(2);
+
+        if (_ed_sndopen3 == i) {
+            y = _ed_snd_browser3(lx, y, inner, i);
         }
 
         // Düz Türkçe özet — kuralın ne yaptığını okumak için kaynağa
