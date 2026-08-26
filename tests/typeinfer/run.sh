@@ -25,6 +25,13 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
+# DİLİ SABİTLE. Tanı mesajları `tr_en` üzerinden geçiyor ve dil LC_ALL /
+# LC_MESSAGES / LANG'a bakıyor; sabitlemezsek EXPECT satırları geliştiricinin
+# yerel ayarına göre tutar ya da tutmaz. Bu varsayım değil ölçüm: Türkçe
+# yerel ayarlı bir makinede yeşil olan bir fixture CI'da (İngilizce)
+# kırmızıya döndü.
+export LC_ALL=C
+
 TULPAR="./tulpar"
 [ -x "$TULPAR" ] || TULPAR="./tulpar.exe"
 if [ ! -x "$TULPAR" ]; then

@@ -88,7 +88,7 @@ A multi-language micro-benchmark harness lives in `benchmarks/` — `run_benchma
 
 CLI dispatch lives in `main()` in [src/main.cpp](src/main.cpp); `--lsp`, `fmt`, `pkg`, `version`, `--help`, and `update` all short-circuit before the run/build path. Default execution calls `aot_compile_and_run_silent()`; an AOT failure (parse/codegen/emit/link) returns non-zero — there is no fallback, so "it ran" means AOT ran. `--lsp` owns stdin/stdout for JSON-RPC, so it must dispatch before any banner output.
 
-CLI output language follows the system locale; override with `TULPAR_LANG=tr` / `TULPAR_LANG=en`.
+CLI output language follows the system locale. The override is the standard POSIX one — `LC_ALL`, `LC_MESSAGES` or `LANG` (see `is_turkish_locale()` in `src/common/localization.cpp`); `LC_ALL=C` forces English. There is **no** `TULPAR_LANG` variable — this file documented one that never existed in the source. Tests that assert on diagnostic text must pin the locale (`tests/typeinfer/run.sh` exports `LC_ALL=C`), otherwise they pass or fail with the developer's locale.
 
 ## Architecture
 

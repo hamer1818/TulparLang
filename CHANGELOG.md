@@ -173,6 +173,23 @@ her yerde değil.
 
 Yeni süit: `tests/bool_to_int_arg.test.tpr` (7 test) + `typeinfer/pass/06`.
 
+### Fixed — bir typeinfer fixture'ı YEREL AYARA bağlıydı
+
+`fail/07`'nin `EXPECT:` satırları tanı mesajının TÜRKÇE hâline göre
+yazılmıştı. Mesaj `tr_en` üzerinden geçiyor ve dil `LC_ALL`/`LC_MESSAGES`/
+`LANG`'a bakıyor, dolayısıyla fixture Türkçe yerel ayarlı bir makinede yeşil,
+CI'da (İngilizce) kırmızıydı. Varsayım değil, ölçüm: CI tam olarak böyle
+düştü.
+
+`tests/typeinfer/run.sh` artık `LC_ALL=C` sabitliyor ve EXPECT satırları
+İngilizce. Bozma ile sınandı: sabitleme kaldırılıp Türkçe yerel ayarda
+koşulunca fixture yine kırmızıya dönüyor.
+
+Bu sırada CLAUDE.md'de bir belge hatası çıktı: dosya `TULPAR_LANG=tr` /
+`TULPAR_LANG=en` diye bir geçersiz kılma anlatıyordu ve **böyle bir değişken
+kaynakta hiç yok**. Doğrusu standart POSIX yolu (`LC_ALL` / `LC_MESSAGES` /
+`LANG`); düzeltildi.
+
 ### Fixed — `packages/` testleri CI'da bağlanamıyordu (yerelde görünmüyordu)
 
 AOT bağlayıcısının arşiv arama yolları ÇALIŞMA DİZİNİNE göre üretiliyordu

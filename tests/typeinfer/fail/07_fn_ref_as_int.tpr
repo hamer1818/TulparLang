@@ -12,9 +12,13 @@
 // symbol is recorded as what it really holds so no second, misleading error
 // follows.
 
-// EXPECT: FONKSIYON REFERANSI
+// EXPECT: FUNCTION REFERENCE
 // EXPECT: 'f'
-// EXPECT: 'var' kullan
+// EXPECT: use 'var'
+//
+// The runner pins LC_ALL=C, so these are the English strings. Without the pin
+// these lines would pass or fail depending on the developer's locale — which
+// is exactly what happened: green on a Turkish machine, red in CI.
 
 func selam() { print("selam"); }
 
