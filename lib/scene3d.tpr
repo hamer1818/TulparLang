@@ -401,6 +401,12 @@ func scene3d_reset() {
     _e3gen = []; _e3free = []; _free_n3 = 0;
     _bx = []; _by = []; _bz = []; _br = [];   // geniş faz de sahneyle gider
     _rampi3 = [];                             // rampa dizini de
+    // Nav ızgarası da sahneyle gider. Bırakılınca yeni sahne ESKİ duvarların
+    // ızgarasını kullanır ve `chase_path3d` var olmayan duvarları dolaşır —
+    // üstelik testleri sıraya bağımlı yapıyordu (gerekçe `_slope_lim3` ve
+    // parçacık ayarlarıyla aynı; nitekim burada da birebir yaşandı).
+    _nav_w3 = 0; _nav_h3 = 0; _nav_block3 = [];
+    _nav_wx3 = []; _nav_wz3 = []; _nav_t3 = [];
     // UI durumu da tam teardown'a dahil: reset kancaları ve bölümleri zaten
     // siliyor, bekleyen bir "çıkış" isteği ya da açık kalmış duraklat örtüsü
     // yeni sahneye sızmamalı.
@@ -1212,6 +1218,353 @@ func _path_clear3(sx, sy, sz, dirx, dirz, dist, pad, syh): bool {
     }
     return true;
 }
+
+// ===========================================================================
+// YOL BULMA (A*) — kaçınmanın çözemediği şey
+// ===========================================================================
+// `chase3d`in kaçınması TEK engeli çözüyor: duvara değince bir yana bağlanıp
+// kayıyor. Labirenti çözmüyor — çıkmaz bir koridora giren düşman orada
+// kalıyor, çünkü yerel bir karar küresel bir yolu bulamaz.
+//
+// Izgara + A*. Saf Tulpar; C tarafına dokunmuyor.
+//
+// Neden ayrı bir fonksiyon (`chase_path3d`) ve `chase3d` değiştirilmedi:
+// A* her çağrıda ızgara taraması demek ve çoğu oyunun buna ihtiyacı yok
+// (arenada düz kovalama yeterli, üstelik daha "aç gözlü" ve doğal duruyor).
+// Varsayılanı değiştirmek yayınlanmış oyunların düşman davranışını haber
+// vermeden değiştirirdi.
+
+int   _nav_w3 = 0;          // ızgara genişliği (hücre)
+int   _nav_h3 = 0;
+float _nav_cell3 = 2.0;     // hücre kenarı (dünya birimi)
+float _nav_x03 = 0.0;       // ızgaranın sol-üst dünya köşesi
+float _nav_z03 = 0.0;
+array _nav_block3 = [];     // 1 = kapalı
+int   _NAV_MAX3 = 4096;     // hücre tavanı (64x64) — üstünde ızgara kurulmaz
+
+// Yol önbelleği, slot'a göre. Her karede A* koşturmak pahalı; düşman başına
+// bir ARA HEDEF tutup birkaç karede bir yeniliyoruz. Oyunlarda standart
+// çözüm bu ve görsel farkı yok, çünkü ara hedef zaten birkaç hücre ötede.
+array _nav_wx3 = [];        // ara hedef x
+array _nav_wz3 = [];
+array _nav_t3 = [];         // kalan geçerlilik (sn)
+float _nav_repath3 = 0.4;   // yeniden hesap aralığı (sn)
+
+func nav_repath3d(sn) { _nav_repath3 = sn; }
+func yol_yenileme3d(sn) { nav_repath3d(sn); }
+
+func _nav_idx3(cx, cz): int { return cz * _nav_w3 + cx; }
+
+func _nav_walls3(): int {
+    int c = 0;
+    int n = length(_e3);
+    int i = 0;
+    while (i < n) {
+        Ent3 w = _e3[i];
+        if (w.alive == 1 && w.tag == TAG_WALL && w.solid == 1) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+
+func _nav_slots3(n) {
+    while (length(_nav_wx3) < n) {
+        push(_nav_wx3, 0.0); push(_nav_wz3, 0.0); push(_nav_t3, 0.0);
+    }
+}
+
+// Izgarayı duvarlardan kur. `pad` ajanın yarıçapı: hücre bu kadar
+// ŞİŞİRİLMİŞ duvarla kesişiyorsa kapalı sayılıyor — yoksa yol duvara
+// sürtüyor ve gövde sıkışıyor.
+func nav_build3d(cell, pad) {
+    _nav_cell3 = cell;
+    if (_nav_cell3 < 0.25) { _nav_cell3 = 0.25; }
+    // Sınırlar CANLI HER VARLIKTAN türüyor: dünya sınırsız, ızgara olamaz.
+    //
+    // Yalnız duvarlara bakmak sessiz bir hataydı ve ilk yazımda tam bu oldu:
+    // düşman da hedef de duvarların DIŞINDA duruyordu, başlangıç/hedef
+    // hücresi ızgara dışına düşüyordu ve A* hiç yol aramadan false diyordu.
+    // Belirti "yol bulunamadı" değil, "düşman kımıldamıyor"du.
+    float minx = 0.0; float maxx = 0.0;
+    float minz = 0.0; float maxz = 0.0;
+    int any = 0;
+    int n = length(_e3);
+    int i = 0;
+    while (i < n) {
+        Ent3 w = _e3[i];
+        if (w.alive == 1) {
+            float hx = w.sx * 0.5; float hz = w.sz * 0.5;
+            if (any == 0) {
+                minx = w.x - hx; maxx = w.x + hx;
+                minz = w.z - hz; maxz = w.z + hz;
+                any = 1;
+            } else {
+                if (w.x - hx < minx) { minx = w.x - hx; }
+                if (w.x + hx > maxx) { maxx = w.x + hx; }
+                if (w.z - hz < minz) { minz = w.z - hz; }
+                if (w.z + hz > maxz) { maxz = w.z + hz; }
+            }
+        }
+        i = i + 1;
+    }
+    if (any == 0) { _nav_w3 = 0; _nav_h3 = 0; _nav_block3 = []; return; }
+    // Duvarsız sahnede ızgara kurmanın anlamı yok: her hücre açık olurdu ve
+    // A* düz çizgiyi bulurdu — `chase3d` bunu zaten bedavaya yapıyor.
+    if (_nav_walls3() == 0) { _nav_w3 = 0; _nav_h3 = 0; _nav_block3 = []; return; }
+    // Kenar payı PAD'İ DE hesaba katmalı. Bir hücrelik sabit pay yetmiyordu:
+    // duvar `pad` kadar şişirildiği için şişmiş hâli ızgaranın kenarına
+    // dayanıyor ve dışından dolaşacak açık hücre KALMIYORDU. Belirti sinsiydi
+    // — A* "yol yok" diyor, oyunda düşman kımıldamıyor, hiçbir hata çıkmıyor.
+    // İki hücre + pad: şişmiş duvarın dışında her zaman en az bir tam açık
+    // hücre kalıyor.
+    float marg = pad + _nav_cell3 * 2.0;
+    minx = minx - marg; maxx = maxx + marg;
+    minz = minz - marg; maxz = maxz + marg;
+    _nav_x03 = minx; _nav_z03 = minz;
+    _nav_w3 = toInt((maxx - minx) / _nav_cell3) + 1;
+    _nav_h3 = toInt((maxz - minz) / _nav_cell3) + 1;
+    if (_nav_w3 < 1) { _nav_w3 = 1; }
+    if (_nav_h3 < 1) { _nav_h3 = 1; }
+    if (_nav_w3 * _nav_h3 > _NAV_MAX3) {
+        // Tavanı aşan sahne: ızgara kurulmuyor ve `chase_path3d` düz
+        // kovalamaya düşüyor. Sessizce yanlış bir yol üretmektense
+        // bilinen davranışa dönmek doğru.
+        uyari3d("nav: ızgara çok büyük (" + toString(_nav_w3) + "x" +
+                toString(_nav_h3) + ") — hücreyi büyüt");
+        _nav_w3 = 0; _nav_h3 = 0; _nav_block3 = [];
+        return;
+    }
+    _nav_block3 = [];
+    int cells = _nav_w3 * _nav_h3;
+    int k = 0;
+    while (k < cells) { push(_nav_block3, 0); k = k + 1; }
+
+    // Her duvarı ızgaraya bas. Hücre merkezi yerine hücre KUTUSU ile
+    // kesişim: merkez testi ince duvarları tamamen kaçırırdı.
+    i = 0;
+    while (i < n) {
+        Ent3 w = _e3[i];
+        if (w.alive == 1 && w.tag == TAG_WALL && w.solid == 1) {
+            float hx = w.sx * 0.5 + pad;
+            float hz = w.sz * 0.5 + pad;
+            int c0 = toInt((w.x - hx - _nav_x03) / _nav_cell3);
+            int c1 = toInt((w.x + hx - _nav_x03) / _nav_cell3);
+            int r0 = toInt((w.z - hz - _nav_z03) / _nav_cell3);
+            int r1 = toInt((w.z + hz - _nav_z03) / _nav_cell3);
+            if (c0 < 0) { c0 = 0; }
+            if (r0 < 0) { r0 = 0; }
+            if (c1 > _nav_w3 - 1) { c1 = _nav_w3 - 1; }
+            if (r1 > _nav_h3 - 1) { r1 = _nav_h3 - 1; }
+            int r = r0;
+            while (r <= r1) {
+                int c = c0;
+                while (c <= c1) {
+                    _nav_block3[_nav_idx3(c, r)] = 1;
+                    c = c + 1;
+                }
+                r = r + 1;
+            }
+        }
+        i = i + 1;
+    }
+}
+func yol_izgarasi3d(hucre, pay) { nav_build3d(hucre, pay); }
+
+func nav_ready3d(): bool { return _nav_w3 > 0 && _nav_h3 > 0; }
+func yol_hazir3d(): bool { return nav_ready3d(); }
+func yol_kapali3d(x, z): bool { return nav_blocked3d(x, z); }
+func nav_blocked3d(x, z): bool {
+    if (!nav_ready3d()) { return false; }
+    int cx = toInt((x - _nav_x03) / _nav_cell3);
+    int cz = toInt((z - _nav_z03) / _nav_cell3);
+    if (cx < 0 || cz < 0 || cx >= _nav_w3 || cz >= _nav_h3) { return false; }
+    return _nav_block3[_nav_idx3(cx, cz)] == 1;
+}
+
+// A*: başlangıç hücresinden hedef hücreye. Bulunan yolun İKİNCİ hücresinin
+// dünya konumu `_nav_ox3/_nav_oz3`e yazılır (ilk hücre zaten üstünde
+// durduğumuz yer). Bulunamazsa false.
+float _nav_ox3 = 0.0;
+float _nav_oz3 = 0.0;
+
+func _nav_astar3(sx, sz, tx, tz): bool {
+    if (!nav_ready3d()) { return false; }
+    int scx = toInt((sx - _nav_x03) / _nav_cell3);
+    int scz = toInt((sz - _nav_z03) / _nav_cell3);
+    int tcx = toInt((tx - _nav_x03) / _nav_cell3);
+    int tcz = toInt((tz - _nav_z03) / _nav_cell3);
+    // KIRPMA: ızgara canlı varlıklardan kuruluyor ama biri arada dışarı
+    // çıkabilir (ışınlanma, dünya sınırı). Hemen vazgeçmek yerine en yakın
+    // kenar hücresinden yol aramak doğru — "oraya kadar götür" demek.
+    if (scx < 0) { scx = 0; }
+    if (scz < 0) { scz = 0; }
+    if (scx >= _nav_w3) { scx = _nav_w3 - 1; }
+    if (scz >= _nav_h3) { scz = _nav_h3 - 1; }
+    if (tcx < 0) { tcx = 0; }
+    if (tcz < 0) { tcz = 0; }
+    if (tcx >= _nav_w3) { tcx = _nav_w3 - 1; }
+    if (tcz >= _nav_h3) { tcz = _nav_h3 - 1; }
+    int start = _nav_idx3(scx, scz);
+    int goal = _nav_idx3(tcx, tcz);
+    if (start == goal) { return false; }
+    // Hedef hücresi kapalıysa (duvara yaslanmış oyuncu) yine de deniyoruz:
+    // kapalı hücreye komşu açık bir hücrede durmak yeterince iyi.
+    int cells = _nav_w3 * _nav_h3;
+
+    array g = [];      // start'tan maliyet; -1 = ziyaret edilmedi
+    array f = [];      // g + sezgisel
+    array came = [];   // nereden gelindi
+    array open = [];   // 1 = açık listede
+    int i = 0;
+    while (i < cells) { push(g, 0 - 1); push(f, 0.0); push(came, 0 - 1); push(open, 0); i = i + 1; }
+    g[start] = 0.0;
+    f[start] = _nav_hh3(scx, scz, tcx, tcz);
+    open[start] = 1;
+    int open_n = 1;
+
+    int guard = 0;
+    int found = 0;
+    while (open_n > 0 && found == 0 && guard < cells * 2) {
+        guard = guard + 1;
+        // En küçük f'li açık hücreyi bul. Öbek yok: ızgara tavanı 4096 ve
+        // yol birkaç karede bir hesaplanıyor, doğrusal tarama yeterli.
+        int cur = 0 - 1;
+        float best = 0.0;
+        i = 0;
+        while (i < cells) {
+            if (open[i] == 1) {
+                if (cur < 0 || f[i] < best) { cur = i; best = f[i]; }
+            }
+            i = i + 1;
+        }
+        if (cur < 0) { open_n = 0; }
+        else {
+            if (cur == goal) { found = 1; }
+            else {
+                open[cur] = 0; open_n = open_n - 1;
+                int ccx = mod(cur, _nav_w3);
+                int ccz = toInt((cur - ccx) / _nav_w3);
+                int d = 0;
+                while (d < 8) {
+                    int ddx = _nav_dx3(d);
+                    int ddz = _nav_dz3(d);
+                    int nx = ccx + ddx;
+                    int nz = ccz + ddz;
+                    if (nx >= 0 && nz >= 0 && nx < _nav_w3 && nz < _nav_h3) {
+                        int ni = _nav_idx3(nx, nz);
+                        if (_nav_block3[ni] == 0) {
+                            // KÖŞE KESME yasak: çaprazda iki ortogonal
+                            // komşudan biri kapalıysa geçilmiyor, yoksa yol
+                            // duvarın köşesinden geçermiş gibi görünürdü.
+                            bool ok = true;
+                            if (ddx != 0 && ddz != 0) {
+                                if (_nav_block3[_nav_idx3(ccx + ddx, ccz)] == 1) { ok = false; }
+                                if (_nav_block3[_nav_idx3(ccx, ccz + ddz)] == 1) { ok = false; }
+                            }
+                            if (ok) {
+                                float step = 1.0;
+                                if (ddx != 0 && ddz != 0) { step = 1.41421356; }
+                                float ng = g[cur] + step;
+                                if (g[ni] < 0.0 || ng < g[ni]) {
+                                    g[ni] = ng;
+                                    f[ni] = ng + _nav_hh3(nx, nz, tcx, tcz);
+                                    came[ni] = cur;
+                                    if (open[ni] == 0) { open[ni] = 1; open_n = open_n + 1; }
+                                }
+                            }
+                        }
+                    }
+                    d = d + 1;
+                }
+            }
+        }
+    }
+    if (found == 0) { return false; }
+
+    // Yolu geri sar, START'tan sonraki İLK hücreyi bul.
+    int node = goal;
+    int prev = came[node];
+    while (prev >= 0 && prev != start) {
+        node = prev;
+        prev = came[node];
+    }
+    if (prev != start) { return false; }
+    int ox = mod(node, _nav_w3);
+    int oz = toInt((node - ox) / _nav_w3);
+    _nav_ox3 = _nav_x03 + (ox + 0.5) * _nav_cell3;
+    _nav_oz3 = _nav_z03 + (oz + 0.5) * _nav_cell3;
+    return true;
+}
+
+// Sezgisel: sekiz yönlü ızgarada oktil mesafe. Manhattan burada AŞIRI
+// tahmin eder (çapraz adım 1.41 iken 2 sayar) ve A*'ı en kısa yoldan
+// saptırır; oktil kabul edilebilir sınırda kalıyor.
+func _nav_hh3(ax, az, bx, bz): float {
+    float dx = abs_f3((ax - bx) * 1.0);
+    float dz = abs_f3((az - bz) * 1.0);
+    float lo = dx;
+    float hi = dz;
+    if (dz < dx) { lo = dz; hi = dx; }
+    return (hi - lo) + lo * 1.41421356;
+}
+
+func _nav_dx3(d): int {
+    if (d == 0) { return 1; }
+    if (d == 1) { return 0 - 1; }
+    if (d == 2) { return 0; }
+    if (d == 3) { return 0; }
+    if (d == 4) { return 1; }
+    if (d == 5) { return 1; }
+    if (d == 6) { return 0 - 1; }
+    return 0 - 1;
+}
+func _nav_dz3(d): int {
+    if (d == 0) { return 0; }
+    if (d == 1) { return 0; }
+    if (d == 2) { return 1; }
+    if (d == 3) { return 0 - 1; }
+    if (d == 4) { return 1; }
+    if (d == 5) { return 0 - 1; }
+    if (d == 6) { return 1; }
+    return 0 - 1;
+}
+
+// A* ile kovala. Izgara kurulu değilse ya da yol bulunamazsa `chase3d`e
+// düşer — bilinen davranış, sessiz bir durma değil.
+func chase_path3d(id, target, speed) {
+    int s = _slot_of3(id);
+    int t = _slot_of3(target);
+    if (s < 0 || t < 0) { return; }
+    if (!nav_ready3d()) { chase3d(id, target, speed); return; }
+    _nav_slots3(length(_e3));
+
+    Ent3 e = _e3[s];
+    Ent3 tg = _e3[t];
+
+    _nav_t3[s] = _nav_t3[s] - frame_time();
+    if (_nav_t3[s] <= 0.0) {
+        _nav_t3[s] = _nav_repath3;
+        if (_nav_astar3(e.x, e.z, tg.x, tg.z)) {
+            _nav_wx3[s] = _nav_ox3;
+            _nav_wz3[s] = _nav_oz3;
+        } else {
+            _nav_wx3[s] = tg.x;      // yol yok → doğrudan hedefe
+            _nav_wz3[s] = tg.z;
+        }
+    }
+
+    float dx = _nav_wx3[s] - e.x;
+    float dz = _nav_wz3[s] - e.z;
+    float d = sqrt(dx * dx + dz * dz);
+    // Ara hedefe vardıysak bir sonrakini hemen iste.
+    if (d < _nav_cell3 * 0.4) { _nav_t3[s] = 0.0; }
+    if (d <= 0.001) { e.vx = 0.0; e.vz = 0.0; _e3[s] = e; return; }
+    e.vx = (dx / d) * speed;
+    e.vz = (dz / d) * speed;
+    e.yaw = atan2(e.vx, e.vz) * RAD2DEG3;
+    _e3[s] = e;
+}
+func yol_takip3d(i, hedef, hiz) { chase_path3d(i, hedef, hiz); }
 
 // Hedefe doğru yürü; önü kapalıysa AÇIK olan en yakın yöne sap.
 //

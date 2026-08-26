@@ -6259,6 +6259,164 @@ func t_ramp_index_is_superset_not_sync() {
 }
 
 
+// ---------------------------------------------------------------------------
+// A* YOL BULMA. Kaçınma TEK engeli çözüyor; bu testler onun çözemediği şeyi
+// ölçüyor: U biçimli bir cebe giren düşman orada kalır, çünkü yerel bir karar
+// küresel bir yolu bulamaz.
+//
+// Test AYIRT EDİCİ olmak zorunda: aynı sahnede düz kovalama BAŞARISIZ,
+// A* BAŞARILI olmalı. Yalnız "A* hedefe vardı" demek, düz kovalamanın da
+// varacağı bir sahnede hiçbir şey kanıtlamaz.
+// ---------------------------------------------------------------------------
+
+// U biçimli cep: arka duvar z=0'da, kollar z=0..-8 arasında x=±6'da.
+// Düşman (0,-10)'dan cebin ağzına bakıyor, hedef (0,+10) cebin ARKASINDA.
+func _nav_cep_kur(): int {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 1.5, 0.0,        13.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    spawn3(0.0 - 6.0, 1.5, 0.0 - 4.0,  1.0, 3.0, 8.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    spawn3(6.0, 1.5, 0.0 - 4.0,        1.0, 3.0, 8.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int hedef = spawn3(0.0, 1.0, 10.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    return hedef;
+}
+
+func _nav_mesafe(a, b): float {
+    float dx = get3x(a) - get3x(b);
+    float dz = get3z(a) - get3z(b);
+    return sqrt(dx * dx + dz * dz);
+}
+
+func t_astar_beats_straight_chase() {
+    // ÖLÇÜT: koşum boyunca ULAŞILAN EN YAKIN mesafe, son mesafe değil.
+    // "Vardı mı?" sorusunun cevabı bu. Son mesafeyi ölçmek yanıltıcıydı:
+    // iki katı gövde temas edince birbirini itiyor ve ikisi birlikte
+    // sürükleniyor, yani A* hedefe VARDIKTAN sonra mesafe yeniden açılıyor.
+    int hedef = _nav_cep_kur();
+    int dusman = spawn3(0.0, 1.0, 0.0 - 10.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    float duz = 1000.0;
+    int i = 0;
+    while (i < 900) {
+        chase3d(dusman, hedef, 6.0);
+        _s3_physics(1.0 / 60.0);
+        _s3_collision();
+        float m = _nav_mesafe(dusman, hedef);
+        if (m < duz) { duz = m; }
+        i = i + 1;
+    }
+
+    // 2) A*: aynı sahne, aynı süre.
+    hedef = _nav_cep_kur();
+    dusman = spawn3(0.0, 1.0, 0.0 - 10.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    nav_build3d(1.5, 0.6);
+    assert(nav_ready3d(), "izgara kurulmadi");
+    float astar = 1000.0;
+    i = 0;
+    while (i < 900) {
+        chase_path3d(dusman, hedef, 6.0);
+        _s3_physics(1.0 / 60.0);
+        _s3_collision();
+        float m2 = _nav_mesafe(dusman, hedef);
+        if (m2 < astar) { astar = m2; }
+        i = i + 1;
+    }
+
+    // Testin AYIRT EDİCİ olduğunu önce kanıtla: düz kovalama takılmalı.
+    assert(duz > 8.0,
+           "duz kovalama cebe takilmadi (test ayirt edici degil): " + toString(duz));
+    assert(astar < 3.0,
+           "A* cebi dolasamadi: " + toString(astar) + " (duz: " + toString(duz) + ")");
+}
+
+func t_nav_no_corner_cutting() {
+    // KÖŞE KESME: çaprazda iki ortogonal komşudan biri kapalıysa geçilmemeli.
+    // Geçilirse yol duvarın köşesinden sızar; gövdesi olan bir ajan oraya
+    // sığmaz ve takılır — sessiz bir hata, çünkü A* "yol buldum" der.
+    //
+    // Izgara ELLE kuruluyor: dünya geometrisiyle bu durumu üretmek hücre
+    // hizasına bağlı olurdu ve test ölçtüğü şeyi ölçemeyebilirdi. Burada
+    // 2x2'lik ızgara tam olarak o durumu kuruyor:
+    //     (0,0) açık   (1,0) KAPALI
+    //     (0,1) KAPALI (1,1) açık
+    // (0,0) ile (1,1) arasındaki TEK adım çapraz ve iki ortogonalı da kapalı.
+    scene3d_reset();
+    no_ground3d();
+    _nav_w3 = 2; _nav_h3 = 2;
+    _nav_cell3 = 1.0; _nav_x03 = 0.0; _nav_z03 = 0.0;
+    _nav_block3 = [0, 1, 1, 0];
+    assert(nav_ready3d(), "elle kurulan izgara hazir sayilmadi");
+    assert(_nav_astar3(0.5, 0.5, 1.5, 1.5) == false,
+           "A* kosesinden sizdi — kose kesme engellenmemis");
+
+    // Ters sözleşme: ortogonal komşulardan biri AÇIK olunca çapraz geçilmeli,
+    // yoksa düzeltme fazla hevesli olur ve normal çaprazları da keserdi.
+    _nav_block3 = [0, 0, 1, 0];
+    assert(_nav_astar3(0.5, 0.5, 1.5, 1.5),
+           "ortogonali acik olan capraz da engellenmis (fazla hevesli)");
+}
+
+func t_nav_grid_marks_walls() {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 1.5, 0.0, 10.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    nav_build3d(1.0, 0.0);
+    assert(nav_ready3d(), "izgara kurulmadi");
+    assert(nav_blocked3d(0.0, 0.0), "duvarin ustundeki hucre kapali degil");
+    assert(nav_blocked3d(4.0, 0.0), "duvarin ucundaki hucre kapali degil");
+    assert(nav_blocked3d(0.0, 8.0) == false, "bos alan kapali sayilmis");
+}
+
+func t_nav_pad_inflates_walls() {
+    // `pad` ajanın yarıçapı: yol duvara sürtmesin diye hücreler ŞİŞİRİLMİŞ
+    // duvarla test ediliyor. Pad'siz açık olan bir hücre pad'li kapanmalı.
+    // Nokta ÖLÇÜLEREK seçildi: ilk denemede (z=0.9) hücre pad'siz de kapalıydı
+    // ve test hiçbir şey ayırt etmiyordu. Izgara duvarın hücre KUTUSUYLA
+    // kesişimine bakıyor, yani duvarın hemen kenarındaki hücre zaten kapalı.
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 1.5, 0.0, 10.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    spawn3(0.0, 1.0, 6.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    nav_build3d(0.5, 0.0);
+    bool padsiz = nav_blocked3d(0.0, 2.0);
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 1.5, 0.0, 10.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    spawn3(0.0, 1.0, 6.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    nav_build3d(0.5, 2.0);
+    bool padli = nav_blocked3d(0.0, 2.0);
+    assert(padsiz == false, "pad'siz zaten kapaliymis — test ayirt edici degil");
+    assert(padli, "pad duvari sismedi");
+}
+
+func t_nav_falls_back_without_grid() {
+    // Izgara kurulmamışken `chase_path3d` SESSİZCE DURMAMALI; bilinen
+    // davranışa, düz kovalamaya düşmeli.
+    scene3d_reset();
+    no_ground3d();
+    int hedef = spawn3(10.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int dusman = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    assert(nav_ready3d() == false, "izgara beklenmedik sekilde kurulu");
+    int i = 0;
+    while (i < 120) {
+        chase_path3d(dusman, hedef, 6.0);
+        _s3_physics(1.0 / 60.0);
+        i = i + 1;
+    }
+    assert(_nav_mesafe(dusman, hedef) < 3.0,
+           "izgarasiz durumda duz kovalamaya dusmedi");
+}
+
+func t_nav_grid_cap_refuses_giant_grid() {
+    // Tavanı aşan sahnede ızgara KURULMAMALI: sessizce yanlış bir yol
+    // üretmektense bilinen davranışa dönmek doğru.
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 1.5, 0.0, 4000.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    nav_build3d(0.5, 0.0);
+    assert(nav_ready3d() == false, "dev izgara reddedilmedi");
+}
+
+
 test("satir yuksekligi fonttan buyuk", "t_ui_line_height_exceeds_font");
 test("dikey merkezleme", "t_ui_vertical_centering");
 test("dedektor metinleri goruyor", "t_ui_detector_sees_text");
@@ -6305,6 +6463,12 @@ test("hucre sinirindaki cift bulunur", "t_grid_finds_pair_across_cell_boundary")
 test("sarma sahte cakisma uretmez", "t_grid_no_false_pair_when_hashed_together");
 test("karisik boyutlar kacirilmaz", "t_grid_mixed_sizes");
 test("rampa dizini ust kume", "t_ramp_index_is_superset_not_sync");
+test("A* duz kovalamayi geciyor", "t_astar_beats_straight_chase");
+test("kose kesme yasak", "t_nav_no_corner_cutting");
+test("izgara duvarlari isaretliyor", "t_nav_grid_marks_walls");
+test("pad duvari sisiriyor", "t_nav_pad_inflates_walls");
+test("izgarasiz duz kovalamaya duser", "t_nav_falls_back_without_grid");
+test("dev izgara reddediliyor", "t_nav_grid_cap_refuses_giant_grid");
 test("ses sag-sol ayirimi", "t_snd_pan_left_right");
 test("ses kamerayla donuyor", "t_snd_pan_follows_camera_yaw");
 test("ses ekseni move3d ile ayni", "t_snd_pan_matches_move_axis");

@@ -1,0 +1,88 @@
+// scene3d — LABİRENT: A* yol bulma ile düz kovalamanın farkı.
+//
+//   ./tulpar examples/scene3d_labirent.tpr
+//
+// WASD/oklar: yürü   |   BOŞLUK: zıpla   |   Y: yol bulmayı aç/kapat
+//
+// İki kırmızı düşman seni kovalıyor. Y ile aradaki farkı canlı görebilirsin:
+//   AÇIK  → A* ile labirenti dolaşıp geliyorlar
+//   KAPALI→ `chase3d`in kaçınması TEK engeli çözüyor; çıkmaz koridora giren
+//           düşman orada kalıyor, çünkü yerel bir karar küresel bir yol
+//           bulamaz.
+//
+// Izgara duvarlardan bir kez kuruluyor (`yol_izgarasi3d`). Hücre kenarı
+// koridor genişliğinden küçük olmalı, yoksa koridorun tamamı kapalı görünür.
+// `pay` ajanın yarıçapı: yol duvara sürtmesin diye hücreler şişirilmiş
+// duvarla sınanıyor.
+
+import "scene3d";
+
+int oyuncu = 0;
+array dusmanlar = [];
+bool yol_bulma = true;
+int K_Y = 89;
+
+func duvar(x, z, sx, sz) {
+    uret3(x, 1.5, z, sx, 3.0, sz, rgb(120, 126, 145), SHAPE_CUBE, TAG_WALL);
+}
+
+func setup() {
+    gokyuzu3d(rgb(26, 32, 54), rgb(104, 122, 156));
+    sis3d(0.016);
+
+    // Dış çerçeve
+    duvar(0.0, 0.0 - 20.0, 42.0, 1.0);
+    duvar(0.0, 20.0,       42.0, 1.0);
+    duvar(0.0 - 20.0, 0.0, 1.0, 42.0);
+    duvar(20.0, 0.0,       1.0, 42.0);
+
+    // İç labirent — çıkmazlar bilerek var: düz kovalama onlara takılsın.
+    duvar(0.0 - 8.0, 0.0 - 6.0, 1.0, 22.0);
+    duvar(0.0,       6.0,       1.0, 22.0);
+    duvar(8.0,       0.0 - 6.0, 1.0, 22.0);
+    duvar(0.0 - 14.0, 4.0,      12.0, 1.0);
+    duvar(14.0,       0.0 - 4.0, 12.0, 1.0);
+    duvar(0.0 - 4.0,  0.0 - 14.0, 8.0, 1.0);
+    duvar(4.0,        14.0,       8.0, 1.0);
+
+    oyuncu = uret3(0.0 - 16.0, 1.0, 16.0, 1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    kamera_yorunge(oyuncu, 18.0, 14.0);
+
+    push(dusmanlar, uret3(16.0, 1.0, 0.0 - 16.0, 1.3, 2.0, 1.3, rgb(230, 80, 80), SHAPE_CUBE, TAG_ENEMY));
+    push(dusmanlar, uret3(16.0, 1.0, 16.0,       1.3, 2.0, 1.3, rgb(230, 120, 80), SHAPE_CUBE, TAG_ENEMY));
+
+    // Izgarayı duvarlar kurulduktan SONRA kur.
+    yol_izgarasi3d(1.5, 0.8);
+    kayit3d("izgara hazir: " + toString(yol_hazir3d()));
+}
+
+func update() {
+    hareket3(oyuncu, 9.0);
+    if (ziplandi()) { zipla3(oyuncu, 11.0); }
+    if (key_pressed(K_Y)) { yol_bulma = !yol_bulma; }
+
+    int i = 0;
+    while (i < length(dusmanlar)) {
+        int d = dusmanlar[i];
+        if (alive3(d)) {
+            if (yol_bulma) { yol_takip3d(d, oyuncu, 4.5); }
+            else { takip_et3d(d, oyuncu, 4.5); }
+        }
+        i = i + 1;
+    }
+}
+
+func hud() {
+    if (yol_bulma) {
+        text("Yol bulma: A* ACIK  (Y ile kapat)", 12, 12, 20, rgb(150, 230, 150));
+    } else {
+        text("Yol bulma: KAPALI — duz kovalama  (Y ile ac)", 12, 12, 20, rgb(235, 160, 150));
+    }
+    text("Kapaliyken cikmaz koridora giren dusman takilir.", 12, 38, 15, rgb(180, 190, 205));
+}
+
+sahne3d(940, 560, "Tulpar 3B — Labirent (A*)");
+kurulumda3(setup);
+her_kare3(update);
+hud_ciz3(hud);
+oyna3d();

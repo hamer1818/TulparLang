@@ -207,6 +207,41 @@ hata çıkıyor.
 Adaylar artık hem çalışma dizinine hem EXE DİZİNİNE göre üretiliyor, yani
 bağlama hangi dizinden çalışıldığından bağımsız.
 
+### Added — A* yol bulma (kaçınmanın çözemediği şey)
+
+`chase3d`in kaçınması TEK engeli çözüyor: duvara değince bir yana bağlanıp
+kayıyor. Labirenti çözmüyor — çıkmaz bir koridora giren düşman orada kalıyor,
+çünkü yerel bir karar küresel bir yolu bulamaz.
+
+`nav_build3d(hucre, pay)` duvarlardan doluluk ızgarası kuruyor,
+`chase_path3d` A* ile onu izliyor. Saf Tulpar; C tarafına dokunmuyor.
+
+`chase3d` VARSAYILAN kalıyor. A* her çağrıda ızgara taraması demek, çoğu
+oyunun ihtiyacı yok (arenada düz kovalama daha "aç gözlü" ve doğal duruyor)
+ve varsayılanı değiştirmek yayınlanmış oyunların düşman davranışını haber
+vermeden değiştirirdi. Izgara yoksa ya da yol bulunamazsa `chase3d`e
+düşülüyor — bilinen davranış, sessiz bir durma değil.
+
+Köşe kesme yasak: çaprazda iki ortogonal komşudan biri kapalıysa geçilmiyor.
+Geçilseydi yol duvarın köşesinden sızar, gövdesi olan ajan oraya sığmaz ve
+takılırdı — üstelik A* "yol buldum" dediği için sessiz bir hata olurdu.
+
+Yazarken üç gerçek hata çıktı ve **üçü de sessizdi** (hiçbiri hata mesajı
+üretmiyordu, belirti "düşman kımıldamıyor"du):
+1. Izgara yalnız duvarlardan kuruluyordu, oysa ajanlar duvarların dışında —
+   başlangıç hücresi ızgara dışına düşüyor ve A* hiç aramadan "yol yok" diyordu.
+2. Kenar payı `pad`i saymıyordu; şişirilmiş duvar ızgara kenarına dayanıp
+   cebi mühürlüyordu.
+3. `scene3d_reset` nav durumunu temizlemiyordu — yeni sahne ESKİ duvarların
+   ızgarasını kullanıyordu (aynı sınıf: `_slope_lim3`, parçacık ayarları).
+
+Testler AYIRT EDİCİ olmak zorunda: aynı sahnede düz kovalama BAŞARISIZ, A*
+BAŞARILI. Ölçüt "koşum boyunca ulaşılan en yakın mesafe" — son mesafe
+yanıltıcıydı, çünkü iki katı gövde temas edince birbirini itip birlikte
+sürükleniyor, yani A* vardıktan SONRA mesafe yeniden açılıyor.
+
+Örnek: `examples/scene3d_labirent.tpr` — Y tuşu A*'ı açıp kapatıyor.
+
 ### Fixed — çarpışma O(n²)'den çıktı; ve asıl darboğaz çarpışma değilmiş
 
 TODO "~800 entity üstüne çıkılmadıkça getirisi yok" diyordu. Ölçüm bunu
