@@ -66,6 +66,9 @@ struct Ent3 {
     float yaw;                        // Y dönüşü (derece) — hareket yönüne bakar
     int shape;                        // SHAPE_*
     int model;                        // SHAPE_MODEL ise handle, değilse -1
+    // Modelin KAYNAK YOLU ("" = yok / prosedürel mesh). Handle süreç içi bir
+    // sayı olduğu için sahne dosyasına yazılabilir olan bu.
+    str msrc;
     int color;                        // paketli renk
     int tag;                          // TAG_*
     int grounded;                     // zeminde mi (zıplama için)
@@ -221,6 +224,86 @@ int   _sky_bot3 = 0;
 // Zemin dokusu (opsiyonel). -1 = dokusuz düz renk (varsayılan).
 int   _ground_tex3 = 0 - 1;
 float _ground_tile3 = 1.0;
+// Zemin dokusunun YOLU — handle taşınabilir değil, yol taşınabilir.
+str   _ground_tex_src3 = "";
+
+// ---- Varlık (asset) kaydı --------------------------------------------------
+// `load_model`/`load_texture` SÜREÇ İÇİ bir sayı döner. Sahne dosyasına o
+// sayıyı yazmak taşınabilir görünüp taşınabilir OLMAYAN bir dosya üretiyordu:
+// aynı sahne başka bir çalıştırmada modelleri karışmış ya da hiç yüklenmemiş
+// açılır, çünkü handle yükleme SIRASINA bağlı. Kayıt araya giriyor —
+// sahne YOLU yazıyor, yükleyen yolu handle'a çeviriyor.
+//
+// Aynı yol iki kez istendiğinde ikinci kez yüklenmiyor: bir modeli kullanan
+// yirmi varlık yirmi kopya değil tek bir GPU yüklemesi demek.
+array _as_path3 = [];    // str  — dosya yolu
+array _as_kind3 = [];    // int  — AS_MODEL3 / AS_TEX3
+array _as_h3    = [];    // int  — yükleme handle'ı (-1 = yüklenemedi)
+
+int AS_MODEL3 = 0;
+int AS_TEX3   = 1;
+
+func _as_find3(path, kind): int {
+    int i = 0;
+    while (i < length(_as_path3)) {
+        if (_as_kind3[i] == kind && _as_path3[i] == path) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Yol → handle. Yükleme başarısızsa -1 KAYDEDİLİYOR ve kaydı silinmiyor:
+// eksik bir dosya her karede yeniden yüklenmeye çalışılırsa editör diske
+// takılır. Dosya sonradan gelirse `asset_reload3d` var.
+func _as_get3(path, kind): int {
+    if (path == "") { return 0 - 1; }
+    int k = _as_find3(path, kind);
+    if (k >= 0) { return _as_h3[k]; }
+    int h = 0 - 1;
+    if (kind == AS_MODEL3) { h = load_model(path); }
+    else                   { h = load_texture(path); }
+    push(_as_path3, path);
+    push(_as_kind3, kind);
+    push(_as_h3, h);
+    return h;
+}
+
+// Modeli yoldan al (bir kez yükler, sonra önbellekten).
+//
+//   int h = asset_model3d("varliklar/robot.glb");
+func asset_model3d(path): int   { return _as_get3(path, AS_MODEL3); }
+func varlik_model3d(yol): int   { return _as_get3(yol, AS_MODEL3); }
+// Dokuyu yoldan al.
+func asset_texture3d(path): int { return _as_get3(path, AS_TEX3); }
+func varlik_doku3d(yol): int    { return _as_get3(yol, AS_TEX3); }
+
+// Kayıttaki girdi sayısı / i. girdinin yolu, türü, handle'ı. Araçlar ve
+// testler kaydın içine bakabilsin diye.
+func asset_count3d(): int      { return length(_as_path3); }
+func asset_path3d(i): str {
+    if (i < 0 || i >= length(_as_path3)) { return ""; }
+    return _as_path3[i];
+}
+func asset_kind3d(i): int {
+    if (i < 0 || i >= length(_as_kind3)) { return 0 - 1; }
+    return _as_kind3[i];
+}
+func asset_handle3d(i): int {
+    if (i < 0 || i >= length(_as_h3)) { return 0 - 1; }
+    return _as_h3[i];
+}
+// Yüklenememiş (handle < 0) bir girdiyi yeniden dener. Dosya sonradan
+// eklenince editörü kapatmak gerekmesin diye.
+func asset_reload3d(path, kind): int {
+    int k = _as_find3(path, kind);
+    if (k < 0) { return _as_get3(path, kind); }
+    if (_as_h3[k] >= 0) { return _as_h3[k]; }
+    int h = 0 - 1;
+    if (kind == AS_MODEL3) { h = load_model(path); }
+    else                   { h = load_texture(path); }
+    _as_h3[k] = h;
+    return h;
+}
 // Sis yoğunluğu. 0 = kapalı (varsayılan). Rengi gökyüzünün ufkundan alınır.
 float _fog3 = 0.0;
 
@@ -311,7 +394,7 @@ func _alloc_slot3(Ent3 e): int {
 func spawn3(x, y, z, sx, sy, sz, color, shape, tag): int {
     Ent3 e = { x: x, y: y, z: z,  vx: 0.0, vy: 0.0, vz: 0.0,
                sx: sx, sy: sy, sz: sz,  yaw: 0.0,
-               shape: shape, model: 0 - 1, color: color, tag: tag,
+               shape: shape, model: 0 - 1, msrc: "", color: color, tag: tag,
                grounded: 0, alive: 1, solid: _default_solid3(tag),
                hp: 0, hpmax: 0, invuln: 0.0, life: 0.0, owner: 0 - 1, pdir: 0,
                anim_idle: 0 - 1, anim_run: 0 - 1, anim_fps: 24.0, anim_t: 0.0,
@@ -324,13 +407,69 @@ func spawn3(x, y, z, sx, sy, sz, color, shape, tag): int {
 func spawn3_model(x, y, z, scale, model_handle, tag): int {
     Ent3 e = { x: x, y: y, z: z,  vx: 0.0, vy: 0.0, vz: 0.0,
                sx: scale, sy: scale, sz: scale,  yaw: 0.0,
-               shape: SHAPE_MODEL, model: model_handle, color: WHITE, tag: tag,
+               shape: SHAPE_MODEL, model: model_handle, msrc: "", color: WHITE, tag: tag,
                grounded: 0, alive: 1, solid: _default_solid3(tag),
                hp: 0, hpmax: 0, invuln: 0.0, life: 0.0, owner: 0 - 1, pdir: 0,
                anim_idle: 0 - 1, anim_run: 0 - 1, anim_fps: 24.0, anim_t: 0.0,
                anim_a: 0 - 1, anim_b: 0 - 1, anim_w: 0.0, anim_manual: 0,
                avoid: 0 };
     return _mk_handle3(_alloc_slot3(e));
+}
+
+// Yoldan modelli entity — handle'ı da KAYNAK YOLUNU da kurar, yani bu yolla
+// üretilen varlık sahne dosyasına taşınabilir biçimde yazılır. `spawn3_model`
+// ham handle aldığı için yolu bilemez; sahneye kalıcı model koyacaksan bunu
+// kullan.
+//
+//   int r = spawn3_asset(0.0, 1.0, 0.0, 1.0, "varliklar/robot.glb", TAG_PLAYER);
+func spawn3_asset(x, y, z, scale, path, tag): int {
+    int id = spawn3_model(x, y, z, scale, asset_model3d(path), tag);
+    int sl = _slot_of3(id);
+    Ent3 e = _e3[sl];
+    e.msrc = path;
+    _e3[sl] = e;
+    return id;
+}
+func uret3_varlik(x, y, z, olcek, yol, etiket): int {
+    return spawn3_asset(x, y, z, olcek, yol, etiket);
+}
+
+// Var olan bir varlığa yoldan model bağla. Şekli de MODEL yapıyor — modeli
+// olup şekli küp kalan bir varlık kutu olarak çizilirdi.
+func set_model3d(id, path): int {
+    int sl = _slot_of3(id);
+    if (sl < 0) { return 0; }
+    int h = asset_model3d(path);
+    Ent3 e = _e3[sl];
+    e.model = h;
+    e.msrc = path;
+    e.shape = SHAPE_MODEL;
+    _e3[sl] = e;
+    return 1;
+}
+func model_ata3d(id, yol): int { return set_model3d(id, yol); }
+
+// Modeli kaldır → varlık yeniden bir küp. Şekli de geri almak şart: MODEL
+// kalırsa modelsiz bir MODEL varlık, yani hiç çizilmeyen bir şey kalıyor.
+func clear_model3d(id): int {
+    int sl = _slot_of3(id);
+    if (sl < 0) { return 0; }
+    Ent3 e = _e3[sl];
+    e.model = 0 - 1;
+    e.msrc = "";
+    e.shape = SHAPE_CUBE;
+    e.anim_idle = 0 - 1;
+    e.anim_run = 0 - 1;
+    _e3[sl] = e;
+    return 1;
+}
+func model_kaldir3d(id): int { return clear_model3d(id); }
+
+// Varlığın model yolu ("" = yok).
+func model_src3d(id): str {
+    int sl = _slot_of3(id);
+    if (sl < 0) { return ""; }
+    return _e3[sl].msrc;
 }
 
 // Öldür + slot'u boş yığına iade. _e3gen artar: bu handle ve aynı slot'a ait
@@ -4326,6 +4465,16 @@ func gokyuzu3d_kapat() { sky3d_off(); }
 //   int t = checker(128, 128, 8, rgb(158,166,176), rgb(120,128,140));
 //   ground_texture3d(t, 24.0);
 func ground_texture3d(t, tile) { _ground_tex3 = t; _ground_tile3 = tile; }
+// Zemin dokusunu YOLDAN kur — kaydedilebilen sürüm. `ground_texture3d` ham
+// handle aldığı için yolu bilemez ve sahneye yazılamaz.
+func ground_texture_src3d(path, tile) {
+    _ground_tex_src3 = path;
+    _ground_tile3 = tile;
+    if (path == "") { _ground_tex3 = 0 - 1; }
+    else            { _ground_tex3 = asset_texture3d(path); }
+}
+func zemin_doku_yol3d(yol, tile) { ground_texture_src3d(yol, tile); }
+func ground_texture_path3d(): str { return _ground_tex_src3; }
 func zemin_doku3d(t, tile)     { ground_texture3d(t, tile); }
 
 // Mesafe sisi (0 = kapalı, 0.02 hafif pus, 0.06 yoğun). Rengi gökyüzünün
@@ -5366,7 +5515,7 @@ func _sc_coljs3(c): str {
 func _sc_world_defaults3() {
     _sky3 = 0; _fog3 = 0.0;
     _ground_on = 1; _ground_y = 0.0;
-    _ground_tex3 = 0 - 1; _ground_tile3 = 1.0;
+    _ground_tex3 = 0 - 1; _ground_tile3 = 1.0; _ground_tex_src3 = "";
     _grav = 26.0;
     _lights3 = 1; _shadows3 = 1;
     _cam_dist = 12.0; _cam_height = 8.0; _cam_fov = 45.0;
@@ -5395,6 +5544,8 @@ func _sc_load_world3(w) {
     // da boşlukta duran platformlar). Bu yüzden varsayılan değere düşmüyor.
     if (_sc_has3(w, "ground")) { ground3d(_sc_f3(w, "ground", 0.0)); }
     else { no_ground3d(); }
+    str gts = _sc_s3(w, "ground_tex", "");
+    if (gts != "") { ground_texture_src3d(gts, _sc_f3(w, "ground_tile", 1.0)); }
     gravity3d(_sc_f3(w, "gravity", 26.0));
     lights3d(_sc_bool3(w, "lights", 1));
     shadows3d(_sc_bool3(w, "shadows", 1));
@@ -5461,6 +5612,26 @@ func _sc_load_camera3(w) {
     if (_sc_has3(cm, "lock")) { camera_lock3d(_sc_bool3(cm, "lock", 1)); }
 }
 
+// JSON dizesi: tırnak + kaçış. Adlar tarihsel olarak HAM yazılıyor (tırnaksız
+// bir ad zaten editörde üretilemiyor), ama DOSYA YOLU kullanıcının diskinden
+// geliyor — içinde ters bölü ya da tırnak varsa kaçırılmadan yazmak sahne
+// dosyasını ayrıştırılamaz yapardı.
+func _sc_q3(v): str {
+    str o = "\"";
+    int i = 0;
+    int n = length(v);
+    while (i < n) {
+        int c = ord(v, i);
+        if (c == 34)      { o = o + "\\\""; }
+        else {
+            if (c == 92)  { o = o + "\\\\"; }
+            else          { o = o + substring(v, i, i + 1); }
+        }
+        i = i + 1;
+    }
+    return o + "\"";
+}
+
 // ---- Entity: JSON → motor --------------------------------------------------
 func _sc_load_ent3(e): int {
     int id = spawn3(_sc_f3(e, "x", 0.0), _sc_f3(e, "y", 0.0), _sc_f3(e, "z", 0.0),
@@ -5468,12 +5639,21 @@ func _sc_load_ent3(e): int {
                     _sc_col3(e, "color", WHITE),
                     _sc_shape3(_sc_s3(e, "shape", "cube")),
                     _sc_tag3(_sc_s3(e, "tag", "prop")));
-    if (_sc_has3(e, "model")) {
+    if (_sc_has3(e, "model") || _sc_has3(e, "model_src")) {
         int sl = _slot_of3(id);
         Ent3 me = _e3[sl];
-        me.model = _sc_i3(e, "model", 0 - 1);
+        // YOL kazanır. Dosyadaki handle yalnız aynı süreçte anlamlı; yol
+        // varsa modeli yoldan (önbellekli) yüklemek hem doğru hem taşınabilir.
+        str src = _sc_s3(e, "model_src", "");
+        if (src != "") {
+            me.msrc = src;
+            me.model = asset_model3d(src);
+        } else {
+            me.model = _sc_i3(e, "model", 0 - 1);
+        }
         me.anim_idle = _sc_i3(e, "anim_idle", 0 - 1);
         me.anim_run  = _sc_i3(e, "anim_run", 0 - 1);
+        me.anim_fps  = _sc_f3(e, "anim_fps", 24.0);
         _e3[sl] = me;
     }
     if (_sc_has3(e, "yaw"))   { set3yaw(id, _sc_f3(e, "yaw", 0.0)); }
@@ -5774,6 +5954,12 @@ func _sc_world_js3(): str {
     }
     if (_fog3 > 0.0) { o = o + "    \"fog\": " + _sc_num3(_fog3) + ",\n"; }
     if (_ground_on == 1) { o = o + "    \"ground\": " + _sc_num3(_ground_y) + ",\n"; }
+    // Zemin dokusu hiç yazılmıyordu: dokulu bir sahne kaydedilip açıldığında
+    // zemin sessizce düz renge dönüyordu. Handle değil YOL yazılıyor.
+    if (_ground_tex_src3 != "") {
+        o = o + "    \"ground_tex\": " + _sc_q3(_ground_tex_src3) +
+            ", \"ground_tile\": " + _sc_num3(_ground_tile3) + ",\n";
+    }
     o = o + "    \"gravity\": " + _sc_num3(_grav) + ",\n";
     if (_lights3 == 0)  { o = o + "    \"lights\": false,\n"; }
     if (_shadows3 == 0) { o = o + "    \"shadows\": false,\n"; }
@@ -5864,14 +6050,28 @@ func _sc_ent_js3(s): str {
         else { o = o + ", \"solid\": false"; }
     }
     if (e.hpmax > 0) { o = o + ", \"hp\": " + toString(e.hpmax); }
-    // Model tanıtıcısı SÜREÇ İÇİ bir handle; dosyaya yazılması onu taşınabilir
-    // yapmıyor (başka bir çalıştırmada anlamsız). Yine de yazılıyor, çünkü
-    // editörün gidiş-dönüşü (TAB, geri-al) aynı süreçte oluyor ve bu olmadan
-    // modelli varlıklar kutuya dönüşüyordu.
-    if (e.shape == SHAPE_MODEL && e.model >= 0) {
-        o = o + ", \"model\": " + toString(e.model);
+    // İKİ alan yazılıyor ve ikisi AYNI ŞEY DEĞİL:
+    //   "model"     — süreç içi handle. Yalnız editörün aynı süreçteki
+    //                 gidiş-dönüşü (TAB, geri-al) için; bu olmadan modelli
+    //                 varlıklar o turda kutuya dönüşüyordu.
+    //   "model_src" — DOSYA YOLU. Taşınabilir olan bu; başka bir çalıştırma
+    //                 sahneyi yolla yükler ve handle'ı yeniden kurar.
+    // Yükleyici yol varsa yolu yeğliyor. Prosedürel mesh'in (gen_kama vb.)
+    // yolu yoktur — o durumda yalnız handle kalıyor, yani eskisi kadar.
+    // İKİ koruma AYRI, ve ayrı olmaları şart. Tek koruma `model >= 0` idi:
+    // dosya o an yüklenemediyse (eksik varlık, pencere yok) handle -1 kalıyor
+    // ve blok tümden atlanıyordu — yani sahneyi kaydetmek model referansını
+    // SESSİZCE SİLİYORDU. Yol, handle'ın yüklenip yüklenmediğinden bağımsız
+    // olarak varlığın ne olmak istediğini söylüyor; yazılması gereken o.
+    if (e.shape == SHAPE_MODEL) {
+        if (e.msrc != "") { o = o + ", \"model_src\": " + _sc_q3(e.msrc); }
+        if (e.model >= 0) { o = o + ", \"model\": " + toString(e.model); }
         if (e.anim_idle >= 0) { o = o + ", \"anim_idle\": " + toString(e.anim_idle); }
         if (e.anim_run >= 0)  { o = o + ", \"anim_run\": " + toString(e.anim_run); }
+        // Hız da yazılıyor. Yazılmıyordu: elle kurulmuş bir animasyon hızı
+        // kaydedip açınca sessizce 24'e dönüyordu. Yalnız varsayılandan
+        // FARKLIYSA yazılır — dosyayı gereksiz alanla şişirmemek için.
+        if (e.anim_fps != 24.0) { o = o + ", \"anim_fps\": " + _sc_num3(e.anim_fps); }
     }
     str bs = _sc_bh_js3(_mk_handle3(s));
     if (bs != "") { o = o + ", \"behaviors\": [" + bs + "]"; }
@@ -6451,6 +6651,22 @@ func scene_check3d(): int {
     }
     if (_chk_tag_say3(TAG_ITEM) > 0 && !_chk_tag_in_rule3(TAG_ITEM)) {
         _chk_add3("esya var ama hicbir kurala girmiyor — toplanamazlar");
+    }
+
+    // Modeli YÜKLENEMEMİŞ varlıklar. Sahne dosyası artık yol taşıyor, yani
+    // dosya taşınınca/silinince bağ kopabiliyor. Kopan bağ sessiz: varlık
+    // orada durur, hiçbir şey çizilmez. Denetim onu söylüyor.
+    int eksik = 0;
+    i = 0;
+    while (i < length(_e3)) {
+        Ent3 ce = _e3[i];
+        if (ce.alive == 1 && ce.msrc != "" && _ed_as_loaded3(ce.msrc) == 0) {
+            eksik = eksik + 1;
+        }
+        i = i + 1;
+    }
+    if (eksik > 0) {
+        _chk_add3(toString(eksik) + " varligin model dosyasi yuklenemedi");
     }
     return length(_chk_msgs3);
 }
@@ -7446,7 +7662,8 @@ func ed_duplicate3d(id): int {
     // modelli bir varlığın kopyası "şekli MODEL ama modeli yok" oluyordu.
     int ns = _slot_of3(n);
     Ent3 ne = _e3[ns];
-    ne.model = e.model; ne.anim_idle = e.anim_idle; ne.anim_run = e.anim_run;
+    ne.model = e.model; ne.msrc = e.msrc;
+    ne.anim_idle = e.anim_idle; ne.anim_run = e.anim_run;
     ne.anim_fps = e.anim_fps; ne.avoid = e.avoid;
     _e3[ns] = ne;
     set3yaw(n, e.yaw);
@@ -8315,6 +8532,9 @@ func _G_DIM3(): int   { return rgb(132, 142, 158); }
 func _G_ACC3(): int   { return rgb(255, 198, 78); }
 func _G_SEL3(): int   { return rgb(48, 84, 128); }
 func _G_FLD3(): int   { return rgb(32, 36, 44); }
+// Uyarı: hata değil ama "buna bak". Sahne denetimi ve yüklenemeyen varlık
+// aynı rengi kullanıyor — ikisi de aynı şeyi söylüyor.
+func _G_WARN3(): int  { return rgb(240, 190, 110); }
 
 // ---- Metin: her şey ÖLÇÜLEREK yerleştiriliyor -----------------------------
 // Sabit karakter genişliği varsaymak bu yazı tipinde yanlış (değişken
@@ -9431,6 +9651,74 @@ func _ed_next_shape3(sh): int {
     if (sh == SHAPE_CYL)    { return SHAPE_RAMP; }
     return SHAPE_CUBE;
 }
+// ---- Varlık tarayıcısı (editör) --------------------------------------------
+// Modeli sahneye bağlamanın tek yolu KOD YAZMAKTI (`load_model` + elle handle).
+// Yani editörle kurulabilen her şey ya küp ya küre kalıyordu; "kendi karakterin"
+// editörün dışındaydı. Tarayıcı diski `file_glob` ile tarayıp bulduğu dosyaları
+// tıklanır satırlara çeviriyor.
+//
+// Tarama HER KARE yapılmıyor — desen değişince ya da TARA'ya basılınca. Disk
+// taraması karede bir yapılırsa editör panelin altında takılır.
+str   _ed_asglob3   = "varliklar/*.glb";
+array _ed_asfiles3  = [];
+int   _ed_asdone3   = 0;    // bu desen tarandı mı
+int   _ed_asopen3   = 0;    // tarayıcı açık mı
+int   _ed_asscroll3 = 0;    // liste kaydırması (satır)
+
+// Tarayıcının bir seferde gösterdiği satır sayısı. Panel zaten kaydırılabilir
+// ama liste ONUN İÇİNDE de kaydırılıyor: 300 dosyalık bir klasör paneli
+// kilometrelerce uzatır ve altındaki DAVRANIŞLAR bölümü erişilemez olurdu.
+func _ed_as_rows3(): int { return 6; }
+
+// Liste kaydırmasını sınırlara kelepçele. Ayrı fonksiyon: dosya sayısı
+// azalınca (yeni tarama, daha dar desen) eski kaydırma listenin dışında
+// kalıyor ve panel boş görünüyordu — sınanabilir olması bunun için.
+func _ed_as_clamp3(sc, n, rows): int {
+    if (sc > n - rows) { sc = n - rows; }
+    if (sc < 0) { sc = 0; }
+    return sc;
+}
+
+// Klip indeksini modelin gerçek klip sayısına kelepçele. -1 = klip yok.
+// Kelepçesiz bir indeks çizimde var olmayan animasyona uzanıyor; motor onu
+// yok sayıyor, yani karakter sessizce T-poz kalıyordu.
+// n = 0 (klipsiz model) için ayrı bir dal YOK ve gerekmiyor: üst sınır
+// `n - 1` = -1 olduğu için 0 ve üstü zaten -1'e iniyor, -1'in altı da öyle.
+// Dal yazılmıştı; enjeksiyon onu silince hiçbir test kırılmadı — ölü koddu.
+func _ed_anim_clamp3(v, n): int {
+    if (v < 0 - 1) { return 0 - 1; }
+    if (v > n - 1) { return n - 1; }
+    return v;
+}
+
+func _ed_asset_scan3() {
+    _ed_asfiles3 = file_glob(_ed_asglob3);
+    _ed_asdone3 = 1;
+    _ed_asscroll3 = 0;
+}
+
+// Yolun son parçası. Liste dar; tam yol yazmak her satırı "varliklar/…" ile
+// başlatıp ayırt edici kısmı kırpardı.
+func _ed_basename3(path): str {
+    int i = length(path) - 1;
+    while (i >= 0) {
+        int c = ord(path, i);
+        if (c == 47 || c == 92) { return substring(path, i + 1, length(path)); }
+        i = i - 1;
+    }
+    return path;
+}
+
+// Bir modelin gerçekten yüklenip yüklenmediği. Pencere yokken ya da dosya
+// bozukken handle -1 kalıyor; kullanıcıya "atadım" deyip hiçbir şey
+// göstermemek en kötü geri bildirim olurdu.
+func _ed_as_loaded3(path): int {
+    int k = _as_find3(path, AS_MODEL3);
+    if (k < 0) { return 0 - 1; }      // hiç denenmedi
+    if (_as_h3[k] >= 0) { return 1; }
+    return 0;                          // denendi, olmadı
+}
+
 // Etiketli sayı alanı: etiket solda, alan sağda. Panelin her yerinde aynı
 // hizayı verdiği için davranış blokları sütun sütun okunuyor.
 func _ed_bhf3(wid, x, y, lw, fw, label, val, step): float {
@@ -9568,7 +9856,7 @@ func _ed_world_panel3(px, py, pw) {
     } else {
         int ci = 0;
         while (ci < sorun && ci < 8) {
-            _g_txt3("! " + scene_check_msg3d(ci), lx, y, inner, rgb(240, 190, 110));
+            _g_txt3("! " + scene_check_msg3d(ci), lx, y, inner, _G_WARN3());
             y = y + _g_lh3();
             ci = ci + 1;
         }
@@ -10010,6 +10298,129 @@ func _ed_inspector3() {
     rect(px + pw - _ED_PAD3 - sww, y, sww, _ED_FLD3, _e3[s].color);
     rect_lines(px + pw - _ED_PAD3 - sww, y, sww, _ED_FLD3, _G_LINE3());
     y = y + _ED_FLD3 + _us3(6);
+
+    // -- MODEL: varlık tarayıcısı --
+    e = _e3[s];
+    int xbw = _us3(16);
+    str mcur = "model: yok";
+    if (e.msrc != "") { mcur = _ed_basename3(e.msrc); }
+    else {
+        // Yolu olmayan ama modeli olan varlık = prosedürel mesh (gen_kama vb.).
+        // "yok" demek yanlış olurdu; kaldır düğmesi de ona uygulanmamalı.
+        if (e.shape == SHAPE_MODEL && e.model >= 0) { mcur = "model: uretilmis"; }
+    }
+    int mcol = _G_DIM3();
+    if (e.msrc != "" && _ed_as_loaded3(e.msrc) == 0) {
+        mcur = mcur + "  (YUKLENEMEDI)";
+        mcol = _G_WARN3();
+    }
+    _g_txt3(mcur, lx, _g_ly3(y), inner - xbw - 4, mcol);
+    if (e.msrc != "") {
+        if (_g_button(50000, px + pw - _ED_PAD3 - xbw, y, xbw, _ED_FLD3, "x")) {
+            ed_mark3d();
+            clear_model3d(id);
+        }
+        _g_tip_for3(50000, "Modeli kaldir — varlik yeniden kup olur");
+    }
+    y = y + _ED_FLD3 + _us3(3);
+
+    str asl = "MODEL SEC";
+    if (_ed_asopen3 == 1) { asl = "MODEL SEC  (kapat)"; }
+    if (_g_tog(50001, lx, y, inner, _ED_FLD3, asl, _ed_asopen3 == 1)) {
+        if (_ed_asopen3 == 1) { _ed_asopen3 = 0; }
+        else {
+            _ed_asopen3 = 1;
+            if (_ed_asdone3 == 0) { _ed_asset_scan3(); }
+        }
+    }
+    _g_tip_for3(50001, "Diskteki model dosyalarini tara ve bagla");
+    y = y + _ED_FLD3 + _us3(3);
+
+    if (_ed_asopen3 == 1) {
+        int tbw = _us3(38);
+        str g0 = _ed_asglob3;
+        str g1 = _g_text(50002, lx, y, inner - tbw - 4, _ED_FLD3, g0);
+        if (g1 != g0) { _ed_asglob3 = g1; _ed_asdone3 = 0; }
+        if (_g_button(50003, lx + inner - tbw, y, tbw, _ED_FLD3, "TARA")) {
+            _ed_asset_scan3();
+        }
+        _g_tip_for3(50003, "Deseni diskte ara (* ve ? calisir)");
+        y = y + _ED_FLD3 + _us3(3);
+
+        int an = length(_ed_asfiles3);
+        if (an == 0) {
+            str emsg = "eslesme yok";
+            if (_ed_asdone3 == 0) { emsg = "TARA'ya bas"; }
+            _g_txt3(emsg, lx, _g_ly3(y), inner, _G_DIM3());
+            y = y + _g_lh3();
+        }
+        int arows = _ed_as_rows3();
+        _ed_asscroll3 = _ed_as_clamp3(_ed_asscroll3, an, arows);
+        int ai = _ed_asscroll3;
+        int ashown = 0;
+        while (ai < an && ashown < arows) {
+            str apath = _ed_asfiles3[ai];
+            int arw = 50010 + ashown * 2;
+            int sel = 0;
+            if (apath == e.msrc) { sel = 1; }
+            if (_g_tog(arw, lx, y, inner, _ED_FLD3, _ed_basename3(apath), sel == 1)) {
+                ed_mark3d();
+                set_model3d(id, apath);
+            }
+            _g_tip_for3(arw, apath);
+            y = y + _ED_FLD3 + _us3(2);
+            ai = ai + 1;
+            ashown = ashown + 1;
+        }
+        if (an > arows) {
+            int pbw = _us3(30);
+            if (_g_button(50040, lx, y, pbw, _ED_FLD3, "^")) {
+                _ed_asscroll3 = _ed_asscroll3 - arows;
+            }
+            if (_g_button(50041, lx + pbw + 4, y, pbw, _ED_FLD3, "v")) {
+                _ed_asscroll3 = _ed_asscroll3 + arows;
+            }
+            _g_txt3(toString(_ed_asscroll3 + 1) + "-" + toString(_ed_asscroll3 + ashown) +
+                    " / " + toString(an), lx + (pbw + 4) * 2, _g_ly3(y),
+                    inner - (pbw + 4) * 2, _G_DIM3());
+            y = y + _ED_FLD3 + _us3(2);
+        }
+        y = y + _us3(4);
+    }
+
+    // -- ANIMASYON: yalnız modelli varlıkta anlamlı --
+    // Model atanabilir oldu ama HANGİ klibin boşta hangisinin koşu olduğunu
+    // söylemek hâlâ koddaydı; söylenmeyince karakter T-poz duruyor.
+    e = _e3[s];
+    if (e.shape == SHAPE_MODEL) {
+        int akl = 0;
+        if (e.model >= 0) { akl = anim_count(e.model); }
+        _g_txt3("animasyon: " + toString(akl) + " klip", lx, _g_ly3(y), inner, _G_DIM3());
+        y = y + _g_lh3();
+        if (akl > 0) {
+            int alw = _ed_bh_lblw3(inner);
+            int afw = _ed_bh_fieldw3(inner);
+            float ai0 = _ed_bhf3(50050, lx, y, alw, afw, "bosta", e.anim_idle * 1.0, 1.0);
+            y = y + _ED_FLD3 + _us3(2);
+            float ar0 = _ed_bhf3(50051, lx, y, alw, afw, "kosu", e.anim_run * 1.0, 1.0);
+            y = y + _ED_FLD3 + _us3(2);
+            float af0 = _ed_bhf3(50052, lx, y, alw, afw, "kare/sn", e.anim_fps, 1.0);
+            y = y + _ED_FLD3 + _us3(2);
+            int ni = _ed_anim_clamp3(toInt(ai0), akl);
+            int nr = _ed_anim_clamp3(toInt(ar0), akl);
+            if (ni != e.anim_idle || nr != e.anim_run || af0 != e.anim_fps) {
+                ed_mark3d();
+                e = _e3[s];
+                e.anim_idle = ni; e.anim_run = nr; e.anim_fps = af0;
+                _e3[s] = e;
+            }
+        } else {
+            _g_txt3("(model yuklenmeden klip secilemez)", lx, _g_ly3(y),
+                    inner, _G_DIM3());
+            y = y + _g_lh3();
+        }
+        y = y + _us3(4);
+    }
 
     _g_section(px + 2, y, pw - 4, "FIZIK");
     y = y + _us3(16);

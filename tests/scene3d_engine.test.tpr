@@ -7015,4 +7015,283 @@ test("donme kapatilabiliyor", "t_particle_spin_can_be_disabled");
 test("atlas karesi omur boyunca yuruyor", "t_particle_atlas_frame_walks_lifetime");
 test("atlas karesi basa sarmiyor", "t_particle_atlas_frame_does_not_wrap");
 test("izgarasiz doku tam cizilir", "t_particle_no_atlas_means_whole_texture");
+
+// Denetim iletileri arasında arama — hem "var" hem "YOK" yönünü sınamak için.
+func _t_chk_has3(needle): bool {
+    int i = 0;
+    while (i < scene_check_count3d()) {
+        if (_ed_match3(scene_check_msg3d(i), needle)) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+// ===========================================================================
+// VARLIK (ASSET) KAYDI — model yolu, taşınabilir sahne
+//
+// `load_model` SÜREÇ İÇİ bir handle döner. Sahne dosyasına o sayıyı yazmak
+// dosyayı taşınabilir GÖSTERİP taşınabilir yapMIyordu. Aşağıdakiler kaydın
+// üç işini de sınıyor: önbellek, yolun yazılması, yolun handle'ı yenmesi.
+// ===========================================================================
+
+func t_asset_registry_caches() {
+    int n0 = asset_count3d();
+    int h1 = asset_model3d("KAYIT_A.glb");
+    int n1 = asset_count3d();
+    int h2 = asset_model3d("KAYIT_A.glb");
+    int n2 = asset_count3d();
+    assert_eq_int(n1, n0 + 1);
+    // İkinci istek YENİ KAYIT AÇMAMALI — yoksa bir modeli kullanan yirmi
+    // varlık yirmi GPU yüklemesi demek.
+    assert_eq_int(n2, n1);
+    assert_eq_int(h2, h1);
+}
+
+func t_asset_registry_separates_kinds() {
+    int n0 = asset_count3d();
+    asset_model3d("KAYIT_B.png");
+    asset_texture3d("KAYIT_B.png");
+    // Aynı yol, farklı tür = farklı kayıt. Tür ayrılmazsa bir dosyayı hem
+    // model hem doku isteyen sahne yanlış handle alırdı.
+    assert_eq_int(asset_count3d(), n0 + 2);
+    int im = _as_find3("KAYIT_B.png", AS_MODEL3);
+    int it = _as_find3("KAYIT_B.png", AS_TEX3);
+    assert(im >= 0 && it >= 0 && im != it, "iki ayri kayit olmali");
+    assert_eq_int(asset_kind3d(im), AS_MODEL3);
+    assert_eq_int(asset_kind3d(it), AS_TEX3);
+    assert_eq_str(asset_path3d(im), "KAYIT_B.png");
+}
+
+func t_asset_src_serialized_and_roundtrips() {
+    scene3d_reset(); ground3d(0.0);
+    int a = spawn3_asset(1.0, 2.0, 3.0, 1.5, "varliklar/kahraman.glb", TAG_PLAYER);
+    assert_eq_str(model_src3d(a), "varliklar/kahraman.glb");
+    str js = scene_json3d();
+    assert(_ed_match3(js, "model_src"), "JSON model_src TASIMALI");
+    assert(_ed_match3(js, "varliklar/kahraman.glb"), "JSON YOLU tasimali");
+
+    scene3d_reset();
+    scene_load3d(js);
+    int b = _mk_handle3(0);
+    assert_eq_str(model_src3d(b), "varliklar/kahraman.glb");
+    // Şekil de dönmeli; model yolu taşıyıp şekli kaybetmek varlığı küp yapardı.
+    assert_eq_int(_e3[0].shape, SHAPE_MODEL);
+}
+
+// EN ÖNEMLİSİ. Yazıcının tek koruması `model >= 0` idi: dosya o an
+// yüklenemiyorsa (eksik varlık, pencere yok) handle -1 kalıyor ve blok
+// TÜMDEN atlanıyordu — yani sahneyi kaydetmek model referansını SESSİZCE
+// SİLİYORDU. Test başlıksız çalışıyor, yani burada handle GERÇEKTEN -1.
+func t_asset_src_written_even_when_load_failed() {
+    scene3d_reset(); ground3d(0.0);
+    int a = spawn3_asset(0.0, 0.0, 0.0, 1.0, "OLMAYAN_DOSYA.glb", TAG_PROP);
+    // Ön koşul: bu ortamda gerçekten yüklenememiş olmalı, yoksa test
+    // sınamak istediği dalı hiç geçmez.
+    assert(_e3[0].model < 0, "on kosul: modelin yuklenmemis olmasi gerek");
+    str js = scene_json3d();
+    assert(_ed_match3(js, "OLMAYAN_DOSYA.glb"),
+           "yuklenemeyen model bile YOLUNU kaybetmemeli");
+    scene3d_reset();
+    scene_load3d(js);
+    assert_eq_str(model_src3d(_mk_handle3(0)), "OLMAYAN_DOSYA.glb");
+}
+
+// Dosyada hem eski `model` handle'ı hem yeni `model_src` varsa YOL kazanmalı:
+// handle başka bir çalıştırmada bambaşka bir modeli gösterir.
+func t_asset_path_beats_handle() {
+    scene3d_reset(); ground3d(0.0);
+    asset_model3d("YOL_KAZANIR.glb");
+    int hbeklenen = asset_model3d("YOL_KAZANIR.glb");
+    scene_load3d("{\"v\":1,\"world\":{\"ground\":0},\"entities\":[" +
+        "{\"tag\":\"prop\",\"shape\":\"model\",\"x\":0,\"y\":0,\"z\":0," +
+        "\"model\":424242,\"model_src\":\"YOL_KAZANIR.glb\"}]}");
+    assert_eq_str(model_src3d(_mk_handle3(0)), "YOL_KAZANIR.glb");
+    assert_eq_int(_e3[0].model, hbeklenen);
+    assert(_e3[0].model != 424242, "dosyadaki ham handle KULLANILMAMALI");
+}
+
+func t_sc_q3_escapes_json_strings() {
+    assert_eq_str(_sc_q3("a/b.glb"), "\"a/b.glb\"");
+    // Kaçırılmayan bir tırnak sahne dosyasını ayrıştırılamaz yapardı.
+    assert_eq_str(_sc_q3("a\"b"), "\"a\\\"b\"");
+    assert_eq_str(_sc_q3("a\\b"), "\"a\\\\b\"");
+}
+
+func t_asset_weird_path_survives_roundtrip() {
+    scene3d_reset(); ground3d(0.0);
+    spawn3_asset(0.0, 0.0, 0.0, 1.0, "tuhaf\"ad.glb", TAG_PROP);
+    str js = scene_json3d();
+    scene3d_reset();
+    scene_load3d(js);
+    assert_eq_str(model_src3d(_mk_handle3(0)), "tuhaf\"ad.glb");
+}
+
+func t_set_and_clear_model3d() {
+    scene3d_reset(); ground3d(0.0);
+    int a = uret3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_PROP);
+    set_model3d(a, "AT_BUNU.glb");
+    // Şekil de MODEL olmalı: modeli olup şekli küp kalan varlık kutu çizilirdi.
+    assert_eq_int(_e3[0].shape, SHAPE_MODEL);
+    assert_eq_str(model_src3d(a), "AT_BUNU.glb");
+
+    _e3[0].anim_idle = 3;
+    clear_model3d(a);
+    // Şekil de geri gelmeli: modelsiz bir MODEL varlık HİÇ çizilmez.
+    assert_eq_int(_e3[0].shape, SHAPE_CUBE);
+    assert_eq_int(_e3[0].model, 0 - 1);
+    assert_eq_str(model_src3d(a), "");
+    assert_eq_int(_e3[0].anim_idle, 0 - 1);
+}
+
+func t_duplicate_copies_model_src() {
+    scene3d_reset(); ground3d(0.0);
+    int a = spawn3_asset(0.0, 0.0, 0.0, 1.0, "COGALT.glb", TAG_PROP);
+    int b = ed_duplicate3d(a);
+    assert(b >= 0, "cogaltma bir varlik uretmeli");
+    // Yol taşınmazsa kopya "şekli MODEL ama yolu yok" oluyor: kaydedilince
+    // model referansı kopyada kayboluyordu.
+    assert_eq_str(model_src3d(b), "COGALT.glb");
+}
+
+// ---- Zemin dokusu: hiç yazılmıyordu -----------------------------------------
+func t_ground_texture_roundtrips() {
+    scene3d_reset(); ground3d(0.0);
+    ground_texture_src3d("dokular/cimen.png", 24.0);
+    str js = scene_json3d();
+    // NÖBETÇİ: yükleme gerçekten yazıyor mu, yoksa eski değer mi duruyor?
+    // (scene3d_reset dünya ayarlarını bilerek BIRAKIYOR — nöbetçi şart.)
+    ground_texture_src3d("CURUK.png", 1.0);
+    scene_load3d(js);
+    assert_eq_str(ground_texture_path3d(), "dokular/cimen.png");
+    assert(abs_f3(_ground_tile3 - 24.0) < 0.001, "tile de donmeli");
+}
+
+func t_ground_texture_cleared_when_absent() {
+    scene3d_reset();
+    ground_texture_src3d("CURUK2.png", 7.0);
+    scene_load3d("{\"v\":1,\"world\":{\"ground\":0},\"entities\":[]}");
+    // Dokusuz bir sahne öncekinin dokusunu DEVRALMAMALI.
+    assert_eq_str(ground_texture_path3d(), "");
+    assert_eq_int(_ground_tex3, 0 - 1);
+}
+
+// ---- Tarayıcı yerleşimi ------------------------------------------------------
+func t_ed_basename_takes_last_component() {
+    assert_eq_str(_ed_basename3("varliklar/alt/robot.glb"), "robot.glb");
+    assert_eq_str(_ed_basename3("robot.glb"), "robot.glb");
+    assert_eq_str(_ed_basename3(""), "");
+    // Sondaki ayraç: boş ad, çökme değil.
+    assert_eq_str(_ed_basename3("varliklar/"), "");
+}
+
+func t_ed_asset_scroll_clamped() {
+    int rows = _ed_as_rows3();
+    // Liste satır sayısından kısaysa kaydırma HİÇ olmamalı.
+    assert_eq_int(_ed_as_clamp3(5, 3, rows), 0);
+    assert_eq_int(_ed_as_clamp3(0, 0, rows), 0);
+    // Uzun listede son sayfa: son satır görünür kalmalı.
+    assert_eq_int(_ed_as_clamp3(999, 20, rows), 20 - rows);
+    assert_eq_int(_ed_as_clamp3(0 - 4, 20, rows), 0);
+    // Ortadaki geçerli bir konum dokunulmadan geçmeli.
+    assert_eq_int(_ed_as_clamp3(6, 20, rows), 6);
+}
+
+func t_ed_asset_scan_finds_real_files() {
+    _ed_asglob3 = "lib/*.tpr";
+    _ed_asset_scan3();
+    assert(length(_ed_asfiles3) > 3, "lib/ altinda .tpr dosyalari bulunmali");
+    assert_eq_int(_ed_asdone3, 1);
+    // Tarama kaydırmayı başa almalı; almazsa yeni listede boş sayfa görünür.
+    _ed_asscroll3 = 4;
+    _ed_asset_scan3();
+    assert_eq_int(_ed_asscroll3, 0);
+    // Eşleşmeyen desen boş liste vermeli, eskisini BIRAKMAMALI.
+    _ed_asglob3 = "lib/*.HICBIRZAMAN";
+    _ed_asset_scan3();
+    assert_eq_int(length(_ed_asfiles3), 0);
+}
+
+func t_ed_asset_loaded_state() {
+    // -1 = hiç denenmedi, 0 = denendi olmadı, 1 = yuklendi.
+    assert_eq_int(_ed_as_loaded3("HIC_ISTENMEDI.glb"), 0 - 1);
+    asset_model3d("DENENDI.glb");
+    assert_eq_int(_ed_as_loaded3("DENENDI.glb"), 0);
+}
+
+func t_check_flags_missing_model_files() {
+    scene3d_reset(); ground3d(0.0);
+    spawn3_asset(0.0, 0.0, 0.0, 1.0, "KAYIP_MODEL.glb", TAG_PROP);
+    scene_check3d();
+    assert(_t_chk_has3("model dosyasi yuklenemedi"),
+           "yuklenemeyen model denetimde gorunmeli");
+    // Modeli kaldırınca uyarı da gitmeli — yoksa denetim yalancı olurdu.
+    clear_model3d(_mk_handle3(0));
+    scene_check3d();
+    assert(!_t_chk_has3("model dosyasi yuklenemedi"),
+           "model kaldirilinca uyari da gitmeli");
+}
+
+
+// ---- Animasyon klipleri ------------------------------------------------------
+// `anim_fps` HİÇ yazılmıyordu: elle kurulan animasyon hızı kaydedip açınca
+// sessizce 24'e dönüyordu.
+func t_anim_fps_survives_roundtrip() {
+    scene3d_reset(); ground3d(0.0);
+    int a = spawn3_asset(0.0, 0.0, 0.0, 1.0, "ANIM.glb", TAG_PLAYER);
+    _e3[0].anim_idle = 1;
+    _e3[0].anim_run = 2;
+    _e3[0].anim_fps = 12.0;
+    str js = scene_json3d();
+    scene3d_reset();
+    scene_load3d(js);
+    assert_eq_int(_e3[0].anim_idle, 1);
+    assert_eq_int(_e3[0].anim_run, 2);
+    assert(abs_f3(_e3[0].anim_fps - 12.0) < 0.001, "kare/sn de donmeli");
+}
+
+// Varsayılan hız dosyayı şişirmemeli — ama dönüşte de doğru olmalı.
+func t_anim_fps_default_not_written() {
+    scene3d_reset(); ground3d(0.0);
+    spawn3_asset(0.0, 0.0, 0.0, 1.0, "ANIM2.glb", TAG_PLAYER);
+    str js = scene_json3d();
+    assert(!_ed_match3(js, "anim_fps"), "varsayilan hiz yazilmamali");
+    scene3d_reset();
+    scene_load3d(js);
+    assert(abs_f3(_e3[0].anim_fps - 24.0) < 0.001, "varsayilan 24 olmali");
+}
+
+func t_ed_anim_clip_clamped() {
+    // Klipsiz model: hangi indeks istenirse istensin -1.
+    assert_eq_int(_ed_anim_clamp3(3, 0), 0 - 1);
+    assert_eq_int(_ed_anim_clamp3(0, 0), 0 - 1);
+    // -1 gecerli (klip yok); daha kucuk degerler -1'e toplanir.
+    assert_eq_int(_ed_anim_clamp3(0 - 1, 4), 0 - 1);
+    assert_eq_int(_ed_anim_clamp3(0 - 7, 4), 0 - 1);
+    // Ust sinir: son klip. Kelepcesiz indeks var olmayan animasyona uzanir
+    // ve karakter sessizce T-poz kalirdi.
+    assert_eq_int(_ed_anim_clamp3(9, 4), 3);
+    assert_eq_int(_ed_anim_clamp3(3, 4), 3);
+    // Ortadaki gecerli deger dokunulmadan gecmeli.
+    assert_eq_int(_ed_anim_clamp3(2, 4), 2);
+}
+
+test("varlik kaydi ayni yolu iki kez yuklemiyor", "t_asset_registry_caches");
+test("varlik kaydi model ve dokuyu ayiriyor", "t_asset_registry_separates_kinds");
+test("model yolu yaziliyor ve gidis-donusten sag cikiyor", "t_asset_src_serialized_and_roundtrips");
+test("yuklenemeyen model bile yolunu kaybetmiyor", "t_asset_src_written_even_when_load_failed");
+test("yol dosyadaki ham handle'i yeniyor", "t_asset_path_beats_handle");
+test("json dizesi kacisliyor", "t_sc_q3_escapes_json_strings");
+test("tuhaf karakterli yol gidis-donusten sag cikiyor", "t_asset_weird_path_survives_roundtrip");
+test("model atama sekli de kuruyor, kaldirma da geri aliyor", "t_set_and_clear_model3d");
+test("cogaltma model yolunu tasiyor", "t_duplicate_copies_model_src");
+test("zemin dokusu gidis-donusten sag cikiyor", "t_ground_texture_roundtrips");
+test("dokusuz sahne oncekinin dokusunu devralmiyor", "t_ground_texture_cleared_when_absent");
+test("yol son parcasina iniyor", "t_ed_basename_takes_last_component");
+test("varlik listesi kaydirmasi kelepceli", "t_ed_asset_scroll_clamped");
+test("varlik taramasi gercek dosya buluyor", "t_ed_asset_scan_finds_real_files");
+test("varlik yukleme durumu ucusa ayriliyor", "t_ed_asset_loaded_state");
+test("denetim eksik model dosyasini soyluyor", "t_check_flags_missing_model_files");
+test("animasyon hizi gidis-donusten sag cikiyor", "t_anim_fps_survives_roundtrip");
+test("varsayilan animasyon hizi dosyayi sismiyor", "t_anim_fps_default_not_written");
+test("klip indeksi klip sayisina kelepceli", "t_ed_anim_clip_clamped");
 test_summary();
