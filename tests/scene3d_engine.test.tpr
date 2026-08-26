@@ -7275,6 +7275,179 @@ func t_ed_anim_clip_clamped() {
     assert_eq_int(_ed_anim_clamp3(2, 4), 2);
 }
 
+
+// ===========================================================================
+// KURAL PANELİNİN SÖZLÜĞÜ — "player | item | collect | 50" dört isimsiz kutuydu
+// ===========================================================================
+
+// Yön ÖNEMLİ ve panel onu söylemiyordu: aynı eylem, taraflar değişince
+// başka birini yaralıyor.
+func t_rule_summary_states_direction() {
+    str s1 = _ed_rule_ozet3(RULE_HIT, TAG_PLAYER, TAG_ENEMY, ACT_DAMAGE, 10.0);
+    str s2 = _ed_rule_ozet3(RULE_HIT, TAG_ENEMY, TAG_PLAYER, ACT_DAMAGE, 10.0);
+    assert(s1 != s2, "taraflar degisince ozet de degismeli");
+    assert(_ed_match3(s1, "player hasar alir"), "ilk kuralda OYUNCU yaralanir");
+    assert(_ed_match3(s2, "enemy hasar alir"), "ikinci kuralda DUSMAN yaralanir");
+    // HURT'te hasar alan OTEKI — DAMAGE'in tersi.
+    str s3 = _ed_rule_ozet3(RULE_HIT, TAG_PLAYER, TAG_ENEMY, ACT_HURT, 10.0);
+    assert(_ed_match3(s3, "enemy hasar alir"), "hurt'te oteki yaralanir");
+}
+
+func t_rule_summary_covers_every_action() {
+    // Her eylem AYRI bir cumle uretmeli; ikisi ayni cikarsa panel yaniltir.
+    array acts = [ACT_COLLECT, ACT_DAMAGE, ACT_KILL, ACT_HURT, ACT_WIN, ACT_LOSE];
+    array seen = [];
+    int i = 0;
+    while (i < length(acts)) {
+        str o = _ed_rule_ozet3(RULE_HIT, TAG_PLAYER, TAG_ITEM, acts[i], 5.0);
+        assert(o != "", "her eylemin ozeti olmali");
+        int j = 0;
+        while (j < length(seen)) {
+            assert(seen[j] != o, "iki eylem ayni ozeti vermemeli");
+            j = j + 1;
+        }
+        push(seen, o);
+        i = i + 1;
+    }
+    assert_eq_int(length(seen), 6);
+}
+
+// "bitince" kuralinda dagitici `me`/`other` yerine -1 geciyor: topla, oldur
+// ve hasar SESSIZ birer bos islem. Dugme artik onlari dolasmiyor.
+func t_cleared_rule_action_cycle_only_terminal() {
+    int a = ACT_WIN;
+    int i = 0;
+    while (i < 6) {
+        a = _ed_next_act_for3(RULE_CLEARED, a);
+        assert(_ed_act_works_cleared3(a), "bitince dongusu is gormeyen eyleme ugramamali");
+        i = i + 1;
+    }
+    // Carpisma dongusu ise HEPSINI dolasmali — orada hepsi is goruyor.
+    int b = ACT_COLLECT;
+    int gorulen = 0;
+    i = 0;
+    while (i < 6) {
+        b = _ed_next_act_for3(RULE_HIT, b);
+        if (!_ed_act_works_cleared3(b)) { gorulen = gorulen + 1; }
+        i = i + 1;
+    }
+    assert(gorulen >= 4, "carpisma dongusu tum eylemlere ugramali");
+}
+
+// Sayi alani yalnizca eylem onu KULLANIYORSA gosterilmeli. Dagiticinin
+// hangi dallarda `n`e baktigi tek dogruluk kaynagi.
+func t_amount_shown_only_where_used() {
+    assert(_ed_act_uses_n3(ACT_COLLECT), "topla skoru kullanir");
+    assert(_ed_act_uses_n3(ACT_DAMAGE), "damage hasari kullanir");
+    assert(_ed_act_uses_n3(ACT_HURT), "hurt hasari kullanir");
+    assert(!_ed_act_uses_n3(ACT_KILL), "oldur miktara bakmaz");
+    assert(!_ed_act_uses_n3(ACT_WIN), "kazan miktara bakmaz");
+    assert(!_ed_act_uses_n3(ACT_LOSE), "kaybet miktara bakmaz");
+    // Etiket de eyleme gore degismeli: skor ile hasar ayni sey degil.
+    assert_eq_str(_ed_act_n_lbl3(ACT_COLLECT), "skor");
+    assert_eq_str(_ed_act_n_lbl3(ACT_DAMAGE), "hasar");
+}
+
+func t_act_names_are_distinct_and_directional() {
+    array acts = [ACT_COLLECT, ACT_DAMAGE, ACT_KILL, ACT_HURT, ACT_WIN, ACT_LOSE];
+    array nms = [];
+    int i = 0;
+    while (i < length(acts)) {
+        str n = _ed_act_nm3(acts[i]);
+        int j = 0;
+        while (j < length(nms)) {
+            assert(nms[j] != n, "iki eylemin adi ayni olmamali");
+            j = j + 1;
+        }
+        push(nms, n);
+        i = i + 1;
+    }
+    // DAMAGE ile HURT arasindaki fark HANGI TARAF — adlarin bunu soylemesi sart.
+    assert(_ed_act_nm3(ACT_DAMAGE) != _ed_act_nm3(ACT_HURT), "damage ve hurt ayrilmali");
+}
+
+// Kimlik blogu KAYNAKTAN okunuyor. Sabitleri teste kopyalamak daha once bir
+// cakismayi gizlemisti: adim kucultuldugunde test yesil kalmisti.
+func t_rule_widget_ids_do_not_collide() {
+    int base = _ed_rl_idbase3();
+    int step = _ed_rl_idstep3();
+    int used = _ed_rl_idused3();
+    assert(step > used, "adim, blok basina kullanilan widget sayisindan buyuk olmali");
+    // Ard arda iki kural blogu ortusmemeli.
+    int son0 = base + 0 * step + used - 1;
+    int ilk1 = base + 1 * step;
+    assert(son0 < ilk1, "kural bloklari ust uste binmemeli");
+    // Ve "+carpisma"/"+bitince" dugmeleriyle de carpismamali (21900/21901).
+    int cok = base + 100 * step + used - 1;
+    assert(cok < 21900, "100 kural bile ekleme dugmelerine ulasmamali");
+    // Davranis blogu (30000+) da uzakta durmali.
+    assert(cok < _ed_bh_idbase3(), "kural ve davranis kimlikleri ayrilmali");
+}
+
+func t_check_flags_dead_cleared_action() {
+    scene3d_reset(); ground3d(0.0);
+    uret3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    uret3(3.0, 1.0, 0.0, 1.0, 2.0, 1.0, BLUE, SHAPE_CUBE, TAG_PLAYER);
+    cleared_rule3d(TAG_ITEM, ACT_KILL);   // sessiz bos islem
+    scene_check3d();
+    assert(_t_chk_has3("bir sey yapmaz"), "is gormeyen bitince eylemi soylenmeli");
+    // Kazan'a cevirince uyari gitmeli.
+    _rl3[0].act = ACT_WIN;
+    scene_check3d();
+    assert(!_t_chk_has3("bir sey yapmaz"), "duzeltilince uyari da gitmeli");
+}
+
+
+// ---- Panel metin bütçesi ------------------------------------------------------
+// Metin genişliği yalnız PENCEREYLE ölçülebiliyor (`text_width` penceresiz 0
+// döner — ilk yerleşim testim tam bu yüzden boştu, her ölçüm 0 <= sınır diye
+// "sığar" diyordu). Gerçek ölçüm başsız Chrome'da web hedefiyle yapıldı;
+// varsayılan ölçekte (2x, font 20) raylib'in kendi metriği:
+//
+//   alan genişliği              160 px
+//   "otekine hasar" (13 krk)    140 px   -> ~10.8 px/karakter
+//   "-> oyun KAYBEDILIR" (18)   206 px   -> ~11.4 px/karakter (büyük harf)
+//
+// Ölçüm tekrarlanamadığı için burada KARAKTER bütçesi tutuluyor: en kötü
+// 11.5 px/karakterle 160 piksel ~13 karakter demek. Bütçeyi aşan bir ad
+// düğmede kırpılır — bu testin yakaladığı şey o. (Ölçülen taşmalar: eski
+// "OTEKI hasar alir" 174/160, "BEN hasar alirim" 166/160, eski özet
+// cümlesi 462/280, eski uyarı satırı 358/280.)
+func t_action_names_fit_field_budget() {
+    array acts = [ACT_COLLECT, ACT_DAMAGE, ACT_KILL, ACT_HURT, ACT_WIN, ACT_LOSE];
+    int i = 0;
+    while (i < length(acts)) {
+        str n = _ed_act_nm3(acts[i]);
+        assert(length(n) <= 13, "eylem adi alana sigmali: " + n);
+        i = i + 1;
+    }
+}
+
+// Özet satırı panelin TAM genişliğini kullanıyor (280 px) — bütçe 24 karakter.
+// Etiket adı da içine giriyor, en uzunu "player".
+func t_rule_summary_fits_panel_budget() {
+    array acts = [ACT_COLLECT, ACT_DAMAGE, ACT_KILL, ACT_HURT, ACT_WIN, ACT_LOSE];
+    int i = 0;
+    while (i < length(acts)) {
+        str o1 = _ed_rule_ozet3(RULE_HIT, TAG_PLAYER, TAG_PLAYER, acts[i], 100.0);
+        assert(length(o1) <= 24, "carpisma ozeti panele sigmali: " + o1);
+        str o2 = _ed_rule_ozet3(RULE_CLEARED, TAG_PLAYER, TAG_PLAYER, acts[i], 0.0);
+        assert(length(o2) <= 24, "bitince ozeti panele sigmali: " + o2);
+        i = i + 1;
+    }
+}
+
+// Etiket sütunu 102 px -> ~9 karakter.
+func t_panel_labels_fit_label_column() {
+    array labs = ["kim", "neye", "hangisi", "olunca", "skor", "hasar", "bosta",
+                  "kosu", "kare/sn"];
+    int i = 0;
+    while (i < length(labs)) {
+        assert(length(labs[i]) <= 9, "etiket sutuna sigmali: " + labs[i]);
+        i = i + 1;
+    }
+}
+
 test("varlik kaydi ayni yolu iki kez yuklemiyor", "t_asset_registry_caches");
 test("varlik kaydi model ve dokuyu ayiriyor", "t_asset_registry_separates_kinds");
 test("model yolu yaziliyor ve gidis-donusten sag cikiyor", "t_asset_src_serialized_and_roundtrips");
@@ -7294,4 +7467,14 @@ test("denetim eksik model dosyasini soyluyor", "t_check_flags_missing_model_file
 test("animasyon hizi gidis-donusten sag cikiyor", "t_anim_fps_survives_roundtrip");
 test("varsayilan animasyon hizi dosyayi sismiyor", "t_anim_fps_default_not_written");
 test("klip indeksi klip sayisina kelepceli", "t_ed_anim_clip_clamped");
+test("kural ozeti yonu soyluyor", "t_rule_summary_states_direction");
+test("her eylemin ayri bir ozeti var", "t_rule_summary_covers_every_action");
+test("bitince dongusu yalniz is goren eylemleri dolasiyor", "t_cleared_rule_action_cycle_only_terminal");
+test("miktar alani yalniz kullanildigi yerde", "t_amount_shown_only_where_used");
+test("eylem adlari ayrik ve yonlu", "t_act_names_are_distinct_and_directional");
+test("kural widget kimlikleri cakismiyor", "t_rule_widget_ids_do_not_collide");
+test("denetim is gormeyen bitince eylemini soyluyor", "t_check_flags_dead_cleared_action");
+test("eylem adlari alan butcesine siyor", "t_action_names_fit_field_budget");
+test("kural ozeti panel butcesine siyor", "t_rule_summary_fits_panel_budget");
+test("panel etiketleri sutuna siyor", "t_panel_labels_fit_label_column");
 test_summary();

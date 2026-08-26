@@ -6621,6 +6621,14 @@ func scene_check3d(): int {
                 _chk_add3("'" + _sc_tag_nm3(r.a) +
                           "' bitince kurali ama hic yok — aninda biter");
             }
+            // "bitince" kuralı dağıtıcıya çarpışan çift yerine -1 geçiyor,
+            // yani topla / öldür / hasar orada SESSİZ boş işlem. Düğme artık
+            // onları seçtirmiyor ama daha önce yazılmış (ya da elle
+            // düzenlenmiş) dosyalarda duruyor olabilir.
+            if (!_ed_act_works_cleared3(r.act)) {
+                _chk_add3("'" + _sc_tag_nm3(r.a) +
+                          "' bitince kuralinin eylemi bir sey yapmaz");
+            }
         }
         i = i + 1;
     }
@@ -9775,33 +9783,98 @@ func _ed_next_act3(a): int {
 // Kurallar sahneyi OYUN yapan şey (topla / hasar ver / kazan / kaybet) ve
 // şimdiye kadar yalnız JSON'a elle yazılabiliyordu — yani editörde kurulan bir
 // sahne oynanabilir bir oyun olamıyordu.
+// ---- Kural panelinin sözlüğü ------------------------------------------------
+// Panel "player | item | collect | 50" gösteriyordu: dört kutu, hiçbir etiket.
+// Hangi kutunun kim, hangisinin ne olduğu yalnız kaynağa bakınca anlaşılıyordu
+// ve fark ÖNEMLİ — `hit_rule3d(oyuncu, dusman, ACT_DAMAGE)` OYUNCUYU yaralar,
+// tarafları değiştirmek düşmanı yaralar. Üstelik adlar İngilizceydi.
+// Adlar KISA tutuluyor ama yön korunuyor: "bana" ile "otekine" farkı bu
+// panelin bütün amacı. (Uzun sürümler ölçüldü — 2x ölçekte 166 ve 174
+// piksel, alan 160: ikisi de taşıyordu.)
+func _ed_act_nm3(v): str {
+    if (v == ACT_COLLECT) { return "topla +skor"; }
+    if (v == ACT_DAMAGE)  { return "bana hasar"; }
+    if (v == ACT_KILL)    { return "otekini oldur"; }
+    if (v == ACT_HURT)    { return "otekine hasar"; }
+    if (v == ACT_WIN)     { return "kazan"; }
+    return "kaybet";
+}
+
+// Eylem skor/hasar miktarını KULLANIYOR mu? Kullanmayanda sayı alanı
+// gösterilmemeli: `oldur`/`kazan`/`kaybet` seçiliyken kullanıcı 50 yazıyor
+// ve hiçbir şey olmuyordu (dağıtıcı o dallarda `n`e hiç bakmıyor).
+func _ed_act_uses_n3(v): bool {
+    if (v == ACT_COLLECT) { return true; }
+    if (v == ACT_DAMAGE)  { return true; }
+    if (v == ACT_HURT)    { return true; }
+    return false;
+}
+func _ed_act_n_lbl3(v): str {
+    if (v == ACT_COLLECT) { return "skor"; }
+    return "hasar";
+}
+
+// "bitince" kuralında ne yapılabilir? Dağıtıcıya `me`/`other` olarak -1
+// geçiliyor (ortada çarpışan bir çift yok), dolayısıyla topla / öldür /
+// hasar SESSİZ birer boş işlem: kullanıcı seçiyor, oyun hiç tepki vermiyor.
+// İş gören yalnız kazan ve kaybet — düğme de yalnız onları dolaşıyor.
+func _ed_act_works_cleared3(v): bool {
+    if (v == ACT_WIN)  { return true; }
+    if (v == ACT_LOSE) { return true; }
+    return false;
+}
+func _ed_next_act_for3(kind, a): int {
+    if (kind == RULE_CLEARED) {
+        if (a == ACT_WIN) { return ACT_LOSE; }
+        return ACT_WIN;
+    }
+    return _ed_next_act3(a);
+}
+
+// Kuralın düz Türkçe özeti — panelin en önemli satırı. Etiket düğmeleri
+// "kim kime" sorusunu yanıtlayamıyor; bu cümle yanıtlıyor.
+// Cümle yalnız SONUCU söylüyor, tarafları tekrar etmiyor: "kim"/"neye"
+// alanları hemen üstte duruyor. İlk sürüm tam cümle kuruyordu ve 2x ölçekte
+// 462 piksele çıkıyordu (panel 280) — yani panelin en öğretici satırı
+// kırpılarak gösterilecekti. Yön, hasar alan tarafın ADIYLA korunuyor.
+func _ed_rule_ozet3(kind, a, b, act, n): str {
+    str na = _sc_tag_nm3(a);
+    str nb = _sc_tag_nm3(b);
+    if (kind == RULE_CLEARED) {
+        if (act == ACT_WIN)  { return "-> oyun KAZANILIR"; }
+        if (act == ACT_LOSE) { return "-> oyun KAYBEDILIR"; }
+        return "-> BIR SEY YAPMAZ";
+    }
+    if (act == ACT_COLLECT) { return "-> " + nb + " toplanir +skor"; }
+    if (act == ACT_DAMAGE)  { return "-> " + na + " hasar alir"; }
+    if (act == ACT_KILL)    { return "-> " + nb + " olur"; }
+    if (act == ACT_HURT)    { return "-> " + nb + " hasar alir"; }
+    if (act == ACT_WIN)     { return "-> oyun KAZANILIR"; }
+    return "-> oyun KAYBEDILIR";
+}
+
+// Kimlik bloğu — davranışlardaki gibi kaynaktan okunabilir olsun diye
+// fonksiyon; sabitleri teste kopyalamak bir kimlik çakışmasını gizlemişti.
+func _ed_rl_idbase3(): int { return 21000; }
+func _ed_rl_idstep3(): int { return 8; }
+func _ed_rl_idused3(): int { return 5; }
+
 func _ed_rules_panel3(px, y, pw): int {
     int lx = px + _ED_PAD3;
     int inner = pw - _ED_PAD3 * 2;
-    int third = toInt((inner - 8) / 3);
+    int lw = _ed_bh_lblw3(inner);      // davranış bloklarıyla AYNI hiza
+    int fw = _ed_bh_fieldw3(inner);
     int xw = _us3(16);
     int i = 0;
     while (i < length(_rl3)) {
         Rule3 r = _rl3[i];
-        if (r.kind == RULE_HIT) {
-            if (_g_button(21000 + i * 8, lx, y, third, _ED_FLD3, _sc_tag_nm3(r.a))) {
-                ed_mark3d();
-                Rule3 nr = _rl3[i]; nr.a = _ed_next_tag3(nr.a); _rl3[i] = nr;
-            }
-            if (_g_button(21001 + i * 8, lx + third + 4, y, third, _ED_FLD3,
-                          _sc_tag_nm3(r.b))) {
-                ed_mark3d();
-                Rule3 nr2 = _rl3[i]; nr2.b = _ed_next_tag3(nr2.b); _rl3[i] = nr2;
-            }
-        } else {
-            _g_txt3("bitince", lx, _g_ly3(y), third, _G_DIM3());
-            if (_g_button(21000 + i * 8, lx + third + 4, y, third, _ED_FLD3,
-                          _sc_tag_nm3(r.a))) {
-                ed_mark3d();
-                Rule3 nr3 = _rl3[i]; nr3.a = _ed_next_tag3(nr3.a); _rl3[i] = nr3;
-            }
-        }
-        if (_g_button(21002 + i * 8, px + pw - _ED_PAD3 - xw, y, xw, _ED_FLD3, "x")) {
+        int wid = _ed_rl_idbase3() + i * _ed_rl_idstep3();
+
+        // Başlık satırı: kuralın TÜRÜ solda, sil sağda.
+        str kn = "CARPISMA";
+        if (r.kind == RULE_CLEARED) { kn = "BITINCE"; }
+        _g_txt3(kn, lx, _g_ly3(y), inner - xw - 4, _G_ACC3());
+        if (_g_button(wid, px + pw - _ED_PAD3 - xw, y, xw, _ED_FLD3, "x")) {
             ed_mark3d();
             int last = length(_rl3) - 1;
             if (i != last) { _rl3[i] = _rl3[last]; }
@@ -9809,17 +9882,56 @@ func _ed_rules_panel3(px, y, pw): int {
             return y;   // dizi değişti; bu kareyi burada bitir
         }
         y = y + _ED_FLD3 + _us3(2);
-        // 2. satır: eylem + miktar
-        if (_g_button(21003 + i * 8, lx + third + 4, y, third, _ED_FLD3,
-                      _rl_act_nm3(r.act))) {
-            ed_mark3d();
-            Rule3 nr4 = _rl3[i]; nr4.act = _ed_next_act3(nr4.act); _rl3[i] = nr4;
-        }
+
         if (r.kind == RULE_HIT) {
-            float nn = _g_num(21004 + i * 8, lx + (third + 4) * 2, y, third,
-                              _ED_FLD3, r.n, 1.0);
-            if (nn != r.n) { Rule3 nr5 = _rl3[i]; nr5.n = nn; _rl3[i] = nr5; }
+            _g_txt3("kim", lx, _g_ly3(y), lw - 2, _G_DIM3());
+            if (_g_button(wid + 1, lx + lw, y, fw, _ED_FLD3, _sc_tag_nm3(r.a))) {
+                ed_mark3d();
+                Rule3 nr = _rl3[i]; nr.a = _ed_next_tag3(nr.a); _rl3[i] = nr;
+            }
+            y = y + _ED_FLD3 + _us3(2);
+            _g_txt3("neye", lx, _g_ly3(y), lw - 2, _G_DIM3());
+            if (_g_button(wid + 2, lx + lw, y, fw, _ED_FLD3, _sc_tag_nm3(r.b))) {
+                ed_mark3d();
+                Rule3 nr2 = _rl3[i]; nr2.b = _ed_next_tag3(nr2.b); _rl3[i] = nr2;
+            }
+            y = y + _ED_FLD3 + _us3(2);
+        } else {
+            _g_txt3("hangisi", lx, _g_ly3(y), lw - 2, _G_DIM3());
+            if (_g_button(wid + 1, lx + lw, y, fw, _ED_FLD3, _sc_tag_nm3(r.a))) {
+                ed_mark3d();
+                Rule3 nr3 = _rl3[i]; nr3.a = _ed_next_tag3(nr3.a); _rl3[i] = nr3;
+            }
+            y = y + _ED_FLD3 + _us3(2);
         }
+
+        _g_txt3("olunca", lx, _g_ly3(y), lw - 2, _G_DIM3());
+        if (_g_button(wid + 3, lx + lw, y, fw, _ED_FLD3, _ed_act_nm3(r.act))) {
+            ed_mark3d();
+            Rule3 nr4 = _rl3[i];
+            nr4.act = _ed_next_act_for3(nr4.kind, nr4.act);
+            _rl3[i] = nr4;
+        }
+        y = y + _ED_FLD3 + _us3(2);
+
+        // Sayı alanı YALNIZ eylem onu kullanıyorsa. Kullanmayan eylemde
+        // gösterilmesi "50 yaz, hiçbir şey olmasın" demekti.
+        if (r.kind == RULE_HIT && _ed_act_uses_n3(r.act)) {
+            _g_txt3(_ed_act_n_lbl3(r.act), lx, _g_ly3(y), lw - 2, _G_DIM3());
+            float nn = _g_num(wid + 4, lx + lw, y, fw, _ED_FLD3, r.n, 1.0);
+            if (nn != r.n) { Rule3 nr5 = _rl3[i]; nr5.n = nn; _rl3[i] = nr5; }
+            y = y + _ED_FLD3 + _us3(2);
+        }
+
+        // Düz Türkçe özet — kuralın ne yaptığını okumak için kaynağa
+        // bakmak gerekmesin diye. Yanlış kurulmuş kural burada kendini
+        // ele veriyor ("bu eylem BIR SEY YAPMAZ").
+        int oc = _G_DIM3();
+        if (r.kind == RULE_CLEARED && !_ed_act_works_cleared3(r.act)) {
+            oc = _G_WARN3();
+        }
+        _g_txt3(_ed_rule_ozet3(r.kind, r.a, r.b, r.act, r.n), lx, _g_ly3(y),
+                inner, oc);
         y = y + _ED_FLD3 + _us3(5);
         i = i + 1;
     }
@@ -9827,9 +9939,11 @@ func _ed_rules_panel3(px, y, pw): int {
     if (_g_button(21900, lx, y, half, _ED_FLD3, "+carpisma")) {
         ed_mark3d(); hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 50.0);
     }
+    _g_tip_for3(21900, "Iki etiket degince ne olsun");
     if (_g_button(21901, lx + half + 4, y, half, _ED_FLD3, "+bitince")) {
         ed_mark3d(); cleared_rule3d(TAG_ITEM, ACT_WIN);
     }
+    _g_tip_for3(21901, "Bir etiketten hic kalmayinca ne olsun");
     return y + _ED_FLD3;
 }
 
@@ -10309,12 +10423,12 @@ func _ed_inspector3() {
         // "yok" demek yanlış olurdu; kaldır düğmesi de ona uygulanmamalı.
         if (e.shape == SHAPE_MODEL && e.model >= 0) { mcur = "model: uretilmis"; }
     }
-    int mcol = _G_DIM3();
-    if (e.msrc != "" && _ed_as_loaded3(e.msrc) == 0) {
-        mcur = mcur + "  (YUKLENEMEDI)";
-        mcol = _G_WARN3();
-    }
-    _g_txt3(mcur, lx, _g_ly3(y), inner - xbw - 4, mcol);
+    // Uyarı ADIN YANINA eklenmiyor, ALTINA yazılıyor: birleşik metin 2x
+    // ölçekte 328 piksele çıkıyordu (alan 244), yani asıl uyarı kırpılıp
+    // görünmez oluyordu.
+    int muyari = 0;
+    if (e.msrc != "" && _ed_as_loaded3(e.msrc) == 0) { muyari = 1; }
+    _g_txt3(mcur, lx, _g_ly3(y), inner - xbw - 4, _G_DIM3());
     if (e.msrc != "") {
         if (_g_button(50000, px + pw - _ED_PAD3 - xbw, y, xbw, _ED_FLD3, "x")) {
             ed_mark3d();
@@ -10323,6 +10437,12 @@ func _ed_inspector3() {
         _g_tip_for3(50000, "Modeli kaldir — varlik yeniden kup olur");
     }
     y = y + _ED_FLD3 + _us3(3);
+    if (muyari == 1) {
+        // Kısa tutuluyor: uzun sürüm ölçüldü, 2x ölçekte 358 piksel (panel
+        // 280) — yani uyarının kendisi kırpılıyordu.
+        _g_txt3("YUKLENEMEDI", lx, _g_ly3(y), inner, _G_WARN3());
+        y = y + _g_lh3();
+    }
 
     str asl = "MODEL SEC";
     if (_ed_asopen3 == 1) { asl = "MODEL SEC  (kapat)"; }
