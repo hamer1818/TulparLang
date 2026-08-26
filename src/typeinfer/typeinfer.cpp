@@ -3,10 +3,18 @@
 
 #include "typeinfer.hpp"
 #include "../common/localization.hpp"
+#include "../embedded_libs.h"
+#include "../lexer/lexer.hpp"
+#include "../parser/parser.hpp"
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <memory>
+#include <set>
+#include <sstream>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -47,6 +55,25 @@ static DataType lookup_symbol_type(TypeInferContext *ctx, const std::string &nam
   return it->second.type;
 }
 
+// FONKSİYON REFERANSI: bir üst düzey fonksiyonun adı DEĞER olarak
+// kullanıldığında (`var f = selam; call(f)`), çalışma zamanında taşınan şey
+// fonksiyonun ADIDIR — bir string. `f + 0` yazınca "selam0" çıkması bunun
+// ölçülmüş kanıtı.
+//
+// Değişken adları ÖNCE bakılıyor: yerel bir `selam` değişkeni aynı adlı
+// fonksiyonu gölgeler.
+static bool is_function_ref_name(TypeInferContext *ctx,
+                                 const std::string &name) {
+  if (ctx->symbols.find(name) != ctx->symbols.end()) return false;
+  return ctx->functions.find(name) != ctx->functions.end();
+}
+
+// İfade, çıplak bir fonksiyon adı mı? (`selam`, `selam()` değil.)
+static bool expr_is_function_ref(TypeInferContext *ctx, const ASTNode *expr) {
+  const auto *id = as_node<Identifier>(expr);
+  return id && is_function_ref_name(ctx, id->name);
+}
+
 static bool symbol_is_moved(TypeInferContext *ctx, const std::string &name) {
   auto it = ctx->symbols.find(name);
   if (it == ctx->symbols.end()) {
@@ -61,6 +88,50 @@ static DataType function_return_type(TypeInferContext *ctx, const std::string &n
     return TYPE_VOID;
   }
   return it->second.return_type;
+}
+
+// `==` / `!=` between two different scalar types can never be true: the
+// runtime compares the value's type tag first, so `true == 1` is false and —
+// the nastier half — `false != 0` is *true*. Nothing about that is visible at
+// the call site, which is how `assert(x < y, ...)` silently never failed for
+// the entire life of lib/test.tpr: the parameter was declared `int`, the
+// caller passed a bool, and `cond == 0` could not hold. Flagging the constant
+// comparison is what turns that whole bug family into a compile-time error.
+//
+// Deliberately conservative, in the same spirit as `cond_acceptable` below:
+// only the four scalars are judged, int/float stay mutually comparable
+// (numeric promotion makes `1 == 1.0` genuinely true), and anything dynamic
+// or unknown (json, structs, arrays, VOID = "no signature entry") is skipped
+// rather than guessed at.
+static bool is_comparable_scalar(DataType t) {
+  return t == TYPE_INT || t == TYPE_FLOAT || t == TYPE_STRING || t == TYPE_BOOL;
+}
+
+// `int x = <bool>` is a supported, tested coercion: the AOT backend rewrites
+// the VMValue tag from VM_VAL_BOOL to VM_VAL_INT (slot 2 already holds 1/0, so
+// it is lossless). Guarded by tests/bool_to_int_coerce.test.tpr.
+//
+// This used to be scoped to STORES only, because no such rewrite happened at a
+// CALL boundary — which is exactly why `assert(x < y, msg)` against an
+// `int cond` parameter silently never fired. As of 2026-08-25 the callee's
+// parameter prologue runs the SAME coercion (`llvm_coerce_bool_tag_to_int`),
+// so the pair is now legal in both positions and this predicate is shared by
+// the declaration check and the argument check. Keeping them apart would now
+// reject something that provably works.
+static bool store_coercible(DataType declared, DataType initializer) {
+  return declared == TYPE_INT && initializer == TYPE_BOOL;
+}
+
+static bool comparison_is_constant(DataType a, DataType b) {
+  if (!is_comparable_scalar(a) || !is_comparable_scalar(b)) {
+    return false;
+  }
+  if (a == b) {
+    return false;
+  }
+  bool a_num = (a == TYPE_INT || a == TYPE_FLOAT);
+  bool b_num = (b == TYPE_INT || b == TYPE_FLOAT);
+  return !(a_num && b_num);
 }
 
 DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
@@ -141,6 +212,13 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
       report_error(ctx, "Use of moved variable '%s' at line %d", id->name.c_str(),
                    id->loc.line);
     }
+    // Fonksiyon adı değer olarak kullanılıyorsa tipi STRING: çalışma
+    // zamanında taşınan şey ad. Bunu bilmeden `call(f)` çağrısı "expected
+    // str, got int" gibi YANLIŞ YERİ gösteren bir hata veriyordu — sorun
+    // `call` değil, referansın `int` bildirilmiş olmasıydı.
+    if (is_function_ref_name(ctx, id->name)) {
+      return TYPE_STRING;
+    }
     return lookup_symbol_type(ctx, id->name);
   }
 
@@ -151,6 +229,18 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     switch (bin->op) {
     case TOKEN_EQUAL:
     case TOKEN_NOT_EQUAL:
+      if (comparison_is_constant(left_type, right_type)) {
+        report_error(ctx,
+                     tulpar::i18n::tr_en(
+                         "'%s' ile '%s' karsilastirmasi her zaman %s "
+                         "(farkli tipler asla esit olmaz) - satir %d",
+                         "comparison between '%s' and '%s' is always %s "
+                         "(different types are never equal) at line %d"),
+                     datatype_to_string(left_type),
+                     datatype_to_string(right_type),
+                     bin->op == TOKEN_EQUAL ? "false" : "true", bin->loc.line);
+      }
+      return TYPE_BOOL;
     case TOKEN_LESS:
     case TOKEN_GREATER:
     case TOKEN_LESS_EQUAL:
@@ -246,7 +336,11 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
       // `serve()` stand in for `serve(<default port>)`.
       // `call(name, ...)` is genuinely variadic (it forwards a callee's args by
       // name), so registering it with one param must not flag the extra args.
-      const bool is_variadic_builtin = (effective_name == "call");
+      // `call(name, ...)` çağrılanın argümanlarını adıyla iletiyor,
+      // `print(...)` de istediği kadar değer alıyor: ikisi de gerçekten
+      // değişken argümanlı, tek parametreyle kaydedilip burada muaf.
+      const bool is_variadic_builtin =
+          (effective_name == "call" || effective_name == "print");
       if (got > expected && !is_variadic_builtin) {
         report_error(ctx,
                      "Function '%s' expects %d argument(s), got %d at line %d",
@@ -307,7 +401,10 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
             }
           }
 
+          // `f(true)` into an `int` parameter: the callee prologue rewrites
+          // the tag, same as a store. See store_coercible.
           if (!is_unknown(param_type) && !is_unknown(arg_type) &&
+              !store_coercible(param_type, arg_type) &&
               !types_compatible(param_type, arg_type)) {
             report_error(ctx,
                          "Argument %d of '%s': expected %s, got %s at line %d",
@@ -399,7 +496,28 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
         return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM ||
                t == TYPE_JSON;
       };
-      if (!is_unknown(declared_type) && !is_unknown(init_type) &&
+      // FONKSİYON REFERANSINI `int`'e yazmak: çalışıyor (referans zaten bir
+      // string, `call` onu adıyla buluyor) ama yazılan tip yalan ve hata
+      // BAŞKA yerde patlıyordu — `call(f)` satırında "expected str, got int".
+      // Suçlu satırı ve çareyi burada söylüyoruz.
+      if (expr_is_function_ref(ctx, decl->initializer.get()) &&
+          declared_type != TYPE_STRING && !is_unknown(declared_type)) {
+        report_error(ctx,
+                     tulpar::i18n::tr_en(
+                         "'%s' bir FONKSIYON REFERANSI ama '%s' olarak "
+                         "bildirilmis - 'var' kullan (satir %d)",
+                         "'%s' is a FUNCTION REFERENCE but declared as '%s' "
+                         "- use 'var' at line %d"),
+                     decl->name.c_str(), datatype_to_string(declared_type),
+                     decl->loc.line);
+        // Değişken GERÇEKTE ne tutuyorsa onunla kaydediliyor. Bildirilen
+        // yalanı taşımak, sonraki her kullanımda ("call(f) expected str, got
+        // int") ikinci bir hata üretirdi — asıl sorunu zaten söyledik,
+        // ardından gelen gürültü yalnız suçluyu gizler.
+        typeinfer_add_symbol(ctx, decl->name.c_str(), TYPE_STRING);
+        return;
+      } else if (!is_unknown(declared_type) && !is_unknown(init_type) &&
+          !store_coercible(declared_type, init_type) &&
           !types_compatible(declared_type, init_type)) {
         report_error(ctx, "Type mismatch in declaration of '%s': expected %s, got %s at line %d",
                      decl->name.c_str(), datatype_to_string(declared_type),
@@ -417,7 +535,23 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     auto is_unknown = [](DataType t) {
       return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM;
     };
+    // Bildirimdekiyle aynı tanılama, atama yolunda. `int f = 0; f = selam;`
+    // biçimi de aynı tuzağın kapısı.
+    if (expr_is_function_ref(ctx, assign->value.get()) &&
+        var_type != TYPE_STRING && !is_unknown(var_type)) {
+      report_error(ctx,
+                   tulpar::i18n::tr_en(
+                       "'%s' degiskenine FONKSIYON REFERANSI atanıyor ama "
+                       "'%s' olarak bildirilmis - 'var' kullan (satir %d)",
+                       "assigning a FUNCTION REFERENCE to '%s', declared as "
+                       "'%s' - use 'var' at line %d"),
+                   assign->name.c_str(), datatype_to_string(var_type),
+                   assign->loc.line);
+      typeinfer_add_symbol(ctx, assign->name.c_str(), TYPE_STRING);
+      return;
+    }
     if (!is_unknown(var_type) && !is_unknown(expr_type) &&
+        !store_coercible(var_type, expr_type) &&
         !types_compatible(var_type, expr_type)) {
       report_error(ctx, "Type mismatch in assignment to '%s': expected %s, got %s at line %d",
                    assign->name.c_str(), datatype_to_string(var_type),
@@ -448,8 +582,15 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
   // and skip the check rather than emit a false positive. Conservative on
   // purpose; we'd rather miss a real bug than annoy users until typeinfer's
   // builtin catalogue is exhaustive.
+  // TYPE_UNKNOWN is an untyped parameter (`func f(on) { if (on) ... }`, the
+  // house style for every on/off toggle in scene3d/arcade/wings) and TYPE_JSON
+  // is the dynamic type whose truthiness is only knowable at runtime. Both are
+  // "no information", same as VOID, so warning on them is a false positive by
+  // construction — `if (on)` is the correct way to read a flag, and the whole
+  // point of the assert fix was that `on == 1` is the broken one.
   auto cond_acceptable = [](DataType t) {
-    return t == TYPE_BOOL || t == TYPE_INT || t == TYPE_VOID;
+    return t == TYPE_BOOL || t == TYPE_INT || t == TYPE_VOID ||
+           t == TYPE_UNKNOWN || t == TYPE_JSON;
   };
 
   if (const auto *if_stmt = as_node<IfStatement>(stmt)) {
@@ -566,6 +707,16 @@ const char *datatype_to_string(DataType type) {
 
 int types_compatible(DataType a, DataType b) {
   if (a == b) {
+    return 1;
+  }
+  // `json` is Tulpar's dynamic type: a json value holds any runtime value, and
+  // any value flows into a json slot. Declaring it compatible in both
+  // directions is what makes signatures like `assert_eq_str(json, json)` — the
+  // deliberate "accept anything, stringify it" idiom in lib/test.tpr — mean
+  // what they say. Nothing exercised this until imported signatures started
+  // being checked; before that, json parameters were essentially all in
+  // modules typeinfer never opened.
+  if (a == TYPE_JSON || b == TYPE_JSON) {
     return 1;
   }
   if ((a == TYPE_INT && b == TYPE_FLOAT) || (a == TYPE_FLOAT && b == TYPE_INT)) {
@@ -697,8 +848,109 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
   // on the C-bridge AST — those happen after our pre-pass on the std::variant
   // AST, so the synthetic calls never reach typeinfer.
   const BuiltinSig sigs[] = {
+      // --- Denetimsiz kalan 40 builtin (2026-08-25) ---
+      // Tabloda olmayan bir builtin HİÇ denetlenmiyor: dönüşü VOID sayılıyor,
+      // o yüzden hem argümanları hem de sonucu kullanan her satır atlanıyor.
+      //
+      // Dönüş tipleri ÖLÇÜLDÜ — runtime_bindings.cpp okundu ve ayrıca
+      // çalıştırılıp `isInt/isFloat/...` ile doğrulandı. İki sürpriz çıktı ve
+      // ikisi de tahminle yanlış yazılırdı:
+      //   * `min`/`max` HER ZAMAN float döndürüyor, int argümanlarda bile.
+      //   * `path_match` bool değil, `{matched, params}` JSON'u döndürüyor
+      //     (router'ın yol eşleyicisi, bir yüklem değil).
+      // "Yanlış imza, imzasızlıktan kötüdür" — bu yüzden hiçbiri tahmin
+      // edilmedi.
+
+      // Matematik. min/max/mod'un argümanları float yazılı ama int de
+      // geçiyor: types_compatible int↔float'ı karşılıklı kabul ediyor.
+      {"random", TYPE_FLOAT, {}},
+      {"randint", TYPE_INT, {TYPE_FLOAT, TYPE_FLOAT}},
+      {"min", TYPE_FLOAT, {TYPE_FLOAT, TYPE_FLOAT}},
+      {"max", TYPE_FLOAT, {TYPE_FLOAT, TYPE_FLOAT}},
+      // mod int argümanda int, ondalıkta float döndürüyor; float yazmak
+      // int↔float uyumu sayesinde yanlış pozitif üretmiyor.
+      {"mod", TYPE_FLOAT, {TYPE_FLOAT, TYPE_FLOAT}},
+
+      // Dize. join'in ARGÜMAN SIRASI ayırıcı-önce: join("-", dizi).
+      {"join", TYPE_STRING, {TYPE_STRING, TYPE_ARRAY}},
+      {"reverse", TYPE_STRING, {TYPE_STRING}},
+      {"repeat", TYPE_STRING, {TYPE_STRING, TYPE_INT}},
+      {"count", TYPE_INT, {TYPE_STRING, TYPE_STRING}},
+      {"capitalize", TYPE_STRING, {TYPE_STRING}},
+      {"isAlpha", TYPE_BOOL, {TYPE_STRING}},
+      {"isDigit", TYPE_BOOL, {TYPE_STRING}},
+      {"isEmpty", TYPE_BOOL, {TYPE_STRING}},
+
+      // Tip yüklemleri: her şeyi kabul ederler, o yüzden argüman UNKNOWN.
+      {"isArray", TYPE_BOOL, {TYPE_UNKNOWN}},
+      {"isBool", TYPE_BOOL, {TYPE_UNKNOWN}},
+      {"isFloat", TYPE_BOOL, {TYPE_UNKNOWN}},
+      {"isInt", TYPE_BOOL, {TYPE_UNKNOWN}},
+      {"isObject", TYPE_BOOL, {TYPE_UNKNOWN}},
+      {"isString", TYPE_BOOL, {TYPE_UNKNOWN}},
+
+      // Kodlama / özet
+      {"base64_encode", TYPE_STRING, {TYPE_STRING}},
+      {"base64_decode", TYPE_STRING, {TYPE_STRING}},
+      {"sha1", TYPE_STRING, {TYPE_STRING}},
+      {"sha1_hex", TYPE_STRING, {TYPE_STRING}},
+
+      // Veri
+      {"csv_parse", TYPE_ARRAY, {TYPE_STRING}},
+      {"csv_emit", TYPE_STRING, {TYPE_ARRAY}},
+      {"file_glob", TYPE_ARRAY, {TYPE_STRING}},
+      // BOOL DEĞİL: {matched: int, params: json} döndürüyor.
+      {"path_match", TYPE_JSON, {TYPE_STRING, TYPE_STRING}},
+      {"parse_multipart", TYPE_JSON, {TYPE_STRING, TYPE_STRING}},
+      // 3 ve 4 argümanlı iki biçimi var; 4 yazılıyor çünkü EKSİK argüman
+      // serbest, FAZLA argüman hata.
+      {"http_request", TYPE_JSON,
+       {TYPE_STRING, TYPE_STRING, TYPE_STRING, TYPE_JSON}},
+      {"http_request_async", TYPE_UNKNOWN,
+       {TYPE_STRING, TYPE_STRING, TYPE_STRING}},
+
+      // Girdi
+      {"input_int", TYPE_INT, {TYPE_STRING}},
+      {"input_float", TYPE_FLOAT, {TYPE_STRING}},
+
+      // Tarih / saat
+      {"time_ms", TYPE_INT, {}},
+      {"timestamp", TYPE_INT, {}},
+      {"weekday", TYPE_INT, {TYPE_INT}},
+      {"now_iso8601", TYPE_STRING, {}},
+      {"format_iso8601", TYPE_STRING, {TYPE_INT}},
+      {"parse_iso8601", TYPE_INT, {TYPE_STRING}},
+      {"date_add_seconds", TYPE_INT, {TYPE_INT, TYPE_INT}},
+
+      // print DEĞİŞKEN ARGÜMANLI — aşağıdaki is_variadic_builtin listesinde.
+      // Tek parametreyle kaydedilip orada muaf tutuluyor, yoksa `print(a, b)`
+      // "1 argüman bekliyor, 2 aldı" derdi.
+      {"print", TYPE_VOID, {TYPE_UNKNOWN}},
+
       // Time
-      {"clock", TYPE_FLOAT, {}},
+      // --- Matematik: codegen'de VARDI ama tabloda YOKTU ---
+      // Tabloda olmayan bir builtin HİÇ denetlenmiyor: `str s = pow("a","b")`
+      // sessizce geçiyordu (dönüş VOID sayıldığı için sonraki denetimler de
+      // atlanıyordu). Dönüş tipleri runtime_bindings.cpp'den OKUNDU, tahmin
+      // edilmedi — hepsi VM_FLOAT döndürüyor.
+      {"acos", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"asin", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"atan", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"cbrt", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"cosh", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"sinh", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"tanh", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"log2", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"round", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"trunc", TYPE_FLOAT, {TYPE_UNKNOWN}},
+      {"atan2", TYPE_FLOAT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"hypot", TYPE_FLOAT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"fmod", TYPE_FLOAT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"pow", TYPE_FLOAT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      // `clock` KALDIRILDI: tabloda vardı, codegen'de yoktu, yani
+      // çağıran "fonksiyon bulunamadı" alıyordu. Karşılığı zaten var ve
+      // adı da net: `time_ms()` (duvar saati, ms) / `timestamp()`.
+      // Belirsiz bir C adını uygulamaktansa tablodan çıkarmak doğru.
       {"clock_ms", TYPE_FLOAT, {}},
       // Collection / string size
       {"length", TYPE_INT, {TYPE_UNKNOWN}},
@@ -707,6 +959,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"range", TYPE_ARRAY_INT, {TYPE_INT}},
       // Object/json keys — returns a string array of field names.
       {"keys", TYPE_ARRAY_STR, {TYPE_UNKNOWN}},
+      {"args", TYPE_ARRAY_STR, {}},
       {"values", TYPE_ARRAY, {TYPE_UNKNOWN}},
       // clone(obj) — shallow copy. Underlies the VM's typed-struct
       // pass-by-value prologue; surfaced as a user-callable builtin.
@@ -760,6 +1013,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"replace", TYPE_STRING, {TYPE_STRING, TYPE_STRING, TYPE_STRING}},
       {"substring", TYPE_STRING, {TYPE_STRING, TYPE_INT, TYPE_INT}},
       {"ord", TYPE_INT, {TYPE_STRING, TYPE_INT}},
+      {"chr", TYPE_STRING, {TYPE_INT}},
       // tame (2D oyun) builtin ailesi — import "tame" sarmalayıcılarının
       // altındaki tm_* native katmanı. Koordinat pozisyonları int VEYA float
       // kabul eder (oyunlar `x + dx` float'larıyla literal int'leri serbestçe
@@ -804,6 +1058,18 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       // (scene3d'nin K_* sabitleri) yanlış uyarır.
       {"tm_key_down", TYPE_BOOL, {TYPE_UNKNOWN}},
       {"tm_key_pressed", TYPE_BOOL, {TYPE_UNKNOWN}},
+      {"tm_text_width", TYPE_INT, {TYPE_STRING, TYPE_INT}},
+      {"tm_font_width", TYPE_INT, {TYPE_INT, TYPE_STRING, TYPE_INT}},
+      {"tm_scissor", TYPE_VOID, {TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT}},
+      {"tm_scissor_end", TYPE_VOID, {}},
+      {"tm_rt_new", TYPE_INT, {TYPE_INT, TYPE_INT}},
+      {"tm_rt_free", TYPE_VOID, {TYPE_INT}},
+      {"tm_rt_w", TYPE_INT, {TYPE_INT}},
+      {"tm_rt_h", TYPE_INT, {TYPE_INT}},
+      {"tm_rt_begin", TYPE_VOID, {TYPE_INT}},
+      {"tm_rt_end", TYPE_VOID, {}},
+      {"tm_rt_draw", TYPE_VOID, {TYPE_INT, TYPE_INT, TYPE_INT}},
+      {"tm_char_pressed", TYPE_INT, {}},
       {"tm_key_released", TYPE_BOOL, {TYPE_UNKNOWN}},
       {"tm_mouse_x", TYPE_INT, {}},
       {"tm_mouse_y", TYPE_INT, {}},
@@ -813,6 +1079,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm_mouse_dx", TYPE_FLOAT, {}},
       {"tm_mouse_dy", TYPE_FLOAT, {}},
       {"tm_cursor_lock", TYPE_VOID, {TYPE_INT}},
+      {"tm_exit_key", TYPE_VOID, {TYPE_INT}},
       {"tm_cursor_locked", TYPE_BOOL, {}},
       {"tm_touch_count", TYPE_INT, {}},
       {"tm_touch_x", TYPE_INT, {TYPE_INT}},
@@ -834,6 +1101,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm_play_sound", TYPE_VOID, {TYPE_INT}},
       {"tm_stop_sound", TYPE_VOID, {TYPE_INT}},
       {"tm_sound_volume", TYPE_VOID, {TYPE_INT, TYPE_UNKNOWN}},
+      {"tm_sound_pan", TYPE_VOID, {TYPE_INT, TYPE_UNKNOWN}},
       {"tm_load_music", TYPE_INT, {TYPE_STRING}},
       {"tm_play_music", TYPE_VOID, {TYPE_INT}},
       {"tm_stop_music", TYPE_VOID, {TYPE_INT}},
@@ -887,6 +1155,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm3_anim_count", TYPE_INT, {TYPE_INT}},
       {"tm3_anim_frames", TYPE_INT, {TYPE_INT, TYPE_INT}},
       {"tm3_anim", TYPE_VOID, {TYPE_INT, TYPE_INT, TYPE_INT}},
+      {"tm3_anim_blend", TYPE_VOID, {TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_FLOAT}},
       {"tm3_unload_model", TYPE_VOID, {TYPE_INT}},
       {"tm3_lights", TYPE_BOOL, {TYPE_INT}},
       {"tm3_light_set", TYPE_VOID,
@@ -898,6 +1167,35 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm3_shadow_area", TYPE_VOID, {TYPE_UNKNOWN}},
       {"tm3_shadows_active", TYPE_BOOL, {}},
       {"tm3_texture", TYPE_VOID, {TYPE_INT, TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm3_billboard", TYPE_VOID,
+       {TYPE_INT, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_INT}},
+      {"tm3_billboard_pro", TYPE_VOID,
+       {TYPE_INT, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_UNKNOWN, TYPE_INT, TYPE_INT}},
+      {"tm3_atlas_grid", TYPE_VOID, {TYPE_INT, TYPE_INT, TYPE_INT}},
+      {"tm3_atlas_frames", TYPE_INT, {TYPE_INT}},
+      {"tm3_screen_x", TYPE_FLOAT,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm3_screen_y", TYPE_FLOAT,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm3_terrain_gen", TYPE_INT,
+       {TYPE_INT, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_UNKNOWN, TYPE_INT}},
+      {"tm3_terrain_load", TYPE_INT,
+       {TYPE_STRING, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm3_terrain_height", TYPE_FLOAT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm3_terrain_off", TYPE_VOID, {}},
+      {"tm3_cube_rot", TYPE_VOID,
+       {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_INT}},
+      {"tm3_sky_stars", TYPE_VOID, {TYPE_UNKNOWN}},
+      {"tm3_sky_clouds", TYPE_VOID, {TYPE_FLOAT}},
+      {"tm3_terrain_layer", TYPE_INT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
+      {"tm3_terrain_layers", TYPE_VOID,
+       {TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_UNKNOWN, TYPE_UNKNOWN,
+        TYPE_UNKNOWN}},
+      {"tm3_terrain_layers_off", TYPE_VOID, {}},
       {"tm3_material", TYPE_VOID, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
       {"tm3_sky", TYPE_BOOL, {TYPE_INT, TYPE_INT}},
       {"tm3_sky_off", TYPE_VOID, {}},
@@ -911,6 +1209,8 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       // Kalıcı kayıt (Android: internal storage; masaüstü: CWD) + titreşim.
       {"tm_save_data", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
       {"tm_load_data", TYPE_STRING, {TYPE_STRING}},
+      {"tm_download", TYPE_BOOL, {TYPE_STRING, TYPE_STRING}},
+      {"tm_is_web", TYPE_BOOL, {}},
       {"tm_vibrate", TYPE_VOID, {TYPE_INT}},
       // Polymorphic: string haystack (substring) OR array haystack (membership).
       {"indexOf", TYPE_INT, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
@@ -949,10 +1249,18 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"socket_accept", TYPE_UNKNOWN, {TYPE_UNKNOWN}},
       {"socket_send", TYPE_INT, {TYPE_UNKNOWN, TYPE_STRING}},
       {"socket_receive", TYPE_STRING, {TYPE_UNKNOWN, TYPE_INT}},
-      {"socket_recv", TYPE_STRING, {TYPE_UNKNOWN, TYPE_INT}},
+      // `socket_recv` KALDIRILDI: gerçek ad `socket_receive` (üstte) ve
+      // codegen yalnız onu tanıyor. Aynı şeyin ikinci bir adını
+      // uydurmak yerine tabloyu gerçeğe uyduruyoruz.
       {"socket_close", TYPE_VOID, {TYPE_UNKNOWN}},
       {"socket_peer_ip", TYPE_STRING, {TYPE_UNKNOWN}},
-      {"socket_select", TYPE_UNKNOWN, {TYPE_UNKNOWN, TYPE_INT}},
+      // `socket_select` KALDIRILDI (codegen'de yok). Karşılığı
+      // `socket_poll` ve o codegen'de VAR ama imzasızdı — iki boşluk
+      // tek satırda kapanıyor.
+      // Dönüş DİZİ, int değil (aot_socket_poll her yoldan make_arr
+      // döndürüyor — okundu, tahmin edilmedi). Yanlış imza imzasızlıktan
+      // kötüdür: `int n = socket_poll(...)` gibi bir satırı doğrular.
+      {"socket_poll", TYPE_ARRAY, {TYPE_ARRAY, TYPE_INT}},
       // Threads
       {"thread_create", TYPE_UNKNOWN, {TYPE_STRING, TYPE_UNKNOWN}},
       // HTTP helpers
@@ -973,6 +1281,138 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
     typeinfer_register_function(ctx, s.name, s.return_type,
                                 ps.empty() ? nullptr : ps.data(),
                                 static_cast<int>(ps.size()));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Import resolution
+//
+// Until now typeinfer never opened a module's source, so every call into the
+// stdlib was unchecked. That is precisely how `assert(x < y, msg)` survived:
+// the argument checker below would have rejected `bool` against `assert`'s
+// declared `int cond` on sight, but it never saw the signature. Pulling the
+// exported signatures in closes the hole for `test`, `wings`, `router`, `orm`,
+// `scene3d`, `arcade` — every module — at once.
+//
+// Only SIGNATURES are imported (functions + struct layouts), never the module
+// body: type-checking stdlib internals on every user build would be both slow
+// and noisy, and the module's own diagnostics belong to whoever edits it.
+// ---------------------------------------------------------------------------
+
+// Same resolution order as the AOT backend (`src/aot/llvm_backend.cpp`):
+// embedded stdlib → literal path → `<name>.tpr` → the two `tulpar_modules/`
+// slots that `tulpar pkg install` populates. Returns false when nothing
+// resolves; that stays silent here on purpose, because the AOT path owns the
+// "Could not import file" error and we must not double-report it.
+static bool load_import_source(const std::string &name, std::string &out) {
+  if (const char *embedded = get_embedded_lib(name.c_str())) {
+    out = embedded;
+    return true;
+  }
+  const std::string candidates[] = {
+      name,
+      name + ".tpr",
+      "tulpar_modules/" + name + "/" + name + ".tpr",
+      "tulpar_modules/" + name + ".tpr",
+  };
+  for (const auto &path : candidates) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+      continue;
+    }
+    std::stringstream ss;
+    ss << in.rdbuf();
+    out = ss.str();
+    return true;
+  }
+  return false;
+}
+
+static std::unique_ptr<ASTNode> parse_module_source(const std::string &source) {
+  try {
+    Lexer lexer(source);
+    std::vector<Token> tokens;
+    while (true) {
+      Token tok = lexer.next_token();
+      bool eof = tok.type() == TOKEN_EOF;
+      tokens.push_back(std::move(tok));
+      if (eof) {
+        break;
+      }
+    }
+    Parser parser(std::move(tokens));
+    return parser.parse();
+  } catch (...) {
+    // A module that won't parse is not this pass's problem to report.
+    return nullptr;
+  }
+}
+
+// Register everything `import "<name>"` brings into scope. Existing entries are
+// never overwritten, which gives the precedence we want without any extra
+// bookkeeping: builtins beat modules (their hand-written signatures are more
+// precise than a wrapper's), and the importing file's own declarations were
+// registered first, so local definitions beat both.
+static void register_module_exports(TypeInferContext *ctx,
+                                    const std::string &module_name,
+                                    const std::string &alias,
+                                    std::set<std::string> &visited, int depth) {
+  // Depth cap and visited set together make an import cycle terminate; the
+  // AOT path guards this separately, so hitting either here is silent.
+  if (depth > 8 || !visited.insert(module_name).second) {
+    return;
+  }
+  std::string source;
+  if (!load_import_source(module_name, source)) {
+    return;
+  }
+  std::unique_ptr<ASTNode> module_ast = parse_module_source(source);
+  if (!module_ast) {
+    return;
+  }
+  const auto *module_prog = as_node<Program>(module_ast.get());
+  if (!module_prog) {
+    return;
+  }
+
+  for (const auto &stmt : module_prog->statements) {
+    if (const auto *func = as_node<FunctionDecl>(stmt.get())) {
+      // `import "m" as a` mangles the module's top-level functions to
+      // `a__<name>` (src/parser/import_alias.cpp); mirror that here or the
+      // aliased call sites would look undefined.
+      std::string name = alias.empty() ? func->name : alias + "__" + func->name;
+      if (ctx->functions.count(name)) {
+        continue;
+      }
+      std::vector<DataType> param_types;
+      param_types.reserve(func->parameters.size());
+      for (const auto &param : func->parameters) {
+        param_types.push_back(param.type);
+      }
+      typeinfer_register_function(
+          ctx, name.c_str(), func->return_type,
+          param_types.empty() ? nullptr : param_types.data(),
+          static_cast<int>(param_types.size()));
+      continue;
+    }
+    if (const auto *type_decl = as_node<TypeDecl>(stmt.get())) {
+      if (ctx->struct_types.count(type_decl->name)) {
+        continue;
+      }
+      StructTypeInfo info;
+      info.field_names = type_decl->field_names;
+      info.field_types = type_decl->field_types;
+      info.field_custom_types = type_decl->field_custom_types;
+      ctx->struct_types[type_decl->name] = std::move(info);
+      continue;
+    }
+    // A module's own imports are transitive for the plain (unaliased) form —
+    // `import "wings"` puts http_utils' helpers in scope too, matching how the
+    // AOT path flattens them into one namespace.
+    if (const auto *nested = as_node<ImportStatement>(stmt.get())) {
+      register_module_exports(ctx, nested->path, nested->alias, visited,
+                              depth + 1);
+    }
   }
 }
 
@@ -1019,6 +1459,18 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
     // modül kaynağını parse etmediğinden struct'ını göremez).
     if (as_node<ImportStatement>(stmt.get())) {
       ctx->has_imports = true;
+    }
+  }
+
+  // Imported signatures come in AFTER the local pre-scan so this file's own
+  // declarations always win a name clash, and the gap-filling in
+  // register_module_exports needs no special case for it.
+  if (ctx->has_imports) {
+    std::set<std::string> visited;
+    for (const auto &stmt : prog->statements) {
+      if (const auto *imp = as_node<ImportStatement>(stmt.get())) {
+        register_module_exports(ctx, imp->path, imp->alias, visited, 0);
+      }
     }
   }
 

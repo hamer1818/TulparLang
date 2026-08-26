@@ -57,3 +57,4 @@ test("method call on json — single arg", "method_call_single_arg");
 test("method call on json — no extra args", "method_call_no_extra_args");
 test("free-function form still works (parser unchanged)", "free_function_form_still_works");
 test("alias path wins when both resolutions are valid", "alias_wins_over_method");
+test_summary();

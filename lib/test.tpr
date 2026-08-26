@@ -32,17 +32,39 @@ int _test_current_failed = 0;
 str _test_current_msg = "";
 str _test_current_name = "";
 
+// Bir test fonksiyonunda BİRDEN ÇOK assert düşebilir. Eskiden mesaj her
+// seferinde EZİLİYORDU, yani yalnız SONUNCUSU görünüyordu — ilk kırılan
+// iddia, asıl sebebi söyleyen o olduğu hâlde kayboluyordu. (Bu oturumda tam
+// bunun yüzünden yanlış yere bakıldı.)
+//
+// Artık hepsi birikiyor. İlk `_TEST_MSG_MAX` tanesi yazılıyor; sonrası
+// "(+N daha)" olarak özetleniyor — bir döngü içindeki assert yüzlerce satır
+// dökebilir ve o çıktı okunmaz olurdu.
+int _test_current_n = 0;
+int _TEST_MSG_MAX = 5;
+
 func _test_set_fail(str msg) {
     _test_current_failed = 1;
-    _test_current_msg = msg;
+    _test_current_n = _test_current_n + 1;
+    if (_test_current_n <= _TEST_MSG_MAX) {
+        if (length(_test_current_msg) == 0) { _test_current_msg = msg; }
+        else { _test_current_msg = _test_current_msg + "\n         + " + msg; }
+    }
 }
 
 // ----- Assertions ----------------------------------------------------------
 
-// Generic boolean assertion. `cond` must be truthy (non-zero); otherwise the
-// current test fails with `msg` (or a default message).
-func assert(int cond, str msg) {
-    if (cond == 0) {
+// Generic boolean assertion. `cond` must be truthy; otherwise the current test
+// fails with `msg` (or a default message).
+//
+// `cond` is UNTYPED and the check is `!cond`, not `cond == 0`. Bunun sebebi
+// ciddi: parametre `int` ilan edilip `cond == 0` ile bakılınca, çağıran taraf
+// bir BOOL geçtiğinde (yani `assert(x < y, ...)` gibi HER doğal kullanımda)
+// karşılaştırma asla tutmuyordu — bool VMValue'su int 0'a eşit çıkmıyor.
+// Sonuç: assert sessizce hiçbir zaman başarısız olmuyor, test paketi boş
+// yere yeşil yanıyordu. (Aynı aile, assert_eq_str'deki #40 notuyla akraba.)
+func assert(cond, str msg) {
+    if (!cond) {
         if (length(msg) > 0) {
             _test_set_fail(msg);
         } else {
@@ -77,12 +99,21 @@ func assert_eq_str(json actual, json expected) {
     }
 }
 
-// Boolean (0/1) equality.
-func assert_eq_bool(int actual, int expected) {
+// Boolean equality. Both sides are normalised to 0/1 by TRUTHINESS, so a real
+// bool and an int flag can be compared against each other.
+//
+// Same trap as `assert` above, and it bit here too: the parameters used to be
+// `int` and the normalisation used to be `actual != 0`. For a bool argument —
+// i.e. `assert_eq_bool(kazandin_mi(), false)`, the only natural way to call
+// this — `!= 0` is ALWAYS true, so both sides normalised to 1 and the
+// assertion could never fail. 77 call sites across 15 suites were asserting
+// nothing. The `!x` form is the one that reads the value instead of its type
+// tag; `tulpar typecheck` now rejects the `bool != int` shape outright.
+func assert_eq_bool(actual, expected) {
     int a = 0;
     int e = 0;
-    if (actual != 0) { a = 1; }
-    if (expected != 0) { e = 1; }
+    if (actual) { a = 1; }
+    if (expected) { e = 1; }
     if (a != e) {
         _test_set_fail("expected " + toString(e) + " got " + toString(a));
     }
@@ -159,11 +190,17 @@ func assert_status(json response, int expected_status) {
 func test(str name, str handler) {
     _test_current_failed = 0;
     _test_current_msg = "";
+    _test_current_n = 0;
     _test_current_name = name;
     call(handler);
     if (_test_current_failed == 1) {
         _test_fail = _test_fail + 1;
-        print("  FAIL " + name + ": " + _test_current_msg);
+        str ek = "";
+        if (_test_current_n > _TEST_MSG_MAX) {
+            ek = "\n         (+" + toString(_test_current_n - _TEST_MSG_MAX) +
+                 " daha)";
+        }
+        print("  FAIL " + name + ": " + _test_current_msg + ek);
     } else {
         _test_pass = _test_pass + 1;
         print("  PASS " + name);

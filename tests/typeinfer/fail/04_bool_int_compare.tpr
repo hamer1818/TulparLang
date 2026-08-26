@@ -1,0 +1,20 @@
+// Expected: typeinfer should reject comparing a bool against an int.
+//
+// The runtime compares the VMValue's type tag first, so `b == 1` is
+// unconditionally false and `b != 0` is unconditionally TRUE. Neither is
+// visible at the call site, which is how `lib/test.tpr`'s `assert` shipped
+// for months as a silent no-op: the parameter was declared `int cond`, every
+// natural caller passed a bool (`assert(x < y, ...)`), and `cond == 0` could
+// never hold. A whole test suite was green while asserting nothing.
+//
+// Strict mode should turn each of these into exit 1 with a `[typecheck]` line
+// saying the comparison is always false / always true.
+
+bool b = true;
+
+if (b == 1) {
+    print("unreachable");
+}
+if (b != 0) {
+    print("always taken");
+}

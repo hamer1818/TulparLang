@@ -1,0 +1,134 @@
+// Tulpar Scene Editor — a STANDALONE APP.
+// English twin of examples/scene3d_editor.tpr.
+//
+//   ./tulpar examples/en/scene3d_editor.tpr
+//   ./tulpar build examples/en/scene3d_editor.tpr editor && ./editor
+//   ./editor my_scene.json            (open your own scene / create a new file)
+//
+// IN THE BROWSER:
+//   mkdir -p assets && cp <some>.ttf assets/ui.ttf     (a readable font)
+//   TULPAR_WEB_ASSETS=assets tulpar build --target=web \
+//       examples/en/scene3d_editor.tpr -o editor
+//   (serve over HTTP; file:// will not work)
+// On the web, "Save" writes to the BROWSER's persistent storage (it survives
+// a reload) and "DOWNLOAD" takes the scene out as a .json file.
+//
+// The editor is not opened from inside a game: you run it, build your scene,
+// and pressing "PLAY" runs the game inside the editor's SCENE VIEW panel;
+// "STOP" brings you back to editing. That is how Unity, Unreal and Godot work,
+// and the difference from overlaying a running game is this: editing is the
+// primary act, playing is one of its tools.
+//
+// Shortcuts (industry standard):
+//   RIGHT MOUSE held + WASD/QE   free flight, mouse to look
+//   Q / W / E / R                select / move / rotate / scale  (1-4 too)
+//   F                            frame the selection
+//   G                            toggle grid
+//   DEL / CTRL+D                 delete / duplicate
+//   CTRL+Z / CTRL+Y              undo / redo
+//   CTRL+S (or F5)               save
+//   SPACE                        drop the selection onto the ground
+//   ESC                          while playing: stop
+// Letter keys are tool shortcuts ONLY while the right mouse button is NOT
+// held; while it is held they are flight.
+//
+// Layout:
+//   menu bar          New / Open / Save / Undo / Redo
+//   toolbar           tools on the left, PLAY-STOP CENTRED, grid
+//   hierarchy | SCENE VIEW | inspector
+//   console           the engine's diagnostic log
+//   status bar
+//
+// The scene path is resolved against the WORKING DIRECTORY; run from the
+// repo root.
+
+import "scene3d";
+
+// The scene path is resolved against the WORKING DIRECTORY. The editor should
+// be runnable from the repo root, from the examples folder, and from next to
+// the binary — so a few candidates are tried. Otherwise it is very easy to see
+// an "empty scene" and conclude the editor is broken.
+func scene_path(): str {
+    // IN THE BROWSER there is no command line and no file system: `args()`
+    // comes back empty and `file_exists` only sees files packed in with
+    // TULPAR_WEB_ASSETS. A fixed name is chosen so the scene always lands in
+    // the same place in browser storage ("sahne:<name>") — refresh and your
+    // work is still there.
+    if (is_web()) {
+        if (file_exists("examples/scenes/toplayici.scene.json")) {
+            return "examples/scenes/toplayici.scene.json";
+        }
+        return "scene.json";
+    }
+    // THE COMMAND LINE comes first: `./editor my_scene.json`. Being able to
+    // open only one embedded file made the editor useless for your own work.
+    array a = args();
+    if (length(a) > 1) { return a[1]; }
+    if (file_exists("examples/scenes/toplayici.scene.json")) {
+        return "examples/scenes/toplayici.scene.json";
+    }
+    if (file_exists("scenes/toplayici.scene.json")) {
+        return "scenes/toplayici.scene.json";
+    }
+    if (file_exists("toplayici.scene.json")) { return "toplayici.scene.json"; }
+    return "";
+}
+
+str SCENE = scene_path();
+
+// If the file is missing we open with an empty world — the editor must open
+// no matter what, never sit on a black screen because of an absent file.
+str EMPTY = "{\"v\":1,\"world\":{\"title\":\"New Scene\"," +
+            "\"sky\":{\"top\":[38,52,92],\"bottom\":[176,198,224]}," +
+            "\"ground\":0,\"gravity\":26," +
+            "\"camera\":{\"mode\":\"orbit\",\"dist\":16,\"height\":11}},\"entities\":[]}";
+
+func setup() {
+    // WEB: there is only one path (scene_path fixed it). If there is saved
+    // work it opens, otherwise an empty scene. A missing file is NOT an error
+    // here — telling someone to "run from the repo root" would be meaningless
+    // in a browser.
+    if (is_web()) {
+        editor_file3d(SCENE);
+        if (scene_file3d(SCENE) == 0) {
+            scene_load3d(EMPTY);
+            log3d("new scene (browser) — CTRL+S writes to browser storage");
+        } else {
+            log3d("scene opened: " + SCENE + " — " +
+                  toString(alive_count3d()) + " entities");
+        }
+        log3d("the DOWNLOAD button takes the scene out as .json");
+        return;
+    }
+    // A file given on the command line that does NOT yet exist is not an
+    // error: it is the most natural way to create a new scene
+    // (`./editor new.json` -> empty scene, F5 writes it there).
+    array a = args();
+    if (length(a) > 1 && file_exists(a[1]) == false) {
+        editor_file3d(a[1]);
+        scene_load3d(EMPTY);
+        log3d("new scene: " + a[1] + " (will be saved with F5)");
+        return;
+    }
+    if (SCENE == "") {
+        // Saving still needs a target.
+        editor_file3d("scene.json");
+        scene_load3d(EMPTY);
+        log_err3d("no scene file found — opened an empty scene.");
+        log_err3d("run from the repo root: ./editor");
+        return;
+    }
+    editor_file3d(SCENE);
+    if (scene_file3d(SCENE) == 0) {
+        scene_load3d(EMPTY);
+        log_err3d("could not read scene: " + SCENE);
+    } else {
+        log3d("scene opened: " + SCENE + " — " +
+              toString(alive_count3d()) + " entities");
+    }
+}
+
+scene3d(1440, 820, "Tulpar Scene Editor");
+editor_app3d(true);
+on_setup3d(setup);
+play3d();

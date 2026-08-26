@@ -1,4 +1,5 @@
 #include "parser.hpp"
+#include <cctype>
 #include "ast_visitor.hpp"
 #include "../common/localization.hpp"
 #include "../common/diagnostics.hpp"
@@ -67,6 +68,30 @@ Token Parser::expect(TulparTokenType type, const std::string& error_msg) {
         if (position_ > 0) {
             int prev_line = tokens_[position_ - 1].line();
             if (prev_line > 0) err_line = prev_line;
+        }
+        // AYRILMIŞ KELİME ÇARPMASI: bir ad beklenirken elimizde bir anahtar
+        // kelime varsa, sebebi söylemek gerekiyor. Genel "ad bekleniyordu"
+        // mesajı bu durumda yanıltıcı — kullanıcı adı YAZMIŞ oluyor, ama o
+        // ad dilin bir anahtar kelimesi (`tip`, `len`, `icinde`, `don`,
+        // `dene`, `move`...). Bu oturumda üç kez yaşandı ve her seferinde
+        // yanlış yere bakıldı, çünkü mesaj sorunu değil belirtisini
+        // anlatıyordu.
+        if (type == TOKEN_IDENTIFIER && !check(TOKEN_IDENTIFIER)) {
+            const std::string &lex = current().value();
+            if (!lex.empty() && (std::isalpha((unsigned char)lex[0]) ||
+                                 lex[0] == '_')) {
+                // Mesaj `tr_en` üzerinden: taban metni localization.cpp'nin
+                // tam-eşleşme tablosuna sokmak yerine burada kuruluyor,
+                // çünkü suçlu kelime değişken.
+                std::string m = std::string(tulpar::i18n::tr_en(
+                    "ayrilmis kelime ad olarak kullanilamaz: '",
+                    "reserved word cannot be used as a name: '"));
+                m += lex;
+                m += tulpar::i18n::tr_en("' (baska bir ad sec)",
+                                         "' (choose another name)");
+                error(m + " at line " + std::to_string(err_line));
+                return current();
+            }
         }
         error(error_msg + " at line " + std::to_string(err_line));
     }
@@ -257,7 +282,8 @@ int Parser::get_precedence(TulparTokenType op) const {
         case TOKEN_PLUS:
         case TOKEN_MINUS: return 5;
         case TOKEN_MULTIPLY:
-        case TOKEN_DIVIDE: return 6;
+        case TOKEN_DIVIDE:
+        case TOKEN_MODULO: return 6;
         default: return 0;
     }
 }
@@ -493,6 +519,33 @@ std::unique_ptr<ASTNode> Parser::parse_function_decl() {
             // identifier followed by `,` or `)` is the untyped form.
             // Anything else routes through parse_type() which knows how
             // to consume builtin and custom type names.
+            // AYRILMIŞ KELİME PARAMETRE ADI OLARAK: `func indir(ad, metin)`
+            // — `metin` dilde `str` demek, yani parse_type onu TİP sanıp
+            // yutuyor ve hata ')' üzerinde "parametre adı bekleniyordu"
+            // olarak çıkıyor. Suçlu kelime mesajda GEÇMİYORDU; bu oturumda
+            // dördüncü kez aynı tuzağa düşüldü.
+            //
+            // Ayrım net: bir parametre yerinde duran, tanımlayıcı OLMAYAN
+            // ama harfle başlayan bir kelimeyi hemen ',' ya da ')' izliyorsa
+            // ortada tip yoktur — kullanıcı onu AD olarak yazmıştır.
+            // (`func f(int)` de buraya düşer ve orada da doğru mesaj bu:
+            // tipten sonra ad gerekiyor, `int` ad olamaz.)
+            if (!check(TOKEN_IDENTIFIER) &&
+                (peek(1).type() == TOKEN_COMMA ||
+                 peek(1).type() == TOKEN_RPAREN)) {
+                const std::string &lex = current().value();
+                if (!lex.empty() && (std::isalpha((unsigned char)lex[0]) ||
+                                     lex[0] == '_')) {
+                    std::string m = std::string(tulpar::i18n::tr_en(
+                        "ayrilmis kelime parametre adi olamaz: '",
+                        "reserved word cannot be a parameter name: '"));
+                    m += lex;
+                    m += tulpar::i18n::tr_en("' (baska bir ad sec)",
+                                             "' (choose another name)");
+                    error(m + " at line " +
+                          std::to_string(current().line()));
+                }
+            }
             bool untyped = check(TOKEN_IDENTIFIER) &&
                            (peek(1).type() == TOKEN_COMMA ||
                             peek(1).type() == TOKEN_RPAREN);
@@ -1511,28 +1564,61 @@ std::unique_ptr<ASTNode> Parser::parse_struct_literal_init() {
 // Type Parsing
 // ============================================================================
 
-DataType Parser::parse_type() {
-    if (match(TOKEN_INT_TYPE)) return TYPE_INT;
-    if (match(TOKEN_FLOAT_TYPE)) return TYPE_FLOAT;
-    if (match(TOKEN_STR_TYPE)) return TYPE_STRING;
-    if (match(TOKEN_BOOL_TYPE)) return TYPE_BOOL;
-    if (match(TOKEN_ARRAY_TYPE)) return TYPE_ARRAY;
-    if (match(TOKEN_ARRAY_INT)) return TYPE_ARRAY_INT;
-    if (match(TOKEN_ARRAY_FLOAT)) return TYPE_ARRAY_FLOAT;
-    if (match(TOKEN_ARRAY_STR)) return TYPE_ARRAY_STR;
-    if (match(TOKEN_ARRAY_BOOL)) return TYPE_ARRAY_BOOL;
-    if (match(TOKEN_ARRAY_JSON)) return TYPE_ARRAY_JSON;
-    if (match(TOKEN_JSON_TYPE)) return TYPE_JSON;
-    if (match(TOKEN_VAR)) return TYPE_UNKNOWN;
-    
-    // Custom type
-    if (check(TOKEN_IDENTIFIER)) {
-        advance();
-        return TYPE_CUSTOM;
+// `float[]`, `int[]`, `str[]`, `bool[]`, `json[]` — köşeli ayraç biçimi.
+//
+// Tipli diziler dilde zaten VARDI (`arrayFloat` / `diziOndalık`), eksik olan
+// yalnız bu yazımdı; `float[] x = []` ayrıştırma hatası veriyordu ve bu, C /
+// Java / Go / TypeScript'ten gelen herkesin ilk deneyeceği biçim. Aynı tipin
+// iki yazımı olması TR+EN ikiz adlandırmayla da tutarlı.
+//
+// Ayraçlar taban tipten SONRA tüketiliyor, yani `[` görülmezse taban tip
+// olduğu gibi dönüyor ve mevcut hiçbir bildirim etkilenmiyor.
+static DataType array_of(DataType base) {
+    switch (base) {
+    case TYPE_INT: return TYPE_ARRAY_INT;
+    case TYPE_FLOAT: return TYPE_ARRAY_FLOAT;
+    case TYPE_STRING: return TYPE_ARRAY_STR;
+    case TYPE_BOOL: return TYPE_ARRAY_BOOL;
+    case TYPE_JSON: return TYPE_ARRAY_JSON;
+    // Elemanı tipli olmayan her şey (kullanıcı struct'ı, `var`, dizinin
+    // dizisi) düz `array`: motor bunları zaten kutulu tutuyor ve yanlış bir
+    // eleman tipi uydurmaktansa tipsiz kalmak doğru.
+    default: return TYPE_ARRAY;
     }
-    
-    error("Expected type name");
-    return TYPE_UNKNOWN;
+}
+
+DataType Parser::parse_type() {
+    DataType base = TYPE_UNKNOWN;
+    bool matched = true;
+
+    if (match(TOKEN_INT_TYPE)) base = TYPE_INT;
+    else if (match(TOKEN_FLOAT_TYPE)) base = TYPE_FLOAT;
+    else if (match(TOKEN_STR_TYPE)) base = TYPE_STRING;
+    else if (match(TOKEN_BOOL_TYPE)) base = TYPE_BOOL;
+    else if (match(TOKEN_ARRAY_TYPE)) base = TYPE_ARRAY;
+    else if (match(TOKEN_ARRAY_INT)) base = TYPE_ARRAY_INT;
+    else if (match(TOKEN_ARRAY_FLOAT)) base = TYPE_ARRAY_FLOAT;
+    else if (match(TOKEN_ARRAY_STR)) base = TYPE_ARRAY_STR;
+    else if (match(TOKEN_ARRAY_BOOL)) base = TYPE_ARRAY_BOOL;
+    else if (match(TOKEN_ARRAY_JSON)) base = TYPE_ARRAY_JSON;
+    else if (match(TOKEN_JSON_TYPE)) base = TYPE_JSON;
+    else if (match(TOKEN_VAR)) base = TYPE_UNKNOWN;
+    else if (check(TOKEN_IDENTIFIER)) { advance(); base = TYPE_CUSTOM; }
+    else matched = false;
+
+    if (!matched) {
+        error("Expected type name");
+        return TYPE_UNKNOWN;
+    }
+
+    // `[]` sonekleri. Birden fazlası (`int[][]`) düz `array`'e düşüyor —
+    // motorun iç içe dizi için ayrı bir eleman tipi yok.
+    while (check(TOKEN_LBRACKET) && peek(1).type() == TOKEN_RBRACKET) {
+        advance();
+        advance();
+        base = array_of(base);
+    }
+    return base;
 }
 
 // ============================================================================

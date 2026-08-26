@@ -547,6 +547,7 @@ Token Lexer::next_token() {
             case '-': return Token(TOKEN_MINUS, value, start_line, start_column);
             case '*': return Token(TOKEN_MULTIPLY, value, start_line, start_column);
             case '/': return Token(TOKEN_DIVIDE, value, start_line, start_column);
+            case '%': return Token(TOKEN_MODULO, value, start_line, start_column);
             case '=': return Token(TOKEN_ASSIGN, value, start_line, start_column);
             case '<': return Token(TOKEN_LESS, value, start_line, start_column);
             case '>': return Token(TOKEN_GREATER, value, start_line, start_column);

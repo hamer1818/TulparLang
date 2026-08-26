@@ -133,8 +133,16 @@ double tame_impl_frame_time(void) { return (double)GetFrameTime(); }
 double tame_impl_time(void) { return GetTime(); }
 // Kamera modunda OYUN DÜNYASI boyutu döner (oyun kodu hep w×h'ye göre yazılır);
 // gerçek ekranın dünya-uzayı kenarları için tm_view_* kullan.
-int tame_impl_width(void) { return tame_cam_on ? tame_world_w : GetScreenWidth(); }
-int tame_impl_height(void) { return tame_cam_on ? tame_world_h : GetScreenHeight(); }
+// "Ekran" ölçüsü ETKİN HEDEFİN ölçüsüdür. Render texture'a çizerken pencere
+// boyutunu döndürmek, hedefe göre yerleşen her şeyi (sağa/alta yaslı HUD)
+// dokunun dışına atıyordu — editörün sahne görünümü paneli tam olarak böyle
+// bir hedef.
+// (Tanımları dosyanın ilerisinde, render texture kaydının yanında.)
+static int tame_target_w(void);
+static int tame_target_h(void);
+
+int tame_impl_width(void) { return tame_cam_on ? tame_world_w : tame_target_w(); }
+int tame_impl_height(void) { return tame_cam_on ? tame_world_h : tame_target_h(); }
 
 // Görünür ekranın DÜNYA koordinatındaki kenarları. Masaüstü/web: 0..w, 0..h.
 // Android (kamera): sol/üst negatif, sağ/alt w/h'den büyük olabilir — dokunmatik
@@ -233,7 +241,7 @@ static int tame_lights_on = 0;     // ışıklandırma aktif mi
 // çağıran eski immediate-mode yolunu kullanır.
 static int tame_lights_active(void);
 static int tame_draw_lit(int shape, double x, double y, double z, double sx,
-                         double sy, double sz, int64_t color);
+                         double sy, double sz, double yaw, int64_t color);
 // Gölge açıkken sahne iki geçişte çizilir; bu ikisi o akışı sarar (tanımları
 // Faz 4b bloğunda). tame_scene_begin 1 dönerse çizimler KAYDEDİLİYOR demektir
 // ve tame_scene_end iki geçişi kendisi yapar.
@@ -290,9 +298,26 @@ void tame_impl_end3(void) {
 
 void tame_impl_cube(double x, double y, double z, double w, double h, double d,
                     int64_t color) {
-  if (tame_draw_lit(0, x, y, z, w, h, d, color)) return;
+  if (tame_draw_lit(0, x, y, z, w, h, d, 0.0, color)) return;
   DrawCube((Vector3){(float)x, (float)y, (float)z}, (float)w, (float)h,
            (float)d, tame_color(color));
+}
+
+// Y ekseni etrafında DÖNMÜŞ kutu. `tm3_cube` dönme almıyordu; yaw'lı bir
+// entity çarpışmada dönük (SAT/OBB) ama ekranda EKSEN HİZALI çiziliyordu.
+// Yani görülen duvar ile çarpışan duvar aynı yerde değildi — oyuncu görünen
+// duvarın içinden geçiyor gibi oluyordu (kullanıcı ekran görüntüsüyle
+// gösterdi). Işıklı yol zaten DrawModelEx kullandığı için dönme bedava;
+// ışıksız yedek yol rlgl matrisiyle döndürüyor.
+void tame_impl_cube_rot(double x, double y, double z, double w, double h,
+                        double d, double yaw, int64_t color) {
+  if (tame_draw_lit(0, x, y, z, w, h, d, yaw, color)) return;
+  rlPushMatrix();
+  rlTranslatef((float)x, (float)y, (float)z);
+  rlRotatef((float)yaw, 0.0f, 1.0f, 0.0f);
+  DrawCube((Vector3){0.0f, 0.0f, 0.0f}, (float)w, (float)h, (float)d,
+           tame_color(color));
+  rlPopMatrix();
 }
 
 void tame_impl_cube_wires(double x, double y, double z, double w, double h,
@@ -450,7 +475,13 @@ static const char *tame_light_fs =
     "    return 0.25 + 0.75*(lit/9.0);           \n"
     "}                                           \n"
     "void main() {                               \n"
-    "    vec4 texelColor = texture2D(texture0, fragTexCoord*texTile); \n"
+    // fragColor = TEPE NOKTASI rengi. Stok raylib ışık shader'ı bunu vertex
+    // shader'dan taşıyıp fragment'ta HİÇ kullanmıyordu; dokuyla aynı yerde
+    // (yüzeyin albedosu olarak) çarpılması gerekiyor. Renk tamponu olmayan
+    // mesh'lerde raylib öznitelik varsayılanını beyaz yapıyor, yani bu satır
+    // mevcut hiçbir çizimi değiştirmiyor — yalnız renk YAZAN mesh'i etkiliyor
+    // (bkz. arazi katman boyama).
+    "    vec4 texelColor = texture2D(texture0, fragTexCoord*texTile)*fragColor; \n"
     "    vec3 lightDot = vec3(0.0);              \n"
     "    vec3 normal = normalize(fragNormal);    \n"
     "    vec3 viewD = normalize(viewPos - fragPosition); \n"
@@ -483,6 +514,14 @@ static const char *tame_light_fs =
     "    highp float fd = length(viewPos - fragPosition)*fogDensity; \n"
     "    float ff = clamp(exp(0.0 - fd*fd), 0.0, 1.0); \n"
     "    finalColor.rgb = mix(fogColor.rgb, finalColor.rgb, ff); \n"
+    // ALFA'yı açıkça kur. Stok raylib ışık shader'ı opak varsayımıyla yazılmış:
+    // yukarıdaki `colDiffuse + vec4(specular, 1.0)` terimi alfaya 1.0 EKLİYOR,
+    // ambient terimi de üstüne bir pay koyuyor. Sonuçta 70/255 = 0.27'lik bir
+    // tint alfası 1.54'e çıkıp 1.0'a kırpılıyordu — yani saydam çizmek
+    // imkânsızdı (kamera röntgeni bu yüzden görünmüyordu). Doğru alfa yüzeyin
+    // kendi alfası ile tint alfasının çarpımı; opak çizimlerde ikisi de 1
+    // olduğu için mevcut hiçbir görüntü değişmiyor.
+    "    finalColor.a = texelColor.a*colDiffuse.a; \n"
     "    gl_FragColor = finalColor;           \n"
     "}                                           \n";
 #else
@@ -550,7 +589,8 @@ static const char *tame_light_fs =
     "    return 0.25 + 0.75*(lit/9.0);           \n"
     "}                                           \n"
     "void main() {                               \n"
-    "    vec4 texelColor = texture(texture0, fragTexCoord*texTile); \n"
+    // Tepe noktası rengi — gerekçe GLES varyantındaki yorumda.
+    "    vec4 texelColor = texture(texture0, fragTexCoord*texTile)*fragColor; \n"
     "    vec3 lightDot = vec3(0.0);              \n"
     "    vec3 normal = normalize(fragNormal);    \n"
     "    vec3 viewD = normalize(viewPos - fragPosition); \n"
@@ -582,6 +622,8 @@ static const char *tame_light_fs =
     "    float fd = length(viewPos - fragPosition)*fogDensity; \n"
     "    float ff = clamp(exp(-fd*fd), 0.0, 1.0); \n"
     "    finalColor.rgb = mix(fogColor.rgb, finalColor.rgb, ff); \n"
+    // Alfa — gerekçe GLES varyantındaki yorumda.
+    "    finalColor.a = texelColor.a*colDiffuse.a; \n"
     "}                                           \n";
 #endif
 
@@ -609,9 +651,67 @@ static const char *tame_sky_fs =
     "varying vec3 vdir;                          \n"
     "uniform vec4 skyTop;                        \n"
     "uniform vec4 skyBottom;                     \n"
+    "uniform float starI;                        \n"
+    "uniform float cloudI;                       \n"
+    "uniform float cloudT;                       \n"
+    // Yıldızlar PROSEDÜREL: bakış yönü bir ızgaraya yuvarlanıp hash'leniyor,
+    // eşiği geçen hücre bir yıldız oluyor. Sıfır çizim çağrısı, sıfır asset ve
+    // örtüşme kendiliğinden doğru — gökyüzü kubbesi zaten en arkada çiziliyor,
+    // yani dağlar yıldızları örtüyor. 2B çizilseydi dağların ÖNÜNE düşerlerdi.
+    // GLES2'de bit işlemi yok, o yüzden float hash.
+    "float tmStarHash(vec3 p) {                  \n"
+    "    return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164)))*43758.5453); \n"
+    "}                                           \n"
+    // Bulutlar da PROSEDÜREL, yıldızlarla aynı gerekçeyle: sıfır çizim
+    // çağrısı, sıfır asset ve örtüşme kendiliğinden doğru (kubbe en arkada,
+    // dağlar bulutları örtüyor). 2B çizilseydi dağların ÖNÜNE düşerlerdi.
+    //
+    // Yön vektörü YATAY düzleme izdüşürülüyor (d.xz/d.y), yani bulutlar sabit
+    // yükseklikte bir tabaka gibi görünüyor ve ufka doğru sıkışıyorlar —
+    // düz d.xz kullanmak onları kubbeye yapıştırırdı.
+    "float tmCloudHash(vec2 p) {                 \n"
+    "    return fract(sin(dot(p, vec2(127.1, 311.7)))*43758.5453); \n"
+    "}                                           \n"
+    "float tmCloudNoise(vec2 p) {                \n"
+    "    vec2 i = floor(p); vec2 f = fract(p);   \n"
+    "    f = f*f*(3.0-2.0*f);                    \n"
+    "    float a = tmCloudHash(i);               \n"
+    "    float b = tmCloudHash(i+vec2(1.0,0.0)); \n"
+    "    float c = tmCloudHash(i+vec2(0.0,1.0)); \n"
+    "    float e = tmCloudHash(i+vec2(1.0,1.0)); \n"
+    "    return mix(mix(a,b,f.x), mix(c,e,f.x), f.y); \n"
+    "}                                           \n"
+    "float tmCloudFbm(vec2 p) {                  \n"
+    "    float v = 0.0; float amp = 0.5;         \n"
+    "    for (int k = 0; k < 3; k++) {           \n"
+    "        v += amp*tmCloudNoise(p);           \n"
+    "        p *= 2.03; amp *= 0.5;              \n"
+    "    }                                       \n"
+    "    return v;                               \n"
+    "}                                           \n"
     "void main() {                               \n"
-    "    float t = clamp(normalize(vdir).y, 0.0, 1.0); \n"
-    "    gl_FragColor = mix(skyBottom, skyTop, pow(t, 0.55)); \n"
+    "    vec3 d = normalize(vdir);               \n"
+    "    float t = clamp(d.y, 0.0, 1.0);         \n"
+    "    vec4 col = mix(skyBottom, skyTop, pow(t, 0.55)); \n"
+    "    if (starI > 0.001) {                    \n"
+    "        float h = tmStarHash(floor(d*260.0)); \n"
+    "        if (h > 0.9972) {                   \n"
+    // Parlaklık hücreden hücreye değişsin, hepsi aynı beyazlıkta olmasın.
+    "            float b = 0.35 + 0.65*fract(h*137.0); \n"
+    // Ufka yakın yıldızlar sönük: gerçekte atmosfer yutar, ayrıca ufuk
+    // çizgisinde biten yıldız alanı yapay görünür.
+    "            float horiz = smoothstep(0.02, 0.30, d.y); \n"
+    "            col.rgb += vec3(b*starI*horiz);  \n"
+    "        }                                   \n"
+    "    }                                       \n"
+    "    if (cloudI > 0.001 && d.y > 0.02) {     \n"
+    "        vec2 pl = d.xz/max(d.y, 0.05);      \n"
+    "        float n = tmCloudFbm(pl*0.9 + vec2(cloudT*0.02, cloudT*0.01)); \n"
+    "        float cov = smoothstep(0.62 - cloudI*0.35, 0.86 - cloudI*0.25, n); \n"
+    "        float horiz = smoothstep(0.02, 0.35, d.y); \n"
+    "        col.rgb = mix(col.rgb, vec3(1.0), cov*cloudI*horiz*0.85); \n"
+    "    }                                       \n"
+    "    gl_FragColor = col;                     \n"
     "}                                           \n";
 #else
 static const char *tame_sky_vs =
@@ -628,10 +728,61 @@ static const char *tame_sky_fs =
     "in vec3 vdir;                               \n"
     "uniform vec4 skyTop;                        \n"
     "uniform vec4 skyBottom;                     \n"
+    "uniform float starI;                        \n"
+    "uniform float cloudI;                       \n"
+    "uniform float cloudT;                       \n"
     "out vec4 fc;                                \n"
+    // Prosedürel yıldızlar — gerekçe GLES varyantındaki yorumda.
+    "float tmStarHash(vec3 p) {                  \n"
+    "    return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164)))*43758.5453); \n"
+    "}                                           \n"
+    // Bulutlar da PROSEDÜREL, yıldızlarla aynı gerekçeyle: sıfır çizim
+    // çağrısı, sıfır asset ve örtüşme kendiliğinden doğru (kubbe en arkada,
+    // dağlar bulutları örtüyor). 2B çizilseydi dağların ÖNÜNE düşerlerdi.
+    //
+    // Yön vektörü YATAY düzleme izdüşürülüyor (d.xz/d.y), yani bulutlar sabit
+    // yükseklikte bir tabaka gibi görünüyor ve ufka doğru sıkışıyorlar —
+    // düz d.xz kullanmak onları kubbeye yapıştırırdı.
+    "float tmCloudHash(vec2 p) {                 \n"
+    "    return fract(sin(dot(p, vec2(127.1, 311.7)))*43758.5453); \n"
+    "}                                           \n"
+    "float tmCloudNoise(vec2 p) {                \n"
+    "    vec2 i = floor(p); vec2 f = fract(p);   \n"
+    "    f = f*f*(3.0-2.0*f);                    \n"
+    "    float a = tmCloudHash(i);               \n"
+    "    float b = tmCloudHash(i+vec2(1.0,0.0)); \n"
+    "    float c = tmCloudHash(i+vec2(0.0,1.0)); \n"
+    "    float e = tmCloudHash(i+vec2(1.0,1.0)); \n"
+    "    return mix(mix(a,b,f.x), mix(c,e,f.x), f.y); \n"
+    "}                                           \n"
+    "float tmCloudFbm(vec2 p) {                  \n"
+    "    float v = 0.0; float amp = 0.5;         \n"
+    "    for (int k = 0; k < 3; k++) {           \n"
+    "        v += amp*tmCloudNoise(p);           \n"
+    "        p *= 2.03; amp *= 0.5;              \n"
+    "    }                                       \n"
+    "    return v;                               \n"
+    "}                                           \n"
     "void main() {                               \n"
-    "    float t = clamp(normalize(vdir).y, 0.0, 1.0); \n"
-    "    fc = mix(skyBottom, skyTop, pow(t, 0.55)); \n"
+    "    vec3 d = normalize(vdir);               \n"
+    "    float t = clamp(d.y, 0.0, 1.0);         \n"
+    "    vec4 col = mix(skyBottom, skyTop, pow(t, 0.55)); \n"
+    "    if (starI > 0.001) {                    \n"
+    "        float h = tmStarHash(floor(d*260.0)); \n"
+    "        if (h > 0.9972) {                   \n"
+    "            float b = 0.35 + 0.65*fract(h*137.0); \n"
+    "            float horiz = smoothstep(0.02, 0.30, d.y); \n"
+    "            col.rgb += vec3(b*starI*horiz);  \n"
+    "        }                                   \n"
+    "    }                                       \n"
+    "    if (cloudI > 0.001 && d.y > 0.02) {     \n"
+    "        vec2 pl = d.xz/max(d.y, 0.05);      \n"
+    "        float n = tmCloudFbm(pl*0.9 + vec2(cloudT*0.02, cloudT*0.01)); \n"
+    "        float cov = smoothstep(0.62 - cloudI*0.35, 0.86 - cloudI*0.25, n); \n"
+    "        float horiz = smoothstep(0.02, 0.35, d.y); \n"
+    "        col.rgb = mix(col.rgb, vec3(1.0), cov*cloudI*horiz*0.85); \n"
+    "    }                                       \n"
+    "    fc = col;                               \n"
     "}                                           \n";
 #endif
 
@@ -640,6 +791,11 @@ static int tame_sky_ready = 0;
 static int tame_sky_on = 0;
 static int tame_loc_skyTop = -1;
 static int tame_loc_skyBottom = -1;
+static int tame_loc_starI = -1;
+static int tame_loc_cloudI = -1;
+static int tame_loc_cloudT = -1;
+static float tame_cloud_intensity = 0.0f;
+static float tame_star_intensity = 0.0f;
 static float tame_sky_top[4] = {0.29f, 0.51f, 0.82f, 1.0f};
 static float tame_sky_bottom[4] = {0.75f, 0.84f, 0.93f, 1.0f};
 
@@ -852,6 +1008,9 @@ static int tame_sky_ensure(void) {
   }
   tame_loc_skyTop = GetShaderLocation(tame_sky_shader, "skyTop");
   tame_loc_skyBottom = GetShaderLocation(tame_sky_shader, "skyBottom");
+  tame_loc_starI = GetShaderLocation(tame_sky_shader, "starI");
+  tame_loc_cloudI = GetShaderLocation(tame_sky_shader, "cloudI");
+  tame_loc_cloudT = GetShaderLocation(tame_sky_shader, "cloudT");
   tame_sky_ready = 1;
   return 1;
 }
@@ -867,6 +1026,16 @@ static void tame_sky_draw(void) {
                  SHADER_UNIFORM_VEC4);
   SetShaderValue(tame_sky_shader, tame_loc_skyBottom, tame_sky_bottom,
                  SHADER_UNIFORM_VEC4);
+  SetShaderValue(tame_sky_shader, tame_loc_starI, &tame_star_intensity,
+                 SHADER_UNIFORM_FLOAT);
+  SetShaderValue(tame_sky_shader, tame_loc_cloudI, &tame_cloud_intensity,
+                 SHADER_UNIFORM_FLOAT);
+  // Zaman uniform'u: bulutlar sürükleniyor. `GetTime()` kullanılıyor çünkü
+  // gökyüzünün kendi zamanı yok ve oyunun dt'sini buraya taşımak gökyüzü
+  // çizimini oyun döngüsüne bağlardı.
+  float tame_cloud_t = (float)GetTime();
+  SetShaderValue(tame_sky_shader, tame_loc_cloudT, &tame_cloud_t,
+                 SHADER_UNIFORM_FLOAT);
   // Küre birim mesh'i gökyüzü için ödünç alınıyor; sonraki normal çizimde
   // tame_model_apply_shader/set_shader zaten ışık shader'ına geri alıyor.
   tame_model_set_shader(&tame_unit[1], tame_sky_shader);
@@ -918,6 +1087,12 @@ typedef struct {
 static TameDrawCmd tame_dl[TAME_MAX_DRAWCMD];
 static int tame_dl_n = 0;
 static int tame_dl_recording = 0;
+
+// Etkin render hedefi. Gölge geçişi kendi framebuffer'ına geçip işi bitince
+// ESKİ hedefe dönmek zorunda; "ekrana dön" varsayımı editörde kırılıyordu
+// (aşağıya bak).
+static int tame_cur_rt = -1;
+static void tame_restore_target(void);
 
 static unsigned int tame_shadow_fbo = 0;
 static unsigned int tame_shadow_tex = 0;    // derinlik renderbuffer'ı (z-testi; örneklenmez)
@@ -1014,7 +1189,7 @@ static int tame_shadow_ensure(void) {
   rlFramebufferAttach(tame_shadow_fbo, tame_shadow_tex, RL_ATTACHMENT_DEPTH,
                       RL_ATTACHMENT_RENDERBUFFER, 0);
   int ok = rlFramebufferComplete(tame_shadow_fbo);
-  rlDisableFramebuffer();
+  tame_restore_target();
   if (!ok) {
     fprintf(stderr,
             "[tame] Golge haritasi framebuffer'i olusturulamadi; golgeler "
@@ -1093,7 +1268,7 @@ static void tame_dl_replay(int depth_pass) {
         tame_bind_material(&tame_unit[c->kind], c->tex, c->tile, c->shine,
                            c->spec);
       DrawModelEx(tame_unit[c->kind], (Vector3){c->x, c->y, c->z},
-                  (Vector3){0.0f, 1.0f, 0.0f}, 0.0f,
+                  (Vector3){0.0f, 1.0f, 0.0f}, c->yaw,
                   (Vector3){c->sx, c->sy, c->sz}, tame_color(c->color));
     } else if (c->kind == 4) {
       Model *m = tame_model_ptr(c->handle);
@@ -1191,10 +1366,14 @@ static void tame_scene_end(void) {
   rlSetCullFace(RL_CULL_FACE_BACK);
   rlDrawRenderBatchActive();
   rlEnableColorBlend();
-  rlDisableFramebuffer();
 
-  // Ekran viewport'unu ve ezdiğimiz matrisleri geri ver.
-  rlViewport(0, 0, GetScreenWidth(), GetScreenHeight());
+  // ÖNCEKİ hedefe dön — "ekrana dön" DEĞİL. Gölge geçişi bir render texture'ın
+  // içinden çağrılabiliyor (editörün sahne görünümü paneli böyle çiziliyor) ve
+  // rlDisableFramebuffer() orada varsayılan framebuffer'a, yani EKRANA
+  // dönüyordu. Sonuç sinsiydi: gölge geçişinden SONRAKİ her şey ekrana
+  // çiziliyor, editörün dokusunda yalnız temizleme rengi kalıyordu — panelde
+  // koyu mavi bir dikdörtgen, sahne ise panellerin arkasında.
+  tame_restore_target();
   rlSetMatrixProjection(saved_proj);
   rlSetMatrixModelview(saved_mv);
 
@@ -1247,10 +1426,10 @@ static void tame_scene_end(void) {
 }
 
 static int tame_draw_lit(int shape, double x, double y, double z, double sx,
-                         double sy, double sz, int64_t color) {
+                         double sy, double sz, double yaw, int64_t color) {
   // Gölge kaydı önceliklidir: liste modundaysak hiçbir şey çizmeyip kaydet.
   if (tame_dl_recording) {
-    tame_dl_push(shape, -1, x, y, z, sx, sy, sz, 0.0, color);
+    tame_dl_push(shape, -1, x, y, z, sx, sy, sz, yaw, color);
     return 1;
   }
   if (!tame_lights_active()) return 0;
@@ -1260,7 +1439,7 @@ static int tame_draw_lit(int shape, double x, double y, double z, double sx,
   tame_bind_material(&tame_unit[shape], tame_cur_tex, tame_cur_tile,
                      tame_cur_shine, tame_cur_spec);
   DrawModelEx(tame_unit[shape], (Vector3){(float)x, (float)y, (float)z},
-              (Vector3){0.0f, 1.0f, 0.0f}, 0.0f,
+              (Vector3){0.0f, 1.0f, 0.0f}, (float)yaw,
               (Vector3){(float)sx, (float)sy, (float)sz}, tame_color(color));
   return 1;
 }
@@ -1269,7 +1448,7 @@ static int tame_draw_lit(int shape, double x, double y, double z, double sx,
 
 void tame_impl_sphere(double x, double y, double z, double r, int64_t color) {
   // Birim küre r=0.5 → ölçek = çap.
-  if (tame_draw_lit(1, x, y, z, r * 2.0, r * 2.0, r * 2.0, color)) return;
+  if (tame_draw_lit(1, x, y, z, r * 2.0, r * 2.0, r * 2.0, 0.0, color)) return;
   DrawSphere((Vector3){(float)x, (float)y, (float)z}, (float)r,
              tame_color(color));
 }
@@ -1285,7 +1464,7 @@ void tame_impl_cylinder(double x, double y, double z, double r, double h,
                         int64_t color) {
   // Taban (x,y,z)'de duran, dikey silindir; radiusTop==radiusBottom==r.
   // Birim silindir r=0.5, h=1 ve tabanı y=0'da → ölçek (çap, yükseklik, çap).
-  if (tame_draw_lit(2, x, y, z, r * 2.0, h, r * 2.0, color)) return;
+  if (tame_draw_lit(2, x, y, z, r * 2.0, h, r * 2.0, 0.0, color)) return;
   DrawCylinder((Vector3){(float)x, (float)y, (float)z}, (float)r, (float)r,
                (float)h, 20, tame_color(color));
 }
@@ -1293,7 +1472,7 @@ void tame_impl_cylinder(double x, double y, double z, double r, double h,
 void tame_impl_plane(double x, double y, double z, double sx, double sz,
                      int64_t color) {
   // Birim düzlem 1×1 (XZ) → ölçek doğrudan boyut; y ölçeği anlamsız (1).
-  if (tame_draw_lit(3, x, y, z, sx, 1.0, sz, color)) return;
+  if (tame_draw_lit(3, x, y, z, sx, 1.0, sz, 0.0, color)) return;
   DrawPlane((Vector3){(float)x, (float)y, (float)z},
             (Vector2){(float)sx, (float)sz}, tame_color(color));
 }
@@ -1349,6 +1528,12 @@ double tame_impl_pick_sphere(double mx, double my, double cx, double cy,
 
 static Texture2D tame_textures[TAME_MAX_TEXTURES];
 static int tame_texture_used[TAME_MAX_TEXTURES];
+// DOKU ATLASI ızgarası: kaç sütun × kaç satır. Izgara ÇİZİM ÇAĞRISININ değil
+// DOKUNUN özelliği — her karede yeniden söylenseydi 12 argümanlık bir builtin
+// gerekirdi (tavan 8) ve aynı bilgi her çağrıda tekrarlanırdı.
+// 0 = ızgara yok (doku tek parça).
+static int tame_tex_cols[TAME_MAX_TEXTURES];
+static int tame_tex_rows[TAME_MAX_TEXTURES];
 static Font tame_fonts[TAME_MAX_FONTS];
 static int tame_font_used[TAME_MAX_FONTS];
 static Sound tame_sounds[TAME_MAX_SOUNDS];
@@ -1369,6 +1554,106 @@ static int tame_ensure_audio(void) {
                       "not be opened.\n");
   }
   return tame_audio_ready;
+}
+
+// ---- Render texture (sahne görünümü paneli) --------------------------------
+// Editörün 3B görünümü TAM EKRAN değil, panellerin arasındaki dikdörtgen —
+// Unity/Godot düzeni bu. Sahneyi doğrudan çizip kırpmak (scissor) yetmez:
+// kamera izdüşümü hâlâ pencerenin en-boy oranını kullanır, yani görüntü ezik
+// ve merkezi kaymış çıkar. Render texture'a çizmek en-boy oranını da
+// düzeltiyor, çünkü raylib izdüşümü etkin hedefin boyutundan türetiyor.
+#define TAME_MAX_RT 4
+static RenderTexture2D tame_rts[TAME_MAX_RT];
+static int tame_rt_used[TAME_MAX_RT];
+
+// ---- Kırpma (scissor) ------------------------------------------------------
+// Bir panelin İÇİNE kaydırılabilir içerik çizmek için: dikdörtgenin dışına
+// düşen pikseller yazılmıyor. Alternatif her widget çağrısından önce elle sınır
+// denetimi yapmaktı — her yeni widget o borcu büyütürdü ve yarı görünür
+// satırlar yine kırpılamazdı.
+void tame_impl_scissor(int x, int y, int w, int h) {
+  if (w < 0) w = 0;
+  if (h < 0) h = 0;
+  BeginScissorMode(x, y, w, h);
+}
+void tame_impl_scissor_end(void) { EndScissorMode(); }
+
+int tame_impl_rt_new(int w, int h) {
+  if (!tame_window_ready) return -1;
+  if (w < 1) w = 1;
+  if (h < 1) h = 1;
+  for (int i = 0; i < TAME_MAX_RT; i++) {
+    if (!tame_rt_used[i]) {
+      tame_rts[i] = LoadRenderTexture(w, h);
+      if (tame_rts[i].texture.id == 0) return -1;
+      SetTextureFilter(tame_rts[i].texture, TEXTURE_FILTER_POINT);
+      tame_rt_used[i] = 1;
+      return i;
+    }
+  }
+  return -1;
+}
+
+void tame_impl_rt_free(int h) {
+  if (h < 0 || h >= TAME_MAX_RT || !tame_rt_used[h]) return;
+  UnloadRenderTexture(tame_rts[h]);
+  tame_rt_used[h] = 0;
+}
+
+int tame_impl_rt_w(int h) {
+  if (h < 0 || h >= TAME_MAX_RT || !tame_rt_used[h]) return 0;
+  return tame_rts[h].texture.width;
+}
+int tame_impl_rt_h(int h) {
+  if (h < 0 || h >= TAME_MAX_RT || !tame_rt_used[h]) return 0;
+  return tame_rts[h].texture.height;
+}
+
+void tame_impl_rt_begin(int h) {
+  if (h < 0 || h >= TAME_MAX_RT || !tame_rt_used[h]) return;
+  BeginTextureMode(tame_rts[h]);
+  tame_cur_rt = h;
+}
+void tame_impl_rt_end(void) {
+  EndTextureMode();
+  tame_cur_rt = -1;
+}
+
+static int tame_target_w(void) {
+  if (tame_cur_rt >= 0 && tame_cur_rt < TAME_MAX_RT && tame_rt_used[tame_cur_rt]) {
+    return tame_rts[tame_cur_rt].texture.width;
+  }
+  return GetScreenWidth();
+}
+static int tame_target_h(void) {
+  if (tame_cur_rt >= 0 && tame_cur_rt < TAME_MAX_RT && tame_rt_used[tame_cur_rt]) {
+    return tame_rts[tame_cur_rt].texture.height;
+  }
+  return GetScreenHeight();
+}
+
+// Etkin hedefi geri bağla. Gölge geçişi gibi kendi framebuffer'ına geçen
+// kodlar bunu çağırmalı; "ekrana dön" varsayımı render texture içindeyken
+// yanlış.
+static void tame_restore_target(void) {
+  if (tame_cur_rt >= 0 && tame_cur_rt < TAME_MAX_RT && tame_rt_used[tame_cur_rt]) {
+    rlEnableFramebuffer(tame_rts[tame_cur_rt].id);
+    rlViewport(0, 0, tame_rts[tame_cur_rt].texture.width,
+               tame_rts[tame_cur_rt].texture.height);
+    return;
+  }
+  rlDisableFramebuffer();
+  rlViewport(0, 0, GetScreenWidth(), GetScreenHeight());
+}
+
+// Render texture'lar OpenGL'de baş aşağı; kaynak dikdörtgenin yüksekliği
+// negatif verilerek çevriliyor (raylib'in standart yolu).
+void tame_impl_rt_draw(int h, int x, int y) {
+  if (h < 0 || h >= TAME_MAX_RT || !tame_rt_used[h]) return;
+  Texture2D t = tame_rts[h].texture;
+  Rectangle src = {0.0f, 0.0f, (float)t.width, -(float)t.height};
+  Vector2 pos = {(float)x, (float)y};
+  DrawTextureRec(t, src, pos, WHITE);
 }
 
 int tame_impl_load_texture(const char *path) {
@@ -1473,6 +1758,25 @@ int tame_impl_sky(int64_t top, int64_t bottom) {
 
 void tame_impl_sky_off(void) { tame_sky_on = 0; }
 
+// Yıldız yoğunluğu: 0 kapalı, 1 tam. Gökyüzü kubbesi çizilirken uniform olarak
+// gidiyor — yıldızlar gökyüzünün bir parçası, ayrı bir cisim değil.
+// Bulut kapsaması. 0 = açık gökyüzü, 1 = tamamen kapalı. Yıldızlarla aynı
+// yol: tek bir float, gökyüzü kubbesinin shader'ına gidiyor — bulutlar
+// gökyüzünün parçası, ayrı bir cisim değil.
+void tame_impl_sky_clouds(double coverage) {
+  float v = (float)coverage;
+  if (v < 0.0f) v = 0.0f;
+  if (v > 1.0f) v = 1.0f;
+  tame_cloud_intensity = v;
+}
+
+void tame_impl_sky_stars(double intensity) {
+  float v = (float)intensity;
+  if (v < 0.0f) v = 0.0f;
+  if (v > 1.0f) v = 1.0f;
+  tame_star_intensity = v;
+}
+
 // Mesafe sisi. density 0 = kapalı. color < 0 → gökyüzünün UFUK rengi kullanılır
 // (doğru olan bu: sis, uzaktaki cismi arkasındaki gökyüzüne karıştırmalı).
 //
@@ -1490,6 +1794,105 @@ void tame_impl_fog(int64_t color, double density) {
   }
   tame_fog_density = (density > 0.0) ? (float)density : 0.0f;
   tame_material_upload();
+}
+
+// --- Faz 8: billboard + dünya→ekran izdüşümü --------------------------------
+//
+// Billboard, HER ZAMAN kameraya dönük duran bir dörtgendir. Parçacık, kıvılcım,
+// duman, 3B etiket gibi şeylerin tek çizim yolu budur: normal bir kutu/küre
+// kameradan yana bakınca incelir, parçacık ise her açıdan aynı görünmelidir.
+//
+// Dokusuz (düz renkli) billboard da istiyoruz — parçacık için tipik durum bu ve
+// kullanıcıyı "önce bir doku yükle" adımına zorlamak anlamsız. raylib
+// DrawBillboard bir Texture2D şart koştuğu için içeride 1×1 beyaz bir doku
+// tutuyoruz; tint ile boyanınca düz renkli kare oluyor.
+static Texture2D tame_white_tex = {0};
+static int tame_white_tex_ready = 0;
+
+static Texture2D tame_white_texture(void) {
+  if (!tame_white_tex_ready) {
+    Image img = GenImageColor(1, 1, WHITE);
+    tame_white_tex = LoadTextureFromImage(img);
+    UnloadImage(img);
+    tame_white_tex_ready = 1;
+  }
+  return tame_white_tex;
+}
+
+// Kameraya dönük dörtgen. tex < 0 (ya da geçersiz) → düz renk.
+// Işıklandırma UYGULANMAZ: parçacıklar ışık kaynağıdır, gölgelenmeleri yanlış
+// olurdu — bu yüzden tame_draw_lit yolundan bilerek geçmiyor.
+void tame_impl_billboard(int tex, double x, double y, double z, double size,
+                         int64_t color) {
+  Texture2D t = tame_texture_ok(tex) ? tame_textures[tex] : tame_white_texture();
+  DrawBillboard(tame_cam3d, t, (Vector3){(float)x, (float)y, (float)z},
+                (float)size, tame_color(color));
+}
+
+// Dokuyu cols×rows'luk bir atlas olarak işaretle. cols/rows <= 1 → ızgara yok.
+void tame_impl_atlas_grid(int tex, int cols, int rows) {
+  if (!tame_texture_ok(tex)) return;
+  if (cols < 1) cols = 1;
+  if (rows < 1) rows = 1;
+  tame_tex_cols[tex] = cols;
+  tame_tex_rows[tex] = rows;
+}
+
+int tame_impl_atlas_frames(int tex) {
+  if (!tame_texture_ok(tex)) return 0;
+  int c = tame_tex_cols[tex], r = tame_tex_rows[tex];
+  if (c < 1) c = 1;
+  if (r < 1) r = 1;
+  return c * r;
+}
+
+// Döndürülebilir + atlas kareli billboard. rot DERECE (motorun geri kalanıyla
+// aynı birim), frame < 0 → dokunun tamamı.
+//
+// Origin dörtgenin ORTASI: köşe olsaydı döndürme parçacığı kendi konumundan
+// kaydırırdı, yani dönme aynı zamanda yer değiştirme olurdu.
+void tame_impl_billboard_pro(int tex, double x, double y, double z, double size,
+                             double rot, int frame, int64_t color) {
+  Texture2D t = tame_texture_ok(tex) ? tame_textures[tex] : tame_white_texture();
+  Rectangle src = {0.0f, 0.0f, (float)t.width, (float)t.height};
+  if (tame_texture_ok(tex) && frame >= 0) {
+    int c = tame_tex_cols[tex], r = tame_tex_rows[tex];
+    if (c < 1) c = 1;
+    if (r < 1) r = 1;
+    int total = c * r;
+    if (total > 1) {
+      int f = frame % total;
+      float fw = (float)t.width / (float)c;
+      float fh = (float)t.height / (float)r;
+      src.x = (float)(f % c) * fw;
+      src.y = (float)(f / c) * fh;
+      src.width = fw;
+      src.height = fh;
+    }
+  }
+  Vector2 sz = {(float)size, (float)size};
+  DrawBillboardPro(tame_cam3d, t, src,
+                   (Vector3){(float)x, (float)y, (float)z},
+                   (Vector3){0.0f, 1.0f, 0.0f}, sz,
+                   (Vector2){(float)(size * 0.5), (float)(size * 0.5)},
+                   (float)rot, tame_color(color));
+}
+
+// Dünya noktasının EKRAN koordinatı. 3B can barı, isim etiketi ve hasar sayısı
+// gibi şeyler aslında 2B çizimdir — yalnız konumları 3B'de bir cisme bağlıdır.
+// Billboard bunları veremez (yazı tipi/metin 3B dörtgene sığmaz), izdüşüm verir:
+// entity'nin tepesini ekrana çevir, oraya normal text()/rect() çiz.
+// X ve Y ayrı builtin: VMValue ABI'sinden iki değer birden dönmek zahmetli.
+double tame_impl_screen_x(double x, double y, double z) {
+  Vector2 p = GetWorldToScreen((Vector3){(float)x, (float)y, (float)z},
+                               tame_cam3d);
+  return (double)p.x;
+}
+
+double tame_impl_screen_y(double x, double y, double z) {
+  Vector2 p = GetWorldToScreen((Vector3){(float)x, (float)y, (float)z},
+                               tame_cam3d);
+  return (double)p.y;
 }
 
 void tame_impl_draw_texture(int h, double x, double y) {
@@ -1583,6 +1986,84 @@ int tame_impl_load_model(const char *path) {
   return slot;
 }
 
+// --- Kama (wedge) mesh'i -----------------------------------------------------
+// raylib'de kama primitifi YOK. Rampa bu yüzden 12 kademeli kutu olarak
+// çiziliyordu: fizik analitik eğimi kullandığı için yürüyüş pürüzsüzdü ama
+// GÖRÜNTÜ merdivendi. Gerçek çözüm mesh'i kendimiz kurmak.
+//
+// Kutu gibi ORTALANMIŞ: x ∈ [-a/2, a/2], z ∈ [-c/2, c/2], tepe yüzeyi
+// z = -c/2'de tabanda (y = -b/2), z = +c/2'de tavanda (y = +b/2). scene3d'nin
+// `_ramp_h3` analitik yüksekliğiyle aynı tanım — ikisi ayrışırsa görünen
+// rampa ile basılan rampa farklı olurdu.
+//
+// SARMA YÖNÜ elle sıralanmıyor. Üçgenleri gözle doğrulayamıyorum ve ters
+// sarılmış bir yüz arkayüz-ayıklamasıyla GÖRÜNMEZ olur; o yüzden her üçgen,
+// istenen normale göre kendini düzeltiyor.
+static int tame_wedge_tri(float *v, float *n, float *t, int base,
+                          Vector3 p0, Vector3 p1, Vector3 p2, Vector3 nn) {
+  Vector3 e1 = Vector3Subtract(p1, p0);
+  Vector3 e2 = Vector3Subtract(p2, p0);
+  Vector3 f = Vector3CrossProduct(e1, e2);
+  if (Vector3DotProduct(f, nn) < 0.0f) {
+    Vector3 tmp = p1;
+    p1 = p2;
+    p2 = tmp;
+  }
+  Vector3 ps[3] = {p0, p1, p2};
+  // Doku koordinatı kaba: kama için döşeme değil renk asıl kullanım.
+  float uv[6] = {0.0f, 0.0f, 1.0f, 0.0f, 0.5f, 1.0f};
+  for (int i = 0; i < 3; i++) {
+    v[(base + i) * 3 + 0] = ps[i].x;
+    v[(base + i) * 3 + 1] = ps[i].y;
+    v[(base + i) * 3 + 2] = ps[i].z;
+    n[(base + i) * 3 + 0] = nn.x;
+    n[(base + i) * 3 + 1] = nn.y;
+    n[(base + i) * 3 + 2] = nn.z;
+    t[(base + i) * 2 + 0] = uv[i * 2 + 0];
+    t[(base + i) * 2 + 1] = uv[i * 2 + 1];
+  }
+  return base + 3;
+}
+
+static Mesh tame_gen_wedge(float a, float b, float c) {
+  float hx = a * 0.5f, hy = b * 0.5f, hz = c * 0.5f;
+  // 5 yüz: taban(2) + arka(2) + eğim(2) + iki yan üçgen(1+1) = 8 üçgen.
+  const int tris = 8, verts = tris * 3;
+  Mesh m = {0};
+  m.triangleCount = tris;
+  m.vertexCount = verts;
+  m.vertices = (float *)RL_CALLOC(verts * 3, sizeof(float));
+  m.normals = (float *)RL_CALLOC(verts * 3, sizeof(float));
+  m.texcoords = (float *)RL_CALLOC(verts * 2, sizeof(float));
+  if (!m.vertices || !m.normals || !m.texcoords) return m;
+
+  Vector3 A = {-hx, -hy, -hz}, B = {hx, -hy, -hz};   // ön (alçak) kenar
+  Vector3 C = {hx, -hy, hz},   D = {-hx, -hy, hz};   // arka taban
+  Vector3 E = {hx, hy, hz},    F = {-hx, hy, hz};    // arka tepe
+
+  Vector3 nd = {0.0f, -1.0f, 0.0f};                  // taban
+  Vector3 nb = {0.0f, 0.0f, 1.0f};                   // arka
+  Vector3 nl = {-1.0f, 0.0f, 0.0f};                  // sol yan
+  Vector3 nr = {1.0f, 0.0f, 0.0f};                   // sağ yan
+  // Eğim normali: yüzey +z boyunca c kadar giderken b kadar yükseliyor,
+  // teğet (0, b, c); dışa bakan normal (0, c, -b).
+  float sl = sqrtf(b * b + c * c);
+  Vector3 ns = {0.0f, (sl > 0.0f ? c / sl : 1.0f), (sl > 0.0f ? -b / sl : 0.0f)};
+
+  int k = 0;
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, A, B, C, nd);
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, A, C, D, nd);
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, D, C, E, nb);
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, D, E, F, nb);
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, A, B, E, ns);
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, A, E, F, ns);
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, A, D, F, nl);
+  k = tame_wedge_tri(m.vertices, m.normals, m.texcoords, k, B, C, E, nr);
+
+  UploadMesh(&m, false);
+  return m;
+}
+
 // Prosedürel mesh üret → model handle. kind ile şekil seçilir (bkz. lib/tame.tpr
 // gen_* sarmalayıcıları). Dosya gerekmez.
 int tame_impl_gen(int kind, double a, double b, double c, double d) {
@@ -1602,6 +2083,7 @@ int tame_impl_gen(int kind, double a, double b, double c, double d) {
     case 4: mesh = GenMeshTorus((float)a, (float)b, ic, id); break;
     case 5: mesh = GenMeshCone((float)a, (float)b, ic); break;
     case 6: mesh = GenMeshKnot((float)a, (float)b, ic, id); break;
+    case 7: mesh = tame_gen_wedge((float)a, (float)b, (float)c); break;
     default: mesh = GenMeshCube((float)a, (float)b, (float)c); break;
   }
   Model m = LoadModelFromMesh(mesh);
@@ -1611,6 +2093,271 @@ int tame_impl_gen(int kind, double a, double b, double c, double d) {
   tame_models[slot].used = 1;
   return slot;
 }
+
+// --- Faz 10: gerçek arazi (heightmap) ---------------------------------------
+//
+// Rampa (Faz 9) dünyayı düz düzlemden kurtardı ama sınırlıydı: kama biçimli
+// entity'ler, kademeli çizim. Arazi gerçek çözüm — bir yükseklik haritasından
+// üretilmiş TEK mesh, her (x,z) için sürekli yükseklik.
+//
+// Mesh, model kayıt defterine NORMAL bir model olarak giriyor. Bunun sebebi
+// önemli: çizim/gölge/ışık/kayıt (gölge geçişi için display list) yollarının
+// hepsi model handle'ı üzerinden çalışıyor, dolayısıyla arazi bedavaya gölge
+// alıyor ve ışıklanıyor. Ayrı bir Model tutsaydık üçünü de elden bağlamak
+// gerekirdi.
+//
+// Yükseklik örneklemesi GenMeshHeightmap'in ÜÇGENLEMESİNİ birebir taklit
+// ediyor (düz bilineer DEĞİL): mesh her hücreyi köşegenden iki üçgene bölüyor
+// ve düz bilineer o köşegende mesh'ten sapar — oyuncu görünürde zeminin biraz
+// altına gömülür ya da üstünde yüzer. Fizik ile görselin uyuşması buna bağlı.
+static float *tame_terr_h = NULL;   // gri değerler (0..255), satır-major
+static int    tame_terr_mx = 0;     // yükseklik haritası çözünürlüğü
+static int    tame_terr_mz = 0;
+static float  tame_terr_sx = 0.0f;  // dünya boyutları
+static float  tame_terr_sy = 0.0f;
+static float  tame_terr_sz = 0.0f;
+static float  tame_terr_base = 0.0f; // taban Y (dünya)
+static int    tame_terr_ready = 0;
+
+void tame_impl_terrain_off(void) {
+  if (tame_terr_h) { free(tame_terr_h); tame_terr_h = NULL; }
+  tame_terr_ready = 0;
+}
+
+// Görüntüden gri değerleri sakla + mesh üret + model kaydına koy.
+//
+// Yükseklik verisi ile MESH kasten ayrı: gri değerleri çıkarmak saf CPU işi,
+// mesh üretmek ise GPU'ya yükleme yapıyor (GenMeshHeightmap sonunda
+// UploadMesh çağırıyor). Pencere yoksa yükseklik verisini yine de saklıyoruz
+// ve -1 dönüyoruz — böylece arazi FİZİĞİ pencere açmadan (headless testte)
+// sürülebiliyor, yalnız çizim devre dışı kalıyor.
+// Katman boyaması aşağıda tanımlı (yükseklik sorgusuna dayanıyor, o da bu
+// fonksiyonun kurduğu duruma) — ileri bildirim.
+static void tame_terrain_paint_mesh(Mesh *mesh);
+
+static int tame_terrain_build(Image img, double sx, double sy, double sz,
+                              double base) {
+  Color *px = LoadImageColors(img);
+  if (!px) { UnloadImage(img); return -1; }
+  int mx = img.width, mz = img.height;
+  float *hs = (float *)malloc((size_t)mx * (size_t)mz * sizeof(float));
+  if (!hs) { UnloadImageColors(px); UnloadImage(img); return -1; }
+  for (int i = 0; i < mx * mz; i++) {
+    // GenMeshHeightmap'in GRAY_VALUE'su ile AYNI: (r+g+b)/3
+    hs[i] = ((float)px[i].r + (float)px[i].g + (float)px[i].b) / 3.0f;
+  }
+  UnloadImageColors(px);
+
+  // Yükseklik verisi her durumda saklanır (fizik penceresiz de çalışır).
+  tame_impl_terrain_off();          // önceki araziyi bırak
+  tame_terr_h = hs;
+  tame_terr_mx = mx; tame_terr_mz = mz;
+  tame_terr_sx = (float)sx; tame_terr_sy = (float)sy; tame_terr_sz = (float)sz;
+  tame_terr_base = (float)base;
+  tame_terr_ready = 1;
+
+  // Mesh yalnız pencere varken — GPU'ya yükleme gerekiyor.
+  if (!tame_window_ready) { UnloadImage(img); return -1; }
+  int slot = tame_model_slot();
+  if (slot < 0) { UnloadImage(img); return -1; }
+  Mesh mesh = GenMeshHeightmap(img, (Vector3){(float)sx, (float)sy, (float)sz});
+  UnloadImage(img);
+  // Katman boyaması LoadModelFromMesh'ten ÖNCE: Mesh bir DEĞER yapısı, model
+  // onun kopyasını saklıyor — sonra boyasak yerel kopyayı boyamış olurduk.
+  tame_terrain_paint_mesh(&mesh);
+  Model m = LoadModelFromMesh(mesh);
+  tame_models[slot].model = m;
+  tame_models[slot].anims = NULL;
+  tame_models[slot].anim_count = 0;
+  tame_models[slot].used = 1;
+  return slot;
+}
+
+// Perlin gürültüsünden prosedürel arazi — asset dosyası gerekmez.
+int tame_impl_terrain_gen(int res, double sx, double sy, double sz, double base,
+                          double scale, int seed) {
+  if (res < 2) res = 2;
+  if (res > 512) res = 512;         // 512² = 261k tepe noktası; üstü anlamsız
+  if (scale <= 0.0) scale = 4.0;
+  Image img = GenImagePerlinNoise(res, res, seed, seed, (float)scale);
+  return tame_terrain_build(img, sx, sy, sz, base);
+}
+
+// Dosyadan yükseklik haritası (gri tonlamalı görüntü).
+int tame_impl_terrain_load(const char *path, double sx, double sy, double sz,
+                           double base) {
+  if (!path || !*path) return -1;
+  Image img = LoadImage(path);
+  if (img.data == NULL) return -1;
+  return tame_terrain_build(img, sx, sy, sz, base);
+}
+
+// (x,z) dünya noktasında arazi yüzeyinin Y'si. Arazi yoksa ya da nokta ayak
+// izinin dışındaysa taban Y döner (yani düz zemin gibi davranır).
+double tame_impl_terrain_height(double wx, double wz) {
+  if (!tame_terr_ready || tame_terr_mx < 2 || tame_terr_mz < 2)
+    return tame_terr_base;
+  // Arazi dünyada ORTALI: yerel = dünya + yarı-boy.
+  float lx = (float)wx + tame_terr_sx * 0.5f;
+  float lz = (float)wz + tame_terr_sz * 0.5f;
+  if (lx < 0.0f || lz < 0.0f || lx > tame_terr_sx || lz > tame_terr_sz)
+    return tame_terr_base;
+  // Hücre koordinatlarına çevir (mesh: x*sx/(mx-1), z*sz/(mz-1)).
+  float cx = lx * (float)(tame_terr_mx - 1) / tame_terr_sx;
+  float cz = lz * (float)(tame_terr_mz - 1) / tame_terr_sz;
+  int x0 = (int)cx, z0 = (int)cz;
+  if (x0 >= tame_terr_mx - 1) x0 = tame_terr_mx - 2;
+  if (z0 >= tame_terr_mz - 1) z0 = tame_terr_mz - 2;
+  float fx = cx - (float)x0;
+  float fz = cz - (float)z0;
+  float h00 = tame_terr_h[x0 + z0 * tame_terr_mx];
+  float h10 = tame_terr_h[(x0 + 1) + z0 * tame_terr_mx];
+  float h01 = tame_terr_h[x0 + (z0 + 1) * tame_terr_mx];
+  float h11 = tame_terr_h[(x0 + 1) + (z0 + 1) * tame_terr_mx];
+  // GenMeshHeightmap hücreyi (0,1)-(1,0) köşegeninden bölüyor:
+  //   üçgen 1 = (0,0),(0,1),(1,0)  → fx + fz <= 1
+  //   üçgen 2 = (1,0),(0,1),(1,1)  → fx + fz >  1
+  float g;
+  if (fx + fz <= 1.0f) g = h00 + (h10 - h00) * fx + (h01 - h00) * fz;
+  else g = h11 + (h01 - h11) * (1.0f - fx) + (h10 - h11) * (1.0f - fz);
+  return (double)(tame_terr_base + g * tame_terr_sy / 255.0f);
+}
+
+// --- Arazi katman boyama ----------------------------------------------------
+// Arazi tek renkti: kırk birimlik bir dünyanın tamamı aynı yeşil. Oysa
+// yükseklik de eğim de zaten elimizde — fizik ikisini de kullanıyor. Katman
+// boyama yeni VERİ istemiyor, o veriyi mesh'in tepe noktalarına RENK olarak
+// yazmayı istiyor.
+//
+// Neden vertex color, neden shader değil: arazi sıradan bir model olarak
+// kalıyor, yani doku/ışık/gölge/sis yollarının hiçbiri değişmiyor ve ayrı bir
+// materyal yönetmek gerekmiyor. (Bunun görünür olması için ışık shader'ında
+// texelColor'ın fragColor ile çarpılması gerekti — stok raylib ışık shader'ı
+// tepe rengini fragment'a taşıyıp kullanmıyordu.)
+static int   tame_terr_lay_on    = 0;
+static Color tame_terr_lay_low   = { 96, 132,  88, 255};   // çim
+static Color tame_terr_lay_mid   = {124, 116,  82, 255};   // toprak
+static Color tame_terr_lay_high  = {238, 242, 250, 255};   // kar
+static Color tame_terr_lay_rock  = {112, 110, 106, 255};   // kaya (eğime göre)
+static float tame_terr_lay_midy  = 3.0f;    // dünya Y: buradan sonra toprak
+static float tame_terr_lay_highy = 7.0f;    // dünya Y: buradan sonra kar
+static float tame_terr_lay_slope = 42.0f;   // derece: bundan dik yüzey kaya
+
+// Yüzey normalinin Y bileşeni (1 = düz, 0'a yaklaştıkça dik). Merkezi
+// farklarla — scene3d'nin Tulpar tarafındaki _terrain_normal3'üyle aynı
+// yöntem, aynı sonuç.
+static float tame_terrain_up(double wx, double wz) {
+  const double e = 0.5;
+  double hl = tame_impl_terrain_height(wx - e, wz);
+  double hr = tame_impl_terrain_height(wx + e, wz);
+  double hd = tame_impl_terrain_height(wx, wz - e);
+  double hu = tame_impl_terrain_height(wx, wz + e);
+  double dx = (hr - hl) / (2.0 * e);
+  double dz = (hu - hd) / (2.0 * e);
+  return (float)(1.0 / sqrt(dx * dx + 1.0 + dz * dz));
+}
+
+// Hangi katman: 0 çim, 1 toprak, 2 kar, 3 kaya. KESKİN sınıflandırma —
+// oyun mantığı için (ayak sesi, hız, "karda mısın?"). Mesh boyaması ise
+// aşağıda YUMUŞAK geçiş kullanıyor: göz gradyan ister, oyun kesin cevap.
+int tame_impl_terrain_layer(double wx, double wz) {
+  if (!tame_terr_ready) return 0;
+  float up = tame_terrain_up(wx, wz);
+  if (up < cosf(tame_terr_lay_slope * (float)(3.14159265358979 / 180.0)))
+    return 3;
+  double h = tame_impl_terrain_height(wx, wz);
+  if (h >= (double)tame_terr_lay_highy) return 2;
+  if (h >= (double)tame_terr_lay_midy) return 1;
+  return 0;
+}
+
+static Color tame_terr_mix(Color a, Color b, float t) {
+  if (t < 0.0f) t = 0.0f;
+  if (t > 1.0f) t = 1.0f;
+  Color c;
+  c.r = (unsigned char)((float)a.r + ((float)b.r - (float)a.r) * t);
+  c.g = (unsigned char)((float)a.g + ((float)b.g - (float)a.g) * t);
+  c.b = (unsigned char)((float)a.b + ((float)b.b - (float)a.b) * t);
+  c.a = 255;
+  return c;
+}
+
+// Mesh için renk: katman sınırlarında YUMUŞAK geçiş. Keskin sınır, arazide
+// çizilmiş bir kontur gibi görünür — doğada öyle bir çizgi yok.
+static Color tame_terrain_color_at(double wx, double wz, double h) {
+  float band = (tame_terr_lay_highy - tame_terr_lay_midy) * 0.28f;
+  if (band < 0.05f) band = 0.05f;
+  Color c;
+  double m = (double)tame_terr_lay_midy;
+  double t = (double)tame_terr_lay_highy;
+  if (h <= m - band)      c = tame_terr_lay_low;
+  else if (h < m + band)  c = tame_terr_mix(tame_terr_lay_low, tame_terr_lay_mid,
+                                            (float)((h - (m - band)) / (2.0 * band)));
+  else if (h <= t - band) c = tame_terr_lay_mid;
+  else if (h < t + band)  c = tame_terr_mix(tame_terr_lay_mid, tame_terr_lay_high,
+                                            (float)((h - (t - band)) / (2.0 * band)));
+  else                    c = tame_terr_lay_high;
+  // Eğim kayayı ÜSTE bindirir: dik yüzeyde çim/kar tutmaz. Bu da bir bant
+  // üzerinden karışıyor, yoksa yamaçta keskin bir kaya lekesi oluşurdu.
+  float up = tame_terrain_up(wx, wz);
+  float sc = cosf(tame_terr_lay_slope * (float)(3.14159265358979 / 180.0));
+  if (up < sc + 0.06f) {
+    float k = (sc + 0.06f - up) / 0.12f;
+    c = tame_terr_mix(c, tame_terr_lay_rock, k);
+  }
+  return c;
+}
+
+// Mesh'e renk tamponu ekle. GenMeshHeightmap zaten yükleme yaptığı için VAO
+// var; yalnız RENK VBO'sunu ekliyoruz. Mesh'i kendimiz üretmiyoruz ki
+// üçgenleme raylib'inkiyle birebir kalsın — tm3_terrain_height o
+// üçgenlemeyi taklit ediyor, ayrışırlarsa fizik görselden kayar.
+static void tame_terrain_paint_mesh(Mesh *mesh) {
+  if (!tame_terr_lay_on || mesh->vertexCount <= 0 || mesh->vertices == NULL)
+    return;
+  int vc = mesh->vertexCount;
+  unsigned char *cols = (unsigned char *)malloc((size_t)vc * 4);
+  if (!cols) return;
+  for (int i = 0; i < vc; i++) {
+    // Mesh yerel uzayda 0..sx / 0..sz; dünyada yarı-boy kadar geri kaydırılıp
+    // çiziliyor (bkz. scene3d _s3_render). Yerel Y'ye taban eklenince dünya Y.
+    float lx = mesh->vertices[i * 3 + 0];
+    float ly = mesh->vertices[i * 3 + 1];
+    float lz = mesh->vertices[i * 3 + 2];
+    double wx = (double)lx - (double)tame_terr_sx * 0.5;
+    double wz = (double)lz - (double)tame_terr_sz * 0.5;
+    Color c = tame_terrain_color_at(wx, wz, (double)ly + (double)tame_terr_base);
+    cols[i * 4 + 0] = c.r; cols[i * 4 + 1] = c.g;
+    cols[i * 4 + 2] = c.b; cols[i * 4 + 3] = 255;
+  }
+  mesh->colors = cols;
+  if (mesh->vaoId > 0) {
+    rlEnableVertexArray(mesh->vaoId);
+    mesh->vboId[RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR] =
+        rlLoadVertexBuffer(cols, vc * 4 * (int)sizeof(unsigned char), false);
+    rlSetVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR, 4,
+                         RL_UNSIGNED_BYTE, true, 0, 0);
+    rlEnableVertexAttribute(RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR);
+    rlDisableVertexArray();
+  }
+}
+
+// Katmanları ayarla ve AÇ. Mesh üretim zamanında okunduğu için araziden ÖNCE
+// çağrılmalı; sonra çağrılırsa bir sonraki arazi üretiminde geçerli olur.
+void tame_impl_terrain_layers(int64_t low, int64_t mid, int64_t high,
+                              int64_t rock, double mid_y, double high_y,
+                              double rock_slope_deg) {
+  tame_terr_lay_low = tame_color(low);
+  tame_terr_lay_mid = tame_color(mid);
+  tame_terr_lay_high = tame_color(high);
+  tame_terr_lay_rock = tame_color(rock);
+  tame_terr_lay_midy = (float)mid_y;
+  tame_terr_lay_highy = (float)high_y;
+  tame_terr_lay_slope = (float)rock_slope_deg;
+  tame_terr_lay_on = 1;
+}
+
+void tame_impl_terrain_layers_off(void) { tame_terr_lay_on = 0; }
 
 void tame_impl_draw_model(int h, double x, double y, double z, double scale,
                           int64_t tint) {
@@ -1660,6 +2407,87 @@ void tame_impl_anim(int h, int idx, int frame) {
   UpdateModelAnimation(tame_models[h].model, tame_models[h].anims[idx], frame);
 }
 
+// Animasyon HARMANLAMA: iki pozun arasını w ile karıştırıp uygular.
+// w=0 tamamen A, w=1 tamamen B.
+//
+// Neden ayrı bir yol: `tame_impl_anim` tek bir animasyonun pozunu uyguluyor,
+// yani boşta↔koşu geçişi bir KARE içinde oluyor ve karakter sıçrıyordu.
+//
+// Kendi iskelet kodumuzu yazmıyoruz. raylib'in UpdateModelAnimation'ı pozu
+// `anim.framePoses[frame]` üzerinden okuyor; biz tek karelik GEÇİCİ bir
+// ModelAnimation kurup framePoses'ini harmanlanmış diziye bakacak şekilde
+// ayarlıyoruz. Böylece skinning, kemik matrisi kurulumu ve GPU yüklemesi
+// raylib'in kendi (ve test edilmiş) yolundan geçiyor.
+//
+// boneCount'u A'dan alıyoruz: UpdateModelAnimationBones içinde
+// `assert(mesh.boneCount == anim.boneCount)` var.
+static Transform *tame_blend_pose = NULL;
+static int tame_blend_cap = 0;
+
+void tame_impl_anim_blend(int h, int ia, int fa, int ib, int fb, double w) {
+  if (!tame_model_ok(h)) return;
+  int n = tame_models[h].anim_count;
+  if (ia < 0 || ia >= n) return;
+  // B geçersiz ya da ağırlık uçlarda: harmanlamaya gerek yok, tek poz uygula.
+  // Bu aynı zamanda "tek animasyonlu model" durumunun doğal cevabı.
+  if (ib < 0 || ib >= n || w <= 0.001) {
+    UpdateModelAnimation(tame_models[h].model, tame_models[h].anims[ia], fa);
+    return;
+  }
+  if (w >= 0.999) {
+    UpdateModelAnimation(tame_models[h].model, tame_models[h].anims[ib], fb);
+    return;
+  }
+
+  ModelAnimation *A = &tame_models[h].anims[ia];
+  ModelAnimation *B = &tame_models[h].anims[ib];
+  // Kemik sayıları farklıysa harmanlanacak bir eşleşme yok — iki iskelet
+  // farklı demektir. Sessizce A'ya düşmek, çökmekten de yanlış poz
+  // üretmekten de iyi.
+  if (A->boneCount != B->boneCount || A->frameCount <= 0 ||
+      B->frameCount <= 0 || !A->framePoses || !B->framePoses) {
+    UpdateModelAnimation(tame_models[h].model, tame_models[h].anims[ia], fa);
+    return;
+  }
+
+  int bc = A->boneCount;
+  if (bc > tame_blend_cap) {
+    Transform *np = (Transform *)realloc(tame_blend_pose,
+                                         (size_t)bc * sizeof(Transform));
+    if (!np) {
+      UpdateModelAnimation(tame_models[h].model, tame_models[h].anims[ia], fa);
+      return;
+    }
+    tame_blend_pose = np;
+    tame_blend_cap = bc;
+  }
+
+  if (fa < 0) fa = 0;
+  if (fb < 0) fb = 0;
+  fa = fa % A->frameCount;
+  fb = fb % B->frameCount;
+  Transform *pa = A->framePoses[fa];
+  Transform *pb = B->framePoses[fb];
+  float t = (float)w;
+
+  for (int i = 0; i < bc; i++) {
+    tame_blend_pose[i].translation =
+        Vector3Lerp(pa[i].translation, pb[i].translation, t);
+    // Dönüşte SLERP: bileşen bileşen lerp kısa yoldan gitmez ve uzunluğu
+    // bozar, yani kemik boyu oynar.
+    tame_blend_pose[i].rotation =
+        QuaternionSlerp(pa[i].rotation, pb[i].rotation, t);
+    tame_blend_pose[i].scale = Vector3Lerp(pa[i].scale, pb[i].scale, t);
+  }
+
+  ModelAnimation tmp = *A;
+  tmp.frameCount = 1;
+  Transform *rows[1];
+  rows[0] = tame_blend_pose;
+  tmp.framePoses = rows;
+  UpdateModelAnimation(tame_models[h].model, tmp, 0);
+}
+
 void tame_impl_unload_model(int h) {
   if (!tame_model_ok(h)) return;
   if (tame_models[h].anims)
@@ -1691,6 +2519,16 @@ int tame_impl_load_font(const char *path, int size) {
   }
   UnloadFont(f);
   return -1;
+}
+
+// Yüklenmiş fontla metnin genişliği. Harf aralığı `tame_impl_text_font` ile
+// AYNI olmak zorunda — ölçüm ve çizim ayrışırsa yerleşim sessizce kayar
+// (editörün bütün sütun genişlikleri ölçülen metne dayanıyor).
+int tame_impl_font_width(int fh, const char *s, int size) {
+  if (fh < 0 || fh >= TAME_MAX_FONTS || !tame_font_used[fh]) return 0;
+  Vector2 m = MeasureTextEx(tame_fonts[fh], s ? s : "", (float)size,
+                            (float)size / 10.0f);
+  return (int)m.x;
 }
 
 void tame_impl_text_font(int fh, const char *s, double x, double y, int size,
@@ -1735,6 +2573,15 @@ void tame_impl_stop_sound(int h) {
 
 void tame_impl_sound_volume(int h, double v) {
   if (tame_sound_ok(h)) SetSoundVolume(tame_sounds[h], (float)v);
+}
+
+// Stereo kaydırma. raylib'in anlamı TERS ve bu kolay kaçan bir tuzak:
+// raudio.c'de `left = pan; right = 1 - pan`, yani pan=0 SAĞ kanaldır,
+// pan=1 SOL, 0.5 merkez. Çeviriyi burada YAPMIYORUZ — builtin raylib'in
+// anlamını olduğu gibi taşıyor, "sağdaki ses sağdan gelsin" dönüşümü
+// scene3d'nin konumsal ses katmanında.
+void tame_impl_sound_pan(int h, double p) {
+  if (tame_sound_ok(h)) SetSoundPan(tame_sounds[h], (float)p);
 }
 
 int tame_impl_load_music(const char *path) {
@@ -1940,6 +2787,18 @@ int tame_impl_key_released(const char *k) {
 // adresliyor, ama scene3d gibi kütüphaneler kendi sabitlerini (K_W = 87,
 // K_LEFT = 263 …) tutuyor — sayı verilince ad tablosuna düşmek yerine kodu
 // doğrudan kullanıyoruz.
+// Metin genişliği: editörün yerleşimi buna bağlı (panel sütunları, düğme
+// kutuları). Elle "karakter sayısı * kabaca yarım punto" tahmini kullanmak
+// yazı tipi değişince sessizce bozulurdu.
+int tame_impl_text_width(const char *s, int size) {
+  if (!s) return 0;
+  return MeasureText(s, size);
+}
+
+// Klavyeden gelen sıradaki UNICODE karakter (yoksa 0). IsKeyPressed tuş
+// KODU verir, yani düzen/shift bilmez — metin alanı için gereken bu.
+int tame_impl_char_pressed(void) { return GetCharPressed(); }
+
 int tame_impl_key_down_code(int key) { return key ? IsKeyDown(key) : 0; }
 int tame_impl_key_pressed_code(int key) { return key ? IsKeyPressed(key) : 0; }
 int tame_impl_key_released_code(int key) { return key ? IsKeyReleased(key) : 0; }
@@ -2081,6 +2940,16 @@ void tame_impl_cursor_lock(int on) {
 }
 
 int tame_impl_cursor_locked(void) { return tame_cursor_locked; }
+
+// raylib InitWindow'da çıkış tuşunu ESC'ye kuruyor: ESC'ye basılınca
+// WindowShouldClose() true döner ve oyun döngüsü biter. Bu, ESC'yi Tulpar
+// tarafında YAKALANAMAZ yapıyor — duraklat menüsü kurmanın önündeki tek engel
+// buydu. 0 (KEY_NULL) geçilince raylib'in kestirmesi kapanır ve ESC sıradan bir
+// tuş olur; `key_pressed(K_ESC)` ile okunabilir.
+void tame_impl_exit_key(int key) {
+  if (!IsWindowReady()) return;
+  SetExitKey(key);
+}
 
 // Input — touch (mobil). raylib masaüstünde tek dokunuşu fareye maplediği
 // için mouse_* zaten çalışır; bu API çok-parmak (multi-touch) ve açık parmak
@@ -2262,16 +3131,142 @@ int tame_impl_touch_y(int i) { return (int)tame_to_world_y((double)GetTouchPosit
 // toString/toInt yeter); ad dosya adıdır ("skor" gibi, yol verme).
 // ---------------------------------------------------------------------------
 
+// ANDROID'DE pencere hazır olmadan çağrılamaz. Orada raylib'in dosya yolu
+// göreli adlar için AAssetManager'a düşüyor (LoadFileText → android_fopen →
+// AAssetManager_open) ve asset manager ancak aktivite ayağa kalkınca, yani
+// InitWindow sırasında kuruluyor. Öncesinde çağrılırsa NULL mutex üzerinde
+// SIGSEGV — emülatörde birebir bu görüldü: oyun `kayit_ac3d()`yi üst düzeyde,
+// `oyna3d()`den ÖNCE çağırdığı anda çöküyordu. Çökmek yerine "veri yok" demek
+// doğru davranış; scene3d zaten pencereden sonra yeniden okuyor.
+//
+// Guard SADECE Android'de: masaüstünde raylib düz fopen kullanıyor, dosya
+// erişiminin pencereyle ilgisi yok. Guard'ı her platforma koymak motorun
+// headless test edilebilirliğini kırardı (arazi fiziğinde bilerek korunan
+// özellik) — nitekim ilk denemede kalıcılık testleri tam bu yüzden düştü.
+#if defined(PLATFORM_ANDROID) || defined(__ANDROID__)
+#  define TAME_DATA_NEEDS_WINDOW 1
+#else
+#  define TAME_DATA_NEEDS_WINDOW 0
+#endif
+
+// WEB'DE raylib'in dosya yolu emscripten'in MEMFS'ine gider ve MEMFS SAYFA
+// ÖMÜRLÜDÜR: yazılan şey sekme yenilenince yok olur. Bu sessiz bir veri
+// kaybıydı — SaveFileText 1 döndürüyor, oyun "kaydettim" diyor, kullanıcı
+// yenileyince skoru gitmiş oluyor. Ölçüldü (headless Chrome, iki ardışık
+// yükleme): ikinci yüklemede okunan değer boş.
+//
+// Tarayıcının kalıcı deposu localStorage'dır; kaynak (origin) başına ayrı,
+// birkaç MB, sayfa yenilemesini ve sekme kapanmasını atlatır. Anahtarlar
+// "tulpar:" ile öneklenir ki aynı kaynakta duran başka bir uygulamanın
+// anahtarlarıyla çarpışmasın.
+//
+// localStorage gizli sekmede ya da site verisi kapalıyken ERİŞİMDE İSTİSNA
+// atar (yalnız boş dönmez), o yüzden her çağrı try/catch içinde: kalıcılığın
+// olmaması oyunun çökmesi anlamına gelmemeli.
+#if defined(PLATFORM_WEB)
+#include <emscripten.h>
+
+EM_JS(int, tame_js_store_set, (const char *k, const char *v), {
+  try {
+    localStorage.setItem("tulpar:" + UTF8ToString(k), UTF8ToString(v));
+    return 1;
+  } catch (e) { return 0; }
+});
+
+// Anahtar yoksa -1; varsa UTF-8 bayt uzunluğu (sonlandırıcı hariç).
+EM_JS(int, tame_js_store_len, (const char *k), {
+  try {
+    var s = localStorage.getItem("tulpar:" + UTF8ToString(k));
+    if (s === null) return -1;
+    return lengthBytesUTF8(s);
+  } catch (e) { return -1; }
+});
+
+EM_JS(void, tame_js_store_read, (const char *k, char *buf, int n), {
+  try {
+    var s = localStorage.getItem("tulpar:" + UTF8ToString(k));
+    if (s === null) { HEAPU8[buf] = 0; return; }
+    stringToUTF8(s, buf, n);
+  } catch (e) { HEAPU8[buf] = 0; }
+});
+
+// Metni kullanıcının BİLGİSAYARINA indirir (tarayıcının indirme akışı).
+// localStorage sayfanın içinde kalıyor; sahne dosyasını web editöründen
+// dışarı çıkarmanın tek yolu bu.
+EM_JS(void, tame_js_download, (const char *name, const char *text), {
+  try {
+    var blob = new Blob([UTF8ToString(text)], { type: "application/json" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = UTF8ToString(name);
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 0);
+  } catch (e) {}
+});
+#endif
+
 int tame_impl_save_data(const char *name, const char *text) {
   if (!name || !name[0] || !text) return 0;
+#if TAME_DATA_NEEDS_WINDOW
+  if (!IsWindowReady()) return 0;
+#endif
+#if defined(PLATFORM_WEB)
+  return tame_js_store_set(name, text);
+#else
   return SaveFileText(name, (char *)text) ? 1 : 0;
+#endif
 }
 
 // Dönen tampon LoadFileText'in ayırdığı bellektir; binding kopyaladıktan
 // sonra tame_impl_text_free ile bırakır. Dosya yoksa NULL döner.
 char *tame_impl_load_data(const char *name) {
   if (!name || !name[0]) return NULL;
+#if TAME_DATA_NEEDS_WINDOW
+  if (!IsWindowReady()) return NULL;
+#endif
+#if defined(PLATFORM_WEB)
+  // Tamponu C ayırıyor: JS tarafından malloc'lu işaretçi döndürmek
+  // emscripten'in _malloc'unu JS'e ihraç etmeye bağlı olurdu.
+  int n = tame_js_store_len(name);
+  if (n < 0) return NULL;
+  // malloc/free çifti: tame_impl_text_free → UnloadFileText → RL_FREE, ve
+  // RL_FREE varsayılanı free.
+  char *buf = (char *)malloc((size_t)n + 1);
+  if (!buf) return NULL;
+  buf[0] = 0;
+  tame_js_store_read(name, buf, n + 1);
+  return buf;
+#else
   return LoadFileText(name);
+#endif
+}
+
+// Web: tarayıcı indirmesi. Diğer platformlarda "indirme" diye bir şey yok,
+// oradaki doğal karşılığı dosyayı yazmaktır — böylece oyun/editör kodu tek
+// bir çağrı yazar ve platform ayrımı yapmaz.
+int tame_impl_download(const char *name, const char *text) {
+  if (!name || !name[0] || !text) return 0;
+#if defined(PLATFORM_WEB)
+  tame_js_download(name, text);
+  return 1;
+#else
+#if TAME_DATA_NEEDS_WINDOW
+  if (!IsWindowReady()) return 0;
+#endif
+  return SaveFileText(name, (char *)text) ? 1 : 0;
+#endif
+}
+
+// Tarayıcıda mıyız? Dosya yolu / komut satırı argümanı gibi web'de anlamsız
+// olan şeyleri oyun kodunun ayırt edebilmesi için.
+int tame_impl_is_web(void) {
+#if defined(PLATFORM_WEB)
+  return 1;
+#else
+  return 0;
+#endif
 }
 
 void tame_impl_text_free(char *p) {

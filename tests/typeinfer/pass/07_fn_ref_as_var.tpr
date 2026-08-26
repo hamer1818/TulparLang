@@ -1,0 +1,17 @@
+// Expected: a function reference held in `var` (or `str`) is fine.
+//
+// Sibling of fail/07. The reference is the function's name, so `str` is
+// literally correct and `var` is the idiomatic form; `call()` accepts both.
+// Before function references were modelled, `call(f)` on ANY declared-type
+// variable produced a spurious "expected str" error.
+
+func selam() { print("selam"); }
+
+func main() {
+    var f = selam;
+    call(f);
+    str g = selam;
+    call(g);
+}
+
+main();

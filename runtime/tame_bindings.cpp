@@ -61,6 +61,18 @@ int tame_impl_key_pressed(const char *k);
 int tame_impl_key_released(const char *k);
 int tame_impl_key_down_code(int key);
 int tame_impl_key_pressed_code(int key);
+int tame_impl_text_width(const char *s, int size);
+int tame_impl_rt_new(int w, int h);
+void tame_impl_scissor(int x, int y, int w, int h);
+int tame_impl_font_width(int fh, const char *s, int size);
+void tame_impl_scissor_end(void);
+void tame_impl_rt_free(int h);
+int tame_impl_rt_w(int h);
+int tame_impl_rt_h(int h);
+void tame_impl_rt_begin(int h);
+void tame_impl_rt_end(void);
+void tame_impl_rt_draw(int h, int x, int y);
+int tame_impl_char_pressed(void);
 int tame_impl_key_released_code(int key);
 int tame_impl_mouse_x(void);
 int tame_impl_mouse_y(void);
@@ -70,6 +82,7 @@ double tame_impl_mouse_wheel(void);
 double tame_impl_mouse_dx(void);
 double tame_impl_mouse_dy(void);
 void tame_impl_cursor_lock(int on);
+void tame_impl_exit_key(int key);
 int tame_impl_cursor_locked(void);
 int tame_impl_touch_count(void);
 int tame_impl_touch_x(int i);
@@ -90,6 +103,7 @@ int tame_impl_load_sound(const char *path);
 void tame_impl_play_sound(int h);
 void tame_impl_stop_sound(int h);
 void tame_impl_sound_volume(int h, double v);
+void tame_impl_sound_pan(int h, double p);
 int tame_impl_load_music(const char *path);
 void tame_impl_play_music(int h);
 void tame_impl_stop_music(int h);
@@ -100,6 +114,8 @@ void tame_impl_begin3(void);
 void tame_impl_end3(void);
 void tame_impl_cube(double x, double y, double z, double w, double h, double d,
                     int64_t color);
+void tame_impl_cube_rot(double x, double y, double z, double w, double h,
+                        double d, double yaw, int64_t color);
 void tame_impl_cube_wires(double x, double y, double z, double w, double h,
                           double d, int64_t color);
 void tame_impl_grid(int slices, double spacing);
@@ -112,6 +128,25 @@ void tame_impl_plane(double x, double y, double z, double sx, double sz,
                      int64_t color);
 void tame_impl_line3(double x1, double y1, double z1, double x2, double y2,
                      double z2, int64_t color);
+void tame_impl_atlas_grid(int tex, int cols, int rows);
+int tame_impl_atlas_frames(int tex);
+void tame_impl_billboard_pro(int tex, double x, double y, double z, double size,
+                             double rot, int frame, int64_t color);
+void tame_impl_billboard(int tex, double x, double y, double z, double size,
+                         int64_t color);
+int tame_impl_terrain_gen(int res, double sx, double sy, double sz, double base,
+                          double scale, int seed);
+int tame_impl_terrain_load(const char *path, double sx, double sy, double sz,
+                           double base);
+double tame_impl_terrain_height(double x, double z);
+void tame_impl_terrain_off(void);
+int tame_impl_terrain_layer(double wx, double wz);
+void tame_impl_terrain_layers(int64_t low, int64_t mid, int64_t high,
+                              int64_t rock, double mid_y, double high_y,
+                              double rock_slope_deg);
+void tame_impl_terrain_layers_off(void);
+double tame_impl_screen_x(double x, double y, double z);
+double tame_impl_screen_y(double x, double y, double z);
 double tame_impl_pick_box(double mx, double my, double bx, double by, double bz,
                           double bw, double bh, double bd);
 double tame_impl_pick_sphere(double mx, double my, double cx, double cy,
@@ -129,6 +164,8 @@ void tame_impl_texture3(int tex, double tile_u, double tile_v);
 void tame_impl_material3(double shine, double spec);
 int tame_impl_sky(int64_t top, int64_t bottom);
 void tame_impl_sky_off(void);
+void tame_impl_sky_stars(double intensity);
+void tame_impl_sky_clouds(double coverage);
 int tame_impl_checker(int w, int h, int cells, int64_t c1, int64_t c2);
 void tame_impl_fog(int64_t color, double density);
 int tame_impl_load_model(const char *path);
@@ -141,6 +178,7 @@ void tame_impl_model_texture(int h, int tex_handle);
 int tame_impl_model_anim_count(int h);
 int tame_impl_anim_frames(int h, int idx);
 void tame_impl_anim(int h, int idx, int frame);
+void tame_impl_anim_blend(int h, int ia, int fa, int ib, int fb, double w);
 void tame_impl_unload_model(int h);
 void tame_impl_triangle(double x1, double y1, double x2, double y2, double x3,
                         double y3, int64_t color);
@@ -152,6 +190,8 @@ int tame_impl_gamepad_down(int id, const char *btn);
 int tame_impl_gamepad_pressed(int id, const char *btn);
 double tame_impl_gamepad_axis(int id, const char *axis);
 int tame_impl_save_data(const char *name, const char *text);
+int tame_impl_download(const char *name, const char *text);
+int tame_impl_is_web(void);
 char *tame_impl_load_data(const char *name);
 void tame_impl_text_free(char *p);
 void tame_impl_vibrate(int ms);
@@ -302,6 +342,47 @@ VMValue aot_tm_key_released_ptr(VMValue *k) {
   return VM_BOOL(tame_impl_key_released_code((int)tm_int(k)));
 }
 
+VMValue aot_tm_font_width_ptr(VMValue *f, VMValue *s, VMValue *size) {
+  return VM_INT(tame_impl_font_width((int)tm_int(f), tm_str(s), (int)tm_int(size)));
+}
+
+VMValue aot_tm_scissor_ptr(VMValue *x, VMValue *y, VMValue *w, VMValue *h) {
+  tame_impl_scissor((int)tm_int(x), (int)tm_int(y), (int)tm_int(w), (int)tm_int(h));
+  return VM_VOID();
+}
+VMValue aot_tm_scissor_end_ptr(void) {
+  tame_impl_scissor_end();
+  return VM_VOID();
+}
+
+VMValue aot_tm_rt_new_ptr(VMValue *w, VMValue *h) {
+  return VM_INT(tame_impl_rt_new((int)tm_int(w), (int)tm_int(h)));
+}
+VMValue aot_tm_rt_free_ptr(VMValue *h) {
+  tame_impl_rt_free((int)tm_int(h));
+  return VM_VOID();
+}
+VMValue aot_tm_rt_w_ptr(VMValue *h) { return VM_INT(tame_impl_rt_w((int)tm_int(h))); }
+VMValue aot_tm_rt_h_ptr(VMValue *h) { return VM_INT(tame_impl_rt_h((int)tm_int(h))); }
+VMValue aot_tm_rt_begin_ptr(VMValue *h) {
+  tame_impl_rt_begin((int)tm_int(h));
+  return VM_VOID();
+}
+VMValue aot_tm_rt_end_ptr(void) {
+  tame_impl_rt_end();
+  return VM_VOID();
+}
+VMValue aot_tm_rt_draw_ptr(VMValue *h, VMValue *x, VMValue *y) {
+  tame_impl_rt_draw((int)tm_int(h), (int)tm_int(x), (int)tm_int(y));
+  return VM_VOID();
+}
+
+VMValue aot_tm_text_width_ptr(VMValue *s, VMValue *size) {
+  return VM_INT(tame_impl_text_width(tm_str(s), (int)tm_int(size)));
+}
+
+VMValue aot_tm_char_pressed_ptr(void) { return VM_INT(tame_impl_char_pressed()); }
+
 VMValue aot_tm_mouse_x_ptr(void) { return VM_INT(tame_impl_mouse_x()); }
 VMValue aot_tm_mouse_y_ptr(void) { return VM_INT(tame_impl_mouse_y()); }
 
@@ -327,6 +408,11 @@ VMValue aot_tm_cursor_lock_ptr(VMValue *on) {
 
 VMValue aot_tm_cursor_locked_ptr(void) {
   return VM_BOOL(tame_impl_cursor_locked());
+}
+
+VMValue aot_tm_exit_key_ptr(VMValue *key) {
+  tame_impl_exit_key((int)tm_int(key));
+  return VM_VOID();
 }
 
 VMValue aot_tm_touch_count_ptr(void) {
@@ -406,6 +492,11 @@ VMValue aot_tm_sound_volume_ptr(VMValue *snd, VMValue *vol) {
   return VM_VOID();
 }
 
+VMValue aot_tm_sound_pan_ptr(VMValue *snd, VMValue *pan) {
+  tame_impl_sound_pan((int)tm_int(snd), tm_num(pan));
+  return VM_VOID();
+}
+
 VMValue aot_tm_load_music_ptr(VMValue *path) {
   return VM_INT(tame_impl_load_music(tm_str(path)));
 }
@@ -463,6 +554,14 @@ VMValue aot_tm3_cube_ptr(VMValue *x, VMValue *y, VMValue *z, VMValue *w,
                          VMValue *h, VMValue *d, VMValue *color) {
   tame_impl_cube(tm_num(x), tm_num(y), tm_num(z), tm_num(w), tm_num(h),
                  tm_num(d), tm_int(color));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_cube_rot_ptr(VMValue *x, VMValue *y, VMValue *z, VMValue *w,
+                             VMValue *h, VMValue *d, VMValue *yaw,
+                             VMValue *color) {
+  tame_impl_cube_rot(tm_num(x), tm_num(y), tm_num(z), tm_num(w), tm_num(h),
+                     tm_num(d), tm_num(yaw), tm_int(color));
   return VM_VOID();
 }
 
@@ -566,6 +665,85 @@ VMValue aot_tm3_shadow_area_ptr(VMValue *area) {
   return VM_VOID();
 }
 
+// --- 3D (Faz 8) — billboard + dünya→ekran izdüşümü --------------------------
+
+VMValue aot_tm3_billboard_ptr(VMValue *tex, VMValue *x, VMValue *y, VMValue *z,
+                              VMValue *size, VMValue *color) {
+  tame_impl_billboard((int)tm_int(tex), tm_num(x), tm_num(y), tm_num(z),
+                      tm_num(size), tm_int(color));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_atlas_grid_ptr(VMValue *tex, VMValue *cols, VMValue *rows) {
+  tame_impl_atlas_grid((int)tm_int(tex), (int)tm_int(cols), (int)tm_int(rows));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_atlas_frames_ptr(VMValue *tex) {
+  return VM_INT(tame_impl_atlas_frames((int)tm_int(tex)));
+}
+
+VMValue aot_tm3_billboard_pro_ptr(VMValue *tex, VMValue *x, VMValue *y,
+                                  VMValue *z, VMValue *size, VMValue *rot,
+                                  VMValue *frame, VMValue *color) {
+  tame_impl_billboard_pro((int)tm_int(tex), tm_num(x), tm_num(y), tm_num(z),
+                          tm_num(size), tm_num(rot), (int)tm_int(frame),
+                          tm_int(color));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_screen_x_ptr(VMValue *x, VMValue *y, VMValue *z) {
+  return VM_FLOAT(tame_impl_screen_x(tm_num(x), tm_num(y), tm_num(z)));
+}
+
+VMValue aot_tm3_screen_y_ptr(VMValue *x, VMValue *y, VMValue *z) {
+  return VM_FLOAT(tame_impl_screen_y(tm_num(x), tm_num(y), tm_num(z)));
+}
+
+// --- 3D (Faz 10) — gerçek arazi (heightmap) ---------------------------------
+// Üretilen mesh NORMAL bir model handle'ı olarak dönüyor; çizim/gölge/ışık
+// mevcut model yolundan geçsin diye (bkz. tame_impl.c'deki not).
+
+VMValue aot_tm3_terrain_gen_ptr(VMValue *res, VMValue *sx, VMValue *sy,
+                                VMValue *sz, VMValue *base, VMValue *scale,
+                                VMValue *seed) {
+  return VM_INT(tame_impl_terrain_gen((int)tm_int(res), tm_num(sx), tm_num(sy),
+                                      tm_num(sz), tm_num(base), tm_num(scale),
+                                      (int)tm_int(seed)));
+}
+
+VMValue aot_tm3_terrain_load_ptr(VMValue *path, VMValue *sx, VMValue *sy,
+                                 VMValue *sz, VMValue *base) {
+  return VM_INT(tame_impl_terrain_load(tm_str(path), tm_num(sx), tm_num(sy),
+                                       tm_num(sz), tm_num(base)));
+}
+
+VMValue aot_tm3_terrain_height_ptr(VMValue *x, VMValue *z) {
+  return VM_FLOAT(tame_impl_terrain_height(tm_num(x), tm_num(z)));
+}
+
+VMValue aot_tm3_terrain_layer_ptr(VMValue *x, VMValue *z) {
+  return VM_INT(tame_impl_terrain_layer(tm_num(x), tm_num(z)));
+}
+
+VMValue aot_tm3_terrain_layers_ptr(VMValue *low, VMValue *mid, VMValue *high,
+                                   VMValue *rock, VMValue *mid_y,
+                                   VMValue *high_y, VMValue *slope) {
+  tame_impl_terrain_layers(tm_int(low), tm_int(mid), tm_int(high), tm_int(rock),
+                           tm_num(mid_y), tm_num(high_y), tm_num(slope));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_terrain_layers_off_ptr(void) {
+  tame_impl_terrain_layers_off();
+  return VM_VOID();
+}
+
+VMValue aot_tm3_terrain_off_ptr(void) {
+  tame_impl_terrain_off();
+  return VM_VOID();
+}
+
 // --- 3D (Faz 5) — doku / materyal / gökyüzü ---------------------------------
 
 VMValue aot_tm3_texture_ptr(VMValue *tex, VMValue *tu, VMValue *tv) {
@@ -580,6 +758,16 @@ VMValue aot_tm3_material_ptr(VMValue *shine, VMValue *spec) {
 
 VMValue aot_tm3_sky_ptr(VMValue *top, VMValue *bottom) {
   return VM_BOOL(tame_impl_sky(tm_int(top), tm_int(bottom)));
+}
+
+VMValue aot_tm3_sky_clouds_ptr(VMValue *v) {
+  tame_impl_sky_clouds(tm_num(v));
+  return VM_VOID();
+}
+
+VMValue aot_tm3_sky_stars_ptr(VMValue *v) {
+  tame_impl_sky_stars(tm_num(v));
+  return VM_VOID();
 }
 
 VMValue aot_tm3_sky_off_ptr(void) {
@@ -643,6 +831,13 @@ VMValue aot_tm3_anim_ptr(VMValue *h, VMValue *idx, VMValue *frame) {
   return VM_VOID();
 }
 
+VMValue aot_tm3_anim_blend_ptr(VMValue *h, VMValue *ia, VMValue *fa,
+                               VMValue *ib, VMValue *fb, VMValue *w) {
+  tame_impl_anim_blend((int)tm_int(h), (int)tm_int(ia), (int)tm_int(fa),
+                       (int)tm_int(ib), (int)tm_int(fb), tm_num(w));
+  return VM_VOID();
+}
+
 VMValue aot_tm3_unload_model_ptr(VMValue *h) {
   tame_impl_unload_model((int)tm_int(h));
   return VM_VOID();
@@ -686,6 +881,14 @@ VMValue aot_tm_load_data_ptr(VMValue *name) {
   if (t) tame_impl_text_free(t);
   return VM_OBJ((Obj *)s);
 }
+
+// Web: tarayıcı indirmesi; masaüstü/Android: dosyaya yaz. Aynı çağrı her
+// platformda "bu metni kullanıcıya ver" demek.
+VMValue aot_tm_download_ptr(VMValue *name, VMValue *text) {
+  return VM_BOOL(tame_impl_download(tm_str(name), tm_str(text)));
+}
+
+VMValue aot_tm_is_web_ptr(void) { return VM_BOOL(tame_impl_is_web() != 0); }
 
 VMValue aot_tm_vibrate_ptr(VMValue *ms) {
   tame_impl_vibrate((int)tm_int(ms));

@@ -45,3 +45,4 @@ func main() {
     test("müzik teması seçimi", run_muzik_tema);
 }
 main();
+test_summary();

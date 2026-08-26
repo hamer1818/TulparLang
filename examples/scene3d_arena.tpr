@@ -1,0 +1,282 @@
+// scene3d Arena — motorun Faz 7-11 yeteneklerini bir arada gösteren 3B oyun.
+//
+//   Faz 7 (oynanış):  bölüm · düşman AI · mermi · can/hasar
+//   Faz 8 (his):      parçacık (billboard) · 3B'ye bağlı 2B can barları
+//   Faz 9 (geometri): rampa · dönük duvar (SAT) · kapsül sütun · kamera ışını
+//   Faz 11 (kabuk):   başlangıç ekranı · duraklat (ESC/P) · yeniden başla
+//   Bölge:            bonus pedi (tek atım) · zehir havuzu (küre, her kare)
+//   Girdi:            klavye+fare · dokunmatik · gamepad (hepsi aynı anda)
+//
+//   ./tulpar examples/scene3d_arena.tpr
+//   ./tulpar build --target=android examples/scene3d_arena.tpr out
+//
+// Oynanış: düşmanlar seni kovalar, değerlerse can götürür. Bakışın yönüne
+// otomatik ateş edersin; bir bölümdeki tüm düşmanları temizleyince sonraki
+// bölüme geçersin. Üç bölümü de bitirince kazanırsın.
+//
+// Ateş NİYE otomatik: masaüstünde tuş, dokunmatikte düğme gerekirdi — sol
+// yarı zaten joystick, sağ yarı bakış pedi/zıplama. Otomatik ateş oyunu tek
+// parmakla oynanır tutuyor ve mermi sistemini aynı şekilde gösteriyor.
+
+import "scene3d";
+
+int player = 0;
+array enemies = [];        // bu bölümün düşman handle'ları
+int enemies_left = 0;
+float fire_cd = 0.0;       // ateş bekleme sayacı (sn)
+
+float FIRE_EVERY = 0.45;   // ateş aralığı (sn)
+float BULLET_SPEED = 26.0;
+float BULLET_LIFE = 1.6;   // sn — ıskalayan mermi burada ölür
+int   BULLET_DMG = 25;
+int   ENEMY_HP = 50;       // 2 isabet
+int   TOUCH_DMG = 12;      // düşmana değmenin bedeli
+int   poison_zone = 0 - 1; // zehir havuzunun bölge no'su (HUD göstergesi okuyor)
+
+// --- Ortak kurulum: her bölümde aynı olan şeyler --------------------------
+func setup() {
+    gokyuzu3d(rgb(24, 30, 52), rgb(96, 116, 150));
+    sis3d(0.018);
+    yercekimi3(26.0);
+    // Kancalar bölüm geçişlerinde KORUNUR — bir kez kurmak yeter.
+    carpisinca3(TAG_BULLET, TAG_ENEMY, bullet_hits_enemy);
+    carpisinca3(TAG_ENEMY, TAG_PLAYER, enemy_touches_player);
+    olunce3d(TAG_ENEMY, enemy_died);
+    olunce3d(TAG_PLAYER, player_died);
+    // Bölgeler normalde GÖRÜNMEZ. Burada tel kafesleri açıyoruz çünkü oyuncunun
+    // bonus pedini ve zehir havuzunu görmesi gerekiyor — gerçek bir oyunda
+    // yerine bir zemin dokusu/ışık konur, bu ayıklama çizimidir.
+    bolge_goster3d(true);
+}
+
+// --- Bölüm kurulumları ----------------------------------------------------
+// Her biri sahneyi SIFIRDAN kurar: bölüm geçişinde entity'ler silinir.
+func build_arena() {
+    // dört duvar — mermiler de bunlara çarpıp ölür
+    uret3(0.0, 1.5, 0.0 - 16.0,  34.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    uret3(0.0, 1.5, 16.0,        34.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    uret3(0.0 - 16.0, 1.5, 0.0,  1.0, 3.0, 34.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    uret3(16.0, 1.5, 0.0,        1.0, 3.0, 34.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    // Sütunlar: siper görevi görür, mermiyi keser. SHAPE_CYL oldukları için
+    // artık kutu gibi değil, dikey kapsül gibi çarpışıyorlar (Faz 9) — köşeleri
+    // olmayan bir direğe köşesinden çarpmak tuhaftı.
+    uret3(7.0, 2.0, 7.0,         1.6, 4.0, 1.6, rgb(120, 200, 140), SHAPE_CYL, TAG_WALL);
+    uret3(0.0 - 7.0, 2.0, 0.0 - 7.0, 1.6, 4.0, 1.6, rgb(120, 200, 140), SHAPE_CYL, TAG_WALL);
+
+    // Çapraz duvar: yaw ile 45° dönük. AABB'si köşegeni kapsayacak şekilde
+    // şişerdi; SAT sayesinde gerçek yüzeyiyle çarpışıyor (Faz 9).
+    int diag = uret3(0.0 - 6.0, 1.5, 6.0,  9.0, 3.0, 0.6, rgb(150, 150, 175), SHAPE_CUBE, TAG_WALL);
+    set3yaw(diag, 45.0);
+
+    // Rampalar: dünya artık tek düz düzlem değil — üstlerine çıkılabiliyor.
+    rampa3d(0.0, 0.9, 8.0,   5.0, 1.8, 7.0, rgb(110, 120, 160), 180.0);
+    rampa3d(8.5, 0.7, 0.0 - 5.0, 4.0, 1.4, 6.0, rgb(110, 120, 160), 90.0);
+    build_zones();
+}
+
+// Tetikleyici bölgeler. Bunlar ENTITY DEĞİL: çizilmiyorlar (tel kafesi yalnız
+// bolge_goster3d açtığı için görünüyor), çarpışmaya girmiyorlar, oyuncu
+// içlerinden geçiyor. Bölümle birlikte silinip yeniden kuruluyorlar — o yüzden
+// "tek atım" bonus her bölümde bir kez alınabiliyor.
+func build_zones() {
+    // 1) Bonus pedi — GİRİŞ kancası, bölüm başına TEK ATIM. Eski taklitte
+    // (görünmez entity + carpisinca3) bu kanca saniyede 60 kez çağrılırdı;
+    // "bir kez" bayrağını oyunun kendisi tutmak zorundaydı.
+    int pad = bolge3d(0.0 - 10.0, 1.0, 10.0,  4.0, 3.0, 4.0, TAG_PLAYER);
+    girince3d(pad, on_bonus_pad);
+    bolge_bir_kere3d(pad, true);
+
+    // 2) Zehir havuzu — İÇİNDEYKEN kancası, yani her kare. hasar3d kendi
+    // dokunulmazlık penceresini yönettiği için bu "saniyede 60 hasar" değil.
+    // Küre bölge: köşesi olmayan bir havuz için kutu kurmak tuhaf olurdu.
+    poison_zone = bolge_kure3d(11.0, 1.0, 11.0,  3.5, TAG_PLAYER);
+    icindeyken3d(poison_zone, on_poison_pool);
+    // ÇIKINCA kancası: havuzdan çıkmak da bir olay. Taklit yöntemiyle bunu
+    // yazmak için oyunun "geçen kare içinde miydim" bayrağı tutması gerekirdi.
+    cikinca3d(poison_zone, on_poison_exit);
+}
+
+func spawn_player() {
+    player = uret3(0.0, 1.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    can3d(player, 100);
+    kamera_yorunge(player, 14.0, 9.0);
+}
+
+func add_enemy(x, z) {
+    int e = uret3(x, 1.0, z,  1.3, 2.0, 1.3, rgb(230, 80, 80), SHAPE_CUBE, TAG_ENEMY);
+    can3d(e, ENEMY_HP);
+    push(enemies, e);
+    enemies_left = enemies_left + 1;
+}
+
+func reset_level_state() {
+    enemies = [];
+    enemies_left = 0;
+    fire_cd = 0.0;
+}
+
+func level1() {
+    reset_level_state();
+    build_arena();
+    spawn_player();
+    add_enemy(9.0, 9.0);
+    add_enemy(0.0 - 9.0, 9.0);
+    add_enemy(9.0, 0.0 - 9.0);
+}
+
+func level2() {
+    reset_level_state();
+    build_arena();
+    spawn_player();
+    add_enemy(11.0, 11.0);
+    add_enemy(0.0 - 11.0, 11.0);
+    add_enemy(11.0, 0.0 - 11.0);
+    add_enemy(0.0 - 11.0, 0.0 - 11.0);
+    add_enemy(0.0, 12.0);
+}
+
+func level3() {
+    reset_level_state();
+    build_arena();
+    spawn_player();
+    add_enemy(12.0, 12.0);
+    add_enemy(0.0 - 12.0, 12.0);
+    add_enemy(12.0, 0.0 - 12.0);
+    add_enemy(0.0 - 12.0, 0.0 - 12.0);
+    add_enemy(0.0, 13.0);
+    add_enemy(13.0, 0.0);
+    add_enemy(0.0 - 13.0, 0.0);
+}
+
+// --- Her kare -------------------------------------------------------------
+func update() {
+    hareket3(player, 9.0);
+    if (ziplandi()) { zipla3(player, 11.0); }
+
+    // Düşman AI: yakındaysa kovala, uzaktaysa devriye gez.
+    int i = 0;
+    int n = length(enemies);
+    while (i < n) {
+        int e = enemies[i];
+        if (alive3(e)) {
+            if (menzilde3d(e, player, 14.0)) {
+                takip_et3d(e, player, 4.2);
+            } else {
+                devriye3d(e, 0.0 - 12.0, 12.0, 12.0, 0.0 - 12.0, 3.0);
+            }
+        }
+        i = i + 1;
+    }
+
+    // Otomatik ateş: baktığın yöne.
+    fire_cd = fire_cd - frame_time();
+    if (fire_cd <= 0.0) {
+        fire_cd = FIRE_EVERY;
+        mermi3d(player, BULLET_SPEED, BULLET_LIFE);
+    }
+}
+
+// --- Kancalar -------------------------------------------------------------
+func bullet_hits_enemy() {
+    // İsabet kıvılcımı — mermi ölmeden ÖNCE, hâlâ konumu okunabilirken.
+    patlat3d(ben3(), 6, rgb(255, 230, 120), 5.0, 0.25);
+    oldur3(ben3());                 // mermi harcanır
+    hasar3d(oteki3(), BULLET_DMG);
+}
+
+func enemy_touches_player() {
+    // hasar3d dokunulmazlık penceresini kendisi yönetir — temas eden düşman
+    // saniyede 60 kez değil, pencere başına bir kez vurur.
+    hasar3d(oteki3(), TOUCH_DMG);
+}
+
+func enemy_died() {
+    // Ölüm patlaması: kanca içinde entity hâlâ canlı, konumu okunabilir.
+    patlat3d(ben3(), 26, rgb(255, 120, 80), 9.0, 0.7);
+    skor3_ekle(100);
+    enemies_left = enemies_left - 1;
+    // Son düşman da öldü → sonraki bölüm. Geçiş KARE SONUNDA uygulanır,
+    // yani bu kancanın içinde entity dizisi değişmez.
+    if (enemies_left <= 0) { bolum_gec3d(); }
+}
+
+// Bölge kancalarında `ben3()` bölgeye GİREN entity'dir (çarpışmadaki gibi).
+// `oteki3()` yoktur — bölge entity değil.
+func on_bonus_pad() {
+    patlat3d(ben3(), 22, rgb(120, 255, 180), 7.0, 0.6);
+    skor3_ekle(50);
+    // `can3d` (health3d) can sistemini YENİDEN KURAR — hp'yi de hpmax'ı da
+    // 100'e yazar. Şifa için doğru araç değil: 120 canlı bir düşmana
+    // uygulansa canını düşürürdü. iyilestir3d hpmax'ı aşmadan ekler ve
+    // dokunulmazlık penceresine dokunmaz.
+    iyilestir3d(ben3(), 40);
+}
+
+func on_poison_pool() {
+    hasar3d(ben3(), 6);          // pencere başına bir kez ısırır
+}
+
+func on_poison_exit() {
+    patlat3d(ben3(), 10, rgb(200, 120, 240), 5.0, 0.4);
+}
+
+func player_died() {
+    patlat3d(ben3(), 40, SKYBLUE, 11.0, 1.0);
+    game_over3d();
+}
+
+// --- 2B katman: düşmanların üstünde can barı ------------------------------
+// Bunlar 2B çizimdir ama konumları 3B'ye bağlı — ekran_x3d/ekran_y3d ile
+// dünya noktası ekrana çevriliyor. Sahne çizildikten SONRA çağrılır.
+func draw_hud() {
+    // Zehir göstergesi: bölgenin İÇİNDE kaç entity var. Havuza basınca yanar,
+    // çıkınca söner — giriş/çıkışın gerçekten KENAR olduğu buradan görülüyor.
+    if (icinde3d(poison_zone) > 0) {
+        text("ZEHIR!", 12, 78, 20, rgb(200, 120, 240));
+    }
+    // Kol takılıysa söyle. Motor kolu kendiliğinden okuyor (sol çubuk hareket,
+    // sağ çubuk bakış, A zıpla, START duraklat) — oyunun tek satır bile
+    // girdi kodu yazması gerekmiyor; bu yalnızca bir gösterge.
+    if (kol_bagli_mi3d()) {
+        text("KOL", toInt(_win_w) - 60, 12, 18, rgb(140, 220, 255));
+    }
+    int i = 0;
+    int n = length(enemies);
+    while (i < n) {
+        int e = enemies[i];
+        if (alive3(e)) {
+            // gövdenin biraz üstü
+            float wx = get3x(e);
+            float wy = get3y(e) + 1.6;
+            float wz = get3z(e);
+            float sx = ekran_x3d(wx, wy, wz);
+            float sy = ekran_y3d(wx, wy, wz);
+            // Kameranın arkasına düşenler ekranda saçma yerlere gider — kaba
+            // bir ekran-içi kontrolü yeterli.
+            if (sx > 0.0 && sx < 960.0 && sy > 0.0 && sy < 560.0) {
+                float frac = can_kac3d(e) * 1.0 / (ENEMY_HP * 1.0);
+                if (frac < 0.0) { frac = 0.0; }
+                rect(sx - 22.0, sy, 44.0, 6.0, rgba(0, 0, 0, 140));
+                rect(sx - 22.0, sy, 44.0 * frac, 6.0, rgb(240, 90, 90));
+            }
+        }
+        i = i + 1;
+    }
+}
+
+sahne3d(960, 560, "Tulpar 3B Arena");
+// Başlangıç ekranı isteğe bağlı: çağırmayan sahne doğrudan oyuna girer.
+// Duraklat (ESC/P/GERİ) ve oyun-bitti ekranındaki "Tekrar Oyna" bedava gelir.
+// Bölüm kaydedildiği için yeniden başlamak 1. bölüme döner — ayrı bir
+// on_restart3d kancası gerekmiyor.
+baslangic3d("TULPAR 3B ARENA", "3 bolum · dusmanlari temizle");
+// Kalıcılık OPT-IN (diske yazıyor). Açınca rekor ve tamamlanan bölümler
+// oyun kapansa da kalır; başlangıç ve oyun-bitti ekranları rekoru gösterir.
+kayit_ac3d();
+kurulumda3(setup);
+her_kare3(update);
+hud_ciz3(draw_hud);
+bolum3d(1, level1);
+bolum3d(2, level2);
+bolum3d(3, level3);
+oyna3d();

@@ -1,0 +1,45 @@
+// Scene -> Tulpar CODE. JSON is the runtime format; code is the way to learn
+// and to carry on — open the scene you built in the editor, see "oh, that's
+// how it's written", then keep developing it by hand.
+// English twin of examples/scene3d_export.tpr.
+//
+//   ./tulpar examples/en/scene3d_export.tpr scene.json           -> code
+//   ./tulpar examples/en/scene3d_export.tpr scene.json --verify  -> scene JSON
+//
+// The second mode exists to measure EQUIVALENCE: it builds the scene and
+// re-serialises it. On the shell side this output is compared with the
+// source's JSON, so "does the generated code build the same scene?" becomes a
+// measurable question rather than an opinion.
+
+import "scene3d";
+
+array A = args();
+
+func path(): str {
+    if (length(A) > 1) { return A[1]; }
+    return "examples/scenes/toplayici.scene.json";
+}
+
+func verify(): bool {
+    int i = 2;
+    while (i < length(A)) {
+        if (A[i] == "--verify") { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+str P = path();
+if (file_exists(P) == false) {
+    print("scene not found: " + P);
+    exit(1);
+}
+scene_file3d(P);
+
+if (verify()) {
+    // The scene is already built; hand back its JSON. The equivalence of code
+    // generation is measured by comparing this with the source JSON.
+    print(scene_json3d());
+} else {
+    print(scene_code3d());
+}

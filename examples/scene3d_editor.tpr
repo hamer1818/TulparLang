@@ -1,0 +1,128 @@
+// Tulpar Sahne Editörü — BAĞIMSIZ UYGULAMA.
+//
+//   ./tulpar examples/scene3d_editor.tpr
+//   ./tulpar build examples/scene3d_editor.tpr editor && ./editor
+//   ./editor benim_sahnem.json        (kendi sahneni aç / yeni dosya yarat)
+//
+// TARAYICIDA:
+//   mkdir -p assets && cp <bir>.ttf assets/ui.ttf     (okunabilir font)
+//   TULPAR_WEB_ASSETS=assets tulpar build --target=web \
+//       examples/scene3d_editor.tpr -o editor
+//   (HTTP üzerinden servis et; file:// çalışmaz)
+// Web'de "Kaydet" TARAYICININ kalıcı deposuna yazar (yenilemeyi atlatır),
+// "İNDİR" sahneyi .json olarak bilgisayarına çıkarır.
+//
+// Editör bir oyunun içinden açılmıyor: onu çalıştırırsın, sahneni kurarsın,
+// "OYNAT"a basınca oyun editörün SAHNE GÖRÜNÜMÜ panelinde koşar, "DUR" seni
+// düzenlemeye geri getirir. Unity/Unreal/Godot'un çalışma biçimi budur ve
+// çalışan bir oyunun üstüne kaplama açmaktan farkı şudur: düzenleme birincil
+// iştir, oynatma onun bir aracı.
+//
+// Kısayollar (sektör standardı):
+//   SAĞ TUŞ basılı + WASD/QE   serbest uçuş, fare ile bakış
+//   Q / W / E / R              seç / taşı / döndür / ölçekle  (1-4 de olur)
+//   F                          seçiliyi çerçevele
+//   G                          ızgara aç/kapat
+//   DEL / CTRL+D               sil / çoğalt
+//   CTRL+Z / CTRL+Y            geri al / yinele
+//   CTRL+S (ya da F5)          kaydet
+//   BOŞLUK                     seçiliyi zemine oturt
+//   ESC                        oynarken: durdur
+// Harf tuşları yalnız SAĞ TUŞ BASILI DEĞİLKEN araç kısayolu; basılıyken uçuş.
+//
+// Yerleşim:
+//   menü şeridi            Yeni / Aç / Kaydet / Geri / İleri
+//   araç çubuğu            araçlar solda, OYNAT-DUR ORTADA, ızgara
+//   hiyerarşi | SAHNE GÖRÜNÜMÜ | özellikler
+//   konsol                 motorun tanılama kaydı
+//   durum çubuğu
+//
+// Sahne dosyası ÇALIŞMA DİZİNİNE göre çözülüyor; depo kökünden çalıştır.
+
+import "scene3d";
+
+// Sahne dosyası ÇALIŞMA DİZİNİNE göre çözülüyor. Editör depo kökünden de,
+// örnek klasöründen de, ikilinin yanından da çalıştırılabilsin diye birkaç
+// aday deneniyor — yoksa "boş sahne" görüp editörü bozuk sanmak çok kolay.
+func sahne_yolu(): str {
+    // TARAYICIDA komut satırı YOK ve dosya sistemi de yok: `args()` boş
+    // döner, `file_exists` yalnız pakete konmuş (TULPAR_WEB_ASSETS) dosyaları
+    // görür. Sabit bir ad seçiliyor ki sahne tarayıcının kalıcı deposunda
+    // ("sahne:<ad>") hep aynı yere düşsün — yenileyince işin duruyor.
+    if (web_mi()) {
+        if (file_exists("examples/scenes/toplayici.scene.json")) {
+            return "examples/scenes/toplayici.scene.json";
+        }
+        return "sahne.json";
+    }
+    // KOMUT SATIRI ilk sırada: `./editor benim_sahnem.json`. Editörün tek bir
+    // gömülü dosyayı açabilmesi onu kendi işin için kullanılamaz yapıyordu.
+    array a = args();
+    if (length(a) > 1) { return a[1]; }
+    if (file_exists("examples/scenes/toplayici.scene.json")) {
+        return "examples/scenes/toplayici.scene.json";
+    }
+    if (file_exists("scenes/toplayici.scene.json")) {
+        return "scenes/toplayici.scene.json";
+    }
+    if (file_exists("toplayici.scene.json")) { return "toplayici.scene.json"; }
+    return "";
+}
+
+str SAHNE = sahne_yolu();
+
+// Dosya yoksa boş bir dünya ile açılıyor — editör her hâlükârda açılmalı,
+// eksik dosya yüzünden siyah ekranda kalmamalı.
+str BOS = "{\"v\":1,\"world\":{\"title\":\"Yeni Sahne\"," +
+          "\"sky\":{\"top\":[38,52,92],\"bottom\":[176,198,224]}," +
+          "\"ground\":0,\"gravity\":26," +
+          "\"camera\":{\"mode\":\"orbit\",\"dist\":16,\"height\":11}},\"entities\":[]}";
+
+func kur() {
+    // WEB: tek yol var (sahne_yolu sabitledi). Kayıtlı iş varsa o açılır,
+    // yoksa boş sahne. Dosya bulunamaması burada HATA DEĞİL — tarayıcıda
+    // "depo kökünden çalıştır" demek anlamsız olurdu.
+    if (web_mi()) {
+        editor_dosya3d(SAHNE);
+        if (sahne_dosya3d(SAHNE) == 0) {
+            sahne_yukle3d(BOS);
+            kayit3d("yeni sahne (tarayici) — CTRL+S tarayici deposuna yazar");
+        } else {
+            kayit3d("sahne acildi: " + SAHNE + " — " +
+                    toString(yasayan_sayi3d()) + " varlik");
+        }
+        kayit3d("INDIR dugmesi sahneyi .json olarak bilgisayarina cikarir");
+        return;
+    }
+    // Komut satırında verilen ama HENÜZ OLMAYAN dosya bir hata değil: yeni
+    // sahne yaratmanın en doğal yolu bu (`./editor yeni.json` → boş sahne,
+    // F5 orayı yazar).
+    array a = args();
+    if (length(a) > 1 && file_exists(a[1]) == false) {
+        editor_dosya3d(a[1]);
+        sahne_yukle3d(BOS);
+        kayit3d("yeni sahne: " + a[1] + " (F5 ile kaydedilecek)");
+        return;
+    }
+    if (SAHNE == "") {
+        // Kaydetmek için yine de bir hedef gerekiyor.
+        editor_dosya3d("sahne.json");
+        sahne_yukle3d(BOS);
+        hata3d("sahne dosyasi bulunamadi — bos sahne acildi.");
+        hata3d("depo kokunden calistir: ./editor");
+        return;
+    }
+    editor_dosya3d(SAHNE);
+    if (sahne_dosya3d(SAHNE) == 0) {
+        sahne_yukle3d(BOS);
+        hata3d("sahne okunamadi: " + SAHNE);
+    } else {
+        kayit3d("sahne acildi: " + SAHNE + " — " +
+                toString(yasayan_sayi3d()) + " varlik");
+    }
+}
+
+sahne3d(1440, 820, "Tulpar Sahne Editoru");
+editor_uygulamasi3d(true);
+kurulumda3(kur);
+oyna3d();

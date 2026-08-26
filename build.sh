@@ -101,6 +101,191 @@ echo ""
 # ============================================
 # Build
 # ============================================
+# ---------------------------------------------------------------------------
+# ./build.sh suites — tests/*.test.tpr regresyon paketlerini koşar.
+#
+# `./build.sh test` YALNIZ examples/ üzerinde dolaşır ve orada tek ölçüt çıkış
+# kodudur. tests/ altındaki gömülü `test` kitaplığını kullanan paketler
+# (jest tarzı assert'ler) uzun süre HİÇBİR otomasyonda koşmadı — CI'da da,
+# build.sh'de de. 2026-08-04'te `assert` fonksiyonunun bool koşullarda hiçbir
+# zaman başarısız olmadığı ortaya çıktı; hata tam olarak bu körlükte yaşadı,
+# çünkü paketler elle koşulduğunda yeşil görünüyordu ve hiçbir şey onları
+# sürekli doğrulamıyordu. Bu hedef o boşluğu kapatıyor.
+#
+# Ölçüt çıkış kodu: test_summary() başarısızlıkta exit(1) çağırıyor. Özet
+# çağırmayan bir paket ASLA kırmızı olamaz, o yüzden aşağıda `Tests:` satırı
+# olmayan paket de hata sayılıyor — sessizce yutulmasın.
+if [ "$ACTION" = "suites" ]; then
+    if [ ! -x "./tulpar" ]; then
+        echo -e "${RED}ERROR: ./tulpar yok — önce ./build.sh çalıştırın.${NC}"
+        exit 1
+    fi
+    SUITE_FAILED=0
+    SUITE_N=0
+    for suite in tests/*.test.tpr; do
+        [ -f "$suite" ] || continue
+        SUITE_N=$((SUITE_N + 1))
+        name=$(basename "$suite")
+        out=$(DISPLAY= timeout 180 ./tulpar "$suite" 2>&1)
+        code=$?
+        summary=$(echo "$out" | grep -E '^Tests:' | tail -1)
+        if [ $code -ne 0 ]; then
+            printf "%-42s ${RED}FAIL${NC} %s\n" "$name" "$summary"
+            echo "$out" | grep -E 'FAIL|hata|error' | head -8 | sed 's/^/    /'
+            SUITE_FAILED=1
+        elif [ -z "$summary" ]; then
+            printf "%-42s ${RED}FAIL${NC} (test_summary() cagirmiyor — cikis kodu uretmiyor)\n" "$name"
+            SUITE_FAILED=1
+        else
+            printf "%-42s ${GREEN}PASS${NC} %s\n" "$name" "$summary"
+        fi
+    done
+    echo ""
+    if [ $SUITE_FAILED -ne 0 ]; then
+        echo -e "${RED}Some suites failed!${NC} ($SUITE_N paket)"
+        exit 1
+    fi
+    # Builtin tablosu ↔ codegen ↔ LSP tutarlılık denetimi (derleme gerektirmez).
+    if command -v python3 >/dev/null 2>&1; then
+        echo ""
+        if ! python3 tests/builtin_audit.py; then
+            echo -e "${RED}Builtin denetimi basarisiz!${NC}"
+            exit 1
+        fi
+        # Kama mesh'i: rampa artık gerçek bir mesh. GÖZLE doğrulamak pencere
+        # açmayı gerektirir (depoda yasak) ve ters sarılmış bir üçgen
+        # arkayüz ayıklamasıyla sessizce GÖRÜNMEZ olur — yani hata "hata yok"
+        # gibi durur. Denetim üçgenleri C kaynağından okuyup sarma yönünü,
+        # kapalılığı ve eğimin fizikle aynı tanımda olduğunu ölçüyor.
+        if ! python3 tests/wedge_mesh_check.py; then
+            echo -e "${RED}Kama mesh denetimi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
+    # Önceden derlenmiş arşivlerin TAZELİĞİ. Sürücü bunu web/Android link'i
+    # sırasında zaten uyarıyor, ama o uyarıyı görmek için o hedefi derlemek
+    # gerekiyor — yani arşivler aylarca sessizce çürüyebiliyor (ölçüldü:
+    # android/dist 11 Ağustos'tan kalmıştı ve 25-26 Ağustos'ta eklenen ALTI
+    # sembolün hiçbirini içermiyordu; o arşivle her Android derlemesi link'te
+    # patlardı).
+    #
+    # Burada yalnız zaman damgası karşılaştırılıyor: hiçbir araç zinciri
+    # (emsdk / NDK) gerekmiyor, dolayısıyla her makinede çalışıyor.
+    # HATA DEĞİL uyarı: arşiv yoksa o hedef zaten kullanılmıyor demektir ve
+    # emsdk'sı olmayan bir geliştiriciyi kırmızıya boğmak yanlış olur.
+    DIST_SRC_NEWEST=$(ls -t runtime/tame_impl.c runtime/tame_bindings.cpp                           src/vm/runtime_bindings.cpp src/vm/vm.cpp 2>/dev/null | head -1)
+    if [ -n "$DIST_SRC_NEWEST" ]; then
+        for d in wasm/dist android/dist/arm64-v8a android/dist/x86_64; do
+            [ -d "$d" ] || continue
+            oldest=$(ls -t "$d"/*.a 2>/dev/null | tail -1)
+            [ -n "$oldest" ] || continue
+            if [ "$DIST_SRC_NEWEST" -nt "$oldest" ]; then
+                echo -e "${YELLOW}arsiv BAYAT: $d ($DIST_SRC_NEWEST daha yeni)${NC}"
+                case "$d" in
+                    wasm*) echo "   tazele: wasm/build_tame_web.sh" ;;
+                    *)     echo "   tazele: android/build_tame_android.sh" ;;
+                esac
+            fi
+        done
+    fi
+    # packages/ testleri. Bunlar birinci-taraf yayınlanabilir paketler ve
+    # HİÇBİR otomasyonda koşmuyorlardı. `import "<ad>"` ÇALIŞMA DİZİNİNE göre
+    # çözüldüğü için paketin kendi klasöründen çalıştırılmaları gerekiyor —
+    # depo kökünden koşmak "Import dosyasi acilamadi" veriyor.
+    if [ -d packages ]; then
+        PKG_ROOT="$(pwd)"
+        for pkgtest in packages/*/*.test.tpr; do
+            [ -f "$pkgtest" ] || continue
+            pkgdir=$(dirname "$pkgtest")
+            pkgfile=$(basename "$pkgtest")
+            pkgout=$(cd "$pkgdir" && "$PKG_ROOT/tulpar" "$pkgfile" 2>&1)
+            if echo "$pkgout" | grep -q "^Tests:"; then
+                if echo "$pkgout" | grep -qE "Fail: [1-9]"; then
+                    printf "%-42s ${RED}FAIL${NC} %s\n" "$pkgtest" \
+                        "$(echo "$pkgout" | grep '^Tests:')"
+                    echo "$pkgout" | grep '  FAIL' | head -5
+                    exit 1
+                fi
+                printf "%-42s ${GREEN}PASS${NC} %s\n" "$pkgtest" \
+                    "$(echo "$pkgout" | grep '^Tests:')"
+            else
+                # Özet YOKSA başarısız sayılır — test_summary() çağırmayı
+                # unutan bir süit asla kızaramaz (suites'in kendi kuralı).
+                printf "%-42s ${RED}OZET YOK${NC}\n" "$pkgtest"
+                echo "$pkgout" | tail -3
+                exit 1
+            fi
+        done
+    fi
+
+    # Ayrılmış kelime tanılaması: `int tip = 5` gibi bir çarpışmada hata
+    # mesajı SUÇLU KELİMEYİ söylemeli. Genel "ad bekleniyordu" mesajı bu
+    # durumda belirtiyi anlatıyor, sebebi değil — ve bu oturumda üç kez yanlış
+    # yere baktırdı.
+    RW_TMP=$(mktemp -d)
+    printf 'int tip = 5;\n' > "$RW_TMP/rw.tpr"
+    RW_OUT=$(./tulpar typecheck "$RW_TMP/rw.tpr" 2>&1 || true)
+    if echo "$RW_OUT" | grep -q "'tip'"; then
+        echo -e "${GREEN}ayrilmis kelime tanilamasi calisiyor${NC}"
+    else
+        echo -e "${RED}Ayrilmis kelime tanilamasi suclu kelimeyi soylemiyor!${NC}"
+        echo "$RW_OUT" | head -3
+        rm -rf "$RW_TMP"
+        exit 1
+    fi
+    # PARAMETRE ADI ayrı bir yol: orada kelime TİP olarak yutuluyor ve hata
+    # ')' üzerinde patlıyordu, yani suçlu kelime hiç geçmiyordu. Dördüncü
+    # kez aynı tuzağa düşülünce ayrıca sınanır oldu.
+    printf 'func f(ad, metin) { print(ad); }\n' > "$RW_TMP/rwp.tpr"
+    RWP_OUT=$(./tulpar typecheck "$RW_TMP/rwp.tpr" 2>&1 || true)
+    if echo "$RWP_OUT" | grep -q "'metin'"; then
+        echo -e "${GREEN}parametre adi tanilamasi calisiyor${NC}"
+    else
+        echo -e "${RED}Parametre adi tanilamasi suclu kelimeyi soylemiyor!${NC}"
+        echo "$RWP_OUT" | head -3
+        rm -rf "$RW_TMP"
+        exit 1
+    fi
+    rm -rf "$RW_TMP"
+
+    # Kod üretimi DENKLİK denetimi: sahne JSON'undan üretilen Tulpar kodu
+    # derlenip çalıştırılıyor ve kurduğu sahne yeniden serileştirilerek
+    # kaynakla karşılaştırılıyor. "Kod da aynı sahneyi kuruyor" iddiasını
+    # ölçen tek şey bu — üretilen metni gözle okumak yetmez.
+    CODEGEN_SCENE="examples/scenes/toplayici.scene.json"
+    if [ -f "$CODEGEN_SCENE" ] && [ -f "examples/scene3d_export.tpr" ]; then
+        echo ""
+        CG_TMP=$(mktemp -d)
+        if ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" 2>/dev/null > "$CG_TMP/kur.tpr" \
+           && ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" --dogrula 2>/dev/null > "$CG_TMP/src.json"; then
+            {
+                echo 'import "scene3d";'
+                cat "$CG_TMP/kur.tpr"
+                echo 'kur();'
+                echo 'print(sahne_json3d());'
+            } > "$CG_TMP/verify.tpr"
+            if ./tulpar "$CG_TMP/verify.tpr" 2>/dev/null > "$CG_TMP/gen.json" \
+               && diff -q "$CG_TMP/src.json" "$CG_TMP/gen.json" >/dev/null; then
+                echo -e "${GREEN}kod uretimi denk${NC} (uretilen .tpr ayni sahneyi kuruyor)"
+            else
+                echo -e "${RED}Kod uretimi DENK DEGIL!${NC}"
+                diff "$CG_TMP/src.json" "$CG_TMP/gen.json" | head -20
+                rm -rf "$CG_TMP"
+                exit 1
+            fi
+        else
+            echo -e "${RED}Kod uretimi denetimi calistirilamadi!${NC}"
+            rm -rf "$CG_TMP"
+            exit 1
+        fi
+        rm -rf "$CG_TMP"
+    fi
+
+    echo -e "${GREEN}All $SUITE_N suites passed!${NC}"
+    exit 0
+fi
+
 if [ "$ACTION" = "test" ]; then
     # Ensure tulpar exists
     if [ ! -f "tulpar" ]; then
@@ -151,10 +336,14 @@ if [ "$ACTION" = "test" ]; then
                         "arcade_karsiya.tpr" "arcade_ucus.tpr" \
                         "arcade_goktasi.tpr" "arcade_launcher.tpr" "arcade_yilan.tpr" \
                         "arcade_2048.tpr" "arcade_pong.tpr" "arcade_vur.tpr" \
+                        "scene3d_data_game.tpr" "scene3d_editor.tpr" \
+                        "scene3d_export.tpr" \
                         "tame3d_cube.tpr" "tame3d_primitives.tpr" \
                         "tame3d_models.tpr" "tame3d_anim.tpr" "tame3d_lights.tpr" \
                         "tame3d_shadows.tpr" "tame3d_texture.tpr" \
                         "scene3d_collector.tpr" "scene3d_camera.tpr" \
+                        "scene3d_arena.tpr" "scene3d_terrain.tpr" \
+                        "scene3d_karakter.tpr" \
                         "41_struct_entities.tpr")
     # tame_*.tpr: display'li makinede pencere açıp kullanıcı kapatana
     # dek bloklar (headless'ta zarif hata ile hemen çıkar) — deterministik
@@ -439,6 +628,19 @@ if [ "$ACTION" = "test" ]; then
             # Example paths are plain [a-z0-9_]+.tpr (no spaces/quotes), so
             # xargs' default word splitting is safe here.
             printf '%s %s\n' "$example" "$compile_only" >> "$work_list"
+        done
+
+        # examples/en/ — İngilizce ikizler. Bu klasör HİÇ test edilmiyordu:
+        # döngü yalnız `examples/*.tpr` üzerinde geziyordu, yani ikizler
+        # kaynak dilden ayrışsa (yeniden adlandırılmış bir API, kaldırılmış
+        # bir builtin) kimse görmezdi.
+        #
+        # Hepsi COMPILE-ONLY: ikizler oyun, yani pencere açıp kullanıcı
+        # kapatana dek bloklarlar. Derlemeleri yine de gerçek kazanç —
+        # ayrışmanın belirtisi zaten "derlenmiyor" oluyor.
+        for example in examples/en/*.tpr; do
+            [ -f "$example" ] || continue
+            printf '%s %s\n' "$example" "1" >> "$work_list"
         done
 
         # Default to the machine's core count; TULPAR_TEST_JOBS overrides

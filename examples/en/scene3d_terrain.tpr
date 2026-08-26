@@ -1,0 +1,159 @@
+// scene3d Terrain — open world on a real heightmap, plus slope, layer
+// painting, a day/night cycle, stars and water.
+// English twin of examples/scene3d_terrain.tpr.
+//
+//   ./tulpar examples/en/scene3d_terrain.tpr
+//   ./tulpar build --target=android examples/en/scene3d_terrain.tpr out
+//
+// Before terrain, the world was a single flat plane; ramp entities broke that
+// up partly, but they were wedge-shaped and drawn in steps. Terrain is the
+// real answer: ONE mesh generated from Perlin noise, with a continuous height
+// for every (x, z).
+//
+// Play: wander the hills, collect the gold. The gold is placed EXACTLY on the
+// surface via `terrain_height3d` — and that is the point of the API: the
+// world is now queryable, "where is the ground at this point?" has an answer.
+
+import "scene3d";
+
+int player = 0;
+int remaining = 0;
+
+int   RES   = 129;      // heightmap resolution
+float SIZE  = 120.0;    // footprint (centred on XZ: -60..+60)
+float PEAK  = 14.0;     // highest peak
+float NOISE = 4.5;      // noise scale (smaller = broader hills)
+int   SEED  = 20260804;
+
+func setup() {
+    sky3d(rgb(28, 38, 62), rgb(132, 156, 186));
+    fog3d(0.012);
+    ground3d(0.0);
+
+    // Day/night cycle: a full day every two minutes. Sky, sun colour, ambient
+    // light and fog colour all move together with the clock — and SHADOWS
+    // rotate for free, because the shadow map is derived from the sun's
+    // direction. We start near dawn so the sunrise is visible immediately.
+    daynight3d(120.0);
+    set_time3d(5.0);
+
+    // Water: one world-wide horizontal plane. Everything the terrain leaves
+    // below this level becomes a lake — valleys are no longer dry. Drawing it
+    // transparently depended on the alpha fix in the lighting shader.
+    water3d(PEAK * 0.22);
+    water_color3d(rgb(30, 95, 150), 145);
+
+    // Clouds are generated procedurally in the sky shader, with no separate
+    // draw. So the mountains occlude them correctly and they fade out at
+    // night on their own.
+    sky_clouds3d(0.45);
+
+    // Stars are AUTOMATIC: because the day/night cycle is on, they appear as
+    // night falls. Also procedural in the sky shader — no separate draw, so
+    // the mountains occlude them correctly.
+
+    // Terrain. From here on the ground height everywhere comes from this —
+    // gravity, jumping and the camera all follow it automatically.
+    terrain3d(RES, SIZE, PEAK, SIZE, NOISE, SEED);
+    // Layer painting: the terrain is no longer one colour. Height gives
+    // grass -> dirt -> snow, slope gives rock — both are data the physics
+    // already uses, so nothing new is measured. This is the one-line preset;
+    // to tune it by hand call
+    // `terrain_paint3d(low, mid, high, rock, mid_y, high_y, slope)`.
+    // ORDER DOES NOT MATTER: it can be called before or after terrain3d
+    // (the engine rebuilds the terrain if it has to).
+    terrain_natural3d(PEAK);
+
+    // Slope limit: slopes steeper than 38 degrees cannot be climbed, you
+    // slide. This is OPT-IN — a scene that never calls it can climb sheer
+    // walls (some games want exactly that). The downhill direction comes from
+    // the terrain's surface normal.
+    slope_limit3d(38.0);
+    slide_accel3d(16.0);
+
+    player = spawn3(0.0, 30.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    camera_orbit(player, 16.0, 10.0);
+
+    // Sit the gold ON the terrain surface. Placed without asking for the
+    // height they would either hang in the air or sink into a hill.
+    place(0.0 - 40.0, 0.0 - 40.0);
+    place(0.0 - 20.0, 25.0);
+    place(15.0, 0.0 - 30.0);
+    place(35.0, 12.0);
+    place(0.0 - 8.0, 45.0);
+    place(45.0, 0.0 - 45.0);
+    place(0.0 - 45.0, 5.0);
+    place(25.0, 40.0);
+
+    on_hit3d(TAG_PLAYER, TAG_ITEM, collect);
+}
+
+func place(x, z) {
+    float y = terrain_height3d(x, z) + 0.6;   // up by the radius
+    spawn3(x, y, z,  1.2, 1.2, 1.2, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    remaining = remaining + 1;
+}
+
+func update() {
+    move3d(player, 11.0);
+    if (jump_pressed()) { jump3d(player, 12.0); }
+
+    // Keep the player from walking off the world: outside the footprint the
+    // ground falls back to the base Y, so they would slide off a cliff.
+    float px = get3x(player);
+    float pz = get3z(player);
+    float lim = SIZE * 0.5 - 2.0;
+    if (px > lim) { set3pos(player, lim, get3y(player), pz); }
+    if (px < 0.0 - lim) { set3pos(player, 0.0 - lim, get3y(player), pz); }
+    px = get3x(player);
+    if (pz > lim) { set3pos(player, px, get3y(player), lim); }
+    if (pz < 0.0 - lim) { set3pos(player, px, get3y(player), 0.0 - lim); }
+}
+
+func collect() {
+    burst3d(other3d(), 14, GOLD, 6.0, 0.5);
+    kill3d(other3d());
+    score3d_add(50);
+    remaining = remaining - 1;
+    if (remaining <= 0) { game_over3d(); }
+}
+
+func hud() {
+    text("Gold left: " + toString(remaining), 12, 82, 18, GOLD);
+    text("Height: " + toString(toInt(get3y(player))), 12, 104, 16, RAYWHITE);
+    // Warn when the ground under your feet is too steep to climb — so the
+    // slope limit can be seen working from inside the game.
+    if (terrain_steep3d(get3x(player), get3z(player))) {
+        text("STEEP SLOPE - you are sliding", 12, 126, 16, rgb(255, 140, 90));
+    }
+    // Which layer you are standing on. The painting is visible, but game
+    // logic can read the same thresholds — footstep sounds, speed, "are you
+    // in snow" are all this.
+    int lay = terrain_layer3d(get3x(player), get3z(player));
+    str name = "GRASS";
+    int col = rgb(120, 200, 120);
+    if (lay == LAYER_MID)  { name = "DIRT"; col = rgb(190, 175, 120); }
+    if (lay == LAYER_HIGH) { name = "SNOW"; col = RAYWHITE; }
+    if (lay == LAYER_ROCK) { name = "ROCK"; col = rgb(180, 180, 185); }
+    if (under_water3d(player)) {
+        name = "WATER"; col = rgb(110, 200, 255);
+    }
+    text("Ground: " + name, 12, 148, 16, col);
+
+    // The clock — so the cycle can be seen turning as a number too.
+    float hour = time_of_day3d();
+    int hh = toInt(hour);
+    int mm = toInt((hour - hh * 1.0) * 60.0);
+    str mms = toString(mm);
+    if (mm < 10) { mms = "0" + mms; }
+    str part = "DAY";
+    int pc = rgb(255, 230, 140);
+    if (is_night3d()) { part = "NIGHT"; pc = rgb(150, 170, 230); }
+    text(toString(hh) + ":" + mms + "  " + part, 12, 170, 16, pc);
+}
+
+scene3d(960, 560, "Tulpar 3D Terrain");
+on_setup3d(setup);
+on_update3d(update);
+on_hud3d(hud);
+play3d();

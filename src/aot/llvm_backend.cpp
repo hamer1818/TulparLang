@@ -791,10 +791,23 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm_line", "aot_tm_line_ptr", 5},
     {"tm_pixel", "aot_tm_pixel_ptr", 3},
     {"tm_text", "aot_tm_text_ptr", 5},
+    {"tm_text_width", "aot_tm_text_width_ptr", 2},
+    // render texture — editörün sahne görünümü paneli
+    {"tm_font_width", "aot_tm_font_width_ptr", 3},
+    {"tm_scissor", "aot_tm_scissor_ptr", 4},
+    {"tm_scissor_end", "aot_tm_scissor_end_ptr", 0},
+    {"tm_rt_new", "aot_tm_rt_new_ptr", 2},
+    {"tm_rt_free", "aot_tm_rt_free_ptr", 1},
+    {"tm_rt_w", "aot_tm_rt_w_ptr", 1},
+    {"tm_rt_h", "aot_tm_rt_h_ptr", 1},
+    {"tm_rt_begin", "aot_tm_rt_begin_ptr", 1},
+    {"tm_rt_end", "aot_tm_rt_end_ptr", 0},
+    {"tm_rt_draw", "aot_tm_rt_draw_ptr", 3},
     // girdi — klavye
     {"tm_key_down", "aot_tm_key_down_ptr", 1},
     {"tm_key_pressed", "aot_tm_key_pressed_ptr", 1},
     {"tm_key_released", "aot_tm_key_released_ptr", 1},
+    {"tm_char_pressed", "aot_tm_char_pressed_ptr", 0},
     // girdi — fare
     {"tm_mouse_x", "aot_tm_mouse_x_ptr", 0},
     {"tm_mouse_y", "aot_tm_mouse_y_ptr", 0},
@@ -804,6 +817,7 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm_mouse_dx", "aot_tm_mouse_dx_ptr", 0},
     {"tm_mouse_dy", "aot_tm_mouse_dy_ptr", 0},
     {"tm_cursor_lock", "aot_tm_cursor_lock_ptr", 1},
+    {"tm_exit_key", "aot_tm_exit_key_ptr", 1},
     {"tm_cursor_locked", "aot_tm_cursor_locked_ptr", 0},
     // Touch (mobil çok-parmak); masaüstünde mouse_* tek dokunuşu zaten alır.
     {"tm_touch_count", "aot_tm_touch_count_ptr", 0},
@@ -824,6 +838,7 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm_play_sound", "aot_tm_play_sound_ptr", 1},
     {"tm_stop_sound", "aot_tm_stop_sound_ptr", 1},
     {"tm_sound_volume", "aot_tm_sound_volume_ptr", 2},
+    {"tm_sound_pan", "aot_tm_sound_pan_ptr", 2},
     {"tm_load_music", "aot_tm_load_music_ptr", 1},
     {"tm_play_music", "aot_tm_play_music_ptr", 1},
     {"tm_stop_music", "aot_tm_stop_music_ptr", 1},
@@ -855,6 +870,7 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm3_anim_count", "aot_tm3_anim_count_ptr", 1},
     {"tm3_anim_frames", "aot_tm3_anim_frames_ptr", 2},
     {"tm3_anim", "aot_tm3_anim_ptr", 3},
+    {"tm3_anim_blend", "aot_tm3_anim_blend_ptr", 6},
     {"tm3_unload_model", "aot_tm3_unload_model_ptr", 1},
     // 3D (Faz 4) — ışıklandırma
     {"tm3_lights", "aot_tm3_lights_ptr", 1},
@@ -870,6 +886,24 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm3_sky", "aot_tm3_sky_ptr", 2},
     {"tm3_sky_off", "aot_tm3_sky_off_ptr", 0},
     {"tm3_fog", "aot_tm3_fog_ptr", 2},
+    // 3D (Faz 8) — billboard (parçacık/etiket) + dünya→ekran izdüşümü
+    {"tm3_billboard", "aot_tm3_billboard_ptr", 6},
+    {"tm3_billboard_pro", "aot_tm3_billboard_pro_ptr", 8},
+    {"tm3_atlas_grid", "aot_tm3_atlas_grid_ptr", 3},
+    {"tm3_atlas_frames", "aot_tm3_atlas_frames_ptr", 1},
+    {"tm3_screen_x", "aot_tm3_screen_x_ptr", 3},
+    {"tm3_screen_y", "aot_tm3_screen_y_ptr", 3},
+    // 3D (Faz 10) — gerçek arazi (heightmap)
+    {"tm3_terrain_gen", "aot_tm3_terrain_gen_ptr", 7},
+    {"tm3_terrain_load", "aot_tm3_terrain_load_ptr", 5},
+    {"tm3_terrain_height", "aot_tm3_terrain_height_ptr", 2},
+    {"tm3_terrain_off", "aot_tm3_terrain_off_ptr", 0},
+    {"tm3_cube_rot", "aot_tm3_cube_rot_ptr", 8},
+    {"tm3_sky_stars", "aot_tm3_sky_stars_ptr", 1},
+    {"tm3_sky_clouds", "aot_tm3_sky_clouds_ptr", 1},
+    {"tm3_terrain_layer", "aot_tm3_terrain_layer_ptr", 2},
+    {"tm3_terrain_layers", "aot_tm3_terrain_layers_ptr", 7},
+    {"tm3_terrain_layers_off", "aot_tm3_terrain_layers_off_ptr", 0},
     {"tm_checker", "aot_tm_checker_ptr", 5},
     // girdi — gamepad (buton/eksen adla: "A"/"LB"/"START", "LX"/"RT"...)
     {"tm_gamepad_available", "aot_tm_gamepad_available_ptr", 1},
@@ -880,6 +914,8 @@ static const TameBuiltin k_tame_builtins[] = {
     // kalıcı kayıt (Android'de internal storage, masaüstünde CWD) + titreşim
     {"tm_save_data", "aot_tm_save_data_ptr", 2},
     {"tm_load_data", "aot_tm_load_data_ptr", 1},
+    {"tm_download", "aot_tm_download_ptr", 2},
+    {"tm_is_web", "aot_tm_is_web_ptr", 0},
     {"tm_vibrate", "aot_tm_vibrate_ptr", 1},
 };
 
@@ -1252,6 +1288,34 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_keys =
       LLVMAddFunction(backend->module, "aot_keys", fmt_iso_type);
 
+  // aot_values(obj) -> array — keys'in ikizi, AYNI sırada.
+  backend->func_aot_values =
+      LLVMAddFunction(backend->module, "aot_values", fmt_iso_type);
+
+  // aot_to_bool(v) -> bool — toInt/toFloat/toString ailesinin eksik üyesi.
+  backend->func_aot_to_bool =
+      LLVMAddFunction(backend->module, "aot_to_bool", fmt_iso_type);
+
+  // args() -> array<str>. Argümansız; dönüş ABI'si `aot_arena_save` ile aynı
+  // şekilde `llvm_make_vmvalue_func_type` üzerinden kuruluyor, yani sret
+  // ayrımı tek yerde kalıyor.
+  backend->func_aot_args =
+      LLVMAddFunction(backend->module, "aot_args", arena_save_type);
+
+  // aot_set_args(argc, argv): main girişinde çağrılıyor.
+  // `char **argv`. Tip MODÜLÜN bağlamından türemeli: LLVMInt8Type() global
+  // bağlamı kullanıyor ve karışım "Function context does not match Module
+  // context" ile modül doğrulamasını düşürüyor — optimizasyon o zaman
+  // tamamen atlanıyor, yani sessizce yavaş kod üretilirdi.
+  LLVMTypeRef sa_params[2] = {backend->int32_type,
+                              LLVMPointerType(backend->ptr_type, 0)};
+  // DÖNÜŞ tipi de bağlamdan: `LLVMVoidType()` global bağlamı kullanıyor ve
+  // tek bir global-bağlam tipi bütün modül doğrulamasını düşürmeye yetiyor.
+  LLVMTypeRef sa_type =
+      LLVMFunctionType(backend->void_type, sa_params, 2, 0);
+  backend->func_aot_set_args =
+      LLVMAddFunction(backend->module, "aot_set_args", sa_type);
+
   // aot_object_clone(obj) -> obj (shallow). Same 1-arg VMValue→VMValue
   // shape as keys; can reuse `fmt_iso_type`. Exposed as the user-level
   // `clone(obj)` builtin and used by the VM compiler's typed-struct
@@ -1387,6 +1451,11 @@ void declare_runtime_functions(LLVMBackend *backend) {
   // aot_ord(s, i) -> int : unsigned byte value at index i (two-ptr ABI).
   backend->func_aot_ord =
       LLVMAddFunction(backend->module, "aot_ord_ptr", write_type);
+
+  // aot_chr(c) -> str : ord'un tersi. Tek argümanlı ptr ABI'si —
+  // `aot_read_file_ptr` ile aynı şekil.
+  backend->func_aot_chr =
+      LLVMAddFunction(backend->module, "aot_chr_ptr", read_type);
 
   // tame (2D oyun) builtin ailesi — k_tame_builtins tablosundan tek
   // döngüyle bildirilir; hepsi N-ptr VMValue ABI'si. Dispatch tarafı
@@ -2246,7 +2315,11 @@ void register_function(LLVMBackend *backend, const char *name,
   // dropped function null-derefs and crashes codegen (segfault, no diagnostic).
   // A program that links a big stdlib module (e.g. wings) plus its own handlers
   // can legitimately approach this — fail loudly rather than miscompile.
-  const int kMaxFunctions = 1024;
+  // Sınır DİZİDEN türetiliyor: ayrı bir sabit tutmak, biri büyütülüp diğeri
+  // unutulduğunda ya erken hata ya da taşma demekti (dizi 1024'ten 4096'ya
+  // çıkarıldığında tam bu risk vardı).
+  const int kMaxFunctions =
+      (int)(sizeof(backend->functions) / sizeof(backend->functions[0]));
   if (backend->function_count >= kMaxFunctions) {
     fprintf(stderr,
             "[AOT] Fatal: function table overflow (> %d functions). "
@@ -2363,7 +2436,17 @@ static int scope_decl_slot(Scope *s, const char *name) {
       return i;
     }
   }
-  if (s->count >= 256) return -1;
+  // Sınır DİZİDEN türüyor (ayrı sabit tutmak ikisinin ayrışmasına açıktı) ve
+  // taşma SESSİZ DEĞİL: sessizce -1 döndürmek değişkeni yok sayıp okumasını
+  // çöpe çeviriyordu, yani yanlış çalışan bir ikili üretiliyordu.
+  const int kMaxScopeVars = (int)(sizeof(s->vars) / sizeof(s->vars[0]));
+  if (s->count >= kMaxScopeVars) {
+    fprintf(stderr,
+            "[AOT] Fatal: scope variable table overflow (> %d variables). "
+            "Raise LocalVar vars[] in llvm_backend.hpp.\n",
+            kMaxScopeVars);
+    exit(1);
+  }
   return s->count++;
 }
 
@@ -2716,6 +2799,27 @@ void add_local_captured(LLVMBackend *backend, const char *name, LLVMValueRef env
   }
 }
 
+// True only while codegen is emitting a TOP-LEVEL statement.
+//
+// Main's scope is the root: it is pushed first (with no parent) and every
+// function/lambda body pushes its own scope on top of it — which is also why a
+// function can READ a global by falling through the scope chain in get_local.
+// So "no parent" is exactly "this statement belongs to main itself".
+//
+// This is the guard AST_VARIABLE_DECL was missing. Both of its global
+// shortcuts asked only "does a module-level global with this name exist?" and
+// wrote into it — so a function's own `int p = 0;` silently stored into the
+// top-level `int p = 99;` and never allocated a local at all. Parameters were
+// unaffected (they get real allocas at function entry), which is why the bug
+// looked so arbitrary: `func f(p)` was fine, `func f() { int p = ...; }` was not.
+//
+// Top-level `if`/`while` blocks deliberately still count as top level: blocks
+// do not open a scope (see scope_decl_slot), and in a language without block
+// scoping a redeclaration there really is the same variable.
+static bool at_top_level_scope(LLVMBackend *backend) {
+  return backend->current_scope && backend->current_scope->parent == nullptr;
+}
+
 LLVMValueRef get_local(LLVMBackend *backend, const char *name) {
   Scope *s = backend->current_scope;
   while (s) {
@@ -3003,6 +3107,13 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
         return result;
       case TOKEN_DIVIDE:
         result.value = LLVMBuildSDiv(backend->builder, L.value, R.value, "div");
+        result.type = INFERRED_INT;
+        return result;
+      case TOKEN_MODULO:
+        // İşaretli kalan: C ve çoğu dille aynı (işaret BÖLÜNENDEN gelir).
+        // `mod()` builtin'i duruyor ve aynı şeyi yapıyor; `%` yalnız daha
+        // okunur bir yazım.
+        result.value = LLVMBuildSRem(backend->builder, L.value, R.value, "srem");
         result.type = INFERRED_INT;
         return result;
       case TOKEN_LESS:
@@ -4554,11 +4665,28 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_csv_emit,
                                     args, 1, "csv_e");
     }
+    if (node->name && strcmp(node->name, "args") == 0 &&
+        node->argument_count == 0) {
+      return llvm_call_vmvalue_func(backend, backend->func_aot_args, nullptr, 0,
+                                    "args");
+    }
     if (node->name && strcmp(node->name, "keys") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_keys,
                                     args, 1, "keys");
+    }
+    if (node->name && strcmp(node->name, "values") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_values,
+                                    args, 1, "values");
+    }
+    if (node->name && strcmp(node->name, "toBool") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_to_bool,
+                                    args, 1, "toBool");
     }
     // clone(obj) -> obj — shallow copy of a JSON object. The VM compiler
     // also emits this opcode-sequence as the function-entry by-value
@@ -4700,6 +4828,18 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {s_void, i_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_ord, args,
                                     2, "ord_res");
+    }
+    if (node->name && strcmp(node->name, "chr") == 0 &&
+        node->argument_count >= 1) {
+      LLVMValueRef cv = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef cslot = LLVMBuildAlloca(backend->builder,
+                                           backend->vm_value_type, "chr_c");
+      LLVMBuildStore(backend->builder, cv, cslot);
+      LLVMValueRef cvoid = LLVMBuildBitCast(backend->builder, cslot,
+                                            backend->ptr_type, "chr_c_void");
+      LLVMValueRef args[] = {cvoid};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_chr, args, 1,
+                                    "chr_res");
     }
     // tame (2D oyun) builtin ailesi — tablo-güdümlü dispatch. Her arg bir
     // entry-alloca'ya konup pointer'ı geçirilir (ord'un N-ptr ABI'sinin
@@ -5553,6 +5693,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     STR1_FUNC("upper", func_aot_string_upper)
     STR1_FUNC("lower", func_aot_string_lower)
+    // toUpper/toLower: JS'ten (`toUpperCase`) gelen refleksin karşılığı.
+    // Tabloda ZATEN vardılar ama codegen'de yoktu, yani yazan kişi
+    // "fonksiyon bulunamadı" alıyordu. Takma ad olarak bağlamak, tablodan
+    // silmekten iyi: ad doğal ve insanlar onu yazıyor.
+    STR1_FUNC("toUpper", func_aot_string_upper)
+    STR1_FUNC("toLower", func_aot_string_lower)
     STR1_FUNC("reverse", func_aot_string_reverse)
     STR1_FUNC("isEmpty", func_aot_string_is_empty)
     STR1_FUNC("capitalize", func_aot_string_capitalize)
@@ -6929,8 +7075,12 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // Native typed-int global (registered in Pass 0.1 for `int x = ...;`)?
+    // Only when this declaration IS the top-level one — inside a function the
+    // same name is a fresh local that must shadow, not overwrite, the global.
     LLVMValueRef existing_global =
-        LLVMGetNamedGlobal(backend->module, node->name);
+        at_top_level_scope(backend)
+            ? LLVMGetNamedGlobal(backend->module, node->name)
+            : nullptr;
     if (existing_global &&
         LLVMGlobalGetValueType(existing_global) == backend->int_type) {
       LLVMValueRef int_init;
@@ -7130,18 +7280,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       // left alone — typeinfer's pre-pass already warned about those
       // mismatches.
       if (node->data_type == TYPE_INT && init) {
-        LLVMValueRef tag = LLVMBuildExtractValue(backend->builder, init, 0,
-                                                 "decl.tag");
-        LLVMValueRef is_bool = LLVMBuildICmp(
-            backend->builder, LLVMIntEQ, tag,
-            LLVMConstInt(backend->int32_type, /*VM_VAL_BOOL=*/2, 0),
-            "decl.is_bool");
-        LLVMValueRef new_tag = LLVMBuildSelect(
-            backend->builder, is_bool,
-            LLVMConstInt(backend->int32_type, /*VM_VAL_INT=*/0, 0),
-            tag, "decl.tag.coerced");
-        init = LLVMBuildInsertValue(backend->builder, init, new_tag, 0,
-                                    "decl.bool_to_int");
+        init = llvm_coerce_bool_tag_to_int(backend, init);
       }
     } else if (node->data_type == TYPE_CUSTOM) {
       // `Point p;` form: allocate an empty Object so subsequent `p.x = ...`
@@ -9029,6 +9168,22 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
           LLVMBuildLoad2(backend->builder, backend->vm_value_type, arg_ptr,
                          node->parameters[i]->name);
 
+      // `int x` bildirilmiş bir parametreye bool gelirse etiketi int'e
+      // çevriliyor — bildirimdeki (`int x = <bool>`) ile AYNI fonksiyon.
+      //
+      // İkisi ayrışıyordu ve bu SESSİZ bir hataydı: aritmetik yol değeri
+      // zorluyor (x + 10 doğru çıkıyor), ama karşılaştırma yolu ÖNCE tip
+      // etiketine bakıyor, yani `f(true)` çağrısından sonra gövdedeki
+      // `x == 1` her zaman false oluyordu. `lib/test.tpr`'daki `assert`'in
+      // sessiz no-op olması bu boşlukta doğmuştu.
+      //
+      // ÇAĞIRAN tarafta değil ÇAĞRILAN tarafta: burada tek bir yer var ve
+      // doğrudan/`call()` ile dinamik/modül-takma-adlı bütün çağrı yolları
+      // buradan geçiyor.
+      if (node->parameters[i]->data_type == TYPE_INT) {
+        val = llvm_coerce_bool_tag_to_int(backend, val);
+      }
+
       const char *pname = node->parameters[i]->name;
       if (has_captures && cd->slots[node].find(pname) != cd->slots[node].end()) {
         int slot_idx = cd->slots[node][pname];
@@ -9172,7 +9327,13 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   // MAIN FUNCTION: int main() -> returns raw i32 (OS exit code)
   // We must create it FIRST so that imports (Pass 0) can emit init code into
   // it.
-  LLVMTypeRef main_type = LLVMFunctionType(backend->int32_type, nullptr, 0, 0);
+  // main artık (argc, argv) alıyor. `int main()` de `int main(int, char**)`
+  // de geçerli C; imzayı genişletmek çağrı yerlerini etkilemiyor ama dile
+  // args() verebilmenin tek yolu bu — argv başka türlü elde edilemez.
+  LLVMTypeRef main_params[2] = {backend->int32_type,
+                                LLVMPointerType(backend->ptr_type, 0)};
+  LLVMTypeRef main_type =
+      LLVMFunctionType(backend->int32_type, main_params, 2, 0);
   LLVMValueRef main_func = LLVMAddFunction(backend->module, "main", main_type);
   backend->current_function = main_func;
   backend->current_function_node = node;
@@ -9194,6 +9355,16 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   LLVMBuildCall2(backend->builder,
                  LLVMGlobalGetValueType(backend->func_aot_runtime_init),
                  backend->func_aot_runtime_init, nullptr, 0, "");
+
+  // Komut satırı argümanlarını runtime'a ver. Çalışma zamanı başlatıldıktan
+  // HEMEN sonra: args() bir dizi ayırıyor, yani arena hazır olmalı.
+  {
+    LLVMValueRef sa_args[2] = {LLVMGetParam(main_func, 0),
+                               LLVMGetParam(main_func, 1)};
+    LLVMBuildCall2(backend->builder,
+                   LLVMGlobalGetValueType(backend->func_aot_set_args),
+                   backend->func_aot_set_args, sa_args, 2, "");
+  }
 
   // Top-level closure env (2026-07-21): if the capture analysis found
   // lambdas capturing main's scope-locals (for-init vars, block locals —
@@ -9530,13 +9701,21 @@ void llvm_backend_optimize(LLVMBackend *backend) {
   LLVMPassBuilderOptionsSetVerifyEach(safe_options, 0);
 
   // Fallback ladder: aggressive O3/O2 → plain (safe) O2/O1 → unoptimized.
-  const char *att_level[4] = {"default<O3>", "default<O2>", "default<O2>",
-                              "default<O1>"};
-  int att_safe[4] = {0, 0, 1, 1};
+  // Son basamak MUHAFAZAKÂR bir boru hattı: InstCombine ve döngü geçişleri
+  // YOK. Bu iki aile, ölçülen iki LLVM kusurunun kaynağı —
+  //   O2+ : loop-idiom-recognize yanlış mangle edilmiş bir llvm.memset üretiyor
+  //   O1  : InstCombine'ın foldOpIntoPhi'si boxed-karşılaştırma merge'ümüzden
+  //         tipsiz bir phi çıkarıyor
+  // — ve ikisi olmadan da mem2reg/SROA/CSE/simplifycfg ciddi kazanç veriyor.
+  // "Hiç optimizasyon yok"tan iyi olması yeterli gerekçe.
+  const char *att_level[5] = {
+      "default<O3>", "default<O2>", "default<O2>", "default<O1>",
+      "function(sroa,early-cse,simplifycfg,reassociate,gvn,dce,simplifycfg)"};
+  int att_safe[5] = {0, 0, 1, 1, 1};
   LLVMModuleRef chosen = nullptr;
   int chosen_idx = -1;
   int ai = 0;
-  while (ai < 4 && !chosen) {
+  while (ai < 5 && !chosen) {
     LLVMPassBuilderOptionsRef opt = att_safe[ai] ? safe_options : options;
     LLVMModuleRef trial = LLVMCloneModule(codegen_ir);
     LLVMErrorRef error = LLVMRunPasses(trial, att_level[ai], nullptr, opt);
@@ -9611,10 +9790,14 @@ void llvm_backend_optimize(LLVMBackend *backend) {
 
   if (chosen) {
     if (chosen_idx > 0) {
+      // Muhafazakâr basamak uzun bir boru hattı dizesi; kullanıcıya adını
+      // dökmek yerine ne olduğunu söylüyoruz.
+      const char *nm = (chosen_idx == 4) ? "muhafazakar (InstCombine'siz)"
+                                         : att_level[chosen_idx];
       fprintf(stderr,
               "[AOT] Note: aggressive O3 IR invalid on this toolchain; "
               "optimized with %s%s instead.\n",
-              att_level[chosen_idx], att_safe[chosen_idx] ? " (safe)" : "");
+              nm, (att_safe[chosen_idx] && chosen_idx != 4) ? " (safe)" : "");
     } else if (!backend->quiet) {
       const char *v = getenv("TULPAR_AOT_VERBOSE");
       if (v && *v && *v != '0')

@@ -1,0 +1,46 @@
+// Veriyle kurulmuş oyun — bu dosyada TEK SATIR oynanış kodu yok.
+//
+//   ./tulpar examples/scene3d_data_game.tpr
+//
+// Oyunun tamamı `examples/scenes/toplayici.scene.json` içinde: dünya, varlıklar,
+// davranışlar (hareket, kovalama, devriye, salınım, dönme, ateş) ve kurallar
+// (topla / hasar ver / kazan / kaybet). Buradaki Tulpar kodu yalnızca sahneyi
+// yüklüyor ve HUD çiziyor — `update()` YOK.
+//
+// Bunun amacı bir gösteri değil, bir ÖN KOŞUL: tarayıcıda çalışacak sahne
+// editörünün yanında derleyici olmayacak, dolayısıyla "Oynat" düğmesinin
+// çalışabilmesi için oynanışın veri olması gerekiyordu. Bu dosya o koşulun
+// sağlandığının kanıtı — aynı JSON'u editör de üretecek.
+//
+// Sahne dosyası ÇALIŞMA DİZİNİNE göre çözülüyor; depo kökünden çalıştır.
+
+import "scene3d";
+
+str SAHNE = "examples/scenes/toplayici.scene.json";
+
+func kur() {
+    // Bu dosya OYUNU çalıştırıyor. Sahneyi düzenlemek için ayrı bir uygulama
+    // var: `examples/scene3d_editor.tpr` aynı JSON'u açıyor.
+    if (sahne_dosya3d(SAHNE) == 0) {
+        // Dosya bulunamadıysa sessizce boş bir dünyada kalmak kafa karıştırır.
+        hata3d("SAHNE YUKLENEMEDI: " + SAHNE);
+    }
+}
+
+func hud() {
+    text("Skor: " + toString(score3d()), 12, 12, 22, GOLD);
+    int p = bul3d("kahraman");
+    if (alive3(p)) {
+        text("Can: " + toString(can_kac3d(p)), 12, 40, 18, rgb(240, 120, 120));
+    }
+    text("Varlik: " + toString(yasayan_sayi3d()) +
+         "   Davranis: " + toString(davranis_sayisi3d()) +
+         "   Kural: " + toString(kural_sayisi3d()), 12, 66, 16, RAYWHITE);
+    text("WASD hareket, BOSLUK zipla, fare bak", 12, 90, 15, rgb(180, 190, 205));
+}
+
+sahne_bilgi_dosya3d(SAHNE);
+sahne3d(sahne_eni3d(), sahne_boyu3d(), sahne_basligi3d());
+kurulumda3(kur);
+hud_ciz3(hud);
+oyna3d();

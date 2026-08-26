@@ -56,6 +56,7 @@ enum TulparTokenType {
     TOKEN_MINUS,         // -
     TOKEN_MULTIPLY,      // *
     TOKEN_DIVIDE,        // /
+    TOKEN_MODULO,        // % — kalan (mod() builtin'i duruyor)
     TOKEN_ASSIGN,        // =
     TOKEN_EQUAL,         // ==
     TOKEN_NOT_EQUAL,     // !=

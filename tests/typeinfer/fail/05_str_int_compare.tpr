@@ -1,0 +1,13 @@
+// Expected: typeinfer should reject `str == int`.
+//
+// Same root cause as 04: different type tags are never equal, so this is a
+// constant. `int == float` is the one cross-type pair that IS meaningful
+// (numeric promotion makes `1 == 1.0` genuinely true) — see
+// tests/typeinfer/pass/04_cross_type_ok.tpr, which guards that it stays legal.
+
+str s = "1";
+int n = 1;
+
+if (s == n) {
+    print("unreachable");
+}

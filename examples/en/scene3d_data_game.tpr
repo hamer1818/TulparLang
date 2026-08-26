@@ -1,0 +1,48 @@
+// A game built from DATA — not one line of gameplay code in this file.
+// English twin of examples/scene3d_data_game.tpr.
+//
+//   ./tulpar examples/en/scene3d_data_game.tpr
+//
+// The whole game lives in `examples/scenes/toplayici.scene.json`: the world,
+// the entities, the behaviours (move, chase, patrol, bob, spin, shoot) and the
+// rules (collect / damage / win / lose). The Tulpar code here only loads the
+// scene and draws the HUD — there is NO `update()`.
+//
+// The point is not a demo but a PRECONDITION: the browser-based scene editor
+// will have no compiler next to it, so for its "Play" button to work at all,
+// gameplay had to become data. This file is the proof that the condition
+// holds — the editor will produce the very same JSON.
+//
+// The scene path is resolved against the WORKING DIRECTORY; run from the
+// repo root.
+
+import "scene3d";
+
+str SCENE = "examples/scenes/toplayici.scene.json";
+
+func setup() {
+    // This file RUNS the game. To edit the scene there is a separate app:
+    // `examples/scene3d_editor.tpr` opens the same JSON.
+    if (scene_file3d(SCENE) == 0) {
+        // Silently sitting in an empty world would be confusing.
+        log_err3d("COULD NOT LOAD SCENE: " + SCENE);
+    }
+}
+
+func hud() {
+    text("Score: " + toString(score3d()), 12, 12, 22, GOLD);
+    int p = find3d("kahraman");
+    if (alive3(p)) {
+        text("Health: " + toString(hp3d(p)), 12, 40, 18, rgb(240, 120, 120));
+    }
+    text("Entities: " + toString(alive_count3d()) +
+         "   Behaviours: " + toString(behavior_count3d()) +
+         "   Rules: " + toString(rule_count3d()), 12, 66, 16, RAYWHITE);
+    text("WASD to move, SPACE to jump, mouse to look", 12, 90, 15, rgb(180, 190, 205));
+}
+
+scene_meta_file3d(SCENE);
+scene3d(scene_w3d(), scene_h3d(), scene_title3d());
+on_setup3d(setup);
+on_hud3d(hud);
+play3d();

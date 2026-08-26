@@ -1,0 +1,132 @@
+// Fonksiyon yerelinin aynı adlı TOP-LEVEL global'i ezmesi (codegen hatası).
+//
+//   func inner() { int p = 0; while (p < 5) { p = p + 1; } }
+//   int p = 99;  inner();  print(p);   // 99 değil, 5 yazıyordu
+//
+// Sebep: AST_VARIABLE_DECL'in iki global kısayolu da yalnızca "bu adda bir
+// modül-düzeyi global var mı?" diye soruyordu; bildirimin FONKSİYON GÖVDESİ
+// içinde olup olmadığına bakmıyordu. Sonuç: fonksiyonun kendi `int p = 0;`i
+// global'e yazıyor ve yerel hiç ayrılmıyordu. Parametreler etkilenmiyordu
+// (fonksiyon girişinde gerçek alloca alıyorlar) — hatanın bu kadar keyfî
+// görünmesinin sebebi buydu.
+//
+// Düzeltme: her iki kısayol da yalnız KÖK SCOPE'ta (main'in kendi scope'u,
+// parent'ı yok) geçerli. Bu dosya hem ezilmemeyi hem de ters yöndeki
+// sözleşmeyi sabitliyor: fonksiyon global'i hâlâ OKUYABİLMELİ ve ATAYABİLMELİ
+// — scene3d/arcade/wings'in tamamı buna dayanıyor.
+
+import "test";
+
+// ---- 1) Yerel bildirim global'i ezmemeli --------------------------------
+
+int g_int = 99;
+func w_int() { int g_int = 0; while (g_int < 5) { g_int = g_int + 1; } }
+
+func t_local_int_shadows() {
+    w_int();
+    assert_eq_int(g_int, 99);
+}
+
+// Global fonksiyondan SONRA tanımlıysa da aynı olmalı (bildirim sırası
+// önemsiz: Pass 0.1 global'leri gövdelerden önce tarıyor).
+func w_after() { int g_after = 7; g_after = g_after + 1; }
+int g_after = 42;
+
+func t_decl_order_irrelevant() {
+    w_after();
+    assert_eq_int(g_after, 42);
+}
+
+float g_flt = 9.5;
+func w_flt() { float g_flt = 0.0; g_flt = g_flt + 1.0; }
+
+func t_local_float_shadows() {
+    w_flt();
+    assert(g_flt > 9.49 && g_flt < 9.51, "float global bozulmamali");
+}
+
+str g_str = "global";
+func w_str() { str g_str = "yerel"; }
+
+func t_local_str_shadows() {
+    w_str();
+    assert_eq_str(g_str, "global");
+}
+
+// for-init değişkeni de yerel olmalı
+int g_for = 99;
+func w_for() { for (int g_for = 0; g_for < 3; g_for = g_for + 1) { } }
+
+func t_for_var_shadows() {
+    w_for();
+    assert_eq_int(g_for, 99);
+}
+
+// Parametre zaten doğruydu; geri gitmesin diye sabitleniyor
+int g_par = 99;
+func w_par(g_par) { g_par = g_par + 1; }
+
+func t_param_shadows() {
+    w_par(5);
+    assert_eq_int(g_par, 99);
+}
+
+// ---- 2) TERS SÖZLEŞME: global erişimi bozulmamalı ------------------------
+// Düzeltme fazla hevesli olsaydı (her bildirimi yerelleştirseydi) burası
+// kırılırdı. scene3d'nin `_lvl_pending3 = n` deseni tam olarak bu.
+
+int g_rw = 10;
+func reads_global(): int { return g_rw + 1; }
+func writes_global() { g_rw = 77; }
+func writes_global_arg(v) { g_rw = v; }
+
+func t_function_reads_global() {
+    g_rw = 10;
+    assert_eq_int(reads_global(), 11);
+}
+
+func t_function_assigns_global() {
+    g_rw = 10;
+    writes_global();
+    assert_eq_int(g_rw, 77);       // atama HÂLÂ global'e gitmeli
+    writes_global_arg(123);
+    assert_eq_int(g_rw, 123);
+}
+
+// Yerel gölge varken bile BAŞKA global'ler okunabilmeli
+int g_other = 5;
+func shadow_and_read(): int {
+    int g_other2 = 100;            // yerel, global değil
+    return g_other + g_other2;     // g_other global'den gelmeli
+}
+
+func t_shadow_does_not_blind_other_globals() {
+    assert_eq_int(shadow_and_read(), 105);
+    assert_eq_int(g_other, 5);
+}
+
+// Aynı fonksiyon hem gölgeleyip hem BAŞKA bir global'e yazabilmeli
+int g_mix_shadow = 1;
+int g_mix_write  = 1;
+func mixes() {
+    int g_mix_shadow = 50;         // gölge
+    g_mix_write = g_mix_shadow;    // global'e yaz (yerelin değerini)
+}
+
+func t_shadow_and_write_same_function() {
+    mixes();
+    assert_eq_int(g_mix_shadow, 1);    // gölgelenen dokunulmamis
+    assert_eq_int(g_mix_write, 50);    // yazilan gercekten yazilmis
+}
+
+test("yerel int global'i ezmez", "t_local_int_shadows");
+test("bildirim sirasi onemsiz", "t_decl_order_irrelevant");
+test("yerel float global'i ezmez", "t_local_float_shadows");
+test("yerel str global'i ezmez", "t_local_str_shadows");
+test("for degiskeni global'i ezmez", "t_for_var_shadows");
+test("parametre global'i ezmez", "t_param_shadows");
+test("fonksiyon global'i okuyabilir", "t_function_reads_global");
+test("fonksiyon global'e atayabilir", "t_function_assigns_global");
+test("golge diger globalleri kor etmez", "t_shadow_does_not_blind_other_globals");
+test("ayni fonksiyonda golge + global yazma", "t_shadow_and_write_same_function");
+test_summary();

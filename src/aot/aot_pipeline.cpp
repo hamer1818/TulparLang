@@ -17,6 +17,7 @@
 #endif
 #if !PLATFORM_WINDOWS
 #include <csignal>   // SIGINT
+#include <vector>
 #include <sys/wait.h> // WIFSIGNALED / WTERMSIG on system() status
 #include <dirent.h>  // find_android_ndk: ~/Android/android-ndk-* taraması
 #endif
@@ -201,23 +202,64 @@ static std::string build_link_search_dirs() {
     out += "\" ";
   };
 
+  // Geliştirme ağacındaki adaylar. `./build.sh` bunları köke kopyalıyor ama
+  // doğrudan `cmake --build build-linux` kullanan (yani artımlı derleyen)
+  // biri için kökteki kopya BAYAT kalıyor ve exe dizini önce arandığı için
+  // taze arşivi GÖLGELİYOR. Sonuç sinsiydi: yeni eklenen bir builtin
+  // "undefined reference" ile bağlanamıyor, oysa derleme başarılı.
+  //
+  // Çözüm: exe dizinindeki arşiv geliştirme ağacındakinden ESKİYSE, arama
+  // sırası ters çevriliyor. Kurulu bir tulpar'da geliştirme dizini zaten
+  // yok, yani orada davranış değişmiyor.
+  // Adaylar hem ÇALIŞMA DİZİNİNE hem EXE DİZİNİNE göre üretiliyor.
+  //
+  // Yalnız CWD'ye göre üretmek sinsi bir hataydı: `packages/<ad>` altından
+  // koşan testler (paketin `import "<ad>"`i çalışma dizinine göre çözüldüğü
+  // için oradan koşmak ZORUNDA) `./build-linux`i `packages/<ad>/build-linux`
+  // diye arıyor, bulamıyor ve "libtulpar_runtime.a mevcut mu?" diyip
+  // düşüyorlardı. Geliştirici makinesinde bu görünmüyordu, çünkü orada
+  // arşivin kökte bir kopyası duruyor ve exe dizini onu buluyor; CI'da o
+  // kopya yoksa kırmızıya dönüyordu — nitekim döndü.
   std::string exe_dir = get_executable_dir();
+  std::vector<std::string> dev_dirs;
+  auto add_dev = [&](const char *rel) {
+    dev_dirs.push_back(std::string("./") + rel);
+    if (!exe_dir.empty()) dev_dirs.push_back(exe_dir + "/" + rel);
+  };
+#if PLATFORM_WINDOWS
+  add_dev("build-windows");
+  add_dev("build-windows/Release");
+#elif PLATFORM_MACOS
+  add_dev("build-macos");
+#else
+  add_dev("build-linux");
+#endif
+  add_dev("build");
+  bool dev_first = false;
+  if (!exe_dir.empty()) {
+    struct stat se;
+    if (stat((exe_dir + "/libtulpar_runtime.a").c_str(), &se) == 0) {
+      for (const auto &d : dev_dirs) {
+        struct stat sd;
+        if (stat((d + "/libtulpar_runtime.a").c_str(), &sd) == 0 &&
+            sd.st_mtime > se.st_mtime) {
+          dev_first = true;
+          break;
+        }
+      }
+    }
+  }
+
+  if (dev_first) {
+    for (const auto &d : dev_dirs) add(d);
+  }
   if (!exe_dir.empty()) {
     add(exe_dir);          // installer drops libtulpar_runtime.a here
     add(exe_dir + "/lib"); // package-manager-style /lib subdir variant
   }
-
-  // Dev-tree fallbacks — running `tulpar` straight out of the repo
-  // root after `./build.sh` should keep working without TULPAR_HOME.
-#if PLATFORM_WINDOWS
-  add("./build-windows");
-  add("./build-windows/Release");
-#elif PLATFORM_MACOS
-  add("./build-macos");
-#else
-  add("./build-linux");
-#endif
-  add("./build");
+  if (!dev_first) {
+    for (const auto &d : dev_dirs) add(d);
+  }
 
   // Last resort override — operators with custom layouts can set
   // TULPAR_RUNTIME_DIR=/some/path to point at the runtime archive
@@ -641,6 +683,57 @@ static std::string build_web_link_search_dirs() {
   return out;
 }
 
+// ARŞİV TAZELİĞİ: wasm/dist ve android/dist elle derleniyor (bu makinede
+// emsdk/NDK olmayabilir, CI'da hiç yok). `tame_impl.c`'ye yeni bir sembol
+// eklenip arşiv tazelenmeyince link `undefined symbol: aot_tm_...` diyor ve
+// bu, sorunun ne olduğunu SÖYLEMEYEN bir mesaj: eksik olan kodun kendisi
+// değil, arşivin bayatlığı. Aynı hataya en az üç kez çarpıldı.
+//
+// Kaynak arşivden yeniyse link ÖNCESİ söyleniyor. Uyarı, hata değil: arşiv
+// bayat olsa bile içinde gereken semboller varsa link tutar ve derlemeyi
+// durdurmak gereksiz olurdu.
+static void warn_if_prebuilt_archive_stale(const char *dist_dir,
+                                           const char *rebuild_cmd) {
+  static const char *srcs[] = {
+      "runtime/tame_impl.c", "runtime/tame_bindings.cpp",
+      "src/vm/runtime_bindings.cpp", "src/vm/vm.cpp",
+  };
+  struct stat as;
+  time_t oldest_archive = 0;
+  bool found = false;
+  DIR *d = opendir(dist_dir);
+  if (!d) return;  // arşiv yoksa link zaten kendi hatasını verir
+  struct dirent *ent;
+  while ((ent = readdir(d)) != nullptr) {
+    const char *n = ent->d_name;
+    size_t ln = strlen(n);
+    if (ln < 3 || strcmp(n + ln - 2, ".a") != 0) continue;
+    std::string full = std::string(dist_dir) + "/" + n;
+    if (stat(full.c_str(), &as) != 0) continue;
+    if (!found || as.st_mtime < oldest_archive) oldest_archive = as.st_mtime;
+    found = true;
+  }
+  closedir(d);
+  if (!found) return;
+
+  for (const char *src : srcs) {
+    struct stat ss;
+    if (stat(src, &ss) != 0) continue;   // repo kökünden çalışılmıyor
+    if (ss.st_mtime > oldest_archive) {
+      fprintf(stderr,
+              tulpar::i18n::tr_en(
+                  "[AOT] UYARI: %s arsivleri %s dosyasindan ESKI. Yeni bir\n"
+                  "      runtime sembolu eklendiyse link 'undefined symbol'\n"
+                  "      der. Tazele: %s\n",
+                  "[AOT] WARNING: archives in %s are OLDER than %s. If a new\n"
+                  "      runtime symbol was added the link will fail with\n"
+                  "      'undefined symbol'. Refresh with: %s\n"),
+              dist_dir, src, rebuild_cmd);
+      return;   // tek uyarı yeter
+    }
+  }
+}
+
 // Web hedefinin HTML kabuğu. em++'a .html ürettirmiyoruz: emcc'nin HTML
 // çıktısı html-minifier-terser (npm) ister ve vendored SDK'larda yoktur;
 // kendi kabuğumuz hem bağımlılıksız hem de oyuna uygun (koyu, ortalanmış
@@ -942,6 +1035,16 @@ AOTResult aot_compile_with_filename_debug(const char *source,
 
   // Android hedefi: iki ABI için obje + NDK linki + APK staging, sonra çık.
   if (g_target_android) {
+    // Arşiv tazeliği NDK aramasından ÖNCE. Sıra önemli: NDK'sız bir makinede
+    // sürücü "NDK gerekir" deyip çıkıyordu, yani bayat arşiv uyarısı o yola
+    // hiç varmıyordu — üstelik bayatlığı en kolay gözden kaçacağı makine tam
+    // olarak orası. Zaman damgası karşılaştırması hiçbir araç zinciri
+    // istemiyor, o yüzden burada hiçbir şeye mal olmuyor.
+    for (const char *abi : {"arm64-v8a", "x86_64"}) {
+      std::string dist = std::string("android/dist/") + abi;
+      warn_if_prebuilt_archive_stale(dist.c_str(),
+                                     "android/build_tame_android.sh");
+    }
     std::string ndk = find_android_ndk();
     std::string tc = ndk + "/toolchains/llvm/prebuilt/linux-x86_64/bin/";
     if (ndk.empty()) {
@@ -1002,6 +1105,11 @@ AOTResult aot_compile_with_filename_debug(const char *source,
                         "-ltulpar_tame_android -ltulpar_runtime_android "
                         "-landroid -llog -lEGL -lGLESv2 -lOpenSLES -lm -ldl" +
                         extra + " 2>&1";
+      {
+        std::string dist = std::string("android/dist/") + a.abi;
+        warn_if_prebuilt_archive_stale(dist.c_str(),
+                                       "android/build_tame_android.sh");
+      }
       AOT_PROGRESS("[AOT] Linking %s: libtulpargame.so\n", a.abi);
       int rc;
       {
@@ -1168,6 +1276,7 @@ AOTResult aot_compile_with_filename_debug(const char *source,
     // - Arşiv sırası native ile aynı: tame, runtime'dan önce.
     // - TULPAR_WEB_ASSETS=<dizin> → --preload-file (oyun varlıkları sanal
     //   dosya sistemine aynı yolda gömülür).
+    warn_if_prebuilt_archive_stale("wasm/dist", "wasm/build_tame_web.sh");
     std::string web_dirs = build_web_link_search_dirs();
     std::string preload;
     if (const char *assets = getenv("TULPAR_WEB_ASSETS"); assets && *assets) {
@@ -1342,6 +1451,16 @@ static AOTResult aot_compile_silent(const char *source,
 
 // Silent compile and run - used as default execution mode.
 // Compiles to temp binary, runs it, cleans up. No [AOT] output.
+// `tulpar script.tpr a b` çağrısındaki fazladan argümanlar. Program bunları
+// `args()` ile okuyor; iletilmezse Tulpar ile yazılmış hiçbir CLI aracı
+// `tulpar` üzerinden çalıştırıldığında argüman göremiyordu (yalnız `build`
+// ile üretilen ikili görüyordu, ki bu tutarsızlıktı).
+static std::string g_tulpar_run_args;
+
+void aot_set_run_args(const char *quoted) {
+  g_tulpar_run_args = quoted ? quoted : "";
+}
+
 AOTResult aot_compile_and_run_silent(const char *source) {
   return aot_compile_and_run_silent_with_filename(source, nullptr);
 }
@@ -1356,7 +1475,9 @@ AOTResult aot_compile_and_run_silent_with_filename(const char *source,
   }
   // cmd.exe does not auto-search the current directory unless an explicit
   // path is given, so prefix with .\ to ensure the binary is found.
-  int run_result = system(".\\tulpar_run_tmp.exe");
+  std::string run_cmd = ".\\tulpar_run_tmp.exe";
+  if (!g_tulpar_run_args.empty()) run_cmd += " " + g_tulpar_run_args;
+  int run_result = system(run_cmd.c_str());
   remove("tulpar_run_tmp.exe");
   remove("tulpar_run_tmp.ll");
   remove("tulpar_run_tmp.o");
@@ -1366,7 +1487,9 @@ AOTResult aot_compile_and_run_silent_with_filename(const char *source,
   if (result != AOT_OK) {
     return result;
   }
-  int run_result = system("/tmp/.tulpar_run");
+  std::string run_cmd = "/tmp/.tulpar_run";
+  if (!g_tulpar_run_args.empty()) run_cmd += " " + g_tulpar_run_args;
+  int run_result = system(run_cmd.c_str());
   remove("/tmp/.tulpar_run");
   remove("/tmp/.tulpar_run.ll");
 #endif

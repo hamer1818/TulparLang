@@ -1180,6 +1180,34 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
       return;
     }
 
+  case TOKEN_MODULO: // %
+    // Kutulu yol. Tam sayıda işaretli kalan (C ile aynı: işaret bölünenden),
+    // ondalıkta `fmod`. Sıfıra bölmede bölmeyle AYNI davranış — iki farklı
+    // hata biçimi tutmak kullanıcı için sürpriz olurdu.
+    switch (type_pair) {
+    case TYPE_INT_INT:
+      if (AS_INT(b) == 0) {
+        printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
+                                           "Runtime Error: Division by zero"));
+        *result = VM_INT(0);
+        return;
+      }
+      *result = VM_INT(AS_INT(a) % AS_INT(b));
+      return;
+    case TYPE_FLOAT_FLOAT:
+      *result = VM_FLOAT(fmod(AS_FLOAT(a), AS_FLOAT(b)));
+      return;
+    case TYPE_INT_FLOAT:
+      *result = VM_FLOAT(fmod((double)AS_INT(a), AS_FLOAT(b)));
+      return;
+    case TYPE_FLOAT_INT:
+      *result = VM_FLOAT(fmod(AS_FLOAT(a), (double)AS_INT(b)));
+      return;
+    default:
+      *result = VM_INT(0);
+      return;
+    }
+
   case TOKEN_LESS: // <
     switch (type_pair) {
     case TYPE_INT_INT:
@@ -2927,6 +2955,89 @@ VMValue aot_csv_emit(VMValue rowsVal) {
 // order. The returned array shares no string objects with the original
 // (each key is re-allocated in the arena), so the caller may keep the
 // result around even after the source object is mutated.
+// AOT Builtin: args() -> str[]  (komut satırı argümanları)
+//
+// Üretilen `main` artık (argc, argv) alıyor ve girişte bunları buraya
+// veriyor. Dilde argv erişimi HİÇ yoktu: Tulpar ile yazılmış bir CLI aracı
+// (editör dahil) hangi dosyayla açıldığını öğrenemiyordu.
+//
+// args()[0] programın kendi yolu — C'nin argv sözleşmesiyle aynı, çünkü
+// başka bir sözleşme uydurmak "neden kaydı?" sorusunu doğurur.
+static int aot_g_argc = 0;
+static char **aot_g_argv = nullptr;
+
+extern "C" void aot_set_args(int argc, char **argv) {
+  aot_g_argc = argc;
+  aot_g_argv = argv;
+}
+
+extern "C" VMValue aot_args(void) {
+  int n = aot_g_argc > 0 ? aot_g_argc : 0;
+  ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
+  a->obj.type = OBJ_ARRAY;
+  a->obj.arena_allocated = 1;
+  a->obj.next = nullptr;
+  a->obj.ref_count = 1;
+  a->obj.is_moved = 0;
+  a->capacity = n;
+  a->count = n;
+  a->items = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
+  for (int i = 0; i < n; i++) {
+    const char *sv = (aot_g_argv && aot_g_argv[i]) ? aot_g_argv[i] : "";
+    a->items[i] = VM_OBJ((Obj *)aot_allocate_string(sv, (int)strlen(sv)));
+  }
+  return VM_OBJ((Obj *)a);
+}
+
+// values(obj) -> array. `keys`in ikizi. İkisi AYNI sırayı veriyor (ObjObject
+// ekleme sırasını koruyor), yani `keys(o)[i]` ile `values(o)[i]` eşleşiyor —
+// bu olmasaydı ikisini birlikte gezmek mümkün olmazdı.
+//
+// Tabloda VARDI ama codegen'de yoktu: çağıran "'values' adında bir fonksiyon
+// bulunamadı" alıyordu. Kırık vaat, imzasızlıktan kötü.
+VMValue aot_values(VMValue objVal) {
+    ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
+    a->obj.type = OBJ_ARRAY;
+    a->obj.arena_allocated = 1;
+    a->obj.next = nullptr;
+    a->obj.ref_count = 1;
+    a->obj.is_moved = 0;
+    if (!IS_OBJECT(objVal)) {
+        a->capacity = 0;
+        a->count = 0;
+        a->items = nullptr;
+        return VM_OBJ((Obj *)a);
+    }
+    ObjObject *o = (ObjObject *)AS_OBJECT(objVal);
+    int n = o->count;
+    a->capacity = n;
+    a->count = n;
+    a->items = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
+    for (int i = 0; i < n; i++) {
+        a->items[i] = o->values[i];
+    }
+    return VM_OBJ((Obj *)a);
+}
+
+// toBool(v) -> bool. toInt/toFloat/toString ailesinin eksik üyesiydi.
+// Doğruluk kuralı dilin geri kalanıyla AYNI (`if` koşulunun kullandığı
+// truthiness): 0 / 0.0 / "" / false yanlış, gerisi doğru. Ayrı bir kural
+// uydurmak `toBool(x)` ile `if (x)` arasında sessiz bir ayrışma yaratırdı.
+VMValue aot_to_bool(VMValue v) {
+    switch (v.type) {
+    case VM_VAL_BOOL: return VM_BOOL(AS_BOOL(v));
+    case VM_VAL_INT: return VM_BOOL(AS_INT(v) != 0);
+    case VM_VAL_FLOAT: return VM_BOOL(AS_FLOAT(v) != 0.0);
+    case VM_VAL_VOID: return VM_BOOL(false);
+    default: break;
+    }
+    if (IS_STRING(v)) {
+        ObjString *s = (ObjString *)AS_OBJECT(v);
+        return VM_BOOL(s && s->length > 0);
+    }
+    return VM_BOOL(true);
+}
+
 VMValue aot_keys(VMValue objVal) {
     auto empty = []() -> VMValue {
         ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
@@ -3762,6 +3873,29 @@ VMValue aot_ord(VMValue s_val, VMValue i_val) {
   if (idx < 0 || idx >= s->length)
     return VM_INT(-1);
   return VM_INT((int64_t)(unsigned char)s->chars[idx]);
+}
+
+// aot_chr(c) -> str : tek baytlık dize. `ord`un tersi ve dilin bir
+// asimetrisiydi: kod → karakter dönüşümü yoktu, bu yüzden metin girişi yazan
+// kod (sahne editörünün metin alanı) Tulpar tarafında bir ASCII tablosu
+// taşımak zorunda kalıyordu.
+//
+// Bayt düzeyinde: TulparLang dizeleri UTF-8 bayt dizisi ve length()/substring()
+// bayt tabanlı, yani `ord` ile birebir eş. Aralık dışı (0-255 değilse) boş
+// dize — sessizce çöp bayt üretmek metni bozardı.
+VMValue aot_chr(VMValue c_val) {
+  if (!IS_INT(c_val)) return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  int64_t c = AS_INT(c_val);
+  if (c < 0 || c > 255) return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  char buf[2];
+  buf[0] = (char)(unsigned char)c;
+  buf[1] = 0;
+  return VM_OBJ((Obj *)aot_allocate_string(buf, 1));
+}
+
+VMValue aot_chr_ptr(VMValue *a) {
+  if (!a) return VM_OBJ((Obj *)aot_allocate_string("", 0));
+  return aot_chr(*a);
 }
 
 VMValue aot_ord_ptr(VMValue *a, VMValue *b) {

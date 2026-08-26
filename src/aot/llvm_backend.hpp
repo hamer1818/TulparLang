@@ -42,7 +42,15 @@ typedef struct FuncStackNode {
 } FuncStackNode;
 
 typedef struct Scope {
-  LocalVar vars[256];
+  // 256 idi ve SESSİZCE taşıyordu. En üst kapsam programın BÜTÜN global
+  // değişkenlerini tutuyor; scene3d tek başına 353 tanesine sahip. Taşınca
+  // `scope_decl_slot` -1 döndürüyor, değişken hiç kaydedilmiyor ve okuması
+  // çöp veriyordu — hata mesajı yok, derleme başarılı görünüyor. (Bulunuş
+  // biçimi: test özetinde "Fail: 0" yerine "Fail: nullptr".)
+  //
+  // Kapsam `calloc` ile ayrılıyor, yani büyütmek yığını riske atmıyor;
+  // 4096 * ~64 bayt = ~256 KB ve kapsamlar derinlemesine az sayıda.
+  LocalVar vars[4096];
   int count;
   struct Scope *parent;
 } Scope;
@@ -141,7 +149,11 @@ typedef struct {
   Scope *current_scope;
   FuncStackNode *func_stack;
 
-  FunctionEntry functions[1024];
+  // 1024 idi ve gerçekten doldu: scene3d'nin editör katmanı (paneller +
+  // widget'lar) eklenince tek bir programın fonksiyon sayısı sınırı aştı.
+  // Sabit dizi, her girdi birkaç işaretçi — 4096'ya çıkarmak birkaç yüz KB'lik
+  // derleyici-içi bir maliyet, yani kullanıcı ikilisinde iz bırakmıyor.
+  FunctionEntry functions[4096];
   int function_count;
 
   StructTypeEntry struct_types[64];
@@ -203,6 +215,7 @@ typedef struct {
   LLVMValueRef func_aot_display_width;    // display_width(s)->int : column width
   LLVMValueRef func_aot_fit_width;        // fit_width(s,w)->str : pad/truncate
   LLVMValueRef func_aot_ord;              // ord(s,i)->int : byte value at index i
+  LLVMValueRef func_aot_chr;              // chr(c)->str : tek baytlık dize
   LLVMValueRef func_aot_screen_open;      // screen_open() : enter TUI screen
   LLVMValueRef func_aot_screen_close;     // screen_close() : restore screen
   LLVMValueRef func_aot_screen_render;    // screen_render(frame) : atomic draw
@@ -224,6 +237,10 @@ typedef struct {
   LLVMValueRef func_aot_csv_parse;
   LLVMValueRef func_aot_csv_emit;
   LLVMValueRef func_aot_keys;
+  LLVMValueRef func_aot_values;
+  LLVMValueRef func_aot_to_bool;
+  LLVMValueRef func_aot_args;
+  LLVMValueRef func_aot_set_args;
   LLVMValueRef func_aot_object_clone;
   LLVMValueRef func_aot_persist; // persist(value) -> deep malloc'd copy (survives arena_restore)
   LLVMValueRef func_aot_http_request;

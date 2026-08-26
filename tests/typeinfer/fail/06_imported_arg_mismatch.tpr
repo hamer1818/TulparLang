@@ -1,0 +1,26 @@
+// Expected: typeinfer should reject a bad argument to an IMPORTED function.
+//
+// This is the regression guard for the gap that let the `assert` no-op live:
+// the argument checker was already capable of rejecting a mismatched type, but
+// typeinfer never opened a module's source, so it had no signature for anything
+// in the stdlib. Every call into `test`, `wings`, `router`, `orm`, `scene3d`,
+// `arcade` was unchecked. THAT is what this fixture protects — not any one
+// particular type pair.
+//
+// It used to pass `true, false` into `assert_eq_int(int, int)`. That pair is no
+// longer an error: as of 2026-08-25 the callee's parameter prologue rewrites a
+// bool tag to int, the same coercion a store does, so `f(true)` into an `int`
+// parameter is legal AND correct (tests/bool_to_int_arg.test.tpr). A string is
+// used instead — nothing coerces a string to an int, so the fixture keeps
+// testing what it was written to test.
+
+// EXPECT: Argument 1 of 'assert_eq_int'
+
+import "test";
+
+func t_bad() {
+    assert_eq_int("bir", 1);
+}
+
+test("imported signature is checked", t_bad);
+test_summary();

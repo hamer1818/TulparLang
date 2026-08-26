@@ -1,0 +1,21 @@
+// Expected: the newly catalogued builtins are actually checked.
+//
+// EXPECT: Argument 1 of 'join'
+// EXPECT: Argument 2 of 'join'
+// EXPECT: 'sha1_hex'
+//
+// Until 2026-08-25 forty builtins had NO signature, which does not merely mean
+// "arguments unchecked": an uncatalogued call infers as VOID, so every
+// downstream use of its result is skipped too. Nothing below was reported.
+//
+// `join` is the sharpest case — its argument order is separator-FIRST
+// (`join("-", xs)`), the opposite of the reflex from Python's `xs.join(sep)`
+// reading. Getting it backwards produced no diagnostic at all.
+
+func main() {
+    array xs = ["a", "b"];
+    print(join(xs, "-"));        // ters sıra: ayırıcı önce gelmeli
+    print(sha1_hex(42));         // str bekliyor
+}
+
+main();

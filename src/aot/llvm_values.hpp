@@ -15,6 +15,18 @@ LLVMValueRef llvm_build_vm_val_float(LLVMBackend *backend,
                                      LLVMValueRef float_val);
 LLVMValueRef llvm_build_vm_val_obj(LLVMBackend *backend, LLVMValueRef obj_ptr);
 
+// `int` bildirilmiş bir yere gelen bool değerin TİP ETİKETİNİ int yapar.
+// Yükte kayıp yok: VMValue'nun tamsayı yuvası bool için de 1/0 tutuyor,
+// yalnız etiket alanı yeniden yazılıyor.
+//
+// Neden gerekli: çalışma zamanı karşılaştırması ÖNCE tip etiketine bakıyor,
+// yani etiketi bool kalmış bir değer için `x == 1` her zaman false.
+// `lib/test.tpr`'daki `assert`'in sessiz no-op olması tam bu boşluktu.
+// Bildirimde (`int x = <bool>`) ve PARAMETRE bağlamada AYNI fonksiyon
+// çağrılıyor ki ikisi ayrışamasın.
+LLVMValueRef llvm_coerce_bool_tag_to_int(LLVMBackend *backend,
+                                         LLVMValueRef vm_val);
+
 LLVMValueRef llvm_build_is_truthy(LLVMBackend *backend, LLVMValueRef vm_val);
 LLVMValueRef llvm_extract_vm_val_int(LLVMBackend *backend, LLVMValueRef vm_val);
 LLVMValueRef llvm_extract_vm_val_ptr(LLVMBackend *backend, LLVMValueRef vm_val);

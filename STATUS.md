@@ -111,6 +111,15 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 > bölüm sistemi + codegen düzeltmeleri. GitHub Release'te 3-OS ikilileri +
 > Windows installer + GPG-imzalı SHA256SUMS.
 >
+> **Geliştirme (yayınlanmadı) — platform politikası:** 3.13.0'dan itibaren
+> **natif Windows desteklenmiyor**; Windows kullanıcıları **WSL** içinde Linux
+> sürümünü kullanıyor. CI'daki `build-windows` işi, Windows release varlıkları,
+> `build.bat`/`build.ps1`/`run_tests.*` ve Inno Setup installer kaldırıldı.
+> Kaynaktaki `PLATFORM_WINDOWS` dalları bilerek bırakıldı ama artık **bakımsız
+> ve test edilmemiş**. ⚠️ `main`'in branch protection ayarından `build-windows`
+> zorunlu check'i **elle kaldırılmalı**. Detay: CHANGELOG "natif Windows
+> desteği bırakıldı".
+>
 > **Geliştirme (yayınlanmadı) — 3D oyun katmanı:** TulparLang artık 3D oyun
 > yapabiliyor. Vendored raylib'in zaten derlenen 3D modülü **35 `tm3_*` builtin**
 > ile açığa çıkarıldı (Faz 0 kamera/küp/ızgara; Faz 1 primitifler + raycast
@@ -1491,7 +1500,30 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 **"Sıradaki adım"** satırıyla: bir sonraki oturuma cold-start
 girildiğinde ne yapacağımı bilelim.
 
-### 3D oyun katmanı — Faz 7-9 yol haritası
+### 3D oyun katmanı — Faz 7-9 yol haritası ✅ TAMAMLANDI (2026-08-04)
+
+**Durum (2026-08-04):** Faz 7, 8 ve 9 bitti; aşağıdaki maddelerin tamamı
+uygulandı ve `tests/scene3d_engine.test.tpr`de **49 headless test** ile
+korunuyor. Motor artık "gezilebilir sahne" değil, **üstüne oyun yazılabilir**:
+bölüm sistemi, düşman AI, mermi, can/hasar, parçacık, karakter animasyonu,
+konumsal ses, kamera-duvar çarpışması, şekil farkında (küre/kapsül/OBB)
+çarpışma, katı gövde çözümü ve rampalı zemin var. Örnek:
+`examples/scene3d_arena.tpr`. Detay: CHANGELOG "3D oyun motoru (Faz 7-9)".
+
+Uygulama sırasında iki hata çıktı ve düzeltildi (ikisi de CHANGELOG'da):
+`lib/test.tpr`'deki **`assert` bool koşullarda hiç başarısız olmuyordu** (yani
+test paketi yersiz yeşildi) ve **SAT ayırma vektörünün işareti terstiydi**
+(oyuncu duvardan dışarı değil içine itiliyordu).
+
+**Faz 10 — gerçek arazi ✅ (2026-08-04):** `GenMeshHeightmap` tabanlı yükseklik
+haritası bağlandı; dünya artık sorgulanabilir sürekli bir yüzey. Örnekleme
+mesh'in üçgenlemesini birebir taklit ediyor, yani fizik görselle tam uyuşuyor.
+Yükseklik verisi CPU'da / mesh GPU'da ayrıldığı için arazi fiziği headless test
+edilebiliyor. Örnek: `examples/scene3d_terrain.tpr`.
+
+**Bundan sonrası:** aşağıdaki "Faz 11+ backlog" bölümü.
+
+<details><summary>Özgün yol haritası (2026-08-01, Faz 6 sonrası) — tarihsel kayıt</summary>
 
 **Durum (2026-08-01, Faz 6 sonrası):** Faz 4-6'nın **üçü render'dı** (ışık,
 gölge, doku/gökyüzü/sis) + kamera. Sahne artık iyi görünüyor ve gezilebiliyor
@@ -1566,6 +1598,229 @@ bağlama + **`wasm/dist` ve `android/dist` yeniden derlemesi** demek.
   var, 3B'de tek demo (`scene3d_collector` + `scene3d_camera`). Karar
   (2026-08-01): motor "gezilebilir sahne"den "oyun yazılabilir"e geçmeden
   `tulparlang.dev/oyunlar`'a 3B oyun konmayacak.
+
+</details>
+
+### 3D oyun katmanı — Faz 11+ backlog
+
+**Yazıldığı an: 2026-08-04, Faz 10 sonrası.** Faz 7-10 motoru "gezilebilir
+sahne"den "üstüne oyun yazılabilir"e taşıdı. Aşağıdakiler o çalışma sırasında
+ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
+öneriyle yazıldı: önce güven altyapısı, sonra motor, sonra içerik.
+
+#### 🔴 Güven altyapısı — motor büyümeden önce
+
+- ✅ **54 test paketi artık CI'da (2026-08-04).** Bu paketler daha önce
+  HİÇBİR otomasyonda koşmuyordu — 49 testlik `scene3d_engine.test.tpr` dahil.
+  `assert` hatası tam olarak bu körlükte yaşadı: paketler yeşil görünüyordu
+  ama hiçbir şey doğrulamıyordu. Yeni `./build.sh suites` hedefi hepsini
+  koşuyor ve `build.yml`'de `./build.sh test`'ten sonra çağrılıyor.
+  Özet satırı üretmeyen paket de **hata** sayılıyor, çünkü `exit(1)`'i çağıran
+  şey `test_summary()`: onu unutan paket asla kırmızı olamaz. Dördü
+  (`arcade_movement`, `arcade_progression`, `methods`, `struct_native`) tam
+  olarak bu durumdaydı ve düzeltildi. Koşucunun her iki koruması da bilerek
+  hata sokularak doğrulandı.
+
+- ✅ **`assert` sınıfı denetimi tamamlandı (2026-08-06).** Tarama bir hata daha
+  buldu ve asıl kök nedeni ortaya çıkardı.
+  - **`assert_eq_bool` de no-op'muş.** İmzası `(int actual, int expected)`,
+    normalleştirmesi `actual != 0` idi. Bool için `!= 0` **her zaman true**, yani
+    iki taraf da 1'e normalleşiyor ve iddia asla başarısız olamıyordu. 15
+    dosyada 77 çağrı hiçbir şey doğrulamıyormuş. `assert` ile aynı düzeltme:
+    parametreler tipsiz, kontrol doğruluk-değeri üzerinden (`if (actual)`).
+    Düzeltildikten sonra 54 paket hâlâ geçti — iddialar doğruymuş, sadece
+    denetlenmiyorlarmış.
+  - **Kök neden: typechecker `import`'u takip etmiyordu.** Argüman denetimi
+    zaten vardı ve `assert(x < y, msg)`'yi (`bool` → `int cond`) anında
+    reddederdi; ama typeinfer hiçbir modülün kaynağını açmadığı için `assert`'ün
+    imzasını hiç görmedi. Yani `test`, `wings`, `router`, `orm`, `scene3d`,
+    `arcade` — **tüm stdlib çağrıları denetimsizdi.** `typeinfer_program` artık
+    AOT ile aynı çözüm sırasını kullanarak modülleri parse ediyor ve yalnızca
+    **imzalarını** (fonksiyon + struct) kaydediyor; gövdeler denetlenmiyor.
+  - **Yeni denetim: sabit karşılaştırma.** `==`/`!=` operandları farklı skaler
+    tiplerse uyarı. Çalışma zamanı önce tip etiketine baktığı için `b == 1` hep
+    false, `b != 0` hep **true**'dur. `int`/`float` mutually comparable kalıyor
+    (`1 == 1.0` gerçekten doğru).
+  - **Yol boyunca üç yanlış pozitif ayıklandı:** `json` artık her iki yönde
+    uyumlu (dinamik tip; 461 uyarının 418'i tek başına buydu), `if (<tipsiz
+    parametre>)` ve `if (<json>)` artık uyarı vermiyor (scene3d/arcade/wings'in
+    on/off ev stili), `int x = <bool>` **store**'da serbest — AOT gerçekten
+    dönüştürüyor (`tests/bool_to_int_coerce.test.tpr`), **call**'da değil.
+    Repoda kalan 6 uyarının hepsi bu çalışmadan önce de vardı (`bigint`,
+    `input` arity, `call` arg); ölçüldü ve doğrulandı.
+  - Regresyon: `tests/typeinfer/{pass,fail}/` altına 6 fixture. Üç `fail`
+    fixture'ının **doğru mesajla** reddedildiği tek tek doğrulandı.
+
+- 🟡 **Argüman sınırında bool→int dönüşümü yok.** Yukarıdaki asimetri dilin
+  kendisinde: `int x = true` ve `x = true` doğru dönüşüyor, ama `f(true)` →
+  `int` parametresi dönüşmüyor; değer bool kalıyor. `assert` hatası tam olarak
+  bu boşlukta doğdu. Artık typecheck yakalıyor, ama asıl çözüm codegen'de
+  parametre bağlamayı store ile aynı hale getirmek olurdu.
+
+- ✅ **Codegen: fonksiyon yereli aynı adlı GLOBAL'i eziyordu (düzeltildi
+  2026-08-06).**
+  ```tulpar
+  func inner() { int p = 0; while (p < 5) { p = p + 1; } }
+  int p = 99;  inner();  print(p);   // 99 değil, 5 yazıyordu
+  ```
+  **Sebep:** `AST_VARIABLE_DECL`'in iki global kısayolu da (natif int global
+  ve boxed VMValue global) yalnızca *"bu adda modül-düzeyi global var mı?"*
+  diye soruyor, bildirimin **fonksiyon gövdesi içinde** olup olmadığına
+  bakmıyordu. Fonksiyonun kendi `int p = 0;`i global'e yazıyor ve yerel hiç
+  ayrılmıyordu — sonraki `p = p + 1` de doğal olarak global'i sürüyordu.
+  **Neden bu kadar keyfî görünüyordu:** parametreler etkilenmiyordu (fonksiyon
+  girişinde gerçek alloca alıyorlar), yalnızca okuyan fonksiyonlar da
+  etkilenmiyordu. Ölçülen matris: yerel `int`/`float`/`str` ve `for`-init
+  bozuk, parametre ve salt-okuma sağlam.
+  **Düzeltme:** her iki kısayol da yalnız KÖK SCOPE'ta geçerli. Main'in scope'u
+  kök (parent'ı yok) ve her fonksiyon/lambda gövdesi onun üstüne biniyor —
+  global'i *okumanın* çalışmasının sebebi de bu, yani sinyal zaten oradaydı.
+  Üst düzey `if`/`while` blokları bilerek "üst düzey" sayılıyor: bloklar scope
+  açmıyor ve blok kapsamı olmayan bir dilde oradaki yeniden bildirim gerçekten
+  aynı değişkendir.
+  Regresyon: `tests/global_shadow.test.tpr` (10 test). Yalnız ezilmemeyi değil
+  **ters sözleşmeyi** de sabitliyor — fonksiyon global'i hâlâ okuyabilmeli ve
+  ATAYABİLMELİ (`scene3d`'nin `_lvl_pending3 = n` deseni), aksi hâlde düzeltme
+  fazla hevesli olurdu. Düzeltme geri alınarak doğrulandı: 6 test kırmızıya
+  döndü, 4 ters-sözleşme testi yeşil kaldı.
+
+#### 🔴 Motor — bilerek bırakılan ödünler
+
+- 🟡 **Çarpışma hâlâ O(n²) — ama sabiti 14× küçüldü (2026-08-06).** Önce
+  ÖLÇÜLDÜ, sonra optimize edildi; ölçüm beklentiyi yanlışladı.
+  - **Ölçüm (headless, `_s3_collision`):** 50 entity 0.87 ms, 100 → 3.88 ms,
+    200 → **15.4 ms** (60fps bütçesinin %92'si), 400 → 57 ms, 800 → 258 ms.
+  - **Beklenti yanlıştı.** Şüpheli `Ent3` struct kopyalarıydı; mikro-ölçüm
+    (200 entity, 40.000 çift) boş döngü ~0 ms, çift başına iki struct kopyası
+    1.8 ms, gerçek `_overlap3` **23.7 ms** dedi. Yani maliyet kopyada değil,
+    ZİNCİRİN KENDİSİNDE: şekil seçimi, `Ent3`i değerle alan yardımcılar
+    (`_is_round3`, `_radius3`), tekrar tekrar dizi okuması. Doğru hamle zinciri
+    hızlandırmak değil, **çağırmamak**.
+  - **Geniş faz.** Kareye bir kez düz dizilere konum + kapsayan küre yarıçapı
+    (kutunun köşegen yarısı) yazılıyor; kürelerin ayrık olduğu çiftler zincire
+    hiç girmiyor. Eleme struct kopyasından ÖNCE, yani kopya da kazanılıyor.
+    Yarıçap seçimi kutu/küre/silindiri ve **dönük** kutuyu kapsıyor
+    (döndürme kürenin yarıçapını değiştirmez; silindir için Minkowski).
+  - **Sonuç:** 200 entity 15.4 → **1.12 ms** (bütçenin %92'si → %6.7),
+    800 entity 258 → 16.8 ms. Her ölçekte ~14×. Pratik tavan ~200'den
+    ~800 entity'e çıktı.
+  - **Hâlâ O(n²).** Uniform grid asimptotik çözüm olmayı sürdürüyor, ama artık
+    çok daha ucuz: düz konum/yarıçap dizileri grid'in zaten ihtiyaç duyacağı
+    zemin. 800 entity üstüne çıkılmadıkça getirisi yok.
+  - Regresyon: 3 test (`t_broadphase_conservative` tüm çiftlerde
+    `_bp_far3 ⟹ ¬_overlap3` değişmezini karışık şekil/yaw üzerinde tarar,
+    `_prunes` elemenin sessizce kaybolmasını yakalar, `_sync_after_push`
+    itme/ışınlanma sonrası bayatlığı yakalar). Üçü de **bilerek hata
+    sokularak** doğrulandı ve üçü de doğru testle kırmızıya döndü.
+
+- 🟡 **Küre ↔ DÖNÜK kutu yaklaşık.** `_sph_box3` kutuyu eksen-hizalı
+  varsayıyor; kutu-kutu çifti tam SAT'tan geçiyor ama küre-kutu geçmiyor.
+  Faz 9'da bilerek bırakıldı, kodda not düşülü.
+
+- ✅ **Arazide eğim sınırı + kayma eklendi (2026-08-06).** **Binding
+  gerekmedi.** STATUS `tm3_terrain_normal` öneriyordu, ama `terrain_height3d`
+  zaten mesh'in üçgenlemesini birebir taklit ediyor — normal, komşu
+  örneklerden **merkezi farkla** saf Tulpar'da türetiliyor. Böylece 5 noktalık
+  bağlama da, wasm/android arşivlerini yeniden derlemek de tamamen atlandı ve
+  özellik üç hedefte anında çalıştı. Merkezi fark hücre sınırlarını
+  yumuşatıyor; üçgen bazlı kesin normal keskin sıçrar ve kayma titrerdi.
+  - `slope_limit3d(derece)` / `egim_siniri3d`, `slide_accel3d`, ve sorgular
+    `terrain_up3d` (eğimin **kosinüsü** — dilde `acos` yok ve karşılaştırma
+    zaten kosinüs üzerinden), `terrain_steep3d` / `arazi_dik_mi3d`.
+  - **Varsayılan KAPALI**, bilerek: eğim sınırı doğruluk değil tasarım
+    tercihi (bazı oyunlar serbest tırmanma ister). Açmayan sahne bit-bit
+    eskisi gibi. `examples/scene3d_terrain.tpr` 38° ile açıyor.
+  - Yamaç aşağı yön ayrıca hesaplanmıyor: normalin yatay bileşeni zaten
+    tepeden dışarı bakıyor.
+
+- ✅ **Kamera ışını artık zemini görüyor (2026-08-06).** `_cam_clear_t3` yalnız
+  `TAG_WALL` AABB'lerini tarıyordu; arazi bir kutu olmadığı için kamera
+  tepenin içine girip sahneyi topraktan gösteriyordu. Arazide kapalı biçimli
+  bir kesişim yok, o yüzden ışın boyunca 14 örnek yürünüp zeminin altına
+  düşülen ilk yer bulunuyor. `_floor_at3` kullanıldığı için **rampalar da
+  bedavaya** kapsandı — onlar da `TAG_WALL` olmadıkları için taramanın
+  dışındaydı.
+
+- 🟢 **Rampa artık gereksiz olabilir.** Faz 9'un rampası kademeli çiziliyor
+  (raylib'de kama primitifi yok) ve arazi geldiğine göre çoğu kullanım
+  arazinin işi. Ya gerçek kama mesh'i üretilmeli ya da rampa "arazi yokken
+  kullanılan basit yol" olarak konumlandırılmalı.
+
+#### 🟡 Oyun yapımı — motorun hâlâ vermediği şeyler
+
+- 🟡 **Düşman yol bulma yok.** `chase3d` düz çizgi; düşman duvara toslayıp
+  takılıyor. En az bir "engelden kaç" davranışı (duvara değince yana kay) ya
+  da arazi/duvar ızgarası üzerinde A*.
+- 🟡 **Animasyon geçişi/harmanlama yok.** `anim3d` boşta↔koşu arasında sert
+  geçiyor. Geçiş süresi + harmanlama.
+- 🟡 **Kayıt/yükleme 3B'ye bağlı değil.** `kayit_yaz`/`kayit_oku` tame'de var,
+  `scene3d` kullanmıyor (arcade kullanıyor). Bölüm ilerlemesi, en yüksek skor.
+- 🟡 **Gamepad `scene3d`'de yok.** tame'de binding var (`gamepad_down`,
+  `gamepad_axis`); hareket/kamera preset'lerine bağlanmalı.
+- ✅ **Menü/UI katmanı eklendi (2026-08-06, Faz 11).** Motor Faz 7-10'da
+  "üstüne oyun yazılabilir" olmuştu ama **yayınlanabilir** değildi: oyun-bitti
+  ekranı yalnız yazı basıyordu, hiçbir tuş iş yapmıyordu, tek çıkış pencereyi
+  kapatmaktı.
+  - **Ön koşul bir tame binding'iymiş.** raylib `InitWindow`'da çıkış tuşunu
+    ESC'ye kuruyor: ESC'ye basılınca `WindowShouldClose()` true dönüyor ve
+    döngü bitiyor — yani ESC Tulpar tarafında **yakalanamıyordu**. Duraklat
+    menüsünün kurulamamasının tek sebebi buydu. `tm_exit_key(k)` eklendi
+    (`exit_key`/`cikis_tusu`); `scene3d` `exit_key(K_NONE)` ile kestirmeyi
+    kapatıyor ve ESC sıradan bir tuş oluyor.
+  - **Başlangıç ekranı opt-in** (`menu3d(baslik, altbaslik)` /
+    `baslangic3d`). Çağırmayan sahne bit-bit eskisi gibi doğrudan oyuna girer.
+  - **Duraklat** her zaman açık (ESC/P/GERİ): Devam / Yeniden / Çıkış.
+    Duraklatınca oyun **donar** — bakış, update, fizik, çarpışma ve parçacık
+    hepsi atlanır; sahne yine çizilir.
+  - **Oyun-bitti ekranı** artık gerçek: skor + "Tekrar Oyna" / "Çıkış".
+  - **`restart3d()`** sırayla: bölüm varsa en küçüğüne döner, yoksa
+    `on_restart3d(fn)` kancasını çağırır, o da yoksa yalnız skoru/durumu
+    sıfırlar (belgelenmiş sınır — motor `setup`u tek başına tekrarlayamaz,
+    çünkü setup kancaları da kaydediyor ve ikinci çalıştırma onları çoğaltırdı).
+  - Her düğme **klavye + fare + dokunmatik** ile çalışır; menü açıkken imleç
+    kilidi otomatik bırakılıyor (FPS modunda düğmeye tıklanamazdı).
+  - Yan kazanç: `is_over3d()` / `bitti_mi3d()` ve `alive_count3d()` —
+    arcade'de karşılıkları vardı, 3B'de yoktu.
+  - Regresyon: 9 test (`tests/scene3d_engine.test.tpr`, 52 → 61). Biri
+    yazarken gerçek bir hata yakaladı: kanca `int` global'de saklanıyordu ve
+    fonksiyon referansı natif i64'e kırpılıyordu — dosyadaki diğer kancalar
+    zaten `var` kullanıyordu.
+
+- 🟢 **Menü katmanının vermedikleri.** arcade'de olan ama 3B'ye taşınmayanlar:
+  ayarlar ekranı (ses/dil/FPS), rozet/başarım, skor tablosu, bölüm seçimi.
+  Yayın için şart değil; oyun sayısı artınca değerlenir.
+  `on_hud3d` var ama her oyun kendi menüsünü elden yazıyor.
+- 🟢 **Tetikleyici bölge** (`solid3d(false)` + kanca ile taklit edilebiliyor)
+  için adı konmuş bir API: `trigger3d(...)`.
+- 🟢 **Konumsal seste yön yok** — yalnız mesafe zayıflatması var, stereo
+  kaydırma (panning) yok.
+
+#### 🟡 Görsel
+
+- 🟡 **Arazi tek renk.** Yüksekliğe/eğime göre katman boyama (çim/kaya/kar)
+  shader işi; `tm3_terrain_*` ailesine doku katmanı eklenmeli.
+- 🟢 Gökyüzü dokusu (şu an yalnız degrade), su yüzeyi, gündüz/gece döngüsü.
+- 🟢 Parçacıklarda dönme/doku atlası yok; tek boy billboard.
+
+#### 🟢 Yayın ve belgeler
+
+- 🟢 **3B oyun `tulparlang.dev/oyunlar`'a konabilir** — Faz 7 şartı sağlandı
+  (karar 2026-08-01'de "Faz 7 bitmeden yayınlanmayacak" idi). Adaylar:
+  `scene3d_arena`, `scene3d_terrain`.
+- 🟢 **`scene3d` API belgesi yok.** arcade'in Starlight sayfası var, 3B'nin
+  yok. ~120 fonksiyon (TR+EN alias'larla).
+- 🟢 **3B örneklerin İngilizce ikizi yok.** `examples/en/` altında arcade
+  ikizleri var, `scene3d_*` için yok.
+
+#### 🟢 Temizlik
+
+- 🟢 **Windows shim'leri ölü kod.** Natif Windows 3.13.0'da bırakıldı ama
+  `src/common/platform*.h` içindeki `PLATFORM_WINDOWS`/`_WIN32` dalları
+  bilerek duruyor (sökmek büyük ve riskli bir refactor). Artık bakımsız ve
+  test edilmemiş sayılıyorlar; istenirse ayrı bir işte temizlenebilir.
+- 🟢 **`%` operatörü dilde yok** — `mod()` var. Faz 8'de animasyon karesini
+  sararken yazıldı ve sözcükleyici hatası verdi; üstelik hata **modülü
+  sessizce kesiyor** ve alakasız bir "fonksiyon bulunamadı" olarak görünüyor.
 
 ### Dil seviyesi
 

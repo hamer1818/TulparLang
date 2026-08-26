@@ -103,6 +103,30 @@ func circle(x, y, radius, color) { tm_circle(x, y, radius, color); }
 func line(x1, y1, x2, y2, color) { tm_line(x1, y1, x2, y2, color); }
 func pixel(x, y, color) { tm_pixel(x, y, color); }
 func text(s, x, y, size, color) { tm_text(s, x, y, size, color); }
+// Metnin piksel genişliği — arayüz yerleşimi (panel sütunu, düğme kutusu)
+// buna dayanıyor; karakter sayısından tahmin etmek yazı tipi değişince bozulur.
+func text_width(s, size): int { return tm_text_width(s, size); }
+
+// ---- Render texture --------------------------------------------------------
+// Sahneyi ekrana değil bir dokuya çizmek. Editörün 3B görünümü tam ekran değil,
+// panellerin arasındaki dikdörtgen; doğrudan çizip kırpmak yetmez çünkü kamera
+// izdüşümü pencerenin en-boy oranını kullanır ve görüntü ezik çıkar.
+// Çizimi bir dikdörtgene kırp — panel içine kaydırılabilir içerik için.
+func scissor(x, y, w, h) { tm_scissor(x, y, w, h); }
+func kirp(x, y, w, h)    { tm_scissor(x, y, w, h); }
+func scissor_end() { tm_scissor_end(); }
+func kirp_bitir()  { tm_scissor_end(); }
+
+func render_target(w, h): int { return tm_rt_new(w, h); }
+func render_hedef(w, h): int  { return tm_rt_new(w, h); }
+func render_target_free(t) { tm_rt_free(t); }
+func render_hedef_sil(t)   { tm_rt_free(t); }
+func render_target_w(t): int { return tm_rt_w(t); }
+func render_target_h(t): int { return tm_rt_h(t); }
+func render_to(t) { tm_rt_begin(t); }
+func render_to_screen() { tm_rt_end(); }
+func render_draw(t, x, y) { tm_rt_draw(t, x, y); }
+func metin_genisligi(s, boy): int { return tm_text_width(s, boy); }
 
 // ---- Girdi -----------------------------------------------------------------
 // Tuş adları: "A".."Z", "0".."9", "SPACE", "ENTER", "ESC", "TAB",
@@ -111,6 +135,11 @@ func text(s, x, y, size, color) { tm_text(s, x, y, size, color); }
 
 func key_down(k): bool { return tm_key_down(k); }       // şu an basılı mı
 func key_pressed(k): bool { return tm_key_pressed(k); } // bu karede basıldı (tek tetik)
+// Klavyeden gelen sıradaki unicode karakter (yoksa 0). Tuş KODU değil KARAKTER
+// verir — yani düzen ve shift uygulanmış hâli; metin alanı için gereken bu.
+// Kuyruk boşalana kadar aynı karede tekrar tekrar çağrılabilir.
+func char_pressed(): int { return tm_char_pressed(); }
+func karakter_geldi(): int { return tm_char_pressed(); }
 func key_released(k): bool { return tm_key_released(k); }
 
 // Fare düğmeleri: 0 = sol, 1 = sağ, 2 = orta.
@@ -134,6 +163,11 @@ func cursor_lock(on) { tm_cursor_lock(on); }
 func imlec_kilitle(on) { tm_cursor_lock(on); }
 func cursor_locked(): bool { return tm_cursor_locked(); }
 func imlec_kilitli(): bool { return tm_cursor_locked(); }
+// Pencereyi kapatan tuş. raylib varsayılanı ESC — yani ESC'ye basıldığında
+// running() false döner ve ESC Tulpar tarafında HİÇ yakalanamaz. exit_key(0)
+// bu kestirmeyi kapatır; duraklat menüsü kurmanın ön koşulu budur.
+func exit_key(k) { tm_exit_key(k); }
+func cikis_tusu(k) { tm_exit_key(k); }
 
 // Dokunma (mobil). Çok parmak desteklenir; parmak index'i 0'dan başlar.
 // Masaüstünde raylib tek dokunuşu fareye maplediği için mouse_* de çalışır,
@@ -173,6 +207,9 @@ func unload_texture(tex) { tm_unload_texture(tex); }
 // aynı tut).
 func load_font(path, size): int { return tm_load_font(path, size); }
 func text_font(f, s, x, y, size, color) { tm_text_font(f, s, x, y, size, color); }
+// Yüklenmiş fontla metnin genişliği — çizimle aynı harf aralığını kullanıyor.
+func font_width(f, s, size): int { return tm_font_width(f, s, size); }
+func font_genisligi(f, s, boy): int { return tm_font_width(f, s, boy); }
 // Varsayılan fontla yazının piksel genişliği — ortalamak için:
 //   text(s, (screen_width() - measure_text(s, 24)) / 2, y, 24, WHITE);
 func measure_text(s, size): int { return tm_measure_text(s, size); }
@@ -185,6 +222,9 @@ func load_sound(path): int { return tm_load_sound(path); }
 func play_sound(s) { tm_play_sound(s); }
 func stop_sound(s) { tm_stop_sound(s); }
 func sound_volume(s, v) { tm_sound_volume(s, v); }
+// DİKKAT — raylib anlamı ters: 0.0 SAĞ, 0.5 merkez, 1.0 SOL.
+func sound_pan(s, p) { tm_sound_pan(s, p); }
+func ses_kaydir(s, p) { tm_sound_pan(s, p); }
 
 func load_music(path): int { return tm_load_music(path); }
 func play_music(m) { tm_play_music(m); }
@@ -199,6 +239,14 @@ func save_data(name, text): bool { return tm_save_data(name, text); }
 func kayit_yaz(name, text): bool { return tm_save_data(name, text); }
 func load_data(name): str { return tm_load_data(name); }
 func kayit_oku(name): str { return tm_load_data(name); }
+// Metni KULLANICIYA verir: web'de tarayıcı indirmesi, masaüstü/Android'de
+// dosyaya yazar. kayit_yaz sayfanın içinde kalır (localStorage); dosyayı
+// tarayıcıdan DIŞARI çıkarmanın yolu budur.
+func download(name, text): bool { return tm_download(name, text); }
+func indir(ad, yazi): bool { return tm_download(ad, yazi); }
+// Tarayıcıda mıyız? Dosya yolu / komut satırı web'de anlamsız.
+func is_web(): bool { return tm_is_web(); }
+func web_mi(): bool { return tm_is_web(); }
 // Titreşim: Android'de cihazı ms milisaniye titretir; masaüstü/web no-op.
 func vibrate(ms) { tm_vibrate(ms); }
 func titret(ms)  { tm_vibrate(ms); }
@@ -240,6 +288,9 @@ func cube(x, y, z, w, h, d, color) { tm3_cube(x, y, z, w, h, d, color); }
 func kup(x, y, z, w, h, d, color)  { tm3_cube(x, y, z, w, h, d, color); }
 
 // Tel-çerçeve küp/kutu.
+// Dönük kutu — yaw'lı cisimler bununla çizilmeli, yoksa görüntü çarpışmadan kayar.
+func cube_rot(x, y, z, w, h, d, yaw, color) { tm3_cube_rot(x, y, z, w, h, d, yaw, color); }
+func kup_donuk(x, y, z, w, h, d, yaw, color) { tm3_cube_rot(x, y, z, w, h, d, yaw, color); }
 func cube_wires(x, y, z, w, h, d, color) { tm3_cube_wires(x, y, z, w, h, d, color); }
 func kup_tel(x, y, z, w, h, d, color)    { tm3_cube_wires(x, y, z, w, h, d, color); }
 
@@ -304,6 +355,10 @@ func gen_cylinder(r, h, slices): int { return tm3_gen(3, r, h, slices, 0); }
 func gen_silindir(r, h, slices): int { return tm3_gen(3, r, h, slices, 0); }
 func gen_torus(radius, size, seg, sides): int { return tm3_gen(4, radius, size, seg, sides); }
 func gen_cone(r, h, slices): int     { return tm3_gen(5, r, h, slices, 0); }
+// KAMA: raylib'de bu primitif yok, mesh'i tame kuruyor. Kutu gibi
+// ORTALANMIŞ; tepe yüzeyi -z ucunda tabanda, +z ucunda tavanda.
+func gen_wedge(w, h, d): int         { return tm3_gen(7, w, h, d, 0); }
+func gen_kama(w, h, d): int          { return tm3_gen(7, w, h, d, 0); }
 func gen_koni(r, h, slices): int     { return tm3_gen(5, r, h, slices, 0); }
 func gen_knot(radius, size, seg, sides): int  { return tm3_gen(6, radius, size, seg, sides); }
 
@@ -326,6 +381,10 @@ func anim_frames(h, idx): int   { return tm3_anim_frames(h, idx); }
 func anim_kare_sayisi(h, idx): int { return tm3_anim_frames(h, idx); }
 func anim_play(h, idx, frame)   { tm3_anim(h, idx, frame); }
 func anim_oynat(h, idx, frame)  { tm3_anim(h, idx, frame); }
+// İki pozu harmanlar: w=0 → A, w=1 → B. Boşta↔koşu geçişini yumuşatır;
+// tek karede animasyon değiştirmek karakteri sıçratıyordu.
+func anim_blend(h, ia, fa, ib, fb, w)     { tm3_anim_blend(h, ia, fa, ib, fb, w); }
+func anim_harmanla(h, ia, fa, ib, fb, w)  { tm3_anim_blend(h, ia, fa, ib, fb, w); }
 func unload_model(h) { tm3_unload_model(h); }
 func model_sil(h)    { tm3_unload_model(h); }
 
@@ -406,6 +465,67 @@ func golge_aktif(): bool    { return tm3_shadows_active(); }
 func checker(w, h, cells, c1, c2): int { return tm_checker(w, h, cells, c1, c2); }
 func damali(w, h, cells, c1, c2): int  { return tm_checker(w, h, cells, c1, c2); }
 
+// Billboard: kameraya her zaman dönük dörtgen. tex < 0 → dokusuz düz renk.
+// Parçacık/kıvılcım/duman ve 3B etiketlerin tek doğru çizim yolu.
+func billboard3d(tex, x, y, z, size, color) { tm3_billboard(tex, x, y, z, size, color); }
+func tabela3d(tex, x, y, z, size, color)    { tm3_billboard(tex, x, y, z, size, color); }
+// Dokusuz kısayol — parçacık için tipik kullanım.
+func spark3d(x, y, z, size, color) { tm3_billboard(0 - 1, x, y, z, size, color); }
+// Döndürülebilir + atlas kareli billboard. rot DERECE, dönme merkezi
+// dörtgenin ORTASI (köşe olsaydı dönme aynı zamanda yer değiştirme olurdu).
+// frame < 0 → dokunun tamamı.
+func billboard_pro3d(tex, x, y, z, size, rot, frame, color) {
+    tm3_billboard_pro(tex, x, y, z, size, rot, frame, color);
+}
+func tabela_pro3d(tex, x, y, z, boy, aci, kare, renk) {
+    tm3_billboard_pro(tex, x, y, z, boy, aci, kare, renk);
+}
+// Dokuyu cols×rows atlas olarak işaretle — ızgara dokunun özelliği.
+func atlas_grid3d(tex, cols, rows) { tm3_atlas_grid(tex, cols, rows); }
+func atlas_izgara3d(tex, sutun, satir) { tm3_atlas_grid(tex, sutun, satir); }
+func atlas_frames3d(tex): int { return tm3_atlas_frames(tex); }
+func atlas_kare_sayisi3d(tex): int { return tm3_atlas_frames(tex); }
+func kivilcim3d(x, y, z, size, color) { tm3_billboard(0 - 1, x, y, z, size, color); }
+
+// Dünya → ekran izdüşümü: 3B bir noktaya bağlı 2B çizim (can barı, isim
+// etiketi, hasar sayısı) için. space_end()'den SONRA çizilir.
+func screen_x3d(x, y, z): float { return tm3_screen_x(x, y, z); }
+func screen_y3d(x, y, z): float { return tm3_screen_y(x, y, z); }
+func ekran_x3d(x, y, z): float  { return tm3_screen_x(x, y, z); }
+func ekran_y3d(x, y, z): float  { return tm3_screen_y(x, y, z); }
+
+// Gerçek arazi (heightmap). Model handle'ı döner — çizimi draw_model ile,
+// dolayısıyla gölge/ışık bedava. Arazi XZ'de dünya merkezinde ORTALIdır.
+func terrain_gen3d(res, sx, sy, sz, base, scale, seed): int {
+    return tm3_terrain_gen(res, sx, sy, sz, base, scale, seed);
+}
+func terrain_load3d(path, sx, sy, sz, base): int {
+    return tm3_terrain_load(path, sx, sy, sz, base);
+}
+func terrain_height3d(x, z): float { return tm3_terrain_height(x, z); }
+func terrain_off3d() { tm3_terrain_off(); }
+func arazi_uret3d(res, sx, sy, sz, taban, olcek, tohum): int {
+    return tm3_terrain_gen(res, sx, sy, sz, taban, olcek, tohum);
+}
+func arazi_yukle3d(yol, sx, sy, sz, taban): int {
+    return tm3_terrain_load(yol, sx, sy, sz, taban);
+}
+func arazi_yukseklik3d(x, z): float { return tm3_terrain_height(x, z); }
+func arazi_kapat3d() { tm3_terrain_off(); }
+
+// Katman boyama: yükseklik + eğime göre çim/toprak/kar/kaya. Araziden ÖNCE
+// çağır — mesh üretim anında boyanıyor.
+func terrain_layers3d(low, mid, high, rock, mid_y, high_y, rock_slope) {
+    tm3_terrain_layers(low, mid, high, rock, mid_y, high_y, rock_slope);
+}
+func terrain_layer3d(x, z): int { return tm3_terrain_layer(x, z); }
+func terrain_layers_off3d() { tm3_terrain_layers_off(); }
+func arazi_katman3d(alt, orta, ust, kaya, orta_y, ust_y, egim) {
+    tm3_terrain_layers(alt, orta, ust, kaya, orta_y, ust_y, egim);
+}
+func arazi_katmani3d(x, z): int { return tm3_terrain_layer(x, z); }
+func arazi_katman_kapat3d() { tm3_terrain_layers_off(); }
+
 func texture3d(t, tu, tv) { tm3_texture(t, tu, tv); }
 func doku3d(t, tu, tv)    { tm3_texture(t, tu, tv); }
 func no_texture3d() { tm3_texture(0 - 1, 1.0, 1.0); }
@@ -426,6 +546,14 @@ func parlak3d() { tm3_material(48.0, 1.4); }
 func sky(top, bottom): bool     { return tm3_sky(top, bottom); }
 func gokyuzu(top, bottom): bool { return tm3_sky(top, bottom); }
 func sky_off()        { tm3_sky_off(); }
+// Gökyüzü yıldızları (prosedürel, shader'da): 0 kapalı, 1 tam.
+func sky_stars3d(i)   { tm3_sky_stars(i); }
+// Bulut kapsaması 0..1 (0 = açık gökyüzü). Prosedürel: gökyüzü kubbesinin
+// shader'ında üretiliyor, ayrı çizim yok — dolayısıyla dağlar bulutları
+// doğru şekilde örtüyor.
+func sky_clouds3d(coverage) { tm3_sky_clouds(coverage); }
+func gok_bulut3d(kapsama) { tm3_sky_clouds(kapsama); }
+func yildiz3d(i)      { tm3_sky_stars(i); }
 func gokyuzu_kapat()  { tm3_sky_off(); }
 
 // Mesafe sisi — gökyüzü ile zemin arasındaki sert ufuk çizgisini kapatır ve
