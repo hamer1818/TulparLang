@@ -173,6 +173,23 @@ her yerde değil.
 
 Yeni süit: `tests/bool_to_int_arg.test.tpr` (7 test) + `typeinfer/pass/06`.
 
+### Fixed — `packages/` testleri CI'da bağlanamıyordu (yerelde görünmüyordu)
+
+AOT bağlayıcısının arşiv arama yolları ÇALIŞMA DİZİNİNE göre üretiliyordu
+(`./build-linux`). `packages/<ad>` altındaki testler oradan koşmak ZORUNDA —
+paketin kendi `import "<ad>"`i çalışma dizinine göre çözülüyor — ve o dizinden
+bakınca yol `packages/<ad>/build-linux` oluyor, yani yok. Sonuç:
+"libtulpar_runtime.a mevcut mu?" deyip düşmek.
+
+**Geliştirici makinesinde görünmüyordu**, çünkü `build.sh` arşivi depo köküne
+kopyalıyor ve exe dizini önce aranıyor. CI ise `build.sh` ile değil doğrudan
+`cmake` ile derliyor, dolayısıyla o kopya hiç oluşmuyor — ve orada kırmızıya
+döndü. Yerelde birebir tekrar üretildi: kökteki arşivler kaldırılınca aynı
+hata çıkıyor.
+
+Adaylar artık hem çalışma dizinine hem EXE DİZİNİNE göre üretiliyor, yani
+bağlama hangi dizinden çalışıldığından bağımsız.
+
 ### Fixed — çarpışma O(n²)'den çıktı; ve asıl darboğaz çarpışma değilmiş
 
 TODO "~800 entity üstüne çıkılmadıkça getirisi yok" diyordu. Ölçüm bunu

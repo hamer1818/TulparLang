@@ -211,18 +211,30 @@ static std::string build_link_search_dirs() {
   // Çözüm: exe dizinindeki arşiv geliştirme ağacındakinden ESKİYSE, arama
   // sırası ters çevriliyor. Kurulu bir tulpar'da geliştirme dizini zaten
   // yok, yani orada davranış değişmiyor.
-  std::vector<std::string> dev_dirs;
-#if PLATFORM_WINDOWS
-  dev_dirs.push_back("./build-windows");
-  dev_dirs.push_back("./build-windows/Release");
-#elif PLATFORM_MACOS
-  dev_dirs.push_back("./build-macos");
-#else
-  dev_dirs.push_back("./build-linux");
-#endif
-  dev_dirs.push_back("./build");
-
+  // Adaylar hem ÇALIŞMA DİZİNİNE hem EXE DİZİNİNE göre üretiliyor.
+  //
+  // Yalnız CWD'ye göre üretmek sinsi bir hataydı: `packages/<ad>` altından
+  // koşan testler (paketin `import "<ad>"`i çalışma dizinine göre çözüldüğü
+  // için oradan koşmak ZORUNDA) `./build-linux`i `packages/<ad>/build-linux`
+  // diye arıyor, bulamıyor ve "libtulpar_runtime.a mevcut mu?" diyip
+  // düşüyorlardı. Geliştirici makinesinde bu görünmüyordu, çünkü orada
+  // arşivin kökte bir kopyası duruyor ve exe dizini onu buluyor; CI'da o
+  // kopya yoksa kırmızıya dönüyordu — nitekim döndü.
   std::string exe_dir = get_executable_dir();
+  std::vector<std::string> dev_dirs;
+  auto add_dev = [&](const char *rel) {
+    dev_dirs.push_back(std::string("./") + rel);
+    if (!exe_dir.empty()) dev_dirs.push_back(exe_dir + "/" + rel);
+  };
+#if PLATFORM_WINDOWS
+  add_dev("build-windows");
+  add_dev("build-windows/Release");
+#elif PLATFORM_MACOS
+  add_dev("build-macos");
+#else
+  add_dev("build-linux");
+#endif
+  add_dev("build");
   bool dev_first = false;
   if (!exe_dir.empty()) {
     struct stat se;
