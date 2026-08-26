@@ -1608,7 +1608,7 @@ sahne"den "üstüne oyun yazılabilir"e taşıdı. Aşağıdakiler o çalışma 
 ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 öneriyle yazıldı: önce güven altyapısı, sonra motor, sonra içerik.
 
-#### 🔴 Güven altyapısı — motor büyümeden önce
+#### ✅ Güven altyapısı — hepsi kapandı
 
 - ✅ **54 test paketi artık CI'da (2026-08-04).** Bu paketler daha önce
   HİÇBİR otomasyonda koşmuyordu — 49 testlik `scene3d_engine.test.tpr` dahil.
@@ -1651,11 +1651,18 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   - Regresyon: `tests/typeinfer/{pass,fail}/` altına 6 fixture. Üç `fail`
     fixture'ının **doğru mesajla** reddedildiği tek tek doğrulandı.
 
-- 🟡 **Argüman sınırında bool→int dönüşümü yok.** Yukarıdaki asimetri dilin
-  kendisinde: `int x = true` ve `x = true` doğru dönüşüyor, ama `f(true)` →
-  `int` parametresi dönüşmüyor; değer bool kalıyor. `assert` hatası tam olarak
-  bu boşlukta doğdu. Artık typecheck yakalıyor, ama asıl çözüm codegen'de
-  parametre bağlamayı store ile aynı hale getirmek olurdu.
+- ✅ **Argüman sınırında bool→int geldi (2026-08-25).** Asimetri kapandı:
+  çağrılan tarafın parametre önsözü artık bildirimle AYNI yardımcıyı çağırıyor
+  (`llvm_coerce_bool_tag_to_int`), yani ikisi ayrışamıyor.
+  Hata SESSİZDİ ve bu yüzden bu kadar yaşadı: aritmetik yol değeri zaten
+  zorluyordu (`x + 10` doğru çıkıyor), ama karşılaştırma ÖNCE tip etiketine
+  bakıyor — `f(true)` çağrısından sonra gövdedeki `x == 1` HER ZAMAN false idi.
+  Ölçüldü. `assert` hatasının kökü buydu ve typecheck düzeltmesinden sonra da
+  codegen tarafında AÇIK KALMIŞTI.
+  typecheck'in çağrı sınırındaki reddi de kalktı — kural codegen'in ESKİ
+  davranışını yansıtıyordu ve artık çalışan bir şeyi reddediyordu.
+  Regresyon: `tests/bool_to_int_arg.test.tpr` (7 test) + `typeinfer/pass/06`.
+  Bozma denendi: dönüşümü kaldırınca 7 testin 5'i kırmızı.
 
 - ✅ **Codegen: fonksiyon yereli aynı adlı GLOBAL'i eziyordu (düzeltildi
   2026-08-06).**
@@ -1684,9 +1691,10 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   fazla hevesli olurdu. Düzeltme geri alınarak doğrulandı: 6 test kırmızıya
   döndü, 4 ters-sözleşme testi yeşil kaldı.
 
-#### 🔴 Motor — bilerek bırakılan ödünler
+#### ✅ Motor — bilerek bırakılan ödünlerin hepsi kapandı
 
-- 🟡 **Çarpışma hâlâ O(n²) — ama sabiti 14× küçüldü (2026-08-06).** Önce
+- ✅ **Çarpışma O(n²)'den çıktı (2026-08-26).** Önce geniş faz sabiti 14×
+  küçüldü (2026-08-06), sonra ızgara asimptotu kırdı. Önce
   ÖLÇÜLDÜ, sonra optimize edildi; ölçüm beklentiyi yanlışladı.
   - **Ölçüm (headless, `_s3_collision`):** 50 entity 0.87 ms, 100 → 3.88 ms,
     200 → **15.4 ms** (60fps bütçesinin %92'si), 400 → 57 ms, 800 → 258 ms.
@@ -1704,18 +1712,41 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   - **Sonuç:** 200 entity 15.4 → **1.12 ms** (bütçenin %92'si → %6.7),
     800 entity 258 → 16.8 ms. Her ölçekte ~14×. Pratik tavan ~200'den
     ~800 entity'e çıktı.
-  - **Hâlâ O(n²).** Uniform grid asimptotik çözüm olmayı sürdürüyor, ama artık
-    çok daha ucuz: düz konum/yarıçap dizileri grid'in zaten ihtiyaç duyacağı
-    zemin. 800 entity üstüne çıkılmadıkça getirisi yok.
+  - **✅ Uniform ızgara geldi (2026-08-26) — ve bu maddenin tahmini yanlıştı.**
+    "800 entity üstüne çıkılmadıkça getirisi yok" ölçümle çürüdü: 400 entity'de
+    kare **15.9 ms** sürüyor, yani 60 fps bütçesi (16.7 ms) ZATEN aşılmış.
+    Gerçek eşik ~300.
+    Ölçüm darboğazın nerede OLMADIĞINI da gösterdi: ızgara yazılıp çarpışma
+    taramalarına uygulandı ve tablo HİÇ DEĞİŞMEDİ. Sebep `_ramp_floor3` —
+    zemin sorgusu entity başına bütün entity'leri geziyor ve her adımda bir
+    `Ent3` struct kopyası alıyordu. Maliyet çarpışmada değil ZEMİN
+    SORGUSUNDAYDI.
+    Rampa dizini (kare başına bir kez, O(n)) + beş taramaya uygulanan ızgara:
+
+    | entity | fizik önce | fizik sonra | fizik+çarpışma önce | sonra |
+    |---|---|---|---|---|
+    | 400 | 15.94 | 0.66 | 15.55 | 3.14 |
+    | 800 | 69.43 | 1.28 | 59.96 | 8.92 |
+    | 1600 | 470.39 | 2.55 | — | — |
+
+    Hücre kenarı = en büyük kapsayan küre ÇAPI; bu 3×3 taramasını korumalı
+    yapıyor. Izgara sarmalı (64×64), yani dünya büyüklüğünden bağımsız.
+    Doğruluk KABA KUVVETLE karşılaştırılıyor (hem kanca hem veri-kural yolu):
+    hızlı ve yanlış bir geniş faz, yavaş ve doğru olandan kötüdür — kaçırılan
+    çarpışma sessizdir.
+    Kalan: `_grid_near3` her çağrıda yeni dizi ayırıyor; 800 üstünde bakılabilir.
   - Regresyon: 3 test (`t_broadphase_conservative` tüm çiftlerde
     `_bp_far3 ⟹ ¬_overlap3` değişmezini karışık şekil/yaw üzerinde tarar,
     `_prunes` elemenin sessizce kaybolmasını yakalar, `_sync_after_push`
     itme/ışınlanma sonrası bayatlığı yakalar). Üçü de **bilerek hata
     sokularak** doğrulandı ve üçü de doğru testle kırmızıya döndü.
 
-- 🟡 **Küre ↔ DÖNÜK kutu yaklaşık.** `_sph_box3` kutuyu eksen-hizalı
-  varsayıyor; kutu-kutu çifti tam SAT'tan geçiyor ama küre-kutu geçmiyor.
-  Faz 9'da bilerek bırakıldı, kodda not düşülü.
+- ✅ **Küre ↔ DÖNÜK kutu düzeldi (2026-08-25).** Küre merkezi kutunun yerel
+  çerçevesine taşınıyor; dönüş ifadesi `_seg_aabb3` (ışın/kamera) ile AYNI —
+  ayrışsalar nişan aldığın yer ile çarptığın yer farklı olurdu.
+  Testler bir kez zayıf çıktı: 90°'de kutu simetrik olduğundan dönüş yönünü
+  ters çeviren bozma kaçtı. Testler 45°'ye taşındı (iki köşegen ayrışıyor) ve
+  beklenti koda değil bağımsız yazılmış ışın testine bağlandı.
 
 - ✅ **Arazide eğim sınırı + kayma eklendi (2026-08-06).** **Binding
   gerekmedi.** STATUS `tm3_terrain_normal` öneriyordu, ama `terrain_height3d`
@@ -1741,22 +1772,36 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   bedavaya** kapsandı — onlar da `TAG_WALL` olmadıkları için taramanın
   dışındaydı.
 
-- 🟢 **Rampa artık gereksiz olabilir.** Faz 9'un rampası kademeli çiziliyor
-  (raylib'de kama primitifi yok) ve arazi geldiğine göre çoğu kullanım
-  arazinin işi. Ya gerçek kama mesh'i üretilmeli ya da rampa "arazi yokken
-  kullanılan basit yol" olarak konumlandırılmalı.
+- ✅ **Rampa artık gerçek kama mesh'i (2026-08-25).** İki seçenekten birincisi
+  seçildi. raylib'de kama primitifi yok, mesh'i tame kuruyor (`gen_wedge`);
+  eğim tanımı `_ramp_h3` ile birebir aynı. Sarma yönü elle sıralanmıyor: her
+  üçgen istenen normale göre kendini düzeltiyor — ters sarılmış bir yüz
+  arkayüz ayıklamasıyla sessizce GÖRÜNMEZ olur, yani hata "hata yok" gibi durur.
+  Denetim `tests/wedge_mesh_check.py` (build.sh suites içinde) üçgenleri C
+  KAYNAĞINDAN okuyup sarma yönünü, kapalılığı ve eğimin fizikle aynı tanımda
+  olduğunu ölçüyor.
 
-#### 🟡 Oyun yapımı — motorun hâlâ vermediği şeyler
+#### 🟢 Oyun yapımı — motorun hâlâ vermediği şeyler (yayın için şart değil)
 
-- 🟡 **Düşman yol bulma yok.** `chase3d` düz çizgi; düşman duvara toslayıp
-  takılıyor. En az bir "engelden kaç" davranışı (duvara değince yana kay) ya
-  da arazi/duvar ızgarası üzerinde A*.
-- 🟡 **Animasyon geçişi/harmanlama yok.** `anim3d` boşta↔koşu arasında sert
-  geçiyor. Geçiş süresi + harmanlama.
-- 🟡 **Kayıt/yükleme 3B'ye bağlı değil.** `kayit_yaz`/`kayit_oku` tame'de var,
-  `scene3d` kullanmıyor (arcade kullanıyor). Bölüm ilerlemesi, en yüksek skor.
-- 🟡 **Gamepad `scene3d`'de yok.** tame'de binding var (`gamepad_down`,
-  `gamepad_axis`); hareket/kamera preset'lerine bağlanmalı.
+- ✅ **Düşman kaçınması geldi.** Maddenin istediği alt sınır ("en az bir
+  engelden kaç davranışı") karşılandı: `chase3d` duvara değince bir yana
+  BAĞLANIP kayıyor (`e.avoid`), yol açılınca bağlılık bitiyor. Yana seçim
+  simetrik — hep aynı yana bakmak düşmanları duvar dibinde kümeliyordu.
+  `chase_avoid3d(false)` ile kapatılabiliyor, varsayılan açık.
+  🟢 **Kalan:** gerçek A*. Kaçınma tek engeli çözüyor, labirenti çözmüyor.
+- ✅ **Animasyon harmanlaması geldi (2026-08-25) ve N klibe genelleşti.**
+  Geçiş bir `(a, b, w)` üçlüsü; "iki klip" hiç özel değildi, yalnız hedefi
+  hesaplayan kural iki seçenekliydi. `anim_set3d`/`anim_auto3d`/`anim_now3d`.
+  Geçiş DOĞRUSAL: üstel yumuşatmada ağırlık uca hiç varmaz, yani "boşta" pozu
+  sonsuza kadar biraz koşu taşırdı. Kendi iskelet kodumuz yok — tek karelik
+  geçici bir `ModelAnimation` kurulup raylib'in kendi skinning yolundan
+  geçiliyor.
+- ✅ **Kayıt/yükleme 3B'ye bağlandı.** `kayit_ac3d`/`save_progress3d` opt-in;
+  rekor (`rekor3d`) ve tamamlanan bölümler diske yazılıyor, başlangıç ve
+  oyun-bitti ekranları rekoru gösteriyor. `scene3d_arena` kullanıyor.
+- ✅ **Gamepad `scene3d`'de.** Motor kolu kendiliğinden okuyor (sol çubuk
+  hareket, sağ çubuk bakış, A zıpla, START duraklat); oyun tek satır girdi
+  kodu yazmıyor. `gamepad_active3d`/`kol_bagli_mi3d` yalnız gösterge.
 - ✅ **Menü/UI katmanı eklendi (2026-08-06, Faz 11).** Motor Faz 7-10'da
   "üstüne oyun yazılabilir" olmuştu ama **yayınlanabilir** değildi: oyun-bitti
   ekranı yalnız yazı basıyordu, hiçbir tuş iş yapmıyordu, tek çıkış pencereyi
@@ -1790,37 +1835,61 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   ayarlar ekranı (ses/dil/FPS), rozet/başarım, skor tablosu, bölüm seçimi.
   Yayın için şart değil; oyun sayısı artınca değerlenir.
   `on_hud3d` var ama her oyun kendi menüsünü elden yazıyor.
-- 🟢 **Tetikleyici bölge** (`solid3d(false)` + kanca ile taklit edilebiliyor)
-  için adı konmuş bir API: `trigger3d(...)`.
-- 🟢 **Konumsal seste yön yok** — yalnız mesafe zayıflatması var, stereo
-  kaydırma (panning) yok.
+- ✅ **Tetikleyici bölge API'si geldi.** `trigger3d` / `trigger_sphere3d`
+  (`bolge3d`/`bolge_kure3d`) + `on_enter3d`/`on_exit3d`/`on_stay3d`.
+  Taklidin iki kusuru da kapandı: kanca artık çakışılan HER KARE değil
+  girişte bir kez çağrılabiliyor (`trigger_once3d`), ve bölge ENTITY değil —
+  çizilmiyor, slot yemiyor, geniş faza ve MTV çözümüne girmiyor.
+- ✅ **Konumsal seste stereo yön geldi (2026-08-25).** Kameranın sağ ekseni
+  `move3d`'nin girdi döndürmesiyle AYNI ifadeden geliyor; ayrışsalar "sağa
+  yürü" ile "sağdan duy" farklı yönleri gösterirdi ve hata kamera döndükçe
+  büyürdü. raylib'in pan'ı TERS (`left = pan`, yani pan 0 SAĞ kanal) —
+  çeviri scene3d'de, `tm_sound_pan` bilerek raylib'in anlamını koruyor.
+  Değer çalmadan ayrı hesaplanıyor, yani ses aygıtı olmadan sınanabiliyor.
 
-#### 🟡 Görsel
+#### ✅ Görsel — hepsi kapandı
 
-- 🟡 **Arazi tek renk.** Yüksekliğe/eğime göre katman boyama (çim/kaya/kar)
-  shader işi; `tm3_terrain_*` ailesine doku katmanı eklenmeli.
-- 🟢 Gökyüzü dokusu (şu an yalnız degrade), su yüzeyi, gündüz/gece döngüsü.
-- 🟢 Parçacıklarda dönme/doku atlası yok; tek boy billboard.
+- ✅ **Arazi katman boyama geldi.** Yükseklik çim→toprak→kar, eğim kaya —
+  ikisi de fiziğin ZATEN kullandığı veri, yeni bir şey ölçülmüyor.
+  `terrain_natural3d(tepe)` tek satırlık hazır palet; `terrain_layer3d(x,z)`
+  oyun mantığına da aynı eşikleri veriyor (ayak sesi, hız, "karda mısın").
+- ✅ **Su, gündüz-gece, bulut ve yıldızlar geldi.** Su dünya çapında tek yatay
+  düzlem (vadiler artık kuru değil); gündüz-gece gökyüzü/güneş/ortam ışığı/sis
+  rengini birlikte sürüyor ve GÖLGELER bedava dönüyor (gölge haritası güneşin
+  yönünden türüyor). Bulut ve yıldızlar gökyüzü shader'ında prosedürel —
+  ayrı çizim yok, dolayısıyla dağlar onları doğru örtüyor.
+- ✅ **Parçacıklarda dönme ve doku atlası geldi (2026-08-25).** Atlas flipbook
+  olarak oynuyor (kare ömürle ilerliyor, SON KAREDE kalıyor — sarmak patlamayı
+  ölürken yeniden başlatırdı). Dönme VARSAYILAN KAPALI: dokusuz parçacık dolu
+  bir karedir ve dolu kare dönünce silueti değişir, varsayılanı açmak
+  yayınlanmış oyunların görünüşünü haber vermeden değiştirirdi.
 
 #### 🟢 Yayın ve belgeler
 
-- 🟢 **3B oyun `tulparlang.dev/oyunlar`'a konabilir** — Faz 7 şartı sağlandı
-  (karar 2026-08-01'de "Faz 7 bitmeden yayınlanmayacak" idi). Adaylar:
-  `scene3d_arena`, `scene3d_terrain`.
-- 🟢 **`scene3d` API belgesi yok.** arcade'in Starlight sayfası var, 3B'nin
-  yok. ~120 fonksiyon (TR+EN alias'larla).
-- 🟢 **3B örneklerin İngilizce ikizi yok.** `examples/en/` altında arcade
-  ikizleri var, `scene3d_*` için yok.
+- ✅ **3B oyunlar `tulparlang.dev/oyunlar`'da yayında.** `3d_collector`,
+  `3d_robot`, `3d_models`, `3d_primitives` (web deposunda `b1808b8`).
+- ✅ **`scene3d` ve editör belgeleri yazıldı.** Starlight'ta
+  `games/{overview,scene3d,editor}` (TR+EN). 197 API adının hepsi motora
+  karşı doğrulandı — uydurma ad yok.
+  🟢 **Kalan:** web deposunda dal birleştirme kararı (yerel dal ile master
+  ayrışık içerik taşıyor); ayrıntı TODO.md'de.
+- ✅ **3B örneklerin İngilizce ikizi geldi (2026-08-25).** 15 dosya:
+  8 `scene3d_*` + 7 `tame3d_*`. Yan bulgu: `examples/en/` HİÇ test
+  edilmiyormuş — koşucu yalnız `examples/*.tpr` üzerinde geziyordu, yani
+  ikizler kaynaktan ayrışsa kimse görmezdi. Artık hepsi koşuyor.
 
 #### 🟢 Temizlik
 
-- 🟢 **Windows shim'leri ölü kod.** Natif Windows 3.13.0'da bırakıldı ama
-  `src/common/platform*.h` içindeki `PLATFORM_WINDOWS`/`_WIN32` dalları
-  bilerek duruyor (sökmek büyük ve riskli bir refactor). Artık bakımsız ve
-  test edilmemiş sayılıyorlar; istenirse ayrı bir işte temizlenebilir.
-- 🟢 **`%` operatörü dilde yok** — `mod()` var. Faz 8'de animasyon karesini
-  sararken yazıldı ve sözcükleyici hatası verdi; üstelik hata **modülü
-  sessizce kesiyor** ve alakasız bir "fonksiyon bulunamadı" olarak görünüyor.
+- ✅ **Windows shim'leri: KARAR VERİLDİ, iş yok.** Dallar bilerek duruyor;
+  sökmek soketler/thread'ler/dl/yollar boyunca büyük ve riskli bir refactor,
+  desteklenen platformlarda kazancı yok, durmasının maliyeti sıfır. Bakımsız
+  ve test edilmemiş sayılıyorlar. Açık madde olarak taşımak yanlıştı.
+- ✅ **`%` operatörü geldi (2026-08-24).** `mod()` duruyor ve ikisi AYNI
+  sonucu veriyor (işaret bölünenden, C ile aynı). Ondalıkta `fmod`.
+  Maddenin şikâyet ettiği "sessizce kesen sözcükleyici hatası" da ayrıca
+  düzeltildi: ayrılmış kelime bir ad olarak kullanılınca tanı artık SUÇLU
+  KELİMEYİ söylüyor (`int tip = 5`, `func f(ad, metin)`), alakasız bir
+  "fonksiyon bulunamadı" değil.
 
 ### Dil seviyesi
 
