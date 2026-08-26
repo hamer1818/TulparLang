@@ -8692,9 +8692,37 @@ func _ed_chrome3() {
 }
 
 // Inspector davranış satırının alan genişliği (panel genişliğinden türüyor).
-func _ed_bhw3(pw, namew, xw): int {
-    return toInt((pw - _ED_PAD3 * 2 - namew - xw - 12) / 2);
+// Davranış bloğunun sütun genişlikleri. SAF: yerleşim penceresiz
+// sınanabilsin diye çizimden ayrı. (Önceki `_ed_bhw3` tek satırlık
+// "ad|alan|alan|x" yerleşimini hesaplıyordu; o yerleşim etiketli bloklara
+// dönüşünce fonksiyon ölü kaldı ve testi VAR OLMAYAN bir şeyi doğruluyordu.)
+// PARAMETRE BAŞINA TEK SATIR: etiket solda, alan sağda.
+//
+// İki sütun denendi ve ÖLÇÜMLE elendi: okunur bir etiket ("yukseklik",
+// "mermi hizi") genişlik istiyor ve iki etiket + iki alan 280 piksellik
+// inceleyiciye sığmıyordu (340 gerekiyordu). Etiketleri kısaltmak da
+// çözüm değil — panelin var olma sebebi "bu sayı ne?" sorusunu bitirmek.
+//
+// Etiket sütunu oransal: panel genişliği değişince ikisi birlikte büyüyor.
+func _ed_bh_labelw3(): int { return _us3(52); }
+
+// Davranış bloğunun kimlik TABANI ve ADIMI. Kod ve test ikisini de BURADAN
+// okuyor. Test sabitleri tekrar etseydi adımı küçültmek bloğu kendi üstüne
+// bindirir ve test bunu göremezdi (denendi: adım 3 yapıldı, test yeşil
+// kaldı) — çakışan iki widget'tan ikincisi ÖLÜ kalır ve bu ancak liste
+// büyüyünce ortaya çıkar.
+func _ed_bh_idbase3(): int { return 30000; }
+func _ed_bh_idstep3(): int { return 12; }
+// Blok başına kullanılan en fazla widget: +0 sil, +1..+5 alanlar.
+func _ed_bh_idused3(): int { return 6; }
+
+func _ed_bh_lblw3(inner): int {
+    int lw = toInt(inner * 45 / 100);
+    if (lw > _ed_bh_labelw3()) { lw = _ed_bh_labelw3(); }
+    return lw;
 }
+
+func _ed_bh_fieldw3(inner): int { return inner - _ed_bh_lblw3(inner) - _us3(4); }
 // Hiyerarşi ekleme düğmelerinin genişliği.
 func _ed_addw3(pw, gap): int {
     return toInt((pw - _ED_PAD3 * 2 - gap * 3) / 4);
@@ -8879,6 +8907,13 @@ func _ed_next_shape3(sh): int {
     if (sh == SHAPE_CYL)    { return SHAPE_RAMP; }
     return SHAPE_CUBE;
 }
+// Etiketli sayı alanı: etiket solda, alan sağda. Panelin her yerinde aynı
+// hizayı verdiği için davranış blokları sütun sütun okunuyor.
+func _ed_bhf3(wid, x, y, lw, fw, label, val, step): float {
+    _g_txt3(label, x, _g_ly3(y), lw - 2, _G_DIM3());
+    return _g_num(wid, x + lw, y, fw, _ED_FLD3, val, step);
+}
+
 func _ed_bh_name3(k): str {
     if (k == BH_MOVE)   { return "hareket"; }
     if (k == BH_CHASE)  { return "kovala"; }
@@ -9421,38 +9456,30 @@ func _ed_inspector3() {
     _g_section(px + 2, y, pw - 4, "DAVRANISLAR");
     y = y + _us3(16);
 
-    // Satır: ad | alan1 | alan2 | x — hepsi panel genişliğinden türüyor.
+    // DAVRANIŞ BLOĞU — her türün kendi ETİKETLİ alanları.
+    //
+    // Eskiden satır "ad | sayı | sayı | x" idi: iki İSİMSİZ kutu. Hangisinin
+    // hız hangisinin menzil olduğu yalnız kaynağa bakınca anlaşılıyordu ve
+    // türden türe değişiyordu (devriyede tek kutu HIZDI, ötekilerde ilk
+    // parametre). Üstelik gösterilmeyen parametreler hiç düzenlenemiyordu:
+    // devriyenin uçları, atışın ömrü/menzili, kovalamanın HEDEF ETİKETİ.
+    // Yani panel oynanışı yazmaya değil, tahmin etmeye zorluyordu.
     int xw = _us3(16);
-    int nw2 = _us3(44);
-    int bfw = _ed_bhw3(pw, nw2, xw);
+    int lw = _ed_bh_lblw3(inner);            // etiket sütunu
+    int fw = _ed_bh_fieldw3(inner);          // alan, satırın kalanı
     int bi = 0;
     int shown = 0;
     while (bi < length(_bh3)) {
         Bh3 b = _bh3[bi];
         if (b.id == id) {
-            _g_txt3(_ed_bh_name3(b.kind), lx, _g_ly3(y), nw2 - 2, _G_TXT3());
-            float v1 = b.a;
-            if (b.kind == BH_PATROL) { v1 = b.e; }
-            float p1 = _g_num(20000 + shown * 4, lx + nw2, y, bfw, _ED_FLD3, v1, 0.1);
-            if (p1 != v1) {
-                Bh3 nb = _bh3[bi];
-                if (b.kind == BH_PATROL) { nb.e = p1; } else { nb.a = p1; }
-                _bh3[bi] = nb;
-            }
-            // 2. alan yalnız b'si SERİLEŞTİRİLEN türlerde: gösterilip de
-            // saklanmayan alan, sürüklenip ilk kayıtta sessizce geri dönerdi.
-            if (b.kind == BH_MOVE || b.kind == BH_CHASE || b.kind == BH_BOB ||
-                b.kind == BH_SHOOT || b.kind == BH_FLOAT) {
-                float p2 = _g_num(20001 + shown * 4, lx + nw2 + bfw + 4, y, bfw,
-                                  _ED_FLD3, b.b, 0.1);
-                if (p2 != b.b) {
-                    Bh3 nb2 = _bh3[bi];
-                    nb2.b = p2;
-                    _bh3[bi] = nb2;
-                }
-            }
-            if (_g_button(20002 + shown * 4, px + pw - _ED_PAD3 - xw, y, xw,
-                          _ED_FLD3, "x")) {
+            // Kimlik adımı 12 (blok başına en fazla 6 widget + pay).
+            // 20000 tabanında adım 12 ile 84. davranış 21008'e ulaşır ve
+            // KURAL satırlarıyla (21000+) çakışırdı; taban 30000'e taşındı,
+            // orada 21000-23030 aralığının tamamı geride kalıyor.
+            int wid = _ed_bh_idbase3() + shown * _ed_bh_idstep3();
+            // Başlık satırı: ad solda, sil sağda.
+            _g_txt3(_ed_bh_name3(b.kind), lx, _g_ly3(y), inner - xw - 4, _G_ACC3());
+            if (_g_button(wid, px + pw - _ED_PAD3 - xw, y, xw, _ED_FLD3, "x")) {
                 ed_mark3d();
                 int last = length(_bh3) - 1;
                 if (bi != last) { _bh3[bi] = _bh3[last]; }
@@ -9460,6 +9487,78 @@ func _ed_inspector3() {
                 return;
             }
             y = y + _ED_FLD3 + _us3(2);
+
+            Bh3 nb = _bh3[bi];
+
+            if (b.kind == BH_MOVE) {
+                nb.a = _ed_bhf3(wid + 1, lx, y, lw, fw, "hiz", b.a, 0.5);
+                y = y + _ED_FLD3 + _us3(2);
+                nb.b = _ed_bhf3(wid + 2, lx, y, lw, fw, "ziplama", b.b, 0.5);
+                y = y + _ED_FLD3 + _us3(2);
+            }
+            if (b.kind == BH_CHASE) {
+                nb.a = _ed_bhf3(wid + 1, lx, y, lw, fw, "hiz", b.a, 0.5);
+                y = y + _ED_FLD3 + _us3(2);
+                nb.b = _ed_bhf3(wid + 2, lx, y, lw, fw, "menzil", b.b, 1.0);
+                y = y + _ED_FLD3 + _us3(2);
+                _g_txt3("hedef", lx, _g_ly3(y), lw - 2, _G_DIM3());
+                if (_g_button(wid + 3, lx + lw, y, fw, _ED_FLD3,
+                              _sc_tag_nm3(nb.tag))) {
+                    ed_mark3d();
+                    nb.tag = _ed_next_tag3(nb.tag);
+                }
+                y = y + _ED_FLD3 + _us3(2);
+            }
+            if (b.kind == BH_PATROL) {
+                // Uçlar artık düzenlenebiliyor. Eskiden yalnız hız (e)
+                // gösteriliyordu; devriye yolunu değiştirmek için sahneyi
+                // elle JSON'dan düzenlemek gerekiyordu.
+                nb.a = _ed_bhf3(wid + 1, lx, y, lw, fw, "x1", b.a, 0.5);
+                y = y + _ED_FLD3 + _us3(2);
+                nb.b = _ed_bhf3(wid + 2, lx, y, lw, fw, "z1", b.b, 0.5);
+                y = y + _ED_FLD3 + _us3(2);
+                nb.c = _ed_bhf3(wid + 3, lx, y, lw, fw, "x2", b.c, 0.5);
+                y = y + _ED_FLD3 + _us3(2);
+                nb.d = _ed_bhf3(wid + 4, lx, y, lw, fw, "z2", b.d, 0.5);
+                y = y + _ED_FLD3 + _us3(2);
+                nb.e = _ed_bhf3(wid + 5, lx, y, lw, fw, "hiz", b.e, 0.5);
+                y = y + _ED_FLD3 + _us3(2);
+            }
+            if (b.kind == BH_SPIN) {
+                nb.a = _ed_bhf3(wid + 1, lx, y, lw, fw, "derece/sn", b.a, 5.0);
+                y = y + _ED_FLD3 + _us3(2);
+            }
+            if (b.kind == BH_BOB) {
+                nb.a = _ed_bhf3(wid + 1, lx, y, lw, fw, "yukseklik", b.a, 0.05);
+                y = y + _ED_FLD3 + _us3(2);
+                nb.b = _ed_bhf3(wid + 2, lx, y, lw, fw, "hiz", b.b, 0.1);
+                y = y + _ED_FLD3 + _us3(2);
+            }
+            if (b.kind == BH_FLOAT) {
+                nb.a = _ed_bhf3(wid + 1, lx, y, lw, fw, "guc", b.a, 0.5);
+                y = y + _ED_FLD3 + _us3(2);
+                nb.b = _ed_bhf3(wid + 2, lx, y, lw, fw, "derinlik", b.b, 0.05);
+                y = y + _ED_FLD3 + _us3(2);
+            }
+            if (b.kind == BH_SHOOT) {
+                nb.a = _ed_bhf3(wid + 1, lx, y, lw, fw, "aralik", b.a, 0.1);
+                y = y + _ED_FLD3 + _us3(2);
+                nb.b = _ed_bhf3(wid + 2, lx, y, lw, fw, "mermi hizi", b.b, 1.0);
+                y = y + _ED_FLD3 + _us3(2);
+                nb.c = _ed_bhf3(wid + 3, lx, y, lw, fw, "omur", b.c, 0.1);
+                y = y + _ED_FLD3 + _us3(2);
+                nb.d = _ed_bhf3(wid + 4, lx, y, lw, fw, "menzil", b.d, 1.0);
+                y = y + _ED_FLD3 + _us3(2);
+                _g_txt3("hedef", lx, _g_ly3(y), lw - 2, _G_DIM3());
+                if (_g_button(wid + 5, lx + lw, y, fw, _ED_FLD3,
+                              _sc_tag_nm3(nb.tag))) {
+                    ed_mark3d();
+                    nb.tag = _ed_next_tag3(nb.tag);
+                }
+                y = y + _ED_FLD3 + _us3(2);
+            }
+            _bh3[bi] = nb;
+            y = y + _us3(4);
             shown = shown + 1;
         }
         bi = bi + 1;

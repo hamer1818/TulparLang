@@ -207,6 +207,39 @@ hata çıkıyor.
 Adaylar artık hem çalışma dizinine hem EXE DİZİNİNE göre üretiliyor, yani
 bağlama hangi dizinden çalışıldığından bağımsız.
 
+### Changed — EDİTÖR: davranış parametreleri artık etiketli ve TAM
+
+Davranış paneli iki **isimsiz** sayı kutusu gösteriyordu. Hangisinin hız
+hangisinin menzil olduğu yalnız kaynağa bakınca anlaşılıyordu ve türden türe
+değişiyordu — devriyede tek kutu HIZDI, ötekilerde ilk parametre. Panel
+oynanışı yazmaya değil tahmin etmeye zorluyordu.
+
+Dahası, gösterilmeyen parametreler hiç düzenlenemiyordu: **devriyenin uçları**,
+**atışın ömrü ve menzili**, **kovalamanın hedef etiketi**. Bunları değiştirmek
+için sahneyi elle JSON'dan düzenlemek gerekiyordu — yani editörün var olma
+sebebine aykırı.
+
+Artık her tür kendi etiketli alanlarını gösteriyor ve **tüm** parametreleri
+kapsıyor; hedef etiketi de panelden döndürülüyor.
+
+İki sütunlu yerleşim denendi ve ÖLÇÜMLE elendi: okunur bir etiket
+("yukseklik", "mermi hizi") genişlik istiyor ve iki etiket + iki alan 280
+piksellik inceleyiciye sığmıyordu (340 gerekiyordu). Etiketleri kısaltmak
+çözüm değil — panelin var olma sebebi "bu sayı ne?" sorusunu bitirmek.
+Parametre başına tek satır: her zaman sığıyor, panel zaten kaydırılıyor.
+
+Yol boyunca üç şey daha çıktı:
+- **Eski yerleşim testi VACUOUS'a dönmüştü.** `_ed_bhw3` yerleşim değişince
+  ölü kaldı ve testi var olmayan bir şeyi doğruluyordu. Fonksiyon silindi,
+  test gerçek yerleşime bağlandı (her ölçekte sığma dahil).
+- **Widget kimlik adımı aralığı daraltıyordu.** Blok başına 6 widget × adım
+  12, taban 20000'de kalsaydı 84. davranış KURAL satırlarına (21000+)
+  çarpardı. Taban 30000'e taşındı.
+- **Kimlik testi sabitleri TEKRAR EDİYORDU**, kaynaktan okumuyordu: adım 3'e
+  düşürüldüğünde bloklar birbirine bindiği hâlde test yeşil kaldı (ölçüldü).
+  Taban/adım/kullanılan-widget artık `_ed_bh_idbase3/idstep3/idused3`'ten
+  okunuyor ve aynı bozma kırmızıya dönüyor.
+
 ### Added — A* yol bulma (kaçınmanın çözemediği şey)
 
 `chase3d`in kaçınması TEK engeli çözüyor: duvara değince bir yana bağlanıp

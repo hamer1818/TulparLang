@@ -4817,10 +4817,15 @@ func t_bh_all_params_roundtrip() {
     _sc_reg3("d", a);
     patrol_behavior3d(a, 0.0 - 7.0, 2.0, 9.0, 0.0 - 3.0, 6.5);
     shoot_behavior3d(a, 1.25, 22.0, 3.5, TAG_PLAYER, 18.0);
+    // Kovalamanın HEDEF ETİKETİ inceleyiciden düzenlenebilir oldu; gösterilip
+    // de kaydedilmeyen bir alan ilk kayıtta sessizce geri dönerdi.
+    // Varsayılan olmayan bir etiket seçiliyor ki "hep player yazıyor" durumu
+    // testi geçmesin.
+    chase_behavior3d(a, TAG_ITEM, 4.25, 33.0);
     scene_load3d(scene_json3d());
     int nid = bul3d("d");
     int i = 0;
-    int okp = 0; int oks = 0;
+    int okp = 0; int oks = 0; int okc = 0;
     while (i < length(_bh3)) {
         Bh3 b = _bh3[i];
         if (b.id == nid && b.kind == BH_PATROL) {
@@ -4839,19 +4844,24 @@ func t_bh_all_params_roundtrip() {
             assert_eq_int(b.tag, TAG_PLAYER);
             oks = 1;
         }
+        if (b.id == nid && b.kind == BH_CHASE) {
+            assert(abs_f3(b.a - 4.25) < 0.001, "kovala hizi");
+            assert(abs_f3(b.b - 33.0) < 0.001, "kovala menzili");
+            assert_eq_int(b.tag, TAG_ITEM);
+            okc = 1;
+        }
         i = i + 1;
     }
-    assert_eq_int(okp + oks, 2);
+    assert_eq_int(okp + oks + okc, 3);
 }
 
 // Widget kimlik aralıkları AYRIK olmalı. Tek bir "basılı widget" yuvası olduğu
 // için çakışan iki widget'tan ikincisi ölü kalır — ve bu ancak listeler
 // büyüyünce ortaya çıkar, yani gözle fark edilmesi çok zor bir hata.
 func t_gui_widget_id_ranges_are_disjoint() {
-    // Hiyerarşi satırları 12000+r, davranış satırları 20000+shown*4 (+0,+1,+2).
-    // 500 satır ve 500 davranış varsayımıyla üst sınırlar:
+    // Hiyerarşi satırları 12000+r, davranış BLOKLARI 30000+shown*12 (+0..+5).
     int hier_max = 12000 + 500;
-    int bh_min = 20000;
+    int bh_min = _ed_bh_idbase3();
     assert(hier_max < bh_min, "hiyerarsi ile davranis araliklari cakismamali");
     // Sabit kimlikler (9001-9471) her ikisinin de ALTINDA kalmalı.
     assert(9471 < 12000, "sabit kimlikler hiyerarsinin altinda");
@@ -4867,13 +4877,27 @@ func t_gui_widget_id_ranges_are_disjoint() {
     // hepsi hiyerarşi (12000+) ve davranış (20000+) aralıklarından ayrık.
     assert(21901 < 22001, "kural ile baglam menusu ayrik");
     assert(22015 < 23001, "baglam menusu ile bolge paneli ayrik");
-    // Davranış satırı içi üç kimlik birbirine girmemeli.
-    int s0 = 20000 + 0 * 4;
-    int s1 = 20000 + 1 * 4;
-    assert(s0 + 2 < s1, "ardisik davranis satirlari cakismamali");
+    // Davranış bloğu içi kimlikler birbirine girmemeli. Blok başına en
+    // fazla 6 widget kullanılıyor (+0 sil, +1..+5 alanlar), adım 12.
+    // Sabitler KAYNAKTAN okunuyor. Tekrar etseydi adımı küçültmek bloğu
+    // kendi üstüne bindirir ve test göremezdi — denendi, adım 3'e
+    // düşürüldüğünde test yeşil kalmıştı.
+    int step = _ed_bh_idstep3();
+    int used = _ed_bh_idused3();
+    assert(used <= step,
+           "davranis blogu " + toString(used) + " widget kullaniyor ama adim " +
+           toString(step) + " — bloklar birbirine biner");
+    int s0 = _ed_bh_idbase3() + 0 * step;
+    int s1 = _ed_bh_idbase3() + 1 * step;
+    assert(s0 + used - 1 < s1, "ardisik davranis bloklari cakismamali");
+
+    // Davranış tabanı, ALTINDAKİ bütün aralıkların üstünde olmalı. Bu bir
+    // varsayım değil ölçülmüş sınır: kural satırları 21000+, bağlam menüsü
+    // 22000+, bölge paneli 23030'a kadar gidiyor. Taban 20000'de kalsaydı
+    // adım 12 ile 84. davranış kural satırlarına çarpardı.
+    assert(23030 < _ed_bh_idbase3(),
+           "davranis tabani diger araliklarin ustunde olmali");
 }
-
-
 
 test("merkez isini ileri yon", "t_ed_center_ray_is_forward");
 test("isin birim", "t_ed_ray_is_unit");
@@ -5234,14 +5258,37 @@ func t_ui_inspector_columns_fit() {
 // Davranış satırı (ad | alan | alan | x) panelin içinde bitmeli — ilk sürümde
 // 6 piksel taşıyordu.
 func t_ui_behavior_row_fits() {
+    // Davranış bloğunun İKİ SÜTUNLU satırı panele sığmalı:
+    //   etiket | alan | etiket | alan
+    // (Eski hâli `_ed_bhw3`yi sınıyordu; o yerleşim etiketli bloklara
+    // dönüşünce fonksiyon öldü ve test VAR OLMAYAN bir şeyi doğruluyordu.)
     int pw = _ED_INSP_W3;
-    int namew = 44;
-    int xw = 16;
-    int bfw = _ed_bhw3(pw, namew, xw);
-    assert(bfw > 16, "davranis alani cok dar: " + toString(bfw));
-    int total = _ED_PAD3 + namew + bfw * 2 + 4 + xw + _ED_PAD3;
-    assert(total <= pw, "davranis satiri panele sigmali: " +
-           toString(total) + " > " + toString(pw));
+    int inner = pw - _ED_PAD3 * 2;
+    int lw = _ed_bh_lblw3(inner);
+    int fw = _ed_bh_fieldw3(inner);
+    assert(fw > _us3(20), "davranis alani cok dar: " + toString(fw));
+    assert(lw > _us3(20), "etiket sutunu cok dar: " + toString(lw));
+    assert(lw + fw + _us3(4) <= inner,
+           "etiket+alan satiri panele sigmali: " +
+           toString(lw + fw + _us3(4)) + " > " + toString(inner));
+}
+
+func t_ui_behavior_row_fits_all_scales() {
+    // Ölçek değişince de sığmalı: alanlar da etiketler de _us3'ten türüyor,
+    // biri ölçeklenip diğeri sabit kalırsa satır taşar.
+    int k = 1;
+    while (k <= 3) {
+        editor_ui_scale3d(k);
+        int inner = _ED_INSP_W3 - _ED_PAD3 * 2;
+        int total = _ed_bh_lblw3(inner) + _ed_bh_fieldw3(inner) + _us3(4);
+        assert(total <= inner,
+               "olcek " + toString(k) + ": davranis satiri tasti " +
+               toString(total) + " > " + toString(inner));
+        assert(_ed_bh_fieldw3(inner) > 0,
+               "olcek " + toString(k) + ": alan genisligi pozitif olmali");
+        k = k + 1;
+    }
+    editor_ui_scale3d(2);
 }
 
 // Hiyerarşi ekleme düğmeleri (4 sütun) panele sığmalı.
@@ -5262,8 +5309,8 @@ func t_ui_layout_holds_for_other_widths() {
         int fw = _ed_f3w3(w, 26);
         assert(_ED_PAD3 + 26 + fw * 3 + 8 + _ED_PAD3 <= w,
                "3 sutun " + toString(w) + " genisliginde tasti");
-        int bfw = _ed_bhw3(w, 44, 16);
-        assert(_ED_PAD3 + 44 + bfw * 2 + 4 + 16 + _ED_PAD3 <= w,
+        int inner = w - _ED_PAD3 * 2;
+        assert(_ed_bh_lblw3(inner) + _ed_bh_fieldw3(inner) + _us3(4) <= inner,
                "davranis satiri " + toString(w) + " genisliginde tasti");
         w = w + 20;
     }
@@ -6442,6 +6489,7 @@ test("ESC durdurup duzenlemeye donuyor", "t_ui_stop_returns_to_edit");
 test("gorunum kokeni panellerle uyumlu", "t_ui_view_origin_matches_panels");
 test("inspector sutunlari sigiyor", "t_ui_inspector_columns_fit");
 test("davranis satiri sigiyor", "t_ui_behavior_row_fits");
+test("davranis satiri her olcekte sigiyor", "t_ui_behavior_row_fits_all_scales");
 test("hiyerarsi dugmeleri sigiyor", "t_ui_hierarchy_buttons_fit");
 test("yerlesim baska genisliklerde de tutuyor", "t_ui_layout_holds_for_other_widths");
 test("masaustu web degil", "t_storage_desktop_is_not_web");
