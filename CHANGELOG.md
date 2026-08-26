@@ -207,6 +207,46 @@ hata çıkıyor.
 Adaylar artık hem çalışma dizinine hem EXE DİZİNİNE göre üretiliyor, yani
 bağlama hangi dizinden çalışıldığından bağımsız.
 
+### Added — ÇOK BÖLÜMLÜ SAHNE: editörle artık "ekran" değil OYUN yapılıyor
+
+Sahne biçimi tek bir bölüm anlatıyordu: bir dosya = bir ekran. Motorda
+`level3d(n, fn)` vardı ama bir FONKSİYON istiyordu, yani bölümler yalnız KOD
+ile yazılabiliyordu — editörle yapılan bir oyun ilk ekranda bitiyordu.
+
+Yeni `"levels"` anahtarı. **Ne paylaşılır, ne bölüme aittir:** dünya
+(gökyüzü, sis, zemin, yerçekimi, kamera) ve şablonlar paylaşılır; varlıklar,
+bölgeler ve kurallar bölüme aittir. Gökyüzünü her bölümde tekrar yazmak
+dosyayı şişirir ve iki bölümün sessizce farklı görünmesine yol açar — asıl
+değişen şey sahnenin İÇİDİR.
+
+Tek bölümlü dosyalar AYNEN çalışıyor ve yeni anahtarı ALMIYOR: `"levels"`
+yalnız birden çok bölüm varken yazılıyor, yoksa var olan her sahne dosyası
+gereksizce değişirdi.
+
+**Editörde:** hiyerarşinin üstünde bölüm şeridi — `◀ BOLUM 2/3 ▶` ve
+`+ bolum` / `sil`. Tek bölümlü bir sahnede "+ BOLUM EKLE" sahneyi çok
+bölümlüye ÇEVİRİYOR (yaşayan sahne 1. bölüm oluyor, kaybolmuyor).
+
+En kritik davranış: **bölüm değiştirmek yapılan işi kaybetmez.** Yaşayan
+sahne, geçmeden/kaydetmeden/oynatmadan önce diziye geri yazılıyor. Sessiz
+kayıp bu editörde daha önce bir kez gerçekten yaşandı (oynanmış hâl dosyaya
+yazılmıştı), o yüzden açıkça sınanıyor.
+
+"Oynat" her zaman BİRİNCİ bölümden başlıyor: editörde 3. bölümdeyken oynatmak
+3. bölümü test etmek gibi görünür ama oyunun başlangıcı hiç denenmemiş olurdu.
+
+Bölüm silinince numaralar 1..N olarak YENİDEN kuruluyor. Delik kalsaydı
+`bolum_gec3d` boşluğa düşer, oyuncu kazanmak yerine BOŞ bir sahneye inerdi —
+ve bu sessiz olurdu. İki test bozması bu yolları ilk yazımda ıskalamıştı;
+testler ölçülerek ayırt edici hâle getirildi.
+
+Son bölüm silinmiyor: bölümsüz oyun yok.
+
+Örnek: `examples/scenes/iki_bolum.scene.json` (motorla üretildi, elle JSON
+yazılmadı) — `./data_game_desktop examples/scenes/iki_bolum.scene.json` ile
+oynanıyor. `scene3d_data_game.tpr` artık sahne yolunu komut satırından alıyor
+ve HUD'da bölüm sayacını gösteriyor.
+
 ### Changed — EDİTÖR: davranış parametreleri artık etiketli ve TAM
 
 Davranış paneli iki **isimsiz** sayı kutusu gösteriyordu. Hangisinin hız

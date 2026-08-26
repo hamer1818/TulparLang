@@ -1,0 +1,53 @@
+{
+  "v": 1,
+  "world": {
+    "title": "Tulpar 3B Sahne", "w": 960, "h": 560,
+    "sky": {"top": [38,52,92], "bottom": [176,198,224]},
+    "fog": 0.014,
+    "ground": 0,
+    "gravity": 26,
+    "camera": {"mode": "follow", "dist": 12, "height": 8, "fov": 45}
+  },
+  "levels": [
+    {
+      "entities": [
+    {"name": "kahraman", "tag": "player", "shape": "cube", "x": 0, "y": 1, "z": 8, "sx": 1.2, "sy": 2, "sz": 1.2, "color": [102,191,255], "hp": 100, "behaviors": [{"type": "move", "speed": 10, "jump": 12}]},
+    {"tag": "wall", "shape": "cube", "x": 0, "y": 1.5, "z": -14, "sx": 30, "sy": 3, "sz": 1, "color": [130,130,130]},
+    {"tag": "wall", "shape": "cube", "x": 0, "y": 1.5, "z": 14, "sx": 30, "sy": 3, "sz": 1, "color": [130,130,130]},
+    {"tag": "wall", "shape": "cube", "x": -14, "y": 1.5, "z": 0, "sx": 1, "sy": 3, "sz": 30, "color": [130,130,130]},
+    {"tag": "wall", "shape": "cube", "x": 14, "y": 1.5, "z": 0, "sx": 1, "sy": 3, "sz": 30, "color": [130,130,130]},
+    {"tag": "item", "shape": "sphere", "x": 5, "y": 1, "z": -3, "sx": 1, "sy": 1, "sz": 1, "color": [255,203,0]},
+    {"tag": "item", "shape": "sphere", "x": -6, "y": 1, "z": 2, "sx": 1, "sy": 1, "sz": 1, "color": [255,203,0]},
+    {"tag": "item", "shape": "sphere", "x": 2, "y": 1, "z": -8, "sx": 1, "sy": 1, "sz": 1, "color": [255,203,0]},
+    {"tag": "enemy", "shape": "cube", "x": -8, "y": 1, "z": -8, "sx": 1.3, "sy": 2, "sz": 1.3, "color": [230,80,80], "behaviors": [{"type": "chase", "target": "player", "speed": 3.5, "range": 30}]}
+      ],
+  "rules": [
+    {"on": "hit", "a": "player", "b": "item", "do": "collect", "n": 10},
+    {"on": "hit", "a": "enemy", "b": "player", "do": "damage", "n": 12},
+    {"on": "cleared", "tag": "item", "do": "win"}
+  ]
+    },
+    {
+      "entities": [
+    {"name": "kahraman", "tag": "player", "shape": "cube", "x": 0, "y": 1, "z": 10, "sx": 1.2, "sy": 2, "sz": 1.2, "color": [102,191,255], "hp": 100, "behaviors": [{"type": "move", "speed": 10, "jump": 12}]},
+    {"tag": "wall", "shape": "cube", "x": 0, "y": 1.5, "z": -14, "sx": 30, "sy": 3, "sz": 1, "color": [130,130,130]},
+    {"tag": "wall", "shape": "cube", "x": 0, "y": 1.5, "z": 14, "sx": 30, "sy": 3, "sz": 1, "color": [130,130,130]},
+    {"tag": "wall", "shape": "cube", "x": -14, "y": 1.5, "z": 0, "sx": 1, "sy": 3, "sz": 30, "color": [130,130,130]},
+    {"tag": "wall", "shape": "cube", "x": 14, "y": 1.5, "z": 0, "sx": 1, "sy": 3, "sz": 30, "color": [130,130,130]},
+    {"tag": "item", "shape": "sphere", "x": 8, "y": 1, "z": 8, "sx": 1, "sy": 1, "sz": 1, "color": [255,203,0]},
+    {"tag": "item", "shape": "sphere", "x": -8, "y": 1, "z": 8, "sx": 1, "sy": 1, "sz": 1, "color": [255,203,0]},
+    {"tag": "item", "shape": "sphere", "x": 8, "y": 1, "z": -8, "sx": 1, "sy": 1, "sz": 1, "color": [255,203,0]},
+    {"tag": "item", "shape": "sphere", "x": -8, "y": 1, "z": -8, "sx": 1, "sy": 1, "sz": 1, "color": [255,203,0]},
+    {"tag": "item", "shape": "sphere", "x": 0, "y": 1, "z": 0, "sx": 1, "sy": 1, "sz": 1, "color": [255,203,0]},
+    {"tag": "enemy", "shape": "cube", "x": 10, "y": 1, "z": 0, "sx": 1.3, "sy": 2, "sz": 1.3, "color": [230,80,80], "behaviors": [{"type": "chase", "target": "player", "speed": 5, "range": 40}]},
+    {"tag": "enemy", "shape": "cube", "x": -10, "y": 1, "z": 0, "sx": 1.3, "sy": 2, "sz": 1.3, "color": [230,120,80], "behaviors": [{"type": "patrol", "x1": -10, "z1": -10, "x2": -10, "z2": 10, "speed": 6}]},
+    {"tag": "wall", "shape": "cube", "x": 0, "y": 1.5, "z": 5, "sx": 8, "sy": 1, "sz": 1, "color": [150,150,180], "behaviors": [{"type": "spin", "speed": 45}]}
+      ],
+  "rules": [
+    {"on": "hit", "a": "player", "b": "item", "do": "collect", "n": 10},
+    {"on": "hit", "a": "enemy", "b": "player", "do": "damage", "n": 15},
+    {"on": "cleared", "tag": "item", "do": "win"}
+  ]
+    }
+  ]
+}

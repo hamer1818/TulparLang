@@ -30,6 +30,12 @@
 //   ESC                        oynarken: durdur
 // Harf tuşları yalnız SAĞ TUŞ BASILI DEĞİLKEN araç kısayolu; basılıyken uçuş.
 //
+// BÖLÜMLER: hiyerarşi panelinin üstündeki şerit. "+ BOLUM EKLE" sahneyi çok
+// bölümlüye çevirir (yaşayan sahne 1. bölüm olur), ◀ ▶ bölümler arasında
+// gezinir. Bölüm değiştirmek yapılan işi KAYBETMEZ — yaşayan sahne önce
+// diziye yazılır. Dünya (gökyüzü, yerçekimi, kamera) bölümler arasında
+// PAYLAŞILIR; değişen şey sahnenin içidir.
+//
 // Yerleşim:
 //   menü şeridi            Yeni / Aç / Kaydet / Geri / İleri
 //   araç çubuğu            araçlar solda, OYNAT-DUR ORTADA, ızgara

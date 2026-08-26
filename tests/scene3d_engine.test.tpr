@@ -4897,6 +4897,10 @@ func t_gui_widget_id_ranges_are_disjoint() {
     // adım 12 ile 84. davranış kural satırlarına çarpardı.
     assert(23030 < _ed_bh_idbase3(),
            "davranis tabani diger araliklarin ustunde olmali");
+    // Bölüm şeridi 9760-9764: dünya panelinin (9700-9750) ÜSTÜNDE ve
+    // hiyerarşinin (12000+) altında kalmalı.
+    assert(9750 < 9760, "bolum seridi dunya panelinin ustunde");
+    assert(9764 < 12000, "bolum seridi hiyerarsinin altinda");
 }
 
 test("merkez isini ileri yon", "t_ed_center_ray_is_forward");
@@ -5292,6 +5296,32 @@ func t_ui_behavior_row_fits_all_scales() {
 }
 
 // Hiyerarşi ekleme düğmeleri (4 sütun) panele sığmalı.
+func t_ui_level_bar_fits() {
+    // Bölüm şeridi hiyerarşi paneline sığmalı ve ETİKET İÇİN yer kalmalı.
+    // Etiket eksiye düşerse "BOLUM 2/3" yazısı düğmelerin altına kayar.
+    int k = 1;
+    while (k <= 3) {
+        editor_ui_scale3d(k);
+        int inner = _ED_HIER_W3 - _ED_PAD3 * 2;
+        int lbl = _ed_lvlbar_lblw3(inner);
+        assert(lbl > _us3(30),
+               "olcek " + toString(k) + ": bolum etiketi cok dar: " + toString(lbl));
+        // 1. satir: < | etiket | >
+        int r1 = _ed_lvlbar_navw3() * 2 + lbl + _us3(4);
+        assert(r1 <= inner,
+               "olcek " + toString(k) + ": gezinme satiri tasti " +
+               toString(r1) + " > " + toString(inner));
+        // 2. satir: iki esit dugme
+        int halfw = toInt((inner - _us3(4)) / 2);
+        assert(halfw > _us3(30),
+               "olcek " + toString(k) + ": ekle/sil dugmesi cok dar");
+        assert(halfw * 2 + _us3(4) <= inner,
+               "olcek " + toString(k) + ": ekle/sil satiri tasti");
+        k = k + 1;
+    }
+    editor_ui_scale3d(2);
+}
+
 func t_ui_hierarchy_buttons_fit() {
     int pw = _ED_HIER_W3;
     int gap = 3;
@@ -6464,6 +6494,144 @@ func t_nav_grid_cap_refuses_giant_grid() {
 }
 
 
+// ---------------------------------------------------------------------------
+// ÇOK BÖLÜMLÜ SAHNE. Editörle yapılan oyun ilk ekranda bitiyordu: biçim tek
+// bölüm anlatıyordu, motorun `level3d`i ise FONKSİYON istiyordu — yani
+// bölümler yalnız kodla yazılabiliyordu.
+//
+// En kritik iddia: bölüm değiştirmek YAPILAN İŞİ KAYBETMEMELİ. Sessiz kayıp
+// bu editörde daha önce bir kez gerçekten yaşandı (oynanmış hâl dosyaya
+// yazılmıştı), o yüzden burada açıkça sınanıyor.
+// ---------------------------------------------------------------------------
+
+func _lvl_kur2(): str {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(1.0, 1.0, 2.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    str b1 = _sc_level_js3();
+    scene3d_reset();
+    no_ground3d();
+    spawn3(5.0, 1.0, 6.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    spawn3(7.0, 1.0, 8.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    str b2 = _sc_level_js3();
+    scene3d_reset();
+    return "{\"v\":1,\"world\":{\"title\":\"iki\",\"ground\":0},\"levels\":[" +
+           b1 + "," + b2 + "]}";
+}
+
+func t_levels_load_and_switch() {
+    sahne_yukle3d(_lvl_kur2());
+    assert_eq_int(bolum_sayisi3d(), 2);
+    assert_eq_int(yasayan_sayi3d(), 1);      // 1. bölüm
+    assert_eq_int(level_now3d(), 1);
+    bolum_gec3d();
+    _s3_apply_level();
+    assert_eq_int(level_now3d(), 2);
+    assert_eq_int(yasayan_sayi3d(), 2);      // 2. bölüm
+}
+
+func t_levels_survive_roundtrip() {
+    sahne_yukle3d(_lvl_kur2());
+    str out = sahne_json_bolumlu3d();
+    scene3d_reset();
+    sahne_yukle3d(out);
+    assert_eq_int(bolum_sayisi3d(), 2);
+    assert_eq_int(yasayan_sayi3d(), 1);
+    bolum_gec3d();
+    _s3_apply_level();
+    assert_eq_int(yasayan_sayi3d(), 2);
+}
+
+func t_single_level_scene_unchanged() {
+    // Tek bölümlü dosyalar AYNEN çalışmalı ve yeni anahtarı ALMAMALI —
+    // yoksa var olan her sahne dosyası gereksizce değişirdi.
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    str js = sahne_json_bolumlu3d();
+    assert(contains(js, "\"entities\""), "tek bolumde entities yazilmali");
+    assert(contains(js, "\"levels\"") == false,
+           "hic bolum yokken levels anahtari YAZILMAMALI");
+
+    // TEK bölüm DİZİDE varken de eski biçim yazılmalı. Yukarıdaki hâlde
+    // `_lvl_js3` BOŞ (hiç bölüm yok); eşiği 1'e kaydıran bir bozma oradan
+    // kaçıyordu — ölçüldü. Burada dizide tam bir bölüm var.
+    ed_level_add3d();                 // 2 bolum
+    ed_level_del3d();                 // geri 1 bolum, ama DIZIDE duruyor
+    assert_eq_int(ed_level_count3d(), 1);
+    str js1 = sahne_json_bolumlu3d();
+    assert(contains(js1, "\"levels\"") == false,
+           "dizide tek bolum varken de levels YAZILMAMALI");
+    assert(contains(js1, "\"entities\""), "tek bolumde entities yazilmali");
+}
+
+func t_ed_level_switch_keeps_edits() {
+    // ASIL İDDİA: 2. bölümde bir şey ekleyip 1'e, sonra 2'ye dönünce
+    // eklenen şey DURMALI.
+    sahne_yukle3d(_lvl_kur2());
+    ed_level_go3d(2);
+    assert_eq_int(yasayan_sayi3d(), 2);
+    spawn3(9.0, 1.0, 9.0, 1.0, 1.0, 1.0, BLUE, SHAPE_CUBE, TAG_PROP);
+    assert_eq_int(yasayan_sayi3d(), 3);
+    ed_level_go3d(1);
+    assert_eq_int(yasayan_sayi3d(), 1);      // 1. bölüm etkilenmemeli
+    ed_level_go3d(2);
+    assert_eq_int(yasayan_sayi3d(), 3);      // eklenen varlik durmali
+}
+
+func t_ed_level_add_converts_single() {
+    // Tek bölümlü sahnede "+bolum" sahneyi çok bölümlüye ÇEVİRMELİ ve
+    // yaşayan sahne 1. bölüm olmalı — kaybolmamalı.
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    assert_eq_int(ed_level_count3d(), 0);
+    ed_level_add3d();
+    assert_eq_int(ed_level_count3d(), 2);
+    assert_eq_int(ed_level_now3d(), 2);
+    assert_eq_int(yasayan_sayi3d(), 0);      // yeni bolum BOS
+    ed_level_go3d(1);
+    assert_eq_int(yasayan_sayi3d(), 1);      // eski sahne 1. bolum oldu
+}
+
+func t_ed_level_delete_renumbers() {
+    // Aradan bir bölüm silinince numaralar 1..N olarak YENİDEN kurulmalı;
+    // delik kalırsa `bolum_gec3d` boşluğa düşer ve oyun sessizce biter.
+    sahne_yukle3d(_lvl_kur2());
+    ed_level_add3d();                        // 3 bolum
+    assert_eq_int(ed_level_count3d(), 3);
+    ed_level_go3d(2);
+    ed_level_del3d();                        // ortadaki gitti
+    assert_eq_int(ed_level_count3d(), 2);
+    // 1'den 2'ye gecis calismali (numara deligi yok)
+    _cur_lvl3 = 1;
+    bolum_gec3d();
+    _s3_apply_level();
+    assert_eq_int(level_now3d(), 2);
+    assert(bitti_mi3d() == false, "bolum deligi yuzunden oyun bitti sayildi");
+
+    // ASIL AYIRT EDİCİ ADIM: SON bölümden sonrası KAZANMA olmalı. Numaralar
+    // yenilenmezse `_lvlN` [1,2,3] kalır, 3. bölüm hâlâ "var" görünür ve
+    // oyuncu BOŞ bir sahneye düşer — kazanmak yerine hiçbir şey olmaz.
+    // (Bu adım olmadan bozma testten kaçıyordu: ölçüldü.)
+    bolum_gec3d();
+    _s3_apply_level();
+    assert(kazandin_mi3d(),
+           "son bolumden sonra kazanma olmali — numara deligi kalmis");
+}
+
+func t_ed_level_delete_refuses_last() {
+    // Son bölüm silinmemeli: bölümsüz oyun yok ve "hepsi gitti" durumu
+    // kullanıcıya geri alınamaz görünür.
+    sahne_yukle3d(_lvl_kur2());
+    ed_level_go3d(2);
+    ed_level_del3d();
+    assert_eq_int(ed_level_count3d(), 1);
+    ed_level_del3d();
+    assert_eq_int(ed_level_count3d(), 1);
+}
+
+
 test("satir yuksekligi fonttan buyuk", "t_ui_line_height_exceeds_font");
 test("dikey merkezleme", "t_ui_vertical_centering");
 test("dedektor metinleri goruyor", "t_ui_detector_sees_text");
@@ -6490,6 +6658,7 @@ test("gorunum kokeni panellerle uyumlu", "t_ui_view_origin_matches_panels");
 test("inspector sutunlari sigiyor", "t_ui_inspector_columns_fit");
 test("davranis satiri sigiyor", "t_ui_behavior_row_fits");
 test("davranis satiri her olcekte sigiyor", "t_ui_behavior_row_fits_all_scales");
+test("bolum seridi sigiyor", "t_ui_level_bar_fits");
 test("hiyerarsi dugmeleri sigiyor", "t_ui_hierarchy_buttons_fit");
 test("yerlesim baska genisliklerde de tutuyor", "t_ui_layout_holds_for_other_widths");
 test("masaustu web degil", "t_storage_desktop_is_not_web");
@@ -6513,6 +6682,13 @@ test("karisik boyutlar kacirilmaz", "t_grid_mixed_sizes");
 test("rampa dizini ust kume", "t_ramp_index_is_superset_not_sync");
 test("A* duz kovalamayi geciyor", "t_astar_beats_straight_chase");
 test("kose kesme yasak", "t_nav_no_corner_cutting");
+test("bolumler yukleniyor ve geciliyor", "t_levels_load_and_switch");
+test("bolumler gidis-donusten sag cikiyor", "t_levels_survive_roundtrip");
+test("tek bolumlu sahne degismiyor", "t_single_level_scene_unchanged");
+test("bolum degisimi duzenlemeyi koruyor", "t_ed_level_switch_keeps_edits");
+test("+bolum tek bolumluyu cevirir", "t_ed_level_add_converts_single");
+test("bolum silme numaralari yeniler", "t_ed_level_delete_renumbers");
+test("son bolum silinemez", "t_ed_level_delete_refuses_last");
 test("izgara duvarlari isaretliyor", "t_nav_grid_marks_walls");
 test("pad duvari sisiriyor", "t_nav_pad_inflates_walls");
 test("izgarasiz duz kovalamaya duser", "t_nav_falls_back_without_grid");

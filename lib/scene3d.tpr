@@ -446,6 +446,8 @@ func scene3d_reset() {
     _deadT = []; _deadF = [];
     _trg_clear3(); _trg_show3 = 0;
     _lvlN = []; _lvlF = []; _cur_lvl3 = 0; _lvl_pending3 = 0 - 1; _won3 = 0;
+    _lvl_js3 = [];            // bölüm içerikleri de sahneyle gider
+    _ed_lvl3 = 0;
     _s3_particles_clear();
     // Parçacık AYARLARI da sahneyle gider — havuzu boşaltıp dokusunu ve
     // dönmesini bırakmak yarım bir teardown olurdu. Gerekçe `_slope_lim3` ile
@@ -5588,6 +5590,25 @@ func scene_load3d(src): int {
         int r = 0;
         while (r < length(rs)) { _sc_load_rule3(rs[r]); r = r + 1; }
     }
+    // ÇOK BÖLÜMLÜ dosya: her bölüm kaydediliyor ve BİRİNCİSİ yükleniyor.
+    // Dünya ve şablonlar yukarıda zaten okundu; onlar paylaşılıyor.
+    if (_sc_has3(sc, "levels")) {
+        json ls = sc["levels"];
+        _lvl_js3 = []; _lvlN = []; _lvlF = [];
+        int k = 0;
+        while (k < length(ls)) {
+            push(_lvl_js3, ls[k]);
+            level3d(k + 1, "_s3_level_data3");
+            k = k + 1;
+        }
+        if (length(_lvl_js3) > 0) {
+            _cur_lvl3 = 1;
+            n = _sc_load_level3(_lvl_js3[0]);
+        }
+        log3d("sahne yuklendi: " + toString(length(_lvl_js3)) + " bolum, " +
+              toString(n) + " varlik (1. bolum)");
+        return n;
+    }
     log3d("sahne yuklendi: " + toString(n) + " varlik");
     return n;
 }
@@ -6243,6 +6264,151 @@ func _sc_load_prefabs3(ps) {
 }
 
 // Şu anki sahneyi JSON olarak ver.
+// ===========================================================================
+// ÇOK BÖLÜMLÜ SAHNE — editörle "ekran" değil OYUN yapmak
+// ===========================================================================
+// Sahne biçimi tek bir bölüm anlatıyordu: bir dosya = bir ekran. Motorda
+// `level3d(n, fn)` vardı ama bir FONKSİYON istiyordu, yani bölümler yalnız
+// KOD ile yazılabiliyordu — editörle yapılan bir oyun ilk ekranda bitiyordu.
+//
+// NE PAYLAŞILIR, NE BÖLÜME AİTTİR:
+//   paylaşılan — dünya (gökyüzü, sis, zemin, yerçekimi, kamera) ve şablonlar
+//   bölüme ait — varlıklar, bölgeler, kurallar
+// Gökyüzünü her bölümde tekrar yazmak dosyayı şişirir ve iki bölümün
+// sessizce farklı görünmesine yol açar; asıl değişen şey sahnenin İÇİDİR.
+//
+// Tek bölümlü dosyalar AYNEN çalışıyor: üst düzey "entities" varsa o tek
+// bölümdür. Yeni anahtar "levels" yalnız birden çok bölüm varken yazılıyor.
+array _lvl_js3 = [];        // bölüm içerikleri (json), _lvlN ile paralel
+
+// Bölümün sahne-kapsamlı parçası.
+func _sc_level_js3(): str {
+    str o = "    {\n      \"entities\": [\n";
+    int i = 0;
+    int first = 1;
+    while (i < length(_e3)) {
+        Ent3 e = _e3[i];
+        if (e.alive == 1 && e.tag != TAG_BULLET && e.life <= 0.0) {
+            if (first == 0) { o = o + ",\n"; }
+            o = o + _sc_ent_js3(i);
+            first = 0;
+        }
+        i = i + 1;
+    }
+    return o + "\n      ]" + _sc_zones_js3() + _sc_rules_js3() + "\n    }";
+}
+
+// Bölümün sahne-kapsamlı parçasını yükle. Dünyaya ve şablonlara DOKUNMAZ:
+// onlar bölümler arasında paylaşılıyor.
+func _sc_load_level3(j): int {
+    _e3 = []; _e3gen = []; _e3free = []; _free_n3 = 0;
+    _bx = []; _by = []; _bz = []; _br = [];
+    _rampi3 = [];
+    _sc_nm = []; _sc_id = [];
+    _bh3 = []; _rl3 = [];
+    _trg_clear3();
+    int n = 0;
+    if (_sc_has3(j, "entities")) {
+        json es = j["entities"];
+        int i = 0;
+        while (i < length(es)) { _sc_load_ent3(es[i]); n = n + 1; i = i + 1; }
+    }
+    if (_sc_has3(j, "zones")) {
+        json zs = j["zones"];
+        int z = 0;
+        while (z < length(zs)) { _sc_load_zone3(zs[z]); z = z + 1; }
+    }
+    if (_sc_has3(j, "rules")) {
+        json rs = j["rules"];
+        int r = 0;
+        while (r < length(rs)) { _sc_load_rule3(rs[r]); r = r + 1; }
+    }
+    return n;
+}
+
+// Bölüm sisteminin VERİ tarafı. `level3d` bir fonksiyon istiyor; veri
+// bölümlerinin hepsi BUNU kaydediyor ve hangi bölümde olduğumuza bakıp
+// kendi içeriğini yüklüyor.
+func _s3_level_data3() {
+    int idx = _lvl_index3(_cur_lvl3);
+    if (idx < 0 || idx >= length(_lvl_js3)) { return; }
+    _sc_load_level3(_lvl_js3[idx]);
+}
+
+// --- Editör tarafı: bölümler arasında gezinme ------------------------------
+int _ed_lvl3 = 0;           // düzenlenen bölüm (0-tabanlı)
+
+func ed_level_count3d(): int { return length(_lvl_js3); }
+func ed_level_now3d(): int { return _ed_lvl3 + 1; }
+
+// Yaşayan sahneyi ŞU ANKİ bölüme geri yaz. Bölüm değiştirmeden, kaydetmeden
+// ve oynatmadan önce ŞART: yoksa o bölümde yapılan iş sessizce kaybolur —
+// ve sessiz kayıp bu editörde daha önce bir kez gerçekten yaşandı.
+func _ed_level_store3() {
+    if (_ed_lvl3 < 0 || _ed_lvl3 >= length(_lvl_js3)) { return; }
+    _lvl_js3[_ed_lvl3] = fromJson(_sc_level_js3());
+}
+
+func ed_level_go3d(k) {
+    int i = k - 1;
+    if (i < 0 || i >= length(_lvl_js3) || i == _ed_lvl3) { return; }
+    _ed_level_store3();
+    _ed_lvl3 = i;
+    _cur_lvl3 = k;
+    _sc_load_level3(_lvl_js3[i]);
+    _ed_sel3e = 0 - 1;
+    _ed_drag3 = 0;
+    _ed_dirty3 = 1;
+}
+func bolum_git3d(k) { ed_level_go3d(k); }
+
+// Yeni BOŞ bölüm ekle ve ona geç. Tek bölümlü bir sahne burada çok bölümlüye
+// DÖNÜŞÜYOR: yaşayan sahne 1. bölüm oluyor.
+func ed_level_add3d() {
+    ed_mark3d();
+    if (length(_lvl_js3) == 0) {
+        push(_lvl_js3, fromJson(_sc_level_js3()));
+        level3d(1, "_s3_level_data3");
+        _ed_lvl3 = 0;
+    } else {
+        _ed_level_store3();
+    }
+    push(_lvl_js3, fromJson("{\"entities\": []}"));
+    level3d(length(_lvl_js3), "_s3_level_data3");
+    _ed_lvl3 = length(_lvl_js3) - 1;
+    _cur_lvl3 = _ed_lvl3 + 1;
+    _sc_load_level3(_lvl_js3[_ed_lvl3]);
+    _ed_sel3e = 0 - 1;
+    _ed_dirty3 = 1;
+}
+func bolum_ekle3d() { ed_level_add3d(); }
+
+// Bulunulan bölümü sil. SON bölüm silinmiyor: bölümsüz bir oyun yok ve
+// "hepsini sildim, sahnem nerede?" durumu geri alınamaz görünürdü.
+func ed_level_del3d() {
+    if (length(_lvl_js3) < 2) { return; }
+    ed_mark3d();
+    int i = _ed_lvl3;
+    int last = length(_lvl_js3) - 1;
+    int k = i;
+    while (k < last) { _lvl_js3[k] = _lvl_js3[k + 1]; k = k + 1; }
+    pop(_lvl_js3);
+    // Bölüm numaraları 1..N olarak yeniden kuruluyor: aradan biri silinince
+    // numaralar delik kalırsa `bolum_gec3d` boşluğa düşer ve oyun biter.
+    _lvlN = []; _lvlF = [];
+    k = 0;
+    while (k < length(_lvl_js3)) { level3d(k + 1, "_s3_level_data3"); k = k + 1; }
+    if (_ed_lvl3 > length(_lvl_js3) - 1) { _ed_lvl3 = length(_lvl_js3) - 1; }
+    _cur_lvl3 = _ed_lvl3 + 1;
+    _sc_load_level3(_lvl_js3[_ed_lvl3]);
+    _ed_sel3e = 0 - 1;
+    _ed_dirty3 = 1;
+}
+func bolum_sil3d() { ed_level_del3d(); }
+
+func level_count3d(): int { return length(_lvl_js3); }
+func bolum_sayisi3d(): int { return level_count3d(); }
+
 func scene_json3d(): str {
     str o = "{\n  \"v\": " + toString(SCENE_V3) + ",\n" + _sc_world_js3() + ",\n";
     o = o + "  \"entities\": [\n";
@@ -6261,6 +6427,27 @@ func scene_json3d(): str {
     return o + "\n  ]" + _sc_zones_js3() + _sc_prefabs_js3() +
            _sc_rules_js3() + "\n}\n";
 }
+
+// Çok bölümlü yazım. Tek bölümde ESKİ biçim yazılıyor — yeni bir anahtar
+// eklemek, tek bölümlü her dosyayı gereksizce değiştirirdi.
+func scene_json_levels3d(): str {
+    if (length(_lvl_js3) < 2) { return scene_json3d(); }
+    str o = "{\n  \"v\": " + toString(SCENE_V3) + ",\n" + _sc_world_js3() + ",\n";
+    str pf = _sc_prefabs_js3();
+    if (length(pf) > 0) {
+        // _sc_prefabs_js3 ",\n  ..." ile başlıyor; baştaki virgülü atıyoruz.
+        o = o + substring(pf, 2, length(pf)) + ",\n";
+    }
+    o = o + "  \"levels\": [\n";
+    int k = 0;
+    while (k < length(_lvl_js3)) {
+        if (k > 0) { o = o + ",\n"; }
+        o = o + toJson(_lvl_js3[k]);
+        k = k + 1;
+    }
+    return o + "\n  ]\n}\n";
+}
+func sahne_json_bolumlu3d(): str { return scene_json_levels3d(); }
 func sahne_json3d(): str { return scene_json3d(); }
 
 // Diske yaz — web'de tarayıcının kalıcı deposuna (bkz. _s3_key3).
@@ -7070,7 +7257,12 @@ str   _ed_msg3   = "";
 // tepkisiz kalırdı.
 str _sc_authored3 = "";
 
-func _ed_capture3() { _sc_authored3 = scene_json3d(); }
+// YAZARLIK durumunu sakla. Çok bölümlü sahnede yaşayan bölüm önce diziye
+// geri yazılıyor, yoksa "Oynat"a basmak o bölümde yapılanı yutardı.
+func _ed_capture3() {
+    _ed_level_store3();
+    _sc_authored3 = scene_json_levels3d();
+}
 
 func _ed_apply_json3(js) {
     if (js == "") { return; }
@@ -7558,7 +7750,12 @@ func editor_save3d(): bool {
         _ed_msg_t3 = 3.0;
         return false;
     }
-    bool ok = scene_save3d(_ed_path3);
+    // Bölüm farkındalığı: yaşayan bölüm önce diziye yazılıyor, sonra ÇOK
+    // BÖLÜMLÜ biçim kaydediliyor. Tek bölümde eski biçim yazılıyor.
+    _ed_level_store3();
+    bool ok = false;
+    if (web_mi()) { ok = kayit_yaz(_s3_key3(_ed_path3), scene_json_levels3d()); }
+    else { ok = write_file(_ed_path3, scene_json_levels3d()); }
     if (ok) { _ed_msg3 = "kaydedildi: " + _ed_path3; _ed_dirty3 = 0; }
     else { _ed_msg3 = "KAYDEDILEMEDI: " + _ed_path3; }
     _ed_msg_t3 = 3.0;
@@ -8519,6 +8716,13 @@ func _ed_toolbar3() {
 func ed_play3d() {
     if (_ed_playing3 == 1) { return; }
     _ed_capture3();
+    // Oyun BİRİNCİ bölümden başlar — oyuncunun göreceği şey bu. Editörde
+    // 3. bölümdeyken "Oynat" 3. bölümü test etmek gibi görünebilir ama o
+    // zaman oyunun başlangıcı hiç denenmemiş olurdu.
+    if (length(_lvl_js3) > 1) {
+        _cur_lvl3 = 1;
+        _sc_load_level3(_lvl_js3[0]);
+    }
     _ed_playing3 = 1;
     _ed_on3 = 0;
     _g_focus3 = 0;
@@ -8767,16 +8971,74 @@ func _ed_match3(hay, needle): bool {
     return false;
 }
 
+// Bölüm şeridi: ◀ BOLUM k/N ▶ + x. Dönen değer bir SONRAKİ satırın y'si —
+// şerit yüksekliği değişince altındaki her şey birlikte kayıyor (sabit bir
+// offset yazmak, bu panelde daha önce başlığın üstüne binmeye yol açmıştı).
+//
+// Tek bölümlü sahnede yalnız "+bolum" görünüyor: sayaç ve gezinme okları
+// anlamsız olurdu ve panelin üstünde yer kaplardı.
+// Şerit sütun genişlikleri SAF: yerleşim penceresiz sınanabilsin diye
+// çizimden ayrı. Etiket satırın KALANI; dar panelde eksiye düşerse yazı
+// düğmelerin altına kayar ve şerit okunmaz olur.
+func _ed_lvlbar_navw3(): int { return _us3(22); }
+
+// İKİ SATIR: gezinme üstte, ekle/sil altta.
+//
+// Tek satır denendi ve ÖLÇÜMLE elendi: hiyerarşi paneli dar, üç düğme + ekle
+// + sil yan yana konunca etikete 2x ölçekte 4 PİKSEL kalıyordu — yani
+// "BOLUM 2/3" yazısı okunmaz oluyordu. İki satır her ölçekte sığıyor.
+func _ed_lvlbar_lblw3(inner): int {
+    return inner - _ed_lvlbar_navw3() * 2 - _us3(4);
+}
+
+func _ed_level_bar3(y, pw): int {
+    int n = ed_level_count3d();
+    int bx = _ED_PAD3;
+    int inner = pw - _ED_PAD3 * 2;
+    int h = _ED_FLD3;
+    if (n < 2) {
+        if (_g_button(9760, bx, y, inner, h, "+ BOLUM EKLE")) { ed_level_add3d(); }
+        return y + h + _us3(4);
+    }
+    int nav = _ed_lvlbar_navw3();
+    int lblw = _ed_lvlbar_lblw3(inner);
+    // 1. satır: gezinme
+    if (_g_button(9761, bx, y, nav, h, "<")) { ed_level_go3d(ed_level_now3d() - 1); }
+    bx = bx + nav + _us3(2);
+    _g_txtc3("BOLUM " + toString(ed_level_now3d()) + "/" + toString(n),
+             bx, _g_ly3(y), lblw, _G_ACC3());
+    bx = bx + lblw + _us3(2);
+    if (_g_button(9762, bx, y, nav, h, ">")) { ed_level_go3d(ed_level_now3d() + 1); }
+    y = y + h + _us3(2);
+    // 2. satır: ekle / sil
+    int halfw = toInt((inner - _us3(4)) / 2);
+    if (_g_button(9763, _ED_PAD3, y, halfw, h, "+ bolum")) { ed_level_add3d(); }
+    if (_g_button(9764, _ED_PAD3 + halfw + _us3(4), y, halfw, h, "sil")) {
+        ed_level_del3d();
+    }
+    _g_tip_for3(9761, "Onceki bolum");
+    _g_tip_for3(9762, "Sonraki bolum");
+    _g_tip_for3(9763, "Yeni bos bolum ekle");
+    _g_tip_for3(9764, "Bu bolumu sil (son bolum silinmez)");
+    return y + h + _us3(4);
+}
+
 func _ed_hierarchy3() {
     int py = _ed_view_y3();
     int ph = _ed_view_h3();
     int pw = _ED_HIER_W3;
     _g_panel(0, py, pw, ph, "HIYERARSI");
 
+    // BÖLÜM ŞERİDİ — hiyerarşinin en üstünde, ekleme düğmelerinin üstünde.
+    // Buraya konuyor çünkü hiyerarşi "bu bölümde ne var" panelidir; hangi
+    // bölüme baktığın da o sorunun parçası.
+    int ly = py + _us3(16) + _us3(4);
+    ly = _ed_level_bar3(ly, pw);
+
     // Ekleme düğmeleri: dört eşit sütun, panel genişliğinden türetiliyor.
     // İçerik başlık şeridinin ALTINDAN başlıyor. Sabit 20 idi ve 2x ölçekte
     // şerit 32 piksel olduğu için düğmeler başlığın üstüne biniyordu.
-    int by = py + _us3(16) + _us3(4);
+    int by = ly;
     int gap = 3;
     int bw = _ed_addw3(pw, gap);
     int bx = _ED_PAD3;
