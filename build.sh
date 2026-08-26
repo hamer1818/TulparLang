@@ -28,6 +28,32 @@ echo -e "${YELLOW}Platform: ${PLATFORM}${NC}"
 
 # Parse arguments
 ACTION="$1"
+
+# --- Donanım kaynak göstergesi ----------------------------------------------
+# Uzun koşumların NEYE MAL OLDUĞUNU gösterir: RAM zirvesi, CPU frekansı ve
+# sıcaklığı, GPU kullanımı. Sondaların hepsi tools/hwstat.sh içinde ayrı ayrı
+# korumalı — eksik arayüz sessizce atlanıyor, koşum bundan dolayı ASLA
+# düşmüyor (CI'da lm-sensors da nvidia-smi de yok).
+# TULPAR_NO_HWSTAT=1 tamamen susturur.
+# MUTLAK yol: derleme fazı `cd "$BUILD_DIR"` yaptıktan sonra da çağırıyor,
+# göreli yol orada çözülmezdi.
+HWSTAT="$(cd "$(dirname "$0")" && pwd)/tools/hwstat.sh"
+HW_PID=""
+HW_FILE=""
+
+hw_begin() {
+    [ -x "$HWSTAT" ] || return 0
+    "$HWSTAT" info
+    HW_FILE=$(mktemp 2>/dev/null) || return 0
+    HW_PID=$("$HWSTAT" start "$HW_FILE" 2>/dev/null)
+}
+
+hw_end() {
+    [ -x "$HWSTAT" ] || return 0
+    [ -n "$HW_PID" ] || return 0
+    "$HWSTAT" stop "$HW_PID" "$HW_FILE" "${1:-kosum}" 2>/dev/null
+    HW_PID=""
+}
 TARGET="$2"
 
 # Single platform-suffixed build directory (mirrors build.bat behaviour:
@@ -120,6 +146,7 @@ if [ "$ACTION" = "suites" ]; then
         echo -e "${RED}ERROR: ./tulpar yok — önce ./build.sh çalıştırın.${NC}"
         exit 1
     fi
+    hw_begin
     SUITE_FAILED=0
     SUITE_N=0
     for suite in tests/*.test.tpr; do
@@ -142,6 +169,7 @@ if [ "$ACTION" = "suites" ]; then
     done
     echo ""
     if [ $SUITE_FAILED -ne 0 ]; then
+        hw_end "suites"
         echo -e "${RED}Some suites failed!${NC} ($SUITE_N paket)"
         exit 1
     fi
@@ -282,11 +310,13 @@ if [ "$ACTION" = "suites" ]; then
         rm -rf "$CG_TMP"
     fi
 
+    hw_end "suites ($SUITE_N paket)"
     echo -e "${GREEN}All $SUITE_N suites passed!${NC}"
     exit 0
 fi
 
 if [ "$ACTION" = "test" ]; then
+    hw_begin
     # Ensure tulpar exists
     if [ ! -f "tulpar" ]; then
         echo "Executable 'tulpar' not found. Building first..."
@@ -686,17 +716,20 @@ if [ "$ACTION" = "test" ]; then
     rm -rf "$FAIL_DIR"
 
     echo ""
+    hw_end "ornekler"
     if [ $TEST_FAILED -ne 0 ]; then
         echo -e "${RED}Some tests failed!${NC}"
         exit 1
     fi
-    
+
     echo -e "${GREEN}All tests passed!${NC}"
     exit 0
 fi
 
 # Build with CMake — wipe contents first so we always get a clean configure
 echo "Building TulparLang..."
+# Derleme en ağır faz; kaynak kullanımı burada da ölçülüyor.
+hw_begin
 echo "Preparing $BUILD_DIR (wiping contents)..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
@@ -715,6 +748,7 @@ if [ $? -ne 0 ]; then
 fi
 
 # Copy executable
+hw_end "derleme"
 cp tulpar ../tulpar
 # Copy the runtime archive next to the executable too. The AOT linker
 # probes the directory of the running `tulpar` first, so leaving a stale
