@@ -557,6 +557,11 @@ func scene3d_reset() {
     _e3gen = []; _e3free = []; _free_n3 = 0;
     _bx = []; _by = []; _bz = []; _br = [];   // geniş faz de sahneyle gider
     _rampi3 = [];                             // rampa dizini de
+    _plati3 = [];                             // platform dizini de
+    _plat_lasty3 = []; _plat_dy3 = []; _plat_seen3 = []; _e_sup3 = [];
+    _pl_top3 = []; _pl_pdy3 = []; _pl_x3 = []; _pl_z3 = [];
+    _pl_hx3 = []; _pl_hz3 = []; _pl_yaw3 = [];
+    _plat_hit3 = 0 - 1;
     // Nav ızgarası da sahneyle gider. Bırakılınca yeni sahne ESKİ duvarların
     // ızgarasını kullanır ve `chase_path3d` var olmayan duvarları dolaşır —
     // üstelik testleri sıraya bağımlı yapıyordu (gerekçe `_slope_lim3` ve
@@ -2468,6 +2473,8 @@ func _s3_physics(dt) {
     // Rampa dizini kare başına BİR KEZ kuruluyor (O(n)); eskiden zemin
     // sorgusu entity başına bütün diziyi geziyordu, yani O(n²).
     _ramp_index3();
+    // Platform dizini de: aynı gerekçe, aynı ömür.
+    _plat_index3();
     int i = 0;
     while (i < n) {
         Ent3 e = _e3[i];
@@ -2504,20 +2511,40 @@ func _s3_physics(dt) {
                 e.vy = e.vy * k;
                 e.vz = e.vz * k;
             }
+            // TAŞIMA: üstünde durduğu platform bu karede kımıldadıysa cisim
+            // de onunla gider. Bundan ÖNCE olmalı — taşınmış konum, "yüzeyin
+            // üstünde mi başladı" sorusunun sorulacağı konum.
+            if (is_bullet == 0 && is_static == 0 && i < length(_e_sup3)) {
+                int sup = _e_sup3[i];
+                if (sup >= 0 && sup < length(_plat_dy3)) {
+                    e.y = e.y + _plat_dy3[sup];
+                }
+            }
+            // Bu karenin BAŞINDAKİ alt yüzeyi, hareket etmeden önce.
+            // Platform desteği bunu kullanıyor: "yüzeyin üstünde mi başladı"
+            // sorusu, yandan çarpmayı üstüne çıkmaktan ayıran tek şey.
+            float onceki_alt = e.y - e.sy * 0.5;
             e.x = e.x + e.vx * dt;
             e.y = e.y + e.vy * dt;
             e.z = e.z + e.vz * dt;
             // Zemin teması. Dünya artık tek düzlem değil: rampaların üzerindeki
-            // yükseklik de zemin sayılır, ikisinin EN YÜKSEĞİ alınır.
+            // yükseklik, PLATFORMLARIN üstü de zemin sayılır — en yüksek olan.
             if (is_bullet == 0 && is_static == 0) {
                 float half = e.sy * 0.5;
-                float floor_y = _floor_at3(e.x, e.z) + half;
+                float floor_y = _plat_top3(e.x, e.z, onceki_alt,
+                                           _floor_at3(e.x, e.z)) + half;
                 if (e.y <= floor_y) {
                     e.y = floor_y;
                     if (e.vy < 0.0) { e.vy = 0.0; }
                     e.grounded = 1;
+                    // Destek kaydı: `_plat_top3` bir platform seçtiyse onun
+                    // slotu, zemine/rampaya oturduysa -1.
+                    if (i < length(_e_sup3)) { _e_sup3[i] = _plat_hit3; }
                 } else {
                     e.grounded = 0;
+                    // Havadayken destek YOK: zıplayan cisim eski platformunun
+                    // hareketini taşımaya devam etmemeli.
+                    if (i < length(_e_sup3)) { _e_sup3[i] = 0 - 1; }
                 }
                 // Eğim sınırı: dik yamaçta zemine basmak yetmiyor, aşağı
                 // kayıyorsun. Normalin YATAY bileşeni tepeden dışarı bakar,
@@ -3133,6 +3160,168 @@ func _ramp_h3(r, px, pz): float {
 // yapıyor. Bu, dizini kill3d ile senkron tutma zorunluluğunu kaldırıyor —
 // senkronu kaçırmak sessiz bir hata olurdu, üst küme olmak değil.
 array _rampi3 = [];
+
+// ---- Platform desteği (statik katı kutuların ÜSTÜ zemin sayılır) -----------
+// Zemin sorgusu düzlem + arazi + rampa biliyordu, KUTULARI bilmiyordu. Sonucu
+// kullanıcı oynayarak buldu: PLATFORM şablonunda toplanacak altınlar
+// platformların üstünde durmuyor, dibe düşüyordu (katı olmadıkları için MTV
+// de onlara dokunmuyor) — yani "platform oyunu"nun bütün eşyaları yerdeydi.
+//
+// Aynı sorgu hızlı düşüşteki TÜNELLEMEYİ de kapatıyor: karşılaştırma
+// entity'nin bu kareye BAŞLARKENki alt yüzeyiyle yapılıyor, o yüzden bir
+// karede kalınlığı aşmak fark etmiyor.
+array _plati3 = [];
+
+// Temas payı — bkz. `_plat_top3`. Sığ teması yandan tırmanmadan ayıran sınır.
+float _PLAT_SKIN3 = 0.15;
+
+// HAREKETLİ platform taşıması. Salınan bir platformun üstündeki cisim onunla
+// birlikte gitmezse platform altından kaçıyor ve cisim düşüyor: şablondaki
+// salınan platformun altını YERE düşüyordu, oyuncu da karelerin %43'ünde
+// havada kalıyordu (ölçüldü). Taşıma olmadan "hareketli platform" diye bir
+// şey yok, sadece ara ara çarpan bir kutu var.
+//
+// Üç dizi de SLOT'la indeksleniyor (handle ile değil) ve entity deposuyla
+// aynı boyda tutuluyor.
+array _plat_lasty3 = [];   // geçen karedeki y
+array _plat_dy3    = [];   // bu karedeki y değişimi
+array _plat_seen3  = [];   // bu slot geçen karede de platform muydu
+array _e_sup3      = [];   // cismin üstünde durduğu platformun slotu (-1 = yok)
+
+// Sorgunun okuduğu DÜZ diziler — `_plati3` ile aynı sırada. Sorgu cisim
+// başına dönüyor, yani sıcak yol: burada `Ent3` kopyalamak ölçüldü ve
+// pahalıydı. Struct kopyası zaten bu depoda bir kez zemin sorgusunu O(n²)
+// yapmıştı; aynı tuzağa ikinci kez düşüldü ve ölçüm gösterdi.
+//
+// 120 kare, platform/cisim sayısına göre (ms):
+//     sorgu yok    struct kopyalı    düz dizili
+//   50/200   101         222              121
+//  200/400   235        1181              386
+//  400/600   385        3201              802
+//
+// Kalan yük hâlâ O(cisim × platform): 400 platformluk bir sahnede kare
+// başına ~6.7 ms. Oynanabilir ama bedava değil; bir sahne o ölçeğe çıkarsa
+// sıradaki adım ızgaraya (`_grid_near3`) taşımak.
+array _pl_top3  = [];   // üst yüzey y'si
+array _pl_pdy3  = [];   // bu karedeki y değişimi
+array _pl_x3    = [];   array _pl_z3   = [];
+array _pl_hx3   = [];   array _pl_hz3  = [];
+array _pl_yaw3  = [];
+
+// `_plat_top3`in seçtiği platform. Desteği kaydetmek için: taşıma bir sonraki
+// karede HANGİ platformun hareket ettiğini bilmek zorunda.
+int _plat_hit3 = 0 - 1;
+
+func _plat_arrays3(n) {
+    while (length(_plat_lasty3) < n) {
+        push(_plat_lasty3, 0.0);
+        push(_plat_dy3, 0.0);
+        push(_plat_seen3, 0);
+        push(_e_sup3, 0 - 1);
+    }
+}
+
+func _plat_index3() {
+    _plati3 = [];
+    _pl_top3 = []; _pl_pdy3 = [];
+    _pl_x3 = []; _pl_z3 = []; _pl_hx3 = []; _pl_hz3 = []; _pl_yaw3 = [];
+    int n = length(_e3);
+    _plat_arrays3(n);
+    int i = 0;
+    while (i < n) {
+        Ent3 e = _e3[i];
+        // RAMPA ayrı sorguda (eğimli üstü var); KÜRE dışarıda, bir kürenin
+        // "üstü" tek nokta — üzerinde durmak anlamlı değil ve MTV zaten
+        // yuvarlak gövdeleri kendi çözüyor.
+        if (e.alive == 1 && e.solid == 1 && e.tag == TAG_WALL &&
+            e.shape != SHAPE_RAMP && e.shape != SHAPE_SPHERE) {
+            // İlk kare: değişim SIFIR. Yoksa bayat bir `lasty` (ya da yeni
+            // slotun 0.0'ı) koca bir sıçrama gibi görünür ve üstündeki her
+            // şeyi fırlatırdı.
+            float dy = 0.0;
+            if (_plat_seen3[i] == 1) { dy = e.y - _plat_lasty3[i]; }
+            _plat_dy3[i] = dy;
+            _plat_lasty3[i] = e.y;
+            _plat_seen3[i] = 1;
+            push(_plati3, i);
+            push(_pl_top3, e.y + e.sy * 0.5);
+            push(_pl_pdy3, dy);
+            push(_pl_x3, e.x);   push(_pl_z3, e.z);
+            push(_pl_hx3, e.sx * 0.5);  push(_pl_hz3, e.sz * 0.5);
+            push(_pl_yaw3, e.yaw);
+        } else {
+            _plat_dy3[i] = 0.0;
+            _plat_seen3[i] = 0;
+        }
+        i = i + 1;
+    }
+}
+
+// Nokta kutunun XZ izdüşümünde mi? Dönük kutu için nokta kutunun YEREL
+// çerçevesine taşınıyor — dönüş ifadesi `_seg_aabb3` ile BİREBİR aynı;
+// ikisi ayrışırsa "üstünde durabildiğin yer" ile "ışının çarptığı yer"
+// farklı hacimler olurdu.
+// `j` = DİZİN sırası (entity slotu değil) — düz dizilerden okuyor.
+func _plat_in_xz3(j, px, pz): bool {
+    float rx = px - _pl_x3[j];
+    float rz = pz - _pl_z3[j];
+    float yw = _pl_yaw3[j];
+    if (abs_f3(yw) > 0.01) {
+        float c = cos(yw * DEG2RAD3);
+        float sn = sin(yw * DEG2RAD3);
+        float nrx = rx * c - rz * sn;
+        float nrz = rx * sn + rz * c;
+        rx = nrx; rz = nrz;
+    }
+    if (abs_f3(rx) > _pl_hx3[j]) { return false; }
+    if (abs_f3(rz) > _pl_hz3[j]) { return false; }
+    return true;
+}
+
+// Ayağın ALTINDA kalan en yüksek platform üstü.
+//
+// `onceki_alt` = entity'nin bu kareye BAŞLARKENki alt yüzeyi. Şimdiki değil:
+// yandan bir platforma yürüyen cisim yükseğe ışınlanmamalı, ve hızlı düşen
+// cisim ince platformu delip geçmemeli. İkisini ayıran tek şey "kareye
+// yüzeyin ÜSTÜNDE mi başladı" sorusu.
+func _plat_top3(px, pz, onceki_alt, base): float {
+    float best = base;
+    _plat_hit3 = 0 - 1;
+    int m = length(_plati3);
+    // Platformsuz sahne burada biter: tek bir uzunluk okuması.
+    int j = 0;
+    while (j < m) {
+        float top = _pl_top3[j];
+        // "Üstünde miydi" sorusu platformun KARE BAŞINDAKİ üstüne soruluyor,
+        // şimdikine değil. İki hareket de sayılmalı: cisim düşerken yüzeyi
+        // geçebiliyor, ama YÜKSELEN platform da cismin içinden geçebiliyor —
+        // ve ikincisi ölçülene kadar gözden kaçtı: şablondaki salınan
+        // platform, üstündeki altını yukarı çıkarken yutup geçiyordu, altın
+        // da dibe kadar düşüyordu. Testi yalnız cismin hareketine sormak
+        // asimetrikti.
+        float onceki_ust = top - _pl_pdy3[j];
+        // İki kabul yolu:
+        //   (a) cisim kareye yüzeyin ÜSTÜNDE başladı — temiz hâl.
+        //   (b) SIĞ TEMAS: yüzeyin biraz altında ama _PLAT_SKIN3'ten daha az.
+        //
+        // (b) şart, çünkü bir platformun ilk karedeki hareketi ÖLÇÜLEMİYOR
+        // (değişim ancak iki kare arasında bilinir). Salınan platformun
+        // üstünde tam yüzeyde duran altın o ilk karede 0.1 birim içeride
+        // kalıyor ve (a) bir daha asla tutmuyordu: platform yükselirken
+        // altını yutup geçiyor, altın dibe düşüyordu.
+        //
+        // BEDELİ, açıkça: _PLAT_SKIN3 kadar bir BASAMAK. Bu yükseklikteki bir
+        // kenara yandan yürüyen cisim üstüne çıkar. 0.15 birim — takılmayı
+        // önleyecek kadar küçük, ışınlanma gibi görünmeyecek kadar da.
+        bool ustunde = onceki_ust <= onceki_alt + 0.001;
+        bool sig_temas = onceki_alt < onceki_ust && onceki_ust - onceki_alt < _PLAT_SKIN3;
+        if (top > best && (ustunde || sig_temas)) {
+            if (_plat_in_xz3(j, px, pz)) { best = top; _plat_hit3 = _plati3[j]; }
+        }
+        j = j + 1;
+    }
+    return best;
+}
 
 func _ramp_index3() {
     _rampi3 = [];
@@ -6855,7 +7044,11 @@ func ed_template3d(k) {
                            rgb(140, 150, 190), SHAPE_CUBE, TAG_WALL);
             // Bir platform salınsın: zıplamayı zamanlamak gerekiyor.
             if (i == 2) { salin_davranis3d(pl, 1.2, 0.8); }
-            uret3(px2, ph + 1.2, 0.0 - i * 4.0, 1.0, 1.0, 1.0, GOLD,
+            // Altın platformun ÜST YÜZEYİNDE dinleniyor: platform yarı
+            // yüksekliği 0.3 + altın yarıçapı 0.5. Eskiden merkezden 1.2
+            // yukarıdaydı, yani havada duruyordu — salınan platform için
+            // bu, altının salınım aralığının İÇİNDE kalması demekti.
+            uret3(px2, ph + 0.3 + 0.5, 0.0 - i * 4.0, 1.0, 1.0, 1.0, GOLD,
                   SHAPE_SPHERE, TAG_ITEM);
             px2 = px2 + 5.5;
             i = i + 1;

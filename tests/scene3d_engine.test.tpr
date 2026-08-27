@@ -7641,6 +7641,269 @@ func t_check_flags_missing_sound_file() {
     assert(!_t_chk_has3("ses dosyasi yuklenemedi"), "ses kaldirilinca uyari da gitmeli");
 }
 
+
+// ===========================================================================
+// PLATFORM DESTEĞİ — kullanıcının OYNAYARAK bulduğu hata
+//
+// Zemin sorgusu düzlem + arazi + rampa biliyordu, KUTULARI bilmiyordu. Sonuç:
+// PLATFORM şablonunda toplanacak altınlar platformların üstünde durmuyor,
+// dibe düşüyordu (katı olmadıkları için MTV de onlara dokunmuyor). Salınan
+// platform da üstündekini taşımıyordu — oyuncu karelerin %43'ünde havadaydı.
+// ===========================================================================
+
+func _pl_step(dt) { _s3_behaviors(dt); _s3_physics(dt); _s3_collision(); _s3_rules(); }
+
+// Katı OLMAYAN bir cisim de platformun üstünde durmalı. MTV yalnız katı
+// gövdeleri ayırıyor, yani eşyanın tek desteği zemin sorgusu.
+func t_nonsolid_rests_on_platform() {
+    scene3d_reset(); ground3d(0.0);
+    // Platform: merkez y=2, kalinlik 0.6 -> ust yuzey 2.3
+    uret3(0.0, 2.0, 0.0, 4.0, 0.6, 4.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int g = uret3(0.0, 5.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    int gs = _slot_of3(g);
+    assert_eq_int(_e3[gs].solid, 0);   // on kosul: KATI DEGIL
+    int k = 0;
+    while (k < 120) { _pl_step(0.016667); k = k + 1; }
+    // Dinlenme: 2.3 + yaricap 0.5 = 2.8. Zemine duserse 0.5 olurdu.
+    assert(abs_f3(_e3[gs].y - 2.8) < 0.01,
+           "esya platformun ustunde dinlenmeli, y=" + toString(_e3[gs].y));
+}
+
+// Yandan gelen cisim platformun ÜSTÜNE IŞINLANMAMALI — destek testinin
+// varlık sebebi bu. (Temas payı kadar bir basamak kabul; ondan yükseği hayır.)
+func t_side_approach_does_not_teleport_up() {
+    scene3d_reset(); ground3d(0.0);
+    // Kalin bir duvar: ust yuzey 3.0, temas payindan (0.15) cok yuksek.
+    uret3(0.0, 1.5, 0.0, 4.0, 3.0, 4.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int p = uret3(0.0 - 6.0, 1.0, 0.0, 1.2, 2.0, 1.2, BLUE, SHAPE_CUBE, TAG_PLAYER);
+    int ps = _slot_of3(p);
+    int k = 0;
+    while (k < 120) {
+        _s3_behaviors(0.016667);
+        _e3[ps].vx = 6.0;              // duvara dogru yuru
+        _s3_physics(0.016667); _s3_collision(); _s3_rules();
+        k = k + 1;
+    }
+    // Zeminde kalmali (y=1.0), duvarin ustune (3.0+1.0=4.0) cikmamali.
+    assert(_e3[ps].y < 1.5, "yandan gelen cisim duvara TIRMANMAMALI, y=" +
+           toString(_e3[ps].y));
+}
+
+// Hızlı düşen cisim ince platformu DELMEMELİ: karşılaştırma cismin kareye
+// başlarkenki alt yüzeyiyle yapılıyor, o yüzden bir karede kalınlığı aşmak
+// fark etmez. (Ölçüldü: -160 birim/sn ile eskiden geçip gidiyordu.)
+func t_fast_fall_does_not_tunnel_platform() {
+    scene3d_reset(); ground3d(0.0);
+    uret3(0.0, 2.0, 0.0, 4.0, 0.6, 4.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int p = uret3(0.0, 4.0, 0.0, 1.2, 2.0, 1.2, BLUE, SHAPE_CUBE, TAG_PLAYER);
+    int ps = _slot_of3(p);
+    _e3[ps].vy = 0.0 - 160.0;
+    int k = 0;
+    while (k < 60) { _pl_step(0.016667); k = k + 1; }
+    // Dinlenme 2.3 + 1.0 = 3.3; delip gecerse 1.0 olurdu.
+    assert(abs_f3(_e3[ps].y - 3.3) < 0.01,
+           "hizli dusus platformu delmemeli, y=" + toString(_e3[ps].y));
+}
+
+// HAREKETLİ platform üstündekini taşımalı. Taşımazsa platform altından kaçar
+// ve cisim düşer — "hareketli platform" diye bir şey kalmaz.
+func t_moving_platform_carries_rider() {
+    scene3d_reset(); ground3d(0.0);
+    int pl = uret3(0.0, 5.0, 0.0, 4.0, 0.6, 4.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    salin_davranis3d(pl, 1.2, 0.8);
+    int pls = _slot_of3(pl);
+    int p = uret3(0.0, 6.3, 0.0, 1.2, 2.0, 1.2, BLUE, SHAPE_CUBE, TAG_PLAYER);
+    int ps = _slot_of3(p);
+    int havada = 0;
+    int k = 0;
+    float en_dusuk = 999.0;
+    while (k < 240) {
+        _pl_step(0.016667);
+        if (_e3[ps].grounded == 0) { havada = havada + 1; }
+        if (_e3[ps].y < en_dusuk) { en_dusuk = _e3[ps].y; }
+        // Her karede platformun UZERINDE durmali: ayak = platform ustu.
+        float ayak = _e3[ps].y - 1.0;
+        float ust = _e3[pls].y + 0.3;
+        assert(abs_f3(ayak - ust) < 0.02,
+               "binici platformla birlikte gitmeli (kare " + toString(k) + ")");
+        k = k + 1;
+    }
+    assert_eq_int(havada, 0);
+    assert(en_dusuk > 3.0, "zemine dusmemeli");
+}
+
+// Zıplayan cisim eski platformunun hareketini TAŞIMAYA DEVAM ETMEMELİ.
+func t_jumping_off_drops_support() {
+    scene3d_reset(); ground3d(0.0);
+    int pl = uret3(0.0, 5.0, 0.0, 4.0, 0.6, 4.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    salin_davranis3d(pl, 1.2, 0.8);
+    int p = uret3(0.0, 6.3, 0.0, 1.2, 2.0, 1.2, BLUE, SHAPE_CUBE, TAG_PLAYER);
+    int ps = _slot_of3(p);
+    int k = 0;
+    while (k < 30) { _pl_step(0.016667); k = k + 1; }
+    assert(_e_sup3[ps] >= 0, "on kosul: platformda olmali");
+    _e3[ps].vy = 14.0;              // zipla
+    _pl_step(0.016667);
+    assert_eq_int(_e_sup3[ps], 0 - 1);
+    assert_eq_int(_e3[ps].grounded, 0);
+}
+
+// Platform ŞABLONUNUN altınları platformlarda durmali — kullanicinin
+// bildirdigi hatanin ta kendisi.
+func t_platform_template_items_rest_on_platforms() {
+    scene3d_reset();
+    ed_template3d(TPL_PLATFORM);
+    int k = 0;
+    while (k < 150) { _pl_step(0.016667); k = k + 1; }
+    int i = 0;
+    int yerde = 0;
+    int say = 0;
+    while (i < length(_e3)) {
+        if (_e3[i].tag == TAG_ITEM && _e3[i].alive == 1) {
+            say = say + 1;
+            // Zemin dinlenmesi y=0.5; platformlarin en alcagi 2.8.
+            if (_e3[i].y < 1.5) { yerde = yerde + 1; }
+        }
+        i = i + 1;
+    }
+    assert(say >= 4, "on kosul: sablonda altin olmali");
+    assert_eq_int(yerde, 0);
+}
+
+
+// ---- Platform desteğinin KORUMALARI -----------------------------------------
+// Aşağıdakiler mutlu yolu değil, YASAKLARI sınıyor. Hepsi KATI OLMAYAN bir
+// cisim kullanıyor ve sebebi ölçüldü: katı gövdeyi MTV platformun dışına
+// itiyor, yani merkezi ayak izine hiç girmiyor ve korumalar hiç çalışmıyor.
+// Bu yüzden katı gövdeyle yazılmış ilk koruma testlerim BOŞTU — beş ayrı
+// bozma testlerden kaçtı.
+
+
+// Simetrinin KENDİSİ — döngüden değil, sorgudan. Yukarıdaki benzetim testi
+// simetri kaldırılınca da yeşil kaldı ve sebebi öğreticiydi: destek bir kez
+// kurulduktan sonra TAŞIMA cismi zaten yüzeye kilitliyor, yani simetri hiç
+// sorulmuyor. Simetri yalnız DESTEKSİZ bir cisme yükselen platform yetişince
+// devreye giriyor. Bu yüzden burada sorgu doğrudan çağrılıyor.
+func t_support_test_counts_platform_motion() {
+    scene3d_reset(); ground3d(0.0);
+    int pl = uret3(0.0, 4.5, 0.0, 6.0, 0.6, 6.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int pls = _slot_of3(pl);
+    // 1. dizinleme: gecmis yok, degisim 0 (ust = 4.8).
+    _plat_index3();
+    // Platformu bir karede 0.5 YUKARI tasi (ust 4.8 -> 5.3).
+    _e3[pls].y = 5.0;
+    _plat_index3();
+    assert(abs_f3(_plat_dy3[pls] - 0.5) < 0.001, "on kosul: degisim 0.5 olmali");
+    // Kare BASINDA alt yuzeyi 5.0 olan cisim: ESKI ustun (4.8) uzerindeydi,
+    // ama YENI ustun (5.3) 0.3 altinda — pay (0.15) bunu kurtarmaz.
+    assert(0.3 > _PLAT_SKIN3, "on kosul: fark paydan buyuk olmali");
+    float y = _plat_top3(0.0, 0.0, 5.0, 0.0);
+    assert(abs_f3(y - 5.3) < 0.001,
+           "yukselen platform, ustunde BASLAYAN cismi tasimali; donen=" + toString(y));
+    assert_eq_int(_plat_hit3, pls);
+    // Ters yon: ESKI ustun de ALTINDA baslayan cisim tasinmamali.
+    float y2 = _plat_top3(0.0, 0.0, 4.0, 0.0);
+    assert(abs_f3(y2 - 0.0) < 0.001, "altinda baslayan cisim tasinmamali");
+    assert_eq_int(_plat_hit3, 0 - 1);
+}
+
+// Bir cisim ÜSTÜNDEKİ platforma ışınlanmamalı. Zemin 1.0'da: cismin alt
+// yüzeyi 1.0, yani "kare başında yüzeyin üstünde miydi" testi yanlış
+// kurulursa (ya da ilk-kare değişimi korunmazsa) yukarı çekilir.
+func t_body_below_platform_not_lifted() {
+    scene3d_reset(); ground3d(1.0);
+    uret3(0.0, 5.0, 0.0, 6.0, 0.6, 6.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int g = uret3(0.0, 1.5, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    int gs = _slot_of3(g);
+    int k = 0;
+    while (k < 90) { _pl_step(0.016667); k = k + 1; }
+    // Zeminde kalmali (1.5). Platformun ustune cikarsa 5.8 olurdu.
+    assert(_e3[gs].y < 2.0, "altindaki cisim platformun ustune cikmamali, y=" +
+           toString(_e3[gs].y));
+}
+
+// Platform yalnız KENDİ ayak izindeki cismi taşımalı. Uzaktaki bir cisim,
+// dikey testi geçse bile (yukarıdan düşerken alt yüzeyi platform üstünün
+// üzerindedir) o platforma oturmamalı.
+func t_platform_supports_only_its_footprint() {
+    scene3d_reset(); ground3d(0.0);
+    uret3(0.0, 2.0, 0.0, 4.0, 0.6, 4.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    // Platformdan 30 birim UZAKTA dusuyor.
+    int g = uret3(30.0, 10.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    int gs = _slot_of3(g);
+    int k = 0;
+    while (k < 150) { _pl_step(0.016667); k = k + 1; }
+    // Zemine inmeli (0.5). Uzaktaki platforma oturursa 2.8'de havada kalirdi.
+    assert(abs_f3(_e3[gs].y - 0.5) < 0.01,
+           "ayak izi disindaki cisim platforma oturmamali, y=" + toString(_e3[gs].y));
+}
+
+// Temas payı BASAMAK demek ve küçük kalmalı. 0.5 birimlik bir çıkıntıya
+// yandan gelen cisim TIRMANMAMALI; pay büyütülürse tırmanır.
+func t_contact_skin_does_not_become_a_staircase() {
+    scene3d_reset(); ground3d(0.0);
+    // ALCAK: x [-2,2], ust 2.3.  YUKSEK: x [2,6], ust 2.8 (0.5 daha yuksek).
+    uret3(0.0, 2.0, 0.0, 4.0, 0.6, 4.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    uret3(4.0, 2.5, 0.0, 4.0, 0.6, 4.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    // Pay (0.15) bu basamaktan (0.5) KUCUK olmali, yoksa test bos olur.
+    assert(_PLAT_SKIN3 < 0.5, "on kosul: pay basamaktan kucuk olmali");
+    int g = uret3(0.0, 2.8, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    int gs = _slot_of3(g);
+    int k = 0;
+    while (k < 120) {
+        _s3_behaviors(0.016667);
+        _e3[gs].vx = 4.0;
+        _s3_physics(0.016667); _s3_collision(); _s3_rules();
+        k = k + 1;
+    }
+    // Yuksek platforma tirmanirsa 3.3'te kalirdi; dogru davranis zemine dusmek.
+    assert(_e3[gs].y < 1.0, "0.5 birimlik basamaga tirmanmamali, y=" +
+           toString(_e3[gs].y));
+}
+
+// Destek testi SİMETRİK olmalı: cismin düşüşü kadar PLATFORMUN yükselişi de
+// sayılmalı. Hızlı yükselen bir platform üstündekini yutup geçmemeli.
+// (Salınım hızı payı aşacak kadar yüksek seçildi: dy ~ genlik*2pi*hiz*dt.)
+func t_fast_rising_platform_does_not_swallow_rider() {
+    scene3d_reset(); ground3d(0.0);
+    int pl = uret3(0.0, 5.0, 0.0, 6.0, 0.6, 6.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    salin_davranis3d(pl, 2.0, 3.0);
+    int pls = _slot_of3(pl);
+    int g = uret3(0.0, 5.8, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    int gs = _slot_of3(g);
+    // On kosul: kare basina hareket temas payindan BUYUK olmali, yoksa
+    // simetri sinanmadan sig-temas kurtarir ve test bos kalir.
+    _pl_step(0.016667);
+    _pl_step(0.016667);
+    float dy = abs_f3(_plat_dy3[pls]);
+    assert(dy > _PLAT_SKIN3, "on kosul: platform payi asacak kadar hizli (dy=" +
+           toString(dy) + ")");
+    int k = 0;
+    float en_dusuk = 999.0;
+    while (k < 240) {
+        _pl_step(0.016667);
+        if (_e3[gs].y < en_dusuk) { en_dusuk = _e3[gs].y; }
+        k = k + 1;
+    }
+    // Yutulursa zemine (0.5) duserdi.
+    assert(en_dusuk > 2.5, "hizli yukselen platform cismi yutmamali, en dusuk=" +
+           toString(en_dusuk));
+}
+
+// KÜRE platform değil: bir kürenin "üstü" tek nokta, üzerinde durmak anlamlı
+// değil ve MTV zaten yuvarlak gövdeleri kendi çözüyor.
+func t_sphere_wall_is_not_a_platform() {
+    scene3d_reset(); ground3d(0.0);
+    uret3(0.0, 2.0, 0.0, 2.0, 2.0, 2.0, GRAY, SHAPE_SPHERE, TAG_WALL);
+    int g = uret3(0.0, 8.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    int gs = _slot_of3(g);
+    int k = 0;
+    while (k < 150) { _pl_step(0.016667); k = k + 1; }
+    // Kurenin sinir kutusu ustu 3.0 olurdu -> 3.5. Dogrusu zemine inmek.
+    assert(abs_f3(_e3[gs].y - 0.5) < 0.01,
+           "kure platform sayilmamali, y=" + toString(_e3[gs].y));
+}
+
 test("varlik kaydi ayni yolu iki kez yuklemiyor", "t_asset_registry_caches");
 test("varlik kaydi model ve dokuyu ayiriyor", "t_asset_registry_separates_kinds");
 test("model yolu yaziliyor ve gidis-donusten sag cikiyor", "t_asset_src_serialized_and_roundtrips");
@@ -7679,4 +7942,16 @@ test("ses de varlik kaydindan geciyor", "t_sound_uses_asset_registry");
 test("sablonlarin sesi var ve dosyalar depoda", "t_templates_have_sounds");
 test("sablon sesleri gidis-donusten sag cikiyor", "t_template_sounds_survive_roundtrip");
 test("denetim eksik ses dosyasini soyluyor", "t_check_flags_missing_sound_file");
+test("kati olmayan cisim platformda duruyor", "t_nonsolid_rests_on_platform");
+test("yandan gelen cisim tirmanmiyor", "t_side_approach_does_not_teleport_up");
+test("hizli dusus platformu delmiyor", "t_fast_fall_does_not_tunnel_platform");
+test("hareketli platform binicisini tasiyor", "t_moving_platform_carries_rider");
+test("ziplayinca destek birakiliyor", "t_jumping_off_drops_support");
+test("sablon altinlari platformlarda duruyor", "t_platform_template_items_rest_on_platforms");
+test("altindaki cisim platforma cekilmiyor", "t_body_below_platform_not_lifted");
+test("platform yalniz kendi ayak izini tasiyor", "t_platform_supports_only_its_footprint");
+test("temas payi merdivene donusmuyor", "t_contact_skin_does_not_become_a_staircase");
+test("hizli yukselen platform cismi yutmuyor", "t_fast_rising_platform_does_not_swallow_rider");
+test("kure platform sayilmiyor", "t_sphere_wall_is_not_a_platform");
+test("destek testi platform hareketini de sayiyor", "t_support_test_counts_platform_motion");
 test_summary();
