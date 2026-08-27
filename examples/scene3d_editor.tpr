@@ -58,7 +58,8 @@
 // gireni yok et (çukur/lav), hasar ver, skor ekle, sonraki bölüm. Eylem
 // seçilmemiş bir bölge hiçbir şey yapmaz — sahne denetimi bunu söylüyor.
 // Bölgeler editörde çizilir (rengi durumunu söyler), tıklanır, ok tuşlarıyla
-// taşınır.
+// taşınır. SESİ de var: girince çalacak dosyayı panelden seçiyorsun —
+// kurallardaki ses listesinin aynısı.
 //
 // KAPATIRKEN: pencereyi çarpıyla kapatmak kaydedilmemiş işi GÖTÜRMÜYOR
 // artık. raylib'de kapanışı iptal edecek bir bağlama yok, yani "emin misin?"

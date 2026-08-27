@@ -4273,6 +4273,10 @@ int ZACT_NEXT   = 6;   // sonraki bölüme geç (çıkış kapısı)
 
 array _trg_act = [];   // ZACT_*
 array _trg_amt = [];   // eylemin miktarı (hasar / skor)
+// Bölgenin sesi. Kuralların sesi vardı, bölgelerinki YOKTU: "çıkış kapısına
+// vardın" ve "çukura düştün" sessizdi — oysa geri bildirimin en çok gerektiği
+// an tam olarak o.
+array _trg_snd = [];
 
 array _trg_in_t = [];     // üyelik: bölge indeksi
 array _trg_in_e = [];     // üyelik: içerideki entity handle
@@ -4292,6 +4296,7 @@ func _trg_new3(shape, x, y, z, sx, sy, sz, r, tag): int {
     push(_trg_fstay, 0); push(_trg_hasstay, 0);
     push(_trg_act, ZACT_NONE);
     push(_trg_amt, 0.0);
+    push(_trg_snd, "");
     return length(_trg_shape) - 1;
 }
 
@@ -4318,6 +4323,16 @@ func trigger_action3d(t, act, amount) {
     _trg_amt[t] = amount * 1.0;
 }
 func bolge_eylem3d(t, eylem, miktar) { trigger_action3d(t, eylem, miktar); }
+func trigger_sound3d(t, path) {
+    if (!_trg_valid3(t)) { return; }
+    _trg_snd[t] = path;
+}
+func bolge_ses3d(t, yol) { trigger_sound3d(t, yol); }
+func trigger_sound_of3d(t): str {
+    if (!_trg_valid3(t)) { return ""; }
+    return _trg_snd[t];
+}
+
 func trigger_action_of3d(t): int {
     if (!_trg_valid3(t)) { return ZACT_NONE; }
     return _trg_act[t];
@@ -4365,6 +4380,11 @@ func _zact_next3(a): int {
 // sonraki bölüm). Ortak kod uğruna zorlamak, yarısı sessizce boş işlem olan
 // bir liste üretirdi.
 func _trg_apply3(t, h) {
+    // Ses EN BAŞTA ve eylemden BAĞIMSIZ. Kurallardaki gerekçenin aynısı:
+    // aşağıdaki dallar gireni öldürebiliyor ve sonra çalmak konumu
+    // kaybettirirdi. Bağımsız olması da bilerek — eylemi olmayan ama sesi
+    // olan bir bölge geçerli bir şey (kapı gıcırtısı, ayak sesi bölgesi).
+    _rl_snd3(_trg_snd[t], h, 0 - 1);
     int a = _trg_act[t];
     if (a == ZACT_NONE) { return; }
     if (a == ZACT_WIN)    { win3d(); return; }
@@ -4572,7 +4592,7 @@ func _trg_clear3() {
     _trg_fin = []; _trg_hasin = [];
     _trg_fout = []; _trg_hasout = [];
     _trg_fstay = []; _trg_hasstay = [];
-    _trg_act = []; _trg_amt = [];
+    _trg_act = []; _trg_amt = []; _trg_snd = [];
     _trg_in_t = []; _trg_in_e = [];
     _trg_cur3 = 0 - 1;
 }
@@ -6644,6 +6664,7 @@ func _sc_load_zone3(z) {
         trigger_action3d(id, _zact_of3(_sc_s3(z, "do", "none")),
                          _sc_f3(z, "amount", 0.0));
     }
+    trigger_sound3d(id, _sc_s3(z, "sound", ""));
 }
 
 // Eylem ↔ dosya anahtarı. Biçimde SAYI değil AD duruyor — ZACT_KILL'in 3
@@ -6696,6 +6717,9 @@ func _sc_zones_js3(): str {
             if (_zact_uses_amount3(_trg_act[i])) {
                 o = o + ", \"amount\": " + _sc_num3(_trg_amt[i]);
             }
+        }
+        if (_trg_snd[i] != "") {
+            o = o + ", \"sound\": " + _sc_q3(_trg_snd[i]);
         }
         o = o + "}";
         i = i + 1;
@@ -7518,6 +7542,14 @@ func scene_check3d(): int {
     int oyuncu = _chk_tag_say3(TAG_PLAYER);
     if (oyuncu == 0) {
         _chk_add3("oyuncu yok (oyuncu etiketli varlik ekle)");
+    }
+    // BİRDEN ÇOK oyuncu neredeyse her zaman kazadır (çoğaltma, yapıştırma).
+    // Hareket girdisi global: ikisi de aynı tuşlara cevap verir ve aynı anda
+    // yürürler. Kamera yalnız birini izlediği için öteki ekrandan çıkıp
+    // gider — sahne "kayıyor" gibi görünür ve sebebi hiçbir yerde yazmaz.
+    if (oyuncu > 1) {
+        _chk_add3(toString(oyuncu) +
+                  " oyuncu var — hepsi ayni tuslarla birlikte hareket eder");
     }
 
     // Bitiş şartı: KAZAN ya da SONRAKI BÖLÜM. Bölge eylemleri de sayılıyor —
@@ -8916,6 +8948,14 @@ func ed_duplicate3d(id): int {
     set3yaw(n, e.yaw);
     solid3d(n, e.solid);
     if (e.hpmax > 0) { health3d(n, e.hpmax); }
+    // AD da taşınıyor, benzersizleştirilerek. Eskiden büsbütün atılıyordu:
+    // adlı bir varlığı çoğaltmak ADSIZ bir kopya veriyordu. Ad taşınabilir
+    // biçimin tek referans yolu — kamera hedefi ve kurallar varlıklara adla
+    // atıfta bulunuyor — yani adsız kopya, kaydedilince o bağların hiçbirine
+    // giremeyen bir şey oluyordu. Benzersizleştirme ŞART: aynı sahnede iki
+    // "kahraman" olsa `find3d` ilkini döndürür.
+    str dnm = _sc_nm_of3(id);
+    if (dnm != "") { rename3d(n, _ed_uniq_name3(dnm)); }
     // Davranışları da kopyala — çoğaltılan düşmanın kovalamaması sürpriz olurdu.
     int cnt = length(_bh3);
     int k = 0;
@@ -11820,6 +11860,10 @@ str   _ed_sndglob3   = "examples/assets/sesler/*.wav";
 array _ed_sndfiles3  = [];
 int   _ed_snddone3   = 0;
 int   _ed_sndopen3   = 0 - 1;   // açık kuralın indeksi (-1 = kapalı)
+// Bölge panelinin kendi bayrağı. Kuralınki bir İNDEKS (hangi kural), bölgede
+// aynı anda tek bölge seçili olduğu için 0/1 yetiyor. İkisi aynı widget
+// bloğunu paylaşıyor ama farklı sekmelerde çizildikleri için çakışmıyorlar.
+int   _ed_zsndopen3  = 0;
 int   _ed_sndscroll3 = 0;
 
 func _ed_snd_scan3() {
@@ -12024,9 +12068,23 @@ func _ed_rl_idused3(): int { return 7; }
 // Ses tarayıcısı SABİT blok: bir anda yalnız TEK kuralın tarayıcısı açık.
 func _ed_snd_idbase3(): int { return 51000; }
 
-// Ses tarayıcısı. Model tarayıcısıyla aynı iskelet; ayrı fonksiyon çünkü
-// kural bloğunun İÇİNDE, seçili kurala yazıyor.
-func _ed_snd_browser3(lx, y, inner, ri): int {
+// Ses tarayıcısı. Model tarayıcısıyla aynı iskelet.
+//
+// KİME yazacağını BİLMİYOR: yürürlükteki yolu parametre olarak alıyor,
+// seçilen yolu `_ed_snd_pick3` ile bildiriyor ve yazma işini çağırana
+// bırakıyor. Böylece aynı tarayıcı hem KURALA hem BÖLGEYE hizmet ediyor;
+// ikinci bir kopya çıkarmak, ses listesini iki yerde bakımı gereken bir şey
+// yapardı. (Dönüş değeri yeni y — Tulpar'da çoklu dönüş yok, o yüzden seçim
+// global ile geliyor; motorun başka yerlerinde de aynı desen var.)
+//
+// Widget kimlikleri SABİT bir blok (51000..51051) ve bu, "bir anda yalnız
+// TEK tarayıcı açık" kuralına dayanıyor. Kural paneli DÜNYA sekmesinde
+// (_ed_tab3 == 1), bölge paneli BÖLGE sekmesinde (== 2) çiziliyor: ikisi
+// aynı karede asla çizilmiyor, yani blok paylaşımı güvenli.
+str _ed_snd_pick3 = "";
+
+func _ed_snd_browser3(lx, y, inner, cur): int {
+    _ed_snd_pick3 = "";
     int base = _ed_snd_idbase3();
     int tbw = _us3(38);
     str g0 = _ed_sndglob3;
@@ -12050,14 +12108,11 @@ func _ed_snd_browser3(lx, y, inner, ri): int {
     _ed_sndscroll3 = _ed_as_clamp3(_ed_sndscroll3, an, rows);
     int ai = _ed_sndscroll3;
     int shown = 0;
-    str cur = rule_sound_path3d(ri);
     while (ai < an && shown < rows) {
         str apath = _ed_sndfiles3[ai];
         int rw = base + 10 + shown * 2;
         if (_g_tog(rw, lx, y, inner, _ED_FLD3, _ed_basename3(apath), apath == cur)) {
-            ed_mark3d();
-            _rl_set_snd3(ri, apath);
-            _ed_sndopen3 = 0 - 1;   // seçince kapan: liste kuralın altını şişirmesin
+            _ed_snd_pick3 = apath;
         }
         _g_tip_for3(rw, apath);
         y = y + _ED_FLD3 + _us3(2);
@@ -12349,7 +12404,12 @@ func _ed_rules_panel3(px, y, pw): int {
         y = y + _ED_FLD3 + _us3(2);
 
         if (_ed_sndopen3 == i) {
-            y = _ed_snd_browser3(lx, y, inner, i);
+            y = _ed_snd_browser3(lx, y, inner, rule_sound_path3d(i));
+            if (_ed_snd_pick3 != "") {
+                ed_mark3d();
+                _rl_set_snd3(i, _ed_snd_pick3);
+                _ed_sndopen3 = 0 - 1;   // seçince kapan: liste bloğu şişirmesin
+            }
         }
 
         // Düz Türkçe özet — kuralın ne yaptığını okumak için kaynağa
@@ -12711,6 +12771,34 @@ func _ed_zone_panel3(px, y, pw) {
         if (_trg_amt[i] < 0.0) { _trg_amt[i] = 0.0; }
         y = y + _ED_FLD3 + _us3(3);
     }
+    // SES satırı — kuralların sesi vardı, bölgelerinki yoktu. "Çıkış kapısına
+    // vardın" ve "çukura düştün" sessizdi; oysa geri bildirimin en çok
+    // gerektiği an tam olarak o.
+    str zs = _trg_snd[i];
+    str zsl = "ses: yok";
+    if (zs != "") { zsl = _ed_basename3(zs); }
+    int zsxw = _us3(22);
+    if (_g_button(23042, lx, y, inner - zsxw - _us3(4), _ED_FLD3, zsl)) {
+        if (_ed_zsndopen3 == 1) { _ed_zsndopen3 = 0; }
+        else { _ed_zsndopen3 = 1; if (_ed_snddone3 == 0) { _ed_snd_scan3(); } }
+    }
+    _g_tip_for3(23042, "Bolgeye girince calacak ses");
+    if (zs != "") {
+        if (_g_button(23043, lx + inner - zsxw, y, zsxw, _ED_FLD3, "x")) {
+            ed_mark3d();
+            trigger_sound3d(i, "");
+        }
+    }
+    y = y + _ED_FLD3 + _us3(2);
+    if (_ed_zsndopen3 == 1) {
+        y = _ed_snd_browser3(lx, y, inner, zs);
+        if (_ed_snd_pick3 != "") {
+            ed_mark3d();
+            trigger_sound3d(i, _ed_snd_pick3);
+            _ed_zsndopen3 = 0;
+        }
+    }
+
     _g_txt3("ok: tasi  R+ok: boyut", lx, _g_ly3(y), inner, _G_DIM3());
     y = y + _g_lh3();
     // Kanca varsa SÖYLE: kod da bir şey yapıyor ve ikisi birlikte koşuyor.
@@ -12750,6 +12838,7 @@ func _ed_zone_delete3(i) {
         // sildiğin kutunun hasarını uygulamaya başlar. Paralel dizilerde en
         // sık yapılan hata bu ve tümüyle sessiz.
         _trg_act[k] = _trg_act[k+1]; _trg_amt[k] = _trg_amt[k+1];
+        _trg_snd[k] = _trg_snd[k+1];
         k = k + 1;
     }
     pop(_trg_x); pop(_trg_y); pop(_trg_z);
@@ -12758,7 +12847,7 @@ func _ed_zone_delete3(i) {
     pop(_trg_fin); pop(_trg_hasin);
     pop(_trg_fout); pop(_trg_hasout);
     pop(_trg_fstay); pop(_trg_hasstay);
-    pop(_trg_act); pop(_trg_amt);
+    pop(_trg_act); pop(_trg_amt); pop(_trg_snd);
     // Üyelik kayıtları bölge indeksine göre; silinen bölgeninkiler gitmeli,
     // sonrakiler kaymalı — yoksa "içeride" sayılan yanlış bölge olur.
     array nt = [];

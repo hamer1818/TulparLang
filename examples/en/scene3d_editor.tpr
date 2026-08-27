@@ -60,6 +60,8 @@
 // kill whoever entered (pits/lava), damage, add score, next level. A zone with
 // no action does nothing at all — the scene check says so. Zones are drawn in
 // the editor (the colour states their condition), clickable, arrow-key movable.
+// They also have a SOUND: pick the file that plays on enter from the panel —
+// the same sound list the rules use.
 //
 // ON CLOSING: closing the window no longer loses unsaved work. raylib has no
 // hook to cancel a close, so "are you sure?" cannot be asked — instead the

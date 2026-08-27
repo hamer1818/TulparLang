@@ -7680,6 +7680,112 @@ func t_single_level_scene_unchanged() {
     assert(contains(js1, "\"entities\""), "tek bolumde entities yazilmali");
 }
 
+// ---- Bölge sesi -------------------------------------------------------------
+// Kuralların sesi vardı, bölgelerinki YOKTU: "çıkış kapısına vardın" ve
+// "çukura düştün" sessizdi — oysa geri bildirimin en çok gerektiği an o.
+func t_zone_sound_plays_on_enter() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0, 4.0, 4.0, 4.0, TAG_PLAYER);
+    trigger_sound3d(z, "examples/assets/sesler/altin.wav");
+    _snd_last_slot3 = 0 - 2;
+    _t_zone_step3(0.016667);
+    // Ses aygiti yokken CALMA dusuyor ama KONUM hesabi yine de kosuyor:
+    // sinanabilir olan o (bkz. _rl_snd3'teki not).
+    assert_eq_int(_snd_last_slot3, _slot_of3(p));
+}
+
+// Ses eylemden BAĞIMSIZ: eylemi olmayan ama sesi olan bölge geçerli bir şey
+// (kapı gıcırtısı, ayak sesi bölgesi).
+func t_zone_sound_independent_of_action() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0, 4.0, 4.0, 4.0, TAG_PLAYER);
+    trigger_sound3d(z, "examples/assets/sesler/vurus.wav");
+    assert_eq_int(trigger_action_of3d(z), ZACT_NONE);
+    _snd_last_slot3 = 0 - 2;
+    _t_zone_step3(0.016667);
+    assert_eq_int(_snd_last_slot3, _slot_of3(p));
+}
+
+func t_zone_sound_roundtrips() {
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z1 = trigger3d(2.0, 1.0, 0.0, 2.0, 2.0, 2.0, TAG_PLAYER);
+    trigger_sound3d(z1, "examples/assets/sesler/kazandin.wav");
+    int z2 = trigger3d(8.0, 1.0, 0.0, 2.0, 2.0, 2.0, TAG_PLAYER);   // sessiz
+    str js = sahne_json3d();
+    assert(contains(js, "\"sound\""), "bolge sesi yazilmali");
+    scene3d_reset();
+    sahne_yukle3d(js);
+    assert(trigger_sound_of3d(0) == "examples/assets/sesler/kazandin.wav",
+           "ses gidis-donusten sag cikmali");
+    assert(trigger_sound_of3d(1) == "", "sessiz bolge ses kazanmamali");
+}
+
+func t_zone_without_sound_writes_no_key() {
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    trigger3d(0.0, 1.0, 0.0, 2.0, 2.0, 2.0, TAG_PLAYER);
+    assert(contains(sahne_json3d(), "\"sound\"") == false,
+           "sessiz bolge sound yazmamali");
+}
+
+// Bölge silinince SES de kaymalı — eylem ve miktarla aynı paralel dizi
+// tuzağı; kaymayan bir dizi sessizce yanlış bölgenin sesini çalar.
+func t_zone_delete_shifts_sounds() {
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z0 = trigger3d(0.0, 20.0, 0.0, 1.0, 1.0, 1.0, TAG_PLAYER);
+    int z1 = trigger3d(4.0, 20.0, 0.0, 1.0, 1.0, 1.0, TAG_PLAYER);
+    int z2 = trigger3d(8.0, 20.0, 0.0, 1.0, 1.0, 1.0, TAG_PLAYER);
+    trigger_sound3d(z0, "a.wav");
+    trigger_sound3d(z1, "b.wav");
+    trigger_sound3d(z2, "c.wav");
+    _ed_zone_delete3(0);
+    assert(trigger_sound_of3d(0) == "b.wav", "ses de kaymali");
+    assert(trigger_sound_of3d(1) == "c.wav", "ses de kaymali");
+}
+
+// ---- Çoğaltma adı koruyor ---------------------------------------------------
+// Ad taşınabilir biçimin tek referans yolu (kamera hedefi ve kurallar adla
+// atıfta bulunuyor). Adsız kopya, kaydedilince o bağların hiçbirine giremeyen
+// bir şey oluyordu.
+func t_duplicate_keeps_the_name_uniquified() {
+    scene3d_reset(); no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    ad_ver3d(a, "nobetci");
+    int b = ed_duplicate3d(a);
+    assert(b >= 0, "cogaltilmali");
+    assert(_sc_nm_of3(b) != "", "kopya adsiz kalmamali");
+    assert(_sc_nm_of3(b) == "nobetci 2", "kopya sayilanmali: " + _sc_nm_of3(b));
+    // ESKISI kendi adini korumali.
+    assert_eq_int(bul3d("nobetci"), a);
+    assert_eq_int(bul3d("nobetci 2"), b);
+    // ADSIZ bir varliktan cogaltmak ad UYDURMAMALI.
+    int c = spawn3(5.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    int d = ed_duplicate3d(c);
+    assert(_sc_nm_of3(d) == "", "adsizin kopyasi da adsiz olmali");
+}
+
+// ---- İki oyuncu -------------------------------------------------------------
+// Hareket girdisi global: iki oyuncu aynı tuşlarla birlikte yürür. Kamera
+// yalnız birini izlediği için öteki ekrandan çıkıp gider ve sebebi hiçbir
+// yerde yazmaz. Neredeyse her zaman kazadır (çoğaltma / yapıştırma).
+func t_check_flags_multiple_players() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    hareket_davranis3d(p, 8.0, 10.0);
+    kamera_yorunge(p, 12.0, 8.0);
+    scene_check3d();
+    assert(_t_chk_has3("oyuncu var —") == false, "tek oyuncuda uyari olmamali");
+    spawn3(5.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    scene_check3d();
+    assert(_t_chk_has3("oyuncu var —"), "iki oyuncu soylenmeli");
+    // "Oyuncu yok" ile karismamali.
+    assert(_t_chk_has3("oyuncu yok") == false, "iki oyuncu 'yok' demek degil");
+}
+
 // ===========================================================================
 // KURTARMA DOSYASI — kapatırken kaybolan iş
 // ===========================================================================
@@ -8674,6 +8780,13 @@ test("kose kesme yasak", "t_nav_no_corner_cutting");
 test("bolumler yukleniyor ve geciliyor", "t_levels_load_and_switch");
 test("bolumler gidis-donusten sag cikiyor", "t_levels_survive_roundtrip");
 test("tek bolumlu sahne degismiyor", "t_single_level_scene_unchanged");
+test("bolge sesi girince caliyor", "t_zone_sound_plays_on_enter");
+test("bolge sesi eylemden bagimsiz", "t_zone_sound_independent_of_action");
+test("bolge sesi gidis-donusten sag cikiyor", "t_zone_sound_roundtrips");
+test("sessiz bolge anahtar yazmiyor", "t_zone_without_sound_writes_no_key");
+test("bolge silme sesleri de kaydiriyor", "t_zone_delete_shifts_sounds");
+test("cogaltma adi koruyor", "t_duplicate_keeps_the_name_uniquified");
+test("denetim iki oyuncuyu soyluyor", "t_check_flags_multiple_players");
 test("kurtarma yolu hedeften turuyor", "t_recovery_path_derives_from_target");
 test("kurtarma yalniz kirliyken yaziliyor", "t_recovery_written_only_when_dirty");
 test("sade oyun kurtarma dosyasi yazmiyor", "t_recovery_not_written_for_plain_game");
@@ -9352,6 +9465,11 @@ func t_zone_panel_texts_fit() {
     assert(_t_fits3("surekli", half), "surekli dugmesi");
     assert(_t_fits3("etkin", half), "etkin dugmesi");
     assert(_t_fits3("kapali", half), "kapali dugmesi");
+    // Ses satiri: dugme genisligi inner eksi "x" dugmesi ve payi.
+    int sesw = inner - _us3(22) - _us3(4);
+    assert(_t_fits3("ses: yok", sesw), "sessiz etiketi");
+    assert(_t_fits3("kazandin.wav", sesw), "ses dosya adi");
+    assert(_t_fits3("x", _us3(22)), "ses temizleme dugmesi");
 }
 
 // Kamera panelinin metinleri. Düğmelerin çoğu YARIM sütunda (2x ölçekte
