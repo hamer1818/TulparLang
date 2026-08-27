@@ -27,13 +27,23 @@
 //   DEL / CTRL+D                 delete / duplicate
 //   CTRL+Z / CTRL+Y              undo / redo
 //   CTRL+S (or F5)               save
+//   CTRL+SHIFT+S                 save as (file window)
 //   SPACE                        drop the selection onto the ground
-//   ESC                          while playing: stop
+//   ESC                          close the file window / while playing: stop
 // Letter keys are tool shortcuts ONLY while the right mouse button is NOT
 // held; while it is held they are flight.
 //
+// FILES: "Open" in the menu lists the .json scenes on disk — the editor is no
+// longer tied to the file it was launched with. "F. Kaydet" (save as) writes
+// the scene to ANOTHER file and CTRL+S targets that file from then on; this
+// is how you take a template and turn it into your own game. Clicking the
+// file that is already open is a REVERT (unsaved work goes, but CTRL+Z still
+// brings it back). Switching to a different file RESETS the undo history: if
+// it did not, CTRL+Z would pull the previous scene into the new file and
+// CTRL+S would write it there.
+//
 // Layout:
-//   menu bar          New / Open / Save / Undo / Redo
+//   menu bar          New / Open / Save / Save As / Undo / Redo
 //   toolbar           tools on the left, PLAY-STOP CENTRED, grid
 //   hierarchy | SCENE VIEW | inspector
 //   console           the engine's diagnostic log

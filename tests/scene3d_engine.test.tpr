@@ -5776,6 +5776,243 @@ func t_storage_export_writes_file_on_desktop() {
     assert(i == "{\"proba\":42}", "indir() icerigi bozdu");
 }
 
+// ===========================================================================
+// DOSYA PENCERESİ — "başka bir sahne aç" / "farklı kaydet"
+// ===========================================================================
+// Editör açıldığı dosyaya ömür boyu bağlıydı: "Aç" yalnız aynı dosyayı
+// yeniden okuyordu, "Farklı Kaydet" hiç yoktu. Aşağıdaki testler pencerenin
+// SAF kararlarını (yol ayrıştırma, ad normalleştirme, geçmiş kuralı) ve
+// diske dokunan iki etkisini ayrı ayrı sınıyor.
+
+func t_ed_dirname_splits_path() {
+    assert(_ed_dirname3("examples/scenes/a.json") == "examples/scenes",
+           "dizin son ayiracin oncesi olmali");
+    assert(_ed_dirname3("a.json") == "", "ayiracsiz yolun dizini bos");
+    assert(_ed_dirname3("") == "", "bos yolun dizini bos");
+    // Ters bölü de ayıraç: Windows'tan yapıştırılan yol da çalışmalı.
+    assert(_ed_dirname3("c:\\oyun\\sahne.json") == "c:\\oyun",
+           "ters bolu de ayirac sayilmali");
+    // Dizin ve ad birlikte yolu TAM bölmeli — ikisi ayrı fonksiyon, ayrı
+    // kaymaları ancak birlikte sınamak yakalar.
+    str y = "a/b/c.json";
+    assert(_ed_dirname3(y) + "/" + _ed_basename3(y) == y,
+           "dizin + ad yolu tam vermeli");
+}
+
+func t_ed_fd_glob_follows_current_file() {
+    // Desen yürürlükteki dosyanın DİZİNİNDEN türüyor. Sabit bir desen, kendi
+    // klasöründe çalışan kullanıcıya kendi dosyalarını hiç göstermezdi.
+    assert(_ed_fd_glob_for3("examples/scenes/toplayici.scene.json") ==
+           "examples/scenes/*.json", "desen dosyanin dizinini izlemeli");
+    assert(_ed_fd_glob_for3("sahne.json") == "*.json",
+           "dizinsiz dosya calisma dizinini taramali");
+    assert(_ed_fd_glob_for3("") == "*.json", "yol yokken calisma dizini");
+}
+
+func t_ed_fd_norm_adds_extension() {
+    assert(_ed_fd_norm3("bolum2") == "bolum2.json", "uzantisiz ada .json eklenmeli");
+    assert(_ed_fd_norm3("bolum2.json") == "bolum2.json", "uzantili ad degismemeli");
+    assert(_ed_fd_norm3("  bolum2  ") == "bolum2.json", "bosluklar kirpilmali");
+    assert(_ed_fd_norm3("") == "sahne.json", "bos ad varsayilana dusmeli");
+    assert(_ed_fd_norm3("   ") == "sahne.json", "yalniz bosluk da bos sayilmali");
+    // Uzantı SON parçada aranmalı: dizin adındaki nokta uzantı değil, ve bu
+    // ayrım olmadan "v1.2/sahne" uzantısız diske yazılırdı.
+    assert(_ed_fd_norm3("v1.2/sahne") == "v1.2/sahne.json",
+           "dizindeki nokta uzanti sayilmamali");
+    assert(_ed_fd_norm3("v1.2/sahne.json") == "v1.2/sahne.json",
+           "dizinde de dosyada da nokta varken ikinci kez eklenmemeli");
+}
+
+func t_ed_fd_history_rule_is_path_change() {
+    // Karar SAF ve etkiden ayrı: dosya yazan yol sınanamaz, bu sınanabilir.
+    assert(_ed_fd_resets_history3("a.json", "b.json"),
+           "dosya degisince gecmis sifirlanmali");
+    assert(_ed_fd_resets_history3("a.json", "a.json") == false,
+           "ayni dosya yeniden acilinca gecmis KORUNMALI");
+    assert(_ed_fd_resets_history3("", "a.json"),
+           "adsiz sahneden dosyaya gecis de degisiklik");
+}
+
+// ASIL ZARAR burada: geçmiş sıfırlanmasaydı yeni açılan sahnede CTRL+Z
+// ÖNCEKİ dosyanın hâlini getirir, CTRL+S de onu yeni dosyaya yazardı — bir
+// sahneyi öbürünün içeriğiyle ezmenin en sessiz yolu.
+func t_open_different_file_clears_history() {
+    str ya = "s3_dosya_a.json";
+    str yb = "s3_dosya_b.json";
+    write_file(ya, _CURUK);
+    write_file(yb, _CURUK);
+
+    // A: iki varlik.
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ITEM);
+    spawn3(2.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ITEM);
+    assert(sahne_kaydet3d(ya), "A kaydedilemedi");
+    // B: tek varlik.
+    scene3d_reset(); no_ground3d();
+    spawn3(9.0, 1.0, 0.0, 1.0, 1.0, 1.0, BLUE, SHAPE_SPHERE, TAG_ITEM);
+    assert(sahne_kaydet3d(yb), "B kaydedilemedi");
+
+    // A'yi ac, uzerinde CALIS (gecmis birikir).
+    editor_dosya3d(ya);
+    _ed_fd_load3(ya);
+    assert_eq_int(yasayan_sayi3d(), 2);
+    ed_mark3d();
+    ed_add3d(TAG_PROP, SHAPE_CUBE, 5.0, 1.0, 5.0);
+    assert(ed_undo_count3d() > 0, "duzenleme gecmise yazilmali");
+    // YİNELE yığınını da DOLDUR. Doldurmadan yazılan hâli, "redo
+    // temizlenmiyor" bozmasından KAÇIYORDU: `ed_mark3d` zaten yineleyi
+    // boşaltıyor, yani yığın testin baktığı anda kendiliğinden boştu ve
+    // iddia hiçbir şey ölçmüyordu (ölçüldü). Zarar gerçek: A'da geri al,
+    // B'yi aç, CTRL+Y → A'nın hâli B'nin içine düşer.
+    assert(ed_undo3d(), "geri alma calismali");
+    assert(ed_redo_count3d() > 0, "geri alma yineleyi doldurmali");
+
+    // B'yi ac: gecmis GITMELI.
+    _ed_fd_load3(yb);
+    assert_eq_int(yasayan_sayi3d(), 1);
+    assert_eq_int(ed_undo_count3d(), 0);
+    assert_eq_int(ed_redo_count3d(), 0);
+    // Geri al ARTIK A'yi getirmemeli.
+    assert(ed_undo3d() == false, "yeni dosyada geri alinacak bir sey olmamali");
+    assert_eq_int(yasayan_sayi3d(), 1);
+}
+
+func t_reopen_same_file_keeps_history() {
+    // Aynı dosyayı yeniden açmak GERİ YÜKLEMEDİR ve orada geçmiş bir
+    // güvenlik ağı: kaydedilmemiş işi geri getirmenin tek yolu o.
+    str ya = "s3_dosya_a.json";
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ITEM);
+    assert(sahne_kaydet3d(ya), "A kaydedilemedi");
+    editor_dosya3d(ya);
+    _ed_fd_load3(ya);
+    ed_mark3d();
+    ed_add3d(TAG_PROP, SHAPE_CUBE, 5.0, 1.0, 5.0);
+    int once = ed_undo_count3d();
+    assert(once > 0, "duzenleme gecmise yazilmali");
+    _ed_fd_load3(ya);                       // geri yukle
+    assert_eq_int(ed_undo_count3d(), once);
+    assert(ed_undo3d(), "geri yuklemeden sonra geri alma calismali");
+}
+
+func t_saveas_writes_new_file_and_retargets() {
+    str hedef = "s3_farkli_kaydet.json";
+    write_file(hedef, _CURUK);
+    scene3d_reset(); no_ground3d();
+    spawn3(4.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    editor_dosya3d("s3_dosya_a.json");
+    ed_mark3d();
+    int once = ed_undo_count3d();
+
+    // Uzantısız yazılan ad da çalışmalı — pencerede en olası yazım bu.
+    assert(_ed_fd_saveas3("s3_farkli_kaydet"), "farkli kaydet basarisiz");
+    assert(file_exists(hedef), "yeni dosya yazilmadi");
+    str j = read_file(hedef);
+    assert(j != _CURUK, "dosya BU kosumda yazilmadi (nobetci duruyor)");
+    assert(contains(j, "\"entities\""), "yazilan sey sahne JSON'u degil");
+    // Hedef DEĞİŞMELİ: bundan sonra CTRL+S yeni dosyaya yazmalı, yoksa
+    // "farklı kaydet" tek seferlik bir dışa aktarma olurdu.
+    assert(_ed_path3 == hedef, "kaydetme hedefi yeni dosya olmali");
+    // Sahne aynı sahne: geçmiş KORUNMALI.
+    assert_eq_int(ed_undo_count3d(), once);
+}
+
+// YERLEŞİM: pencerenin yüksekliği ile çizimin gerçekten kullandığı dikey
+// alan AYNI olmalı. İki ayrı yerde hesaplanıyorlardı ve ayrıldılar: yükseklik
+// üç sabit satır sayıyordu, çizim dördünü koyuyordu — 2x ölçekte VAZGEÇ
+// düğmesinin alt kenarı pencerenin 2 piksel dışında kalıyordu (3x'te 3).
+// Test çizimin dikey yürüyüşünü ADIM ADIM tekrarlıyor; toplamı sınamak
+// yetmezdi, çünkü hangi adımın kaydığını göstermezdi.
+func t_ed_fd_content_fits_panel() {
+    int k = 1;
+    while (k <= 3) {
+        editor_ui_scale3d(k);
+        int H = 820;                       // examples/scene3d_editor.tpr
+        int rows = _ed_fd_rows_for3(H);
+        int h = _ed_fd_h_for3(H);
+        // Panel içi y, çizimle birebir aynı sırayla:
+        int iy = _ed_fd_top3() + _ED_FLD3 + _ed_fd_gap3();   // desen satırı
+        iy = _ed_fd_top3() + _ED_FLD3 + _ed_fd_gap3() +
+             _ED_FLD3 * rows + _us3(4);                      // liste
+        iy = iy + _ED_FLD3 + _ed_fd_gap3();                  // kaydirma
+        iy = iy + _ED_FLD3 + _ed_fd_gap3();                  // ad / uyari
+        int alt = iy + _ED_FLD3;                             // VAZGEC'in alti
+        assert(alt <= h, "olcek " + toString(k) + ": icerik tasti " +
+               toString(alt) + " > " + toString(h));
+        // Alt pay GÖRÜNÜR olmalı: son düğmenin kenarı çerçeveye yapışık
+        // olursa kırpılmış gibi okunuyor. (Payı sıfırlayan bozma `alt <= h`
+        // iddiasından kaçıyordu — eşitlik hâlâ "sığıyor" sayılıyor.)
+        assert(h - alt >= _us3(4), "olcek " + toString(k) +
+               ": VAZGEC dugmesi alt cerceveye yapisik");
+        // Boşuna uzun da olmamalı: bir satırdan fazla boşluk, yerleşimin
+        // kaydığını gösterir (ve pencereyi gereksiz büyütür).
+        assert(h - alt < _ED_FLD3, "olcek " + toString(k) +
+               ": pencere gereksiz uzun, " + toString(h - alt) + " piksel bos");
+        k = k + 1;
+    }
+    editor_ui_scale3d(2);
+}
+
+// Pencere editörün KENDİ penceresine sığmalı — her ölçekte. 3x'te sabit
+// sekiz satır 820 pikseli aşıyordu ve taşan kısım alttaki düğmelerdi: yani
+// pencere kapatılamaz hâle geliyordu.
+func t_ed_fd_fits_editor_window() {
+    int W = 1440;
+    int H = 820;
+    int k = 1;
+    while (k <= 3) {
+        editor_ui_scale3d(k);
+        int w = _ed_fd_w_for3(W);
+        int h = _ed_fd_h_for3(H);
+        assert(w <= W - _us3(24), "olcek " + toString(k) + ": genislik tasti");
+        assert(h + _ED_MENU_H3 + _ED_STAT_H3 <= H,
+               "olcek " + toString(k) + ": yukseklik tasti " + toString(h));
+        // Liste kullanılabilir kalmalı: iki satırlık bir dosya listesi
+        // kaydırmaktan başka bir şey yapılamaz demek.
+        assert(_ed_fd_rows_for3(H) >= 4,
+               "olcek " + toString(k) + ": liste cok kisaldi");
+        k = k + 1;
+    }
+    // Dar bir pencerede de KELEPÇE çalışmalı — sabit ölçü taşardı.
+    editor_ui_scale3d(3);
+    assert(_ed_fd_w_for3(400) <= 400 - _us3(24), "dar pencerede genislik kelepcesiz");
+    // Satır sayısı pencere küçülünce GERÇEKTEN azalmalı. `>= 2` demek yetmez:
+    // sabit sekiz satır döndüren bir bozma o iddiadan kaçardı (8 >= 2).
+    assert(_ed_fd_rows_for3(600) < _ed_fd_maxrows3(),
+           "600 piksellik pencerede liste kisalmali: " +
+           toString(_ed_fd_rows_for3(600)));
+    assert(_ed_fd_rows_for3(400) >= 2, "en az iki satir kalmali");
+    // 820'de tam liste, 600'de daha az — sıralama da tutmalı.
+    assert(_ed_fd_rows_for3(820) > _ed_fd_rows_for3(600),
+           "buyuk pencere daha cok satir gostermeli");
+    editor_ui_scale3d(2);
+}
+
+func t_ed_fd_widget_ids_do_not_collide() {
+    int base = _ed_fd_idbase3();
+    int step = _ed_fd_idstep3();
+    int rows = _ed_fd_maxrows3();
+    // Liste satırları base+20'den başlıyor; adım satır başına kullanılandan
+    // büyük olmalı, yoksa iki satır aynı kimliği paylaşır ve İKİNCİSİ ölür.
+    assert(step >= 1, "adim en az 1 olmali");
+    int son_satir = base + 20 + (rows - 1) * step;
+    assert(son_satir < base + 60, "liste satirlari kaydirma dugmelerine degmemeli");
+    // Sabit kimlikler: base, base+1, base+60/61, base+70/71, base+80.
+    assert(base + 20 > base + 1, "desen satiri liste ile cakismamali");
+    assert(base + 70 > base + 61, "ad alani kaydirma ile cakismamali");
+    assert(base + 80 > base + 71, "vazgec kaydet ile cakismamali");
+    // 200 kurallık ve 200 ışıklık gerçekçi üst sınırların ikisinin de
+    // ÜSTÜNDE kalmalı — ikisi de tabandan yukarı sınırsız büyüyor.
+    int rl_ust = _ed_rl_idbase3() + 200 * _ed_rl_idstep3() + _ed_rl_idused3() - 1;
+    int lt_ust = _ed_lt_idbase3() + 200 * _ed_lt_idstep3() + _ed_lt_idused3() - 1;
+    assert(base > rl_ust, "dosya penceresi kural araliginin ustunde olmali");
+    assert(base > lt_ust, "dosya penceresi isik araliginin ustunde olmali");
+    // Davranış blokları (30000 tabanlı) ve menü kimlikleri de altta kalmalı.
+    int bh_ust = _ed_bh_idbase3() + 200 * _ed_bh_idstep3() + _ed_bh_idused3() - 1;
+    assert(base > bh_ust, "dosya penceresi davranis araliginin ustunde olmali");
+    assert(9606 < base, "menu kimlikleri altta kalmali");
+}
+
 func t_storage_key_is_path_scoped() {
     // Anahtar YOLDAN türüyor: aynı sayfada iki sahne birbirini ezmemeli.
     assert(_s3_key3("a.json") != _s3_key3("b.json"),
@@ -7104,6 +7341,17 @@ test("tek bolumlu sahne degismiyor", "t_single_level_scene_unchanged");
 test("yeni sahne eski bolumleri birakmiyor", "t_new_scene_drops_old_levels");
 test("sablon eski bolumleri birakmiyor", "t_template_drops_old_levels");
 test("tek bolumlu dosya cok bolumlunun ustune temiz aciliyor", "t_loading_single_level_over_multi_clears");
+test("yol dizin ve ada bolunuyor", "t_ed_dirname_splits_path");
+test("dosya penceresi deseni acik dosyayi izliyor", "t_ed_fd_glob_follows_current_file");
+test("uzantisiz ada .json ekleniyor", "t_ed_fd_norm_adds_extension");
+test("gecmis kurali yol degisimine bagli", "t_ed_fd_history_rule_is_path_change");
+test("baska dosya acmak gecmisi temizliyor", "t_open_different_file_clears_history");
+test("ayni dosyayi yeniden acmak gecmisi koruyor", "t_reopen_same_file_keeps_history");
+test("farkli kaydet yeni dosyaya yazip hedefi degistiriyor", "t_saveas_writes_new_file_and_retargets");
+test("dosya penceresi etiketleri kutulara sigiyor", "t_ed_fd_labels_fit_their_boxes");
+test("dosya penceresi icerigi panele sigiyor", "t_ed_fd_content_fits_panel");
+test("dosya penceresi editor penceresine sigiyor", "t_ed_fd_fits_editor_window");
+test("dosya penceresi widget kimlikleri cakismiyor", "t_ed_fd_widget_ids_do_not_collide");
 test("bayat bolum defteri yuklemeden sag cikmiyor", "t_stale_level_registry_does_not_survive_load");
 test("bayat bolum numarasi ilerlemeyi kirletmiyor", "t_stale_level_number_does_not_mark_progress");
 test("yazarin bolum kayitlari sahne yuklemeden sag cikiyor", "t_authored_levels_survive_scene_load");
@@ -7597,6 +7845,36 @@ func t_rule_summary_fits_panel_budget() {
         assert(length(o2) <= 24, "bitince ozeti panele sigmali: " + o2);
         i = i + 1;
     }
+}
+
+// Kutu genişliğinden karakter bütçesi. Sabit bir sayı yazmak, kutu daralınca
+// sessizce yalan söylerdi; bütçe genişlikten TÜRÜYOR. En kötü 11.5
+// px/karakter (yukarıdaki ölçüme bak) — tam sayıyla: 2*w / 23.
+func _t_fits3(label, boxw): bool {
+    return length(label) <= toInt(boxw * 2 / 23);
+}
+
+// Dosya penceresinin sabit genişlikli kutuları. Düğme etiketi kutuya
+// sığmazsa kırpılıyor ve "VAZG..." yazan bir düğme ne yaptığını söylemiyor.
+func t_ed_fd_labels_fit_their_boxes() {
+    editor_ui_scale3d(2);
+    assert(_t_fits3("TARA", _us3(38)), "TARA dugmesi");
+    assert(_t_fits3("KAYDET", _us3(64)), "KAYDET dugmesi");
+    assert(_t_fits3("VAZGEC", _us3(56)), "VAZGEC dugmesi");
+    assert(_t_fits3("^", _us3(30)), "yukari dugmesi");
+    assert(_t_fits3("v", _us3(30)), "asagi dugmesi");
+    int inner = _ed_fd_w_for3(1440) - _ED_PAD3 * 2;
+    assert(_t_fits3("kaydedilmemis is var — tekrar tikla", inner),
+           "uyari satiri pencereye sigmali");
+    assert(_t_fits3("bir dosyaya tikla", inner), "ipucu satiri");
+    assert(_t_fits3("FARKLI KAYDET", _ed_fd_w_for3(1440)), "pencere basligi");
+    assert(_t_fits3("SAHNE AC", _ed_fd_w_for3(1440)), "pencere basligi");
+    // 3x ölçekte de: kutular da yazı da ölçekle büyüyor, oran korunmalı.
+    editor_ui_scale3d(3);
+    assert(_t_fits3("TARA", _us3(38)), "3x TARA");
+    assert(_t_fits3("KAYDET", _us3(64)), "3x KAYDET");
+    assert(_t_fits3("VAZGEC", _us3(56)), "3x VAZGEC");
+    editor_ui_scale3d(2);
 }
 
 // Etiket sütunu 102 px -> ~9 karakter.

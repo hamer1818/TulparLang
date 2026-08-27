@@ -8727,8 +8727,11 @@ func ed_pick_at3d(px, py): int {
 func _s3_editor_mouse(dt) {
     int s = _slot_of3(_ed_sel3e);
     // Bağlam menüsü açıkken görüntü penceresi tıklama ALMIYOR: menüdeki bir
-    // seçim aynı anda arkadaki sahnede de bir şey seçerdi.
+    // seçim aynı anda arkadaki sahnede de bir şey seçerdi. Dosya penceresi
+    // için de aynısı — hatta daha kritiği: liste ekranın ORTASINDA duruyor,
+    // yani tam sahnenin üstünde.
     if (_ed_ctx_on3 == 1) { return; }
+    if (_ed_fd_on3 != _ED_FD_OFF3) { return; }
     // Sürükleme SÜRÜYORSA panel denetimi atlanıyor: imleç panelin üstünden
     // geçerken sürüklemenin kopması, Unity'de de olmayan bir davranış olurdu.
     if (_gz_axis3 < 0 && _ed_drag3 == 0 && _ed_over_ui3()) { return; }
@@ -8866,6 +8869,13 @@ func _s3_editor_keys() {
     // SAĞ TUŞ basılıyken harfler UÇUŞ tuşu (WASD/QE); araç kısayolları o
     // sırada çalışmamalı. Unity, Unreal ve Godot'ta da ayrım tam budur.
     if (mouse_down(1)) { return; }
+    // Dosya penceresi açıkken KLAVYE ONUN: ESC kapatır, geri kalan tuşlar
+    // arkadaki sahneye gitmez. Gitseydi dosya adı yazarken "d" varlığı
+    // çoğaltır, DEL seçili varlığı silerdi.
+    if (_ed_fd_on3 != _ED_FD_OFF3) {
+        if (key_pressed(K_ESC)) { _ed_fd_close3(); }
+        return;
+    }
 
     // Araç kısayolları Unity düzeninde: Q seç, W taşı, E döndür, R ölçekle.
     // 1-4 de duruyor (eski alışkanlık ve rakam tuşları her editörde çalışır).
@@ -8877,7 +8887,14 @@ func _s3_editor_keys() {
         if (_ed_grid3 > 0.0) { _ed_grid3 = 0.0; } else { _ed_grid3 = 0.5; }
     }
     if (key_pressed(K_ESC) && _ed_ctx_on3 == 1) { _ed_ctx_close3(); return; }
-    if (key_down(K_LCTRL) && key_pressed(K_S)) { editor_save3d(); return; }
+    if (key_down(K_LCTRL) && key_pressed(K_S)) {
+        // CTRL+SHIFT+S = farklı kaydet. Sektör standardı ve buradaki asıl
+        // değeri şu: kaydetmenin refleks tuşuna basan biri, dallandırmak
+        // istediğinde eli klavyeden kalkmadan pencereyi açabiliyor.
+        if (key_down(K_LSHIFT)) { _ed_fd_open3(_ED_FD_SAVE3); return; }
+        editor_save3d();
+        return;
+    }
     if (key_pressed(K_F5)) { editor_save3d(); return; }
     if (key_down(K_LCTRL) && key_pressed(K_Z)) {
         if (ed_undo3d()) { _ed_msg3 = "geri alindi"; _ed_msg_t3 = 1.2; }
@@ -9641,13 +9658,18 @@ func _ed_menubar3() {
             }
         }
         _g_tip_for3(9600, "Bos sahne  —  kaydedilmemis is silinir");
-        _g_tip_for3(9601, "Dosyayi yeniden ac  —  kaydedilmemis is gider");
+        _g_tip_for3(9601, "Baska bir sahne ac  (diskteki .json dosyalari)");
         x = x + w0 + gap;
     }
     int w1 = _g_btnw3("Ac");
     if (x + w1 <= W - _ED_PAD3) {
+        // Artık GERÇEK bir aç: dosya penceresi açılıyor. Eskiden yalnız
+        // yürürlükteki dosyayı yeniden okuyordu, yani editör açıldığı
+        // dosyaya ömür boyu bağlıydı. Geri yükleme kayboldu sanılmasın:
+        // listede yürürlükteki dosyaya tıklamak tam olarak odur ve yol
+        // değişmediği için geçmiş de korunuyor.
         if (_g_button(9601, x, _us3(2), w1, bh, "Ac")) {
-            if (_ed_path3 != "") { scene_file3d(_ed_path3); _ed_capture3(); }
+            _ed_fd_open3(_ED_FD_OPEN3);
         }
         x = x + w1 + gap;
     }
@@ -9655,7 +9677,18 @@ func _ed_menubar3() {
     if (x + w2 <= W - _ED_PAD3) {
         if (_g_button(9602, x, _us3(2), w2, bh, "Kaydet")) { editor_save3d(); }
         _g_tip_for3(9602, "Kaydet  (CTRL+S)");
-        x = x + w2 + _us3(12);
+        x = x + w2 + gap;
+    }
+    // FARKLI KAYDET: bir sahneyi DALLANDIRMANIN tek yolu. Bu düğme yokken
+    // şablona basmak, açık olan dosyanın üstüne yazmaya mahkûmdu.
+    str fkl = "F. Kaydet";
+    int w2b = _g_btnw3(fkl);
+    if (x + w2b <= W - _ED_PAD3) {
+        if (_g_button(9606, x, _us3(2), w2b, bh, fkl)) {
+            _ed_fd_open3(_ED_FD_SAVE3);
+        }
+        _g_tip_for3(9606, "Sahneyi baska bir dosyaya kaydet  (CTRL+SHIFT+S)");
+        x = x + w2b + _us3(12);
     }
     // WEB'DE bir düğme daha: "Kaydet" tarayıcının deposuna yazıyor (kalıcı,
     // ama sayfanın İÇİNDE). İşi dışarı — depoya, başka bir makineye — almanın
@@ -9961,6 +9994,305 @@ func _ed_axis_one3(cx, cy, r, vx, vy, vz, col, lbl) {
     }
 }
 
+// ---- DOSYA PENCERESİ -------------------------------------------------------
+// Editörün en büyük eksiği buydu: BAŞKA BİR SAHNE AÇAMIYORDU. Menüdeki "Aç"
+// yalnız yürürlükteki dosyayı yeniden okuyordu (geri yükleme), yani editör
+// açıldığı dosyaya ömür boyu bağlıydı — başka bir sahneye geçmenin tek yolu
+// programı kapatıp komut satırında yol vermekti. "Farklı Kaydet" de yoktu,
+// yani bir sahneyi DALLANDIRMAK (şablonu al, üstüne kendi oyununu yap)
+// imkânsızdı; şablona basmak var olan dosyanın üstüne yazmaya mahkûmdu.
+//
+// Pencere BAĞLAM MENÜSÜYLE aynı desende: panellerin üstünde çizilen bir örtü,
+// dışına tıklamak kapatır, çakışma denetiminden muaf (kasıtlı olarak örtüyor).
+// Ayrı bir kipsel pencere makinesi kurmuyor — o makine tek bir kullanım için
+// editörün bütün girdi yolunu ikiye bölerdi.
+int _ED_FD_OFF3  = 0;
+int _ED_FD_OPEN3 = 1;
+int _ED_FD_SAVE3 = 2;
+
+int   _ed_fd_on3     = 0;
+str   _ed_fd_glob3   = "*.json";
+array _ed_fd_files3  = [];
+int   _ed_fd_done3   = 0;
+int   _ed_fd_scroll3 = 0;
+str   _ed_fd_name3   = "";
+int   _ed_fd_warn3   = 0;    // 1 = kaydedilmemiş iş uyarısı gösteriliyor
+
+func _ed_fd_idbase3(): int { return 70000; }
+func _ed_fd_idstep3(): int { return 2; }
+
+// En çok kaç dosya satırı. Üst sınır: daha uzun bir liste pencereyi ekran
+// yüksekliğine bağımlı kılmadan da okunmaz yapardı; kaydırma zaten var.
+func _ed_fd_maxrows3(): int { return 8; }
+
+// Dikey ölçüler TEK YERDE. Çizim de bu üçünü kullanıyor, yükseklik hesabı da:
+// ikisini ayrı ayrı yazmak, birini değiştirince ötekinin sessizce yalan
+// söylemesi demek. (İlk hâlde tam olarak bu oldu — yükseklik üç sabit satır
+// sayıyordu, çizim dördünü koyuyordu ve VAZGEÇ düğmesinin alt kenarı 2x
+// ölçekte pencerenin 2 piksel dışında kalıyordu.)
+func _ed_fd_top3(): int { return _us3(20); }   // başlık şeridinin altı
+func _ed_fd_gap3(): int { return _us3(3); }    // satır arası
+func _ed_fd_pad3(): int { return _us3(8); }    // alt pay
+
+// Yüksekliğin SABİT parçası — liste dışındaki her şey.
+// Dört sabit satır: desen, kaydırma, ad/uyarı, vazgeç.
+// Üç satır arası + listeden sonraki ekstra pay (_us3(4)).
+func _ed_fd_fixed_h3(): int {
+    return _ed_fd_top3() + _ED_FLD3 * 4 + _ed_fd_gap3() * 3 + _us3(4) +
+           _ed_fd_pad3();
+}
+
+// Kaç satır SIĞAR. Sabit 8 satır 3x ölçekte 820 piksellik editör penceresini
+// aşıyordu ve taşan kısım alttaki düğmelerdi — yani pencere KAPATILAMAZ
+// oluyordu (VAZGEÇ ekranın dışında). Satır sayısını ekrandan türetmek bu
+// sınıfı tümden kapatıyor. SAF: pencere gerekmiyor, sınanabiliyor.
+func _ed_fd_rows_for3(H): int {
+    int bos = H - _ED_MENU_H3 - _ED_STAT_H3 - _ed_fd_fixed_h3();
+    int r = toInt(bos / _ED_FLD3);
+    if (r > _ed_fd_maxrows3()) { r = _ed_fd_maxrows3(); }
+    // En az iki satır: tek satırlık bir dosya listesi liste sayılmaz, ve
+    // sıfır satır listeyi görünmez yapıp pencereyi anlamsız kılardı.
+    if (r < 2) { r = 2; }
+    return r;
+}
+func _ed_fd_rows3(): int { return _ed_fd_rows_for3(screen_height()); }
+
+// Genişlik de ekrandan kelepçeli — aynı sebeple.
+func _ed_fd_w_for3(W): int {
+    int w = _us3(360);
+    int enb = W - _us3(24);
+    if (w > enb) { w = enb; }
+    return w;
+}
+
+// Yolun DİZİN parçası (son ayıracın öncesi). Ayıracsız yol için boş.
+// `_ed_basename3`'in kardeşi; ikisi birlikte bir yolu ikiye bölüyor.
+func _ed_dirname3(yol): str {
+    int i = length(yol) - 1;
+    while (i >= 0) {
+        int c = ord(yol, i);
+        if (c == 47 || c == 92) { return substring(yol, 0, i); }
+        i = i - 1;
+    }
+    return "";
+}
+
+// Pencerenin açılışta tarayacağı desen: yürürlükteki dosyanın DİZİNİ.
+// Sabit bir desen ("examples/scenes/*.json") kendi klasöründe çalışan bir
+// kullanıcıya hiçbir zaman kendi dosyalarını göstermezdi; dizinsiz bir ad
+// (./editor sahne.json) çalışma dizinini veriyor.
+func _ed_fd_glob_for3(yol): str {
+    str d = _ed_dirname3(yol);
+    if (d == "") { return "*.json"; }
+    return d + "/*.json";
+}
+
+func _ed_ws3(c): bool { return c == 32 || c == 9 || c == 13 || c == 10; }
+
+func _ed_trimws3(s): str {
+    int a = 0;
+    int b = length(s);
+    while (a < b && _ed_ws3(ord(s, a))) { a = a + 1; }
+    while (b > a && _ed_ws3(ord(s, b - 1))) { b = b - 1; }
+    return substring(s, a, b);
+}
+
+// Yolun SON parçasında nokta var mı. Tam yolda nokta aramak yanlış olurdu:
+// "v1.2/sahne" uzantılı görünür ve dosya uzantısız yazılırdı.
+func _ed_has_ext3(yol): bool {
+    str b = _ed_basename3(yol);
+    int i = 0;
+    while (i < length(b)) {
+        if (ord(b, i) == 46) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+// Yazılan adı dosya adına çevir. SAF: pencere gerektirmiyor, o yüzden
+// sınanabiliyor — dosya yazan yol sınanamaz.
+//   • baş/son boşluklar gider (yapıştırılan yol boşluk getiriyor)
+//   • uzantı yoksa ".json" eklenir ("bolum2" yazıp kaydedilebilsin)
+//   • boş ad varsayılana düşer; adsız bir dosya yazmaktansa bilinen bir ad
+func _ed_fd_norm3(ad): str {
+    str t = _ed_trimws3(ad);
+    if (t == "") { return "sahne.json"; }
+    if (_ed_has_ext3(t)) { return t; }
+    return t + ".json";
+}
+
+// GEÇMİŞ, dosya DEĞİŞİRSE sıfırlanmalı. Sıfırlanmasa yeni açılan sahnede
+// CTRL+Z ÖNCEKİ dosyanın hâlini getirir, CTRL+S de onu yeni dosyaya YAZARDI:
+// bir sahneyi öbürünün içeriğiyle ezmenin en sessiz yolu. (`_ed_apply_json3`
+// geçmişi bilerek koruyor — geri alma sahne İÇİNDE gezinmektir — ama o kural
+// dosya değişince geçerli değil.)
+//
+// AYNI dosyayı yeniden açmak (geri yükleme) geçmişi KORUYOR: orada geçmiş bir
+// güvenlik ağı ve kaydedilmemiş işi geri getirmenin tek yolu.
+func _ed_fd_resets_history3(eski, yeni): bool { return eski != yeni; }
+
+func _ed_fd_scan3() {
+    _ed_fd_files3 = file_glob(_ed_fd_glob3);
+    _ed_fd_done3 = 1;
+    _ed_fd_scroll3 = 0;
+}
+
+func _ed_fd_open3(kip) {
+    _ed_fd_on3 = kip;
+    _ed_fd_glob3 = _ed_fd_glob_for3(_ed_path3);
+    _ed_fd_name3 = _ed_path3;
+    _ed_fd_warn3 = 0;
+    _ed_fd_scan3();
+}
+func _ed_fd_close3() { _ed_fd_on3 = 0; _ed_fd_warn3 = 0; }
+
+// Sahneyi AÇ. Yükleme etkisi burada, KARARI (geçmiş sıfırlanacak mı) yukarıda:
+// karar saf olduğu için pencere olmadan sınanıyor.
+func _ed_fd_load3(path): int {
+    bool sifirla = _ed_fd_resets_history3(_ed_path3, path);
+    editor_file3d(path);
+    int n = scene_file3d(path);
+    if (sifirla) { _ed_undo3 = []; _ed_redo3 = []; }
+    _ed_capture3();
+    _ed_dirty3 = 0;
+    _ed_dirty_seq3 = _ed_dirty_seq3 + 1;
+    _ed_tab3 = 0;
+    _ed_msg3 = "acildi: " + path + "  (" + toString(n) + " varlik)";
+    _ed_msg_t3 = 3.0;
+    _ed_fd_close3();
+    return n;
+}
+
+// FARKLI KAYDET. Geçmiş KORUNUYOR: sahne aynı sahne, değişen yalnız hedef
+// dosya. Sıfırlamak, dallandırdıktan sonra geri almayı imkânsız kılardı.
+func _ed_fd_saveas3(ad): bool {
+    str yol = _ed_fd_norm3(ad);
+    editor_file3d(yol);
+    bool ok = editor_save3d();     // mesajı kendisi yazıyor
+    _ed_fd_close3();
+    return ok;
+}
+
+func _ed_fd_w3(): int { return _ed_fd_w_for3(screen_width()); }
+func _ed_fd_h_for3(H): int {
+    return _ed_fd_fixed_h3() + _ED_FLD3 * _ed_fd_rows_for3(H);
+}
+func _ed_fd_h3(): int { return _ed_fd_h_for3(screen_height()); }
+
+func _ed_fd_draw3() {
+    if (_ed_fd_on3 == _ED_FD_OFF3) { return; }
+    int w = _ed_fd_w3();
+    int h = _ed_fd_h3();
+    int x = toInt(screen_width() / 2) - toInt(w / 2);
+    int y = toInt(screen_height() / 2) - toInt(h / 2);
+    // SIRA önemli, `_ed_center_x3` ile aynı kural: önce alt kenara sığdır,
+    // SONRA üst sınırı uygula. Üst sınır en son geldiği için kazanıyor —
+    // menü şeridinin altına inmek, alttan taşıp VAZGEÇ düğmesini ekranın
+    // dışında bırakmaktan yeğ.
+    if (y + h > screen_height()) { y = screen_height() - h; }
+    if (y < _ED_MENU_H3) { y = _ED_MENU_H3; }
+    str baslik = "SAHNE AC";
+    if (_ed_fd_on3 == _ED_FD_SAVE3) { baslik = "FARKLI KAYDET"; }
+    // `_g_panel` zaten OPAK bir zemin çiziyor; altına ayrıca bir dikdörtgen
+    // koymak görünmez bir katman olurdu. Vurgu çerçevesi panelden SONRA:
+    // pencerenin panellerin üstünde durduğunu anlatan tek işaret o.
+    _g_panel(x, y, w, h, baslik);
+    rect_lines(x, y, w, h, _G_ACC3());
+
+    int base = _ed_fd_idbase3();
+    int lx = x + _ED_PAD3;
+    int inner = w - _ED_PAD3 * 2;
+    int iy = y + _ed_fd_top3();
+
+    // Desen satırı — öteki tarayıcılarla aynı: yazılabilir desen + TARA.
+    int tbw = _us3(38);
+    str g0 = _ed_fd_glob3;
+    str g1 = _g_text(base, lx, iy, inner - tbw - 4, _ED_FLD3, g0);
+    if (g1 != g0) { _ed_fd_glob3 = g1; _ed_fd_done3 = 0; }
+    _g_tip_for3(base, _ed_fd_glob3);
+    if (_g_button(base + 1, lx + inner - tbw, iy, tbw, _ED_FLD3, "TARA")) {
+        _ed_fd_scan3();
+    }
+    _g_tip_for3(base + 1, "Deseni diskte ara (* ve ? calisir)");
+    iy = iy + _ED_FLD3 + _ed_fd_gap3();
+
+    int an = length(_ed_fd_files3);
+    int rows = _ed_fd_rows_for3(screen_height());
+    _ed_fd_scroll3 = _ed_as_clamp3(_ed_fd_scroll3, an, rows);
+    if (an == 0) {
+        str emsg = "eslesme yok";
+        if (_ed_fd_done3 == 0) { emsg = "TARA'ya bas"; }
+        _g_txt3(emsg, lx, _g_ly3(iy), inner, _G_DIM3());
+    }
+    int ai = _ed_fd_scroll3;
+    int shown = 0;
+    while (ai < an && shown < rows) {
+        str apath = _ed_fd_files3[ai];
+        int rw = base + 20 + shown * _ed_fd_idstep3();
+        if (_g_item(rw, lx, iy, inner, _ED_FLD3 - _us3(2),
+                    _ed_basename3(apath), apath == _ed_path3)) {
+            if (_ed_fd_on3 == _ED_FD_SAVE3) { _ed_fd_name3 = apath; }
+            else {
+                // Kaydedilmemiş iş varsa TEK TIKLA açma. Uyarı satırı
+                // beliriyor ve ikinci tık açıyor — "Yeni" düğmesindeki
+                // kipsiz onayın aynısı, modal pencere kurmadan.
+                if (_ed_dirty3 == 1 && _ed_fd_warn3 == 0) { _ed_fd_warn3 = 1; }
+                else { _ed_fd_load3(apath); return; }
+            }
+        }
+        _g_tip_for3(rw, apath);
+        iy = iy + _ED_FLD3 - _us3(2) + _us3(2);
+        ai = ai + 1;
+        shown = shown + 1;
+    }
+    // Liste sabit yükseklikte: gösterilmeyen satırların yeri boş kalıyor ki
+    // alttaki düğmeler dosya sayısıyla zıplamasın.
+    iy = y + _ed_fd_top3() + _ED_FLD3 + _ed_fd_gap3() + _ED_FLD3 * rows +
+         _us3(4);
+
+    if (an > rows) {
+        int pbw = _us3(30);
+        if (_g_button(base + 60, lx, iy, pbw, _ED_FLD3, "^")) {
+            _ed_fd_scroll3 = _ed_fd_scroll3 - rows;
+        }
+        if (_g_button(base + 61, lx + pbw + 4, iy, pbw, _ED_FLD3, "v")) {
+            _ed_fd_scroll3 = _ed_fd_scroll3 + rows;
+        }
+        _g_txt3(toString(_ed_fd_scroll3 + 1) + "-" + toString(_ed_fd_scroll3 + shown) +
+                " / " + toString(an), lx + (pbw + 4) * 2, _g_ly3(iy),
+                inner - (pbw + 4) * 2, _G_DIM3());
+    }
+    iy = iy + _ED_FLD3 + _ed_fd_gap3();
+
+    if (_ed_fd_on3 == _ED_FD_SAVE3) {
+        int kbw = _us3(64);
+        _ed_fd_name3 = _g_text(base + 70, lx, iy, inner - kbw - 4, _ED_FLD3,
+                               _ed_fd_name3);
+        _g_tip_for3(base + 70, "Dosya adi  —  uzantisiz yazarsan .json eklenir");
+        if (_g_button(base + 71, lx + inner - kbw, iy, kbw, _ED_FLD3, "KAYDET")) {
+            _ed_fd_saveas3(_ed_fd_name3);
+            return;
+        }
+        _g_tip_for3(base + 71, _ed_fd_norm3(_ed_fd_name3));
+    } else {
+        if (_ed_fd_warn3 == 1) {
+            _g_txt3("kaydedilmemis is var — tekrar tikla", lx, _g_ly3(iy),
+                    inner, rgb(250, 190, 90));
+        } else {
+            _g_txt3("bir dosyaya tikla", lx, _g_ly3(iy), inner, _G_DIM3());
+        }
+    }
+    iy = iy + _ED_FLD3 + _ed_fd_gap3();
+    int vbw = _us3(56);
+    if (_g_button(base + 80, lx + inner - vbw, iy, vbw, _ED_FLD3, "VAZGEC")) {
+        _ed_fd_close3();
+        return;
+    }
+
+    // Dışarıya tıklamak kapatır — bağlam menüsüyle aynı kural.
+    if (_g_press3 == 1 && _g_in(x, y, w, h) == false) { _ed_fd_close3(); }
+}
+
 // ---- Kabuk -----------------------------------------------------------------
 func _ed_chrome3() {
     _g_begin();
@@ -9983,6 +10315,20 @@ func _ed_chrome3() {
     if (_ed_ctx_on3 == 1) {
         _ed_ctx_draw3();
         _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+    }
+    // Dosya penceresi bağlam menüsünden SONRA: ikisi birden açıksa üstte
+    // duran pencere olmalı ve tıklama ona gitmeli.
+    //
+    // Kuyruk çizimden ÖNCE boşaltılıyor — bağlam menüsünün tersine. Menü
+    // çizdikten SONRA boşaltıyor, yani KENDİ satırlarını da denetim dışı
+    // bırakıyor; beş sabit satır için bunun bedeli yok. Dosya penceresinin
+    // on beş widget'ı var ve yerleşimi satır sayısına göre değişiyor, yani
+    // denetlenmeye ihtiyacı olan asıl yer orası. Altındaki panelleri
+    // çakışma saymak yanlış olurdu (pencere onları kasıtlı örtüyor), bu
+    // yüzden kuyruk önce boşalıyor, pencere sonra doluyor.
+    if (_ed_fd_on3 != _ED_FD_OFF3) {
+        _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+        _ed_fd_draw3();
     }
     _g_check_overlaps3();
     _g_tip_draw3();   // EN SON: ipucu her şeyin üstünde (denetime girmiyor)

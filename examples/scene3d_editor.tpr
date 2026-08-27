@@ -26,9 +26,18 @@
 //   DEL / CTRL+D               sil / çoğalt
 //   CTRL+Z / CTRL+Y            geri al / yinele
 //   CTRL+S (ya da F5)          kaydet
+//   CTRL+SHIFT+S               farklı kaydet (dosya penceresi)
 //   BOŞLUK                     seçiliyi zemine oturt
-//   ESC                        oynarken: durdur
+//   ESC                        dosya penceresini kapat / oynarken: durdur
 // Harf tuşları yalnız SAĞ TUŞ BASILI DEĞİLKEN araç kısayolu; basılıyken uçuş.
+//
+// DOSYA: menüdeki "Aç" diskteki .json sahnelerini listeler — editör artık
+// açıldığı dosyaya bağlı değil. "F. Kaydet" sahneyi BAŞKA bir dosyaya yazar
+// ve bundan sonra CTRL+S oraya kaydeder; bir şablonu alıp kendi oyununa
+// çevirmenin yolu bu. Listede AÇIK OLAN dosyaya tıklamak "geri yükle"dir
+// (kaydedilmemiş iş gider ama CTRL+Z hâlâ geri getirir). Başka bir dosyaya
+// geçmek geri-al geçmişini SIFIRLAR: sıfırlamasaydı CTRL+Z önceki sahneyi
+// yeni dosyanın içine getirir, CTRL+S de onu oraya yazardı.
 //
 // BÖLÜMLER: hiyerarşi panelinin üstündeki şerit. "+ BOLUM EKLE" sahneyi çok
 // bölümlüye çevirir (yaşayan sahne 1. bölüm olur), ◀ ▶ bölümler arasında
@@ -37,7 +46,7 @@
 // PAYLAŞILIR; değişen şey sahnenin içidir.
 //
 // Yerleşim:
-//   menü şeridi            Yeni / Aç / Kaydet / Geri / İleri
+//   menü şeridi            Yeni / Aç / Kaydet / F. Kaydet / Geri / İleri
 //   araç çubuğu            araçlar solda, OYNAT-DUR ORTADA, ızgara
 //   hiyerarşi | SAHNE GÖRÜNÜMÜ | özellikler
 //   konsol                 motorun tanılama kaydı

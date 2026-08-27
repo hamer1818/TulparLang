@@ -198,6 +198,9 @@ scene3d_lvl_*.txt
 # scene3d depo testlerinin proba dosyaları (tests/scene3d_engine.test.tpr)
 /s3_depo_probasi.json
 /s3_indirme_probasi.json
+/s3_dosya_a.json
+/s3_dosya_b.json
+/s3_farkli_kaydet.json
 /scene3d_karakter
 /karakter_desktop
 /labirent_desktop
