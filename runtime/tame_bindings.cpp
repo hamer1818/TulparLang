@@ -83,6 +83,11 @@ double tame_impl_mouse_dx(void);
 double tame_impl_mouse_dy(void);
 void tame_impl_cursor_lock(int on);
 void tame_impl_exit_key(int key);
+void tame_impl_window_resizable(int on);
+void tame_impl_fullscreen(int on);
+int tame_impl_is_fullscreen(void);
+void tame_impl_maximize(int on);
+int tame_impl_window_resized(void);
 int tame_impl_cursor_locked(void);
 int tame_impl_touch_count(void);
 int tame_impl_touch_x(int i);
@@ -413,6 +418,29 @@ VMValue aot_tm_cursor_locked_ptr(void) {
 VMValue aot_tm_exit_key_ptr(VMValue *key) {
   tame_impl_exit_key((int)tm_int(key));
   return VM_VOID();
+}
+
+VMValue aot_tm_window_resizable_ptr(VMValue *on) {
+  tame_impl_window_resizable((int)tm_int(on));
+  return VM_VOID();
+}
+
+VMValue aot_tm_fullscreen_ptr(VMValue *on) {
+  tame_impl_fullscreen((int)tm_int(on));
+  return VM_VOID();
+}
+
+VMValue aot_tm_is_fullscreen_ptr(void) {
+  return VM_BOOL(tame_impl_is_fullscreen() != 0);
+}
+
+VMValue aot_tm_maximize_ptr(VMValue *on) {
+  tame_impl_maximize((int)tm_int(on));
+  return VM_VOID();
+}
+
+VMValue aot_tm_window_resized_ptr(void) {
+  return VM_BOOL(tame_impl_window_resized() != 0);
 }
 
 VMValue aot_tm_touch_count_ptr(void) {

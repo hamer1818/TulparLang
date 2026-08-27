@@ -56,6 +56,70 @@ static Color tame_color(int64_t packed) {
   return c;
 }
 
+// Pencere BAYRAKLARI InitWindow'dan ÖNCE kurulmak zorunda (raylib sözleşmesi).
+// İstek burada bekletilip pencere açılırken uygulanıyor. Varsayılan KAPALI:
+// sabit bir pencere çoğu oyunun istediği şey (arcade oyunları mantıksal bir
+// çözünürlük varsayıyor), boyutlandırılabilirlik isteyen açıyor.
+static int tame_want_resizable = 0;
+
+int tame_impl_is_fullscreen(void);   // aşağıda; fullscreen() onu çağırıyor
+
+void tame_impl_window_resizable(int on) {
+  if (tame_window_ready) {
+    // Pencere zaten açıksa bayrak "geç kalmış" değil: raylib açıkken de
+    // durum değiştirmeye izin veriyor.
+    if (on) SetWindowState(FLAG_WINDOW_RESIZABLE);
+    else ClearWindowState(FLAG_WINDOW_RESIZABLE);
+    return;
+  }
+  tame_want_resizable = on ? 1 : 0;
+}
+
+// Tam ekran. Masaüstünde KENARLIKSIZ pencere kipi yeğleniyor: gerçek
+// tam ekran monitörün çözünürlüğünü değiştiriyor ve alt-sekme yapınca
+// masaüstü bir an kararıyor. Web'de tarayıcının kendi tam ekranı,
+// Android'de zaten tam ekran (no-op).
+void tame_impl_fullscreen(int on) {
+  if (!tame_window_ready) return;
+#if defined(PLATFORM_ANDROID)
+  (void)on;
+#elif defined(PLATFORM_WEB)
+  if ((IsWindowFullscreen() ? 1 : 0) != (on ? 1 : 0)) ToggleFullscreen();
+#else
+  if ((tame_impl_is_fullscreen() ? 1 : 0) != (on ? 1 : 0)) ToggleBorderlessWindowed();
+#endif
+}
+
+int tame_impl_is_fullscreen(void) {
+  if (!tame_window_ready) return 0;
+#if defined(PLATFORM_ANDROID)
+  return 1;
+#elif defined(PLATFORM_WEB)
+  return IsWindowFullscreen() ? 1 : 0;
+#else
+  if (IsWindowFullscreen()) return 1;
+  return IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE) ? 1 : 0;
+#endif
+}
+
+// Büyüt / eski boyuta dön. `MaximizeWindow` yalnız FLAG_WINDOW_RESIZABLE
+// açıkken iş görüyor — raylib'in kendi kuralı, ve bu yüzden büyütme
+// düğmesi de boyutlandırılabilir olmayan bir pencerede ölü kalıyor.
+void tame_impl_maximize(int on) {
+  if (!tame_window_ready) return;
+#if defined(PLATFORM_ANDROID) || defined(PLATFORM_WEB)
+  (void)on;
+#else
+  if (on) { if (!IsWindowMaximized()) MaximizeWindow(); }
+  else { if (IsWindowMaximized()) RestoreWindow(); }
+#endif
+}
+
+int tame_impl_window_resized(void) {
+  if (!tame_window_ready) return 0;
+  return IsWindowResized() ? 1 : 0;
+}
+
 int tame_impl_window(int w, int h, const char *title) {
   if (tame_window_ready) return 1; // ikinci çağrı no-op / second call is a no-op
   SetTraceLogLevel(LOG_WARNING);   // oyun konsolunu raylib INFO spam'inden koru
@@ -76,6 +140,10 @@ int tame_impl_window(int w, int h, const char *title) {
     tame_cam_on = 1;
   }
 #else
+  // Bayrak InitWindow'dan ÖNCE — raylib sözleşmesi. Sonra kurulan bir
+  // FLAG_WINDOW_RESIZABLE pencereyi boyutlandırılabilir yapmıyor ve
+  // büyütme düğmesi ölü kalıyor.
+  if (tame_want_resizable) SetConfigFlags(FLAG_WINDOW_RESIZABLE);
   InitWindow(w, h, title ? title : "tame");
   if (!IsWindowReady()) return 0;
 #endif

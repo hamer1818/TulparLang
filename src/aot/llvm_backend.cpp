@@ -762,6 +762,11 @@ typedef struct {
 static const TameBuiltin k_tame_builtins[] = {
     // pencere / döngü
     {"tm_window", "aot_tm_window_ptr", 3},
+    {"tm_window_resizable", "aot_tm_window_resizable_ptr", 1},
+    {"tm_fullscreen", "aot_tm_fullscreen_ptr", 1},
+    {"tm_is_fullscreen", "aot_tm_is_fullscreen_ptr", 0},
+    {"tm_maximize", "aot_tm_maximize_ptr", 1},
+    {"tm_window_resized", "aot_tm_window_resized_ptr", 0},
     {"tm_running", "aot_tm_running_ptr", 0},
     {"tm_close", "aot_tm_close_ptr", 0},
     {"tm_set_fps", "aot_tm_set_fps_ptr", 1},

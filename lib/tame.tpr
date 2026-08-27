@@ -32,6 +32,33 @@
 // false döner ve stderr'e açıklama basılır.
 func window(w, h, title): bool { return tm_window(w, h, title); }
 
+// Pencere BOYUTLANDIRILABİLİR olsun mu. `window()`'DAN ÖNCE çağrılmalı:
+// raylib bayrağı InitWindow'dan önce istiyor ve sonradan kurulan bayrak
+// büyütme düğmesini ölü bırakıyor.
+//
+// Varsayılan KAPALI ve bilerek: sabit bir pencere çoğu oyunun istediği şey
+// (arcade oyunları mantıksal bir çözünürlük varsayıyor ve kamera onu
+// ölçekliyor). İsteyen açar — editör gibi araçlar açıyor.
+func window_resizable(on) { tm_window_resizable(on); }
+func pencere_boyutlandirilabilir(ac) { tm_window_resizable(ac); }
+
+// Tam ekran. Masaüstünde KENARLIKSIZ pencere kipi: gerçek tam ekran
+// monitörün çözünürlüğünü değiştiriyor ve alt-sekme yapınca masaüstü bir an
+// kararıyor. Web'de tarayıcının kendi tam ekranı; Android'de zaten tam ekran.
+func fullscreen(on) { tm_fullscreen(on); }
+func tam_ekran(ac) { tm_fullscreen(ac); }
+func is_fullscreen(): bool { return tm_is_fullscreen(); }
+func tam_ekran_mi(): bool { return tm_is_fullscreen(); }
+
+// Büyüt / eski boyuta dön. Yalnız pencere boyutlandırılabilirken iş görür.
+func maximize_window(on) { tm_maximize(on); }
+func pencereyi_buyut(ac) { tm_maximize(ac); }
+
+// Pencere BU KARE boyutlandırıldı mı — render hedefi gibi ekrana bağlı
+// kaynakları yeniden kurmak için.
+func window_resized(): bool { return tm_window_resized(); }
+func pencere_boyutlandi(): bool { return tm_window_resized(); }
+
 // Ana oyun döngüsünün koşulu: pencere açık ve kapatılmak istenmemiş.
 // (Varsayılan olarak ESC veya pencere kapatma düğmesi döngüyü bitirir.)
 func running(): bool { return tm_running(); }

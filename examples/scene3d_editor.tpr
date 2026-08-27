@@ -32,6 +32,7 @@
 //   CTRL+S (ya da F5)          kaydet
 //   CTRL+SHIFT+S               farklı kaydet (dosya penceresi)
 //   H                          kısayol listesi
+//   F11                        tam ekran aç/kapat
 //   ESC                        açık pencereyi kapat / oynarken: durdur
 // Harf tuşları yalnız SAĞ TUŞ BASILI DEĞİLKEN araç kısayolu; basılıyken uçuş.
 //
@@ -60,6 +61,10 @@
 // Bölgeler editörde çizilir (rengi durumunu söyler), tıklanır, ok tuşlarıyla
 // taşınır. SESİ de var: girince çalacak dosyayı panelden seçiyorsun —
 // kurallardaki ses listesinin aynısı.
+//
+// PENCERE: boyutlandırılabilir ve büyütülebilir — kenarından çek, işletim
+// sisteminin büyütme düğmesini kullan ya da F11 ile tam ekrana geç. Bütün
+// paneller ve sahne görünümü yeni boyuta göre yeniden hesaplanıyor.
 //
 // KAPATIRKEN: pencereyi çarpıyla kapatmak kaydedilmemiş işi GÖTÜRMÜYOR
 // artık. raylib'de kapanışı iptal edecek bir bağlama yok, yani "emin misin?"

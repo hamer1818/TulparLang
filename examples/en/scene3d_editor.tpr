@@ -34,6 +34,7 @@
 //   CTRL+S (or F5)               save
 //   CTRL+SHIFT+S                 save as (file window)
 //   H                            the shortcut list
+//   F11                          toggle fullscreen
 //   ESC                          close an open window / while playing: stop
 // Letter keys are tool shortcuts ONLY while the right mouse button is NOT
 // held; while it is held they are flight.
@@ -62,6 +63,10 @@
 // the editor (the colour states their condition), clickable, arrow-key movable.
 // They also have a SOUND: pick the file that plays on enter from the panel —
 // the same sound list the rules use.
+//
+// THE WINDOW is resizable and maximizable — drag an edge, use the OS maximize
+// button, or press F11 for fullscreen. Every panel and the scene view is
+// recomputed for the new size.
 //
 // ON CLOSING: closing the window no longer loses unsaved work. raylib has no
 // hook to cancel a close, so "are you sure?" cannot be asked — instead the

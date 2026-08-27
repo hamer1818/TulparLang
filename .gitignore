@@ -204,7 +204,10 @@ scene3d_lvl_*.txt
 /s3_dosya_b.json
 /s3_farkli_kaydet.json
 /s3_kurtarma_probasi.json
-/*.kurtarma.json
+# Editörün kurtarma dosyaları — kaydedilmemiş iş, HER dizinde (sahne
+# dosyasının yanında duruyorlar). Kök-bağlı bir desen (/*.kurtarma.json)
+# examples/scenes/ altındakini kaçırıyordu.
+*.kurtarma.json
 /scene3d_karakter
 /karakter_desktop
 /labirent_desktop

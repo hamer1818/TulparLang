@@ -54,6 +54,7 @@ int K_Q = 81;   int K_E = 69;   // kamerayı klavyeyle çevir (fare yedeği)
 int K_ESC = 256; int K_ENTER = 257; int K_BACKSPACE = 259;
 int K_R = 82;    int K_P = 80;      int K_NONE = 0;
 int K_F1 = 290;  int K_F2 = 291;    int K_F3 = 292;
+int K_F11 = 300;
 
 float DEG2RAD3 = 0.01745329;
 float RAD2DEG3 = 57.29578;
@@ -5791,6 +5792,16 @@ func _s3_overlay3() {
 
 // ---- Yönetilen döngü -------------------------------------------------------
 func play3d() {
+    // Pencere BOYUTLANDIRILABİLİR. Bayrak `window()`'DAN ÖNCE kurulmak
+    // zorunda (raylib sözleşmesi) — sonradan kurulan bayrak pencereyi
+    // boyutlandırılabilir yapmıyor ve işletim sisteminin BÜYÜTME düğmesi
+    // ölü kalıyor. Kullanıcı bildirdi: editör tam ekran yapılamıyor,
+    // pencere boyutu değiştirilemiyordu.
+    //
+    // scene3d için güvenli: 3B sahne çözünürlükten bağımsız çiziliyor,
+    // editör yerleşimi zaten `screen_width()`'ten türüyor ve sahne
+    // görünümünün render hedefi `_ed_rt_sync3` ile yeniden kuruluyor.
+    window_resizable(true);
     if (!window(_win_w, _win_h, _win_title)) { return; }
     set_fps(60);
     // Işıklandırma VARSAYILAN AÇIK — motoru kullanan oyun sıfır konfigürasyonla
@@ -5854,6 +5865,15 @@ func play3d() {
     }
 
     while (running() && _s3_quit == 0) {
+        // Pencere ölçüsünü HER KARE tazele. Menü, duraklat ve oyun-bitti
+        // örtüleri `_win_w`/`_win_h` üzerinden konumlanıyor; onlar açılıştaki
+        // değerde donsaydı büyütülen pencerede bütün arayüz sol üst köşeye
+        // sıkışırdı. (Bu noktada hiçbir render hedefi bağlı değil, yani
+        // `screen_width()` gerçek pencereyi veriyor.)
+        int sw3 = screen_width();
+        int sh3 = screen_height();
+        if (sw3 > 0 && sh3 > 0) { _win_w = sw3; _win_h = sh3; }
+
         float dt = frame_time();
         if (dt <= 0.0) { dt = 0.0166667; }
         if (dt > 0.05) { dt = 0.05; }
@@ -5877,6 +5897,8 @@ func play3d() {
             log_dump3d("scene3d_log.txt");
             _lg_push(LOG_INFO, "kayit dosyaya yazildi: scene3d_log.txt");
         }
+        // F11: tam ekran. Oyunda da editörde de aynı tuş — sektör standardı.
+        if (key_pressed(K_F11)) { tam_ekran(is_fullscreen() == false); }
         if (key_pressed(K_F1)) {
             if (_lg_ovl == 1) { _lg_ovl = 0; }
             else { _lg_on = 1; _lg_ovl = 1; _lg_watch = 1; }
@@ -11323,7 +11345,7 @@ int _ed_help3 = 0;
 int _ed_help_scroll3 = 0;
 
 func _ed_help_idbase3(): int { return 71000; }
-func _ed_help_n3(): int { return 22; }
+func _ed_help_n3(): int { return 23; }
 
 func _ed_help_key3(i): str {
     if (i ==  0) { return "SAG TUS + WASD"; }
@@ -11347,6 +11369,7 @@ func _ed_help_key3(i): str {
     if (i == 18) { return "ESC"; }
     if (i == 19) { return "F1"; }
     if (i == 20) { return "F2"; }
+    if (i == 21) { return "F11"; }
     return "H";
 }
 
@@ -11379,6 +11402,7 @@ func _ed_help_act3(i): str {
     // satırda anlatmak zaten okunmuyordu.
     if (i == 19) { return "tanilama ortusu"; }
     if (i == 20) { return "kaydi dosyaya dok"; }
+    if (i == 21) { return "tam ekran ac / kapat"; }
     return "bu listeyi ac / kapat";
 }
 

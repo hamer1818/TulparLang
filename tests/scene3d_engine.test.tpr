@@ -7680,6 +7680,66 @@ func t_single_level_scene_unchanged() {
     assert(contains(js1, "\"entities\""), "tek bolumde entities yazilmali");
 }
 
+// ---- Pencere boyutlandırma --------------------------------------------------
+// Pencere sabit boyutluydu: tam ekran yapılamıyor, kenarından çekilemiyordu.
+// Sebep raylib sözleşmesi — FLAG_WINDOW_RESIZABLE `InitWindow`'DAN ÖNCE
+// kurulmak zorunda ve kurulmuyordu. Bayrak artık pencere açılmadan önce
+// veriliyor; burada sınanan şey ise YERLEŞİMİN o boyutu izlemesi.
+func t_view_rect_follows_window_size() {
+    int k = 1;
+    while (k <= 3) {
+        editor_ui_scale3d(k);
+        // Genis pencere: gorunum de genis olmali.
+        int w1 = _ed_view_w_at3(1440);
+        int w2 = _ed_view_w_at3(2560);
+        assert(w2 > w1, "olcek " + toString(k) + ": genis pencerede gorunum buyumeli");
+        assert_eq_int(w2 - w1, 2560 - 1440);   // paneller sabit genislikte
+        int h1 = _ed_view_h_at3(820);
+        int h2 = _ed_view_h_at3(1440);
+        assert(h2 > h1, "olcek " + toString(k) + ": yuksek pencerede gorunum uzamali");
+        k = k + 1;
+    }
+    editor_ui_scale3d(2);
+}
+
+// DAR pencerede görünüm negatife düşmemeli: render hedefi negatif ölçüyle
+// kurulamaz ve sahne görünümü tümden kaybolurdu. (Kelepçe zaten vardı;
+// pencere artık GERÇEKTEN küçültülebildiği için asıl şimdi yük taşıyor.)
+func t_view_rect_never_degenerate() {
+    int k = 1;
+    while (k <= 3) {
+        editor_ui_scale3d(k);
+        int w = 200;
+        while (w <= 3840) {
+            assert(_ed_view_w_at3(w) > 0,
+                   "olcek " + toString(k) + " genislik " + toString(w) +
+                   ": gorunum genisligi pozitif olmali");
+            w = w + 260;
+        }
+        int h = 200;
+        while (h <= 2160) {
+            assert(_ed_view_h_at3(h) > 0,
+                   "olcek " + toString(k) + " yukseklik " + toString(h) +
+                   ": gorunum yuksekligi pozitif olmali");
+            h = h + 220;
+        }
+        k = k + 1;
+    }
+    editor_ui_scale3d(2);
+}
+
+// Kısayol listesi F11'i de saymalı — tam ekran artık VAR ve listede yoksa
+// öğrenilmesinin yolu yok. (Tekrar denetimi ayrı testte.)
+func t_help_lists_fullscreen() {
+    int i = 0;
+    int bulundu = 0;
+    while (i < _ed_help_n3()) {
+        if (_ed_help_key3(i) == "F11") { bulundu = 1; }
+        i = i + 1;
+    }
+    assert_eq_int(bulundu, 1);
+}
+
 // ---- Bölge sesi -------------------------------------------------------------
 // Kuralların sesi vardı, bölgelerinki YOKTU: "çıkış kapısına vardın" ve
 // "çukura düştün" sessizdi — oysa geri bildirimin en çok gerektiği an o.
@@ -8780,6 +8840,9 @@ test("kose kesme yasak", "t_nav_no_corner_cutting");
 test("bolumler yukleniyor ve geciliyor", "t_levels_load_and_switch");
 test("bolumler gidis-donusten sag cikiyor", "t_levels_survive_roundtrip");
 test("tek bolumlu sahne degismiyor", "t_single_level_scene_unchanged");
+test("gorunum pencere boyutunu izliyor", "t_view_rect_follows_window_size");
+test("gorunum hicbir boyutta bozulmuyor", "t_view_rect_never_degenerate");
+test("kisayol listesi tam ekrani sayiyor", "t_help_lists_fullscreen");
 test("bolge sesi girince caliyor", "t_zone_sound_plays_on_enter");
 test("bolge sesi eylemden bagimsiz", "t_zone_sound_independent_of_action");
 test("bolge sesi gidis-donusten sag cikiyor", "t_zone_sound_roundtrips");
