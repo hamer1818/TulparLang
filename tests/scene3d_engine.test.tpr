@@ -7680,6 +7680,73 @@ func t_single_level_scene_unchanged() {
     assert(contains(js1, "\"entities\""), "tek bolumde entities yazilmali");
 }
 
+// ---- Oynat / Dur ve bölümler ------------------------------------------------
+// "Dur" TAM belgeyi geri yüklüyor, geri alma ise TEK bölümün içeriğini. İkisi
+// aynı fonksiyondan (`_ed_apply_json3`) geçiyor ve bölüm durumunu koşulsuz
+// korumak ölçüldü: 2. bölümü düzenleyip Oynat-Dur yapınca editör "BOLUM 2"
+// diyor ama ekranda 1. bölümün içeriği duruyordu; sonraki bölüm değişiminde
+// o içerik 2. bölümün ÜSTÜNE yazılıp düzenleme siliniyordu.
+func t_play_stop_keeps_level_edits() {
+    sahne_yukle3d(_lvl_kur2());
+    ed_level_go3d(2);
+    int once = yasayan_sayi3d();
+    ed_add3d(TAG_PROP, SHAPE_CUBE, 7.0, 1.0, 7.0);
+    assert_eq_int(yasayan_sayi3d(), once + 1);
+
+    ed_play3d();
+    // Oyun HER ZAMAN 1. bolumden baslar — oyuncunun gorecegi sey o.
+    assert_eq_int(level_now3d(), 1);
+    assert_eq_int(yasayan_sayi3d(), 1);
+    ed_stop3d();
+
+    // Duzenlemeye donunce: BIRAKILAN bolum ve DUZENLEME yerinde.
+    assert_eq_int(ed_level_now3d(), 2);
+    assert_eq_int(yasayan_sayi3d(), once + 1);
+    // Ve bolum degistirip donunce de durmali — asil kayip orada oluyordu.
+    ed_level_go3d(1);
+    assert_eq_int(yasayan_sayi3d(), 1);
+    ed_level_go3d(2);
+    assert_eq_int(yasayan_sayi3d(), once + 1);
+}
+
+// Oyun içinde bölüm ilerlemek düzenlemeyi etkilememeli: Dur, YAZARLIK
+// belgesine dönüyor, oynanmış hâle değil.
+func t_play_advance_then_stop_restores_authored() {
+    sahne_yukle3d(_lvl_kur2());
+    ed_play3d();
+    bolum_gec3d();
+    _s3_apply_level();
+    assert_eq_int(level_now3d(), 2);
+    // Oynarken sahneyi boz.
+    int i = 0;
+    while (i < length(_e3)) {
+        if (_e3[i].alive == 1) { kill3d(_mk_handle3(i)); }
+        i = i + 1;
+    }
+    assert_eq_int(yasayan_sayi3d(), 0);
+    ed_stop3d();
+    assert_eq_int(ed_level_now3d(), 1);
+    assert_eq_int(bolum_sayisi3d(), 2);
+    assert_eq_int(yasayan_sayi3d(), 1);       // 1. bolum, yazildigi gibi
+    ed_level_go3d(2);
+    assert_eq_int(yasayan_sayi3d(), 2);       // 2. bolum de bozulmamis
+}
+
+// Tek bölümlü sahnede Oynat-Dur eskisi gibi çalışmalı — bölüm dizisi yokken
+// koşullu koruma yanlış dala girip sahneyi bozmasın.
+func t_play_stop_single_level_unchanged() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    spawn3(4.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    assert_eq_int(bolum_sayisi3d(), 0);
+    ed_play3d();
+    kill3d(p);
+    assert_eq_int(yasayan_sayi3d(), 1);
+    ed_stop3d();
+    assert_eq_int(yasayan_sayi3d(), 2);       // yazildigi gibi geri geldi
+    assert_eq_int(bolum_sayisi3d(), 0);       // bolum uydurulmadi
+}
+
 // ---- Geri alma ve bölümler --------------------------------------------------
 // Bu testler bir REGRESYONDAN doğdu. "Yeni sahne eski bölümleri bırakmasın"
 // düzeltmesi `scene_load3d`'ye bölümleri temizletti — ve GERİ ALMA da o
@@ -8310,6 +8377,9 @@ test("kose kesme yasak", "t_nav_no_corner_cutting");
 test("bolumler yukleniyor ve geciliyor", "t_levels_load_and_switch");
 test("bolumler gidis-donusten sag cikiyor", "t_levels_survive_roundtrip");
 test("tek bolumlu sahne degismiyor", "t_single_level_scene_unchanged");
+test("oynat-dur bolum duzenlemesini koruyor", "t_play_stop_keeps_level_edits");
+test("oynayip durmak yazilan hali getiriyor", "t_play_advance_then_stop_restores_authored");
+test("tek bolumlu oynat-dur degismiyor", "t_play_stop_single_level_unchanged");
 test("geri alma bolumleri gotürmuyor", "t_undo_keeps_levels");
 test("geri alma kendi bolumune donuyor", "t_undo_returns_to_its_own_level");
 test("geri alma yiginlari es adimda", "t_undo_stacks_stay_in_step");

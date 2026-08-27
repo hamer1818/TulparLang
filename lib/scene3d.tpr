@@ -8955,9 +8955,23 @@ func _ed_apply_json3(js) {
     // yani bölüm dizisine hiç dokunmaması gerekiyor.
     array lj = _lvl_js3; array ln = _lvlN; array lf = _lvlF;
     int el = _ed_lvl3; int cl = _cur_lvl3;
+    // KORUMA KOŞULLU: yalnız belge kendi bölümlerini TAŞIMIYORSA.
+    //
+    // İki çağıran var ve ikisi farklı şey istiyor:
+    //   • GERİ ALMA — anlık görüntü tek bölümün içeriği (`scene_json3d`),
+    //     bölüm dizisine hiç dokunmamalı.
+    //   • DUR — TAM belgeyi (`scene_json_levels3d`) geri yüklüyor; bölümler
+    //     belgenin kendisinden geliyor ve 1. bölümde duruluyor.
+    // Koşulsuz korumak ölçüldü ve İŞ KAYBETTİRİYORDU: 2. bölümü düzenleyip
+    // Oynat-Dur yapınca editör "BOLUM 2" diyor ama ekranda 1. bölümün içeriği
+    // duruyordu; sonraki bölüm değişiminde `_ed_level_store3` o içeriği
+    // 2. bölümün ÜSTÜNE yazıp yapılan düzenlemeyi siliyordu.
+    bool kendi_bolumleri = _sc_has3(fromJson(js), "levels");
     scene_load3d(js);
-    _lvl_js3 = lj; _lvlN = ln; _lvlF = lf;
-    _ed_lvl3 = el; _cur_lvl3 = cl;
+    if (kendi_bolumleri == false) {
+        _lvl_js3 = lj; _lvlN = ln; _lvlF = lf;
+        _ed_lvl3 = el; _cur_lvl3 = cl;
+    }
     int n = length(_trg_x);
     int i = 0;
     while (i < n && i < length(fi)) {
@@ -10609,9 +10623,15 @@ func _ed_toolbar3() {
 // Unity modeli: Oynat, ekrandaki düzenlenmiş sahneyi yazarlık durumu olarak
 // sabitler ve KOPYASINI koşturur. Dur kopyayı atar. Oynarken yapılan hiçbir
 // değişiklik kaydedilmez.
+int _ed_lvl_before_play3 = 0;   // Oynat'a basıldığında düzenlenen bölüm
+
 func ed_play3d() {
     if (_ed_playing3 == 1) { return; }
     _ed_capture3();
+    // Dur'dan sonra KULLANICININ bıraktığı bölüme dönmek için. Oyun her
+    // zaman 1. bölümden başlıyor (oyuncunun göreceği şey o) ama düzenlemeye
+    // dönünce 3. bölümdeki işinin başında olmak gerekiyor.
+    _ed_lvl_before_play3 = _ed_lvl3;
     // Oyun BİRİNCİ bölümden başlar — oyuncunun göreceği şey bu. Editörde
     // 3. bölümdeyken "Oynat" 3. bölümü test etmek gibi görünebilir ama o
     // zaman oyunun başlangıcı hiç denenmemiş olurdu.
@@ -10626,6 +10646,11 @@ func ed_play3d() {
 func ed_stop3d() {
     if (_ed_playing3 == 0) { return; }
     _ed_apply_json3(_sc_authored3);
+    // Yazarlık belgesi bölümleri taşıyor, yani yükleme 1. bölümde duruyor.
+    // Kullanıcı hangi bölümü düzenliyorduysa oraya dön.
+    if (_ed_lvl_before_play3 > 0 && _ed_lvl_before_play3 < length(_lvl_js3)) {
+        ed_level_go3d(_ed_lvl_before_play3 + 1);
+    }
     _ed_playing3 = 0;
     _ed_on3 = 1;
     _g_focus3 = 0;
