@@ -6187,6 +6187,21 @@ func _sc_clear_for_load3() {
     // Editör seçimi bayat handle olurdu.
     _ed_sel3e = 0 - 1; _ed_drag3 = 0; _gz_axis3 = 0 - 1;
     _ed_zsel3 = 0 - 1; _ed_msel3 = [];
+    // BÖLÜMLER de biçimin parçası, yani yükleme onları da temizlemeli.
+    // Temizlenmiyordu ve sonuç sinsi bir VERİ KAYBIYDI: üç bölümlü bir sahne
+    // açıkken "Yeni"ye basmak yaşayan sahneyi boşaltıyor ama _lvl_js3'ü
+    // bırakıyordu; F5 o dosyaya ESKİ sahnenin varlıklarını "levels" altında
+    // yazıyordu. Yani kullanıcının boş istediği dosya, terk ettiği sahnenin
+    // içeriğiyle doluyordu. (Ölçüldü: yeni sahneden sonra kaydedilen JSON
+    // önceki bölümün kürelerini taşıyordu.) Şablonlar da aynı yoldan geçiyor.
+    //
+    // Kayıt defteri (_lvlN/_lvlF) yalnız VERİ bölümleri varken siliniyor.
+    // Elle yazılmış bir oyunun `level3d(1, "bolum1")` kayıtları KOD, sahne
+    // değil; sahne yüklemek onları silmemeli. _lvl_js3 doluyken defter zaten
+    // veri bölümlerinin: `ed_level_del3d` de onu bütünüyle yeniden kuruyor.
+    if (length(_lvl_js3) > 0) { _lvlN = []; _lvlF = []; _cur_lvl3 = 0; }
+    _lvl_js3 = [];
+    _ed_lvl3 = 0;
 }
 
 func scene_load3d(src): int {

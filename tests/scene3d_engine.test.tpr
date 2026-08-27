@@ -6565,6 +6565,129 @@ func t_single_level_scene_unchanged() {
     assert(contains(js1, "\"entities\""), "tek bolumde entities yazilmali");
 }
 
+// Sahne YÜKLEMEK eski sahnenin bölümlerini de bırakmalı. Bırakmıyordu ve
+// sonuç sessiz bir VERİ KAYBIYDI: üç bölümlü bir sahne açıkken menüdeki
+// "Yeni"ye basmak yaşayan sahneyi boşaltıyor, `_lvl_js3`'ü bırakıyordu — ve
+// F5 kullanıcının BOŞ istediği dosyaya eski sahnenin varlıklarını "levels"
+// altında yazıyordu.
+//
+// İDDİA sayıda değil, YAZILANDA: bölüm sayısını sınamak yetmez, çünkü sayı
+// sıfırlanıp içerik yine yazılabilirdi. O yüzden eski varlığın koordinatı
+// çıktıda ARANIYOR.
+func t_new_scene_drops_old_levels() {
+    scene3d_reset(); no_ground3d();
+    // Ayırt edici koordinat: çıktıda aranacak.
+    spawn3(77.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    ed_level_add3d();
+    ed_level_add3d();
+    assert_eq_int(ed_level_count3d(), 3);
+
+    // Menüdeki "Yeni" düğmesinin yaptığı şeyin birebir aynısı.
+    sahne_yukle3d("{\"v\":1,\"world\":{\"ground\":0},\"entities\":[]}");
+    assert_eq_int(ed_level_count3d(), 0);
+    assert_eq_int(ed_level_now3d(), 1);
+    assert_eq_int(yasayan_sayi3d(), 0);
+
+    str js = sahne_json_bolumlu3d();
+    assert(contains(js, "\"levels\"") == false,
+           "yeni sahne levels anahtari YAZMAMALI");
+    assert(contains(js, "77") == false,
+           "yeni sahne eski bolumun varligini TASIMAMALI");
+}
+
+// Şablonlar da aynı temizlikten geçiyor (`_tpl_base3` → `_sc_clear_for_load3`).
+// Ayrı test: iki yol aynı fonksiyona dayansa da çağrı zincirleri ayrı ve
+// şablon düğmesi editörün en çok basılan düğmesi.
+func t_template_drops_old_levels() {
+    scene3d_reset(); no_ground3d();
+    spawn3(77.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    ed_level_add3d();
+    assert_eq_int(ed_level_count3d(), 2);
+    ed_template3d(TPL_TOPLAYICI);
+    assert_eq_int(ed_level_count3d(), 0);
+    str js = sahne_json_bolumlu3d();
+    assert(contains(js, "\"levels\"") == false,
+           "sablon levels anahtari YAZMAMALI");
+}
+
+// Tek bölümlü bir dosyayı ÇOK bölümlünün üstüne açmak da aynı sızıntıydı:
+// açılan dosyada bir bölüm var ama editör üçünü gösteriyordu.
+func t_loading_single_level_over_multi_clears() {
+    sahne_yukle3d(_lvl_kur2());
+    assert_eq_int(bolum_sayisi3d(), 2);
+    sahne_yukle3d("{\"v\":1,\"world\":{\"ground\":0}," +
+                  "\"entities\":[{\"tag\":\"prop\",\"x\":3,\"y\":1,\"z\":0}]}");
+    assert_eq_int(bolum_sayisi3d(), 0);
+    assert_eq_int(yasayan_sayi3d(), 1);
+}
+
+// _lvl_js3'ü boşaltmak YETMİYOR: bölüm KAYIT DEFTERİ (_lvlN/_lvlF) de
+// gitmeli. Kalırsa tek bölümlük sahne kendini üç bölümlü sanır ve
+// "bölümü bitir" KAZANDIRMAZ — motor hayalet bir 2. bölüme geçer, entity
+// deposunu siler ve yükleyecek veri bulamaz: sahne bomboş kalır, oyun asla
+// bitmez. İddia davranışta: kazanma bayrağı ve sahnenin dolu kalması.
+func t_stale_level_registry_does_not_survive_load() {
+    sahne_yukle3d(_lvl_kur2());
+    assert_eq_int(bolum_sayisi3d(), 2);
+    sahne_yukle3d("{\"v\":1,\"world\":{\"ground\":0}," +
+                  "\"entities\":[{\"tag\":\"prop\",\"x\":3,\"y\":1,\"z\":0}]}");
+    assert_eq_int(yasayan_sayi3d(), 1);
+    bolum_gec3d();
+    _s3_apply_level();
+    assert(won3d(), "tek bolumlu sahnede bolum bitince KAZANILMALI");
+    assert_eq_int(yasayan_sayi3d(), 1);
+}
+
+// Yürürlükteki bölüm NUMARASI da sıfırlanmalı. Sıfırlanmazsa görünür bir
+// şey bozulmuyor (bölüm HUD'ı zaten boş deftere bakıp susuyor) — ama
+// İLERLEME KAYDI bozuluyor: 2. bölümdeyken tek bölümlü bir sahne açıp o
+// bölümü bitirmek, tek bölümlük oyunda "2. bölüm tamamlandı" diye
+// işaretliyor. Kalıcılık açıksa bu diske de yazılıyor ve asıl oyunun
+// ilerlemesini kirletiyor.
+func t_stale_level_number_does_not_mark_progress() {
+    // Reset ŞART: ilerleme bayrakları global ve önceki testlerden dolu
+    // gelebiliyor — o hâlde bu test hiçbir şey ölçmezdi (ölçüldü: reset'siz
+    // hâli düzeltme YERİNDEYKEN de kırmızıydı).
+    scene3d_reset();
+    sahne_yukle3d(_lvl_kur2());
+    bolum_gec3d();
+    _s3_apply_level();
+    assert_eq_int(level_now3d(), 2);
+    sahne_yukle3d("{\"v\":1,\"world\":{\"ground\":0}," +
+                  "\"entities\":[{\"tag\":\"prop\",\"x\":3,\"y\":1,\"z\":0}]}");
+    bolum_gec3d();
+    _s3_apply_level();
+    assert(won3d(), "tek bolumlu sahne bitince kazanilmali");
+    assert(level_done3d(2) == false,
+           "tek bolumluk sahne 2. bolumu bitti diye isaretlememeli");
+}
+
+// Temizliğin DAR olması da iddianın parçası: elle yazılmış bir oyunun
+// `level3d(1, "bolum1")` kayıtları KOD, sahne değil. Sahne yüklemek onları
+// silseydi bir oyunun içinden sahne açmak bölüm sistemini sessizce
+// öldürürdü. Kayıt defteri yalnız VERİ bölümleri varken siliniyor.
+int _t_auth_lvl_ran3 = 0;
+func _t_auth_lvl3() { _t_auth_lvl_ran3 = _t_auth_lvl_ran3 + 1; }
+
+func t_authored_levels_survive_scene_load() {
+    scene3d_reset(); no_ground3d();
+    _t_auth_lvl_ran3 = 0;
+    level3d(1, "_t_auth_lvl3");
+    level3d(2, "_t_auth_lvl3");
+    // Veri bölümü YOK — defter yazarın.
+    assert_eq_int(ed_level_count3d(), 0);
+    goto_level3d(1);
+    _s3_apply_level();
+    assert_eq_int(level_now3d(), 1);
+    sahne_yukle3d("{\"v\":1,\"world\":{\"ground\":0},\"entities\":[]}");
+    // Defter durmali: bolum gecisi hala calismali.
+    _t_auth_lvl_ran3 = 0;
+    bolum_gec3d();
+    _s3_apply_level();
+    assert_eq_int(level_now3d(), 2);
+    assert(_t_auth_lvl_ran3 > 0, "yazarin bolum fonksiyonu calismali");
+}
+
 func t_ed_level_switch_keeps_edits() {
     // ASIL İDDİA: 2. bölümde bir şey ekleyip 1'e, sonra 2'ye dönünce
     // eklenen şey DURMALI.
@@ -6978,6 +7101,12 @@ test("kose kesme yasak", "t_nav_no_corner_cutting");
 test("bolumler yukleniyor ve geciliyor", "t_levels_load_and_switch");
 test("bolumler gidis-donusten sag cikiyor", "t_levels_survive_roundtrip");
 test("tek bolumlu sahne degismiyor", "t_single_level_scene_unchanged");
+test("yeni sahne eski bolumleri birakmiyor", "t_new_scene_drops_old_levels");
+test("sablon eski bolumleri birakmiyor", "t_template_drops_old_levels");
+test("tek bolumlu dosya cok bolumlunun ustune temiz aciliyor", "t_loading_single_level_over_multi_clears");
+test("bayat bolum defteri yuklemeden sag cikmiyor", "t_stale_level_registry_does_not_survive_load");
+test("bayat bolum numarasi ilerlemeyi kirletmiyor", "t_stale_level_number_does_not_mark_progress");
+test("yazarin bolum kayitlari sahne yuklemeden sag cikiyor", "t_authored_levels_survive_scene_load");
 test("bolum degisimi duzenlemeyi koruyor", "t_ed_level_switch_keeps_edits");
 test("+bolum tek bolumluyu cevirir", "t_ed_level_add_converts_single");
 test("bolum silme numaralari yeniler", "t_ed_level_delete_renumbers");
