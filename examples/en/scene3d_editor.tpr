@@ -64,6 +64,17 @@
 // They also have a SOUND: pick the file that plays on enter from the panel —
 // the same sound list the rules use.
 //
+// PANELS CAN BE MOVED: the PANELLER button in the menu bar lists all three
+// panels (hierarchy, inspector, console). Each row has a slot button that
+// moves the panel to the left / right / bottom dock, and a hide button —
+// a hidden panel is not drawn and takes no space; its area goes to the scene
+// view. Two panels in the same dock split it evenly (stacked in the side
+// docks, side by side in the bottom one). "VARSAYILAN YERLESIM" restores
+// both the docks and the sizes.
+//
+// Deliberately NOT done: ordering within a dock, TABS, and FLOATING windows.
+// All three mean a separate window manager.
+//
 // PANEL BORDERS ARE DRAGGABLE: grab the line between the hierarchy and the
 // scene view, between the scene view and the inspector, or the top of the
 // console, and pull. The choice PERSISTS — it survives closing the engine and
@@ -90,7 +101,7 @@
 // would silently break on save.
 //
 // Layout:
-//   menu bar          New / Open / Save / Save As / Undo / Redo / YERLESIM / ?
+//   menu bar          New / Open / Save / Save As / Undo / Redo / PANELLER / ?
 //   toolbar           tools on the left, PLAY-STOP CENTRED, grid
 //   hierarchy | SCENE VIEW | inspector
 //   console           the engine's diagnostic log

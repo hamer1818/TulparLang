@@ -62,6 +62,16 @@
 // taşınır. SESİ de var: girince çalacak dosyayı panelden seçiyorsun —
 // kurallardaki ses listesinin aynısı.
 //
+// PANELLERİN YERİ DEĞİŞTİRİLİR: menüdeki PANELLER düğmesi üç paneli de
+// (hiyerarşi, özellikler, konsol) listeler. Her satırda YUVA düğmesi paneli
+// sol / sağ / alt yuvaya taşır, GİZLE düğmesi kapatır — kapalı panel hiç
+// çizilmez ve yer kaplamaz, alanı sahne görünümüne geçer. Aynı yuvadaki iki
+// panel yuvayı eşit paylaşır (yan yuvalarda alt alta, alt yuvada yan yana).
+// "VARSAYILAN YERLESIM" hem yuvaları hem ölçüleri geri alır.
+//
+// Yapılmayan, açıkça: yuva içinde sıralama, SEKME ve YÜZEN pencere. Üçü de
+// ayrı bir pencere yöneticisi demek.
+//
 // PANEL SINIRLARI SÜRÜKLENİR: hiyerarşi ile sahne görünümü arasındaki,
 // sahne görünümü ile özellikler arasındaki ve konsolun üstündeki çizgiyi
 // tut ve çek. Herkes kendi ekranına göre yerleştirsin diye. Seçim KALICI —
@@ -87,7 +97,7 @@
 // atıfta bulunuyor — adsız bir hedef kaydedince sessizce kopardı.
 //
 // Yerleşim:
-//   menü şeridi            Yeni / Aç / Kaydet / F. Kaydet / Geri / İleri / YERLESIM / ?
+//   menü şeridi            Yeni / Aç / Kaydet / F. Kaydet / Geri / İleri / PANELLER / ?
 //   araç çubuğu            araçlar solda, OYNAT-DUR ORTADA, ızgara
 //   hiyerarşi | SAHNE GÖRÜNÜMÜ | özellikler
 //   konsol                 motorun tanılama kaydı
