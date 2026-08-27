@@ -1167,6 +1167,57 @@ func resume3d() { if (_s3_ui == UI_PAUSE) { _s3_ui = UI_NONE; } }
 func paused3d(): bool { return _s3_ui == UI_PAUSE; }
 func quit3d()   { _s3_quit = 1; }
 
+// Menülerdeki "Çıkış" ve ESC kestirmesi. EDİTÖR UYGULAMASINDA programı
+// KAPATMAZ: editör asıl uygulama, oyun onun içinde koşan bir ÖNİZLEME.
+//
+// Kapatıyordu ve kullanıcı bildirdi: editörde OYNAT'a bas, oyun bitsin
+// (kazan/kaybet), ESC'ye bas → bütün editör kapanıyordu, kaydedilmemiş
+// sahne dâhil. `_s3_over_step` ESC'yi "çık" sayıyor, o da `_s3_quit = 1`
+// yapıp döngüyü kırıyordu. Oyun-bitti ekranından çıkmanın tek anlamı
+// editörde düzenlemeye DÖNMEK.
+// Menü düğmesinin ETİKETİ. Editörde "Çıkış" yazan bir düğme yalan söylüyordu:
+// bastığında program kapanmıyor, düzenlemeye dönüyor.
+func _s3_quit_lbl3(): str {
+    if (_ed_app3 == 1) { return _s3_t("Duzenle", "Edit"); }
+    return _s3_t("Cikis", "Quit");
+}
+
+// Menü ADIMININ sonucunu eyleme çevir. Ayrı fonksiyon olmasının sebebi
+// SINANABİLİRLİK: bu dağıtım `play3d`'nin döngüsünün göbeğindeydi, yani
+// pencere olmadan çalıştırılamıyordu — ve "çıkış artık durdurma"
+// düzeltmesini çağrı yerinden geri almak HİÇBİR testi kırmıyordu (bozma
+// denendi, kaçtı). Yardımcıyı sınamak yetmiyor; onu ÇAĞIRDIĞINI da
+// sınamak gerekiyor.
+//   kind: 0 = başlık ekranı, 1 = duraklat, 2 = oyun bitti
+func _s3_menu_act3(kind, a) {
+    if (a == 0) { return; }
+    if (kind == 0) {
+        if (a == 1) { _s3_ui = UI_NONE; return; }
+        _s3_quit_or_stop3();
+        return;
+    }
+    if (kind == 1) {
+        if (a == 1) { _s3_ui = UI_NONE; return; }
+        if (a == 2) { restart3d(); return; }
+        _s3_quit_or_stop3();
+        return;
+    }
+    if (a == 1) { restart3d(); return; }
+    _s3_quit_or_stop3();
+}
+
+func _s3_quit_or_stop3() {
+    if (_ed_app3 == 1) {
+        // Bayraklar önce: `ed_stop3d` oynamıyorken erken dönüyor ve o hâlde
+        // örtü ekranda kalırdı — yani ESC hiçbir şey yapmaz görünürdü.
+        _game_over3 = 0; _won3 = 0;
+        _s3_ui = UI_NONE;
+        ed_stop3d();
+        return;
+    }
+    _s3_quit = 1;
+}
+
 // Baştan başla. Sırayla: bölüm varsa en küçüğüne dön, yoksa on_restart3d
 // kancasını çağır, o da yoksa yalnız skoru/durumu sıfırla (sahne yerinde kalır —
 // belgelenmiş sınır, sessiz değil).
@@ -1299,7 +1350,7 @@ func _s3_title_draw() {
                         _win_h * 0.365, toInt(_win_h * 0.04), GOLD);
     }
     _s3_btn_draw(0, _s3_t("Basla", "Start"));
-    _s3_btn_draw(1, _s3_t("Cikis", "Quit"));
+    _s3_btn_draw(1, _s3_quit_lbl3());
 }
 
 // 1 = başla, 2 = çık, 0 = bekle
@@ -1321,7 +1372,7 @@ func _s3_pause_draw() {
                     toInt(_win_h * 0.09), GOLD);
     _s3_btn_draw(0, _s3_t("Devam", "Resume"));
     _s3_btn_draw(1, _s3_t("Yeniden", "Restart"));
-    _s3_btn_draw(2, _s3_t("Cikis", "Quit"));
+    _s3_btn_draw(2, _s3_quit_lbl3());
 }
 
 // 1 = devam, 2 = yeniden, 3 = çık, 0 = bekle
@@ -1359,7 +1410,7 @@ func _s3_over_draw() {
         }
     }
     _s3_btn_draw(0, _s3_t("Tekrar Oyna", "Play Again"));
-    _s3_btn_draw(1, _s3_t("Cikis", "Quit"));
+    _s3_btn_draw(1, _s3_quit_lbl3());
 }
 
 // 1 = tekrar, 2 = çık, 0 = bekle
@@ -5981,20 +6032,9 @@ func play3d() {
 
         // Girdi çizimden SONRA okunuyor: düğmeler bu karede zaten çizilmiş
         // oldu, yani oyuncunun tıkladığı şey ekranda gördüğü şeyle aynı.
-        if (_s3_ui == UI_TITLE) {
-            int ta = _s3_title_step();
-            if (ta == 1) { _s3_ui = UI_NONE; }
-            else if (ta == 2) { _s3_quit = 1; }
-        } else if (_s3_ui == UI_PAUSE) {
-            int pa = _s3_pause_step();
-            if (pa == 1) { _s3_ui = UI_NONE; }
-            else if (pa == 2) { restart3d(); }
-            else if (pa == 3) { _s3_quit = 1; }
-        } else if (_game_over3 == 1) {
-            int oa = _s3_over_step();
-            if (oa == 1) { restart3d(); }
-            else if (oa == 2) { _s3_quit = 1; }
-        }
+        if (_s3_ui == UI_TITLE)        { _s3_menu_act3(0, _s3_title_step()); }
+        else if (_s3_ui == UI_PAUSE)   { _s3_menu_act3(1, _s3_pause_step()); }
+        else if (_game_over3 == 1)     { _s3_menu_act3(2, _s3_over_step()); }
         if (_s3_quit == 1) { break; }
     }
     close_window();

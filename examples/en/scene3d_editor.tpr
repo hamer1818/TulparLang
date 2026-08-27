@@ -2,8 +2,8 @@
 // English twin of examples/scene3d_editor.tpr.
 //
 //   ./tulpar examples/en/scene3d_editor.tpr
-//   ./tulpar build examples/en/scene3d_editor.tpr editor && ./editor
-//   ./editor my_scene.json            (open your own scene / create a new file)
+//   ./tulpar build examples/en/scene3d_editor.tpr TameEngine && ./TameEngine
+//   ./TameEngine my_scene.json        (open your own scene / create a new file)
 //
 // IN THE BROWSER:
 //   mkdir -p assets && cp <some>.ttf assets/ui.ttf     (a readable font)
@@ -96,7 +96,7 @@ func scene_path(): str {
         }
         return "scene.json";
     }
-    // THE COMMAND LINE comes first: `./editor my_scene.json`. Being able to
+    // THE COMMAND LINE comes first: `./TameEngine my_scene.json`. Being able to
     // open only one embedded file made the editor useless for your own work.
     array a = args();
     if (length(a) > 1) { return a[1]; }
@@ -138,7 +138,7 @@ func setup() {
     }
     // A file given on the command line that does NOT yet exist is not an
     // error: it is the most natural way to create a new scene
-    // (`./editor new.json` -> empty scene, F5 writes it there).
+    // (`./TameEngine new.json` -> empty scene, F5 writes it there).
     array a = args();
     if (length(a) > 1 && file_exists(a[1]) == false) {
         editor_file3d(a[1]);
@@ -151,7 +151,7 @@ func setup() {
         editor_file3d("scene.json");
         scene_load3d(EMPTY);
         log_err3d("no scene file found — opened an empty scene.");
-        log_err3d("run from the repo root: ./editor");
+        log_err3d("run from the repo root: ./TameEngine");
         return;
     }
     editor_file3d(SCENE);
@@ -164,7 +164,7 @@ func setup() {
     }
 }
 
-scene3d(1440, 820, "Tulpar Scene Editor");
+scene3d(1440, 820, "TameEngine");
 editor_app3d(true);
 on_setup3d(setup);
 play3d();

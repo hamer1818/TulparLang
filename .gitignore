@@ -192,6 +192,8 @@ scene3d_lvl_*.txt
 
 # 3B masaüstü derleme çıktıları (./tulpar build examples/scene3d_*.tpr)
 /editor
+/TameEngine
+/TameEngine.o
 /arena_desktop
 /data_game_desktop
 /terrain_desktop
