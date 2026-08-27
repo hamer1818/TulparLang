@@ -19,17 +19,22 @@
 // and the difference from overlaying a running game is this: editing is the
 // primary act, playing is one of its tools.
 //
-// Shortcuts (industry standard):
+// SHORTCUTS: the full list lives INSIDE the editor — press H, or the "?"
+// button in the menu bar. What follows is a summary; the on-screen list is
+// the single source (the status bar no longer enumerates shortcuts, that
+// line was getting truncated).
 //   RIGHT MOUSE held + WASD/QE   free flight, mouse to look
-//   Q / W / E / R                select / move / rotate / scale  (1-4 too)
-//   F                            frame the selection
-//   G                            toggle grid
+//   Q / W / E / R                select / move / rotate / scale
+//   1 / 2 / 3 / 4                select / move / SCALE / ROTATE  (different!)
+//   F / G / SPACE                frame / grid / drop onto the ground
 //   DEL / CTRL+D                 delete / duplicate
+//   CTRL+C / CTRL+V              copy / paste (works ACROSS LEVELS)
+//   CTRL+A                       select all
 //   CTRL+Z / CTRL+Y              undo / redo
 //   CTRL+S (or F5)               save
 //   CTRL+SHIFT+S                 save as (file window)
-//   SPACE                        drop the selection onto the ground
-//   ESC                          close the file window / while playing: stop
+//   H                            the shortcut list
+//   ESC                          close an open window / while playing: stop
 // Letter keys are tool shortcuts ONLY while the right mouse button is NOT
 // held; while it is held they are flight.
 //
@@ -43,7 +48,7 @@
 // CTRL+S would write it there.
 //
 // Layout:
-//   menu bar          New / Open / Save / Save As / Undo / Redo
+//   menu bar          New / Open / Save / Save As / Undo / Redo / ?
 //   toolbar           tools on the left, PLAY-STOP CENTRED, grid
 //   hierarchy | SCENE VIEW | inspector
 //   console           the engine's diagnostic log

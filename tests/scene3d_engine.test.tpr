@@ -5784,6 +5784,274 @@ func t_storage_export_writes_file_on_desktop() {
 // SAF kararlarını (yol ayrıştırma, ad normalleştirme, geçmiş kuralı) ve
 // diske dokunan iki etkisini ayrı ayrı sınıyor.
 
+// ===========================================================================
+// KISAYOL YARDIMI
+// ===========================================================================
+// Kısayollar yalnız durum çubuğunun sağ ucundaki tek satırda yazıyordu — o
+// satır kırpılıyor, dar pencerede hiç çizilmiyor ve her mesajda yerini
+// kaybediyordu. Q/W/E/R'yi bilmeyen biri onları hiç öğrenemiyordu.
+
+// Her satırın KENDİ tuşu ve KENDİ açıklaması olmalı. Liste `if (i == k)`
+// zinciriyle yazılıyor ve zincirin sonunda bir varsayılan var: bir dal
+// silinirse ya da sayaç büyütülürse o satır SESSİZCE varsayılana düşer —
+// yani listede aynı şey iki kez görünür. Tekrar aramak bu sınıfı kapatıyor.
+func t_help_rows_are_all_distinct() {
+    int n = _ed_help_n3();
+    assert(n > 0, "kisayol listesi bos olmamali");
+    int i = 0;
+    while (i < n) {
+        str ki = _ed_help_key3(i);
+        str ai = _ed_help_act3(i);
+        assert(length(ki) > 0, "tus adi bos: satir " + toString(i));
+        assert(length(ai) > 0, "aciklama bos: satir " + toString(i));
+        int j = i + 1;
+        while (j < n) {
+            assert(ki != _ed_help_key3(j),
+                   "ayni tus iki satirda: " + ki + " (" + toString(i) + "," +
+                   toString(j) + ")");
+            assert(ai != _ed_help_act3(j),
+                   "ayni aciklama iki satirda: " + ai + " (" + toString(i) +
+                   "," + toString(j) + ")");
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+}
+
+// Tuş sütunu İÇERİKTEN türüyor. Sabit bir genişlik, yeni bir uzun kısayol
+// eklenince açıklama sütununun üstüne binerdi — ve bu ancak o kısayol
+// eklendiğinde, gözle görülürdü.
+func t_help_key_column_fits_longest_key() {
+    editor_ui_scale3d(2);
+    int kw = _ed_help_keyw3();
+    int i = 0;
+    while (i < _ed_help_n3()) {
+        // 11.5 px/karakter bütçesi, sütunun kendi payı (_us3(4)) düşülmüş.
+        assert(_t_fits3(_ed_help_key3(i), kw - _us3(4)),
+               "tus adi sutuna sigmali: " + _ed_help_key3(i) +
+               " (" + toString(kw) + " px)");
+        i = i + 1;
+    }
+    // Açıklama sütunu da kalan yere sığmalı.
+    int inner = _ed_help_w_for3(1440) - _ED_PAD3 * 2;
+    i = 0;
+    while (i < _ed_help_n3()) {
+        assert(_t_fits3(_ed_help_act3(i), inner - kw),
+               "aciklama sutuna sigmali: " + _ed_help_act3(i));
+        i = i + 1;
+    }
+}
+
+// Örtü editörün penceresine sığmalı — her ölçekte. 3x'te on sekiz satır
+// 820 pikseli aşıyor; sığmayan kısım KAYIYOR, kırpılmıyor. Kırpılsaydı
+// öğrenilmesi gereken kısayollar yine görünmez kalırdı.
+func t_help_overlay_fits_and_scrolls() {
+    int W = 1440;
+    int H = 820;
+    int k = 1;
+    while (k <= 3) {
+        editor_ui_scale3d(k);
+        int h = _ed_help_h_for3(H);
+        assert(h + _ED_MENU_H3 + _ED_STAT_H3 <= H,
+               "olcek " + toString(k) + ": yukseklik tasti " + toString(h));
+        assert(_ed_help_w_for3(W) <= W - _us3(24),
+               "olcek " + toString(k) + ": genislik tasti");
+        assert(_ed_help_rows_for3(H) >= 3,
+               "olcek " + toString(k) + ": liste cok kisaldi");
+        k = k + 1;
+    }
+    // 1x ve 2x'te liste TAM görünmeli: kaydırmadan okunabilmesi yeğ.
+    editor_ui_scale3d(2);
+    assert_eq_int(_ed_help_rows_for3(H), _ed_help_n3());
+    // Pencere kısalınca satır sayısı GERÇEKTEN azalmalı — sabit döndüren
+    // bir bozma "en az 3" iddiasından kaçardı.
+    assert(_ed_help_rows_for3(400) < _ed_help_n3(),
+           "kisa pencerede liste kisalmali: " + toString(_ed_help_rows_for3(400)));
+    assert(_ed_help_rows_for3(820) > _ed_help_rows_for3(400),
+           "buyuk pencere daha cok satir gostermeli");
+    editor_ui_scale3d(2);
+}
+
+func t_help_widget_ids_do_not_collide() {
+    int hb = _ed_help_idbase3();
+    int fb = _ed_fd_idbase3();
+    // Dosya penceresi bloğu base..base+80 kullanıyor.
+    assert(hb > fb + 80 || hb + 2 < fb, "yardim ve dosya bloklari ayrik olmali");
+    // Menüdeki "?" düğmesi (9607) ikisinin de altında.
+    assert(9607 < fb && 9607 < hb, "menu kimlikleri altta kalmali");
+    // Bağlam menüsü 22001-22016.
+    assert(22016 < hb, "baglam menusu yardim araliginin altinda");
+}
+
+// ===========================================================================
+// PANO — kopyala / yapıştır / tümünü seç
+// ===========================================================================
+// Çoğaltma (CTRL+D) vardı ama tek bölümün İÇİNDE: bir düşmanı 1. bölümde
+// kurup 2. bölümde de kullanmanın yolu yoktu. Pano bölüm sınırını geçiyor.
+
+// Bir varlığın davranış sayısı — panonun "tam kopya" iddiasını sınamak için.
+func _t_bh_of3(id): int {
+    int n = 0;
+    int i = 0;
+    while (i < length(_bh3)) {
+        Bh3 b = _bh3[i];
+        if (b.id == id) { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+// Panoda handle değil METİN duruyor ve o metin varlığın TAMAMI: davranışlar,
+// doku, can, katılık. Alan alan kopyalayan bir pano her yeni alanda sessizce
+// eksilirdi (çoğaltmada tam olarak bu borç var — model alanları elle taşınıyor).
+func t_clipboard_copies_whole_entity() {
+    scene3d_reset(); no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 2.0, 3.0, 4.0, GOLD, SHAPE_CUBE, TAG_ENEMY);
+    ad_ver3d(a, "nobetci");
+    can3d(a, 55);
+    set_texture3d(a, "examples/assets/dokular/tugla.png", 3.0);
+    kovala_davranis3d(a, TAG_PLAYER, 4.25, 33.0);
+    ed_select3d(a);
+    assert_eq_int(ed_copy3d(), 1);
+
+    // BAŞKA bir sahneye yapıştır: kopyanın kendi başına ayakta durması
+    // gerekiyor, kaynağın hâlâ var olmasına değil.
+    scene3d_reset(); no_ground3d();
+    assert_eq_int(ed_paste3d(), 1);
+    int n = ed_selected3d();
+    assert(n >= 0, "yapistirilan secili olmali");
+    Ent3 e = _e3[_slot_of3(n)];
+    assert_eq_int(e.tag, TAG_ENEMY);
+    assert(abs_f3(e.sx - 2.0) < 0.001, "sx tasinmali");
+    assert(abs_f3(e.sy - 3.0) < 0.001, "sy tasinmali");
+    assert(abs_f3(e.sz - 4.0) < 0.001, "sz tasinmali");
+    assert_eq_int(e.hpmax, 55);
+    assert(e.tsrc == "examples/assets/dokular/tugla.png", "doku tasinmali");
+    assert(abs_f3(e.ttile - 3.0) < 0.001, "doseme tasinmali");
+    assert_eq_int(_t_bh_of3(n), 1);
+    assert(_sc_nm_of3(n) == "nobetci", "bos sahnede ad KORUNMALI");
+}
+
+// ASIL SEBEP: bölüm sınırını geçmek. Handle tutan bir pano burada çöker —
+// bölüm değişince entity deposu tamamen siliniyor.
+func t_clipboard_crosses_levels() {
+    sahne_yukle3d(_lvl_kur2());
+    assert_eq_int(bolum_sayisi3d(), 2);
+    assert_eq_int(yasayan_sayi3d(), 1);          // 1. bolum
+    ed_select_all3d();
+    assert_eq_int(ed_copy3d(), 1);
+    ed_level_go3d(2);
+    int once = yasayan_sayi3d();
+    assert_eq_int(ed_paste3d(), 1);
+    assert_eq_int(yasayan_sayi3d(), once + 1);
+    // 1. bolum ETKILENMEMELI.
+    ed_level_go3d(1);
+    assert_eq_int(yasayan_sayi3d(), 1);
+}
+
+// Yapıştırılan kopya KAYDIRILMALI. Tam üstüne düşen bir kopya görünmez olur
+// ve kullanıcı hiçbir şey olmadığını sanır (çoğaltma da bu yüzden kaydırıyor).
+func t_paste_offsets_the_copy() {
+    scene3d_reset(); no_ground3d();
+    ed_grid3d(0.0);
+    int a = spawn3(3.0, 1.0, 7.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    ed_select3d(a);
+    ed_copy3d();
+    assert_eq_int(ed_paste3d(), 1);
+    int n = ed_selected3d();
+    assert(n != a, "yapistirilan yeni bir varlik olmali");
+    assert(abs_f3(get3x(n) - 3.0) > 0.01 || abs_f3(get3z(n) - 7.0) > 0.01,
+           "kopya kaynakla ayni yerde durmamali");
+}
+
+// Aynı sahneye yapıştırınca AD çakışmamalı: iki "kahraman" varsa `find3d`
+// ilkini döndürür ve hangisinin kastedildiği belirsizleşir. Ama ad
+// ATILMAMALI da — başka bölüme yapıştırırken korunması gereken şey o.
+func t_paste_uniquifies_name_only_on_conflict() {
+    scene3d_reset(); no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    ad_ver3d(a, "kahraman");
+    ed_select3d(a);
+    ed_copy3d();
+    ed_paste3d();
+    int n = ed_selected3d();
+    assert(_sc_nm_of3(n) != "kahraman", "cakisan ad oldugu gibi kalmamali");
+    assert(_sc_nm_of3(n) == "kahraman 2", "cakisan ad sayilanmali: " + _sc_nm_of3(n));
+    // ESKISI hala kendi adiyla bulunmali — benzersizlestirme yanlis varligi
+    // yeniden adlandirsaydi bu kirmizi olurdu.
+    assert_eq_int(bul3d("kahraman"), a);
+    assert_eq_int(bul3d("kahraman 2"), n);
+    // Ucuncu kopya da carpismamali.
+    ed_select3d(a);
+    ed_copy3d();
+    ed_paste3d();
+    int m = ed_selected3d();
+    assert(_sc_nm_of3(m) == "kahraman 3", "ucuncu kopya: " + _sc_nm_of3(m));
+}
+
+// Boş seçimle CTRL+C, panoyu SİLMEMELİ: az önce kopyalanan şeyi kaybetmek,
+// "kopyalayamadım"dan çok daha kötü.
+func t_copy_with_empty_selection_keeps_clipboard() {
+    scene3d_reset(); no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    ed_select3d(a);
+    assert_eq_int(ed_copy3d(), 1);
+    assert_eq_int(ed_clip_count3d(), 1);
+    ed_deselect3d();
+    assert_eq_int(ed_copy3d(), 0);
+    assert_eq_int(ed_clip_count3d(), 1);
+    assert_eq_int(ed_paste3d(), 1);
+}
+
+func t_select_all_takes_every_live_entity() {
+    scene3d_reset(); no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    spawn3(2.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    spawn3(4.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    assert_eq_int(ed_select_all3d(), 3);
+    assert_eq_int(ed_select_count3d(), 3);
+    assert(ed_selected3d() >= 0, "birincil secim kurulmali");
+    // ÖLÜ varlık seçilmemeli: silinen bir slotun handle'ı kümede kalırsa
+    // toplu taşıma o slotu diriltmeye çalışırdı.
+    ed_delete3d(a);
+    assert_eq_int(ed_select_all3d(), 2);
+}
+
+// Çoklu seçim toplu kopyalanmalı — tek varlıkla sınamak, seçim kümesi
+// yerine birincili okuyan bir bozmayı kaçırırdı.
+func t_copy_takes_the_whole_selection() {
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    spawn3(2.0, 1.0, 0.0, 1.0, 1.0, 1.0, BLUE, SHAPE_SPHERE, TAG_ITEM);
+    spawn3(4.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CYL, TAG_WALL);
+    ed_select_all3d();
+    assert_eq_int(ed_copy3d(), 3);
+    assert_eq_int(ed_clip_count3d(), 3);
+    scene3d_reset(); no_ground3d();
+    assert_eq_int(ed_paste3d(), 3);
+    assert_eq_int(yasayan_sayi3d(), 3);
+    assert_eq_int(ed_select_count3d(), 3);
+}
+
+// Bağlam menüsünün YÜKSEKLİĞİ çizilen düğme sayısıyla tutmalı. Satır sayısı
+// ayrı bir fonksiyonda ve düğmeler ayrı bir yerde: yeni bir satır eklerken
+// sayacı unutmak, son düğmeyi menü çerçevesinin DIŞINDA bırakır.
+func t_ctx_menu_rows_match_buttons() {
+    // Varlık menüsü: cercevele, kopyala, cogalt, zemine, sil  (+ yapistir)
+    _ed_ctx_id3 = 0;
+    _ed_clip3 = "";
+    assert_eq_int(_ed_ctx_rows3(), 5);
+    _ed_clip3 = "{\"e\": []}";
+    assert_eq_int(_ed_ctx_rows3(), 6);
+    // Boşluk menüsü: kutu, kure, boru, duvar, bolge  (+ yapistir)
+    _ed_ctx_id3 = 0 - 1;
+    _ed_clip3 = "";
+    assert_eq_int(_ed_ctx_rows3(), 5);
+    _ed_clip3 = "{\"e\": []}";
+    assert_eq_int(_ed_ctx_rows3(), 6);
+    _ed_clip3 = "";
+}
+
 func t_ed_dirname_splits_path() {
     assert(_ed_dirname3("examples/scenes/a.json") == "examples/scenes",
            "dizin son ayiracin oncesi olmali");
@@ -7341,6 +7609,18 @@ test("tek bolumlu sahne degismiyor", "t_single_level_scene_unchanged");
 test("yeni sahne eski bolumleri birakmiyor", "t_new_scene_drops_old_levels");
 test("sablon eski bolumleri birakmiyor", "t_template_drops_old_levels");
 test("tek bolumlu dosya cok bolumlunun ustune temiz aciliyor", "t_loading_single_level_over_multi_clears");
+test("kisayol satirlari birbirinin ayni degil", "t_help_rows_are_all_distinct");
+test("kisayol sutunlari icerige gore sigiyor", "t_help_key_column_fits_longest_key");
+test("kisayol ortusu sigiyor ve kayiyor", "t_help_overlay_fits_and_scrolls");
+test("yardim widget kimlikleri cakismiyor", "t_help_widget_ids_do_not_collide");
+test("pano varligin tamamini kopyaliyor", "t_clipboard_copies_whole_entity");
+test("pano bolum sinirini geciyor", "t_clipboard_crosses_levels");
+test("yapistirilan kopya kaydiriliyor", "t_paste_offsets_the_copy");
+test("ad yalniz cakisinca sayilaniyor", "t_paste_uniquifies_name_only_on_conflict");
+test("bos secimle kopyalamak panoyu silmiyor", "t_copy_with_empty_selection_keeps_clipboard");
+test("tumunu sec yasayan her varligi aliyor", "t_select_all_takes_every_live_entity");
+test("kopyalama secimin tamamini aliyor", "t_copy_takes_the_whole_selection");
+test("baglam menusu satir sayisi dugmelerle tutuyor", "t_ctx_menu_rows_match_buttons");
 test("yol dizin ve ada bolunuyor", "t_ed_dirname_splits_path");
 test("dosya penceresi deseni acik dosyayi izliyor", "t_ed_fd_glob_follows_current_file");
 test("uzantisiz ada .json ekleniyor", "t_ed_fd_norm_adds_extension");

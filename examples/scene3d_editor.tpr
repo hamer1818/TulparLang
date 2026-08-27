@@ -18,17 +18,21 @@
 // çalışan bir oyunun üstüne kaplama açmaktan farkı şudur: düzenleme birincil
 // iştir, oynatma onun bir aracı.
 //
-// Kısayollar (sektör standardı):
+// KISAYOLLAR: tam liste editörün İÇİNDE — H tuşu ya da menüdeki "?" düğmesi.
+// Burada özet duruyor; ekrandaki liste tek kaynak, bu yorum onun kopyası
+// değil (durum çubuğu artık kısayol saymıyor, o satır kırpılıyordu).
 //   SAĞ TUŞ basılı + WASD/QE   serbest uçuş, fare ile bakış
-//   Q / W / E / R              seç / taşı / döndür / ölçekle  (1-4 de olur)
-//   F                          seçiliyi çerçevele
-//   G                          ızgara aç/kapat
+//   Q / W / E / R              seç / taşı / döndür / ölçekle
+//   1 / 2 / 3 / 4              seç / taşı / ÖLÇEK / DÖNDÜR  (sıra farklı!)
+//   F / G / BOŞLUK             çerçevele / ızgara / zemine oturt
 //   DEL / CTRL+D               sil / çoğalt
+//   CTRL+C / CTRL+V            kopyala / yapıştır (BÖLÜMLER ARASI çalışır)
+//   CTRL+A                     tümünü seç
 //   CTRL+Z / CTRL+Y            geri al / yinele
 //   CTRL+S (ya da F5)          kaydet
 //   CTRL+SHIFT+S               farklı kaydet (dosya penceresi)
-//   BOŞLUK                     seçiliyi zemine oturt
-//   ESC                        dosya penceresini kapat / oynarken: durdur
+//   H                          kısayol listesi
+//   ESC                        açık pencereyi kapat / oynarken: durdur
 // Harf tuşları yalnız SAĞ TUŞ BASILI DEĞİLKEN araç kısayolu; basılıyken uçuş.
 //
 // DOSYA: menüdeki "Aç" diskteki .json sahnelerini listeler — editör artık
@@ -46,7 +50,7 @@
 // PAYLAŞILIR; değişen şey sahnenin içidir.
 //
 // Yerleşim:
-//   menü şeridi            Yeni / Aç / Kaydet / F. Kaydet / Geri / İleri
+//   menü şeridi            Yeni / Aç / Kaydet / F. Kaydet / Geri / İleri / ?
 //   araç çubuğu            araçlar solda, OYNAT-DUR ORTADA, ızgara
 //   hiyerarşi | SAHNE GÖRÜNÜMÜ | özellikler
 //   konsol                 motorun tanılama kaydı

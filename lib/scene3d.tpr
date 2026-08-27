@@ -8211,6 +8211,131 @@ func ed_duplicate_selected3d() {
     if (length(yeni) > 0) { _ed_sel3e = yeni[0]; }
 }
 
+// ---- Pano: kopyala / yapıştır ----------------------------------------------
+// Çoğaltma (CTRL+D) vardı ama TEK BÖLÜMÜN İÇİNDE: bir düşmanı 1. bölümde
+// kurup 2. bölümde de kullanmanın yolu yoktu, elle yeniden kurmak gerekiyordu.
+// Pano bu boşluğu kapatıyor ve bölüm sınırını geçiyor.
+//
+// Panoda handle DEĞİL, METİN duruyor. Handle bölüm değişince anlamsız
+// (entity deposu tamamen siliniyor); serileştirilmiş varlık ise taşınabilir
+// ve zaten TAM: davranışlar, doku, model yolu, can, katılık, ad — hepsi
+// `_sc_ent_js3`'in yazdığı şey. Ayrı bir "kopyalanacak alanlar" listesi
+// tutmak, her yeni alanda unutulacak bir borç olurdu (çoğaltmada tam olarak
+// bu oldu: model alanları elle taşınıyor).
+str _ed_clip3 = "";
+
+// Panodaki varlık sayısı — durum çubuğu ve testler için.
+func ed_clip_count3d(): int {
+    if (_ed_clip3 == "") { return 0; }
+    json c = fromJson(_ed_clip3);
+    if (_sc_has3(c, "e") == false) { return 0; }
+    return length(c["e"]);
+}
+
+// Yapıştırılan ADIN çakışmaması gerekiyor: aynı sahnede iki "kahraman"
+// olursa `find3d` ilkini döndürür ve hangisinin kastedildiği belirsizleşir.
+// AMA ad ATILMAMALI — başka bir bölüme yapıştırırken adın korunması tam da
+// istenen şey (her bölümün kendi "kahraman"ı var, adlar bölümle birlikte
+// siliniyor). Kural: ad SERBESTSE olduğu gibi kalır, DOLUYSA sayı eklenir.
+// (Çoğaltma adı büsbütün atıyor; orada hedef aynı sahne olduğu için
+// belirsizlik kaçınılmazdı, burada değil.)
+func _ed_uniq_name3(nm): str {
+    if (nm == "") { return ""; }
+    if (find3d(nm) < 0) { return nm; }
+    // Deneme sayısı KAYITLI AD SAYISINDAN türüyor: her deneme en fazla bir
+    // kayıtlı adı tüketiyor, yani kayıt sayısı + 2 deneme her zaman yetiyor.
+    // Sabit bir üst sınır (1000 gibi) sınanamayan bir dal bırakırdı.
+    int n = length(_sc_nm) + 2;
+    int k = 2;
+    while (k <= n) {
+        str aday = nm + " " + toString(k);
+        if (find3d(aday) < 0) { return aday; }
+        k = k + 1;
+    }
+    // Buraya güvercin yuvası ilkesince ULAŞILAMIYOR (n deneme, en fazla n-2
+    // dolu ad). Dil her yolda bir dönüş istediği için duruyor.
+    return nm;
+}
+
+// Seçili varlıkları panoya al. Seçim boşsa pano DEĞİŞMİYOR: boş bir seçimle
+// CTRL+C'ye basmak, az önce kopyalanan şeyi silmemeli.
+func ed_copy3d(): int {
+    str o = "";
+    int n = 0;
+    int i = 0;
+    while (i < length(_ed_msel3)) {
+        int sl = _slot_of3(_ed_msel3[i]);
+        if (sl >= 0) {
+            if (n > 0) { o = o + ",\n"; }
+            o = o + _sc_ent_js3(sl);
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    if (n == 0) { return 0; }
+    _ed_clip3 = "{\"e\": [\n" + o + "\n]}";
+    return n;
+}
+func ed_kopyala3d(): int { return ed_copy3d(); }
+
+// Panoyu yapıştır. Kopyalar KAYDIRILIYOR (çoğaltmayla aynı ofset): tam
+// üstüne düşen bir kopya görünmez olurdu ve kullanıcı hiçbir şey olmadığını
+// sanırdı. Yapıştırılanlar seçili kalıyor — hemen taşımak isteyen için doğal
+// olan bu, ve çoğaltma da öyle yapıyor.
+func ed_paste3d(): int {
+    if (_ed_clip3 == "") { return 0; }
+    json c = fromJson(_ed_clip3);
+    if (_sc_has3(c, "e") == false) { return 0; }
+    json es = c["e"];
+    float off = 1.0;
+    if (_ed_grid3 > 0.0) { off = _ed_grid3 * 2.0; }
+    array yeni = [];
+    int i = 0;
+    while (i < length(es)) {
+        // Ad ÖNCE benzersizleştiriliyor: `_sc_load_ent3` adı kendisi
+        // kaydediyor, yani sonradan düzeltmek iki kayıt bırakırdı.
+        int id = _sc_load_ent3(es[i]);
+        if (id >= 0) {
+            str nm = _sc_nm_of3(id);
+            if (nm != "") { rename3d(id, _ed_uniq_name3_for3(id, nm)); }
+            ed_nudge3d(id, off, 0.0, off);
+            push(yeni, id);
+        }
+        i = i + 1;
+    }
+    _ed_msel3 = yeni;
+    _ed_sel3e = 0 - 1;
+    if (length(yeni) > 0) { _ed_sel3e = yeni[0]; }
+    _ed_tab3 = 0;
+    return length(yeni);
+}
+func ed_yapistir3d(): int { return ed_paste3d(); }
+
+// Benzersizleştirmenin YAPIŞTIRMA hâli: varlık kendi adıyla ZATEN kayıtlı
+// olduğu için `find3d(nm)` onun kendisini bulur. Kendini çakışma saymak,
+// başka bir bölüme yapıştırılan tek bir varlığı bile "kahraman 2" yapardı.
+func _ed_uniq_name3_for3(id, nm): str {
+    int sahip = find3d(nm);
+    if (sahip < 0 || sahip == id) { return nm; }
+    return _ed_uniq_name3(nm);
+}
+
+// TÜMÜNÜ SEÇ. "Hepsini bir arada taşı / sil" için gereken tek adım; elle
+// CTRL+tıklamak 40 varlıkta yapılabilir bir şey değil.
+func ed_select_all3d(): int {
+    _ed_msel3 = [];
+    int i = 0;
+    while (i < length(_e3)) {
+        if (_e3[i].alive == 1) { push(_ed_msel3, _mk_handle3(i)); }
+        i = i + 1;
+    }
+    _ed_sel3e = 0 - 1;
+    if (length(_ed_msel3) > 0) { _ed_sel3e = _ed_msel3[0]; }
+    _ed_tab3 = 0;
+    return length(_ed_msel3);
+}
+func ed_tumunu_sec3d(): int { return ed_select_all3d(); }
+
 // Tek seçim: kümeyi sıfırlar.
 func ed_select3d(id) {
     _ed_sel3e = id;
@@ -8453,10 +8578,16 @@ func _ed_ctx_open3(x, y, id) {
 }
 func _ed_ctx_close3() { _ed_ctx_on3 = 0; }
 
-// Menüdeki satır sayısı bağlama göre değişiyor.
+// Menüdeki satır sayısı bağlama göre değişiyor. Yapıştır satırı YALNIZ pano
+// doluysa: her zaman görünen ama çoğu zaman iş görmeyen bir satır, menüyü
+// uzatmaktan başka bir şey yapmazdı.
 func _ed_ctx_rows3(): int {
-    if (_ed_ctx_id3 >= 0) { return 4; }   // cercevele/cogalt/zemine/sil
-    return 5;                              // kutu/kure/boru/duvar/bolge
+    int yp = 0;
+    if (_ed_clip3 != "") { yp = 1; }
+    // cercevele/kopyala/cogalt/zemine/sil  (+ yapistir)
+    if (_ed_ctx_id3 >= 0) { return 5 + yp; }
+    // kutu/kure/boru/duvar/bolge  (+ yapistir)
+    return 5 + yp;
 }
 func _ed_ctx_w3(): int { return _us3(96); }
 func _ed_ctx_h3(): int { return _ed_ctx_rows3() * _ED_FLD3 + _us3(4); }
@@ -8564,6 +8695,16 @@ func _ed_ctx_draw3() {
             ed_frame3d(id); _ed_ctx_close3();
         }
         iy = iy + _ED_FLD3;
+        // Kopyala menüde de duruyor: CTRL+C'yi bilmeyen biri panonun VAR
+        // olduğunu ancak burada görüyor. Kopyalanan şey SEÇİM — menü tek bir
+        // varlığın üstünde açılsa da çoklu seçim korunuyor, yoksa "beşini
+        // seçtim, sağ tıkladım, biri kopyalandı" olurdu.
+        if (_g_button(22005, x + _us3(2), iy, w - _us3(4), _ED_FLD3, "Kopyala")) {
+            if (_ed_msel_has3(id) == false) { ed_select3d(id); }
+            ed_copy3d();
+            _ed_ctx_close3();
+        }
+        iy = iy + _ED_FLD3;
         if (_g_button(22002, x + _us3(2), iy, w - _us3(4), _ED_FLD3, "Cogalt")) {
             ed_mark3d(); ed_duplicate3d(id); _ed_ctx_close3();
         }
@@ -8574,6 +8715,13 @@ func _ed_ctx_draw3() {
         iy = iy + _ED_FLD3;
         if (_g_button(22004, x + _us3(2), iy, w - _us3(4), _ED_FLD3, "Sil")) {
             ed_mark3d(); ed_delete3d(id); _ed_ctx_close3();
+        }
+        if (_ed_clip3 != "") {
+            iy = iy + _ED_FLD3;
+            if (_g_button(22006, x + _us3(2), iy, w - _us3(4), _ED_FLD3,
+                          "Yapistir")) {
+                ed_mark3d(); ed_paste3d(); _ed_ctx_close3();
+            }
         }
     } else {
         // Boşluğa sağ tık: varlık ekle. Eklenen şey İMLECİN altındaki zemine
@@ -8597,6 +8745,13 @@ func _ed_ctx_draw3() {
         iy = iy + _ED_FLD3;
         if (_g_button(22015, x + _us3(2), iy, w - _us3(4), _ED_FLD3, "+ bolge")) {
             _ed_ctx_zone3();
+        }
+        if (_ed_clip3 != "") {
+            iy = iy + _ED_FLD3;
+            if (_g_button(22016, x + _us3(2), iy, w - _us3(4), _ED_FLD3,
+                          "Yapistir")) {
+                ed_mark3d(); ed_paste3d(); _ed_ctx_close3();
+            }
         }
     }
     // Dışarıya tıklamak kapatır (menünün kendi düğmeleri zaten kapatıyor).
@@ -8732,6 +8887,7 @@ func _s3_editor_mouse(dt) {
     // yani tam sahnenin üstünde.
     if (_ed_ctx_on3 == 1) { return; }
     if (_ed_fd_on3 != _ED_FD_OFF3) { return; }
+    if (_ed_help3 == 1) { return; }
     // Sürükleme SÜRÜYORSA panel denetimi atlanıyor: imleç panelin üstünden
     // geçerken sürüklemenin kopması, Unity'de de olmayan bir davranış olurdu.
     if (_gz_axis3 < 0 && _ed_drag3 == 0 && _ed_over_ui3()) { return; }
@@ -8864,6 +9020,7 @@ func editor_save3d(): bool {
 func editor_kaydet3d(): bool { return editor_save3d(); }
 
 int K_Z = 90; int K_Y = 89; int K_F = 70;
+int K_C = 67; int K_V = 86; int K_H = 72;
 
 func _s3_editor_keys() {
     // SAĞ TUŞ basılıyken harfler UÇUŞ tuşu (WASD/QE); araç kısayolları o
@@ -8876,6 +9033,14 @@ func _s3_editor_keys() {
         if (key_pressed(K_ESC)) { _ed_fd_close3(); }
         return;
     }
+    // Kısayol listesi açıkken de klavye ONUN: H kapatır, ESC kapatır.
+    // Listeyi okurken basılan bir harfin arkadaki sahneyi değiştirmesi,
+    // "ne yaptığımı öğreniyordum" ile "yanlışlıkla sildim" arasındaki fark.
+    if (_ed_help3 == 1) {
+        if (key_pressed(K_H) || key_pressed(K_ESC)) { _ed_help_close3(); }
+        return;
+    }
+    if (key_pressed(K_H)) { _ed_help3 = 1; _ed_help_scroll3 = 0; return; }
 
     // Araç kısayolları Unity düzeninde: Q seç, W taşı, E döndür, R ölçekle.
     // 1-4 de duruyor (eski alışkanlık ve rakam tuşları her editörde çalışır).
@@ -8902,6 +9067,35 @@ func _s3_editor_keys() {
     }
     if (key_down(K_LCTRL) && key_pressed(K_Y)) {
         if (ed_redo3d()) { _ed_msg3 = "yinelendi"; _ed_msg_t3 = 1.2; }
+        return;
+    }
+
+    // PANO ve TÜMÜNÜ SEÇ, seçim denetiminden ÖNCE: yapıştırmak ve tümünü
+    // seçmek seçili bir varlık gerektirmiyor, ve aşağıdaki erken dönüş
+    // ikisini de boş sahnede erişilemez yapardı.
+    if (key_down(K_LCTRL) && key_pressed(K_A)) {
+        int sn = ed_select_all3d();
+        _ed_msg3 = toString(sn) + " varlik secildi";
+        _ed_msg_t3 = 1.5;
+        return;
+    }
+    if (key_down(K_LCTRL) && key_pressed(K_C)) {
+        int cn = ed_copy3d();
+        if (cn > 0) { _ed_msg3 = toString(cn) + " varlik kopyalandi"; }
+        else { _ed_msg3 = "kopyalanacak secim yok"; }
+        _ed_msg_t3 = 1.5;
+        return;
+    }
+    if (key_down(K_LCTRL) && key_pressed(K_V)) {
+        if (ed_clip_count3d() == 0) {
+            _ed_msg3 = "pano bos";
+            _ed_msg_t3 = 1.5;
+            return;
+        }
+        ed_mark3d();
+        int pn = ed_paste3d();
+        _ed_msg3 = toString(pn) + " varlik yapistirildi";
+        _ed_msg_t3 = 1.5;
         return;
     }
 
@@ -9721,6 +9915,17 @@ func _ed_menubar3() {
         _g_tip_for3(9604, "Yinele  (CTRL+Y)");
         x = x + w4 + gap;
     }
+    // Kısayol listesi FAREYLE de bulunabilmeli: "H'ye bas" demek, H'yi
+    // bilmeyen kullanıcıya bir şey söylemiyor. Bu düğme o döngüyü kırıyor.
+    int w5 = _g_btnw3("?");
+    if (x + w5 <= W - _ED_PAD3) {
+        if (_g_button(9607, x, _us3(2), w5, bh, "?")) {
+            if (_ed_help3 == 1) { _ed_help_close3(); }
+            else { _ed_help3 = 1; _ed_help_scroll3 = 0; }
+        }
+        _g_tip_for3(9607, "Kisayollar  (H)");
+        x = x + w5 + _us3(12);
+    }
 
     // Sağda dosya adı — yalnız son düğmeden SONRA yer kalırsa.
     str f = _ed_path3;
@@ -9933,8 +10138,12 @@ func _ed_statusbar3() {
         }
     }
     _g_txt3(left, _ED_PAD3, sy + _g_cy3(_ED_STAT_H3), toInt(W / 2), _G_DIM3());
+    // Kısayolları BURADA saymak işe yaramıyordu: satır kırpılıyor, dar
+    // pencerede hiç çizilmiyor ve her mesajda (kaydedildi, geri alındı)
+    // yerini kaybediyor. Tam liste artık H ile açılan örtüde; burada yalnız
+    // ona işaret var — kısa olduğu için her zaman görünüyor.
     str right = "gorunum " + toString(_ed_view_w3()) + "x" + toString(_ed_view_h3()) +
-                " | rt " + toString(_ed_rt3) + " | SAG TUS+WASD uc | Q/W/E/R arac | F cercevele | CTRL+tik coklu secim | CTRL+S kaydet";
+                " | rt " + toString(_ed_rt3) + " | H = kisayollar";
     if (_ed_playing3 == 1) { right = "OYNUYOR — ESC durdurur"; }
     if (_ed_msg_t3 > 0.0) { right = _ed_msg3; }
     int rw = _g_w3(right, _F3);
@@ -10293,6 +10502,181 @@ func _ed_fd_draw3() {
     if (_g_press3 == 1 && _g_in(x, y, w, h) == false) { _ed_fd_close3(); }
 }
 
+// ---- KISAYOL YARDIMI -------------------------------------------------------
+// Editörün kısayolları yalnız durum çubuğunun SAĞ ucundaki tek satırda
+// yazıyordu — ve o satır hem kırpılıyor (pencere darsa hiç çizilmiyor) hem de
+// her mesajda (kaydedildi, geri alındı) yerini kaybediyordu. Yani Q/W/E/R'yi,
+// BOŞLUK'u, CTRL+D'yi bilmeyen biri onları hiç öğrenemiyordu; bir editörde
+// bu, özelliğin var olmamasıyla aynı şey.
+//
+// Liste TEK KAYNAK: durum çubuğu artık kısayol saymıyor, "H = kısayollar"
+// diyor. İki yerde elle yazılmış iki liste, biri değişince ötekinin sessizce
+// yalan söylemesi demekti.
+int _ed_help3 = 0;
+int _ed_help_scroll3 = 0;
+
+func _ed_help_idbase3(): int { return 71000; }
+func _ed_help_n3(): int { return 22; }
+
+func _ed_help_key3(i): str {
+    if (i ==  0) { return "SAG TUS + WASD"; }
+    if (i ==  1) { return "SAG TUS + Q/E"; }
+    if (i ==  2) { return "Q W E R"; }
+    if (i ==  3) { return "1 2 3 4"; }
+    if (i ==  4) { return "SOL TIK"; }
+    if (i ==  5) { return "CTRL + TIK"; }
+    if (i ==  6) { return "CTRL + A"; }
+    if (i ==  7) { return "F"; }
+    if (i ==  8) { return "G"; }
+    if (i ==  9) { return "BOSLUK"; }
+    if (i == 10) { return "OK TUSLARI"; }
+    if (i == 11) { return "DEL"; }
+    if (i == 12) { return "CTRL + D"; }
+    if (i == 13) { return "CTRL + C / V"; }
+    if (i == 14) { return "CTRL + Z / Y"; }
+    if (i == 15) { return "CTRL + S"; }
+    if (i == 16) { return "CTRL+SHIFT+S"; }
+    if (i == 17) { return "SAG TIK"; }
+    if (i == 18) { return "ESC"; }
+    if (i == 19) { return "F1"; }
+    if (i == 20) { return "F2"; }
+    return "H";
+}
+
+func _ed_help_act3(i): str {
+    if (i ==  0) { return "serbest ucus, fareyle bakis"; }
+    if (i ==  1) { return "yukari / asagi ucus"; }
+    if (i ==  2) { return "sec / tasi / dondur / olcek"; }
+    // SIRA QWER ile AYNI DEĞİL ve öyle yazmak yanlış olurdu: tuş
+    // dinleyicisinde E=döndür, R=ölçek ama 3=ölçek, 4=döndür. Listenin
+    // değeri doğru olmasında; "aynı dört araç" demek kullanıcıyı üçüncü
+    // tuşta yanıltırdı.
+    if (i ==  3) { return "sec / tasi / olcek / dondur"; }
+    if (i ==  4) { return "sec, oklardan surukle"; }
+    if (i ==  5) { return "secime ekle / cikar"; }
+    if (i ==  6) { return "tumunu sec"; }
+    if (i ==  7) { return "secileni cercevele"; }
+    if (i ==  8) { return "izgarayi ac / kapat"; }
+    if (i ==  9) { return "secileni zemine oturt"; }
+    if (i == 10) { return "ittir (aracin isine gore)"; }
+    if (i == 11) { return "secilenleri sil"; }
+    if (i == 12) { return "cogalt (kaydirarak)"; }
+    if (i == 13) { return "kopyala / yapistir"; }
+    if (i == 14) { return "geri al / yinele"; }
+    if (i == 15) { return "kaydet  (F5 de olur)"; }
+    if (i == 16) { return "farkli kaydet"; }
+    if (i == 17) { return "baglam menusu (ekle / sil)"; }
+    if (i == 18) { return "pencereyi kapat, oyunu durdur"; }
+    // F1 ve F2 AYRI satır: tek satıra sığdırmak açıklama sütununu aşıyordu
+    // (34 karakter, bütçe 31 — yerleşim testi yakaladı) ve iki ayrı işi tek
+    // satırda anlatmak zaten okunmuyordu.
+    if (i == 19) { return "tanilama ortusu"; }
+    if (i == 20) { return "kaydi dosyaya dok"; }
+    return "bu listeyi ac / kapat";
+}
+
+func _ed_help_close3() { _ed_help3 = 0; _ed_help_scroll3 = 0; }
+
+// Ölçüler ekrandan TÜRÜYOR — dosya penceresiyle aynı sebeple: 3x ölçekte on
+// sekiz satır 820 piksele sığmıyor ve sığmayan kısım sessizce kayboluyordu
+// (yani öğrenilmesi gereken kısayollar yine görünmez kalıyordu). Sığmıyorsa
+// liste KAYIYOR; kırpmak yerine kaydırmak, hiçbir satırı kaybetmiyor.
+func _ed_help_fixed_h3(): int {
+    // başlık payı + alt satır (kapat düğmesi + kaydırma ipucu) + alt pay
+    return _us3(20) + _ED_FLD3 + _us3(8);
+}
+func _ed_help_rows_for3(H): int {
+    int bos = H - _ED_MENU_H3 - _ED_STAT_H3 - _ed_help_fixed_h3();
+    int r = toInt(bos / _g_lh3());
+    if (r > _ed_help_n3()) { r = _ed_help_n3(); }
+    if (r < 3) { r = 3; }
+    return r;
+}
+func _ed_help_h_for3(H): int {
+    return _ed_help_fixed_h3() + _g_lh3() * _ed_help_rows_for3(H);
+}
+
+// Anahtar sütunu: en uzun kısayol adı + pay. Sabit bir sayı, yeni bir uzun
+// kısayol eklenince sessizce çakışırdı; sütun İÇERİKTEN türüyor.
+func _ed_help_keyw3(): int {
+    int en = 0;
+    int i = 0;
+    while (i < _ed_help_n3()) {
+        int w = length(_ed_help_key3(i));
+        if (w > en) { en = w; }
+        i = i + 1;
+    }
+    // 11.5 px/karakter (ölçüldü — testlerdeki bütçe notuna bak), yarım
+    // karakter pay. Tam sayı aritmetiği: (en*23 + 23) / 2.
+    return toInt((en * 23 + 23) / 2);
+}
+
+func _ed_help_w_for3(W): int {
+    int w = _ed_help_keyw3() + _us3(180) + _ED_PAD3 * 2;
+    int enb = W - _us3(24);
+    if (w > enb) { w = enb; }
+    return w;
+}
+
+func _ed_help_draw3() {
+    if (_ed_help3 == 0) { return; }
+    int w = _ed_help_w_for3(screen_width());
+    int h = _ed_help_h_for3(screen_height());
+    int x = toInt(screen_width() / 2) - toInt(w / 2);
+    int y = toInt(screen_height() / 2) - toInt(h / 2);
+    if (y + h > screen_height()) { y = screen_height() - h; }
+    if (y < _ED_MENU_H3) { y = _ED_MENU_H3; }
+    _g_panel(x, y, w, h, "KISAYOLLAR");
+    rect_lines(x, y, w, h, _G_ACC3());
+
+    int base = _ed_help_idbase3();
+    int lx = x + _ED_PAD3;
+    int inner = w - _ED_PAD3 * 2;
+    int kw = _ed_help_keyw3();
+    int rows = _ed_help_rows_for3(screen_height());
+    int n = _ed_help_n3();
+    _ed_help_scroll3 = _ed_as_clamp3(_ed_help_scroll3, n, rows);
+    // Tekerlek de kaydırıyor: uzun bir listede düğme aramak gereksiz.
+    if (_g_in(x, y, w, h)) {
+        float wh = mouse_wheel();
+        if (wh > 0.5) { _ed_help_scroll3 = _ed_help_scroll3 - 3; }
+        if (wh < 0.0 - 0.5) { _ed_help_scroll3 = _ed_help_scroll3 + 3; }
+        _ed_help_scroll3 = _ed_as_clamp3(_ed_help_scroll3, n, rows);
+    }
+
+    int iy = y + _us3(20);
+    int i = _ed_help_scroll3;
+    int shown = 0;
+    while (i < n && shown < rows) {
+        _g_txt3(_ed_help_key3(i), lx, iy, kw - _us3(4), _G_ACC3());
+        _g_txt3(_ed_help_act3(i), lx + kw, iy, inner - kw, _G_TXT3());
+        iy = iy + _g_lh3();
+        i = i + 1;
+        shown = shown + 1;
+    }
+
+    int by = y + h - _ED_FLD3 - _us3(6);
+    int kbw = _us3(56);
+    if (n > rows) {
+        int pbw = _us3(30);
+        if (_g_button(base + 1, lx, by, pbw, _ED_FLD3, "^")) {
+            _ed_help_scroll3 = _ed_help_scroll3 - rows;
+        }
+        if (_g_button(base + 2, lx + pbw + 4, by, pbw, _ED_FLD3, "v")) {
+            _ed_help_scroll3 = _ed_help_scroll3 + rows;
+        }
+        _g_txt3(toString(_ed_help_scroll3 + 1) + "-" +
+                toString(_ed_help_scroll3 + shown) + " / " + toString(n),
+                lx + (pbw + 4) * 2, _g_ly3(by), inner - (pbw + 4) * 2 - kbw,
+                _G_DIM3());
+    }
+    if (_g_button(base, lx + inner - kbw, by, kbw, _ED_FLD3, "KAPAT")) {
+        _ed_help_close3();
+        return;
+    }
+    if (_g_press3 == 1 && _g_in(x, y, w, h) == false) { _ed_help_close3(); }
+}
+
 // ---- Kabuk -----------------------------------------------------------------
 func _ed_chrome3() {
     _g_begin();
@@ -10329,6 +10713,12 @@ func _ed_chrome3() {
     if (_ed_fd_on3 != _ED_FD_OFF3) {
         _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
         _ed_fd_draw3();
+    }
+    // Kısayol listesi EN ÜSTTE: bir şeyin nasıl yapıldığını okurken onu
+    // örten bir pencere olmamalı.
+    if (_ed_help3 == 1) {
+        _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+        _ed_help_draw3();
     }
     _g_check_overlaps3();
     _g_tip_draw3();   // EN SON: ipucu her şeyin üstünde (denetime girmiyor)
