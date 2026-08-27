@@ -5790,6 +5790,199 @@ func t_storage_export_writes_file_on_desktop() {
 // SAF kararlarını (yol ayrıştırma, ad normalleştirme, geçmiş kuralı) ve
 // diske dokunan iki etkisini ayrı ayrı sınıyor.
 
+// ===========================================================================
+// KAMERA — editörün hiç dokunamadığı ayar
+// ===========================================================================
+// Kamera sahne biçiminde vardı, kaydediliyordu ve DÜZENLENEMİYORDU. Üstelik
+// iki yerde sessizce bozuluyordu: oyuncuyu silince ve çok bölümlü sahnede.
+
+// ÇOK BÖLÜMLÜ sahnede kamera hiç çalışmıyordu — hedef HER YERDE -1'di
+// (ölçüldü). İki katmanlı sebep: (1) `scene_load3d` kamerayı bölümlerden
+// ÖNCE okuyor, yani `find3d` çağrıldığında bölümün gövdeleri henüz yok;
+// (2) bölüm değiştirmek entity deposunu siliyor ve veri bölümlerinde
+// `camera_follow`'u yeniden çağıracak bir kurulum fonksiyonu yok.
+func t_camera_target_survives_levels() {
+    scene3d_reset();
+    assert(sahne_dosya3d("examples/scenes/iki_bolum.scene.json") > 0,
+           "iki bolumlu sahne acilmali");
+    assert(camera_target_ok3d(), "yuklemeden hemen sonra hedef gecerli olmali");
+    assert_eq_int(_cam_target, bul3d("kahraman"));
+    // Editorde bolum degistir.
+    ed_level_go3d(2);
+    assert(camera_target_ok3d(), "2. bolumde de hedef gecerli olmali");
+    assert_eq_int(_cam_target, bul3d("kahraman"));
+    // Oynarken bolum gecisi.
+    scene3d_reset();
+    sahne_dosya3d("examples/scenes/iki_bolum.scene.json");
+    bolum_gec3d();
+    _s3_apply_level();
+    assert(camera_target_ok3d(), "oynarken gecince de hedef gecerli olmali");
+}
+
+// Yaşayan bir hedefi EZMEMELİ: oyun sırasında kamerayı elle başka bir şeye
+// çeviren kod (boss kamerası, ara sahne) bozulurdu.
+func t_camera_retarget_does_not_override_live_target() {
+    scene3d_reset();
+    sahne_dosya3d("examples/scenes/iki_bolum.scene.json");
+    int baska = spawn3(5.0, 1.0, 5.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    kamera_yorunge(baska, 10.0, 6.0);
+    assert_eq_int(_cam_target, baska);
+    _sc_cam_retarget3();
+    assert_eq_int(_cam_target, baska);
+}
+
+// Oyuncuyu silmek kamerayı ÖLÜ bir handle'a bağlı bırakıyordu; yerine yeni
+// bir oyuncu eklemek de onarmıyordu. Ne düzeltilebiliyor ne söyleniyordu.
+func t_deleting_camera_target_clears_it() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    kamera_yorunge(p, 12.0, 8.0);
+    assert(camera_target_ok3d(), "hedef kurulmali");
+    ed_delete3d(p);
+    assert_eq_int(_cam_target, 0 - 1);
+    assert(camera_target_ok3d() == false, "silinen hedef gecerli sayilmamali");
+    // BAŞKA bir varlığı silmek hedefe DOKUNMAMALI.
+    int q = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int r = spawn3(4.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    kamera_yorunge(q, 12.0, 8.0);
+    ed_delete3d(r);
+    assert_eq_int(_cam_target, q);
+}
+
+// OYUN sırasındaki ölüm kamerayı sıfırlamamalı: oyun-bitti ekranı hâlâ
+// sahneyi göstermeli. Düzeltme bilerek yalnız EDİTÖR silmesinde.
+func t_dying_in_play_keeps_camera_target() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    kamera_yorunge(p, 12.0, 8.0);
+    kill3d(p);
+    assert_eq_int(_cam_target, p);
+}
+
+func t_check_flags_camera_target() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    hareket_davranis3d(p, 8.0, 10.0);
+    kazanma_yok_diye_uyarma3();
+    scene_check3d();
+    assert(_t_chk_has3("kamera hedefi yok"), "hedefsiz kamera soylenmeli");
+    kamera_yorunge(p, 12.0, 8.0);
+    scene_check3d();
+    assert(_t_chk_has3("kamera hedefi yok") == false, "hedef varken uyari olmamali");
+    // Hedefi OYUN icinde oldur: bayat handle ayri bir mesaj vermeli.
+    kill3d(p);
+    scene_check3d();
+    assert(_t_chk_has3("kamera hedefi silinmis"), "bayat hedef soylenmeli");
+}
+
+// Yardımcı: denetimin "kazanma şartı yok" satırı bu testlerin konusu değil.
+func kazanma_yok_diye_uyarma3() {
+    spawn3(9.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    bitince_kurali3d(TAG_ITEM, ACT_WIN);
+}
+
+func t_camera_mode_cycle_is_closed() {
+    int m = CAM_FIXED;
+    int i = 0;
+    while (i < 3) { m = _cam_next_mode3(m); i = i + 1; }
+    assert_eq_int(m, CAM_FIXED);
+    // Üç mod, üç AYRI ad — bir dal düşerse iki mod aynı görünür ve düğme
+    // hiçbir şey yapmıyor sanılır.
+    assert(_cam_mode_nm3(CAM_FIXED) != _cam_mode_nm3(CAM_ORBIT), "takip != yorunge");
+    assert(_cam_mode_nm3(CAM_ORBIT) != _cam_mode_nm3(CAM_FPS), "yorunge != fps");
+    assert(_cam_mode_nm3(CAM_FIXED) != _cam_mode_nm3(CAM_FPS), "takip != fps");
+}
+
+// YÖRÜNGE modunda `_cam_dist` yarıçap, biçimdeki "dist" ise yatay mesafe.
+// Ters dönüşüm TEK fonksiyonda; serileştirici de panel de onu çağırıyor.
+// İki yerde ayrı yazılınca kamera her kaydet/yükle turunda bir adım geri
+// kayıyordu (16 -> 18.87 -> 21.35).
+func t_camera_logical_dist_inverts_orbit_radius() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    kamera_yorunge(p, 16.0, 11.0);
+    // Yaricap sqrt(16^2 + 11^2); mantiksal mesafe yine 16 olmali.
+    assert(abs_f3(_cam_dist_logical3() - 16.0) < 0.01,
+           "yorunge mesafesi geri cevrilmeli: " + toString(_cam_dist_logical3()));
+    assert(_cam_dist > 18.0, "yaricap yatay mesafeden buyuk olmali");
+    // TAKIP modunda ters cevirme YOK.
+    camera_follow(p, 16.0, 11.0);
+    assert(abs_f3(_cam_dist_logical3() - 16.0) < 0.01, "takipte dogrudan");
+    // Uc gidis-donus turu kamerayi KAYDIRMAMALI.
+    kamera_yorunge(p, 16.0, 11.0);
+    int k = 0;
+    while (k < 3) {
+        str js = sahne_json3d();
+        scene3d_reset();
+        sahne_yukle3d(js);
+        k = k + 1;
+    }
+    assert(abs_f3(_cam_dist_logical3() - 16.0) < 0.05,
+           "uc turdan sonra mesafe kaymamali: " + toString(_cam_dist_logical3()));
+}
+
+// Hedef döngüsü HEDEFSİZ durumu da içermeli: sahnedeki her cismi gezip de
+// "hiçbiri"ye dönememek, yanlışlıkla verilen hedefi geri alınamaz yapardı.
+func t_camera_target_cycle_includes_none() {
+    scene3d_reset(); no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    int b = spawn3(2.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    assert_eq_int(_ed_cam_next_target3(0 - 1), a);
+    assert_eq_int(_ed_cam_next_target3(a), b);
+    assert_eq_int(_ed_cam_next_target3(b), 0 - 1);
+    // Bos sahnede her zaman hedefsiz.
+    scene3d_reset(); no_ground3d();
+    assert_eq_int(_ed_cam_next_target3(0 - 1), 0 - 1);
+}
+
+// Biçim entity'lere ADLA atıfta bulunuyor: adsız bir varlığı hedef yapmak,
+// kaydedince bağın SESSİZCE kopması demekti. Editör hedefe ad veriyor.
+func t_camera_target_gets_a_name() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    assert(_sc_nm_of3(p) == "", "varlik adsiz baslamali");
+    _ed_cam_apply3(CAM_ORBIT, p, 12.0, 8.0);
+    assert(_sc_nm_of3(p) != "", "hedefe ad verilmeli");
+    // Ad gidis-donuste kamerayi tasimali.
+    str js = sahne_json3d();
+    assert(contains(js, "\"target\""), "hedef adi yazilmali");
+    scene3d_reset();
+    sahne_yukle3d(js);
+    assert(camera_target_ok3d(), "gidis-donusten sonra hedef gecerli olmali");
+    // VAR OLAN ad korunmali — ezilmemeli.
+    scene3d_reset(); no_ground3d();
+    int q = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    ad_ver3d(q, "kahraman");
+    _ed_cam_apply3(CAM_ORBIT, q, 12.0, 8.0);
+    assert(_sc_nm_of3(q) == "kahraman", "var olan ad korunmali");
+    // Iki adsiz hedef CAKISMAMALI.
+    int r = spawn3(3.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    _ed_cam_apply3(CAM_ORBIT, r, 12.0, 8.0);
+    assert(_sc_nm_of3(r) != "kahraman", "ikinci hedef ayni adi almamali");
+    assert_eq_int(bul3d("kahraman"), q);
+}
+
+// Çok bölümlü sahnede BAŞKA bir bölümü düzenlerken kaydetmek, kamera bağını
+// koparmamalı: yaşayan hedef çözülemiyorsa ADI yazılıyor.
+func t_camera_target_name_written_when_unresolved() {
+    scene3d_reset();
+    sahne_dosya3d("examples/scenes/iki_bolum.scene.json");
+    // Hedefi elle gecersiz kil (baska bir bolumdeymis gibi).
+    _cam_target = 0 - 1;
+    str js = sahne_json_bolumlu3d();
+    assert(contains(js, "\"target\": \"kahraman\""),
+           "cozulemeyen hedef adiyla yazilmali");
+}
+
+func t_ed_camera_widget_ids_do_not_collide() {
+    int cb = _ed_cam_idbase3();
+    // Kamera bloğu 8 widget kullanıyor (cb .. cb+7).
+    // Dünya panelinin öteki kimlikleri ve şablon satırları çakışmamalı.
+    assert(cb > 9772, "kamera blogu sablon satirlarinin ustunde olmali");
+    assert(cb + 7 < 12000, "kamera blogu hiyerarsinin altinda kalmali");
+    assert(cb + 7 < 21900, "ekleme dugmelerine degmemeli");
+}
+
 // ---- Bölge seçimi: ışın geometrisi -----------------------------------------
 // Bölgeler entity DEĞİL, o yüzden entity'nin ışın testi (`_seg_aabb3`, ki
 // `_e3`'ten okuyor) onlara uygulanamıyor. Bunlar saf geometri: parametre
@@ -8026,6 +8219,17 @@ test("tek bolumlu sahne degismiyor", "t_single_level_scene_unchanged");
 test("yeni sahne eski bolumleri birakmiyor", "t_new_scene_drops_old_levels");
 test("sablon eski bolumleri birakmiyor", "t_template_drops_old_levels");
 test("tek bolumlu dosya cok bolumlunun ustune temiz aciliyor", "t_loading_single_level_over_multi_clears");
+test("kamera hedefi bolumler arasi yasiyor", "t_camera_target_survives_levels");
+test("yeniden hedefleme yasayan hedefi ezmiyor", "t_camera_retarget_does_not_override_live_target");
+test("kamera hedefini silmek onu temizliyor", "t_deleting_camera_target_clears_it");
+test("oyunda olmek kamera hedefini korumali", "t_dying_in_play_keeps_camera_target");
+test("denetim kamera hedefini soyluyor", "t_check_flags_camera_target");
+test("kamera mod dongusu kapali halka", "t_camera_mode_cycle_is_closed");
+test("yorunge mesafesi geri cevriliyor", "t_camera_logical_dist_inverts_orbit_radius");
+test("hedef dongusu hedefsizi de iceriyor", "t_camera_target_cycle_includes_none");
+test("kamera hedefine ad veriliyor", "t_camera_target_gets_a_name");
+test("cozulemeyen hedef adiyla yaziliyor", "t_camera_target_name_written_when_unresolved");
+test("kamera widget kimlikleri cakismiyor", "t_ed_camera_widget_ids_do_not_collide");
 test("isin-kutu testi dogru", "t_seg_box_ray_test");
 test("isin-kure testi dogru", "t_seg_sphere_ray_test");
 test("bolge secimi en yakini aliyor", "t_zone_pick_takes_nearest");
@@ -8069,6 +8273,7 @@ test("ayni dosyayi yeniden acmak gecmisi koruyor", "t_reopen_same_file_keeps_his
 test("farkli kaydet yeni dosyaya yazip hedefi degistiriyor", "t_saveas_writes_new_file_and_retargets");
 test("dosya penceresi etiketleri kutulara sigiyor", "t_ed_fd_labels_fit_their_boxes");
 test("bolge paneli metinleri sigiyor", "t_zone_panel_texts_fit");
+test("kamera paneli metinleri sigiyor", "t_camera_panel_texts_fit");
 test("dosya penceresi icerigi panele sigiyor", "t_ed_fd_content_fits_panel");
 test("dosya penceresi editor penceresine sigiyor", "t_ed_fd_fits_editor_window");
 test("dosya penceresi widget kimlikleri cakismiyor", "t_ed_fd_widget_ids_do_not_collide");
@@ -8670,6 +8875,32 @@ func t_zone_panel_texts_fit() {
     assert(_t_fits3("surekli", half), "surekli dugmesi");
     assert(_t_fits3("etkin", half), "etkin dugmesi");
     assert(_t_fits3("kapali", half), "kapali dugmesi");
+}
+
+// Kamera panelinin metinleri. Düğmelerin çoğu YARIM sütunda (2x ölçekte
+// 136 px -> ~11 karakter) ve ilk yazdıklarımın dördü taşıyordu.
+func t_camera_panel_texts_fit() {
+    editor_ui_scale3d(2);
+    int inner = _ED_INSP_W3 - _ED_PAD3 * 2;
+    int half = toInt((inner - 4) / 2);
+    int i = 0;
+    while (i <= CAM_FPS) {
+        assert(_t_fits3(_cam_mode_nm3(i), half), "mod adi: " + _cam_mode_nm3(i));
+        i = i + 1;
+    }
+    // Hedef düğmesi de yarım sütunda ve İÇERİĞİ değişken: en uzun sabit
+    // hâlleri sınanıyor (varlık adı zaten kırpılabilir, o bilinçli).
+    scene3d_reset(); no_ground3d();
+    assert(_t_fits3(_ed_cam_target_nm3(), half), "hedefsiz etiket");
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    kamera_yorunge(p, 12.0, 8.0);
+    kill3d(p);
+    assert(_t_fits3(_ed_cam_target_nm3(), half), "silinmis hedef etiketi");
+    // Uyarı satırı TAM genişlikte.
+    assert(_t_fits3("hedefi yeniden sec", inner), "uyari satiri");
+    // Kamera-engel düğmesi yarım sütunda.
+    assert(_t_fits3("engel: yok", half), "engel yok");
+    assert(_t_fits3("engel: var", half), "engel var");
 }
 
 // Etiket sütunu 102 px -> ~9 karakter.

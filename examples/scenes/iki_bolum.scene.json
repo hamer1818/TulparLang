@@ -6,7 +6,7 @@
     "fog": 0.014,
     "ground": 0,
     "gravity": 26,
-    "camera": {"mode": "follow", "dist": 12, "height": 8, "fov": 45}
+    "camera": {"mode": "follow", "target": "kahraman", "dist": 12, "height": 8, "fov": 45}
   },
   "levels": [
     {

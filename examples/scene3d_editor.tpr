@@ -57,6 +57,14 @@
 // BÖLGELER: sağ tık → "+ bolge". Bölgenin GIRINCE eylemi var: kazan, kaybet,
 // gireni yok et (çukur/lav), hasar ver, skor ekle, sonraki bölüm. Eylem
 // seçilmemiş bir bölge hiçbir şey yapmaz — sahne denetimi bunu söylüyor.
+// Bölgeler editörde çizilir (rengi durumunu söyler), tıklanır, ok tuşlarıyla
+// taşınır.
+//
+// KAMERA: dünya panelinde. Mod (takip / yörünge / 1. şahıs), HEDEF (kameranın
+// izlediği varlık — düğme sırayla gezer), uzaklık/yükseklik/fov ve kameranın
+// duvara çarpıp çarpmayacağı. Hedefi olmayan kamera hiç kıpırdamaz; denetim
+// bunu söylüyor. Hedefe editör AD veriyor, çünkü sahne biçimi varlıklara adla
+// atıfta bulunuyor — adsız bir hedef kaydedince sessizce kopardı.
 //
 // Yerleşim:
 //   menü şeridi            Yeni / Aç / Kaydet / F. Kaydet / Geri / İleri / ?

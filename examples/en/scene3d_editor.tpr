@@ -58,7 +58,15 @@
 //
 // ZONES: right-click -> "+ bolge". A zone has an on-enter action: win, lose,
 // kill whoever entered (pits/lava), damage, add score, next level. A zone with
-// no action does nothing at all — the scene check says so.
+// no action does nothing at all — the scene check says so. Zones are drawn in
+// the editor (the colour states their condition), clickable, arrow-key movable.
+//
+// CAMERA: in the world panel. Mode (follow / orbit / first person), TARGET
+// (the entity the camera watches — the button cycles through them),
+// distance/height/fov, and whether the camera stops at walls. A camera with no
+// target never moves; the scene check says so. The editor NAMES the target,
+// because the scene format refers to entities by name — an unnamed target
+// would silently break on save.
 //
 // Layout:
 //   menu bar          New / Open / Save / Save As / Undo / Redo / ?

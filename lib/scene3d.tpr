@@ -188,6 +188,10 @@ int   _cam_lock3  = 0;      // imleç kilidi (FPS'te varsayılan açık)
 // bir sanat yönü tercihi değil, kusurdur (gölge gibi — bkz. _shadows3).
 // Açık alanda hiçbir etkisi yok, çünkü ışın hiçbir duvara çarpmıyor.
 int   _cam_collide3 = 1;
+// Kamera hedefinin ADI. Biçim entity'lere ADLA atıfta bulunuyor ve handle
+// bölüm değişince ölüyor: çok bölümlü bir sahnede kamera her bölümde yeni
+// gövdeye yeniden bağlanmak zorunda. Adı saklamadan bu imkânsız.
+str   _sc_cam_nm3 = "";
 // Geri çekilme ve en yakın mesafe DÜNYA BİRİMİ. Eskiden ikisi de yörünge
 // mesafesinin ORANIydı: taban %12 olduğu için `kamera_yorunge(p, 16, ...)`
 // diyen bir sahnede kamera, arkada engel varken oyuncunun 1.9 birim yakınına
@@ -5046,6 +5050,105 @@ func camera_fps(target, eye) {
 func kamera_fpv(target, eye) { camera_fps(target, eye); }
 func kamera_birinci_sahis(target, eye) { camera_fps(target, eye); }
 
+// ---- Kameranın editör tarafı -----------------------------------------------
+// Kamera sahne biçiminde vardı, kaydediliyordu ve DÜZENLENEMİYORDU: mod,
+// hedef, mesafe, fov — hiçbirinin arayüzü yoktu. Yani editörde kurulan bir
+// oyunun kamerası ya şablondan geliyordu ya da hiç yoktu, ve şablondan
+// gelen de oyuncu silinince sessizce bozuluyordu.
+//
+// İSİMLENDİRME UYARISI: `CAM_FIXED` "sabit kamera" değil, motorun ilk günkü
+// TAKİP kamerasıdır (açı sabit, hedefi izler). Biçimdeki karşılığı "follow"
+// ve doğrusu bu — sabit açılı takip. Gerçekten hiçbir şeyi izlemeyen kamera
+// ise hedefi olmayan kameradır, ayrı bir mod değil.
+func _cam_mode_nm3(m): str {
+    if (m == CAM_ORBIT) { return "yorunge"; }
+    if (m == CAM_FPS)   { return "1. sahis"; }
+    return "takip";
+}
+
+// Mod döngüsü KAPALI HALKA: sonuncudan sonra başa dönmezse düğme takılır.
+func _cam_next_mode3(m): int {
+    if (m == CAM_FIXED) { return CAM_ORBIT; }
+    if (m == CAM_ORBIT) { return CAM_FPS; }
+    return CAM_FIXED;
+}
+
+// Yörünge modunda `_cam_dist` yörünge YARIÇAPI; biçimdeki (ve panelin
+// gösterdiği) "mesafe" ise `camera_orbit`'in aldığı yatay değer. Ters
+// dönüşüm TEK YERDE: serileştirici de panel de bunu çağırıyor. İki yerde
+// ayrı ayrı yazılsaydı biri unutulduğunda kamera her kaydet/yükle turunda
+// bir adım daha geri kayardı — bu tam olarak yaşandı (16 → 18.87 → 21.35).
+func _cam_dist_logical3(): float {
+    if (_cam_mode3 != CAM_ORBIT) { return _cam_dist; }
+    float q = _cam_dist * _cam_dist - _cam_height * _cam_height;
+    if (q > 0.0) { return sqrt(q); }
+    return 0.0;
+}
+
+// Kamera hedefi GEÇERLİ mi. Hedef silinince handle bayatlıyor ve kamera var
+// olmayan bir cismi izlemeye devam ediyordu; ne onarılıyor ne söyleniyordu.
+func camera_target_ok3d(): bool {
+    if (_cam_target < 0) { return false; }
+    return alive3(_cam_target);
+}
+func kamera_hedefi_gecerli3d(): bool { return camera_target_ok3d(); }
+
+// Kamerayı ÇERÇEVELEMEYİ KORUYARAK yeniden kur. Mod düğmesi ile hedef
+// düğmesi ikisi de bunu çağırıyor: her modun kendi kurucusu var ve onları
+// doğrudan çağırmak, mesafe/yükseklik değerlerini modlar arasında
+// kaybettirirdi (yörüngeye geçip geri dönmek kamerayı varsayılana atardı).
+func _ed_cam_apply3(mode, target, dist, height) {
+    float d = dist;
+    float h = height;
+    if (d < 0.5) { d = 0.5; }
+    // Hedefin ADI biçime yazılacak tek şey — handle taşınabilir değil. Adsız
+    // bir varlığı hedef yapmak, kaydedince bağın sessizce kopması demekti;
+    // o yüzden editör hedefe ad VERİYOR. Ad etiketten türüyor ve
+    // benzersizleştiriliyor: iki "player" olsa `find3d` ilkini bulurdu.
+    if (target >= 0 && alive3(target) && _sc_nm_of3(target) == "") {
+        rename3d(target, _ed_uniq_name3(_sc_tag_nm3(_e3[_slot_of3(target)].tag)));
+    }
+    _sc_cam_nm3 = "";
+    if (target >= 0) { _sc_cam_nm3 = _sc_nm_of3(target); }
+    if (mode == CAM_FPS) {
+        camera_fps(target, _cam_eye3);
+        return;
+    }
+    if (mode == CAM_ORBIT) { camera_orbit(target, d, h); return; }
+    camera_follow(target, d, h);
+}
+
+// Hedef döngüsü: -1 (hedefsiz) → yaşayan varlıklar → başa. Hedefsiz durumun
+// döngüde YER ALMASI gerekiyor; sahnedeki her cismi gezip de "hiçbiri"ye
+// dönememek, yanlışlıkla hedef verildiğinde geri alınamaz olurdu.
+func _ed_cam_next_target3(cur): int {
+    int bas = 0;
+    int s = _slot_of3(cur);
+    if (s >= 0) { bas = s + 1; }
+    int i = bas;
+    while (i < length(_e3)) {
+        if (_e3[i].alive == 1) { return _mk_handle3(i); }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Hedefin panelde görünen adı.
+// "hedef: " öneki ATILDI: düğme yarım sütunda (2x ölçekte ~11 karakter) ve
+// önekle birlikte "hedef: SILINMIS" 15 karaktere çıkıyor, yani kırpılıyordu.
+// Bölüm başlığı zaten KAMERA ve ipucu ne olduğunu söylüyor; önek bilgi
+// taşımıyordu, yer yiyordu. Varlık ADI uzun olabilir ve kırpılması normal —
+// asıl anlatılması gereken iki DURUM (hedefsiz / silinmiş) artık sığıyor.
+func _ed_cam_target_nm3(): str {
+    if (_cam_target < 0) { return "hedefsiz"; }
+    if (alive3(_cam_target) == false) { return "SILINDI"; }
+    str n = _sc_nm_of3(_cam_target);
+    if (n == "") { n = _sc_tag_nm3(_e3[_slot_of3(_cam_target)].tag); }
+    return n;
+}
+
+func _ed_cam_idbase3(): int { return 9780; }
+
 // Bakış hassasiyeti (derece / piksel). Fare ve dokunmatik ayrı ayarlanır.
 func camera_sens3d(s) { _cam_sens3 = s; }
 func kamera_hassasiyet3d(s) { camera_sens3d(s); }
@@ -6168,7 +6271,7 @@ func _sc_world_defaults3() {
     _lt_x3 = []; _lt_y3 = []; _lt_z3 = []; _lt_col3 = []; _lt_rng3 = [];
     _lt_pick3 = [];
     _cam_dist = 12.0; _cam_height = 8.0; _cam_fov = 45.0;
-    _cam_collide3 = 1; _cam_eye3 = 0.0;
+    _cam_collide3 = 1; _cam_eye3 = 0.0; _sc_cam_nm3 = "";
     _dn_on3 = 0; _dn_h3 = 12.0; _dn_len3 = 120.0; _dn_frozen3 = 0;
     _stars3 = 0.0 - 1.0;
     _cloud3 = 0.0;
@@ -6259,7 +6362,8 @@ func _sc_load_world3(w) {
 func _sc_load_camera3(w) {
     if (_sc_has3(w, "camera") == false) { return; }
     json cm = w["camera"];
-    int tgt = find3d(_sc_s3(cm, "target", ""));
+    _sc_cam_nm3 = _sc_s3(cm, "target", "");
+    int tgt = find3d(_sc_cam_nm3);
     str md = _sc_s3(cm, "mode", "orbit");
     float ds = _sc_f3(cm, "dist", 12.0);
     float hg = _sc_f3(cm, "height", 8.0);
@@ -6459,7 +6563,7 @@ func scene_load3d(src): int {
         }
         if (length(_lvl_js3) > 0) {
             _cur_lvl3 = 1;
-            n = _sc_load_level3(_lvl_js3[0]);
+            n = _sc_load_level3(_lvl_js3[0]);   // sonunda kamerayı hedefler
         }
         log3d("sahne yuklendi: " + toString(length(_lvl_js3)) + " bolum, " +
               toString(n) + " varlik (1. bolum)");
@@ -6759,6 +6863,10 @@ func _sc_world_js3(): str {
     if (_cam_mode3 == CAM_FPS)   { md = "fps"; }
     o = o + "    \"camera\": {\"mode\": \"" + md + "\"";
     str tn = _sc_nm_of3(_cam_target);
+    // Yaşayan hedef çözülemiyorsa (çok bölümlü sahnede yazarken başka bir
+    // bölümdesin) ADI yaz. Yazmasaydı kaydetmek kamera bağını sessizce
+    // koparırdı — dosya her turda biraz daha bozulurdu.
+    if (tn == "") { tn = _sc_cam_nm3; }
     if (tn != "") { o = o + ", \"target\": \"" + tn + "\""; }
     if (md == "fps") { o = o + ", \"eye\": " + _sc_num3(_cam_eye3); }
     else {
@@ -6767,11 +6875,7 @@ func _sc_world_js3(): str {
         // "dist" ise camera_orbit'in aldığı değer, yani geri çevirmek gerek —
         // yoksa her kaydet/yükle turunda kamera bir adım daha geri kayardı
         // (16 → 18.87 → 21.35). Ters dönüşüm tam: r*r - h*h = d*d.
-        float dh = _cam_dist;
-        if (_cam_mode3 == CAM_ORBIT) {
-            float q = _cam_dist * _cam_dist - _cam_height * _cam_height;
-            if (q > 0.0) { dh = sqrt(q); } else { dh = 0.0; }
-        }
+        float dh = _cam_dist_logical3();
         o = o + ", \"dist\": " + _sc_num3(dh) +
             ", \"height\": " + _sc_num3(_cam_height);
     }
@@ -7279,7 +7383,26 @@ func _sc_load_level3(j): int {
         int r = 0;
         while (r < length(rs)) { _sc_load_rule3(rs[r]); r = r + 1; }
     }
+    _sc_cam_retarget3();
     return n;
+}
+
+// Kamerayı ADINDAN yeniden hedefle. ÇOK BÖLÜMLÜ sahnelerde kamera hiç
+// çalışmıyordu ve sebebi iki katmanlıydı (ölçüldü — hedef her yerde -1):
+//   1. `scene_load3d` kamerayı bölümlerden ÖNCE okuyor, yani `find3d`
+//      çağrıldığında bölümün gövdeleri henüz YOK.
+//   2. Bölüm değiştirmek entity deposunu tamamen siliyor; kod bölümlerinde
+//      kurulum fonksiyonu `camera_follow`'u yeniden çağırıyor ama VERİ
+//      bölümlerinde öyle bir fonksiyon yok.
+// Bölüm içeriğini yükleyen tek huni burası olduğu için düzeltme de burada.
+//
+// Yalnız hedef GEÇERSİZKEN çalışıyor: yaşayan bir hedefi ezmek, oyun
+// sırasında kamerayı elle başka bir şeye çeviren kodu bozardı.
+func _sc_cam_retarget3() {
+    if (_sc_cam_nm3 == "") { return; }
+    if (camera_target_ok3d()) { return; }
+    int t = find3d(_sc_cam_nm3);
+    if (t >= 0) { _cam_target = t; }
 }
 
 // Bölüm sisteminin VERİ tarafı. `level3d` bir fonksiyon istiyor; veri
@@ -7477,6 +7600,19 @@ func scene_check3d(): int {
         if (_chk_tag_say3(_trg_tag[i]) == 0) { etiketsiz = etiketsiz + 1; }
         i = i + 1;
     }
+    // KAMERA: hedefi olmayan ya da hedefi SİLİNMİŞ kamera hiç kıpırdamaz.
+    // Sahne yine açılıyor, hata da vermiyor — oyun sadece tek bir noktadan
+    // izleniyor ve oyuncu ekrandan çıkıp gidiyor. Sıfırdan kurulan her sahne
+    // bu durumda başlıyor (şablonlar hedefi kendileri kuruyor), yani en çok
+    // görülecek uyarı bu.
+    if (_cam_target < 0) {
+        _chk_add3("kamera hedefi yok — kamera kimseyi izlemiyor");
+    } else {
+        if (camera_target_ok3d() == false) {
+            _chk_add3("kamera hedefi silinmis — kamera bir yere cakili kaldi");
+        }
+    }
+
     if (olu_bolge > 0) {
         _chk_add3(toString(olu_bolge) +
                   " bolge hicbir sey yapmiyor (girince eylemi sec)");
@@ -8689,6 +8825,15 @@ func ed_rotate3d(id, yaw) { set3yaw(id, yaw); }
 
 func ed_delete3d(id) {
     if (_ed_sel3e == id) { _ed_sel3e = 0 - 1; }
+    // KAMERA HEDEFİ de düşmeli. Düşmüyordu: oyuncuyu silmek kamerayı var
+    // olmayan bir handle'a bağlı bırakıyor, yerine yeni bir oyuncu eklemek
+    // de onu onarmıyordu — kamera kalıcı olarak ölü bir cismi izliyordu ve
+    // ne editörde düzeltilebiliyor ne denetimde söyleniyordu.
+    //
+    // Yalnız EDİTÖR silmesinde: `kill3d` oyun sırasında da çağrılıyor ve
+    // oyuncunun ölmesi kamerayı sıfırlamamalı (oyun-bitti ekranı hâlâ
+    // sahneyi göstermeli).
+    if (_cam_target == id) { _cam_target = 0 - 1; }
     clear_behaviors3d(id);
     kill3d(id);
 }
@@ -12066,6 +12211,62 @@ func _ed_world_panel3(px, py, pw) {
         ed_mark3d();
         if (_shadows3 == 1) { _shadows3 = 0; } else { _shadows3 = 1; }
     }
+    y = y + _ED_FLD3 + _us3(6);
+
+    // ---- KAMERA ----
+    // Oyuncudan sonra bir oyunu en çok tanımlayan şey ve buraya kadar hiç
+    // arayüzü yoktu: mod da hedef de mesafe de yalnız JSON elle açılarak
+    // değiştirilebiliyordu.
+    _g_section(px + 2, y, pw - 4, "KAMERA");
+    y = y + _us3(16);
+    int cb = _ed_cam_idbase3();
+    if (_g_button(cb, lx, y, half, _ED_FLD3, _cam_mode_nm3(_cam_mode3))) {
+        ed_mark3d();
+        int ym = _cam_next_mode3(_cam_mode3);
+        _ed_cam_apply3(ym, _cam_target, _cam_dist_logical3(), _cam_height);
+    }
+    _g_tip_for3(cb, "takip / yorunge / birinci sahis");
+    if (_g_button(cb + 1, lx + half + 4, y, half, _ED_FLD3,
+                  _ed_cam_target_nm3())) {
+        ed_mark3d();
+        int yt = _ed_cam_next_target3(_cam_target);
+        _ed_cam_apply3(_cam_mode3, yt, _cam_dist_logical3(), _cam_height);
+    }
+    _g_tip_for3(cb + 1, "Kameranin izledigi varlik — sirayla gezer");
+    y = y + _ED_FLD3 + _us3(3);
+    // Hedefi SİLİNMİŞ kamera sessiz kalmasın: düğmeye basılınca düzeliyor
+    // ama önce bir şeyin bozuk olduğunu bilmek gerekiyor.
+    if (_cam_target >= 0 && camera_target_ok3d() == false) {
+        _g_txt3("hedefi yeniden sec", lx, _g_ly3(y), inner,
+                rgb(250, 190, 90));
+        y = y + _g_lh3();
+    }
+    if (_cam_mode3 == CAM_FPS) {
+        _g_txt3("goz", lx, _g_ly3(y), labw - 2, _G_DIM3());
+        float ye = _g_num(cb + 2, fx, y, fw, _ED_FLD3, _cam_eye3, 0.1);
+        if (ye != _cam_eye3) { ed_mark3d(); _cam_eye3 = ye; }
+        _g_txt3("fov", fx + fw + 4, _g_ly3(y), labw - 2, _G_DIM3());
+        _cam_fov = _g_num(cb + 3, fx + (fw + 4) * 2, y, fw, _ED_FLD3, _cam_fov, 1.0);
+    } else {
+        _g_txt3("uzak", lx, _g_ly3(y), labw - 2, _G_DIM3());
+        float yd = _g_num(cb + 4, fx, y, fw, _ED_FLD3, _cam_dist_logical3(), 0.25);
+        float yh = _g_num(cb + 5, fx + fw + 4, y, fw, _ED_FLD3, _cam_height, 0.25);
+        // Mesafe/yükseklik AYNI kurucudan geçiyor: yörüngede `_cam_dist`
+        // yarıçap olduğu için doğrudan yazmak modu bozardı.
+        if (yd != _cam_dist_logical3() || yh != _cam_height) {
+            ed_mark3d();
+            _ed_cam_apply3(_cam_mode3, _cam_target, yd, yh);
+        }
+        _cam_fov = _g_num(cb + 6, fx + (fw + 4) * 2, y, fw, _ED_FLD3, _cam_fov, 1.0);
+    }
+    y = y + _ED_FLD3 + _us3(3);
+    str cc = "engel: yok";
+    if (_cam_collide3 == 1) { cc = "engel: var"; }
+    if (_g_tog(cb + 7, lx, y, half, _ED_FLD3, cc, _cam_collide3 == 1)) {
+        ed_mark3d();
+        if (_cam_collide3 == 1) { _cam_collide3 = 0; } else { _cam_collide3 = 1; }
+    }
+    _g_tip_for3(cb + 7, "Kamera duvarin icinden gecmesin");
     y = y + _ED_FLD3 + _us3(6);
 
     _g_section(px + 2, y, pw - 4, "ISIKLAR");
