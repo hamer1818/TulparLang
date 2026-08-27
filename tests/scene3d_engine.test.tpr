@@ -5790,6 +5790,92 @@ func t_storage_export_writes_file_on_desktop() {
 // SAF kararlarını (yol ayrıştırma, ad normalleştirme, geçmiş kuralı) ve
 // diske dokunan iki etkisini ayrı ayrı sınıyor.
 
+// ---- Bölge seçimi: ışın geometrisi -----------------------------------------
+// Bölgeler entity DEĞİL, o yüzden entity'nin ışın testi (`_seg_aabb3`, ki
+// `_e3`'ten okuyor) onlara uygulanamıyor. Bunlar saf geometri: parametre
+// alıyorlar, veri okumuyorlar — penceresiz tam olarak sınanabiliyorlar.
+func t_seg_box_ray_test() {
+    // Dışarıdan vur: kutu (0,0,0) yarı-boy 1, ışın x=-5'ten +10 birim.
+    float t = _seg_box3(0.0 - 5.0, 0.0, 0.0, 10.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
+    assert(abs_f3(t - 0.4) < 0.001, "giris parametresi 0.4 olmali: " + toString(t));
+    // İÇERİDEN: bölgenin içinden bakarken de seçilebilmeli → 0.
+    t = _seg_box3(0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
+    assert(abs_f3(t) < 0.001, "icerideki isin 0 dondurmeli: " + toString(t));
+    // MENZİL dışı: ışın kutuya varmadan bitiyor.
+    assert(_seg_box3(0.0 - 5.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                     0.0, 0.0, 0.0, 1.0, 1.0, 1.0) < 0.0, "kisa isin vurmamali");
+    // ARKAYA bakıyor.
+    assert(_seg_box3(5.0, 0.0, 0.0, 10.0, 0.0, 0.0,
+                     0.0, 0.0, 0.0, 1.0, 1.0, 1.0) < 0.0, "arkadaki kutu vurulmamali");
+    // PARALEL ve dışarıda: dilim testinin sıfıra bölmeyen dalı.
+    assert(_seg_box3(0.0 - 5.0, 5.0, 0.0, 10.0, 0.0, 0.0,
+                     0.0, 0.0, 0.0, 1.0, 1.0, 1.0) < 0.0,
+           "kutunun ustunden gecen isin vurmamali");
+    // Paralel ve İÇERİDE olan eksen engel olmamalı.
+    assert(_seg_box3(0.0 - 5.0, 0.5, 0.0, 10.0, 0.0, 0.0,
+                     0.0, 0.0, 0.0, 1.0, 1.0, 1.0) >= 0.0,
+           "kutunun icinden gecen isin vurmali");
+}
+
+func t_seg_sphere_ray_test() {
+    float t = _seg_sphere3(0.0 - 5.0, 0.0, 0.0, 10.0, 0.0, 0.0,
+                           0.0, 0.0, 0.0, 2.0);
+    assert(abs_f3(t - 0.3) < 0.001, "giris parametresi 0.3 olmali: " + toString(t));
+    // İÇERİDEN → 0.
+    t = _seg_sphere3(0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0);
+    assert(abs_f3(t) < 0.001, "icerideki isin 0 dondurmeli: " + toString(t));
+    // ARKADA.
+    assert(_seg_sphere3(5.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0) < 0.0,
+           "arkadaki kure vurulmamali");
+    // MENZİL dışı.
+    assert(_seg_sphere3(0.0 - 50.0, 0.0, 0.0, 10.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0, 2.0) < 0.0, "uzaktaki kure vurulmamali");
+    // IŞINDAN kaçan küre.
+    assert(_seg_sphere3(0.0 - 5.0, 9.0, 0.0, 10.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0, 2.0) < 0.0, "isindan uzak kure vurulmamali");
+}
+
+// Işın birden çok bölgeye çarparsa EN YAKINI seçilmeli — yoksa arkadaki
+// büyük bir bölge, önündeki küçüğü seçilemez yapardı.
+func t_zone_pick_takes_nearest() {
+    scene3d_reset(); no_ground3d();
+    int uzak  = trigger3d(10.0, 0.0, 0.0, 2.0, 2.0, 2.0, TAG_PLAYER);
+    int yakin = trigger3d(3.0, 0.0, 0.0, 2.0, 2.0, 2.0, TAG_PLAYER);
+    int h = _ed_pick_zone3(0.0 - 5.0, 0.0, 0.0, 1.0, 0.0, 0.0, 40.0);
+    assert_eq_int(h, yakin);
+    // Ters yönden bakınca öteki kazanmali.
+    int h2 = _ed_pick_zone3(30.0, 0.0, 0.0, 0.0 - 1.0, 0.0, 0.0, 40.0);
+    assert_eq_int(h2, uzak);
+    // Hicbirine degmeyen isin -1 dondurmeli.
+    assert_eq_int(_ed_pick_zone3(0.0, 50.0, 0.0, 0.0, 1.0, 0.0, 40.0), 0 - 1);
+    // Küre bölge de seçilebilmeli.
+    scene3d_reset(); no_ground3d();
+    int kure = trigger_sphere3d(6.0, 0.0, 0.0, 2.0, TAG_PLAYER);
+    assert_eq_int(_ed_pick_zone3(0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 40.0), kure);
+}
+
+// Bölgenin RENGİ bir bilgi: denetim "bu bölge hiçbir şey yapmıyor" diyor ve
+// aynı şeyin ekranda da görünmesi gerekiyor. Üç durum ÜÇ ayrı renk olmalı,
+// yoksa çizim hiçbir şey anlatmaz.
+func t_zone_color_reflects_state() {
+    scene3d_reset(); no_ground3d();
+    int z = trigger3d(0.0, 0.0, 0.0, 2.0, 2.0, 2.0, TAG_PLAYER);
+    int olu = _trg_col3(z);
+    trigger_action3d(z, ZACT_WIN, 0.0);
+    int calisan = _trg_col3(z);
+    trigger_on3d(z, false);
+    int kapali = _trg_col3(z);
+    assert(olu != calisan, "eylemsiz bolge is gorenden farkli gorunmeli");
+    assert(kapali != calisan, "kapali bolge is gorenden farkli gorunmeli");
+    assert(kapali != olu, "kapali ile eylemsiz de ayirt edilmeli");
+    // Kod kancası da "iş gören" saymalı — denetimle aynı kural.
+    trigger_on3d(z, true);
+    trigger_action3d(z, ZACT_NONE, 0.0);
+    girince3d(z, "_t_zhook3");
+    assert(_trg_col3(z) == calisan, "kancasi olan bolge olu gorunmemeli");
+}
+
 // "Sonraki bölüm" KURAL eylemi. Bu eylem olmadan çok bölümlü bir VERİ
 // sahnesinin 2. bölümüne oynayarak ULAŞILAMIYORDU: `next_level3d()`'i
 // çağıran tek şey koddu, yani editörün "+ BOLUM EKLE" düğmesiyle kurulan
@@ -7940,6 +8026,10 @@ test("tek bolumlu sahne degismiyor", "t_single_level_scene_unchanged");
 test("yeni sahne eski bolumleri birakmiyor", "t_new_scene_drops_old_levels");
 test("sablon eski bolumleri birakmiyor", "t_template_drops_old_levels");
 test("tek bolumlu dosya cok bolumlunun ustune temiz aciliyor", "t_loading_single_level_over_multi_clears");
+test("isin-kutu testi dogru", "t_seg_box_ray_test");
+test("isin-kure testi dogru", "t_seg_sphere_ray_test");
+test("bolge secimi en yakini aliyor", "t_zone_pick_takes_nearest");
+test("bolge rengi durumunu soyluyor", "t_zone_color_reflects_state");
 test("bitince kurali sonraki bolume geciriyor", "t_cleared_rule_next_level_advances");
 test("son bolumde sonraki istemek kazandiriyor", "t_next_level_on_last_level_wins");
 test("sonraki bolum eylemi gidis-donusten sag cikiyor", "t_next_level_action_roundtrips");
@@ -7978,6 +8068,7 @@ test("baska dosya acmak gecmisi temizliyor", "t_open_different_file_clears_histo
 test("ayni dosyayi yeniden acmak gecmisi koruyor", "t_reopen_same_file_keeps_history");
 test("farkli kaydet yeni dosyaya yazip hedefi degistiriyor", "t_saveas_writes_new_file_and_retargets");
 test("dosya penceresi etiketleri kutulara sigiyor", "t_ed_fd_labels_fit_their_boxes");
+test("bolge paneli metinleri sigiyor", "t_zone_panel_texts_fit");
 test("dosya penceresi icerigi panele sigiyor", "t_ed_fd_content_fits_panel");
 test("dosya penceresi editor penceresine sigiyor", "t_ed_fd_fits_editor_window");
 test("dosya penceresi widget kimlikleri cakismiyor", "t_ed_fd_widget_ids_do_not_collide");
@@ -8547,6 +8638,38 @@ func t_ed_fd_labels_fit_their_boxes() {
     assert(_t_fits3("KAYDET", _us3(64)), "3x KAYDET");
     assert(_t_fits3("VAZGEC", _us3(56)), "3x VAZGEC");
     editor_ui_scale3d(2);
+}
+
+// Bölge panelinin metinleri de inceleyiciye (280 px -> ~24 karakter) sığmalı.
+// İlk yazdığım iki satır sığmıyordu — "ok tuslari: tasi (X/Z) — R ile boyut"
+// 36 karakter, "+ kodda girince kancasi var" 27. İkisi de kırpılarak
+// gösterilecekti, yani ipucu olma işlevlerini kaybediyorlardı.
+func t_zone_panel_texts_fit() {
+    editor_ui_scale3d(2);
+    int inner = _ED_INSP_W3 - _ED_PAD3 * 2;
+    assert(_t_fits3("ok: tasi  R+ok: boyut", inner), "ok tuslari ipucu");
+    assert(_t_fits3("kodda kancasi da var", inner), "kanca satiri");
+    assert(_t_fits3("bolge secili degil", inner), "secim yok satiri");
+    assert(_t_fits3("BOLGEYI SIL", inner), "sil dugmesi");
+    // Eylem düğmesi TAM genişlikte; adlar oraya sığmalı.
+    int i = 0;
+    while (i <= ZACT_NEXT) {
+        assert(_t_fits3(_zact_nm3(i), inner), "eylem adi: " + _zact_nm3(i));
+        i = i + 1;
+    }
+    // Miktar etiketi DAR sütunda (labw + _us3(20)).
+    int labw = _us3(30) + _us3(20);
+    assert(_t_fits3(_zact_amount_lbl3(ZACT_DAMAGE), labw), "hasar etiketi");
+    assert(_t_fits3(_zact_amount_lbl3(ZACT_SCORE), labw), "skor etiketi");
+    // Yarım sütundaki iki geçiş düğmesi.
+    int half = toInt((inner - _us3(4)) / 2);
+    // Bu iki düğme ZATEN taşıyordu ("tek atim: yok" 13 karakter, bütçe 11) —
+    // testi yazarken çıktı, benim eklediğim bir şey değil. Etiketler artık
+    // DURUMUN ADI: hem sığıyorlar hem daha açıklar.
+    assert(_t_fits3("tek atim", half), "tek atim dugmesi");
+    assert(_t_fits3("surekli", half), "surekli dugmesi");
+    assert(_t_fits3("etkin", half), "etkin dugmesi");
+    assert(_t_fits3("kapali", half), "kapali dugmesi");
 }
 
 // Etiket sütunu 102 px -> ~9 karakter.

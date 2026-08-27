@@ -4517,13 +4517,36 @@ func _trg_clear3() {
     _trg_cur3 = 0 - 1;
 }
 
+// Bölgenin editördeki rengi. Rengin kendisi bir BİLGİ: sahne denetimi
+// "bu bölge hiçbir şey yapmıyor" diyor ve aynı şeyi ekranda da görmek
+// gerekiyor — konsola bakmadan.
+func _trg_col3(t): int {
+    if (_trg_on[t] == 0) { return rgb(110, 110, 120); }          // kapalı
+    if (_trg_act[t] == ZACT_NONE && _trg_hasin[t] == 0 &&
+        _trg_hasout[t] == 0 && _trg_hasstay[t] == 0) {
+        return rgb(190, 150, 90);                                 // ölü: eylemsiz
+    }
+    return rgb(90, 220, 160);                                     // iş gören
+}
+
 func _trg_draw3() {
-    if (_trg_show3 == 0) { return; }
+    // EDİTÖRDE bölgeler her zaman görünür. Görünmediklerinde editör bir kutu
+    // koyduruyor ve sonra onu GÖSTERMİYORDU: yerini ancak paneldeki sayı
+    // alanlarına bakarak tahmin edebiliyordun, yani bölge yerleştirmek gözle
+    // yapılan bir iş olmaktan çıkıyordu. (`_ed_on3` oynarken zaten 0 oluyor,
+    // yani oyun görüntüsü tel kafeslerle kirlenmiyor.)
+    //
+    // OYUNDA varsayılan yine KAPALI: bölge bir mekanik, dekor değil.
+    int goster = _trg_show3;
+    if (_ed_on3 == 1) { goster = 1; }
+    if (goster == 0) { return; }
     int t = 0;
     int n = length(_trg_shape);
     while (t < n) {
-        int col = rgb(90, 220, 160);
-        if (_trg_on[t] == 0) { col = rgb(120, 120, 130); }
+        int col = _trg_col3(t);
+        // Seçili bölge vurgulanıyor — hiyerarşiden seçtiğin satırın sahnede
+        // NEREYE denk geldiğini gösteren tek işaret bu.
+        if (_ed_on3 == 1 && _ed_tab3 == 2 && _ed_zsel3 == t) { col = _G_ACC3(); }
         if (_trg_shape[t] == 1) {
             sphere_wires(_trg_x[t], _trg_y[t], _trg_z[t], _trg_r[t], 8, col);
         } else {
@@ -4532,6 +4555,92 @@ func _trg_draw3() {
         }
         t = t + 1;
     }
+}
+
+// ---- Işın ↔ bölge (seçim) ---------------------------------------------------
+// Bölgeler entity DEĞİL, o yüzden `_seg_aabb3` (ki `_e3`'ten okuyor ve dönüşü
+// de hesaplıyor) onlara uygulanamıyor. Bunlar saf geometri: parametre
+// alıyorlar, veri okumuyorlar — yani penceresiz sınanabiliyorlar.
+//
+// Dönüş: kesişim parametresi t (0..1) ya da -1. Işının BAŞI hacmin içindeyse
+// 0 dönüyor: bölgenin içinden bakarken de onu seçebilmek gerekiyor.
+func _seg_box3(ox, oy, oz, dx, dy, dz, cx, cy, cz, hx, hy, hz): float {
+    float tmin = 0.0;
+    float tmax = 1.0;
+    if (abs_f3(dx) < 0.000001) {
+        if (ox < cx - hx || ox > cx + hx) { return 0.0 - 1.0; }
+    } else {
+        float t1 = (cx - hx - ox) / dx;
+        float t2 = (cx + hx - ox) / dx;
+        if (t1 > t2) { float tt = t1; t1 = t2; t2 = tt; }
+        if (t1 > tmin) { tmin = t1; }
+        if (t2 < tmax) { tmax = t2; }
+        if (tmin > tmax) { return 0.0 - 1.0; }
+    }
+    if (abs_f3(dy) < 0.000001) {
+        if (oy < cy - hy || oy > cy + hy) { return 0.0 - 1.0; }
+    } else {
+        float t1 = (cy - hy - oy) / dy;
+        float t2 = (cy + hy - oy) / dy;
+        if (t1 > t2) { float tt = t1; t1 = t2; t2 = tt; }
+        if (t1 > tmin) { tmin = t1; }
+        if (t2 < tmax) { tmax = t2; }
+        if (tmin > tmax) { return 0.0 - 1.0; }
+    }
+    if (abs_f3(dz) < 0.000001) {
+        if (oz < cz - hz || oz > cz + hz) { return 0.0 - 1.0; }
+    } else {
+        float t1 = (cz - hz - oz) / dz;
+        float t2 = (cz + hz - oz) / dz;
+        if (t1 > t2) { float tt = t1; t1 = t2; t2 = tt; }
+        if (t1 > tmin) { tmin = t1; }
+        if (t2 < tmax) { tmax = t2; }
+        if (tmin > tmax) { return 0.0 - 1.0; }
+    }
+    return tmin;
+}
+
+func _seg_sphere3(ox, oy, oz, dx, dy, dz, cx, cy, cz, r): float {
+    float mx = ox - cx;
+    float my = oy - cy;
+    float mz = oz - cz;
+    float a = dx * dx + dy * dy + dz * dz;
+    if (a < 0.000001) { return 0.0 - 1.0; }
+    float b = 2.0 * (mx * dx + my * dy + mz * dz);
+    float c = mx * mx + my * my + mz * mz - r * r;
+    float disc = b * b - 4.0 * a * c;
+    if (disc < 0.0) { return 0.0 - 1.0; }
+    float sq = sqrt(disc);
+    float t1 = (0.0 - b - sq) / (2.0 * a);
+    float t2 = (0.0 - b + sq) / (2.0 * a);
+    if (t2 < 0.0) { return 0.0 - 1.0; }   // tamamı ışının ARKASINDA
+    if (t1 > 1.0) { return 0.0 - 1.0; }   // menzilin ötesinde
+    if (t1 < 0.0) { return 0.0; }         // başlangıç noktası İÇERİDE
+    return t1;
+}
+
+// Ekran ışınının vurduğu bölge (indeks) ya da -1. En yakını kazanıyor.
+func _ed_pick_zone3(ox, oy, oz, dx, dy, dz, reach): int {
+    float sx = dx * reach;
+    float sy = dy * reach;
+    float sz = dz * reach;
+    float best = 2.0;
+    int bi = 0 - 1;
+    int t = 0;
+    while (t < length(_trg_shape)) {
+        float h = 0.0 - 1.0;
+        if (_trg_shape[t] == 1) {
+            h = _seg_sphere3(ox, oy, oz, sx, sy, sz,
+                             _trg_x[t], _trg_y[t], _trg_z[t], _trg_r[t]);
+        } else {
+            h = _seg_box3(ox, oy, oz, sx, sy, sz,
+                          _trg_x[t], _trg_y[t], _trg_z[t],
+                          _trg_sx[t] * 0.5, _trg_sy[t] * 0.5, _trg_sz[t] * 0.5);
+        }
+        if (h >= 0.0 && h < best) { best = h; bi = t; }
+        t = t + 1;
+    }
+    return bi;
 }
 
 // ---- Kamera: bakış girdisi + üç mod ----------------------------------------
@@ -9063,6 +9172,18 @@ func ed_pick_at3d(px, py): int {
     return _ed_pick3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3, _ed_rz3, _ed_reach3);
 }
 
+// Ekran noktasından BÖLGE seç. `_ed_ray3` çağrısı `ed_pick_at3d` ile aynı;
+// ayrı fonksiyon olmasının sebebi ÖNCELİK: bölge genellikle içinde
+// entity'ler barındıran büyük bir kutu, yani bölgeyi önce sınamak kutunun
+// içindeki hiçbir cismin tıklanamaması demek olurdu. Bölge ancak entity
+// bulunamadığında sınanıyor.
+func ed_pick_zone_at3d(px, py): int {
+    _ed_ray3(px - _ed_view_x3(), py - _ed_view_y3(),
+             _ed_view_w3(), _ed_view_h3(), _cam_fov);
+    return _ed_pick_zone3(_ed_cx3, _ed_cy3, _ed_cz3,
+                          _ed_rx3, _ed_ry3, _ed_rz3, _ed_reach3);
+}
+
 func _s3_editor_mouse(dt) {
     int s = _slot_of3(_ed_sel3e);
     // Bağlam menüsü açıkken görüntü penceresi tıklama ALMIYOR: menüdeki bir
@@ -9126,8 +9247,19 @@ func _s3_editor_mouse(dt) {
             if (_ed_mode3 == ED_MOVE) { ed_mark3d(); }
             _ed_drag3 = 1;
         } else {
-            if (key_down(K_LCTRL) == false) { ed_deselect3d(); }
-            _ed_drag3 = 0;
+            // Entity yoksa BÖLGE dene. Bölgeler artık editörde çiziliyor;
+            // görünen ama tıklanamayan bir şey, olmayan bir şeyden daha
+            // kafa karıştırıcı olurdu.
+            int zh = ed_pick_zone_at3d(mouse_x(), mouse_y());
+            if (zh >= 0) {
+                ed_deselect3d();
+                _ed_tab3 = 2;
+                _ed_zsel3 = zh;
+                _ed_drag3 = 0;
+            } else {
+                if (key_down(K_LCTRL) == false) { ed_deselect3d(); }
+                _ed_drag3 = 0;
+            }
         }
     }
 
@@ -9280,6 +9412,60 @@ func _s3_editor_keys() {
         int pn = ed_paste3d();
         _ed_msg3 = toString(pn) + " varlik yapistirildi";
         _ed_msg_t3 = 1.5;
+        return;
+    }
+
+    // BÖLGE seçiliyken tuşlar bölgeye ait. Tutamak (gizmo) entity'ye bağlı ve
+    // onu bölgelere açmak sürükleme durum makinesini ikiye bölerdi — burada
+    // gözle doğrulayamadığım bir refactor. Klavye aynı işi görüyor.
+    //
+    // Yön eşlemesi entity'ninkinden FARKLI ve bilerek: entity'de tutamak XZ'yi
+    // hallediyor, oklar Y için kalıyor. Bölgede tutamak YOK, yani oklar
+    // ZEMİN DÜZLEMİNİ vermeli — bir bölgeyi yerleştirmek demek onu haritada
+    // gezdirmek demek. Y zaten panelde, bir satır yukarıda.
+    if (_ed_tab3 == 2 && _ed_zsel3 >= 0 && _ed_zsel3 < length(_trg_x)) {
+        int zi = _ed_zsel3;
+        float zg = 0.5;
+        if (_ed_grid3 > 0.0) { zg = _ed_grid3; }
+        if (key_pressed(K_DEL)) {
+            ed_mark3d();
+            _ed_zone_delete3(zi);
+            _ed_tab3 = 0;
+            _ed_zsel3 = 0 - 1;
+            return;
+        }
+        bool ok_basildi = key_pressed(K_UP) || key_pressed(K_DOWN) ||
+                          key_pressed(K_LEFT) || key_pressed(K_RIGHT);
+        if (ok_basildi == false) { return; }
+        ed_mark3d();
+        if (_ed_mode3 == ED_SCALE) {
+            if (_trg_shape[zi] == 1) {
+                if (key_pressed(K_RIGHT) || key_pressed(K_UP)) {
+                    _trg_r[zi] = _trg_r[zi] + zg;
+                }
+                if (key_pressed(K_LEFT) || key_pressed(K_DOWN)) {
+                    _trg_r[zi] = _trg_r[zi] - zg;
+                }
+                if (_trg_r[zi] < 0.1) { _trg_r[zi] = 0.1; }
+            } else {
+                if (key_pressed(K_RIGHT)) {
+                    _trg_sx[zi] = _trg_sx[zi] + zg; _trg_sz[zi] = _trg_sz[zi] + zg;
+                }
+                if (key_pressed(K_LEFT)) {
+                    _trg_sx[zi] = _trg_sx[zi] - zg; _trg_sz[zi] = _trg_sz[zi] - zg;
+                }
+                if (key_pressed(K_UP))   { _trg_sy[zi] = _trg_sy[zi] + zg; }
+                if (key_pressed(K_DOWN)) { _trg_sy[zi] = _trg_sy[zi] - zg; }
+                if (_trg_sx[zi] < 0.1) { _trg_sx[zi] = 0.1; }
+                if (_trg_sy[zi] < 0.1) { _trg_sy[zi] = 0.1; }
+                if (_trg_sz[zi] < 0.1) { _trg_sz[zi] = 0.1; }
+            }
+            return;
+        }
+        if (key_pressed(K_RIGHT)) { _trg_x[zi] = _trg_x[zi] + zg; }
+        if (key_pressed(K_LEFT))  { _trg_x[zi] = _trg_x[zi] - zg; }
+        if (key_pressed(K_DOWN))  { _trg_z[zi] = _trg_z[zi] + zg; }
+        if (key_pressed(K_UP))    { _trg_z[zi] = _trg_z[zi] - zg; }
         return;
     }
 
@@ -12027,18 +12213,25 @@ func _ed_zone_panel3(px, y, pw) {
 
     _g_section(px + _us3(2), y, pw - _us3(4), "DAVRANIS");
     y = y + _us3(16);
-    str ov = "tek atim: yok";
-    if (_trg_once[i] == 1) { ov = "tek atim: var"; }
+    // Etiketler DURUMUN ADI, "alan: değer" değil. "tek atim: yok" 13 karakter
+    // ve yarım sütun (2x ölçekte 136 px) ~11 karakter alıyor — yani kırpılarak
+    // gösteriliyordu ve düğmenin ne dediği okunmuyordu (metin bütçesi testi
+    // yakaladı). Durumu adlandırmak hem sığıyor hem daha açık: "sürekli"
+    // sözcüğü "tek atım değil"den daha çok şey anlatıyor.
+    str ov = "surekli";
+    if (_trg_once[i] == 1) { ov = "tek atim"; }
     if (_g_tog(23020, lx, y, half, _ED_FLD3, ov, _trg_once[i] == 1)) {
         ed_mark3d();
         if (_trg_once[i] == 1) { _trg_once[i] = 0; } else { _trg_once[i] = 1; }
     }
-    str en = "etkin: yok";
-    if (_trg_on[i] == 1) { en = "etkin: var"; }
+    _g_tip_for3(23020, "Tek atim: ilk giristen sonra kendini kapatir");
+    str en = "kapali";
+    if (_trg_on[i] == 1) { en = "etkin"; }
     if (_g_tog(23021, lx + half + _us3(4), y, half, _ED_FLD3, en, _trg_on[i] == 1)) {
         ed_mark3d();
         if (_trg_on[i] == 1) { _trg_on[i] = 0; } else { _trg_on[i] = 1; }
     }
+    _g_tip_for3(23021, "Kapali bolge hic olay uretmez");
     y = y + _ED_FLD3 + _us3(6);
 
     // ---- EYLEM ----
@@ -12065,10 +12258,12 @@ func _ed_zone_panel3(px, y, pw) {
         if (_trg_amt[i] < 0.0) { _trg_amt[i] = 0.0; }
         y = y + _ED_FLD3 + _us3(3);
     }
+    _g_txt3("ok: tasi  R+ok: boyut", lx, _g_ly3(y), inner, _G_DIM3());
+    y = y + _g_lh3();
     // Kanca varsa SÖYLE: kod da bir şey yapıyor ve ikisi birlikte koşuyor.
     // Söylenmezse "eylem yok" yazan bir bölgenin neden iş gördüğü anlaşılmaz.
     if (_trg_hasin[i] == 1) {
-        _g_txt3("+ kodda girince kancasi var", lx, _g_ly3(y), inner, _G_DIM3());
+        _g_txt3("kodda kancasi da var", lx, _g_ly3(y), inner, _G_DIM3());
         y = y + _g_lh3();
     }
     y = y + _us3(5);
