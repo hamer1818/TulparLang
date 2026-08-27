@@ -49,6 +49,15 @@
 // diziye yazılır. Dünya (gökyüzü, yerçekimi, kamera) bölümler arasında
 // PAYLAŞILIR; değişen şey sahnenin içidir.
 //
+// Bir bölümden ÖTEKİNE geçmek için bir bitiş şartı gerekiyor. İki yolu var:
+//   • kural:  "bitince: esya → SONRAKI BOLUM"   (altınlar bitince ilerle)
+//   • bölge:  bir bölge kur, GIRINCE eylemini "sonraki bol" yap (çıkış kapısı)
+// Son bölümde "sonraki bölüm" istemek oyunu KAZANDIRIR, takılmaz.
+//
+// BÖLGELER: sağ tık → "+ bolge". Bölgenin GIRINCE eylemi var: kazan, kaybet,
+// gireni yok et (çukur/lav), hasar ver, skor ekle, sonraki bölüm. Eylem
+// seçilmemiş bir bölge hiçbir şey yapmaz — sahne denetimi bunu söylüyor.
+//
 // Yerleşim:
 //   menü şeridi            Yeni / Aç / Kaydet / F. Kaydet / Geri / İleri / ?
 //   araç çubuğu            araçlar solda, OYNAT-DUR ORTADA, ızgara

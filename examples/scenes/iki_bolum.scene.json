@@ -24,7 +24,7 @@
   "rules": [
     {"on": "hit", "a": "player", "b": "item", "do": "collect", "n": 10},
     {"on": "hit", "a": "enemy", "b": "player", "do": "damage", "n": 12},
-    {"on": "cleared", "tag": "item", "do": "win"}
+    {"on": "cleared", "tag": "item", "do": "next_level"}
   ]
     },
     {

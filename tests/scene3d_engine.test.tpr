@@ -5411,21 +5411,27 @@ test("bos ad kaydi siliyor", "t_ed_rename_to_empty_clears");
 // Eylem döngüsü BÜTÜN eylemleri gezmeli: eksik bir dal, o eylemi editörden
 // erişilemez yapardı (ve kural olmadan sahne bir oyun değil).
 func t_ed_action_cycle_covers_all() {
+    // Adım sayısı SON eylem sabitinden türüyor. Sabit "6" yazmak, yeni bir
+    // eylem eklendiğinde testi bir eksiğini gezer hâle getiriyordu ve o
+    // eyleme düğmeyle hiç ulaşılamadığını göremezdi.
+    int n = ACT_NEXT + 1;
+    array gorulen = [];
+    int k = 0;
+    while (k < n) { push(gorulen, 0); k = k + 1; }
     int a = ACT_COLLECT;
-    int seen = 0;
     int i = 0;
-    while (i < 6) {
+    while (i < n) {
         a = _ed_next_act3(a);
-        if (a == ACT_DAMAGE) { seen = seen + 1; }
-        if (a == ACT_KILL)   { seen = seen + 1; }
-        if (a == ACT_HURT)   { seen = seen + 1; }
-        if (a == ACT_WIN)    { seen = seen + 1; }
-        if (a == ACT_LOSE)   { seen = seen + 1; }
-        if (a == ACT_COLLECT){ seen = seen + 1; }
+        assert(a >= 0 && a < n, "dongu tanimsiz eyleme gitti: " + toString(a));
+        gorulen[a] = 1;
         i = i + 1;
     }
-    assert_eq_int(seen, 6);
-    assert_eq_int(a, ACT_COLLECT);   // 6 adimda basa donmeli
+    k = 0;
+    while (k < n) {
+        assert_eq_int(gorulen[k], 1);
+        k = k + 1;
+    }
+    assert_eq_int(a, ACT_COLLECT);   // n adimda basa donmeli
 }
 
 // Editörden kurulan kurallar diske gidip geri gelmeli — yoksa editörde
@@ -5783,6 +5789,331 @@ func t_storage_export_writes_file_on_desktop() {
 // yeniden okuyordu, "Farklı Kaydet" hiç yoktu. Aşağıdaki testler pencerenin
 // SAF kararlarını (yol ayrıştırma, ad normalleştirme, geçmiş kuralı) ve
 // diske dokunan iki etkisini ayrı ayrı sınıyor.
+
+// "Sonraki bölüm" KURAL eylemi. Bu eylem olmadan çok bölümlü bir VERİ
+// sahnesinin 2. bölümüne oynayarak ULAŞILAMIYORDU: `next_level3d()`'i
+// çağıran tek şey koddu, yani editörün "+ BOLUM EKLE" düğmesiyle kurulan
+// bölümler ölü doğuyordu. (`examples/scenes/iki_bolum.scene.json` tam olarak
+// bu durumdaydı — 1. bölüm "altınlar bitince KAZAN" diyordu ve oyun orada
+// bitiyordu.)
+func t_cleared_rule_next_level_advances() {
+    sahne_yukle3d(_lvl_kur2());
+    assert_eq_int(bolum_sayisi3d(), 2);
+    assert_eq_int(level_now3d(), 1);
+    // 1. bölümde bir eşya ve "bitince → sonraki bölüm".
+    int it = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    cleared_rule3d(TAG_ITEM, ACT_NEXT);
+    kill3d(it);
+    _s3_rules();
+    _s3_apply_level();
+    assert_eq_int(level_now3d(), 2);
+    assert(won3d() == false, "sonraki bolum varken oyun BITMEMELI");
+}
+
+// SON bölümde "sonraki" takılmamalı: kayıtlı bölüm kalmayınca kazanılır.
+func t_next_level_on_last_level_wins() {
+    scene3d_reset(); no_ground3d();
+    int it = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    cleared_rule3d(TAG_ITEM, ACT_NEXT);
+    kill3d(it);
+    _s3_rules();
+    _s3_apply_level();
+    assert(won3d(), "son bolumde sonraki istemek kazandirmali");
+}
+
+func t_next_level_action_roundtrips() {
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    spawn3(3.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    cleared_rule3d(TAG_ITEM, ACT_NEXT);
+    str js = sahne_json3d();
+    assert(contains(js, "\"do\": \"next_level\""),
+           "eylem dosya anahtariyla yazilmali");
+    scene3d_reset();
+    sahne_yukle3d(js);
+    assert_eq_int(kural_sayisi3d(), 1);
+    assert_eq_int(_rl3[0].act, ACT_NEXT);
+    // Anahtar gidiş-dönüşü iki yönlü olmalı.
+    assert_eq_int(_rl_act3(_rl_act_nm3(ACT_NEXT)), ACT_NEXT);
+}
+
+// Denetim "sonraki bölüm"ü de BİTİŞ sayar. Saymasaydı, doğru kurulmuş çok
+// bölümlü bir sahnenin her bölümü "kazanma sarti yok" uyarısı verirdi —
+// yani denetim doğru sahneye yalan söylerdi ve öğrenilen şey "uyarıları
+// yok say" olurdu.
+func t_check_accepts_next_level_as_ending() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    hareket_davranis3d(p, 8.0, 10.0);
+    spawn3(3.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    hit_rule3d(TAG_PLAYER, TAG_ITEM, ACT_COLLECT, 10.0);
+    scene_check3d();
+    assert(_t_chk_has3("kazanma sarti yok"), "bitissiz sahne soylenmeli");
+    cleared_rule3d(TAG_ITEM, ACT_NEXT);
+    scene_check3d();
+    assert(_t_chk_has3("kazanma sarti yok") == false,
+           "sonraki bolum bir bitis sartidir");
+}
+
+// BÖLGE eylemi de bitiş sayılmalı: "çıkış kapısına gel" tam bir bitiş şartı
+// ve yalnız kurallara bakan bir denetim onu görmezdi.
+func t_check_accepts_zone_ending() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    hareket_davranis3d(p, 8.0, 10.0);
+    scene_check3d();
+    assert(_t_chk_has3("kazanma sarti yok"), "bitissiz sahne soylenmeli");
+    int z = trigger3d(0.0, 20.0, 0.0, 2.0, 2.0, 2.0, TAG_PLAYER);
+    trigger_action3d(z, ZACT_WIN, 0.0);
+    scene_check3d();
+    assert(_t_chk_has3("kazanma sarti yok") == false,
+           "kazandiran bolge bir bitis sartidir");
+}
+
+// ===========================================================================
+// BÖLGE EYLEMLERİ — "buraya gelince şu olsun"
+// ===========================================================================
+// Bölgeler yalnız KANCAYLA (kod) iş görüyordu. Yani editörden "+ bölge"
+// eklemek hiçbir şey yapmayan bir kutu koymaktı: konumu, boyu, etiketi,
+// "tek atım"ı ayarlanabiliyordu ve hiçbiri bir işe yaramıyordu, çünkü sahne
+// dosyasında "buraya girince şu olsun" diyecek bir yer yoktu.
+
+// Bölge taramasını bir kare sürmek için: fizik + bölgeler.
+func _t_zone_step3(dt) {
+    _s3_physics(dt);
+    _s3_triggers();
+}
+
+func t_zone_action_win_fires_on_enter() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0, 4.0, 4.0, 4.0, TAG_PLAYER);
+    trigger_action3d(z, ZACT_WIN, 0.0);
+    assert(won3d() == false, "baslangicta kazanilmis olmamali");
+    _t_zone_step3(0.016667);
+    assert(won3d(), "bolgeye girince kazanilmali");
+}
+
+func t_zone_action_kill_takes_the_entrant() {
+    // ÇUKUR/LAV: kuralların "öldür"ü ÖTEKİNİ öldürüyor ve bölgede öteki YOK.
+    // Bölge eyleminin GİRENİ öldürmesi bu yüzden ayrı bir dağıtıcıda.
+    scene3d_reset(); no_ground3d();
+    int e = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    // Oyuncu da olsun ki bölge YANLIŞ gövdeyi öldürürse görünsün.
+    int p = spawn3(20.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0, 4.0, 4.0, 4.0, TAG_ENEMY);
+    trigger_action3d(z, ZACT_KILL, 0.0);
+    _t_zone_step3(0.016667);
+    assert(alive3(e) == false, "bolgeye giren olmeli");
+    assert(alive3(p), "bolgenin izlemedigi govde etkilenmemeli");
+}
+
+func t_zone_action_damage_and_score_use_amount() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    can3d(p, 100);
+    int z = trigger3d(0.0, 1.0, 0.0, 4.0, 4.0, 4.0, TAG_PLAYER);
+    trigger_action3d(z, ZACT_DAMAGE, 30.0);
+    _t_zone_step3(0.016667);
+    assert_eq_int(_e3[_slot_of3(p)].hp, 70);
+
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z2 = trigger3d(0.0, 1.0, 0.0, 4.0, 4.0, 4.0, TAG_PLAYER);
+    trigger_action3d(z2, ZACT_SCORE, 25.0);
+    assert_eq_int(score3d(), 0);
+    _t_zone_step3(0.016667);
+    assert_eq_int(score3d(), 25);
+}
+
+// ÇIKIŞ KAPISI: platformcunun asıl ihtiyacı. Bu eylem olmadan bir bölümü
+// bitirmenin tek yolu "şu etiketten hiç kalmasın" kuralıydı.
+func t_zone_action_next_level_advances() {
+    sahne_yukle3d(_lvl_kur2());
+    assert_eq_int(level_now3d(), 1);
+    // 1. bölümün gövdesinin üstüne bir çıkış bölgesi.
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0, 6.0, 6.0, 6.0, TAG_PLAYER);
+    trigger_action3d(z, ZACT_NEXT, 0.0);
+    _t_zone_step3(0.016667);
+    // Bölüm geçişi ERTELENİR (kare sonunda uygulanır) — bu doğru davranış.
+    _s3_apply_level();
+    assert_eq_int(level_now3d(), 2);
+}
+
+// Eylem YALNIZ GİRİŞTE atmalı. "İçindeyken" de atsaydı bir "kazan" bölgesi
+// saniyede altmış kez kazandırırdı; "skor ekle" ise durduğun yerde sayardı.
+func t_zone_action_fires_once_per_entry() {
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0, 6.0, 6.0, 6.0, TAG_PLAYER);
+    trigger_action3d(z, ZACT_SCORE, 5.0);
+    int k = 0;
+    while (k < 30) { _t_zone_step3(0.016667); k = k + 1; }
+    assert_eq_int(score3d(), 5);
+}
+
+// Kod kancası ve veri eylemi BİRLİKTE koşmalı, ve kanca gövdeyi CANLI
+// görmeli: veri eylemi önce çalışsaydı "gireni yok et" kancanın eline ölü
+// bir handle bırakırdı.
+int _t_zhook_alive3 = 0 - 1;
+func _t_zhook3() { _t_zhook_alive3 = 0; if (alive3(ben3())) { _t_zhook_alive3 = 1; } }
+
+func t_zone_hook_runs_before_data_action() {
+    scene3d_reset(); no_ground3d();
+    int e = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    int z = trigger3d(0.0, 1.0, 0.0, 4.0, 4.0, 4.0, TAG_ENEMY);
+    girince3d(z, "_t_zhook3");
+    trigger_action3d(z, ZACT_KILL, 0.0);
+    _t_zhook_alive3 = 0 - 1;
+    _t_zone_step3(0.016667);
+    assert_eq_int(_t_zhook_alive3, 1);
+    assert(alive3(e) == false, "veri eylemi yine de calismali");
+}
+
+func t_zone_action_roundtrips() {
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z1 = trigger3d(2.0, 1.0, 3.0, 4.0, 4.0, 4.0, TAG_PLAYER);
+    trigger_action3d(z1, ZACT_DAMAGE, 17.0);
+    int z2 = trigger_sphere3d(0.0 - 5.0, 1.0, 0.0, 3.0, TAG_PLAYER);
+    trigger_action3d(z2, ZACT_NEXT, 0.0);
+    int z3 = trigger3d(8.0, 1.0, 0.0, 2.0, 2.0, 2.0, TAG_PLAYER);   // eylemsiz
+
+    str js = sahne_json3d();
+    scene3d_reset();
+    sahne_yukle3d(js);
+    assert_eq_int(length(_trg_x), 3);
+    assert_eq_int(trigger_action_of3d(0), ZACT_DAMAGE);
+    assert(abs_f3(trigger_amount_of3d(0) - 17.0) < 0.001, "miktar tasinmali");
+    assert_eq_int(trigger_action_of3d(1), ZACT_NEXT);
+    assert_eq_int(trigger_action_of3d(2), ZACT_NONE);
+}
+
+// Eylemsiz bölge dosyayı ŞİŞİRMEMELİ: kancayla çalışan eski sahneler
+// kaydedilince değişmemeli, git farkı okunur kalmalı.
+func t_zone_without_action_writes_no_key() {
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    trigger3d(0.0, 1.0, 0.0, 4.0, 4.0, 4.0, TAG_PLAYER);
+    str js = sahne_json3d();
+    assert(contains(js, "\"zones\""), "bolge yazilmali");
+    assert(contains(js, "\"do\"") == false, "eylemsiz bolge do yazmamali");
+    assert(contains(js, "\"amount\"") == false, "eylemsiz bolge amount yazmamali");
+    // Miktarsız eylem de amount yazmamalı.
+    trigger_action3d(0, ZACT_WIN, 0.0);
+    str js2 = sahne_json3d();
+    assert(contains(js2, "\"do\": \"win\""), "eylem yazilmali");
+    assert(contains(js2, "\"amount\"") == false,
+           "miktar kullanmayan eylem amount yazmamali");
+}
+
+// Bölge SİLİNİNCE eylemler kaymalı. Paralel dizilerde en sık yapılan hata bu
+// ve tümüyle sessiz: silinen kutudan sonraki her bölge bir öncekinin eylemini
+// devralır, yani "çıkış kapısı" sildiğin kutunun hasarını uygulamaya başlar.
+func t_zone_delete_shifts_actions() {
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z0 = trigger3d(0.0, 20.0, 0.0, 1.0, 1.0, 1.0, TAG_PLAYER);
+    int z1 = trigger3d(4.0, 20.0, 0.0, 1.0, 1.0, 1.0, TAG_PLAYER);
+    int z2 = trigger3d(8.0, 20.0, 0.0, 1.0, 1.0, 1.0, TAG_PLAYER);
+    trigger_action3d(z0, ZACT_DAMAGE, 11.0);
+    trigger_action3d(z1, ZACT_SCORE, 22.0);
+    trigger_action3d(z2, ZACT_NEXT, 0.0);
+    _ed_zone_delete3(0);
+    assert_eq_int(length(_trg_x), 2);
+    assert_eq_int(trigger_action_of3d(0), ZACT_SCORE);
+    assert(abs_f3(trigger_amount_of3d(0) - 22.0) < 0.001, "miktar da kaymali");
+    assert_eq_int(trigger_action_of3d(1), ZACT_NEXT);
+}
+
+// Eylem döngüsü KAPALI HALKA: son eylemden sonra başa dönmeli, yoksa düğme
+// takılır ve önceki eylemlere dönülemez.
+func t_zone_action_cycle_is_closed() {
+    int a = ZACT_NONE;
+    int gorulen = 0;
+    int k = 0;
+    while (k < 7) {
+        gorulen = gorulen + 1;
+        a = _zact_next3(a);
+        k = k + 1;
+    }
+    assert_eq_int(a, ZACT_NONE);
+    assert_eq_int(gorulen, 7);
+    // Her eylemin AYRI bir adı olmalı — `if` zincirinden bir dal düşerse
+    // iki eylem aynı görünür ve düğme hiçbir şey yapmıyor sanılır.
+    int i = 0;
+    while (i <= ZACT_NEXT) {
+        int j = i + 1;
+        while (j <= ZACT_NEXT) {
+            assert(_zact_nm3(i) != _zact_nm3(j),
+                   "iki eylem ayni adi tasiyor: " + _zact_nm3(i));
+            assert(_zact_key3(i) != _zact_key3(j),
+                   "iki eylem ayni dosya anahtarini tasiyor: " + _zact_key3(i));
+            j = j + 1;
+        }
+        // Dosya anahtarı gidiş-dönüşten sağ çıkmalı.
+        assert_eq_int(_zact_of3(_zact_key3(i)), i);
+        // Ad panele sığmalı (yarım sütun ~11 karakter).
+        assert(length(_zact_nm3(i)) <= 11, "eylem adi sigmali: " + _zact_nm3(i));
+        i = i + 1;
+    }
+}
+
+// Miktar alanı YALNIZ kullanan eylemlerde görünmeli: kullanılmayan bir alan
+// "buraya ne yazsam?" diye düşündürüp hiçbir şey yapmıyor.
+func t_zone_amount_shown_only_where_used() {
+    assert(_zact_uses_amount3(ZACT_DAMAGE), "hasar miktar kullanir");
+    assert(_zact_uses_amount3(ZACT_SCORE), "skor miktar kullanir");
+    assert(_zact_uses_amount3(ZACT_NONE) == false, "eylemsiz miktar istemez");
+    assert(_zact_uses_amount3(ZACT_WIN) == false, "kazan miktar istemez");
+    assert(_zact_uses_amount3(ZACT_LOSE) == false, "kaybet miktar istemez");
+    assert(_zact_uses_amount3(ZACT_KILL) == false, "oldur miktar istemez");
+    assert(_zact_uses_amount3(ZACT_NEXT) == false, "sonraki bolum miktar istemez");
+    // Etiket yalnız miktar kullanan eylemlerde dolu.
+    assert(length(_zact_amount_lbl3(ZACT_DAMAGE)) > 0, "hasar etiketi olmali");
+    assert(length(_zact_amount_lbl3(ZACT_SCORE)) > 0, "skor etiketi olmali");
+    assert(_zact_amount_lbl3(ZACT_WIN) == "", "kazan icin etiket olmamali");
+}
+
+// Denetim, eklenip UNUTULAN bölgeyi söylemeli. Bölgeler ÇİZİLMİYOR: ölü bir
+// bölge ekranda hiç görünmez, hata vermez, sahneyi bozmaz — sadece hiçbir şey
+// yapmaz. Söylenmezse fark edilmesinin bir yolu yok.
+func t_check_flags_dead_zone() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    hareket_davranis3d(p, 8.0, 10.0);
+    trigger3d(0.0, 20.0, 0.0, 2.0, 2.0, 2.0, TAG_PLAYER);
+    scene_check3d();
+    assert(_t_chk_has3("bolge hicbir sey yapmiyor"), "olu bolge soylenmeli");
+    // Eylem verilince uyari gitmeli.
+    trigger_action3d(0, ZACT_WIN, 0.0);
+    scene_check3d();
+    assert(_t_chk_has3("bolge hicbir sey yapmiyor") == false,
+           "eylemi olan bolge olu sayilmamali");
+    // Kod kancasi da olu sayilmamali.
+    trigger_action3d(0, ZACT_NONE, 0.0);
+    girince3d(0, "_t_zhook3");
+    scene_check3d();
+    assert(_t_chk_has3("bolge hicbir sey yapmiyor") == false,
+           "kancasi olan bolge olu sayilmamali");
+}
+
+func t_check_flags_zone_with_absent_tag() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    hareket_davranis3d(p, 8.0, 10.0);
+    int z = trigger3d(0.0, 20.0, 0.0, 2.0, 2.0, 2.0, TAG_ENEMY);
+    trigger_action3d(z, ZACT_WIN, 0.0);
+    scene_check3d();
+    assert(_t_chk_has3("izledigi etiket sahnede yok"),
+           "etiketi olmayan bolge soylenmeli");
+    // Etiket sahnede varsa uyari olmamali.
+    spawn3(9.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    scene_check3d();
+    assert(_t_chk_has3("izledigi etiket sahnede yok") == false,
+           "etiket varken uyari olmamali");
+}
 
 // ===========================================================================
 // KISAYOL YARDIMI
@@ -7609,6 +7940,24 @@ test("tek bolumlu sahne degismiyor", "t_single_level_scene_unchanged");
 test("yeni sahne eski bolumleri birakmiyor", "t_new_scene_drops_old_levels");
 test("sablon eski bolumleri birakmiyor", "t_template_drops_old_levels");
 test("tek bolumlu dosya cok bolumlunun ustune temiz aciliyor", "t_loading_single_level_over_multi_clears");
+test("bitince kurali sonraki bolume geciriyor", "t_cleared_rule_next_level_advances");
+test("son bolumde sonraki istemek kazandiriyor", "t_next_level_on_last_level_wins");
+test("sonraki bolum eylemi gidis-donusten sag cikiyor", "t_next_level_action_roundtrips");
+test("denetim sonraki bolumu bitis sayiyor", "t_check_accepts_next_level_as_ending");
+test("denetim bolge bitisini de sayiyor", "t_check_accepts_zone_ending");
+test("bolge eylemi girince kazandiriyor", "t_zone_action_win_fires_on_enter");
+test("bolge eylemi GIRENI olduruyor", "t_zone_action_kill_takes_the_entrant");
+test("hasar ve skor miktari kullaniyor", "t_zone_action_damage_and_score_use_amount");
+test("cikis bolgesi sonraki bolume geciriyor", "t_zone_action_next_level_advances");
+test("bolge eylemi giriste bir kez atiyor", "t_zone_action_fires_once_per_entry");
+test("kod kancasi veri eyleminden once kosuyor", "t_zone_hook_runs_before_data_action");
+test("bolge eylemi gidis-donusten sag cikiyor", "t_zone_action_roundtrips");
+test("eylemsiz bolge anahtar yazmiyor", "t_zone_without_action_writes_no_key");
+test("bolge silme eylemleri kaydiriyor", "t_zone_delete_shifts_actions");
+test("bolge eylem dongusu kapali halka", "t_zone_action_cycle_is_closed");
+test("bolge miktari yalniz kullanildigi yerde", "t_zone_amount_shown_only_where_used");
+test("denetim olu bolgeyi soyluyor", "t_check_flags_dead_zone");
+test("denetim etiketsiz bolgeyi soyluyor", "t_check_flags_zone_with_absent_tag");
 test("kisayol satirlari birbirinin ayni degil", "t_help_rows_are_all_distinct");
 test("kisayol sutunlari icerige gore sigiyor", "t_help_key_column_fits_longest_key");
 test("kisayol ortusu sigiyor ve kayiyor", "t_help_overlay_fits_and_scrolls");
@@ -7952,7 +8301,12 @@ func t_rule_summary_states_direction() {
 
 func t_rule_summary_covers_every_action() {
     // Her eylem AYRI bir cumle uretmeli; ikisi ayni cikarsa panel yaniltir.
-    array acts = [ACT_COLLECT, ACT_DAMAGE, ACT_KILL, ACT_HURT, ACT_WIN, ACT_LOSE];
+    // Liste SABİT SAYILARDAN türüyor: elle yazılmış bir dizi, yeni bir eylem
+    // eklenince onu sessizce atlar ve test "hepsi" demeyi bırakır (ACT_NEXT
+    // eklendiğinde tam olarak bu oldu — dört test altı eylem sayıyordu).
+    array acts = [];
+    int _ai = 0;
+    while (_ai <= ACT_NEXT) { push(acts, _ai); _ai = _ai + 1; }
     array seen = [];
     int i = 0;
     while (i < length(acts)) {
@@ -7966,29 +8320,51 @@ func t_rule_summary_covers_every_action() {
         push(seen, o);
         i = i + 1;
     }
-    assert_eq_int(length(seen), 6);
+    assert_eq_int(length(seen), length(acts));
 }
 
 // "bitince" kuralinda dagitici `me`/`other` yerine -1 geciyor: topla, oldur
 // ve hasar SESSIZ birer bos islem. Dugme artik onlari dolasmiyor.
 func t_cleared_rule_action_cycle_only_terminal() {
+    int n = ACT_NEXT + 1;
+    // 1) Bitince döngüsü İŞ GÖRMEYEN eyleme uğramamalı.
+    array gor = [];
+    int k = 0;
+    while (k < n) { push(gor, 0); k = k + 1; }
     int a = ACT_WIN;
     int i = 0;
-    while (i < 6) {
+    while (i < n * 2) {
         a = _ed_next_act_for3(RULE_CLEARED, a);
         assert(_ed_act_works_cleared3(a), "bitince dongusu is gormeyen eyleme ugramamali");
+        gor[a] = 1;
         i = i + 1;
     }
-    // Carpisma dongusu ise HEPSINI dolasmali — orada hepsi is goruyor.
+    // 2) ...ama iş gören HER eyleme uğramalı. Yalnız "uğramasın" demek, iki
+    // eylem arasında takılıp üçüncüsüne hiç gitmeyen bir döngüden kaçardı —
+    // ve ACT_NEXT eklenince kullanıcı ona düğmeyle hiç ulaşamazdı.
+    k = 0;
+    while (k < n) {
+        if (_ed_act_works_cleared3(k)) {
+            assert_eq_int(gor[k], 1);
+        }
+        k = k + 1;
+    }
+    // 3) Çarpışma döngüsü HEPSİNİ dolaşmalı — orada hepsi iş görüyor.
+    array gor2 = [];
+    k = 0;
+    while (k < n) { push(gor2, 0); k = k + 1; }
     int b = ACT_COLLECT;
-    int gorulen = 0;
     i = 0;
-    while (i < 6) {
+    while (i < n) {
         b = _ed_next_act_for3(RULE_HIT, b);
-        if (!_ed_act_works_cleared3(b)) { gorulen = gorulen + 1; }
+        gor2[b] = 1;
         i = i + 1;
     }
-    assert(gorulen >= 4, "carpisma dongusu tum eylemlere ugramali");
+    k = 0;
+    while (k < n) {
+        assert_eq_int(gor2[k], 1);
+        k = k + 1;
+    }
 }
 
 // Sayi alani yalnizca eylem onu KULLANIYORSA gosterilmeli. Dagiticinin
@@ -8000,13 +8376,19 @@ func t_amount_shown_only_where_used() {
     assert(!_ed_act_uses_n3(ACT_KILL), "oldur miktara bakmaz");
     assert(!_ed_act_uses_n3(ACT_WIN), "kazan miktara bakmaz");
     assert(!_ed_act_uses_n3(ACT_LOSE), "kaybet miktara bakmaz");
+    assert(!_ed_act_uses_n3(ACT_NEXT), "sonraki bolum miktara bakmaz");
     // Etiket de eyleme gore degismeli: skor ile hasar ayni sey degil.
     assert_eq_str(_ed_act_n_lbl3(ACT_COLLECT), "skor");
     assert_eq_str(_ed_act_n_lbl3(ACT_DAMAGE), "hasar");
 }
 
 func t_act_names_are_distinct_and_directional() {
-    array acts = [ACT_COLLECT, ACT_DAMAGE, ACT_KILL, ACT_HURT, ACT_WIN, ACT_LOSE];
+    // Liste SABİT SAYILARDAN türüyor: elle yazılmış bir dizi, yeni bir eylem
+    // eklenince onu sessizce atlar ve test "hepsi" demeyi bırakır (ACT_NEXT
+    // eklendiğinde tam olarak bu oldu — dört test altı eylem sayıyordu).
+    array acts = [];
+    int _ai = 0;
+    while (_ai <= ACT_NEXT) { push(acts, _ai); _ai = _ai + 1; }
     array nms = [];
     int i = 0;
     while (i < length(acts)) {
@@ -8104,7 +8486,12 @@ func t_light_color_names_fit_button() {
 }
 
 func t_action_names_fit_field_budget() {
-    array acts = [ACT_COLLECT, ACT_DAMAGE, ACT_KILL, ACT_HURT, ACT_WIN, ACT_LOSE];
+    // Liste SABİT SAYILARDAN türüyor: elle yazılmış bir dizi, yeni bir eylem
+    // eklenince onu sessizce atlar ve test "hepsi" demeyi bırakır (ACT_NEXT
+    // eklendiğinde tam olarak bu oldu — dört test altı eylem sayıyordu).
+    array acts = [];
+    int _ai = 0;
+    while (_ai <= ACT_NEXT) { push(acts, _ai); _ai = _ai + 1; }
     int i = 0;
     while (i < length(acts)) {
         str n = _ed_act_nm3(acts[i]);
@@ -8116,7 +8503,12 @@ func t_action_names_fit_field_budget() {
 // Özet satırı panelin TAM genişliğini kullanıyor (280 px) — bütçe 24 karakter.
 // Etiket adı da içine giriyor, en uzunu "player".
 func t_rule_summary_fits_panel_budget() {
-    array acts = [ACT_COLLECT, ACT_DAMAGE, ACT_KILL, ACT_HURT, ACT_WIN, ACT_LOSE];
+    // Liste SABİT SAYILARDAN türüyor: elle yazılmış bir dizi, yeni bir eylem
+    // eklenince onu sessizce atlar ve test "hepsi" demeyi bırakır (ACT_NEXT
+    // eklendiğinde tam olarak bu oldu — dört test altı eylem sayıyordu).
+    array acts = [];
+    int _ai = 0;
+    while (_ai <= ACT_NEXT) { push(acts, _ai); _ai = _ai + 1; }
     int i = 0;
     while (i < length(acts)) {
         str o1 = _ed_rule_ozet3(RULE_HIT, TAG_PLAYER, TAG_PLAYER, acts[i], 100.0);

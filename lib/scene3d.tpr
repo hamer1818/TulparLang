@@ -4192,6 +4192,28 @@ array _trg_fin = [];   array _trg_hasin = [];    // girince
 array _trg_fout = [];  array _trg_hasout = [];   // çıkınca
 array _trg_fstay = []; array _trg_hasstay = [];  // içindeyken (her kare)
 
+// ---- Bölge EYLEMİ (veriyle) -------------------------------------------------
+// Bölgeler yalnız KANCAYLA iş görüyordu ve kancalar KOD. Yani editörden
+// "+ bölge" eklemek, hiçbir şey yapmayan bir kutu koymaktı: konumunu, boyunu,
+// etiketini ayarlayabiliyordun ama sahne dosyasında "buraya girince şu olsun"
+// diyecek bir yer yoktu. Veriyle kurulmuş bir oyunda bölgeler tümüyle ölüydü.
+//
+// Eylem listesi ÇARPIŞMA KURALLARININKİNDEN AYRI ve bilerek: kural eylemleri
+// bir ÇİFT üzerinden konuşuyor ("ötekini öldür"), bölgede öteki YOK — giren
+// gövde var. ACT_* sabitlerini burada kullanmak, "topla"nın sessiz boş işlem
+// olduğu bir liste üretirdi (bitince kurallarında tam olarak bu oldu ve
+// denetim hâlâ o mirası uyarıyor).
+int ZACT_NONE   = 0;   // veri eylemi yok — bölge yalnız kancayla çalışır
+int ZACT_WIN    = 1;   // kazan
+int ZACT_LOSE   = 2;   // kaybet
+int ZACT_KILL   = 3;   // GİRENİ öldür (çukur, lav, sınır dışı)
+int ZACT_DAMAGE = 4;   // girene hasar (miktar)
+int ZACT_SCORE  = 5;   // skor ekle (miktar)
+int ZACT_NEXT   = 6;   // sonraki bölüme geç (çıkış kapısı)
+
+array _trg_act = [];   // ZACT_*
+array _trg_amt = [];   // eylemin miktarı (hasar / skor)
+
 array _trg_in_t = [];     // üyelik: bölge indeksi
 array _trg_in_e = [];     // üyelik: içerideki entity handle
 int   _trg_cur3 = 0 - 1;  // kanca içinde: hangi bölge tetikledi
@@ -4208,6 +4230,8 @@ func _trg_new3(shape, x, y, z, sx, sy, sz, r, tag): int {
     push(_trg_fin, 0);   push(_trg_hasin, 0);
     push(_trg_fout, 0);  push(_trg_hasout, 0);
     push(_trg_fstay, 0); push(_trg_hasstay, 0);
+    push(_trg_act, ZACT_NONE);
+    push(_trg_amt, 0.0);
     return length(_trg_shape) - 1;
 }
 
@@ -4226,6 +4250,70 @@ func _trg_valid3(t): bool { return t >= 0 && t < length(_trg_shape); }
 func on_enter3d(t, fn)  { if (_trg_valid3(t)) { _trg_fin[t] = fn;   _trg_hasin[t] = 1; } }
 func on_exit3d(t, fn)   { if (_trg_valid3(t)) { _trg_fout[t] = fn;  _trg_hasout[t] = 1; } }
 func on_stay3d(t, fn)   { if (_trg_valid3(t)) { _trg_fstay[t] = fn; _trg_hasstay[t] = 1; } }
+
+// Bölgenin VERİ eylemi. Sahne dosyasından geliyor, kod istemiyor.
+func trigger_action3d(t, act, amount) {
+    if (!_trg_valid3(t)) { return; }
+    _trg_act[t] = act;
+    _trg_amt[t] = amount * 1.0;
+}
+func bolge_eylem3d(t, eylem, miktar) { trigger_action3d(t, eylem, miktar); }
+func trigger_action_of3d(t): int {
+    if (!_trg_valid3(t)) { return ZACT_NONE; }
+    return _trg_act[t];
+}
+func trigger_amount_of3d(t): float {
+    if (!_trg_valid3(t)) { return 0.0; }
+    return _trg_amt[t];
+}
+
+// Eylemin MİKTARI var mı. Kural panelindeki aynı ayrım: kullanılmayan bir
+// alanı göstermek, "buraya ne yazsam?" diye düşündürüp hiçbir şey yapmıyor.
+func _zact_uses_amount3(a): bool {
+    return a == ZACT_DAMAGE || a == ZACT_SCORE;
+}
+
+// Eylem adı. Panelde YARIM sütuna sığması gerekiyor (~11 karakter).
+func _zact_nm3(a): str {
+    if (a == ZACT_WIN)    { return "kazan"; }
+    if (a == ZACT_LOSE)   { return "kaybet"; }
+    if (a == ZACT_KILL)   { return "gireni yok"; }
+    if (a == ZACT_DAMAGE) { return "hasar ver"; }
+    if (a == ZACT_SCORE)  { return "skor ekle"; }
+    if (a == ZACT_NEXT)   { return "sonraki bol"; }
+    return "eylem yok";
+}
+
+// Miktar alanının etiketi — hangi eylemin neyi saydığını alan BAŞLIĞI söylüyor.
+func _zact_amount_lbl3(a): str {
+    if (a == ZACT_DAMAGE) { return "hasar"; }
+    if (a == ZACT_SCORE)  { return "skor"; }
+    return "";
+}
+
+// Eylem döngüsü KAPALI HALKA: son eylemden sonra başa dönüyor, yoksa düğme
+// bir yerde takılır ve önceki eylemlere geri dönülemezdi.
+func _zact_next3(a): int {
+    if (a >= ZACT_NEXT) { return ZACT_NONE; }
+    return a + 1;
+}
+
+// Bölge eylemini UYGULA. Giren gövde `h`; "öteki" yok.
+//
+// Kural dağıtıcısını (`_rl_apply3`) çağırmıyor ve çağırmamalı: o dağıtıcı
+// çiftle konuşuyor ve buradaki her eylemin karşılığı orada yok (skor ekle,
+// sonraki bölüm). Ortak kod uğruna zorlamak, yarısı sessizce boş işlem olan
+// bir liste üretirdi.
+func _trg_apply3(t, h) {
+    int a = _trg_act[t];
+    if (a == ZACT_NONE) { return; }
+    if (a == ZACT_WIN)    { win3d(); return; }
+    if (a == ZACT_LOSE)   { game_over3d(); return; }
+    if (a == ZACT_KILL)   { kill3d(h); return; }
+    if (a == ZACT_DAMAGE) { damage3d(h, toInt(_trg_amt[t])); return; }
+    if (a == ZACT_SCORE)  { score3d_add(toInt(_trg_amt[t])); return; }
+    if (a == ZACT_NEXT)   { next_level3d(); return; }
+}
 
 // Tek atımlık bölge: ilk girişten sonra kendini kapatır. Kontrol noktası,
 // "bir kere anlatılan" mesaj, tek kullanımlık tuzak. Kapandığı için ÇIKIŞ
@@ -4354,6 +4442,18 @@ func _s3_triggers() {
                         _trg_fire3(t, h, _trg_fstay[t], _trg_hasstay[t]);
                     } else {
                         _trg_fire3(t, h, _trg_fin[t], _trg_hasin[t]);
+                        // VERİ eylemi kancadan SONRA: kanca yazarın kendi
+                        // kodu ve gövdeyi CANLI görmeli. Önce çalışsaydı
+                        // "gireni yok et" eylemi, kancanın eline ölü bir
+                        // handle bırakırdı. Tersi güvenli — `kill3d`/
+                        // `damage3d` ölü handle'da sessizce hiçbir şey
+                        // yapmıyor.
+                        //
+                        // Yalnız GİRİŞTE: "içindeyken" her kare atıyor ve
+                        // orada bir "kazan" eylemi saniyede altmış kez
+                        // kazandırırdı. Tekrarlanabilir hasar isteyen
+                        // "tek atım"ı kapalı bırakıp bölgeden çıkıp girer.
+                        _trg_apply3(t, h);
                         // Tek atım: girişi işledikten SONRA kapan, yoksa
                         // kancanın kendisi hiç çalışmazdı. Kapatma tek yoldan
                         // (trigger_on3d) geçiyor ki "kapalı bölge" her yerde
@@ -4412,6 +4512,7 @@ func _trg_clear3() {
     _trg_fin = []; _trg_hasin = [];
     _trg_fout = []; _trg_hasout = [];
     _trg_fstay = []; _trg_hasstay = [];
+    _trg_act = []; _trg_amt = [];
     _trg_in_t = []; _trg_in_e = [];
     _trg_cur3 = 0 - 1;
 }
@@ -6277,6 +6378,32 @@ func _sc_load_zone3(z) {
     }
     if (_sc_has3(z, "once")) { trigger_once3d(id, _sc_bool3(z, "once", 0)); }
     if (_sc_has3(z, "on"))   { trigger_on3d(id, _sc_bool3(z, "on", 1)); }
+    if (_sc_has3(z, "do")) {
+        trigger_action3d(id, _zact_of3(_sc_s3(z, "do", "none")),
+                         _sc_f3(z, "amount", 0.0));
+    }
+}
+
+// Eylem ↔ dosya anahtarı. Biçimde SAYI değil AD duruyor — ZACT_KILL'in 3
+// olması bir uygulama ayrıntısı ve elle düzenlenen bir sahne dosyasında
+// "do": 3 hiçbir şey anlatmazdı. (Kural eylemleri de aynı sözleşmede.)
+func _zact_key3(a): str {
+    if (a == ZACT_WIN)    { return "win"; }
+    if (a == ZACT_LOSE)   { return "lose"; }
+    if (a == ZACT_KILL)   { return "kill"; }
+    if (a == ZACT_DAMAGE) { return "damage"; }
+    if (a == ZACT_SCORE)  { return "score"; }
+    if (a == ZACT_NEXT)   { return "next_level"; }
+    return "none";
+}
+func _zact_of3(k): int {
+    if (k == "win")        { return ZACT_WIN; }
+    if (k == "lose")       { return ZACT_LOSE; }
+    if (k == "kill")       { return ZACT_KILL; }
+    if (k == "damage")     { return ZACT_DAMAGE; }
+    if (k == "score")      { return ZACT_SCORE; }
+    if (k == "next_level") { return ZACT_NEXT; }
+    return ZACT_NONE;
 }
 
 // Bölgeler → JSON dizisi.
@@ -6300,6 +6427,14 @@ func _sc_zones_js3(): str {
             ", \"z\": " + _sc_num3(_trg_z[i]);
         if (_trg_once[i] == 1) { o = o + ", \"once\": true"; }
         if (_trg_on[i] == 0)   { o = o + ", \"on\": false"; }
+        // Eylem yalnız VARSA yazılıyor: eylemsiz bölgeler (kancayla çalışan
+        // eski sahneler) dosyada değişmiyor, git farkı okunur kalıyor.
+        if (_trg_act[i] != ZACT_NONE) {
+            o = o + ", \"do\": \"" + _zact_key3(_trg_act[i]) + "\"";
+            if (_zact_uses_amount3(_trg_act[i])) {
+                o = o + ", \"amount\": " + _sc_num3(_trg_amt[i]);
+            }
+        }
         o = o + "}";
         i = i + 1;
     }
@@ -7106,12 +7241,23 @@ func scene_check3d(): int {
         _chk_add3("oyuncu yok (oyuncu etiketli varlik ekle)");
     }
 
-    // Kazanma şartı: ACT_WIN eylemi olan bir kural.
+    // Bitiş şartı: KAZAN ya da SONRAKI BÖLÜM. Bölge eylemleri de sayılıyor —
+    // "çıkış kapısına gel" tam bir bitiş şartı ve yalnız kurallara bakan bir
+    // denetim onu görmeyip yanlış yere uyarı basardı.
+    //
+    // "Sonraki bölüm" son bölümde de bitiriyor (kayıtlı bölüm kalmayınca
+    // `_s3_apply_level` kazandırıyor), yani ayrı bir "son bölümde win olsun"
+    // kuralı gerekmiyor.
     bool win = false;
     int i = 0;
     while (i < length(_rl3)) {
         Rule3 r = _rl3[i];
-        if (r.act == ACT_WIN) { win = true; }
+        if (r.act == ACT_WIN || r.act == ACT_NEXT) { win = true; }
+        i = i + 1;
+    }
+    i = 0;
+    while (i < length(_trg_act)) {
+        if (_trg_act[i] == ZACT_WIN || _trg_act[i] == ZACT_NEXT) { win = true; }
         i = i + 1;
     }
     if (!win) { _chk_add3("kazanma sarti yok — oyun bitirilemez"); }
@@ -7204,6 +7350,31 @@ func scene_check3d(): int {
     }
     if (sesyok > 0) {
         _chk_add3(toString(sesyok) + " kuralin ses dosyasi yuklenemedi");
+    }
+
+    // Bölgeler: eklenip UNUTULAN bölge tam sessiz. Görünmüyor (bölgeler
+    // çizilmiyor), hata vermiyor, sahneyi de bozmuyor — sadece hiçbir şey
+    // yapmıyor. İki ayrı sessizlik var ve ikisi ayrı ayrı söyleniyor.
+    int olu_bolge = 0;
+    int etiketsiz = 0;
+    i = 0;
+    while (i < length(_trg_shape)) {
+        // 1) Ne veri eylemi ne de kod kancası: bölge tümüyle ölü.
+        if (_trg_act[i] == ZACT_NONE && _trg_hasin[i] == 0 &&
+            _trg_hasout[i] == 0 && _trg_hasstay[i] == 0) {
+            olu_bolge = olu_bolge + 1;
+        }
+        // 2) İzlediği etiketten sahnede hiç yok: eylemi olsa da hiç atmaz.
+        if (_chk_tag_say3(_trg_tag[i]) == 0) { etiketsiz = etiketsiz + 1; }
+        i = i + 1;
+    }
+    if (olu_bolge > 0) {
+        _chk_add3(toString(olu_bolge) +
+                  " bolge hicbir sey yapmiyor (girince eylemi sec)");
+    }
+    if (etiketsiz > 0) {
+        _chk_add3(toString(etiketsiz) +
+                  " bolgenin izledigi etiket sahnede yok — hic atmaz");
     }
     return length(_chk_msgs3);
 }
@@ -7788,6 +7959,16 @@ int ACT_KILL    = 2;   // ötekini öldür (skorsuz)
 int ACT_HURT    = 3;   // ötekine hasar ver (mermi düşmana değdi)
 int ACT_WIN     = 4;
 int ACT_LOSE    = 5;
+// Sonraki bölüme geç. BUNSUZ çok bölümlü bir VERİ sahnesi ilerleyemiyordu:
+// `next_level3d()`'i çağıran tek şey KOD'du (bir örnekteki `bolum_gec3d()`),
+// yani editörün "+ BOLUM EKLE" düğmesiyle kurulan 2. ve sonraki bölümlere
+// oynayarak ULAŞMANIN yolu yoktu. `examples/scenes/iki_bolum.scene.json`
+// tam olarak bu durumdaydı: 1. bölüm "altınlar bitince KAZAN" diyordu ve
+// oyun orada bitiyordu, 2. bölüm hiç görünmüyordu.
+//
+// Son bölümde "sonraki" istemek TAKILMIYOR: kayıtlı bölüm kalmayınca
+// `_s3_apply_level` zaten kazandırıyor.
+int ACT_NEXT    = 6;
 
 struct Rule3 {
     int kind;   // RULE_*
@@ -7808,6 +7989,7 @@ func _rl_act3(s): int {
     if (s == "hurt")    { return ACT_HURT; }
     if (s == "win")     { return ACT_WIN; }
     if (s == "lose")    { return ACT_LOSE; }
+    if (s == "next_level") { return ACT_NEXT; }
     return ACT_COLLECT;
 }
 func _rl_act_nm3(v): str {
@@ -7816,6 +7998,7 @@ func _rl_act_nm3(v): str {
     if (v == ACT_HURT)   { return "hurt"; }
     if (v == ACT_WIN)    { return "win"; }
     if (v == ACT_LOSE)   { return "lose"; }
+    if (v == ACT_NEXT)   { return "next_level"; }
     return "collect";
 }
 
@@ -7923,6 +8106,7 @@ func _rl_apply3(act, n, me, other, snd) {
     if (act == ACT_HURT)   { damage3d(other, toInt(n)); }
     if (act == ACT_WIN)    { win3d(); }
     if (act == ACT_LOSE)   { game_over3d(); }
+    if (act == ACT_NEXT)   { next_level3d(); }
 }
 
 // Kuralların çarpışma taraması. Kanca taramasının aynısı, ama etiket çiftini
@@ -11159,6 +11343,7 @@ func _ed_next_act3(a): int {
     if (a == ACT_KILL)    { return ACT_HURT; }
     if (a == ACT_HURT)    { return ACT_WIN; }
     if (a == ACT_WIN)     { return ACT_LOSE; }
+    if (a == ACT_LOSE)    { return ACT_NEXT; }
     return ACT_COLLECT;
 }
 
@@ -11180,7 +11365,8 @@ func _ed_act_nm3(v): str {
     if (v == ACT_KILL)    { return "otekini oldur"; }
     if (v == ACT_HURT)    { return "otekine hasar"; }
     if (v == ACT_WIN)     { return "kazan"; }
-    return "kaybet";
+    if (v == ACT_LOSE)    { return "kaybet"; }
+    return "sonraki bolum";
 }
 
 // Eylem skor/hasar miktarını KULLANIYOR mu? Kullanmayanda sayı alanı
@@ -11204,11 +11390,16 @@ func _ed_act_n_lbl3(v): str {
 func _ed_act_works_cleared3(v): bool {
     if (v == ACT_WIN)  { return true; }
     if (v == ACT_LOSE) { return true; }
+    // "Sonraki bölüm" de çift istemiyor: bölüm sistemine konuşuyor, çarpışan
+    // gövdelere değil. Çok bölümlü bir sahnede EN ÇOK kullanılacak bitiş bu
+    // ("altınlar bitti → sonraki bölüm").
+    if (v == ACT_NEXT) { return true; }
     return false;
 }
 func _ed_next_act_for3(kind, a): int {
     if (kind == RULE_CLEARED) {
-        if (a == ACT_WIN) { return ACT_LOSE; }
+        if (a == ACT_WIN)  { return ACT_LOSE; }
+        if (a == ACT_LOSE) { return ACT_NEXT; }
         return ACT_WIN;
     }
     return _ed_next_act3(a);
@@ -11226,6 +11417,7 @@ func _ed_rule_ozet3(kind, a, b, act, n): str {
     if (kind == RULE_CLEARED) {
         if (act == ACT_WIN)  { return "-> oyun KAZANILIR"; }
         if (act == ACT_LOSE) { return "-> oyun KAYBEDILIR"; }
+        if (act == ACT_NEXT) { return "-> SONRAKI BOLUM"; }
         return "-> BIR SEY YAPMAZ";
     }
     if (act == ACT_COLLECT) { return "-> " + nb + " toplanir +skor"; }
@@ -11233,7 +11425,8 @@ func _ed_rule_ozet3(kind, a, b, act, n): str {
     if (act == ACT_KILL)    { return "-> " + nb + " olur"; }
     if (act == ACT_HURT)    { return "-> " + nb + " hasar alir"; }
     if (act == ACT_WIN)     { return "-> oyun KAZANILIR"; }
-    return "-> oyun KAYBEDILIR";
+    if (act == ACT_LOSE)    { return "-> oyun KAYBEDILIR"; }
+    return "-> SONRAKI BOLUM";
 }
 
 // Kimlik bloğu — davranışlardaki gibi kaynaktan okunabilir olsun diye
@@ -11846,7 +12039,39 @@ func _ed_zone_panel3(px, y, pw) {
         ed_mark3d();
         if (_trg_on[i] == 1) { _trg_on[i] = 0; } else { _trg_on[i] = 1; }
     }
-    y = y + _ED_FLD3 + _us3(8);
+    y = y + _ED_FLD3 + _us3(6);
+
+    // ---- EYLEM ----
+    // Bu bölüm olmadan bölge paneli tam bir yalandı: konum, boy, etiket,
+    // "tek atım" — hepsi ayarlanıyor ve HİÇBİRİ bir şey yapmıyordu, çünkü
+    // bölgenin tek çıkışı KOD kancasıydı. Veriyle kurulan bir oyunda "buraya
+    // gelince kazandın" demenin yolu yoktu.
+    _g_section(px + _us3(2), y, pw - _us3(4), "GIRINCE");
+    y = y + _us3(16);
+    int za = _trg_act[i];
+    if (_g_button(23040, lx, y, inner, _ED_FLD3, _zact_nm3(za))) {
+        ed_mark3d();
+        _trg_act[i] = _zact_next3(za);
+        za = _trg_act[i];
+    }
+    _g_tip_for3(23040, "Bu bolgeye girince ne olsun");
+    y = y + _ED_FLD3 + _us3(3);
+    // Miktar YALNIZ kullanıldığı eylemde: kullanılmayan bir alan "buraya ne
+    // yazsam?" diye düşündürüp hiçbir şey yapmıyor (kural panelinde de böyle).
+    if (_zact_uses_amount3(za)) {
+        _g_txt3(_zact_amount_lbl3(za), lx, _g_ly3(y), labw + _us3(20), _G_DIM3());
+        _trg_amt[i] = _g_num(23041, lx + labw + _us3(22), y,
+                             inner - labw - _us3(22), _ED_FLD3, _trg_amt[i], 1.0);
+        if (_trg_amt[i] < 0.0) { _trg_amt[i] = 0.0; }
+        y = y + _ED_FLD3 + _us3(3);
+    }
+    // Kanca varsa SÖYLE: kod da bir şey yapıyor ve ikisi birlikte koşuyor.
+    // Söylenmezse "eylem yok" yazan bir bölgenin neden iş gördüğü anlaşılmaz.
+    if (_trg_hasin[i] == 1) {
+        _g_txt3("+ kodda girince kancasi var", lx, _g_ly3(y), inner, _G_DIM3());
+        y = y + _g_lh3();
+    }
+    y = y + _us3(5);
 
     if (_g_button(23030, lx, y, inner, _ED_FLD3, "BOLGEYI SIL")) {
         ed_mark3d();
@@ -11872,6 +12097,11 @@ func _ed_zone_delete3(i) {
         _trg_fin[k] = _trg_fin[k+1]; _trg_hasin[k] = _trg_hasin[k+1];
         _trg_fout[k] = _trg_fout[k+1]; _trg_hasout[k] = _trg_hasout[k+1];
         _trg_fstay[k] = _trg_fstay[k+1]; _trg_hasstay[k] = _trg_hasstay[k+1];
+        // Eylem ve miktarı da KAYDIRILMALI. Kaydırılmazsa silinen bölgeden
+        // sonraki her bölge, bir öncekinin eylemini devralır: "çıkış kapısı"
+        // sildiğin kutunun hasarını uygulamaya başlar. Paralel dizilerde en
+        // sık yapılan hata bu ve tümüyle sessiz.
+        _trg_act[k] = _trg_act[k+1]; _trg_amt[k] = _trg_amt[k+1];
         k = k + 1;
     }
     pop(_trg_x); pop(_trg_y); pop(_trg_z);
@@ -11880,6 +12110,7 @@ func _ed_zone_delete3(i) {
     pop(_trg_fin); pop(_trg_hasin);
     pop(_trg_fout); pop(_trg_hasout);
     pop(_trg_fstay); pop(_trg_hasstay);
+    pop(_trg_act); pop(_trg_amt);
     // Üyelik kayıtları bölge indeksine göre; silinen bölgeninkiler gitmeli,
     // sonrakiler kaymalı — yoksa "içeride" sayılan yanlış bölge olur.
     array nt = [];

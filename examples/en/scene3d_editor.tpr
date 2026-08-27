@@ -47,6 +47,19 @@
 // it did not, CTRL+Z would pull the previous scene into the new file and
 // CTRL+S would write it there.
 //
+// LEVELS: the strip at the top of the hierarchy. "+ BOLUM EKLE" turns the
+// scene into a multi-level one (the live scene becomes level 1); the arrows
+// move between them. Switching levels does NOT lose work.
+//
+// Getting from one level to the NEXT needs an ending condition. Two ways:
+//   • a rule:  "cleared: item -> SONRAKI BOLUM" (advance when the gold is gone)
+//   • a zone:  place a zone, set its GIRINCE action to "sonraki bol" (an exit)
+// On the last level "next level" WINS the game rather than hanging.
+//
+// ZONES: right-click -> "+ bolge". A zone has an on-enter action: win, lose,
+// kill whoever entered (pits/lava), damage, add score, next level. A zone with
+// no action does nothing at all — the scene check says so.
+//
 // Layout:
 //   menu bar          New / Open / Save / Save As / Undo / Redo / ?
 //   toolbar           tools on the left, PLAY-STOP CENTRED, grid
