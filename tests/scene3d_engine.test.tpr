@@ -7432,6 +7432,20 @@ func t_check_flags_dead_cleared_action() {
 // düğmede kırpılır — bu testin yakaladığı şey o. (Ölçülen taşmalar: eski
 // "OTEKI hasar alir" 174/160, "BEN hasar alirim" 166/160, eski özet
 // cümlesi 462/280, eski uyarı satırı 358/280.)
+
+// Işık renk adları düğmeye sığmalı. Düğme 134 piksel (ölçüldü), yani
+// ~11 karakter — en uzun ad "beyaz" 58 piksel.
+func t_light_color_names_fit_button() {
+    array cols = [WHITE, rgb(255, 214, 150), GOLD, rgb(255, 120, 70),
+                  rgb(120, 180, 255), rgb(140, 255, 170)];
+    int i = 0;
+    while (i < length(cols)) {
+        str n = _ed_lt_col_nm3(cols[i]);
+        assert(length(n) <= 11, "isik renk adi dugmeye sigmali: " + n);
+        i = i + 1;
+    }
+}
+
 func t_action_names_fit_field_budget() {
     array acts = [ACT_COLLECT, ACT_DAMAGE, ACT_KILL, ACT_HURT, ACT_WIN, ACT_LOSE];
     int i = 0;
@@ -7459,7 +7473,7 @@ func t_rule_summary_fits_panel_budget() {
 // Etiket sütunu 102 px -> ~9 karakter.
 func t_panel_labels_fit_label_column() {
     array labs = ["kim", "neye", "hangisi", "olunca", "skor", "hasar", "bosta",
-                  "kosu", "kare/sn"];
+                  "kosu", "kare/sn", "menzil", "renk", "doseme", "kon"];
     int i = 0;
     while (i < length(labs)) {
         assert(length(labs[i]) <= 9, "etiket sutuna sigmali: " + labs[i]);
@@ -7904,6 +7918,310 @@ func t_sphere_wall_is_not_a_platform() {
            "kure platform sayilmamali, y=" + toString(_e3[gs].y));
 }
 
+
+// ===========================================================================
+// YÜZEY DOKUSU — `model_texture` motorda vardı, scene3d onu HİÇ çağırmıyordu
+// ===========================================================================
+
+func t_texture_roundtrips() {
+    scene3d_reset(); ground3d(0.0);
+    int d = uret3(0.0, 1.5, 0.0, 8.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    ad_ver3d(d, "duvar");
+    set_texture3d(d, "dokular/tugla.png", 6.0);
+    assert_eq_str(texture_src3d(d), "dokular/tugla.png");
+    assert(abs_f3(texture_tile3d(d) - 6.0) < 0.001, "doseme kurulmali");
+    str js = scene_json3d();
+    assert(_ed_match3(js, "dokular/tugla.png"), "doku yolu yazilmali");
+
+    // NÖBETÇİ: yükleme gerçekten dosyadan mı okuyor?
+    scene3d_reset();
+    int c = uret3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    set_texture3d(c, "CURUK.png", 99.0);
+    scene_load3d(js);
+    int d2 = bul3d("duvar");
+    assert_eq_str(texture_src3d(d2), "dokular/tugla.png");
+    assert(abs_f3(texture_tile3d(d2) - 6.0) < 0.001, "doseme de donmeli");
+}
+
+// Dokusuz varlık dosyayı şişirmemeli — ve dönüşte de dokusuz kalmalı.
+func t_untextured_writes_no_key() {
+    scene3d_reset(); ground3d(0.0);
+    uret3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    str js = scene_json3d();
+    assert(!_ed_match3(js, "\"texture\""), "dokusuz varlik anahtar yazmamali");
+    scene3d_reset();
+    int c = uret3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    set_texture3d(c, "CURUK.png", 3.0);
+    scene_load3d(js);
+    assert_eq_str(texture_src3d(_mk_handle3(0)), "");
+}
+
+// Varsayılan döşeme (1.0) yazılmamalı ama dönüşte doğru olmalı.
+func t_default_tile_not_written() {
+    scene3d_reset(); ground3d(0.0);
+    int d = uret3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_WALL);
+    set_texture3d(d, "a.png", 1.0);
+    str js = scene_json3d();
+    assert(!_ed_match3(js, "\"tile\""), "varsayilan doseme yazilmamali");
+    scene3d_reset();
+    scene_load3d(js);
+    assert(abs_f3(texture_tile3d(_mk_handle3(0)) - 1.0) < 0.001, "varsayilan 1 olmali");
+}
+
+func t_texture_set_clear_and_duplicate() {
+    scene3d_reset(); ground3d(0.0);
+    int d = uret3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_WALL);
+    set_texture3d(d, "a.png", 4.0);
+    int kop = ed_duplicate3d(d);
+    assert_eq_str(texture_src3d(kop), "a.png");
+    assert(abs_f3(texture_tile3d(kop) - 4.0) < 0.001, "kopya dosemeyi de tasimali");
+    clear_texture3d(d);
+    assert_eq_str(texture_src3d(d), "");
+    // Doseme de varsayilana donmeli, yoksa yeni doku eski sikliktan baslar.
+    assert(abs_f3(texture_tile3d(d) - 1.0) < 0.001, "kaldirinca doseme sifirlanmali");
+}
+
+// Sıfır/negatif döşeme anlamsız (bölme ve gerdirme bozulur) — 1'e düşmeli.
+func t_tile_never_zero() {
+    scene3d_reset(); ground3d(0.0);
+    int d = uret3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, WHITE, SHAPE_CUBE, TAG_WALL);
+    set_texture3d(d, "a.png", 0.0);
+    assert(abs_f3(texture_tile3d(d) - 1.0) < 0.001, "sifir doseme 1'e dusmeli");
+    set_texture3d(d, "a.png", 0.0 - 3.0);
+    assert(abs_f3(texture_tile3d(d) - 1.0) < 0.001, "negatif doseme 1'e dusmeli");
+}
+
+// Doku da varlık kaydından geçiyor ve model/ses ile AYNI yol farklı kayıt.
+func t_texture_uses_asset_registry() {
+    int n0 = asset_count3d();
+    asset_texture3d("DOKU_A.png");
+    asset_texture3d("DOKU_A.png");
+    assert_eq_int(asset_count3d(), n0 + 1);
+    int k = _as_find3("DOKU_A.png", AS_TEX3);
+    assert(k >= 0 && asset_kind3d(k) == AS_TEX3, "doku kaydi acilmali");
+}
+
+// Şablonlar dokulu olmalı ve dosyalar depoda durmalı.
+func t_templates_are_textured() {
+    array kk = [TPL_TOPLAYICI, TPL_ARENA, TPL_PLATFORM];
+    int i = 0;
+    while (i < length(kk)) {
+        scene3d_reset();
+        ed_template3d(kk[i]);
+        int dokulu = 0;
+        int j = 0;
+        while (j < length(_e3)) {
+            str t = _e3[j].tsrc;
+            if (t != "") {
+                dokulu = dokulu + 1;
+                assert(file_exists(t), "doku dosyasi depoda olmali: " + t);
+            }
+            j = j + 1;
+        }
+        assert(dokulu >= 4, "sablonda dokulu varlik olmali (sablon " + toString(i) + ")");
+        // Zemin dokusu da kurulu ve dosyasi var.
+        str gt = ground_texture_path3d();
+        assert(gt != "", "sablonun zemin dokusu olmali");
+        assert(file_exists(gt), "zemin dokusu depoda olmali: " + gt);
+        i = i + 1;
+    }
+}
+
+// ===========================================================================
+// SAHNE IŞIKLARI — `point_light` motorda vardı, HİÇ çağrılmıyordu
+// ===========================================================================
+
+func t_light_roundtrips() {
+    scene3d_reset(); ground3d(0.0);
+    light3d(4.0, 3.0, 0.0 - 2.0, GOLD, 14.0);
+    str js = scene_json3d();
+    assert(_ed_match3(js, "lights_at"), "isiklar yazilmali");
+    // NOBETCI
+    scene3d_reset();
+    light3d(0.0, 0.0, 0.0, RED, 1.0);
+    scene_load3d(js);
+    assert_eq_int(light_count3d(), 1);
+    assert(abs_f3(light_x3d(0) - 4.0) < 0.001, "x donmeli");
+    assert(abs_f3(light_z3d(0) + 2.0) < 0.001, "z donmeli");
+    assert(abs_f3(light_range3d(0) - 14.0) < 0.001, "menzil donmeli");
+    assert_eq_int(light_color3d(0), GOLD);
+}
+
+// Işıksız sahne dosyayı şişirmemeli, ve öncekinin lambalarını devralmamalı.
+func t_no_lights_writes_no_key() {
+    scene3d_reset(); ground3d(0.0);
+    str js = scene_json3d();
+    assert(!_ed_match3(js, "lights_at"), "isiksiz sahne anahtar yazmamali");
+    scene3d_reset();
+    light3d(0.0, 0.0, 0.0, RED, 1.0);
+    scene_load3d(js);
+    assert_eq_int(light_count3d(), 0);
+}
+
+// Işıklar YERLEŞTİRİLMİŞ içerik: reset onları silmeli. Silmezse editörün
+// OYNAT/DUR döngüsü her turda lambaları ÜST ÜSTE KOYAR (ölçüldü: üç turda
+// 5 lamba 8 oldu) ve seçim yanlış üçlüyü yakar.
+func t_reset_clears_lights() {
+    scene3d_reset();
+    light3d(1.0, 0.0, 0.0, RED, 5.0);
+    light3d(2.0, 0.0, 0.0, BLUE, 5.0);
+    assert_eq_int(light_count3d(), 2);
+    scene3d_reset();
+    assert_eq_int(light_count3d(), 0);
+}
+
+// Motorda dört yuva var, biri güneşin: aynı anda en çok ÜÇ nokta ışık.
+// Motor kameraya en yakınları seçiyor.
+func t_light_selection_picks_nearest() {
+    scene3d_reset();
+    light3d(0.0 - 20.0, 0.0, 0.0, RED, 10.0);    // 0: uzak
+    light3d(2.0, 0.0, 0.0, GOLD, 10.0);          // 1: yakin
+    light3d(0.0 - 4.0, 0.0, 0.0, GREEN, 10.0);   // 2: yakin
+    light3d(30.0, 0.0, 0.0, BLUE, 10.0);         // 3: cok uzak
+    light3d(8.0, 0.0, 0.0, WHITE, 10.0);         // 4: orta
+    _lt_select3(0.0, 0.0, 0.0);
+    assert_eq_int(length(_lt_pick3), light_slots3d());
+    assert_eq_int(_lt_pick3[0], 1);
+    assert_eq_int(_lt_pick3[1], 2);
+    assert_eq_int(_lt_pick3[2], 4);
+    // Dinleyici tasininca secim de degismeli.
+    _lt_select3(30.0, 0.0, 0.0);
+    assert_eq_int(_lt_pick3[0], 3);
+}
+
+// Yakınlık MENZİLE göre ölçülüyor: geniş menzilli bir projektör uzaktan da
+// katkı verir, yanı başındaki bir mum vermez. Ham mesafe yanlış seçerdi.
+func t_light_selection_weighs_range() {
+    scene3d_reset();
+    light3d(1.0, 0.0, 0.0, RED, 0.5);        // cok yakin, cok dar
+    light3d(20.0, 0.0, 0.0, BLUE, 200.0);    // uzak, cok genis
+    _lt_select3(0.0, 0.0, 0.0);
+    assert_eq_int(_lt_pick3[0], 1);
+}
+
+// Işık sayısı yuvadan azsa hepsi seçilmeli (ve fazlası uydurulmamalı).
+func t_light_selection_fewer_than_slots() {
+    scene3d_reset();
+    light3d(1.0, 0.0, 0.0, RED, 5.0);
+    _lt_select3(0.0, 0.0, 0.0);
+    assert_eq_int(length(_lt_pick3), 1);
+    scene3d_reset();
+    _lt_select3(0.0, 0.0, 0.0);
+    assert_eq_int(length(_lt_pick3), 0);
+}
+
+// Silme SIRAYI korumali: indeksler sahne dosyasinda ve editor seciminde
+// kullaniliyor, son elemani yerine takas etmek yanlis isigi secili birakirdi.
+func t_light_delete_preserves_order() {
+    scene3d_reset();
+    // DÖRT ışık şart: üç ışıkta ortadakini silmek kaydırma ile takas aynı
+    // sonucu veriyor ([1,3]) ve test hiçbir şey ayırt etmiyor — enjeksiyon
+    // tam bundan kaçtı. Dörtte ayrışıyorlar: kaydırma [1,3,4], takas [1,4,3].
+    light3d(1.0, 0.0, 0.0, RED, 5.0);
+    light3d(2.0, 0.0, 0.0, GREEN, 5.0);
+    light3d(3.0, 0.0, 0.0, BLUE, 5.0);
+    light3d(4.0, 0.0, 0.0, WHITE, 5.0);
+    light_del3d(1);
+    assert_eq_int(light_count3d(), 3);
+    assert(abs_f3(light_x3d(0) - 1.0) < 0.001, "ilk isik yerinde kalmali");
+    assert(abs_f3(light_x3d(1) - 3.0) < 0.001, "ucuncu isik ikinciye kaymali");
+    assert(abs_f3(light_x3d(2) - 4.0) < 0.001, "dorduncu isik ucuncuye kaymali");
+    assert_eq_int(light_color3d(1), BLUE);
+    assert_eq_int(light_color3d(2), WHITE);
+    // Gecersiz indeks cokmemeli.
+    assert_eq_int(light_del3d(9), 0);
+    assert_eq_int(light_del3d(0 - 1), 0);
+    assert_eq_int(light_count3d(), 3);
+}
+
+// Menzil SIFIR olamaz: yakınlık ölçüsü menzile BÖLÜYOR, sıfır menzil sıfıra
+// bölme demek ve seçim çöker.
+func t_light_range_never_zero() {
+    scene3d_reset();
+    int a = light3d(0.0, 0.0, 0.0, RED, 0.0);
+    assert(light_range3d(a) > 0.0, "sifir menzil kabul edilmemeli");
+    int b = light3d(1.0, 0.0, 0.0, RED, 0.0 - 4.0);
+    assert(light_range3d(b) > 0.0, "negatif menzil kabul edilmemeli");
+    // Sonradan da sifirlanamamali.
+    light_set_range3d(a, 0.0);
+    assert(light_range3d(a) > 0.0, "menzil sonradan da sifirlanamamali");
+    // Secim yine calismali (sifira bolme yok).
+    _lt_select3(0.0, 0.0, 0.0);
+    assert_eq_int(length(_lt_pick3), 2);
+}
+
+// Editörün renk döngüsü kendini tekrar etmeli (kapalı halka) ve her rengin
+// bir ADI olmalı — isimsiz bir renk düğmesi "ozel" der ve kullanıcı hangi
+// rengi seçtiğini bilemez.
+func t_light_color_cycle_is_closed() {
+    int c = WHITE;
+    array gorulen = [];
+    int i = 0;
+    while (i < 6) {
+        push(gorulen, c);
+        assert(_ed_lt_col_nm3(c) != "ozel", "dongudeki her rengin adi olmali");
+        c = _ed_lt_next_col3(c);
+        i = i + 1;
+    }
+    assert_eq_int(c, WHITE);
+    // Alti renk de AYRI olmali.
+    int a = 0;
+    while (a < length(gorulen)) {
+        int b = a + 1;
+        while (b < length(gorulen)) {
+            assert(gorulen[a] != gorulen[b], "dongude ayni renk iki kez olmamali");
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+}
+
+
+// Boş yuva KAPATILMALI. Motor çağrıları (`point_light`/`light_off`)
+// penceresiz hiçbir şey yapmıyor, o yüzden sınanan şey KARAR: hangi yuvaya
+// hangi ışık, hangisi kapalı.
+func t_unused_light_slots_are_turned_off() {
+    scene3d_reset();
+    light3d(1.0, 0.0, 0.0, RED, 5.0);
+    _lt_select3(0.0, 0.0, 0.0);
+    assert_eq_int(_lt_slot_light3(0), 0);
+    // Tek isik var, gerisi KAPALI olmali.
+    assert_eq_int(_lt_slot_light3(1), 0 - 1);
+    assert_eq_int(_lt_slot_light3(2), 0 - 1);
+    // Yuva sinirinin disi da kapali.
+    assert_eq_int(_lt_slot_light3(light_slots3d()), 0 - 1);
+    assert_eq_int(_lt_slot_light3(0 - 1), 0 - 1);
+    // Isiklar yuvalari doldurunca hicbiri kapali olmamali.
+    light3d(2.0, 0.0, 0.0, GREEN, 5.0);
+    light3d(3.0, 0.0, 0.0, BLUE, 5.0);
+    _lt_select3(0.0, 0.0, 0.0);
+    int k = 0;
+    while (k < light_slots3d()) {
+        assert(_lt_slot_light3(k) >= 0, "dolu yuva kapali olmamali");
+        k = k + 1;
+    }
+    // Isiklar silinince yuvalar yeniden kapanmali.
+    scene3d_reset();
+    _lt_select3(0.0, 0.0, 0.0);
+    assert_eq_int(_lt_slot_light3(0), 0 - 1);
+}
+
+func t_light_widget_ids_do_not_collide() {
+    int base = _ed_lt_idbase3();
+    int step = _ed_lt_idstep3();
+    int used = _ed_lt_idused3();
+    assert(step > used, "adim kullanilandan buyuk olmali");
+    int alt = base;
+    int ust = base + 200 * step + used - 1;
+    assert(52900 < alt || 52900 > ust, "ekleme dugmesi isik araligina girmemeli");
+    // Doku tarayicisi 52000-52051 ve ekleme dugmesi 52900 ile de carpismamali.
+    assert(52051 < alt || 52000 > ust, "doku tarayicisi isik araligina girmemeli");
+    assert(52900 > 52051, "ekleme dugmesi doku tarayicisinin da disinda olmali");
+    // Kural blogu (60000+) ile de.
+    int rl_alt = _ed_rl_idbase3();
+    assert(ust < rl_alt, "isik ve kural araliklari ayrik olmali");
+}
+
 test("varlik kaydi ayni yolu iki kez yuklemiyor", "t_asset_registry_caches");
 test("varlik kaydi model ve dokuyu ayiriyor", "t_asset_registry_separates_kinds");
 test("model yolu yaziliyor ve gidis-donusten sag cikiyor", "t_asset_src_serialized_and_roundtrips");
@@ -7933,6 +8251,7 @@ test("denetim is gormeyen bitince eylemini soyluyor", "t_check_flags_dead_cleare
 test("eylem adlari alan butcesine siyor", "t_action_names_fit_field_budget");
 test("kural ozeti panel butcesine siyor", "t_rule_summary_fits_panel_budget");
 test("panel etiketleri sutuna siyor", "t_panel_labels_fit_label_column");
+test("isik renk adlari dugmeye siyor", "t_light_color_names_fit_button");
 test("kural sesi gidis-donusten sag cikiyor", "t_rule_sound_roundtrips");
 test("sessiz kural dosyaya ses yazmiyor", "t_silent_rule_writes_no_key");
 test("ses otekinin yerinden geliyor", "t_rule_sound_plays_at_other");
@@ -7954,4 +8273,22 @@ test("temas payi merdivene donusmuyor", "t_contact_skin_does_not_become_a_stairc
 test("hizli yukselen platform cismi yutmuyor", "t_fast_rising_platform_does_not_swallow_rider");
 test("kure platform sayilmiyor", "t_sphere_wall_is_not_a_platform");
 test("destek testi platform hareketini de sayiyor", "t_support_test_counts_platform_motion");
+test("doku gidis-donusten sag cikiyor", "t_texture_roundtrips");
+test("dokusuz varlik anahtar yazmiyor", "t_untextured_writes_no_key");
+test("varsayilan doseme yazilmiyor", "t_default_tile_not_written");
+test("doku atama/kaldirma/cogaltma", "t_texture_set_clear_and_duplicate");
+test("doseme sifir olamiyor", "t_tile_never_zero");
+test("doku da varlik kaydindan geciyor", "t_texture_uses_asset_registry");
+test("sablonlar dokulu ve dosyalar depoda", "t_templates_are_textured");
+test("isik gidis-donusten sag cikiyor", "t_light_roundtrips");
+test("isiksiz sahne anahtar yazmiyor", "t_no_lights_writes_no_key");
+test("reset isiklari siliyor", "t_reset_clears_lights");
+test("isik secimi en yakini aliyor", "t_light_selection_picks_nearest");
+test("isik secimi menzili tartiyor", "t_light_selection_weighs_range");
+test("yuvadan az isik varsa hepsi seciliyor", "t_light_selection_fewer_than_slots");
+test("isik silme sirayi koruyor", "t_light_delete_preserves_order");
+test("isik menzili sifir olamiyor", "t_light_range_never_zero");
+test("bos isik yuvalari kapatiliyor", "t_unused_light_slots_are_turned_off");
+test("isik renk dongusu kapali halka", "t_light_color_cycle_is_closed");
+test("isik widget kimlikleri cakismiyor", "t_light_widget_ids_do_not_collide");
 test_summary();

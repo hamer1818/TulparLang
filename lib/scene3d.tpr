@@ -69,6 +69,15 @@ struct Ent3 {
     // Modelin KAYNAK YOLU ("" = yok / prosedürel mesh). Handle süreç içi bir
     // sayı olduğu için sahne dosyasına yazılabilir olan bu.
     str msrc;
+    // Yüzey dokusunun YOLU ("" = düz renk) ve döşeme sıklığı. Model yoluyla
+    // aynı gerekçe: yol taşınabilir, handle değil.
+    //
+    // Bu doku İLKEL cisimler için: kutu, küre, silindir, rampa. Yüklü bir
+    // modelin dokusu kendi dosyasından geliyor. raylib'de doku KİPSEL bir
+    // durum (çiz-kapat), MODELE ait değil — yani iki varlık aynı şekli
+    // paylaşsa bile farklı doku alabiliyor, takas yok.
+    str tsrc;
+    float ttile;
     int color;                        // paketli renk
     int tag;                          // TAG_*
     int grounded;                     // zeminde mi (zıplama için)
@@ -411,7 +420,8 @@ func _alloc_slot3(Ent3 e): int {
 func spawn3(x, y, z, sx, sy, sz, color, shape, tag): int {
     Ent3 e = { x: x, y: y, z: z,  vx: 0.0, vy: 0.0, vz: 0.0,
                sx: sx, sy: sy, sz: sz,  yaw: 0.0,
-               shape: shape, model: 0 - 1, msrc: "", color: color, tag: tag,
+               shape: shape, model: 0 - 1, msrc: "", tsrc: "", ttile: 1.0,
+               color: color, tag: tag,
                grounded: 0, alive: 1, solid: _default_solid3(tag),
                hp: 0, hpmax: 0, invuln: 0.0, life: 0.0, owner: 0 - 1, pdir: 0,
                anim_idle: 0 - 1, anim_run: 0 - 1, anim_fps: 24.0, anim_t: 0.0,
@@ -424,7 +434,8 @@ func spawn3(x, y, z, sx, sy, sz, color, shape, tag): int {
 func spawn3_model(x, y, z, scale, model_handle, tag): int {
     Ent3 e = { x: x, y: y, z: z,  vx: 0.0, vy: 0.0, vz: 0.0,
                sx: scale, sy: scale, sz: scale,  yaw: 0.0,
-               shape: SHAPE_MODEL, model: model_handle, msrc: "", color: WHITE, tag: tag,
+               shape: SHAPE_MODEL, model: model_handle, msrc: "", tsrc: "", ttile: 1.0,
+               color: WHITE, tag: tag,
                grounded: 0, alive: 1, solid: _default_solid3(tag),
                hp: 0, hpmax: 0, invuln: 0.0, life: 0.0, owner: 0 - 1, pdir: 0,
                anim_idle: 0 - 1, anim_run: 0 - 1, anim_fps: 24.0, anim_t: 0.0,
@@ -481,6 +492,45 @@ func clear_model3d(id): int {
     return 1;
 }
 func model_kaldir3d(id): int { return clear_model3d(id); }
+
+// Varlığa yüzey dokusu bağla. `tile` = dokunun kaç kez döşeneceği; büyük bir
+// duvarda 1.0 dokuyu gerdirir, 8.0 tuğla gibi tekrarlar.
+//
+//   set_texture3d(duvar, "dokular/tugla.png", 6.0);
+func set_texture3d(id, path, tile): int {
+    int sl = _slot_of3(id);
+    if (sl < 0) { return 0; }
+    Ent3 e = _e3[sl];
+    e.tsrc = path;
+    if (tile > 0.0) { e.ttile = tile; } else { e.ttile = 1.0; }
+    _e3[sl] = e;
+    return 1;
+}
+func doku_ata3d(id, yol, tile): int { return set_texture3d(id, yol, tile); }
+
+// Dokuyu kaldır → varlık yeniden düz renk.
+func clear_texture3d(id): int {
+    int sl = _slot_of3(id);
+    if (sl < 0) { return 0; }
+    Ent3 e = _e3[sl];
+    e.tsrc = "";
+    e.ttile = 1.0;
+    _e3[sl] = e;
+    return 1;
+}
+func doku_kaldir3d(id): int { return clear_texture3d(id); }
+
+// Varlığın doku yolu ("" = yok) ve döşeme sıklığı.
+func texture_src3d(id): str {
+    int sl = _slot_of3(id);
+    if (sl < 0) { return ""; }
+    return _e3[sl].tsrc;
+}
+func texture_tile3d(id): float {
+    int sl = _slot_of3(id);
+    if (sl < 0) { return 1.0; }
+    return _e3[sl].ttile;
+}
 
 // Varlığın model yolu ("" = yok).
 func model_src3d(id): str {
@@ -607,6 +657,12 @@ func scene3d_reset() {
     _hitA = []; _hitB = []; _hitF = [];
     _deadT = []; _deadF = [];
     _trg_clear3(); _trg_show3 = 0;
+    // Işıklar da YERLEŞTİRİLMİŞ sahne içeriği (bölgeler gibi), tek bir dünya
+    // ayarı değil — reset onları silmeli. Silmezse editörün OYNAT/DUR
+    // döngüsü her turda lambaları ÜST ÜSTE KOYARDI (ölçüldü: üç turda 5
+    // lamba 8 oldu) ve seçim yanlış üçlüyü yakardı.
+    _lt_x3 = []; _lt_y3 = []; _lt_z3 = []; _lt_col3 = []; _lt_rng3 = [];
+    _lt_pick3 = [];
     _lvlN = []; _lvlF = []; _cur_lvl3 = 0; _lvl_pending3 = 0 - 1; _won3 = 0;
     _lvl_js3 = [];            // bölüm içerikleri de sahneyle gider
     _ed_lvl3 = 0;
@@ -3977,6 +4033,154 @@ func _s3_collision() {
 // ÜYELİK düz çift listesinde tutuluyor (bölge indeksi × entity handle) —
 // iç içe dizi yok. Bölge sayısı da içerideki entity sayısı da pratikte tek
 // haneli olduğu için doğrusal tarama en ucuz ve en okunur çözüm.
+// ---- Sahne ışıkları (nokta ışık) -------------------------------------------
+// `point_light()` motorda vardı ve scene3d onu HİÇ çağırmıyordu: sahnedeki
+// tek aydınlatma güneş + ortam ışığıydı, yani bir meşale, bir lamba, bir
+// yangın ışık vermiyordu. Sahne biçiminde de yeri yoktu.
+//
+// MOTOR SINIRI, gizlenmiyor: toplam DÖRT ışık yuvası var ve 0'ı güneş
+// kullanıyor, yani aynı anda en çok ÜÇ nokta ışık yanabiliyor. Sahneye
+// istediğin kadar lamba koyabilirsin — motor her kare kameraya EN YAKIN
+// üçünü seçiyor. Sınırı kullanıcıya "3 tane koyabilirsin" diye dayatmak
+// yerine eleme yapmak, ışıklı bir koridorda yürümeyi mümkün kılıyor.
+array _lt_x3 = [];   array _lt_y3 = [];   array _lt_z3 = [];
+array _lt_col3 = []; array _lt_rng3 = [];
+
+// Motorun serbest yuva sayısı (0 = güneş).
+func light_slots3d(): int { return 3; }
+
+// Sahneye nokta ışık ekle → indeks döner.
+//
+//   light3d(4.0, 3.0, 0.0, GOLD, 12.0);
+func light3d(x, y, z, color, range): int {
+    push(_lt_x3, x * 1.0); push(_lt_y3, y * 1.0); push(_lt_z3, z * 1.0);
+    push(_lt_col3, color);
+    float r = range * 1.0;
+    if (r <= 0.0) { r = 10.0; }
+    push(_lt_rng3, r);
+    return length(_lt_x3) - 1;
+}
+func isik_ekle3d(x, y, z, renk, menzil): int { return light3d(x, y, z, renk, menzil); }
+
+func light_count3d(): int { return length(_lt_x3); }
+func light_valid3d(i): bool { return i >= 0 && i < length(_lt_x3); }
+func light_x3d(i): float { if (!light_valid3d(i)) { return 0.0; } return _lt_x3[i]; }
+func light_y3d(i): float { if (!light_valid3d(i)) { return 0.0; } return _lt_y3[i]; }
+func light_z3d(i): float { if (!light_valid3d(i)) { return 0.0; } return _lt_z3[i]; }
+func light_color3d(i): int { if (!light_valid3d(i)) { return 0; } return _lt_col3[i]; }
+func light_range3d(i): float { if (!light_valid3d(i)) { return 0.0; } return _lt_rng3[i]; }
+
+func light_move3d(i, x, y, z): int {
+    if (!light_valid3d(i)) { return 0; }
+    _lt_x3[i] = x * 1.0; _lt_y3[i] = y * 1.0; _lt_z3[i] = z * 1.0;
+    return 1;
+}
+func light_set_color3d(i, c): int {
+    if (!light_valid3d(i)) { return 0; }
+    _lt_col3[i] = c;
+    return 1;
+}
+func light_set_range3d(i, r): int {
+    if (!light_valid3d(i)) { return 0; }
+    if (r > 0.0) { _lt_rng3[i] = r * 1.0; }
+    return 1;
+}
+
+// Işığı sil. Diziler SIRAYI KORUYARAK kayıyor: indeksler sahne dosyasında
+// ve editör seçiminde kullanılıyor, son elemanı yerine takas etmek
+// (entity deposundaki hızlı yol) burada yanlış ışığı seçili bırakırdı.
+func light_del3d(i): int {
+    if (!light_valid3d(i)) { return 0; }
+    int n = length(_lt_x3);
+    int k = i;
+    while (k < n - 1) {
+        _lt_x3[k] = _lt_x3[k + 1]; _lt_y3[k] = _lt_y3[k + 1]; _lt_z3[k] = _lt_z3[k + 1];
+        _lt_col3[k] = _lt_col3[k + 1]; _lt_rng3[k] = _lt_rng3[k + 1];
+        k = k + 1;
+    }
+    pop(_lt_x3); pop(_lt_y3); pop(_lt_z3); pop(_lt_col3); pop(_lt_rng3);
+    return 1;
+}
+func isik_sil3d(i): int { return light_del3d(i); }
+
+// Dinleyici (kamera hedefi) konumuna göre ışığın "yakınlık" ölçüsü — küçük
+// olan önce seçiliyor. MENZİLE bölünüyor: geniş menzilli bir ışık uzaktan da
+// sahneye katkı verir, dar menzilli bir mum vermez. Ham mesafeyle sıralamak
+// yanı başındaki mumu uzaktaki projektöre tercih ederdi.
+func _lt_score3(i, cx, cy, cz): float {
+    float dx = _lt_x3[i] - cx;
+    float dy = _lt_y3[i] - cy;
+    float dz = _lt_z3[i] - cz;
+    return sqrt(dx * dx + dy * dy + dz * dz) / _lt_rng3[i];
+}
+
+// En yakın N ışığın indekslerini seç (N = serbest yuva sayısı).
+// Seçim sonucu ayrı: yükleme yapmadan, penceresiz sınanabilsin diye —
+// `_snd_vol3`/`_plat_top3` ile aynı gerekçe.
+array _lt_pick3 = [];
+
+func _lt_select3(cx, cy, cz) {
+    _lt_pick3 = [];
+    int n = length(_lt_x3);
+    int slots = light_slots3d();
+    array kullanildi = [];
+    int i = 0;
+    while (i < n) { push(kullanildi, 0); i = i + 1; }
+    int s = 0;
+    while (s < slots && s < n) {
+        int en_iyi = 0 - 1;
+        float en_iyi_p = 0.0;
+        i = 0;
+        while (i < n) {
+            if (kullanildi[i] == 0) {
+                float p = _lt_score3(i, cx, cy, cz);
+                if (en_iyi < 0 || p < en_iyi_p) { en_iyi = i; en_iyi_p = p; }
+            }
+            i = i + 1;
+        }
+        if (en_iyi < 0) { return; }
+        kullanildi[en_iyi] = 1;
+        push(_lt_pick3, en_iyi);
+        s = s + 1;
+    }
+}
+
+// Seçimi motora yükle. Kullanılmayan yuvalar KAPATILIYOR: bırakılırsa
+// oyuncu uzaklaşınca ışık olduğu yerde yanmaya devam ederdi.
+// k. yuvaya HANGİ ışık gidiyor (-1 = yuva KAPATILACAK). Yüklemeden ayrı,
+// çünkü `point_light`/`light_off` motor çağrıları penceresiz hiçbir şey
+// yapmıyor — karar sınanabilir olmalı. (`_snd_vol3`, `_plat_top3`,
+// `_lt_select3` ile aynı gerekçe.)
+func _lt_slot_light3(k): int {
+    if (k < 0 || k >= light_slots3d()) { return 0 - 1; }
+    if (k >= length(_lt_pick3)) { return 0 - 1; }
+    return _lt_pick3[k];
+}
+
+func _lt_upload3() {
+    float cx = 0.0; float cy = 0.0; float cz = 0.0;
+    int ct = _slot_of3(_cam_target);
+    if (ct >= 0) {
+        Ent3 t = _e3[ct];
+        cx = t.x; cy = t.y; cz = t.z;
+    }
+    _lt_select3(cx, cy, cz);
+    int slots = light_slots3d();
+    int k = 0;
+    while (k < slots) {
+        int li = _lt_slot_light3(k);
+        // Yuva 0 GÜNEŞİN: nokta ışıklar 1'den başlıyor.
+        if (li >= 0) {
+            point_light(k + 1, _lt_x3[li], _lt_y3[li], _lt_z3[li], _lt_col3[li]);
+        } else {
+            // Boş yuva KAPATILMALI: bırakılırsa oyuncu uzaklaşınca o ışık
+            // olduğu yerde yanmaya devam eder.
+            light_off(k + 1);
+        }
+        k = k + 1;
+    }
+}
+
 array _trg_x = [];   array _trg_y = [];   array _trg_z = [];
 array _trg_sx = [];  array _trg_sy = [];  array _trg_sz = [];  // TAM boy (entity ile aynı sözleşme)
 array _trg_r = [];        // küre bölgenin yarıçapı
@@ -4438,6 +4642,23 @@ func _s3_render() {
                 ecol = rgba(_col_r3(e.color), _col_g3(e.color), _col_b3(e.color),
                             _fade_a3);
             }
+            // YÜZEY DOKUSU. raylib'de doku KİPSEL: kur, çiz, kapat. Bu yüzden
+            // ilkel cisimleri dokulamak modelin materyalini paylaşmak gibi bir
+            // takas gerektirmiyor — her varlık kendi dokusunu alabiliyor.
+            //
+            // Renk BEYAZA çekiliyor (zemin dokusunda olduğu gibi): renk kalırsa
+            // doku onunla çarpılıp boyanır ve tuğla duvar mavi tuğla olur.
+            // Solma geçişinde alfa korunuyor, yoksa kaybolan cisim doku
+            // yüzünden aniden opaklaşırdı.
+            int tex = 0 - 1;
+            if (e.tsrc != "") { tex = asset_texture3d(e.tsrc); }
+            if (tex >= 0) {
+                float tl = e.ttile;
+                if (tl <= 0.0) { tl = 1.0; }
+                texture3d(tex, tl, tl);
+                if (fade_it == 1) { ecol = rgba(255, 255, 255, _fade_a3); }
+                else { ecol = WHITE; }
+            }
             if (e.shape == SHAPE_RAMP) {
                 // GERÇEK kama mesh'i varsa tek çağrıda çiz. `ramp3d` onu
                 // rampayla birlikte üretiyor, o yüzden ölçek 1.0.
@@ -4519,6 +4740,9 @@ func _s3_render() {
                 }
             }
             }   // SHAPE_RAMP else'i
+            // Kipsel durum KAPATILMALI: açık bırakılırsa dokusuz komşu cisim
+            // de aynı dokuyla çizilir (ve zemin/su da).
+            if (tex >= 0) { no_texture3d(); }
         }
         i = i + 1;
     }
@@ -5322,6 +5546,11 @@ func play3d() {
         // Gökyüzü/ışık saati. Duraklatmada donuyor: oyun durduysa zaman da
         // durmalı, yoksa menüden çıkınca gece olmuş buluyorsun.
         if (frozen == 0) { _s3_daynight(dt); }
+        // Sahne ışıklarının yuva ataması. DURAKLATMADA DA çalışıyor: seçim
+        // kameranın yerine bağlı ve duraklatmada kamera hâlâ dönebiliyor —
+        // donarsa oyuncu döndükçe yanlış üçlü yanık kalırdı. `_lights3`
+        // kapalıysa motorun ışık sistemi zaten kapalı, yükleme anlamsız.
+        if (_lights3 == 1 && length(_lt_x3) > 0) { _lt_upload3(); }
         if (_game_over3 == 0 && frozen == 0) {
             _s3_physics(dt);
             _s3_collision();
@@ -5725,6 +5954,9 @@ func _sc_world_defaults3() {
     _ground_tex3 = 0 - 1; _ground_tile3 = 1.0; _ground_tex_src3 = "";
     _grav = 26.0;
     _lights3 = 1; _shadows3 = 1;
+    // Işıklar da dünya ayarı: B sahnesini açmak A'nın lambalarını devralmamalı.
+    _lt_x3 = []; _lt_y3 = []; _lt_z3 = []; _lt_col3 = []; _lt_rng3 = [];
+    _lt_pick3 = [];
     _cam_dist = 12.0; _cam_height = 8.0; _cam_fov = 45.0;
     _cam_collide3 = 1; _cam_eye3 = 0.0;
     _dn_on3 = 0; _dn_h3 = 12.0; _dn_len3 = 120.0; _dn_frozen3 = 0;
@@ -5755,6 +5987,16 @@ func _sc_load_world3(w) {
     if (gts != "") { ground_texture_src3d(gts, _sc_f3(w, "ground_tile", 1.0)); }
     gravity3d(_sc_f3(w, "gravity", 26.0));
     lights3d(_sc_bool3(w, "lights", 1));
+    if (_sc_has3(w, "lights_at")) {
+        json ls3 = w["lights_at"];
+        int li2 = 0;
+        while (li2 < length(ls3)) {
+            json L = ls3[li2];
+            light3d(_sc_f3(L, "x", 0.0), _sc_f3(L, "y", 2.0), _sc_f3(L, "z", 0.0),
+                    _sc_col3(L, "color", WHITE), _sc_f3(L, "range", 10.0));
+            li2 = li2 + 1;
+        }
+    }
     shadows3d(_sc_bool3(w, "shadows", 1));
 
     if (_sc_has3(w, "daynight")) {
@@ -5863,6 +6105,8 @@ func _sc_load_ent3(e): int {
         me.anim_fps  = _sc_f3(e, "anim_fps", 24.0);
         _e3[sl] = me;
     }
+    str tx = _sc_s3(e, "texture", "");
+    if (tx != "") { set_texture3d(id, tx, _sc_f3(e, "tile", 1.0)); }
     if (_sc_has3(e, "yaw"))   { set3yaw(id, _sc_f3(e, "yaw", 0.0)); }
     if (_sc_has3(e, "solid")) { solid3d(id, _sc_bool3(e, "solid", 1)); }
     if (_sc_has3(e, "hp"))    { health3d(id, _sc_i3(e, "hp", 0)); }
@@ -6195,6 +6439,20 @@ func _sc_world_js3(): str {
     }
     o = o + "    \"gravity\": " + _sc_num3(_grav) + ",\n";
     if (_lights3 == 0)  { o = o + "    \"lights\": false,\n"; }
+    if (length(_lt_x3) > 0) {
+        o = o + "    \"lights_at\": [";
+        int li = 0;
+        while (li < length(_lt_x3)) {
+            if (li > 0) { o = o + ", "; }
+            o = o + "{\"x\": " + _sc_num3(_lt_x3[li]) +
+                ", \"y\": " + _sc_num3(_lt_y3[li]) +
+                ", \"z\": " + _sc_num3(_lt_z3[li]) +
+                ", \"color\": " + _sc_coljs3(_lt_col3[li]) +
+                ", \"range\": " + _sc_num3(_lt_rng3[li]) + "}";
+            li = li + 1;
+        }
+        o = o + "],\n";
+    }
     if (_shadows3 == 0) { o = o + "    \"shadows\": false,\n"; }
     if (_dn_on3 == 1) {
         o = o + "    \"daynight\": {\"len\": " + _sc_num3(_dn_len3) +
@@ -6296,6 +6554,12 @@ func _sc_ent_js3(s): str {
     // ve blok tümden atlanıyordu — yani sahneyi kaydetmek model referansını
     // SESSİZCE SİLİYORDU. Yol, handle'ın yüklenip yüklenmediğinden bağımsız
     // olarak varlığın ne olmak istediğini söylüyor; yazılması gereken o.
+    // Doku her ŞEKİL için geçerli (model dahil değil — onun dokusu kendi
+    // dosyasından gelir), o yüzden model bloğunun DIŞINDA yazılıyor.
+    if (e.tsrc != "") {
+        o = o + ", \"texture\": " + _sc_q3(e.tsrc);
+        if (e.ttile != 1.0) { o = o + ", \"tile\": " + _sc_num3(e.ttile); }
+    }
     if (e.shape == SHAPE_MODEL) {
         if (e.msrc != "") { o = o + ", \"model_src\": " + _sc_q3(e.msrc); }
         if (e.model >= 0) { o = o + ", \"model\": " + toString(e.model); }
@@ -6967,11 +7231,23 @@ int TPL_TOPLAYICI = 0;
 int TPL_ARENA     = 1;
 int TPL_PLATFORM  = 2;
 
+// Yer tutucu dokuların kök dizini — seslerle aynı gerekçe ve aynı bedel:
+// yol depo köküne göreli, başka bir dizinden çalıştırılırsa doku yüklenmez
+// ve varlık düz renge düşer (çökmez).
+func _tpl_doku3(ad): str { return "examples/assets/dokular/" + ad; }
+
 func _tpl_duvarlar3(r) {
-    uret3(0.0, 1.5, 0.0 - r, r * 2.0 + 2.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
-    uret3(0.0, 1.5, r,       r * 2.0 + 2.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
-    uret3(0.0 - r, 1.5, 0.0, 1.0, 3.0, r * 2.0 + 2.0, GRAY, SHAPE_CUBE, TAG_WALL);
-    uret3(r, 1.5, 0.0,       1.0, 3.0, r * 2.0 + 2.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    // Duvarlar DOKULU: düz gri kutular editörün "her şey plastik" hâliydi.
+    // Döşeme duvarın uzunluğuyla orantılı, yoksa tuğla gerilip bulanıklaşır.
+    float dt = r * 0.5;
+    int a = uret3(0.0, 1.5, 0.0 - r, r * 2.0 + 2.0, 3.0, 1.0, WHITE, SHAPE_CUBE, TAG_WALL);
+    int b = uret3(0.0, 1.5, r,       r * 2.0 + 2.0, 3.0, 1.0, WHITE, SHAPE_CUBE, TAG_WALL);
+    int c = uret3(0.0 - r, 1.5, 0.0, 1.0, 3.0, r * 2.0 + 2.0, WHITE, SHAPE_CUBE, TAG_WALL);
+    int d = uret3(r, 1.5, 0.0,       1.0, 3.0, r * 2.0 + 2.0, WHITE, SHAPE_CUBE, TAG_WALL);
+    set_texture3d(a, _tpl_doku3("tugla.png"), dt);
+    set_texture3d(b, _tpl_doku3("tugla.png"), dt);
+    set_texture3d(c, _tpl_doku3("tugla.png"), dt);
+    set_texture3d(d, _tpl_doku3("tugla.png"), dt);
 }
 
 // Her şablonun ortak açılışı: temiz sahne, dünya ayarları, oyuncu.
@@ -6979,6 +7255,9 @@ func _tpl_base3(): int {
     _sc_clear_for_load3();
     _sc_world_defaults3();
     zemin3(0.0);
+    // Zemin de dokulu: düz yeşil bir düzlem ölçek hissi vermiyordu, dokulu
+    // zeminde ne kadar hızlı gittiğin görünüyor.
+    ground_texture_src3d(_tpl_doku3("cimen.png"), 28.0);
     gokyuzu3d(rgb(38, 52, 92), rgb(176, 198, 224));
     sis3d(0.014);
     yercekimi3(26.0);
@@ -7006,8 +7285,10 @@ func ed_template3d(k) {
         int p = _tpl_base3();
         _tpl_duvarlar3(16.0);
         // Sütunlar: siper. Nişancıda siper olmadan kaçacak yer kalmıyor.
-        uret3(7.0, 2.0, 7.0, 1.6, 4.0, 1.6, rgb(120, 200, 140), SHAPE_CYL, TAG_WALL);
-        uret3(0.0 - 7.0, 2.0, 0.0 - 7.0, 1.6, 4.0, 1.6, rgb(120, 200, 140), SHAPE_CYL, TAG_WALL);
+        int s1 = uret3(7.0, 2.0, 7.0, 1.6, 4.0, 1.6, WHITE, SHAPE_CYL, TAG_WALL);
+        int s2 = uret3(0.0 - 7.0, 2.0, 0.0 - 7.0, 1.6, 4.0, 1.6, WHITE, SHAPE_CYL, TAG_WALL);
+        set_texture3d(s1, _tpl_doku3("metal.png"), 2.0);
+        set_texture3d(s2, _tpl_doku3("metal.png"), 2.0);
         // Oyuncu ateş eder; düşmanlar kovalar.
         ates_davranis3d(p, 0.45, 26.0, 1.6, TAG_ENEMY, 40.0);
         int i = 0;
@@ -7041,7 +7322,8 @@ func ed_template3d(k) {
         while (i < 4) {
             float ph = 2.0 + i * 1.6;
             int pl = uret3(px2, ph, 0.0 - i * 4.0, 4.0, 0.6, 3.0,
-                           rgb(140, 150, 190), SHAPE_CUBE, TAG_WALL);
+                           WHITE, SHAPE_CUBE, TAG_WALL);
+            set_texture3d(pl, _tpl_doku3("tahta.png"), 2.0);
             // Bir platform salınsın: zıplamayı zamanlamak gerekiyor.
             if (i == 2) { salin_davranis3d(pl, 1.2, 0.8); }
             // Altın platformun ÜST YÜZEYİNDE dinleniyor: platform yarı
@@ -7992,6 +8274,7 @@ func ed_duplicate3d(id): int {
     int ns = _slot_of3(n);
     Ent3 ne = _e3[ns];
     ne.model = e.model; ne.msrc = e.msrc;
+    ne.tsrc = e.tsrc; ne.ttile = e.ttile;
     ne.anim_idle = e.anim_idle; ne.anim_run = e.anim_run;
     ne.anim_fps = e.anim_fps; ne.avoid = e.avoid;
     _e3[ns] = ne;
@@ -10003,6 +10286,18 @@ func _ed_as_rows3(): int { return 6; }
 // tutuyor (sesler .wav/.ogg, modeller .glb), ama AÇIK OLAN kural indeksi
 // tek: iki kuralın tarayıcısı aynı anda açık olsaydı ikisi de aynı widget
 // kimliklerini kullanırdı.
+str   _ed_texglob3   = "examples/assets/dokular/*.png";
+array _ed_texfiles3  = [];
+int   _ed_texdone3   = 0;
+int   _ed_texopen3   = 0;
+int   _ed_texscroll3 = 0;
+
+func _ed_tex_scan3() {
+    _ed_texfiles3 = file_glob(_ed_texglob3);
+    _ed_texdone3 = 1;
+    _ed_texscroll3 = 0;
+}
+
 str   _ed_sndglob3   = "examples/assets/sesler/*.wav";
 array _ed_sndfiles3  = [];
 int   _ed_snddone3   = 0;
@@ -10210,6 +10505,7 @@ func _ed_snd_browser3(lx, y, inner, ri): int {
     str g0 = _ed_sndglob3;
     str g1 = _g_text(base, lx, y, inner - tbw - 4, _ED_FLD3, g0);
     if (g1 != g0) { _ed_sndglob3 = g1; _ed_snddone3 = 0; }
+    _g_tip_for3(base, _ed_sndglob3);
     if (_g_button(base + 1, lx + inner - tbw, y, tbw, _ED_FLD3, "TARA")) {
         _ed_snd_scan3();
     }
@@ -10250,6 +10546,179 @@ func _ed_snd_browser3(lx, y, inner, ri): int {
             _ed_sndscroll3 = _ed_sndscroll3 + rows;
         }
         _g_txt3(toString(_ed_sndscroll3 + 1) + "-" + toString(_ed_sndscroll3 + shown) +
+                " / " + toString(an), lx + (pbw + 4) * 2, _g_ly3(y),
+                inner - (pbw + 4) * 2, _G_DIM3());
+        y = y + _ED_FLD3 + _us3(2);
+    }
+    return y + _us3(2);
+}
+
+// ---- Işık paneli -------------------------------------------------------------
+// Nokta ışık motorda vardı ve scene3d onu HİÇ çağırmıyordu: sahnede meşale,
+// lamba, ateş yoktu. Panel ışıkları YERLEŞTİRİLMİŞ içerik olarak gösteriyor
+// (bölgeler gibi), tek bir dünya ayarı olarak değil.
+func _ed_lt_idbase3(): int { return 53000; }
+func _ed_lt_idstep3(): int { return 10; }
+func _ed_lt_idused3(): int { return 7; }
+
+// Işık için hazır renkler. Tam RGB düzenleyici bu dar panelde üç satır
+// yerdi; ışık rengi zaten birkaç kullanışlı değerden seçiliyor.
+func _ed_lt_next_col3(c): int {
+    if (c == WHITE)                 { return rgb(255, 214, 150); }  // sicak
+    if (c == rgb(255, 214, 150))    { return GOLD; }
+    if (c == GOLD)                  { return rgb(255, 120, 70); }   // ates
+    if (c == rgb(255, 120, 70))     { return rgb(120, 180, 255); }  // soguk
+    if (c == rgb(120, 180, 255))    { return rgb(140, 255, 170); }  // yesil
+    return WHITE;
+}
+func _ed_lt_col_nm3(c): str {
+    if (c == WHITE)              { return "beyaz"; }
+    if (c == rgb(255, 214, 150)) { return "sicak"; }
+    if (c == GOLD)               { return "altin"; }
+    if (c == rgb(255, 120, 70))  { return "ates"; }
+    if (c == rgb(120, 180, 255)) { return "soguk"; }
+    if (c == rgb(140, 255, 170)) { return "yesil"; }
+    return "ozel";
+}
+
+func _ed_lights_panel3(px, y, pw): int {
+    int lx = px + _ED_PAD3;
+    int inner = pw - _ED_PAD3 * 2;
+    int labw = _us3(26);
+    int fw = _ed_f3w3(pw, labw);
+    int fx = lx + labw;
+    int xw = _us3(16);
+    int n = light_count3d();
+
+    // MOTOR SINIRI görünür: aynı anda en çok 3 ışık yanıyor, motor kameraya
+    // en yakınları seçiyor. Bunu söylemezsek 6 lamba koyan biri "üçü neden
+    // yanmıyor" diye kaynağa bakmak zorunda kalır.
+    if (n > light_slots3d()) {
+        // Kısa tutuluyor: uzun sürüm ölçüldü, 414 piksel (panel 280).
+        _g_txt3(toString(n) + " lamba, " + toString(light_slots3d()) + " yanar",
+                lx, _g_ly3(y), inner, _G_WARN3());
+        y = y + _g_lh3();
+        _g_txt3("(kameraya en yakinlar)", lx, _g_ly3(y), inner, _G_DIM3());
+        y = y + _g_lh3();
+    }
+
+    int i = 0;
+    while (i < n) {
+        int wid = _ed_lt_idbase3() + i * _ed_lt_idstep3();
+        // Yanan ışıklar işaretli: seçimin ne yaptığı görünsün.
+        str bas = "isik " + toString(i + 1);
+        int bc = _G_DIM3();
+        int k = 0;
+        while (k < length(_lt_pick3)) {
+            if (_lt_pick3[k] == i) { bas = bas + "  (yaniyor)"; bc = _G_ACC3(); }
+            k = k + 1;
+        }
+        _g_txt3(bas, lx, _g_ly3(y), inner - xw - 4, bc);
+        if (_g_button(wid, px + pw - _ED_PAD3 - xw, y, xw, _ED_FLD3, "x")) {
+            ed_mark3d();
+            light_del3d(i);
+            return y;   // dizi degisti; bu kareyi burada bitir
+        }
+        y = y + _ED_FLD3 + _us3(2);
+
+        _g_txt3("kon", lx, _g_ly3(y), labw - 2, _G_DIM3());
+        float nx = _g_num(wid + 1, fx, y, fw, _ED_FLD3, light_x3d(i), 0.1);
+        float ny = _g_num(wid + 2, fx + fw + 4, y, fw, _ED_FLD3, light_y3d(i), 0.1);
+        float nz = _g_num(wid + 3, fx + (fw + 4) * 2, y, fw, _ED_FLD3, light_z3d(i), 0.1);
+        if (nx != light_x3d(i) || ny != light_y3d(i) || nz != light_z3d(i)) {
+            ed_mark3d();
+            light_move3d(i, nx, ny, nz);
+        }
+        y = y + _ED_FLD3 + _us3(2);
+
+        // Menzil ve renk AYRI satırlarda ve GENİŞ etiket sütunuyla. Aynı
+        // satıra sıkıştırılmışlardı ve ölçüm gösterdi: "menzil" 56 piksel,
+        // dar sütun 50 — etiketin kendisi taşıyordu.
+        int wlw = _ed_bh_lblw3(inner);
+        _g_txt3("menzil", lx, _g_ly3(y), wlw - 2, _G_DIM3());
+        float nr = _g_num(wid + 4, lx + wlw, y, _ed_bh_fieldw3(inner), _ED_FLD3,
+                          light_range3d(i), 0.5);
+        if (nr != light_range3d(i)) { ed_mark3d(); light_set_range3d(i, nr); }
+        _g_tip_for3(wid + 4, "Isigin ne kadar uzaga vurdugu");
+        y = y + _ED_FLD3 + _us3(2);
+
+        _g_txt3("renk", lx, _g_ly3(y), wlw - 2, _G_DIM3());
+        int cw = inner - wlw - xw - 4;
+        if (_g_button(wid + 5, lx + wlw, y, cw, _ED_FLD3,
+                      _ed_lt_col_nm3(light_color3d(i)))) {
+            ed_mark3d();
+            light_set_color3d(i, _ed_lt_next_col3(light_color3d(i)));
+        }
+        rect(px + pw - _ED_PAD3 - xw, y, xw, _ED_FLD3, light_color3d(i));
+        rect_lines(px + pw - _ED_PAD3 - xw, y, xw, _ED_FLD3, _G_LINE3());
+        y = y + _ED_FLD3 + _us3(5);
+        i = i + 1;
+    }
+
+    // Ekleme düğmesi ışık bloğunun ALTINDA (52900), üstünde değil: 53000
+    // tabanında adım 10 ile 90. ışık 53900'e ulaşıyordu ve düğmeyle
+    // çakışıyordu. Doku tarayıcısı 52051'de bitiyor, arada boşluk var.
+    if (_g_button(52900, lx, y, inner, _ED_FLD3, "+ ISIK EKLE")) {
+        ed_mark3d();
+        // Kameranın baktığı yere değil, ORTAYA koyuyoruz ve yukarı: yeni
+        // ışığın nerede olduğu belli olsun, sonra konumdan taşınsın.
+        light3d(0.0, 4.0, 0.0, rgb(255, 214, 150), 12.0);
+    }
+    _g_tip_for3(52900, "Sahneye nokta isik ekle (mesale, lamba)");
+    y = y + _ED_FLD3 + _us3(6);
+    return y;
+}
+
+// Doku tarayıcısı — ses/model tarayıcılarının kardeşi.
+func _ed_tex_browser3(lx, y, inner, id): int {
+    int base = 52010;
+    int tbw = _us3(38);
+    str g0 = _ed_texglob3;
+    str g1 = _g_text(base, lx, y, inner - tbw - 4, _ED_FLD3, g0);
+    if (g1 != g0) { _ed_texglob3 = g1; _ed_texdone3 = 0; }
+    // Alan deseni KIRPIYOR (ölçüldü: varsayılan desen 336 piksel, alan 194)
+    // ve düzenlerken de kırpık görünüyor — tam hâli ipucunda.
+    _g_tip_for3(base, _ed_texglob3);
+    if (_g_button(base + 1, lx + inner - tbw, y, tbw, _ED_FLD3, "TARA")) {
+        _ed_tex_scan3();
+    }
+    _g_tip_for3(base + 1, "Deseni diskte ara (* ve ? calisir)");
+    y = y + _ED_FLD3 + _us3(3);
+
+    int an = length(_ed_texfiles3);
+    if (an == 0) {
+        str emsg = "eslesme yok";
+        if (_ed_texdone3 == 0) { emsg = "TARA'ya bas"; }
+        _g_txt3(emsg, lx, _g_ly3(y), inner, _G_DIM3());
+        y = y + _g_lh3();
+    }
+    int rows = _ed_as_rows3();
+    _ed_texscroll3 = _ed_as_clamp3(_ed_texscroll3, an, rows);
+    int ai = _ed_texscroll3;
+    int shown = 0;
+    str cur = texture_src3d(id);
+    while (ai < an && shown < rows) {
+        str apath = _ed_texfiles3[ai];
+        int rw = base + 10 + shown * 2;
+        if (_g_tog(rw, lx, y, inner, _ED_FLD3, _ed_basename3(apath), apath == cur)) {
+            ed_mark3d();
+            set_texture3d(id, apath, texture_tile3d(id));
+            _ed_texopen3 = 0;   // seçince kapan
+        }
+        _g_tip_for3(rw, apath);
+        y = y + _ED_FLD3 + _us3(2);
+        ai = ai + 1;
+        shown = shown + 1;
+    }
+    if (an > rows) {
+        int pbw = _us3(30);
+        if (_g_button(base + 40, lx, y, pbw, _ED_FLD3, "^")) {
+            _ed_texscroll3 = _ed_texscroll3 - rows;
+        }
+        if (_g_button(base + 41, lx + pbw + 4, y, pbw, _ED_FLD3, "v")) {
+            _ed_texscroll3 = _ed_texscroll3 + rows;
+        }
+        _g_txt3(toString(_ed_texscroll3 + 1) + "-" + toString(_ed_texscroll3 + shown) +
                 " / " + toString(an), lx + (pbw + 4) * 2, _g_ly3(y),
                 inner - (pbw + 4) * 2, _G_DIM3());
         y = y + _ED_FLD3 + _us3(2);
@@ -10468,6 +10937,10 @@ func _ed_world_panel3(px, py, pw) {
         if (_shadows3 == 1) { _shadows3 = 0; } else { _shadows3 = 1; }
     }
     y = y + _ED_FLD3 + _us3(6);
+
+    _g_section(px + 2, y, pw - 4, "ISIKLAR");
+    y = y + _us3(16);
+    y = _ed_lights_panel3(px, y, pw);
 
     _g_section(px + 2, y, pw - 4, "SU");
     y = y + _us3(16);
@@ -10894,6 +11367,7 @@ func _ed_inspector3() {
         str g0 = _ed_asglob3;
         str g1 = _g_text(50002, lx, y, inner - tbw - 4, _ED_FLD3, g0);
         if (g1 != g0) { _ed_asglob3 = g1; _ed_asdone3 = 0; }
+        _g_tip_for3(50002, _ed_asglob3);
         if (_g_button(50003, lx + inner - tbw, y, tbw, _ED_FLD3, "TARA")) {
             _ed_asset_scan3();
         }
@@ -10940,6 +11414,54 @@ func _ed_inspector3() {
         }
         y = y + _us3(4);
     }
+
+    // -- YUZEY DOKUSU --
+    // Editörle kurulan her şey düz renk plastikti: `model_texture` motorda
+    // vardı ama scene3d onu HİÇ çağırmıyordu. İlkel cisimlerde doku kipsel
+    // (çiz-kapat) olduğu için varlık başına doku hiçbir takas gerektirmiyor.
+    e = _e3[s];
+    int txw = _us3(16);
+    str tcur = "doku: yok";
+    if (e.tsrc != "") { tcur = "doku: " + _ed_basename3(e.tsrc); }
+    str tsl = "DOKU SEC";
+    if (_ed_texopen3 == 1) { tsl = "DOKU SEC  (kapat)"; }
+    if (_g_button(52000, lx, y, inner - txw - 4, _ED_FLD3, tcur)) {
+        if (_ed_texopen3 == 1) { _ed_texopen3 = 0; }
+        else {
+            _ed_texopen3 = 1;
+            if (_ed_texdone3 == 0) { _ed_tex_scan3(); }
+        }
+    }
+    str ttip = "Yuzey dokusu sec (kutu/kure/silindir/rampa)";
+    if (e.tsrc != "") { ttip = e.tsrc; }
+    _g_tip_for3(52000, ttip);
+    if (e.tsrc != "") {
+        if (_g_button(52001, lx + inner - txw, y, txw, _ED_FLD3, "x")) {
+            ed_mark3d();
+            clear_texture3d(id);
+        }
+        _g_tip_for3(52001, "Dokuyu kaldir — varlik yeniden duz renk");
+    }
+    y = y + _ED_FLD3 + _us3(3);
+
+    // Döşeme sıklığı yalnız DOKU VARKEN anlamlı.
+    e = _e3[s];
+    if (e.tsrc != "") {
+        int tlw = _ed_bh_lblw3(inner);
+        int tfw = _ed_bh_fieldw3(inner);
+        float ntl = _ed_bhf3(52002, lx, y, tlw, tfw, "doseme", e.ttile, 0.5);
+        if (ntl != e.ttile) {
+            ed_mark3d();
+            set_texture3d(id, e.tsrc, ntl);
+        }
+        _g_tip_for3(52002, "Doku kac kez tekrarlansin (1 = gerdir)");
+        y = y + _ED_FLD3 + _us3(2);
+    }
+
+    if (_ed_texopen3 == 1) {
+        y = _ed_tex_browser3(lx, y, inner, id);
+    }
+    y = y + _us3(4);
 
     // -- ANIMASYON: yalnız modelli varlıkta anlamlı --
     // Model atanabilir oldu ama HANGİ klibin boşta hangisinin koşu olduğunu
