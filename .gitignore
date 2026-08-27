@@ -208,6 +208,9 @@ scene3d_lvl_*.txt
 # dosyasının yanında duruyorlar). Kök-bağlı bir desen (/*.kurtarma.json)
 # examples/scenes/ altındakini kaçırıyordu.
 *.kurtarma.json
+# Editörün panel yerleşimi (kalıcı ayar) ve testlerin proba kaydı
+/tameengine_layout.txt
+/s3_yerlesim_probasi.txt
 /scene3d_karakter
 /karakter_desktop
 /labirent_desktop

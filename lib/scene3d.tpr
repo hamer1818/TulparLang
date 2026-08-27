@@ -5858,6 +5858,10 @@ func play3d() {
     // Editör uygulaması: kamerayı sahnenin üstüne kur (editor3d bunu hedefe
     // göre yapıyor). Kurulum bittikten SONRA çağrılıyor, yoksa hedef yok.
     if (_ed_app3 == 1) {
+        // Kayıtlı YERLEŞİM önce: ölçeği de taşıyor ve ölçek değişimi fontu
+        // kendisi yeniden yüklüyor. "Motor yeniden açıldığında hatırlansın"
+        // isteğinin karşılığı bu satır.
+        editor_layout_load3d();
         // Font pencere kurulduktan SONRA yüklenebiliyor (raylib GPU dokusu
         // oluşturuyor); bu yüzden setup'ta değil burada.
         _ed_font_load3();
@@ -5870,9 +5874,7 @@ func play3d() {
         // değerde donsaydı büyütülen pencerede bütün arayüz sol üst köşeye
         // sıkışırdı. (Bu noktada hiçbir render hedefi bağlı değil, yani
         // `screen_width()` gerçek pencereyi veriyor.)
-        int sw3 = screen_width();
-        int sh3 = screen_height();
-        if (sw3 > 0 && sh3 > 0) { _win_w = sw3; _win_h = sh3; }
+        _ed_sync_window3(screen_width(), screen_height());
 
         float dt = frame_time();
         if (dt <= 0.0) { dt = 0.0166667; }
@@ -9536,6 +9538,10 @@ func _s3_editor_mouse(dt) {
     if (_ed_ctx_on3 == 1) { return; }
     if (_ed_fd_on3 != _ED_FD_OFF3) { return; }
     if (_ed_help3 == 1) { return; }
+    // Ayraç sürüklenirken görünüm tıklama almamalı: sol ayraç tam görünümün
+    // kenarında duruyor, yani sürüklemenin ilk karesi aynı zamanda sahnede
+    // bir seçim olurdu.
+    if (_ed_split3 > 0) { return; }
     // Sürükleme SÜRÜYORSA panel denetimi atlanıyor: imleç panelin üstünden
     // geçerken sürüklemenin kopması, Unity'de de olmayan bir davranış olurdu.
     if (_gz_axis3 < 0 && _ed_drag3 == 0 && _ed_over_ui3()) { return; }
@@ -10130,6 +10136,7 @@ func editor_ui_scale3d(k) {
     int n = k;
     if (n < 1) { n = 1; }
     if (n > 3) { n = 3; }
+    int eski = _ed_ui3;
     _ed_ui3 = n;
     _F3         = 10 * n;
     _ED_PAD3    =  6 * n;
@@ -10143,12 +10150,19 @@ func editor_ui_scale3d(k) {
     // Konsol yüksekliği SATIR SAYISINDAN türüyor: sabit bir taban 3x ölçekte
     // tek satır gösterebiliyordu ve tek satırlık konsol işe yaramıyor.
     // (satır yüksekliği = 10n + 4n = 14n) * 3 satır + başlık/pay.
-    _ED_CONS_H3 = 14 * n * 3 + 24 * n;
     // Paneller ölçekle büyüyor ama DOĞRU ORANTILI değil: 3x'te ikisi birden
     // editör penceresinin yarısını yerdi. Sabit taban + ölçek payı, ve toplam
     // 720'nin (1440'ın yarısı) altında kalıyor — bir test bunu koruyor.
-    _ED_HIER_W3 = 84 + 72 * n;
-    _ED_INSP_W3 = 96 + 104 * n;
+    //
+    // ÖZELLEŞTİRME KORUNUYOR: kullanıcı sınırı sürüklediyse ölçek değişimi
+    // onun oranını taşıyor, varsayılana geri atmıyor. Atmak "kendi
+    // yerleşimini kullanabilsin" isteğinin tam tersi olurdu.
+    _ED_CONS_H3 = _ed_lay_rescale3(_ED_CONS_H3, _ed_lay_def_cons3(eski),
+                                   _ed_lay_def_cons3(n));
+    _ED_HIER_W3 = _ed_lay_rescale3(_ED_HIER_W3, _ed_lay_def_hier3(eski),
+                                   _ed_lay_def_hier3(n));
+    _ED_INSP_W3 = _ed_lay_rescale3(_ED_INSP_W3, _ed_lay_def_insp3(eski),
+                                   _ed_lay_def_insp3(n));
     // Kaydırmalar bayatlamasın.
     _ed_hscroll3 = 0;
     _ed_iscroll3 = 0;
@@ -10532,7 +10546,13 @@ int _ed_rtw3     = 0;
 int _ed_rth3     = 0;
 
 int _ED_MENU_H3 = 40;
-int _ED_CONS_H3 = 96;
+// 2x ölçeğin varsayılanı — `_ed_lay_def_cons3(2)` ile AYNI olmak zorunda.
+// 96 yazıyordu ve formül 132 veriyordu; fark görünmüyordu çünkü ilk
+// `editor_ui_scale3d` çağrısı değeri eziyordu. Ölçek değişimi kullanıcının
+// özelleştirmesini ORANLAYARAK taşımaya başlayınca fark yük taşır oldu:
+// motor açılıştaki 96'yı "özelleştirilmiş" sanıp her ölçekte küçültüyordu
+// (1x'te konsol üç satır yerine iki satır gösteriyordu — test yakaladı).
+int _ED_CONS_H3 = 132;
 int _ED_STAT_H3 = 36;
 
 // İmleç kilidi kararı TEK yerde ve saf: döngünün içine gömülü olduğu sürece
@@ -10564,6 +10584,193 @@ func ed_playing3d(): bool { return _ed_playing3 == 1; }
 
 // ---- Yerleşim dikdörtgenleri ----------------------------------------------
 // Hepsi pencere boyutundan türüyor; parametreli ikizleri penceresiz sınanıyor.
+// ---- YERLEŞİM: sürüklenebilir ayraçlar + kalıcılık --------------------------
+// Paneller sabit genişlikteydi: hiyerarşi dar gelse de, inceleyici geniş
+// gelse de yapılabilecek bir şey yoktu. Unity/Godot/Unreal'da panel sınırı
+// sürüklenir; herkes kendi ekranına ve kendi işine göre yerleştirir.
+//
+// TAM DOCKING (paneli söküp başka bir yere bırakmak, sekmeler, yüzen
+// pencereler) DEĞİL ve bilerek: onun bedeli ayrı bir pencere yöneticisi ve
+// onu sürükleyecek bir kip makinesi. Buradaki üç sınır, "kendi
+// özelleştirmesini kullanabilsin" isteğinin karşılığının neredeyse tamamı.
+//
+// Ölçüler UI ÖLÇEĞİYLE ilişkili: 3x'te 70 piksellik bir panel okunmuyor.
+func _ed_lay_grip3(): int { return _us3(4); }      // yakalama yarıçapı
+func _ed_lay_min_hier3(): int { return _us3(70); }
+func _ed_lay_min_insp3(): int { return _us3(90); }
+func _ed_lay_min_view3(): int { return _us3(120); }
+func _ed_lay_min_cons3(): int { return _g_lh3() + _us3(18); }   // bir satır
+
+// Konsol pencerenin YARISINDAN fazlasını yiyemez: konsol bir tanılama
+// paneli, sahne görünümü ise asıl iş — oranı tersine çevirmek editörü
+// kullanılamaz yapardı ve geri getirmenin yolu (sınır yine ekranda) zor
+// bulunurdu.
+func _ed_lay_max_cons3(H): int {
+    int mx = toInt(H / 2);
+    int mn = _ed_lay_min_cons3();
+    if (mx < mn) { mx = mn; }
+    return mx;
+}
+
+// SAF kelepçeler. Her biri ÖTEKİ paneli hesaba katıyor: ikisi bağımsız
+// sürükleniyor ve toplamları sahne görünümünü yok edebilir.
+func _ed_lay_hier_at3(w, W): int {
+    int mn = _ed_lay_min_hier3();
+    int mx = W - _ED_INSP_W3 - _ed_lay_min_view3();
+    if (mx < mn) { mx = mn; }
+    if (w < mn) { w = mn; }
+    if (w > mx) { w = mx; }
+    return w;
+}
+func _ed_lay_insp_at3(w, W): int {
+    int mn = _ed_lay_min_insp3();
+    int mx = W - _ED_HIER_W3 - _ed_lay_min_view3();
+    if (mx < mn) { mx = mn; }
+    if (w < mn) { w = mn; }
+    if (w > mx) { w = mx; }
+    return w;
+}
+func _ed_lay_cons_at3(h, H): int {
+    int mn = _ed_lay_min_cons3();
+    int mx = _ed_lay_max_cons3(H);
+    if (h < mn) { h = mn; }
+    if (h > mx) { h = mx; }
+    return h;
+}
+
+// Pencere küçülünce kelepçeler YENİDEN uygulanmalı: kullanıcının 400
+// piksellik inceleyicisi 600 piksellik bir pencerede sahne görünümünü
+// tümden yerdi.
+// Pencere ölçüsünü tazele ve DEĞİŞTİYSE yerleşimi yeniden kelepçele.
+// Ayrı fonksiyon çünkü döngünün göbeğinde pencere olmadan sürülemiyordu ve
+// kelepçe çağrısını oradan silmek hiçbir testi kırmıyordu (bozma denendi,
+// kaçtı). Menü dağıtımında da aynı ders çıkmıştı: yardımcıyı sınamak
+// yetmiyor, onu ÇAĞIRDIĞINI da sınamak gerekiyor.
+func _ed_sync_window3(W, H) {
+    if (W <= 0 || H <= 0) { return; }
+    if (W != _win_w || H != _win_h) { _ed_lay_reclamp3(W, H); }
+    _win_w = W;
+    _win_h = H;
+}
+
+func _ed_lay_reclamp3(W, H) {
+    // Ölçü BİLİNMİYORSA kelepçeleme. `screen_width()` pencere açılmadan 0
+    // dönüyor ve sıfıra göre kelepçelemek her paneli en küçük ölçüsüne
+    // indirir — yani kayıtlı yerleşimi sessizce SİLER. (Test yakaladı:
+    // yeniden açılışta 300 piksellik hiyerarşi 140'a düşüyordu.) Gerçek
+    // ölçü öğrenilince kare döngüsü zaten yeniden kelepçeliyor.
+    if (W <= 0 || H <= 0) { return; }
+    _ED_HIER_W3 = _ed_lay_hier_at3(_ED_HIER_W3, W);
+    _ED_INSP_W3 = _ed_lay_insp_at3(_ED_INSP_W3, W);
+    _ED_CONS_H3 = _ed_lay_cons_at3(_ED_CONS_H3, H);
+}
+
+// Ölçek değişiminde ÖZELLEŞTİRME korunuyor. Kullanıcı sınırı hiç
+// sürüklemediyse yeni ölçeğin varsayılanı geliyor; sürüklediyse oranı
+// korunarak büyüyor. Özelleştirmeyi sessizce atmak, "kendi yerleşimini
+// kullanabilsin" isteğinin tam tersi olurdu.
+func _ed_lay_rescale3(cur, eski_var, yeni_var): int {
+    if (eski_var <= 0) { return yeni_var; }
+    if (cur == eski_var) { return yeni_var; }
+    return toInt(cur * yeni_var / eski_var);
+}
+
+// Ölçeğin VARSAYILAN ölçüleri — hem `editor_ui_scale3d` hem yeniden
+// ölçekleme buradan okuyor, iki yerde tutmak ikisini ayırırdı.
+func _ed_lay_def_hier3(n): int { return 84 + 72 * n; }
+func _ed_lay_def_insp3(n): int { return 96 + 104 * n; }
+func _ed_lay_def_cons3(n): int { return 14 * n * 3 + 24 * n; }
+
+// Hangi ayracın üstündeyiz: 0 yok, 1 sol (hiyerarşi), 2 sağ (inceleyici),
+// 3 konsolun üstü. SAF — fare konumu parametre, pencere gerekmiyor.
+//
+// KÖŞEYİ SIRA çözüyor, ikinci bir sınır değil: konsol şeridi ÖNCE
+// sınanıyor, yani dikey ayraçlarla kesiştiği yerde her zaman konsol
+// kazanıyor. Dikey bandı ayrıca "konsolun bir tutam yukarısında bitir"
+// diye kısmak da denendi ve ÖLÜ çıktı (bozma denemesi hiçbir testi
+// kırmadı) — iki yerde tutulan koruma, hangisinin yük taşıdığını
+// sınanamaz yapıyor.
+func _ed_split_at3(mx, my, W, H): int {
+    int t = _ed_lay_grip3();
+    int vy = _ed_view_y_at3(H);
+    int cb = H - _ED_STAT_H3 - _ED_CONS_H3;   // konsolun ÜST kenarı
+    if (my >= cb - t && my <= cb + t) { return 3; }
+    if (my >= vy && my < cb) {
+        int lx = _ED_HIER_W3;
+        if (mx >= lx - t && mx <= lx + t) { return 1; }
+        int rx = W - _ED_INSP_W3;
+        if (mx >= rx - t && mx <= rx + t) { return 2; }
+    }
+    return 0;
+}
+
+// ---- Yerleşimin kalıcılığı ---------------------------------------------------
+// "Motor yeniden açıldığında da hatırlansın": ölçek ve üç panel ölçüsü
+// kalıcı depoya yazılıyor (masaüstünde çalışma dizini, Android'de uygulama
+// verisi, web'de tarayıcı deposu — `save_data` üçünü de kapsıyor).
+//
+// Biçim düz metin ve BORU ile ayrılmış: dört sayı için JSON kurmak, okumak
+// için ayrıştırıcı çağırmak ve bozuk dosyaya karşı ayrıca korunmak gerekirdi.
+// Kayıt ADI değiştirilebilir ve bu gerekli: testler yerleşim kaydını
+// tazeliyor ve sabit bir ad, `./build.sh suites` çalıştıran kullanıcının
+// KENDİ editör yerleşimini eziyordu. Ayrıca projeye özel yerleşim tutmak
+// isteyen bir kurulum da bunu kullanabilir.
+str _ed_lay_key_s3 = "tameengine_layout.txt";
+func _ed_lay_key3(): str { return _ed_lay_key_s3; }
+func editor_layout_key3d(name) { if (name != "") { _ed_lay_key_s3 = name; } }
+func editor_yerlesim_anahtari3d(ad) { editor_layout_key3d(ad); }
+
+func _ed_lay_encode3(): str {
+    return toString(_ed_ui3) + "|" + toString(_ED_HIER_W3) + "|" +
+           toString(_ED_INSP_W3) + "|" + toString(_ED_CONS_H3);
+}
+
+// Bozuk / eski / boş kayıt SESSİZCE yok sayılıyor ve false dönüyor: kayıt
+// dosyası kullanıcının elinde ve editörün açılmaması onu düzeltmenin yolunu
+// da kapatırdı.
+func _ed_lay_decode3(s, W, H): bool {
+    if (s == "") { return false; }
+    array p = split(s, "|");
+    if (length(p) < 4) { return false; }
+    int sc = toInt(p[0]);
+    int hw = toInt(p[1]);
+    int iw = toInt(p[2]);
+    int ch = toInt(p[3]);
+    if (sc < 1 || sc > 3) { return false; }
+    if (hw <= 0 || iw <= 0 || ch <= 0) { return false; }
+    if (sc != _ed_ui3) { editor_ui_scale3d(sc); }
+    _ED_HIER_W3 = hw;
+    _ED_INSP_W3 = iw;
+    _ED_CONS_H3 = ch;
+    _ed_lay_reclamp3(W, H);
+    return true;
+}
+
+func editor_layout_save3d(): bool {
+    return save_data(_ed_lay_key3(), _ed_lay_encode3());
+}
+func editor_yerlesim_kaydet3d(): bool { return editor_layout_save3d(); }
+
+func editor_layout_load3d(): bool {
+    return _ed_lay_decode3(load_data(_ed_lay_key3()),
+                           screen_width(), screen_height());
+}
+func editor_yerlesim_yukle3d(): bool { return editor_layout_load3d(); }
+
+// Varsayılana dön — özelleştirmeyi geri almanın yolu olmalı, yoksa sınırı
+// ekranın dışına itmiş biri sıkışıp kalır.
+func editor_layout_reset3d() {
+    _ED_HIER_W3 = _ed_lay_def_hier3(_ed_ui3);
+    _ED_INSP_W3 = _ed_lay_def_insp3(_ed_ui3);
+    _ED_CONS_H3 = _ed_lay_def_cons3(_ed_ui3);
+    editor_layout_save3d();
+}
+func editor_yerlesim_sifirla3d() { editor_layout_reset3d(); }
+
+// Sürükleme durumu.
+int _ed_split3 = 0;      // 0 = sürüklenmiyor, 1/2/3 = hangi ayraç
+int _ed_split_hot3 = 0;  // imlecin altındaki ayraç (vurgulama)
+
 func _ed_view_x_at3(W): int { return _ED_HIER_W3; }
 func _ed_view_y_at3(H): int { return _ED_MENU_H3 + _ED_TOOL_H3; }
 func _ed_view_w_at3(W): int {
@@ -10729,6 +10936,20 @@ func _ed_menubar3() {
             _g_tip_for3(9608, "Onceki oturumda kaydedilmemis is bulundu — geri getir");
             x = x + wk + _us3(12);
         }
+    }
+    // Yerleşimi varsayılana döndür — özelleştirmenin geri alınabilir olması
+    // ŞART: sınırı ekranın kenarına itip sıkışan biri başka türlü çıkamaz
+    // (ve yerleşim kalıcı olduğu için programı kapatmak da kurtarmaz).
+    str yl = "YERLESIM";
+    int wy = _g_btnw3(yl);
+    if (x + wy <= W - _ED_PAD3) {
+        if (_g_button(9609, x, _us3(2), wy, bh, yl)) {
+            editor_layout_reset3d();
+            _ed_msg3 = "panel yerlesimi varsayilana dondu";
+            _ed_msg_t3 = 3.0;
+        }
+        _g_tip_for3(9609, "Panel yerlesimini varsayilana dondur");
+        x = x + wy + gap;
     }
     // Kısayol listesi FAREYLE de bulunabilmeli: "H'ye bas" demek, H'yi
     // bilmeyen kullanıcıya bir şey söylemiyor. Bu düğme o döngüyü kırıyor.
@@ -11345,7 +11566,7 @@ int _ed_help3 = 0;
 int _ed_help_scroll3 = 0;
 
 func _ed_help_idbase3(): int { return 71000; }
-func _ed_help_n3(): int { return 23; }
+func _ed_help_n3(): int { return 24; }
 
 func _ed_help_key3(i): str {
     if (i ==  0) { return "SAG TUS + WASD"; }
@@ -11370,6 +11591,7 @@ func _ed_help_key3(i): str {
     if (i == 19) { return "F1"; }
     if (i == 20) { return "F2"; }
     if (i == 21) { return "F11"; }
+    if (i == 22) { return "PANEL SINIRI"; }
     return "H";
 }
 
@@ -11403,6 +11625,7 @@ func _ed_help_act3(i): str {
     if (i == 19) { return "tanilama ortusu"; }
     if (i == 20) { return "kaydi dosyaya dok"; }
     if (i == 21) { return "tam ekran ac / kapat"; }
+    if (i == 22) { return "surukle: panel boyutu"; }
     return "bu listeyi ac / kapat";
 }
 
@@ -11416,15 +11639,47 @@ func _ed_help_fixed_h3(): int {
     // başlık payı + alt satır (kapat düğmesi + kaydırma ipucu) + alt pay
     return _us3(20) + _ED_FLD3 + _us3(8);
 }
-func _ed_help_rows_for3(H): int {
+// Dikey olarak kaç satır sığar (SÜTUN BAŞINA).
+func _ed_help_rowcap_for3(H): int {
     int bos = H - _ED_MENU_H3 - _ED_STAT_H3 - _ed_help_fixed_h3();
     int r = toInt(bos / _g_lh3());
     if (r > _ed_help_n3()) { r = _ed_help_n3(); }
     if (r < 3) { r = 3; }
     return r;
 }
+
+// Kaç SÜTUN. Liste 24 satıra çıkınca 2x ölçekte tek sütun 820 piksele
+// sığmaz oldu ve kaydırmaya düştü — bir BAŞVURU listesini kaydırtmak onu
+// okumaktan çıkarıyor. İki sütun 2x'te tümünü görünür kılıyor; 3x'te iki
+// sütun 1440 piksele sığmadığı için tek sütuna düşüp kayıyor. Karar
+// GENİŞLİKTEN türüyor, elle seçilmiyor.
+func _ed_help_cols_for3(W): int {
+    int bir = _ed_help_keyw3() + _us3(180);
+    int enb = W - _us3(24) - _ED_PAD3 * 2;
+    if (enb >= bir * 2 + _us3(16)) { return 2; }
+    return 1;
+}
+
+// Sütun başına GERÇEKTEN çizilecek satır: hepsi sığıyorsa daha fazlasına
+// yer ayırmak pencereyi boşuna uzatırdı.
+func _ed_help_rows_used3(W, H): int {
+    int cols = _ed_help_cols_for3(W);
+    int cap = _ed_help_rowcap_for3(H);
+    int need = toInt((_ed_help_n3() + cols - 1) / cols);
+    if (need < cap) { return need; }
+    return cap;
+}
+
+// Aynı anda GÖRÜNEN satır sayısı — testin "hepsi okunabiliyor mu"
+// sorusunun cevabı.
+func _ed_help_visible3(W, H): int {
+    int v = _ed_help_rows_used3(W, H) * _ed_help_cols_for3(W);
+    if (v > _ed_help_n3()) { v = _ed_help_n3(); }
+    return v;
+}
+
 func _ed_help_h_for3(H): int {
-    return _ed_help_fixed_h3() + _g_lh3() * _ed_help_rows_for3(H);
+    return _ed_help_fixed_h3() + _g_lh3() * _ed_help_rows_used3(screen_width(), H);
 }
 
 // Anahtar sütunu: en uzun kısayol adı + pay. Sabit bir sayı, yeni bir uzun
@@ -11443,7 +11698,9 @@ func _ed_help_keyw3(): int {
 }
 
 func _ed_help_w_for3(W): int {
-    int w = _ed_help_keyw3() + _us3(180) + _ED_PAD3 * 2;
+    int cols = _ed_help_cols_for3(W);
+    int w = (_ed_help_keyw3() + _us3(180)) * cols + _ED_PAD3 * 2;
+    if (cols > 1) { w = w + _us3(16); }
     int enb = W - _us3(24);
     if (w > enb) { w = enb; }
     return w;
@@ -11464,37 +11721,46 @@ func _ed_help_draw3() {
     int lx = x + _ED_PAD3;
     int inner = w - _ED_PAD3 * 2;
     int kw = _ed_help_keyw3();
-    int rows = _ed_help_rows_for3(screen_height());
+    int cols = _ed_help_cols_for3(screen_width());
+    int rows = _ed_help_rows_used3(screen_width(), screen_height());
+    int gorunen = _ed_help_visible3(screen_width(), screen_height());
     int n = _ed_help_n3();
-    _ed_help_scroll3 = _ed_as_clamp3(_ed_help_scroll3, n, rows);
+    _ed_help_scroll3 = _ed_as_clamp3(_ed_help_scroll3, n, gorunen);
     // Tekerlek de kaydırıyor: uzun bir listede düğme aramak gereksiz.
     if (_g_in(x, y, w, h)) {
         float wh = mouse_wheel();
         if (wh > 0.5) { _ed_help_scroll3 = _ed_help_scroll3 - 3; }
         if (wh < 0.0 - 0.5) { _ed_help_scroll3 = _ed_help_scroll3 + 3; }
-        _ed_help_scroll3 = _ed_as_clamp3(_ed_help_scroll3, n, rows);
+        _ed_help_scroll3 = _ed_as_clamp3(_ed_help_scroll3, n, gorunen);
     }
 
-    int iy = y + _us3(20);
+    // Satırlar SÜTUN SÜTUN doluyor: ilk sütun baştan sona, sonra ikinci.
+    // Satır satır (soldan sağa) doldurmak listeyi okunmaz yapardı — göz
+    // kısayolları alt alta arıyor.
+    int sw = toInt((inner - _us3(16)) / cols);
+    if (cols == 1) { sw = inner; }
     int i = _ed_help_scroll3;
     int shown = 0;
-    while (i < n && shown < rows) {
-        _g_txt3(_ed_help_key3(i), lx, iy, kw - _us3(4), _G_ACC3());
-        _g_txt3(_ed_help_act3(i), lx + kw, iy, inner - kw, _G_TXT3());
-        iy = iy + _g_lh3();
+    while (i < n && shown < gorunen) {
+        int c = toInt(shown / rows);
+        int r = shown - c * rows;
+        int cx = lx + c * (sw + _us3(16));
+        int iy = y + _us3(20) + r * _g_lh3();
+        _g_txt3(_ed_help_key3(i), cx, iy, kw - _us3(4), _G_ACC3());
+        _g_txt3(_ed_help_act3(i), cx + kw, iy, sw - kw, _G_TXT3());
         i = i + 1;
         shown = shown + 1;
     }
 
     int by = y + h - _ED_FLD3 - _us3(6);
     int kbw = _us3(56);
-    if (n > rows) {
+    if (n > gorunen) {
         int pbw = _us3(30);
         if (_g_button(base + 1, lx, by, pbw, _ED_FLD3, "^")) {
-            _ed_help_scroll3 = _ed_help_scroll3 - rows;
+            _ed_help_scroll3 = _ed_help_scroll3 - gorunen;
         }
         if (_g_button(base + 2, lx + pbw + 4, by, pbw, _ED_FLD3, "v")) {
-            _ed_help_scroll3 = _ed_help_scroll3 + rows;
+            _ed_help_scroll3 = _ed_help_scroll3 + gorunen;
         }
         _g_txt3(toString(_ed_help_scroll3 + 1) + "-" +
                 toString(_ed_help_scroll3 + shown) + " / " + toString(n),
@@ -11508,9 +11774,61 @@ func _ed_help_draw3() {
     if (_g_press3 == 1 && _g_in(x, y, w, h) == false) { _ed_help_close3(); }
 }
 
+// ---- Ayraç sürükleme -------------------------------------------------------
+// GİRDİ panellerden ÖNCE işleniyor, ÇİZİM panellerden sonra. Girdi sonra
+// gelseydi ayraca yapılan tıklama aynı karede altındaki panel widget'ına da
+// giderdi (sınır, hiyerarşi satırlarının sağ kenarıyla birkaç piksel
+// örtüşüyor); çizim önce gelseydi paneller ayracın üstünü boyardı.
+func _ed_split_input3() {
+    int W = screen_width();
+    int H = screen_height();
+    _ed_split_hot3 = 0;
+    if (_ed_split3 == 0) {
+        _ed_split_hot3 = _ed_split_at3(mouse_x(), mouse_y(), W, H);
+        if (_ed_split_hot3 > 0 && mouse_pressed(0)) { _ed_split3 = _ed_split_hot3; }
+    }
+    if (_ed_split3 == 0) { return; }
+    // Sürükleme başladıktan sonra imleç ayracın DIŞINA çıksa da bırakılmıyor:
+    // hızlı bir sürüklemede fare her karede sınırın önünde oluyor ve
+    // "üstündeyse sürükle" kuralı jesti sürekli koparırdı.
+    if (_ed_split3 == 1) { _ED_HIER_W3 = _ed_lay_hier_at3(mouse_x(), W); }
+    if (_ed_split3 == 2) { _ED_INSP_W3 = _ed_lay_insp_at3(W - mouse_x(), W); }
+    if (_ed_split3 == 3) {
+        _ED_CONS_H3 = _ed_lay_cons_at3(H - _ED_STAT_H3 - mouse_y(), H);
+    }
+    // Panel widget'ları bu karede tıklama ALMASIN.
+    _g_press3 = 0;
+    _g_act3 = 0;
+    if (mouse_down(0) == false) {
+        _ed_split3 = 0;
+        // Bırakınca KALICI. Her karede yazmak diske kare başına dokunurdu;
+        // yalnız çıkışta yazmak ise çökme hâlinde işi kaybettirirdi.
+        editor_layout_save3d();
+    }
+}
+
+func _ed_split_draw3() {
+    int W = screen_width();
+    int H = screen_height();
+    int vy = _ed_view_y_at3(H);
+    int cb = H - _ED_STAT_H3 - _ED_CONS_H3;
+    int c = _G_LINE3();
+    int hot = _ed_split3;
+    if (hot == 0) { hot = _ed_split_hot3; }
+    // Sınır normalde ince bir çizgi; imleç üstündeyken VURGULU. Vurgu
+    // olmadan "burası sürüklenebilir" bilgisi hiçbir yerde yazmıyor.
+    if (hot == 1) { rect(_ED_HIER_W3 - 1, vy, 2, cb - vy, _G_ACC3()); }
+    else { line(_ED_HIER_W3, vy, _ED_HIER_W3, cb, c); }
+    int rx = W - _ED_INSP_W3;
+    if (hot == 2) { rect(rx - 1, vy, 2, cb - vy, _G_ACC3()); }
+    else { line(rx, vy, rx, cb, c); }
+    if (hot == 3) { rect(0, cb - 1, W, 2, _G_ACC3()); }
+}
+
 // ---- Kabuk -----------------------------------------------------------------
 func _ed_chrome3() {
     _g_begin();
+    _ed_split_input3();
     _ed_menubar3();
     _ed_toolbar3();
     _ed_hierarchy3();
@@ -11523,6 +11841,7 @@ func _ed_chrome3() {
     int vw = _ed_view_w3();
     int vh = _ed_view_h3();
     rect_lines(vx - 1, vy - 1, vw + 2, vh + 2, _G_LINE3());
+    _ed_split_draw3();
     if (_ed_playing3 == 0) { _ed_axis_widget3(); }
     // Bağlam menüsü panellerin ÜSTÜNDE ama çakışma denetiminden ÖNCE:
     // menü kasıtlı olarak altındakileri örtüyor, onu çakışma saymak yanlış

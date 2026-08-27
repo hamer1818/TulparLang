@@ -6444,9 +6444,12 @@ func t_help_key_column_fits_longest_key() {
     }
     // Açıklama sütunu da kalan yere sığmalı.
     int inner = _ed_help_w_for3(1440) - _ED_PAD3 * 2;
+    int cols = _ed_help_cols_for3(1440);
+    int sw = inner;
+    if (cols > 1) { sw = toInt((inner - _us3(16)) / cols); }
     i = 0;
     while (i < _ed_help_n3()) {
-        assert(_t_fits3(_ed_help_act3(i), inner - kw),
+        assert(_t_fits3(_ed_help_act3(i), sw - kw),
                "aciklama sutuna sigmali: " + _ed_help_act3(i));
         i = i + 1;
     }
@@ -6466,19 +6469,28 @@ func t_help_overlay_fits_and_scrolls() {
                "olcek " + toString(k) + ": yukseklik tasti " + toString(h));
         assert(_ed_help_w_for3(W) <= W - _us3(24),
                "olcek " + toString(k) + ": genislik tasti");
-        assert(_ed_help_rows_for3(H) >= 3,
+        assert(_ed_help_rowcap_for3(H) >= 3,
                "olcek " + toString(k) + ": liste cok kisaldi");
         k = k + 1;
     }
-    // 1x ve 2x'te liste TAM görünmeli: kaydırmadan okunabilmesi yeğ.
+    // 1x ve 2x'te liste TAM görünmeli: bir BAŞVURU listesini kaydırtmak onu
+    // okumaktan çıkarıyor. 24 satır 2x'te tek sütuna sığmıyor — sütun sayısı
+    // genişlikten türediği için orada İKİ sütun açılıyor ve hepsi görünüyor.
+    editor_ui_scale3d(1);
+    assert_eq_int(_ed_help_visible3(W, H), _ed_help_n3());
     editor_ui_scale3d(2);
-    assert_eq_int(_ed_help_rows_for3(H), _ed_help_n3());
+    assert_eq_int(_ed_help_visible3(W, H), _ed_help_n3());
+    assert_eq_int(_ed_help_cols_for3(W), 2);
+    // 3x'te iki sütun 1440'a sığmıyor: tek sütuna düşüp KAYIYOR — ve
+    // kaydırmayla her satıra ulaşılabiliyor.
+    editor_ui_scale3d(3);
+    assert_eq_int(_ed_help_cols_for3(W), 1);
+    assert(_ed_help_visible3(W, H) >= 3, "3x'te bile birkac satir gorunmeli");
     // Pencere kısalınca satır sayısı GERÇEKTEN azalmalı — sabit döndüren
     // bir bozma "en az 3" iddiasından kaçardı.
-    assert(_ed_help_rows_for3(400) < _ed_help_n3(),
-           "kisa pencerede liste kisalmali: " + toString(_ed_help_rows_for3(400)));
-    assert(_ed_help_rows_for3(820) > _ed_help_rows_for3(400),
-           "buyuk pencere daha cok satir gostermeli");
+    editor_ui_scale3d(2);
+    assert(_ed_help_rowcap_for3(400) < _ed_help_rowcap_for3(820),
+           "kisa pencerede liste kisalmali");
     editor_ui_scale3d(2);
 }
 
@@ -7680,6 +7692,217 @@ func t_single_level_scene_unchanged() {
     assert(contains(js1, "\"entities\""), "tek bolumde entities yazilmali");
 }
 
+// ===========================================================================
+// PANEL YERLEŞİMİ — sürüklenebilir sınırlar + kalıcılık
+// ===========================================================================
+// Paneller sabit genişlikteydi: hiyerarşi dar gelse de yapılabilecek bir şey
+// yoktu. Sınırlar artık sürükleniyor ve seçim motor kapanınca kaybolmuyor.
+
+func t_layout_clamps_keep_the_viewport_alive() {
+    editor_layout_key3d("s3_yerlesim_probasi.txt");
+    int k = 1;
+    while (k <= 3) {
+        editor_ui_scale3d(k);
+        int W = 1440;
+        // Sınırı ekranın DIŞINA itmeye çalış: görünüm yine de yaşamalı.
+        _ED_INSP_W3 = _ed_lay_def_insp3(k);
+        int hw = _ed_lay_hier_at3(99999, W);
+        assert(W - hw - _ED_INSP_W3 >= _ed_lay_min_view3(),
+               "olcek " + toString(k) + ": hiyerarsi gorunumu yedi");
+        // Ters yon: sifira itmek de en az genisligi birakmali.
+        assert(_ed_lay_hier_at3(0, W) >= _ed_lay_min_hier3(),
+               "olcek " + toString(k) + ": hiyerarsi cok daraldi");
+        _ED_HIER_W3 = _ed_lay_def_hier3(k);
+        int iw = _ed_lay_insp_at3(99999, W);
+        assert(W - _ED_HIER_W3 - iw >= _ed_lay_min_view3(),
+               "olcek " + toString(k) + ": inceleyici gorunumu yedi");
+        assert(_ed_lay_insp_at3(0, W) >= _ed_lay_min_insp3(),
+               "olcek " + toString(k) + ": inceleyici cok daraldi");
+        // Konsol pencerenin YARISINDAN fazlasini yiyemez.
+        assert(_ed_lay_cons_at3(99999, 820) <= toInt(820 / 2),
+               "olcek " + toString(k) + ": konsol yarisi asti");
+        assert(_ed_lay_cons_at3(0, 820) >= _ed_lay_min_cons3(),
+               "olcek " + toString(k) + ": konsol cok kisaldi");
+        k = k + 1;
+    }
+    editor_ui_scale3d(2);
+    editor_layout_reset3d();
+}
+
+// Pencere KÜÇÜLÜNCE kelepçe yeniden uygulanmalı: kullanıcının geniş
+// inceleyicisi dar bir pencerede sahne görünümünü tümden yerdi.
+func t_layout_reclamps_when_window_shrinks() {
+    editor_ui_scale3d(2);
+    // KARE DÖNGÜSÜNÜN çağırdığı yol sürülüyor, kelepçe fonksiyonu değil:
+    // kelepçeyi doğrudan çağıran bir test, çağrının döngüden silinmesini
+    // göremiyordu (bozma denendi, kaçtı).
+    _win_w = 1440; _win_h = 820;
+    _ED_HIER_W3 = 500;
+    _ED_INSP_W3 = 500;
+    _ed_sync_window3(900, 600);
+    assert_eq_int(_win_w, 900);
+    assert_eq_int(_win_h, 600);
+    assert(900 - _ED_HIER_W3 - _ED_INSP_W3 >= _ed_lay_min_view3(),
+           "dar pencerede gorunum kalmali: " + toString(_ED_HIER_W3) +
+           "+" + toString(_ED_INSP_W3));
+    editor_layout_reset3d();
+}
+
+// Ayraç YAKALAMA bölgeleri AYRIK olmalı: kesişselerdi köşede hangi sınırın
+// tutulduğu fareyi bir piksel oynatınca değişirdi.
+func t_splitter_zones_are_distinct() {
+    editor_ui_scale3d(2);
+    editor_layout_reset3d();
+    int W = 1440;
+    int H = 820;
+    int vy = _ed_view_y_at3(H);
+    int cb = H - _ED_STAT_H3 - _ED_CONS_H3;
+    int orta = vy + toInt((cb - vy) / 2);
+    // Sol sinir.
+    assert_eq_int(_ed_split_at3(_ED_HIER_W3, orta, W, H), 1);
+    // Sag sinir.
+    assert_eq_int(_ed_split_at3(W - _ED_INSP_W3, orta, W, H), 2);
+    // Konsolun ustu.
+    assert_eq_int(_ed_split_at3(toInt(W / 2), cb, W, H), 3);
+    // Aradaki bos alan hicbiri.
+    assert_eq_int(_ed_split_at3(toInt(W / 2), orta, W, H), 0);
+    // Menu seridinde hicbiri — orada dugmeler var.
+    assert_eq_int(_ed_split_at3(_ED_HIER_W3, 4, W, H), 0);
+    // KOSE: konsol seridiyle dikey ayracin kesistigi yerde TEK bir cevap.
+    // Cozen sey SIRA: konsol once sinaniyor.
+    int kose = _ed_split_at3(_ED_HIER_W3, cb, W, H);
+    assert_eq_int(kose, 3);
+    // KONSOLUN ICI dikey ayraca ait DEGIL: sinirin altinda, tutamak
+    // bolgesinin cok asagisinda kalan bir tiklama konsolun kendisine
+    // gitmeli. (Dikey bandin ust sinirini silen bozma bu iddiadan
+    // kaciyordu — konsolun icinde sol ayrac yakalaniyordu.)
+    assert_eq_int(_ed_split_at3(_ED_HIER_W3, cb + _us3(40), W, H), 0);
+    assert_eq_int(_ed_split_at3(W - _ED_INSP_W3, cb + _us3(40), W, H), 0);
+    // Durum cubugu da ayrac degil.
+    assert_eq_int(_ed_split_at3(_ED_HIER_W3, H - 2, W, H), 0);
+}
+
+// Ölçek değişimi ÖZELLEŞTİRMEYİ korumalı: sürüklenmiş bir sınırı
+// varsayılana geri atmak "kendi yerleşimini kullanabilsin" isteğinin tam
+// tersi olurdu. Dokunulmamış sınır ise yeni ölçeğin varsayılanını almalı.
+func t_scale_change_preserves_customisation() {
+    editor_ui_scale3d(2);
+    editor_layout_reset3d();
+    // DOKUNULMAMIS: yeni olcegin varsayilani gelmeli.
+    editor_ui_scale3d(3);
+    assert_eq_int(_ED_HIER_W3, _ed_lay_def_hier3(3));
+    assert_eq_int(_ED_CONS_H3, _ed_lay_def_cons3(3));
+    editor_ui_scale3d(2);
+    assert_eq_int(_ED_HIER_W3, _ed_lay_def_hier3(2));
+    // OZELLESTIRILMIS: oran korunmali (varsayilana ATILMAMALI).
+    _ED_HIER_W3 = _ed_lay_def_hier3(2) * 2;
+    editor_ui_scale3d(3);
+    assert(_ED_HIER_W3 != _ed_lay_def_hier3(3),
+           "ozellestirme varsayilana atilmamali");
+    assert(_ED_HIER_W3 > _ed_lay_def_hier3(3),
+           "iki kat genis sinir yine genis kalmali: " + toString(_ED_HIER_W3));
+    editor_ui_scale3d(2);
+    editor_layout_reset3d();
+}
+
+// Bildirilen 2x varsayılanları `_ed_lay_def_*3(2)` ile AYNI olmak zorunda.
+// Değillerdi: `_ED_CONS_H3` 96 yazıyordu, formül 132 veriyordu. Fark
+// görünmüyordu çünkü ilk ölçek çağrısı değeri eziyordu — ölçek değişimi
+// özelleştirmeyi oranlamaya başlayınca motor açılıştaki 96'yı
+// "özelleştirilmiş" sanıp her ölçekte küçültmeye başladı.
+func t_declared_defaults_match_the_formula() {
+    editor_ui_scale3d(2);
+    editor_layout_reset3d();
+    assert_eq_int(_ED_HIER_W3, _ed_lay_def_hier3(2));
+    assert_eq_int(_ED_INSP_W3, _ed_lay_def_insp3(2));
+    assert_eq_int(_ED_CONS_H3, _ed_lay_def_cons3(2));
+}
+
+// KALICILIK: "motor yeniden açıldığında hatırlansın".
+//
+// Kayıt adı PROBA adına çevriliyor: testler gerçek anahtara yazsaydı
+// `./build.sh suites` çalıştıran kullanıcının kendi editör yerleşimini
+// ezerdi.
+func t_layout_survives_a_restart() {
+    editor_layout_key3d("s3_yerlesim_probasi.txt");
+    editor_ui_scale3d(2);
+    editor_layout_reset3d();
+    _ED_HIER_W3 = 300;
+    _ED_INSP_W3 = 260;
+    _ED_CONS_H3 = 150;
+    assert(editor_layout_save3d(), "yerlesim kaydedilmeli");
+    // "Yeniden acilis": bellekteki degerleri varsayilana cevir ve diskten
+    // yukle. `editor_layout_reset3d()` KULLANILAMAZ — o bir kullanici
+    // eylemi ve kaydi da eziyor (dogru davranis: sifirlamak kalici olmali),
+    // yani onunla kurulan bir "yeniden acilis" hicbir sey olcmezdi.
+    _ED_HIER_W3 = _ed_lay_def_hier3(2);
+    _ED_INSP_W3 = _ed_lay_def_insp3(2);
+    _ED_CONS_H3 = _ed_lay_def_cons3(2);
+    assert(editor_layout_load3d(), "yerlesim geri okunmali");
+    assert_eq_int(_ED_HIER_W3, 300);
+    assert_eq_int(_ED_INSP_W3, 260);
+    assert_eq_int(_ED_CONS_H3, 150);
+    // OLCEK de tasinmali.
+    editor_ui_scale3d(1);
+    _ED_HIER_W3 = 190;
+    assert(editor_layout_save3d(), "1x yerlesimi kaydedilmeli");
+    editor_ui_scale3d(3);
+    _ED_HIER_W3 = _ed_lay_def_hier3(3);
+    assert(editor_layout_load3d(), "geri okunmali");
+    assert_eq_int(editor_ui_scale_now3d(), 1);
+    assert_eq_int(_ED_HIER_W3, 190);
+    editor_ui_scale3d(2);
+    editor_layout_reset3d();
+}
+
+// BOZUK kayıt sessizce yok sayılmalı: kayıt dosyası kullanıcının elinde ve
+// editörün açılmaması onu düzeltmenin yolunu da kapatırdı.
+func t_broken_layout_record_is_ignored() {
+    editor_ui_scale3d(2);
+    editor_layout_reset3d();
+    int hw = _ED_HIER_W3;
+    assert(_ed_lay_decode3("", 1440, 820) == false, "bos kayit");
+    assert(_ed_lay_decode3("abc", 1440, 820) == false, "ayracsiz kayit");
+    assert(_ed_lay_decode3("2|300", 1440, 820) == false, "eksik alan");
+    assert(_ed_lay_decode3("9|300|260|150", 1440, 820) == false, "gecersiz olcek");
+    assert(_ed_lay_decode3("2|0|260|150", 1440, 820) == false, "sifir genislik");
+    assert(_ed_lay_decode3("2|300|-5|150", 1440, 820) == false, "negatif genislik");
+    // Hicbiri yerlesimi BOZMAMALI.
+    assert_eq_int(_ED_HIER_W3, hw);
+    assert_eq_int(editor_ui_scale_now3d(), 2);
+    // Gecerli kayit ise alinmali.
+    assert(_ed_lay_decode3("2|300|260|150", 1440, 820), "gecerli kayit");
+    assert_eq_int(_ED_HIER_W3, 300);
+    editor_layout_reset3d();
+}
+
+// Yüklenen kayıt da KELEPÇEDEN geçmeli: başka bir makinede (ya da tam
+// ekranda) kaydedilmiş geniş bir yerleşim, dar bir pencerede sahne
+// görünümünü yok ederdi.
+func t_loaded_layout_is_clamped() {
+    editor_ui_scale3d(2);
+    assert(_ed_lay_decode3("2|900|900|400", 900, 600),
+           "gecerli ama cok genis kayit alinmali");
+    assert(900 - _ED_HIER_W3 - _ED_INSP_W3 >= _ed_lay_min_view3(),
+           "yuklenen yerlesim kelepcelenmeli");
+    assert(_ED_CONS_H3 <= toInt(600 / 2), "konsol da kelepcelenmeli");
+    // Ölçü BİLİNMİYORKEN (pencere yok → `screen_width()` 0) kelepçelenmemeli:
+    // sıfıra göre kelepçelemek her paneli en küçüğüne indirip kayıtlı
+    // yerleşimi siler. Açılışta yükleme tam da o anda oluyor.
+    _ED_HIER_W3 = 300;
+    _ED_INSP_W3 = 260;
+    _ed_lay_reclamp3(0, 0);
+    assert_eq_int(_ED_HIER_W3, 300);
+    assert_eq_int(_ED_INSP_W3, 260);
+    // Tazeleme yolu da olcusuz cagriyi yutmali — pencere acilmadan once
+    // kare dongusu bir kez oradan gecebiliyor.
+    _win_w = 1440; _win_h = 820;
+    _ed_sync_window3(0, 0);
+    assert_eq_int(_win_w, 1440);
+    assert_eq_int(_ED_HIER_W3, 300);
+    editor_layout_reset3d();
+}
+
 // ---- Pencere boyutlandırma --------------------------------------------------
 // Pencere sabit boyutluydu: tam ekran yapılamıyor, kenarından çekilemiyordu.
 // Sebep raylib sözleşmesi — FLAG_WINDOW_RESIZABLE `InitWindow`'DAN ÖNCE
@@ -8840,6 +9063,14 @@ test("kose kesme yasak", "t_nav_no_corner_cutting");
 test("bolumler yukleniyor ve geciliyor", "t_levels_load_and_switch");
 test("bolumler gidis-donusten sag cikiyor", "t_levels_survive_roundtrip");
 test("tek bolumlu sahne degismiyor", "t_single_level_scene_unchanged");
+test("yerlesim kelepceleri gorunumu yasatiyor", "t_layout_clamps_keep_the_viewport_alive");
+test("pencere kuculunce yerlesim kelepceleniyor", "t_layout_reclamps_when_window_shrinks");
+test("ayrac bolgeleri ayrik", "t_splitter_zones_are_distinct");
+test("olcek degisimi ozellestirmeyi koruyor", "t_scale_change_preserves_customisation");
+test("bildirilen varsayilanlar formulle ayni", "t_declared_defaults_match_the_formula");
+test("yerlesim yeniden acilista hatirlaniyor", "t_layout_survives_a_restart");
+test("bozuk yerlesim kaydi yok sayiliyor", "t_broken_layout_record_is_ignored");
+test("yuklenen yerlesim kelepceleniyor", "t_loaded_layout_is_clamped");
 test("gorunum pencere boyutunu izliyor", "t_view_rect_follows_window_size");
 test("gorunum hicbir boyutta bozulmuyor", "t_view_rect_never_degenerate");
 test("kisayol listesi tam ekrani sayiyor", "t_help_lists_fullscreen");

@@ -62,6 +62,13 @@
 // taşınır. SESİ de var: girince çalacak dosyayı panelden seçiyorsun —
 // kurallardaki ses listesinin aynısı.
 //
+// PANEL SINIRLARI SÜRÜKLENİR: hiyerarşi ile sahne görünümü arasındaki,
+// sahne görünümü ile özellikler arasındaki ve konsolun üstündeki çizgiyi
+// tut ve çek. Herkes kendi ekranına göre yerleştirsin diye. Seçim KALICI —
+// motor kapanınca kaybolmuyor, yeniden açılışta geri geliyor (ölçek de
+// dâhil). Menüdeki YERLESIM düğmesi varsayılana döndürür; sınırı ekranın
+// kenarına itip sıkışmanın çıkışı o.
+//
 // PENCERE: boyutlandırılabilir ve büyütülebilir — kenarından çek, işletim
 // sisteminin büyütme düğmesini kullan ya da F11 ile tam ekrana geç. Bütün
 // paneller ve sahne görünümü yeni boyuta göre yeniden hesaplanıyor.
@@ -80,7 +87,7 @@
 // atıfta bulunuyor — adsız bir hedef kaydedince sessizce kopardı.
 //
 // Yerleşim:
-//   menü şeridi            Yeni / Aç / Kaydet / F. Kaydet / Geri / İleri / ?
+//   menü şeridi            Yeni / Aç / Kaydet / F. Kaydet / Geri / İleri / YERLESIM / ?
 //   araç çubuğu            araçlar solda, OYNAT-DUR ORTADA, ızgara
 //   hiyerarşi | SAHNE GÖRÜNÜMÜ | özellikler
 //   konsol                 motorun tanılama kaydı

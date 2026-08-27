@@ -64,6 +64,13 @@
 // They also have a SOUND: pick the file that plays on enter from the panel —
 // the same sound list the rules use.
 //
+// PANEL BORDERS ARE DRAGGABLE: grab the line between the hierarchy and the
+// scene view, between the scene view and the inspector, or the top of the
+// console, and pull. The choice PERSISTS — it survives closing the engine and
+// comes back on the next start (the UI scale too). The YERLESIM button in the
+// menu bar restores the defaults; that is the way out if you push a border to
+// the edge of the screen.
+//
 // THE WINDOW is resizable and maximizable — drag an edge, use the OS maximize
 // button, or press F11 for fullscreen. Every panel and the scene view is
 // recomputed for the new size.
@@ -83,7 +90,7 @@
 // would silently break on save.
 //
 // Layout:
-//   menu bar          New / Open / Save / Save As / Undo / Redo / ?
+//   menu bar          New / Open / Save / Save As / Undo / Redo / YERLESIM / ?
 //   toolbar           tools on the left, PLAY-STOP CENTRED, grid
 //   hierarchy | SCENE VIEW | inspector
 //   console           the engine's diagnostic log
