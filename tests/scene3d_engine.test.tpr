@@ -7680,6 +7680,139 @@ func t_single_level_scene_unchanged() {
     assert(contains(js1, "\"entities\""), "tek bolumde entities yazilmali");
 }
 
+// ===========================================================================
+// KURTARMA DOSYASI — kapatırken kaybolan iş
+// ===========================================================================
+// Pencereyi çarpıyla kapatmak kaydedilmemiş işi götürüyordu ve raylib'de
+// kapanışı İPTAL edecek bir bağlama yok (`WindowShouldClose()` bir kez true
+// dönünce geri alınamıyor), yani "emin misin?" SORULAMIYOR. Sorulamayanı
+// kaybetmemek yine de mümkün: çıkarken yaşayan sahne diske yazılıyor.
+
+func t_recovery_path_derives_from_target() {
+    assert(_ed_recover_path3("sahne.json") == "sahne.json.kurtarma.json",
+           "kurtarma yolu hedeften turemeli");
+    assert(_ed_recover_path3("a/b/oyun.json") == "a/b/oyun.json.kurtarma.json",
+           "dizin korunmali — kurtarma dosyasi hedefin YANINDA durmali");
+    // Hedefsiz sahne de kurtarilabilmeli: adsiz calisan bir editorde
+    // yapilan is, kaydedilecek yer olmadigi icin EN cok risk altinda olan.
+    assert(_ed_recover_path3("") == "sahne.kurtarma.json", "yolsuz varsayilan");
+}
+
+func t_recovery_written_only_when_dirty() {
+    str yol = "s3_kurtarma_probasi.json";
+    str kyol = yol + ".kurtarma.json";
+    write_file(kyol, "");
+    editor_uygulamasi3d(true);
+    editor_dosya3d(yol);
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    _ed_dirty3 = 0;
+    // TEMIZ sahnede cikis dosya BIRAKMAMALI: her cikista dosya birakmak
+    // calisma dizinini coplendirir ve uyariyi anlamsiz yapar.
+    assert(ed_recovery_save3d() == false, "temiz sahnede yazilmamali");
+    assert(ed_has_recovery3d() == false, "temiz cikis kurtarma birakmamali");
+    // KIRLI sahnede yazmali.
+    ed_mark3d();
+    spawn3(4.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    assert(ed_recovery_save3d(), "kirli sahnede yazilmali");
+    assert(ed_has_recovery3d(), "kurtarma okunabilmeli");
+    editor_uygulamasi3d(false);
+}
+
+// Editör UYGULAMASI olmayan bir oyun kurtarma dosyası bırakmamalı: oyunun
+// çalışma dizinine dosya atması istenmeyen bir yan etki.
+func t_recovery_not_written_for_plain_game() {
+    str yol = "s3_kurtarma_probasi.json";
+    write_file(yol + ".kurtarma.json", "");
+    editor_uygulamasi3d(false);
+    editor_dosya3d(yol);
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    ed_mark3d();
+    assert(ed_recovery_save3d() == false, "oyun kurtarma dosyasi yazmamali");
+    assert(ed_has_recovery3d() == false, "dosya olusmamali");
+}
+
+func t_save_clears_recovery() {
+    str yol = "s3_kurtarma_probasi.json";
+    editor_uygulamasi3d(true);
+    editor_dosya3d(yol);
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    ed_mark3d();
+    assert(ed_recovery_save3d(), "kurtarma yazilmali");
+    assert(ed_recovery_pending3d() == false,
+           "yazmak onbellegi kendiliginden doldurmamali");
+    ed_recovery_scan3d();
+    assert(ed_recovery_pending3d(), "tarama kurtarmayi gormeli");
+    // KAYDETMEK kurtarmayi gecersiz kilmali: kilmasaydi editor her acilista
+    // "kurtarilacak is var" der ve uyari anlamini yitirirdi.
+    assert(editor_kaydet3d(), "kaydedilmeli");
+    assert(ed_has_recovery3d() == false, "kaydettikten sonra kurtarma kalmamali");
+    assert(ed_recovery_pending3d() == false, "onbellek de temizlenmeli");
+    editor_uygulamasi3d(false);
+}
+
+// Kurtarma bir DÜZENLEMEDİR: yanlış düğmeye basmak geri alınabilmeli. Ve
+// kurtarılan iş HÂLÂ diskte değil — yıldız yanmalı, yoksa kullanıcı
+// kaydedilmiş sanıp ikinci kez kaybeder.
+func t_recover_restores_is_undoable_and_stays_dirty() {
+    str yol = "s3_kurtarma_probasi.json";
+    editor_uygulamasi3d(true);
+    editor_dosya3d(yol);
+    // Diske TEK varlikli hali kaydet.
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    assert(editor_kaydet3d(), "kaydedilmeli");
+    // Sonra kaydetmeden iki varlik daha ekle ve "cikis"ta kurtarma yaz.
+    ed_mark3d();
+    spawn3(4.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    spawn3(6.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    assert(ed_recovery_save3d(), "kurtarma yazilmali");
+
+    // YENI OTURUM: dosyadan ac (kaydedilmis hal = 1 varlik).
+    scene3d_reset();
+    editor_dosya3d(yol);
+    assert_eq_int(sahne_dosya3d(yol), 1);
+    assert(ed_recovery_pending3d(), "acilista kurtarma gorunmeli");
+    int n = ed_kurtar3d();
+    assert_eq_int(n, 3);
+    assert_eq_int(yasayan_sayi3d(), 3);
+    assert_eq_int(_ed_dirty3, 1);                     // hala diskte degil
+    assert(ed_recovery_pending3d() == false, "kurtarma tuketilmis olmali");
+    assert(ed_has_recovery3d() == false, "dosya da bosaltilmis olmali");
+    // GERI AL: kurtarmadan onceki hale donmeli.
+    assert(ed_undo3d(), "kurtarma geri alinabilmeli");
+    assert_eq_int(yasayan_sayi3d(), 1);
+    editor_uygulamasi3d(false);
+}
+
+// Kurtarma yolu HEDEFE bağlı: başka bir dosyaya geçmek başka bir kurtarma
+// demek. Önbellek yeniden taranmazsa bir dosyanın kurtarması ötekinde
+// görünürdü.
+func t_recovery_follows_the_target_file() {
+    str a = "s3_kurtarma_probasi.json";
+    str b = "s3_dosya_b.json";
+    write_file(a + ".kurtarma.json", "");
+    write_file(b + ".kurtarma.json", "");
+    editor_uygulamasi3d(true);
+    editor_dosya3d(a);
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_SPHERE, TAG_ITEM);
+    ed_mark3d();
+    assert(ed_recovery_save3d(), "A icin kurtarma yazilmali");
+    ed_recovery_scan3d();
+    assert(ed_recovery_pending3d(), "A'da kurtarma var");
+    // B'ye gec: B'nin kurtarmasi YOK.
+    editor_dosya3d(b);
+    assert(ed_recovery_pending3d() == false, "B'de kurtarma olmamali");
+    // A'ya don: yine var.
+    editor_dosya3d(a);
+    assert(ed_recovery_pending3d(), "A'ya donunce yine gorunmeli");
+    ed_recovery_clear3d();
+    editor_uygulamasi3d(false);
+}
+
 // ---- ESC / "Çıkış" editörde programı kapatmamalı ---------------------------
 // Kullanıcı bildirdi: editörde OYNAT'a bas, oyun bitsin (kazan/kaybet),
 // ESC'ye bas → BÜTÜN EDİTÖR kapanıyordu, kaydedilmemiş sahne dâhil.
@@ -8541,6 +8674,12 @@ test("kose kesme yasak", "t_nav_no_corner_cutting");
 test("bolumler yukleniyor ve geciliyor", "t_levels_load_and_switch");
 test("bolumler gidis-donusten sag cikiyor", "t_levels_survive_roundtrip");
 test("tek bolumlu sahne degismiyor", "t_single_level_scene_unchanged");
+test("kurtarma yolu hedeften turuyor", "t_recovery_path_derives_from_target");
+test("kurtarma yalniz kirliyken yaziliyor", "t_recovery_written_only_when_dirty");
+test("sade oyun kurtarma dosyasi yazmiyor", "t_recovery_not_written_for_plain_game");
+test("kaydetmek kurtarmayi gecersiz kiliyor", "t_save_clears_recovery");
+test("kurtarma geri alinabilir ve kirli kaliyor", "t_recover_restores_is_undoable_and_stays_dirty");
+test("kurtarma hedef dosyayi izliyor", "t_recovery_follows_the_target_file");
 test("editorde cikis duzenlemeye donuyor", "t_editor_quit_returns_to_editing");
 test("menu dagitimi durdurma yolundan geciyor", "t_menu_dispatch_uses_quit_or_stop");
 test("oynamiyorken de ortu kapaniyor", "t_editor_quit_clears_overlay_even_when_not_playing");

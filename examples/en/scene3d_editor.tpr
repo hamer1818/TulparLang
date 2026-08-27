@@ -61,6 +61,13 @@
 // no action does nothing at all — the scene check says so. Zones are drawn in
 // the editor (the colour states their condition), clickable, arrow-key movable.
 //
+// ON CLOSING: closing the window no longer loses unsaved work. raylib has no
+// hook to cancel a close, so "are you sure?" cannot be asked — instead the
+// live scene is written to `<file>.kurtarma.json` and the editor shows a
+// KURTAR (recover) button in the menu bar next time it starts. Saving voids
+// that file. Recovering is undoable (CTRL+Z) and the recovered work still
+// counts as unsaved (the title keeps its asterisk).
+//
 // CAMERA: in the world panel. Mode (follow / orbit / first person), TARGET
 // (the entity the camera watches — the button cycles through them),
 // distance/height/fov, and whether the camera stops at walls. A camera with no

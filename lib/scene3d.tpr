@@ -6037,6 +6037,10 @@ func play3d() {
         else if (_game_over3 == 1)     { _s3_menu_act3(2, _s3_over_step()); }
         if (_s3_quit == 1) { break; }
     }
+    // Döngü BİTTİ: ya pencere kapatıldı ya menüden çıkıldı. Kaydedilmemiş iş
+    // varsa burada yakalanıyor — kapanışı iptal edemediğimiz için elimizdeki
+    // tek an bu.
+    ed_recovery_save3d();
     close_window();
 }
 
@@ -9587,12 +9591,95 @@ func _s3_editor_mouse(dt) {
 // Editörün yazacağı dosya. `sahne_dosya3d` ile yüklenen oyun bunu kendi
 // yoluna kurarsa düzenleme tam bir döngü olur: düzenle → F5 → aynı JSON
 // güncellenir, yeniden derleme yok.
-func editor_file3d(path) { _ed_path3 = path; }
+func editor_file3d(path) {
+    _ed_path3 = path;
+    // Hedef değişti: kurtarma dosyası da yola bağlı, yeniden bakılmalı.
+    ed_recovery_scan3d();
+}
 func editor_dosya3d(yol) { editor_file3d(yol); }
 
 // KAYDEDİLEN, ekrandaki YAZARLIK durumudur. F5 yalnız editör kipinde işliyor
 // (bu fonksiyon `_s3_editor_keys` içinden çağrılıyor), editöre girmek de
 // simülasyonu attığı için oynanmış hâlin diske sızması mümkün değil.
+// ---- KURTARMA DOSYASI -------------------------------------------------------
+// Pencereyi çarpıyla kapatmak kaydedilmemiş işi götürüyordu ve raylib'de
+// kapanışı İPTAL edecek bir bağlama yok: `WindowShouldClose()` bir kez true
+// dönünce geri alınamıyor, yani "emin misin?" diye SORULAMIYOR.
+//
+// Sorulamayanı kaybetmemek yine de mümkün: çıkarken yaşayan sahne
+// `<dosya>.kurtarma.json`'a yazılıyor ve editör bir dahaki açılışta onu
+// görüp menüde bir KURTAR düğmesi gösteriyor. Sessizce geri yüklemek YANLIŞ
+// olurdu — kullanıcı kaydetmemeyi bilerek seçmiş olabilir; karar onun.
+func _ed_recover_path3(yol): str {
+    if (yol == "") { return "sahne.kurtarma.json"; }
+    return yol + ".kurtarma.json";
+}
+
+// Silme builtin'i YOK, o yüzden "boş içerik = kurtarma yok" sözleşmesi.
+func _ed_recovery_read3(): str {
+    str yol = _ed_recover_path3(_ed_path3);
+    if (web_mi()) { return kayit_oku(_s3_key3(yol)); }
+    if (file_exists(yol) == false) { return ""; }
+    return read_file(yol);
+}
+func ed_recovery3d(): str { return _ed_recovery_read3(); }
+func ed_kurtarma3d(): str { return _ed_recovery_read3(); }
+func ed_has_recovery3d(): bool { return length(_ed_recovery_read3()) > 0; }
+
+func _ed_recovery_write3(js): bool {
+    str yol = _ed_recover_path3(_ed_path3);
+    if (web_mi()) { return kayit_yaz(_s3_key3(yol), js); }
+    return write_file(yol, js);
+}
+
+// Çıkışta çağrılıyor. YALNIZ kaydedilmemiş iş varken yazıyor: her çıkışta
+// dosya bırakmak, çalışma dizinini çöplüğe çevirir ve uyarıyı anlamsız yapar.
+func ed_recovery_save3d(): bool {
+    if (_ed_app3 == 0) { return false; }
+    if (_ed_dirty3 == 0) { return false; }
+    _ed_level_store3();
+    return _ed_recovery_write3(scene_json_levels3d());
+}
+
+// Kaydetmek kurtarma dosyasını GEÇERSİZ kılıyor. Kılmasaydı editör her
+// açılışta "kurtarılacak iş var" derdi ve uyarı anlamını yitirirdi.
+func ed_recovery_clear3d() {
+    _ed_recover_has3 = 0;
+    if (_ed_app3 == 0) { return; }
+    _ed_recovery_write3("");
+}
+
+// Kurtarma dosyasının VARLIĞI önbellekli. Menü şeridi her kare çiziliyor ve
+// düğmenin görünürlüğü için kare başına bir DİSK OKUMASI yapmak, editörü
+// dosya sisteminin hızına bağlardı. Yol değiştiğinde ve kaydettiğinde
+// yeniden taranıyor — durumun değişebileceği tek iki an.
+int _ed_recover_has3 = 0;
+
+func ed_recovery_scan3d() {
+    _ed_recover_has3 = 0;
+    if (length(_ed_recovery_read3()) > 0) { _ed_recover_has3 = 1; }
+}
+func ed_recovery_pending3d(): bool { return _ed_recover_has3 == 1; }
+
+// Kurtarılan işi sahneye al. GERİ ALINABİLİR (önce işaret bırakılıyor):
+// kurtarma da bir düzenleme ve yanlış düğmeye basmak geri alınabilmeli.
+//
+// Sessizce yüklemek YANLIŞ olurdu — kullanıcı kaydetmemeyi bilerek seçmiş
+// olabilir. Karar onun, düğme de o yüzden var.
+func ed_recover3d(): int {
+    str js = _ed_recovery_read3();
+    if (js == "") { _ed_recover_has3 = 0; return 0; }
+    ed_mark3d();
+    _ed_apply_json3(js, 1);
+    ed_recovery_clear3d();
+    // Kurtarılan iş HÂLÂ diskte değil: yıldız yanmalı, yoksa kullanıcı
+    // kaydedilmiş sanır ve ikinci kez kaybeder.
+    _ed_dirty3 = 1;
+    _ed_dirty_seq3 = _ed_dirty_seq3 + 1;
+    return yasayan_sayi3d();
+}
+func ed_kurtar3d(): int { return ed_recover3d(); }
+
 func editor_save3d(): bool {
     if (_ed_path3 == "") {
         _ed_msg3 = "kayit yolu yok (editor_dosya3d cagir)";
@@ -9605,7 +9692,11 @@ func editor_save3d(): bool {
     bool ok = false;
     if (web_mi()) { ok = kayit_yaz(_s3_key3(_ed_path3), scene_json_levels3d()); }
     else { ok = write_file(_ed_path3, scene_json_levels3d()); }
-    if (ok) { _ed_msg3 = "kaydedildi: " + _ed_path3; _ed_dirty3 = 0; }
+    if (ok) {
+        _ed_msg3 = "kaydedildi: " + _ed_path3;
+        _ed_dirty3 = 0;
+        ed_recovery_clear3d();
+    }
     else { _ed_msg3 = "KAYDEDILEMEDI: " + _ed_path3; }
     _ed_msg_t3 = 3.0;
     return ok;
@@ -10561,6 +10652,21 @@ func _ed_menubar3() {
         if (_g_button(9604, x, _us3(2), w4, bh, "Ileri")) { ed_redo3d(); }
         _g_tip_for3(9604, "Yinele  (CTRL+Y)");
         x = x + w4 + gap;
+    }
+    // KURTAR yalnız kurtarılacak iş VARKEN. Her zaman duran ve çoğu zaman
+    // iş görmeyen bir düğme, şeridi doldurmaktan başka bir şey yapmazdı.
+    if (_ed_recover_has3 == 1) {
+        str kl = "KURTAR";
+        int wk = _g_btnw3(kl);
+        if (x + wk <= W - _ED_PAD3) {
+            if (_g_button(9608, x, _us3(2), wk, bh, kl)) {
+                int kn = ed_recover3d();
+                _ed_msg3 = "kurtarildi: " + toString(kn) + " varlik";
+                _ed_msg_t3 = 4.0;
+            }
+            _g_tip_for3(9608, "Onceki oturumda kaydedilmemis is bulundu — geri getir");
+            x = x + wk + _us3(12);
+        }
     }
     // Kısayol listesi FAREYLE de bulunabilmeli: "H'ye bas" demek, H'yi
     // bilmeyen kullanıcıya bir şey söylemiyor. Bu düğme o döngüyü kırıyor.

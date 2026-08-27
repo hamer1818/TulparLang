@@ -203,6 +203,8 @@ scene3d_lvl_*.txt
 /s3_dosya_a.json
 /s3_dosya_b.json
 /s3_farkli_kaydet.json
+/s3_kurtarma_probasi.json
+/*.kurtarma.json
 /scene3d_karakter
 /karakter_desktop
 /labirent_desktop

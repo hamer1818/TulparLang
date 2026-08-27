@@ -60,6 +60,13 @@
 // Bölgeler editörde çizilir (rengi durumunu söyler), tıklanır, ok tuşlarıyla
 // taşınır.
 //
+// KAPATIRKEN: pencereyi çarpıyla kapatmak kaydedilmemiş işi GÖTÜRMÜYOR
+// artık. raylib'de kapanışı iptal edecek bir bağlama yok, yani "emin misin?"
+// sorulamıyor — onun yerine yaşayan sahne `<dosya>.kurtarma.json`'a yazılıyor
+// ve editör bir dahaki açılışta menüde bir KURTAR düğmesi gösteriyor.
+// Kaydetmek o dosyayı geçersiz kılıyor. Kurtarma geri alınabilir (CTRL+Z) ve
+// kurtarılan iş HÂLÂ kaydedilmemiş sayılıyor (başlıkta yıldız yanar).
+//
 // KAMERA: dünya panelinde. Mod (takip / yörünge / 1. şahıs), HEDEF (kameranın
 // izlediği varlık — düğme sırayla gezer), uzaklık/yükseklik/fov ve kameranın
 // duvara çarpıp çarpmayacağı. Hedefi olmayan kamera hiç kıpırdamaz; denetim
