@@ -7680,6 +7680,100 @@ func t_single_level_scene_unchanged() {
     assert(contains(js1, "\"entities\""), "tek bolumde entities yazilmali");
 }
 
+// ---- Geri alma ve bölümler --------------------------------------------------
+// Bu testler bir REGRESYONDAN doğdu. "Yeni sahne eski bölümleri bırakmasın"
+// düzeltmesi `scene_load3d`'ye bölümleri temizletti — ve GERİ ALMA da o
+// yoldan geçiyordu. Ölçüldü: iki bölümlü bir sahnede TEK bir CTRL+Z bölüm
+// sayısını 2'den 0'a düşürüyor, kaydetmek öteki bölümü dosyadan siliyordu.
+//
+// Ayrım: YENİ sahne açmak bölümleri götürür, GERİ ALMAK götürmez. İki tarafı
+// da sınamak şart — tek taraflı bir test düzeltmenin ötekini bozmasını
+// göremez (tam olarak bu oldu).
+func t_undo_keeps_levels() {
+    sahne_yukle3d(_lvl_kur2());
+    assert_eq_int(bolum_sayisi3d(), 2);
+    int once = yasayan_sayi3d();
+    ed_mark3d();
+    ed_add3d(TAG_PROP, SHAPE_CUBE, 5.0, 1.0, 5.0);
+    assert_eq_int(yasayan_sayi3d(), once + 1);
+    assert(ed_undo3d(), "geri alma calismali");
+    assert_eq_int(yasayan_sayi3d(), once);
+    // ASIL IDDIA: bolumler durmali.
+    assert_eq_int(bolum_sayisi3d(), 2);
+    assert(contains(sahne_json_bolumlu3d(), "\"levels\""),
+           "geri almadan sonra hala cok bolumlu kaydedilmeli");
+    // Yineleme de bolumleri gotürmemeli.
+    assert(ed_redo3d(), "yineleme calismali");
+    assert_eq_int(bolum_sayisi3d(), 2);
+    assert_eq_int(yasayan_sayi3d(), once + 1);
+}
+
+// Anlık görüntü BİR BÖLÜMÜN içeriği. 1. bölümde işaret bırakıp 2. bölüme
+// geçmek ve CTRL+Z'ye basmak, 1. bölümün içeriğini 2. bölümün ÜSTÜNE yazardı:
+// iki bölüm birden bozulur ve geri almanın kendisi veri kaybı olurdu.
+func t_undo_returns_to_its_own_level() {
+    sahne_yukle3d(_lvl_kur2());
+    assert_eq_int(yasayan_sayi3d(), 1);          // 1. bolum
+    ed_mark3d();
+    ed_add3d(TAG_PROP, SHAPE_CUBE, 5.0, 1.0, 5.0);
+    assert_eq_int(yasayan_sayi3d(), 2);
+    // 2. bolume gec — orada 2 varlik var.
+    ed_level_go3d(2);
+    assert_eq_int(yasayan_sayi3d(), 2);
+    // Geri al: 1. BOLUME donmeli ve orayi eski haline getirmeli.
+    assert(ed_undo3d(), "geri alma calismali");
+    assert_eq_int(ed_level_now3d(), 1);
+    assert_eq_int(yasayan_sayi3d(), 1);
+    // 2. BOLUM ETKILENMEMELI.
+    ed_level_go3d(2);
+    assert_eq_int(yasayan_sayi3d(), 2);
+}
+
+// İki yığın (içerik + bölüm) HER ZAMAN aynı boyda olmalı: ayrılırlarsa geri
+// alma yanlış eşleşmiş bir çift açar ve anlık görüntüyü yanlış bölüme yazar.
+func t_undo_stacks_stay_in_step() {
+    sahne_yukle3d(_lvl_kur2());
+    int i = 0;
+    while (i < 5) {
+        ed_mark3d();
+        ed_add3d(TAG_PROP, SHAPE_CUBE, 1.0 * i, 1.0, 0.0);
+        i = i + 1;
+    }
+    assert_eq_int(length(_ed_undo3), length(_ed_undo_lvl3));
+    ed_undo3d(); ed_undo3d();
+    assert_eq_int(length(_ed_undo3), length(_ed_undo_lvl3));
+    assert_eq_int(length(_ed_redo3), length(_ed_redo_lvl3));
+    ed_redo3d();
+    assert_eq_int(length(_ed_undo3), length(_ed_undo_lvl3));
+    assert_eq_int(length(_ed_redo3), length(_ed_redo_lvl3));
+    // Tavan asilinca ikisi de kirpilmali — yalnız biri kirpilirsa yigin kayar.
+    i = 0;
+    while (i < _ED_UNDO_MAX3 + 6) {
+        ed_mark3d();
+        i = i + 1;
+    }
+    assert_eq_int(length(_ed_undo3), length(_ed_undo_lvl3));
+    assert_eq_int(length(_ed_undo3), _ED_UNDO_MAX3);
+}
+
+// Başka bir dosya açmak bölüm etiketlerini de temizlemeli — içerik yığını
+// boşalıp etiket yığını dolu kalırsa ilk geri alma yanlış bölüme gider.
+func t_opening_file_clears_level_tags() {
+    str ya = "s3_dosya_a.json";
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ITEM);
+    assert(sahne_kaydet3d(ya), "A kaydedilemedi");
+    sahne_yukle3d(_lvl_kur2());
+    ed_mark3d();
+    ed_mark3d();
+    assert(length(_ed_undo_lvl3) > 0, "etiketler dolmali");
+    editor_dosya3d("baska.json");
+    _ed_fd_load3(ya);
+    assert_eq_int(length(_ed_undo3), 0);
+    assert_eq_int(length(_ed_undo_lvl3), 0);
+    assert_eq_int(length(_ed_redo_lvl3), 0);
+}
+
 // Sahne YÜKLEMEK eski sahnenin bölümlerini de bırakmalı. Bırakmıyordu ve
 // sonuç sessiz bir VERİ KAYBIYDI: üç bölümlü bir sahne açıkken menüdeki
 // "Yeni"ye basmak yaşayan sahneyi boşaltıyor, `_lvl_js3`'ü bırakıyordu — ve
@@ -8216,6 +8310,10 @@ test("kose kesme yasak", "t_nav_no_corner_cutting");
 test("bolumler yukleniyor ve geciliyor", "t_levels_load_and_switch");
 test("bolumler gidis-donusten sag cikiyor", "t_levels_survive_roundtrip");
 test("tek bolumlu sahne degismiyor", "t_single_level_scene_unchanged");
+test("geri alma bolumleri gotürmuyor", "t_undo_keeps_levels");
+test("geri alma kendi bolumune donuyor", "t_undo_returns_to_its_own_level");
+test("geri alma yiginlari es adimda", "t_undo_stacks_stay_in_step");
+test("dosya acmak bolum etiketlerini temizliyor", "t_opening_file_clears_level_tags");
 test("yeni sahne eski bolumleri birakmiyor", "t_new_scene_drops_old_levels");
 test("sablon eski bolumleri birakmiyor", "t_template_drops_old_levels");
 test("tek bolumlu dosya cok bolumlunun ustune temiz aciliyor", "t_loading_single_level_over_multi_clears");

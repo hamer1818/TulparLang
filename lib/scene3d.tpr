@@ -649,8 +649,13 @@ func scene3d_reset() {
     // oldu: yeni "kutu" varlığı bir önceki testin "kahraman"ı sanıldı.)
     _sc_nm = []; _sc_id = [];
     // Geri-al geçmişi de: başka bir sahnenin anlık görüntüsünü "geri almak"
-    // sahneyi alakasız bir şeye çevirirdi.
+    // sahneyi alakasız bir şeye çevirirdi. Bölüm ETİKETLERİ de sıfırlanmalı:
+    // içerik yığını boşalıp etiket yığını dolu kalırsa ikisi kayar ve ilk
+    // geri alma anlık görüntüyü YANLIŞ bölüme yazar. (Testin "eş adımda"
+    // iddiası bunu yakaladı — iki yığını ayrı ayrı sıfırlamak, paralel dizi
+    // tutmanın klasik bedeli.)
     _ed_undo3 = []; _ed_redo3 = [];
+    _ed_undo_lvl3 = []; _ed_redo_lvl3 = [];
     _ed_sel3e = 0 - 1; _ed_drag3 = 0;   // secim sahneyle gider
     _bh3 = [];   // veri-davranislar da sahne durumu
     _rl3 = [];   // veri-kurallar da sahne durumu
@@ -8938,7 +8943,21 @@ func _ed_apply_json3(js) {
     array fi = _trg_fin;  array hi = _trg_hasin;
     array fo = _trg_fout; array ho = _trg_hasout;
     array fs = _trg_fstay; array hs = _trg_hasstay;
+    // BÖLÜMLER de korunuyor ve bu liste bir REGRESYONLA öğrenildi. `scene_load3d`
+    // artık bölümleri temizliyor (yoksa "Yeni" sahne, terk edilen sahnenin
+    // bölümlerini yeni dosyaya yazıyordu) — ama geri alma da o yoldan geçiyor.
+    // Sonuç ölçüldü: iki bölümlü bir sahnede TEK bir CTRL+Z bölüm sayısını
+    // 2'den 0'a düşürüyordu ve kaydetmek öteki bölümü dosyadan siliyordu.
+    //
+    // Ayrım şu: YENİ sahne açmak bölümleri götürür, geri almak GÖTÜRMEZ —
+    // aynı ayrım geçmiş, kancalar ve skor için de geçerli, onlar da burada
+    // korunuyor. Anlık görüntü zaten tek bölümün içeriği (`scene_json3d`),
+    // yani bölüm dizisine hiç dokunmaması gerekiyor.
+    array lj = _lvl_js3; array ln = _lvlN; array lf = _lvlF;
+    int el = _ed_lvl3; int cl = _cur_lvl3;
     scene_load3d(js);
+    _lvl_js3 = lj; _lvlN = ln; _lvlF = lf;
+    _ed_lvl3 = el; _cur_lvl3 = cl;
     int n = length(_trg_x);
     int i = 0;
     while (i < n && i < length(fi)) {
@@ -8958,6 +8977,12 @@ func _ed_apply_json3(js) {
 // tam olduğu için anlık görüntü hem daha kısa hem daha güvenilir.
 array _ed_undo3 = [];
 array _ed_redo3 = [];
+// Anlık görüntü BİR BÖLÜMÜN içeriği. Hangi bölümün olduğunu da saklamak
+// gerekiyor: 1. bölümde işaret bırakıp 2. bölüme geçmek ve CTRL+Z'ye basmak,
+// 1. bölümün içeriğini 2. bölümün ÜSTÜNE yazardı — iki bölüm birden bozulur,
+// ve geri almanın kendisi veri kaybı olurdu.
+array _ed_undo_lvl3 = [];
+array _ed_redo_lvl3 = [];
 int   _ED_UNDO_MAX3 = 40;
 
 func _ed_trim3(a): array {
@@ -8971,22 +8996,40 @@ func ed_mark3d() {
     _ed_dirty3 = 1;
     _ed_dirty_seq3 = _ed_dirty_seq3 + 1;
     push(_ed_undo3, scene_json3d());
-    if (length(_ed_undo3) > _ED_UNDO_MAX3) { _ed_undo3 = _ed_trim3(_ed_undo3); }
+    push(_ed_undo_lvl3, _ed_lvl3);
+    if (length(_ed_undo3) > _ED_UNDO_MAX3) {
+        _ed_undo3 = _ed_trim3(_ed_undo3);
+        _ed_undo_lvl3 = _ed_trim3(_ed_undo_lvl3);
+    }
     _ed_redo3 = [];   // yeni bir dal açıldı
+    _ed_redo_lvl3 = [];
+}
+
+// Anlık görüntüyü AİT OLDUĞU bölüme uygula. Başka bir bölümdeysek önce oraya
+// dönülüyor; dönmeden uygulamak iki bölümü birden bozardı.
+func _ed_apply_at_level3(js, lvl) {
+    if (lvl != _ed_lvl3 && lvl >= 0 && lvl < length(_lvl_js3)) {
+        ed_level_go3d(lvl + 1);
+    }
+    _ed_apply_json3(js);
 }
 
 func ed_undo3d(): bool {
     if (length(_ed_undo3) == 0) { return false; }
     push(_ed_redo3, scene_json3d());
+    push(_ed_redo_lvl3, _ed_lvl3);
     str js = pop(_ed_undo3);
-    _ed_apply_json3(js);
+    int lv = pop(_ed_undo_lvl3);
+    _ed_apply_at_level3(js, lv);
     return true;
 }
 func ed_redo3d(): bool {
     if (length(_ed_redo3) == 0) { return false; }
     push(_ed_undo3, scene_json3d());
+    push(_ed_undo_lvl3, _ed_lvl3);
     str js = pop(_ed_redo3);
-    _ed_apply_json3(js);
+    int lv = pop(_ed_redo_lvl3);
+    _ed_apply_at_level3(js, lv);
     return true;
 }
 func ed_undo_count3d(): int { return length(_ed_undo3); }
@@ -10876,7 +10919,10 @@ func _ed_fd_load3(path): int {
     bool sifirla = _ed_fd_resets_history3(_ed_path3, path);
     editor_file3d(path);
     int n = scene_file3d(path);
-    if (sifirla) { _ed_undo3 = []; _ed_redo3 = []; }
+    if (sifirla) {
+        _ed_undo3 = []; _ed_redo3 = [];
+        _ed_undo_lvl3 = []; _ed_redo_lvl3 = [];
+    }
     _ed_capture3();
     _ed_dirty3 = 0;
     _ed_dirty_seq3 = _ed_dirty_seq3 + 1;
