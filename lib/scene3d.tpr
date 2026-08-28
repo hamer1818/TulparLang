@@ -9539,6 +9539,9 @@ func _s3_editor_mouse(dt) {
     if (_ed_fd_on3 != _ED_FD_OFF3) { return; }
     if (_ed_help3 == 1) { return; }
     if (_ed_dock_on3 == 1) { return; }
+    // Panel sürüklenirken de görünüm tıklama almamalı: sürükleme sahnenin
+    // üstünden geçiyor ve bırakma anı orada bir seçim olurdu.
+    if (_dk_drag3 >= 0) { return; }
     // Ayraç sürüklenirken görünüm tıklama almamalı: sol ayraç tam görünümün
     // kenarında duruyor, yani sürüklemenin ilk karesi aynı zamanda sahnede
     // bir seçim olurdu.
@@ -10731,6 +10734,82 @@ func _dk_rect3(p, W, H): bool {
     return true;
 }
 
+// ---- Paneli BAŞLIĞINDAN sürükle ---------------------------------------------
+// Yuvayı bir listeden seçmek işi görüyordu ama jest yanlıştı: Unity'de,
+// Unreal'da, Blender'da panel BAŞLIĞINDAN tutulup bırakılır. Kullanıcı da
+// bunu istedi — "hiyerarşi yazısının üstünden sürükleyip yerini
+// değiştireyim".
+//
+// Bırakma bölgeleri EKRAN GEOMETRİSİNDEN: içerik alanının (araç çubuğu ile
+// durum çubuğu arası) alt çeyreği ALT yuva, sol üçte biri SOL, sağ üçte biri
+// SAĞ. Ortası geçerli bir bırakma yeri DEĞİL — kazayla başlayan bir
+// sürüklemenin paneli rastgele bir yere atmaması için.
+func _dk_close_w3(): int { return _us3(16); }
+func _dk_head_h3(): int { return _us3(16); }
+
+// İmlecin altındaki panelin BAŞLIK ŞERİDİ. Kapatma düğmesinin yeri hariç:
+// aynı piksel hem "kapat" hem "sürükle" olsaydı, kapatmak için basmak
+// sürüklemeyi de başlatırdı.
+func _dk_header_at3(mx, my, W, H): int {
+    int p = 0;
+    while (p < _dk_n3()) {
+        if (_dk_rect3(p, W, H)) {
+            int sag = _dk_x3 + _dk_w3 - _dk_close_w3();
+            if (mx >= _dk_x3 && mx < sag &&
+                my >= _dk_y3 && my < _dk_y3 + _dk_head_h3()) { return p; }
+        }
+        p = p + 1;
+    }
+    return 0 - 1;
+}
+
+// İmlecin altındaki panelin KAPATMA düğmesi. -1 = yok.
+func _dk_close_at3(mx, my, W, H): int {
+    int p = 0;
+    while (p < _dk_n3()) {
+        if (_dk_rect3(p, W, H)) {
+            int sag = _dk_x3 + _dk_w3 - _dk_close_w3();
+            if (mx >= sag && mx < _dk_x3 + _dk_w3 &&
+                my >= _dk_y3 && my < _dk_y3 + _dk_head_h3()) { return p; }
+        }
+        p = p + 1;
+    }
+    return 0 - 1;
+}
+
+// Bırakılınca hangi yuvaya düşer. -1 = geçersiz (bırakma iptal).
+func _dk_drop_at3(mx, my, W, H): int {
+    int top = _ED_MENU_H3 + _ED_TOOL_H3;
+    int bot = H - _ED_STAT_H3;
+    if (my < top || my >= bot) { return 0 - 1; }
+    if (mx < 0 || mx >= W) { return 0 - 1; }
+    int ih = bot - top;
+    // ALT bant ÖNCE sınanıyor: alt yuva tam genişlik, yani sol ve sağ
+    // üçte birlerin de altından geçiyor. Sonra sınansaydı sol alt köşe
+    // "sol" olurdu ve alta bırakmak isteyen kullanıcı sola düşürürdü.
+    if (my >= bot - toInt(ih / 4)) { return DOCK_BOTTOM3; }
+    if (mx < toInt(W / 3)) { return DOCK_LEFT3; }
+    if (mx >= toInt(W * 2 / 3)) { return DOCK_RIGHT3; }
+    return 0 - 1;
+}
+
+// Bırakma KARARI: sürüklenen panel hangi yuvaya gitsin. -1 = değişiklik yok.
+// Ayrı fonksiyon çünkü karar fare durumuna gömülüydü ve "geçersiz bölgeye
+// bırakmak İPTALDİR" kuralını çağrı yerinden silmek hiçbir testi
+// kırmıyordu (bozma denendi, kaçtı). Aynı ders üçüncü kez: yardımcıyı
+// sınamak yetmiyor, kararın KENDİSİ sınanabilir olmalı.
+func _dk_drop_result3(p, drop): int {
+    if (p < 0) { return 0 - 1; }
+    if (drop < DOCK_LEFT3 || drop > DOCK_BOTTOM3) { return 0 - 1; }
+    if (drop == _dk_slot_of3(p)) { return 0 - 1; }
+    return drop;
+}
+
+int _dk_drag3 = 0 - 1;      // sürüklenen panel (-1 = yok)
+int _dk_drop3 = 0 - 1;      // sürükleme sırasında hedef yuva (vurgulama)
+
+func panel_dragging3d(): int { return _dk_drag3; }
+
 // ---- YERLEŞİM: sürüklenebilir ayraçlar + kalıcılık --------------------------
 // Paneller sabit genişlikteydi: hiyerarşi dar gelse de, inceleyici geniş
 // gelse de yapılabilecek bir şey yoktu. Unity/Godot/Unreal'da panel sınırı
@@ -11747,7 +11826,7 @@ int _ed_help3 = 0;
 int _ed_help_scroll3 = 0;
 
 func _ed_help_idbase3(): int { return 71000; }
-func _ed_help_n3(): int { return 24; }
+func _ed_help_n3(): int { return 25; }
 
 func _ed_help_key3(i): str {
     if (i ==  0) { return "SAG TUS + WASD"; }
@@ -11773,6 +11852,7 @@ func _ed_help_key3(i): str {
     if (i == 20) { return "F2"; }
     if (i == 21) { return "F11"; }
     if (i == 22) { return "PANEL SINIRI"; }
+    if (i == 23) { return "PANEL BASLIGI"; }
     return "H";
 }
 
@@ -11807,6 +11887,7 @@ func _ed_help_act3(i): str {
     if (i == 20) { return "kaydi dosyaya dok"; }
     if (i == 21) { return "tam ekran ac / kapat"; }
     if (i == 22) { return "surukle: panel boyutu"; }
+    if (i == 23) { return "surukle: paneli tasi"; }
     return "bu listeyi ac / kapat";
 }
 
@@ -11988,6 +12069,78 @@ func _ed_split_input3() {
     }
 }
 
+// Başlıktan sürükleme — GİRDİ. Ayraçlardan SONRA sınanıyor: ayraç ince bir
+// şerit (±4 px) ve panelin kenarıyla çakışıyor; daha DAR olan hedef önce
+// kazanmalı, yoksa sınırı yakalamak imkânsız olurdu.
+func _dk_drag_input3() {
+    int W = screen_width();
+    int H = screen_height();
+    if (_ed_split3 > 0) { return; }     // ayraç sürükleniyor, karışmasın
+    if (_dk_drag3 < 0) {
+        if (mouse_pressed(0) == false) { return; }
+        // KAPATMA düğmesi başlığın içinde ama sürükleme başlatmıyor.
+        int kp = _dk_close_at3(mouse_x(), mouse_y(), W, H);
+        if (kp >= 0) {
+            _dk_set_slot3(kp, DOCK_OFF3);
+            editor_layout_save3d();
+            _g_press3 = 0;
+            _g_act3 = 0;
+            return;
+        }
+        int hp = _dk_header_at3(mouse_x(), mouse_y(), W, H);
+        if (hp < 0) { return; }
+        _dk_drag3 = hp;
+    }
+    _dk_drop3 = _dk_drop_at3(mouse_x(), mouse_y(), W, H);
+    // Sürükleme sırasında panellerin widget'ları tıklama ALMASIN.
+    _g_press3 = 0;
+    _g_act3 = 0;
+    if (mouse_down(0) == false) {
+        // Geçersiz bölgeye bırakmak İPTAL: kazayla başlayan bir sürükleme
+        // paneli rastgele bir yere atmamalı.
+        int hedef = _dk_drop_result3(_dk_drag3, _dk_drop3);
+        if (hedef >= 0) {
+            _dk_set_slot3(_dk_drag3, hedef);
+            editor_layout_save3d();
+        }
+        _dk_drag3 = 0 - 1;
+        _dk_drop3 = 0 - 1;
+    }
+}
+
+// Sürükleme — ÇİZİM. Hedef yuva vurgulanıyor ve imlecin yanında panelin adı
+// duruyor: bırakınca nereye gideceğini GÖRMEDEN sürüklemek tahmin oyunu.
+func _dk_drag_draw3() {
+    if (_dk_drag3 < 0) { return; }
+    int W = screen_width();
+    int H = screen_height();
+    int top = _ED_MENU_H3 + _ED_TOOL_H3;
+    int bot = H - _ED_STAT_H3;
+    if (_dk_drop3 == DOCK_LEFT3) {
+        rect(0, top, toInt(W / 3), bot - top, rgba(90, 170, 255, 60));
+        rect_lines(0, top, toInt(W / 3), bot - top, _G_ACC3());
+    }
+    if (_dk_drop3 == DOCK_RIGHT3) {
+        int rx = toInt(W * 2 / 3);
+        rect(rx, top, W - rx, bot - top, rgba(90, 170, 255, 60));
+        rect_lines(rx, top, W - rx, bot - top, _G_ACC3());
+    }
+    if (_dk_drop3 == DOCK_BOTTOM3) {
+        int by = bot - toInt((bot - top) / 4);
+        rect(0, by, W, bot - by, rgba(90, 170, 255, 60));
+        rect_lines(0, by, W, bot - by, _G_ACC3());
+    }
+    str ad = _dk_panel_nm3(_dk_drag3);
+    if (_dk_drop3 < 0) { ad = ad + "  (birakma yeri degil)"; }
+    int tw = _g_w3(ad, _F3) + _us3(10);
+    int tx = mouse_x() + _us3(10);
+    int ty = mouse_y() + _us3(10);
+    if (tx + tw > W) { tx = W - tw; }
+    rect(tx, ty, tw, _g_lh3(), rgba(24, 26, 32, 235));
+    rect_lines(tx, ty, tw, _g_lh3(), _G_ACC3());
+    _g_txt3(ad, tx + _us3(4), ty, tw - _us3(8), _G_TXT3());
+}
+
 func _ed_split_draw3() {
     int W = screen_width();
     int H = screen_height();
@@ -12022,9 +12175,19 @@ func _ed_panels_draw3() {
     int p = 0;
     while (p < _dk_n3()) {
         if (_dk_rect3(p, W, H)) {
+            int hx = _dk_x3;
+            int hy = _dk_y3;
+            int hw = _dk_w3;
             if (p == PANEL_HIER3) { _ed_hierarchy3(_dk_x3, _dk_y3, _dk_w3, _dk_h3); }
             if (p == PANEL_INSP3) { _ed_inspector3(_dk_x3, _dk_y3, _dk_w3, _dk_h3); }
             if (p == PANEL_CONS3) { _ed_console3(_dk_x3, _dk_y3, _dk_w3, _dk_h3); }
+            // Kapatma "x"i başlığın sağ ucunda. Başlık şeridi 2x ölçekte 32
+            // piksel — bir düğme için fazlasıyla yeter (önce "çok küçük"
+            // diye elenmişti, ölçüldü ve yanlıştı). Tıklamayı `_dk_drag_input3`
+            // yakalıyor; burada yalnız İŞARET çiziliyor, yoksa aynı piksel
+            // hem düğme hem sürükleme tutamağı olurdu.
+            int cw = _dk_close_w3();
+            _g_txtc3("x", hx + hw - cw, hy, cw, _dk_head_h3(), _G_DIM3());
         }
         p = p + 1;
     }
@@ -12114,6 +12277,7 @@ func _ed_dock_draw3() {
 func _ed_chrome3() {
     _g_begin();
     _ed_split_input3();
+    _dk_drag_input3();
     _ed_menubar3();
     _ed_toolbar3();
     // Paneller YUVALARINA göre çiziliyor. Sıra sabit (kimlik sırası) ama
@@ -12128,6 +12292,7 @@ func _ed_chrome3() {
     int vh = _ed_view_h3();
     rect_lines(vx - 1, vy - 1, vw + 2, vh + 2, _G_LINE3());
     _ed_split_draw3();
+    _dk_drag_draw3();
     if (_ed_playing3 == 0) { _ed_axis_widget3(); }
     // Bağlam menüsü panellerin ÜSTÜNDE ama çakışma denetiminden ÖNCE:
     // menü kasıtlı olarak altındakileri örtüyor, onu çakışma saymak yanlış
