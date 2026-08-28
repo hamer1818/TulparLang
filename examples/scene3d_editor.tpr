@@ -99,7 +99,7 @@
 // KAPATIRKEN: pencereyi çarpıyla kapatmak kaydedilmemiş işi GÖTÜRMÜYOR
 // artık. raylib'de kapanışı iptal edecek bir bağlama yok, yani "emin misin?"
 // sorulamıyor — onun yerine yaşayan sahne `<dosya>.kurtarma.json`'a yazılıyor
-// ve editör bir dahaki açılışta menüde bir KURTAR düğmesi gösteriyor.
+// ve editör bir dahaki açılışta şeritte bir KURTAR düğmesi gösteriyor.
 // Kaydetmek o dosyayı geçersiz kılıyor. Kurtarma geri alınabilir (CTRL+Z) ve
 // kurtarılan iş HÂLÂ kaydedilmemiş sayılıyor (başlıkta yıldız yanar).
 //
@@ -109,8 +109,22 @@
 // bunu söylüyor. Hedefe editör AD veriyor, çünkü sahne biçimi varlıklara adla
 // atıfta bulunuyor — adsız bir hedef kaydedince sessizce kopardı.
 //
+// MENÜ ŞERİDİ AÇILIR MENÜLERDEN oluşuyor: Dosya / Duzen / Gorunum / Yardim.
+// Açık bir menü varken başka bir başlığın üstüne gelmek ona geçiyor; ESC
+// kapatıyor. Her komutun KISAYOLU kendi satırında sağda yazıyor — kısayolu
+// öğrenmenin yolu ayrı bir liste açmak olmamalı. Şu an iş görmeyen komutlar
+// (boş panoda "Yapistir", seçimsiz "Sil") SOLUK duruyor; kaybolan bir öğe
+// komutun var olduğunu da unutturur.
+//
+// "Yeni" yıkıcı olduğu için iki tıklıyor: ilkinde öğe "EMIN MISIN?" yazıyor
+// ve menü açık kalıyor, ikincisi siliyor. Kaydedilmemiş iş yoksa soru yok.
+//
+// KURTAR menüde DEĞİL, şeritte ve vurgulu: o duran bir komut değil, geçici
+// bir teklif ("önceki oturumdan kaydedilmemiş iş var") ve menüde saklanan
+// bir teklif görülmez.
+//
 // Yerleşim:
-//   menü şeridi            Yeni / Aç / Kaydet / F. Kaydet / Geri / İleri / PANELLER / ?
+//   menü şeridi            Dosya / Duzen / Gorunum / Yardim  —  sağda dosya adı
 //   araç çubuğu            araçlar solda, OYNAT-DUR ORTADA, ızgara
 //   hiyerarşi | SAHNE GÖRÜNÜMÜ | özellikler
 //   konsol                 motorun tanılama kaydı

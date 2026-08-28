@@ -9811,6 +9811,9 @@ func _s3_editor_keys() {
     if (key_pressed(K_G)) {
         if (_ed_grid3 > 0.0) { _ed_grid3 = 0.0; } else { _ed_grid3 = 0.5; }
     }
+    // ESC açık menüyü kapatıyor — bağlam menüsünden ÖNCE sınanıyor: ikisi
+    // birden açıkken üstte duran açılır menü, kapanması gereken de o.
+    if (key_pressed(K_ESC) && _ed_mn_open3 >= 0) { _ed_mn_close3(); return; }
     if (key_pressed(K_ESC) && _ed_ctx_on3 == 1) { _ed_ctx_close3(); return; }
     if (key_down(K_LCTRL) && key_pressed(K_S)) {
         // CTRL+SHIFT+S = farklı kaydet. Sektör standardı ve buradaki asıl
@@ -10120,6 +10123,22 @@ func _g_draw3(t, x, y, size, col) {
 func _g_w3(t, size): int {
     if (_ed_font3 >= 0) { return font_width(_ed_font3, t, size); }
     return text_width(t, size);
+}
+
+// Metin genişliğinin KARAKTER TABANLI tahmini. `_g_w3` pencere yokken 0
+// döner (Tuzaklar 3) ve 0'a göre kurulan bir yerleşim testte "her şey
+// sığıyor" der. Katsayı ölçülmüş: `_F3 = 20`'de karakter başına ~11.5 px,
+// yani `_F3 * 23 / 40`.
+func _g_estw3(s): int { return toInt(length(s) * _F3 * 23 / 40); }
+
+// Yerleşim ölçüsü ikisinin BÜYÜĞÜ: pencereyle gerçek genişlik, penceresiz
+// tahmin. Gerçek yazı tipi tahminden dar çıkarsa menü bir tutam geniş olur —
+// hesabı penceresiz sınanamaz yapmaktan iyidir.
+func _g_wmax3(s): int {
+    int a = _g_w3(s, _F3);
+    int b = _g_estw3(s);
+    if (a > b) { return a; }
+    return b;
 }
 
 // Ölçeğe göre büyütülmüş piksel değeri. Panel içindeki bütün sabitler 1x
@@ -11341,147 +11360,447 @@ func _ed_rt_sync3() {
 // ---- Menü şeridi -----------------------------------------------------------
 // Açılır menü YOK: tek kullanımlık bir menü makinesi yazmak, aynı işi yapan
 // düğmelerden çok daha fazla kod ve durum demekti. Şerit doğrudan eylem.
+// ---- Menü şeridi: AÇILIR MENÜLER --------------------------------------------
+// Şerit düz bir düğme sırasıydı: "Yeni / Ac / Kaydet / F. Kaydet / Geri /
+// Ileri / PANELLER / ?". İşi görüyordu ama iki somut bedeli vardı:
+//
+//   • ŞERİT DOLUYORDU. Her yeni komut bir düğme demek ve sığmayan düğme
+//     hiç çizilmiyordu — yani komut dar pencerede ERİŞİLEMEZ oluyordu.
+//     Menü başlığı sayısı sabit; komut eklemek şeridi büyütmüyor.
+//   • KISAYOL hiçbir yerde YAZMIYORDU. CTRL+D'yi öğrenmenin tek yolu H
+//     listesini açmaktı. Kısayolu komutun YANINDA göstermek, kullanıcının
+//     fareden klavyeye geçmesinin sektörde standart olan yolu.
+//
+// Öğeler KONUMLA değil KODLA anılıyor (`MNA_*`). Bir öğe duruma göre
+// gizlenebiliyor (web'de "Indir", yalnız kurtarılacak iş varken "Kurtar");
+// dağıtıcı indekse baksaydı gizlenen bir öğe ötekilerin ne yaptığını
+// kaydırırdı — bu depodaki en sevmediğimiz hata türü, sessiz olanı.
+int MNA_NEW3      =  1;
+int MNA_OPEN3     =  2;
+int MNA_SAVE3     =  3;
+int MNA_SAVEAS3   =  4;
+int MNA_EXPORT3   =  5;
+int MNA_UNDO3     = 10;
+int MNA_REDO3     = 11;
+int MNA_COPY3     = 12;
+int MNA_PASTE3    = 13;
+int MNA_DUP3      = 14;
+int MNA_DELETE3   = 15;
+int MNA_SELALL3   = 16;
+int MNA_PANEL_H3  = 20;
+int MNA_PANEL_I3  = 21;
+int MNA_PANEL_C3  = 22;
+int MNA_PANELS3   = 23;
+int MNA_LAYOUT3   = 24;
+int MNA_GRID3     = 25;
+int MNA_FULL3     = 26;
+int MNA_HELP3     = 30;
+
+int _ed_mn_open3 = 0 - 1;      // açık menü (-1 = yok)
+func _ed_mn_close3() { _ed_mn_open3 = 0 - 1; }
+func _ed_mn_n3(): int { return 4; }
+func _ed_mn_idbase3(): int { return 73000; }
+
+func _ed_mn_title3(m): str {
+    if (m == 0) { return "Dosya"; }
+    if (m == 1) { return "Duzen"; }
+    if (m == 2) { return "Gorunum"; }
+    return "Yardim";
+}
+
+// Menünün öğeleri. 0 = AYIRICI. Duruma göre değişiyor: görünmeyecek öğeyi
+// soluk çizmektense hiç koymamak, listeyi kısa ve okunur tutuyor —
+// ama bu yalnız VAR OLUŞU duruma bağlı olanlar için (web, kurtarma).
+// Geçici olarak iş görmeyenler (boş pano, seçimsiz sil) DURUYOR ve SOLUK
+// çiziliyor: kaybolan öğe, kullanıcıya komutun var olduğunu da unutturur.
+func _ed_mn_codes3(m): array {
+    array a = [];
+    if (m == 0) {
+        push(a, MNA_NEW3);
+        push(a, MNA_OPEN3);
+        push(a, 0);
+        push(a, MNA_SAVE3);
+        push(a, MNA_SAVEAS3);
+        if (web_mi()) { push(a, MNA_EXPORT3); }
+        return a;
+    }
+    if (m == 1) {
+        push(a, MNA_UNDO3);
+        push(a, MNA_REDO3);
+        push(a, 0);
+        push(a, MNA_COPY3);
+        push(a, MNA_PASTE3);
+        push(a, MNA_DUP3);
+        push(a, MNA_DELETE3);
+        push(a, 0);
+        push(a, MNA_SELALL3);
+        return a;
+    }
+    if (m == 2) {
+        push(a, MNA_PANEL_H3);
+        push(a, MNA_PANEL_I3);
+        push(a, MNA_PANEL_C3);
+        push(a, 0);
+        push(a, MNA_PANELS3);
+        push(a, MNA_LAYOUT3);
+        push(a, 0);
+        push(a, MNA_GRID3);
+        push(a, MNA_FULL3);
+        return a;
+    }
+    push(a, MNA_HELP3);
+    return a;
+}
+
+// Üç nokta = "bir pencere açar, işi hemen yapmaz". Sektör standardı ve
+// burada gerçek bir bilgi: "Kaydet" yazar, "Farkli Kaydet..." sorar.
+func _ed_mn_label3(code): str {
+    if (code == MNA_NEW3) {
+        // YIKICI komut: kaydedilmemiş sahneyi siler. Kipsiz onay — öğe
+        // kendisi soruya dönüşüyor ve menü açık kalıyor.
+        if (_ed_confirm3 > 0.0) { return "Yeni  —  EMIN MISIN?"; }
+        return "Yeni";
+    }
+    if (code == MNA_OPEN3)    { return "Ac..."; }
+    if (code == MNA_SAVE3)    { return "Kaydet"; }
+    if (code == MNA_SAVEAS3)  { return "Farkli Kaydet..."; }
+    if (code == MNA_EXPORT3)  { return "Indir..."; }
+    if (code == MNA_UNDO3)    { return "Geri Al"; }
+    if (code == MNA_REDO3)    { return "Yinele"; }
+    if (code == MNA_COPY3)    { return "Kopyala"; }
+    if (code == MNA_PASTE3)   { return "Yapistir"; }
+    if (code == MNA_DUP3)     { return "Cogalt"; }
+    if (code == MNA_DELETE3)  { return "Sil"; }
+    if (code == MNA_SELALL3)  { return "Tumunu Sec"; }
+    if (code == MNA_PANEL_H3) { return "Hiyerarsi"; }
+    if (code == MNA_PANEL_I3) { return "Ozellikler"; }
+    if (code == MNA_PANEL_C3) { return "Konsol"; }
+    if (code == MNA_PANELS3)  { return "Panel Yerlesimi..."; }
+    if (code == MNA_LAYOUT3)  { return "Varsayilan Yerlesim"; }
+    if (code == MNA_GRID3)    { return "Izgara"; }
+    if (code == MNA_FULL3)    { return "Tam Ekran"; }
+    return "Kisayollar...";
+}
+
+// Kısayol ipucu. Boş dize = kısayolu YOK. Var olmayan bir kısayolu yazmak
+// yanlış bilgi vermek olurdu: "Yeni" ve "Ac"ın kısayolu gerçekten yok
+// (CTRL+N / CTRL+O bu editörde bağlı değil).
+func _ed_mn_key3(code): str {
+    if (code == MNA_SAVE3)    { return "CTRL + S"; }
+    if (code == MNA_SAVEAS3)  { return "CTRL+SHIFT+S"; }
+    if (code == MNA_UNDO3)    { return "CTRL + Z"; }
+    if (code == MNA_REDO3)    { return "CTRL + Y"; }
+    if (code == MNA_COPY3)    { return "CTRL + C"; }
+    if (code == MNA_PASTE3)   { return "CTRL + V"; }
+    if (code == MNA_DUP3)     { return "CTRL + D"; }
+    if (code == MNA_DELETE3)  { return "DEL"; }
+    if (code == MNA_SELALL3)  { return "CTRL + A"; }
+    if (code == MNA_GRID3)    { return "G"; }
+    if (code == MNA_FULL3)    { return "F11"; }
+    if (code == MNA_HELP3)    { return "H"; }
+    return "";
+}
+
+// İŞARET sütunu: -1 = işaretlenebilir değil, 0/1 = kapalı/açık.
+func _ed_mn_check3(code): int {
+    if (code == MNA_PANEL_H3) {
+        if (_dk_slot_of3(PANEL_HIER3) != DOCK_OFF3) { return 1; }
+        return 0;
+    }
+    if (code == MNA_PANEL_I3) {
+        if (_dk_slot_of3(PANEL_INSP3) != DOCK_OFF3) { return 1; }
+        return 0;
+    }
+    if (code == MNA_PANEL_C3) {
+        if (_dk_slot_of3(PANEL_CONS3) != DOCK_OFF3) { return 1; }
+        return 0;
+    }
+    if (code == MNA_GRID3) {
+        if (_ed_grid3 > 0.0) { return 1; }
+        return 0;
+    }
+    if (code == MNA_FULL3) {
+        if (is_fullscreen()) { return 1; }
+        return 0;
+    }
+    return 0 - 1;
+}
+
+// İş görüp görmeyeceği. Soluk bir öğe "bu komut VAR ama şu an yapacak bir
+// şey yok" diyor; kaybolan öğe komutun varlığını da unutturur.
+func _ed_mn_on3(code): bool {
+    if (code == MNA_UNDO3)   { return length(_ed_undo3) > 0; }
+    if (code == MNA_REDO3)   { return length(_ed_redo3) > 0; }
+    if (code == MNA_COPY3)   { return ed_select_count3d() > 0; }
+    if (code == MNA_PASTE3)  { return ed_clip_count3d() > 0; }
+    if (code == MNA_DUP3)    { return ed_select_count3d() > 0; }
+    if (code == MNA_DELETE3) { return ed_select_count3d() > 0; }
+    return true;
+}
+
+// Panelin VARSAYILAN yuvası. Kapalı bir paneli geri açarken kullanılıyor:
+// hepsini sola atmak, konsolu geri açan kullanıcıya onu bir daha taşıtırdı.
+func _dk_def_slot3(p): int {
+    if (p == PANEL_HIER3) { return DOCK_LEFT3; }
+    if (p == PANEL_INSP3) { return DOCK_RIGHT3; }
+    return DOCK_BOTTOM3;
+}
+
+func _ed_mn_panel_toggle3(p) {
+    if (_dk_slot_of3(p) == DOCK_OFF3) { _dk_set_slot3(p, _dk_def_slot3(p)); }
+    else { _dk_set_slot3(p, DOCK_OFF3); }
+    editor_layout_save3d();
+}
+
+// Öğenin İŞİ. Dönüş: menü AÇIK KALSIN mı. Ayrı ve çağrılabilir bir
+// fonksiyon, çünkü tıklama çizim göbeğinde yaşıyor ve orada penceresiz
+// sürülemiyor — bu depodaki en sık kaçan bozma sınıfı (bkz. Tuzaklar 1a).
+func _ed_mn_do3(code): bool {
+    if (_ed_mn_on3(code) == false) { return true; }
+    if (code == MNA_NEW3) {
+        if (_ed_confirm3 > 0.0 || _ed_dirty3 == 0) {
+            ed_mark3d();
+            scene_load3d("{\"v\":1,\"world\":{\"ground\":0},\"entities\":[]}");
+            _ed_confirm3 = 0.0;
+            return false;
+        }
+        // Silmeye HENÜZ karar verilmedi: menü açık kalıyor ki ikinci
+        // tıklama aynı yerde olsun ve öğe "EMIN MISIN?" yazsın.
+        _ed_confirm3 = 4.0;
+        return true;
+    }
+    if (code == MNA_OPEN3)   { _ed_fd_open3(_ED_FD_OPEN3); return false; }
+    if (code == MNA_SAVE3)   { editor_save3d(); return false; }
+    if (code == MNA_SAVEAS3) { _ed_fd_open3(_ED_FD_SAVE3); return false; }
+    if (code == MNA_EXPORT3) {
+        str ad = _ed_path3;
+        if (ad == "") { ad = "sahne.json"; }
+        scene_export3d(ad);
+        _ed_msg3 = "indiriliyor: " + ad;
+        _ed_msg_t3 = 3.0;
+        return false;
+    }
+    if (code == MNA_UNDO3) {
+        if (ed_undo3d()) { _ed_msg3 = "geri alindi"; _ed_msg_t3 = 1.2; }
+        return false;
+    }
+    if (code == MNA_REDO3) {
+        if (ed_redo3d()) { _ed_msg3 = "yinelendi"; _ed_msg_t3 = 1.2; }
+        return false;
+    }
+    if (code == MNA_COPY3) {
+        int cn = ed_copy3d();
+        _ed_msg3 = toString(cn) + " varlik kopyalandi";
+        _ed_msg_t3 = 1.5;
+        return false;
+    }
+    if (code == MNA_PASTE3) {
+        ed_mark3d();
+        int pn = ed_paste3d();
+        _ed_msg3 = toString(pn) + " varlik yapistirildi";
+        _ed_msg_t3 = 1.5;
+        return false;
+    }
+    if (code == MNA_DUP3)    { ed_mark3d(); ed_duplicate_selected3d(); return false; }
+    if (code == MNA_DELETE3) { ed_mark3d(); ed_delete_selected3d(); return false; }
+    if (code == MNA_SELALL3) {
+        int sn = ed_select_all3d();
+        _ed_msg3 = toString(sn) + " varlik secildi";
+        _ed_msg_t3 = 1.5;
+        return false;
+    }
+    if (code == MNA_PANEL_H3) { _ed_mn_panel_toggle3(PANEL_HIER3); return true; }
+    if (code == MNA_PANEL_I3) { _ed_mn_panel_toggle3(PANEL_INSP3); return true; }
+    if (code == MNA_PANEL_C3) { _ed_mn_panel_toggle3(PANEL_CONS3); return true; }
+    if (code == MNA_PANELS3)  { _ed_dock_on3 = 1; return false; }
+    if (code == MNA_LAYOUT3)  { editor_layout_reset3d(); return false; }
+    if (code == MNA_GRID3) {
+        if (_ed_grid3 > 0.0) { _ed_grid3 = 0.0; } else { _ed_grid3 = 0.5; }
+        return true;
+    }
+    if (code == MNA_FULL3) { tam_ekran(is_fullscreen() == false); return false; }
+    _ed_help3 = 1;
+    _ed_help_scroll3 = 0;
+    return false;
+}
+
+// ---- Menünün ölçüleri (SAF — pencere gerekmiyor) ----------------------------
+// Genişlik gerçek metin genişliğinden DE, karakter tahmininden DE geliyor:
+// `_g_w3` pencere yokken 0 döner ve yalnız ona bakan bir yerleşim testte
+// "her şey sığıyor" der (bkz. Tuzaklar 3).
+func _ed_mn_titlew3(m): int { return _g_wmax3(_ed_mn_title3(m)) + _us3(16); }
+func _ed_mn_titlex3(m): int {
+    int x = _ED_PAD3;
+    int i = 0;
+    while (i < m) { x = x + _ed_mn_titlew3(i); i = i + 1; }
+    return x;
+}
+func _ed_mn_sepy3(): int { return _us3(5); }
+func _ed_mn_checkw3(): int { return _us3(12); }
+
+func _ed_mn_w3(m): int {
+    array cd = _ed_mn_codes3(m);
+    int lw = 0;
+    int kw = 0;
+    int i = 0;
+    while (i < length(cd)) {
+        int c = cd[i];
+        if (c != 0) {
+            int a = _g_wmax3(_ed_mn_label3(c));
+            if (a > lw) { lw = a; }
+            int b = _g_wmax3(_ed_mn_key3(c));
+            if (b > kw) { kw = b; }
+        }
+        i = i + 1;
+    }
+    // İki sütunun ARASINDA nefes payı: bitişik yazılan etiket ve kısayol
+    // tek bir kelime gibi okunuyor.
+    return _ed_mn_checkw3() + lw + _us3(18) + kw + _us3(12);
+}
+
+func _ed_mn_h3(m): int {
+    array cd = _ed_mn_codes3(m);
+    int h = _us3(6);
+    int i = 0;
+    while (i < length(cd)) {
+        if (cd[i] == 0) { h = h + _ed_mn_sepy3(); }
+        else { h = h + _ED_FLD3; }
+        i = i + 1;
+    }
+    return h;
+}
+
+// Menü ekranın SAĞINDAN taşmasın. Saf: başlığın x'inden başlıyor, sığmazsa
+// sola kayıyor (sıfırın altına değil).
+func _ed_mn_x3(m, W): int {
+    int x = _ed_mn_titlex3(m);
+    int w = _ed_mn_w3(m);
+    if (x + w > W) { x = W - w; }
+    if (x < 0) { x = 0; }
+    return x;
+}
+
+// ---- Çizim -------------------------------------------------------------------
+func _ed_mn_item3(id, x, y, w, h, code): bool {
+    bool acik = _ed_mn_on3(code);
+    _g_rect3(id, x, y, w, h);
+    bool over = _g_in(x, y, w, h);
+    bool clicked = false;
+    if (acik) {
+        if (over) { _g_hot3 = id; }
+        if (over && _g_press3 == 1) { _g_act3 = id; }
+        if (_g_act3 == id && _g_rel3 == 1) {
+            if (over) { clicked = true; }
+            _g_act3 = 0;
+        }
+        if (over) { rect(x, y, w, h, _G_BTNH3()); }
+    }
+    int tc = _G_TXT3();
+    if (acik == false) { tc = _G_DIM3(); }
+    // İŞARET sütunu HER ZAMAN ayrılıyor: yalnız işaretli satırda yer
+    // açsaydık iki satırın metni birbirine göre kayardı.
+    int cw = _ed_mn_checkw3();
+    int chk = _ed_mn_check3(code);
+    if (chk >= 0) {
+        int bx = x + toInt((cw - _us3(6)) / 2);
+        int by = y + toInt((h - _us3(6)) / 2);
+        rect_lines(bx, by, _us3(6), _us3(6), _G_LINE3());
+        if (chk == 1) { rect(bx + 1, by + 1, _us3(6) - 2, _us3(6) - 2, _G_ACC3()); }
+    }
+    _g_txt3(_ed_mn_label3(code), x + cw, y + _g_cy3(h), w - cw - _us3(6), tc);
+    str k = _ed_mn_key3(code);
+    if (k != "") { _g_txtr3(k, x + w - _us3(6), y + _g_cy3(h), _G_DIM3()); }
+    return clicked;
+}
+
+// Açılır liste EN ÜSTTE çiziliyor (kabuk sırasına bak): menü şeridinin
+// hemen altındaki her şeyi kasıtlı olarak örtüyor.
+func _ed_mn_draw3() {
+    if (_ed_mn_open3 < 0) { return; }
+    int m = _ed_mn_open3;
+    int W = screen_width();
+    int x = _ed_mn_x3(m, W);
+    int y = _ED_MENU_H3;
+    int w = _ed_mn_w3(m);
+    int h = _ed_mn_h3(m);
+    rect(x, y, w, h, rgba(24, 26, 32, 246));
+    rect_lines(x, y, w, h, _G_ACC3());
+    array cd = _ed_mn_codes3(m);
+    int iy = y + _us3(3);
+    int i = 0;
+    while (i < length(cd)) {
+        int c = cd[i];
+        if (c == 0) {
+            int ly = iy + toInt(_ed_mn_sepy3() / 2);
+            line(x + _us3(6), ly, x + w - _us3(6), ly, _G_LINE3());
+            iy = iy + _ed_mn_sepy3();
+        } else {
+            if (_ed_mn_item3(_ed_mn_idbase3() + i, x + _us3(3), iy,
+                             w - _us3(6), _ED_FLD3, c)) {
+                if (_ed_mn_do3(c) == false) { _ed_mn_close3(); }
+                return;
+            }
+            iy = iy + _ED_FLD3;
+        }
+        i = i + 1;
+    }
+    // Dışarıya tıklamak kapatır — ama ŞERİDİN kendisi hariç: başlığa
+    // tıklamak zaten menüyü açıp kapatıyor ve ikisi birden çalışsaydı
+    // açık menünün başlığına basmak onu kapatıp aynı karede yeniden açardı.
+    if (_g_press3 == 1 && _g_in(x, y, w, h) == false &&
+        _g_in(0, 0, W, _ED_MENU_H3) == false) { _ed_mn_close3(); }
+}
+
 func _ed_menubar3() {
     int W = screen_width();
     rect(0, 0, W, _ED_MENU_H3, rgb(30, 33, 40));
     line(0, _ED_MENU_H3, W, _ED_MENU_H3, _G_LINE3());
     int bh = _ED_MENU_H3 - _us3(4);
-    int gap = _us3(2);
-    int x = _ED_PAD3;
-
-    // "Yeni" YIKICI: kaydedilmemiş sahneyi tek tıkla siler. Kipsiz onay —
-    // düğme kendisi soruya dönüşüyor. Modal pencere makinesi kurmadan
-    // kullanıcıya ikinci bir karar noktası veriyor.
-    str nlbl = "Yeni";
-    if (_ed_confirm3 > 0.0) { nlbl = "EMIN MISIN?"; }
-    int w0 = _g_btnw3(nlbl);
-    // Her düğme çizilmeden ÖNCE sığdığı denetleniyor: sığmayan düğme
-    // çizilmiyor, bir sonrakinin üstüne binmiyor.
-    if (x + w0 <= W - _ED_PAD3) {
-        if (_g_button(9600, x, _us3(2), w0, bh, nlbl)) {
-            if (_ed_confirm3 > 0.0 || _ed_dirty3 == 0) {
-                ed_mark3d();
-                scene_load3d("{\"v\":1,\"world\":{\"ground\":0},\"entities\":[]}");
-                _ed_confirm3 = 0.0;
-            } else {
-                _ed_confirm3 = 4.0;
-            }
+    int m = 0;
+    while (m < _ed_mn_n3()) {
+        int x = _ed_mn_titlex3(m);
+        int w = _ed_mn_titlew3(m);
+        bool acik = _ed_mn_open3 == m;
+        if (_g_tog(9600 + m, x, _us3(2), w, bh, _ed_mn_title3(m), acik)) {
+            if (acik) { _ed_mn_close3(); } else { _ed_mn_open3 = m; }
         }
-        _g_tip_for3(9600, "Bos sahne  —  kaydedilmemis is silinir");
-        _g_tip_for3(9601, "Baska bir sahne ac  (diskteki .json dosyalari)");
-        x = x + w0 + gap;
-    }
-    int w1 = _g_btnw3("Ac");
-    if (x + w1 <= W - _ED_PAD3) {
-        // Artık GERÇEK bir aç: dosya penceresi açılıyor. Eskiden yalnız
-        // yürürlükteki dosyayı yeniden okuyordu, yani editör açıldığı
-        // dosyaya ömür boyu bağlıydı. Geri yükleme kayboldu sanılmasın:
-        // listede yürürlükteki dosyaya tıklamak tam olarak odur ve yol
-        // değişmediği için geçmiş de korunuyor.
-        if (_g_button(9601, x, _us3(2), w1, bh, "Ac")) {
-            _ed_fd_open3(_ED_FD_OPEN3);
+        // Bir menü AÇIKKEN başka bir başlığın ÜSTÜNE gelmek ona geçiyor.
+        // Sektör standardı ve gerçek bir kolaylık: menüler arasında
+        // gezinmek için her seferinde kapat-aç yapmak gerekmiyor.
+        if (_ed_mn_open3 >= 0 && acik == false && _g_in(x, _us3(2), w, bh)) {
+            _ed_mn_open3 = m;
         }
-        x = x + w1 + gap;
-    }
-    int w2 = _g_btnw3("Kaydet");
-    if (x + w2 <= W - _ED_PAD3) {
-        if (_g_button(9602, x, _us3(2), w2, bh, "Kaydet")) { editor_save3d(); }
-        _g_tip_for3(9602, "Kaydet  (CTRL+S)");
-        x = x + w2 + gap;
-    }
-    // FARKLI KAYDET: bir sahneyi DALLANDIRMANIN tek yolu. Bu düğme yokken
-    // şablona basmak, açık olan dosyanın üstüne yazmaya mahkûmdu.
-    str fkl = "F. Kaydet";
-    int w2b = _g_btnw3(fkl);
-    if (x + w2b <= W - _ED_PAD3) {
-        if (_g_button(9606, x, _us3(2), w2b, bh, fkl)) {
-            _ed_fd_open3(_ED_FD_SAVE3);
-        }
-        _g_tip_for3(9606, "Sahneyi baska bir dosyaya kaydet  (CTRL+SHIFT+S)");
-        x = x + w2b + _us3(12);
-    }
-    // WEB'DE bir düğme daha: "Kaydet" tarayıcının deposuna yazıyor (kalıcı,
-    // ama sayfanın İÇİNDE). İşi dışarı — depoya, başka bir makineye — almanın
-    // yolu indirmek. Masaüstünde böyle bir ayrım yok: "Kaydet" zaten dosyaya
-    // yazıyor, ikinci düğme yalnız kafa karıştırırdı.
-    if (web_mi()) {
-        int wd = _g_btnw3("Indir");
-        if (x + wd <= W - _ED_PAD3) {
-            if (_g_button(9605, x, _us3(2), wd, bh, "Indir")) {
-                str ad = _ed_path3;
-                if (ad == "") { ad = "sahne.json"; }
-                scene_export3d(ad);
-                _ed_msg3 = "indiriliyor: " + ad;
-                _ed_msg_t3 = 3.0;
-            }
-            _g_tip_for3(9605, "Sahneyi bilgisayarina indir (.json)");
-            x = x + wd + _us3(12);
-        }
+        m = m + 1;
     }
 
-    int w3 = _g_btnw3("Geri");
-    if (x + w3 <= W - _ED_PAD3) {
-        if (_g_button(9603, x, _us3(2), w3, bh, "Geri")) { ed_undo3d(); }
-        _g_tip_for3(9603, "Geri al  (CTRL+Z)");
-        x = x + w3 + gap;
-    }
-    int w4 = _g_btnw3("Ileri");
-    if (x + w4 <= W - _ED_PAD3) {
-        if (_g_button(9604, x, _us3(2), w4, bh, "Ileri")) { ed_redo3d(); }
-        _g_tip_for3(9604, "Yinele  (CTRL+Y)");
-        x = x + w4 + gap;
-    }
-    // KURTAR yalnız kurtarılacak iş VARKEN. Her zaman duran ve çoğu zaman
-    // iş görmeyen bir düğme, şeridi doldurmaktan başka bir şey yapmazdı.
+    // KURTAR menüde DEĞİL, şeritte ve VURGULU. Menüye koymak yanlış olurdu:
+    // bu duran bir komut değil, geçici bir TEKLİF ("önceki oturumdan
+    // kaydedilmemiş iş var"). Menüde saklanan bir teklif görülmez ve
+    // kurtarma tam olarak görülmesi gereken şey.
+    int rx = W - _ED_PAD3;
     if (_ed_recover_has3 == 1) {
         str kl = "KURTAR";
-        int wk = _g_btnw3(kl);
-        if (x + wk <= W - _ED_PAD3) {
-            if (_g_button(9608, x, _us3(2), wk, bh, kl)) {
+        int wk = _g_btnw3(kl) + _us3(8);
+        int kx = rx - wk;
+        if (kx > _ed_mn_titlex3(_ed_mn_n3())) {
+            if (_g_button(9608, kx, _us3(2), wk, bh, kl)) {
                 int kn = ed_recover3d();
                 _ed_msg3 = "kurtarildi: " + toString(kn) + " varlik";
                 _ed_msg_t3 = 4.0;
             }
             _g_tip_for3(9608, "Onceki oturumda kaydedilmemis is bulundu — geri getir");
-            x = x + wk + _us3(12);
+            rx = kx - _us3(8);
         }
-    }
-    // Yerleşimi varsayılana döndür — özelleştirmenin geri alınabilir olması
-    // ŞART: sınırı ekranın kenarına itip sıkışan biri başka türlü çıkamaz
-    // (ve yerleşim kalıcı olduğu için programı kapatmak da kurtarmaz).
-    // PANELLER: yuva değiştirme, kapatma/açma ve varsayılana dönüş. Üçü de
-    // burada — "YERLESIM" düğmesi yalnız sıfırlıyordu ve şeritte iki ayrı
-    // düğme tutmak, aynı işin iki yere bölünmesi olurdu.
-    str yl = "PANELLER";
-    int wy = _g_btnw3(yl);
-    if (x + wy <= W - _ED_PAD3) {
-        if (_g_button(9609, x, _us3(2), wy, bh, yl)) {
-            if (_ed_dock_on3 == 1) { _ed_dock_close3(); }
-            else { _ed_dock_on3 = 1; }
-        }
-        _g_tip_for3(9609, "Panellerin yerini degistir, kapat / ac");
-        x = x + wy + gap;
-    }
-    // Kısayol listesi FAREYLE de bulunabilmeli: "H'ye bas" demek, H'yi
-    // bilmeyen kullanıcıya bir şey söylemiyor. Bu düğme o döngüyü kırıyor.
-    int w5 = _g_btnw3("?");
-    if (x + w5 <= W - _ED_PAD3) {
-        if (_g_button(9607, x, _us3(2), w5, bh, "?")) {
-            if (_ed_help3 == 1) { _ed_help_close3(); }
-            else { _ed_help3 = 1; _ed_help_scroll3 = 0; }
-        }
-        _g_tip_for3(9607, "Kisayollar  (H)");
-        x = x + w5 + _us3(12);
     }
 
-    // Sağda dosya adı — yalnız son düğmeden SONRA yer kalırsa.
+    // Sağda dosya adı — başlıklardan sonra yer kalırsa.
     str f = _ed_path3;
     if (f == "") { f = "(kaydedilmemis sahne)"; }
     // Yıldız = kaydedilmemiş değişiklik. Her editörde standart.
     if (_ed_dirty3 == 1) { f = "* " + f; }
     int fw = _g_w3(f, _F3);
-    if (W - _ED_PAD3 - fw > x + _us3(12)) {
-        _g_txtr3(f, W - _ED_PAD3, _g_cy3(_ED_MENU_H3), _G_DIM3());
+    if (rx - fw > _ed_mn_titlex3(_ed_mn_n3()) + _us3(12)) {
+        _g_txtr3(f, rx, _g_cy3(_ED_MENU_H3), _G_DIM3());
     }
 }
 
@@ -12564,9 +12883,10 @@ func _ed_dock_draw3() {
         if (slot == DOCK_OFF3) { gl = "goster"; }
         if (_g_button(base + p * 4 + 1, lx + adw + ybw + _us3(8), iy, gbw,
                       _ED_FLD3, gl)) {
-            if (slot == DOCK_OFF3) { _dk_set_slot3(p, DOCK_LEFT3); }
-            else { _dk_set_slot3(p, DOCK_OFF3); }
-            editor_layout_save3d();
+            // Geri açarken panelin KENDİ varsayılan yuvasına: hepsini
+            // sola atmak, konsolu geri açan kullanıcıya onu bir daha
+            // taşıtırdı. Kural `_ed_mn_panel_toggle3` ile ORTAK.
+            _ed_mn_panel_toggle3(p);
         }
         _g_tip_for3(base + p * 4 + 1, "Paneli kapat / geri ac");
         iy = iy + _ED_FLD3 + _us3(6);
@@ -12639,6 +12959,13 @@ func _ed_chrome3() {
     if (_ed_help3 == 1) {
         _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
         _ed_help_draw3();
+    }
+    // Açılır menü EN SON: şeridin altındaki her şeyi kasıtlı olarak örtüyor
+    // ve tıklamayı önce O almalı. Kuyruk çizimden ÖNCE boşalıyor — altındaki
+    // panelleri çakışma saymak yanlış olurdu (menü onları bilerek örtüyor).
+    if (_ed_mn_open3 >= 0) {
+        _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+        _ed_mn_draw3();
     }
     _g_check_overlaps3();
     _g_tip_draw3();   // EN SON: ipucu her şeyin üstünde (denetime girmiyor)

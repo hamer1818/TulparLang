@@ -78,10 +78,11 @@
 // moves into a dock gets an equal share, so a panel you squeezed to a sliver
 // in one dock does not arrive as a sliver in the next.
 //
-// The PANELLER button in the menu bar does the same from a list, and it is
-// the way to bring a HIDDEN panel back (a hidden panel has no title bar, so
-// it cannot reopen itself). "VARSAYILAN YERLESIM" restores both the docks
-// and the sizes.
+// The Gorunum (View) menu lists the three panels with a check box each — that
+// is the way to bring a HIDDEN panel back (a hidden panel has no title bar,
+// so it cannot reopen itself), and a hidden panel reopens into ITS OWN home
+// dock, not always the left one. "Panel Yerlesimi..." opens the same list as
+// a window and "Varsayilan Yerlesim" restores both the docks and the sizes.
 //
 // Deliberately NOT done: ordering within a dock, TABS, and FLOATING windows.
 // All three mean a separate window manager.
@@ -92,8 +93,8 @@
 // the same dock resizes their share. Where the two meet in a corner, the
 // dock's outer border wins.) The choice PERSISTS — it survives closing the engine and
 // comes back on the next start (the UI scale too). The YERLESIM button in the
-// menu bar restores the defaults; that is the way out if you push a border to
-// the edge of the screen.
+// Gorunum menu restores the defaults; that is the way out if you push a
+// border to the edge of the screen.
 //
 // THE WINDOW is resizable and maximizable — drag an edge, use the OS maximize
 // button, or press F11 for fullscreen. Every panel and the scene view is
@@ -102,7 +103,7 @@
 // ON CLOSING: closing the window no longer loses unsaved work. raylib has no
 // hook to cancel a close, so "are you sure?" cannot be asked — instead the
 // live scene is written to `<file>.kurtarma.json` and the editor shows a
-// KURTAR (recover) button in the menu bar next time it starts. Saving voids
+// KURTAR (recover) button in the bar next time it starts. Saving voids
 // that file. Recovering is undoable (CTRL+Z) and the recovered work still
 // counts as unsaved (the title keeps its asterisk).
 //
@@ -113,8 +114,24 @@
 // because the scene format refers to entities by name — an unnamed target
 // would silently break on save.
 //
+// THE MENU BAR IS MADE OF DROP-DOWN MENUS: Dosya (File) / Duzen (Edit) /
+// Gorunum (View) / Yardim (Help). While one is open, moving over another
+// title switches to it; ESC closes. Every command shows ITS SHORTCUT on the
+// right of its own row — learning a shortcut should not require opening a
+// separate list. Commands that cannot do anything right now (Paste with an
+// empty clipboard, Delete with no selection) are DIMMED rather than hidden:
+// an item that disappears also makes you forget the command exists.
+//
+// "Yeni" (New) is destructive, so it takes two clicks: the first turns the
+// item into "EMIN MISIN?" and keeps the menu open, the second clears the
+// scene. With no unsaved work there is no question.
+//
+// KURTAR (recover) is NOT in a menu — it sits in the bar, highlighted. It is
+// not a standing command but a temporary offer ("there is unsaved work from
+// the last session"), and an offer hidden in a menu is not seen.
+//
 // Layout:
-//   menu bar          New / Open / Save / Save As / Undo / Redo / PANELLER / ?
+//   menu bar          Dosya / Duzen / Gorunum / Yardim  —  file name on the right
 //   toolbar           tools on the left, PLAY-STOP CENTRED, grid
 //   hierarchy | SCENE VIEW | inspector
 //   console           the engine's diagnostic log

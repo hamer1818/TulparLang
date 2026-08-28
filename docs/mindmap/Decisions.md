@@ -33,6 +33,19 @@ bırakılıyor, yuvanın sınırı çekiliyor, kapatılıyor; yerleşim kalıcı
 **Yapılmadı ve bilerek:** yuva içinde sıralama, SEKME, YÜZEN pencere — üçü de
 ayrı bir pencere yöneticisi demek. → [[Editor]]
 
+## Menü şeridi AÇILIR MENÜ, düz düğme sırası değil (2026-08-28)
+Şerit düz bir düğme sırasıydı ve dolmuştu: sığmayan düğme hiç çizilmiyordu,
+yani komut dar pencerede **erişilemez** oluyordu. Kısayollar da hiçbir yerde
+yazmıyordu. Dört başlık (Dosya/Duzen/Gorunum/Yardim) + açılır listeler; başlık
+sayısı sabit, komut eklemek şeridi büyütmüyor.
+- Öğeler **konumla değil KODLA** anılıyor (`MNA_*`) — duruma göre gizlenen bir
+  öğe ötekilerin ne yaptığını kaydırmasın diye.
+- **Soluk ≠ gizli:** geçici olarak iş görmeyen komut duruyor ve soluk
+  çiziliyor; var oluşu duruma bağlı olan (web'in "Indir"i) hiç konmuyor.
+- **KURTAR menüde değil**, şeritte: duran bir komut değil geçici bir teklif.
+- Menüde yazan kısayolun bağlı olduğunu bir test **tuş işleyicisinin
+  kaynağından** doğruluyor. → [[Editor]]
+
 ## Yuva içi paylaşım PAY (oran), piksel değil (2026-08-28)
 Aynı yuvadaki paneller yuvayı sabit eşit bölüşüyordu ve aralarındaki sınır
 çekilemiyordu. Artık her panelin bir **payı** var (tam sayı, varsayılan 1000).

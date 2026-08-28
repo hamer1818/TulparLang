@@ -23,6 +23,41 @@ tags: [moc, editor, 3d, games]
   `scene_json3d()` / `scene_json_levels3d()` ile yazılır, `scene_load3d()` ile
   okunur. Editör ayrı bir veri modeli tutmuyor.
 
+## Menü şeridi — açılır menüler
+Şerit düz bir düğme sırasıydı (`Yeni / Ac / Kaydet / F. Kaydet / Geri / Ileri
+/ PANELLER / ?`). İki somut derdi vardı:
+- **Şerit doluyordu.** Her yeni komut bir düğme demek ve sığmayan düğme hiç
+  çizilmiyordu — yani komut dar pencerede **erişilemez** oluyordu.
+- **Kısayol hiçbir yerde yazmıyordu**; CTRL+D'yi öğrenmenin tek yolu H
+  listesiydi.
+
+Şimdi dört başlık: **Dosya / Duzen / Gorunum / Yardim**. Başlık sayısı sabit,
+yani komut eklemek şeridi büyütmüyor.
+
+- Öğeler **konumla değil KODLA** anılıyor (`MNA_*`). Bir öğe duruma göre
+  gizlenebiliyor (web'de "Indir"); dağıtıcı indekse baksaydı gizlenen öğe
+  ötekilerin ne yaptığını **kaydırırdı**.
+- **Kısayol her satırın sağında.** Menüde yazan kısayolun gerçekten bağlı
+  olduğunu bir test **tuş işleyicisinin kaynağından** doğruluyor — testin
+  içine kısayol kopyalamak, menünün iddiasını kendisiyle doğrulamak olurdu.
+  ("Yeni"/"Ac"ın kısayolu **yok** ve bu yüzden yazmıyor.)
+- **Soluk ≠ gizli.** Geçici olarak iş görmeyen komut (boş panoda "Yapistir")
+  duruyor ve soluk çiziliyor; var oluşu duruma bağlı olan (web'in "Indir"i)
+  hiç konmuyor. Kaybolan öğe komutun varlığını da unutturur.
+- Açık menü varken **başka başlığın üstüne gelmek ona geçiyor**; ESC kapatıyor.
+- **"Yeni" iki tık:** ilki öğeyi "EMIN MISIN?"e çeviriyor ve **menüyü açık
+  tutuyor** (ikinci tık aynı yerde olsun diye), ikincisi siliyor.
+- Aç/kapa öğeleri menüyü **açık bırakıyor** (üç paneli tek açılışta
+  kapatabilmek için), komutlar kapatıyor — kararı `_ed_mn_do3`'ün dönüşü veriyor.
+- **KURTAR menüde değil**, şeritte ve vurgulu: o duran bir komut değil geçici
+  bir *teklif*, ve menüde saklanan teklif görülmez.
+- Kapalı panel **kendi varsayılan yuvasına** geri açılıyor (`_dk_def_slot3`) —
+  hepsini sola atmak, konsolu geri açana onu bir daha taşıtırdı.
+
+> **`text_width()` penceresiz 0 döner**, yani yalnız ona bakan bir genişlik
+> hesabı testte "her şey sığıyor" der. Menü genişliği `_g_wmax3` ile
+> **gerçek ölçü ile karakter tahmininin büyüğünden** geliyor.
+
 ## Dock — panellerin yeri
 Üç panel × dört yuva: `PANEL_HIER3` / `PANEL_INSP3` / `PANEL_CONS3` ×
 `DOCK_LEFT3` / `DOCK_RIGHT3` / `DOCK_BOTTOM3` / `DOCK_OFF3`.
@@ -170,6 +205,7 @@ gizlemişti).
 | Blok | Aralık | Not |
 |---|---|---|
 | Sabit arayüz | 9001–9611 | araç çubuğu, hiyerarşi düğmeleri, dünya paneli |
+| Menü başlıkları | 9600–9603 | eski düğme sırasından kalan blokta |
 | Kamera | 9780+8 | `_ed_cam_idbase3` |
 | Hiyerarşi listesi | 11990–13000+ | satır başına 1 |
 | Bağlam menüsü | 22001–22016 | |
@@ -183,6 +219,7 @@ gizlemişti).
 | Dosya penceresi | 70000+ | `_ed_fd_idbase3` |
 | Kısayol örtüsü | 71000+ | `_ed_help_idbase3` |
 | PANELLER örtüsü | 72000+ | `_ed_dock_idbase3` |
+| Menü öğeleri | 73000+ | `_ed_mn_idbase3`, satır başına 1 |
 
 Ses tarayıcısının paylaşımı güvenli çünkü kural paneli DUNYA sekmesinde,
 bölge paneli BÖLGE sekmesinde çiziliyor — ikisi aynı karede asla çizilmiyor.

@@ -6499,8 +6499,8 @@ func t_help_widget_ids_do_not_collide() {
     int fb = _ed_fd_idbase3();
     // Dosya penceresi bloğu base..base+80 kullanıyor.
     assert(hb > fb + 80 || hb + 2 < fb, "yardim ve dosya bloklari ayrik olmali");
-    // Menüdeki "?" düğmesi (9607) ikisinin de altında.
-    assert(9607 < fb && 9607 < hb, "menu kimlikleri altta kalmali");
+    // Menü şeridinin kimlikleri (9600-9611) ikisinin de altında.
+    assert(9611 < fb && 9611 < hb, "menu kimlikleri altta kalmali");
     // Bağlam menüsü 22001-22016.
     assert(22016 < hb, "baglam menusu yardim araliginin altinda");
 }
@@ -6900,7 +6900,7 @@ func t_ed_fd_widget_ids_do_not_collide() {
     // Davranış blokları (30000 tabanlı) ve menü kimlikleri de altta kalmalı.
     int bh_ust = _ed_bh_idbase3() + 200 * _ed_bh_idstep3() + _ed_bh_idused3() - 1;
     assert(base > bh_ust, "dosya penceresi davranis araliginin ustunde olmali");
-    assert(9606 < base, "menu kimlikleri altta kalmali");
+    assert(9611 < base, "menu kimlikleri altta kalmali");
 }
 
 func t_storage_key_is_path_scoped() {
@@ -7912,8 +7912,391 @@ func t_dock_widget_ids_do_not_collide() {
     // Yardim (71000) ve dosya penceresi (70000) bloklariyla ayrik.
     assert(db > _ed_help_idbase3() + 90, "yardim blogunun ustunde olmali");
     assert(db > _ed_fd_idbase3() + 90, "dosya blogunun ustunde olmali");
-    // Menudeki PANELLER dugmesi (9609) altta.
-    assert(9609 < db, "menu kimlikleri altta kalmali");
+    // Menu seridinin kimlikleri (9600-9611) altta.
+    assert(9611 < db, "menu kimlikleri altta kalmali");
+}
+
+// ===========================================================================
+// MENÜ ŞERİDİ — açılır menüler
+// ===========================================================================
+// Şerit düz bir düğme sırasıydı; her yeni komut şeridi dolduruyordu ve
+// sığmayan düğme HİÇ çizilmediği için komut erişilemez oluyordu. Kısayollar
+// da hiçbir yerde yazmıyordu.
+
+// Bütün menülerin bütün öğe kodları (ayırıcılar hariç).
+func _t_mn_all_codes3(): array {
+    array out = [];
+    int m = 0;
+    while (m < _ed_mn_n3()) {
+        array cd = _ed_mn_codes3(m);
+        int i = 0;
+        while (i < length(cd)) {
+            if (cd[i] != 0) { push(out, cd[i]); }
+            i = i + 1;
+        }
+        m = m + 1;
+    }
+    return out;
+}
+
+// Her komut TEK bir yerde ve her kodun bir etiketi olmalı. Aynı kod iki
+// menüde olsaydı kullanıcı aynı işi iki yerde arardı; etiketsiz bir kod ise
+// listede boş bir satır olurdu.
+func t_menu_codes_are_unique_and_labelled() {
+    array cd = _t_mn_all_codes3();
+    assert(length(cd) > 12, "menu cok az komut tasiyor: " + toString(length(cd)));
+    int i = 0;
+    while (i < length(cd)) {
+        assert(cd[i] != 0, "ayirici kod listesine sizmis");
+        assert(_ed_mn_label3(cd[i]) != "", "kodun etiketi yok: " + toString(cd[i]));
+        int j = i + 1;
+        while (j < length(cd)) {
+            assert(cd[i] != cd[j],
+                   "ayni komut iki menude: " + toString(cd[i]));
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    // Baslıklar da ayrı olmalı.
+    int m = 0;
+    while (m < _ed_mn_n3()) {
+        assert(_ed_mn_title3(m) != "", "menu basligi bos");
+        int n = m + 1;
+        while (n < _ed_mn_n3()) {
+            assert(_ed_mn_title3(m) != _ed_mn_title3(n), "iki menu ayni adda");
+            n = n + 1;
+        }
+        m = m + 1;
+    }
+}
+
+// AYIRICI listenin BAŞINDA ya da SONUNDA olamaz ve ARDIŞIK iki ayırıcı
+// olamaz: üçü de ekranda anlamsız bir çizgi demek.
+func t_menu_separators_are_well_placed() {
+    int m = 0;
+    while (m < _ed_mn_n3()) {
+        array cd = _ed_mn_codes3(m);
+        assert(length(cd) > 0, "bos menu");
+        assert(cd[0] != 0, "menu ayiricyla basliyor: " + _ed_mn_title3(m));
+        assert(cd[length(cd) - 1] != 0,
+               "menu ayiricyla bitiyor: " + _ed_mn_title3(m));
+        int i = 1;
+        while (i < length(cd)) {
+            if (cd[i] == 0) {
+                assert(cd[i - 1] != 0,
+                       "ardisik iki ayirici: " + _ed_mn_title3(m));
+            }
+            i = i + 1;
+        }
+        m = m + 1;
+    }
+}
+
+// Menüde yazan kısayolun GERÇEKTEN bağlı olması gerekiyor. Var olmayan bir
+// kısayol yazmak, kullanıcıya yanlış bilgi vermektir ve hiçbir çalıştırma
+// bunu ortaya çıkarmaz (tuşa basar, bir şey olmaz, editörü bozuk sanır).
+//
+// Beklenti BAĞIMSIZ kaynaktan: tuş işleyicisinin KAYNAK kodundan. Testin
+// içine kısayolları kopyalamak, menünün kendi iddiasını kendisiyle
+// doğrulamak olurdu (bkz. Tuzaklar 1b).
+func _t_mn_keysrc3(k): str {
+    if (k == "CTRL + S")     { return "key_down(K_LCTRL) && key_pressed(K_S)"; }
+    if (k == "CTRL+SHIFT+S") { return "if (key_down(K_LSHIFT)) { _ed_fd_open3(_ED_FD_SAVE3)"; }
+    if (k == "CTRL + Z")     { return "key_down(K_LCTRL) && key_pressed(K_Z)"; }
+    if (k == "CTRL + Y")     { return "key_down(K_LCTRL) && key_pressed(K_Y)"; }
+    if (k == "CTRL + C")     { return "key_down(K_LCTRL) && key_pressed(K_C)"; }
+    if (k == "CTRL + V")     { return "key_down(K_LCTRL) && key_pressed(K_V)"; }
+    if (k == "CTRL + D")     { return "key_pressed(K_D) && key_down(K_LCTRL)"; }
+    if (k == "CTRL + A")     { return "key_down(K_LCTRL) && key_pressed(K_A)"; }
+    if (k == "DEL")          { return "key_pressed(K_DEL)"; }
+    if (k == "G")            { return "key_pressed(K_G)"; }
+    if (k == "F11")          { return "key_pressed(K_F11)"; }
+    if (k == "H")            { return "key_pressed(K_H)"; }
+    return "";
+}
+
+func t_menu_shortcuts_are_really_bound() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(src) > 100000, "kaynak okunamadi — depo kokunden calistir");
+    array cd = _t_mn_all_codes3();
+    int i = 0;
+    int sayildi = 0;
+    while (i < length(cd)) {
+        str k = _ed_mn_key3(cd[i]);
+        if (k != "") {
+            str frag = _t_mn_keysrc3(k);
+            assert(frag != "",
+                   "menude BILINMEYEN kisayol yaziyor: " + k +
+                   "  (" + _ed_mn_label3(cd[i]) + ")");
+            assert(length(split(src, frag)) > 1,
+                   "menu var olmayan bir kisayol vaat ediyor: " + k);
+            sayildi = sayildi + 1;
+        }
+        i = i + 1;
+    }
+    assert(sayildi >= 10, "kisayol ipuclari kaybolmus: " + toString(sayildi));
+}
+
+// Dağıtıcı KODA bakmalı, konuma değil. Konuma baksaydı duruma göre gizlenen
+// bir öğe (web'de "Indir", kurtarma) ötekilerin ne yaptığını kaydırırdı.
+func t_menu_dispatch_is_by_code_not_position() {
+    scene3d_reset();
+    no_ground3d();
+    _t_dock_default3();
+    // IZGARA: aç -> kapat.
+    _ed_grid3 = 0.0;
+    _ed_mn_do3(MNA_GRID3);
+    assert(_ed_grid3 > 0.0, "izgara acilmali");
+    assert_eq_int(_ed_mn_check3(MNA_GRID3), 1);
+    _ed_mn_do3(MNA_GRID3);
+    assert(_ed_grid3 <= 0.0, "izgara kapanmali");
+    assert_eq_int(_ed_mn_check3(MNA_GRID3), 0);
+    // TUMUNU SEC.
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    spawn3(3.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    ed_deselect3d();
+    _ed_mn_do3(MNA_SELALL3);
+    assert_eq_int(ed_select_count3d(), 2);
+    _t_dock_default3();
+}
+
+// Panel aç/kapa öğesi panelin KENDİ varsayılan yuvasına geri açmalı:
+// hepsini sola atmak, konsolu geri açan kullanıcıya onu bir daha taşıtırdı.
+func t_menu_panel_toggle_restores_the_home_slot() {
+    editor_layout_key3d("s3_yerlesim_probasi.txt");
+    _t_dock_default3();
+    assert_eq_int(_ed_mn_check3(MNA_PANEL_C3), 1);
+    _ed_mn_do3(MNA_PANEL_C3);
+    assert_eq_int(_dk_slot_of3(PANEL_CONS3), DOCK_OFF3);
+    assert_eq_int(_ed_mn_check3(MNA_PANEL_C3), 0);
+    _ed_mn_do3(MNA_PANEL_C3);
+    assert_eq_int(_dk_slot_of3(PANEL_CONS3), DOCK_BOTTOM3);   // SOL degil
+    _ed_mn_do3(MNA_PANEL_I3);
+    _ed_mn_do3(MNA_PANEL_I3);
+    assert_eq_int(_dk_slot_of3(PANEL_INSP3), DOCK_RIGHT3);
+    _t_dock_default3();
+}
+
+// Menü açık KALMALI mı: aç/kapa öğeleri kalmalı (arka arkaya üçünü de
+// kapatmak tek açılışta yapılabilsin), komutlar kapatmalı.
+func t_menu_stays_open_only_for_toggles() {
+    editor_layout_key3d("s3_yerlesim_probasi.txt");
+    scene3d_reset();
+    no_ground3d();
+    _t_dock_default3();
+    assert(_ed_mn_do3(MNA_GRID3), "izgara menuyu acik birakmali");
+    _ed_mn_do3(MNA_GRID3);
+    assert(_ed_mn_do3(MNA_PANEL_H3), "panel anahtari menuyu acik birakmali");
+    _ed_mn_do3(MNA_PANEL_H3);
+    assert(_ed_mn_do3(MNA_SELALL3) == false, "komut menuyu kapatmali");
+    assert(_ed_mn_do3(MNA_HELP3) == false, "yardim menuyu kapatmali");
+    _ed_help_close3();
+    _t_dock_default3();
+}
+
+// YIKICI "Yeni": ilk tık ONAY istiyor (menü AÇIK kalıyor ki ikinci tık
+// aynı yerde olsun), ikinci tık siliyor. Kaydedilmemiş iş yoksa soru yok.
+func t_menu_new_asks_before_destroying_work() {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    _ed_dirty3 = 1;
+    _ed_confirm3 = 0.0;
+    assert(_ed_mn_do3(MNA_NEW3), "ilk tik menuyu acik birakmali (onay)");
+    assert(_ed_confirm3 > 0.0, "onay silahlanmali");
+    assert(yasayan_sayi3d() > 0, "ilk tik sahneyi SILMEMELI");
+    // Etiket de soruyor olmali, yoksa kullanici neden silinmedigini bilmez.
+    assert(_ed_mn_label3(MNA_NEW3) != "Yeni", "etiket soruya donmeli");
+    assert(_ed_mn_do3(MNA_NEW3) == false, "ikinci tik menuyu kapatmali");
+    assert_eq_int(yasayan_sayi3d(), 0);
+    assert(_ed_mn_label3(MNA_NEW3) == "Yeni", "onay sonrasi etiket normale donmeli");
+    // Temiz sahnede soru YOK: kaybolacak bir sey yok.
+    _ed_dirty3 = 0;
+    _ed_confirm3 = 0.0;
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    assert(_ed_mn_do3(MNA_NEW3) == false, "temiz sahnede soru sorulmamali");
+    assert_eq_int(yasayan_sayi3d(), 0);
+}
+
+// SOLUK öğe iş GÖRMEMELİ. Yalnız soluk çizip işi yapmak, "kapali" görünen
+// bir düğmenin çalışması demek olurdu — ve boş panoyla yapıştırmak geri-al
+// yığınına anlamsız bir adım yazardı.
+func t_menu_disabled_items_do_nothing() {
+    scene3d_reset();
+    no_ground3d();
+    _ed_clip3 = "";
+    ed_deselect3d();
+    assert(_ed_mn_on3(MNA_PASTE3) == false, "bos panoda yapistir soluk olmali");
+    assert(_ed_mn_on3(MNA_COPY3) == false, "secimsiz kopyala soluk olmali");
+    assert(_ed_mn_on3(MNA_DELETE3) == false, "secimsiz sil soluk olmali");
+    int once = yasayan_sayi3d();
+    // GERI-AL YIGINI da: bos panoyla yapistirmak sahneyi degistirmiyor ama
+    // korumasiz dagitici `ed_mark3d()` cagirir ve yigina ANLAMSIZ bir adim
+    // yazar — kullanicinin bir CTRL+Z'si bosa gider. Yalniz varlik sayisina
+    // bakan test bunu goremiyordu (bozma denendi, kacti).
+    _ed_undo3 = [];
+    _ed_mn_do3(MNA_PASTE3);
+    assert_eq_int(yasayan_sayi3d(), once);
+    assert_eq_int(length(_ed_undo3), 0);
+    ed_deselect3d();
+    _ed_mn_do3(MNA_DELETE3);
+    assert_eq_int(yasayan_sayi3d(), once);
+    assert_eq_int(length(_ed_undo3), 0);
+    _ed_mn_do3(MNA_DUP3);
+    assert_eq_int(yasayan_sayi3d(), once);
+    assert_eq_int(length(_ed_undo3), 0);
+    // Secim gelince acilmali.
+    int e = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    ed_select3d(e);
+    assert(_ed_mn_on3(MNA_COPY3), "secim varken kopyala acilmali");
+    assert(_ed_mn_on3(MNA_DELETE3), "secim varken sil acilmali");
+}
+
+// Geri al / yinele YIĞIN BOŞKEN soluk. Boş yığında "Geri Al" tıklanabilir
+// dursaydı kullanıcı basar, hiçbir şey olmaz ve neden olmadığını bilmez.
+func t_menu_undo_reflects_the_stack() {
+    scene3d_reset();
+    no_ground3d();
+    _ed_undo3 = [];
+    _ed_redo3 = [];
+    assert(_ed_mn_on3(MNA_UNDO3) == false, "bos yiginda geri al soluk olmali");
+    assert(_ed_mn_on3(MNA_REDO3) == false, "bos yiginda yinele soluk olmali");
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    ed_mark3d();
+    assert(_ed_mn_on3(MNA_UNDO3), "isaretten sonra geri al acilmali");
+}
+
+// Açılır liste ekrandan TAŞMAMALI: sağa taşan bir menünün öğeleri kırpılır
+// ve tıklanamaz. Saf hesap — pencere gerekmiyor.
+func t_menu_dropdown_fits_on_screen() {
+    int i = 1;
+    while (i <= 3) {
+        editor_ui_scale3d(i);
+        int m = 0;
+        while (m < _ed_mn_n3()) {
+            int w = _ed_mn_w3(m);
+            // Pencere GENISKEN menu kendi basliginin altinda duruyor.
+            assert_eq_int(_ed_mn_x3(m, 1600), _ed_mn_titlex3(m));
+            // DAR pencere: genislik oyle secildi ki menu tam _us3(2) kadar
+            // tasiyor. 900 gibi bol bir olcude hicbir menu tasmiyor ve
+            // kelepceyi silmek hicbir testi kirmiyordu (bozma denendi,
+            // kacti) — bkz. Tuzaklar 1c-2.
+            int W = _ed_mn_titlex3(m) + w - _us3(2);
+            int x = _ed_mn_x3(m, W);
+            assert(x >= 0, "menu solda tasiyor: " + _ed_mn_title3(m));
+            assert(x + w <= W,
+                   "menu sagda tasiyor: " + _ed_mn_title3(m) + " " +
+                   toString(x + w) + " > " + toString(W));
+            m = m + 1;
+        }
+        i = i + 1;
+    }
+    editor_ui_scale3d(2);
+}
+
+// Başlıklar ŞERİDE sığmalı — her ölçekte. Sığmayan başlık tıklanamaz ve
+// arkasındaki menü ERİŞİLEMEZ olur (eski düz düğme sırasının derdi tam
+// buydu; menü sayısı sabit olduğu için burada bir kez ölçmek yetiyor).
+func t_menu_titles_fit_the_bar() {
+    int i = 1;
+    while (i <= 3) {
+        editor_ui_scale3d(i);
+        int son = _ed_mn_titlex3(_ed_mn_n3());
+        assert(son < 640,
+               "basliklar 640 piksellik seride sigmali, olcek " + toString(i) +
+               ": " + toString(son));
+        i = i + 1;
+    }
+    editor_ui_scale3d(2);
+}
+
+// Etiket + kısayol menünün GENİŞLİĞİNE sığmalı. `text_width()` penceresiz 0
+// döndüğü için ölçü karakter bütçesinden sınanıyor (Tuzaklar 3).
+func t_menu_labels_fit_the_dropdown() {
+    editor_ui_scale3d(2);
+    int m = 0;
+    while (m < _ed_mn_n3()) {
+        int w = _ed_mn_w3(m);
+        array cd = _ed_mn_codes3(m);
+        int i = 0;
+        while (i < length(cd)) {
+            if (cd[i] != 0) {
+                str l = _ed_mn_label3(cd[i]);
+                str k = _ed_mn_key3(cd[i]);
+                // Etiket ve kisayol AYRI sutunlar; ikisi + isaret sutunu
+                // birlikte sigmali.
+                assert(_t_fits3(l + k, w - _ed_mn_checkw3()),
+                       "menu satiri sigmiyor: " + l + " / " + k +
+                       "  (" + toString(w) + " px)");
+            }
+            i = i + 1;
+        }
+        m = m + 1;
+    }
+}
+
+// Menünün yüksekliği öğelerden türemeli: sabit bir yükseklik, öğe eklenince
+// listeyi kutunun dışına taşırırdı.
+func t_menu_height_follows_the_items() {
+    editor_ui_scale3d(2);
+    int m = 0;
+    while (m < _ed_mn_n3()) {
+        array cd = _ed_mn_codes3(m);
+        int oge = 0;
+        int ayr = 0;
+        int i = 0;
+        while (i < length(cd)) {
+            if (cd[i] == 0) { ayr = ayr + 1; } else { oge = oge + 1; }
+            i = i + 1;
+        }
+        assert_eq_int(_ed_mn_h3(m),
+                      _us3(6) + oge * _ED_FLD3 + ayr * _ed_mn_sepy3());
+        m = m + 1;
+    }
+}
+
+// Menü widget kimlikleri öteki bloklarla ÇAKIŞMAMALI: çakışan iki
+// kimlikten ikincisi ÖLÜ kalır ve bu sessiz bir hata.
+func t_menu_widget_ids_do_not_collide() {
+    int mb = _ed_mn_idbase3();
+    // Menu blogu EN USTTE: altindaki en yuksek blok panel ortusu (72000+).
+    assert(mb > _ed_dock_idbase3() + 90, "panel blogunun ustunde olmali");
+    assert(mb > _ed_help_idbase3() + 90, "yardim blogunun ustunde olmali");
+    assert(mb > _ed_fd_idbase3() + 90, "dosya blogunun ustunde olmali");
+    // Kimlik oge INDEKSINDEN turuyor (taban + i), yani blogun genisligi en
+    // uzun menunun satir sayisi kadar. Olculmus olmasi gerekiyor: bir gun
+    // 90 satirlik bir menu yazilirsa bu test once kizarsin.
+    int enuzun = 0;
+    int mm = 0;
+    while (mm < _ed_mn_n3()) {
+        int n = length(_ed_mn_codes3(mm));
+        if (n > enuzun) { enuzun = n; }
+        mm = mm + 1;
+    }
+    assert(enuzun <= 20, "menu 20 satiri asiyor: " + toString(enuzun));
+    // Basliklar 9600+m; eski menu blogunun (9600-9611) icinde kaliyor.
+    assert(9600 + _ed_mn_n3() - 1 <= 9611, "baslik kimlikleri blogun icinde");
+    // KURTAR 9608 ve basliklarla cakismamali.
+    assert(9608 > 9600 + _ed_mn_n3() - 1, "kurtar dugmesi basliklarla cakisiyor");
+}
+
+// Menü penceresiz SÜRÜLEMEYEN yerlerden de çağrılmalı: başlıkların çizimi,
+// açılır listenin çizimi ve ESC ile kapanma. Kaynağı okuyarak sınıyor —
+// bu depodaki en sık kaçan bozma sınıfı (Tuzaklar 1a).
+func t_menu_is_wired_into_the_frame() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(src) > 100000, "kaynak okunamadi — depo kokunden calistir");
+    assert(length(split(src, "_ed_mn_draw3();")) > 1,
+           "acilir liste hic cizilmiyor");
+    assert(length(split(src, "_ed_mn_do3(c)")) > 1,
+           "oge tiklamasi dagiticiyi cagirmiyor");
+    // ESC acik menuyu kapatmali.
+    assert(length(split(src, "key_pressed(K_ESC) && _ed_mn_open3 >= 0")) > 1,
+           "ESC acik menuyu kapatmiyor");
+    // Cizim EN SON: seridin altindaki her seyi ortmeli.
+    array g = split(src, "_ed_mn_draw3();");
+    assert(length(split(g[0], "_ed_help_draw3();")) > 1,
+           "acilir liste yardim ortusunden SONRA cizilmeli");
 }
 
 // ---- Yuva içi sınır — aynı yuvadaki panellerin PAYLAŞIMI --------------------
@@ -9956,6 +10339,21 @@ test("eski yerlesim kaydi hala okunuyor", "t_dock_old_record_still_loads");
 test("varsayilana donus yuvalari toparliyor", "t_dock_reset_restores_slots");
 test("dock widget kimlikleri cakismiyor", "t_dock_widget_ids_do_not_collide");
 test("paneller yuvayi tam kapliyor", "t_div_panels_tile_the_slot");
+test("menu kodlari benzersiz ve etiketli", "t_menu_codes_are_unique_and_labelled");
+test("ayiricilar dogru yerde", "t_menu_separators_are_well_placed");
+test("menudeki kisayollar gercekten bagli", "t_menu_shortcuts_are_really_bound");
+test("dagitici koda bakiyor", "t_menu_dispatch_is_by_code_not_position");
+test("panel anahtari kendi yuvasina donuyor", "t_menu_panel_toggle_restores_the_home_slot");
+test("menu yalniz anahtarlarda acik kaliyor", "t_menu_stays_open_only_for_toggles");
+test("yeni once soruyor", "t_menu_new_asks_before_destroying_work");
+test("soluk oge is gormuyor", "t_menu_disabled_items_do_nothing");
+test("geri al yigini yansitiyor", "t_menu_undo_reflects_the_stack");
+test("acilir liste ekrana sigiyor", "t_menu_dropdown_fits_on_screen");
+test("basliklar seride sigiyor", "t_menu_titles_fit_the_bar");
+test("menu satirlari sigiyor", "t_menu_labels_fit_the_dropdown");
+test("menu yuksekligi ogelerden turuyor", "t_menu_height_follows_the_items");
+test("menu widget kimlikleri cakismiyor", "t_menu_widget_ids_do_not_collide");
+test("menu kare dongusune bagli", "t_menu_is_wired_into_the_frame");
 test("yan yigin alt yuvanin ustunde bitiyor", "t_div_side_stack_stops_above_the_bottom_dock");
 test("pay oran, piksel degil", "t_div_share_is_a_ratio_not_pixels");
 test("sinir yalniz iki panel arasinda", "t_div_only_exists_between_two_panels");
