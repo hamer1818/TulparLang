@@ -7702,6 +7702,11 @@ func _t_dock_default3() {
     _dk_set_slot3(PANEL_HIER3, DOCK_LEFT3);
     _dk_set_slot3(PANEL_INSP3, DOCK_RIGHT3);
     _dk_set_slot3(PANEL_CONS3, DOCK_BOTTOM3);
+    // PAYLAR da sifirlanmali: yuva ici sinir kalici bir durum ve onu
+    // birakan test sonrakinin yerlesimini kaydirirdi.
+    _dk_set_wt3(PANEL_HIER3, _DK_WT_DEF3);
+    _dk_set_wt3(PANEL_INSP3, _DK_WT_DEF3);
+    _dk_set_wt3(PANEL_CONS3, _DK_WT_DEF3);
     editor_ui_scale3d(2);
     _ED_L_W3 = _ed_lay_def_lw3(2);
     _ED_R_W3 = _ed_lay_def_rw3(2);
@@ -7909,6 +7914,364 @@ func t_dock_widget_ids_do_not_collide() {
     assert(db > _ed_fd_idbase3() + 90, "dosya blogunun ustunde olmali");
     // Menudeki PANELLER dugmesi (9609) altta.
     assert(9609 < db, "menu kimlikleri altta kalmali");
+}
+
+// ---- Yuva içi sınır — aynı yuvadaki panellerin PAYLAŞIMI --------------------
+// İki panel aynı yuvaya girince yuvayı yarı yarıya paylaşıyorlardı ve
+// aralarındaki sınır ÇEKİLEMİYORDU: konsolu hiyerarşinin altına koyan biri
+// konsolu küçültemiyordu. Artık her panelin bir PAYI var.
+
+func _t_yakin3(a, b, tol): bool {
+    int d = a - b;
+    if (d < 0) { d = 0 - d; }
+    return d <= tol;
+}
+
+// Yuvanın DİBİ (yan yuvalarda). Testin kendi hesabı; motorun formülünü
+// kopyalamıyor, "araç çubuğunun altından durum çubuğunun üstüne" diyor.
+func _t_slot_bottom3(H): int { return H - _ED_STAT_H3 - _dk_bh3(); }
+
+// Paneller yuvayı TAM kaplamalı — hangi payla olursa olsun. Boşluk kalırsa
+// arkadaki sahne görünümü şerit şerit sızar; örtüşürse alttaki panelin üst
+// satırları tıklanamaz olur.
+func t_div_panels_tile_the_slot() {
+    _t_dock_default3();
+    // TEK sayılar: 1440/2 gibi tam bölünen ölçüler "son panel artanı alır"
+    // kuralının kırılmasını göremiyordu.
+    int W = 1001;
+    int H = 821;
+    _dk_set_slot3(PANEL_CONS3, DOCK_LEFT3);
+    _dk_set_wt3(PANEL_HIER3, 300);
+    _dk_set_wt3(PANEL_CONS3, 1700);
+    int top = _ED_MENU_H3 + _ED_TOOL_H3;
+    assert(_dk_rect3(PANEL_HIER3, W, H), "hiyerarsi cizilmeli");
+    assert_eq_int(_dk_y3, top);                  // ilk panel yuvanin tepesinden
+    int b = _dk_y3 + _dk_h3;
+    assert(_dk_rect3(PANEL_CONS3, W, H), "konsol cizilmeli");
+    assert_eq_int(_dk_y3, b);                    // BOSLUK YOK, ORTUSME YOK
+    assert_eq_int(_dk_y3 + _dk_h3, _t_slot_bottom3(H));   // son panel dibe kadar
+    // Pay ORAN: 300/2000 = %15. Beklenti motorun formulunden degil,
+    // orandan turuyor.
+    int yanh = _t_slot_bottom3(H) - top;
+    assert(_t_yakin3(b - top, toInt(yanh * 15 / 100), 2),
+           "pay orani tutmuyor: " + toString(b - top) + " / " + toString(yanh));
+    // ALT yuvada da ayni: yan yana, bosluksuz, son panel sag kenara kadar.
+    _t_dock_default3();
+    _dk_set_slot3(PANEL_HIER3, DOCK_BOTTOM3);
+    _dk_set_wt3(PANEL_HIER3, 700);
+    _dk_set_wt3(PANEL_CONS3, 1300);
+    assert(_dk_rect3(PANEL_HIER3, W, H), "hiyerarsi cizilmeli");
+    assert_eq_int(_dk_x3, 0);
+    int bx = _dk_x3 + _dk_w3;
+    assert(_dk_rect3(PANEL_CONS3, W, H), "konsol cizilmeli");
+    assert_eq_int(_dk_x3, bx);
+    assert_eq_int(_dk_x3 + _dk_w3, W);
+    assert(_t_yakin3(bx, toInt(W * 35 / 100), 2),
+           "alt yuvada pay orani tutmuyor: " + toString(bx));
+    _t_dock_default3();
+}
+
+// Yan yuvadaki YIĞIN alt yuvanın ÜSTÜNDE bitmeli. Yığının son paneli alt
+// yuvanın altına uzarsa konsolun üstünü boyar ve oradaki satırlar hem
+// okunamaz hem tıklanamaz olur.
+//
+// Ayrı test, çünkü öteki paylaşım testleri konsolu yan yuvaya taşıyor —
+// yani alt yuva BOŞ oluyor ve bu hatayı göremiyorlar (bozma denendi, kaçtı).
+func t_div_side_stack_stops_above_the_bottom_dock() {
+    _t_dock_default3();
+    int W = 1001;
+    int H = 821;
+    _dk_set_slot3(PANEL_INSP3, DOCK_LEFT3);      // solda iki panel, altta konsol
+    assert_eq_int(_dk_count_in3(DOCK_LEFT3), 2);
+    assert(_dk_bh3() > 0, "alt yuva dolu olmali");
+    assert(_dk_rect3(PANEL_CONS3, W, H), "konsol cizilmeli");
+    int ust = _dk_y3;                            // alt yuvanin UST kenari
+    assert(_dk_rect3(PANEL_INSP3, W, H), "ikinci sol panel cizilmeli");
+    assert_eq_int(_dk_y3 + _dk_h3, ust);         // yigin TAM burada bitmeli
+    assert(_dk_rect3(PANEL_HIER3, W, H), "ilk sol panel cizilmeli");
+    assert(_dk_y3 + _dk_h3 <= ust, "ilk panel alt yuvaya tasmamali");
+    _t_dock_default3();
+}
+
+// Pay ORANDIR, piksel DEĞİL: pencere büyüyünce paneller birlikte büyümeli.
+// Piksel tutulsaydı büyük ekranda üstteki panel aynı kalır, alttaki bütün
+// artışı yerdi.
+func t_div_share_is_a_ratio_not_pixels() {
+    _t_dock_default3();
+    int W = 1001;
+    _dk_set_slot3(PANEL_CONS3, DOCK_LEFT3);
+    _dk_set_wt3(PANEL_HIER3, 500);
+    _dk_set_wt3(PANEL_CONS3, 1500);
+    int top = _ED_MENU_H3 + _ED_TOOL_H3;
+    assert(_dk_rect3(PANEL_HIER3, W, 821), "hiyerarsi cizilmeli");
+    int h1 = _dk_h3;
+    int y1 = _t_slot_bottom3(821) - top;
+    assert(_dk_rect3(PANEL_HIER3, W, 1241), "hiyerarsi cizilmeli");
+    int h2 = _dk_h3;
+    int y2 = _t_slot_bottom3(1241) - top;
+    assert(h2 > h1, "pencere buyuyunce panel de buyumeli");
+    // Ayni oran: %25.
+    assert(_t_yakin3(h1, toInt(y1 / 4), 2), "kucuk pencerede oran: " + toString(h1));
+    assert(_t_yakin3(h2, toInt(y2 / 4), 2), "buyuk pencerede oran: " + toString(h2));
+    _t_dock_default3();
+}
+
+// Sınır YALNIZ iki panel aynı yuvadayken var. Tek panelli yuvada görünmez
+// bir tutamak bırakmak, tıklamaları yutan bir şerit demek olurdu.
+func t_div_only_exists_between_two_panels() {
+    _t_dock_default3();
+    int W = 1440;
+    int H = 821;
+    // Varsayilan: her yuvada tek panel -> hicbir yerde sinir yok. Panelin
+    // KENDI KENARINDA da olmamali: ortasina bakmak yetmiyordu (bozma
+    // denendi, kacti) cunku tek panelli yuvada da sinir ureten bir hata
+    // ancak KENARDA gorunur.
+    int top = _ED_MENU_H3 + _ED_TOOL_H3;
+    int orta = top + toInt((_t_slot_bottom3(H) - top) / 2);
+    assert_eq_int(_dk_div_at3(toInt(_dk_lw3() / 2), orta, W, H), 0 - 1);
+    assert(_dk_rect3(PANEL_HIER3, W, H), "hiyerarsi cizilmeli");
+    assert_eq_int(_dk_div_at3(toInt(_dk_lw3() / 2), _dk_y3 + _dk_h3, W, H), 0 - 1);
+    assert_eq_int(_dk_div_at3(toInt(_dk_lw3() / 2), _dk_y3, W, H), 0 - 1);
+    assert(_dk_rect3(PANEL_CONS3, W, H), "konsol cizilmeli");
+    assert_eq_int(_dk_div_at3(_dk_x3 + _dk_w3, _dk_y3 + toInt(_dk_h3 / 2), W, H),
+                  0 - 1);
+    // Konsolu sola tak: hiyerarsi ile konsolun ARASINDA sinir olmali.
+    _dk_set_slot3(PANEL_CONS3, DOCK_LEFT3);
+    assert(_dk_rect3(PANEL_HIER3, W, H), "hiyerarsi cizilmeli");
+    int by = _dk_y3 + _dk_h3;
+    int mx = toInt(_dk_lw3() / 2);
+    assert_eq_int(_dk_div_at3(mx, by, W, H), PANEL_HIER3);
+    // Sinirin UZAGINDA degil.
+    assert_eq_int(_dk_div_at3(mx, by + _us3(30), W, H), 0 - 1);
+    // Yuvanin DISINDA degil: sinir yalnizca kendi yuvasinin genisliginde.
+    assert_eq_int(_dk_div_at3(_dk_lw3() + _us3(40), by, W, H), 0 - 1);
+    _t_dock_default3();
+}
+
+// ALT yuvada sınır DİKEY (fareyi yatay izler): yan yuvadakiyle aynı olsaydı
+// alt yuvada sürüklemek panelleri hiç oynatmazdı.
+func t_div_bottom_slot_boundary_is_vertical() {
+    _t_dock_default3();
+    int W = 1001;
+    int H = 821;
+    _dk_set_slot3(PANEL_HIER3, DOCK_BOTTOM3);
+    assert(_dk_rect3(PANEL_HIER3, W, H), "hiyerarsi cizilmeli");
+    int bx = _dk_x3 + _dk_w3;
+    int my = _dk_y3 + toInt(_dk_h3 / 2);
+    assert_eq_int(_dk_div_at3(bx, my, W, H), PANEL_HIER3);
+    // Alt yuvanin DISINDA (yukarida) degil.
+    assert_eq_int(_dk_div_at3(bx, _dk_y3 - _us3(40), W, H), 0 - 1);
+    // Yatayda uzakta degil.
+    assert_eq_int(_dk_div_at3(bx + _us3(40), my, W, H), 0 - 1);
+    _t_dock_default3();
+}
+
+// Sınırı çekmek sınırı FARENİN OLDUĞU yere taşımalı.
+func t_div_drag_moves_the_boundary() {
+    _t_dock_default3();
+    int W = 1001;
+    int H = 821;
+    _dk_set_slot3(PANEL_CONS3, DOCK_LEFT3);
+    int top = _ED_MENU_H3 + _ED_TOOL_H3;
+    int dip = _t_slot_bottom3(H);
+    int hedef = top + toInt((dip - top) * 3 / 4);   // yuvanin dortte ucu
+    assert(_dk_div_apply3(PANEL_HIER3, hedef, W, H), "sinir tasinabilmeli");
+    assert(_dk_rect3(PANEL_HIER3, W, H), "hiyerarsi cizilmeli");
+    assert(_t_yakin3(_dk_y3 + _dk_h3, hedef, 2),
+           "sinir farenin yerine gitmedi: " + toString(_dk_y3 + _dk_h3));
+    // Ve yuva HALA tam kapli.
+    assert(_dk_rect3(PANEL_CONS3, W, H), "konsol cizilmeli");
+    assert_eq_int(_dk_y3 + _dk_h3, dip);
+    // Ters yone de: yukari cekmek ustteki paneli kucultmeli.
+    int hedef2 = top + toInt((dip - top) / 4);
+    assert(_dk_div_apply3(PANEL_HIER3, hedef2, W, H), "sinir geri tasinabilmeli");
+    assert(_dk_rect3(PANEL_HIER3, W, H), "hiyerarsi cizilmeli");
+    assert(_t_yakin3(_dk_y3 + _dk_h3, hedef2, 2),
+           "geri tasima tutmadi: " + toString(_dk_y3 + _dk_h3));
+    _t_dock_default3();
+}
+
+// Sınırı uca kadar çekmek bir paneli YOK ETMEMELİ: başlığı görünmeyen panel
+// ne sürüklenebilir ne kapatılabilir, yani geri getirilemez olurdu.
+func t_div_drag_keeps_both_panels_usable() {
+    _t_dock_default3();
+    int W = 1001;
+    int H = 821;
+    _dk_set_slot3(PANEL_CONS3, DOCK_LEFT3);
+    int top = _ED_MENU_H3 + _ED_TOOL_H3;
+    int dip = _t_slot_bottom3(H);
+    int mn = _dk_min_h3();
+    // BEKLENTI BAGIMSIZ bir kaynaktan: panelin BASLIGI tam gorunmeli, yoksa
+    // panel ne suruklenebilir ne kapatilabilir — yani geri getirilemez olur.
+    // Yalniz `_dk_min_h3()` ile karsilastirmak onu 0 yapan bir hatayi
+    // onaylardi (test, sinadigi formulun kendisinden beklenti turetemez).
+    int bas = _dk_head_h3();
+    assert(mn >= bas, "en kucuk olcu basligi kapsamali");
+    // Tepenin de USTUNE cek.
+    _dk_div_apply3(PANEL_HIER3, top - 500, W, H);
+    assert(_dk_rect3(PANEL_HIER3, W, H), "hiyerarsi cizilmeli");
+    assert(_dk_h3 >= bas, "ustteki panelin basligi kayboldu: " + toString(_dk_h3));
+    assert(_dk_h3 >= mn, "ustteki panel yok oldu: " + toString(_dk_h3));
+    assert(_dk_rect3(PANEL_CONS3, W, H), "konsol cizilmeli");
+    assert(_dk_h3 >= bas, "alttaki panelin basligi kayboldu: " + toString(_dk_h3));
+    assert(_dk_h3 >= mn, "alttaki panel yok oldu: " + toString(_dk_h3));
+    // Dibin de ALTINA cek.
+    _dk_div_apply3(PANEL_HIER3, dip + 500, W, H);
+    assert(_dk_rect3(PANEL_CONS3, W, H), "konsol cizilmeli");
+    assert(_dk_h3 >= bas, "alttaki panelin basligi kayboldu: " + toString(_dk_h3));
+    assert(_dk_h3 >= mn, "alttaki panel yok oldu: " + toString(_dk_h3));
+    assert(_dk_rect3(PANEL_HIER3, W, H), "hiyerarsi cizilmeli");
+    assert(_dk_h3 >= bas, "ustteki panelin basligi kayboldu: " + toString(_dk_h3));
+    assert(_dk_h3 >= mn, "ustteki panel yok oldu: " + toString(_dk_h3));
+    _t_dock_default3();
+}
+
+// Sınırı çekmek YALNIZ o çifti etkilemeli. Üç panelin olduğu bir yuvada
+// ortadaki sınır üçüncüyü de oynatsaydı, kullanıcı düzelttiğini sandığı
+// yerleşimi bozmuş olurdu.
+func t_div_drag_leaves_the_third_panel_alone() {
+    _t_dock_default3();
+    int W = 1001;
+    int H = 1241;                 // uc panel sigsin
+    _dk_set_slot3(PANEL_INSP3, DOCK_LEFT3);
+    _dk_set_slot3(PANEL_CONS3, DOCK_LEFT3);
+    assert_eq_int(_dk_count_in3(DOCK_LEFT3), 3);
+    assert(_dk_rect3(PANEL_CONS3, W, H), "konsol cizilmeli");
+    int onceki_h = _dk_h3;
+    int onceki_y = _dk_y3;
+    // Ilk iki panelin arasindaki siniri cek.
+    assert(_dk_rect3(PANEL_HIER3, W, H), "hiyerarsi cizilmeli");
+    assert(_dk_div_apply3(PANEL_HIER3, _dk_y3 + _us3(40), W, H),
+           "sinir tasinabilmeli");
+    assert(_dk_rect3(PANEL_CONS3, W, H), "konsol cizilmeli");
+    assert_eq_int(_dk_h3, onceki_h);
+    assert_eq_int(_dk_y3, onceki_y);
+    _t_dock_default3();
+}
+
+// KÖŞE: yuvanın DIŞ sınırı ile yuva İÇİ sınır çakışıyor. Dış sınır
+// kullanıcının önceden öğrendiği jest ve kazanmalı — yoksa çalışan bir
+// jest bozulurdu.
+func t_div_outer_splitter_wins_in_the_corner() {
+    _t_dock_default3();
+    int W = 1440;
+    int H = 821;
+    _dk_set_slot3(PANEL_CONS3, DOCK_LEFT3);
+    assert(_dk_rect3(PANEL_HIER3, W, H), "hiyerarsi cizilmeli");
+    int by = _dk_y3 + _dk_h3;
+    int kose = _dk_lw3();                 // sol yuvanin dis sinirinin ustu
+    // Ham hedef testi ikisini de goruyor.
+    assert_eq_int(_dk_div_at3(kose - 1, by, W, H), PANEL_HIER3);
+    assert(_ed_split_at3(kose, by, W, H) > 0, "dis sinir da burada");
+    // SECIM dis siniri veriyor: yuva ici sinir bu piksellerde YOK sayiliyor.
+    assert_eq_int(_dk_div_pick3(kose - 1, by, W, H), 0 - 1);
+    // Kosenin disinda yuva ici sinir yine yakalanabilmeli, yoksa jest
+    // butunuyle olurdu.
+    assert_eq_int(_dk_div_pick3(toInt(_dk_lw3() / 2), by, W, H), PANEL_HIER3);
+    _t_dock_default3();
+}
+
+// Paylaşım da KALICI olmalı: "motor yeniden açıldığında hatırlansın" panel
+// yerleri kadar panellerin PAYLAŞIMI için de geçerli.
+func t_div_shares_survive_a_restart() {
+    editor_layout_key3d("s3_yerlesim_probasi.txt");
+    _t_dock_default3();
+    _dk_set_slot3(PANEL_CONS3, DOCK_LEFT3);
+    _dk_set_wt3(PANEL_HIER3, 1600);
+    _dk_set_wt3(PANEL_CONS3, 400);
+    assert(editor_layout_save3d(), "yerlesim kaydedilmeli");
+    // "Yeniden acilis": once varsayilana don, sonra oku.
+    _t_dock_default3();
+    assert_eq_int(_dk_wt_of3(PANEL_HIER3), _DK_WT_DEF3);
+    assert(editor_layout_load3d(), "geri okunmali");
+    assert_eq_int(_dk_slot_of3(PANEL_CONS3), DOCK_LEFT3);
+    assert_eq_int(_dk_wt_of3(PANEL_HIER3), 1600);
+    assert_eq_int(_dk_wt_of3(PANEL_CONS3), 400);
+    editor_layout_reset3d();
+    // Varsayilana donus PAYLARI da toparlamali, yoksa "varsayilana don"
+    // yarim bir soz olurdu.
+    assert_eq_int(_dk_wt_of3(PANEL_HIER3), _DK_WT_DEF3);
+    assert_eq_int(_dk_wt_of3(PANEL_CONS3), _DK_WT_DEF3);
+    _t_dock_default3();
+}
+
+// Paysız (dokuz alanlı ve daha eski) kayıtlar hâlâ okunmalı; bozuk pay
+// kaydın TAMAMINI değil yalnız payları düşürmeli.
+func t_div_broken_share_record_is_ignored() {
+    _t_dock_default3();
+    // Paysiz kayit: olculer ve yuvalar alinmali, paylar varsayilanda kalmali.
+    assert(_ed_lay_decode3("2|280|300|140|1|2|3", 1440, 821),
+           "paysiz kayit okunmali");
+    assert_eq_int(_ED_L_W3, 280);
+    assert_eq_int(_dk_wt_of3(PANEL_HIER3), _DK_WT_DEF3);
+    // SIFIR pay bir paneli gorunmez yapardi -> yok sayilmali.
+    _t_dock_default3();
+    assert(_ed_lay_decode3("2|280|300|140|1|2|3|0|1000|1000", 1440, 821),
+           "bozuk payli kayit yine de olculeri vermeli");
+    assert_eq_int(_ED_L_W3, 280);
+    assert_eq_int(_dk_wt_of3(PANEL_HIER3), _DK_WT_DEF3);
+    // Devasa pay da: yanindaki paneli sifir piksele indirirdi.
+    _t_dock_default3();
+    assert(_ed_lay_decode3("2|280|300|140|1|2|3|1000|1000|999999", 1440, 821),
+           "devasa payli kayit yine de olculeri vermeli");
+    assert_eq_int(_dk_wt_of3(PANEL_CONS3), _DK_WT_DEF3);
+    _t_dock_default3();
+}
+
+// Yuvaya YENİ gelen panel ADİL pay almalı. Kendi eski payını taşısaydı, bir
+// yuvada kenara sıkıştırılmış panel yeni yuvasına da kıymık olarak düşerdi —
+// oysa kullanıcı onu oraya GÖRMEK için taşıdı.
+func t_div_moved_panel_gets_a_fair_share() {
+    _t_dock_default3();
+    int W = 1001;
+    int H = 821;
+    // Konsolu sola tak ve kiymik yap.
+    _dk_set_slot3(PANEL_CONS3, DOCK_LEFT3);
+    _dk_set_wt3(PANEL_CONS3, 20);
+    _dk_set_wt3(PANEL_HIER3, 1980);
+    // Hedef yuvanin payi da VARSAYILAN DEGIL: varsayilan olsaydi "hep
+    // varsayilani ver" diyen bir hata da testi gecerdi.
+    _dk_set_wt3(PANEL_INSP3, 400);
+    // Simdi konsolu SAGA tasi: ozelliklerle esit paylasmali.
+    _dk_set_slot3(PANEL_CONS3, DOCK_RIGHT3);
+    assert(_dk_rect3(PANEL_INSP3, W, H), "ozellikler cizilmeli");
+    int ih = _dk_h3;
+    assert(_dk_rect3(PANEL_CONS3, W, H), "konsol cizilmeli");
+    assert(_t_yakin3(_dk_h3, ih, 2),
+           "yeni gelen panel kiymik kaldi: " + toString(_dk_h3) +
+           " / " + toString(ih));
+    _t_dock_default3();
+}
+
+// ÇAĞRI YERİ de sınanmalı. Bu depodaki en sık kaçan bozma sınıfı bu: karar
+// saf bir fonksiyona çıkarılıyor, testler onu sürüyor ve fonksiyonun kare
+// döngüsünden SİLİNMESİ hiçbir testi kırmıyor (menü dağıtımı, pencere
+// tazeleme, panel bırakma, kaydırma adımı — dördü de böyle kaçtı). Fare
+// gerektiren bir çağrıyı penceresiz süremediğimiz için KAYNAĞI okuyor.
+//
+// Sınırı açık: "bir yerden çağrılıyor ve SIRASI doğru" diyor, "her karede
+// çağrılıyor" demiyor. Sıra taşıyıcı — dış sınır önce (köşede o kazanmalı),
+// başlık sürüklemesi sonra (daha dar hedef önce yakalanmalı).
+func t_div_is_wired_into_the_frame() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(src) > 100000, "kaynak okunamadi — depo kokunden calistir");
+    array g = split(src, "_dk_div_input3();");
+    assert(length(g) > 1, "yuva ici sinir girdisi hic cagrilmiyor");
+    assert(length(split(g[0], "_ed_split_input3();")) > 1,
+           "dis sinir girdisi ONCE gelmeli");
+    assert(length(split(g[1], "_dk_drag_input3();")) > 1,
+           "baslik suruklemesi SONRA gelmeli");
+    // Girdi fonksiyonunun İÇİ de: kararı (seçici) ve etkiyi (uygulayıcı)
+    // çağırmıyorsa sınır ya vurgulanmaz ya hiç oynamaz. İkisinin de bozması
+    // penceresiz süremediğimiz için kaçıyordu.
+    assert(length(split(src, "_dk_div_pick3(mouse_x()")) > 1,
+           "sinir secimi fareden surulmeli");
+    assert(length(split(src, "_dk_div_apply3(_dk_div3,")) > 1,
+           "surukleme siniri gercekten tasimali");
+    array c = split(src, "_dk_div_draw3();");
+    assert(length(c) > 1, "yuva ici sinir cizimi hic cagrilmiyor");
+    assert(length(split(c[0], "_ed_split_draw3();")) > 1,
+           "dis sinir cizimi ONCE gelmeli");
 }
 
 // ---- Kaydırma sınırı ve kırpma ----------------------------------------------
@@ -8453,6 +8816,19 @@ func t_help_lists_fullscreen() {
     int bulundu = 0;
     while (i < _ed_help_n3()) {
         if (_ed_help_key3(i) == "F11") { bulundu = 1; }
+        i = i + 1;
+    }
+    assert_eq_int(bulundu, 1);
+}
+
+// Kısayol listesi yuva içi sınırı da saymalı: sürükleyerek paylaşımı
+// değiştirmek GÖRÜNMEZ bir jest — listede yoksa öğrenilmesinin yolu yok.
+// Dıştaki sınırla aynı satırda anlatılamaz, ikisi ayrı şeyi değiştiriyor.
+func t_help_lists_the_panel_share() {
+    int i = 0;
+    int bulundu = 0;
+    while (i < _ed_help_n3()) {
+        if (_ed_help_key3(i) == "PANEL ARASI") { bulundu = 1; }
         i = i + 1;
     }
     assert_eq_int(bulundu, 1);
@@ -9579,6 +9955,20 @@ test("yuvalar yeniden acilista hatirlaniyor", "t_dock_slots_survive_a_restart");
 test("eski yerlesim kaydi hala okunuyor", "t_dock_old_record_still_loads");
 test("varsayilana donus yuvalari toparliyor", "t_dock_reset_restores_slots");
 test("dock widget kimlikleri cakismiyor", "t_dock_widget_ids_do_not_collide");
+test("paneller yuvayi tam kapliyor", "t_div_panels_tile_the_slot");
+test("yan yigin alt yuvanin ustunde bitiyor", "t_div_side_stack_stops_above_the_bottom_dock");
+test("pay oran, piksel degil", "t_div_share_is_a_ratio_not_pixels");
+test("sinir yalniz iki panel arasinda", "t_div_only_exists_between_two_panels");
+test("alt yuvada sinir dikey", "t_div_bottom_slot_boundary_is_vertical");
+test("sinir farenin yerine gidiyor", "t_div_drag_moves_the_boundary");
+test("sinir hicbir paneli yok etmiyor", "t_div_drag_keeps_both_panels_usable");
+test("sinir ucuncu paneli oynatmiyor", "t_div_drag_leaves_the_third_panel_alone");
+test("kosede dis sinir kazaniyor", "t_div_outer_splitter_wins_in_the_corner");
+test("paylasim yeniden acilista hatirlaniyor", "t_div_shares_survive_a_restart");
+test("bozuk pay kaydi yok sayiliyor", "t_div_broken_share_record_is_ignored");
+test("tasinan panel adil pay aliyor", "t_div_moved_panel_gets_a_fair_share");
+test("sinir kare dongusune bagli", "t_div_is_wired_into_the_frame");
+test("kisayol listesi panel arasini sayiyor", "t_help_lists_the_panel_share");
 test("yerlesim kelepceleri gorunumu yasatiyor", "t_layout_clamps_keep_the_viewport_alive");
 test("pencere kuculunce yerlesim kelepceleniyor", "t_layout_reclamps_when_window_shrinks");
 test("ayrac bolgeleri ayrik", "t_splitter_zones_are_distinct");

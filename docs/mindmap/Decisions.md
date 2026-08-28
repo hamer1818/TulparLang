@@ -29,9 +29,20 @@ düzenlemeye döner (`_s3_quit_or_stop3`). Düğmenin etiketi de editörde
 
 ## Panel dock modeli — üç yuva, docking DEĞİL (2026-08-28)
 Üç panel × dört yuva (sol/sağ/alt/kapalı). Panel başlığından sürüklenip
-bırakılıyor, sınırı çekiliyor, kapatılıyor; yerleşim kalıcı.
+bırakılıyor, yuvanın sınırı çekiliyor, kapatılıyor; yerleşim kalıcı.
 **Yapılmadı ve bilerek:** yuva içinde sıralama, SEKME, YÜZEN pencere — üçü de
 ayrı bir pencere yöneticisi demek. → [[Editor]]
+
+## Yuva içi paylaşım PAY (oran), piksel değil (2026-08-28)
+Aynı yuvadaki paneller yuvayı sabit eşit bölüşüyordu ve aralarındaki sınır
+çekilemiyordu. Artık her panelin bir **payı** var (tam sayı, varsayılan 1000).
+- **Oran, piksel değil:** pencere büyüyünce paneller birlikte büyüyor.
+- **Tam sayı,** çünkü kayıt biçimi metin ve `toString(1.0)` = `"1e+00"` —
+  ondalık pay her kaydet/aç turunda okunamaz hâle gelirdi.
+- **Sınır yalnız ÇİFTİ etkiliyor;** üçüncü panel yerinde kalıyor.
+- **Yuvaya yeni gelen panel ORTALAMA pay alıyor** (`_dk_set_slot3` içinde,
+  tek çoktan geçilen nokta): kendi payını taşısaydı bir yuvada kıymık olan
+  panel yeni yuvasına da kıymık düşerdi. → [[Editor]]
 
 ## Kaydedilmemiş iş: soramıyorsak KAYBETMEYELİM (2026-08-27)
 raylib'de kapanışı iptal edecek bağlama yok → "emin misin?" **sorulamıyor**.

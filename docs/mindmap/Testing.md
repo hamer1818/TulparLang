@@ -40,9 +40,12 @@ köşesindeki ikinci sınır.)
 ### En sık KAÇAN bozma: "karar sınandı, çağrı sınanmadı"
 Yardımcıyı doğrudan çağıran bir test, o yardımcının **çağrı yerinden
 silinmesini göremiyor**. Çağrı çizim/döngü göbeğindeyse pencere olmadan
-sürülemiyor ve bozma sessizce kaçıyor. **Dört kez** yaşandı: menü dağıtımı,
-pencere tazeleme, panel bırakma kararı, kaydırma adımı. Çözüm hep aynı —
-kararı ayrı bir SAF fonksiyona çıkar, testi ONU sürsün.
+sürülemiyor ve bozma sessizce kaçıyor. **Beş kez** yaşandı: menü dağıtımı,
+pencere tazeleme, panel bırakma kararı, kaydırma adımı, yuva içi sınır.
+Çözüm hep aynı — kararı ayrı bir SAF fonksiyona çıkar, testi ONU sürsün.
+
+Saf fonksiyon yetmediğinde (çağrının kendisi fare istiyorsa) **kaynağı okuyan**
+bir test çağrının varlığını VE sırasını sınıyor — `t_div_is_wired_into_the_frame`.
 
 Tam liste ve öteki kalıplar: [[Tuzaklar]].
 
@@ -66,7 +69,7 @@ C tarafı (`runtime/`) bozmaları gerçek `./build.sh` ister.
 Android doğrulaması `adb screencap` ile (yerel pencere yok). Görsel/oynanış testini
 **kullanıcı yapar** — Claude derler, paketler, kurar ve durur.
 
-Bu kısıt motorun tasarımını belirledi: [[Scene3D]]'in **535 testi** pencere açmadan koşuyor
+Bu kısıt motorun tasarımını belirledi: [[Scene3D]]'in **549 testi** pencere açmadan koşuyor
 çünkü cihaz okuması tek yere hapsedilmiş ve karar mantığı saf fonksiyonlara ayrılmış.
 
 ## Metin genişliği penceresiz ÖLÇÜLEMEZ

@@ -69,8 +69,12 @@
 // kapatır; kapalı panel hiç çizilmez ve yer kaplamaz, alanı sahne
 // görünümüne geçer.
 //
-// Aynı yuvadaki iki panel yuvayı eşit paylaşır — yan yuvalarda alt alta,
-// alt yuvada yan yana.
+// Aynı yuvadaki paneller yuvayı paylaşır — yan yuvalarda alt alta, alt
+// yuvada yan yana — ve ARALARINDAKİ ÇİZGİ DE SÜRÜKLENİR: konsolu
+// hiyerarşinin altına koyup konsola üçte bir yer vermek bir çekiş. Paylaşım
+// ORANDIR: pencere büyüyünce iki panel birlikte büyür. Yuvaya yeni gelen
+// panel eşit pay alır, yani bir yerde kıymığa indirdiğin panel taşındığı
+// yerde kıymık kalmaz.
 //
 // Menüdeki PANELLER düğmesi aynı işi listeden yapar ve KAPALI paneli geri
 // getirmenin yoludur (kapalı panelin başlığı çizilmediği için kendini geri
@@ -81,7 +85,9 @@
 //
 // PANEL SINIRLARI SÜRÜKLENİR: hiyerarşi ile sahne görünümü arasındaki,
 // sahne görünümü ile özellikler arasındaki ve konsolun üstündeki çizgiyi
-// tut ve çek. Herkes kendi ekranına göre yerleştirsin diye. Seçim KALICI —
+// tut ve çek. (Bu YUVANIN ölçüsünü değiştirir; aynı yuvadaki iki panelin
+// ARASINDAKİ çizgi ise onların paylaşımını. Köşede ikisi çakışırsa yuvanın
+// dış sınırı kazanır.) Herkes kendi ekranına göre yerleştirsin diye. Seçim KALICI —
 // motor kapanınca kaybolmuyor, yeniden açılışta geri geliyor (ölçek de
 // dâhil). Menüdeki YERLESIM düğmesi varsayılana döndürür; sınırı ekranın
 // kenarına itip sıkışmanın çıkışı o.

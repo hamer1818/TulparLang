@@ -31,9 +31,9 @@ tags: [moc, editor, 3d, games]
   alıyor (dörtlü global ile döner — Tulpar'da çoklu dönüş yok).
 - **Boş yuva yer kaplamıyor** → paneli kapatmak alanını sahne görünümüne
   bırakıyor; üçünü de kapatmak görünümü tam ekran yapıyor.
-- Aynı yuvadaki paneller yuvayı **eşit paylaşıyor** (yan yuvalarda alt alta,
-  alt yuvada yan yana). **Son panel artan pikselleri alıyor** — tam bölünmeyen
-  ölçüde kalan boşluk göze çarpıyor.
+- Aynı yuvadaki paneller yuvayı **paylaşıyor** (yan yuvalarda alt alta, alt
+  yuvada yan yana) ve **aralarındaki sınır çekilebiliyor**. **Son panel artan
+  pikselleri alıyor** — tam bölünmeyen ölçüde kalan boşluk göze çarpıyor.
 - Alt yuva **tam genişlik**, yan yuvalar araç çubuğundan alt yuvaya kadar.
 
 ### Jestler
@@ -41,30 +41,58 @@ tags: [moc, editor, 3d, games]
 |---|---|
 | Panel **başlığından** sürükle | yuvayı değiştirir; hedef bölge maviyle vurgulanır |
 | Başlığın sağ ucundaki **x** | paneli kapatır |
-| Panel **sınırını** sürükle | yuvanın ölçüsünü değiştirir |
+| Yuvanın **dış sınırını** sürükle | yuvanın ölçüsünü değiştirir |
+| İki panelin **arasını** sürükle | o yuvadaki **paylaşımı** değiştirir |
 | Menüde **PANELLER** | listeden aynı işler + varsayılana dönüş |
 
 Bırakma bölgeleri ekran geometrisinden: sol üçte bir SOL, sağ üçte bir SAĞ,
 alt çeyrek ALT. **Ortası geçerli bir yer DEĞİL** (bırakmak iptal eder) —
 kazayla başlayan bir sürükleme paneli rastgele bir yere atmamalı.
 
-> **Sıra taşıyıcı.** Ayraç (±4 px) başlıktan ÖNCE sınanıyor: daha DAR hedef
-> önce kazanmalı, yoksa sınırı yakalamak imkânsız olur. Alt bant sol/sağ
-> üçte birlerden ÖNCE sınanıyor: alt yuva tam genişlik olduğu için sol alt
-> köşe yoksa "sol" olurdu.
+> **Sıra taşıyıcı.** Sınırlar (±4 px) başlıktan ÖNCE sınanıyor: daha DAR
+> hedef önce kazanmalı, yoksa sınırı yakalamak imkânsız olur. Yuvanın DIŞ
+> sınırı yuva İÇİ sınırdan önce: ikisi yuvanın köşesinde çakışıyor ve dış
+> sınır kullanıcının önceden öğrendiği jest. Alt bant sol/sağ üçte
+> birlerden ÖNCE sınanıyor: alt yuva tam genişlik olduğu için sol alt köşe
+> yoksa "sol" olurdu.
+>
+> Sıra hem SAF bir seçici fonksiyonda (`_dk_div_pick3`) hem de çağrı
+> sırasında yaşıyor; ikincisi **kaynağı okuyan** bir testle bağlı, çünkü
+> fare gerektiren bir çağrıyı penceresiz süremiyoruz.
+
+### Yuva içi paylaşım
+Her panelin bir **PAYI** var (tam sayı, varsayılan 1000); yuvadaki yer paylara
+göre bölünüyor. Pay **orandır, piksel değil** — pencere büyüyünce paneller
+birlikte büyüyor.
+
+- Sınırı çekmek yalnız **o çiftin** paylarını değiştiriyor, toplamları sabit:
+  üç panelli bir yuvada ortadaki sınır üçüncüyü oynatsaydı kullanıcı
+  düzelttiğini sandığı yerleşimi bozardı.
+- **Piksel kelepçesi tek başına yetmiyordu:** pay→piksel çevrimi aşağı
+  kırpıyor, tam en küçük ölçüye çekilen panel bir piksel eksik çıkıyordu
+  (ölçüldü: 60 istenirken 59). Payın kendisinin de bir tabanı var.
+- Yuvaya **yeni gelen** panel hedefin **ortalamasını** alıyor — kendi eski
+  payını taşısaydı bir yuvada kıymık olan panel yeni yuvasına da kıymık
+  düşerdi, oysa kullanıcı onu oraya GÖRMEK için taşıdı. Kural tek çoktan
+  geçilen noktada (`_dk_set_slot3`), çağıranlara dağıtılmış değil.
+- Tam sayı tutuluyor çünkü kayıt biçimi metin ve `toString(1.0)` bu dilde
+  `"1e+00"` yazıyor: ondalık pay her kaydet/aç turunda okunamaz hâle gelirdi.
 
 **Kapalı panel kendini geri açamaz** (başlığı çizilmiyor) → PANELLER listesi
 bu yüzden duruyor, süslü değil zorunlu.
 
 ## Yerleşimin kalıcılığı
-`save_data("tameengine_layout.txt", "ölçek|solW|sağW|altH|yuva0|yuva1|yuva2")`.
+`save_data("tameengine_layout.txt",
+"ölçek|solW|sağW|altH|yuva0|yuva1|yuva2|pay0|pay1|pay2")`.
 Bırakınca yazılıyor (her karede değil, yalnız çıkışta da değil).
 
 - Kayıt adı **değiştirilebilir** (`editor_layout_key3d`) — sabit ad, testlerin
   kullanıcının kendi yerleşimini ezmesi demekti.
-- **Eski (dört alanlı, dock öncesi) kayıtlar hâlâ okunuyor**: alan sayısına
-  bakılıyor, sürüm numarası yok. Geçersiz yuva değeri kaydın TAMAMINI değil
-  yalnız yuvaları düşürüyor.
+- **Eski kayıtlar hâlâ okunuyor** (dört alanlı dock öncesi, yedi alanlı
+  paysız): alan sayısına bakılıyor, sürüm numarası yok. Geçersiz yuva ya da
+  pay değeri kaydın TAMAMINI değil yalnız o alan ailesini düşürüyor.
+- **Paylar yuvalardan SONRA okunuyor**: yuva değişimi payı hedefin
+  ortalamasına çekiyor, yani önce yazılan pay o kuralla silinirdi.
 - Ölçek değişimi **özelleştirmeyi oranlayarak taşıyor**, varsayılana atmıyor.
 
 ## Dosya işleri

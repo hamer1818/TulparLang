@@ -10663,8 +10663,15 @@ func _dk_slot_of3(p): int {
     if (p < 0 || p >= length(_dk_slot3)) { return DOCK_OFF3; }
     return _dk_slot3[p];
 }
+// Paneli yuvaya tak. Yuva GERÇEKTEN değiştiyse panelin payı hedef yuvanın
+// ortalamasına çekiliyor — bu tek çoktan geçilen nokta (bırakma, kapatma,
+// varsayılana dönüş, kayıttan okuma hepsi buradan geçiyor), yani kuralı
+// çağıranlara dağıtmak onu birinde unutmak demekti.
 func _dk_set_slot3(p, slot) {
     if (p < 0 || p >= length(_dk_slot3)) { return; }
+    if (_dk_slot3[p] != slot && slot != DOCK_OFF3) {
+        _dk_set_wt3(p, _dk_wt_fair3(slot));
+    }
     _dk_slot3[p] = slot;
 }
 func panel_slot3d(p): int { return _dk_slot_of3(p); }
@@ -10720,6 +10727,63 @@ func _dk_index_in3(p): int {
     return n;
 }
 
+// ---- Yuva içi PAY ------------------------------------------------------------
+// İki panel aynı yuvaya girince yuvayı yarı yarıya paylaşıyorlardı ve arasındaki
+// sınır ÇEKİLEMİYORDU: konsolu hiyerarşinin altına koyan biri konsolu küçültemiyordu.
+// Artık her panelin bir PAYI var; yuvadaki yer paylara göre bölünüyor.
+//
+// Pay ORANDIR, piksel değil — pencere büyüyünce paneller birlikte büyüyor ve
+// oran korunuyor. Tam sayı tutuluyor (varsayılan 1000): kayıt biçimi zaten
+// metin ve `toString(1.0)` bu dilde "1e+00" yazıyor, yani ondalık pay her
+// kaydet/aç turunda okunamaz hâle gelirdi.
+int _DK_WT_DEF3 = 1000;
+
+array _dk_wt3 = [1000, 1000, 1000];
+
+// Bozuk/sıfır pay bir paneli görünmez yapardı; okurken taban uygulanıyor.
+func _dk_wt_of3(p): int {
+    if (p < 0 || p >= length(_dk_wt3)) { return _DK_WT_DEF3; }
+    int w = _dk_wt3[p];
+    if (w < 1) { return 1; }
+    return w;
+}
+func _dk_set_wt3(p, w) {
+    if (p < 0 || p >= length(_dk_wt3)) { return; }
+    if (w < 1) { w = 1; }
+    _dk_wt3[p] = w;
+}
+
+func _dk_wsum_slot3(slot): int {
+    int t = 0;
+    int i = 0;
+    while (i < _dk_n3()) {
+        if (_dk_slot_of3(i) == slot) { t = t + _dk_wt_of3(i); }
+        i = i + 1;
+    }
+    if (t < 1) { t = 1; }
+    return t;
+}
+func _dk_wsum_before3(p): int {
+    int slot = _dk_slot_of3(p);
+    int t = 0;
+    int i = 0;
+    while (i < p) {
+        if (_dk_slot_of3(i) == slot) { t = t + _dk_wt_of3(i); }
+        i = i + 1;
+    }
+    return t;
+}
+
+// Yuvaya YENİ gelen panelin payı. Eşit bölüşen bir yuvaya gelen panel tam
+// 1/k alsın diye ORTALAMA veriliyor: kendi eski payını taşısaydı, bir
+// yuvada kenara sıkıştırılmış panel yeni yuvasına da kıymık olarak düşerdi
+// (kullanıcı onu oraya GÖRMEK için taşıdı).
+func _dk_wt_fair3(slot): int {
+    int k = _dk_count_in3(slot);
+    if (k < 1) { return _DK_WT_DEF3; }
+    return toInt(_dk_wsum_slot3(slot) / k);
+}
+
 // Yuvanın kapladığı yer — BOŞ yuva sıfır yer kaplıyor, yani bütün panelleri
 // kapatmak sahne görünümünü tam ekran yapıyor.
 func _dk_lw3(): int {
@@ -10745,36 +10809,153 @@ int _dk_y3 = 0;
 int _dk_w3 = 0;
 int _dk_h3 = 0;
 
+// Yuvanın toplam uzunluğu (yan yuvalarda yükseklik, alt yuvada genişlik).
+// Tek yerde: dikdörtgen hesabı da sınır sürüklemesi de buradan okuyor,
+// ikisi ayrı yazılsaydı payın piksele çevrimi iki yerde ayrışabilirdi.
+func _dk_slot_span3(slot, W, H): int {
+    if (slot == DOCK_BOTTOM3) { return W; }
+    int v = H - _ED_MENU_H3 - _ED_TOOL_H3 - _ED_STAT_H3 - _dk_bh3();
+    if (v < 1) { v = 1; }
+    return v;
+}
+
 func _dk_rect3(p, W, H): bool {
     int slot = _dk_slot_of3(p);
     if (slot == DOCK_OFF3) { return false; }
     int top = _ED_MENU_H3 + _ED_TOOL_H3;
     int bh = _dk_bh3();
-    int yanh = H - top - _ED_STAT_H3 - bh;
-    if (yanh < 1) { yanh = 1; }
-    int k = _dk_count_in3(slot);
-    if (k < 1) { k = 1; }
-    int i = _dk_index_in3(p);
-    if (i < 0) { i = 0; }
+    int yanh = _dk_slot_span3(slot, W, H);
+    // Sınırlar PAYLARIN yığmalı toplamından: her panel kendi başlangıcını da
+    // bitişini de aynı toplamdan okuyor — biri "genişlik", öteki "başlangıç"
+    // hesaplasa yuvarlama farkı iki panelin arasında bir piksellik boşluk
+    // bırakırdı.
+    //
+    // İLK ve SON panel için ÖZEL DURUM YOK ve gerekmiyor: `bef` sıfırdan
+    // başlıyor, son panelde `bef + pay` tam olarak `tot` oluyor, yani
+    // `toInt(T * tot / tot)` tam T veriyor. Eski (eşit bölen) hesap "son
+    // panel artanı alır" satırına muhtaçtı; burada o satır ÖLÜ (bozma
+    // denendi, hiçbir test kızarmadı — çünkü kızaracak bir davranış yok).
+    int tot = _dk_wsum_slot3(slot);
+    int bef = _dk_wsum_before3(p);
     if (slot == DOCK_BOTTOM3) {
-        int pw = toInt(W / k);
-        _dk_x3 = i * pw;
+        int x0 = toInt(W * bef / tot);
+        int x1 = toInt(W * (bef + _dk_wt_of3(p)) / tot);
+        _dk_x3 = x0;
+        _dk_w3 = x1 - x0;
         _dk_y3 = H - _ED_STAT_H3 - bh;
-        _dk_w3 = pw;
-        // SON panel artanı da alıyor: tam bölünmeyen genişlikte sağda bir
-        // piksellik boşluk kalırdı ve o boşluk her karede göze çarpar.
-        if (i == k - 1) { _dk_w3 = W - _dk_x3; }
         _dk_h3 = bh;
         return true;
     }
-    int ph = toInt(yanh / k);
-    _dk_y3 = top + i * ph;
-    _dk_h3 = ph;
-    if (i == k - 1) { _dk_h3 = top + yanh - _dk_y3; }
+    int y0 = top + toInt(yanh * bef / tot);
+    int y1 = top + toInt(yanh * (bef + _dk_wt_of3(p)) / tot);
+    _dk_y3 = y0;
+    _dk_h3 = y1 - y0;
     if (slot == DOCK_LEFT3) { _dk_x3 = 0; _dk_w3 = _dk_lw3(); }
     else { _dk_x3 = W - _dk_rw3(); _dk_w3 = _dk_rw3(); }
     return true;
 }
+
+// ---- Yuva içi sınır ----------------------------------------------------------
+// Aynı yuvadaki iki panelin ARASINDAKİ sınır. Yuvanın DIŞ sınırı
+// (`_ed_split_at3`) yuvanın ölçüsünü değiştiriyor; bu ise yuvanın içindeki
+// paylaşımı. İkisi ayrı jest, ayrı hedef.
+func _dk_next_in_slot3(p): int {
+    int slot = _dk_slot_of3(p);
+    if (slot == DOCK_OFF3) { return 0 - 1; }
+    int i = p + 1;
+    while (i < _dk_n3()) {
+        if (_dk_slot_of3(i) == slot) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Bir panelin en küçük ölçüsü. Başlık + bir satır: başlığı görünmeyen panel
+// ne sürüklenebilir ne kapatılabilir, yani geri getirilemez olurdu.
+func _dk_min_h3(): int { return _dk_head_h3() + _g_lh3(); }
+func _dk_min_w3(): int { return _us3(90); }
+
+// İmlecin altındaki yuva-içi sınır: ÜSTTEKİ (yan yuvada) ya da SOLDAKİ (alt
+// yuvada) panelin kimliği. -1 = yok. SAF — pencere gerekmiyor.
+func _dk_div_at3(mx, my, W, H): int {
+    int t = _ed_lay_grip3();
+    int p = 0;
+    while (p < _dk_n3()) {
+        if (_dk_next_in_slot3(p) >= 0 && _dk_rect3(p, W, H)) {
+            int slot = _dk_slot_of3(p);
+            if (slot == DOCK_BOTTOM3) {
+                int bx = _dk_x3 + _dk_w3;
+                if (mx >= bx - t && mx <= bx + t &&
+                    my >= _dk_y3 && my < _dk_y3 + _dk_h3) { return p; }
+            } else {
+                int by = _dk_y3 + _dk_h3;
+                if (my >= by - t && my <= by + t &&
+                    mx >= _dk_x3 && mx < _dk_x3 + _dk_w3) { return p; }
+            }
+        }
+        p = p + 1;
+    }
+    return 0 - 1;
+}
+
+// Sınırı `pos` pikseline taşı. Yalnız ÇİFTİN payları değişiyor, toplamları
+// sabit kalıyor: üç panelin olduğu bir yuvada ortadaki sınırı çekmek
+// üçüncüsünü de oynatsaydı, kullanıcı düzelttiğini sandığı yerleşimi
+// bozmuş olurdu.
+//
+// SAF anlamda değil ama pencere GEREKTİRMİYOR (W/H parametre) — kare
+// döngüsünden ayrı sürülebilsin diye. Kararın kendisi burada; girdi
+// fonksiyonu yalnız fareyi okuyor.
+func _dk_div_apply3(p, pos, W, H): bool {
+    int q = _dk_next_in_slot3(p);
+    if (q < 0) { return false; }
+    if (_dk_rect3(p, W, H) == false) { return false; }
+    bool dikey = _dk_slot_of3(p) != DOCK_BOTTOM3;
+    int s = _dk_x3;
+    if (dikey) { s = _dk_y3; }
+    if (_dk_rect3(q, W, H) == false) { return false; }
+    int e = _dk_x3 + _dk_w3;
+    int mn = _dk_min_w3();
+    if (dikey) { e = _dk_y3 + _dk_h3; mn = _dk_min_h3(); }
+    int span = e - s;
+    // İki panelin ikisine birden yetmeyen bir yuvada sınırı oynatmak,
+    // birini görünmez yapmaktan başka bir şey yapmaz.
+    if (span < mn * 2) { return false; }
+    // Fareyi piksel olarak kelepçelemek de denendi ve ÖLÜ çıktı: aşağıdaki
+    // pay tabanı en küçük ölçüyü zaten sağlıyor, bozma denemesi hiçbir testi
+    // kırmadı. İki yerde tutulan koruma hangisinin yük taşıdığını sınanamaz
+    // yapıyor — bu depoda aynı gerekçeyle silinen üçüncü koruma.
+    int comb = _dk_wt_of3(p) + _dk_wt_of3(q);
+    int np = toInt(comb * (pos - s) / span);
+    // Pikseli kelepçelemek YETMİYOR: pay → piksel çevrimi aşağı kırpıyor,
+    // yani tam en küçük ölçüye çekilen panel bir piksel EKSİK çıkıyordu
+    // (ölçüldü: 60 istenirken 59). Payın kendisinin de bir tabanı olmalı ve
+    // o taban en küçük ölçüden türemeli — yuvanın TAMAMI üzerinden, çünkü
+    // pay yuvanın toplamına göre piksele çevriliyor.
+    int tot = _dk_wsum_slot3(_dk_slot_of3(p));
+    int T = _dk_slot_span3(_dk_slot_of3(p), W, H);
+    int taban = toInt(((mn + 1) * tot + T - 1) / T);
+    if (taban < 1) { taban = 1; }
+    if (comb < taban * 2) { return false; }
+    if (np < taban) { np = taban; }
+    if (np > comb - taban) { np = comb - taban; }
+    _dk_set_wt3(p, np);
+    _dk_set_wt3(q, comb - np);
+    return true;
+}
+
+// Hangi sınır SEÇİLİYOR — yuvanın DIŞ sınırı varsa o kazanıyor. Ayrı ve saf
+// bir fonksiyon, çünkü öncelik kuralı girdi fonksiyonunun içinde kalsaydı
+// pencere olmadan sürülemezdi ve oradan silinmesi hiçbir testi kırmazdı
+// (bu depoda aynı ders dörtten fazla kez çıktı: kararı ayrı bir SAF
+// fonksiyona çıkar, testi ONU sürsün).
+func _dk_div_pick3(mx, my, W, H): int {
+    if (_ed_split_at3(mx, my, W, H) > 0) { return 0 - 1; }
+    return _dk_div_at3(mx, my, W, H);
+}
+
+int _dk_div3 = 0 - 1;      // sürüklenen yuva-içi sınır (-1 = yok)
+int _dk_div_hot3 = 0 - 1;  // imlecin altındaki sınır (vurgulama)
 
 // ---- Paneli BAŞLIĞINDAN sürükle ---------------------------------------------
 // Yuvayı bir listeden seçmek işi görüyordu ama jest yanlıştı: Unity'de,
@@ -10998,10 +11179,17 @@ func _ed_lay_encode3(): str {
            toString(_ED_R_W3) + "|" + toString(_ED_B_H3) + "|" +
            toString(_dk_slot_of3(PANEL_HIER3)) + "|" +
            toString(_dk_slot_of3(PANEL_INSP3)) + "|" +
-           toString(_dk_slot_of3(PANEL_CONS3));
+           toString(_dk_slot_of3(PANEL_CONS3)) + "|" +
+           toString(_dk_wt_of3(PANEL_HIER3)) + "|" +
+           toString(_dk_wt_of3(PANEL_INSP3)) + "|" +
+           toString(_dk_wt_of3(PANEL_CONS3));
 }
 
 func _dk_slot_valid3(v): bool { return v >= DOCK_OFF3 && v <= DOCK_BOTTOM3; }
+
+// Pay ORAN olduğu için üst sınır da gerekiyor: 10 000 000'luk bir pay
+// yanındaki paneli sıfır piksele indirirdi ve o panel bir daha görünmezdi.
+func _dk_wt_valid3(v): bool { return v >= 1 && v <= 100000; }
 
 // Bozuk / eski / boş kayıt SESSİZCE yok sayılıyor ve false dönüyor: kayıt
 // dosyası kullanıcının elinde ve editörün açılmaması onu düzeltmenin yolunu
@@ -11038,6 +11226,21 @@ func _ed_lay_decode3(s, W, H): bool {
     _dk_set_slot3(PANEL_HIER3, s0);
     _dk_set_slot3(PANEL_INSP3, s1);
     _dk_set_slot3(PANEL_CONS3, s2);
+    // PAYLAR yuvalardan SONRA: `_dk_set_slot3` yuva değişince payı hedefin
+    // ortalamasına çekiyor (yeni gelen panel kıymık olmasın diye), yani
+    // önce yazılan pay o kuralla silinirdi.
+    if (length(p) >= 10) {
+        int w0 = toInt(p[7]);
+        int w1 = toInt(p[8]);
+        int w2 = toInt(p[9]);
+        // Üçü birden geçerliyse uygulanıyor: bir payı düşürüp ikisini almak
+        // kullanıcının hiç görmediği bir oran üretirdi.
+        if (_dk_wt_valid3(w0) && _dk_wt_valid3(w1) && _dk_wt_valid3(w2)) {
+            _dk_set_wt3(PANEL_HIER3, w0);
+            _dk_set_wt3(PANEL_INSP3, w1);
+            _dk_set_wt3(PANEL_CONS3, w2);
+        }
+    }
     _ed_lay_reclamp3(W, H);
     return true;
 }
@@ -11064,6 +11267,11 @@ func editor_layout_reset3d() {
     _dk_set_slot3(PANEL_HIER3, DOCK_LEFT3);
     _dk_set_slot3(PANEL_INSP3, DOCK_RIGHT3);
     _dk_set_slot3(PANEL_CONS3, DOCK_BOTTOM3);
+    // Paylar da: yuvaları varsayılana alıp paylaşımı bozuk bırakmak,
+    // "varsayılana dön"ü yarım bir söz yapardı.
+    _dk_set_wt3(PANEL_HIER3, _DK_WT_DEF3);
+    _dk_set_wt3(PANEL_INSP3, _DK_WT_DEF3);
+    _dk_set_wt3(PANEL_CONS3, _DK_WT_DEF3);
     editor_layout_save3d();
 }
 func editor_yerlesim_sifirla3d() { editor_layout_reset3d(); }
@@ -11868,7 +12076,7 @@ int _ed_help3 = 0;
 int _ed_help_scroll3 = 0;
 
 func _ed_help_idbase3(): int { return 71000; }
-func _ed_help_n3(): int { return 25; }
+func _ed_help_n3(): int { return 26; }
 
 func _ed_help_key3(i): str {
     if (i ==  0) { return "SAG TUS + WASD"; }
@@ -11895,6 +12103,11 @@ func _ed_help_key3(i): str {
     if (i == 21) { return "F11"; }
     if (i == 22) { return "PANEL SINIRI"; }
     if (i == 23) { return "PANEL BASLIGI"; }
+    // Yuva içi sınır listede AYRI satır: dıştaki sınır yuvanın ölçüsünü,
+    // içteki aynı yuvadaki panellerin paylaşımını değiştiriyor. Tek satırda
+    // anlatmak ikisini de anlatmamak olurdu ve iç sınır hiçbir yerde
+    // yazmıyorsa görünmez bir jest demektir.
+    if (i == 24) { return "PANEL ARASI"; }
     return "H";
 }
 
@@ -11930,6 +12143,7 @@ func _ed_help_act3(i): str {
     if (i == 21) { return "tam ekran ac / kapat"; }
     if (i == 22) { return "surukle: panel boyutu"; }
     if (i == 23) { return "surukle: paneli tasi"; }
+    if (i == 24) { return "surukle: paylasim"; }
     return "bu listeyi ac / kapat";
 }
 
@@ -12111,6 +12325,62 @@ func _ed_split_input3() {
     }
 }
 
+// Yuva içi sınır — GİRDİ. Yuvanın DIŞ sınırından SONRA, başlık
+// sürüklemesinden ÖNCE sınanıyor:
+//   • Dış sınır önce, çünkü ikisi yuvanın KÖŞESİNDE çakışıyor ve dış sınır
+//     kullanıcının önceden öğrendiği jest — sırayı tersine çevirmek çalışan
+//     bir jesti bozardı. Kesişme tek köşe; ikisi de başka her yerinden
+//     yakalanabiliyor.
+//   • Başlıktan önce, çünkü sınır (±4 px) başlık şeridinin üst kenarıyla
+//     çakışıyor ve daha DAR hedef önce kazanmalı.
+func _dk_div_input3() {
+    int W = screen_width();
+    int H = screen_height();
+    _dk_div_hot3 = 0 - 1;
+    if (_ed_split3 > 0) { return; }
+    if (_dk_drag3 >= 0) { return; }
+    if (_dk_div3 < 0) {
+        _dk_div_hot3 = _dk_div_pick3(mouse_x(), mouse_y(), W, H);
+        if (_dk_div_hot3 >= 0 && mouse_pressed(0)) { _dk_div3 = _dk_div_hot3; }
+    }
+    if (_dk_div3 < 0) { return; }
+    // Yan yuvada sınır YATAY (fareyi dikey izler), alt yuvada DİKEY.
+    int pos = mouse_y();
+    if (_dk_slot_of3(_dk_div3) == DOCK_BOTTOM3) { pos = mouse_x(); }
+    _dk_div_apply3(_dk_div3, pos, W, H);
+    // Panel widget'ları bu karede tıklama ALMASIN.
+    _g_press3 = 0;
+    _g_act3 = 0;
+    if (mouse_down(0) == false) {
+        _dk_div3 = 0 - 1;
+        editor_layout_save3d();
+    }
+}
+
+// Yuva içi sınır — ÇİZİM. Vurgu olmadan "burası çekilebilir" bilgisi hiçbir
+// yerde yazmıyor; panellerin arasındaki çizgi sıradan bir kenarlık sanılırdı.
+func _dk_div_draw3() {
+    int W = screen_width();
+    int H = screen_height();
+    int hot = _dk_div3;
+    if (hot < 0) { hot = _dk_div_hot3; }
+    int p = 0;
+    while (p < _dk_n3()) {
+        if (_dk_next_in_slot3(p) >= 0 && _dk_rect3(p, W, H)) {
+            if (_dk_slot_of3(p) == DOCK_BOTTOM3) {
+                int bx = _dk_x3 + _dk_w3;
+                if (p == hot) { rect(bx - 1, _dk_y3, 2, _dk_h3, _G_ACC3()); }
+                else { line(bx, _dk_y3, bx, _dk_y3 + _dk_h3, _G_LINE3()); }
+            } else {
+                int by = _dk_y3 + _dk_h3;
+                if (p == hot) { rect(_dk_x3, by - 1, _dk_w3, 2, _G_ACC3()); }
+                else { line(_dk_x3, by, _dk_x3 + _dk_w3, by, _G_LINE3()); }
+            }
+        }
+        p = p + 1;
+    }
+}
+
 // Başlıktan sürükleme — GİRDİ. Ayraçlardan SONRA sınanıyor: ayraç ince bir
 // şerit (±4 px) ve panelin kenarıyla çakışıyor; daha DAR olan hedef önce
 // kazanmalı, yoksa sınırı yakalamak imkânsız olurdu.
@@ -12118,6 +12388,7 @@ func _dk_drag_input3() {
     int W = screen_width();
     int H = screen_height();
     if (_ed_split3 > 0) { return; }     // ayraç sürükleniyor, karışmasın
+    if (_dk_div3 >= 0) { return; }      // yuva içi sınır sürükleniyor
     if (_dk_drag3 < 0) {
         if (mouse_pressed(0) == false) { return; }
         // KAPATMA düğmesi başlığın içinde ama sürükleme başlatmıyor.
@@ -12319,6 +12590,7 @@ func _ed_dock_draw3() {
 func _ed_chrome3() {
     _g_begin();
     _ed_split_input3();
+    _dk_div_input3();
     _dk_drag_input3();
     _ed_menubar3();
     _ed_toolbar3();
@@ -12334,6 +12606,7 @@ func _ed_chrome3() {
     int vh = _ed_view_h3();
     rect_lines(vx - 1, vy - 1, vw + 2, vh + 2, _G_LINE3());
     _ed_split_draw3();
+    _dk_div_draw3();
     _dk_drag_draw3();
     if (_ed_playing3 == 0) { _ed_axis_widget3(); }
     // Bağlam menüsü panellerin ÜSTÜNDE ama çakışma denetiminden ÖNCE:

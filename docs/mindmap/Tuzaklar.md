@@ -12,15 +12,21 @@ tags: [moc, traps, debugging]
 En sık ve en pahalı sınıf. **Her düzeltme, hatayı bilerek enjekte edip doğru
 testin kızardığı görülerek doğrulanır** ([[Testing]]).
 
-### 1a. Karar sınandı, ÇAĞRI sınanmadı — DÖRT kez yaşandı
+### 1a. Karar sınandı, ÇAĞRI sınanmadı — BEŞ kez yaşandı
 Yardımcı fonksiyonu doğrudan çağıran bir test, o yardımcının **çağrı yerinden
 silinmesini** göremiyor. Çağrı çizim/döngü göbeğindeyse pencere olmadan
 sürülemiyor ve bozma sessizce kaçıyor.
 
 Yaşananlar: menü dağıtımı (`_s3_menu_act3`), pencere tazeleme
 (`_ed_sync_window3`), bırakma kararı (`_dk_drop_result3`), kaydırma adımı
-(`_ed_iscroll_step3`). **Çözüm hep aynı:** kararı ayrı bir SAF fonksiyona
-çıkar ve testi ONU sürsün.
+(`_ed_iscroll_step3`), yuva içi sınır (`_dk_div_pick3`/`_dk_div_apply3`).
+**Çözüm hep aynı:** kararı ayrı bir SAF fonksiyona çıkar ve testi ONU sürsün.
+
+**Saf fonksiyon YETMEDİĞİNDE:** çağrının kendisi fare/pencere istiyorsa
+**KAYNAĞI OKUYAN** bir test yaz — `read_file("lib/scene3d.tpr")` + `split`
+ile hem çağrının varlığını hem SIRASINI sına (`t_div_is_wired_into_the_frame`).
+Sınırı açık ve dürüstçe yazılmalı: "bir yerden çağrılıyor" der, "her karede
+çağrılıyor" demez. Aynı desen `t_no_duplicate_function_names`'te de var.
 
 ### 1b. Beklenti sınanan formülün kendisinden türetiliyor
 Nişan yönü hatası (2026-08-14) böyle kaçtı: test, beklediği yönü sınadığı
@@ -46,6 +52,20 @@ ve geri-al yığınları bu yüzden reset'e eklendi.
 ### 1f. Eşitlik "sığıyor" sayılıyor
 `içerik <= yükseklik` iddiası, payı sıfırlayan bozmadan KAÇIYOR. Görünür bir
 pay ayrı bir iddia olmalı.
+
+### 1g. Kaçan bozma = ÖLÜ KOD olabilir
+Bozma kaçtığında ilk varsayım "test eksik" olmasın: koruma **gereksiz** de
+olabilir. Yuva içi sınırda iki koruma böyle silindi — fareyi piksel olarak
+kelepçeleyen satır (pay tabanı zaten sağlıyordu) ve "son panel artanı alır"
+özel durumu (yığmalı toplamda son panelin bitişi zaten tam T). İki yerde
+tutulan koruma, hangisinin yük taşıdığını sınanamaz yapıyor.
+
+### 1h. Testin KENDİ kurulumu sınananı ortadan kaldırıyor
+Yan yuvadaki panellerin alt yuvanın üstünde bitmesi hiç sınanmıyordu: paylaşım
+testlerinin hepsi konsolu yan yuvaya taşıyor, yani **alt yuva boş kalıyor** ve
+`- _dk_bh3()` çıkarmasını silmek hiçbir testi kırmıyordu. Aynı sınıf:
+`goto_level3d` testi `_cur_lvl3 == 0` iken koşuyordu.
+**Sor:** bu testin kurulumu, sınadığım şeyin ETKİSİNİ sıfırlıyor mu?
 
 ## 2. Enjeksiyon harness'ı yalan söylüyor
 `lib/*.tpr` içinde **süslü parantez dengesi bozulursa** `cmake --build` yine

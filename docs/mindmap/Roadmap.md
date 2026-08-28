@@ -18,7 +18,8 @@ araç:
 - **Dosya**: aç / farklı kaydet / geri yükle + **kurtarma dosyası** (kapatırken
   kaybolan iş). Geri-al geçmişi dosya değişince sıfırlanıyor.
 - **Yerleşim**: paneller yuvalara takılı, **başlıktan sürüklenip** taşınıyor,
-  sınırları çekiliyor, kapatılıp açılıyor; yerleşim + ölçek **kalıcı**.
+  yuvanın sınırı **ve aynı yuvadaki panellerin arasındaki sınır** çekiliyor,
+  kapatılıp açılıyor; yerleşim + paylaşım + ölçek **kalıcı**.
 - **Pencere**: boyutlandırılabilir, büyütülebilir, F11 tam ekran.
 - **İçerik**: doku, ışık, ses, kamera paneli, bölge eylemleri (`ZACT_*`),
   `ACT_NEXT` ile veriyle bölüm ilerletme, pano (bölümler arası), tümünü seç,
@@ -27,9 +28,9 @@ araç:
   iki oyuncu, iş görmeyen bitince eylemi, eksik model/ses dosyası.
 - Bir düzine **sessiz veri kaybı** bulunup kapatıldı (tablo: [[Editor]]).
 
-Açık kalanlar: yuva içinde sıralama / sekme / yüzen pencere (bilerek
-yapılmadı → [[Decisions]]), panel başlığında sürükleme hayaleti yok
-(yalnız hedef vurgusu var).
+Açık kalanlar: yuva içinde SIRALAMA / sekme / yüzen pencere (bilerek
+yapılmadı → [[Decisions]]; paylaşım artık ayarlanabiliyor, sıra değil),
+panel başlığında sürükleme hayaleti yok (yalnız hedef vurgusu var).
 
 ## 🟢 DB katmanı (paralel-read kapandı)
 - ✅ `db_open` WAL + busy_timeout varsayılan (yapıldı, write 2.3×). → [[SQLite and DB]]

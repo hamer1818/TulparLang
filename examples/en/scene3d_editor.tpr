@@ -71,8 +71,12 @@
 // right end of the title closes the panel; a hidden panel is not drawn and
 // takes no space, its area goes to the scene view.
 //
-// Two panels in the same dock split it evenly — stacked in the side docks,
-// side by side in the bottom one.
+// Panels in the same dock share it — stacked in the side docks, side by side
+// in the bottom one — and THE LINE BETWEEN THEM IS DRAGGABLE TOO: putting the
+// console under the hierarchy and giving it a third of the space is one pull.
+// The share is a RATIO: both panels grow when the window does. A panel that
+// moves into a dock gets an equal share, so a panel you squeezed to a sliver
+// in one dock does not arrive as a sliver in the next.
 //
 // The PANELLER button in the menu bar does the same from a list, and it is
 // the way to bring a HIDDEN panel back (a hidden panel has no title bar, so
@@ -84,7 +88,9 @@
 //
 // PANEL BORDERS ARE DRAGGABLE: grab the line between the hierarchy and the
 // scene view, between the scene view and the inspector, or the top of the
-// console, and pull. The choice PERSISTS — it survives closing the engine and
+// console, and pull. (That resizes the DOCK; the line BETWEEN two panels in
+// the same dock resizes their share. Where the two meet in a corner, the
+// dock's outer border wins.) The choice PERSISTS — it survives closing the engine and
 // comes back on the next start (the UI scale too). The YERLESIM button in the
 // menu bar restores the defaults; that is the way out if you push a border to
 // the edge of the screen.
