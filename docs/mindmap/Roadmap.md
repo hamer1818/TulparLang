@@ -15,6 +15,8 @@ Tek doğruluk kaynağı [STATUS.md](../../STATUS.md) (🔴 kritik / 🟡 önemli
 ## ✅ Sahne editörü — TameEngine (2026-08-24 → 2026-08-28)
 Ayrıntı: [[Editor]]. Kısa hâli — editör artık kendi başına kullanılabilir bir
 araç:
+- **Tutamaklar**: taşı/ölçek eksen okları + **döndürme halkası** (dönüş artık
+  fareyle, ızgara açıkken 15°'ye oturuyor, çoklu seçim grup merkezi etrafında).
 - **Menü**: şerit açılır menülere döndü (Dosya / Duzen / Gorunum / Yardim);
   her komutun kısayolu kendi satırında, iş görmeyen komut soluk.
 - **Dosya**: aç / farklı kaydet / geri yükle + **kurtarma dosyası** (kapatırken

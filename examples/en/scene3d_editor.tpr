@@ -24,7 +24,7 @@
 // the single source (the status bar no longer enumerates shortcuts, that
 // line was getting truncated).
 //   RIGHT MOUSE held + WASD/QE   free flight, mouse to look
-//   Q / W / E / R                select / move / rotate / scale
+//   Q / W / E / R                select / move / rotate / scale  (handles)
 //   1 / 2 / 3 / 4                select / move / SCALE / ROTATE  (different!)
 //   F / G / SPACE                frame / grid / drop onto the ground
 //   DEL / CTRL+D                 delete / duplicate
@@ -38,6 +38,23 @@
 //   ESC                          close an open window / while playing: stop
 // Letter keys are tool shortcuts ONLY while the right mouse button is NOT
 // held; while it is held they are flight.
+//
+// HANDLES: MOVE and SCALE give you three arrows (X red, Y green, Z blue) —
+// grab one and the change stays on that axis. ROTATE gives you a RING: grab
+// the circle around the body and turn it. The engine rotates on Y only, so
+// there is one ring; drawing three would mean two handles that do nothing.
+// The line across the ring shows which way the body FACES — without it a
+// symmetric circle tells you nothing about how far you have turned.
+//
+// WITH THE GRID ON rotation snaps to 15° too (the same step the arrow keys
+// use); with it off the angle is free. The grid button means "align", and
+// aligning positions while leaving angles free would leave an aligned wall
+// tilted by 3°.
+//
+// ROTATING A MULTI-SELECTION turns the group around ITS CENTRE: each body
+// both turns and orbits, so the arrangement itself rotates. Turning only the
+// facings would spin the boxes in place and leave the arrangement untouched —
+// that is not what "rotate the group" means.
 //
 // FILES: "Open" in the menu lists the .json scenes on disk — the editor is no
 // longer tied to the file it was launched with. "F. Kaydet" (save as) writes

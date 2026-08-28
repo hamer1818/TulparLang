@@ -33,6 +33,12 @@ bırakılıyor, yuvanın sınırı çekiliyor, kapatılıyor; yerleşim kalıcı
 **Yapılmadı ve bilerek:** yuva içinde sıralama, SEKME, YÜZEN pencere — üçü de
 ayrı bir pencere yöneticisi demek. → [[Editor]]
 
+## Döndürme tutamağı TEK HALKA (2026-08-28)
+Motorun tek dönme ekseni Y olduğu için tutamak da tek halka; üç halka çizmek
+ikisi hiçbir şey yapmayan tutamak demekti. Izgara açıkken 15°'ye oturuyor (ok
+tuşunun adımıyla aynı), kapalıyken serbest. Çoklu seçim **grup merkezi**
+etrafında dönüyor — yalnız yaw'ı döndürmek dizilişi bırakırdı. → [[Editor]]
+
 ## Menü şeridi AÇILIR MENÜ, düz düğme sırası değil (2026-08-28)
 Şerit düz bir düğme sırasıydı ve dolmuştu: sığmayan düğme hiç çizilmiyordu,
 yani komut dar pencerede **erişilemez** oluyordu. Kısayollar da hiçbir yerde

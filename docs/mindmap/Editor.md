@@ -23,6 +23,33 @@ tags: [moc, editor, 3d, games]
   `scene_json3d()` / `scene_json_levels3d()` ile yazılır, `scene_load3d()` ile
   okunur. Editör ayrı bir veri modeli tutmuyor.
 
+## Tutamaklar — taşı/ölçek OK, döndür HALKA
+TAŞI ve ÖLÇEK kiplerinde üç eksen oku; matematiği saf (ışın ile eksen doğrusu
+arasındaki en yakın yaklaşım — ekran uzayında piksel mesafesine bakmak, tepeden
+bakınca dikey oku bir noktaya çökertirdi).
+
+DÖNDÜRME 2026-08-28'e kadar **klavyeye mahkûmdu**: ok tuşları, 15°'lik adımlar,
+yani 37°'ye dönmenin yolu yoktu. Artık **halka**:
+- Motorun tek dönme ekseni Y (`set3yaw`) → **tek halka**. Üç halka çizmek,
+  ikisi hiçbir şey yapmayan tutamak demekti.
+- Tutunma: ışın ↔ cismin yüksekliğindeki **yatay düzlem**; kesişim merkeze
+  `r` uzaklıktaysa yakalandı. Sürüklerken tutunma **sınanmıyor**, yalnız açı
+  okunuyor — imleç halkadan çıkınca dönüşün kopması hiçbir editörde yok.
+- **Yarıçap cismin dışında** kalmak zorunda: kocaman bir duvarın içindeki
+  halkaya tıklamak duvarı seçer.
+- Halkadaki çizgi cismin **baktığı yön** — onsuz simetrik bir daireden kaç
+  derece döndüğü anlaşılmıyor.
+- **Izgara açıkken 15°'ye oturuyor**, ok tuşunun adımıyla aynı: iki yol aynı
+  açı kümesini üretmeli.
+- **Çoklu seçim grup merkezi etrafında** dönüyor (yaw + yörünge). Yalnız
+  yaw'ı döndürmek kutuları yerinde çevirir, dizilişi bırakırdı.
+- Dönüş **yakalanan hâlden** hesaplanıyor, bir öncekinden değil: üstüne
+  eklemek yuvarlamayı biriktirir ve sürükleme uzadıkça cisim kaçardı.
+
+> ⚠️ **İKİ YAW SÖZLEŞMESİ var** (bkz. [[Scene3D]]): gövde `(sin, cos)`,
+> kamera `(sin, −cos)`. Halka **gövde** sözleşmesini kullanıyor ve testi
+> beklentiyi `patrol3d`'den — bağımsız bir kod yolundan — alıyor.
+
 ## Menü şeridi — açılır menüler
 Şerit düz bir düğme sırasıydı (`Yeni / Ac / Kaydet / F. Kaydet / Geri / Ileri
 / PANELLER / ?`). İki somut derdi vardı:

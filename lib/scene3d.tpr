@@ -8701,6 +8701,69 @@ func ed_select_count3d(): int { return length(_ed_msel3); }
 
 // Birincili verilen konuma taşı, kümenin GERİ KALANINI aynı delta kadar.
 // Hepsini aynı mutlak konuma taşımak onları üst üste yığardı.
+// Seçimi `delta` derece döndür. Her varlığın YAW'ı dönüyor VE konumu grup
+// merkezi etrafında yörüngeye giriyor: yalnız yaw'ı döndürmek, seçili beş
+// kutuyu yerinde çevirir ama dizilişlerini olduğu gibi bırakırdı — "grubu
+// döndür" jestinin karşılığı bu değil.
+//
+// Hesap YAKALANAN hâlden yapılıyor, bir öncekinden değil: her karede
+// üstüne eklemek yuvarlama hatasını biriktirir ve sürükleme uzadıkça cisim
+// kayardı (aynı gerekçeyle eksen sürüklemesi de `_gz_p*3`'ü sabit tutuyor).
+//
+// Tek seçimde merkez varlığın kendisi, yani yörünge yarıçapı sıfır ve
+// hareket saf dönüş. Ayrı bir dal gerekmiyor.
+func _ed_rotate_group3(delta) {
+    float c = cos(delta * DEG2RAD3);
+    float sn = sin(delta * DEG2RAD3);
+    // BAYAT HANDLE burada ayrıca denetlenmiyor ve gerekmiyor: handle'lar
+    // kuşak etiketli, `ed_move3d`/`set3yaw`/`get3y` üçü de `_slot_of3< 0`
+    // durumunda dönüyor. Buraya bir denetim daha koymak denendi ve ÖLÜ
+    // çıktı (bozma denemesi hiçbir testi kırmadı) — iki yerde tutulan
+    // koruma, hangisinin yük taşıdığını sınanamaz yapıyor.
+    int i = 0;
+    while (i < length(_gz_g0id3)) {
+        int id = _gz_g0id3[i];
+        float px = _gz_g0x3[i] - _gz_gcx3;
+        float pz = _gz_g0z3[i] - _gz_gcz3;
+        // YAW sözleşmesi (sin, cos): +delta, +Z'den +X'e doğru döndürüyor.
+        float nx = _gz_gcx3 + px * c + pz * sn;
+        float nz = _gz_gcz3 - px * sn + pz * c;
+        ed_move3d(id, nx, get3y(id), nz);
+        ed_rotate3d(id, _gz_g0yaw3[i] + delta);
+        i = i + 1;
+    }
+}
+
+// Halkaya tutunulduğu andaki hâli sakla. Grup merkezi seçili varlıkların
+// ORTALAMASI: birincisini merkez almak, kullanıcının hangi kutuya tıkladığına
+// göre bambaşka bir dönüş verirdi.
+func _gz_grab_group3() {
+    _gz_g0id3 = [];
+    _gz_g0x3 = [];
+    _gz_g0z3 = [];
+    _gz_g0yaw3 = [];
+    float sx = 0.0;
+    float sz = 0.0;
+    int n = 0;
+    int i = 0;
+    while (i < length(_ed_msel3)) {
+        int id = _ed_msel3[i];
+        if (_slot_of3(id) >= 0) {
+            push(_gz_g0id3, id);
+            push(_gz_g0x3, get3x(id));
+            push(_gz_g0z3, get3z(id));
+            push(_gz_g0yaw3, get3yaw(id));
+            sx = sx + get3x(id);
+            sz = sz + get3z(id);
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    if (n == 0) { return; }
+    _gz_gcx3 = sx / n;
+    _gz_gcz3 = sz / n;
+}
+
 func _ed_move_group3(nx, ny, nz) {
     int s = _slot_of3(_ed_sel3e);
     if (s < 0) { return; }
@@ -9553,6 +9616,34 @@ func _s3_editor_mouse(dt) {
     if (mouse_pressed(0)) {
         // 1) ÖNCE tutamaklar: okun üstündeki tıklama arkadaki varlığı
         // seçmemeli, yoksa oka basmak seçimi değiştirirdi.
+        // DÖNDÜRME kipinde tutamak bir HALKA, ok değil. Ayrı dal, çünkü
+        // yakalanan şey de ayrı: eksen sürüklemesi bir UZAKLIK, halka bir
+        // AÇI taşıyor.
+        if (s >= 0 && _ed_mode3 == ED_ROTATE) {
+            _ed_ray3(mouse_x() - _ed_view_x3(), mouse_y() - _ed_view_y3(),
+                     _ed_view_w3(), _ed_view_h3(), _cam_fov);
+            Ent3 re = _e3[s];
+            float rr = _gz_ring_r3(re.x, re.y, re.z, re.sx, re.sz);
+            if (_gz_ring_pick3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3,
+                               _ed_rz3, re.x, re.y, re.z, rr)) {
+                _gz_py3 = re.y;
+                _gz_grab_group3();
+                // TUTUNMA tıklanan varlığın halkasında sınanıyor ama
+                // REFERANS AÇI grup merkezinden okunuyor: ikisi çoklu
+                // seçimde farklı noktalar ve karıştırılsaydı sürüklemenin
+                // ilk karesi grubu bir anda sıçratırdı.
+                float a0 = _gz_ring_ang3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3,
+                                         _ed_ry3, _ed_rz3, _gz_gcx3, _gz_py3,
+                                         _gz_gcz3);
+                if (_gz_ang_ok3(a0)) {
+                    ed_mark3d();
+                    _gz_axis3 = _GZ_RING3;
+                    _gz_a0_3 = a0;
+                    _ed_drag3 = 0;
+                    return;
+                }
+            }
+        }
         if (s >= 0 && (_ed_mode3 == ED_MOVE || _ed_mode3 == ED_SCALE)) {
             _ed_ray3(mouse_x() - _ed_view_x3(), mouse_y() - _ed_view_y3(),
                      _ed_view_w3(), _ed_view_h3(), _cam_fov);
@@ -9628,6 +9719,20 @@ func _s3_editor_mouse(dt) {
 
     // Eksen sürüklemesi. Referans doğru YAKALANDIĞI andaki konumda sabit —
     // varlıkla birlikte kaysaydı hareket kendini besleyip kaçardı.
+    if (_gz_axis3 == _GZ_RING3 && s >= 0) {
+        _ed_ray3(mouse_x() - _ed_view_x3(), mouse_y() - _ed_view_y3(),
+                 _ed_view_w3(), _ed_view_h3(), _cam_fov);
+        // Sürüklerken TUTUNMA sınanmıyor, yalnız açı okunuyor: imleç
+        // halkanın dışına çıkınca dönüşün kopması, hiçbir editörde
+        // olmayan bir davranış olurdu.
+        float a = _gz_ring_ang3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3,
+                                _ed_rz3, _gz_gcx3, _gz_py3, _gz_gcz3);
+        if (_gz_ang_ok3(a)) {
+            float d = _gz_angdiff3(a, _gz_a0_3);
+            _ed_rotate_group3(_gz_snap_deg3(d, _ed_grid3));
+        }
+        return;
+    }
     if (_gz_axis3 >= 0 && s >= 0) {
         _ed_ray3(mouse_x() - _ed_view_x3(), mouse_y() - _ed_view_y3(),
                  _ed_view_w3(), _ed_view_h3(), _cam_fov);
@@ -11876,7 +11981,7 @@ func _ed_toolbar3() {
     _g_tip_for3(9004, "Olcekle  (R)  —  oklardan surukle");
     x = x + w3 + gap;
     if (_g_tog(9005, x, by, w4, _ED_FLD3, "DONDUR", _ed_mode3 == ED_ROTATE)) { _ed_mode3 = ED_ROTATE; }
-    _g_tip_for3(9005, "Dondur  (E)  —  sol/sag oklar");
+    _g_tip_for3(9005, "Dondur  (E)  —  halkadan surukle, oklar 15 derece");
 
     if (showGrid == 1) {
         if (_g_tog(9006, optX, by, w5, _ED_FLD3, gl, _ed_grid3 > 0.0)) {
@@ -12439,7 +12544,9 @@ func _ed_help_act3(i): str {
     // değeri doğru olmasında; "aynı dört araç" demek kullanıcıyı üçüncü
     // tuşta yanıltırdı.
     if (i ==  3) { return "sec / tasi / olcek / dondur"; }
-    if (i ==  4) { return "sec, oklardan surukle"; }
+    // Tutamak KİPE göre değişiyor: taşı/ölçek okları, döndürme halkası.
+    // "oklardan sürükle" demek, döndürme kipinde yalan olurdu.
+    if (i ==  4) { return "sec / tutamak surukle"; }
     if (i ==  5) { return "secime ekle / cikar"; }
     if (i ==  6) { return "tumunu sec"; }
     if (i ==  7) { return "secileni cercevele"; }
@@ -14950,6 +15057,25 @@ float _gz_s0y3  = 0.0;
 float _gz_s0z3  = 0.0;
 float _GZ_PICK3 = 0.32;    // oka tutunma yarıçapı (dünya birimi, ok boyuna oranlı)
 
+// DÖNDÜRME HALKASI. Döndürme klavyeye mahkûmdu: sol/sağ oklar, 15°'lik
+// adımlar. Yani 37°'ye dönmenin yolu YOKTU ve fareyle çalışan bir editörde
+// dönüşün de fareyle olması gerekiyor (Unity/Unreal/Blender'da halka).
+//
+// Motorun tek dönme ekseni Y (`set3yaw`), yani halka da cismin
+// yüksekliğindeki YATAY düzlemde. Tek eksen olması işi kolaylaştırmıyor,
+// DOĞRU yapıyor: üç halka çizmek, ikisi hiçbir şey yapmayan bir tutamak
+// demek olurdu.
+int   _GZ_RING3 = 3;       // `_gz_axis3` için halka "ekseni"
+float _gz_a0_3  = 0.0;     // yakalandığı andaki açı (derece)
+float _gz_ang3  = 0.0;     // son hesaplanan açı (derece)
+float _gz_rd3   = 0.0;     // ...ve kesişimin merkeze uzaklığı
+float _gz_gcx3  = 0.0;     // grup merkezi (çoklu seçimde dönme ekseni)
+float _gz_gcz3  = 0.0;
+array _gz_g0id3 = [];      // yakalanan seçim ve o andaki hâli
+array _gz_g0x3  = [];
+array _gz_g0z3  = [];
+array _gz_g0yaw3 = [];
+
 // Son çağrının çıktıları.
 float _gz_t3   = 0.0;      // eksen üzerindeki parametre
 float _gz_d3   = 0.0;      // ışına en yakın mesafe
@@ -14990,6 +15116,70 @@ func _gz_len3(px, py, pz): float {
     return l;
 }
 
+// Halkanın YARIÇAPI. Eksen okuyla aynı ölçüden türüyor (kamera uzaklaşınca
+// ekranda aynı boyda kalıyor) ama cismin KENDİNDEN küçük olamıyor: kocaman
+// bir duvarın içinde kalan halka tutulamaz, çünkü tıklama önce duvarı seçer.
+func _gz_ring_r3(px, py, pz, sx, sz): float {
+    float r = _gz_len3(px, py, pz);
+    float yari = sx * 0.5;
+    if (sz * 0.5 > yari) { yari = sz * 0.5; }
+    float mn = yari + r * 0.35;
+    if (r < mn) { r = mn; }
+    return r;
+}
+
+// Yatay düzlemdeki bir yönün YAW'ı. GÖVDE sözleşmesi: (sin yaw, cos yaw),
+// yani `move3d`'nin `atan2(wx, wz)`'si. Kamera sözleşmesiyle (−cos)
+// karıştırmak dönüşü ayna görüntüsü yapardı — bu depoda bir kez yaşandı ve
+// mermiler tam ters gitmişti.
+func _gz_yaw_from3(ax, az): float { return atan2(ax, az) * RAD2DEG3; }
+
+// Işının, `py` yüksekliğindeki yatay düzlemle kesişiminin merkeze göre
+// AÇISI. Işın düzleme paralelse ya da düzlem ışının ARKASINDAysa geçersiz
+// (−1000) dönüyor; 0 döndürmek dönüşü bir karede sıfıra sıçratırdı.
+// Merkeze uzaklık `_gz_rd3`'e yazılıyor (tutunma sınaması onu kullanıyor).
+func _gz_ring_ang3(ox, oy, oz, dx, dy, dz, px, py, pz): float {
+    float t = _ray_planey3(oy, dy, py);
+    if (t <= 0.0) { return 0.0 - 1000.0; }
+    float ax = (ox + dx * t) - px;
+    float az = (oz + dz * t) - pz;
+    _gz_rd3 = sqrt(ax * ax + az * az);
+    return _gz_yaw_from3(ax, az);
+}
+func _gz_ang_ok3(a): bool { return a > 0.0 - 999.0; }
+
+// Halkaya TUTUNMA: kesişim merkeze `r` uzaklıktaysa yakalandı.
+func _gz_ring_pick3(ox, oy, oz, dx, dy, dz, px, py, pz, r): bool {
+    float a = _gz_ring_ang3(ox, oy, oz, dx, dy, dz, px, py, pz);
+    if (_gz_ang_ok3(a) == false) { return false; }
+    _gz_ang3 = a;
+    return abs_f3(_gz_rd3 - r) <= r * _GZ_PICK3;
+}
+
+// İki açı arasındaki EN KISA fark (−180..180). Ham çıkarma, halkanın
+// ±180 dikişinden geçerken 359°'lik bir sıçrama üretirdi: cisim bir karede
+// tam tur atardı.
+func _gz_angdiff3(a, b): float {
+    float d = a - b;
+    while (d > 180.0)  { d = d - 360.0; }
+    while (d < 0.0 - 180.0) { d = d + 360.0; }
+    return d;
+}
+
+// IZGARA AÇIKKEN dönüş de 15°'ye oturuyor. Izgara düğmesi "hizala"
+// demek ve konumu hizalayıp açıyı serbest bırakmak, hizalanmış bir
+// duvarı 3° eğik bırakırdı. 15°, klavyedeki ok adımıyla AYNI: iki yol
+// aynı açı kümesini üretmeli.
+func _gz_snap_deg3(a, izgara): float {
+    if (izgara <= 0.0) { return a; }
+    float k = 15.0;
+    float h = a / k;
+    // `toInt` sıfıra doğru kırpıyor, yani yarımı SIFIRDAN UZAĞA yuvarlamak
+    // için işaret elle veriliyor: −7.5° tek bir `toInt` ile 0'a düşerdi.
+    if (h >= 0.0) { return toInt(h + 0.5) * k; }
+    return toInt(h - 0.5) * k;
+}
+
 // Fare ışını hangi eksene tutunuyor? -1 = hiçbiri.
 // Eksenlerin hepsi denenip EN YAKIN olan seçiliyor: üç ok merkezde kesiştiği
 // için ilk eşleşeni almak, kamera açısına göre yanlış ekseni verirdi.
@@ -15022,7 +15212,37 @@ func _gz_ax_y3(a): float { if (a == 1) { return 1.0; } return 0.0; }
 func _gz_ax_z3(a): float { if (a == 2) { return 1.0; } return 0.0; }
 
 // Tutamakların çizimi. Ok gövdesi çizgi, ucu küçük bir küp.
+// Döndürme halkası: yatay düzlemde bir çember, kısa doğru parçalarından.
+// `circle3d` diye bir bağlama yok ve eklemenin bedeli 5 noktalı bir builtin
+// wiring'i; 24 parça gözle çemberden ayırt edilemiyor (ölçüldü: 15°'lik
+// kiriş, yarıçapın %13'ü kadar sapıyor ve tutamak zaten kalın çiziliyor).
+func _gz_ring_draw3(px, py, pz, r, col) {
+    int n = 24;
+    int i = 0;
+    while (i < n) {
+        float a0 = i * 360.0 / n * DEG2RAD3;
+        float a1 = (i + 1) * 360.0 / n * DEG2RAD3;
+        line3d(px + sin(a0) * r, py, pz + cos(a0) * r,
+               px + sin(a1) * r, py, pz + cos(a1) * r, col);
+        i = i + 1;
+    }
+}
+
 func _gz_draw3(s) {
+    // DÖNDÜRME kipinde tutamak halka. Ayrı dal, ayrı geometri.
+    if (_ed_mode3 == ED_ROTATE) {
+        Ent3 re = _e3[s];
+        float rr = _gz_ring_r3(re.x, re.y, re.z, re.sx, re.sz);
+        int rc = rgb(112, 214, 112);        // Y ekseninin rengi: dönüş Y'de
+        if (_gz_axis3 == _GZ_RING3) { rc = _G_ACC3(); }
+        _gz_ring_draw3(re.x, re.y, re.z, rr, rc);
+        // Cismin BAKTIĞI yön: halkada nerede olduğunu gösteren tek işaret.
+        // Onsuz halka simetrik bir daire ve kaç derece döndüğü görünmüyor.
+        float yr = re.yaw * DEG2RAD3;
+        line3d(re.x, re.y, re.z,
+               re.x + sin(yr) * rr, re.y, re.z + cos(yr) * rr, rc);
+        return;
+    }
     if (_ed_mode3 != ED_MOVE && _ed_mode3 != ED_SCALE) { return; }
     Ent3 e = _e3[s];
     float axlen = _gz_len3(e.x, e.y, e.z);

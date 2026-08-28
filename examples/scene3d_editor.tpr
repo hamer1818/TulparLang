@@ -22,7 +22,7 @@
 // Burada özet duruyor; ekrandaki liste tek kaynak, bu yorum onun kopyası
 // değil (durum çubuğu artık kısayol saymıyor, o satır kırpılıyordu).
 //   SAĞ TUŞ basılı + WASD/QE   serbest uçuş, fare ile bakış
-//   Q / W / E / R              seç / taşı / döndür / ölçekle
+//   Q / W / E / R              seç / taşı / döndür / ölçekle  (tutamakla)
 //   1 / 2 / 3 / 4              seç / taşı / ÖLÇEK / DÖNDÜR  (sıra farklı!)
 //   F / G / BOŞLUK             çerçevele / ızgara / zemine oturt
 //   DEL / CTRL+D               sil / çoğalt
@@ -35,6 +35,22 @@
 //   F11                        tam ekran aç/kapat
 //   ESC                        açık pencereyi kapat / oynarken: durdur
 // Harf tuşları yalnız SAĞ TUŞ BASILI DEĞİLKEN araç kısayolu; basılıyken uçuş.
+//
+// TUTAMAKLAR: TAŞI ve ÖLÇEK kiplerinde üç ok (X kırmızı, Y yeşil, Z mavi) —
+// bir oka tutununca hareket o eksende kalıyor. DÖNDÜR kipinde tutamak bir
+// HALKA: cismin çevresindeki çemberi tut ve çevir. Motorun tek dönme ekseni
+// Y olduğu için tek halka var; üç halka çizmek, ikisi hiçbir şey yapmayan
+// bir tutamak demek olurdu. Halkadaki çizgi cismin BAKTIĞI yönü gösteriyor —
+// onsuz simetrik bir daireden kaç derece döndüğü anlaşılmıyor.
+//
+// IZGARA AÇIKKEN dönüş de 15°'ye oturuyor (ok tuşlarının adımıyla aynı);
+// kapalıyken açı serbest. Izgara "hizala" demek ve konumu hizalayıp açıyı
+// serbest bırakmak, hizalanmış bir duvarı 3° eğik bırakırdı.
+//
+// ÇOKLU SEÇİMİ döndürmek grubu GRUP MERKEZİ etrafında çeviriyor: her cismin
+// hem yönü döner hem de yeri yörüngeye girer, yani dizilişin kendisi döner.
+// Yalnız yönleri döndürmek kutuları yerinde çevirir ve diziliş olduğu gibi
+// kalırdı — "grubu döndür" jestinin karşılığı bu değil.
 //
 // DOSYA: menüdeki "Aç" diskteki .json sahnelerini listeler — editör artık
 // açıldığı dosyaya bağlı değil. "F. Kaydet" sahneyi BAŞKA bir dosyaya yazar

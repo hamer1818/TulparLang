@@ -7917,6 +7917,248 @@ func t_dock_widget_ids_do_not_collide() {
 }
 
 // ===========================================================================
+// DÖNDÜRME HALKASI — dönüş artık fareyle
+// ===========================================================================
+// Taşıma ve ölçekleme fareyle yapılıyordu (eksen okları) ama DÖNDÜRME
+// klavyeye mahkûmdu: sol/sağ oklar, 15°'lik adımlar. Yani 37°'ye dönmenin
+// yolu YOKTU. Motorun tek dönme ekseni Y, yani tutamak da tek bir halka.
+
+func _t_yakinf3(a, b, tol): bool {
+    float d = a - b;
+    if (d < 0.0) { d = 0.0 - d; }
+    return d <= tol;
+}
+
+// YAW SÖZLEŞMESİ: beklenti BAĞIMSIZ kaynaktan — `move3d`'nin ürettiği
+// yaw'dan. Bu depoda nişan yönü hatası tam bu yüzden testten kaçmıştı:
+// test beklediği açıyı sınadığı formülün KENDİSİNDEN türetiyordu ve
+// 180°'lik hatayı onaylıyordu. Halka gövde sözleşmesini (sin, cos)
+// kullanmalı; kamera sözleşmesi (sin, −cos) dönüşü ayna yapardı.
+func t_gizmo_ring_uses_the_body_yaw_convention() {
+    scene3d_reset();
+    no_ground3d();
+    // BAGIMSIZ kaynak: `patrol3d` hedefe donerken yaw'i KENDI hesabiyla
+    // yaziyor (`atan2(dx, dz)`). Halkanin acisi onunla ayni cikmali.
+    int e = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    patrol3d(e, 0.0, 0.0, 5.0, 0.0, 1.0);          // hedef +X
+    float bek = get3yaw(e);
+    float halka = _gz_ring_ang3(5.0, 10.0, 0.0, 0.0, 0.0 - 1.0, 0.0,
+                                0.0, 0.0, 0.0);     // +X yonunde kesisim
+    assert(_t_yakinf3(halka, bek, 0.5),
+           "halka acisi gövde sozlesmesini izlemeli: " + toString(halka) +
+           " != " + toString(bek));
+    // +Z yonu: iki hesap da 0 vermeli. Kamera sozlesmesi (sin, -cos)
+    // kullanilsaydi burasi 180 cikardi.
+    scene3d_reset();
+    no_ground3d();
+    int e2 = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    patrol3d(e2, 0.0, 0.0, 0.0, 5.0, 1.0);         // hedef +Z
+    float bek2 = get3yaw(e2);
+    float halka2 = _gz_ring_ang3(0.0, 10.0, 5.0, 0.0, 0.0 - 1.0, 0.0,
+                                 0.0, 0.0, 0.0);
+    assert(_t_yakinf3(halka2, bek2, 0.5),
+           "+Z yonu tutmuyor: " + toString(halka2) + " != " + toString(bek2));
+}
+
+// Işın düzleme DEĞMİYORSA açı GEÇERSİZ dönmeli. 0 döndürmek dönüşü bir
+// karede sıfıra sıçratırdı — kamera yatayken (ışın düzleme paralel) tam
+// olarak bu olurdu.
+func t_gizmo_ring_angle_rejects_a_missing_hit() {
+    // YUKARI bakan isin: y=0 duzlemine hic varmiyor.
+    assert(_gz_ang_ok3(_gz_ring_ang3(0.0, 10.0, 0.0, 0.0, 1.0, 0.0,
+                                     0.0, 0.0, 0.0)) == false,
+           "arkadaki duzlem gecersiz olmali");
+    // Duzleme PARALEL isin.
+    assert(_gz_ang_ok3(_gz_ring_ang3(0.0, 10.0, 0.0, 1.0, 0.0, 0.0,
+                                     0.0, 0.0, 0.0)) == false,
+           "paralel isin gecersiz olmali");
+    // Asagi bakan isin GECERLI.
+    assert(_gz_ang_ok3(_gz_ring_ang3(0.0, 10.0, 0.0, 0.0, 0.0 - 1.0, 0.0,
+                                     0.0, 0.0, 0.0)), "asagi isin gecerli");
+}
+
+// Halkaya TUTUNMA yalnız çemberin ÜSTÜNDE olmalı: içine ya da dışına
+// tıklamak dönüşü başlatmamalı, yoksa cismi seçmek için yapılan her tıklama
+// onu döndürmeye başlardı.
+func t_gizmo_ring_grabs_only_on_the_circle() {
+    float r = 5.0;
+    // Tam cember uzerinde.
+    assert(_gz_ring_pick3(5.0, 10.0, 0.0, 0.0, 0.0 - 1.0, 0.0,
+                          0.0, 0.0, 0.0, r), "cember uzerinde tutunmali");
+    // ICINDE (merkeze yakin) — tutunmamali.
+    assert(_gz_ring_pick3(1.0, 10.0, 0.0, 0.0, 0.0 - 1.0, 0.0,
+                          0.0, 0.0, 0.0, r) == false, "icinde tutunmamali");
+    // DISINDA, uzakta — tutunmamali.
+    assert(_gz_ring_pick3(9.0, 10.0, 0.0, 0.0, 0.0 - 1.0, 0.0,
+                          0.0, 0.0, 0.0, r) == false, "disinda tutunmamali");
+    // Cemberin bir tutam disi HALA tutunmali: piksel hassasiyeti istemek
+    // tutamagi kullanilamaz yapardi.
+    assert(_gz_ring_pick3(6.0, 10.0, 0.0, 0.0, 0.0 - 1.0, 0.0,
+                          0.0, 0.0, 0.0, r), "cemberin yaninda tutunmali");
+}
+
+// Açı farkı ±180 DİKİŞİNDEN geçebilmeli. Ham çıkarma orada 359°'lik bir
+// sıçrama üretir ve cisim bir karede tam tur atardı.
+func t_gizmo_angle_difference_wraps() {
+    assert(_t_yakinf3(_gz_angdiff3(10.0, 350.0), 20.0, 0.001),
+           "dikisin ustunden gecmeli");
+    assert(_t_yakinf3(_gz_angdiff3(350.0, 10.0), 0.0 - 20.0, 0.001),
+           "ters yonde de");
+    assert(_t_yakinf3(_gz_angdiff3(90.0, 30.0), 60.0, 0.001), "duz fark");
+    assert(_t_yakinf3(_gz_angdiff3(0.0 - 170.0, 170.0), 20.0, 0.001),
+           "negatif dikis");
+}
+
+// IZGARA açıkken dönüş de 15°'ye oturmalı: konumu hizalayıp açıyı serbest
+// bırakmak, hizalanmış bir duvarı 3° eğik bırakırdı. 15° klavyedeki ok
+// adımıyla AYNI — iki yol aynı açı kümesini üretmeli.
+func t_gizmo_rotation_snaps_with_the_grid() {
+    assert(_t_yakinf3(_gz_snap_deg3(37.0, 0.5), 30.0, 0.001), "37 -> 30");
+    assert(_t_yakinf3(_gz_snap_deg3(38.0, 0.5), 45.0, 0.001), "38 -> 45");
+    // NEGATIF de sifirdan uzaga yuvarlanmali: `toInt` sifira dogru kirpiyor
+    // ve tek basina -7.5'i 0'a dusururdu.
+    assert(_t_yakinf3(_gz_snap_deg3(0.0 - 38.0, 0.5), 0.0 - 45.0, 0.001),
+           "-38 -> -45");
+    assert(_t_yakinf3(_gz_snap_deg3(0.0 - 7.6, 0.5), 0.0 - 15.0, 0.001),
+           "-7.6 -> -15");
+    // IZGARA KAPALIYKEN aci SERBEST: 37 derece tam olarak 37 kalmali.
+    assert(_t_yakinf3(_gz_snap_deg3(37.0, 0.0), 37.0, 0.001),
+           "izgara kapaliyken aci serbest");
+}
+
+// Halka cismin İÇİNDE kalmamalı: kocaman bir duvarın içindeki halkaya
+// tıklamak duvarı seçer, halkayı değil.
+func t_gizmo_ring_clears_the_body() {
+    _ed_cx3 = 0.0; _ed_cy3 = 0.0; _ed_cz3 = 0.0;
+    // Kameraya YAKIN ve GENIS bir cisim: ekran-sabit yaricap kucuk kalir.
+    float r = _gz_ring_r3(0.0, 0.0, 4.0, 24.0, 2.0);
+    assert(r > 12.0, "halka cismin yarisini asmali: " + toString(r));
+    // Ince bir cisimde yaricap kameradan turemeli (ekranda sabit boy).
+    float yakin = _gz_ring_r3(0.0, 0.0, 10.0, 1.0, 1.0);
+    float uzak  = _gz_ring_r3(0.0, 0.0, 60.0, 1.0, 1.0);
+    assert(uzak > yakin, "uzaktaki halka dunya biriminde buyumeli");
+}
+
+// Tek varlık: dönüş YERİNDE olmalı, konum kıpırdamamalı.
+func t_gizmo_rotate_single_turns_in_place() {
+    scene3d_reset();
+    no_ground3d();
+    int e = spawn3(4.0, 1.0, 7.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    ed_rotate3d(e, 20.0);
+    ed_select3d(e);
+    _gz_grab_group3();
+    _ed_rotate_group3(35.0);
+    assert(_t_yakinf3(get3yaw(e), 55.0, 0.01), "yaw donmeli");
+    assert(_t_yakinf3(get3x(e), 4.0, 0.001), "konum kipirdamamali (x)");
+    assert(_t_yakinf3(get3z(e), 7.0, 0.001), "konum kipirdamamali (z)");
+}
+
+// Çoklu seçim: her varlığın YAW'ı dönmeli VE konumu grup merkezi etrafında
+// yörüngeye girmeli. Yalnız yaw'ı döndürmek, seçili kutuları yerinde çevirir
+// ama dizilişlerini olduğu gibi bırakırdı — "grubu döndür" bu değil.
+func t_gizmo_rotate_group_orbits_around_the_centre() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0 - 3.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    int b = spawn3(3.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    ed_select3d(a);
+    ed_select_toggle3d(b);
+    assert_eq_int(ed_select_count3d(), 2);
+    _gz_grab_group3();
+    // Merkez ORTALAMA olmali, birincisi degil.
+    assert(_t_yakinf3(_gz_gcx3, 0.0, 0.001), "merkez ortalama olmali");
+    _ed_rotate_group3(90.0);
+    // +90: (sin, cos) sozlesmesinde +X'teki nokta -Z'ye gider.
+    assert(_t_yakinf3(get3x(b), 0.0, 0.001), "b x -> 0: " + toString(get3x(b)));
+    assert(_t_yakinf3(get3z(b), 0.0 - 3.0, 0.001), "b z -> -3");
+    assert(_t_yakinf3(get3x(a), 0.0, 0.001), "a x -> 0");
+    assert(_t_yakinf3(get3z(a), 3.0, 0.001), "a z -> 3");
+    // Ikisinin YAW'i da donmus olmali.
+    assert(_t_yakinf3(get3yaw(a), 90.0, 0.01), "a yaw donmeli");
+    assert(_t_yakinf3(get3yaw(b), 90.0, 0.01), "b yaw donmeli");
+    // Ve grubun BICIMI korunmali: aradaki uzaklik degismemeli.
+    float dx = get3x(a) - get3x(b);
+    float dz = get3z(a) - get3z(b);
+    assert(_t_yakinf3(sqrt(dx * dx + dz * dz), 6.0, 0.001),
+           "grubun bicimi bozulmamali");
+}
+
+// Dönüş YAKALANAN hâlden hesaplanmalı, bir öncekinden değil. Üstüne
+// eklenseydi aynı fare açısı için sonuç kare sayısına bağlı olurdu ve
+// sürükleme uzadıkça cisim kaçardı.
+func t_gizmo_rotation_is_absolute_not_cumulative() {
+    scene3d_reset();
+    no_ground3d();
+    // IKI varlik gerekiyor: tek varlikta grup merkezi varligin KENDISI, yani
+    // yaricap sifir ve konum zaten hic kipirdamiyor — birikme oradan
+    // GORULEMIYOR (bozma denendi, kacti).
+    int a = spawn3(2.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    int b = spawn3(0.0 - 2.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    ed_select3d(a);
+    ed_select_toggle3d(b);
+    _gz_grab_group3();
+    _ed_rotate_group3(30.0);
+    float x1 = get3x(a);
+    float z1 = get3z(a);
+    float yaw1 = get3yaw(a);
+    // AYNI delta ikinci kez: sonuc DEGISMEMELI.
+    _ed_rotate_group3(30.0);
+    assert(_t_yakinf3(get3x(a), x1, 0.001),
+           "ayni delta ayni sonucu vermeli: " + toString(get3x(a)) +
+           " != " + toString(x1));
+    assert(_t_yakinf3(get3z(a), z1, 0.001), "z de birikmemeli");
+    assert(_t_yakinf3(get3yaw(a), yaw1, 0.01), "yaw birikmemeli");
+    // Kucuk bir delta, buyugun uzerine binmemeli: 10 derece YAKALANAN
+    // haldeki 0'in uzerine.
+    _ed_rotate_group3(10.0);
+    assert(_t_yakinf3(get3yaw(a), 10.0, 0.01),
+           "yaw yakalanan hale gore olmali: " + toString(get3yaw(a)));
+    assert(_t_yakinf3(get3x(a), 2.0 * cos(10.0 * DEG2RAD3), 0.01),
+           "konum da yakalanan hale gore olmali: " + toString(get3x(a)));
+}
+
+// Silinen varlık dönüşü ÇÖKERTMEMELİ: sürükleme sırasında (DEL ile ya da
+// bir kural yüzünden) bir varlık ölebilir ve yakalanan liste bayat kalır.
+func t_gizmo_rotate_survives_a_dead_handle() {
+    scene3d_reset();
+    no_ground3d();
+    int a = spawn3(0.0 - 3.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    int b = spawn3(3.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    ed_select3d(a);
+    ed_select_toggle3d(b);
+    _gz_grab_group3();
+    ed_delete3d(b);
+    _ed_rotate_group3(90.0);       // cokmemeli
+    assert(_t_yakinf3(get3x(a), 0.0, 0.001), "yasayan varlik yine donmeli");
+}
+
+// Halka ÇAĞRI YERİNE bağlı olmalı: tutunma girdide, açı sürüklemede,
+// çizim de döndürme kipinde. Üçü de fare/pencere istiyor, yani kaynağı
+// okuyarak sınanıyor (Tuzaklar 1a).
+func t_gizmo_ring_is_wired_into_the_editor() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(src) > 100000, "kaynak okunamadi — depo kokunden calistir");
+    assert(length(split(src, "_gz_ring_pick3(_ed_cx3")) > 1,
+           "halkaya tutunma girdiye bagli degil");
+    assert(length(split(src, "_gz_axis3 == _GZ_RING3 && s >= 0")) > 1,
+           "halka surukleme dali yok");
+    assert(length(split(src, "_ed_rotate_group3(_gz_snap_deg3(")) > 1,
+           "surukleme donusu izgaraya oturtmuyor");
+    // ÇAĞRI yeri aranıyor, tanım değil: `_gz_ring_draw3(` deseni
+    // fonksiyonun KENDİ tanımıyla da eşleşiyordu ve çizimi silen bozma
+    // bu yüzden kaçmıştı.
+    assert(length(split(src, "_gz_ring_draw3(re.x")) > 1, "halka cizilmiyor");
+    // YÖN ÇİZGİSİ olmadan halka simetrik bir daire ve kaç derece döndüğü
+    // görünmüyor — dönüşü GÖRÜLEBİLİR yapan tek işaret o.
+    assert(length(split(src, "re.x + sin(yr) * rr")) > 1,
+           "halkada yon cizgisi yok");
+    // Tutunma DONDURME kipinde sinanmali; tasima/olcek kipinde ok var.
+    array g = split(src, "_gz_ring_pick3(_ed_cx3");
+    assert(length(split(g[0], "_ed_mode3 == ED_ROTATE")) > 1,
+           "halka yalniz dondurme kipinde yakalanmali");
+}
+
+// ===========================================================================
 // MENÜ ŞERİDİ — açılır menüler
 // ===========================================================================
 // Şerit düz bir düğme sırasıydı; her yeni komut şeridi dolduruyordu ve
@@ -10339,6 +10581,17 @@ test("eski yerlesim kaydi hala okunuyor", "t_dock_old_record_still_loads");
 test("varsayilana donus yuvalari toparliyor", "t_dock_reset_restores_slots");
 test("dock widget kimlikleri cakismiyor", "t_dock_widget_ids_do_not_collide");
 test("paneller yuvayi tam kapliyor", "t_div_panels_tile_the_slot");
+test("halka govde yaw sozlesmesini izliyor", "t_gizmo_ring_uses_the_body_yaw_convention");
+test("degmeyen isin gecersiz aci veriyor", "t_gizmo_ring_angle_rejects_a_missing_hit");
+test("halka yalniz cemberde tutunuyor", "t_gizmo_ring_grabs_only_on_the_circle");
+test("aci farki dikisten geciyor", "t_gizmo_angle_difference_wraps");
+test("izgara donusu de oturtuyor", "t_gizmo_rotation_snaps_with_the_grid");
+test("halka cismin disinda kaliyor", "t_gizmo_ring_clears_the_body");
+test("tek varlik yerinde donuyor", "t_gizmo_rotate_single_turns_in_place");
+test("grup merkez etrafinda donuyor", "t_gizmo_rotate_group_orbits_around_the_centre");
+test("donus birikmiyor", "t_gizmo_rotation_is_absolute_not_cumulative");
+test("olu handle donusu cokertmiyor", "t_gizmo_rotate_survives_a_dead_handle");
+test("halka editore bagli", "t_gizmo_ring_is_wired_into_the_editor");
 test("menu kodlari benzersiz ve etiketli", "t_menu_codes_are_unique_and_labelled");
 test("ayiricilar dogru yerde", "t_menu_separators_are_well_placed");
 test("menudeki kisayollar gercekten bagli", "t_menu_shortcuts_are_really_bound");
