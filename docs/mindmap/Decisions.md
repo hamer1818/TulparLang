@@ -33,6 +33,13 @@ bırakılıyor, yuvanın sınırı çekiliyor, kapatılıyor; yerleşim kalıcı
 **Yapılmadı ve bilerek:** yuva içinde sıralama, SEKME, YÜZEN pencere — üçü de
 ayrı bir pencere yöneticisi demek. → [[Editor]]
 
+## Konsol kaydırması DİPTEN sayılıyor (2026-08-28)
+`_ed_cons_scroll3` = dipten kaç satır yukarıda; 0 = takip. Tepeden saysaydık
+yeni satır geldikçe aynı sayı başka bir yeri gösterirdi ve takip eden konsol
+kendi kendine kayardı. Tek kural iki davranışı veriyor: dipteyken yeni satır
+görünür, yukarıdayken aynı satırda kalırsın. Sayaçlar süzgeçten bağımsız
+(gizlenen hata da görünür), İZ ile BİLGİ tek süzgeçte. → [[Editor]]
+
 ## Döndürme tutamağı TEK HALKA (2026-08-28)
 Motorun tek dönme ekseni Y olduğu için tutamak da tek halka; üç halka çizmek
 ikisi hiçbir şey yapmayan tutamak demekti. Izgara açıkken 15°'ye oturuyor (ok

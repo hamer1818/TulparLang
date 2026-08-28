@@ -43,6 +43,10 @@ yani 37°'ye dönmenin yolu yoktu. Artık **halka**:
   açı kümesini üretmeli.
 - **Çoklu seçim grup merkezi etrafında** dönüyor (yaw + yörünge). Yalnız
   yaw'ı döndürmek kutuları yerinde çevirir, dizilişi bırakırdı.
+- **Ölçek de seçimin tamamına** gidiyor ve uygulanan şey MUTLAK uzunluk
+  (tutamak dünya birimi veriyor), oran değil. Konumlar kıpırdamıyor:
+  "şu beşini genişlet" ≠ "beşini birbirinden ayır". Döndürmede yörünge
+  var, çünkü orada dizilişin dönmesi jestin kendisi.
 - Dönüş **yakalanan hâlden** hesaplanıyor, bir öncekinden değil: üstüne
   eklemek yuvarlamayı biriktirir ve sürükleme uzadıkça cisim kaçardı.
 
@@ -182,7 +186,32 @@ kurtarılan iş **hâlâ kaydedilmemiş** sayılıyor (yıldız yanmaya devam ed
 - **OZELLIKLER** — seçime göre: varlık (dönüşüm/görünüm/fizik/davranışlar),
   DUNYA (denetim, gökyüzü, dünya, **kamera**, ışıklar, su, arazi, gündüz-gece,
   eğim, kurallar) ya da bölge.
-- **KONSOL** — motorun tanılama kaydı.
+- **KONSOL** — motorun tanılama kaydı; **kaydırılıyor, süzülüyor,
+  temizleniyor** (aşağıda).
+
+## Konsol
+Panel uzun süre "son N satır" demekten ibaretti ve bir konsolun yapması
+gereken üç şeyi yapmıyordu: geriye bakmak, süzmek, temizlemek.
+
+- **Kaydırma DİPTEN sayılıyor** (`_ed_cons_scroll3`, 0 = takip). Tepeden
+  saysaydık yeni satır geldikçe aynı sayı başka bir yeri gösterirdi ve takip
+  eden konsol kendi kendine kayardı. Dipteyken yeni satır görünür, yukarıda
+  kaldıysan aynı satırda kalırsın — **tek kural, iki davranış**.
+- **Yukarıdayken bunu SÖYLÜYOR** ("12 satir asagida"): kaydırılmış bir konsol
+  yeni satırları göstermiyor ve bunu bilmeyen "kayıt durdu" sanıyor.
+- **Sayaçlar süzgeçten BAĞIMSIZ**: "üç hata var ama süzgeci kapatmışsın"
+  görünür olmalı, yoksa kullanıcı gizlediği şeyi aramaya devam eder.
+- **İZ ile BİLGİ tek süzgeçte** — ikisi de gürültü kefesinde; ayrı bir düğme
+  kimsenin istemediği bir ayrım için yer harcardı.
+- **TEMIZLE sahneye dokunmuyor.** Tampon sahnenin değil OTURUMUN durumu.
+- Etiketler kısa (`x 3` / `! 12` / `i 40`) çünkü konsol yan yuvaya
+  taşınabiliyor; TEMIZLE'nin genişliği metninden türüyor (`_g_wmax3`), sabit
+  bir yüzde üç haneli sayaçta taşıyordu.
+
+> ⚠️ **Halka tamponda dizi sırası kronolojik sıra DEĞİL.** `_lg_push`
+> dolduktan sonra en eskinin üstüne yazıyor. Panel diziyi ham sırayla
+> okuyordu: 240. satırdan sonra kayıt karışık görünüyordu, hiçbir hata
+> vermeden. Sıra artık tek yerde: `_lg_idx3` (`log_dump3d` de onu kullanıyor).
 
 ## Kamera paneli
 Mod (takip / yörünge / 1. şahıs), **hedef** (sırayla gezen düğme; "hedefsiz"
@@ -247,6 +276,7 @@ gizlemişti).
 | Kısayol örtüsü | 71000+ | `_ed_help_idbase3` |
 | PANELLER örtüsü | 72000+ | `_ed_dock_idbase3` |
 | Menü öğeleri | 73000+ | `_ed_mn_idbase3`, satır başına 1 |
+| Konsol çubuğu | 74000–74003 | `_ed_cons_idbase3` |
 
 Ses tarayıcısının paylaşımı güvenli çünkü kural paneli DUNYA sekmesinde,
 bölge paneli BÖLGE sekmesinde çiziliyor — ikisi aynı karede asla çizilmiyor.

@@ -56,6 +56,20 @@
 // facings would spin the boxes in place and leave the arrangement untouched —
 // that is not what "rotate the group" means.
 //
+// SCALING also applies to the WHOLE selection: pick five crates, drag an
+// axis arrow, and all five widen. What is applied is an ABSOLUTE length
+// ("two units wider"), not a ratio — the handle gives you world units.
+// Positions do not move: "widen these five" is not "spread these five
+// apart". (Rotation does orbit, because there the arrangement turning IS
+// the gesture.)
+//
+// THE CONSOLE is a real console: scroll BACK with the wheel, FILTER by
+// level from the bar above it (x errors / ! warnings / i info — the counts
+// stay visible while a filter is off, otherwise you keep hunting for what
+// you hid), and empty it with TEMIZLE (which does not touch the scene).
+// At the bottom it follows new lines; once you scroll up it stays put and
+// the bar tells you how many lines below you are.
+//
 // FILES: "Open" in the menu lists the .json scenes on disk — the editor is no
 // longer tied to the file it was launched with. "F. Kaydet" (save as) writes
 // the scene to ANOTHER file and CTRL+S targets that file from then on; this
@@ -151,7 +165,7 @@
 //   menu bar          Dosya / Duzen / Gorunum / Yardim  —  file name on the right
 //   toolbar           tools on the left, PLAY-STOP CENTRED, grid
 //   hierarchy | SCENE VIEW | inspector
-//   console           the engine's diagnostic log
+//   console           the engine's diagnostic log (scrollable, filterable)
 //   status bar
 //
 // The scene path is resolved against the WORKING DIRECTORY; run from the

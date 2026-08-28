@@ -52,6 +52,20 @@
 // Yalnız yönleri döndürmek kutuları yerinde çevirir ve diziliş olduğu gibi
 // kalırdı — "grubu döndür" jestinin karşılığı bu değil.
 //
+// ÖLÇEK de seçimin TAMAMINA gidiyor: beş kasayı seçip eksen okunu çekmek
+// beşini birden genişletir. Uygulanan şey MUTLAK bir uzunluk ("2 birim
+// genişlet"), oran değil — tutamağın verdiği şey dünya birimi. Konumlar
+// kıpırdamaz: "şu beşini genişlet" demek "beşini birbirinden ayır" demek
+// değil (döndürmede yörünge VAR, çünkü orada dizilişin dönmesi jestin
+// kendisi).
+//
+// KONSOL gerçek bir konsol: tekerlekle GERİYE kaydırılıyor, üstündeki
+// çubuktan seviyeye göre SÜZÜLÜYOR (x hata / ! uyarı / i bilgi — sayılar
+// süzgeç kapalıyken de görünür, yoksa gizlediğin şeyi aramaya devam
+// edersin) ve TEMIZLE ile boşaltılıyor (sahneye dokunmaz). Dipteyken yeni
+// satırları takip eder; yukarı kaydırdıysan aynı satırda kalır ve çubukta
+// kaç satır aşağıda olduğun yazar.
+//
 // DOSYA: menüdeki "Aç" diskteki .json sahnelerini listeler — editör artık
 // açıldığı dosyaya bağlı değil. "F. Kaydet" sahneyi BAŞKA bir dosyaya yazar
 // ve bundan sonra CTRL+S oraya kaydeder; bir şablonu alıp kendi oyununa
@@ -143,7 +157,7 @@
 //   menü şeridi            Dosya / Duzen / Gorunum / Yardim  —  sağda dosya adı
 //   araç çubuğu            araçlar solda, OYNAT-DUR ORTADA, ızgara
 //   hiyerarşi | SAHNE GÖRÜNÜMÜ | özellikler
-//   konsol                 motorun tanılama kaydı
+//   konsol                 motorun tanılama kaydı (kaydırılır, süzülür)
 //   durum çubuğu
 //
 // Sahne dosyası ÇALIŞMA DİZİNİNE göre çözülüyor; depo kökünden çalıştır.

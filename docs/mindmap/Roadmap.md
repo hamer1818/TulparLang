@@ -17,6 +17,8 @@ Ayrıntı: [[Editor]]. Kısa hâli — editör artık kendi başına kullanılab
 araç:
 - **Tutamaklar**: taşı/ölçek eksen okları + **döndürme halkası** (dönüş artık
   fareyle, ızgara açıkken 15°'ye oturuyor, çoklu seçim grup merkezi etrafında).
+  Üç dönüşümün üçü de **seçimin tamamını** işliyor.
+- **Konsol**: kaydırılıyor, seviyeye göre süzülüyor, temizleniyor.
 - **Menü**: şerit açılır menülere döndü (Dosya / Duzen / Gorunum / Yardim);
   her komutun kısayolu kendi satırında, iş görmeyen komut soluk.
 - **Dosya**: aç / farklı kaydet / geri yükle + **kurtarma dosyası** (kapatırken

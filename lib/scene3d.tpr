@@ -571,6 +571,12 @@ func alive3(id): bool {
 func get3x(id): float { int s = _slot_of3(id); if (s < 0) { return 0.0; } Ent3 e = _e3[s]; return e.x; }
 func get3y(id): float { int s = _slot_of3(id); if (s < 0) { return 0.0; } Ent3 e = _e3[s]; return e.y; }
 func get3z(id): float { int s = _slot_of3(id); if (s < 0) { return 0.0; } Ent3 e = _e3[s]; return e.z; }
+// BOYUT okuyucuları. `get3x/y/z`'nin kardeşi; ölçek tutamağı seçimin
+// tamamını yakalarken gerekti ve bayat handle'da 0 dönüyorlar (öteki
+// okuyucularla aynı sözleşme).
+func get3sx(id): float { int s = _slot_of3(id); if (s < 0) { return 0.0; } Ent3 e = _e3[s]; return e.sx; }
+func get3sy(id): float { int s = _slot_of3(id); if (s < 0) { return 0.0; } Ent3 e = _e3[s]; return e.sy; }
+func get3sz(id): float { int s = _slot_of3(id); if (s < 0) { return 0.0; } Ent3 e = _e3[s]; return e.sz; }
 
 func set3pos(id, x, y, z) {
     int s = _slot_of3(id);
@@ -707,6 +713,9 @@ func scene3d_reset() {
     // Tanılama AYARLARI kullanıcı tercihi, kalır; TAMPON sahneyle gider.
     _lg_txt = []; _lg_sev = []; _lg_n = 0;
     _lg_key = []; _lg_t = []; _lg_cnt = [];
+    // Konsolun GÖRÜNÜMÜ de tamponla gidiyor: kayıt silinince "37 satır
+    // aşağıda" demek yalan olurdu. Süzgeçler kullanıcı tercihi, kalıyor.
+    _ed_cons_scroll3 = 0;
     _w_pen = 0; _w_pen_max = 0.0; _w_cam_in = 0;
     _hit_me = 0 - 1; _hit_other = 0 - 1;
 }
@@ -5552,6 +5561,19 @@ func watch3d(on) { if (on) { _lg_watch = 1; } else { _lg_watch = 0; } }
 func gozcu3d(ac) { watch3d(ac); }
 func debug_on3d(): bool { return _lg_on == 1; }
 
+// HALKA TAMPONDA SIRA. Tampon dolduktan sonra dizi sırası KRONOLOJİK sıra
+// DEĞİL: `_lg_push` en eskinin üstüne yazıyor, yani en eski kayıt bir
+// sonraki yazma yuvasında duruyor. Konsol paneli diziyi ham sırayla
+// okuyordu ve 240. satırdan sonra kayıt karışık görünüyordu — hiçbir hata
+// mesajı vermeden, yalnız "sıra tuhaf" diye.
+func _lg_count3(): int { return length(_lg_txt); }
+func _lg_idx3(i): int {
+    int dolu = length(_lg_txt);
+    if (i < 0 || i >= dolu) { return 0 - 1; }
+    if (dolu < _LG_CAP) { return i; }
+    return mod(_lg_n + i, _LG_CAP);
+}
+
 func _lg_sev_ad(sev): str {
     if (sev == LOG_ERR)  { return "[HATA] "; }
     if (sev == LOG_WARN) { return "[UYARI] "; }
@@ -5602,19 +5624,22 @@ func _lg_once(sev, key, msg, sec) {
 func log3d(msg) { _lg_push(LOG_INFO, msg); }
 func log_warn3d(msg) { _lg_push(LOG_WARN, msg); }
 func log_err3d(msg) { _lg_push(LOG_ERR, msg); }
+// İZ seviyesi vardı ama yazacak bir fonksiyon YOKTU: `log_level3d(3)`
+// açılabiliyor, o seviyeye kayıt düşülemiyordu.
+func log_trace3d(msg) { _lg_push(LOG_TRACE, msg); }
 func kayit3d(msg) { log3d(msg); }
+func iz3d(msg) { log_trace3d(msg); }
 func uyari3d(msg) { log_warn3d(msg); }
 func hata3d(msg) { log_err3d(msg); }
 
 // Halka tamponu dosyaya yaz. Oyun kapanırken de otomatik çağrılabilir.
 func log_dump3d(path) {
     str all = "";
-    int n = length(_lg_txt);
-    int start = 0;
-    if (_lg_n > _LG_CAP) { start = mod(_lg_n, _LG_CAP); }
+    // Halka aritmetiği `_lg_idx3`'te, tek yerde: burada ikinci bir kopya
+    // vardı ve konsol paneli ÜÇÜNCÜ bir (yanlış) kopya yazmıştı.
     int i = 0;
-    while (i < n) {
-        all = all + _lg_txt[mod(start + i, n)] + "\n";
+    while (i < _lg_count3()) {
+        all = all + _lg_txt[_lg_idx3(i)] + "\n";
         i = i + 1;
     }
     save_data(path, all);
@@ -8742,6 +8767,9 @@ func _gz_grab_group3() {
     _gz_g0x3 = [];
     _gz_g0z3 = [];
     _gz_g0yaw3 = [];
+    _gz_g0sx3 = [];
+    _gz_g0sy3 = [];
+    _gz_g0sz3 = [];
     float sx = 0.0;
     float sz = 0.0;
     int n = 0;
@@ -8753,6 +8781,9 @@ func _gz_grab_group3() {
             push(_gz_g0x3, get3x(id));
             push(_gz_g0z3, get3z(id));
             push(_gz_g0yaw3, get3yaw(id));
+            push(_gz_g0sx3, get3sx(id));
+            push(_gz_g0sy3, get3sy(id));
+            push(_gz_g0sz3, get3sz(id));
             sx = sx + get3x(id);
             sz = sz + get3z(id);
             n = n + 1;
@@ -8762,6 +8793,25 @@ func _gz_grab_group3() {
     if (n == 0) { return; }
     _gz_gcx3 = sx / n;
     _gz_gcz3 = sz / n;
+}
+
+// Seçimi `d*` kadar BÜYÜT/KÜÇÜLT. Taşımanın kardeşi: orada da aynı MUTLAK
+// öteleme herkese uygulanıyor. Oran değil mutlak, çünkü tutamağın verdiği
+// şey dünya birimi cinsinden bir uzunluk ("2 birim genişlet"); oran
+// isteyen bir jest başka bir tutamak isterdi.
+//
+// Konumlar KIPIRDAMIYOR. Ölçeklerken cisimleri de merkezden uzaklaştırmak
+// (Unity'nin pivot ölçeklemesi) bir seviye editöründe istenmeyen şey:
+// kullanıcı "şu beş kasayı genişlet" diyor, "beşini birbirinden ayır"
+// demiyor. Döndürmede yörünge VAR çünkü orada dizilişin dönmesi jestin
+// kendisi; ölçekte öyle bir karşılık yok.
+func _ed_resize_group3(dx, dy, dz) {
+    int i = 0;
+    while (i < length(_gz_g0id3)) {
+        ed_resize3d(_gz_g0id3[i], _gz_g0sx3[i] + dx, _gz_g0sy3[i] + dy,
+                    _gz_g0sz3[i] + dz);
+        i = i + 1;
+    }
 }
 
 func _ed_move_group3(nx, ny, nz) {
@@ -9655,7 +9705,11 @@ func _s3_editor_mouse(dt) {
                 _gz_axis3 = ax;
                 _gz_t0_3 = _gz_t3;
                 _gz_px3 = ge.x; _gz_py3 = ge.y; _gz_pz3 = ge.z;
-                _gz_s0x3 = ge.sx; _gz_s0y3 = ge.sy; _gz_s0z3 = ge.sz;
+                // Seçimin TAMAMI yakalanıyor: ölçek tutamağı yalnız birincil
+                // varlığı büyütüyordu, oysa taşıma ve döndürme grubu işliyor.
+                // Beş kutuyu seçip ölçeklemek dördünü değiştirmiyordu ve
+                // hiçbir yerde bunu söyleyen bir şey yoktu.
+                _gz_grab_group3();
                 _ed_drag3 = 0;
                 return;
             }
@@ -9747,8 +9801,7 @@ func _s3_editor_mouse(dt) {
                 _ed_move_group3(_gz_px3 + ax * delta, _gz_py3 + ay * delta,
                                 _gz_pz3 + az * delta);
             } else {
-                ed_resize3d(_ed_sel3e, _gz_s0x3 + ax * delta,
-                            _gz_s0y3 + ay * delta, _gz_s0z3 + az * delta);
+                _ed_resize_group3(ax * delta, ay * delta, az * delta);
             }
         }
         return;
@@ -10726,7 +10779,7 @@ int _ED_MENU_H3 = 40;
 // özelleştirmesini ORANLAYARAK taşımaya başlayınca fark yük taşır oldu:
 // motor açılıştaki 96'yı "özelleştirilmiş" sanıp her ölçekte küçültüyordu
 // (1x'te konsol üç satır yerine iki satır gösteriyordu — test yakaladı).
-int _ED_B_H3 = 132;
+int _ED_B_H3 = 148;
 int _ED_STAT_H3 = 36;
 
 // İmleç kilidi kararı TEK yerde ve saf: döngünün içine gömülü olduğu sürece
@@ -11172,7 +11225,10 @@ func _ed_lay_grip3(): int { return _us3(4); }      // yakalama yarıçapı
 func _ed_lay_min_lw3(): int { return _us3(70); }
 func _ed_lay_min_rw3(): int { return _us3(90); }
 func _ed_lay_min_view3(): int { return _us3(120); }
-func _ed_lay_min_bh3(): int { return _g_lh3() + _us3(18); }   // bir satır
+// En küçük konsol: SÜZGEÇ ÇUBUĞU + bir kayıt satırı. Çubuğu hesaba
+// katmayan eski ölçü (tek satır) süzgeci çizecek yeri bırakıyor, kayda
+// hiç yer bırakmıyordu.
+func _ed_lay_min_bh3(): int { return _g_lh3() * 2 + _us3(18); }
 
 // Konsol pencerenin YARISINDAN fazlasını yiyemez: konsol bir tanılama
 // paneli, sahne görünümü ise asıl iş — oranı tersine çevirmek editörü
@@ -11252,7 +11308,11 @@ func _ed_lay_rescale3(cur, eski_var, yeni_var): int {
 // ölçekleme buradan okuyor, iki yerde tutmak ikisini ayırırdı.
 func _ed_lay_def_lw3(n): int { return 84 + 72 * n; }
 func _ed_lay_def_rw3(n): int { return 96 + 104 * n; }
-func _ed_lay_def_bh3(n): int { return 14 * n * 3 + 24 * n; }
+// Konsolun varsayılan yüksekliği ÜÇ KAYIT SATIRI + süzgeç çubuğu + başlık.
+// Satır yüksekliği 14n; çubuk da bir satır, yani dört satırlık gövde + pay.
+// (Süzgeç çubuğu eklenince üç satır ikiye düşmüştü — ölçü satır sayısından
+// türediği için düzeltmesi tek sayı.)
+func _ed_lay_def_bh3(n): int { return 14 * n * 4 + 18 * n; }
 
 // Hangi ayracın üstündeyiz: 0 yok, 1 sol (hiyerarşi), 2 sağ (inceleyici),
 // 3 konsolun üstü. SAF — fare konumu parametre, pencere gerekmiyor.
@@ -12060,23 +12120,208 @@ func dur3d() { ed_stop3d(); }
 // ---- Konsol ----------------------------------------------------------------
 // Motorun tanılama halka tamponunu gösteriyor. Ayrı bir kayıt sistemi
 // yazılmadı — `log3d`/`uyari3d`/`hata3d` zaten oraya yazıyor.
+//
+// Panel uzun süre "son N satır" demekten ibaretti ve bir konsolun yapması
+// gereken üç şeyi yapmıyordu:
+//   • GERİYE BAKMAK. Bir şeyin neden bozulduğunu konsolda ararsın; kaydırma
+//     olmayınca hata ekrandan akıp gidiyordu ve geri getirmenin yolu yoktu.
+//   • SÜZMEK. Kırk bilgi satırının arasındaki tek hatayı gözle aramak,
+//     konsolu olmamasıyla neredeyse aynı şey.
+//   • TEMİZLEMEK. "Şimdi ne olacağını görmek istiyorum" demenin yolu.
+int _ed_cons_f_err3 = 1;      // HATA satırları görünsün mü
+int _ed_cons_f_wrn3 = 1;      // UYARI
+int _ed_cons_f_inf3 = 1;      // BİLGİ + İZ (ikisi tek süzgeç: "gürültü")
+int _ed_cons_scroll3 = 0;     // DİPTEN kaç satır yukarıdayız (0 = takip)
+
+func _ed_cons_idbase3(): int { return 74000; }
+
+// İZ, BİLGİ ile aynı süzgeçte: ikisi de "gürültü" kefesinde ve ayrı bir
+// düğme, hiç kimsenin ayrı ayrı istemediği bir ayrım için yer harcardı.
+func _ed_cons_pass3(sev): bool {
+    if (sev == LOG_ERR)  { return _ed_cons_f_err3 == 1; }
+    if (sev == LOG_WARN) { return _ed_cons_f_wrn3 == 1; }
+    return _ed_cons_f_inf3 == 1;
+}
+
+// Tampondaki o seviyeden kaç satır var. Süzgeç düğmesinin üstündeki sayı
+// bu — "üç hata var ama süzgeç kapalı" görünür olmalı, yoksa kullanıcı
+// gizlediği şeyi aramaya devam eder.
+func _ed_cons_count3(sev): int {
+    int n = 0;
+    int i = 0;
+    while (i < _lg_count3()) {
+        int idx = _lg_idx3(i);
+        if (idx >= 0) {
+            int sv = _lg_sev[idx];
+            if (sv == sev) { n = n + 1; }
+            // İZ, BİLGİ sayacına giriyor — süzgeçle aynı gruplama.
+            if (sev == LOG_INFO && sv == LOG_TRACE) { n = n + 1; }
+        }
+        i = i + 1;
+    }
+    return n;
+}
+
+// Süzgeçten GEÇEN satır sayısı.
+func _ed_cons_shown3(): int {
+    int n = 0;
+    int i = 0;
+    while (i < _lg_count3()) {
+        int idx = _lg_idx3(i);
+        if (idx >= 0) {
+            if (_ed_cons_pass3(_lg_sev[idx])) { n = n + 1; }
+        }
+        i = i + 1;
+    }
+    return n;
+}
+
+// Süzgeçten geçenlerin k'ıncısının DİZİ indeksi. -1 = yok.
+func _ed_cons_nth3(k): int {
+    if (k < 0) { return 0 - 1; }
+    int n = 0;
+    int i = 0;
+    while (i < _lg_count3()) {
+        int idx = _lg_idx3(i);
+        if (idx >= 0) {
+            if (_ed_cons_pass3(_lg_sev[idx])) {
+                if (n == k) { return idx; }
+                n = n + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Kaydırma kelepçesi. SAF: pencere gerekmiyor.
+// `scroll` DİPTEN yukarı sayılıyor, yani 0 her zaman "en yeni satır
+// görünür" demek. Tepeden saysaydık yeni satır geldikçe aynı sayı başka bir
+// yeri gösterirdi ve takip eden konsol kendi kendine kayardı.
+func _ed_cons_clamp3(scroll, toplam, satir): int {
+    int maxs = toplam - satir;
+    if (maxs < 0) { maxs = 0; }
+    int v = scroll;
+    if (v > maxs) { v = maxs; }
+    if (v < 0) { v = 0; }
+    return v;
+}
+
+// İlk görünen satırın süzülmüş listedeki sırası.
+func _ed_cons_first3(scroll, toplam, satir): int {
+    int f = toplam - satir - scroll;
+    if (f < 0) { f = 0; }
+    return f;
+}
+
+// Konsolun kaç SATIR gösterdiği. Başlık şeridi ve süzgeç çubuğu düşülüyor.
+func _ed_cons_rows3(ph): int {
+    int lav = ph - _us3(16) - _g_lh3() - _us3(2);
+    int r = toInt(lav / _g_lh3());
+    if (r < 1) { r = 1; }
+    return r;
+}
+
+// Kaydı temizle. Tampon SAHNENİN değil OTURUMUN durumu, bu yüzden ayrı bir
+// düğme: sahneyi sıfırlamadan kaydı sıfırlamak isteniyor ("şimdi ne
+// olacağını görmek istiyorum").
+func ed_console_clear3d() {
+    _lg_txt = [];
+    _lg_sev = [];
+    _lg_n = 0;
+    _ed_cons_scroll3 = 0;
+}
+func ed_konsol_temizle3d() { ed_console_clear3d(); }
+
+// Süzgeç çubuğu. Etiketler KISA ve işaretli ("x 3" / "! 12" / "i 40")
+// çünkü konsol yan yuvaya taşınabiliyor ve orada 300 piksel genişliğinde
+// oluyor: "UYARI 12" o genişlikte üç sütuna sığmıyor. İşaret + sayı hem
+// sığıyor hem renkle birlikte iki kanaldan anlatıyor.
+// Süzgeç çubuğunun SÜTUN ÖLÇÜLERİ. Ayrı ve saf, çünkü yerleşim kararı
+// çizimin içinde kalsaydı testin onu yeniden hesaplaması gerekirdi — ve
+// testin kopyaladığı formül, sınadığı formülün kendisi olurdu (bkz.
+// Tuzaklar 1b; bozma denendi ve tam bu yüzden kaçtı).
+//
+// TEMIZLE ölçüsünü METNİNDEN alıyor (`_g_wmax3`, yani penceresiz de doğru);
+// kalanı üç sayaç paylaşıyor. Sabit bir yüzde, üç haneli sayaçta ("! 240")
+// taşıyordu. Panelin yarısını da geçemiyor: konsol dar bir yan yuvaya
+// taşınabiliyor ve orada asıl iş sayaçlar.
+func _ed_cons_bar_tw3(w): int {
+    int ic = w - _ED_PAD3 * 2;
+    int tw = _g_wmax3("TEMIZLE") + _us3(10);
+    int yari = toInt(ic / 2);
+    if (tw > yari) { tw = yari; }
+    return tw;
+}
+func _ed_cons_bar_sw3(w): int {
+    int ic = w - _ED_PAD3 * 2;
+    return toInt((ic - _ed_cons_bar_tw3(w)) / 3);
+}
+
+func _ed_cons_bar3(x, y, w, h) {
+    int base = _ed_cons_idbase3();
+    int tw = _ed_cons_bar_tw3(w);
+    int sw = _ed_cons_bar_sw3(w);
+    int bx = x + _ED_PAD3;
+    if (_g_button(base, bx, y, tw, h, "TEMIZLE")) { ed_console_clear3d(); }
+    _g_tip_for3(base, "Kaydi temizle  —  sahneye dokunmaz");
+    bx = bx + tw;
+    if (_g_tog(base + 1, bx, y, sw, h,
+               "x " + toString(_ed_cons_count3(LOG_ERR)), _ed_cons_f_err3 == 1)) {
+        if (_ed_cons_f_err3 == 1) { _ed_cons_f_err3 = 0; } else { _ed_cons_f_err3 = 1; }
+    }
+    _g_tip_for3(base + 1, "HATA satirlarini goster / gizle");
+    bx = bx + sw;
+    if (_g_tog(base + 2, bx, y, sw, h,
+               "! " + toString(_ed_cons_count3(LOG_WARN)), _ed_cons_f_wrn3 == 1)) {
+        if (_ed_cons_f_wrn3 == 1) { _ed_cons_f_wrn3 = 0; } else { _ed_cons_f_wrn3 = 1; }
+    }
+    _g_tip_for3(base + 2, "UYARI satirlarini goster / gizle");
+    bx = bx + sw;
+    if (_g_tog(base + 3, bx, y, sw, h,
+               "i " + toString(_ed_cons_count3(LOG_INFO)), _ed_cons_f_inf3 == 1)) {
+        if (_ed_cons_f_inf3 == 1) { _ed_cons_f_inf3 = 0; } else { _ed_cons_f_inf3 = 1; }
+    }
+    _g_tip_for3(base + 3, "BILGI ve IZ satirlarini goster / gizle");
+}
+
 func _ed_console3(px, py, pw, ph) {
     _g_panel(px, py, pw, ph, "KONSOL");
-    int rows = toInt((ph - _us3(18)) / _g_lh3());
-    if (rows < 1) { rows = 1; }
-    int n = length(_lg_txt);
-    int start = n - rows;
-    if (start < 0) { start = 0; }
-    int i = start;
+    int fy = py + _us3(16);
+    int fh = _g_lh3();
+    _ed_cons_bar3(px, fy, pw, fh);
+    int ly = fy + fh;
+    int rows = _ed_cons_rows3(ph);
+    int toplam = _ed_cons_shown3();
+
+    // Tekerlek: YUKARI eski satırlara gider. Panelin ÜSTÜNDEYKEN, yoksa
+    // sahne görünümünde yakınlaştırmak konsolu da kaydırırdı.
+    if (_g_in(px, py, pw, ph)) {
+        float wh = mouse_wheel();
+        if (wh > 0.5)       { _ed_cons_scroll3 = _ed_cons_scroll3 + 1; }
+        if (wh < 0.0 - 0.5) { _ed_cons_scroll3 = _ed_cons_scroll3 - 1; }
+    }
+    _ed_cons_scroll3 = _ed_cons_clamp3(_ed_cons_scroll3, toplam, rows);
+    int ilk = _ed_cons_first3(_ed_cons_scroll3, toplam, rows);
+
     int r = 0;
-    while (i < n) {
-        int c = _G_TXT3();
-        if (_lg_sev[i] == LOG_WARN) { c = rgb(255, 200, 90); }
-        if (_lg_sev[i] == LOG_ERR)  { c = rgb(255, 120, 110); }
-        _g_txt3(_lg_txt[i], px + _ED_PAD3, py + _us3(16) + r * _g_lh3(),
-                pw - _ED_PAD3 * 2, c);
-        i = i + 1;
+    while (r < rows && ilk + r < toplam) {
+        int idx = _ed_cons_nth3(ilk + r);
+        if (idx >= 0) {
+            int c = _G_TXT3();
+            if (_lg_sev[idx] == LOG_WARN) { c = rgb(255, 200, 90); }
+            if (_lg_sev[idx] == LOG_ERR)  { c = rgb(255, 120, 110); }
+            _g_txt3(_lg_txt[idx], px + _ED_PAD3, ly + r * _g_lh3(),
+                    pw - _ED_PAD3 * 2, c);
+        }
         r = r + 1;
+    }
+
+    // DİPTE DEĞİLSEN bunu söyle. Kaydırılmış bir konsol yeni satırları
+    // göstermiyor ve bunu bilmeyen kullanıcı "kayıt durdu" sanıyor.
+    if (_ed_cons_scroll3 > 0) {
+        _g_txtr3(toString(_ed_cons_scroll3) + " satir asagida",
+                 px + pw - _ED_PAD3, fy + _g_cy3(fh), _G_ACC3());
     }
 }
 
@@ -15052,9 +15297,6 @@ float _gz_t0_3  = 0.0;     // yakalandığı andaki eksen parametresi
 float _gz_px3   = 0.0;     // ...ve varlığın konumu
 float _gz_py3   = 0.0;
 float _gz_pz3   = 0.0;
-float _gz_s0x3  = 0.0;     // ölçek kipinde yakalanan boyut
-float _gz_s0y3  = 0.0;
-float _gz_s0z3  = 0.0;
 float _GZ_PICK3 = 0.32;    // oka tutunma yarıçapı (dünya birimi, ok boyuna oranlı)
 
 // DÖNDÜRME HALKASI. Döndürme klavyeye mahkûmdu: sol/sağ oklar, 15°'lik
@@ -15075,6 +15317,9 @@ array _gz_g0id3 = [];      // yakalanan seçim ve o andaki hâli
 array _gz_g0x3  = [];
 array _gz_g0z3  = [];
 array _gz_g0yaw3 = [];
+array _gz_g0sx3 = [];      // ...ve boyutları (ölçek tutamağı için)
+array _gz_g0sy3 = [];
+array _gz_g0sz3 = [];
 
 // Son çağrının çıktıları.
 float _gz_t3   = 0.0;      // eksen üzerindeki parametre

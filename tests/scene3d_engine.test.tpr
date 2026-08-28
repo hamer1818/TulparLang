@@ -7917,6 +7917,232 @@ func t_dock_widget_ids_do_not_collide() {
 }
 
 // ===========================================================================
+// KONSOL — geriye bakılabilir, süzülebilir, temizlenebilir
+// ===========================================================================
+// Panel "son N satır" demekten ibaretti: kaydırma yok, süzgeç yok, temizleme
+// yok. Bir şeyin neden bozulduğunu konsolda ararsın ama geriye bakamıyordun.
+
+func _t_log_ac3() {
+    scene3d_reset();
+    debug3d(true);
+    log_echo3d(false);        // test ciktisini kirletmesin
+    log_level3d(3);           // IZ dahil hepsi kaydedilsin
+    ed_console_clear3d();
+    _ed_cons_f_err3 = 1;
+    _ed_cons_f_wrn3 = 1;
+    _ed_cons_f_inf3 = 1;
+    _ed_cons_scroll3 = 0;
+}
+
+// HALKA TAMPONDA SIRA. Tampon dolduktan sonra dizi sırası kronolojik sıra
+// DEĞİL — `_lg_push` en eskinin üstüne yazıyor. Panel diziyi ham sırayla
+// okuyordu, yani 240. satırdan sonra kayıt karışık görünüyordu.
+func t_console_ring_reads_in_order() {
+    _t_log_ac3();
+    // Tamponu TASIR: kapasitenin uzerine cikip sarmayi zorla.
+    int i = 0;
+    while (i < _LG_CAP + 30) {
+        log3d("satir" + toString(i));
+        i = i + 1;
+    }
+    assert_eq_int(_lg_count3(), _LG_CAP);
+    // EN ESKI kalan satir: _LG_CAP+30 yazildi, son _LG_CAP tanesi duruyor.
+    int enEski = _LG_CAP + 30 - _LG_CAP;
+    assert_contains(_lg_txt[_lg_idx3(0)], "satir" + toString(enEski));
+    // EN YENI satir sonuncu olmali.
+    assert_contains(_lg_txt[_lg_idx3(_lg_count3() - 1)],
+                    "satir" + toString(_LG_CAP + 30 - 1));
+    // ARADAKI sira da artmali (ham dizi sirasi burada karisik).
+    assert_contains(_lg_txt[_lg_idx3(1)], "satir" + toString(enEski + 1));
+    // Sinir disi ISTEK -1 vermeli, dizi tasmasi degil.
+    assert_eq_int(_lg_idx3(0 - 1), 0 - 1);
+    assert_eq_int(_lg_idx3(_lg_count3()), 0 - 1);
+    _t_log_ac3();
+}
+
+// SÜZGEÇ: kapatılan seviye listeden düşmeli, ötekiler kalmalı.
+func t_console_filter_hides_only_its_own_level() {
+    _t_log_ac3();
+    log3d("bilgi bir");
+    log_warn3d("uyari bir");
+    log_err3d("hata bir");
+    log3d("bilgi iki");
+    assert_eq_int(_ed_cons_shown3(), 4);
+    assert_eq_int(_ed_cons_count3(LOG_ERR), 1);
+    assert_eq_int(_ed_cons_count3(LOG_WARN), 1);
+    assert_eq_int(_ed_cons_count3(LOG_INFO), 2);
+    // BILGI kapali: yalniz uyari + hata kalmali.
+    _ed_cons_f_inf3 = 0;
+    assert_eq_int(_ed_cons_shown3(), 2);
+    assert(_ed_cons_pass3(LOG_ERR), "hata gecmeli");
+    assert(_ed_cons_pass3(LOG_INFO) == false, "bilgi gecmemeli");
+    // SAYAC sozgecten BAGIMSIZ: "uc hata var ama suzgec kapali" gorunur
+    // olmali, yoksa kullanici gizledigi seyi aramaya devam eder.
+    assert_eq_int(_ed_cons_count3(LOG_INFO), 2);
+    // Suzulmus listenin k'inci ogesi DOGRU satir olmali.
+    assert_contains(_lg_txt[_ed_cons_nth3(0)], "uyari bir");
+    assert_contains(_lg_txt[_ed_cons_nth3(1)], "hata bir");
+    assert_eq_int(_ed_cons_nth3(2), 0 - 1);
+    _t_log_ac3();
+}
+
+// İZ ile BİLGİ aynı süzgeçte: ikisi de "gürültü" kefesinde ve ayrı bir
+// düğme kimsenin istemediği bir ayrım için yer harcardı.
+func t_console_trace_shares_the_info_filter() {
+    _t_log_ac3();
+    log3d("bilgi");
+    log_trace3d("iz");
+    assert_eq_int(_ed_cons_shown3(), 2);
+    assert_eq_int(_ed_cons_count3(LOG_INFO), 2);      // iz de sayiliyor
+    _ed_cons_f_inf3 = 0;
+    assert_eq_int(_ed_cons_shown3(), 0);
+    _t_log_ac3();
+}
+
+// KAYDIRMA sınırı: dipten yukarı sayılıyor ve içerikten fazlasına
+// çıkamıyor. 0 her zaman "en yeni satır görünür" demek — tepeden saysaydık
+// yeni satır geldikçe aynı sayı başka bir yeri gösterirdi.
+func t_console_scroll_is_clamped_from_the_bottom() {
+    // 40 satir, 5 satirlik pencere -> en fazla 35 yukari.
+    assert_eq_int(_ed_cons_clamp3(0, 40, 5), 0);
+    assert_eq_int(_ed_cons_clamp3(35, 40, 5), 35);
+    assert_eq_int(_ed_cons_clamp3(90, 40, 5), 35);
+    assert_eq_int(_ed_cons_clamp3(0 - 3, 40, 5), 0);
+    // Icerik pencereden KISAYSA kaydirma yok.
+    assert_eq_int(_ed_cons_clamp3(4, 3, 5), 0);
+    // ILK gorunen satir: dipteyken son `satir` tanesi.
+    assert_eq_int(_ed_cons_first3(0, 40, 5), 35);
+    assert_eq_int(_ed_cons_first3(35, 40, 5), 0);
+    assert_eq_int(_ed_cons_first3(0, 3, 5), 0);       // negatife dusmemeli
+}
+
+// DİPTEYKEN yeni satır GÖRÜNMELİ (takip), YUKARIDAYKEN aynı satırda
+// KALMALI. İkisi tek kuraldan çıkıyor: kaydırma dipten sayılıyor.
+func t_console_follows_the_tail_only_at_the_bottom() {
+    _t_log_ac3();
+    int i = 0;
+    while (i < 20) { log3d("s" + toString(i)); i = i + 1; }
+    int satir = 5;
+    // DIPTE: son satir gorunmeli.
+    _ed_cons_scroll3 = 0;
+    int ilk = _ed_cons_first3(_ed_cons_scroll3, _ed_cons_shown3(), satir);
+    assert_contains(_lg_txt[_ed_cons_nth3(ilk + satir - 1)], "s19");
+    // 3 satir YUKARIDA: "s16" en altta.
+    _ed_cons_scroll3 = 3;
+    ilk = _ed_cons_first3(_ed_cons_scroll3, _ed_cons_shown3(), satir);
+    assert_contains(_lg_txt[_ed_cons_nth3(ilk + satir - 1)], "s16");
+    // Yeni satirlar gelince YUKARIDAKI ayni satirda kalmali.
+    log3d("s20");
+    log3d("s21");
+    ilk = _ed_cons_first3(_ed_cons_scroll3, _ed_cons_shown3(), satir);
+    assert_contains(_lg_txt[_ed_cons_nth3(ilk + satir - 1)], "s18");
+    _t_log_ac3();
+}
+
+// TEMİZLE kaydı siler ama SAHNEYE dokunmaz: ikisi ayrı şeyler ve konsolu
+// temizlemek için sahneyi sıfırlatmak kabul edilemez.
+func t_console_clear_empties_the_log_not_the_scene() {
+    _t_log_ac3();
+    no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    log3d("bir");
+    log_warn3d("iki");
+    _ed_cons_scroll3 = 1;
+    assert(_ed_cons_shown3() > 0, "kayit olmali");
+    ed_console_clear3d();
+    assert_eq_int(_ed_cons_shown3(), 0);
+    assert_eq_int(_lg_count3(), 0);
+    // Kaydirma da sifirlanmali: kayit yokken "1 satir asagida" yalan olurdu.
+    assert_eq_int(_ed_cons_scroll3, 0);
+    // SAHNE duruyor.
+    assert_eq_int(yasayan_sayi3d(), 1);
+    _t_log_ac3();
+}
+
+// Sahne sıfırlanınca kaydırma da sıfırlanmalı — tampon gidiyor, onun
+// görünümü kalamaz.
+func t_console_scroll_resets_with_the_scene() {
+    _t_log_ac3();
+    int i = 0;
+    while (i < 10) { log3d("s" + toString(i)); i = i + 1; }
+    _ed_cons_scroll3 = 4;
+    scene3d_reset();
+    assert_eq_int(_ed_cons_scroll3, 0);
+    _t_log_ac3();
+}
+
+// VARSAYILAN konsol yüksekliği ÜÇ kayıt satırı göstermeli — her ölçekte.
+// Süzgeç çubuğu eklenince üç satır ikiye düşmüştü; ölçü satır sayısından
+// türediği için bunu bir kez sınamak yetiyor.
+func t_console_default_height_shows_three_lines() {
+    int k = 1;
+    while (k <= 3) {
+        editor_ui_scale3d(k);
+        assert_eq_int(_ed_cons_rows3(_ed_lay_def_bh3(k)), 3);
+        // EN KUCUK olcude bile bir satir kalmali: yalniz suzgec cubugu
+        // gosteren bir konsol, konsol degildir.
+        assert(_ed_cons_rows3(_ed_lay_min_bh3()) >= 1,
+               toString(k) + "x: en kucuk konsolda satir kalmiyor");
+        k = k + 1;
+    }
+    editor_ui_scale3d(2);
+}
+
+// Süzgeç çubuğunun etiketleri DAR konsolda da sığmalı: konsol yan yuvaya
+// taşınabiliyor ve orada 300 piksel oluyor. `text_width()` penceresiz 0
+// döndüğü için ölçü karakter bütçesinden (Tuzaklar 3).
+func t_console_bar_labels_fit_when_narrow() {
+    editor_ui_scale3d(2);
+    _t_log_ac3();
+    // En kotu durum: uc haneli sayaclar.
+    int i = 0;
+    while (i < 120) { log_warn3d("u"); i = i + 1; }
+    int pw = 300;                     // yan yuvadaki konsol genisligi
+    // Olculer KODDAN aliniyor, testte yeniden hesaplanmiyor: formulu
+    // kopyalamak, sinadigi formulun kendisiyle dogrulamak olurdu ve
+    // sabit-yuzdeye donen bir bozma tam bu yuzden kacmisti.
+    int tw = _ed_cons_bar_tw3(pw);
+    int sw = _ed_cons_bar_sw3(pw);
+    assert(tw + sw * 3 <= pw - _ED_PAD3 * 2, "sutunlar panele sigmali");
+    assert(_t_fits3("TEMIZLE", tw), "TEMIZLE dar konsolda sigmali");
+    assert(_t_fits3("! " + toString(_ed_cons_count3(LOG_WARN)), sw),
+           "sayac dar konsolda sigmali: ! " +
+           toString(_ed_cons_count3(LOG_WARN)));
+    // EN KOTU durum tamponun DOLU hali: sayac ucuncu hanesini asamaz cunku
+    // halka tamponun kapasitesi 240. Dort haneli bir sayac cikarsa bu
+    // iddia once kizarsin.
+    assert(_LG_CAP < 1000, "sayaclar uc haneyi asamaz varsayimi");
+    assert(_t_fits3("! " + toString(_LG_CAP), sw), "en buyuk sayac sigmali");
+    _t_log_ac3();
+}
+
+// Konsol widget kimlikleri öteki bloklarla çakışmamalı.
+func t_console_widget_ids_do_not_collide() {
+    int cb = _ed_cons_idbase3();
+    assert(cb > _ed_mn_idbase3() + 20, "menu blogunun ustunde olmali");
+    assert(cb > _ed_dock_idbase3() + 90, "panel blogunun ustunde olmali");
+}
+
+// Konsolun yeni yetenekleri ÇAĞRI YERİNE bağlı olmalı: tekerlek, süzgeç
+// çubuğu ve sıralı okuma. Üçü de pencere istiyor (Tuzaklar 1a).
+func t_console_is_wired_into_the_panel() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(src) > 100000, "kaynak okunamadi — depo kokunden calistir");
+    assert(length(split(src, "_ed_cons_bar3(px, fy, pw, fh)")) > 1,
+           "suzgec cubugu cizilmiyor");
+    assert(length(split(src, "_ed_cons_scroll3 = _ed_cons_clamp3(")) > 1,
+           "kaydirma kelepcelenmiyor");
+    assert(length(split(src, "_ed_cons_nth3(ilk + r)")) > 1,
+           "panel suzulmus listeyi okumuyor");
+    // Tekerlek YALNIZ panelin ustundeyken: sahne gorunumunde yakinlasmak
+    // konsolu da kaydirirdi.
+    array g = split(src, "_ed_cons_scroll3 = _ed_cons_scroll3 + 1;");
+    assert(length(g) > 1, "tekerlek konsolu kaydirmiyor");
+    assert(length(split(g[0], "if (_g_in(px, py, pw, ph)) {")) > 1,
+           "tekerlek panel denetimi olmadan okunuyor");
+}
+
+// ===========================================================================
 // DÖNDÜRME HALKASI — dönüş artık fareyle
 // ===========================================================================
 // Taşıma ve ölçekleme fareyle yapılıyordu (eksen okları) ama DÖNDÜRME
@@ -8130,6 +8356,51 @@ func t_gizmo_rotate_survives_a_dead_handle() {
     ed_delete3d(b);
     _ed_rotate_group3(90.0);       // cokmemeli
     assert(_t_yakinf3(get3x(a), 0.0, 0.001), "yasayan varlik yine donmeli");
+}
+
+// ÖLÇEK tutamağı da SEÇİMİN TAMAMINI işlemeli. Taşıma ve döndürme grubu
+// işliyordu, ölçek yalnız birincil varlığı büyütüyordu: beş kutuyu seçip
+// ölçeklemek dördünü değiştirmiyordu ve hiçbir yerde bunu söyleyen bir şey
+// yoktu — sessiz "yaptım sandım" hatası.
+func t_gizmo_scale_applies_to_the_whole_selection() {
+    scene3d_reset();
+    no_ground3d();
+    _ed_grid3 = 0.0;
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    int b = spawn3(5.0, 1.0, 0.0, 2.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    ed_select3d(a);
+    ed_select_toggle3d(b);
+    _gz_grab_group3();
+    _ed_resize_group3(3.0, 0.0, 0.0);
+    // MUTLAK delta: ikisi de 3 birim genisliyor, orana gore degil (b'nin
+    // eni 2'ydi, oran olsaydi 6 olurdu).
+    assert(_t_yakinf3(get3sx(a), 4.0, 0.001), "a genislemeli: " + toString(get3sx(a)));
+    assert(_t_yakinf3(get3sx(b), 5.0, 0.001), "b de genislemeli: " + toString(get3sx(b)));
+    // Oteki eksenler ve KONUMLAR kipirdamamali.
+    assert(_t_yakinf3(get3sy(a), 1.0, 0.001), "y kipirdamamali");
+    assert(_t_yakinf3(get3sz(a), 1.0, 0.001), "z kipirdamamali");
+    assert(_t_yakinf3(get3x(b), 5.0, 0.001), "konum kipirdamamali");
+    // BIRIKMEMELI: ayni delta ikinci kez ayni sonucu vermeli.
+    _ed_resize_group3(3.0, 0.0, 0.0);
+    assert(_t_yakinf3(get3sx(a), 4.0, 0.001), "olcek birikmemeli");
+    // KUCULTME de gruba gitmeli ve en kucuk olcude durmali.
+    _ed_resize_group3(0.0 - 10.0, 0.0, 0.0);
+    assert(get3sx(a) > 0.0, "olcek sifira dusmemeli");
+    assert(get3sx(b) > 0.0, "olcek sifira dusmemeli");
+    assert(get3sx(a) < 1.0, "kucultme de gruba gitmeli");
+}
+
+// Ölçek tutamağı ÇAĞRI YERİNDE de gruba bağlı olmalı.
+func t_gizmo_scale_group_is_wired() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(src) > 100000, "kaynak okunamadi — depo kokunden calistir");
+    assert(length(split(src, "_ed_resize_group3(ax * delta")) > 1,
+           "olcek surukleme grubu islemiyor");
+    // Tutamaga tutunurken secimin TAMAMI yakalanmali, yoksa gruba
+    // uygulanacak bir baslangic hali olmaz.
+    array g = split(src, "_ed_resize_group3(ax * delta");
+    assert(length(split(g[0], "_gz_grab_group3();")) > 1,
+           "eksen tutamagi secimi yakalamiyor");
 }
 
 // Halka ÇAĞRI YERİNE bağlı olmalı: tutunma girdide, açı sürüklemede,
@@ -10581,6 +10852,17 @@ test("eski yerlesim kaydi hala okunuyor", "t_dock_old_record_still_loads");
 test("varsayilana donus yuvalari toparliyor", "t_dock_reset_restores_slots");
 test("dock widget kimlikleri cakismiyor", "t_dock_widget_ids_do_not_collide");
 test("paneller yuvayi tam kapliyor", "t_div_panels_tile_the_slot");
+test("halka tampon sirayla okunuyor", "t_console_ring_reads_in_order");
+test("suzgec yalniz kendi seviyesini gizliyor", "t_console_filter_hides_only_its_own_level");
+test("iz bilgi suzgecini paylasiyor", "t_console_trace_shares_the_info_filter");
+test("konsol kaydirmasi dipten kelepceli", "t_console_scroll_is_clamped_from_the_bottom");
+test("konsol yalniz dipte takip ediyor", "t_console_follows_the_tail_only_at_the_bottom");
+test("temizle sahneye dokunmuyor", "t_console_clear_empties_the_log_not_the_scene");
+test("konsol kaydirmasi sahneyle sifirlaniyor", "t_console_scroll_resets_with_the_scene");
+test("varsayilan konsol uc satir gosteriyor", "t_console_default_height_shows_three_lines");
+test("konsol cubugu dar panelde siğiyor", "t_console_bar_labels_fit_when_narrow");
+test("konsol widget kimlikleri cakismiyor", "t_console_widget_ids_do_not_collide");
+test("konsol panele bagli", "t_console_is_wired_into_the_panel");
 test("halka govde yaw sozlesmesini izliyor", "t_gizmo_ring_uses_the_body_yaw_convention");
 test("degmeyen isin gecersiz aci veriyor", "t_gizmo_ring_angle_rejects_a_missing_hit");
 test("halka yalniz cemberde tutunuyor", "t_gizmo_ring_grabs_only_on_the_circle");
@@ -10591,6 +10873,8 @@ test("tek varlik yerinde donuyor", "t_gizmo_rotate_single_turns_in_place");
 test("grup merkez etrafinda donuyor", "t_gizmo_rotate_group_orbits_around_the_centre");
 test("donus birikmiyor", "t_gizmo_rotation_is_absolute_not_cumulative");
 test("olu handle donusu cokertmiyor", "t_gizmo_rotate_survives_a_dead_handle");
+test("olcek secimin tamamini isliyor", "t_gizmo_scale_applies_to_the_whole_selection");
+test("olcek grubu cagri yerinde bagli", "t_gizmo_scale_group_is_wired");
 test("halka editore bagli", "t_gizmo_ring_is_wired_into_the_editor");
 test("menu kodlari benzersiz ve etiketli", "t_menu_codes_are_unique_and_labelled");
 test("ayiricilar dogru yerde", "t_menu_separators_are_well_placed");

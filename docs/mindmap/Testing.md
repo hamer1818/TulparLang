@@ -69,7 +69,7 @@ C tarafı (`runtime/`) bozmaları gerçek `./build.sh` ister.
 Android doğrulaması `adb screencap` ile (yerel pencere yok). Görsel/oynanış testini
 **kullanıcı yapar** — Claude derler, paketler, kurar ve durur.
 
-Bu kısıt motorun tasarımını belirledi: [[Scene3D]]'in **575 testi** pencere açmadan koşuyor
+Bu kısıt motorun tasarımını belirledi: [[Scene3D]]'in **588 testi** pencere açmadan koşuyor
 çünkü cihaz okuması tek yere hapsedilmiş ve karar mantığı saf fonksiyonlara ayrılmış.
 
 ## Metin genişliği penceresiz ÖLÇÜLEMEZ
