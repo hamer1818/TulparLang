@@ -1639,12 +1639,20 @@ static int tame_rt_used[TAME_MAX_RT];
 // düşen pikseller yazılmıyor. Alternatif her widget çağrısından önce elle sınır
 // denetimi yapmaktı — her yeni widget o borcu büyütürdü ve yarı görünür
 // satırlar yine kırpılamazdı.
+// Pencere denetimi ŞART: `BeginScissorMode` çizim toplu işine yazıyor ve
+// GL bağlamı yokken ÇÖKÜYOR. Öteki bağlamalar bu denetimi zaten yapıyordu,
+// bu ikisi atlanmıştı — yani `kirp()`'i pencere açmadan çağıran her program
+// (ve penceresiz her test) çöküyordu.
 void tame_impl_scissor(int x, int y, int w, int h) {
+  if (!tame_window_ready) return;
   if (w < 0) w = 0;
   if (h < 0) h = 0;
   BeginScissorMode(x, y, w, h);
 }
-void tame_impl_scissor_end(void) { EndScissorMode(); }
+void tame_impl_scissor_end(void) {
+  if (!tame_window_ready) return;
+  EndScissorMode();
+}
 
 int tame_impl_rt_new(int w, int h) {
   if (!tame_window_ready) return -1;

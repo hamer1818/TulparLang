@@ -10281,8 +10281,43 @@ func editor_overlap_check3d(on) { if (on) { _g_ovl_on3 = 1; } else { _g_ovl_on3 
 func editor_cakisma3d(ac) { editor_overlap_check3d(ac); }
 func editor_overlap_count3d(): int { return _g_ovl_n3; }
 
+// Yürürlükteki KIRPMA dikdörtgeni. `kirp`/`kirp_bitir` yalnız ÇİZİMİ
+// kırpıyordu; widget kuyruğu ve fare denetimi bundan habersizdi. İki sessiz
+// hata birden çıkıyordu (kullanıcı ekran görüntüsüyle bildirdi):
+//   • Kaydırılıp başlığın altına giren widget'lar hâlâ kuyruğa giriyor ve
+//     çakışma dedektörü onları KIRMIZI kutularla çiziyordu — üstelik o
+//     kutular kırpmanın dışında çizildiği için panelin dışına taşıyordu.
+//   • Görünmeyen widget hâlâ TIKLANABİLİYORDU: başlığın altına kaymış bir
+//     düğme, başlığa yapılan tıklamayı yiyordu.
+int _g_clip_on3 = 0;
+int _g_clip_x3 = 0;
+int _g_clip_y3 = 0;
+int _g_clip_w3 = 0;
+int _g_clip_h3 = 0;
+
+func _g_clip3(x, y, w, h) {
+    _g_clip_on3 = 1;
+    _g_clip_x3 = x; _g_clip_y3 = y; _g_clip_w3 = w; _g_clip_h3 = h;
+    kirp(x, y, w, h);
+}
+func _g_clip_end3() {
+    _g_clip_on3 = 0;
+    kirp_bitir();
+}
+
+// Dikdörtgen kırpma alanına DEĞİYOR mu (kısmen de olsa). Çakışma denetimi
+// için doğru ölçü bu: yarısı görünen bir widget gerçekten çakışabilir.
+func _g_clip_touches3(x, y, w, h): bool {
+    if (_g_clip_on3 == 0) { return true; }
+    return _g_overlap_rect3(x, y, w, h,
+                            _g_clip_x3, _g_clip_y3, _g_clip_w3, _g_clip_h3);
+}
+
 func _g_rect3(id, x, y, w, h) {
     if (_g_ovl_on3 == 0) { return; }
+    // Kırpma alanının TÜMÜYLE dışındaki widget çizilmiyor; çakışma
+    // denetimine girmesi de anlamsız — göze görünmeyen bir çakışma yok.
+    if (_g_clip_touches3(x, y, w, h) == false) { return; }
     push(_g_qx3, x); push(_g_qy3, y);
     push(_g_qw3, w); push(_g_qh3, h);
     push(_g_qi3, id);
@@ -10366,6 +10401,13 @@ func _g_begin() {
 }
 
 func _g_in(x, y, w, h): bool {
+    // FARE kırpma alanının dışındaysa hiçbir kırpılmış widget'a değemez.
+    // Ölçü İMLECİN yeri, widget'ın kısmen görünür olması değil: başlığın
+    // altına kaymış bir düğmenin görünmeyen yarısına tıklanamamalı.
+    if (_g_clip_on3 == 1) {
+        if (_g_mx3 < _g_clip_x3 || _g_mx3 >= _g_clip_x3 + _g_clip_w3) { return false; }
+        if (_g_my3 < _g_clip_y3 || _g_my3 >= _g_clip_y3 + _g_clip_h3) { return false; }
+    }
     return _g_mx3 >= x && _g_mx3 < x + w && _g_my3 >= y && _g_my3 < y + h;
 }
 
@@ -12749,7 +12791,36 @@ int _ed_zsel3 = 0 - 1;   // seçili bölge indeksi
 // ayarları + kurallar) panelden uzun olabiliyor; kırpma olmadan alttaki
 // konsolun üstüne taşardı.
 int _ed_iscroll3 = 0;
-int _ed_icontent3 = 0;    // son karede içeriğin bittiği y (kaydırma sınırı)
+int _ed_icontent3 = 0;    // içeriğin bittiği y — MUTLAK (kaydırmadan bağımsız)
+
+// İçeriğin kaydırmadan BAĞIMSIZ bitiş noktası. `_ed_icontent3` ekran
+// koordinatında ve içinde kaydırma payı VAR (`y` zaten `- _ed_iscroll3` ile
+// başlıyor). Kelepçe onu olduğu gibi kullanınca sınır kaydırdıkça küçülüyor
+// ve kaydırma gerçek sona varmadan KİLİTLENİYORDU — hesapla: izin verilen
+// en büyük kaydırma A-t-a iken, oraya varınca sınır A-s-t-a oluyor, yani
+// yolun ancak YARISI gidilebiliyor. (Kullanıcı bildirdi: sağ panel bir yere
+// kadar kayıyor, sonra duruyor.)
+//
+// Kaydırma çubuğu bu toplamayı zaten yapıyordu; kelepçe yapmıyordu. Tek
+// fonksiyona alındı ki bir daha ayrılmasınlar.
+// İçeriğin bitişini KAYDIRMADAN BAĞIMSIZ sakla. Çizim `y`yi ekran
+// koordinatında biriktiriyor (`y` zaten `- _ed_iscroll3` ile başlıyor);
+// kaydırmayı burada geri eklemek saklanan değeri MUTLAK yapıyor.
+//
+// Toplamayı OKUYAN tarafta yapmak yetmiyordu: kelepçe bir önceki karenin
+// içeriğiyle bu karenin kaydırmasını eşleştiriyor ve ikisi bir tekerlek
+// adımı kadar kayıyordu — kullanıcı içeriğin bir adım ötesine kayabiliyordu.
+// Yazan tarafta yapınca eşleştirilecek bir şey kalmıyor.
+func _ed_iset_content3(y) { _ed_icontent3 = y + _ed_iscroll3; }
+
+// İnceleyicinin KAYDIRMA ADIMI. Ayrı fonksiyon çünkü çağrı çizim
+// fonksiyonunun göbeğindeydi ve orada içerik hesabını bozmak hiçbir testi
+// kırmıyordu (bozma denendi, kaçtı). Aynı ders dördüncü kez: kararı
+// sınamak yetmiyor, ÇAĞRIYI da sürmek gerekiyor.
+func _ed_iscroll_step3(ctop, cavail) {
+    _ed_iscroll3 = _ed_clamp_scroll3(_ed_iscroll3, _ed_icontent3,
+                                     ctop, cavail);
+}
 
 // Kaydırma sınırı. Döngünün içine gömülü kalsaydı penceresiz sınanamazdı; bu
 // oturumda "sınanamayan yerdeki hata" birkaç kez tekrarlandı.
@@ -13461,7 +13532,7 @@ func _ed_world_panel3(px, py, pw) {
     _g_section(px + 2, y, pw - 4, "KURALLAR");
     y = y + _us3(16);
     y = _ed_rules_panel3(px, y, pw);
-    _ed_icontent3 = y;
+    _ed_iset_content3(y);
 }
 
 func _ed_c255(v): int {
@@ -13484,7 +13555,7 @@ func _ed_zone_panel3(px, y, pw) {
     int i = _ed_zsel3;
     if (i < 0 || i >= length(_trg_x)) {
         _g_txt3("bolge secili degil", lx, y, inner, _G_DIM3());
-        _ed_icontent3 = y + _g_lh3();
+        _ed_iset_content3(y + _g_lh3());
         return;
     }
     _g_txt3("BOLGE " + toString(i), lx, y, inner, _G_ACC3());
@@ -13613,7 +13684,7 @@ func _ed_zone_panel3(px, y, pw) {
         _ed_tab3 = 0;
         _ed_zsel3 = 0 - 1;
     }
-    _ed_icontent3 = y + _ED_FLD3 + _us3(6);
+    _ed_iset_content3(y + _ED_FLD3 + _us3(6));
 }
 
 // Bölgeyi sil: bütün paralel diziler AYNI indeksten düşmeli, yoksa bölge
@@ -13687,21 +13758,21 @@ func _ed_inspector3(px, py, pw, ph) {
         if (wh > 0.5)        { _ed_iscroll3 = _ed_iscroll3 - 24; }
         if (wh < 0.0 - 0.5)  { _ed_iscroll3 = _ed_iscroll3 + 24; }
     }
-    _ed_iscroll3 = _ed_clamp_scroll3(_ed_iscroll3, _ed_icontent3, ctop, cavail);
-    kirp(px, ctop, pw, cavail);
+    _ed_iscroll_step3(ctop, cavail);
+    _g_clip3(px, ctop, pw, cavail);
     // İçerik başlık şeridinin ALTINDAN başlıyor. Sabit 20 idi ve 2x ölçekte
     // şerit 32 piksel olduğu için ilk satır başlığın üstüne biniyordu.
     int y = py + _us3(16) + _us3(4) - _ed_iscroll3;
     if (_ed_tab3 == 2) {
         _ed_zone_panel3(px, y, pw);
-        kirp_bitir();
+        _g_clip_end3();
         _ed_scrollbar3(px, ctop, pw, cavail);
         return;
     }
     if (_ed_tab3 == 1) {
         _g_txt3("DUNYA", lx, y, inner, _G_ACC3());
         _ed_world_panel3(px, y + 14, pw);
-        kirp_bitir();
+        _g_clip_end3();
         _ed_scrollbar3(px, ctop, pw, cavail);
         return;
     }
@@ -13739,8 +13810,8 @@ func _ed_inspector3(px, py, pw, ph) {
         _g_tip_for3(9772, "Platformlara zipla, altinlari topla");
         y = y + _ED_FLD3 + _us3(6);
 
-        _ed_icontent3 = y;
-        kirp_bitir();
+        _ed_iset_content3(y);
+        _g_clip_end3();
         _ed_scrollbar3(px, ctop, pw, cavail);
         return;
     }
@@ -14205,21 +14276,45 @@ func _ed_inspector3(px, py, pw, ph) {
     _g_tip_for3(9470, "Cogalt  (CTRL+D)  —  davranislariyla");
     if (_g_button(9471, lx + half + 4, y, half, _ED_FLD3, "SIL")) { ed_mark3d(); ed_delete3d(id); }
     _g_tip_for3(9471, "Sil  (DEL)  —  CTRL+Z ile geri alinir");
-    _ed_icontent3 = y + _ED_FLD3 + 6;
-    kirp_bitir();
+    _ed_iset_content3(y + _ED_FLD3 + 6);
+    _g_clip_end3();
     _ed_scrollbar3(px, ctop, pw, cavail);
 }
 
 // İnce kaydırma çubuğu — içerik panelden uzunsa nerede olduğunu gösteriyor.
-func _ed_scrollbar3(px, ctop, pw, cavail) {
-    int total = _ed_icontent3 - ctop + _ed_iscroll3;
-    if (total <= cavail) { return; }
+// Çubuğun GEOMETRİSİ saf: çubuk yalnız çiziliyordu ve hesabındaki bir hata
+// (içerik ÜSTÜNÜ çıkarmayı unutmak gibi) hiçbir testi kırmıyordu — tutamak
+// sessizce yanlış boyda ve yanlış yerde duruyordu.
+func _ed_sbar_total3(ctop): int { return _ed_icontent3 - ctop; }
+
+func _ed_sbar_h3(total, cavail): int {
+    if (total <= 0) { return cavail; }
     int bh = toInt(cavail * cavail / total);
+    // En az 12 piksel: oransal yükseklik çok uzun içerikte tutamağı
+    // görünmez inceliğe indiriyor.
     if (bh < 12) { bh = 12; }
+    if (bh > cavail) { bh = cavail; }
+    return bh;
+}
+
+func _ed_sbar_y3(total, cavail, ctop, scroll): int {
+    int bh = _ed_sbar_h3(total, cavail);
     int room = cavail - bh;
     int span = total - cavail;
-    int by = ctop;
-    if (span > 0) { by = ctop + toInt(room * _ed_iscroll3 / span); }
+    if (span <= 0) { return ctop; }
+    int y = ctop + toInt(room * scroll / span);
+    // Uçlarda taşmasın: kelepçe bir kare geriden gelen içerikle birlikte
+    // tutamağı yolun dışına itebiliyor.
+    if (y < ctop) { y = ctop; }
+    if (y > ctop + room) { y = ctop + room; }
+    return y;
+}
+
+func _ed_scrollbar3(px, ctop, pw, cavail) {
+    int total = _ed_sbar_total3(ctop);
+    if (total <= cavail) { return; }
+    int bh = _ed_sbar_h3(total, cavail);
+    int by = _ed_sbar_y3(total, cavail, ctop, _ed_iscroll3);
     rect(px + pw - _us3(4), ctop, _us3(3), cavail, rgb(34, 38, 46));
     rect(px + pw - _us3(4), by, _us3(3), bh, rgb(90, 100, 118));
 }

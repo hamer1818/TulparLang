@@ -7911,6 +7911,157 @@ func t_dock_widget_ids_do_not_collide() {
     assert(9609 < db, "menu kimlikleri altta kalmali");
 }
 
+// ---- Kaydırma sınırı ve kırpma ----------------------------------------------
+// Kullanıcı ekran görüntüsüyle bildirdi: sağ panel bir yere kadar kayıyor,
+// sonra duruyor ve ekrana KIRMIZI kutular çıkıyor. İki ayrı hata:
+//   1) Kaydırma sınırı içeriğin EKRAN koordinatından hesaplanıyordu ve
+//      kaydırdıkça küçülüyordu.
+//   2) Kırpılan (görünmeyen) widget'lar hâlâ kuyruğa giriyor ve çakışma
+//      dedektörü onları kırmızı çerçeveyle çiziyordu.
+
+// Sınır KAYDIRMADAN BAĞIMSIZ olmalı: kare kare kaydırınca içeriğin gerçek
+// dibine VARILMALI.
+func t_scroll_reaches_the_bottom() {
+    int A = 2000;      // icerigin mutlak dibi
+    int t = 100;       // icerik ustu
+    int a = 400;       // gorunur yukseklik
+    int hedef = A - (t + a);
+    int s = 0;
+    int i = 0;
+    while (i < 300) {
+        // Icerik MUTLAK olarak saklaniyor (cizim `y + kaydirma` yaziyor),
+        // yani kelepceye her karede ayni A gidiyor.
+        s = _ed_clamp_scroll3(s + 24, A, t, a);
+        i = i + 1;
+    }
+    assert_eq_int(s, hedef);
+}
+
+// GERÇEK yolu sür: `_ed_icontent_abs3()` + `_ed_iscroll_step3()`. Yukarıdaki
+// test kelepçeyi elle beslediği için çağrı yerinin ham `_ed_icontent3`'e
+// dönmesini GÖREMİYORDU (bozma denendi, kaçtı).
+func t_inspector_scroll_step_reaches_the_bottom() {
+    int A = 2000;
+    int t = 100;
+    int a = 400;
+    int hedef = A - (t + a);
+    _ed_iscroll3 = 0;
+    int i = 0;
+    while (i < 300) {
+        // Gercek kare sirasi: tekerlek -> kelepce -> cizim.
+        _ed_iscroll3 = _ed_iscroll3 + 24;          // tekerlek
+        _ed_iscroll_step3(t, a);
+        // Cizim `y`yi EKRAN koordinatinda biriktiriyor; kaydedilen deger
+        // MUTLAK olmali.
+        _ed_iset_content3(A - _ed_iscroll3);
+        i = i + 1;
+    }
+    // Tam dibe VARMALI ve BIR ADIM otesine GECMEMELI.
+    assert_eq_int(_ed_iscroll3, hedef);
+    // Saklanan deger kaydirmadan bagimsiz: ayni icerik, farkli kaydirma,
+    // ayni sonuc.
+    _ed_iscroll3 = 240;
+    _ed_iset_content3(1500 - 240);
+    int a1 = _ed_icontent3;
+    _ed_iscroll3 = 0;
+    _ed_iset_content3(1500);
+    assert_eq_int(_ed_icontent3, a1);
+    assert_eq_int(_ed_icontent3, 1500);
+    _ed_icontent3 = 0;
+}
+
+// Kaydırma ÇUBUĞUNUN geometrisi. Çubuk yalnız çiziliyordu, yani hesabındaki
+// bir hata (içerik ÜSTÜNÜ çıkarmayı unutmak) hiçbir testi kırmıyordu ve
+// tutamak sessizce yanlış boyda duruyordu.
+func t_scrollbar_geometry() {
+    int ctop = 100;
+    int cavail = 400;
+    // Toplam icerik, iceriğin USTUNU cikarmali: cubuk yalnizca gorunur
+    // alanin uzunlugunu temsil ediyor.
+    _ed_icontent3 = 1500;
+    assert_eq_int(_ed_sbar_total3(ctop), 1400);
+    int total = _ed_sbar_total3(ctop);
+    // Tutamak GORUNUR ALANDAN uzun olamaz ve gorunmez incelige inemez.
+    int bh = _ed_sbar_h3(total, cavail);
+    assert(bh <= cavail, "tutamak yoldan uzun olmamali");
+    assert(bh >= 12, "tutamak gorunur kalmali");
+    // Cok uzun icerikte de en az 12.
+    assert(_ed_sbar_h3(100000, cavail) >= 12, "uzun icerikte de gorunur");
+    // Kisa icerikte yolun tamamini kaplamali.
+    assert_eq_int(_ed_sbar_h3(cavail, cavail), cavail);
+    // UCLAR: kaydirma 0'da tutamak yolun basinda, sonda yolun sonunda ve
+    // hicbir yerde yoldan TASMIYOR.
+    int span = total - cavail;
+    assert_eq_int(_ed_sbar_y3(total, cavail, ctop, 0), ctop);
+    int son = _ed_sbar_y3(total, cavail, ctop, span);
+    assert_eq_int(son + bh, ctop + cavail);
+    // Asiri kaydirma degeri de tasirmamali.
+    int tas = _ed_sbar_y3(total, cavail, ctop, span * 3);
+    assert(tas + bh <= ctop + cavail, "tutamak yoldan tasmamali");
+    _ed_icontent3 = 0;
+}
+
+// İki formül DENK DEĞİL: ekran koordinatını doğrudan kelepçeye vermek yolun
+// ancak yarısını gidiyor. (İzin verilen en büyük kaydırma A-t-a iken, oraya
+// varınca sınır A-s-t-a oluyor.) Bu test o denkliği bir daha kurmaya karşı.
+func t_screen_relative_clamp_stalls_halfway() {
+    int A = 2000;
+    int t = 100;
+    int a = 400;
+    int hedef = A - (t + a);
+    int s = 0;
+    int i = 0;
+    while (i < 300) {
+        s = _ed_clamp_scroll3(s + 24, A - s, t, a);
+        i = i + 1;
+    }
+    assert(s < hedef, "ekran degeriyle kelepceleme sonuna varmamali");
+    // Yaklasik YARISINDA duruyor.
+    assert(s * 2 >= hedef - 48, "yolun yarisi civarinda durmali: " + toString(s));
+    assert(s * 2 <= hedef + 48, "yolun yarisi civarinda durmali: " + toString(s));
+}
+
+// KIRPILAN widget kuyruğa girmemeli: görünmeyen bir çakışma yok ve
+// dedektörün kırmızı çerçevesi kırpmanın DIŞINA çiziliyor, yani panelin
+// dışına taşıyor.
+func t_clipped_widgets_are_not_queued() {
+    editor_overlap_check3d(true);
+    _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+    _g_clip3(100, 100, 200, 200);
+    // ICERIDE: kuyruga girmeli.
+    _g_rect3(1, 120, 120, 40, 20);
+    assert_eq_int(length(_g_qi3), 1);
+    // TUMUYLE DISARIDA (basligin altina kaymis gibi): girmemeli.
+    _g_rect3(2, 120, 40, 40, 20);
+    assert_eq_int(length(_g_qi3), 1);
+    // KISMEN iceride: girmeli — yarisi gorunen bir widget gercekten
+    // cakisabilir.
+    _g_rect3(3, 120, 90, 40, 20);
+    assert_eq_int(length(_g_qi3), 2);
+    _g_clip_end3();
+    // Kirpma KAPALIYKEN her sey kuyruga girmeli.
+    _g_rect3(4, 0, 0, 10, 10);
+    assert_eq_int(length(_g_qi3), 3);
+    _g_qx3 = []; _g_qy3 = []; _g_qw3 = []; _g_qh3 = []; _g_qi3 = [];
+}
+
+// Görünmeyen widget TIKLANMAMALI: başlığın altına kaymış bir düğme,
+// başlığa yapılan tıklamayı yiyordu.
+func t_clipped_widgets_are_not_clickable() {
+    _g_clip3(100, 100, 200, 200);
+    // Imlec kirpma ICINDE ve widget'in uzerinde.
+    _g_mx3 = 130; _g_my3 = 130;
+    assert(_g_in(120, 120, 40, 20), "kirpma icinde tiklanabilmeli");
+    // Imlec kirpmanin DISINDA ama widget'in dikdortgeninin icinde:
+    // (widget yukari kaymis, gorunen kismi yok)
+    _g_mx3 = 130; _g_my3 = 50;
+    assert(_g_in(120, 40, 40, 20) == false, "kirpma disinda tiklanmamali");
+    _g_clip_end3();
+    // Kirpma kapaliyken yine tiklanabilmeli.
+    _g_mx3 = 130; _g_my3 = 50;
+    assert(_g_in(120, 40, 40, 20), "kirpma kapaliyken tiklanabilmeli");
+}
+
 // ---- Paneli BAŞLIĞINDAN sürükle ---------------------------------------------
 // Yuvayı listeden seçmek işi görüyordu ama jest yanlıştı: Unity'de,
 // Unreal'da, Blender'da panel BAŞLIĞINDAN tutulup bırakılır.
@@ -9407,6 +9558,12 @@ test("kose kesme yasak", "t_nav_no_corner_cutting");
 test("bolumler yukleniyor ve geciliyor", "t_levels_load_and_switch");
 test("bolumler gidis-donusten sag cikiyor", "t_levels_survive_roundtrip");
 test("tek bolumlu sahne degismiyor", "t_single_level_scene_unchanged");
+test("kaydirma icerigin dibine variyor", "t_scroll_reaches_the_bottom");
+test("kaydirma cubugu geometrisi", "t_scrollbar_geometry");
+test("inceleyici kaydirma adimi dibe variyor", "t_inspector_scroll_step_reaches_the_bottom");
+test("ekran degerli kelepce yarida kaliyor", "t_screen_relative_clamp_stalls_halfway");
+test("kirpilan widget kuyruga girmiyor", "t_clipped_widgets_are_not_queued");
+test("kirpilan widget tiklanamiyor", "t_clipped_widgets_are_not_clickable");
 test("baslik tiklamasi paneli buluyor", "t_dock_header_hit_finds_the_panel");
 test("kapatma dugmesi surukleme tutamagi degil", "t_dock_close_button_is_not_a_drag_handle");
 test("birakma bolgeleri dogru", "t_dock_drop_zones");
