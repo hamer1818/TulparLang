@@ -9,6 +9,27 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — ANDROID DERLEME DENETİMİ: hedefin çalıştığı artık her koşumda ölçülüyor
+
+Bugünkü iki kırık (bayat arşivler, NDK aramasının Android Studio kurulumunu
+görmemesi) ortak bir boşluğa işaret ediyordu: **Android derleme yolunu hiçbir
+şey denetlemiyordu.** Hedef "Temmuz'da emülatörde doğrulandı" diye duruyordu;
+arada masaüstü build'i, 59 süit ve 47 örnek boyunca her şey yeşil kaldı,
+çünkü hiçbiri o hedefi derlemiyor.
+
+`build.sh suites` artık NDK varsa bir scene3d oyununu Android'e derliyor ve
+iki ABI'nin `.so`'su + manifest üretildiğini sınıyor (~36 sn). scene3d
+seçildi çünkü tame'i de içeriyor — tek derleme iki arşivi birden kapsıyor.
+NDK yoksa **atlanıyor** (dist denetimindeki aynı gerekçe: NDK'sı olmayan
+geliştiriciyi kırmızıya boğmak yanlış). `TULPAR_NO_ANDROID_SMOKE=1` kapatır.
+
+Denetimin kendi üç yolu da sınandı: NDK yokken atlıyor (sahte HOME ile),
+arşivler yokken kızarıyor (android/dist geçici olarak kenara alındı — link
+kopuyor, `.so` üretilmiyor), normalde yeşil. Ölçüm sırasında bir sınamamın
+geçersiz olduğu da çıktı: `TULPAR_ANDROID_LIB_DIR` arama yolunu DEĞİŞTİRMİYOR,
+EKLİYOR — boş bir dizin göstermek link'i bozmuyor.
+
+
 ### Fixed — WEB HEDEFİ KIRIKTI: önceden derlenmiş arşivler sessizce çürüyor
 
 `wasm/dist` ve `android/dist` gitignored ve elle tazeleniyor. Yeni bir

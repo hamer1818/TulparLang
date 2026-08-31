@@ -200,6 +200,34 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # ANDROID DERLEME DENETİMİ. Arşiv sembolleri tamam olsa bile derleme yolu
+    # (manifest yazımı, PIC reloc, link bayrakları, NDK bulma) kırık olabilir
+    # ve bunu hiçbir şey denetlemiyordu: hedef "Temmuz'da emülatörde
+    # doğrulandı" diye duruyordu, arada İKİ ayrı kırık sessizce birikti
+    # (bayat arşivler + NDK aramasının Android Studio kurulumunu görmemesi).
+    # Masaüstü build'i, 59 süit ve tüm örnekler bu süre boyunca yeşildi.
+    #
+    # scene3d SEÇİLDİ çünkü tame'i de içeriyor — tek derleme iki arşivi birden
+    # sınıyor. NDK yoksa ATLANIYOR: NDK'sı olmayan geliştiriciyi kırmızıya
+    # boğmak yanlış olur (dist denetimindeki aynı gerekçe).
+    if [ -z "$TULPAR_NO_ANDROID_SMOKE" ] && [ -x ./tulpar ]; then
+        ASMOKE=$(mktemp -d)
+        ASMOKE_OUT=$(DISPLAY= ./tulpar build --target=android                             examples/scene3d_collector.tpr "$ASMOKE/g" 2>&1)
+        if echo "$ASMOKE_OUT" | grep -qE "NDK gerekir|needs the NDK"; then
+            echo "android derleme denetimi: NDK yok — atlandi"
+        elif [ -f "$ASMOKE/g_apk/lib/arm64-v8a/libtulpargame.so" ] &&
+             [ -f "$ASMOKE/g_apk/lib/x86_64/libtulpargame.so" ] &&
+             [ -f "$ASMOKE/g_apk/AndroidManifest.xml" ]; then
+            echo -e "${GREEN}android derlemesi calisiyor${NC} (iki ABI + manifest)"
+        else
+            echo -e "${RED}Android derlemesi basarisiz!${NC}"
+            echo "$ASMOKE_OUT" | tail -12
+            rm -rf "$ASMOKE"
+            exit 1
+        fi
+        rm -rf "$ASMOKE"
+    fi
+
     # Önceden derlenmiş arşivlerin TAZELİĞİ. Sürücü bunu web/Android link'i
     # sırasında zaten uyarıyor, ama o uyarıyı görmek için o hedefi derlemek
     # gerekiyor — yani arşivler aylarca sessizce çürüyebiliyor (ölçüldü:

@@ -210,6 +210,12 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   WASM, **native Android** (`tulpar build --target=android` → NativeActivity
   APK; arm64-v8a + x86_64; canlı emülatörde render+animasyon+dokunma
   doğrulandı). `libtulpar_runtime.a` AOT'a static link.
+  **Derleme yolu artık otomatik denetleniyor** (2026-08-31): `build.sh suites`
+  NDK varsa bir scene3d oyununu Android'e derleyip iki ABI + manifest
+  üretildiğini sınıyor, ve `tests/dist_archive_audit.py` önceden derlenmiş
+  arşivlerde eksik builtin'leri adıyla sayıyor. Bu iki denetim yokken hedef
+  günlerce kırık kaldı (bayat arşivler + NDK aramasının Android Studio
+  kurulumunu görmemesi) ve hiçbir yeşil koşum bunu söylemedi.
 - **Stdlib gömülü:** wings, router, http_utils, http_client, async,
   middleware, socket, tulpar_api, orm, test, wings_tls, tame, arcade. SQLite
   ve raylib vendored.

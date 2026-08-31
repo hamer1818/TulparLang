@@ -206,6 +206,16 @@ derlemesi `undefined symbol` ile ölüyor — ama masaüstü build'i, süitler v
   `wasm/build_tame_web.sh` (ve NDK varsa `android/build_tame_android.sh`)
   çalıştır, yoksa o hedefi kırmış olursun.
 
+**Derleme YOLU da denetlenmiyordu.** Arşiv sembolleri tamam olsa bile
+manifest yazımı / PIC reloc / link bayrakları / NDK bulma kırık olabilir.
+Android hedefi "Temmuz'da emülatörde doğrulandı" diye duruyordu ve o günden
+bugüne İKİ ayrı kırık sessizce birikti — masaüstü build'i, 59 süit ve tüm
+örnekler bu süre boyunca yeşildi, çünkü hiçbiri o hedefi derlemiyordu.
+`build.sh suites` artık NDK varsa bir scene3d oyununu Android'e derleyip iki
+ABI + manifest üretildiğini denetliyor (~36 sn; scene3d seçildi çünkü tame'i
+de içeriyor, tek derleme iki arşivi birden sınıyor). NDK yoksa atlanıyor.
+`TULPAR_NO_ANDROID_SMOKE=1` kapatır.
+
 **Yan tuzak: NDK araması İKİ yerde yazılıydı** — sürücüde
 (`aot_pipeline.cpp`, derlemeyi yapan) ve betikte
 (`build_tame_android.sh`, arşivleri üreten). İkisi de yalnız
