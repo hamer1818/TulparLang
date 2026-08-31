@@ -200,6 +200,19 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # BİÇİMLENDİRİCİ. `tulpar fmt --write` KULLANICININ KAYNAĞINI değiştiriyor,
+    # yani buradaki bir hata doğrudan veri kaybı — ve bu denetim yokken üç
+    # ayrı bozulma birden hayatta kaldı: `i++` → `i + +`, `=>` → `= >`,
+    # `/*` → `/ *` (blok yorumun içi kod gibi işleniyordu). Üçü de
+    # DERLENMEYEN kod üretiyordu. ~2 sn.
+    if [ -x tests/fmt_audit.sh ]; then
+        echo ""
+        if ! bash tests/fmt_audit.sh; then
+            echo -e "${RED}Bicimlendirici denetimi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # ANDROID DERLEME DENETİMİ. Arşiv sembolleri tamam olsa bile derleme yolu
     # (manifest yazımı, PIC reloc, link bayrakları, NDK bulma) kırık olabilir
     # ve bunu hiçbir şey denetlemiyordu: hedef "Temmuz'da emülatörde

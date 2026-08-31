@@ -9,6 +9,42 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Fixed — `tulpar fmt` DERLENMEYEN kod üretiyordu (üç ayrı bozulma)
+
+`tulpar fmt --write` kullanıcının kaynak dosyasının üstüne yazıyor, yani
+buradaki bir hata doğrudan veri kaybı. Biçimlendiricinin hiçbir otomasyonu
+yoktu ve üç bozulma birden hayatta kalmıştı — üçü de aynı kökten, karakter
+düzeyinde çalışan bir yazıcının iki karakterli belirteçleri tanımaması:
+
+- **`i++` → `i + +`.** Depoda 84 dosya `++`/`--` kullanıyor; hepsi
+  biçimlendirildiğinde ayrışmaz hâle geliyordu.
+- **`=>` → `= >`.** `match` ifadesi olan her dosya bozuluyordu.
+- **`/*` → `/ *`.** Blok yorum diye bir kavram yoktu: sınırlar bölünüyor,
+  yorumun İÇİNDEKİ düzyazı kod gibi dolgulanıyordu. Blok yorum satırları
+  artık **olduğu gibi** kopyalanıyor — içeride hizalanmış tablo/ASCII şema
+  olabilir ve onu "düzeltmek" biçimlendiricinin işi değil. Dizgi içindeki
+  `/*` yorum açmıyor (bu da sınandı).
+
+### Fixed — `tulpar typecheck` ayrıştırma hatasında 0 dönüyordu
+
+Sözdizimi bozuk bir dosya tanıyı basıp **"ok"** alıyor ve çıkış kodu 0
+oluyordu, yani `tulpar typecheck`i kapı olarak kullanan bir CI ayrıştırma
+hatalarına kördü — biçimlendiricinin ürettiği bozuk kodu yakalayabilecek tek
+denetim de buydu. Sebep: **parser hatadan kurtuluyor**, tanıyı basıp kısmi
+bir AST döndürüyor ve istisna atmıyor; `try/catch` + `!ast` denetimi bunu
+göremiyor. Sayaç zaten vardı (`parser_get_error_count`, tam bu iş için
+belgelenmiş, typeinfer ön-geçişi de okuyordu) — eksik olan yalnız bu komuttu.
+
+### Added — biçimlendirici denetimi (`tests/fmt_audit.sh`)
+
+`build.sh suites` artık her `examples/`, `examples/en/` ve `lib/` dosyası için
+üç şeyi ölçüyor (~2 sn, 141 dosya): fmt çalışıyor, **idempotent**
+(fmt∘fmt = fmt — değilse kaydet-biçimlendir döngüsünde dosya sonsuza kadar
+değişir), ve çıktı **hâlâ ayrışıyor**. Bozma denendi ve denetim kızardı.
+Ayrıca altı örnekte formatlanmış hâlin ÇALIŞMA çıktısı da karşılaştırıldı:
+beşi birebir aynı, altıncısında tek fark zaman ölçen satırlar.
+
+
 ### Fixed — ANDROID: paket kimliği artık oyun adından türüyor (iki oyun birbirini siliyordu)
 
 `tulpar.toml` yazmayan her oyun `dev.tulparlang.game` paket kimliğini

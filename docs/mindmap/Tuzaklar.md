@@ -234,6 +234,34 @@ dururken ikisi de "NDK bulunamadı" diyordu ve Android hedefi kullanılamıyordu
 Artık ikisi de aynı beş yere bakıyor ve `dist_archive_audit.py` ayrışmayı
 denetliyor — bir kural iki dosyada yazılıysa, aynı olduklarını SINA.
 
+## 6c. Yayınlanan ARAÇLARIN hiç denetimi yoktu
+`tulpar fmt` ve `tulpar typecheck` kullanıcıya doğrudan dokunan iki komut ve
+**hiçbir otomasyonda yoklardı** (eski `*_smoke.py` harness'ları kaldırılmıştı).
+Sonuç: üç ayrı bozulma birden hayatta kaldı ve hiçbiri bir koşumu kızartmadı.
+
+| Hata | Sonuç |
+|---|---|
+| `i++` → `i + +` | biçimlendirici DERLENMEYEN kod üretiyordu (84 dosya `++` kullanıyor) |
+| `=>` → `= >` | `match` ifadesi ayrışmıyordu |
+| `/*` → `/ *` | blok yorumun İÇİ kod gibi dolgulanıyor, dosya ayrışmıyordu |
+| `typecheck` ayrıştırma hatasında **0** dönüyordu | "ok" yazıp geçiyordu; bozulmayı yakalayacak tek kapı da kördü |
+
+Kök neden ortak: biçimlendirici **karakter düzeyinde** çalışıyor ve iki
+karakterli belirteçleri tanımıyordu; `//` ile dizgiler ele alınmıştı, `/*`
+alınmamıştı. Blok yorum satırları artık **olduğu gibi** kopyalanıyor — içeride
+hizalanmış tablo/şema olabilir ve onu "düzeltmek" biçimlendiricinin işi değil.
+
+`typecheck` tarafında sayaç ZATEN vardı (`parser_get_error_count`, tam bu iş
+için belgelenmiş) ve typeinfer ön-geçişi onu okuyordu; eksik olan yalnız bu
+komuttu — **parser hatadan kurtulup kısmi AST döndürüyor**, yani `try/catch`
+ve `!ast` denetimine güvenmek yetmiyor.
+
+**Çare:** `tests/fmt_audit.sh` (`build.sh suites`, ~2 sn) her `examples/`,
+`examples/en/` ve `lib/` dosyası için üç şeyi ölçüyor: fmt çalışıyor,
+**idempotent** (fmt∘fmt = fmt — değilse kaydet-biçimlendir döngüsünde dosya
+sonsuza kadar değişir), ve çıktı **hâlâ ayrışıyor**. Bozma denendi: `++`
+düzeltmesini geri almak denetimi kızartıyor.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.

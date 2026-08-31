@@ -39,6 +39,36 @@ std::string lstrip(const std::string &s) {
     return s.substr(i);
 }
 
+// Satırda, DİZGİ ve `//` dışında kalan bir `/*` var mı ve satır içinde
+// KAPANMIYOR mu? Öyleyse blok yorum başlıyor demektir. Dizgiyi atlamak şart:
+// `str s = "metin /* icinde */ kalsin";` bir yorum AÇMAZ.
+bool line_opens_block_comment(const std::string &line) {
+    bool in_str = false;
+    char quote = 0;
+    for (size_t i = 0; i < line.size(); i++) {
+        char c = line[i];
+        if (in_str) {
+            if (c == '\\' && i + 1 < line.size()) { i++; continue; }
+            if (c == quote) in_str = false;
+            continue;
+        }
+        if (c == '"' || c == '\'') { in_str = true; quote = c; continue; }
+        if (c == '/' && i + 1 < line.size() && line[i + 1] == '/') return false;
+        if (c == '/' && i + 1 < line.size() && line[i + 1] == '*') {
+            // Aynı satırda kapanıyorsa durum taşınmıyor — ama satır yine de
+            // olduğu gibi bırakılıyor (çağıran öyle yapıyor).
+            return line.find("*/", i + 2) == std::string::npos;
+        }
+    }
+    return false;
+}
+
+// Blok yorum İÇİNDEYKEN kapanış arıyoruz; burada dizgi kuralı YOK, çünkü
+// yorumun içinde dizgi diye bir şey yok — `*/` nerede geçerse orada biter.
+bool line_closes_block_comment(const std::string &line) {
+    return line.find("*/") != std::string::npos;
+}
+
 // Count net `{` minus `}` for a single source line, ignoring braces that
 // occur inside line comments or string literals. We don't try to handle
 // every edge case (escaped quotes inside backticks, e.g.) — Tulpar's
@@ -287,13 +317,32 @@ std::string normalise_line_spacing(const std::string &content) {
         // Skip member-access dot — no spaces around it ever.
         if (c == '.') { out.push_back(c); continue; }
 
+        // `++` / `--` TEK bir belirteçtir ve YANAŞIK yazılır. Padding alan
+        // ikili operatör listesinde olmadıkları için tek karakterlik `+`
+        // dalına düşüyorlardı ve `i++` → `i + +` oluyordu: biçimlendirici
+        // DERLENMEYEN kod üretiyordu. Depoda 84 dosya `++`/`--` kullanıyor ve
+        // `fmt --write` bu bozuk hâli kullanıcının kaynağının ÜSTÜNE yazıyor.
+        //
+        // Eşleşme kaynakta YANAŞIK olmayı şart koşuyor — lexer de tam olarak
+        // böyle karar veriyor (`a - -b` iki ayrı eksi, `a--b` tek `--`), yani
+        // biçimlendirici ile ayrıştırıcı aynı şeyi görüyor.
+        if (two('+', '+') || two('-', '-')) {
+            out.push_back(c);
+            out.push_back(content[i + 1]);
+            i++;
+            continue;
+        }
+
         // Detect operators that take padding.
         bool is_op = false;
         size_t op_len = 1;
         if (two('=', '=') || two('!', '=') || two('<', '=') ||
             two('>', '=') || two('&', '&') || two('|', '|') ||
             two('+', '=') || two('-', '=') || two('*', '=') ||
-            two('/', '=')) {
+            two('/', '=') || two('=', '>')) {
+            // `=>` (match kolu) LİSTEDE OLMALIYDI: yoksa `=` ve `>` ayrı ayrı
+            // dolgulanıp `= >` çıkıyordu ve match ifadesi AYRIŞMIYORDU —
+            // biçimlendirici derlenmeyen kod üretiyordu (üç örnek dosya).
             is_op = true; op_len = 2;
         } else if (c == '+' || c == '*' || c == '/' || c == '%' ||
                    c == '<' || c == '>' || c == '=') {
@@ -443,7 +492,32 @@ std::string fmt_source(const std::string &source, int indent_width) {
     out.reserve(source.size());
     int depth = 0;
     int consecutive_blank = 0;
+    // BLOK YORUM durumu satırlar arası taşınıyor. Biçimlendirici karakter
+    // düzeyinde çalışıyor ve `/*` diye bir şey BİLMİYORDU: `/` ile `*`
+    // ayrı ayrı ikili operatör sayılıp `/ *` yazılıyor, içerideki düzyazı da
+    // kod gibi dolgulanıyordu. Sonuç, blok yorumu olan her dosyanın
+    // AYRIŞMAMASI (ölçüldü: lib/async.tpr).
+    //
+    // Blok yorum satırları OLDUĞU GİBİ kopyalanıyor: içeride hizalanmış
+    // tablolar/ASCII şemalar olabilir ve onları "düzeltmek" biçimlendiricinin
+    // işi değil. Aynı sebeple kapanış satırının kalanı da dokunulmadan
+    // geçiyor — `*/` sonrası kod nadir, bozmamak ondan önemli.
+    bool in_block = false;
     for (const auto &raw : lines) {
+        if (in_block) {
+            out.append(rstrip(raw));
+            out.push_back('\n');
+            consecutive_blank = 0;
+            if (line_closes_block_comment(raw)) in_block = false;
+            continue;
+        }
+        if (line_opens_block_comment(raw)) {
+            out.append(rstrip(raw));
+            out.push_back('\n');
+            consecutive_blank = 0;
+            in_block = true;
+            continue;
+        }
         std::string trimmed = lstrip(rstrip(raw));
         if (trimmed.empty()) {
             // Blank line: emit just the newline, no indent. We collapse
