@@ -29,10 +29,10 @@
     {"tag": "wall", "shape": "cube", "x": -6, "y": 1.5, "z": -14, "sx": 10, "sy": 3, "sz": 1.5, "color": [140,132,118], "yaw": 30}
   ],
   "rules": [
-    {"on": "hit", "a": "player", "b": "item", "do": "collect", "n": 50},
+    {"on": "hit", "a": "player", "b": "item", "do": "collect", "n": 50, "sound": "examples/assets/sesler/altin.wav"},
     {"on": "hit", "a": "player", "b": "enemy", "do": "damage", "n": 12},
     {"on": "hit", "a": "bullet", "b": "player", "do": "hurt", "n": 8},
-    {"on": "cleared", "tag": "item", "do": "win"},
+    {"on": "cleared", "tag": "item", "do": "win", "sound": "examples/assets/sesler/kazandin.wav"},
     {"on": "cleared", "tag": "player", "do": "lose"}
   ]
 }

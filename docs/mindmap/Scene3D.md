@@ -146,6 +146,16 @@ yalnız testlerden çağrılıyordu — kayıt sisteminin başlığındaki söz 
 > `level_count3d()` kullanıldı ve "Bölümler" düğmesi kod tabanlı oyunlarda hiç
 > çıkmadı.
 
+> **Tarama sonucu (2026-09-01):** aynı gözle bütün manşet özellikler
+> tarandı. Beş tanesinin hiç örneği yoktu; üçü kapatıldı — **bölge sesi**
+> (arena, zehir havuzu), **kural sesi** (`toplayici.scene.json`, tek satır
+> VERİ, kod değil) ve **yüzme/kaldırma kuvveti** (terrain, suyun üstünde
+> yüzen sandık — su vardı, üstünde duran hiçbir şey yoktu). Kalan ikisi
+> bilerek açık: **müzik** için depoda ses dosyası yok (binary varlık kararı)
+> ve **nişan modu** arena'nın otomatik ateşiyle çakışıyor. Yanlış alarm da
+> çıktı: animasyon harmanlaması `scene3d_karakter`'de otomatik yoldan
+> (`anim3d`) zaten gösteriliyor, tarama yalnız elle seçim API'sini arıyordu.
+
 > ⚠️ **Motorun ses yolu HİÇBİR 3B örnekte gösterilmiyordu** (2026-09-01'e
 > kadar). Kural sesi, bölge sesi ve konumsal stereo ses hepsi yazılmış ve
 > testliydi, `.wav` varlıkları depodaydı — ama tek bir `scene3d_*` örneği

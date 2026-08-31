@@ -115,6 +115,10 @@ func build_zones() {
     // ÇIKINCA kancası: havuzdan çıkmak da bir olay. Taklit yöntemiyle bunu
     // yazmak için oyunun "geçen kare içinde miydim" bayrağı tutması gerekirdi.
     cikinca3d(poison_zone, on_poison_exit);
+    // BÖLGE SESİ: kanca yazmadan, bölgenin kendi alanı. Girişte bir kez
+    // çalıyor (bölge sesi GİRİŞ olayına bağlı) ve sahne biçiminde
+    // taşınıyor — editörden de seçilebiliyor, kod gerekmiyor.
+    bolge_ses3d(poison_zone, "examples/assets/sesler/ates.wav");
 }
 
 func spawn_player() {

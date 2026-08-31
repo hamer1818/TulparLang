@@ -73,6 +73,14 @@ func setup() {
 
     player = spawn3(0.0, 30.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
     camera_orbit(player, 16.0, 10.0);
+    // FLOATING CRATE — the water was already there but nothing sat on it, so
+    // buoyancy existed in the engine and appeared in NO example. Floating is
+    // a BEHAVIOUR, not a world setting: it belongs to the body, which is why
+    // it serialises and can be added from the editor.
+    // (force, depth) = push strength and the depth it settles at.
+    int crate = spawn3(6.0, PEAK * 0.22 + 4.0, 6.0,  1.6, 1.6, 1.6,
+                       rgb(180, 130, 70), SHAPE_CUBE, TAG_PROP);
+    float_behavior3d(crate, 26.0, 0.5);
 
     // Sit the gold ON the terrain surface. Placed without asking for the
     // height they would either hang in the air or sink into a hill.

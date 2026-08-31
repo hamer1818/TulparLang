@@ -9,6 +9,34 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — "testi var ama örneği yok" taraması: üç özellik daha gösteriliyor
+
+Konumsal sesin başına gelen şey (yazılmış, testli, hiçbir örnekte yok) bir
+kalıba işaret ediyordu; bütün manşet özellikler aynı gözle tarandı. **Beş
+özelliğin hiç örneği yoktu**, üçü kapatıldı:
+
+- **Bölge sesi** — `scene3d_arena`'nın zehir havuzu artık girişte ses
+  çalıyor. Kanca YOK: ses bölgenin kendi alanı, sahne biçiminde taşınıyor ve
+  editörden seçilebiliyor.
+- **Kural sesi** — `examples/scenes/toplayici.scene.json` içindeki "topla" ve
+  "kazan" kurallarına birer `"sound"` eklendi. **Tek satır veri, sıfır kod**:
+  veri odaklı ses yolunun tam olarak gösterilmesi gereken hâli.
+- **Yüzme / kaldırma kuvveti** — `scene3d_terrain`'de suyun üstünde yüzen bir
+  sandık. Su zaten vardı ama üstünde duran hiçbir şey yoktu, yani kuvvet
+  motorda yazılı olduğu hâlde görünmüyordu.
+
+Kalan ikisi bilerek açık: **müzik** için depoda ses dosyası yok (binary varlık
+eklemek ayrı bir karar) ve **nişan modu** arena'nın otomatik ateşiyle
+çakışıyor.
+
+Tarama bir YANLIŞ ALARM da üretti ve düzeltildi: animasyon harmanlaması
+`scene3d_karakter`'de otomatik yoldan (`anim3d`) zaten gösteriliyor — tarama
+yalnız elle klip seçme API'sini (`anim_set3d`) arıyordu. Genel bir "her API
+bir örnekte geçsin" denetimi bilerek YAZILMADI: 286 özellik grubunun 197'si
+"kapsanmamış" görünüyor (editör API'si, sorgular, JSON'dan sürülen
+davranışlar) ve hep kırmızı bir denetim, kırmızıyı görmezden gelmeyi öğretir.
+
+
 ### Added — 3B örnekte SES: motorun ses yolu ilk kez gösteriliyor
 
 Kullanıcı ses ayarını denemek isteyince "oyundan hiç ses gelmiyor" dedi.

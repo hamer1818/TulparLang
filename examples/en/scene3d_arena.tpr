@@ -116,6 +116,10 @@ func build_zones() {
     // imitation approach would need the game to keep a "was I inside last
     // frame" flag.
     on_exit3d(poison_zone, on_poison_exit);
+    // ZONE SOUND: no hook needed, it is a field of the zone itself. It
+    // fires once on ENTER and travels in the scene format — the editor
+    // can pick it too, no code required.
+    trigger_sound3d(poison_zone, "examples/assets/sesler/ates.wav");
 }
 
 func spawn_player() {
