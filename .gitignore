@@ -191,6 +191,7 @@ arcade_lvl_*.txt
 # kalıcılık testleri de bunları CWD'ye düşürüyor.
 scene3d_best_*.txt
 scene3d_lvl_*.txt
+scene3d_vol_*.txt
 
 # 3B masaüstü derleme çıktıları (./tulpar build examples/scene3d_*.tpr)
 /editor

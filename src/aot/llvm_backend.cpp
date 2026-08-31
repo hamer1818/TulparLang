@@ -848,6 +848,7 @@ static const TameBuiltin k_tame_builtins[] = {
     {"tm_play_music", "aot_tm_play_music_ptr", 1},
     {"tm_stop_music", "aot_tm_stop_music_ptr", 1},
     {"tm_music_volume", "aot_tm_music_volume_ptr", 2},
+    {"tm_master_volume", "aot_tm_master_volume_ptr", 1},
     // ek çizim / araç
     {"tm_triangle", "aot_tm_triangle_ptr", 7},
     {"tm_screenshot", "aot_tm_screenshot_ptr", 1},

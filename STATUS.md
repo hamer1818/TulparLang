@@ -1832,10 +1832,16 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   ızgarasında kilitli bölüm çiziliyor ama seçilemiyor (gizlemek "kaç bölüm
   var" bilgisini de götürürdü). Dağıtım konuma göre değil TÜRE göre.
   Detay: [[Scene3D]] "Menü katmanı".
+- ✅ **Ayarlar ekranı geldi (2026-08-31).** Motorda ANA ses seviyesi yoktu —
+  yayınlanmış bir oyunda sesi kısmanın yolu yoktu. Yeni tame binding'i
+  `tm_master_volume` (`master_volume`/`ana_ses`) ses ve müziği birden
+  ölçekliyor; seviye duraklat menüsündeki Ayarlar ekranından sürülüyor ve
+  kayıt açıksa diske yazılıyor. Seviye ses aygıtı açılmadan önce de
+  ayarlanabiliyor (C tarafında saklanıp aygıt açılınca uygulanıyor).
 - 🟢 **Menü katmanının kalan eksikleri.** arcade'de olan ama 3B'ye
-  taşınmayanlar: **ayarlar ekranı (ses/dil/FPS)**, rozet/başarım, skor
-  tablosu. Ses için önce bir tame binding'i gerekiyor: motorda ANA SES
-  SEVİYESİ yok, yalnız müzik başına `music_volume` var.
+  taşınmayanlar: rozet/başarım, skor tablosu, dil/FPS ayarı (dil sistem
+  yerelinden geliyor, FPS'i motor sürmüyor — ikisi de "ayar" olarak
+  eklenirse çalışmayan düğme olurdu).
   `on_hud3d` var ama her oyun kendi menüsünü elden yazıyor.
 - ✅ **Tetikleyici bölge API'si geldi.** `trigger3d` / `trigger_sphere3d`
   (`bolge3d`/`bolge_kure3d`) + `on_enter3d`/`on_exit3d`/`on_stay3d`.

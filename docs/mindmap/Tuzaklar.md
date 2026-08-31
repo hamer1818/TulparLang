@@ -60,6 +60,20 @@ kelepçeleyen satır (pay tabanı zaten sağlıyordu) ve "son panel artanı alı
 özel durumu (yığmalı toplamda son panelin bitişi zaten tam T). İki yerde
 tutulan koruma, hangisinin yük taşıdığını sınanamaz yapıyor.
 
+### 1i. Soyutlama DEJENERE, bozma bu yüzden kaçıyor
+Duraklat menüsünün tür sabitleri 0,1,2,3'tü ve liste sırası da 0,1,2,3 —
+yani "türe göre dağıt" eşlemesi birim fonksiyondu. Dağıtıcıyı `a - 1`'e
+çeviren bozma **hiçbir davranışı bozmadan** çalıştı ve testten kaçtı.
+Soyutlama gerçekten var olsun diye sabitler kaydırıldı (`_PB_* = 10..13`).
+**Kural:** bir dolaylılık katmanı ekliyorsan, onu atlayan kestirmenin
+GERÇEKTEN farklı sonuç vermesini sağla — yoksa katman yalnız kâğıt üstünde.
+
+### 1j. Disk artığı testler arasında taşınıyor
+"Diske yazılmamış olmalı" testi, önceki bir **bozma denemesinin** yazdığı
+dosyayı okuyup yanlış yere kızardı. Kayıt/dosya sınayan testler kendi
+anahtarını ÖNCE temizlemeli (`save_data(key, "")`); enjeksiyon turları da
+diske yazabilir.
+
 ### 1h-4. Test ÖLÇEĞİ sızıntıyı görünmez yapıyor
 Bölüm ızgarasının "ekranda kalıyor" testi 10 bölümle koşuyordu; dikey
 ortalamayı sabit bir tepeye çeviren bozma o boyutta hâlâ sığıyor ve

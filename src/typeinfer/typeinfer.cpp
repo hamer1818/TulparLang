@@ -1111,6 +1111,7 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"tm_play_music", TYPE_VOID, {TYPE_INT}},
       {"tm_stop_music", TYPE_VOID, {TYPE_INT}},
       {"tm_music_volume", TYPE_VOID, {TYPE_INT, TYPE_UNKNOWN}},
+      {"tm_master_volume", TYPE_VOID, {TYPE_UNKNOWN}},
       {"tm_triangle", TYPE_VOID,
        {TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN, TYPE_UNKNOWN,
         TYPE_UNKNOWN, TYPE_INT}},

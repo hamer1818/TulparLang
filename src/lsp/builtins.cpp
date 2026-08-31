@@ -124,6 +124,7 @@ const BuiltinEntry kBuiltins[] = {
     {"tm_play_music",   "tm_play_music(mus: int)",                      "Müziği başlatır. Sarmalayıcı: play_music()."},
     {"tm_stop_music",   "tm_stop_music(mus: int)",                      "Müziği durdurur. Sarmalayıcı: stop_music()."},
     {"tm_music_volume", "tm_music_volume(mus: int, vol: float)",        "Müzik seviyesi 0.0-1.0. Sarmalayıcı: music_volume()."},
+    {"tm_master_volume", "tm_master_volume(vol: float)",                 "ANA ses seviyesi 0.0-1.0 (ses+müzik). Sarmalayıcı: master_volume()."},
     {"tm_triangle",     "tm_triangle(x1, y1, x2, y2, x3, y3, color: int)", "Dolu üçgen çizer (köşe sırası önemsiz — sarım otomatik düzeltilir). Sarmalayıcı: triangle()."},
     {"tm_screenshot",   "tm_screenshot(path: str)",                     "Pencerenin anlık görüntüsünü PNG olarak kaydeder. Dosya her zaman çalışma dizinine yazılır (path'in dizin kısmı kırpılır — raylib davranışı). Sarmalayıcı: screenshot()."},
     {"tm3_camera",      "tm3_camera(px, py, pz, tx, ty, tz, fov)",      "3D kamerayı konumlar: göz (px,py,pz), bakış hedefi (tx,ty,tz), dikey FOV (derece). Sarmalayıcı: kamera3d()/camera3d()."},

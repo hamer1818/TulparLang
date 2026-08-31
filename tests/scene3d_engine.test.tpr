@@ -10030,19 +10030,23 @@ func t_menu_dispatch_uses_quit_or_stop() {
     editor3d(true);
     ed_play3d();
     _s3_quit = 0;
-    _s3_menu_act3(1, 3);
+    // Duraklattaki "Cikis"in SIRASINI koddan aliyoruz: araya "Ayarlar"
+    // girdiginde sabit 3 sessizce ayarlari acmisti.
+    _s3_menu_act3(1, _s3_pause_qi3() + 1);
     assert_eq_int(_s3_quit, 0);
     editor3d(true);
     ed_play3d();
     _s3_quit = 0;
-    _s3_menu_act3(0, 2);
+    _s3_menu_act3(0, _s3_title_qi3() + 1);
     assert_eq_int(_s3_quit, 0);
     editor_uygulamasi3d(false);
     editor3d(false);
     // BAGIMSIZ oyunda ucu de cikmali.
+    // Sıralar KODDAN: menülere düğme eklendiğinde sabit sayılar sessizce
+    // başka bir işi sınamaya başlıyor.
     _s3_quit = 0; _s3_menu_act3(2, 2); assert_eq_int(_s3_quit, 1);
-    _s3_quit = 0; _s3_menu_act3(1, 3); assert_eq_int(_s3_quit, 1);
-    _s3_quit = 0; _s3_menu_act3(0, 2); assert_eq_int(_s3_quit, 1);
+    _s3_quit = 0; _s3_menu_act3(1, _s3_pause_qi3() + 1); assert_eq_int(_s3_quit, 1);
+    _s3_quit = 0; _s3_menu_act3(0, _s3_title_qi3() + 1); assert_eq_int(_s3_quit, 1);
     _s3_quit = 0;
     // "Devam" ve "bekle" cikis DEGIL.
     _s3_menu_act3(1, 1); assert_eq_int(_s3_quit, 0);
@@ -10396,6 +10400,135 @@ func t_counter_snapshot_matches_the_top_of_the_stack() {
     assert_eq_int(_ed_karsi_bicim3(yapisal), 1);
     assert_eq_int(_ed_karsi_bicim3(bolumlu), 0);
     assert_eq_int(_ed_karsi_bicim3(bos), 0);
+}
+
+// ===========================================================================
+// AYARLAR EKRANI (ses seviyesi)
+// Motorda ANA ses seviyesi yoktu — yalnız müzik başına `music_volume` vardı,
+// yani yayınlanmış bir oyunda sesi kısmanın yolu yoktu.
+// ===========================================================================
+
+func t_volume_is_clamped_and_readable() {
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_vol0");
+    ses_seviye3d(0.5);
+    assert(_t_yakinf3(ses_seviye_now3d(), 0.5, 0.001), "seviye okunabilmeli");
+    ses_seviye3d(2.0);
+    assert(_t_yakinf3(ses_seviye_now3d(), 1.0, 0.001), "ust kelepce");
+    ses_seviye3d(0.0 - 1.0);
+    assert(_t_yakinf3(ses_seviye_now3d(), 0.0, 0.001), "alt kelepce");
+    ses_seviye3d(1.0);
+}
+
+// Ayarlar ekranının artırma/azaltma kuralı da kelepçeden geçiyor: uçta
+// basmaya devam etmek sayıyı 1.0'ın üstüne ya da 0.0'ın altına taşımamalı.
+func t_volume_steps_stop_at_the_ends() {
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_vol1");
+    ses_seviye3d(1.0);
+    _s3_ui = UI_SETTINGS;
+    _s3_menu_act3(4, 2);                       // "+" tavanda
+    assert(_t_yakinf3(ses_seviye_now3d(), 1.0, 0.001), "tavanda kalmali");
+    int k = 0;
+    while (k < 20) { _s3_menu_act3(4, 1); k = k + 1; }   // 20 kez "-"
+    assert(_t_yakinf3(ses_seviye_now3d(), 0.0, 0.001), "tabanda kalmali");
+    // Adim gercekten uyguluyor: bir "+" sonrasi taban degil.
+    _s3_menu_act3(4, 2);
+    assert(ses_seviye_now3d() > 0.0, "artirma is gormeli");
+    assert(_t_yakinf3(ses_seviye_now3d(), _s3_vol_step3(), 0.001),
+           "bir adim kadar artmali");
+    ses_seviye3d(1.0);
+}
+
+// Seviye diske yazılıyor VE yeni oturumda geri okunuyor. Yalnız değişkeni
+// doldurmak yetmez — okunan değer tame'e de itilmeli, yoksa oyuncunun geçen
+// sefer kıstığı ses bu oturumda sessizce tam açık kalırdı.
+func t_volume_survives_a_restart() {
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_vol2");
+    save_data("scene3d_vol_t3d_vol2.txt", "");
+    save_progress3d();
+    ses_seviye3d(0.3);
+    assert(load_data("scene3d_vol_t3d_vol2.txt") == "30", "diske yazilmali");
+    // Yeni oturum.
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_vol2");
+    _s3_vol3 = 1.0;                            // "tam acik" hale don
+    save_progress3d();                         // ilerlemeyle birlikte ses de gelir
+    assert(_t_yakinf3(ses_seviye_now3d(), 0.3, 0.001), "seviye kayittan gelmeli");
+    // Uygulama da kaynaktan: okunan deger tame'e itilmeli.
+    str src = read_file("lib/scene3d.tpr");
+    array g = split(src, "str sv = load_data(_sav_vol_key3());");
+    assert(length(g) > 1, "kayittan ses okunmali");
+    array gov = split(g[1], "\n}");
+    assert(length(split(gov[0], "master_volume(_s3_vol3)")) > 1,
+           "okunan seviye uygulanmali");
+    ses_seviye3d(1.0);
+}
+
+// Diske yazmak OPT-IN — kaydın geri kalanıyla aynı kural. Kapalıyken ayar
+// yine ÇALIŞIYOR, yalnız oturumla sınırlı.
+func t_volume_write_is_opt_in() {
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_vol3");
+    // Anahtar ONCE temizleniyor: "yazilmamis olmali" iddiasi, onceki bir
+    // kosumdan (ya da bozma denemesinden) kalan dosyayi okursa yanlis yere
+    // kizariyor. Disk durumu testler arasinda TASINIYOR.
+    save_data("scene3d_vol_t3d_vol3.txt", "");
+    // kayit ACILMADI
+    ses_seviye3d(0.4);
+    assert(_t_yakinf3(ses_seviye_now3d(), 0.4, 0.001), "ayar yine calismali");
+    assert(load_data("scene3d_vol_t3d_vol3.txt") == "", "diske YAZILMAMALI");
+    ses_seviye3d(1.0);
+}
+
+// Duraklat listesi de TÜRE göre dağıtılıyor: araya "Ayarlar" girince konuma
+// sabitlenmiş bir dağıtıcı "Çıkış"ı sessizce ayarlara bağlamıştı.
+func t_pause_menu_dispatches_by_kind() {
+    assert_eq_int(_s3_pause_kind3(0), _PB_RESUME3);
+    assert_eq_int(_s3_pause_kind3(_s3_pause_qi3()), _PB_QUIT3);
+    assert_eq_int(_s3_pause_qi3(), _s3_pause_n3() - 1);
+    // Ayarlar duraklattan aciliyor.
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_pk");
+    int si = 0;
+    int ai = 0 - 1;
+    while (si < _s3_pause_n3()) {
+        if (_s3_pause_kind3(si) == _PB_SET3) { ai = si; }
+        si = si + 1;
+    }
+    assert(ai >= 0, "Ayarlar dugmesi olmali");
+    _s3_ui = UI_PAUSE;
+    _s3_menu_act3(1, ai + 1);
+    assert_eq_int(_s3_ui, UI_SETTINGS);
+    // GERI duraklata doner, oyuna DEGIL: ayarlar oradan acildi ve oyuna
+    // dogrudan donmek duraklatmayi da sessizce kaldirirdi.
+    _s3_menu_act3(4, 3);
+    assert_eq_int(_s3_ui, UI_PAUSE);
+}
+
+// Duraklat dört düğme taşıyor — dikey listenin tavanı da tam dört.
+func t_pause_menu_fits_the_screen() {
+    _win_h = 720; _win_w = 1280;
+    assert(_s3_pause_n3() <= _S3_BTN_MAX3, "duraklat listesi tavani asmamali");
+    float alt = _s3_btn_y(_s3_pause_n3() - 1) + _s3_btn_h();
+    assert(alt <= _win_h * 1.0, "duraklat dugmeleri ekrana sigmali");
+}
+
+func t_settings_screen_is_wired() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(split(src, "_s3_set_draw();")) > 1, "ayarlar ekrani cizilmeli");
+    assert(length(split(src, "_s3_menu_act3(4, _s3_set_step())")) > 1,
+           "ayarlar ekrani girdi almali");
+    assert(length(split(src, "_s3_pause_kind3(a - 1)")) > 1,
+           "duraklat dagitimi TURE gore olmali");
+    // Motor seviyeyi tame'e itiyor: builtin cagrilmazsa ekran calisiyor
+    // gorunur ama SES degismez.
+    array g = split(src, "func ses_seviye3d(");
+    assert(length(g) > 1, "seviye ayari olmali");
+    array gov = split(g[1], "\nfunc ");
+    assert(length(split(gov[0], "master_volume(_s3_vol3)")) > 1,
+           "seviye tame'e itilmeli");
 }
 
 // ===========================================================================
@@ -11966,6 +12099,13 @@ test("kutu her yone ve kelepceli", "t_marquee_rect_normalises_and_clamps");
 test("kutu merkeze gore seciyor", "t_marquee_selects_by_centre");
 test("kutu sifirlar, CTRL ekler", "t_marquee_replaces_but_ctrl_adds");
 test("kutu secimi kare dongusune bagli", "t_marquee_is_wired_into_the_frame");
+test("ses seviyesi kelepceli", "t_volume_is_clamped_and_readable");
+test("ses adimlari ucta duruyor", "t_volume_steps_stop_at_the_ends");
+test("ses seviyesi yeniden acilista duruyor", "t_volume_survives_a_restart");
+test("diske yazma opt-in", "t_volume_write_is_opt_in");
+test("duraklat dagitimi ture gore", "t_pause_menu_dispatches_by_kind");
+test("duraklat menusu ekrana sigiyor", "t_pause_menu_fits_the_screen");
+test("ayarlar ekrani bagli", "t_settings_screen_is_wired");
 test("baslik dugmeleri duruma gore", "t_title_buttons_follow_the_state");
 test("ESC hep cikisa gidiyor", "t_title_escape_always_quits");
 test("baslik dugmeleri ekrana siğiyor", "t_title_buttons_fit_the_screen");

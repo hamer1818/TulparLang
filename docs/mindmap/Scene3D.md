@@ -107,7 +107,8 @@ saçılması istenen şey değil.
 | Bölge EYLEMİ (veri) | `bolge_eylem3d(t, ZACT_*, miktar)`, `bolge_ses3d` | Kod kancası olmadan: kazan/kaybet/gireni yok et/hasar/skor/**sonraki bölüm** |
 | Kural eylemi | `ACT_COLLECT/DAMAGE/KILL/HURT/WIN/LOSE/**NEXT**` | `ACT_NEXT` olmadan veri sahnesi bölüm ilerletemiyordu |
 | Kalıcılık | `kayit_ac3d()` (OPT-IN), `rekor3d()` | Diske yazdığı için opt-in |
-| UI | `baslangic3d`, duraklat, oyun-bitti, **bölüm seçme** | Menüde imleç + kol A/B; başlık düğmeleri duruma göre |
+| UI | `baslangic3d`, duraklat, oyun-bitti, **bölüm seçme**, **ayarlar** | Menüde imleç + kol A/B; düğmeler TÜRE göre dağıtılıyor |
+| Ses seviyesi | `ses_seviye3d(v)`/`volume3d`, `ana_ses(v)` (tame) | ANA seviye; diske yazma opt-in |
 | Arazi | `arazi3d`, `arazi_dogal3d`, `arazi_katmani3d` | Katman boyama tepe rengiyle |
 | Gündüz-gece | `gunduz_gece3d(sn)`, `saati_ayarla3d` | Gölgeler güneşle döner |
 | Girdi | klavye + dokunmatik + **gamepad** | Üçü aynı anda açık |
@@ -143,12 +144,40 @@ yalnız testlerden çağrılıyordu — kayıt sisteminin başlığındaki söz 
 > `level_count3d()` kullanıldı ve "Bölümler" düğmesi kod tabanlı oyunlarda hiç
 > çıkmadı.
 
+### Ayarlar — ses seviyesi
+Motorda **ana ses seviyesi yoktu**: yalnız müzik başına `music_volume` vardı,
+yani yayınlanmış bir oyunda sesi kısmanın yolu yoktu. Yeni tame binding'i
+`tm_master_volume` (sarmalayıcı `master_volume`/`ana_ses`) ses ve müziğin
+ikisini birden ölçekliyor; müzik başına ayar onun ÜSTÜNE biniyor.
+
+- Değer **motorda** tutuluyor (`_s3_vol3`) ve tame'e itiliyor: geri okuyacak
+  bir builtin yok, olsaydı da iki doğruluk kaynağı olurdu.
+- Diske yazmak **opt-in** (`kayit_ac3d`), kaydın geri kalanıyla aynı kural.
+  Kapalıyken ayar yine çalışıyor, yalnız oturumla sınırlı.
+- **Ayarlar duraklat menüsünde**, başlık ekranında değil: dikey liste en çok
+  dört düğme taşıyor ve başlık zaten dördünü kullanabiliyor. Duraklat oyunun
+  her yerinden bir tuş uzakta.
+- **Geri, duraklata dönüyor** — oyuna değil; ayarlar oradan açıldı ve doğrudan
+  dönmek duraklatmayı da sessizce kaldırırdı.
+
+> ⚠️ **Seviye, ses aygıtı AÇILMADAN önce de ayarlanabilmeli.** Aygıt ilk ses
+> yüklendiğinde açılıyor; doğrudan `SetMasterVolume` çağırmak `setup` içinde
+> yapılan ayarı sessizce düşürürdü. Değer C tarafında saklanıyor ve aygıt
+> açılınca uygulanıyor. Seviye ayarlamak aygıtı AÇMAK için sebep değil —
+> headless'ta açılamaz ve hata basardı.
+
+> ⚠️ **Menü tür sabitleri konumlarla ÇAKIŞMIYOR** (`_PB_* = 10..13`,
+> `_TB_* = 20..23`). 0,1,2,3 verilseydi tür eşlemesi birim fonksiyon olurdu
+> ve dağıtıcıyı `a - 1`'e çeviren bir kestirme hiçbir şeyi bozmadan
+> çalışırdı — soyutlama sırayı değiştiren ilk düzenlemeye kadar yalnız kâğıt
+> üstünde var olurdu. (Bozma denendi ve dejenere hâlde kaçtı.)
+
 > ⚠️ Dikey düğme listesi **en çok dört** düğme taşıyor. Adım sabit 0.15 iken
 > dördüncü düğme ekranın tam alt kenarına dayanıyordu (0.44 + 3×0.15 + 0.11 =
 > 1.00, sıfır boşluk). Adım artık tavandan türüyor (`_s3_btn_step3`).
 
 ## Test edilebilirlik — motorun tasarımını belirleyen kısıt
-`tests/scene3d_engine.test.tpr` **632 test**, hepsi **pencere açmadan** koşuyor.
+`tests/scene3d_engine.test.tpr` **639 test**, hepsi **pencere açmadan** koşuyor.
 Bunu mümkün kılan iki desen:
 - **Cihaz okuması tek yere hapsedilir** (`_read_touch3`, `_read_gamepad3`) —
   motorun geri kalanı yalnız tamponu okur.

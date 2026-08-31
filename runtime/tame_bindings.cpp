@@ -113,6 +113,7 @@ int tame_impl_load_music(const char *path);
 void tame_impl_play_music(int h);
 void tame_impl_stop_music(int h);
 void tame_impl_music_volume(int h, double v);
+void tame_impl_master_volume(double v);
 void tame_impl_cam3(double px, double py, double pz, double tx, double ty,
                     double tz, double fov);
 void tame_impl_begin3(void);
@@ -541,6 +542,11 @@ VMValue aot_tm_stop_music_ptr(VMValue *mus) {
 
 VMValue aot_tm_music_volume_ptr(VMValue *mus, VMValue *vol) {
   tame_impl_music_volume((int)tm_int(mus), tm_num(vol));
+  return VM_VOID();
+}
+
+VMValue aot_tm_master_volume_ptr(VMValue *vol) {
+  tame_impl_master_volume(tm_num(vol));
   return VM_VOID();
 }
 

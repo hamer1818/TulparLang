@@ -1053,12 +1053,52 @@ func _sav_lvl_key3(k): str {
     return "scene3d_lvl_" + _win_title + "_" + toString(k) + ".txt";
 }
 
+// ---- Ses seviyesi -----------------------------------------------------------
+// Motorda ANA ses seviyesi yoktu: yalnız müzik başına `music_volume` vardı,
+// yani yayınlanmış bir oyunda sesi kısmanın yolu YOKTU. Değer motorda
+// tutuluyor ve tame'e itiliyor (`master_volume`), çünkü ekranın göstereceği
+// sayıyı geri okuyacak bir builtin yok — ve olsaydı da iki doğruluk kaynağı
+// olurdu.
+float _s3_vol3 = 1.0;
+func _sav_vol_key3(): str { return "scene3d_vol_" + _win_title + ".txt"; }
+
+// Diske yazmak OPT-IN, kaydın geri kalanıyla aynı kural: `kayit_ac3d`
+// çağırmayan bir oyun kullanıcının diskine dosya bırakmıyor. Kapalıyken ayar
+// yine ÇALIŞIYOR, yalnız oturumla sınırlı.
+func ses_seviye3d(v) {
+    float x = v * 1.0;
+    if (x < 0.0) { x = 0.0; }
+    if (x > 1.0) { x = 1.0; }
+    _s3_vol3 = x;
+    master_volume(_s3_vol3);
+    if (_sav_on == 1 && length(_win_title) > 0) {
+        save_data(_sav_vol_key3(), toString(toInt(_s3_vol3 * 100.0)));
+    }
+}
+func volume3d(v) { ses_seviye3d(v); }
+func ses_seviye_now3d(): float { return _s3_vol3; }
+func volume_now3d(): float { return _s3_vol3; }
+
+// Adım 10%: kolla/klavyeyle on basışta uçtan uca gidiliyor. Daha ince bir
+// adım, kumandayla ayar yapmayı angaryaya çevirirdi.
+func _s3_vol_step3(): float { return 0.1; }
+
 func _s3_load_progress() {
     _best3 = 0;
     _lvl_done3 = [];
     if (_sav_on == 0 || length(_win_title) == 0) { return; }
     str s = load_data(_sav_key3());
     if (length(s) > 0) { _best3 = toInt(s); }
+    // Ses seviyesi de kayıttan geliyor ve HEMEN uygulanıyor: yalnız
+    // değişkeni doldurmak, oyuncunun geçen sefer kıstığı sesi bu oturumda
+    // sessizce tam açık bırakırdı.
+    str sv = load_data(_sav_vol_key3());
+    if (length(sv) > 0) {
+        _s3_vol3 = toInt(sv) / 100.0;
+        if (_s3_vol3 < 0.0) { _s3_vol3 = 0.0; }
+        if (_s3_vol3 > 1.0) { _s3_vol3 = 1.0; }
+        master_volume(_s3_vol3);
+    }
     // Bölüm bayrakları: kayıtlı bölüm sayısı kadar oku.
     int n = length(_lvlN);
     int k = 1;
@@ -1137,6 +1177,7 @@ int UI_NONE  = 0;   // oyun akıyor
 int UI_TITLE = 1;   // başlangıç ekranı
 int UI_PAUSE = 2;   // duraklat örtüsü
 int UI_LEVELS = 3;  // bölüm seçme ızgarası
+int UI_SETTINGS = 4; // ayarlar (ses)
 int _s3_ui = UI_NONE;
 
 int _s3_has_title = 0;
@@ -1229,9 +1270,19 @@ func _s3_menu_act3(kind, a) {
         return;
     }
     if (kind == 1) {
-        if (a == 1) { _s3_ui = UI_NONE; return; }
-        if (a == 2) { restart3d(); return; }
+        int pk = _s3_pause_kind3(a - 1);
+        if (pk == _PB_RESUME3)  { _s3_ui = UI_NONE; return; }
+        if (pk == _PB_RESTART3) { restart3d(); return; }
+        if (pk == _PB_SET3)     { _s3_ui = UI_SETTINGS; return; }
         _s3_quit_or_stop3();
+        return;
+    }
+    // Ayarlar. GERİ duraklata dönüyor — ayarlar oradan açıldı ve oyuna
+    // doğrudan dönmek, duraklatmayı da sessizce kaldırırdı.
+    if (kind == 4) {
+        if (a == 1) { ses_seviye3d(_s3_vol3 - _s3_vol_step3()); return; }
+        if (a == 2) { ses_seviye3d(_s3_vol3 + _s3_vol_step3()); return; }
+        _s3_ui = UI_PAUSE;
         return;
     }
     if (a == 1) { restart3d(); return; }
@@ -1384,10 +1435,13 @@ func _s3_center_text(s, y, size, col) {
 // bir eşleme YOK: her düğmenin NE OLDUĞU soruluyor (`_s3_title_kind3`) ve iş
 // ona göre yapılıyor. Konuma göre dağıtmak, listeye bir düğme eklendiğinde
 // sessizce yanlış işi yaptırırdı — menü şeridinde tam olarak bu yaşandı.
-int _TB_START3 = 0;   // Başla — 1. bölümden
-int _TB_CONT3  = 1;   // Devam — kaldığın bölümden
-int _TB_LVLS3  = 2;   // Bölümler — seçme ızgarası
-int _TB_QUIT3  = 3;   // Çıkış
+// Değerler konumlarla çakışmasın diye kaydırılmış (bkz. `_PB_*`): tür
+// eşlemesini birim fonksiyona düşürmek, konuma göre dağıtan bir kestirmeyi
+// sessizce çalışır kılardı.
+int _TB_START3 = 20;   // Başla — 1. bölümden
+int _TB_CONT3  = 21;   // Devam — kaldığın bölümden
+int _TB_LVLS3  = 22;   // Bölümler — seçme ızgarası
+int _TB_QUIT3  = 23;   // Çıkış
 
 // DEVAM yalnız gerçekten ilerleme varsa. "Devam (Bölüm 1)" ile "Başla" aynı
 // şeydir ve iki ayrı düğme olarak durmaları kullanıcıya olmayan bir soru
@@ -1641,22 +1695,93 @@ func _s3_lv_hit3(n): int {
 }
 
 // ---- Duraklat örtüsü -------------------------------------------------------
+// AYARLAR duraklat menüsünde, başlık ekranında DEĞİL: dikey liste en çok
+// dört düğme taşıyor (`_S3_BTN_MAX3`) ve başlık ekranı zaten dördü de
+// kullanabiliyor (Başla / Devam / Bölümler / Çıkış). Duraklat oyunun her
+// yerinden bir tuş uzakta, yani ses ayarı erişilemez olmuyor.
+//
+// Duraklat listesi de TÜRE göre dağıtılıyor — başlıktakiyle aynı sebep:
+// araya "Ayarlar" girdiğinde konuma sabitlenmiş bir dağıtıcı "Çıkış"ı
+// sessizce ayarlara bağlamıştı (regresyon testi yakaladı).
+// Değerler KONUMLARLA ÇAKIŞMASIN diye kaydırılmış. 0,1,2,3 verseydik tür
+// eşlemesi şu an birim fonksiyon olurdu ve dağıtıcıyı `a - 1`'e çeviren bir
+// kestirme HİÇBİR ŞEYİ bozmadan çalışırdı — yani soyutlama, sırayı
+// değiştiren ilk düzenlemeye kadar yalnız kâğıt üstünde var olurdu.
+// (Bozma denendi: dejenere hâlde davranışsal test kızarmıyordu.)
+int _PB_RESUME3  = 10;
+int _PB_RESTART3 = 11;
+int _PB_SET3     = 12;
+int _PB_QUIT3    = 13;
+func _s3_pause_n3(): int { return 4; }
+func _s3_pause_kind3(i): int {
+    if (i <= 0) { return _PB_RESUME3; }
+    if (i == 1) { return _PB_RESTART3; }
+    if (i == 2) { return _PB_SET3; }
+    return _PB_QUIT3;
+}
+// ÇIKIŞ her zaman SON düğme.
+func _s3_pause_qi3(): int { return _s3_pause_n3() - 1; }
+
 func _s3_pause_draw() {
     _s3_dim();
     _s3_center_text(_s3_t("Duraklatildi", "Paused"), _win_h * 0.18,
                     toInt(_win_h * 0.09), GOLD);
-    _s3_btn_draw(0, _s3_t("Devam", "Resume"));
-    _s3_btn_draw(1, _s3_t("Yeniden", "Restart"));
-    _s3_btn_draw(2, _s3_quit_lbl3());
+    int pi = 0;
+    while (pi < _s3_pause_n3()) {
+        int pk = _s3_pause_kind3(pi);
+        if (pk == _PB_RESUME3)  { _s3_btn_draw(pi, _s3_t("Devam", "Resume")); }
+        if (pk == _PB_RESTART3) { _s3_btn_draw(pi, _s3_t("Yeniden", "Restart")); }
+        if (pk == _PB_SET3)     { _s3_btn_draw(pi, _s3_t("Ayarlar", "Settings")); }
+        if (pk == _PB_QUIT3)    { _s3_btn_draw(pi, _s3_quit_lbl3()); }
+        pi = pi + 1;
+    }
 }
 
-// 1 = devam, 2 = yeniden, 3 = çık, 0 = bekle
+// 1 = devam, 2 = yeniden, 3 = ayarlar, 4 = çık, 0 = bekle
 func _s3_pause_step(): int {
-    _s3_menu_nav(3);
+    _s3_menu_nav(_s3_pause_n3());
     // ESC/P/B = "devam" kestirmesi: duraklattığın tuş seni geri çıkarmalı,
     // hangi düğme seçili olursa olsun.
     if (key_pressed(K_ESC) || key_pressed(K_P) || _gp_back == 1) { return 1; }
     if (key_pressed(K_R)) { return 2; }
+    if (_s3_confirm3()) { return _s3_sel3 + 1; }
+    int b = _s3_btn_pressed(_s3_pause_n3());
+    if (b >= 0) { return b + 1; }
+    return 0;
+}
+
+// ---- Ayarlar ---------------------------------------------------------------
+// Tek satırlık bir ekran ve bilerek: motorun gerçekten SAHİP OLDUĞU tek ayar
+// ses seviyesi. Dil sistem yerelinden geliyor (`_s3_lang`), FPS'i motor
+// sürmüyor. Var olmayan ayarları listelemek, çalışmayan düğmeler demek olurdu.
+func _s3_set_draw() {
+    _s3_dim();
+    _s3_center_text(_s3_t("AYARLAR", "SETTINGS"), _win_h * 0.18,
+                    toInt(_win_h * 0.09), GOLD);
+    int yuzde = toInt(_s3_vol3 * 100.0 + 0.5);
+    _s3_center_text(_s3_t("Ses: ", "Volume: ") + toString(yuzde) + "%",
+                    _win_h * 0.33, toInt(_win_h * 0.055), RAYWHITE);
+    // Çubuk: sayı tek başına "ne kadar" sorusunu göstermiyor.
+    float bw = _win_w * 0.44;
+    float bx = (_win_w - bw) * 0.5;
+    float by = _win_h * 0.40;
+    float bh = _win_h * 0.03;
+    rect(bx, by, bw, bh, rgba(46, 54, 82, 235));
+    if (_s3_vol3 > 0.0) { rect(bx, by, bw * _s3_vol3, bh, GOLD); }
+    rect_lines(bx, by, bw, bh, rgba(190, 160, 60, 200));
+    _s3_btn_draw(0, _s3_t("Ses -", "Volume -"));
+    _s3_btn_draw(1, _s3_t("Ses +", "Volume +"));
+    _s3_btn_draw(2, _s3_t("Geri", "Back"));
+}
+
+// 1 = kıs, 2 = aç, 3 = geri, 0 = bekle
+func _s3_set_step(): int {
+    _s3_menu_nav(3);
+    // Sol/sağ okları DOĞRUDAN seviyeyi sürüyor: bir kaydırıcıda beklenen bu,
+    // ve seçili düğmeye gitmek için önce aşağı inmek zorunda kalmak angarya.
+    if (key_pressed(K_LEFT))  { return 1; }
+    if (key_pressed(K_RIGHT)) { return 2; }
+    if (key_pressed(K_ESC) || _gp_back == 1) { return 3; }
     if (_s3_confirm3()) { return _s3_sel3 + 1; }
     int b = _s3_btn_pressed(3);
     if (b >= 0) { return b + 1; }
@@ -6350,6 +6475,7 @@ func play3d() {
             // Örtüler HUD'ın üstünde: karartma oyunun kendi çizimini de kapatmalı.
             if (_s3_ui == UI_TITLE)      { _s3_title_draw(); }
             else if (_s3_ui == UI_LEVELS){ _s3_levels_draw(); }
+            else if (_s3_ui == UI_SETTINGS) { _s3_set_draw(); }
             else if (_s3_ui == UI_PAUSE) { _s3_pause_draw(); }
             else if (_game_over3 == 1)   { _s3_over_draw(); }
             // Tanılama HER ŞEYİN ÜSTÜNDE: menü örtüsü açıkken de okunabilmeli.
@@ -6369,6 +6495,7 @@ func play3d() {
         // oldu, yani oyuncunun tıkladığı şey ekranda gördüğü şeyle aynı.
         if (_s3_ui == UI_TITLE)        { _s3_menu_act3(0, _s3_title_step()); }
         else if (_s3_ui == UI_LEVELS)  { _s3_menu_act3(3, _s3_levels_step()); }
+        else if (_s3_ui == UI_SETTINGS){ _s3_menu_act3(4, _s3_set_step()); }
         else if (_s3_ui == UI_PAUSE)   { _s3_menu_act3(1, _s3_pause_step()); }
         else if (_game_over3 == 1)     { _s3_menu_act3(2, _s3_over_step()); }
         if (_s3_quit == 1) { break; }

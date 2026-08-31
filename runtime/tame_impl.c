@@ -1611,6 +1611,13 @@ static int tame_music_used[TAME_MAX_MUSIC];
 
 static int tame_audio_ready = 0;
 
+// Ana ses seviyesi. Aygıt açılmadan ÖNCE de ayarlanabilsin diye burada
+// saklanıyor: oyunlar sesi `setup` içinde kuruyor ama ses aygıtı ilk ses
+// YÜKLENDİĞİNDE açılıyor, yani doğrudan `SetMasterVolume` çağırmak o ayarı
+// sessizce düşürürdü. Seviye ayarlamak, aygıtı AÇMAK için bir sebep de
+// değil (headless'ta açılamıyor ve hata basardı).
+static float tame_master_vol = 1.0f;
+
 // Ses aygıtını ilk ihtiyaçta aç (load_sound/load_music). Başarısızlık
 // (aygıt yok / headless) -1 handle olarak yüzeye çıkar, çökmez.
 static int tame_ensure_audio(void) {
@@ -1620,6 +1627,8 @@ static int tame_ensure_audio(void) {
     if (!tame_audio_ready)
       fprintf(stderr, "[tame] Ses aygiti acilamadi. / Audio device could "
                       "not be opened.\n");
+    /* Aygıt yeni açıldı: bekleyen seviye şimdi uygulanıyor. */
+    if (tame_audio_ready) SetMasterVolume(tame_master_vol);
   }
   return tame_audio_ready;
 }
@@ -2689,6 +2698,16 @@ void tame_impl_stop_music(int h) {
 
 void tame_impl_music_volume(int h, double v) {
   if (tame_music_ok(h)) SetMusicVolume(tame_musics[h], (float)v);
+}
+
+/* Ana seviye SES ve MÜZİĞİN ikisini birden ölçekler. Müzik başına
+   SetMusicVolume bunun ÜSTÜNE biniyor, yani oyun kendi karışımını kurup
+   üstünden tek düğmeyle kısabiliyor. */
+void tame_impl_master_volume(double v) {
+  if (v < 0.0) v = 0.0;
+  if (v > 1.0) v = 1.0;
+  tame_master_vol = (float)v;
+  if (tame_audio_ready) SetMasterVolume(tame_master_vol);
 }
 
 // Ekran görüntüsünü PNG olarak kaydeder (çalışma dizinine göre yol).

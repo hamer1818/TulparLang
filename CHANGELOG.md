@@ -9,6 +9,41 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — MOTOR: ayarlar ekranı ve ANA ses seviyesi (`tm_master_volume`)
+
+Motorda ana ses seviyesi **yoktu**: yalnız müzik başına `music_volume` vardı,
+yani yayınlanmış bir oyunda sesi kısmanın yolu yoktu. Yeni tame binding'i
+`tm_master_volume` (sarmalayıcılar `master_volume`/`ana_ses`) ses ve müziğin
+ikisini birden ölçekliyor; müzik başına ayar onun üstüne biniyor, yani oyun
+kendi karışımını kurup üstünden tek düğmeyle kısabiliyor.
+
+Seviye **ses aygıtı açılmadan önce de** ayarlanabiliyor: aygıt ilk ses
+yüklendiğinde açılıyor, doğrudan `SetMasterVolume` çağırmak `setup` içinde
+yapılan ayarı sessizce düşürürdü. Değer C tarafında saklanıyor ve aygıt
+açılınca uygulanıyor. Seviye ayarlamak aygıtı AÇMAK için bir sebep değil —
+headless'ta açılamaz ve hata basardı.
+
+Duraklat menüsüne **Ayarlar** girdi (Devam / Yeniden / Ayarlar / Çıkış).
+Başlık ekranında değil: dikey liste en çok dört düğme taşıyor ve başlık zaten
+dördünü kullanabiliyor; duraklat da oyunun her yerinden bir tuş uzakta.
+Ayarlar ekranı tek satır — motorun gerçekten sahip olduğu tek ayar ses
+seviyesi; dil sistem yerelinden geliyor ve FPS'i motor sürmüyor, onları
+listelemek çalışmayan düğme demek olurdu. "Geri" duraklata dönüyor, oyuna
+değil. Diske yazmak opt-in (`kayit_ac3d`), kaydın geri kalanıyla aynı kural.
+
+Yol üstünde bir tuzak yakalandı: duraklat dağıtıcısı **konuma** göre
+çalışıyordu ve araya "Ayarlar" girince "Çıkış"ı sessizce ayarlara bağladı —
+mevcut bir regresyon testi kızardı. Duraklat da başlık gibi TÜRE göre
+dağıtılıyor artık. Dahası, tür sabitleri konumlarla çakışmasın diye kaydırıldı
+(`_PB_* = 10..13`, `_TB_* = 20..23`): 0,1,2,3 iken eşleme birim fonksiyondu ve
+dağıtıcıyı `a - 1`'e çeviren bir bozma hiçbir şeyi bozmadan **kaçıyordu** —
+soyutlama sırayı değiştiren ilk düzenlemeye kadar yalnız kâğıt üstündeydi.
+
+7 regresyon testi (632 → 639) ve 9 bozma denemesi. Biri kaçtı (yukarıdaki
+dejenere eşleme), bir tanesi de önceki bozma turunun diske bıraktığı artığı
+okuyup yanlış yere kızardı — ikisi de [[Tuzaklar]]'a yazıldı.
+
+
 ### Added — MOTOR: bölüm seçme ekranı ve "Devam" (kayıt sistemi sözünü tutuyor)
 
 Kayıt sistemi bitirilen bölümleri **zaten** diske yazıyordu

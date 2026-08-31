@@ -257,6 +257,10 @@ func load_music(path): int { return tm_load_music(path); }
 func play_music(m) { tm_play_music(m); }
 func stop_music(m) { tm_stop_music(m); }
 func music_volume(m, v) { tm_music_volume(m, v); }
+// ANA seviye: ses ve müziğin ikisini birden ölçekler. Aygıt açılmadan önce
+// de çağrılabilir — değer saklanır ve aygıt açılınca uygulanır.
+func master_volume(v) { tm_master_volume(v); }
+func ana_ses(v) { tm_master_volume(v); }
 
 // ---- Kalıcı kayıt + titreşim (mobil-dostu) ----------------------------------
 // save/load: Android'de uygulamanın internal storage'ına, masaüstünde çalışma
