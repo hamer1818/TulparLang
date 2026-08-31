@@ -47,7 +47,6 @@ int   poison_zone = 0 - 1; // zehir havuzunun bölge no'su (HUD göstergesi okuy
 // Ses aygıtı yoksa yükleme -1 döner ve çalma sessizce atlanır — oyun
 // penceresiz/sessiz testte de AYNI yoldan geçiyor, ayrı bir dal yok.
 int   snd_hit   = 0 - 1;   // mermi isabeti
-int   snd_bonus = 0 - 1;   // bonus pedi
 int   snd_lose  = 0 - 1;   // oyuncu öldü
 
 // --- Ortak kurulum: her bölümde aynı olan şeyler --------------------------
@@ -66,7 +65,6 @@ func setup() {
     bolge_goster3d(true);
     // Sesler. Yollar ÇALIŞMA DİZİNİNE göre — depo kökünden çalıştır.
     snd_hit   = ses_yukle("examples/assets/sesler/vurus.wav");
-    snd_bonus = ses_yukle("examples/assets/sesler/altin.wav");
     snd_lose  = ses_yukle("examples/assets/sesler/kaybettin.wav");
 }
 
@@ -106,6 +104,11 @@ func build_zones() {
     int pad = bolge3d(0.0 - 10.0, 1.0, 10.0,  4.0, 3.0, 4.0, TAG_PLAYER);
     girince3d(pad, on_bonus_pad);
     bolge_bir_kere3d(pad, true);
+    // Pedin sesi KANCADA DEĞİL, bölgenin kendi alanında. Elle çalmak da
+    // çalışırdı (bir satır `ses3d`) ama o zaman ses sahne dosyasında
+    // TAŞINMAZ ve editörden seçilemezdi — veri odaklı yol tam olarak bunun
+    // için var. Kanca yalnız oyunun kendi işini yapıyor (skor, şifa).
+    bolge_ses3d(pad, "examples/assets/sesler/altin.wav");
 
     // 2) Zehir havuzu — İÇİNDEYKEN kancası, yani her kare. hasar3d kendi
     // dokunulmazlık penceresini yönettiği için bu "saniyede 60 hasar" değil.
@@ -233,7 +236,6 @@ func enemy_died() {
 // `oteki3()` yoktur — bölge entity değil.
 func on_bonus_pad() {
     patlat3d(ben3(), 22, rgb(120, 255, 180), 7.0, 0.6);
-    ses3d(snd_bonus, get3x(ben3()), get3y(ben3()), get3z(ben3()));
     skor3_ekle(50);
     // `can3d` (health3d) can sistemini YENİDEN KURAR — hp'yi de hpmax'ı da
     // 100'e yazar. Şifa için doğru araç değil: 120 canlı bir düşmana

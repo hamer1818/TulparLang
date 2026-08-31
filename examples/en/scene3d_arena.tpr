@@ -46,7 +46,6 @@ int   poison_zone = 0 - 1; // poison pool's zone id (the HUD reads it)
 // audio device the load returns -1 and playback is skipped silently — the
 // windowless/silent test run takes the SAME path, there is no second branch.
 int   snd_hit   = 0 - 1;   // bullet hit
-int   snd_bonus = 0 - 1;   // bonus pad
 int   snd_lose  = 0 - 1;   // player died
 
 // --- Shared setup: the things that are the same in every level ------------
@@ -66,7 +65,6 @@ func setup() {
     // Sounds. Paths are relative to the WORKING DIRECTORY — run from the
     // repo root.
     snd_hit   = load_sound("examples/assets/sesler/vurus.wav");
-    snd_bonus = load_sound("examples/assets/sesler/altin.wav");
     snd_lose  = load_sound("examples/assets/sesler/kaybettin.wav");
 }
 
@@ -106,6 +104,11 @@ func build_zones() {
     int pad = trigger3d(0.0 - 10.0, 1.0, 10.0,  4.0, 3.0, 4.0, TAG_PLAYER);
     on_enter3d(pad, on_bonus_pad);
     trigger_once3d(pad, true);
+    // The pad sound lives in the ZONE, not in the hook. Playing it by
+    // hand would work (one `sound3d` line) but then it would not travel
+    // in the scene file and the editor could not pick it — that is what
+    // the data-driven path is for. The hook only does the game logic.
+    trigger_sound3d(pad, "examples/assets/sesler/altin.wav");
 
     // 2) Poison pool — a WHILE-INSIDE hook, i.e. every frame. Because damage3d
     // manages its own invulnerability window this is not "60 damage a second".
@@ -234,7 +237,6 @@ func enemy_died() {
 // There is no `other3d()` — a zone is not an entity.
 func on_bonus_pad() {
     burst3d(me3d(), 22, rgb(120, 255, 180), 7.0, 0.6);
-    sound3d(snd_bonus, get3x(me3d()), get3y(me3d()), get3z(me3d()));
     score3d_add(50);
     // `health3d` REBUILDS the health system — it writes both hp and hpmax to
     // 100. It is the wrong tool for healing: applied to an enemy with 120 hp
