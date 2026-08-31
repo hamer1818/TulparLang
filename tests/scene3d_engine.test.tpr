@@ -7532,6 +7532,200 @@ func t_astar_beats_straight_chase() {
            "A* cebi dolasamadi: " + toString(astar) + " (duz: " + toString(duz) + ")");
 }
 
+// ===========================================================================
+// VERİ ODAKLI A* — davranış listesinden erişilebilir yol bulma
+// `chase_path3d` elle yazılan koddan erişilebiliyordu ama sahne biçiminden
+// DEĞİL: editörün ürettiği "kovala" düz kovalamaya düşüyor ve U biçimli
+// tuzaktan çıkamıyordu.
+// ===========================================================================
+
+// AYIRT EDİCİ: aynı sahne, aynı süre, tek fark davranışın bayrağı. Ölçüt
+// yine ULAŞILAN EN YAKIN mesafe (iki katı gövde temas edince birbirini itip
+// birlikte sürükleniyor, son mesafe yanıltıcı).
+func _nav_beh_kos3(yol_bul): float {
+    int hedef = _nav_cep_kur();
+    int dusman = spawn3(0.0, 1.0, 0.0 - 10.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    if (yol_bul) { chase_path_behavior3d(dusman, TAG_PLAYER, 6.0, 0.0); }
+    else         { chase_behavior3d(dusman, TAG_PLAYER, 6.0, 0.0); }
+    float en_yakin = 1000.0;
+    int i = 0;
+    while (i < 900) {
+        _s3_behaviors(1.0 / 60.0);
+        _s3_physics(1.0 / 60.0);
+        _s3_collision();
+        float m = _nav_mesafe(dusman, hedef);
+        if (m < en_yakin) { en_yakin = m; }
+        i = i + 1;
+    }
+    return en_yakin;
+}
+
+func t_path_behavior_beats_plain_chase_behavior() {
+    float duz = _nav_beh_kos3(false);
+    float yol = _nav_beh_kos3(true);
+    // Once testin AYIRT EDICI oldugunu kanitla.
+    assert(duz > 8.0,
+           "duz kovalama DAVRANISI cebe takilmadi (test ayirt edici degil): " +
+           toString(duz));
+    assert(yol < 3.0,
+           "yol bulan DAVRANIS cebi dolasamadi: " + toString(yol) +
+           " (duz: " + toString(duz) + ")");
+}
+
+// Izgara TEMBEL kuruluyor: ihtiyaç doğduğunda, ihtiyaç yoksa hiç. Kurulmasa
+// `chase_path3d` sessizce düz kovalamaya düşerdi — editördeki anahtar açık
+// görünür, hiçbir şey yapmazdı.
+func t_nav_grid_is_built_lazily() {
+    scene3d_reset(); no_ground3d();
+    nav_invalidate3d();
+    int hedef = _nav_cep_kur();
+    int d = spawn3(0.0, 1.0, 0.0 - 10.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    chase_path_behavior3d(d, TAG_PLAYER, 6.0, 0.0);
+    assert(nav_ready3d() == false, "izgara daha kurulmamis olmali");
+    _s3_behaviors(1.0 / 60.0);
+    assert(nav_ready3d(), "ilk adimda izgara kurulmali");
+    assert(hedef >= 0, "hedef kurulmali");
+
+    // DUZ kovalama izgara KURMAMALI: bedava olmayan bir isi istemeyen
+    // oyuna yaptirmak, A*'i opt-in tutma kararini bosa cikarirdi.
+    scene3d_reset(); no_ground3d();
+    nav_invalidate3d();
+    _nav_cep_kur();
+    int d2 = spawn3(0.0, 1.0, 0.0 - 10.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    chase_behavior3d(d2, TAG_PLAYER, 6.0, 0.0);
+    _s3_behaviors(1.0 / 60.0);
+    assert(nav_ready3d() == false, "duz kovalama izgara kurmamali");
+}
+
+// Elle kurulmuş ızgarayı EZMEMELİ: oyun kendi ölçüsünü seçtiyse motor onu
+// varsayılanla değiştirmemeli.
+func t_nav_auto_does_not_override_manual() {
+    scene3d_reset(); no_ground3d();
+    nav_invalidate3d();
+    _nav_cep_kur();
+    int d = spawn3(0.0, 1.0, 0.0 - 10.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    chase_path_behavior3d(d, TAG_PLAYER, 6.0, 0.0);
+    yol_izgarasi3d(3.0, 0.5);
+    assert(nav_ready3d(), "elle kurulan izgara hazir olmali");
+    float onceki = _nav_cell3;
+    _s3_behaviors(1.0 / 60.0);
+    assert(_t_yakinf3(_nav_cell3, onceki, 0.001), "elle kurulan olcu korunmali");
+    assert(_t_yakinf3(_nav_cell3, 3.0, 0.001) , "olcu 3.0 kalmali");
+}
+
+// Yeni bölüm = yeni duvarlar. Izgara geçersiz kılınmazsa 2. bölümün düşmanı
+// 1. bölümün labirentini dolaşır: duvarlar başka yerde, yol saçma, hata yok.
+func t_level_change_invalidates_the_grid() {
+    // SIRA onemli: `_nav_cep_kur` kendi icinde `scene3d_reset()` cagiriyor ve
+    // o da bolum kaydini siliyor. Once sahneyi kur, SONRA bolumleri kaydet —
+    // tersi olunca `_s3_apply_level` "bolum yok" deyip erken donuyor ve test
+    // gecersiz kilmayi hic olcmemis oluyor.
+    _nav_cep_kur();
+    sahne3d(320, 200, "t3d_navlvl");
+    level3d(1, _t_p2); level3d(2, _t_p2);
+    nav_build3d(1.5, 0.6);
+    assert(nav_ready3d(), "izgara kurulmali");
+    goto_level3d(2);
+    _s3_apply_level();
+    assert(nav_ready3d() == false, "bolum degisince izgara gecersiz olmali");
+}
+
+// Bayrak sahne biçiminde taşınıyor; KAPALI olan anahtar YAZMIYOR (her sahne
+// dosyasına anlamsız bir alan eklemek).
+func t_path_flag_roundtrips() {
+    scene3d_reset(); no_ground3d();
+    int a = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    chase_path_behavior3d(a, TAG_PLAYER, 6.5, 12.0);
+    str js = sahne_json3d();
+    assert(contains(js, "\"path\": 1"), "bayrak yazilmali");
+    scene3d_reset();
+    sahne_yukle3d(js);
+    assert_eq_int(length(_bh3), 1);
+    assert(_bh_is_path3(_bh3[0]), "bayrak gidis-donusten sag cikmali");
+    assert(_t_yakinf3(_bh3[0].a, 6.5, 0.01), "hiz da tasinmali");
+    assert(_t_yakinf3(_bh3[0].b, 12.0, 0.01), "menzil de tasinmali");
+
+    // KAPALI olan anahtar yazmamali.
+    scene3d_reset(); no_ground3d();
+    int b = spawn3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    chase_behavior3d(b, TAG_PLAYER, 6.0, 0.0);
+    assert(contains(sahne_json3d(), "\"path\"") == false,
+           "duz kovalama path anahtari yazmamali");
+}
+
+// Izgara STATİK: duvar oynayınca kendini yenilemiyor. Yol bulan düşman
+// artık orada olmayan bir duvarı dolaşır — tümüyle sessiz. Denetimin işi
+// tam bu: "çalışıyor ama yanlış" durumlarını söylemek.
+func t_check_warns_about_moving_walls_with_pathfinding() {
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 10.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int w = spawn3(0.0, 1.5, 0.0, 6.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int d = spawn3(0.0, 1.0, 0.0 - 8.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    chase_path_behavior3d(d, TAG_PLAYER, 6.0, 0.0);
+    // `scene_check_count3d` yalnizca son sonucu okuyor; denetimi KOSTURAN
+    // `scene_check3d`. Cagirmadan sormak, bir onceki testin listesini
+    // okumak demekti.
+    scene_check3d();
+    assert(_chk_var_mi("izgara bayat") == false, "sabit duvarda uyari olmamali");
+    // Duvara devriye ver: artik uyarmali.
+    patrol_behavior3d(w, 0.0 - 4.0, 0.0, 4.0, 0.0, 2.0);
+    scene_check3d();
+    assert(_chk_var_mi("izgara bayat"), "hareketli duvarda uyarmali");
+    // Yol bulma KAPALIYKEN uyari olmamali: uyarinin kosulu ikisi birden.
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 10.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int w2 = spawn3(0.0, 1.5, 0.0, 6.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    int d2 = spawn3(0.0, 1.0, 0.0 - 8.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    chase_behavior3d(d2, TAG_PLAYER, 6.0, 0.0);
+    patrol_behavior3d(w2, 0.0 - 4.0, 0.0, 4.0, 0.0, 2.0);
+    scene_check3d();
+    assert(_chk_var_mi("izgara bayat") == false,
+           "duz kovalamada uyari olmamali");
+
+    // HAREKETLI DUSMAN uyari sebebi DEGIL: ızgarayi bozan sey duvarin
+    // oynamasi, ajanin degil. Neredeyse her oyunda devriye gezen dusman var;
+    // onlara uyarmak, uyariyi gurultuye cevirir ve kimse okumaz.
+    // (Bu satir olmadan etiket denetimini silen bozma KACIYORDU: testte
+    // hareket eden tek sey duvardi.)
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 10.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    spawn3(0.0, 1.5, 0.0, 6.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);  // SABIT
+    int d3 = spawn3(0.0, 1.0, 0.0 - 8.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    int d4 = spawn3(3.0, 1.0, 0.0 - 8.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    chase_path_behavior3d(d3, TAG_PLAYER, 6.0, 0.0);
+    patrol_behavior3d(d4, 0.0 - 4.0, 0.0, 4.0, 0.0, 2.0);   // DUSMAN geziyor
+    scene_check3d();
+    assert(_chk_var_mi("izgara bayat") == false,
+           "devriye gezen DUSMAN uyari sebebi olmamali");
+}
+
+func t_path_behavior_is_wired() {
+    str src = read_file("lib/scene3d.tpr");
+    // Dagitim bayragi okumali.
+    assert(length(split(src, "if (_bh_is_path3(b)) {")) > 1,
+           "davranis dagitimi bayragi okumali");
+    assert(length(split(src, "chase_path3d(b.id, t, b.a);")) > 1,
+           "bayrak acikken A* kullanilmali");
+    // Tembel kurulum DAGITIMIN icinde olmali. Ayrac benzersiz olmali:
+    // "if (b.kind == BH_CHASE) {" dosyada dort kez geciyor (serilestirme,
+    // okuma, dagitim, editor paneli) ve sirasina guvenmek kirilgan.
+    array g = split(src, "int t = _bh_nearest3(b.id, b.tag, b.b);");
+    assert(length(g) > 1, "kovala dagitimi olmali");
+    array gov = split(g[1], "\n    if (b.kind == BH_PATROL)");
+    assert(length(gov) > 1, "dagitimin sonu bulunmali");
+    assert(length(split(gov[0], "_s3_nav_auto3();")) > 1,
+           "izgara ihtiyac aninda kurulmali");
+    // Editorde anahtar olmali.
+    assert(length(split(src, "duvarlari dolas")) > 1, "editorde anahtar olmali");
+    assert(length(split(src, "_g_tog(wid + 4,")) > 1, "anahtar widget'i olmali");
+    // Bolum degisimi gecersiz kilmali.
+    array lv = split(src, "func _s3_apply_level() {");
+    assert(length(lv) > 1, "bolum uygulama olmali");
+    array lvg = split(lv[1], "\nfunc ");
+    assert(length(split(lvg[0], "nav_invalidate3d();")) > 1,
+           "bolum degisimi izgarayi gecersiz kilmali");
+}
+
 func t_nav_no_corner_cutting() {
     // KÖŞE KESME: çaprazda iki ortogonal komşudan biri kapalıysa geçilmemeli.
     // Geçilirse yol duvarın köşesinden sızar; gövdesi olan bir ajan oraya
@@ -11965,6 +12159,13 @@ test("sarma sahte cakisma uretmez", "t_grid_no_false_pair_when_hashed_together")
 test("karisik boyutlar kacirilmaz", "t_grid_mixed_sizes");
 test("rampa dizini ust kume", "t_ramp_index_is_superset_not_sync");
 test("A* duz kovalamayi geciyor", "t_astar_beats_straight_chase");
+test("yol bulan DAVRANIS duzu geciyor", "t_path_behavior_beats_plain_chase_behavior");
+test("izgara tembel kuruluyor", "t_nav_grid_is_built_lazily");
+test("otomatik izgara elle kuruleni ezmiyor", "t_nav_auto_does_not_override_manual");
+test("bolum degisimi izgarayi gecersiz kiliyor", "t_level_change_invalidates_the_grid");
+test("yol bul bayragi gidis-donusten sag cikiyor", "t_path_flag_roundtrips");
+test("denetim bayat izgarayi soyluyor", "t_check_warns_about_moving_walls_with_pathfinding");
+test("yol bul davranisi bagli", "t_path_behavior_is_wired");
 test("kose kesme yasak", "t_nav_no_corner_cutting");
 test("bolumler yukleniyor ve geciliyor", "t_levels_load_and_switch");
 test("bolumler gidis-donusten sag cikiyor", "t_levels_survive_roundtrip");

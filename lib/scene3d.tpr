@@ -1026,6 +1026,9 @@ func _s3_apply_level() {
     _s3_particles_clear();  // önceki bölümün patlamaları yeni sahneye taşmasın
     _hit_me = 0 - 1; _hit_other = 0 - 1;
     _cam_target = 0 - 1;    // kurulum fn'i camera_follow'u yeniden çağırır
+    // Yeni bölüm = yeni duvarlar: eski ızgara artık YANLIŞ bir haritanın
+    // ızgarası. Tembel yeniden kurulum ilk yol isteğinde.
+    nav_invalidate3d();
     _cur_lvl3 = want;
     call(_lvlF[idx]);
 }
@@ -2051,6 +2054,30 @@ func nav_build3d(cell, pad) {
 func yol_izgarasi3d(hucre, pay) { nav_build3d(hucre, pay); }
 
 func nav_ready3d(): bool { return _nav_w3 > 0 && _nav_h3 > 0; }
+
+// ---- Veri odaklı A*: ızgarayı motor kuruyor --------------------------------
+// `chase_path3d` elle yazılan koddan erişilebiliyordu ama sahne biçiminden
+// DEĞİL: editörün ürettiği "kovala" düz kovalamaya düşüyor ve U biçimli
+// tuzaktan çıkamıyordu. Yani editörle oyun yapan biri motorun en iyi düşman
+// AI'ını kullanamıyordu.
+//
+// Ölçüler: hücre 1.5 birim (insan ölçeğinde bir koridorun içine iki hücre
+// sığar), pay 0.8 (ajan yarıçapı — konfigürasyon uzayı şişirmesi, bkz.
+// `_seg_box_xz3`). Elle `yol_izgarasi3d(...)` çağıran oyun kendi ölçüsünü
+// kuruyor; otomatik kurulum yalnız HİÇ ızgara yokken devreye giriyor.
+float _NAV_AUTO_CELL3 = 1.5;
+float _NAV_AUTO_PAD3  = 0.8;
+
+func _s3_nav_auto3() {
+    if (nav_ready3d()) { return; }
+    nav_build3d(_NAV_AUTO_CELL3, _NAV_AUTO_PAD3);
+}
+
+// Bölüm değişince ızgara GEÇERSİZ. Geçersiz kılmasaydık 2. bölümün düşmanı
+// 1. bölümün labirentini dolaşırdı — duvarlar başka yerde, yol saçma, ve
+// hiçbir hata yok. Yeniden kurulum tembel: ilk yol bulma isteğinde.
+func nav_invalidate3d() { _nav_w3 = 0; _nav_h3 = 0; _nav_block3 = []; }
+func yol_izgarasi_bosalt3d() { nav_invalidate3d(); }
 func yol_hazir3d(): bool { return nav_ready3d(); }
 func yol_kapali3d(x, z): bool { return nav_blocked3d(x, z); }
 func nav_blocked3d(x, z): bool {
@@ -6958,7 +6985,13 @@ func _sc_load_bh3(id, b) {
     }
     if (k == "chase") {
         if (tg == 0) { tg = TAG_PLAYER; }
-        chase_behavior3d(id, tg, _sc_f3(b, "speed", 5.0), _sc_f3(b, "range", 0.0));
+        if (_sc_f3(b, "path", 0.0) > 0.5) {
+            chase_path_behavior3d(id, tg, _sc_f3(b, "speed", 5.0),
+                                  _sc_f3(b, "range", 0.0));
+        } else {
+            chase_behavior3d(id, tg, _sc_f3(b, "speed", 5.0),
+                             _sc_f3(b, "range", 0.0));
+        }
     }
     if (k == "patrol") {
         patrol_behavior3d(id, _sc_f3(b, "x1", 0.0), _sc_f3(b, "z1", 0.0),
@@ -7473,6 +7506,9 @@ func _sc_bh_js3(id): str {
                 one = "{\"type\": \"chase\", \"target\": \"" + _sc_tag_nm3(b.tag) +
                       "\", \"speed\": " + _sc_num3(b.a);
                 if (b.b > 0.0) { one = one + ", \"range\": " + _sc_num3(b.b); }
+                // Yalnız AÇIKKEN yazılıyor: varsayılanı da yazmak her sahne
+                // dosyasına anlamsız bir alan eklerdi.
+                if (_bh_is_path3(b)) { one = one + ", \"path\": 1"; }
                 one = one + "}";
             }
             if (b.kind == BH_PATROL) {
@@ -8016,6 +8052,29 @@ func scene_check3d(): int {
     }
     if (!win) { _chk_add3("kazanma sarti yok — oyun bitirilemez"); }
 
+    // YOL BULMA ızgarası STATİK: bir kez kuruluyor ve duvarlar oynadığında
+    // kendini yenilemiyor. Hareketli bir duvar varken yol bulan düşman,
+    // artık orada olmayan bir duvarı dolaşır ya da yeni duvarın içinden
+    // geçmeye çalışır — ve bu tümüyle sessiz. Denetimin işi tam bu:
+    // "çalışıyor ama yanlış" durumlarını söylemek.
+    int yolcu = 0;
+    int oynak_duvar = 0;
+    int bi2 = 0;
+    while (bi2 < length(_bh3)) {
+        Bh3 cb = _bh3[bi2];
+        if (cb.kind == BH_CHASE && _bh_is_path3(cb)) { yolcu = yolcu + 1; }
+        if (cb.kind == BH_MOVE || cb.kind == BH_PATROL) {
+            int cs2 = _slot_of3(cb.id);
+            if (cs2 >= 0) {
+                if (_e3[cs2].tag == TAG_WALL) { oynak_duvar = oynak_duvar + 1; }
+            }
+        }
+        bi2 = bi2 + 1;
+    }
+    if (yolcu > 0 && oynak_duvar > 0) {
+        _chk_add3("yol bulma acik ama duvar hareketli — izgara bayat kalir");
+    }
+
     // Kuralların etiketleri sahnede karşılığı olan etiketler mi?
     i = 0;
     while (i < length(_rl3)) {
@@ -8528,6 +8587,20 @@ func kovala_davranis3d(id, hedef_etiket, hiz, menzil) {
     chase_behavior3d(id, hedef_etiket, hiz, menzil);
 }
 
+// YOL BULAN kovalama. `c` alanı bayrak: ayrı bir davranış TÜRÜ açmadım,
+// çünkü iş aynı ("en yakın hedefi kovala") ve yalnız GEZİNME stratejisi
+// değişiyor — ayrı tür, hedef bulma ve menzil mantığını ikinci kez yazmak
+// olurdu. Bayrak aynı zamanda motorun kendi kararını yansıtıyor: `chase3d`
+// varsayılan kalıyor, A* OPT-IN (her çağrıda ızgara taraması demek ve çoğu
+// oyunun ihtiyacı yok).
+func chase_path_behavior3d(id, target_tag, speed, range) {
+    _bh_add3(id, BH_CHASE, target_tag, 0 - 1, speed, range, 1.0, 0.0, 0.0);
+}
+func yol_kovala_davranis3d(id, hedef_etiket, hiz, menzil) {
+    chase_path_behavior3d(id, hedef_etiket, hiz, menzil);
+}
+func _bh_is_path3(b): bool { return b.c > 0.5; }
+
 // Devriye: iki nokta arasında gidip gelir (patrol3d zaten uçlarda yön çeviriyor).
 func patrol_behavior3d(id, x1, z1, x2, z2, speed) {
     _bh_add3(id, BH_PATROL, 0, 0 - 1, x1, z1, x2, z2, speed);
@@ -8614,7 +8687,17 @@ func _bh_tick3(i, dt) {
         int t = _bh_nearest3(b.id, b.tag, b.b);
         // Menzil dışındaysa DURUYOR, son hızıyla kaymıyor: kovalamayı bırakan
         // düşmanın süzülerek uzaklaşması hata gibi görünürdü.
-        if (t >= 0) { chase3d(b.id, t, b.a); }
+        if (t >= 0) {
+            if (_bh_is_path3(b)) {
+                // Izgara TEMBEL kuruluyor: burada, ilk ihtiyaçta. Kurulmazsa
+                // `chase_path3d` sessizce düz kovalamaya düşer — yani
+                // editördeki anahtar açık görünür ve hiçbir şey yapmaz.
+                _s3_nav_auto3();
+                chase_path3d(b.id, t, b.a);
+            } else {
+                chase3d(b.id, t, b.a);
+            }
+        }
         else {
             Ent3 e = _e3[s];
             e.vx = 0.0; e.vz = 0.0;
@@ -16023,6 +16106,17 @@ func _ed_inspector3(px, py, pw, ph) {
                     ed_mark3d();
                     nb.tag = _ed_next_tag3(nb.tag);
                 }
+                y = y + _ED_FLD3 + _us3(2);
+                // YOL BULMA anahtarı. Etiket DURUMUN ADI ("duvarlari dolas"
+                // / "duz git"), "yol bul: acik" değil: yarım sütuna sığıyor
+                // ve ne yaptığını doğrudan söylüyor.
+                str yl = "duz git";
+                if (_bh_is_path3(nb)) { yl = "duvarlari dolas"; }
+                if (_g_tog(wid + 4, lx, y, inner, _ED_FLD3, yl, _bh_is_path3(nb))) {
+                    ed_mark3d();
+                    if (_bh_is_path3(nb)) { nb.c = 0.0; } else { nb.c = 1.0; }
+                }
+                _g_tip_for3(wid + 4, "A* ile duvarlari dolasir (cikmaz koridordan cikar)");
                 y = y + _ED_FLD3 + _us3(2);
             }
             if (b.kind == BH_PATROL) {

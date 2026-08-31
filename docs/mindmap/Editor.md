@@ -266,7 +266,9 @@ kurtarılan iş **hâlâ kaydedilmemiş** sayılıyor (yıldız yanmaya devam ed
 ## Paneller
 - **HIYERARSI** — bölüm şeridi, ekleme düğmeleri, ada/etikete göre süzme,
   DUNYA satırı (Godot'nun WorldEnvironment'ı gibi), varlıklar, bölgeler.
-- **OZELLIKLER** — seçime göre: varlık (dönüşüm/görünüm/fizik/davranışlar),
+- **OZELLIKLER** — seçime göre: varlık (dönüşüm/görünüm/fizik/davranışlar —
+  `kovala` davranışında **"duvarlari dolas"** anahtarı A*'ı açıyor, bkz.
+  [[Scene3D]]),
   DUNYA (denetim, gökyüzü, dünya, **kamera**, ışıklar, su, arazi, gündüz-gece,
   eğim, kurallar) ya da bölge.
 - **KONSOL** — motorun tanılama kaydı; **kaydırılıyor, süzülüyor,

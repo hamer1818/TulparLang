@@ -106,6 +106,7 @@ saçılması istenen şey değil.
 | Tetikleyici bölge | `bolge3d`/`bolge_kure3d`, `girince3d`/`cikinca3d`/`icindeyken3d` | Entity DEĞİL; giriş/çıkış **kenarı** |
 | Bölge EYLEMİ (veri) | `bolge_eylem3d(t, ZACT_*, miktar)`, `bolge_ses3d` | Kod kancası olmadan: kazan/kaybet/gireni yok et/hasar/skor/**sonraki bölüm** |
 | Kural eylemi | `ACT_COLLECT/DAMAGE/KILL/HURT/WIN/LOSE/**NEXT**` | `ACT_NEXT` olmadan veri sahnesi bölüm ilerletemiyordu |
+| Yol bulma (veri) | `kovala` davranışında **"duvarlari dolas"** anahtarı | A* artık koddan değil SAHNEDEN de erişilebilir |
 | Kalıcılık | `kayit_ac3d()` (OPT-IN), `rekor3d()` | Diske yazdığı için opt-in |
 | UI | `baslangic3d`, duraklat, oyun-bitti, **bölüm seçme**, **ayarlar** | Menüde imleç + kol A/B; düğmeler TÜRE göre dağıtılıyor |
 | Ses seviyesi | `ses_seviye3d(v)`/`volume3d`, `ana_ses(v)` (tame) | ANA seviye; diske yazma opt-in |
@@ -176,8 +177,37 @@ ikisini birden ölçekliyor; müzik başına ayar onun ÜSTÜNE biniyor.
 > dördüncü düğme ekranın tam alt kenarına dayanıyordu (0.44 + 3×0.15 + 0.11 =
 > 1.00, sıfır boşluk). Adım artık tavandan türüyor (`_s3_btn_step3`).
 
+## Veri odaklı A* — motorun en iyi AI'ı editöre açıldı
+`chase_path3d` elle yazılan koddan erişilebiliyordu ama **sahne biçiminden
+değil**: editörün ürettiği `kovala` davranışı düz kovalamaya düşüyor ve U
+biçimli tuzaktan çıkamıyordu. Yani editörle oyun yapan biri motorun en iyi
+düşman AI'ını kullanamıyordu.
+
+- Ayrı bir davranış TÜRÜ değil, `kovala`'nın **bayrağı** (`Bh3.c`): iş aynı
+  ("en yakın hedefi kovala"), yalnız gezinme stratejisi değişiyor. Ayrı tür,
+  hedef bulma ve menzil mantığını ikinci kez yazmak olurdu. Bayrak aynı
+  zamanda motorun kararını yansıtıyor: `chase3d` varsayılan, A* **opt-in**.
+- Biçimde `"path": 1` ve yalnız AÇIKKEN yazılıyor.
+- Editörde anahtar: **"duz git" / "duvarlari dolas"** (durumun adı, "yol bul:
+  acik" değil).
+
+> ⚠️ **Izgara TEMBEL kuruluyor** — ilk yol bulma isteğinde, dağıtımın içinde.
+> Kurulmasaydı `chase_path3d` sessizce düz kovalamaya düşerdi: editördeki
+> anahtar açık görünür ve hiçbir şey yapmazdı. Düz kovalama ızgara KURMUYOR
+> (A*'ı opt-in tutma kararı bunu gerektiriyor), ve elle kurulmuş bir ızgara
+> EZİLMİYOR (`_s3_nav_auto3` yalnız hiç ızgara yokken devreye giriyor).
+
+> ⚠️ **Bölüm değişimi ızgarayı geçersiz kılıyor** (`nav_invalidate3d`).
+> Kılmasaydı 2. bölümün düşmanı 1. bölümün labirentini dolaşırdı — duvarlar
+> başka yerde, yol saçma, hiçbir hata yok.
+
+Izgara hâlâ **statik**: duvar oynayınca kendini yenilemiyor. Bu artık sessiz
+değil — sahne denetimi söylüyor: *"yol bulma acik ama duvar hareketli —
+izgara bayat kalir"*. Uyarı yalnız DUVAR hareketliyse çıkıyor; devriye gezen
+düşman ızgarayı bozmuyor ve ona uyarmak uyarıyı gürültüye çevirirdi.
+
 ## Test edilebilirlik — motorun tasarımını belirleyen kısıt
-`tests/scene3d_engine.test.tpr` **639 test**, hepsi **pencere açmadan** koşuyor.
+`tests/scene3d_engine.test.tpr` **646 test**, hepsi **pencere açmadan** koşuyor.
 Bunu mümkün kılan iki desen:
 - **Cihaz okuması tek yere hapsedilir** (`_read_touch3`, `_read_gamepad3`) —
   motorun geri kalanı yalnız tamponu okur.

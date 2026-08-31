@@ -9,6 +9,40 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — MOTOR: A* yol bulma artık SAHNEDEN de erişilebilir
+
+`chase_path3d` motorun en iyi düşman AI'ıydı ama yalnız **elle yazılan
+koddan** erişilebiliyordu: editörün ürettiği `kovala` davranışı düz
+kovalamaya düşüyor ve U biçimli tuzaktan çıkamıyordu. Yani editörle oyun
+yapan biri motorun en iyi parçasını kullanamıyordu.
+
+Ayrı bir davranış türü açılmadı; `kovala`'ya bir **bayrak** eklendi
+(`Bh3.c`). İş aynı — "en yakın hedefi kovala" — ve yalnız gezinme stratejisi
+değişiyor; ayrı tür, hedef bulma ve menzil mantığını ikinci kez yazmak
+olurdu. Bayrak motorun kendi kararını da yansıtıyor: `chase3d` varsayılan
+kalıyor, A* opt-in (her çağrıda ızgara taraması demek ve çoğu oyunun ihtiyacı
+yok). Biçimde `"path": 1` ve yalnız açıkken yazılıyor. Editörde anahtar:
+**"duz git" / "duvarlari dolas"**.
+
+**Izgara tembel kuruluyor** — ilk yol bulma isteğinde, dağıtımın içinde.
+Kurulmasaydı `chase_path3d` sessizce düz kovalamaya düşerdi: editördeki
+anahtar açık görünür, hiçbir şey yapmazdı. Düz kovalama ızgara kurmuyor
+(opt-in kararı bunu gerektiriyor) ve elle kurulmuş bir ızgara ezilmiyor.
+**Bölüm değişimi ızgarayı geçersiz kılıyor**; kılmasaydı 2. bölümün düşmanı
+1. bölümün labirentini dolaşırdı — duvarlar başka yerde, yol saçma, hata yok.
+
+Izgaranın statik olması artık **sessiz değil**: sahne denetimi hareketli
+duvar ile yol bulma birlikteyken uyarıyor. Uyarı yalnız DUVAR hareketliyse
+çıkıyor — devriye gezen düşman ızgarayı bozmuyor ve ona uyarmak uyarıyı
+gürültüye çevirirdi.
+
+7 regresyon testi (639 → 646) ve 12 bozma denemesi. Ayırt edici test mevcut
+A* testinin desenini izliyor: aynı cep sahnesi, aynı süre, tek fark davranışın
+bayrağı — düz kovalama takılmak, yol bulan varmak ZORUNDA. Bir bozma kaçtı
+(etiket denetimini silmek): testte hareket eden tek şey duvardı, yani
+"devriye gezen düşman uyarı sebebi değil" durumu hiç kurulmamıştı.
+
+
 ### Added — MOTOR: ayarlar ekranı ve ANA ses seviyesi (`tm_master_volume`)
 
 Motorda ana ses seviyesi **yoktu**: yalnız müzik başına `music_volume` vardı,

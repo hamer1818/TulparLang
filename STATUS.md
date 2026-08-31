@@ -1777,9 +1777,15 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
     üretmek hücre hizasına bağlı olurdu).
   - Örnek: `examples/scene3d_labirent.tpr` — Y tuşu A*'ı açıp kapatıyor,
     fark canlı görülüyor.
-  🟢 **Kalan:** ızgara statik (duvar taşınırsa `nav_build3d` yeniden
-  çağrılmalı) ve açık liste doğrusal taranıyor (ızgara tavanı 4096, yol
-  birkaç karede bir hesaplandığı için ölçülebilir bir sorun değil).
+  ✅ **Veri odaklı erişim geldi (2026-08-31).** A* yalnız elle yazılan koddan
+  erişilebiliyordu; editörün ürettiği `kovala` düz kovalamaya düşüyordu.
+  Artık `kovala` davranışının bir bayrağı ("duvarlari dolas"), biçimde
+  `"path": 1`. Izgara ihtiyaç anında tembel kuruluyor, bölüm değişince
+  geçersiz kılınıyor.
+  🟢 **Kalan:** ızgara statik — duvar TAŞINIRSA `nav_build3d` yeniden
+  çağrılmalı. Artık sessiz değil: sahne denetimi hareketli duvar + yol bulma
+  birlikteyken uyarıyor. Açık liste doğrusal taranıyor (ızgara tavanı 4096,
+  yol birkaç karede bir hesaplandığı için ölçülebilir bir sorun değil).
 - ✅ **Animasyon harmanlaması geldi (2026-08-25) ve N klibe genelleşti.**
   Geçiş bir `(a, b, w)` üçlüsü; "iki klip" hiç özel değildi, yalnız hedefi
   hesaplayan kural iki seçenekliydi. `anim_set3d`/`anim_auto3d`/`anim_now3d`.
