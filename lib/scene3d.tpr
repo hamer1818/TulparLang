@@ -8612,18 +8612,35 @@ func _ed_snap3(v, step): float {
 //   ileri = (sin y·cp, sin p, -cos y·cp)  →  sağ = (cos y, 0, sin y)
 // (çapraz çarpımın uzunluğu tam cos(pitch), o yüzden bölme temiz.)
 // raylib'in fov'u DİKEY olduğu için yatayda en-boy oranıyla çarpılıyor.
-func _ed_ray3(px, py, w, h, fov) {
+// Kameranın TABANI (ileri / sağ / yukarı), birim ve karşılıklı dik. Işın
+// kurmak da dünya noktasını ekrana indirmek de aynı tabana dayanıyor; iki
+// yerde ayrı yazılsalardı seçim çerçevesi tıklamayla farklı yeri gösterirdi
+// ve bunu hiçbir şey söylemezdi. Çoklu dönüş yok, sonuç globallerde.
+float _ed_bfx3 = 0.0; float _ed_bfy3 = 0.0; float _ed_bfz3 = 0.0;
+float _ed_brx3 = 0.0; float _ed_bry3 = 0.0; float _ed_brz3 = 0.0;
+float _ed_bux3 = 0.0; float _ed_buy3 = 0.0; float _ed_buz3 = 0.0;
+
+func _ed_cam_basis3() {
     float yr = _ed_yaw3 * DEG2RAD3;
     float pr = _ed_pitch3 * DEG2RAD3;
     float cp = cos(pr);
-    float fx = sin(yr) * cp;
-    float fy = sin(pr);
-    float fz = 0.0 - cos(yr) * cp;
-    float rx = cos(yr);
-    float rz = sin(yr);
-    float ux = 0.0 - sin(yr) * fy;
-    float uy = cp;
-    float uz = cos(yr) * fy;
+    float sp = sin(pr);
+    _ed_bfx3 = sin(yr) * cp;
+    _ed_bfy3 = sp;
+    _ed_bfz3 = 0.0 - cos(yr) * cp;
+    _ed_brx3 = cos(yr);
+    _ed_bry3 = 0.0;
+    _ed_brz3 = sin(yr);
+    _ed_bux3 = 0.0 - sin(yr) * sp;
+    _ed_buy3 = cp;
+    _ed_buz3 = cos(yr) * sp;
+}
+
+func _ed_ray3(px, py, w, h, fov) {
+    _ed_cam_basis3();
+    float fx = _ed_bfx3; float fy = _ed_bfy3; float fz = _ed_bfz3;
+    float rx = _ed_brx3; float rz = _ed_brz3;
+    float ux = _ed_bux3; float uy = _ed_buy3; float uz = _ed_buz3;
 
     float ndx = 2.0 * px / (w * 1.0) - 1.0;
     float ndy = 1.0 - 2.0 * py / (h * 1.0);
@@ -8638,6 +8655,36 @@ func _ed_ray3(px, py, w, h, fov) {
     _ed_rx3 = dx / L;
     _ed_ry3 = dy / L;
     _ed_rz3 = dz / L;
+}
+
+// `_ed_ray3`'ün TERSİ: dünya noktası → GÖRÜNÜM içindeki piksel. Türetmesi
+// ışının tanımından çıkıyor — d = f + r·X + u·Y ve taban dik/birim olduğu
+// için v = nokta − göz'de X = (v·r)/(v·f), Y = (v·u)/(v·f), oradan da
+// piksel. Yani ikisi TANIMDAN tutarlı, "iki formül aynı sonucu veriyor mu"
+// diye ummuyoruz.
+//
+// Kameranın ARKASINDAKİ nokta yansıtılamaz (v·f <= 0) ve `_ed_w2s_ok3`
+// sıfır kalıyor: yansıtsaydık arkadaki cisim ekranın karşı köşesinde
+// belirir, kutu seçimi de görünmeyen şeyleri toplardı.
+int   _ed_w2s_ok3 = 0;
+float _ed_w2sx3   = 0.0;
+float _ed_w2sy3   = 0.0;
+
+func _ed_world_to_screen3(x, y, z, w, h, fov) {
+    _ed_w2s_ok3 = 0;
+    _ed_cam_basis3();
+    float vx = x - _ed_cx3;
+    float vy = y - _ed_cy3;
+    float vz = z - _ed_cz3;
+    float a = vx * _ed_bfx3 + vy * _ed_bfy3 + vz * _ed_bfz3;
+    if (a <= 0.001) { return; }
+    float b = vx * _ed_brx3 + vy * _ed_bry3 + vz * _ed_brz3;
+    float c = vx * _ed_bux3 + vy * _ed_buy3 + vz * _ed_buz3;
+    float tf = tan(fov * 0.5 * DEG2RAD3);
+    float asp = (w * 1.0) / (h * 1.0);
+    _ed_w2sx3 = ((b / a) / (tf * asp) + 1.0) * 0.5 * (w * 1.0);
+    _ed_w2sy3 = (1.0 - (c / a) / tf) * 0.5 * (h * 1.0);
+    _ed_w2s_ok3 = 1;
 }
 
 // Işın × yatay düzlem (y = pl). Işının ilerisinde değilse -1.
@@ -9015,6 +9062,124 @@ func ed_select_toggle3d(id) {
 func ed_secim_ekle3d(id) { ed_select_toggle3d(id); }
 func ed_selected3d(): int { return _ed_sel3e; }
 func ed_deselect3d() { _ed_sel3e = 0 - 1; _ed_msel3 = []; }
+
+// ---- KUTU SEÇİMİ -----------------------------------------------------------
+// Üç dönüşüm de artık seçimin TAMAMINI işliyor, yani darboğaz seçimi
+// KURMAK: tek tek tıklamak ile "tümünü seç" arasında hiçbir şey yoktu.
+//
+// Kutu BOŞLUKTAN başlıyor. Bir cismin üstünde başlayan sürükleme onu taşımak
+// demek ve o jest kutu seçiminden çok daha sık; boşluğa basmak ise ZATEN
+// seçimi bırakıyordu, yani kutu o jestin devamı.
+int _ed_mq3     = 0;      // 1 = kutu çiziliyor
+int _ed_mq_x03  = 0;      // basma noktası (PENCERE koordinatı)
+int _ed_mq_y03  = 0;
+int _ed_mq_add3 = 0;      // CTRL: kümeyi koru, üstüne ekle
+
+// Bu eşiğin ALTI tıklama sayılıyor. Eşik olmasaydı her tıklama sıfır alanlı
+// bir kutu çalıştırırdı ve "boşluğa tıkla, seçim gitsin" davranışı sessizce
+// kutu seçimine dönüşürdü.
+func _ed_mq_min3(): int { return _us3(4); }
+func _ed_mq_big3(x1, y1): bool {
+    int dw = x1 - _ed_mq_x03; if (dw < 0) { dw = 0 - dw; }
+    int dh = y1 - _ed_mq_y03; if (dh < 0) { dh = 0 - dh; }
+    return dw >= _ed_mq_min3() || dh >= _ed_mq_min3();
+}
+
+// Kutunun ekran dikdörtgeni, GÖRÜNÜME kelepçeli. Kelepçesiz bir kutu
+// panellerin üstüne taşardı ve sürüklemeyi panele götürmek orada bir seçim
+// üretirdi. Sonuç globallerde (çoklu dönüş yok).
+int _ed_mq_rx3 = 0; int _ed_mq_ry3 = 0;
+int _ed_mq_rw3 = 0; int _ed_mq_rh3 = 0;
+//
+// `..._at3` biçimi bilerek: görünüm dikdörtgeni ARGÜMAN, çünkü canlı hâli
+// `screen_width()`'ten geliyor ve o pencere olmadan sıfır — yerleşimin geri
+// kalanında da aynı ayrım var (`_ed_view_w_at3`). Böylece kural penceresiz
+// ÖLÇÜLEBİLİYOR; canlı sarmalayıcı yalnız dikdörtgeni okuyor.
+func _ed_mq_rect_at3(x1, y1, mqvx, mqvy, mqvw, mqvh) {
+    int mqax = _ed_mq_x03; int mqbx = x1;
+    if (mqbx < mqax) { int mqsw = mqax; mqax = mqbx; mqbx = mqsw; }
+    int mqay = _ed_mq_y03; int mqby = y1;
+    if (mqby < mqay) { int mqsh = mqay; mqay = mqby; mqby = mqsh; }
+    if (mqax < mqvx) { mqax = mqvx; }
+    if (mqay < mqvy) { mqay = mqvy; }
+    if (mqbx > mqvx + mqvw) { mqbx = mqvx + mqvw; }
+    if (mqby > mqvy + mqvh) { mqby = mqvy + mqvh; }
+    _ed_mq_rx3 = mqax; _ed_mq_ry3 = mqay;
+    _ed_mq_rw3 = mqbx - mqax; _ed_mq_rh3 = mqby - mqay;
+    if (_ed_mq_rw3 < 0) { _ed_mq_rw3 = 0; }
+    if (_ed_mq_rh3 < 0) { _ed_mq_rh3 = 0; }
+}
+func _ed_mq_rect3(x1, y1) {
+    _ed_mq_rect_at3(x1, y1, _ed_view_x3(), _ed_view_y3(),
+                    _ed_view_w3(), _ed_view_h3());
+}
+
+// Kutunun İÇİNDE kalan varlıklar. MERKEZ testi: kutuya DEĞEN her şeyi almak
+// (sınır kutusu kesişimi) kocaman bir zemini ya da duvarı her seçime
+// katardı — "merkezi kutuda olan" hem öngörülebilir hem anlatılabilir.
+// Kameranın arkasındakiler zaten yansıtılamıyor (bkz. `_ed_w2s_ok3`).
+func _ed_mq_inside_at3(mqvx, mqvy, mqvw, mqvh): array {
+    array o = [];
+    int mqi = 0;
+    while (mqi < length(_e3)) {
+        if (_e3[mqi].alive == 1) {
+            Ent3 mqe = _e3[mqi];
+            _ed_world_to_screen3(mqe.x, mqe.y, mqe.z, mqvw, mqvh, _cam_fov);
+            if (_ed_w2s_ok3 == 1) {
+                float mqsx = _ed_w2sx3 + mqvx;
+                float mqsy = _ed_w2sy3 + mqvy;
+                if (mqsx >= _ed_mq_rx3 && mqsx <= _ed_mq_rx3 + _ed_mq_rw3 &&
+                    mqsy >= _ed_mq_ry3 && mqsy <= _ed_mq_ry3 + _ed_mq_rh3) {
+                    push(o, _mk_handle3(mqi));
+                }
+            }
+        }
+        mqi = mqi + 1;
+    }
+    return o;
+}
+func _ed_mq_inside3(): array {
+    return _ed_mq_inside_at3(_ed_view_x3(), _ed_view_y3(),
+                             _ed_view_w3(), _ed_view_h3());
+}
+
+// Kutuyu BİTİR. CTRL basılıyken küme korunup üstüne ekleniyor — CTRL+tıkın
+// kuralının aynısı; iki jest aynı tuşla farklı davranmamalı.
+func _ed_mq_apply_at3(x1, y1, mqvx, mqvy, mqvw, mqvh): int {
+    _ed_mq3 = 0;
+    if (_ed_mq_big3(x1, y1) == false) { return 0; }
+    _ed_mq_rect_at3(x1, y1, mqvx, mqvy, mqvw, mqvh);
+    array mqy = _ed_mq_inside_at3(mqvx, mqvy, mqvw, mqvh);
+    if (_ed_mq_add3 == 0) { _ed_msel3 = []; }
+    int mqk = 0;
+    while (mqk < length(mqy)) {
+        if (_ed_msel_has3(mqy[mqk]) == false) { push(_ed_msel3, mqy[mqk]); }
+        mqk = mqk + 1;
+    }
+    _ed_sel3e = 0 - 1;
+    if (length(_ed_msel3) > 0) { _ed_sel3e = _ed_msel3[0]; }
+    if (length(mqy) > 0) { _ed_tab3 = 0; }
+    return length(mqy);
+}
+func _ed_mq_apply3(x1, y1): int {
+    return _ed_mq_apply_at3(x1, y1, _ed_view_x3(), _ed_view_y3(),
+                            _ed_view_w3(), _ed_view_h3());
+}
+
+// Kutunun kendisi. Dolgu ÇOK şeffaf: altındaki sahne görünmeye devam etmeli,
+// yoksa tam da seçtiğin şeyi göremezsin.
+func _ed_mq_draw3() {
+    if (_ed_mq3 == 0) { return; }
+    // Basış kaybolduysa (araya bağlam menüsü girdi, girdi yolu atlandı) kutu
+    // ekranda ASILI kalmasın: fare kalkmışsa jest bitmiştir.
+    if (mouse_down(0) == false) { _ed_mq3 = 0; return; }
+    if (_ed_mq_big3(mouse_x(), mouse_y()) == false) { return; }
+    _ed_mq_rect3(mouse_x(), mouse_y());
+    if (_ed_mq_rw3 <= 0 || _ed_mq_rh3 <= 0) { return; }
+    rect(_ed_mq_rx3 * 1.0, _ed_mq_ry3 * 1.0,
+         _ed_mq_rw3 * 1.0, _ed_mq_rh3 * 1.0, rgba(90, 150, 230, 46));
+    rect_lines(_ed_mq_rx3, _ed_mq_ry3, _ed_mq_rw3, _ed_mq_rh3, _G_ACC3());
+}
 func ed_mode3d(m) { _ed_mode3 = m; }
 func ed_mode_now3d(): int { return _ed_mode3; }
 func ed_grid3d(step) { _ed_grid3 = step * 1.0; }
@@ -9048,6 +9213,61 @@ func ed_resize3d(id, sx, sy, sz) {
     _bp_sync3(s);
 }
 func ed_rotate3d(id, yaw) { set3yaw(id, yaw); }
+
+// ---- BÖLGE DÖNÜŞÜMÜ --------------------------------------------------------
+// Bölgeler artık tutamakla da taşınıyor/boyutlanıyor, yani konumu yazan iki
+// yol var: sayı alanı ve ok. İkisi de BURADAN geçiyor — ayrı yazılmış bir
+// kelepçe kayınca tutamakla küçültülen bölge sessizce ters yüz olurdu ve
+// ters yüz bir kutu HİÇ tetiklenmez (hata yok, olay da yok).
+// Kurallar varlığınkiyle aynı: konum ızgaraya oturuyor, ölçü bir ızgara
+// adımının (ızgara kapalıyken 0.1) altına inemiyor.
+//
+// TR ikizi YOK ve olmamalı: `ed_move3d`/`ed_resize3d`'in de yok, bunlar
+// editörün iç komutları. Üstelik oyun tarafında ZATEN bir `bolge_tasi3d`
+// var (`trigger_move3d`) ve o HAM yazıyor — aynı ada iki sözleşme koymak,
+// derleyicinin sessizce birini öldürdüğü tuzağın davetiyesi.
+func _ed_zone_lo3(): float {
+    if (_ed_grid3 > 0.0) { return _ed_grid3; }
+    return 0.1;
+}
+func _ed_zone_ok3(i): bool { return i >= 0 && i < length(_trg_x); }
+
+func ed_zone_move3d(i, x, y, z) {
+    if (_ed_zone_ok3(i) == false) { return; }
+    _trg_x[i] = _ed_snap3(x, _ed_grid3);
+    _trg_y[i] = _ed_snap3(y, _ed_grid3);
+    _trg_z[i] = _ed_snap3(z, _ed_grid3);
+}
+
+func ed_zone_resize3d(i, sx, sy, sz) {
+    if (_ed_zone_ok3(i) == false) { return; }
+    float lo = _ed_zone_lo3();
+    float ax = sx; if (ax < lo) { ax = lo; }
+    float ay = sy; if (ay < lo) { ay = lo; }
+    float az = sz; if (az < lo) { az = lo; }
+    _trg_sx[i] = ax; _trg_sy[i] = ay; _trg_sz[i] = az;
+}
+
+func ed_zone_radius3d(i, r) {
+    if (_ed_zone_ok3(i) == false) { return; }
+    float lo = _ed_zone_lo3();
+    float ar = r; if (ar < lo) { ar = lo; }
+    _trg_r[i] = ar;
+}
+
+// KÜRE bölgenin tek ölçüsü var: hangi oka basılırsa basılsın yarıçap
+// değişiyor (Unity'nin SphereCollider tutamağı da böyle). Eksene göre
+// sx/sy/sz yazmak, kürenin ne çizimini ne içerik testini etkilemeyen üç
+// sayıyı oynatırdı — tutamak çalışıyor görünür, bölge kıpırdamazdı.
+func _ed_zone_resize_axis3(i, ax, ay, az, delta) {
+    if (_ed_zone_ok3(i) == false) { return; }
+    if (_trg_shape[i] == 1) {
+        ed_zone_radius3d(i, _gz_z0r3 + delta);
+        return;
+    }
+    ed_zone_resize3d(i, _gz_z0sx3 + ax * delta, _gz_z0sy3 + ay * delta,
+                     _gz_z0sz3 + az * delta);
+}
 
 func ed_delete3d(id) {
     if (_ed_sel3e == id) { _ed_sel3e = 0 - 1; }
@@ -9704,7 +9924,7 @@ func _s3_editor_mouse(dt) {
     if (_ed_split3 > 0) { return; }
     // Sürükleme SÜRÜYORSA panel denetimi atlanıyor: imleç panelin üstünden
     // geçerken sürüklemenin kopması, Unity'de de olmayan bir davranış olurdu.
-    if (_gz_axis3 < 0 && _ed_drag3 == 0 && _ed_over_ui3()) { return; }
+    if (_gz_axis3 < 0 && _ed_drag3 == 0 && _ed_mq3 == 0 && _ed_over_ui3()) { return; }
 
     if (mouse_pressed(0)) {
         // 1) ÖNCE tutamaklar: okun üstündeki tıklama arkadaki varlığı
@@ -9757,6 +9977,27 @@ func _s3_editor_mouse(dt) {
                 return;
             }
         }
+        // BÖLGENİN tutamakları. Varlık seçili değilken çalışıyor: ikisi
+        // birden seçili olamıyor (bölge seçmek varlık seçimini bırakıyor),
+        // yani hangi tutamağın kime ait olduğu belirsiz kalmıyor.
+        // DÖNDÜRME kipi burada YOK — bölgenin yaw'ı yok (bkz. _gz_zone_draw3).
+        if (s < 0 && _ed_tab3 == 2 && _ed_zone_ok3(_ed_zsel3) &&
+            (_ed_mode3 == ED_MOVE || _ed_mode3 == ED_SCALE)) {
+            _ed_ray3(mouse_x() - _ed_view_x3(), mouse_y() - _ed_view_y3(),
+                     _ed_view_w3(), _ed_view_h3(), _cam_fov);
+            int zi = _ed_zsel3;
+            int zax = _gz_pick3(_ed_cx3, _ed_cy3, _ed_cz3,
+                                _ed_rx3, _ed_ry3, _ed_rz3,
+                                _trg_x[zi], _trg_y[zi], _trg_z[zi]);
+            if (zax >= 0) {
+                ed_mark3d();
+                _gz_axis3 = zax;
+                _gz_t0_3 = _gz_t3;
+                _gz_grab_zone3(zi);
+                _ed_drag3 = 0;
+                return;
+            }
+        }
         // 2) Sonra seçim.
         int hit = ed_pick_at3d(mouse_x(), mouse_y());
         if (hit >= 0) {
@@ -9798,19 +10039,39 @@ func _s3_editor_mouse(dt) {
                 _ed_zsel3 = zh;
                 _ed_drag3 = 0;
             } else {
-                if (key_down(K_LCTRL) == false) { ed_deselect3d(); }
+                // Boşluğa tıklamak HER İKİ seçimi de bırakıyor. Bölgeninki
+                // kalsaydı tutamakları boşlukta durmaya devam eder ve
+                // "şu an neyi taşıyorum?" sorusu cevapsız kalırdı.
+                if (key_down(K_LCTRL) == false) {
+                    ed_deselect3d();
+                    _ed_zsel3 = 0 - 1;
+                }
                 _ed_drag3 = 0;
+                // ...ve KUTU SEÇİMİ burada başlıyor. Aynı basış hem seçimi
+                // bırakıyor hem kutuyu açıyor: eşiği geçmeyen bir sürükleme
+                // sade bir tıklama olarak kalıyor (bkz. _ed_mq_big3).
+                _ed_mq3 = 1;
+                _ed_mq_x03 = mouse_x();
+                _ed_mq_y03 = mouse_y();
+                _ed_mq_add3 = 0;
+                if (key_down(K_LCTRL)) { _ed_mq_add3 = 1; }
             }
         }
     }
 
-    if (mouse_down(0) == false) { _ed_drag3 = 0; _gz_axis3 = 0 - 1; }
+    if (mouse_down(0) == false) {
+        // Kutu BIRAKMA anında uygulanıyor. Sürüklerken uygulamak, kutuyu
+        // büyütüp küçültürken seçimi durmadan değiştirir — çizim önizleme,
+        // KARAR bırakma anıdır.
+        if (_ed_mq3 == 1) { _ed_mq_apply3(mouse_x(), mouse_y()); }
+        _ed_drag3 = 0; _gz_axis3 = 0 - 1; _gz_zid3 = 0 - 1;
+    }
 
     // Üzerine gelince vurgulama: tıklamadan ÖNCE neyi seçeceğini göstermek
     // her editörde var ve yokluğu "tıkladım ama yanlış şey seçildi" hissi
     // veriyor. Kare başına bir ışın taraması — seçim taramasının aynısı.
     _ed_msel_prune3();
-    if (_ed_drag3 == 0 && _gz_axis3 < 0) {
+    if (_ed_drag3 == 0 && _gz_axis3 < 0 && _ed_mq3 == 0) {
         _ed_hover3 = ed_pick_at3d(mouse_x(), mouse_y());
     } else { _ed_hover3 = 0 - 1; }
 
@@ -9827,6 +10088,25 @@ func _s3_editor_mouse(dt) {
         if (_gz_ang_ok3(a)) {
             float d = _gz_angdiff3(a, _gz_a0_3);
             _ed_rotate_group3(_gz_snap_deg3(d, _ed_grid3));
+        }
+        return;
+    }
+    if (_gz_axis3 >= 0 && _gz_zid3 >= 0) {
+        _ed_ray3(mouse_x() - _ed_view_x3(), mouse_y() - _ed_view_y3(),
+                 _ed_view_w3(), _ed_view_h3(), _cam_fov);
+        float zx = _gz_ax_x3(_gz_axis3);
+        float zy = _gz_ax_y3(_gz_axis3);
+        float zz = _gz_ax_z3(_gz_axis3);
+        float zd = _ray_axis3(_ed_cx3, _ed_cy3, _ed_cz3, _ed_rx3, _ed_ry3,
+                              _ed_rz3, _gz_px3, _gz_py3, _gz_pz3, zx, zy, zz);
+        if (zd >= 0.0) {
+            float zdelta = _gz_t3 - _gz_t0_3;
+            if (_ed_mode3 == ED_MOVE) {
+                ed_zone_move3d(_gz_zid3, _gz_px3 + zx * zdelta,
+                               _gz_py3 + zy * zdelta, _gz_pz3 + zz * zdelta);
+            } else {
+                _ed_zone_resize_axis3(_gz_zid3, zx, zy, zz, zdelta);
+            }
         }
         return;
     }
@@ -10185,7 +10465,11 @@ func _s3_editor_draw() {
         mi = mi + 1;
     }
     int s = _slot_of3(_ed_sel3e);
-    if (s < 0) { return; }
+    if (s < 0) {
+        // Varlık yoksa BÖLGE seçili olabilir: onun da tutamakları var.
+        if (_ed_tab3 == 2) { _gz_zone_draw3(_ed_zsel3); }
+        return;
+    }
     Ent3 e = _e3[s];
     // Kenarı bir tık şişir ki cismin yüzeyiyle z-savaşı yapmasın.
     cube_wires(e.x, e.y, e.z, e.sx + 0.06, e.sy + 0.06, e.sz + 0.06, rgb(255, 220, 60));
@@ -12788,7 +13072,7 @@ int _ed_help3 = 0;
 int _ed_help_scroll3 = 0;
 
 func _ed_help_idbase3(): int { return 71000; }
-func _ed_help_n3(): int { return 26; }
+func _ed_help_n3(): int { return 27; }
 
 func _ed_help_key3(i): str {
     if (i ==  0) { return "SAG TUS + WASD"; }
@@ -12820,6 +13104,10 @@ func _ed_help_key3(i): str {
     // anlatmak ikisini de anlatmamak olurdu ve iç sınır hiçbir yerde
     // yazmıyorsa görünmez bir jest demektir.
     if (i == 24) { return "PANEL ARASI"; }
+    // Kutu seçimi listede AYRI satır: boş alandan sürüklemek eskiden
+    // hiçbir şey yapmıyordu, yani kimsenin denemeyi düşünmeyeceği bir jest.
+    // Yazmayan bir jest, olmayan bir jesttir.
+    if (i == 25) { return "BOS ALANDA"; }
     return "H";
 }
 
@@ -12858,6 +13146,7 @@ func _ed_help_act3(i): str {
     if (i == 22) { return "surukle: panel boyutu"; }
     if (i == 23) { return "surukle: paneli tasi"; }
     if (i == 24) { return "surukle: paylasim"; }
+    if (i == 25) { return "surukle: kutuyla sec"; }
     return "bu listeyi ac / kapat";
 }
 
@@ -13135,37 +13424,102 @@ func _dk_drag_input3() {
     }
 }
 
-// Sürükleme — ÇİZİM. Hedef yuva vurgulanıyor ve imlecin yanında panelin adı
-// duruyor: bırakınca nereye gideceğini GÖRMEDEN sürüklemek tahmin oyunu.
+// Bırakma ÖNİZLEMESİ: panelin gideceği GERÇEK dikdörtgen.
+//
+// Eskiden ekranın kabaca üçte biri boyanıyordu ve bu bir YALANDI: sol
+// yuvada zaten iki panel varsa gelen panel üçte biri değil, payına düşeni
+// alır — yani vurgulanan alan bırakınca oluşacak alan değildi. Üstelik
+// yuvanın genişliği kullanıcının çektiği sınıra bağlı, "üçte bir" ise
+// hiçbir şeye.
+//
+// Önizleme artık sonucun KENDİSİYLE aynı fonksiyondan çıkıyor: model
+// geçici olarak hedefe kuruluyor, `_dk_rect3` okunuyor, model geri
+// alınıyor. Ayrı bir tahmin formülü yazmak, önizlemenin zamanla sonuçtan
+// sapması demekti — üçte bir kuralı tam olarak öyle sapmıştı.
+int _dk_pv_ok3 = 0;
+int _dk_pvx3 = 0; int _dk_pvy3 = 0; int _dk_pvw3 = 0; int _dk_pvh3 = 0;
+
+func _dk_preview_rect3(p, hedef, W, H) {
+    _dk_pv_ok3 = 0;
+    if (p < 0 || p >= length(_dk_slot3)) { return; }
+    if (hedef < 0) { return; }
+    int pvSlot = _dk_slot3[p];
+    int pvWt   = _dk_wt3[p];
+    _dk_set_slot3(p, hedef);
+    bool var_mi = _dk_rect3(p, W, H);
+    _dk_pvx3 = _dk_x3; _dk_pvy3 = _dk_y3;
+    _dk_pvw3 = _dk_w3; _dk_pvh3 = _dk_h3;
+    // Model AYNEN geri konuyor. Sürükleme sırasında her kare çağrılıyor;
+    // bir tek kare bile geri koymayı atlasa panel bırakılmadan taşınmış
+    // olurdu ve iptal (geçersiz bölgeye bırakma) hiçbir şeyi geri almazdı.
+    _dk_slot3[p] = pvSlot;
+    _dk_wt3[p] = pvWt;
+    if (var_mi == false) { return; }
+    if (_dk_pvw3 <= 0 || _dk_pvh3 <= 0) { return; }
+    _dk_pv_ok3 = 1;
+}
+
+// Sürükleme — ÇİZİM. Hedef yuva vurgulanıyor, imlecin altında panelin
+// HAYALETİ duruyor: bırakınca nereye gideceğini GÖRMEDEN sürüklemek tahmin
+// oyunu.
 func _dk_drag_draw3() {
     if (_dk_drag3 < 0) { return; }
     int W = screen_width();
     int H = screen_height();
-    int top = _ED_MENU_H3 + _ED_TOOL_H3;
-    int bot = H - _ED_STAT_H3;
-    if (_dk_drop3 == DOCK_LEFT3) {
-        rect(0, top, toInt(W / 3), bot - top, rgba(90, 170, 255, 60));
-        rect_lines(0, top, toInt(W / 3), bot - top, _G_ACC3());
+    _dk_preview_rect3(_dk_drag3, _dk_drop3, W, H);
+    if (_dk_pv_ok3 == 1) {
+        rect(_dk_pvx3, _dk_pvy3, _dk_pvw3, _dk_pvh3, rgba(90, 170, 255, 60));
+        rect_lines(_dk_pvx3, _dk_pvy3, _dk_pvw3, _dk_pvh3, _G_ACC3());
     }
-    if (_dk_drop3 == DOCK_RIGHT3) {
-        int rx = toInt(W * 2 / 3);
-        rect(rx, top, W - rx, bot - top, rgba(90, 170, 255, 60));
-        rect_lines(rx, top, W - rx, bot - top, _G_ACC3());
+    _dk_ghost_draw3(_dk_drag3, _dk_drop3, W, H);
+}
+
+// HAYALET: taşınan panelin imleci izleyen küçük bir kopyası. Yalnız ad
+// yazmak "bir şey sürüklüyorum" demiyordu; başlık şeridi + gövdesi olan bir
+// kart, taşınan şeyin bir PANEL olduğunu gösteriyor.
+//
+// Hayalet imlecin ALTINDA-SAĞINDA duruyor ve pencereye kelepçeli: ekranın
+// kenarında yarısı dışarı taşan bir hayalet, tam da adını okumak
+// istediğinde okunamaz hâle gelirdi.
+func _dk_ghost_w3(): int { return _us3(108); }
+func _dk_ghost_h3(): int { return _us3(64); }
+
+// Hayaletin kendi çıkış değişkenleri var; önizlemenin (`_dk_pv*3`) üstüne
+// yazmıyor. İkisi aynı karede çiziliyor ve tek bir çift değişkeni
+// paylaşsalardı, çizim sırasını değiştiren ilk düzenleme önizlemeyi
+// hayaletin yerine kaydırırdı — hiçbir şeyin söylemeyeceği bir hata.
+int _dk_ghx3 = 0; int _dk_ghy3 = 0; int _dk_ghw3 = 0; int _dk_ghh3 = 0;
+
+func _dk_ghost_at3(mx, my, W, H) {
+    int gw = _dk_ghost_w3();
+    int gh = _dk_ghost_h3();
+    int gx = mx + _us3(8);
+    int gy = my + _us3(8);
+    if (gx + gw > W) { gx = W - gw; }
+    if (gy + gh > H) { gy = H - gh; }
+    if (gx < 0) { gx = 0; }
+    if (gy < 0) { gy = 0; }
+    _dk_ghx3 = gx; _dk_ghy3 = gy; _dk_ghw3 = gw; _dk_ghh3 = gh;
+}
+
+func _dk_ghost_draw3(p, hedef, W, H) {
+    _dk_ghost_at3(mouse_x(), mouse_y(), W, H);
+    int gx = _dk_ghx3; int gy = _dk_ghy3;
+    int gw = _dk_ghw3; int gh = _dk_ghh3;
+    int hh = _us3(16);
+    // Gövde YARI SAYDAM: hayaletin altındaki sahne görünmeye devam etmeli,
+    // yoksa "bırakırsam neyin üstüne gelecek?" sorusu cevapsız kalır.
+    rect(gx, gy, gw, gh, rgba(24, 26, 32, 170));
+    rect(gx, gy, gw, hh, rgba(90, 170, 255, 150));
+    rect_lines(gx, gy, gw, gh, _G_ACC3());
+    str ad = _dk_panel_nm3(p);
+    _g_txt3(ad, gx + _us3(4), gy + _g_cy3(hh), gw - _us3(8), _G_TXT3());
+    // Geçersiz bölge SÖYLENİYOR. Söylenmezse bırakma sessizce hiçbir şey
+    // yapmaz ve kullanıcı sürüklemenin çalışmadığını sanır.
+    if (hedef < 0) {
+        _g_txt3("birakma yeri degil", gx + _us3(4), gy + hh + _us3(3),
+                gw - _us3(8), _G_DIM3());
     }
-    if (_dk_drop3 == DOCK_BOTTOM3) {
-        int by = bot - toInt((bot - top) / 4);
-        rect(0, by, W, bot - by, rgba(90, 170, 255, 60));
-        rect_lines(0, by, W, bot - by, _G_ACC3());
-    }
-    str ad = _dk_panel_nm3(_dk_drag3);
-    if (_dk_drop3 < 0) { ad = ad + "  (birakma yeri degil)"; }
-    int tw = _g_w3(ad, _F3) + _us3(10);
-    int tx = mouse_x() + _us3(10);
-    int ty = mouse_y() + _us3(10);
-    if (tx + tw > W) { tx = W - tw; }
-    rect(tx, ty, tw, _g_lh3(), rgba(24, 26, 32, 235));
-    rect_lines(tx, ty, tw, _g_lh3(), _G_ACC3());
-    _g_txt3(ad, tx + _us3(4), ty, tw - _us3(8), _G_TXT3());
 }
 
 func _ed_split_draw3() {
@@ -13320,6 +13674,10 @@ func _ed_chrome3() {
     int vw = _ed_view_w3();
     int vh = _ed_view_h3();
     rect_lines(vx - 1, vy - 1, vw + 2, vh + 2, _G_LINE3());
+    // Kutu seçimi görünümün ÜSTÜNDE ama panellerden SONRA çiziliyor: kendisi
+    // görünüme kelepçeli olduğu için paneli örtemiyor, sahnenin üstünde ise
+    // görünmesi şart.
+    _ed_mq_draw3();
     _ed_split_draw3();
     _dk_div_draw3();
     _dk_drag_draw3();
@@ -14571,6 +14929,9 @@ func _ed_zone_panel3(px, y, pw) {
     _g_section(px + _us3(2), y, pw - _us3(4), "KONUM");
     y = y + _us3(16);
     _g_txt3("kon", lx, _g_ly3(y), labw - _us3(2), _G_DIM3());
+    // YAZILAN sayı ızgaraya OTURTULMUYOR (varlık panelinde de öyle):
+    // "1.35 yaz" demek tam olarak 1.35 demektir. Izgara SÜRÜKLEMENİN
+    // kuralı — elle girilen değeri de yuvarlamak, sayı alanını yalancı yapar.
     _trg_x[i] = _g_num(23010, fx, y, fw, _ED_FLD3, _trg_x[i], 0.05);
     _trg_y[i] = _g_num(23011, fx + fw + _us3(4), y, fw, _ED_FLD3, _trg_y[i], 0.05);
     _trg_z[i] = _g_num(23012, fx + (fw + _us3(4)) * 2, y, fw, _ED_FLD3, _trg_z[i], 0.05);
@@ -14578,13 +14939,13 @@ func _ed_zone_panel3(px, y, pw) {
 
     if (_trg_shape[i] == 1) {
         _g_txt3("r", lx, _g_ly3(y), labw - _us3(2), _G_DIM3());
-        _trg_r[i] = _g_num(23013, fx, y, fw, _ED_FLD3, _trg_r[i], 0.05);
-        if (_trg_r[i] < 0.1) { _trg_r[i] = 0.1; }
+        ed_zone_radius3d(i, _g_num(23013, fx, y, fw, _ED_FLD3, _trg_r[i], 0.05));
     } else {
         _g_txt3("boy", lx, _g_ly3(y), labw - _us3(2), _G_DIM3());
-        _trg_sx[i] = _g_num(23014, fx, y, fw, _ED_FLD3, _trg_sx[i], 0.05);
-        _trg_sy[i] = _g_num(23015, fx + fw + _us3(4), y, fw, _ED_FLD3, _trg_sy[i], 0.05);
-        _trg_sz[i] = _g_num(23016, fx + (fw + _us3(4)) * 2, y, fw, _ED_FLD3, _trg_sz[i], 0.05);
+        float zsx = _g_num(23014, fx, y, fw, _ED_FLD3, _trg_sx[i], 0.05);
+        float zsy = _g_num(23015, fx + fw + _us3(4), y, fw, _ED_FLD3, _trg_sy[i], 0.05);
+        float zsz = _g_num(23016, fx + (fw + _us3(4)) * 2, y, fw, _ED_FLD3, _trg_sz[i], 0.05);
+        ed_zone_resize3d(i, zsx, zsy, zsz);
     }
     y = y + _ED_FLD3 + _us3(6);
 
@@ -15342,6 +15703,26 @@ float _gz_py3   = 0.0;
 float _gz_pz3   = 0.0;
 float _GZ_PICK3 = 0.32;    // oka tutunma yarıçapı (dünya birimi, ok boyuna oranlı)
 
+// Tutamağın tuttuğu BÖLGE (-1 = varlık tutuyor). Bölgenin kendi seçimi var
+// (`_ed_zsel3`) ve tutamak sürüklenirken seçim değişebilir; sürüklemenin
+// hedefi YAKALANDIĞI anda saklanıyor, yoksa jest ortasında başka bir bölge
+// büyümeye başlardı.
+int   _gz_zid3  = 0 - 1;
+// Ölçek MUTLAK bir uzunluk ekliyor ve eklenen şey YAKALANAN ölçüye biniyor,
+// bir öncekine değil: üstüne eklemek yuvarlamayı biriktirir ve sürükleme
+// uzadıkça bölge kaçardı (halkada da aynı kural).
+float _gz_z0sx3 = 0.0;
+float _gz_z0sy3 = 0.0;
+float _gz_z0sz3 = 0.0;
+float _gz_z0r3  = 0.0;
+
+func _gz_grab_zone3(i) {
+    _gz_zid3 = i;
+    _gz_px3 = _trg_x[i];  _gz_py3 = _trg_y[i];  _gz_pz3 = _trg_z[i];
+    _gz_z0sx3 = _trg_sx[i]; _gz_z0sy3 = _trg_sy[i]; _gz_z0sz3 = _trg_sz[i];
+    _gz_z0r3 = _trg_r[i];
+}
+
 // DÖNDÜRME HALKASI. Döndürme klavyeye mahkûmdu: sol/sağ oklar, 15°'lik
 // adımlar. Yani 37°'ye dönmenin yolu YOKTU ve fareyle çalışan bir editörde
 // dönüşün de fareyle olması gerekiyor (Unity/Unreal/Blender'da halka).
@@ -15516,6 +15897,25 @@ func _gz_ring_draw3(px, py, pz, r, col) {
     }
 }
 
+// Üç eksen oku. Hem varlık hem bölge buradan çiziliyor.
+func _gz_arrows_draw3(px, py, pz) {
+    float axlen = _gz_len3(px, py, pz);
+    float ucb = axlen * 0.12;
+    int cx = rgb(232, 84, 74);
+    int cy = rgb(112, 214, 112);
+    int cz = rgb(96, 150, 246);
+    // Sürüklenen eksen vurgulanıyor — hangisine tutunduğun belli olsun.
+    if (_gz_axis3 == 0) { cx = _G_ACC3(); }
+    if (_gz_axis3 == 1) { cy = _G_ACC3(); }
+    if (_gz_axis3 == 2) { cz = _G_ACC3(); }
+    line3d(px, py, pz, px + axlen, py, pz, cx);
+    line3d(px, py, pz, px, py + axlen, pz, cy);
+    line3d(px, py, pz, px, py, pz + axlen, cz);
+    cube_wires(px + axlen, py, pz, ucb, ucb, ucb, cx);
+    cube_wires(px, py + axlen, pz, ucb, ucb, ucb, cy);
+    cube_wires(px, py, pz + axlen, ucb, ucb, ucb, cz);
+}
+
 func _gz_draw3(s) {
     // DÖNDÜRME kipinde tutamak halka. Ayrı dal, ayrı geometri.
     if (_ed_mode3 == ED_ROTATE) {
@@ -15533,19 +15933,19 @@ func _gz_draw3(s) {
     }
     if (_ed_mode3 != ED_MOVE && _ed_mode3 != ED_SCALE) { return; }
     Ent3 e = _e3[s];
-    float axlen = _gz_len3(e.x, e.y, e.z);
-    float ucb = axlen * 0.12;
-    int cx = rgb(232, 84, 74);
-    int cy = rgb(112, 214, 112);
-    int cz = rgb(96, 150, 246);
-    // Sürüklenen eksen vurgulanıyor — hangisine tutunduğun belli olsun.
-    if (_gz_axis3 == 0) { cx = _G_ACC3(); }
-    if (_gz_axis3 == 1) { cy = _G_ACC3(); }
-    if (_gz_axis3 == 2) { cz = _G_ACC3(); }
-    line3d(e.x, e.y, e.z, e.x + axlen, e.y, e.z, cx);
-    line3d(e.x, e.y, e.z, e.x, e.y + axlen, e.z, cy);
-    line3d(e.x, e.y, e.z, e.x, e.y, e.z + axlen, cz);
-    cube_wires(e.x + axlen, e.y, e.z, ucb, ucb, ucb, cx);
-    cube_wires(e.x, e.y + axlen, e.z, ucb, ucb, ucb, cy);
-    cube_wires(e.x, e.y, e.z + axlen, ucb, ucb, ucb, cz);
+    _gz_arrows_draw3(e.x, e.y, e.z);
+}
+
+// Bölgenin tutamakları. Aynı oklar, aynı ölçü, aynı vurgu — VARLIKLA AYNI
+// FONKSİYON çiziyor; ayrı yazılmış bir kopya zamanla sapar ve "bölgede
+// tutamak başka yerde duruyor" olurdu.
+//
+// DÖNDÜRME kipinde bölgede tutamak YOK: bölgenin yaw'ı yok (biçimde de,
+// içerik testinde de eksen hizalı bir kutu) — döndüren bir halka çizmek
+// hiçbir şey yapmayan bir tutamak olurdu. Aynı gerekçeyle motorun tek
+// dönme ekseni için tek halka çiziliyor.
+func _gz_zone_draw3(i) {
+    if (_ed_mode3 != ED_MOVE && _ed_mode3 != ED_SCALE) { return; }
+    if (i < 0 || i >= length(_trg_x)) { return; }
+    _gz_arrows_draw3(_trg_x[i], _trg_y[i], _trg_z[i]);
 }

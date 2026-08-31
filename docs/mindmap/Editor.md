@@ -54,6 +54,46 @@ yani 37°'ye dönmenin yolu yoktu. Artık **halka**:
 > kamera `(sin, −cos)`. Halka **gövde** sözleşmesini kullanıyor ve testi
 > beklentiyi `patrol3d`'den — bağımsız bir kod yolundan — alıyor.
 
+### Bölgenin de tutamakları var
+Varlığın üç dönüşümünün de tutamağı vardı, **bölgenin hiçbirinin yoktu** —
+oysa lav çukuru ya da kazanma bölgesi tam olarak gözle yerleştirilen şey.
+- Oklar **varlıkla aynı fonksiyondan** çiziliyor (`_gz_arrows_draw3`). Ayrı
+  bir kopya zamanla sapar ve "bölgede tutamak başka yerde duruyor" hatası
+  kimsenin aramadığı yerde durur.
+- **DÖNDÜR kipinde bölgede tutamak yok**: bölgenin yaw'ı yok (biçimde de,
+  içerik testinde de eksen hizalı kutu) — halkanın tek dönme ekseni
+  gerekçesinin aynısı, hiçbir şey yapmayan tutamak çizilmiyor.
+- **Küre bölgede her ok yarıçapı sürüyor** (Unity'nin SphereCollider'ı da
+  böyle). Eksene göre `sx/sy/sz` yazmak, kürenin ne çizimini ne içerik
+  testini etkilemeyen üç sayıyı oynatırdı: tutamak çalışıyor görünür, bölge
+  kıpırdamazdı.
+- Ölçek **yakalanan ölçüye** biniyor (halkadaki kuralın aynısı) ve boy bir
+  ızgara adımının altına inemiyor: **ters yüz bir kutu hiç tetiklenmez** ve
+  bunu söyleyen bir şey yok. Kelepçe tek yerde — sayı alanı da tutamak da
+  `ed_zone_resize3d`/`ed_zone_radius3d`'ten geçiyor.
+- Boşluğa tıklamak artık **bölge seçimini de** bırakıyor; kalsaydı
+  tutamakları boşlukta durmaya devam ederdi.
+
+### Kutu seçimi
+Üç dönüşüm de seçimin tamamını işliyor, yani darboğaz seçimi **kurmak**tı:
+tek tek tıklamak ile "tümünü seç" arasında hiçbir şey yoktu.
+- Kutu **boşluktan** başlıyor: bir cismin üstünde başlayan sürükleme onu
+  taşımak demek ve o jest çok daha sık. Eşiğin (`_ed_mq_min3`) altı hâlâ
+  sade bir tıklama — yoksa her tıklama sıfır alanlı bir kutu çalıştırırdı.
+- **CTRL kümeye ekliyor**, CTRL+tıkın kuralının aynısı.
+- **Merkez** testi: kutuya değen her şeyi almak kocaman bir zemini her
+  seçime katardı.
+- Karar **bırakma** anında; sürüklerken uygulamak, kutuyu büyütüp
+  küçültürken seçimi durmadan değiştirirdi. Çizim önizleme, karar bırakma.
+
+> ⚠️ **Yansıtma `_ed_ray3`'ün TERSİ olmak zorunda.** İkisi de tek bir
+> kamera tabanından (`_ed_cam_basis3`) türüyor ve testi beklentiyi bağımsız
+> yoldan alıyor: ekran noktası → ışın → dünya noktası → geri yansıtma aynı
+> piksele düşmeli. Ayrı yazılsalardı seçim çerçevesi tıklamayla farklı yeri
+> gösterirdi. Kameranın **arkasındaki** nokta yansıtılamaz (`_ed_w2s_ok3`);
+> bayrağı yok sayan bir toplayıcı, bir önceki cismin piksellerini okuyup
+> göremediği şeyi kutuya katar.
+
 ## Menü şeridi — açılır menüler
 Şerit düz bir düğme sırasıydı (`Yeni / Ac / Kaydet / F. Kaydet / Geri / Ileri
 / PANELLER / ?`). İki somut derdi vardı:
@@ -146,6 +186,26 @@ birlikte büyüyor.
 
 **Kapalı panel kendini geri açamaz** (başlığı çizilmiyor) → PANELLER listesi
 bu yüzden duruyor, süslü değil zorunlu.
+
+### Sürükleme geri bildirimi — hayalet + GERÇEK önizleme
+- İmlecin altında panelin **hayaleti** (başlık şeridi + gövde) duruyor.
+  Yalnız ad yazmak "bir şey sürüklüyorum" demiyordu; kart, taşınan şeyin bir
+  PANEL olduğunu söylüyor. Pencereye kelepçeli — kenarda yarısı taşan bir
+  hayalet tam da adını okumak istediğinde okunmaz.
+- Vurgulanan alan artık **panelin gideceği gerçek dikdörtgen**. Eskisi
+  ekranın kabaca üçte birini boyuyordu ve bu bir **yalandı**: yuvada zaten
+  panel varsa gelen panel üçte biri değil payına düşeni alır, üstelik
+  yuvanın genişliği kullanıcının çektiği sınıra bağlı.
+- Önizleme sonucun **kendisiyle aynı fonksiyondan** çıkıyor: model geçici
+  olarak hedefe kuruluyor, `_dk_rect3` okunuyor, model geri alınıyor. Ayrı
+  bir tahmin formülü yazmak, önizlemenin zamanla sonuçtan sapması demekti —
+  üçte bir kuralı tam olarak öyle sapmıştı.
+
+> ⚠️ Önizleme her karede çağrılıyor ve modeli **aynen** geri koymak zorunda
+> (yuva **ve** pay). Bir tek kare atlasa panel bırakılmadan taşınmış olur ve
+> "geçersiz bölgeye bırak = iptal" sözü sessizce bozulurdu. Hayaletin kendi
+> değişkenleri var (`_dk_gh*3`); önizlemeyle tek çift paylaşsalardı, çizim
+> sırasını değiştiren ilk düzenleme önizlemeyi hayaletin yerine kaydırırdı.
 
 ## Yerleşimin kalıcılığı
 `save_data("tameengine_layout.txt",

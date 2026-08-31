@@ -9,6 +9,54 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — EDİTÖR: bölge tutamakları, kutu seçimi, sürükleme hayaleti
+
+Üç ayrı boşluk, tek ortak tema: **jest var ama görünmüyordu.**
+
+**Bölgenin de tutamakları var.** Varlığın üç dönüşümünün de tutamağı vardı,
+bölgenin hiçbirinin yoktu — oysa lav çukuru ya da kazanma bölgesi tam olarak
+gözle yerleştirilen şey. TAŞI ve ÖLÇEK kipleri artık seçili bölgede de aynı
+okları çiziyor; oklar **varlıkla aynı fonksiyondan** geliyor, ayrı bir kopya
+değil. DÖNDÜR kipinde bölgede tutamak **yok**: bölgenin yaw'ı yok (biçimde de
+içerik testinde de eksen hizalı kutu), halka hiçbir şey yapmayan bir tutamak
+olurdu. Küre bölgede hangi ok çekilirse çekilsin **yarıçap** değişiyor —
+kürenin tek ölçüsü var ve eksene göre üç sayı yazmak hiçbir şeyi
+kıpırdatmazdı. Boy bir ızgara adımının altına inmiyor (ters yüz bir kutu HİÇ
+tetiklenmez ve bunu söyleyen bir şey yok); kelepçe tek yerde, sayı alanı da
+tutamak da oradan geçiyor.
+
+**Kutu seçimi.** Üç dönüşüm de seçimin tamamını işliyor, yani darboğaz seçimi
+KURMAK'tı: tek tık ile "tümünü seç" arasında hiçbir şey yoktu. Boş bir yere
+basıp sürüklemek artık kutu açıyor; CTRL basılıysa küme korunup üstüne
+ekleniyor (CTRL+tıkın kuralı). Kutu **boşluktan** başlıyor çünkü cismin
+üstünde başlayan sürükleme onu taşımak demek; eşiğin altı hâlâ sade tıklama.
+Seçim **merkeze** bakıyor — kutuya değen her şeyi almak kocaman bir zemini
+her seçime katardı. Bunun için dünya→ekran yansıtması geldi ve `_ed_ray3`'ün
+**tersi** olarak, tek bir kamera tabanından türetildi; testi beklentiyi
+bağımsız yoldan alıyor (ekran noktası → ışın → dünya → geri yansıtma aynı
+piksele düşmeli). Kameranın arkasındaki nokta yansıtılamıyor.
+
+**Sürükleme hayaleti — ve önizlemedeki bir yalan.** Panel sürüklerken imlecin
+altında artık panelin hayaleti (başlık şeridi + gövde) duruyor. Asıl düzeltme
+vurgulanan alan: ekranın kabaca üçte biri boyanıyordu ve bu **yanlıştı** —
+yuvada zaten panel varsa gelen panel üçte biri değil payına düşeni alır,
+üstelik yuva genişliği kullanıcının çektiği sınıra bağlı. Önizleme artık
+sonucun **kendi fonksiyonundan** çıkıyor: model geçici olarak hedefe
+kuruluyor, `_dk_rect3` okunuyor, model geri alınıyor. Geri koymak (yuva **ve**
+pay) testle korunuyor — bir tek kare atlasa panel bırakılmadan taşınmış olur
+ve "geçersiz bölgeye bırak = iptal" sözü sessizce bozulurdu.
+
+Kısayol listesi (H) kutu seçimini de sayıyor: yazmayan bir jest, olmayan bir
+jesttir.
+
+21 regresyon testi (593 → 614) ve 30 bozma denemesi; üçü ilk turda kaçtı ve
+üçü de testin kendi kurulumundandı — kameranın arkasındaki cisim listenin
+sonundaydı (bir önceki cismin değerlerini miras alıyordu), önizleme testi
+döngünün sonunda ölçüyordu (son çağrı panelin kendi yuvasınaydı) ve adil-pay
+adımı varsayılan yerleşimde zaten fark yaratmıyordu. Üçü de [[Tuzaklar]]'a
+yazıldı.
+
+
 ### Fixed — EDİTÖR: yineleme (CTRL+Y) yapısal işi geri getirmiyor, sahneyi siliyordu
 
 "Bölüm ekle → CTRL+Z → CTRL+Y" ölçüldü: bölüm geri gelmiyor ve üstüne 1.

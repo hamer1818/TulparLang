@@ -60,6 +60,23 @@ kelepçeleyen satır (pay tabanı zaten sağlıyordu) ve "son panel artanı alı
 özel durumu (yığmalı toplamda son panelin bitişi zaten tam T). İki yerde
 tutulan koruma, hangisinin yük taşıdığını sınanamaz yapıyor.
 
+### 1h-2. Testin kendi SIRASI sızıntıyı görünmez yapıyor
+Kutu seçimi testinde kameranın arkasındaki cisim, listenin **sonunda**
+duruyordu. Yansıtma başarısız olunca sonuç değişkenleri bir önceki cismin
+değerlerinde kalıyor — sondaki cisim ekran dışındaki komşusunun değerlerini
+miras alıyor ve kutuya girmiyordu. Bayrağı yok sayan bozma bu yüzden
+**kaçtı**. Sızıntıyı görünür kılan şey sıralama: arkadaki cismi ekranın
+ortasındaki cismin HEMEN ARDINA koymak.
+**Kural:** "eski değeri okuma" hatalarını sınarken, okunacak eski değerin
+testi kızartacak bir değer olduğundan emin ol.
+
+### 1h-3. Döngünün SONUNDA ölçmek geri koymayı taklit ediyor
+Önizlemenin modeli kirletmediğini sınayan test, sol/sağ/alt üçlüsünü
+döngüde çağırıp sonunda ölçüyordu. Son çağrı panelin **kendi** yuvasına
+olduğu için, geri koymayı silen bozma "geri koymuş" gibi göründü.
+**Kural:** tek bir çağrıdan **hemen sonra** ölç ve hedefi asla nesnenin
+bulunduğu yer seçme.
+
 ### 1h. Testin KENDİ kurulumu sınananı ortadan kaldırıyor
 Yan yuvadaki panellerin alt yuvanın üstünde bitmesi hiç sınanmıyordu: paylaşım
 testlerinin hepsi konsolu yan yuvaya taşıyor, yani **alt yuva boş kalıyor** ve
@@ -146,6 +163,12 @@ koşar. Görsel/oynanış testini **kullanıcı yapar**.
 Belirti hep aynı: hata yok, ekranda bir şey görünmüyor, dosya sessizce
 yanlış. Dokuz ayrı örneği [[Editor]]'de tabloda. Ortak kök: **bir işlemin
 neyi koruyup neyi atacağı belirsiz bırakılmış.**
+
+**Alt sınıf: ÖNİZLEME ile SONUÇ ayrı formüllerden.** Panel sürüklemesinin
+bırakma önizlemesi ekranın üçte birini boyuyordu, oysa panel payına düşeni
+alır — vurgulanan alan bırakınca oluşan alan DEĞİLDİ. Çare: önizlemeyi
+sonucun kendi fonksiyonundan üretmek (modeli geçici kurup `_dk_rect3`'ü
+okumak), yani "iki formül aynı sonucu veriyor mu" diye ummamak.
 
 **Alt sınıf: TERS işlem simetrisi.** Geri alma ↔ yineleme, kes ↔ yapıştır,
 kaydet ↔ yükle — bir çiftin iki ucu durum TAKAS eder ve ikisi de aynı

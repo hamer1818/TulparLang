@@ -28,6 +28,7 @@
 //   DEL / CTRL+D               sil / çoğalt
 //   CTRL+C / CTRL+V            kopyala / yapıştır (BÖLÜMLER ARASI çalışır)
 //   CTRL+A                     tümünü seç
+//   BOŞ ALANDAN SÜRÜKLE        kutuyla çoklu seç (CTRL: kümeye ekle)
 //   CTRL+Z / CTRL+Y            geri al / yinele
 //   CTRL+S (ya da F5)          kaydet
 //   CTRL+SHIFT+S               farklı kaydet (dosya penceresi)
@@ -46,6 +47,18 @@
 // IZGARA AÇIKKEN dönüş de 15°'ye oturuyor (ok tuşlarının adımıyla aynı);
 // kapalıyken açı serbest. Izgara "hizala" demek ve konumu hizalayıp açıyı
 // serbest bırakmak, hizalanmış bir duvarı 3° eğik bırakırdı.
+//
+// KUTU SEÇİMİ: boş bir yere bas ve sürükle — kutunun içinde kalan her şey
+// seçilir, CTRL basılıysa var olan seçimin ÜSTÜNE eklenir (CTRL+tık ile aynı
+// kural). Kutu boşluktan başlıyor, çünkü bir cismin üstünde başlayan
+// sürükleme onu TAŞIMAK demek ve o jest çok daha sık. Eşiğin altında kalan
+// bir sürükleme hâlâ sade bir tıklamadır (yoksa her tıklama sıfır alanlı bir
+// kutu çalıştırırdı).
+//
+// Kutu MERKEZE bakıyor: bir cisim, merkezi kutunun içindeyse seçilir. Kutuya
+// DEĞEN her şeyi almak, kocaman bir zemini ya da duvarı her seçime katardı.
+// Görüş alanının dışında kalan (ve kameranın arkasındaki) cisimler
+// gelmiyor — "seçtiğim şeyi görüyorum" sözü bozulmasın.
 //
 // ÇOKLU SEÇİMİ döndürmek grubu GRUP MERKEZİ etrafında çeviriyor: her cismin
 // hem yönü döner hem de yeri yörüngeye girer, yani dizilişin kendisi döner.
@@ -92,10 +105,26 @@
 // taşınır. SESİ de var: girince çalacak dosyayı panelden seçiyorsun —
 // kurallardaki ses listesinin aynısı.
 //
+// BÖLGENİN DE TUTAMAKLARI VAR: seçili bir bölgede TAŞI ve ÖLÇEK kipleri
+// varlıktakiyle aynı okları çiziyor (aynı fonksiyon çiziyor, ayrı bir kopya
+// değil). Lav çukuru ya da kazanma bölgesi tam olarak GÖZLE yerleştirilen
+// şey; sayı alanlarına mahkûm olmamalı.
+//   • DÖNDÜR kipinde bölgede tutamak YOK: bölgenin yaw'ı yok (biçimde de,
+//     içerik testinde de eksen hizalı bir kutu), yani halka hiçbir şey
+//     yapmayan bir tutamak olurdu.
+//   • KÜRE bölgede hangi oku çekersen çek YARIÇAP değişiyor: kürenin tek
+//     ölçüsü var, eksene göre üç sayı yazmak hiçbir şeyi kıpırdatmazdı.
+//   • Boy bir ızgara adımının (ızgara kapalıyken 0.1) altına inmiyor: ters
+//     yüz olmuş bir kutu HİÇ tetiklenmez ve bunu söyleyen bir şey yok.
+//
 // PANELİ BAŞLIĞINDAN SÜRÜKLE: "HIYERARSI" yazısının üstünden tut ve çek.
-// Sürüklerken hedef bölge maviyle vurgulanır — sol üçte bir SOL yuva, sağ
-// üçte bir SAĞ yuva, alt çeyrek ALT yuva. Ortası geçerli bir bırakma yeri
-// değildir (orada bırakmak iptal eder). Başlığın sağ ucundaki "x" paneli
+// İmlecin altında panelin HAYALETİ (başlık şeridi + gövde) seni izler ve
+// panelin GİDECEĞİ GERÇEK DİKDÖRTGEN maviyle boyanır — kabaca ekranın üçte
+// biri değil, bırakınca gerçekten oluşacak alan. (Yuvada zaten panel varsa
+// gelen panel üçte biri değil PAYINA düşeni alır; eski önizleme tam da bu
+// yüzden yanlış yeri gösteriyordu.) İmleç sol üçte birdeyken SOL yuva, sağ
+// üçte birdeyken SAĞ, alt çeyrekteyken ALT hedeflenir; ortası geçerli bir
+// bırakma yeri değildir (orada bırakmak iptal eder ve hayalet bunu yazar). Başlığın sağ ucundaki "x" paneli
 // kapatır; kapalı panel hiç çizilmez ve yer kaplamaz, alanı sahne
 // görünümüne geçer.
 //

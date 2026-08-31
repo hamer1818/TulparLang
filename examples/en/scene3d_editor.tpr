@@ -30,6 +30,7 @@
 //   DEL / CTRL+D                 delete / duplicate
 //   CTRL+C / CTRL+V              copy / paste (works ACROSS LEVELS)
 //   CTRL+A                       select all
+//   DRAG FROM EMPTY SPACE        box-select (CTRL: add to the set)
 //   CTRL+Z / CTRL+Y              undo / redo
 //   CTRL+S (or F5)               save
 //   CTRL+SHIFT+S                 save as (file window)
@@ -50,6 +51,18 @@
 // use); with it off the angle is free. The grid button means "align", and
 // aligning positions while leaving angles free would leave an aligned wall
 // tilted by 3°.
+//
+// BOX SELECTION: press on empty space and drag — everything inside the box is
+// selected, and with CTRL held it is ADDED to the existing set (the same rule
+// as CTRL+click). The box starts from empty space because a drag that starts
+// on a body means MOVE it, and that gesture is far more common. A drag under
+// the threshold is still a plain click (otherwise every click would run a
+// zero-area box).
+//
+// The box goes by CENTRES: a body is selected when its centre is inside the
+// box. Taking everything the box TOUCHES would drag a huge floor or wall into
+// every selection. Bodies outside the view (and behind the camera) are not
+// collected — "I can see what I selected" has to keep holding.
 //
 // ROTATING A MULTI-SELECTION turns the group around ITS CENTRE: each body
 // both turns and orbits, so the arrangement itself rotates. Turning only the
@@ -95,10 +108,26 @@
 // They also have a SOUND: pick the file that plays on enter from the panel —
 // the same sound list the rules use.
 //
-// DRAG A PANEL BY ITS TITLE: grab the "HIYERARSI" text and pull. While you
-// drag, the target zone is highlighted in blue — the left third is the LEFT
-// dock, the right third the RIGHT dock, the bottom quarter the BOTTOM dock.
-// The middle is not a valid drop (releasing there cancels). The "x" at the
+// ZONES HAVE HANDLES TOO: with a zone selected, MOVE and SCALE draw the same
+// arrows entities get (the same function draws them, not a second copy). A
+// lava pit or a win zone is exactly the kind of thing you place by eye; it
+// should not be stuck behind number fields.
+//   * ROTATE gives a zone no handle: a zone has no yaw (it is an axis-aligned
+//     box both in the format and in the containment test), so a ring would be
+//     a handle that does nothing.
+//   * On a SPHERE zone every arrow drives the RADIUS: a sphere has one size,
+//     and writing three per-axis numbers would move nothing.
+//   * A size never drops below one grid step (0.1 with the grid off): an
+//     inside-out box NEVER triggers, and nothing would say so.
+//
+// DRAG A PANEL BY ITS TITLE: grab the "HIYERARSI" text and pull. A GHOST of
+// the panel (title strip plus body) follows the cursor, and the RECTANGLE THE
+// PANEL WILL ACTUALLY GET is painted blue — not a rough third of the screen,
+// but the area that really appears when you release. (If the dock already
+// holds a panel, the newcomer gets its SHARE, not a third; that is exactly
+// where the old preview lied.) The left third targets the LEFT dock, the
+// right third the RIGHT one, the bottom quarter the BOTTOM one. The middle is
+// not a valid drop — releasing there cancels, and the ghost says so. The "x" at the
 // right end of the title closes the panel; a hidden panel is not drawn and
 // takes no space, its area goes to the scene view.
 //

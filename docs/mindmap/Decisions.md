@@ -70,6 +70,39 @@ Aynı yuvadaki paneller yuvayı sabit eşit bölüşüyordu ve aralarındaki sı
   tek çoktan geçilen nokta): kendi payını taşısaydı bir yuvada kıymık olan
   panel yeni yuvasına da kıymık düşerdi. → [[Editor]]
 
+## Bölgede DÖNDÜRME tutamağı YOK (2026-08-31)
+Bölge, biçimde de içerik testinde de **eksen hizalı** bir kutu; yaw'ı yok.
+Halka çizmek hiçbir şey yapmayan bir tutamak olurdu — motorun tek dönme
+ekseni için tek halka çizme kararının aynı gerekçesi. Bölgeye yaw eklemek
+biçim + içerik testi + serileştirici üçlüsünü değiştirmek demek; talep
+gelirse ayrı bir iş.
+
+## Kürede her ok YARIÇAPI sürüyor (2026-08-31)
+Küre bölgenin tek ölçüsü var. Eksene göre `sx/sy/sz` yazmak, kürenin ne
+çizimini ne içerik testini etkilemeyen üç sayıyı oynatırdı: tutamak
+çalışıyor görünür, bölge kıpırdamazdı. Unity'nin SphereCollider tutamağı da
+her eksende yarıçapı sürüyor.
+
+## Kutu seçimi BOŞLUKTAN başlıyor, MERKEZE bakıyor (2026-08-31)
+İki karar, iki gerekçe:
+- **Boşluktan**: bir cismin üstünde başlayan sürükleme onu TAŞIMAK demek ve
+  o jest kutu seçiminden çok daha sık. Boşluğa basmak zaten seçimi
+  bırakıyordu; kutu o jestin devamı. Eşiğin altı hâlâ sade tıklama.
+- **Merkez**: kutuya DEĞEN her şeyi almak (sınır kutusu kesişimi) kocaman
+  bir zemini ya da duvarı her seçime katardı. "Merkezi kutuda olan" hem
+  öngörülebilir hem anlatılabilir.
+Karar **bırakma** anında uygulanıyor: sürüklerken uygulamak, kutuyu büyütüp
+küçültürken seçimi durmadan değiştirir. Çizim önizleme, karar bırakma.
+
+## Bırakma önizlemesi SONUCUN KENDİ fonksiyonundan (2026-08-31)
+Panel sürüklerken vurgulanan alan ekranın kabaca üçte biriydi ve bu bir
+yalandı: yuvada zaten panel varsa gelen panel üçte biri değil **payına**
+düşeni alır, üstelik yuva genişliği kullanıcının çektiği sınıra bağlı.
+Önizleme artık modeli geçici olarak hedefe kurup `_dk_rect3`'ü okuyor ve
+geri alıyor — "iki formül aynı sonucu veriyor mu" diye ummuyoruz, TEK
+formül var. Bedeli: çizim sırasında model mutasyonu, ki geri koyma
+(yuva **ve** pay) testle korunuyor.
+
 ## Kaydedilmemiş iş: soramıyorsak KAYBETMEYELİM (2026-08-27)
 raylib'de kapanışı iptal edecek bağlama yok → "emin misin?" **sorulamıyor**.
 Onun yerine çıkarken `<dosya>.kurtarma.json` yazılıyor ve açılışta KURTAR

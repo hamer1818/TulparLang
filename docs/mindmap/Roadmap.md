@@ -17,7 +17,10 @@ Ayrıntı: [[Editor]]. Kısa hâli — editör artık kendi başına kullanılab
 araç:
 - **Tutamaklar**: taşı/ölçek eksen okları + **döndürme halkası** (dönüş artık
   fareyle, ızgara açıkken 15°'ye oturuyor, çoklu seçim grup merkezi etrafında).
-  Üç dönüşümün üçü de **seçimin tamamını** işliyor.
+  Üç dönüşümün üçü de **seçimin tamamını** işliyor. **Bölgenin de tutamakları
+  var** (döndürme hariç — bölgenin yaw'ı yok; kürede her ok yarıçapı sürüyor).
+- **Seçim**: tek tık, CTRL+tık, tümünü seç ve **boş alandan sürükleyerek kutu
+  seçimi** (CTRL kümeye ekler; merkez kuralı, görüş alanı dışı gelmiyor).
 - **Konsol**: kaydırılıyor, seviyeye göre süzülüyor, temizleniyor.
 - **Menü**: şerit açılır menülere döndü (Dosya / Duzen / Gorunum / Yardim);
   her komutun kısayolu kendi satırında, iş görmeyen komut soluk.
@@ -26,7 +29,8 @@ araç:
 - **Geri al ↔ yinele simetrik**: yapısal işler (bölüm ekle/sil) de yinelenebiliyor.
   Önceden "bölüm ekle → CTRL+Z → CTRL+Y" bölümü geri getirmiyor, üstüne
   sahneyi siliyordu (→ [[Editor]] "takas simetrisi").
-- **Yerleşim**: paneller yuvalara takılı, **başlıktan sürüklenip** taşınıyor,
+- **Yerleşim**: paneller yuvalara takılı, **başlıktan sürüklenip** taşınıyor
+  (imleçte **hayalet**, hedefte **panelin gideceği gerçek dikdörtgen**),
   yuvanın sınırı **ve aynı yuvadaki panellerin arasındaki sınır** çekiliyor,
   kapatılıp açılıyor; yerleşim + paylaşım + ölçek **kalıcı**.
 - **Pencere**: boyutlandırılabilir, büyütülebilir, F11 tam ekran.
@@ -38,8 +42,7 @@ araç:
 - Bir düzine **sessiz veri kaybı** bulunup kapatıldı (tablo: [[Editor]]).
 
 Açık kalanlar: yuva içinde SIRALAMA / sekme / yüzen pencere (bilerek
-yapılmadı → [[Decisions]]; paylaşım artık ayarlanabiliyor, sıra değil),
-panel başlığında sürükleme hayaleti yok (yalnız hedef vurgusu var).
+yapılmadı → [[Decisions]]; paylaşım artık ayarlanabiliyor, sıra değil).
 
 ## 🟢 DB katmanı (paralel-read kapandı)
 - ✅ `db_open` WAL + busy_timeout varsayılan (yapıldı, write 2.3×). → [[SQLite and DB]]

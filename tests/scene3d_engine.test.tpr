@@ -9720,6 +9720,21 @@ func t_help_lists_fullscreen() {
 // Kısayol listesi yuva içi sınırı da saymalı: sürükleyerek paylaşımı
 // değiştirmek GÖRÜNMEZ bir jest — listede yoksa öğrenilmesinin yolu yok.
 // Dıştaki sınırla aynı satırda anlatılamaz, ikisi ayrı şeyi değiştiriyor.
+// Yazmayan bir jest, olmayan bir jesttir: boş alandan sürüklemek eskiden
+// hiçbir şey yapmıyordu, yani kimse kendiliğinden denemez.
+func t_help_lists_the_box_selection() {
+    int i = 0;
+    int bulundu = 0;
+    while (i < _ed_help_n3()) {
+        if (_ed_help_key3(i) == "BOS ALANDA") {
+            bulundu = 1;
+            assert(contains(_ed_help_act3(i), "kutu"), "satir kutu secimini anlatmali");
+        }
+        i = i + 1;
+    }
+    assert_eq_int(bulundu, 1);
+}
+
 func t_help_lists_the_panel_share() {
     int i = 0;
     int bulundu = 0;
@@ -10383,6 +10398,466 @@ func t_counter_snapshot_matches_the_top_of_the_stack() {
     assert_eq_int(_ed_karsi_bicim3(bos), 0);
 }
 
+// ===========================================================================
+// PANEL SÜRÜKLEME: HAYALET + GERÇEK ÖNİZLEME
+// Sürüklerken tek geri bildirim ekranın kabaca üçte birini boyayan bir
+// vurguydu ve o vurgu bir YALANDI: yuvada zaten panel varsa gelen panel
+// üçte biri değil payına düşeni alır.
+// ===========================================================================
+
+// Önizleme, bırakmanın GERÇEK sonucuyla aynı olmalı. Beklenti formülün
+// kopyasından değil, işi GERÇEKTEN yaptırıp ölçerek geliyor: önce önizleme
+// okunuyor, sonra panel gerçekten taşınıyor ve dikdörtgeni karşılaştırılıyor.
+func t_drop_preview_equals_the_real_rect() {
+    _t_dock_default3();
+    editor_ui_scale3d(2);
+    int W = 1600; int H = 900;
+    // HIYERARSI'ye ALISILMADIK bir pay veriliyor. Varsayilan paylarla her
+    // panelin payi zaten esit ve "yeni yuvada ADIL pay al" adimini atlayan
+    // bir onizleme AYNI dikdortgeni verirdi — yani test hicbir sey olcmezdi.
+    _dk_set_wt3(PANEL_HIER3, 3000);
+    // HIYERARSI'yi (0) SAG yuvaya birakmanin onizlemesi...
+    _dk_preview_rect3(0, DOCK_RIGHT3, W, H);
+    assert_eq_int(_dk_pv_ok3, 1);
+    int px = _dk_pvx3; int py = _dk_pvy3;
+    int pw = _dk_pvw3; int ph = _dk_pvh3;
+    // ...gercekten birakinca olusan dikdortgenle AYNI olmali.
+    _dk_set_slot3(0, DOCK_RIGHT3);
+    assert(_dk_rect3(0, W, H), "tasinan panelin dikdortgeni olmali");
+    assert_eq_int(_dk_x3, px);
+    assert_eq_int(_dk_y3, py);
+    assert_eq_int(_dk_w3, pw);
+    assert_eq_int(_dk_h3, ph);
+    _t_dock_default3();
+}
+
+// Önizleme MODELİ KİRLETMEMELİ. Her karede çağrılıyor; bir tek kare geri
+// koymayı atlasa panel bırakılmadan taşınmış olur ve "geçersiz bölgeye
+// bırak = iptal" sözü sessizce bozulurdu.
+func t_drop_preview_leaves_the_layout_alone() {
+    _t_dock_default3();
+    _dk_set_wt3(PANEL_HIER3, 3000);
+    int W = 1600; int H = 900;
+    int slot0 = _dk_slot3[0];      // SOL
+    int wt0 = _dk_wt3[0];          // 3000
+    // TEK bir onizlemeden hemen sonra olculuyor. Dongunun SONUNDA olcmek,
+    // son cagriyi panelin KENDI yuvasina yaparsa "geri koydu" gibi gorunur:
+    // testin kendi kurulumu sinadigi seyi ortadan kaldirirdi (bir bozma tam
+    // bu yuzden ilk turda kacti).
+    _dk_preview_rect3(0, DOCK_RIGHT3, W, H);
+    assert_eq_int(_dk_slot3[0], slot0);
+    assert_eq_int(_dk_wt3[0], wt0);
+    // Tekrarlanan onizleme de birikmemeli ve hicbiri EV yuvasina degil.
+    int k = 0;
+    while (k < 30) {
+        _dk_preview_rect3(0, DOCK_RIGHT3, W, H);
+        _dk_preview_rect3(0, DOCK_BOTTOM3, W, H);
+        k = k + 1;
+    }
+    assert_eq_int(_dk_slot3[0], slot0);
+    assert_eq_int(_dk_wt3[0], wt0);
+    _t_dock_default3();
+}
+
+// Geçersiz hedefte önizleme YOK: boyanmış bir alan "buraya gidecek" demektir
+// ve bırakma iptal olacaksa bunu söylemek yanlış olur.
+func t_drop_preview_absent_for_invalid_targets() {
+    _t_dock_default3();
+    _dk_preview_rect3(0, 0 - 1, 1600, 900);
+    assert_eq_int(_dk_pv_ok3, 0);
+    _dk_preview_rect3(0 - 1, DOCK_LEFT3, 1600, 900);
+    assert_eq_int(_dk_pv_ok3, 0);
+}
+
+// Hayalet imleci izliyor ama PENCEREYE kelepçeli: kenarda yarısı dışarı
+// taşan bir hayalet, tam da adını okumak istediğinde okunamaz olurdu.
+func t_drag_ghost_follows_and_stays_on_screen() {
+    editor_ui_scale3d(2);
+    int W = 1600; int H = 900;
+    // Ortada: imlecin ALTINDA-SAGINDA.
+    _dk_ghost_at3(700, 400, W, H);
+    assert(_dk_ghx3 > 700, "hayalet imlecin sagi nda olmali");
+    assert(_dk_ghy3 > 400, "hayalet imlecin altinda olmali");
+    int gw = _dk_ghw3; int gh = _dk_ghh3;
+    assert(gw > 0 && gh > 0, "hayaletin olcusu olmali");
+    // Sag-alt kosede: tamamen ekranda kalmali.
+    _dk_ghost_at3(W - 2, H - 2, W, H);
+    assert(_dk_ghx3 + _dk_ghw3 <= W, "hayalet sagdan tasmamali");
+    assert(_dk_ghy3 + _dk_ghh3 <= H, "hayalet asagidan tasmamali");
+    assert(_dk_ghx3 >= 0 && _dk_ghy3 >= 0, "hayalet eksiye dusmemeli");
+    // Olcu ekranla degil UI OLCEGIYLE buyumeli.
+    editor_ui_scale3d(3);
+    _dk_ghost_at3(700, 400, W, H);
+    assert(_dk_ghw3 > gw, "3x'te hayalet buyumeli");
+    editor_ui_scale3d(2);
+}
+
+// Hayalet ile önizleme AYRI değişkenlerde. Tek çifti paylaşsalardı, çizim
+// sırasını değiştiren ilk düzenleme önizlemeyi hayaletin yerine kaydırırdı.
+func t_ghost_and_preview_do_not_share_state() {
+    _t_dock_default3();
+    editor_ui_scale3d(2);
+    _dk_preview_rect3(0, DOCK_RIGHT3, 1600, 900);
+    int px = _dk_pvx3; int py = _dk_pvy3; int pw = _dk_pvw3; int ph = _dk_pvh3;
+    _dk_ghost_at3(700, 400, 1600, 900);
+    assert_eq_int(_dk_pvx3, px);
+    assert_eq_int(_dk_pvy3, py);
+    assert_eq_int(_dk_pvw3, pw);
+    assert_eq_int(_dk_pvh3, ph);
+    _t_dock_default3();
+}
+
+func t_drag_ghost_is_wired_into_the_frame() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(split(src, "_dk_ghost_draw3(_dk_drag3, _dk_drop3, W, H);")) > 1,
+           "hayalet surukleme ciziminde olmali");
+    assert(length(split(src, "_dk_preview_rect3(_dk_drag3, _dk_drop3, W, H);")) > 1,
+           "onizleme surukleme ciziminde olmali");
+    // Eski "ucte bir" yalani CIZIME geri gelmemeli. (Ayni ucte bir kurali
+    // BIRAKMA BOLGESI icin dogru ve orada duruyor: imlecin hangi yuvanin
+    // uzerinde sayilacagi ayri bir soru, panelin nereye oturacagi ayri.)
+    array dd = split(src, "func _dk_drag_draw3(");
+    assert(length(dd) > 1, "surukleme cizimi olmali");
+    array ddg = split(dd[1], "\nfunc ");
+    assert(length(split(ddg[0], "/ 3")) == 1,
+           "birakma onizlemesi ucte bir kuralina donmemeli");
+    assert(length(split(ddg[0], "DOCK_LEFT3")) == 1,
+           "onizleme yuvayi elle boyamamali, dikdortgeni okumali");
+    // Onizleme GERCEK dikdortgen fonksiyonundan gelmeli.
+    array g = split(src, "func _dk_preview_rect3(");
+    assert(length(g) > 1, "onizleme fonksiyonu olmali");
+    array gov = split(g[1], "\nfunc ");
+    assert(length(split(gov[0], "_dk_rect3(p, W, H)")) > 1,
+           "onizleme gercek dikdortgeni okumali");
+    assert(length(split(gov[0], "_dk_slot3[p] = pvSlot;")) > 1,
+           "onizleme modeli geri koymali");
+}
+
+// ===========================================================================
+// KUTU SEÇİMİ
+// Üç dönüşüm de seçimin tamamını işliyor, yani darboğaz seçimi KURMAK'tı:
+// tek tek tıklamak ile "tümünü seç" arasında hiçbir şey yoktu.
+// ===========================================================================
+
+// Yansıtma, ışının TERSİ olmak zorunda. Beklenti bu yüzden formülün
+// kopyasından değil BAĞIMSIZ yoldan geliyor: bir ekran noktasından ışın
+// kuruluyor, ışın boyunca bir dünya noktasına yürünüyor, o nokta geri
+// yansıtılıyor — aynı piksele düşmeli. Sapsalardı seçim çerçevesi
+// tıklamayla farklı yeri gösterirdi ve bunu kimse söylemezdi.
+func t_projection_inverts_the_pick_ray() {
+    scene3d_reset();
+    _ed_cx3 = 4.0; _ed_cy3 = 6.0; _ed_cz3 = 0.0 - 9.0;
+    _ed_yaw3 = 37.0; _ed_pitch3 = 0.0 - 18.0;
+    int w = 1280; int h = 720;
+    array px = []; push(px, 40.0);  push(px, 640.0); push(px, 1230.0); push(px, 320.0);
+    array py = []; push(py, 30.0);  push(py, 360.0); push(py, 690.0);  push(py, 500.0);
+    int i = 0;
+    while (i < length(px)) {
+        _ed_ray3(px[i], py[i], w, h, 60.0);
+        float t = 12.5;
+        float wx = _ed_cx3 + _ed_rx3 * t;
+        float wy = _ed_cy3 + _ed_ry3 * t;
+        float wz = _ed_cz3 + _ed_rz3 * t;
+        _ed_world_to_screen3(wx, wy, wz, w, h, 60.0);
+        assert_eq_int(_ed_w2s_ok3, 1);
+        assert(_t_yakinf3(_ed_w2sx3, px[i], 0.05),
+               "yansitma isinin tersi olmali (x): " + toString(_ed_w2sx3));
+        assert(_t_yakinf3(_ed_w2sy3, py[i], 0.05),
+               "yansitma isinin tersi olmali (y): " + toString(_ed_w2sy3));
+        i = i + 1;
+    }
+}
+
+// Kameranın ARKASI yansıtılamaz. Yansıtsaydık arkadaki cisim ekranın karşı
+// köşesinde belirir ve kutu görünmeyen şeyleri toplardı.
+func t_projection_refuses_points_behind_the_camera() {
+    scene3d_reset();
+    _ed_cx3 = 0.0; _ed_cy3 = 2.0; _ed_cz3 = 0.0;
+    _ed_yaw3 = 0.0; _ed_pitch3 = 0.0;
+    // yaw 0 → ileri -Z. Onde olan yansiyor...
+    _ed_world_to_screen3(0.0, 2.0, 0.0 - 10.0, 1280, 720, 60.0);
+    assert_eq_int(_ed_w2s_ok3, 1);
+    // ...arkada olan YANSIMIYOR.
+    _ed_world_to_screen3(0.0, 2.0, 10.0, 1280, 720, 60.0);
+    assert_eq_int(_ed_w2s_ok3, 0);
+}
+
+// Eşiğin ALTI tıklama. Eşik olmasaydı her tıklama sıfır alanlı bir kutu
+// çalıştırır ve "boşluğa tıkla, seçim gitsin" sessizce kutuya dönüşürdü.
+func t_marquee_threshold_separates_click_from_drag() {
+    editor_ui_scale3d(2);
+    _ed_mq_x03 = 500; _ed_mq_y03 = 400;
+    int esik = _ed_mq_min3();
+    assert(esik > 0, "esik pozitif olmali");
+    assert(_ed_mq_big3(500 + esik - 1, 400) == false, "esigin altinda tiklama");
+    assert(_ed_mq_big3(500 + esik, 400), "esikte kutu");
+    assert(_ed_mq_big3(500, 400 - esik), "yukari surukleme de kutu");
+    assert(_ed_mq_big3(500, 400) == false, "hic kipirdamayan tiklama");
+}
+
+// Dikdörtgen HER YÖNE çiziliyor (sağ-aşağı da, sol-yukarı da) ve GÖRÜNÜME
+// kelepçeleniyor: kelepçesiz bir kutu panellerin üstüne taşardı.
+func t_marquee_rect_normalises_and_clamps() {
+    _ed_mq_x03 = 600; _ed_mq_y03 = 500;
+    // Sol-yukari surukleme: dikdortgen yine pozitif olculu olmali.
+    _ed_mq_rect_at3(400, 300, 200, 100, 800, 600);
+    assert_eq_int(_ed_mq_rx3, 400);
+    assert_eq_int(_ed_mq_ry3, 300);
+    assert_eq_int(_ed_mq_rw3, 200);
+    assert_eq_int(_ed_mq_rh3, 200);
+    // Gorunumun DISINA tasan surukleme kelepcelenmeli.
+    _ed_mq_x03 = 300; _ed_mq_y03 = 200;
+    _ed_mq_rect_at3(5000, 5000, 200, 100, 800, 600);
+    assert_eq_int(_ed_mq_rx3, 300);
+    assert_eq_int(_ed_mq_ry3, 200);
+    assert_eq_int(_ed_mq_rx3 + _ed_mq_rw3, 1000);   // 200 + 800
+    assert_eq_int(_ed_mq_ry3 + _ed_mq_rh3, 700);    // 100 + 600
+}
+
+// MERKEZ kuralı: kutuya değen her şeyi almak (sınır kutusu kesişimi)
+// kocaman bir zemini ya da duvarı her seçime katardı.
+func t_marquee_selects_by_centre() {
+    scene3d_reset(); no_ground3d();
+    _ed_cx3 = 0.0; _ed_cy3 = 0.0; _ed_cz3 = 20.0;
+    // yaw 0 -> ileri -Z: z=+20'den ORIJINE bakiyor.
+    _ed_yaw3 = 0.0; _ed_pitch3 = 0.0;
+    int w = 800; int h = 600;
+    // Tam merkezde duran KUCUK bir cisim ve uzakta duran bir baskasi.
+    int a = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    // Kameranin ARKASINDA kalan bir cisim (kamera z=+20'de, -Z'ye bakiyor).
+    // Bunun ekranda YERI YOK. Sirasi bilerek A'dan HEMEN SONRA: yansitma
+    // basarisiz olunca sonuc degiskenleri bir onceki cismin degerlerinde
+    // KALIYOR, yani bayragi yok sayan bir toplayici D'yi A'nin pikselinde
+    // sanip kutuya katardi. Sona koysaydik D, ekran disindaki C'nin
+    // degerlerini miras alir ve sizinti gorunmezdi (bir bozma tam bu yuzden
+    // ilk turda kacti).
+    int d = spawn3(0.0, 0.0, 30.0, 1.0, 1.0, 1.0, LIME, SHAPE_CUBE, TAG_PROP);
+    int b = spawn3(0.0 - 6.0, 0.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PROP);
+    // ...ve gorus alaninin YANINDAN cikan bir sonuncu.
+    int c = spawn3(0.0 - 40.0, 0.0, 0.0, 1.0, 1.0, 1.0, GOLD, SHAPE_CUBE, TAG_PROP);
+    // Yerlerini OLC: hangisinin nerede oldugu bizim varsayimimiz degil.
+    _ed_world_to_screen3(0.0, 0.0, 0.0, w, h, _cam_fov);
+    assert_eq_int(_ed_w2s_ok3, 1);
+    float ax = _ed_w2sx3; float ay = _ed_w2sy3;
+    _ed_world_to_screen3(0.0 - 6.0, 0.0, 0.0, w, h, _cam_fov);
+    assert_eq_int(_ed_w2s_ok3, 1);
+    assert(_t_yakinf3(_ed_w2sx3, ax, 0.05) == false, "iki cisim ayni pikselde olmamali");
+    assert(_ed_w2sx3 >= 0.0 && _ed_w2sx3 <= w * 1.0, "B ekranda olmali");
+    _ed_world_to_screen3(0.0 - 40.0, 0.0, 0.0, w, h, _cam_fov);
+    assert(_ed_w2sx3 < 0.0, "C ekranin DISINDA olmali");
+    _ed_world_to_screen3(0.0, 0.0, 30.0, w, h, _cam_fov);
+    assert_eq_int(_ed_w2s_ok3, 0);   // D kameranin ARKASINDA
+    // A'yi saran kucuk bir kutu: yalniz A gelmeli.
+    _ed_mq_x03 = toInt(ax) - 10; _ed_mq_y03 = toInt(ay) - 10;
+    _ed_mq_rect_at3(toInt(ax) + 10, toInt(ay) + 10, 0, 0, w, h);
+    array ic = _ed_mq_inside_at3(0, 0, w, h);
+    assert_eq_int(length(ic), 1);
+    assert(ic[0] == a, "kutudaki cisim A olmali");
+    // Tum ekrani kaplayan kutu: ekrandaki IKISI gelmeli, ucuncusu GELMEMELI.
+    // Kutu ancak GÖRÜNENİ toplayabilir; gorus alani disindakini de almak,
+    // "sectigim seyi goruyorum" sozunu bozardi.
+    _ed_mq_x03 = 0; _ed_mq_y03 = 0;
+    _ed_mq_rect_at3(w, h, 0, 0, w, h);
+    array hep = _ed_mq_inside_at3(0, 0, w, h);
+    assert_eq_int(length(hep), 2);
+    assert(b >= 0 && c >= 0 && d >= 0, "dordu de kurulmali");
+}
+
+// Kutu SIFIRLIYOR, CTRL basiliyken EKLIYOR — CTRL+tikin kuralinin aynisi.
+// Iki jest ayni tusla farkli davranmamali.
+func t_marquee_replaces_but_ctrl_adds() {
+    scene3d_reset(); no_ground3d();
+    _ed_cx3 = 0.0; _ed_cy3 = 0.0; _ed_cz3 = 20.0;
+    _ed_yaw3 = 0.0; _ed_pitch3 = 0.0;
+    int w = 800; int h = 600;
+    int a = spawn3(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    int b = spawn3(0.0 - 6.0, 0.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PROP);
+    editor_ui_scale3d(2);
+    // Once B tek basina secili.
+    ed_select3d(b);
+    assert_eq_int(length(_ed_msel3), 1);
+    // A'nin uzerine kutu, CTRL YOK: B dusmeli.
+    _ed_world_to_screen3(0.0, 0.0, 0.0, w, h, _cam_fov);
+    float ax = _ed_w2sx3; float ay = _ed_w2sy3;
+    _ed_mq_x03 = toInt(ax) - 20; _ed_mq_y03 = toInt(ay) - 20;
+    _ed_mq_add3 = 0;
+    int n1 = _ed_mq_apply_at3(toInt(ax) + 20, toInt(ay) + 20, 0, 0, w, h);
+    assert_eq_int(n1, 1);
+    assert_eq_int(length(_ed_msel3), 1);
+    assert(_ed_sel3e == a, "birincil secim kutudaki olmali");
+    // Simdi CTRL ile B'nin uzerine kutu: ikisi birden.
+    _ed_world_to_screen3(0.0 - 6.0, 0.0, 0.0, w, h, _cam_fov);
+    float bx = _ed_w2sx3; float by = _ed_w2sy3;
+    _ed_mq_x03 = toInt(bx) - 20; _ed_mq_y03 = toInt(by) - 20;
+    _ed_mq_add3 = 1;
+    _ed_mq_apply_at3(toInt(bx) + 20, toInt(by) + 20, 0, 0, w, h);
+    assert_eq_int(length(_ed_msel3), 2);
+    // Esigin ALTINDA kalan bir "kutu" secime DOKUNMAMALI: o bir tiklama.
+    _ed_mq_x03 = toInt(bx); _ed_mq_y03 = toInt(by);
+    _ed_mq_add3 = 0;
+    int n3 = _ed_mq_apply_at3(toInt(bx) + 1, toInt(by) + 1, 0, 0, w, h);
+    assert_eq_int(n3, 0);
+    assert_eq_int(length(_ed_msel3), 2);
+}
+
+// Karar sınandı, ÇAĞRI sınanmadı — bu depoda en sık kaçan sınıf. Kutunun
+// fareye bağlanması penceresiz sürülemiyor, o yüzden KAYNAKTAN okunuyor.
+func t_marquee_is_wired_into_the_frame() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(src) > 100000, "kaynak okunamadi — depo kokunden calistir");
+    // Bos alana basmak kutuyu ACMALI.
+    assert(length(split(src, "_ed_mq3 = 1;")) > 1, "bos alana basinca kutu acilmali");
+    assert(length(split(src, "_ed_mq_x03 = mouse_x();")) > 1, "basma noktasi saklanmali");
+    // Birakma UYGULAMALI.
+    assert(length(split(src, "if (_ed_mq3 == 1) { _ed_mq_apply3(mouse_x(), mouse_y()); }")) > 1,
+           "birakinca kutu uygulanmali");
+    // Cizim kare dongusunde olmali.
+    assert(length(split(src, "_ed_mq_draw3();")) > 1, "kutu cizilmeli");
+    // Panel muafiyeti: surukleme panelin uzerine tasarsa jest KOPMAMALI,
+    // yoksa kutu ekranda asili kalir ve secim hic uygulanmaz.
+    assert(length(split(src, "_ed_mq3 == 0 && _ed_over_ui3()")) > 1,
+           "kutu surerken panel denetimi atlanmali");
+    // Kutu surerken vurgulama kapanmali.
+    assert(length(split(src, "_gz_axis3 < 0 && _ed_mq3 == 0) {")) > 1,
+           "kutu surerken vurgulama kapanmali");
+    // CTRL kutuyu EKLEME kipine almali.
+    assert(length(split(src, "if (key_down(K_LCTRL)) { _ed_mq_add3 = 1; }")) > 1,
+           "CTRL kutuyu ekleme kipine almali");
+}
+
+// ===========================================================================
+// BÖLGE TUTAMAKLARI
+// Varlığın üç dönüşümünün de tutamağı vardı, bölgenin hiçbirinin yoktu:
+// lav çukuru ya da kazanma bölgesi sayı alanlarıyla konumlanıyordu — oysa
+// bunlar tam olarak GÖZLE yerleştirilen şeyler.
+// ===========================================================================
+
+// Tutamak da sayı alanı da tek kapıdan geçiyor. Konum ızgaraya oturuyor,
+// ölçü bir ızgara adımının altına inemiyor: ters yüz bir kutu hiç
+// tetiklenmez ve bunu söyleyen hiçbir şey yok.
+func t_zone_move_snaps_to_the_grid() {
+    scene3d_reset(); no_ground3d();
+    int z = trigger3d(0.0, 1.0, 0.0, 2.0, 2.0, 2.0, TAG_PLAYER);
+    ed_grid3d(1.0);
+    ed_zone_move3d(z, 3.4, 1.6, 0.0 - 2.4);
+    assert(_t_yakinf3(_trg_x[z], 3.0, 0.001), "izgara acikken x oturmali");
+    assert(_t_yakinf3(_trg_y[z], 2.0, 0.001), "izgara acikken y oturmali");
+    assert(_t_yakinf3(_trg_z[z], 0.0 - 2.0, 0.001), "negatifte de oturmali");
+    ed_grid3d(0.0);
+    ed_zone_move3d(z, 3.4, 1.6, 0.0 - 2.4);
+    assert(_t_yakinf3(_trg_x[z], 3.4, 0.001), "izgara kapaliyken serbest olmali");
+}
+
+func t_zone_size_never_collapses() {
+    scene3d_reset(); no_ground3d();
+    int z = trigger3d(0.0, 1.0, 0.0, 4.0, 4.0, 4.0, TAG_PLAYER);
+    ed_grid3d(0.0);
+    ed_zone_resize3d(z, 0.0 - 3.0, 0.0, 0.02);
+    assert(_trg_sx[z] > 0.0, "negatif boy kabul edilmemeli");
+    assert(_trg_sy[z] > 0.0, "sifir boy kabul edilmemeli");
+    assert(_trg_sz[z] > 0.0, "cok kucuk boy kabul edilmemeli");
+    // Izgara acikken taban IZGARA ADIMI — varliktaki kuralin aynisi.
+    ed_grid3d(1.0);
+    ed_zone_resize3d(z, 0.2, 0.2, 0.2);
+    assert(_t_yakinf3(_trg_sx[z], 1.0, 0.001), "izgara acikken taban bir adim olmali");
+    ed_zone_radius3d(z, 0.0 - 5.0);
+    assert(_t_yakinf3(_trg_r[z], 1.0, 0.001), "yaricap da tabana oturmali");
+}
+
+// Küre bölgenin TEK ölçüsü var. Eksene göre sx/sy/sz yazmak, kürenin ne
+// çizimini ne içerik testini etkilemeyen üç sayıyı oynatırdı: tutamak
+// çalışıyor görünür, bölge kıpırdamazdı.
+func t_sphere_zone_handle_drives_the_radius() {
+    scene3d_reset(); no_ground3d();
+    int z = trigger_sphere3d(0.0, 1.0, 0.0, 3.0, TAG_PLAYER);
+    ed_grid3d(0.0);
+    _gz_grab_zone3(z);
+    float sx0 = _trg_sx[z];
+    // Y ekseninden cekmek de yaricabi buyutmeli.
+    _ed_zone_resize_axis3(z, 0.0, 1.0, 0.0, 2.0);
+    assert(_t_yakinf3(_trg_r[z], 5.0, 0.001), "kurede her ok yaricabi degistirmeli");
+    assert(_t_yakinf3(_trg_sx[z], sx0, 0.001), "kurede kutu olculeri kipirdamama li");
+    // Kutu bölgede tersi: yalnız CEKILEN eksen degisiyor, yaricap durmali.
+    int k = trigger3d(0.0, 1.0, 0.0, 4.0, 4.0, 4.0, TAG_PLAYER);
+    _gz_grab_zone3(k);
+    float r0 = _trg_r[k];
+    _ed_zone_resize_axis3(k, 1.0, 0.0, 0.0, 2.0);
+    assert(_t_yakinf3(_trg_sx[k], 6.0, 0.001), "cekilen eksen buyumeli");
+    assert(_t_yakinf3(_trg_sy[k], 4.0, 0.001), "oteki eksen durmali");
+    assert(_t_yakinf3(_trg_r[k], r0, 0.001), "kutuda yaricap kipirdamamali");
+}
+
+// Ölçek YAKALANAN ölçüye biniyor, bir öncekine değil: üstüne eklemek
+// yuvarlamayı biriktirir ve sürükleme uzadıkça bölge kaçardı. Halkada da
+// aynı kural — iki yerde ayrı yazılırsa biri sapar.
+func t_zone_scale_is_absolute_from_the_grab() {
+    scene3d_reset(); no_ground3d();
+    int z = trigger3d(0.0, 1.0, 0.0, 4.0, 4.0, 4.0, TAG_PLAYER);
+    ed_grid3d(0.0);
+    _gz_grab_zone3(z);
+    _ed_zone_resize_axis3(z, 1.0, 0.0, 0.0, 1.0);
+    _ed_zone_resize_axis3(z, 1.0, 0.0, 0.0, 2.0);
+    _ed_zone_resize_axis3(z, 1.0, 0.0, 0.0, 3.0);
+    // Birikseydi 4 + 1 + 2 + 3 = 10 olurdu.
+    assert(_t_yakinf3(_trg_sx[z], 7.0, 0.001), "olcek yakalanan olcuden turemeli");
+}
+
+// Bölgenin yaw'ı yok (biçimde de, içerik testinde de eksen hizalı kutu),
+// yani DÖNDÜRME kipinde tutamak da yok: dönderen bir halka çizmek hiçbir
+// şey yapmayan bir tutamak olurdu. Aynı gerekçe motorun tek dönme ekseni
+// için tek halka çizmesinin gerekçesi.
+func t_zone_has_no_rotation_handle() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(src) > 100000, "kaynak okunamadi — depo kokunden calistir");
+    array g = split(src, "func _gz_zone_draw3(");
+    assert(length(g) > 1, "bolge tutamagi cizimi yok");
+    array gov = split(g[1], "}");
+    assert(length(split(gov[0], "_ed_mode3 != ED_MOVE && _ed_mode3 != ED_SCALE")) > 1,
+           "bolge tutamagi kipe bakmali (DONDUR'de cizmemeli)");
+    assert(length(split(gov[0], "_gz_ring_draw3")) == 1,
+           "bolgeye halka cizilmemeli");
+    // Yakalama yolu da aynı iki kiple sınırlı olmalı.
+    array pg = split(src, "int zax = _gz_pick3(");
+    assert(length(pg) > 1, "bolge tutamagi yakalanmiyor");
+    assert(length(split(pg[0], "_ed_mode3 == ED_MOVE || _ed_mode3 == ED_SCALE")) > 1,
+           "bolge yakalamasi kipe bakmali");
+}
+
+// Oklar VARLIKLA AYNI fonksiyondan çiziliyor. Ayrı yazılmış bir kopya
+// zamanla sapar: "bölgede tutamak başka yerde duruyor" hatası, kimsenin
+// aramadığı yerde durur.
+func t_zone_handles_share_the_arrow_drawing() {
+    str src = read_file("lib/scene3d.tpr");
+    array d = split(src, "_gz_arrows_draw3(");
+    // 1 tanim + 2 cagri = 3 parca.
+    assert(length(d) >= 4, "ok cizimi paylasilmali (tanim + iki cagri)");
+    assert(length(split(src, "func _gz_arrows_draw3(")) > 1, "ortak cizim tanimli olmali");
+}
+
+// Karar sınandı, ÇAĞRI sınanmadı — bu depoda en sık kaçan sınıf. Tutamağın
+// fareye bağlanması penceresiz sürülemiyor, o yüzden bağlantı KAYNAKTAN
+// okunuyor.
+func t_zone_handles_are_wired_into_the_frame() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(split(src, "_gz_grab_zone3(zi);")) > 1,
+           "basma ani bolgeyi yakalamali");
+    assert(length(split(src, "ed_zone_move3d(_gz_zid3,")) > 1,
+           "TASI kipinde surukleme bolgeyi tasimali");
+    assert(length(split(src, "_ed_zone_resize_axis3(_gz_zid3,")) > 1,
+           "OLCEK kipinde surukleme bolgeyi boyutlamali");
+    assert(length(split(src, "_gz_zone_draw3(_ed_zsel3)")) > 1,
+           "secili bolgenin tutamaklari cizilmeli");
+    // Bırakınca tutamak da bırakılmalı: kalsaydı bir sonraki tıklama
+    // bölgeyi kendiliğinden sürüklemeye devam ederdi.
+    assert(length(split(src, "_gz_axis3 = 0 - 1; _gz_zid3 = 0 - 1;")) > 1,
+           "fare birakilinca bolge tutamagi da birakilmali");
+    // Panel de aynı kelepçeden geçmeli.
+    assert(length(split(src, "ed_zone_resize3d(i, zsx, zsy, zsz)")) > 1,
+           "panel boy alanlari kelepceden gecmeli");
+    assert(length(split(src, "ed_zone_radius3d(i, _g_num(23013")) > 1,
+           "panel yaricap alani kelepceden gecmeli");
+}
+
 // Başka bir dosya açmak bölüm etiketlerini de temizlemeli — içerik yığını
 // boşalıp etiket yığını dolu kalırsa ilk geri alma yanlış bölüme gider.
 func t_opening_file_clears_level_tags() {
@@ -11011,6 +11486,7 @@ test("bozuk pay kaydi yok sayiliyor", "t_div_broken_share_record_is_ignored");
 test("tasinan panel adil pay aliyor", "t_div_moved_panel_gets_a_fair_share");
 test("sinir kare dongusune bagli", "t_div_is_wired_into_the_frame");
 test("kisayol listesi panel arasini sayiyor", "t_help_lists_the_panel_share");
+test("kisayol listesi kutu secimini sayiyor", "t_help_lists_the_box_selection");
 test("yerlesim kelepceleri gorunumu yasatiyor", "t_layout_clamps_keep_the_viewport_alive");
 test("pencere kuculunce yerlesim kelepceleniyor", "t_layout_reclamps_when_window_shrinks");
 test("ayrac bolgeleri ayrik", "t_splitter_zones_are_distinct");
@@ -11052,6 +11528,26 @@ test("yineleme yeni bolumdeki isi koruyor", "t_redo_keeps_live_edits_of_the_new_
 test("yineleme silmeyi tekrar uyguluyor", "t_redo_reapplies_a_structural_delete");
 test("yapisal geri alma kendi bolumune donuyor", "t_structural_undo_returns_to_its_own_level");
 test("karsi goruntu yigin tepesine uyuyor", "t_counter_snapshot_matches_the_top_of_the_stack");
+test("bolge tasima izgaraya oturuyor", "t_zone_move_snaps_to_the_grid");
+test("bolge boyu cokmuyor", "t_zone_size_never_collapses");
+test("kure bolgede ok yaricabi surer", "t_sphere_zone_handle_drives_the_radius");
+test("bolge olcegi yakalanan olcuden", "t_zone_scale_is_absolute_from_the_grab");
+test("bolgede dondurme tutamagi yok", "t_zone_has_no_rotation_handle");
+test("bolge oklari ortak cizimden", "t_zone_handles_share_the_arrow_drawing");
+test("bolge tutamaklari kare dongusune bagli", "t_zone_handles_are_wired_into_the_frame");
+test("yansitma isinin tersi", "t_projection_inverts_the_pick_ray");
+test("kamera arkasi yansitilmiyor", "t_projection_refuses_points_behind_the_camera");
+test("kutu esigi tiklamayi ayiriyor", "t_marquee_threshold_separates_click_from_drag");
+test("kutu her yone ve kelepceli", "t_marquee_rect_normalises_and_clamps");
+test("kutu merkeze gore seciyor", "t_marquee_selects_by_centre");
+test("kutu sifirlar, CTRL ekler", "t_marquee_replaces_but_ctrl_adds");
+test("kutu secimi kare dongusune bagli", "t_marquee_is_wired_into_the_frame");
+test("onizleme gercek dikdortgen", "t_drop_preview_equals_the_real_rect");
+test("onizleme yerlesimi kirletmiyor", "t_drop_preview_leaves_the_layout_alone");
+test("gecersiz hedefte onizleme yok", "t_drop_preview_absent_for_invalid_targets");
+test("hayalet imleci izliyor ve ekranda kaliyor", "t_drag_ghost_follows_and_stays_on_screen");
+test("hayalet ile onizleme ayri", "t_ghost_and_preview_do_not_share_state");
+test("hayalet kare dongusune bagli", "t_drag_ghost_is_wired_into_the_frame");
 test("dosya acmak bolum etiketlerini temizliyor", "t_opening_file_clears_level_tags");
 test("yeni sahne eski bolumleri birakmiyor", "t_new_scene_drops_old_levels");
 test("sablon eski bolumleri birakmiyor", "t_template_drops_old_levels");
