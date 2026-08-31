@@ -225,6 +225,17 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # BELGE ÜRETECİ. `tulpar doc` da denetimsizdi ve üç stdlib modülü HİÇ
+    # belgelenemiyordu (kardeş modüllerin sembollerine baktıkları için tek
+    # başlarına derlenmiyorlar; `doc` kodgen hatasında her şeyi atıyordu).
+    # ~5 sn.
+    if [ -x tests/doc_audit.sh ]; then
+        if ! bash tests/doc_audit.sh; then
+            echo -e "${RED}Belge denetimi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # ANDROID DERLEME DENETİMİ. Arşiv sembolleri tamam olsa bile derleme yolu
     # (manifest yazımı, PIC reloc, link bayrakları, NDK bulma) kırık olabilir
     # ve bunu hiçbir şey denetlemiyordu: hedef "Temmuz'da emülatörde

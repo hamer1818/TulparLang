@@ -9,6 +9,30 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Fixed — `tulpar doc` üç stdlib modülünü HİÇ belgeleyemiyordu
+
+Belge üreteci kodgen hatasında her şeyi atıp hiçbir şey basmıyordu. Sonuç:
+`lib/router.tpr`, `lib/middleware.tpr` ve `lib/http_utils.tpr` için çıktı
+**boştu** — bu üç modül kardeş modüllerin sembollerine bakıyor
+(`_router_port`, `_request`, `json_response`) ve tek başlarına derlenmiyor,
+oysa birlikte import edildiklerinde tamamen geçerliler.
+
+Belge çıkarmak **bildirimlere** bakar, derlemenin başarısına değil. Üstelik
+indeks zaten kodgen'den bağımsız kuruluyordu (`aot_check_and_index` onu
+koşulsuz inşa ediyor) — `doc` yalnız atıyordu. Ayrım artık net: **ayrıştırma**
+hatası belgeyi engelliyor (indeks güvenilmez), **kodgen** hatası stderr'e bir
+uyarı basıyor ve belge bildirimlerden üretiliyor. `lib/router.tpr` artık 19
+fonksiyonu docstring'leriyle belgeliyor.
+
+### Added — belge denetimi (`tests/doc_audit.sh`)
+
+`build.sh suites` içinde ~5 sn: 112 dosyanın her biri için `doc` çıkış 0
+veriyor ve çıktı boş değil; ayrıca **ayrışmayan** bir dosyanın hâlâ hata
+verdiği sınanıyor — "her zaman 0 dön" biçiminde bir düzeltme denetimi işe
+yaramaz hâle getirirdi. İki bozma da denendi (kodgen hatasında yine at;
+ayrışma hatasında da 0 dön) ve ikisi de yakalandı.
+
+
 ### Added — LSP duman testi (`tests/lsp_audit.py`)
 
 `tulpar --lsp` editör eklentisinin dayandığı yüzey ve hiçbir otomasyonda

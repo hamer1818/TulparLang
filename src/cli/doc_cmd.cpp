@@ -107,11 +107,27 @@ int doc_cmd_main(int argc, char **argv) {
 
     DocumentIndex idx;
     AOTResult rc = aot_check_and_index(source.c_str(), path, &idx);
-    if (rc != AOT_OK) {
+    if (rc == AOT_ERROR_PARSE) {
+        // AYRIŞTIRILAMAYAN dosyadan belge çıkmaz: indeks boş ya da güvenilmez.
         std::fprintf(stderr,
-                     "tulpar doc: parse/codegen errors prevented indexing "
+                     "tulpar doc: parse errors prevented indexing "
                      "(see diagnostics above)\n");
         return 1;
+    }
+    if (rc != AOT_OK) {
+        // KODGEN hatası belgeyi ENGELLEMİYOR. Belge çıkarmak BİLDİRİMLERE
+        // bakıyor, derlemenin başarısına değil — ve indeks zaten kodgen'den
+        // bağımsız kuruluyor (bkz. aot_check_and_index).
+        //
+        // Ölçüldü: `lib/router.tpr`, `lib/middleware.tpr` ve
+        // `lib/http_utils.tpr` KARDEŞ modüllerin sembollerine bakıyor
+        // (`_router_port`, `_request`, `json_response`) ve tek başlarına
+        // derlenmiyor — oysa birlikte import edildiklerinde geçerliler.
+        // Eski davranış bu üç stdlib modülünü belgelenemez yapıyordu ve
+        // çıktı olarak HİÇBİR ŞEY basıyordu.
+        std::fprintf(stderr,
+                     "tulpar doc: codegen errors — belge yalnız "
+                     "BILDIRIMLERDEN uretildi (govdeler denetlenmedi)\n");
     }
 
     // ----- Header -----

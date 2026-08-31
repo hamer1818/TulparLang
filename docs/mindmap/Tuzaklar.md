@@ -262,6 +262,19 @@ ve `!ast` denetimine güvenmek yetmiyor.
 sonsuza kadar değişir), ve çıktı **hâlâ ayrışıyor**. Bozma denendi: `++`
 düzeltmesini geri almak denetimi kızartıyor.
 
+### `tulpar doc`: DERLEME başarısı, BELGE ön koşulu sanılıyordu
+Belge üreteci kodgen hatasında **her şeyi atıp hiçbir şey basmıyordu**.
+Ölçüldü: üç stdlib modülü (`router`, `middleware`, `http_utils`) hiç
+belgelenemiyordu — çünkü KARDEŞ modüllerin sembollerine bakıyorlar
+(`_router_port`, `_request`, `json_response`) ve tek başlarına derlenmiyorlar;
+birlikte import edildiklerinde tamamen geçerliler.
+
+Belge çıkarmak **bildirimlere** bakar, derlemenin başarısına değil — ve
+indeks zaten kodgen'den bağımsız kuruluyordu (`aot_check_and_index` onu
+koşulsuz inşa ediyor), `doc` yalnız atıyordu. Artık ayrım net: **ayrıştırma**
+hatası belgeyi engelliyor (indeks güvenilmez), **kodgen** hatası yalnız bir
+uyarı basıyor ve belge bildirimlerden üretiliyor.
+
 ### LSP: "ilan et ↔ uygula" ayrışması
 `tulpar --lsp` de hiçbir otomasyonda yoktu. Ölçüldü ve **sağlamdı** — hover,
 tanım, referans, tamamlama, imza yardımı ve yeniden adlandırma çalışıyor,
