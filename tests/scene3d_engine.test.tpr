@@ -7699,6 +7699,72 @@ func t_check_warns_about_moving_walls_with_pathfinding() {
            "devriye gezen DUSMAN uyari sebebi olmamali");
 }
 
+// Katı duvar yoksa ızgara HİÇ kurulmuyor ve `chase_path3d` düz kovalamaya
+// düşüyor. Davranış doğru (duvarsız sahnede A* zaten düz çizgiyi bulur) ama
+// editördeki anahtar yalan söylüyor: açtın, hiçbir şey değişmedi.
+func t_check_warns_when_pathfinding_has_no_walls() {
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 10.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int d = spawn3(0.0, 1.0, 0.0 - 8.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    chase_path_behavior3d(d, TAG_PLAYER, 6.0, 0.0);
+    scene_check3d();
+    assert(_chk_var_mi("kati duvar yok"), "duvarsiz sahnede uyarmali");
+
+    // KATI duvar eklenince susmali.
+    int w = spawn3(0.0, 1.5, 0.0, 6.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    scene_check3d();
+    assert(_chk_var_mi("kati duvar yok") == false, "kati duvar varken susmali");
+
+    // KATI OLMAYAN duvar sayilmamali: dekor ne yolu keser ne izgaraya girer.
+    solid3d(w, false);
+    scene_check3d();
+    assert(_chk_var_mi("kati duvar yok"), "kati olmayan duvar sayilmamali");
+
+    // Yol bulma KAPALIYKEN uyari olmamali — kosul ikisi birden.
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 10.0, 1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int d2 = spawn3(0.0, 1.0, 0.0 - 8.0, 1.0, 2.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    chase_behavior3d(d2, TAG_PLAYER, 6.0, 0.0);
+    scene_check3d();
+    assert(_chk_var_mi("kati duvar yok") == false, "duz kovalamada uyari olmamali");
+}
+
+// Denetim YAŞAYAN bölümü görüyordu; çok bölümlü bir sahnede geri kalanlar
+// hiç bakılmadan kalıyordu. 3. bölümde oyuncu yoksa bunu ancak oraya geçince
+// fark ediyorsun — ya da hiç fark etmeyip oyunu öyle yayınlıyorsun.
+func t_check_looks_at_the_other_levels() {
+    scene3d_reset(); no_ground3d();
+    // 1. bolum: oyuncu VAR. 2. bolum: oyuncu YOK. 3. bolum: IKI oyuncu.
+    str b1 = "{\"entities\": [{\"tag\": \"player\", \"x\": 0, \"y\": 1, \"z\": 0}]}";
+    str b2 = "{\"entities\": [{\"tag\": \"enemy\", \"x\": 0, \"y\": 1, \"z\": 0}]}";
+    str b3 = "{\"entities\": [{\"tag\": \"player\", \"x\": 0, \"y\": 1, \"z\": 0}," +
+             "{\"tag\": \"player\", \"x\": 2, \"y\": 1, \"z\": 0}]}";
+    sahne_yukle3d("{\"v\":1,\"world\":{\"title\":\"uc\",\"ground\":0}," +
+                  "\"levels\":[" + b1 + "," + b2 + "," + b3 + "]}");
+    assert_eq_int(bolum_sayisi3d(), 3);
+    scene_check3d();
+    assert(_chk_var_mi("2. bolumde oyuncu yok"), "2. bolum uyarilmali");
+    assert(_chk_var_mi("3. bolumde 2 oyuncu"), "3. bolumdeki iki oyuncu soylenmeli");
+    // YASAYAN bolum (1) atlanmali. Sinamak icin saklanan kopyayi BAYAT
+    // yapiyoruz: canli sahnede tek oyuncu var, saklanan JSON'da iki. Editorde
+    // bu her an olabiliyor — bir oyuncuyu siler, `_ed_level_store3` daha
+    // calismamistir. Koruma olmasa denetim OLMAYAN bir sorunu bagirirdi.
+    // (Bu kurulum olmadan korumayi silen bozma KACIYORDU: saklanan kopya
+    // canliyla ayniydi, yani iki kez bakmak da ayni cevabi veriyordu.)
+    _lvl_js3[0] = fromJson("{\"entities\": [" +
+        "{\"tag\": \"player\", \"x\": 0, \"y\": 1, \"z\": 0}," +
+        "{\"tag\": \"player\", \"x\": 2, \"y\": 1, \"z\": 0}]}");
+    assert_eq_int(_ed_lvl3, 0);        // yasayan bolum 1
+    scene_check3d();
+    assert(_chk_var_mi("1. bolumde") == false,
+           "yasayan bolumun BAYAT kopyasi denetlenmemeli");
+    // ...ama canli sahne hala tek oyuncu, yani CANLI coklu-oyuncu uyarisi da
+    // yok. Ayrac "hepsi ayni tuslarla": "oyuncu var" fazla gevsek, bolum
+    // uyarilarinin metnine de uyuyor.
+    assert(_chk_var_mi("hepsi ayni tuslarla") == false,
+           "canli sahnede coklu oyuncu uyarisi olmamali");
+}
+
 func t_path_behavior_is_wired() {
     str src = read_file("lib/scene3d.tpr");
     // Dagitim bayragi okumali.
@@ -12165,6 +12231,8 @@ test("otomatik izgara elle kuruleni ezmiyor", "t_nav_auto_does_not_override_manu
 test("bolum degisimi izgarayi gecersiz kiliyor", "t_level_change_invalidates_the_grid");
 test("yol bul bayragi gidis-donusten sag cikiyor", "t_path_flag_roundtrips");
 test("denetim bayat izgarayi soyluyor", "t_check_warns_about_moving_walls_with_pathfinding");
+test("denetim duvarsiz yol bulmayi soyluyor", "t_check_warns_when_pathfinding_has_no_walls");
+test("denetim oteki bolumlere de bakiyor", "t_check_looks_at_the_other_levels");
 test("yol bul davranisi bagli", "t_path_behavior_is_wired");
 test("kose kesme yasak", "t_nav_no_corner_cutting");
 test("bolumler yukleniyor ve geciliyor", "t_levels_load_and_switch");

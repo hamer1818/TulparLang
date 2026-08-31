@@ -9,6 +9,31 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — SAHNE DENETİMİ: iki sessiz durum daha görünür oldu
+
+**Yol bulma açık ama katı duvar yok.** `nav_build3d` duvarsız sahnede erken
+dönüyor (haklı olarak: her hücre açık olurdu ve `chase3d` düz çizgiyi zaten
+bedavaya buluyor), ama sonuç şu: editörde "duvarlari dolas" anahtarını
+açıyorsun, hiçbir şey değişmiyor ve sebebi hiçbir yerde yazmıyor. Denetim
+artık söylüyor. "Katı" şartı da önemli — katı olmayan duvar bir dekor, ne
+yolu keser ne ızgaraya girer.
+
+**Öteki bölümlerde oyuncu denetimi.** Denetim yalnız YAŞAYAN bölümü
+görüyordu; çok bölümlü bir sahnede geri kalanlar hiç bakılmadan kalıyordu.
+3. bölümde oyuncu yoksa bunu ancak oraya geçince fark ediyorsun — ya da hiç
+fark etmeyip oyunu öyle yayınlıyorsun. Saklanan bölümlerin JSON'u zaten elde,
+yüklemeden bakmak yetiyor. Yaşayan bölüm **atlanıyor**: saklanan kopyası
+bayat olabilir (`_ed_level_store3` henüz çalışmamış olabilir) ve zaten canlı
+denetleniyor — atlamasaydı, bir oyuncuyu silip henüz saklamamış kullanıcıya
+olmayan bir sorun bağırırdı.
+
+2 regresyon testi (646 → 648) ve 6 bozma denemesi. Biri kaçtı ve öğreticiydi:
+"yaşayan bölümü atla" korumasını silen bozma yakalanmadı, çünkü testte
+saklanan kopya canlı sahneyle aynıydı — yani iki kez bakmak da aynı cevabı
+veriyordu. Korumanın var olma sebebi olan BAYAT kopya durumu kurulunca
+yakalandı.
+
+
 ### Added — MOTOR: A* yol bulma artık SAHNEDEN de erişilebilir
 
 `chase_path3d` motorun en iyi düşman AI'ıydı ama yalnız **elle yazılan

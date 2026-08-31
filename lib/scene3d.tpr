@@ -8016,6 +8016,21 @@ func _chk_tag_ok3(t): bool {
 func _chk_add3(m) { push(_chk_msgs3, m); }
 
 // Sahneyi denetle; sorun sayısını döndürür, mesajlar `_chk_msgs3`te.
+// Saklanan bir bölümün JSON'undaki oyuncu sayısı. Bölümü YÜKLEMEDEN
+// bakıyoruz: yüklemek yaşayan sahneyi değiştirirdi ve denetim her karede
+// çalışıyor.
+func _chk_lvl_players3(j): int {
+    if (_sc_has3(j, "entities") == false) { return 0; }
+    json es = j["entities"];
+    int c = 0;
+    int i = 0;
+    while (i < length(es)) {
+        if (_sc_s3(es[i], "tag", "prop") == "player") { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+
 func scene_check3d(): int {
     _chk_msgs3 = [];
     int oyuncu = _chk_tag_say3(TAG_PLAYER);
@@ -8073,6 +8088,36 @@ func scene_check3d(): int {
     }
     if (yolcu > 0 && oynak_duvar > 0) {
         _chk_add3("yol bulma acik ama duvar hareketli — izgara bayat kalir");
+    }
+    // KATI DUVAR YOKSA ızgara hiç kurulmuyor (`nav_build3d` erken dönüyor) ve
+    // `chase_path3d` sessizce düz kovalamaya düşüyor. Davranış DOĞRU —
+    // duvarsız sahnede A* zaten düz çizgiyi bulurdu — ama editördeki anahtar
+    // yalan söylüyor: açtın, hiçbir şey değişmedi ve sebebi hiçbir yerde
+    // yazmıyor. "Katı" şartı da önemli: katı olmayan duvar bir dekor, ne
+    // yolu keser ne ızgaraya girer.
+    if (yolcu > 0 && _nav_walls3() == 0) {
+        _chk_add3("yol bulma acik ama kati duvar yok — dolasacak bir sey yok");
+    }
+
+    // ÖTEKİ BÖLÜMLER. Denetim yaşayan bölümü görüyor; çok bölümlü bir sahnede
+    // geri kalanlar hiç bakılmadan kalıyordu — 3. bölümde oyuncu yoksa bunu
+    // ancak oraya geçince fark ediyorsun, ya da hiç fark etmeyip oyunu öyle
+    // yayınlıyorsun. Yaşayan bölüm ATLANIYOR: onun saklanan kopyası bayat
+    // olabilir (`_ed_level_store3` henüz çalışmamış olabilir) ve zaten canlı
+    // denetlendi.
+    int lk = 0;
+    while (lk < length(_lvl_js3)) {
+        if (lk != _ed_lvl3) {
+            int lp = _chk_lvl_players3(_lvl_js3[lk]);
+            if (lp == 0) {
+                _chk_add3(toString(lk + 1) + ". bolumde oyuncu yok");
+            }
+            if (lp > 1) {
+                _chk_add3(toString(lk + 1) + ". bolumde " + toString(lp) +
+                          " oyuncu var");
+            }
+        }
+        lk = lk + 1;
     }
 
     // Kuralların etiketleri sahnede karşılığı olan etiketler mi?

@@ -376,6 +376,28 @@ sürükleme jestin başında bir kez işaret bırakıyor (`_g_moved3` 0→1), ya
   adımlarla doldurup geri alma tuşunu işe yaramaz hâle getirirdi.
 - **ESC iptal**, oradan geçmiyor — iptal geçmişe girmemeli.
 
+## Sahne denetimi — "çalışıyor ama yanlış"ı söylemek
+Denetim, hata VERMEYEN ama oynanışı bozan durumları sayıyor: oyuncu yok /
+iki oyuncu, kazanma şartı yok, kural etiketi sahnede yok, kovala/ateş hedefi
+yok, oyuncuda hareket davranışı yok, hiçbir kurala girmeyen düşman-eşya,
+yüklenemeyen model/ses, kamera hedefi yok/silinmiş, ölü ve etiketsiz bölge.
+Son turda üç madde eklendi, üçü de **yol bulma ve çok bölümlülük** çevresinde:
+
+| Uyarı | Neden sessizdi |
+|---|---|
+| yol bulma açık ama duvar hareketli | ızgara statik; düşman artık orada olmayan duvarı dolaşır |
+| yol bulma açık ama katı duvar yok | `nav_build3d` erken dönüyor, `chase_path3d` düz kovalamaya düşüyor — anahtar açık görünür, hiçbir şey yapmaz |
+| N. bölümde oyuncu yok / iki oyuncu | denetim yalnız YAŞAYAN bölümü görüyordu; öteki bölümler ancak oraya geçilince bakılıyordu |
+
+> ⚠️ Bölüm taraması **yaşayan bölümü atlıyor**: onun saklanan kopyası bayat
+> olabilir (`_ed_level_store3` henüz çalışmamış olabilir) ve zaten canlı
+> denetleniyor. Atlamasaydı, bir oyuncuyu silip henüz saklamamış kullanıcıya
+> olmayan bir sorun bağırırdı.
+
+> ⚠️ Uyarının koşulu **iki taraflı** olmalı: hareketli duvar tek başına sorun
+> değil (yol bulma yoksa ızgara da yok), devriye gezen DÜŞMAN hiç sorun değil.
+> Tek taraflı bir uyarı gürültüye dönüşür ve okunmaz hâle gelir.
+
 ## Veri kaybı ailesi — en çok hata çıkan yer
 Bulunan ve düzeltilenler (hepsi **sessizdi**):
 
