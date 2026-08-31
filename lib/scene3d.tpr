@@ -1096,6 +1096,15 @@ func _s3_load_progress() {
     // değişkeni doldurmak, oyuncunun geçen sefer kıstığı sesi bu oturumda
     // sessizce tam açık bırakırdı.
     str sv = load_data(_sav_vol_key3());
+    // Anahtar YOKSA varsayılanı bir kez yazıyoruz. Sebep gürültü: raylib
+    // olmayan bir dosyayı okumaya çalışınca WARNING basıyor ve `kayit_ac3d`
+    // açıkken bu okuma her açılışta İKİ kez oluyor (bir kez üst düzeyde, bir
+    // kez pencereden sonra — Android'de dosya erişimi pencereye bağlı).
+    // Yani ses ayarına hiç dokunmamış kullanıcı her başlangıçta iki uyarı
+    // görüyordu. Yazınca ikinci okuma da bulur ve sonraki açılışlar sessiz.
+    if (length(sv) == 0 && length(_win_title) > 0) {
+        save_data(_sav_vol_key3(), toString(toInt(_s3_vol3 * 100.0)));
+    }
     if (length(sv) > 0) {
         _s3_vol3 = toInt(sv) / 100.0;
         if (_s3_vol3 < 0.0) { _s3_vol3 = 0.0; }

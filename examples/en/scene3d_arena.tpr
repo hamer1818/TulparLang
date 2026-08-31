@@ -41,6 +41,14 @@ int   ENEMY_HP = 50;       // 2 hits
 int   TOUCH_DMG = 12;      // cost of touching an enemy
 int   poison_zone = 0 - 1; // poison pool's zone id (the HUD reads it)
 
+// SOUND handles, loaded once in `setup`: reloading every shot would hit the
+// disk for nothing and make raylib allocate a fresh Sound each time. With no
+// audio device the load returns -1 and playback is skipped silently — the
+// windowless/silent test run takes the SAME path, there is no second branch.
+int   snd_hit   = 0 - 1;   // bullet hit
+int   snd_bonus = 0 - 1;   // bonus pad
+int   snd_lose  = 0 - 1;   // player died
+
 // --- Shared setup: the things that are the same in every level ------------
 func setup() {
     sky3d(rgb(24, 30, 52), rgb(96, 116, 150));
@@ -55,6 +63,11 @@ func setup() {
     // player has to see the bonus pad and the poison pool — a real game would
     // use a floor texture or a light instead; this is a debug draw.
     trigger_show3d(true);
+    // Sounds. Paths are relative to the WORKING DIRECTORY — run from the
+    // repo root.
+    snd_hit   = load_sound("examples/assets/sesler/vurus.wav");
+    snd_bonus = load_sound("examples/assets/sesler/altin.wav");
+    snd_lose  = load_sound("examples/assets/sesler/kaybettin.wav");
 }
 
 // --- Level setups ---------------------------------------------------------
@@ -189,6 +202,10 @@ func update() {
 func bullet_hits_enemy() {
     // Hit spark — BEFORE the bullet dies, while its position can still be read.
     burst3d(me3d(), 6, rgb(255, 230, 120), 5.0, 0.25);
+    // The sound is POSITIONAL too: `sound3d` attenuates with distance and
+    // pans left/right along the camera axis, so hitting an enemy on your
+    // right is heard on the right.
+    sound3d(snd_hit, get3x(me3d()), get3y(me3d()), get3z(me3d()));
     kill3d(me3d());                 // the bullet is spent
     damage3d(other3d(), BULLET_DMG);
 }
@@ -213,6 +230,7 @@ func enemy_died() {
 // There is no `other3d()` — a zone is not an entity.
 func on_bonus_pad() {
     burst3d(me3d(), 22, rgb(120, 255, 180), 7.0, 0.6);
+    sound3d(snd_bonus, get3x(me3d()), get3y(me3d()), get3z(me3d()));
     score3d_add(50);
     // `health3d` REBUILDS the health system — it writes both hp and hpmax to
     // 100. It is the wrong tool for healing: applied to an enemy with 120 hp
@@ -231,6 +249,7 @@ func on_poison_exit() {
 
 func player_died() {
     burst3d(me3d(), 40, SKYBLUE, 11.0, 1.0);
+    sound3d(snd_lose, get3x(me3d()), get3y(me3d()), get3z(me3d()));
     game_over3d();
 }
 

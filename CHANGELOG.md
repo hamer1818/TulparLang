@@ -9,6 +9,41 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — 3B örnekte SES: motorun ses yolu ilk kez gösteriliyor
+
+Kullanıcı ses ayarını denemek isteyince "oyundan hiç ses gelmiyor" dedi.
+Ölçüldü: `examples/scene3d_arena.tpr` içinde tek bir ses çağrısı **yok** —
+ve daha kötüsü, **hiçbir** `scene3d_*` örneği ses çalmıyordu. Motorda kural
+sesi, bölge sesi ve konumsal stereo ses yazılmış ve testliydi, `.wav`
+varlıkları depoda duruyordu, ama hiçbiri bir örneğe bağlı değildi. Yani ses
+ayarını deneyecek bir yer yoktu ve sessizlik bir gerileme gibi görünüyordu.
+
+`scene3d_arena` (ve İngilizce ikizi) artık üç sesi **konumlu** çalıyor:
+mermi isabeti (`vurus.wav`), bonus pedi (`altin.wav`) ve oyuncunun ölümü
+(`kaybettin.wav`). `ses3d` mesafeye göre kısıyor ve kamera eksenine göre
+sağa/sola yaslıyor — sağdaki düşmanı vurmak sağ kulakta duyuluyor. Ses aygıtı
+yokken yükleme -1 dönüyor ve çalma sessizce atlanıyor, yani penceresiz test
+koşumu AYNI yoldan geçiyor (ayrı bir dal yok).
+
+**Ders: bir özelliğin testi varsa ama örneği yoksa, kullanıcı için var
+değildir.** Konumsal ses 2026-08-25'te "geldi" diye kaydedilmişti.
+
+### Added — `ses_yukle` / `ses_cal` / `ses_durdur` (TR ikizleri)
+
+`load_sound`/`play_sound`/`stop_sound`'un Türkçe karşılığı yoktu: çift dilli
+API sözünün ortasında, Türkçe yazılmış bir örnek ses yüklerken İngilizce ada
+düşüyordu.
+
+### Fixed — ilk açılışta iki "Failed to open text file" uyarısı
+
+Ses seviyesi anahtarı yokken raylib her okuma denemesinde WARNING basıyor ve
+`kayit_ac3d` açıkken bu okuma her açılışta İKİ kez oluyor (bir kez üst
+düzeyde, bir kez pencereden sonra — Android'de dosya erişimi pencereye bağlı,
+bu ayrım bilerek). Ses ayarına hiç dokunmamış kullanıcı her başlangıçta iki
+uyarı görüyordu. Anahtar yoksa varsayılan artık bir kez yazılıyor: ilk
+açılışta bir uyarı, sonraki açılışlarda sıfır.
+
+
 ### Added — paket yöneticisi denetimi (`tests/pkg_audit.sh`)
 
 `tulpar pkg` kullanıcının PROJE DİZİNİNE yazıyor (`tulpar.toml`,

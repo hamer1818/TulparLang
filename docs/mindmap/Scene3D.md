@@ -110,6 +110,7 @@ saçılması istenen şey değil.
 | Kalıcılık | `kayit_ac3d()` (OPT-IN), `rekor3d()` | Diske yazdığı için opt-in |
 | UI | `baslangic3d`, duraklat, oyun-bitti, **bölüm seçme**, **ayarlar** | Menüde imleç + kol A/B; düğmeler TÜRE göre dağıtılıyor |
 | Ses seviyesi | `ses_seviye3d(v)`/`volume3d`, `ana_ses(v)` (tame) | ANA seviye; diske yazma opt-in |
+| Konumsal ses | `ses3d(tutamak, x, y, z)`, `ses_yukle(yol)` | mesafe + stereo yön; örnek: `scene3d_arena` |
 | Arazi | `arazi3d`, `arazi_dogal3d`, `arazi_katmani3d` | Katman boyama tepe rengiyle |
 | Gündüz-gece | `gunduz_gece3d(sn)`, `saati_ayarla3d` | Gölgeler güneşle döner |
 | Girdi | klavye + dokunmatik + **gamepad** | Üçü aynı anda açık |
@@ -144,6 +145,15 @@ yalnız testlerden çağrılıyordu — kayıt sisteminin başlığındaki söz 
 > oynanabilir sayı `_lvlN`'de. Menü `_s3_lv_count3()` kullanıyor — ilk yazımda
 > `level_count3d()` kullanıldı ve "Bölümler" düğmesi kod tabanlı oyunlarda hiç
 > çıkmadı.
+
+> ⚠️ **Motorun ses yolu HİÇBİR 3B örnekte gösterilmiyordu** (2026-09-01'e
+> kadar). Kural sesi, bölge sesi ve konumsal stereo ses hepsi yazılmış ve
+> testliydi, `.wav` varlıkları depodaydı — ama tek bir `scene3d_*` örneği
+> onlara bağlı değildi. Sonuç: ses ayarını deneyecek bir yer yoktu ve
+> "oyundan ses gelmiyor" bir gerileme gibi görünüyordu, oysa o oyun
+> sessizdi. `scene3d_arena` artık isabet/bonus/ölüm seslerini konumlu
+> çalıyor. **Ders: bir özelliğin testi varsa ama örneği yoksa, kullanıcı
+> için var değildir.**
 
 ### Ayarlar — ses seviyesi
 Motorda **ana ses seviyesi yoktu**: yalnız müzik başına `music_volume` vardı,

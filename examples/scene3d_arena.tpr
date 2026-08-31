@@ -6,6 +6,9 @@
 //   Faz 11 (kabuk):   başlangıç ekranı · duraklat (ESC/P) · yeniden başla
 //                     · DEVAM (kaldığın bölümden) · BÖLÜM SEÇME ızgarası
 //   Bölge:            bonus pedi (tek atım) · zehir havuzu (küre, her kare)
+//   Ses:              KONUMSAL (`ses3d`) — isabet, bonus, ölüm. Mesafeye göre
+//                     kısılıyor, kamera eksenine göre sağa/sola yaslanıyor;
+//                     ESC > Ayarlar'dan ana seviye kısılabiliyor.
 //   Girdi:            klavye+fare · dokunmatik · gamepad (hepsi aynı anda)
 //
 //   ./tulpar examples/scene3d_arena.tpr
@@ -39,6 +42,14 @@ int   ENEMY_HP = 50;       // 2 isabet
 int   TOUCH_DMG = 12;      // düşmana değmenin bedeli
 int   poison_zone = 0 - 1; // zehir havuzunun bölge no'su (HUD göstergesi okuyor)
 
+// SES tutamakları. `setup` içinde bir kez yükleniyor: her çalışta yeniden
+// yüklemek diski boşuna okur ve raylib her seferinde yeni bir Sound ayırır.
+// Ses aygıtı yoksa yükleme -1 döner ve çalma sessizce atlanır — oyun
+// penceresiz/sessiz testte de AYNI yoldan geçiyor, ayrı bir dal yok.
+int   snd_hit   = 0 - 1;   // mermi isabeti
+int   snd_bonus = 0 - 1;   // bonus pedi
+int   snd_lose  = 0 - 1;   // oyuncu öldü
+
 // --- Ortak kurulum: her bölümde aynı olan şeyler --------------------------
 func setup() {
     gokyuzu3d(rgb(24, 30, 52), rgb(96, 116, 150));
@@ -53,6 +64,10 @@ func setup() {
     // bonus pedini ve zehir havuzunu görmesi gerekiyor — gerçek bir oyunda
     // yerine bir zemin dokusu/ışık konur, bu ayıklama çizimidir.
     bolge_goster3d(true);
+    // Sesler. Yollar ÇALIŞMA DİZİNİNE göre — depo kökünden çalıştır.
+    snd_hit   = ses_yukle("examples/assets/sesler/vurus.wav");
+    snd_bonus = ses_yukle("examples/assets/sesler/altin.wav");
+    snd_lose  = ses_yukle("examples/assets/sesler/kaybettin.wav");
 }
 
 // --- Bölüm kurulumları ----------------------------------------------------
@@ -186,6 +201,10 @@ func update() {
 func bullet_hits_enemy() {
     // İsabet kıvılcımı — mermi ölmeden ÖNCE, hâlâ konumu okunabilirken.
     patlat3d(ben3(), 6, rgb(255, 230, 120), 5.0, 0.25);
+    // Ses de KONUMLU: `ses3d` mesafeye göre kısıyor ve kamera eksenine göre
+    // sağa/sola yaslıyor. Sağdaki düşmanı vurmak sağ kulakta duyuluyor —
+    // motorun konumsal ses yolu tam olarak bunu gösteriyor.
+    ses3d(snd_hit, get3x(ben3()), get3y(ben3()), get3z(ben3()));
     oldur3(ben3());                 // mermi harcanır
     hasar3d(oteki3(), BULLET_DMG);
 }
@@ -210,6 +229,7 @@ func enemy_died() {
 // `oteki3()` yoktur — bölge entity değil.
 func on_bonus_pad() {
     patlat3d(ben3(), 22, rgb(120, 255, 180), 7.0, 0.6);
+    ses3d(snd_bonus, get3x(ben3()), get3y(ben3()), get3z(ben3()));
     skor3_ekle(50);
     // `can3d` (health3d) can sistemini YENİDEN KURAR — hp'yi de hpmax'ı da
     // 100'e yazar. Şifa için doğru araç değil: 120 canlı bir düşmana
@@ -228,6 +248,7 @@ func on_poison_exit() {
 
 func player_died() {
     patlat3d(ben3(), 40, SKYBLUE, 11.0, 1.0);
+    ses3d(snd_lose, get3x(ben3()), get3y(ben3()), get3z(ben3()));
     game_over3d();
 }
 

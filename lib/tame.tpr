@@ -248,6 +248,11 @@ func measure_text(s, size): int { return tm_measure_text(s, size); }
 func load_sound(path): int { return tm_load_sound(path); }
 func play_sound(s) { tm_play_sound(s); }
 func stop_sound(s) { tm_stop_sound(s); }
+// TR ikizleri: API'nin geri kalanı çift dilli, ses yükleme/çalma değildi —
+// Türkçe yazılmış bir örnek ortasında İngilizce ada düşüyordu.
+func ses_yukle(yol): int { return tm_load_sound(yol); }
+func ses_cal(s) { tm_play_sound(s); }
+func ses_durdur(s) { tm_stop_sound(s); }
 func sound_volume(s, v) { tm_sound_volume(s, v); }
 // DİKKAT — raylib anlamı ters: 0.0 SAĞ, 0.5 merkez, 1.0 SOL.
 func sound_pan(s, p) { tm_sound_pan(s, p); }
