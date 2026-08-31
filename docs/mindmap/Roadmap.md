@@ -76,7 +76,10 @@ Express/Gin/FastAPI'ye karşı tüm kapatılabilir boşluklar kapandı: middlewa
 
 ## 🟢 Dil/altsistem
 - `obj.method(x)` gerçek obje method çağrısı desteklenmiyor. → [[Imports and Modules]]
-- pkg registry bağımlılıkları (şu an yalnız `path:`). → [[Tooling]]
+- ~~pkg registry bağımlılıkları~~ — not BAYATMIŞ: `path:`in yanında `url:` ve
+  registry yolu (`fetch_versions` + indirme) kodda var. Ölçüldü (2026-08-31):
+  yerel zincir (init/add/install/import) çalışıyor ve ulaşılamayan registry
+  asılmadan net hata veriyor. → [[Tooling]]
 
 ## 🎮 Tame — 2D oyun kütüphanesi (Faz 0-5 ✅, v3.10.0, 2026-07-12)
 - ✅ Çekirdek (pencere/döngü) + çizim + klavye/fare + adlı renkler + **sprite/texture/font + ses/müzik (otomatik pompalama) + `run(update,draw)` yönetilen döngü (arena bracket) + `triangle`/`screenshot`** — `import "tame"`, vendored raylib, ayrı `libtulpar_tame.a` (yalnız import edilince linklenir). WSLg altında pencereli canlı doğrulama: screenshot piksel-kanıtı, 60 FPS, run() 480 kare stabil. → [[Tame]]

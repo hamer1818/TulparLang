@@ -9,6 +9,28 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — paket yöneticisi denetimi (`tests/pkg_audit.sh`)
+
+`tulpar pkg` kullanıcının PROJE DİZİNİNE yazıyor (`tulpar.toml`,
+`tulpar_modules/`) ve denetimsiz yüzeylerin sonuncusuydu. **Ölçüm sonucu:
+sağlam** — LSP'de olduğu gibi burada da düzeltilecek hata değil, korunacak
+çalışan bir yüzey vardı: `init` → `add name@path:../dir` → `install` zinciri
+paketi vendor'luyor, vendor edilen paket gerçekten `import` edilip
+çalışıyor (`kare(7)` → 49), `list`/`remove` toml'u doğru düzenliyor, olmayan
+yol sıfırdan farklı dönüyor ve ulaşılamayan registry asılmadan net konuşuyor
+("connect failed" / "dns failed", çıkış 1).
+
+Denetimin asıl iddiası "dosya kopyalandı" değil, **vendor edilenin import
+edilebilmesi** — kopyalamak yetmez, çözümleme yolunda da görünmeli. Ayrıca
+hata yollarının sıfırdan farklı döndüğü sınanıyor: hatayı basıp 0 dönmek bu
+depoda görülmüş bir sınıf (`tulpar typecheck` aynısını yapıyordu) ve
+`pkg install && build` zincirini sessizce bozardı. Bozma denendi (olmayan
+yolda `return 1` → `continue`) ve denetim kızardı. ~0.1 sn.
+
+Yol üstünde iki bayat belge düzeltildi: `path:` dışındaki bağımlılıklar
+"TODO" diye yazılıydı, oysa `url:` ve registry yolu kodda var.
+
+
 ### Fixed — `tulpar doc` üç stdlib modülünü HİÇ belgeleyemiyordu
 
 Belge üreteci kodgen hatasında her şeyi atıp hiçbir şey basmıyordu. Sonuç:

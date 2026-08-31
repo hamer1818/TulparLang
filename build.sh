@@ -236,6 +236,16 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # PAKET YÖNETİCİSİ. Kullanıcının proje dizinine yazıyor (`tulpar.toml`,
+    # `tulpar_modules/`). Asıl iddia "dosya kopyalandı" değil, vendor edilen
+    # paketin GERÇEKTEN import edilebilmesi. ~0.1 sn.
+    if [ -x tests/pkg_audit.sh ]; then
+        if ! bash tests/pkg_audit.sh; then
+            echo -e "${RED}Paket denetimi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # ANDROID DERLEME DENETİMİ. Arşiv sembolleri tamam olsa bile derleme yolu
     # (manifest yazımı, PIC reloc, link bayrakları, NDK bulma) kırık olabilir
     # ve bunu hiçbir şey denetlemiyordu: hedef "Temmuz'da emülatörde
