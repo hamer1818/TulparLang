@@ -9,6 +9,38 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Fixed — WEB HEDEFİ KIRIKTI: önceden derlenmiş arşivler sessizce çürüyor
+
+`wasm/dist` ve `android/dist` gitignored ve elle tazeleniyor. Yeni bir
+`aot_tm_*` binding'i eklemek arşivi anında bayat yapıyor ve **o hedefin her
+derlemesi `undefined symbol` ile ölüyor** — ama masaüstü build'i, 59 süit ve
+tüm örnekler yeşil kalıyor, çünkü hiçbiri o hedefi derlemiyor.
+
+Ölçüldü: `wasm/dist` beş gündür bayattı ve scene3d'nin **her** web derlemesi
+altı eksik sembolde patlıyordu (`tm_window_resizable`, `tm_fullscreen`,
+`tm_is_fullscreen`, `tm_maximize`, `tm_window_resized`, `tm_master_volume`).
+`android/dist`'te eksik sayısı **31**. Arşivler tazelendi; web hedefi
+(`scene3d_collector` ve editörün kendisi) yeniden derleniyor.
+
+Asıl düzeltme uyarının kendisinde. `build.sh suites` zaten "arsiv BAYAT"
+diyordu ve doğru diyordu — ama "olabilir" diyordu, "kırık" demiyordu, ve
+sarı bir "olabilir" satırı birkaç koşumda gürültüye dönüşüyor (bu satırı
+yazan da dahil kimse okumadı). Yeni `tests/dist_archive_audit.py` builtin
+tablosunu okuyup arşivde **eksik sembolleri adıyla** sayıyor:
+- Arşiv **yoksa** atlanıyor — o hedef kullanılmıyor demektir ve emsdk'sı
+  olmayan bir geliştiriciyi kırmızıya boğmak yanlış olur.
+- Arşiv **varsa ve eksikse**: web'de HATA (emsdk depoda vendored, yani her
+  geliştirici tazeleyebilir), Android'de UYARI (NDK vendored değil —
+  düzeltilemeyen bir kırmızı, kırmızıyı görmezden gelmeyi öğretir; bu
+  denetimin kapatmaya çalıştığı hatanın ta kendisi).
+
+Zaman damgası denetimi yedek yola indi: yalnız python3 yokken koşuyor. Aynı
+arşiv için iki ayrı sarı satır basmak uyarıyı yine gürültüye çevirirdi.
+
+CLAUDE.md'deki "5 noktalı binding" yönergesine altıncı adım eklendi: tame
+builtin'i eklediysen arşivleri de tazele.
+
+
 ### Added — SAHNE DENETİMİ: iki sessiz durum daha görünür oldu
 
 **Yol bulma açık ama katı duvar yok.** `nav_build3d` duvarsız sahnede erken

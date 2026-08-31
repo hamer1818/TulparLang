@@ -187,6 +187,25 @@ koşar. Görsel/oynanış testini **kullanıcı yapar**.
 - `toString(30.0)` bir ara `"3e+01"` veriyordu (düzeltildi) — üretilen Tulpar
   kodunda geçersiz.
 
+## 6b. Önceden derlenmiş arşivler sessizce çürüyor
+`wasm/dist` ve `android/dist` **gitignored** ve elle tazeleniyor. Yeni bir
+`aot_tm_*` binding'i eklemek arşivi anında BAYAT yapıyor ve o hedefin her
+derlemesi `undefined symbol` ile ölüyor — ama masaüstü build'i, süitler ve
+örneklerin hepsi yeşil kalıyor, çünkü hiçbiri o hedefi derlemiyor.
+- **Ölçüldü:** `wasm/dist` beş gün bayat kaldı; bu sürede scene3d'nin HER web
+  derlemesi link'te patlıyordu. `android/dist`'te eksik sembol sayısı 31'e
+  çıkmıştı. Uyarı vardı ve kimse okumadı.
+- **Zaman damgası uyarısı yetmiyor:** "kaynak daha yeni" der, "kırık" demez.
+  Sarı bir "olabilir" satırı birkaç koşumda gürültüye dönüşüyor.
+- **Çare:** `tests/dist_archive_audit.py` — builtin tablosunu okuyup arşivde
+  eksik sembolleri ADIYLA sayıyor. Arşiv yoksa atlıyor (o hedef
+  kullanılmıyor); varsa ve eksikse web'de HATA (emsdk depoda vendored, yani
+  tazelenebilir), Android'de UYARI (NDK vendored değil — düzeltilemeyen bir
+  kırmızı, kırmızıyı görmezden gelmeyi öğretir).
+- **Yeni binding eklerken:** beş noktayı bağladıktan sonra
+  `wasm/build_tame_web.sh` (ve NDK varsa `android/build_tame_android.sh`)
+  çalıştır, yoksa o hedefi kırmış olursun.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.

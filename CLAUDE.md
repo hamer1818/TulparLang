@@ -146,7 +146,7 @@ A native built-in (`print`, `ord`, `gzip_compress`, `secure_token`, `hmac_sha256
 4. **`src/typeinfer/typeinfer.cpp`** — add the signature to the builtin table (e.g. `{"foo", TYPE_INT, {TYPE_STRING, TYPE_INT}}`) so type inference knows the return/arg types.
 5. **`src/lsp/builtins.cpp`** — register the symbol (signature + doc string) for LSP completion/hover.
 
-Then rebuild **both** `tulpar` and `tulpar_runtime`, and refresh the repo-root `libtulpar_runtime.a` if AOT link probing needs it. Pure-Tulpar helpers (most of Wings/ORM) don't need any of this — they live in `lib/*.tpr` and only require a `./build.sh clean` to re-embed.
+Then rebuild **both** `tulpar` and `tulpar_runtime`, and refresh the repo-root `libtulpar_runtime.a` if AOT link probing needs it. **If the builtin is a tame one, also refresh the prebuilt archives** — `wasm/build_tame_web.sh` (emsdk is vendored) and, with an NDK, `android/build_tame_android.sh`. Skipping this breaks every `--target=web` / `--target=android` build with `undefined symbol` while the desktop build, the suites and the examples all stay green; `tests/dist_archive_audit.py` (run by `./build.sh suites`) names the missing symbols. Pure-Tulpar helpers (most of Wings/ORM) don't need any of this — they live in `lib/*.tpr` and only require a `./build.sh clean` to re-embed.
 
 ### Cross-platform shims
 

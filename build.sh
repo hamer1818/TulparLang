@@ -189,6 +189,15 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}Kama mesh denetimi basarisiz!${NC}"
             exit 1
         fi
+        # Önceden derlenmiş web/Android arşivleri ↔ builtin tablosu.
+        # Aşağıdaki zaman damgası denetiminin YERİNE geçiyor (o yalnız
+        # "kaynak daha yeni" diyebiliyordu); bu, EKSİK SEMBOLLERİ adıyla
+        # sayıyor. Ayrım işe yaradı: wasm/dist beş gün bayat kaldı, scene3d'nin
+        # her web derlemesi link'te patlıyordu ve sarı satırı kimse okumadı.
+        if ! python3 tests/dist_archive_audit.py; then
+            echo -e "${RED}Dist arsiv denetimi basarisiz!${NC}"
+            exit 1
+        fi
     fi
 
     # Önceden derlenmiş arşivlerin TAZELİĞİ. Sürücü bunu web/Android link'i
@@ -202,7 +211,15 @@ if [ "$ACTION" = "suites" ]; then
     # (emsdk / NDK) gerekmiyor, dolayısıyla her makinede çalışıyor.
     # HATA DEĞİL uyarı: arşiv yoksa o hedef zaten kullanılmıyor demektir ve
     # emsdk'sı olmayan bir geliştiriciyi kırmızıya boğmak yanlış olur.
-    DIST_SRC_NEWEST=$(ls -t runtime/tame_impl.c runtime/tame_bindings.cpp                           src/vm/runtime_bindings.cpp src/vm/vm.cpp 2>/dev/null | head -1)
+    #
+    # YEDEK YOL: python3 varsa yukarıdaki SEMBOL denetimi zaten koştu ve o
+    # daha kesin konuşuyor ("şu 31 fonksiyon yok"). Aynı arşiv için iki ayrı
+    # sarı satır basmak uyarıyı gürültüye çevirirdi — tam da bu denetimin
+    # kapatmaya çalıştığı hata. Bu blok yalnız python3 yokken devreye giriyor.
+    DIST_SRC_NEWEST=""
+    if ! command -v python3 >/dev/null 2>&1; then
+        DIST_SRC_NEWEST=$(ls -t runtime/tame_impl.c runtime/tame_bindings.cpp                               src/vm/runtime_bindings.cpp src/vm/vm.cpp 2>/dev/null | head -1)
+    fi
     if [ -n "$DIST_SRC_NEWEST" ]; then
         for d in wasm/dist android/dist/arm64-v8a android/dist/x86_64; do
             [ -d "$d" ] || continue
