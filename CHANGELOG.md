@@ -40,6 +40,22 @@ arşiv için iki ayrı sarı satır basmak uyarıyı yine gürültüye çevirird
 CLAUDE.md'deki "5 noktalı binding" yönergesine altıncı adım eklendi: tame
 builtin'i eklediysen arşivleri de tazele.
 
+**Android arşivleri de tazelendi ve yol üstünde ikinci bir kusur çıktı:** NDK
+araması iki yerde yazılıydı — sürücüde (`aot_pipeline.cpp`, derlemeyi yapan)
+ve betikte (`build_tame_android.sh`, arşivleri üreten) — ve ikisi de yalnız
+`~/Android/android-ndk-*`'a (tek başına indirilen NDK) bakıyordu. Android
+Studio ise NDK'yı SDK'nın içine, `~/Android/Sdk/ndk/<sürüm>` altına kuruyor.
+Sonuç: makinede çalışır bir NDK dururken hem betik hem sürücü "NDK
+bulunamadı" diyordu. İkisi de artık `$ANDROID_HOME/ndk`, `$ANDROID_SDK_ROOT/
+ndk`, `~/Android/Sdk/ndk`, `~/Library/Android/sdk/ndk` ve
+`~/Android/android-ndk-*` yollarına bakıyor; sürüm sırası sözlük sırası değil
+(düz karşılaştırma "9.x"i "30.x"in üstüne koyuyordu) ve seçilen aday
+`llvm-ar` ile doğrulanıyor. Denetim ayrışmayı da sınıyor: aynı kural iki
+dosyada yazılıysa aynı olduklarını ölçmek gerekiyor.
+
+Android hedefi uçtan uca doğrulandı: `scene3d_collector` iki ABI'ye derlendi,
+`package_apk.sh` imzalı bir APK üretti (24 MB).
+
 
 ### Added — SAHNE DENETİMİ: iki sessiz durum daha görünür oldu
 

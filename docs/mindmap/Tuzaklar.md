@@ -206,6 +206,15 @@ derlemesi `undefined symbol` ile ölüyor — ama masaüstü build'i, süitler v
   `wasm/build_tame_web.sh` (ve NDK varsa `android/build_tame_android.sh`)
   çalıştır, yoksa o hedefi kırmış olursun.
 
+**Yan tuzak: NDK araması İKİ yerde yazılıydı** — sürücüde
+(`aot_pipeline.cpp`, derlemeyi yapan) ve betikte
+(`build_tame_android.sh`, arşivleri üreten). İkisi de yalnız
+`~/Android/android-ndk-*`'a bakıyordu; Android Studio ise NDK'yı SDK'nın
+içine (`~/Android/Sdk/ndk/<sürüm>`) kuruyor. Sonuç: makinede çalışır bir NDK
+dururken ikisi de "NDK bulunamadı" diyordu ve Android hedefi kullanılamıyordu.
+Artık ikisi de aynı beş yere bakıyor ve `dist_archive_audit.py` ayrışmayı
+denetliyor — bir kural iki dosyada yazılıysa, aynı olduklarını SINA.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.

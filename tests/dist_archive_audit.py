@@ -73,6 +73,34 @@ def archive_symbols(path):
     return None
 
 
+# NDK araması İKİ yerde yazılı: sürücü (aot_pipeline.cpp, derlemeyi yapan) ve
+# betik (build_tame_android.sh, arşivleri üreten). Ayrışırlarsa biri NDK'yı
+# bulur öteki bulmaz — ölçüldü: ikisi de yalnız `~/Android/android-ndk-*`'a
+# bakıyordu ve Android Studio'nun kurduğu `~/Android/Sdk/ndk/*` görünmüyordu,
+# yani makinede çalışır NDK dururken Android hedefi kullanılamıyordu.
+NDK_SPOTS = ["ANDROID_HOME", "Android/Sdk/ndk", "Library/Android/sdk/ndk",
+             "android-ndk-"]
+
+
+def check_ndk_search_agrees():
+    files = ["src/aot/aot_pipeline.cpp", "android/build_tame_android.sh"]
+    texts = {}
+    for rel in files:
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            return 0
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            texts[rel] = fh.read()
+    bad = 0
+    for spot in NDK_SPOTS:
+        missing = [rel for rel in files if spot not in texts[rel]]
+        if missing:
+            print("HATA: NDK aramasi ayrisik — '%s' su dosyalarda yok: %s"
+                  % (spot, ", ".join(missing)))
+            bad += 1
+    return bad
+
+
 def main():
     wanted = table_symbols()
     fail = False
@@ -101,6 +129,10 @@ def main():
         dirty += 1
         if hard:
             fail = True
+    if check_ndk_search_agrees():
+        print("    surucu ve betik AYNI yerlere bakmali (ikisi de Android "
+              "hedefinin parcasi)")
+        fail = True
     if fail:
         return 1
     if dirty:
