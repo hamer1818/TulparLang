@@ -200,6 +200,18 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # LSP. Editör eklentisinin dayandığı yüzey ve hiçbir otomasyonda yoktu:
+    # bozulsa derleyici de süitler de yeşil kalır, yalnız editörde tamamlama
+    # ve hover sessizce ölürdü. "İlan et ↔ uygula" denetimi: initialize hangi
+    # *Provider'ı bildiriyorsa o metot gerçekten çağrılıp anlamlı cevap
+    # verdiği sınanıyor (~0.03 sn).
+    if command -v python3 >/dev/null 2>&1 && [ -f tests/lsp_audit.py ]; then
+        if ! python3 tests/lsp_audit.py; then
+            echo -e "${RED}LSP denetimi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # BİÇİMLENDİRİCİ. `tulpar fmt --write` KULLANICININ KAYNAĞINI değiştiriyor,
     # yani buradaki bir hata doğrudan veri kaybı — ve bu denetim yokken üç
     # ayrı bozulma birden hayatta kaldı: `i++` → `i + +`, `=>` → `= >`,

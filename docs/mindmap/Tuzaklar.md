@@ -262,6 +262,20 @@ ve `!ast` denetimine güvenmek yetmiyor.
 sonsuza kadar değişir), ve çıktı **hâlâ ayrışıyor**. Bozma denendi: `++`
 düzeltmesini geri almak denetimi kızartıyor.
 
+### LSP: "ilan et ↔ uygula" ayrışması
+`tulpar --lsp` de hiçbir otomasyonda yoktu. Ölçüldü ve **sağlamdı** — hover,
+tanım, referans, tamamlama, imza yardımı ve yeniden adlandırma çalışıyor,
+bozuk kodda tanı üretiyor. Yani burada düzeltilecek hata değil, korunacak
+çalışan bir yüzey vardı. `tests/lsp_audit.py` (~0.03 sn) `initialize`ın
+bildirdiği HER `*Provider` yeteneğini gerçekten çağırıyor: ilan edip
+uygulamamak editörde "hiçbir şey olmuyor" demek ve tek bir log satırı bile
+üretmiyor. Bozma denendi (hover işleyicisi kapatıldı) ve denetim kızardı.
+
+> ⚠️ **Denetimin kendi aritmetiği de bir hata kaynağı.** İlk yazımda imleç
+> sütunlarını elle yazdım, sonra örnek metni kısalttım ve aynı sütun
+> parantezin içine düştü: denetim sunucuyu değil kendini kızarttı. Konumlar
+> artık metinden hesaplanıyor (`line.index("topla") + 2`).
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.

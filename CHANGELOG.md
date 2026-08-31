@@ -9,6 +9,32 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — LSP duman testi (`tests/lsp_audit.py`)
+
+`tulpar --lsp` editör eklentisinin dayandığı yüzey ve hiçbir otomasyonda
+yoktu: bozulsa derleyici de 59 süit de yeşil kalır, yalnız editörde tamamlama
+ve hover **sessizce** ölürdü. Bugün denetimsiz kalan yüzeylerden ikisi (web
+arşivleri, `tulpar fmt`) gerçekten kırık çıkmıştı; bu, üçüncüsü kırılmadan
+önce yakalansın diye.
+
+Ölçüm sonucu: **LSP sağlam.** hover doğru imzayı veriyor, definition bildirim
+satırını gösteriyor, references bildirim+kullanımı buluyor, completion 384 öğe
+dönüyor, signatureHelp parantez içinde çalışıp aktif parametreyi izliyor
+(0 → 1), rename iki noktayı birden değiştiriyor, bozuk kodda 2 tanı
+üretiyor ve `shutdown`/`exit` temiz kapanıyor. Yani düzeltilecek hata değil,
+korunacak çalışan bir yüzey vardı.
+
+Denetimin çekirdeği **"ilan et ↔ uygula"**: `initialize` hangi `*Provider`
+yeteneğini bildiriyorsa o metot gerçekten çağrılıp anlamlı cevap verdiği
+sınanıyor — ilan edip uygulamamak editörde "hiçbir şey olmuyor" demek ve tek
+bir log satırı bile üretmiyor. ~0.03 sn, `build.sh suites` içinde. Bozma
+denendi (hover işleyicisi kapatıldı) ve denetim kızardı.
+
+Yan not: ilk yazımda imleç sütunlarını elle yazmıştım, sonra örnek metni
+kısaltınca aynı sütun parantezin içine düştü ve denetim sunucuyu değil kendi
+aritmetiğini kızarttı. Konumlar artık metinden hesaplanıyor.
+
+
 ### Fixed — `tulpar fmt` DERLENMEYEN kod üretiyordu (üç ayrı bozulma)
 
 `tulpar fmt --write` kullanıcının kaynak dosyasının üstüne yazıyor, yani
