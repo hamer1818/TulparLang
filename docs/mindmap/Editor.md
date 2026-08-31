@@ -289,6 +289,7 @@ Bulunan ve düzeltilenler (hepsi **sessizdi**):
 | "Yeni" sahne eski bölümleri bırakıyordu | boş istenen dosya, terk edilen sahnenin varlıklarıyla doluyordu |
 | Geri alma çok bölümlü sahneyi yok ediyordu | tek CTRL+Z bölüm sayısını 2'den 0'a düşürüyordu (kendi düzeltmemin regresyonu) |
 | Anlık görüntü hangi bölüme ait olduğunu bilmiyordu | 1. bölümde işaret, 2. bölümde CTRL+Z → iki bölüm birden bozuluyordu |
+| Yineleme yapısal işi geri getirmiyordu, üstüne sahneyi siliyordu | "bölüm ekle → CTRL+Z → CTRL+Y": bölüm gelmiyor, 1. bölümün içeriği de gidiyordu |
 | Oynat-Dur düzenlenen bölümün işini siliyordu | "BOLUM 2" yazıyor, ekranda 1. bölümün içeriği duruyordu |
 | Çok bölümlü sahnede kamera hiç çalışmıyordu | hedef her yerde -1: yükleme sırası + bölüm değişimi |
 | Oyuncuyu silmek kamerayı ölü handle'a bağlıyordu | yerine yeni oyuncu eklemek onarmıyordu |
@@ -298,6 +299,32 @@ Bulunan ve düzeltilenler (hepsi **sessizdi**):
 **Ortak ders:** `_ed_apply_json3` neyi koruyup neyi atacağını ÇAĞIRANDAN
 öğreniyor (`yapisal` parametresi), JSON'a bakıp tahmin etmiyor. Geri alma
 sahne İÇİNDE gezinmektir; Dur ve dosya açmak belge DEĞİŞTİRMEKTİR.
+
+## Geri al / yinele — takas simetrisi
+Yığın anlık görüntü tabanlı ve görüntüler **iki biçimde** olabiliyor: tek
+bölümün içeriği (`scene_json3d`) ya da tam belge (`scene_json_levels3d`).
+Biçimi etiket taşıyor — **işareti biçimi, büyüklüğü bölümü** söylüyor
+(`_ed_snap_tag3` / `_ed_snap_lvl3`; negatif = yapısal).
+
+> ⚠️ **Geri alma ile yineleme durum TAKAS eder: biri tam belgeyse öteki de
+> tam belge olmalı.** `ed_undo3d`/`ed_redo3d` yığına bıraktıkları KARŞI
+> durumu her zaman tek bölüm olarak saklıyordu. Ölçülen sonuç:
+> "bölüm ekle → CTRL+Z → CTRL+Y" yineleme yığınına o an açık olan BOŞ
+> bölümün içeriğini koyuyor, yineleme o boşluğu geri gelen sahnenin ÜSTÜNE
+> yazıyor ve bölüm de geri gelmiyordu — **yinelemenin kendisi sahneyi
+> siliyordu**, hiçbir hata vermeden. Kural artık tek yerde: karşı görüntünün
+> biçimini, uygulanacak görüntünün etiketi seçiyor (`_ed_karsi_bicim3`).
+
+İki yan kural aynı yerden çıkıyor:
+- **Tam belge yakalamadan önce yaşayan bölüm diziye yazılıyor**
+  (`_ed_snap_take3` → `_ed_level_store3`); yoksa görüntü o an ekranda olan
+  işi hiç görmez ve yineleme götürdüğünden AZINI geri getirir.
+- **Yapısal etiket bölümü de taşıyor**; taşımasaydı 2. bölümde "+ BOLUM EKLE"
+  deyip geri alan kullanıcı 1. bölüme düşer, çalıştığı yeri kaybederdi.
+
+Bu ailenin ilk hatası (`_ed_capture3`'ün ikinci kez tanımlanması) **aynı adlı
+iki fonksiyon** tuzağıydı — sessizce derleniyor, biri ölüyor. Süitteki
+`t_no_duplicate_function_names` adı vererek yakaladı; bkz. [[Tuzaklar]].
 
 ## İlgili
 [[Scene3D]] · [[Tame]] · [[Testing]] · [[Tuzaklar]] · [[Decisions]] · [[Roadmap]]

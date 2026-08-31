@@ -9,6 +9,36 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Fixed — EDİTÖR: yineleme (CTRL+Y) yapısal işi geri getirmiyor, sahneyi siliyordu
+
+"Bölüm ekle → CTRL+Z → CTRL+Y" ölçüldü: bölüm geri gelmiyor ve üstüne 1.
+bölümün içeriği de gidiyordu. Hiçbir hata yok, hiçbir uyarı yok — yalnız
+boşalmış bir sahne.
+
+Kök neden geri alma ile yinelemenin **takas ettiği** durumun biçiminde:
+görüntüler iki biçimde olabiliyor (tek bölümün içeriği `scene_json3d`, ya da
+bölüm yapısının da sahibi olan tam belge `scene_json_levels3d`), ama
+`ed_undo3d`/`ed_redo3d` yığına bıraktıkları KARŞI durumu her zaman tek bölüm
+olarak saklıyordu. Yapısal bir görüntüyü uygularken bıraktığımız durum da
+yapısaldır: yineleme yığınına o an açık olan BOŞ bölümün içeriği giriyor,
+yineleme onu geri gelen sahnenin ÜSTÜNE yazıyordu.
+
+Kural artık tek yerde ve **yığının tepesindeki etiket** söylüyor
+(`_ed_karsi_bicim3`). Etiketin İŞARETİ biçimi, BÜYÜKLÜĞÜ bölümü taşıyor
+(`_ed_snap_tag3`/`_ed_snap_lvl3`) — yani "+ BOLUM EKLE"yi geri alan kullanıcı
+çalıştığı bölümde kalıyor, 1. bölüme düşmüyor. Tam belge yakalanmadan önce
+yaşayan bölüm diziye yazılıyor (`_ed_level_store3`), yoksa yineleme
+götürdüğünden azını geri getiriyordu.
+
+Yol üstünde ikinci bir hata: yeni yardımcı, var olan bir `_ed_capture3()` ile
+**aynı adı** taşıyordu — Tulpar bunu sessizce derliyor ve biri ölü kalıyor.
+Süitteki `t_no_duplicate_function_names` adı vererek yakaladı.
+
+Altı regresyon testi (`tests/scene3d_engine.test.tpr`, 588 → 593) ve altı
+bozma denemesi; kural testi, karşı görüntünün biçimini sabite çevirmeyi de
+yakalıyor.
+
+
 ### Added — sahne artık VERİ: JSON sahne biçimi + davranışlar + kurallar
 
 Bir sahne buraya kadar yalnız KOD olarak vardı: `setup()` içinde elle yazılmış

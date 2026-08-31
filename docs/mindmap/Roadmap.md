@@ -23,6 +23,9 @@ araç:
   her komutun kısayolu kendi satırında, iş görmeyen komut soluk.
 - **Dosya**: aç / farklı kaydet / geri yükle + **kurtarma dosyası** (kapatırken
   kaybolan iş). Geri-al geçmişi dosya değişince sıfırlanıyor.
+- **Geri al ↔ yinele simetrik**: yapısal işler (bölüm ekle/sil) de yinelenebiliyor.
+  Önceden "bölüm ekle → CTRL+Z → CTRL+Y" bölümü geri getirmiyor, üstüne
+  sahneyi siliyordu (→ [[Editor]] "takas simetrisi").
 - **Yerleşim**: paneller yuvalara takılı, **başlıktan sürüklenip** taşınıyor,
   yuvanın sınırı **ve aynı yuvadaki panellerin arasındaki sınır** çekiliyor,
   kapatılıp açılıyor; yerleşim + paylaşım + ölçek **kalıcı**.

@@ -9257,16 +9257,57 @@ func ed_mark3d() {
 
 // Anlık görüntüyü AİT OLDUĞU bölüme uygula. Başka bir bölümdeysek önce oraya
 // dönülüyor; dönmeden uygulamak iki bölümü birden bozardı.
+//
+// ETİKET İKİ ŞEY SÖYLÜYOR: İŞARETİ anlık görüntünün BİÇİMİNİ (negatif = tam
+// belge), BÜYÜKLÜĞÜ de o görüntünün ait olduğu bölümü. Yapısal görüntüyü de
+// bir bölüme bağlamak gerekiyor: "bölüm ekle"yi yinelemek kullanıcıyı
+// yarattığı bölüme geri koymalı, bir öncekine değil.
+func _ed_snap_tag3(lvl): int { return 0 - 1 - lvl; }
+func _ed_snap_lvl3(tag): int { return 0 - 1 - tag; }
+func _ed_is_yapisal3(tag): bool { return tag < 0; }
+
 func _ed_apply_at_level3(js, lvl) {
-    // -1 = YAPISAL anlık görüntü (tam belge). Bölüm eklemek/silmek bölüm
+    // Negatif = YAPISAL anlık görüntü (tam belge). Bölüm eklemek/silmek bölüm
     // dizisinin KENDİSİNİ değiştiriyor; tek bölümün içeriğini geri koymak
     // o değişikliği geri almaz. Bu yüzden yapısal işlemler tam belgeyi
     // saklıyor ve geri alma onu bütünüyle uyguluyor.
-    if (lvl < 0) { _ed_apply_json3(js, 1); return; }
+    if (_ed_is_yapisal3(lvl)) {
+        _ed_apply_json3(js, 1);
+        int hedef = _ed_snap_lvl3(lvl);
+        if (hedef > 0 && hedef < length(_lvl_js3)) { ed_level_go3d(hedef + 1); }
+        return;
+    }
     if (lvl != _ed_lvl3 && lvl < length(_lvl_js3)) {
         ed_level_go3d(lvl + 1);
     }
     _ed_apply_json3(js, 0);
+}
+
+// Bulunulan durumu, uygulanacak görüntüyle AYNI BİÇİMDE yakala. Geri alma ile
+// yineleme durum TAKAS eder; biri tam belgeyse öteki de tam belge olmalı.
+// Karşı durumu tek bölüm olarak saklamak ölçüldü ve VERİ KAYBIYDI:
+// "bölüm ekle → CTRL+Z → CTRL+Y" yineleme yığınına o an açık olan BOŞ bölümün
+// içeriğini koyuyordu; yineleme o boşluğu geri gelen sahnenin ÜSTÜNE yazıyor,
+// bölüm de geri gelmiyordu — yani yineleme sahneyi siliyordu.
+func _ed_snap_take3(yapisal): str {
+    if (yapisal == 0) { return scene_json3d(); }
+    // Yaşayan bölüm önce diziye yazılıyor; yoksa tam belge, o an ekranda olan
+    // düzenlemeleri kaçırır.
+    _ed_level_store3();
+    return scene_json_levels3d();
+}
+func _ed_snap_take_tag3(yapisal): int {
+    if (yapisal == 0) { return _ed_lvl3; }
+    return _ed_snap_tag3(_ed_lvl3);
+}
+// Yığının tepesindeki etiket: hangi biçimde yakalayacağımızı O söylüyor.
+func _ed_top_tag3(etiketler): int {
+    if (length(etiketler) == 0) { return 0; }
+    return etiketler[length(etiketler) - 1];
+}
+func _ed_karsi_bicim3(etiketler): int {
+    if (_ed_is_yapisal3(_ed_top_tag3(etiketler))) { return 1; }
+    return 0;
 }
 
 // YAPISAL işaret: bölüm eklemek/silmek için. Tam belgeyi saklıyor ve -1 ile
@@ -9274,8 +9315,8 @@ func _ed_apply_at_level3(js, lvl) {
 func ed_mark_all3d() {
     _ed_dirty3 = 1;
     _ed_dirty_seq3 = _ed_dirty_seq3 + 1;
-    push(_ed_undo3, scene_json_levels3d());
-    push(_ed_undo_lvl3, 0 - 1);
+    push(_ed_undo3, _ed_snap_take3(1));
+    push(_ed_undo_lvl3, _ed_snap_take_tag3(1));
     if (length(_ed_undo3) > _ED_UNDO_MAX3) {
         _ed_undo3 = _ed_trim3(_ed_undo3);
         _ed_undo_lvl3 = _ed_trim3(_ed_undo_lvl3);
@@ -9286,8 +9327,9 @@ func ed_mark_all3d() {
 
 func ed_undo3d(): bool {
     if (length(_ed_undo3) == 0) { return false; }
-    push(_ed_redo3, scene_json3d());
-    push(_ed_redo_lvl3, _ed_lvl3);
+    int yap = _ed_karsi_bicim3(_ed_undo_lvl3);
+    push(_ed_redo3, _ed_snap_take3(yap));
+    push(_ed_redo_lvl3, _ed_snap_take_tag3(yap));
     str js = pop(_ed_undo3);
     int lv = pop(_ed_undo_lvl3);
     _ed_apply_at_level3(js, lv);
@@ -9295,8 +9337,9 @@ func ed_undo3d(): bool {
 }
 func ed_redo3d(): bool {
     if (length(_ed_redo3) == 0) { return false; }
-    push(_ed_undo3, scene_json3d());
-    push(_ed_undo_lvl3, _ed_lvl3);
+    int yap = _ed_karsi_bicim3(_ed_redo_lvl3);
+    push(_ed_undo3, _ed_snap_take3(yap));
+    push(_ed_undo_lvl3, _ed_snap_take_tag3(yap));
     str js = pop(_ed_redo3);
     int lv = pop(_ed_redo_lvl3);
     _ed_apply_at_level3(js, lv);

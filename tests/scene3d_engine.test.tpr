@@ -10276,6 +10276,113 @@ func t_undo_stacks_stay_in_step() {
     assert_eq_int(length(_ed_undo3), _ED_UNDO_MAX3);
 }
 
+// YAPISAL bir işi (bölüm ekle/sil) geri alıp YİNELEMEK, bırakılan durumu da
+// yapısal saklamayı gerektiriyor: geri alma ile yineleme durum TAKAS eder,
+// biri tam belgeyse öteki de tam belge olmalı. Karşı durumu tek bölüm olarak
+// saklamak ölçüldü ve VERİ KAYBIYDI: "bölüm ekle → CTRL+Z → CTRL+Y" yineleme
+// yığınına o an açık olan BOŞ bölümün içeriğini koyuyordu; yineleme o boşluğu
+// geri gelen sahnenin ÜSTÜNE yazıyor, bölüm de geri gelmiyordu — yani
+// yinelemenin kendisi sahneyi siliyordu.
+func t_redo_restores_a_structural_add() {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(1.0, 1.0, 2.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    assert_eq_int(bolum_sayisi3d(), 0);      // tek bolumlu sahne: dizi bos
+    assert_eq_int(yasayan_sayi3d(), 1);
+    ed_level_add3d();
+    assert_eq_int(bolum_sayisi3d(), 2);
+    assert_eq_int(ed_level_now3d(), 2);
+    assert(ed_undo3d(), "geri alma calismali");
+    assert_eq_int(bolum_sayisi3d(), 0);
+    assert_eq_int(yasayan_sayi3d(), 1);      // 1. bolumun icerigi geri geldi
+    // ASIL IDDIA: yineleme eklemeyi TEKRAR yapmali — bolum de geri gelmeli,
+    // 1. bolumun icerigi de yerinde kalmali.
+    assert(ed_redo3d(), "yineleme calismali");
+    assert_eq_int(bolum_sayisi3d(), 2);
+    assert_eq_int(ed_level_now3d(), 2);      // yaratilan bolumde birakmali
+    assert_eq_int(yasayan_sayi3d(), 0);      // yeni bolum bos
+    ed_level_go3d(1);
+    assert_eq_int(yasayan_sayi3d(), 1);      // eski is DURUYOR
+    // Ve yineleme yiginda dogru bicimi birakmali: ikinci CTRL+Z tekrar
+    // tek bolumlu sahneyi getirmeli.
+    assert(ed_undo3d(), "yinelemeden sonra geri alma calismali");
+    assert_eq_int(bolum_sayisi3d(), 0);
+    assert_eq_int(yasayan_sayi3d(), 1);
+}
+
+// Yapısal görüntü, DİZİDEKİ bölümleri yazıyor — yaşayan bölüm önce diziye
+// aktarılmazsa o an ekranda olan iş görüntüye hiç girmez. Ölçülen sonuç:
+// yeni bölümde çalışıp CTRL+Z, CTRL+Y yapan kullanıcı o işi kaybederdi
+// (geri alma götürdüğünü yineleme geri getirmeli, eksiğini değil).
+func t_redo_keeps_live_edits_of_the_new_level() {
+    scene3d_reset();
+    no_ground3d();
+    spawn3(1.0, 1.0, 2.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_ENEMY);
+    ed_level_add3d();
+    assert_eq_int(yasayan_sayi3d(), 0);
+    // YENI bolumde is yapiliyor (henuz diziye yazilmadi).
+    ed_add3d(TAG_PROP, SHAPE_CUBE, 3.0, 1.0, 4.0);
+    ed_add3d(TAG_PROP, SHAPE_CUBE, 6.0, 1.0, 4.0);
+    assert_eq_int(yasayan_sayi3d(), 2);
+    assert(ed_undo3d(), "geri alma calismali");
+    assert(ed_redo3d(), "yineleme calismali");
+    assert_eq_int(bolum_sayisi3d(), 2);
+    assert_eq_int(ed_level_now3d(), 2);
+    assert_eq_int(yasayan_sayi3d(), 2);      // yeni bolumdeki IS DURUYOR
+}
+
+// Silmenin yinelenmesi de aynı kuralın öteki yüzü.
+func t_redo_reapplies_a_structural_delete() {
+    sahne_yukle3d(_lvl_kur2());
+    ed_level_add3d();
+    assert_eq_int(bolum_sayisi3d(), 3);
+    ed_level_del3d();
+    assert_eq_int(bolum_sayisi3d(), 2);
+    assert(ed_undo3d(), "geri alma calismali");
+    assert_eq_int(bolum_sayisi3d(), 3);
+    assert(ed_redo3d(), "yineleme calismali");
+    assert_eq_int(bolum_sayisi3d(), 2);
+    // GİDİŞ-DÖNÜŞ: yinelemenin yığına bıraktığı karşı durum da yapısal olmalı,
+    // yoksa ikinci CTRL+Z bölümü geri getiremez (yığın bir adım sonra bozulur).
+    assert(ed_undo3d(), "yinelemeden sonra geri alma calismali");
+    assert_eq_int(bolum_sayisi3d(), 3);
+}
+
+// Etiketin İŞARETİ biçimi (negatif = tam belge), BÜYÜKLÜĞÜ bölümü söylüyor.
+// Yapısal görüntüyü bölümsüz saklamak, geri almayı hep 1. bölüme düşürürdü:
+// 2. bölümde "+ BOLUM EKLE" deyip geri alan kullanıcı, çalıştığı bölümü
+// kaybederdi.
+func t_structural_undo_returns_to_its_own_level() {
+    sahne_yukle3d(_lvl_kur2());
+    ed_level_go3d(2);
+    assert_eq_int(yasayan_sayi3d(), 2);
+    ed_level_add3d();
+    assert_eq_int(bolum_sayisi3d(), 3);
+    assert_eq_int(ed_level_now3d(), 3);
+    assert(ed_undo3d(), "geri alma calismali");
+    assert_eq_int(bolum_sayisi3d(), 2);
+    assert_eq_int(ed_level_now3d(), 2);      // BIRAKILAN bolum
+    assert_eq_int(yasayan_sayi3d(), 2);
+}
+
+// Karar tek yerde: karşı durumu hangi biçimde saklayacağımızı yığının
+// TEPESİNDEKİ etiket söylüyor.
+func t_counter_snapshot_matches_the_top_of_the_stack() {
+    int k = 0;
+    while (k < 4) {
+        assert(_ed_is_yapisal3(_ed_snap_tag3(k)), "yapisal etiket negatif olmali");
+        assert_eq_int(_ed_snap_lvl3(_ed_snap_tag3(k)), k);
+        assert(_ed_is_yapisal3(k) == false, "bolum etiketi yapisal degil");
+        k = k + 1;
+    }
+    array yapisal = [];  push(yapisal, 3);  push(yapisal, _ed_snap_tag3(1));
+    array bolumlu = [];  push(bolumlu, _ed_snap_tag3(0));  push(bolumlu, 2);
+    array bos = [];
+    assert_eq_int(_ed_karsi_bicim3(yapisal), 1);
+    assert_eq_int(_ed_karsi_bicim3(bolumlu), 0);
+    assert_eq_int(_ed_karsi_bicim3(bos), 0);
+}
+
 // Başka bir dosya açmak bölüm etiketlerini de temizlemeli — içerik yığını
 // boşalıp etiket yığını dolu kalırsa ilk geri alma yanlış bölüme gider.
 func t_opening_file_clears_level_tags() {
@@ -10940,6 +11047,11 @@ test("tek bolumlu oynat-dur degismiyor", "t_play_stop_single_level_unchanged");
 test("geri alma bolumleri gotürmuyor", "t_undo_keeps_levels");
 test("geri alma kendi bolumune donuyor", "t_undo_returns_to_its_own_level");
 test("geri alma yiginlari es adimda", "t_undo_stacks_stay_in_step");
+test("yineleme eklenen bolumu geri getiriyor", "t_redo_restores_a_structural_add");
+test("yineleme yeni bolumdeki isi koruyor", "t_redo_keeps_live_edits_of_the_new_level");
+test("yineleme silmeyi tekrar uyguluyor", "t_redo_reapplies_a_structural_delete");
+test("yapisal geri alma kendi bolumune donuyor", "t_structural_undo_returns_to_its_own_level");
+test("karsi goruntu yigin tepesine uyuyor", "t_counter_snapshot_matches_the_top_of_the_stack");
 test("dosya acmak bolum etiketlerini temizliyor", "t_opening_file_clears_level_tags");
 test("yeni sahne eski bolumleri birakmiyor", "t_new_scene_drops_old_levels");
 test("sablon eski bolumleri birakmiyor", "t_template_drops_old_levels");

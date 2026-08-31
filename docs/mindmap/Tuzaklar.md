@@ -77,6 +77,14 @@ BAŞARILI döner (`.tpr` yalnız gömülü bir dize). Hata test programı
 Enjeksiyonları ifade düzeyinde yap (`if (cond)` → `if (true)`), satır
 silerek blok yapısını bozma.
 
+**İkinci yalan biçimi: harness YANLIŞ ADI arıyor.** `FAIL` satırı testin
+ETİKETİNİ yazıyor (`"yineleme eklenen bolumu geri getiriyor"`), fonksiyon
+adını (`t_redo_restores_a_structural_add`) değil. Beklenen testi fonksiyon
+adıyla arayan harness altı bozmanın beşini **"KAÇTI"** diye raporladı —
+oysa hepsi yakalanmıştı. Kural: eşleşmeyi `test("<etiket>", "<ad>")`
+kayıtlarından KUR, iki adı elle eşleştirme. Beklentiyle çelişen bir "kaçtı"
+raporunda önce harness'ın kendisinden şüphelen: kırmızı listesine BAK.
+
 ## 3. Penceresiz ölçüm boşa çıkıyor
 `text_width()` / `font_width()` **pencere yokken 0 döner** → her yerleşim
 karşılaştırması `0 <= sınır` olur ve **her metin "sığıyor" görünür**.
@@ -114,8 +122,11 @@ koşar. Görsel/oynanış testini **kullanıcı yapar**.
 - **Yerel değişken GLOBAL'i gölgeliyor** (açık codegen hatası) → probe/test
   yazarken benzersiz ad kullan.
 - **Aynı adlı iki fonksiyon**: derleyici uyarmıyor, biri sessizce ölüyor.
-  `bolum_git3d` iki kez tanımlıydı. Koruma: kaynağı okuyup `func` adlarında
-  tekrar arayan test.
+  `bolum_git3d` iki kez tanımlıydı; sonra `_ed_capture3` (0 argümanlı eski
+  hâli + yeni 1 argümanlı) aynı tuzağa düştü — belirtisi "düzeltmem hiç
+  çalışmıyor" oldu. Koruma çalışıyor: `t_no_duplicate_function_names`
+  kaynağı okuyup ADI VEREREK kırmızıya dönüyor. **Yeni yardımcıya ad
+  verirken önce `grep "func <ad>("`.**
 - **`%` yok** → `mod()`/`fmod()`. **`/` bir operand float ise float bölme.**
 - **Çoklu dönüş yok** → sonuç global ile döner (`_dk_rect3`, `_ed_ray3`).
 - Ayrılmış kelimeler: `len`, `tip`, `icinde`, `don`, `dene`, `move`, `metin`,
@@ -133,8 +144,15 @@ koşar. Görsel/oynanış testini **kullanıcı yapar**.
 
 ## 8. Sessiz veri kaybı — [[Editor]]'de tam liste
 Belirti hep aynı: hata yok, ekranda bir şey görünmüyor, dosya sessizce
-yanlış. Sekiz ayrı örneği [[Editor]]'de tabloda. Ortak kök: **bir işlemin
+yanlış. Dokuz ayrı örneği [[Editor]]'de tabloda. Ortak kök: **bir işlemin
 neyi koruyup neyi atacağı belirsiz bırakılmış.**
+
+**Alt sınıf: TERS işlem simetrisi.** Geri alma ↔ yineleme, kes ↔ yapıştır,
+kaydet ↔ yükle — bir çiftin iki ucu durum TAKAS eder ve ikisi de aynı
+BİÇİMDE saklamalı. Yinelemenin karşı durumu tek bölüm olarak saklanınca
+"CTRL+Z, CTRL+Y" sahneyi siliyordu. Test yazarken **gidiş-dönüşü kapat**:
+işlemin tersi tek başına yeşil olabilir, çift ise ancak iki adım sonra
+bozulur (bir bozma tam bu yüzden ilk turda kaçtı).
 
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
