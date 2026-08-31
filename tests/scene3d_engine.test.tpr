@@ -10399,6 +10399,218 @@ func t_counter_snapshot_matches_the_top_of_the_stack() {
 }
 
 // ===========================================================================
+// GERİ ALMA KAPSAMI + BÖLGE JESTLERİ
+// ===========================================================================
+
+// Sayı alanının İKİ düzenleme yolu var: sürükle ve yaz. Sürükleme jestin
+// başında işaret bırakıyordu, yazma HİÇ bırakmıyordu — yani CTRL+Z
+// çalışıyor gibi görünüp BİR ÖNCEKİ işi geri alıyor, yazdığın değer
+// geçmişte hiç yer almadan kayboluyordu.
+func t_typed_number_is_undoable() {
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, RED, SHAPE_CUBE, TAG_PROP);
+    _ed_undo3 = []; _ed_undo_lvl3 = [];
+    float v = _g_num_commit3(5.0, "7.5");
+    assert(_t_yakinf3(v, 7.5, 0.001), "yazilan deger donmeli");
+    assert_eq_int(length(_ed_undo3), 1);
+    // ...ama AYNI sayiyi yazmak gecmisi kirletmemeli: 40'lik yigin bos
+    // adimlarla dolarsa geri alma tusu ise yaramaz hale gelir.
+    float v2 = _g_num_commit3(7.5, "7.5");
+    assert(_t_yakinf3(v2, 7.5, 0.001), "ayni deger yine donmeli");
+    assert_eq_int(length(_ed_undo3), 1);
+}
+
+// Karar sınandı, ÇAĞRI sınanmadı: yazmanın bitiş anları (ENTER ve alanın
+// dışına tıklamak) penceresiz sürülemiyor, o yüzden kaynaktan okunuyor.
+// ESC İPTAL: oradan geçmemeli, yoksa iptal de geçmişe girer.
+func t_number_commit_paths_are_wired() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(split(src, "out = _g_num_commit3(val, _g_buf3); _g_focus3 = 0;")) > 2,
+           "ENTER ve disari tiklama ayni kapidan gecmeli");
+    array g = split(src, "func _g_num(id,");
+    assert(length(g) > 1, "sayi alani olmali");
+    array gov = split(g[1], "\nfunc ");
+    assert(length(split(gov[0], "key_pressed(K_ESC)) { _g_focus3 = 0; }")) > 1,
+           "ESC iptal olmali (deger yazmadan)");
+    // Surukleme yolu jestin BASINDA bir kez isaret birakmali; her karede
+    // birakmak 40'lik gecmisi tek surukleyisle bosaltirdi.
+    assert(length(split(gov[0], "if (_g_moved3 == 0) { ed_mark3d(); }")) > 1,
+           "surukleme isareti jest basinda ve bir kez olmali");
+}
+
+// Kavrama ofseti: TUTUP BIRAKMAK cismi yerinden oynatmamali. Beklenti
+// formülün kopyasından değil, gidiş-dönüşten geliyor — ofseti kur, hiç
+// kıpırdamadan sürükleme noktasını oku, cismin merkezi çıkmalı.
+func t_grab_offset_does_not_teleport() {
+    scene3d_reset();
+    _ed_cx3 = 3.0; _ed_cy3 = 9.0; _ed_cz3 = 14.0;
+    _ed_yaw3 = 12.0; _ed_pitch3 = 0.0 - 35.0;
+    _ed_ray3(300.0, 380.0, 1280, 720, 60.0);
+    // Cismin KENARINA tiklanmis gibi: merkez isinin dustugu yerde DEGIL.
+    float mx = 6.0; float mz = 0.0 - 4.0; float my = 2.5;
+    _ed_grab_offset3(mx, mz, my);
+    assert(_ed_drag_point3(), "surukleme noktasi okunabilmeli");
+    assert(_t_yakinf3(_ed_dpx3, mx, 0.001), "tutmak x'i oynatmamali");
+    assert(_t_yakinf3(_ed_dpz3, mz, 0.001), "tutmak z'yi oynatmamali");
+    assert(_t_yakinf3(_ed_dgy3, my, 0.001), "surukleme duzlemi cismin kendi yuksekliginde");
+    // Ofset SIFIR olmamali, yoksa test hicbir sey olcmemis olur.
+    assert(_t_yakinf3(_ed_ox3, 0.0, 0.001) == false, "ofset gercekten hesaplanmali");
+}
+
+// Bölge de tutulup sürükleniyor ve ofset VARLIKLA AYNI fonksiyondan geliyor.
+// İki kopya, birinde düzeltilen bir hatanın ötekinde yaşaması demekti.
+func t_zone_drag_is_wired_and_shares_the_grab() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(split(src, "_ed_grab_offset3(")) >= 4,
+           "kavrama ofseti paylasilmali (tanim + varlik + bolge)");
+    assert(length(split(src, "_ed_grab_offset3(_trg_x[zh], _trg_z[zh], _trg_y[zh]);")) > 1,
+           "bolge de ayni ofseti kurmali");
+    assert(length(split(src, "ed_zone_move3d(_ed_drag_z3, _ed_dpx3, _ed_dgy3, _ed_dpz3)")) > 1,
+           "bolge suruklemesi zemin duzleminde tasimali");
+    // Jestin hedefi BASINDA saklanmali; sürükleme ortasında seçim değişirse
+    // başka bir şey kaymaya başlardı.
+    assert(length(split(src, "_ed_drag_z3 = zh;")) > 1, "jest hedefi saklanmali");
+    assert(length(split(src, "_ed_drag_z3 = 0 - 1;   // bu jest bir VARLIĞI")) > 1,
+           "varliga tiklamak bolge suruklemesini birakmali");
+    assert(length(split(src, "_gz_zid3 = 0 - 1; _ed_drag_z3 = 0 - 1;")) > 1,
+           "fare birakilinca jest hedefi sifirlanmali");
+}
+
+// Bölgenin klavye yolu da TEK KAPIDAN. Eski kopya kendi `0.1`'ini taşıyor ve
+// ızgaraya hiç oturmuyordu: aynı bölgeyi klavyeyle ittirmek ile tutamakla
+// çekmek FARKLI yerlere koyuyordu.
+func t_zone_keyboard_uses_the_same_door() {
+    str src = read_file("lib/scene3d.tpr");
+    array g = split(src, "if (_ed_tab3 == 2 && _ed_zone_ok3(_ed_zsel3)) {");
+    assert(length(g) > 1, "bolge klavye blogu olmali");
+    array gov = split(g[1], "\n    int sel = _ed_sel3e;");
+    assert(length(gov) > 1, "blogun sonu bulunmali");
+    str blok = gov[0];
+    // Ham dizi yazimi KALMAMALI.
+    assert(length(split(blok, "_trg_sx[zi] =")) == 1, "ham boy yazimi kalmamali");
+    assert(length(split(blok, "_trg_r[zi] =")) == 1, "ham yaricap yazimi kalmamali");
+    assert(length(split(blok, "_trg_x[zi] =")) == 1, "ham konum yazimi kalmamali");
+    assert(length(split(blok, "0.1")) == 1, "kendi taban kopyasi kalmamali");
+    assert(length(split(blok, "ed_zone_move3d(")) > 1, "tasima tek kapidan gecmeli");
+    assert(length(split(blok, "ed_zone_resize3d(")) > 1, "boy tek kapidan gecmeli");
+    assert(length(split(blok, "ed_zone_radius3d(")) > 1, "yaricap tek kapidan gecmeli");
+    // Oklar artik VARLIKLA AYNI eksende: Y. Eski XZ esleme "bolgede tutamak
+    // yok" gerekcesine dayaniyordu ve o gerekce dustu.
+    assert(length(split(blok, "_trg_y[zi] + zg")) > 1, "yukari ok Y'yi ittirmeli");
+    assert(length(split(blok, "_trg_z[zi] + zg")) == 1, "oklar artik Z'yi ittirmemeli");
+}
+
+// Ayarlanmış bir bölgeyi ikinci kez kurmanın tek yolu her alanı elle
+// doldurmaktı. `trigger3d` yalnız geometriyi ve etiketi kuruyor; kopyalaması
+// unutulan alan SESSİZCE varsayılana düşer ve kopya "aynı görünen ama hiçbir
+// şey yapmayan" bir bölge olur.
+func t_zone_duplicate_keeps_the_configuration() {
+    scene3d_reset(); no_ground3d();
+    ed_grid3d(0.0);
+    int z = trigger3d(2.0, 3.0, 4.0, 5.0, 6.0, 7.0, TAG_ENEMY);
+    _trg_shape[z] = 1;
+    _trg_r[z] = 9.5;
+    _trg_on[z] = 0;
+    _trg_once[z] = 1;
+    _trg_act[z] = ZACT_DAMAGE;
+    _trg_amt[z] = 37;
+    trigger_sound3d(z, "examples/assets/sesler/kazandin.wav");
+    int n = ed_zone_duplicate3d(z);
+    assert(n >= 0, "cogaltma bir bolge uretmeli");
+    assert(n != z, "kopya AYRI bir bolge olmali");
+    // Tanimin HER alani tasinmali.
+    assert_eq_int(_trg_shape[n], _trg_shape[z]);
+    assert(_t_yakinf3(_trg_r[n], _trg_r[z], 0.001), "yaricap tasinmali");
+    assert(_t_yakinf3(_trg_sx[n], _trg_sx[z], 0.001), "boy x tasinmali");
+    assert(_t_yakinf3(_trg_sy[n], _trg_sy[z], 0.001), "boy y tasinmali");
+    assert(_t_yakinf3(_trg_sz[n], _trg_sz[z], 0.001), "boy z tasinmali");
+    assert_eq_int(_trg_tag[n], _trg_tag[z]);
+    assert_eq_int(_trg_on[n], _trg_on[z]);
+    assert_eq_int(_trg_once[n], _trg_once[z]);
+    assert_eq_int(_trg_act[n], _trg_act[z]);
+    assert_eq_int(_trg_amt[n], _trg_amt[z]);
+    assert(trigger_sound_of3d(n) == trigger_sound_of3d(z), "ses tasinmali");
+    // Konum KAYDIRILMIS olmali: tam ustune koymak "hicbir sey olmadi" gibi
+    // gorunur ve kullanici ikinci kez basar.
+    assert(_t_yakinf3(_trg_x[n], _trg_x[z], 0.001) == false, "kopya kaymali");
+    assert(_t_yakinf3(_trg_y[n], _trg_y[z], 0.001), "yukseklik AYNI kalmali");
+}
+
+// ÜYELİK kayıtları bölgenin TANIMI değil, "şu an içeride kim var" durumu.
+// Kopyalansaydı yeni bölge hiç girilmeden dolu sayılır ve ilk karede bir
+// ÇIKIŞ olayı atardı.
+func t_zone_duplicate_does_not_copy_membership() {
+    scene3d_reset(); no_ground3d();
+    ed_grid3d(0.0);
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0, 6.0, 6.0, 6.0, TAG_PLAYER);
+    // Oyuncu bolgenin ICINDE: uyelik olussun.
+    _s3_triggers();
+    assert(length(_trg_in_t) > 0, "uyelik kaydi olusmali");
+    int n = ed_zone_duplicate3d(z);
+    assert(n >= 0, "cogaltma calismali");
+    int m = 0;
+    int yeni_uyelik = 0;
+    while (m < length(_trg_in_t)) {
+        if (_trg_in_t[m] == n) { yeni_uyelik = yeni_uyelik + 1; }
+        m = m + 1;
+    }
+    assert_eq_int(yeni_uyelik, 0);
+    assert(p >= 0, "oyuncu kurulmali");
+}
+
+// Alan listesi SİLME ile ÇOĞALTMA arasında AYNI olmalı: biri alan eklenip
+// öteki unutulursa silme kaydırır, çoğaltma düşürür — ikisi de sessiz.
+// Liste teste KOPYALANMIYOR, silme fonksiyonunun kendisinden okunuyor.
+func t_zone_duplicate_covers_every_deleted_field() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(src) > 100000, "kaynak okunamadi — depo kokunden calistir");
+    array dg = split(src, "func _ed_zone_delete3(");
+    assert(length(dg) > 1, "silme fonksiyonu olmali");
+    array dgov = split(dg[1], "\nfunc ");
+    str silme = dgov[0];
+    array cg = split(src, "func ed_zone_duplicate3d(");
+    assert(length(cg) > 1, "cogaltma fonksiyonu olmali");
+    array cgov = split(cg[1], "\nfunc ");
+    str kopya = cgov[0];
+    array parts = split(silme, "_trg_");
+    int i = 1;
+    int sayac = 0;
+    while (i < length(parts)) {
+        // Alan adi ilk ayraca kadar. `pop(_trg_x);` satirlarinda koseli
+        // ayrac yok, o yuzden parantez de kesici — yoksa ad "x);" cikardi.
+        // Alan adi ilk ayraca kadar. Kesiciler: `[` (dizi erisimi), `)`
+        // (`pop(_trg_x);`) ve ` ` (`_trg_in_t = nt;`) — biri eksik olsa ad
+        // "x);" ya da "in_t = nt;" cikar ve test kendi ayristirmasindan
+        // kizarirdi.
+        array t = split(parts[i], "[");
+        array t2 = split(t[0], ")");
+        array t3 = split(t2[0], " ");
+        str ad = t3[0];
+        // Uyelik dizileri TANIM degil DURUM: cogaltmada bilerek yok.
+        if (length(ad) > 0 && ad != "in_t" && ad != "in_e") {
+            assert(contains(kopya, "_trg_" + ad + "["),
+                   "cogaltma bir alani atliyor: _trg_" + ad);
+            sayac = sayac + 1;
+        }
+        i = i + 1;
+    }
+    assert(sayac > 15, "alan taramasi bos donmemeli");
+}
+
+func t_zone_duplicate_is_wired() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(split(src, "int yz = ed_zone_duplicate3d(zi);")) > 1,
+           "CTRL+D bolgeyi cogaltmali");
+    assert(length(split(src, "int yz = ed_zone_duplicate3d(i);")) > 1,
+           "panel dugmesi de cogaltmali");
+    assert(length(split(src, "\"BOLGEYI COGALT\"")) > 1, "panelde dugme olmali");
+    // Kopya SECILI kalmali: hemen tasinabilsin (varlik cogaltmasi da oyle).
+    assert(length(split(src, "if (yz >= 0) { _ed_zsel3 = yz; }")) > 2,
+           "kopya secili kalmali (iki yolda da)");
+}
+
+// ===========================================================================
 // PANEL SÜRÜKLEME: HAYALET + GERÇEK ÖNİZLEME
 // Sürüklerken tek geri bildirim ekranın kabaca üçte birini boyayan bir
 // vurguydu ve o vurgu bir YALANDI: yuvada zaten panel varsa gelen panel
@@ -11542,6 +11754,15 @@ test("kutu her yone ve kelepceli", "t_marquee_rect_normalises_and_clamps");
 test("kutu merkeze gore seciyor", "t_marquee_selects_by_centre");
 test("kutu sifirlar, CTRL ekler", "t_marquee_replaces_but_ctrl_adds");
 test("kutu secimi kare dongusune bagli", "t_marquee_is_wired_into_the_frame");
+test("yazilan sayi geri alinabiliyor", "t_typed_number_is_undoable");
+test("yazma bitis yollari bagli", "t_number_commit_paths_are_wired");
+test("tutmak cismi oynatmiyor", "t_grab_offset_does_not_teleport");
+test("bolge suruklemesi bagli ve ortak", "t_zone_drag_is_wired_and_shares_the_grab");
+test("bolge klavyesi tek kapidan", "t_zone_keyboard_uses_the_same_door");
+test("bolge cogaltmasi ayarlari tasiyor", "t_zone_duplicate_keeps_the_configuration");
+test("bolge cogaltmasi uyeligi tasimiyor", "t_zone_duplicate_does_not_copy_membership");
+test("cogaltma silmenin her alanini kapsiyor", "t_zone_duplicate_covers_every_deleted_field");
+test("bolge cogaltmasi bagli", "t_zone_duplicate_is_wired");
 test("onizleme gercek dikdortgen", "t_drop_preview_equals_the_real_rect");
 test("onizleme yerlesimi kirletmiyor", "t_drop_preview_leaves_the_layout_alone");
 test("gecersiz hedefte onizleme yok", "t_drop_preview_absent_for_invalid_targets");

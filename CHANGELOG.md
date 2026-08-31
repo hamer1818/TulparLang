@@ -9,6 +9,40 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Fixed/Added — EDİTÖR: yazılan sayı geri alınabiliyor, bölge varlıkla aynı jestlerden geçiyor
+
+**Sayı alanına YAZILAN değer geri alınamıyordu.** Alanın iki düzenleme yolu
+var; sürükleme jestin başında bir kez işaret bırakıyordu, yazma **hiç**
+bırakmıyordu. Belirti sinsi: CTRL+Z çalışıyor gibi görünür ama bir ÖNCEKİ işi
+geri alır, yazdığın değer geçmişte hiç yer almadan kaybolur. Yazma artık
+`_g_num_commit3`'ten geçiyor ve işaret yalnız değer gerçekten değiştiyse
+bırakılıyor (aynı sayıyı yazmak 40'lık yığını boş adımlarla doldurup geri
+alma tuşunu işe yaramaz hâle getirirdi). ESC iptal, oradan geçmiyor.
+
+**Bölge artık varlıkla aynı jestlerden geçiyor.** Tutamaklar geldikten sonra
+kalan farklar kapandı: bölge **tutulup sürükleniyor** (zemin düzleminde,
+kavrama ofsetiyle), oklar **Y'yi ittiriyor** (eskiden XZ veriyordu ve
+gerekçesi "bölgede tutamak yok"tu — o gerekçe düştü), **CTRL+D ile
+çoğaltılıyor** (+ panelde düğme).
+
+Kavrama ofseti artık **tek fonksiyonda** (`_ed_grab_offset3` /
+`_ed_drag_point3`): iki kopya, birinde düzeltilen bir hatanın ötekinde
+yaşaması demekti. Testi gidiş-dönüşten — tutup hiç kıpırdamadan sürükleme
+noktasını okumak cismin merkezini vermeli. Bölgenin **klavye yolu da tek
+kapıdan** geçiyor: eski kopya kendi `0.1` tabanını taşıyor ve ızgaraya hiç
+oturmuyordu, yani aynı bölgeyi klavyeyle ittirmek ile tutamakla çekmek farklı
+yerlere koyuyordu.
+
+Çoğaltmanın alan listesi `_ed_zone_delete3`'inkiyle **aynı** olmak zorunda
+(biri alan eklenip öteki unutulursa silme kaydırır, çoğaltma düşürür — ikisi
+de sessiz), ve test listeyi kopyalamıyor: silme fonksiyonunun **kaynağından**
+okuyup çoğaltmada arıyor. Üyelik kayıtları kopyalanmıyor — onlar bölgenin
+tanımı değil, "şu an içeride kim var" durumu.
+
+9 regresyon testi (614 → 623) ve 21 bozma denemesi, hepsi doğru testi
+kızarttı.
+
+
 ### Added — EDİTÖR: bölge tutamakları, kutu seçimi, sürükleme hayaleti
 
 Üç ayrı boşluk, tek ortak tema: **jest var ama görünmüyordu.**

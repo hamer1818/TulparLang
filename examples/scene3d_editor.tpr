@@ -28,6 +28,7 @@
 //   DEL / CTRL+D               sil / çoğalt
 //   CTRL+C / CTRL+V            kopyala / yapıştır (BÖLÜMLER ARASI çalışır)
 //   CTRL+A                     tümünü seç
+//   CTRL+D                     çoğalt (varlık VE bölge)
 //   BOŞ ALANDAN SÜRÜKLE        kutuyla çoklu seç (CTRL: kümeye ekle)
 //   CTRL+Z / CTRL+Y            geri al / yinele
 //   CTRL+S (ya da F5)          kaydet
@@ -101,9 +102,12 @@
 // BÖLGELER: sağ tık → "+ bolge". Bölgenin GIRINCE eylemi var: kazan, kaybet,
 // gireni yok et (çukur/lav), hasar ver, skor ekle, sonraki bölüm. Eylem
 // seçilmemiş bir bölge hiçbir şey yapmaz — sahne denetimi bunu söylüyor.
-// Bölgeler editörde çizilir (rengi durumunu söyler), tıklanır, ok tuşlarıyla
-// taşınır. SESİ de var: girince çalacak dosyayı panelden seçiyorsun —
-// kurallardaki ses listesinin aynısı.
+// Bölgeler editörde çizilir (rengi durumunu söyler) ve VARLIKLA AYNI şekilde
+// kullanılır: tıkla, tutup sürükle (zemin düzleminde), oklarla yüksekliğini
+// ittir, CTRL+D ile ÇOĞALT, DEL ile sil. Çoğaltma ayarları da taşır — eylem,
+// miktar, ses, tek-atım, etiket — yoksa kopya "aynı görünen ama hiçbir şey
+// yapmayan" bir bölge olurdu. SESİ de var: girince çalacak dosyayı panelden
+// seçiyorsun — kurallardaki ses listesinin aynısı.
 //
 // BÖLGENİN DE TUTAMAKLARI VAR: seçili bir bölgede TAŞI ve ÖLÇEK kipleri
 // varlıktakiyle aynı okları çiziyor (aynı fonksiyon çiziyor, ayrı bir kopya

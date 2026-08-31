@@ -74,6 +74,29 @@ oysa lav çukuru ya da kazanma bölgesi tam olarak gözle yerleştirilen şey.
 - Boşluğa tıklamak artık **bölge seçimini de** bırakıyor; kalsaydı
   tutamakları boşlukta durmaya devam ederdi.
 
+### Bölge artık varlıkla AYNI jestlerden geçiyor
+Tutamaklar geldikten sonra kalan farklar tek tek kapatıldı:
+- **Tutup sürüklemek** (zemin düzleminde, kavrama ofsetiyle). Seçilip
+  sürüklenemeyen bir cisim, seçimin ne işe yaradığını sorduruyordu.
+- **Kavrama ofseti varlıkla aynı fonksiyondan** (`_ed_grab_offset3` /
+  `_ed_drag_point3`). İki kopya, birinde düzeltilen bir hatanın ötekinde
+  yaşaması demekti. Testi gidiş-dönüşten: tutup hiç kıpırdamadan sürükleme
+  noktasını okumak cismin merkezini vermeli.
+- **Oklar artık Y'yi ittiriyor**, varlıktaki gibi. Eskiden bölgede oklar XZ
+  veriyordu ve gerekçesi "bölgede tutamak yok"tu — o gerekçe düştü.
+- **Klavye yolu da tek kapıdan** (`ed_zone_*3d`). Eski kopya kendi `0.1`'ini
+  taşıyor ve ızgaraya hiç oturmuyordu: aynı bölgeyi klavyeyle ittirmek ile
+  tutamakla çekmek **farklı yerlere** koyuyordu.
+- **CTRL+D ile çoğaltma** (+ panelde düğme). Kopya seçili kalıyor.
+
+> ⚠️ **`trigger3d` yalnız geometriyi ve etiketi kuruyor.** Çoğaltmada
+> kopyalanması unutulan alan sessizce varsayılana düşer ve kopya "aynı
+> görünen ama hiçbir şey yapmayan" bir bölge olur — varlık çoğaltmasında
+> tam olarak bu yaşandı (model alanı taşınmıyordu). Alan listesi
+> `_ed_zone_delete3` ile **aynı** olmak zorunda ve test listeyi kopyalamıyor,
+> silme fonksiyonunun kendisinden okuyor. **Üyelik** (`_trg_in_*`)
+> kopyalanmıyor: o bölgenin tanımı değil, "şu an içeride kim var" durumu.
+
 ### Kutu seçimi
 Üç dönüşüm de seçimin tamamını işliyor, yani darboğaz seçimi **kurmak**tı:
 tek tek tıklamak ile "tümünü seç" arasında hiçbir şey yoktu.
@@ -341,6 +364,16 @@ gizlemişti).
 Ses tarayıcısının paylaşımı güvenli çünkü kural paneli DUNYA sekmesinde,
 bölge paneli BÖLGE sekmesinde çiziliyor — ikisi aynı karede asla çizilmiyor.
 
+## Geri alma kapsamı
+Sayı alanının **iki** düzenleme yolu var ve yalnız biri geçmişe giriyordu:
+sürükleme jestin başında bir kez işaret bırakıyor (`_g_moved3` 0→1), yazma
+**hiç** bırakmıyordu. Belirti sinsi — CTRL+Z çalışıyor gibi görünür ama bir
+ÖNCEKİ işi geri alır, yazdığın değer geçmişte hiç yer almadan kaybolur.
+- Yazma artık `_g_num_commit3`'ten geçiyor ve işaret yalnız değer
+  **gerçekten değiştiyse** bırakılıyor: aynı sayıyı yazmak 40'lık yığını boş
+  adımlarla doldurup geri alma tuşunu işe yaramaz hâle getirirdi.
+- **ESC iptal**, oradan geçmiyor — iptal geçmişe girmemeli.
+
 ## Veri kaybı ailesi — en çok hata çıkan yer
 Bulunan ve düzeltilenler (hepsi **sessizdi**):
 
@@ -350,6 +383,7 @@ Bulunan ve düzeltilenler (hepsi **sessizdi**):
 | Geri alma çok bölümlü sahneyi yok ediyordu | tek CTRL+Z bölüm sayısını 2'den 0'a düşürüyordu (kendi düzeltmemin regresyonu) |
 | Anlık görüntü hangi bölüme ait olduğunu bilmiyordu | 1. bölümde işaret, 2. bölümde CTRL+Z → iki bölüm birden bozuluyordu |
 | Yineleme yapısal işi geri getirmiyordu, üstüne sahneyi siliyordu | "bölüm ekle → CTRL+Z → CTRL+Y": bölüm gelmiyor, 1. bölümün içeriği de gidiyordu |
+| Sayı alanına YAZILAN değer geri alınamıyordu | CTRL+Z bir önceki işi geri alıyor, yazılan değer geçmişte hiç yer almadan kayboluyordu |
 | Oynat-Dur düzenlenen bölümün işini siliyordu | "BOLUM 2" yazıyor, ekranda 1. bölümün içeriği duruyordu |
 | Çok bölümlü sahnede kamera hiç çalışmıyordu | hedef her yerde -1: yükleme sırası + bölüm değişimi |
 | Oyuncuyu silmek kamerayı ölü handle'a bağlıyordu | yerine yeni oyuncu eklemek onarmıyordu |

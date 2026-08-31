@@ -30,6 +30,7 @@
 //   DEL / CTRL+D                 delete / duplicate
 //   CTRL+C / CTRL+V              copy / paste (works ACROSS LEVELS)
 //   CTRL+A                       select all
+//   CTRL+D                       duplicate (bodies AND zones)
 //   DRAG FROM EMPTY SPACE        box-select (CTRL: add to the set)
 //   CTRL+Z / CTRL+Y              undo / redo
 //   CTRL+S (or F5)               save
@@ -104,9 +105,12 @@
 // ZONES: right-click -> "+ bolge". A zone has an on-enter action: win, lose,
 // kill whoever entered (pits/lava), damage, add score, next level. A zone with
 // no action does nothing at all — the scene check says so. Zones are drawn in
-// the editor (the colour states their condition), clickable, arrow-key movable.
-// They also have a SOUND: pick the file that plays on enter from the panel —
-// the same sound list the rules use.
+// the editor (the colour states their condition) and handled EXACTLY like a
+// body: click, grab and drag (on the ground plane), nudge the height with the
+// arrows, CTRL+D to DUPLICATE, DEL to remove. Duplication carries the settings
+// too — action, amount, sound, once-only, tag — otherwise the copy would be a
+// zone that looks the same and does nothing. They also have a SOUND: pick the
+// file that plays on enter from the panel — the same sound list the rules use.
 //
 // ZONES HAVE HANDLES TOO: with a zone selected, MOVE and SCALE draw the same
 // arrows entities get (the same function draws them, not a second copy). A

@@ -164,6 +164,14 @@ Belirti hep aynı: hata yok, ekranda bir şey görünmüyor, dosya sessizce
 yanlış. Dokuz ayrı örneği [[Editor]]'de tabloda. Ortak kök: **bir işlemin
 neyi koruyup neyi atacağı belirsiz bırakılmış.**
 
+**Alt sınıf: PARALEL DİZİ alan listesi İKİ yerde.** Bölgeyi silmek her
+diziyi kaydırıyor, çoğaltmak her diziyi kopyalıyor — listeler ayrışırsa
+silme kaydırır, çoğaltma düşürür ve ikisi de sessiz. Çare: testin listeyi
+**kopyalamaması**; silme fonksiyonunun kaynağından okuyup çoğaltmada
+aranması. Aynı aile: `trigger3d`/`spawn3` gibi kurucular yalnız birkaç alanı
+alıyor, gerisi varsayılana düşüyor — kopya "aynı görünen ama hiçbir şey
+yapmayan" nesne oluyor.
+
 **Alt sınıf: ÖNİZLEME ile SONUÇ ayrı formüllerden.** Panel sürüklemesinin
 bırakma önizlemesi ekranın üçte birini boyuyordu, oysa panel payına düşeni
 alır — vurgulanan alan bırakınca oluşan alan DEĞİLDİ. Çare: önizlemeyi

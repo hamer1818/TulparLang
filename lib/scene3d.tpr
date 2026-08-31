@@ -9905,6 +9905,39 @@ func ed_pick_zone_at3d(px, py): int {
                           _ed_rx3, _ed_ry3, _ed_rz3, _ed_reach3);
 }
 
+// KAVRAMA OFSETİ ve SÜRÜKLEME NOKTASI — varlık da bölge de buradan geçiyor.
+//
+// Ofset, tıkladığın nokta ile cismin merkezi arasındaki fark. Saklanmasaydı
+// cismin MERKEZİ imlecin altına atlardı: 24 birimlik bir duvarın ucuna
+// tıklamak onu 12 birim kaydırırdı. İki ayrı kopya tutmak, birinde
+// düzeltilen bir hatanın ötekinde yaşamaya devam etmesi demekti.
+//
+// Sürükleme düzlemi cismin KENDİ yüksekliğinde (`_ed_dgy3`); zemin düzlemini
+// kullanmak, havadaki bir platformu tutunca onu yere düşürürdü.
+float _ed_dpx3 = 0.0;
+float _ed_dpz3 = 0.0;
+
+func _ed_grab_offset3(cx, cz, dy) {
+    _ed_dgy3 = dy;
+    _ed_ox3 = 0.0; _ed_oz3 = 0.0;
+    float gt = _ray_planey3(_ed_cy3, _ed_ry3, dy);
+    if (gt > 0.0) {
+        _ed_ox3 = cx - (_ed_cx3 + _ed_rx3 * gt);
+        _ed_oz3 = cz - (_ed_cz3 + _ed_rz3 * gt);
+    }
+}
+
+// Işının sürükleme düzlemini kestiği nokta + ofset. Işın düzleme paralelse
+// (ya da arkasındaysa) false döner ve ÇAĞIRAN hiçbir şey taşımıyor: yoksa
+// cisim bir anda sonsuza kaçardı.
+func _ed_drag_point3(): bool {
+    float dt2 = _ray_planey3(_ed_cy3, _ed_ry3, _ed_dgy3);
+    if (dt2 <= 0.0) { return false; }
+    _ed_dpx3 = _ed_cx3 + _ed_rx3 * dt2 + _ed_ox3;
+    _ed_dpz3 = _ed_cz3 + _ed_rz3 * dt2 + _ed_oz3;
+    return true;
+}
+
 func _s3_editor_mouse(dt) {
     int s = _slot_of3(_ed_sel3e);
     // Bağlam menüsü açıkken görüntü penceresi tıklama ALMIYOR: menüdeki bir
@@ -10010,19 +10043,11 @@ func _s3_editor_mouse(dt) {
                 if (_ed_msel_has3(hit)) { _ed_sel3e = hit; }
                 else { ed_select3d(hit); }
             }
+            _ed_drag_z3 = 0 - 1;   // bu jest bir VARLIĞI sürüklüyor
             _ed_tab3 = 0;   // görünümden seçim DÜNYA'dan çıkarır
-            // Sürükleme düzlemi varlığın KENDİ yüksekliğinde: zemin düzlemini
-            // kullanmak, havadaki bir platformu tutunca onu yere düşürürdü.
-            _ed_dgy3 = get3y(hit);
-            // KAVRAMA OFSETİ: tıkladığın nokta ile merkez arasındaki fark
-            // saklanıyor. Saklanmasaydı cismin MERKEZİ imlecin altına atlardı —
-            // 24 birimlik bir duvarın ucuna tıklamak onu 12 birim kaydırırdı.
-            _ed_ox3 = 0.0; _ed_oz3 = 0.0;
-            float t0 = _ray_planey3(_ed_cy3, _ed_ry3, _ed_dgy3);
-            if (t0 > 0.0) {
-                _ed_ox3 = get3x(hit) - (_ed_cx3 + _ed_rx3 * t0);
-                _ed_oz3 = get3z(hit) - (_ed_cz3 + _ed_rz3 * t0);
-            }
+            // Sürükleme düzlemi ve kavrama ofseti — ikisi de
+            // `_ed_grab_offset3` içinde, bölgeninkiyle aynı yerde.
+            _ed_grab_offset3(get3x(hit), get3z(hit), get3y(hit));
             // Geri-al işareti yalnız GERÇEKTEN bir jest başlarken: boşluğa
             // tıklamak da işaret koysaydı, 40'lık geçmiş boş tıklamalarla
             // sessizce boşalırdı (ölçüldü).
@@ -10037,7 +10062,17 @@ func _s3_editor_mouse(dt) {
                 ed_deselect3d();
                 _ed_tab3 = 2;
                 _ed_zsel3 = zh;
-                _ed_drag3 = 0;
+                // Bölge de TUTULUP SÜRÜKLENİYOR — varlıkla aynı jest. Seçilip
+                // sürüklenemeyen bir cisim, seçimin ne işe yaradığını
+                // sorduruyordu: bölgeyi haritada gezdirmenin tek yolu ok
+                // tuşlarıydı.
+                _ed_drag_z3 = zh;
+                // Ofset varlıktakiyle AYNI fonksiyondan: bölgeler genellikle
+                // kocaman kutular, kenarına tıklayınca merkezinin imlecin
+                // altına atlaması onları kullanılamaz yapardı.
+                _ed_grab_offset3(_trg_x[zh], _trg_z[zh], _trg_y[zh]);
+                if (_ed_mode3 == ED_MOVE) { ed_mark3d(); }
+                _ed_drag3 = 1;
             } else {
                 // Boşluğa tıklamak HER İKİ seçimi de bırakıyor. Bölgeninki
                 // kalsaydı tutamakları boşlukta durmaya devam eder ve
@@ -10064,7 +10099,7 @@ func _s3_editor_mouse(dt) {
         // büyütüp küçültürken seçimi durmadan değiştirir — çizim önizleme,
         // KARAR bırakma anıdır.
         if (_ed_mq3 == 1) { _ed_mq_apply3(mouse_x(), mouse_y()); }
-        _ed_drag3 = 0; _gz_axis3 = 0 - 1; _gz_zid3 = 0 - 1;
+        _ed_drag3 = 0; _gz_axis3 = 0 - 1; _gz_zid3 = 0 - 1; _ed_drag_z3 = 0 - 1;
     }
 
     // Üzerine gelince vurgulama: tıklamadan ÖNCE neyi seçeceğini göstermek
@@ -10130,13 +10165,22 @@ func _s3_editor_mouse(dt) {
         return;
     }
 
+    // Düz sürükleme ZEMİN DÜZLEMİNDE. Sürüklenen şeyin ne olduğunu jestin
+    // BAŞINDA saklıyoruz (`_ed_drag_z3`): sürükleme ortasında seçim
+    // değişebilir ve o an başka bir şey kaymaya başlardı.
+    if (_ed_drag3 == 1 && _ed_mode3 == ED_MOVE && _ed_drag_z3 >= 0) {
+        _ed_ray3(mouse_x() - _ed_view_x3(), mouse_y() - _ed_view_y3(),
+                 _ed_view_w3(), _ed_view_h3(), _cam_fov);
+        if (_ed_drag_point3()) {
+            ed_zone_move3d(_ed_drag_z3, _ed_dpx3, _ed_dgy3, _ed_dpz3);
+        }
+        return;
+    }
     if (_ed_drag3 == 1 && _ed_mode3 == ED_MOVE && _slot_of3(_ed_sel3e) >= 0) {
         _ed_ray3(mouse_x() - _ed_view_x3(), mouse_y() - _ed_view_y3(),
                  _ed_view_w3(), _ed_view_h3(), _cam_fov);
-        float t = _ray_planey3(_ed_cy3, _ed_ry3, _ed_dgy3);
-        if (t > 0.0) {
-            _ed_move_group3(_ed_cx3 + _ed_rx3 * t + _ed_ox3, _ed_dgy3,
-                            _ed_cz3 + _ed_rz3 * t + _ed_oz3);
+        if (_ed_drag_point3()) {
+            _ed_move_group3(_ed_dpx3, _ed_dgy3, _ed_dpz3);
         }
     }
 }
@@ -10343,15 +10387,19 @@ func _s3_editor_keys() {
         return;
     }
 
-    // BÖLGE seçiliyken tuşlar bölgeye ait. Tutamak (gizmo) entity'ye bağlı ve
-    // onu bölgelere açmak sürükleme durum makinesini ikiye bölerdi — burada
-    // gözle doğrulayamadığım bir refactor. Klavye aynı işi görüyor.
+    // BÖLGE seçiliyken tuşlar bölgeye ait.
     //
-    // Yön eşlemesi entity'ninkinden FARKLI ve bilerek: entity'de tutamak XZ'yi
-    // hallediyor, oklar Y için kalıyor. Bölgede tutamak YOK, yani oklar
-    // ZEMİN DÜZLEMİNİ vermeli — bir bölgeyi yerleştirmek demek onu haritada
-    // gezdirmek demek. Y zaten panelde, bir satır yukarıda.
-    if (_ed_tab3 == 2 && _ed_zsel3 >= 0 && _ed_zsel3 < length(_trg_x)) {
+    // Yön eşlemesi artık VARLIKLA AYNI: oklar Y'yi ittiriyor, zemin düzlemi
+    // sürüklemenin işi. Eskiden bölgede oklar XZ'yi veriyordu ve gerekçesi
+    // "bölgede tutamak yok"tu — o gerekçe düştü (tutamak da var, sürükleme
+    // de). İki seçilebilir tür arasında farklı bir klavye haritası tutmak,
+    // artık hiçbir şeyin karşılığı olmayan bir istisna olurdu.
+    //
+    // Yazma, ölçek ve yarıçap TEK KAPIDAN geçiyor (`ed_zone_*3d`): ızgara
+    // ve taban kelepçesi orada. Buradaki eski kopya kendi `0.1`'ini taşıyor
+    // ve ızgaraya hiç oturmuyordu — yani aynı bölgeyi klavyeyle ittirmek ile
+    // tutamakla çekmek FARKLI yerlere koyuyordu.
+    if (_ed_tab3 == 2 && _ed_zone_ok3(_ed_zsel3)) {
         int zi = _ed_zsel3;
         float zg = 0.5;
         if (_ed_grid3 > 0.0) { zg = _ed_grid3; }
@@ -10362,6 +10410,14 @@ func _s3_editor_keys() {
             _ed_zsel3 = 0 - 1;
             return;
         }
+        // CTRL+D varlıkla aynı tuş: kopya SEÇİLİ kalıyor ki hemen
+        // taşınabilsin (varlık çoğaltması da öyle yapıyor).
+        if (key_pressed(K_D) && key_down(K_LCTRL)) {
+            ed_mark3d();
+            int yz = ed_zone_duplicate3d(zi);
+            if (yz >= 0) { _ed_zsel3 = yz; }
+            return;
+        }
         bool ok_basildi = key_pressed(K_UP) || key_pressed(K_DOWN) ||
                           key_pressed(K_LEFT) || key_pressed(K_RIGHT);
         if (ok_basildi == false) { return; }
@@ -10369,31 +10425,29 @@ func _s3_editor_keys() {
         if (_ed_mode3 == ED_SCALE) {
             if (_trg_shape[zi] == 1) {
                 if (key_pressed(K_RIGHT) || key_pressed(K_UP)) {
-                    _trg_r[zi] = _trg_r[zi] + zg;
+                    ed_zone_radius3d(zi, _trg_r[zi] + zg);
                 }
                 if (key_pressed(K_LEFT) || key_pressed(K_DOWN)) {
-                    _trg_r[zi] = _trg_r[zi] - zg;
+                    ed_zone_radius3d(zi, _trg_r[zi] - zg);
                 }
-                if (_trg_r[zi] < 0.1) { _trg_r[zi] = 0.1; }
             } else {
                 if (key_pressed(K_RIGHT)) {
-                    _trg_sx[zi] = _trg_sx[zi] + zg; _trg_sz[zi] = _trg_sz[zi] + zg;
+                    ed_zone_resize3d(zi, _trg_sx[zi] + zg, _trg_sy[zi], _trg_sz[zi] + zg);
                 }
                 if (key_pressed(K_LEFT)) {
-                    _trg_sx[zi] = _trg_sx[zi] - zg; _trg_sz[zi] = _trg_sz[zi] - zg;
+                    ed_zone_resize3d(zi, _trg_sx[zi] - zg, _trg_sy[zi], _trg_sz[zi] - zg);
                 }
-                if (key_pressed(K_UP))   { _trg_sy[zi] = _trg_sy[zi] + zg; }
-                if (key_pressed(K_DOWN)) { _trg_sy[zi] = _trg_sy[zi] - zg; }
-                if (_trg_sx[zi] < 0.1) { _trg_sx[zi] = 0.1; }
-                if (_trg_sy[zi] < 0.1) { _trg_sy[zi] = 0.1; }
-                if (_trg_sz[zi] < 0.1) { _trg_sz[zi] = 0.1; }
+                if (key_pressed(K_UP)) {
+                    ed_zone_resize3d(zi, _trg_sx[zi], _trg_sy[zi] + zg, _trg_sz[zi]);
+                }
+                if (key_pressed(K_DOWN)) {
+                    ed_zone_resize3d(zi, _trg_sx[zi], _trg_sy[zi] - zg, _trg_sz[zi]);
+                }
             }
             return;
         }
-        if (key_pressed(K_RIGHT)) { _trg_x[zi] = _trg_x[zi] + zg; }
-        if (key_pressed(K_LEFT))  { _trg_x[zi] = _trg_x[zi] - zg; }
-        if (key_pressed(K_DOWN))  { _trg_z[zi] = _trg_z[zi] + zg; }
-        if (key_pressed(K_UP))    { _trg_z[zi] = _trg_z[zi] - zg; }
+        if (key_pressed(K_UP))   { ed_zone_move3d(zi, _trg_x[zi], _trg_y[zi] + zg, _trg_z[zi]); }
+        if (key_pressed(K_DOWN)) { ed_zone_move3d(zi, _trg_x[zi], _trg_y[zi] - zg, _trg_z[zi]); }
         return;
     }
 
@@ -10968,6 +11022,22 @@ func _g_tog(id, x, y, w, h, label, on): bool {
 }
 
 // Sayı alanı: SÜRÜKLE tarar, TIKLA yazmaya geçer.
+// Alanı YAZARAK düzenlemek de geri alınabilir olmalı. Sürükleme yolu jestin
+// başında zaten işaret bırakıyordu (`_g_moved3` 0→1); yazma yolu HİÇ
+// bırakmıyordu, yani aynı alanın iki düzenleme yolundan biri geri
+// alınamıyordu ve bunu söyleyen hiçbir şey yoktu. Belirti sinsi: CTRL+Z
+// çalışıyor gibi görünür ama BİR ÖNCEKİ işi geri alır, yazdığın değer
+// geçmişte hiç yer almadan kaybolur.
+//
+// İşaret yalnız değer GERÇEKTEN değiştiyse bırakılıyor: alana girip aynı
+// sayıyı yazmak (ya da tıklayıp çıkmak) 40'lık geçmişi boş adımlarla
+// doldurur ve geri alma tuşunu işe yaramaz hâle getirirdi.
+func _g_num_commit3(val, buf): float {
+    float yeni = toFloat(buf);
+    if (yeni != val) { ed_mark3d(); }
+    return yeni;
+}
+
 func _g_num(id, x, y, w, h, val, step): float {
     float out = val * 1.0;
     _g_rect3(id, x, y, w, h);
@@ -10983,9 +11053,12 @@ func _g_num(id, x, y, w, h, val, step): float {
         if (key_pressed(K_BACKSPACE) && length(_g_buf3) > 0) {
             _g_buf3 = substring(_g_buf3, 0, length(_g_buf3) - 1);
         }
-        if (key_pressed(K_ENTER)) { out = toFloat(_g_buf3); _g_focus3 = 0; }
+        if (key_pressed(K_ENTER)) { out = _g_num_commit3(val, _g_buf3); _g_focus3 = 0; }
+        // ESC İPTAL: değer yazılmıyor, yani işaret de bırakılmıyor.
         if (key_pressed(K_ESC)) { _g_focus3 = 0; }
-        if (_g_press3 == 1 && over == false) { out = toFloat(_g_buf3); _g_focus3 = 0; }
+        if (_g_press3 == 1 && over == false) {
+            out = _g_num_commit3(val, _g_buf3); _g_focus3 = 0;
+        }
         rect(x, y, w, h, rgb(28, 38, 54));
         rect_lines(x, y, w, h, _G_ACC3());
         _g_txt3(_g_buf3 + "_", x + _us3(3), y + _g_cy3(h), w - _us3(6), _G_TXT3());
@@ -14140,6 +14213,9 @@ func _ed_f3w3(pw, labw): int {
 // 0 = seçili varlık, 1 = dünya ayarları, 2 = seçili BÖLGE.
 int _ed_tab3 = 0;
 int _ed_zsel3 = 0 - 1;   // seçili bölge indeksi
+// Düz sürüklemenin HEDEFİ: -1 = varlık(lar), >=0 = bölge indeksi. Jestin
+// başında yazılıyor, bırakınca sıfırlanıyor.
+int _ed_drag_z3 = 0 - 1;
 // Inspector kaydırması. Panel içeriği (çok davranışlı bir varlık, dünya
 // ayarları + kurallar) panelden uzun olabiliyor; kırpma olmadan alttaki
 // konsolun üstüne taşardı.
@@ -15034,6 +15110,14 @@ func _ed_zone_panel3(px, y, pw) {
     }
     y = y + _us3(5);
 
+    if (_g_button(23031, lx, y, inner, _ED_FLD3, "BOLGEYI COGALT")) {
+        ed_mark3d();
+        int yz = ed_zone_duplicate3d(i);
+        if (yz >= 0) { _ed_zsel3 = yz; }
+    }
+    _g_tip_for3(23031, "Ayarlariyla birlikte kopyalar  (CTRL+D)");
+    y = y + _ED_FLD3 + _us3(3);
+
     if (_g_button(23030, lx, y, inner, _ED_FLD3, "BOLGEYI SIL")) {
         ed_mark3d();
         _ed_zone_delete3(i);
@@ -15042,6 +15126,42 @@ func _ed_zone_panel3(px, y, pw) {
     }
     _ed_iset_content3(y + _ED_FLD3 + _us3(6));
 }
+
+// Bölgeyi ÇOĞALT. Varlıkta CTRL+D vardı, bölgede yoktu: ayarlanmış bir
+// bölgeyi (eylem + miktar + ses + tek-atım + etiket) ikinci kez kurmanın tek
+// yolu her alanı elle yeniden doldurmaktı.
+//
+// ⚠️ `trigger3d` yalnız geometriyi ve etiketi kuruyor; geri kalan her alan
+// VARSAYILANA düşüyor. Kopyalamayı unutulan alan sessizce kaybolur ve
+// kopya "aynı görünen ama hiçbir şey yapmayan" bir bölge olur — varlık
+// çoğaltmasında tam olarak bu yaşandı (model alanı taşınmıyordu, kopya
+// "şekli MODEL ama modeli yok" çıkıyordu). Alan listesi
+// `_ed_zone_delete3`'inkiyle AYNI olmalı: biri alan eklenip öteki
+// unutulursa silme kaydırır, çoğaltma düşürür.
+//
+// ÜYELİK kayıtları (`_trg_in_*`) KOPYALANMIYOR ve bu doğru: onlar "şu an
+// içeride kim var" durumu, bölgenin tanımı değil. Kopyalasaydık yeni bölge
+// hiç girilmeden "içeride biri var" sanır ve çıkış olayı atardı.
+func ed_zone_duplicate3d(i): int {
+    if (_ed_zone_ok3(i) == false) { return 0 - 1; }
+    float off = 1.0;
+    if (_ed_grid3 > 0.0) { off = _ed_grid3 * 2.0; }
+    int n = trigger3d(_trg_x[i] + off, _trg_y[i], _trg_z[i] + off,
+                      _trg_sx[i], _trg_sy[i], _trg_sz[i], _trg_tag[i]);
+    if (_ed_zone_ok3(n) == false) { return 0 - 1; }
+    _trg_r[n] = _trg_r[i];
+    _trg_shape[n] = _trg_shape[i];
+    _trg_on[n] = _trg_on[i];
+    _trg_once[n] = _trg_once[i];
+    _trg_fin[n] = _trg_fin[i];     _trg_hasin[n] = _trg_hasin[i];
+    _trg_fout[n] = _trg_fout[i];   _trg_hasout[n] = _trg_hasout[i];
+    _trg_fstay[n] = _trg_fstay[i]; _trg_hasstay[n] = _trg_hasstay[i];
+    _trg_act[n] = _trg_act[i];
+    _trg_amt[n] = _trg_amt[i];
+    _trg_snd[n] = _trg_snd[i];
+    return n;
+}
+func bolge_cogalt3d(i): int { return ed_zone_duplicate3d(i); }
 
 // Bölgeyi sil: bütün paralel diziler AYNI indeksten düşmeli, yoksa bölge
 // verileri birbirine kayar.
