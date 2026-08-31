@@ -5,6 +5,7 @@
 //   Phase 8  (feel):     particles (billboards) · 2D health bars pinned to 3D
 //   Phase 9  (geometry): ramps · rotated wall (SAT) · capsule pillar · camera ray
 //   Phase 11 (shell):    title screen · pause (ESC/P) · restart
+//                        · CONTINUE (from where you left off) · LEVEL SELECT
 //   Zones:               bonus pad (one shot) · poison pool (sphere, every frame)
 //   Input:               keyboard+mouse · touch · gamepad (all at once)
 //
@@ -14,6 +15,11 @@
 // Play: enemies chase you and cost health on contact. You fire automatically
 // in the direction you are looking; clear every enemy in a level to advance.
 // Finish all three levels to win.
+//
+// PROGRESS PERSISTS (`save_progress3d`): finished levels are written to disk, so
+// the second time you open the game the title screen offers "Devam (Bolum 2)"
+// and "Bolumler". In the level grid, locked levels are drawn dim and cannot be
+// picked — the open ones run up to one past your longest unbroken run.
 //
 // WHY firing is automatic: on desktop it would need a key, on touch a button —
 // and the left half is already the stick, the right half the look pad / jump.

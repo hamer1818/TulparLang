@@ -1136,6 +1136,7 @@ func _s3_mark_level_done(k) {
 int UI_NONE  = 0;   // oyun akıyor
 int UI_TITLE = 1;   // başlangıç ekranı
 int UI_PAUSE = 2;   // duraklat örtüsü
+int UI_LEVELS = 3;  // bölüm seçme ızgarası
 int _s3_ui = UI_NONE;
 
 int _s3_has_title = 0;
@@ -1202,8 +1203,29 @@ func _s3_quit_lbl3(): str {
 func _s3_menu_act3(kind, a) {
     if (a == 0) { return; }
     if (kind == 0) {
-        if (a == 1) { _s3_ui = UI_NONE; return; }
+        // Konuma göre değil TÜRE göre: düğme listesi duruma göre değişiyor.
+        int t = _s3_title_kind3(a - 1);
+        if (t == _TB_START3) { _s3_ui = UI_NONE; return; }
+        if (t == _TB_CONT3) {
+            // Geçiş ERTELENMİŞ (`_lvl_pending3`), kare sonunda uygulanıyor —
+            // oyun içindeki bölüm değişimiyle aynı yol. Menüden anında
+            // yüklemek, aynı işi ikinci bir yerde yapmak olurdu.
+            goto_level3d(unlocked_level3d());
+            _s3_ui = UI_NONE;
+            return;
+        }
+        if (t == _TB_LVLS3) { _s3_ui = UI_LEVELS; return; }
         _s3_quit_or_stop3();
+        return;
+    }
+    // Bölüm seçme ızgarası. a = -1 geri, a > 0 seçilen bölüm.
+    if (kind == 3) {
+        if (a < 0) { _s3_ui = UI_TITLE; return; }
+        // KİLİTLİ bölüm iş görmüyor. Kare çiziliyor (kaç bölüm olduğu bilgisi
+        // de bir bilgi) ama soluk, yani "olmadı" sessiz değil GÖRÜNÜR.
+        if (_s3_lv_open3(a) == false) { return; }
+        goto_level3d(a);
+        _s3_ui = UI_NONE;
         return;
     }
     if (kind == 1) {
@@ -1261,10 +1283,20 @@ func restart3d() {
 // ---- Düğme çizimi + isabet testi -------------------------------------------
 // Ölçüler pencereye göre oransal: aynı düzen 960x560 masaüstünde de, dar bir
 // telefon ekranında da çalışsın.
+// Dikey düğme listesi EN ÇOK dört düğme taşıyor (başlık ekranı duruma göre
+// 2-4 gösteriyor). Adım sabit 0.15 iken dördüncü düğme ekranın TAM alt
+// kenarına dayanıyordu: 0.44 + 3×0.15 + 0.11 = 1.00, yani sıfır boşluk.
+// Adım artık tavandan TÜRÜYOR — sayı değişince yerleşim kendini toparlıyor.
+int   _S3_BTN_MAX3 = 4;
+float _S3_BTN_TOP3 = 0.44;   // ilk düğmenin üstü
+float _S3_BTN_BOT3 = 0.97;   // son düğmenin bitebileceği en alt yer
 func _s3_btn_w(): float { return _win_w * 0.44; }
 func _s3_btn_h(): float { return _win_h * 0.11; }
 func _s3_btn_x(): float { return (_win_w - _s3_btn_w()) * 0.5; }
-func _s3_btn_y(i): float { return _win_h * (0.44 + i * 0.15); }
+func _s3_btn_step3(): float {
+    return (_S3_BTN_BOT3 - _S3_BTN_TOP3 - 0.11) / (_S3_BTN_MAX3 - 1);
+}
+func _s3_btn_y(i): float { return _win_h * (_S3_BTN_TOP3 + i * _s3_btn_step3()); }
 
 // Menüde SEÇİLİ düğme. Fare/parmak doğrudan tıkladığı için buna ihtiyaç
 // duymuyordu; kol ve klavye ise bir imleç olmadan üç düğmeli duraklat
@@ -1348,6 +1380,69 @@ func _s3_center_text(s, y, size, col) {
 }
 
 // ---- Başlangıç ekranı ------------------------------------------------------
+// Düğme listesi DURUMA göre değişiyor, o yüzden "2. düğme çıkış" gibi sabit
+// bir eşleme YOK: her düğmenin NE OLDUĞU soruluyor (`_s3_title_kind3`) ve iş
+// ona göre yapılıyor. Konuma göre dağıtmak, listeye bir düğme eklendiğinde
+// sessizce yanlış işi yaptırırdı — menü şeridinde tam olarak bu yaşandı.
+int _TB_START3 = 0;   // Başla — 1. bölümden
+int _TB_CONT3  = 1;   // Devam — kaldığın bölümden
+int _TB_LVLS3  = 2;   // Bölümler — seçme ızgarası
+int _TB_QUIT3  = 3;   // Çıkış
+
+// DEVAM yalnız gerçekten ilerleme varsa. "Devam (Bölüm 1)" ile "Başla" aynı
+// şeydir ve iki ayrı düğme olarak durmaları kullanıcıya olmayan bir soru
+// sordururdu.
+func _s3_has_continue3(): bool {
+    if (_sav_on == 0) { return false; }
+    return unlocked_level3d() > 1;
+}
+// BÖLÜMLER yalnız çok bölümlü VE kayıt açık sahnede: kayıt yokken hiçbir
+// bölüm açılmış olmaz ve ekran tek kilitli kareden ibaret bir çıkmaz olurdu.
+// OYNANABİLİR bölüm sayısı `_lvlN`'den geliyor, `level_count3d()`'ten DEĞİL:
+// o, sahne JSON'undaki bölüm dizisini sayıyor ve elle yazılmış bir oyunda
+// (`level3d(1, "kur1")`) o dizi BOŞ. Menü "kaç bölüm oynanabilir" diye
+// soruyor, "kaç bölüm serileştirildi" diye değil.
+func _s3_lv_count3(): int { return length(_lvlN); }
+
+func _s3_has_levels3(): bool {
+    if (_sav_on == 0) { return false; }
+    return _s3_lv_count3() > 1;
+}
+
+func _s3_title_n3(): int {
+    int n = 2;                                   // Başla + Çıkış hep var
+    if (_s3_has_continue3()) { n = n + 1; }
+    if (_s3_has_levels3())   { n = n + 1; }
+    return n;
+}
+// ÇIKIŞ her zaman SON düğme: ESC'nin nereye gideceği de buradan geliyor.
+func _s3_title_qi3(): int { return _s3_title_n3() - 1; }
+
+func _s3_title_kind3(i): int {
+    if (i <= 0) { return _TB_START3; }
+    int k = 1;
+    if (_s3_has_continue3()) {
+        if (i == k) { return _TB_CONT3; }
+        k = k + 1;
+    }
+    if (_s3_has_levels3()) {
+        if (i == k) { return _TB_LVLS3; }
+        k = k + 1;
+    }
+    return _TB_QUIT3;
+}
+
+func _s3_title_lbl3(i): str {
+    int k = _s3_title_kind3(i);
+    if (k == _TB_START3) { return _s3_t("Basla", "Start"); }
+    if (k == _TB_CONT3) {
+        return _s3_t("Devam  (Bolum ", "Continue  (Level ") +
+               toString(unlocked_level3d()) + ")";
+    }
+    if (k == _TB_LVLS3) { return _s3_t("Bolumler", "Levels"); }
+    return _s3_quit_lbl3();
+}
+
 func _s3_title_draw() {
     _s3_dim();
     int tsz = toInt(_win_h * 0.10);
@@ -1359,20 +1454,190 @@ func _s3_title_draw() {
         _s3_center_text(_s3_t("Rekor: ", "Best: ") + toString(_best3),
                         _win_h * 0.365, toInt(_win_h * 0.04), GOLD);
     }
-    _s3_btn_draw(0, _s3_t("Basla", "Start"));
-    _s3_btn_draw(1, _s3_quit_lbl3());
+    int i = 0;
+    int n = _s3_title_n3();
+    while (i < n) { _s3_btn_draw(i, _s3_title_lbl3(i)); i = i + 1; }
 }
 
-// 1 = başla, 2 = çık, 0 = bekle
+// Dönüş: 0 = bekle, aksi hâlde SEÇİLEN DÜĞMENİN sırası + 1.
 func _s3_title_step(): int {
-    _s3_menu_nav(2);
+    int n = _s3_title_n3();
+    _s3_menu_nav(n);
     // Enter/Space SEÇİLİ düğmeyi işletir. İmleç 0'da başladığı için eski
     // "Enter = Basla" davranışı birebir korunuyor.
     if (_s3_confirm3()) { return _s3_sel3 + 1; }
-    if (key_pressed(K_ESC) || _gp_back == 1) { return 2; }
-    int b = _s3_btn_pressed(2);
+    // ESC = ÇIKIŞ, düğme sırası ne olursa olsun. Sabit "2" yazmak, araya bir
+    // düğme girdiğinde ESC'yi "Bölümler"e bağlardı.
+    if (key_pressed(K_ESC) || _gp_back == 1) { return _s3_title_qi3() + 1; }
+    int b = _s3_btn_pressed(n);
     if (b >= 0) { return b + 1; }
     return 0;
+}
+
+// ---- Bölüm seçme ızgarası --------------------------------------------------
+// Motor bitirilen bölümleri ZATEN diske yazıyordu (`_s3_mark_level_done`) ve
+// kaldığın yeri ZATEN hesaplıyordu (`unlocked_level3d`) — ama hiçbir yer o
+// cevabı sormuyordu: beş bölüm bitiren oyuncu ertesi gün yine 1. bölümden
+// başlıyordu. Kayıt sisteminin başlığındaki söz burada tutuluyor.
+//
+// Dikey düğme listesi 4 düğmede ekranı dolduruyor (`_s3_btn_y`), yani sekiz
+// bölüm oraya sığmaz — bölümler ayrı bir IZGARADA.
+func _s3_lv_cols3(n): int {
+    if (n <= 4) { return n; }
+    if (n <= 9) { return 3; }
+    return 5;
+}
+func _s3_lv_rows3(n): int {
+    int c = _s3_lv_cols3(n);
+    if (c < 1) { return 1; }
+    return toInt((n + c - 1) / c);
+}
+// Izgara BİR BANDIN içinde yaşıyor: başlığın altı ile alt kenar payı arası.
+// Sınırları sabit tutmak, "ekrandan taşmadı" iddiasını ölçülebilir yapıyor —
+// yoksa taşma ancak bölüm sayısı büyüdüğünde ve kimse bakmazken olurdu.
+float _S3_LV_TOP3 = 0.26;
+float _S3_LV_BOT3 = 0.96;
+func _s3_lv_gap3(): float  { return _win_h * 0.03; }
+
+// Hücre boyu SIĞMAYA göre türüyor. Sabit boy, bölüm sayısı arttıkça ızgarayı
+// bandın dışına taşırıyordu ve ekranda kaydırma YOK — yani 25 bölümlük bir
+// oyunda alt sıra hiç görünmezdi. Tavan da var: üç bölümlük bir oyunda
+// ekranı dolduran kocaman kareler saçma olurdu.
+func _s3_lv_cell3(n): float {
+    int rows = _s3_lv_rows3(n);
+    int cols = _s3_lv_cols3(n);
+    if (rows < 1) { rows = 1; }
+    if (cols < 1) { cols = 1; }
+    float g = _s3_lv_gap3();
+    float ch = (_win_h * (_S3_LV_BOT3 - _S3_LV_TOP3) - (rows - 1) * g) / rows;
+    float cw = (_win_w * 0.80 - (cols - 1) * g) / cols;
+    float c = ch;
+    if (cw < c) { c = cw; }
+    if (c > _win_h * 0.14) { c = _win_h * 0.14; }
+    if (c < _win_h * 0.03) { c = _win_h * 0.03; }
+    return c;
+}
+
+func _s3_lv_x3(i, n): float {
+    int c = _s3_lv_cols3(n);
+    if (c < 1) { c = 1; }
+    int col = mod(i, c);
+    float cs = _s3_lv_cell3(n);
+    float w = c * cs + (c - 1) * _s3_lv_gap3();
+    return (_win_w - w) * 0.5 + col * (cs + _s3_lv_gap3());
+}
+func _s3_lv_y3(i, n): float {
+    int c = _s3_lv_cols3(n);
+    if (c < 1) { c = 1; }
+    int row = toInt(i / c);
+    int rows = _s3_lv_rows3(n);
+    float cs = _s3_lv_cell3(n);
+    float h = rows * cs + (rows - 1) * _s3_lv_gap3();
+    // Izgara BANDIN içinde dikeyde ortalanıyor.
+    return _win_h * _S3_LV_TOP3 + (_win_h * (_S3_LV_BOT3 - _S3_LV_TOP3) - h) * 0.5
+           + row * (cs + _s3_lv_gap3());
+}
+
+// AÇIK bölüm: kesintisiz tamamlananların bir sonrasına kadar. Kilitliyi
+// seçilebilir yapmak oyunu atlanabilir kılardı; gizlemek ise "kaç bölüm var"
+// bilgisini de götürürdü — o yüzden çiziliyor ama soluk.
+func _s3_lv_open3(k): bool { return k <= unlocked_level3d(); }
+
+// Izgarada gezinme: sol/sağ bir hücre, yukarı/aşağı bir SATIR. Dikey listenin
+// `_s3_menu_nav`i yalnız yukarı/aşağı biliyor ve satır atlamıyordu.
+// Sınırın dışına çıkan hareket YOK SAYILIYOR (sarmalamıyor): kolla hızlı
+// basarken karşı köşeye ışınlanmak yanlış bölümü başlatırdı.
+func _s3_lv_nav3(sel, n, dx, dy): int {
+    int c = _s3_lv_cols3(n);
+    if (c < 1) { c = 1; }
+    int col = mod(sel, c);
+    if (dx != 0) {
+        int nc = col + dx;
+        if (nc < 0 || nc >= c) { return sel; }
+    }
+    int t = sel + dx + dy * c;
+    if (t < 0 || t >= n) { return sel; }
+    return t;
+}
+
+func _s3_levels_draw() {
+    _s3_dim();
+    int n = _s3_lv_count3();
+    _s3_center_text(_s3_t("BOLUMLER", "LEVELS"), _win_h * 0.10,
+                    toInt(_win_h * 0.075), GOLD);
+    _s3_center_text(_s3_t("ESC: geri", "ESC: back"), _win_h * 0.20,
+                    toInt(_win_h * 0.035), RAYWHITE);
+    float cs = _s3_lv_cell3(n);
+    int i = 0;
+    while (i < n) {
+        float bx = _s3_lv_x3(i, n);
+        float by = _s3_lv_y3(i, n);
+        bool acik = _s3_lv_open3(i + 1);
+        if (i == _s3_sel3) {
+            rect(bx, by, cs, cs, rgba(86, 102, 150, 245));
+            rect_lines(bx, by, cs, cs, GOLD);
+            rect_lines(bx - 3.0, by - 3.0, cs + 6.0, cs + 6.0, GOLD);
+        } else {
+            rect(bx, by, cs, cs, rgba(46, 54, 82, 235));
+            rect_lines(bx, by, cs, cs, rgba(190, 160, 60, 200));
+        }
+        int col = RAYWHITE;
+        if (acik == false) { col = rgba(120, 126, 140, 255); }
+        str lab = toString(i + 1);
+        int sz = toInt(cs * 0.40);
+        text(lab, toInt(bx + (cs - measure_text(lab, sz)) * 0.5),
+             toInt(by + (cs - sz) * 0.5), sz, col);
+        // BİTMİŞ bölüm işaretli: "açık" ile "bitmiş" ayrı şeyler ve oyuncu
+        // nereye kadar geldiğini görmek ister.
+        if (level_done3d(i + 1)) {
+            int ssz = toInt(cs * 0.22);
+            text("*", toInt(bx + cs - ssz * 1.1), toInt(by + ssz * 0.2), ssz, GOLD);
+        }
+        i = i + 1;
+    }
+}
+
+// Dönüş: 0 = bekle, -1 = geri, k>0 = k. bölüm seçildi.
+func _s3_levels_step(): int {
+    int n = _s3_lv_count3();
+    if (n < 1) { return 0 - 1; }
+    int dx = 0; int dy = 0;
+    if (key_pressed(K_LEFT))  { dx = 0 - 1; }
+    if (key_pressed(K_RIGHT)) { dx = 1; }
+    if (key_pressed(K_UP))    { dy = 0 - 1; }
+    if (key_pressed(K_DOWN))  { dy = 1; }
+    if (_gp_nav != 0) { dy = _gp_nav; }
+    if (dx != 0 || dy != 0) { _s3_sel3 = _s3_lv_nav3(_s3_sel3, n, dx, dy); }
+    if (key_pressed(K_ESC) || _gp_back == 1) { return 0 - 1; }
+    if (_s3_confirm3()) { return _s3_sel3 + 1; }
+    int t = _s3_lv_hit3(n);
+    if (t >= 0) { return t + 1; }
+    return 0;
+}
+
+// Fare/parmak hangi kareye bastı? Yoksa -1. Kenar tetikli — düğme listesinin
+// `_s3_btn_pressed`i ile aynı sözleşme.
+int _s3_lv_tap_prev3 = 0;
+func _s3_lv_hit3(n): int {
+    float px = 0.0; float pz = 0.0;
+    int now = 0;
+    if (mouse_pressed(0)) { px = mouse_x() * 1.0; pz = mouse_y() * 1.0; now = 1; }
+    int tn = touch_count();
+    if (tn > 0) {
+        if (_s3_lv_tap_prev3 == 0) { px = touch_x(0) * 1.0; pz = touch_y(0) * 1.0; now = 1; }
+    }
+    if (tn > 0) { _s3_lv_tap_prev3 = 1; } else { _s3_lv_tap_prev3 = 0; }
+    if (now == 0) { return 0 - 1; }
+    float cs = _s3_lv_cell3(n);
+    int i = 0;
+    int hit = 0 - 1;
+    while (i < n) {
+        float bx = _s3_lv_x3(i, n);
+        float by = _s3_lv_y3(i, n);
+        if (px >= bx && px <= bx + cs && pz >= by && pz <= by + cs) { hit = i; }
+        i = i + 1;
+    }
+    return hit;
 }
 
 // ---- Duraklat örtüsü -------------------------------------------------------
@@ -6084,6 +6349,7 @@ func play3d() {
             }
             // Örtüler HUD'ın üstünde: karartma oyunun kendi çizimini de kapatmalı.
             if (_s3_ui == UI_TITLE)      { _s3_title_draw(); }
+            else if (_s3_ui == UI_LEVELS){ _s3_levels_draw(); }
             else if (_s3_ui == UI_PAUSE) { _s3_pause_draw(); }
             else if (_game_over3 == 1)   { _s3_over_draw(); }
             // Tanılama HER ŞEYİN ÜSTÜNDE: menü örtüsü açıkken de okunabilmeli.
@@ -6102,6 +6368,7 @@ func play3d() {
         // Girdi çizimden SONRA okunuyor: düğmeler bu karede zaten çizilmiş
         // oldu, yani oyuncunun tıkladığı şey ekranda gördüğü şeyle aynı.
         if (_s3_ui == UI_TITLE)        { _s3_menu_act3(0, _s3_title_step()); }
+        else if (_s3_ui == UI_LEVELS)  { _s3_menu_act3(3, _s3_levels_step()); }
         else if (_s3_ui == UI_PAUSE)   { _s3_menu_act3(1, _s3_pause_step()); }
         else if (_game_over3 == 1)     { _s3_menu_act3(2, _s3_over_step()); }
         if (_s3_quit == 1) { break; }

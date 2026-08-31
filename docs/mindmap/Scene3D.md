@@ -107,7 +107,7 @@ saçılması istenen şey değil.
 | Bölge EYLEMİ (veri) | `bolge_eylem3d(t, ZACT_*, miktar)`, `bolge_ses3d` | Kod kancası olmadan: kazan/kaybet/gireni yok et/hasar/skor/**sonraki bölüm** |
 | Kural eylemi | `ACT_COLLECT/DAMAGE/KILL/HURT/WIN/LOSE/**NEXT**` | `ACT_NEXT` olmadan veri sahnesi bölüm ilerletemiyordu |
 | Kalıcılık | `kayit_ac3d()` (OPT-IN), `rekor3d()` | Diske yazdığı için opt-in |
-| UI | `baslangic3d`, duraklat, oyun-bitti | Menüde imleç + kol A/B |
+| UI | `baslangic3d`, duraklat, oyun-bitti, **bölüm seçme** | Menüde imleç + kol A/B; başlık düğmeleri duruma göre |
 | Arazi | `arazi3d`, `arazi_dogal3d`, `arazi_katmani3d` | Katman boyama tepe rengiyle |
 | Gündüz-gece | `gunduz_gece3d(sn)`, `saati_ayarla3d` | Gölgeler güneşle döner |
 | Girdi | klavye + dokunmatik + **gamepad** | Üçü aynı anda açık |
@@ -115,8 +115,40 @@ saçılması istenen şey değil.
 | Tanılama | **F1** örtü, **F2** dosyaya döküm | gözcüler + seviyeli kayıt |
 | Can | `can3d`, `hasar3d`, `iyilestir3d` | `heal3d` invuln penceresine yazmaz |
 
+## Menü katmanı — başlık düğmeleri DURUMA göre
+Kayıt sistemi bitirilen bölümleri diske yazıyordu ve kaldığın yeri
+(`unlocked_level3d`) hesaplıyordu, ama **hiçbir yer o cevabı sormuyordu**:
+beş bölüm bitiren oyuncu ertesi gün yine 1. bölümden başlıyordu. Fonksiyon
+yalnız testlerden çağrılıyordu — kayıt sisteminin başlığındaki söz tutulmuyordu.
+
+- Başlık ekranı artık **Başla / [Devam (Bölüm N)] / [Bölümler] / Çıkış**.
+  Köşeli parantezliler koşullu: **Devam** yalnız ilerleme varsa (yoksa
+  "Devam (Bölüm 1)" ile "Başla" aynı şeydir), **Bölümler** yalnız çok bölümlü
+  VE kayıt açıkken (kayıt yoksa hiçbir bölüm açılmaz, ekran çıkmaz olurdu).
+- Dağıtım **konuma göre değil TÜRE göre** (`_s3_title_kind3`): liste duruma
+  göre uzayıp kısalıyor, sabit eşleme araya bir düğme girdiğinde sessizce
+  yanlış işi yaptırırdı. ESC de sabit sayıya değil "son düğme"ye gidiyor.
+- Bölüm ızgarasında **kilitli bölüm çiziliyor ama iş görmüyor**: gizlemek
+  "kaç bölüm var" bilgisini de götürürdü. Açıklık kuralı tek yerde ve
+  `unlocked_level3d`'den geliyor — kesintisiz, yani 3 bitip 2 bitmediyse 3
+  açılmıyor.
+- Seçim **ertelenmiş geçiş** kuruyor (`goto_level3d`), oyun içindeki bölüm
+  değişimiyle aynı yol; menüden anında yüklemek aynı işi ikinci bir yerde
+  yapmak olurdu. `goto_level3d` "bitti" işaretlemiyor, yani seçme ilerlemeyi
+  uydurmuyor.
+
+> ⚠️ **İki ayrı "bölüm sayısı" var.** `level_count3d()` sahne JSON'undaki
+> diziyi sayıyor ve elle yazılmış oyunda (`bolum3d(1, "kur1")`) o dizi BOŞ;
+> oynanabilir sayı `_lvlN`'de. Menü `_s3_lv_count3()` kullanıyor — ilk yazımda
+> `level_count3d()` kullanıldı ve "Bölümler" düğmesi kod tabanlı oyunlarda hiç
+> çıkmadı.
+
+> ⚠️ Dikey düğme listesi **en çok dört** düğme taşıyor. Adım sabit 0.15 iken
+> dördüncü düğme ekranın tam alt kenarına dayanıyordu (0.44 + 3×0.15 + 0.11 =
+> 1.00, sıfır boşluk). Adım artık tavandan türüyor (`_s3_btn_step3`).
+
 ## Test edilebilirlik — motorun tasarımını belirleyen kısıt
-`tests/scene3d_engine.test.tpr` **623 test**, hepsi **pencere açmadan** koşuyor.
+`tests/scene3d_engine.test.tpr` **632 test**, hepsi **pencere açmadan** koşuyor.
 Bunu mümkün kılan iki desen:
 - **Cihaz okuması tek yere hapsedilir** (`_read_touch3`, `_read_gamepad3`) —
   motorun geri kalanı yalnız tamponu okur.

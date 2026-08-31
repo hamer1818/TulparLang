@@ -9,6 +9,49 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — MOTOR: bölüm seçme ekranı ve "Devam" (kayıt sistemi sözünü tutuyor)
+
+Kayıt sistemi bitirilen bölümleri **zaten** diske yazıyordu
+(`_s3_mark_level_done`) ve kaldığın yeri **zaten** hesaplıyordu
+(`unlocked_level3d`) — ama hiçbir yer o cevabı sormuyordu: fonksiyon yalnız
+testlerden çağrılıyordu ve beş bölüm bitiren oyuncu ertesi gün yine 1.
+bölümden başlıyordu. "Bölüm ilerlemesi kalıcı" sözü tutulmuyordu.
+
+Başlangıç ekranı artık **Başla / [Devam (Bölüm N)] / [Bölümler] / Çıkış**.
+Köşeli parantezliler koşullu: **Devam** yalnız gerçekten ilerleme varsa
+("Devam (Bölüm 1)" ile "Başla" aynı şeydir ve iki düğme olarak durmaları
+olmayan bir soru sordururdu), **Bölümler** yalnız çok bölümlü VE kayıt açık
+sahnede (kayıt yoksa hiçbir bölüm açılmaz, ekran çıkmaz olurdu).
+
+Dağıtım **konuma göre değil TÜRE göre** (`_s3_title_kind3`): liste duruma göre
+uzayıp kısalıyor, sabit eşleme araya bir düğme girdiğinde sessizce yanlış işi
+yaptırırdı — menü şeridinde tam olarak bu yaşanmıştı. ESC de sabit bir sayıya
+değil "son düğme"ye gidiyor.
+
+Bölüm ızgarasında **kilitli bölüm çiziliyor ama seçilemiyor**: gizlemek "kaç
+bölüm var" bilgisini de götürürdü, seçilebilir yapmak oyunu atlanabilir
+kılardı. Açıklık kuralı tek yerde ve `unlocked_level3d`'den geliyor — yani
+kesintisiz: 3 bitip 2 bitmediyse 3 açılmıyor. Seçim **ertelenmiş geçiş**
+kuruyor (`goto_level3d`), oyun içindeki bölüm değişimiyle aynı yol, ve
+`goto_level3d` "bitti" işaretlemiyor — seçmek ilerlemeyi uydurmuyor.
+
+İki yan düzeltme yol üstünde çıktı. Dikey düğme listesinin adımı sabit 0.15'ti
+ve dördüncü düğme ekranın **tam alt kenarına** dayanıyordu (0.44 + 3×0.15 +
+0.11 = 1.00, sıfır boşluk); adım artık tavandan türüyor. Izgaranın hücre boyu
+da sabitti ve ekranda kaydırma olmadığı için ~25 bölümden sonra alt sıra
+görünmez oluyordu; boy artık sığmaya göre küçülüyor ve ızgara tanımlı bir
+bandın içinde ortalanıyor.
+
+Örnek: `examples/scene3d_arena.tpr` (üç bölüm + `kayit_ac3d`) ikinci açılışta
+iki düğmeyi de gösteriyor.
+
+9 regresyon testi (623 → 632) ve 17 bozma denemesi. Üçü ilk turda kaçtı, üçü
+de testin kendi kurulumundandı: yerleşim testi tek ölçekte koşuyordu (taşma
+ancak 25 bölümde görülüyor), iki koşullu bir kuralın sınanmayan koşulu zaten
+sağlanmıyordu, ve `_lvlN` ile `_lvl_js3` karışmıştı. Üçü de [[Tuzaklar]]'a
+yazıldı.
+
+
 ### Fixed/Added — EDİTÖR: yazılan sayı geri alınabiliyor, bölge varlıkla aynı jestlerden geçiyor
 
 **Sayı alanına YAZILAN değer geri alınamıyordu.** Alanın iki düzenleme yolu

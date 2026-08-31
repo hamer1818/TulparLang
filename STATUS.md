@@ -1822,9 +1822,20 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
     fonksiyon referansı natif i64'e kırpılıyordu — dosyadaki diğer kancalar
     zaten `var` kullanıyordu.
 
-- 🟢 **Menü katmanının vermedikleri.** arcade'de olan ama 3B'ye taşınmayanlar:
-  ayarlar ekranı (ses/dil/FPS), rozet/başarım, skor tablosu, bölüm seçimi.
-  Yayın için şart değil; oyun sayısı artınca değerlenir.
+- ✅ **Bölüm seçimi ve "Devam" geldi (2026-08-31).** Kayıt sistemi bitirilen
+  bölümleri ZATEN diske yazıyor ve kaldığın yeri (`unlocked_level3d`) ZATEN
+  hesaplıyordu — ama hiçbir yer o cevabı sormuyordu: fonksiyon yalnız
+  testlerden çağrılıyordu ve beş bölüm bitiren oyuncu ertesi gün yine 1.
+  bölümden başlıyordu.
+  Başlık ekranı artık **Başla / [Devam (Bölüm N)] / [Bölümler] / Çıkış**;
+  koşullu düğmeler yalnız iş görebilecekleri durumda çıkıyor. Bölüm
+  ızgarasında kilitli bölüm çiziliyor ama seçilemiyor (gizlemek "kaç bölüm
+  var" bilgisini de götürürdü). Dağıtım konuma göre değil TÜRE göre.
+  Detay: [[Scene3D]] "Menü katmanı".
+- 🟢 **Menü katmanının kalan eksikleri.** arcade'de olan ama 3B'ye
+  taşınmayanlar: **ayarlar ekranı (ses/dil/FPS)**, rozet/başarım, skor
+  tablosu. Ses için önce bir tame binding'i gerekiyor: motorda ANA SES
+  SEVİYESİ yok, yalnız müzik başına `music_volume` var.
   `on_hud3d` var ama her oyun kendi menüsünü elden yazıyor.
 - ✅ **Tetikleyici bölge API'si geldi.** `trigger3d` / `trigger_sphere3d`
   (`bolge3d`/`bolge_kure3d`) + `on_enter3d`/`on_exit3d`/`on_stay3d`.

@@ -4,6 +4,7 @@
 //   Faz 8 (his):      parçacık (billboard) · 3B'ye bağlı 2B can barları
 //   Faz 9 (geometri): rampa · dönük duvar (SAT) · kapsül sütun · kamera ışını
 //   Faz 11 (kabuk):   başlangıç ekranı · duraklat (ESC/P) · yeniden başla
+//                     · DEVAM (kaldığın bölümden) · BÖLÜM SEÇME ızgarası
 //   Bölge:            bonus pedi (tek atım) · zehir havuzu (küre, her kare)
 //   Girdi:            klavye+fare · dokunmatik · gamepad (hepsi aynı anda)
 //
@@ -13,6 +14,11 @@
 // Oynanış: düşmanlar seni kovalar, değerlerse can götürür. Bakışın yönüne
 // otomatik ateş edersin; bir bölümdeki tüm düşmanları temizleyince sonraki
 // bölüme geçersin. Üç bölümü de bitirince kazanırsın.
+//
+// İLERLEME KALICI (`kayit_ac3d`): bitirdiğin bölümler diske yazılır, yani
+// başlangıç ekranı ikinci açılışta "Devam (Bolum 2)" ve "Bolumler" düğmelerini
+// gösterir. Bölüm ızgarasında kilitli bölümler soluk çizilir ve seçilemez —
+// açık olanlar kesintisiz tamamladıklarının bir sonrasına kadar.
 //
 // Ateş NİYE otomatik: masaüstünde tuş, dokunmatikte düğme gerekirdi — sol
 // yarı zaten joystick, sağ yarı bakış pedi/zıplama. Otomatik ateş oyunu tek

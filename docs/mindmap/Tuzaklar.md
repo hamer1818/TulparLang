@@ -60,6 +60,20 @@ kelepçeleyen satır (pay tabanı zaten sağlıyordu) ve "son panel artanı alı
 özel durumu (yığmalı toplamda son panelin bitişi zaten tam T). İki yerde
 tutulan koruma, hangisinin yük taşıdığını sınanamaz yapıyor.
 
+### 1h-4. Test ÖLÇEĞİ sızıntıyı görünmez yapıyor
+Bölüm ızgarasının "ekranda kalıyor" testi 10 bölümle koşuyordu; dikey
+ortalamayı sabit bir tepeye çeviren bozma o boyutta hâlâ sığıyor ve
+**kaçıyordu**. Taşma ancak satır sayısı büyüyünce görülüyor.
+**Kural:** yerleşim testlerini tek boyutta değil, birkaç ölçekte koştur
+(3 / 10 / 25 / 60) — sınır davranışı ancak ucunda görünür. Aynı testte
+"kaç bölüm" gibi bir eksen varsa, o eksenin uç değerlerini de ölç.
+
+### 1h-3b. Kurulum, ikinci koşulu zaten sağlamıyor
+"Bölümler düğmesi kayıt kapalıyken çıkmamalı" testi kayıt KAPALI ama
+**tek bölümlü** bir sahnede koşuyordu; düğme zaten çıkmazdı, yani kayıt
+koşulunu silen bozma kaçtı. İki koşullu bir kuralı sınarken, sınanmayan
+koşulun **sağlandığından** emin ol — yoksa test öteki koşulu ölçer.
+
 ### 1h-2. Testin kendi SIRASI sızıntıyı görünmez yapıyor
 Kutu seçimi testinde kameranın arkasındaki cisim, listenin **sonunda**
 duruyordu. Yansıtma başarısız olunca sonuç değişkenleri bir önceki cismin
@@ -134,6 +148,14 @@ koşar. Görsel/oynanış testini **kullanıcı yapar**.
   dedektörüne kırmızı kutu çizdirir hem tıklamaları yer.
 - **Yörünge kamerası:** `_cam_dist` YARIÇAP, biçimdeki "dist" YATAY mesafe.
   Ters dönüşüm tek yerde olmalı.
+
+## 5b. İki ayrı "aynı" sayı
+- **Bölüm sayısı İKİ yerde:** `level_count3d()` sahne JSON'undaki bölüm
+  dizisini sayıyor; elle yazılmış oyunda (`bolum3d(1, "kur1")`) o dizi BOŞ ve
+  oynanabilir sayı `_lvlN`'de. Menü ilk yazımda `level_count3d()` kullandı ve
+  "Bölümler" düğmesi kod tabanlı oyunlarda hiç çıkmadı. Bir sayıyı sormadan
+  önce **hangi soruyu** sorduğunu belirle: "kaç bölüm serileştirildi" ile
+  "kaç bölüm oynanabilir" aynı şey değil.
 
 ## 6. Dil ve codegen tuzakları
 - **Yerel değişken GLOBAL'i gölgeliyor** (açık codegen hatası) → probe/test

@@ -10399,6 +10399,218 @@ func t_counter_snapshot_matches_the_top_of_the_stack() {
 }
 
 // ===========================================================================
+// BÖLÜM SEÇME EKRANI + "DEVAM"
+// Motor bitirilen bölümleri ZATEN diske yazıyordu ve kaldığın yeri ZATEN
+// hesaplıyordu (`unlocked_level3d`) — ama hiçbir yer o cevabı sormuyordu:
+// beş bölüm bitiren oyuncu ertesi gün yine 1. bölümden başlıyordu.
+// ===========================================================================
+
+func _t_lvl_menu_kur3(baslik, kac) {
+    scene3d_reset();
+    sahne3d(320, 200, baslik);
+    int k = 1;
+    while (k <= kac) {
+        save_data("scene3d_lvl_" + baslik + "_" + toString(k) + ".txt", "");
+        level3d(k, _t_p2);
+        k = k + 1;
+    }
+    save_progress3d();
+    menu3d("T", "");
+}
+
+// Düğme listesi DURUMA göre değişiyor, o yüzden konuma göre sabit bir eşleme
+// olamaz. "Devam" yalnız gerçekten ilerleme varken çıkıyor: "Devam (Bolum 1)"
+// ile "Basla" aynı şeydir ve iki düğme olarak durmaları olmayan bir soru
+// sordururdu.
+func t_title_buttons_follow_the_state() {
+    // Kayit KAPALI ama COK BOLUMLU: yine yalnizca Basla + Cikis. Bolum
+    // sayisini da vermek SART — tek bolumlu bir sahnede "Bolumler" zaten
+    // cikmaz, yani kayit kosulunu silen bir bozma o kurulumda kacar.
+    scene3d_reset();
+    sahne3d(320, 200, "t3d_tb0");
+    level3d(1, _t_p2); level3d(2, _t_p2); level3d(3, _t_p2);
+    menu3d("T", "");
+    assert_eq_int(_s3_lv_count3(), 3);
+    assert_eq_int(_s3_title_n3(), 2);
+    assert_eq_int(_s3_title_kind3(0), _TB_START3);
+    assert_eq_int(_s3_title_kind3(1), _TB_QUIT3);
+
+    // Kayit ACIK, cok bolumlu, ilerleme YOK: Bolumler var, Devam YOK.
+    _t_lvl_menu_kur3("t3d_tb1", 3);
+    assert_eq_int(_s3_title_n3(), 3);
+    assert_eq_int(_s3_title_kind3(0), _TB_START3);
+    assert_eq_int(_s3_title_kind3(1), _TB_LVLS3);
+    assert_eq_int(_s3_title_kind3(2), _TB_QUIT3);
+
+    // ...ilerleme olunca Devam da giriyor ve sira kayiyor.
+    _s3_mark_level_done(1);
+    assert_eq_int(_s3_title_n3(), 4);
+    assert_eq_int(_s3_title_kind3(1), _TB_CONT3);
+    assert_eq_int(_s3_title_kind3(2), _TB_LVLS3);
+    assert_eq_int(_s3_title_kind3(3), _TB_QUIT3);
+    assert(contains(_s3_title_lbl3(1), "2"), "Devam etiketi kalinan bolumu yazmali");
+}
+
+// ÇIKIŞ her zaman SON düğme ve ESC oraya gidiyor. Sabit "2" yazmak, araya bir
+// düğme girdiğinde ESC'yi "Bölümler"e bağlardı — sessiz ve can sıkıcı.
+func t_title_escape_always_quits() {
+    _t_lvl_menu_kur3("t3d_tb2", 3);
+    assert_eq_int(_s3_title_kind3(_s3_title_qi3()), _TB_QUIT3);
+    _s3_mark_level_done(1);
+    assert_eq_int(_s3_title_kind3(_s3_title_qi3()), _TB_QUIT3);
+    assert_eq_int(_s3_title_qi3(), _s3_title_n3() - 1);
+}
+
+// Dikey liste ekranı EN ÇOK dört düğmede dolduruyor. Beşinci bir düğme
+// eklenirse sonuncusu ekranın altından taşar ve kimse fark etmez.
+func t_title_buttons_fit_the_screen() {
+    _win_h = 720; _win_w = 1280;
+    int n = 4;
+    float alt = _s3_btn_y(n - 1) + _s3_btn_h();
+    assert(alt <= _win_h * 1.0, "dort dugme ekrana sigmali");
+    // ...ve besincisi SIGMIYOR: sinirin gercekten dort oldugunu olcuyoruz,
+    // yoksa test "her zaman dogru" bir iddia olurdu.
+    float alt5 = _s3_btn_y(4) + _s3_btn_h();
+    assert(alt5 > _win_h * 1.0, "besinci dugme tasmali (sinir gercekten 4)");
+    // Baslik ekrani hicbir durumda dortten fazla dugme uretmemeli.
+    _t_lvl_menu_kur3("t3d_tb3", 5);
+    _s3_mark_level_done(1);
+    assert(_s3_title_n3() <= 4, "baslik dugmeleri dortu asmamali");
+}
+
+// AÇIK bölüm kuralı `unlocked_level3d`'den geliyor — ayrı bir kopya değil.
+// Kilitli bölüm ÇİZİLİYOR (kaç bölüm olduğu da bir bilgi) ama iş görmüyor.
+func t_level_grid_open_rule_follows_progress() {
+    _t_lvl_menu_kur3("t3d_lg1", 4);
+    assert(_s3_lv_open3(1), "1. bolum hep acik");
+    assert(_s3_lv_open3(2) == false, "ilerleme yokken 2 kilitli");
+    _s3_mark_level_done(1);
+    assert(_s3_lv_open3(2), "1 bitince 2 acilir");
+    assert(_s3_lv_open3(3) == false, "3 hala kilitli");
+    // Bosluk atlanmaz: 3 bitse de 2 bitmediyse 3 acilmaz.
+    _t_lvl_menu_kur3("t3d_lg2", 4);
+    _s3_mark_level_done(3);
+    assert(_s3_lv_open3(2) == false, "bosluk bolum acmamali");
+}
+
+// Izgarada sol/sağ SATIRDA kalıyor, yukarı/aşağı bir satır atlıyor. Sarmalama
+// yok: kolla hızlı basarken karşı köşeye ışınlanmak yanlış bölümü başlatırdı.
+func t_level_grid_navigation_stays_in_bounds() {
+    int n = 7;                       // 3 sutun (bkz. _s3_lv_cols3)
+    assert_eq_int(_s3_lv_cols3(n), 3);
+    assert_eq_int(_s3_lv_nav3(0, n, 1, 0), 1);        // saga
+    assert_eq_int(_s3_lv_nav3(2, n, 1, 0), 2);        // satir sonu: DURUR
+    assert_eq_int(_s3_lv_nav3(3, n, 0 - 1, 0), 3);    // satir basi: DURUR
+    assert_eq_int(_s3_lv_nav3(0, n, 0, 1), 3);        // asagi = bir satir
+    assert_eq_int(_s3_lv_nav3(0, n, 0, 0 - 1), 0);    // ust satir: DURUR
+    assert_eq_int(_s3_lv_nav3(6, n, 0, 1), 6);        // son ogeden ilerisi YOK
+    assert_eq_int(_s3_lv_nav3(4, n, 0, 1), 4);        // 7 asamaz (n=7)
+}
+
+// Kareler ekranın İÇİNDE ve üst üste binmiyor. Izgara ölçüsü pencereden
+// türüyor, yani dar pencerede de geçerli olmalı.
+func t_level_grid_cells_fit_and_do_not_overlap() {
+    _win_h = 720; _win_w = 1280;
+    // AZ ve COK bolum birlikte: yalniz 10 bolume bakmak yetmiyordu — dikey
+    // ortalamayi sabit bir tepeye ceviren bozma o boyutta hala siğiyor ve
+    // KACIYORDU. Tasma ancak sira sayisi buyuyunce goruluyor.
+    array kacs = [];
+    push(kacs, 3); push(kacs, 10); push(kacs, 25); push(kacs, 60);
+    int ki = 0;
+    while (ki < length(kacs)) {
+        int n = kacs[ki];
+        float cs = _s3_lv_cell3(n);
+        assert(cs > 0.0, "hucre boyu pozitif olmali");
+        float ust = _win_h * _S3_LV_TOP3;
+        float alt = _win_h * _S3_LV_BOT3;
+        int i = 0;
+        while (i < n) {
+            float x = _s3_lv_x3(i, n);
+            float y = _s3_lv_y3(i, n);
+            assert(x >= 0.0, "kare soldan tasmamali (n=" + toString(n) + ")");
+            assert(x + cs <= _win_w * 1.0, "kare sagdan tasmamali (n=" + toString(n) + ")");
+            // BANDIN icinde: basligin altinda, alt kenar payinin ustunde.
+            assert(y >= ust - 0.5, "kare bandin ustune tasmamali (n=" + toString(n) + ")");
+            assert(y + cs <= alt + 0.5, "kare bandin altina tasmamali (n=" + toString(n) + ")");
+            i = i + 1;
+        }
+        // Komsu iki kare cakismamali.
+        int c = _s3_lv_cols3(n);
+        if (c > 1) {
+            assert(_s3_lv_x3(1, n) >= _s3_lv_x3(0, n) + cs, "yan yana kareler ayrik olmali");
+        }
+        if (n > c) {
+            assert(_s3_lv_y3(c, n) >= _s3_lv_y3(0, n) + cs, "alt alta kareler ayrik olmali");
+        }
+        ki = ki + 1;
+    }
+}
+
+// Dağıtıcı: kilitli bölüm İŞ GÖRMEZ, açık bölüm bekleyen geçişi kurar ve
+// menüyü kapatır. Geçiş ERTELENMİŞ — oyun içindeki bölüm değişimiyle aynı yol.
+func t_level_grid_dispatch_respects_the_lock() {
+    _t_lvl_menu_kur3("t3d_lg3", 4);
+    _s3_mark_level_done(1);            // 2 acik, 3-4 kilitli
+    _s3_ui = UI_LEVELS;
+    _lvl_pending3 = 0;
+    _s3_menu_act3(3, 3);               // KILITLI
+    assert_eq_int(_lvl_pending3, 0);
+    assert_eq_int(_s3_ui, UI_LEVELS);  // ekranda kalir
+    _s3_menu_act3(3, 2);               // ACIK
+    assert_eq_int(_lvl_pending3, 2);
+    assert_eq_int(_s3_ui, UI_NONE);
+    // Geri: basliga doner, bekleyen gecis KURMAZ.
+    _s3_ui = UI_LEVELS;
+    _lvl_pending3 = 0;
+    _s3_menu_act3(3, 0 - 1);
+    assert_eq_int(_s3_ui, UI_TITLE);
+    assert_eq_int(_lvl_pending3, 0);
+}
+
+// "Devam" kaldığın bölümü başlatıyor — kayıt sisteminin başlığındaki söz.
+func t_continue_starts_at_the_unlocked_level() {
+    _t_lvl_menu_kur3("t3d_cont", 4);
+    _s3_mark_level_done(1);
+    _s3_mark_level_done(2);
+    assert_eq_int(unlocked_level3d(), 3);
+    _s3_ui = UI_TITLE;
+    _lvl_pending3 = 0;
+    // "Devam" dugmesinin SIRASINI da koddan aliyoruz: konuma sabit yazmak,
+    // listeye bir dugme eklendiginde testi sessizce baska dugmeye baglardi.
+    int i = 0;
+    int di = 0 - 1;
+    while (i < _s3_title_n3()) {
+        if (_s3_title_kind3(i) == _TB_CONT3) { di = i; }
+        i = i + 1;
+    }
+    assert(di >= 0, "Devam dugmesi olmali");
+    _s3_menu_act3(0, di + 1);
+    assert_eq_int(_lvl_pending3, 3);
+    assert_eq_int(_s3_ui, UI_NONE);
+    // "Basla" ise HEP bastan: bekleyen gecis kurmaz.
+    _s3_ui = UI_TITLE;
+    _lvl_pending3 = 0;
+    _s3_menu_act3(0, 1);
+    assert_eq_int(_lvl_pending3, 0);
+    assert_eq_int(_s3_ui, UI_NONE);
+}
+
+func t_level_menu_is_wired_into_the_frame() {
+    str src = read_file("lib/scene3d.tpr");
+    assert(length(split(src, "_s3_levels_draw();")) > 1, "bolum ekrani cizilmeli");
+    assert(length(split(src, "_s3_menu_act3(3, _s3_levels_step())")) > 1,
+           "bolum ekrani girdi almali");
+    assert(length(split(src, "_s3_title_kind3(a - 1)")) > 1,
+           "baslik dagitimi TURE gore olmali");
+    // Baslik ciziminde sabit dugme listesi KALMAMALI.
+    array g = split(src, "func _s3_title_draw() {");
+    assert(length(g) > 1, "baslik cizimi olmali");
+    array gov = split(g[1], "\nfunc ");
+    assert(length(split(gov[0], "_s3_btn_draw(1,")) == 1,
+           "baslik dugmeleri elle sayilmamali");
+}
+
+// ===========================================================================
 // GERİ ALMA KAPSAMI + BÖLGE JESTLERİ
 // ===========================================================================
 
@@ -11754,6 +11966,15 @@ test("kutu her yone ve kelepceli", "t_marquee_rect_normalises_and_clamps");
 test("kutu merkeze gore seciyor", "t_marquee_selects_by_centre");
 test("kutu sifirlar, CTRL ekler", "t_marquee_replaces_but_ctrl_adds");
 test("kutu secimi kare dongusune bagli", "t_marquee_is_wired_into_the_frame");
+test("baslik dugmeleri duruma gore", "t_title_buttons_follow_the_state");
+test("ESC hep cikisa gidiyor", "t_title_escape_always_quits");
+test("baslik dugmeleri ekrana siğiyor", "t_title_buttons_fit_the_screen");
+test("acik bolum kurali ilerlemeden", "t_level_grid_open_rule_follows_progress");
+test("izgara gezinmesi sinirda duruyor", "t_level_grid_navigation_stays_in_bounds");
+test("izgara kareleri sigiyor ve ayrik", "t_level_grid_cells_fit_and_do_not_overlap");
+test("kilitli bolum is gormuyor", "t_level_grid_dispatch_respects_the_lock");
+test("Devam kalinan bolumden basliyor", "t_continue_starts_at_the_unlocked_level");
+test("bolum menusu kare dongusune bagli", "t_level_menu_is_wired_into_the_frame");
 test("yazilan sayi geri alinabiliyor", "t_typed_number_is_undoable");
 test("yazma bitis yollari bagli", "t_number_commit_paths_are_wired");
 test("tutmak cismi oynatmiyor", "t_grab_offset_does_not_teleport");
