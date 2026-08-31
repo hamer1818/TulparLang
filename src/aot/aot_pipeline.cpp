@@ -436,6 +436,8 @@ static std::string build_android_link_search_dirs(const char *abi) {
 // Uygulama kimliği — tulpar.toml [android] bölümünden doldurulur; her alanın
 // tarihi varsayılanı vardır, yani toml'suz davranış birebir aynı kalır.
 struct AndroidAppConfig {
+  // Çıktı adından türetiliyor (bkz. `android_package_from_label`); buradaki
+  // değer yalnız ad hiç verilmediğinde kalan son çare.
   std::string package = "dev.tulparlang.game";
   std::string label;                       // boş → çıktı taban adı
   std::string orientation = "landscape";   // landscape | portrait | sensor
@@ -444,6 +446,45 @@ struct AndroidAppConfig {
   bool has_icon = false;                   // res/mipmap/ic_launcher.png kondu
   std::string splash_color = "#10121A";    // açılış/splash arka planı (koyu lacivert)
 };
+
+// Çıktı adından geçerli bir paket kimliği türet: "dev.tulparlang.<ad>".
+//
+// NEDEN: varsayılan sabit `dev.tulparlang.game` idi, yani tulpar.toml
+// yazmayan HER oyun aynı kimliği alıyordu ve cihazda birbirini EZİYORDU —
+// ikinci oyunu kurmak birincisini siliyor, sebebi hiçbir yerde yazmıyor.
+// Kimliği addan türetmek bu tuzağı tümden kaldırıyor; toml'daki `package`
+// yine her şeyi eziyor (yayınlanmış bir oyunun kimliği ORADA sabitlenmeli).
+//
+// Paket parçası kuralları: küçük harf, yalnız [a-z0-9_], rakamla başlayamaz
+// ve Java anahtar sözcüğü olamaz (aapt2 ikisini de reddeder).
+static std::string android_package_segment(const std::string &label) {
+  std::string seg;
+  for (char c : label) {
+    if (c >= 'A' && c <= 'Z') seg += (char)(c - 'A' + 'a');
+    else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) seg += c;
+    else if (!seg.empty() && seg.back() != '_') seg += '_';
+  }
+  while (!seg.empty() && seg.back() == '_') seg.pop_back();
+  if (seg.empty()) return "game";
+  if (seg[0] >= '0' && seg[0] <= '9') seg = "g" + seg;
+  static const char *kJavaKeywords[] = {
+      "abstract", "assert", "boolean", "break", "byte", "case", "catch",
+      "char", "class", "const", "continue", "default", "do", "double",
+      "else", "enum", "extends", "final", "finally", "float", "for", "goto",
+      "if", "implements", "import", "instanceof", "int", "interface", "long",
+      "native", "new", "package", "private", "protected", "public", "return",
+      "short", "static", "strictfp", "super", "switch", "synchronized",
+      "this", "throw", "throws", "transient", "try", "void", "volatile",
+      "while", "true", "false", "null"};
+  for (const char *kw : kJavaKeywords) {
+    if (seg == kw) { seg += "_"; break; }
+  }
+  return seg;
+}
+
+static std::string android_package_from_label(const std::string &label) {
+  return "dev.tulparlang." + android_package_segment(label);
+}
 
 // "#RRGGBB" doğrula (aksi halde varsayılana dön) — aapt2 color kaynağına
 // düz gireceği için basit bir #hex kontrolü yeterli.
@@ -635,6 +676,9 @@ static AndroidAppConfig load_android_app_config(const std::string &stage,
                                                 const char *fallback_label) {
   AndroidAppConfig cfg;
   cfg.label = fallback_label;
+  // Kimlik ADDAN türüyor — toml yoksa da iki oyun aynı pakette çakışmasın.
+  if (fallback_label && *fallback_label)
+    cfg.package = android_package_from_label(fallback_label);
   struct stat st;
   if (stat("tulpar.toml", &st) != 0) {
     // toml yok — asset'ler yine env ile verilebilir.

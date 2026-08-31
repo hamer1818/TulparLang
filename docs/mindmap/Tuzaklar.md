@@ -216,6 +216,15 @@ ABI + manifest üretildiğini denetliyor (~36 sn; scene3d seçildi çünkü tame
 de içeriyor, tek derleme iki arşivi birden sınıyor). NDK yoksa atlanıyor.
 `TULPAR_NO_ANDROID_SMOKE=1` kapatır.
 
+**Yan tuzak: paket kimliği herkeste AYNIYDI.** `tulpar.toml` yazmayan her
+oyun `dev.tulparlang.game` alıyordu, yani cihazda ikinci oyunu kurmak
+birincisini **siliyordu** — sebebi hiçbir yerde yazmadan. Kimlik artık çıktı
+adından türüyor (`dev.tulparlang.<ad>`; geçersiz karakterler `_`, rakamla
+başlıyorsa `g` öneki, Java anahtar sözcüğüyse `_` eki, tümü elenirse `game`).
+toml'daki `package` yine eziyor ve **yayınlanmış bir oyunda orada
+sabitlenmeli**: çıktı adını değiştirmek kimliği değiştirir, cihazdaki kurulum
+güncellenmez, yanına ikinci kopya kurulur.
+
 **Yan tuzak: NDK araması İKİ yerde yazılıydı** — sürücüde
 (`aot_pipeline.cpp`, derlemeyi yapan) ve betikte
 (`build_tame_android.sh`, arşivleri üreten). İkisi de yalnız

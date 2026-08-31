@@ -212,13 +212,19 @@ if [ "$ACTION" = "suites" ]; then
     # boğmak yanlış olur (dist denetimindeki aynı gerekçe).
     if [ -z "$TULPAR_NO_ANDROID_SMOKE" ] && [ -x ./tulpar ]; then
         ASMOKE=$(mktemp -d)
-        ASMOKE_OUT=$(DISPLAY= ./tulpar build --target=android                             examples/scene3d_collector.tpr "$ASMOKE/g" 2>&1)
+        ASMOKE_OUT=$(DISPLAY= ./tulpar build --target=android                             examples/scene3d_collector.tpr "$ASMOKE/tulparsmoke" 2>&1)
+        ASMOKE_MAN="$ASMOKE/tulparsmoke_apk/AndroidManifest.xml"
         if echo "$ASMOKE_OUT" | grep -qE "NDK gerekir|needs the NDK"; then
             echo "android derleme denetimi: NDK yok — atlandi"
-        elif [ -f "$ASMOKE/g_apk/lib/arm64-v8a/libtulpargame.so" ] &&
-             [ -f "$ASMOKE/g_apk/lib/x86_64/libtulpargame.so" ] &&
-             [ -f "$ASMOKE/g_apk/AndroidManifest.xml" ]; then
-            echo -e "${GREEN}android derlemesi calisiyor${NC} (iki ABI + manifest)"
+        elif [ -f "$ASMOKE/tulparsmoke_apk/lib/arm64-v8a/libtulpargame.so" ] &&
+             [ -f "$ASMOKE/tulparsmoke_apk/lib/x86_64/libtulpargame.so" ] &&
+             [ -f "$ASMOKE_MAN" ] &&
+             grep -q 'package="dev.tulparlang.tulparsmoke"' "$ASMOKE_MAN"; then
+            # Paket kimliği ÇIKTI ADINDAN türüyor. Sabit bir varsayılan
+            # (`dev.tulparlang.game`), tulpar.toml yazmayan her oyuna aynı
+            # kimliği verir ve cihazda ikinci oyun birinciyi SİLER — sebebi
+            # hiçbir yerde yazmadan. Denetim bunu her koşumda ölçüyor.
+            echo -e "${GREEN}android derlemesi calisiyor${NC} (iki ABI + manifest + ada gore paket)"
         else
             echo -e "${RED}Android derlemesi basarisiz!${NC}"
             echo "$ASMOKE_OUT" | tail -12

@@ -9,6 +9,32 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Fixed — ANDROID: paket kimliği artık oyun adından türüyor (iki oyun birbirini siliyordu)
+
+`tulpar.toml` yazmayan her oyun `dev.tulparlang.game` paket kimliğini
+alıyordu. Sonuç: cihazda ikinci Tulpar oyununu kurmak **birincisini siliyor**
+— aynı kimlik, Android için aynı uygulama demek — ve bunu söyleyen hiçbir şey
+yok. tulpar.toml ile kimlik zaten sabitlenebiliyordu, ama varsayılan yol
+(hızlı bir `tulpar build --target=android oyun.tpr` çağrısı) sessizce
+çakışıyordu.
+
+Kimlik artık **çıktı adından** türüyor: `dev.tulparlang.<ad>`. Temizleme
+kuralları aapt2'nin kabul ettiği paket parçasını üretiyor ve dördü de gerçek
+derlemeyle sınandı: geçersiz karakterler `_` olur (`my-game v2` →
+`my_game_v2`), rakamla başlayan ada `g` öneki gelir (`3boyut` → `g3boyut`),
+Java anahtar sözcüğü `_` ile biter (`class` → `class_`), her şey elenirse
+`game`'e düşer (`___`). `tulpar.toml`'daki `package` yine her şeyi eziyor —
+ve **yayınlanmış bir oyunda orada sabitlenmeli**, çünkü çıktı adını
+değiştirmek kimliği değiştirir: cihazdaki kurulum güncellenmez, yanına ikinci
+kopya kurulur.
+
+Android derleme denetimi bunu her koşumda ölçüyor (manifest'te
+`package="dev.tulparlang.tulparsmoke"` aranıyor); sabit varsayılana dönen
+bozma denendi ve denetim kızardı. Zincirin tamamı doğrulandı: iki farklı oyun
+farklı kimlik alıyor, toml ezmesi çalışıyor, aapt2 alt çizgili paketi kabul
+ediyor (18 MB imzalı APK üretildi).
+
+
 ### Added — ANDROID DERLEME DENETİMİ: hedefin çalıştığı artık her koşumda ölçülüyor
 
 Bugünkü iki kırık (bayat arşivler, NDK aramasının Android Studio kurulumunu
