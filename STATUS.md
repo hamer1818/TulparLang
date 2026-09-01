@@ -2551,13 +2551,17 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 
 ## 🎯 Olgunluk kriterleri (sürüm bağımsız)
 
-> **Sürümleme notu (2026-06-18):** Proje **v1.0'ın çok ötesinde** — yayınlı
-> son tag **`v3.0.0`** (2026-06-15, AOT-only breaking change). main onun 8
-> commit önünde; sıradaki yayın **`v3.1.0`** (geriye-uyumlu feature'lar +
-> fix'ler, bkz. `CHANGELOG.md`). `CMakeLists.txt` `project(VERSION 3.1.0)`
-> ile hizalandı (önceden 2.1.0'da takılıydı → dev build'ler en son release'in
-> gerisini raporluyordu). Aşağıdaki kriterler "dil olgun mu?" kalıcı
-> gate'leridir, bir sürüm numarasına bağlı değil.
+> **Sürümleme notu (2026-09-01'de tazelendi):** Proje **v1.0'ın çok ötesinde**
+> — yayınlı son tag **`v3.12.0`** (2026-07-23). Sıradaki yayın **`v3.13.0`**:
+> CHANGELOG'u kesildi, `CMakeLists.txt` `project(VERSION 3.13.0)` ile hizalı,
+> `tulpar version` `3.13.0-dev` diyor. **Etiket henüz atılmadı** ve yerel dal
+> `origin/main`'in 161 commit önünde — gönderme kararı bekliyor.
+> Aşağıdaki kriterler "dil olgun mu?" kalıcı gate'leridir, bir sürüm
+> numarasına bağlı değil.
+>
+> ⚠️ **`v3.5.0` / `v3.6.0` / `v3.7.0` CHANGELOG'da var ama ETİKETLERİ YOK** —
+> hiç kesilmemişler (muhtemelen `v3.8.0`'a katlandılar). Karşılaştırma
+> bağlantıları bu yüzden `v3.8.0`'ı doğrudan `v3.4.0`'a bağlıyor.
 
 1. **Sıfır bilinen davranış regresyonu** — CI compile + runtime gate'leri
    yeşil (`./build.sh test` 48/48 örnek + 27 focused suite yeşil).
@@ -2571,10 +2575,16 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 5. **Stable release süreci** — `v*` git tag + binary release artifact'leri;
    `tulpar update` bunu çekiyor (✓ v2.2.0 + v3.0.0 yayınlandı).
 
-**Şu an konumumuz:** v3.0.0 yayınlı, **v3.1.0 yayına hazır**. (1) ve (2)
-karşılandı (tam suite yeşil). (3) altyapı tam, içerik az. (4) reference büyük
-ölçüde hazır, canlı deploy eksik. (5) süreç işliyor — v3.1.0 tag'i atılmayı
-bekliyor.
+**Şu an konumumuz:** v3.12.0 yayınlı, **v3.13.0 kesildi ve etiketlenmeyi
+bekliyor**. (1) ve (2) karşılandı — 59 paket · 52 örnek · 8 denetim yeşil.
+(3) altyapı tam, içerik az. (4) reference büyük ölçüde hazır, canlı deploy
+eksik. (5) süreç işliyor.
+
+**Gönderme önündeki tek engel kod değil, karar:** 161 commit `docs/3d-roadmap`
+dalında duruyor ve dalın adı artık içeriğiyle uyuşmuyor (derleyici
+düzeltmeleri, Android paketleme, denetim altyapısı, ses). Konu başlıklarına
+göre birkaç PR'a bölmek mi, tek sürüm dalı olarak main'e almak mı — bu karar
+verilmeden etiket atılmamalı.
 
 ---
 

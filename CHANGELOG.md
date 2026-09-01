@@ -9,6 +9,187 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+## [v3.13.0] — 2026-09-01
+
+**Tulpar bir oyun motoru ve görsel editör kazandı.** Bu sürüm iki büyük işi
+birden taşıyor: `scene3d` 3B oyun motoru (Faz 6-13) ve onun içinde yaşayan
+**TameEngine** sahne editörü — ikisi de **saf Tulpar**, yani dilin kendisiyle
+yazılmış en büyük program artık dilin kendi deposunda. Yanına arcade'in üçüncü
+mobil dalgası, Android/web hedefleri ve yayınlanan araçların ilk gerçek
+denetimleri geliyor.
+
+### Öne çıkanlar
+
+**3B oyun motoru — `import "scene3d"`**
+- Kamera (yörünge / birinci şahıs / takip), ışıklandırma, gölge haritalama,
+  doku · gökyüzü · materyal.
+- Oynanış, his ve dünya geometrisi: bölüm · düşman AI · mermi · can/hasar ·
+  parçacık · rampa · dönük kutu (SAT) · kapsül sütun · kamera ışını.
+- **Gerçek arazi**: yükseklik haritalı dünya, katman boyama (çim/toprak/kar,
+  eğimde kaya), su yüzeyi ve kaldırma kuvveti, gündüz-gece döngüsü, prosedürel
+  bulut ve yıldızlar.
+- **Menü/UI katmanı**: başlangıç ekranı, duraklat, bölüm seçme, "Devam",
+  ayarlar ekranı ve **ana ses seviyesi**.
+- **A\* yol bulma** — kaçınmanın çözemediği şey; hem koddan hem sahneden
+  erişilebiliyor. Izgara ihtiyaç anında kuruluyor, bölüm değişince geçersiz.
+- **Konumsal ses**: mesafe sönümü + stereo yön (kameranın sağ ekseni hareket
+  girdisiyle aynı ifadeden geliyor), bölge sesi, kural sesi.
+- Tetikleyici bölgeler (kutu/küre, giriş/çıkış/içindeyken, tek atım),
+  kalıcılık (rekor + bölüm ilerlemesi), gamepad, animasyon harmanlaması.
+- **Ses tanısı**: motor çalarken uygulanan seviye/kaydırmayı ve çalma sayısını
+  kaydediyor, `examples/scene3d_ses_testi.tpr` beş ses katmanını ayrı ayrı
+  sürüyor — "ses gelmiyor" artık ayrıştırılabilir bir belirti.
+
+**TameEngine — görsel sahne editörü**
+- Unity/Unreal düzeni: yuvalara takılı, başlıktan sürüklenip taşınan paneller,
+  yerleşim diske kalıcı; menü şeridi, konsol, ölçeklenebilir arayüz.
+- **Tutamaklar**: taşı/ölçek eksen okları + döndürme halkası; bölgelerin de
+  kendi tutamakları var ve varlıkla aynı jestlerden geçiyorlar.
+- Seçim: tek tık · CTRL+tık · tümünü seç · **kutu (marquee) seçimi**; prefab,
+  çoklu seçim, sağ tık bağlam menüsü.
+- **Simetrik geri al ↔ yinele** — yapısal işler (bölüm ekle/sil) dahil.
+- **Sahne denetimi**: "çalışıyor ama yanlış"ı söyleyen kurallar (ölü bölge,
+  etiketsiz bölge, silinmiş kamera hedefi, bayat yol ızgarası...).
+- Dosya: aç / farklı kaydet / geri yükle + **kurtarma dosyası**.
+- Çok bölümlü sahne, oyun şablonları, kural düzenleyici — editörle artık
+  "ekran" değil **oyun** yapılıyor.
+- **Tarayıcıda çalışıyor** (`--target=web`).
+
+**Sahne artık VERİ**
+- JSON sahne biçimi + davranışlar + kurallar; `tulpar` sahneyi **okunabilir
+  Tulpar koduna** çevirebiliyor (`sahne_kod3d`), ve üretilen kodun aynı sahneyi
+  kurduğu her koşumda `diff` ile ölçülüyor.
+
+**Mobil ve web**
+- Android: paket kimliği oyun adından türüyor (iki oyun birbirini siliyordu),
+  NDK araması Android Studio kurulumunu buluyor, derleme yolu artık her
+  koşumda denetleniyor.
+- Web: editör tarayıcıda çalışıyor; kaydın sessizce kaybolduğu hata kapandı.
+- **Arcade üçüncü mobil dalga**: app kabuğu (Ayarlar/Duraklat/dil), juice,
+  üç yeni oyun (launcher'da 13), full-stack Tulpar global skor tablosu,
+  parçacık/sarsıntı efektleri, kalıcı rekorlar, ivmeölçer.
+
+**Araçlar denetim altına alındı**
+Yayınlanan araçların bütün testler yeşilken sessizce çürüdüğü ortaya çıktı ve
+her biri için bir denetim yazıldı (`build.sh suites`):
+- `tulpar fmt` **derlenmeyen kod üretiyordu** (üç ayrı bozulma: `i++` → `i + +`,
+  `=>` → `= >`, blok yorumlarının içi).
+- `tulpar doc` üç stdlib modülünü **hiç belgeleyemiyordu**.
+- `tulpar typecheck` ayrıştırma hatasında **0 dönüyordu** (CI kapısı olarak kör).
+- `wasm/dist` ve `android/dist` arşivleri bayatlayınca web/Android derlemeleri
+  `undefined symbol` ile kırılıyordu — masaüstü yeşilken.
+- Sahne **kod üretimi** bölge ve kural seslerini düşürüyordu; denetim
+  göremiyordu çünkü denetim sahnesinde hiç bölge yoktu.
+- `tulpar build` önbelleği **import edilen modül** değişikliklerini görmüyor,
+  sessizce **bayat ikili** veriyordu.
+- İki eşzamanlı `tulpar` sabit bir geçici yolu paylaşıyor, birbirinin ikilisini
+  çalıştırabiliyordu.
+- Ayrıca: LSP duman testi, paket yöneticisi denetimi, builtin tutarlılığı.
+
+**Derleyici ve çalışma zamanı düzeltmeleri**
+- Fonksiyon yereli aynı adlı **global'i eziyordu** (AOT codegen).
+- Kapsam değişken tablosu **sessizce taşıyordu**; AOT fonksiyon tablosu 1024'te
+  doluyordu.
+- `typecheck` artık `import`'u takip ediyor — `lib/test.tpr`'deki `assert`'in
+  **hiçbir zaman başarısız olmamasının** kök nedeni buydu.
+- `%` operatörü, `chr()`, `float[] x = []` sözdizimi, `args()`.
+- Çarpışmaya geniş faz: 200 varlıkta **15.4 ms → 1.12 ms**.
+
+### ⚠️ Kırılma
+
+- **Natif Windows desteği bırakıldı.** Windows'ta geliştirme artık **WSL**
+  üzerinden, Linux yolunun aynısıyla — web ve Android hedefleri dahil her şey
+  orada çalışıyor. `build.bat` / `build.ps1` / `run_tests.ps1` / Inno Setup
+  installer ve `build-windows` CI işi kaldırıldı. Shim'lerdeki
+  `PLATFORM_WINDOWS` dalları bilerek duruyor ama **bakımsız ve sınanmamış**.
+
+  *Sürüm notu:* semver'e göre bir platformun düşürülmesi tartışmalı bir MINOR;
+  dil/stdlib/ABI kırılması olmadığı için (Windows'ta derlenen kod aynı kod)
+  MINOR olarak kesildi ve burada açıkça işaretlendi.
+
+### Kapılar
+
+59 test paketi · 52 örnek · 8 denetim — hepsi yeşil. `scene3d` motorunun
+**653 testi pencere açmadan** koşuyor. Belgelerde geçen 197 API adının hepsi
+motora karşı doğrulandı.
+
+
+### Added — SES TANISI: "ses gelmiyor" artık ayrıştırılabilir bir belirti
+
+"Oyundan ses gelmiyor" tek bir arıza değil, **en az beş** ayrı arızanın aynı
+görünen belirtisi: ses aygıtı açılmadı · dosya bulunamadı · olay hiç olmadı ·
+olay oldu ama ses çağrılmadı · ses çağrıldı ama seviye 0'dı. Bir tur boyunca
+bütün penceresiz sondalar yeşildi — **ve hepsi doğruydu**; sondalar mekanizmayı
+ölçüyordu, belirtinin sebebi mekanizmada değildi.
+
+- Motor artık çalarken **UYGULANAN** değerleri kaydediyor: `ses_son_seviye3d()`,
+  `ses_son_kaydirma3d()`, `ses_calma_sayisi3d()`. Üçü de "çalmadan ayrı"
+  hesaplanıyor, yani ses aygıtı olmadan da sınanabiliyorlar.
+- **`examples/scene3d_ses_testi.tpr`** (+ İngilizce ikizi): beş istasyon, beşi
+  farklı ses, her katman ayrı — elle yükleme + konumsal · varlık kaydı +
+  konumsal · bölgenin kendi sesi (kutu) · bölgenin kendi sesi (küre) ·
+  konum**suz** düz çalma. `1..5` tuşları aynı sesleri bölgeye hiç girmeden
+  çalıyor. 3 ve 4'te `calma=` sütunu bir kare gecikmeli ölçülüyor: motorun sesi
+  gerçekten çağırıp çağırmadığı ayrı okunuyor. Hiçbir bölge tek atım değil ve
+  her çalışta ekrana bildirim düşüyor.
+- **Sonuç: beş katman da çalışıyordu.** Arena'da duyulmayan şey bozuk değildi —
+  sesler kısa (`ates.wav` 0.14 sn, `altin.wav` 0.24 sn), zehir havuzu sesini
+  yalnız giriş kenarında ve hasar parçacıklarının altında, bonus pedi ise tek
+  atım olduğu için oturum başına bir kez çalıyor. Arıza değil, **ölçüm
+  penceresi**. Ders: bir geri bildirimi doğrulatacaksan önce **tekrarlanabilir
+  ve görülebilir** yap.
+- Yeni testler: çalan sesin uygulanan seviyeyi/kaydırmayı kaydettiği, sayacın
+  çalmadan artmadığı, ve **bölge sesinin gerçekten `sound3d`'yi çağırdığı**
+  (kayda geçerli tutamak yazılarak penceresiz sınanabilir hâle geldi) —
+  karşıtıyla birlikte: geçersiz tutamakta çalma atlanıyor ama konum yine
+  hesaplanıyor.
+
+### Fixed — KOD ÜRETİMİ bölge ve kural SESLERİNİ düşürüyordu
+
+Aynı sahne üç biçimde yaşıyor — kaydet (JSON), yükle (JSON→sahne) ve **kod üret**
+(JSON→`.tpr`) — ve üçünün alan listesi elle eşlenmiş. `scene_code3d()` bölgenin
+**eylemini/miktarını ve sesini**, kuralın da **sesini** hiç yazmıyordu: JSON'da
+var, üretilen kodda yok. Kaydet↔yükle gidiş-dönüşü yeşil olduğu için görünmedi;
+kaybeden yalnız "koda dök" yolundan geçen kullanıcıydı.
+
+Denklik denetimi vardı ama **göremiyordu**: denetim sahnesinde (`toplayici`)
+hiç bölge yok, yani bölge kod üretiminin tamamı denetimsizdi.
+
+- Emitter tamamlandı (`bolge_eylem3d` / `bolge_ses3d` / `kural_sesi3d`), bölge
+  eylemleri için ayrı bir `_sc_zact_code3` çeviricisi eklendi — `ZACT_*` ile
+  `ACT_*` ayrı sayı uzayları ve karıştırmak sessizce yanlış eylem yazardı.
+- Denetim artık **iki sahne** koşuyor: demo + kapsamı kasten dolduran
+  `tests/kod_uretimi_tam.scene.json` (kutu+küre bölge, eylem+miktar+ses, tek
+  atım, kapalı bölge, sesli/sessiz kural). Üç bozmanın **ikisini yalnız yeni
+  sahne** yakalıyor.
+
+### Fixed — `tulpar build` BAYAT ikili veriyordu (import edilen modül değişince)
+
+Önbellek yalnız **ana kaynağın** ve sürücü ikilisinin mtime'ına bakıyordu.
+`import "lib/scene3d"` gibi **yerel** bir modülü düzeltip yeniden derlemek
+`[AOT] Cache hit` alıyor ve **sessizce eski ikiliyi** bırakıyordu — belirti çok
+yanıltıcı: *düzeltmen işe yaramamış görünüyor* ve yanlış yerde hata arıyorsun.
+Bu, tam da bu turdaki kod üretimi iğnelemesini bozdu: üç bozmanın ikisi hiç
+derlenmediği hâlde "yakalandı" göründü ve düzeltilmiş hâl bile kırmızı çıktı.
+
+`newest_local_import_mtime()` (`src/main.cpp`) eklendi: kaynaktaki
+`import "ad"` bildirimleri arka uçla **aynı sırayla** çözülüp (düz ad,
+`ad.tpr`, `tulpar_modules/<ad>/<ad>.tpr`, `tulpar_modules/<ad>.tpr`)
+özyinelemeli taranıyor. Gömülü stdlib adları diskte çözülmediği için sürücünün
+mtime'ının kapsamında kalıyor. İki yönlü doğrulandı: modül değişince yeniden
+derliyor, hiçbir şey değişmeyince hâlâ önbellekten dönüyor.
+
+### Fixed — iki eşzamanlı `tulpar` birbirinin ikilisini çalıştırıyordu
+
+`aot_compile_and_run_silent` derlediği programı **sabit** `/tmp/.tulpar_run`
+yoluna yazıp çalıştırıp siliyordu. İki `tulpar` aynı anda koşunca biri
+ötekinin ikilisini eziyor ve siliyor. Belirtinin iki yüzü var, ikincisi çok
+daha kötü: (a) paket boş çıktıyla **FAIL** görünüyor (tek başına koşturunca
+yeşil), (b) **sessizce yanlış program koşuyor** — enjeksiyonla ölçüldü: iki
+farklı kaynak, iki süreç, **ikisi de aynı çıktıyı** bastı. Yani paket koşucusu
+bir paketin yerine başka bir paketin sonucunu raporlayabilirdi. Yol artık
+sürece özgü (`/tmp/.tulpar_run.<pid>`).
+
 ### Added — "testi var ama örneği yok" taraması: üç özellik daha gösteriliyor
 
 Konumsal sesin başına gelen şey (yazılmış, testli, hiçbir örnekte yok) bir
@@ -3909,7 +4090,7 @@ Backwards-compatible feature on top of v3.3.0. No breaking changes.
   other security-sensitive randomness. Wired through runtime, AOT codegen,
   typeinfer and the LSP builtin table.
 
-## [Unreleased] — v3.3.0 (candidate)
+## [v3.3.0]
 
 Backwards-compatible features on top of v3.2.1. No breaking changes.
 
@@ -4003,6 +4184,15 @@ Backwards-compatible features on top of v3.2.1. No breaking changes.
   coercion at typed local var declarations; wired 8 utility builtins (arena,
   cpu/time, input, `string_pin`).
 
-[Unreleased]: https://github.com/hamer1818/TulparLang/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/hamer1818/TulparLang/compare/v3.13.0...HEAD
+[v3.13.0]: https://github.com/hamer1818/TulparLang/compare/v3.12.0...v3.13.0
+[v3.12.0]: https://github.com/hamer1818/TulparLang/compare/v3.11.0...v3.12.0
+[v3.11.0]: https://github.com/hamer1818/TulparLang/compare/v3.10.0...v3.11.0
+[v3.10.0]: https://github.com/hamer1818/TulparLang/compare/v3.9.0...v3.10.0
+[v3.9.0]: https://github.com/hamer1818/TulparLang/compare/v3.8.1...v3.9.0
+[v3.8.1]: https://github.com/hamer1818/TulparLang/compare/v3.8.0...v3.8.1
+[v3.8.0]: https://github.com/hamer1818/TulparLang/compare/v3.4.0...v3.8.0
+[v3.4.0]: https://github.com/hamer1818/TulparLang/compare/v3.3.0...v3.4.0
+[v3.3.0]: https://github.com/hamer1818/TulparLang/compare/v3.0.0...v3.3.0
 [3.0.0]: https://github.com/hamer1818/TulparLang/compare/v2.2.0...v3.0.0
 [2.2.0]: https://github.com/hamer1818/TulparLang/releases/tag/v2.2.0
