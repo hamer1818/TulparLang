@@ -10098,6 +10098,12 @@ func t_zone_sound_actually_calls_play() {
     assert_eq_int(ses_calma_sayisi3d(), n0 + 1);
     // Dinleyici sesin uzerinde: tam seviye. 0 gelseydi "caldi ama duyulmaz".
     assert(abs_f3(ses_son_seviye3d() - 1.0) < 0.001, "girilen bolgede tam seviye");
+    // KAYDI GERI AL. Varlik kaydi kuresel ve `scene3d_reset` onu temizlemiyor;
+    // burada birakilan sahte GECERLI tutamak, sonraki testlerde "ses aygiti
+    // calisiyor" anlamina geliyordu (`_chk_kind_ok3`) ve sahne denetimi
+    // testlerini SESSIZ AYGITLI makinede dusuruyordu. Olculdu: CI'da iki test
+    // tam bu artik yuzunden kirmiziydi.
+    _as_h3[k] = 0 - 1;
 }
 
 // Tutamak GECERSIZ kalirsa calma HIC olmuyor — ustteki testin karsiti.
@@ -13392,6 +13398,25 @@ func t_template_sounds_survive_roundtrip() {
 
 // Kopan ses bağı SESSİZ: eksik model boş bir yer bırakır, eksik ses hiçbir
 // iz bırakmaz. Denetim onu söylemeli.
+// Varlik uyarisinin KARARI: "dosya yok" ile "yuklenemedi" ayri seyler.
+// Ses aygiti (ya da GL baglami) yoksa o turden HER yukleme -1 doner ve
+// dosyalarin hepsi saglam oldugu halde sahne suclanirdi. Olculdu: CI'da
+// (ses aygiti yok) sahne denetiminin iki testi tam bu yuzden kirmiziydi,
+// yereldeki yesilligin tek sebebi gelistiricinin makinesinde ses karti
+// olmasiydi. Karar saf bir fonksiyona alindi ki kuresel varlik kaydina
+// dokunmadan surulebilsin — kaydi testte bozmak siradaki testi etkiliyor.
+func t_check_asset_warn_decision() {
+    // Tur CALISMIYORSA yalniz "dosyasi yok" olanlar suclaniyor.
+    assert_eq_int(_chk_asset_warn_n3(0, 2, false), 0);
+    assert_eq_int(_chk_asset_warn_n3(1, 2, false), 1);
+    // Tur CALISIYORSA yuklenemeyenler de gercek bir kusur.
+    assert_eq_int(_chk_asset_warn_n3(0, 2, true), 2);
+    assert_eq_int(_chk_asset_warn_n3(1, 2, true), 3);
+    // Hicbir sey yoksa uyari da yok.
+    assert_eq_int(_chk_asset_warn_n3(0, 0, true), 0);
+    assert_eq_int(_chk_asset_warn_n3(0, 0, false), 0);
+}
+
 func t_check_flags_missing_sound_file() {
     scene3d_reset(); ground3d(0.0);
     uret3(0.0, 1.0, 0.0, 1.0, 2.0, 1.0, BLUE, SHAPE_CUBE, TAG_PLAYER);
@@ -14014,6 +14039,7 @@ test("ses konumu oteki-sonra-ben sirasi", "t_sound_slot_prefers_other_then_me");
 test("ses de varlik kaydindan geciyor", "t_sound_uses_asset_registry");
 test("sablonlarin sesi var ve dosyalar depoda", "t_templates_have_sounds");
 test("sablon sesleri gidis-donusten sag cikiyor", "t_template_sounds_survive_roundtrip");
+test("varlik uyarisi karari", "t_check_asset_warn_decision");
 test("denetim eksik ses dosyasini soyluyor", "t_check_flags_missing_sound_file");
 test("kati olmayan cisim platformda duruyor", "t_nonsolid_rests_on_platform");
 test("yandan gelen cisim tirmanmiyor", "t_side_approach_does_not_teleport_up");

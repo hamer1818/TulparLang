@@ -16,6 +16,17 @@ tags: [moc, testing]
 Dört süit tam bu durumdaydı ve **hiçbir otomasyonda koşmuyorlardı**; `assert`'in
 sessiz no-op olarak aylarca yaşaması bu körlükten.
 
+> ⚠️ **Yerelde yeşil, CI'da kırmızı olabilir — donanım farkından.** CI'da
+> **ses aygıtı yok** (ve pencere de yok). Ses/GL yüklemesine dolaylı olarak
+> bakan her test bu yüzden makineye bağlı hâle gelebiliyor; bir kez oldu ve
+> bir sürüm PR'ını kırdı. Sürüm öncesi **sessiz makineyi taklit ederek** de
+> koş:
+> ```bash
+> env -u XDG_RUNTIME_DIR PULSE_SERVER=/nonexistent \
+>     ALSA_CONFIG_PATH=/nonexistent HOME=/nonexistent ./build.sh suites
+> ```
+> → [[Tuzaklar]] §3c
+
 **Denetimler** paket döngüsünden SONRA koşuyor: builtin · kama mesh · dist arşiv ·
 LSP · fmt · doc · pkg · Android derleme dumanı · ayrılmış kelime ve parametre adı
 tanılamaları · `packages/wings_jwt` · **kod üretimi denkliği** (iki sahne).
@@ -111,7 +122,7 @@ sed 's|import "scene3d"|import "lib/scene3d"|; s|import "test"|import "lib/test"
 ./tulpar /tmp/probe/eng.test.tpr | grep -E '^  FAIL|^Tests:'
 cp /tmp/probe/scene3d.bak lib/scene3d.tpr          # GERİ AL, sonra diff -q ile doğrula
 ```
-653 testin tamamı ~55 sn — derleyiciyi yeniden derlemeye (~dakikalar) gerek yok.
+654 testin tamamı ~55 sn — derleyiciyi yeniden derlemeye (~dakikalar) gerek yok.
 Bozmaları **ifade düzeyinde** yap (`if (cond)` → `if (false)`), satır silerek
 blok yapısını bozma. C tarafı (`runtime/`) bozmaları gerçek `./build.sh` ister.
 
@@ -120,7 +131,7 @@ blok yapısını bozma. C tarafı (`runtime/`) bozmaları gerçek `./build.sh` i
 Android doğrulaması `adb screencap` ile (yerel pencere yok). Görsel/oynanış testini
 **kullanıcı yapar** — Claude derler, paketler, kurar ve durur.
 
-Bu kısıt motorun tasarımını belirledi: [[Scene3D]]'in **653 testi** pencere açmadan koşuyor
+Bu kısıt motorun tasarımını belirledi: [[Scene3D]]'in **654 testi** pencere açmadan koşuyor
 çünkü cihaz okuması tek yere hapsedilmiş ve karar mantığı saf fonksiyonlara ayrılmış.
 
 ## Metin genişliği penceresiz ÖLÇÜLEMEZ

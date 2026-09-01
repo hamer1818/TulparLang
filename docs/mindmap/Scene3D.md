@@ -250,7 +250,7 @@ izgara bayat kalir"*. Uyarı yalnız DUVAR hareketliyse çıkıyor; devriye geze
 düşman ızgarayı bozmuyor ve ona uyarmak uyarıyı gürültüye çevirirdi.
 
 ## Test edilebilirlik — motorun tasarımını belirleyen kısıt
-`tests/scene3d_engine.test.tpr` **653 test**, hepsi **pencere açmadan** koşuyor.
+`tests/scene3d_engine.test.tpr` **654 test**, hepsi **pencere açmadan** koşuyor.
 Bunu mümkün kılan iki desen:
 - **Cihaz okuması tek yere hapsedilir** (`_read_touch3`, `_read_gamepad3`) —
   motorun geri kalanı yalnız tamponu okur.

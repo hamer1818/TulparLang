@@ -114,6 +114,42 @@ her biri için bir denetim yazıldı (`build.sh suites`):
 motora karşı doğrulandı.
 
 
+### Fixed — SAHNE DENETİMİ ses aygıtı olmayan makinede sahneyi haksız suçluyordu
+
+Ses aygıtı yoksa (başsız CI, sessiz sunucu) **her** ses yüklemesi -1 döner.
+Denetim bunu "ses dosyasi yuklenemedi" diye okuyordu — oysa dosyalar sağlam,
+aygıt yoktu. Yani denetimin kendisi, bu sürümde belgelenen hatayı yapıyordu:
+sessizliğin tek sebebi olduğunu varsaymak. Aynı kusur model denetiminde de
+vardı (GL bağlamı yoksa her model -1 döner), tetiklenmemişti.
+
+Sayım ikiye ayrıldı: **dosya diskte yok** = aygıttan bağımsız kesin kusur, her
+zaman söyleniyor; **dosya var ama yüklenemedi** = ancak o türden en az bir şey
+yüklenebiliyorsa (`_chk_kind_ok3`) söyleniyor. Karar saf bir fonksiyona alındı
+(`_chk_asset_warn_n3`) ki küresel varlık kaydına dokunmadan sınanabilsin —
+böylece regresyon testi **ses kartı olan makinede de** kırmızıya dönüyor.
+
+Bilinçli kayıp: tek varlığı olan ve o varlığı bozuk olan sahne sessiz kalıyor
+(o durumda iki sebep ayırt edilemiyor). Yanlış uyarı, uyarıyı görmezden gelmeyi
+öğretir.
+
+**Nasıl bulundu:** yerelde 654 testin hepsi yeşilken CI'da ikisi kırmızıydı ve
+tek fark donanımdı. İki yan bulgu daha çıktı: (1) bir testin kayda yazdığı
+sahte tutamak geri alınmıyor, sonraki testleri etkiliyordu — `scene3d_reset()`
+varlık kaydını temizlemiyor, kaydı bozan test onu kendi geri almalı; (2) karar
+fonksiyonunun `bool` parametresi TİPSİZDİ ve `== false` karşılaştırması farklı
+tip etiketleri yüzünden sabit `false` oluyordu, yani fonksiyon her koşulda aynı
+şeyi dönüyordu.
+
+### Fixed — başarısız pakette HANGİ testin düştüğü çıktıda görünmüyordu
+
+`build.sh suites` başarısız pakette `grep -E 'FAIL|hata|error' | head -8`
+basıyordu. Bir kütüphane stderr'e gürültü döktüğünde (ALSA'nın "ses aygıtı
+yok" satırları) o gürültü `error` ile eşleşip **gerçek FAIL satırlarını dışarı
+itiyordu** — CI kırmızı dönüyor ama hangi testin düştüğü hiç görünmüyordu.
+`head`'in erken çıkması ayrıca grep'e SIGPIPE attırıp çıktıya "write error:
+Broken pipe" satırları ekliyordu. Artık önce `FAIL` satırları basılıyor (awk
+ile, SIGPIPE'sız); genel gürültü yalnız hiç FAIL satırı yoksa yedek olarak.
+
 ### Added — SES TANISI: "ses gelmiyor" artık ayrıştırılabilir bir belirti
 
 "Oyundan ses gelmiyor" tek bir arıza değil, **en az beş** ayrı arızanın aynı

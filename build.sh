@@ -158,7 +158,22 @@ if [ "$ACTION" = "suites" ]; then
         summary=$(echo "$out" | grep -E '^Tests:' | tail -1)
         if [ $code -ne 0 ]; then
             printf "%-42s ${RED}FAIL${NC} %s\n" "$name" "$summary"
-            echo "$out" | grep -E 'FAIL|hata|error' | head -8 | sed 's/^/    /'
+            # ONCE gercek test satirlari. Eski hali `grep -E 'FAIL|hata|error'`
+            # idi ve ilk 8 satiri aliyordu: bir kutuphane stderr'e gurultu
+            # basinca (ALSA "ses aygiti yok" satirlari gibi) o gurultu 'error'
+            # ile eslesip FAIL satirlarini DISARI itiyordu. Olculdu
+            # (2026-09-01): CI kirmizi dondu ama HANGI testin dustugu ciktida
+            # hic gorunmedi — bir tur bosa gitti. Genel gurultu artik yalniz
+            # FAIL satiri HIC yoksa (paket cokmusse) yedek olarak basiliyor.
+            #
+            # `head` yerine `awk`: `head` erken cikinca yukaridaki grep SIGPIPE
+            # aliyor ve ciktiya "write error: Broken pipe" satirlari dusuyordu.
+            fails=$(echo "$out" | grep -E '^[[:space:]]*FAIL' | awk 'NR<=10')
+            if [ -n "$fails" ]; then
+                echo "$fails" | sed 's/^/    /'
+            else
+                echo "$out" | grep -E 'hata|error|Error' | awk 'NR<=8' | sed 's/^/    /'
+            fi
             SUITE_FAILED=1
         elif [ -z "$summary" ]; then
             printf "%-42s ${RED}FAIL${NC} (test_summary() cagirmiyor — cikis kodu uretmiyor)\n" "$name"

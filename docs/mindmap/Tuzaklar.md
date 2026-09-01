@@ -161,6 +161,16 @@ stdlib adları diskte çözülmez — onları sürücünün mtime'ı kapsıyor.
 **Kural:** iğneleme koşarken çıktı ikilisini SİL (`rm -f`), önbelleğe güvenme;
 ve iğnelemenin gerçekten derlendiğini bir kez gözle doğrula.
 
+**Beşinci yalan biçimi: gürültü tanıyı DIŞARI itiyor.** `build.sh suites`
+başarısız pakette `grep -E 'FAIL|hata|error' | head -8` basıyordu. Bir
+kütüphane stderr'e gürültü döktüğünde (ALSA'nın "ses aygıtı yok" satırları)
+o gürültü `error` ile eşleşip **gerçek FAIL satırlarını dışarı itiyordu** —
+CI kırmızı dönüyor ama HANGİ testin düştüğü çıktıda hiç görünmüyor. Ölçüldü
+(2026-09-01): bir sürüm turu tam bu yüzden boşa gitti. `head`'in erken çıkması
+ayrıca yukarıdaki grep'e SIGPIPE attırıp çıktıya "write error: Broken pipe"
+satırları da ekliyordu. **Düzeltildi:** önce `^\s*FAIL` satırları (awk ile,
+SIGPIPE'sız), genel gürültü yalnız FAIL satırı HİÇ yoksa yedek olarak.
+
 ## 3. Penceresiz ölçüm boşa çıkıyor
 `text_width()` / `font_width()` **pencere yokken 0 döner** → her yerleşim
 karşılaştırması `0 <= sınır` olur ve **her metin "sığıyor" görünür**.
@@ -214,6 +224,41 @@ DEĞİL (çıkıp gir, istediğin kadar) ve her çalışta ekrana bir bildirim d
 böylece duyduğunla gördüğün eşleşiyor. Bir geri bildirimi doğrulatacaksan onu
 önce **tekrarlanabilir** ve **görülebilir** yap; yoksa kullanıcıdan gelen
 "duymadım" cevabı hiçbir şeyi elemez.
+
+## 3c. Geliştiricinin makinesinde OLAN şey, testi yeşil tutuyor
+CI kırmızı, yerel yeşil — ve sebep koddaki bir fark değil, **donanım farkı**.
+Yaşandı (2026-09-01, v3.13.0 sürüm PR'ı): `scene3d_engine` CI'da 654 testin
+2'sini düşürdü, yerelde hepsi geçiyordu. Sebep: **CI'da ses aygıtı yok.**
+
+Sahne denetimi "ses dosyası yüklenemedi" diye uyarıyordu; oysa dosyalar
+sağlamdı, aygıt yoktu. Yani **denetimin kendisi 3b'deki hatayı yapıyordu**:
+sessizliğin tek sebebi olduğunu varsaymak. Aynı kusur model denetiminde de
+vardı (GL bağlamı yoksa her model -1 döner) ama tetiklenmemişti.
+
+**Çare üç parçalı:**
+1. Ayrım: *dosya diskte yok* (kesin kusur, aygıttan bağımsız, her zaman söyle)
+   ile *dosya var ama yüklenemedi* (ancak o türden bir şey yüklenebiliyorsa
+   söyle — `_chk_kind_ok3`).
+2. Kararı SAF bir fonksiyona al (`_chk_asset_warn_n3`) ki küresel varlık
+   kaydına dokunmadan sınanabilsin. Böylece regresyon testi **ses kartı olan
+   makinede de** kırmızıya dönüyor — makineden bağımsız hâle geldi.
+3. Sessiz makineyi taklit et ve iki koşumda da koş:
+   ```bash
+   env -u XDG_RUNTIME_DIR PULSE_SERVER=/nonexistent \
+       ALSA_CONFIG_PATH=/nonexistent HOME=/nonexistent ./build.sh suites
+   ```
+
+### 3c-1. İki yan bulgu, ikisi de bu turu pahalılaştırdı
+- **Testin kendi artığı.** `t_zone_sound_actually_calls_play` kayda sahte
+  GEÇERLİ bir tutamak yazıp geri almıyordu; sonraki testler "ses aygıtı
+  çalışıyor" sanıyordu. `scene3d_reset()` varlık kaydını temizlemiyor —
+  kaydı bozan test onu **kendi geri almalı**. (Bkz. 1e, 1j.)
+- **`bool` tipsiz parametreden geçince tag'ini kaybediyor.** `_chk_asset_warn_n3`
+  ilk yazımda `if (tur_calisiyor == false)` diyordu ve parametre tipsizdi:
+  farklı tipler arası `==` sabit `false` olduğu için fonksiyon HER koşulda
+  `yok + bozuk` dönüyordu. Yerelde görünmedi çünkü ses aygıtı olan makinede
+  `bozuk` zaten 0. **Parametreyi tiple** (`bool tur_calisiyor`) ve `== false`
+  yerine `if (!x)` yaz.
 
 ## 4. Grafik/pencere kuralı
 **Asla raylib penceresi açma.** Pencere açan komutlar `DISPLAY=` altında
