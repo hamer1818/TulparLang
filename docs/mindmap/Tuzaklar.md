@@ -130,6 +130,37 @@ oysa hepsi yakalanmıştı. Kural: eşleşmeyi `test("<etiket>", "<ad>")`
 kayıtlarından KUR, iki adı elle eşleştirme. Beklentiyle çelişen bir "kaçtı"
 raporunda önce harness'ın kendisinden şüphelen: kırmızı listesine BAK.
 
+**Üçüncü yalan biçimi: iki `tulpar` aynı geçici yolu paylaşıyordu.**
+`aot_compile_and_run_silent` derlediği ikiliyi **sabit** `/tmp/.tulpar_run`
+yoluna yazıp çalıştırıp siliyordu. İki `tulpar` aynı anda koşunca biri
+ötekinin ikilisini eziyor ve siliyor. Belirtinin iki yüzü var ve ikincisi
+çok daha kötü:
+
+- `/tmp/.tulpar_run: Böyle bir dosya yok` → paket boş çıktıyla **FAIL**
+  görünüyor (tek başına koşturunca yeşil).
+- **Sessizce YANLIŞ program koşuyor:** enjeksiyonla ölçüldü (2026-09-01) —
+  iki farklı kaynak, iki süreç, **ikisi de aynı çıktıyı** bastı. Yani paket
+  koşucusu bir paketin yerine BAŞKA bir paketin sonucunu raporlayabilir.
+
+**Düzeltildi:** yol artık sürece özgü (`/tmp/.tulpar_run.<pid>`). Ders:
+"testte regresyon" görünen bir FAIL'i düzeltmeye başlamadan önce paketi
+**tek başına** koştur; eşzamanlı bir şey varsa şüpheyi önce ORAYA yönelt.
+
+**Dördüncü yalan biçimi: `tulpar build` BAYAT ikili veriyordu.** Önbellek
+yalnız ana kaynağı ve sürücüyü karşılaştırıyordu; `import` edilen YEREL bir
+modülü (`import "lib/scene3d"`, `import "utils"`, `tulpar_modules/...`)
+düzeltip yeniden derlemek `[AOT] Cache hit` alıp eski ikiliyi bırakıyordu.
+Belirti son derece yanıltıcı: **düzeltmen "işe yaramamış" görünüyor.**
+Ölçüldü (2026-09-01): kod üretimi iğnelemesinde üç ayrı bozma da aynı bayat
+ikiliyi koşturdu; ikisi hiç ölçülmediği hâlde "yakalandı" gibi göründü ve
+düzeltilmiş hâl bile kırmızı çıktı.
+
+**Düzeltildi:** önbellek artık import edilen yerel dosyaların (özyinelemeli)
+mtime'ını da okuyor (`newest_local_import_mtime`, `src/main.cpp`). Gömülü
+stdlib adları diskte çözülmez — onları sürücünün mtime'ı kapsıyor.
+**Kural:** iğneleme koşarken çıktı ikilisini SİL (`rm -f`), önbelleğe güvenme;
+ve iğnelemenin gerçekten derlendiğini bir kez gözle doğrula.
+
 ## 3. Penceresiz ölçüm boşa çıkıyor
 `text_width()` / `font_width()` **pencere yokken 0 döner** → her yerleşim
 karşılaştırması `0 <= sınır` olur ve **her metin "sığıyor" görünür**.
@@ -142,6 +173,38 @@ her seferinde eski taşmalar çıktı ("tek atim: yok" 13/11, kural özeti
 
 Gerçek ölçüm gerekiyorsa: web hedefi + başsız Chrome (CDP). Bu makinede
 Chrome/Chromium ve Xvfb **YOK**.
+
+## 3b. "Ses gelmiyor" TEK bir arıza değil
+Aynı sessizlik en az **beş** ayrı sebepten geliyor ve hepsi kulakta aynı:
+
+| sebep | gösterge |
+|---|---|
+| ses aygıtı hiç açılmadı | handle `-1` (stderr'de `[tame] Ses aygiti acilamadi`) |
+| dosya bulunamadı | handle `-1`, aygıt açık |
+| olay hiç olmadı (bölgeye girilmedi) | giriş sayacı 0 |
+| olay oldu ama ses ÇAĞRILMADI | giriş artıyor, `ses_calma_sayisi3d()` artmıyor |
+| ses çağrıldı ama SEVİYE 0'dı | çalma artıyor, `ses_son_seviye3d()` = 0 |
+
+Bunları ayırmadan hata aramak, penceresiz sondaların hepsinin yeşil olduğu
+(ve gerçekten de doğru olduğu) bir turda saatler yakıyor — **yaşandı**
+(2026-09-01, arena bölge sesleri). Motor bu yüzden çalarken UYGULANAN
+değerleri kaydediyor: `ses_son_seviye3d()`, `ses_son_kaydirma3d()`,
+`ses_calma_sayisi3d()`.
+
+**Araç:** `examples/scene3d_ses_testi.tpr` — beş istasyon, beşi FARKLI ses,
+her katman ayrı: elle yükleme+konumsal · varlık kaydı+konumsal · bölgenin
+kendi sesi (kutu) · bölgenin kendi sesi (küre) · konumSUZ düz çalma.
+1..5 tuşları aynı sesleri bölgeye hiç girmeden çalıyor. Belirti → katman
+eşlemesi doğrudan okunuyor.
+
+### 3b-1. Altıncı sebep: ses ÇALDI ama duyulacak kadar sürmedi
+Ölçüldü (2026-09-01): `ates.wav` **0.14 s**, `altin.wav` 0.24 s. Arena'nın
+zehir havuzu sesini yalnız GİRİŞ kenarında, hasar parçacıklarının altında,
+bir kez çalıyor; bonus pedi `bolge_bir_kere3d` olduğu için oturum başına
+**bir kez** çalıyor. "Bayağı gezdim, hiç ses yok" raporunun en olası
+açıklaması buydu — arıza değil, **ölçüm penceresi**. Tanı sahnesindeki
+bölgeler bu yüzden tek-atım DEĞİL ve her çalışta ekrana bir bildirim düşüyor:
+duyduğunla gördüğün eşleşiyor.
 
 ## 4. Grafik/pencere kuralı
 **Asla raylib penceresi açma.** Pencere açan komutlar `DISPLAY=` altında

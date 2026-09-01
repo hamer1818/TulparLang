@@ -378,33 +378,43 @@ if [ "$ACTION" = "suites" ]; then
     # derlenip çalıştırılıyor ve kurduğu sahne yeniden serileştirilerek
     # kaynakla karşılaştırılıyor. "Kod da aynı sahneyi kuruyor" iddiasını
     # ölçen tek şey bu — üretilen metni gözle okumak yetmez.
-    CODEGEN_SCENE="examples/scenes/toplayici.scene.json"
-    if [ -f "$CODEGEN_SCENE" ] && [ -f "examples/scene3d_export.tpr" ]; then
+    # İKİ sahne üzerinden koşuyor. `toplayici` gerçek bir demo (davranışlar,
+    # iki bölüm, isimli hedef); `kod_uretimi_tam` ise KASITLI olarak kapsamı
+    # doldurmak için üretildi — bölge kutu+küre, eylem+miktar+ses, tek atım ve
+    # kapalı bölge, sesli/sessiz kural. Gerek vardı: demo sahnesinde HİÇ bölge
+    # yok, o yüzden bölge kod üretimi denetimsizdi ve `bolge_eylem3d`/
+    # `bolge_ses3d`'nin hiç yazılmadığı (JSON'da var, üretilen kodda yok)
+    # sessizce aylarca durabilirdi. Yeni bir alan ekleyen, düzeneği de büyütsün.
+    CODEGEN_SCENES="examples/scenes/toplayici.scene.json tests/kod_uretimi_tam.scene.json"
+    if [ -f "examples/scene3d_export.tpr" ]; then
         echo ""
-        CG_TMP=$(mktemp -d)
-        if ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" 2>/dev/null > "$CG_TMP/kur.tpr" \
-           && ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" --dogrula 2>/dev/null > "$CG_TMP/src.json"; then
-            {
-                echo 'import "scene3d";'
-                cat "$CG_TMP/kur.tpr"
-                echo 'kur();'
-                echo 'print(sahne_json3d());'
-            } > "$CG_TMP/verify.tpr"
-            if ./tulpar "$CG_TMP/verify.tpr" 2>/dev/null > "$CG_TMP/gen.json" \
-               && diff -q "$CG_TMP/src.json" "$CG_TMP/gen.json" >/dev/null; then
-                echo -e "${GREEN}kod uretimi denk${NC} (uretilen .tpr ayni sahneyi kuruyor)"
+        for CODEGEN_SCENE in $CODEGEN_SCENES; do
+            [ -f "$CODEGEN_SCENE" ] || continue
+            CG_TMP=$(mktemp -d)
+            if ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" 2>/dev/null > "$CG_TMP/kur.tpr" \
+               && ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" --dogrula 2>/dev/null > "$CG_TMP/src.json"; then
+                {
+                    echo 'import "scene3d";'
+                    cat "$CG_TMP/kur.tpr"
+                    echo 'kur();'
+                    echo 'print(sahne_json3d());'
+                } > "$CG_TMP/verify.tpr"
+                if ./tulpar "$CG_TMP/verify.tpr" 2>/dev/null > "$CG_TMP/gen.json" \
+                   && diff -q "$CG_TMP/src.json" "$CG_TMP/gen.json" >/dev/null; then
+                    echo -e "${GREEN}kod uretimi denk${NC} ($CODEGEN_SCENE)"
+                else
+                    echo -e "${RED}Kod uretimi DENK DEGIL!${NC} ($CODEGEN_SCENE)"
+                    diff "$CG_TMP/src.json" "$CG_TMP/gen.json" | head -20
+                    rm -rf "$CG_TMP"
+                    exit 1
+                fi
             else
-                echo -e "${RED}Kod uretimi DENK DEGIL!${NC}"
-                diff "$CG_TMP/src.json" "$CG_TMP/gen.json" | head -20
+                echo -e "${RED}Kod uretimi denetimi calistirilamadi!${NC} ($CODEGEN_SCENE)"
                 rm -rf "$CG_TMP"
                 exit 1
             fi
-        else
-            echo -e "${RED}Kod uretimi denetimi calistirilamadi!${NC}"
             rm -rf "$CG_TMP"
-            exit 1
-        fi
-        rm -rf "$CG_TMP"
+        done
     fi
 
     hw_end "suites ($SUITE_N paket)"
@@ -471,6 +481,7 @@ if [ "$ACTION" = "test" ]; then
                         "scene3d_collector.tpr" "scene3d_camera.tpr" \
                         "scene3d_arena.tpr" "scene3d_terrain.tpr" \
                         "scene3d_karakter.tpr" "scene3d_labirent.tpr" \
+                        "scene3d_ses_testi.tpr" \
                         "41_struct_entities.tpr")
     # tame_*.tpr: display'li makinede pencere açıp kullanıcı kapatana
     # dek bloklar (headless'ta zarif hata ile hemen çıkar) — deterministik

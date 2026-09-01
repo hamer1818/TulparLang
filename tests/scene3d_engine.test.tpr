@@ -552,6 +552,54 @@ func t_sound_falloff() {
     assert(abs_f3(_snd_vol3(50.0, 1.0, 0.0)) < 0.001, "menzil disi sessiz");
 }
 
+// -- 31b) Calarken UYGULANAN seviye/kaydirma kayda geciyor ------------------
+// "Ses gelmiyor" sikayeti tek bir ariza degil: ses HIC calinmadi, ya da
+// calindi ama seviye 0'di (dinleyici menzil disindaydi). Ikisi ayni sessizligi
+// veriyor ve ancak bu iki sayac ayirt ediyor. Tani sahnesi (examples/
+// scene3d_ses_testi.tpr) bunlari HUD'da gosteriyor.
+func t_sound3d_records_applied_volume() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    kamera_takip(p, 12.0, 8.0);
+    sound_range3d(20.0);
+    int n0 = ses_calma_sayisi3d();
+    // Handle -1: ses aygiti yok, CALMA sessizce dusuyor — ama hesap kosuyor.
+    sound3d(0 - 1, 0.0, 1.0, 0.0);
+    assert_eq_int(ses_calma_sayisi3d(), n0 + 1);
+    assert(abs_f3(ses_son_seviye3d() - 1.0) < 0.001, "dinleyicide tam seviye");
+    assert(abs_f3(ses_son_kaydirma3d() - 0.5) < 0.001, "dinleyici uzerinde merkez");
+    // MENZIL DISI: sayac artiyor ama seviye 0 — "caldi ama duyulmaz" hali.
+    sound3d(0 - 1, 100.0, 1.0, 0.0);
+    assert_eq_int(ses_calma_sayisi3d(), n0 + 2);
+    assert(abs_f3(ses_son_seviye3d()) < 0.001, "menzil disi sifir seviye");
+}
+
+// Sayac YALNIZ calinca artiyor. Artmiyorsa ariza seste degil, sesi cagiran
+// olaydadir — tani sahnesindeki ayrimin dayandigi sey bu.
+func t_sound_count_holds_without_play() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    kamera_takip(p, 12.0, 8.0);
+    int n0 = ses_calma_sayisi3d();
+    _snd_vol3(5.0, 1.0, 0.0);
+    _snd_pan_val3(5.0, 1.0, 0.0);
+    assert_eq_int(ses_calma_sayisi3d(), n0);
+}
+
+// Kaydirma da kayda geciyor: sagdaki ses ile soldaki ayni degeri birakmamali,
+// yoksa "yon calisiyor mu" sorusu HUD'dan cevaplanamaz.
+func t_sound3d_records_applied_pan() {
+    scene3d_reset();
+    int p = spawn3(0.0, 1.0, 0.0,  1.0, 2.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    kamera_takip(p, 12.0, 8.0);
+    sound_pan_amount3d(1.0);
+    sound3d(0 - 1, 10.0, 1.0, 0.0);
+    float sag = ses_son_kaydirma3d();
+    sound3d(0 - 1, 0.0 - 10.0, 1.0, 0.0);
+    float sol = ses_son_kaydirma3d();
+    assert(abs_f3(sag - sol) > 0.5, "sag ile sol ayni kaydirmayi birakmamali");
+}
+
 // ===========================================================================
 // Faz 9 — dunya geometrisi: kure/kapsul, donen kutu (OBB), rampa, kamera isini
 // ===========================================================================
@@ -967,6 +1015,9 @@ test("burst3d entity konumunda", "t_burst_at_entity");
 test("bolum gecisi parcaciklari temizler", "t_particles_cleared_on_level");
 test("animasyon sayaci + bosta/kosu secimi", "t_anim_state");
 test("konumsal ses mesafe sonumu", "t_sound_falloff");
+test("calan ses uygulanan seviyeyi kaydeder", "t_sound3d_records_applied_volume");
+test("ses sayaci calmadan artmaz", "t_sound_count_holds_without_play");
+test("calan ses uygulanan kaydirmayi kaydeder", "t_sound3d_records_applied_pan");
 test("kure kutu gibi carpismaz", "t_sphere_not_box");
 test("kure-kutu en yakin nokta", "t_sphere_box");
 test("silindir dikey kapsul", "t_cylinder_capsule");
@@ -10020,6 +10071,53 @@ func t_zone_sound_plays_on_enter() {
     assert_eq_int(_snd_last_slot3, _slot_of3(p));
 }
 
+// Bolgeye girildi -> `sound3d` GERCEKTEN cagrildi mi? Bu zincirin son halkasi
+// penceresiz sinanamiyordu: `_rl_snd3` handle < 0 iken CALMADAN donuyor ve ses
+// aygiti olmayan makinede handle hep -1. Kayda sahte ama GECERLI (>= 0) bir
+// tutamak yazarak o dal aciliyor; `play_sound` gecersiz slotta zaten sessiz.
+// Kacan ariza sinifi tam buydu: giris kenari atiyor, kanca kosuyor, ama sesin
+// cagrilip cagrilmadigi hicbir yerde olculmuyordu (bkz. Tuzaklar 3b).
+func t_zone_sound_actually_calls_play() {
+    scene3d_reset(); no_ground3d();
+    int p = spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    // Dinleyiciyi ACIKCA kur: kamera hedefi yokken dinleyici DUNYA MERKEZINDE
+    // sayiliyor ve y=1'deki ses bir birim uzakta kaliyor — menzil de testler
+    // arasinda tasindigi icin (global) seviye beklentisi kayardi.
+    kamera_takip(p, 12.0, 8.0);
+    sound_range3d(30.0);
+    int z = trigger3d(0.0, 1.0, 0.0, 4.0, 4.0, 4.0, TAG_PLAYER);
+    str yol = "examples/assets/sesler/ates.wav";
+    trigger_sound3d(z, yol);
+    // Kaydi olustur, sonra tutamagi gecerli yap.
+    asset_sound3d(yol);
+    int k = _as_find3(yol, AS_SOUND3);
+    assert(k >= 0, "kayit olusmali");
+    _as_h3[k] = 0;
+    int n0 = ses_calma_sayisi3d();
+    _t_zone_step3(0.016667);
+    assert_eq_int(ses_calma_sayisi3d(), n0 + 1);
+    // Dinleyici sesin uzerinde: tam seviye. 0 gelseydi "caldi ama duyulmaz".
+    assert(abs_f3(ses_son_seviye3d() - 1.0) < 0.001, "girilen bolgede tam seviye");
+}
+
+// Tutamak GECERSIZ kalirsa calma HIC olmuyor — ustteki testin karsiti.
+// Ikisi birlikte "sessizlik" sikayetini ikiye boluyor: kayit mi cokmus,
+// yoksa olay mi hic olmamis.
+func t_zone_sound_skips_play_when_handle_invalid() {
+    scene3d_reset(); no_ground3d();
+    spawn3(0.0, 1.0, 0.0, 1.0, 1.0, 1.0, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    int z = trigger3d(0.0, 1.0, 0.0, 4.0, 4.0, 4.0, TAG_PLAYER);
+    str yol = "yok/olmayan_ses.wav";
+    trigger_sound3d(z, yol);
+    asset_sound3d(yol);                       // yuklenemez -> -1 kaydedilir
+    assert_eq_int(_as_h3[_as_find3(yol, AS_SOUND3)], 0 - 1);
+    int n0 = ses_calma_sayisi3d();
+    _t_zone_step3(0.016667);
+    assert_eq_int(ses_calma_sayisi3d(), n0);
+    // Ama KONUM yine hesaplanmis olmali — tanının oteki yarisi.
+    assert(_snd_last_slot3 >= 0, "konum yine de hesaplanmali");
+}
+
 // Ses eylemden BAĞIMSIZ: eylemi olmayan ama sesi olan bölge geçerli bir şey
 // (kapı gıcırtısı, ayak sesi bölgesi).
 func t_zone_sound_independent_of_action() {
@@ -12325,6 +12423,8 @@ test("gorunum pencere boyutunu izliyor", "t_view_rect_follows_window_size");
 test("gorunum hicbir boyutta bozulmuyor", "t_view_rect_never_degenerate");
 test("kisayol listesi tam ekrani sayiyor", "t_help_lists_fullscreen");
 test("bolge sesi girince caliyor", "t_zone_sound_plays_on_enter");
+test("bolge sesi gercekten calma cagiriyor", "t_zone_sound_actually_calls_play");
+test("gecersiz tutamakta calma atlaniyor", "t_zone_sound_skips_play_when_handle_invalid");
 test("bolge sesi eylemden bagimsiz", "t_zone_sound_independent_of_action");
 test("bolge sesi gidis-donusten sag cikiyor", "t_zone_sound_roundtrips");
 test("sessiz bolge anahtar yazmiyor", "t_zone_without_sound_writes_no_key");

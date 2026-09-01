@@ -111,6 +111,7 @@ saçılması istenen şey değil.
 | UI | `baslangic3d`, duraklat, oyun-bitti, **bölüm seçme**, **ayarlar** | Menüde imleç + kol A/B; düğmeler TÜRE göre dağıtılıyor |
 | Ses seviyesi | `ses_seviye3d(v)`/`volume3d`, `ana_ses(v)` (tame) | ANA seviye; diske yazma opt-in |
 | Konumsal ses | `ses3d(tutamak, x, y, z)`, `ses_yukle(yol)` | mesafe + stereo yön; örnek: `scene3d_arena` |
+| Ses tanısı | `ses_son_seviye3d()`, `ses_son_kaydirma3d()`, `ses_calma_sayisi3d()` | "çalmadı" ile "seviye 0 ile çaldı"yı ayırır; örnek: `scene3d_ses_testi` ([[Tuzaklar#3b. "Ses gelmiyor" TEK bir arıza değil\|3b]]) |
 | Arazi | `arazi3d`, `arazi_dogal3d`, `arazi_katmani3d` | Katman boyama tepe rengiyle |
 | Gündüz-gece | `gunduz_gece3d(sn)`, `saati_ayarla3d` | Gölgeler güneşle döner |
 | Girdi | klavye + dokunmatik + **gamepad** | Üçü aynı anda açık |

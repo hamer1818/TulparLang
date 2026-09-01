@@ -490,6 +490,41 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 
 ### Çekirdek dil + derleme zinciri
 
+- **Sahne kod üretimi bölge ve kural SESLERİNİ düşürüyordu (2026-09-01):**
+  `scene_code3d()` bölgenin eylemini/miktarını ve sesini, kuralın de sesini
+  hiç yazmıyordu — JSON'da var, üretilen `.tpr`'de yok. Yani "üretilen kod
+  aynı sahneyi kuruyor" iddiası bu üç alan için yanlıştı. Denklik denetimi
+  göremiyordu çünkü denetim sahnesinde (`toplayici`) **hiç bölge yok**.
+  Emitter'a `bolge_eylem3d`/`bolge_ses3d`/`kural_sesi3d` eklendi (+ `ZACT_*`
+  için ayrı `_sc_zact_code3` çevirici — kural eylemiyle ayrı sayı uzayı) ve
+  denetim artık İKİ sahne üzerinde koşuyor: demo + kapsamı kasten dolduran
+  `tests/kod_uretimi_tam.scene.json` (kutu+küre bölge, eylem+miktar+ses,
+  tek atım, kapalı bölge, sesli/sessiz kural). Üç bozma da iğnelemeyle
+  doğrulandı; ikisini yalnız yeni düzenek yakalıyor. → [[Scene3D]]
+
+- **`tulpar build` önbelleği import edilen modül değişikliklerini görmüyordu
+  (2026-09-01):** önbellek denetimi yalnız ANA kaynağın ve sürücü ikilisinin
+  mtime'ına bakıyordu. `import "lib/scene3d"` gibi yerel bir modülü düzeltip
+  yeniden derleyen `[AOT] Cache hit` alıyor ve **sessizce eski ikiliyi**
+  çalıştırıyordu — düzeltme "işe yaramamış" görünüyor, hata yanlış yerde
+  aranıyor. `newest_local_import_mtime()` (`src/main.cpp`) eklendi: kaynaktaki
+  `import "ad"` bildirimleri arka uçla AYNI sırayla çözülüp (düz ad, `ad.tpr`,
+  `tulpar_modules/<ad>/<ad>.tpr`, `tulpar_modules/<ad>.tpr`) özyinelemeli
+  taranıyor; gömülü stdlib adları diskte çözülmediği için sürücü mtime'ının
+  kapsamında kalıyor. İki yönlü doğrulandı: modül değişince yeniden derliyor,
+  hiçbir şey değişmeyince hâlâ önbellekten dönüyor. → [[Tuzaklar#2]]
+
+- **Eşzamanlı `tulpar` çalıştırmaları birbirinin ikilisini koşuyordu
+  (2026-09-01):** `aot_compile_and_run_silent` derlediği programı **sabit**
+  `/tmp/.tulpar_run` yoluna yazıp çalıştırıp siliyordu. İki `tulpar` aynı anda
+  koşunca yarış oluşuyor; ölçülen iki belirti: (a) paket boş çıktıyla FAIL
+  görünüyor (tek başına yeşil), (b) daha kötüsü — enjeksiyonla doğrulandı —
+  **iki farklı kaynak, iki süreç, ikisi de AYNI çıktıyı** basıyor, yani bir
+  paket başka bir paketin sonucunu raporlayabiliyor. Yol sürece özgü yapıldı
+  (`/tmp/.tulpar_run.<pid>`). Düzeltme iki yönlü doğrulandı: düzeltilmiş
+  ikilide iki eşzamanlı koşu doğru çıktıları veriyor, sabit yola dönünce yarış
+  üç turun üçünde de geri geliyor. → [[Tuzaklar#2]]
+
 - **Cila turu — diagnostik + CLI gürültüsü (2026-06-29):** iki "bilinen ufak
   konu" kapatıldı (detay → Notlar):
   - ✅ **Parse error satır no off-by-one (EOF).** Kapanmamış ifade EOF'a

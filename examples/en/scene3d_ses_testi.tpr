@@ -1,0 +1,287 @@
+// scene3d Sound Diagnostic Scene — finds WHICH layer swallowed the sound.
+// English twin of examples/scene3d_ses_testi.tpr.
+//
+//   ./tulpar examples/en/scene3d_ses_testi.tpr
+//
+// WHY IT EXISTS: "no sound in the game" is not one fault — it is the shared
+// symptom of at least five distinct ones:
+//
+//   1. audio device never opened      -> handle -1
+//   2. sound file not found           -> handle -1 (device is fine)
+//   3. the event never happened       -> enter counter stays at 0
+//   4. event happened, sound NOT called -> enter counts up, play count doesn't
+//   5. sound called but VOLUME was 0  -> play counts up, volume reads 0.00
+//
+// This scene makes all five separately readable. Five stations, each with a
+// DIFFERENT sound, so you can tell by ear which one you heard.
+//
+//   1  manual load (load_sound) + positional sound3d  -> vurus.wav
+//   2  asset registry (asset_sound3d) + sound3d       -> altin.wav
+//   3  the zone's OWN sound (zone sound), box zone    -> ates.wav
+//   4  the zone's OWN sound, sphere zone              -> kazandin.wav
+//   5  NON-positional direct play (play_sound)        -> kaybettin.wav
+//
+// Station 5 deliberately skips the positional layer: if 5 is audible and 1-4
+// are not, the fault is in the distance/pan math, not in the zone.
+//
+// Keys 1..5 also play the same sounds directly, at full volume, without
+// entering any zone. Audible by key but not by pad => the fault is not the
+// sound itself, it is the event that should trigger it.
+//
+// THE SOUNDS ARE SHORT — measured: ates.wav 0.14 s, vurus 0.16, altin 0.24,
+// kaybettin 0.52, kazandin 0.60. Some "I heard nothing" reports are not a fault
+// at all but a MEASUREMENT WINDOW, so no zone here is one-shot (step out and in
+// as often as you like) and every play drops a banner on screen: what you hear
+// matches what you see.
+//
+// The HUD shows, per station: handle · enter count · applied volume/side.
+// Stations 3 and 4 also show `plays=` — how many times the engine actually
+// called the sound.
+
+import "scene3d";
+
+int player = 0;
+
+// Sound files — paths are relative to the WORKING DIRECTORY; run from repo root.
+string PATH1 = "examples/assets/sesler/vurus.wav";
+string PATH2 = "examples/assets/sesler/altin.wav";
+string PATH3 = "examples/assets/sesler/ates.wav";
+string PATH4 = "examples/assets/sesler/kazandin.wav";
+string PATH5 = "examples/assets/sesler/kaybettin.wav";
+
+int snd1 = 0 - 1;   // via load_sound
+int snd2 = 0 - 1;   // via the asset registry
+int snd3 = 0 - 1;   // the zone loads it itself; warmed here so the HUD can show it
+int snd4 = 0 - 1;
+int snd5 = 0 - 1;   // non-positional playback
+
+int z1 = 0 - 1; int z2 = 0 - 1; int z3 = 0 - 1; int z4 = 0 - 1; int z5 = 0 - 1;
+
+// Enter counters — the answer to "did the event happen at all".
+int g1 = 0; int g2 = 0; int g3 = 0; int g4 = 0; int g5 = 0;
+
+// Real values read back AFTER the sound was played, for 1 and 2.
+float v1 = 0.0; float p1 = 0.5;
+float v2 = 0.0; float p2 = 0.5;
+
+// For 3 and 4 the same measurement is taken ONE FRAME LATER. Reason: those two
+// sounds are played by the ENGINE, right after the hook — so a value read
+// inside the hook is still the old one. The hook records the play counter as
+// "pending"; the next frame confirms the counter actually moved.
+//
+// The whole distinction lives in these two numbers:
+//   enter up + plays flat -> the engine NEVER called the sound
+//                            (handle -1, or empty path)
+//   enter up + plays up   -> the sound was called; now look at the volume
+int c3_pending = 0 - 1; int c3_done = 0; float v3 = 0.0; float p3 = 0.5;
+int c4_pending = 0 - 1; int c4_done = 0; float v4 = 0.0; float p4 = 0.5;
+
+// Banner for the last event: see on screen what you just heard.
+string last_event = "";
+float last_event_t = 0.0;
+
+// Key codes kept local: the engine does not define all of them and leaning on
+// a global name here would collide later.
+int KEY1 = 49; int KEY2 = 50; int KEY3 = 51; int KEY4 = 52; int KEY5 = 53;
+
+func announce(msg) {
+    last_event = msg;
+    last_event_t = 1.6;
+}
+
+// --- Station hooks ---------------------------------------------------------
+// 1 and 2: the HOOK plays the sound (positional). Right after playing we read
+// back the volume/pan the engine applied — that is the only way the "played
+// but the volume was 0" case becomes visible.
+func entered1() {
+    g1 = g1 + 1;
+    sound3d(snd1, get3x(me3d()), get3y(me3d()), get3z(me3d()));
+    v1 = sound_last_volume3d();
+    p1 = sound_last_pan3d();
+    announce("1 · manual load + sound3d · vurus.wav");
+}
+
+func entered2() {
+    g2 = g2 + 1;
+    sound3d(snd2, get3x(me3d()), get3y(me3d()), get3z(me3d()));
+    v2 = sound_last_volume3d();
+    p2 = sound_last_pan3d();
+    announce("2 · asset registry + sound3d · altin.wav");
+}
+
+// 3 and 4: NO sound is played here. The zone's own sound field plays it (inside
+// the engine, right after the enter edge). The hook only COUNTS — that is what
+// separates "entered the zone but heard nothing" from "never entered it".
+func entered3() {
+    g3 = g3 + 1;
+    c3_pending = sound_play_count3d();
+    announce("3 · zone sound (box) · ates.wav");
+}
+
+func entered4() {
+    g4 = g4 + 1;
+    c4_pending = sound_play_count3d();
+    announce("4 · zone sound (sphere) · kazandin.wav");
+}
+
+// 5: no positional layer — full volume, dead centre.
+func entered5() {
+    g5 = g5 + 1;
+    play_sound(snd5);
+    announce("5 · non-positional play_sound · kaybettin.wav");
+}
+
+// --- Setup -----------------------------------------------------------------
+func pad(x, z, color) {
+    // A flat marker you can stand on. Solidity off: tripping over a 0.2-high
+    // step would make the station harder to enter.
+    int id = spawn3(x, 0.1, z,  3.4, 0.2, 3.4, color, SHAPE_CUBE, TAG_PROP);
+    solid3d(id, false);
+}
+
+func setup() {
+    sky3d(rgb(18, 22, 34), rgb(70, 88, 120));
+    gravity3d(26.0);
+    ground3d(0.0);
+    // Zone wireframes ON: you need to see where to step.
+    trigger_show3d(true);
+
+    // Four walls so you stay inside.
+    spawn3(0.0, 1.5, 0.0 - 18.0,  40.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    spawn3(0.0, 1.5, 18.0,        40.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    spawn3(0.0 - 18.0, 1.5, 0.0,  1.0, 3.0, 40.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    spawn3(18.0, 1.5, 0.0,        1.0, 3.0, 40.0, GRAY, SHAPE_CUBE, TAG_WALL);
+
+    player = spawn3(0.0, 1.0, 6.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    camera_orbit(player, 15.0, 10.0);
+
+    // SOUNDS. All five load HERE, i.e. after the window and the audio device
+    // are up. The mix is deliberate: two by hand (load_sound), three through
+    // the asset registry. Warming the zones' sounds makes their handle visible
+    // in the HUD from the start; since the registry never loads the same path
+    // twice, the zone will use exactly this handle.
+    snd1 = load_sound(PATH1);
+    snd2 = asset_sound3d(PATH2);
+    snd3 = asset_sound3d(PATH3);
+    snd4 = asset_sound3d(PATH4);
+    snd5 = load_sound(PATH5);
+
+    // Five stations along the z = -6 line, 6 units apart.
+    pad(0.0 - 12.0, 0.0 - 6.0, rgb(240, 120, 120));
+    pad(0.0 - 6.0,  0.0 - 6.0, rgb(240, 200, 100));
+    pad(0.0,        0.0 - 6.0, rgb(120, 220, 140));
+    pad(6.0,        0.0 - 6.0, rgb(120, 180, 250));
+    pad(12.0,       0.0 - 6.0, rgb(210, 130, 240));
+
+    z1 = trigger3d(0.0 - 12.0, 1.5, 0.0 - 6.0,  3.4, 3.0, 3.4, TAG_PLAYER);
+    z2 = trigger3d(0.0 - 6.0,  1.5, 0.0 - 6.0,  3.4, 3.0, 3.4, TAG_PLAYER);
+    z3 = trigger3d(0.0,        1.5, 0.0 - 6.0,  3.4, 3.0, 3.4, TAG_PLAYER);
+    z4 = trigger_sphere3d(6.0, 1.5, 0.0 - 6.0,  2.0, TAG_PLAYER);
+    z5 = trigger3d(12.0,       1.5, 0.0 - 6.0,  3.4, 3.0, 3.4, TAG_PLAYER);
+
+    on_enter3d(z1, entered1);
+    on_enter3d(z2, entered2);
+    on_enter3d(z3, entered3);
+    on_enter3d(z4, entered4);
+    on_enter3d(z5, entered5);
+
+    // 3 and 4 carry their sound as DATA on the zone — not a line of sound code
+    // in the hook.
+    trigger_sound3d(z3, PATH3);
+    trigger_sound3d(z4, PATH4);
+
+    // None of them is one-shot: step out and back in to retry as often as you like.
+}
+
+func update(dt) {
+    move3d(player, 9.0);
+    if (last_event_t > 0.0) { last_event_t = last_event_t - dt; }
+    // Deferred measurement: did the engine play 3/4's sound after the hook?
+    if (c3_pending >= 0 && sound_play_count3d() > c3_pending) {
+        c3_done = c3_done + 1;
+        v3 = sound_last_volume3d(); p3 = sound_last_pan3d();
+        c3_pending = 0 - 1;
+    }
+    if (c4_pending >= 0 && sound_play_count3d() > c4_pending) {
+        c4_done = c4_done + 1;
+        v4 = sound_last_volume3d(); p4 = sound_last_pan3d();
+        c4_pending = 0 - 1;
+    }
+    // Keys: skip the zone entirely and play the sound directly, at full volume.
+    if (key_pressed(KEY1)) { play_sound(snd1); announce("KEY 1 · direct · vurus.wav"); }
+    if (key_pressed(KEY2)) { play_sound(snd2); announce("KEY 2 · direct · altin.wav"); }
+    if (key_pressed(KEY3)) { play_sound(snd3); announce("KEY 3 · direct · ates.wav"); }
+    if (key_pressed(KEY4)) { play_sound(snd4); announce("KEY 4 · direct · kazandin.wav"); }
+    if (key_pressed(KEY5)) { play_sound(snd5); announce("KEY 5 · direct · kaybettin.wav"); }
+}
+
+// --- HUD -------------------------------------------------------------------
+func hstate(h): str {
+    if (h < 0) { return "LOAD FAILED"; }
+    return "h=" + toString(h);
+}
+
+// Volume as a percentage, pan as a DIRECTION WORD. The raw float is unreadable
+// (`0.9666667`) and its width varies — it overflowed the panel.
+func pct(v): str { return toString(toInt(v * 100.0 + 0.5)) + "%"; }
+
+// raylib's meaning is INVERTED: 0 = RIGHT, 1 = LEFT, 0.5 = centre
+// (see tame_impl_sound_pan).
+func side_name(p): str {
+    if (p < 0.45) { return "right"; }
+    if (p > 0.55) { return "left"; }
+    return "centre";
+}
+
+func row(y, no, name, h, count, extra) {
+    string s = no + "  " + name + "  " + hstate(h) + "  enter=" + toString(count);
+    int cr = 150; int cg = 160; int cb = 180;
+    if (h < 0) { cr = 255; cg = 110; cb = 110; }
+    if (h >= 0 && count > 0) { cr = 150; cg = 240; cb = 170; }
+    text(s + extra, 14, y, 17, rgb(cr, cg, cb));
+}
+
+func label(x, z, s) {
+    float sx = screen_x3d(x, 2.4, z);
+    float sy = screen_y3d(x, 2.4, z);
+    if (sx > 0.0 && sx < _win_w * 1.0 && sy > 0.0 && sy < _win_h * 1.0) {
+        text(s, sx - 8.0, sy, 26, RAYWHITE);
+    }
+}
+
+func draw_hud() {
+    rect(8.0, 8.0, 620.0, 176.0, rgba(0, 0, 0, 170));
+    text("SOUND DIAGNOSTIC  ·  master " + toString(toInt(volume_now3d() * 100.0)) + "%"
+         + "  ·  positional plays: " + toString(sound_play_count3d()),
+         14, 14, 18, GOLD);
+
+    row(40.0, "1", "manual+s3d vurus    ", snd1, g1,
+        "  vol=" + pct(v1) + " side=" + side_name(p1));
+    row(62.0, "2", "asset +s3d altin    ", snd2, g2,
+        "  vol=" + pct(v2) + " side=" + side_name(p2));
+    row(84.0, "3", "zone box   ates     ", snd3, g3,
+        "  plays=" + toString(c3_done) + " vol=" + pct(v3));
+    row(106.0, "4", "zone sphere kazandin", snd4, g4,
+        "  plays=" + toString(c4_done) + " vol=" + pct(v4));
+    row(128.0, "5", "direct     kaybettin", snd5, g5, "  (no vol/pan)");
+
+    text("Step on the pads · keys 1..5 play the sound directly", 14, 156, 16,
+         rgb(150, 170, 200));
+
+    if (last_event_t > 0.0) {
+        rect(8.0, 192.0, 620.0, 30.0, rgba(20, 60, 30, 210));
+        text(last_event, 14, 198, 18, rgb(140, 255, 170));
+    }
+
+    label(0.0 - 12.0, 0.0 - 6.0, "1");
+    label(0.0 - 6.0,  0.0 - 6.0, "2");
+    label(0.0,        0.0 - 6.0, "3");
+    label(6.0,        0.0 - 6.0, "4");
+    label(12.0,       0.0 - 6.0, "5");
+}
+
+scene3d(960, 560, "Tulpar 3D Sound Diagnostic");
+on_setup3d(setup);
+on_update3d(update);
+on_hud3d(draw_hud);
+play3d();

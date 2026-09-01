@@ -3013,11 +3013,37 @@ func _snd_pan_val3(x, y, z): float {
     return p;
 }
 
+// Sesin EN SON çalınırken uygulanan seviye/kaydırma değerleri ve kaç kez
+// çalındığı. Tanı için var ve gerçek bir ihtiyaçtan doğdu: oyuncu "ses yok"
+// dediğinde üç ayrı sebep aynı sessizliği veriyor — ses hiç ÇALINMADI, ses
+// çalındı ama SEVİYE 0'dı (dinleyici menzil dışında), ya da handle geçersizdi.
+// Bu üçü ancak burada ayrışıyor; oyunun HUD'ı okuyup gösterebiliyor.
+float _snd_last_vol3 = 0.0;
+float _snd_last_pan3 = 0.5;
+int   _snd_play_n3   = 0;
+
 func sound3d(handle, x, y, z) {
-    sound_volume(handle, _snd_vol3(x, y, z));
-    sound_pan(handle, _snd_pan_val3(x, y, z));
+    // Değerler ÖNCE saklanıyor, sonra uygulanıyor: geçersiz handle'da
+    // `sound_volume` sessizce düşüyor ama hesap yine de yapılmış oluyor,
+    // yani "menzil dışı mıydı" sorusu ses aygıtı olmadan da cevaplanabiliyor.
+    _snd_last_vol3 = _snd_vol3(x, y, z);
+    _snd_last_pan3 = _snd_pan_val3(x, y, z);
+    _snd_play_n3 = _snd_play_n3 + 1;
+    sound_volume(handle, _snd_last_vol3);
+    sound_pan(handle, _snd_last_pan3);
     play_sound(handle);
 }
+
+// Son çalınan sesin uygulanan seviyesi (0..1). 0 = duyulmaz (menzil dışı).
+func sound_last_volume3d(): float { return _snd_last_vol3; }
+func ses_son_seviye3d(): float    { return _snd_last_vol3; }
+// Son çalınan sesin kaydırması (raylib anlamı: 0 sağ, 0.5 merkez, 1 sol).
+func sound_last_pan3d(): float { return _snd_last_pan3; }
+func ses_son_kaydirma3d(): float { return _snd_last_pan3; }
+// `sound3d`'nin kaç kez çağrıldığı. Sayaç ARTMIYORSA sorun ses değil,
+// sesi çağıran olayın kendisidir.
+func sound_play_count3d(): int { return _snd_play_n3; }
+func ses_calma_sayisi3d(): int  { return _snd_play_n3; }
 
 // ---- Fizik: hız entegrasyonu + yerçekimi + zemin ---------------------------
 func _s3_physics(dt) {
@@ -7591,6 +7617,18 @@ func _sc_act_code3(v): str {
     if (v == ACT_LOSE)   { return "ACT_LOSE"; }
     return "ACT_COLLECT";
 }
+// Bölge eylemi. Kural eylemiyle AYRI bir sayı uzayı (ZACT_* vs ACT_*), o
+// yüzden ayrı bir çevirici: ikisini karıştırmak sessizce yanlış eylem yazardı.
+func _sc_zact_code3(v): str {
+    if (v == ZACT_WIN)    { return "ZACT_WIN"; }
+    if (v == ZACT_LOSE)   { return "ZACT_LOSE"; }
+    if (v == ZACT_KILL)   { return "ZACT_KILL"; }
+    if (v == ZACT_DAMAGE) { return "ZACT_DAMAGE"; }
+    if (v == ZACT_SCORE)  { return "ZACT_SCORE"; }
+    if (v == ZACT_NEXT)   { return "ZACT_NEXT"; }
+    return "ZACT_NONE";
+}
+
 // Negatif sayılar: Tulpar'da tekil eksi yok, `0.0 - x` yazılıyor.
 func _sc_f_code3(v): str {
     if (v < 0.0) { return "0.0 - " + _sc_num3(0.0 - v); }
@@ -7752,6 +7790,19 @@ func scene_code3d(): str {
         }
         if (_trg_once[z] == 1) { o = o + "    bolge_bir_kere3d(b" + toString(z) + ", true);\n"; }
         if (_trg_on[z] == 0)   { o = o + "    bolge_etkin3d(b" + toString(z) + ", false);\n"; }
+        // EYLEM/MİKTAR ve SES de yazılmalı. Yazılmadıkları sürece üretilen kod
+        // "aynı sahneyi kuruyor" demiyordu: kaydeden ve YÜKLEYEN taraf bu üç
+        // alanı taşıyor, yalnız KOD ÜRETEN taraf düşürüyordu — yani JSON'dan
+        // koda geçen herkes bölgesinin ne yaptığını ve sesini kaybediyordu.
+        // Denklik denetimi bunu göremiyordu çünkü denetim sahnesinde hiç bölge
+        // yok (bkz. tests/kod_uretimi_tam.scene.json).
+        if (_trg_act[z] != ZACT_NONE) {
+            o = o + "    bolge_eylem3d(b" + toString(z) + ", " +
+                _sc_zact_code3(_trg_act[z]) + ", " + _sc_num3(_trg_amt[z]) + ");\n";
+        }
+        if (_trg_snd[z] != "") {
+            o = o + "    bolge_ses3d(b" + toString(z) + ", \"" + _trg_snd[z] + "\");\n";
+        }
         z = z + 1;
     }
     // Kurallar
@@ -7765,6 +7816,12 @@ func scene_code3d(): str {
         } else {
             o = o + "    bitince_kurali3d(" + _sc_tag_code3(ru.a) + ", " +
                 _sc_act_code3(ru.act) + ");\n";
+        }
+        // Kuralın SESİ de yazılmalı — JSON'da var, kodda yoktu. Denklik
+        // denetimi bunu yakaladı: `toplayici` sahnesine ses eklenince üretilen
+        // kod sessiz bir sahne kuruyordu.
+        if (ru.snd != "") {
+            o = o + "    kural_sesi3d(" + toString(r) + ", \"" + ru.snd + "\");\n";
         }
         r = r + 1;
     }

@@ -1580,16 +1580,24 @@ AOTResult aot_compile_and_run_silent_with_filename(const char *source,
   remove("tulpar_run_tmp.ll");
   remove("tulpar_run_tmp.o");
 #else
-  const char *base = "/tmp/.tulpar_run";
+  // SÜRECE ÖZGÜ yol. Sabit `/tmp/.tulpar_run` iki `tulpar` aynı anda koşunca
+  // yarışıyordu: biri ötekinin ikilisini derlemesiyle EZİYOR, sonra `remove`
+  // ile SİLİYOR — ikincisi "Böyle bir dosya yok" ile düşüyor. Ölçüldü
+  // (2026-09-01): paralel bir kabuktan tek bir `tulpar dosya.tpr` çalıştırmak,
+  // o sırada koşan `./build.sh suites` içinde bir pakete sahte FAIL verdirdi.
+  // Belirti "testte regresyon" gibi görünüyor ve yanlış yere baktırıyor.
+  std::string run_base = std::string("/tmp/.tulpar_run.") +
+                         std::to_string((long)getpid());
+  const char *base = run_base.c_str();
   AOTResult result = aot_compile_silent(source, base, source_filename);
   if (result != AOT_OK) {
     return result;
   }
-  std::string run_cmd = "/tmp/.tulpar_run";
+  std::string run_cmd = run_base;
   if (!g_tulpar_run_args.empty()) run_cmd += " " + g_tulpar_run_args;
   int run_result = system(run_cmd.c_str());
-  remove("/tmp/.tulpar_run");
-  remove("/tmp/.tulpar_run.ll");
+  remove(run_base.c_str());
+  remove((run_base + ".ll").c_str());
 #endif
 
   // The compile + link already succeeded above (we returned early otherwise),
