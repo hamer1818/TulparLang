@@ -4,7 +4,7 @@ tags: [moc, root]
 
 # 🐎 TulparLang — Zihin Haritası
 
-Statically-typed, **AOT-derlenen** dil. C++17 + **LLVM 18** backend. Kaynak uzantısı `.tpr`. Türkçe yazılmış; kullanıcıya görünen string'ler `src/common/localization.hpp` (`tr_en`) üzerinden hem TR hem EN.
+Statically-typed, **AOT-derlenen** dil. C++17 + **LLVM 18–22** backend. Kaynak uzantısı `.tpr`. Türkçe yazılmış; kullanıcıya görünen string'ler `src/common/localization.hpp` (`tr_en`) üzerinden hem TR hem EN.
 
 > Bu vault, projeyi baştan taramak yerine hızlı başvuru içindir. Her not = bir konu + ilgili dosya yolları + diğer notlara wiki-bağlantılar. Tek doğruluk kaynağı yine de [STATUS.md](../../STATUS.md) ve [CLAUDE.md](../../CLAUDE.md).
 >
@@ -21,7 +21,7 @@ Statically-typed, **AOT-derlenen** dil. C++17 + **LLVM 18** backend. Kaynak uzan
 - [[Arcade]] — 2B preset motoru (`import "arcade"`, saf Tulpar)
 - [[Scene3D]] — **3B motor** (`import "scene3d"`, saf Tulpar; entity/çarpışma/kamera/arazi)
 - [[Editor]] — **TameEngine**, sahne editörü (motorun içinde, saf Tulpar; dock/panel/dosya)
-- [[Build System]] — CMake, `build.sh`, gömülü lib üretimi, installer
+- [[Build System]] — CMake, `build.sh`, gömülü lib üretimi, `tulpar build` önbelleği
 - [[Decisions]] — mimari kararlar (ADR): AOT-only, port 8484, arena modeli
 - [[Performance]] — benchmark + stres testi sonuçları
 - [[Testing]] — koşumlar + **bozma disiplini** (her düzeltme enjekte edilerek doğrulanır)
@@ -32,7 +32,7 @@ Statically-typed, **AOT-derlenen** dil. C++17 + **LLVM 18** backend. Kaynak uzan
 [[Lexer]] · [[Parser]] · [[Type Inference]] · [[AOT Backend]] · [[Runtime]] · [[Memory Model]] · [[Async Runtime]] · [[SQLite and DB]]
 
 ## Yardımcı altsistemler
-[[LSP]] · [[Tooling]] (fmt/pkg/update) · [[Imports and Modules]] · [[Cross-platform]] · [[Android]]
+[[LSP]] · [[Tooling]] (fmt/typecheck/doc/pkg/update) · [[Imports and Modules]] · [[Cross-platform]] · [[Android]]
 
 ## Çalıştırma
 `tulpar script.tpr` → AOT derler + çalıştırır (**tek yürütme yolu**; AOT hatası = hard error). `tulpar build` standalone binary üretir. CLI dispatch: `src/main.cpp`.

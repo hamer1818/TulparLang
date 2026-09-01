@@ -111,7 +111,7 @@ saçılması istenen şey değil.
 | UI | `baslangic3d`, duraklat, oyun-bitti, **bölüm seçme**, **ayarlar** | Menüde imleç + kol A/B; düğmeler TÜRE göre dağıtılıyor |
 | Ses seviyesi | `ses_seviye3d(v)`/`volume3d`, `ana_ses(v)` (tame) | ANA seviye; diske yazma opt-in |
 | Konumsal ses | `ses3d(tutamak, x, y, z)`, `ses_yukle(yol)` | mesafe + stereo yön; örnek: `scene3d_arena` |
-| Ses tanısı | `ses_son_seviye3d()`, `ses_son_kaydirma3d()`, `ses_calma_sayisi3d()` | "çalmadı" ile "seviye 0 ile çaldı"yı ayırır; örnek: `scene3d_ses_testi` ([[Tuzaklar#3b. "Ses gelmiyor" TEK bir arıza değil\|3b]]) |
+| Ses tanısı | `ses_son_seviye3d()`, `ses_son_kaydirma3d()`, `ses_calma_sayisi3d()` | "çalmadı" ile "seviye 0 ile çaldı"yı ayırır; örnek: `scene3d_ses_testi` ([[Tuzaklar]] §3b) |
 | Arazi | `arazi3d`, `arazi_dogal3d`, `arazi_katmani3d` | Katman boyama tepe rengiyle |
 | Gündüz-gece | `gunduz_gece3d(sn)`, `saati_ayarla3d` | Gölgeler güneşle döner |
 | Girdi | klavye + dokunmatik + **gamepad** | Üçü aynı anda açık |
@@ -165,6 +165,28 @@ yalnız testlerden çağrılıyordu — kayıt sisteminin başlığındaki söz 
 > sessizdi. `scene3d_arena` artık isabet/bonus/ölüm seslerini konumlu
 > çalıyor. **Ders: bir özelliğin testi varsa ama örneği yoksa, kullanıcı
 > için var değildir.**
+
+#### Devamı: "hâlâ hiçbir şey duymadım" → arıza değil, ÖLÇÜM PENCERESİ
+Arena seslendirildikten sonra da bölge sesleri duyulmadı ve bir tur boyunca
+**bütün penceresiz sondalar yeşildi** — çünkü gerçekten doğrulardı. Tahmin
+etmeyi bırakıp ölçmenin yolu açıldı: motor artık çalarken UYGULANAN değerleri
+kaydediyor (`ses_son_seviye3d` · `ses_son_kaydirma3d` · `ses_calma_sayisi3d`)
+ve `examples/scene3d_ses_testi.tpr` beş ses katmanını ayrı ayrı sürüyor.
+
+**Sonuç (kullanıcı doğruladı, 2026-09-01): beş katman da sorunsuz çalışıyor.**
+Yani arena'da duyulmayan şey bozuk değildi; sesler kısa (`ates.wav` 0.14 sn,
+`altin.wav` 0.24 sn), zehir havuzununki yalnız GİRİŞ kenarında ve hasar
+parçacıklarının altında, bonus pedi ise tek atım olduğu için oturum başına
+bir kez çalıyor. Duyulmamaları için hata gerekmiyordu.
+
+**İki ders, ikisi de pahalıya alındı:**
+1. **Sessizlik tek bir arıza değil** — en az beş sebep aynı belirtiyi veriyor
+   (aygıt · dosya · olay olmadı · ses çağrılmadı · seviye 0). Ayırmadan
+   aramak saatler yakıyor. Ayrım tablosu: [[Tuzaklar]] §3b.
+2. **Bir özelliği "çalışıyor" ilan etmek için tekrarlanabilir ve
+   GÖRÜLEBİLİR olması gerekiyor.** Tanı sahnesindeki hiçbir bölge tek atım
+   değil ve her çalışta ekrana bildirim düşüyor — duyduğun ile gördüğün
+   eşleşiyor. Ölçülemeyen bir geri bildirim, olmayan bir geri bildirimdir.
 
 ### Ayarlar — ses seviyesi
 Motorda **ana ses seviyesi yoktu**: yalnız müzik başına `music_volume` vardı,
@@ -228,7 +250,7 @@ izgara bayat kalir"*. Uyarı yalnız DUVAR hareketliyse çıkıyor; devriye geze
 düşman ızgarayı bozmuyor ve ona uyarmak uyarıyı gürültüye çevirirdi.
 
 ## Test edilebilirlik — motorun tasarımını belirleyen kısıt
-`tests/scene3d_engine.test.tpr` **648 test**, hepsi **pencere açmadan** koşuyor.
+`tests/scene3d_engine.test.tpr` **653 test**, hepsi **pencere açmadan** koşuyor.
 Bunu mümkün kılan iki desen:
 - **Cihaz okuması tek yere hapsedilir** (`_read_touch3`, `_read_gamepad3`) —
   motorun geri kalanı yalnız tamponu okur.
@@ -254,6 +276,32 @@ bölümleri (`_lvl_js3`, hepsi `_s3_level_data3`'e kayıtlı).
 > ⚠️ **`_sc_clear_for_load3` bölümleri de temizliyor** ama kayıt defterini
 > (`_lvlN`/`_lvlF`) yalnız VERİ bölümleri varken: elle yazılmış bir oyunun
 > `level3d(1, "bolum1")` kayıtları KOD, sahne değil.
+
+## Verinin ÜÇ yolu — kaydet · yükle · KOD ÜRET
+Aynı sahne üç biçimde yaşıyor ve üçünün alan listesi **elle** eşlenmiş:
+
+| yol | fonksiyon | ne veriyor |
+|---|---|---|
+| kaydet | `sahne_json3d()` | sahne → JSON |
+| yükle | `sahne_yukle3d(js)` | JSON → sahne |
+| **kod üret** | `sahne_kod3d()` / `scene_code3d()` | sahne → çalıştırılabilir `.tpr` |
+
+Üçüncüsü `examples/scene3d_export.tpr` ile sürülüyor: editörde kurduğun sahneyi
+elle yazılmış bir oyuna dönüştürüp üstüne kod yazmanın yolu. `--dogrula`
+bayrağı yüklediğini yeniden serileştiriyor.
+
+**Denklik denetimi** (`./build.sh suites`) üretilen `.tpr`'yi derleyip
+çalıştırıyor ve kurduğu sahneyi kaynakla `diff`liyor — "kod da aynı sahneyi
+kuruyor" iddiasını ölçen tek şey bu; üretilen metni gözle okumak yetmiyor.
+
+> ⚠️ **Üç yol AYRIŞABİLİYOR ve ayrışma sessiz.** Kod üretici bölgenin
+> eylemini/miktarını ve sesini, kuralın da sesini hiç yazmıyordu (2026-09-01):
+> JSON'da var, kodda yok. Kaydet↔yükle gidiş-dönüşü yeşil olduğu için görünmedi
+> ve denetim de göremedi — denetim sahnesinde **hiç bölge yok**du. Emitter
+> tamamlandı, denetim artık iki sahne koşuyor (demo + kapsamı kasten dolduran
+> `tests/kod_uretimi_tam.scene.json`). **Yeni serileştirilebilir alan ekleyen
+> üçünü birden dolduracak ve düzeneği büyütecek.**
+> → [[Tuzaklar]] §8 (sessiz veri kaybı)
 
 ## İlgili
 [[Tame]] · [[Arcade]] · [[Editor]] · [[Android]] · [[Testing]] · [[Tuzaklar]] · [[Roadmap]] · [[Standard Library]]

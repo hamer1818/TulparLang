@@ -197,14 +197,23 @@ kendi sesi (kutu) · bölgenin kendi sesi (küre) · konumSUZ düz çalma.
 1..5 tuşları aynı sesleri bölgeye hiç girmeden çalıyor. Belirti → katman
 eşlemesi doğrudan okunuyor.
 
-### 3b-1. Altıncı sebep: ses ÇALDI ama duyulacak kadar sürmedi
+### 3b-1. Altıncı sebep: ses ÇALDI ama duyulacak kadar sürmedi — **DOĞRULANDI**
 Ölçüldü (2026-09-01): `ates.wav` **0.14 s**, `altin.wav` 0.24 s. Arena'nın
 zehir havuzu sesini yalnız GİRİŞ kenarında, hasar parçacıklarının altında,
 bir kez çalıyor; bonus pedi `bolge_bir_kere3d` olduğu için oturum başına
-**bir kez** çalıyor. "Bayağı gezdim, hiç ses yok" raporunun en olası
-açıklaması buydu — arıza değil, **ölçüm penceresi**. Tanı sahnesindeki
-bölgeler bu yüzden tek-atım DEĞİL ve her çalışta ekrana bir bildirim düşüyor:
-duyduğunla gördüğün eşleşiyor.
+**bir kez** çalıyor.
+
+**Sonuç:** tanı sahnesinde (`examples/scene3d_ses_testi.tpr`) kullanıcı beş
+katmanı da tek tek denedi ve **hepsi sorunsuz çalıştı**. Yani arena'daki
+sessizlik bir arıza değildi — **ölçüm penceresiydi**. Sebep listesinin altıncı
+maddesi bu ve ötekilerden farkı şu: kodda yanlış bir şey YOK, yalnız geri
+bildirim insan tarafından yakalanamayacak kadar kısa ve seyrek.
+
+**Tasarım kuralı buradan çıktı:** tanı sahnesindeki hiçbir bölge tek-atım
+DEĞİL (çıkıp gir, istediğin kadar) ve her çalışta ekrana bir bildirim düşüyor,
+böylece duyduğunla gördüğün eşleşiyor. Bir geri bildirimi doğrulatacaksan onu
+önce **tekrarlanabilir** ve **görülebilir** yap; yoksa kullanıcıdan gelen
+"duymadım" cevabı hiçbir şeyi elemez.
 
 ## 4. Grafik/pencere kuralı
 **Asla raylib penceresi açma.** Pencere açan komutlar `DISPLAY=` altında
@@ -385,6 +394,25 @@ BİÇİMDE saklamalı. Yinelemenin karşı durumu tek bölüm olarak saklanınca
 "CTRL+Z, CTRL+Y" sahneyi siliyordu. Test yazarken **gidiş-dönüşü kapat**:
 işlemin tersi tek başına yeşil olabilir, çift ise ancak iki adım sonra
 bozulur (bir bozma tam bu yüzden ilk turda kaçtı).
+
+**Alt sınıf: BİR YÖN taşıyor, ÖTEKİ düşürüyor.** Aynı veri için üç yol var —
+kaydet (JSON), yükle (JSON→sahne) ve **kod üret** (JSON→`.tpr`) — ve üçünün
+alan listesi elle eşlenmiş. `scene_code3d()` bölgenin **eylemini/miktarını ve
+sesini**, kuralın da **sesini** hiç yazmıyordu (2026-09-01): JSON'da var,
+üretilen kodda yok. Kaydet↔yükle gidiş-dönüşü yeşil olduğu için kimse fark
+etmedi; kaybeden yalnız "koda dök" yolundan geçen kullanıcıydı.
+
+Denklik denetimi vardı ama **göremiyordu**: denetim sahnesinde (`toplayici`)
+hiç bölge yok, yani bölge kod üretiminin tamamı denetimsizdi. Bu, 1d'nin
+("senaryo hiç kurulmuyor") uçtan uca ölçekteki hâli — düzenek doğru şeyi
+ölçüyor ama **girdisi o dalı hiç uyarmıyor**.
+
+**Çare iki parçalı:** (1) emitter tamamlandı, (2) denetim artık İKİ sahne
+koşuyor — demo + kapsamı KASTEN dolduran `tests/kod_uretimi_tam.scene.json`
+(kutu+küre bölge, eylem+miktar+ses, tek atım, kapalı bölge, sesli/sessiz
+kural). Üç bozmanın **ikisini yalnız yeni sahne** yakalıyor. **Kural: yeni bir
+serileştirilebilir alan ekleyen, düzeneği de büyütür** — yoksa alan sessizce
+üç yoldan yalnız ikisinde yaşar.
 
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
