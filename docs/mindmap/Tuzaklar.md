@@ -260,6 +260,52 @@ vardı (GL bağlamı yoksa her model -1 döner) ama tetiklenmemişti.
   `bozuk` zaten 0. **Parametreyi tiple** (`bool tur_calisiyor`) ve `== false`
   yerine `if (!x)` yaz.
 
+## 3d. Denetim, ORTAM EKSİKLİĞİNİ kusur sanıyor
+Bir denetim iki ayrı şeyi ayırmak zorunda: **ön koşul yok** (NDK kurulu değil,
+`android/dist` arşivleri üretilmemiş, ses aygıtı yok) ile **kod kırık**. İkisi
+de "başarısız" görünüyor ama yalnız ikincisi bir kusur.
+
+Yaşandı (2026-09-01): Android derleme denetimi NDK yokluğunu atlıyordu ama
+ARŞİV yokluğunu atlamıyordu. `android/dist` gitignore'lu ve yerelde NDK ile
+üretiliyor — temiz bir checkout'ta (yani CI'da) hiç yok. Denetim kırmızı döndü,
+oysa kodda hiçbir şey yoktu.
+
+**Kural:** ön koşul eksikse **ATLA, ama SESSİZ ATLAMA** — sebebiyle birlikte
+tek satır yaz (`android derleme denetimi: android/dist arsivleri yok —
+atlandi`). Sessiz atlama, "asla kırmızıya dönemeyen denetim" tuzağıdır (bkz. 1).
+
+### 3d-1. CI'yı yerelde taklit et — üç tur ucuza gitti
+Bu sürüm PR'ında CI **üç kez** kırmızı döndü ve üçü de yereldeki ortam
+farkındandı: ses aygıtı (3c), zaman bütçesi, Android arşivleri. Her tur ~15
+dakika. Yereldeki tek komutla üçü birden yakalanabilirdi:
+
+```bash
+mv android/dist android/dist.bak; mv wasm/dist wasm/dist.bak
+env -u XDG_RUNTIME_DIR PULSE_SERVER=/nonexistent \
+    ALSA_CONFIG_PATH=/nonexistent HOME=/nonexistent ./build.sh suites
+mv android/dist.bak android/dist; mv wasm/dist.bak wasm/dist
+```
+
+**Sürüm PR'ı açmadan önce bunu koş.** CI ortamı senin makinen değil: ses
+aygıtı yok, pencere yok, önceden derlenmiş arşiv yok, çekirdek sayısı ~4 ve
+saat daha yavaş.
+
+### 3d-2. Zaman bütçesi de bir ölçüm — tahmin değil
+`./build.sh test` adımının 10 dakikalık bütçesi tükenmişti ve **aynı ağacın
+iki ardışık koşumu sınırın iki yanına düştü**: 9dk46sn (geçti, 14 sn pay) ve
+>10dk (aştı). Bütçeyi koşucunun hız değişkenliği çevirebiliyorsa o bir koruma
+değil, kumar.
+
+Sebep dürüst: örnek sayısı 87 → 129 (`examples/en/` ikizleri 2026-08-25'te ilk
+kez koşuma girdi) ve `scene3d_*` örnekleri dosya başına çok ağır — **her biri
+`lib/scene3d.tpr`'yi (~16k satır) sıfırdan derliyor**, önceden derlenmiş modül
+önbelleği yok. Yerel: 16 çekirdek @5GHz'de 100 sn; 4 çekirdekli koşucu ~7×
+yavaş → ~12 dk. Bütçe 25 dakika (~2× pay).
+
+**Bir zaman aşımı SONRAKİ HER ADIMI atlar.** O koşumda paketler hiç koşmadı,
+ama "suites yeşil" diye okunabilirdi — adım listesine bak, çıktının son satırına
+değil.
+
 ## 4. Grafik/pencere kuralı
 **Asla raylib penceresi açma.** Pencere açan komutlar `DISPLAY=` altında
 koşar. Görsel/oynanış testini **kullanıcı yapar**.

@@ -275,8 +275,20 @@ if [ "$ACTION" = "suites" ]; then
         ASMOKE=$(mktemp -d)
         ASMOKE_OUT=$(DISPLAY= ./tulpar build --target=android                             examples/scene3d_collector.tpr "$ASMOKE/tulparsmoke" 2>&1)
         ASMOKE_MAN="$ASMOKE/tulparsmoke_apk/AndroidManifest.xml"
+        # ÖN KOŞUL EKSİKLİĞİ ile KIRIK DERLEME ayrı şeyler. İkisi de "başarısız"
+        # gibi görünüyor ama yalnız ikincisi bir kusur.
+        #
+        # NDK yoksa zaten atlanıyordu; ARŞİVLER yoksa atlanmıyordu ve CI tam
+        # bu yüzden kırmızı döndü (2026-09-01): `android/dist` gitignore'lu,
+        # yerelde NDK ile üretiliyor, temiz bir checkout'ta hiç yok. Denetim
+        # ortamın eksikliğini kodun kusuru sanıyordu.
+        #
+        # Atlama SESSİZ DEĞİL: sebebiyle birlikte yazılıyor, yoksa "asla
+        # kırmızıya dönemeyen denetim" tuzağına düşerdi.
         if echo "$ASMOKE_OUT" | grep -qE "NDK gerekir|needs the NDK"; then
             echo "android derleme denetimi: NDK yok — atlandi"
+        elif echo "$ASMOKE_OUT" | grep -qE "android/dist ars|android/dist archives"; then
+            echo "android derleme denetimi: android/dist arsivleri yok — atlandi"
         elif [ -f "$ASMOKE/tulparsmoke_apk/lib/arm64-v8a/libtulpargame.so" ] &&
              [ -f "$ASMOKE/tulparsmoke_apk/lib/x86_64/libtulpargame.so" ] &&
              [ -f "$ASMOKE_MAN" ] &&

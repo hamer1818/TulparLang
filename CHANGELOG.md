@@ -140,6 +140,15 @@ fonksiyonunun `bool` parametresi TİPSİZDİ ve `== false` karşılaştırması 
 tip etiketleri yüzünden sabit `false` oluyordu, yani fonksiyon her koşulda aynı
 şeyi dönüyordu.
 
+### Fixed — Android derleme denetimi ARŞİV yokluğunu kusur sanıyordu
+
+Denetim NDK yokluğunu atlıyordu ama `android/dist` arşivlerinin yokluğunu
+atlamıyordu. O arşivler gitignore'lu ve yerelde NDK ile üretiliyor — temiz bir
+checkout'ta (yani CI'da) hiç yok. Sonuç: kodda hiçbir kusur yokken denetim
+kırmızı dönüyordu. Artık ön koşul eksikliği atlanıyor, ama **sessiz değil**:
+sebebiyle birlikte tek satır yazılıyor, yoksa "asla kırmızıya dönemeyen
+denetim" tuzağına düşerdi.
+
 ### Fixed — CI'nın örnek koşumu bütçesi tükenmişti (çakışan zaman aşımı)
 
 `./build.sh test` adımının 10 dakikalık bütçesi artık yetmiyordu ve bu bir
