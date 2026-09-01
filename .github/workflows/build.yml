@@ -296,11 +296,25 @@ jobs:
         # History: the suite ran serially and grew to 87 examples (each a
         # full AOT compile + link), hitting ~5m45s — 87% of this job's wall
         # time — which is why the timeout kept getting raised (5 -> 15 min).
-        # `build.sh test` now fans the examples out over `xargs -P$(nproc)`
-        # (~36s on an 8-core dev box; ~1-2 min on a 4-core runner), so the
-        # generous ceiling is no longer load-bearing — 10 min is still ~5x
-        # headroom while catching a genuine hang sooner.
-        timeout-minutes: 10
+        # `build.sh test` now fans the examples out over `xargs -P$(nproc)`,
+        # which brought it back down and 10 min looked like ~5x headroom.
+        #
+        # 2026-09-01 — 10 min was NOT headroom any more; measured, not guessed:
+        #   * the example count grew 87 -> 129 (the `examples/en/` twins were
+        #     never run before 2026-08-25; adding them ~doubled the set), and
+        #   * the new `scene3d_*` / `tame3d_*` examples are far heavier per
+        #     file — each one recompiles `lib/scene3d.tpr` (~16k lines) from
+        #     scratch, since there is no precompiled-module cache.
+        # Two consecutive runs of the SAME tree straddled the limit: 9m46s
+        # (passed, 14s to spare) and >10m (timed out). A threshold that a
+        # runner's speed variance can flip is a flake, not a guard.
+        # Local reference: 100s on 16 cores @5GHz; a 4-core runner is ~7x
+        # slower => ~12 min expected. 25 min is ~2x that — enough to absorb a
+        # slow runner, still tight enough to catch a genuine hang.
+        #
+        # The real fix is a precompiled-module cache so 30 scene3d examples
+        # stop rebuilding the same library 30 times; until then, budget honestly.
+        timeout-minutes: 25
 
       # tests/*.test.tpr regression suites (gömülü `test` kitaplığı,
       # jest tarzı assert'ler). `./build.sh test` YALNIZ examples/ üzerinde

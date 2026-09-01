@@ -140,6 +140,24 @@ fonksiyonunun `bool` parametresi TİPSİZDİ ve `== false` karşılaştırması 
 tip etiketleri yüzünden sabit `false` oluyordu, yani fonksiyon her koşulda aynı
 şeyi dönüyordu.
 
+### Fixed — CI'nın örnek koşumu bütçesi tükenmişti (çakışan zaman aşımı)
+
+`./build.sh test` adımının 10 dakikalık bütçesi artık yetmiyordu ve bu bir
+FLAKE'ti: **aynı ağacın iki ardışık koşumu sınırın iki yanına düştü** — biri
+9dk46sn ile geçti (14 saniye pay), öteki zaman aşımına uğradı. Bütçeyi
+koşucunun hız değişkenliği çevirebiliyorsa o bir koruma değil, kumar.
+
+Ölçüldü: örnek sayısı 87 → **129** (2026-08-25'te `examples/en/` ikizleri ilk
+kez koşuma girdi, küme kabaca ikiye katlandı) ve yeni `scene3d_*` / `tame3d_*`
+örnekleri dosya başına çok daha ağır — her biri `lib/scene3d.tpr`'yi (~16 bin
+satır) sıfırdan yeniden derliyor, çünkü önceden derlenmiş modül önbelleği yok.
+Yerel referans: 16 çekirdek @5GHz'de 100 sn; 4 çekirdekli koşucu ~7× yavaş,
+yani ~12 dk bekleniyor. Bütçe **25 dakikaya** çıkarıldı (~2× pay) — yavaş bir
+koşucuyu soğuracak kadar geniş, gerçek bir takılmayı yakalayacak kadar dar.
+
+Asıl çözüm önceden derlenmiş modül önbelleği: 30 scene3d örneği aynı
+kütüphaneyi 30 kez derlemeyi bırakmalı. O gelene kadar bütçe dürüst tutuluyor.
+
 ### Fixed — başarısız pakette HANGİ testin düştüğü çıktıda görünmüyordu
 
 `build.sh suites` başarısız pakette `grep -E 'FAIL|hata|error' | head -8`
