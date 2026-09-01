@@ -31,6 +31,9 @@
 #include "typeinfer/typeinfer_warn.hpp"
 #include "common/version.hpp"
 #include <ctime>
+#include <set>
+#include <string>
+#include <cctype>
 
 // Dosyadan kaynak kodu oku
 char *read_file(const char *filename) {
@@ -61,6 +64,71 @@ char *read_file(const char *filename) {
 // Print the top-level command reference. Shared between explicit
 // `tulpar --help` / `-h` / `help` / `?` invocations and the no-args
 // fallback so both stay in sync.
+// Kaynaktaki `import "ad"` bildirimlerinden çözülen YEREL dosyaların en yeni
+// değişiklik zamanı. `tulpar build` önbelleği bunu okuyor: import edilen bir
+// modül ana kaynaktan sonra değiştiyse ikili bayattır.
+//
+// Çözüm sırası AOT arka ucuyla AYNI (llvm_backend.cpp'deki import işleyicisi):
+// düz `ad`, `ad.tpr`, `tulpar_modules/<ad>/<ad>.tpr`, `tulpar_modules/<ad>.tpr`.
+// Gömülü stdlib adları (wings, tame, scene3d, ...) diskte bulunmaz ve
+// atlanır — onları sürücünün kendi mtime'ı kapsıyor.
+//
+// Özyineleme: bulunan dosyanın kendi import'ları da izleniyor (yerel modül
+// yerel modül çağırabiliyor). `seen` hem döngüyü hem tekrarı kesiyor, derinlik
+// de sınırlı — bozuk/dairesel bir ağaçta önbellek denetimi asılmasın.
+static time_t newest_local_import_mtime(const char *src, const char *src_path,
+                                        std::set<std::string> &seen, int depth) {
+  time_t newest = 0;
+  if (!src || depth > 8) return newest;
+
+  // İçe aktaranın dizini: göreli yollar ONA göre değil ÇALIŞMA DİZİNİNE göre
+  // çözülüyor (motor da öyle yapıyor), o yüzden dizin yalnız `seen` anahtarı
+  // için tutuluyor.
+  (void)src_path;
+
+  std::string text(src);
+  size_t pos = 0;
+  while ((pos = text.find("import", pos)) != std::string::npos) {
+    size_t p = pos + 6;
+    // `import` bir tanımlayıcının parçasıysa (ör. `importer`) atla.
+    if (pos > 0 && (isalnum((unsigned char)text[pos - 1]) || text[pos - 1] == '_')) {
+      pos = p;
+      continue;
+    }
+    while (p < text.size() && (text[p] == ' ' || text[p] == '\t')) p++;
+    if (p >= text.size() || text[p] != '"') { pos = p; continue; }
+    size_t q = text.find('"', p + 1);
+    if (q == std::string::npos) break;
+    std::string name = text.substr(p + 1, q - p - 1);
+    pos = q + 1;
+    if (name.empty()) continue;
+
+    const std::string cands[4] = {
+        name, name + ".tpr", "tulpar_modules/" + name + "/" + name + ".tpr",
+        "tulpar_modules/" + name + ".tpr"};
+    for (int i = 0; i < 4; i++) {
+      struct stat st;
+      if (stat(cands[i].c_str(), &st) != 0 || !S_ISREG(st.st_mode)) continue;
+      if (!seen.insert(cands[i]).second) break;   // zaten görüldü
+      if (st.st_mtime > newest) newest = st.st_mtime;
+      // İçeriğini de tara: yerel modül başka bir yerel modülü çağırabilir.
+      FILE *f = fopen(cands[i].c_str(), "rb");
+      if (f) {
+        std::string body;
+        char buf[4096];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), f)) > 0) body.append(buf, n);
+        fclose(f);
+        time_t deep =
+            newest_local_import_mtime(body.c_str(), cands[i].c_str(), seen, depth + 1);
+        if (deep > newest) newest = deep;
+      }
+      break;   // ilk eşleşen aday kazanır — çözüm sırası budur
+    }
+  }
+  return newest;
+}
+
 static void print_help() {
   std::printf("TulparLang %s (LLVM AOT Backend)\n\n", tulpar::kVersion);
 
@@ -512,7 +580,18 @@ int main(int argc, char **argv) {
         if (stat(exe_path, &exe_st) == 0 &&
             stat(src_arg, &src_st) == 0) {
           int driver_ok = (stat(argv[0], &drv_st) == 0);
+          // IMPORT EDİLEN DOSYALAR da hesaba katılıyor. Eskiden yalnız ana
+          // kaynak ve sürücü karşılaştırılıyordu; `import "lib/scene3d"` gibi
+          // YEREL bir modülü düzeltip yeniden derlemek "Cache hit" alıp
+          // SESSİZCE eski ikiliyi bırakıyordu. Belirti çok yanıltıcı:
+          // düzeltmen "işe yaramamış" görünüyor ve yanlış yerde hata arıyorsun
+          // (ölçüldü 2026-09-01: üç ayrı enjeksiyonun üçü de aynı bayat ikiliyi
+          // koşturdu ve hepsi "yakalandı" gibi göründü). Gömülü stdlib adları
+          // diskte çözülmüyor — onları sürücünün mtime'ı zaten kapsıyor.
+          std::set<std::string> seen;
+          time_t imp_mtime = newest_local_import_mtime(source, src_arg, seen, 0);
           if (exe_st.st_mtime >= src_st.st_mtime &&
+              exe_st.st_mtime >= imp_mtime &&
               (!driver_ok || exe_st.st_mtime >= drv_st.st_mtime)) {
             printf("[AOT] Cache hit: %s up-to-date\n", exe_path);
             free(source);

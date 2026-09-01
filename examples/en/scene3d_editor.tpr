@@ -2,8 +2,8 @@
 // English twin of examples/scene3d_editor.tpr.
 //
 //   ./tulpar examples/en/scene3d_editor.tpr
-//   ./tulpar build examples/en/scene3d_editor.tpr editor && ./editor
-//   ./editor my_scene.json            (open your own scene / create a new file)
+//   ./tulpar build examples/en/scene3d_editor.tpr TameEngine && ./TameEngine
+//   ./TameEngine my_scene.json        (open your own scene / create a new file)
 //
 // IN THE BROWSER:
 //   mkdir -p assets && cp <some>.ttf assets/ui.ttf     (a readable font)
@@ -19,24 +19,186 @@
 // and the difference from overlaying a running game is this: editing is the
 // primary act, playing is one of its tools.
 //
-// Shortcuts (industry standard):
+// SHORTCUTS: the full list lives INSIDE the editor — press H, or the "?"
+// button in the menu bar. What follows is a summary; the on-screen list is
+// the single source (the status bar no longer enumerates shortcuts, that
+// line was getting truncated).
 //   RIGHT MOUSE held + WASD/QE   free flight, mouse to look
-//   Q / W / E / R                select / move / rotate / scale  (1-4 too)
-//   F                            frame the selection
-//   G                            toggle grid
+//   Q / W / E / R                select / move / rotate / scale  (handles)
+//   1 / 2 / 3 / 4                select / move / SCALE / ROTATE  (different!)
+//   F / G / SPACE                frame / grid / drop onto the ground
 //   DEL / CTRL+D                 delete / duplicate
+//   CTRL+C / CTRL+V              copy / paste (works ACROSS LEVELS)
+//   CTRL+A                       select all
+//   CTRL+D                       duplicate (bodies AND zones)
+//   DRAG FROM EMPTY SPACE        box-select (CTRL: add to the set)
 //   CTRL+Z / CTRL+Y              undo / redo
 //   CTRL+S (or F5)               save
-//   SPACE                        drop the selection onto the ground
-//   ESC                          while playing: stop
+//   CTRL+SHIFT+S                 save as (file window)
+//   H                            the shortcut list
+//   F11                          toggle fullscreen
+//   ESC                          close an open window / while playing: stop
 // Letter keys are tool shortcuts ONLY while the right mouse button is NOT
 // held; while it is held they are flight.
 //
+// HANDLES: MOVE and SCALE give you three arrows (X red, Y green, Z blue) —
+// grab one and the change stays on that axis. ROTATE gives you a RING: grab
+// the circle around the body and turn it. The engine rotates on Y only, so
+// there is one ring; drawing three would mean two handles that do nothing.
+// The line across the ring shows which way the body FACES — without it a
+// symmetric circle tells you nothing about how far you have turned.
+//
+// WITH THE GRID ON rotation snaps to 15° too (the same step the arrow keys
+// use); with it off the angle is free. The grid button means "align", and
+// aligning positions while leaving angles free would leave an aligned wall
+// tilted by 3°.
+//
+// BOX SELECTION: press on empty space and drag — everything inside the box is
+// selected, and with CTRL held it is ADDED to the existing set (the same rule
+// as CTRL+click). The box starts from empty space because a drag that starts
+// on a body means MOVE it, and that gesture is far more common. A drag under
+// the threshold is still a plain click (otherwise every click would run a
+// zero-area box).
+//
+// The box goes by CENTRES: a body is selected when its centre is inside the
+// box. Taking everything the box TOUCHES would drag a huge floor or wall into
+// every selection. Bodies outside the view (and behind the camera) are not
+// collected — "I can see what I selected" has to keep holding.
+//
+// ROTATING A MULTI-SELECTION turns the group around ITS CENTRE: each body
+// both turns and orbits, so the arrangement itself rotates. Turning only the
+// facings would spin the boxes in place and leave the arrangement untouched —
+// that is not what "rotate the group" means.
+//
+// SCALING also applies to the WHOLE selection: pick five crates, drag an
+// axis arrow, and all five widen. What is applied is an ABSOLUTE length
+// ("two units wider"), not a ratio — the handle gives you world units.
+// Positions do not move: "widen these five" is not "spread these five
+// apart". (Rotation does orbit, because there the arrangement turning IS
+// the gesture.)
+//
+// THE CONSOLE is a real console: scroll BACK with the wheel, FILTER by
+// level from the bar above it (x errors / ! warnings / i info — the counts
+// stay visible while a filter is off, otherwise you keep hunting for what
+// you hid), and empty it with TEMIZLE (which does not touch the scene).
+// At the bottom it follows new lines; once you scroll up it stays put and
+// the bar tells you how many lines below you are.
+//
+// FILES: "Open" in the menu lists the .json scenes on disk — the editor is no
+// longer tied to the file it was launched with. "F. Kaydet" (save as) writes
+// the scene to ANOTHER file and CTRL+S targets that file from then on; this
+// is how you take a template and turn it into your own game. Clicking the
+// file that is already open is a REVERT (unsaved work goes, but CTRL+Z still
+// brings it back). Switching to a different file RESETS the undo history: if
+// it did not, CTRL+Z would pull the previous scene into the new file and
+// CTRL+S would write it there.
+//
+// LEVELS: the strip at the top of the hierarchy. "+ BOLUM EKLE" turns the
+// scene into a multi-level one (the live scene becomes level 1); the arrows
+// move between them. Switching levels does NOT lose work.
+//
+// Getting from one level to the NEXT needs an ending condition. Two ways:
+//   • a rule:  "cleared: item -> SONRAKI BOLUM" (advance when the gold is gone)
+//   • a zone:  place a zone, set its GIRINCE action to "sonraki bol" (an exit)
+// On the last level "next level" WINS the game rather than hanging.
+//
+// ZONES: right-click -> "+ bolge". A zone has an on-enter action: win, lose,
+// kill whoever entered (pits/lava), damage, add score, next level. A zone with
+// no action does nothing at all — the scene check says so. Zones are drawn in
+// the editor (the colour states their condition) and handled EXACTLY like a
+// body: click, grab and drag (on the ground plane), nudge the height with the
+// arrows, CTRL+D to DUPLICATE, DEL to remove. Duplication carries the settings
+// too — action, amount, sound, once-only, tag — otherwise the copy would be a
+// zone that looks the same and does nothing. They also have a SOUND: pick the
+// file that plays on enter from the panel — the same sound list the rules use.
+//
+// ZONES HAVE HANDLES TOO: with a zone selected, MOVE and SCALE draw the same
+// arrows entities get (the same function draws them, not a second copy). A
+// lava pit or a win zone is exactly the kind of thing you place by eye; it
+// should not be stuck behind number fields.
+//   * ROTATE gives a zone no handle: a zone has no yaw (it is an axis-aligned
+//     box both in the format and in the containment test), so a ring would be
+//     a handle that does nothing.
+//   * On a SPHERE zone every arrow drives the RADIUS: a sphere has one size,
+//     and writing three per-axis numbers would move nothing.
+//   * A size never drops below one grid step (0.1 with the grid off): an
+//     inside-out box NEVER triggers, and nothing would say so.
+//
+// DRAG A PANEL BY ITS TITLE: grab the "HIYERARSI" text and pull. A GHOST of
+// the panel (title strip plus body) follows the cursor, and the RECTANGLE THE
+// PANEL WILL ACTUALLY GET is painted blue — not a rough third of the screen,
+// but the area that really appears when you release. (If the dock already
+// holds a panel, the newcomer gets its SHARE, not a third; that is exactly
+// where the old preview lied.) The left third targets the LEFT dock, the
+// right third the RIGHT one, the bottom quarter the BOTTOM one. The middle is
+// not a valid drop — releasing there cancels, and the ghost says so. The "x" at the
+// right end of the title closes the panel; a hidden panel is not drawn and
+// takes no space, its area goes to the scene view.
+//
+// Panels in the same dock share it — stacked in the side docks, side by side
+// in the bottom one — and THE LINE BETWEEN THEM IS DRAGGABLE TOO: putting the
+// console under the hierarchy and giving it a third of the space is one pull.
+// The share is a RATIO: both panels grow when the window does. A panel that
+// moves into a dock gets an equal share, so a panel you squeezed to a sliver
+// in one dock does not arrive as a sliver in the next.
+//
+// The Gorunum (View) menu lists the three panels with a check box each — that
+// is the way to bring a HIDDEN panel back (a hidden panel has no title bar,
+// so it cannot reopen itself), and a hidden panel reopens into ITS OWN home
+// dock, not always the left one. "Panel Yerlesimi..." opens the same list as
+// a window and "Varsayilan Yerlesim" restores both the docks and the sizes.
+//
+// Deliberately NOT done: ordering within a dock, TABS, and FLOATING windows.
+// All three mean a separate window manager.
+//
+// PANEL BORDERS ARE DRAGGABLE: grab the line between the hierarchy and the
+// scene view, between the scene view and the inspector, or the top of the
+// console, and pull. (That resizes the DOCK; the line BETWEEN two panels in
+// the same dock resizes their share. Where the two meet in a corner, the
+// dock's outer border wins.) The choice PERSISTS — it survives closing the engine and
+// comes back on the next start (the UI scale too). The YERLESIM button in the
+// Gorunum menu restores the defaults; that is the way out if you push a
+// border to the edge of the screen.
+//
+// THE WINDOW is resizable and maximizable — drag an edge, use the OS maximize
+// button, or press F11 for fullscreen. Every panel and the scene view is
+// recomputed for the new size.
+//
+// ON CLOSING: closing the window no longer loses unsaved work. raylib has no
+// hook to cancel a close, so "are you sure?" cannot be asked — instead the
+// live scene is written to `<file>.kurtarma.json` and the editor shows a
+// KURTAR (recover) button in the bar next time it starts. Saving voids
+// that file. Recovering is undoable (CTRL+Z) and the recovered work still
+// counts as unsaved (the title keeps its asterisk).
+//
+// CAMERA: in the world panel. Mode (follow / orbit / first person), TARGET
+// (the entity the camera watches — the button cycles through them),
+// distance/height/fov, and whether the camera stops at walls. A camera with no
+// target never moves; the scene check says so. The editor NAMES the target,
+// because the scene format refers to entities by name — an unnamed target
+// would silently break on save.
+//
+// THE MENU BAR IS MADE OF DROP-DOWN MENUS: Dosya (File) / Duzen (Edit) /
+// Gorunum (View) / Yardim (Help). While one is open, moving over another
+// title switches to it; ESC closes. Every command shows ITS SHORTCUT on the
+// right of its own row — learning a shortcut should not require opening a
+// separate list. Commands that cannot do anything right now (Paste with an
+// empty clipboard, Delete with no selection) are DIMMED rather than hidden:
+// an item that disappears also makes you forget the command exists.
+//
+// "Yeni" (New) is destructive, so it takes two clicks: the first turns the
+// item into "EMIN MISIN?" and keeps the menu open, the second clears the
+// scene. With no unsaved work there is no question.
+//
+// KURTAR (recover) is NOT in a menu — it sits in the bar, highlighted. It is
+// not a standing command but a temporary offer ("there is unsaved work from
+// the last session"), and an offer hidden in a menu is not seen.
+//
 // Layout:
-//   menu bar          New / Open / Save / Undo / Redo
+//   menu bar          Dosya / Duzen / Gorunum / Yardim  —  file name on the right
 //   toolbar           tools on the left, PLAY-STOP CENTRED, grid
 //   hierarchy | SCENE VIEW | inspector
-//   console           the engine's diagnostic log
+//   console           the engine's diagnostic log (scrollable, filterable)
 //   status bar
 //
 // The scene path is resolved against the WORKING DIRECTORY; run from the
@@ -60,7 +222,7 @@ func scene_path(): str {
         }
         return "scene.json";
     }
-    // THE COMMAND LINE comes first: `./editor my_scene.json`. Being able to
+    // THE COMMAND LINE comes first: `./TameEngine my_scene.json`. Being able to
     // open only one embedded file made the editor useless for your own work.
     array a = args();
     if (length(a) > 1) { return a[1]; }
@@ -102,7 +264,7 @@ func setup() {
     }
     // A file given on the command line that does NOT yet exist is not an
     // error: it is the most natural way to create a new scene
-    // (`./editor new.json` -> empty scene, F5 writes it there).
+    // (`./TameEngine new.json` -> empty scene, F5 writes it there).
     array a = args();
     if (length(a) > 1 && file_exists(a[1]) == false) {
         editor_file3d(a[1]);
@@ -115,7 +277,7 @@ func setup() {
         editor_file3d("scene.json");
         scene_load3d(EMPTY);
         log_err3d("no scene file found — opened an empty scene.");
-        log_err3d("run from the repo root: ./editor");
+        log_err3d("run from the repo root: ./TameEngine");
         return;
     }
     editor_file3d(SCENE);
@@ -128,7 +290,7 @@ func setup() {
     }
 }
 
-scene3d(1440, 820, "Tulpar Scene Editor");
+scene3d(1440, 820, "TameEngine");
 editor_app3d(true);
 on_setup3d(setup);
 play3d();

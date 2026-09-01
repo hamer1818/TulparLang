@@ -5,6 +5,7 @@
 //   Phase 8  (feel):     particles (billboards) · 2D health bars pinned to 3D
 //   Phase 9  (geometry): ramps · rotated wall (SAT) · capsule pillar · camera ray
 //   Phase 11 (shell):    title screen · pause (ESC/P) · restart
+//                        · CONTINUE (from where you left off) · LEVEL SELECT
 //   Zones:               bonus pad (one shot) · poison pool (sphere, every frame)
 //   Input:               keyboard+mouse · touch · gamepad (all at once)
 //
@@ -14,6 +15,11 @@
 // Play: enemies chase you and cost health on contact. You fire automatically
 // in the direction you are looking; clear every enemy in a level to advance.
 // Finish all three levels to win.
+//
+// PROGRESS PERSISTS (`save_progress3d`): finished levels are written to disk, so
+// the second time you open the game the title screen offers "Devam (Bolum 2)"
+// and "Bolumler". In the level grid, locked levels are drawn dim and cannot be
+// picked — the open ones run up to one past your longest unbroken run.
 //
 // WHY firing is automatic: on desktop it would need a key, on touch a button —
 // and the left half is already the stick, the right half the look pad / jump.
@@ -35,6 +41,13 @@ int   ENEMY_HP = 50;       // 2 hits
 int   TOUCH_DMG = 12;      // cost of touching an enemy
 int   poison_zone = 0 - 1; // poison pool's zone id (the HUD reads it)
 
+// SOUND handles, loaded once in `setup`: reloading every shot would hit the
+// disk for nothing and make raylib allocate a fresh Sound each time. With no
+// audio device the load returns -1 and playback is skipped silently — the
+// windowless/silent test run takes the SAME path, there is no second branch.
+int   snd_hit   = 0 - 1;   // bullet hit
+int   snd_lose  = 0 - 1;   // player died
+
 // --- Shared setup: the things that are the same in every level ------------
 func setup() {
     sky3d(rgb(24, 30, 52), rgb(96, 116, 150));
@@ -49,6 +62,10 @@ func setup() {
     // player has to see the bonus pad and the poison pool — a real game would
     // use a floor texture or a light instead; this is a debug draw.
     trigger_show3d(true);
+    // Sounds. Paths are relative to the WORKING DIRECTORY — run from the
+    // repo root.
+    snd_hit   = load_sound("examples/assets/sesler/vurus.wav");
+    snd_lose  = load_sound("examples/assets/sesler/kaybettin.wav");
 }
 
 // --- Level setups ---------------------------------------------------------
@@ -87,6 +104,11 @@ func build_zones() {
     int pad = trigger3d(0.0 - 10.0, 1.0, 10.0,  4.0, 3.0, 4.0, TAG_PLAYER);
     on_enter3d(pad, on_bonus_pad);
     trigger_once3d(pad, true);
+    // The pad sound lives in the ZONE, not in the hook. Playing it by
+    // hand would work (one `sound3d` line) but then it would not travel
+    // in the scene file and the editor could not pick it — that is what
+    // the data-driven path is for. The hook only does the game logic.
+    trigger_sound3d(pad, "examples/assets/sesler/altin.wav");
 
     // 2) Poison pool — a WHILE-INSIDE hook, i.e. every frame. Because damage3d
     // manages its own invulnerability window this is not "60 damage a second".
@@ -97,6 +119,10 @@ func build_zones() {
     // imitation approach would need the game to keep a "was I inside last
     // frame" flag.
     on_exit3d(poison_zone, on_poison_exit);
+    // ZONE SOUND: no hook needed, it is a field of the zone itself. It
+    // fires once on ENTER and travels in the scene format — the editor
+    // can pick it too, no code required.
+    trigger_sound3d(poison_zone, "examples/assets/sesler/ates.wav");
 }
 
 func spawn_player() {
@@ -183,6 +209,10 @@ func update() {
 func bullet_hits_enemy() {
     // Hit spark — BEFORE the bullet dies, while its position can still be read.
     burst3d(me3d(), 6, rgb(255, 230, 120), 5.0, 0.25);
+    // The sound is POSITIONAL too: `sound3d` attenuates with distance and
+    // pans left/right along the camera axis, so hitting an enemy on your
+    // right is heard on the right.
+    sound3d(snd_hit, get3x(me3d()), get3y(me3d()), get3z(me3d()));
     kill3d(me3d());                 // the bullet is spent
     damage3d(other3d(), BULLET_DMG);
 }
@@ -225,6 +255,7 @@ func on_poison_exit() {
 
 func player_died() {
     burst3d(me3d(), 40, SKYBLUE, 11.0, 1.0);
+    sound3d(snd_lose, get3x(me3d()), get3y(me3d()), get3z(me3d()));
     game_over3d();
 }
 

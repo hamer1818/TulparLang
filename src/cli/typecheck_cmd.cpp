@@ -76,6 +76,18 @@ int typecheck_cmd_main(int argc, char **argv) {
     std::fprintf(stderr, "tulpar typecheck: parse failed\n");
     return 2;
   }
+  // AYRIŞTIRICI HATA SAYACI. Parser hatadan KURTULUYOR: tanıyı basıp KISMİ
+  // bir AST döndürüyor, istisna atmıyor. Yalnız `catch` ve `!ast` denetimine
+  // güvenmek, sözdizimi bozuk bir dosyaya "ok" dedirtiyordu — ölçüldü:
+  // `int x = ;` yazan dosya tanıyı basıyor ve çıkış kodu 0 dönüyordu, yani
+  // `tulpar typecheck`i kapı olarak kullanan bir CI ayrıştırma hatalarına
+  // KÖR kalıyordu. Sayacın var olma sebebi tam bu (bkz. parser.hpp) ve
+  // typeinfer ön-geçişi onu zaten okuyordu; eksik olan yalnız bu komuttu.
+  if (parser_get_error_count() > 0) {
+    std::fprintf(stderr, "tulpar typecheck: %d parse error(s) in %s\n",
+                 parser_get_error_count(), path);
+    return 2;
+  }
 
   TypeInferContext *ctx = typeinfer_create();
   typeinfer_program(ctx, ast.get());

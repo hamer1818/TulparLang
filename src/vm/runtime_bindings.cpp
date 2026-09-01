@@ -1031,7 +1031,38 @@ static int aot_format_float(char *buf, size_t n, double value) {
   float f = (float)value;
   for (int prec = 1; prec <= 9; prec++) {  // 9 sig-figs round-trips any float32
     int len = snprintf(buf, n, "%.*g", prec, (double)f);
-    if ((float)strtod(buf, nullptr) == f) return len;
+    if ((float)strtod(buf, nullptr) != f) continue;
+    // `%g` switches to scientific whenever the exponent leaves [-4, prec).
+    // At the SHORTEST round-tripping precision that fires for perfectly
+    // ordinary numbers: 30.0 came out "3e+01" and 100.0 "1e+02". Both
+    // round-trip, so the loop accepted them — but nobody writes a score,
+    // an fps or a coordinate that way, and this is what `print` shows.
+    // Re-render in fixed notation when the magnitude is one a reader
+    // expects written out; scientific stays for the extremes where it
+    // earns its place.
+    if (memchr(buf, 'e', (size_t)len) == nullptr) return len;
+    double a = f < 0 ? -(double)f : (double)f;
+    if (a < 1e-4 || a >= 1e16) return len;
+    // Buraya YALNIZCA `%g`nin BÜYÜK tarafta bilimsele geçtiği durum düşüyor:
+    // küçük taraf (üs < -4) yukarıdaki büyüklük korumasına takılıyor, sıfır
+    // ise hiç 'e' üretmiyor. Büyük tarafta bilimsel demek "üs >= anlamlı
+    // basamak sayısı" demek — yani tam sayı kısmı anlamlı basamaklardan
+    // uzun, dolayısıyla KESİR YOK. O yüzden ondalık basamak hesabı gereksiz:
+    // her zaman sıfır çıkıyor. (Önce genel bir `prec - 1 - exp10` hesabı
+    // yazılmıştı; enjeksiyon o hesabı bozunca hiçbir test kırılmadı ve
+    // sebebi buydu — ulaşılabilir yolda sonuç değişmiyordu.)
+    int flen = snprintf(buf, n, "%.0f", (double)f);
+    // Fixed form must still round-trip; if it somehow doesn't, keep the
+    // scientific one rather than print a number that isn't the value.
+    //
+    // NOTE: this check and the `memchr` early return above are MUTUALLY
+    // REDUNDANT — remove either alone and every test still passes (measured),
+    // because whichever survives covers the other's case. Remove BOTH and
+    // 3.14 prints "3". They are kept as a pair on purpose: the early return
+    // is the fast path (no second snprintf on the common case), this one is
+    // the correctness backstop. Don't delete one because it "looks dead".
+    if ((float)strtod(buf, nullptr) == f) return flen;
+    return snprintf(buf, n, "%.*g", prec, (double)f);
   }
   return snprintf(buf, n, "%.9g", (double)f);
 }

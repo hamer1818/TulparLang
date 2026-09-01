@@ -22,8 +22,35 @@ func run_negative() {
     assert_eq_str(toString(0.0 - 0.5), "-0.5");
 }
 
+
+// 2026-08-26: kısa-gidiş-dönüş araması BİLİMSEL gösterimi de kabul ediyordu.
+// "%g" üssü [-4, hassasiyet) aralığından çıkınca bilimsele geçiyor; en kısa
+// hassasiyette bu SIRADAN sayılarda oluyordu — 30.0 "3e+01", 100.0 "1e+02".
+// İkisi de gidiş-dönüş yapıyor, o yüzden döngü onları kabul ediyordu. Ama
+// bu `print`in gösterdiği şey: kimse skoru ya da fps'i böyle yazmaz.
+func run_whole_numbers_not_scientific() {
+    assert_eq_str(toString(30.0), "30");
+    assert_eq_str(toString(100.0), "100");
+    assert_eq_str(toString(1234567.0), "1234567");
+    assert_eq_str(toString(0.0), "0");
+    assert_eq_str(toString(0.0 - 30.0), "-30");
+}
+
+// Sınırın ALTINDA/ÜSTÜNDE bilimsel gösterim KALMALI — düzeltme "bilimseli
+// tümden kaldır" değil, "sıradan büyüklükte kullanma".
+func run_extremes_stay_scientific() {
+    assert_eq_str(toString(0.0001), "0.0001");     // sınırın içinde: düz
+    assert_eq_str(toString(0.00001), "1e-05");     // sınırın altında: bilimsel
+    float big = 1.0;
+    int i = 0;
+    while (i < 20) { big = big * 10.0; i = i + 1; }
+    assert_eq_str(toString(big), "1e+20");         // sınırın üstünde: bilimsel
+}
+
 print("=== float toString (shortest round-trip) ===");
 test("clean small floats", "run_clean_small");
 test("large float keeps fraction", "run_large_with_fraction");
 test("negative float", "run_negative");
+test("tam sayilar bilimsel gosterime kacmiyor", "run_whole_numbers_not_scientific");
+test("uc degerlerde bilimsel gosterim duruyor", "run_extremes_stay_scientific");
 test_summary();

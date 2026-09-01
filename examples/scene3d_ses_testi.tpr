@@ -1,0 +1,285 @@
+// scene3d Ses Tanı Sahnesi — sesin HANGİ katmanda kaybolduğunu bulur.
+//
+//   ./tulpar examples/scene3d_ses_testi.tpr
+//
+// NİYE VAR: "oyundan ses gelmiyor" tek bir arıza değil, en az beş ayrı
+// arızanın aynı görünen belirtisi:
+//
+//   1. ses aygıtı hiç açılmadı        -> handle -1
+//   2. ses dosyası bulunamadı         -> handle -1 (ama aygıt açık)
+//   3. olay hiç olmadı (bölgeye girilmedi)  -> giriş sayacı artmıyor
+//   4. olay oldu ama ses ÇAĞRILMADI   -> giriş artıyor, çalma sayacı artmıyor
+//   5. ses çağrıldı ama SEVİYE 0'dı   -> çalma artıyor, seviye 0.00
+//
+// Bu sahne beşini de ayrı ayrı okunur hale getiriyor. Beş istasyon var, her
+// birinin sesi FARKLI: hangisini duyduğunu kulakla ayırabiliyorsun.
+//
+//   1  elle yükleme (ses_yukle) + konumsal ses3d      -> vurus.wav
+//   2  varlık kaydı (asset_sound3d) + konumsal ses3d  -> altin.wav
+//   3  bölgenin KENDİ sesi (bolge_ses3d), kutu bölge  -> ates.wav
+//   4  bölgenin KENDİ sesi (bolge_ses3d), küre bölge  -> kazandin.wav
+//   5  konumSUZ düz çalma (ses_cal)                   -> kaybettin.wav
+//
+// 5. istasyon KASITLI olarak konumsal katmanı atlıyor: 5 duyulup 1-4
+// duyulmuyorsa arıza mesafe/kaydırma hesabındadır, bölgede değil.
+//
+// Ayrıca 1..5 TUŞLARI aynı sesleri bölgeye hiç girmeden, tam seviyede,
+// doğrudan çalar. Tuşla duyuluyor ama pedle duyulmuyorsa arıza sesin
+// kendisinde değil, olayın tetiklenmesindedir.
+//
+// SESLER KISA — ölçüldü: ates.wav 0.14 sn, vurus 0.16, altin 0.24,
+// kaybettin 0.52, kazandin 0.60. "Bir şey duymadım" raporlarının bir kısmı
+// arıza değil ÖLÇÜM PENCERESİ oluyor, o yüzden burada hiçbir bölge tek atım
+// DEĞİL (istediğin kadar çıkıp gir) ve her çalışta ekrana bir bildirim düşüyor:
+// duyduğunla gördüğün eşleşiyor.
+//
+// HUD her istasyon için: handle · giriş sayısı · uygulanan seviye/yön.
+// 3 ve 4'te ayrıca `calma=` var — motorun sesi gerçekten ÇAĞIRDIĞI sayı.
+
+import "scene3d";
+
+int player = 0;
+
+// Ses dosyaları — yollar ÇALIŞMA DİZİNİNE göre, depo kökünden çalıştır.
+string YOL1 = "examples/assets/sesler/vurus.wav";
+string YOL2 = "examples/assets/sesler/altin.wav";
+string YOL3 = "examples/assets/sesler/ates.wav";
+string YOL4 = "examples/assets/sesler/kazandin.wav";
+string YOL5 = "examples/assets/sesler/kaybettin.wav";
+
+int snd1 = 0 - 1;   // ses_yukle ile
+int snd2 = 0 - 1;   // varlık kaydı ile
+int snd3 = 0 - 1;   // bölge kendi yükleyecek; burada önceden ısıtıyoruz
+int snd4 = 0 - 1;
+int snd5 = 0 - 1;   // konumsuz çalma
+
+int z1 = 0 - 1; int z2 = 0 - 1; int z3 = 0 - 1; int z4 = 0 - 1; int z5 = 0 - 1;
+
+// Giriş sayaçları — "olay oldu mu" sorusunun cevabı.
+int g1 = 0; int g2 = 0; int g3 = 0; int g4 = 0; int g5 = 0;
+
+// 1, 2 ve 5 için sesi ÇALDIKTAN sonra okunan gerçek değerler.
+float v1 = 0.0; float p1 = 0.5;
+float v2 = 0.0; float p2 = 0.5;
+
+// 3 ve 4 için aynı ölçüm BİR KARE GECİKMELİ alınıyor. Sebep: o iki sesi kanca
+// değil MOTOR çalıyor ve kancadan hemen sonra çalıyor — yani kancanın içinde
+// okunan değer henüz eski. Kanca çalma sayacını "bekleyen" olarak yazıyor,
+// bir sonraki kare sayacın gerçekten ilerlediğini görüyor.
+//
+// Ayrımın tamamı bu iki sayıda:
+//   giris artiyor + calma artmiyor -> motor sesi HİÇ çağırmadı
+//                                     (handle -1 ya da yol boş)
+//   giris artiyor + calma artiyor  -> ses çağrıldı; o zaman seviyeye bak
+int c3_bekleyen = 0 - 1; int c3_oldu = 0; float v3 = 0.0; float p3 = 0.5;
+int c4_bekleyen = 0 - 1; int c4_oldu = 0; float v4 = 0.0; float p4 = 0.5;
+
+// Son olayın duyurusu: ne olduğunu ekranda da gör, kulakla duyduğunla eşleştir.
+string son_olay = "";
+float son_olay_t = 0.0;
+
+// Tuş kodları yerel: motor bunların hepsini tanımlamıyor ve global bir ada
+// yaslanmak ileride çakışır.
+int TUS1 = 49; int TUS2 = 50; int TUS3 = 51; int TUS4 = 52; int TUS5 = 53;
+
+func duyur(msg) {
+    son_olay = msg;
+    son_olay_t = 1.6;
+}
+
+// --- İstasyon kancaları ---------------------------------------------------
+// 1 ve 2: sesi KANCA çalıyor (konumsal). Çaldıktan sonra motorun uyguladığı
+// seviye/kaydırmayı okuyoruz — "çaldı ama seviye 0'dı" durumu ancak böyle
+// görünür hale geliyor.
+func girdi1() {
+    g1 = g1 + 1;
+    ses3d(snd1, get3x(ben3()), get3y(ben3()), get3z(ben3()));
+    v1 = ses_son_seviye3d();
+    p1 = ses_son_kaydirma3d();
+    duyur("1 · elle yukleme + ses3d · vurus.wav");
+}
+
+func girdi2() {
+    g2 = g2 + 1;
+    ses3d(snd2, get3x(ben3()), get3y(ben3()), get3z(ben3()));
+    v2 = ses_son_seviye3d();
+    p2 = ses_son_kaydirma3d();
+    duyur("2 · varlik kaydi + ses3d · altin.wav");
+}
+
+// 3 ve 4: ses BURADA çalınmıyor. Bölgenin kendi `bolge_ses3d` alanı çalıyor
+// (motorun içinde, girişten hemen sonra). Kanca yalnız SAYIYOR — böylece
+// "bölgeye girildi ama ses gelmedi" ile "bölgeye hiç girilmedi" ayrılıyor.
+func girdi3() {
+    g3 = g3 + 1;
+    c3_bekleyen = ses_calma_sayisi3d();
+    duyur("3 · bolge_ses3d (kutu) · ates.wav");
+}
+
+func girdi4() {
+    g4 = g4 + 1;
+    c4_bekleyen = ses_calma_sayisi3d();
+    duyur("4 · bolge_ses3d (kure) · kazandin.wav");
+}
+
+// 5: konumsal katman YOK — ses tam seviyede, merkezden çalıyor.
+func girdi5() {
+    g5 = g5 + 1;
+    ses_cal(snd5);
+    duyur("5 · konumsuz ses_cal · kaybettin.wav");
+}
+
+// --- Kurulum --------------------------------------------------------------
+func ped(x, z, renk) {
+    // Üstüne basılabilen düz işaret. Katılığı kapalı: 0.2 yükseklikte bir
+    // basamağa takılmak istasyona girmeyi zorlaştırırdı.
+    int id = uret3(x, 0.1, z,  3.4, 0.2, 3.4, renk, SHAPE_CUBE, TAG_PROP);
+    solid3d(id, false);
+}
+
+func setup() {
+    gokyuzu3d(rgb(18, 22, 34), rgb(70, 88, 120));
+    yercekimi3(26.0);
+    zemin3(0.0);
+    // Bölge tel kafesleri AÇIK: nereye basacağını görmen gerekiyor.
+    bolge_goster3d(true);
+
+    // Dört duvar, dışarı çıkmayasın diye.
+    uret3(0.0, 1.5, 0.0 - 18.0,  40.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    uret3(0.0, 1.5, 18.0,        40.0, 3.0, 1.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    uret3(0.0 - 18.0, 1.5, 0.0,  1.0, 3.0, 40.0, GRAY, SHAPE_CUBE, TAG_WALL);
+    uret3(18.0, 1.5, 0.0,        1.0, 3.0, 40.0, GRAY, SHAPE_CUBE, TAG_WALL);
+
+    player = uret3(0.0, 1.0, 6.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
+    kamera_yorunge(player, 15.0, 10.0);
+
+    // SESLER. Beşi de BURADA yükleniyor — yani pencere ve ses aygıtı açıldıktan
+    // sonra. Yükleme sırası kasıtlı olarak karışık: ikisi elle (`ses_yukle`),
+    // üçü varlık kaydından (`asset_sound3d`). Bölgelerin kullanacağı sesleri
+    // önceden ısıtmak handle'ı HUD'da baştan görünür yapıyor; kayıt aynı yolu
+    // ikinci kez yüklemediği için bölge de tam bu handle'ı kullanacak.
+    snd1 = ses_yukle(YOL1);
+    snd2 = asset_sound3d(YOL2);
+    snd3 = asset_sound3d(YOL3);
+    snd4 = asset_sound3d(YOL4);
+    snd5 = ses_yukle(YOL5);
+
+    // Beş istasyon, z = -6 hattında, 6'şar birim arayla.
+    ped(0.0 - 12.0, 0.0 - 6.0, rgb(240, 120, 120));
+    ped(0.0 - 6.0,  0.0 - 6.0, rgb(240, 200, 100));
+    ped(0.0,        0.0 - 6.0, rgb(120, 220, 140));
+    ped(6.0,        0.0 - 6.0, rgb(120, 180, 250));
+    ped(12.0,       0.0 - 6.0, rgb(210, 130, 240));
+
+    z1 = bolge3d(0.0 - 12.0, 1.5, 0.0 - 6.0,  3.4, 3.0, 3.4, TAG_PLAYER);
+    z2 = bolge3d(0.0 - 6.0,  1.5, 0.0 - 6.0,  3.4, 3.0, 3.4, TAG_PLAYER);
+    z3 = bolge3d(0.0,        1.5, 0.0 - 6.0,  3.4, 3.0, 3.4, TAG_PLAYER);
+    z4 = bolge_kure3d(6.0,   1.5, 0.0 - 6.0,  2.0, TAG_PLAYER);
+    z5 = bolge3d(12.0,       1.5, 0.0 - 6.0,  3.4, 3.0, 3.4, TAG_PLAYER);
+
+    girince3d(z1, girdi1);
+    girince3d(z2, girdi2);
+    girince3d(z3, girdi3);
+    girince3d(z4, girdi4);
+    girince3d(z5, girdi5);
+
+    // 3 ve 4'ün sesi VERİ olarak bölgeye bağlı — kancada tek satır ses kodu yok.
+    bolge_ses3d(z3, YOL3);
+    bolge_ses3d(z4, YOL4);
+
+    // Hiçbiri tek atım DEĞİL: çıkıp tekrar girerek istediğin kadar deneyebil.
+}
+
+func update(dt) {
+    hareket3(player, 9.0);
+    if (son_olay_t > 0.0) { son_olay_t = son_olay_t - dt; }
+    // Gecikmeli ölçüm: motor 3/4'ün sesini kancadan SONRA çaldı mı?
+    if (c3_bekleyen >= 0 && ses_calma_sayisi3d() > c3_bekleyen) {
+        c3_oldu = c3_oldu + 1;
+        v3 = ses_son_seviye3d(); p3 = ses_son_kaydirma3d();
+        c3_bekleyen = 0 - 1;
+    }
+    if (c4_bekleyen >= 0 && ses_calma_sayisi3d() > c4_bekleyen) {
+        c4_oldu = c4_oldu + 1;
+        v4 = ses_son_seviye3d(); p4 = ses_son_kaydirma3d();
+        c4_bekleyen = 0 - 1;
+    }
+    // Tuşlar: bölgeyi tamamen atlayıp sesi doğrudan, tam seviyede çal.
+    if (key_pressed(TUS1)) { ses_cal(snd1); duyur("TUS 1 · duz cal · vurus.wav"); }
+    if (key_pressed(TUS2)) { ses_cal(snd2); duyur("TUS 2 · duz cal · altin.wav"); }
+    if (key_pressed(TUS3)) { ses_cal(snd3); duyur("TUS 3 · duz cal · ates.wav"); }
+    if (key_pressed(TUS4)) { ses_cal(snd4); duyur("TUS 4 · duz cal · kazandin.wav"); }
+    if (key_pressed(TUS5)) { ses_cal(snd5); duyur("TUS 5 · duz cal · kaybettin.wav"); }
+}
+
+// --- HUD ------------------------------------------------------------------
+func hdurum(h): str {
+    if (h < 0) { return "YUKLENEMEDI"; }
+    return "h=" + toString(h);
+}
+
+// Seviyeyi yuzde, kaydirmayi YON ADI olarak yaz. Ham float okunaksiz
+// (`0.9666667`) ve genisligi degisken — panelden tasardi.
+func yuzde(v): str { return toString(toInt(v * 100.0 + 0.5)) + "%"; }
+
+// raylib anlami TERS: 0 = SAG, 1 = SOL, 0.5 = merkez (bkz. tame_impl_sound_pan).
+func yon_ad(p): str {
+    if (p < 0.45) { return "sag"; }
+    if (p > 0.55) { return "sol"; }
+    return "merkez";
+}
+
+func satir(y, no, ad, h, sayi, ek) {
+    string s = no + "  " + ad + "  " + hdurum(h) + "  giris=" + toString(sayi);
+    int renk_r = 150; int renk_g = 160; int renk_b = 180;
+    if (h < 0) { renk_r = 255; renk_g = 110; renk_b = 110; }
+    if (h >= 0 && sayi > 0) { renk_r = 150; renk_g = 240; renk_b = 170; }
+    text(s + ek, 14, y, 17, rgb(renk_r, renk_g, renk_b));
+}
+
+func etiket(x, z, s) {
+    float sx = ekran_x3d(x, 2.4, z);
+    float sy = ekran_y3d(x, 2.4, z);
+    if (sx > 0.0 && sx < _win_w * 1.0 && sy > 0.0 && sy < _win_h * 1.0) {
+        text(s, sx - 8.0, sy, 26, RAYWHITE);
+    }
+}
+
+func draw_hud() {
+    rect(8.0, 8.0, 620.0, 176.0, rgba(0, 0, 0, 170));
+    text("SES TANI  ·  ana seviye " + toString(toInt(ses_seviye_now3d() * 100.0)) + "%"
+         + "  ·  toplam konumsal calma: " + toString(ses_calma_sayisi3d()),
+         14, 14, 18, GOLD);
+
+    satir(40.0, "1", "elle+ses3d vurus    ", snd1, g1,
+          "  seviye=" + yuzde(v1) + " yon=" + yon_ad(p1));
+    satir(62.0, "2", "kayit+ses3d altin   ", snd2, g2,
+          "  seviye=" + yuzde(v2) + " yon=" + yon_ad(p2));
+    satir(84.0, "3", "bolge_ses  ates     ", snd3, g3,
+          "  calma=" + toString(c3_oldu) + " seviye=" + yuzde(v3));
+    satir(106.0, "4", "bolge_kure kazandin ", snd4, g4,
+          "  calma=" + toString(c4_oldu) + " seviye=" + yuzde(v4));
+    satir(128.0, "5", "konumsuz   kaybettin", snd5, g5, "  (konumsuz)");
+
+    text("Pedlere bas · 1..5 tuslari sesi dogrudan calar", 14, 156, 16,
+         rgb(150, 170, 200));
+
+    // Son olayın duyurusu — duyduğunla gördüğünü eşleştir.
+    if (son_olay_t > 0.0) {
+        rect(8.0, 192.0, 620.0, 30.0, rgba(20, 60, 30, 210));
+        text(son_olay, 14, 198, 18, rgb(140, 255, 170));
+    }
+
+    // Pedlerin üstünde numaraları yüzdür.
+    etiket(0.0 - 12.0, 0.0 - 6.0, "1");
+    etiket(0.0 - 6.0,  0.0 - 6.0, "2");
+    etiket(0.0,        0.0 - 6.0, "3");
+    etiket(6.0,        0.0 - 6.0, "4");
+    etiket(12.0,       0.0 - 6.0, "5");
+}
+
+sahne3d(960, 560, "Tulpar 3B Ses Tanisi");
+kurulumda3(setup);
+her_kare3(update);
+hud_ciz3(draw_hud);
+oyna3d();

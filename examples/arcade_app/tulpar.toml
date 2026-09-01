@@ -24,7 +24,11 @@ author = "TulparLang"
 license = "MIT"
 
 # [android] — cihazda gorunen uygulama kimligi.
-#   package      : Play Store'da benzersiz paket kimligi
+#   package      : Play Store'da benzersiz paket kimligi. VERILMEZSE cikti
+#                  adindan turetilir (dev.tulparlang.<ad>) — yani iki oyun
+#                  toml'suz da carpismaz. YAYINLANMIS bir oyunda burada
+#                  SABITLE: cikti adini degistirmek kimligi degistirir ve
+#                  cihazdaki kurulum guncellenmez, yanina ikinci kopya kurulur.
 #   name         : cihazda gorunen uygulama adi (android:label)
 #   icon         : baslatici ikonu (bu dizinde)
 #   orientation  : oyunlar yatay

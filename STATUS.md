@@ -210,6 +210,12 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
   WASM, **native Android** (`tulpar build --target=android` → NativeActivity
   APK; arm64-v8a + x86_64; canlı emülatörde render+animasyon+dokunma
   doğrulandı). `libtulpar_runtime.a` AOT'a static link.
+  **Derleme yolu artık otomatik denetleniyor** (2026-08-31): `build.sh suites`
+  NDK varsa bir scene3d oyununu Android'e derleyip iki ABI + manifest
+  üretildiğini sınıyor, ve `tests/dist_archive_audit.py` önceden derlenmiş
+  arşivlerde eksik builtin'leri adıyla sayıyor. Bu iki denetim yokken hedef
+  günlerce kırık kaldı (bayat arşivler + NDK aramasının Android Studio
+  kurulumunu görmemesi) ve hiçbir yeşil koşum bunu söylemedi.
 - **Stdlib gömülü:** wings, router, http_utils, http_client, async,
   middleware, socket, tulpar_api, orm, test, wings_tls, tame, arcade. SQLite
   ve raylib vendored.
@@ -483,6 +489,41 @@ toplandı. Yeni eksiklikler buradaki **Açık eksikler** bölümüne eklenir;
 ## ✅ Yapılanlar
 
 ### Çekirdek dil + derleme zinciri
+
+- **Sahne kod üretimi bölge ve kural SESLERİNİ düşürüyordu (2026-09-01):**
+  `scene_code3d()` bölgenin eylemini/miktarını ve sesini, kuralın de sesini
+  hiç yazmıyordu — JSON'da var, üretilen `.tpr`'de yok. Yani "üretilen kod
+  aynı sahneyi kuruyor" iddiası bu üç alan için yanlıştı. Denklik denetimi
+  göremiyordu çünkü denetim sahnesinde (`toplayici`) **hiç bölge yok**.
+  Emitter'a `bolge_eylem3d`/`bolge_ses3d`/`kural_sesi3d` eklendi (+ `ZACT_*`
+  için ayrı `_sc_zact_code3` çevirici — kural eylemiyle ayrı sayı uzayı) ve
+  denetim artık İKİ sahne üzerinde koşuyor: demo + kapsamı kasten dolduran
+  `tests/kod_uretimi_tam.scene.json` (kutu+küre bölge, eylem+miktar+ses,
+  tek atım, kapalı bölge, sesli/sessiz kural). Üç bozma da iğnelemeyle
+  doğrulandı; ikisini yalnız yeni düzenek yakalıyor. → [[Scene3D]]
+
+- **`tulpar build` önbelleği import edilen modül değişikliklerini görmüyordu
+  (2026-09-01):** önbellek denetimi yalnız ANA kaynağın ve sürücü ikilisinin
+  mtime'ına bakıyordu. `import "lib/scene3d"` gibi yerel bir modülü düzeltip
+  yeniden derleyen `[AOT] Cache hit` alıyor ve **sessizce eski ikiliyi**
+  çalıştırıyordu — düzeltme "işe yaramamış" görünüyor, hata yanlış yerde
+  aranıyor. `newest_local_import_mtime()` (`src/main.cpp`) eklendi: kaynaktaki
+  `import "ad"` bildirimleri arka uçla AYNI sırayla çözülüp (düz ad, `ad.tpr`,
+  `tulpar_modules/<ad>/<ad>.tpr`, `tulpar_modules/<ad>.tpr`) özyinelemeli
+  taranıyor; gömülü stdlib adları diskte çözülmediği için sürücü mtime'ının
+  kapsamında kalıyor. İki yönlü doğrulandı: modül değişince yeniden derliyor,
+  hiçbir şey değişmeyince hâlâ önbellekten dönüyor. → [[Tuzaklar#2]]
+
+- **Eşzamanlı `tulpar` çalıştırmaları birbirinin ikilisini koşuyordu
+  (2026-09-01):** `aot_compile_and_run_silent` derlediği programı **sabit**
+  `/tmp/.tulpar_run` yoluna yazıp çalıştırıp siliyordu. İki `tulpar` aynı anda
+  koşunca yarış oluşuyor; ölçülen iki belirti: (a) paket boş çıktıyla FAIL
+  görünüyor (tek başına yeşil), (b) daha kötüsü — enjeksiyonla doğrulandı —
+  **iki farklı kaynak, iki süreç, ikisi de AYNI çıktıyı** basıyor, yani bir
+  paket başka bir paketin sonucunu raporlayabiliyor. Yol sürece özgü yapıldı
+  (`/tmp/.tulpar_run.<pid>`). Düzeltme iki yönlü doğrulandı: düzeltilmiş
+  ikilide iki eşzamanlı koşu doğru çıktıları veriyor, sabit yola dönünce yarış
+  üç turun üçünde de geri geliyor. → [[Tuzaklar#2]]
 
 - **Cila turu — diagnostik + CLI gürültüsü (2026-06-29):** iki "bilinen ufak
   konu" kapatıldı (detay → Notlar):
@@ -1538,66 +1579,27 @@ Not: `scene3d` saf Tulpar (`lib/scene3d.tpr`) — C wiring'i olmayan her madde
 yalnız `./build.sh clean` re-embed'i ister. C binding'i olan madde 5-nokta
 bağlama + **`wasm/dist` ve `android/dist` yeniden derlemesi** demek.
 
-- 🔴 **Ön koşul — entity slot geri kazanımı.** `spawn3` diziye `push` edip
-  **ham index** dönüyor, `kill3d` yalnız `alive=0` yapıyor; boş slot asla
-  geri kullanılmıyor. Mermi eklendiği anda `_e3` sonsuza kadar büyür.
-  arcade bunu yaşayıp **generation'lı handle**'a geçti (`id = gen*1048576 +
-  slot`, bayat handle sessizce yok sayılır) — aynısı `scene3d`'ye, mermiden
-  ÖNCE. Saf Tulpar, ~60 satır, tüm getter/setter'lardan geçmeli.
-  **Sıradaki adım:** arcade'deki `_slot_of` desenini `Ent3` dizisine uyarla,
-  `tests/scene3d_engine.test.tpr`'ye bayat-handle testi ekle.
+- ✅ **Faz 7-10'un TAMAMI bitti (2026-08 boyunca).** Bu blok yazıldığında
+  hepsi "yapılacak" idi ve her maddede bir "sıradaki adım" duruyordu; hiçbiri
+  artık geçerli değil. Kodda doğrulandı:
+  - **Slot geri kazanımı** — generation'lı handle (`_mk_handle3`,
+    `_slot_of3`, `_alloc_slot3`); bayat handle sessizce yok sayılıyor.
+    Mermi eklenince `_e3`'in sonsuza kadar büyümesi engellendi.
+  - **Faz 7 (oynanış)** — `level3d`/`bolum3d` (geçiş kare sonuna ERTELENİR),
+    `chase3d`, `patrol3d`, `in_range3d`, `bullet3d`, `health3d`, `damage3d`,
+    `on_death3d` + dokunulmazlık penceresi.
+  - **Faz 8 (his)** — `tm3_billboard` + havuzlu parçacıklar, 3B'ye bağlı 2B
+    can barları (`screen_x3d`/`screen_y3d`), `anim3d`, konumsal ses.
+  - **Faz 9 (dünya geometrisi)** — kamera-duvar ışını (`_cam_clear_t3`),
+    küre/kapsül çarpışma, dönen kutu için SAT (`_sat_axis3`), rampa.
+  - **Faz 10 (arazi)** — gerçek yükseklik haritası; yerçekimi, zıplama ve
+    kamera hepsi ona uyuyor.
+  Sonrasında Faz 11-13 de geldi: menü/duraklat kabuğu, tetikleyici bölgeler,
+  sahnenin VERİ olması (JSON + davranışlar + kurallar) ve görsel sahne
+  editörü.
 
-- 🔴 **Faz 7 — oynanış paketi (hepsi saf Tulpar).** Dördü birbirine bağlı,
-  tek fazda gitmeli (düşmansız can, cansız mermi anlamsız); dördü de
-  arcade'de kanıtlanmış tasarımlar, sıfırdan icat değil:
-  - **Bölüm:** `bolum3d(n, fn)` / `level3d`, `bolum_gec3d()`,
-    `kazandin_mi3d()`. Geçiş **kare sonuna ERTELENİR** (arcade'in
-    `_lvl_pending` deseni) — çarpışma döngüsü ortasında entity dizisini
-    değiştirmek yasak.
-  - **Düşman AI:** `takip_et3d(i, hedef, hiz)` / `chase3d`,
-    `devriye3d(i, x1,z1, x2,z2, hiz)` / `patrol3d`, `menzilde3d(a, b, r)`.
-  - **Mermi:** `mermi3d(sahip, hiz, omur)` / `bullet3d` — sahibin baktığı
-    yöne çıkar; `Ent3`'e `life` alanı, ömrü dolan/dünya sınırını aşan ölür.
-  - **Can/hasar:** `can3d(i, n)` / `health3d`, `hasar3d(i, n)` / `damage3d`,
-    `olunce3d(tag, fn)` / `on_death3d`, dokunulmazlık kareleri; HUD'da can
-    barı. `Ent3`'e `hp` + `invuln`.
-  Tahmin: `scene3d` ~800 → ~1400 satır, C tarafına dokunmaz.
-  **Sıradaki adım:** slot geri kazanımı → bölüm → düşman → mermi → can
-  sırasıyla; her parça headless birim testiyle (`_s3_physics`/`_s3_collision`
-  doğrudan sürülebiliyor, pencere gerekmiyor).
-
-- 🟡 **Faz 8 — "his" katmanı (C binding gerekir).**
-  - **Parçacık + billboard:** `parcacik3d(x,y,z, sayi, renk, hiz, omur)`,
-    havuzlu, motor günceller/çizer. Kameraya dönük yüzey şart → yeni
-    `tm3_billboard` builtin'i (raylib `DrawBillboard`). Aynı builtin ailesi
-    3B can barı / isim etiketi / hasar sayısını da verir.
-  - **Karakter animasyonu:** `anim_play` builtin'i ZATEN VAR, `scene3d`
-    kullanmıyor — modelli entity donuk duruyor. `Ent3`'e `anim`,
-    `anim_frame`, `anim_speed` + "hız > 0 ise koşu, değilse boşta". Saf
-    Tulpar.
-  - 🟢 Konumsal ses: `ses3d(x,y,z)` — ses zaten var, yalnız mesafe çarpanı.
-  **Sıradaki adım:** `tm3_billboard` 5-nokta bağlaması, sonra saf-Tulpar
-  parçacık havuzu.
-
-- 🟡 **Faz 9 — dünya geometrisi (en zor).**
-  - **Kamera-duvar çarpışması:** hedeften kameraya ışın, duvara çarparsa
-    kamerayı içeri çek. Saf Tulpar ~40 satır — **Faz 9'u beklemesi gerekmez,
-    Faz 7'nin yanına alınabilir.** Bugün yörüngede duvarın içine girilip
-    dışarıdan bakılabiliyor.
-  - **Küre/kapsül çarpışma:** yuvarlak cisimler kutu gibi çarpışmasın.
-  - **Dönen kutu (OBB):** entity `yaw` ile dönüyor ama AABB'si dönmüyor →
-    SAT gerekir.
-  - **Rampa / eğimli zemin / merdiven:** dünya şu an TEK düz düzlem. İki yol:
-    (a) "rampa" entity'si + düzleme izdüşüm (saf Tulpar, sınırlı),
-    (b) gerçek arazi — raylib `GenMeshHeightmap` + yükseklik örnekleme
-    (C binding, çok daha güçlü). (b) önerilir ama tek başına bir faz.
-  **Sıradaki adım:** kamera-duvar çarpışmasını Faz 7'ye iliştir, gerisini
-  Faz 8'den sonraya bırak.
-
-- 🟢 **3B oyun yayınlamak — Faz 7 BİTMEDEN yapılmayacak.** arcade'de 10 oyun
-  var, 3B'de tek demo (`scene3d_collector` + `scene3d_camera`). Karar
-  (2026-08-01): motor "gezilebilir sahne"den "oyun yazılabilir"e geçmeden
-  `tulparlang.dev/oyunlar`'a 3B oyun konmayacak.
+- ✅ **3B oyunlar yayınlandı.** "Faz 7 bitmeden yayınlanmayacak" kararı
+  (2026-08-01) şartını buldu; dört demo `tulparlang.dev/oyunlar`'da.
 
 </details>
 
@@ -1608,7 +1610,7 @@ sahne"den "üstüne oyun yazılabilir"e taşıdı. Aşağıdakiler o çalışma 
 ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 öneriyle yazıldı: önce güven altyapısı, sonra motor, sonra içerik.
 
-#### 🔴 Güven altyapısı — motor büyümeden önce
+#### ✅ Güven altyapısı — hepsi kapandı
 
 - ✅ **54 test paketi artık CI'da (2026-08-04).** Bu paketler daha önce
   HİÇBİR otomasyonda koşmuyordu — 49 testlik `scene3d_engine.test.tpr` dahil.
@@ -1651,11 +1653,18 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   - Regresyon: `tests/typeinfer/{pass,fail}/` altına 6 fixture. Üç `fail`
     fixture'ının **doğru mesajla** reddedildiği tek tek doğrulandı.
 
-- 🟡 **Argüman sınırında bool→int dönüşümü yok.** Yukarıdaki asimetri dilin
-  kendisinde: `int x = true` ve `x = true` doğru dönüşüyor, ama `f(true)` →
-  `int` parametresi dönüşmüyor; değer bool kalıyor. `assert` hatası tam olarak
-  bu boşlukta doğdu. Artık typecheck yakalıyor, ama asıl çözüm codegen'de
-  parametre bağlamayı store ile aynı hale getirmek olurdu.
+- ✅ **Argüman sınırında bool→int geldi (2026-08-25).** Asimetri kapandı:
+  çağrılan tarafın parametre önsözü artık bildirimle AYNI yardımcıyı çağırıyor
+  (`llvm_coerce_bool_tag_to_int`), yani ikisi ayrışamıyor.
+  Hata SESSİZDİ ve bu yüzden bu kadar yaşadı: aritmetik yol değeri zaten
+  zorluyordu (`x + 10` doğru çıkıyor), ama karşılaştırma ÖNCE tip etiketine
+  bakıyor — `f(true)` çağrısından sonra gövdedeki `x == 1` HER ZAMAN false idi.
+  Ölçüldü. `assert` hatasının kökü buydu ve typecheck düzeltmesinden sonra da
+  codegen tarafında AÇIK KALMIŞTI.
+  typecheck'in çağrı sınırındaki reddi de kalktı — kural codegen'in ESKİ
+  davranışını yansıtıyordu ve artık çalışan bir şeyi reddediyordu.
+  Regresyon: `tests/bool_to_int_arg.test.tpr` (7 test) + `typeinfer/pass/06`.
+  Bozma denendi: dönüşümü kaldırınca 7 testin 5'i kırmızı.
 
 - ✅ **Codegen: fonksiyon yereli aynı adlı GLOBAL'i eziyordu (düzeltildi
   2026-08-06).**
@@ -1684,9 +1693,10 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   fazla hevesli olurdu. Düzeltme geri alınarak doğrulandı: 6 test kırmızıya
   döndü, 4 ters-sözleşme testi yeşil kaldı.
 
-#### 🔴 Motor — bilerek bırakılan ödünler
+#### ✅ Motor — bilerek bırakılan ödünlerin hepsi kapandı
 
-- 🟡 **Çarpışma hâlâ O(n²) — ama sabiti 14× küçüldü (2026-08-06).** Önce
+- ✅ **Çarpışma O(n²)'den çıktı (2026-08-26).** Önce geniş faz sabiti 14×
+  küçüldü (2026-08-06), sonra ızgara asimptotu kırdı. Önce
   ÖLÇÜLDÜ, sonra optimize edildi; ölçüm beklentiyi yanlışladı.
   - **Ölçüm (headless, `_s3_collision`):** 50 entity 0.87 ms, 100 → 3.88 ms,
     200 → **15.4 ms** (60fps bütçesinin %92'si), 400 → 57 ms, 800 → 258 ms.
@@ -1704,18 +1714,41 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   - **Sonuç:** 200 entity 15.4 → **1.12 ms** (bütçenin %92'si → %6.7),
     800 entity 258 → 16.8 ms. Her ölçekte ~14×. Pratik tavan ~200'den
     ~800 entity'e çıktı.
-  - **Hâlâ O(n²).** Uniform grid asimptotik çözüm olmayı sürdürüyor, ama artık
-    çok daha ucuz: düz konum/yarıçap dizileri grid'in zaten ihtiyaç duyacağı
-    zemin. 800 entity üstüne çıkılmadıkça getirisi yok.
+  - **✅ Uniform ızgara geldi (2026-08-26) — ve bu maddenin tahmini yanlıştı.**
+    "800 entity üstüne çıkılmadıkça getirisi yok" ölçümle çürüdü: 400 entity'de
+    kare **15.9 ms** sürüyor, yani 60 fps bütçesi (16.7 ms) ZATEN aşılmış.
+    Gerçek eşik ~300.
+    Ölçüm darboğazın nerede OLMADIĞINI da gösterdi: ızgara yazılıp çarpışma
+    taramalarına uygulandı ve tablo HİÇ DEĞİŞMEDİ. Sebep `_ramp_floor3` —
+    zemin sorgusu entity başına bütün entity'leri geziyor ve her adımda bir
+    `Ent3` struct kopyası alıyordu. Maliyet çarpışmada değil ZEMİN
+    SORGUSUNDAYDI.
+    Rampa dizini (kare başına bir kez, O(n)) + beş taramaya uygulanan ızgara:
+
+    | entity | fizik önce | fizik sonra | fizik+çarpışma önce | sonra |
+    |---|---|---|---|---|
+    | 400 | 15.94 | 0.66 | 15.55 | 3.14 |
+    | 800 | 69.43 | 1.28 | 59.96 | 8.92 |
+    | 1600 | 470.39 | 2.55 | — | — |
+
+    Hücre kenarı = en büyük kapsayan küre ÇAPI; bu 3×3 taramasını korumalı
+    yapıyor. Izgara sarmalı (64×64), yani dünya büyüklüğünden bağımsız.
+    Doğruluk KABA KUVVETLE karşılaştırılıyor (hem kanca hem veri-kural yolu):
+    hızlı ve yanlış bir geniş faz, yavaş ve doğru olandan kötüdür — kaçırılan
+    çarpışma sessizdir.
+    Kalan: `_grid_near3` her çağrıda yeni dizi ayırıyor; 800 üstünde bakılabilir.
   - Regresyon: 3 test (`t_broadphase_conservative` tüm çiftlerde
     `_bp_far3 ⟹ ¬_overlap3` değişmezini karışık şekil/yaw üzerinde tarar,
     `_prunes` elemenin sessizce kaybolmasını yakalar, `_sync_after_push`
     itme/ışınlanma sonrası bayatlığı yakalar). Üçü de **bilerek hata
     sokularak** doğrulandı ve üçü de doğru testle kırmızıya döndü.
 
-- 🟡 **Küre ↔ DÖNÜK kutu yaklaşık.** `_sph_box3` kutuyu eksen-hizalı
-  varsayıyor; kutu-kutu çifti tam SAT'tan geçiyor ama küre-kutu geçmiyor.
-  Faz 9'da bilerek bırakıldı, kodda not düşülü.
+- ✅ **Küre ↔ DÖNÜK kutu düzeldi (2026-08-25).** Küre merkezi kutunun yerel
+  çerçevesine taşınıyor; dönüş ifadesi `_seg_aabb3` (ışın/kamera) ile AYNI —
+  ayrışsalar nişan aldığın yer ile çarptığın yer farklı olurdu.
+  Testler bir kez zayıf çıktı: 90°'de kutu simetrik olduğundan dönüş yönünü
+  ters çeviren bozma kaçtı. Testler 45°'ye taşındı (iki köşegen ayrışıyor) ve
+  beklenti koda değil bağımsız yazılmış ışın testine bağlandı.
 
 - ✅ **Arazide eğim sınırı + kayma eklendi (2026-08-06).** **Binding
   gerekmedi.** STATUS `tm3_terrain_normal` öneriyordu, ama `terrain_height3d`
@@ -1741,22 +1774,72 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
   bedavaya** kapsandı — onlar da `TAG_WALL` olmadıkları için taramanın
   dışındaydı.
 
-- 🟢 **Rampa artık gereksiz olabilir.** Faz 9'un rampası kademeli çiziliyor
-  (raylib'de kama primitifi yok) ve arazi geldiğine göre çoğu kullanım
-  arazinin işi. Ya gerçek kama mesh'i üretilmeli ya da rampa "arazi yokken
-  kullanılan basit yol" olarak konumlandırılmalı.
+- ✅ **Rampa artık gerçek kama mesh'i (2026-08-25).** İki seçenekten birincisi
+  seçildi. raylib'de kama primitifi yok, mesh'i tame kuruyor (`gen_wedge`);
+  eğim tanımı `_ramp_h3` ile birebir aynı. Sarma yönü elle sıralanmıyor: her
+  üçgen istenen normale göre kendini düzeltiyor — ters sarılmış bir yüz
+  arkayüz ayıklamasıyla sessizce GÖRÜNMEZ olur, yani hata "hata yok" gibi durur.
+  Denetim `tests/wedge_mesh_check.py` (build.sh suites içinde) üçgenleri C
+  KAYNAĞINDAN okuyup sarma yönünü, kapalılığı ve eğimin fizikle aynı tanımda
+  olduğunu ölçüyor.
 
-#### 🟡 Oyun yapımı — motorun hâlâ vermediği şeyler
+#### 🟢 Oyun yapımı — motorun hâlâ vermediği şeyler (yayın için şart değil)
 
-- 🟡 **Düşman yol bulma yok.** `chase3d` düz çizgi; düşman duvara toslayıp
-  takılıyor. En az bir "engelden kaç" davranışı (duvara değince yana kay) ya
-  da arazi/duvar ızgarası üzerinde A*.
-- 🟡 **Animasyon geçişi/harmanlama yok.** `anim3d` boşta↔koşu arasında sert
-  geçiyor. Geçiş süresi + harmanlama.
-- 🟡 **Kayıt/yükleme 3B'ye bağlı değil.** `kayit_yaz`/`kayit_oku` tame'de var,
-  `scene3d` kullanmıyor (arcade kullanıyor). Bölüm ilerlemesi, en yüksek skor.
-- 🟡 **Gamepad `scene3d`'de yok.** tame'de binding var (`gamepad_down`,
-  `gamepad_axis`); hareket/kamera preset'lerine bağlanmalı.
+- ✅ **Düşman kaçınması geldi.** Maddenin istediği alt sınır ("en az bir
+  engelden kaç davranışı") karşılandı: `chase3d` duvara değince bir yana
+  BAĞLANIP kayıyor (`e.avoid`), yol açılınca bağlılık bitiyor. Yana seçim
+  simetrik — hep aynı yana bakmak düşmanları duvar dibinde kümeliyordu.
+  `chase_avoid3d(false)` ile kapatılabiliyor, varsayılan açık.
+- ✅ **A\* yol bulma geldi (2026-08-26).** Kaçınmanın çözemediği şey kapandı:
+  çıkmaz koridora giren düşman artık orada kalmıyor.
+  `nav_build3d(hucre, pay)` / `yol_izgarasi3d` duvarlardan doluluk ızgarası
+  kuruyor, `chase_path3d` / `yol_takip3d` onu izliyor. Saf Tulpar.
+  - Izgara kurulu değilse ya da yol yoksa `chase3d`e DÜŞÜYOR — bilinen
+    davranış, sessiz bir durma değil. `chase3d` varsayılan kalıyor: A* her
+    çağrıda ızgara taraması demek, çoğu oyunun ihtiyacı yok ve varsayılanı
+    değiştirmek yayınlanmış oyunların düşman davranışını haber vermeden
+    değiştirirdi.
+  - Yol düşman başına birkaç karede bir yenileniyor (`nav_repath3d`), her
+    karede değil.
+  - Sezgisel OKTİL: Manhattan sekiz yönlü ızgarada aşırı tahmin eder ve A*'ı
+    en kısa yoldan saptırır.
+  - **Köşe kesme yasak**: çaprazda iki ortogonaldan biri kapalıysa geçilmiyor,
+    yoksa yol duvarın köşesinden sızar ve gövdesi olan ajan oraya sığmaz.
+  - Yazarken ÜÇ gerçek hata çıktı, üçü de sessizdi: (1) ızgara yalnız
+    duvarlardan kuruluyordu, oysa ajanlar duvarların dışında — başlangıç
+    hücresi ızgara dışına düşüyor ve A* hiç aramadan "yol yok" diyordu;
+    (2) kenar payı `pad`i saymıyordu, şişmiş duvar ızgara kenarına dayanıp
+    cebi mühürlüyordu; (3) `scene3d_reset` nav durumunu temizlemiyordu, yeni
+    sahne ESKİ duvarların ızgarasını kullanıyordu.
+  - Testler AYIRT EDİCİ: aynı sahnede düz kovalama başarısız, A* başarılı
+    olmak zorunda. Ölçüt "ulaşılan en yakın mesafe" — son mesafe yanıltıcıydı,
+    çünkü iki katı gövde temas edince birbirini itip birlikte sürükleniyor.
+    Köşe kesme ızgara ELLE kurularak sınanıyor (dünya geometrisiyle bu durumu
+    üretmek hücre hizasına bağlı olurdu).
+  - Örnek: `examples/scene3d_labirent.tpr` — Y tuşu A*'ı açıp kapatıyor,
+    fark canlı görülüyor.
+  ✅ **Veri odaklı erişim geldi (2026-08-31).** A* yalnız elle yazılan koddan
+  erişilebiliyordu; editörün ürettiği `kovala` düz kovalamaya düşüyordu.
+  Artık `kovala` davranışının bir bayrağı ("duvarlari dolas"), biçimde
+  `"path": 1`. Izgara ihtiyaç anında tembel kuruluyor, bölüm değişince
+  geçersiz kılınıyor.
+  🟢 **Kalan:** ızgara statik — duvar TAŞINIRSA `nav_build3d` yeniden
+  çağrılmalı. Artık sessiz değil: sahne denetimi hareketli duvar + yol bulma
+  birlikteyken uyarıyor. Açık liste doğrusal taranıyor (ızgara tavanı 4096,
+  yol birkaç karede bir hesaplandığı için ölçülebilir bir sorun değil).
+- ✅ **Animasyon harmanlaması geldi (2026-08-25) ve N klibe genelleşti.**
+  Geçiş bir `(a, b, w)` üçlüsü; "iki klip" hiç özel değildi, yalnız hedefi
+  hesaplayan kural iki seçenekliydi. `anim_set3d`/`anim_auto3d`/`anim_now3d`.
+  Geçiş DOĞRUSAL: üstel yumuşatmada ağırlık uca hiç varmaz, yani "boşta" pozu
+  sonsuza kadar biraz koşu taşırdı. Kendi iskelet kodumuz yok — tek karelik
+  geçici bir `ModelAnimation` kurulup raylib'in kendi skinning yolundan
+  geçiliyor.
+- ✅ **Kayıt/yükleme 3B'ye bağlandı.** `kayit_ac3d`/`save_progress3d` opt-in;
+  rekor (`rekor3d`) ve tamamlanan bölümler diske yazılıyor, başlangıç ve
+  oyun-bitti ekranları rekoru gösteriyor. `scene3d_arena` kullanıyor.
+- ✅ **Gamepad `scene3d`'de.** Motor kolu kendiliğinden okuyor (sol çubuk
+  hareket, sağ çubuk bakış, A zıpla, START duraklat); oyun tek satır girdi
+  kodu yazmıyor. `gamepad_active3d`/`kol_bagli_mi3d` yalnız gösterge.
 - ✅ **Menü/UI katmanı eklendi (2026-08-06, Faz 11).** Motor Faz 7-10'da
   "üstüne oyun yazılabilir" olmuştu ama **yayınlanabilir** değildi: oyun-bitti
   ekranı yalnız yazı basıyordu, hiçbir tuş iş yapmıyordu, tek çıkış pencereyi
@@ -1786,41 +1869,82 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
     fonksiyon referansı natif i64'e kırpılıyordu — dosyadaki diğer kancalar
     zaten `var` kullanıyordu.
 
-- 🟢 **Menü katmanının vermedikleri.** arcade'de olan ama 3B'ye taşınmayanlar:
-  ayarlar ekranı (ses/dil/FPS), rozet/başarım, skor tablosu, bölüm seçimi.
-  Yayın için şart değil; oyun sayısı artınca değerlenir.
+- ✅ **Bölüm seçimi ve "Devam" geldi (2026-08-31).** Kayıt sistemi bitirilen
+  bölümleri ZATEN diske yazıyor ve kaldığın yeri (`unlocked_level3d`) ZATEN
+  hesaplıyordu — ama hiçbir yer o cevabı sormuyordu: fonksiyon yalnız
+  testlerden çağrılıyordu ve beş bölüm bitiren oyuncu ertesi gün yine 1.
+  bölümden başlıyordu.
+  Başlık ekranı artık **Başla / [Devam (Bölüm N)] / [Bölümler] / Çıkış**;
+  koşullu düğmeler yalnız iş görebilecekleri durumda çıkıyor. Bölüm
+  ızgarasında kilitli bölüm çiziliyor ama seçilemiyor (gizlemek "kaç bölüm
+  var" bilgisini de götürürdü). Dağıtım konuma göre değil TÜRE göre.
+  Detay: [[Scene3D]] "Menü katmanı".
+- ✅ **Ayarlar ekranı geldi (2026-08-31).** Motorda ANA ses seviyesi yoktu —
+  yayınlanmış bir oyunda sesi kısmanın yolu yoktu. Yeni tame binding'i
+  `tm_master_volume` (`master_volume`/`ana_ses`) ses ve müziği birden
+  ölçekliyor; seviye duraklat menüsündeki Ayarlar ekranından sürülüyor ve
+  kayıt açıksa diske yazılıyor. Seviye ses aygıtı açılmadan önce de
+  ayarlanabiliyor (C tarafında saklanıp aygıt açılınca uygulanıyor).
+- 🟢 **Menü katmanının kalan eksikleri.** arcade'de olan ama 3B'ye
+  taşınmayanlar: rozet/başarım, skor tablosu, dil/FPS ayarı (dil sistem
+  yerelinden geliyor, FPS'i motor sürmüyor — ikisi de "ayar" olarak
+  eklenirse çalışmayan düğme olurdu).
   `on_hud3d` var ama her oyun kendi menüsünü elden yazıyor.
-- 🟢 **Tetikleyici bölge** (`solid3d(false)` + kanca ile taklit edilebiliyor)
-  için adı konmuş bir API: `trigger3d(...)`.
-- 🟢 **Konumsal seste yön yok** — yalnız mesafe zayıflatması var, stereo
-  kaydırma (panning) yok.
+- ✅ **Tetikleyici bölge API'si geldi.** `trigger3d` / `trigger_sphere3d`
+  (`bolge3d`/`bolge_kure3d`) + `on_enter3d`/`on_exit3d`/`on_stay3d`.
+  Taklidin iki kusuru da kapandı: kanca artık çakışılan HER KARE değil
+  girişte bir kez çağrılabiliyor (`trigger_once3d`), ve bölge ENTITY değil —
+  çizilmiyor, slot yemiyor, geniş faza ve MTV çözümüne girmiyor.
+- ✅ **Konumsal seste stereo yön geldi (2026-08-25).** Kameranın sağ ekseni
+  `move3d`'nin girdi döndürmesiyle AYNI ifadeden geliyor; ayrışsalar "sağa
+  yürü" ile "sağdan duy" farklı yönleri gösterirdi ve hata kamera döndükçe
+  büyürdü. raylib'in pan'ı TERS (`left = pan`, yani pan 0 SAĞ kanal) —
+  çeviri scene3d'de, `tm_sound_pan` bilerek raylib'in anlamını koruyor.
+  Değer çalmadan ayrı hesaplanıyor, yani ses aygıtı olmadan sınanabiliyor.
 
-#### 🟡 Görsel
+#### ✅ Görsel — hepsi kapandı
 
-- 🟡 **Arazi tek renk.** Yüksekliğe/eğime göre katman boyama (çim/kaya/kar)
-  shader işi; `tm3_terrain_*` ailesine doku katmanı eklenmeli.
-- 🟢 Gökyüzü dokusu (şu an yalnız degrade), su yüzeyi, gündüz/gece döngüsü.
-- 🟢 Parçacıklarda dönme/doku atlası yok; tek boy billboard.
+- ✅ **Arazi katman boyama geldi.** Yükseklik çim→toprak→kar, eğim kaya —
+  ikisi de fiziğin ZATEN kullandığı veri, yeni bir şey ölçülmüyor.
+  `terrain_natural3d(tepe)` tek satırlık hazır palet; `terrain_layer3d(x,z)`
+  oyun mantığına da aynı eşikleri veriyor (ayak sesi, hız, "karda mısın").
+- ✅ **Su, gündüz-gece, bulut ve yıldızlar geldi.** Su dünya çapında tek yatay
+  düzlem (vadiler artık kuru değil); gündüz-gece gökyüzü/güneş/ortam ışığı/sis
+  rengini birlikte sürüyor ve GÖLGELER bedava dönüyor (gölge haritası güneşin
+  yönünden türüyor). Bulut ve yıldızlar gökyüzü shader'ında prosedürel —
+  ayrı çizim yok, dolayısıyla dağlar onları doğru örtüyor.
+- ✅ **Parçacıklarda dönme ve doku atlası geldi (2026-08-25).** Atlas flipbook
+  olarak oynuyor (kare ömürle ilerliyor, SON KAREDE kalıyor — sarmak patlamayı
+  ölürken yeniden başlatırdı). Dönme VARSAYILAN KAPALI: dokusuz parçacık dolu
+  bir karedir ve dolu kare dönünce silueti değişir, varsayılanı açmak
+  yayınlanmış oyunların görünüşünü haber vermeden değiştirirdi.
 
 #### 🟢 Yayın ve belgeler
 
-- 🟢 **3B oyun `tulparlang.dev/oyunlar`'a konabilir** — Faz 7 şartı sağlandı
-  (karar 2026-08-01'de "Faz 7 bitmeden yayınlanmayacak" idi). Adaylar:
-  `scene3d_arena`, `scene3d_terrain`.
-- 🟢 **`scene3d` API belgesi yok.** arcade'in Starlight sayfası var, 3B'nin
-  yok. ~120 fonksiyon (TR+EN alias'larla).
-- 🟢 **3B örneklerin İngilizce ikizi yok.** `examples/en/` altında arcade
-  ikizleri var, `scene3d_*` için yok.
+- ✅ **3B oyunlar `tulparlang.dev/oyunlar`'da yayında.** `3d_collector`,
+  `3d_robot`, `3d_models`, `3d_primitives` (web deposunda `b1808b8`).
+- ✅ **`scene3d` ve editör belgeleri yazıldı.** Starlight'ta
+  `games/{overview,scene3d,editor}` (TR+EN). 197 API adının hepsi motora
+  karşı doğrulandı — uydurma ad yok.
+  🟢 **Kalan:** web deposunda dal birleştirme kararı (yerel dal ile master
+  ayrışık içerik taşıyor); ayrıntı TODO.md'de.
+- ✅ **3B örneklerin İngilizce ikizi geldi (2026-08-25).** 15 dosya:
+  8 `scene3d_*` + 7 `tame3d_*`. Yan bulgu: `examples/en/` HİÇ test
+  edilmiyormuş — koşucu yalnız `examples/*.tpr` üzerinde geziyordu, yani
+  ikizler kaynaktan ayrışsa kimse görmezdi. Artık hepsi koşuyor.
 
 #### 🟢 Temizlik
 
-- 🟢 **Windows shim'leri ölü kod.** Natif Windows 3.13.0'da bırakıldı ama
-  `src/common/platform*.h` içindeki `PLATFORM_WINDOWS`/`_WIN32` dalları
-  bilerek duruyor (sökmek büyük ve riskli bir refactor). Artık bakımsız ve
-  test edilmemiş sayılıyorlar; istenirse ayrı bir işte temizlenebilir.
-- 🟢 **`%` operatörü dilde yok** — `mod()` var. Faz 8'de animasyon karesini
-  sararken yazıldı ve sözcükleyici hatası verdi; üstelik hata **modülü
-  sessizce kesiyor** ve alakasız bir "fonksiyon bulunamadı" olarak görünüyor.
+- ✅ **Windows shim'leri: KARAR VERİLDİ, iş yok.** Dallar bilerek duruyor;
+  sökmek soketler/thread'ler/dl/yollar boyunca büyük ve riskli bir refactor,
+  desteklenen platformlarda kazancı yok, durmasının maliyeti sıfır. Bakımsız
+  ve test edilmemiş sayılıyorlar. Açık madde olarak taşımak yanlıştı.
+- ✅ **`%` operatörü geldi (2026-08-24).** `mod()` duruyor ve ikisi AYNI
+  sonucu veriyor (işaret bölünenden, C ile aynı). Ondalıkta `fmod`.
+  Maddenin şikâyet ettiği "sessizce kesen sözcükleyici hatası" da ayrıca
+  düzeltildi: ayrılmış kelime bir ad olarak kullanılınca tanı artık SUÇLU
+  KELİMEYİ söylüyor (`int tip = 5`, `func f(ad, metin)`), alakasız bir
+  "fonksiyon bulunamadı" değil.
 
 ### Dil seviyesi
 
@@ -2427,13 +2551,17 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 
 ## 🎯 Olgunluk kriterleri (sürüm bağımsız)
 
-> **Sürümleme notu (2026-06-18):** Proje **v1.0'ın çok ötesinde** — yayınlı
-> son tag **`v3.0.0`** (2026-06-15, AOT-only breaking change). main onun 8
-> commit önünde; sıradaki yayın **`v3.1.0`** (geriye-uyumlu feature'lar +
-> fix'ler, bkz. `CHANGELOG.md`). `CMakeLists.txt` `project(VERSION 3.1.0)`
-> ile hizalandı (önceden 2.1.0'da takılıydı → dev build'ler en son release'in
-> gerisini raporluyordu). Aşağıdaki kriterler "dil olgun mu?" kalıcı
-> gate'leridir, bir sürüm numarasına bağlı değil.
+> **Sürümleme notu (2026-09-01'de tazelendi):** Proje **v1.0'ın çok ötesinde**
+> — yayınlı son tag **`v3.12.0`** (2026-07-23). Sıradaki yayın **`v3.13.0`**:
+> CHANGELOG'u kesildi, `CMakeLists.txt` `project(VERSION 3.13.0)` ile hizalı,
+> `tulpar version` `3.13.0-dev` diyor. **Etiket henüz atılmadı** ve yerel dal
+> `origin/main`'in 161 commit önünde — gönderme kararı bekliyor.
+> Aşağıdaki kriterler "dil olgun mu?" kalıcı gate'leridir, bir sürüm
+> numarasına bağlı değil.
+>
+> ⚠️ **`v3.5.0` / `v3.6.0` / `v3.7.0` CHANGELOG'da var ama ETİKETLERİ YOK** —
+> hiç kesilmemişler (muhtemelen `v3.8.0`'a katlandılar). Karşılaştırma
+> bağlantıları bu yüzden `v3.8.0`'ı doğrudan `v3.4.0`'a bağlıyor.
 
 1. **Sıfır bilinen davranış regresyonu** — CI compile + runtime gate'leri
    yeşil (`./build.sh test` 48/48 örnek + 27 focused suite yeşil).
@@ -2447,10 +2575,16 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 5. **Stable release süreci** — `v*` git tag + binary release artifact'leri;
    `tulpar update` bunu çekiyor (✓ v2.2.0 + v3.0.0 yayınlandı).
 
-**Şu an konumumuz:** v3.0.0 yayınlı, **v3.1.0 yayına hazır**. (1) ve (2)
-karşılandı (tam suite yeşil). (3) altyapı tam, içerik az. (4) reference büyük
-ölçüde hazır, canlı deploy eksik. (5) süreç işliyor — v3.1.0 tag'i atılmayı
-bekliyor.
+**Şu an konumumuz:** v3.12.0 yayınlı, **v3.13.0 kesildi ve etiketlenmeyi
+bekliyor**. (1) ve (2) karşılandı — 59 paket · 52 örnek · 8 denetim yeşil.
+(3) altyapı tam, içerik az. (4) reference büyük ölçüde hazır, canlı deploy
+eksik. (5) süreç işliyor.
+
+**Gönderme önündeki tek engel kod değil, karar:** 161 commit `docs/3d-roadmap`
+dalında duruyor ve dalın adı artık içeriğiyle uyuşmuyor (derleyici
+düzeltmeleri, Android paketleme, denetim altyapısı, ses). Konu başlıklarına
+göre birkaç PR'a bölmek mi, tek sürüm dalı olarak main'e almak mı — bu karar
+verilmeden etiket atılmamalı.
 
 ---
 

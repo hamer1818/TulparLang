@@ -9,6 +9,765 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+## [v3.13.0] — 2026-09-01
+
+**Tulpar bir oyun motoru ve görsel editör kazandı.** Bu sürüm iki büyük işi
+birden taşıyor: `scene3d` 3B oyun motoru (Faz 6-13) ve onun içinde yaşayan
+**TameEngine** sahne editörü — ikisi de **saf Tulpar**, yani dilin kendisiyle
+yazılmış en büyük program artık dilin kendi deposunda. Yanına arcade'in üçüncü
+mobil dalgası, Android/web hedefleri ve yayınlanan araçların ilk gerçek
+denetimleri geliyor.
+
+### Öne çıkanlar
+
+**3B oyun motoru — `import "scene3d"`**
+- Kamera (yörünge / birinci şahıs / takip), ışıklandırma, gölge haritalama,
+  doku · gökyüzü · materyal.
+- Oynanış, his ve dünya geometrisi: bölüm · düşman AI · mermi · can/hasar ·
+  parçacık · rampa · dönük kutu (SAT) · kapsül sütun · kamera ışını.
+- **Gerçek arazi**: yükseklik haritalı dünya, katman boyama (çim/toprak/kar,
+  eğimde kaya), su yüzeyi ve kaldırma kuvveti, gündüz-gece döngüsü, prosedürel
+  bulut ve yıldızlar.
+- **Menü/UI katmanı**: başlangıç ekranı, duraklat, bölüm seçme, "Devam",
+  ayarlar ekranı ve **ana ses seviyesi**.
+- **A\* yol bulma** — kaçınmanın çözemediği şey; hem koddan hem sahneden
+  erişilebiliyor. Izgara ihtiyaç anında kuruluyor, bölüm değişince geçersiz.
+- **Konumsal ses**: mesafe sönümü + stereo yön (kameranın sağ ekseni hareket
+  girdisiyle aynı ifadeden geliyor), bölge sesi, kural sesi.
+- Tetikleyici bölgeler (kutu/küre, giriş/çıkış/içindeyken, tek atım),
+  kalıcılık (rekor + bölüm ilerlemesi), gamepad, animasyon harmanlaması.
+- **Ses tanısı**: motor çalarken uygulanan seviye/kaydırmayı ve çalma sayısını
+  kaydediyor, `examples/scene3d_ses_testi.tpr` beş ses katmanını ayrı ayrı
+  sürüyor — "ses gelmiyor" artık ayrıştırılabilir bir belirti.
+
+**TameEngine — görsel sahne editörü**
+- Unity/Unreal düzeni: yuvalara takılı, başlıktan sürüklenip taşınan paneller,
+  yerleşim diske kalıcı; menü şeridi, konsol, ölçeklenebilir arayüz.
+- **Tutamaklar**: taşı/ölçek eksen okları + döndürme halkası; bölgelerin de
+  kendi tutamakları var ve varlıkla aynı jestlerden geçiyorlar.
+- Seçim: tek tık · CTRL+tık · tümünü seç · **kutu (marquee) seçimi**; prefab,
+  çoklu seçim, sağ tık bağlam menüsü.
+- **Simetrik geri al ↔ yinele** — yapısal işler (bölüm ekle/sil) dahil.
+- **Sahne denetimi**: "çalışıyor ama yanlış"ı söyleyen kurallar (ölü bölge,
+  etiketsiz bölge, silinmiş kamera hedefi, bayat yol ızgarası...).
+- Dosya: aç / farklı kaydet / geri yükle + **kurtarma dosyası**.
+- Çok bölümlü sahne, oyun şablonları, kural düzenleyici — editörle artık
+  "ekran" değil **oyun** yapılıyor.
+- **Tarayıcıda çalışıyor** (`--target=web`).
+
+**Sahne artık VERİ**
+- JSON sahne biçimi + davranışlar + kurallar; `tulpar` sahneyi **okunabilir
+  Tulpar koduna** çevirebiliyor (`sahne_kod3d`), ve üretilen kodun aynı sahneyi
+  kurduğu her koşumda `diff` ile ölçülüyor.
+
+**Mobil ve web**
+- Android: paket kimliği oyun adından türüyor (iki oyun birbirini siliyordu),
+  NDK araması Android Studio kurulumunu buluyor, derleme yolu artık her
+  koşumda denetleniyor.
+- Web: editör tarayıcıda çalışıyor; kaydın sessizce kaybolduğu hata kapandı.
+- **Arcade üçüncü mobil dalga**: app kabuğu (Ayarlar/Duraklat/dil), juice,
+  üç yeni oyun (launcher'da 13), full-stack Tulpar global skor tablosu,
+  parçacık/sarsıntı efektleri, kalıcı rekorlar, ivmeölçer.
+
+**Araçlar denetim altına alındı**
+Yayınlanan araçların bütün testler yeşilken sessizce çürüdüğü ortaya çıktı ve
+her biri için bir denetim yazıldı (`build.sh suites`):
+- `tulpar fmt` **derlenmeyen kod üretiyordu** (üç ayrı bozulma: `i++` → `i + +`,
+  `=>` → `= >`, blok yorumlarının içi).
+- `tulpar doc` üç stdlib modülünü **hiç belgeleyemiyordu**.
+- `tulpar typecheck` ayrıştırma hatasında **0 dönüyordu** (CI kapısı olarak kör).
+- `wasm/dist` ve `android/dist` arşivleri bayatlayınca web/Android derlemeleri
+  `undefined symbol` ile kırılıyordu — masaüstü yeşilken.
+- Sahne **kod üretimi** bölge ve kural seslerini düşürüyordu; denetim
+  göremiyordu çünkü denetim sahnesinde hiç bölge yoktu.
+- `tulpar build` önbelleği **import edilen modül** değişikliklerini görmüyor,
+  sessizce **bayat ikili** veriyordu.
+- İki eşzamanlı `tulpar` sabit bir geçici yolu paylaşıyor, birbirinin ikilisini
+  çalıştırabiliyordu.
+- Ayrıca: LSP duman testi, paket yöneticisi denetimi, builtin tutarlılığı.
+
+**Derleyici ve çalışma zamanı düzeltmeleri**
+- Fonksiyon yereli aynı adlı **global'i eziyordu** (AOT codegen).
+- Kapsam değişken tablosu **sessizce taşıyordu**; AOT fonksiyon tablosu 1024'te
+  doluyordu.
+- `typecheck` artık `import`'u takip ediyor — `lib/test.tpr`'deki `assert`'in
+  **hiçbir zaman başarısız olmamasının** kök nedeni buydu.
+- `%` operatörü, `chr()`, `float[] x = []` sözdizimi, `args()`.
+- Çarpışmaya geniş faz: 200 varlıkta **15.4 ms → 1.12 ms**.
+
+### ⚠️ Kırılma
+
+- **Natif Windows desteği bırakıldı.** Windows'ta geliştirme artık **WSL**
+  üzerinden, Linux yolunun aynısıyla — web ve Android hedefleri dahil her şey
+  orada çalışıyor. `build.bat` / `build.ps1` / `run_tests.ps1` / Inno Setup
+  installer ve `build-windows` CI işi kaldırıldı. Shim'lerdeki
+  `PLATFORM_WINDOWS` dalları bilerek duruyor ama **bakımsız ve sınanmamış**.
+
+  *Sürüm notu:* semver'e göre bir platformun düşürülmesi tartışmalı bir MINOR;
+  dil/stdlib/ABI kırılması olmadığı için (Windows'ta derlenen kod aynı kod)
+  MINOR olarak kesildi ve burada açıkça işaretlendi.
+
+### Kapılar
+
+59 test paketi · 52 örnek · 8 denetim — hepsi yeşil. `scene3d` motorunun
+**653 testi pencere açmadan** koşuyor. Belgelerde geçen 197 API adının hepsi
+motora karşı doğrulandı.
+
+
+### Fixed — SAHNE DENETİMİ ses aygıtı olmayan makinede sahneyi haksız suçluyordu
+
+Ses aygıtı yoksa (başsız CI, sessiz sunucu) **her** ses yüklemesi -1 döner.
+Denetim bunu "ses dosyasi yuklenemedi" diye okuyordu — oysa dosyalar sağlam,
+aygıt yoktu. Yani denetimin kendisi, bu sürümde belgelenen hatayı yapıyordu:
+sessizliğin tek sebebi olduğunu varsaymak. Aynı kusur model denetiminde de
+vardı (GL bağlamı yoksa her model -1 döner), tetiklenmemişti.
+
+Sayım ikiye ayrıldı: **dosya diskte yok** = aygıttan bağımsız kesin kusur, her
+zaman söyleniyor; **dosya var ama yüklenemedi** = ancak o türden en az bir şey
+yüklenebiliyorsa (`_chk_kind_ok3`) söyleniyor. Karar saf bir fonksiyona alındı
+(`_chk_asset_warn_n3`) ki küresel varlık kaydına dokunmadan sınanabilsin —
+böylece regresyon testi **ses kartı olan makinede de** kırmızıya dönüyor.
+
+Bilinçli kayıp: tek varlığı olan ve o varlığı bozuk olan sahne sessiz kalıyor
+(o durumda iki sebep ayırt edilemiyor). Yanlış uyarı, uyarıyı görmezden gelmeyi
+öğretir.
+
+**Nasıl bulundu:** yerelde 654 testin hepsi yeşilken CI'da ikisi kırmızıydı ve
+tek fark donanımdı. İki yan bulgu daha çıktı: (1) bir testin kayda yazdığı
+sahte tutamak geri alınmıyor, sonraki testleri etkiliyordu — `scene3d_reset()`
+varlık kaydını temizlemiyor, kaydı bozan test onu kendi geri almalı; (2) karar
+fonksiyonunun `bool` parametresi TİPSİZDİ ve `== false` karşılaştırması farklı
+tip etiketleri yüzünden sabit `false` oluyordu, yani fonksiyon her koşulda aynı
+şeyi dönüyordu.
+
+### Fixed — Android derleme denetimi ARŞİV yokluğunu kusur sanıyordu
+
+Denetim NDK yokluğunu atlıyordu ama `android/dist` arşivlerinin yokluğunu
+atlamıyordu. O arşivler gitignore'lu ve yerelde NDK ile üretiliyor — temiz bir
+checkout'ta (yani CI'da) hiç yok. Sonuç: kodda hiçbir kusur yokken denetim
+kırmızı dönüyordu. Artık ön koşul eksikliği atlanıyor, ama **sessiz değil**:
+sebebiyle birlikte tek satır yazılıyor, yoksa "asla kırmızıya dönemeyen
+denetim" tuzağına düşerdi.
+
+### Fixed — CI'nın örnek koşumu bütçesi tükenmişti (çakışan zaman aşımı)
+
+`./build.sh test` adımının 10 dakikalık bütçesi artık yetmiyordu ve bu bir
+FLAKE'ti: **aynı ağacın iki ardışık koşumu sınırın iki yanına düştü** — biri
+9dk46sn ile geçti (14 saniye pay), öteki zaman aşımına uğradı. Bütçeyi
+koşucunun hız değişkenliği çevirebiliyorsa o bir koruma değil, kumar.
+
+Ölçüldü: örnek sayısı 87 → **129** (2026-08-25'te `examples/en/` ikizleri ilk
+kez koşuma girdi, küme kabaca ikiye katlandı) ve yeni `scene3d_*` / `tame3d_*`
+örnekleri dosya başına çok daha ağır — her biri `lib/scene3d.tpr`'yi (~16 bin
+satır) sıfırdan yeniden derliyor, çünkü önceden derlenmiş modül önbelleği yok.
+Yerel referans: 16 çekirdek @5GHz'de 100 sn; 4 çekirdekli koşucu ~7× yavaş,
+yani ~12 dk bekleniyor. Bütçe **25 dakikaya** çıkarıldı (~2× pay) — yavaş bir
+koşucuyu soğuracak kadar geniş, gerçek bir takılmayı yakalayacak kadar dar.
+
+Asıl çözüm önceden derlenmiş modül önbelleği: 30 scene3d örneği aynı
+kütüphaneyi 30 kez derlemeyi bırakmalı. O gelene kadar bütçe dürüst tutuluyor.
+
+### Fixed — başarısız pakette HANGİ testin düştüğü çıktıda görünmüyordu
+
+`build.sh suites` başarısız pakette `grep -E 'FAIL|hata|error' | head -8`
+basıyordu. Bir kütüphane stderr'e gürültü döktüğünde (ALSA'nın "ses aygıtı
+yok" satırları) o gürültü `error` ile eşleşip **gerçek FAIL satırlarını dışarı
+itiyordu** — CI kırmızı dönüyor ama hangi testin düştüğü hiç görünmüyordu.
+`head`'in erken çıkması ayrıca grep'e SIGPIPE attırıp çıktıya "write error:
+Broken pipe" satırları ekliyordu. Artık önce `FAIL` satırları basılıyor (awk
+ile, SIGPIPE'sız); genel gürültü yalnız hiç FAIL satırı yoksa yedek olarak.
+
+### Added — SES TANISI: "ses gelmiyor" artık ayrıştırılabilir bir belirti
+
+"Oyundan ses gelmiyor" tek bir arıza değil, **en az beş** ayrı arızanın aynı
+görünen belirtisi: ses aygıtı açılmadı · dosya bulunamadı · olay hiç olmadı ·
+olay oldu ama ses çağrılmadı · ses çağrıldı ama seviye 0'dı. Bir tur boyunca
+bütün penceresiz sondalar yeşildi — **ve hepsi doğruydu**; sondalar mekanizmayı
+ölçüyordu, belirtinin sebebi mekanizmada değildi.
+
+- Motor artık çalarken **UYGULANAN** değerleri kaydediyor: `ses_son_seviye3d()`,
+  `ses_son_kaydirma3d()`, `ses_calma_sayisi3d()`. Üçü de "çalmadan ayrı"
+  hesaplanıyor, yani ses aygıtı olmadan da sınanabiliyorlar.
+- **`examples/scene3d_ses_testi.tpr`** (+ İngilizce ikizi): beş istasyon, beşi
+  farklı ses, her katman ayrı — elle yükleme + konumsal · varlık kaydı +
+  konumsal · bölgenin kendi sesi (kutu) · bölgenin kendi sesi (küre) ·
+  konum**suz** düz çalma. `1..5` tuşları aynı sesleri bölgeye hiç girmeden
+  çalıyor. 3 ve 4'te `calma=` sütunu bir kare gecikmeli ölçülüyor: motorun sesi
+  gerçekten çağırıp çağırmadığı ayrı okunuyor. Hiçbir bölge tek atım değil ve
+  her çalışta ekrana bildirim düşüyor.
+- **Sonuç: beş katman da çalışıyordu.** Arena'da duyulmayan şey bozuk değildi —
+  sesler kısa (`ates.wav` 0.14 sn, `altin.wav` 0.24 sn), zehir havuzu sesini
+  yalnız giriş kenarında ve hasar parçacıklarının altında, bonus pedi ise tek
+  atım olduğu için oturum başına bir kez çalıyor. Arıza değil, **ölçüm
+  penceresi**. Ders: bir geri bildirimi doğrulatacaksan önce **tekrarlanabilir
+  ve görülebilir** yap.
+- Yeni testler: çalan sesin uygulanan seviyeyi/kaydırmayı kaydettiği, sayacın
+  çalmadan artmadığı, ve **bölge sesinin gerçekten `sound3d`'yi çağırdığı**
+  (kayda geçerli tutamak yazılarak penceresiz sınanabilir hâle geldi) —
+  karşıtıyla birlikte: geçersiz tutamakta çalma atlanıyor ama konum yine
+  hesaplanıyor.
+
+### Fixed — KOD ÜRETİMİ bölge ve kural SESLERİNİ düşürüyordu
+
+Aynı sahne üç biçimde yaşıyor — kaydet (JSON), yükle (JSON→sahne) ve **kod üret**
+(JSON→`.tpr`) — ve üçünün alan listesi elle eşlenmiş. `scene_code3d()` bölgenin
+**eylemini/miktarını ve sesini**, kuralın da **sesini** hiç yazmıyordu: JSON'da
+var, üretilen kodda yok. Kaydet↔yükle gidiş-dönüşü yeşil olduğu için görünmedi;
+kaybeden yalnız "koda dök" yolundan geçen kullanıcıydı.
+
+Denklik denetimi vardı ama **göremiyordu**: denetim sahnesinde (`toplayici`)
+hiç bölge yok, yani bölge kod üretiminin tamamı denetimsizdi.
+
+- Emitter tamamlandı (`bolge_eylem3d` / `bolge_ses3d` / `kural_sesi3d`), bölge
+  eylemleri için ayrı bir `_sc_zact_code3` çeviricisi eklendi — `ZACT_*` ile
+  `ACT_*` ayrı sayı uzayları ve karıştırmak sessizce yanlış eylem yazardı.
+- Denetim artık **iki sahne** koşuyor: demo + kapsamı kasten dolduran
+  `tests/kod_uretimi_tam.scene.json` (kutu+küre bölge, eylem+miktar+ses, tek
+  atım, kapalı bölge, sesli/sessiz kural). Üç bozmanın **ikisini yalnız yeni
+  sahne** yakalıyor.
+
+### Fixed — `tulpar build` BAYAT ikili veriyordu (import edilen modül değişince)
+
+Önbellek yalnız **ana kaynağın** ve sürücü ikilisinin mtime'ına bakıyordu.
+`import "lib/scene3d"` gibi **yerel** bir modülü düzeltip yeniden derlemek
+`[AOT] Cache hit` alıyor ve **sessizce eski ikiliyi** bırakıyordu — belirti çok
+yanıltıcı: *düzeltmen işe yaramamış görünüyor* ve yanlış yerde hata arıyorsun.
+Bu, tam da bu turdaki kod üretimi iğnelemesini bozdu: üç bozmanın ikisi hiç
+derlenmediği hâlde "yakalandı" göründü ve düzeltilmiş hâl bile kırmızı çıktı.
+
+`newest_local_import_mtime()` (`src/main.cpp`) eklendi: kaynaktaki
+`import "ad"` bildirimleri arka uçla **aynı sırayla** çözülüp (düz ad,
+`ad.tpr`, `tulpar_modules/<ad>/<ad>.tpr`, `tulpar_modules/<ad>.tpr`)
+özyinelemeli taranıyor. Gömülü stdlib adları diskte çözülmediği için sürücünün
+mtime'ının kapsamında kalıyor. İki yönlü doğrulandı: modül değişince yeniden
+derliyor, hiçbir şey değişmeyince hâlâ önbellekten dönüyor.
+
+### Fixed — iki eşzamanlı `tulpar` birbirinin ikilisini çalıştırıyordu
+
+`aot_compile_and_run_silent` derlediği programı **sabit** `/tmp/.tulpar_run`
+yoluna yazıp çalıştırıp siliyordu. İki `tulpar` aynı anda koşunca biri
+ötekinin ikilisini eziyor ve siliyor. Belirtinin iki yüzü var, ikincisi çok
+daha kötü: (a) paket boş çıktıyla **FAIL** görünüyor (tek başına koşturunca
+yeşil), (b) **sessizce yanlış program koşuyor** — enjeksiyonla ölçüldü: iki
+farklı kaynak, iki süreç, **ikisi de aynı çıktıyı** bastı. Yani paket koşucusu
+bir paketin yerine başka bir paketin sonucunu raporlayabilirdi. Yol artık
+sürece özgü (`/tmp/.tulpar_run.<pid>`).
+
+### Added — "testi var ama örneği yok" taraması: üç özellik daha gösteriliyor
+
+Konumsal sesin başına gelen şey (yazılmış, testli, hiçbir örnekte yok) bir
+kalıba işaret ediyordu; bütün manşet özellikler aynı gözle tarandı. **Beş
+özelliğin hiç örneği yoktu**, üçü kapatıldı:
+
+- **Bölge sesi** — `scene3d_arena`'nın zehir havuzu artık girişte ses
+  çalıyor. Kanca YOK: ses bölgenin kendi alanı, sahne biçiminde taşınıyor ve
+  editörden seçilebiliyor.
+- **Kural sesi** — `examples/scenes/toplayici.scene.json` içindeki "topla" ve
+  "kazan" kurallarına birer `"sound"` eklendi. **Tek satır veri, sıfır kod**:
+  veri odaklı ses yolunun tam olarak gösterilmesi gereken hâli.
+- **Yüzme / kaldırma kuvveti** — `scene3d_terrain`'de suyun üstünde yüzen bir
+  sandık. Su zaten vardı ama üstünde duran hiçbir şey yoktu, yani kuvvet
+  motorda yazılı olduğu hâlde görünmüyordu.
+
+Kalan ikisi bilerek açık: **müzik** için depoda ses dosyası yok (binary varlık
+eklemek ayrı bir karar) ve **nişan modu** arena'nın otomatik ateşiyle
+çakışıyor.
+
+Tarama bir YANLIŞ ALARM da üretti ve düzeltildi: animasyon harmanlaması
+`scene3d_karakter`'de otomatik yoldan (`anim3d`) zaten gösteriliyor — tarama
+yalnız elle klip seçme API'sini (`anim_set3d`) arıyordu. Genel bir "her API
+bir örnekte geçsin" denetimi bilerek YAZILMADI: 286 özellik grubunun 197'si
+"kapsanmamış" görünüyor (editör API'si, sorgular, JSON'dan sürülen
+davranışlar) ve hep kırmızı bir denetim, kırmızıyı görmezden gelmeyi öğretir.
+
+
+### Added — 3B örnekte SES: motorun ses yolu ilk kez gösteriliyor
+
+Kullanıcı ses ayarını denemek isteyince "oyundan hiç ses gelmiyor" dedi.
+Ölçüldü: `examples/scene3d_arena.tpr` içinde tek bir ses çağrısı **yok** —
+ve daha kötüsü, **hiçbir** `scene3d_*` örneği ses çalmıyordu. Motorda kural
+sesi, bölge sesi ve konumsal stereo ses yazılmış ve testliydi, `.wav`
+varlıkları depoda duruyordu, ama hiçbiri bir örneğe bağlı değildi. Yani ses
+ayarını deneyecek bir yer yoktu ve sessizlik bir gerileme gibi görünüyordu.
+
+`scene3d_arena` (ve İngilizce ikizi) artık üç sesi **konumlu** çalıyor:
+mermi isabeti (`vurus.wav`), bonus pedi (`altin.wav`) ve oyuncunun ölümü
+(`kaybettin.wav`). `ses3d` mesafeye göre kısıyor ve kamera eksenine göre
+sağa/sola yaslıyor — sağdaki düşmanı vurmak sağ kulakta duyuluyor. Ses aygıtı
+yokken yükleme -1 dönüyor ve çalma sessizce atlanıyor, yani penceresiz test
+koşumu AYNI yoldan geçiyor (ayrı bir dal yok).
+
+**Ders: bir özelliğin testi varsa ama örneği yoksa, kullanıcı için var
+değildir.** Konumsal ses 2026-08-25'te "geldi" diye kaydedilmişti.
+
+### Added — `ses_yukle` / `ses_cal` / `ses_durdur` (TR ikizleri)
+
+`load_sound`/`play_sound`/`stop_sound`'un Türkçe karşılığı yoktu: çift dilli
+API sözünün ortasında, Türkçe yazılmış bir örnek ses yüklerken İngilizce ada
+düşüyordu.
+
+### Fixed — ilk açılışta iki "Failed to open text file" uyarısı
+
+Ses seviyesi anahtarı yokken raylib her okuma denemesinde WARNING basıyor ve
+`kayit_ac3d` açıkken bu okuma her açılışta İKİ kez oluyor (bir kez üst
+düzeyde, bir kez pencereden sonra — Android'de dosya erişimi pencereye bağlı,
+bu ayrım bilerek). Ses ayarına hiç dokunmamış kullanıcı her başlangıçta iki
+uyarı görüyordu. Anahtar yoksa varsayılan artık bir kez yazılıyor: ilk
+açılışta bir uyarı, sonraki açılışlarda sıfır.
+
+
+### Added — paket yöneticisi denetimi (`tests/pkg_audit.sh`)
+
+`tulpar pkg` kullanıcının PROJE DİZİNİNE yazıyor (`tulpar.toml`,
+`tulpar_modules/`) ve denetimsiz yüzeylerin sonuncusuydu. **Ölçüm sonucu:
+sağlam** — LSP'de olduğu gibi burada da düzeltilecek hata değil, korunacak
+çalışan bir yüzey vardı: `init` → `add name@path:../dir` → `install` zinciri
+paketi vendor'luyor, vendor edilen paket gerçekten `import` edilip
+çalışıyor (`kare(7)` → 49), `list`/`remove` toml'u doğru düzenliyor, olmayan
+yol sıfırdan farklı dönüyor ve ulaşılamayan registry asılmadan net konuşuyor
+("connect failed" / "dns failed", çıkış 1).
+
+Denetimin asıl iddiası "dosya kopyalandı" değil, **vendor edilenin import
+edilebilmesi** — kopyalamak yetmez, çözümleme yolunda da görünmeli. Ayrıca
+hata yollarının sıfırdan farklı döndüğü sınanıyor: hatayı basıp 0 dönmek bu
+depoda görülmüş bir sınıf (`tulpar typecheck` aynısını yapıyordu) ve
+`pkg install && build` zincirini sessizce bozardı. Bozma denendi (olmayan
+yolda `return 1` → `continue`) ve denetim kızardı. ~0.1 sn.
+
+Yol üstünde iki bayat belge düzeltildi: `path:` dışındaki bağımlılıklar
+"TODO" diye yazılıydı, oysa `url:` ve registry yolu kodda var.
+
+
+### Fixed — `tulpar doc` üç stdlib modülünü HİÇ belgeleyemiyordu
+
+Belge üreteci kodgen hatasında her şeyi atıp hiçbir şey basmıyordu. Sonuç:
+`lib/router.tpr`, `lib/middleware.tpr` ve `lib/http_utils.tpr` için çıktı
+**boştu** — bu üç modül kardeş modüllerin sembollerine bakıyor
+(`_router_port`, `_request`, `json_response`) ve tek başlarına derlenmiyor,
+oysa birlikte import edildiklerinde tamamen geçerliler.
+
+Belge çıkarmak **bildirimlere** bakar, derlemenin başarısına değil. Üstelik
+indeks zaten kodgen'den bağımsız kuruluyordu (`aot_check_and_index` onu
+koşulsuz inşa ediyor) — `doc` yalnız atıyordu. Ayrım artık net: **ayrıştırma**
+hatası belgeyi engelliyor (indeks güvenilmez), **kodgen** hatası stderr'e bir
+uyarı basıyor ve belge bildirimlerden üretiliyor. `lib/router.tpr` artık 19
+fonksiyonu docstring'leriyle belgeliyor.
+
+### Added — belge denetimi (`tests/doc_audit.sh`)
+
+`build.sh suites` içinde ~5 sn: 112 dosyanın her biri için `doc` çıkış 0
+veriyor ve çıktı boş değil; ayrıca **ayrışmayan** bir dosyanın hâlâ hata
+verdiği sınanıyor — "her zaman 0 dön" biçiminde bir düzeltme denetimi işe
+yaramaz hâle getirirdi. İki bozma da denendi (kodgen hatasında yine at;
+ayrışma hatasında da 0 dön) ve ikisi de yakalandı.
+
+
+### Added — LSP duman testi (`tests/lsp_audit.py`)
+
+`tulpar --lsp` editör eklentisinin dayandığı yüzey ve hiçbir otomasyonda
+yoktu: bozulsa derleyici de 59 süit de yeşil kalır, yalnız editörde tamamlama
+ve hover **sessizce** ölürdü. Bugün denetimsiz kalan yüzeylerden ikisi (web
+arşivleri, `tulpar fmt`) gerçekten kırık çıkmıştı; bu, üçüncüsü kırılmadan
+önce yakalansın diye.
+
+Ölçüm sonucu: **LSP sağlam.** hover doğru imzayı veriyor, definition bildirim
+satırını gösteriyor, references bildirim+kullanımı buluyor, completion 384 öğe
+dönüyor, signatureHelp parantez içinde çalışıp aktif parametreyi izliyor
+(0 → 1), rename iki noktayı birden değiştiriyor, bozuk kodda 2 tanı
+üretiyor ve `shutdown`/`exit` temiz kapanıyor. Yani düzeltilecek hata değil,
+korunacak çalışan bir yüzey vardı.
+
+Denetimin çekirdeği **"ilan et ↔ uygula"**: `initialize` hangi `*Provider`
+yeteneğini bildiriyorsa o metot gerçekten çağrılıp anlamlı cevap verdiği
+sınanıyor — ilan edip uygulamamak editörde "hiçbir şey olmuyor" demek ve tek
+bir log satırı bile üretmiyor. ~0.03 sn, `build.sh suites` içinde. Bozma
+denendi (hover işleyicisi kapatıldı) ve denetim kızardı.
+
+Yan not: ilk yazımda imleç sütunlarını elle yazmıştım, sonra örnek metni
+kısaltınca aynı sütun parantezin içine düştü ve denetim sunucuyu değil kendi
+aritmetiğini kızarttı. Konumlar artık metinden hesaplanıyor.
+
+
+### Fixed — `tulpar fmt` DERLENMEYEN kod üretiyordu (üç ayrı bozulma)
+
+`tulpar fmt --write` kullanıcının kaynak dosyasının üstüne yazıyor, yani
+buradaki bir hata doğrudan veri kaybı. Biçimlendiricinin hiçbir otomasyonu
+yoktu ve üç bozulma birden hayatta kalmıştı — üçü de aynı kökten, karakter
+düzeyinde çalışan bir yazıcının iki karakterli belirteçleri tanımaması:
+
+- **`i++` → `i + +`.** Depoda 84 dosya `++`/`--` kullanıyor; hepsi
+  biçimlendirildiğinde ayrışmaz hâle geliyordu.
+- **`=>` → `= >`.** `match` ifadesi olan her dosya bozuluyordu.
+- **`/*` → `/ *`.** Blok yorum diye bir kavram yoktu: sınırlar bölünüyor,
+  yorumun İÇİNDEKİ düzyazı kod gibi dolgulanıyordu. Blok yorum satırları
+  artık **olduğu gibi** kopyalanıyor — içeride hizalanmış tablo/ASCII şema
+  olabilir ve onu "düzeltmek" biçimlendiricinin işi değil. Dizgi içindeki
+  `/*` yorum açmıyor (bu da sınandı).
+
+### Fixed — `tulpar typecheck` ayrıştırma hatasında 0 dönüyordu
+
+Sözdizimi bozuk bir dosya tanıyı basıp **"ok"** alıyor ve çıkış kodu 0
+oluyordu, yani `tulpar typecheck`i kapı olarak kullanan bir CI ayrıştırma
+hatalarına kördü — biçimlendiricinin ürettiği bozuk kodu yakalayabilecek tek
+denetim de buydu. Sebep: **parser hatadan kurtuluyor**, tanıyı basıp kısmi
+bir AST döndürüyor ve istisna atmıyor; `try/catch` + `!ast` denetimi bunu
+göremiyor. Sayaç zaten vardı (`parser_get_error_count`, tam bu iş için
+belgelenmiş, typeinfer ön-geçişi de okuyordu) — eksik olan yalnız bu komuttu.
+
+### Added — biçimlendirici denetimi (`tests/fmt_audit.sh`)
+
+`build.sh suites` artık her `examples/`, `examples/en/` ve `lib/` dosyası için
+üç şeyi ölçüyor (~2 sn, 141 dosya): fmt çalışıyor, **idempotent**
+(fmt∘fmt = fmt — değilse kaydet-biçimlendir döngüsünde dosya sonsuza kadar
+değişir), ve çıktı **hâlâ ayrışıyor**. Bozma denendi ve denetim kızardı.
+Ayrıca altı örnekte formatlanmış hâlin ÇALIŞMA çıktısı da karşılaştırıldı:
+beşi birebir aynı, altıncısında tek fark zaman ölçen satırlar.
+
+
+### Fixed — ANDROID: paket kimliği artık oyun adından türüyor (iki oyun birbirini siliyordu)
+
+`tulpar.toml` yazmayan her oyun `dev.tulparlang.game` paket kimliğini
+alıyordu. Sonuç: cihazda ikinci Tulpar oyununu kurmak **birincisini siliyor**
+— aynı kimlik, Android için aynı uygulama demek — ve bunu söyleyen hiçbir şey
+yok. tulpar.toml ile kimlik zaten sabitlenebiliyordu, ama varsayılan yol
+(hızlı bir `tulpar build --target=android oyun.tpr` çağrısı) sessizce
+çakışıyordu.
+
+Kimlik artık **çıktı adından** türüyor: `dev.tulparlang.<ad>`. Temizleme
+kuralları aapt2'nin kabul ettiği paket parçasını üretiyor ve dördü de gerçek
+derlemeyle sınandı: geçersiz karakterler `_` olur (`my-game v2` →
+`my_game_v2`), rakamla başlayan ada `g` öneki gelir (`3boyut` → `g3boyut`),
+Java anahtar sözcüğü `_` ile biter (`class` → `class_`), her şey elenirse
+`game`'e düşer (`___`). `tulpar.toml`'daki `package` yine her şeyi eziyor —
+ve **yayınlanmış bir oyunda orada sabitlenmeli**, çünkü çıktı adını
+değiştirmek kimliği değiştirir: cihazdaki kurulum güncellenmez, yanına ikinci
+kopya kurulur.
+
+Android derleme denetimi bunu her koşumda ölçüyor (manifest'te
+`package="dev.tulparlang.tulparsmoke"` aranıyor); sabit varsayılana dönen
+bozma denendi ve denetim kızardı. Zincirin tamamı doğrulandı: iki farklı oyun
+farklı kimlik alıyor, toml ezmesi çalışıyor, aapt2 alt çizgili paketi kabul
+ediyor (18 MB imzalı APK üretildi).
+
+
+### Added — ANDROID DERLEME DENETİMİ: hedefin çalıştığı artık her koşumda ölçülüyor
+
+Bugünkü iki kırık (bayat arşivler, NDK aramasının Android Studio kurulumunu
+görmemesi) ortak bir boşluğa işaret ediyordu: **Android derleme yolunu hiçbir
+şey denetlemiyordu.** Hedef "Temmuz'da emülatörde doğrulandı" diye duruyordu;
+arada masaüstü build'i, 59 süit ve 47 örnek boyunca her şey yeşil kaldı,
+çünkü hiçbiri o hedefi derlemiyor.
+
+`build.sh suites` artık NDK varsa bir scene3d oyununu Android'e derliyor ve
+iki ABI'nin `.so`'su + manifest üretildiğini sınıyor (~36 sn). scene3d
+seçildi çünkü tame'i de içeriyor — tek derleme iki arşivi birden kapsıyor.
+NDK yoksa **atlanıyor** (dist denetimindeki aynı gerekçe: NDK'sı olmayan
+geliştiriciyi kırmızıya boğmak yanlış). `TULPAR_NO_ANDROID_SMOKE=1` kapatır.
+
+Denetimin kendi üç yolu da sınandı: NDK yokken atlıyor (sahte HOME ile),
+arşivler yokken kızarıyor (android/dist geçici olarak kenara alındı — link
+kopuyor, `.so` üretilmiyor), normalde yeşil. Ölçüm sırasında bir sınamamın
+geçersiz olduğu da çıktı: `TULPAR_ANDROID_LIB_DIR` arama yolunu DEĞİŞTİRMİYOR,
+EKLİYOR — boş bir dizin göstermek link'i bozmuyor.
+
+
+### Fixed — WEB HEDEFİ KIRIKTI: önceden derlenmiş arşivler sessizce çürüyor
+
+`wasm/dist` ve `android/dist` gitignored ve elle tazeleniyor. Yeni bir
+`aot_tm_*` binding'i eklemek arşivi anında bayat yapıyor ve **o hedefin her
+derlemesi `undefined symbol` ile ölüyor** — ama masaüstü build'i, 59 süit ve
+tüm örnekler yeşil kalıyor, çünkü hiçbiri o hedefi derlemiyor.
+
+Ölçüldü: `wasm/dist` beş gündür bayattı ve scene3d'nin **her** web derlemesi
+altı eksik sembolde patlıyordu (`tm_window_resizable`, `tm_fullscreen`,
+`tm_is_fullscreen`, `tm_maximize`, `tm_window_resized`, `tm_master_volume`).
+`android/dist`'te eksik sayısı **31**. Arşivler tazelendi; web hedefi
+(`scene3d_collector` ve editörün kendisi) yeniden derleniyor.
+
+Asıl düzeltme uyarının kendisinde. `build.sh suites` zaten "arsiv BAYAT"
+diyordu ve doğru diyordu — ama "olabilir" diyordu, "kırık" demiyordu, ve
+sarı bir "olabilir" satırı birkaç koşumda gürültüye dönüşüyor (bu satırı
+yazan da dahil kimse okumadı). Yeni `tests/dist_archive_audit.py` builtin
+tablosunu okuyup arşivde **eksik sembolleri adıyla** sayıyor:
+- Arşiv **yoksa** atlanıyor — o hedef kullanılmıyor demektir ve emsdk'sı
+  olmayan bir geliştiriciyi kırmızıya boğmak yanlış olur.
+- Arşiv **varsa ve eksikse**: web'de HATA (emsdk depoda vendored, yani her
+  geliştirici tazeleyebilir), Android'de UYARI (NDK vendored değil —
+  düzeltilemeyen bir kırmızı, kırmızıyı görmezden gelmeyi öğretir; bu
+  denetimin kapatmaya çalıştığı hatanın ta kendisi).
+
+Zaman damgası denetimi yedek yola indi: yalnız python3 yokken koşuyor. Aynı
+arşiv için iki ayrı sarı satır basmak uyarıyı yine gürültüye çevirirdi.
+
+CLAUDE.md'deki "5 noktalı binding" yönergesine altıncı adım eklendi: tame
+builtin'i eklediysen arşivleri de tazele.
+
+**Android arşivleri de tazelendi ve yol üstünde ikinci bir kusur çıktı:** NDK
+araması iki yerde yazılıydı — sürücüde (`aot_pipeline.cpp`, derlemeyi yapan)
+ve betikte (`build_tame_android.sh`, arşivleri üreten) — ve ikisi de yalnız
+`~/Android/android-ndk-*`'a (tek başına indirilen NDK) bakıyordu. Android
+Studio ise NDK'yı SDK'nın içine, `~/Android/Sdk/ndk/<sürüm>` altına kuruyor.
+Sonuç: makinede çalışır bir NDK dururken hem betik hem sürücü "NDK
+bulunamadı" diyordu. İkisi de artık `$ANDROID_HOME/ndk`, `$ANDROID_SDK_ROOT/
+ndk`, `~/Android/Sdk/ndk`, `~/Library/Android/sdk/ndk` ve
+`~/Android/android-ndk-*` yollarına bakıyor; sürüm sırası sözlük sırası değil
+(düz karşılaştırma "9.x"i "30.x"in üstüne koyuyordu) ve seçilen aday
+`llvm-ar` ile doğrulanıyor. Denetim ayrışmayı da sınıyor: aynı kural iki
+dosyada yazılıysa aynı olduklarını ölçmek gerekiyor.
+
+Android hedefi uçtan uca doğrulandı: `scene3d_collector` iki ABI'ye derlendi,
+`package_apk.sh` imzalı bir APK üretti (24 MB).
+
+
+### Added — SAHNE DENETİMİ: iki sessiz durum daha görünür oldu
+
+**Yol bulma açık ama katı duvar yok.** `nav_build3d` duvarsız sahnede erken
+dönüyor (haklı olarak: her hücre açık olurdu ve `chase3d` düz çizgiyi zaten
+bedavaya buluyor), ama sonuç şu: editörde "duvarlari dolas" anahtarını
+açıyorsun, hiçbir şey değişmiyor ve sebebi hiçbir yerde yazmıyor. Denetim
+artık söylüyor. "Katı" şartı da önemli — katı olmayan duvar bir dekor, ne
+yolu keser ne ızgaraya girer.
+
+**Öteki bölümlerde oyuncu denetimi.** Denetim yalnız YAŞAYAN bölümü
+görüyordu; çok bölümlü bir sahnede geri kalanlar hiç bakılmadan kalıyordu.
+3. bölümde oyuncu yoksa bunu ancak oraya geçince fark ediyorsun — ya da hiç
+fark etmeyip oyunu öyle yayınlıyorsun. Saklanan bölümlerin JSON'u zaten elde,
+yüklemeden bakmak yetiyor. Yaşayan bölüm **atlanıyor**: saklanan kopyası
+bayat olabilir (`_ed_level_store3` henüz çalışmamış olabilir) ve zaten canlı
+denetleniyor — atlamasaydı, bir oyuncuyu silip henüz saklamamış kullanıcıya
+olmayan bir sorun bağırırdı.
+
+2 regresyon testi (646 → 648) ve 6 bozma denemesi. Biri kaçtı ve öğreticiydi:
+"yaşayan bölümü atla" korumasını silen bozma yakalanmadı, çünkü testte
+saklanan kopya canlı sahneyle aynıydı — yani iki kez bakmak da aynı cevabı
+veriyordu. Korumanın var olma sebebi olan BAYAT kopya durumu kurulunca
+yakalandı.
+
+
+### Added — MOTOR: A* yol bulma artık SAHNEDEN de erişilebilir
+
+`chase_path3d` motorun en iyi düşman AI'ıydı ama yalnız **elle yazılan
+koddan** erişilebiliyordu: editörün ürettiği `kovala` davranışı düz
+kovalamaya düşüyor ve U biçimli tuzaktan çıkamıyordu. Yani editörle oyun
+yapan biri motorun en iyi parçasını kullanamıyordu.
+
+Ayrı bir davranış türü açılmadı; `kovala`'ya bir **bayrak** eklendi
+(`Bh3.c`). İş aynı — "en yakın hedefi kovala" — ve yalnız gezinme stratejisi
+değişiyor; ayrı tür, hedef bulma ve menzil mantığını ikinci kez yazmak
+olurdu. Bayrak motorun kendi kararını da yansıtıyor: `chase3d` varsayılan
+kalıyor, A* opt-in (her çağrıda ızgara taraması demek ve çoğu oyunun ihtiyacı
+yok). Biçimde `"path": 1` ve yalnız açıkken yazılıyor. Editörde anahtar:
+**"duz git" / "duvarlari dolas"**.
+
+**Izgara tembel kuruluyor** — ilk yol bulma isteğinde, dağıtımın içinde.
+Kurulmasaydı `chase_path3d` sessizce düz kovalamaya düşerdi: editördeki
+anahtar açık görünür, hiçbir şey yapmazdı. Düz kovalama ızgara kurmuyor
+(opt-in kararı bunu gerektiriyor) ve elle kurulmuş bir ızgara ezilmiyor.
+**Bölüm değişimi ızgarayı geçersiz kılıyor**; kılmasaydı 2. bölümün düşmanı
+1. bölümün labirentini dolaşırdı — duvarlar başka yerde, yol saçma, hata yok.
+
+Izgaranın statik olması artık **sessiz değil**: sahne denetimi hareketli
+duvar ile yol bulma birlikteyken uyarıyor. Uyarı yalnız DUVAR hareketliyse
+çıkıyor — devriye gezen düşman ızgarayı bozmuyor ve ona uyarmak uyarıyı
+gürültüye çevirirdi.
+
+7 regresyon testi (639 → 646) ve 12 bozma denemesi. Ayırt edici test mevcut
+A* testinin desenini izliyor: aynı cep sahnesi, aynı süre, tek fark davranışın
+bayrağı — düz kovalama takılmak, yol bulan varmak ZORUNDA. Bir bozma kaçtı
+(etiket denetimini silmek): testte hareket eden tek şey duvardı, yani
+"devriye gezen düşman uyarı sebebi değil" durumu hiç kurulmamıştı.
+
+
+### Added — MOTOR: ayarlar ekranı ve ANA ses seviyesi (`tm_master_volume`)
+
+Motorda ana ses seviyesi **yoktu**: yalnız müzik başına `music_volume` vardı,
+yani yayınlanmış bir oyunda sesi kısmanın yolu yoktu. Yeni tame binding'i
+`tm_master_volume` (sarmalayıcılar `master_volume`/`ana_ses`) ses ve müziğin
+ikisini birden ölçekliyor; müzik başına ayar onun üstüne biniyor, yani oyun
+kendi karışımını kurup üstünden tek düğmeyle kısabiliyor.
+
+Seviye **ses aygıtı açılmadan önce de** ayarlanabiliyor: aygıt ilk ses
+yüklendiğinde açılıyor, doğrudan `SetMasterVolume` çağırmak `setup` içinde
+yapılan ayarı sessizce düşürürdü. Değer C tarafında saklanıyor ve aygıt
+açılınca uygulanıyor. Seviye ayarlamak aygıtı AÇMAK için bir sebep değil —
+headless'ta açılamaz ve hata basardı.
+
+Duraklat menüsüne **Ayarlar** girdi (Devam / Yeniden / Ayarlar / Çıkış).
+Başlık ekranında değil: dikey liste en çok dört düğme taşıyor ve başlık zaten
+dördünü kullanabiliyor; duraklat da oyunun her yerinden bir tuş uzakta.
+Ayarlar ekranı tek satır — motorun gerçekten sahip olduğu tek ayar ses
+seviyesi; dil sistem yerelinden geliyor ve FPS'i motor sürmüyor, onları
+listelemek çalışmayan düğme demek olurdu. "Geri" duraklata dönüyor, oyuna
+değil. Diske yazmak opt-in (`kayit_ac3d`), kaydın geri kalanıyla aynı kural.
+
+Yol üstünde bir tuzak yakalandı: duraklat dağıtıcısı **konuma** göre
+çalışıyordu ve araya "Ayarlar" girince "Çıkış"ı sessizce ayarlara bağladı —
+mevcut bir regresyon testi kızardı. Duraklat da başlık gibi TÜRE göre
+dağıtılıyor artık. Dahası, tür sabitleri konumlarla çakışmasın diye kaydırıldı
+(`_PB_* = 10..13`, `_TB_* = 20..23`): 0,1,2,3 iken eşleme birim fonksiyondu ve
+dağıtıcıyı `a - 1`'e çeviren bir bozma hiçbir şeyi bozmadan **kaçıyordu** —
+soyutlama sırayı değiştiren ilk düzenlemeye kadar yalnız kâğıt üstündeydi.
+
+7 regresyon testi (632 → 639) ve 9 bozma denemesi. Biri kaçtı (yukarıdaki
+dejenere eşleme), bir tanesi de önceki bozma turunun diske bıraktığı artığı
+okuyup yanlış yere kızardı — ikisi de [[Tuzaklar]]'a yazıldı.
+
+
+### Added — MOTOR: bölüm seçme ekranı ve "Devam" (kayıt sistemi sözünü tutuyor)
+
+Kayıt sistemi bitirilen bölümleri **zaten** diske yazıyordu
+(`_s3_mark_level_done`) ve kaldığın yeri **zaten** hesaplıyordu
+(`unlocked_level3d`) — ama hiçbir yer o cevabı sormuyordu: fonksiyon yalnız
+testlerden çağrılıyordu ve beş bölüm bitiren oyuncu ertesi gün yine 1.
+bölümden başlıyordu. "Bölüm ilerlemesi kalıcı" sözü tutulmuyordu.
+
+Başlangıç ekranı artık **Başla / [Devam (Bölüm N)] / [Bölümler] / Çıkış**.
+Köşeli parantezliler koşullu: **Devam** yalnız gerçekten ilerleme varsa
+("Devam (Bölüm 1)" ile "Başla" aynı şeydir ve iki düğme olarak durmaları
+olmayan bir soru sordururdu), **Bölümler** yalnız çok bölümlü VE kayıt açık
+sahnede (kayıt yoksa hiçbir bölüm açılmaz, ekran çıkmaz olurdu).
+
+Dağıtım **konuma göre değil TÜRE göre** (`_s3_title_kind3`): liste duruma göre
+uzayıp kısalıyor, sabit eşleme araya bir düğme girdiğinde sessizce yanlış işi
+yaptırırdı — menü şeridinde tam olarak bu yaşanmıştı. ESC de sabit bir sayıya
+değil "son düğme"ye gidiyor.
+
+Bölüm ızgarasında **kilitli bölüm çiziliyor ama seçilemiyor**: gizlemek "kaç
+bölüm var" bilgisini de götürürdü, seçilebilir yapmak oyunu atlanabilir
+kılardı. Açıklık kuralı tek yerde ve `unlocked_level3d`'den geliyor — yani
+kesintisiz: 3 bitip 2 bitmediyse 3 açılmıyor. Seçim **ertelenmiş geçiş**
+kuruyor (`goto_level3d`), oyun içindeki bölüm değişimiyle aynı yol, ve
+`goto_level3d` "bitti" işaretlemiyor — seçmek ilerlemeyi uydurmuyor.
+
+İki yan düzeltme yol üstünde çıktı. Dikey düğme listesinin adımı sabit 0.15'ti
+ve dördüncü düğme ekranın **tam alt kenarına** dayanıyordu (0.44 + 3×0.15 +
+0.11 = 1.00, sıfır boşluk); adım artık tavandan türüyor. Izgaranın hücre boyu
+da sabitti ve ekranda kaydırma olmadığı için ~25 bölümden sonra alt sıra
+görünmez oluyordu; boy artık sığmaya göre küçülüyor ve ızgara tanımlı bir
+bandın içinde ortalanıyor.
+
+Örnek: `examples/scene3d_arena.tpr` (üç bölüm + `kayit_ac3d`) ikinci açılışta
+iki düğmeyi de gösteriyor.
+
+9 regresyon testi (623 → 632) ve 17 bozma denemesi. Üçü ilk turda kaçtı, üçü
+de testin kendi kurulumundandı: yerleşim testi tek ölçekte koşuyordu (taşma
+ancak 25 bölümde görülüyor), iki koşullu bir kuralın sınanmayan koşulu zaten
+sağlanmıyordu, ve `_lvlN` ile `_lvl_js3` karışmıştı. Üçü de [[Tuzaklar]]'a
+yazıldı.
+
+
+### Fixed/Added — EDİTÖR: yazılan sayı geri alınabiliyor, bölge varlıkla aynı jestlerden geçiyor
+
+**Sayı alanına YAZILAN değer geri alınamıyordu.** Alanın iki düzenleme yolu
+var; sürükleme jestin başında bir kez işaret bırakıyordu, yazma **hiç**
+bırakmıyordu. Belirti sinsi: CTRL+Z çalışıyor gibi görünür ama bir ÖNCEKİ işi
+geri alır, yazdığın değer geçmişte hiç yer almadan kaybolur. Yazma artık
+`_g_num_commit3`'ten geçiyor ve işaret yalnız değer gerçekten değiştiyse
+bırakılıyor (aynı sayıyı yazmak 40'lık yığını boş adımlarla doldurup geri
+alma tuşunu işe yaramaz hâle getirirdi). ESC iptal, oradan geçmiyor.
+
+**Bölge artık varlıkla aynı jestlerden geçiyor.** Tutamaklar geldikten sonra
+kalan farklar kapandı: bölge **tutulup sürükleniyor** (zemin düzleminde,
+kavrama ofsetiyle), oklar **Y'yi ittiriyor** (eskiden XZ veriyordu ve
+gerekçesi "bölgede tutamak yok"tu — o gerekçe düştü), **CTRL+D ile
+çoğaltılıyor** (+ panelde düğme).
+
+Kavrama ofseti artık **tek fonksiyonda** (`_ed_grab_offset3` /
+`_ed_drag_point3`): iki kopya, birinde düzeltilen bir hatanın ötekinde
+yaşaması demekti. Testi gidiş-dönüşten — tutup hiç kıpırdamadan sürükleme
+noktasını okumak cismin merkezini vermeli. Bölgenin **klavye yolu da tek
+kapıdan** geçiyor: eski kopya kendi `0.1` tabanını taşıyor ve ızgaraya hiç
+oturmuyordu, yani aynı bölgeyi klavyeyle ittirmek ile tutamakla çekmek farklı
+yerlere koyuyordu.
+
+Çoğaltmanın alan listesi `_ed_zone_delete3`'inkiyle **aynı** olmak zorunda
+(biri alan eklenip öteki unutulursa silme kaydırır, çoğaltma düşürür — ikisi
+de sessiz), ve test listeyi kopyalamıyor: silme fonksiyonunun **kaynağından**
+okuyup çoğaltmada arıyor. Üyelik kayıtları kopyalanmıyor — onlar bölgenin
+tanımı değil, "şu an içeride kim var" durumu.
+
+9 regresyon testi (614 → 623) ve 21 bozma denemesi, hepsi doğru testi
+kızarttı.
+
+
+### Added — EDİTÖR: bölge tutamakları, kutu seçimi, sürükleme hayaleti
+
+Üç ayrı boşluk, tek ortak tema: **jest var ama görünmüyordu.**
+
+**Bölgenin de tutamakları var.** Varlığın üç dönüşümünün de tutamağı vardı,
+bölgenin hiçbirinin yoktu — oysa lav çukuru ya da kazanma bölgesi tam olarak
+gözle yerleştirilen şey. TAŞI ve ÖLÇEK kipleri artık seçili bölgede de aynı
+okları çiziyor; oklar **varlıkla aynı fonksiyondan** geliyor, ayrı bir kopya
+değil. DÖNDÜR kipinde bölgede tutamak **yok**: bölgenin yaw'ı yok (biçimde de
+içerik testinde de eksen hizalı kutu), halka hiçbir şey yapmayan bir tutamak
+olurdu. Küre bölgede hangi ok çekilirse çekilsin **yarıçap** değişiyor —
+kürenin tek ölçüsü var ve eksene göre üç sayı yazmak hiçbir şeyi
+kıpırdatmazdı. Boy bir ızgara adımının altına inmiyor (ters yüz bir kutu HİÇ
+tetiklenmez ve bunu söyleyen bir şey yok); kelepçe tek yerde, sayı alanı da
+tutamak da oradan geçiyor.
+
+**Kutu seçimi.** Üç dönüşüm de seçimin tamamını işliyor, yani darboğaz seçimi
+KURMAK'tı: tek tık ile "tümünü seç" arasında hiçbir şey yoktu. Boş bir yere
+basıp sürüklemek artık kutu açıyor; CTRL basılıysa küme korunup üstüne
+ekleniyor (CTRL+tıkın kuralı). Kutu **boşluktan** başlıyor çünkü cismin
+üstünde başlayan sürükleme onu taşımak demek; eşiğin altı hâlâ sade tıklama.
+Seçim **merkeze** bakıyor — kutuya değen her şeyi almak kocaman bir zemini
+her seçime katardı. Bunun için dünya→ekran yansıtması geldi ve `_ed_ray3`'ün
+**tersi** olarak, tek bir kamera tabanından türetildi; testi beklentiyi
+bağımsız yoldan alıyor (ekran noktası → ışın → dünya → geri yansıtma aynı
+piksele düşmeli). Kameranın arkasındaki nokta yansıtılamıyor.
+
+**Sürükleme hayaleti — ve önizlemedeki bir yalan.** Panel sürüklerken imlecin
+altında artık panelin hayaleti (başlık şeridi + gövde) duruyor. Asıl düzeltme
+vurgulanan alan: ekranın kabaca üçte biri boyanıyordu ve bu **yanlıştı** —
+yuvada zaten panel varsa gelen panel üçte biri değil payına düşeni alır,
+üstelik yuva genişliği kullanıcının çektiği sınıra bağlı. Önizleme artık
+sonucun **kendi fonksiyonundan** çıkıyor: model geçici olarak hedefe
+kuruluyor, `_dk_rect3` okunuyor, model geri alınıyor. Geri koymak (yuva **ve**
+pay) testle korunuyor — bir tek kare atlasa panel bırakılmadan taşınmış olur
+ve "geçersiz bölgeye bırak = iptal" sözü sessizce bozulurdu.
+
+Kısayol listesi (H) kutu seçimini de sayıyor: yazmayan bir jest, olmayan bir
+jesttir.
+
+21 regresyon testi (593 → 614) ve 30 bozma denemesi; üçü ilk turda kaçtı ve
+üçü de testin kendi kurulumundandı — kameranın arkasındaki cisim listenin
+sonundaydı (bir önceki cismin değerlerini miras alıyordu), önizleme testi
+döngünün sonunda ölçüyordu (son çağrı panelin kendi yuvasınaydı) ve adil-pay
+adımı varsayılan yerleşimde zaten fark yaratmıyordu. Üçü de [[Tuzaklar]]'a
+yazıldı.
+
+
+### Fixed — EDİTÖR: yineleme (CTRL+Y) yapısal işi geri getirmiyor, sahneyi siliyordu
+
+"Bölüm ekle → CTRL+Z → CTRL+Y" ölçüldü: bölüm geri gelmiyor ve üstüne 1.
+bölümün içeriği de gidiyordu. Hiçbir hata yok, hiçbir uyarı yok — yalnız
+boşalmış bir sahne.
+
+Kök neden geri alma ile yinelemenin **takas ettiği** durumun biçiminde:
+görüntüler iki biçimde olabiliyor (tek bölümün içeriği `scene_json3d`, ya da
+bölüm yapısının da sahibi olan tam belge `scene_json_levels3d`), ama
+`ed_undo3d`/`ed_redo3d` yığına bıraktıkları KARŞI durumu her zaman tek bölüm
+olarak saklıyordu. Yapısal bir görüntüyü uygularken bıraktığımız durum da
+yapısaldır: yineleme yığınına o an açık olan BOŞ bölümün içeriği giriyor,
+yineleme onu geri gelen sahnenin ÜSTÜNE yazıyordu.
+
+Kural artık tek yerde ve **yığının tepesindeki etiket** söylüyor
+(`_ed_karsi_bicim3`). Etiketin İŞARETİ biçimi, BÜYÜKLÜĞÜ bölümü taşıyor
+(`_ed_snap_tag3`/`_ed_snap_lvl3`) — yani "+ BOLUM EKLE"yi geri alan kullanıcı
+çalıştığı bölümde kalıyor, 1. bölüme düşmüyor. Tam belge yakalanmadan önce
+yaşayan bölüm diziye yazılıyor (`_ed_level_store3`), yoksa yineleme
+götürdüğünden azını geri getiriyordu.
+
+Yol üstünde ikinci bir hata: yeni yardımcı, var olan bir `_ed_capture3()` ile
+**aynı adı** taşıyordu — Tulpar bunu sessizce derliyor ve biri ölü kalıyor.
+Süitteki `t_no_duplicate_function_names` adı vererek yakaladı.
+
+Altı regresyon testi (`tests/scene3d_engine.test.tpr`, 588 → 593) ve altı
+bozma denemesi; kural testi, karşı görüntünün biçimini sabite çevirmeyi de
+yakalıyor.
+
+
 ### Added — sahne artık VERİ: JSON sahne biçimi + davranışlar + kurallar
 
 Bir sahne buraya kadar yalnız KOD olarak vardı: `setup()` içinde elle yazılmış
@@ -206,6 +965,182 @@ hata çıkıyor.
 
 Adaylar artık hem çalışma dizinine hem EXE DİZİNİNE göre üretiliyor, yani
 bağlama hangi dizinden çalışıldığından bağımsız.
+
+### Added — SAHNE DENETİMİ: sessiz hatalar artık görünür
+
+Veriyle kurulan bir oyunun hataları SESSİZDİR. Kazanma şartı olmayan sahne
+çalışır ama bitmez. Hiç düşman bulunmayan bir etikete "bunlar bitince
+kazandın" demek oyunu daha başlamadan kazandırır. Sahnede olmayan bir etiketi
+kovalayan düşman hiç kımıldamaz. Hiçbiri hata mesajı üretmez — oyun "çalışır",
+sadece oynanmaz.
+
+Editör artık sahneyi denetliyor: durum çubuğunda uyarı sayacı, dünya panelinde
+liste. Denetlenenler:
+- oyuncu yok
+- oyuncuda hareket davranışı yok (tuşlar işlemez)
+- kazanma şartı yok (oyun bitirilemez)
+- bir kural sahnede bulunmayan bir etikete bakıyor
+- "şu bitince kazandın" kuralı ama o etiketten hiç yok (anında biter)
+- kovalama/ateş davranışı sahnede olmayan bir hedefi gösteriyor
+- düşman/eşya var ama hiçbir kurala girmiyor (zararsızlar / toplanamazlar)
+
+MERMİ özel: sahneye konmaz, ateş davranışından çalışma zamanında doğar. Doğru
+soru "mermi var mı?" değil "mermi ÜRETEN bir şey var mı?" — böylece ateş
+davranışı olmadan konmuş, hiç ateşlenmeyecek bir mermi kuralı hâlâ
+yakalanıyor.
+
+UYARI, hata değil: yarım kalmış bir sahne geçerli bir ara adımdır ve editör
+insanı durdurmamalı.
+
+Denetim her kare değil, sahne DEĞİŞTİĞİNDE koşuyor — tarama varlık × kural ×
+davranış geziyor. `_ed_dirty3` bir bayrak (0/1) olduğu için iki ardışık
+düzenlemeyi ayırt edemezdi; ayrı bir sürüm sayacı eklendi.
+
+Bu denetimler bir süre YALNIZ TESTLERDE yaşıyordu; asıl ihtiyaç duyan kişi
+editördeki insan. Her denetim İKİ YÖNLÜ sınanıyor: bozuk sahnede uyarı
+çıkmalı, sağlam sahnede çıkmamalı — hep uyaran bir denetim, hiç uyarmayan
+kadar işe yaramaz.
+
+### Added — OYUN ŞABLONLARI: tek tıkla oynanabilir bir oyun
+
+"Yeni sahne" bomboş bir dünya açıyordu ve inceleyicide yalnız "secili varlik
+yok" yazıyordu — yani editörün EN ÇOK görülen ilk ekranı boştu. Yeni gelen
+kişi, oyunun hangi parçalardan yapıldığını hiç görmeden boşluğa bakıyordu.
+
+Seçim yokken inceleyici artık **OYUN ŞABLONLARI** gösteriyor: `TOPLAYICI`,
+`ARENA (nisanci)`, `PLATFORM`. Her biri TAM OYNANABİLİR bir sahne kuruyor —
+oyuncu, zemin, duvarlar, davranışlar, kurallar ve kazanma şartı. "Oynat"a
+basınca oyun çalışıyor. Öğrenme yolu da bu: çalışan bir şeyi kurcalamak, boş
+sayfayı doldurmaktan çok daha kolay.
+
+Yıkıcı bir işlem ama ONAY SORULMUYOR: `ed_mark3d` geri-al noktası bırakıyor,
+CTRL+Z eski sahneyi geri getiriyor. Editörün geri kalanı da kipsiz; buraya bir
+modal pencere yabancı olurdu. (Geri-alın gerçekten çalıştığı ayrıca test
+ediliyor — çalışmazsa kullanıcı sahnesini geri alınamaz şekilde kaybederdi.)
+
+Testler "birkaç cisim kondu" değil **"oynanabilir mi"** diye soruyor: oyuncu
+var mı, canı var mı, kazanma şartı var mı, davranış var mı, ve en sinsisi —
+her kuralın dokunduğu etiketin sahnede karşılığı var mı. Kuralı olan ama o
+etikette hiç varlık bulunmayan bir sahne sessizdir: kural hiç ateşlenmez ya
+da (kazanma kuralıysa) oyun ANINDA kazanılmış sayılır.
+
+Yapısal denetim tek başına yetmiyor, çünkü kural bağlı görünüp de
+ateşlenmeyebilir; toplayıcı için oyuncu bir altının üstüne taşınıp çarpışma
+sürülüyor ve skorun gerçekten arttığı ölçülüyor.
+
+Bu test yazılırken bir incelik çıktı: arena şablonu mermi-düşman kuralı
+içeriyor ama sahnede MERMİ YOK — mermiler ateş davranışından çalışma
+zamanında doğuyor. Doğru soru "mermi var mı?" değil "mermi ÜRETEN bir şey var
+mı?" oldu; böylece ateş davranışı olmadan konmuş (hiç ateşlenmeyecek) bir
+mermi kuralı hâlâ yakalanıyor.
+
+### Added — ÇOK BÖLÜMLÜ SAHNE: editörle artık "ekran" değil OYUN yapılıyor
+
+Sahne biçimi tek bir bölüm anlatıyordu: bir dosya = bir ekran. Motorda
+`level3d(n, fn)` vardı ama bir FONKSİYON istiyordu, yani bölümler yalnız KOD
+ile yazılabiliyordu — editörle yapılan bir oyun ilk ekranda bitiyordu.
+
+Yeni `"levels"` anahtarı. **Ne paylaşılır, ne bölüme aittir:** dünya
+(gökyüzü, sis, zemin, yerçekimi, kamera) ve şablonlar paylaşılır; varlıklar,
+bölgeler ve kurallar bölüme aittir. Gökyüzünü her bölümde tekrar yazmak
+dosyayı şişirir ve iki bölümün sessizce farklı görünmesine yol açar — asıl
+değişen şey sahnenin İÇİDİR.
+
+Tek bölümlü dosyalar AYNEN çalışıyor ve yeni anahtarı ALMIYOR: `"levels"`
+yalnız birden çok bölüm varken yazılıyor, yoksa var olan her sahne dosyası
+gereksizce değişirdi.
+
+**Editörde:** hiyerarşinin üstünde bölüm şeridi — `◀ BOLUM 2/3 ▶` ve
+`+ bolum` / `sil`. Tek bölümlü bir sahnede "+ BOLUM EKLE" sahneyi çok
+bölümlüye ÇEVİRİYOR (yaşayan sahne 1. bölüm oluyor, kaybolmuyor).
+
+En kritik davranış: **bölüm değiştirmek yapılan işi kaybetmez.** Yaşayan
+sahne, geçmeden/kaydetmeden/oynatmadan önce diziye geri yazılıyor. Sessiz
+kayıp bu editörde daha önce bir kez gerçekten yaşandı (oynanmış hâl dosyaya
+yazılmıştı), o yüzden açıkça sınanıyor.
+
+"Oynat" her zaman BİRİNCİ bölümden başlıyor: editörde 3. bölümdeyken oynatmak
+3. bölümü test etmek gibi görünür ama oyunun başlangıcı hiç denenmemiş olurdu.
+
+Bölüm silinince numaralar 1..N olarak YENİDEN kuruluyor. Delik kalsaydı
+`bolum_gec3d` boşluğa düşer, oyuncu kazanmak yerine BOŞ bir sahneye inerdi —
+ve bu sessiz olurdu. İki test bozması bu yolları ilk yazımda ıskalamıştı;
+testler ölçülerek ayırt edici hâle getirildi.
+
+Son bölüm silinmiyor: bölümsüz oyun yok.
+
+Örnek: `examples/scenes/iki_bolum.scene.json` (motorla üretildi, elle JSON
+yazılmadı) — `./data_game_desktop examples/scenes/iki_bolum.scene.json` ile
+oynanıyor. `scene3d_data_game.tpr` artık sahne yolunu komut satırından alıyor
+ve HUD'da bölüm sayacını gösteriyor.
+
+### Changed — EDİTÖR: davranış parametreleri artık etiketli ve TAM
+
+Davranış paneli iki **isimsiz** sayı kutusu gösteriyordu. Hangisinin hız
+hangisinin menzil olduğu yalnız kaynağa bakınca anlaşılıyordu ve türden türe
+değişiyordu — devriyede tek kutu HIZDI, ötekilerde ilk parametre. Panel
+oynanışı yazmaya değil tahmin etmeye zorluyordu.
+
+Dahası, gösterilmeyen parametreler hiç düzenlenemiyordu: **devriyenin uçları**,
+**atışın ömrü ve menzili**, **kovalamanın hedef etiketi**. Bunları değiştirmek
+için sahneyi elle JSON'dan düzenlemek gerekiyordu — yani editörün var olma
+sebebine aykırı.
+
+Artık her tür kendi etiketli alanlarını gösteriyor ve **tüm** parametreleri
+kapsıyor; hedef etiketi de panelden döndürülüyor.
+
+İki sütunlu yerleşim denendi ve ÖLÇÜMLE elendi: okunur bir etiket
+("yukseklik", "mermi hizi") genişlik istiyor ve iki etiket + iki alan 280
+piksellik inceleyiciye sığmıyordu (340 gerekiyordu). Etiketleri kısaltmak
+çözüm değil — panelin var olma sebebi "bu sayı ne?" sorusunu bitirmek.
+Parametre başına tek satır: her zaman sığıyor, panel zaten kaydırılıyor.
+
+Yol boyunca üç şey daha çıktı:
+- **Eski yerleşim testi VACUOUS'a dönmüştü.** `_ed_bhw3` yerleşim değişince
+  ölü kaldı ve testi var olmayan bir şeyi doğruluyordu. Fonksiyon silindi,
+  test gerçek yerleşime bağlandı (her ölçekte sığma dahil).
+- **Widget kimlik adımı aralığı daraltıyordu.** Blok başına 6 widget × adım
+  12, taban 20000'de kalsaydı 84. davranış KURAL satırlarına (21000+)
+  çarpardı. Taban 30000'e taşındı.
+- **Kimlik testi sabitleri TEKRAR EDİYORDU**, kaynaktan okumuyordu: adım 3'e
+  düşürüldüğünde bloklar birbirine bindiği hâlde test yeşil kaldı (ölçüldü).
+  Taban/adım/kullanılan-widget artık `_ed_bh_idbase3/idstep3/idused3`'ten
+  okunuyor ve aynı bozma kırmızıya dönüyor.
+
+### Added — A* yol bulma (kaçınmanın çözemediği şey)
+
+`chase3d`in kaçınması TEK engeli çözüyor: duvara değince bir yana bağlanıp
+kayıyor. Labirenti çözmüyor — çıkmaz bir koridora giren düşman orada kalıyor,
+çünkü yerel bir karar küresel bir yolu bulamaz.
+
+`nav_build3d(hucre, pay)` duvarlardan doluluk ızgarası kuruyor,
+`chase_path3d` A* ile onu izliyor. Saf Tulpar; C tarafına dokunmuyor.
+
+`chase3d` VARSAYILAN kalıyor. A* her çağrıda ızgara taraması demek, çoğu
+oyunun ihtiyacı yok (arenada düz kovalama daha "aç gözlü" ve doğal duruyor)
+ve varsayılanı değiştirmek yayınlanmış oyunların düşman davranışını haber
+vermeden değiştirirdi. Izgara yoksa ya da yol bulunamazsa `chase3d`e
+düşülüyor — bilinen davranış, sessiz bir durma değil.
+
+Köşe kesme yasak: çaprazda iki ortogonal komşudan biri kapalıysa geçilmiyor.
+Geçilseydi yol duvarın köşesinden sızar, gövdesi olan ajan oraya sığmaz ve
+takılırdı — üstelik A* "yol buldum" dediği için sessiz bir hata olurdu.
+
+Yazarken üç gerçek hata çıktı ve **üçü de sessizdi** (hiçbiri hata mesajı
+üretmiyordu, belirti "düşman kımıldamıyor"du):
+1. Izgara yalnız duvarlardan kuruluyordu, oysa ajanlar duvarların dışında —
+   başlangıç hücresi ızgara dışına düşüyor ve A* hiç aramadan "yol yok" diyordu.
+2. Kenar payı `pad`i saymıyordu; şişirilmiş duvar ızgara kenarına dayanıp
+   cebi mühürlüyordu.
+3. `scene3d_reset` nav durumunu temizlemiyordu — yeni sahne ESKİ duvarların
+   ızgarasını kullanıyordu (aynı sınıf: `_slope_lim3`, parçacık ayarları).
+
+Testler AYIRT EDİCİ olmak zorunda: aynı sahnede düz kovalama BAŞARISIZ, A*
+BAŞARILI. Ölçüt "koşum boyunca ulaşılan en yakın mesafe" — son mesafe
+yanıltıcıydı, çünkü iki katı gövde temas edince birbirini itip birlikte
+sürükleniyor, yani A* vardıktan SONRA mesafe yeniden açılıyor.
+
+Örnek: `examples/scene3d_labirent.tpr` — Y tuşu A*'ı açıp kapatıyor.
 
 ### Fixed — çarpışma O(n²)'den çıktı; ve asıl darboğaz çarpışma değilmiş
 
@@ -3218,7 +4153,7 @@ Backwards-compatible feature on top of v3.3.0. No breaking changes.
   other security-sensitive randomness. Wired through runtime, AOT codegen,
   typeinfer and the LSP builtin table.
 
-## [Unreleased] — v3.3.0 (candidate)
+## [v3.3.0]
 
 Backwards-compatible features on top of v3.2.1. No breaking changes.
 
@@ -3312,6 +4247,15 @@ Backwards-compatible features on top of v3.2.1. No breaking changes.
   coercion at typed local var declarations; wired 8 utility builtins (arena,
   cpu/time, input, `string_pin`).
 
-[Unreleased]: https://github.com/hamer1818/TulparLang/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/hamer1818/TulparLang/compare/v3.13.0...HEAD
+[v3.13.0]: https://github.com/hamer1818/TulparLang/compare/v3.12.0...v3.13.0
+[v3.12.0]: https://github.com/hamer1818/TulparLang/compare/v3.11.0...v3.12.0
+[v3.11.0]: https://github.com/hamer1818/TulparLang/compare/v3.10.0...v3.11.0
+[v3.10.0]: https://github.com/hamer1818/TulparLang/compare/v3.9.0...v3.10.0
+[v3.9.0]: https://github.com/hamer1818/TulparLang/compare/v3.8.1...v3.9.0
+[v3.8.1]: https://github.com/hamer1818/TulparLang/compare/v3.8.0...v3.8.1
+[v3.8.0]: https://github.com/hamer1818/TulparLang/compare/v3.4.0...v3.8.0
+[v3.4.0]: https://github.com/hamer1818/TulparLang/compare/v3.3.0...v3.4.0
+[v3.3.0]: https://github.com/hamer1818/TulparLang/compare/v3.0.0...v3.3.0
 [3.0.0]: https://github.com/hamer1818/TulparLang/compare/v2.2.0...v3.0.0
 [2.2.0]: https://github.com/hamer1818/TulparLang/releases/tag/v2.2.0

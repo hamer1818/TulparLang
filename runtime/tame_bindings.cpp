@@ -83,6 +83,11 @@ double tame_impl_mouse_dx(void);
 double tame_impl_mouse_dy(void);
 void tame_impl_cursor_lock(int on);
 void tame_impl_exit_key(int key);
+void tame_impl_window_resizable(int on);
+void tame_impl_fullscreen(int on);
+int tame_impl_is_fullscreen(void);
+void tame_impl_maximize(int on);
+int tame_impl_window_resized(void);
 int tame_impl_cursor_locked(void);
 int tame_impl_touch_count(void);
 int tame_impl_touch_x(int i);
@@ -108,6 +113,7 @@ int tame_impl_load_music(const char *path);
 void tame_impl_play_music(int h);
 void tame_impl_stop_music(int h);
 void tame_impl_music_volume(int h, double v);
+void tame_impl_master_volume(double v);
 void tame_impl_cam3(double px, double py, double pz, double tx, double ty,
                     double tz, double fov);
 void tame_impl_begin3(void);
@@ -415,6 +421,29 @@ VMValue aot_tm_exit_key_ptr(VMValue *key) {
   return VM_VOID();
 }
 
+VMValue aot_tm_window_resizable_ptr(VMValue *on) {
+  tame_impl_window_resizable((int)tm_int(on));
+  return VM_VOID();
+}
+
+VMValue aot_tm_fullscreen_ptr(VMValue *on) {
+  tame_impl_fullscreen((int)tm_int(on));
+  return VM_VOID();
+}
+
+VMValue aot_tm_is_fullscreen_ptr(void) {
+  return VM_BOOL(tame_impl_is_fullscreen() != 0);
+}
+
+VMValue aot_tm_maximize_ptr(VMValue *on) {
+  tame_impl_maximize((int)tm_int(on));
+  return VM_VOID();
+}
+
+VMValue aot_tm_window_resized_ptr(void) {
+  return VM_BOOL(tame_impl_window_resized() != 0);
+}
+
 VMValue aot_tm_touch_count_ptr(void) {
   return VM_INT(tame_impl_touch_count());
 }
@@ -513,6 +542,11 @@ VMValue aot_tm_stop_music_ptr(VMValue *mus) {
 
 VMValue aot_tm_music_volume_ptr(VMValue *mus, VMValue *vol) {
   tame_impl_music_volume((int)tm_int(mus), tm_num(vol));
+  return VM_VOID();
+}
+
+VMValue aot_tm_master_volume_ptr(VMValue *vol) {
+  tame_impl_master_volume(tm_num(vol));
   return VM_VOID();
 }
 

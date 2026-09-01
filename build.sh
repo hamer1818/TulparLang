@@ -28,6 +28,32 @@ echo -e "${YELLOW}Platform: ${PLATFORM}${NC}"
 
 # Parse arguments
 ACTION="$1"
+
+# --- Donanım kaynak göstergesi ----------------------------------------------
+# Uzun koşumların NEYE MAL OLDUĞUNU gösterir: RAM zirvesi, CPU frekansı ve
+# sıcaklığı, GPU kullanımı. Sondaların hepsi tools/hwstat.sh içinde ayrı ayrı
+# korumalı — eksik arayüz sessizce atlanıyor, koşum bundan dolayı ASLA
+# düşmüyor (CI'da lm-sensors da nvidia-smi de yok).
+# TULPAR_NO_HWSTAT=1 tamamen susturur.
+# MUTLAK yol: derleme fazı `cd "$BUILD_DIR"` yaptıktan sonra da çağırıyor,
+# göreli yol orada çözülmezdi.
+HWSTAT="$(cd "$(dirname "$0")" && pwd)/tools/hwstat.sh"
+HW_PID=""
+HW_FILE=""
+
+hw_begin() {
+    [ -x "$HWSTAT" ] || return 0
+    "$HWSTAT" info
+    HW_FILE=$(mktemp 2>/dev/null) || return 0
+    HW_PID=$("$HWSTAT" start "$HW_FILE" 2>/dev/null)
+}
+
+hw_end() {
+    [ -x "$HWSTAT" ] || return 0
+    [ -n "$HW_PID" ] || return 0
+    "$HWSTAT" stop "$HW_PID" "$HW_FILE" "${1:-kosum}" 2>/dev/null
+    HW_PID=""
+}
 TARGET="$2"
 
 # Single platform-suffixed build directory (mirrors build.bat behaviour:
@@ -120,6 +146,7 @@ if [ "$ACTION" = "suites" ]; then
         echo -e "${RED}ERROR: ./tulpar yok — önce ./build.sh çalıştırın.${NC}"
         exit 1
     fi
+    hw_begin
     SUITE_FAILED=0
     SUITE_N=0
     for suite in tests/*.test.tpr; do
@@ -131,7 +158,22 @@ if [ "$ACTION" = "suites" ]; then
         summary=$(echo "$out" | grep -E '^Tests:' | tail -1)
         if [ $code -ne 0 ]; then
             printf "%-42s ${RED}FAIL${NC} %s\n" "$name" "$summary"
-            echo "$out" | grep -E 'FAIL|hata|error' | head -8 | sed 's/^/    /'
+            # ONCE gercek test satirlari. Eski hali `grep -E 'FAIL|hata|error'`
+            # idi ve ilk 8 satiri aliyordu: bir kutuphane stderr'e gurultu
+            # basinca (ALSA "ses aygiti yok" satirlari gibi) o gurultu 'error'
+            # ile eslesip FAIL satirlarini DISARI itiyordu. Olculdu
+            # (2026-09-01): CI kirmizi dondu ama HANGI testin dustugu ciktida
+            # hic gorunmedi — bir tur bosa gitti. Genel gurultu artik yalniz
+            # FAIL satiri HIC yoksa (paket cokmusse) yedek olarak basiliyor.
+            #
+            # `head` yerine `awk`: `head` erken cikinca yukaridaki grep SIGPIPE
+            # aliyor ve ciktiya "write error: Broken pipe" satirlari dusuyordu.
+            fails=$(echo "$out" | grep -E '^[[:space:]]*FAIL' | awk 'NR<=10')
+            if [ -n "$fails" ]; then
+                echo "$fails" | sed 's/^/    /'
+            else
+                echo "$out" | grep -E 'hata|error|Error' | awk 'NR<=8' | sed 's/^/    /'
+            fi
             SUITE_FAILED=1
         elif [ -z "$summary" ]; then
             printf "%-42s ${RED}FAIL${NC} (test_summary() cagirmiyor — cikis kodu uretmiyor)\n" "$name"
@@ -142,6 +184,7 @@ if [ "$ACTION" = "suites" ]; then
     done
     echo ""
     if [ $SUITE_FAILED -ne 0 ]; then
+        hw_end "suites"
         echo -e "${RED}Some suites failed!${NC} ($SUITE_N paket)"
         exit 1
     fi
@@ -161,6 +204,107 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}Kama mesh denetimi basarisiz!${NC}"
             exit 1
         fi
+        # Önceden derlenmiş web/Android arşivleri ↔ builtin tablosu.
+        # Aşağıdaki zaman damgası denetiminin YERİNE geçiyor (o yalnız
+        # "kaynak daha yeni" diyebiliyordu); bu, EKSİK SEMBOLLERİ adıyla
+        # sayıyor. Ayrım işe yaradı: wasm/dist beş gün bayat kaldı, scene3d'nin
+        # her web derlemesi link'te patlıyordu ve sarı satırı kimse okumadı.
+        if ! python3 tests/dist_archive_audit.py; then
+            echo -e "${RED}Dist arsiv denetimi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
+    # LSP. Editör eklentisinin dayandığı yüzey ve hiçbir otomasyonda yoktu:
+    # bozulsa derleyici de süitler de yeşil kalır, yalnız editörde tamamlama
+    # ve hover sessizce ölürdü. "İlan et ↔ uygula" denetimi: initialize hangi
+    # *Provider'ı bildiriyorsa o metot gerçekten çağrılıp anlamlı cevap
+    # verdiği sınanıyor (~0.03 sn).
+    if command -v python3 >/dev/null 2>&1 && [ -f tests/lsp_audit.py ]; then
+        if ! python3 tests/lsp_audit.py; then
+            echo -e "${RED}LSP denetimi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
+    # BİÇİMLENDİRİCİ. `tulpar fmt --write` KULLANICININ KAYNAĞINI değiştiriyor,
+    # yani buradaki bir hata doğrudan veri kaybı — ve bu denetim yokken üç
+    # ayrı bozulma birden hayatta kaldı: `i++` → `i + +`, `=>` → `= >`,
+    # `/*` → `/ *` (blok yorumun içi kod gibi işleniyordu). Üçü de
+    # DERLENMEYEN kod üretiyordu. ~2 sn.
+    if [ -x tests/fmt_audit.sh ]; then
+        echo ""
+        if ! bash tests/fmt_audit.sh; then
+            echo -e "${RED}Bicimlendirici denetimi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
+    # BELGE ÜRETECİ. `tulpar doc` da denetimsizdi ve üç stdlib modülü HİÇ
+    # belgelenemiyordu (kardeş modüllerin sembollerine baktıkları için tek
+    # başlarına derlenmiyorlar; `doc` kodgen hatasında her şeyi atıyordu).
+    # ~5 sn.
+    if [ -x tests/doc_audit.sh ]; then
+        if ! bash tests/doc_audit.sh; then
+            echo -e "${RED}Belge denetimi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
+    # PAKET YÖNETİCİSİ. Kullanıcının proje dizinine yazıyor (`tulpar.toml`,
+    # `tulpar_modules/`). Asıl iddia "dosya kopyalandı" değil, vendor edilen
+    # paketin GERÇEKTEN import edilebilmesi. ~0.1 sn.
+    if [ -x tests/pkg_audit.sh ]; then
+        if ! bash tests/pkg_audit.sh; then
+            echo -e "${RED}Paket denetimi basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
+    # ANDROID DERLEME DENETİMİ. Arşiv sembolleri tamam olsa bile derleme yolu
+    # (manifest yazımı, PIC reloc, link bayrakları, NDK bulma) kırık olabilir
+    # ve bunu hiçbir şey denetlemiyordu: hedef "Temmuz'da emülatörde
+    # doğrulandı" diye duruyordu, arada İKİ ayrı kırık sessizce birikti
+    # (bayat arşivler + NDK aramasının Android Studio kurulumunu görmemesi).
+    # Masaüstü build'i, 59 süit ve tüm örnekler bu süre boyunca yeşildi.
+    #
+    # scene3d SEÇİLDİ çünkü tame'i de içeriyor — tek derleme iki arşivi birden
+    # sınıyor. NDK yoksa ATLANIYOR: NDK'sı olmayan geliştiriciyi kırmızıya
+    # boğmak yanlış olur (dist denetimindeki aynı gerekçe).
+    if [ -z "$TULPAR_NO_ANDROID_SMOKE" ] && [ -x ./tulpar ]; then
+        ASMOKE=$(mktemp -d)
+        ASMOKE_OUT=$(DISPLAY= ./tulpar build --target=android                             examples/scene3d_collector.tpr "$ASMOKE/tulparsmoke" 2>&1)
+        ASMOKE_MAN="$ASMOKE/tulparsmoke_apk/AndroidManifest.xml"
+        # ÖN KOŞUL EKSİKLİĞİ ile KIRIK DERLEME ayrı şeyler. İkisi de "başarısız"
+        # gibi görünüyor ama yalnız ikincisi bir kusur.
+        #
+        # NDK yoksa zaten atlanıyordu; ARŞİVLER yoksa atlanmıyordu ve CI tam
+        # bu yüzden kırmızı döndü (2026-09-01): `android/dist` gitignore'lu,
+        # yerelde NDK ile üretiliyor, temiz bir checkout'ta hiç yok. Denetim
+        # ortamın eksikliğini kodun kusuru sanıyordu.
+        #
+        # Atlama SESSİZ DEĞİL: sebebiyle birlikte yazılıyor, yoksa "asla
+        # kırmızıya dönemeyen denetim" tuzağına düşerdi.
+        if echo "$ASMOKE_OUT" | grep -qE "NDK gerekir|needs the NDK"; then
+            echo "android derleme denetimi: NDK yok — atlandi"
+        elif echo "$ASMOKE_OUT" | grep -qE "android/dist ars|android/dist archives"; then
+            echo "android derleme denetimi: android/dist arsivleri yok — atlandi"
+        elif [ -f "$ASMOKE/tulparsmoke_apk/lib/arm64-v8a/libtulpargame.so" ] &&
+             [ -f "$ASMOKE/tulparsmoke_apk/lib/x86_64/libtulpargame.so" ] &&
+             [ -f "$ASMOKE_MAN" ] &&
+             grep -q 'package="dev.tulparlang.tulparsmoke"' "$ASMOKE_MAN"; then
+            # Paket kimliği ÇIKTI ADINDAN türüyor. Sabit bir varsayılan
+            # (`dev.tulparlang.game`), tulpar.toml yazmayan her oyuna aynı
+            # kimliği verir ve cihazda ikinci oyun birinciyi SİLER — sebebi
+            # hiçbir yerde yazmadan. Denetim bunu her koşumda ölçüyor.
+            echo -e "${GREEN}android derlemesi calisiyor${NC} (iki ABI + manifest + ada gore paket)"
+        else
+            echo -e "${RED}Android derlemesi basarisiz!${NC}"
+            echo "$ASMOKE_OUT" | tail -12
+            rm -rf "$ASMOKE"
+            exit 1
+        fi
+        rm -rf "$ASMOKE"
     fi
 
     # Önceden derlenmiş arşivlerin TAZELİĞİ. Sürücü bunu web/Android link'i
@@ -174,7 +318,15 @@ if [ "$ACTION" = "suites" ]; then
     # (emsdk / NDK) gerekmiyor, dolayısıyla her makinede çalışıyor.
     # HATA DEĞİL uyarı: arşiv yoksa o hedef zaten kullanılmıyor demektir ve
     # emsdk'sı olmayan bir geliştiriciyi kırmızıya boğmak yanlış olur.
-    DIST_SRC_NEWEST=$(ls -t runtime/tame_impl.c runtime/tame_bindings.cpp                           src/vm/runtime_bindings.cpp src/vm/vm.cpp 2>/dev/null | head -1)
+    #
+    # YEDEK YOL: python3 varsa yukarıdaki SEMBOL denetimi zaten koştu ve o
+    # daha kesin konuşuyor ("şu 31 fonksiyon yok"). Aynı arşiv için iki ayrı
+    # sarı satır basmak uyarıyı gürültüye çevirirdi — tam da bu denetimin
+    # kapatmaya çalıştığı hata. Bu blok yalnız python3 yokken devreye giriyor.
+    DIST_SRC_NEWEST=""
+    if ! command -v python3 >/dev/null 2>&1; then
+        DIST_SRC_NEWEST=$(ls -t runtime/tame_impl.c runtime/tame_bindings.cpp                               src/vm/runtime_bindings.cpp src/vm/vm.cpp 2>/dev/null | head -1)
+    fi
     if [ -n "$DIST_SRC_NEWEST" ]; then
         for d in wasm/dist android/dist/arm64-v8a android/dist/x86_64; do
             [ -d "$d" ] || continue
@@ -253,40 +405,52 @@ if [ "$ACTION" = "suites" ]; then
     # derlenip çalıştırılıyor ve kurduğu sahne yeniden serileştirilerek
     # kaynakla karşılaştırılıyor. "Kod da aynı sahneyi kuruyor" iddiasını
     # ölçen tek şey bu — üretilen metni gözle okumak yetmez.
-    CODEGEN_SCENE="examples/scenes/toplayici.scene.json"
-    if [ -f "$CODEGEN_SCENE" ] && [ -f "examples/scene3d_export.tpr" ]; then
+    # İKİ sahne üzerinden koşuyor. `toplayici` gerçek bir demo (davranışlar,
+    # iki bölüm, isimli hedef); `kod_uretimi_tam` ise KASITLI olarak kapsamı
+    # doldurmak için üretildi — bölge kutu+küre, eylem+miktar+ses, tek atım ve
+    # kapalı bölge, sesli/sessiz kural. Gerek vardı: demo sahnesinde HİÇ bölge
+    # yok, o yüzden bölge kod üretimi denetimsizdi ve `bolge_eylem3d`/
+    # `bolge_ses3d`'nin hiç yazılmadığı (JSON'da var, üretilen kodda yok)
+    # sessizce aylarca durabilirdi. Yeni bir alan ekleyen, düzeneği de büyütsün.
+    CODEGEN_SCENES="examples/scenes/toplayici.scene.json tests/kod_uretimi_tam.scene.json"
+    if [ -f "examples/scene3d_export.tpr" ]; then
         echo ""
-        CG_TMP=$(mktemp -d)
-        if ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" 2>/dev/null > "$CG_TMP/kur.tpr" \
-           && ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" --dogrula 2>/dev/null > "$CG_TMP/src.json"; then
-            {
-                echo 'import "scene3d";'
-                cat "$CG_TMP/kur.tpr"
-                echo 'kur();'
-                echo 'print(sahne_json3d());'
-            } > "$CG_TMP/verify.tpr"
-            if ./tulpar "$CG_TMP/verify.tpr" 2>/dev/null > "$CG_TMP/gen.json" \
-               && diff -q "$CG_TMP/src.json" "$CG_TMP/gen.json" >/dev/null; then
-                echo -e "${GREEN}kod uretimi denk${NC} (uretilen .tpr ayni sahneyi kuruyor)"
+        for CODEGEN_SCENE in $CODEGEN_SCENES; do
+            [ -f "$CODEGEN_SCENE" ] || continue
+            CG_TMP=$(mktemp -d)
+            if ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" 2>/dev/null > "$CG_TMP/kur.tpr" \
+               && ./tulpar examples/scene3d_export.tpr "$CODEGEN_SCENE" --dogrula 2>/dev/null > "$CG_TMP/src.json"; then
+                {
+                    echo 'import "scene3d";'
+                    cat "$CG_TMP/kur.tpr"
+                    echo 'kur();'
+                    echo 'print(sahne_json3d());'
+                } > "$CG_TMP/verify.tpr"
+                if ./tulpar "$CG_TMP/verify.tpr" 2>/dev/null > "$CG_TMP/gen.json" \
+                   && diff -q "$CG_TMP/src.json" "$CG_TMP/gen.json" >/dev/null; then
+                    echo -e "${GREEN}kod uretimi denk${NC} ($CODEGEN_SCENE)"
+                else
+                    echo -e "${RED}Kod uretimi DENK DEGIL!${NC} ($CODEGEN_SCENE)"
+                    diff "$CG_TMP/src.json" "$CG_TMP/gen.json" | head -20
+                    rm -rf "$CG_TMP"
+                    exit 1
+                fi
             else
-                echo -e "${RED}Kod uretimi DENK DEGIL!${NC}"
-                diff "$CG_TMP/src.json" "$CG_TMP/gen.json" | head -20
+                echo -e "${RED}Kod uretimi denetimi calistirilamadi!${NC} ($CODEGEN_SCENE)"
                 rm -rf "$CG_TMP"
                 exit 1
             fi
-        else
-            echo -e "${RED}Kod uretimi denetimi calistirilamadi!${NC}"
             rm -rf "$CG_TMP"
-            exit 1
-        fi
-        rm -rf "$CG_TMP"
+        done
     fi
 
+    hw_end "suites ($SUITE_N paket)"
     echo -e "${GREEN}All $SUITE_N suites passed!${NC}"
     exit 0
 fi
 
 if [ "$ACTION" = "test" ]; then
+    hw_begin
     # Ensure tulpar exists
     if [ ! -f "tulpar" ]; then
         echo "Executable 'tulpar' not found. Building first..."
@@ -343,7 +507,8 @@ if [ "$ACTION" = "test" ]; then
                         "tame3d_shadows.tpr" "tame3d_texture.tpr" \
                         "scene3d_collector.tpr" "scene3d_camera.tpr" \
                         "scene3d_arena.tpr" "scene3d_terrain.tpr" \
-                        "scene3d_karakter.tpr" \
+                        "scene3d_karakter.tpr" "scene3d_labirent.tpr" \
+                        "scene3d_ses_testi.tpr" \
                         "41_struct_entities.tpr")
     # tame_*.tpr: display'li makinede pencere açıp kullanıcı kapatana
     # dek bloklar (headless'ta zarif hata ile hemen çıkar) — deterministik
@@ -686,17 +851,20 @@ if [ "$ACTION" = "test" ]; then
     rm -rf "$FAIL_DIR"
 
     echo ""
+    hw_end "ornekler"
     if [ $TEST_FAILED -ne 0 ]; then
         echo -e "${RED}Some tests failed!${NC}"
         exit 1
     fi
-    
+
     echo -e "${GREEN}All tests passed!${NC}"
     exit 0
 fi
 
 # Build with CMake — wipe contents first so we always get a clean configure
 echo "Building TulparLang..."
+# Derleme en ağır faz; kaynak kullanımı burada da ölçülüyor.
+hw_begin
 echo "Preparing $BUILD_DIR (wiping contents)..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
@@ -715,6 +883,7 @@ if [ $? -ne 0 ]; then
 fi
 
 # Copy executable
+hw_end "derleme"
 cp tulpar ../tulpar
 # Copy the runtime archive next to the executable too. The AOT linker
 # probes the directory of the running `tulpar` first, so leaving a stale

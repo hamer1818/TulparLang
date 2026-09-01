@@ -19,7 +19,8 @@
 #include <csignal>   // SIGINT
 #include <vector>
 #include <sys/wait.h> // WIFSIGNALED / WTERMSIG on system() status
-#include <dirent.h>  // find_android_ndk: ~/Android/android-ndk-* taraması
+#include <dirent.h>  // find_android_ndk: NDK klasör taraması
+#include <unistd.h>  // find_android_ndk: access() ile llvm-ar denetimi
 #endif
 #include <chrono>
 #include <string>
@@ -338,29 +339,80 @@ static std::string find_android_script(const char *name) {
   return ok(std::string("./android/") + name);
 }
 
-// NDK kökü: TULPAR_ANDROID_NDK env'i, yoksa ~/Android/android-ndk-* (en
-// yenisi). Boş dönerse çağıran hata basar. Android hedefi şimdilik yalnız
+// NDK kökü. Boş dönerse çağıran hata basar. Android hedefi şimdilik yalnız
 // Linux/macOS host'tan derleniyor (Windows host'ta VMValue codegen'i sret
 // ABI'sine kayar — NDK arşivleriyle uyumsuz olur), Windows'ta boş döner.
-static std::string find_android_ndk() {
-#if PLATFORM_WINDOWS
-  return "";
+//
+// ARAMA android/build_tame_android.sh ile AYNI yerlere bakmalı. Eskiden ikisi
+// de yalnız `~/Android/android-ndk-*`'a (tek başına indirilen NDK) bakıyordu;
+// Android Studio ise NDK'yı SDK'nın İÇİNE, `<sdk>/ndk/<sürüm>` altına koyuyor.
+// Sonuç ölçüldü: makinede çalışır bir NDK dururken hem betik hem sürücü
+// "NDK bulunamadı" diyordu. Bir kural iki yerde yazılınca ikisi de aynı
+// eksikle yaşıyor — burada tam olarak bu oldu.
+static bool ndk_usable(const std::string &dir) {
+  if (dir.empty()) return false;
+  // Araç zinciri klasörü ana bilgisayara göre adlanıyor.
+#if PLATFORM_MACOS
+  const char *host = "darwin-x86_64";
 #else
-  if (const char *env = getenv("TULPAR_ANDROID_NDK"); env && *env) return env;
-  const char *home = getenv("HOME");
-  if (!home || !*home) return "";
-  std::string base = std::string(home) + "/Android";
+  const char *host = "linux-x86_64";
+#endif
+  std::string ar = dir + "/toolchains/llvm/prebuilt/" + host + "/bin/llvm-ar";
+  return access(ar.c_str(), X_OK) == 0;
+}
+
+// `base` altındaki EN YENİ alt klasör (sürüm dizinleri: 27.x, 30.x ...).
+// `prefix` boşsa her alt klasör aday; doluysa yalnız o önekle başlayanlar.
+static std::string newest_subdir(const std::string &base, const char *prefix) {
   DIR *d = opendir(base.c_str());
   if (!d) return "";
   std::string best;
+  int best_major = -1;
   while (struct dirent *e = readdir(d)) {
-    if (strncmp(e->d_name, "android-ndk-", 12) == 0) {
-      std::string cand = base + "/" + e->d_name;
-      if (cand > best) best = cand;
+    if (e->d_name[0] == '.') continue;
+    if (prefix && *prefix && strncmp(e->d_name, prefix, strlen(prefix)) != 0)
+      continue;
+    std::string cand = base + "/" + e->d_name;
+    if (!ndk_usable(cand)) continue;
+    // SÜRÜM sırası, sözlük sırası değil: düz karşılaştırma "9.x"i "30.x"in
+    // üstüne koyardı. İlk sayı yeter — NDK sürümleri "30.0.157..." biçiminde.
+    const char *p = e->d_name;
+    while (*p && (*p < '0' || *p > '9')) p++;   // "android-ndk-27b" önekini atla
+    int major = 0;
+    for (; *p >= '0' && *p <= '9'; p++) major = major * 10 + (*p - '0');
+    if (major > best_major || (major == best_major && cand > best)) {
+      best_major = major;
+      best = cand;
     }
   }
   closedir(d);
   return best;
+}
+
+static std::string find_android_ndk() {
+#if PLATFORM_WINDOWS
+  return "";
+#else
+  if (const char *env = getenv("TULPAR_ANDROID_NDK"); env && *env) {
+    if (ndk_usable(env)) return env;
+  }
+  std::vector<std::pair<std::string, const char *>> spots;
+  for (const char *var : {"ANDROID_HOME", "ANDROID_SDK_ROOT"}) {
+    if (const char *sdk = getenv(var); sdk && *sdk)
+      spots.push_back({std::string(sdk) + "/ndk", ""});
+  }
+  const char *home = getenv("HOME");
+  if (home && *home) {
+    std::string h(home);
+    spots.push_back({h + "/Android/Sdk/ndk", ""});        // Android Studio (Linux)
+    spots.push_back({h + "/Library/Android/sdk/ndk", ""}); // Android Studio (macOS)
+    spots.push_back({h + "/Android", "android-ndk-"});     // tek başına indirme
+  }
+  for (const auto &sp : spots) {
+    std::string got = newest_subdir(sp.first, sp.second);
+    if (!got.empty()) return got;
+  }
+  return "";
 #endif
 }
 
@@ -384,6 +436,8 @@ static std::string build_android_link_search_dirs(const char *abi) {
 // Uygulama kimliği — tulpar.toml [android] bölümünden doldurulur; her alanın
 // tarihi varsayılanı vardır, yani toml'suz davranış birebir aynı kalır.
 struct AndroidAppConfig {
+  // Çıktı adından türetiliyor (bkz. `android_package_from_label`); buradaki
+  // değer yalnız ad hiç verilmediğinde kalan son çare.
   std::string package = "dev.tulparlang.game";
   std::string label;                       // boş → çıktı taban adı
   std::string orientation = "landscape";   // landscape | portrait | sensor
@@ -392,6 +446,45 @@ struct AndroidAppConfig {
   bool has_icon = false;                   // res/mipmap/ic_launcher.png kondu
   std::string splash_color = "#10121A";    // açılış/splash arka planı (koyu lacivert)
 };
+
+// Çıktı adından geçerli bir paket kimliği türet: "dev.tulparlang.<ad>".
+//
+// NEDEN: varsayılan sabit `dev.tulparlang.game` idi, yani tulpar.toml
+// yazmayan HER oyun aynı kimliği alıyordu ve cihazda birbirini EZİYORDU —
+// ikinci oyunu kurmak birincisini siliyor, sebebi hiçbir yerde yazmıyor.
+// Kimliği addan türetmek bu tuzağı tümden kaldırıyor; toml'daki `package`
+// yine her şeyi eziyor (yayınlanmış bir oyunun kimliği ORADA sabitlenmeli).
+//
+// Paket parçası kuralları: küçük harf, yalnız [a-z0-9_], rakamla başlayamaz
+// ve Java anahtar sözcüğü olamaz (aapt2 ikisini de reddeder).
+static std::string android_package_segment(const std::string &label) {
+  std::string seg;
+  for (char c : label) {
+    if (c >= 'A' && c <= 'Z') seg += (char)(c - 'A' + 'a');
+    else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) seg += c;
+    else if (!seg.empty() && seg.back() != '_') seg += '_';
+  }
+  while (!seg.empty() && seg.back() == '_') seg.pop_back();
+  if (seg.empty()) return "game";
+  if (seg[0] >= '0' && seg[0] <= '9') seg = "g" + seg;
+  static const char *kJavaKeywords[] = {
+      "abstract", "assert", "boolean", "break", "byte", "case", "catch",
+      "char", "class", "const", "continue", "default", "do", "double",
+      "else", "enum", "extends", "final", "finally", "float", "for", "goto",
+      "if", "implements", "import", "instanceof", "int", "interface", "long",
+      "native", "new", "package", "private", "protected", "public", "return",
+      "short", "static", "strictfp", "super", "switch", "synchronized",
+      "this", "throw", "throws", "transient", "try", "void", "volatile",
+      "while", "true", "false", "null"};
+  for (const char *kw : kJavaKeywords) {
+    if (seg == kw) { seg += "_"; break; }
+  }
+  return seg;
+}
+
+static std::string android_package_from_label(const std::string &label) {
+  return "dev.tulparlang." + android_package_segment(label);
+}
 
 // "#RRGGBB" doğrula (aksi halde varsayılana dön) — aapt2 color kaynağına
 // düz gireceği için basit bir #hex kontrolü yeterli.
@@ -583,6 +676,9 @@ static AndroidAppConfig load_android_app_config(const std::string &stage,
                                                 const char *fallback_label) {
   AndroidAppConfig cfg;
   cfg.label = fallback_label;
+  // Kimlik ADDAN türüyor — toml yoksa da iki oyun aynı pakette çakışmasın.
+  if (fallback_label && *fallback_label)
+    cfg.package = android_package_from_label(fallback_label);
   struct stat st;
   if (stat("tulpar.toml", &st) != 0) {
     // toml yok — asset'ler yine env ile verilebilir.
@@ -1051,10 +1147,12 @@ AOTResult aot_compile_with_filename_debug(const char *source,
       fprintf(stderr, "%s\n",
               tulpar::i18n::tr_en(
                   "[AOT] Android hedefi icin NDK gerekir: TULPAR_ANDROID_NDK "
-                  "ayarlayin ya da ~/Android/android-ndk-* kurun "
+                  "ayarlayin ya da Android Studio'dan NDK kurun "
+                  "(~/Android/Sdk/ndk/*) "
                   "(android/build_tame_android.sh ayni NDK'yi kullanir).",
                   "[AOT] The android target needs the NDK: set "
-                  "TULPAR_ANDROID_NDK or install ~/Android/android-ndk-* "
+                  "TULPAR_ANDROID_NDK or install the NDK from Android "
+                  "Studio (~/Android/Sdk/ndk/*) "
                   "(android/build_tame_android.sh uses the same NDK)."));
       llvm_backend_destroy(backend);
       ast_node_free(ast);
@@ -1482,16 +1580,24 @@ AOTResult aot_compile_and_run_silent_with_filename(const char *source,
   remove("tulpar_run_tmp.ll");
   remove("tulpar_run_tmp.o");
 #else
-  const char *base = "/tmp/.tulpar_run";
+  // SÜRECE ÖZGÜ yol. Sabit `/tmp/.tulpar_run` iki `tulpar` aynı anda koşunca
+  // yarışıyordu: biri ötekinin ikilisini derlemesiyle EZİYOR, sonra `remove`
+  // ile SİLİYOR — ikincisi "Böyle bir dosya yok" ile düşüyor. Ölçüldü
+  // (2026-09-01): paralel bir kabuktan tek bir `tulpar dosya.tpr` çalıştırmak,
+  // o sırada koşan `./build.sh suites` içinde bir pakete sahte FAIL verdirdi.
+  // Belirti "testte regresyon" gibi görünüyor ve yanlış yere baktırıyor.
+  std::string run_base = std::string("/tmp/.tulpar_run.") +
+                         std::to_string((long)getpid());
+  const char *base = run_base.c_str();
   AOTResult result = aot_compile_silent(source, base, source_filename);
   if (result != AOT_OK) {
     return result;
   }
-  std::string run_cmd = "/tmp/.tulpar_run";
+  std::string run_cmd = run_base;
   if (!g_tulpar_run_args.empty()) run_cmd += " " + g_tulpar_run_args;
   int run_result = system(run_cmd.c_str());
-  remove("/tmp/.tulpar_run");
-  remove("/tmp/.tulpar_run.ll");
+  remove(run_base.c_str());
+  remove((run_base + ".ll").c_str());
 #endif
 
   // The compile + link already succeeded above (we returned early otherwise),

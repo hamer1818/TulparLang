@@ -11,7 +11,9 @@
 # Bunlar `tulpar build --target=android oyun.tpr` link adımında kullanılır
 # (bkz. src/aot/aot_pipeline.cpp android yolu). Ana CMake build'ine dokunmaz.
 #
-# NDK: TULPAR_ANDROID_NDK env'i, yoksa ~/Android/android-ndk-* aranır.
+# NDK: TULPAR_ANDROID_NDK env'i, yoksa SDK içi (~/Android/Sdk/ndk/*,
+#      $ANDROID_HOME/ndk/*) ve tek başına indirilen (~/Android/android-ndk-*)
+#      kurulumlar aranır — Android Studio ilkini kuruyor.
 # wasm/build_tame_web.sh'nin birebir kardeşi. Notlar:
 # - tulpar_async.cpp derlenmez (bionic'te makecontext/swapcontext yok —
 #   Emscripten'dekiyle aynı sınırlama). android_stubs.cpp koşulsuz
@@ -28,13 +30,31 @@ cd "$(dirname "$0")"
 
 API=34
 
+# NDK ARAMASI birkaç yere birden bakıyor. Eskiden yalnız
+# `~/Android/android-ndk-*` (tek başına indirilen NDK) aranıyordu; Android
+# Studio ise NDK'yı SDK'nın içine, `<sdk>/ndk/<sürüm>` altına koyuyor. Sonuç:
+# makinede çalışır bir NDK dururken betik "bulunamadı" diyordu ve arşivler
+# tazelenmeden kalıyordu (ölçüldü — bu makinede tam olarak bu oldu).
 NDK="${TULPAR_ANDROID_NDK:-}"
 if [ -z "$NDK" ]; then
-    NDK=$(ls -d "$HOME"/Android/android-ndk-* 2>/dev/null | sort | tail -1)
+    # `sort -V` sürüm sırası: düz `sort` 9.x'i 30.x'in üstüne koyardı.
+    NDK=$(ls -d "${ANDROID_HOME:-/nonexistent}"/ndk/*                        "${ANDROID_SDK_ROOT:-/nonexistent}"/ndk/*                        "$HOME"/Android/Sdk/ndk/*                        "$HOME"/Library/Android/sdk/ndk/*                        "$HOME"/Android/android-ndk-* 2>/dev/null | sort -V | tail -1)
 fi
-TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+# Ana bilgisayar etiketi: NDK araç zinciri klasörü platforma göre adlanıyor.
+HOSTTAG="linux-x86_64"
+case "$(uname -s)" in
+    Darwin*) HOSTTAG="darwin-x86_64" ;;
+esac
+
+TC="$NDK/toolchains/llvm/prebuilt/$HOSTTAG/bin"
 if [ ! -x "$TC/llvm-ar" ]; then
-    echo "HATA: NDK bulunamadı (TULPAR_ANDROID_NDK ayarla ya da ~/Android/android-ndk-* kur)."
+    echo "HATA: NDK bulunamadı."
+    echo "  arandi: \$TULPAR_ANDROID_NDK, \$ANDROID_HOME/ndk/*,"
+    echo "          \$ANDROID_SDK_ROOT/ndk/*, ~/Android/Sdk/ndk/*,"
+    echo "          ~/Library/Android/sdk/ndk/*, ~/Android/android-ndk-*"
+    [ -n "$NDK" ] && echo "  bulunan ama kullanilamayan: $NDK ($HOSTTAG yok)"
+    echo "  Android Studio kuruluysa: SDK Manager > SDK Tools > NDK"
     exit 1
 fi
 echo "NDK: $NDK (API $API)"

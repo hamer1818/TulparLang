@@ -56,6 +56,70 @@ static Color tame_color(int64_t packed) {
   return c;
 }
 
+// Pencere BAYRAKLARI InitWindow'dan ÖNCE kurulmak zorunda (raylib sözleşmesi).
+// İstek burada bekletilip pencere açılırken uygulanıyor. Varsayılan KAPALI:
+// sabit bir pencere çoğu oyunun istediği şey (arcade oyunları mantıksal bir
+// çözünürlük varsayıyor), boyutlandırılabilirlik isteyen açıyor.
+static int tame_want_resizable = 0;
+
+int tame_impl_is_fullscreen(void);   // aşağıda; fullscreen() onu çağırıyor
+
+void tame_impl_window_resizable(int on) {
+  if (tame_window_ready) {
+    // Pencere zaten açıksa bayrak "geç kalmış" değil: raylib açıkken de
+    // durum değiştirmeye izin veriyor.
+    if (on) SetWindowState(FLAG_WINDOW_RESIZABLE);
+    else ClearWindowState(FLAG_WINDOW_RESIZABLE);
+    return;
+  }
+  tame_want_resizable = on ? 1 : 0;
+}
+
+// Tam ekran. Masaüstünde KENARLIKSIZ pencere kipi yeğleniyor: gerçek
+// tam ekran monitörün çözünürlüğünü değiştiriyor ve alt-sekme yapınca
+// masaüstü bir an kararıyor. Web'de tarayıcının kendi tam ekranı,
+// Android'de zaten tam ekran (no-op).
+void tame_impl_fullscreen(int on) {
+  if (!tame_window_ready) return;
+#if defined(PLATFORM_ANDROID)
+  (void)on;
+#elif defined(PLATFORM_WEB)
+  if ((IsWindowFullscreen() ? 1 : 0) != (on ? 1 : 0)) ToggleFullscreen();
+#else
+  if ((tame_impl_is_fullscreen() ? 1 : 0) != (on ? 1 : 0)) ToggleBorderlessWindowed();
+#endif
+}
+
+int tame_impl_is_fullscreen(void) {
+  if (!tame_window_ready) return 0;
+#if defined(PLATFORM_ANDROID)
+  return 1;
+#elif defined(PLATFORM_WEB)
+  return IsWindowFullscreen() ? 1 : 0;
+#else
+  if (IsWindowFullscreen()) return 1;
+  return IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE) ? 1 : 0;
+#endif
+}
+
+// Büyüt / eski boyuta dön. `MaximizeWindow` yalnız FLAG_WINDOW_RESIZABLE
+// açıkken iş görüyor — raylib'in kendi kuralı, ve bu yüzden büyütme
+// düğmesi de boyutlandırılabilir olmayan bir pencerede ölü kalıyor.
+void tame_impl_maximize(int on) {
+  if (!tame_window_ready) return;
+#if defined(PLATFORM_ANDROID) || defined(PLATFORM_WEB)
+  (void)on;
+#else
+  if (on) { if (!IsWindowMaximized()) MaximizeWindow(); }
+  else { if (IsWindowMaximized()) RestoreWindow(); }
+#endif
+}
+
+int tame_impl_window_resized(void) {
+  if (!tame_window_ready) return 0;
+  return IsWindowResized() ? 1 : 0;
+}
+
 int tame_impl_window(int w, int h, const char *title) {
   if (tame_window_ready) return 1; // ikinci çağrı no-op / second call is a no-op
   SetTraceLogLevel(LOG_WARNING);   // oyun konsolunu raylib INFO spam'inden koru
@@ -76,6 +140,10 @@ int tame_impl_window(int w, int h, const char *title) {
     tame_cam_on = 1;
   }
 #else
+  // Bayrak InitWindow'dan ÖNCE — raylib sözleşmesi. Sonra kurulan bir
+  // FLAG_WINDOW_RESIZABLE pencereyi boyutlandırılabilir yapmıyor ve
+  // büyütme düğmesi ölü kalıyor.
+  if (tame_want_resizable) SetConfigFlags(FLAG_WINDOW_RESIZABLE);
   InitWindow(w, h, title ? title : "tame");
   if (!IsWindowReady()) return 0;
 #endif
@@ -1543,6 +1611,13 @@ static int tame_music_used[TAME_MAX_MUSIC];
 
 static int tame_audio_ready = 0;
 
+// Ana ses seviyesi. Aygıt açılmadan ÖNCE de ayarlanabilsin diye burada
+// saklanıyor: oyunlar sesi `setup` içinde kuruyor ama ses aygıtı ilk ses
+// YÜKLENDİĞİNDE açılıyor, yani doğrudan `SetMasterVolume` çağırmak o ayarı
+// sessizce düşürürdü. Seviye ayarlamak, aygıtı AÇMAK için bir sebep de
+// değil (headless'ta açılamıyor ve hata basardı).
+static float tame_master_vol = 1.0f;
+
 // Ses aygıtını ilk ihtiyaçta aç (load_sound/load_music). Başarısızlık
 // (aygıt yok / headless) -1 handle olarak yüzeye çıkar, çökmez.
 static int tame_ensure_audio(void) {
@@ -1552,6 +1627,8 @@ static int tame_ensure_audio(void) {
     if (!tame_audio_ready)
       fprintf(stderr, "[tame] Ses aygiti acilamadi. / Audio device could "
                       "not be opened.\n");
+    /* Aygıt yeni açıldı: bekleyen seviye şimdi uygulanıyor. */
+    if (tame_audio_ready) SetMasterVolume(tame_master_vol);
   }
   return tame_audio_ready;
 }
@@ -1571,12 +1648,20 @@ static int tame_rt_used[TAME_MAX_RT];
 // düşen pikseller yazılmıyor. Alternatif her widget çağrısından önce elle sınır
 // denetimi yapmaktı — her yeni widget o borcu büyütürdü ve yarı görünür
 // satırlar yine kırpılamazdı.
+// Pencere denetimi ŞART: `BeginScissorMode` çizim toplu işine yazıyor ve
+// GL bağlamı yokken ÇÖKÜYOR. Öteki bağlamalar bu denetimi zaten yapıyordu,
+// bu ikisi atlanmıştı — yani `kirp()`'i pencere açmadan çağıran her program
+// (ve penceresiz her test) çöküyordu.
 void tame_impl_scissor(int x, int y, int w, int h) {
+  if (!tame_window_ready) return;
   if (w < 0) w = 0;
   if (h < 0) h = 0;
   BeginScissorMode(x, y, w, h);
 }
-void tame_impl_scissor_end(void) { EndScissorMode(); }
+void tame_impl_scissor_end(void) {
+  if (!tame_window_ready) return;
+  EndScissorMode();
+}
 
 int tame_impl_rt_new(int w, int h) {
   if (!tame_window_ready) return -1;
@@ -2613,6 +2698,16 @@ void tame_impl_stop_music(int h) {
 
 void tame_impl_music_volume(int h, double v) {
   if (tame_music_ok(h)) SetMusicVolume(tame_musics[h], (float)v);
+}
+
+/* Ana seviye SES ve MÜZİĞİN ikisini birden ölçekler. Müzik başına
+   SetMusicVolume bunun ÜSTÜNE biniyor, yani oyun kendi karışımını kurup
+   üstünden tek düğmeyle kısabiliyor. */
+void tame_impl_master_volume(double v) {
+  if (v < 0.0) v = 0.0;
+  if (v > 1.0) v = 1.0;
+  tame_master_vol = (float)v;
+  if (tame_audio_ready) SetMasterVolume(tame_master_vol);
 }
 
 // Ekran görüntüsünü PNG olarak kaydeder (çalışma dizinine göre yol).

@@ -20,7 +20,7 @@ Hedef: isteyen herkes arayüzden, hızlıca oyun yapabilsin. Beş faz; ilk ikisi
 bitti.
 
 Mimari kararlar ve gerekçeleri:
-- **Editör MASAÜSTÜ bir uygulama** (`./editor`, motorun kendisiyle aynı ikili
+- **Editör MASAÜSTÜ bir uygulama** (`./TameEngine`, motorun kendisiyle aynı ikili
   yığın). Başta "tarayıcıda çalışsın" planlanmıştı — gerekçe kurulum
   gerektirmemesi ve headless Chrome ile doğrulanabilmesiydi — ama editör
   motorun İÇİNDE Tulpar ile yazılınca web sürümü ayrı bir uygulama değil,

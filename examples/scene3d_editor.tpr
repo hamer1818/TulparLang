@@ -1,13 +1,13 @@
-// Tulpar Sahne Editörü — BAĞIMSIZ UYGULAMA.
+// TameEngine — Tulpar sahne editörü, BAĞIMSIZ UYGULAMA.
 //
 //   ./tulpar examples/scene3d_editor.tpr
-//   ./tulpar build examples/scene3d_editor.tpr editor && ./editor
-//   ./editor benim_sahnem.json        (kendi sahneni aç / yeni dosya yarat)
+//   ./tulpar build examples/scene3d_editor.tpr TameEngine && ./TameEngine
+//   ./TameEngine benim_sahnem.json    (kendi sahneni aç / yeni dosya yarat)
 //
 // TARAYICIDA:
 //   mkdir -p assets && cp <bir>.ttf assets/ui.ttf     (okunabilir font)
 //   TULPAR_WEB_ASSETS=assets tulpar build --target=web \
-//       examples/scene3d_editor.tpr -o editor
+//       examples/scene3d_editor.tpr -o TameEngine
 //   (HTTP üzerinden servis et; file:// çalışmaz)
 // Web'de "Kaydet" TARAYICININ kalıcı deposuna yazar (yenilemeyi atlatır),
 // "İNDİR" sahneyi .json olarak bilgisayarına çıkarır.
@@ -18,23 +18,179 @@
 // çalışan bir oyunun üstüne kaplama açmaktan farkı şudur: düzenleme birincil
 // iştir, oynatma onun bir aracı.
 //
-// Kısayollar (sektör standardı):
+// KISAYOLLAR: tam liste editörün İÇİNDE — H tuşu ya da menüdeki "?" düğmesi.
+// Burada özet duruyor; ekrandaki liste tek kaynak, bu yorum onun kopyası
+// değil (durum çubuğu artık kısayol saymıyor, o satır kırpılıyordu).
 //   SAĞ TUŞ basılı + WASD/QE   serbest uçuş, fare ile bakış
-//   Q / W / E / R              seç / taşı / döndür / ölçekle  (1-4 de olur)
-//   F                          seçiliyi çerçevele
-//   G                          ızgara aç/kapat
+//   Q / W / E / R              seç / taşı / döndür / ölçekle  (tutamakla)
+//   1 / 2 / 3 / 4              seç / taşı / ÖLÇEK / DÖNDÜR  (sıra farklı!)
+//   F / G / BOŞLUK             çerçevele / ızgara / zemine oturt
 //   DEL / CTRL+D               sil / çoğalt
+//   CTRL+C / CTRL+V            kopyala / yapıştır (BÖLÜMLER ARASI çalışır)
+//   CTRL+A                     tümünü seç
+//   CTRL+D                     çoğalt (varlık VE bölge)
+//   BOŞ ALANDAN SÜRÜKLE        kutuyla çoklu seç (CTRL: kümeye ekle)
 //   CTRL+Z / CTRL+Y            geri al / yinele
 //   CTRL+S (ya da F5)          kaydet
-//   BOŞLUK                     seçiliyi zemine oturt
-//   ESC                        oynarken: durdur
+//   CTRL+SHIFT+S               farklı kaydet (dosya penceresi)
+//   H                          kısayol listesi
+//   F11                        tam ekran aç/kapat
+//   ESC                        açık pencereyi kapat / oynarken: durdur
 // Harf tuşları yalnız SAĞ TUŞ BASILI DEĞİLKEN araç kısayolu; basılıyken uçuş.
 //
+// TUTAMAKLAR: TAŞI ve ÖLÇEK kiplerinde üç ok (X kırmızı, Y yeşil, Z mavi) —
+// bir oka tutununca hareket o eksende kalıyor. DÖNDÜR kipinde tutamak bir
+// HALKA: cismin çevresindeki çemberi tut ve çevir. Motorun tek dönme ekseni
+// Y olduğu için tek halka var; üç halka çizmek, ikisi hiçbir şey yapmayan
+// bir tutamak demek olurdu. Halkadaki çizgi cismin BAKTIĞI yönü gösteriyor —
+// onsuz simetrik bir daireden kaç derece döndüğü anlaşılmıyor.
+//
+// IZGARA AÇIKKEN dönüş de 15°'ye oturuyor (ok tuşlarının adımıyla aynı);
+// kapalıyken açı serbest. Izgara "hizala" demek ve konumu hizalayıp açıyı
+// serbest bırakmak, hizalanmış bir duvarı 3° eğik bırakırdı.
+//
+// KUTU SEÇİMİ: boş bir yere bas ve sürükle — kutunun içinde kalan her şey
+// seçilir, CTRL basılıysa var olan seçimin ÜSTÜNE eklenir (CTRL+tık ile aynı
+// kural). Kutu boşluktan başlıyor, çünkü bir cismin üstünde başlayan
+// sürükleme onu TAŞIMAK demek ve o jest çok daha sık. Eşiğin altında kalan
+// bir sürükleme hâlâ sade bir tıklamadır (yoksa her tıklama sıfır alanlı bir
+// kutu çalıştırırdı).
+//
+// Kutu MERKEZE bakıyor: bir cisim, merkezi kutunun içindeyse seçilir. Kutuya
+// DEĞEN her şeyi almak, kocaman bir zemini ya da duvarı her seçime katardı.
+// Görüş alanının dışında kalan (ve kameranın arkasındaki) cisimler
+// gelmiyor — "seçtiğim şeyi görüyorum" sözü bozulmasın.
+//
+// ÇOKLU SEÇİMİ döndürmek grubu GRUP MERKEZİ etrafında çeviriyor: her cismin
+// hem yönü döner hem de yeri yörüngeye girer, yani dizilişin kendisi döner.
+// Yalnız yönleri döndürmek kutuları yerinde çevirir ve diziliş olduğu gibi
+// kalırdı — "grubu döndür" jestinin karşılığı bu değil.
+//
+// ÖLÇEK de seçimin TAMAMINA gidiyor: beş kasayı seçip eksen okunu çekmek
+// beşini birden genişletir. Uygulanan şey MUTLAK bir uzunluk ("2 birim
+// genişlet"), oran değil — tutamağın verdiği şey dünya birimi. Konumlar
+// kıpırdamaz: "şu beşini genişlet" demek "beşini birbirinden ayır" demek
+// değil (döndürmede yörünge VAR, çünkü orada dizilişin dönmesi jestin
+// kendisi).
+//
+// KONSOL gerçek bir konsol: tekerlekle GERİYE kaydırılıyor, üstündeki
+// çubuktan seviyeye göre SÜZÜLÜYOR (x hata / ! uyarı / i bilgi — sayılar
+// süzgeç kapalıyken de görünür, yoksa gizlediğin şeyi aramaya devam
+// edersin) ve TEMIZLE ile boşaltılıyor (sahneye dokunmaz). Dipteyken yeni
+// satırları takip eder; yukarı kaydırdıysan aynı satırda kalır ve çubukta
+// kaç satır aşağıda olduğun yazar.
+//
+// DOSYA: menüdeki "Aç" diskteki .json sahnelerini listeler — editör artık
+// açıldığı dosyaya bağlı değil. "F. Kaydet" sahneyi BAŞKA bir dosyaya yazar
+// ve bundan sonra CTRL+S oraya kaydeder; bir şablonu alıp kendi oyununa
+// çevirmenin yolu bu. Listede AÇIK OLAN dosyaya tıklamak "geri yükle"dir
+// (kaydedilmemiş iş gider ama CTRL+Z hâlâ geri getirir). Başka bir dosyaya
+// geçmek geri-al geçmişini SIFIRLAR: sıfırlamasaydı CTRL+Z önceki sahneyi
+// yeni dosyanın içine getirir, CTRL+S de onu oraya yazardı.
+//
+// BÖLÜMLER: hiyerarşi panelinin üstündeki şerit. "+ BOLUM EKLE" sahneyi çok
+// bölümlüye çevirir (yaşayan sahne 1. bölüm olur), ◀ ▶ bölümler arasında
+// gezinir. Bölüm değiştirmek yapılan işi KAYBETMEZ — yaşayan sahne önce
+// diziye yazılır. Dünya (gökyüzü, yerçekimi, kamera) bölümler arasında
+// PAYLAŞILIR; değişen şey sahnenin içidir.
+//
+// Bir bölümden ÖTEKİNE geçmek için bir bitiş şartı gerekiyor. İki yolu var:
+//   • kural:  "bitince: esya → SONRAKI BOLUM"   (altınlar bitince ilerle)
+//   • bölge:  bir bölge kur, GIRINCE eylemini "sonraki bol" yap (çıkış kapısı)
+// Son bölümde "sonraki bölüm" istemek oyunu KAZANDIRIR, takılmaz.
+//
+// BÖLGELER: sağ tık → "+ bolge". Bölgenin GIRINCE eylemi var: kazan, kaybet,
+// gireni yok et (çukur/lav), hasar ver, skor ekle, sonraki bölüm. Eylem
+// seçilmemiş bir bölge hiçbir şey yapmaz — sahne denetimi bunu söylüyor.
+// Bölgeler editörde çizilir (rengi durumunu söyler) ve VARLIKLA AYNI şekilde
+// kullanılır: tıkla, tutup sürükle (zemin düzleminde), oklarla yüksekliğini
+// ittir, CTRL+D ile ÇOĞALT, DEL ile sil. Çoğaltma ayarları da taşır — eylem,
+// miktar, ses, tek-atım, etiket — yoksa kopya "aynı görünen ama hiçbir şey
+// yapmayan" bir bölge olurdu. SESİ de var: girince çalacak dosyayı panelden
+// seçiyorsun — kurallardaki ses listesinin aynısı.
+//
+// BÖLGENİN DE TUTAMAKLARI VAR: seçili bir bölgede TAŞI ve ÖLÇEK kipleri
+// varlıktakiyle aynı okları çiziyor (aynı fonksiyon çiziyor, ayrı bir kopya
+// değil). Lav çukuru ya da kazanma bölgesi tam olarak GÖZLE yerleştirilen
+// şey; sayı alanlarına mahkûm olmamalı.
+//   • DÖNDÜR kipinde bölgede tutamak YOK: bölgenin yaw'ı yok (biçimde de,
+//     içerik testinde de eksen hizalı bir kutu), yani halka hiçbir şey
+//     yapmayan bir tutamak olurdu.
+//   • KÜRE bölgede hangi oku çekersen çek YARIÇAP değişiyor: kürenin tek
+//     ölçüsü var, eksene göre üç sayı yazmak hiçbir şeyi kıpırdatmazdı.
+//   • Boy bir ızgara adımının (ızgara kapalıyken 0.1) altına inmiyor: ters
+//     yüz olmuş bir kutu HİÇ tetiklenmez ve bunu söyleyen bir şey yok.
+//
+// PANELİ BAŞLIĞINDAN SÜRÜKLE: "HIYERARSI" yazısının üstünden tut ve çek.
+// İmlecin altında panelin HAYALETİ (başlık şeridi + gövde) seni izler ve
+// panelin GİDECEĞİ GERÇEK DİKDÖRTGEN maviyle boyanır — kabaca ekranın üçte
+// biri değil, bırakınca gerçekten oluşacak alan. (Yuvada zaten panel varsa
+// gelen panel üçte biri değil PAYINA düşeni alır; eski önizleme tam da bu
+// yüzden yanlış yeri gösteriyordu.) İmleç sol üçte birdeyken SOL yuva, sağ
+// üçte birdeyken SAĞ, alt çeyrekteyken ALT hedeflenir; ortası geçerli bir
+// bırakma yeri değildir (orada bırakmak iptal eder ve hayalet bunu yazar). Başlığın sağ ucundaki "x" paneli
+// kapatır; kapalı panel hiç çizilmez ve yer kaplamaz, alanı sahne
+// görünümüne geçer.
+//
+// Aynı yuvadaki paneller yuvayı paylaşır — yan yuvalarda alt alta, alt
+// yuvada yan yana — ve ARALARINDAKİ ÇİZGİ DE SÜRÜKLENİR: konsolu
+// hiyerarşinin altına koyup konsola üçte bir yer vermek bir çekiş. Paylaşım
+// ORANDIR: pencere büyüyünce iki panel birlikte büyür. Yuvaya yeni gelen
+// panel eşit pay alır, yani bir yerde kıymığa indirdiğin panel taşındığı
+// yerde kıymık kalmaz.
+//
+// Menüdeki PANELLER düğmesi aynı işi listeden yapar ve KAPALI paneli geri
+// getirmenin yoludur (kapalı panelin başlığı çizilmediği için kendini geri
+// açamaz). "VARSAYILAN YERLESIM" hem yuvaları hem ölçüleri geri alır.
+//
+// Yapılmayan, açıkça: yuva içinde sıralama, SEKME ve YÜZEN pencere. Üçü de
+// ayrı bir pencere yöneticisi demek.
+//
+// PANEL SINIRLARI SÜRÜKLENİR: hiyerarşi ile sahne görünümü arasındaki,
+// sahne görünümü ile özellikler arasındaki ve konsolun üstündeki çizgiyi
+// tut ve çek. (Bu YUVANIN ölçüsünü değiştirir; aynı yuvadaki iki panelin
+// ARASINDAKİ çizgi ise onların paylaşımını. Köşede ikisi çakışırsa yuvanın
+// dış sınırı kazanır.) Herkes kendi ekranına göre yerleştirsin diye. Seçim KALICI —
+// motor kapanınca kaybolmuyor, yeniden açılışta geri geliyor (ölçek de
+// dâhil). Menüdeki YERLESIM düğmesi varsayılana döndürür; sınırı ekranın
+// kenarına itip sıkışmanın çıkışı o.
+//
+// PENCERE: boyutlandırılabilir ve büyütülebilir — kenarından çek, işletim
+// sisteminin büyütme düğmesini kullan ya da F11 ile tam ekrana geç. Bütün
+// paneller ve sahne görünümü yeni boyuta göre yeniden hesaplanıyor.
+//
+// KAPATIRKEN: pencereyi çarpıyla kapatmak kaydedilmemiş işi GÖTÜRMÜYOR
+// artık. raylib'de kapanışı iptal edecek bir bağlama yok, yani "emin misin?"
+// sorulamıyor — onun yerine yaşayan sahne `<dosya>.kurtarma.json`'a yazılıyor
+// ve editör bir dahaki açılışta şeritte bir KURTAR düğmesi gösteriyor.
+// Kaydetmek o dosyayı geçersiz kılıyor. Kurtarma geri alınabilir (CTRL+Z) ve
+// kurtarılan iş HÂLÂ kaydedilmemiş sayılıyor (başlıkta yıldız yanar).
+//
+// KAMERA: dünya panelinde. Mod (takip / yörünge / 1. şahıs), HEDEF (kameranın
+// izlediği varlık — düğme sırayla gezer), uzaklık/yükseklik/fov ve kameranın
+// duvara çarpıp çarpmayacağı. Hedefi olmayan kamera hiç kıpırdamaz; denetim
+// bunu söylüyor. Hedefe editör AD veriyor, çünkü sahne biçimi varlıklara adla
+// atıfta bulunuyor — adsız bir hedef kaydedince sessizce kopardı.
+//
+// MENÜ ŞERİDİ AÇILIR MENÜLERDEN oluşuyor: Dosya / Duzen / Gorunum / Yardim.
+// Açık bir menü varken başka bir başlığın üstüne gelmek ona geçiyor; ESC
+// kapatıyor. Her komutun KISAYOLU kendi satırında sağda yazıyor — kısayolu
+// öğrenmenin yolu ayrı bir liste açmak olmamalı. Şu an iş görmeyen komutlar
+// (boş panoda "Yapistir", seçimsiz "Sil") SOLUK duruyor; kaybolan bir öğe
+// komutun var olduğunu da unutturur.
+//
+// "Yeni" yıkıcı olduğu için iki tıklıyor: ilkinde öğe "EMIN MISIN?" yazıyor
+// ve menü açık kalıyor, ikincisi siliyor. Kaydedilmemiş iş yoksa soru yok.
+//
+// KURTAR menüde DEĞİL, şeritte ve vurgulu: o duran bir komut değil, geçici
+// bir teklif ("önceki oturumdan kaydedilmemiş iş var") ve menüde saklanan
+// bir teklif görülmez.
+//
 // Yerleşim:
-//   menü şeridi            Yeni / Aç / Kaydet / Geri / İleri
+//   menü şeridi            Dosya / Duzen / Gorunum / Yardim  —  sağda dosya adı
 //   araç çubuğu            araçlar solda, OYNAT-DUR ORTADA, ızgara
 //   hiyerarşi | SAHNE GÖRÜNÜMÜ | özellikler
-//   konsol                 motorun tanılama kaydı
+//   konsol                 motorun tanılama kaydı (kaydırılır, süzülür)
 //   durum çubuğu
 //
 // Sahne dosyası ÇALIŞMA DİZİNİNE göre çözülüyor; depo kökünden çalıştır.
@@ -55,7 +211,7 @@ func sahne_yolu(): str {
         }
         return "sahne.json";
     }
-    // KOMUT SATIRI ilk sırada: `./editor benim_sahnem.json`. Editörün tek bir
+    // KOMUT SATIRI ilk sırada: `./TameEngine benim_sahnem.json`. Editörün tek bir
     // gömülü dosyayı açabilmesi onu kendi işin için kullanılamaz yapıyordu.
     array a = args();
     if (length(a) > 1) { return a[1]; }
@@ -95,7 +251,7 @@ func kur() {
         return;
     }
     // Komut satırında verilen ama HENÜZ OLMAYAN dosya bir hata değil: yeni
-    // sahne yaratmanın en doğal yolu bu (`./editor yeni.json` → boş sahne,
+    // sahne yaratmanın en doğal yolu bu (`./TameEngine yeni.json` → boş sahne,
     // F5 orayı yazar).
     array a = args();
     if (length(a) > 1 && file_exists(a[1]) == false) {
@@ -109,7 +265,7 @@ func kur() {
         editor_dosya3d("sahne.json");
         sahne_yukle3d(BOS);
         hata3d("sahne dosyasi bulunamadi — bos sahne acildi.");
-        hata3d("depo kokunden calistir: ./editor");
+        hata3d("depo kokunden calistir: ./TameEngine");
         return;
     }
     editor_dosya3d(SAHNE);
@@ -122,7 +278,7 @@ func kur() {
     }
 }
 
-sahne3d(1440, 820, "Tulpar Sahne Editoru");
+sahne3d(1440, 820, "TameEngine");
 editor_uygulamasi3d(true);
 kurulumda3(kur);
 oyna3d();

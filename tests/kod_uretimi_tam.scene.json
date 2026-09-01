@@ -1,0 +1,29 @@
+{
+  "v": 1,
+  "world": {
+    "title": "Tulpar 3B Sahne", "w": 960, "h": 560,
+    "sky": {"top": [20,26,40], "bottom": [90,110,150]},
+    "ground": 0,
+    "gravity": 24,
+    "camera": {"mode": "orbit", "target": "kahraman", "dist": 12, "height": 8, "fov": 45}
+  },
+  "entities": [
+    {"name": "kahraman", "tag": "player", "shape": "cube", "x": 0, "y": 1, "z": 0, "sx": 1.2, "sy": 2, "sz": 1.2, "color": [102,191,255]},
+    {"tag": "item", "shape": "sphere", "x": 4, "y": 1, "z": -3, "sx": 1, "sy": 1, "sz": 1, "color": [255,203,0]},
+    {"tag": "enemy", "shape": "cube", "x": -5, "y": 1, "z": 2, "sx": 1.4, "sy": 2, "sz": 1.4, "color": [230,41,55]},
+    {"tag": "wall", "shape": "cube", "x": 0, "y": 1.5, "z": -9, "sx": 20, "sy": 3, "sz": 1, "color": [130,130,130]}
+  ],
+  "zones": [
+    {"tag": "player", "sx": 3, "sy": 3, "sz": 3, "x": 6, "y": 1.5, "z": 6, "once": true, "do": "score", "amount": 40, "sound": "examples/assets/sesler/altin.wav"},
+    {"tag": "player", "shape": "sphere", "r": 2.5, "x": -7, "y": 1, "z": -7, "do": "damage", "amount": 9, "sound": "examples/assets/sesler/ates.wav"},
+    {"tag": "player", "sx": 2, "sy": 3, "sz": 2, "x": 9, "y": 1.5, "z": -9, "on": false, "do": "next_level"},
+    {"tag": "enemy", "shape": "sphere", "r": 2, "x": 0, "y": 1, "z": 12, "sound": "examples/assets/sesler/vurus.wav"}
+  ],
+  "rules": [
+    {"on": "hit", "a": "player", "b": "item", "do": "collect", "n": 25, "sound": "examples/assets/sesler/altin.wav"},
+    {"on": "hit", "a": "enemy", "b": "player", "do": "damage", "n": 7},
+    {"on": "cleared", "tag": "item", "do": "win", "sound": "examples/assets/sesler/kazandin.wav"},
+    {"on": "cleared", "tag": "player", "do": "lose"}
+  ]
+}
+

@@ -4,7 +4,11 @@
 //   Faz 8 (his):      parçacık (billboard) · 3B'ye bağlı 2B can barları
 //   Faz 9 (geometri): rampa · dönük duvar (SAT) · kapsül sütun · kamera ışını
 //   Faz 11 (kabuk):   başlangıç ekranı · duraklat (ESC/P) · yeniden başla
+//                     · DEVAM (kaldığın bölümden) · BÖLÜM SEÇME ızgarası
 //   Bölge:            bonus pedi (tek atım) · zehir havuzu (küre, her kare)
+//   Ses:              KONUMSAL (`ses3d`) — isabet, bonus, ölüm. Mesafeye göre
+//                     kısılıyor, kamera eksenine göre sağa/sola yaslanıyor;
+//                     ESC > Ayarlar'dan ana seviye kısılabiliyor.
 //   Girdi:            klavye+fare · dokunmatik · gamepad (hepsi aynı anda)
 //
 //   ./tulpar examples/scene3d_arena.tpr
@@ -13,6 +17,11 @@
 // Oynanış: düşmanlar seni kovalar, değerlerse can götürür. Bakışın yönüne
 // otomatik ateş edersin; bir bölümdeki tüm düşmanları temizleyince sonraki
 // bölüme geçersin. Üç bölümü de bitirince kazanırsın.
+//
+// İLERLEME KALICI (`kayit_ac3d`): bitirdiğin bölümler diske yazılır, yani
+// başlangıç ekranı ikinci açılışta "Devam (Bolum 2)" ve "Bolumler" düğmelerini
+// gösterir. Bölüm ızgarasında kilitli bölümler soluk çizilir ve seçilemez —
+// açık olanlar kesintisiz tamamladıklarının bir sonrasına kadar.
 //
 // Ateş NİYE otomatik: masaüstünde tuş, dokunmatikte düğme gerekirdi — sol
 // yarı zaten joystick, sağ yarı bakış pedi/zıplama. Otomatik ateş oyunu tek
@@ -33,6 +42,13 @@ int   ENEMY_HP = 50;       // 2 isabet
 int   TOUCH_DMG = 12;      // düşmana değmenin bedeli
 int   poison_zone = 0 - 1; // zehir havuzunun bölge no'su (HUD göstergesi okuyor)
 
+// SES tutamakları. `setup` içinde bir kez yükleniyor: her çalışta yeniden
+// yüklemek diski boşuna okur ve raylib her seferinde yeni bir Sound ayırır.
+// Ses aygıtı yoksa yükleme -1 döner ve çalma sessizce atlanır — oyun
+// penceresiz/sessiz testte de AYNI yoldan geçiyor, ayrı bir dal yok.
+int   snd_hit   = 0 - 1;   // mermi isabeti
+int   snd_lose  = 0 - 1;   // oyuncu öldü
+
 // --- Ortak kurulum: her bölümde aynı olan şeyler --------------------------
 func setup() {
     gokyuzu3d(rgb(24, 30, 52), rgb(96, 116, 150));
@@ -47,6 +63,9 @@ func setup() {
     // bonus pedini ve zehir havuzunu görmesi gerekiyor — gerçek bir oyunda
     // yerine bir zemin dokusu/ışık konur, bu ayıklama çizimidir.
     bolge_goster3d(true);
+    // Sesler. Yollar ÇALIŞMA DİZİNİNE göre — depo kökünden çalıştır.
+    snd_hit   = ses_yukle("examples/assets/sesler/vurus.wav");
+    snd_lose  = ses_yukle("examples/assets/sesler/kaybettin.wav");
 }
 
 // --- Bölüm kurulumları ----------------------------------------------------
@@ -85,6 +104,11 @@ func build_zones() {
     int pad = bolge3d(0.0 - 10.0, 1.0, 10.0,  4.0, 3.0, 4.0, TAG_PLAYER);
     girince3d(pad, on_bonus_pad);
     bolge_bir_kere3d(pad, true);
+    // Pedin sesi KANCADA DEĞİL, bölgenin kendi alanında. Elle çalmak da
+    // çalışırdı (bir satır `ses3d`) ama o zaman ses sahne dosyasında
+    // TAŞINMAZ ve editörden seçilemezdi — veri odaklı yol tam olarak bunun
+    // için var. Kanca yalnız oyunun kendi işini yapıyor (skor, şifa).
+    bolge_ses3d(pad, "examples/assets/sesler/altin.wav");
 
     // 2) Zehir havuzu — İÇİNDEYKEN kancası, yani her kare. hasar3d kendi
     // dokunulmazlık penceresini yönettiği için bu "saniyede 60 hasar" değil.
@@ -94,6 +118,10 @@ func build_zones() {
     // ÇIKINCA kancası: havuzdan çıkmak da bir olay. Taklit yöntemiyle bunu
     // yazmak için oyunun "geçen kare içinde miydim" bayrağı tutması gerekirdi.
     cikinca3d(poison_zone, on_poison_exit);
+    // BÖLGE SESİ: kanca yazmadan, bölgenin kendi alanı. Girişte bir kez
+    // çalıyor (bölge sesi GİRİŞ olayına bağlı) ve sahne biçiminde
+    // taşınıyor — editörden de seçilebiliyor, kod gerekmiyor.
+    bolge_ses3d(poison_zone, "examples/assets/sesler/ates.wav");
 }
 
 func spawn_player() {
@@ -180,6 +208,10 @@ func update() {
 func bullet_hits_enemy() {
     // İsabet kıvılcımı — mermi ölmeden ÖNCE, hâlâ konumu okunabilirken.
     patlat3d(ben3(), 6, rgb(255, 230, 120), 5.0, 0.25);
+    // Ses de KONUMLU: `ses3d` mesafeye göre kısıyor ve kamera eksenine göre
+    // sağa/sola yaslıyor. Sağdaki düşmanı vurmak sağ kulakta duyuluyor —
+    // motorun konumsal ses yolu tam olarak bunu gösteriyor.
+    ses3d(snd_hit, get3x(ben3()), get3y(ben3()), get3z(ben3()));
     oldur3(ben3());                 // mermi harcanır
     hasar3d(oteki3(), BULLET_DMG);
 }
@@ -222,6 +254,7 @@ func on_poison_exit() {
 
 func player_died() {
     patlat3d(ben3(), 40, SKYBLUE, 11.0, 1.0);
+    ses3d(snd_lose, get3x(ben3()), get3y(ben3()), get3z(ben3()));
     game_over3d();
 }
 

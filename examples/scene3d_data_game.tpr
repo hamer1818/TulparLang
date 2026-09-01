@@ -16,7 +16,19 @@
 
 import "scene3d";
 
-str SAHNE = "examples/scenes/toplayici.scene.json";
+// Sahne yolu komut satırından verilebilir:
+//   ./data_game_desktop examples/scenes/iki_bolum.scene.json
+// İKİ BÖLÜMLÜ o sahne, bölüm sisteminin de veri olduğunu gösteriyor —
+// "sonraki bölüm" hiçbir Tulpar satırı yazılmadan çalışıyor.
+func sahne_yolu(): str {
+    if (web_mi() == false) {
+        array a = args();
+        if (length(a) > 1) { return a[1]; }
+    }
+    return "examples/scenes/toplayici.scene.json";
+}
+
+str SAHNE = sahne_yolu();
 
 func kur() {
     // Bu dosya OYUNU çalıştırıyor. Sahneyi düzenlemek için ayrı bir uygulama
@@ -32,6 +44,10 @@ func hud() {
     int p = bul3d("kahraman");
     if (alive3(p)) {
         text("Can: " + toString(can_kac3d(p)), 12, 40, 18, rgb(240, 120, 120));
+    }
+    if (bolum_sayisi3d() > 1) {
+        text("Bolum: " + toString(level_now3d()) + "/" + toString(bolum_sayisi3d()),
+             12, 116, 16, rgb(150, 220, 255));
     }
     text("Varlik: " + toString(yasayan_sayi3d()) +
          "   Davranis: " + toString(davranis_sayisi3d()) +

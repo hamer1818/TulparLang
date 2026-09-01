@@ -68,6 +68,14 @@ func setup() {
 
     player = uret3(0.0, 30.0, 0.0,  1.2, 2.0, 1.2, SKYBLUE, SHAPE_CUBE, TAG_PLAYER);
     kamera_yorunge(player, 16.0, 10.0);
+    // YÜZEN SANDIK — su ZATEN vardı ama üstünde duran hiçbir şey yoktu, yani
+    // kaldırma kuvveti motorda yazılı olduğu hâlde hiçbir örnekte
+    // görünmüyordu. Yüzme bir DÜNYA AYARI değil DAVRANIŞ: yüzmek cismin
+    // özelliği, o yüzden serileşiyor ve editörden de eklenebiliyor.
+    // (guc, derinlik) = itme kuvveti ve dengede kalacağı batma derinliği.
+    int sandik = uret3(6.0, PEAK * 0.22 + 4.0, 6.0,  1.6, 1.6, 1.6,
+                       rgb(180, 130, 70), SHAPE_CUBE, TAG_PROP);
+    yuz_davranis3d(sandik, 26.0, 0.5);
 
     // Altınları arazi YÜZEYİNE oturt. Yüksekliği sormadan yerleştirseydik
     // ya havada asılı kalır ya da tepenin içine gömülürlerdi.
