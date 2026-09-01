@@ -2552,10 +2552,10 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 ## 🎯 Olgunluk kriterleri (sürüm bağımsız)
 
 > **Sürümleme notu (2026-09-01'de tazelendi):** Proje **v1.0'ın çok ötesinde**
-> — yayınlı son tag **`v3.12.0`** (2026-07-23). Sıradaki yayın **`v3.13.0`**:
-> CHANGELOG'u kesildi, `CMakeLists.txt` `project(VERSION 3.13.0)` ile hizalı,
-> `tulpar version` `3.13.0-dev` diyor. **Etiket henüz atılmadı** ve yerel dal
-> `origin/main`'in 161 commit önünde — gönderme kararı bekliyor.
+> — yayınlı son tag **`v3.13.0`** (2026-09-01): 3B oyun motoru + TameEngine
+> sahne editörü + mobil hedefler, PR #300 ile main'e girdi (165 commit,
+> 94 dosya, +23k satır). Release yayında ve doğrulandı: indirilen ikili
+> `TulparLang v3.13.0` diyor, SHA-256 tutuyor.
 > Aşağıdaki kriterler "dil olgun mu?" kalıcı gate'leridir, bir sürüm
 > numarasına bağlı değil.
 >
@@ -2575,16 +2575,17 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 5. **Stable release süreci** — `v*` git tag + binary release artifact'leri;
    `tulpar update` bunu çekiyor (✓ v2.2.0 + v3.0.0 yayınlandı).
 
-**Şu an konumumuz:** v3.12.0 yayınlı, **v3.13.0 kesildi ve etiketlenmeyi
-bekliyor**. (1) ve (2) karşılandı — 59 paket · 52 örnek · 8 denetim yeşil.
-(3) altyapı tam, içerik az. (4) reference büyük ölçüde hazır, canlı deploy
-eksik. (5) süreç işliyor.
+**Şu an konumumuz:** **v3.13.0 yayınlandı.** (1) ve (2) karşılandı — 59 paket ·
+129 örnek · 8 denetim yeşil. (3) altyapı tam, içerik az. (4) reference büyük
+ölçüde hazır, canlı deploy eksik. (5) süreç işliyor.
 
-**Gönderme önündeki tek engel kod değil, karar:** 161 commit `docs/3d-roadmap`
-dalında duruyor ve dalın adı artık içeriğiyle uyuşmuyor (derleyici
-düzeltmeleri, Android paketleme, denetim altyapısı, ses). Konu başlıklarına
-göre birkaç PR'a bölmek mi, tek sürüm dalı olarak main'e almak mı — bu karar
-verilmeden etiket atılmamalı.
+**Sürüm turundan çıkan kalıcı ders:** CI üç kez kırmızı döndü ve üçü de gerçek
+hataydı ama üçü de **yerelde görünmeyen ortam farkındandı** — ses aygıtı yok,
+zaman bütçesi, `android/dist` arşivleri yok. Sürüm PR'ı açmadan önce CI'yı
+yerelde taklit et; komut [[Tuzaklar]] §3d-1'de.
+
+**Sıradaki 🟡 iki madde de kod değil içerik:** registry'de gerçek 3rd-party
+paket, ve `tulparlang.dev/docs/` derin sayfalarının canlıya çıkması.
 
 ---
 
