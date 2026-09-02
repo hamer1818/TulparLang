@@ -30,8 +30,22 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$BUNDLE"
 
 echo "[paket] editor derleniyor..."
-DISPLAY= ./tulpar build examples/scene3d_editor.tpr "$BUNDLE/TameEngine" >/dev/null
-[ -f "$BUNDLE/TameEngine" ] || { echo "HATA: editor ikilisi uretilemedi" >&2; exit 1; }
+# Çıktı YUTULMUYOR, saklanıyor: başarıda sessiz kalması iyi ama başarısızlıkta
+# derleyici/linker'ın söylediği tek şey o. İlk denemede `>/dev/null` yüzünden
+# macOS'taki link hatası CI günlüğünde HİÇ görünmedi ve bir tur boşa gitti —
+# tanıyı gizleyen her yönlendirme aynı bedeli ödetiyor.
+build_log="$STAGE/build.log"
+if ! DISPLAY= ./tulpar build examples/scene3d_editor.tpr "$BUNDLE/TameEngine" \
+        > "$build_log" 2>&1; then
+    echo "HATA: editor derlenemedi — derleyici ciktisi:" >&2
+    tail -30 "$build_log" >&2
+    exit 1
+fi
+if [ ! -f "$BUNDLE/TameEngine" ]; then
+    echo "HATA: editor ikilisi uretilemedi — derleyici ciktisi:" >&2
+    tail -30 "$build_log" >&2
+    exit 1
+fi
 chmod +x "$BUNDLE/TameEngine"
 # AOT ara ciktilarini SIL. `tulpar build` nesne (.o) ve bazen IR (.ll)
 # dosyasini ciktinin yanina birakiyor; ilk pakette `TameEngine.o` kullanicinin
