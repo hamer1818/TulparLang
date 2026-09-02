@@ -74,6 +74,34 @@ değişince. **`./build.sh clean` yap.** Belirti: kaynak/`embedded_libs.h` yeni 
 eski davranıyor, ya da LLVM "Incorrect number of arguments". Kökteki bayat `.a` arşivleri
 de taze derlemeyi gölgeler (`cp build-linux/libtulpar_*.a ./`).
 
+## CI — main'in gerçek hâli test ediliyor mu?
+İki ayar birlikte bir delik açıyor ve ikisi de tek başına makul görünüyor:
+
+| Ayar | Ne yapıyor |
+|---|---|
+| `required_status_checks.strict` **kapalı** | PR **eski** bir main'e karşı yeşile dönebiliyor |
+| main-push işinde **artefakt yeniden kullanımı** | Reuse başarılıysa derleme/test/süit/duman/paketleme adımlarının **hepsi atlanıyor** |
+
+Birlikte: **main'in birleşmiş hâlini hiçbir şey sınamıyor.** İki PR ayrı ayrı
+yeşil olup birleşince main'i bozabilir (biri bir fonksiyonu siler, öteki onu
+çağırır) ve CI yeşil kalır. Ölçüldü (2026-09-02): main-push koşumunda
+`Build with LLVM`, `Run tests`, `Run tests/*.test.tpr suites`,
+`AOT end-to-end smoke`, `Package TameEngine` — hepsi **skipped**.
+
+**Çözüm `strict`i açmak.** Açıkken dal main'i içeriyor demektir; squash sonrası
+main'in ağacı PR'ın ağacına EŞİT olur, yani yeniden kullanma *güvenilir* hâle
+gelir. Yani reuse iyileştirmesi zaten `strict`i varsayıyordu — o varsayım
+yazılı değildi ve tutmuyordu.
+
+```bash
+gh api -X PATCH repos/<sahip>/<depo>/branches/main/protection/required_status_checks \
+  --input - <<< '{"strict":true,"contexts":["build-linux","build-macos"]}'
+```
+
+Alternatif (strict istenmiyorsa): main-push işinde yeniden kullanmayı kapat ve
+testleri gerçekten koştur — önleme yerine tespit, merge başına ~20 dk.
+**İkisinden biri olmalı; hiçbiri olmazsa main sınanmamış demektir.**
+
 ## CI
 `.github/workflows/build.yml` — Ubuntu + macOS. Test adımlarını **yalnız Linux işi**
 koşuyor: `./build.sh test`, `./build.sh suites`, typeinfer koşucusu, SHA-256 yardımcısı.
