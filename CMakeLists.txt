@@ -69,6 +69,16 @@ find_package(OpenSSL QUIET)
 if(OpenSSL_FOUND)
     message(STATUS "OpenSSL: ${OPENSSL_VERSION} (TLS enabled)")
     add_compile_definitions(TULPAR_HAS_TLS=1)
+    # AOT link satirina `-lssl -lcrypto` giriyor ama `-L` GIRMIYORDU: OpenSSL
+    # sistemin varsayilan arama yolunda degilse (macOS'ta Homebrew keg-only bir
+    # dizine koyuyor) her `tulpar build` `ld: library 'ssl' not found` ile
+    # dusuyordu. CMake'in bulduğu dizin ikiliye gomuluyor; surucu onu ve birkac
+    # standart konumu VAR OLDUKLARI SURECE `-L` olarak ekliyor.
+    get_filename_component(TULPAR_OPENSSL_LIBDIR "${OPENSSL_SSL_LIBRARY}" DIRECTORY)
+    if(TULPAR_OPENSSL_LIBDIR)
+        message(STATUS "OpenSSL lib dir: ${TULPAR_OPENSSL_LIBDIR}")
+        add_compile_definitions(TULPAR_OPENSSL_LIBDIR="${TULPAR_OPENSSL_LIBDIR}")
+    endif()
 else()
     message(STATUS "OpenSSL: not found (TLS disabled — `https://` URLs will fail at runtime)")
 endif()

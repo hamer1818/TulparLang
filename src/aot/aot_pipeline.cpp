@@ -269,6 +269,44 @@ static std::string build_link_search_dirs() {
     add(env);
   }
 
+  // OPENSSL ARAMA YOLU. `TULPAR_HAS_TLS` tanımlıysa link satırına
+  // `-lssl -lcrypto` giriyor ama `-L` GİRMİYORDU — ve bu, kütüphane
+  // sistemin varsayılan yolunda değilse her AOT derlemesini düşürüyor.
+  //
+  // ÖLÇÜLDÜ (2026-09-02): macOS CI'da `ld: library 'ssl' not found` ile
+  // HER `tulpar build` düşüyordu; Homebrew'un OpenSSL'i keg-only bir
+  // dizinde (`/opt/homebrew/opt/openssl@3/lib`) duruyor ve varsayılan
+  // arama yolunda değil. Linux'ta görünmüyordu çünkü `libssl` `/usr/lib`de.
+  // Yani YAYINLANMIS macOS ikilisiyle hiçbir program derlenemiyordu ve
+  // bunu hiçbir şey yakalamıyordu: macOS işi test KOŞMUYOR (yalnız derleyip
+  // artefakt yüklüyor), o yüzden link yolu orada hiç sınanmamıştı.
+  //
+  // İki kaynak birden, ikisi de yalnız VAR OLAN dizinleri ekliyor
+  // (olmayan bir `-L` linker'a "search path not found" uyarısı bastırıyor):
+  //   1. Derleme zamanında CMake'in bulduğu dizin (TULPAR_OPENSSL_LIBDIR).
+  //      Aynı makinede derlenip kullanılan tulpar için kesin cevap.
+  //   2. Dağıtılan ikili BAŞKA bir makinede koşuyor olabilir, o yüzden
+  //      standart konumlar da deneniyor.
+  {
+    auto add_if_dir = [&](const std::string &d) {
+      if (d.empty()) return;
+      struct stat st;
+      if (stat(d.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) add(d);
+    };
+#ifdef TULPAR_OPENSSL_LIBDIR
+    add_if_dir(TULPAR_OPENSSL_LIBDIR);
+#endif
+#if PLATFORM_MACOS
+    add_if_dir("/opt/homebrew/opt/openssl@3/lib");  // Apple Silicon brew
+    add_if_dir("/usr/local/opt/openssl@3/lib");     // Intel brew
+    add_if_dir("/opt/homebrew/lib");
+    add_if_dir("/usr/local/lib");
+#endif
+    if (const char *env = getenv("TULPAR_OPENSSL_DIR"); env && *env) {
+      add_if_dir(env);
+    }
+  }
+
   return out;
 }
 

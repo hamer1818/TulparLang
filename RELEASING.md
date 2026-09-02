@@ -58,17 +58,32 @@ Every release ships:
 | -------------------------------------- | ----------------------------------------- |
 | `tulpar-linux-x64`                     | Linux x86_64 driver binary.               |
 | `tulpar-macos-universal`               | macOS Apple Silicon + Intel binary.       |
-| `tulpar-windows-x64.exe`               | Windows portable driver.                  |
-| `tulpar-setup-windows-x64.exe`         | Windows GUI installer (Inno Setup).       |
 | `libtulpar_runtime-<platform>.a`       | Per-platform runtime archive (linked into AOT-compiled user binaries). |
-| `libwinpthread-1.dll` etc.             | Windows runtime DLLs the GUI installer bundles. Standalone copies so the one-line `install.ps1` can fetch them too. |
+| `TameEngine-<platform>.tar.gz`         | The 3D scene editor as a standalone bundle — binary + texture/sound/model palettes + sample scenes. Does **not** require the compiler to run. |
 | `SHA256SUMS.txt`                       | `sha256sum -b` manifest. `tulpar update` verifies every download against this. |
+| `SHA256SUMS.txt.asc`                   | Detached GPG signature over the manifest. Present only when the signing secret is configured (absent on forks). |
 
-The DLL bundling guard in `build-windows` runs `objdump -p` on the
-freshly-built `tulpar.exe` and fails the build if any imported DLL is
-neither a stock-Windows system DLL nor one of the bundled set.
-Catches the "binary picked up a new transitive dependency we forgot
-to ship" failure mode at CI time.
+> **No Windows assets.** Native Windows support was dropped in 3.13.0 —
+> `tulpar-windows-x64.exe`, the Inno Setup installer and the bundled MinGW
+> DLLs are gone, along with the `build-windows` job and its `objdump -p`
+> DLL-bundling guard. Windows users run the Linux build inside WSL.
+
+### Why TameEngine ships as a bundle, not a bare binary
+
+The editor's texture / sound / model browsers glob their paths **relative to
+the working directory** (`examples/assets/dokular/*.png`,
+`examples/assets/sesler/*.wav`, `varliklar/*.glb`), and the scene templates
+build the same paths. A lone binary starts fine but shows empty palettes and
+lays out untextured templates, so the archive preserves that layout and the
+README tells the user to run it from inside the folder.
+
+`tools/package_tameengine.sh` builds and **audits its own output** — palettes
+non-empty, no build residue (`.o`/`.ll`) leaked, and on Linux the binary is
+actually launched headless to prove it links and starts. A failing check
+refuses to produce the archive rather than shipping a broken one. The
+packaging step runs on **every** build, not only on tags: a release path that
+is exercised once, at the worst possible moment, is how this repo has been
+bitten before.
 
 ## `TULPAR_VERSION` resolution
 
