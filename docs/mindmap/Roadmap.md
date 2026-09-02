@@ -88,3 +88,5 @@ Express/Gin/FastAPI'ye karşı tüm kapatılabilir boşluklar kapandı: middlewa
 
 ## İlgili
 [[Performance]] · [[SQLite and DB]] · [[Wings]] · [[Decisions]]
+
+<!-- strict dogrulama denemesi — bu dal silinecek -->
