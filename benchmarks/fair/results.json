@@ -1,0 +1,155 @@
+{
+  "results": {
+    "intloop": {
+      "n": "50000000",
+      "desc": "tamsay\u0131 aritmeti\u011fi (zincirleme ba\u011f\u0131ml\u0131l\u0131k)",
+      "rows": {
+        "c": {
+          "best": 134.4,
+          "median": 134.5
+        },
+        "rust": {
+          "best": 144.1,
+          "median": 144.3
+        },
+        "go": {
+          "best": 134.8,
+          "median": 134.9
+        },
+        "java": {
+          "best": 144.4,
+          "median": 144.9
+        },
+        "node": {
+          "best": 709.6,
+          "median": 712.2
+        },
+        "python": {
+          "best": 3174.1,
+          "median": 3195.5
+        },
+        "tulpar": {
+          "best": 135.2,
+          "median": 135.3
+        }
+      },
+      "output": "723378784",
+      "agree": true
+    },
+    "fib": {
+      "n": "32",
+      "desc": "\u00f6zyineleme (\u00e7a\u011fr\u0131 maliyeti)",
+      "rows": {
+        "c": {
+          "best": 1.6,
+          "median": 1.7
+        },
+        "rust": {
+          "best": 3.7,
+          "median": 3.8
+        },
+        "go": {
+          "best": 6.6,
+          "median": 6.7
+        },
+        "java": {
+          "best": 12.2,
+          "median": 13.0
+        },
+        "node": {
+          "best": 25.1,
+          "median": 25.3
+        },
+        "python": {
+          "best": 141.7,
+          "median": 141.9
+        },
+        "tulpar": {
+          "best": 5.8,
+          "median": 5.9
+        }
+      },
+      "output": "2178309",
+      "agree": true
+    },
+    "sieve": {
+      "n": "5000000",
+      "desc": "dizi/bellek eri\u015fimi",
+      "rows": {
+        "c": {
+          "best": 7.5,
+          "median": 7.7
+        },
+        "rust": {
+          "best": 8.1,
+          "median": 8.3
+        },
+        "go": {
+          "best": 8.2,
+          "median": 8.6
+        },
+        "java": {
+          "best": 20.2,
+          "median": 20.8
+        },
+        "node": {
+          "best": 28.9,
+          "median": 29.1
+        },
+        "python": {
+          "best": 455.8,
+          "median": 461.4
+        },
+        "tulpar": {
+          "best": 60.4,
+          "median": 62.0
+        }
+      },
+      "output": "348513",
+      "agree": true
+    },
+    "strcat": {
+      "n": "2000000",
+      "desc": "dizgi kurma + tarama",
+      "rows": {
+        "c": {
+          "best": 37.6,
+          "median": 37.8
+        },
+        "rust": {
+          "best": 18.9,
+          "median": 19.0
+        },
+        "go": {
+          "best": 24.7,
+          "median": 24.9
+        },
+        "java": {
+          "best": 32.9,
+          "median": 33.6
+        },
+        "node": {
+          "best": 100.4,
+          "median": 100.6
+        },
+        "python": {
+          "best": 199.3,
+          "median": 201.9
+        },
+        "tulpar": {
+          "best": 233.5,
+          "median": 237.0
+        }
+      },
+      "output": "7780000 2000000",
+      "agree": true
+    }
+  },
+  "baseline": {
+    "c": 0.17788299737730995,
+    "python": 5.811177994473837,
+    "node": 11.386161000700668,
+    "tulpar": 0.8281410046038218
+  },
+  "repeats": 5
+}

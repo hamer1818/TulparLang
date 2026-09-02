@@ -1,0 +1,16 @@
+int n = toInt(env("BENCH_N"));
+if (n <= 0) { n = 2000000; }
+array parts = [];
+int i = 0;
+while (i < n) {
+    push(parts, toString(i % 1000));
+    push(parts, ",");
+    i = i + 1;
+}
+str s = join("", parts);
+// Go `strings.Count` ve Python `s.count` ile ayni: her dil kendi stdlib
+// sayacini kullaniyor. Elle karakter donguse cevirmek, olculen seyi
+// "stdlib ne kadar iyi"den "dongu ne kadar hizli"ya kaydirirdi.
+int L = len(s);
+int cnt = count(s, ",");
+print(toString(L) + " " + toString(cnt));

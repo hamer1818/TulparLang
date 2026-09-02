@@ -1,0 +1,16 @@
+int n = toInt(env("BENCH_N"));
+if (n <= 0) { n = 5000000; }
+array f = [];
+int j = 0;
+while (j <= n) { push(f, 0); j = j + 1; }
+int c = 0;
+int i = 2;
+while (i <= n) {
+    if (f[i] == 0) {
+        c = c + 1;
+        int k = i * i;
+        while (k <= n) { f[k] = 1; k = k + i; }
+    }
+    i = i + 1;
+}
+print(c);

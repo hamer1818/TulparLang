@@ -1,0 +1,9 @@
+func compute(int n): int {
+    int t = 1;
+    int i = 0;
+    while (i < n) { t = (t * 31 + i) % 1000000007; i = i + 1; }
+    return t;
+}
+int n = toInt(env("BENCH_N"));
+if (n <= 0) { n = 50000000; }
+print(compute(n));
