@@ -306,6 +306,22 @@ yavaş → ~12 dk. Bütçe 25 dakika (~2× pay).
 ama "suites yeşil" diye okunabilirdi — adım listesine bak, çıktının son satırına
 değil.
 
+## 3e. Bir platform HİÇ sınanmıyorsa, orada her şey bozuk olabilir
+macOS CI işi **test koşmuyor** — derliyor, artefaktı yüklüyor, bitiyor.
+Sonucu (2026-09-02'de ölçüldü): **yayınlanan `tulpar-macos-universal` ile
+hiçbir program derlenemiyordu.** `ld: library 'ssl' not found` — CMake OpenSSL'i
+bulunca link satırına `-lssl -lcrypto` giriyor ama `-L` yolu girmiyordu ve
+Homebrew OpenSSL'i keg-only bir dizinde tutuyor. Linux'ta görünmedi: `libssl`
+orada `/usr/lib`de.
+
+Hata aylarca durdu ve ancak TameEngine paketleme adımı macOS'ta **ilk kez bir
+`tulpar build` çağırınca** ortaya çıktı. Yani bulunması bir tesadüftü.
+
+**Ders:** "derleniyor" ile "çalışıyor" arasındaki fark bir platformda hiç
+ölçülmüyorsa, o platform için hiçbir iddian yok. Bir artefaktı yayınlamak onu
+sınamak değildir. Yayınlanan her platformda **en az bir uçtan uca iş** koşmalı
+(bir `tulpar build` + çalıştır yeter).
+
 ## 4. Grafik/pencere kuralı
 **Asla raylib penceresi açma.** Pencere açan komutlar `DISPLAY=` altında
 koşar. Görsel/oynanış testini **kullanıcı yapar**.

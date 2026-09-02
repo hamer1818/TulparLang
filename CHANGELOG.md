@@ -9,6 +9,27 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Fixed — macOS'ta `tulpar build` HİÇBİR ŞEYİ derleyemiyordu (`library 'ssl' not found`)
+
+CMake OpenSSL'i bulunca AOT link satırına `-lssl -lcrypto` giriyor ama **`-L`
+yolu girmiyordu**. Kütüphane sistemin varsayılan arama yolunda değilse her
+`tulpar build` link aşamasında düşüyor — macOS'ta Homebrew OpenSSL'i keg-only
+bir dizine koyduğu için (`/opt/homebrew/opt/openssl@3/lib`) durum tam olarak
+buydu. Linux'ta görünmüyordu çünkü `libssl` `/usr/lib`de.
+
+**Yani yayınlanan `tulpar-macos-universal` ile hiçbir program derlenemiyordu.**
+Bunu hiçbir şey yakalamıyordu: **macOS CI işi test KOŞMUYOR** — yalnız derleyip
+artefakt yüklüyor, yani AOT link yolu orada bir kez bile denenmemişti. Hata
+ancak TameEngine paketleme adımı macOS'ta ilk kez `tulpar build` çağırınca
+ortaya çıktı.
+
+Sürücü artık `-L` olarak: (1) derleme zamanında CMake'in bulduğu dizini
+(`TULPAR_OPENSSL_LIBDIR`), (2) macOS'ta standart Homebrew konumlarını, (3)
+`TULPAR_OPENSSL_DIR` ortam değişkenini ekliyor — hepsi **yalnız gerçekten var
+olan** dizinler için (olmayan bir `-L` linker'a uyarı bastırıyor). İkisi birden
+gerekiyor: (1) aynı makinede derlenip kullanılan tulpar için kesin cevap,
+(2) dağıtılan ikili başka bir makinede koşuyor olabileceği için.
+
 ### Added — TameEngine artık RELEASE'te indirilebilir
 
 Editör bir Tulpar programı olduğu için pratikte **yayınlanmış değildi**:
