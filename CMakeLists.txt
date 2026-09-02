@@ -8,7 +8,7 @@ cmake_minimum_required(VERSION 3.14)
 # Keep it >= the latest git tag (currently v3.10.0) so `tulpar --version` and
 # `tulpar update --check` never report a dev build as older than the last
 # release. Bump here when cutting a release; CI overrides via -DTULPAR_VERSION.
-project(TulparLang VERSION 3.13.0 LANGUAGES C CXX)
+project(TulparLang VERSION 3.13.1 LANGUAGES C CXX)
 
 # C++17 Standard (required for std::variant, std::optional, std::unique_ptr)
 set(CMAKE_CXX_STANDARD 17)
@@ -310,6 +310,14 @@ target_compile_definitions(tulpar PRIVATE TULPAR_AOT_ENABLED)
 # builds; release CI overrides with `-DTULPAR_VERSION=v3.1.0` (the tag
 # name) so `tulpar --version` matches the GitHub release tag. Only tag
 # pushes create releases; main/PR builds use this default.
+#
+# ⚠️ ÖNBELLEKLİ. `project(VERSION ...)` yükseltilip AYNI build dizininde
+# yeniden derlenirse bu değer ESKİ kalır ve `tulpar version` yanlış sürüm
+# söyler — sessizce. Ölçüldü (2026-09-02, v3.13.1 keserken): 3.13.1'e
+# yükseltildikten sonra ikili hâlâ "3.13.0-dev" diyordu. CI'da görünmüyor
+# (her koşum temiz dizin, üstelik etiket -DTULPAR_VERSION ile eziyor).
+# Sürüm yükselttikten sonra YA build dizinini sil YA da
+# `cmake -S . -B <dir> -DTULPAR_VERSION=<yeni>-dev` ile ez.
 set(TULPAR_VERSION "${PROJECT_VERSION}-dev"
     CACHE STRING "Embedded version string surfaced via tulpar --version")
 target_compile_definitions(tulpar

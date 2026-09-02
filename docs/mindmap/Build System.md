@@ -50,6 +50,17 @@ atlanmıyor (üretilen şey `output_name`'in kendisi değil).
 > AYNI sırayla çözüp özyinelemeli tarıyor. Gömülü stdlib adları diskte çözülmez; onları
 > sürücünün mtime'ı kapsıyor. → [[Tuzaklar]] §2
 
+## ⚠️ Sürüm numarası ÖNBELLEKLİ
+`TULPAR_VERSION` bir CMake **cache** değişkeni (`set(... CACHE STRING ...)`).
+`project(VERSION ...)` yükseltilip **aynı build dizininde** yeniden derlenirse
+eski değer kalır ve `tulpar version` yanlış sürümü söyler — sessizce. Ölçüldü
+(2026-09-02, v3.13.1 keserken): 3.13.1'e yükseltildikten sonra ikili hâlâ
+`3.13.0-dev` diyordu. CI'da görünmez (her koşum temiz dizin; etiket koşumu
+ayrıca `-DTULPAR_VERSION` ile eziyor), yani yalnız yereli yanıltır.
+
+**Sürüm yükselttikten sonra:** ya build dizinini sil, ya da
+`cmake -S . -B build-linux -DTULPAR_VERSION=<yeni>-dev` ile ez.
+
 ## ⚠️ Gömülü lib değişikliği RECONFIGURE ister
 `lib/*.tpr` → `embedded_libs.h` (`EmbedLibraries.cmake`, `configure_file`). Değişikliği
 görmek için `cmake -S . -B build-linux` **yeniden yapılandırma** şart; yalnız `--build`

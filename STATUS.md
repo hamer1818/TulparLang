@@ -2552,10 +2552,16 @@ ya **bilerek ertelenen ödünler** ya da yolda **fark edilen eksikler**. Sıra
 ## 🎯 Olgunluk kriterleri (sürüm bağımsız)
 
 > **Sürümleme notu (2026-09-01'de tazelendi):** Proje **v1.0'ın çok ötesinde**
-> — yayınlı son tag **`v3.13.0`** (2026-09-01): 3B oyun motoru + TameEngine
-> sahne editörü + mobil hedefler, PR #300 ile main'e girdi (165 commit,
-> 94 dosya, +23k satır). Release yayında ve doğrulandı: indirilen ikili
-> `TulparLang v3.13.0` diyor, SHA-256 tutuyor.
+> — yayınlı son tag **`v3.13.1`** (2026-09-02). `v3.13.0` (2026-09-01) 3B oyun
+> motorunu + TameEngine sahne editörünü + mobil hedefleri getirdi (PR #300,
+> 165 commit, +23k satır); `v3.13.1` onun iki eksiğini kapattı: macOS'ta
+> `tulpar build`in hiçbir şeyi derleyememesi (`library 'ssl' not found`) ve
+> TameEngine'in indirilebilir olmaması.
+>
+> ⚠️ **macOS CI işi test KOŞMUYOR** — yalnız derleyip artefakt yüklüyor.
+> v3.13.0'ın iki eksiği de bu kör noktadan geldi ve biri ancak tesadüfen
+> bulundu. Yayınlanan her platformda en az bir uçtan uca iş koşmalı.
+> → [[Tuzaklar]] §3e
 > Aşağıdaki kriterler "dil olgun mu?" kalıcı gate'leridir, bir sürüm
 > numarasına bağlı değil.
 >
