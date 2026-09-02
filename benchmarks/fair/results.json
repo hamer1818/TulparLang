@@ -6,31 +6,31 @@
       "rows": {
         "c": {
           "best": 134.4,
-          "median": 134.8
+          "median": 134.6
         },
         "rust": {
-          "best": 144.0,
-          "median": 144.0
+          "best": 144.2,
+          "median": 144.3
         },
         "go": {
-          "best": 134.7,
-          "median": 134.9
+          "best": 135.0,
+          "median": 135.2
         },
         "java": {
-          "best": 144.4,
-          "median": 144.8
+          "best": 143.1,
+          "median": 144.4
         },
         "node": {
-          "best": 712.4,
-          "median": 713.9
+          "best": 706.1,
+          "median": 708.0
         },
         "python": {
-          "best": 3167.6,
-          "median": 3202.1
+          "best": 3169.3,
+          "median": 3226.2
         },
         "tulpar": {
           "best": 135.1,
-          "median": 135.1
+          "median": 135.2
         }
       },
       "output": "723378784",
@@ -53,16 +53,16 @@
           "median": 6.7
         },
         "java": {
-          "best": 12.3,
-          "median": 12.5
+          "best": 12.6,
+          "median": 13.0
         },
         "node": {
-          "best": 24.7,
-          "median": 27.4
+          "best": 25.2,
+          "median": 25.9
         },
         "python": {
-          "best": 141.3,
-          "median": 145.0
+          "best": 141.6,
+          "median": 141.7
         },
         "tulpar": {
           "best": 4.3,
@@ -77,32 +77,32 @@
       "desc": "dizi/bellek eri\u015fimi",
       "rows": {
         "c": {
-          "best": 7.5,
-          "median": 7.8
+          "best": 7.6,
+          "median": 7.7
         },
         "rust": {
-          "best": 8.3,
-          "median": 8.4
+          "best": 8.4,
+          "median": 9.1
         },
         "go": {
-          "best": 8.3,
+          "best": 8.0,
           "median": 8.5
         },
         "java": {
-          "best": 20.6,
-          "median": 20.7
+          "best": 19.7,
+          "median": 20.1
         },
         "node": {
-          "best": 27.5,
-          "median": 28.4
+          "best": 27.2,
+          "median": 27.3
         },
         "python": {
-          "best": 445.5,
+          "best": 445.0,
           "median": 454.6
         },
         "tulpar": {
-          "best": 56.1,
-          "median": 58.7
+          "best": 42.1,
+          "median": 42.6
         }
       },
       "output": "348513",
@@ -113,32 +113,32 @@
       "desc": "dizgi kurma + tarama",
       "rows": {
         "c": {
-          "best": 38.0,
+          "best": 37.5,
           "median": 38.1
         },
         "rust": {
-          "best": 18.7,
-          "median": 19.4
+          "best": 18.5,
+          "median": 19.0
         },
         "go": {
-          "best": 24.5,
-          "median": 25.0
+          "best": 24.6,
+          "median": 24.7
         },
         "java": {
-          "best": 33.0,
-          "median": 33.5
+          "best": 31.6,
+          "median": 32.5
         },
         "node": {
-          "best": 102.1,
-          "median": 103.5
+          "best": 101.4,
+          "median": 103.9
         },
         "python": {
-          "best": 199.3,
-          "median": 207.8
+          "best": 199.1,
+          "median": 203.6
         },
         "tulpar": {
-          "best": 167.2,
-          "median": 170.6
+          "best": 166.3,
+          "median": 168.2
         }
       },
       "output": "7780000 2000000",
@@ -146,10 +146,10 @@
     }
   },
   "baseline": {
-    "c": 0.15710299339843914,
-    "python": 5.592410001554526,
-    "node": 10.489488005987369,
-    "tulpar": 0.8116160024655983
+    "c": 0.1776729986886494,
+    "python": 5.578846001299098,
+    "node": 10.94954099971801,
+    "tulpar": 0.8290389960166067
   },
   "repeats": 5
 }
