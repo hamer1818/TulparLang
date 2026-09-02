@@ -113,6 +113,10 @@ typedef struct {
   // Runtime Functions
   LLVMValueRef func_printf;
   LLVMValueRef func_vm_alloc_string;
+  // Dizgi sabitleri BİR KEZ ayrılır (aot_intern_string) ve site başına bir
+  // modül global'inde önbelleklenir; gerekçe runtime_bindings.cpp'de.
+  LLVMValueRef func_aot_intern_string;
+  int str_lit_cache_n;
   LLVMValueRef func_print_value; // Helper: print_value(VMValue) with newline
   LLVMValueRef
       func_print_value_inline; // Helper: print_value_inline(VMValue) no newline

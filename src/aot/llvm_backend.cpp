@@ -957,6 +957,15 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_vm_alloc_string =
       LLVMAddFunction(backend->module, "vm_alloc_string_aot", alloc_str_type);
 
+  // aot_intern_string: ObjString* aot_intern_string(char*, i32)
+  // Dizgi SABİTLERİ için: bir kez ayrılır, kalıcıdır, yazma bariyeri
+  // kopyalamaz. Ölçüm ve gerekçe runtime_bindings.cpp'de.
+  LLVMTypeRef intern_params[] = {backend->string_type, backend->int32_type};
+  LLVMTypeRef intern_type = LLVMFunctionType(
+      LLVMPointerType(backend->obj_string_type, 0), intern_params, 2, 0);
+  backend->func_aot_intern_string =
+      LLVMAddFunction(backend->module, "aot_intern_string", intern_type);
+
   // print_value: void print_value(VMValue)
   // VMValue is passed by value (struct)
   // print_value: void print_value(VMValue*) - takes pointer for ABI
@@ -3206,20 +3215,59 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     return llvm_vm_val_void(backend);
 
   case AST_STRING_LITERAL: {
-    // Call runtime: vm_alloc_string(vm, "str", len)
-    // For now passing nullptr as VM context (dangerous but temp)
+    // SABİT BİR DİZGİ, HER TURDA YENİDEN AYRILMAZ.
+    //
+    // Eskiden burası her değerlendirmede `vm_alloc_string_aot` çağırıyordu:
+    // arena'dan yeni bir ObjString, GEÇİCİ işaretli. Kalıcı bir kaba
+    // konulduğunda yazma bariyeri onu ayrıca derin kopyalıyordu. Ölçüldü
+    // (2026-09-03): kalıcı diziye sabit literal push etmek 34.8 ns, tamsayı
+    // push etmek 4.5 ns sürüyordu; aradaki ~30 ns tamamen bu iki gereksiz iş.
+    //
+    // Artık site başına bir modül global'i tutuluyor ve ilk kullanımda
+    // `aot_intern_string` ile BİR KEZ dolduruluyor. Sıcak yol: bir yükleme +
+    // tahmini kolay bir dal. Dizgiler değişmez olduğu için paylaşım
+    // gözlemlenebilir bir fark yaratmıyor.
     LLVMValueRef const_str = LLVMBuildGlobalStringPtr(
         backend->builder, node->value.string_value, "str_lit");
     int len = strlen(node->value.string_value);
 
-    LLVMValueRef args[] = {LLVMConstNull(backend->ptr_type), // vm (nullptr)
-                           const_str,
-                           LLVMConstInt(backend->int32_type, len, 0)};
+    LLVMTypeRef strp_type = LLVMPointerType(backend->obj_string_type, 0);
+    char gname[64];
+    snprintf(gname, sizeof(gname), "tulpar_strlit_%d",
+             backend->str_lit_cache_n++);
+    LLVMValueRef cache = LLVMAddGlobal(backend->module, strp_type, gname);
+    LLVMSetInitializer(cache, LLVMConstNull(strp_type));
+    LLVMSetLinkage(cache, LLVMInternalLinkage);
 
-    LLVMValueRef str_obj = LLVMBuildCall2(
-        backend->builder, LLVMGlobalGetValueType(backend->func_vm_alloc_string),
-        backend->func_vm_alloc_string, args, 3, "alloc_str");
-    return llvm_build_vm_val_obj(backend, str_obj);
+    LLVMValueRef fn = LLVMGetBasicBlockParent(
+        LLVMGetInsertBlock(backend->builder));
+    LLVMBasicBlockRef entry_bb = LLVMGetInsertBlock(backend->builder);
+    LLVMBasicBlockRef init_bb = LLVMAppendBasicBlock(fn, "strlit.init");
+    LLVMBasicBlockRef done_bb = LLVMAppendBasicBlock(fn, "strlit.done");
+
+    LLVMValueRef cached =
+        LLVMBuildLoad2(backend->builder, strp_type, cache, "strlit.cached");
+    LLVMValueRef is_null = LLVMBuildICmp(
+        backend->builder, LLVMIntEQ, cached, LLVMConstNull(strp_type),
+        "strlit.isnull");
+    LLVMBuildCondBr(backend->builder, is_null, init_bb, done_bb);
+
+    LLVMPositionBuilderAtEnd(backend->builder, init_bb);
+    LLVMValueRef iargs[] = {const_str,
+                            LLVMConstInt(backend->int32_type, len, 0)};
+    LLVMValueRef fresh = LLVMBuildCall2(
+        backend->builder,
+        LLVMGlobalGetValueType(backend->func_aot_intern_string),
+        backend->func_aot_intern_string, iargs, 2, "strlit.new");
+    LLVMBuildStore(backend->builder, fresh, cache);
+    LLVMBuildBr(backend->builder, done_bb);
+
+    LLVMPositionBuilderAtEnd(backend->builder, done_bb);
+    LLVMValueRef phi = LLVMBuildPhi(backend->builder, strp_type, "strlit");
+    LLVMValueRef inc[] = {cached, fresh};
+    LLVMBasicBlockRef inb[] = {entry_bb, init_bb};
+    LLVMAddIncoming(phi, inc, inb, 2);
+    return llvm_build_vm_val_obj(backend, phi);
   }
 
   case AST_ARRAY_LITERAL: {

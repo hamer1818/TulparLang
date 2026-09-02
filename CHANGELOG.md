@@ -9,6 +9,39 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Performance — dizgi sabitleri bir kez ayrılıyor (interning)
+
+Her `AST_STRING_LITERAL` **değerlendirmesi** yeni bir `ObjString` ayırıyordu —
+arena'dan, yani GEÇİCİ işaretli. Kalıcı bir kaba konulduğunda yazma bariyeri
+(`wb_persist_escape`) onu ayrıca **derin kopyalıyordu**. Bir derleme zamanı
+sabiti için iki gereksiz iş; ölçüldü:
+
+| İşlem | Önce | Sonra |
+|---|---|---|
+| `push(dizi, "sabit")` × 4M | 140,3 ms | **20,8 ms** |
+| `push(dizi, int)` × 4M (referans) | 18,9 ms | 19,9 ms |
+
+Sabit dizgi push'u artık tamsayı push'uyla aynı sınıfta. Codegen artık site
+başına bir modül global'i tutuyor ve ilk kullanımda `aot_intern_string` ile
+BİR KEZ dolduruyor; sıcak yol bir yükleme + tahmini kolay bir dal. Ayrılan
+dizgi **kalıcı** (arena değil), böylece bariyer erken çıkıyor.
+
+Güvenlik: dizgiler **değişmez** — kaynakta `ObjString::chars`'ı yerinde yazan
+tek bir yer yok, dolayısıyla paylaşmak gözlemlenebilir bir fark yaratmıyor.
+İnternlenen dizgiler bilerek ölümsüz (sayıları derleme zamanında sınırlı);
+`ref_count` sentinel bir değerle başlıyor, çünkü AOT yolu bugün `arc_release`i
+hiç çağırmasa da ileride biri çağırırsa serbest bırakılmamalılar.
+
+Adil kıyaslama takımındaki etkisi (`benchmarks/fair/`):
+
+| | Önce | Sonra |
+|---|---|---|
+| `strcat` 2M | 233,5 ms | **167,2 ms** — Python'un (199,3) önüne geçti |
+| `fib(32)` | 5,8 ms | **4,3 ms** |
+| `sieve` 5M | 60,4 ms | **56,1 ms** |
+| `intloop` 50M | 135,2 ms | 135,1 ms (değişmedi, beklendiği gibi) |
+
+
 ## [v3.13.1] — 2026-09-02
 
 **Yama sürümü: macOS'ta AOT derleme çalışmıyordu, ve TameEngine indirilemiyordu.**

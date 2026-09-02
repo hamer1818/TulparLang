@@ -828,6 +828,47 @@ ObjString *vm_alloc_string_aot(void *vm, const char *chars, int length) {
   return aot_allocate_string(chars, length);
 }
 
+// DİZGİ SABİTİNİ BİR KEZ AYIR (interning).
+//
+// Eskiden her `AST_STRING_LITERAL` DEĞERLENDİRMESİ yeni bir ObjString
+// ayırıyordu — arena'dan, yani GEÇİCİ işaretli. Sonucu ölçüldü
+// (2026-09-03): kalıcı bir diziye sabit bir literal push etmek **34.8 ns**
+// sürüyordu, bir tamsayı push etmek 4.5 ns. Aradaki ~30 ns iki yerden
+// geliyordu: her turda yeni ayırma, ve yazma bariyerinin (wb_persist_escape)
+// geçici olduğu için her birini KALICIYA DERİN KOPYALAMASI. Bir derleme
+// zamanı sabiti için ikisi de gereksiz iş.
+//
+// Burada ayrılan dizgi KALICI (arena değil, malloc): `obj_is_transient`
+// false döner, yani bariyer erken çıkar ve kopya hiç yapılmaz. Dizgiler
+// DEĞİŞMEZ (kaynakta ObjString::chars'ı yerinde yazan tek bir yer yok),
+// dolayısıyla paylaşmak gözlemlenebilir bir fark yaratmıyor.
+//
+// ÖMÜR: bilerek ölümsüz. Sayı derleme zamanında sınırlı (kaynaktaki farklı
+// literal sayısı) ve program boyunca yaşamaları gerekiyor. ref_count sentinel
+// bir değerle başlıyor: AOT yolu bugün `arc_release`i HİÇ çağırmıyor
+// (ölçüldü: llvm_backend.cpp ve runtime_bindings.cpp'de sıfır çağrı), ama
+// ileride biri çağırırsa sayaç sıfıra inip serbest bırakılmasın diye.
+ObjString *aot_intern_string(const char *chars, int length) {
+  if (!chars) return nullptr;
+  size_t total = sizeof(ObjString) + (size_t)length + 1;
+  char *block = static_cast<char *>(malloc(total));
+  if (!block) return nullptr;
+
+  ObjString *str = (ObjString *)block;
+  str->obj.type = OBJ_STRING;
+  str->obj.arena_allocated = 0;   // KALICI: bariyer bunu kopyalamaz
+  str->obj.next = nullptr;
+  str->obj.ref_count = 1 << 28;   // ölümsüz (yukarıdaki ÖMÜR notu)
+  str->obj.is_moved = 0;
+  str->length = length;
+  str->capacity = length + 1;
+  str->chars = block + sizeof(ObjString);
+  memcpy(str->chars, chars, (size_t)length);
+  str->chars[length] = '\0';
+  str->hash = 0;
+  return str;
+}
+
 // persist(value) -> value
 //
 // Deep-copies a value into permanent (malloc'd, ARC-managed) storage that
