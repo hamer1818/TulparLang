@@ -9,6 +9,23 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+## [v3.13.1] — 2026-09-02
+
+**Yama sürümü: macOS'ta AOT derleme çalışmıyordu, ve TameEngine indirilemiyordu.**
+
+v3.13.0 iki eksikle çıktı ve ikisi de aynı kör noktadan geldi — **macOS CI işi
+test koşmuyor**, yalnız derleyip artefakt yüklüyor:
+
+- macOS'ta `tulpar build` **hiçbir şeyi** derleyemiyordu (`ld: library 'ssl'
+  not found`). Yayınlanan `tulpar-macos-universal` ile bir program üretmek
+  mümkün değildi ve AOT link yolu o platformda bir kez bile denenmemişti.
+- 3B sahne editörü **TameEngine** yayında yoktu: bir Tulpar programı olduğu
+  için derleyiciyi indiren onu kendisi derlemek zorundaydı.
+
+İkincisini düzeltirken birincisi ortaya çıktı — paketleme adımı macOS'ta ilk
+kez bir `tulpar build` çağırdığı için.
+
+
 ### Fixed — macOS'ta `tulpar build` HİÇBİR ŞEYİ derleyemiyordu (`library 'ssl' not found`)
 
 CMake OpenSSL'i bulunca AOT link satırına `-lssl -lcrypto` giriyor ama **`-L`
@@ -4295,7 +4312,8 @@ Backwards-compatible features on top of v3.2.1. No breaking changes.
   coercion at typed local var declarations; wired 8 utility builtins (arena,
   cpu/time, input, `string_pin`).
 
-[Unreleased]: https://github.com/hamer1818/TulparLang/compare/v3.13.0...HEAD
+[Unreleased]: https://github.com/hamer1818/TulparLang/compare/v3.13.1...HEAD
+[v3.13.1]: https://github.com/hamer1818/TulparLang/compare/v3.13.0...v3.13.1
 [v3.13.0]: https://github.com/hamer1818/TulparLang/compare/v3.12.0...v3.13.0
 [v3.12.0]: https://github.com/hamer1818/TulparLang/compare/v3.11.0...v3.12.0
 [v3.11.0]: https://github.com/hamer1818/TulparLang/compare/v3.10.0...v3.11.0
