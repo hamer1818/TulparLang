@@ -7,6 +7,25 @@ tags: [moc, adr, decisions]
 ## AOT-only — VM yok (2026-06-15)
 Tulpar C/Rust/Go modeli: **tek AOT/LLVM yürütme yolu**. Bytecode VM interpreter + REPL **kaldırıldı, geri getirme**. `tulpar foo.tpr` AOT derler+çalıştırır, fallback yok (AOT hatası = hard error). `--vm`/`--run` yok sayılır (uyarı); `--repl`/`-i` kaldırma notu basıp çıkar. Yeni özellik yalnız AOT yolunda. Kaldırılan: `compiler.cpp`, `vm_run`, `run_repl`. → [[Runtime]] · [[Architecture]]
 
+## main dal koruması — üç ayar, üçü de BİLİNÇLİ (2026-09-02)
+Denetlenirken "boşluk" gibi görünen iki şey var; ikisi de tercih:
+
+| Ayar | Durum | Gerekçe |
+|---|---|---|
+| `required_status_checks.strict` | **AÇIK** | Zorunlu. Kapalıyken PR *eski* main'e karşı yeşile dönüyordu ve main-push'taki artefakt yeniden kullanımı birleşmiş sonucu hiç sınamıyordu → main'in gerçek hâli test edilmemiş kalıyordu. Açıkken squash sonrası main'in ağacı PR'ın ağacına eşit olur, yani reuse *geçerli* hâle gelir. |
+| `required_pull_request_reviews` | **YOK** | Tek bakımcılı depo; kendi kendini onaylatmanın bilgi değeri yok, yalnız sürtünme katar. Kapı denetimler: iki derleme işi + 59 paket + 129 örnek + denetimler. |
+| `enforce_admins` | **KAPALI** | Bakımcı gerektiğinde koruma dışına çıkabilsin (acil düzeltme, yanlış giden bir sürüm). Bilinçli ayrıcalık. |
+
+**Yabancı biri bunlardan yararlanamıyor** — ölçüldü: auto-merge yalnız depo
+İÇİNDEKİ dallara çalışıyor (`head.repo.full_name == github.repository`), fork
+PR'ları atlanıyor; GitHub zaten fork tetiklemeli akışlardan sırları siliyor;
+yazma yetkisi tek kişide; ve hiçbir akış `pull_request_target` kullanmıyor
+(fork'tan gelen kodu ayrıcalıklı bağlamda koşturan klasik sızıntı vektörü).
+
+**Yani gevşeklik yalnız BAKIMCININ kendisine karşı, ve bu istenen şey.** Bunu
+"eksik" sanıp kapatma; kapatılacaksa sebebi bu tablonun değişmesi olmalı.
+→ [[Build System]]
+
 ## Varsayılan port 8484
 `serve()` portsuz → **8484**. Hikaye: ASCII 'T' = 84 = binary `01010100` ("tulpar"ın T'si). Doluysa otomatik +1; açık port doluysa kullanıcı bilgilendirilir. Reklam/marka değeri. → [[Wings]]
 

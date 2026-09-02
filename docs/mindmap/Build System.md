@@ -88,19 +88,23 @@ yeşil olup birleşince main'i bozabilir (biri bir fonksiyonu siler, öteki onu
 `Build with LLVM`, `Run tests`, `Run tests/*.test.tpr suites`,
 `AOT end-to-end smoke`, `Package TameEngine` — hepsi **skipped**.
 
-**Çözüm `strict`i açmak.** Açıkken dal main'i içeriyor demektir; squash sonrası
-main'in ağacı PR'ın ağacına EŞİT olur, yani yeniden kullanma *güvenilir* hâle
-gelir. Yani reuse iyileştirmesi zaten `strict`i varsayıyordu — o varsayım
-yazılı değildi ve tutmuyordu.
+**✅ ÇÖZÜLDÜ (2026-09-02): `strict` açıldı.** Açıkken dal main'i içeriyor
+demektir; squash sonrası main'in ağacı PR'ın ağacına EŞİT olur, yani yeniden
+kullanma *güvenilir* hâle gelir. Reuse iyileştirmesi zaten `strict`i
+varsayıyordu — o varsayım yazılı değildi ve tutmuyordu; artık ikisi de doğru.
 
-```bash
-gh api -X PATCH repos/<sahip>/<depo>/branches/main/protection/required_status_checks \
-  --input - <<< '{"strict":true,"contexts":["build-linux","build-macos"]}'
-```
+Doğrulandı, ayarın açık görünmesiyle yetinilmedi: main'in bir öncekine dayalı
+bir deneme PR'ı GitHub tarafından `BEHIND` işaretlendi ve merge **reddedildi**
+(*"the head branch is not up to date with the base branch"*), main kımıldamadı.
+Deneme PR'ı yalnız-belge seçildi ki `detect-docs-only` derlemeleri atlasın.
 
-Alternatif (strict istenmiyorsa): main-push işinde yeniden kullanmayı kapat ve
-testleri gerçekten koştur — önleme yerine tespit, merge başına ~20 dk.
-**İkisinden biri olmalı; hiçbiri olmazsa main sınanmamış demektir.**
+> `strict`i kapatan, aynı anda main-push işindeki artefakt yeniden kullanımını
+> da kapatmalı (testleri gerçekten koştursun) — yoksa yukarıdaki delik geri
+> açılır. İkisinden biri olmalı.
+
+Öteki iki koruma ayarı (inceleme zorunluluğu yok, `enforce_admins` kapalı)
+**bilinçli tercih** — gerekçe ve yabancı birinin bunlardan yararlanamadığının
+ölçümü: [[Decisions]].
 
 ## CI
 `.github/workflows/build.yml` — Ubuntu + macOS. Test adımlarını **yalnız Linux işi**
