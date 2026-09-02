@@ -261,6 +261,17 @@ if [ "$ACTION" = "suites" ]; then
         fi
     fi
 
+    # UÇTAN UCA AOT DUMANI: derleyici gerçekten program üretebiliyor mu?
+    # "İkili oluştu" ile "ikili çalışıyor" ayrı iddialar; ikincisi macOS'ta
+    # uzun süre hiç ölçülmedi ve yayınlanan macOS ikilisiyle hiçbir program
+    # derlenemediği aylarca fark edilmedi. ~10 sn, grafiksiz.
+    if [ -x tests/aot_smoke.sh ]; then
+        if ! bash tests/aot_smoke.sh ./tulpar; then
+            echo -e "${RED}AOT dumani basarisiz!${NC}"
+            exit 1
+        fi
+    fi
+
     # ANDROID DERLEME DENETİMİ. Arşiv sembolleri tamam olsa bile derleme yolu
     # (manifest yazımı, PIC reloc, link bayrakları, NDK bulma) kırık olabilir
     # ve bunu hiçbir şey denetlemiyordu: hedef "Temmuz'da emülatörde
