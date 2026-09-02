@@ -1,8 +1,8 @@
 int n = toInt(env("BENCH_N"));
 if (n <= 0) { n = 5000000; }
-array f = [];
-int j = 0;
-while (j <= n) { push(f, 0); j = j + 1; }
+// Oteki dillerin hepsi diziyi TEK CAGRIDA ayiriyor (vec![0;n],
+// make([]int32,n), [0]*n, new Int32Array(n)); Tulpar'da da karsiligi var.
+array f = array_fill(n + 1, 0);
 int c = 0;
 int i = 2;
 while (i <= n) {

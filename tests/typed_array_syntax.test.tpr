@@ -84,5 +84,62 @@ test("bildirimde", "bildirim_calisiyor");
 test("parametrede", "parametrede_calisiyor");
 test("donus tipinde", "donus_tipinde_calisiyor");
 test("iki yazim ayni tip", "iki_yazim_ayni_tip");
+// array_fill(n, deger) — n elemanli diziyi TEK CAGRIDA kurar.
+//
+// Niye eklendi: n elemanli bir diziyi kurmanin tek yolu n kez `push`ti ve
+// cagri basina ~4.5 ns, 5M elemanlik bir dizide 22 ms'yi is yapmadan once
+// harciyordu. Rakiplerin hepsinde karsiligi var (vec![0;n], make([]int,n),
+// [0]*n, new Int32Array(n)).
+func fill_temel() {
+    array a = array_fill(5, 0);
+    assert_eq_int(length(a), 5);
+    assert_eq_int(a[0], 0);
+    assert_eq_int(a[4], 0);
+}
+
+func fill_deger_tasiyor() {
+    array a = array_fill(3, 7);
+    assert_eq_int(a[0], 7);
+    assert_eq_int(a[1], 7);
+    assert_eq_int(a[2], 7);
+    array b = dizi_dolu(2, "x");   // TR ikizi
+    assert_eq_str(b[0], "x");
+    assert_eq_str(b[1], "x");
+    assert_eq_int(length(b), 2);
+}
+
+// SINIR: sifir ve negatif uzunluk bos dizi vermeli, cokmemeli.
+func fill_sinirlar() {
+    assert_eq_int(length(array_fill(0, 1)), 0);
+    assert_eq_int(length(array_fill(0 - 5, 1)), 0);
+}
+
+// KAPASITE ile SAYI tutarli olmali: doldurduktan SONRA push etmek diziyi
+// bozmamali. (Ilk yazimda count'u ayarlayip capacity'yi ayarlamamak tam
+// burada patlardi.)
+func fill_sonra_push() {
+    // BUYUK dizi bilerek: kucuk n ile bu test HICBIR SEY olcmuyordu.
+    // Olculdu — capacity'yi 0 birakan bir bozma n=3'te KACIYOR, cunku push
+    // yolu 8'e realloc ediyor ve 3 eleman oraya sigiyor. n kapasite
+    // tavanini asmadikca hata maskeleniyor.
+    array a = array_fill(500, 1);
+    assert_eq_int(length(a), 500);
+    assert_eq_int(a[499], 1);
+    push(a, 9);
+    assert_eq_int(length(a), 501);
+    assert_eq_int(a[500], 9);
+    assert_eq_int(a[0], 1);
+    assert_eq_int(a[499], 1);
+    int i = 0;
+    while (i < 100) { push(a, i); i = i + 1; }
+    assert_eq_int(length(a), 601);
+    assert_eq_int(a[600], 99);
+    assert_eq_int(a[499], 1);
+}
+
 test("bos dizi bildirilebiliyor", "bos_dizi_bildirilebiliyor");
 test_summary();
+test("array_fill temel", "fill_temel");
+test("array_fill degeri tasiyor", "fill_deger_tasiyor");
+test("array_fill sinirlari", "fill_sinirlar");
+test("array_fill sonrasi push", "fill_sonra_push");

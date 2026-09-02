@@ -36,6 +36,8 @@ const BuiltinEntry kBuiltins[] = {
     {"isAlpha",      "isAlpha(s: str): bool",                       "Tüm karakterler harf mi?"},
     {"replace",      "replace(s: str, old: str, new: str): str",    "Tüm `old` geçişlerini `new` ile değiştirir."},
     {"split",        "split(s: str, sep: str): array<str>",         "Ayraç üzerinden böler."},
+    {"array_fill",   "array_fill(n: int, deger): array",            "n elemanlı, hepsi `deger` olan dizi — tek çağrıda."},
+    {"dizi_dolu",    "dizi_dolu(n: int, deger): array",             "n elemanlı, hepsi `deger` olan dizi — tek çağrıda."},
     {"substring",    "substring(s: str, start: int, end: int): str", "[start, end) aralığını döner."},
     {"ord",          "ord(s: str, i: int): int",                    "s'nin i. byte'ının işaretsiz değeri (0-255); i aralık dışıysa -1. String'ler UTF-8 byte dizisi olduğundan (length/substring byte-tabanlı) elle UTF-8 işleme için — örn. tam bir çok-byte kod noktasını silmek (0x80-0xBF devam byte'larını geri sayarak)."},
     {"chr",            "chr(c: int): str",                                "Bayt kodundan tek karakterlik dize (ord'un tersi). 0-255 disi bos dize."},

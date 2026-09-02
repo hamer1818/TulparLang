@@ -1416,6 +1416,13 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_split =
       LLVMAddFunction(backend->module, "aot_split_ptr", split_type);
 
+  // aot_array_fill_ptr(VMValue* n, VMValue* deger) -> VMValue (dizi)
+  LLVMTypeRef fill_params[] = {backend->ptr_type, backend->ptr_type};
+  LLVMTypeRef fill_type =
+      llvm_make_vmvalue_func_type(backend, fill_params, 2, 0);
+  backend->func_aot_array_fill =
+      LLVMAddFunction(backend->module, "aot_array_fill_ptr", fill_type);
+
   // aot_array_slice_ptr(VMValue* arr, i64 start) -> VMValue (match `..rest`)
   LLVMTypeRef slice_params[] = {backend->ptr_type, backend->int_type};
   LLVMTypeRef slice_type =
@@ -5017,6 +5024,27 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           backend->builder, del_ptr, backend->ptr_type, "split_del_void");
       LLVMValueRef args[] = {str_void, del_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_split, args, 2, "split_res");
+    }
+
+    // array_fill(n, deger) / dizi_dolu(n, deger) -> n elemanli dizi
+    if (node->name && node->argument_count >= 2 &&
+        (strcmp(node->name, "array_fill") == 0 ||
+         strcmp(node->name, "dizi_dolu") == 0)) {
+      LLVMValueRef cnt = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef val = codegen_expression(backend, node->arguments[1]);
+      LLVMValueRef cnt_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "fill_n_ptr");
+      LLVMBuildStore(backend->builder, cnt, cnt_ptr);
+      LLVMValueRef val_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "fill_v_ptr");
+      LLVMBuildStore(backend->builder, val, val_ptr);
+      LLVMValueRef cnt_void = LLVMBuildBitCast(
+          backend->builder, cnt_ptr, backend->ptr_type, "fill_n_void");
+      LLVMValueRef val_void = LLVMBuildBitCast(
+          backend->builder, val_ptr, backend->ptr_type, "fill_v_void");
+      LLVMValueRef args[] = {cnt_void, val_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_array_fill,
+                                    args, 2, "fill_res");
     }
 
     // parse_multipart(body, content_type) -> {fields, files}

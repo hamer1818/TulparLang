@@ -1010,6 +1010,10 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"sleep_async", TYPE_JSON, {TYPE_INT}},
       // String utils
       {"split", TYPE_ARRAY_STR, {TYPE_STRING, TYPE_STRING}},
+      // array_fill(n, deger): n elemanli dizi. Eleman tipi degere bagli
+      // oldugu icin genel `array` donuyor.
+      {"array_fill", TYPE_ARRAY, {TYPE_INT, TYPE_UNKNOWN}},
+      {"dizi_dolu", TYPE_ARRAY, {TYPE_INT, TYPE_UNKNOWN}},
       {"replace", TYPE_STRING, {TYPE_STRING, TYPE_STRING, TYPE_STRING}},
       {"substring", TYPE_STRING, {TYPE_STRING, TYPE_INT, TYPE_INT}},
       {"ord", TYPE_INT, {TYPE_STRING, TYPE_INT}},

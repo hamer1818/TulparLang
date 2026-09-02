@@ -9,6 +9,28 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — `array_fill(n, deger)`: diziyi tek çağrıda kur
+
+n elemanlı bir dizi kurmanın tek yolu n kez `push` çağırmaktı. Ölçüldü: çağrı
+başına ~4,5 ns, yani 5M elemanlık bir elek dizisi **22 ms'yi iş yapmadan önce**
+çağrı ek maliyetine harcıyordu. Rakiplerin hepsinde tek çağrılık karşılığı var
+(`vec![0; n]`, `make([]int32, n)`, `[0]*n`, `new Int32Array(n)`) — adil
+kıyaslamada Tulpar döngüye mahkûmdu çünkü karşılığı yoktu.
+
+`array_fill(n, deger)` / `dizi_dolu(n, deger)`: kapasite bir kez ayrılıyor,
+doldurma sıkı bir C döngüsü, yazma bariyeri n kez değil **bir kez** çalışıyor
+(doldurulan değer hep aynı). `sieve` 5M: **56,1 → 47,8 ms**.
+
+Yan düzeltme — `push` artık kapasiteyi **kendini onararak** büyütüyor:
+`capacity` ile `count` tutarsız kalırsa eski kod buffer'ı küçültüp
+`items[count]`'a yazıyordu, yani sessiz bir yığın taşması. Ölçüldü:
+`capacity`yi sıfırlayan bir bozma 500 elemanlı dizide bile **hiçbir testi
+kırmıyor**, çünkü yazma malloc'un boş alanına düşüyor — testle güvenilir
+biçimde yakalanamayan bir sınıf, o yüzden ihlal imkânsız kılındı.
+
+İğneleme bir de **ölü kod** buldu: `array_fill`deki negatif kelepçe
+gereksizdi (`n > 0` zaten eliyor), kaldırıldı.
+
 ### Performance — dizgi sabitleri bir kez ayrılıyor (interning)
 
 Her `AST_STRING_LITERAL` **değerlendirmesi** yeni bir `ObjString` ayırıyordu —

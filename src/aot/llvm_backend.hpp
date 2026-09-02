@@ -253,6 +253,7 @@ typedef struct {
   LLVMValueRef func_aot_trim;
   LLVMValueRef func_aot_replace;
   LLVMValueRef func_aot_split;
+  LLVMValueRef func_aot_array_fill;
   LLVMValueRef func_aot_array_slice; // (VMValue* arr, i64 start) -> VMValue
 
   LLVMValueRef func_aot_read_file;
