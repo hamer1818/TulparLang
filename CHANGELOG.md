@@ -9,6 +9,33 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Added — TameEngine artık RELEASE'te indirilebilir
+
+Editör bir Tulpar programı olduğu için pratikte **yayınlanmış değildi**:
+derleyiciyi indiren biri onu kendisi derlemek zorundaydı. Artık her sürüme
+`TameEngine-linux-x64.tar.gz` ve `TameEngine-macos-universal.tar.gz` olarak
+giriyor — derleyici gerekmiyor, kurulum yok.
+
+**Çıplak ikili neden yetmiyor:** editörün doku/ses/model gezginleri yolları
+ÇALIŞMA DİZİNİNE göre globluyor (`examples/assets/dokular/*.png`,
+`.../sesler/*.wav`, `varliklar/*.glb`) ve şablonlar aynı yolları kullanıyor.
+Tek başına indirilen bir ikili açılır ama o listeler BOŞ çıkar ve şablonlar
+dokusuz kurulur. Paket düzeni koruyor; OKUBENI kullanıcıya klasörün içinden
+çalıştırmasını söylüyor. İçinde doku/ses/model paletleri ve üç örnek sahne var.
+
+`tools/package_tameengine.sh` **kendi çıktısını denetliyor**: paletler dolu mu,
+derleme artığı (`.o`/`.ll`) sızmış mı, ve Linux'ta ikili gerçekten penceresiz
+açılıp zarifçe çıkıyor mu. Denetim düşerse paket ÜRETİLMİYOR — bozuk paket
+kullanıcının eline geçmesin. (İlk denemede `TameEngine.o` sızmıştı; denetim
+iğnelemeyle doğrulandı.) Paketleme **her koşumda** çalışıyor, yalnız
+etiketlerde değil: yayın yolunun tek kez ve en kötü anda sınanması bu depoda
+defalarca pahalıya patladı.
+
+Yol boyunca `RELEASING.md`'nin varlık tablosu da düzeltildi — hâlâ 3.13.0'da
+silinmiş Windows varlıklarını (`tulpar-windows-x64.exe`, Inno Setup
+installer, MinGW DLL'leri) ve onların `objdump` denetimini listeliyordu.
+
+
 ## [v3.13.0] — 2026-09-01
 
 **Tulpar bir oyun motoru ve görsel editör kazandı.** Bu sürüm iki büyük işi

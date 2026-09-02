@@ -180,15 +180,23 @@ jobs:
           dl_a=$?
           gh run download "$run_id" -n libtulpar_runtime-linux-x64 -D _pr-artifacts
           dl_b=$?
-          if [ $dl_a -ne 0 ] || [ $dl_b -ne 0 ]; then
-            echo "Artifact download failed (codes $dl_a,$dl_b) — falling back to fresh build."
+          # TameEngine paketi de yeniden kullanılıyor. Getirilmezse "Upload
+          # TameEngine bundle" adımı boşa düşerdi: paketleme adımı reuse
+          # yolunda ATLANIYOR, yani dosya yerelde hiç üretilmiyor.
+          gh run download "$run_id" -n TameEngine-linux-x64        -D _pr-artifacts
+          dl_c=$?
+          if [ $dl_a -ne 0 ] || [ $dl_b -ne 0 ] || [ $dl_c -ne 0 ]; then
+            echo "Artifact download failed (codes $dl_a,$dl_b,$dl_c) — falling back to fresh build."
             echo "reused=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           cp _pr-artifacts/tulpar-linux-x64           dist/tulpar-linux-x64 2>/dev/null || \
             cp _pr-artifacts/tulpar-linux-x64/tulpar-linux-x64 dist/tulpar-linux-x64
           cp _pr-artifacts/libtulpar_runtime-linux-x64.a dist/libtulpar_runtime-linux-x64.a 2>/dev/null || \
             cp _pr-artifacts/libtulpar_runtime-linux-x64/libtulpar_runtime-linux-x64.a dist/libtulpar_runtime-linux-x64.a
-          if [ ! -f dist/tulpar-linux-x64 ] || [ ! -f dist/libtulpar_runtime-linux-x64.a ]; then
+          cp _pr-artifacts/TameEngine-linux-x64.tar.gz dist/TameEngine-linux-x64.tar.gz 2>/dev/null || \
+            cp _pr-artifacts/TameEngine-linux-x64/TameEngine-linux-x64.tar.gz dist/TameEngine-linux-x64.tar.gz
+          if [ ! -f dist/tulpar-linux-x64 ] || [ ! -f dist/libtulpar_runtime-linux-x64.a ] \
+             || [ ! -f dist/TameEngine-linux-x64.tar.gz ]; then
             echo "Artifact staging failed (file missing after copy) — falling back to fresh build."
             echo "reused=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
@@ -368,6 +376,34 @@ jobs:
           cp build/tulpar dist/tulpar-linux-x64
           cp build/libtulpar_runtime.a dist/libtulpar_runtime-linux-x64.a
 
+      # TameEngine (3B sahne editörü) İNDİRİLEBİLİR bir paket olarak.
+      # Editör bir Tulpar programı; derleyiciyi indiren biri onu kendisi
+      # derlemek zorundaydı, yani pratikte yayınlanmış değildi.
+      #
+      # Çıplak ikili YETMİYOR: editörün doku/ses/model gezginleri yolları
+      # ÇALIŞMA DİZİNİNE göre globluyor (`examples/assets/dokular/*.png`,
+      # `.../sesler/*.wav`, `varliklar/*.glb`) ve şablonlar aynı yolları
+      # kullanıyor — tek başına indirilen ikilide o listeler BOŞ çıkar ve
+      # şablonlar dokusuz kurulur. Betik o düzeni koruyarak paketliyor ve
+      # paketin KENDİSİNİ denetliyor (listeler dolu mu, derleme artığı
+      # sızmış mı, ikili gerçekten açılıyor mu).
+      #
+      # Her koşumda çalışıyor, yalnız etiketlerde değil: yayın yolunun tek
+      # kez ve en kötü anda sınanması bu depoda defalarca pahalıya patladı.
+      - name: Package TameEngine
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        run: |
+          cp build/tulpar tulpar && chmod +x tulpar
+          bash tools/package_tameengine.sh linux-x64 dist
+        timeout-minutes: 15
+
+      - name: Upload TameEngine bundle
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: TameEngine-linux-x64
+          path: dist/TameEngine-linux-x64.tar.gz
+
       # Upload runs unconditionally — `dist/tulpar-linux-x64` was
       # placed there either by the reuse step (downloaded from PR run)
       # or by Prepare artifact (copied from build/).
@@ -439,15 +475,21 @@ jobs:
           dl_a=$?
           gh run download "$run_id" -n libtulpar_runtime-macos-universal -D _pr-artifacts
           dl_b=$?
-          if [ $dl_a -ne 0 ] || [ $dl_b -ne 0 ]; then
-            echo "Artifact download failed (codes $dl_a,$dl_b) — falling back to fresh build."
+          # TameEngine paketi — build-linux'taki aynı gerekçe.
+          gh run download "$run_id" -n TameEngine-macos-universal        -D _pr-artifacts
+          dl_c=$?
+          if [ $dl_a -ne 0 ] || [ $dl_b -ne 0 ] || [ $dl_c -ne 0 ]; then
+            echo "Artifact download failed (codes $dl_a,$dl_b,$dl_c) — falling back to fresh build."
             echo "reused=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           cp _pr-artifacts/tulpar-macos-universal           dist/tulpar-macos-universal 2>/dev/null || \
             cp _pr-artifacts/tulpar-macos-universal/tulpar-macos-universal dist/tulpar-macos-universal
           cp _pr-artifacts/libtulpar_runtime-macos-universal.a dist/libtulpar_runtime-macos-universal.a 2>/dev/null || \
             cp _pr-artifacts/libtulpar_runtime-macos-universal/libtulpar_runtime-macos-universal.a dist/libtulpar_runtime-macos-universal.a
-          if [ ! -f dist/tulpar-macos-universal ] || [ ! -f dist/libtulpar_runtime-macos-universal.a ]; then
+          cp _pr-artifacts/TameEngine-macos-universal.tar.gz dist/TameEngine-macos-universal.tar.gz 2>/dev/null || \
+            cp _pr-artifacts/TameEngine-macos-universal/TameEngine-macos-universal.tar.gz dist/TameEngine-macos-universal.tar.gz
+          if [ ! -f dist/tulpar-macos-universal ] || [ ! -f dist/libtulpar_runtime-macos-universal.a ] \
+             || [ ! -f dist/TameEngine-macos-universal.tar.gz ]; then
             echo "Artifact staging failed (file missing after copy) — falling back to fresh build."
             echo "reused=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
@@ -531,6 +573,23 @@ jobs:
           cp build/tulpar dist/tulpar-macos-universal
           cp build/libtulpar_runtime.a dist/libtulpar_runtime-macos-universal.a
 
+      # TameEngine paketi — gerekçe build-linux'taki notta. macOS'ta betik
+      # BAŞLATMA DUMANINI atlıyor: orada DISPLAY yok, pencere açma denemesi
+      # başsız koşucuda asılabilir.
+      - name: Package TameEngine
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        run: |
+          cp build/tulpar tulpar && chmod +x tulpar
+          bash tools/package_tameengine.sh macos-universal dist
+        timeout-minutes: 15
+
+      - name: Upload TameEngine bundle
+        if: needs.detect-docs-only.outputs.docs_only != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: TameEngine-macos-universal
+          path: dist/TameEngine-macos-universal.tar.gz
+
       - name: Upload artifact
         if: needs.detect-docs-only.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v7
@@ -566,7 +625,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
-          pattern: '{tulpar-*,libtulpar_runtime-*}'
+          pattern: '{tulpar-*,libtulpar_runtime-*,TameEngine-*}'
           merge-multiple: true
 
       - name: Compute release tag
@@ -601,7 +660,9 @@ jobs:
               tulpar-linux-x64 \
               tulpar-macos-universal \
               libtulpar_runtime-linux-x64.a \
-              libtulpar_runtime-macos-universal.a; do
+              libtulpar_runtime-macos-universal.a \
+              TameEngine-linux-x64.tar.gz \
+              TameEngine-macos-universal.tar.gz; do
             if [ ! -f "$f" ]; then
               echo "ERROR: expected release artifact missing: $f" >&2
               exit 1
@@ -663,6 +724,19 @@ jobs:
             - `tulpar-linux-x64` - Linux executable
             - `tulpar-macos-universal` - macOS executable
 
+            **TameEngine — 3D scene editor** (standalone, no install; the compiler is *not* required to run it):
+            - `TameEngine-linux-x64.tar.gz`
+            - `TameEngine-macos-universal.tar.gz`
+
+            Unpack and run **from inside the folder** — the editor's texture / sound / model browsers look for their files relative to the working directory:
+            ```bash
+            tar -xzf TameEngine-linux-x64.tar.gz
+            cd TameEngine-linux-x64
+            ./TameEngine                                   # empty scene
+            ./TameEngine sahneler/toplayici.scene.json     # sample scene
+            ```
+            The bundle ships the texture / sound / model palettes and three sample scenes. Shortcuts are listed inside the editor (`H`). Docs: <https://tulparlang.dev/games/editor>
+
             **Runtime libraries** (required for `tulpar build` / AOT, automatically installed by the one-line installer):
             - `libtulpar_runtime-linux-x64.a`
             - `libtulpar_runtime-macos-universal.a`
@@ -692,6 +766,8 @@ jobs:
             tulpar-macos-universal
             libtulpar_runtime-linux-x64.a
             libtulpar_runtime-macos-universal.a
+            TameEngine-linux-x64.tar.gz
+            TameEngine-macos-universal.tar.gz
             SHA256SUMS.txt*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
