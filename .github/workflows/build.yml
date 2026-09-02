@@ -376,6 +376,23 @@ jobs:
           cp build/tulpar dist/tulpar-linux-x64
           cp build/libtulpar_runtime.a dist/libtulpar_runtime-linux-x64.a
 
+      # UÇTAN UCA AOT DUMANI. "tulpar ikilisi oluştu" ile "tulpar çalışıyor"
+      # ayrı iddialar ve macOS'ta ikincisi UZUN SÜRE hiç ölçülmedi: o iş yalnız
+      # derleyip artefakt yüklüyordu. Sonuç, 2026-09-02'de ölçüldü — yayınlanan
+      # `tulpar-macos-universal` ile HİÇBİR program derlenemiyordu
+      # (`ld: library 'ssl' not found`) ve bu aylarca fark edilmedi; ancak
+      # TameEngine paketleme adımı orada ilk kez bir `tulpar build` çağırınca
+      # ortaya çıktı. Yani bulunması tesadüftü.
+      #
+      # Bu adım o boşluğu kapatıyor: derle → linkle → ÇALIŞTIR → çıktıyı
+      # karşılaştır, artı doğrudan koşum yolu, stdlib (dosya + JSON) ve sürüm
+      # satırı. Grafiksiz ve ~10 saniye, yani her platformda koşabilir.
+      # Paketlemeden ÖNCE duruyor: bozuk bir derleyiciyi ucuz denetim söylesin.
+      - name: AOT end-to-end smoke
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        run: bash tests/aot_smoke.sh dist/tulpar-linux-x64
+        timeout-minutes: 5
+
       # TameEngine (3B sahne editörü) İNDİRİLEBİLİR bir paket olarak.
       # Editör bir Tulpar programı; derleyiciyi indiren biri onu kendisi
       # derlemek zorundaydı, yani pratikte yayınlanmış değildi.
@@ -572,6 +589,23 @@ jobs:
           mkdir -p dist
           cp build/tulpar dist/tulpar-macos-universal
           cp build/libtulpar_runtime.a dist/libtulpar_runtime-macos-universal.a
+
+      # UÇTAN UCA AOT DUMANI. "tulpar ikilisi oluştu" ile "tulpar çalışıyor"
+      # ayrı iddialar ve macOS'ta ikincisi UZUN SÜRE hiç ölçülmedi: o iş yalnız
+      # derleyip artefakt yüklüyordu. Sonuç, 2026-09-02'de ölçüldü — yayınlanan
+      # `tulpar-macos-universal` ile HİÇBİR program derlenemiyordu
+      # (`ld: library 'ssl' not found`) ve bu aylarca fark edilmedi; ancak
+      # TameEngine paketleme adımı orada ilk kez bir `tulpar build` çağırınca
+      # ortaya çıktı. Yani bulunması tesadüftü.
+      #
+      # Bu adım o boşluğu kapatıyor: derle → linkle → ÇALIŞTIR → çıktıyı
+      # karşılaştır, artı doğrudan koşum yolu, stdlib (dosya + JSON) ve sürüm
+      # satırı. Grafiksiz ve ~10 saniye, yani her platformda koşabilir.
+      # Paketlemeden ÖNCE duruyor: bozuk bir derleyiciyi ucuz denetim söylesin.
+      - name: AOT end-to-end smoke
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        run: bash tests/aot_smoke.sh dist/tulpar-macos-universal
+        timeout-minutes: 5
 
       # TameEngine paketi — gerekçe build-linux'taki notta. macOS'ta betik
       # BAŞLATMA DUMANINI atlıyor: orada DISPLAY yok, pencere açma denemesi
