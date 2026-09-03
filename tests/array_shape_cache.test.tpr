@@ -1,0 +1,93 @@
+import "test";
+
+// Dongu-degismezi DIZI SEKLI onbellegi — dogruluk paketi.
+//
+// Optimizasyon: dizinin idata/count'u dongu basinda bir kez okunup yerelde
+// tutuluyor (src/aot/llvm_array_shape.cpp + llvm_backend.cpp'deki
+// emit_shape_cache_for_loop). Yanlis yapilirsa sonuc SESSIZ bozulma olur,
+// o yuzden buradaki her test kasten bir varsayimi zorluyor.
+//
+// Enjeksiyonla dogrulandi (2026-09-03) — HANGI testin neyi yakaladigi:
+//   * tazeleme kaldirilinca  -> "kutuya donus onbellegi tazeler" kirmizi
+//   * cagri denetimi kaldirilinca -> "dongu icinde buyume" kirmizi (cop deger)
+//   * yeniden baglama denetimi kaldirilinca -> "dizi yeniden baglanirsa" kirmizi
+// "push onbellegi engeller" testi cagri denetimini TEK BASINA yakalamiyor
+// (indeksleri onbellek sinirinin disinda kaliyor, yavas yola dusuyor);
+// paketteki isi kapsam, yakalayan test buyume testi. Bu ayrimi yazmak sart:
+// yakalamayan bir teste guvenmek [[Tuzaklar#1]] tuzagi.
+
+// Onbellek, dongu icinde dizi KUTUYA DONERSE tazelenmeli. Tazelenmezse
+// sonraki yazma serbest birakilmis eski depoya gider ve dizinin gercek
+// icerigine hic islemez. Dongu DISINDA okuyarak yakaliyoruz — dongu icinde
+// okumak yetmez, cunku serbest bellek eski degerleri hala tasiyor.
+func run_kutuya_donus_tazeler() {
+    int[] a = array_fill(6, 3);
+    int i = 0;
+    while (i < 6) {
+        if (i == 2) { a[i] = 1.5; }   // kutuya doner, eski idata serbest
+        if (i == 4) { a[i] = 99; }    // donusten SONRAKI int yazimi
+        i = i + 1;
+    }
+    assert_eq_int(a[4], 99);
+    assert_eq_int(a[0], 3);
+}
+
+// Govdede fonksiyon cagrisi varsa onbellek ALINMAMALI: `push` count'u ve
+// idata'yi degistirir, bayat bir sekil sinir denetimini delerdi.
+func run_push_onbellegi_engeller() {
+    int[] e = array_fill(2, 4);
+    int k = 0;
+    int w = 0;
+    while (k < 6) {
+        e.push(k);
+        w = w + e[k];
+        k = k + 1;
+    }
+    assert_eq_int(w, 14);          // 4+4+0+1+2+3
+    assert_eq_int(len(e), 8);
+}
+
+// Dizinin KENDISI dongu icinde yeniden baglanirsa onbellek alinmamali.
+func run_yeniden_baglama() {
+    int[] c = array_fill(3, 1);
+    int[] d = array_fill(3, 9);
+    int j = 0;
+    int u = 0;
+    while (j < 3) {
+        if (j == 1) { c = d; }
+        u = u + c[j];
+        j = j + 1;
+    }
+    assert_eq_int(u, 19);          // 1 + 9 + 9
+}
+
+// Sinir disi erisim onbellekli yolda da yavas yola dusmeli (sessiz yok sayma).
+func run_sinir_disi() {
+    int[] b = array_fill(4, 7);
+    int i = 0;
+    while (i < 3) { b[i] = i; i = i + 1; }
+    assert_eq_int(b[0] + b[3], 0 + 7);
+    assert_eq_int(len(b), 4);
+}
+
+// Buyume dongu icinde: taban isaretci DEGISIR, onbellek bunu gormeli.
+// (push cagri oldugu icin onbellek zaten alinmiyor — bu testin isi, o
+// kuralin gercekten islediginden emin olmak.)
+func run_buyume() {
+    int[] a = array_fill(4, 1);
+    int i = 0;
+    int toplam = 0;
+    while (i < 200) {
+        a.push(i);
+        toplam = toplam + a[0] + a[len(a) - 1];
+        i = i + 1;
+    }
+    assert_eq_int(toplam, 20100);  // 200*1 + (0+..+199)
+}
+
+test("kutuya donus onbellegi tazeler", "run_kutuya_donus_tazeler");
+test("push onbellegi engeller", "run_push_onbellegi_engeller");
+test("dizi yeniden baglanirsa onbellek yok", "run_yeniden_baglama");
+test("sinir disi yavas yola duser", "run_sinir_disi");
+test("dongu icinde buyume", "run_buyume");
+test_summary();

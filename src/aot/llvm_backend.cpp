@@ -3210,6 +3210,134 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Dongu-degismezi dizi sekli onbellegi (bkz. src/aot/llvm_array_shape.cpp)
+// ---------------------------------------------------------------------------
+extern "C" int tulpar_loop_shape_stable(ASTNode_C *cond, ASTNode_C *body,
+                                        ASTNode_C *incr);
+extern "C" int tulpar_loop_rebinds_name(ASTNode_C *cond, ASTNode_C *body,
+                                        ASTNode_C *incr, const char *name);
+extern "C" int tulpar_collect_indexed_names(ASTNode_C *cond, ASTNode_C *body,
+                                            const char **out, int max);
+
+// `a[i]` dugumunde taban ya `name`de ya da `left`te duruyor — parser iki
+// bicimi de uretiyor (for-in seker acilimi `left` kullaniyor). Ikisine de
+// bakmayan bir arama sessizce hicbir seyi hizlandirmaz.
+static const char *array_base_name(ASTNode_C *n) {
+  if (!n) return nullptr;
+  if (n->name) return n->name;
+  if (n->left && n->left->type == AST_IDENTIFIER) return n->left->name;
+  return nullptr;
+}
+
+static LLVMBackend::ArrShapeEntry *shape_lookup(LLVMBackend *backend,
+                                                const char *name) {
+  if (!name) return nullptr;
+  for (int i = backend->shape_count - 1; i >= 0; i--)
+    if (strcmp(backend->shape_cache[i].name, name) == 0)
+      return &backend->shape_cache[i];
+  return nullptr;
+}
+
+// Dizinin seklini OKU ve onbellek yuvalarina yaz. Sekil uymuyorsa (dizi degil,
+// kutulu, ya da degisken bir dizi tutmuyor) count=0 yaziliyor: o zaman her
+// erisim eski tam yola dusuyor, yani yanlis olamiyor — yalnizca hizlanmiyor.
+static void emit_shape_fill(LLVMBackend *backend, const char *name,
+                            LLVMValueRef idata_slot, LLVMValueRef count_slot) {
+  LLVMValueRef slot = get_local(backend, name);
+  if (!slot) {
+    LLVMBuildStore(backend->builder, LLVMConstNull(backend->ptr_type), idata_slot);
+    LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), count_slot);
+    return;
+  }
+  LLVMTypeRef i32t = backend->int32_type;
+  LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+  LLVMBasicBlockRef b_ty = LLVMAppendBasicBlock(fn, "shape.ty");
+  LLVMBasicBlockRef b_ld = LLVMAppendBasicBlock(fn, "shape.ld");
+  LLVMBasicBlockRef b_no = LLVMAppendBasicBlock(fn, "shape.no");
+  LLVMBasicBlockRef b_done = LLVMAppendBasicBlock(fn, "shape.done");
+
+  LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->vm_value_type, slot,
+                                  "shape.v");
+  llvm_tbaa_tag(backend, v, 0);
+  LLVMValueRef tag = LLVMBuildExtractValue(backend->builder, v, 0, "shape.tag");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntEQ, tag,
+                                LLVMConstInt(i32t, 4, 0), "shape.isobj"),
+                  b_ty, b_no);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_ty);
+  LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, v);
+  LLVMValueRef otp = LLVMBuildStructGEP2(backend->builder, backend->obj_array_type,
+                                         objp, 0, "shape.otp");
+  LLVMValueRef ot = LLVMBuildLoad2(backend->builder, i32t, otp, "shape.ot");
+  llvm_tbaa_tag(backend, ot, 0);
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
+                                LLVMConstInt(i32t, 1, 0), "shape.isarr"),
+                  b_ld, b_no);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_ld);
+  LLVMValueRef idp = LLVMBuildStructGEP2(backend->builder, backend->obj_array_type,
+                                         objp, 5, "shape.idp");
+  LLVMValueRef id = LLVMBuildLoad2(backend->builder, backend->ptr_type, idp, "shape.id");
+  llvm_tbaa_tag(backend, id, 0);
+  LLVMValueRef cnp = LLVMBuildStructGEP2(backend->builder, backend->obj_array_type,
+                                         objp, 2, "shape.cnp");
+  LLVMValueRef cn = LLVMBuildLoad2(backend->builder, i32t, cnp, "shape.cn");
+  llvm_tbaa_tag(backend, cn, 0);
+  LLVMValueRef cn64 = LLVMBuildSExt(backend->builder, cn, backend->int_type, "shape.cn64");
+  // Kutulu diziyi hizli yola ALMIYORUZ: count=0 -> eski yol calisir.
+  LLVMValueRef ok = LLVMBuildIsNotNull(backend->builder, id, "shape.ubox");
+  LLVMValueRef cn_final = LLVMBuildSelect(
+      backend->builder, ok, cn64, LLVMConstInt(backend->int_type, 0, 0), "shape.cnf");
+  LLVMBuildStore(backend->builder, id, idata_slot);
+  LLVMBuildStore(backend->builder, cn_final, count_slot);
+  LLVMBuildBr(backend->builder, b_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_no);
+  LLVMBuildStore(backend->builder, LLVMConstNull(backend->ptr_type), idata_slot);
+  LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), count_slot);
+  LLVMBuildBr(backend->builder, b_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_done);
+}
+
+// Yavas yoldan donuste onbellegi tazele. Sart: yavas yol diziyi KUTUYA
+// cevirmis olabilir (float yazimi) ve o zaman onbellekteki idata SERBEST
+// BIRAKILMIS bellege bakar. Tazeleme bunu imkansiz kiliyor.
+static void emit_shape_refresh_all(LLVMBackend *backend) {
+  for (int i = 0; i < backend->shape_count; i++)
+    emit_shape_fill(backend, backend->shape_cache[i].name,
+                    backend->shape_cache[i].idata_slot,
+                    backend->shape_cache[i].count_slot);
+}
+
+// Dongu basinda: sekli kanitlanabilen dizileri onbellege al.
+static int emit_shape_cache_for_loop(LLVMBackend *backend, ASTNode_C *cond,
+                                     ASTNode_C *body, ASTNode_C *incr) {
+  int saved = backend->shape_count;
+  if (!tulpar_loop_shape_stable(cond, body, incr)) return saved;
+  const char *names[4];
+  int n = tulpar_collect_indexed_names(cond, body, names, 4);
+  for (int i = 0; i < n && backend->shape_count < 4; i++) {
+    if (tulpar_loop_rebinds_name(cond, body, incr, names[i])) continue;
+    if (shape_lookup(backend, names[i])) continue;   // dis dongu zaten aldi
+    if (!get_local(backend, names[i])) continue;
+    LLVMValueRef ids = llvm_build_alloca_at_entry(backend, backend->ptr_type,
+                                                  "shape.idata.slot");
+    LLVMValueRef cns = llvm_build_alloca_at_entry(backend, backend->int_type,
+                                                  "shape.count.slot");
+    emit_shape_fill(backend, names[i], ids, cns);
+    backend->shape_cache[backend->shape_count].name = names[i];
+    backend->shape_cache[backend->shape_count].idata_slot = ids;
+    backend->shape_cache[backend->shape_count].count_slot = cns;
+    backend->shape_count++;
+  }
+  return saved;
+}
+
+
 LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   if (!node)
     return nullptr;
@@ -3483,6 +3611,40 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMBasicBlockRef bb_done = LLVMAppendBasicBlock(fn, "arr.done");
       LLVMTypeRef i32t = backend->int32_type;
 
+      // Onbellekli hizli yol: sekil dongu basinda dogrulandi, burada yalniz
+      // SINIR denetimi kaldi ve `count` YERELDEN geliyor (bellekten degil).
+      LLVMBackend::ArrShapeEntry *shp =
+          shape_lookup(backend, array_base_name(node));
+      LLVMBasicBlockRef cached_end = nullptr;
+      LLVMValueRef cached_val = nullptr;
+      if (shp) {
+        LLVMBasicBlockRef bb_cached = LLVMAppendBasicBlock(fn, "arr.cached");
+        LLVMBasicBlockRef bb_gen = LLVMAppendBasicBlock(fn, "arr.generic");
+        LLVMValueRef ccnt = LLVMBuildLoad2(backend->builder, backend->int_type,
+                                           shp->count_slot, "arr.ccnt");
+        LLVMValueRef cid = LLVMBuildLoad2(backend->builder, backend->ptr_type,
+                                          shp->idata_slot, "arr.cid");
+        LLVMValueRef it0 =
+            LLVMBuildExtractValue(backend->builder, idx_val, 0, "arr.cit");
+        LLVMValueRef ii0 = LLVMBuildICmp(backend->builder, LLVMIntEQ, it0,
+                                         LLVMConstInt(i32t, 0, 0), "arr.ciint");
+        LLVMValueRef ix0 = llvm_extract_vm_val_int(backend, idx_val);
+        LLVMValueRef ir0 = LLVMBuildICmp(backend->builder, LLVMIntULT, ix0, ccnt,
+                                         "arr.cinr");
+        LLVMBuildCondBr(backend->builder,
+                        LLVMBuildAnd(backend->builder, ii0, ir0, "arr.cok"),
+                        bb_cached, bb_gen);
+        LLVMPositionBuilderAtEnd(backend->builder, bb_cached);
+        LLVMValueRef cep = LLVMBuildGEP2(backend->builder, backend->int_type, cid,
+                                         &ix0, 1, "arr.cep");
+        LLVMValueRef craw = LLVMBuildLoad2(backend->builder, backend->int_type,
+                                           cep, "arr.craw");
+        llvm_tbaa_tag(backend, craw, 1);
+        cached_val = llvm_vm_val_int_val(backend, craw);
+        cached_end = LLVMGetInsertBlock(backend->builder);
+        LLVMBuildBr(backend->builder, bb_done);
+        LLVMPositionBuilderAtEnd(backend->builder, bb_gen);
+      }
       LLVMValueRef ltag =
           LLVMBuildExtractValue(backend->builder, left_val, 0, "arr.ltag");
       LLVMValueRef itag =
@@ -3568,15 +3730,17 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {target_temp, index_temp};
       LLVMValueRef slow_val = llvm_call_vmvalue_func(
           backend, backend->func_vm_get_element, args, 2, "element");
+      // Cagri diziyi kutuya cevirmis olabilir -> onbellek tazelenmeli.
+      if (backend->shape_count > 0) emit_shape_refresh_all(backend);
       LLVMBasicBlockRef slow_end = LLVMGetInsertBlock(backend->builder);
       LLVMBuildBr(backend->builder, bb_done);
 
       LLVMPositionBuilderAtEnd(backend->builder, bb_done);
       LLVMValueRef phi = LLVMBuildPhi(backend->builder, backend->vm_value_type,
                                       "arr.res");
-      LLVMValueRef inc[] = {ubox_val, fast_val, slow_val};
-      LLVMBasicBlockRef inb[] = {ubox_end, boxed_end, slow_end};
-      LLVMAddIncoming(phi, inc, inb, 3);
+      LLVMValueRef inc[] = {ubox_val, fast_val, slow_val, cached_val};
+      LLVMBasicBlockRef inb[] = {ubox_end, boxed_end, slow_end, cached_end};
+      LLVMAddIncoming(phi, inc, inb, cached_end ? 4 : 3);
       return phi;
     }
   }
@@ -7724,6 +7888,42 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         LLVMBasicBlockRef sb_done = LLVMAppendBasicBlock(fn2, "set.done");
         LLVMTypeRef si32 = backend->int32_type;
 
+        // Onbellekli yazma: sekil dongu basinda dogrulandi; burada yalniz
+        // sinir denetimi + degerin int olmasi kaldi.
+        LLVMBackend::ArrShapeEntry *s_shp =
+            shape_lookup(backend, array_base_name(access));
+        if (s_shp) {
+          LLVMBasicBlockRef sb_cached = LLVMAppendBasicBlock(fn2, "set.cached");
+          LLVMBasicBlockRef sb_gen = LLVMAppendBasicBlock(fn2, "set.generic");
+          LLVMValueRef sccnt = LLVMBuildLoad2(backend->builder, backend->int_type,
+                                              s_shp->count_slot, "set.ccnt");
+          LLVMValueRef scid = LLVMBuildLoad2(backend->builder, backend->ptr_type,
+                                             s_shp->idata_slot, "set.cid");
+          LLVMValueRef sit = LLVMBuildExtractValue(backend->builder, index, 0,
+                                                   "set.cit");
+          LLVMValueRef svt = LLVMBuildExtractValue(backend->builder, val, 0,
+                                                   "set.cvt");
+          LLVMValueRef sii = LLVMBuildICmp(backend->builder, LLVMIntEQ, sit,
+                                           LLVMConstInt(si32, 0, 0), "set.ciint");
+          LLVMValueRef svi = LLVMBuildICmp(backend->builder, LLVMIntEQ, svt,
+                                           LLVMConstInt(si32, 0, 0), "set.cvint");
+          LLVMValueRef six = llvm_extract_vm_val_int(backend, index);
+          LLVMValueRef sir = LLVMBuildICmp(backend->builder, LLVMIntULT, six,
+                                           sccnt, "set.cinr");
+          LLVMValueRef sok = LLVMBuildAnd(
+              backend->builder,
+              LLVMBuildAnd(backend->builder, sii, svi, "set.cok1"), sir,
+              "set.cok");
+          LLVMBuildCondBr(backend->builder, sok, sb_cached, sb_gen);
+          LLVMPositionBuilderAtEnd(backend->builder, sb_cached);
+          LLVMValueRef scep = LLVMBuildGEP2(backend->builder, backend->int_type,
+                                            scid, &six, 1, "set.cep");
+          LLVMValueRef scst = LLVMBuildStore(
+              backend->builder, llvm_extract_vm_val_int(backend, val), scep);
+          llvm_tbaa_tag(backend, scst, 1);
+          LLVMBuildBr(backend->builder, sb_done);
+          LLVMPositionBuilderAtEnd(backend->builder, sb_gen);
+        }
         LLVMValueRef s_ltag =
             LLVMBuildExtractValue(backend->builder, target, 0, "set.ltag");
         LLVMValueRef s_itag =
@@ -7837,6 +8037,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         LLVMBuildCall2(backend->builder,
                        LLVMGlobalGetValueType(backend->func_vm_set_element),
                        backend->func_vm_set_element, args, 4, "");
+        // Cagri diziyi kutuya cevirmis olabilir -> onbellek tazelenmeli.
+        if (backend->shape_count > 0) emit_shape_refresh_all(backend);
         LLVMBuildBr(backend->builder, sb_done);
 
         LLVMPositionBuilderAtEnd(backend->builder, sb_done);
@@ -7923,6 +8125,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         LLVMAppendBasicBlock(backend->current_function, "body");
     LLVMBasicBlockRef exitB =
         LLVMAppendBasicBlock(backend->current_function, "exit");
+    // Dongu-degismezi dizi sekli: kanitlanabiliyorsa bir kez oku, govdede
+    // yerelden kullan. Kanitlanamiyorsa hicbir sey degismez.
+    int shape_saved = emit_shape_cache_for_loop(backend, node->condition,
+                                                node->body, nullptr);
     LLVMBuildBr(backend->builder, condB);
     LLVMPositionBuilderAtEnd(backend->builder, condB);
     LLVMValueRef c = codegen_expression(backend, node->condition);
@@ -7943,6 +8149,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder)))
       LLVMBuildBr(backend->builder, condB);
     LLVMPositionBuilderAtEnd(backend->builder, exitB);
+    backend->shape_count = shape_saved;
     return nullptr;
   }
   case AST_FOR_IN: {

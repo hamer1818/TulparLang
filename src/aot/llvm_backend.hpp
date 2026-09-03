@@ -118,6 +118,19 @@ typedef struct {
   // (count/idata) ezebilecegini varsayip her yinelemede yeniden okuyor;
   // dogru bilgiyle sinir denetimi ve etiket denetimleri dongu disina
   // tasiniyor — C/Rust/Go derleyicilerinin ayni isi yapma bicimi.
+  // Dongu-degismezi dizi sekli onbellegi. Dongu basinda bir kez okunan
+  // idata/count, govde boyunca YERELDEN okunuyor (Go'nun dilim basligini
+  // yazmacta tutmasiyla ayni fikir). Yavas yoldan donuste TAZELENIYOR:
+  // bir float yazimi diziyi kutuya cevirirse eski isaretci askida kalirdi.
+  // Kanit tarafi: src/aot/llvm_array_shape.cpp.
+  struct ArrShapeEntry {
+    const char *name;
+    LLVMValueRef idata_slot;   // ptr* (alloca)
+    LLVMValueRef count_slot;   // i64* (alloca), sekil uymuyorsa 0
+  };
+  ArrShapeEntry shape_cache[4];
+  int shape_count;
+
   LLVMMetadataRef tbaa_header;
   LLVMMetadataRef tbaa_elem;
   unsigned tbaa_kind;
