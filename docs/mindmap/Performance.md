@@ -57,6 +57,22 @@ Onu yazmaca almak = şekil önbelleği. Ölçmeden başlansaydı muhtemelen i32'
 daraltmaya girilecekti — oysa oran N ile küçülüyordu, yani darboğaz bant
 genişliği değildi. **Yanlış işe girilmesini ölçüm engelledi.**
 
+### Denendi ve ÇÜRÜDÜ (tekrar denemeyin)
+İkisi de makul görünüyordu, ikisi de **iç içe ölçümde yavaşlattı**:
+
+| deneme | beklenti | ölçüm |
+|---|---|---|
+| Üst düzey küreselleri `internal` linkage yapmak | LLVM yazmaca alır | 9.6 → **11.0 ms** |
+| Salt-okunur int küreselleri döngü başında yerele kopyalamak | 2 yükleme eksilir | 9.2 → **10.2 ms** |
+
+İkincisi özellikle şaşırtıcıydı: elekte `i` ve `n` gerçekten her turda bellekten
+okunuyor ve o döngüde yazılmıyorlar. Yerel kopya çıkarmak yine de yavaşlattı
+(muhtemelen LLVM'in kendi analizine karışıyor). **Kod doğruydu, testler yeşildi
+— sadece daha yavaştı.** Ölçmeseydik "iyileştirme" diye girecekti.
+
+Küresellerin ham adla yazılması ayrı bir **hata** olarak çıktı ve önekle
+çözüldü (bkz. [[Tuzaklar#6h]]) — linkage değiştirmeden, bedelsiz.
+
 **Kalan fark neden var (Tulpar ~10 / Go 8.5):**
 - Tulpar'ın `int`'i 64 bit; C/Go/Java bu testte 4 baytlık eleman kullanıyor →
   aynı algoritmada **2× bellek trafiği**. Bu bir semantik farkı, gerileme değil.
