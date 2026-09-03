@@ -27,6 +27,24 @@ struct CaptureData {
   std::unordered_map<ASTNode_C*, int> depths;
 };
 
+// Kullanici degiskenlerinin LLVM sembol adi.
+//
+// Ham ad kullanildiginda `free`, `malloc`, `stdout` gibi bir ust duzey
+// degisken libc sembolunu EZIYOR: baglama "Successfully created" diyor,
+// uretilen ikili ilk free() cagrisinda SIGSEGV atiyor ve derleyici tek
+// kelime etmiyor (olculdu 2026-09-03: `int free = 3;` -> cikis 139,
+// `nm` ciktisinda "B free"). Onek bunu imkansiz kiliyor.
+//
+// Neden `internal` linkage degil: o da cozerdi ama olculdu, elek
+// kiyasini %15 yavaslatiyor. Onek bedava.
+//
+// Yaratma ve arama noktalarinin HEPSI buradan gecmeli — biri atlanirsa
+// kuresel sessizce bulunamaz.
+static std::string gsym(const char *name) {
+  return std::string("tpr_g_") + (name ? name : "");
+}
+
+
 static void collect_declared_locals(ASTNode_C *node, std::unordered_set<std::string> &declared) {
   if (!node) return;
   if (node->type == AST_VARIABLE_DECL) {
@@ -2862,7 +2880,7 @@ LLVMValueRef get_local(LLVMBackend *backend, const char *name) {
   }
 
   // Fallback: Check for Global Variable (for imported modules)
-  LLVMValueRef global_var = LLVMGetNamedGlobal(backend->module, name);
+  LLVMValueRef global_var = LLVMGetNamedGlobal(backend->module, gsym(name).c_str());
   if (global_var) {
     return global_var;
   }
@@ -2897,7 +2915,7 @@ static bool is_global_var(LLVMBackend *backend, const char *name) {
         return false; // a local shadows the global → not a global write
     }
   }
-  return LLVMGetNamedGlobal(backend->module, name) != nullptr;
+  return LLVMGetNamedGlobal(backend->module, gsym(name).c_str()) != nullptr;
 }
 
 // If `arg` is an expression producing a trivially-unboxable struct VALUE — a
@@ -3209,6 +3227,7 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
     return result;
   }
 }
+
 
 // ---------------------------------------------------------------------------
 // Dongu-degismezi dizi sekli onbellegi (bkz. src/aot/llvm_array_shape.cpp)
@@ -6428,7 +6447,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       // name exists AND no user function `t_<name>` shadows it (builtins
       // were already dispatched above). A non-closure global falls through
       // to aot_call_closure's null/invalid guard at runtime.
-      LLVMValueRef g = LLVMGetNamedGlobal(backend->module, node->name);
+      LLVMValueRef g = LLVMGetNamedGlobal(backend->module, gsym(node->name).c_str());
       bool has_user_func = false;
       for (int i = 0; i < backend->function_count; i++) {
         if (backend->functions[i].name &&
@@ -7476,7 +7495,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // same name is a fresh local that must shadow, not overwrite, the global.
     LLVMValueRef existing_global =
         at_top_level_scope(backend)
-            ? LLVMGetNamedGlobal(backend->module, node->name)
+            ? LLVMGetNamedGlobal(backend->module, gsym(node->name).c_str())
             : nullptr;
     if (existing_global &&
         LLVMGlobalGetValueType(existing_global) == backend->int_type) {
@@ -8609,10 +8628,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         for (int i = 0; i < module_ast->statement_count; i++) {
           if (module_ast->statements[i]->type == AST_VARIABLE_DECL) {
             ASTNode_C *decl = module_ast->statements[i];
-            if (!LLVMGetNamedGlobal(backend->module, decl->name)) {
+            if (!LLVMGetNamedGlobal(backend->module, gsym(decl->name).c_str())) {
               if (backend->use_static_typing && decl->data_type == TYPE_INT) {
                 LLVMValueRef ig = LLVMAddGlobal(
-                    backend->module, backend->int_type, decl->name);
+                    backend->module, backend->int_type, gsym(decl->name).c_str());
                 LLVMSetInitializer(ig,
                                    LLVMConstInt(backend->int_type, 0, 0));
                 LLVMSetLinkage(ig, LLVMInternalLinkage);
@@ -8636,7 +8655,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                     backend, decl->name, ig, decl->line, /*is_vmvalue=*/0);
               } else {
                 LLVMValueRef global_var = LLVMAddGlobal(
-                    backend->module, backend->vm_value_type, decl->name);
+                    backend->module, backend->vm_value_type, gsym(decl->name).c_str());
                 LLVMSetInitializer(global_var,
                                    LLVMConstNull(backend->vm_value_type));
                 LLVMSetLinkage(global_var, LLVMInternalLinkage);
@@ -9982,10 +10001,10 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
     for (int i = 0; i < node->statement_count; i++) {
       if (node->statements[i]->type == AST_VARIABLE_DECL) {
         ASTNode_C *decl = node->statements[i];
-        if (!LLVMGetNamedGlobal(backend->module, decl->name)) {
+        if (!LLVMGetNamedGlobal(backend->module, gsym(decl->name).c_str())) {
           if (backend->use_static_typing && decl->data_type == TYPE_INT) {
             LLVMValueRef ig = LLVMAddGlobal(
-                backend->module, backend->int_type, decl->name);
+                backend->module, backend->int_type, gsym(decl->name).c_str());
             LLVMSetInitializer(ig, LLVMConstInt(backend->int_type, 0, 0));
             add_local_typed(backend, decl->name, nullptr, INFERRED_INT, ig);
             if (global_needs_tls(decl->name)) {
@@ -9998,7 +10017,7 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
                                              decl->line, /*is_vmvalue=*/0);
           } else {
             LLVMValueRef global_var = LLVMAddGlobal(
-                backend->module, backend->vm_value_type, decl->name);
+                backend->module, backend->vm_value_type, gsym(decl->name).c_str());
             LLVMSetInitializer(global_var,
                                LLVMConstNull(backend->vm_value_type));
             if (global_needs_tls(decl->name)) {

@@ -1,0 +1,43 @@
+import "test";
+
+// Ust duzey degiskenler libc sembollerini EZMEMELI.
+//
+// Hata (2026-09-03): kullanici kureselleri LLVM'e HAM ADLA yaziliyordu.
+// `int free = 3;` uretilen ikilide "B free" sembolu olusturup libc'nin
+// free()'sini eziyordu: derleme "Successfully created" diyor, program ilk
+// serbest birakmada SIGSEGV atiyor (cikis 139) ve derleyici TEK KELIME
+// ETMIYOR. Cozum: sembol adlari `tpr_g_` onekli.
+//
+// `free` uydurma bir ornek degil — bir oyunda "bos slot sayisi" icin
+// yazilabilecek bir ad. Test dizgi/dizi de kullaniyor, cunku hatanin
+// gorunmesi icin runtime'in gercekten free() cagirmasi gerekiyor.
+//
+// Enjeksiyonla dogrulandi: oneki kaldirinca bu paket HIC CIKTI VERMIYOR
+// (program cokuyor, tek bir PASS satiri bile yok). ./build.sh suites
+// `Tests:` ozeti olmayan paketi BASARISIZ sayiyor — kirmizi oradan geliyor,
+// assert'ten degil. Bkz. [[Tuzaklar#1]]: bos cikti "gecti" sanilabilir.
+
+// DIKKAT: bunlar UST DUZEY olmali. Fonksiyon icindeki ayni adlar yereldir
+// ve hicbir sembol uretmez — hatayi hic gostermez. (Ilk yazilisinda tam bu
+// yanlis yapildi: test yesildi, enjeksiyon yakalamadi.)
+int free = 3;
+int malloc = 4;
+int stdout = 5;
+
+func run_libc_adlari_degisken_olabilir() {
+    assert_eq_int(free + malloc + stdout, 12);
+}
+
+// Serbest birakma yollarini gercekten calistir: eski hatada burasi cokuyordu.
+func run_ayirma_yollari_saglam() {
+    str s = "";
+    for (int i = 0; i < 50; i = i + 1) { s = s + "x"; }
+    assert_eq_int(len(s), 50);
+    int[] a = array_fill(4, 1);
+    for (int j = 0; j < 100; j = j + 1) { a.push(j); }
+    assert_eq_int(len(a), 104);
+}
+
+test("libc adlari degisken olabilir", "run_libc_adlari_degisken_olabilir");
+test("ayirma/serbest birakma yollari saglam", "run_ayirma_yollari_saglam");
+test_summary();
