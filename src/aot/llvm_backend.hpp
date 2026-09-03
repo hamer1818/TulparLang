@@ -113,6 +113,15 @@ typedef struct {
   // ofsetleri runtime_bindings.cpp'deki static_assert'lerle kilitli.
   LLVMTypeRef obj_array_type;
 
+  // TBAA: dizi ELEMAN deposu ile ObjArray BASLIGI/VMValue yuvalari ayri
+  // takma-ad sinifi. Bu bilgi olmadan LLVM, `a[k] = 1` yazmasinin basligi
+  // (count/idata) ezebilecegini varsayip her yinelemede yeniden okuyor;
+  // dogru bilgiyle sinir denetimi ve etiket denetimleri dongu disina
+  // tasiniyor — C/Rust/Go derleyicilerinin ayni isi yapma bicimi.
+  LLVMMetadataRef tbaa_header;
+  LLVMMetadataRef tbaa_elem;
+  unsigned tbaa_kind;
+
   // Runtime Functions
   LLVMValueRef func_printf;
   LLVMValueRef func_vm_alloc_string;

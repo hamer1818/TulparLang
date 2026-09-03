@@ -562,8 +562,10 @@ static void free_object(Obj *obj) {
   case OBJ_ARRAY: {
     ObjArray *arr = (ObjArray *)obj;
     // items is always malloc'd
-    if (arr->items)
-      free(arr->items);
+    if (arr->items_)
+      free(arr->items_);
+    free(arr->idata);
+    arr->idata = nullptr;
     if (!from_arena)
       free(arr);
     break;
@@ -831,7 +833,8 @@ ObjArray *vm_allocate_array(VM *vm) {
       (ObjArray *)allocate_object(vm, sizeof(ObjArray), OBJ_ARRAY);
   array->count = 0;
   array->capacity = 0;
-  array->items = nullptr;
+  array->items_ = nullptr;
+  array->idata = nullptr;
   return array;
 }
 
@@ -840,10 +843,10 @@ void vm_array_push(VM *vm, ObjArray *array, VMValue value) {
   if (array->capacity < array->count + 1) {
     int old_capacity = array->capacity;
     array->capacity = old_capacity < 8 ? 8 : old_capacity * 2;
-    array->items =
-        static_cast<VMValue*>(realloc(array->items, sizeof(VMValue) * array->capacity));
+    array->items_ =
+        static_cast<VMValue*>(realloc(arr_items(array), sizeof(VMValue) * array->capacity));
   }
-  array->items[array->count] = value;
+  arr_items(array)[array->count] = value;
   array->count++;
 }
 

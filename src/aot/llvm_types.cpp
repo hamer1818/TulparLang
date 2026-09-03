@@ -1,8 +1,45 @@
 #include "llvm_types.hpp"
 #include <llvm-c/Core.h>
+#include <cstring>
+
+static LLVMMetadataRef tbaa_str(LLVMContextRef c, const char *s) {
+  return LLVMMDStringInContext2(c, s, strlen(s));
+}
+
+// TBAA agacini kur. Iki yaprak: "header" (ObjArray alanlari + VMValue
+// kuresel yuvalari) ve "elem" (dizi eleman deposu). Ikisi AYRI bellek:
+// eleman deposu her zaman ayri bir malloc/arena blogu, asla basligin
+// baytlari degil — yani bu ayrim dogru.
+static void llvm_init_tbaa(LLVMBackend *backend) {
+  LLVMContextRef c = backend->context;
+  LLVMMetadataRef root_ops[] = {tbaa_str(c, "Tulpar TBAA")};
+  LLVMMetadataRef root = LLVMMDNodeInContext2(c, root_ops, 1);
+  LLVMMetadataRef ch_ops[] = {tbaa_str(c, "omnipotent char"), root};
+  LLVMMetadataRef ch = LLVMMDNodeInContext2(c, ch_ops, 2);
+  LLVMMetadataRef h_ops[] = {tbaa_str(c, "tulpar.header"), ch};
+  LLVMMetadataRef h = LLVMMDNodeInContext2(c, h_ops, 2);
+  LLVMMetadataRef e_ops[] = {tbaa_str(c, "tulpar.elem"), ch};
+  LLVMMetadataRef e = LLVMMDNodeInContext2(c, e_ops, 2);
+  LLVMMetadataRef zero = LLVMValueAsMetadata(
+      LLVMConstInt(LLVMInt64TypeInContext(c), 0, 0));
+  LLVMMetadataRef ht[] = {h, h, zero};
+  LLVMMetadataRef et[] = {e, e, zero};
+  backend->tbaa_header = LLVMMDNodeInContext2(c, ht, 3);
+  backend->tbaa_elem = LLVMMDNodeInContext2(c, et, 3);
+  backend->tbaa_kind = LLVMGetMDKindIDInContext(c, "tbaa", 4);
+}
+
+void llvm_tbaa_tag(LLVMBackend *backend, LLVMValueRef inst, int is_elem) {
+  if (!inst || !backend->tbaa_kind) return;
+  LLVMSetMetadata(inst, backend->tbaa_kind,
+                  LLVMMetadataAsValue(backend->context,
+                                      is_elem ? backend->tbaa_elem
+                                              : backend->tbaa_header));
+}
 
 void llvm_init_types(LLVMBackend *backend) {
   LLVMContextRef ctx = backend->context;
+  llvm_init_tbaa(backend);
 
   // Basic types
   backend->ptr_type = LLVMPointerType(LLVMInt8TypeInContext(ctx), 0);
@@ -23,7 +60,8 @@ void llvm_init_types(LLVMBackend *backend) {
   //   Obj obj;      // 32 bayt basik
   //   int count;    // @32
   //   int capacity; // @36
-  //   VMValue *items; // @40   -> sizeof 48
+  //   VMValue *items_;   // @40  (NULL ise dizi KUTULANMAMIS)
+  //   long long *idata;  // @48  (NULL ise dizi kutulu) -> sizeof 56
   // Basligi opak 28 baytlik dolgu + basindaki i32 (obj.type) olarak
   // modelliyoruz: OBJ_ARRAY denetimi icin yalnizca o alan lazim.
   // Duzen degisirse runtime_bindings.cpp'deki static_assert'ler derlemeyi
@@ -34,9 +72,10 @@ void llvm_init_types(LLVMBackend *backend) {
       LLVMArrayType(LLVMInt8TypeInContext(ctx), 28),  // baslik kalani
       LLVMInt32TypeInContext(ctx),                    // count      @32
       LLVMInt32TypeInContext(ctx),                    // capacity   @36
-      LLVMPointerType(LLVMInt8TypeInContext(ctx), 0)  // items      @40
+      LLVMPointerType(LLVMInt8TypeInContext(ctx), 0), // items_     @40
+      LLVMPointerType(LLVMInt8TypeInContext(ctx), 0)  // idata      @48 -> sizeof 56
   };
-  LLVMStructSetBody(backend->obj_array_type, obj_arr_elements, 5, 0);
+  LLVMStructSetBody(backend->obj_array_type, obj_arr_elements, 6, 0);
 
   // --- Define VMValue Body ---
   // struct VMValue {

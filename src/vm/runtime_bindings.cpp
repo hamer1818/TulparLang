@@ -654,7 +654,9 @@ static inline void region_free_one(Obj *o) {
     free(x->keys);
     free(x->values);
   } else if (o->type == OBJ_ARRAY) {
-    free(((ObjArray *)o)->items);
+    free(((ObjArray *)o)->items_);
+    free(((ObjArray *)o)->idata);
+    ((ObjArray *)o)->idata = nullptr;
   }
   free(o);
 }
@@ -854,14 +856,34 @@ ObjString *vm_alloc_string_aot(void *vm, const char *chars, int length) {
 // alternatifi, uretilen kodun sessizce yanlis adrese yazmasiydi.
 static_assert(sizeof(VMValue) == 16, "VMValue 16 bayt olmali (codegen varsayimi)");
 static_assert(offsetof(VMValue, as) == 8, "VMValue::as @8 olmali");
-static_assert(sizeof(ObjArray) == 48, "ObjArray 48 bayt olmali (codegen varsayimi)");
+static_assert(sizeof(ObjArray) == 56, "ObjArray 56 bayt olmali (codegen varsayimi)");
 static_assert(offsetof(ObjArray, count) == 32, "ObjArray::count @32 olmali");
 static_assert(offsetof(ObjArray, capacity) == 36, "ObjArray::capacity @36 olmali");
-static_assert(offsetof(ObjArray, items) == 40, "ObjArray::items @40 olmali");
+static_assert(offsetof(ObjArray, items_) == 40, "ObjArray::items_ @40 olmali");
+static_assert(offsetof(ObjArray, idata) == 48, "ObjArray::idata @48 olmali");
 static_assert(offsetof(Obj, type) == 0, "Obj::type @0 olmali");
 static_assert((int)VM_VAL_INT == 0 && (int)VM_VAL_OBJ == 4,
               "VMValueType sirasi codegen ile uyusmali");
 static_assert((int)OBJ_ARRAY == 1, "OBJ_ARRAY = 1 olmali (codegen varsayimi)");
+
+// Kutulanmamis diziyi kutulu bicime cevirir (bkz. vm.hpp'deki ObjArray notu).
+//
+// Genel amacli her yol `arr_items()` uzerinden geciyor ve o da gerekiyorsa
+// burayi cagiriyor: yani bir dizi, kutulanmamis hizli yolun disinda ilk kez
+// kullanildigi anda bir kez cevriliyor ve oyle kaliyor. Yavaslamiyor, cunku
+// cevrim eleman basina tek bir yazma ve yalniz BIR KEZ oluyor.
+void arr_debox(ObjArray *a) {
+  if (!a || !a->idata) return;
+  int n = a->count;
+  int cap = a->capacity > n ? a->capacity : (n > 0 ? n : 1);
+  VMValue *boxed = (VMValue *)malloc(sizeof(VMValue) * cap);
+  if (!boxed) return;   // cevrilemedi: idata oldugu gibi kalir
+  for (int i = 0; i < n; i++) boxed[i] = VM_INT(a->idata[i]);
+  free(a->idata);
+  a->idata = nullptr;
+  a->items_ = boxed;
+  a->capacity = cap;   // kapasite KORUNUR: buyume kodu old_capacity'yi onceden okumus olabilir
+}
 
 ObjString *aot_intern_string(const char *chars, int length) {
   if (!chars) return nullptr;
@@ -924,6 +946,7 @@ VMValue aot_persist(VMValue v) {
     ObjArray *dst = (ObjArray *)malloc(sizeof(ObjArray));
     if (!dst) return v;
     dst->obj.type = OBJ_ARRAY;
+    dst->idata = nullptr;
     dst->obj.arena_allocated = 0;
     dst->obj.next = nullptr;
     dst->obj.ref_count = 1;
@@ -931,9 +954,9 @@ VMValue aot_persist(VMValue v) {
     int n = src->count;
     dst->count = n;
     dst->capacity = n;
-    dst->items = (n > 0) ? (VMValue *)malloc(sizeof(VMValue) * n) : nullptr;
+    dst->items_ = (n > 0) ? (VMValue *)malloc(sizeof(VMValue) * n) : nullptr;
     for (int i = 0; i < n; i++) {
-      dst->items[i] = aot_persist(src->items[i]);
+      arr_items(dst)[i] = aot_persist(arr_items(src)[i]);
     }
     return VM_OBJ((Obj *)dst);
   }
@@ -1513,7 +1536,7 @@ VMValue vm_array_get(ObjArray *array, int index) {
                                "Runtime Error: Array index out of bounds"));
     return VM_INT(0);
   }
-  return array->items[index];
+  return arr_items(array)[index];
 }
 
 void vm_array_set(ObjArray *array, int index, VMValue value) {
@@ -1525,7 +1548,7 @@ void vm_array_set(ObjArray *array, int index, VMValue value) {
                                "Runtime Error: Array index out of bounds"));
     return;
   }
-  array->items[index] = value;
+  arr_items(array)[index] = value;
 }
 
 // Pointer-based wrapper used by AOT closure-env codegen. The 16-byte
@@ -1555,7 +1578,7 @@ VMValue aot_array_get_fast(VMValue arr_val, int64_t index) {
 #if TULPAR_UNSAFE_ARRAYS
   // UNSAFE MODE: No type check, no bounds check - MAXIMUM SPEED
   ObjArray *arr = AS_ARRAY(arr_val);
-  return arr->items[index];
+  return arr_items(arr)[index];
 #else
   // SAFE MODE: Full checks
   if (!IS_ARRAY(arr_val)) {
@@ -1565,7 +1588,7 @@ VMValue aot_array_get_fast(VMValue arr_val, int64_t index) {
   if (index < 0 || index >= arr->count) {
     return VM_INT(0);
   }
-  return arr->items[index];
+  return arr_items(arr)[index];
 #endif
 }
 
@@ -1576,7 +1599,7 @@ void aot_array_set_fast(VMValue arr_val, int64_t index, VMValue value) {
 #if TULPAR_UNSAFE_ARRAYS
   // UNSAFE MODE: No type check, no bounds check
   ObjArray *arr = AS_ARRAY(arr_val);
-  arr->items[index] = value;
+  arr_items(arr)[index] = value;
 #else
   // SAFE MODE: Full checks
   if (!IS_ARRAY(arr_val)) {
@@ -1586,7 +1609,7 @@ void aot_array_set_fast(VMValue arr_val, int64_t index, VMValue value) {
   if (index < 0 || index >= arr->count) {
     return;
   }
-  arr->items[index] = value;
+  arr_items(arr)[index] = value;
 #endif
 }
 
@@ -1600,14 +1623,14 @@ void aot_array_set_fast(VMValue arr_val, int64_t index, VMValue value) {
 TULPAR_INLINE static VMValue
 aot_array_get_unsafe(VMValue arr_val, int64_t index) {
   ObjArray *arr = AS_ARRAY(arr_val); // Direct cast, no check
-  return arr->items[index];
+  return arr_items(arr)[index];
 }
 
 // Unsafe array set - NO type check, NO bounds check
 TULPAR_INLINE static void
 aot_array_set_unsafe(VMValue arr_val, int64_t index, VMValue value) {
   ObjArray *arr = AS_ARRAY(arr_val); // Direct cast, no check
-  arr->items[index] = value;
+  arr_items(arr)[index] = value;
 }
 
 // ============================================================
@@ -1625,21 +1648,21 @@ ObjArray *aot_array_get_raw(VMValue arr_val) {
 // Direct array element access via raw pointer - FASTEST!
 TULPAR_INLINE static VMValue
 aot_raw_get(ObjArray *arr, int64_t index) {
-  return arr->items[index];
+  return arr_items(arr)[index];
 }
 
 TULPAR_INLINE static void
 aot_raw_set(ObjArray *arr, int64_t index, VMValue value) {
-  arr->items[index] = value;
+  arr_items(arr)[index] = value;
 }
 
 // Public versions for LLVM to call (non-inline)
 VMValue aot_array_get_raw_fast(ObjArray *arr, int64_t index) {
-  return arr->items[index];
+  return arr_items(arr)[index];
 }
 
 void aot_array_set_raw_fast(ObjArray *arr, int64_t index, VMValue value) {
-  arr->items[index] = wb_persist_escape((Obj *)arr, value);
+  arr_items(arr)[index] = wb_persist_escape((Obj *)arr, value);
 }
 
 // Object Wrappers
@@ -1814,7 +1837,7 @@ void print_vm_value(VMValue value) {
       for (int i = 0; i < arr->count; i++) {
         if (i > 0)
           printf(", ");
-        print_vm_value(arr->items[i]);
+        print_vm_value(arr_items(arr)[i]);
       }
       printf("]");
     } else {
@@ -1988,6 +2011,28 @@ void aot_array_push(VMValue *arr_ptr, VMValue *item_ptr) {
     // Write barrier: a transient item pushed into a persistent array is
     // deep-copied so it outlives the per-request arena_restore.
     item = wb_persist_escape((Obj *)arr, item);
+    // Kutulanmamis dizi + int deger: kutuya donmeden ekle.
+    if (arr->idata && IS_INT(item)) {
+      if (arr->count >= arr->capacity) {
+        int new_cap = arr->capacity < 8 ? 8 : arr->capacity * 2;
+        if (new_cap <= arr->count) new_cap = arr->count + 1;
+        size_t nb = sizeof(long long) * (size_t)new_cap;
+        long long *ni;
+        if (arr->obj.arena_allocated) {
+          ni = (long long *)aot_arena_alloc(nb);
+          if (ni && arr->count > 0)
+            memcpy(ni, arr->idata, sizeof(long long) * (size_t)arr->count);
+        } else {
+          ni = (long long *)realloc(arr->idata, nb);
+        }
+        if (!ni) { arr_debox(arr); }   // buyutulemedi: kutulu yola dus
+        else { arr->idata = ni; arr->capacity = new_cap; }
+      }
+      if (arr->idata) {
+        arr->idata[arr->count++] = AS_INT(item);
+        return;
+      }
+    }
     // Inline push without VM
     if (arr->count >= arr->capacity) {
       int old_capacity = arr->capacity;
@@ -2004,16 +2049,16 @@ void aot_array_push(VMValue *arr_ptr, VMValue *item_ptr) {
       if (arr->obj.arena_allocated) {
         VMValue *new_items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * new_cap);
         if (old_capacity > 0) {
-          memcpy(new_items, arr->items, sizeof(VMValue) * arr->count);
+          memcpy(new_items, arr_items(arr), sizeof(VMValue) * arr->count);
         }
-        arr->items = new_items;
+        arr->items_ = new_items;
       } else {
-        arr->items =
-            static_cast<VMValue *>(realloc(arr->items, sizeof(VMValue) * new_cap));
+        arr->items_ =
+            static_cast<VMValue *>(realloc(arr_items(arr), sizeof(VMValue) * new_cap));
       }
       arr->capacity = new_cap;
     }
-    arr->items[arr->count++] = item;
+    arr_items(arr)[arr->count++] = item;
   }
 }
 
@@ -2021,7 +2066,7 @@ void aot_array_push(VMValue *arr_ptr, VMValue *item_ptr) {
 VMValue aot_array_pop(VMValue arr_val) {
   if (IS_ARRAY(arr_val) && AS_ARRAY(arr_val)->count > 0) {
     ObjArray *arr = AS_ARRAY(arr_val);
-    return arr->items[--arr->count];
+    return arr_items(arr)[--arr->count];
   }
   return VM_INT(0);
 }
@@ -2428,7 +2473,7 @@ static void js_serialize(JSBuilder *b, VMValue v, int depth) {
     for (int i = 0; i < arr->count; i++) {
       if (i > 0)
         js_append_char(b, ',');
-      js_serialize(b, arr->items[i], depth + 1);
+      js_serialize(b, arr_items(arr)[i], depth + 1);
     }
     js_append_char(b, ']');
   } else if (IS_OBJECT(v)) {
@@ -2470,7 +2515,7 @@ static cJSON *vmvalue_to_cjson(VMValue v, int depth) {
     cJSON *json_arr = cJSON_CreateArray();
     for (int i = 0; i < arr->count; i++) {
       cJSON_AddItemToArray(json_arr,
-                           vmvalue_to_cjson(arr->items[i], depth + 1));
+                           vmvalue_to_cjson(arr_items(arr)[i], depth + 1));
     }
     return json_arr;
   } else if (IS_OBJECT(v)) {
@@ -2532,13 +2577,14 @@ ObjArray *vm_allocate_array_aot_wrapper(void *vm) {
     return vm_allocate_array(static_cast<VM *>(vm));
   ObjArray *arr = static_cast<ObjArray*>(malloc(sizeof(ObjArray)));
   arr->obj.type = OBJ_ARRAY;
+  arr->idata = nullptr;
   arr->obj.arena_allocated = 0;
   arr->obj.next = nullptr;
   arr->obj.ref_count = 1;
   arr->obj.is_moved = 0;
   arr->count = 0;
   arr->capacity = 0;
-  arr->items = nullptr;
+  arr->items_ = nullptr;
   region_track((Obj *)arr); // request-local literal → freed at arena_restore
   return arr;
 }
@@ -2574,15 +2620,15 @@ void vm_array_push_aot_wrapper(void *vm, ObjArray *array, VMValue value) {
     if (array->obj.arena_allocated) {
       VMValue *new_items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * new_cap);
       if (old_capacity > 0) {
-        memcpy(new_items, array->items, sizeof(VMValue) * array->count);
+        memcpy(new_items, arr_items(array), sizeof(VMValue) * array->count);
       }
-      array->items = new_items;
+      array->items_ = new_items;
     } else {
-      array->items = static_cast<VMValue*>(realloc(array->items, sizeof(VMValue) * new_cap));
+      array->items_ = static_cast<VMValue*>(realloc(array->items_, sizeof(VMValue) * new_cap));
     }
     array->capacity = new_cap;
   }
-  array->items[array->count++] = value;
+  arr_items(array)[array->count++] = value;
 }
 
 void vm_array_push_aot_ptr_wrapper(void *vm, ObjArray *array,
@@ -2718,13 +2764,14 @@ VMValue aot_regex_capture(VMValue patVal, VMValue strVal) {
     auto empty = []() -> VMValue {
         ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
         a->obj.type = OBJ_ARRAY;
+        a->idata = nullptr;
         a->obj.arena_allocated = 1;
         a->obj.next = nullptr;
         a->obj.ref_count = 1;
         a->obj.is_moved = 0;
         a->capacity = 0;
         a->count = 0;
-        a->items = nullptr;
+        a->items_ = nullptr;
         return VM_OBJ((Obj *)a);
     };
     if (!IS_STRING(patVal) || !IS_STRING(strVal)) return empty();
@@ -2742,16 +2789,17 @@ VMValue aot_regex_capture(VMValue patVal, VMValue strVal) {
     int n = (int)m.size();
     ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     a->obj.type = OBJ_ARRAY;
+    a->idata = nullptr;
     a->obj.arena_allocated = 1;
     a->obj.next = nullptr;
     a->obj.ref_count = 1;
     a->obj.is_moved = 0;
     a->capacity = n;
     a->count = n;
-    a->items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * n);
+    a->items_ = (VMValue *)aot_arena_alloc(sizeof(VMValue) * n);
     for (int i = 0; i < n; i++) {
         std::string s = m[i].str();
-        a->items[i] = VM_OBJ((Obj *)aot_allocate_string(s.data(), (int)s.size()));
+        arr_items(a)[i] = VM_OBJ((Obj *)aot_allocate_string(s.data(), (int)s.size()));
     }
     return VM_OBJ((Obj *)a);
 }
@@ -2884,13 +2932,14 @@ VMValue aot_file_glob(VMValue patVal) {
     auto empty = []() -> VMValue {
         ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
         a->obj.type = OBJ_ARRAY;
+        a->idata = nullptr;
         a->obj.arena_allocated = 1;
         a->obj.next = nullptr;
         a->obj.ref_count = 1;
         a->obj.is_moved = 0;
         a->capacity = 0;
         a->count = 0;
-        a->items = nullptr;
+        a->items_ = nullptr;
         return VM_OBJ((Obj *)a);
     };
     if (!IS_STRING(patVal)) return empty();
@@ -2934,6 +2983,7 @@ VMValue aot_file_glob(VMValue patVal) {
 
     ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     a->obj.type = OBJ_ARRAY;
+    a->idata = nullptr;
     a->obj.arena_allocated = 1;
     a->obj.next = nullptr;
     a->obj.ref_count = 1;
@@ -2941,9 +2991,9 @@ VMValue aot_file_glob(VMValue patVal) {
     int n = (int)matches.size();
     a->capacity = n;
     a->count = n;
-    a->items = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
+    a->items_ = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
     for (int i = 0; i < n; i++) {
-        a->items[i] = VM_OBJ(
+        arr_items(a)[i] = VM_OBJ(
             (Obj *)aot_allocate_string(matches[i].data(), (int)matches[i].size()));
     }
     return VM_OBJ((Obj *)a);
@@ -2962,13 +3012,14 @@ VMValue aot_csv_parse(VMValue strVal) {
     auto empty = []() -> VMValue {
         ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
         a->obj.type = OBJ_ARRAY;
+        a->idata = nullptr;
         a->obj.arena_allocated = 1;
         a->obj.next = nullptr;
         a->obj.ref_count = 1;
         a->obj.is_moved = 0;
         a->capacity = 0;
         a->count = 0;
-        a->items = nullptr;
+        a->items_ = nullptr;
         return VM_OBJ((Obj *)a);
     };
     if (!IS_STRING(strVal)) return empty();
@@ -3023,29 +3074,31 @@ VMValue aot_csv_parse(VMValue strVal) {
     int rn = (int)rows.size();
     ObjArray *outer = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     outer->obj.type = OBJ_ARRAY;
+    outer->idata = nullptr;
     outer->obj.arena_allocated = 1;
     outer->obj.next = nullptr;
     outer->obj.ref_count = 1;
     outer->obj.is_moved = 0;
     outer->capacity = rn;
     outer->count = rn;
-    outer->items = rn ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * rn) : nullptr;
+    outer->items_ = rn ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * rn) : nullptr;
     for (int r = 0; r < rn; r++) {
         int cn = (int)rows[r].size();
         ObjArray *inner = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
         inner->obj.type = OBJ_ARRAY;
+        inner->idata = nullptr;
         inner->obj.arena_allocated = 1;
         inner->obj.next = nullptr;
         inner->obj.ref_count = 1;
         inner->obj.is_moved = 0;
         inner->capacity = cn;
         inner->count = cn;
-        inner->items = cn ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * cn) : nullptr;
+        inner->items_ = cn ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * cn) : nullptr;
         for (int c = 0; c < cn; c++) {
-            inner->items[c] = VM_OBJ(
+            arr_items(inner)[c] = VM_OBJ(
                 (Obj *)aot_allocate_string(rows[r][c].data(), (int)rows[r][c].size()));
         }
-        outer->items[r] = VM_OBJ((Obj *)inner);
+        arr_items(outer)[r] = VM_OBJ((Obj *)inner);
     }
     return VM_OBJ((Obj *)outer);
 }
@@ -3065,12 +3118,12 @@ VMValue aot_csv_emit(VMValue rowsVal) {
     };
 
     for (int r = 0; r < rows->count; r++) {
-        VMValue rv = rows->items[r];
+        VMValue rv = arr_items(rows)[r];
         if (!IS_ARRAY(rv)) continue;
         ObjArray *row = (ObjArray *)AS_OBJECT(rv);
         for (int c = 0; c < row->count; c++) {
             if (c > 0) out.push_back(',');
-            VMValue fv = row->items[c];
+            VMValue fv = arr_items(row)[c];
             if (!IS_STRING(fv)) continue;
             ObjString *fs = AS_STRING(fv);
             if (needs_quote(fs->chars, fs->length)) {
@@ -3115,16 +3168,17 @@ extern "C" VMValue aot_args(void) {
   int n = aot_g_argc > 0 ? aot_g_argc : 0;
   ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
   a->obj.type = OBJ_ARRAY;
+  a->idata = nullptr;
   a->obj.arena_allocated = 1;
   a->obj.next = nullptr;
   a->obj.ref_count = 1;
   a->obj.is_moved = 0;
   a->capacity = n;
   a->count = n;
-  a->items = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
+  a->items_ = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
   for (int i = 0; i < n; i++) {
     const char *sv = (aot_g_argv && aot_g_argv[i]) ? aot_g_argv[i] : "";
-    a->items[i] = VM_OBJ((Obj *)aot_allocate_string(sv, (int)strlen(sv)));
+    arr_items(a)[i] = VM_OBJ((Obj *)aot_allocate_string(sv, (int)strlen(sv)));
   }
   return VM_OBJ((Obj *)a);
 }
@@ -3138,6 +3192,7 @@ extern "C" VMValue aot_args(void) {
 VMValue aot_values(VMValue objVal) {
     ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     a->obj.type = OBJ_ARRAY;
+    a->idata = nullptr;
     a->obj.arena_allocated = 1;
     a->obj.next = nullptr;
     a->obj.ref_count = 1;
@@ -3145,16 +3200,16 @@ VMValue aot_values(VMValue objVal) {
     if (!IS_OBJECT(objVal)) {
         a->capacity = 0;
         a->count = 0;
-        a->items = nullptr;
+        a->items_ = nullptr;
         return VM_OBJ((Obj *)a);
     }
     ObjObject *o = (ObjObject *)AS_OBJECT(objVal);
     int n = o->count;
     a->capacity = n;
     a->count = n;
-    a->items = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
+    a->items_ = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
     for (int i = 0; i < n; i++) {
-        a->items[i] = o->values[i];
+        arr_items(a)[i] = o->values[i];
     }
     return VM_OBJ((Obj *)a);
 }
@@ -3182,13 +3237,14 @@ VMValue aot_keys(VMValue objVal) {
     auto empty = []() -> VMValue {
         ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
         a->obj.type = OBJ_ARRAY;
+        a->idata = nullptr;
         a->obj.arena_allocated = 1;
         a->obj.next = nullptr;
         a->obj.ref_count = 1;
         a->obj.is_moved = 0;
         a->capacity = 0;
         a->count = 0;
-        a->items = nullptr;
+        a->items_ = nullptr;
         return VM_OBJ((Obj *)a);
     };
     if (!IS_OBJECT(objVal)) return empty();
@@ -3196,19 +3252,20 @@ VMValue aot_keys(VMValue objVal) {
     int n = o->count;
     ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     a->obj.type = OBJ_ARRAY;
+    a->idata = nullptr;
     a->obj.arena_allocated = 1;
     a->obj.next = nullptr;
     a->obj.ref_count = 1;
     a->obj.is_moved = 0;
     a->capacity = n;
     a->count = n;
-    a->items = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
+    a->items_ = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
     for (int i = 0; i < n; i++) {
         ObjString *k = o->keys[i];
         if (!k) {
-            a->items[i] = VM_OBJ((Obj *)aot_allocate_string("", 0));
+            arr_items(a)[i] = VM_OBJ((Obj *)aot_allocate_string("", 0));
         } else {
-            a->items[i] = VM_OBJ(
+            arr_items(a)[i] = VM_OBJ(
                 (Obj *)aot_allocate_string(k->chars, k->length));
         }
     }
@@ -3501,16 +3558,34 @@ VMValue aot_array_fill_ptr(VMValue *n_ptr, VMValue *val_ptr) {
     // Yazma bariyeri BIR KEZ: doldurulan deger hep ayni, yani kalici bir
     // kaba kacip kacmadigi tek seferde belirleniyor.
     VMValue item = val_ptr ? wb_persist_escape((Obj *)arr, *val_ptr) : VM_VOID();
+    // Kutulanmamis hizli yol: int dolgu, eleman basina 16 yerine 8 bayt.
+    // Bellek bant genisligine bagli is yukleri (elek vb.) burada iki katina
+    // cikiyor; rakiplerin sik dizi duzenine bu sekilde yaklasiyoruz.
+    if (IS_INT(item)) {
+      size_t ibytes = sizeof(long long) * (size_t)n;
+      long long *id = arr->obj.arena_allocated
+                          ? (long long *)aot_arena_alloc(ibytes)
+                          : (long long *)malloc(ibytes);
+      if (id) {
+        long long iv = AS_INT(item);
+        for (long long i = 0; i < n; i++) id[i] = iv;
+        arr->idata = id;
+        arr->items_ = nullptr;   // kutulu depo YOK: kacirilan her yol gurultuyle patlar
+        arr->capacity = (int)n;
+        arr->count = (int)n;
+        return VM_OBJ((Obj *)arr);
+      }
+    }
     size_t bytes = sizeof(VMValue) * (size_t)n;
     VMValue *items;
     if (arr->obj.arena_allocated) {
       items = (VMValue *)aot_arena_alloc(bytes);
     } else {
-      items = (VMValue *)realloc(arr->items, bytes);
+      items = (VMValue *)realloc(arr_items(arr), bytes);
     }
     if (!items) return VM_OBJ((Obj *)arr);
     for (long long i = 0; i < n; i++) items[i] = item;
-    arr->items = items;
+    arr->items_ = items;
     arr->capacity = (int)n;
     arr->count = (int)n;
   }
@@ -3533,7 +3608,7 @@ VMValue aot_array_slice_ptr(VMValue *arr_ptr, long long start) {
     ObjArray *src = AS_ARRAY(*arr_ptr);
     if (start < 0) start = 0;
     for (int i = (int)start; i < src->count; i++)
-      vm_array_push_aot_wrapper(nullptr, out, src->items[i]);
+      vm_array_push_aot_wrapper(nullptr, out, arr_items(src)[i]);
   }
   return VM_OBJ((Obj *)out);
 }
@@ -5258,6 +5333,7 @@ VMValue aot_socket_poll(VMValue fdsVal, VMValue timeoutVal) {
   auto make_arr = [](int n, const VMValue *src) -> VMValue {
     ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     a->obj.type = OBJ_ARRAY;
+    a->idata = nullptr;
     a->obj.arena_allocated = 1;
     a->obj.next = nullptr;
     a->obj.ref_count = 1;
@@ -5265,12 +5341,12 @@ VMValue aot_socket_poll(VMValue fdsVal, VMValue timeoutVal) {
     a->capacity = n;
     a->count = n;
     if (n > 0) {
-      a->items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * (size_t)n);
+      a->items_ = (VMValue *)aot_arena_alloc(sizeof(VMValue) * (size_t)n);
       if (src) {
-        for (int i = 0; i < n; i++) a->items[i] = src[i];
+        for (int i = 0; i < n; i++) arr_items(a)[i] = src[i];
       }
     } else {
-      a->items = nullptr;
+      a->items_ = nullptr;
     }
     return VM_OBJ((Obj *)a);
   };
@@ -5298,7 +5374,7 @@ VMValue aot_socket_poll(VMValue fdsVal, VMValue timeoutVal) {
   }
 
   for (int i = 0; i < nfds; i++) {
-    VMValue v = arr->items[i];
+    VMValue v = arr_items(arr)[i];
     int64_t fd = IS_INT(v) ? AS_INT(v) : -1;
     pfds[i].fd = (tulpar_socket)fd;
     pfds[i].events = POLLIN;
@@ -6139,7 +6215,7 @@ VMValue aot_wings_find_route(VMValue routesVal, VMValue methodVal,
   // Most production apps have a handful of static routes plus a few
   // `:name`-bearing ones; this loop short-circuits on the static hits.
   for (int i = 0; i < routes->count; i++) {
-    VMValue rv = routes->items[i];
+    VMValue rv = arr_items(routes)[i];
     if (!IS_OBJECT(rv)) continue;
     ObjObject *r = (ObjObject *)AS_OBJECT(rv);
     VMValue rm = vm_object_get(r, (char *)"method");
@@ -6158,7 +6234,7 @@ VMValue aot_wings_find_route(VMValue routesVal, VMValue methodVal,
   // missed entirely, and we only consider routes whose path contains
   // a ':' — non-param routes are exact-only by construction.
   for (int i = 0; i < routes->count; i++) {
-    VMValue rv = routes->items[i];
+    VMValue rv = arr_items(routes)[i];
     if (!IS_OBJECT(rv)) continue;
     ObjObject *r = (ObjObject *)AS_OBJECT(rv);
     VMValue rm = vm_object_get(r, (char *)"method");
@@ -7900,7 +7976,7 @@ VMValue aot_string_contains(VMValue haystack, VMValue needle) {
   if (IS_ARRAY(haystack)) {
     ObjArray *arr = AS_ARRAY(haystack);
     for (int i = 0; i < arr->count; i++)
-      if (vm_values_equal(arr->items[i], needle)) return VM_BOOL(1);
+      if (vm_values_equal(arr_items(arr)[i], needle)) return VM_BOOL(1);
     return VM_BOOL(0);
   }
   if (!IS_STRING(haystack) || !IS_STRING(needle))
@@ -7956,7 +8032,7 @@ VMValue aot_string_index_of(VMValue haystack, VMValue needle) {
   if (IS_ARRAY(haystack)) {
     ObjArray *arr = AS_ARRAY(haystack);
     for (int i = 0; i < arr->count; i++)
-      if (vm_values_equal(arr->items[i], needle)) return VM_INT(i);
+      if (vm_values_equal(arr_items(arr)[i], needle)) return VM_INT(i);
     return VM_INT(-1);
   }
   if (!IS_STRING(haystack) || !IS_STRING(needle))
@@ -8169,8 +8245,8 @@ VMValue aot_string_join(VMValue sep, VMValue arr) {
   // Calculate total length
   int total_len = 0;
   for (int i = 0; i < array->count; i++) {
-    if (IS_STRING(array->items[i])) {
-      total_len += AS_STRING(array->items[i])->length;
+    if (IS_STRING(arr_items(array)[i])) {
+      total_len += AS_STRING(arr_items(array)[i])->length;
     }
     if (i > 0)
       total_len += separator->length;
@@ -8183,8 +8259,8 @@ VMValue aot_string_join(VMValue sep, VMValue arr) {
       memcpy(result + pos, separator->chars, separator->length);
       pos += separator->length;
     }
-    if (IS_STRING(array->items[i])) {
-      ObjString *s = AS_STRING(array->items[i]);
+    if (IS_STRING(arr_items(array)[i])) {
+      ObjString *s = AS_STRING(arr_items(array)[i]);
       memcpy(result + pos, s->chars, s->length);
       pos += s->length;
     }
@@ -8340,11 +8416,12 @@ static VMValue parse_json_array(const char **p, const char *end) {
 
   ObjArray *arr = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
   arr->obj.type = OBJ_ARRAY;
+  arr->idata = nullptr;
   arr->obj.arena_allocated = 1;
   arr->obj.next = nullptr;
   arr->capacity = 8;
   arr->count = 0;
-  arr->items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * arr->capacity);
+  arr->items_ = (VMValue *)aot_arena_alloc(sizeof(VMValue) * arr->capacity);
 
   skip_whitespace(p, end);
 
@@ -8356,11 +8433,11 @@ static VMValue parse_json_array(const char **p, const char *end) {
       int new_cap = arr->capacity * 2;
       VMValue *new_items =
           (VMValue *)aot_arena_alloc(sizeof(VMValue) * new_cap);
-      memcpy(new_items, arr->items, sizeof(VMValue) * arr->count);
-      arr->items = new_items;
+      memcpy(new_items, arr_items(arr), sizeof(VMValue) * arr->count);
+      arr->items_ = new_items;
       arr->capacity = new_cap;
     }
-    arr->items[arr->count++] = val;
+    arr_items(arr)[arr->count++] = val;
 
     skip_whitespace(p, end);
     if (*p < end && **p == ',') {
@@ -8531,24 +8608,26 @@ VMValue aot_range(VMValue endVal) {
   if (end <= 0) {
     ObjArray *arr = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     arr->obj.type = OBJ_ARRAY;
+    arr->idata = nullptr;
     arr->obj.arena_allocated = 1;
     arr->obj.next = nullptr;
     arr->capacity = 0;
     arr->count = 0;
-    arr->items = nullptr;
+    arr->items_ = nullptr;
     return VM_OBJ((Obj *)arr);
   }
 
   ObjArray *arr = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
   arr->obj.type = OBJ_ARRAY;
+  arr->idata = nullptr;
   arr->obj.arena_allocated = 1;
   arr->obj.next = nullptr;
   arr->capacity = (int)end;
   arr->count = (int)end;
-  arr->items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * end);
+  arr->items_ = (VMValue *)aot_arena_alloc(sizeof(VMValue) * end);
 
   for (int64_t i = 0; i < end; i++) {
-    arr->items[i] = VM_INT(i);
+    arr_items(arr)[i] = VM_INT(i);
   }
 
   return VM_OBJ((Obj *)arr);
@@ -8868,11 +8947,12 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
     // Return empty array
     ObjArray *arr = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     arr->obj.type = OBJ_ARRAY;
+    arr->idata = nullptr;
     arr->obj.arena_allocated = 1;
     arr->obj.next = nullptr;
     arr->capacity = 0;
     arr->count = 0;
-    arr->items = nullptr;
+    arr->items_ = nullptr;
     return VM_OBJ((Obj *)arr);
   }
 
@@ -8882,11 +8962,12 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
   // Prepare result array
   ObjArray *result = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
   result->obj.type = OBJ_ARRAY;
+  result->idata = nullptr;
   result->obj.arena_allocated = 1;
   result->obj.next = nullptr;
   result->capacity = 16;
   result->count = 0;
-  result->items =
+  result->items_ =
       (VMValue *)aot_arena_alloc(sizeof(VMValue) * result->capacity);
 
   if (!db)
@@ -8954,12 +9035,12 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
       int new_cap = result->capacity * 2;
       VMValue *new_items =
           (VMValue *)aot_arena_alloc(sizeof(VMValue) * new_cap);
-      memcpy(new_items, result->items, sizeof(VMValue) * result->count);
-      result->items = new_items;
+      memcpy(new_items, arr_items(result), sizeof(VMValue) * result->count);
+      result->items_ = new_items;
       result->capacity = new_cap;
     }
 
-    result->items[result->count++] = VM_OBJ((Obj *)row);
+    arr_items(result)[result->count++] = VM_OBJ((Obj *)row);
   }
 
   // step_rc is SQLITE_DONE on a clean finish; anything else (e.g. a residual
@@ -8993,7 +9074,7 @@ static void db_bind_params(sqlite3_stmt *stmt, VMValue paramsVal) {
     return;
   ObjArray *arr = AS_ARRAY(paramsVal);
   for (int i = 0; i < arr->count; i++) {
-    VMValue p = arr->items[i];
+    VMValue p = arr_items(arr)[i];
     int idx = i + 1; // sqlite placeholders are 1-based
     if (IS_INT(p)) {
       sqlite3_bind_int64(stmt, idx, (sqlite3_int64)AS_INT(p));
@@ -9053,11 +9134,12 @@ VMValue aot_db_execute_params_ptr(VMValue *db_ptr, VMValue *sql_ptr,
 VMValue aot_db_query_params(VMValue dbVal, VMValue sqlVal, VMValue paramsVal) {
   ObjArray *result = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
   result->obj.type = OBJ_ARRAY;
+  result->idata = nullptr;
   result->obj.arena_allocated = 1;
   result->obj.next = nullptr;
   result->capacity = 16;
   result->count = 0;
-  result->items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * result->capacity);
+  result->items_ = (VMValue *)aot_arena_alloc(sizeof(VMValue) * result->capacity);
 
   if (!IS_STRING(sqlVal))
     return VM_OBJ((Obj *)result);
@@ -9116,11 +9198,11 @@ VMValue aot_db_query_params(VMValue dbVal, VMValue sqlVal, VMValue paramsVal) {
     if (result->count >= result->capacity) {
       int new_cap = result->capacity * 2;
       VMValue *new_items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * new_cap);
-      memcpy(new_items, result->items, sizeof(VMValue) * result->count);
-      result->items = new_items;
+      memcpy(new_items, arr_items(result), sizeof(VMValue) * result->count);
+      result->items_ = new_items;
       result->capacity = new_cap;
     }
-    result->items[result->count++] = VM_OBJ((Obj *)row);
+    arr_items(result)[result->count++] = VM_OBJ((Obj *)row);
   }
   if (step_rc != SQLITE_DONE && getenv("TULPAR_DB_DEBUG"))
     fprintf(stderr, "[dbq] step rc=%d (%s) rows=%d\n", step_rc,
