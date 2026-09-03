@@ -345,9 +345,23 @@ Denenip ELENEN açıklamalar: dolguyu `undef` yerine sıfırdan başlatmak
 (düzeltmedi, başka testler düştü); `{i64,i64}` → VMValue tip cezalandırmasını
 bellek yerine bit işlemiyle yapmak (düzeltmedi). Mekanizma **izole edilemedi**.
 
+**En sağlam ipucu — BAĞLAMA BAĞLI:** düşen testlerin gövdesi **tek başına
+çalıştırıldığında DOĞRU sonuç veriyor.** `t_obb_rotated`ın tamamı elle
+koşturuldu: `yaw` 45 olarak geri okunuyor, AABB `true`, SAT `false` — hepsi
+beklendiği gibi. Aynı test paket içinde düşüyor. `t_terrain_normal_flat` da
+iki testlik bir pakette geçiyor, tam pakette düşüyor.
+
+Bu, hesabın yanlış olmadığını söylüyor: **önceki testlerin bıraktığı belleğe
+göre değişen bir şey var** — yani tanımsız (undef) bir değerin izi. Elenen
+adaylar: dolguyu sıfırdan başlatmak, `{i64,i64}` → VMValue cezalandırmasını
+bit işlemine çevirmek, alanları ayrı ayrı okumak (bu sonuncusu ayrıca
+**yavaşlattı**: 18,8 → 20,4 ms — LLVM'in tek 16 baytlık taşımasını bozuyor).
+
 **Karar: gönderilmedi.** Sebebi anlaşılmayan bir değişikliği hız için dile
-sokmak, tam olarak "testler patlarken hızlanmak" olurdu. Denemek isteyen
-buradan başlasın — kazanç gerçek, eksik olan tek şey kırılmanın nedeni.
+sokmak, tam olarak "testler patlarken hızlanmak" olurdu. Devam eden buradan
+başlasın: aranacak şey, üretilen IR'da bir yerde VMValue'nun **undef** ile
+kurulup depolanması. Kazanç gerçek (~%10-15, dilin her yerinde), eksik olan
+tek şey o yer.
 
 ## 4. Grafik/pencere kuralı
 **Asla raylib penceresi açma.** Pencere açan komutlar `DISPLAY=` altında
