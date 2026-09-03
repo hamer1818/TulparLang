@@ -608,6 +608,36 @@ yardımcı kullan. Ve bir optimizasyon eklendiğinde "test geçti" yetmez:
 **üretilen kodun gerçekten değiştiğini** doğrula (objdump / ölçüm). Bu hata
 hiçbir testi kırmaz, yalnızca kazanç vermez.
 
+## 6h. Kullanıcı değişkeni libc sembolünü ezerse: derleme yeşil, ikili çöker
+
+`int free = 3;` yazan bir Tulpar programı **derleniyor** — `[AOT] Successfully
+created` — sonra ilk serbest bırakmada SIGSEGV atıyordu (çıkış 139), derleyici
+tek kelime etmeden. `nm` çıktısı sebebi söylüyor: **`B free`**. Kullanıcı
+küreselleri LLVM'e ham adla yazıldığı için üretilen ikilideki `free` sembolü
+libc'nin `free()`'sini eziyor ve runtime'ın her `free()` çağrısı bir veri
+adresine atlıyordu. `stdout` ve `malloc` da aynı.
+
+Bu sınıfın tehlikesi: **hata derleyicide değil, bağlayıcıda ve sessiz.** Her
+katman kendi işini başarıyla yaptığını bildiriyor.
+
+Yanıltıcı olan yanı: `printf`, `strlen`, `memcpy`, `index`, `time`, `log`,
+`remove`, `exit` gibi adlar denendiğinde **sağlam çıktı** — ama kural onlarda
+da yoktu, yalnızca o sembollerin çözümlenme biçimi denk gelmişti. "Birkaç ad
+denedim, çalışıyor" bu sınıfta kanıt değil.
+
+Çözüm: kullanıcı küresellerinin sembol adı `tpr_g_` önekli (`gsym()` —
+`llvm_backend.cpp`). Yaratma ve arama noktalarının **hepsi** oradan geçmeli;
+biri atlanırsa küresel sessizce bulunamaz.
+
+`internal` linkage de çözerdi ve önce o denendi — **ölçüldü: elek kıyasını %15
+yavaşlatıyor** (9.6 → 11.0 ms). Önek bedava. Hipotez ("internal daha iyi
+optimize edilir") ölçümle çürüdü; ölçmeden alınsaydı sessiz bir gerileme
+girecekti.
+
+Test yazarken düşülen tuzak: değişkenler **üst düzey** olmalı. İlk yazılışında
+`func` içine konmuşlardı — yerel oldukları için hiçbir sembol üretmiyorlardı,
+test yeşildi ve enjeksiyon hiçbir şey yakalamıyordu.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.
