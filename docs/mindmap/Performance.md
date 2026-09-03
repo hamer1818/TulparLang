@@ -6,6 +6,49 @@ tags: [moc, performance, benchmark]
 
 Araçlar `benchmarks/`: `loadtest.c` (çok-thread keep-alive/close HTTP yük üreteci, 1µs histogram), `run_stress.sh`, `stress_server.tpr`, `stress_db_server.tpr`. Detay: `benchmarks/WINGS_STRESS.md`, `WINGS_VS_FASTAPI.md`.
 
+## Dil kıyaslaması — `benchmarks/fair/` (2026-09-03)
+
+Adil kural: **her dil** `BENCH_N`'i ortamdan okur (yoksa `gcc -O2`/`rustc -O3`
+kapalı forma katlıyor ve boş programı ölçmüş oluyorsun — [[Tuzaklar#1]]), aynı
+algoritma, aynı veri yapısı, çıktı doğrulanıyor. En iyi/medyan + boş program
+taban çizgisi. Çalıştır: `python3 benchmarks/fair/run.py [test]`.
+
+| Test | C | Rust | Go | **Tulpar** | Java | Node | Sıra |
+|---|--:|--:|--:|--:|--:|--:|:--:|
+| intloop (50M) | 134.6 | 144.3 | 134.9 | **135.8** | 146.0 | 710.9 | **3.** |
+| fib(32) | 1.6 | 3.8 | 6.7 | **4.4** | 13.4 | 27.1 | **3.** |
+| sieve (5M) | 7.6 | 8.2 | 8.6 | **13.3** | 21.2 | 30.0 | 4. |
+| strcat (2M) | 38.3 | 18.9 | 24.8 | **31.8** | 33.8 | 103.3 | **3.** |
+
+Hedef "her alanda 2.–3. sıra" 4 testin 3'ünde tutuyor.
+
+### Dizi/bellek (sieve) — 19.9 → 13.3 ms nasıl geldi
+İki yapısal değişiklik, ikisi de [[Memory Model]]'de ayrıntılı:
+
+1. **Kutulanmamış int depolama.** `ObjArray` artık ya `items_` (kutulu
+   `VMValue`, 16 bayt/eleman) ya da `idata` (ham `int64`, 8 bayt/eleman)
+   tutuyor. `array_fill(n, <int>)` doğrudan kutulanmamış üretiyor. Int olmayan
+   her şey `arr_items()` üzerinden tek seferde kutuya dönüyor (`arr_debox`).
+2. **TBAA.** Eleman deposu ile ObjArray başlığı/değişken yuvaları ayrı
+   takma-ad sınıfı. Bu olmadan LLVM `a[k]=1` yazmasının başlığı ezebileceğini
+   varsayıp diziyi, etiketini, `count`'unu ve `idata`'sını **her yinelemede**
+   yeniden okuyordu. Etiketlemeden sonra bunlar döngü dışına çıktı.
+
+**Kalan fark neden var (Tulpar 13.3 / Go 8.6):**
+- Tulpar'ın `int`'i 64 bit; C/Go/Java bu testte 4 baytlık eleman kullanıyor →
+  aynı algoritmada **2× bellek trafiği**. Bu bir semantik farkı, gerileme değil.
+- Sıcak döngüde hâlâ yineleme başına 3 başlık okuması var (`obj.type`, `count`,
+  `idata`). Kalkmıyorlar çünkü döngüde **yavaş yol çağrısı** duruyor ve o çağrı
+  her şeyi ezebilir. `!invariant.load` ile kaldırmak SAĞLAM DEĞİL: `count` ve
+  `idata` döngü içinde bir `push` ile gerçekten değişebilir.
+- Bir sonraki gerçek adım daha derin: typeinfer `int[]` olduğunu bildiğinde
+  diziyi ham `long long*` + count olarak yerel tutmak (VMValue'yu tamamen
+  atlamak). Ondan sonrası i32'ye daraltma (V8'in SMI dizileri gibi).
+
+Ölçüm hijyeni: oran N ile **küçülüyor** (N=200k'da Go'nun 2.36×'i, N=5M'de
+1.55×'i) — yani darboğaz saf bant genişliği değil, erişim başına sabit hesap.
+Tek bir N'de ölçüp "bellek bağlı" demek yanıltıcı olurdu.
+
 ## In-memory (HTTP katmanı, 14 CPU)
 | Mod | keep-alive tepe `/ping` | p50/p99 | RSS |
 |-----|------:|:---:|---:|

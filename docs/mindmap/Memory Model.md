@@ -25,6 +25,33 @@ Stack **32 slot** (`AOT_ARENA_CHECKPOINT_MAX`). `arena_restore` checkpoint'i **k
 - `g_call_cache` plain-store publish'liyordu → ARM'da stale `ptr` → yanlış handler. → `key` `std::atomic` release/acquire.
 Zaten güvenli: arena/checkpoint/region/`js_small_buffer`/`g_wings_current_fd` TLS; `g_db_registry`/`g_call_cache` mutex; `_request` LLVM-TLS.
 
+## Dizi temsili: kutulu / kutulanmamış (2026-09-03)
+
+`ObjArray` (56 bayt) iki depodan **tam olarak birini** tutar:
+- `items_` — `VMValue*`, 16 bayt/eleman, her tür değer.
+- `idata` — `long long*`, 8 bayt/eleman, yalnız int.
+
+Diğeri **NULL**. Bu bilinçli: kutulanmamış bir dizide `items_` NULL olduğu için
+atlanan her yol sessizce bozulmak yerine **gürültüyle patlar**.
+
+Genel amaçlı her yol `arr_items(a)` üzerinden geçer; o da gerekiyorsa diziyi
+**tek seferde** kutuya çevirir (`arr_debox`) ve öyle bırakır — yani dönüşüm
+eleman başına tek yazma ve yalnız bir kez. Yalnız codegen'in sıcak yolu
+`idata`ya doğrudan bakar. `arr_debox` **kapasiteyi korur**: büyüme kodu
+`old_capacity`'yi önceden okumuş olabilir.
+
+Üreticiler: `array_fill(n, <int>)` ve `push(<int>)`. Float/bool/nesne yazımı
+diziyi kutuya döndürür (codegen bu durumda yavaş yola dalar, orası `arr_items`
+çağırır) — anlam birebir korunur.
+
+Serbest bırakma: `idata` da bırakılmalı ve bu, `items_` denetiminin **dışında**
+olmalı (kutulanmamış dizide `items_` NULL'dır). Üç yol: `region_free_one`,
+`freeObject`, `arc_free_array` — üçü de `!arena_allocated` korumalı, yani
+`idata` `items_`'in ayırıcısını aynalar.
+
+Alan eklerken düşülen tuzak: [[Tuzaklar#6d]]. TBAA'nın neden testle
+doğrulanamadığı: [[Tuzaklar#6e]].
+
 ## Faydalı builtin'ler
 `persist(v)` — değeri kalıcı belleğe derin kopyalar. `arena_save/restore/drop` — codegen'de isimle tanınır.
 

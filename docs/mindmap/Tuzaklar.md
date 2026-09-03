@@ -518,6 +518,60 @@ uygulamamak editörde "hiçbir şey olmuyor" demek ve tek bir log satırı bile
 > parantezin içine düştü: denetim sunucuyu değil kendini kızarttı. Konumlar
 > artık metinden hesaplanıyor (`line.index("topla") + 2`).
 
+## 6d. Struct'a alan eklemek: yeniden adlandırma OKUMAları yakalar, eksik İLKLENDİRMEyi yakalamaz
+
+`ObjArray`'e `idata` alanı eklerken (kutulanmamış diziler, 2026-09-03) bilinçli
+bir hile kullanıldı: `items` alanı `items_` olarak yeniden adlandırıldı, böylece
+ona **doğrudan dokunan her yer derlenmedi** ve 101 erişim noktası derleyici
+tarafından tek tek önüme getirildi. Bu kısım işe yaradı.
+
+**Ama yakalamadığı şey vardı:** `ObjArray` kurucuları alanları tek tek atıyor
+(`calloc` değil, `malloc` + alan alan atama). Yeni alanı 20 kurucunun hiçbiri
+sıfırlamıyordu ve derleyici bundan hiç şikâyet etmedi — yeni bir alanı
+*okumamak* hata değil. Sonuç: `malloc`'tan gelen çöp değer NULL olmadığı için
+sahte bir işaretçi `free()` edildi → **`free(): invalid pointer`**, 4 satırlık
+bir programda bile.
+
+Belirti aldatıcıydı: çöküş derleyicide değil, **üretilen kullanıcı ikilisinde**
+oluyordu ve `tulpar` yalnızca 1 döndürüyordu; suite çıktısında tek satır
+`free(): invalid pointer` görünüyordu, hangi testin patladığına dair hiçbir iz
+yoktu.
+
+**Kural:** alanları tek tek atayan bir struct'a yeni alan eklerken, kurucuları
+saymakla yetinme — `grep`'le *her* kurucunun yeni alanı atadığını **programla**
+doğrula:
+```
+python3 -c "..."  # 'type = OBJ_ARRAY' satirini takip eden satirda alan var mi?
+```
+Yeniden adlandırma hilesi okuma tarafını kapatır; yazma/ilklendirme tarafını
+kapatmaz. İkisi ayrı denetim.
+
+## 6e. TBAA doğruluğu çıktı testiyle ÖLÇÜLEMEZ
+
+Dizi erişimini hızlandırmak için TBAA meta verisi eklendi (eleman deposu ile
+ObjArray başlığı ayrı takma-ad sınıfı). TBAA yanlışsa sonuç sessiz
+yanlış-derlemedir, o yüzden doğrulamak şart görünüyordu.
+
+Yazılan stres testi (aynı döngüde okuma + `push` büyümesi + döngü ortasında
+kutuya dönüş + yazıp hemen okuma) geçti. Sonra **kasten yanlış etiketleme
+enjekte edildi** — eleman yazması `header` olarak işaretlendi, yani LLVM'e
+"bu yazma eleman okumasını etkilemez" diye yalan söylendi.
+
+**Test yine geçti.** Çünkü LLVM yanlış takma-ad bilgisini *sömürmek zorunda
+değil* — sömürebilir. Yani yeşil bir test TBAA'nın doğru olduğunu göstermez;
+yalnızca bu derleyici sürümünün bu programda o bilgiyi kullanmadığını gösterir.
+Bu, [[Tuzaklar#1|hiçbir şey ölçmeyen test]] sınıfının derleyici hâlidir ve
+enjeksiyon disiplininin **sınırını** işaretler.
+
+**Güvence gerekçeden gelmeli:** eleman deposu (`malloc`/arena bloğu) ile başlık
+(`ObjArray` struct'ı) ve değişken yuvaları (alloca/global) her zaman **ayrı
+ayırmalar** — hiçbir bayt ikisi olarak erişilmiyor. Arena baytları geri
+dönüştürebilir, ama bu ancak `arena_restore` çağrısıyla olur ve LLVM, nitelik
+taşımayan dış çağrıların ötesine bellek işlemi taşıyamaz. Dolayısıyla tek bir
+düz kod bölgesi aynı baytları iki tip olarak göremez.
+
+TBAA değiştirirken: gerekçeyi yaz, teste güvenme.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.
