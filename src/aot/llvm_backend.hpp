@@ -321,6 +321,7 @@ typedef struct {
 
   // StringBuilder Functions
   LLVMValueRef func_aot_stringbuilder_new;
+  LLVMValueRef func_aot_stringbuilder_append_int;
   LLVMValueRef func_aot_stringbuilder_append;
   LLVMValueRef func_aot_stringbuilder_append_vmvalue;
   LLVMValueRef func_aot_stringbuilder_to_string;

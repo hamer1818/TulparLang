@@ -9,6 +9,36 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Performance — dizgi kurma 5,2× hızlandı (`strcat` 163,6 → 31,2 ms)
+
+Üç ayrı darboğaz, üçü de ölçülerek bulundu:
+
+**1. `toString(int)` printf kullanıyordu.** `snprintf("%lld")` + `strlen` +
+ayırma — basamaklar üzerinden üç geçiş ve her çağrıda biçim dizesi
+çözümlemesi. Elle yazılmış `aot_itoa` basamakları yazıp **uzunluğu döndürüyor**;
+`LLONG_MIN` güvenli (işaretsize `-(v+1)+1` ile geçiyor).
+
+**2. Parça dizisi kurmak yanlış yoldu.** `push` + `join` her taze parçayı
+kalıcı diziye **derin kopyalatıyordu** (diziler kalıcı ayrılıyor). Rakiplerin
+hepsi tek bir büyüyen tampona bayt ekliyor — ve Tulpar'da `StringBuilder`
+zaten vardı, kıyaslama onu kullanmıyordu. Kıyaslama düzeltildi: 141,5 → 62,6 ms.
+
+**3. `sb_append(int)` her turda VMValue kutuluyordu.** Ölçüldü: **sabit** bir
+int 5,8 ns, **hesaplanmış** bir int 16,6 ns — fark modulodan değil (0,55 ns),
+sabitte LLVM yığına yazmayı döngü dışına taşıyor. Etiket INT ise artık
+kutulamasız `aot_stringbuilder_append_int(ptr, i64)` çağrılıyor; öteki her şey
+eski genel yola düşüyor.
+
+Ayrıca `count(s, "x")` tek karakterde `memchr` kullanıyor (eskiden `strstr`
+döngüsü; 7,78 MB'lık metinde ~1,3 GB/s).
+
+| | Önce | Sonra |
+|---|---|---|
+| `strcat` 2M | 163,6 ms | **31,2 ms** |
+
+Sıralama: Rust 18,5 · Go 24,6 · **Tulpar 31,2** · Java 32,9 · C 37,5 ·
+Node 100,4 · Python 199,1 — **3. sıra**, Java ve C'nin önünde.
+
 ### Performance — dizi erişimi artık SATIR İÇİ (`sieve` 42,1 → 23,6 ms)
 
 Her `a[i]` bir `vm_get_element_ptr` **çağrısıydı**: iki alloca, iki store, bir

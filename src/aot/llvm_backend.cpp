@@ -1752,6 +1752,15 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_stringbuilder_new =
       LLVMAddFunction(backend->module, "aot_stringbuilder_new", sb_new_type);
 
+  // aot_stringbuilder_append_int(ptr, i64) -> void
+  // Tamsayi icin kutulamasiz yol; gerekce runtime_bindings.cpp'de.
+  LLVMTypeRef sb_apint_params[] = {backend->ptr_type, backend->int_type};
+  LLVMTypeRef sb_apint_type =
+      LLVMFunctionType(LLVMVoidTypeInContext(backend->context),
+                       sb_apint_params, 2, 0);
+  backend->func_aot_stringbuilder_append_int = LLVMAddFunction(
+      backend->module, "aot_stringbuilder_append_int", sb_apint_type);
+
   // aot_stringbuilder_append_vmvalue_ptr(ptr, VMValue*) -> void
   // Pointer-ABI (aot_*_ptr pattern): passing the raw vm_value_type aggregate
   // by value hits the SysV lowering trap documented at
@@ -6134,8 +6143,35 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef ptr_int = llvm_extract_vm_val_int(backend, sb_val);
       LLVMValueRef sb_ptr = LLVMBuildIntToPtr(backend->builder, ptr_int,
                                               backend->ptr_type, "sb_ptr");
-      // Spill the VMValue to a stack slot and pass its pointer (aot_*_ptr
-      // ABI) — see the declaration comment for why by-value corrupts.
+      // TAMSAYI icin kutulamasiz hizli yol. Genel yol VMValue'yu yigina
+      // yazip pointer geciriyor; olculdu, hesaplanmis bir int'te o yazma
+      // cagri basina ~11 ns tutuyordu (sabit int'te LLVM onu dongu disina
+      // tasidigi icin gorunmuyordu). Etiket INT ise dogrudan i64 geciyoruz.
+      // Oteki her sey eski yola dusuyor — anlam birebir korunuyor.
+      LLVMValueRef fnp =
+          LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+      LLVMBasicBlockRef ab_fast = LLVMAppendBasicBlock(fnp, "sbap.int");
+      LLVMBasicBlockRef ab_slow = LLVMAppendBasicBlock(fnp, "sbap.gen");
+      LLVMBasicBlockRef ab_done = LLVMAppendBasicBlock(fnp, "sbap.done");
+      LLVMValueRef vtag =
+          LLVMBuildExtractValue(backend->builder, val, 0, "sbap.tag");
+      LLVMBuildCondBr(
+          backend->builder,
+          LLVMBuildICmp(backend->builder, LLVMIntEQ, vtag,
+                        LLVMConstInt(backend->int32_type, 0 /* VM_VAL_INT */, 0),
+                        "sbap.isint"),
+          ab_fast, ab_slow);
+
+      LLVMPositionBuilderAtEnd(backend->builder, ab_fast);
+      LLVMValueRef raw_i = llvm_extract_vm_val_int(backend, val);
+      LLVMValueRef fargs[] = {sb_ptr, raw_i};
+      LLVMBuildCall2(backend->builder,
+                     LLVMGlobalGetValueType(
+                         backend->func_aot_stringbuilder_append_int),
+                     backend->func_aot_stringbuilder_append_int, fargs, 2, "");
+      LLVMBuildBr(backend->builder, ab_done);
+
+      LLVMPositionBuilderAtEnd(backend->builder, ab_slow);
       LLVMValueRef val_slot = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "sb_val_slot");
       LLVMBuildStore(backend->builder, val, val_slot);
@@ -6145,6 +6181,9 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                          backend->func_aot_stringbuilder_append_vmvalue),
                      backend->func_aot_stringbuilder_append_vmvalue, args, 2,
                      "");
+      LLVMBuildBr(backend->builder, ab_done);
+
+      LLVMPositionBuilderAtEnd(backend->builder, ab_done);
       return llvm_vm_val_int(backend, 0);
     }
 

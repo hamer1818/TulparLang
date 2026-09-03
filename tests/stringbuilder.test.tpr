@@ -53,5 +53,47 @@ print("=== StringBuilder ===");
 test("basic append + tostring", "run_basic_append");
 test("mixed-type appends", "run_mixed_types");
 test("capacity growth to 1000", "run_growth");
+// HESAPLANMIS tamsayi eklemek KUTULAMASIZ hizli yoldan geciyor (2026-09-03).
+// Etiket INT ise VMValue yigina yazilmadan dogrudan i64 geciyor; oteki her
+// sey eski genel yola dusuyor. Bu testler iki yolun da AYNI metni urettigini
+// kilitliyor — hizli yol bir kisayol, ayri bir semantik degil.
+func run_int_fast_path() {
+    var sb = StringBuilder(64);
+    int i = 0;
+    while (i < 5) { sb_append(sb, i * 7); sb_append(sb, "-"); i = i + 1; }
+    assert_eq_str(sb_tostring(sb), "0-7-14-21-28-");
+    sb_free(sb);
+}
+
+func run_int_edges() {
+    var sb = StringBuilder(64);
+    sb_append(sb, 0);
+    sb_append(sb, "|");
+    sb_append(sb, 0 - 42);
+    sb_append(sb, "|");
+    sb_append(sb, 9223372036854775807);
+    assert_eq_str(sb_tostring(sb), "0|-42|9223372036854775807");
+    sb_free(sb);
+}
+
+// Karisik turler: hizli yol yalniz INT'te devreye girmeli, otekiler
+// bozulmadan genel yoldan gecmeli.
+func run_mixed_after_fast_path() {
+    var sb = StringBuilder(16);
+    int n = 3;
+    sb_append(sb, n * 2);
+    sb_append(sb, " ");
+    sb_append(sb, 1.5);
+    sb_append(sb, " ");
+    sb_append(sb, false);
+    sb_append(sb, " ");
+    sb_append(sb, "son");
+    assert_eq_str(sb_tostring(sb), "6 1.5 false son");
+    sb_free(sb);
+}
+
 test("null handle is safe", "run_null_handle_safe");
 test_summary();
+test("hesaplanmis int hizli yol", "run_int_fast_path");
+test("int sinir degerleri", "run_int_edges");
+test("hizli yoldan sonra karisik turler", "run_mixed_after_fast_path");

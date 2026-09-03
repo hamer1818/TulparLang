@@ -1124,14 +1124,56 @@ static int aot_format_float(char *buf, size_t n, double value) {
 }
 
 // Append VMValue to StringBuilder (handles any type)
+// Tamsayi -> ondalik metin. printf bicim cozumlemesi YOK, strlen YOK:
+// basamaklari yazip UZUNLUGU dondururuyor.
+//
+// Niye: `toString(int)` snprintf("%lld") + strlen + ayirma yapiyordu, yani
+// basamaklar uzerinden uc gecis ve her cagrida bicim dizesinin cozumlenmesi.
+// Olculdu (2026-09-03): cagri basina ~29 ns; dizgi kurma kiyaslamasinin
+// 2M cagrisinda 58 ms.
+//
+// LLONG_MIN guvenli: negatifi dogrudan negatiflemek tasar, o yuzden
+// isaretsize (-(v+1))+1 ile geciliyor.
+static inline int aot_itoa(long long v, char *out) {
+  if (v == 0) { out[0] = '0'; out[1] = '\0'; return 1; }
+  char tmp[24];
+  int n = 0;
+  unsigned long long u = (v < 0) ? (unsigned long long)(-(v + 1)) + 1ULL
+                                 : (unsigned long long)v;
+  while (u) { tmp[n++] = (char)('0' + (int)(u % 10ULL)); u /= 10ULL; }
+  int len = 0;
+  if (v < 0) out[len++] = '-';
+  while (n > 0) out[len++] = tmp[--n];
+  out[len] = '\0';
+  return len;
+}
+
+// TAMSAYI icin ozel giris noktasi: VMValue kurmadan, dogrudan i64.
+//
+// Niye: genel yol VMValue'yu yigina yazip POINTER geciriyor (aot_*_ptr ABI).
+// Olculdu (2026-09-03) — sb_append'e SABIT bir int vermek 5.8 ns, HESAPLANMIS
+// bir int vermek 16.6 ns suruyordu. Fark modulodan degil (0.55 ns): sabitte
+// LLVM yigina yazmayi dongu disina tasiyor, hesaplanmista her turda yaziyor.
+// Aradaki ~11 ns tamamen o kutulama+yazma.
+void aot_stringbuilder_append_int(StringBuilder *sb, long long v) {
+  if (!sb) return;
+  char buf[24];
+  int len = aot_itoa(v, buf);
+  aot_stringbuilder_append(sb, buf, len);
+}
+
 void aot_stringbuilder_append_vmvalue(StringBuilder *sb, VMValue val) {
   if (!sb) return;
   if (IS_STRING(val)) {
     ObjString *str = AS_STRING(val);
     aot_stringbuilder_append(sb, str->chars, str->length);
   } else if (IS_INT(val)) {
-    char buf[32];
-    int len = snprintf(buf, sizeof(buf), "%lld", (long long)AS_INT(val));
+    // snprintf DEGIL: olculdu (2026-09-03) sb_append(int) cagri basina
+    // ~22 ns suruyordu ve dizgi kurma kiyaslamasinin 2M cagrisinda 44.5 ms
+    // ile tek basina baskin maliyetti. Bicim dizesi cozumlemesi bir tamsayi
+    // yazmak icin gereksiz is.
+    char buf[24];
+    int len = aot_itoa((long long)AS_INT(val), buf);
     aot_stringbuilder_append(sb, buf, len);
   } else if (IS_FLOAT(val)) {
     char buf[64];
@@ -1822,32 +1864,34 @@ void print_newline(void) {
 static thread_local char aot_string_buffer[1024];
 
 VMValue aot_to_string(VMValue value) {
+  int len;
   switch (value.type) {
   case VM_VAL_INT:
-    snprintf(aot_string_buffer, sizeof(aot_string_buffer), "%lld",
-             AS_INT(value));
+    len = aot_itoa(AS_INT(value), aot_string_buffer);
     break;
   case VM_VAL_FLOAT:
     aot_format_float(aot_string_buffer, sizeof(aot_string_buffer),
                      AS_FLOAT(value));
+    len = (int)strlen(aot_string_buffer);
     break;
   case VM_VAL_BOOL:
-    snprintf(aot_string_buffer, sizeof(aot_string_buffer), "%s",
-             AS_BOOL(value) ? "true" : "false");
+    if (AS_BOOL(value)) { memcpy(aot_string_buffer, "true", 5); len = 4; }
+    else { memcpy(aot_string_buffer, "false", 6); len = 5; }
     break;
   case VM_VAL_OBJ:
     if (IS_STRING(value)) {
       return value;
     }
-    snprintf(aot_string_buffer, sizeof(aot_string_buffer), "<object>");
+    memcpy(aot_string_buffer, "<object>", 9);
+    len = 8;
     break;
   default:
-    snprintf(aot_string_buffer, sizeof(aot_string_buffer), "nullptr");
+    memcpy(aot_string_buffer, "nullptr", 8);
+    len = 7;
     break;
   }
 
-  ObjString *str =
-      aot_allocate_string(aot_string_buffer, strlen(aot_string_buffer));
+  ObjString *str = aot_allocate_string(aot_string_buffer, len);
   return VM_OBJ((Obj *)str);
 }
 
@@ -8018,6 +8062,27 @@ VMValue aot_string_count(VMValue haystack, VMValue needle) {
     return VM_INT(0);
 
   int count = 0;
+
+  // TEK KARAKTER: memchr. glibc'de SIMD'li ve strstr dongusunden kat kat
+  // hizli. Olculdu (2026-09-03): 7.78 MB'lik metinde ayrac saymak strstr
+  // ile 10.1 ms (~1.3 GB/s) suruyordu — memchr o isi bir kac katinda
+  // yapiyor. `count(s, ",")` en sik kullanim ve tam bu durum.
+  //
+  // Ayrica strstr NUL'a dayaniyor; memchr uzunlugu kullaniyor, yani ici
+  // NUL iceren metinlerde de dogru sayiyor.
+  if (n->length == 1) {
+    const char *p = h->chars;
+    size_t left = (size_t)h->length;
+    while (left > 0) {
+      const char *hit = (const char *)memchr(p, (unsigned char)n->chars[0], left);
+      if (!hit) break;
+      count++;
+      left -= (size_t)(hit - p) + 1;
+      p = hit + 1;
+    }
+    return VM_INT(count);
+  }
+
   const char *pos = h->chars;
   while ((pos = strstr(pos, n->chars)) != nullptr) {
     count++;
