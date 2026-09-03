@@ -9,6 +9,20 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Fixed/Performance — VMValue'nun dolgusu artık bayt bayt kopyalanmıyor
+
+`VMValue` LLVM'de `{i32, [4 x i8], i64}` modellenmişti ve dolgu bir bayt
+dizisi olduğu için üretilen kodda **her VMValue kopyası dört ayrı `movzbl` +
+dört bayt store'a** açılıyordu — dizilerde değil, dilin her yerinde. Düz `i32`
+yerleşimi değiştirmiyor; ölçüldü (A/B, 9 tekrar × 2 tur): `sieve` 24,6/27,5 →
+**21,9/22,0 ms**.
+
+Bunun yanında **sessiz bir hata** kapandı: sabit VMValue kurucuları dolguyu üç
+ayrı yerde elle `[4 x i8]` diye kuruyordu ve `LLVMConstNamedStruct` tip
+uyuşmayan sabiti **hata vermeden `undef`e çeviriyor**. Global'lere
+`{ i32 1, i32 undef, i64 ... }` yazılıyordu. Sabit artık tipini struct'ın
+kendisinden alıyor, yani alan değişse de uyuyor.
+
 ### Performance — dizgi kurma 5,2× hızlandı (`strcat` 163,6 → 31,2 ms)
 
 Üç ayrı darboğaz, üçü de ölçülerek bulundu:

@@ -322,11 +322,13 @@ Hata aylarca durdu ve ancak TameEngine paketleme adımı macOS'ta **ilk kez bir
 sınamak değildir. Yayınlanan her platformda **en az bir uçtan uca iş** koşmalı
 (bir `tulpar build` + çalıştır yeter).
 
-## 3f. VMValue'nun LLVM BİÇİMİ davranış değiştiriyor
-`VMValue` LLVM'de `{i32, [4 x i8], i64}` diye modellenmiş. Dolgu bir **bayt
+## 3f. `LLVMConstNamedStruct` tip uyuşmazlığını SESSİZCE `undef` yapıyor
+Bu, bir performans işinden çıktı ama asıl ders C API'sinin kendisiyle ilgili.
+
+`VMValue` LLVM'de `{i32, [4 x i8], i64}` diye modellenmişti. Dolgu bir **bayt
 dizisi** olduğu için üretilen kodda her VMValue kopyası dört ayrı `movzbl` +
-dört bayt store'a açılıyor — dilin HER YERİNDE, yalnız dizilerde değil.
-Elek kıyaslamasının iç döngüsünden (2026-09-03):
+dört bayt store'a açılıyordu — dilin HER YERİNDE. Elek kıyaslamasının iç
+döngüsünden okundu (2026-09-03):
 
 ```
 mov    (%r12),%edx        ; etiket
@@ -337,31 +339,38 @@ movzbl 0x7(%r12),%r9d     ┘
 mov    0x8(%r12),%rax     ; yük
 ```
 
-Dolguyu düz `i32` yapmak yerleşimi **değiştirmiyor** (i32@0, i32@4, i64@8,
-16 bayt) ve ölçülen kazanç gerçek: `sieve` 23 → ~20 ms.
+Dolguyu düz `i32` yapmak yerleşimi değiştirmiyor ve ölçülen kazanç gerçek
+(A/B, 9 tekrar × 2 tur: `sieve` 24,6/27,5 → 21,9/22,0 ms).
 
-**AMA scene3d'nin 10 çarpışma/fizik testi düşüyor** (654/654 → 644/654).
-Denenip ELENEN açıklamalar: dolguyu `undef` yerine sıfırdan başlatmak
-(düzeltmedi, başka testler düştü); `{i64,i64}` → VMValue tip cezalandırmasını
-bellek yerine bit işlemiyle yapmak (düzeltmedi). Mekanizma **izole edilemedi**.
+**Ama ilk denemede scene3d'nin 10 çarpışma/fizik testi düştü** ve sebebi üç
+yanlış hipotez boyunca bulunamadı. Kilit gözlem şuydu: **düşen testin gövdesi
+tek başına çalıştırıldığında DOĞRU sonuç veriyordu.** Aynı test pakette
+düşüyordu. "Önceki testlerin bıraktığı belleğe göre değişen bir şey var" =
+tanımsız değer izi.
 
-**En sağlam ipucu — BAĞLAMA BAĞLI:** düşen testlerin gövdesi **tek başına
-çalıştırıldığında DOĞRU sonuç veriyor.** `t_obb_rotated`ın tamamı elle
-koşturuldu: `yaw` 45 olarak geri okunuyor, AABB `true`, SAT `false` — hepsi
-beklendiği gibi. Aynı test paket içinde düşüyor. `t_terrain_normal_flat` da
-iki testlik bir pakette geçiyor, tam pakette düşüyor.
+Üretilen IR (`TULPAR_AOT_EMIT_LL_PRE=1`) tek bakışta söyledi:
 
-Bu, hesabın yanlış olmadığını söylüyor: **önceki testlerin bıraktığı belleğe
-göre değişen bir şey var** — yani tanımsız (undef) bir değerin izi. Elenen
-adaylar: dolguyu sıfırdan başlatmak, `{i64,i64}` → VMValue cezalandırmasını
-bit işlemine çevirmek, alanları ayrı ayrı okumak (bu sonuncusu ayrıca
-**yavaşlattı**: 18,8 → 20,4 ms — LLVM'in tek 16 baytlık taşımasını bozuyor).
+```llvm
+store %struct.VMValue { i32 1, i32 undef, i64 4580687789900693504 }, ptr @DEG2RAD3
+```
 
-**Karar: gönderilmedi.** Sebebi anlaşılmayan bir değişikliği hız için dile
-sokmak, tam olarak "testler patlarken hızlanmak" olurdu. Devam eden buradan
-başlasın: aranacak şey, üretilen IR'da bir yerde VMValue'nun **undef** ile
-kurulup depolanması. Kazanç gerçek (~%10-15, dilin her yerinde), eksik olan
-tek şey o yer.
+**Sebep:** sabit VMValue kurucuları dolguyu üç ayrı yerde elle
+`LLVMConstNull(LLVMArrayType(i8, 4))` diye kuruyordu. Alan `i32` olunca
+`LLVMConstNamedStruct` tip uyuşmayan sabiti **hata vermeden `undef`e
+çeviriyor**. Global'lere yazılan undef, hangi testin önce koştuğuna göre
+değişen değerler üretti.
+
+**Ders — C API'si tip uyuşmazlığında susuyor.** Bir struct alanının tipini
+değiştiren, o alana sabit üreten HER yeri de değiştirmek zorunda; derleyici
+uyarmıyor. Çare yazmayı ortadan kaldırmak: sabit artık tipini struct'ın
+kendisinden alıyor (`llvm_vm_val_padding_zero` →
+`LLVMStructGetTypeAtIndex(vm_value_type, 1)`), yani alan ne olursa olsun uyuyor.
+
+**İkinci ders — "tek başına geçiyor, pakette düşüyor" bir imzadır.** Hesap
+yanlış değil; tanımsız bellek okunuyor. Doğrudan IR'a bak, hipotez üretme.
+(Denenip elenenler: dolguyu sıfırdan başlatmak, tip cezalandırmasını bit
+işlemine çevirmek, alanları ayrı okumak — sonuncusu ayrıca **yavaşlattı**,
+LLVM'in tek 16 baytlık taşımasını bozuyor.)
 
 ## 4. Grafik/pencere kuralı
 **Asla raylib penceresi açma.** Pencere açan komutlar `DISPLAY=` altında

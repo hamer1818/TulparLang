@@ -48,8 +48,27 @@ void llvm_init_types(LLVMBackend *backend) {
   // Note: LLVM will add implicit padding for alignment when isPacked=0
   LLVMTypeRef vm_val_elements[] = {
       LLVMInt32TypeInContext(ctx), // type
-      LLVMArrayType(LLVMInt8TypeInContext(ctx),
-                    4),           // Explicit Padding to force offset 8
+      // DOLGU `i32`, `[4 x i8]` DEGIL. Fark sadece yazim degil: dizi bicimi
+      // LLVM'e "dort ayri bayt" diyor ve uretilen kodda her VMValue kopyasi
+      // dort `movzbl` + dort bayt store'a aciliyordu — dilin HER YERINDE.
+      // Elek kiyaslamasinin ic dongusunden okundu (2026-09-03):
+      //     mov    (%r12),%edx        ; etiket
+      //     movzbl 0x4(%r12),%esi     ┐
+      //     movzbl 0x5(%r12),%edi     │ dolgu, tek tek
+      //     movzbl 0x6(%r12),%r8d     │
+      //     movzbl 0x7(%r12),%r9d     ┘
+      //     mov    0x8(%r12),%rax     ; yuk
+      // Duz i32 ile LLVM iki skaler goruyor. Olculdu (A/B, ayni makinede,
+      // 9 tekrar x 2 tur): sieve en iyi 24.6/27.5 -> 21.9/22.0 ms.
+      //
+      // ⚠️ SART: dolgu SABITI struct'in kendisinden turetilmeli
+      // (llvm_values.cpp'deki `llvm_vm_val_padding_zero`). Elle `[4 x i8]`
+      // yazan bir sabit bu alana verilirse `LLVMConstNamedStruct` tip
+      // uyusmazligini SESSIZCE `undef`e ceviriyor — hata vermiyor — ve
+      // global'lere `{ i32 1, i32 undef, i64 ... }` yaziliyor. Tam olarak bu
+      // olmustu: scene3d'nin 10 carpisma/fizik testi, hangi testin once
+      // kostuguna gore degisen degerler yuzunden dusuyordu.
+      LLVMInt32TypeInContext(ctx),  // dolgu (offset 8'i zorlamak icin)
       LLVMInt64TypeInContext(ctx) // as
   };
   LLVMStructSetBody(backend->vm_value_type, vm_val_elements, 3, 0);
