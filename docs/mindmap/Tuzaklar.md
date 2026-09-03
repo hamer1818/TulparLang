@@ -322,6 +322,33 @@ Hata aylarca durdu ve ancak TameEngine paketleme adımı macOS'ta **ilk kez bir
 sınamak değildir. Yayınlanan her platformda **en az bir uçtan uca iş** koşmalı
 (bir `tulpar build` + çalıştır yeter).
 
+## 3f. VMValue'nun LLVM BİÇİMİ davranış değiştiriyor
+`VMValue` LLVM'de `{i32, [4 x i8], i64}` diye modellenmiş. Dolgu bir **bayt
+dizisi** olduğu için üretilen kodda her VMValue kopyası dört ayrı `movzbl` +
+dört bayt store'a açılıyor — dilin HER YERİNDE, yalnız dizilerde değil.
+Elek kıyaslamasının iç döngüsünden (2026-09-03):
+
+```
+mov    (%r12),%edx        ; etiket
+movzbl 0x4(%r12),%esi     ┐
+movzbl 0x5(%r12),%edi     │ dolgu, tek tek
+movzbl 0x6(%r12),%r8d     │
+movzbl 0x7(%r12),%r9d     ┘
+mov    0x8(%r12),%rax     ; yük
+```
+
+Dolguyu düz `i32` yapmak yerleşimi **değiştirmiyor** (i32@0, i32@4, i64@8,
+16 bayt) ve ölçülen kazanç gerçek: `sieve` 23 → ~20 ms.
+
+**AMA scene3d'nin 10 çarpışma/fizik testi düşüyor** (654/654 → 644/654).
+Denenip ELENEN açıklamalar: dolguyu `undef` yerine sıfırdan başlatmak
+(düzeltmedi, başka testler düştü); `{i64,i64}` → VMValue tip cezalandırmasını
+bellek yerine bit işlemiyle yapmak (düzeltmedi). Mekanizma **izole edilemedi**.
+
+**Karar: gönderilmedi.** Sebebi anlaşılmayan bir değişikliği hız için dile
+sokmak, tam olarak "testler patlarken hızlanmak" olurdu. Denemek isteyen
+buradan başlasın — kazanç gerçek, eksik olan tek şey kırılmanın nedeni.
+
 ## 4. Grafik/pencere kuralı
 **Asla raylib penceresi açma.** Pencere açan komutlar `DISPLAY=` altında
 koşar. Görsel/oynanış testini **kullanıcı yapar**.
