@@ -109,6 +109,9 @@ typedef struct {
   LLVMTypeRef ret_pair_type;   // {i64, i64} - ABI-safe return type for VMValue
   LLVMTypeRef obj_type;        // struct Obj
   LLVMTypeRef obj_string_type; // struct ObjString
+  // struct ObjArray — dizi erisiminin satir ici hizli yolu icin. Alan
+  // ofsetleri runtime_bindings.cpp'deki static_assert'lerle kilitli.
+  LLVMTypeRef obj_array_type;
 
   // Runtime Functions
   LLVMValueRef func_printf;

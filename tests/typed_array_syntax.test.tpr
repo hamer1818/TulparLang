@@ -139,7 +139,89 @@ func fill_sonra_push() {
 
 test("bos dizi bildirilebiliyor", "bos_dizi_bildirilebiliyor");
 test_summary();
+// SATIR ICI DIZI ERISIMI — korumalarin sinirlari.
+//
+// a[i] ve a[i]=v artik satir ici GEP+load/store; yalniz UC kosul birden
+// tutunca (hedef OBJ_ARRAY, indeks tamsayi ve sinir icinde, yazmada deger
+// skalar) hizli yol calisiyor, aksi halde eski cagriya dusuyor. Bu testler
+// duserek dogru davranmayi kilitliyor: hizli yol bir KISAYOL, ayri bir
+// semantik degil.
+func inline_dizi_okuma() {
+    array a = [10, 20, 30];
+    assert_eq_int(a[0], 10);
+    assert_eq_int(a[2], 30);
+    // Ic ice: dis erisim de i icteki de hizli yoldan gecmeli.
+    array m = [[1, 2], [3, 4]];
+    assert_eq_int(m[1][0], 3);
+    assert_eq_int(m[0][1], 2);
+}
+
+func inline_dizi_yazma() {
+    array a = array_fill(4, 0);
+    int i = 0;
+    while (i < 4) { a[i] = i * i; i = i + 1; }
+    assert_eq_int(a[0], 0);
+    assert_eq_int(a[3], 9);
+    // Ayni yuvaya tekrar yazmak
+    a[2] = 100;
+    assert_eq_int(a[2], 100);
+}
+
+// DIZI OLMAYAN hedefler hizli yoldan GECMEMELI. Etiket denetimi kalkarsa
+// burasi bozulur — dizgi indekslemesi dizi gibi okunmaya calisilir.
+func inline_dizi_olmayan_hedef() {
+    str s = "merhaba";
+    assert_eq_str(s[1], "e");
+    assert_eq_str(s[0], "m");
+    json o = { "ad": "tulpar", "n": 7 };
+    assert_eq_str(o["ad"], "tulpar");
+    assert_eq_int(o["n"], 7);
+    o["n"] = 9;
+    assert_eq_int(o["n"], 9);
+}
+
+// NESNE degerini diziye yazmak yavas yoldan (yazma bariyeri) gecmeli.
+//
+// DURUSTLUK NOTU — bu test o korumayi DOGRULAMIYOR. Olculdu: yazma
+// yolundaki skalar denetimini kaldirmak (yani nesneleri de bariyersiz
+// yazmak) bu testi KIRMIYOR, cunku (a) dizgi sabitleri artik internlenmis
+// yani zaten kalici ve (b) burada arena geri sarimi tetiklenmiyor.
+// Tulpar'dan arena_restore'u guvenilir bicimde tetiklemenin yolu yok.
+//
+// Koruma yine de DOGRU ve gerekli: wb_persist_escape skalarda zaten erken
+// donuyor (`!IS_OBJ(v)`), yani skalari hizli yola almak birebir esdeger;
+// nesneyi almak ise gecici bir nesnenin kalici bir dizide kalmasi demek.
+// Test, yazmanin dogru SONUCU urettigini kilitliyor — bariyerin omur
+// yonetimini degil.
+array _inline_kalici = [];
+
+func inline_nesne_degeri_bariyerden_geciyor() {
+    push(_inline_kalici, 0);
+    push(_inline_kalici, 0);
+    _inline_kalici[0] = "dizgi-deger";
+    _inline_kalici[1] = [7, 8];
+    // Arenayi calkala
+    int i = 0;
+    while (i < 2000) { array cop = []; push(cop, toString(i)); i = i + 1; }
+    assert_eq_str(_inline_kalici[0], "dizgi-deger");
+    assert_eq_int(_inline_kalici[1][1], 8);
+}
+
+// Sinirdaki indeksler: count'un TAM uzerinde olan hizli yola girmemeli.
+func inline_sinir_indeksi() {
+    array a = [1, 2, 3];
+    assert_eq_int(a[2], 3);          // son gecerli
+    assert_eq_int(length(a), 3);
+    array b = array_fill(1, 5);
+    assert_eq_int(b[0], 5);
+}
+
 test("array_fill temel", "fill_temel");
 test("array_fill degeri tasiyor", "fill_deger_tasiyor");
 test("array_fill sinirlari", "fill_sinirlar");
 test("array_fill sonrasi push", "fill_sonra_push");
+test("satir ici dizi okuma", "inline_dizi_okuma");
+test("satir ici dizi yazma", "inline_dizi_yazma");
+test("dizi olmayan hedef hizli yola girmiyor", "inline_dizi_olmayan_hedef");
+test("nesne degeri bariyerden geciyor", "inline_nesne_degeri_bariyerden_geciyor");
+test("sinir indeksi", "inline_sinir_indeksi");

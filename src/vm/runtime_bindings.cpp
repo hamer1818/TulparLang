@@ -848,6 +848,21 @@ ObjString *vm_alloc_string_aot(void *vm, const char *chars, int length) {
 // bir değerle başlıyor: AOT yolu bugün `arc_release`i HİÇ çağırmıyor
 // (ölçüldü: llvm_backend.cpp ve runtime_bindings.cpp'de sıfır çağrı), ama
 // ileride biri çağırırsa sayaç sıfıra inip serbest bırakılmasın diye.
+// DUZEN KILIDI. AOT codegen dizi erisimini SATIR ICI GEP ile yapiyor ve
+// asagidaki ofsetleri sabit olarak gomuyor (llvm_types.cpp, obj_array_type).
+// Bir alan eklenir/sirasi degisirse bu static_assert'ler derlemeyi KIRAR —
+// alternatifi, uretilen kodun sessizce yanlis adrese yazmasiydi.
+static_assert(sizeof(VMValue) == 16, "VMValue 16 bayt olmali (codegen varsayimi)");
+static_assert(offsetof(VMValue, as) == 8, "VMValue::as @8 olmali");
+static_assert(sizeof(ObjArray) == 48, "ObjArray 48 bayt olmali (codegen varsayimi)");
+static_assert(offsetof(ObjArray, count) == 32, "ObjArray::count @32 olmali");
+static_assert(offsetof(ObjArray, capacity) == 36, "ObjArray::capacity @36 olmali");
+static_assert(offsetof(ObjArray, items) == 40, "ObjArray::items @40 olmali");
+static_assert(offsetof(Obj, type) == 0, "Obj::type @0 olmali");
+static_assert((int)VM_VAL_INT == 0 && (int)VM_VAL_OBJ == 4,
+              "VMValueType sirasi codegen ile uyusmali");
+static_assert((int)OBJ_ARRAY == 1, "OBJ_ARRAY = 1 olmali (codegen varsayimi)");
+
 ObjString *aot_intern_string(const char *chars, int length) {
   if (!chars) return nullptr;
   size_t total = sizeof(ObjString) + (size_t)length + 1;

@@ -18,6 +18,26 @@ void llvm_init_types(LLVMBackend *backend) {
   // struct ObjString
   backend->obj_string_type = LLVMStructCreateNamed(ctx, "struct.ObjString");
 
+  // struct ObjArray — dizi erisiminin SATIR ICI hizli yolu bu tip uzerinden
+  // GEP yapiyor. C tarafindaki duzen (olculdu):
+  //   Obj obj;      // 32 bayt basik
+  //   int count;    // @32
+  //   int capacity; // @36
+  //   VMValue *items; // @40   -> sizeof 48
+  // Basligi opak 28 baytlik dolgu + basindaki i32 (obj.type) olarak
+  // modelliyoruz: OBJ_ARRAY denetimi icin yalnizca o alan lazim.
+  // Duzen degisirse runtime_bindings.cpp'deki static_assert'ler derlemeyi
+  // kirar — sessizce yanlis ofsete GEP yapilmasin diye.
+  backend->obj_array_type = LLVMStructCreateNamed(ctx, "struct.ObjArray");
+  LLVMTypeRef obj_arr_elements[] = {
+      LLVMInt32TypeInContext(ctx),                    // obj.type   @0
+      LLVMArrayType(LLVMInt8TypeInContext(ctx), 28),  // baslik kalani
+      LLVMInt32TypeInContext(ctx),                    // count      @32
+      LLVMInt32TypeInContext(ctx),                    // capacity   @36
+      LLVMPointerType(LLVMInt8TypeInContext(ctx), 0)  // items      @40
+  };
+  LLVMStructSetBody(backend->obj_array_type, obj_arr_elements, 5, 0);
+
   // --- Define VMValue Body ---
   // struct VMValue {
   //   int type;      // offset 0  (4 bytes)

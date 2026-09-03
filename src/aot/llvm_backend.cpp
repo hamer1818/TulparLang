@@ -3448,18 +3448,99 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // This handles arrays, strings, and objects correctly with type checking
     // ============================================================
 
-    // Use generic vm_get_element_ptr for all element access
-    // This function properly handles: arrays (int index), strings (int index),
-    // and objects (string key)
-    LLVMValueRef target_temp =
-        llvm_build_alloca_at_entry(backend, backend->vm_value_type, "target_tmp");
-    LLVMBuildStore(backend->builder, left_val, target_temp);
-    LLVMValueRef index_temp =
-        llvm_build_alloca_at_entry(backend, backend->vm_value_type, "index_tmp");
-    LLVMBuildStore(backend->builder, idx_val, index_temp);
+    // DIZI OKUMASI: KORUMALI SATIR ICI HIZLI YOL.
+    //
+    // Eskiden HER `a[i]` bir `vm_get_element_ptr` cagrisiydi: iki alloca, iki
+    // store, bir cagri. Olculdu (2026-09-03): eleman basina ~3 ns; C'nin ham
+    // yuklemesi ~0.5 ns ve elek kiyaslamasinin farkinin buyuk kismi buradan
+    // geliyordu. Runtime ayri bir arsiv oldugu icin LLVM o cagriyi satir ici
+    // de alamiyor.
+    //
+    // Artik sicak yol satir ici: etiketler + OBJ_ARRAY + sinir denetimi, sonra
+    // dogrudan GEP+load. Uymayan her sey (dizgi indeksleme, json nesnesi,
+    // negatif/tasan indeks) ESKI CAGRIYA dusuyor, yani anlam birebir korunuyor
+    // — hizli yol yalnizca kisayol, ayri bir semantik degil.
+    //
+    // Sinir denetimi `ult` ile: negatif indeks isaretsizde devasa gorunur ve
+    // ayni denetime takilir, yani ayrica `>= 0` bakmaya gerek yok.
+    {
+      LLVMValueRef fn =
+          LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+      LLVMBasicBlockRef bb_chk  = LLVMAppendBasicBlock(fn, "arr.chk");
+      LLVMBasicBlockRef bb_fast = LLVMAppendBasicBlock(fn, "arr.fast");
+      LLVMBasicBlockRef bb_slow = LLVMAppendBasicBlock(fn, "arr.slow");
+      LLVMBasicBlockRef bb_done = LLVMAppendBasicBlock(fn, "arr.done");
+      LLVMTypeRef i32t = backend->int32_type;
 
-    LLVMValueRef args[] = {target_temp, index_temp};
-    return llvm_call_vmvalue_func(backend, backend->func_vm_get_element, args, 2, "element");
+      LLVMValueRef ltag =
+          LLVMBuildExtractValue(backend->builder, left_val, 0, "arr.ltag");
+      LLVMValueRef itag =
+          LLVMBuildExtractValue(backend->builder, idx_val, 0, "arr.itag");
+      LLVMValueRef is_obj = LLVMBuildICmp(
+          backend->builder, LLVMIntEQ, ltag,
+          LLVMConstInt(i32t, 4 /* VM_VAL_OBJ */, 0), "arr.isobj");
+      LLVMValueRef is_int = LLVMBuildICmp(
+          backend->builder, LLVMIntEQ, itag,
+          LLVMConstInt(i32t, 0 /* VM_VAL_INT */, 0), "arr.isint");
+      LLVMBuildCondBr(backend->builder,
+                      LLVMBuildAnd(backend->builder, is_obj, is_int, "arr.ok1"),
+                      bb_chk, bb_slow);
+
+      LLVMPositionBuilderAtEnd(backend->builder, bb_chk);
+      LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, left_val);
+      LLVMValueRef ot_ptr = LLVMBuildStructGEP2(
+          backend->builder, backend->obj_array_type, objp, 0, "arr.otype.ptr");
+      LLVMValueRef otype =
+          LLVMBuildLoad2(backend->builder, i32t, ot_ptr, "arr.otype");
+      LLVMValueRef is_arr = LLVMBuildICmp(
+          backend->builder, LLVMIntEQ, otype,
+          LLVMConstInt(i32t, 1 /* OBJ_ARRAY */, 0), "arr.isarr");
+      LLVMValueRef idx64 = llvm_extract_vm_val_int(backend, idx_val);
+      LLVMValueRef cnt_ptr = LLVMBuildStructGEP2(
+          backend->builder, backend->obj_array_type, objp, 2, "arr.cnt.ptr");
+      LLVMValueRef cnt =
+          LLVMBuildLoad2(backend->builder, i32t, cnt_ptr, "arr.cnt");
+      LLVMValueRef cnt64 = LLVMBuildSExt(backend->builder, cnt,
+                                         backend->int_type, "arr.cnt64");
+      LLVMValueRef in_rng = LLVMBuildICmp(backend->builder, LLVMIntULT, idx64,
+                                          cnt64, "arr.inrange");
+      LLVMBuildCondBr(backend->builder,
+                      LLVMBuildAnd(backend->builder, is_arr, in_rng, "arr.ok2"),
+                      bb_fast, bb_slow);
+
+      LLVMPositionBuilderAtEnd(backend->builder, bb_fast);
+      LLVMValueRef it_ptr = LLVMBuildStructGEP2(
+          backend->builder, backend->obj_array_type, objp, 4, "arr.items.ptr");
+      LLVMValueRef items = LLVMBuildLoad2(backend->builder, backend->ptr_type,
+                                          it_ptr, "arr.items");
+      LLVMValueRef elem_ptr = LLVMBuildGEP2(
+          backend->builder, backend->vm_value_type, items, &idx64, 1,
+          "arr.elem.ptr");
+      LLVMValueRef fast_val = LLVMBuildLoad2(
+          backend->builder, backend->vm_value_type, elem_ptr, "arr.elem");
+      LLVMBuildBr(backend->builder, bb_done);
+
+      LLVMPositionBuilderAtEnd(backend->builder, bb_slow);
+      LLVMValueRef target_temp = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "target_tmp");
+      LLVMBuildStore(backend->builder, left_val, target_temp);
+      LLVMValueRef index_temp = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "index_tmp");
+      LLVMBuildStore(backend->builder, idx_val, index_temp);
+      LLVMValueRef args[] = {target_temp, index_temp};
+      LLVMValueRef slow_val = llvm_call_vmvalue_func(
+          backend, backend->func_vm_get_element, args, 2, "element");
+      LLVMBasicBlockRef slow_end = LLVMGetInsertBlock(backend->builder);
+      LLVMBuildBr(backend->builder, bb_done);
+
+      LLVMPositionBuilderAtEnd(backend->builder, bb_done);
+      LLVMValueRef phi = LLVMBuildPhi(backend->builder, backend->vm_value_type,
+                                      "arr.res");
+      LLVMValueRef inc[] = {fast_val, slow_val};
+      LLVMBasicBlockRef inb[] = {bb_fast, slow_end};
+      LLVMAddIncoming(phi, inc, inb, 2);
+      return phi;
+    }
   }
 
   case AST_INCREMENT: {
@@ -7553,8 +7634,85 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         // checking
         // ============================================================
 
-        // Use generic vm_set_element_ptr for all element set. Allocas hoisted
-        // to entry block to avoid stack growth in hot loops.
+        // DIZI YAZMASI: KORUMALI SATIR ICI HIZLI YOL — okuma tarafinin ikizi.
+        //
+        // Elek kiyaslamasinin agirligi YAZMADA (~11.9M isaretleme); yalnizca
+        // okumayi satir ici almak %6 kazandirmisti, asil maliyet buradaydi.
+        //
+        // Hizli yol UC kosula birden bagli: hedef OBJ_ARRAY, indeks tamsayi ve
+        // sinir icinde, VE yazilan deger SKALAR. Ucuncusu bilerek: nesne
+        // degerlerde yazma bariyeri (wb_persist_escape) gerekiyor — gecici bir
+        // nesne kalici bir diziye kacarsa derin kopyalanmali. Skalarlar
+        // kacamaz, o yuzden onlarda bariyer atlanabiliyor. Nesne yazmalari
+        // ESKI CAGRIYA dusuyor, yani bariyer semantigi birebir korunuyor.
+        LLVMValueRef fn2 =
+            LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+        LLVMBasicBlockRef sb_chk  = LLVMAppendBasicBlock(fn2, "set.chk");
+        LLVMBasicBlockRef sb_fast = LLVMAppendBasicBlock(fn2, "set.fast");
+        LLVMBasicBlockRef sb_slow = LLVMAppendBasicBlock(fn2, "set.slow");
+        LLVMBasicBlockRef sb_done = LLVMAppendBasicBlock(fn2, "set.done");
+        LLVMTypeRef si32 = backend->int32_type;
+
+        LLVMValueRef s_ltag =
+            LLVMBuildExtractValue(backend->builder, target, 0, "set.ltag");
+        LLVMValueRef s_itag =
+            LLVMBuildExtractValue(backend->builder, index, 0, "set.itag");
+        LLVMValueRef s_vtag =
+            LLVMBuildExtractValue(backend->builder, val, 0, "set.vtag");
+        LLVMValueRef s_isobj = LLVMBuildICmp(
+            backend->builder, LLVMIntEQ, s_ltag,
+            LLVMConstInt(si32, 4 /* VM_VAL_OBJ */, 0), "set.isobj");
+        LLVMValueRef s_isint = LLVMBuildICmp(
+            backend->builder, LLVMIntEQ, s_itag,
+            LLVMConstInt(si32, 0 /* VM_VAL_INT */, 0), "set.isint");
+        // Deger NESNE DEGILSE bariyer gerekmiyor.
+        LLVMValueRef s_scalar = LLVMBuildICmp(
+            backend->builder, LLVMIntNE, s_vtag,
+            LLVMConstInt(si32, 4 /* VM_VAL_OBJ */, 0), "set.scalar");
+        LLVMValueRef s_ok1 = LLVMBuildAnd(
+            backend->builder,
+            LLVMBuildAnd(backend->builder, s_isobj, s_isint, "set.ok1a"),
+            s_scalar, "set.ok1");
+        LLVMBuildCondBr(backend->builder, s_ok1, sb_chk, sb_slow);
+
+        LLVMPositionBuilderAtEnd(backend->builder, sb_chk);
+        LLVMValueRef s_objp = llvm_extract_vm_val_ptr(backend, target);
+        LLVMValueRef s_ot_ptr = LLVMBuildStructGEP2(
+            backend->builder, backend->obj_array_type, s_objp, 0,
+            "set.otype.ptr");
+        LLVMValueRef s_otype =
+            LLVMBuildLoad2(backend->builder, si32, s_ot_ptr, "set.otype");
+        LLVMValueRef s_isarr = LLVMBuildICmp(
+            backend->builder, LLVMIntEQ, s_otype,
+            LLVMConstInt(si32, 1 /* OBJ_ARRAY */, 0), "set.isarr");
+        LLVMValueRef s_idx = llvm_extract_vm_val_int(backend, index);
+        LLVMValueRef s_cnt_ptr = LLVMBuildStructGEP2(
+            backend->builder, backend->obj_array_type, s_objp, 2,
+            "set.cnt.ptr");
+        LLVMValueRef s_cnt =
+            LLVMBuildLoad2(backend->builder, si32, s_cnt_ptr, "set.cnt");
+        LLVMValueRef s_cnt64 = LLVMBuildSExt(backend->builder, s_cnt,
+                                             backend->int_type, "set.cnt64");
+        LLVMValueRef s_inr = LLVMBuildICmp(backend->builder, LLVMIntULT, s_idx,
+                                           s_cnt64, "set.inrange");
+        LLVMBuildCondBr(
+            backend->builder,
+            LLVMBuildAnd(backend->builder, s_isarr, s_inr, "set.ok2"),
+            sb_fast, sb_slow);
+
+        LLVMPositionBuilderAtEnd(backend->builder, sb_fast);
+        LLVMValueRef s_it_ptr = LLVMBuildStructGEP2(
+            backend->builder, backend->obj_array_type, s_objp, 4,
+            "set.items.ptr");
+        LLVMValueRef s_items = LLVMBuildLoad2(
+            backend->builder, backend->ptr_type, s_it_ptr, "set.items");
+        LLVMValueRef s_ep = LLVMBuildGEP2(
+            backend->builder, backend->vm_value_type, s_items, &s_idx, 1,
+            "set.elem.ptr");
+        LLVMBuildStore(backend->builder, val, s_ep);
+        LLVMBuildBr(backend->builder, sb_done);
+
+        LLVMPositionBuilderAtEnd(backend->builder, sb_slow);
         LLVMValueRef target_temp = llvm_build_alloca_at_entry(
             backend, backend->vm_value_type, "target_set_tmp");
         LLVMBuildStore(backend->builder, target, target_temp);
@@ -7570,6 +7728,9 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         LLVMBuildCall2(backend->builder,
                        LLVMGlobalGetValueType(backend->func_vm_set_element),
                        backend->func_vm_set_element, args, 4, "");
+        LLVMBuildBr(backend->builder, sb_done);
+
+        LLVMPositionBuilderAtEnd(backend->builder, sb_done);
       }
       return val;
     }

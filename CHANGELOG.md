@@ -9,6 +9,31 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Performance — dizi erişimi artık SATIR İÇİ (`sieve` 42,1 → 23,6 ms)
+
+Her `a[i]` bir `vm_get_element_ptr` **çağrısıydı**: iki alloca, iki store, bir
+çağrı — eleman başına ~3 ns. C'nin ham yüklemesi ~0,5 ns ve runtime ayrı bir
+arşiv olduğu için LLVM o çağrıyı satır içine de alamıyordu. Yazma tarafı ayrıca
+her seferinde yazma bariyerine uğruyordu.
+
+Artık sıcak yol satır içi: etiket denetimi + `OBJ_ARRAY` + sınır denetimi,
+sonra doğrudan GEP+load/store. **Uymayan her şey eski çağrıya düşüyor** —
+dizgi indeksleme, json anahtarı, taşan/negatif indeks, ve yazmada *nesne*
+değerleri (onlarda bariyer gerekiyor). Hızlı yol bir kısayol, ayrı bir
+semantik değil.
+
+| | Önce | Sonra |
+|---|---|---|
+| `sieve` 5M | 42,1 ms | **23,6 ms** — Node.js'i (28,9) geçti |
+
+Yalnız okumayı satır içine almak %6 kazandırmıştı; ağırlık yazmadaydı
+(~11,9M işaretleme). İkisi birlikte %44.
+
+Ofsetler codegen'e sabit gömülü olduğu için `runtime_bindings.cpp`'ye
+**düzen kilidi** kondu: `VMValue`, `Obj` ve `ObjArray` alan ofsetleri ile
+enum sıraları `static_assert` ile sabitlendi. Düzen değişirse derleme kırılır —
+alternatifi üretilen kodun sessizce yanlış adrese yazmasıydı.
+
 ### Added — `array_fill(n, deger)`: diziyi tek çağrıda kur
 
 n elemanlı bir dizi kurmanın tek yolu n kez `push` çağırmaktı. Ölçüldü: çağrı
