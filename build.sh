@@ -213,6 +213,13 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}Dist arsiv denetimi basarisiz!${NC}"
             exit 1
         fi
+        # Dongu-sekli gezicisi ASTNode_C'nin TUM cocuk alanlarini geziyor mu?
+        # Bir dal atlanirsa "govdede cagri yok" kaniti delinir ve atlanan
+        # dalda duran bir push bellek bozar — suitler yesil kalarak.
+        if ! python3 tests/ast_child_fields_audit.py; then
+            echo -e "${RED}AST cocuk alani denetimi basarisiz!${NC}"
+            exit 1
+        fi
     fi
 
     # LSP. Editör eklentisinin dayandığı yüzey ve hiçbir otomasyonda yoktu:
