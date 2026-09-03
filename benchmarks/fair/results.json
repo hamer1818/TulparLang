@@ -5,32 +5,32 @@
       "desc": "tamsay\u0131 aritmeti\u011fi (zincirleme ba\u011f\u0131ml\u0131l\u0131k)",
       "rows": {
         "c": {
-          "best": 134.4,
-          "median": 134.6
+          "best": 134.6,
+          "median": 134.7
         },
         "rust": {
           "best": 144.2,
-          "median": 144.3
-        },
-        "go": {
-          "best": 135.0,
-          "median": 135.2
-        },
-        "java": {
-          "best": 143.1,
           "median": 144.4
         },
+        "go": {
+          "best": 134.9,
+          "median": 135.0
+        },
+        "java": {
+          "best": 144.6,
+          "median": 145.3
+        },
         "node": {
-          "best": 706.1,
-          "median": 708.0
+          "best": 712.1,
+          "median": 715.3
         },
         "python": {
-          "best": 3169.3,
-          "median": 3226.2
+          "best": 3237.7,
+          "median": 3288.3
         },
         "tulpar": {
-          "best": 135.1,
-          "median": 135.2
+          "best": 136.0,
+          "median": 140.3
         }
       },
       "output": "723378784",
@@ -45,28 +45,28 @@
           "median": 1.7
         },
         "rust": {
-          "best": 3.7,
-          "median": 3.8
+          "best": 3.8,
+          "median": 3.9
         },
         "go": {
-          "best": 6.6,
-          "median": 6.7
+          "best": 7.0,
+          "median": 7.1
         },
         "java": {
-          "best": 12.6,
-          "median": 13.0
+          "best": 14.3,
+          "median": 14.4
         },
         "node": {
-          "best": 25.2,
-          "median": 25.9
+          "best": 26.7,
+          "median": 28.7
         },
         "python": {
-          "best": 141.6,
-          "median": 141.7
+          "best": 142.6,
+          "median": 143.3
         },
         "tulpar": {
-          "best": 4.3,
-          "median": 4.4
+          "best": 4.4,
+          "median": 4.5
         }
       },
       "output": "2178309",
@@ -77,32 +77,32 @@
       "desc": "dizi/bellek eri\u015fimi",
       "rows": {
         "c": {
-          "best": 7.6,
-          "median": 7.7
+          "best": 7.5,
+          "median": 8.1
         },
         "rust": {
-          "best": 8.4,
-          "median": 9.1
-        },
-        "go": {
-          "best": 8.0,
+          "best": 8.3,
           "median": 8.5
         },
+        "go": {
+          "best": 8.6,
+          "median": 8.7
+        },
         "java": {
-          "best": 19.7,
-          "median": 20.1
+          "best": 21.8,
+          "median": 22.4
         },
         "node": {
-          "best": 27.2,
-          "median": 27.3
+          "best": 28.9,
+          "median": 29.8
         },
         "python": {
-          "best": 445.0,
-          "median": 454.6
+          "best": 459.0,
+          "median": 461.1
         },
         "tulpar": {
-          "best": 42.1,
-          "median": 42.6
+          "best": 19.9,
+          "median": 20.3
         }
       },
       "output": "348513",
@@ -113,32 +113,32 @@
       "desc": "dizgi kurma + tarama",
       "rows": {
         "c": {
-          "best": 37.5,
-          "median": 38.1
+          "best": 37.8,
+          "median": 38.4
         },
         "rust": {
-          "best": 18.5,
-          "median": 19.0
+          "best": 18.9,
+          "median": 19.1
         },
         "go": {
-          "best": 24.6,
-          "median": 24.7
+          "best": 24.8,
+          "median": 25.5
         },
         "java": {
-          "best": 31.6,
-          "median": 32.5
+          "best": 35.4,
+          "median": 35.5
         },
         "node": {
-          "best": 101.4,
-          "median": 103.9
+          "best": 102.1,
+          "median": 104.8
         },
         "python": {
-          "best": 199.1,
-          "median": 203.6
+          "best": 202.1,
+          "median": 208.0
         },
         "tulpar": {
-          "best": 166.3,
-          "median": 168.2
+          "best": 31.4,
+          "median": 31.7
         }
       },
       "output": "7780000 2000000",
@@ -146,10 +146,10 @@
     }
   },
   "baseline": {
-    "c": 0.1776729986886494,
-    "python": 5.578846001299098,
-    "node": 10.94954099971801,
-    "tulpar": 0.8290389960166067
+    "c": 0.1780519996827934,
+    "python": 5.969046000245726,
+    "node": 10.915378999925451,
+    "tulpar": 0.8280609981738962
   },
   "repeats": 5
 }
