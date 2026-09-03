@@ -572,6 +572,42 @@ düz kod bölgesi aynı baytları iki tip olarak göremez.
 
 TBAA değiştirirken: gerekçeyi yaz, teste güvenme.
 
+## 6f. Tek atışlık kıyas ölçümü yalan söyler
+
+Elek optimizasyonunu ayrıştırırken aynı ikili iki kez ölçüldü: **8.9 ms** ve
+**12.2 ms**. Fark %37 — yani ölçüm, aranan etkiden büyüktü.
+
+Sebep: her yapılandırma arka arkaya bir kez çalıştırılmıştı. Serideki **ilk**
+koşu sistematik olarak yüksek çıkıyor (ısınma / frekans / önbellek). Sırayı
+iç içe geçirip (`none, all, all, none` × 4 tur, her turda 5 koşunun en iyisi)
+ölçünce tablo kararlı hâle geldi: 9.1 / 12.6.
+
+Bu, "hızlandırdık" derken en kolay kandırılma biçimi — ve bu oturumda daha
+önce de olmuştu (şanslı bir best-of-5'ten "18.8 ms" bildirilmişti, gerçek
+~20.6–21.4). **Kural:** yapılandırmaları iç içe ve simetrik sırada, birden çok
+tur, her turda min al. Tek seride arka arkaya ölçme.
+
+## 6g. `a[i]` düğümünde taban İKİ ayrı alanda olabilir
+
+Şekil önbelleği kodu yazıldı, testler geçti, tanılama "önbelleğe alındı" dedi
+— ama üretilen makine kodu **hiç değişmedi**. Sessiz hiçbir-şey-yapmama.
+
+Sebep: `AST_ARRAY_ACCESS` düğümünde taban ifadesi bazen `node->name`'de,
+bazen `node->left`'te duruyor (parser iki biçimi de üretiyor; for-in şeker
+açılımı `left` kullanıyor). Arama yalnız `name`e bakıyordu, elek de `left`
+biçimini üretiyordu → arama hep boş döndü.
+
+Aldatıcı olan: mevcut codegen zaten `if (node->name) ... else if (node->left)`
+diye **iki biçimi de** ele alıyordu, yani doğru kalıp gözümün önündeydi; yeni
+kod tek biçime baktı. Aday toplayıcı iki biçimi de ele aldığı için "aday
+bulundu" logu doğru çıkıyor ve sorunu gizliyordu.
+
+**Kural:** AST alanına yeni bir yerden erişirken, o alana **zaten erişen**
+kodun nasıl yaptığına bak — tek alan yerine `array_base_name()` gibi ortak bir
+yardımcı kullan. Ve bir optimizasyon eklendiğinde "test geçti" yetmez:
+**üretilen kodun gerçekten değiştiğini** doğrula (objdump / ölçüm). Bu hata
+hiçbir testi kırmaz, yalnızca kazanç vermez.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.

@@ -17,7 +17,7 @@ taban çizgisi. Çalıştır: `python3 benchmarks/fair/run.py [test]`.
 |---|--:|--:|--:|--:|--:|--:|:--:|
 | intloop (50M) | 134.6 | 144.3 | 134.9 | **135.8** | 146.0 | 710.9 | **3.** |
 | fib(32) | 1.6 | 3.8 | 6.7 | **4.4** | 13.4 | 27.1 | **3.** |
-| sieve (5M) | 7.6 | 8.2 | 8.6 | **13.3** | 21.2 | 30.0 | 4. |
+| sieve (5M) | 7.7 | 8.2 | 8.5 | **~10.0** | 21.2 | 29.3 | 4. |
 | strcat (2M) | 38.3 | 18.9 | 24.8 | **31.8** | 33.8 | 103.3 | **3.** |
 
 Hedef "her alanda 2.–3. sıra" 4 testin 3'ünde tutuyor.
@@ -34,16 +34,38 @@ Hedef "her alanda 2.–3. sıra" 4 testin 3'ünde tutuyor.
    varsayıp diziyi, etiketini, `count`'unu ve `idata`'sını **her yinelemede**
    yeniden okuyordu. Etiketlemeden sonra bunlar döngü dışına çıktı.
 
-**Kalan fark neden var (Tulpar 13.3 / Go 8.6):**
+3. **Döngü-değişmezi dizi şekli önbelleği** (`src/aot/llvm_array_shape.cpp`).
+   Döngü başında dizinin `idata` + `count`'u **bir kez** okunup yerelde
+   tutuluyor; gövdede yalnız sınır karşılaştırması kalıyor — Go'nun dilim
+   uzunluğunu yazmaçta tutmasıyla aynı fikir. 13.3 → ~10 ms.
+
+### Önce ölç, sonra yaz — bu işin karar anı
+Makine kurmadan önce **tavan ölçüldü**: codegen'e geçici bir "hiçbir denetim
+yok" yolu konup elek çalıştırıldı. 12.9 → 9.1 ms. Sonra denetimler tek tek
+geri açılarak maliyet ayrıştırıldı:
+
+| yapılandırma | ms | ek |
+|---|--:|--:|
+| hiçbir denetim | 9.1 | — |
+| + sınır denetimi | 11.5 | **+2.4** |
+| + tür denetimi | 12.4 | +0.9 |
+| + idata denetimi | 12.9 | +0.5 |
+
+Bu tablo tasarımı belirledi: en pahalısı sınır denetimiydi **ama** pahalı olan
+denetimin kendisi değil, `count`'un her yinelemede **bellekten** okunmasıydı.
+Onu yazmaca almak = şekil önbelleği. Ölçmeden başlansaydı muhtemelen i32'ye
+daraltmaya girilecekti — oysa oran N ile küçülüyordu, yani darboğaz bant
+genişliği değildi. **Yanlış işe girilmesini ölçüm engelledi.**
+
+**Kalan fark neden var (Tulpar ~10 / Go 8.5):**
 - Tulpar'ın `int`'i 64 bit; C/Go/Java bu testte 4 baytlık eleman kullanıyor →
   aynı algoritmada **2× bellek trafiği**. Bu bir semantik farkı, gerileme değil.
-- Sıcak döngüde hâlâ yineleme başına 3 başlık okuması var (`obj.type`, `count`,
-  `idata`). Kalkmıyorlar çünkü döngüde **yavaş yol çağrısı** duruyor ve o çağrı
-  her şeyi ezebilir. `!invariant.load` ile kaldırmak SAĞLAM DEĞİL: `count` ve
-  `idata` döngü içinde bir `push` ile gerçekten değişebilir.
-- Bir sonraki gerçek adım daha derin: typeinfer `int[]` olduğunu bildiğinde
-  diziyi ham `long long*` + count olarak yerel tutmak (VMValue'yu tamamen
-  atlamak). Ondan sonrası i32'ye daraltma (V8'in SMI dizileri gibi).
+- Şekil önbelleği yalnız **kanıtlanabilen** döngülerde açılıyor: gövdede tek
+  bir fonksiyon çağrısı varsa vazgeçiliyor (push/pop şekli değiştirir). Yani
+  çağrı içeren sıcak döngüler hâlâ tam denetim ödüyor.
+- Bir sonraki adım: kanıtı genişletmek (şekil değiştirmediği bilinen saf
+  yerleşiklere izin vermek, `for` döngülerini de kapsamak) ve i32'ye daraltma
+  (V8'in SMI dizileri gibi) — ama i32 ölçüme göre küçük bir kazanç.
 
 Ölçüm hijyeni: oran N ile **küçülüyor** (N=200k'da Go'nun 2.36×'i, N=5M'de
 1.55×'i) — yani darboğaz saf bant genişliği değil, erişim başına sabit hesap.
