@@ -638,6 +638,56 @@ Test yazarken düşülen tuzak: değişkenler **üst düzey** olmalı. İlk yaz�
 `func` içine konmuşlardı — yerel oldukları için hiçbir sembol üretmiyorlardı,
 test yeşildi ve enjeksiyon hiçbir şey yakalamıyordu.
 
+## 6i. Hızlı yol ile yavaş yol AYNI şeyi yapmalı — yoksa dil kendiyle çelişir
+
+İki hata aynı kalıptan çıktı (2026-09-04, ikisi de sondalamayla bulundu):
+
+**Tamsayı sıfıra bölme.** Kutulu yol doğruydu: "Sifira bolme" basıp 0
+dönüyordu. Tipli hızlı yol ham `sdiv` üretiyordu — x86'da #DE, yani SIGFPE.
+
+```
+int n = toInt(env("YOK"));   // 0
+print(10 / n);               // program BURADA ölüyor, tek kelime etmeden
+print("bu satır hiç çalışmıyor");
+```
+
+Aynı programda `%` düzgün çalışıyordu. Yani **aynı dilde aynı işlem iki
+farklı davranış** gösteriyordu, ve hızlı yolun davranışı sessiz ölümdü.
+`INT_MIN / -1` de aynı tuzak ve o kutulu yolda da vardı.
+
+**Yerleşik gölgeleme.** typeinfer'ın belgelenmiş kuralı "yerel tanım her zaman
+kazanır"dı; codegen'de yerleşik kazanıyordu. `func exit(int x)` tanımlayan bir
+program `exit(5)` çağırınca süreç 5 ile sonlanıyordu. 11 yerleşik aynı.
+
+**Kural:** bir işlemin iki uygulaması varsa (tipli/kutulu, satır içi/runtime),
+davranışları TEST EDİLEREK eşitlenmeli. "Hızlı yol yalnızca kısayol" demek
+yetmez — kanıtlanmalı. Yeni bir hızlı yol eklerken sorulacak soru: *yavaş yol
+bu girdide ne yapıyor?*
+
+**Ölçüm tuzağı:** `10 / 0` sabitiyle yazılan bir test bu hatayı GÖREMEZ — LLVM
+katlıyor. Bölenin katlanamaz olması gerek (ortamdan gelen değer). İlk sonda
+sabitle yazılmıştı ve temiz görünüyordu.
+
+## 6j. Sondalama: "doğru yazılmış program" testleri bu sınıfı hiç görmez
+
+Paketler ve örnekler doğru yazılmış programları koşuyor. `tests/
+silent_failure_probe.py` kenar durumlarını koşuyor ve özellikle **derleyicinin
+"başarılı" deyip yanlış sonuç ürettiği / ikilinin çöktüğü** sınıfı arıyor.
+
+Üç gerçek hata bununla bulundu: `int free = 3;` (libc sembol ezme,
+[[Tuzaklar#6h]]), `func exit(...)` (yerleşik gölgeleme), `10 / n` (sessiz
+SIGFPE). Hiçbiri 62 paketin veya 40 örneğin gözüne çarpmamıştı — çünkü hiçbiri
+böyle bir program yazmıyor.
+
+Sonda eklemek ucuz: `c("ad", "kaynak", "beklenen çıktı")`. Sonda `LC_ALL=C` ile
+koşuyor, çünkü tanı metinleri yerele göre değişiyor.
+
+**Sondanın kendi tuzağı:** bir sonda yanlış yazılırsa sessizce hiçbir şey
+ölçmez. `func exit` sondası önce fonksiyon İÇİNE yazılmıştı (yerel değişken →
+hiç sembol üretmiyor), `len(dizgi)` sondası dizgiyi indekslemiyordu (önbelleğe
+aday bile değil). İkisi de yeşildi ve ikisi de hiçbir şey ölçmüyordu. Her
+sondayı enjeksiyonla sına.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.
