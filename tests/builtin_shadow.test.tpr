@@ -1,0 +1,42 @@
+import "test";
+
+// KULLANICI TANIMI YERLESIGI GOLGELER.
+//
+// Hata (2026-09-04, sondalamayla bulundu): tersiydi ve TAMAMEN SESSIZDI.
+// `func exit(int x) { return x - 1; }` tanimlayan bir program `exit(5)`
+// cagirinca kullanici fonksiyonu degil YERLESIK calisiyordu — surec 5 ile
+// sonlaniyor, ne uyari ne hata cikiyordu. 11 yerlesik ayni sekilde
+// davraniyordu: len, abs, round, upper, lower, trim, keys, values, print,
+// range, exit.
+//
+// Ayrica typeinfer'in BELGELENMIS kuraliyla celisiyordu ("yerel tanim her
+// zaman kazanir"), yani tip denetimi kullanicinin imzasina bakarken codegen
+// baska bir sey cagiriyordu.
+//
+// Golgeleme artik calisiyor AMA sessiz degil: typeinfer bir [typecheck]
+// satiri basiyor, cunku Tulpar'in tek kuresel ad alani yuzunden golgeleme
+// programin TAMAMINI kapsiyor (ice aktarilan kutuphaneler dahil).
+//
+// NOT: burada golgelenen adlar lib/test.tpr'nin KULLANMADIKLARI secildi
+// (o print/length/upper/exit kullaniyor) — yoksa test cercevesinin kendisi
+// bozulurdu.
+
+func abs(int x) { return x + 1000; }
+func round(int x) { return x + 2000; }
+
+func run_yerlesik_golgelenir() {
+    assert_eq_int(abs(1), 1001);
+    assert_eq_int(round(1), 2001);
+}
+
+// Golgelenmemis yerlesikler etkilenmemeli.
+func run_digerleri_saglam() {
+    int[] a = array_fill(4, 2);
+    assert_eq_int(len(a), 4);
+    assert_eq_int(length(a), 4);
+    assert_eq_int(toInt("7"), 7);
+}
+
+test("yerlesik golgelenir", "run_yerlesik_golgelenir");
+test("digerleri saglam", "run_digerleri_saglam");
+test_summary();

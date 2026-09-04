@@ -4636,12 +4636,38 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       resolve_qualified_call(node, func_in_module, backend->module);
     }
 
+    // KULLANICI TANIMI YERLESIGI GOLGELER.
+    //
+    // Eskiden tersiydi ve SESSIZDI: `func exit(int x) { ... }` tanimlayan bir
+    // program `exit(5)` cagirinca kullanici fonksiyonu degil YERLESIK
+    // calisiyordu — surec 5 ile sonlaniyor, hicbir uyari cikmiyordu. Ayni sey
+    // len/abs/round/upper/lower/trim/keys/values/print/range icin de
+    // gecerliydi: 11 yerlesik, kullanici fonksiyonunu sessizce yutuyordu.
+    //
+    // Bu, typeinfer'in BELGELENMIS kuraliyla da celisiyordu ("yerel tanim her
+    // zaman kazanir"), yani tip denetimi kullanicinin imzasina bakarken
+    // codegen baska bir sey cagiriyordu.
+    //
+    // Asagidaki yerlesik zincirinin tamami `bi_name` uzerinden karsilastirma
+    // yapiyor; kullanici ayni adi tanimlamissa bi_name bos kaliyor ve zincir
+    // topluca eleniyor, cagri asagidaki kullanici blogana dusuyor.
+    const char *bi_name = node->name ? node->name : "";
+    if (node->name) {
+      for (int i = 0; i < backend->function_count; i++) {
+        if (backend->functions[i].name &&
+            strcmp(backend->functions[i].name, node->name) == 0) {
+          bi_name = "";
+          break;
+        }
+      }
+    }
+
     // call(func_name) -> dynamic dispatch
     // call(name, a, b, ...) — forward 2+ arguments. Stash the actual args in a
     // stack VMValue array and hand the runtime a pointer + count; it invokes
     // the target through its true (registered) arity. Must be checked BEFORE
     // the 1-arg case below, which would otherwise swallow the extra args.
-    if (node->name && strcmp(node->name, "call") == 0 &&
+    if (node->name && strcmp(bi_name, "call") == 0 &&
         node->argument_count >= 3) {
       int actual = node->argument_count - 1; // arguments[0] is the name
       LLVMValueRef name_v = codegen_expression(backend, node->arguments[0]);
@@ -4665,7 +4691,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     cargs, 3, "calln_res");
     }
     // call(name, arg) — dynamic dispatch passing one argument to the target.
-    if (node->name && strcmp(node->name, "call") == 0 &&
+    if (node->name && strcmp(bi_name, "call") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef args[] = {
           codegen_expression(backend, node->arguments[0]),
@@ -4673,7 +4699,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_call_dynamic_1,
                                     args, 2, "call1_res");
     }
-    if (node->name && strcmp(node->name, "call") == 0 &&
+    if (node->name && strcmp(bi_name, "call") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       // Alloca to pass by value/pointer as needed by ABI
@@ -4694,7 +4720,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // Check for builtin "print" function
-    if (node->name && strcmp(node->name, "print") == 0) {
+    if (node->name && strcmp(bi_name, "print") == 0) {
       // Generate print calls for each argument on the same line
       for (int i = 0; i < node->argument_count; i++) {
         ASTNode_C *arg = node->arguments[i];
@@ -4847,7 +4873,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // ====== Builtin Functions ======
 
     // toString(value) -> string (for print, returns char*)
-    if (node->name && strcmp(node->name, "toString") == 0 &&
+    if (node->name && strcmp(bi_name, "toString") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
@@ -4860,12 +4886,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // clock_ms() -> float
-    if (node->name && strcmp(node->name, "clock_ms") == 0) {
+    if (node->name && strcmp(bi_name, "clock_ms") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_clock_ms, nullptr, 0, "clock_res");
     }
 
     // toInt(value) -> int
-    if (node->name && strcmp(node->name, "toInt") == 0 &&
+    if (node->name && strcmp(bi_name, "toInt") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
@@ -4881,7 +4907,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // toJson(value) -> String
-    if (node->name && strcmp(node->name, "toJson") == 0 &&
+    if (node->name && strcmp(bi_name, "toJson") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
@@ -4894,7 +4920,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // toFloat(value) -> float
-    if (node->name && strcmp(node->name, "toFloat") == 0 &&
+    if (node->name && strcmp(bi_name, "toFloat") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
@@ -4910,7 +4936,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // len(value) -> int
-    if (node->name && strcmp(node->name, "len") == 0 &&
+    if (node->name && strcmp(bi_name, "len") == 0 &&
         node->argument_count >= 1) {
       // Dongu-degismezi sekil onbellegi `len` icin de gecerli: dongu boyunca
       // sekli degistiren bir sey olmadigi KANITLANDIGI icin uzunluk sabit.
@@ -4987,7 +5013,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // length(value) -> int (alias for len)
-    if (node->name && strcmp(node->name, "length") == 0 &&
+    if (node->name && strcmp(bi_name, "length") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       if (!arg) return llvm_vm_val_int(backend, 0);
@@ -5004,7 +5030,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // push(array, value) - pointer ABI
-    if (node->name && strcmp(node->name, "push") == 0 &&
+    if (node->name && strcmp(bi_name, "push") == 0 &&
         node->argument_count >= 2) {
       // Heap-promote escape path (Plan 04 v2): if arg[1] is a typed-struct
       // identifier OR a struct-returning call, lift the struct contents to
@@ -5048,7 +5074,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // pop(array) -> value
-    if (node->name && strcmp(node->name, "pop") == 0 &&
+    if (node->name && strcmp(bi_name, "pop") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arr = codegen_expression(backend, node->arguments[0]);
       if (!arr) return llvm_vm_val_int(backend, 0);
@@ -5057,54 +5083,54 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // input() -> String
-    if (node->name && strcmp(node->name, "env") == 0 &&
+    if (node->name && strcmp(bi_name, "env") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_env, args, 1, "env_res");
     }
-    if (node->name && strcmp(node->name, "arena_save") == 0) {
+    if (node->name && strcmp(bi_name, "arena_save") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_arena_save,
                                     nullptr, 0, "arena_save_res");
     }
-    if (node->name && strcmp(node->name, "now_iso8601") == 0) {
+    if (node->name && strcmp(bi_name, "now_iso8601") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_now_iso8601,
                                     nullptr, 0, "now_iso");
     }
-    if (node->name && strcmp(node->name, "format_iso8601") == 0 &&
+    if (node->name && strcmp(bi_name, "format_iso8601") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_format_iso8601,
                                     args, 1, "fmt_iso");
     }
-    if (node->name && strcmp(node->name, "parse_iso8601") == 0 &&
+    if (node->name && strcmp(bi_name, "parse_iso8601") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_parse_iso8601,
                                     args, 1, "parse_iso");
     }
     // regex builtins
-    if (node->name && strcmp(node->name, "regex_match") == 0 &&
+    if (node->name && strcmp(bi_name, "regex_match") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_regex_match,
                                     args, 2, "rxm");
     }
-    if (node->name && strcmp(node->name, "regex_search") == 0 &&
+    if (node->name && strcmp(bi_name, "regex_search") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_regex_search,
                                     args, 2, "rxs");
     }
-    if (node->name && strcmp(node->name, "regex_capture") == 0 &&
+    if (node->name && strcmp(bi_name, "regex_capture") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_regex_capture,
                                     args, 2, "rxc");
     }
-    if (node->name && strcmp(node->name, "regex_replace") == 0 &&
+    if (node->name && strcmp(bi_name, "regex_replace") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1]),
@@ -5112,55 +5138,55 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_regex_replace,
                                     args, 3, "rxr");
     }
-    if (node->name && strcmp(node->name, "weekday") == 0 &&
+    if (node->name && strcmp(bi_name, "weekday") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_weekday,
                                     args, 1, "wday");
     }
-    if (node->name && strcmp(node->name, "date_add_seconds") == 0 &&
+    if (node->name && strcmp(bi_name, "date_add_seconds") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_date_add_seconds,
                                     args, 2, "date_add");
     }
-    if (node->name && strcmp(node->name, "file_glob") == 0 &&
+    if (node->name && strcmp(bi_name, "file_glob") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_file_glob,
                                     args, 1, "glob");
     }
-    if (node->name && strcmp(node->name, "csv_parse") == 0 &&
+    if (node->name && strcmp(bi_name, "csv_parse") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_csv_parse,
                                     args, 1, "csv_p");
     }
-    if (node->name && strcmp(node->name, "csv_emit") == 0 &&
+    if (node->name && strcmp(bi_name, "csv_emit") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_csv_emit,
                                     args, 1, "csv_e");
     }
-    if (node->name && strcmp(node->name, "args") == 0 &&
+    if (node->name && strcmp(bi_name, "args") == 0 &&
         node->argument_count == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_args, nullptr, 0,
                                     "args");
     }
-    if (node->name && strcmp(node->name, "keys") == 0 &&
+    if (node->name && strcmp(bi_name, "keys") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_keys,
                                     args, 1, "keys");
     }
-    if (node->name && strcmp(node->name, "values") == 0 &&
+    if (node->name && strcmp(bi_name, "values") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_values,
                                     args, 1, "values");
     }
-    if (node->name && strcmp(node->name, "toBool") == 0 &&
+    if (node->name && strcmp(bi_name, "toBool") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_to_bool,
@@ -5170,7 +5196,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // also emits this opcode-sequence as the function-entry by-value
     // prologue for typed-struct params; surfacing it as a user-callable
     // builtin lets `.tpr` code request explicit copies too.
-    if (node->name && strcmp(node->name, "clone") == 0 &&
+    if (node->name && strcmp(bi_name, "clone") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_object_clone,
@@ -5179,14 +5205,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // persist(value) -> deep malloc'd copy that outlives the per-request
     // arena. Use it to keep handler-built data in a long-lived global:
     // `push(_users, persist(u))`.
-    if (node->name && strcmp(node->name, "persist") == 0 &&
+    if (node->name && strcmp(bi_name, "persist") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_persist,
                                     args, 1, "persist");
     }
     // http_request(method, url, body) — outbound HTTP/1.0 client.
-    if (node->name && strcmp(node->name, "http_request") == 0 &&
+    if (node->name && strcmp(bi_name, "http_request") == 0 &&
         node->argument_count >= 4) {
       // 4-arg form: method, url, body, headers (object).
       LLVMValueRef args[] = {
@@ -5197,7 +5223,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_http_request_h,
                                     args, 4, "http_req_h");
     }
-    if (node->name && strcmp(node->name, "http_request") == 0 &&
+    if (node->name && strcmp(bi_name, "http_request") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef args[] = {
           codegen_expression(backend, node->arguments[0]),
@@ -5208,7 +5234,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
     // http_request_async(method, url, body) — non-blocking client; returns a
     // promise resolved off a worker pool. `await` it inside an async func.
-    if (node->name && strcmp(node->name, "http_request_async") == 0 &&
+    if (node->name && strcmp(bi_name, "http_request_async") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef args[] = {
           codegen_expression(backend, node->arguments[0]),
@@ -5218,36 +5244,36 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     backend->func_aot_http_request_async, args,
                                     3, "http_req_async");
     }
-    if (node->name && strcmp(node->name, "arena_restore") == 0 &&
+    if (node->name && strcmp(bi_name, "arena_restore") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_arena_restore,
                                     args, 1, "arena_restore_res");
     }
-    if (node->name && strcmp(node->name, "arena_drop") == 0 &&
+    if (node->name && strcmp(bi_name, "arena_drop") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_arena_drop,
                                     args, 1, "arena_drop_res");
     }
-    if (node->name && strcmp(node->name, "input") == 0) {
+    if (node->name && strcmp(bi_name, "input") == 0) {
       if (!backend->func_aot_input)
         fprintf(stderr, "Fatal: func_aot_input is nullptr\n");
       return llvm_call_vmvalue_func(backend, backend->func_aot_input, nullptr, 0, "input_res");
     }
-    if (node->name && strcmp(node->name, "read_key") == 0) {
+    if (node->name && strcmp(bi_name, "read_key") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_read_key, nullptr, 0, "readkey_res");
     }
-    if (node->name && strcmp(node->name, "sys_lang") == 0) {
+    if (node->name && strcmp(bi_name, "sys_lang") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_sys_lang, nullptr, 0, "syslang_res");
     }
-    if (node->name && strcmp(node->name, "term_width") == 0) {
+    if (node->name && strcmp(bi_name, "term_width") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_term_width, nullptr, 0, "termw_res");
     }
-    if (node->name && strcmp(node->name, "term_height") == 0) {
+    if (node->name && strcmp(bi_name, "term_height") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_term_height, nullptr, 0, "termh_res");
     }
-    if (node->name && strcmp(node->name, "read_key_timeout") == 0 &&
+    if (node->name && strcmp(bi_name, "read_key_timeout") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
@@ -5259,7 +5285,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_read_key_timeout,
                                     args, 1, "rkt_res");
     }
-    if (node->name && strcmp(node->name, "display_width") == 0 &&
+    if (node->name && strcmp(bi_name, "display_width") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
@@ -5271,7 +5297,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_display_width,
                                     args, 1, "dw_res");
     }
-    if (node->name && strcmp(node->name, "fit_width") == 0 &&
+    if (node->name && strcmp(bi_name, "fit_width") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef sv = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef wv = codegen_expression(backend, node->arguments[1]);
@@ -5289,7 +5315,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_fit_width, args,
                                     2, "fw_res");
     }
-    if (node->name && strcmp(node->name, "ord") == 0 &&
+    if (node->name && strcmp(bi_name, "ord") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef sv = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef iv = codegen_expression(backend, node->arguments[1]);
@@ -5307,7 +5333,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_ord, args,
                                     2, "ord_res");
     }
-    if (node->name && strcmp(node->name, "chr") == 0 &&
+    if (node->name && strcmp(bi_name, "chr") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef cv = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef cslot = LLVMBuildAlloca(backend->builder,
@@ -5347,15 +5373,15 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                       (unsigned)tb->argc, "tm_res");
       }
     }
-    if (node->name && strcmp(node->name, "screen_open") == 0) {
+    if (node->name && strcmp(bi_name, "screen_open") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_screen_open,
                                     nullptr, 0, "scropen_res");
     }
-    if (node->name && strcmp(node->name, "screen_close") == 0) {
+    if (node->name && strcmp(bi_name, "screen_close") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_screen_close,
                                     nullptr, 0, "scrclose_res");
     }
-    if (node->name && strcmp(node->name, "screen_render") == 0 &&
+    if (node->name && strcmp(bi_name, "screen_render") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
@@ -5367,7 +5393,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_screen_render,
                                     args, 1, "scr_res");
     }
-    if (node->name && strcmp(node->name, "style") == 0 &&
+    if (node->name && strcmp(bi_name, "style") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef sv = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef pv = codegen_expression(backend, node->arguments[1]);
@@ -5387,7 +5413,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // trim(str) -> String
-    if (node->name && strcmp(node->name, "trim") == 0 &&
+    if (node->name && strcmp(bi_name, "trim") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr =
@@ -5400,7 +5426,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // replace(str, old, new) -> String
-    if (node->name && strcmp(node->name, "replace") == 0 &&
+    if (node->name && strcmp(bi_name, "replace") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef str = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef oldVal = codegen_expression(backend, node->arguments[1]);
@@ -5425,7 +5451,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // split(str, del) -> Array
-    if (node->name && strcmp(node->name, "split") == 0 &&
+    if (node->name && strcmp(bi_name, "split") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef str = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef del = codegen_expression(backend, node->arguments[1]);
@@ -5445,8 +5471,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     // array_fill(n, deger) / dizi_dolu(n, deger) -> n elemanli dizi
     if (node->name && node->argument_count >= 2 &&
-        (strcmp(node->name, "array_fill") == 0 ||
-         strcmp(node->name, "dizi_dolu") == 0)) {
+        (strcmp(bi_name, "array_fill") == 0 ||
+         strcmp(bi_name, "dizi_dolu") == 0)) {
       LLVMValueRef cnt = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef val = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef cnt_ptr = llvm_build_alloca_at_entry(
@@ -5465,7 +5491,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // parse_multipart(body, content_type) -> {fields, files}
-    if (node->name && strcmp(node->name, "parse_multipart") == 0 &&
+    if (node->name && strcmp(bi_name, "parse_multipart") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef bodyv = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef ctv = codegen_expression(backend, node->arguments[1]);
@@ -5484,7 +5510,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     args, 2, "parse_multipart_res");
     }
 
-    if (strcmp(node->name, "read_file") == 0) {
+    if (strcmp(bi_name, "read_file") == 0) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "read_arg_ptr");
@@ -5494,7 +5520,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {arg_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_read_file, args, 1, "read_res");
     }
-    if (strcmp(node->name, "sys_run") == 0) {
+    if (strcmp(bi_name, "sys_run") == 0) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "sysrun_arg_ptr");
@@ -5504,7 +5530,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {arg_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_sys_run, args, 1, "sysrun_res");
     }
-    if (strcmp(node->name, "write_file") == 0) {
+    if (strcmp(bi_name, "write_file") == 0) {
       LLVMValueRef p = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef c = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef p_ptr = llvm_build_alloca_at_entry(
@@ -5520,7 +5546,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {p_void, c_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_write_file, args, 2, "write_res");
     }
-    if (strcmp(node->name, "append_file") == 0) {
+    if (strcmp(bi_name, "append_file") == 0) {
       LLVMValueRef p = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef c = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef p_ptr = llvm_build_alloca_at_entry(
@@ -5536,7 +5562,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {p_void, c_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_append_file, args, 2, "append_res");
     }
-    if (strcmp(node->name, "file_exists") == 0) {
+    if (strcmp(bi_name, "file_exists") == 0) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "exists_arg_ptr");
@@ -5546,7 +5572,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {arg_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_file_exists, args, 1, "exists_res");
     }
-    if (strcmp(node->name, "sha256") == 0) {
+    if (strcmp(bi_name, "sha256") == 0) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "sha256_arg_ptr");
@@ -5556,7 +5582,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {arg_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_sha256, args, 1, "sha256_res");
     }
-    if (strcmp(node->name, "gzip_compress") == 0) {
+    if (strcmp(bi_name, "gzip_compress") == 0) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "gzip_arg_ptr");
@@ -5567,7 +5593,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_gzip_compress, args, 1, "gzip_res");
     }
 
-    if (strcmp(node->name, "password_hash") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "password_hash") == 0 && node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "pwhash_arg_ptr");
@@ -5578,7 +5604,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_password_hash, args, 1, "pwhash_res");
     }
 
-    if (strcmp(node->name, "secure_token") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "secure_token") == 0 && node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "sectok_arg_ptr");
@@ -5589,7 +5615,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_secure_token, args, 1, "sectok_res");
     }
 
-    if (strcmp(node->name, "password_verify") == 0 && node->argument_count >= 2) {
+    if (strcmp(bi_name, "password_verify") == 0 && node->argument_count >= 2) {
       LLVMValueRef pw = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef stored = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef pw_ptr = llvm_build_alloca_at_entry(
@@ -5606,7 +5632,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_password_verify, args, 2, "pwverify_res");
     }
 
-    if (strcmp(node->name, "hmac_sha256") == 0 && node->argument_count >= 2) {
+    if (strcmp(bi_name, "hmac_sha256") == 0 && node->argument_count >= 2) {
       LLVMValueRef key = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef msg = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef key_ptr = llvm_build_alloca_at_entry(
@@ -5623,7 +5649,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_hmac_sha256, args, 2, "hmac_res");
     }
 
-    if (strcmp(node->name, "db_open") == 0) {
+    if (strcmp(bi_name, "db_open") == 0) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "db_open_arg_ptr");
@@ -5634,7 +5660,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_open, args, 1, "db_open_res");
     }
 
-    if (strcmp(node->name, "db_close") == 0) {
+    if (strcmp(bi_name, "db_close") == 0) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "db_close_arg_ptr");
@@ -5648,7 +5674,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_vm_val_int(backend, 0);
     }
 
-    if (strcmp(node->name, "db_execute") == 0) {
+    if (strcmp(bi_name, "db_execute") == 0) {
       LLVMValueRef db = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef sql = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef db_ptr = llvm_build_alloca_at_entry(
@@ -5677,7 +5703,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_execute, args, 2, "db_exec_res");
     }
 
-    if (strcmp(node->name, "db_query") == 0) {
+    if (strcmp(bi_name, "db_query") == 0) {
       LLVMValueRef db = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef sql = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef db_ptr = llvm_build_alloca_at_entry(
@@ -5707,21 +5733,21 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // Socket Functions
-    if (strcmp(node->name, "socket_server") == 0) {
+    if (strcmp(bi_name, "socket_server") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_socket_server, args, 2, "sock_fd");
     }
-    if (strcmp(node->name, "socket_client") == 0) {
+    if (strcmp(bi_name, "socket_client") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_socket_client, args, 2, "sock_fd");
     }
-    if (strcmp(node->name, "socket_accept") == 0) {
+    if (strcmp(bi_name, "socket_accept") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_socket_accept, args, 1, "client_fd");
     }
-    if (strcmp(node->name, "socket_peer_ip") == 0 &&
+    if (strcmp(bi_name, "socket_peer_ip") == 0 &&
         node->argument_count >= 1) {
       // Declared lazily (no cached backend field): (VMValue) -> VMValue,
       // same shape as socket_close. Resolves the remote IP of an accepted
@@ -5736,29 +5762,29 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, fn, args, 1, "peer_ip");
     }
-    if (strcmp(node->name, "socket_send") == 0) {
+    if (strcmp(bi_name, "socket_send") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_socket_send, args, 2, "bytes_sent");
     }
-    if (strcmp(node->name, "socket_receive") == 0) {
+    if (strcmp(bi_name, "socket_receive") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_socket_receive, args, 2, "recv_data");
     }
-    if (strcmp(node->name, "socket_close") == 0) {
+    if (strcmp(bi_name, "socket_close") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_socket_close,
                                     args, 1, "sock_close_res");
     }
-    if (strcmp(node->name, "socket_set_nonblocking") == 0 &&
+    if (strcmp(bi_name, "socket_set_nonblocking") == 0 &&
         node->argument_count == 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(
           backend, backend->func_aot_socket_set_nonblocking, args, 1,
           "sock_nonblock_res");
     }
-    if (strcmp(node->name, "socket_poll") == 0 &&
+    if (strcmp(bi_name, "socket_poll") == 0 &&
         node->argument_count == 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
@@ -5767,41 +5793,41 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
     // TLS server primitives. Same dispatch shape as socket_*; the
     // builtin names match what `lib/wings_tls.tpr` calls.
-    if (strcmp(node->name, "tls_init") == 0 &&
+    if (strcmp(bi_name, "tls_init") == 0 &&
         node->argument_count == 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_tls_init,
                                     args, 2, "tls_ctx");
     }
-    if (strcmp(node->name, "tls_accept") == 0 &&
+    if (strcmp(bi_name, "tls_accept") == 0 &&
         node->argument_count == 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_tls_accept,
                                     args, 2, "tls_ssl");
     }
-    if (strcmp(node->name, "tls_recv") == 0 &&
+    if (strcmp(bi_name, "tls_recv") == 0 &&
         node->argument_count == 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_tls_recv,
                                     args, 2, "tls_recv_data");
     }
-    if (strcmp(node->name, "tls_send") == 0 &&
+    if (strcmp(bi_name, "tls_send") == 0 &&
         node->argument_count == 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_tls_send,
                                     args, 2, "tls_send_n");
     }
-    if (strcmp(node->name, "tls_close") == 0 &&
+    if (strcmp(bi_name, "tls_close") == 0 &&
         node->argument_count == 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_tls_close,
                                     args, 1, "tls_close_res");
     }
-    if (strcmp(node->name, "tls_ctx_free") == 0 &&
+    if (strcmp(bi_name, "tls_ctx_free") == 0 &&
         node->argument_count == 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_tls_ctx_free,
@@ -5819,7 +5845,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // prefixed). Without the fallback, `thread_create(my_worker, x)`
     // silently passed a NULL function pointer and the worker thread
     // would segfault on first dispatch.
-    if (strcmp(node->name, "thread_create") == 0 && node->argument_count >= 2) {
+    if (strcmp(bi_name, "thread_create") == 0 && node->argument_count >= 2) {
       LLVMValueRef func_ptr = nullptr;
       if (node->arguments[0]->type == AST_IDENTIFIER) {
         const char *raw = node->arguments[0]->name;
@@ -5838,36 +5864,36 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // thread_join(thread_id) — VMValue-returning since the ABI fix.
-    if (strcmp(node->name, "thread_join") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "thread_join") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_thread_join,
                                     args, 1, "thread_join_res");
     }
 
     // thread_detach(thread_id) — same ABI as thread_join.
-    if (strcmp(node->name, "thread_detach") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "thread_detach") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_thread_detach,
                                     args, 1, "thread_detach_res");
     }
 
     // mutex_create() -> mutex_ptr
-    if (strcmp(node->name, "mutex_create") == 0) {
+    if (strcmp(bi_name, "mutex_create") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_mutex_create, nullptr, 0, "mutex_ptr");
     }
 
     // mutex_lock / unlock / destroy — VMValue-returning since the ABI fix.
-    if (strcmp(node->name, "mutex_lock") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "mutex_lock") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_mutex_lock,
                                     args, 1, "mutex_lock_res");
     }
-    if (strcmp(node->name, "mutex_unlock") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "mutex_unlock") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_mutex_unlock,
                                     args, 1, "mutex_unlock_res");
     }
-    if (strcmp(node->name, "mutex_destroy") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "mutex_destroy") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_mutex_destroy,
                                     args, 1, "mutex_destroy_res");
@@ -5875,7 +5901,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     // ====== HTTP Functions ======
     // http_parse_request(raw) -> object
-    if (strcmp(node->name, "http_parse_request") == 0 &&
+    if (strcmp(bi_name, "http_parse_request") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_http_parse_request, args, 1, "parsed_req");
@@ -5885,7 +5911,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // 3-arg: status + ct + body. 4-arg adds custom headers map.
     // 5-arg further passes a keep-alive flag (1 = "keep-alive", 0 = "close")
     // — required by the keep-alive request loop in lib/wings.tpr / router.tpr.
-    if (strcmp(node->name, "http_create_response") == 0 &&
+    if (strcmp(bi_name, "http_create_response") == 0 &&
         node->argument_count >= 5) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1]),
@@ -5896,7 +5922,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     backend->func_aot_http_create_response_keepalive,
                                     args, 5, "http_resp_keep");
     }
-    if (strcmp(node->name, "http_create_response") == 0 &&
+    if (strcmp(bi_name, "http_create_response") == 0 &&
         node->argument_count >= 4) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1]),
@@ -5904,7 +5930,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                              codegen_expression(backend, node->arguments[3])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_http_create_response_full, args, 4, "http_resp_full");
     }
-    if (strcmp(node->name, "http_create_response") == 0 &&
+    if (strcmp(bi_name, "http_create_response") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1]),
@@ -5913,7 +5939,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // http_should_keepalive(parsed_request) -> int (0/1)
-    if (strcmp(node->name, "http_should_keepalive") == 0 &&
+    if (strcmp(bi_name, "http_should_keepalive") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend,
@@ -5922,7 +5948,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // http_recv_request(client_fd, max_bytes) -> str
-    if (strcmp(node->name, "http_recv_request") == 0 &&
+    if (strcmp(bi_name, "http_recv_request") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
@@ -5932,7 +5958,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // http_status_text(status) -> string
-    if (strcmp(node->name, "http_status_text") == 0 &&
+    if (strcmp(bi_name, "http_status_text") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_http_status_text, args, 1, "status_text");
@@ -5942,7 +5968,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // Fused replacement for the Tulpar-side _wings_build_response —
     // skips three function-call hops per request and folds the envelope
     // check + toJson + framing into one native call.
-    if (strcmp(node->name, "wings_build_response") == 0 &&
+    if (strcmp(bi_name, "wings_build_response") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1]),
@@ -5956,7 +5982,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // Native replacement for the Tulpar `_find_route_with_params`
     // serve-path lookup. Saves N json[get]s per route iteration on
     // every request.
-    if (strcmp(node->name, "wings_find_route") == 0 &&
+    if (strcmp(bi_name, "wings_find_route") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1]),
@@ -5967,7 +5993,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // string_pin(s) -> str (permanent copy outside the per-request arena)
-    if (strcmp(node->name, "string_pin") == 0 &&
+    if (strcmp(bi_name, "string_pin") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_string_pin,
@@ -5976,29 +6002,29 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     // sha1(s) / sha1_hex(s) / base64_encode(s) / base64_decode(s) /
     // wings_ws_accept_key(s) — single-arg VMValue->VMValue helpers.
-    if (strcmp(node->name, "sha1") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "sha1") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_sha1,
                                     args, 1, "sha1");
     }
-    if (strcmp(node->name, "sha1_hex") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "sha1_hex") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_sha1_hex,
                                     args, 1, "sha1_hex");
     }
-    if (strcmp(node->name, "base64_encode") == 0 &&
+    if (strcmp(bi_name, "base64_encode") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_base64_encode,
                                     args, 1, "base64_encode");
     }
-    if (strcmp(node->name, "base64_decode") == 0 &&
+    if (strcmp(bi_name, "base64_decode") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_base64_decode,
                                     args, 1, "base64_decode");
     }
-    if (strcmp(node->name, "wings_ws_accept_key") == 0 &&
+    if (strcmp(bi_name, "wings_ws_accept_key") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend,
@@ -6006,7 +6032,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     args, 1, "ws_accept_key");
     }
     // wings_ws_send_frame(fd, opcode, payload) -> int
-    if (strcmp(node->name, "wings_ws_send_frame") == 0 &&
+    if (strcmp(bi_name, "wings_ws_send_frame") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1]),
@@ -6016,7 +6042,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     args, 3, "ws_send_frame");
     }
     // wings_ws_recv_frame(fd) -> {ok, opcode, fin, payload} | {ok=0, error}
-    if (strcmp(node->name, "wings_ws_recv_frame") == 0 &&
+    if (strcmp(bi_name, "wings_ws_recv_frame") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend,
@@ -6024,7 +6050,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     args, 1, "ws_recv_frame");
     }
     // wings_set_current_fd(fd) -> 0 (sentinel)
-    if (strcmp(node->name, "wings_set_current_fd") == 0 &&
+    if (strcmp(bi_name, "wings_set_current_fd") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend,
@@ -6032,7 +6058,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     args, 1, "wings_set_fd");
     }
     // wings_current_fd() -> int
-    if (strcmp(node->name, "wings_current_fd") == 0 &&
+    if (strcmp(bi_name, "wings_current_fd") == 0 &&
         node->argument_count == 0) {
       return llvm_call_vmvalue_func(backend,
                                     backend->func_aot_wings_current_fd,
@@ -6040,13 +6066,13 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // cpu_count() -> int (logical CPUs).
-    if (strcmp(node->name, "cpu_count") == 0 && node->argument_count == 0) {
+    if (strcmp(bi_name, "cpu_count") == 0 && node->argument_count == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_cpu_count,
                                     nullptr, 0, "cpu_count");
     }
 
     // path_match(pattern, path) -> {matched, params}
-    if (strcmp(node->name, "path_match") == 0 &&
+    if (strcmp(bi_name, "path_match") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
@@ -6054,14 +6080,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // parse_query(str) -> object
-    if (strcmp(node->name, "parse_query") == 0 &&
+    if (strcmp(bi_name, "parse_query") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_parse_query, args, 1, "parse_query");
     }
 
     // parse_cookies(str) -> object
-    if (strcmp(node->name, "parse_cookies") == 0 &&
+    if (strcmp(bi_name, "parse_cookies") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_parse_cookies, args, 1, "parse_cookies");
@@ -6071,7 +6097,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // Extract the i64 from VMValue, truncate to i32, call libc-backed
     // aot_exit_i32. Placeholder VMValue return keeps surrounding IR
     // well-typed; control never returns past the call.
-    if (strcmp(node->name, "exit") == 0 &&
+    if (strcmp(bi_name, "exit") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef code_vm = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef code_i64 = llvm_extract_vm_val_int(backend, code_vm);
@@ -6086,7 +6112,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
 // ====== Math Functions - Single Param ======
 #define MATH1_FUNC(func_name, field)                                           \
-  if (strcmp(node->name, func_name) == 0 && node->argument_count >= 1) {       \
+  if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 1) {       \
     LLVMValueRef v = codegen_expression(backend, node->arguments[0]);          \
     LLVMValueRef v_ptr = LLVMBuildAlloca(                                      \
         backend->builder, backend->vm_value_type, func_name "_arg_ptr");       \
@@ -6099,7 +6125,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   }
 
     // abs(v) -> passed by pointer with result pointer
-    if (strcmp(node->name, "abs") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "abs") == 0 && node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
 
       LLVMValueRef arg_temp =
@@ -6142,7 +6168,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
 // ====== Math Functions - Two Params ======
 #define MATH2_FUNC(func_name, field)                                           \
-  if (strcmp(node->name, func_name) == 0 && node->argument_count >= 2) {       \
+  if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 2) {       \
     LLVMValueRef v1 = codegen_expression(backend, node->arguments[0]);         \
     LLVMValueRef v2 = codegen_expression(backend, node->arguments[1]);         \
     LLVMValueRef v1_ptr = LLVMBuildAlloca(                                     \
@@ -6172,13 +6198,13 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 #undef MATH2_FUNC
 
     // random() -> float (0.0 - 1.0)
-    if (strcmp(node->name, "random") == 0) {
+    if (strcmp(bi_name, "random") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_math_random, nullptr, 0, "random_res");
     }
 
 // ====== String Functions - Single Param ======
 #define STR1_FUNC(func_name, field)                                            \
-  if (strcmp(node->name, func_name) == 0 && node->argument_count >= 1) {       \
+  if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 1) {       \
     LLVMValueRef v = codegen_expression(backend, node->arguments[0]);          \
     LLVMValueRef v_ptr = LLVMBuildAlloca(                                      \
         backend->builder, backend->vm_value_type, func_name "_arg_ptr");       \
@@ -6208,7 +6234,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
 // ====== String Functions - Two Params ======
 #define STR2_FUNC(func_name, field)                                            \
-  if (strcmp(node->name, func_name) == 0 && node->argument_count >= 2) {       \
+  if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 2) {       \
     LLVMValueRef v1 = codegen_expression(backend, node->arguments[0]);         \
     LLVMValueRef v2 = codegen_expression(backend, node->arguments[1]);         \
     LLVMValueRef v1_ptr = LLVMBuildAlloca(                                     \
@@ -6237,7 +6263,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 #undef STR2_FUNC
 
     // substring(str, start, end) -> string
-    if (strcmp(node->name, "substring") == 0 && node->argument_count >= 3) {
+    if (strcmp(bi_name, "substring") == 0 && node->argument_count >= 3) {
       LLVMValueRef v0 = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef v1 = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef v2 = codegen_expression(backend, node->arguments[2]);
@@ -6262,17 +6288,17 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     // ====== Time Functions ======
     // timestamp() -> int (unix timestamp)
-    if (strcmp(node->name, "timestamp") == 0) {
+    if (strcmp(bi_name, "timestamp") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_timestamp, nullptr, 0, "timestamp_res");
     }
 
     // time_ms() -> int (milliseconds)
-    if (strcmp(node->name, "time_ms") == 0) {
+    if (strcmp(bi_name, "time_ms") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_time_ms, nullptr, 0, "time_ms_res");
     }
 
     // sleep(ms)
-    if (strcmp(node->name, "sleep") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "sleep") == 0 && node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "sleep_arg_ptr");
@@ -6290,7 +6316,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // sleep(), this does NOT block: it registers a timer with the event loop,
     // so other coroutines run while it pends. `await sleep_async(ms)` is the
     // idiomatic non-blocking delay.
-    if (strcmp(node->name, "sleep_async") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "sleep_async") == 0 && node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef ms_i64 =
           LLVMBuildExtractValue(backend->builder, arg, 2, "sleep_async_ms");
@@ -6305,7 +6331,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // gather(p1, p2, ...) -> promise of [v1, v2, ...]. Awaits every argument
     // concurrently (each async call already queued its own task) and fulfils
     // with an array of their results. Idiomatic: `let r = await gather(a, b);`
-    if (strcmp(node->name, "gather") == 0) {
+    if (strcmp(bi_name, "gather") == 0) {
       LLVMValueRef args_ptr_void;
       if (node->argument_count > 0) {
         LLVMTypeRef arr_type =
@@ -6336,14 +6362,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     // ====== JSON Functions ======
     // fromJson(str) -> object/array
-    if (strcmp(node->name, "fromJson") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "fromJson") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_from_json, args, 1, "from_json_res");
     }
 
     // ====== Input Functions ======
     // input_int(prompt) -> int
-    if (strcmp(node->name, "input_int") == 0) {
+    if (strcmp(bi_name, "input_int") == 0) {
       LLVMValueRef prompt =
           node->argument_count >= 1
               ? codegen_expression(backend, node->arguments[0])
@@ -6353,7 +6379,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // input_float(prompt) -> float
-    if (strcmp(node->name, "input_float") == 0) {
+    if (strcmp(bi_name, "input_float") == 0) {
       LLVMValueRef prompt =
           node->argument_count >= 1
               ? codegen_expression(backend, node->arguments[0])
@@ -6364,20 +6390,20 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     // ====== Range Function ======
     // range(end) -> array [0, 1, ..., end-1]
-    if (strcmp(node->name, "range") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "range") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_range, args, 1, "range_res");
     }
 
     // ====== SQLite Database Functions ======
     // db_open(path) -> db_handle
-    if (strcmp(node->name, "db_open") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "db_open") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_open, args, 1, "db_handle");
     }
 
     // db_close(db)
-    if (strcmp(node->name, "db_close") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "db_close") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       LLVMBuildCall2(backend->builder,
                      LLVMGlobalGetValueType(backend->func_aot_db_close),
@@ -6386,28 +6412,28 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // db_execute(db, sql) -> bool
-    if (strcmp(node->name, "db_execute") == 0 && node->argument_count >= 2) {
+    if (strcmp(bi_name, "db_execute") == 0 && node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_execute, args, 2, "db_exec_res");
     }
 
     // db_query(db, sql) -> array of objects
-    if (strcmp(node->name, "db_query") == 0 && node->argument_count >= 2) {
+    if (strcmp(bi_name, "db_query") == 0 && node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_query, args, 2, "db_query_res");
     }
 
     // db_last_insert_id(db) -> int64
-    if (strcmp(node->name, "db_last_insert_id") == 0 &&
+    if (strcmp(bi_name, "db_last_insert_id") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_last_insert_id, args, 1, "db_last_id");
     }
 
     // db_error(db) -> string
-    if (strcmp(node->name, "db_error") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "db_error") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_error, args, 1, "db_err");
     }
@@ -6433,7 +6459,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     // ====== StringBuilder Functions ======
     // StringBuilder(capacity) -> ptr (stored as int in VMValue)
-    if (strcmp(node->name, "StringBuilder") == 0) {
+    if (strcmp(bi_name, "StringBuilder") == 0) {
       int capacity = 1024; // default
       if (node->argument_count >= 1) {
         LLVMValueRef cap_val = codegen_expression(backend, node->arguments[0]);
@@ -6463,7 +6489,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // sb_append(sb, value) -> void
-    if (strcmp(node->name, "sb_append") == 0 && node->argument_count >= 2) {
+    if (strcmp(bi_name, "sb_append") == 0 && node->argument_count >= 2) {
       LLVMValueRef sb_val = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef val = codegen_expression(backend, node->arguments[1]);
       // Extract pointer from VMValue (stored as int64)
@@ -6515,7 +6541,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // sb_tostring(sb) -> VMValue string
-    if (strcmp(node->name, "sb_tostring") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "sb_tostring") == 0 && node->argument_count >= 1) {
       LLVMValueRef sb_val = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef ptr_int = llvm_extract_vm_val_int(backend, sb_val);
       LLVMValueRef sb_ptr = LLVMBuildIntToPtr(backend->builder, ptr_int,
@@ -6525,7 +6551,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // sb_free(sb) -> void
-    if (strcmp(node->name, "sb_free") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "sb_free") == 0 && node->argument_count >= 1) {
       LLVMValueRef sb_val = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef ptr_int = llvm_extract_vm_val_int(backend, sb_val);
       LLVMValueRef sb_ptr = LLVMBuildIntToPtr(backend->builder, ptr_int,

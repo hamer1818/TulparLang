@@ -5,10 +5,11 @@
 
 import "lib/router.tpr";
 
-// Provide a len() helper aliasing built-in length()
-func len(array a) { return length(a); }
-func len(json a) { return length(a); }
-func len(str s) { return length(s); }
+// `len` ZATEN yerlesik; buradaki uc sarmalayici olu koddu (yerlesik
+// kazaniyordu, hicbiri cagrilmiyordu). 2026-09-04'te kullanici tanimi
+// yerlesigi golgeler oldu — o yuzden bunlar birden CANLANIRDI ve ayni adli
+// uc tanim, belgelenmis "ayni isimli fonksiyonlar sessizce derlenir"
+// tuzagina duserdi. Kaldirildi: `len` ve `length` zaten yerlesik.
 
 // ============================================
 // TulparAPI Class-like Functions

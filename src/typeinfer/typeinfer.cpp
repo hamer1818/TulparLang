@@ -1438,8 +1438,33 @@ void typeinfer_program(TypeInferContext *ctx, const ASTNode *program) {
   // happens to define `func len(...)`, their signature wins (last write).
   register_builtin_signatures(ctx);
 
+  // Bu noktada ctx->functions YALNIZ yerlesikleri tutuyor (ice aktarilan
+  // modul disa aktarimlari daha sonra dolduruluyor). Yani buradaki kume,
+  // "yerlesik adlari"nin tam listesi.
+  std::set<std::string> builtin_names;
+  for (const auto &kv : ctx->functions) builtin_names.insert(kv.first);
+
   for (const auto &stmt : prog->statements) {
     if (const auto *func = as_node<FunctionDecl>(stmt.get())) {
+      // Yerlesigin adini tasiyan kullanici tanimi ARTIK KAZANIYOR (codegen
+      // 2026-09-04'te duzeltildi; eskiden yerlesik kazaniyor ve bu tamamen
+      // sessizdi — `func exit(int x)` tanimlayan program exit(5) cagirinca
+      // surec 5 ile sonlaniyordu). Ama sessiz de olmamali: Tulpar'in tek
+      // kuresel ad alani yuzunden bu golgeleme programin TAMAMINI kapsiyor,
+      // ice aktarilan stdlib dahil — yani `func len(...)` tanimlamak
+      // wings/router icindeki len cagrilarini da senin surumune yonlendirir.
+      if (builtin_names.count(func->name)) {
+        fprintf(stderr,
+                tulpar::i18n::tr_en(
+                    "[typecheck] %s:%d: '%s' bir yerlesigin adi; tanimin onu "
+                    "programin TAMAMINDA (ice aktarilan kutuphaneler dahil) "
+                    "golgeliyor\n",
+                    "[typecheck] %s:%d: '%s' is a built-in name; your "
+                    "definition shadows it across the WHOLE program "
+                    "(imported libraries included)\n"),
+                ctx->source_path.empty() ? "<kaynak>" : ctx->source_path.c_str(),
+                func->loc.line, func->name.c_str());
+      }
       std::vector<DataType> param_types;
       param_types.reserve(func->parameters.size());
       for (const auto &param : func->parameters) {

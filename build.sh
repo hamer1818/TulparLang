@@ -220,6 +220,14 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}AST cocuk alani denetimi basarisiz!${NC}"
             exit 1
         fi
+        # Sessiz bozulma sondalari: paketler "dogru yazilmis" programlari
+        # kosuyor, bu kenar durumlari kosuyor ve ozellikle derleyicinin
+        # "basarili" deyip yanlis sonuc urettigi / ikilinin coktugu sinifi
+        # ariyor. Iki gercek hatayi boyle bulduk (bkz. dosya basligi).
+        if ! python3 tests/silent_failure_probe.py; then
+            echo -e "${RED}Sessiz hata sondalari basarisiz!${NC}"
+            exit 1
+        fi
     fi
 
     # LSP. Editör eklentisinin dayandığı yüzey ve hiçbir otomasyonda yoktu:
