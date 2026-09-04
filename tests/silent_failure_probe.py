@@ -19,7 +19,7 @@ Aranan uc bozulma bicimi:
 
 Sonda eklemek serbest ve tesvik edilir: (ad, kaynak, beklenen cikti).
 """
-import subprocess, sys, tempfile, pathlib
+import os, subprocess, sys, tempfile, pathlib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TULPAR = str(ROOT / "tulpar")
 D = pathlib.Path(tempfile.mkdtemp(prefix="probe"))
@@ -73,11 +73,33 @@ for _b, _v in [("exit", 4), ("len", 101), ("abs", 101), ("round", 101),
       f"func {_b}(int x) {{ return x + 100; }}\nprint({_b}(1));",
       "101" if _b != "exit" else "101")
 
+# --- 6. Tamsayi bolme tuzaklari (2026-09-04'te bulunan hata) ---
+# `10 / n` (n calisma zamaninda 0) ham sdiv uretiyordu -> SIGFPE, program
+# TEK KELIME ETMEDEN oluyordu. Sabit 0 ile yazilirsa LLVM katliyor ve hata
+# GORUNMUYOR; o yuzden bolen ortamdan geliyor (katlanamaz).
+c("sifira bolme oldurmemeli",
+  'int n = toInt(env("KESINLIKLE_YOK_12345"));\nprint(10 / n);\nprint(7);',
+  "Runtime Error: Division by zero\n0\n7")
+c("sifira mod oldurmemeli",
+  'int n = toInt(env("KESINLIKLE_YOK_12345"));\nprint(10 % n);\nprint(7);',
+  "Runtime Error: Division by zero\n0\n7")
+c("INT_MIN / -1 oldurmemeli",
+  'int n = toInt(env("KESINLIKLE_YOK_12345"));\nint m = n - 1;\n'
+  'int big = -9223372036854775807 - 1;\nprint(big / m);\nprint(7);',
+  "Runtime Error: Integer division overflow\n0\n7")
+c("normal bolme bozulmadi", 'print(10 / 3);\nprint(-7 / 2);\nprint(10 % 3);\nprint(-7 % 3);',
+  "3\n-3\n1\n-1")
+
 fails = 0
 for name, src, expect in CASES:
-    f = D / (name.replace(" ", "_").replace("'", "") + ".tpr")
+    safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)
+    f = D / (safe + ".tpr")
     f.write_text(src, encoding="utf-8")
-    p = subprocess.run([TULPAR, str(f)], capture_output=True, text=True, timeout=90)
+    # LC_ALL=C: tani metinleri yerele gore degisiyor, beklenen ciktiyi
+    # sabitlemek icin ingilizceye pinliyoruz (bkz. tests/typeinfer/run.sh).
+    env = dict(os.environ, LC_ALL="C")
+    p = subprocess.run([TULPAR, str(f)], capture_output=True, text=True,
+                       timeout=90, env=env)
     out = (p.stdout or "").strip()
     # [typecheck] uyarilari stderr'e gidiyor; cikti karsilastirmasini
     # bozmamali (golgeleme sondasi bilerek uyari uretiyor).

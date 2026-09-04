@@ -44,6 +44,65 @@ static std::string gsym(const char *name) {
   return std::string("tpr_g_") + (name ? name : "");
 }
 
+// Korumali tamsayi bolme/kalan.
+//
+// Ham `sdiv`/`srem` iki durumda DONANIM TUZAGI (x86 #DE -> SIGFPE) ve LLVM
+// IR'de tanimsiz davranis: bolen 0, ve INT_MIN / -1. Tipli hizli yol
+// bunlari denetlemiyordu, yani `10 / n` (n calisma zamaninda 0) programi
+// TEK KELIME ETMEDEN olduruyordu — kutulu yol ise ayni islemde mesaj basip
+// 0 donuyordu. Ayni dilde iki farkli davranis.
+//
+// Artik ikisi de: mesaj + 0. Dal iyi tahmin ediliyor ve `idiv` zaten
+// ~20-40 cevrim, yani olculebilir bir maliyet degil.
+static LLVMValueRef build_checked_div(LLVMBackend *backend, LLVMValueRef l,
+                                      LLVMValueRef r, int is_rem) {
+  LLVMTypeRef i64 = backend->int_type;
+  LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+  LLVMBasicBlockRef bb_bad = LLVMAppendBasicBlock(fn, "div.bad");
+  LLVMBasicBlockRef bb_ok = LLVMAppendBasicBlock(fn, "div.ok");
+  LLVMBasicBlockRef bb_done = LLVMAppendBasicBlock(fn, "div.done");
+
+  LLVMValueRef zero = LLVMConstInt(i64, 0, 0);
+  LLVMValueRef isz =
+      LLVMBuildICmp(backend->builder, LLVMIntEQ, r, zero, "div.isz");
+  LLVMValueRef minv =
+      LLVMConstInt(i64, (unsigned long long)INT64_MIN, 1);
+  LLVMValueRef ovf = LLVMBuildAnd(
+      backend->builder,
+      LLVMBuildICmp(backend->builder, LLVMIntEQ, l, minv, "div.lmin"),
+      LLVMBuildICmp(backend->builder, LLVMIntEQ, r,
+                    LLVMConstInt(i64, (unsigned long long)-1, 1), "div.rm1"),
+      "div.ovf");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildOr(backend->builder, isz, ovf, "div.trap"), bb_bad,
+                  bb_ok);
+
+  LLVMPositionBuilderAtEnd(backend->builder, bb_bad);
+  LLVMValueRef kind = LLVMBuildSelect(backend->builder, isz, zero,
+                                      LLVMConstInt(i64, 1, 0), "div.kind");
+  LLVMValueRef eargs[] = {kind};
+  LLVMBuildCall2(backend->builder,
+                 LLVMGlobalGetValueType(backend->func_aot_div_error),
+                 backend->func_aot_div_error, eargs, 1, "");
+  LLVMBasicBlockRef bad_end = LLVMGetInsertBlock(backend->builder);
+  LLVMBuildBr(backend->builder, bb_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, bb_ok);
+  LLVMValueRef okv = is_rem
+                         ? LLVMBuildSRem(backend->builder, l, r, "srem")
+                         : LLVMBuildSDiv(backend->builder, l, r, "div");
+  LLVMBasicBlockRef ok_end = LLVMGetInsertBlock(backend->builder);
+  LLVMBuildBr(backend->builder, bb_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, bb_done);
+  LLVMValueRef phi = LLVMBuildPhi(backend->builder, i64, "div.res");
+  LLVMValueRef inc[] = {zero, okv};
+  LLVMBasicBlockRef inb[] = {bad_end, ok_end};
+  LLVMAddIncoming(phi, inc, inb, 2);
+  return phi;
+}
+
+
 
 static void collect_declared_locals(ASTNode_C *node, std::unordered_set<std::string> &declared) {
   if (!node) return;
@@ -1126,6 +1185,13 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMFunctionType(backend->float_type, to_float_params, 1, 0);
   backend->func_aot_to_float =
       LLVMAddFunction(backend->module, "aot_to_float_ptr", to_float_type);
+
+  // aot_div_error(i64 kind) -> void  (codegen ic yardimcisi)
+  LLVMTypeRef diverr_params[] = {backend->int_type};
+  LLVMTypeRef diverr_type =
+      LLVMFunctionType(backend->void_type, diverr_params, 1, 0);
+  backend->func_aot_div_error =
+      LLVMAddFunction(backend->module, "aot_div_error", diverr_type);
 
   // aot_len_ptr(VMValue*) -> int64
   LLVMTypeRef len_params[] = {backend->ptr_type};
@@ -3155,14 +3221,14 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
         result.type = INFERRED_INT;
         return result;
       case TOKEN_DIVIDE:
-        result.value = LLVMBuildSDiv(backend->builder, L.value, R.value, "div");
+        result.value = build_checked_div(backend, L.value, R.value, 0);
         result.type = INFERRED_INT;
         return result;
       case TOKEN_MODULO:
         // İşaretli kalan: C ve çoğu dille aynı (işaret BÖLÜNENDEN gelir).
         // `mod()` builtin'i duruyor ve aynı şeyi yapıyor; `%` yalnız daha
         // okunur bir yazım.
-        result.value = LLVMBuildSRem(backend->builder, L.value, R.value, "srem");
+        result.value = build_checked_div(backend, L.value, R.value, 1);
         result.type = INFERRED_INT;
         return result;
       case TOKEN_LESS:
@@ -3227,6 +3293,7 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
     return result;
   }
 }
+
 
 
 // ---------------------------------------------------------------------------
@@ -3917,7 +3984,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         new_int = LLVMBuildMul(backend->builder, old_int, rhs_int, "muleq");
         break;
       case TOKEN_DIVIDE_EQUAL:
-        new_int = LLVMBuildSDiv(backend->builder, old_int, rhs_int, "diveq");
+        new_int = build_checked_div(backend, old_int, rhs_int, 0);
         break;
       default:
         new_int = old_int; // unsupported op falls through, leave value
@@ -4144,7 +4211,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       int_res = LLVMBuildMul(backend->builder, l_val, r_val, "mul");
       break;
     case TOKEN_DIVIDE:
-      int_res = LLVMBuildSDiv(backend->builder, l_val, r_val, "div");
+      int_res = build_checked_div(backend, l_val, r_val, 0);
       break;
     case TOKEN_EQUAL:
       int_res = LLVMBuildZExt(

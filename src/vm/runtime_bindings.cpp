@@ -885,6 +885,26 @@ void arr_debox(ObjArray *a) {
   a->capacity = cap;   // kapasite KORUNUR: buyume kodu old_capacity'yi onceden okumus olabilir
 }
 
+// Tamsayi bolme hatasi bildirici. Codegen'in IC yardimcisi: kullanici
+// yerlesigi degil, o yuzden typeinfer/LSP kaydi yok (5 noktali baglama
+// yalniz cagrilabilir yerlesikler icin).
+//
+// Neden var: tipli hizli yol ham `sdiv`/`srem` uretiyordu ve sifira bolme
+// x86'da SIGFPE demek — program TEK KELIME ETMEDEN oluyordu (olculdu
+// 2026-09-04: `10 / n` (n=0) cikis 1, hicbir cikti, sonraki satir hic
+// calismiyor). Kutulu yol zaten mesaj basip 0 donuyordu; simdi ikisi ayni.
+// kind: 0 = sifira bolme, 1 = tasma (INT_MIN / -1).
+extern "C" void aot_div_error(long long kind) {
+  if (kind == 1) {
+    printf("%s\n", tulpar::i18n::tr_en(
+                        "Calisma Zamani Hatasi: Tamsayi bolme tasmasi",
+                        "Runtime Error: Integer division overflow"));
+  } else {
+    printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
+                                       "Runtime Error: Division by zero"));
+  }
+}
+
 ObjString *aot_intern_string(const char *chars, int length) {
   if (!chars) return nullptr;
   size_t total = sizeof(ObjString) + (size_t)length + 1;
@@ -1316,6 +1336,11 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
         *result = VM_INT(0);
         return;
       }
+      if (AS_INT(a) == INT64_MIN && AS_INT(b) == -1) {
+        aot_div_error(1);   // INT_MIN / -1: kutulu yolda da UB idi
+        *result = VM_INT(0);
+        return;
+      }
       *result = VM_INT(AS_INT(a) / AS_INT(b));
       return;
     case TYPE_FLOAT_FLOAT:
@@ -1341,6 +1366,11 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
       if (AS_INT(b) == 0) {
         printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
                                            "Runtime Error: Division by zero"));
+        *result = VM_INT(0);
+        return;
+      }
+      if (AS_INT(a) == INT64_MIN && AS_INT(b) == -1) {
+        aot_div_error(1);
         *result = VM_INT(0);
         return;
       }

@@ -138,6 +138,8 @@ typedef struct {
   ArrShapeEntry shape_cache[4];
   int shape_count;
 
+  LLVMValueRef func_aot_div_error;
+
   LLVMMetadataRef tbaa_header;
   LLVMMetadataRef tbaa_elem;
   unsigned tbaa_kind;
