@@ -40,6 +40,10 @@ BENCH = {
     "fib":     ("32",        "özyineleme (çağrı maliyeti)"),
     "sieve":   ("5000000",   "dizi/bellek erişimi"),
     "strcat":  ("2000000",   "dizgi kurma + tarama"),
+    # Gercek kodun en yaygin kalibi: diziyi deyimsel uzunlukla gezmek.
+    # Her dil kendi uzunluk erisimini kullaniyor (len(a) / a.len() /
+    # a.length); C'de dilde uzunluk yok, n tasiniyor.
+    "arrayiter": ("5000000", "dizi yineleme (deyimsel uzunlukla)"),
 }
 
 LANGS = ["c", "rust", "go", "java", "node", "python", "tulpar"]

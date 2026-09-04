@@ -1,0 +1,7 @@
+int n = toInt(env("BENCH_N"));
+if (n <= 0) { n = 5000000; }
+int[] a = array_fill(n, 0);
+int t = 0;
+for (int i = 0; i < len(a); i = i + 1) { a[i] = i; }
+for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+print(t);
