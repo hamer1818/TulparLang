@@ -85,9 +85,61 @@ func run_buyume() {
     assert_eq_int(toplam, 20100);  // 200*1 + (0+..+199)
 }
 
+// `for` dongusu de onbellege giriyor (2026-09-04). Artim ifadesi kanita
+// DAHIL: `i = i + 1` orada duruyor ve sekli degistiren bir sey icerebilirdi.
+func run_for_dongusu() {
+    int[] a = array_fill(10, 2);
+    int t = 0;
+    for (int i = 0; i < 10; i = i + 1) { a[i] = i; t = t + a[i]; }
+    assert_eq_int(t, 45);
+    assert_eq_int(a[9], 9);
+}
+
+// `for` govdesinde kutuya donus + sonrasinda int yazimi: while ile ayni
+// tazeleme kurali burada da gecerli olmali.
+func run_for_kutuya_donus() {
+    int[] b = array_fill(6, 3);
+    for (int i = 0; i < 6; i = i + 1) {
+        if (i == 2) { b[i] = 1.5; }
+        if (i == 4) { b[i] = 99; }
+    }
+    assert_eq_int(b[4], 99);
+    assert_eq_int(b[0], 3);
+}
+
+// `for` govdesinde cagri varsa onbellek alinmamali.
+func run_for_cagri_engeller() {
+    int[] c = array_fill(2, 5);
+    int w = 0;
+    for (int i = 0; i < 6; i = i + 1) {
+        c.push(i);
+        w = w + c[i];
+    }
+    assert_eq_int(w, 5 + 5 + 0 + 1 + 2 + 3);
+    assert_eq_int(len(c), 8);
+}
+
+// `for` ARTIMINDA sekli degistiren bir cagri: kanit artimi da taramazsa
+// onbellek aliniyor, push realloc ediyor ve onbellekteki isaretci askida
+// kaliyor. Sinir icindeki yazmalar hic yavas yola dusmedigi icin tazeleme
+// de devreye girmiyor — bu yuzden etkiyi dongu DISINDA olcuyoruz.
+func run_artim_cagrisi() {
+    int[] a = array_fill(3, 1);
+    for (int i = 0; i < 20; a.push(i)) {
+        a[0] = i;
+        i = i + 1;
+    }
+    assert_eq_int(a[0], 19);
+    assert_eq_int(len(a), 23);
+}
+
 test("kutuya donus onbellegi tazeler", "run_kutuya_donus_tazeler");
 test("push onbellegi engeller", "run_push_onbellegi_engeller");
 test("dizi yeniden baglanirsa onbellek yok", "run_yeniden_baglama");
 test("sinir disi yavas yola duser", "run_sinir_disi");
 test("dongu icinde buyume", "run_buyume");
+test("for dongusu", "run_for_dongusu");
+test("for icinde kutuya donus", "run_for_kutuya_donus");
+test("for icinde cagri onbellegi engeller", "run_for_cagri_engeller");
+test("for artimindaki cagri", "run_artim_cagrisi");
 test_summary();

@@ -8186,6 +8186,12 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     if (node->init)
       codegen_statement(backend, node->init);
 
+    // Dongu-degismezi dizi sekli — `while` ile ayni; ARTIM da kanita dahil
+    // (`i = i + 1` orada duruyor ve sekli degistiren bir sey icerebilirdi).
+    // init'ten SONRA cagriliyor: dongu degiskeni artik kapsamda.
+    int shape_saved = emit_shape_cache_for_loop(backend, node->condition,
+                                                node->body, node->increment);
+
     LLVMBasicBlockRef condB =
         LLVMAppendBasicBlock(backend->current_function, "for_cond");
     LLVMBasicBlockRef bodyB =
@@ -8227,6 +8233,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
 
     LLVMPositionBuilderAtEnd(backend->builder, exitB);
 
+    backend->shape_count = shape_saved;
     // Exit loop scope
     exit_scope(backend);
     return nullptr;
