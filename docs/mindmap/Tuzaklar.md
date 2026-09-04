@@ -659,8 +659,12 @@ farklı davranış** gösteriyordu, ve hızlı yolun davranışı sessiz ölümd
 kazanır"dı; codegen'de yerleşik kazanıyordu. `func exit(int x)` tanımlayan bir
 program `exit(5)` çağırınca süreç 5 ile sonlanıyordu. 11 yerleşik aynı.
 
-**Kural:** bir işlemin iki uygulaması varsa (tipli/kutulu, satır içi/runtime),
-davranışları TEST EDİLEREK eşitlenmeli. "Hızlı yol yalnızca kısayol" demek
+**Blok kapsamı.** `for` gövdesi yeni kapsam açıyordu, `if`/`while` gövdeleri
+açmıyordu. Yani `if (true) { int x = 5; }` dıştaki `x`i eziyordu — sessizce.
+Aynı dilde iki farklı kapsam kuralı.
+
+**Kural:** bir işlemin iki uygulaması varsa (tipli/kutulu, satır içi/runtime,
+`for` vs `if`), davranışları TEST EDİLEREK eşitlenmeli. "Hızlı yol yalnızca kısayol" demek
 yetmez — kanıtlanmalı. Yeni bir hızlı yol eklerken sorulacak soru: *yavaş yol
 bu girdide ne yapıyor?*
 
@@ -674,10 +678,22 @@ Paketler ve örnekler doğru yazılmış programları koşuyor. `tests/
 silent_failure_probe.py` kenar durumlarını koşuyor ve özellikle **derleyicinin
 "başarılı" deyip yanlış sonuç ürettiği / ikilinin çöktüğü** sınıfı arıyor.
 
-Üç gerçek hata bununla bulundu: `int free = 3;` (libc sembol ezme,
+**Beş** gerçek hata bununla bulundu: `int free = 3;` (libc sembol ezme,
 [[Tuzaklar#6h]]), `func exit(...)` (yerleşik gölgeleme), `10 / n` (sessiz
-SIGFPE). Hiçbiri 62 paketin veya 40 örneğin gözüne çarpmamıştı — çünkü hiçbiri
-böyle bir program yazmıyor.
+SIGFPE), `a[0]++` (sessiz hiç-işlem), `if` gövdesinin kapsam açmaması. Hiçbiri
+64 paketin veya 40 örneğin gözüne çarpmamıştı — çünkü hiçbiri böyle bir program
+yazmıyor.
+
+`a[0]++` özellikle öğretici: `parse_postfix`'te `match(TOKEN_PLUS_PLUS)` token'ı
+**tüketiyor**, ama hedef `Identifier` değilse gövde çalışmıyordu — `++` yutulup
+ifade `a[0];` olarak kalıyordu. **Token tüketen bir `match()`ten sonra her yolda
+bir şey üretildiğinden emin ol**; üretmeyen dal sessiz hiç-işlem demek.
+
+### fmt gidiş-dönüş
+Sonda ayrıca her kaynağı `tulpar fmt`'den geçirip **yeniden koşuyor** ve aynı
+sonucu bekliyor. Güçlü bir değişmez: `%=` eklenirken fmt onu `% =` diye bölüp
+kodu BOZUYORDU — ve aynı sınıf daha önce `=>` için de olmuş (formatter.cpp'deki
+yorum anlatıyor). Tek operatörü düzeltmek yetmez, değişmezi koy.
 
 Sonda eklemek ucuz: `c("ad", "kaynak", "beklenen çıktı")`. Sonda `LC_ALL=C` ile
 koşuyor, çünkü tanı metinleri yerele göre değişiyor.
