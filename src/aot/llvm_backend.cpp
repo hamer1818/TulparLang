@@ -8380,6 +8380,18 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     return val;
   }
   case AST_BLOCK: {
+    // BLOK YENI KAPSAM ACAR.
+    //
+    // Eskiden acmiyordu ve bu SESSIZ bir anlam hatasiydi: `if`/`while`
+    // govdesindeki `int x = 5;` DISTAKI x'i eziyordu.
+    //
+    //   int x = 1;
+    //   if (true) { int x = 5; }
+    //   print(x);            // 5 basiyordu, 1 basmaliydi
+    //
+    // Fonksiyon govdesinde de ayni. `for` DOGRUYDU (kendi enter_scope'u
+    // var), yani dilin icinde iki farkli kapsam kurali vardi.
+    enter_scope(backend);
     LLVMValueRef last = nullptr;
     if (node->statements) {
       for (int i = 0; i < node->statement_count; i++) {
@@ -8388,6 +8400,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         last = codegen_statement(backend, node->statements[i]);
       }
     }
+    exit_scope(backend);   // erken terminator'da da calisir (break yukarida)
     return last;
   }
   case AST_IF: {

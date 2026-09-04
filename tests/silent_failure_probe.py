@@ -90,6 +90,17 @@ c("INT_MIN / -1 oldurmemeli",
 c("normal bolme bozulmadi", 'print(10 / 3);\nprint(-7 / 2);\nprint(10 % 3);\nprint(-7 % 3);',
   "3\n-3\n1\n-1")
 
+# --- 7a. Blok kapsami (2026-09-04'te bulunan hata) ---
+# `if`/`while` govdeleri kapsam ACMIYORDU: icteki `int x = 5` distakini
+# eziyordu. `for` dogruydu — dilde iki farkli kapsam kurali vardi.
+c("if govdesi golgeler", 'int x = 1;\nif (true) { int x = 5; }\nprint(x);', "1")
+c("while govdesi golgeler",
+  'int x = 1;\nint i = 0;\nwhile (i < 1) { int x = 5; i = i + 1; }\nprint(x);', "1")
+c("ic ice blok golgeleme",
+  'int x = 1;\nif (true) { int x = 2; if (true) { int x = 3; print(x); } print(x); }\n'
+  'print(x);', "3\n2\n1")
+c("blok dis degiskeni yazar", 'int x = 7;\nif (true) { x = 9; }\nprint(x);', "9")
+
 # --- 7b. Bilesik atamalar ---
 c("%= operatoru", 'int x = 17;\nx %= 5;\nprint(x);', "2")
 c("%= sifira", 'int n = toInt(env("KESINLIKLE_YOK_12345"));\nint z = 7;\nz %= n;\n'
