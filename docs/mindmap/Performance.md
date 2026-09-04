@@ -15,12 +15,18 @@ taban çizgisi. Çalıştır: `python3 benchmarks/fair/run.py [test]`.
 
 | Test | C | Rust | Go | **Tulpar** | Java | Node | Sıra |
 |---|--:|--:|--:|--:|--:|--:|:--:|
-| intloop (50M) | 134.6 | 144.3 | 134.9 | **135.8** | 146.0 | 710.9 | **3.** |
-| fib(32) | 1.6 | 3.8 | 6.7 | **4.4** | 13.4 | 27.1 | **3.** |
-| sieve (5M) | 7.7 | 8.2 | 8.5 | **~10.0** | 21.2 | 29.3 | 4. |
-| strcat (2M) | 38.3 | 18.9 | 24.8 | **31.8** | 33.8 | 103.3 | **3.** |
+| intloop (50M) | 134.6 | 144.5 | 135.6 | **135.6** | 147.7 | 715.2 | **2.–3.** |
+| fib(32) | 1.6 | 3.8 | 6.7 | **4.3** | 13.4 | 27.7 | **3.** |
+| sieve (5M) | 7.7 | 8.2 | 8.5 | **~9.9** | 21.2 | 29.3 | 4. |
+| strcat (2M) | 37.8 | 19.1 | 25.4 | **31.6** | 35.9 | 105.6 | **3.** |
+| arrayiter (5M) | 2.3 | 1.7 | 4.0 | **6.6** | 19.5 | 21.3 | 4. |
 
-Hedef "her alanda 2.–3. sıra" 4 testin 3'ünde tutuyor.
+Hedef "her alanda 2.–3. sıra" 5 testin 3'ünde tutuyor.
+
+`arrayiter` sonradan eklendi (2026-09-04): önceki dördü Tulpar'ın **en yaygın
+döngü kalıbını** hiç ölçmüyordu — `for (int i = 0; i < len(a); ...)`. O kalıp
+şekil önbelleği + `len` katlamasıyla 2.4× hızlandı ama tabloda görünmüyordu.
+Her dil kendi deyimsel uzunluk erişimini kullanıyor.
 
 ### Dizi/bellek (sieve) — 19.9 → 13.3 ms nasıl geldi
 İki yapısal değişiklik, ikisi de [[Memory Model]]'de ayrıntılı:
@@ -76,12 +82,35 @@ Küresellerin ham adla yazılması ayrı bir **hata** olarak çıktı ve önekle
 **Kalan fark neden var (Tulpar ~10 / Go 8.5):**
 - Tulpar'ın `int`'i 64 bit; C/Go/Java bu testte 4 baytlık eleman kullanıyor →
   aynı algoritmada **2× bellek trafiği**. Bu bir semantik farkı, gerileme değil.
-- Şekil önbelleği yalnız **kanıtlanabilen** döngülerde açılıyor: gövdede tek
-  bir fonksiyon çağrısı varsa vazgeçiliyor (push/pop şekli değiştirir). Yani
-  çağrı içeren sıcak döngüler hâlâ tam denetim ödüyor.
-- Bir sonraki adım: kanıtı genişletmek (şekil değiştirmediği bilinen saf
-  yerleşiklere izin vermek, `for` döngülerini de kapsamak) ve i32'ye daraltma
+- Şekil önbelleği yalnız **kanıtlanabilen** döngülerde açılıyor: gövdede
+  beyaz listede olmayan bir çağrı varsa vazgeçiliyor (push/pop şekli
+  değiştirir). Yani kullanıcı fonksiyonu çağıran sıcak döngüler hâlâ tam
+  denetim ödüyor.
+- Bir sonraki adım: `for-in` şeker açılımını da kapsamak, ve i32'ye daraltma
   (V8'in SMI dizileri gibi) — ama i32 ölçüme göre küçük bir kazanç.
+
+### Kanıtın genişletilmesi (2026-09-04)
+1. **`for` döngüleri.** Önbellek yalnız `while`a bağlıydı. `for`a da bağlandı;
+   **artım ifadesi de kanıta dahil** (`for (...; ...; a.push(i))` şekli
+   değiştirebilir). Ölçüldü: 7.5 → 5.1 ms.
+2. **Saf yerleşikler.** Her çağrı kanıtı düşürüyordu, dolayısıyla
+   `for (int i = 0; i < len(a); ...)` hiç yararlanamıyordu. Elle doğrulanmış
+   kısa bir liste (`len`/`length`/`abs`/`min`/`max`/`sqrt`/`pow`/`floor`/
+   `ceil`/`round`/`toInt`/`toFloat`/`ord`/`chr`) artık kanıtı düşürmüyor.
+   Kararı **codegen** veriyor: kullanıcı aynı adı tanımladıysa yerleşik
+   sayılmıyor. Listeye ekleme ölçütü "saf mı" DEĞİL — "bir dizinin
+   count/items_/idata alanını değiştirebilir mi" ve "kullanıcı koduna geri
+   dönebilir mi" (`call`, `map`, karşılaştırıcılı `sort` bu yüzden yok).
+3. **`len` önbellekten.** Kanıt zaten uzunluğun sabit olduğunu söylüyor, o
+   hâlde çağrıya gerek yok. Önbellekte **ayrı** bir gerçek-uzunluk yuvası var:
+   `count_slot` yerine geçemez, çünkü o kutulanmamış olmayan dizide bilerek 0
+   tutuyor. Dizi olmayan değer için −1 yazılıp eski çağrıya düşülüyor, yani
+   `len(dizgi)` / `len(json)` birebir korunuyor. Ölçüldü: 14.2 → 5.9 ms.
+
+**Yük taşıyan varsayım:** ayırma yapan yerleşikler önbelleği bozmuyor, çünkü
+arena **öbek-zincirli bump ayırıcı** — `aot_arena_alloc` yeni bloğu zincire
+ekliyor, `realloc` yok, bloklar asla taşınmıyor. Arena tek büyük blok olsaydı
+bu liste güvensiz olurdu.
 
 Ölçüm hijyeni: oran N ile **küçülüyor** (N=200k'da Go'nun 2.36×'i, N=5M'de
 1.55×'i) — yani darboğaz saf bant genişliği değil, erişim başına sabit hesap.
