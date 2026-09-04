@@ -16,10 +16,16 @@
 // hata yapar (taniniamayan yeni bir dugum turu sessizce "guvenli" sayilir),
 // beyaz liste ise en fazla optimizasyonu kacirir.
 //
-// Fonksiyon cagrisi tek basina yeterli sebep: `push`/`pop`/`insert` ve her
-// kullanici fonksiyonu bir cagri, yani cagriyi yasaklamak sekil degistiren
-// her yolu kapatiyor. Eleman yazmasi (`f[k] = 1`) sekli degistirmez.
+// Fonksiyon cagrisi kural olarak yeterli sebep: `push`/`pop`/`insert` ve her
+// kullanici fonksiyonu bir cagri. TEK ISTISNA, cagrilan adin sekil
+// degistiremedigi ELLE dogrulanmis bir yerlesik olmasi — bunu burasi degil,
+// codegen'deki `shape_pure_call` karari veriyor (kullanici ayni adi
+// tanimlamis olabilir; o zaman guvenli sayilmamali). Bu istisna sart:
+// Tulpar'in en yaygin dongu kalibi `for (int i = 0; i < len(a); ...)` ve
+// `len` bir cagri oldugu icin kanit her seferinde dusuyordu.
+// Eleman yazmasi (`f[k] = 1`) sekli degistirmez.
 #include "../parser/parser.hpp"
+#include "llvm_array_shape.hpp"
 #include <cstring>
 
 // Govdede gorulmesine izin verilen dugumler. Buraya bir tur eklemeden once
@@ -49,9 +55,10 @@ static bool shape_safe_kind(ASTNodeType t) {
   case AST_BLOCK:
     return true;
   default:
-    // AST_FUNCTION_CALL, AST_AWAIT, AST_LAMBDA, AST_MATCH, AST_TRY_CATCH,
+    // AST_AWAIT, AST_LAMBDA, AST_MATCH, AST_TRY_CATCH,
     // AST_THROW, AST_RETURN, AST_FOR_IN, AST_ARRAY_LITERAL, ... hepsi ya
     // cagri icerir ya da yeni kap uretir: hicbiri gerekli degil, hepsi risk.
+    // (AST_FUNCTION_CALL yukarida ayrica ele aliniyor.)
     return false;
   }
 }
@@ -87,16 +94,29 @@ static bool walk_all(ASTNode_C *n, bool (*visit)(ASTNode_C *, void *),
   return true;
 }
 
-static bool visit_kind_ok(ASTNode_C *n, void *) {
+struct KindCtx {
+  TulparPureCallFn pure;
+  void *ctx;
+};
+
+static bool visit_kind_ok(ASTNode_C *n, void *p) {
+  KindCtx *k = (KindCtx *)p;
+  if (n->type == AST_FUNCTION_CALL) {
+    // Adsiz cagri (bir degerde tutulan kapanis) asla guvenli sayilmaz.
+    if (!n->name || !k->pure) return false;
+    return k->pure(n->name, k->ctx) != 0;
+  }
   return shape_safe_kind(n->type);
 }
 
 // Dongunun sekli degistiremedigi kanitlanabiliyor mu?
 extern "C" int tulpar_loop_shape_stable(ASTNode_C *cond, ASTNode_C *body,
-                                        ASTNode_C *incr) {
-  return walk_all(cond, visit_kind_ok, nullptr) &&
-         walk_all(body, visit_kind_ok, nullptr) &&
-         walk_all(incr, visit_kind_ok, nullptr);
+                                        ASTNode_C *incr, TulparPureCallFn pure,
+                                        void *ctx) {
+  KindCtx k{pure, ctx};
+  return walk_all(cond, visit_kind_ok, &k) &&
+         walk_all(body, visit_kind_ok, &k) &&
+         walk_all(incr, visit_kind_ok, &k);
 }
 
 struct NameCtx {

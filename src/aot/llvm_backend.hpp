@@ -127,6 +127,10 @@ typedef struct {
     const char *name;
     LLVMValueRef idata_slot;   // ptr* (alloca)
     LLVMValueRef count_slot;   // i64* (alloca), sekil uymuyorsa 0
+    // GERCEK uzunluk: dizi kutulu olsa bile dogru, dizi DEGILSE -1.
+    // count_slot bunun yerine gecemez — o, kutulanmamis olmayan dizide
+    // bilerek 0 tutuyor (her erisim eski yola dussun diye).
+    LLVMValueRef len_slot;
   };
   ArrShapeEntry shape_cache[4];
   int shape_count;

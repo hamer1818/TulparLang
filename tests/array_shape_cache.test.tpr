@@ -133,6 +133,51 @@ func run_artim_cagrisi() {
     assert_eq_int(len(a), 23);
 }
 
+// `len` artik onbellekten karsilaniyor (2026-09-04). Dizi OLMAYAN degerler
+// icin len_slot -1 tutuyor ve eski cagriya dusuluyor — bu testler tam
+// olarak o ayrimi zorluyor.
+func run_len_onbellek() {
+    int[] a = array_fill(7, 2);
+    int t = 0;
+    for (int i = 0; i < len(a); i = i + 1) { t = t + a[i]; }
+    assert_eq_int(t, 14);
+    assert_eq_int(len(a), 7);
+}
+
+// Dizgi INDEKSLENIYOR: onbellege aday olarak giriyor ama dizi degil.
+// Sekil doldurma bu durumda len_slot'a -1 yazmali, yoksa len(s) onbellekten
+// yanlis deger doner. (Ilk yazilisinda dizgi indekslenmiyordu — aday bile
+// olmadigi icin enjeksiyon hicbir sey yakalamiyordu.)
+func run_len_dizgi() {
+    str s = "merhaba";
+    int t = 0;
+    str ilk = "";
+    for (int i = 0; i < 3; i = i + 1) {
+        t = t + len(s);
+        ilk = s[0];
+    }
+    assert_eq_int(t, 21);          // 3 * 7
+    assert_eq_str(ilk, "m");
+}
+
+// Kutulu dizi (str[]): eleman erisimi eski yola duser AMA len dogru olmali.
+func run_len_kutulu_dizi() {
+    str[] b = ["bir", "iki", "uc"];
+    int t = 0;
+    for (int i = 0; i < len(b); i = i + 1) { t = t + len(b[i]); }
+    assert_eq_int(t, 8);           // 3 + 3 + 2
+    assert_eq_int(len(b), 3);
+}
+
+// Dongu icinde dizi buyurse len GUNCEL olmali (push cagri -> onbellek yok).
+func run_len_buyume() {
+    int[] c = array_fill(2, 1);
+    int son = 0;
+    for (int i = 0; i < 5; i = i + 1) { c.push(i); son = len(c); }
+    assert_eq_int(son, 7);
+    assert_eq_int(len(c), 7);
+}
+
 test("kutuya donus onbellegi tazeler", "run_kutuya_donus_tazeler");
 test("push onbellegi engeller", "run_push_onbellegi_engeller");
 test("dizi yeniden baglanirsa onbellek yok", "run_yeniden_baglama");
@@ -142,4 +187,8 @@ test("for dongusu", "run_for_dongusu");
 test("for icinde kutuya donus", "run_for_kutuya_donus");
 test("for icinde cagri onbellegi engeller", "run_for_cagri_engeller");
 test("for artimindaki cagri", "run_artim_cagrisi");
+test("len onbellekten", "run_len_onbellek");
+test("len dizgide onbellege girmez", "run_len_dizgi");
+test("len kutulu dizide dogru", "run_len_kutulu_dizi");
+test("len buyume sonrasi guncel", "run_len_buyume");
 test_summary();
