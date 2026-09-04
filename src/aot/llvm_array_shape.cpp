@@ -178,3 +178,34 @@ extern "C" int tulpar_collect_indexed_names(ASTNode_C *cond, ASTNode_C *body,
   walk_all(body, visit_indexed, &c);
   return c.n;
 }
+
+struct LenCtx {
+  const char *name;
+  bool used;
+};
+
+static bool visit_len_of(ASTNode_C *n, void *p) {
+  LenCtx *c = (LenCtx *)p;
+  if (n->type == AST_FUNCTION_CALL && n->name &&
+      (strcmp(n->name, "len") == 0 || strcmp(n->name, "length") == 0) &&
+      n->argument_count >= 1 && n->arguments && n->arguments[0] &&
+      n->arguments[0]->type == AST_IDENTIFIER && n->arguments[0]->name &&
+      strcmp(n->arguments[0]->name, c->name) == 0) {
+    c->used = true;
+    return false;
+  }
+  return true;
+}
+
+// Dongu `len(<ad>)` cagiriyor mu? Cagiriyorsa uzunlugu dongu basinda BIR KEZ
+// hesaplayip yuvayi her zaman gecerli kiliyoruz; o zaman kullanim yerinde ne
+// dal ne cagri kaliyor. Cagirmiyorsa bos yere bir aot_len cagrisi eklemenin
+// anlami yok (ic ice dongude her girise bir cagri demek olurdu).
+extern "C" int tulpar_loop_uses_len(ASTNode_C *cond, ASTNode_C *body,
+                                    ASTNode_C *incr, const char *name) {
+  LenCtx c{name, false};
+  walk_all(cond, visit_len_of, &c);
+  walk_all(body, visit_len_of, &c);
+  walk_all(incr, visit_len_of, &c);
+  return c.used ? 1 : 0;
+}

@@ -3285,7 +3285,7 @@ static LLVMBackend::ArrShapeEntry *shape_lookup(LLVMBackend *backend,
 // erisim eski tam yola dusuyor, yani yanlis olamiyor — yalnizca hizlanmiyor.
 static void emit_shape_fill(LLVMBackend *backend, const char *name,
                             LLVMValueRef idata_slot, LLVMValueRef count_slot,
-                            LLVMValueRef len_slot) {
+                            LLVMValueRef len_slot, int eager_len) {
   LLVMValueRef minus1 = LLVMConstInt(backend->int_type, (unsigned long long)-1, 1);
   LLVMValueRef slot = get_local(backend, name);
   if (!slot) {
@@ -3294,6 +3294,7 @@ static void emit_shape_fill(LLVMBackend *backend, const char *name,
     LLVMBuildStore(backend->builder, minus1, len_slot);
     return;
   }
+  (void)eager_len;
   LLVMTypeRef i32t = backend->int32_type;
   LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
   LLVMBasicBlockRef b_ty = LLVMAppendBasicBlock(fn, "shape.ty");
@@ -3343,7 +3344,23 @@ static void emit_shape_fill(LLVMBackend *backend, const char *name,
   LLVMPositionBuilderAtEnd(backend->builder, b_no);
   LLVMBuildStore(backend->builder, LLVMConstNull(backend->ptr_type), idata_slot);
   LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), count_slot);
-  LLVMBuildStore(backend->builder, minus1, len_slot);  // dizi degil -> len() cagrilsin
+  if (eager_len) {
+    // Dizi degil (dizgi/json/...) ama dongu `len` cagiriyor: uzunlugu BURADA,
+    // dongu basinda bir kez hesapla. Rebind denetimi degerin dongu boyunca
+    // degismedigini garanti ediyor, yani bu deger dongu boyunca gecerli.
+    // Cagri yalniz bu nadir dalda: dizi olan yaygin durumda hic cagri yok.
+    LLVMValueRef vtmp = llvm_build_alloca_at_entry(
+        backend, backend->vm_value_type, "shape.lenarg");
+    LLVMBuildStore(backend->builder, v, vtmp);
+    LLVMValueRef largs[] = {LLVMBuildBitCast(backend->builder, vtmp,
+                                             backend->ptr_type, "shape.lenap")};
+    LLVMValueRef lres = LLVMBuildCall2(
+        backend->builder, LLVMGlobalGetValueType(backend->func_aot_len),
+        backend->func_aot_len, largs, 1, "shape.lenv");
+    LLVMBuildStore(backend->builder, lres, len_slot);
+  } else {
+    LLVMBuildStore(backend->builder, minus1, len_slot);
+  }
   LLVMBuildBr(backend->builder, b_done);
 
   LLVMPositionBuilderAtEnd(backend->builder, b_done);
@@ -3357,7 +3374,8 @@ static void emit_shape_refresh_all(LLVMBackend *backend) {
     emit_shape_fill(backend, backend->shape_cache[i].name,
                     backend->shape_cache[i].idata_slot,
                     backend->shape_cache[i].count_slot,
-                    backend->shape_cache[i].len_slot);
+                    backend->shape_cache[i].len_slot,
+                    backend->shape_cache[i].len_eager);
 }
 
 // Dongu basinda: sekli kanitlanabilen dizileri onbellege al.
@@ -3378,11 +3396,13 @@ static int emit_shape_cache_for_loop(LLVMBackend *backend, ASTNode_C *cond,
                                                   "shape.count.slot");
     LLVMValueRef lns = llvm_build_alloca_at_entry(backend, backend->int_type,
                                                   "shape.len.slot");
-    emit_shape_fill(backend, names[i], ids, cns, lns);
+    int uses_len = tulpar_loop_uses_len(cond, body, incr, names[i]);
+    emit_shape_fill(backend, names[i], ids, cns, lns, uses_len);
     backend->shape_cache[backend->shape_count].name = names[i];
     backend->shape_cache[backend->shape_count].idata_slot = ids;
     backend->shape_cache[backend->shape_count].count_slot = cns;
     backend->shape_cache[backend->shape_count].len_slot = lns;
+    backend->shape_cache[backend->shape_count].len_eager = uses_len;
     backend->shape_count++;
   }
   return saved;
@@ -4906,6 +4926,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           (larg && larg->type == AST_IDENTIFIER)
               ? shape_lookup(backend, larg->name)
               : nullptr;
+      if (lshp && lshp->len_eager) {
+        // Yuva dongu basinda KESIN dolduruldu: dal da cagri da gereksiz.
+        LLVMValueRef cl = LLVMBuildLoad2(backend->builder, backend->int_type,
+                                         lshp->len_slot, "len.cl");
+        return llvm_vm_val_int_val(backend, cl);
+      }
       if (lshp) {
         LLVMValueRef fnl =
             LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
