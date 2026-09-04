@@ -90,6 +90,11 @@ c("INT_MIN / -1 oldurmemeli",
 c("normal bolme bozulmadi", 'print(10 / 3);\nprint(-7 / 2);\nprint(10 % 3);\nprint(-7 % 3);',
   "3\n-3\n1\n-1")
 
+# --- 7b. Bilesik atamalar ---
+c("%= operatoru", 'int x = 17;\nx %= 5;\nprint(x);', "2")
+c("%= sifira", 'int n = toInt(env("KESINLIKLE_YOK_12345"));\nint z = 7;\nz %= n;\n'
+  'print(z);\nprint(9);', "Runtime Error: Division by zero\n0\n9")
+
 # --- 7. Eleman hedefli ++/-- (2026-09-04'te bulunan hata) ---
 # `a[0]++` SESSIZ HIC-ISLEMDI: parser `++` token'ini tuketip atiyordu
 # (hedef Identifier degilse govde calismiyordu), ifade `a[0];` olarak
@@ -123,5 +128,32 @@ for name, src, expect in CASES:
         print(f"      cikis={p.returncode} beklenen={expect!r} alinan={out!r}")
         err = (p.stderr or "").strip()
         if err: print(f"      stderr: {err[:200]}")
-print(f"\n{len(CASES)} sonda, {fails} sorun")
+# --- fmt GIDIS-DONUS ---
+# Bicimlendirici cikitisi YENIDEN AYRISTIRILABILIR ve AYNI sonucu vermeli.
+# Guclu bir degismez: `%=` eklenirken fmt onu `% =` diye boluyordu ve kod
+# BOZULUYORDU (ayni sinif daha once `=>` icin de olmus — formatter.cpp'deki
+# yoruma bakin). Bu sonda o sinifi topluca yakaliyor.
+fmt_fails = 0
+for name, src, expect in CASES:
+    if expect is None or "\n" not in src:
+        continue
+    safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)
+    f = D / ("fmt_" + safe + ".tpr")
+    f.write_text(src, encoding="utf-8")
+    env = dict(os.environ, LC_ALL="C")
+    r = subprocess.run([TULPAR, "fmt", str(f)], capture_output=True, text=True,
+                       timeout=90, env=env)
+    if r.returncode != 0 or not r.stdout.strip():
+        continue          # fmt bu girdiyi islemiyorsa sondanin konusu degil
+    g = D / ("fmtout_" + safe + ".tpr")
+    g.write_text(r.stdout, encoding="utf-8")
+    q = subprocess.run([TULPAR, str(g)], capture_output=True, text=True,
+                       timeout=90, env=env)
+    if q.returncode != 0 or (q.stdout or "").strip() != expect:
+        fmt_fails += 1
+        print(f"  ✗ fmt gidis-donus: {name}")
+        print(f"      beklenen={expect!r} alinan={(q.stdout or '').strip()!r}")
+fails += fmt_fails
+
+print(f"\n{len(CASES)} sonda (+fmt gidis-donus), {fails} sorun")
 sys.exit(1 if fails else 0)

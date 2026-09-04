@@ -73,6 +73,7 @@ enum TulparTokenType {
     TOKEN_MINUS_EQUAL,   // -=
     TOKEN_MULTIPLY_EQUAL,// *=
     TOKEN_DIVIDE_EQUAL,  // /=
+    TOKEN_MODULO_EQUAL,  // %=  (otekiler vardi, bu YOKTU)
     TOKEN_FAT_ARROW,     // => — lambda expression head (Plan 06-style)
 
     // Semboller

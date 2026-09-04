@@ -170,6 +170,7 @@ void Token::print() const {
         "EQUAL", "NOT_EQUAL", "LESS", "GREATER", "LESS_EQUAL", "GREATER_EQUAL",
         "AND", "OR", "BANG", "PLUS_PLUS", "MINUS_MINUS",
         "PLUS_EQUAL", "MINUS_EQUAL", "MULTIPLY_EQUAL", "DIVIDE_EQUAL",
+        "MODULO_EQUAL",
         "LPAREN", "RPAREN", "LBRACE", "RBRACE", "LBRACKET", "RBRACKET",
         "SEMICOLON", "COMMA", "COLON", "DOT",
         "EOF", "ERROR"
@@ -496,6 +497,12 @@ Token Lexer::next_token() {
         if (ch == '/' && next_ch == '=') {
             advance(); advance();
             return Token(TOKEN_DIVIDE_EQUAL, "/=", start_line, start_column);
+        }
+        // `%=` otekiler (+= -= *= /=) varken YOKTU: `x %= 5` ayristirma
+        // hatasi veriyordu. Tutarlilik icin eklendi.
+        if (ch == '%' && next_ch == '=') {
+            advance(); advance();
+            return Token(TOKEN_MODULO_EQUAL, "%=", start_line, start_column);
         }
         if (ch == '=' && next_ch == '=') {
             advance(); advance();

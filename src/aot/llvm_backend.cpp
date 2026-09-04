@@ -4049,6 +4049,9 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       case TOKEN_DIVIDE_EQUAL:
         new_int = build_checked_div(backend, old_int, rhs_int, 0);
         break;
+      case TOKEN_MODULO_EQUAL:
+        new_int = build_checked_div(backend, old_int, rhs_int, 1);
+        break;
       default:
         new_int = old_int; // unsupported op falls through, leave value
         break;
@@ -4114,6 +4117,9 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       break;
     case TOKEN_DIVIDE_EQUAL:
       op_token = TOKEN_DIVIDE;
+      break;
+    case TOKEN_MODULO_EQUAL:
+      op_token = TOKEN_MODULO;
       break;
     default:
       break;

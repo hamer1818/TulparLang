@@ -878,7 +878,8 @@ std::unique_ptr<ASTNode> Parser::parse_expression_statement() {
             next_type == TOKEN_PLUS_EQUAL ||
             next_type == TOKEN_MINUS_EQUAL ||
             next_type == TOKEN_MULTIPLY_EQUAL ||
-            next_type == TOKEN_DIVIDE_EQUAL) {
+            next_type == TOKEN_DIVIDE_EQUAL ||
+            next_type == TOKEN_MODULO_EQUAL) {
             SourceLocation loc(name_tok.line(), name_tok.column());
             advance(); // identifier
             advance(); // assignment operator
