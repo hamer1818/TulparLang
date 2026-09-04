@@ -225,17 +225,28 @@ struct CompoundAssign {
 };
 
 struct IncrementOp {
-    std::string name;
+    std::string name;                 // basit hedef: degisken adi
+    // Karmasik hedef: `a[0]++`, `j["n"]++`. Assignment ile AYNI kalip.
+    // Eskiden yoktu ve `a[0]++` SESSIZ HIC-ISLEMDI (parser `++` token'ini
+    // tuketip atiyordu) — bkz. parse_postfix.
+    std::unique_ptr<ASTNode> target;
     SourceLocation loc;
-    
-    IncrementOp(const std::string& n, SourceLocation l) : name(n), loc(l) {}
+
+    IncrementOp(const std::string& n, SourceLocation l)
+        : name(n), target(nullptr), loc(l) {}
+    IncrementOp(std::unique_ptr<ASTNode> tgt, SourceLocation l)
+        : name(""), target(std::move(tgt)), loc(l) {}
 };
 
 struct DecrementOp {
     std::string name;
+    std::unique_ptr<ASTNode> target;
     SourceLocation loc;
-    
-    DecrementOp(const std::string& n, SourceLocation l) : name(n), loc(l) {}
+
+    DecrementOp(const std::string& n, SourceLocation l)
+        : name(n), target(nullptr), loc(l) {}
+    DecrementOp(std::unique_ptr<ASTNode> tgt, SourceLocation l)
+        : name(""), target(std::move(tgt)), loc(l) {}
 };
 
 struct FunctionDecl {

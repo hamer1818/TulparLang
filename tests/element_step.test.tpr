@@ -1,0 +1,52 @@
+import "test";
+
+// ELEMAN HEDEFLI ++/-- (`a[0]++`, `j["n"]--`).
+//
+// Hata (2026-09-04, sondalamayla bulundu): bunlar SESSIZ HIC-ISLEMDI.
+// parse_postfix'te `match(TOKEN_PLUS_PLUS)` token'i TUKETIYOR, ama hedef
+// Identifier degilse govde calismiyordu — `++` yutuluyor, ifade `a[0];`
+// olarak kaliyordu. Program derleniyor, calisiyor, deger DEGISMIYOR ve
+// tek kelime uyari cikmiyordu.
+//
+// Enjeksiyonla dogrulandi: parser'daki hedef tasima kaldirilinca bu paket
+// kirmizi doner.
+
+func run_dizi_elemani() {
+    int[] a = array_fill(3, 3);
+    a[0]++;
+    assert_eq_int(a[0], 4);
+    a[0]--;
+    a[0]--;
+    assert_eq_int(a[0], 2);
+    assert_eq_int(a[1], 3);   // komsu eleman etkilenmemeli
+}
+
+func run_json_alani() {
+    json j = {"n": 5};
+    j["n"]++;
+    assert_eq_int(j["n"], 6);
+}
+
+// Post semantigi: ESKI deger donmeli — `x++` ile ayni.
+func run_post_semantigi() {
+    int[] a = array_fill(2, 5);
+    assert_eq_int(a[0]++, 5);
+    assert_eq_int(a[0], 6);
+    int x = 5;
+    assert_eq_int(x++, 5);
+    assert_eq_int(x, 6);
+}
+
+func run_donguda() {
+    int[] a = array_fill(4, 1);
+    for (int i = 0; i < len(a); i = i + 1) { a[i]++; }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 8);
+}
+
+test("dizi elemani ++/--", "run_dizi_elemani");
+test("json alani ++", "run_json_alani");
+test("post semantigi", "run_post_semantigi");
+test("donguda eleman ++", "run_donguda");
+test_summary();

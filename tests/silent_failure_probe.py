@@ -90,6 +90,20 @@ c("INT_MIN / -1 oldurmemeli",
 c("normal bolme bozulmadi", 'print(10 / 3);\nprint(-7 / 2);\nprint(10 % 3);\nprint(-7 % 3);',
   "3\n-3\n1\n-1")
 
+# --- 7. Eleman hedefli ++/-- (2026-09-04'te bulunan hata) ---
+# `a[0]++` SESSIZ HIC-ISLEMDI: parser `++` token'ini tuketip atiyordu
+# (hedef Identifier degilse govde calismiyordu), ifade `a[0];` olarak
+# kaliyordu. Program derleniyor, calisiyor, deger degismiyor, uyari yok.
+c("dizi elemani ++", 'int[] a = array_fill(3, 3);\na[0]++;\nprint(a[0]);', "4")
+c("dizi elemani --", 'int[] a = array_fill(3, 3);\na[0]--;\nprint(a[0]);', "2")
+c("json alani ++", 'json j = {"n": 5};\nj["n"]++;\nprint(j["n"]);', "6")
+c("eleman ++ post degeri",
+  'int[] a = array_fill(2, 5);\nprint(a[0]++);\nprint(a[0]);', "5\n6")
+c("eleman ++ donguda",
+  'int[] a = array_fill(2, 1);\nint i = 0;\nwhile (i < 2) { a[i]++; i++; }\n'
+  'print(a[0] + a[1]);', "4")
+c("degisken ++ bozulmadi", 'int x = 5;\nprint(x++);\nprint(x);', "5\n6")
+
 fails = 0
 for name, src, expect in CASES:
     safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)

@@ -44,6 +44,7 @@ static std::string gsym(const char *name) {
   return std::string("tpr_g_") + (name ? name : "");
 }
 
+
 // Korumali tamsayi bolme/kalan.
 //
 // Ham `sdiv`/`srem` iki durumda DONANIM TUZAGI (x86 #DE -> SIGFPE) ve LLVM
@@ -3476,6 +3477,66 @@ static int emit_shape_cache_for_loop(LLVMBackend *backend, ASTNode_C *cond,
 }
 
 
+// `a[0]++` / `j["n"]--`: ELEMAN hedefli artirma/azaltma.
+//
+// Eskiden SESSIZ HIC-ISLEMDI (parser `++` token'ini tuketip atiyordu; bkz.
+// parse_postfix). Simdi hedef codegen'e geliyor ve burada oku-artir-yaz
+// yapiliyor. Runtime cagrilariyla: dizi de nesne de ayni yoldan gecsin ve
+// satir ici hizli yolun kopyasi cikmasin — artirma sicak yol degil,
+// dogruluk hizdan onemli.
+//
+// Post semantigi korunuyor: ESKI deger donuyor (`x++` ile ayni).
+static LLVMValueRef codegen_elem_step(LLVMBackend *backend, ASTNode_C *node,
+                                      int delta) {
+  ASTNode_C *acc = node->left;
+  if (!acc || acc->type != AST_ARRAY_ACCESS) {
+    report_codegen_error_with_suggestion(
+        backend, node->line, "hata",
+        "++/-- yalniz degiskene ya da dizi/nesne elemanina uygulanabilir",
+        nullptr, "hedefi bir degisken ya da a[i] bicimine getirin");
+    return llvm_vm_val_int(backend, 0);
+  }
+  // Kap ve indeks: `a[i]` dugumunde taban ya name'de ya left'te (bkz. 6g).
+  LLVMValueRef cont = nullptr;
+  if (acc->name) {
+    LLVMValueRef slot = get_local(backend, acc->name);
+    if (slot)
+      cont = LLVMBuildLoad2(backend->builder, backend->vm_value_type, slot,
+                            acc->name);
+  } else if (acc->left) {
+    cont = codegen_expression(backend, acc->left);
+  }
+  if (!cont || !acc->index) return llvm_vm_val_int(backend, 0);
+  LLVMValueRef idx = codegen_expression(backend, acc->index);
+
+  LLVMValueRef cont_p = llvm_build_alloca_at_entry(
+      backend, backend->vm_value_type, "step.cont");
+  LLVMBuildStore(backend->builder, cont, cont_p);
+  LLVMValueRef idx_p = llvm_build_alloca_at_entry(
+      backend, backend->vm_value_type, "step.idx");
+  LLVMBuildStore(backend->builder, idx, idx_p);
+
+  LLVMValueRef gargs[] = {cont_p, idx_p};
+  LLVMValueRef old = llvm_call_vmvalue_func(
+      backend, backend->func_vm_get_element, gargs, 2, "step.old");
+  LLVMValueRef oldi = llvm_extract_vm_val_int(backend, old);
+  LLVMValueRef newi =
+      LLVMBuildAdd(backend->builder, oldi,
+                   LLVMConstInt(backend->int_type, (unsigned long long)delta,
+                                delta < 0),
+                   "step.new");
+  LLVMValueRef new_p = llvm_build_alloca_at_entry(
+      backend, backend->vm_value_type, "step.newv");
+  LLVMBuildStore(backend->builder, llvm_vm_val_int_val(backend, newi), new_p);
+  LLVMValueRef sargs[] = {LLVMConstNull(backend->ptr_type), cont_p, idx_p,
+                          new_p};
+  LLVMBuildCall2(backend->builder,
+                 LLVMGlobalGetValueType(backend->func_vm_set_element),
+                 backend->func_vm_set_element, sargs, 4, "");
+  return old;   // post-increment: ESKI deger
+}
+
+
 LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   if (!node)
     return nullptr;
@@ -3884,6 +3945,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   }
 
   case AST_INCREMENT: {
+    if (node->left) return codegen_elem_step(backend, node, 1);
     // Typed-int fast path: top-level `int x = ...;` registers x as a native
     // i64 global with no boxed VMValue local. get_local() would return NULL
     // in that case, so check the typed/native side first.
@@ -3922,6 +3984,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   }
 
   case AST_DECREMENT: {
+    if (node->left) return codegen_elem_step(backend, node, -1);
     InferredType vt_dec = get_local_type(backend, node->name);
     LLVMValueRef nat_dec = get_local_native(backend, node->name);
     if (vt_dec == INFERRED_INT && nat_dec) {

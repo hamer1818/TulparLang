@@ -1429,16 +1429,21 @@ std::unique_ptr<ASTNode> Parser::parse_postfix(std::unique_ptr<ASTNode> expr) {
             );
         } else if (match(TOKEN_PLUS_PLUS)) {
             // x++ becomes increment
+            SourceLocation loc(current().line(), current().column());
             if (auto* id = std::get_if<Identifier>(&expr->value)) {
-                SourceLocation loc(current().line(), current().column());
                 return std::make_unique<ASTNode>(IncrementOp(id->name, loc));
             }
+            // `a[0]++` / `j["n"]++`: hedefi TASI. Eskiden buraya dusuldugunde
+            // `++` zaten tuketilmis oluyor ve hicbir sey yapilmiyordu —
+            // program derleniyor, calisiyor, deger degismiyordu.
+            return std::make_unique<ASTNode>(IncrementOp(std::move(expr), loc));
         } else if (match(TOKEN_MINUS_MINUS)) {
             // x-- becomes decrement
+            SourceLocation loc(current().line(), current().column());
             if (auto* id = std::get_if<Identifier>(&expr->value)) {
-                SourceLocation loc(current().line(), current().column());
                 return std::make_unique<ASTNode>(DecrementOp(id->name, loc));
             }
+            return std::make_unique<ASTNode>(DecrementOp(std::move(expr), loc));
         } else {
             break;
         }
@@ -1763,10 +1768,12 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
         } else if constexpr (std::is_same_v<T, IncrementOp>) {
             out->type = AST_INCREMENT;
             out->name = dup_cstr(n.name);
+            if (n.target) out->left = convert_ast_node_ptr(n.target);
             set_loc(out, n.loc);
         } else if constexpr (std::is_same_v<T, DecrementOp>) {
             out->type = AST_DECREMENT;
             out->name = dup_cstr(n.name);
+            if (n.target) out->left = convert_ast_node_ptr(n.target);
             set_loc(out, n.loc);
         } else if constexpr (std::is_same_v<T, FunctionDecl>) {
             out->type = AST_FUNCTION_DECL;
