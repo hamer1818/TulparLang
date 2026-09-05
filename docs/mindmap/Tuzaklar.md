@@ -678,10 +678,12 @@ Paketler ve örnekler doğru yazılmış programları koşuyor. `tests/
 silent_failure_probe.py` kenar durumlarını koşuyor ve özellikle **derleyicinin
 "başarılı" deyip yanlış sonuç ürettiği / ikilinin çöktüğü** sınıfı arıyor.
 
-**Beş** gerçek hata bununla bulundu: `int free = 3;` (libc sembol ezme,
+**Sekiz** gerçek hata bununla bulundu: `int free = 3;` (libc sembol ezme,
 [[Tuzaklar#6h]]), `func exit(...)` (yerleşik gölgeleme), `10 / n` (sessiz
-SIGFPE), `a[0]++` (sessiz hiç-işlem), `if` gövdesinin kapsam açmaması. Hiçbiri
-64 paketin veya 40 örneğin gözüne çarpmamıştı — çünkü hiçbiri böyle bir program
+SIGFPE), `a[0]++` (sessiz hiç-işlem), `if` gövdesinin kapsam açmaması, float
+literallerinin float32'ye kırpılması, biçimleyicinin aynı kırpmayı yapması ve
+`print`in `toString`den **farklı sayı** basması ([[Tuzaklar#6k]]). Hiçbiri 66
+paketin veya 40 örneğin gözüne çarpmamıştı — çünkü hiçbiri böyle bir program
 yazmıyor.
 
 `a[0]++` özellikle öğretici: `parse_postfix`'te `match(TOKEN_PLUS_PLUS)` token'ı
@@ -703,6 +705,73 @@ koşuyor, çünkü tanı metinleri yerele göre değişiyor.
 hiç sembol üretmiyor), `len(dizgi)` sondası dizgiyi indekslemiyordu (önbelleğe
 aday bile değil). İkisi de yeşildi ve ikisi de hiçbir şey ölçmüyordu. Her
 sondayı enjeksiyonla sına.
+
+## 6k. Bir varsayım üç katmanda tekrarlanınca kendini gizler
+
+2026-09-05: Tulpar'ın `float`u çalışma zamanında **double** —
+`backend->float_type = LLVMDoubleType`, `VMValue` payload'ı 8 bayt. Ama üç
+ayrı yerde float32 varsayımı vardı ve **her biri diğerini görünmez kılıyordu**:
+
+1. `ASTNode_C.value.float_value` alanı `float` idi (32-bit). Kaynaktaki her
+   float literali C-köprüsünde kırpılıyordu: `float pi = 3.141592653589793;`
+   gerçekte `3.1415927410125732` derleniyordu.
+2. `aot_format_float` değeri önce `(float)`e yuvarlayıp en kısa **float32**
+   gösterimini arıyordu. Gerekçesi kendi yorumundaydı: *"the LLVM backend uses
+   a 32-bit float type"* — **yanlış**; `LLVMFloatTypeInContext` bu repoda hiç
+   olmadı (`git log -S` ile bakıldı).
+3. `print` o biçimleyiciyi hiç kullanmıyordu: codegen `aot_print_value` →
+   `vm_print_value` (vm.cpp) → düz `printf("%g")`, altı anlamlı hane.
+
+**Neden altı hafta görünmedi:** (1) değeri kırpıyor, (2) kırpılmış değeri
+kırpılmış biçimde basıyor. İkisi *aynı yönde* yanlış olduğu için çıktı
+tutarlı görünüyordu. (3) ise en üstte oturup ikisini birden `%g`nin arkasına
+saklıyordu.
+
+**Ders:** bir tür/genişlik varsayımı katmanlar arasında **tekrarlanıyorsa**,
+uçlarını ayrı ayrı ölç. Buradaki ayırıcı sonda, hesabı sonucun kendisine
+değil, *beklenen kırpılmış değere olan farka* bakmaktı:
+`print((pi - 3.1415927410125732) * 1e12)` → kırpılmışsa tam `0`, double ise
+`-87422.8`. `print(pi)` tek başına ikisini de `3.14159` gösteriyordu.
+
+**İkinci ders — testin kendisi hatayı sabitleyebilir:**
+`tests/float_format.test.tpr` içinde `toString(0.1+0.2) == "0.3"` yazıyordu.
+Bu float32 yuvarlamasının *beklentiye çevrilmiş hâliydi*: düzeltme yapılınca
+test kırmızıya döndü ve ilk refleks "düzeltme yanlış" demek oldu. Doğrusu
+`0.30000000000000004` (Python/Go/Rust/JS de böyle basar). Bir test bir hatayı
+kilitliyorsa, başlığındaki gerekçeyi oku — oradaki cümle de yanlıştı.
+
+### Aynı değer, iki farklı biçimleyici
+`print(x)` ile `print("" + x)` **farklı sayılar basıyordu** (`1e+06` ve
+`1000000.5`): `toString` doğru biçimleyiciyi kullanıyordu, `print`
+kullanmıyordu. `runtime_bindings.cpp`'deki doğru `print_value` /
+`print_vm_value` çifti AOT yolunda **ölü koddu** (VM'den kalma). Bu
+[[Tuzaklar#6i]]'nin (hızlı yol ↔ yavaş yol ayrışması) biçimleme hâli:
+**aynı değeri metne çeviren iki yol varsa aynı fonksiyonu çağırmalılar.**
+
+### Enjeksiyon bunu söyledi, ben değil
+(3)'ü geri alınca `float_precision.test.tpr` **yeşil kaldı** — çünkü
+assert'ler `toString`den geçiyor, `print`ten değil. `print`in biçimleyicisi
+yalnız **stdout karşılaştıran** sondada görünüyor. Bir davranışı test etmek
+istiyorsan, testin o davranışın *geçtiği yoldan* geçtiğini enjeksiyonla
+doğrula ([[Tuzaklar#6j]] "sondanın kendi tuzağı").
+
+## 6l. Runtime'a düşen her çağrı şekil önbelleğini bayatlatır
+
+`a[i]++` ve `a[i] += 5` runtime'a giriyor: `vm_get_element` →
+`vm_array_get` → `arr_items` → **`arr_debox`**, yani KUTUSUZ dizi kutulanıyor
+ve `idata` **`free`** ediliyor. Döngü başında önbelleğe alınan `idata` o an
+sarkıyor; aynı döngüdeki sonraki önbellekli erişim serbest belleğe yazıyor.
+Ölçüldü: `malloc(): unsorted double linked list corrupted`.
+
+Değişmez zaten vardı (`emit_shape_refresh_all`, `vm_get_element` /
+`vm_set_element` çağrılarından sonra) — yeni eleman yolu onu **uygulamayı
+unuttu**. Sağ taraf `a[j]` okuyabildiği için tazeleme `get`ten **sonra**,
+okumadan **önce** olmalı.
+
+**Regresyon testi 4096 eleman kullanıyor, bilerek:** ilk yazılan döngü testi 4
+elemanlıydı ve `free` o boyutta belleği işletim sistemine geri vermiyor —
+sarkan işaretçi hâlâ eski değerleri okuyor, test **yeşil geçiyordu**. Serbest
+bellek hatasını arayan test, tahsisin gerçekten geri verileceği boyutta olmalı.
 
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
