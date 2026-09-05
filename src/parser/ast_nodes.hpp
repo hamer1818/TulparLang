@@ -214,14 +214,22 @@ struct Assignment {
 };
 
 struct CompoundAssign {
-    std::string name;
+    std::string name;                       // basit hedef: degisken adi
+    // Karmasik hedef: `a[i] += 5`, `j["n"] *= 2`. Assignment / IncrementOp
+    // ile AYNI kalip. Eskiden yoktu: `a[i] += 5` ACIK ayristirma hatasiydi
+    // (sessiz degildi ama `a[i]++` calisirken tutarsizdi).
+    std::unique_ptr<ASTNode> target;
     TulparTokenType op;
     std::unique_ptr<ASTNode> value;
     SourceLocation loc;
-    
+
     CompoundAssign(const std::string& n, TulparTokenType o,
                    std::unique_ptr<ASTNode> v, SourceLocation l)
-        : name(n), op(o), value(std::move(v)), loc(l) {}
+        : name(n), target(nullptr), op(o), value(std::move(v)), loc(l) {}
+
+    CompoundAssign(std::unique_ptr<ASTNode> tgt, TulparTokenType o,
+                   std::unique_ptr<ASTNode> v, SourceLocation l)
+        : name(""), target(std::move(tgt)), op(o), value(std::move(v)), loc(l) {}
 };
 
 struct IncrementOp {

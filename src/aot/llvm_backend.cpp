@@ -3477,6 +3477,21 @@ static int emit_shape_cache_for_loop(LLVMBackend *backend, ASTNode_C *cond,
 }
 
 
+// `+=` -> `+` esleme. Bilesik atamanin hem skaler hem eleman yolu bunu
+// kullaniyor: iki yerde ayri switch kalirsa yeni bir operator eklenince
+// biri sessizce guncellenmemis kalir (`%=` eklenirken tam bu oldu).
+static int compound_op_to_binary(int op) {
+  switch (op) {
+  case TOKEN_PLUS_EQUAL:     return TOKEN_PLUS;
+  case TOKEN_MINUS_EQUAL:    return TOKEN_MINUS;
+  case TOKEN_MULTIPLY_EQUAL: return TOKEN_MULTIPLY;
+  case TOKEN_DIVIDE_EQUAL:   return TOKEN_DIVIDE;
+  case TOKEN_MODULO_EQUAL:   return TOKEN_MODULO;
+  default:                   return op;
+  }
+}
+
+
 // `a[0]++` / `j["n"]--`: ELEMAN hedefli artirma/azaltma.
 //
 // Eskiden SESSIZ HIC-ISLEMDI (parser `++` token'ini tuketip atiyordu; bkz.
@@ -3519,6 +3534,11 @@ static LLVMValueRef codegen_elem_step(LLVMBackend *backend, ASTNode_C *node,
   LLVMValueRef gargs[] = {cont_p, idx_p};
   LLVMValueRef old = llvm_call_vmvalue_func(
       backend, backend->func_vm_get_element, gargs, 2, "step.old");
+  // vm_get_element -> vm_array_get -> arr_items -> arr_debox: KUTUSUZ diziyi
+  // kutular ve idata'yi FREE eder. Sekil onbellegindeki idata o an sarkiyor;
+  // tazelenmezse dongudeki sonraki `a[j]` SERBEST BELLEK okuyor (olculdu:
+  // "malloc(): unsorted double linked list corrupted").
+  if (backend->shape_count > 0) emit_shape_refresh_all(backend);
   LLVMValueRef oldi = llvm_extract_vm_val_int(backend, old);
   LLVMValueRef newi =
       LLVMBuildAdd(backend->builder, oldi,
@@ -3533,7 +3553,95 @@ static LLVMValueRef codegen_elem_step(LLVMBackend *backend, ASTNode_C *node,
   LLVMBuildCall2(backend->builder,
                  LLVMGlobalGetValueType(backend->func_vm_set_element),
                  backend->func_vm_set_element, sargs, 4, "");
+  if (backend->shape_count > 0) emit_shape_refresh_all(backend);
   return old;   // post-increment: ESKI deger
+}
+
+
+// `a[i] += 5` / `j["n"] *= 2`: ELEMAN hedefli BILESIK atama.
+//
+// `a[i]++` calisirken bunun ACIK ayristirma hatasi olmasi tutarsizdi
+// (bkz. parse_expression_statement). Ayni oku-degistir-yaz kalibi, ama
+// adim yerine keyfi bir ikili islem ve keyfi bir sag taraf.
+//
+// Islem GENEL vm_binary_op'tan geciyor: boylece int/float/dizgi ayni
+// yoldan calisiyor (`s[0] += "x"` de) ve sifira bolme / INT_MIN-(-1)
+// korumalari orada zaten var — burada kopyalanmiyor.
+//
+// Skaler bilesik atama gibi YENI deger donuyor.
+static LLVMValueRef codegen_elem_compound(LLVMBackend *backend,
+                                          ASTNode_C *node) {
+  ASTNode_C *acc = node->left;
+  if (!acc || acc->type != AST_ARRAY_ACCESS) {
+    report_codegen_error_with_suggestion(
+        backend, node->line, "hata",
+        "bileşik atama yalnız değişkene ya da dizi/nesne elemanına uygulanabilir",
+        nullptr, "hedefi bir değişken ya da a[i] biçimine getirin");
+    return llvm_vm_val_int(backend, 0);
+  }
+  // Kap ve indeks: `a[i]` dugumunde taban ya name'de ya left'te (bkz. 6g).
+  LLVMValueRef cont = nullptr;
+  if (acc->name) {
+    LLVMValueRef slot = get_local(backend, acc->name);
+    if (slot)
+      cont = LLVMBuildLoad2(backend->builder, backend->vm_value_type, slot,
+                            acc->name);
+  } else if (acc->left) {
+    cont = codegen_expression(backend, acc->left);
+  }
+  if (!cont || !acc->index) return llvm_vm_val_int(backend, 0);
+  LLVMValueRef idx = codegen_expression(backend, acc->index);
+
+  LLVMValueRef cont_p = llvm_build_alloca_at_entry(
+      backend, backend->vm_value_type, "ca.cont");
+  LLVMBuildStore(backend->builder, cont, cont_p);
+  LLVMValueRef idx_p = llvm_build_alloca_at_entry(
+      backend, backend->vm_value_type, "ca.idx");
+  LLVMBuildStore(backend->builder, idx, idx_p);
+
+  LLVMValueRef gargs[] = {cont_p, idx_p};
+  LLVMValueRef old = llvm_call_vmvalue_func(
+      backend, backend->func_vm_get_element, gargs, 2, "ca.old");
+  // Cagri diziyi kutuya cevirmis olabilir (arr_items -> arr_debox idata'yi
+  // FREE eder) -> sekil onbellegi tazelenmeli. Sag taraf `a[j]` okuyabilir,
+  // yani tazeleme okumadan ONCE olmali.
+  if (backend->shape_count > 0) emit_shape_refresh_all(backend);
+
+  LLVMValueRef rhs = codegen_expression(backend, node->right);
+
+  LLVMValueRef L_ptr =
+      llvm_build_alloca_at_entry(backend, backend->vm_value_type, "ca.L");
+  LLVMBuildStore(backend->builder, old, L_ptr);
+  LLVMValueRef R_ptr =
+      llvm_build_alloca_at_entry(backend, backend->vm_value_type, "ca.R");
+  LLVMBuildStore(backend->builder, rhs, R_ptr);
+  LLVMValueRef res_ptr =
+      llvm_build_alloca_at_entry(backend, backend->vm_value_type, "ca.res");
+
+  LLVMValueRef bin_args[] = {
+      LLVMConstPointerNull(backend->ptr_type),
+      LLVMBuildBitCast(backend->builder, L_ptr, backend->ptr_type, "ca.Lv"),
+      LLVMBuildBitCast(backend->builder, R_ptr, backend->ptr_type, "ca.Rv"),
+      LLVMConstInt(backend->int32_type,
+                   compound_op_to_binary(node->op), 0),
+      LLVMBuildBitCast(backend->builder, res_ptr, backend->ptr_type,
+                       "ca.resv")};
+  LLVMBuildCall2(backend->builder, backend->vm_binary_op_type,
+                 backend->func_vm_binary_op, bin_args, 5, "");
+
+  LLVMValueRef new_val = LLVMBuildLoad2(backend->builder,
+                                        backend->vm_value_type, res_ptr,
+                                        "ca.new");
+  LLVMValueRef new_p = llvm_build_alloca_at_entry(
+      backend, backend->vm_value_type, "ca.newv");
+  LLVMBuildStore(backend->builder, new_val, new_p);
+  LLVMValueRef sargs[] = {LLVMConstNull(backend->ptr_type), cont_p, idx_p,
+                          new_p};
+  LLVMBuildCall2(backend->builder,
+                 LLVMGlobalGetValueType(backend->func_vm_set_element),
+                 backend->func_vm_set_element, sargs, 4, "");
+  if (backend->shape_count > 0) emit_shape_refresh_all(backend);
+  return new_val;   // bilesik atama: YENI deger
 }
 
 
@@ -4020,6 +4128,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   }
 
   case AST_COMPOUND_ASSIGN: {
+    if (node->left) return codegen_elem_compound(backend, node);
     // Typed-int fast path: do unboxed +=/-=/*=//= directly on the native i64.
     InferredType vt_ca = get_local_type(backend, node->name);
     LLVMValueRef nat_ca = get_local_native(backend, node->name);
@@ -4104,26 +4213,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     LLVMValueRef R_void =
         LLVMBuildBitCast(backend->builder, R_ptr, backend->ptr_type, "R_void");
 
-    int op_token = node->op;
-    switch (op_token) {
-    case TOKEN_PLUS_EQUAL:
-      op_token = TOKEN_PLUS;
-      break;
-    case TOKEN_MINUS_EQUAL:
-      op_token = TOKEN_MINUS;
-      break;
-    case TOKEN_MULTIPLY_EQUAL:
-      op_token = TOKEN_MULTIPLY;
-      break;
-    case TOKEN_DIVIDE_EQUAL:
-      op_token = TOKEN_DIVIDE;
-      break;
-    case TOKEN_MODULO_EQUAL:
-      op_token = TOKEN_MODULO;
-      break;
-    default:
-      break;
-    }
+    int op_token = compound_op_to_binary(node->op);
 
     LLVMValueRef bin_args[] = {
         LLVMConstPointerNull(backend->ptr_type), L_void, R_void,

@@ -900,17 +900,29 @@ std::unique_ptr<ASTNode> Parser::parse_expression_statement() {
     auto expr = parse_expression();
 
     // Complex-lvalue assignment:  arr[i] = val;  obj["k"]["k2"] = val;
-    if (check(TOKEN_ASSIGN)) {
-        // Only valid if expr is an ArrayAccess (or chain thereof).
-        // Other lvalues currently aren't supported and will fall through
-        // to the existing error path.
-        if (std::holds_alternative<ArrayAccess>(expr->value)) {
+    // ve bilesik bicimi:           arr[i] += val;  obj["k"] *= 2;
+    // Ikisi de yalniz ArrayAccess hedefinde gecerli; baska lvalue'lar
+    // asagidaki hata yoluna dusuyor.
+    {
+        const TulparTokenType t = current().type();
+        const bool is_plain = (t == TOKEN_ASSIGN);
+        const bool is_compound =
+            (t == TOKEN_PLUS_EQUAL || t == TOKEN_MINUS_EQUAL ||
+             t == TOKEN_MULTIPLY_EQUAL || t == TOKEN_DIVIDE_EQUAL ||
+             t == TOKEN_MODULO_EQUAL);
+        if ((is_plain || is_compound) &&
+            std::holds_alternative<ArrayAccess>(expr->value)) {
             SourceLocation loc(current().line(), current().column());
-            advance(); // consume '='
+            advance(); // consume '=' / '+=' / ...
             auto value = parse_expression();
             expect(TOKEN_SEMICOLON, "Expected ';' after assignment");
+            if (is_plain) {
+                return std::make_unique<ASTNode>(
+                    Assignment(std::move(expr), std::move(value), loc)
+                );
+            }
             return std::make_unique<ASTNode>(
-                Assignment(std::move(expr), std::move(value), loc)
+                CompoundAssign(std::move(expr), t, std::move(value), loc)
             );
         }
     }
@@ -1763,6 +1775,10 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
         } else if constexpr (std::is_same_v<T, CompoundAssign>) {
             out->type = AST_COMPOUND_ASSIGN;
             out->name = dup_cstr(n.name);
+            // Karmasik hedef (`a[i] += 5`): Assignment ile ayni slot.
+            if (n.target) {
+                out->left = convert_ast_node_ptr(n.target);
+            }
             out->right = convert_ast_node_ptr(n.value);
             out->op = n.op;
             set_loc(out, n.loc);
