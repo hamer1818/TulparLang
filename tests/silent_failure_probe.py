@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""Sessiz hata tarayicisi: beklenen ciktisi bilinen kucuk programlar.
+
+NEDEN VAR: paketler ve ornekler "dogru yazilmis" programlari kosuyor. Bu
+tarayici KENAR durumlarini kosuyor ve ozellikle SESSIZ bozulmalari ariyor —
+derleyicinin "basarili" dedigi, hicbir tani basmadigi, ama sonucun yanlis
+oldugu ya da ikilinin coktugu durumlar. O sinif normal testlerde gorunmez.
+
+Bu tarayici iki gercek hatayi boyle buldu (2026-09-04):
+  * `int free = 3;` -> ust duzey degisken libc sembolunu eziyordu; derleme
+    "Successfully created" diyor, ikili ilk serbest birakmada SIGSEGV.
+  * `func exit(int x)` -> kullanici fonksiyonu yerine YERLESIK cagriliyordu;
+    surec 5 ile sonlaniyor, tek kelime uyari yok. 11 yerlesik ayni sekilde.
+
+Aranan uc bozulma bicimi:
+  * cokme / bos cikti (derleme "basarili" derken ikili patliyor)
+  * yanlis sonuc
+  * beklenmeyen derleyici hatasi
+
+Sonda eklemek serbest ve tesvik edilir: (ad, kaynak, beklenen cikti).
+"""
+import os, subprocess, sys, tempfile, pathlib
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+TULPAR = str(ROOT / "tulpar")
+D = pathlib.Path(tempfile.mkdtemp(prefix="probe"))
+CASES = []
+def c(name, src, expect):
+    # expect=None: program DERLENMEMELI (sifirdan farkli cikis). Sessizce
+    # gecerli sayilan bozuk sozdizimi bu tarayicinin aradigi siniftir.
+    CASES.append((name, src, None if expect is None else expect.strip()))
+
+# --- 1. Ad cakismasi: KULLANICI FONKSIYONLARI ---
+c("fonksiyon adi 'free'", 'func free(int x) { return x + 1; }\nprint(free(1));', "2")
+c("fonksiyon adi 'malloc'", 'func malloc(int x) { return x * 2; }\nprint(malloc(3));', "6")
+c("fonksiyon adi 'exit'", 'func exit(int x) { return x - 1; }\nprint(exit(5));', "4")
+c("fonksiyon adi 'strlen'", 'func strlen(int x) { return x; }\nprint(strlen(9));', "9")
+c("fonksiyon adi 'abort'", 'func abort(int x) { return x; }\nprint(abort(7));', "7")
+c("fonksiyon adi 'memcpy'", 'func memcpy(int x) { return x; }\nprint(memcpy(4));', "4")
+
+# --- 2. Sekil onbellegi kenar durumlari ---
+c("bos dizide len dongusu",
+  'int[] a = array_fill(0, 0);\nint t = 0;\nfor (int i = 0; i < len(a); i = i + 1) { t = t + 1; }\nprint(t);', "0")
+c("dongude break",
+  'int[] a = array_fill(10, 3);\nint t = 0;\nfor (int i = 0; i < len(a); i = i + 1) { if (i == 4) { break; } t = t + a[i]; }\nprint(t);', "12")
+c("dongude continue",
+  'int[] a = array_fill(6, 2);\nint t = 0;\nfor (int i = 0; i < len(a); i = i + 1) { if (i == 2) { continue; } t = t + a[i]; }\nprint(t);', "10")
+c("ic ice ayni dizi",
+  'int[] a = array_fill(4, 1);\nint t = 0;\nfor (int i = 0; i < len(a); i = i + 1) { for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; } }\nprint(t);', "16")
+c("fonksiyon icinde onbellekli dongu",
+  'func topla(int[] a) { int t = 0; for (int i = 0; i < len(a); i = i + 1) { t = t + a[i]; } return t; }\nint[] x = array_fill(5, 4);\nprint(topla(x));', "20")
+c("dizi fonksiyona gecirilip degistiriliyor",
+  'func ekle(int[] a) { a.push(99); return 0; }\nint[] x = array_fill(2, 1);\nint t = 0;\nfor (int i = 0; i < 3; i = i + 1) { ekle(x); t = len(x); }\nprint(t);', "5")
+c("iki farkli dizi ayni donguda",
+  'int[] a = array_fill(3, 1);\nint[] b = array_fill(3, 10);\nint t = 0;\nfor (int i = 0; i < len(a); i = i + 1) { t = t + a[i] + b[i]; }\nprint(t);', "33")
+c("dizi dongu icinde kutuya donuyor sonra len",
+  'int[] a = array_fill(4, 1);\nint son = 0;\nfor (int i = 0; i < 4; i = i + 1) { if (i == 1) { a[i] = 2.5; } son = len(a); }\nprint(son);', "4")
+
+# --- 3. Sayisal kenar durumlar ---
+c("negatif indeks okuma", 'int[] a = array_fill(3, 5);\nprint(a[0]);', "5")
+c("buyuk int", 'int x = 9223372036854775806;\nprint(x + 1);', "9223372036854775807")
+c("negatif array_fill", 'int[] a = array_fill(-5, 1);\nprint(len(a));', "0")
+c("sifir array_fill", 'int[] a = array_fill(0, 1);\nprint(len(a));', "0")
+
+# --- 4. Dizgi kenar durumlari ---
+c("bos dizgi len", 'str s = "";\nprint(len(s));', "0")
+c("utf8 dizgi", 'str s = "çğüöşı";\nprint(len(s));', "12")
+c("dizgi indeksleme dongude",
+  'str s = "abcde";\nstr son = "";\nfor (int i = 0; i < len(s); i = i + 1) { son = s[i]; }\nprint(son);', "e")
+
+# --- 5. Yerlesik golgeleme (2026-09-04'te bulunan hata) ---
+for _b, _v in [("exit", 4), ("len", 101), ("abs", 101), ("round", 101),
+               ("upper", 101), ("lower", 101), ("trim", 101), ("keys", 101),
+               ("values", 101), ("range", 101), ("sqrt", 101)]:
+    c(f"kullanici '{_b}' yerlesigi golgeler",
+      f"func {_b}(int x) {{ return x + 100; }}\nprint({_b}(1));",
+      "101" if _b != "exit" else "101")
+
+# --- 6. Tamsayi bolme tuzaklari (2026-09-04'te bulunan hata) ---
+# `10 / n` (n calisma zamaninda 0) ham sdiv uretiyordu -> SIGFPE, program
+# TEK KELIME ETMEDEN oluyordu. Sabit 0 ile yazilirsa LLVM katliyor ve hata
+# GORUNMUYOR; o yuzden bolen ortamdan geliyor (katlanamaz).
+c("sifira bolme oldurmemeli",
+  'int n = toInt(env("KESINLIKLE_YOK_12345"));\nprint(10 / n);\nprint(7);',
+  "Runtime Error: Division by zero\n0\n7")
+c("sifira mod oldurmemeli",
+  'int n = toInt(env("KESINLIKLE_YOK_12345"));\nprint(10 % n);\nprint(7);',
+  "Runtime Error: Division by zero\n0\n7")
+c("INT_MIN / -1 oldurmemeli",
+  'int n = toInt(env("KESINLIKLE_YOK_12345"));\nint m = n - 1;\n'
+  'int big = -9223372036854775807 - 1;\nprint(big / m);\nprint(7);',
+  "Runtime Error: Integer division overflow\n0\n7")
+c("normal bolme bozulmadi", 'print(10 / 3);\nprint(-7 / 2);\nprint(10 % 3);\nprint(-7 % 3);',
+  "3\n-3\n1\n-1")
+
+# --- 7a. Blok kapsami (2026-09-04'te bulunan hata) ---
+# `if`/`while` govdeleri kapsam ACMIYORDU: icteki `int x = 5` distakini
+# eziyordu. `for` dogruydu — dilde iki farkli kapsam kurali vardi.
+c("if govdesi golgeler", 'int x = 1;\nif (true) { int x = 5; }\nprint(x);', "1")
+c("while govdesi golgeler",
+  'int x = 1;\nint i = 0;\nwhile (i < 1) { int x = 5; i = i + 1; }\nprint(x);', "1")
+c("ic ice blok golgeleme",
+  'int x = 1;\nif (true) { int x = 2; if (true) { int x = 3; print(x); } print(x); }\n'
+  'print(x);', "3\n2\n1")
+c("blok dis degiskeni yazar", 'int x = 7;\nif (true) { x = 9; }\nprint(x);', "9")
+
+# --- 7b. Bilesik atamalar ---
+c("%= operatoru", 'int x = 17;\nx %= 5;\nprint(x);', "2")
+c("%= sifira", 'int n = toInt(env("KESINLIKLE_YOK_12345"));\nint z = 7;\nz %= n;\n'
+  'print(z);\nprint(9);', "Runtime Error: Division by zero\n0\n9")
+
+# --- 7. Eleman hedefli ++/-- (2026-09-04'te bulunan hata) ---
+# `a[0]++` SESSIZ HIC-ISLEMDI: parser `++` token'ini tuketip atiyordu
+# (hedef Identifier degilse govde calismiyordu), ifade `a[0];` olarak
+# kaliyordu. Program derleniyor, calisiyor, deger degismiyor, uyari yok.
+c("dizi elemani ++", 'int[] a = array_fill(3, 3);\na[0]++;\nprint(a[0]);', "4")
+c("dizi elemani --", 'int[] a = array_fill(3, 3);\na[0]--;\nprint(a[0]);', "2")
+c("json alani ++", 'json j = {"n": 5};\nj["n"]++;\nprint(j["n"]);', "6")
+c("eleman ++ post degeri",
+  'int[] a = array_fill(2, 5);\nprint(a[0]++);\nprint(a[0]);', "5\n6")
+c("eleman ++ donguda",
+  'int[] a = array_fill(2, 1);\nint i = 0;\nwhile (i < 2) { a[i]++; i++; }\n'
+  'print(a[0] + a[1]);', "4")
+c("degisken ++ bozulmadi", 'int x = 5;\nprint(x++);\nprint(x);', "5\n6")
+
+# --- 7c. Eleman hedefli BILESIK atama (2026-09-05'te bulunan eksiklik) ---
+# `a[i]++` calisirken `a[i] += 5` ACIK ayristirma hatasiydi.
+c("dizi elemani +=", 'int[] a = [1, 2, 3];\na[1] += 5;\nprint(a[1]);', "7")
+c("dizi elemani *=", 'int[] a = [1, 2, 3];\na[0] *= 7;\nprint(a[0]);', "7")
+c("dizi elemani %=", 'int[] a = [17];\na[0] %= 5;\nprint(a[0]);', "2")
+c("json alani +=", 'json j = {"n": 10};\nj["n"] += 5;\nprint(j["n"]);', "15")
+c("eleman += ifade indeks",
+  'int[] a = [10, 20, 30];\nint i = 2;\na[i - 1] += 100;\nprint(a[1]);', "120")
+c("dizgi elemani +=", 'array s = ["ab"];\ns[0] += "XY";\nprint(s[0]);', "abXY")
+
+# SARKAN SEKIL ONBELLEGI: `a[i]++` / `a[i] += 1` runtime'a giriyor,
+# vm_array_get -> arr_items -> arr_debox KUTUSUZ diziyi kutuluyor ve
+# idata'yi FREE ediyor. Dongu basinda onbellege alinan idata sarkiyor.
+# Olculdu 2026-09-05: "malloc(): unsorted double linked list corrupted".
+# Dizi kucukse free geri vermeyebilir — 4096 eleman gerekiyor.
+c("sarkan onbellek: eleman ++",
+  'int[] a = array_fill(4096, 0);\n'
+  'for (int i = 0; i < 4096; i = i + 1) { a[i]++; a[i] = a[i] + 1; }\n'
+  'int t = 0;\nfor (int j = 0; j < 4096; j = j + 1) { t = t + a[j]; }\nprint(t);', "8192")
+c("sarkan onbellek: eleman +=",
+  'int[] a = array_fill(4096, 0);\n'
+  'for (int i = 0; i < 4096; i = i + 1) { a[i] += 1; a[i] = a[i] + 1; }\n'
+  'int t = 0;\nfor (int j = 0; j < 4096; j = j + 1) { t = t + a[j]; }\nprint(t);', "8192")
+
+# --- 7d. Float kesinligi (2026-09-05'te bulunan uc hata) ---
+# `print`in float bicimleyicisi YALNIZ burada gorunur: paketlerdeki
+# assert'ler toString'den geciyor, print'ten degil. Bu ayrimi enjeksiyon
+# ortaya cikardi — vm_print_value'yu `%g`ye geri alinca paket YESIL kaldi.
+#
+#   1) AST literali float32'ye kirpiliyordu (ASTNode_C.value.float_value)
+#   2) aot_format_float degeri once (float)'a yuvarliyordu
+#   3) print bu bicimleyiciyi hic kullanmiyordu: vm_print_value -> "%g"
+c("print float tam kesinlik", 'print(3.141592653589793);', "3.141592653589793")
+c("print float veri kaybi yok", 'print(1000000.5);', "1000000.5")
+c("print double aritmetigi", 'print(0.1 + 0.2);', "0.30000000000000004")
+c("print ve toString ayni",
+  'float x = 1000000.5;\nprint(x);\nprint("" + x);', "1000000.5\n1000000.5")
+c("print siradan float bilimsele kacmiyor",
+  'print(30.0);\nprint(100.0);\nprint(123456789.0);', "30\n100\n123456789")
+c("print float 3.14", 'print(3.14);', "3.14")
+
+# --- 7e. Bilimsel gosterim (2026-09-05'te bulunan eksiklik) ---
+# Lexer'in read_number'i us kabul etmiyordu: DIL KENDI CIKTISINI
+# OKUYAMIYORDU. `print(1e20)` -> "1e+20", ama kaynakta `1e+20` hata.
+c("us: 1e3", 'print(1e3);', "1000")
+c("us: 1e+20", 'print(1e+20);', "1e+20")
+c("us: negatif", 'print(1.5e-8);', "1.5e-08")
+c("us: buyuk harf E", 'print(2E+3);', "2000")
+c("us: cikti-kaynak gidis donusu", 'print(6.02e23);', "6.02e+23")
+# `e` ardindan basamak yoksa TUKETILMEMELI. Bu koruma YUK TASIYOR:
+# kaldirilinca `int x = 1e;` SESSIZCE derleniyor ve 0 basiyor,
+# `print(y - 1e)` ise `1e`yi 1.0 sayiyor. Yani eksik us bir yazim
+# hatasi degil, gecerli bir sayi oluyor — tek kelime tani yok.
+# (Ilk yazilan sonda `int e = 7; print(a + e);` idi ve HICBIR SEY
+# olcmuyordu: bosluk zaten sayi taramasini bitiriyor. Enjeksiyon
+# soyledi — bkz. Tuzaklar 6j.)
+c("us: eksik us HATA vermeli", 'int x = 1e;\nprint(x);', None)
+c("us: ifadede eksik us HATA vermeli", 'float y = 5.0;\nprint(y - 1e);', None)
+c("us: e degiskeni bozulmuyor", 'int e = 7;\nint a = 2;\nprint(a + e);', "9")
+
+# --- 7f. array_fill sifir dolgusu calloc'a gecti (2026-09-05) ---
+# Sifir dolgusunda yazma dongusu ATLANIYOR: calloc'un sayfalari zaten
+# sifir. Arena yolu HARIC (blok geri donusturulmus/kirli olabilir).
+# Bir gun calloc yanlislikla malloc'a donerse bu sondalar cop deger yakalar.
+c("array_fill sifir", 'int[] a = array_fill(1000, 0);\nint t = 0;\n'
+  'for (int i = 0; i < 1000; i = i + 1) { t = t + a[i]; }\nprint(t);', "0")
+c("array_fill sifir buyuk", 'int[] a = array_fill(200000, 0);\nint t = 0;\n'
+  'for (int i = 0; i < 200000; i = i + 1) { t = t + a[i]; }\nprint(t);', "0")
+c("array_fill sifirdisi bozulmadi",
+  'int[] a = array_fill(1000, 7);\nint t = 0;\n'
+  'for (int i = 0; i < 1000; i = i + 1) { t = t + a[i]; }\nprint(t);', "7000")
+c("array_fill negatif deger",
+  'int[] a = array_fill(100, -3);\nint t = 0;\n'
+  'for (int i = 0; i < 100; i = i + 1) { t = t + a[i]; }\nprint(t);', "-300")
+c("array_fill sifir sonra yaz",
+  'int[] a = array_fill(64, 0);\na[10] = 5;\nint t = 0;\n'
+  'for (int i = 0; i < 64; i = i + 1) { t = t + a[i]; }\nprint(t);', "5")
+
+fails = 0
+for name, src, expect in CASES:
+    safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)
+    f = D / (safe + ".tpr")
+    f.write_text(src, encoding="utf-8")
+    # LC_ALL=C: tani metinleri yerele gore degisiyor, beklenen ciktiyi
+    # sabitlemek icin ingilizceye pinliyoruz (bkz. tests/typeinfer/run.sh).
+    env = dict(os.environ, LC_ALL="C")
+    p = subprocess.run([TULPAR, str(f)], capture_output=True, text=True,
+                       timeout=90, env=env)
+    out = (p.stdout or "").strip()
+    # [typecheck] uyarilari stderr'e gidiyor; cikti karsilastirmasini
+    # bozmamali (golgeleme sondasi bilerek uyari uretiyor).
+    if expect is None:
+        if p.returncode == 0:
+            fails += 1
+            print(f"  ✗ {name}")
+            print(f"      HATA BEKLENIYORDU ama derlendi; cikti={out!r}")
+        continue
+    if p.returncode != 0 or out != expect:
+        fails += 1
+        print(f"  ✗ {name}")
+        print(f"      cikis={p.returncode} beklenen={expect!r} alinan={out!r}")
+        err = (p.stderr or "").strip()
+        if err: print(f"      stderr: {err[:200]}")
+# --- fmt GIDIS-DONUS ---
+# Bicimlendirici cikitisi YENIDEN AYRISTIRILABILIR ve AYNI sonucu vermeli.
+# Guclu bir degismez: `%=` eklenirken fmt onu `% =` diye boluyordu ve kod
+# BOZULUYORDU (ayni sinif daha once `=>` icin de olmus — formatter.cpp'deki
+# yoruma bakin). Bu sonda o sinifi topluca yakaliyor.
+fmt_fails = 0
+for name, src, expect in CASES:
+    if expect is None or "\n" not in src:
+        continue
+    safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)
+    f = D / ("fmt_" + safe + ".tpr")
+    f.write_text(src, encoding="utf-8")
+    env = dict(os.environ, LC_ALL="C")
+    r = subprocess.run([TULPAR, "fmt", str(f)], capture_output=True, text=True,
+                       timeout=90, env=env)
+    if r.returncode != 0 or not r.stdout.strip():
+        continue          # fmt bu girdiyi islemiyorsa sondanin konusu degil
+    g = D / ("fmtout_" + safe + ".tpr")
+    g.write_text(r.stdout, encoding="utf-8")
+    q = subprocess.run([TULPAR, str(g)], capture_output=True, text=True,
+                       timeout=90, env=env)
+    if q.returncode != 0 or (q.stdout or "").strip() != expect:
+        fmt_fails += 1
+        print(f"  ✗ fmt gidis-donus: {name}")
+        print(f"      beklenen={expect!r} alinan={(q.stdout or '').strip()!r}")
+fails += fmt_fails
+
+print(f"\n{len(CASES)} sonda (+fmt gidis-donus), {fails} sorun")
+sys.exit(1 if fails else 0)

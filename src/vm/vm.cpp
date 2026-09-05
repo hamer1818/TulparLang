@@ -32,6 +32,12 @@
 
 // External function from runtime_bindings.cpp (C ABI)
 extern "C" void print_vm_value(VMValue value);
+// Ortak float bicimleyici (runtime_bindings.cpp). Asagidaki FLOAT durumu
+// duz `printf("%g")` idi — yani ALTI anlamli hane. `print` ile `toString`
+// AYNI degeri FARKLI basiyordu (`print(1000000.5)` -> "1e+06", ama
+// `print("" + x)` -> "1000000.5"): print veri kaybediyordu. Olculdu
+// 2026-09-05. Regresyon: tests/float_precision.test.tpr
+extern "C" int aot_format_float(char *buf, size_t n, double value);
 
 // Shared AOT runtime entry points. Defined in runtime_bindings.cpp inside
 // its `extern "C" {` block — match that linkage here so the VM opcodes
@@ -562,8 +568,10 @@ static void free_object(Obj *obj) {
   case OBJ_ARRAY: {
     ObjArray *arr = (ObjArray *)obj;
     // items is always malloc'd
-    if (arr->items)
-      free(arr->items);
+    if (arr->items_)
+      free(arr->items_);
+    free(arr->idata);
+    arr->idata = nullptr;
     if (!from_arena)
       free(arr);
     break;
@@ -671,9 +679,12 @@ void vm_print_value(VMValue value) {
   case VM_VAL_INT:
     printf("%lld", AS_INT(value));
     break;
-  case VM_VAL_FLOAT:
-    printf("%g", AS_FLOAT(value));
+  case VM_VAL_FLOAT: {
+    char fbuf[64];
+    aot_format_float(fbuf, sizeof(fbuf), AS_FLOAT(value));
+    printf("%s", fbuf);
     break;
+  }
   case VM_VAL_BOOL:
     printf(AS_BOOL(value) ? "true" : "false");
     break;
@@ -831,7 +842,8 @@ ObjArray *vm_allocate_array(VM *vm) {
       (ObjArray *)allocate_object(vm, sizeof(ObjArray), OBJ_ARRAY);
   array->count = 0;
   array->capacity = 0;
-  array->items = nullptr;
+  array->items_ = nullptr;
+  array->idata = nullptr;
   return array;
 }
 
@@ -840,10 +852,10 @@ void vm_array_push(VM *vm, ObjArray *array, VMValue value) {
   if (array->capacity < array->count + 1) {
     int old_capacity = array->capacity;
     array->capacity = old_capacity < 8 ? 8 : old_capacity * 2;
-    array->items =
-        static_cast<VMValue*>(realloc(array->items, sizeof(VMValue) * array->capacity));
+    array->items_ =
+        static_cast<VMValue*>(realloc(arr_items(array), sizeof(VMValue) * array->capacity));
   }
-  array->items[array->count] = value;
+  arr_items(array)[array->count] = value;
   array->count++;
 }
 

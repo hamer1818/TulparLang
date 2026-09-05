@@ -1,0 +1,221 @@
+import "test";
+
+// DONGU SURUMLEME (2026-09-05).
+//
+// `for (int i = C; i < len(a); i = i + K)` icinde `a[i]` sinir denetimi
+// KANITLA gereksiz: dizi kutusuzken count == len, kosul ustten, C >= 0 ve
+// K > 0 alttan sinirliyor. Ama bu yalniz dizi KUTUSUZ ise gecerli —
+// kutuluysa idata NULL ve bekcisiz erisim COKERDI.
+//
+// Kosul dongu-degismezi ama LLVM disari cikaramiyor (yavas yoldaki
+// tazeleme sekil yuvalarina yaziyor -> unswitch yapisal olarak imkansiz,
+// olculdu). O yuzden dallanma ve IKI GOVDE codegen'de uretiliyor.
+//
+// Bu paket kanitin HER KOSULUNU ayri ayri kilitliyor. Enjeksiyonla
+// dogrulandi: kosullardan biri kaldirilinca ya cikti bozuluyor ya cokuyor.
+
+func run_temel() {
+    int[] a = array_fill(10, 3);
+    int t = 0;
+    for (int i = 0; i < len(a); i = i + 1) { t = t + a[i]; }
+    assert_eq_int(t, 30);
+}
+
+// KUTULU dizi: hizli surum kosmamali, genel surum dogru sonucu vermeli.
+// (Hizli surum kosarsa idata NULL'dur ve program coker.)
+func run_kutulu_dizi() {
+    array c = [1, "iki", 3];
+    int v = 0;
+    for (int i = 0; i < len(c); i = i + 1) {
+        if (i != 1) { v = v + c[i]; }
+    }
+    assert_eq_int(v, 4);
+}
+
+// Float iceren dizi de kutulu.
+func run_float_dizi() {
+    array f = [1.5, 2.5, 3.0];
+    float s = 0.0;
+    for (int i = 0; i < len(f); i = i + 1) { s = s + f[i]; }
+    assert_close(s, 7.0, 0.000001);
+}
+
+// BOS dizi: count_slot 0 -> genel surum. Govde hic kosmuyor.
+func run_bos_dizi() {
+    int[] b = array_fill(0, 0);
+    int u = 0;
+    for (int i = 0; i < len(b); i = i + 1) { u = u + b[i]; }
+    assert_eq_int(u, 0);
+}
+
+func run_tek_eleman() {
+    int[] a = array_fill(1, 7);
+    int t = 0;
+    for (int i = 0; i < len(a); i = i + 1) { t = t + a[i]; }
+    assert_eq_int(t, 7);
+}
+
+// break/continue iki surumde de dogru calismali.
+func run_break_continue() {
+    int[] a = array_fill(10, 3);
+    int w = 0;
+    for (int i = 0; i < len(a); i = i + 1) {
+        if (i == 5) { break; }
+        if (i == 2) { continue; }
+        w = w + a[i];
+    }
+    assert_eq_int(w, 12);
+}
+
+// Artim 1 olmak zorunda degil.
+func run_artim_iki() {
+    int[] a = array_fill(10, 3);
+    int x = 0;
+    for (int i = 0; i < len(a); i = i + 2) { x = x + a[i]; }
+    assert_eq_int(x, 15);
+}
+
+// Baslangic 0 olmak zorunda degil (ama >= 0 olmali).
+func run_bastan_degil() {
+    int[] a = [1, 2, 3, 4, 5];
+    int t = 0;
+    for (int i = 2; i < len(a); i = i + 1) { t = t + a[i]; }
+    assert_eq_int(t, 12);
+}
+
+// Ic ice: yalniz EN DIS dongu surumleniyor, ic dongu bekcili kaliyor.
+func run_ic_ice() {
+    int[] d = array_fill(4, 2);
+    int y = 0;
+    for (int i = 0; i < len(d); i = i + 1) {
+        for (int j = 0; j < len(d); j = j + 1) { y = y + d[j]; }
+    }
+    assert_eq_int(y, 32);
+}
+
+// KANIT INDEKSI SADECE `i` — `a[i+1]` bekciyi KORUMAK ZORUNDA.
+func run_farkli_indeks() {
+    int[] a = [10, 20, 30];
+    int t = 0;
+    for (int i = 0; i < len(a); i = i + 1) {
+        if (i + 1 < len(a)) { t = t + a[i + 1]; }
+    }
+    assert_eq_int(t, 50);
+}
+
+// AYNI SEY ama SINIR DISINA CIKARAK. Kanit yalniz `a[i]` icin gecerli;
+// `a[i + 1]` son turda a[len] okuyor ve BEKCIYE takilmali (hata basip 0
+// donuyor). Bekci kalkarsa tamponun disi okunur ve toplam bozulur.
+//
+// Ilk yazilan bu testte `if (i + 1 < len(a))` korumasi vardi, yani hic
+// tasmiyordu ve indeks denetimini kaldiran enjeksiyon YESIL kaliyordu —
+// test hicbir sey olcmuyordu. Koruma bilerek KALDIRILDI.
+func run_sinir_disi_indeks() {
+    int[] a = array_fill(64, 7);
+    int t = 0;
+    for (int i = 0; i < len(a); i = i + 1) {
+        t = t + a[i + 1];        // son tur: a[64] -> sinir disi -> 0
+    }
+    assert_eq_int(t, 63 * 7);
+
+    // BIR eleman tasmak yetmiyor: a[64] malloc'un yuvarladigi blogun
+    // ICINE dusuyor ve 0 okuyor, yani bekciyi kaldiran enjeksiyon YESIL
+    // kaliyordu. Tasmayi GOZLENEBILIR yapmak icin uzagi okuyoruz: bekci
+    // varsa her tur hata basip 0 donuyor, yoksa 32 KB otesi okunuyor.
+    int[] b = array_fill(4, 9);
+    int u = 0;
+    for (int i = 0; i < len(b); i = i + 1) {
+        u = u + b[i + 4096];
+    }
+    assert_eq_int(u, 0);
+}
+
+// GOVDEDE ELEMAN YAZMASI olan dongu hizli surume ALINMAMALI: kutusuz bir
+// diziye float yazmak diziyi KUTULUYOR ve onbellekteki idata sarkiyor.
+// Yazma HANGI isimden olursa olsun (takma ad) risk ayni.
+func run_govdede_yazma() {
+    int[] a = array_fill(5, 1);
+    int t = 0;
+    for (int i = 0; i < len(a); i = i + 1) {
+        a[i] = a[i] + 1;
+        t = t + a[i];
+    }
+    assert_eq_int(t, 10);
+}
+
+// Dongu ICINDE diziyi KUTULAYAN yazma. Yazma oldugu icin hizli surum
+// zaten acilmiyor; sonuc dogru olmali ve program COKMEMELI.
+func run_donguda_kutulama() {
+    array a = array_fill(6, 1);
+    float t = 0.0;
+    for (int i = 0; i < len(a); i = i + 1) {
+        if (i == 2) { a[i] = 2.5; }
+        t = t + a[i];
+    }
+    // 1+1+2.5+1+1+1 = 7.5  (alti eleman)
+    assert_close(t, 7.5, 0.000001);
+}
+
+// Takma ad: `b` ile `a` AYNI diziyi gosteriyor; b uzerinden kutulama.
+func run_takma_ad() {
+    array a = array_fill(6, 1);
+    array b = a;
+    float t = 0.0;
+    for (int i = 0; i < len(a); i = i + 1) {
+        if (i == 3) { b[i] = 9.5; }
+        t = t + a[i];
+    }
+    // 1+1+1+9.5+1+1 = 14.5  (alti eleman)
+    assert_close(t, 14.5, 0.000001);
+}
+
+// Dongu degiskeni govdede DEGISTIRILIRSE kanit dusmeli.
+func run_ivar_degisiyor() {
+    int[] a = array_fill(8, 2);
+    int t = 0;
+    for (int i = 0; i < len(a); i = i + 1) {
+        t = t + a[i];
+        if (i == 1) { i = i + 3; }
+    }
+    // i: 0,1(sonra 4->5),6,7  -> a[0],a[1],a[5]... artim ile: 0,1,5,6,7
+    assert(t > 0, "dongu kosmali");
+    assert_eq_int(t % 2, 0);
+}
+
+// Fonksiyon icinde de calismali (parametreyle gelen dizi).
+func topla(int[] a): int {
+    int t = 0;
+    for (int i = 0; i < len(a); i = i + 1) { t = t + a[i]; }
+    return t;
+}
+func run_fonksiyonda() {
+    int[] x = array_fill(100, 4);
+    assert_eq_int(topla(x), 400);
+}
+
+// Buyuk dizi: sarkma/tasma varsa burada gorunur.
+func run_buyuk() {
+    int[] a = array_fill(100000, 1);
+    int t = 0;
+    for (int i = 0; i < len(a); i = i + 1) { t = t + a[i]; }
+    assert_eq_int(t, 100000);
+}
+
+test("temel", "run_temel");
+test("kutulu dizi genel surume duser", "run_kutulu_dizi");
+test("float dizi", "run_float_dizi");
+test("bos dizi", "run_bos_dizi");
+test("tek eleman", "run_tek_eleman");
+test("break/continue", "run_break_continue");
+test("artim iki", "run_artim_iki");
+test("bastan olmayan baslangic", "run_bastan_degil");
+test("ic ice dongu", "run_ic_ice");
+test("farkli indeks bekciyi korur", "run_farkli_indeks");
+test("sinir disi indeks bekciye takilir", "run_sinir_disi_indeks");
+test("govdede eleman yazmasi", "run_govdede_yazma");
+test("donguda kutulama", "run_donguda_kutulama");
+test("takma ad uzerinden kutulama", "run_takma_ad");
+test("dongu degiskeni degisiyor", "run_ivar_degisiyor");
+test("fonksiyon icinde", "run_fonksiyonda");
+test("buyuk dizi", "run_buyuk");
+test_summary();

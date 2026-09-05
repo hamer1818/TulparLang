@@ -224,12 +224,39 @@ static inline VMValue vm_make_obj(void *v) {
 #define AS_OBJECT(v) ((ObjObject *)AS_OBJ(v))
 
 // Array Object (Requires VMValue)
+// KUTULANMAMIS SAYISAL DEPOLAMA (2026-09-03).
+//
+// Bir dizi ya KUTULU (`items`, eleman basina 16 bayt VMValue) ya da
+// KUTULANMAMIS (`idata`, eleman basina 8 bayt ham int64) tutulur — ikisi
+// ayni anda dolu olmaz. `items == NULL` ise dizi kutulanmamistir.
+//
+// Niye: elek kiyaslamasinda oran veri buyudukce buyuyordu (2.4x -> 2.8x ->
+// 5.1x), yani darbogaz bellek bant genisligiydi. 20M elemanda Tulpar'in
+// dizisi 305 MB, C'ninki 80 MB. Rakiplerin hepsi ham sayisal dizi kullaniyor
+// (vec![0i32], []int32, Int32Array); biz eleman basina bir de tur etiketi
+// tasiyorduk.
+//
+// GUVENLIK: `items` alani bilerek `items_` diye adlandirildi. Ona dogrudan
+// dokunan her yer DERLENMEZ; erisim `arr_items()` uzerinden yapilmali, o da
+// gerekiyorsa diziyi once kutuya cevirir (`arr_debox`). Boylece bir yeri
+// atlamak sessiz bir bozulma degil, derleme hatasi olur.
 typedef struct ObjArray {
   Obj obj;
   int count;
   int capacity;
-  VMValue *items;
+  VMValue *items_;   // kutulu depolama (NULL ise kutulanmamis)
+  long long *idata;  // kutulanmamis int64 depolama (NULL ise kutulu)
 } ObjArray;
+
+// Diziyi kutulu bicime cevirir. Kutuluysa hicbir sey yapmaz.
+extern "C" void arr_debox(ObjArray *a);
+
+// Kutulu eleman dizisi — gerekirse once cevirir. Genel amacli her yol
+// bunu kullanir; yalniz sicak yollar `idata`ya dogrudan bakar.
+static inline VMValue *arr_items(ObjArray *a) {
+  if (a && a->idata) arr_debox(a);
+  return a ? a->items_ : nullptr;
+}
 
 // Object (Map/Dictionary) Object (Requires VMValue)
 typedef struct {

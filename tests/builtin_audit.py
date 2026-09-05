@@ -92,8 +92,12 @@ def collect():
     ti = read("src/typeinfer/typeinfer.cpp")
     ls = read("src/lsp/builtins.cpp")
 
+    # `bi_name`: yerlesik zinciri artik bu ad uzerinden karsilastiriyor —
+    # kullanici ayni adi tanimlamissa bos kalip zinciri toptan eliyor
+    # (kullanici tanimi yerlesigi golgeler). `node->name` de kabul ediliyor,
+    # cunku zincir disinda kalan birkac dagitim hala onu kullaniyor.
     codegen = set(re.findall(
-        r'strcmp\(\s*node->name\s*,\s*"([A-Za-z_][A-Za-z_0-9]*)"\s*\)', cg))
+        r'strcmp\(\s*(?:node->name|bi_name)\s*,\s*"([A-Za-z_][A-Za-z_0-9]*)"\s*\)', cg))
     # makro tabanlı dağıtım: MATH1_FUNC("sin", ...) vb.
     codegen |= set(re.findall(
         r'\b[A-Z][A-Z0-9_]*_FUNC\(\s*"([A-Za-z_][A-Za-z_0-9]*)"', cg))

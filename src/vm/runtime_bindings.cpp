@@ -654,7 +654,9 @@ static inline void region_free_one(Obj *o) {
     free(x->keys);
     free(x->values);
   } else if (o->type == OBJ_ARRAY) {
-    free(((ObjArray *)o)->items);
+    free(((ObjArray *)o)->items_);
+    free(((ObjArray *)o)->idata);
+    ((ObjArray *)o)->idata = nullptr;
   }
   free(o);
 }
@@ -828,6 +830,102 @@ ObjString *vm_alloc_string_aot(void *vm, const char *chars, int length) {
   return aot_allocate_string(chars, length);
 }
 
+// DİZGİ SABİTİNİ BİR KEZ AYIR (interning).
+//
+// Eskiden her `AST_STRING_LITERAL` DEĞERLENDİRMESİ yeni bir ObjString
+// ayırıyordu — arena'dan, yani GEÇİCİ işaretli. Sonucu ölçüldü
+// (2026-09-03): kalıcı bir diziye sabit bir literal push etmek **34.8 ns**
+// sürüyordu, bir tamsayı push etmek 4.5 ns. Aradaki ~30 ns iki yerden
+// geliyordu: her turda yeni ayırma, ve yazma bariyerinin (wb_persist_escape)
+// geçici olduğu için her birini KALICIYA DERİN KOPYALAMASI. Bir derleme
+// zamanı sabiti için ikisi de gereksiz iş.
+//
+// Burada ayrılan dizgi KALICI (arena değil, malloc): `obj_is_transient`
+// false döner, yani bariyer erken çıkar ve kopya hiç yapılmaz. Dizgiler
+// DEĞİŞMEZ (kaynakta ObjString::chars'ı yerinde yazan tek bir yer yok),
+// dolayısıyla paylaşmak gözlemlenebilir bir fark yaratmıyor.
+//
+// ÖMÜR: bilerek ölümsüz. Sayı derleme zamanında sınırlı (kaynaktaki farklı
+// literal sayısı) ve program boyunca yaşamaları gerekiyor. ref_count sentinel
+// bir değerle başlıyor: AOT yolu bugün `arc_release`i HİÇ çağırmıyor
+// (ölçüldü: llvm_backend.cpp ve runtime_bindings.cpp'de sıfır çağrı), ama
+// ileride biri çağırırsa sayaç sıfıra inip serbest bırakılmasın diye.
+// DUZEN KILIDI. AOT codegen dizi erisimini SATIR ICI GEP ile yapiyor ve
+// asagidaki ofsetleri sabit olarak gomuyor (llvm_types.cpp, obj_array_type).
+// Bir alan eklenir/sirasi degisirse bu static_assert'ler derlemeyi KIRAR —
+// alternatifi, uretilen kodun sessizce yanlis adrese yazmasiydi.
+static_assert(sizeof(VMValue) == 16, "VMValue 16 bayt olmali (codegen varsayimi)");
+static_assert(offsetof(VMValue, as) == 8, "VMValue::as @8 olmali");
+static_assert(sizeof(ObjArray) == 56, "ObjArray 56 bayt olmali (codegen varsayimi)");
+static_assert(offsetof(ObjArray, count) == 32, "ObjArray::count @32 olmali");
+static_assert(offsetof(ObjArray, capacity) == 36, "ObjArray::capacity @36 olmali");
+static_assert(offsetof(ObjArray, items_) == 40, "ObjArray::items_ @40 olmali");
+static_assert(offsetof(ObjArray, idata) == 48, "ObjArray::idata @48 olmali");
+static_assert(offsetof(Obj, type) == 0, "Obj::type @0 olmali");
+static_assert((int)VM_VAL_INT == 0 && (int)VM_VAL_OBJ == 4,
+              "VMValueType sirasi codegen ile uyusmali");
+static_assert((int)OBJ_ARRAY == 1, "OBJ_ARRAY = 1 olmali (codegen varsayimi)");
+
+// Kutulanmamis diziyi kutulu bicime cevirir (bkz. vm.hpp'deki ObjArray notu).
+//
+// Genel amacli her yol `arr_items()` uzerinden geciyor ve o da gerekiyorsa
+// burayi cagiriyor: yani bir dizi, kutulanmamis hizli yolun disinda ilk kez
+// kullanildigi anda bir kez cevriliyor ve oyle kaliyor. Yavaslamiyor, cunku
+// cevrim eleman basina tek bir yazma ve yalniz BIR KEZ oluyor.
+void arr_debox(ObjArray *a) {
+  if (!a || !a->idata) return;
+  int n = a->count;
+  int cap = a->capacity > n ? a->capacity : (n > 0 ? n : 1);
+  VMValue *boxed = (VMValue *)malloc(sizeof(VMValue) * cap);
+  if (!boxed) return;   // cevrilemedi: idata oldugu gibi kalir
+  for (int i = 0; i < n; i++) boxed[i] = VM_INT(a->idata[i]);
+  free(a->idata);
+  a->idata = nullptr;
+  a->items_ = boxed;
+  a->capacity = cap;   // kapasite KORUNUR: buyume kodu old_capacity'yi onceden okumus olabilir
+}
+
+// Tamsayi bolme hatasi bildirici. Codegen'in IC yardimcisi: kullanici
+// yerlesigi degil, o yuzden typeinfer/LSP kaydi yok (5 noktali baglama
+// yalniz cagrilabilir yerlesikler icin).
+//
+// Neden var: tipli hizli yol ham `sdiv`/`srem` uretiyordu ve sifira bolme
+// x86'da SIGFPE demek — program TEK KELIME ETMEDEN oluyordu (olculdu
+// 2026-09-04: `10 / n` (n=0) cikis 1, hicbir cikti, sonraki satir hic
+// calismiyor). Kutulu yol zaten mesaj basip 0 donuyordu; simdi ikisi ayni.
+// kind: 0 = sifira bolme, 1 = tasma (INT_MIN / -1).
+extern "C" void aot_div_error(long long kind) {
+  if (kind == 1) {
+    printf("%s\n", tulpar::i18n::tr_en(
+                        "Calisma Zamani Hatasi: Tamsayi bolme tasmasi",
+                        "Runtime Error: Integer division overflow"));
+  } else {
+    printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
+                                       "Runtime Error: Division by zero"));
+  }
+}
+
+ObjString *aot_intern_string(const char *chars, int length) {
+  if (!chars) return nullptr;
+  size_t total = sizeof(ObjString) + (size_t)length + 1;
+  char *block = static_cast<char *>(malloc(total));
+  if (!block) return nullptr;
+
+  ObjString *str = (ObjString *)block;
+  str->obj.type = OBJ_STRING;
+  str->obj.arena_allocated = 0;   // KALICI: bariyer bunu kopyalamaz
+  str->obj.next = nullptr;
+  str->obj.ref_count = 1 << 28;   // ölümsüz (yukarıdaki ÖMÜR notu)
+  str->obj.is_moved = 0;
+  str->length = length;
+  str->capacity = length + 1;
+  str->chars = block + sizeof(ObjString);
+  memcpy(str->chars, chars, (size_t)length);
+  str->chars[length] = '\0';
+  str->hash = 0;
+  return str;
+}
+
 // persist(value) -> value
 //
 // Deep-copies a value into permanent (malloc'd, ARC-managed) storage that
@@ -868,6 +966,7 @@ VMValue aot_persist(VMValue v) {
     ObjArray *dst = (ObjArray *)malloc(sizeof(ObjArray));
     if (!dst) return v;
     dst->obj.type = OBJ_ARRAY;
+    dst->idata = nullptr;
     dst->obj.arena_allocated = 0;
     dst->obj.next = nullptr;
     dst->obj.ref_count = 1;
@@ -875,9 +974,9 @@ VMValue aot_persist(VMValue v) {
     int n = src->count;
     dst->count = n;
     dst->capacity = n;
-    dst->items = (n > 0) ? (VMValue *)malloc(sizeof(VMValue) * n) : nullptr;
+    dst->items_ = (n > 0) ? (VMValue *)malloc(sizeof(VMValue) * n) : nullptr;
     for (int i = 0; i < n; i++) {
-      dst->items[i] = aot_persist(src->items[i]);
+      arr_items(dst)[i] = aot_persist(arr_items(src)[i]);
     }
     return VM_OBJ((Obj *)dst);
   }
@@ -1020,62 +1119,116 @@ void aot_stringbuilder_append(StringBuilder *sb, const char *str, int len) {
   sb->buffer[sb->length] = '\0';
 }
 
-// Format a Tulpar float for display. Tulpar's float carries 32-bit (float)
-// precision — the LLVM backend uses a 32-bit float type — so a plain "%g" at
-// 6 sig-figs both loses precision (1000000.5 -> "1e+06") and, at higher fixed
-// precision, exposes the float32 rounding noise (3.14 -> "3.14000010490417").
-// Instead find the SHORTEST decimal that round-trips to the same float32:
-// 3.14 -> "3.14", 1000000.5 -> "1000000.5", 0.1+0.2 -> "0.3". Mirrors what
-// Python/Go/Rust print for their floats. Returns the written length.
-static int aot_format_float(char *buf, size_t n, double value) {
-  float f = (float)value;
-  for (int prec = 1; prec <= 9; prec++) {  // 9 sig-figs round-trips any float32
-    int len = snprintf(buf, n, "%.*g", prec, (double)f);
-    if ((float)strtod(buf, nullptr) != f) continue;
-    // `%g` switches to scientific whenever the exponent leaves [-4, prec).
-    // At the SHORTEST round-tripping precision that fires for perfectly
-    // ordinary numbers: 30.0 came out "3e+01" and 100.0 "1e+02". Both
-    // round-trip, so the loop accepted them — but nobody writes a score,
-    // an fps or a coordinate that way, and this is what `print` shows.
-    // Re-render in fixed notation when the magnitude is one a reader
-    // expects written out; scientific stays for the extremes where it
-    // earns its place.
+// Format a Tulpar float for display: en KISA, ayni double'a geri donen
+// ondalik gosterim. 3.14 -> "3.14", 1000000.5 -> "1000000.5",
+// 0.1+0.2 -> "0.30000000000000004". Python/Go/Rust/JS ile ayni davranis.
+//
+// ONCEDEN float32'ye YUVARLIYORDU. Yorumundaki gerekce ("the LLVM backend
+// uses a 32-bit float type") YANLISTI: backend->float_type ilk gunden beri
+// LLVMDoubleType ve VMValue payload'i 8 bayt. Yani her basilan float ~7
+// haneye kirpiliyordu ve print, tuttugu sayidan BASKA bir sayi yaziyordu.
+// Bu ayni zamanda parser'daki gercek kirpma hatasini (ASTNode_C.value
+// .float_value `float` idi) GIZLIYORDU — ikisi birlikte olculdu 2026-09-05.
+// Regresyon: tests/float_precision.test.tpr
+int aot_format_float(char *buf, size_t n, double value) {
+  for (int prec = 1; prec <= 17; prec++) {  // 17 sig-fig herhangi bir double'i geri dondurur
+    int len = snprintf(buf, n, "%.*g", prec, value);
+    if (strtod(buf, nullptr) != value) continue;
+    // `%g` us [-4, prec) araligindan cikinca bilimsele geciyor. En kisa
+    // gosterimde bu siradan sayilarda da tetikleniyor: 30.0 -> "3e+01",
+    // 100.0 -> "1e+02". Ikisi de geri donuyor, yani dongu kabul ediyor —
+    // ama kimse bir skoru ya da koordinati boyle yazmaz ve print'in
+    // gosterdigi bu. Okurun duz bekledigi buyuklukte sabit gosterime don;
+    // bilimsel yalniz uclarda kalsin.
     if (memchr(buf, 'e', (size_t)len) == nullptr) return len;
-    double a = f < 0 ? -(double)f : (double)f;
+    double a = value < 0 ? -value : value;
     if (a < 1e-4 || a >= 1e16) return len;
-    // Buraya YALNIZCA `%g`nin BÜYÜK tarafta bilimsele geçtiği durum düşüyor:
-    // küçük taraf (üs < -4) yukarıdaki büyüklük korumasına takılıyor, sıfır
-    // ise hiç 'e' üretmiyor. Büyük tarafta bilimsel demek "üs >= anlamlı
-    // basamak sayısı" demek — yani tam sayı kısmı anlamlı basamaklardan
-    // uzun, dolayısıyla KESİR YOK. O yüzden ondalık basamak hesabı gereksiz:
-    // her zaman sıfır çıkıyor. (Önce genel bir `prec - 1 - exp10` hesabı
-    // yazılmıştı; enjeksiyon o hesabı bozunca hiçbir test kırılmadı ve
-    // sebebi buydu — ulaşılabilir yolda sonuç değişmiyordu.)
-    int flen = snprintf(buf, n, "%.0f", (double)f);
-    // Fixed form must still round-trip; if it somehow doesn't, keep the
-    // scientific one rather than print a number that isn't the value.
+    // Buraya YALNIZCA `%g`nin BUYUK tarafta bilimsele gectigi durum dusuyor:
+    // kucuk taraf (us < -4) yukaridaki buyukluk korumasina takiliyor, sifir
+    // ise hic 'e' uretmiyor. Buyuk tarafta bilimsel demek "us >= anlamli
+    // basamak sayisi" demek — yani tam sayi kismi anlamli basamaklardan
+    // uzun, dolayisiyla KESIR YOK. O yuzden ondalik basamak hesabi
+    // gereksiz: her zaman sifir cikiyor. (Once genel bir `prec - 1 - exp10`
+    // hesabi yazilmisti; enjeksiyon o hesabi bozunca hicbir test kirilmadi
+    // ve sebebi buydu — ulasilabilir yolda sonuc degismiyordu.)
+    int flen = snprintf(buf, n, "%.0f", value);
+    // Sabit gosterim de geri DONMELI; donmuyorsa bilimsel olani birak,
+    // tuttugundan baska bir sayi yazma.
     //
-    // NOTE: this check and the `memchr` early return above are MUTUALLY
-    // REDUNDANT — remove either alone and every test still passes (measured),
-    // because whichever survives covers the other's case. Remove BOTH and
-    // 3.14 prints "3". They are kept as a pair on purpose: the early return
-    // is the fast path (no second snprintf on the common case), this one is
-    // the correctness backstop. Don't delete one because it "looks dead".
-    if ((float)strtod(buf, nullptr) == f) return flen;
-    return snprintf(buf, n, "%.*g", prec, (double)f);
+    // NOT: bu denetim ile yukaridaki `memchr` erken donusu KARSILIKLI
+    // GEREKSIZ — birini tek basina kaldirinca butun testler yine geciyor
+    // (olculdu), cunku kalan digerinin durumunu da kapsiyor. Ikisi birden
+    // kalkarsa 3.14 "3" basiyor. Cift olarak BILEREK duruyor: erken donus
+    // hizli yol (yaygin durumda ikinci snprintf yok), bu ise dogruluk
+    // agi. "Olu goruniyor" diye birini silme.
+    if (strtod(buf, nullptr) == value) return flen;
+    return snprintf(buf, n, "%.*g", prec, value);
   }
-  return snprintf(buf, n, "%.9g", (double)f);
+  return snprintf(buf, n, "%.17g", value);
 }
 
 // Append VMValue to StringBuilder (handles any type)
+// Tamsayi -> ondalik metin. printf bicim cozumlemesi YOK, strlen YOK:
+// basamaklari yazip UZUNLUGU dondururuyor.
+//
+// Niye: `toString(int)` snprintf("%lld") + strlen + ayirma yapiyordu, yani
+// basamaklar uzerinden uc gecis ve her cagrida bicim dizesinin cozumlenmesi.
+// Olculdu (2026-09-03): cagri basina ~29 ns; dizgi kurma kiyaslamasinin
+// 2M cagrisinda 58 ms.
+//
+// LLONG_MIN guvenli: negatifi dogrudan negatiflemek tasar, o yuzden
+// isaretsize (-(v+1))+1 ile geciliyor.
+static inline int aot_itoa(long long v, char *out) {
+  if (v == 0) { out[0] = '0'; out[1] = '\0'; return 1; }
+  char tmp[24];
+  int n = 0;
+  unsigned long long u = (v < 0) ? (unsigned long long)(-(v + 1)) + 1ULL
+                                 : (unsigned long long)v;
+  while (u) { tmp[n++] = (char)('0' + (int)(u % 10ULL)); u /= 10ULL; }
+  int len = 0;
+  if (v < 0) out[len++] = '-';
+  while (n > 0) out[len++] = tmp[--n];
+  out[len] = '\0';
+  return len;
+}
+
+// TAMSAYI icin ozel giris noktasi: VMValue kurmadan, dogrudan i64.
+//
+// Niye: genel yol VMValue'yu yigina yazip POINTER geciriyor (aot_*_ptr ABI).
+// Olculdu (2026-09-03) — sb_append'e SABIT bir int vermek 5.8 ns, HESAPLANMIS
+// bir int vermek 16.6 ns suruyordu. Fark modulodan degil (0.55 ns): sabitte
+// LLVM yigina yazmayi dongu disina tasiyor, hesaplanmista her turda yaziyor.
+// Aradaki ~11 ns tamamen o kutulama+yazma.
+void aot_stringbuilder_append_int(StringBuilder *sb, long long v) {
+  if (!sb) return;
+  // Rakamlari DOGRUDAN tampona yaz. Eskiden once yigindaki `buf`a yazilip
+  // sonra aot_stringbuilder_append ile memcpy'leniyordu; bu, cagri basina
+  // bir memcpy (uzunluk degisken oldugu icin satir ici alinmiyor) + ikinci
+  // bir sinir hesabi + gereksiz bir yazma gecisi demekti.
+  //
+  // Yer ayirma sabit: int64 en fazla 20 hane + isaret + NUL = 22. Her
+  // seferinde 24 bayt garanti etmek, uzunluga gore hesap yapmaktan hem
+  // ucuz hem de tasmaya kapali.
+  if (sb->length + 24 >= sb->capacity) {
+    sb->capacity = (sb->length + 24 + 1) * 2;
+    sb->buffer = static_cast<char *>(realloc(sb->buffer, sb->capacity));
+    if (!sb->buffer) { sb->capacity = 0; sb->length = 0; return; }
+  }
+  sb->length += aot_itoa(v, sb->buffer + sb->length);   // itoa NUL'u da yaziyor
+}
+
 void aot_stringbuilder_append_vmvalue(StringBuilder *sb, VMValue val) {
   if (!sb) return;
   if (IS_STRING(val)) {
     ObjString *str = AS_STRING(val);
     aot_stringbuilder_append(sb, str->chars, str->length);
   } else if (IS_INT(val)) {
-    char buf[32];
-    int len = snprintf(buf, sizeof(buf), "%lld", (long long)AS_INT(val));
+    // snprintf DEGIL: olculdu (2026-09-03) sb_append(int) cagri basina
+    // ~22 ns suruyordu ve dizgi kurma kiyaslamasinin 2M cagrisinda 44.5 ms
+    // ile tek basina baskin maliyetti. Bicim dizesi cozumlemesi bir tamsayi
+    // yazmak icin gereksiz is.
+    char buf[24];
+    int len = aot_itoa((long long)AS_INT(val), buf);
     aot_stringbuilder_append(sb, buf, len);
   } else if (IS_FLOAT(val)) {
     char buf[64];
@@ -1195,6 +1348,11 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
         *result = VM_INT(0);
         return;
       }
+      if (AS_INT(a) == INT64_MIN && AS_INT(b) == -1) {
+        aot_div_error(1);   // INT_MIN / -1: kutulu yolda da UB idi
+        *result = VM_INT(0);
+        return;
+      }
       *result = VM_INT(AS_INT(a) / AS_INT(b));
       return;
     case TYPE_FLOAT_FLOAT:
@@ -1220,6 +1378,11 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
       if (AS_INT(b) == 0) {
         printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
                                            "Runtime Error: Division by zero"));
+        *result = VM_INT(0);
+        return;
+      }
+      if (AS_INT(a) == INT64_MIN && AS_INT(b) == -1) {
+        aot_div_error(1);
         *result = VM_INT(0);
         return;
       }
@@ -1415,7 +1578,7 @@ VMValue vm_array_get(ObjArray *array, int index) {
                                "Runtime Error: Array index out of bounds"));
     return VM_INT(0);
   }
-  return array->items[index];
+  return arr_items(array)[index];
 }
 
 void vm_array_set(ObjArray *array, int index, VMValue value) {
@@ -1427,7 +1590,7 @@ void vm_array_set(ObjArray *array, int index, VMValue value) {
                                "Runtime Error: Array index out of bounds"));
     return;
   }
-  array->items[index] = value;
+  arr_items(array)[index] = value;
 }
 
 // Pointer-based wrapper used by AOT closure-env codegen. The 16-byte
@@ -1457,7 +1620,7 @@ VMValue aot_array_get_fast(VMValue arr_val, int64_t index) {
 #if TULPAR_UNSAFE_ARRAYS
   // UNSAFE MODE: No type check, no bounds check - MAXIMUM SPEED
   ObjArray *arr = AS_ARRAY(arr_val);
-  return arr->items[index];
+  return arr_items(arr)[index];
 #else
   // SAFE MODE: Full checks
   if (!IS_ARRAY(arr_val)) {
@@ -1467,7 +1630,7 @@ VMValue aot_array_get_fast(VMValue arr_val, int64_t index) {
   if (index < 0 || index >= arr->count) {
     return VM_INT(0);
   }
-  return arr->items[index];
+  return arr_items(arr)[index];
 #endif
 }
 
@@ -1478,7 +1641,7 @@ void aot_array_set_fast(VMValue arr_val, int64_t index, VMValue value) {
 #if TULPAR_UNSAFE_ARRAYS
   // UNSAFE MODE: No type check, no bounds check
   ObjArray *arr = AS_ARRAY(arr_val);
-  arr->items[index] = value;
+  arr_items(arr)[index] = value;
 #else
   // SAFE MODE: Full checks
   if (!IS_ARRAY(arr_val)) {
@@ -1488,7 +1651,7 @@ void aot_array_set_fast(VMValue arr_val, int64_t index, VMValue value) {
   if (index < 0 || index >= arr->count) {
     return;
   }
-  arr->items[index] = value;
+  arr_items(arr)[index] = value;
 #endif
 }
 
@@ -1502,14 +1665,14 @@ void aot_array_set_fast(VMValue arr_val, int64_t index, VMValue value) {
 TULPAR_INLINE static VMValue
 aot_array_get_unsafe(VMValue arr_val, int64_t index) {
   ObjArray *arr = AS_ARRAY(arr_val); // Direct cast, no check
-  return arr->items[index];
+  return arr_items(arr)[index];
 }
 
 // Unsafe array set - NO type check, NO bounds check
 TULPAR_INLINE static void
 aot_array_set_unsafe(VMValue arr_val, int64_t index, VMValue value) {
   ObjArray *arr = AS_ARRAY(arr_val); // Direct cast, no check
-  arr->items[index] = value;
+  arr_items(arr)[index] = value;
 }
 
 // ============================================================
@@ -1527,21 +1690,21 @@ ObjArray *aot_array_get_raw(VMValue arr_val) {
 // Direct array element access via raw pointer - FASTEST!
 TULPAR_INLINE static VMValue
 aot_raw_get(ObjArray *arr, int64_t index) {
-  return arr->items[index];
+  return arr_items(arr)[index];
 }
 
 TULPAR_INLINE static void
 aot_raw_set(ObjArray *arr, int64_t index, VMValue value) {
-  arr->items[index] = value;
+  arr_items(arr)[index] = value;
 }
 
 // Public versions for LLVM to call (non-inline)
 VMValue aot_array_get_raw_fast(ObjArray *arr, int64_t index) {
-  return arr->items[index];
+  return arr_items(arr)[index];
 }
 
 void aot_array_set_raw_fast(ObjArray *arr, int64_t index, VMValue value) {
-  arr->items[index] = wb_persist_escape((Obj *)arr, value);
+  arr_items(arr)[index] = wb_persist_escape((Obj *)arr, value);
 }
 
 // Object Wrappers
@@ -1716,7 +1879,7 @@ void print_vm_value(VMValue value) {
       for (int i = 0; i < arr->count; i++) {
         if (i > 0)
           printf(", ");
-        print_vm_value(arr->items[i]);
+        print_vm_value(arr_items(arr)[i]);
       }
       printf("]");
     } else {
@@ -1766,32 +1929,34 @@ void print_newline(void) {
 static thread_local char aot_string_buffer[1024];
 
 VMValue aot_to_string(VMValue value) {
+  int len;
   switch (value.type) {
   case VM_VAL_INT:
-    snprintf(aot_string_buffer, sizeof(aot_string_buffer), "%lld",
-             AS_INT(value));
+    len = aot_itoa(AS_INT(value), aot_string_buffer);
     break;
   case VM_VAL_FLOAT:
     aot_format_float(aot_string_buffer, sizeof(aot_string_buffer),
                      AS_FLOAT(value));
+    len = (int)strlen(aot_string_buffer);
     break;
   case VM_VAL_BOOL:
-    snprintf(aot_string_buffer, sizeof(aot_string_buffer), "%s",
-             AS_BOOL(value) ? "true" : "false");
+    if (AS_BOOL(value)) { memcpy(aot_string_buffer, "true", 5); len = 4; }
+    else { memcpy(aot_string_buffer, "false", 6); len = 5; }
     break;
   case VM_VAL_OBJ:
     if (IS_STRING(value)) {
       return value;
     }
-    snprintf(aot_string_buffer, sizeof(aot_string_buffer), "<object>");
+    memcpy(aot_string_buffer, "<object>", 9);
+    len = 8;
     break;
   default:
-    snprintf(aot_string_buffer, sizeof(aot_string_buffer), "nullptr");
+    memcpy(aot_string_buffer, "nullptr", 8);
+    len = 7;
     break;
   }
 
-  ObjString *str =
-      aot_allocate_string(aot_string_buffer, strlen(aot_string_buffer));
+  ObjString *str = aot_allocate_string(aot_string_buffer, len);
   return VM_OBJ((Obj *)str);
 }
 
@@ -1888,23 +2053,54 @@ void aot_array_push(VMValue *arr_ptr, VMValue *item_ptr) {
     // Write barrier: a transient item pushed into a persistent array is
     // deep-copied so it outlives the per-request arena_restore.
     item = wb_persist_escape((Obj *)arr, item);
+    // Kutulanmamis dizi + int deger: kutuya donmeden ekle.
+    if (arr->idata && IS_INT(item)) {
+      if (arr->count >= arr->capacity) {
+        int new_cap = arr->capacity < 8 ? 8 : arr->capacity * 2;
+        if (new_cap <= arr->count) new_cap = arr->count + 1;
+        size_t nb = sizeof(long long) * (size_t)new_cap;
+        long long *ni;
+        if (arr->obj.arena_allocated) {
+          ni = (long long *)aot_arena_alloc(nb);
+          if (ni && arr->count > 0)
+            memcpy(ni, arr->idata, sizeof(long long) * (size_t)arr->count);
+        } else {
+          ni = (long long *)realloc(arr->idata, nb);
+        }
+        if (!ni) { arr_debox(arr); }   // buyutulemedi: kutulu yola dus
+        else { arr->idata = ni; arr->capacity = new_cap; }
+      }
+      if (arr->idata) {
+        arr->idata[arr->count++] = AS_INT(item);
+        return;
+      }
+    }
     // Inline push without VM
     if (arr->count >= arr->capacity) {
       int old_capacity = arr->capacity;
       int new_cap = old_capacity < 8 ? 8 : old_capacity * 2;
+      // KAPASITE HER ZAMAN count+1'i KARSILAMALI. Buyume normalde iki katina
+      // cikiyor ve bu yeterli, AMA capacity ile count tutarsiz kalirsa
+      // (ornegin diziyi toplu dolduran bir yol capacity'yi ayarlamayi
+      // unutursa) buradaki realloc buffer'i KUCULTUP items[count]'a yazardi:
+      // sessiz bir yigin tasmasi. Olculdu (2026-09-03): capacity'yi 0
+      // birakan bir bozma 500 elemanli dizide bile HICBIR testi kirmiyor,
+      // cunku yazma malloc'un bos alanina dusuyor. Testle guvenilir bicimde
+      // yakalanamayan bir sinif; o yuzden ihlal imkansiz kilindi.
+      if (new_cap <= arr->count) new_cap = arr->count + 1;
       if (arr->obj.arena_allocated) {
         VMValue *new_items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * new_cap);
         if (old_capacity > 0) {
-          memcpy(new_items, arr->items, sizeof(VMValue) * arr->count);
+          memcpy(new_items, arr_items(arr), sizeof(VMValue) * arr->count);
         }
-        arr->items = new_items;
+        arr->items_ = new_items;
       } else {
-        arr->items =
-            static_cast<VMValue *>(realloc(arr->items, sizeof(VMValue) * new_cap));
+        arr->items_ =
+            static_cast<VMValue *>(realloc(arr_items(arr), sizeof(VMValue) * new_cap));
       }
       arr->capacity = new_cap;
     }
-    arr->items[arr->count++] = item;
+    arr_items(arr)[arr->count++] = item;
   }
 }
 
@@ -1912,7 +2108,7 @@ void aot_array_push(VMValue *arr_ptr, VMValue *item_ptr) {
 VMValue aot_array_pop(VMValue arr_val) {
   if (IS_ARRAY(arr_val) && AS_ARRAY(arr_val)->count > 0) {
     ObjArray *arr = AS_ARRAY(arr_val);
-    return arr->items[--arr->count];
+    return arr_items(arr)[--arr->count];
   }
   return VM_INT(0);
 }
@@ -2319,7 +2515,7 @@ static void js_serialize(JSBuilder *b, VMValue v, int depth) {
     for (int i = 0; i < arr->count; i++) {
       if (i > 0)
         js_append_char(b, ',');
-      js_serialize(b, arr->items[i], depth + 1);
+      js_serialize(b, arr_items(arr)[i], depth + 1);
     }
     js_append_char(b, ']');
   } else if (IS_OBJECT(v)) {
@@ -2361,7 +2557,7 @@ static cJSON *vmvalue_to_cjson(VMValue v, int depth) {
     cJSON *json_arr = cJSON_CreateArray();
     for (int i = 0; i < arr->count; i++) {
       cJSON_AddItemToArray(json_arr,
-                           vmvalue_to_cjson(arr->items[i], depth + 1));
+                           vmvalue_to_cjson(arr_items(arr)[i], depth + 1));
     }
     return json_arr;
   } else if (IS_OBJECT(v)) {
@@ -2423,13 +2619,14 @@ ObjArray *vm_allocate_array_aot_wrapper(void *vm) {
     return vm_allocate_array(static_cast<VM *>(vm));
   ObjArray *arr = static_cast<ObjArray*>(malloc(sizeof(ObjArray)));
   arr->obj.type = OBJ_ARRAY;
+  arr->idata = nullptr;
   arr->obj.arena_allocated = 0;
   arr->obj.next = nullptr;
   arr->obj.ref_count = 1;
   arr->obj.is_moved = 0;
   arr->count = 0;
   arr->capacity = 0;
-  arr->items = nullptr;
+  arr->items_ = nullptr;
   region_track((Obj *)arr); // request-local literal → freed at arena_restore
   return arr;
 }
@@ -2465,15 +2662,15 @@ void vm_array_push_aot_wrapper(void *vm, ObjArray *array, VMValue value) {
     if (array->obj.arena_allocated) {
       VMValue *new_items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * new_cap);
       if (old_capacity > 0) {
-        memcpy(new_items, array->items, sizeof(VMValue) * array->count);
+        memcpy(new_items, arr_items(array), sizeof(VMValue) * array->count);
       }
-      array->items = new_items;
+      array->items_ = new_items;
     } else {
-      array->items = static_cast<VMValue*>(realloc(array->items, sizeof(VMValue) * new_cap));
+      array->items_ = static_cast<VMValue*>(realloc(array->items_, sizeof(VMValue) * new_cap));
     }
     array->capacity = new_cap;
   }
-  array->items[array->count++] = value;
+  arr_items(array)[array->count++] = value;
 }
 
 void vm_array_push_aot_ptr_wrapper(void *vm, ObjArray *array,
@@ -2609,13 +2806,14 @@ VMValue aot_regex_capture(VMValue patVal, VMValue strVal) {
     auto empty = []() -> VMValue {
         ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
         a->obj.type = OBJ_ARRAY;
+        a->idata = nullptr;
         a->obj.arena_allocated = 1;
         a->obj.next = nullptr;
         a->obj.ref_count = 1;
         a->obj.is_moved = 0;
         a->capacity = 0;
         a->count = 0;
-        a->items = nullptr;
+        a->items_ = nullptr;
         return VM_OBJ((Obj *)a);
     };
     if (!IS_STRING(patVal) || !IS_STRING(strVal)) return empty();
@@ -2633,16 +2831,17 @@ VMValue aot_regex_capture(VMValue patVal, VMValue strVal) {
     int n = (int)m.size();
     ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     a->obj.type = OBJ_ARRAY;
+    a->idata = nullptr;
     a->obj.arena_allocated = 1;
     a->obj.next = nullptr;
     a->obj.ref_count = 1;
     a->obj.is_moved = 0;
     a->capacity = n;
     a->count = n;
-    a->items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * n);
+    a->items_ = (VMValue *)aot_arena_alloc(sizeof(VMValue) * n);
     for (int i = 0; i < n; i++) {
         std::string s = m[i].str();
-        a->items[i] = VM_OBJ((Obj *)aot_allocate_string(s.data(), (int)s.size()));
+        arr_items(a)[i] = VM_OBJ((Obj *)aot_allocate_string(s.data(), (int)s.size()));
     }
     return VM_OBJ((Obj *)a);
 }
@@ -2775,13 +2974,14 @@ VMValue aot_file_glob(VMValue patVal) {
     auto empty = []() -> VMValue {
         ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
         a->obj.type = OBJ_ARRAY;
+        a->idata = nullptr;
         a->obj.arena_allocated = 1;
         a->obj.next = nullptr;
         a->obj.ref_count = 1;
         a->obj.is_moved = 0;
         a->capacity = 0;
         a->count = 0;
-        a->items = nullptr;
+        a->items_ = nullptr;
         return VM_OBJ((Obj *)a);
     };
     if (!IS_STRING(patVal)) return empty();
@@ -2825,6 +3025,7 @@ VMValue aot_file_glob(VMValue patVal) {
 
     ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     a->obj.type = OBJ_ARRAY;
+    a->idata = nullptr;
     a->obj.arena_allocated = 1;
     a->obj.next = nullptr;
     a->obj.ref_count = 1;
@@ -2832,9 +3033,9 @@ VMValue aot_file_glob(VMValue patVal) {
     int n = (int)matches.size();
     a->capacity = n;
     a->count = n;
-    a->items = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
+    a->items_ = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
     for (int i = 0; i < n; i++) {
-        a->items[i] = VM_OBJ(
+        arr_items(a)[i] = VM_OBJ(
             (Obj *)aot_allocate_string(matches[i].data(), (int)matches[i].size()));
     }
     return VM_OBJ((Obj *)a);
@@ -2853,13 +3054,14 @@ VMValue aot_csv_parse(VMValue strVal) {
     auto empty = []() -> VMValue {
         ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
         a->obj.type = OBJ_ARRAY;
+        a->idata = nullptr;
         a->obj.arena_allocated = 1;
         a->obj.next = nullptr;
         a->obj.ref_count = 1;
         a->obj.is_moved = 0;
         a->capacity = 0;
         a->count = 0;
-        a->items = nullptr;
+        a->items_ = nullptr;
         return VM_OBJ((Obj *)a);
     };
     if (!IS_STRING(strVal)) return empty();
@@ -2914,29 +3116,31 @@ VMValue aot_csv_parse(VMValue strVal) {
     int rn = (int)rows.size();
     ObjArray *outer = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     outer->obj.type = OBJ_ARRAY;
+    outer->idata = nullptr;
     outer->obj.arena_allocated = 1;
     outer->obj.next = nullptr;
     outer->obj.ref_count = 1;
     outer->obj.is_moved = 0;
     outer->capacity = rn;
     outer->count = rn;
-    outer->items = rn ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * rn) : nullptr;
+    outer->items_ = rn ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * rn) : nullptr;
     for (int r = 0; r < rn; r++) {
         int cn = (int)rows[r].size();
         ObjArray *inner = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
         inner->obj.type = OBJ_ARRAY;
+        inner->idata = nullptr;
         inner->obj.arena_allocated = 1;
         inner->obj.next = nullptr;
         inner->obj.ref_count = 1;
         inner->obj.is_moved = 0;
         inner->capacity = cn;
         inner->count = cn;
-        inner->items = cn ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * cn) : nullptr;
+        inner->items_ = cn ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * cn) : nullptr;
         for (int c = 0; c < cn; c++) {
-            inner->items[c] = VM_OBJ(
+            arr_items(inner)[c] = VM_OBJ(
                 (Obj *)aot_allocate_string(rows[r][c].data(), (int)rows[r][c].size()));
         }
-        outer->items[r] = VM_OBJ((Obj *)inner);
+        arr_items(outer)[r] = VM_OBJ((Obj *)inner);
     }
     return VM_OBJ((Obj *)outer);
 }
@@ -2956,12 +3160,12 @@ VMValue aot_csv_emit(VMValue rowsVal) {
     };
 
     for (int r = 0; r < rows->count; r++) {
-        VMValue rv = rows->items[r];
+        VMValue rv = arr_items(rows)[r];
         if (!IS_ARRAY(rv)) continue;
         ObjArray *row = (ObjArray *)AS_OBJECT(rv);
         for (int c = 0; c < row->count; c++) {
             if (c > 0) out.push_back(',');
-            VMValue fv = row->items[c];
+            VMValue fv = arr_items(row)[c];
             if (!IS_STRING(fv)) continue;
             ObjString *fs = AS_STRING(fv);
             if (needs_quote(fs->chars, fs->length)) {
@@ -3006,16 +3210,17 @@ extern "C" VMValue aot_args(void) {
   int n = aot_g_argc > 0 ? aot_g_argc : 0;
   ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
   a->obj.type = OBJ_ARRAY;
+  a->idata = nullptr;
   a->obj.arena_allocated = 1;
   a->obj.next = nullptr;
   a->obj.ref_count = 1;
   a->obj.is_moved = 0;
   a->capacity = n;
   a->count = n;
-  a->items = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
+  a->items_ = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
   for (int i = 0; i < n; i++) {
     const char *sv = (aot_g_argv && aot_g_argv[i]) ? aot_g_argv[i] : "";
-    a->items[i] = VM_OBJ((Obj *)aot_allocate_string(sv, (int)strlen(sv)));
+    arr_items(a)[i] = VM_OBJ((Obj *)aot_allocate_string(sv, (int)strlen(sv)));
   }
   return VM_OBJ((Obj *)a);
 }
@@ -3029,6 +3234,7 @@ extern "C" VMValue aot_args(void) {
 VMValue aot_values(VMValue objVal) {
     ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     a->obj.type = OBJ_ARRAY;
+    a->idata = nullptr;
     a->obj.arena_allocated = 1;
     a->obj.next = nullptr;
     a->obj.ref_count = 1;
@@ -3036,16 +3242,16 @@ VMValue aot_values(VMValue objVal) {
     if (!IS_OBJECT(objVal)) {
         a->capacity = 0;
         a->count = 0;
-        a->items = nullptr;
+        a->items_ = nullptr;
         return VM_OBJ((Obj *)a);
     }
     ObjObject *o = (ObjObject *)AS_OBJECT(objVal);
     int n = o->count;
     a->capacity = n;
     a->count = n;
-    a->items = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
+    a->items_ = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
     for (int i = 0; i < n; i++) {
-        a->items[i] = o->values[i];
+        arr_items(a)[i] = o->values[i];
     }
     return VM_OBJ((Obj *)a);
 }
@@ -3073,13 +3279,14 @@ VMValue aot_keys(VMValue objVal) {
     auto empty = []() -> VMValue {
         ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
         a->obj.type = OBJ_ARRAY;
+        a->idata = nullptr;
         a->obj.arena_allocated = 1;
         a->obj.next = nullptr;
         a->obj.ref_count = 1;
         a->obj.is_moved = 0;
         a->capacity = 0;
         a->count = 0;
-        a->items = nullptr;
+        a->items_ = nullptr;
         return VM_OBJ((Obj *)a);
     };
     if (!IS_OBJECT(objVal)) return empty();
@@ -3087,19 +3294,20 @@ VMValue aot_keys(VMValue objVal) {
     int n = o->count;
     ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     a->obj.type = OBJ_ARRAY;
+    a->idata = nullptr;
     a->obj.arena_allocated = 1;
     a->obj.next = nullptr;
     a->obj.ref_count = 1;
     a->obj.is_moved = 0;
     a->capacity = n;
     a->count = n;
-    a->items = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
+    a->items_ = n ? (VMValue *)aot_arena_alloc(sizeof(VMValue) * n) : nullptr;
     for (int i = 0; i < n; i++) {
         ObjString *k = o->keys[i];
         if (!k) {
-            a->items[i] = VM_OBJ((Obj *)aot_allocate_string("", 0));
+            arr_items(a)[i] = VM_OBJ((Obj *)aot_allocate_string("", 0));
         } else {
-            a->items[i] = VM_OBJ(
+            arr_items(a)[i] = VM_OBJ(
                 (Obj *)aot_allocate_string(k->chars, k->length));
         }
     }
@@ -3366,6 +3574,77 @@ VMValue aot_split(VMValue strVal, VMValue delVal) {
   return VM_OBJ((Obj *)arr);
 }
 
+// array_fill(n, deger) -> n elemanli, hepsi `deger` olan dizi.
+//
+// NIYE VAR: n elemanli bir diziyi kurmanin tek yolu n kez `push` cagirmakti.
+// Olculdu (2026-09-03): push basina ~4.5 ns, yani 5M elemanlik bir elek
+// dizisi 22 ms'yi cagri ek maliyetine harciyordu — is yapmadan once.
+// Rakiplerin hepsinde bunun tek cagrilik karsiligi var (`vec![0; n]`,
+// `make([]int32, n)`, `[0]*n`, `new Int32Array(n)`); adil kiyaslamada
+// Tulpar donguye mahkumdu cunku karsiligi yoktu.
+//
+// Kapasite BIR KEZ ayriliyor ve doldurma siki bir C dongusu: cagri basina
+// maliyet n'e degil 1'e dusuyor.
+VMValue aot_array_fill_ptr(VMValue *n_ptr, VMValue *val_ptr) {
+  long long n = 0;
+  if (n_ptr) {
+    if (IS_INT(*n_ptr)) n = AS_INT(*n_ptr);
+    else if (IS_FLOAT(*n_ptr)) n = (long long)AS_FLOAT(*n_ptr);
+  }
+  // Negatif n icin ayri bir kelepceye gerek yok: asagidaki `n > 0` zaten
+  // eliyor ve bos dizi donuyor. (Ignelemeyle olculdu: kelepceyi sokmek
+  // hicbir testi kirmadi — koruma gereksizdi, test zayif degildi.)
+  ObjArray *arr = vm_allocate_array_aot_wrapper(nullptr);
+  if (!arr) return VM_VOID();
+  if (n > 0) {
+    // Yazma bariyeri BIR KEZ: doldurulan deger hep ayni, yani kalici bir
+    // kaba kacip kacmadigi tek seferde belirleniyor.
+    VMValue item = val_ptr ? wb_persist_escape((Obj *)arr, *val_ptr) : VM_VOID();
+    // Kutulanmamis hizli yol: int dolgu, eleman basina 16 yerine 8 bayt.
+    // Bellek bant genisligine bagli is yukleri (elek vb.) burada iki katina
+    // cikiyor; rakiplerin sik dizi duzenine bu sekilde yaklasiyoruz.
+    if (IS_INT(item)) {
+      size_t ibytes = sizeof(long long) * (size_t)n;
+      long long iv = AS_INT(item);
+      // SIFIR DOLGUSU: calloc. Buyuk istekte glibc mmap'e gidiyor ve
+      // cekirdek sayfalari ZATEN sifir veriyor — yani 40 MB'lik bir dizide
+      // yazma dongusu TAMAMEN gereksiz is. Olculdu (2026-09-05, n=5M):
+      // dolgu 0,93 ms -> 0,07 ms.
+      //
+      // Arena yolu HARIC: arena yigin-ayirici, blok geri donusturulmus ve
+      // KIRLI olabilir. Orada yazmak zorundayiz.
+      bool zero_fill = (iv == 0 && !arr->obj.arena_allocated);
+      long long *id = arr->obj.arena_allocated
+                          ? (long long *)aot_arena_alloc(ibytes)
+                          : (zero_fill ? (long long *)calloc((size_t)n,
+                                                             sizeof(long long))
+                                       : (long long *)malloc(ibytes));
+      if (id) {
+        if (!zero_fill)
+          for (long long i = 0; i < n; i++) id[i] = iv;
+        arr->idata = id;
+        arr->items_ = nullptr;   // kutulu depo YOK: kacirilan her yol gurultuyle patlar
+        arr->capacity = (int)n;
+        arr->count = (int)n;
+        return VM_OBJ((Obj *)arr);
+      }
+    }
+    size_t bytes = sizeof(VMValue) * (size_t)n;
+    VMValue *items;
+    if (arr->obj.arena_allocated) {
+      items = (VMValue *)aot_arena_alloc(bytes);
+    } else {
+      items = (VMValue *)realloc(arr_items(arr), bytes);
+    }
+    if (!items) return VM_OBJ((Obj *)arr);
+    for (long long i = 0; i < n; i++) items[i] = item;
+    arr->items_ = items;
+    arr->capacity = (int)n;
+    arr->count = (int)n;
+  }
+  return VM_OBJ((Obj *)arr);
+}
+
 VMValue aot_split_ptr(VMValue *str_ptr, VMValue *del_ptr) {
   if (!str_ptr || !del_ptr)
     return VM_INT(0);
@@ -3382,7 +3661,7 @@ VMValue aot_array_slice_ptr(VMValue *arr_ptr, long long start) {
     ObjArray *src = AS_ARRAY(*arr_ptr);
     if (start < 0) start = 0;
     for (int i = (int)start; i < src->count; i++)
-      vm_array_push_aot_wrapper(nullptr, out, src->items[i]);
+      vm_array_push_aot_wrapper(nullptr, out, arr_items(src)[i]);
   }
   return VM_OBJ((Obj *)out);
 }
@@ -5107,6 +5386,7 @@ VMValue aot_socket_poll(VMValue fdsVal, VMValue timeoutVal) {
   auto make_arr = [](int n, const VMValue *src) -> VMValue {
     ObjArray *a = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     a->obj.type = OBJ_ARRAY;
+    a->idata = nullptr;
     a->obj.arena_allocated = 1;
     a->obj.next = nullptr;
     a->obj.ref_count = 1;
@@ -5114,12 +5394,12 @@ VMValue aot_socket_poll(VMValue fdsVal, VMValue timeoutVal) {
     a->capacity = n;
     a->count = n;
     if (n > 0) {
-      a->items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * (size_t)n);
+      a->items_ = (VMValue *)aot_arena_alloc(sizeof(VMValue) * (size_t)n);
       if (src) {
-        for (int i = 0; i < n; i++) a->items[i] = src[i];
+        for (int i = 0; i < n; i++) arr_items(a)[i] = src[i];
       }
     } else {
-      a->items = nullptr;
+      a->items_ = nullptr;
     }
     return VM_OBJ((Obj *)a);
   };
@@ -5147,7 +5427,7 @@ VMValue aot_socket_poll(VMValue fdsVal, VMValue timeoutVal) {
   }
 
   for (int i = 0; i < nfds; i++) {
-    VMValue v = arr->items[i];
+    VMValue v = arr_items(arr)[i];
     int64_t fd = IS_INT(v) ? AS_INT(v) : -1;
     pfds[i].fd = (tulpar_socket)fd;
     pfds[i].events = POLLIN;
@@ -5988,7 +6268,7 @@ VMValue aot_wings_find_route(VMValue routesVal, VMValue methodVal,
   // Most production apps have a handful of static routes plus a few
   // `:name`-bearing ones; this loop short-circuits on the static hits.
   for (int i = 0; i < routes->count; i++) {
-    VMValue rv = routes->items[i];
+    VMValue rv = arr_items(routes)[i];
     if (!IS_OBJECT(rv)) continue;
     ObjObject *r = (ObjObject *)AS_OBJECT(rv);
     VMValue rm = vm_object_get(r, (char *)"method");
@@ -6007,7 +6287,7 @@ VMValue aot_wings_find_route(VMValue routesVal, VMValue methodVal,
   // missed entirely, and we only consider routes whose path contains
   // a ':' — non-param routes are exact-only by construction.
   for (int i = 0; i < routes->count; i++) {
-    VMValue rv = routes->items[i];
+    VMValue rv = arr_items(routes)[i];
     if (!IS_OBJECT(rv)) continue;
     ObjObject *r = (ObjObject *)AS_OBJECT(rv);
     VMValue rm = vm_object_get(r, (char *)"method");
@@ -7749,7 +8029,7 @@ VMValue aot_string_contains(VMValue haystack, VMValue needle) {
   if (IS_ARRAY(haystack)) {
     ObjArray *arr = AS_ARRAY(haystack);
     for (int i = 0; i < arr->count; i++)
-      if (vm_values_equal(arr->items[i], needle)) return VM_BOOL(1);
+      if (vm_values_equal(arr_items(arr)[i], needle)) return VM_BOOL(1);
     return VM_BOOL(0);
   }
   if (!IS_STRING(haystack) || !IS_STRING(needle))
@@ -7805,7 +8085,7 @@ VMValue aot_string_index_of(VMValue haystack, VMValue needle) {
   if (IS_ARRAY(haystack)) {
     ObjArray *arr = AS_ARRAY(haystack);
     for (int i = 0; i < arr->count; i++)
-      if (vm_values_equal(arr->items[i], needle)) return VM_INT(i);
+      if (vm_values_equal(arr_items(arr)[i], needle)) return VM_INT(i);
     return VM_INT(-1);
   }
   if (!IS_STRING(haystack) || !IS_STRING(needle))
@@ -7911,6 +8191,60 @@ VMValue aot_string_count(VMValue haystack, VMValue needle) {
     return VM_INT(0);
 
   int count = 0;
+
+  // TEK KARAKTER: memchr. glibc'de SIMD'li ve strstr dongusunden kat kat
+  // hizli. Olculdu (2026-09-03): 7.78 MB'lik metinde ayrac saymak strstr
+  // ile 10.1 ms (~1.3 GB/s) suruyordu — memchr o isi bir kac katinda
+  // yapiyor. `count(s, ",")` en sik kullanim ve tam bu durum.
+  //
+  // Ayrica strstr NUL'a dayaniyor; memchr uzunlugu kullaniyor, yani ici
+  // NUL iceren metinlerde de dogru sayiyor.
+  if (n->length == 1) {
+    // memchr her ISABETTE yeniden cagriliyor, yani maliyeti isabet
+    // SAYISIYLA orantili. Ayrac YOGUNSA (ki `count(s, ",")` tam bu) bu
+    // felaket: olculdu (2026-09-05, 7.42 MB, her ~4 baytta bir virgul)
+    // memchr dongusu 10.2 ms, duz sayma dongusu 1.9 ms — 5.4 kat.
+    //
+    // Ama duz donguye KORU KORUNE gecmek daha kotu olurdu: ayni metinde
+    // ayrac her 1 MB'de bir oldugunda memchr 0.06 ms, dongu yine 1.88 ms
+    // — 30 KAT gerileme. (Once "dongu her zaman daha iyi" diye baslandi;
+    // seyrek durum olculunce vazgecildi.)
+    //
+    // Bu yuzden UYARLANIYOR: ilk birkac isabet memchr ile bulunup ortalama
+    // aralik olculuyor, sonra kalani hangisi kazaniyorsa onunla bitiriliyor.
+    // Esik 32 bayt: olcumde donus noktasi 16 (dongu 1.88 / memchr 2.57) ile
+    // 64 (dongu 1.89 / memchr 0.64) arasinda.
+    const unsigned char needle = (unsigned char)n->chars[0];
+    const char *p = h->chars;
+    size_t left = (size_t)h->length;
+    const int probe_hits = 64;
+    int probed = 0;
+    while (left > 0 && probed < probe_hits) {
+      const char *hit = (const char *)memchr(p, needle, left);
+      if (!hit) return VM_INT(count);
+      count++;
+      probed++;
+      left -= (size_t)(hit - p) + 1;
+      p = hit + 1;
+    }
+    if (left == 0) return VM_INT(count);
+    size_t consumed = (size_t)h->length - left;
+    if (consumed / (size_t)probe_hits < 32) {
+      // YOGUN: tek gecis sayma dongusu. Derleyici bunu vektorlestiriyor
+      // (-O3), isabet basina maliyet YOK.
+      for (size_t i = 0; i < left; i++) count += (p[i] == (char)needle);
+      return VM_INT(count);
+    }
+    while (left > 0) {   // SEYREK: memchr kazaniyor
+      const char *hit = (const char *)memchr(p, needle, left);
+      if (!hit) break;
+      count++;
+      left -= (size_t)(hit - p) + 1;
+      p = hit + 1;
+    }
+    return VM_INT(count);
+  }
+
   const char *pos = h->chars;
   while ((pos = strstr(pos, n->chars)) != nullptr) {
     count++;
@@ -7997,8 +8331,8 @@ VMValue aot_string_join(VMValue sep, VMValue arr) {
   // Calculate total length
   int total_len = 0;
   for (int i = 0; i < array->count; i++) {
-    if (IS_STRING(array->items[i])) {
-      total_len += AS_STRING(array->items[i])->length;
+    if (IS_STRING(arr_items(array)[i])) {
+      total_len += AS_STRING(arr_items(array)[i])->length;
     }
     if (i > 0)
       total_len += separator->length;
@@ -8011,8 +8345,8 @@ VMValue aot_string_join(VMValue sep, VMValue arr) {
       memcpy(result + pos, separator->chars, separator->length);
       pos += separator->length;
     }
-    if (IS_STRING(array->items[i])) {
-      ObjString *s = AS_STRING(array->items[i]);
+    if (IS_STRING(arr_items(array)[i])) {
+      ObjString *s = AS_STRING(arr_items(array)[i]);
       memcpy(result + pos, s->chars, s->length);
       pos += s->length;
     }
@@ -8168,11 +8502,12 @@ static VMValue parse_json_array(const char **p, const char *end) {
 
   ObjArray *arr = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
   arr->obj.type = OBJ_ARRAY;
+  arr->idata = nullptr;
   arr->obj.arena_allocated = 1;
   arr->obj.next = nullptr;
   arr->capacity = 8;
   arr->count = 0;
-  arr->items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * arr->capacity);
+  arr->items_ = (VMValue *)aot_arena_alloc(sizeof(VMValue) * arr->capacity);
 
   skip_whitespace(p, end);
 
@@ -8184,11 +8519,11 @@ static VMValue parse_json_array(const char **p, const char *end) {
       int new_cap = arr->capacity * 2;
       VMValue *new_items =
           (VMValue *)aot_arena_alloc(sizeof(VMValue) * new_cap);
-      memcpy(new_items, arr->items, sizeof(VMValue) * arr->count);
-      arr->items = new_items;
+      memcpy(new_items, arr_items(arr), sizeof(VMValue) * arr->count);
+      arr->items_ = new_items;
       arr->capacity = new_cap;
     }
-    arr->items[arr->count++] = val;
+    arr_items(arr)[arr->count++] = val;
 
     skip_whitespace(p, end);
     if (*p < end && **p == ',') {
@@ -8359,24 +8694,26 @@ VMValue aot_range(VMValue endVal) {
   if (end <= 0) {
     ObjArray *arr = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     arr->obj.type = OBJ_ARRAY;
+    arr->idata = nullptr;
     arr->obj.arena_allocated = 1;
     arr->obj.next = nullptr;
     arr->capacity = 0;
     arr->count = 0;
-    arr->items = nullptr;
+    arr->items_ = nullptr;
     return VM_OBJ((Obj *)arr);
   }
 
   ObjArray *arr = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
   arr->obj.type = OBJ_ARRAY;
+  arr->idata = nullptr;
   arr->obj.arena_allocated = 1;
   arr->obj.next = nullptr;
   arr->capacity = (int)end;
   arr->count = (int)end;
-  arr->items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * end);
+  arr->items_ = (VMValue *)aot_arena_alloc(sizeof(VMValue) * end);
 
   for (int64_t i = 0; i < end; i++) {
-    arr->items[i] = VM_INT(i);
+    arr_items(arr)[i] = VM_INT(i);
   }
 
   return VM_OBJ((Obj *)arr);
@@ -8696,11 +9033,12 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
     // Return empty array
     ObjArray *arr = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
     arr->obj.type = OBJ_ARRAY;
+    arr->idata = nullptr;
     arr->obj.arena_allocated = 1;
     arr->obj.next = nullptr;
     arr->capacity = 0;
     arr->count = 0;
-    arr->items = nullptr;
+    arr->items_ = nullptr;
     return VM_OBJ((Obj *)arr);
   }
 
@@ -8710,11 +9048,12 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
   // Prepare result array
   ObjArray *result = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
   result->obj.type = OBJ_ARRAY;
+  result->idata = nullptr;
   result->obj.arena_allocated = 1;
   result->obj.next = nullptr;
   result->capacity = 16;
   result->count = 0;
-  result->items =
+  result->items_ =
       (VMValue *)aot_arena_alloc(sizeof(VMValue) * result->capacity);
 
   if (!db)
@@ -8782,12 +9121,12 @@ VMValue aot_db_query(VMValue dbVal, VMValue sqlVal) {
       int new_cap = result->capacity * 2;
       VMValue *new_items =
           (VMValue *)aot_arena_alloc(sizeof(VMValue) * new_cap);
-      memcpy(new_items, result->items, sizeof(VMValue) * result->count);
-      result->items = new_items;
+      memcpy(new_items, arr_items(result), sizeof(VMValue) * result->count);
+      result->items_ = new_items;
       result->capacity = new_cap;
     }
 
-    result->items[result->count++] = VM_OBJ((Obj *)row);
+    arr_items(result)[result->count++] = VM_OBJ((Obj *)row);
   }
 
   // step_rc is SQLITE_DONE on a clean finish; anything else (e.g. a residual
@@ -8821,7 +9160,7 @@ static void db_bind_params(sqlite3_stmt *stmt, VMValue paramsVal) {
     return;
   ObjArray *arr = AS_ARRAY(paramsVal);
   for (int i = 0; i < arr->count; i++) {
-    VMValue p = arr->items[i];
+    VMValue p = arr_items(arr)[i];
     int idx = i + 1; // sqlite placeholders are 1-based
     if (IS_INT(p)) {
       sqlite3_bind_int64(stmt, idx, (sqlite3_int64)AS_INT(p));
@@ -8881,11 +9220,12 @@ VMValue aot_db_execute_params_ptr(VMValue *db_ptr, VMValue *sql_ptr,
 VMValue aot_db_query_params(VMValue dbVal, VMValue sqlVal, VMValue paramsVal) {
   ObjArray *result = (ObjArray *)aot_arena_alloc(sizeof(ObjArray));
   result->obj.type = OBJ_ARRAY;
+  result->idata = nullptr;
   result->obj.arena_allocated = 1;
   result->obj.next = nullptr;
   result->capacity = 16;
   result->count = 0;
-  result->items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * result->capacity);
+  result->items_ = (VMValue *)aot_arena_alloc(sizeof(VMValue) * result->capacity);
 
   if (!IS_STRING(sqlVal))
     return VM_OBJ((Obj *)result);
@@ -8944,11 +9284,11 @@ VMValue aot_db_query_params(VMValue dbVal, VMValue sqlVal, VMValue paramsVal) {
     if (result->count >= result->capacity) {
       int new_cap = result->capacity * 2;
       VMValue *new_items = (VMValue *)aot_arena_alloc(sizeof(VMValue) * new_cap);
-      memcpy(new_items, result->items, sizeof(VMValue) * result->count);
-      result->items = new_items;
+      memcpy(new_items, arr_items(result), sizeof(VMValue) * result->count);
+      result->items_ = new_items;
       result->capacity = new_cap;
     }
-    result->items[result->count++] = VM_OBJ((Obj *)row);
+    arr_items(result)[result->count++] = VM_OBJ((Obj *)row);
   }
   if (step_rc != SQLITE_DONE && getenv("TULPAR_DB_DEBUG"))
     fprintf(stderr, "[dbq] step rc=%d (%s) rows=%d\n", step_rc,

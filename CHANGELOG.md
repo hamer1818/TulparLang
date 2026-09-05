@@ -9,6 +9,130 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Fixed/Performance — VMValue'nun dolgusu artık bayt bayt kopyalanmıyor
+
+`VMValue` LLVM'de `{i32, [4 x i8], i64}` modellenmişti ve dolgu bir bayt
+dizisi olduğu için üretilen kodda **her VMValue kopyası dört ayrı `movzbl` +
+dört bayt store'a** açılıyordu — dizilerde değil, dilin her yerinde. Düz `i32`
+yerleşimi değiştirmiyor; ölçüldü (A/B, 9 tekrar × 2 tur): `sieve` 24,6/27,5 →
+**21,9/22,0 ms**.
+
+Bunun yanında **sessiz bir hata** kapandı: sabit VMValue kurucuları dolguyu üç
+ayrı yerde elle `[4 x i8]` diye kuruyordu ve `LLVMConstNamedStruct` tip
+uyuşmayan sabiti **hata vermeden `undef`e çeviriyor**. Global'lere
+`{ i32 1, i32 undef, i64 ... }` yazılıyordu. Sabit artık tipini struct'ın
+kendisinden alıyor, yani alan değişse de uyuyor.
+
+### Performance — dizgi kurma 5,2× hızlandı (`strcat` 163,6 → 31,2 ms)
+
+Üç ayrı darboğaz, üçü de ölçülerek bulundu:
+
+**1. `toString(int)` printf kullanıyordu.** `snprintf("%lld")` + `strlen` +
+ayırma — basamaklar üzerinden üç geçiş ve her çağrıda biçim dizesi
+çözümlemesi. Elle yazılmış `aot_itoa` basamakları yazıp **uzunluğu döndürüyor**;
+`LLONG_MIN` güvenli (işaretsize `-(v+1)+1` ile geçiyor).
+
+**2. Parça dizisi kurmak yanlış yoldu.** `push` + `join` her taze parçayı
+kalıcı diziye **derin kopyalatıyordu** (diziler kalıcı ayrılıyor). Rakiplerin
+hepsi tek bir büyüyen tampona bayt ekliyor — ve Tulpar'da `StringBuilder`
+zaten vardı, kıyaslama onu kullanmıyordu. Kıyaslama düzeltildi: 141,5 → 62,6 ms.
+
+**3. `sb_append(int)` her turda VMValue kutuluyordu.** Ölçüldü: **sabit** bir
+int 5,8 ns, **hesaplanmış** bir int 16,6 ns — fark modulodan değil (0,55 ns),
+sabitte LLVM yığına yazmayı döngü dışına taşıyor. Etiket INT ise artık
+kutulamasız `aot_stringbuilder_append_int(ptr, i64)` çağrılıyor; öteki her şey
+eski genel yola düşüyor.
+
+Ayrıca `count(s, "x")` tek karakterde `memchr` kullanıyor (eskiden `strstr`
+döngüsü; 7,78 MB'lık metinde ~1,3 GB/s).
+
+| | Önce | Sonra |
+|---|---|---|
+| `strcat` 2M | 163,6 ms | **31,2 ms** |
+
+Sıralama: Rust 18,5 · Go 24,6 · **Tulpar 31,2** · Java 32,9 · C 37,5 ·
+Node 100,4 · Python 199,1 — **3. sıra**, Java ve C'nin önünde.
+
+### Performance — dizi erişimi artık SATIR İÇİ (`sieve` 42,1 → 23,6 ms)
+
+Her `a[i]` bir `vm_get_element_ptr` **çağrısıydı**: iki alloca, iki store, bir
+çağrı — eleman başına ~3 ns. C'nin ham yüklemesi ~0,5 ns ve runtime ayrı bir
+arşiv olduğu için LLVM o çağrıyı satır içine de alamıyordu. Yazma tarafı ayrıca
+her seferinde yazma bariyerine uğruyordu.
+
+Artık sıcak yol satır içi: etiket denetimi + `OBJ_ARRAY` + sınır denetimi,
+sonra doğrudan GEP+load/store. **Uymayan her şey eski çağrıya düşüyor** —
+dizgi indeksleme, json anahtarı, taşan/negatif indeks, ve yazmada *nesne*
+değerleri (onlarda bariyer gerekiyor). Hızlı yol bir kısayol, ayrı bir
+semantik değil.
+
+| | Önce | Sonra |
+|---|---|---|
+| `sieve` 5M | 42,1 ms | **23,6 ms** — Node.js'i (28,9) geçti |
+
+Yalnız okumayı satır içine almak %6 kazandırmıştı; ağırlık yazmadaydı
+(~11,9M işaretleme). İkisi birlikte %44.
+
+Ofsetler codegen'e sabit gömülü olduğu için `runtime_bindings.cpp`'ye
+**düzen kilidi** kondu: `VMValue`, `Obj` ve `ObjArray` alan ofsetleri ile
+enum sıraları `static_assert` ile sabitlendi. Düzen değişirse derleme kırılır —
+alternatifi üretilen kodun sessizce yanlış adrese yazmasıydı.
+
+### Added — `array_fill(n, deger)`: diziyi tek çağrıda kur
+
+n elemanlı bir dizi kurmanın tek yolu n kez `push` çağırmaktı. Ölçüldü: çağrı
+başına ~4,5 ns, yani 5M elemanlık bir elek dizisi **22 ms'yi iş yapmadan önce**
+çağrı ek maliyetine harcıyordu. Rakiplerin hepsinde tek çağrılık karşılığı var
+(`vec![0; n]`, `make([]int32, n)`, `[0]*n`, `new Int32Array(n)`) — adil
+kıyaslamada Tulpar döngüye mahkûmdu çünkü karşılığı yoktu.
+
+`array_fill(n, deger)` / `dizi_dolu(n, deger)`: kapasite bir kez ayrılıyor,
+doldurma sıkı bir C döngüsü, yazma bariyeri n kez değil **bir kez** çalışıyor
+(doldurulan değer hep aynı). `sieve` 5M: **56,1 → 47,8 ms**.
+
+Yan düzeltme — `push` artık kapasiteyi **kendini onararak** büyütüyor:
+`capacity` ile `count` tutarsız kalırsa eski kod buffer'ı küçültüp
+`items[count]`'a yazıyordu, yani sessiz bir yığın taşması. Ölçüldü:
+`capacity`yi sıfırlayan bir bozma 500 elemanlı dizide bile **hiçbir testi
+kırmıyor**, çünkü yazma malloc'un boş alanına düşüyor — testle güvenilir
+biçimde yakalanamayan bir sınıf, o yüzden ihlal imkânsız kılındı.
+
+İğneleme bir de **ölü kod** buldu: `array_fill`deki negatif kelepçe
+gereksizdi (`n > 0` zaten eliyor), kaldırıldı.
+
+### Performance — dizgi sabitleri bir kez ayrılıyor (interning)
+
+Her `AST_STRING_LITERAL` **değerlendirmesi** yeni bir `ObjString` ayırıyordu —
+arena'dan, yani GEÇİCİ işaretli. Kalıcı bir kaba konulduğunda yazma bariyeri
+(`wb_persist_escape`) onu ayrıca **derin kopyalıyordu**. Bir derleme zamanı
+sabiti için iki gereksiz iş; ölçüldü:
+
+| İşlem | Önce | Sonra |
+|---|---|---|
+| `push(dizi, "sabit")` × 4M | 140,3 ms | **20,8 ms** |
+| `push(dizi, int)` × 4M (referans) | 18,9 ms | 19,9 ms |
+
+Sabit dizgi push'u artık tamsayı push'uyla aynı sınıfta. Codegen artık site
+başına bir modül global'i tutuyor ve ilk kullanımda `aot_intern_string` ile
+BİR KEZ dolduruyor; sıcak yol bir yükleme + tahmini kolay bir dal. Ayrılan
+dizgi **kalıcı** (arena değil), böylece bariyer erken çıkıyor.
+
+Güvenlik: dizgiler **değişmez** — kaynakta `ObjString::chars`'ı yerinde yazan
+tek bir yer yok, dolayısıyla paylaşmak gözlemlenebilir bir fark yaratmıyor.
+İnternlenen dizgiler bilerek ölümsüz (sayıları derleme zamanında sınırlı);
+`ref_count` sentinel bir değerle başlıyor, çünkü AOT yolu bugün `arc_release`i
+hiç çağırmasa da ileride biri çağırırsa serbest bırakılmamalılar.
+
+Adil kıyaslama takımındaki etkisi (`benchmarks/fair/`):
+
+| | Önce | Sonra |
+|---|---|---|
+| `strcat` 2M | 233,5 ms | **167,2 ms** — Python'un (199,3) önüne geçti |
+| `fib(32)` | 5,8 ms | **4,3 ms** |
+| `sieve` 5M | 60,4 ms | **56,1 ms** |
+| `intloop` 50M | 135,2 ms | 135,1 ms (değişmedi, beklendiği gibi) |
+
+
 ## [v3.13.1] — 2026-09-02
 
 **Yama sürümü: macOS'ta AOT derleme çalışmıyordu, ve TameEngine indirilemiyordu.**

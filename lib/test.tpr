@@ -83,6 +83,26 @@ func assert_eq_int(int actual, int expected) {
     }
 }
 
+// Float equality with a TOLERANCE. Float'ta `==` kullanmak yanlis: 0.1+0.2
+// tam 0.3 etmez, yani dogru bir hesap bile kirmizi doner. Varsayilan esik
+// 1e-9; kendi esigini vermek icin assert_close kullan.
+//
+// Yoktu ve eksikligi float testlerini ya `assert(a > x && a < y, ...)`
+// gibi elle yazmaya ya da hic yazmamaya itiyordu.
+func assert_eq_float(float actual, float expected) {
+    assert_close(actual, expected, 0.000000001);
+}
+
+func assert_close(float actual, float expected, float tolerance) {
+    float d = actual - expected;
+    if (d < 0.0) { d = 0.0 - d; }
+    if (d > tolerance) {
+        _test_set_fail("expected " + toString(expected) +
+                       " got " + toString(actual) +
+                       " (fark " + toString(d) + " > " + toString(tolerance) + ")");
+    }
+}
+
 // String equality (byte-exact). `actual` and `expected` are typed as
 // `json` (rather than `str`) so any value flows through the same path
 // — toString first, then byte-equality. This used to be necessary as

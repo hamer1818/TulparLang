@@ -27,6 +27,84 @@ struct CaptureData {
   std::unordered_map<ASTNode_C*, int> depths;
 };
 
+// Kullanici degiskenlerinin LLVM sembol adi.
+//
+// Ham ad kullanildiginda `free`, `malloc`, `stdout` gibi bir ust duzey
+// degisken libc sembolunu EZIYOR: baglama "Successfully created" diyor,
+// uretilen ikili ilk free() cagrisinda SIGSEGV atiyor ve derleyici tek
+// kelime etmiyor (olculdu 2026-09-03: `int free = 3;` -> cikis 139,
+// `nm` ciktisinda "B free"). Onek bunu imkansiz kiliyor.
+//
+// Neden `internal` linkage degil: o da cozerdi ama olculdu, elek
+// kiyasini %15 yavaslatiyor. Onek bedava.
+//
+// Yaratma ve arama noktalarinin HEPSI buradan gecmeli — biri atlanirsa
+// kuresel sessizce bulunamaz.
+static std::string gsym(const char *name) {
+  return std::string("tpr_g_") + (name ? name : "");
+}
+
+
+// Korumali tamsayi bolme/kalan.
+//
+// Ham `sdiv`/`srem` iki durumda DONANIM TUZAGI (x86 #DE -> SIGFPE) ve LLVM
+// IR'de tanimsiz davranis: bolen 0, ve INT_MIN / -1. Tipli hizli yol
+// bunlari denetlemiyordu, yani `10 / n` (n calisma zamaninda 0) programi
+// TEK KELIME ETMEDEN olduruyordu — kutulu yol ise ayni islemde mesaj basip
+// 0 donuyordu. Ayni dilde iki farkli davranis.
+//
+// Artik ikisi de: mesaj + 0. Dal iyi tahmin ediliyor ve `idiv` zaten
+// ~20-40 cevrim, yani olculebilir bir maliyet degil.
+static LLVMValueRef build_checked_div(LLVMBackend *backend, LLVMValueRef l,
+                                      LLVMValueRef r, int is_rem) {
+  LLVMTypeRef i64 = backend->int_type;
+  LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+  LLVMBasicBlockRef bb_bad = LLVMAppendBasicBlock(fn, "div.bad");
+  LLVMBasicBlockRef bb_ok = LLVMAppendBasicBlock(fn, "div.ok");
+  LLVMBasicBlockRef bb_done = LLVMAppendBasicBlock(fn, "div.done");
+
+  LLVMValueRef zero = LLVMConstInt(i64, 0, 0);
+  LLVMValueRef isz =
+      LLVMBuildICmp(backend->builder, LLVMIntEQ, r, zero, "div.isz");
+  LLVMValueRef minv =
+      LLVMConstInt(i64, (unsigned long long)INT64_MIN, 1);
+  LLVMValueRef ovf = LLVMBuildAnd(
+      backend->builder,
+      LLVMBuildICmp(backend->builder, LLVMIntEQ, l, minv, "div.lmin"),
+      LLVMBuildICmp(backend->builder, LLVMIntEQ, r,
+                    LLVMConstInt(i64, (unsigned long long)-1, 1), "div.rm1"),
+      "div.ovf");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildOr(backend->builder, isz, ovf, "div.trap"), bb_bad,
+                  bb_ok);
+
+  LLVMPositionBuilderAtEnd(backend->builder, bb_bad);
+  LLVMValueRef kind = LLVMBuildSelect(backend->builder, isz, zero,
+                                      LLVMConstInt(i64, 1, 0), "div.kind");
+  LLVMValueRef eargs[] = {kind};
+  LLVMBuildCall2(backend->builder,
+                 LLVMGlobalGetValueType(backend->func_aot_div_error),
+                 backend->func_aot_div_error, eargs, 1, "");
+  LLVMBasicBlockRef bad_end = LLVMGetInsertBlock(backend->builder);
+  LLVMBuildBr(backend->builder, bb_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, bb_ok);
+  LLVMValueRef okv = is_rem
+                         ? LLVMBuildSRem(backend->builder, l, r, "srem")
+                         : LLVMBuildSDiv(backend->builder, l, r, "div");
+  LLVMBasicBlockRef ok_end = LLVMGetInsertBlock(backend->builder);
+  LLVMBuildBr(backend->builder, bb_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, bb_done);
+  LLVMValueRef phi = LLVMBuildPhi(backend->builder, i64, "div.res");
+  LLVMValueRef inc[] = {zero, okv};
+  LLVMBasicBlockRef inb[] = {bad_end, ok_end};
+  LLVMAddIncoming(phi, inc, inb, 2);
+  return phi;
+}
+
+
+
 static void collect_declared_locals(ASTNode_C *node, std::unordered_set<std::string> &declared) {
   if (!node) return;
   if (node->type == AST_VARIABLE_DECL) {
@@ -957,6 +1035,15 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_vm_alloc_string =
       LLVMAddFunction(backend->module, "vm_alloc_string_aot", alloc_str_type);
 
+  // aot_intern_string: ObjString* aot_intern_string(char*, i32)
+  // Dizgi SABİTLERİ için: bir kez ayrılır, kalıcıdır, yazma bariyeri
+  // kopyalamaz. Ölçüm ve gerekçe runtime_bindings.cpp'de.
+  LLVMTypeRef intern_params[] = {backend->string_type, backend->int32_type};
+  LLVMTypeRef intern_type = LLVMFunctionType(
+      LLVMPointerType(backend->obj_string_type, 0), intern_params, 2, 0);
+  backend->func_aot_intern_string =
+      LLVMAddFunction(backend->module, "aot_intern_string", intern_type);
+
   // print_value: void print_value(VMValue)
   // VMValue is passed by value (struct)
   // print_value: void print_value(VMValue*) - takes pointer for ABI
@@ -1099,6 +1186,13 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMFunctionType(backend->float_type, to_float_params, 1, 0);
   backend->func_aot_to_float =
       LLVMAddFunction(backend->module, "aot_to_float_ptr", to_float_type);
+
+  // aot_div_error(i64 kind) -> void  (codegen ic yardimcisi)
+  LLVMTypeRef diverr_params[] = {backend->int_type};
+  LLVMTypeRef diverr_type =
+      LLVMFunctionType(backend->void_type, diverr_params, 1, 0);
+  backend->func_aot_div_error =
+      LLVMAddFunction(backend->module, "aot_div_error", diverr_type);
 
   // aot_len_ptr(VMValue*) -> int64
   LLVMTypeRef len_params[] = {backend->ptr_type};
@@ -1406,6 +1500,13 @@ void declare_runtime_functions(LLVMBackend *backend) {
       llvm_make_vmvalue_func_type(backend, split_params, 2, 0);
   backend->func_aot_split =
       LLVMAddFunction(backend->module, "aot_split_ptr", split_type);
+
+  // aot_array_fill_ptr(VMValue* n, VMValue* deger) -> VMValue (dizi)
+  LLVMTypeRef fill_params[] = {backend->ptr_type, backend->ptr_type};
+  LLVMTypeRef fill_type =
+      llvm_make_vmvalue_func_type(backend, fill_params, 2, 0);
+  backend->func_aot_array_fill =
+      LLVMAddFunction(backend->module, "aot_array_fill_ptr", fill_type);
 
   // aot_array_slice_ptr(VMValue* arr, i64 start) -> VMValue (match `..rest`)
   LLVMTypeRef slice_params[] = {backend->ptr_type, backend->int_type};
@@ -1735,6 +1836,15 @@ void declare_runtime_functions(LLVMBackend *backend) {
       LLVMFunctionType(backend->ptr_type, sb_new_params, 1, 0);
   backend->func_aot_stringbuilder_new =
       LLVMAddFunction(backend->module, "aot_stringbuilder_new", sb_new_type);
+
+  // aot_stringbuilder_append_int(ptr, i64) -> void
+  // Tamsayi icin kutulamasiz yol; gerekce runtime_bindings.cpp'de.
+  LLVMTypeRef sb_apint_params[] = {backend->ptr_type, backend->int_type};
+  LLVMTypeRef sb_apint_type =
+      LLVMFunctionType(LLVMVoidTypeInContext(backend->context),
+                       sb_apint_params, 2, 0);
+  backend->func_aot_stringbuilder_append_int = LLVMAddFunction(
+      backend->module, "aot_stringbuilder_append_int", sb_apint_type);
 
   // aot_stringbuilder_append_vmvalue_ptr(ptr, VMValue*) -> void
   // Pointer-ABI (aot_*_ptr pattern): passing the raw vm_value_type aggregate
@@ -2837,7 +2947,7 @@ LLVMValueRef get_local(LLVMBackend *backend, const char *name) {
   }
 
   // Fallback: Check for Global Variable (for imported modules)
-  LLVMValueRef global_var = LLVMGetNamedGlobal(backend->module, name);
+  LLVMValueRef global_var = LLVMGetNamedGlobal(backend->module, gsym(name).c_str());
   if (global_var) {
     return global_var;
   }
@@ -2872,7 +2982,7 @@ static bool is_global_var(LLVMBackend *backend, const char *name) {
         return false; // a local shadows the global → not a global write
     }
   }
-  return LLVMGetNamedGlobal(backend->module, name) != nullptr;
+  return LLVMGetNamedGlobal(backend->module, gsym(name).c_str()) != nullptr;
 }
 
 // If `arg` is an expression producing a trivially-unboxable struct VALUE — a
@@ -3112,14 +3222,14 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
         result.type = INFERRED_INT;
         return result;
       case TOKEN_DIVIDE:
-        result.value = LLVMBuildSDiv(backend->builder, L.value, R.value, "div");
+        result.value = build_checked_div(backend, L.value, R.value, 0);
         result.type = INFERRED_INT;
         return result;
       case TOKEN_MODULO:
         // İşaretli kalan: C ve çoğu dille aynı (işaret BÖLÜNENDEN gelir).
         // `mod()` builtin'i duruyor ve aynı şeyi yapıyor; `%` yalnız daha
         // okunur bir yazım.
-        result.value = LLVMBuildSRem(backend->builder, L.value, R.value, "srem");
+        result.value = build_checked_div(backend, L.value, R.value, 1);
         result.type = INFERRED_INT;
         return result;
       case TOKEN_LESS:
@@ -3185,6 +3295,476 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
   }
 }
 
+
+
+// ---------------------------------------------------------------------------
+// Dongu-degismezi dizi sekli onbellegi (bkz. src/aot/llvm_array_shape.cpp)
+// ---------------------------------------------------------------------------
+#include "llvm_array_shape.hpp"
+
+// Bu ad, hicbir dizinin count/idata alanini degistiremez mi?
+//
+// Liste ELLE dogrulandi ve kasten kisa: her biri ya salt okuma (`len`) ya da
+// saf sayisal/donusum. Buraya bir ad eklemeden once sorulacak soru "saf mi"
+// DEGIL, "bir dizinin count/items_/idata alanini degistirebilir mi" — ve
+// dolayli olarak da: kullanici koduna geri donebilir mi (`call`, `map`,
+// karsilastiricili `sort` gibi) — donebiliyorsa girmez.
+//
+// Ayirma yapan yerlesikler (`toStr` vb.) sorun degil: arena obek-zincirli
+// bump ayirici, bloklar asla tasinmiyor, yani onbellekteki isaretci gecerli
+// kaliyor. Yine de listeyi dar tutuyoruz.
+static int shape_pure_call(const char *name, void *ctx) {
+  if (!name) return 0;
+  LLVMBackend *backend = (LLVMBackend *)ctx;
+  // Kullanici ayni adi tanimladiysa yerlesik degil: govdesi her seyi yapabilir.
+  for (int i = 0; i < backend->function_count; i++)
+    if (backend->functions[i].name && strcmp(backend->functions[i].name, name) == 0)
+      return 0;
+  static const char *k_pure[] = {"len",  "length", "abs",     "min",
+                                 "max",  "sqrt",   "pow",     "floor",
+                                 "ceil", "round",  "toInt",   "toFloat",
+                                 "ord",  "chr"};
+  for (const char *p : k_pure)
+    if (strcmp(p, name) == 0) return 1;
+  return 0;
+}
+
+// `a[i]` dugumunde taban ya `name`de ya da `left`te duruyor — parser iki
+// bicimi de uretiyor (for-in seker acilimi `left` kullaniyor). Ikisine de
+// bakmayan bir arama sessizce hicbir seyi hizlandirmaz.
+static const char *array_base_name(ASTNode_C *n) {
+  if (!n) return nullptr;
+  if (n->name) return n->name;
+  if (n->left && n->left->type == AST_IDENTIFIER) return n->left->name;
+  return nullptr;
+}
+
+// Bu erisim BEKCISIZ uretilebilir mi?
+//
+// TEK KARAR NOKTASI, bilerek. Kanit (tulpar_loop_index_proven) yalniz
+// `a[<ivar>]` bicimi icin gecerli: `a[i + 1]` son turda a[len] okur,
+// `a[k]` ise hicbir sey bilmiyoruz. Kosul satir ici yazilirsa bir gun
+// biri "index varsa yeter" diye gevsetir.
+//
+// ⚠ BU DEGISMEZ CIKTI TESTIYLE SINANAMIYOR. Olculdu (2026-09-05):
+// kosul kaldirilip 4 elemanlik bir dizide `a[i + 4096]` okundu — yani
+// 32 KB otesi — ve sonuc yine 0 cikti, 17 testin hepsi YESIL kaldi.
+// Yigindan tasan OKUMA pratikte sifir donuyor. Bkz. Tuzaklar 6m/6o.
+// Guvence testte degil, bu fonksiyonun dar ve tek olmasinda.
+static bool shape_access_proven(const LLVMBackend::ArrShapeEntry *shp,
+                                ASTNode_C *idx) {
+  return shp && shp->proven_ivar && idx && idx->type == AST_IDENTIFIER &&
+         idx->name && strcmp(idx->name, shp->proven_ivar) == 0;
+}
+
+static LLVMBackend::ArrShapeEntry *shape_lookup(LLVMBackend *backend,
+                                                const char *name) {
+  if (!name) return nullptr;
+  for (int i = backend->shape_count - 1; i >= 0; i--)
+    if (strcmp(backend->shape_cache[i].name, name) == 0)
+      return &backend->shape_cache[i];
+  return nullptr;
+}
+
+// Dizinin seklini OKU ve onbellek yuvalarina yaz. Sekil uymuyorsa (dizi degil,
+// kutulu, ya da degisken bir dizi tutmuyor) count=0 yaziliyor: o zaman her
+// erisim eski tam yola dusuyor, yani yanlis olamiyor — yalnizca hizlanmiyor.
+static void emit_shape_fill(LLVMBackend *backend, const char *name,
+                            LLVMValueRef idata_slot, LLVMValueRef count_slot,
+                            LLVMValueRef len_slot, int eager_len) {
+  LLVMValueRef minus1 = LLVMConstInt(backend->int_type, (unsigned long long)-1, 1);
+  LLVMValueRef slot = get_local(backend, name);
+  if (!slot) {
+    LLVMBuildStore(backend->builder, LLVMConstNull(backend->ptr_type), idata_slot);
+    LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), count_slot);
+    LLVMBuildStore(backend->builder, minus1, len_slot);
+    return;
+  }
+  (void)eager_len;
+  LLVMTypeRef i32t = backend->int32_type;
+  LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+  LLVMBasicBlockRef b_ty = LLVMAppendBasicBlock(fn, "shape.ty");
+  LLVMBasicBlockRef b_ld = LLVMAppendBasicBlock(fn, "shape.ld");
+  LLVMBasicBlockRef b_no = LLVMAppendBasicBlock(fn, "shape.no");
+  LLVMBasicBlockRef b_done = LLVMAppendBasicBlock(fn, "shape.done");
+
+  LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->vm_value_type, slot,
+                                  "shape.v");
+  llvm_tbaa_tag(backend, v, 0);
+  LLVMValueRef tag = LLVMBuildExtractValue(backend->builder, v, 0, "shape.tag");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntEQ, tag,
+                                LLVMConstInt(i32t, 4, 0), "shape.isobj"),
+                  b_ty, b_no);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_ty);
+  LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, v);
+  LLVMValueRef otp = LLVMBuildStructGEP2(backend->builder, backend->obj_array_type,
+                                         objp, 0, "shape.otp");
+  LLVMValueRef ot = LLVMBuildLoad2(backend->builder, i32t, otp, "shape.ot");
+  llvm_tbaa_tag(backend, ot, 0);
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
+                                LLVMConstInt(i32t, 1, 0), "shape.isarr"),
+                  b_ld, b_no);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_ld);
+  LLVMValueRef idp = LLVMBuildStructGEP2(backend->builder, backend->obj_array_type,
+                                         objp, 5, "shape.idp");
+  LLVMValueRef id = LLVMBuildLoad2(backend->builder, backend->ptr_type, idp, "shape.id");
+  llvm_tbaa_tag(backend, id, 0);
+  LLVMValueRef cnp = LLVMBuildStructGEP2(backend->builder, backend->obj_array_type,
+                                         objp, 2, "shape.cnp");
+  LLVMValueRef cn = LLVMBuildLoad2(backend->builder, i32t, cnp, "shape.cn");
+  llvm_tbaa_tag(backend, cn, 0);
+  LLVMValueRef cn64 = LLVMBuildSExt(backend->builder, cn, backend->int_type, "shape.cn64");
+  // Kutulu diziyi hizli yola ALMIYORUZ: count=0 -> eski yol calisir.
+  LLVMValueRef ok = LLVMBuildIsNotNull(backend->builder, id, "shape.ubox");
+  LLVMValueRef cn_final = LLVMBuildSelect(
+      backend->builder, ok, cn64, LLVMConstInt(backend->int_type, 0, 0), "shape.cnf");
+  LLVMBuildStore(backend->builder, id, idata_slot);
+  LLVMBuildStore(backend->builder, cn_final, count_slot);
+  LLVMBuildStore(backend->builder, cn64, len_slot);   // GERCEK uzunluk
+  LLVMBuildBr(backend->builder, b_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_no);
+  LLVMBuildStore(backend->builder, LLVMConstNull(backend->ptr_type), idata_slot);
+  LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), count_slot);
+  if (eager_len) {
+    // Dizi degil (dizgi/json/...) ama dongu `len` cagiriyor: uzunlugu BURADA,
+    // dongu basinda bir kez hesapla. Rebind denetimi degerin dongu boyunca
+    // degismedigini garanti ediyor, yani bu deger dongu boyunca gecerli.
+    // Cagri yalniz bu nadir dalda: dizi olan yaygin durumda hic cagri yok.
+    LLVMValueRef vtmp = llvm_build_alloca_at_entry(
+        backend, backend->vm_value_type, "shape.lenarg");
+    LLVMBuildStore(backend->builder, v, vtmp);
+    LLVMValueRef largs[] = {LLVMBuildBitCast(backend->builder, vtmp,
+                                             backend->ptr_type, "shape.lenap")};
+    LLVMValueRef lres = LLVMBuildCall2(
+        backend->builder, LLVMGlobalGetValueType(backend->func_aot_len),
+        backend->func_aot_len, largs, 1, "shape.lenv");
+    LLVMBuildStore(backend->builder, lres, len_slot);
+  } else {
+    LLVMBuildStore(backend->builder, minus1, len_slot);
+  }
+  LLVMBuildBr(backend->builder, b_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_done);
+}
+
+// Yavas yoldan donuste onbellegi tazele. Sart: yavas yol diziyi KUTUYA
+// cevirmis olabilir (float yazimi) ve o zaman onbellekteki idata SERBEST
+// BIRAKILMIS bellege bakar. Tazeleme bunu imkansiz kiliyor.
+// Modul-yerel tazeleme fonksiyonu (varsa dondur, yoksa uret).
+// Govdesi emit_shape_fill ile AYNI isi yapmak ZORUNDA — ikisi ayrisirsa
+// onbellek bayat/sarkan isaretci tutar (bkz. Tuzaklar 6l).
+static LLVMValueRef get_shape_refill_fn(LLVMBackend *backend, int eager) {
+  eager = eager ? 1 : 0;
+  if (backend->fn_shape_refill[eager]) return backend->fn_shape_refill[eager];
+
+  LLVMBasicBlockRef save_bb = LLVMGetInsertBlock(backend->builder);
+  LLVMTypeRef i32t = backend->int32_type;
+  LLVMTypeRef params[] = {backend->ptr_type, backend->ptr_type,
+                          backend->ptr_type, backend->ptr_type};
+  LLVMTypeRef fty = LLVMFunctionType(backend->void_type, params, 4, 0);
+  LLVMValueRef fn = LLVMAddFunction(
+      backend->module,
+      eager ? "tulpar.shape_refill.len" : "tulpar.shape_refill", fty);
+  LLVMSetLinkage(fn, LLVMInternalLinkage);
+  backend->fn_shape_refill[eager] = fn;
+
+  LLVMValueRef p_v = LLVMGetParam(fn, 0);
+  LLVMValueRef p_id = LLVMGetParam(fn, 1);
+  LLVMValueRef p_cn = LLVMGetParam(fn, 2);
+  LLVMValueRef p_ln = LLVMGetParam(fn, 3);
+
+  LLVMBasicBlockRef b_entry = LLVMAppendBasicBlock(fn, "entry");
+  LLVMBasicBlockRef b_ty = LLVMAppendBasicBlock(fn, "ty");
+  LLVMBasicBlockRef b_ld = LLVMAppendBasicBlock(fn, "ld");
+  LLVMBasicBlockRef b_no = LLVMAppendBasicBlock(fn, "no");
+  LLVMBasicBlockRef b_ret = LLVMAppendBasicBlock(fn, "ret");
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_entry);
+  LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->vm_value_type,
+                                  p_v, "v");
+  LLVMValueRef tag = LLVMBuildExtractValue(backend->builder, v, 0, "tag");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntEQ, tag,
+                                LLVMConstInt(i32t, 4, 0), "isobj"),
+                  b_ty, b_no);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_ty);
+  LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, v);
+  LLVMValueRef otp = LLVMBuildStructGEP2(backend->builder,
+                                         backend->obj_array_type, objp, 0, "otp");
+  LLVMValueRef ot = LLVMBuildLoad2(backend->builder, i32t, otp, "ot");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
+                                LLVMConstInt(i32t, 1, 0), "isarr"),
+                  b_ld, b_no);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_ld);
+  LLVMValueRef idp = LLVMBuildStructGEP2(backend->builder,
+                                         backend->obj_array_type, objp, 5, "idp");
+  LLVMValueRef id = LLVMBuildLoad2(backend->builder, backend->ptr_type, idp, "id");
+  LLVMValueRef cnp = LLVMBuildStructGEP2(backend->builder,
+                                         backend->obj_array_type, objp, 2, "cnp");
+  LLVMValueRef cn = LLVMBuildLoad2(backend->builder, i32t, cnp, "cn");
+  LLVMValueRef cn64 = LLVMBuildSExt(backend->builder, cn, backend->int_type, "cn64");
+  LLVMValueRef ok = LLVMBuildIsNotNull(backend->builder, id, "ubox");
+  LLVMValueRef cnf = LLVMBuildSelect(backend->builder, ok, cn64,
+                                     LLVMConstInt(backend->int_type, 0, 0), "cnf");
+  LLVMBuildStore(backend->builder, id, p_id);
+  LLVMBuildStore(backend->builder, cnf, p_cn);
+  LLVMBuildStore(backend->builder, cn64, p_ln);
+  LLVMBuildBr(backend->builder, b_ret);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_no);
+  LLVMBuildStore(backend->builder, LLVMConstNull(backend->ptr_type), p_id);
+  LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), p_cn);
+  if (eager) {
+    // Dizi degil (dizgi/json/...) ama dongu `len` cagiriyor: bir kez hesapla.
+    LLVMValueRef largs[] = {p_v};
+    LLVMValueRef lres = LLVMBuildCall2(
+        backend->builder, LLVMGlobalGetValueType(backend->func_aot_len),
+        backend->func_aot_len, largs, 1, "lenv");
+    LLVMBuildStore(backend->builder, lres, p_ln);
+  } else {
+    LLVMBuildStore(backend->builder,
+                   LLVMConstInt(backend->int_type, (unsigned long long)-1, 1),
+                   p_ln);
+  }
+  LLVMBuildBr(backend->builder, b_ret);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_ret);
+  LLVMBuildRetVoid(backend->builder);
+
+  if (save_bb) LLVMPositionBuilderAtEnd(backend->builder, save_bb);
+  return fn;
+}
+
+static void emit_shape_refresh_all(LLVMBackend *backend) {
+  // TEK CAGRI, satir ici degil. emit_shape_fill 4 temel blok + ~25 komut
+  // uretiyor ve bu YAVAS YOLDA, yani DONGU GOVDESININ ICINDE duruyordu;
+  // o buyukluk LLVM'in sicak yolu acmasini engelliyordu. Olculdu
+  // (arrayiter n=5M): tazelemeyi cikarmak 5,53 -> 4,27 ms, butun
+  // bekcileri kaldirmanin tavani 3,51. Yani kazancin yarisindan cogu
+  // koddan, daldan degil. Cagri ayni isi yapiyor — anlam degismiyor.
+  for (int i = 0; i < backend->shape_count; i++) {
+    LLVMBackend::ArrShapeEntry *e = &backend->shape_cache[i];
+    LLVMValueRef slot = get_local(backend, e->name);
+    if (!slot) {
+      // Degisken gorunmuyor: eski satir ici yol zaten yalniz null yaziyor.
+      emit_shape_fill(backend, e->name, e->idata_slot, e->count_slot,
+                      e->len_slot, e->len_eager);
+      continue;
+    }
+    LLVMValueRef rf = get_shape_refill_fn(backend, e->len_eager);
+    LLVMValueRef args[] = {slot, e->idata_slot, e->count_slot, e->len_slot};
+    LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(rf), rf, args, 4, "");
+  }
+}
+
+// Dongu basinda: sekli kanitlanabilen dizileri onbellege al.
+static int emit_shape_cache_for_loop(LLVMBackend *backend, ASTNode_C *cond,
+                                     ASTNode_C *body, ASTNode_C *incr) {
+  int saved = backend->shape_count;
+  if (!tulpar_loop_shape_stable(cond, body, incr, shape_pure_call, backend))
+    return saved;
+  const char *names[4];
+  int n = tulpar_collect_indexed_names(cond, body, names, 4);
+  for (int i = 0; i < n && backend->shape_count < 4; i++) {
+    if (tulpar_loop_rebinds_name(cond, body, incr, names[i])) continue;
+    if (shape_lookup(backend, names[i])) continue;   // dis dongu zaten aldi
+    if (!get_local(backend, names[i])) continue;
+    LLVMValueRef ids = llvm_build_alloca_at_entry(backend, backend->ptr_type,
+                                                  "shape.idata.slot");
+    LLVMValueRef cns = llvm_build_alloca_at_entry(backend, backend->int_type,
+                                                  "shape.count.slot");
+    LLVMValueRef lns = llvm_build_alloca_at_entry(backend, backend->int_type,
+                                                  "shape.len.slot");
+    int uses_len = tulpar_loop_uses_len(cond, body, incr, names[i]);
+    emit_shape_fill(backend, names[i], ids, cns, lns, uses_len);
+    backend->shape_cache[backend->shape_count].name = names[i];
+    backend->shape_cache[backend->shape_count].idata_slot = ids;
+    backend->shape_cache[backend->shape_count].count_slot = cns;
+    backend->shape_cache[backend->shape_count].len_slot = lns;
+    backend->shape_cache[backend->shape_count].len_eager = uses_len;
+    backend->shape_cache[backend->shape_count].proven_ivar = nullptr;
+    backend->shape_count++;
+  }
+  return saved;
+}
+
+
+// `+=` -> `+` esleme. Bilesik atamanin hem skaler hem eleman yolu bunu
+// kullaniyor: iki yerde ayri switch kalirsa yeni bir operator eklenince
+// biri sessizce guncellenmemis kalir (`%=` eklenirken tam bu oldu).
+static int compound_op_to_binary(int op) {
+  switch (op) {
+  case TOKEN_PLUS_EQUAL:     return TOKEN_PLUS;
+  case TOKEN_MINUS_EQUAL:    return TOKEN_MINUS;
+  case TOKEN_MULTIPLY_EQUAL: return TOKEN_MULTIPLY;
+  case TOKEN_DIVIDE_EQUAL:   return TOKEN_DIVIDE;
+  case TOKEN_MODULO_EQUAL:   return TOKEN_MODULO;
+  default:                   return op;
+  }
+}
+
+
+// `a[0]++` / `j["n"]--`: ELEMAN hedefli artirma/azaltma.
+//
+// Eskiden SESSIZ HIC-ISLEMDI (parser `++` token'ini tuketip atiyordu; bkz.
+// parse_postfix). Simdi hedef codegen'e geliyor ve burada oku-artir-yaz
+// yapiliyor. Runtime cagrilariyla: dizi de nesne de ayni yoldan gecsin ve
+// satir ici hizli yolun kopyasi cikmasin — artirma sicak yol degil,
+// dogruluk hizdan onemli.
+//
+// Post semantigi korunuyor: ESKI deger donuyor (`x++` ile ayni).
+static LLVMValueRef codegen_elem_step(LLVMBackend *backend, ASTNode_C *node,
+                                      int delta) {
+  ASTNode_C *acc = node->left;
+  if (!acc || acc->type != AST_ARRAY_ACCESS) {
+    report_codegen_error_with_suggestion(
+        backend, node->line, "hata",
+        "++/-- yalniz degiskene ya da dizi/nesne elemanina uygulanabilir",
+        nullptr, "hedefi bir degisken ya da a[i] bicimine getirin");
+    return llvm_vm_val_int(backend, 0);
+  }
+  // Kap ve indeks: `a[i]` dugumunde taban ya name'de ya left'te (bkz. 6g).
+  LLVMValueRef cont = nullptr;
+  if (acc->name) {
+    LLVMValueRef slot = get_local(backend, acc->name);
+    if (slot)
+      cont = LLVMBuildLoad2(backend->builder, backend->vm_value_type, slot,
+                            acc->name);
+  } else if (acc->left) {
+    cont = codegen_expression(backend, acc->left);
+  }
+  if (!cont || !acc->index) return llvm_vm_val_int(backend, 0);
+  LLVMValueRef idx = codegen_expression(backend, acc->index);
+
+  LLVMValueRef cont_p = llvm_build_alloca_at_entry(
+      backend, backend->vm_value_type, "step.cont");
+  LLVMBuildStore(backend->builder, cont, cont_p);
+  LLVMValueRef idx_p = llvm_build_alloca_at_entry(
+      backend, backend->vm_value_type, "step.idx");
+  LLVMBuildStore(backend->builder, idx, idx_p);
+
+  LLVMValueRef gargs[] = {cont_p, idx_p};
+  LLVMValueRef old = llvm_call_vmvalue_func(
+      backend, backend->func_vm_get_element, gargs, 2, "step.old");
+  // vm_get_element -> vm_array_get -> arr_items -> arr_debox: KUTUSUZ diziyi
+  // kutular ve idata'yi FREE eder. Sekil onbellegindeki idata o an sarkiyor;
+  // tazelenmezse dongudeki sonraki `a[j]` SERBEST BELLEK okuyor (olculdu:
+  // "malloc(): unsorted double linked list corrupted").
+  if (backend->shape_count > 0) emit_shape_refresh_all(backend);
+  LLVMValueRef oldi = llvm_extract_vm_val_int(backend, old);
+  LLVMValueRef newi =
+      LLVMBuildAdd(backend->builder, oldi,
+                   LLVMConstInt(backend->int_type, (unsigned long long)delta,
+                                delta < 0),
+                   "step.new");
+  LLVMValueRef new_p = llvm_build_alloca_at_entry(
+      backend, backend->vm_value_type, "step.newv");
+  LLVMBuildStore(backend->builder, llvm_vm_val_int_val(backend, newi), new_p);
+  LLVMValueRef sargs[] = {LLVMConstNull(backend->ptr_type), cont_p, idx_p,
+                          new_p};
+  LLVMBuildCall2(backend->builder,
+                 LLVMGlobalGetValueType(backend->func_vm_set_element),
+                 backend->func_vm_set_element, sargs, 4, "");
+  if (backend->shape_count > 0) emit_shape_refresh_all(backend);
+  return old;   // post-increment: ESKI deger
+}
+
+
+// `a[i] += 5` / `j["n"] *= 2`: ELEMAN hedefli BILESIK atama.
+//
+// `a[i]++` calisirken bunun ACIK ayristirma hatasi olmasi tutarsizdi
+// (bkz. parse_expression_statement). Ayni oku-degistir-yaz kalibi, ama
+// adim yerine keyfi bir ikili islem ve keyfi bir sag taraf.
+//
+// Islem GENEL vm_binary_op'tan geciyor: boylece int/float/dizgi ayni
+// yoldan calisiyor (`s[0] += "x"` de) ve sifira bolme / INT_MIN-(-1)
+// korumalari orada zaten var — burada kopyalanmiyor.
+//
+// Skaler bilesik atama gibi YENI deger donuyor.
+static LLVMValueRef codegen_elem_compound(LLVMBackend *backend,
+                                          ASTNode_C *node) {
+  ASTNode_C *acc = node->left;
+  if (!acc || acc->type != AST_ARRAY_ACCESS) {
+    report_codegen_error_with_suggestion(
+        backend, node->line, "hata",
+        "bileşik atama yalnız değişkene ya da dizi/nesne elemanına uygulanabilir",
+        nullptr, "hedefi bir değişken ya da a[i] biçimine getirin");
+    return llvm_vm_val_int(backend, 0);
+  }
+  // Kap ve indeks: `a[i]` dugumunde taban ya name'de ya left'te (bkz. 6g).
+  LLVMValueRef cont = nullptr;
+  if (acc->name) {
+    LLVMValueRef slot = get_local(backend, acc->name);
+    if (slot)
+      cont = LLVMBuildLoad2(backend->builder, backend->vm_value_type, slot,
+                            acc->name);
+  } else if (acc->left) {
+    cont = codegen_expression(backend, acc->left);
+  }
+  if (!cont || !acc->index) return llvm_vm_val_int(backend, 0);
+  LLVMValueRef idx = codegen_expression(backend, acc->index);
+
+  LLVMValueRef cont_p = llvm_build_alloca_at_entry(
+      backend, backend->vm_value_type, "ca.cont");
+  LLVMBuildStore(backend->builder, cont, cont_p);
+  LLVMValueRef idx_p = llvm_build_alloca_at_entry(
+      backend, backend->vm_value_type, "ca.idx");
+  LLVMBuildStore(backend->builder, idx, idx_p);
+
+  LLVMValueRef gargs[] = {cont_p, idx_p};
+  LLVMValueRef old = llvm_call_vmvalue_func(
+      backend, backend->func_vm_get_element, gargs, 2, "ca.old");
+  // Cagri diziyi kutuya cevirmis olabilir (arr_items -> arr_debox idata'yi
+  // FREE eder) -> sekil onbellegi tazelenmeli. Sag taraf `a[j]` okuyabilir,
+  // yani tazeleme okumadan ONCE olmali.
+  if (backend->shape_count > 0) emit_shape_refresh_all(backend);
+
+  LLVMValueRef rhs = codegen_expression(backend, node->right);
+
+  LLVMValueRef L_ptr =
+      llvm_build_alloca_at_entry(backend, backend->vm_value_type, "ca.L");
+  LLVMBuildStore(backend->builder, old, L_ptr);
+  LLVMValueRef R_ptr =
+      llvm_build_alloca_at_entry(backend, backend->vm_value_type, "ca.R");
+  LLVMBuildStore(backend->builder, rhs, R_ptr);
+  LLVMValueRef res_ptr =
+      llvm_build_alloca_at_entry(backend, backend->vm_value_type, "ca.res");
+
+  LLVMValueRef bin_args[] = {
+      LLVMConstPointerNull(backend->ptr_type),
+      LLVMBuildBitCast(backend->builder, L_ptr, backend->ptr_type, "ca.Lv"),
+      LLVMBuildBitCast(backend->builder, R_ptr, backend->ptr_type, "ca.Rv"),
+      LLVMConstInt(backend->int32_type,
+                   compound_op_to_binary(node->op), 0),
+      LLVMBuildBitCast(backend->builder, res_ptr, backend->ptr_type,
+                       "ca.resv")};
+  LLVMBuildCall2(backend->builder, backend->vm_binary_op_type,
+                 backend->func_vm_binary_op, bin_args, 5, "");
+
+  LLVMValueRef new_val = LLVMBuildLoad2(backend->builder,
+                                        backend->vm_value_type, res_ptr,
+                                        "ca.new");
+  LLVMValueRef new_p = llvm_build_alloca_at_entry(
+      backend, backend->vm_value_type, "ca.newv");
+  LLVMBuildStore(backend->builder, new_val, new_p);
+  LLVMValueRef sargs[] = {LLVMConstNull(backend->ptr_type), cont_p, idx_p,
+                          new_p};
+  LLVMBuildCall2(backend->builder,
+                 LLVMGlobalGetValueType(backend->func_vm_set_element),
+                 backend->func_vm_set_element, sargs, 4, "");
+  if (backend->shape_count > 0) emit_shape_refresh_all(backend);
+  return new_val;   // bilesik atama: YENI deger
+}
+
+
 LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   if (!node)
     return nullptr;
@@ -3206,20 +3786,59 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     return llvm_vm_val_void(backend);
 
   case AST_STRING_LITERAL: {
-    // Call runtime: vm_alloc_string(vm, "str", len)
-    // For now passing nullptr as VM context (dangerous but temp)
+    // SABİT BİR DİZGİ, HER TURDA YENİDEN AYRILMAZ.
+    //
+    // Eskiden burası her değerlendirmede `vm_alloc_string_aot` çağırıyordu:
+    // arena'dan yeni bir ObjString, GEÇİCİ işaretli. Kalıcı bir kaba
+    // konulduğunda yazma bariyeri onu ayrıca derin kopyalıyordu. Ölçüldü
+    // (2026-09-03): kalıcı diziye sabit literal push etmek 34.8 ns, tamsayı
+    // push etmek 4.5 ns sürüyordu; aradaki ~30 ns tamamen bu iki gereksiz iş.
+    //
+    // Artık site başına bir modül global'i tutuluyor ve ilk kullanımda
+    // `aot_intern_string` ile BİR KEZ dolduruluyor. Sıcak yol: bir yükleme +
+    // tahmini kolay bir dal. Dizgiler değişmez olduğu için paylaşım
+    // gözlemlenebilir bir fark yaratmıyor.
     LLVMValueRef const_str = LLVMBuildGlobalStringPtr(
         backend->builder, node->value.string_value, "str_lit");
     int len = strlen(node->value.string_value);
 
-    LLVMValueRef args[] = {LLVMConstNull(backend->ptr_type), // vm (nullptr)
-                           const_str,
-                           LLVMConstInt(backend->int32_type, len, 0)};
+    LLVMTypeRef strp_type = LLVMPointerType(backend->obj_string_type, 0);
+    char gname[64];
+    snprintf(gname, sizeof(gname), "tulpar_strlit_%d",
+             backend->str_lit_cache_n++);
+    LLVMValueRef cache = LLVMAddGlobal(backend->module, strp_type, gname);
+    LLVMSetInitializer(cache, LLVMConstNull(strp_type));
+    LLVMSetLinkage(cache, LLVMInternalLinkage);
 
-    LLVMValueRef str_obj = LLVMBuildCall2(
-        backend->builder, LLVMGlobalGetValueType(backend->func_vm_alloc_string),
-        backend->func_vm_alloc_string, args, 3, "alloc_str");
-    return llvm_build_vm_val_obj(backend, str_obj);
+    LLVMValueRef fn = LLVMGetBasicBlockParent(
+        LLVMGetInsertBlock(backend->builder));
+    LLVMBasicBlockRef entry_bb = LLVMGetInsertBlock(backend->builder);
+    LLVMBasicBlockRef init_bb = LLVMAppendBasicBlock(fn, "strlit.init");
+    LLVMBasicBlockRef done_bb = LLVMAppendBasicBlock(fn, "strlit.done");
+
+    LLVMValueRef cached =
+        LLVMBuildLoad2(backend->builder, strp_type, cache, "strlit.cached");
+    LLVMValueRef is_null = LLVMBuildICmp(
+        backend->builder, LLVMIntEQ, cached, LLVMConstNull(strp_type),
+        "strlit.isnull");
+    LLVMBuildCondBr(backend->builder, is_null, init_bb, done_bb);
+
+    LLVMPositionBuilderAtEnd(backend->builder, init_bb);
+    LLVMValueRef iargs[] = {const_str,
+                            LLVMConstInt(backend->int32_type, len, 0)};
+    LLVMValueRef fresh = LLVMBuildCall2(
+        backend->builder,
+        LLVMGlobalGetValueType(backend->func_aot_intern_string),
+        backend->func_aot_intern_string, iargs, 2, "strlit.new");
+    LLVMBuildStore(backend->builder, fresh, cache);
+    LLVMBuildBr(backend->builder, done_bb);
+
+    LLVMPositionBuilderAtEnd(backend->builder, done_bb);
+    LLVMValueRef phi = LLVMBuildPhi(backend->builder, strp_type, "strlit");
+    LLVMValueRef inc[] = {cached, fresh};
+    LLVMBasicBlockRef inb[] = {entry_bb, init_bb};
+    LLVMAddIncoming(phi, inc, inb, 2);
+    return llvm_build_vm_val_obj(backend, phi);
   }
 
   case AST_ARRAY_LITERAL: {
@@ -3346,6 +3965,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       if (val_ptr) {
         left_val = LLVMBuildLoad2(backend->builder, backend->vm_value_type,
                                   val_ptr, node->name);
+        // Degisken yuvasi (alloca/kuresel) — asla dizi eleman deposu degil.
+        llvm_tbaa_tag(backend, left_val, 0);
       } else {
         char msg[256];
         snprintf(msg, sizeof(msg),
@@ -3393,21 +4014,193 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // This handles arrays, strings, and objects correctly with type checking
     // ============================================================
 
-    // Use generic vm_get_element_ptr for all element access
-    // This function properly handles: arrays (int index), strings (int index),
-    // and objects (string key)
-    LLVMValueRef target_temp =
-        llvm_build_alloca_at_entry(backend, backend->vm_value_type, "target_tmp");
-    LLVMBuildStore(backend->builder, left_val, target_temp);
-    LLVMValueRef index_temp =
-        llvm_build_alloca_at_entry(backend, backend->vm_value_type, "index_tmp");
-    LLVMBuildStore(backend->builder, idx_val, index_temp);
+    // DIZI OKUMASI: KORUMALI SATIR ICI HIZLI YOL.
+    //
+    // Eskiden HER `a[i]` bir `vm_get_element_ptr` cagrisiydi: iki alloca, iki
+    // store, bir cagri. Olculdu (2026-09-03): eleman basina ~3 ns; C'nin ham
+    // yuklemesi ~0.5 ns ve elek kiyaslamasinin farkinin buyuk kismi buradan
+    // geliyordu. Runtime ayri bir arsiv oldugu icin LLVM o cagriyi satir ici
+    // de alamiyor.
+    //
+    // Artik sicak yol satir ici: etiketler + OBJ_ARRAY + sinir denetimi, sonra
+    // dogrudan GEP+load. Uymayan her sey (dizgi indeksleme, json nesnesi,
+    // negatif/tasan indeks) ESKI CAGRIYA dusuyor, yani anlam birebir korunuyor
+    // — hizli yol yalnizca kisayol, ayri bir semantik degil.
+    //
+    // Sinir denetimi `ult` ile: negatif indeks isaretsizde devasa gorunur ve
+    // ayni denetime takilir, yani ayrica `>= 0` bakmaya gerek yok.
+    // KANITLI ERISIM: `for (i = C; i < len(a); i += K)` icinde `a[i]`.
+    // 0 <= i < len == count (dizi kutusuz — dongu basinda sinandi ve dongu
+    // SURUMLENDI). Bekci de, genel katman da, yavas yol da YOK: geriye tek
+    // GEP+load kaliyor. Kazanc bekcinin kendisinden degil, DONGU
+    // GOVDESINDEN KODU cikarmaktan geliyor (bkz. Tuzaklar 6n).
+    //
+    // ⚠ BU DAL, ASAGIDAKI BLOKLAR YARATILMADAN ONCE OLMAK ZORUNDA.
+    // Ilk yazilisinda blok yaratmadan SONRA duruyordu ve erken `return`
+    // geriye SONLANDIRICISI OLMAYAN dort bos temel blok birakiyordu —
+    // gecersiz IR. LLVM 22 tolere ediyor, LLVM 18 SEGFAULT veriyor; yerel
+    // makinede 69 paket yesilken CI'da uc paket coktu (bkz. Tuzaklar 6q).
+    {
+      LLVMBackend::ArrShapeEntry *pshp =
+          shape_lookup(backend, array_base_name(node));
+      if (shape_access_proven(pshp, node->index)) {
+        LLVMValueRef pid = LLVMBuildLoad2(backend->builder, backend->ptr_type,
+                                          pshp->idata_slot, "arr.pid");
+        LLVMValueRef pix = llvm_extract_vm_val_int(backend, idx_val);
+        LLVMValueRef pep = LLVMBuildGEP2(backend->builder, backend->int_type,
+                                         pid, &pix, 1, "arr.pep");
+        LLVMValueRef praw = LLVMBuildLoad2(backend->builder, backend->int_type,
+                                           pep, "arr.praw");
+        llvm_tbaa_tag(backend, praw, 1);
+        return llvm_vm_val_int_val(backend, praw);
+      }
+    }
 
-    LLVMValueRef args[] = {target_temp, index_temp};
-    return llvm_call_vmvalue_func(backend, backend->func_vm_get_element, args, 2, "element");
+    {
+      LLVMValueRef fn =
+          LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+      LLVMBasicBlockRef bb_chk  = LLVMAppendBasicBlock(fn, "arr.chk");
+      LLVMBasicBlockRef bb_fast = LLVMAppendBasicBlock(fn, "arr.fast");
+      LLVMBasicBlockRef bb_slow = LLVMAppendBasicBlock(fn, "arr.slow");
+      LLVMBasicBlockRef bb_done = LLVMAppendBasicBlock(fn, "arr.done");
+      LLVMTypeRef i32t = backend->int32_type;
+
+      // Onbellekli hizli yol: sekil dongu basinda dogrulandi, burada yalniz
+      // SINIR denetimi kaldi ve `count` YERELDEN geliyor (bellekten degil).
+      LLVMBackend::ArrShapeEntry *shp =
+          shape_lookup(backend, array_base_name(node));
+      LLVMBasicBlockRef cached_end = nullptr;
+      LLVMValueRef cached_val = nullptr;
+      if (shp) {
+        LLVMBasicBlockRef bb_cached = LLVMAppendBasicBlock(fn, "arr.cached");
+        LLVMBasicBlockRef bb_gen = LLVMAppendBasicBlock(fn, "arr.generic");
+        LLVMValueRef ccnt = LLVMBuildLoad2(backend->builder, backend->int_type,
+                                           shp->count_slot, "arr.ccnt");
+        LLVMValueRef cid = LLVMBuildLoad2(backend->builder, backend->ptr_type,
+                                          shp->idata_slot, "arr.cid");
+        LLVMValueRef it0 =
+            LLVMBuildExtractValue(backend->builder, idx_val, 0, "arr.cit");
+        LLVMValueRef ii0 = LLVMBuildICmp(backend->builder, LLVMIntEQ, it0,
+                                         LLVMConstInt(i32t, 0, 0), "arr.ciint");
+        LLVMValueRef ix0 = llvm_extract_vm_val_int(backend, idx_val);
+        LLVMValueRef ir0 = LLVMBuildICmp(backend->builder, LLVMIntULT, ix0, ccnt,
+                                         "arr.cinr");
+        LLVMBuildCondBr(backend->builder,
+                        LLVMBuildAnd(backend->builder, ii0, ir0, "arr.cok"),
+                        bb_cached, bb_gen);
+        LLVMPositionBuilderAtEnd(backend->builder, bb_cached);
+        LLVMValueRef cep = LLVMBuildGEP2(backend->builder, backend->int_type, cid,
+                                         &ix0, 1, "arr.cep");
+        LLVMValueRef craw = LLVMBuildLoad2(backend->builder, backend->int_type,
+                                           cep, "arr.craw");
+        llvm_tbaa_tag(backend, craw, 1);
+        cached_val = llvm_vm_val_int_val(backend, craw);
+        cached_end = LLVMGetInsertBlock(backend->builder);
+        LLVMBuildBr(backend->builder, bb_done);
+        LLVMPositionBuilderAtEnd(backend->builder, bb_gen);
+      }
+      LLVMValueRef ltag =
+          LLVMBuildExtractValue(backend->builder, left_val, 0, "arr.ltag");
+      LLVMValueRef itag =
+          LLVMBuildExtractValue(backend->builder, idx_val, 0, "arr.itag");
+      LLVMValueRef is_obj = LLVMBuildICmp(
+          backend->builder, LLVMIntEQ, ltag,
+          LLVMConstInt(i32t, 4 /* VM_VAL_OBJ */, 0), "arr.isobj");
+      LLVMValueRef is_int = LLVMBuildICmp(
+          backend->builder, LLVMIntEQ, itag,
+          LLVMConstInt(i32t, 0 /* VM_VAL_INT */, 0), "arr.isint");
+      LLVMBuildCondBr(backend->builder,
+                      LLVMBuildAnd(backend->builder, is_obj, is_int, "arr.ok1"),
+                      bb_chk, bb_slow);
+
+      LLVMPositionBuilderAtEnd(backend->builder, bb_chk);
+      LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, left_val);
+      LLVMValueRef ot_ptr = LLVMBuildStructGEP2(
+          backend->builder, backend->obj_array_type, objp, 0, "arr.otype.ptr");
+      LLVMValueRef otype =
+          LLVMBuildLoad2(backend->builder, i32t, ot_ptr, "arr.otype");
+      LLVMValueRef is_arr = LLVMBuildICmp(
+          backend->builder, LLVMIntEQ, otype,
+          LLVMConstInt(i32t, 1 /* OBJ_ARRAY */, 0), "arr.isarr");
+      LLVMValueRef idx64 = llvm_extract_vm_val_int(backend, idx_val);
+      LLVMValueRef cnt_ptr = LLVMBuildStructGEP2(
+          backend->builder, backend->obj_array_type, objp, 2, "arr.cnt.ptr");
+      LLVMValueRef cnt =
+          LLVMBuildLoad2(backend->builder, i32t, cnt_ptr, "arr.cnt");
+      LLVMValueRef cnt64 = LLVMBuildSExt(backend->builder, cnt,
+                                         backend->int_type, "arr.cnt64");
+      LLVMValueRef in_rng = LLVMBuildICmp(backend->builder, LLVMIntULT, idx64,
+                                          cnt64, "arr.inrange");
+      LLVMBuildCondBr(backend->builder,
+                      LLVMBuildAnd(backend->builder, is_arr, in_rng, "arr.ok2"),
+                      bb_fast, bb_slow);
+
+      // Hizli yol ikiye ayriliyor: kutulanmamis (idata != NULL) diziden
+      // dogrudan i64 yukleniyor — eleman basina 16 degil 8 bayt dokunuluyor.
+      LLVMBasicBlockRef bb_ubox  = LLVMAppendBasicBlock(fn, "arr.unboxed");
+      LLVMBasicBlockRef bb_boxed = LLVMAppendBasicBlock(fn, "arr.boxed");
+      LLVMPositionBuilderAtEnd(backend->builder, bb_fast);
+      LLVMValueRef id_ptr = LLVMBuildStructGEP2(
+          backend->builder, backend->obj_array_type, objp, 5, "arr.idata.ptr");
+      LLVMValueRef idata = LLVMBuildLoad2(backend->builder, backend->ptr_type,
+                                          id_ptr, "arr.idata");
+      llvm_tbaa_tag(backend, idata, 0);
+      LLVMBuildCondBr(backend->builder,
+                      LLVMBuildIsNotNull(backend->builder, idata, "arr.isubox"),
+                      bb_ubox, bb_boxed);
+
+      LLVMPositionBuilderAtEnd(backend->builder, bb_ubox);
+      LLVMValueRef ielem_ptr = LLVMBuildGEP2(
+          backend->builder, backend->int_type, idata, &idx64, 1, "arr.ielem.ptr");
+      LLVMValueRef iraw = LLVMBuildLoad2(backend->builder, backend->int_type,
+                                         ielem_ptr, "arr.ielem");
+      llvm_tbaa_tag(backend, iraw, 1);
+      LLVMValueRef ubox_val = llvm_vm_val_int_val(backend, iraw);
+      LLVMBasicBlockRef ubox_end = LLVMGetInsertBlock(backend->builder);
+      LLVMBuildBr(backend->builder, bb_done);
+
+      LLVMPositionBuilderAtEnd(backend->builder, bb_boxed);
+      LLVMValueRef it_ptr = LLVMBuildStructGEP2(
+          backend->builder, backend->obj_array_type, objp, 4, "arr.items.ptr");
+      LLVMValueRef items = LLVMBuildLoad2(backend->builder, backend->ptr_type,
+                                          it_ptr, "arr.items");
+      llvm_tbaa_tag(backend, items, 0);
+      LLVMValueRef elem_ptr = LLVMBuildGEP2(
+          backend->builder, backend->vm_value_type, items, &idx64, 1,
+          "arr.elem.ptr");
+      LLVMValueRef fast_val = LLVMBuildLoad2(
+          backend->builder, backend->vm_value_type, elem_ptr, "arr.elem");
+      llvm_tbaa_tag(backend, fast_val, 1);
+      LLVMBasicBlockRef boxed_end = LLVMGetInsertBlock(backend->builder);
+      LLVMBuildBr(backend->builder, bb_done);
+
+      LLVMPositionBuilderAtEnd(backend->builder, bb_slow);
+      LLVMValueRef target_temp = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "target_tmp");
+      LLVMBuildStore(backend->builder, left_val, target_temp);
+      LLVMValueRef index_temp = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "index_tmp");
+      LLVMBuildStore(backend->builder, idx_val, index_temp);
+      LLVMValueRef args[] = {target_temp, index_temp};
+      LLVMValueRef slow_val = llvm_call_vmvalue_func(
+          backend, backend->func_vm_get_element, args, 2, "element");
+      // Cagri diziyi kutuya cevirmis olabilir -> onbellek tazelenmeli.
+      if (backend->shape_count > 0) emit_shape_refresh_all(backend);
+      LLVMBasicBlockRef slow_end = LLVMGetInsertBlock(backend->builder);
+      LLVMBuildBr(backend->builder, bb_done);
+
+      LLVMPositionBuilderAtEnd(backend->builder, bb_done);
+      LLVMValueRef phi = LLVMBuildPhi(backend->builder, backend->vm_value_type,
+                                      "arr.res");
+      LLVMValueRef inc[] = {ubox_val, fast_val, slow_val, cached_val};
+      LLVMBasicBlockRef inb[] = {ubox_end, boxed_end, slow_end, cached_end};
+      LLVMAddIncoming(phi, inc, inb, cached_end ? 4 : 3);
+      return phi;
+    }
   }
 
   case AST_INCREMENT: {
+    if (node->left) return codegen_elem_step(backend, node, 1);
     // Typed-int fast path: top-level `int x = ...;` registers x as a native
     // i64 global with no boxed VMValue local. get_local() would return NULL
     // in that case, so check the typed/native side first.
@@ -3446,6 +4239,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   }
 
   case AST_DECREMENT: {
+    if (node->left) return codegen_elem_step(backend, node, -1);
     InferredType vt_dec = get_local_type(backend, node->name);
     LLVMValueRef nat_dec = get_local_native(backend, node->name);
     if (vt_dec == INFERRED_INT && nat_dec) {
@@ -3481,6 +4275,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   }
 
   case AST_COMPOUND_ASSIGN: {
+    if (node->left) return codegen_elem_compound(backend, node);
     // Typed-int fast path: do unboxed +=/-=/*=//= directly on the native i64.
     InferredType vt_ca = get_local_type(backend, node->name);
     LLVMValueRef nat_ca = get_local_native(backend, node->name);
@@ -3508,7 +4303,10 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         new_int = LLVMBuildMul(backend->builder, old_int, rhs_int, "muleq");
         break;
       case TOKEN_DIVIDE_EQUAL:
-        new_int = LLVMBuildSDiv(backend->builder, old_int, rhs_int, "diveq");
+        new_int = build_checked_div(backend, old_int, rhs_int, 0);
+        break;
+      case TOKEN_MODULO_EQUAL:
+        new_int = build_checked_div(backend, old_int, rhs_int, 1);
         break;
       default:
         new_int = old_int; // unsupported op falls through, leave value
@@ -3562,23 +4360,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     LLVMValueRef R_void =
         LLVMBuildBitCast(backend->builder, R_ptr, backend->ptr_type, "R_void");
 
-    int op_token = node->op;
-    switch (op_token) {
-    case TOKEN_PLUS_EQUAL:
-      op_token = TOKEN_PLUS;
-      break;
-    case TOKEN_MINUS_EQUAL:
-      op_token = TOKEN_MINUS;
-      break;
-    case TOKEN_MULTIPLY_EQUAL:
-      op_token = TOKEN_MULTIPLY;
-      break;
-    case TOKEN_DIVIDE_EQUAL:
-      op_token = TOKEN_DIVIDE;
-      break;
-    default:
-      break;
-    }
+    int op_token = compound_op_to_binary(node->op);
 
     LLVMValueRef bin_args[] = {
         LLVMConstPointerNull(backend->ptr_type), L_void, R_void,
@@ -3615,8 +4397,10 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     LLVMValueRef val_ptr = get_local(backend, node->name);
     if (val_ptr) {
       // Load the full VMValue struct
-      return LLVMBuildLoad2(backend->builder, backend->vm_value_type, val_ptr,
-                            node->name);
+      LLVMValueRef ident_val = LLVMBuildLoad2(
+          backend->builder, backend->vm_value_type, val_ptr, node->name);
+      llvm_tbaa_tag(backend, ident_val, 0);
+      return ident_val;
     }
     // A bare identifier that names a known top-level function lowers to a
     // string constant of that name. This makes function references usable as
@@ -3733,7 +4517,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       int_res = LLVMBuildMul(backend->builder, l_val, r_val, "mul");
       break;
     case TOKEN_DIVIDE:
-      int_res = LLVMBuildSDiv(backend->builder, l_val, r_val, "div");
+      int_res = build_checked_div(backend, l_val, r_val, 0);
       break;
     case TOKEN_EQUAL:
       int_res = LLVMBuildZExt(
@@ -4225,12 +5009,38 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       resolve_qualified_call(node, func_in_module, backend->module);
     }
 
+    // KULLANICI TANIMI YERLESIGI GOLGELER.
+    //
+    // Eskiden tersiydi ve SESSIZDI: `func exit(int x) { ... }` tanimlayan bir
+    // program `exit(5)` cagirinca kullanici fonksiyonu degil YERLESIK
+    // calisiyordu — surec 5 ile sonlaniyor, hicbir uyari cikmiyordu. Ayni sey
+    // len/abs/round/upper/lower/trim/keys/values/print/range icin de
+    // gecerliydi: 11 yerlesik, kullanici fonksiyonunu sessizce yutuyordu.
+    //
+    // Bu, typeinfer'in BELGELENMIS kuraliyla da celisiyordu ("yerel tanim her
+    // zaman kazanir"), yani tip denetimi kullanicinin imzasina bakarken
+    // codegen baska bir sey cagiriyordu.
+    //
+    // Asagidaki yerlesik zincirinin tamami `bi_name` uzerinden karsilastirma
+    // yapiyor; kullanici ayni adi tanimlamissa bi_name bos kaliyor ve zincir
+    // topluca eleniyor, cagri asagidaki kullanici blogana dusuyor.
+    const char *bi_name = node->name ? node->name : "";
+    if (node->name) {
+      for (int i = 0; i < backend->function_count; i++) {
+        if (backend->functions[i].name &&
+            strcmp(backend->functions[i].name, node->name) == 0) {
+          bi_name = "";
+          break;
+        }
+      }
+    }
+
     // call(func_name) -> dynamic dispatch
     // call(name, a, b, ...) — forward 2+ arguments. Stash the actual args in a
     // stack VMValue array and hand the runtime a pointer + count; it invokes
     // the target through its true (registered) arity. Must be checked BEFORE
     // the 1-arg case below, which would otherwise swallow the extra args.
-    if (node->name && strcmp(node->name, "call") == 0 &&
+    if (node->name && strcmp(bi_name, "call") == 0 &&
         node->argument_count >= 3) {
       int actual = node->argument_count - 1; // arguments[0] is the name
       LLVMValueRef name_v = codegen_expression(backend, node->arguments[0]);
@@ -4254,7 +5064,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     cargs, 3, "calln_res");
     }
     // call(name, arg) — dynamic dispatch passing one argument to the target.
-    if (node->name && strcmp(node->name, "call") == 0 &&
+    if (node->name && strcmp(bi_name, "call") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef args[] = {
           codegen_expression(backend, node->arguments[0]),
@@ -4262,7 +5072,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_call_dynamic_1,
                                     args, 2, "call1_res");
     }
-    if (node->name && strcmp(node->name, "call") == 0 &&
+    if (node->name && strcmp(bi_name, "call") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       // Alloca to pass by value/pointer as needed by ABI
@@ -4283,7 +5093,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // Check for builtin "print" function
-    if (node->name && strcmp(node->name, "print") == 0) {
+    if (node->name && strcmp(bi_name, "print") == 0) {
       // Generate print calls for each argument on the same line
       for (int i = 0; i < node->argument_count; i++) {
         ASTNode_C *arg = node->arguments[i];
@@ -4436,7 +5246,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // ====== Builtin Functions ======
 
     // toString(value) -> string (for print, returns char*)
-    if (node->name && strcmp(node->name, "toString") == 0 &&
+    if (node->name && strcmp(bi_name, "toString") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
@@ -4449,12 +5259,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // clock_ms() -> float
-    if (node->name && strcmp(node->name, "clock_ms") == 0) {
+    if (node->name && strcmp(bi_name, "clock_ms") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_clock_ms, nullptr, 0, "clock_res");
     }
 
     // toInt(value) -> int
-    if (node->name && strcmp(node->name, "toInt") == 0 &&
+    if (node->name && strcmp(bi_name, "toInt") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
@@ -4470,7 +5280,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // toJson(value) -> String
-    if (node->name && strcmp(node->name, "toJson") == 0 &&
+    if (node->name && strcmp(bi_name, "toJson") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
@@ -4483,7 +5293,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // toFloat(value) -> float
-    if (node->name && strcmp(node->name, "toFloat") == 0 &&
+    if (node->name && strcmp(bi_name, "toFloat") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
@@ -4499,8 +5309,69 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // len(value) -> int
-    if (node->name && strcmp(node->name, "len") == 0 &&
+    if (node->name && strcmp(bi_name, "len") == 0 &&
         node->argument_count >= 1) {
+      // Dongu-degismezi sekil onbellegi `len` icin de gecerli: dongu boyunca
+      // sekli degistiren bir sey olmadigi KANITLANDIGI icin uzunluk sabit.
+      // `for (int i = 0; i < len(a); ...)` Tulpar'in en yaygin dongu kalibi
+      // ve boyle her yinelemede bir runtime cagrisi yapiyordu — olculdu:
+      // ayni dongu len()'siz 5,1 ms, len()'li 12,7 ms.
+      //
+      // len_slot dizi olmayan bir deger icin -1 tutuyor (dizgi, json, ...);
+      // o zaman eski cagriya dusuyoruz, yani anlam birebir korunuyor.
+      // Dal dongu-degismezi oldugu icin LLVM onu disari tasiyor.
+      ASTNode_C *larg = node->arguments[0];
+      LLVMBackend::ArrShapeEntry *lshp =
+          (larg && larg->type == AST_IDENTIFIER)
+              ? shape_lookup(backend, larg->name)
+              : nullptr;
+      if (lshp && lshp->len_eager) {
+        // Yuva dongu basinda KESIN dolduruldu: dal da cagri da gereksiz.
+        LLVMValueRef cl = LLVMBuildLoad2(backend->builder, backend->int_type,
+                                         lshp->len_slot, "len.cl");
+        return llvm_vm_val_int_val(backend, cl);
+      }
+      if (lshp) {
+        LLVMValueRef fnl =
+            LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+        LLVMBasicBlockRef lb_hit = LLVMAppendBasicBlock(fnl, "len.cached");
+        LLVMBasicBlockRef lb_call = LLVMAppendBasicBlock(fnl, "len.call");
+        LLVMBasicBlockRef lb_done = LLVMAppendBasicBlock(fnl, "len.done");
+        LLVMValueRef cl = LLVMBuildLoad2(backend->builder, backend->int_type,
+                                         lshp->len_slot, "len.cl");
+        LLVMBuildCondBr(
+            backend->builder,
+            LLVMBuildICmp(backend->builder, LLVMIntSGE, cl,
+                          LLVMConstInt(backend->int_type, 0, 0), "len.ok"),
+            lb_hit, lb_call);
+
+        LLVMPositionBuilderAtEnd(backend->builder, lb_hit);
+        LLVMValueRef hit_val = llvm_vm_val_int_val(backend, cl);
+        LLVMBasicBlockRef hit_end = LLVMGetInsertBlock(backend->builder);
+        LLVMBuildBr(backend->builder, lb_done);
+
+        LLVMPositionBuilderAtEnd(backend->builder, lb_call);
+        LLVMValueRef carg = codegen_expression(backend, larg);
+        LLVMValueRef cap = llvm_build_alloca_at_entry(
+            backend, backend->vm_value_type, "len_arg");
+        LLVMBuildStore(backend->builder, carg, cap);
+        LLVMValueRef cargs[] = {LLVMBuildBitCast(backend->builder, cap,
+                                                 backend->ptr_type, "len_ap")};
+        LLVMValueRef cres = LLVMBuildCall2(
+            backend->builder, LLVMGlobalGetValueType(backend->func_aot_len),
+            backend->func_aot_len, cargs, 1, "len_result");
+        LLVMValueRef call_val = llvm_vm_val_int_val(backend, cres);
+        LLVMBasicBlockRef call_end = LLVMGetInsertBlock(backend->builder);
+        LLVMBuildBr(backend->builder, lb_done);
+
+        LLVMPositionBuilderAtEnd(backend->builder, lb_done);
+        LLVMValueRef lphi = LLVMBuildPhi(backend->builder,
+                                         backend->vm_value_type, "len.res");
+        LLVMValueRef linc[] = {hit_val, call_val};
+        LLVMBasicBlockRef lbb[] = {hit_end, call_end};
+        LLVMAddIncoming(lphi, linc, lbb, 2);
+        return lphi;
+      }
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr =
           llvm_build_alloca_at_entry(backend, backend->vm_value_type, "len_arg");
@@ -4515,7 +5386,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // length(value) -> int (alias for len)
-    if (node->name && strcmp(node->name, "length") == 0 &&
+    if (node->name && strcmp(bi_name, "length") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       if (!arg) return llvm_vm_val_int(backend, 0);
@@ -4532,7 +5403,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // push(array, value) - pointer ABI
-    if (node->name && strcmp(node->name, "push") == 0 &&
+    if (node->name && strcmp(bi_name, "push") == 0 &&
         node->argument_count >= 2) {
       // Heap-promote escape path (Plan 04 v2): if arg[1] is a typed-struct
       // identifier OR a struct-returning call, lift the struct contents to
@@ -4576,7 +5447,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // pop(array) -> value
-    if (node->name && strcmp(node->name, "pop") == 0 &&
+    if (node->name && strcmp(bi_name, "pop") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arr = codegen_expression(backend, node->arguments[0]);
       if (!arr) return llvm_vm_val_int(backend, 0);
@@ -4585,54 +5456,54 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // input() -> String
-    if (node->name && strcmp(node->name, "env") == 0 &&
+    if (node->name && strcmp(bi_name, "env") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_env, args, 1, "env_res");
     }
-    if (node->name && strcmp(node->name, "arena_save") == 0) {
+    if (node->name && strcmp(bi_name, "arena_save") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_arena_save,
                                     nullptr, 0, "arena_save_res");
     }
-    if (node->name && strcmp(node->name, "now_iso8601") == 0) {
+    if (node->name && strcmp(bi_name, "now_iso8601") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_now_iso8601,
                                     nullptr, 0, "now_iso");
     }
-    if (node->name && strcmp(node->name, "format_iso8601") == 0 &&
+    if (node->name && strcmp(bi_name, "format_iso8601") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_format_iso8601,
                                     args, 1, "fmt_iso");
     }
-    if (node->name && strcmp(node->name, "parse_iso8601") == 0 &&
+    if (node->name && strcmp(bi_name, "parse_iso8601") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_parse_iso8601,
                                     args, 1, "parse_iso");
     }
     // regex builtins
-    if (node->name && strcmp(node->name, "regex_match") == 0 &&
+    if (node->name && strcmp(bi_name, "regex_match") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_regex_match,
                                     args, 2, "rxm");
     }
-    if (node->name && strcmp(node->name, "regex_search") == 0 &&
+    if (node->name && strcmp(bi_name, "regex_search") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_regex_search,
                                     args, 2, "rxs");
     }
-    if (node->name && strcmp(node->name, "regex_capture") == 0 &&
+    if (node->name && strcmp(bi_name, "regex_capture") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_regex_capture,
                                     args, 2, "rxc");
     }
-    if (node->name && strcmp(node->name, "regex_replace") == 0 &&
+    if (node->name && strcmp(bi_name, "regex_replace") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1]),
@@ -4640,55 +5511,55 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_regex_replace,
                                     args, 3, "rxr");
     }
-    if (node->name && strcmp(node->name, "weekday") == 0 &&
+    if (node->name && strcmp(bi_name, "weekday") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_weekday,
                                     args, 1, "wday");
     }
-    if (node->name && strcmp(node->name, "date_add_seconds") == 0 &&
+    if (node->name && strcmp(bi_name, "date_add_seconds") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_date_add_seconds,
                                     args, 2, "date_add");
     }
-    if (node->name && strcmp(node->name, "file_glob") == 0 &&
+    if (node->name && strcmp(bi_name, "file_glob") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_file_glob,
                                     args, 1, "glob");
     }
-    if (node->name && strcmp(node->name, "csv_parse") == 0 &&
+    if (node->name && strcmp(bi_name, "csv_parse") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_csv_parse,
                                     args, 1, "csv_p");
     }
-    if (node->name && strcmp(node->name, "csv_emit") == 0 &&
+    if (node->name && strcmp(bi_name, "csv_emit") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_csv_emit,
                                     args, 1, "csv_e");
     }
-    if (node->name && strcmp(node->name, "args") == 0 &&
+    if (node->name && strcmp(bi_name, "args") == 0 &&
         node->argument_count == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_args, nullptr, 0,
                                     "args");
     }
-    if (node->name && strcmp(node->name, "keys") == 0 &&
+    if (node->name && strcmp(bi_name, "keys") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_keys,
                                     args, 1, "keys");
     }
-    if (node->name && strcmp(node->name, "values") == 0 &&
+    if (node->name && strcmp(bi_name, "values") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_values,
                                     args, 1, "values");
     }
-    if (node->name && strcmp(node->name, "toBool") == 0 &&
+    if (node->name && strcmp(bi_name, "toBool") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_to_bool,
@@ -4698,7 +5569,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // also emits this opcode-sequence as the function-entry by-value
     // prologue for typed-struct params; surfacing it as a user-callable
     // builtin lets `.tpr` code request explicit copies too.
-    if (node->name && strcmp(node->name, "clone") == 0 &&
+    if (node->name && strcmp(bi_name, "clone") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_object_clone,
@@ -4707,14 +5578,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // persist(value) -> deep malloc'd copy that outlives the per-request
     // arena. Use it to keep handler-built data in a long-lived global:
     // `push(_users, persist(u))`.
-    if (node->name && strcmp(node->name, "persist") == 0 &&
+    if (node->name && strcmp(bi_name, "persist") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_persist,
                                     args, 1, "persist");
     }
     // http_request(method, url, body) — outbound HTTP/1.0 client.
-    if (node->name && strcmp(node->name, "http_request") == 0 &&
+    if (node->name && strcmp(bi_name, "http_request") == 0 &&
         node->argument_count >= 4) {
       // 4-arg form: method, url, body, headers (object).
       LLVMValueRef args[] = {
@@ -4725,7 +5596,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_http_request_h,
                                     args, 4, "http_req_h");
     }
-    if (node->name && strcmp(node->name, "http_request") == 0 &&
+    if (node->name && strcmp(bi_name, "http_request") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef args[] = {
           codegen_expression(backend, node->arguments[0]),
@@ -4736,7 +5607,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
     // http_request_async(method, url, body) — non-blocking client; returns a
     // promise resolved off a worker pool. `await` it inside an async func.
-    if (node->name && strcmp(node->name, "http_request_async") == 0 &&
+    if (node->name && strcmp(bi_name, "http_request_async") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef args[] = {
           codegen_expression(backend, node->arguments[0]),
@@ -4746,36 +5617,36 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     backend->func_aot_http_request_async, args,
                                     3, "http_req_async");
     }
-    if (node->name && strcmp(node->name, "arena_restore") == 0 &&
+    if (node->name && strcmp(bi_name, "arena_restore") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_arena_restore,
                                     args, 1, "arena_restore_res");
     }
-    if (node->name && strcmp(node->name, "arena_drop") == 0 &&
+    if (node->name && strcmp(bi_name, "arena_drop") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_arena_drop,
                                     args, 1, "arena_drop_res");
     }
-    if (node->name && strcmp(node->name, "input") == 0) {
+    if (node->name && strcmp(bi_name, "input") == 0) {
       if (!backend->func_aot_input)
         fprintf(stderr, "Fatal: func_aot_input is nullptr\n");
       return llvm_call_vmvalue_func(backend, backend->func_aot_input, nullptr, 0, "input_res");
     }
-    if (node->name && strcmp(node->name, "read_key") == 0) {
+    if (node->name && strcmp(bi_name, "read_key") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_read_key, nullptr, 0, "readkey_res");
     }
-    if (node->name && strcmp(node->name, "sys_lang") == 0) {
+    if (node->name && strcmp(bi_name, "sys_lang") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_sys_lang, nullptr, 0, "syslang_res");
     }
-    if (node->name && strcmp(node->name, "term_width") == 0) {
+    if (node->name && strcmp(bi_name, "term_width") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_term_width, nullptr, 0, "termw_res");
     }
-    if (node->name && strcmp(node->name, "term_height") == 0) {
+    if (node->name && strcmp(bi_name, "term_height") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_term_height, nullptr, 0, "termh_res");
     }
-    if (node->name && strcmp(node->name, "read_key_timeout") == 0 &&
+    if (node->name && strcmp(bi_name, "read_key_timeout") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
@@ -4787,7 +5658,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_read_key_timeout,
                                     args, 1, "rkt_res");
     }
-    if (node->name && strcmp(node->name, "display_width") == 0 &&
+    if (node->name && strcmp(bi_name, "display_width") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
@@ -4799,7 +5670,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_display_width,
                                     args, 1, "dw_res");
     }
-    if (node->name && strcmp(node->name, "fit_width") == 0 &&
+    if (node->name && strcmp(bi_name, "fit_width") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef sv = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef wv = codegen_expression(backend, node->arguments[1]);
@@ -4817,7 +5688,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_fit_width, args,
                                     2, "fw_res");
     }
-    if (node->name && strcmp(node->name, "ord") == 0 &&
+    if (node->name && strcmp(bi_name, "ord") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef sv = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef iv = codegen_expression(backend, node->arguments[1]);
@@ -4835,7 +5706,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_ord, args,
                                     2, "ord_res");
     }
-    if (node->name && strcmp(node->name, "chr") == 0 &&
+    if (node->name && strcmp(bi_name, "chr") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef cv = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef cslot = LLVMBuildAlloca(backend->builder,
@@ -4875,15 +5746,15 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                       (unsigned)tb->argc, "tm_res");
       }
     }
-    if (node->name && strcmp(node->name, "screen_open") == 0) {
+    if (node->name && strcmp(bi_name, "screen_open") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_screen_open,
                                     nullptr, 0, "scropen_res");
     }
-    if (node->name && strcmp(node->name, "screen_close") == 0) {
+    if (node->name && strcmp(bi_name, "screen_close") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_screen_close,
                                     nullptr, 0, "scrclose_res");
     }
-    if (node->name && strcmp(node->name, "screen_render") == 0 &&
+    if (node->name && strcmp(bi_name, "screen_render") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
@@ -4895,7 +5766,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_screen_render,
                                     args, 1, "scr_res");
     }
-    if (node->name && strcmp(node->name, "style") == 0 &&
+    if (node->name && strcmp(bi_name, "style") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef sv = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef pv = codegen_expression(backend, node->arguments[1]);
@@ -4915,7 +5786,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // trim(str) -> String
-    if (node->name && strcmp(node->name, "trim") == 0 &&
+    if (node->name && strcmp(bi_name, "trim") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr =
@@ -4928,7 +5799,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // replace(str, old, new) -> String
-    if (node->name && strcmp(node->name, "replace") == 0 &&
+    if (node->name && strcmp(bi_name, "replace") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef str = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef oldVal = codegen_expression(backend, node->arguments[1]);
@@ -4953,7 +5824,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // split(str, del) -> Array
-    if (node->name && strcmp(node->name, "split") == 0 &&
+    if (node->name && strcmp(bi_name, "split") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef str = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef del = codegen_expression(backend, node->arguments[1]);
@@ -4971,8 +5842,29 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_split, args, 2, "split_res");
     }
 
+    // array_fill(n, deger) / dizi_dolu(n, deger) -> n elemanli dizi
+    if (node->name && node->argument_count >= 2 &&
+        (strcmp(bi_name, "array_fill") == 0 ||
+         strcmp(bi_name, "dizi_dolu") == 0)) {
+      LLVMValueRef cnt = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef val = codegen_expression(backend, node->arguments[1]);
+      LLVMValueRef cnt_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "fill_n_ptr");
+      LLVMBuildStore(backend->builder, cnt, cnt_ptr);
+      LLVMValueRef val_ptr = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "fill_v_ptr");
+      LLVMBuildStore(backend->builder, val, val_ptr);
+      LLVMValueRef cnt_void = LLVMBuildBitCast(
+          backend->builder, cnt_ptr, backend->ptr_type, "fill_n_void");
+      LLVMValueRef val_void = LLVMBuildBitCast(
+          backend->builder, val_ptr, backend->ptr_type, "fill_v_void");
+      LLVMValueRef args[] = {cnt_void, val_void};
+      return llvm_call_vmvalue_func(backend, backend->func_aot_array_fill,
+                                    args, 2, "fill_res");
+    }
+
     // parse_multipart(body, content_type) -> {fields, files}
-    if (node->name && strcmp(node->name, "parse_multipart") == 0 &&
+    if (node->name && strcmp(bi_name, "parse_multipart") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef bodyv = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef ctv = codegen_expression(backend, node->arguments[1]);
@@ -4991,7 +5883,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     args, 2, "parse_multipart_res");
     }
 
-    if (strcmp(node->name, "read_file") == 0) {
+    if (strcmp(bi_name, "read_file") == 0) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "read_arg_ptr");
@@ -5001,7 +5893,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {arg_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_read_file, args, 1, "read_res");
     }
-    if (strcmp(node->name, "sys_run") == 0) {
+    if (strcmp(bi_name, "sys_run") == 0) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "sysrun_arg_ptr");
@@ -5011,7 +5903,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {arg_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_sys_run, args, 1, "sysrun_res");
     }
-    if (strcmp(node->name, "write_file") == 0) {
+    if (strcmp(bi_name, "write_file") == 0) {
       LLVMValueRef p = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef c = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef p_ptr = llvm_build_alloca_at_entry(
@@ -5027,7 +5919,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {p_void, c_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_write_file, args, 2, "write_res");
     }
-    if (strcmp(node->name, "append_file") == 0) {
+    if (strcmp(bi_name, "append_file") == 0) {
       LLVMValueRef p = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef c = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef p_ptr = llvm_build_alloca_at_entry(
@@ -5043,7 +5935,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {p_void, c_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_append_file, args, 2, "append_res");
     }
-    if (strcmp(node->name, "file_exists") == 0) {
+    if (strcmp(bi_name, "file_exists") == 0) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "exists_arg_ptr");
@@ -5053,7 +5945,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {arg_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_file_exists, args, 1, "exists_res");
     }
-    if (strcmp(node->name, "sha256") == 0) {
+    if (strcmp(bi_name, "sha256") == 0) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "sha256_arg_ptr");
@@ -5063,7 +5955,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {arg_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_sha256, args, 1, "sha256_res");
     }
-    if (strcmp(node->name, "gzip_compress") == 0) {
+    if (strcmp(bi_name, "gzip_compress") == 0) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "gzip_arg_ptr");
@@ -5074,7 +5966,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_gzip_compress, args, 1, "gzip_res");
     }
 
-    if (strcmp(node->name, "password_hash") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "password_hash") == 0 && node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "pwhash_arg_ptr");
@@ -5085,7 +5977,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_password_hash, args, 1, "pwhash_res");
     }
 
-    if (strcmp(node->name, "secure_token") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "secure_token") == 0 && node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "sectok_arg_ptr");
@@ -5096,7 +5988,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_secure_token, args, 1, "sectok_res");
     }
 
-    if (strcmp(node->name, "password_verify") == 0 && node->argument_count >= 2) {
+    if (strcmp(bi_name, "password_verify") == 0 && node->argument_count >= 2) {
       LLVMValueRef pw = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef stored = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef pw_ptr = llvm_build_alloca_at_entry(
@@ -5113,7 +6005,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_password_verify, args, 2, "pwverify_res");
     }
 
-    if (strcmp(node->name, "hmac_sha256") == 0 && node->argument_count >= 2) {
+    if (strcmp(bi_name, "hmac_sha256") == 0 && node->argument_count >= 2) {
       LLVMValueRef key = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef msg = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef key_ptr = llvm_build_alloca_at_entry(
@@ -5130,7 +6022,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_hmac_sha256, args, 2, "hmac_res");
     }
 
-    if (strcmp(node->name, "db_open") == 0) {
+    if (strcmp(bi_name, "db_open") == 0) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "db_open_arg_ptr");
@@ -5141,7 +6033,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_open, args, 1, "db_open_res");
     }
 
-    if (strcmp(node->name, "db_close") == 0) {
+    if (strcmp(bi_name, "db_close") == 0) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "db_close_arg_ptr");
@@ -5155,7 +6047,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_vm_val_int(backend, 0);
     }
 
-    if (strcmp(node->name, "db_execute") == 0) {
+    if (strcmp(bi_name, "db_execute") == 0) {
       LLVMValueRef db = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef sql = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef db_ptr = llvm_build_alloca_at_entry(
@@ -5184,7 +6076,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_execute, args, 2, "db_exec_res");
     }
 
-    if (strcmp(node->name, "db_query") == 0) {
+    if (strcmp(bi_name, "db_query") == 0) {
       LLVMValueRef db = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef sql = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef db_ptr = llvm_build_alloca_at_entry(
@@ -5214,21 +6106,21 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // Socket Functions
-    if (strcmp(node->name, "socket_server") == 0) {
+    if (strcmp(bi_name, "socket_server") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_socket_server, args, 2, "sock_fd");
     }
-    if (strcmp(node->name, "socket_client") == 0) {
+    if (strcmp(bi_name, "socket_client") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_socket_client, args, 2, "sock_fd");
     }
-    if (strcmp(node->name, "socket_accept") == 0) {
+    if (strcmp(bi_name, "socket_accept") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_socket_accept, args, 1, "client_fd");
     }
-    if (strcmp(node->name, "socket_peer_ip") == 0 &&
+    if (strcmp(bi_name, "socket_peer_ip") == 0 &&
         node->argument_count >= 1) {
       // Declared lazily (no cached backend field): (VMValue) -> VMValue,
       // same shape as socket_close. Resolves the remote IP of an accepted
@@ -5243,29 +6135,29 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, fn, args, 1, "peer_ip");
     }
-    if (strcmp(node->name, "socket_send") == 0) {
+    if (strcmp(bi_name, "socket_send") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_socket_send, args, 2, "bytes_sent");
     }
-    if (strcmp(node->name, "socket_receive") == 0) {
+    if (strcmp(bi_name, "socket_receive") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_socket_receive, args, 2, "recv_data");
     }
-    if (strcmp(node->name, "socket_close") == 0) {
+    if (strcmp(bi_name, "socket_close") == 0) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_socket_close,
                                     args, 1, "sock_close_res");
     }
-    if (strcmp(node->name, "socket_set_nonblocking") == 0 &&
+    if (strcmp(bi_name, "socket_set_nonblocking") == 0 &&
         node->argument_count == 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(
           backend, backend->func_aot_socket_set_nonblocking, args, 1,
           "sock_nonblock_res");
     }
-    if (strcmp(node->name, "socket_poll") == 0 &&
+    if (strcmp(bi_name, "socket_poll") == 0 &&
         node->argument_count == 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
@@ -5274,41 +6166,41 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
     // TLS server primitives. Same dispatch shape as socket_*; the
     // builtin names match what `lib/wings_tls.tpr` calls.
-    if (strcmp(node->name, "tls_init") == 0 &&
+    if (strcmp(bi_name, "tls_init") == 0 &&
         node->argument_count == 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_tls_init,
                                     args, 2, "tls_ctx");
     }
-    if (strcmp(node->name, "tls_accept") == 0 &&
+    if (strcmp(bi_name, "tls_accept") == 0 &&
         node->argument_count == 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_tls_accept,
                                     args, 2, "tls_ssl");
     }
-    if (strcmp(node->name, "tls_recv") == 0 &&
+    if (strcmp(bi_name, "tls_recv") == 0 &&
         node->argument_count == 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_tls_recv,
                                     args, 2, "tls_recv_data");
     }
-    if (strcmp(node->name, "tls_send") == 0 &&
+    if (strcmp(bi_name, "tls_send") == 0 &&
         node->argument_count == 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_tls_send,
                                     args, 2, "tls_send_n");
     }
-    if (strcmp(node->name, "tls_close") == 0 &&
+    if (strcmp(bi_name, "tls_close") == 0 &&
         node->argument_count == 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_tls_close,
                                     args, 1, "tls_close_res");
     }
-    if (strcmp(node->name, "tls_ctx_free") == 0 &&
+    if (strcmp(bi_name, "tls_ctx_free") == 0 &&
         node->argument_count == 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_tls_ctx_free,
@@ -5326,7 +6218,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // prefixed). Without the fallback, `thread_create(my_worker, x)`
     // silently passed a NULL function pointer and the worker thread
     // would segfault on first dispatch.
-    if (strcmp(node->name, "thread_create") == 0 && node->argument_count >= 2) {
+    if (strcmp(bi_name, "thread_create") == 0 && node->argument_count >= 2) {
       LLVMValueRef func_ptr = nullptr;
       if (node->arguments[0]->type == AST_IDENTIFIER) {
         const char *raw = node->arguments[0]->name;
@@ -5345,36 +6237,36 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // thread_join(thread_id) — VMValue-returning since the ABI fix.
-    if (strcmp(node->name, "thread_join") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "thread_join") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_thread_join,
                                     args, 1, "thread_join_res");
     }
 
     // thread_detach(thread_id) — same ABI as thread_join.
-    if (strcmp(node->name, "thread_detach") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "thread_detach") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_thread_detach,
                                     args, 1, "thread_detach_res");
     }
 
     // mutex_create() -> mutex_ptr
-    if (strcmp(node->name, "mutex_create") == 0) {
+    if (strcmp(bi_name, "mutex_create") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_mutex_create, nullptr, 0, "mutex_ptr");
     }
 
     // mutex_lock / unlock / destroy — VMValue-returning since the ABI fix.
-    if (strcmp(node->name, "mutex_lock") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "mutex_lock") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_mutex_lock,
                                     args, 1, "mutex_lock_res");
     }
-    if (strcmp(node->name, "mutex_unlock") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "mutex_unlock") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_mutex_unlock,
                                     args, 1, "mutex_unlock_res");
     }
-    if (strcmp(node->name, "mutex_destroy") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "mutex_destroy") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_mutex_destroy,
                                     args, 1, "mutex_destroy_res");
@@ -5382,7 +6274,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     // ====== HTTP Functions ======
     // http_parse_request(raw) -> object
-    if (strcmp(node->name, "http_parse_request") == 0 &&
+    if (strcmp(bi_name, "http_parse_request") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_http_parse_request, args, 1, "parsed_req");
@@ -5392,7 +6284,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // 3-arg: status + ct + body. 4-arg adds custom headers map.
     // 5-arg further passes a keep-alive flag (1 = "keep-alive", 0 = "close")
     // — required by the keep-alive request loop in lib/wings.tpr / router.tpr.
-    if (strcmp(node->name, "http_create_response") == 0 &&
+    if (strcmp(bi_name, "http_create_response") == 0 &&
         node->argument_count >= 5) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1]),
@@ -5403,7 +6295,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     backend->func_aot_http_create_response_keepalive,
                                     args, 5, "http_resp_keep");
     }
-    if (strcmp(node->name, "http_create_response") == 0 &&
+    if (strcmp(bi_name, "http_create_response") == 0 &&
         node->argument_count >= 4) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1]),
@@ -5411,7 +6303,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                              codegen_expression(backend, node->arguments[3])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_http_create_response_full, args, 4, "http_resp_full");
     }
-    if (strcmp(node->name, "http_create_response") == 0 &&
+    if (strcmp(bi_name, "http_create_response") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1]),
@@ -5420,7 +6312,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // http_should_keepalive(parsed_request) -> int (0/1)
-    if (strcmp(node->name, "http_should_keepalive") == 0 &&
+    if (strcmp(bi_name, "http_should_keepalive") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend,
@@ -5429,7 +6321,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // http_recv_request(client_fd, max_bytes) -> str
-    if (strcmp(node->name, "http_recv_request") == 0 &&
+    if (strcmp(bi_name, "http_recv_request") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
@@ -5439,7 +6331,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // http_status_text(status) -> string
-    if (strcmp(node->name, "http_status_text") == 0 &&
+    if (strcmp(bi_name, "http_status_text") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_http_status_text, args, 1, "status_text");
@@ -5449,7 +6341,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // Fused replacement for the Tulpar-side _wings_build_response —
     // skips three function-call hops per request and folds the envelope
     // check + toJson + framing into one native call.
-    if (strcmp(node->name, "wings_build_response") == 0 &&
+    if (strcmp(bi_name, "wings_build_response") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1]),
@@ -5463,7 +6355,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // Native replacement for the Tulpar `_find_route_with_params`
     // serve-path lookup. Saves N json[get]s per route iteration on
     // every request.
-    if (strcmp(node->name, "wings_find_route") == 0 &&
+    if (strcmp(bi_name, "wings_find_route") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1]),
@@ -5474,7 +6366,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // string_pin(s) -> str (permanent copy outside the per-request arena)
-    if (strcmp(node->name, "string_pin") == 0 &&
+    if (strcmp(bi_name, "string_pin") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_string_pin,
@@ -5483,29 +6375,29 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     // sha1(s) / sha1_hex(s) / base64_encode(s) / base64_decode(s) /
     // wings_ws_accept_key(s) — single-arg VMValue->VMValue helpers.
-    if (strcmp(node->name, "sha1") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "sha1") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_sha1,
                                     args, 1, "sha1");
     }
-    if (strcmp(node->name, "sha1_hex") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "sha1_hex") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_sha1_hex,
                                     args, 1, "sha1_hex");
     }
-    if (strcmp(node->name, "base64_encode") == 0 &&
+    if (strcmp(bi_name, "base64_encode") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_base64_encode,
                                     args, 1, "base64_encode");
     }
-    if (strcmp(node->name, "base64_decode") == 0 &&
+    if (strcmp(bi_name, "base64_decode") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_base64_decode,
                                     args, 1, "base64_decode");
     }
-    if (strcmp(node->name, "wings_ws_accept_key") == 0 &&
+    if (strcmp(bi_name, "wings_ws_accept_key") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend,
@@ -5513,7 +6405,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     args, 1, "ws_accept_key");
     }
     // wings_ws_send_frame(fd, opcode, payload) -> int
-    if (strcmp(node->name, "wings_ws_send_frame") == 0 &&
+    if (strcmp(bi_name, "wings_ws_send_frame") == 0 &&
         node->argument_count >= 3) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1]),
@@ -5523,7 +6415,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     args, 3, "ws_send_frame");
     }
     // wings_ws_recv_frame(fd) -> {ok, opcode, fin, payload} | {ok=0, error}
-    if (strcmp(node->name, "wings_ws_recv_frame") == 0 &&
+    if (strcmp(bi_name, "wings_ws_recv_frame") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend,
@@ -5531,7 +6423,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     args, 1, "ws_recv_frame");
     }
     // wings_set_current_fd(fd) -> 0 (sentinel)
-    if (strcmp(node->name, "wings_set_current_fd") == 0 &&
+    if (strcmp(bi_name, "wings_set_current_fd") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend,
@@ -5539,7 +6431,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                     args, 1, "wings_set_fd");
     }
     // wings_current_fd() -> int
-    if (strcmp(node->name, "wings_current_fd") == 0 &&
+    if (strcmp(bi_name, "wings_current_fd") == 0 &&
         node->argument_count == 0) {
       return llvm_call_vmvalue_func(backend,
                                     backend->func_aot_wings_current_fd,
@@ -5547,13 +6439,13 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // cpu_count() -> int (logical CPUs).
-    if (strcmp(node->name, "cpu_count") == 0 && node->argument_count == 0) {
+    if (strcmp(bi_name, "cpu_count") == 0 && node->argument_count == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_cpu_count,
                                     nullptr, 0, "cpu_count");
     }
 
     // path_match(pattern, path) -> {matched, params}
-    if (strcmp(node->name, "path_match") == 0 &&
+    if (strcmp(bi_name, "path_match") == 0 &&
         node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
@@ -5561,14 +6453,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // parse_query(str) -> object
-    if (strcmp(node->name, "parse_query") == 0 &&
+    if (strcmp(bi_name, "parse_query") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_parse_query, args, 1, "parse_query");
     }
 
     // parse_cookies(str) -> object
-    if (strcmp(node->name, "parse_cookies") == 0 &&
+    if (strcmp(bi_name, "parse_cookies") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_parse_cookies, args, 1, "parse_cookies");
@@ -5578,7 +6470,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // Extract the i64 from VMValue, truncate to i32, call libc-backed
     // aot_exit_i32. Placeholder VMValue return keeps surrounding IR
     // well-typed; control never returns past the call.
-    if (strcmp(node->name, "exit") == 0 &&
+    if (strcmp(bi_name, "exit") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef code_vm = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef code_i64 = llvm_extract_vm_val_int(backend, code_vm);
@@ -5593,7 +6485,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
 // ====== Math Functions - Single Param ======
 #define MATH1_FUNC(func_name, field)                                           \
-  if (strcmp(node->name, func_name) == 0 && node->argument_count >= 1) {       \
+  if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 1) {       \
     LLVMValueRef v = codegen_expression(backend, node->arguments[0]);          \
     LLVMValueRef v_ptr = LLVMBuildAlloca(                                      \
         backend->builder, backend->vm_value_type, func_name "_arg_ptr");       \
@@ -5606,7 +6498,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   }
 
     // abs(v) -> passed by pointer with result pointer
-    if (strcmp(node->name, "abs") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "abs") == 0 && node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
 
       LLVMValueRef arg_temp =
@@ -5649,7 +6541,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
 // ====== Math Functions - Two Params ======
 #define MATH2_FUNC(func_name, field)                                           \
-  if (strcmp(node->name, func_name) == 0 && node->argument_count >= 2) {       \
+  if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 2) {       \
     LLVMValueRef v1 = codegen_expression(backend, node->arguments[0]);         \
     LLVMValueRef v2 = codegen_expression(backend, node->arguments[1]);         \
     LLVMValueRef v1_ptr = LLVMBuildAlloca(                                     \
@@ -5679,13 +6571,13 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 #undef MATH2_FUNC
 
     // random() -> float (0.0 - 1.0)
-    if (strcmp(node->name, "random") == 0) {
+    if (strcmp(bi_name, "random") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_math_random, nullptr, 0, "random_res");
     }
 
 // ====== String Functions - Single Param ======
 #define STR1_FUNC(func_name, field)                                            \
-  if (strcmp(node->name, func_name) == 0 && node->argument_count >= 1) {       \
+  if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 1) {       \
     LLVMValueRef v = codegen_expression(backend, node->arguments[0]);          \
     LLVMValueRef v_ptr = LLVMBuildAlloca(                                      \
         backend->builder, backend->vm_value_type, func_name "_arg_ptr");       \
@@ -5715,7 +6607,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
 // ====== String Functions - Two Params ======
 #define STR2_FUNC(func_name, field)                                            \
-  if (strcmp(node->name, func_name) == 0 && node->argument_count >= 2) {       \
+  if (strcmp(bi_name, func_name) == 0 && node->argument_count >= 2) {       \
     LLVMValueRef v1 = codegen_expression(backend, node->arguments[0]);         \
     LLVMValueRef v2 = codegen_expression(backend, node->arguments[1]);         \
     LLVMValueRef v1_ptr = LLVMBuildAlloca(                                     \
@@ -5744,7 +6636,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 #undef STR2_FUNC
 
     // substring(str, start, end) -> string
-    if (strcmp(node->name, "substring") == 0 && node->argument_count >= 3) {
+    if (strcmp(bi_name, "substring") == 0 && node->argument_count >= 3) {
       LLVMValueRef v0 = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef v1 = codegen_expression(backend, node->arguments[1]);
       LLVMValueRef v2 = codegen_expression(backend, node->arguments[2]);
@@ -5769,17 +6661,17 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     // ====== Time Functions ======
     // timestamp() -> int (unix timestamp)
-    if (strcmp(node->name, "timestamp") == 0) {
+    if (strcmp(bi_name, "timestamp") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_timestamp, nullptr, 0, "timestamp_res");
     }
 
     // time_ms() -> int (milliseconds)
-    if (strcmp(node->name, "time_ms") == 0) {
+    if (strcmp(bi_name, "time_ms") == 0) {
       return llvm_call_vmvalue_func(backend, backend->func_aot_time_ms, nullptr, 0, "time_ms_res");
     }
 
     // sleep(ms)
-    if (strcmp(node->name, "sleep") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "sleep") == 0 && node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef arg_ptr = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "sleep_arg_ptr");
@@ -5797,7 +6689,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // sleep(), this does NOT block: it registers a timer with the event loop,
     // so other coroutines run while it pends. `await sleep_async(ms)` is the
     // idiomatic non-blocking delay.
-    if (strcmp(node->name, "sleep_async") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "sleep_async") == 0 && node->argument_count >= 1) {
       LLVMValueRef arg = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef ms_i64 =
           LLVMBuildExtractValue(backend->builder, arg, 2, "sleep_async_ms");
@@ -5812,7 +6704,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // gather(p1, p2, ...) -> promise of [v1, v2, ...]. Awaits every argument
     // concurrently (each async call already queued its own task) and fulfils
     // with an array of their results. Idiomatic: `let r = await gather(a, b);`
-    if (strcmp(node->name, "gather") == 0) {
+    if (strcmp(bi_name, "gather") == 0) {
       LLVMValueRef args_ptr_void;
       if (node->argument_count > 0) {
         LLVMTypeRef arr_type =
@@ -5843,14 +6735,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     // ====== JSON Functions ======
     // fromJson(str) -> object/array
-    if (strcmp(node->name, "fromJson") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "fromJson") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_from_json, args, 1, "from_json_res");
     }
 
     // ====== Input Functions ======
     // input_int(prompt) -> int
-    if (strcmp(node->name, "input_int") == 0) {
+    if (strcmp(bi_name, "input_int") == 0) {
       LLVMValueRef prompt =
           node->argument_count >= 1
               ? codegen_expression(backend, node->arguments[0])
@@ -5860,7 +6752,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // input_float(prompt) -> float
-    if (strcmp(node->name, "input_float") == 0) {
+    if (strcmp(bi_name, "input_float") == 0) {
       LLVMValueRef prompt =
           node->argument_count >= 1
               ? codegen_expression(backend, node->arguments[0])
@@ -5871,20 +6763,20 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     // ====== Range Function ======
     // range(end) -> array [0, 1, ..., end-1]
-    if (strcmp(node->name, "range") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "range") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_range, args, 1, "range_res");
     }
 
     // ====== SQLite Database Functions ======
     // db_open(path) -> db_handle
-    if (strcmp(node->name, "db_open") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "db_open") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_open, args, 1, "db_handle");
     }
 
     // db_close(db)
-    if (strcmp(node->name, "db_close") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "db_close") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       LLVMBuildCall2(backend->builder,
                      LLVMGlobalGetValueType(backend->func_aot_db_close),
@@ -5893,28 +6785,28 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // db_execute(db, sql) -> bool
-    if (strcmp(node->name, "db_execute") == 0 && node->argument_count >= 2) {
+    if (strcmp(bi_name, "db_execute") == 0 && node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_execute, args, 2, "db_exec_res");
     }
 
     // db_query(db, sql) -> array of objects
-    if (strcmp(node->name, "db_query") == 0 && node->argument_count >= 2) {
+    if (strcmp(bi_name, "db_query") == 0 && node->argument_count >= 2) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0]),
                              codegen_expression(backend, node->arguments[1])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_query, args, 2, "db_query_res");
     }
 
     // db_last_insert_id(db) -> int64
-    if (strcmp(node->name, "db_last_insert_id") == 0 &&
+    if (strcmp(bi_name, "db_last_insert_id") == 0 &&
         node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_last_insert_id, args, 1, "db_last_id");
     }
 
     // db_error(db) -> string
-    if (strcmp(node->name, "db_error") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "db_error") == 0 && node->argument_count >= 1) {
       LLVMValueRef args[] = {codegen_expression(backend, node->arguments[0])};
       return llvm_call_vmvalue_func(backend, backend->func_aot_db_error, args, 1, "db_err");
     }
@@ -5940,7 +6832,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     // ====== StringBuilder Functions ======
     // StringBuilder(capacity) -> ptr (stored as int in VMValue)
-    if (strcmp(node->name, "StringBuilder") == 0) {
+    if (strcmp(bi_name, "StringBuilder") == 0) {
       int capacity = 1024; // default
       if (node->argument_count >= 1) {
         LLVMValueRef cap_val = codegen_expression(backend, node->arguments[0]);
@@ -5970,15 +6862,42 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // sb_append(sb, value) -> void
-    if (strcmp(node->name, "sb_append") == 0 && node->argument_count >= 2) {
+    if (strcmp(bi_name, "sb_append") == 0 && node->argument_count >= 2) {
       LLVMValueRef sb_val = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef val = codegen_expression(backend, node->arguments[1]);
       // Extract pointer from VMValue (stored as int64)
       LLVMValueRef ptr_int = llvm_extract_vm_val_int(backend, sb_val);
       LLVMValueRef sb_ptr = LLVMBuildIntToPtr(backend->builder, ptr_int,
                                               backend->ptr_type, "sb_ptr");
-      // Spill the VMValue to a stack slot and pass its pointer (aot_*_ptr
-      // ABI) — see the declaration comment for why by-value corrupts.
+      // TAMSAYI icin kutulamasiz hizli yol. Genel yol VMValue'yu yigina
+      // yazip pointer geciriyor; olculdu, hesaplanmis bir int'te o yazma
+      // cagri basina ~11 ns tutuyordu (sabit int'te LLVM onu dongu disina
+      // tasidigi icin gorunmuyordu). Etiket INT ise dogrudan i64 geciyoruz.
+      // Oteki her sey eski yola dusuyor — anlam birebir korunuyor.
+      LLVMValueRef fnp =
+          LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+      LLVMBasicBlockRef ab_fast = LLVMAppendBasicBlock(fnp, "sbap.int");
+      LLVMBasicBlockRef ab_slow = LLVMAppendBasicBlock(fnp, "sbap.gen");
+      LLVMBasicBlockRef ab_done = LLVMAppendBasicBlock(fnp, "sbap.done");
+      LLVMValueRef vtag =
+          LLVMBuildExtractValue(backend->builder, val, 0, "sbap.tag");
+      LLVMBuildCondBr(
+          backend->builder,
+          LLVMBuildICmp(backend->builder, LLVMIntEQ, vtag,
+                        LLVMConstInt(backend->int32_type, 0 /* VM_VAL_INT */, 0),
+                        "sbap.isint"),
+          ab_fast, ab_slow);
+
+      LLVMPositionBuilderAtEnd(backend->builder, ab_fast);
+      LLVMValueRef raw_i = llvm_extract_vm_val_int(backend, val);
+      LLVMValueRef fargs[] = {sb_ptr, raw_i};
+      LLVMBuildCall2(backend->builder,
+                     LLVMGlobalGetValueType(
+                         backend->func_aot_stringbuilder_append_int),
+                     backend->func_aot_stringbuilder_append_int, fargs, 2, "");
+      LLVMBuildBr(backend->builder, ab_done);
+
+      LLVMPositionBuilderAtEnd(backend->builder, ab_slow);
       LLVMValueRef val_slot = llvm_build_alloca_at_entry(
           backend, backend->vm_value_type, "sb_val_slot");
       LLVMBuildStore(backend->builder, val, val_slot);
@@ -5988,11 +6907,14 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                          backend->func_aot_stringbuilder_append_vmvalue),
                      backend->func_aot_stringbuilder_append_vmvalue, args, 2,
                      "");
+      LLVMBuildBr(backend->builder, ab_done);
+
+      LLVMPositionBuilderAtEnd(backend->builder, ab_done);
       return llvm_vm_val_int(backend, 0);
     }
 
     // sb_tostring(sb) -> VMValue string
-    if (strcmp(node->name, "sb_tostring") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "sb_tostring") == 0 && node->argument_count >= 1) {
       LLVMValueRef sb_val = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef ptr_int = llvm_extract_vm_val_int(backend, sb_val);
       LLVMValueRef sb_ptr = LLVMBuildIntToPtr(backend->builder, ptr_int,
@@ -6002,7 +6924,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     // sb_free(sb) -> void
-    if (strcmp(node->name, "sb_free") == 0 && node->argument_count >= 1) {
+    if (strcmp(bi_name, "sb_free") == 0 && node->argument_count >= 1) {
       LLVMValueRef sb_val = codegen_expression(backend, node->arguments[0]);
       LLVMValueRef ptr_int = llvm_extract_vm_val_int(backend, sb_val);
       LLVMValueRef sb_ptr = LLVMBuildIntToPtr(backend->builder, ptr_int,
@@ -6037,7 +6959,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       // name exists AND no user function `t_<name>` shadows it (builtins
       // were already dispatched above). A non-closure global falls through
       // to aot_call_closure's null/invalid guard at runtime.
-      LLVMValueRef g = LLVMGetNamedGlobal(backend->module, node->name);
+      LLVMValueRef g = LLVMGetNamedGlobal(backend->module, gsym(node->name).c_str());
       bool has_user_func = false;
       for (int i = 0; i < backend->function_count; i++) {
         if (backend->functions[i].name &&
@@ -7037,6 +7959,15 @@ static void emit_try_pops(LLVMBackend *backend, int count) {
   }
 }
 
+// `for` dongusunun cond/body/incr ucusunu uretir ve `after`a baglar.
+// Iki kez cagriliyor: SURUMLEME'de once bekcisiz (hizli), sonra bekcili
+// (genel) govde. Dongu degiskeni init'te BIR KEZ bildirildigi ve bellekte
+// durdugu icin iki surum ayni yuvayi kullaniyor — hangisi kosarsa kossun
+// disaridan gorunen durum ayni.
+static void codegen_for_body(LLVMBackend *backend, ASTNode_C *node,
+                             LLVMBasicBlockRef after);
+
+
 LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
   if (!node)
     return nullptr;
@@ -7085,7 +8016,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // same name is a fresh local that must shadow, not overwrite, the global.
     LLVMValueRef existing_global =
         at_top_level_scope(backend)
-            ? LLVMGetNamedGlobal(backend->module, node->name)
+            ? LLVMGetNamedGlobal(backend->module, gsym(node->name).c_str())
             : nullptr;
     if (existing_global &&
         LLVMGlobalGetValueType(existing_global) == backend->int_type) {
@@ -7457,6 +8388,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         if (var_ptr) {
           target = LLVMBuildLoad2(backend->builder, backend->vm_value_type,
                                   var_ptr, access->name);
+          llvm_tbaa_tag(backend, target, 0);
         }
       } else if (access->left) {
         // Nested access: evaluate left expression
@@ -7477,8 +8409,159 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         // checking
         // ============================================================
 
-        // Use generic vm_set_element_ptr for all element set. Allocas hoisted
-        // to entry block to avoid stack growth in hot loops.
+        // DIZI YAZMASI: KORUMALI SATIR ICI HIZLI YOL — okuma tarafinin ikizi.
+        //
+        // Elek kiyaslamasinin agirligi YAZMADA (~11.9M isaretleme); yalnizca
+        // okumayi satir ici almak %6 kazandirmisti, asil maliyet buradaydi.
+        //
+        // Hizli yol UC kosula birden bagli: hedef OBJ_ARRAY, indeks tamsayi ve
+        // sinir icinde, VE yazilan deger SKALAR. Ucuncusu bilerek: nesne
+        // degerlerde yazma bariyeri (wb_persist_escape) gerekiyor — gecici bir
+        // nesne kalici bir diziye kacarsa derin kopyalanmali. Skalarlar
+        // kacamaz, o yuzden onlarda bariyer atlanabiliyor. Nesne yazmalari
+        // ESKI CAGRIYA dusuyor, yani bariyer semantigi birebir korunuyor.
+        LLVMValueRef fn2 =
+            LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+        LLVMBasicBlockRef sb_chk  = LLVMAppendBasicBlock(fn2, "set.chk");
+        LLVMBasicBlockRef sb_fast = LLVMAppendBasicBlock(fn2, "set.fast");
+        LLVMBasicBlockRef sb_slow = LLVMAppendBasicBlock(fn2, "set.slow");
+        LLVMBasicBlockRef sb_done = LLVMAppendBasicBlock(fn2, "set.done");
+        LLVMTypeRef si32 = backend->int32_type;
+
+        // Onbellekli yazma: sekil dongu basinda dogrulandi; burada yalniz
+        // sinir denetimi + degerin int olmasi kaldi.
+        LLVMBackend::ArrShapeEntry *s_shp =
+            shape_lookup(backend, array_base_name(access));
+        if (s_shp) {
+          LLVMBasicBlockRef sb_cached = LLVMAppendBasicBlock(fn2, "set.cached");
+          LLVMBasicBlockRef sb_gen = LLVMAppendBasicBlock(fn2, "set.generic");
+          LLVMValueRef sccnt = LLVMBuildLoad2(backend->builder, backend->int_type,
+                                              s_shp->count_slot, "set.ccnt");
+          LLVMValueRef scid = LLVMBuildLoad2(backend->builder, backend->ptr_type,
+                                             s_shp->idata_slot, "set.cid");
+          LLVMValueRef sit = LLVMBuildExtractValue(backend->builder, index, 0,
+                                                   "set.cit");
+          LLVMValueRef svt = LLVMBuildExtractValue(backend->builder, val, 0,
+                                                   "set.cvt");
+          LLVMValueRef sii = LLVMBuildICmp(backend->builder, LLVMIntEQ, sit,
+                                           LLVMConstInt(si32, 0, 0), "set.ciint");
+          LLVMValueRef svi = LLVMBuildICmp(backend->builder, LLVMIntEQ, svt,
+                                           LLVMConstInt(si32, 0, 0), "set.cvint");
+          LLVMValueRef six = llvm_extract_vm_val_int(backend, index);
+          LLVMValueRef sir = LLVMBuildICmp(backend->builder, LLVMIntULT, six,
+                                           sccnt, "set.cinr");
+          LLVMValueRef sok = LLVMBuildAnd(
+              backend->builder,
+              LLVMBuildAnd(backend->builder, sii, svi, "set.cok1"), sir,
+              "set.cok");
+          LLVMBuildCondBr(backend->builder, sok, sb_cached, sb_gen);
+          LLVMPositionBuilderAtEnd(backend->builder, sb_cached);
+          LLVMValueRef scep = LLVMBuildGEP2(backend->builder, backend->int_type,
+                                            scid, &six, 1, "set.cep");
+          LLVMValueRef scst = LLVMBuildStore(
+              backend->builder, llvm_extract_vm_val_int(backend, val), scep);
+          llvm_tbaa_tag(backend, scst, 1);
+          LLVMBuildBr(backend->builder, sb_done);
+          LLVMPositionBuilderAtEnd(backend->builder, sb_gen);
+        }
+        LLVMValueRef s_ltag =
+            LLVMBuildExtractValue(backend->builder, target, 0, "set.ltag");
+        LLVMValueRef s_itag =
+            LLVMBuildExtractValue(backend->builder, index, 0, "set.itag");
+        LLVMValueRef s_vtag =
+            LLVMBuildExtractValue(backend->builder, val, 0, "set.vtag");
+        LLVMValueRef s_isobj = LLVMBuildICmp(
+            backend->builder, LLVMIntEQ, s_ltag,
+            LLVMConstInt(si32, 4 /* VM_VAL_OBJ */, 0), "set.isobj");
+        LLVMValueRef s_isint = LLVMBuildICmp(
+            backend->builder, LLVMIntEQ, s_itag,
+            LLVMConstInt(si32, 0 /* VM_VAL_INT */, 0), "set.isint");
+        // Deger NESNE DEGILSE bariyer gerekmiyor.
+        LLVMValueRef s_scalar = LLVMBuildICmp(
+            backend->builder, LLVMIntNE, s_vtag,
+            LLVMConstInt(si32, 4 /* VM_VAL_OBJ */, 0), "set.scalar");
+        LLVMValueRef s_ok1 = LLVMBuildAnd(
+            backend->builder,
+            LLVMBuildAnd(backend->builder, s_isobj, s_isint, "set.ok1a"),
+            s_scalar, "set.ok1");
+        LLVMBuildCondBr(backend->builder, s_ok1, sb_chk, sb_slow);
+
+        LLVMPositionBuilderAtEnd(backend->builder, sb_chk);
+        LLVMValueRef s_objp = llvm_extract_vm_val_ptr(backend, target);
+        LLVMValueRef s_ot_ptr = LLVMBuildStructGEP2(
+            backend->builder, backend->obj_array_type, s_objp, 0,
+            "set.otype.ptr");
+        LLVMValueRef s_otype =
+            LLVMBuildLoad2(backend->builder, si32, s_ot_ptr, "set.otype");
+        llvm_tbaa_tag(backend, s_otype, 0);
+        LLVMValueRef s_isarr = LLVMBuildICmp(
+            backend->builder, LLVMIntEQ, s_otype,
+            LLVMConstInt(si32, 1 /* OBJ_ARRAY */, 0), "set.isarr");
+        LLVMValueRef s_idx = llvm_extract_vm_val_int(backend, index);
+        LLVMValueRef s_cnt_ptr = LLVMBuildStructGEP2(
+            backend->builder, backend->obj_array_type, s_objp, 2,
+            "set.cnt.ptr");
+        LLVMValueRef s_cnt =
+            LLVMBuildLoad2(backend->builder, si32, s_cnt_ptr, "set.cnt");
+        llvm_tbaa_tag(backend, s_cnt, 0);
+        LLVMValueRef s_cnt64 = LLVMBuildSExt(backend->builder, s_cnt,
+                                             backend->int_type, "set.cnt64");
+        LLVMValueRef s_inr = LLVMBuildICmp(backend->builder, LLVMIntULT, s_idx,
+                                           s_cnt64, "set.inrange");
+        LLVMBuildCondBr(
+            backend->builder,
+            LLVMBuildAnd(backend->builder, s_isarr, s_inr, "set.ok2"),
+            sb_fast, sb_slow);
+
+        // Kutulanmamis dizi: yalniz INT deger dogrudan yazilabilir. Float/bool
+        // gelirse yavas yola dusuyoruz — oradaki `arr_items()` diziyi kutuya
+        // cevirip anlami birebir koruyor.
+        LLVMBasicBlockRef sb_uchk  = LLVMAppendBasicBlock(fn2, "set.ubox.chk");
+        LLVMBasicBlockRef sb_ubox  = LLVMAppendBasicBlock(fn2, "set.unboxed");
+        LLVMBasicBlockRef sb_boxed = LLVMAppendBasicBlock(fn2, "set.boxed");
+        LLVMPositionBuilderAtEnd(backend->builder, sb_fast);
+        LLVMValueRef s_id_ptr = LLVMBuildStructGEP2(
+            backend->builder, backend->obj_array_type, s_objp, 5,
+            "set.idata.ptr");
+        LLVMValueRef s_idata = LLVMBuildLoad2(
+            backend->builder, backend->ptr_type, s_id_ptr, "set.idata");
+        llvm_tbaa_tag(backend, s_idata, 0);
+      llvm_tbaa_tag(backend, s_idata, 0);
+        LLVMValueRef s_visint = LLVMBuildICmp(
+            backend->builder, LLVMIntEQ, s_vtag,
+            LLVMConstInt(si32, 0 /* VM_VAL_INT */, 0), "set.visint");
+        LLVMValueRef s_isubox = LLVMBuildIsNotNull(
+            backend->builder, s_idata, "set.isubox");
+        LLVMBuildCondBr(backend->builder, s_isubox, sb_uchk, sb_boxed);
+
+        LLVMPositionBuilderAtEnd(backend->builder, sb_uchk);
+        LLVMBuildCondBr(backend->builder, s_visint, sb_ubox, sb_slow);
+
+        LLVMPositionBuilderAtEnd(backend->builder, sb_ubox);
+        LLVMValueRef s_iep = LLVMBuildGEP2(
+            backend->builder, backend->int_type, s_idata, &s_idx, 1,
+            "set.ielem.ptr");
+        LLVMValueRef s_ist = LLVMBuildStore(backend->builder,
+                       llvm_extract_vm_val_int(backend, val), s_iep);
+        llvm_tbaa_tag(backend, s_ist, 1);
+        LLVMBuildBr(backend->builder, sb_done);
+
+        LLVMPositionBuilderAtEnd(backend->builder, sb_boxed);
+        LLVMValueRef s_it_ptr = LLVMBuildStructGEP2(
+            backend->builder, backend->obj_array_type, s_objp, 4,
+            "set.items.ptr");
+        LLVMValueRef s_items = LLVMBuildLoad2(
+            backend->builder, backend->ptr_type, s_it_ptr, "set.items");
+        llvm_tbaa_tag(backend, s_items, 0);
+      llvm_tbaa_tag(backend, s_items, 0);
+        LLVMValueRef s_ep = LLVMBuildGEP2(
+            backend->builder, backend->vm_value_type, s_items, &s_idx, 1,
+            "set.elem.ptr");
+        LLVMValueRef s_st1 = LLVMBuildStore(backend->builder, val, s_ep);
+        llvm_tbaa_tag(backend, s_st1, 1);
+        LLVMBuildBr(backend->builder, sb_done);
+
+        LLVMPositionBuilderAtEnd(backend->builder, sb_slow);
         LLVMValueRef target_temp = llvm_build_alloca_at_entry(
             backend, backend->vm_value_type, "target_set_tmp");
         LLVMBuildStore(backend->builder, target, target_temp);
@@ -7494,6 +8577,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         LLVMBuildCall2(backend->builder,
                        LLVMGlobalGetValueType(backend->func_vm_set_element),
                        backend->func_vm_set_element, args, 4, "");
+        // Cagri diziyi kutuya cevirmis olabilir -> onbellek tazelenmeli.
+        if (backend->shape_count > 0) emit_shape_refresh_all(backend);
+        LLVMBuildBr(backend->builder, sb_done);
+
+        LLVMPositionBuilderAtEnd(backend->builder, sb_done);
       }
       return val;
     }
@@ -7538,6 +8626,18 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     return val;
   }
   case AST_BLOCK: {
+    // BLOK YENI KAPSAM ACAR.
+    //
+    // Eskiden acmiyordu ve bu SESSIZ bir anlam hatasiydi: `if`/`while`
+    // govdesindeki `int x = 5;` DISTAKI x'i eziyordu.
+    //
+    //   int x = 1;
+    //   if (true) { int x = 5; }
+    //   print(x);            // 5 basiyordu, 1 basmaliydi
+    //
+    // Fonksiyon govdesinde de ayni. `for` DOGRUYDU (kendi enter_scope'u
+    // var), yani dilin icinde iki farkli kapsam kurali vardi.
+    enter_scope(backend);
     LLVMValueRef last = nullptr;
     if (node->statements) {
       for (int i = 0; i < node->statement_count; i++) {
@@ -7546,6 +8646,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         last = codegen_statement(backend, node->statements[i]);
       }
     }
+    exit_scope(backend);   // erken terminator'da da calisir (break yukarida)
     return last;
   }
   case AST_IF: {
@@ -7577,6 +8678,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         LLVMAppendBasicBlock(backend->current_function, "body");
     LLVMBasicBlockRef exitB =
         LLVMAppendBasicBlock(backend->current_function, "exit");
+    // Dongu-degismezi dizi sekli: kanitlanabiliyorsa bir kez oku, govdede
+    // yerelden kullan. Kanitlanamiyorsa hicbir sey degismez.
+    int shape_saved = emit_shape_cache_for_loop(backend, node->condition,
+                                                node->body, nullptr);
     LLVMBuildBr(backend->builder, condB);
     LLVMPositionBuilderAtEnd(backend->builder, condB);
     LLVMValueRef c = codegen_expression(backend, node->condition);
@@ -7597,6 +8702,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder)))
       LLVMBuildBr(backend->builder, condB);
     LLVMPositionBuilderAtEnd(backend->builder, exitB);
+    backend->shape_count = shape_saved;
     return nullptr;
   }
   case AST_FOR_IN: {
@@ -7613,6 +8719,73 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
 
     if (node->init)
       codegen_statement(backend, node->init);
+
+    // Dongu-degismezi dizi sekli — `while` ile ayni; ARTIM da kanita dahil
+    // (`i = i + 1` orada duruyor ve sekli degistiren bir sey icerebilirdi).
+    // init'ten SONRA cagriliyor: dongu degiskeni artik kapsamda.
+    int shape_saved = emit_shape_cache_for_loop(backend, node->condition,
+                                                node->body, node->increment);
+
+    // DONGU SURUMLEME. `for (int i = C; i < len(a); i += K)` bicimindeki
+    // dongude `a[i]` sinir denetimi KANITLA gereksiz — ama yalniz dizi
+    // KUTUSUZSA (kutuluysa idata NULL ve dogrudan erisim cokerdi). Bu
+    // kosul dongu-degismezi ama LLVM onu disari cikaramiyor: yavas
+    // yoldaki tazeleme sekil yuvalarina yaziyor, yani unswitch yapisal
+    // olarak imkansiz (olculdu, Performance.md). O yuzden dallanmayi ve
+    // iki govdeyi BIZ uretiyoruz.
+    //
+    // Sinav `count_slot != 0`: kutuluysa yuva bilerek 0 tutuluyor, yani
+    // sifir-disi olmak "kutusuz VE bos degil" demek. Bos dizide genel
+    // surume dusuyoruz — govde zaten hic calismiyor, dogru ve onemsiz.
+    //
+    // Ic ice dongulerde katlanarak buyumemesi icin yalniz EN DIS
+    // seviyede aciliyor.
+    int ver_count = 0;
+    if (backend->loop_depth == 0 && node->init && node->condition) {
+      for (int i = shape_saved; i < backend->shape_count; i++) {
+        const char *ivar = nullptr;
+        if (tulpar_loop_index_proven(node->init, node->condition, node->body,
+                                     node->increment,
+                                     backend->shape_cache[i].name, &ivar)) {
+          backend->shape_cache[i].proven_ivar = ivar;
+          ver_count++;
+        }
+      }
+    }
+    if (ver_count > 0) {
+      LLVMBasicBlockRef vb_fast =
+          LLVMAppendBasicBlock(backend->current_function, "for_ver_fast");
+      LLVMBasicBlockRef vb_gen =
+          LLVMAppendBasicBlock(backend->current_function, "for_ver_gen");
+      LLVMBasicBlockRef vb_done =
+          LLVMAppendBasicBlock(backend->current_function, "for_ver_done");
+      LLVMValueRef all_ok = nullptr;
+      for (int i = shape_saved; i < backend->shape_count; i++) {
+        if (!backend->shape_cache[i].proven_ivar) continue;
+        LLVMValueRef cn =
+            LLVMBuildLoad2(backend->builder, backend->int_type,
+                           backend->shape_cache[i].count_slot, "ver.cn");
+        LLVMValueRef ok = LLVMBuildICmp(
+            backend->builder, LLVMIntNE, cn,
+            LLVMConstInt(backend->int_type, 0, 0), "ver.ok");
+        all_ok = all_ok ? LLVMBuildAnd(backend->builder, all_ok, ok, "ver.and")
+                        : ok;
+      }
+      LLVMBuildCondBr(backend->builder, all_ok, vb_fast, vb_gen);
+
+      LLVMPositionBuilderAtEnd(backend->builder, vb_fast);
+      codegen_for_body(backend, node, vb_done);          // proven_ivar DOLU
+
+      for (int i = shape_saved; i < backend->shape_count; i++)
+        backend->shape_cache[i].proven_ivar = nullptr;   // genel surum: BEKCILI
+      LLVMPositionBuilderAtEnd(backend->builder, vb_gen);
+      codegen_for_body(backend, node, vb_done);
+
+      LLVMPositionBuilderAtEnd(backend->builder, vb_done);
+      backend->shape_count = shape_saved;
+      exit_scope(backend);
+      return nullptr;
+    }
 
     LLVMBasicBlockRef condB =
         LLVMAppendBasicBlock(backend->current_function, "for_cond");
@@ -7655,6 +8828,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
 
     LLVMPositionBuilderAtEnd(backend->builder, exitB);
 
+    backend->shape_count = shape_saved;
     // Exit loop scope
     exit_scope(backend);
     return nullptr;
@@ -8056,10 +9230,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         for (int i = 0; i < module_ast->statement_count; i++) {
           if (module_ast->statements[i]->type == AST_VARIABLE_DECL) {
             ASTNode_C *decl = module_ast->statements[i];
-            if (!LLVMGetNamedGlobal(backend->module, decl->name)) {
+            if (!LLVMGetNamedGlobal(backend->module, gsym(decl->name).c_str())) {
               if (backend->use_static_typing && decl->data_type == TYPE_INT) {
                 LLVMValueRef ig = LLVMAddGlobal(
-                    backend->module, backend->int_type, decl->name);
+                    backend->module, backend->int_type, gsym(decl->name).c_str());
                 LLVMSetInitializer(ig,
                                    LLVMConstInt(backend->int_type, 0, 0));
                 LLVMSetLinkage(ig, LLVMInternalLinkage);
@@ -8083,7 +9257,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                     backend, decl->name, ig, decl->line, /*is_vmvalue=*/0);
               } else {
                 LLVMValueRef global_var = LLVMAddGlobal(
-                    backend->module, backend->vm_value_type, decl->name);
+                    backend->module, backend->vm_value_type, gsym(decl->name).c_str());
                 LLVMSetInitializer(global_var,
                                    LLVMConstNull(backend->vm_value_type));
                 LLVMSetLinkage(global_var, LLVMInternalLinkage);
@@ -9429,10 +10603,10 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
     for (int i = 0; i < node->statement_count; i++) {
       if (node->statements[i]->type == AST_VARIABLE_DECL) {
         ASTNode_C *decl = node->statements[i];
-        if (!LLVMGetNamedGlobal(backend->module, decl->name)) {
+        if (!LLVMGetNamedGlobal(backend->module, gsym(decl->name).c_str())) {
           if (backend->use_static_typing && decl->data_type == TYPE_INT) {
             LLVMValueRef ig = LLVMAddGlobal(
-                backend->module, backend->int_type, decl->name);
+                backend->module, backend->int_type, gsym(decl->name).c_str());
             LLVMSetInitializer(ig, LLVMConstInt(backend->int_type, 0, 0));
             add_local_typed(backend, decl->name, nullptr, INFERRED_INT, ig);
             if (global_needs_tls(decl->name)) {
@@ -9445,7 +10619,7 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
                                              decl->line, /*is_vmvalue=*/0);
           } else {
             LLVMValueRef global_var = LLVMAddGlobal(
-                backend->module, backend->vm_value_type, decl->name);
+                backend->module, backend->vm_value_type, gsym(decl->name).c_str());
             LLVMSetInitializer(global_var,
                                LLVMConstNull(backend->vm_value_type));
             if (global_needs_tls(decl->name)) {
@@ -10291,4 +11465,50 @@ void llvm_backend_emit_local_vmvalue_declare(LLVMBackend *backend,
   LLVMDIBuilderInsertDeclareAtEnd(backend->di_builder, alloca, var, expr, loc,
                                   block);
 #endif
+}
+
+
+// Bkz. yukaridaki ileri bildirim.
+static void codegen_for_body(LLVMBackend *backend, ASTNode_C *node,
+                             LLVMBasicBlockRef after) {
+  LLVMBasicBlockRef condB =
+      LLVMAppendBasicBlock(backend->current_function, "for_cond");
+  LLVMBasicBlockRef bodyB =
+      LLVMAppendBasicBlock(backend->current_function, "for_body");
+  LLVMBasicBlockRef incrB =
+      LLVMAppendBasicBlock(backend->current_function, "for_incr");
+  LLVMBasicBlockRef exitB =
+      LLVMAppendBasicBlock(backend->current_function, "for_exit");
+
+  LLVMBuildBr(backend->builder, condB);
+  LLVMPositionBuilderAtEnd(backend->builder, condB);
+  LLVMValueRef c =
+      node->condition
+          ? llvm_build_is_truthy(backend,
+                                 codegen_expression(backend, node->condition))
+          : LLVMConstInt(backend->bool_type, 1, 0);
+  LLVMBuildCondBr(backend->builder, c, bodyB, exitB);
+
+  LLVMPositionBuilderAtEnd(backend->builder, bodyB);
+  if (backend->loop_depth < 32) {
+    backend->loop_stack[backend->loop_depth].continue_block = incrB;
+    backend->loop_stack[backend->loop_depth].break_block = exitB;
+    backend->loop_stack[backend->loop_depth].try_depth_at_entry =
+        backend->try_depth;
+    backend->loop_depth++;
+  }
+  enter_scope(backend);
+  codegen_statement(backend, node->body);
+  exit_scope(backend);
+  if (backend->loop_depth > 0) backend->loop_depth--;
+  if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder)))
+    LLVMBuildBr(backend->builder, incrB);
+
+  LLVMPositionBuilderAtEnd(backend->builder, incrB);
+  if (node->increment)
+    codegen_statement(backend, node->increment);
+  LLVMBuildBr(backend->builder, condB);
+
+  LLVMPositionBuilderAtEnd(backend->builder, exitB);
+  LLVMBuildBr(backend->builder, after);
 }

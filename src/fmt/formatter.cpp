@@ -339,7 +339,7 @@ std::string normalise_line_spacing(const std::string &content) {
         if (two('=', '=') || two('!', '=') || two('<', '=') ||
             two('>', '=') || two('&', '&') || two('|', '|') ||
             two('+', '=') || two('-', '=') || two('*', '=') ||
-            two('/', '=') || two('=', '>')) {
+            two('/', '=') || two('%', '=') || two('=', '>')) {
             // `=>` (match kolu) LİSTEDE OLMALIYDI: yoksa `=` ve `>` ayrı ayrı
             // dolgulanıp `= >` çıkıyordu ve match ifadesi AYRIŞMIYORDU —
             // biçimlendirici derlenmeyen kod üretiyordu (üç örnek dosya).

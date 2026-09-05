@@ -82,15 +82,21 @@ void arc_free_array(Obj *obj) {
   ObjArray *arr = (ObjArray *)obj;
   
   // Release all items in array
-  if (arr->items) {
+  if (arr->items_) {
     for (int i = 0; i < arr->count; i++) {
-      if (IS_OBJ(arr->items[i])) {
-        arc_release(AS_OBJ(arr->items[i]));
+      if (IS_OBJ(arr_items(arr)[i])) {
+        arc_release(AS_OBJ(arr_items(arr)[i]));
       }
     }
     if (!obj->arena_allocated) {
-      free(arr->items);
+      free(arr->items_);
     }
+  }
+  // idata, items_ NULL iken de dolu olabilir (kutulanmamis dizi) — bu yuzden
+  // serbest birakma yukaridaki `if (arr->items_)` blogunun DISINDA olmali.
+  if (!obj->arena_allocated) {
+    free(arr->idata);
+    arr->idata = nullptr;
   }
   
   if (!obj->arena_allocated) {

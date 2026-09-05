@@ -58,7 +58,15 @@ if "$TULPAR" pkg install > /dev/null 2>&1; then
 fi
 
 # ULAŞILAMAYAN registry: asılmamalı, 0 dönmemeli.
-if timeout 30 "$TULPAR" pkg search test --registry "http://127.0.0.1:9" \
+#
+# `timeout` GNU coreutils'te; macOS'ta YOK (orada brew ile `gtimeout`).
+# Ciplak `timeout` bu satiri macOS'ta "command not found" ile duserirdi —
+# fark edilmedi cunku bu denetim orada hic kosmuyordu. Hicbiri yoksa
+# zaman siniri olmadan kosuyor: CI adim zaman asimi yedek.
+TO=""
+if command -v timeout >/dev/null 2>&1; then TO="timeout 30"
+elif command -v gtimeout >/dev/null 2>&1; then TO="gtimeout 30"; fi
+if $TO "$TULPAR" pkg search test --registry "http://127.0.0.1:9" \
         > "$TMP/s.txt" 2>&1; then
     note "olu registry'de pkg search 0 donuyor"
 fi

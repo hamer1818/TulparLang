@@ -15,10 +15,28 @@
 //   VM_VAL_VOID  = 3
 //   VM_VAL_OBJ   = 4
 
+// VMValue'nun dolgu alani icin SIFIR sabiti — tipi struct'in KENDISINDEN
+// aliniyor, elle yazilmiyor.
+//
+// Niye boyle: dolgu eskiden uc ayri yerde `[4 x i8]` diye elle kuruluyordu.
+// Struct'in o alani baska bir tipe cevrildiginde `LLVMConstNamedStruct`
+// tip uyusmayan sabiti sessizce **undef**e ceviriyor — hata vermiyor.
+// Olculdu (2026-09-03): tam olarak bu oldu ve `store %struct.VMValue
+// { i32 1, i32 undef, i64 ... }` seklinde GLOBAL'lere yazildi; scene3d'nin
+// 10 carpisma/fizik testi, hangi testin once kostuguna gore degisen
+// degerler yuzunden dusuyordu. Tek basina calistirilan ayni test gecerken
+// pakette dusmesinin sebebi buydu.
+//
+// Tipi struct'tan turetmek o sinifi tamamen kapatiyor: alan ne olursa olsun
+// sabit ona uyuyor.
+static LLVMValueRef llvm_vm_val_padding_zero(LLVMBackend *backend) {
+  LLVMTypeRef pad_type = LLVMStructGetTypeAtIndex(backend->vm_value_type, 1);
+  return LLVMConstNull(pad_type);
+}
+
 // Create tagged INT value: {type: 0 (VM_VAL_INT), pad, as: i64}
 LLVMValueRef llvm_vm_val_int(LLVMBackend *backend, int64_t value) {
-  LLVMValueRef padding =
-      LLVMConstNull(LLVMArrayType(LLVMInt8TypeInContext(backend->context), 4));
+  LLVMValueRef padding = llvm_vm_val_padding_zero(backend);
   LLVMValueRef fields[] = {
       LLVMConstInt(backend->int32_type, 0, 0),  // VM_VAL_INT = 0
       padding,                                  // Padding
@@ -29,8 +47,7 @@ LLVMValueRef llvm_vm_val_int(LLVMBackend *backend, int64_t value) {
 
 // Create tagged BOOL value: {type: 2 (VM_VAL_BOOL), pad, as: i64}
 LLVMValueRef llvm_vm_val_bool(LLVMBackend *backend, int value) {
-  LLVMValueRef padding =
-      LLVMConstNull(LLVMArrayType(LLVMInt8TypeInContext(backend->context), 4));
+  LLVMValueRef padding = llvm_vm_val_padding_zero(backend);
   LLVMValueRef fields[] = {
       LLVMConstInt(backend->int32_type, 2, 0), // VM_VAL_BOOL = 2
       padding, LLVMConstInt(backend->int_type, value ? 1 : 0, 0)}; // as
@@ -41,8 +58,7 @@ LLVMValueRef llvm_vm_val_bool(LLVMBackend *backend, int value) {
 // (js_serialize fast-path + vmvalue_to_cjson) already render a void as
 // JSON `null`, and is_truthy treats it as falsy.
 LLVMValueRef llvm_vm_val_void(LLVMBackend *backend) {
-  LLVMValueRef padding =
-      LLVMConstNull(LLVMArrayType(LLVMInt8TypeInContext(backend->context), 4));
+  LLVMValueRef padding = llvm_vm_val_padding_zero(backend);
   LLVMValueRef fields[] = {
       LLVMConstInt(backend->int32_type, 3, 0), // VM_VAL_VOID = 3
       padding, LLVMConstInt(backend->int_type, 0, 0)};

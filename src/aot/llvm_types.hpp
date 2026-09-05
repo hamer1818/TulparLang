@@ -23,3 +23,6 @@ void llvm_init_types(LLVMBackend *backend);
 #define OFFSET_OBJSTRING_HASH 5
 
 #endif
+
+// TBAA etiketi: is_elem=1 dizi eleman deposu, 0 baslik/VMValue yuvasi.
+void llvm_tbaa_tag(LLVMBackend *backend, LLVMValueRef inst, int is_elem);

@@ -187,6 +187,7 @@ set(PARSER_SOURCES
 # LLVM Backend (Primary) - Now using C++ API
 set(AOT_SOURCES
     src/aot/llvm_backend.cpp
+    src/aot/llvm_array_shape.cpp
     src/aot/llvm_backend.hpp
     src/aot/llvm_types.cpp
     src/aot/llvm_types.hpp

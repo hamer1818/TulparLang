@@ -115,6 +115,64 @@ func toInt_toFloat() {
     assert_eq_str(toString(toFloat("3.14")), "3.14");
 }
 
+// DIZGI SABITLERI INTERNLENIYOR (2026-09-03): her degerlendirmede yeniden
+// ayrilmak yerine site basina BIR KEZ ayriliyor ve paylasiliyor. Olculdu:
+// kalici bir diziye sabit literal push etmek 34.8 ns -> 4.9 ns.
+//
+// Paylasim ancak dizgiler DEGISMEZ oldugu icin guvenli. Bu iki test o
+// sozlesmeyi tutuyor: ayni literal defalarca ayni degeri vermeli, ve
+// baska bir yerde uretilen dizgiler onu bozmamali.
+func interned_literal_stable() {
+    str ilk = "tulpar";
+    int i = 0;
+    str son = "";
+    while (i < 200) {
+        str t = "tulpar";
+        son = t;
+        // Baska dizgiler uretmek paylasilan sabiti etkilememeli.
+        str gecici = "tul" + "par" + toString(i);
+        assert(len(gecici) > 6, "gecici dizgi kuruldu");
+        i = i + 1;
+    }
+    assert_eq_str(son, ilk);
+    assert_eq_str(son, "tulpar");
+    assert_eq_int(len(son), 6);
+}
+
+// Kalici bir kapta tutulan bir literal, arena cok sayida yeni ayirmayla
+// calkalandiktan SONRA da saglam okunabilmeli.
+//
+// DURUSTLUK NOTU — bu test interning DEGISIKLIGINI dogrulamiyor. Olculdu:
+// internlenen dizgiyi arena'ya geri almak (arena_allocated = 1) bu testi
+// KIRMIYOR, cunku o durumda yazma bariyeri onu derin kopyaliyor ve sonuc
+// yine dogru oluyor. Iki uygulama da bu testi geciyor; aralarindaki fark
+// DOGRULUK degil HIZ (34.8 ns -> 4.9 ns), ve hiz bir teste guvenilir
+// bicimde baglanamaz.
+//
+// O halde niye duruyor: gelecekteki YANLIS BIRLESIMI yakaliyor — literal
+// arena'dan gelip bariyer de kaldirilirsa bu test kizarir. Interning'in
+// kendi dogrulugunu ise bu paketin geri kalani zaten koruyor (olculdu:
+// aot_intern_string'de uzunlugu bir kirpinca length/upper/substring/ord/
+// split-join testlerinin besi birden kizardi).
+array _interned_kap = [];
+
+func interned_literal_survives_churn() {
+    push(_interned_kap, "sabit-bir");
+    push(_interned_kap, "sabit-iki");
+    // Arenayi calkala: bol miktarda gecici dizgi ve dizi uret.
+    int i = 0;
+    while (i < 3000) {
+        array cop = [];
+        push(cop, toString(i) + "-cop");
+        push(cop, "ayni-sabit");
+        i = i + 1;
+    }
+    assert_eq_int(length(_interned_kap), 2);
+    assert_eq_str(_interned_kap[0], "sabit-bir");
+    assert_eq_str(_interned_kap[1], "sabit-iki");
+    assert_eq_int(len(_interned_kap[0]), 9);
+}
+
 func toString_basic() {
     assert_eq_str(toString(42), "42");
     assert_eq_str(toString(0), "0");
@@ -157,6 +215,8 @@ test("replace", "replace_basic");
 test("repeat", "repeat_basic");
 test("trim", "trim_basic");
 test("toInt / toFloat", "toInt_toFloat");
+test("dizgi sabiti tekrar tekrar ayni deger", "interned_literal_stable");
+test("dizgi sabiti bellek calkalanmasindan sag cikiyor", "interned_literal_survives_churn");
 test("toString", "toString_basic");
 test("fn-local string concat (typed)", "fn_local_string_concat_typed");
 test("fn-local string concat (let)", "fn_local_string_concat_let");

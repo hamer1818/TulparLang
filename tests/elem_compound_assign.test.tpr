@@ -1,0 +1,128 @@
+import "test";
+
+// ELEMAN HEDEFLI BILESIK ATAMA (`a[i] += 5`, `j["n"] *= 2`).
+//
+// Eksiklik (2026-09-05, sondalamayla bulundu): `a[i]++` calisirken
+// `a[i] += 5` ACIK ayristirma hatasi veriyordu — sessiz degil ama
+// tutarsiz. parse_expression_statement yalnız `=` icin karmasik lvalue
+// tasiyordu; `+= -= *= /= %=` icin tasimiyordu.
+//
+// Islem GENEL vm_binary_op'tan geciyor: int/float/dizgi ayni yoldan,
+// sifira bolme korumasi orada zaten var.
+//
+// Enjeksiyonla dogrulandi: parser'daki is_compound dali kaldirilinca
+// bu paket kirmizi doner.
+
+func run_int_dizi() {
+    int[] a = [1, 2, 3];
+    a[1] += 5;
+    assert_eq_int(a[1], 7);
+    a[1] -= 2;
+    assert_eq_int(a[1], 5);
+    a[0] *= 7;
+    assert_eq_int(a[0], 7);
+    a[2] /= 3;
+    assert_eq_int(a[2], 1);
+    a[1] %= 4;
+    assert_eq_int(a[1], 1);
+}
+
+// Komsu eleman bozulmamali.
+func run_komsu_bozulmaz() {
+    int[] a = [10, 20, 30];
+    a[1] += 5;
+    assert_eq_int(a[0], 10);
+    assert_eq_int(a[1], 25);
+    assert_eq_int(a[2], 30);
+}
+
+// Indeks bir IFADE olabilir; bir kez degerlendirilmeli.
+func run_ifade_indeks() {
+    int[] a = [10, 20, 30];
+    int i = 2;
+    a[i - 1] += 100;
+    assert_eq_int(a[1], 120);
+    assert_eq_int(a[0], 10);
+    assert_eq_int(a[2], 30);
+}
+
+func run_float() {
+    array f = [1.5, 2.5];
+    f[0] += 0.25;
+    assert_eq_float(f[0], 1.75);
+    f[1] *= 2.0;
+    assert_eq_float(f[1], 5.0);
+}
+
+// Dizgi birlestirme de ayni yoldan: `+=` -> `+`.
+func run_dizgi() {
+    array s = ["ab", "cd"];
+    s[0] += "XY";
+    assert_eq_str(s[0], "abXY");
+    assert_eq_str(s[1], "cd");
+}
+
+func run_json() {
+    json j = {"n": 10, "m": 3};
+    j["n"] += 5;
+    assert_eq_int(j["n"], 15);
+    j["m"] *= 4;
+    assert_eq_int(j["m"], 12);
+}
+
+func run_ic_ice() {
+    array g = [[1, 2], [3, 4]];
+    g[0][1] += 10;
+    assert_eq_int(g[0][1], 12);
+    assert_eq_int(g[1][0], 3);
+}
+
+// Dongude birikim — en yaygin kullanim.
+func run_donguda_birikim() {
+    int[] acc = array_fill(3, 0);
+    for (int k = 0; k < 6; k = k + 1) {
+        acc[k % 3] += k;
+    }
+    assert_eq_int(acc[0], 3);
+    assert_eq_int(acc[1], 5);
+    assert_eq_int(acc[2], 7);
+}
+
+// SEKIL ONBELLEGI ile birlikte — `a[i]++` ile ayni sarkan-idata tuzagi
+// (bkz. element_step.test.tpr / run_onbellek_tazeleme).
+func run_onbellek_tazeleme() {
+    int[] a = array_fill(4096, 0);
+    for (int i = 0; i < 4096; i = i + 1) {
+        a[i] += 1;
+        a[i] = a[i] + 1;
+    }
+    assert_eq_int(a[0], 2);
+    assert_eq_int(a[4095], 2);
+    int t = 0;
+    for (int j = 0; j < 4096; j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 8192);
+}
+
+// Sag taraf AYNI diziden okuyabilir: tazeleme okumadan ONCE olmali.
+func run_sag_taraf_ayni_dizi() {
+    int[] a = array_fill(64, 2);
+    for (int i = 1; i < 64; i = i + 1) {
+        a[i] += a[i - 1];
+    }
+    assert_eq_int(a[0], 2);
+    assert_eq_int(a[1], 4);
+    assert_eq_int(a[2], 6);
+    assert_eq_int(a[63], 128);
+}
+
+test("int dizide += -= *= /= %=", "run_int_dizi");
+test("komsu eleman bozulmaz", "run_komsu_bozulmaz");
+test("ifade indeks", "run_ifade_indeks");
+test("float bilesik atama", "run_float");
+test("dizgi +=", "run_dizgi");
+test("json alani bilesik atama", "run_json");
+test("ic ice dizi", "run_ic_ice");
+test("donguda birikim", "run_donguda_birikim");
+test("sekil onbellegi tazeleme", "run_onbellek_tazeleme");
+test("sag taraf ayni dizi", "run_sag_taraf_ayni_dizi");
+test_summary();

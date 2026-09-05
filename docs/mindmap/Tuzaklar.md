@@ -322,6 +322,56 @@ Hata aylarca durdu ve ancak TameEngine paketleme adımı macOS'ta **ilk kez bir
 sınamak değildir. Yayınlanan her platformda **en az bir uçtan uca iş** koşmalı
 (bir `tulpar build` + çalıştır yeter).
 
+## 3f. `LLVMConstNamedStruct` tip uyuşmazlığını SESSİZCE `undef` yapıyor
+Bu, bir performans işinden çıktı ama asıl ders C API'sinin kendisiyle ilgili.
+
+`VMValue` LLVM'de `{i32, [4 x i8], i64}` diye modellenmişti. Dolgu bir **bayt
+dizisi** olduğu için üretilen kodda her VMValue kopyası dört ayrı `movzbl` +
+dört bayt store'a açılıyordu — dilin HER YERİNDE. Elek kıyaslamasının iç
+döngüsünden okundu (2026-09-03):
+
+```
+mov    (%r12),%edx        ; etiket
+movzbl 0x4(%r12),%esi     ┐
+movzbl 0x5(%r12),%edi     │ dolgu, tek tek
+movzbl 0x6(%r12),%r8d     │
+movzbl 0x7(%r12),%r9d     ┘
+mov    0x8(%r12),%rax     ; yük
+```
+
+Dolguyu düz `i32` yapmak yerleşimi değiştirmiyor ve ölçülen kazanç gerçek
+(A/B, 9 tekrar × 2 tur: `sieve` 24,6/27,5 → 21,9/22,0 ms).
+
+**Ama ilk denemede scene3d'nin 10 çarpışma/fizik testi düştü** ve sebebi üç
+yanlış hipotez boyunca bulunamadı. Kilit gözlem şuydu: **düşen testin gövdesi
+tek başına çalıştırıldığında DOĞRU sonuç veriyordu.** Aynı test pakette
+düşüyordu. "Önceki testlerin bıraktığı belleğe göre değişen bir şey var" =
+tanımsız değer izi.
+
+Üretilen IR (`TULPAR_AOT_EMIT_LL_PRE=1`) tek bakışta söyledi:
+
+```llvm
+store %struct.VMValue { i32 1, i32 undef, i64 4580687789900693504 }, ptr @DEG2RAD3
+```
+
+**Sebep:** sabit VMValue kurucuları dolguyu üç ayrı yerde elle
+`LLVMConstNull(LLVMArrayType(i8, 4))` diye kuruyordu. Alan `i32` olunca
+`LLVMConstNamedStruct` tip uyuşmayan sabiti **hata vermeden `undef`e
+çeviriyor**. Global'lere yazılan undef, hangi testin önce koştuğuna göre
+değişen değerler üretti.
+
+**Ders — C API'si tip uyuşmazlığında susuyor.** Bir struct alanının tipini
+değiştiren, o alana sabit üreten HER yeri de değiştirmek zorunda; derleyici
+uyarmıyor. Çare yazmayı ortadan kaldırmak: sabit artık tipini struct'ın
+kendisinden alıyor (`llvm_vm_val_padding_zero` →
+`LLVMStructGetTypeAtIndex(vm_value_type, 1)`), yani alan ne olursa olsun uyuyor.
+
+**İkinci ders — "tek başına geçiyor, pakette düşüyor" bir imzadır.** Hesap
+yanlış değil; tanımsız bellek okunuyor. Doğrudan IR'a bak, hipotez üretme.
+(Denenip elenenler: dolguyu sıfırdan başlatmak, tip cezalandırmasını bit
+işlemine çevirmek, alanları ayrı okumak — sonuncusu ayrıca **yavaşlattı**,
+LLVM'in tek 16 baytlık taşımasını bozuyor.)
+
 ## 4. Grafik/pencere kuralı
 **Asla raylib penceresi açma.** Pencere açan komutlar `DISPLAY=` altında
 koşar. Görsel/oynanış testini **kullanıcı yapar**.
@@ -467,6 +517,403 @@ uygulamamak editörde "hiçbir şey olmuyor" demek ve tek bir log satırı bile
 > sütunlarını elle yazdım, sonra örnek metni kısalttım ve aynı sütun
 > parantezin içine düştü: denetim sunucuyu değil kendini kızarttı. Konumlar
 > artık metinden hesaplanıyor (`line.index("topla") + 2`).
+
+## 6d. Struct'a alan eklemek: yeniden adlandırma OKUMAları yakalar, eksik İLKLENDİRMEyi yakalamaz
+
+`ObjArray`'e `idata` alanı eklerken (kutulanmamış diziler, 2026-09-03) bilinçli
+bir hile kullanıldı: `items` alanı `items_` olarak yeniden adlandırıldı, böylece
+ona **doğrudan dokunan her yer derlenmedi** ve 101 erişim noktası derleyici
+tarafından tek tek önüme getirildi. Bu kısım işe yaradı.
+
+**Ama yakalamadığı şey vardı:** `ObjArray` kurucuları alanları tek tek atıyor
+(`calloc` değil, `malloc` + alan alan atama). Yeni alanı 20 kurucunun hiçbiri
+sıfırlamıyordu ve derleyici bundan hiç şikâyet etmedi — yeni bir alanı
+*okumamak* hata değil. Sonuç: `malloc`'tan gelen çöp değer NULL olmadığı için
+sahte bir işaretçi `free()` edildi → **`free(): invalid pointer`**, 4 satırlık
+bir programda bile.
+
+Belirti aldatıcıydı: çöküş derleyicide değil, **üretilen kullanıcı ikilisinde**
+oluyordu ve `tulpar` yalnızca 1 döndürüyordu; suite çıktısında tek satır
+`free(): invalid pointer` görünüyordu, hangi testin patladığına dair hiçbir iz
+yoktu.
+
+**Kural:** alanları tek tek atayan bir struct'a yeni alan eklerken, kurucuları
+saymakla yetinme — `grep`'le *her* kurucunun yeni alanı atadığını **programla**
+doğrula:
+```
+python3 -c "..."  # 'type = OBJ_ARRAY' satirini takip eden satirda alan var mi?
+```
+Yeniden adlandırma hilesi okuma tarafını kapatır; yazma/ilklendirme tarafını
+kapatmaz. İkisi ayrı denetim.
+
+## 6e. TBAA doğruluğu çıktı testiyle ÖLÇÜLEMEZ
+
+Dizi erişimini hızlandırmak için TBAA meta verisi eklendi (eleman deposu ile
+ObjArray başlığı ayrı takma-ad sınıfı). TBAA yanlışsa sonuç sessiz
+yanlış-derlemedir, o yüzden doğrulamak şart görünüyordu.
+
+Yazılan stres testi (aynı döngüde okuma + `push` büyümesi + döngü ortasında
+kutuya dönüş + yazıp hemen okuma) geçti. Sonra **kasten yanlış etiketleme
+enjekte edildi** — eleman yazması `header` olarak işaretlendi, yani LLVM'e
+"bu yazma eleman okumasını etkilemez" diye yalan söylendi.
+
+**Test yine geçti.** Çünkü LLVM yanlış takma-ad bilgisini *sömürmek zorunda
+değil* — sömürebilir. Yani yeşil bir test TBAA'nın doğru olduğunu göstermez;
+yalnızca bu derleyici sürümünün bu programda o bilgiyi kullanmadığını gösterir.
+Bu, [[Tuzaklar#1|hiçbir şey ölçmeyen test]] sınıfının derleyici hâlidir ve
+enjeksiyon disiplininin **sınırını** işaretler.
+
+**Güvence gerekçeden gelmeli:** eleman deposu (`malloc`/arena bloğu) ile başlık
+(`ObjArray` struct'ı) ve değişken yuvaları (alloca/global) her zaman **ayrı
+ayırmalar** — hiçbir bayt ikisi olarak erişilmiyor. Arena baytları geri
+dönüştürebilir, ama bu ancak `arena_restore` çağrısıyla olur ve LLVM, nitelik
+taşımayan dış çağrıların ötesine bellek işlemi taşıyamaz. Dolayısıyla tek bir
+düz kod bölgesi aynı baytları iki tip olarak göremez.
+
+TBAA değiştirirken: gerekçeyi yaz, teste güvenme.
+
+## 6f. Tek atışlık kıyas ölçümü yalan söyler
+
+Elek optimizasyonunu ayrıştırırken aynı ikili iki kez ölçüldü: **8.9 ms** ve
+**12.2 ms**. Fark %37 — yani ölçüm, aranan etkiden büyüktü.
+
+Sebep: her yapılandırma arka arkaya bir kez çalıştırılmıştı. Serideki **ilk**
+koşu sistematik olarak yüksek çıkıyor (ısınma / frekans / önbellek). Sırayı
+iç içe geçirip (`none, all, all, none` × 4 tur, her turda 5 koşunun en iyisi)
+ölçünce tablo kararlı hâle geldi: 9.1 / 12.6.
+
+Bu, "hızlandırdık" derken en kolay kandırılma biçimi — ve bu oturumda daha
+önce de olmuştu (şanslı bir best-of-5'ten "18.8 ms" bildirilmişti, gerçek
+~20.6–21.4). **Kural:** yapılandırmaları iç içe ve simetrik sırada, birden çok
+tur, her turda min al. Tek seride arka arkaya ölçme.
+
+## 6g. `a[i]` düğümünde taban İKİ ayrı alanda olabilir
+
+Şekil önbelleği kodu yazıldı, testler geçti, tanılama "önbelleğe alındı" dedi
+— ama üretilen makine kodu **hiç değişmedi**. Sessiz hiçbir-şey-yapmama.
+
+Sebep: `AST_ARRAY_ACCESS` düğümünde taban ifadesi bazen `node->name`'de,
+bazen `node->left`'te duruyor (parser iki biçimi de üretiyor; for-in şeker
+açılımı `left` kullanıyor). Arama yalnız `name`e bakıyordu, elek de `left`
+biçimini üretiyordu → arama hep boş döndü.
+
+Aldatıcı olan: mevcut codegen zaten `if (node->name) ... else if (node->left)`
+diye **iki biçimi de** ele alıyordu, yani doğru kalıp gözümün önündeydi; yeni
+kod tek biçime baktı. Aday toplayıcı iki biçimi de ele aldığı için "aday
+bulundu" logu doğru çıkıyor ve sorunu gizliyordu.
+
+**Kural:** AST alanına yeni bir yerden erişirken, o alana **zaten erişen**
+kodun nasıl yaptığına bak — tek alan yerine `array_base_name()` gibi ortak bir
+yardımcı kullan. Ve bir optimizasyon eklendiğinde "test geçti" yetmez:
+**üretilen kodun gerçekten değiştiğini** doğrula (objdump / ölçüm). Bu hata
+hiçbir testi kırmaz, yalnızca kazanç vermez.
+
+## 6h. Kullanıcı değişkeni libc sembolünü ezerse: derleme yeşil, ikili çöker
+
+`int free = 3;` yazan bir Tulpar programı **derleniyor** — `[AOT] Successfully
+created` — sonra ilk serbest bırakmada SIGSEGV atıyordu (çıkış 139), derleyici
+tek kelime etmeden. `nm` çıktısı sebebi söylüyor: **`B free`**. Kullanıcı
+küreselleri LLVM'e ham adla yazıldığı için üretilen ikilideki `free` sembolü
+libc'nin `free()`'sini eziyor ve runtime'ın her `free()` çağrısı bir veri
+adresine atlıyordu. `stdout` ve `malloc` da aynı.
+
+Bu sınıfın tehlikesi: **hata derleyicide değil, bağlayıcıda ve sessiz.** Her
+katman kendi işini başarıyla yaptığını bildiriyor.
+
+Yanıltıcı olan yanı: `printf`, `strlen`, `memcpy`, `index`, `time`, `log`,
+`remove`, `exit` gibi adlar denendiğinde **sağlam çıktı** — ama kural onlarda
+da yoktu, yalnızca o sembollerin çözümlenme biçimi denk gelmişti. "Birkaç ad
+denedim, çalışıyor" bu sınıfta kanıt değil.
+
+Çözüm: kullanıcı küresellerinin sembol adı `tpr_g_` önekli (`gsym()` —
+`llvm_backend.cpp`). Yaratma ve arama noktalarının **hepsi** oradan geçmeli;
+biri atlanırsa küresel sessizce bulunamaz.
+
+`internal` linkage de çözerdi ve önce o denendi — **ölçüldü: elek kıyasını %15
+yavaşlatıyor** (9.6 → 11.0 ms). Önek bedava. Hipotez ("internal daha iyi
+optimize edilir") ölçümle çürüdü; ölçmeden alınsaydı sessiz bir gerileme
+girecekti.
+
+Test yazarken düşülen tuzak: değişkenler **üst düzey** olmalı. İlk yazılışında
+`func` içine konmuşlardı — yerel oldukları için hiçbir sembol üretmiyorlardı,
+test yeşildi ve enjeksiyon hiçbir şey yakalamıyordu.
+
+## 6i. Hızlı yol ile yavaş yol AYNI şeyi yapmalı — yoksa dil kendiyle çelişir
+
+İki hata aynı kalıptan çıktı (2026-09-04, ikisi de sondalamayla bulundu):
+
+**Tamsayı sıfıra bölme.** Kutulu yol doğruydu: "Sifira bolme" basıp 0
+dönüyordu. Tipli hızlı yol ham `sdiv` üretiyordu — x86'da #DE, yani SIGFPE.
+
+```
+int n = toInt(env("YOK"));   // 0
+print(10 / n);               // program BURADA ölüyor, tek kelime etmeden
+print("bu satır hiç çalışmıyor");
+```
+
+Aynı programda `%` düzgün çalışıyordu. Yani **aynı dilde aynı işlem iki
+farklı davranış** gösteriyordu, ve hızlı yolun davranışı sessiz ölümdü.
+`INT_MIN / -1` de aynı tuzak ve o kutulu yolda da vardı.
+
+**Yerleşik gölgeleme.** typeinfer'ın belgelenmiş kuralı "yerel tanım her zaman
+kazanır"dı; codegen'de yerleşik kazanıyordu. `func exit(int x)` tanımlayan bir
+program `exit(5)` çağırınca süreç 5 ile sonlanıyordu. 11 yerleşik aynı.
+
+**Blok kapsamı.** `for` gövdesi yeni kapsam açıyordu, `if`/`while` gövdeleri
+açmıyordu. Yani `if (true) { int x = 5; }` dıştaki `x`i eziyordu — sessizce.
+Aynı dilde iki farklı kapsam kuralı.
+
+**Kural:** bir işlemin iki uygulaması varsa (tipli/kutulu, satır içi/runtime,
+`for` vs `if`), davranışları TEST EDİLEREK eşitlenmeli. "Hızlı yol yalnızca kısayol" demek
+yetmez — kanıtlanmalı. Yeni bir hızlı yol eklerken sorulacak soru: *yavaş yol
+bu girdide ne yapıyor?*
+
+**Ölçüm tuzağı:** `10 / 0` sabitiyle yazılan bir test bu hatayı GÖREMEZ — LLVM
+katlıyor. Bölenin katlanamaz olması gerek (ortamdan gelen değer). İlk sonda
+sabitle yazılmıştı ve temiz görünüyordu.
+
+## 6j. Sondalama: "doğru yazılmış program" testleri bu sınıfı hiç görmez
+
+Paketler ve örnekler doğru yazılmış programları koşuyor. `tests/
+silent_failure_probe.py` kenar durumlarını koşuyor ve özellikle **derleyicinin
+"başarılı" deyip yanlış sonuç ürettiği / ikilinin çöktüğü** sınıfı arıyor.
+
+**Sekiz** gerçek hata bununla bulundu: `int free = 3;` (libc sembol ezme,
+[[Tuzaklar#6h]]), `func exit(...)` (yerleşik gölgeleme), `10 / n` (sessiz
+SIGFPE), `a[0]++` (sessiz hiç-işlem), `if` gövdesinin kapsam açmaması, float
+literallerinin float32'ye kırpılması, biçimleyicinin aynı kırpmayı yapması ve
+`print`in `toString`den **farklı sayı** basması ([[Tuzaklar#6k]]). Hiçbiri 66
+paketin veya 40 örneğin gözüne çarpmamıştı — çünkü hiçbiri böyle bir program
+yazmıyor.
+
+`a[0]++` özellikle öğretici: `parse_postfix`'te `match(TOKEN_PLUS_PLUS)` token'ı
+**tüketiyor**, ama hedef `Identifier` değilse gövde çalışmıyordu — `++` yutulup
+ifade `a[0];` olarak kalıyordu. **Token tüketen bir `match()`ten sonra her yolda
+bir şey üretildiğinden emin ol**; üretmeyen dal sessiz hiç-işlem demek.
+
+### fmt gidiş-dönüş
+Sonda ayrıca her kaynağı `tulpar fmt`'den geçirip **yeniden koşuyor** ve aynı
+sonucu bekliyor. Güçlü bir değişmez: `%=` eklenirken fmt onu `% =` diye bölüp
+kodu BOZUYORDU — ve aynı sınıf daha önce `=>` için de olmuş (formatter.cpp'deki
+yorum anlatıyor). Tek operatörü düzeltmek yetmez, değişmezi koy.
+
+Sonda eklemek ucuz: `c("ad", "kaynak", "beklenen çıktı")`. Sonda `LC_ALL=C` ile
+koşuyor, çünkü tanı metinleri yerele göre değişiyor.
+
+**Sondanın kendi tuzağı:** bir sonda yanlış yazılırsa sessizce hiçbir şey
+ölçmez. Ayrıca sonda bir sınıfı HİÇ göremez: tampon taşmasını görünür
+çıktı testiyle yakalayamazsın ([[Tuzaklar#6m]]). `func exit` sondası önce fonksiyon İÇİNE yazılmıştı (yerel değişken →
+hiç sembol üretmiyor), `len(dizgi)` sondası dizgiyi indekslemiyordu (önbelleğe
+aday bile değil). İkisi de yeşildi ve ikisi de hiçbir şey ölçmüyordu. Her
+sondayı enjeksiyonla sına.
+
+## 6k. Bir varsayım üç katmanda tekrarlanınca kendini gizler
+
+2026-09-05: Tulpar'ın `float`u çalışma zamanında **double** —
+`backend->float_type = LLVMDoubleType`, `VMValue` payload'ı 8 bayt. Ama üç
+ayrı yerde float32 varsayımı vardı ve **her biri diğerini görünmez kılıyordu**:
+
+1. `ASTNode_C.value.float_value` alanı `float` idi (32-bit). Kaynaktaki her
+   float literali C-köprüsünde kırpılıyordu: `float pi = 3.141592653589793;`
+   gerçekte `3.1415927410125732` derleniyordu.
+2. `aot_format_float` değeri önce `(float)`e yuvarlayıp en kısa **float32**
+   gösterimini arıyordu. Gerekçesi kendi yorumundaydı: *"the LLVM backend uses
+   a 32-bit float type"* — **yanlış**; `LLVMFloatTypeInContext` bu repoda hiç
+   olmadı (`git log -S` ile bakıldı).
+3. `print` o biçimleyiciyi hiç kullanmıyordu: codegen `aot_print_value` →
+   `vm_print_value` (vm.cpp) → düz `printf("%g")`, altı anlamlı hane.
+
+**Neden altı hafta görünmedi:** (1) değeri kırpıyor, (2) kırpılmış değeri
+kırpılmış biçimde basıyor. İkisi *aynı yönde* yanlış olduğu için çıktı
+tutarlı görünüyordu. (3) ise en üstte oturup ikisini birden `%g`nin arkasına
+saklıyordu.
+
+**Ders:** bir tür/genişlik varsayımı katmanlar arasında **tekrarlanıyorsa**,
+uçlarını ayrı ayrı ölç. Buradaki ayırıcı sonda, hesabı sonucun kendisine
+değil, *beklenen kırpılmış değere olan farka* bakmaktı:
+`print((pi - 3.1415927410125732) * 1e12)` → kırpılmışsa tam `0`, double ise
+`-87422.8`. `print(pi)` tek başına ikisini de `3.14159` gösteriyordu.
+
+**İkinci ders — testin kendisi hatayı sabitleyebilir:**
+`tests/float_format.test.tpr` içinde `toString(0.1+0.2) == "0.3"` yazıyordu.
+Bu float32 yuvarlamasının *beklentiye çevrilmiş hâliydi*: düzeltme yapılınca
+test kırmızıya döndü ve ilk refleks "düzeltme yanlış" demek oldu. Doğrusu
+`0.30000000000000004` (Python/Go/Rust/JS de böyle basar). Bir test bir hatayı
+kilitliyorsa, başlığındaki gerekçeyi oku — oradaki cümle de yanlıştı.
+
+### Aynı değer, iki farklı biçimleyici
+`print(x)` ile `print("" + x)` **farklı sayılar basıyordu** (`1e+06` ve
+`1000000.5`): `toString` doğru biçimleyiciyi kullanıyordu, `print`
+kullanmıyordu. `runtime_bindings.cpp`'deki doğru `print_value` /
+`print_vm_value` çifti AOT yolunda **ölü koddu** (VM'den kalma). Bu
+[[Tuzaklar#6i]]'nin (hızlı yol ↔ yavaş yol ayrışması) biçimleme hâli:
+**aynı değeri metne çeviren iki yol varsa aynı fonksiyonu çağırmalılar.**
+
+### Enjeksiyon bunu söyledi, ben değil
+(3)'ü geri alınca `float_precision.test.tpr` **yeşil kaldı** — çünkü
+assert'ler `toString`den geçiyor, `print`ten değil. `print`in biçimleyicisi
+yalnız **stdout karşılaştıran** sondada görünüyor. Bir davranışı test etmek
+istiyorsan, testin o davranışın *geçtiği yoldan* geçtiğini enjeksiyonla
+doğrula ([[Tuzaklar#6j]] "sondanın kendi tuzağı").
+
+## 6l. Runtime'a düşen her çağrı şekil önbelleğini bayatlatır
+
+`a[i]++` ve `a[i] += 5` runtime'a giriyor: `vm_get_element` →
+`vm_array_get` → `arr_items` → **`arr_debox`**, yani KUTUSUZ dizi kutulanıyor
+ve `idata` **`free`** ediliyor. Döngü başında önbelleğe alınan `idata` o an
+sarkıyor; aynı döngüdeki sonraki önbellekli erişim serbest belleğe yazıyor.
+Ölçüldü: `malloc(): unsorted double linked list corrupted`.
+
+Değişmez zaten vardı (`emit_shape_refresh_all`, `vm_get_element` /
+`vm_set_element` çağrılarından sonra) — yeni eleman yolu onu **uygulamayı
+unuttu**. Sağ taraf `a[j]` okuyabildiği için tazeleme `get`ten **sonra**,
+okumadan **önce** olmalı.
+
+**Regresyon testi 4096 eleman kullanıyor, bilerek:** ilk yazılan döngü testi 4
+elemanlıydı ve `free` o boyutta belleği işletim sistemine geri vermiyor —
+sarkan işaretçi hâlâ eski değerleri okuyor, test **yeşil geçiyordu**. Serbest
+bellek hatasını arayan test, tahsisin gerçekten geri verileceği boyutta olmalı.
+
+## 6m. Görünür davranış testi TAMPON TAŞMASINI göremez
+
+2026-09-05: `sb_append(int)` rakamları doğrudan tampona yazacak şekilde
+değiştirildi. Ayrılan yeri **24 bayttan 4 bayta düşüren** enjeksiyon
+denendi — yani gerçek bir heap taşması — ve **68 paketin, 40 örneğin, 75
+sondanın hiçbiri kırılmadı.**
+
+Sebep: taşan baytlar `malloc`'un boş payına düşüyor. Program çökmüyor,
+okunan değer doğru çıkıyor, görünür davranış aynı. Test doğru yazılmıştı;
+**ölçemeyeceği bir şeyi ölçüyordu**.
+
+Aynı sınıf o gün ikinci kez çıktı: şekil önbelleğindeki sarkan `idata`
+([[Tuzaklar#6l]]) yalnız 4096 elemanda görünür oldu — 4 elemanlı ilk test
+yeşil geçmişti, çünkü `free` o boyutta belleği işletim sistemine geri
+vermiyor.
+
+**Çözüm: `tests/runtime_asan.c` + `tests/run_asan.sh`.** Runtime giriş
+noktalarını doğrudan çağıran, ASAN'la derlenen bir C koşum takımı. Aynı
+enjeksiyonu deterministik yakalıyor:
+
+```
+==ERROR: AddressSanitizer: heap-buffer-overflow
+WRITE of size 1 ... in aot_itoa
+```
+
+CI'da değil (ASAN derlemesi ~2 dk). **Runtime'ın belleğe dokunan bir
+yerini değiştirdiğinde elle koş** — `bash tests/run_asan.sh`.
+
+**Ders:** bellek güvenliği `.test.tpr` ile sınanamaz. Bir runtime
+fonksiyonu ham işaretçiyle yazıyorsa (tampon, dizi, dizgi), doğruluğunun
+kanıtı görünür çıktı değil, sanitizer'dır.
+
+## 6n. Sıcak döngüde soğuk yolun VARLIĞI bedava değil
+
+Döngü sürümleme (2026-09-05) buradan çıktı. Üç kademeli tavan ölçümü
+(arrayiter, n=5M) kazancın nereden geldiğini söyledi:
+
+| | ms |
+|---|--:|
+| normal | 5,53 |
+| **A**: bütün bekçiler kaldırıldı | 3,51 |
+| **B**: dal DURUYOR, yavaş yol ölü | **3,42** |
+
+**B ≈ A.** Dal duruyor, kazanç aynı → maliyet dalın *çalışması* değil,
+yanındaki kodun **döngü gövdesinde durması**. O kod LLVM'in sıcak yolu
+açmasını/vektörleştirmesini engelliyor ve derleyiciye fazladan tümevarım
+değişkeni (`add $0x10,%rbx`) taşıttırıyor.
+
+İki uygulama, ikisi de bu ilkeden:
+1. Şekil tazelemesini satır içinden **modül-yerel fonksiyona** almak.
+2. `for (i=C; i<len(a); i+=K)` içinde `a[i]` için döngüyü **sürümlemek**
+   — kanıtla bekçi de yavaş yol da tümden yok.
+
+## 6o. Yığından TAŞAN OKUMA çıktı testiyle YAKALANMIYOR
+
+`shape_access_proven`'ın "indeks tam olarak `i` olmalı" koşulu
+kaldırıldı — yani `a[i + k]` de bekçisiz üretildi — ve **17 testin hepsi
+yeşil kaldı**. Üç kez denendi, her seferinde daha agresif:
+
+| deneme | sonuç |
+|---|---|
+| 64 elemanlı dizide `a[i+1]` | 0 döndü, yeşil |
+| aynısı, toplamı denetlenerek | yeşil |
+| **4 elemanlı dizide `a[i + 4096]`** (32 KB ötesi) | **0 döndü, yeşil** |
+
+Yığından taşan okuma pratikte sıfır dönüyor: `malloc` bloğu yuvarlıyor,
+ötesi de eşlenmiş sıfır sayfa. [[Tuzaklar#6m]]'in (taşan YAZMA) okuma
+hâli — ama yazmayı ASAN yakalıyordu, bunu **hiçbir aracımız yakalamıyor**
+(ASAN koşum takımı runtime C fonksiyonlarını sınıyor, üretilen kodu
+değil).
+
+**Ne yapıldı:** karar tek bir adlandırılmış fonksiyona toplandı
+(`shape_access_proven`) ve sınanamadığı **orada** yazıldı. Güvence testte
+değil, o fonksiyonun dar ve tek olmasında. Bir gün "indeks varsa yeter"
+diye gevşetilirse hiçbir test kırmayacak — bunu bilerek kabul ediyoruz.
+
+**Gelecek iş:** `tulpar build --sanitize` (üretilen IR'a ASan geçişi)
+bu sınıfı kapatırdı. Şu an yok.
+
+## 6p. Koşmayan kod, taşınabilirlik hatalarını SAKLAR
+
+macOS işine dil paketleri eklenirken **iki gerçek hata** çıktı; ikisi de
+macOS'ta *her* koşumu düşürürdü ve ikisi de fark edilmemişti:
+
+- `build.sh suites` → çıplak `timeout 180`
+- `tests/pkg_audit.sh` → çıplak `timeout 30`
+
+`timeout` GNU coreutils'te; **macOS'ta yok** (orada `gtimeout`). Öğretici
+olan: `build.sh test` bu sorunu zaten çözmüştü (`TIMEOUT_BIN` + `gtimeout`
+yedeği) — yani biri bir kez farkına varmış, ama düzeltme **koşan** koda
+girmiş, koşmayana girmemiş. Kod bir platformda hiç koşmuyorsa oradaki
+hataları da hiç göstermiyor; hata "yok" değil, **görünmez**.
+
+**Ders:** bir işi yeni bir platformda koşturmadan önce "orada zaten çalışır"
+varsayma. Koşturduğun anda taşınabilirlik hataları *ilk kez* görünür hâle
+gelir — ve genelde birden fazla olurlar.
+
+### macOS = ARM64: tek doğrulama noktası
+`macos-latest` Apple Silicon, Linux işi x86-64. `CMakeLists.txt` mimariye
+göre ayrı LLVM backend'i linkliyor ve `vmvalue_abi_uses_sret()` ABI'yi
+çalışma zamanında seçiyor — **AArch64 ayrı bir kod üretim yolu.** 2026-09-06
+öncesinde o yolu yalnız `tests/aot_smoke.sh`'ın 4 vakası doğruluyordu; duman
+"derleyici çalışıyor mu"yu ölçer, "dil doğru mu"yu değil.
+
+### Hedef platformda koşturamıyorsan, en yakınını taklit et
+macOS burada yok. Adım körlemesine bırakılmadı: `build/` dizinine temiz
+derleme + **kökte arşiv yok** (CI'daki durum) + `TULPAR_NO_HWSTAT=1` ile tam
+adım yerelde koşuldu. Kalan risk yalnız ARM64'ün kendisi. Taklit, ortam
+farklarının çoğunu (yol, arşiv arama, telemetri) önceden yakalıyor.
+
+## 6q. Yerel LLVM sürümü GEÇERSİZ IR'ı gizler
+
+Döngü sürümlemenin bekçisiz okuma dalı, `arr.chk/fast/slow/done` blokları
+**yaratıldıktan sonra** duruyordu ve erken `return` geriye **sonlandırıcısı
+olmayan dört boş temel blok** bırakıyordu. Geçersiz IR.
+
+| | sonuç |
+|---|---|
+| LLVM 22 (yerel) | tolere ediyor, 69/69 **yeşil** |
+| LLVM 18 (CI) | **SEGFAULT** |
+
+Yani yerelde yeşil olması bir şey kanıtlamıyordu — geçersiz IR üretiliyordu
+ve yerel sürüm onu **temizliyordu**. CI kırmızısı ortam farkı değil, **gerçek
+bir codegen hatasıydı**.
+
+**Kural:** `LLVMAppendBasicBlock` ile blok yarattıktan sonra o yoldan
+`return` etme. Erken çıkış dalları blok yaratımından **önce** olmalı. Kod
+tarafında koşul yorumla işaretlendi ki bir daha aşağı kaymasın.
+
+**Neden testler görmedi:** `.test.tpr` paketleri geçersiz IR'ı göremez —
+görebilecekleri tek şey sonucu, ve LLVM 22'de sonuç doğru. Bu sınıfın
+doğal aracı IR doğrulayıcısıdır; pipeline'da `VerifyEach` kapalı.
+
+### CI'yı taklit et, 14 dakikalık döngüye mahkûm olma
+Reprodüksiyon Docker'da yapıldı: `ubuntu:24.04` + `llvm-18-dev` + `clang`
+(+ `zlib1g-dev libzstd-dev libtinfo-dev`, yoksa `LLVMExports.cmake`
+`ZLIB::ZLIB` bulamıyor). Kaynak ağacı **salt-okunur mount edilemiyor** —
+derleme `src/embedded_libs.h` yazıyor — o yüzden konteyner içinde
+yazılabilir bir kopya çıkarılıyor. Daraltma sondası hangi biçimin çöktüğünü
+tek tek gösterdi ve hata dakikalar içinde bulundu.
 
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için

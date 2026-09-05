@@ -1,0 +1,67 @@
+import "test";
+
+// BLOK KAPSAMI.
+//
+// Hata (2026-09-04, sondalamayla bulundu): `if`/`while` govdeleri yeni
+// kapsam ACMIYORDU, yani icteki `int x = 5;` DISTAKI x'i eziyordu —
+// sessizce, uyarisiz:
+//
+//   int x = 1;
+//   if (true) { int x = 5; }
+//   print(x);            // 5 basiyordu
+//
+// `for` DOGRUYDU (kendi enter_scope'u vardi), yani dilin icinde iki farkli
+// kapsam kurali isliyordu. Duzeltme AST_BLOCK'a tasindi: if/while/ciplak
+// blok artik tek kuralla calisiyor.
+
+func run_if_golgeleme() {
+    int x = 1;
+    if (true) { int x = 5; }
+    assert_eq_int(x, 1);
+}
+
+func run_while_golgeleme() {
+    int x = 1;
+    int i = 0;
+    while (i < 1) { int x = 5; i = i + 1; }
+    assert_eq_int(x, 1);
+}
+
+func run_ic_ice() {
+    int x = 1;
+    int a = 0;
+    int b = 0;
+    if (true) {
+        int x = 2;
+        a = x;
+        if (true) { int x = 3; b = x; }
+    }
+    assert_eq_int(b, 3);
+    assert_eq_int(a, 2);
+    assert_eq_int(x, 1);
+}
+
+// Kapsam SIZDIRMAMALI ama DIS degiskene erisim ikisi de calismali:
+// blok disaridakini okuyabilmeli ve YAZABILMELI (golgeleme yoksa).
+func run_dis_erisim() {
+    int x = 7;
+    if (true) { x = 9; }
+    assert_eq_int(x, 9);
+    int t = 0;
+    if (true) { t = x; }
+    assert_eq_int(t, 9);
+}
+
+// `for` govdesi zaten dogruydu — gerilemedigini de sinayalim.
+func run_for_govdesi() {
+    int x = 1;
+    for (int i = 0; i < 1; i = i + 1) { int x = 5; }
+    assert_eq_int(x, 1);
+}
+
+test("if govdesi golgeler", "run_if_golgeleme");
+test("while govdesi golgeler", "run_while_golgeleme");
+test("ic ice bloklar", "run_ic_ice");
+test("blok dis degiskene erisir", "run_dis_erisim");
+test("for govdesi gerilemedi", "run_for_govdesi");
+test_summary();

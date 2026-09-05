@@ -1,13 +1,18 @@
 int n = toInt(env("BENCH_N"));
 if (n <= 0) { n = 2000000; }
-array parts = [];
+// Oteki dillerin hepsi TEK BIR BUYUYEN TAMPONA bayt ekliyor
+// (String::push_str, strings.Builder, StringBuilder, list+join).
+// Tulpar'in karsiligi StringBuilder; parca dizisi kurup join'lemek
+// her parcayi kalici diziye derin kopyalatiyordu.
+var sb = StringBuilder(1024);
 int i = 0;
 while (i < n) {
-    push(parts, toString(i % 1000));
-    push(parts, ",");
+    sb_append(sb, i % 1000);
+    sb_append(sb, ",");
     i = i + 1;
 }
-str s = join("", parts);
+str s = sb_tostring(sb);
+sb_free(sb);
 // Go `strings.Count` ve Python `s.count` ile ayni: her dil kendi stdlib
 // sayacini kullaniyor. Elle karakter donguse cevirmek, olculen seyi
 // "stdlib ne kadar iyi"den "dongu ne kadar hizli"ya kaydirirdi.

@@ -1,0 +1,71 @@
+import "test";
+
+// FLOAT KESINLIGI — uc ayri hata, hepsi sessizdi (2026-09-05).
+//
+// 1) ASTNode_C.value.float_value `float` idi (32-bit), oysa calisma zamani
+//    double: backend->float_type = LLVMDoubleType, VMValue payload 8 bayt.
+//    Yani KAYNAKTAKI her float literali derleme sirasinda float32'ye
+//    kirpiliyordu. `float pi = 3.141592653589793;` aslinda
+//    3.1415927410125732 oluyordu. Uyari yok.
+//
+// 2) aot_format_float once degeri `(float)`e yuvarlayip en kisa float32
+//    gosterimini ariyordu. Yorumundaki gerekce ("the LLVM backend uses a
+//    32-bit float type") YANLISTI — o tur repoda hic olmadi. Bu, (1)'i de
+//    GIZLIYORDU: kirpilmis deger kirpilmis bicimde basilinca fark yok.
+//
+// 3) `print` bu bicimleyiciyi HIC kullanmiyordu. aot_print_value ->
+//    vm_print_value (vm.cpp) duz `printf("%g")` idi: ALTI hane.
+//    `print(1000000.5)` "1e+06" basiyordu — .5 tamamen kayboluyordu —
+//    ama `print("" + x)` "1000000.5" basiyordu. Ayni deger, iki farkli sayi.
+//
+// Enjeksiyon notu: (1) ve (2) TEK BASINA enjekte edilince bu paket kirmizi
+// doner; ikisi birlikte geri alinirsa da doner (kirpma bicimlemeden once).
+
+// (1)+(2): 3.1415927410125732 pi'nin float32'ye kirpilmis TAM degeri.
+// Kirpma varsa fark tam 0 cikar.
+func run_literal_kirpilmiyor() {
+    float pi = 3.141592653589793;
+    float f32 = 3.1415927410125732;
+    assert(pi != f32, "float literali float32'ye kirpilmis");
+    assert_close(pi - f32, -0.000000087422780, 0.000000000001);
+}
+
+// double aritmetiginin imzasi. float32 olsaydi fark 0 ya da ~3e-08 olurdu.
+func run_double_aritmetigi() {
+    float d = 0.1 + 0.2 - 0.3;
+    assert_close(d, 0.00000000000000005551115123125783, 0.000000000000000001);
+    assert(d != 0.0, "0.1+0.2-0.3 tam 0 cikti — double degil");
+}
+
+// (3): print ile toString AYNI sayiyi basmali.
+func run_print_tostring_ayni() {
+    float a = 1000000.5;
+    assert_eq_str(toString(a), "1000000.5");
+    float b = 3.141592653589793;
+    assert_eq_str(toString(b), "3.141592653589793");
+    float c = 0.1 + 0.2;
+    assert_eq_str(toString(c), "0.30000000000000004");
+}
+
+// Siradan sayilar bilimsel gosterime KACMAMALI (mevcut davranis korunuyor).
+func run_siradan_gosterim() {
+    assert_eq_str(toString(3.14), "3.14");
+    assert_eq_str(toString(30.0), "30");
+    assert_eq_str(toString(100.0), "100");
+    assert_eq_str(toString(123456789.0), "123456789");
+    assert_eq_str(toString(-0.5), "-0.5");
+    assert_eq_str(toString(0.0), "0");
+}
+
+// Tam sayiya yakin ama tam olmayan degerler yuvarlanip yutulmamali.
+func run_yakin_degerler() {
+    assert_eq_str(toString(1000000.5), "1000000.5");
+    assert_eq_str(toString(0.30000000000000004), "0.30000000000000004");
+}
+
+test("literal float32'ye kirpilmiyor", "run_literal_kirpilmiyor");
+test("double aritmetigi", "run_double_aritmetigi");
+test("print ve toString ayni", "run_print_tostring_ayni");
+test("siradan gosterim", "run_siradan_gosterim");
+test("tam sayiya yakin degerler", "run_yakin_degerler");
+test_summary();

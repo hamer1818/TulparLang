@@ -1,0 +1,79 @@
+import "test";
+
+// BILIMSEL GOSTERIM (`1e20`, `1.5e-8`, `2E+3`).
+//
+// Eksiklik (2026-09-05, float kesinligi calisirken bulundu): lexer'in
+// read_number'i yalniz basamak ve `.` topluyordu. Sonucu su idi:
+//
+//   DIL KENDI CIKTISINI OKUYAMIYORDU. `print(big)` "1e+20" basiyor, ama
+//   kaynaga `1e+20` yazinca "ayristirma hatasi". Bir programin ciktisini
+//   alip fixture'a koymak ya da bir sabiti okunur yazmak imkansizdi.
+//
+// Us varsa sonuc HER ZAMAN float (`1e3` -> 1000.0), C/Python/Go gibi.
+//
+// Enjeksiyonla dogrulandi: lexer'daki us dali kaldirilinca bu paket
+// ayristirma hatasiyla kirmizi doner.
+
+func run_temel() {
+    assert_eq_float(1e3, 1000.0);
+    assert_eq_float(2E+3, 2000.0);
+    assert_eq_float(3e2, 300.0);
+    assert_close(1.5e-8, 0.000000015, 0.0000000000001);
+    assert_close(5e-4, 0.0005, 0.00000000001);
+}
+
+// Cikti -> kaynak gidis-donusu: basilan bicim geri okunabilmeli.
+func run_gidis_donus() {
+    assert_eq_str(toString(1e20), "1e+20");
+    assert_eq_str(toString(1e+20), "1e+20");     // basilan bicim ayristirilabiliyor
+    assert_eq_str(toString(1e-5), "1e-05");
+    assert_eq_str(toString(1e-05), "1e-05");     // basilan bicim ayristirilabiliyor
+    assert_eq_str(toString(6.02e23), "6.02e+23");
+    assert_eq_str(toString(6.02e+23), "6.02e+23");
+}
+
+// Us BUYUK ve KUCUK tarafta double araligina yayilmali.
+func run_genis_aralik() {
+    assert_close(1e100 / 1e100, 1.0, 0.000000001);
+    assert_close(1e-100 * 1e100, 1.0, 0.000000001);
+    assert(1e308 > 1e307, "buyuk us karsilastirmasi");
+}
+
+// `e` ARDINDAN basamak yoksa tuketilmemeli. Bu koruma YUK TASIYOR ama
+// ETKISI BURADA GORUNMEZ: kaldirilinca `int x = 1e;` sessizce derlenip 0
+// basiyor — yani DERLEME HATASI beklentisi gerekiyor ve bu paket ondan
+// bakamiyor. Gercek regresyon tests/silent_failure_probe.py'de
+// ("us: eksik us HATA vermeli"), orada enjeksiyonla dogrulandi.
+//
+// Ilk yazilan hali (`int e = 7; print(a + e);`) HICBIR SEY olcmuyordu:
+// bosluk zaten sayi taramasini bitiriyor, koruma hic devreye girmiyor.
+// Enjeksiyon soyledi. Asagidaki iki assert yalniz `e` adli degiskenin
+// hala kullanilabildigini kayit altina aliyor.
+func run_e_degiskeni_bozulmuyor() {
+    int e = 7;
+    int a = 2;
+    assert_eq_int(a + e, 9);
+    int E = 4;
+    assert_eq_int(E + 1, 5);
+}
+
+// Tamsayi literalleri ETKILENMEMELI.
+func run_tamsayi_bozulmuyor() {
+    assert_eq_int(2 + 3, 5);
+    assert_eq_int(100, 100);
+    assert_eq_str(toString(42), "42");
+}
+
+func run_donguda() {
+    int t = 0;
+    for (int i = 0; i < 1e3; i = i + 1) { t = t + 1; }
+    assert_eq_int(t, 1000);
+}
+
+test("temel us bicimleri", "run_temel");
+test("cikti -> kaynak gidis donusu", "run_gidis_donus");
+test("genis us araligi", "run_genis_aralik");
+test("e degiskeni bozulmuyor", "run_e_degiskeni_bozulmuyor");
+test("tamsayi literalleri bozulmuyor", "run_tamsayi_bozulmuyor");
+test("donguda us siniri", "run_donguda");
+test_summary();

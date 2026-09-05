@@ -109,10 +109,69 @@ typedef struct {
   LLVMTypeRef ret_pair_type;   // {i64, i64} - ABI-safe return type for VMValue
   LLVMTypeRef obj_type;        // struct Obj
   LLVMTypeRef obj_string_type; // struct ObjString
+  // struct ObjArray — dizi erisiminin satir ici hizli yolu icin. Alan
+  // ofsetleri runtime_bindings.cpp'deki static_assert'lerle kilitli.
+  LLVMTypeRef obj_array_type;
+
+  // TBAA: dizi ELEMAN deposu ile ObjArray BASLIGI/VMValue yuvalari ayri
+  // takma-ad sinifi. Bu bilgi olmadan LLVM, `a[k] = 1` yazmasinin basligi
+  // (count/idata) ezebilecegini varsayip her yinelemede yeniden okuyor;
+  // dogru bilgiyle sinir denetimi ve etiket denetimleri dongu disina
+  // tasiniyor — C/Rust/Go derleyicilerinin ayni isi yapma bicimi.
+  // Dongu-degismezi dizi sekli onbellegi. Dongu basinda bir kez okunan
+  // idata/count, govde boyunca YERELDEN okunuyor (Go'nun dilim basligini
+  // yazmacta tutmasiyla ayni fikir). Yavas yoldan donuste TAZELENIYOR:
+  // bir float yazimi diziyi kutuya cevirirse eski isaretci askida kalirdi.
+  // Kanit tarafi: src/aot/llvm_array_shape.cpp.
+  struct ArrShapeEntry {
+    const char *name;
+    LLVMValueRef idata_slot;   // ptr* (alloca)
+    LLVMValueRef count_slot;   // i64* (alloca), sekil uymuyorsa 0
+    // GERCEK uzunluk: dizi kutulu olsa bile dogru, dizi DEGILSE -1.
+    // count_slot bunun yerine gecemez — o, kutulanmamis olmayan dizide
+    // bilerek 0 tutuyor (her erisim eski yola dussun diye).
+    LLVMValueRef len_slot;
+    // Bos degilse: bu dizinin `[<ivar>]` erisiminde SINIR DENETIMI
+    // GEREKSIZ (kanit: tulpar_loop_index_proven). Yalniz dongunun HIZLI
+    // surumunde dolu — genel surumde daima nullptr.
+    const char *proven_ivar;
+    // 1 ise len_slot dongu basinda KESIN dolduruldu (dizi degilse bile
+    // aot_len ile) -> kullanim yerinde dal da cagri da gerekmiyor.
+    int len_eager;
+  };
+  ArrShapeEntry shape_cache[4];
+  int shape_count;
+
+  LLVMValueRef func_aot_div_error;
+  // Sekil onbellegi tazeleme (codegen ic yardimcisi). Yavas yolda SATIR ICI
+  // uretmek yerine cagriliyor: satir ici bicim 4 blok + ~25 komut ve dongu
+  // govdesini LLVM'in acamayacagi kadar sisiriyordu (olculdu: arrayiter'de
+  // 1,26 ms). Dongu BASINDAKI ilk doldurma hala satir ici — orada bir kez
+  // calisiyor ve LLVM'e deger hakkinda bilgi veriyor.
+  // MODUL-YEREL tazeleme fonksiyonu (lazy). Once runtime'da `aot_shape_refill`
+  // olarak denendi ve GERI ALINDI: opak dissal cagri arrayiter'i
+  // 6,51 -> 5,66 iyilestirirken sieve'i 9,64 -> 10,68 GERILETIYORDU —
+  // kucuk bir dongude her dissal cagri LLVM'in gozunde butun bellegi
+  // kirletiyor. Modul-yerel bicimde LLVM govdeyi GORUYOR: bellek etkilerini
+  // kendi cikariyor ve nerede acacagina kendi karar veriyor.
+  // IKI varyant: [0] len KULLANMAYAN dongular icin (govdesinde HIC dissal
+  // cagri yok -> LLVM bellek etkilerini temiz cikariyor), [1] `len` icin
+  // aot_len cagiran varyant. Tek fonksiyonda birlestirilince aot_len'in
+  // bilinmeyen etkileri BUTUN fonksiyonu kirletiyor ve `len` kullanmayan
+  // sicak dongular de bedelini oduyordu (olculdu: sieve 9,07 -> 9,60).
+  LLVMValueRef fn_shape_refill[2];
+
+  LLVMMetadataRef tbaa_header;
+  LLVMMetadataRef tbaa_elem;
+  unsigned tbaa_kind;
 
   // Runtime Functions
   LLVMValueRef func_printf;
   LLVMValueRef func_vm_alloc_string;
+  // Dizgi sabitleri BİR KEZ ayrılır (aot_intern_string) ve site başına bir
+  // modül global'inde önbelleklenir; gerekçe runtime_bindings.cpp'de.
+  LLVMValueRef func_aot_intern_string;
+  int str_lit_cache_n;
   LLVMValueRef func_print_value; // Helper: print_value(VMValue) with newline
   LLVMValueRef
       func_print_value_inline; // Helper: print_value_inline(VMValue) no newline
@@ -249,6 +308,7 @@ typedef struct {
   LLVMValueRef func_aot_trim;
   LLVMValueRef func_aot_replace;
   LLVMValueRef func_aot_split;
+  LLVMValueRef func_aot_array_fill;
   LLVMValueRef func_aot_array_slice; // (VMValue* arr, i64 start) -> VMValue
 
   LLVMValueRef func_aot_read_file;
@@ -313,6 +373,7 @@ typedef struct {
 
   // StringBuilder Functions
   LLVMValueRef func_aot_stringbuilder_new;
+  LLVMValueRef func_aot_stringbuilder_append_int;
   LLVMValueRef func_aot_stringbuilder_append;
   LLVMValueRef func_aot_stringbuilder_append_vmvalue;
   LLVMValueRef func_aot_stringbuilder_to_string;

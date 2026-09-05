@@ -146,6 +146,18 @@ if [ "$ACTION" = "suites" ]; then
         echo -e "${RED}ERROR: ./tulpar yok — önce ./build.sh çalıştırın.${NC}"
         exit 1
     fi
+    # `timeout` GNU coreutils'te; macOS'ta YOK (orada brew ile `gtimeout`).
+    # Bu satir uzun sure ciplak `timeout 180` idi ve macOS'ta HER paketi
+    # "command not found" ile dusururdu — fark edilmedi cunku suites orada
+    # hic kosmuyordu. `test` hedefi ayni sorunu zaten cozmustu; ayni kalibi
+    # buraya da tasiyoruz. Hicbiri yoksa zaman siniri olmadan kosuyor:
+    # CI adim zaman asimi yedek.
+    SUITE_TIMEOUT_CMD=""
+    if command -v timeout >/dev/null 2>&1; then
+        SUITE_TIMEOUT_CMD="timeout 180"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        SUITE_TIMEOUT_CMD="gtimeout 180"
+    fi
     hw_begin
     SUITE_FAILED=0
     SUITE_N=0
@@ -153,7 +165,7 @@ if [ "$ACTION" = "suites" ]; then
         [ -f "$suite" ] || continue
         SUITE_N=$((SUITE_N + 1))
         name=$(basename "$suite")
-        out=$(DISPLAY= timeout 180 ./tulpar "$suite" 2>&1)
+        out=$(DISPLAY= $SUITE_TIMEOUT_CMD ./tulpar "$suite" 2>&1)
         code=$?
         summary=$(echo "$out" | grep -E '^Tests:' | tail -1)
         if [ $code -ne 0 ]; then
@@ -211,6 +223,21 @@ if [ "$ACTION" = "suites" ]; then
         # her web derlemesi link'te patlıyordu ve sarı satırı kimse okumadı.
         if ! python3 tests/dist_archive_audit.py; then
             echo -e "${RED}Dist arsiv denetimi basarisiz!${NC}"
+            exit 1
+        fi
+        # Dongu-sekli gezicisi ASTNode_C'nin TUM cocuk alanlarini geziyor mu?
+        # Bir dal atlanirsa "govdede cagri yok" kaniti delinir ve atlanan
+        # dalda duran bir push bellek bozar — suitler yesil kalarak.
+        if ! python3 tests/ast_child_fields_audit.py; then
+            echo -e "${RED}AST cocuk alani denetimi basarisiz!${NC}"
+            exit 1
+        fi
+        # Sessiz bozulma sondalari: paketler "dogru yazilmis" programlari
+        # kosuyor, bu kenar durumlari kosuyor ve ozellikle derleyicinin
+        # "basarili" deyip yanlis sonuc urettigi / ikilinin coktugu sinifi
+        # ariyor. Iki gercek hatayi boyle bulduk (bkz. dosya basligi).
+        if ! python3 tests/silent_failure_probe.py; then
+            echo -e "${RED}Sessiz hata sondalari basarisiz!${NC}"
             exit 1
         fi
     fi

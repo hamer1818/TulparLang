@@ -1,17 +1,30 @@
-// Regression: float-to-string uses shortest float32 round-trip.
+// Regression: float-to-string uses shortest DOUBLE round-trip.
 //
-// Tulpar floats carry 32-bit precision. Before the 2026-07-20 fix, toString
-// used "%g" (6 sig-figs): it lost precision (1000000.5 -> "1e+06") — and a
-// naive bump to higher fixed precision exposed float32 noise (3.14 ->
-// "3.14000010490417"). Now it prints the shortest decimal that round-trips to
-// the same float32. Run: ./tulpar tests/float_format.test.tpr
+// 2026-07-20'de toString "%g" (6 anlamli hane) idi: kesinlik kaybediyordu
+// (1000000.5 -> "1e+06"). Duzeltme "ayni degere geri donen en kisa ondalik"
+// oldu — dogru fikir, ama YANLIS TURE baglandi: bicimleyici degeri once
+// `(float)`e yuvarliyordu ve gerekcesi "the LLVM backend uses a 32-bit float
+// type" idi.
+//
+// O gerekce YANLIS: backend->float_type ilk gunden beri LLVMDoubleType,
+// VMValue payload'i 8 bayt. Yani bicimleyici tuttugu sayidan BASKA bir sayi
+// yaziyordu ve bu, parser'daki gercek kirpma hatasini da gizliyordu
+// (ASTNode_C.value.float_value `float` idi). Ikisi de 2026-09-05'te
+// duzeltildi; ayrintili tani + enjeksiyon notu:
+// tests/float_precision.test.tpr ve tests/silent_failure_probe.py.
+//
+// Bu paket bicimin KENDISINI kilitliyor. Run: ./tulpar tests/float_format.test.tpr
 import "test";
 
 func run_clean_small() {
     assert_eq_str(toString(3.14), "3.14");        // no float32 noise
     assert_eq_str(toString(1.0), "1");            // trailing .0 dropped
     assert_eq_str(toString(0.5), "0.5");
-    assert_eq_str(toString(0.1 + 0.2), "0.3");    // not 0.30000004
+    // "0.3" BEKLENMIYOR: double'da 0.1+0.2 gercekten 0.30000000000000004.
+    // Eski beklenti float32 yuvarlamasini kodluyordu — yani testin kendisi
+    // hatayi sabitliyordu. Python/Go/Rust/JS de bu sayiyi boyle basar.
+    assert_eq_str(toString(0.1 + 0.2), "0.30000000000000004");
+    assert_eq_str(toString(0.3), "0.3");          // literal 0.3 ise sade
 }
 
 func run_large_with_fraction() {
