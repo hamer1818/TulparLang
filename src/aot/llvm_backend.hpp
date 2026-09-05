@@ -131,6 +131,10 @@ typedef struct {
     // count_slot bunun yerine gecemez — o, kutulanmamis olmayan dizide
     // bilerek 0 tutuyor (her erisim eski yola dussun diye).
     LLVMValueRef len_slot;
+    // Bos degilse: bu dizinin `[<ivar>]` erisiminde SINIR DENETIMI
+    // GEREKSIZ (kanit: tulpar_loop_index_proven). Yalniz dongunun HIZLI
+    // surumunde dolu — genel surumde daima nullptr.
+    const char *proven_ivar;
     // 1 ise len_slot dongu basinda KESIN dolduruldu (dizi degilse bile
     // aot_len ile) -> kullanim yerinde dal da cagri da gerekmiyor.
     int len_eager;

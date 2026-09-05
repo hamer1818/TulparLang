@@ -197,6 +197,99 @@ static bool visit_len_of(ASTNode_C *n, void *p) {
   return true;
 }
 
+// Govdede ELEMAN YAZMASI var mi? (`a[i] = ...`, `a[i] += ...`, `a[i]++`)
+//
+// Bu, sinir denetimi elemenin YUK TASIYAN kosulu. Kutusuz bir diziye int
+// OLMAYAN bir deger yazmak (`a[i] = 2.5`) diziyi KUTULUYOR: idata free
+// ediliyor, items_ ayriliyor. Onbellekteki idata o an sarkiyor ve bugun
+// bunu yalniz yavas yoldaki tazeleme kurtariyor (bkz. Tuzaklar 6l).
+// Bekcisiz hizli surumde tazeleme YOK, yani yazma da olmamali.
+//
+// Yazma HANGI ISIMDEN oldugu onemsiz: `array b = a;` ikisini ayni diziye
+// bagliyor, yani `b[i] = 2.5` bizim `a`mizi da kutular. O yuzden soru
+// "bu diziye yaziliyor mu" degil, "govdede HERHANGI bir eleman yazmasi
+// var mi".
+static bool visit_any_elem_write(ASTNode_C *n, void *p) {
+  bool *found = (bool *)p;
+  if ((n->type == AST_ASSIGNMENT || n->type == AST_COMPOUND_ASSIGN ||
+       n->type == AST_INCREMENT || n->type == AST_DECREMENT) &&
+      n->left && n->left->type == AST_ARRAY_ACCESS) {
+    *found = true;
+    return false;
+  }
+  return true;
+}
+
+// `for (int i = C; i < len(a); i = i + K)` bicimi mi, ve `a[i]` icin SINIR
+// DENETIMI GEREKSIZ mi?
+//
+// Kanit: dizi kutusuzken count == len (ikisi de gercek eleman sayisi).
+// Kosul `i < len(a)` ustteki siniri, `i` C >= 0'dan baslayip yalniz K > 0
+// ile artiyor olmasi alttaki siniri veriyor. Sekil kaniti zaten uzunlugun
+// dongu boyunca degismedigini soyluyor. Yani 0 <= i < count.
+//
+// "Dizi kutusuz" kismi CAGIRAN tarafta, dongu basinda bir kez sinaniyor
+// (count_slot != 0) ve dongu SURUMLENIYOR — LLVM'in kendi unswitch'i bu
+// isi yapamiyor, olculdu (Performance.md).
+//
+// ELEMAN YAZMASI OLAN govde reddediliyor: bkz. visit_any_elem_write.
+extern "C" int tulpar_loop_index_proven(ASTNode_C *init, ASTNode_C *cond,
+                                        ASTNode_C *body, ASTNode_C *incr,
+                                        const char *array_name,
+                                        const char **ivar_out) {
+  if (!init || !cond || !incr || !array_name) return 0;
+
+  // init: `int i = C;`  (C >= 0)
+  if (init->type != AST_VARIABLE_DECL || !init->name) return 0;
+  ASTNode_C *iv = init->right;
+  if (!iv || iv->type != AST_INT_LITERAL || iv->value.int_value < 0) return 0;
+  const char *ivar = init->name;
+
+  // cond: `i < len(a)`
+  if (cond->type != AST_BINARY_OP || cond->op != TOKEN_LESS) return 0;
+  ASTNode_C *lhs = cond->left, *rhs = cond->right;
+  if (!lhs || lhs->type != AST_IDENTIFIER || !lhs->name ||
+      strcmp(lhs->name, ivar) != 0)
+    return 0;
+  if (!rhs || rhs->type != AST_FUNCTION_CALL || !rhs->name) return 0;
+  if (strcmp(rhs->name, "len") != 0 && strcmp(rhs->name, "length") != 0)
+    return 0;
+  if (rhs->argument_count != 1 || !rhs->arguments || !rhs->arguments[0] ||
+      rhs->arguments[0]->type != AST_IDENTIFIER || !rhs->arguments[0]->name ||
+      strcmp(rhs->arguments[0]->name, array_name) != 0)
+    return 0;
+
+  // incr: `i = i + K` (K > 0) ya da `i++`
+  bool incr_ok = false;
+  if (incr->type == AST_INCREMENT && incr->name && !incr->left &&
+      strcmp(incr->name, ivar) == 0) {
+    incr_ok = true;
+  } else if (incr->type == AST_ASSIGNMENT && incr->name && !incr->left &&
+             strcmp(incr->name, ivar) == 0 && incr->right &&
+             incr->right->type == AST_BINARY_OP &&
+             incr->right->op == TOKEN_PLUS) {
+    ASTNode_C *a = incr->right->left, *b = incr->right->right;
+    if (a && b && a->type == AST_IDENTIFIER && a->name &&
+        strcmp(a->name, ivar) == 0 && b->type == AST_INT_LITERAL &&
+        b->value.int_value > 0)
+      incr_ok = true;
+  }
+  if (!incr_ok) return 0;
+
+  // `i` govdede baska yerde ATANMAMALI (kosul/artim disinda).
+  if (tulpar_loop_rebinds_name(nullptr, body, nullptr, ivar)) return 0;
+
+  // Govdede HIC eleman yazmasi olmamali — kutulama riski.
+  bool wrote = false;
+  walk_all(body, visit_any_elem_write, &wrote);
+  walk_all(cond, visit_any_elem_write, &wrote);
+  walk_all(incr, visit_any_elem_write, &wrote);
+  if (wrote) return 0;
+
+  if (ivar_out) *ivar_out = ivar;
+  return 1;
+}
+
 // Dongu `len(<ad>)` cagiriyor mu? Cagiriyorsa uzunlugu dongu basinda BIR KEZ
 // hesaplayip yuvayi her zaman gecerli kiliyoruz; o zaman kullanim yerinde ne
 // dal ne cagri kaliyor. Cagirmiyorsa bos yere bir aot_len cagrisi eklemenin

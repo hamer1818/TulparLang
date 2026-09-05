@@ -16,6 +16,12 @@ extern "C" int tulpar_loop_rebinds_name(ASTNode_C *cond, ASTNode_C *body,
 extern "C" int tulpar_collect_indexed_names(ASTNode_C *cond, ASTNode_C *body,
                                             const char **out, int max);
 
+// `a[i]` sinir denetimi elenebilir mi? Bkz. tanimdaki kanit.
+extern "C" int tulpar_loop_index_proven(ASTNode_C *init, ASTNode_C *cond,
+                                        ASTNode_C *body, ASTNode_C *incr,
+                                        const char *array_name,
+                                        const char **ivar_out);
+
 extern "C" int tulpar_loop_uses_len(ASTNode_C *cond, ASTNode_C *body,
                                     ASTNode_C *incr, const char *name);
 
