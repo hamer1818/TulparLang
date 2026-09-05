@@ -120,6 +120,47 @@ c("eleman ++ donguda",
   'print(a[0] + a[1]);', "4")
 c("degisken ++ bozulmadi", 'int x = 5;\nprint(x++);\nprint(x);', "5\n6")
 
+# --- 7c. Eleman hedefli BILESIK atama (2026-09-05'te bulunan eksiklik) ---
+# `a[i]++` calisirken `a[i] += 5` ACIK ayristirma hatasiydi.
+c("dizi elemani +=", 'int[] a = [1, 2, 3];\na[1] += 5;\nprint(a[1]);', "7")
+c("dizi elemani *=", 'int[] a = [1, 2, 3];\na[0] *= 7;\nprint(a[0]);', "7")
+c("dizi elemani %=", 'int[] a = [17];\na[0] %= 5;\nprint(a[0]);', "2")
+c("json alani +=", 'json j = {"n": 10};\nj["n"] += 5;\nprint(j["n"]);', "15")
+c("eleman += ifade indeks",
+  'int[] a = [10, 20, 30];\nint i = 2;\na[i - 1] += 100;\nprint(a[1]);', "120")
+c("dizgi elemani +=", 'array s = ["ab"];\ns[0] += "XY";\nprint(s[0]);', "abXY")
+
+# SARKAN SEKIL ONBELLEGI: `a[i]++` / `a[i] += 1` runtime'a giriyor,
+# vm_array_get -> arr_items -> arr_debox KUTUSUZ diziyi kutuluyor ve
+# idata'yi FREE ediyor. Dongu basinda onbellege alinan idata sarkiyor.
+# Olculdu 2026-09-05: "malloc(): unsorted double linked list corrupted".
+# Dizi kucukse free geri vermeyebilir — 4096 eleman gerekiyor.
+c("sarkan onbellek: eleman ++",
+  'int[] a = array_fill(4096, 0);\n'
+  'for (int i = 0; i < 4096; i = i + 1) { a[i]++; a[i] = a[i] + 1; }\n'
+  'int t = 0;\nfor (int j = 0; j < 4096; j = j + 1) { t = t + a[j]; }\nprint(t);', "8192")
+c("sarkan onbellek: eleman +=",
+  'int[] a = array_fill(4096, 0);\n'
+  'for (int i = 0; i < 4096; i = i + 1) { a[i] += 1; a[i] = a[i] + 1; }\n'
+  'int t = 0;\nfor (int j = 0; j < 4096; j = j + 1) { t = t + a[j]; }\nprint(t);', "8192")
+
+# --- 7d. Float kesinligi (2026-09-05'te bulunan uc hata) ---
+# `print`in float bicimleyicisi YALNIZ burada gorunur: paketlerdeki
+# assert'ler toString'den geciyor, print'ten degil. Bu ayrimi enjeksiyon
+# ortaya cikardi — vm_print_value'yu `%g`ye geri alinca paket YESIL kaldi.
+#
+#   1) AST literali float32'ye kirpiliyordu (ASTNode_C.value.float_value)
+#   2) aot_format_float degeri once (float)'a yuvarliyordu
+#   3) print bu bicimleyiciyi hic kullanmiyordu: vm_print_value -> "%g"
+c("print float tam kesinlik", 'print(3.141592653589793);', "3.141592653589793")
+c("print float veri kaybi yok", 'print(1000000.5);', "1000000.5")
+c("print double aritmetigi", 'print(0.1 + 0.2);', "0.30000000000000004")
+c("print ve toString ayni",
+  'float x = 1000000.5;\nprint(x);\nprint("" + x);', "1000000.5\n1000000.5")
+c("print siradan float bilimsele kacmiyor",
+  'print(30.0);\nprint(100.0);\nprint(123456789.0);', "30\n100\n123456789")
+c("print float 3.14", 'print(3.14);', "3.14")
+
 fails = 0
 for name, src, expect in CASES:
     safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)

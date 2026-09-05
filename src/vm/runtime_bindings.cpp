@@ -1119,51 +1119,52 @@ void aot_stringbuilder_append(StringBuilder *sb, const char *str, int len) {
   sb->buffer[sb->length] = '\0';
 }
 
-// Format a Tulpar float for display. Tulpar's float carries 32-bit (float)
-// precision — the LLVM backend uses a 32-bit float type — so a plain "%g" at
-// 6 sig-figs both loses precision (1000000.5 -> "1e+06") and, at higher fixed
-// precision, exposes the float32 rounding noise (3.14 -> "3.14000010490417").
-// Instead find the SHORTEST decimal that round-trips to the same float32:
-// 3.14 -> "3.14", 1000000.5 -> "1000000.5", 0.1+0.2 -> "0.3". Mirrors what
-// Python/Go/Rust print for their floats. Returns the written length.
-static int aot_format_float(char *buf, size_t n, double value) {
-  float f = (float)value;
-  for (int prec = 1; prec <= 9; prec++) {  // 9 sig-figs round-trips any float32
-    int len = snprintf(buf, n, "%.*g", prec, (double)f);
-    if ((float)strtod(buf, nullptr) != f) continue;
-    // `%g` switches to scientific whenever the exponent leaves [-4, prec).
-    // At the SHORTEST round-tripping precision that fires for perfectly
-    // ordinary numbers: 30.0 came out "3e+01" and 100.0 "1e+02". Both
-    // round-trip, so the loop accepted them — but nobody writes a score,
-    // an fps or a coordinate that way, and this is what `print` shows.
-    // Re-render in fixed notation when the magnitude is one a reader
-    // expects written out; scientific stays for the extremes where it
-    // earns its place.
+// Format a Tulpar float for display: en KISA, ayni double'a geri donen
+// ondalik gosterim. 3.14 -> "3.14", 1000000.5 -> "1000000.5",
+// 0.1+0.2 -> "0.30000000000000004". Python/Go/Rust/JS ile ayni davranis.
+//
+// ONCEDEN float32'ye YUVARLIYORDU. Yorumundaki gerekce ("the LLVM backend
+// uses a 32-bit float type") YANLISTI: backend->float_type ilk gunden beri
+// LLVMDoubleType ve VMValue payload'i 8 bayt. Yani her basilan float ~7
+// haneye kirpiliyordu ve print, tuttugu sayidan BASKA bir sayi yaziyordu.
+// Bu ayni zamanda parser'daki gercek kirpma hatasini (ASTNode_C.value
+// .float_value `float` idi) GIZLIYORDU — ikisi birlikte olculdu 2026-09-05.
+// Regresyon: tests/float_precision.test.tpr
+int aot_format_float(char *buf, size_t n, double value) {
+  for (int prec = 1; prec <= 17; prec++) {  // 17 sig-fig herhangi bir double'i geri dondurur
+    int len = snprintf(buf, n, "%.*g", prec, value);
+    if (strtod(buf, nullptr) != value) continue;
+    // `%g` us [-4, prec) araligindan cikinca bilimsele geciyor. En kisa
+    // gosterimde bu siradan sayilarda da tetikleniyor: 30.0 -> "3e+01",
+    // 100.0 -> "1e+02". Ikisi de geri donuyor, yani dongu kabul ediyor —
+    // ama kimse bir skoru ya da koordinati boyle yazmaz ve print'in
+    // gosterdigi bu. Okurun duz bekledigi buyuklukte sabit gosterime don;
+    // bilimsel yalniz uclarda kalsin.
     if (memchr(buf, 'e', (size_t)len) == nullptr) return len;
-    double a = f < 0 ? -(double)f : (double)f;
+    double a = value < 0 ? -value : value;
     if (a < 1e-4 || a >= 1e16) return len;
-    // Buraya YALNIZCA `%g`nin BÜYÜK tarafta bilimsele geçtiği durum düşüyor:
-    // küçük taraf (üs < -4) yukarıdaki büyüklük korumasına takılıyor, sıfır
-    // ise hiç 'e' üretmiyor. Büyük tarafta bilimsel demek "üs >= anlamlı
-    // basamak sayısı" demek — yani tam sayı kısmı anlamlı basamaklardan
-    // uzun, dolayısıyla KESİR YOK. O yüzden ondalık basamak hesabı gereksiz:
-    // her zaman sıfır çıkıyor. (Önce genel bir `prec - 1 - exp10` hesabı
-    // yazılmıştı; enjeksiyon o hesabı bozunca hiçbir test kırılmadı ve
-    // sebebi buydu — ulaşılabilir yolda sonuç değişmiyordu.)
-    int flen = snprintf(buf, n, "%.0f", (double)f);
-    // Fixed form must still round-trip; if it somehow doesn't, keep the
-    // scientific one rather than print a number that isn't the value.
+    // Buraya YALNIZCA `%g`nin BUYUK tarafta bilimsele gectigi durum dusuyor:
+    // kucuk taraf (us < -4) yukaridaki buyukluk korumasina takiliyor, sifir
+    // ise hic 'e' uretmiyor. Buyuk tarafta bilimsel demek "us >= anlamli
+    // basamak sayisi" demek — yani tam sayi kismi anlamli basamaklardan
+    // uzun, dolayisiyla KESIR YOK. O yuzden ondalik basamak hesabi
+    // gereksiz: her zaman sifir cikiyor. (Once genel bir `prec - 1 - exp10`
+    // hesabi yazilmisti; enjeksiyon o hesabi bozunca hicbir test kirilmadi
+    // ve sebebi buydu — ulasilabilir yolda sonuc degismiyordu.)
+    int flen = snprintf(buf, n, "%.0f", value);
+    // Sabit gosterim de geri DONMELI; donmuyorsa bilimsel olani birak,
+    // tuttugundan baska bir sayi yazma.
     //
-    // NOTE: this check and the `memchr` early return above are MUTUALLY
-    // REDUNDANT — remove either alone and every test still passes (measured),
-    // because whichever survives covers the other's case. Remove BOTH and
-    // 3.14 prints "3". They are kept as a pair on purpose: the early return
-    // is the fast path (no second snprintf on the common case), this one is
-    // the correctness backstop. Don't delete one because it "looks dead".
-    if ((float)strtod(buf, nullptr) == f) return flen;
-    return snprintf(buf, n, "%.*g", prec, (double)f);
+    // NOT: bu denetim ile yukaridaki `memchr` erken donusu KARSILIKLI
+    // GEREKSIZ — birini tek basina kaldirinca butun testler yine geciyor
+    // (olculdu), cunku kalan digerinin durumunu da kapsiyor. Ikisi birden
+    // kalkarsa 3.14 "3" basiyor. Cift olarak BILEREK duruyor: erken donus
+    // hizli yol (yaygin durumda ikinci snprintf yok), bu ise dogruluk
+    // agi. "Olu goruniyor" diye birini silme.
+    if (strtod(buf, nullptr) == value) return flen;
+    return snprintf(buf, n, "%.*g", prec, value);
   }
-  return snprintf(buf, n, "%.9g", (double)f);
+  return snprintf(buf, n, "%.17g", value);
 }
 
 // Append VMValue to StringBuilder (handles any type)

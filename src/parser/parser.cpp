@@ -1676,7 +1676,7 @@ static ASTNode_C* convert_ast_node(const ASTNode& node) {
             set_loc(out, n.loc);
         } else if constexpr (std::is_same_v<T, FloatLiteral>) {
             out->type = AST_FLOAT_LITERAL;
-            out->value.float_value = static_cast<float>(n.value);
+            out->value.float_value = n.value;   // double -> double, KIRPMA YOK
             set_loc(out, n.loc);
         } else if constexpr (std::is_same_v<T, StringLiteral>) {
             out->type = AST_STRING_LITERAL;

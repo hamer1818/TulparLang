@@ -32,6 +32,12 @@
 
 // External function from runtime_bindings.cpp (C ABI)
 extern "C" void print_vm_value(VMValue value);
+// Ortak float bicimleyici (runtime_bindings.cpp). Asagidaki FLOAT durumu
+// duz `printf("%g")` idi — yani ALTI anlamli hane. `print` ile `toString`
+// AYNI degeri FARKLI basiyordu (`print(1000000.5)` -> "1e+06", ama
+// `print("" + x)` -> "1000000.5"): print veri kaybediyordu. Olculdu
+// 2026-09-05. Regresyon: tests/float_precision.test.tpr
+extern "C" int aot_format_float(char *buf, size_t n, double value);
 
 // Shared AOT runtime entry points. Defined in runtime_bindings.cpp inside
 // its `extern "C" {` block — match that linkage here so the VM opcodes
@@ -673,9 +679,12 @@ void vm_print_value(VMValue value) {
   case VM_VAL_INT:
     printf("%lld", AS_INT(value));
     break;
-  case VM_VAL_FLOAT:
-    printf("%g", AS_FLOAT(value));
+  case VM_VAL_FLOAT: {
+    char fbuf[64];
+    aot_format_float(fbuf, sizeof(fbuf), AS_FLOAT(value));
+    printf("%s", fbuf);
     break;
+  }
   case VM_VAL_BOOL:
     printf(AS_BOOL(value) ? "true" : "false");
     break;

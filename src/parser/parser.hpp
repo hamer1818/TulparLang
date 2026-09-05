@@ -133,7 +133,13 @@ typedef struct ASTNode_C {
 
   union {
     long long int_value;
-    float float_value;
+    // DOUBLE olmali: calisma zamani (VMValue payload, backend->float_type =
+    // LLVMDoubleType) 64-bit. Burasi `float` iken her kaynak literali
+    // SESSIZCE float32'ye kirpiliyordu — `float pi = 3.141592653589793;`
+    // 3.1415927410125732 olarak derleniyor, ~9 hane gidiyor, uyari cikmiyor.
+    // print() %g ile 6 hane bastigi icin gozle de gorunmuyordu.
+    // Olculdu 2026-09-05; regresyon: tests/float_precision.test.tpr
+    double float_value;
     char *string_value;
     int bool_value;
   } value;
