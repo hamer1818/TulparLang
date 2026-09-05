@@ -25,7 +25,9 @@ TULPAR = str(ROOT / "tulpar")
 D = pathlib.Path(tempfile.mkdtemp(prefix="probe"))
 CASES = []
 def c(name, src, expect):
-    CASES.append((name, src, expect.strip()))
+    # expect=None: program DERLENMEMELI (sifirdan farkli cikis). Sessizce
+    # gecerli sayilan bozuk sozdizimi bu tarayicinin aradigi siniftir.
+    CASES.append((name, src, None if expect is None else expect.strip()))
 
 # --- 1. Ad cakismasi: KULLANICI FONKSIYONLARI ---
 c("fonksiyon adi 'free'", 'func free(int x) { return x + 1; }\nprint(free(1));', "2")
@@ -161,6 +163,25 @@ c("print siradan float bilimsele kacmiyor",
   'print(30.0);\nprint(100.0);\nprint(123456789.0);', "30\n100\n123456789")
 c("print float 3.14", 'print(3.14);', "3.14")
 
+# --- 7e. Bilimsel gosterim (2026-09-05'te bulunan eksiklik) ---
+# Lexer'in read_number'i us kabul etmiyordu: DIL KENDI CIKTISINI
+# OKUYAMIYORDU. `print(1e20)` -> "1e+20", ama kaynakta `1e+20` hata.
+c("us: 1e3", 'print(1e3);', "1000")
+c("us: 1e+20", 'print(1e+20);', "1e+20")
+c("us: negatif", 'print(1.5e-8);', "1.5e-08")
+c("us: buyuk harf E", 'print(2E+3);', "2000")
+c("us: cikti-kaynak gidis donusu", 'print(6.02e23);', "6.02e+23")
+# `e` ardindan basamak yoksa TUKETILMEMELI. Bu koruma YUK TASIYOR:
+# kaldirilinca `int x = 1e;` SESSIZCE derleniyor ve 0 basiyor,
+# `print(y - 1e)` ise `1e`yi 1.0 sayiyor. Yani eksik us bir yazim
+# hatasi degil, gecerli bir sayi oluyor — tek kelime tani yok.
+# (Ilk yazilan sonda `int e = 7; print(a + e);` idi ve HICBIR SEY
+# olcmuyordu: bosluk zaten sayi taramasini bitiriyor. Enjeksiyon
+# soyledi — bkz. Tuzaklar 6j.)
+c("us: eksik us HATA vermeli", 'int x = 1e;\nprint(x);', None)
+c("us: ifadede eksik us HATA vermeli", 'float y = 5.0;\nprint(y - 1e);', None)
+c("us: e degiskeni bozulmuyor", 'int e = 7;\nint a = 2;\nprint(a + e);', "9")
+
 fails = 0
 for name, src, expect in CASES:
     safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)
@@ -174,6 +195,12 @@ for name, src, expect in CASES:
     out = (p.stdout or "").strip()
     # [typecheck] uyarilari stderr'e gidiyor; cikti karsilastirmasini
     # bozmamali (golgeleme sondasi bilerek uyari uretiyor).
+    if expect is None:
+        if p.returncode == 0:
+            fails += 1
+            print(f"  ✗ {name}")
+            print(f"      HATA BEKLENIYORDU ama derlendi; cikti={out!r}")
+        continue
     if p.returncode != 0 or out != expect:
         fails += 1
         print(f"  ✗ {name}")

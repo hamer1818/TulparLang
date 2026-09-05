@@ -131,7 +131,9 @@ private:
     
     // Private helper methods
     void advance();
-    char peek() const;
+    // offset=1 bir sonraki karakter (varsayilan). Bilimsel gosterim
+    // (`1e-8`) isaretin ARDINDAN basamak olup olmadigina bakmak icin 2 ister.
+    char peek(size_t offset = 1) const;
     void skip_whitespace();
     void skip_comment();
     void skip_block_comment();

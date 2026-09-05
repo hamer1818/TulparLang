@@ -206,8 +206,8 @@ void Lexer::advance() {
     }
 }
 
-char Lexer::peek() const {
-    size_t peek_pos = position_ + 1;
+char Lexer::peek(size_t offset) const {
+    size_t peek_pos = position_ + offset;
     if (peek_pos < source_.length()) {
         return source_[peek_pos];
     }
@@ -277,7 +277,40 @@ Token Lexer::read_number() {
         buffer += current_char_;
         advance();
     }
-    
+
+    // Bilimsel gosterim: `1e20`, `1.5e-8`, `2E+3`.
+    //
+    // Yoktu ve dil KENDI CIKTISINI okuyamiyordu: `print(big)` `1e+20`
+    // basiyor ama `1e+20` kaynakta ayristirma hatasi veriyordu. Yani bir
+    // programin ciktisini alip kaynaga geri koymak imkansizdi; kucuk/buyuk
+    // sabitler de elle sifir sayarak yazilmak zorundaydi.
+    //
+    // `e` YALNIZCA arkasindan basamak (ya da isaret + basamak) geliyorsa
+    // usse cevriliyor. Bu kosul YUK TASIYOR, olculdu: kosulsuz tuketilirse
+    // `int x = 1e;` SESSIZCE derleniyor ve 0 basiyor, `print(y - 1e)` ise
+    // `1e`yi 1.0 sayiyor — eksik us bir yazim hatasi degil, GECERLI bir
+    // sayi oluyor ve tek kelime tani cikmiyor.
+    // Regresyon: tests/silent_failure_probe.py "us: eksik us HATA vermeli".
+    if (current_char_ == 'e' || current_char_ == 'E') {
+        char sign = peek();
+        bool ok = std::isdigit(static_cast<unsigned char>(sign)) ||
+                  ((sign == '+' || sign == '-') &&
+                   std::isdigit(static_cast<unsigned char>(peek(2))));
+        if (ok) {
+            is_float = true;   // us varsa sonuc her zaman float (`1e3` -> 1000.0)
+            buffer += current_char_;
+            advance();
+            if (current_char_ == '+' || current_char_ == '-') {
+                buffer += current_char_;
+                advance();
+            }
+            while (std::isdigit(static_cast<unsigned char>(current_char_))) {
+                buffer += current_char_;
+                advance();
+            }
+        }
+    }
+
     return Token(is_float ? TOKEN_FLOAT_LITERAL : TOKEN_INT_LITERAL,
                  buffer, start_line, start_column);
 }
