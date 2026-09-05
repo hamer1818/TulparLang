@@ -176,6 +176,69 @@ elek farkı gürültüye giriyor — 9,3 → 9,4, yani orada **görünmüyor**.
 Aralıklı A/B görüyor. İkisini de yazıyorum; birini seçip diğerini saklamak
 [[Tuzaklar#6f]]'nin tam tersi hata olurdu.
 
+### Asıl bulgu: bedel DAL değil, DÖNGÜ GÖVDESİNDEKİ KOD (2026-09-05)
+
+Yukarıdaki "sınır denetimi bedava" ölçümü doğruydu ama **yanlış soruyu**
+cevaplıyordu. Codegen'in içine geçici tavan yolları koyunca gerçek resim
+çıktı (arrayiter, n=5M):
+
+| yapılandırma | ms |
+|---|--:|
+| normal | 5,53 |
+| **A**: bütün bekçiler kaldırıldı | 3,51 |
+| **B**: dal DURUYOR, yavaş yol ölü (`unreachable`) | **3,42** |
+| **C**: yalnız satır içi tazeleme çıkarıldı | 4,27 |
+
+**B ile A'nın aynı çıkması belirleyici.** Dal duruyor ama kazanç aynı →
+maliyet dalın kendisi değil, **yanındaki kod**. `emit_shape_fill` 4 temel
+blok + ~25 komut üretiyordu ve bunu her yavaş yolda, yani **döngü
+gövdesinin içinde** yapıyordu; o boyut LLVM'in sıcak yolu açmasını
+engelliyordu. Tek başına 1,26 ms.
+
+**Genel ders:** bir sıcak döngüde soğuk yolun *çalışma* maliyeti sıfır
+olabilir ama *varlığı* bedava değil. "Bu dal hiç alınmıyor, önemsiz"
+demeden önce gövdenin büyüklüğüne bak.
+
+#### İki ara adım, ikisi de ölçümle elendi
+1. **Runtime'da dışsal çağrı** (`aot_shape_refill`): arrayiter 6,51 →
+   5,66 **ama** sieve 9,64 → **10,68**. Küçük bir döngüde her dışsal
+   çağrı LLVM'in gözünde bütün belleği kirletiyor; kazandığından çoğunu
+   geri veriyor.
+2. **Tek modül-yerel fonksiyon**: arrayiter 6,77 → 4,81, sieve yine
+   9,07 → **9,60**. Sebebi ince: gövdedeki `aot_len` çağrısı (dışsal)
+   **bütün fonksiyonun** çıkarılan bellek etkilerini zehirliyor, yani
+   `len` kullanmayan sıcak döngüler de bedelini ödüyor.
+
+**Çözüm: iki varyant.** `len` kullanmayan döngüler için gövdesinde hiç
+dışsal çağrı olmayan temiz sürüm, `len` için `aot_len` çağıran sürüm.
+LLVM temiz sürümün etkilerini kendi çıkarıyor ve nerede açacağına kendi
+karar veriyor.
+
+| | önce | sonra | tavan |
+|---|--:|--:|--:|
+| arrayiter (A/B, aralıklı, 12 tekrar) | 6,02 | **4,78** | 3,43 |
+| sieve (aynı) | 9,77 | **9,28** | 8,52 |
+
+**Doğruluk riski ve nasıl kapatıldı:** tazeleme mantığının **ikinci bir
+kopyası** oluştu (`emit_shape_fill` ve `get_shape_refill_fn`); ikisi
+ayrışırsa önbellek sarkan işaretçi tutar ([[Tuzaklar#6l]]). Enjeksiyonla
+sınandı: modül-yerel sürümdeki `select(ok, count, 0)` kaldırılınca
+`element_step` çöküyor ve 4 sonda kırmızıya dönüyor.
+
+#### i32'ye girmemenin gerekçesi (ölçüldü)
+Elemanı daraltmanın kazancı **teste göre değişiyor**, tek bir sayı değil:
+
+| | 32-bit | 64-bit | fark |
+|---|--:|--:|--:|
+| sieve (C) | 9,51 | 10,33 | **0,82 ms** |
+| arrayiter (C) | 2,12 | 2,28 | 0,16 ms |
+
+Elekte rastgele erişim var (önbellek/TLB baskısı) → genişlik önemli;
+arrayiter sıralı akış → donanım öngetiricisi hallediyor, genişlik neredeyse
+bedava. Yani i32 **elekte** ~0,8 ms değerinde, arrayiter'de değil — ve
+üçüncü bir depo biçimi demek. Bu tur yerine tazeleme dışarı alındı: aynı
+büyüklükte kazanç, sıfır yeni değişmez.
+
 ## In-memory (HTTP katmanı, 14 CPU)
 | Mod | keep-alive tepe `/ping` | p50/p99 | RSS |
 |-----|------:|:---:|---:|
