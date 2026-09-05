@@ -853,6 +853,37 @@ diye gevşetilirse hiçbir test kırmayacak — bunu bilerek kabul ediyoruz.
 **Gelecek iş:** `tulpar build --sanitize` (üretilen IR'a ASan geçişi)
 bu sınıfı kapatırdı. Şu an yok.
 
+## 6p. Koşmayan kod, taşınabilirlik hatalarını SAKLAR
+
+macOS işine dil paketleri eklenirken **iki gerçek hata** çıktı; ikisi de
+macOS'ta *her* koşumu düşürürdü ve ikisi de fark edilmemişti:
+
+- `build.sh suites` → çıplak `timeout 180`
+- `tests/pkg_audit.sh` → çıplak `timeout 30`
+
+`timeout` GNU coreutils'te; **macOS'ta yok** (orada `gtimeout`). Öğretici
+olan: `build.sh test` bu sorunu zaten çözmüştü (`TIMEOUT_BIN` + `gtimeout`
+yedeği) — yani biri bir kez farkına varmış, ama düzeltme **koşan** koda
+girmiş, koşmayana girmemiş. Kod bir platformda hiç koşmuyorsa oradaki
+hataları da hiç göstermiyor; hata "yok" değil, **görünmez**.
+
+**Ders:** bir işi yeni bir platformda koşturmadan önce "orada zaten çalışır"
+varsayma. Koşturduğun anda taşınabilirlik hataları *ilk kez* görünür hâle
+gelir — ve genelde birden fazla olurlar.
+
+### macOS = ARM64: tek doğrulama noktası
+`macos-latest` Apple Silicon, Linux işi x86-64. `CMakeLists.txt` mimariye
+göre ayrı LLVM backend'i linkliyor ve `vmvalue_abi_uses_sret()` ABI'yi
+çalışma zamanında seçiyor — **AArch64 ayrı bir kod üretim yolu.** 2026-09-06
+öncesinde o yolu yalnız `tests/aot_smoke.sh`'ın 4 vakası doğruluyordu; duman
+"derleyici çalışıyor mu"yu ölçer, "dil doğru mu"yu değil.
+
+### Hedef platformda koşturamıyorsan, en yakınını taklit et
+macOS burada yok. Adım körlemesine bırakılmadı: `build/` dizinine temiz
+derleme + **kökte arşiv yok** (CI'daki durum) + `TULPAR_NO_HWSTAT=1` ile tam
+adım yerelde koşuldu. Kalan risk yalnız ARM64'ün kendisi. Taklit, ortam
+farklarının çoğunu (yol, arşiv arama, telemetri) önceden yakalıyor.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.
