@@ -18,9 +18,14 @@
 
 - **İş yükü `BENCH_N` ortam değişkeninden**, her dilde. Kimse katlayamaz.
 - **Aynı algoritma, aynı veri yapısı.** Kaynaklar yan yana okunacak kadar kısa.
-- **Her dile kendi en iyi aracı**: Java `StringBuilder`, JS `Int32Array`, Go
-  `strings.Builder`, Tulpar `int[]`. Birine naif yol dayatmak dili değil o
-  tuzağı ölçerdi.
+- **Her dile kendi en iyi aracı**: Java/C# `StringBuilder`, C++ `std::string`,
+  JS `Int32Array`, Go `strings.Builder`, Rust `String`, Tulpar `int[]`. Birine
+  naif yol dayatmak dili değil o tuzağı ölçerdi. `arrayiter`de aynı kural
+  uzunluk erişimine de uygulanıyor: `a.size()` / `a.Length` / `a.len()` /
+  `len(a)` — C'de dilde uzunluk yok, `n` elle taşınıyor.
+- **Araç zinciri yoksa satır düşer, koşum durmaz.** C# için `dotnet` (ya da
+  `mono`+`mcs`) gerekiyor; yoksa o satır `DERLENEMEDI` görünür ve kalan
+  diller normal ölçülür.
 - **Çıktı doğrulaması**: bütün diller aynı şeyi basmazsa satır **geçersiz**.
   "Aynı işi yapıyorlar mı" sorusunun tek dürüst cevabı bu.
 - **Isıtma koşumu sayılmıyor**, 5 tekrar, en iyi + ortanca.
@@ -43,21 +48,35 @@ cd benchmarks/fair && REPEATS=5 python3 run.py
 
 ## Sonuçlar
 
-En iyi duvar saati (ms), 5 tekrar. **Düşük olan hızlı.** Bütün diller aynı çıktıyı bastı.
+**Canlı sıralama ve gelişim eğrisi burada:**
+<https://claude.ai/code/artifact/a582fb28-0ecb-4e8b-a8b9-f12878b50215>
+— her ölçüm oraya bir satır ekliyor, aşağıdaki tablo o anlık görüntünün
+kopyası ve bayatlayabilir.
 
-| Dil | intloop 50M | fib(32) | sieve 5M | strcat 2M |
-|---|---|---|---|---|
-| C (gcc -O2) | **134,4** | **1,6** | **7,6** | 37,5 |
-| Rust (-O3) | 144,2 | 3,7 | 8,4 | **18,5** |
-| Go | 135,0 | 6,6 | 8,0 | 24,6 |
-| Java | 144,4 | 12,2 | 20,2 | 32,9 |
-| Node.js | 709,6 | 25,1 | 28,9 | 100,4 |
-| Python | 3169,3 | 141,6 | 445,0 | 199,1 |
-| **Tulpar AOT** | **135,1** | 4,3 | 42,1 | 166,3 |
+En iyi duvar saati (ms), 3 tekrar, 2026-09-05. **Düşük olan hızlı.**
+Bütün diller aynı çıktıyı bastı.
 
-İş yükleri: `intloop` N=50M · `fib` N=32 · `sieve` N=5M · `strcat` N=2M.
-Java ve Node satırları ilk turdan (bu iki dil sonraki iyileştirmelerden
-etkilenmiyor); geri kalanı 2026-09-03 koşumu.
+| Dil | intloop 50M | fib(32) | sieve 5M | strcat 2M | arrayiter 5M |
+|---|---|---|---|---|---|
+| C (gcc -O2) | **134,4** | **1,6** | **7,9** | 37,8 | 2,1 |
+| C++ (g++ -O2) | 134,6 | 1,9 | 8,0 | **14,8** | 3,1 |
+| Rust (-O3) | 144,3 | 3,8 | 8,3 | 18,8 | **1,6** |
+| Go | 134,8 | 6,7 | 8,5 | 24,8 | 4,0 |
+| C# (.NET) | — | — | — | — | — |
+| Java | 144,7 | 12,9 | 20,2 | 32,4 | 17,7 |
+| Node.js | 708,8 | 25,8 | 29,1 | 101,3 | 19,6 |
+| Python | 3187,4 | 143,1 | 451,6 | 200,7 | 414,6 |
+| **Tulpar AOT** | 135,4 | 4,4 | 9,8 | 31,7 | 6,6 |
+
+İş yükleri: `intloop` N=50M · `fib` N=32 · `sieve` N=5M · `strcat` N=2M ·
+`arrayiter` N=5M. C# satırı boş: bu makinede .NET SDK kurulu değil
+(`sudo pacman -S dotnet-sdk-9.0` sonrası kendiliğinden dolar, `run.py`
+tarafı hazır).
+
+**C++ eklenmesi sıralamayı değiştirdi** ve bunu gizlemenin anlamı yok:
+`strcat`te C++ `std::string` bütün dilleri geçti (14,8 ms — C'nin
+`realloc`+`snprintf` döngüsünün 2,5 katı hızlı), `fib`/`sieve`/`arrayiter`te
+Tulpar bir sıra geriledi. Ölçüm ne diyorsa o.
 
 ## İlk ölçümden sonra yapılan iyileştirmeler
 

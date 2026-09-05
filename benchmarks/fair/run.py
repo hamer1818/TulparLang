@@ -16,6 +16,9 @@ geçersiz kılıyordu (2026-09-02'de ölçüldü):
 
 Bu koşucu üçünü de kapatıyor:
   * N her dilde `BENCH_N` ortam değişkeninden okunuyor -> kimse katlayamaz.
+  * Bir dilin araç zinciri yoksa satırı "DERLENEMEDI" olur ve koşum devam
+    eder — eksik bir derleyici bütün ölçümü geçersiz kılmaz. (C# için
+    `dotnet` ya da `mono`+`mcs` gerekiyor.)
   * Aynı algoritma + aynı veri yapısı (kaynaklar yan yana okunabilir).
   * Her ölçüm BOŞ program taban çizgisiyle birlikte raporlanıyor ve iş
     yükü başlatmayı gölgede bırakacak kadar büyük seçiliyor.
@@ -46,16 +49,67 @@ BENCH = {
     "arrayiter": ("5000000", "dizi yineleme (deyimsel uzunlukla)"),
 }
 
-LANGS = ["c", "rust", "go", "java", "node", "python", "tulpar"]
+LANGS = ["c", "cpp", "rust", "go", "csharp", "java", "node", "python", "tulpar"]
 LABEL = {
-    "c": "C (gcc -O2)", "rust": "Rust (-O3)", "go": "Go", "java": "Java",
+    "c": "C (gcc -O2)", "cpp": "C++ (g++ -O2)", "rust": "Rust (-O3)",
+    "go": "Go", "csharp": "C# (.NET)", "java": "Java",
     "node": "Node.js", "python": "Python", "tulpar": "Tulpar AOT",
 }
+
+# C# iki ayri zincirle kosabiliyor. Once .NET SDK aranıyor ("C#" bugun bunu
+# demek: tiered JIT), yoksa mono'ya dusuluyor. Ikisi de yoksa satir
+# "DERLENEMEDI" olarak isaretlenip gecilyor — eksik bir arac butun koşumu
+# durdurmamali.
+def _which(x):
+    from shutil import which
+    return which(x)
+
+HAS_DOTNET = _which("dotnet") is not None
+HAS_MONO = _which("mcs") is not None and _which("mono") is not None
 
 
 def sh(cmd, **kw):
     return subprocess.run(cmd, shell=isinstance(cmd, str), capture_output=True,
                           text=True, cwd=str(HERE), **kw)
+
+
+def _build_csharp(bench, errs):
+    """C# ikilisi. .NET SDK varsa Release derleyip .dll'i `dotnet` ile
+    kosuyoruz; yoksa mono/mcs. Hicbiri yoksa None (satir "DERLENEMEDI")."""
+    if HAS_DOTNET:
+        proj = OUT / f"cs_{bench}"
+        proj.mkdir(parents=True, exist_ok=True)
+        # Tek dosyalik minimal proje. Kaynak her seferinde kopyalaniyor ki
+        # benchmarks/fair/<bench>.cs tek dogru kaynak kalsin.
+        (proj / "Program.cs").write_text((HERE / f"{bench}.cs").read_text())
+        (proj / f"{bench}.csproj").write_text(
+            '<Project Sdk="Microsoft.NET.Sdk">\n'
+            '  <PropertyGroup>\n'
+            '    <OutputType>Exe</OutputType>\n'
+            '    <TargetFramework>net9.0</TargetFramework>\n'
+            '    <Optimize>true</Optimize>\n'
+            '    <Nullable>disable</Nullable>\n'
+            '    <AssemblyName>bench</AssemblyName>\n'
+            '    <RootNamespace>bench</RootNamespace>\n'
+            '    <InvariantGlobalization>true</InvariantGlobalization>\n'
+            '  </PropertyGroup>\n'
+            '</Project>\n')
+        r = sh(["dotnet", "build", "-c", "Release", "-v", "q", "--nologo",
+                "-o", str(proj / "out"), str(proj / f"{bench}.csproj")])
+        dll = proj / "out" / "bench.dll"
+        if r.returncode == 0 and dll.exists():
+            return ["dotnet", str(dll)]
+        errs["csharp"] = (r.stdout + r.stderr).strip()[-200:]
+        return None
+    if HAS_MONO:
+        exe = OUT / f"{bench}_cs.exe"
+        r = sh(["mcs", "-optimize+", f"-out:{exe}", f"{bench}.cs"])
+        if r.returncode == 0 and exe.exists():
+            return ["mono", str(exe)]
+        errs["csharp"] = (r.stdout + r.stderr).strip()[-200:]
+        return None
+    errs["csharp"] = "dotnet ya da mono/mcs bulunamadi"
+    return None
 
 
 def build(bench):
@@ -70,6 +124,13 @@ def build(bench):
     r = sh(["rustc", "-C", "opt-level=3", f"{bench}.rs", "-o", str(rs)])
     cmds["rust"] = [str(rs)] if r.returncode == 0 else None
     if r.returncode: errs["rust"] = r.stderr.strip()[:200]
+
+    cpp = OUT / f"{bench}_cpp"
+    r = sh(["g++", "-O2", "-std=c++17", f"{bench}.cpp", "-o", str(cpp)])
+    cmds["cpp"] = [str(cpp)] if r.returncode == 0 else None
+    if r.returncode: errs["cpp"] = r.stderr.strip()[:200]
+
+    cmds["csharp"] = _build_csharp(bench, errs)
 
     g = OUT / f"{bench}_go"
     r = sh(["go", "build", "-o", str(g), f"{bench}.go"])
@@ -122,6 +183,14 @@ def baseline():
         base["c"], _, _ = timeit([str(e)], os.environ.copy(), 5)
     base["python"], _, _ = timeit(["python3", str(HERE / "empty.py")], os.environ.copy(), 5)
     base["node"], _, _ = timeit(["node", str(HERE / "empty.js")], os.environ.copy(), 5)
+    (HERE / "empty.cpp").write_text("int main(){return 0;}\n")
+    ec = OUT / "empty_cpp"
+    if sh(["g++", "-O2", "empty.cpp", "-o", str(ec)]).returncode == 0:
+        base["cpp"], _, _ = timeit([str(ec)], os.environ.copy(), 5)
+    (HERE / "empty.cs").write_text("class empty{static void Main(){}}\n")
+    cs_cmd = _build_csharp("empty", {})
+    if cs_cmd:
+        base["csharp"], _, _ = timeit(cs_cmd, os.environ.copy(), 5)
     (HERE / "empty.tpr").write_text('int x = 0;\n')
     et = OUT / "empty_tulpar"
     if sh([str(TULPAR), "build", "empty.tpr", str(et)]).returncode == 0 and et.exists():
