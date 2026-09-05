@@ -884,6 +884,37 @@ derleme + **kökte arşiv yok** (CI'daki durum) + `TULPAR_NO_HWSTAT=1` ile tam
 adım yerelde koşuldu. Kalan risk yalnız ARM64'ün kendisi. Taklit, ortam
 farklarının çoğunu (yol, arşiv arama, telemetri) önceden yakalıyor.
 
+## 6q. Yerel LLVM sürümü GEÇERSİZ IR'ı gizler
+
+Döngü sürümlemenin bekçisiz okuma dalı, `arr.chk/fast/slow/done` blokları
+**yaratıldıktan sonra** duruyordu ve erken `return` geriye **sonlandırıcısı
+olmayan dört boş temel blok** bırakıyordu. Geçersiz IR.
+
+| | sonuç |
+|---|---|
+| LLVM 22 (yerel) | tolere ediyor, 69/69 **yeşil** |
+| LLVM 18 (CI) | **SEGFAULT** |
+
+Yani yerelde yeşil olması bir şey kanıtlamıyordu — geçersiz IR üretiliyordu
+ve yerel sürüm onu **temizliyordu**. CI kırmızısı ortam farkı değil, **gerçek
+bir codegen hatasıydı**.
+
+**Kural:** `LLVMAppendBasicBlock` ile blok yarattıktan sonra o yoldan
+`return` etme. Erken çıkış dalları blok yaratımından **önce** olmalı. Kod
+tarafında koşul yorumla işaretlendi ki bir daha aşağı kaymasın.
+
+**Neden testler görmedi:** `.test.tpr` paketleri geçersiz IR'ı göremez —
+görebilecekleri tek şey sonucu, ve LLVM 22'de sonuç doğru. Bu sınıfın
+doğal aracı IR doğrulayıcısıdır; pipeline'da `VerifyEach` kapalı.
+
+### CI'yı taklit et, 14 dakikalık döngüye mahkûm olma
+Reprodüksiyon Docker'da yapıldı: `ubuntu:24.04` + `llvm-18-dev` + `clang`
+(+ `zlib1g-dev libzstd-dev libtinfo-dev`, yoksa `LLVMExports.cmake`
+`ZLIB::ZLIB` bulamıyor). Kaynak ağacı **salt-okunur mount edilemiyor** —
+derleme `src/embedded_libs.h` yazıyor — o yüzden konteyner içinde
+yazılabilir bir kopya çıkarılıyor. Daraltma sondası hangi biçimin çöktüğünü
+tek tek gösterdi ve hata dakikalar içinde bulundu.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.
