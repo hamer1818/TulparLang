@@ -239,6 +239,45 @@ bedava. Yani i32 **elekte** ~0,8 ms değerinde, arrayiter'de değil — ve
 üçüncü bir depo biçimi demek. Bu tur yerine tazeleme dışarı alındı: aynı
 büyüklükte kazanç, sıfır yeni değişmez.
 
+### `strcat` 31,3 → 19,0 ms — söz verilen 3. sıra (2026-09-05)
+
+Önce ayrıştırıldı (2M ekleme):
+
+| adım | ek |
+|---|--:|
+| boş döngü | 0,96 ms |
+| + 2M `sb_append(sb, ",")` | +4,97 |
+| + 2M `sb_append(sb, i % 1000)` | **+17,09** |
+| + `count(s, ",")` | **+8,20** |
+
+**1. `count()` — uyarlanabilir oldu.** Tek karakterlik ayraçta `memchr`
+her **isabette** yeniden çağrılıyordu, yani maliyet isabet *sayısıyla*
+orantılıydı. Yoğun ayraçta felaket, seyrekte mükemmel:
+
+| ayraç aralığı | memchr | sayma döngüsü |
+|---|--:|--:|
+| her 4 baytta | 10,20 ms | **1,89** |
+| her 16 baytta | 2,57 | **1,88** |
+| her 64 baytta | **0,64** | 1,89 |
+| her 1 MB'de | **0,06** | 1,88 |
+
+Yani döngüye körü körüne geçmek seyrek aramada **30 kat** gerileme
+olurdu. İlk 64 isabetin ortalama aralığı ölçülüp 32 baytın altındaysa
+sayma döngüsüne geçiliyor. `count()`: 8,13 → **0,82 ms**.
+
+**2. `sb_append(int)` — doğrudan tampona.** Rakamlar önce yığındaki
+geçici tampona yazılıp sonra `memcpy`'leniyordu; uzunluk değişken olduğu
+için `memcpy` satır içi alınmıyor, üstüne ikinci bir sınır hesabı
+gerekiyordu. Artık doğrudan yazılıyor, yer ayırma sabit 24 bayt (int64:
+20 hane + işaret + NUL). 24,0 → **18,9 ms**.
+
+**Sonuç:** C++ 14,7 · Rust 18,7 · **Tulpar 19,0** · Go 24,5 · C# 29,9 ·
+Java 32,5 · C 37,7. Beş alanın ikincisinde hedef tutuldu.
+
+**Bu işin asıl kazancı ölçüm değil, bulunan boşluktu:** `sb` yer
+ayırmasını 24 → 4 bayta düşüren enjeksiyon **hiçbir paketi kırmadı**
+([[Tuzaklar#6m]]) ve bu, `tests/run_asan.sh`'ın doğmasına yol açtı.
+
 ## In-memory (HTTP katmanı, 14 CPU)
 | Mod | keep-alive tepe `/ping` | p50/p99 | RSS |
 |-----|------:|:---:|---:|

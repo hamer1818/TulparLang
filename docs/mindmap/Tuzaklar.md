@@ -701,7 +701,8 @@ Sonda eklemek ucuz: `c("ad", "kaynak", "beklenen çıktı")`. Sonda `LC_ALL=C` i
 koşuyor, çünkü tanı metinleri yerele göre değişiyor.
 
 **Sondanın kendi tuzağı:** bir sonda yanlış yazılırsa sessizce hiçbir şey
-ölçmez. `func exit` sondası önce fonksiyon İÇİNE yazılmıştı (yerel değişken →
+ölçmez. Ayrıca sonda bir sınıfı HİÇ göremez: tampon taşmasını görünür
+çıktı testiyle yakalayamazsın ([[Tuzaklar#6m]]). `func exit` sondası önce fonksiyon İÇİNE yazılmıştı (yerel değişken →
 hiç sembol üretmiyor), `len(dizgi)` sondası dizgiyi indekslemiyordu (önbelleğe
 aday bile değil). İkisi de yeşildi ve ikisi de hiçbir şey ölçmüyordu. Her
 sondayı enjeksiyonla sına.
@@ -772,6 +773,38 @@ okumadan **önce** olmalı.
 elemanlıydı ve `free` o boyutta belleği işletim sistemine geri vermiyor —
 sarkan işaretçi hâlâ eski değerleri okuyor, test **yeşil geçiyordu**. Serbest
 bellek hatasını arayan test, tahsisin gerçekten geri verileceği boyutta olmalı.
+
+## 6m. Görünür davranış testi TAMPON TAŞMASINI göremez
+
+2026-09-05: `sb_append(int)` rakamları doğrudan tampona yazacak şekilde
+değiştirildi. Ayrılan yeri **24 bayttan 4 bayta düşüren** enjeksiyon
+denendi — yani gerçek bir heap taşması — ve **68 paketin, 40 örneğin, 75
+sondanın hiçbiri kırılmadı.**
+
+Sebep: taşan baytlar `malloc`'un boş payına düşüyor. Program çökmüyor,
+okunan değer doğru çıkıyor, görünür davranış aynı. Test doğru yazılmıştı;
+**ölçemeyeceği bir şeyi ölçüyordu**.
+
+Aynı sınıf o gün ikinci kez çıktı: şekil önbelleğindeki sarkan `idata`
+([[Tuzaklar#6l]]) yalnız 4096 elemanda görünür oldu — 4 elemanlı ilk test
+yeşil geçmişti, çünkü `free` o boyutta belleği işletim sistemine geri
+vermiyor.
+
+**Çözüm: `tests/runtime_asan.c` + `tests/run_asan.sh`.** Runtime giriş
+noktalarını doğrudan çağıran, ASAN'la derlenen bir C koşum takımı. Aynı
+enjeksiyonu deterministik yakalıyor:
+
+```
+==ERROR: AddressSanitizer: heap-buffer-overflow
+WRITE of size 1 ... in aot_itoa
+```
+
+CI'da değil (ASAN derlemesi ~2 dk). **Runtime'ın belleğe dokunan bir
+yerini değiştirdiğinde elle koş** — `bash tests/run_asan.sh`.
+
+**Ders:** bellek güvenliği `.test.tpr` ile sınanamaz. Bir runtime
+fonksiyonu ham işaretçiyle yazıyorsa (tampon, dizi, dizgi), doğruluğunun
+kanıtı görünür çıktı değil, sanitizer'dır.
 
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
