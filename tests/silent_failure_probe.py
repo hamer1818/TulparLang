@@ -182,6 +182,24 @@ c("us: eksik us HATA vermeli", 'int x = 1e;\nprint(x);', None)
 c("us: ifadede eksik us HATA vermeli", 'float y = 5.0;\nprint(y - 1e);', None)
 c("us: e degiskeni bozulmuyor", 'int e = 7;\nint a = 2;\nprint(a + e);', "9")
 
+# --- 7f. array_fill sifir dolgusu calloc'a gecti (2026-09-05) ---
+# Sifir dolgusunda yazma dongusu ATLANIYOR: calloc'un sayfalari zaten
+# sifir. Arena yolu HARIC (blok geri donusturulmus/kirli olabilir).
+# Bir gun calloc yanlislikla malloc'a donerse bu sondalar cop deger yakalar.
+c("array_fill sifir", 'int[] a = array_fill(1000, 0);\nint t = 0;\n'
+  'for (int i = 0; i < 1000; i = i + 1) { t = t + a[i]; }\nprint(t);', "0")
+c("array_fill sifir buyuk", 'int[] a = array_fill(200000, 0);\nint t = 0;\n'
+  'for (int i = 0; i < 200000; i = i + 1) { t = t + a[i]; }\nprint(t);', "0")
+c("array_fill sifirdisi bozulmadi",
+  'int[] a = array_fill(1000, 7);\nint t = 0;\n'
+  'for (int i = 0; i < 1000; i = i + 1) { t = t + a[i]; }\nprint(t);', "7000")
+c("array_fill negatif deger",
+  'int[] a = array_fill(100, -3);\nint t = 0;\n'
+  'for (int i = 0; i < 100; i = i + 1) { t = t + a[i]; }\nprint(t);', "-300")
+c("array_fill sifir sonra yaz",
+  'int[] a = array_fill(64, 0);\na[10] = 5;\nint t = 0;\n'
+  'for (int i = 0; i < 64; i = i + 1) { t = t + a[i]; }\nprint(t);', "5")
+
 fails = 0
 for name, src, expect in CASES:
     safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)
