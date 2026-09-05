@@ -278,6 +278,40 @@ Java 32,5 · C 37,7. Beş alanın ikincisinde hedef tutuldu.
 ayırmasını 24 → 4 bayta düşüren enjeksiyon **hiçbir paketi kırmadı**
 ([[Tuzaklar#6m]]) ve bu, `tests/run_asan.sh`'ın doğmasına yol açtı.
 
+### Döngü sürümleme — `arrayiter` 5,7 → 3,8 ms, Go geçildi (2026-09-05)
+
+`for (int i = C; i < len(a); i = i + K)` içinde `a[i]` sınır denetimi
+**kanıtla** gereksiz: dizi kutusuzken `count == len`, koşul üstten,
+`C >= 0` ve `K > 0` alttan sınırlıyor, şekil kanıtı uzunluğun sabit
+olduğunu zaten söylüyor.
+
+"Dizi kutusuz" kısmı döngü-değişmezi **ama LLVM dışarı çıkaramıyor** —
+yavaş yoldaki tazeleme şekil yuvalarına yazıyor, unswitch yapısal olarak
+imkânsız (aynı gün ölçülüp çürütülmüştü). O yüzden dallanmayı ve iki
+gövdeyi codegen üretiyor. Sınav `count_slot != 0`; kutuluysa yuva zaten 0,
+boş dizide de genel sürüme düşüyor (gövde hiç koşmuyor).
+
+| | ms |
+|---|--:|
+| önce | 5,73 |
+| **sürümlü** | **3,37** |
+| tavan (hiç bekçi yok) | 3,21 |
+
+Koşucuda 4,6 → **3,8**; Go 4,1. Beş alanın üçünde hedefe yaklaşıldı.
+
+**Yük taşıyan kısıt — gövdede HİÇ eleman yazması olmamalı.** Kutusuz bir
+diziye int olmayan bir değer yazmak (`a[i] = 2.5`) diziyi kutuluyor,
+`idata` free ediliyor ve önbellektekini **sarkıtıyor**; bunu bugün yalnız
+tazeleme kurtarıyor, bekçisiz sürümde tazeleme yok. Yazmanın **hangi
+isimden** olduğu önemsiz: `array b = a;` takma adı aynı diziyi kutular.
+Bu yüzden koşul "bu diziye yazılıyor mu" değil, "gövdede **herhangi bir**
+eleman yazması var mı".
+
+`sieve` yararlanmıyor: iç döngüsü `while (k <= n)`, yani sınır `len(f)`
+değil `n` — ikisini statik olarak ilişkilendiremiyoruz.
+
+Enjeksiyon sonuçları ve sınanamayan koşul: [[Tuzaklar#6o]].
+
 ## In-memory (HTTP katmanı, 14 CPU)
 | Mod | keep-alive tepe `/ping` | p50/p99 | RSS |
 |-----|------:|:---:|---:|

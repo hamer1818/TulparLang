@@ -806,6 +806,53 @@ yerini değiştirdiğinde elle koş** — `bash tests/run_asan.sh`.
 fonksiyonu ham işaretçiyle yazıyorsa (tampon, dizi, dizgi), doğruluğunun
 kanıtı görünür çıktı değil, sanitizer'dır.
 
+## 6n. Sıcak döngüde soğuk yolun VARLIĞI bedava değil
+
+Döngü sürümleme (2026-09-05) buradan çıktı. Üç kademeli tavan ölçümü
+(arrayiter, n=5M) kazancın nereden geldiğini söyledi:
+
+| | ms |
+|---|--:|
+| normal | 5,53 |
+| **A**: bütün bekçiler kaldırıldı | 3,51 |
+| **B**: dal DURUYOR, yavaş yol ölü | **3,42** |
+
+**B ≈ A.** Dal duruyor, kazanç aynı → maliyet dalın *çalışması* değil,
+yanındaki kodun **döngü gövdesinde durması**. O kod LLVM'in sıcak yolu
+açmasını/vektörleştirmesini engelliyor ve derleyiciye fazladan tümevarım
+değişkeni (`add $0x10,%rbx`) taşıttırıyor.
+
+İki uygulama, ikisi de bu ilkeden:
+1. Şekil tazelemesini satır içinden **modül-yerel fonksiyona** almak.
+2. `for (i=C; i<len(a); i+=K)` içinde `a[i]` için döngüyü **sürümlemek**
+   — kanıtla bekçi de yavaş yol da tümden yok.
+
+## 6o. Yığından TAŞAN OKUMA çıktı testiyle YAKALANMIYOR
+
+`shape_access_proven`'ın "indeks tam olarak `i` olmalı" koşulu
+kaldırıldı — yani `a[i + k]` de bekçisiz üretildi — ve **17 testin hepsi
+yeşil kaldı**. Üç kez denendi, her seferinde daha agresif:
+
+| deneme | sonuç |
+|---|---|
+| 64 elemanlı dizide `a[i+1]` | 0 döndü, yeşil |
+| aynısı, toplamı denetlenerek | yeşil |
+| **4 elemanlı dizide `a[i + 4096]`** (32 KB ötesi) | **0 döndü, yeşil** |
+
+Yığından taşan okuma pratikte sıfır dönüyor: `malloc` bloğu yuvarlıyor,
+ötesi de eşlenmiş sıfır sayfa. [[Tuzaklar#6m]]'in (taşan YAZMA) okuma
+hâli — ama yazmayı ASAN yakalıyordu, bunu **hiçbir aracımız yakalamıyor**
+(ASAN koşum takımı runtime C fonksiyonlarını sınıyor, üretilen kodu
+değil).
+
+**Ne yapıldı:** karar tek bir adlandırılmış fonksiyona toplandı
+(`shape_access_proven`) ve sınanamadığı **orada** yazıldı. Güvence testte
+değil, o fonksiyonun dar ve tek olmasında. Bir gün "indeks varsa yeter"
+diye gevşetilirse hiçbir test kırmayacak — bunu bilerek kabul ediyoruz.
+
+**Gelecek iş:** `tulpar build --sanitize` (üretilen IR'a ASan geçişi)
+bu sınıfı kapatırdı. Şu an yok.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.
