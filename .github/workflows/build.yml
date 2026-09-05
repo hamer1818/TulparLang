@@ -639,6 +639,11 @@ jobs:
         env:
           TULPAR_NO_HWSTAT: "1"
         run: |
+          # `build.sh` her eylemden ONCE llvm-config'i arıyor ve bulamazsa
+          # çıkıyor. "Build with LLVM" adımı PATH'i KENDİ İÇİNDE ayarlıyor,
+          # adımlar arası taşınmıyor — ilk denemede bu adım tam burada
+          # "ERROR: LLVM is required." ile düştü. Aynı satırı buraya da koy.
+          export PATH="$(brew --prefix llvm@18)/bin:$PATH"
           cp build/tulpar tulpar && chmod +x tulpar
           ./build.sh suites
         timeout-minutes: 25

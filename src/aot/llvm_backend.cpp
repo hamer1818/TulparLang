@@ -4029,6 +4029,33 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     //
     // Sinir denetimi `ult` ile: negatif indeks isaretsizde devasa gorunur ve
     // ayni denetime takilir, yani ayrica `>= 0` bakmaya gerek yok.
+    // KANITLI ERISIM: `for (i = C; i < len(a); i += K)` icinde `a[i]`.
+    // 0 <= i < len == count (dizi kutusuz — dongu basinda sinandi ve dongu
+    // SURUMLENDI). Bekci de, genel katman da, yavas yol da YOK: geriye tek
+    // GEP+load kaliyor. Kazanc bekcinin kendisinden degil, DONGU
+    // GOVDESINDEN KODU cikarmaktan geliyor (bkz. Tuzaklar 6n).
+    //
+    // ⚠ BU DAL, ASAGIDAKI BLOKLAR YARATILMADAN ONCE OLMAK ZORUNDA.
+    // Ilk yazilisinda blok yaratmadan SONRA duruyordu ve erken `return`
+    // geriye SONLANDIRICISI OLMAYAN dort bos temel blok birakiyordu —
+    // gecersiz IR. LLVM 22 tolere ediyor, LLVM 18 SEGFAULT veriyor; yerel
+    // makinede 69 paket yesilken CI'da uc paket coktu (bkz. Tuzaklar 6q).
+    {
+      LLVMBackend::ArrShapeEntry *pshp =
+          shape_lookup(backend, array_base_name(node));
+      if (shape_access_proven(pshp, node->index)) {
+        LLVMValueRef pid = LLVMBuildLoad2(backend->builder, backend->ptr_type,
+                                          pshp->idata_slot, "arr.pid");
+        LLVMValueRef pix = llvm_extract_vm_val_int(backend, idx_val);
+        LLVMValueRef pep = LLVMBuildGEP2(backend->builder, backend->int_type,
+                                         pid, &pix, 1, "arr.pep");
+        LLVMValueRef praw = LLVMBuildLoad2(backend->builder, backend->int_type,
+                                           pep, "arr.praw");
+        llvm_tbaa_tag(backend, praw, 1);
+        return llvm_vm_val_int_val(backend, praw);
+      }
+    }
+
     {
       LLVMValueRef fn =
           LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
@@ -4044,23 +4071,6 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           shape_lookup(backend, array_base_name(node));
       LLVMBasicBlockRef cached_end = nullptr;
       LLVMValueRef cached_val = nullptr;
-      // KANITLI ERISIM: `for (i = C; i < len(a); i += K)` icinde `a[i]`.
-      // 0 <= i < len == count (dizi kutusuz — dongu basinda sinandi ve
-      // dongu SURUMLENDI). Bekci de, genel katman da, yavas yol da YOK:
-      // geriye tek GEP+load kaliyor. Bu, bekcinin kendisini elemekten
-      // cok DONGU GOVDESINDEN KODU cikardigi icin kazaniyor
-      // (bkz. Tuzaklar 6n / Performance.md TAVAN-B).
-      if (shape_access_proven(shp, node->index)) {
-        LLVMValueRef pid = LLVMBuildLoad2(backend->builder, backend->ptr_type,
-                                          shp->idata_slot, "arr.pid");
-        LLVMValueRef pix = llvm_extract_vm_val_int(backend, idx_val);
-        LLVMValueRef pep = LLVMBuildGEP2(backend->builder, backend->int_type,
-                                         pid, &pix, 1, "arr.pep");
-        LLVMValueRef praw = LLVMBuildLoad2(backend->builder, backend->int_type,
-                                           pep, "arr.praw");
-        llvm_tbaa_tag(backend, praw, 1);
-        return llvm_vm_val_int_val(backend, praw);
-      }
       if (shp) {
         LLVMBasicBlockRef bb_cached = LLVMAppendBasicBlock(fn, "arr.cached");
         LLVMBasicBlockRef bb_gen = LLVMAppendBasicBlock(fn, "arr.generic");
