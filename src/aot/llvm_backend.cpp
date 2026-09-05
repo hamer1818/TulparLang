@@ -3437,13 +3437,114 @@ static void emit_shape_fill(LLVMBackend *backend, const char *name,
 // Yavas yoldan donuste onbellegi tazele. Sart: yavas yol diziyi KUTUYA
 // cevirmis olabilir (float yazimi) ve o zaman onbellekteki idata SERBEST
 // BIRAKILMIS bellege bakar. Tazeleme bunu imkansiz kiliyor.
+// Modul-yerel tazeleme fonksiyonu (varsa dondur, yoksa uret).
+// Govdesi emit_shape_fill ile AYNI isi yapmak ZORUNDA — ikisi ayrisirsa
+// onbellek bayat/sarkan isaretci tutar (bkz. Tuzaklar 6l).
+static LLVMValueRef get_shape_refill_fn(LLVMBackend *backend, int eager) {
+  eager = eager ? 1 : 0;
+  if (backend->fn_shape_refill[eager]) return backend->fn_shape_refill[eager];
+
+  LLVMBasicBlockRef save_bb = LLVMGetInsertBlock(backend->builder);
+  LLVMTypeRef i32t = backend->int32_type;
+  LLVMTypeRef params[] = {backend->ptr_type, backend->ptr_type,
+                          backend->ptr_type, backend->ptr_type};
+  LLVMTypeRef fty = LLVMFunctionType(backend->void_type, params, 4, 0);
+  LLVMValueRef fn = LLVMAddFunction(
+      backend->module,
+      eager ? "tulpar.shape_refill.len" : "tulpar.shape_refill", fty);
+  LLVMSetLinkage(fn, LLVMInternalLinkage);
+  backend->fn_shape_refill[eager] = fn;
+
+  LLVMValueRef p_v = LLVMGetParam(fn, 0);
+  LLVMValueRef p_id = LLVMGetParam(fn, 1);
+  LLVMValueRef p_cn = LLVMGetParam(fn, 2);
+  LLVMValueRef p_ln = LLVMGetParam(fn, 3);
+
+  LLVMBasicBlockRef b_entry = LLVMAppendBasicBlock(fn, "entry");
+  LLVMBasicBlockRef b_ty = LLVMAppendBasicBlock(fn, "ty");
+  LLVMBasicBlockRef b_ld = LLVMAppendBasicBlock(fn, "ld");
+  LLVMBasicBlockRef b_no = LLVMAppendBasicBlock(fn, "no");
+  LLVMBasicBlockRef b_ret = LLVMAppendBasicBlock(fn, "ret");
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_entry);
+  LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->vm_value_type,
+                                  p_v, "v");
+  LLVMValueRef tag = LLVMBuildExtractValue(backend->builder, v, 0, "tag");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntEQ, tag,
+                                LLVMConstInt(i32t, 4, 0), "isobj"),
+                  b_ty, b_no);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_ty);
+  LLVMValueRef objp = llvm_extract_vm_val_ptr(backend, v);
+  LLVMValueRef otp = LLVMBuildStructGEP2(backend->builder,
+                                         backend->obj_array_type, objp, 0, "otp");
+  LLVMValueRef ot = LLVMBuildLoad2(backend->builder, i32t, otp, "ot");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntEQ, ot,
+                                LLVMConstInt(i32t, 1, 0), "isarr"),
+                  b_ld, b_no);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_ld);
+  LLVMValueRef idp = LLVMBuildStructGEP2(backend->builder,
+                                         backend->obj_array_type, objp, 5, "idp");
+  LLVMValueRef id = LLVMBuildLoad2(backend->builder, backend->ptr_type, idp, "id");
+  LLVMValueRef cnp = LLVMBuildStructGEP2(backend->builder,
+                                         backend->obj_array_type, objp, 2, "cnp");
+  LLVMValueRef cn = LLVMBuildLoad2(backend->builder, i32t, cnp, "cn");
+  LLVMValueRef cn64 = LLVMBuildSExt(backend->builder, cn, backend->int_type, "cn64");
+  LLVMValueRef ok = LLVMBuildIsNotNull(backend->builder, id, "ubox");
+  LLVMValueRef cnf = LLVMBuildSelect(backend->builder, ok, cn64,
+                                     LLVMConstInt(backend->int_type, 0, 0), "cnf");
+  LLVMBuildStore(backend->builder, id, p_id);
+  LLVMBuildStore(backend->builder, cnf, p_cn);
+  LLVMBuildStore(backend->builder, cn64, p_ln);
+  LLVMBuildBr(backend->builder, b_ret);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_no);
+  LLVMBuildStore(backend->builder, LLVMConstNull(backend->ptr_type), p_id);
+  LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), p_cn);
+  if (eager) {
+    // Dizi degil (dizgi/json/...) ama dongu `len` cagiriyor: bir kez hesapla.
+    LLVMValueRef largs[] = {p_v};
+    LLVMValueRef lres = LLVMBuildCall2(
+        backend->builder, LLVMGlobalGetValueType(backend->func_aot_len),
+        backend->func_aot_len, largs, 1, "lenv");
+    LLVMBuildStore(backend->builder, lres, p_ln);
+  } else {
+    LLVMBuildStore(backend->builder,
+                   LLVMConstInt(backend->int_type, (unsigned long long)-1, 1),
+                   p_ln);
+  }
+  LLVMBuildBr(backend->builder, b_ret);
+
+  LLVMPositionBuilderAtEnd(backend->builder, b_ret);
+  LLVMBuildRetVoid(backend->builder);
+
+  if (save_bb) LLVMPositionBuilderAtEnd(backend->builder, save_bb);
+  return fn;
+}
+
 static void emit_shape_refresh_all(LLVMBackend *backend) {
-  for (int i = 0; i < backend->shape_count; i++)
-    emit_shape_fill(backend, backend->shape_cache[i].name,
-                    backend->shape_cache[i].idata_slot,
-                    backend->shape_cache[i].count_slot,
-                    backend->shape_cache[i].len_slot,
-                    backend->shape_cache[i].len_eager);
+  // TEK CAGRI, satir ici degil. emit_shape_fill 4 temel blok + ~25 komut
+  // uretiyor ve bu YAVAS YOLDA, yani DONGU GOVDESININ ICINDE duruyordu;
+  // o buyukluk LLVM'in sicak yolu acmasini engelliyordu. Olculdu
+  // (arrayiter n=5M): tazelemeyi cikarmak 5,53 -> 4,27 ms, butun
+  // bekcileri kaldirmanin tavani 3,51. Yani kazancin yarisindan cogu
+  // koddan, daldan degil. Cagri ayni isi yapiyor — anlam degismiyor.
+  for (int i = 0; i < backend->shape_count; i++) {
+    LLVMBackend::ArrShapeEntry *e = &backend->shape_cache[i];
+    LLVMValueRef slot = get_local(backend, e->name);
+    if (!slot) {
+      // Degisken gorunmuyor: eski satir ici yol zaten yalniz null yaziyor.
+      emit_shape_fill(backend, e->name, e->idata_slot, e->count_slot,
+                      e->len_slot, e->len_eager);
+      continue;
+    }
+    LLVMValueRef rf = get_shape_refill_fn(backend, e->len_eager);
+    LLVMValueRef args[] = {slot, e->idata_slot, e->count_slot, e->len_slot};
+    LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(rf), rf, args, 4, "");
+  }
 }
 
 // Dongu basinda: sekli kanitlanabilen dizileri onbellege al.

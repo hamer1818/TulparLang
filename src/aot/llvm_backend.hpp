@@ -139,6 +139,23 @@ typedef struct {
   int shape_count;
 
   LLVMValueRef func_aot_div_error;
+  // Sekil onbellegi tazeleme (codegen ic yardimcisi). Yavas yolda SATIR ICI
+  // uretmek yerine cagriliyor: satir ici bicim 4 blok + ~25 komut ve dongu
+  // govdesini LLVM'in acamayacagi kadar sisiriyordu (olculdu: arrayiter'de
+  // 1,26 ms). Dongu BASINDAKI ilk doldurma hala satir ici — orada bir kez
+  // calisiyor ve LLVM'e deger hakkinda bilgi veriyor.
+  // MODUL-YEREL tazeleme fonksiyonu (lazy). Once runtime'da `aot_shape_refill`
+  // olarak denendi ve GERI ALINDI: opak dissal cagri arrayiter'i
+  // 6,51 -> 5,66 iyilestirirken sieve'i 9,64 -> 10,68 GERILETIYORDU —
+  // kucuk bir dongude her dissal cagri LLVM'in gozunde butun bellegi
+  // kirletiyor. Modul-yerel bicimde LLVM govdeyi GORUYOR: bellek etkilerini
+  // kendi cikariyor ve nerede acacagina kendi karar veriyor.
+  // IKI varyant: [0] len KULLANMAYAN dongular icin (govdesinde HIC dissal
+  // cagri yok -> LLVM bellek etkilerini temiz cikariyor), [1] `len` icin
+  // aot_len cagiran varyant. Tek fonksiyonda birlestirilince aot_len'in
+  // bilinmeyen etkileri BUTUN fonksiyonu kirletiyor ve `len` kullanmayan
+  // sicak dongular de bedelini oduyordu (olculdu: sieve 9,07 -> 9,60).
+  LLVMValueRef fn_shape_refill[2];
 
   LLVMMetadataRef tbaa_header;
   LLVMMetadataRef tbaa_elem;
