@@ -116,6 +116,66 @@ bu liste güvensiz olurdu.
 1.55×'i) — yani darboğaz saf bant genişliği değil, erişim başına sabit hesap.
 Tek bir N'de ölçüp "bellek bağlı" demek yanıltıcı olurdu.
 
+### Üç hipotez daha çürüdü (2026-09-05)
+
+Hepsi makuldü, hiçbiri işe yaramadı. Yazıyorum ki bir daha girilmesin.
+
+| deneme | beklenti | ölçüm |
+|---|---|---|
+| `count` yerine ham count + ayrı "kutusuz" bayrağı (`ok && i < count`) | bayrak döngü-değişmezi → LLVM **unswitch** eder, kalan `i < count` döngü sınırıyla özdeş olduğu için silinir | arrayiter 5,55 → **8,13 ms** |
+| Sınır denetimini elemek | yinelemede 2 komut eksilir | **hiç kazanç yok** (aşağıda) |
+| Üst düzey değişkenleri fonksiyona taşımak (küresel → yerel) | `i`/`n` yazmaca girer, 2 bellek okuması eksilir | sieve 11,85 → **13,36 ms** |
+
+**Unswitch neden olmadı:** yavaş yolda `emit_shape_refresh_all` var ve o
+şekil yuvalarına **yazıyor** — yani `ok` döngü içinde yazılan bir yuvadan
+okunuyor, döngü-değişmezi *değil*. Unswitch yapısal olarak imkânsız.
+Geriye yalnız yinelemede fazladan bir `and` + dal kaldı.
+
+**Sınır denetiminin bedava olduğu nasıl ölçüldü:** aynı döngü C'de iki
+biçimde yazıldı — denetimsiz ve `if (i < cnt) ... else abort()` ile.
+İkisi de **2,0 ms**. Dal mükemmel tahmin ediliyor ve sıra-dışı yürütme
+gizliyor. Aynısı elek iç döngüsü için de yapıldı (küresellerden okuma +
+fazladan denetim dahil): 10,8 vs 10,2 ms — Tulpar'ın "fazla" komutları
+**ölçülebilir bir bedel değil**.
+
+### Kalan farkın gerçek kaynağı: ELEMAN GENİŞLİĞİ (ölçüldü)
+
+Elekte `sieve.c` `int` (4 bayt), Tulpar `int[]` 64 bit. Aynı programı C'de
+`long long` ile derleyip ölçtük:
+
+| | süre |
+|---|---|
+| C, 32-bit eleman | 9,51 ms |
+| C, **64-bit** eleman | 10,33 ms |
+| Tulpar (64-bit) | 10,99 ms |
+
+Yani **eleman genişliği eşitlenince Tulpar C'nin ~%7 gerisinde.** Görünen
+1,7 ms'lik farkın yaklaşık yarısı codegen değil, dilin `int`inin 64 bit
+olması. Bu bir tasarım kararının bedeli, gerileme değil.
+
+**Buradan çıkan tek büyük kaldıraç i32 dizi gösterimi** — ama üçüncü bir
+depo biçimi demek (`items_` / `idata` / `idata32`) ve bugün tam bu sınıfta
+sarkan-işaretçi hatası çıktı ([[Tuzaklar#6l]]). Ölçüm kazancı ~0,8 ms;
+risk yüksek. Girilecekse ayrı ve dikkatli bir tur olmalı.
+
+### İşe yarayan: sıfır dolgusunda `calloc` (2026-09-05)
+
+`array_fill(n, 0)` 40 MB'lik bir yazma geçişi yapıyordu. `calloc` büyük
+istekte mmap'e gidiyor ve çekirdek sayfaları zaten sıfır veriyor.
+
+| | önce | sonra |
+|---|---|---|
+| `array_fill` (izole, n=5M) | 1,93 ms | **1,02 ms** |
+| sieve (A/B, aralıklı, 12 tekrar) | 9,81 ms | **9,14 ms** |
+| arrayiter (aynı) | 6,25 ms | **5,33 ms** |
+
+Arena yolu hariç: arena bloğu geri dönüştürülmüş ve **kirli** olabilir.
+
+**Ölçüm notu:** koşucunun kendi rakamında (diller ardışık, aralıklı değil)
+elek farkı gürültüye giriyor — 9,3 → 9,4, yani orada **görünmüyor**.
+Aralıklı A/B görüyor. İkisini de yazıyorum; birini seçip diğerini saklamak
+[[Tuzaklar#6f]]'nin tam tersi hata olurdu.
+
 ## In-memory (HTTP katmanı, 14 CPU)
 | Mod | keep-alive tepe `/ping` | p50/p99 | RSS |
 |-----|------:|:---:|---:|
