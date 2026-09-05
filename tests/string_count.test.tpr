@@ -1,0 +1,70 @@
+import "test";
+
+// count(metin, ayrac) — UYARLANABILIR sayma (2026-09-05).
+//
+// Tek karakterlik ayracta memchr her ISABETTE yeniden cagriliyordu, yani
+// maliyet isabet SAYISIYLA orantiliydi. Yogun ayracta (ki `count(s, ",")`
+// tam bu) 7.42 MB'lik metinde 10.2 ms suruyordu; duz sayma dongusu 1.9 ms.
+//
+// Ama duz donguye KORU KORUNE gecmek daha kotu olurdu: ayni metinde ayrac
+// her 1 MB'de bir oldugunda memchr 0.06 ms, dongu 1.88 ms — 30 KAT
+// gerileme. Bu yuzden ilk 64 isabetin ortalama araligi olculup yogunsa
+// donguye, seyrekse memchr'a devam ediliyor.
+//
+// Bu paket iki dalin da AYNI sayiyi verdigini kilitliyor. Esik 64 isabet
+// oldugu icin testlerin bir kismi bilerek 64'ten COK isabet iceriyor —
+// yoksa yalnizca sonda (probe) dali kosulur ve yogun dal hic denenmez.
+
+func run_kucuk() {
+    assert_eq_int(count("a,b,c,d", ","), 3);
+    assert_eq_int(count(",", ","), 1);
+    assert_eq_int(count(",,,", ","), 3);
+    assert_eq_int(count("", ","), 0);
+    assert_eq_int(count("abc", ","), 0);
+}
+
+// YOGUN dal: 64 isabetten cok, aralik 32'nin altinda -> sayma dongusu.
+func run_yogun() {
+    str d = repeat(",", 500);
+    assert_eq_int(count(d, ","), 500);
+    str e = repeat("abcd,", 1000);        // her 5 baytta bir
+    assert_eq_int(count(e, ","), 1000);
+    str f = repeat("ab,", 300);           // her 3 baytta bir
+    assert_eq_int(count(f, ","), 300);
+}
+
+// SEYREK dal: aralik 32'nin ustunde -> memchr'a devam.
+func run_seyrek() {
+    str g = repeat(repeat("x", 200) + ",", 100);   // her 201 baytta bir
+    assert_eq_int(count(g, ","), 100);
+    str h = repeat("y", 100000) + "," + repeat("z", 100000);
+    assert_eq_int(count(h, ","), 1);
+}
+
+// Sonda esigine TAM oturan sayilar: 63/64/65 isabet.
+func run_esik_civari() {
+    assert_eq_int(count(repeat(",", 63), ","), 63);
+    assert_eq_int(count(repeat(",", 64), ","), 64);
+    assert_eq_int(count(repeat(",", 65), ","), 65);
+    // 64 isabetten sonra SEYREGE donen metin: iki dal da ayni cevabi vermeli
+    str m = repeat(",", 64) + repeat("q", 5000) + ",";
+    assert_eq_int(count(m, ","), 65);
+    // 64 isabetten sonra YOGUNLASAN metin
+    str p = repeat("r", 5000) + repeat(",", 200);
+    assert_eq_int(count(p, ","), 200);
+}
+
+// Cok karakterli ayrac bu yoldan GECMIYOR — bozulmadigini kayda gecir.
+func run_cok_karakter() {
+    assert_eq_int(count("aaa", "aa"), 1);
+    assert_eq_int(count("abab", "ab"), 2);
+    assert_eq_int(count("hello world", "o"), 2);
+    assert_eq_int(count("xyz", ""), 0);
+}
+
+test("kucuk metinler", "run_kucuk");
+test("yogun ayrac (sayma dongusu dali)", "run_yogun");
+test("seyrek ayrac (memchr dali)", "run_seyrek");
+test("sonda esigi civari", "run_esik_civari");
+test("cok karakterli ayrac bozulmadi", "run_cok_karakter");
+test_summary();

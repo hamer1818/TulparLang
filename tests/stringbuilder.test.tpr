@@ -93,6 +93,52 @@ func run_mixed_after_fast_path() {
 }
 
 test("null handle is safe", "run_null_handle_safe");
+// int64 rakamlarini DOGRUDAN tampona yazma (2026-09-05).
+//
+// Eskiden once yigindaki gecici tampona yazilip sonra memcpy'leniyordu.
+// Simdi dogrudan; bu yuzden BUYUME hesabi degisti: her cagri sabit 24
+// bayt (20 hane + isaret + NUL, ustune pay) garanti ediyor. Risk tam
+// burada — az yer ayirmak tasma demek. Bu testler kucuk kapasiteyle
+// baslayip buyume yolunu bilerek zorluyor.
+//
+// Enjeksiyonla dogrulandi: ayrilan yeri 24'ten kucultunce kirmizi doner.
+func run_kucuk_kapasiteden_buyume() {
+    var sb = StringBuilder(1);            // 1 bayt: her ekleme buyutuyor
+    sb_append(sb, 9223372036854775807);   // 19 hane
+    sb_append(sb, "|");
+    sb_append(sb, -9223372036854775807);  // 19 hane + isaret
+    str r = sb_tostring(sb);
+    sb_free(sb);
+    assert_eq_str(r, "9223372036854775807|-9223372036854775807");
+}
+
+func run_cok_ekleme() {
+    var t = StringBuilder(1);
+    int i = 0;
+    while (i < 1000) { sb_append(t, i); i = i + 1; }
+    str r = sb_tostring(t);
+    sb_free(t);
+    // 0-9 (10x1) + 10-99 (90x2) + 100-999 (900x3) = 2890
+    assert_eq_int(len(r), 2890);
+}
+
+// Hizli yol (int) ile genel yol (dizgi/float/bool) art arda bozulmamali.
+func run_karisik_siralama() {
+    var sb = StringBuilder(2);
+    sb_append(sb, 0);
+    sb_append(sb, -1);
+    sb_append(sb, "|");
+    sb_append(sb, 3.5);
+    sb_append(sb, true);
+    sb_append(sb, 42);
+    str r = sb_tostring(sb);
+    sb_free(sb);
+    assert_eq_str(r, "0-1|3.5true42");
+}
+
+test("kucuk kapasiteden buyume", "run_kucuk_kapasiteden_buyume");
+test("cok ekleme", "run_cok_ekleme");
+test("karisik siralama", "run_karisik_siralama");
 test_summary();
 test("hesaplanmis int hizli yol", "run_int_fast_path");
 test("int sinir degerleri", "run_int_edges");

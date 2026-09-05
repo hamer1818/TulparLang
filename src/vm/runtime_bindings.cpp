@@ -1201,9 +1201,20 @@ static inline int aot_itoa(long long v, char *out) {
 // Aradaki ~11 ns tamamen o kutulama+yazma.
 void aot_stringbuilder_append_int(StringBuilder *sb, long long v) {
   if (!sb) return;
-  char buf[24];
-  int len = aot_itoa(v, buf);
-  aot_stringbuilder_append(sb, buf, len);
+  // Rakamlari DOGRUDAN tampona yaz. Eskiden once yigindaki `buf`a yazilip
+  // sonra aot_stringbuilder_append ile memcpy'leniyordu; bu, cagri basina
+  // bir memcpy (uzunluk degisken oldugu icin satir ici alinmiyor) + ikinci
+  // bir sinir hesabi + gereksiz bir yazma gecisi demekti.
+  //
+  // Yer ayirma sabit: int64 en fazla 20 hane + isaret + NUL = 22. Her
+  // seferinde 24 bayt garanti etmek, uzunluga gore hesap yapmaktan hem
+  // ucuz hem de tasmaya kapali.
+  if (sb->length + 24 >= sb->capacity) {
+    sb->capacity = (sb->length + 24 + 1) * 2;
+    sb->buffer = static_cast<char *>(realloc(sb->buffer, sb->capacity));
+    if (!sb->buffer) { sb->capacity = 0; sb->length = 0; return; }
+  }
+  sb->length += aot_itoa(v, sb->buffer + sb->length);   // itoa NUL'u da yaziyor
 }
 
 void aot_stringbuilder_append_vmvalue(StringBuilder *sb, VMValue val) {
@@ -8189,10 +8200,43 @@ VMValue aot_string_count(VMValue haystack, VMValue needle) {
   // Ayrica strstr NUL'a dayaniyor; memchr uzunlugu kullaniyor, yani ici
   // NUL iceren metinlerde de dogru sayiyor.
   if (n->length == 1) {
+    // memchr her ISABETTE yeniden cagriliyor, yani maliyeti isabet
+    // SAYISIYLA orantili. Ayrac YOGUNSA (ki `count(s, ",")` tam bu) bu
+    // felaket: olculdu (2026-09-05, 7.42 MB, her ~4 baytta bir virgul)
+    // memchr dongusu 10.2 ms, duz sayma dongusu 1.9 ms — 5.4 kat.
+    //
+    // Ama duz donguye KORU KORUNE gecmek daha kotu olurdu: ayni metinde
+    // ayrac her 1 MB'de bir oldugunda memchr 0.06 ms, dongu yine 1.88 ms
+    // — 30 KAT gerileme. (Once "dongu her zaman daha iyi" diye baslandi;
+    // seyrek durum olculunce vazgecildi.)
+    //
+    // Bu yuzden UYARLANIYOR: ilk birkac isabet memchr ile bulunup ortalama
+    // aralik olculuyor, sonra kalani hangisi kazaniyorsa onunla bitiriliyor.
+    // Esik 32 bayt: olcumde donus noktasi 16 (dongu 1.88 / memchr 2.57) ile
+    // 64 (dongu 1.89 / memchr 0.64) arasinda.
+    const unsigned char needle = (unsigned char)n->chars[0];
     const char *p = h->chars;
     size_t left = (size_t)h->length;
-    while (left > 0) {
-      const char *hit = (const char *)memchr(p, (unsigned char)n->chars[0], left);
+    const int probe_hits = 64;
+    int probed = 0;
+    while (left > 0 && probed < probe_hits) {
+      const char *hit = (const char *)memchr(p, needle, left);
+      if (!hit) return VM_INT(count);
+      count++;
+      probed++;
+      left -= (size_t)(hit - p) + 1;
+      p = hit + 1;
+    }
+    if (left == 0) return VM_INT(count);
+    size_t consumed = (size_t)h->length - left;
+    if (consumed / (size_t)probe_hits < 32) {
+      // YOGUN: tek gecis sayma dongusu. Derleyici bunu vektorlestiriyor
+      // (-O3), isabet basina maliyet YOK.
+      for (size_t i = 0; i < left; i++) count += (p[i] == (char)needle);
+      return VM_INT(count);
+    }
+    while (left > 0) {   // SEYREK: memchr kazaniyor
+      const char *hit = (const char *)memchr(p, needle, left);
       if (!hit) break;
       count++;
       left -= (size_t)(hit - p) + 1;
