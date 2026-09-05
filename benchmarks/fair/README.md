@@ -53,30 +53,36 @@ cd benchmarks/fair && REPEATS=5 python3 run.py
 — her ölçüm oraya bir satır ekliyor, aşağıdaki tablo o anlık görüntünün
 kopyası ve bayatlayabilir.
 
-En iyi duvar saati (ms), 3 tekrar, 2026-09-05. **Düşük olan hızlı.**
-Bütün diller aynı çıktıyı bastı.
+En iyi duvar saati (ms), 2026-09-05. **Düşük olan hızlı.**
+Dokuz dilin **hepsi aynı çıktıyı bastı** (beş kıyasta da `agree: true`).
 
 | Dil | intloop 50M | fib(32) | sieve 5M | strcat 2M | arrayiter 5M |
 |---|---|---|---|---|---|
-| C (gcc -O2) | **134,4** | **1,6** | **7,9** | 37,8 | 2,1 |
-| C++ (g++ -O2) | 134,6 | 1,9 | 8,0 | **14,8** | 3,1 |
-| Rust (-O3) | 144,3 | 3,8 | 8,3 | 18,8 | **1,6** |
-| Go | 134,8 | 6,7 | 8,5 | 24,8 | 4,0 |
-| C# (.NET) | — | — | — | — | — |
-| Java | 144,7 | 12,9 | 20,2 | 32,4 | 17,7 |
-| Node.js | 708,8 | 25,8 | 29,1 | 101,3 | 19,6 |
-| Python | 3187,4 | 143,1 | 451,6 | 200,7 | 414,6 |
-| **Tulpar AOT** | 135,4 | 4,4 | 9,8 | 31,7 | 6,6 |
+| C (gcc -O2) | **134,6** | **1,6** | **7,6** | 37,7 | 2,3 |
+| C++ (g++ -O2) | 134,7 | 1,9 | 8,0 | **15,0** | 3,0 |
+| Rust (-O3) | 144,2 | 3,9 | 8,2 | 18,8 | **2,2** |
+| Go | 134,8 | 6,7 | 9,2 | 24,8 | 4,3 |
+| C# (.NET 9) | 152,3 | 23,8 | 24,5 | 33,6 | 22,0 |
+| Java | 143,8 | 12,8 | 20,1 | 32,5 | 18,6 |
+| Node.js | 712,8 | 25,4 | 28,6 | 102,5 | 19,2 |
+| Python | 3169,1 | 140,9 | 443,2 | 200,6 | 411,2 |
+| **Tulpar AOT** | 135,1 | 4,5 | 9,3 | 31,3 | 6,0 |
+
+Tulpar sırası: `intloop` 4. · `fib` 4. · `sieve` 5. · `strcat` 4. ·
+`arrayiter` 5. (dokuz dil arasında).
 
 İş yükleri: `intloop` N=50M · `fib` N=32 · `sieve` N=5M · `strcat` N=2M ·
-`arrayiter` N=5M. C# satırı boş: bu makinede .NET SDK kurulu değil
-(`sudo pacman -S dotnet-sdk-9.0` sonrası kendiliğinden dolar, `run.py`
-tarafı hazır).
+`arrayiter` N=5M.
 
-**C++ eklenmesi sıralamayı değiştirdi** ve bunu gizlemenin anlamı yok:
-`strcat`te C++ `std::string` bütün dilleri geçti (14,8 ms — C'nin
-`realloc`+`snprintf` döngüsünün 2,5 katı hızlı), `fib`/`sieve`/`arrayiter`te
-Tulpar bir sıra geriledi. Ölçüm ne diyorsa o.
+Okurken iki şeye dikkat:
+
+- **`strcat`te C sondan üçüncü** (37,7 ms). Elle `realloc`+`snprintf`
+  döngüsü, C++ `std::string`in 2,5 katı yavaş. "C her zaman en hızlı"
+  değil — kap seçimi dili yener.
+- **C# ve Java satırlarında başlatma maliyeti var**: boş program taban
+  çizgisi C# için 8,1 ms (C 0,2 · C++ 0,4 · Tulpar 0,8 · Python 5,7 ·
+  Node 11,3). `fib`in 23,8 ms'sinin üçte biri bu. AOT diller bu maliyeti
+  ödemiyor; kıyas duvar saatini ölçtüğü için fark tabloda görünüyor.
 
 ## İlk ölçümden sonra yapılan iyileştirmeler
 
