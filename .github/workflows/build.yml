@@ -607,6 +607,42 @@ jobs:
         run: bash tests/aot_smoke.sh dist/tulpar-macos-universal
         timeout-minutes: 5
 
+      # DİL ANLAMBİLİMİ — ARM64'ün TEK gerçek doğrulaması.
+      #
+      # `macos-latest` Apple Silicon, yani **arm64**; Linux işi x86-64.
+      # `CMakeLists.txt` mimariye göre AYRI LLVM backend'i linkliyor ve
+      # `vmvalue_abi_uses_sret()` ABI'yi çalışma zamanında seçiyor — yani
+      # AArch64 kod üretimi ayrı bir yol. O yolu bugüne kadar YALNIZ
+      # yukarıdaki 4 vakalık AOT dumanı doğruluyordu.
+      #
+      # Duman "derleyici çalışıyor mu"yu ölçer, "dil doğru mu"yu değil.
+      # 69 paket saf Tulpar anlambilimi (aritmetik, dizi/şekil önbelleği,
+      # struct, closure, string, JSON, ORM/router mantığı) ve grafiksiz.
+      # ARM64'e özgü bir codegen/ABI sapması bugün hiçbir yere düşmüyordu.
+      #
+      # Not: `build.sh suites` ile `tests/pkg_audit.sh` uzun süre çıplak
+      # `timeout` çağırıyordu — macOS'ta o komut YOK. Bu adım eklenirken
+      # ikisi de taşınabilir hale getirildi (`gtimeout` yedeği, hiçbiri
+      # yoksa zaman sınırı olmadan; adım zaman aşımı yedek).
+      #
+      # MALİYET (16 çekirdek / 5 GHz'de ölçüldü, 2026-09-06): toplam 235 sn.
+      # Dağılım: `scene3d_engine.test.tpr` TEK BAŞINA 41 sn (654 test),
+      # arcade paketleri ~1,7 sn/paket, kalan paketler ~150 ms, sondalar
+      # 7 sn, kabuk denetimleri 8 sn. macOS koşucusu daha az çekirdekli;
+      # koşum çoğunlukla sırayla ilerlediği için ~2x bekleniyor.
+      # Fatura sorun olursa ilk bakılacak yer scene3d paketidir — ama
+      # LİSTE TUTMAYIN: "şu paketleri atla" listesi senkronda kalmaz
+      # (aynı tuzak `COMPILE_ONLY_TESTS` / `run_tests.ps1` ikilisinde
+      # yaşandı). Ya hepsi koşar ya adım tümden kaldırılır.
+      - name: Language suites (arm64)
+        if: needs.detect-docs-only.outputs.docs_only != 'true' && steps.reuse.outputs.reused != 'true'
+        env:
+          TULPAR_NO_HWSTAT: "1"
+        run: |
+          cp build/tulpar tulpar && chmod +x tulpar
+          ./build.sh suites
+        timeout-minutes: 25
+
       # TameEngine paketi — gerekçe build-linux'taki notta. macOS'ta betik
       # BAŞLATMA DUMANINI atlıyor: orada DISPLAY yok, pencere açma denemesi
       # başsız koşucuda asılabilir.
