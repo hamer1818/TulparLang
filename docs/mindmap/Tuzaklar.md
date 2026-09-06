@@ -587,6 +587,35 @@ Bu, "hızlandırdık" derken en kolay kandırılma biçimi — ve bu oturumda da
 ~20.6–21.4). **Kural:** yapılandırmaları iç içe ve simetrik sırada, birden çok
 tur, her turda min al. Tek seride arka arkaya ölçme.
 
+## 6f-2. Tavan ölçümü: iki program TEK bir şeyde ayrılmıyorsa sayı yalan
+
+Bir optimizasyona girişmeden önce "tavan ne kadar" diye C'de model yazmak
+doğru refleks. Ama model programı kurmak, ölçmek kadar dikkat ister —
+2026-09-06'da aynı gün **iki kez** yanlış sayı üretildi:
+
+| deneme | ne yanlıştı | sonuç |
+|---|---|---|
+| `ceil.c` A vs B | A'nın DIŞ döngüsü yerel `i`, B'ninki global `g_i` kullanıyordu | bekçiye 0,93 ms fatura edildi, oysa farkın çoğu dış döngüydü |
+| `ceil2.c` A/R/G/B | dört bicim `if (m=='A')` ile SICAK dış döngünün içinde seçiliyordu | 5M kez çalışan seçim farkı gizledi, "bekçi bedava" çıktı |
+
+İkisi de kendi içinde tutarlı, ikisi de yanlış. Doğrusu üçüncü denemede:
+tek bir kaynak, **tek** `#define` değişiyor (`width.c` / `width2.c`),
+dallanma dışarıda. O zaman sayılar oturdu:
+
+| ölçüm (elek, N=5M, pinlenmiş) | ms |
+|---|---|
+| C, int64 eleman, bekçisiz | 8,38 |
+| C, int64 eleman, **bekçi + soğuk yol** | 9,35 |
+| C, int32 eleman, bekçisiz | 7,78 |
+| Tulpar bugün | 9,36 |
+
+Yani Tulpar tam olarak "bekçili C" hızında; bekçi 0,97 ms, eleman
+genişliği 0,60 ms.
+
+**Kural:** tavan modelinde değişen tek şey ölçtüğün şey olmalı. Aynı
+kaynak + `-D` ile derle; "mod" seçen bir `if` sıcak döngüye girmesin;
+çıktıyı doğrula. Bir sayı beklentiye uymuyorsa önce **modeli** şüphelen.
+
 ## 6g. `a[i]` düğümünde taban İKİ ayrı alanda olabilir
 
 Şekil önbelleği kodu yazıldı, testler geçti, tanılama "önbelleğe alındı" dedi

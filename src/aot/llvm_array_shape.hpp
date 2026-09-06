@@ -22,6 +22,14 @@ extern "C" int tulpar_loop_index_proven(ASTNode_C *init, ASTNode_C *cond,
                                         const char *array_name,
                                         const char **ivar_out);
 
+// `while (v <= UB) { ...; v = v + STEP; }` — BICIM dogrulamasi. Kanitin
+// sayisal kismini (v>=0, STEP>0, UB<count) codegen dongu basinda SINIYOR.
+extern "C" int tulpar_while_index_proven(ASTNode_C *cond, ASTNode_C *body,
+                                         const char **ivar_out,
+                                         const char **ub_out,
+                                         const char **step_out,
+                                         int *inclusive_out);
+
 extern "C" int tulpar_loop_uses_len(ASTNode_C *cond, ASTNode_C *body,
                                     ASTNode_C *incr, const char *name);
 

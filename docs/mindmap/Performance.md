@@ -393,3 +393,65 @@ Tulpar daha yavaş. Kıyas sayıları yerel (LLVM 22) ölçümlerdir.
 (arrayiter 2,91 vs generic 2,77; intloop 151,9 vs 135). Kaçış kapısı
 olarak duruyor, varsayılan `generic` (rustc tabanıyla aynı).
 
+## `while` döngü sürümlemesi ve ELEK'İN GERÇEK açığı (2026-09-06)
+
+### Elek tavanı — düzeltilmiş sayılar
+Aynı kaynak, tek `#define` değişiyor (`width.c` / `width2.c`; önceki iki
+ölçümüm geçersizdi, bkz. [[Tuzaklar]] 6f-2). N=5M, pinlenmiş, en iyi:
+
+| | ms |
+|---|---|
+| C, int64 eleman, bekçisiz | 8,38 |
+| C, int64 eleman, **bekçi + soğuk yol** | 9,35 |
+| C, int32 eleman, bekçisiz | 7,78 |
+| C, int8 eleman, bekçisiz | 7,39 |
+| **Tulpar** | **9,36** |
+
+Okunacak şey: Tulpar **bekçili C ile aynı hızda**. Kalan açık iki
+kalemden ibaret — bekçi 0,97 ms, eleman genişliği 0,60 ms — ve üçüncü
+bir "codegen kalitesi" kalemi yok.
+
+### `while` sürümlemesi: kod mükemmel, sonuç ters
+`while (v <= UB) { a[v] = ...; v = v + STEP; }` biçimi için kanıt
+sözdiziminden çıkmıyor (elek'te başlangıç `i*i`, adım `i`, sınır `n`).
+Çözüm: sayısal koşulları döngü BAŞINDA bir kez sınamak —
+`v >= 0 && STEP > 0 && UB < count` — ve döngüyü sürümlemek.
+
+Üretilen hızlı gövde gcc'ninkiyle **komut komut aynı**:
+
+```
+movq $0x1,(%r12,%rbp,8)      ; gcc:  movq $0x1,(%rcx,%rax,8)
+add  %rcx,%rbp               ;       add  %rdx,%rax
+cmp  %rdx,%rbp               ;       cmp  %rbx,%rax
+jle  ...                     ;       jle  ...
+```
+
+İkili yamalanıp (`0xCC`) doğrulandı: hızlı dal koşuyor, genel dal **hiç**
+koşmuyor. Buna rağmen:
+
+| | ms |
+|---|---|
+| elek, sürümleme yok | 9,53 |
+| elek, iç döngü sürümlü (derinlik 1) | **10,22** ← gerileme |
+| elek, yalnız en dış seviyede | 9,54 |
+| tek döngülü doldurma, sürümleme yok | 8,65 |
+| tek döngülü doldurma, sürümlü | **8,01** |
+
+Yani dönüşüm doğru ve döngüyü hızlandırıyor; İÇ İÇE açıldığında dış
+döngünün gövdesine ikinci bir kopya girmesi kazancı yiyor. Mekanizma tam
+olarak aydınlatılamadı — dış döngünün makine kodu komut komut aynı,
+fark yalnız yazmaç ataması ve 13 komutluk büyüme — ama etki N ile
+ÖLÇEKLENIYOR (N=20M'de 80,3 → 83,5), yani bellek sistemine bağlı.
+
+**Karar:** `for` sürümlemesiyle aynı kural — yalnız `loop_depth == 0`.
+Elek değişmiyor, tek döngülü doldurma %7 kazanıyor. Kısıt artık keyfi
+değil, ÖLÇÜLMÜŞ.
+
+### Denenip BIRAKILAN: global'leri `internal` yapmak
+"İçeri alırsak GlobalsAA kanıt üretir, sıcak döngüde her tur yeniden
+okunmazlar" — **yanlış**. Üretilen IR birebir aynı kalıyor (globaller yine
+her tur okunuyor), yalnız makine kodu değişiyor: dışa açıkken LLVM adresi
+bir yazmaca alıyor (`mov $ADDR,%r12` + `(%r12)`), içeri alınınca
+RIP-göreli adresleme üretiyor ve sıcak döngüde daha uzun kodlanıyor.
+Elek 9,66 → 10,54 ms. Geri alındı; içeri alınan modüllerin globalleri
+tarihsel olarak `internal` ve onlara dokunulmadı.
