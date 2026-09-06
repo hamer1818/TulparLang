@@ -915,6 +915,79 @@ derleme `src/embedded_libs.h` yazıyor — o yüzden konteyner içinde
 yazılabilir bir kopya çıkarılıyor. Daraltma sondası hangi biçimin çöktüğünü
 tek tek gösterdi ve hata dakikalar içinde bulundu.
 
+## 6r. Küresel LLVM bağlamı: doğrulayıcı düşer, optimizasyon SESSİZCE iner
+
+En pahalı sessiz hata sınıflarından biri. LLVM-C'nin bazı çağrıları
+**küresel bağlamı** kullanıyor; modülümüz ise `LLVMContextCreate()` ile
+**ayrı** bir bağlamda:
+
+```c
+LLVMBasicBlockRef LLVMAppendBasicBlock(LLVMValueRef Fn, const char *Name) {
+  return LLVMAppendBasicBlockInContext(LLVMGetGlobalContext(), Fn, Name);
+}                                       // ^^^ KÜRESEL
+```
+
+Sonuç: aynı yazılan tip **iki ayrı `Type` nesnesi** oluyor. `<2 x i64>`
+ile `<2 x i64>` eşit değil.
+
+**Nasıl ortaya çıkıyor (2026-09-06 ölçümü):**
+
+| belirti | görünen |
+|---|---|
+| `LLVMVerifyModule` | `MDNode context does not match Module context` |
+| aynısı, vektörleşen döngüde | `Both operands to a binary operator are not of the same type!` |
+| basılan IR | `add <2 x i64> %vec.ind, <2 x i64> splat (i64 2)` |
+| o IR'ı `llvm-as`'e ver | **ayrıştırılamıyor** — `expected type` |
+
+Son iki satır aynı şeyin iki yüzü: yazıcı ikinci işlenenin tipini
+**ayrıca** basıyor, çünkü kendi gözünde de tipler farklı. Doğrulayıcının
+kendi yazdığı metni kendi ayrıştırıcısı kabul etmiyorsa şüphelenilecek
+şey LLVM değil, **bağlam karışmasıdır**.
+
+**Bedeli:** doğrulama düşünce derleyici O3→O2→O1 merdivenine iniyor.
+`arrayiter` bu yüzden **O1'de** derleniyordu: bütün testler yeşil, çıktı
+doğru, kod **%25 yavaş**. Merdivenin varlığı hatayı gizliyordu —
+"geri çekilme" tasarlanmış bir emniyet ağıydı ve tam da bu yüzden kimse
+ağın her seferinde tutulduğunu fark etmedi.
+
+**Vektörleşmenin kaybı ayrıca sinsi:** üretici (`IRBuilder`) bağlamını
+**eklendiği bloktan** alıyor. Bloklarımız küresel bağlamdaysa, döngü
+vektörleştiricinin bizim bloğumuzda ürettiği her sabit yanlış bağlamdan
+geliyor.
+
+**Kural:** yeni blok/tip yaratan HER çağrı modülün bağlamından geçmeli.
+`append_bb()` (llvm_backend.cpp) tek kapı; 99 çağrı oradan geçiyor.
+`LLVMDoubleType()`, `LLVMInt8Type()`, `LLVMVoidType()` gibi bağlamsız
+kısayolların **hiçbiri** kullanılmamalı — `backend->float_type` vb. var.
+
+**Nasıl yakalanır:** `./build.sh suites` artık küçük bir doldurma
+döngüsü derleyip (a) "aggressive O3 IR invalid" notunun **çıkmadığını**,
+(b) üretilen IR'da bekçisiz depo GEP'inin (`set.pep`) **bulunduğunu**
+denetliyor. Bu bir HIZ özelliğinin doğruluk paketleri arasında
+sınanması: sessizce yavaşlamak da bir gerilemedir ve başka hiçbir test
+bunu görmüyor.
+
+⚠ **Denetimin ne ölçtüğüne dikkat.** İlk iki taslak da hiçbir şey
+ölçmüyordu ya da yanlış şeyi ölçüyordu:
+
+1. "İkilide SIMD komutu var mı" — statik bağlanan çalışma zamanı zaten
+   **6000+** tane içeriyor. Her zaman yeşil.
+2. "`main` içinde `movaps|movdqa` var mı" — yığına yapılan sıradan bir
+   16 baytlık kopya da onları üretiyor; vektörleşmeyen derleyicide bile
+   1 bulunuyordu. Yine her zaman yeşil.
+3. "`main` içinde `paddq|movdqu` var mı" — bu gerçekten ayırt ediyor
+   (eski 0, yeni 4) **ama LLVM 18'de (CI'ın sürümü) doğru kod için de
+   0**: LLVM 18 bu döngüyü vektörleştirmiyor. Docker'da ölçüldü. CI'ı,
+   gerçek bir gerileme olmadan kırardı.
+
+Kalan denetim (b) sürümden bağımsız, çünkü **bizim** ürettiğimiz şeyi
+soruyor: bekçisiz depo. Vektörleşme LLVM'in aşağı akıştaki kararı ve
+onu şart koşmak sürüm tahmini yapmak olurdu.
+
+Ayrıca sonda programı bilerek **yalnız** doldurma döngüsünden ibaret:
+bir indirgeme eklenirse o vektörleşir ve denetim yanlış yere yeşil
+kalır.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.

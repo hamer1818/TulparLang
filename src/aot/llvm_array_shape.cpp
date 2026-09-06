@@ -197,27 +197,115 @@ static bool visit_len_of(ASTNode_C *n, void *p) {
   return true;
 }
 
-// Govdede ELEMAN YAZMASI var mi? (`a[i] = ...`, `a[i] += ...`, `a[i]++`)
+// Govdedeki ELEMAN YAZMALARI diziyi KUTULAYABILIR mi?
 //
 // Bu, sinir denetimi elemenin YUK TASIYAN kosulu. Kutusuz bir diziye int
 // OLMAYAN bir deger yazmak (`a[i] = 2.5`) diziyi KUTULUYOR: idata free
-// ediliyor, items_ ayriliyor. Onbellekteki idata o an sarkiyor ve bugun
-// bunu yalniz yavas yoldaki tazeleme kurtariyor (bkz. Tuzaklar 6l).
-// Bekcisiz hizli surumde tazeleme YOK, yani yazma da olmamali.
+// ediliyor, items_ ayriliyor. Onbellekteki idata o an sarkiyor ve bunu
+// yalniz yavas yoldaki tazeleme kurtariyor (bkz. Tuzaklar 6l). Bekcisiz
+// hizli surumde tazeleme YOK — dolayisiyla KUTULAMA da olmamali.
 //
-// Yazma HANGI ISIMDEN oldugu onemsiz: `array b = a;` ikisini ayni diziye
-// bagliyor, yani `b[i] = 2.5` bizim `a`mizi da kutular. O yuzden soru
-// "bu diziye yaziliyor mu" degil, "govdede HERHANGI bir eleman yazmasi
-// var mi".
-static bool visit_any_elem_write(ASTNode_C *n, void *p) {
-  bool *found = (bool *)p;
-  if ((n->type == AST_ASSIGNMENT || n->type == AST_COMPOUND_ASSIGN ||
-       n->type == AST_INCREMENT || n->type == AST_DECREMENT) &&
-      n->left && n->left->type == AST_ARRAY_ACCESS) {
-    *found = true;
+// Yazmanin HANGI ISIMDEN oldugu onemsiz: `array b = a;` ikisini ayni
+// diziye bagliyor, yani `b[i] = 2.5` bizim `a`mizi da kutular. O yuzden
+// soru "bu diziye yaziliyor mu" degil, "govdedeki HER eleman yazmasi
+// KESIN tamsayi mi".
+//
+// 2026-09-06'ya kadar burasi "govdede eleman yazmasi VARSA vazgec"
+// diyordu; o yuzden `for (i...) { a[i] = i; }` gibi DOLDURMA dongulerinin
+// tamami bekcili kaliyor ve vektorlesemiyordu.
+
+// Bir ifadenin degeri KESIN tamsayi mi?
+//
+// Yalniz "evet" cevabi yuk tasiyor; "hayir" en fazla optimizasyonu
+// kaciriyor. O yuzden liste beyaz: taniniamayan her dugum "hayir".
+//
+// bool BILEREK DISARIDA: etiketi 0 (INT) degil 2, yani `a[i] = true`
+// kutusuz diziye dogrudan yazilamaz.
+struct IntCtx {
+  const char *ivar;  // dongu degiskeni: int oldugu dongu BICIMINDEN belli
+};
+
+static bool expr_is_int(ASTNode_C *n, IntCtx *ic) {
+  if (!n) return false;
+  switch (n->type) {
+  case AST_INT_LITERAL:
+    return true;
+  case AST_IDENTIFIER:
+    // TEK kabul edilen ad DONGU DEGISKENI. Int oldugu dongunun BICIMINDEN
+    // belli: init bir int sabiti, artim int sabiti ekliyor ve govde onu
+    // yeniden baglamiyor — ucu de tulpar_loop_index_proven'in on kosulu.
+    //
+    // BASKA HICBIR AD KABUL EDILMIYOR, cunku turunu bilmenin yolu yok:
+    // `int k` yazan bir yerel bile kutulu bir VMValue yuvasinda duruyor ve
+    // icine calisma zamaninda float girebilir (parametreye cagiran float
+    // gecebilir). Bir sure codegen'e "bu ad native i64 yuvasinda mi" diye
+    // soran bir geri cagri vardi; OLCULDU (2026-09-06) ve pratikte HIC
+    // "evet" demiyor — yalniz dar bicimli "native fonksiyon" yayicisinda
+    // native yuva olusuyor. Sinanamayan bir kanit yolu tasimaktansa
+    // kaldirildi.
+    //
+    // Genisletmenin dogru yolu bu degil: `a[i] = k` gibi dongu-DEGISMEZI
+    // bir adin etiketi de dongu degismezidir, yani `tag(k) == INT` sinavi
+    // dongu BASINA, surumleme kosuluna (`count_slot != 0` yanina)
+    // eklenebilir. Kiyaslamalarin hicbiri buna bagli olmadigi icin
+    // yapilmadi.
+    return n->name && ic->ivar && strcmp(n->name, ic->ivar) == 0;
+  case AST_UNARY_OP:
+    return n->op == TOKEN_MINUS && expr_is_int(n->left, ic);
+  case AST_BINARY_OP:
+    switch (n->op) {
+    // Tulpar'da int/int TAMSAYI bolme (`7 / 2 == 3`), yani `/` de int
+    // koruyor. Karsilastirmalar bool uretiyor: listede yoklar.
+    case TOKEN_PLUS:
+    case TOKEN_MINUS:
+    case TOKEN_MULTIPLY:
+    case TOKEN_DIVIDE:
+    case TOKEN_MODULO:
+      return expr_is_int(n->left, ic) && expr_is_int(n->right, ic);
+    default:
+      return false;
+    }
+  default:
     return false;
   }
-  return true;
+}
+
+struct WriteCtx {
+  IntCtx ic;
+  bool unsafe;
+};
+
+static bool visit_elem_write_ok(ASTNode_C *n, void *p) {
+  WriteCtx *w = (WriteCtx *)p;
+  if (!n->left || n->left->type != AST_ARRAY_ACCESS) return true;
+  switch (n->type) {
+  case AST_INCREMENT:
+  case AST_DECREMENT:
+    // Kutusuz dizide eleman zaten int; int +-1 yine int.
+    return true;
+  case AST_ASSIGNMENT:
+    if (expr_is_int(n->right, &w->ic)) return true;
+    break;
+  case AST_COMPOUND_ASSIGN:
+    // `a[i] op= x`: sol taraf (kutusuz dizide) int, op int koruyor ve x
+    // int ise sonuc int.
+    switch (n->op) {
+    case TOKEN_PLUS_EQUAL:
+    case TOKEN_MINUS_EQUAL:
+    case TOKEN_MULTIPLY_EQUAL:
+    case TOKEN_DIVIDE_EQUAL:
+    case TOKEN_MODULO_EQUAL:
+      if (expr_is_int(n->right, &w->ic)) return true;
+      break;
+    default:
+      break;
+    }
+    break;
+  default:
+    return true;   // eleman yazmasi degil
+  }
+  w->unsafe = true;
+  return false;
 }
 
 // `for (int i = C; i < len(a); i = i + K)` bicimi mi, ve `a[i]` icin SINIR
@@ -232,7 +320,8 @@ static bool visit_any_elem_write(ASTNode_C *n, void *p) {
 // (count_slot != 0) ve dongu SURUMLENIYOR — LLVM'in kendi unswitch'i bu
 // isi yapamiyor, olculdu (Performance.md).
 //
-// ELEMAN YAZMASI OLAN govde reddediliyor: bkz. visit_any_elem_write.
+// KUTULAYABILEN eleman yazmasi olan govde reddediliyor: bkz.
+// visit_elem_write_ok.
 extern "C" int tulpar_loop_index_proven(ASTNode_C *init, ASTNode_C *cond,
                                         ASTNode_C *body, ASTNode_C *incr,
                                         const char *array_name,
@@ -279,12 +368,12 @@ extern "C" int tulpar_loop_index_proven(ASTNode_C *init, ASTNode_C *cond,
   // `i` govdede baska yerde ATANMAMALI (kosul/artim disinda).
   if (tulpar_loop_rebinds_name(nullptr, body, nullptr, ivar)) return 0;
 
-  // Govdede HIC eleman yazmasi olmamali — kutulama riski.
-  bool wrote = false;
-  walk_all(body, visit_any_elem_write, &wrote);
-  walk_all(cond, visit_any_elem_write, &wrote);
-  walk_all(incr, visit_any_elem_write, &wrote);
-  if (wrote) return 0;
+  // HER eleman yazmasi KESIN tamsayi olmali — yoksa kutulama riski.
+  WriteCtx wc{IntCtx{ivar}, false};
+  walk_all(body, visit_elem_write_ok, &wc);
+  walk_all(cond, visit_elem_write_ok, &wc);
+  walk_all(incr, visit_elem_write_ok, &wc);
+  if (wc.unsafe) return 0;
 
   if (ivar_out) *ivar_out = ivar;
   return 1;

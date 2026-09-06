@@ -335,3 +335,61 @@ FastAPI'yi 5–15× geçer (Node Fastify ligi); Go/Rust altında. Asıl koz: **d
 
 ## İlgili
 [[Wings Serve Modes]] · [[Memory Leak Fixes]] · [[SQLite and DB]] · [[Roadmap]]
+
+## Optimize edici HEDEF MAKİNEYİ ve kendi BAĞLAMINI görmüyordu (2026-09-06)
+
+İki ayrı kusur, ikisi de "üretilen kod doğru ama sessizce yavaş"
+sınıfından. İkisi de çıktı testiyle görünmez.
+
+### 1. `LLVMRunPasses(..., nullptr, ...)`
+TargetMachine geçilmiyordu → `TargetTransformInfo` yok → vektörleştiricinin
+maliyet modeli yok → hiç ateşlenmiyor. `arrayiter`'in `main`'inde SIMD
+komutu **0 → 7**.
+
+### 2. Temel bloklar KÜRESEL bağlamda yaratılıyordu
+`LLVMAppendBasicBlock` küresel bağlamı kullanıyor (bkz. [[Tuzaklar]] 6r).
+Vektörleşen döngüde doğrulayıcı düşüyor, derleyici O3'ten **O1'e** iniyor.
+Yani (1) düzeltildikten sonra vektörleşen her döngü, tam da vektörleştiği
+için optimizasyonsuz kalıyordu.
+
+### 3. Kanıtlı ELEMAN YAZMASI
+Döngü sürümleme "gövdede eleman yazması varsa vazgeç" diyordu, çünkü
+kutusuz bir diziye float yazmak diziyi kutuluyor ve önbellekteki `idata`
+sarkıyor. Artık yazılan değerin **kesin tamsayı** olduğu kanıtlanabiliyorsa
+yazma da bekçisiz üretiliyor. Kanıt dar: int sabitleri, **döngü değişkeni**
+ve bunlar üzerinde `+ - * / %`.
+
+Döngü değişkeni dışında hiçbir ad kabul edilmiyor. Denendi ve **geri
+alındı**: codegen'e "bu ad native i64 yuvasında mı" diye soran bir geri
+çağrı yazıldı, ölçüldü, **pratikte hiç "evet" demiyor** — `int k = 7`
+diyen bir yerel bile kutulu bir `VMValue` yuvasında duruyor. Sınanamayan
+bir kanıt yolu taşımaktansa kaldırıldı. Genişletmenin doğru yolu:
+`a[i] = k` gibi döngü-DEĞİŞMEZİ bir adın etiketi de döngü değişmezidir,
+yani `tag(k) == INT` sınavı döngü BAŞINA (sürümleme koşulunun yanına)
+eklenebilir. Hiçbir kıyas buna bağlı olmadığı için yapılmadı.
+
+### Ölçüm (arrayiter, BENCH_N=5M, 11 tur, ortanca)
+
+| aşama | ms |
+|---|---|
+| başlangıç | 3,45 |
+| yazma kanıtı (O1'e düşerek) | 3,88 — **gerileme** |
+| + bağlam düzeltmesi (O3 korunuyor) | **2,83** |
+
+Ortadaki satır dersin kendisi: yeni optimizasyon tek başına ölçülseydi
+"işe yaramıyor, geri al" denirdi. İşe yarıyordu; boru hattı onu
+cezalandırıyordu.
+
+### LLVM 18 ile LLVM 22 aynı şeyi yapmıyor
+Docker'da (`ubuntu:24.04` + `llvm-18-dev`) ölçüldü: aynı doldurma
+döngüsünde **LLVM 22 vektörleştiriyor, LLVM 18 vektörleştirmiyor** —
+`main` içinde 4 vs 0 vektör komutu. İkisinde de üretilen kod doğru,
+ikisinde de O3 korunuyor, ikisinde de bekçisiz depo üretiliyor. Yani
+buradaki kazancın bir kısmı **yerel makineye özgü**; CI'ın gördüğü
+Tulpar daha yavaş. Kıyas sayıları yerel (LLVM 22) ölçümlerdir.
+
+### Denenip BIRAKILAN
+`TULPAR_TARGET_CPU=native` — Zen4'te AVX-512 seçimleri kazandırmıyor
+(arrayiter 2,91 vs generic 2,77; intloop 151,9 vs 135). Kaçış kapısı
+olarak duruyor, varsayılan `generic` (rustc tabanıyla aynı).
+

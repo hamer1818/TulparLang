@@ -439,6 +439,54 @@ if [ "$ACTION" = "suites" ]; then
     fi
     rm -rf "$RW_TMP"
 
+    # OPTİMİZASYON SEVİYESİ denetimi.
+    #
+    # `LLVMRunPasses`ten sonra modül doğrulayıcıdan geçemezse derleyici
+    # O3 -> O2 -> O1 merdivenine düşüyor ve bunu tek satır stderr notuyla
+    # söylüyor. 2026-09-06'ya kadar bu not KİMSENİN GÖRMEDİĞİ bir yerde
+    # duruyordu: temel blokları KÜRESEL bağlamda yaratmak yüzünden
+    # vektörleşen her döngü doğrulamayı düşürüyor ve program sessizce
+    # O1'de derleniyordu. Testler yeşil, çıktı doğru, kod %25 yavaş.
+    #
+    # Bu yüzden bir SÜRAT özelliği burada, doğruluk paketlerinin yanında
+    # sınanıyor: sessizce yavaşlamak da bir gerileme.
+    OPT_TMP=$(mktemp -d)
+    cat > "$OPT_TMP/vec.tpr" <<'TPREOF'
+int[] a = array_fill(4096, 0);
+for (int i = 0; i < len(a); i = i + 1) { a[i] = i; }
+print(a[4095]);
+TPREOF
+    OPT_OUT=$(TULPAR_AOT_EMIT_LL=1 ./tulpar build "$OPT_TMP/vec.tpr" "$OPT_TMP/vec" 2>&1)
+    if echo "$OPT_OUT" | grep -q "aggressive O3 IR invalid"; then
+        echo -e "${RED}Optimizasyon O3'ten DUSTU — uretilen kod sessizce yavas!${NC}"
+        echo "$OPT_OUT" | grep -i "o3\|note" | head -3
+        rm -rf "$OPT_TMP"
+        exit 1
+    fi
+    echo -e "${GREEN}optimizasyon O3'te kaldi${NC}"
+    # Bekçisiz KANITLI YAZMA gerçekten üretiliyor mu?
+    #
+    # İlk yazılan denetim sökülen `main` içinde SIMD komutu arıyordu.
+    # ÖLÇÜLDÜ ve BIRAKILDI: LLVM 18'de (CI'ın sürümü) aynı döngü
+    # vektörleşmiyor — komut sayısı 0, oysa üretilen kod doğru ve O3'ten
+    # de düşmüyor. Yani o denetim CI'ı, gerçek bir gerileme olmadan
+    # kırardı. Vektörleşme LLVM'in aşağı akıştaki kararı; BİZİM
+    # garantimiz bekçisiz depo komutunun üretilmesi.
+    #
+    # `set.pep` = kanıtlı eleman yazmasının GEP'i (llvm_backend.cpp,
+    # AST_ASSIGNMENT / ARRAY_ACCESS dalı). Adı değiştirirsen burayı da
+    # değiştir.
+    LLOUT="$OPT_TMP/vec.ll"
+    if [ ! -f "$LLOUT" ]; then LLOUT=$(ls "$OPT_TMP"/*.ll 2>/dev/null | head -1); fi
+    if [ -n "$LLOUT" ] && [ -f "$LLOUT" ] && grep -q "set\.pep" "$LLOUT"; then
+        echo -e "${GREEN}kanitli eleman yazmasi uretiliyor${NC} (bekcisiz depo)"
+    else
+        echo -e "${RED}Kanitli eleman yazmasi URETILMIYOR — doldurma dongusu bekcili!${NC}"
+        rm -rf "$OPT_TMP"
+        exit 1
+    fi
+    rm -rf "$OPT_TMP"
+
     # Kod üretimi DENKLİK denetimi: sahne JSON'undan üretilen Tulpar kodu
     # derlenip çalıştırılıyor ve kurduğu sahne yeniden serileştirilerek
     # kaynakla karşılaştırılıyor. "Kod da aynı sahneyi kuruyor" iddiasını

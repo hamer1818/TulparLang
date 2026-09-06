@@ -45,6 +45,30 @@ static std::string gsym(const char *name) {
 }
 
 
+// TEMEL BLOK YARATMA — HER ZAMAN MODULUN BAGLAMINDA.
+//
+// LLVM-C'nin `LLVMAppendBasicBlock`i blogu KURESEL baglamda yaratiyor
+// (basligindaki tanim aynen bu: `...InContext(LLVMGetGlobalContext(), ...)`).
+// Bizim modulumuz ise `LLVMContextCreate()` ile ACILAN AYRI bir baglamda.
+// Ikisi karisinca ayni yazilan tur iki AYRI Type nesnesi oluyor ve olculen
+// sonuc su (2026-09-06):
+//
+//   * `LLVMVerifyModule` optimizasyondan SONRA "MDNode context does not
+//     match Module context" veriyordu — her derlemede butun modulun
+//     yazdir/yeniden-ayristir turuna girmesi bu yuzdendi.
+//   * Dongu vektorlestirici, ureteci BIZIM blogumuzda konumlandiginda
+//     sabitlerini o blogun baglamindan aliyor: `add <2 x i64> %vec.ind,
+//     <2 x i64> splat (i64 2)` — iki islenen ayni yazilip FARKLI Type
+//     oluyor, dogrulayici "Both operands ... not of the same type" diyor
+//     ve boru hatti O3'ten O1'e dusuyordu. Yani vektorlesen her dongu
+//     sessizce optimizasyonsuz kaliyordu.
+//
+// Yeni blok yaratan her yer buradan gecmeli.
+static LLVMBasicBlockRef append_bb(LLVMBackend *backend, LLVMValueRef fn,
+                                   const char *name) {
+  return LLVMAppendBasicBlockInContext(backend->context, fn, name);
+}
+
 // Korumali tamsayi bolme/kalan.
 //
 // Ham `sdiv`/`srem` iki durumda DONANIM TUZAGI (x86 #DE -> SIGFPE) ve LLVM
@@ -59,9 +83,9 @@ static LLVMValueRef build_checked_div(LLVMBackend *backend, LLVMValueRef l,
                                       LLVMValueRef r, int is_rem) {
   LLVMTypeRef i64 = backend->int_type;
   LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
-  LLVMBasicBlockRef bb_bad = LLVMAppendBasicBlock(fn, "div.bad");
-  LLVMBasicBlockRef bb_ok = LLVMAppendBasicBlock(fn, "div.ok");
-  LLVMBasicBlockRef bb_done = LLVMAppendBasicBlock(fn, "div.done");
+  LLVMBasicBlockRef bb_bad = append_bb(backend, fn, "div.bad");
+  LLVMBasicBlockRef bb_ok = append_bb(backend, fn, "div.ok");
+  LLVMBasicBlockRef bb_done = append_bb(backend, fn, "div.done");
 
   LLVMValueRef zero = LLVMConstInt(i64, 0, 0);
   LLVMValueRef isz =
@@ -3329,6 +3353,7 @@ static int shape_pure_call(const char *name, void *ctx) {
   return 0;
 }
 
+
 // `a[i]` dugumunde taban ya `name`de ya da `left`te duruyor — parser iki
 // bicimi de uretiyor (for-in seker acilimi `left` kullaniyor). Ikisine de
 // bakmayan bir arama sessizce hicbir seyi hizlandirmaz.
@@ -3383,10 +3408,10 @@ static void emit_shape_fill(LLVMBackend *backend, const char *name,
   (void)eager_len;
   LLVMTypeRef i32t = backend->int32_type;
   LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
-  LLVMBasicBlockRef b_ty = LLVMAppendBasicBlock(fn, "shape.ty");
-  LLVMBasicBlockRef b_ld = LLVMAppendBasicBlock(fn, "shape.ld");
-  LLVMBasicBlockRef b_no = LLVMAppendBasicBlock(fn, "shape.no");
-  LLVMBasicBlockRef b_done = LLVMAppendBasicBlock(fn, "shape.done");
+  LLVMBasicBlockRef b_ty = append_bb(backend, fn, "shape.ty");
+  LLVMBasicBlockRef b_ld = append_bb(backend, fn, "shape.ld");
+  LLVMBasicBlockRef b_no = append_bb(backend, fn, "shape.no");
+  LLVMBasicBlockRef b_done = append_bb(backend, fn, "shape.done");
 
   LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->vm_value_type, slot,
                                   "shape.v");
@@ -3478,11 +3503,11 @@ static LLVMValueRef get_shape_refill_fn(LLVMBackend *backend, int eager) {
   LLVMValueRef p_cn = LLVMGetParam(fn, 2);
   LLVMValueRef p_ln = LLVMGetParam(fn, 3);
 
-  LLVMBasicBlockRef b_entry = LLVMAppendBasicBlock(fn, "entry");
-  LLVMBasicBlockRef b_ty = LLVMAppendBasicBlock(fn, "ty");
-  LLVMBasicBlockRef b_ld = LLVMAppendBasicBlock(fn, "ld");
-  LLVMBasicBlockRef b_no = LLVMAppendBasicBlock(fn, "no");
-  LLVMBasicBlockRef b_ret = LLVMAppendBasicBlock(fn, "ret");
+  LLVMBasicBlockRef b_entry = append_bb(backend, fn, "entry");
+  LLVMBasicBlockRef b_ty = append_bb(backend, fn, "ty");
+  LLVMBasicBlockRef b_ld = append_bb(backend, fn, "ld");
+  LLVMBasicBlockRef b_no = append_bb(backend, fn, "no");
+  LLVMBasicBlockRef b_ret = append_bb(backend, fn, "ret");
 
   LLVMPositionBuilderAtEnd(backend->builder, b_entry);
   LLVMValueRef v = LLVMBuildLoad2(backend->builder, backend->vm_value_type,
@@ -3813,8 +3838,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     LLVMValueRef fn = LLVMGetBasicBlockParent(
         LLVMGetInsertBlock(backend->builder));
     LLVMBasicBlockRef entry_bb = LLVMGetInsertBlock(backend->builder);
-    LLVMBasicBlockRef init_bb = LLVMAppendBasicBlock(fn, "strlit.init");
-    LLVMBasicBlockRef done_bb = LLVMAppendBasicBlock(fn, "strlit.done");
+    LLVMBasicBlockRef init_bb = append_bb(backend, fn, "strlit.init");
+    LLVMBasicBlockRef done_bb = append_bb(backend, fn, "strlit.done");
 
     LLVMValueRef cached =
         LLVMBuildLoad2(backend->builder, strp_type, cache, "strlit.cached");
@@ -4059,10 +4084,10 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     {
       LLVMValueRef fn =
           LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
-      LLVMBasicBlockRef bb_chk  = LLVMAppendBasicBlock(fn, "arr.chk");
-      LLVMBasicBlockRef bb_fast = LLVMAppendBasicBlock(fn, "arr.fast");
-      LLVMBasicBlockRef bb_slow = LLVMAppendBasicBlock(fn, "arr.slow");
-      LLVMBasicBlockRef bb_done = LLVMAppendBasicBlock(fn, "arr.done");
+      LLVMBasicBlockRef bb_chk  = append_bb(backend, fn, "arr.chk");
+      LLVMBasicBlockRef bb_fast = append_bb(backend, fn, "arr.fast");
+      LLVMBasicBlockRef bb_slow = append_bb(backend, fn, "arr.slow");
+      LLVMBasicBlockRef bb_done = append_bb(backend, fn, "arr.done");
       LLVMTypeRef i32t = backend->int32_type;
 
       // Onbellekli hizli yol: sekil dongu basinda dogrulandi, burada yalniz
@@ -4072,8 +4097,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMBasicBlockRef cached_end = nullptr;
       LLVMValueRef cached_val = nullptr;
       if (shp) {
-        LLVMBasicBlockRef bb_cached = LLVMAppendBasicBlock(fn, "arr.cached");
-        LLVMBasicBlockRef bb_gen = LLVMAppendBasicBlock(fn, "arr.generic");
+        LLVMBasicBlockRef bb_cached = append_bb(backend, fn, "arr.cached");
+        LLVMBasicBlockRef bb_gen = append_bb(backend, fn, "arr.generic");
         LLVMValueRef ccnt = LLVMBuildLoad2(backend->builder, backend->int_type,
                                            shp->count_slot, "arr.ccnt");
         LLVMValueRef cid = LLVMBuildLoad2(backend->builder, backend->ptr_type,
@@ -4137,8 +4162,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
       // Hizli yol ikiye ayriliyor: kutulanmamis (idata != NULL) diziden
       // dogrudan i64 yukleniyor — eleman basina 16 degil 8 bayt dokunuluyor.
-      LLVMBasicBlockRef bb_ubox  = LLVMAppendBasicBlock(fn, "arr.unboxed");
-      LLVMBasicBlockRef bb_boxed = LLVMAppendBasicBlock(fn, "arr.boxed");
+      LLVMBasicBlockRef bb_ubox  = append_bb(backend, fn, "arr.unboxed");
+      LLVMBasicBlockRef bb_boxed = append_bb(backend, fn, "arr.boxed");
       LLVMPositionBuilderAtEnd(backend->builder, bb_fast);
       LLVMValueRef id_ptr = LLVMBuildStructGEP2(
           backend->builder, backend->obj_array_type, objp, 5, "arr.idata.ptr");
@@ -4487,15 +4512,15 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         LLVMBuildAnd(backend->builder, l_is_float, r_is_float, "both_float");
 
     LLVMValueRef func = backend->current_function;
-    LLVMBasicBlockRef int_block = LLVMAppendBasicBlock(func, "op_int");
-    LLVMBasicBlockRef float_block = LLVMAppendBasicBlock(func, "op_float");
+    LLVMBasicBlockRef int_block = append_bb(backend, func, "op_int");
+    LLVMBasicBlockRef float_block = append_bb(backend, func, "op_float");
     LLVMBasicBlockRef fallback_block =
-        LLVMAppendBasicBlock(func, "op_fallback");
-    LLVMBasicBlockRef merge_block = LLVMAppendBasicBlock(func, "op_merge");
+        append_bb(backend, func, "op_fallback");
+    LLVMBasicBlockRef merge_block = append_bb(backend, func, "op_merge");
 
     // Branch: int -> int_block, else check float
     LLVMBasicBlockRef check_float_block =
-        LLVMAppendBasicBlock(func, "check_float");
+        append_bb(backend, func, "check_float");
     LLVMBuildCondBr(backend->builder, both_int, int_block, check_float_block);
 
     // Check float block
@@ -4633,10 +4658,15 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     LLVMValueRef r_float_bits =
         LLVMBuildExtractValue(backend->builder, R, 2, "r_float_bits");
     // Reinterpret i64 bits as double
+    // `LLVMDoubleType()` KURESEL baglami kullaniyordu; modulumuz ayri bir
+    // baglamda. Ayni yazilan iki farkli `double` Type nesnesi, tam da bu
+    // fonksiyonun ucuncu blogundaki phi'de bulusuyordu — asagidaki geri
+    // cekilme merdiveninin "boxed karsilastirma merge'unden gecersiz phi"
+    // diye tarif ettigi kusur budur. Bkz. append_bb'nin basligi.
     LLVMValueRef l_float = LLVMBuildBitCast(backend->builder, l_float_bits,
-                                            LLVMDoubleType(), "l_double");
+                                            backend->float_type, "l_double");
     LLVMValueRef r_float = LLVMBuildBitCast(backend->builder, r_float_bits,
-                                            LLVMDoubleType(), "r_double");
+                                            backend->float_type, "r_double");
 
     LLVMValueRef float_res = nullptr;
     int float_is_bool = 0;
@@ -4736,11 +4766,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           LLVMBuildAnd(backend->builder, l_is_str, r_is_str, "both_str");
 
       LLVMBasicBlockRef str_concat_block =
-          LLVMAppendBasicBlock(func, "str_concat");
+          append_bb(backend, func, "str_concat");
       LLVMBasicBlockRef generic_block =
-          LLVMAppendBasicBlock(func, "generic_op");
+          append_bb(backend, func, "generic_op");
       LLVMBasicBlockRef fallback_merge =
-          LLVMAppendBasicBlock(func, "fallback_merge");
+          append_bb(backend, func, "fallback_merge");
 
       LLVMBuildCondBr(backend->builder, both_str, str_concat_block,
                       generic_block);
@@ -4944,12 +4974,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         func = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
 
       LLVMBasicBlockRef check_float =
-          LLVMAppendBasicBlock(func, "unary_check_float");
-      LLVMBasicBlockRef int_block = LLVMAppendBasicBlock(func, "unary_int");
-      LLVMBasicBlockRef float_block = LLVMAppendBasicBlock(func, "unary_float");
+          append_bb(backend, func, "unary_check_float");
+      LLVMBasicBlockRef int_block = append_bb(backend, func, "unary_int");
+      LLVMBasicBlockRef float_block = append_bb(backend, func, "unary_float");
       LLVMBasicBlockRef fallback_block =
-          LLVMAppendBasicBlock(func, "unary_fallback");
-      LLVMBasicBlockRef merge_block = LLVMAppendBasicBlock(func, "unary_merge");
+          append_bb(backend, func, "unary_fallback");
+      LLVMBasicBlockRef merge_block = append_bb(backend, func, "unary_merge");
 
       LLVMBuildCondBr(backend->builder, is_int, int_block, check_float);
 
@@ -5338,9 +5368,9 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       if (lshp) {
         LLVMValueRef fnl =
             LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
-        LLVMBasicBlockRef lb_hit = LLVMAppendBasicBlock(fnl, "len.cached");
-        LLVMBasicBlockRef lb_call = LLVMAppendBasicBlock(fnl, "len.call");
-        LLVMBasicBlockRef lb_done = LLVMAppendBasicBlock(fnl, "len.done");
+        LLVMBasicBlockRef lb_hit = append_bb(backend, fnl, "len.cached");
+        LLVMBasicBlockRef lb_call = append_bb(backend, fnl, "len.call");
+        LLVMBasicBlockRef lb_done = append_bb(backend, fnl, "len.done");
         LLVMValueRef cl = LLVMBuildLoad2(backend->builder, backend->int_type,
                                          lshp->len_slot, "len.cl");
         LLVMBuildCondBr(
@@ -6880,9 +6910,9 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       // Oteki her sey eski yola dusuyor — anlam birebir korunuyor.
       LLVMValueRef fnp =
           LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
-      LLVMBasicBlockRef ab_fast = LLVMAppendBasicBlock(fnp, "sbap.int");
-      LLVMBasicBlockRef ab_slow = LLVMAppendBasicBlock(fnp, "sbap.gen");
-      LLVMBasicBlockRef ab_done = LLVMAppendBasicBlock(fnp, "sbap.done");
+      LLVMBasicBlockRef ab_fast = append_bb(backend, fnp, "sbap.int");
+      LLVMBasicBlockRef ab_slow = append_bb(backend, fnp, "sbap.gen");
+      LLVMBasicBlockRef ab_done = append_bb(backend, fnp, "sbap.done");
       LLVMValueRef vtag =
           LLVMBuildExtractValue(backend->builder, val, 0, "sbap.tag");
       LLVMBuildCondBr(
@@ -7433,7 +7463,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     backend->current_parent_env = LLVMGetParam(func, 1);
 
     // 6. Create entry basic block
-    LLVMBasicBlockRef entry = LLVMAppendBasicBlock(func, "entry");
+    LLVMBasicBlockRef entry = append_bb(backend, func, "entry");
     LLVMPositionBuilderAtEnd(backend->builder, entry);
 
     // 7. Create new scope
@@ -7588,7 +7618,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     LLVMBuildStore(backend->builder, llvm_vm_val_int(backend, 0), res_slot);
 
     LLVMValueRef func = backend->current_function;
-    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlock(func, "match_end");
+    LLVMBasicBlockRef merge_bb = append_bb(backend, func, "match_end");
 
     // Truthy test for one pattern atom against the bound subject:
     //   - range `lo..hi`  → (subj >= lo) && (subj <= hi)
@@ -7706,7 +7736,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     // block — so subsequent reads only run once the type/constraint passed.
     auto guard = [&](LLVMValueRef cond, LLVMBasicBlockRef fail_bb,
                      const char *nm) {
-      LLVMBasicBlockRef cont = LLVMAppendBasicBlock(func, nm);
+      LLVMBasicBlockRef cont = append_bb(backend, func, nm);
       LLVMBuildCondBr(backend->builder, cond, cont, fail_bb);
       LLVMPositionBuilderAtEnd(backend->builder, cont);
     };
@@ -7827,7 +7857,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       int saved_scope =
           backend->current_scope ? backend->current_scope->count : 0;
 
-      LLVMBasicBlockRef next_bb = LLVMAppendBasicBlock(func, "match_next");
+      LLVMBasicBlockRef next_bb = append_bb(backend, func, "match_next");
 
       if (pat && (pat->type == AST_ARRAY_LITERAL ||
                   pat->type == AST_OBJECT_LITERAL)) {
@@ -7835,7 +7865,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         // (builder ends positioned at the success continuation) with bindings.
         match_pattern(subj, pat, next_bb);
       } else {
-        LLVMBasicBlockRef then_bb = LLVMAppendBasicBlock(func, "match_arm");
+        LLVMBasicBlockRef then_bb = append_bb(backend, func, "match_arm");
         LLVMValueRef truthy = nullptr;
         if (pat && pat->type == AST_BLOCK) {
           for (int k = 0; k < pat->statement_count; k++) {
@@ -7896,9 +7926,9 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         backend, backend->vm_value_type, "tern_res");
 
     LLVMValueRef func = backend->current_function;
-    LLVMBasicBlockRef then_bb = LLVMAppendBasicBlock(func, "tern_then");
-    LLVMBasicBlockRef else_bb = LLVMAppendBasicBlock(func, "tern_else");
-    LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlock(func, "tern_end");
+    LLVMBasicBlockRef then_bb = append_bb(backend, func, "tern_then");
+    LLVMBasicBlockRef else_bb = append_bb(backend, func, "tern_else");
+    LLVMBasicBlockRef merge_bb = append_bb(backend, func, "tern_end");
     LLVMBuildCondBr(backend->builder, cond_bool, then_bb, else_bb);
 
     LLVMPositionBuilderAtEnd(backend->builder, then_bb);
@@ -8382,6 +8412,44 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // Check for Array/Object Assignment: arr[i] = val OR obj["k"] = val
     if (node->left && node->left->type == AST_ARRAY_ACCESS) {
       ASTNode_C *access = node->left;
+
+      // KANITLI ELEMAN YAZMASI — okuma tarafindaki kanitli erisimin ikizi.
+      // `for (i = C; i < len(a); i += K)` icinde `a[i] = <ifade>`: 0 <= i <
+      // len == count (dizi kutusuz; dongu basinda sinandi ve SURUMLENDI),
+      // ve dongudeki her eleman yazmasinin KESIN tamsayi oldugu
+      // tulpar_loop_index_proven'da kanitlandi — yani bu yazma diziyi
+      // kutulayamaz ve idata askida kalamaz.
+      //
+      // ⚠ ICERIKTEKI KANIT DONGU BASINDA VERILIYOR, burada degil.
+      // `proven_ivar` dolu olmasi zaten "govdedeki BUTUN eleman yazmalari
+      // int" demek (bkz. visit_elem_write_ok); o yuzden burada RHS'i
+      // yeniden sinamiyoruz. Kanit gevsetilecekse ORASI gevsetilir.
+      //
+      // ⚠ BU DAL, ASAGIDAKI BLOKLAR YARATILMADAN ONCE OLMAK ZORUNDA:
+      // blok yaratildiktan sonraki erken `return` sonlandiricisi olmayan
+      // bos bloklar birakir; LLVM 22 tolere eder, LLVM 18 SEGFAULT verir
+      // (bkz. Tuzaklar 6q).
+      {
+        LLVMBackend::ArrShapeEntry *pshp =
+            shape_lookup(backend, array_base_name(access));
+        if (shape_access_proven(pshp, access->index)) {
+          LLVMValueRef pidx = codegen_expression(backend, access->index);
+          if (pidx) {
+            LLVMValueRef pid = LLVMBuildLoad2(backend->builder,
+                                              backend->ptr_type,
+                                              pshp->idata_slot, "set.pid");
+            LLVMValueRef pix = llvm_extract_vm_val_int(backend, pidx);
+            LLVMValueRef pep = LLVMBuildGEP2(backend->builder,
+                                             backend->int_type, pid, &pix, 1,
+                                             "set.pep");
+            LLVMValueRef pst = LLVMBuildStore(
+                backend->builder, llvm_extract_vm_val_int(backend, val), pep);
+            llvm_tbaa_tag(backend, pst, 1);
+            return val;
+          }
+        }
+      }
+
       LLVMValueRef target = nullptr;
 
       // Array access can be either:
@@ -8427,10 +8495,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         // ESKI CAGRIYA dusuyor, yani bariyer semantigi birebir korunuyor.
         LLVMValueRef fn2 =
             LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
-        LLVMBasicBlockRef sb_chk  = LLVMAppendBasicBlock(fn2, "set.chk");
-        LLVMBasicBlockRef sb_fast = LLVMAppendBasicBlock(fn2, "set.fast");
-        LLVMBasicBlockRef sb_slow = LLVMAppendBasicBlock(fn2, "set.slow");
-        LLVMBasicBlockRef sb_done = LLVMAppendBasicBlock(fn2, "set.done");
+        LLVMBasicBlockRef sb_chk  = append_bb(backend, fn2, "set.chk");
+        LLVMBasicBlockRef sb_fast = append_bb(backend, fn2, "set.fast");
+        LLVMBasicBlockRef sb_slow = append_bb(backend, fn2, "set.slow");
+        LLVMBasicBlockRef sb_done = append_bb(backend, fn2, "set.done");
         LLVMTypeRef si32 = backend->int32_type;
 
         // Onbellekli yazma: sekil dongu basinda dogrulandi; burada yalniz
@@ -8438,8 +8506,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         LLVMBackend::ArrShapeEntry *s_shp =
             shape_lookup(backend, array_base_name(access));
         if (s_shp) {
-          LLVMBasicBlockRef sb_cached = LLVMAppendBasicBlock(fn2, "set.cached");
-          LLVMBasicBlockRef sb_gen = LLVMAppendBasicBlock(fn2, "set.generic");
+          LLVMBasicBlockRef sb_cached = append_bb(backend, fn2, "set.cached");
+          LLVMBasicBlockRef sb_gen = append_bb(backend, fn2, "set.generic");
           LLVMValueRef sccnt = LLVMBuildLoad2(backend->builder, backend->int_type,
                                               s_shp->count_slot, "set.ccnt");
           LLVMValueRef scid = LLVMBuildLoad2(backend->builder, backend->ptr_type,
@@ -8521,9 +8589,9 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         // Kutulanmamis dizi: yalniz INT deger dogrudan yazilabilir. Float/bool
         // gelirse yavas yola dusuyoruz — oradaki `arr_items()` diziyi kutuya
         // cevirip anlami birebir koruyor.
-        LLVMBasicBlockRef sb_uchk  = LLVMAppendBasicBlock(fn2, "set.ubox.chk");
-        LLVMBasicBlockRef sb_ubox  = LLVMAppendBasicBlock(fn2, "set.unboxed");
-        LLVMBasicBlockRef sb_boxed = LLVMAppendBasicBlock(fn2, "set.boxed");
+        LLVMBasicBlockRef sb_uchk  = append_bb(backend, fn2, "set.ubox.chk");
+        LLVMBasicBlockRef sb_ubox  = append_bb(backend, fn2, "set.unboxed");
+        LLVMBasicBlockRef sb_boxed = append_bb(backend, fn2, "set.boxed");
         LLVMPositionBuilderAtEnd(backend->builder, sb_fast);
         LLVMValueRef s_id_ptr = LLVMBuildStructGEP2(
             backend->builder, backend->obj_array_type, s_objp, 5,
@@ -8658,11 +8726,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     LLVMValueRef cond = codegen_expression(backend, node->condition);
     cond = llvm_build_is_truthy(backend, cond);
     LLVMBasicBlockRef thenB =
-        LLVMAppendBasicBlock(backend->current_function, "then");
+        append_bb(backend, backend->current_function, "then");
     LLVMBasicBlockRef elseB =
-        LLVMAppendBasicBlock(backend->current_function, "else");
+        append_bb(backend, backend->current_function, "else");
     LLVMBasicBlockRef mergeB =
-        LLVMAppendBasicBlock(backend->current_function, "merge");
+        append_bb(backend, backend->current_function, "merge");
     LLVMBuildCondBr(backend->builder, cond, thenB, elseB);
     LLVMPositionBuilderAtEnd(backend->builder, thenB);
     codegen_statement(backend, node->then_branch);
@@ -8678,11 +8746,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
   }
   case AST_WHILE: {
     LLVMBasicBlockRef condB =
-        LLVMAppendBasicBlock(backend->current_function, "cond");
+        append_bb(backend, backend->current_function, "cond");
     LLVMBasicBlockRef bodyB =
-        LLVMAppendBasicBlock(backend->current_function, "body");
+        append_bb(backend, backend->current_function, "body");
     LLVMBasicBlockRef exitB =
-        LLVMAppendBasicBlock(backend->current_function, "exit");
+        append_bb(backend, backend->current_function, "exit");
     // Dongu-degismezi dizi sekli: kanitlanabiliyorsa bir kez oku, govdede
     // yerelden kullan. Kanitlanamiyorsa hicbir sey degismez.
     int shape_saved = emit_shape_cache_for_loop(backend, node->condition,
@@ -8754,16 +8822,17 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                                      backend->shape_cache[i].name, &ivar)) {
           backend->shape_cache[i].proven_ivar = ivar;
           ver_count++;
+          if (getenv("TULPAR_DBG_VER")) fprintf(stderr, "[ver] %s[%s]\n", backend->shape_cache[i].name, ivar);
         }
       }
     }
     if (ver_count > 0) {
       LLVMBasicBlockRef vb_fast =
-          LLVMAppendBasicBlock(backend->current_function, "for_ver_fast");
+          append_bb(backend, backend->current_function, "for_ver_fast");
       LLVMBasicBlockRef vb_gen =
-          LLVMAppendBasicBlock(backend->current_function, "for_ver_gen");
+          append_bb(backend, backend->current_function, "for_ver_gen");
       LLVMBasicBlockRef vb_done =
-          LLVMAppendBasicBlock(backend->current_function, "for_ver_done");
+          append_bb(backend, backend->current_function, "for_ver_done");
       LLVMValueRef all_ok = nullptr;
       for (int i = shape_saved; i < backend->shape_count; i++) {
         if (!backend->shape_cache[i].proven_ivar) continue;
@@ -8793,13 +8862,13 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     }
 
     LLVMBasicBlockRef condB =
-        LLVMAppendBasicBlock(backend->current_function, "for_cond");
+        append_bb(backend, backend->current_function, "for_cond");
     LLVMBasicBlockRef bodyB =
-        LLVMAppendBasicBlock(backend->current_function, "for_body");
+        append_bb(backend, backend->current_function, "for_body");
     LLVMBasicBlockRef incrB =
-        LLVMAppendBasicBlock(backend->current_function, "for_incr");
+        append_bb(backend, backend->current_function, "for_incr");
     LLVMBasicBlockRef exitB =
-        LLVMAppendBasicBlock(backend->current_function, "for_exit");
+        append_bb(backend, backend->current_function, "for_exit");
 
     LLVMBuildBr(backend->builder, condB);
     LLVMPositionBuilderAtEnd(backend->builder, condB);
@@ -8851,7 +8920,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       // statement in this scope (if any) becomes dead code. Spawn a
       // throwaway block so subsequent codegen still has somewhere
       // to write — LLVMVerifier would otherwise reject the function.
-      LLVMBasicBlockRef dead = LLVMAppendBasicBlock(
+      LLVMBasicBlockRef dead = append_bb(backend, 
           backend->current_function, "after_break");
       LLVMPositionBuilderAtEnd(backend->builder, dead);
     }
@@ -8865,7 +8934,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                             .try_depth_at_entry);
       LLVMBuildBr(backend->builder,
                   backend->loop_stack[backend->loop_depth - 1].continue_block);
-      LLVMBasicBlockRef dead = LLVMAppendBasicBlock(
+      LLVMBasicBlockRef dead = append_bb(backend, 
           backend->current_function, "after_continue");
       LLVMPositionBuilderAtEnd(backend->builder, dead);
     }
@@ -9006,15 +9075,15 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                       LLVMConstInt(backend->int32_type, 0, 0), "is_try");
 
     LLVMBasicBlockRef tryB =
-        LLVMAppendBasicBlock(backend->current_function, "try");
+        append_bb(backend, backend->current_function, "try");
     LLVMBasicBlockRef catchB =
-        LLVMAppendBasicBlock(backend->current_function, "catch");
+        append_bb(backend, backend->current_function, "catch");
     LLVMBasicBlockRef finallyB =
         node->finally_block
-            ? LLVMAppendBasicBlock(backend->current_function, "finally")
+            ? append_bb(backend, backend->current_function, "finally")
             : nullptr;
     LLVMBasicBlockRef endB =
-        LLVMAppendBasicBlock(backend->current_function, "try_end");
+        append_bb(backend, backend->current_function, "try_end");
 
     LLVMBuildCondBr(backend->builder, is_try, tryB, catchB);
 
@@ -9084,7 +9153,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // following (dead) statements a fresh block — appending after the
     // `unreachable` corrupts the block and fails module verification.
     LLVMBasicBlockRef dead =
-        LLVMAppendBasicBlock(backend->current_function, "after_throw");
+        append_bb(backend, backend->current_function, "after_throw");
     LLVMPositionBuilderAtEnd(backend->builder, dead);
     return nullptr;
   }
@@ -9647,7 +9716,7 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
   LLVMBasicBlockRef prev_block = LLVMGetInsertBlock(backend->builder);
   backend->current_function = func;
 
-  LLVMBasicBlockRef entry = LLVMAppendBasicBlock(func, "entry");
+  LLVMBasicBlockRef entry = append_bb(backend, func, "entry");
   LLVMPositionBuilderAtEnd(backend->builder, entry);
 
   // Plan 07 PR 3b: bind a DISubprogram to this typed-int function
@@ -9721,10 +9790,10 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
                             LLVMConstInt(backend->int_type, 0, 0), "cond");
         }
 
-        LLVMBasicBlockRef then_bb = LLVMAppendBasicBlock(func, "then");
+        LLVMBasicBlockRef then_bb = append_bb(backend, func, "then");
         LLVMBasicBlockRef else_bb =
-            stmt->else_branch ? LLVMAppendBasicBlock(func, "else") : nullptr;
-        LLVMBasicBlockRef merge_bb = LLVMAppendBasicBlock(func, "merge");
+            stmt->else_branch ? append_bb(backend, func, "else") : nullptr;
+        LLVMBasicBlockRef merge_bb = append_bb(backend, func, "merge");
 
         LLVMBuildCondBr(backend->builder, cond_bool, then_bb,
                         else_bb ? else_bb : merge_bb);
@@ -9817,9 +9886,9 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
         }
       } else if (stmt->type == AST_WHILE) {
         // Native while loop (typed-int locals path)
-        LLVMBasicBlockRef w_cond = LLVMAppendBasicBlock(func, "while.cond");
-        LLVMBasicBlockRef w_body = LLVMAppendBasicBlock(func, "while.body");
-        LLVMBasicBlockRef w_end  = LLVMAppendBasicBlock(func, "while.end");
+        LLVMBasicBlockRef w_cond = append_bb(backend, func, "while.cond");
+        LLVMBasicBlockRef w_body = append_bb(backend, func, "while.body");
+        LLVMBasicBlockRef w_end  = append_bb(backend, func, "while.end");
 
         LLVMBuildBr(backend->builder, w_cond);
 
@@ -9908,10 +9977,10 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
           }
         }
 
-        LLVMBasicBlockRef loop_cond = LLVMAppendBasicBlock(func, "for.cond");
-        LLVMBasicBlockRef loop_body = LLVMAppendBasicBlock(func, "for.body");
-        LLVMBasicBlockRef loop_inc = LLVMAppendBasicBlock(func, "for.inc");
-        LLVMBasicBlockRef loop_end = LLVMAppendBasicBlock(func, "for.end");
+        LLVMBasicBlockRef loop_cond = append_bb(backend, func, "for.cond");
+        LLVMBasicBlockRef loop_body = append_bb(backend, func, "for.body");
+        LLVMBasicBlockRef loop_inc = append_bb(backend, func, "for.inc");
+        LLVMBasicBlockRef loop_end = append_bb(backend, func, "for.end");
 
         LLVMBuildBr(backend->builder, loop_cond);
 
@@ -9997,13 +10066,13 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
               }
 
               LLVMBasicBlockRef inner_cond =
-                  LLVMAppendBasicBlock(func, "inner.cond");
+                  append_bb(backend, func, "inner.cond");
               LLVMBasicBlockRef inner_body =
-                  LLVMAppendBasicBlock(func, "inner.body");
+                  append_bb(backend, func, "inner.body");
               LLVMBasicBlockRef inner_inc =
-                  LLVMAppendBasicBlock(func, "inner.inc");
+                  append_bb(backend, func, "inner.inc");
               LLVMBasicBlockRef inner_end =
-                  LLVMAppendBasicBlock(func, "inner.end");
+                  append_bb(backend, func, "inner.end");
 
               LLVMBuildBr(backend->builder, inner_cond);
 
@@ -10235,7 +10304,7 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
   LLVMBasicBlockRef prev_block = LLVMGetInsertBlock(backend->builder);
   backend->current_function = func;
 
-  LLVMBasicBlockRef entry = LLVMAppendBasicBlock(func, "entry");
+  LLVMBasicBlockRef entry = append_bb(backend, func, "entry");
   LLVMPositionBuilderAtEnd(backend->builder, entry);
 
   // Plan 07 PR 3b: bind a DISubprogram to this user function and
@@ -10522,7 +10591,7 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
   LLVMValueRef main_func = LLVMAddFunction(backend->module, "main", main_type);
   backend->current_function = main_func;
   backend->current_function_node = node;
-  LLVMBasicBlockRef entry = LLVMAppendBasicBlock(main_func, "entry");
+  LLVMBasicBlockRef entry = append_bb(backend, main_func, "entry");
   LLVMPositionBuilderAtEnd(backend->builder, entry);
 
   // Plan 07 PR 3b/3c: bind a DISubprogram to main so top-level
@@ -11546,13 +11615,13 @@ void llvm_backend_emit_local_vmvalue_declare(LLVMBackend *backend,
 static void codegen_for_body(LLVMBackend *backend, ASTNode_C *node,
                              LLVMBasicBlockRef after) {
   LLVMBasicBlockRef condB =
-      LLVMAppendBasicBlock(backend->current_function, "for_cond");
+      append_bb(backend, backend->current_function, "for_cond");
   LLVMBasicBlockRef bodyB =
-      LLVMAppendBasicBlock(backend->current_function, "for_body");
+      append_bb(backend, backend->current_function, "for_body");
   LLVMBasicBlockRef incrB =
-      LLVMAppendBasicBlock(backend->current_function, "for_incr");
+      append_bb(backend, backend->current_function, "for_incr");
   LLVMBasicBlockRef exitB =
-      LLVMAppendBasicBlock(backend->current_function, "for_exit");
+      append_bb(backend, backend->current_function, "for_exit");
 
   LLVMBuildBr(backend->builder, condB);
   LLVMPositionBuilderAtEnd(backend->builder, condB);
