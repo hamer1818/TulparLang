@@ -4209,10 +4209,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     if (vt_inc == INFERRED_INT && nat_inc) {
       LLVMValueRef old_int = LLVMBuildLoad2(backend->builder, backend->int_type,
                                             nat_inc, node->name);
+      llvm_tbaa_tag(backend, old_int, 0);
       LLVMValueRef new_int =
           LLVMBuildAdd(backend->builder, old_int,
                        LLVMConstInt(backend->int_type, 1, 0), "inc");
-      LLVMBuildStore(backend->builder, new_int, nat_inc);
+      llvm_tbaa_tag(backend, LLVMBuildStore(backend->builder, new_int, nat_inc), 0);
       return llvm_vm_val_int_val(backend, old_int); // post-increment
     }
 
@@ -4245,10 +4246,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     if (vt_dec == INFERRED_INT && nat_dec) {
       LLVMValueRef old_int = LLVMBuildLoad2(backend->builder, backend->int_type,
                                             nat_dec, node->name);
+      llvm_tbaa_tag(backend, old_int, 0);
       LLVMValueRef new_int =
           LLVMBuildSub(backend->builder, old_int,
                        LLVMConstInt(backend->int_type, 1, 0), "dec");
-      LLVMBuildStore(backend->builder, new_int, nat_dec);
+      llvm_tbaa_tag(backend, LLVMBuildStore(backend->builder, new_int, nat_dec), 0);
       return llvm_vm_val_int_val(backend, old_int);
     }
 
@@ -4282,6 +4284,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     if (vt_ca == INFERRED_INT && nat_ca) {
       LLVMValueRef old_int = LLVMBuildLoad2(backend->builder, backend->int_type,
                                             nat_ca, node->name);
+      llvm_tbaa_tag(backend, old_int, 0);
       TypedValue rhs_tv = codegen_typed_expr(backend, node->right);
       LLVMValueRef rhs_int;
       if (rhs_tv.type == INFERRED_INT || rhs_tv.type == INFERRED_BOOL) {
@@ -4312,7 +4315,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         new_int = old_int; // unsupported op falls through, leave value
         break;
       }
-      LLVMBuildStore(backend->builder, new_int, nat_ca);
+      llvm_tbaa_tag(backend, LLVMBuildStore(backend->builder, new_int, nat_ca), 0);
       return llvm_vm_val_int_val(backend, new_int);
     }
 
@@ -4391,6 +4394,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     if (vt == INFERRED_INT && native) {
       LLVMValueRef ival = LLVMBuildLoad2(backend->builder, backend->int_type,
                                          native, node->name);
+      llvm_tbaa_tag(backend, ival, 0);
       return llvm_vm_val_int_val(backend, ival);
     }
 
@@ -8311,7 +8315,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         } else {
           int_val = LLVMConstInt(backend->int_type, 0, 0);
         }
-        LLVMBuildStore(backend->builder, int_val, nat_t);
+        llvm_tbaa_tag(backend,
+                      LLVMBuildStore(backend->builder, int_val, nat_t), 0);
         return llvm_vm_val_int_val(backend, int_val);
       }
     }
@@ -10816,6 +10821,64 @@ int llvm_backend_emit_object_for_triple(LLVMBackend *backend,
 }
 
 // Optimization Pass enabling using new LLVM Pass Manager
+// Optimizasyon icin hedef makinesi.
+//
+// NEDEN VAR: `LLVMRunPasses`in ucuncu argumani TargetMachine ve uzun sure
+// `nullptr` geciliyordu. O zaman gecis hattinda TargetTransformInfo YOK —
+// dongu vektorlestiricinin maliyet modeli olmuyor ve BASTAN VAZGECIYOR.
+// Sonuc: uretilen IR kusursuz bir indirgeme olsa bile tek bir vektor komutu
+// cikmiyordu. Olculdu (2026-09-06, arrayiter): ayni dongu C'de jenerik
+// x86-64 ile 2,8 ms (SSE2 vektorlu), bizde 3,2 ms (skaler).
+//
+// Hedef makinesi zaten emit_object_with_triple icinde kuruluyordu — ama
+// optimizasyondan SONRA, yani cok gec.
+static LLVMTargetMachineRef make_opt_machine(LLVMBackend *backend) {
+  char *triple;
+  if (backend->target_web) {
+    LLVMInitializeWebAssemblyTargetInfo();
+    LLVMInitializeWebAssemblyTarget();
+    LLVMInitializeWebAssemblyTargetMC();
+    LLVMInitializeWebAssemblyAsmPrinter();
+    triple = LLVMCreateMessage("wasm32-unknown-emscripten");
+  } else {
+    LLVMInitializeNativeTarget();
+    LLVMInitializeNativeAsmPrinter();
+    triple = LLVMGetDefaultTargetTriple();
+  }
+  LLVMTargetRef target = nullptr;
+  char *error = nullptr;
+  LLVMTargetMachineRef tm = nullptr;
+  if (LLVMGetTargetFromTriple(triple, &target, &error) == 0) {
+    // CPU dizesi. Varsayilan "generic": tasinabilir ikili, `gcc -O2` ve
+    // `rustc` varsayilanlariyla ayni taban. `TULPAR_TARGET_CPU=native`
+    // konak islemcisine gore uretir (gcc'nin -march=native karsiligi) —
+    // olculdu (arrayiter, C ile): jenerik 2,8 ms, native 1,0 ms. Uretilen
+    // ikili o makineye baglanir, o yuzden VARSAYILAN DEGIL.
+    const char *cpu = getenv("TULPAR_TARGET_CPU");
+    char *host_cpu = nullptr;
+    if (cpu && strcmp(cpu, "native") == 0) {
+      host_cpu = LLVMGetHostCPUName();
+      cpu = host_cpu;
+    } else if (!cpu || !*cpu) {
+      cpu = "generic";
+    }
+    tm = LLVMCreateTargetMachine(target, triple, cpu, "",
+                                 LLVMCodeGenLevelDefault, LLVMRelocDefault,
+                                 LLVMCodeModelDefault);
+    if (host_cpu) LLVMDisposeMessage(host_cpu);
+    if (tm) {
+      // Veri duzeni de gecislerden ONCE baglanmali; yoksa optimize edici
+      // varsayilan bir duzen varsayar ve boyut/hizalama kararlari hedefle
+      // tutmaz.
+      LLVMSetModuleDataLayout(backend->module, LLVMCreateTargetDataLayout(tm));
+      LLVMSetTarget(backend->module, triple);
+    }
+  }
+  if (error) LLVMDisposeMessage(error);
+  LLVMDisposeMessage(triple);
+  return tm;
+}
+
 void llvm_backend_optimize(LLVMBackend *backend) {
   // Create pass builder options
   LLVMPassBuilderOptionsRef options = LLVMCreatePassBuilderOptions();
@@ -10826,11 +10889,21 @@ void llvm_backend_optimize(LLVMBackend *backend) {
   LLVMPassBuilderOptionsSetLoopInterleaving(options, 1);
   LLVMPassBuilderOptionsSetLoopVectorization(options, 1);
   LLVMPassBuilderOptionsSetSLPVectorization(options, 1);
-  // LoopUnrolling was off historically to protect the loopsum micro-benchmark
-  // from being SCEV-folded to its closed-form result. Benchmarks now read
-  // their iteration count from an env var (`TULPAR_BENCH_N`) so the fold
-  // can no longer happen, and we get the unrolling speedup on real loops.
-  LLVMPassBuilderOptionsSetLoopUnrolling(options, 1);
+  // Tarihce: LoopUnrolling bir ara loopsum kiyasini SCEV katlamasindan
+  // korumak icin kapaliydi, sonra acildi. Asagidaki gerekce o ikisinden de
+  // bagimsiz ve OLCUME dayaniyor.
+  // SKALER dongu acma KAPALI. Vektorlestiricinin KENDI orgulemesi
+  // (LoopInterleaving, yukarida acik) ayri sey ve duruyor.
+  //
+  // Hedef makinesi geciş hattina baglanana kadar bu ayar zaten olu
+  // harfti (TTI yok -> unroller muhafazakar). Baglanir baglanmaz devreye
+  // girdi ve OLCULDU (2026-09-06): intloop 135,1 -> 144,7 (-%7), cunku
+  // zincirleme bagimliligi olan bir donguyu acmak kazandirmiyor, yalniz
+  // komut ekliyor. Kapatinca intloop geri geliyor VE arrayiter biraz daha
+  // iyilesiyor (2,77 -> 2,70).
+  //
+  // Bes mikro-kiyasta olculdu; is yuku karisimi degisirse yeniden olc.
+  LLVMPassBuilderOptionsSetLoopUnrolling(options, 0);
   LLVMPassBuilderOptionsSetForgetAllSCEVInLoopUnroll(options, 0);
   LLVMPassBuilderOptionsSetMergeFunctions(options, 1);
 
@@ -10892,13 +10965,14 @@ void llvm_backend_optimize(LLVMBackend *backend) {
       "default<O3>", "default<O2>", "default<O2>", "default<O1>",
       "function(sroa,early-cse,simplifycfg,reassociate,gvn,dce,simplifycfg)"};
   int att_safe[5] = {0, 0, 1, 1, 1};
+  LLVMTargetMachineRef opt_tm = make_opt_machine(backend);
   LLVMModuleRef chosen = nullptr;
   int chosen_idx = -1;
   int ai = 0;
   while (ai < 5 && !chosen) {
     LLVMPassBuilderOptionsRef opt = att_safe[ai] ? safe_options : options;
     LLVMModuleRef trial = LLVMCloneModule(codegen_ir);
-    LLVMErrorRef error = LLVMRunPasses(trial, att_level[ai], nullptr, opt);
+    LLVMErrorRef error = LLVMRunPasses(trial, att_level[ai], opt_tm, opt);
     if (error) {
       char *msg = LLVMGetErrorMessage(error);
       fprintf(stderr, "[AOT] Warning: %s optimization failed: %s\n",
