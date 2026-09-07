@@ -1164,6 +1164,58 @@ Aynı sebeple kıyas programı N'i **ortamdan** okuyor: `fib(30)` sabit olsaydı
 LLVM derleme zamanında katlar, iki ikili de 0 ms sürer, ölçüm hiçbir şey
 ölçmezdi. [[Tuzaklar]] 6f-2'nin aynısı.
 
+## 6v. "typeinfer bunu zaten uyarıyor" — UYARMIYORDU
+
+`int` bildirilmiş bir hedefe float yazmak sessizce bozuk sonuç veriyordu:
+
+```
+float f = 2.5;  int b = f;              -> 4612811918334230528
+int a = 3.7;                            -> 0
+int elapsed = clock_ms() - start;       -> 4574812796478291968
+```
+
+Üçüncüsü `examples/15_feature_test.tpr`'de **aylarca basılı duruyordu**
+(`sleep(10) elapsed: 4621851690620944384 ms`) ve kimse bakmadı — çünkü örnek
+testi yalnız **çıkış kodunu** karşılaştırıyor, çıktıyı değil.
+
+Kök neden tek bir kalıptı, beş yerde kopyalanmıştı:
+
+```c
+if (tv.type == INFERRED_INT || tv.type == INFERRED_BOOL) v = tv.value;
+else if (tv.boxed) v = ExtractValue(tv.boxed, 2);   // double'ın BİT DESENİ
+else                v = 0;                           // sessiz sıfır
+```
+
+İki dal, iki ayrı yanlış cevap. Yanındaki yorum şöyle diyordu: *"Floats/
+strings/objects are left alone — typeinfer's pre-pass already warned about
+those mismatches."* **Uyarmıyordu** — `tulpar typecheck` bu dosyaya "ok"
+diyor. Yani boşluk, doğrulanmamış bir varsayımın yorum olarak yazılmasıyla
+açılmış ve o yorum sonraki okuyucuyu da ikna etmiş.
+
+**Kural:** "başka bir katman bunu zaten yakalıyor" diyen bir yorum yazacaksan
+önce o katmanı ÇALIŞTIRIP gör. Yazılmış varsayım, denetlenmiş varsayımdan
+ayırt edilemez hale geliyor. Bu [[Tuzaklar]] 6k'nın (aynı varsayım üç
+katmanda) yakın akrabası.
+
+### İki yol AYRIŞIYORDU, biri doğru göründüğü için gizlendi
+Aynı ifade nereden geçtiğine göre farklı cevap veriyordu:
+
+| | küresel (native yuva) | yerel (kutulu yuva) |
+|---|---|---|
+| `int y = 10; y -= 2.5;` | 7 | **7,5** |
+| `int y = 10; y = 2.5;` | 2 | **2,5** |
+
+Yani `int` bildirilen yerel değişkende float kalabiliyordu. Küresel yol doğru
+davrandığı için el ile denerken kolayca "düzeldi" sanılabilirdi. Testin İKİ
+yolu da sürmesi gerekiyor — paket şimdi ikisini ayrı ayrı kilitliyor.
+
+### Doğru anlam: aritmetik geniş tipte, kırpma yazarken
+`y -= 2.5` → `10 - 2,5 = 7,5` → **7**. Sağ tarafı önce kırpmak (`2,5 → 2`,
+sonra `10 - 2 = 8`) başka bir cevap verir. İlk düzeltme sağ tarafı önce
+kırpıyordu ve test 8 bekleyip kırmızıya döndü — beklentiyi C ile
+doğrulayınca doğrusunun 7 olduğu çıktı. Bildirim yolu (`int c = f * 2.0` → 5)
+zaten C anlamındaydı; tutarlılık oradan geldi.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.

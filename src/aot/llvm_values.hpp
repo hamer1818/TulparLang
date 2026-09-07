@@ -24,6 +24,11 @@ LLVMValueRef llvm_build_vm_val_obj(LLVMBackend *backend, LLVMValueRef obj_ptr);
 // `lib/test.tpr`'daki `assert`'in sessiz no-op olması tam bu boşluktu.
 // Bildirimde (`int x = <bool>`) ve PARAMETRE bağlamada AYNI fonksiyon
 // çağrılıyor ki ikisi ayrışamasın.
+// Kutulu VMValue -> i64 tam sayi yuku; FLOAT ise sifira dogru kirparak
+// donusturur. Kutulu deger bekleyen her "int hedefe yaz" yolu bunu kullanir.
+LLVMValueRef llvm_vm_val_to_int_payload(LLVMBackend *backend,
+                                        LLVMValueRef vm_val);
+
 LLVMValueRef llvm_coerce_bool_tag_to_int(LLVMBackend *backend,
                                          LLVMValueRef vm_val);
 

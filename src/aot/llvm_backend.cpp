@@ -3099,6 +3099,26 @@ typedef struct {
 TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node);
 LLVMValueRef box_typed_value(LLVMBackend *backend, TypedValue tv);
 
+// TypedValue -> i64 tam sayi yuku, `int` hedefe yazarken kullanilir.
+//
+// FLOAT KAYBI BURADAYDI. Onceki kalip her yerde ayniydi:
+//     if (tv.type == INFERRED_INT || tv.type == INFERRED_BOOL) v = tv.value;
+//     else if (tv.boxed) v = ExtractValue(tv.boxed, 2);   // HAM BIT DESENI
+//     else                v = 0;                          // SESSIZ SIFIR
+// Yani `float f = 2.5; int b = f;` 4612811918334230528 veriyordu (double'in
+// bitleri), `int a = 3.7;` ise 0. Dogrusu `toInt` ile ayni: sifira dogru
+// kirp. Yukarida `else` dali da sessizce 0 verdigi icin iki ayri sessiz
+// yanlis cevap vardi.
+static LLVMValueRef typed_to_int_payload(LLVMBackend *backend, TypedValue tv) {
+  if (tv.type == INFERRED_INT || tv.type == INFERRED_BOOL) return tv.value;
+  if (tv.type == INFERRED_FLOAT && tv.value)
+    return LLVMBuildFPToSI(backend->builder, tv.value, backend->int_type,
+                           "f2i.static");
+  if (tv.boxed) return llvm_vm_val_to_int_payload(backend, tv.boxed);
+  if (tv.value) return tv.value;
+  return LLVMConstInt(backend->int_type, 0, 0);
+}
+
 // Box a typed value to VMValue when needed
 LLVMValueRef box_typed_value(LLVMBackend *backend, TypedValue tv) {
   if (tv.boxed)
@@ -3202,15 +3222,9 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
           args = static_cast<LLVMValueRef*>(malloc(sizeof(LLVMValueRef) * arg_count));
           for (int i = 0; i < arg_count; i++) {
             TypedValue arg = codegen_typed_expr(backend, node->arguments[i]);
-            if (arg.type == INFERRED_INT || arg.type == INFERRED_BOOL) {
-              args[i] = arg.value;
-            } else if (arg.boxed) {
-              // Extract int from boxed value
-              args[i] = LLVMBuildExtractValue(backend->builder, arg.boxed, 2,
-                                              "arg_int");
-            } else {
-              args[i] = arg.value;
-            }
+            // Native ABI parametreleri i64; float arguman DONUSTURULEREK
+            // geciyor (eskiden double'in bit deseni gidiyordu).
+            args[i] = typed_to_int_payload(backend, arg);
           }
         }
 
@@ -4368,14 +4382,45 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                                             nat_ca, node->name);
       llvm_tbaa_tag(backend, old_int, 0);
       TypedValue rhs_tv = codegen_typed_expr(backend, node->right);
-      LLVMValueRef rhs_int;
-      if (rhs_tv.type == INFERRED_INT || rhs_tv.type == INFERRED_BOOL) {
-        rhs_int = rhs_tv.value;
-      } else if (rhs_tv.boxed) {
-        rhs_int = llvm_extract_vm_val_int(backend, rhs_tv.boxed);
-      } else {
-        rhs_int = LLVMConstInt(backend->int_type, 0, 0);
+      // SAG TARAF INT DEGILSE aritmetik GENIS TIPTE yapilir, kirpma
+      // YAZARKEN olur — C anlami ve bildirim yolunun (`int c = f * 2.0`)
+      // zaten yaptigi sey. Sag tarafi once kirpmak baska bir cevap veriyor:
+      // `int y = 10; y -= 2.5;` boyle 8, dogrusu 7 (10 - 2,5 = 7,5 -> 7).
+      // Iki yolun ayrisan cevap vermesi, ham bit desenini saklamak kadar
+      // sinsi olurdu; o yuzden burada kutulu ikili isleme dusuluyor.
+      // Sicak sayaclar (`i += 1`) INFERRED_INT oldugu icin bu dala hic
+      // ugramiyor.
+      if (rhs_tv.type != INFERRED_INT && rhs_tv.type != INFERRED_BOOL) {
+        LLVMValueRef old_boxed = llvm_vm_val_int_val(backend, old_int);
+        LLVMValueRef rhs_boxed = box_typed_value(backend, rhs_tv);
+        LLVMValueRef cres_ptr = llvm_build_alloca_at_entry(
+            backend, backend->vm_value_type, "ceq.res");
+        LLVMValueRef cL_ptr = llvm_build_alloca_at_entry(
+            backend, backend->vm_value_type, "ceq.L");
+        LLVMValueRef cR_ptr = llvm_build_alloca_at_entry(
+            backend, backend->vm_value_type, "ceq.R");
+        LLVMBuildStore(backend->builder, old_boxed, cL_ptr);
+        LLVMBuildStore(backend->builder, rhs_boxed, cR_ptr);
+        LLVMValueRef cargs[] = {
+            LLVMConstPointerNull(backend->ptr_type),
+            LLVMBuildBitCast(backend->builder, cL_ptr, backend->ptr_type,
+                             "ceq.Lv"),
+            LLVMBuildBitCast(backend->builder, cR_ptr, backend->ptr_type,
+                             "ceq.Rv"),
+            LLVMConstInt(backend->int32_type,
+                         compound_op_to_binary(node->op), 0),
+            LLVMBuildBitCast(backend->builder, cres_ptr, backend->ptr_type,
+                             "ceq.resv")};
+        LLVMBuildCall2(backend->builder, backend->vm_binary_op_type,
+                       backend->func_vm_binary_op, cargs, 5, "");
+        LLVMValueRef cres = LLVMBuildLoad2(
+            backend->builder, backend->vm_value_type, cres_ptr, "ceq.load");
+        LLVMValueRef cint = llvm_vm_val_to_int_payload(backend, cres);
+        llvm_tbaa_tag(backend,
+                      LLVMBuildStore(backend->builder, cint, nat_ca), 0);
+        return llvm_vm_val_int_val(backend, cint);
       }
+      LLVMValueRef rhs_int = typed_to_int_payload(backend, rhs_tv);
       LLVMValueRef new_int = nullptr;
       switch (node->op) {
       case TOKEN_PLUS_EQUAL:
@@ -4456,6 +4501,11 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
 
     LLVMValueRef new_val = LLVMBuildLoad2(
         backend->builder, backend->vm_value_type, res_ptr, "compound_res");
+    // Bildirilen tip `int` ise sonucu int'e zorla (float ise kirparak).
+    // Aritmetik GENIS TIPTE yapildi, kirpma burada — yani `int y = 10;
+    // y -= 2.5;` 7 veriyor, native yuvali ikiziyle ayni.
+    if (get_local_type(backend, node->name) == INFERRED_INT)
+      new_val = llvm_coerce_bool_tag_to_int(backend, new_val);
     LLVMBuildStore(backend->builder, new_val, val_ptr);
     return new_val;
   }
@@ -7178,9 +7228,12 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
             for (int i = 0; i < arg_count; i++) {
               LLVMValueRef val =
                   codegen_expression(backend, node->arguments[i]);
-              // Extract i64 from VMValue
-              args[i] =
-                  LLVMBuildExtractValue(backend->builder, val, 2, "arg_i64");
+              // VMValue -> i64. Duz ExtractValue FLOAT argumanda double'in
+              // BIT DESENINI geciriyordu (`func g(int x)` icin `g(2.5)`
+              // 4612811918334230528 goruyordu). Ayni cagri
+              // codegen_typed_expr yolundan gelince dogruydu, buradan
+              // gelince degil — iki yol ayrisiyordu.
+              args[i] = llvm_vm_val_to_int_payload(backend, val);
             }
           }
 
@@ -8116,14 +8169,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       LLVMValueRef int_init;
       if (node->right) {
         TypedValue tv = codegen_typed_expr(backend, node->right);
-        if (tv.type == INFERRED_INT || tv.type == INFERRED_BOOL) {
-          int_init = tv.value;
-        } else if (tv.boxed) {
-          int_init = LLVMBuildExtractValue(backend->builder, tv.boxed, 2,
-                                           "init_int");
-        } else {
-          int_init = LLVMConstInt(backend->int_type, 0, 0);
-        }
+        int_init = typed_to_int_payload(backend, tv);
       } else {
         int_init = LLVMConstInt(backend->int_type, 0, 0);
       }
@@ -8335,7 +8381,20 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     LLVMValueRef alloca =
         llvm_build_alloca_at_entry(backend, backend->vm_value_type, node->name);
     LLVMBuildStore(backend->builder, init, alloca);
-    add_local(backend, node->name, alloca);
+    // `int x` kutulu bir yuvaya dustuyse bile BILDIRILEN TIP kaydediliyor
+    // (native yuva yok, o yuzden native_value null). Bu olmadan sonraki
+    // atamalar bildirilen tipi hic uygulamiyordu:
+    // `int y = 10; y -= 2.5;` degiskende 7,5 birakiyordu — `int` yazan bir
+    // bildirim icin yanlis. Kuresel (native yuvali) ikizi 7 veriyordu, yani
+    // iki yol AYRISIYORDU.
+    //
+    // Guvenli: get_local_type'in yedi cagri yerinin hepsi ayrica
+    // get_local_native'in dolu olmasini sart kosuyor, yani "INT ama native
+    // degil" isareti hicbir hizli yolu yanlislikla acmiyor.
+    if (node->data_type == TYPE_INT)
+      add_local_typed(backend, node->name, alloca, INFERRED_INT, nullptr);
+    else
+      add_local(backend, node->name, alloca);
     // PR 3f: surface this boxed VMValue local to the debugger.
     llvm_backend_emit_local_vmvalue_declare(backend, node->name, alloca,
                                             node->line);
@@ -8395,15 +8454,7 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         }
 
         TypedValue tv = codegen_typed_expr(backend, node->right);
-        LLVMValueRef int_val;
-        if (tv.type == INFERRED_INT || tv.type == INFERRED_BOOL) {
-          int_val = tv.value;
-        } else if (tv.boxed) {
-          int_val = LLVMBuildExtractValue(backend->builder, tv.boxed, 2,
-                                          "assign_int");
-        } else {
-          int_val = LLVMConstInt(backend->int_type, 0, 0);
-        }
+        LLVMValueRef int_val = typed_to_int_payload(backend, tv);
         llvm_tbaa_tag(backend,
                       LLVMBuildStore(backend->builder, int_val, nat_t), 0);
         return llvm_vm_val_int_val(backend, int_val);
@@ -8744,6 +8795,12 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       }
 
       LLVMValueRef target = get_local(backend, node->name);
+      // Bildirilen tip `int` ise atanan degeri int'e zorla (float ise
+      // kirparak). Kuresel (native yuvali) yol bunu zaten yapiyordu;
+      // kutulu yerel yapmiyordu, yani `int y = 10; y = 2.5;` yerelde 2,5
+      // kuresel de 2 veriyordu.
+      if (target && get_local_type(backend, node->name) == INFERRED_INT)
+        val = llvm_coerce_bool_tag_to_int(backend, val);
       if (target)
         LLVMBuildStore(backend->builder, val, target);
       else {

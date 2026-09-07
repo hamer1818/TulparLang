@@ -323,6 +323,52 @@ LLVMTypeRef llvm_make_vmvalue_func_type(LLVMBackend *backend,
   return ft;
 }
 
+// Kutulu bir VMValue'nun i64 TAM SAYI YUKUNU verir; deger FLOAT ise
+// donusturur (sifira dogru kirpma, `toInt` ile ayni).
+//
+// Neden dallanma da select degil: `fptosi` i64 araligi disinda POISON
+// uretiyor. Select'in secilmeyen kolundaki poison'a guvenmek istemedik —
+// gercek dallanma ile float olmayan degerde donusum HIC calismiyor.
+//
+// Sicak yol degil: int ifadeler codegen_typed_expr'den INFERRED_INT olarak
+// donuyor ve buraya hic ugramiyor. Buraya yalniz tipi calisma zamaninda
+// belli olan degerler geliyor.
+LLVMValueRef llvm_vm_val_to_int_payload(LLVMBackend *backend,
+                                        LLVMValueRef vm_val) {
+  if (!vm_val) return nullptr;
+  LLVMValueRef tag =
+      LLVMBuildExtractValue(backend->builder, vm_val, 0, "v2i.tag");
+  LLVMValueRef pay =
+      LLVMBuildExtractValue(backend->builder, vm_val, 2, "v2i.pay");
+  LLVMValueRef is_flt = LLVMBuildICmp(
+      backend->builder, LLVMIntEQ, tag,
+      LLVMConstInt(backend->int32_type, /*VM_VAL_FLOAT=*/1, 0), "v2i.is_flt");
+
+  LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+  LLVMBasicBlockRef bb_flt =
+      LLVMAppendBasicBlockInContext(backend->context, fn, "v2i.flt");
+  LLVMBasicBlockRef bb_done =
+      LLVMAppendBasicBlockInContext(backend->context, fn, "v2i.done");
+  LLVMBasicBlockRef bb_from = LLVMGetInsertBlock(backend->builder);
+  LLVMBuildCondBr(backend->builder, is_flt, bb_flt, bb_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, bb_flt);
+  LLVMValueRef as_dbl = LLVMBuildBitCast(backend->builder, pay,
+                                         backend->float_type, "v2i.asdbl");
+  LLVMValueRef trunc = LLVMBuildFPToSI(backend->builder, as_dbl,
+                                       backend->int_type, "v2i.trunc");
+  LLVMBasicBlockRef bb_flt_end = LLVMGetInsertBlock(backend->builder);
+  LLVMBuildBr(backend->builder, bb_done);
+
+  LLVMPositionBuilderAtEnd(backend->builder, bb_done);
+  LLVMValueRef phi =
+      LLVMBuildPhi(backend->builder, backend->int_type, "v2i.res");
+  LLVMValueRef inc[] = {pay, trunc};
+  LLVMBasicBlockRef inb[] = {bb_from, bb_flt_end};
+  LLVMAddIncoming(phi, inc, inb, 2);
+  return phi;
+}
+
 // Bkz. llvm_values.hpp — bildirim ve parametre bağlama bunu PAYLAŞIYOR.
 LLVMValueRef llvm_coerce_bool_tag_to_int(LLVMBackend *backend,
                                          LLVMValueRef vm_val) {
@@ -336,6 +382,28 @@ LLVMValueRef llvm_coerce_bool_tag_to_int(LLVMBackend *backend,
       backend->builder, is_bool,
       LLVMConstInt(backend->int32_type, /*VM_VAL_INT=*/0, 0), tag,
       "b2i.tag.coerced");
-  return LLVMBuildInsertValue(backend->builder, vm_val, new_tag, 0,
-                              "b2i.bool_to_int");
+  vm_val = LLVMBuildInsertValue(backend->builder, vm_val, new_tag, 0,
+                                "b2i.bool_to_int");
+
+  // FLOAT ise: yuku DONUSTUR, sonra etiketle. Sadece etiketi degistirmek
+  // double'in BIT DESENINI tam sayi diye saklamak demekti —
+  // `int elapsed = clock_ms() - start;` 4574812796478291968 basiyordu.
+  // Buradaki yorum bir zamanlar "typeinfer bunu zaten uyariyor" diyordu;
+  // uyarmiyordu (olculdu: `tulpar typecheck` "ok" diyor).
+  LLVMValueRef tag2 =
+      LLVMBuildExtractValue(backend->builder, vm_val, 0, "f2i.tag");
+  LLVMValueRef is_flt = LLVMBuildICmp(
+      backend->builder, LLVMIntEQ, tag2,
+      LLVMConstInt(backend->int32_type, /*VM_VAL_FLOAT=*/1, 0), "f2i.is_flt");
+  LLVMValueRef ipay = llvm_vm_val_to_int_payload(backend, vm_val);
+  // llvm_vm_val_to_int_payload dallanma acti; `vm_val`/`is_flt` degerleri
+  // dallanma oncesinden geliyor, ikisi de bb_done'da hala gecerli.
+  LLVMValueRef int_tag =
+      LLVMConstInt(backend->int32_type, /*VM_VAL_INT=*/0, 0);
+  LLVMValueRef new_tag2 = LLVMBuildSelect(backend->builder, is_flt, int_tag,
+                                          tag2, "f2i.tag.coerced");
+  vm_val = LLVMBuildInsertValue(backend->builder, vm_val, new_tag2, 0,
+                                "f2i.tag");
+  return LLVMBuildInsertValue(backend->builder, vm_val, ipay, 2,
+                              "f2i.float_to_int");
 }

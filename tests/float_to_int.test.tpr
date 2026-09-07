@@ -1,0 +1,178 @@
+import "test";
+
+// FLOAT -> INT DONUSUMU (2026-09-07).
+//
+// `int` bildirilmis bir hedefe float yazmak SESSIZCE bozuk sonuc veriyordu.
+// Iki ayri yanlis cevap vardi, ikisi de ayni kalibin iki dalindan:
+//
+//   if (tv.type == INFERRED_INT || tv.type == INFERRED_BOOL) v = tv.value;
+//   else if (tv.boxed) v = ExtractValue(tv.boxed, 2);  // double'in BITLERI
+//   else                v = 0;                          // sessiz sifir
+//
+// Olculdu: `float f = 2.5; int b = f;` -> 4612811918334230528,
+// `int a = 3.7;` -> 0, `int e = clock_ms() - start;` -> 4574812796478291968.
+// Ustelik `tulpar typecheck` bunlara "ok" diyordu; codegen'deki yorum
+// "typeinfer bunu zaten uyariyor" varsayimina dayaniyordu, uyarmiyordu.
+//
+// Dogru davranis `toInt` ile AYNI: sifira dogru kirp.
+
+func run_literal() {
+    int a = 3.7;
+    assert_eq_int(a, 3);
+    int b = 3.2;
+    assert_eq_int(b, 3);
+    int c = 0.9;
+    assert_eq_int(c, 0);
+}
+
+// NEGATIF: sifira dogru kirpma, asagi yuvarlama DEGIL. -3.7 -> -3.
+// (Bu ayrimi olcmeyen bir test floor ile truncate'i ayirt edemez.)
+func run_negatif() {
+    int a = -3.7;
+    assert_eq_int(a, -3);
+    int b = -0.9;
+    assert_eq_int(b, 0);
+    float f = -2.5;
+    int c = f;
+    assert_eq_int(c, -2);
+}
+
+func run_degiskenden() {
+    float f = 2.5;
+    int b = f;
+    assert_eq_int(b, 2);
+    float g = 9.99;
+    int c = g;
+    assert_eq_int(c, 9);
+}
+
+func run_ifadeden() {
+    float f = 2.5;
+    int a = f * 2.0;
+    assert_eq_int(a, 5);
+    int b = f + 0.6;
+    assert_eq_int(b, 3);
+    int c = f / 2.0;
+    assert_eq_int(c, 1);
+}
+
+// toInt ile AYNI sonucu vermeli — iki yol ayrisirsa biri yanlis.
+func run_toint_ile_ayni() {
+    float f = 7.9;
+    int a = f;
+    assert_eq_int(a, toInt(f));
+    float g = -7.9;
+    int b = g;
+    assert_eq_int(b, toInt(g));
+}
+
+// BILESIK ATAMA: aritmetik GENIS TIPTE yapilir, kirpma YAZARKEN olur
+// (C anlami). Yani `y -= 2.5` -> 10 - 2,5 = 7,5 -> 7. Sag tarafi ONCE
+// kirpmak 8 verirdi; ilk yazimda 8 beklenmisti ve test kirmiziya dondu.
+//
+// Yerel (kutulu yuva) ve kuresel (native yuva) AYRI kod yollari ve bir
+// zaman AYRISIYORLARDI: kuresel 7, yerel 7,5. Ikisi de burada kilitli.
+int g_bilesik = 10;
+int g_carp = 7;
+func run_bilesik_atama_yerel() {
+    int x = 1;
+    x += 2.7;
+    assert_eq_int(x, 3);
+    int y = 10;
+    y -= 2.5;
+    assert_eq_int(y, 7);
+    int z = 7;
+    z *= 1.5;
+    assert_eq_int(z, 10);
+}
+func run_bilesik_atama_kuresel() {
+    g_bilesik -= 2.5;
+    assert_eq_int(g_bilesik, 7);
+    g_carp *= 1.5;
+    assert_eq_int(g_carp, 10);
+}
+
+// DUZ ATAMA da bildirilen tipi uygulamali; yerel ve kuresel ayni cevabi
+// vermeli (yerelde 2,5 kaliyordu).
+int g_atama = 10;
+func run_duz_atama() {
+    int y = 10;
+    y = 2.5;
+    assert_eq_int(y, 2);
+    int k = 1;
+    k = k + 0.6;
+    assert_eq_int(k, 1);
+    g_atama = 2.5;
+    assert_eq_int(g_atama, 2);
+}
+
+// NATIVE ABI parametresi (`func(int): int`) — cagri i64 gecirir.
+func iki_kat(int n): int { return n * 2; }
+func run_native_param() {
+    float f = 2.5;
+    assert_eq_int(iki_kat(f), 4);
+    assert_eq_int(iki_kat(3.9), 6);
+}
+
+// KUTULU ABI parametresi (donus tipi yok) — ayri kod yolu, ayni sonuc.
+// Iki yol ayrisiyordu: typed yol dogru, kutulu yol double bitlerini
+// geciriyordu.
+func kutulu_al(int n) { return n + 1; }
+func run_kutulu_param() {
+    float f = 4.5;
+    assert_eq_int(kutulu_al(f), 5);
+    assert_eq_int(kutulu_al(2.9), 3);
+}
+
+// KURESEL int bildirimi ayri bir yol (Pass 0.1 native global).
+float kaynak = 6.7;
+int kuresel = 6.7;
+func run_kuresel() {
+    assert_eq_int(kuresel, 6);
+}
+
+// BOOL -> INT zorlamasi BOZULMAMALI: `lib/test.tpr`'daki `assert` buna
+// bagli ve bir kez sessiz no-op olmustu. Float dali ayni fonksiyona
+// eklendi, o yuzden burada birlikte kilitleniyor.
+func bool_alan(int cond): int { if (cond == 1) { return 42; } return 0; }
+func run_bool_bozulmadi() {
+    assert_eq_int(bool_alan(true), 42);
+    assert_eq_int(bool_alan(false), 0);
+    int t = true;
+    assert_eq_int(t, 1);
+    int ff = false;
+    assert_eq_int(ff, 0);
+}
+
+// INT -> FLOAT genisletmesi bozulmamali.
+func run_int_to_float() {
+    float f = 3;
+    assert_eq_float(f, 3.0);
+    int n = 7;
+    float g = n;
+    assert_eq_float(g, 7.0);
+}
+
+// INT hedefe INT yazmak hicbir donusumden gecmemeli (gerileme koruması).
+func run_int_degismeden() {
+    int a = 9223372036854775807;
+    assert_eq_int(a, 9223372036854775807);
+    int b = -9223372036854775807;
+    assert_eq_int(b, -9223372036854775807);
+}
+
+test("float sabit -> int", "run_literal");
+test("negatif: sifira dogru kirpma", "run_negatif");
+test("float degiskenden int", "run_degiskenden");
+test("float ifadeden int", "run_ifadeden");
+test("toInt ile ayni sonuc", "run_toint_ile_ayni");
+test("bilesik atama — yerel (kutulu)", "run_bilesik_atama_yerel");
+test("bilesik atama — kuresel (native)", "run_bilesik_atama_kuresel");
+test("duz atama bildirilen tipi uyguluyor", "run_duz_atama");
+test("native ABI parametresi", "run_native_param");
+test("kutulu ABI parametresi", "run_kutulu_param");
+test("kuresel int bildirimi", "run_kuresel");
+test("bool -> int bozulmadi", "run_bool_bozulmadi");
+test("int -> float genisletmesi", "run_int_to_float");
+test("int hedefe int degismeden", "run_int_degismeden");
+test_summary();
