@@ -576,3 +576,72 @@ katından küçük tek kareye topluyor.
 
 Bkz. [[Tuzaklar]] 6u.
 
+## i32 dizi elemanı ÖLÇÜLDÜ ve BIRAKILDI (2026-09-07)
+
+Elekte C/Rust/Go'nun üçü de **32-bit** eleman kullanıyor (`int*`,
+`vec![0i32]`, `make([]int32,n)`); Tulpar 64-bit. Yani bu bir eşitleme, hile
+değil — ve uzun süredir "kalan tek ölçülmüş kaldıraç" diye duruyordu.
+
+### C modeli 0,59 ms dedi, dilin içi 0,19 dedi
+`width.c` (tek `#define`, sadece eleman genişliği değişiyor):
+
+| | 8 bayt | 4 bayt | kazanç |
+|---|--:|--:|--:|
+| clang -O3 | 8,72 | 8,05 | **0,59** |
+| gcc -O2 | 8,05 | 7,49 | **0,75** |
+
+Ama bu model **C'nin** elek döngüsünü ölçüyor, Tulpar'ınkini değil. Gerçek
+tavan için derleyiciye geçici, doğruluğu umursamayan bir "hep i32" hack'i
+kondu (array_fill + altı eleman erişim yolu) ve elek koşturuldu:
+
+| | ms |
+|---|--:|
+| Tulpar i64 (bugün) | 8,33 |
+| **Tulpar i32 (hack)** | **8,14** |
+
+**Kazanç 0,19 ms** — modelin vaat ettiğinin üçte biri. Üstelik bu bir ÜST
+SINIR: gerçek uygulamada `int` 64-bit kalmak zorunda olduğu için taşan
+değerde diziyi genişleten bir kontrol gerekir; hack'te o yok.
+
+Bedeli ise: `ObjArray`da üçüncü bir durum, 35 çalışma zamanı erişim yeri,
+taşmada genişletme, ve muhtemelen üçüncü bir döngü sürümü. 0,19 ms elek'i
+8,6'dan ~8,4'e taşır — Go ile berabere, Rust'ın (8,2) hâlâ gerisinde. Yani
+**hedefe ulaştırmıyor bile**. Bırakıldı.
+
+### Asıl bulgu: elekte zaten LLVM tavanındayız
+Aynı ölçümün yan ürünü daha değerli:
+
+- Tulpar i64 **8,33** < clang'ın i64 C modeli **8,72** → bizim erişim
+  yolumuz düz C'ye göre ölçülebilir bir maliyet EKLEMİYOR.
+- Tulpar i32 **8,14** ≈ clang i32 **8,05**.
+- gcc i32 **7,49** — aradaki 0,56 ms **gcc'nin LLVM'e üstünlüğü**, bizim
+  açığımız değil.
+
+İç döngü karşılaştırması bunu doğruluyor: gcc 4 komut (ölçekli indeks
+adresleme, tek sayaç), clang 5 (LSR fazladan bir gösterici sayacı yaratıyor).
+
+Yani elekteki 1,0 ms'lik açık şöyle bölünüyor: ~0,2 eleman genişliği
+(alınmaya değmez), ~0,56 gcc-LLVM farkı (bizim elimizde değil), kalanı
+gürültü. **Elek bitti.**
+
+### İç içe döngü sürümlemesi: 4 komutluk döngü, YAVAŞ program
+`TULPAR_X_NEST=1` ile iç döngü de sürümleniyor ve üretilen gövde gcc'ninkiyle
+KOMUT KOMUT AYNI oluyor:
+
+```
+movq $0x1,(%r12,%rbp,8)      ; bugünkü 7 komutluk sürümde:
+add  %rcx,%rbp               ;   add 0x0(%rbp),%r15   <- i BELLEKTEN
+cmp  %rdx,%rbp               ;   cmp (%r12),%r15      <- n BELLEKTEN
+jle  ...                     ;   + sınır denetimi
+```
+
+Yine de program yavaşlıyor: 8,54 → 9,21 (en iyi), 9,66 → 10,03 (ortanca),
+30 ölçüm, araya sokularak. Sebep iç döngü değil, **dış döngü gövdesinin
+ikiye katlanması**. Bu, 2026-09-06'daki aynı sonucun bağımsız tekrarı — o
+zaman tek ikiliye bakıldığı için şüpheliydi, artık değil.
+
+Globallerin bellekten okunmasının sebebi de belli: soğuk yolda
+`call vm_set_element_ptr` var, çağrı her şeyi yazabileceği için LLVM
+`i`/`n`'i yazmaçta tutamıyor. `internal` bağlantı denenmişti (2026-09-06) ve
+IR'ı hiç değiştirmemişti — GlobalsAA kanıtı üretmiyor.
+

@@ -1216,6 +1216,35 @@ kırpıyordu ve test 8 bekleyip kırmızıya döndü — beklentiyi C ile
 doğrulayınca doğrusunun 7 olduğu çıktı. Bildirim yolu (`int c = f * 2.0` → 5)
 zaten C anlamındaydı; tutarlılık oradan geldi.
 
+## 6w. Tavan modelini BAŞKA BİR DİLDE kurma
+
+Elekte i32 eleman kazancı `width.c` ile ölçüldü: tek `#define`, sadece
+genişlik değişiyor, ölçüm kusursuz — **0,59 ms**. Aylarca "kalan tek kaldıraç"
+olarak bu sayı taşındı.
+
+Derleyiciye geçici bir "hep i32" hack'i konup dilin İÇİNDE ölçülünce çıkan
+sayı **0,19 ms** oldu. Üçte biri.
+
+Model kusurlu değildi; **yanlış programı** modelliyordu. `width.c` C'nin elek
+döngüsünü ölçüyor: farklı erişim yolu, farklı sınır denetimi, farklı kayıt
+baskısı. [[Tuzaklar]] 6f-2 "modelde tek şey değişsin" diyor; bu onun eksik
+kalan yarısı: **model, optimize edeceğin programın kendisi olmalı.**
+
+**Kural:** bir optimizasyonun tavanını başka bir dilde ölçme. Derleyiciye
+doğruluğu umursamayan geçici bir hack koy, gerçek programı koştur, sonra
+hack'i at. Elek hack'i üç düzenlemeydi ve yarım saat sürdü — makineyi kurmak
+günler sürecekti.
+
+### Aynı ölçümde ikinci tuzak: TBAA etiketi YÜKÜN kendisine gider
+İlk i32 hack'i eleği 8,3'ten **19,9 ms**'ye çıkardı. Sebep i32 değildi:
+`sext` sonucuna TBAA etiketi konmuştu, yükleme komutuna değil. Doğrulayıcı
+`"This instruction shall not have a TBAA access tag!"` diyor ve modül
+**hiçbir seviyede** optimize edilemiyor — 2,3 kat yavaşlama optimizasyonun
+tamamen kapanmasıydı.
+
+`TULPAR_AOT_DEBUG_O3=1` bunu tek satırda söylüyor. Bir ölçüm sezgiye aykırı
+biçimde kötü çıktığında **önce onu çalıştır**; bkz. [[Tuzaklar]] 6r.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.
