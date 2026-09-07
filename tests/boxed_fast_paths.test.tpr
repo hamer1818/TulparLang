@@ -1,0 +1,127 @@
+import "test";
+
+// KUTULU (tipsiz) YOLUN SATIR ICI HIZLI YOLLARI (2026-09-07).
+//
+// Tipsiz kod ("kolay yazma" yolu) iki yerde gereksiz RUNTIME CAGRISI
+// odiyordu; ikisi de olculdu (20M yineleme, mod'lu dongu):
+//
+//   1. `%` operatorunun kutulu satir ici yolu YOKTU. `+ - * /` ve butun
+//      karsilastirmalar vardi, modulo yoktu -> her `%` vm_binary_op'a
+//      gidiyordu.        tipsiz aritmetik 134,6 -> 46,5 ms
+//   2. `aot_persist` her kutulu GLOBAL atamasinda KOSULSUZ cagriliyordu,
+//      oysa skaler degerde hicbir sey yapmiyor.
+//                        tipsiz cagri     90,8 -> 46,3 ms
+//
+// Cagrinin kendi maliyetinden daha pahali olan sey, LLVM'in onu asamamasi:
+// cagri her seyi yazabilir sayildigi icin dongu degismezleri yazmacta
+// kalamiyor.
+//
+// Bu paket iki yolun AYNI cevabi verdigini kilitliyor. Tipli sonuc bagimsiz
+// referans; ayrisirlarsa biri yanlis.
+
+func run_mod_pozitif() {
+    int ti = 17; int tj = 5;
+    var bi = 17; var bj = 5;
+    assert_eq_int(bi % bj, 2);
+    assert_eq_int(bi % bj, ti % tj);
+}
+
+// NEGATIF: C anlami (isaret bolunenden gelir), floor DEGIL.
+// -17 % 5 = -2, +2 degil; bu ayrimi olcmeyen test iki tanimi ayirt edemez.
+func run_mod_negatif() {
+    int ti = -17; int tj = 5;
+    var bi = -17; var bj = 5;
+    assert_eq_int(bi % bj, -2);
+    assert_eq_int(bi % bj, ti % tj);
+    var b2 = 17; var b3 = -5;
+    assert_eq_int(b2 % b3, 2);
+    assert_eq_int(b2 % b3, 17 % (0 - 5));
+}
+
+func run_mod_sinir() {
+    var a = 0; var b = 7;
+    assert_eq_int(a % b, 0);
+    var c = 5; var d = 5;
+    assert_eq_int(c % d, 0);
+    var e = 3; var f = 7;
+    assert_eq_int(e % f, 3);
+}
+
+// BUYUK degerler: satir ici yol i64 uzerinde calismali, kirpilmamali.
+func run_mod_buyuk() {
+    var a = 9223372036854775807; var b = 1000000007;
+    assert_eq_int(a % b, 9223372036854775807 % 1000000007);
+    var c = 123456789012345; var d = 97;
+    assert_eq_int(c % d, 123456789012345 % 97);
+}
+
+// FLOAT modulo satir ici int yoluna DUSMEMELI.
+func run_mod_float() {
+    var a = 7.5;
+    assert_eq_float(a % 2.0, 1.5);
+    float t = 7.5;
+    assert_eq_float(a % 2.0, t % 2.0);
+}
+
+// Dongu icinde: satir ici yol tekrarli kullanimda da dogru olmali.
+func run_mod_dongu() {
+    var t = 1; var i = 0;
+    while (i < 5000) { t = (t + i) % 1000003; i = i + 1; }
+    int tt = 1; int ii = 0;
+    while (ii < 5000) { tt = (tt + ii) % 1000003; ii = ii + 1; }
+    assert_eq_int(t, tt);
+}
+
+// --- aot_persist bekcisi -------------------------------------------------
+// Skalerde cagri ATLANIYOR, yigin degerinde ATLANMAMALI. Global yigin
+// degerleri atandiktan sonra hala okunabilir olmali.
+var g_str = "";
+var g_arr = [];
+var g_obj = {};
+var g_int = 0;
+var g_float = 0.0;
+var g_bool = false;
+
+func run_persist_skaler() {
+    g_int = 42;
+    assert_eq_int(g_int, 42);
+    g_float = 2.5;
+    assert_eq_float(g_float, 2.5);
+    g_bool = true;
+    assert_eq_bool(g_bool, true);
+}
+
+func run_persist_yigin() {
+    g_str = "merhaba" + " dunya";
+    assert_eq_str(g_str, "merhaba dunya");
+    g_arr = [1, 2, 3];
+    assert_eq_int(len(g_arr), 3);
+    assert_eq_int(g_arr[2], 3);
+    g_obj = {"a": 1, "b": 2};
+    assert_eq_int(g_obj["b"], 2);
+}
+
+// Yigin degeri global'e atandiktan SONRA yerel kapsam bitse de yasamali.
+func _yaz() {
+    var yerel = "gecici" + "-deger";
+    g_str = yerel;
+    var ya = [7, 8];
+    g_arr = ya;
+}
+func run_persist_kapsam_sonrasi() {
+    _yaz();
+    assert_eq_str(g_str, "gecici-deger");
+    assert_eq_int(len(g_arr), 2);
+    assert_eq_int(g_arr[1], 8);
+}
+
+test("kutulu %: pozitif", "run_mod_pozitif");
+test("kutulu %: negatif (C anlami)", "run_mod_negatif");
+test("kutulu %: sinir degerler", "run_mod_sinir");
+test("kutulu %: buyuk i64", "run_mod_buyuk");
+test("kutulu %: float int yoluna dusmuyor", "run_mod_float");
+test("kutulu %: dongu icinde", "run_mod_dongu");
+test("persist: skalerde atlaniyor", "run_persist_skaler");
+test("persist: yigin degerinde atlanmiyor", "run_persist_yigin");
+test("persist: kapsam sonrasi yasiyor", "run_persist_kapsam_sonrasi");
+test_summary();

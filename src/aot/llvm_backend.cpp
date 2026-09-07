@@ -4655,6 +4655,16 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     case TOKEN_DIVIDE:
       int_res = build_checked_div(backend, l_val, r_val, 0);
       break;
+    // MODULO buradan EKSIKTI. `+ - * /` ve butun karsilastirmalar satir ici
+    // hizli yola sahipken `%` her seferinde vm_binary_op'a gidiyordu — yani
+    // tipsiz koddaki her modulo bir runtime CAGRISI. Cagri ayrica cevresindeki
+    // dongude optimizasyonu da kesiyor (LLVM cagrinin her seyi yazabilecegini
+    // varsayip degismezleri yazmacta tutamiyor).
+    // build_checked_div(..., 1) bolme yolunun ZATEN kullandigi ayni yardimci;
+    // sifira bolme davranisi ikisinde de ayni.
+    case TOKEN_MODULO:
+      int_res = build_checked_div(backend, l_val, r_val, 1);
+      break;
     case TOKEN_EQUAL:
       int_res = LLVMBuildZExt(
           backend->builder,
@@ -8789,9 +8799,40 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
       // the whole request object on every call.
       if (is_global_var(backend, node->name) &&
           strcmp(node->name, "_request") != 0) {
+        // aot_persist YIGIN degerlerini kalici kopyaya cikariyor; skalerde
+        // (int/float/bool/void) degeri OLDUGU GIBI donduruyor. Buna ragmen
+        // her kutulu global atamasinda kosulsuz cagriliyordu — tipsiz kodda
+        // dongu basina bir runtime cagrisi. Cagrinin kendisinden daha pahali
+        // olan sey, LLVM'in onu asamamasi: cagri her seyi yazabilir sayildigi
+        // icin dongu degismezleri yazmacta kalamiyor.
+        //
+        // Etiket denetimi satir ici: yalniz VM_VAL_OBJ ise cagriya gidiliyor.
+        LLVMValueRef ptag =
+            LLVMBuildExtractValue(backend->builder, val, 0, "ap.tag");
+        LLVMValueRef pisobj = LLVMBuildICmp(
+            backend->builder, LLVMIntEQ, ptag,
+            LLVMConstInt(backend->int32_type, /*VM_VAL_OBJ=*/4, 0),
+            "ap.isobj");
+        LLVMValueRef pfn =
+            LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+        LLVMBasicBlockRef pb_call = append_bb(backend, pfn, "ap.call");
+        LLVMBasicBlockRef pb_done = append_bb(backend, pfn, "ap.done");
+        LLVMBasicBlockRef pb_from = LLVMGetInsertBlock(backend->builder);
+        LLVMBuildCondBr(backend->builder, pisobj, pb_call, pb_done);
+        LLVMPositionBuilderAtEnd(backend->builder, pb_call);
         LLVMValueRef pargs[] = {val};
-        val = llvm_call_vmvalue_func(backend, backend->func_aot_persist, pargs,
-                                     1, "assign.autopersist");
+        LLVMValueRef pcalled = llvm_call_vmvalue_func(
+            backend, backend->func_aot_persist, pargs, 1,
+            "assign.autopersist");
+        LLVMBasicBlockRef pb_call_end = LLVMGetInsertBlock(backend->builder);
+        LLVMBuildBr(backend->builder, pb_done);
+        LLVMPositionBuilderAtEnd(backend->builder, pb_done);
+        LLVMValueRef pphi = LLVMBuildPhi(backend->builder,
+                                         backend->vm_value_type, "ap.res");
+        LLVMValueRef pin[] = {val, pcalled};
+        LLVMBasicBlockRef pbb[] = {pb_from, pb_call_end};
+        LLVMAddIncoming(pphi, pin, pbb, 2);
+        val = pphi;
       }
 
       LLVMValueRef target = get_local(backend, node->name);

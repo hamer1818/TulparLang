@@ -559,6 +559,52 @@ TPREOF
     fi
     rm -rf "$SR_TMP"
 
+    # KUTULU (tipsiz) YOLUN satır içi hızlı yolları duruyor mu?
+    #
+    # Bu ikisi SESSİZCE geri alınabilir: ikisi de yalnızca hız değiştiriyor,
+    # sonucu değil. `tests/boxed_fast_paths.test.tpr` doğruluğu kilitliyor ama
+    # hızlı yol silinse geri düşüş AYNI cevabı verir ve paket yeşil kalır —
+    # yani o paket tek başına bu gerilemeyi göremez. Denetim burada YAPISAL.
+    #
+    #   1) `srem`  = kutulu `%` için satır içi tamsayı yolu (build_checked_div).
+    #      Yoksa her modulo vm_binary_op'a gidiyor: ölçüldü 134,6 -> 46,5 ms.
+    #   2) `ap.isobj` = global atamasındaki aot_persist etiket denetimi.
+    #      Yoksa her kutulu global ataması koşulsuz runtime çağrısı:
+    #      ölçüldü 90,8 -> 46,3 ms.
+    #
+    # Değerler ortamdan okunuyor: sabit olsaydı LLVM katlar, `srem` hiç
+    # üretilmezdi ve denetim kendi kendini yanlış kırardı.
+    BX_TMP=$(mktemp -d)
+    cat > "$BX_TMP/bx.tpr" <<'TPREOF'
+var a = toInt(env("BX_A"));
+if (a <= 0) { a = 17; }
+var b = toInt(env("BX_B"));
+if (b <= 0) { b = 5; }
+var g = 0;
+g = a % b;
+print(g);
+TPREOF
+    TULPAR_AOT_EMIT_LL=1 ./tulpar build "$BX_TMP/bx.tpr" "$BX_TMP/bx" >/dev/null 2>&1
+    BX_LL=$(ls "$BX_TMP"/*.ll 2>/dev/null | head -1)
+    if [ -z "$BX_LL" ] || ! grep -q "srem" "$BX_LL"; then
+        echo -e "${RED}Kutulu '%' satir ici yolu YOK — her modulo runtime cagrisi!${NC}"
+        rm -rf "$BX_TMP"
+        exit 1
+    fi
+    if ! grep -q "ap\.isobj" "$BX_LL"; then
+        echo -e "${RED}aot_persist etiket bekcisi YOK — her kutulu global atamasi runtime cagrisi!${NC}"
+        rm -rf "$BX_TMP"
+        exit 1
+    fi
+    BX_OUT=$(BX_A=17 BX_B=5 "$BX_TMP/bx")
+    if [ "$BX_OUT" != "2" ]; then
+        echo -e "${RED}Kutulu '%' YANLIS sonuc veriyor: $BX_OUT (2 olmali)${NC}"
+        rm -rf "$BX_TMP"
+        exit 1
+    fi
+    echo -e "${GREEN}kutulu hizli yollar duruyor${NC} (satir ici %, persist bekcisi)"
+    rm -rf "$BX_TMP"
+
     # Kod üretimi DENKLİK denetimi: sahne JSON'undan üretilen Tulpar kodu
     # derlenip çalıştırılıyor ve kurduğu sahne yeniden serileştirilerek
     # kaynakla karşılaştırılıyor. "Kod da aynı sahneyi kuruyor" iddiasını

@@ -645,3 +645,60 @@ Globallerin bellekten okunmasının sebebi de belli: soğuk yolda
 `i`/`n`'i yazmaçta tutamıyor. `internal` bağlantı denenmişti (2026-09-06) ve
 IR'ı hiç değiştirmemişti — GlobalsAA kanıtı üretmiyor.
 
+## Tipsiz ("kolay yazma") yol: iki gereksiz runtime çağrısı (2026-09-07)
+
+`func fib(n)` tipli ikizinden 21 kat yavaştı. "Kutulama pahalı" diye
+geçiştirilecek bir şey değil — ölçünce maliyetin nerede olduğu çıktı.
+
+### Önce ölç: çağrı mı, aritmetik mi?
+Dört sonda, 20M yineleme. **İlk denemem hiçbir şey ölçmedi**: tipli
+sürümlerin ikisi de 0,26 ms çıktı, yani boş program seviyesi — LLVM
+`t = t + i*3 - 1` döngüsünü SCEV ile kapalı forma katlamıştı. Gövde
+katlanmaya dirençli hale getirildi (`% 1000003`), sonra:
+
+| | önce | sonra |
+|---|--:|--:|
+| tipli aritmetik | 46,4 | 46,33 |
+| **tipsiz aritmetik** | **134,6** (2,9×) | **46,51** (1,0×) |
+| tipli çağrı | 46,4 | 46,35 |
+| **tipsiz çağrı** | **90,8** (2,0×) | **46,32** (1,0×) |
+
+### Bulunan iki şey
+1. **`%` operatörünün kutulu satır içi yolu YOKTU.** `+ − * /` ve bütün
+   karşılaştırmalar `op_int` bloğunda satır içi işleniyor; modulo `switch`in
+   `default`ına düşüp `vm_binary_op`a gidiyordu. Dilin ikili operatör kümesi
+   13 taneydi ve eksik olan tek operatör buydu. Düzeltme tek satır:
+   `build_checked_div(..., 1)` — bölme yolunun zaten kullandığı yardımcı.
+2. **`aot_persist` her kutulu global atamasında KOŞULSUZ çağrılıyordu.**
+   Fonksiyon yığın değerlerini kalıcı kopyaya çıkarıyor; skalerde değeri
+   olduğu gibi döndürüyor. Yani `var t = 0; t = t + 1;` her turda bir runtime
+   çağrısı ödüyordu, hiçbir iş yapmayan. Etiket denetimi satır içine alındı:
+   yalnız `VM_VAL_OBJ` ise çağrıya gidiliyor.
+
+Çağrının kendi maliyetinden **daha pahalı olan şey, LLVM'in onu aşamaması**:
+opak bir çağrı her şeyi yazabilir sayıldığı için döngü değişmezleri yazmaçta
+kalamıyor. Sıcak döngüden bir çağrı kaldırmak, o çağrının süresinden fazlasını
+geri veriyor.
+
+### Kalan: tipsiz fib hâlâ yavaş, sebebi ABI
+Bu iki düzeltme `fib`i değiştirmedi (11,92 ms) — orada `%` yok ve sıcak yolda
+kutulu global ataması yok. Doğru kıyas zincir olmadan yapılmalı:
+
+| | ms |
+|---|--:|
+| tipli fib (zincirli) | 0,56 |
+| tipli fib (zincirsiz) | 4,90 |
+| **tipsiz fib** | **11,92** |
+
+Yani kutulamanın gerçek çağrı maliyeti **2,4×**; geri kalan fark özyineleme
+zincirinin kutulu yola uygulanmamasından (zincir denendi, 1,4× geriledi).
+
+2,4×'in kaynağı `t_f` ABI'si: `void t_f(VMValue* ret, VMValue* arg0)`.
+Argümanlar ve dönüş BELLEKTEN geçiyor (çağrı başına ~6 bellek işlemi), ve
+`t_fib` 312 baytlık kare açıyor. Kayıtla geçen bir ABI (`{i64,i64}` çifti —
+`llvm_values.cpp` bunu çalışma zamanı fonksiyonları için zaten yapıyor) bunu
+kaldırır, ama `call()` kayıt defteri, async coroutine motoru, struct
+parametreleri ve wasm sret yolu aynı imzaya bağlı. Güvenli biçimi: gövde
+kayıt-ABI'li `t_f$fast`e taşınır, `t_f` ince bir sarmalayıcı olarak kalır.
+Henüz yapılmadı.
+
