@@ -482,3 +482,33 @@ gövde hiç yok, ikili yamalanarak doğrulandı — 10,74 → 10,85 ms verdi.
 Yani **kazanç yok**. O döngü bellek sınırlı; komut saymak orada işe
 yaramıyor. Elek'te kalan tek gerçek kaldıraç eleman genişliği (0,60 ms)
 ve tek başına Rust'ı geçmeye yetmiyor.
+
+## Açılış: 1,15 → 0,35 ms (2026-09-06/07)
+
+Üç adımda, hepsi bağlama satırında:
+
+| adım | boş program |
+|---|---|
+| başlangıç | 1,15 ms |
+| ağ/TLS ayrı TU + `--as-needed` (OpenSSL yüklenmiyor) | 0,76 |
+| `-static-libstdc++ -static-libgcc` | 0,53 |
+| `--exclude-libs,ALL --gc-sections` (boyutu geri alır) | **0,35** |
+
+C'nin boş programı 0,2–0,4 ms; artık aynı bantdayız. İkili 2,04 → 2,97 MB
+(statik libstdc++ 4,01 yapıyordu, `--gc-sections` 1 MB'ını geri aldı).
+
+⚠ İkinci adımın kararı bir kez YANLIŞ verildi çünkü tek kıyasa bakıldı;
+kod yerleşimi ölçümü ±%27 oynatıyor. Bkz. [[Tuzaklar]] 6t.
+
+### Sonuç (resmî koşum, r22)
+
+| | C | Rust | Go | **Tulpar** | sıra |
+|---|---|---|---|---|---|
+| arrayiter | 2,3 | 2,3 | 4,2 | **1,7** | **1.** |
+| intloop | 134,5 | 144,4 | 134,9 | **134,6** | **2.** |
+| strcat | 37,8 | 18,9 | 24,6 | **18,5** | **2.** |
+| fib | 1,6 | 3,7 | 6,6 | **3,9** | 4. |
+| sieve | 7,5 | 8,3 | 8,5 | **8,9** | 5. |
+
+Go'ya karşı 4 galibiyet 1 yenilgi (elek), Rust'a karşı 3 galibiyet
+2 yenilgi (fib 0,2 · elek 0,6).

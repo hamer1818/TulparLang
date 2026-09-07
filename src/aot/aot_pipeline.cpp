@@ -164,8 +164,25 @@ struct AOTPhaseTimer {
   // acilistan 0,26 ms kazandiriyor ama ikiliyi 2,1 -> 3,8 MB buyutuyor VE
   // fib'i 4,75 -> 6,35 ms geriletiyor (kod yerlesimi degisiyor; ayni
   // sinifta bir etki elek'te de olculdu). Net zarar.
+  // `-static-libstdc++ -static-libgcc`: libstdc++.so + libgcc_s.so'yu
+  // ACILISTA YUKLEMEMEK. Olculdu: bunlar bos bir programa 0,31 ms
+  // biniyor ve HER Tulpar ikilisi oduyordu.
+  //
+  // ⚠ Bu karar bir kez YANLIS verildi: tek bir kiyasa (fib) bakilmisti ve
+  // statik surum 1 ms YAVAS gorunuyordu. Gercek sebep KOD YERLESIMIYDI —
+  // ayni fib kodu, ayni hizalama, yalniz farkli adres: 4,06 ile 5,59 ms
+  // arasi (±%27). Sekiz farkli yerlesimde olculunce tablo duzeldi:
+  // statik medyan 4,01, dinamik 4,20. Bkz. Tuzaklar 6t.
+  //
+  // `--exclude-libs,ALL` + `--gc-sections`: statik libstdc++'in
+  // kullanilmayan bolumlerini atiyor. `-rdynamic` her sembolu kok
+  // sayacagi icin ikisi birlikte sart; arsiv sembolleri .dynsym'e
+  // girmeyince gc calisabiliyor. Ikili 4,01 -> 2,97 MB (dinamik 2,14).
+  // `call()` yalniz KULLANICI fonksiyonlarini dlsym'liyor ve onlar
+  // arsivde degil, kullanicinin kendi nesnesinde — o yuzden etkilenmiyor.
   #define AOT_LINK_LIB_FLAGS \
-      "-rdynamic -Wl,--as-needed " \
+      "-rdynamic -Wl,--as-needed -static-libstdc++ -static-libgcc " \
+      "-Wl,--exclude-libs,ALL -Wl,--gc-sections " \
       "-ltulpar_runtime -lm -lpthread -ldl" AOT_TLS_LINK_FLAGS
   #define AOT_LINK_PIE_FLAG "-no-pie"
   #define AOT_EXE_SUFFIX ""

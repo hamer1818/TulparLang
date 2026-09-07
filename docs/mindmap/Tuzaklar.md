@@ -1065,6 +1065,44 @@ ikili 2,1 → 3,8 MB **ve fib 4,75 → 6,35 ms**. Kod yerleşimi değişiyor;
 aynı sınıfta açıklanamayan bir yerleşim etkisi elek'te de ölçüldü
 (bkz. Performance.md). Net zarar.
 
+## 6t. Kod YERLEŞİMİ ölçümü ±%27 oynatıyor — tek ikiliye bakma
+
+`-static-libstdc++` bir kez ölçülüp **yanlış** karara bağlandı: fib
+4,75 → 6,35 ms göründü, "net zarar" denip geri alındı. Gerçek sebep
+bağlama biçimi değil, **fib'in adresiydi**.
+
+Kanıt: aynı `fib_o.o`, aynı bağlama biçimi, tek fark önüne konan
+dolgu nesnesinin boyutu (fonksiyonu 16'şar bayt kaydırıyor):
+
+| dolgu | fib@ | ms |
+|---|---|---|
+| 0 | 0x418520 | 4,11 |
+| 1 | 0x418530 | 4,30 |
+| 2 | 0x418540 | 4,15 |
+| 3 | 0x418550 | **5,59** |
+| 4 | 0x418560 | 4,11 |
+| 5 | 0x418570 | **5,41** |
+| 6 | 0x418580 | 4,14 |
+| 7 | 0x418590 | 4,26 |
+
+**Aynı kod, aynı hizalama sınıfı (mod 16 / mod 32 / mod 64 hepsi eşit),
+4,06 ile 5,59 arası.** Mekanizma tam belirlenemedi (dal hedefi
+önbelleği / op-cache küme çakışması sınıfından; `perf` bu makinede yok),
+ama etki tekrarlanabilir ve ikiliye özgü.
+
+Eleme yöntemleri denendi ve hepsi ELENDİ:
+- program adı uzunluğu (yığın hizası) — 8 farklı uzunluk, hepsi 5,3
+- fonksiyon/döngü hizalaması — s_fib ile t_fib mod32 ve mod64'te AYNI,
+  yine 1 ms fark
+- ikili boyutu — aynı boyutlu iki ikili 1,45 ms fark ediyor
+
+**Kural:** bir bağlama/kod-üretimi değişikliğini TEK bir ikilinin süresiyle
+yargılama. Sekiz farklı yerleşimde ölç, medyanları karşılaştır. Doğru
+deney tabloyu tersine çevirdi: statik medyan **4,01**, dinamik **4,20**.
+
+Bu, [[Tuzaklar]] 6f-2'nin (tavan modelinde tek değişken) kardeşi: orada
+model programı fazla değişkenliydi, burada ölçüm tek örnekliydi.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.
