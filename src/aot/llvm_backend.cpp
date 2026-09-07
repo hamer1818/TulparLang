@@ -9900,10 +9900,12 @@ static bool native_abi_eligible(LLVMBackend *backend, ASTNode_C *node) {
 // K=8 75,7 · K=10 10,7 · K=12 81,7) — satir ici alicinin butcesi belirli
 // K'larda zincirin ortasinda bitiyor. Yani "daha derin daha iyi" yanlis.
 //
-// Kapsam: yalnizca native (i64) ABI'li fonksiyonlar. Kutulu ABI'de her cagri
-// zaten VMValue kutulama maliyeti odedigi icin kazanc kucuk, buna karsilik
-// `t_<ad>` sembolu call() kayit defterine giriyor ve async/struct yollari
-// devreye giriyor — bedeli riskine degmiyor.
+// Kapsam: yalnizca native (i64) ABI'li fonksiyonlar. Kutulu ABI DENENDI ve
+// OLCUMLE ELENDI: tipsiz `func fib(n)` icin N=32'de 12,03 -> 17,09 ms, yani
+// 1,4 kat GERILEME. Kutulu cagrinin maliyeti VMValue'lerin bellekten gecmesi;
+// satir ici alma bunu kaldirmiyor, yalnizca kodu buyutuyor. (Tipsiz surum
+// tipliden 21 kat yavas — 11,88 vs 0,56 — ama o acigi kapatacak sey zincir
+// degil, kutulamanin kendisi.)
 #define SELFREC_DEPTH 4
 // Govde dugum siniri: buyuk ozyinelemeli fonksiyonlarin K kopyasi derleme
 // suresini ve .text'i buyutur. Kucuk govdeler zaten kazancin tamamini veriyor.
