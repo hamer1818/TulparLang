@@ -13,6 +13,9 @@ kapalı forma katlıyor ve boş programı ölçmüş oluyorsun — [[Tuzaklar#1]
 algoritma, aynı veri yapısı, çıktı doğrulanıyor. En iyi/medyan + boş program
 taban çizgisi. Çalıştır: `python3 benchmarks/fair/run.py [test]`.
 
+> ⚠ Aşağıdaki tablo 2026-09-03 durumudur, **bayattır**. Güncel sonuç için
+> bu notun sonundaki "Sonuç (resmî koşum, r23)" bölümüne bak.
+
 | Test | C | Rust | Go | **Tulpar** | Java | Node | Sıra |
 |---|--:|--:|--:|--:|--:|--:|:--:|
 | intloop (50M) | 134.6 | 144.5 | 135.6 | **135.6** | 147.7 | 715.2 | **2.–3.** |
@@ -21,7 +24,7 @@ taban çizgisi. Çalıştır: `python3 benchmarks/fair/run.py [test]`.
 | strcat (2M) | 37.8 | 19.1 | 25.4 | **31.6** | 35.9 | 105.6 | **3.** |
 | arrayiter (5M) | 2.3 | 1.7 | 4.0 | **6.6** | 19.5 | 21.3 | 4. |
 
-Hedef "her alanda 2.–3. sıra" 5 testin 3'ünde tutuyor.
+Hedef "her alanda 2.–3. sıra" bu koşumda 5 testin 3'ünde tutuyordu.
 
 `arrayiter` sonradan eklendi (2026-09-04): önceki dördü Tulpar'ın **en yaygın
 döngü kalıbını** hiç ölçmüyordu — `for (int i = 0; i < len(a); ...)`. O kalıp
@@ -500,15 +503,76 @@ C'nin boş programı 0,2–0,4 ms; artık aynı bantdayız. İkili 2,04 → 2,97
 ⚠ İkinci adımın kararı bir kez YANLIŞ verildi çünkü tek kıyasa bakıldı;
 kod yerleşimi ölçümü ±%27 oynatıyor. Bkz. [[Tuzaklar]] 6t.
 
-### Sonuç (resmî koşum, r22)
+### Sonuç (resmî koşum, r23 — özyineleme zinciri sonrası)
 
-| | C | Rust | Go | **Tulpar** | sıra |
-|---|---|---|---|---|---|
-| arrayiter | 2,3 | 2,3 | 4,2 | **1,7** | **1.** |
-| intloop | 134,5 | 144,4 | 134,9 | **134,6** | **2.** |
-| strcat | 37,8 | 18,9 | 24,6 | **18,5** | **2.** |
-| fib | 1,6 | 3,7 | 6,6 | **3,9** | 4. |
-| sieve | 7,5 | 8,3 | 8,5 | **8,9** | 5. |
+En iyi / (ortanca), 7 tekrar:
 
-Go'ya karşı 4 galibiyet 1 yenilgi (elek), Rust'a karşı 3 galibiyet
-2 yenilgi (fib 0,2 · elek 0,6).
+| | C | C++ | Rust | Go | **Tulpar** | sıra |
+|---|---|---|---|---|---|---|
+| **fib** | 1,6 | 1,9 | 3,7 | 6,7 | **0,6** | **1.** |
+| intloop | 134,6 | 134,9 | 144,3 | 134,9 | **134,6** | **1.–2.** |
+| arrayiter | 2,1 (2,5) | 2,9 (3,2) | 1,5 (2,4) | 3,9 (4,3) | **1,6 (2,2)** | 2. / **ortancada 1.** |
+| strcat | 37,8 | 14,8 | 19,2 | 24,6 | **18,7** | **2.** |
+| sieve | 7,6 | 8,1 | 8,2 | 8,4 | **8,6** | 5. |
+
+**fib'de birinciyiz** — C'nin 2,7, Rust'ın 6, Go'nun 11 katı hızlı. Sebebi
+gcc'nin bile yapmadığı kadar derin özyineleme açılımı (aşağıdaki bölüm).
+
+Go'ya karşı 4 galibiyet 1 yenilgi (elek, 0,2 ms), Rust'a karşı 4 galibiyet
+1 yenilgi (elek, 0,4 ms). Boş program tabanı: C 0,19 · Tulpar 0,28.
+
+Kalan tek açık **elek**; ölçülmüş tek kaldıraç i32 dizi elemanı (0,60 ms).
+
+## Özyineleme: LLVM'in yapmadığı işi biz yapıyoruz (2026-09-07)
+
+fib'de gcc her LLVM dilini 2,4 kat geçiyordu ve bu "gcc işte" diye
+geçiliyordu. Sayı tutmuyordu: fib(32) ≈ 7 milyon çağrı, gcc 1,6 ms — çevrim
+başına bir çağrı, imkânsız. `objdump` cevabı verdi: gcc'nin `fib` gövdesi
+**266 komut**, clang'ınki **22**. gcc özyinelemeyi satır içine alıp çağrı
+sayısını düşürüyor; LLVM'in satır içi alıcısı bir SCC kenarını kendi içine
+açmayı reddediyor. clang, Rust ve biz aynı tavanda takılıydık.
+
+**Çözüm:** her özyinelemeli native fonksiyonun K kopyasını üretip halka kur —
+`f → f.rec1 → … → f.recK → f`. Her kenar iki *farklı* fonksiyon arası çağrı
+olduğu için sıradan alıcı onları kendi bütçesiyle açıyor. Derinliği biz değil
+LLVM sınırlıyor, kod patlaması olmuyor (derleme süresi 58 → 62 ms, `fib`
+sembolü 1,4 KB'de kaldı). Kod: `llvm_backend.cpp` `selfrec_*`.
+
+### K'yı fib'e bakarak seçmek TUZAK
+Gerçek derleyicide fib N=44: K=4 → 67 ms, K=6 → **3,7 ms**. K=6 açık ara
+görünüyor. Beş ayrı özyineleme şekliyle ölçünce tablo değişiyor
+(zincirsize göre kat):
+
+| şekil | zincirsiz | K=4 | K=6 |
+|---|--:|--:|--:|
+| fib (iki çağrı) | 25,22 | 2,25 (11×) | 0,40 (63×) |
+| fact (tek çağrı) | 13,40 | 0,26 (52×) | 0,23 (58×) |
+| ack (iç içe) | 0,84 | 0,90 (0,9×) | 1,02 (0,8×) |
+| tak (üç param) | 0,45 | 0,35 (1,3×) | 0,36 (1,3×) |
+| **deep (200K derinlik)** | 1,23 | 0,75 (1,7×) | **73,68 (0,02×)** |
+
+`deep`te K=6 **60 kat gerileme** yapıyor: kare büyümesi 200 000 seviyede yığın
+trafiğini patlatıyor. K=4 beş şeklin hiçbirinde gerilemiyor → **K=4**.
+
+K'ya bağımlılık ayrıca monoton değil (fib N=44: K=6 3,7 · K=7 82,5 · K=8 75,7
+· K=10 10,7 · K=12 81,7) — alıcının bütçesi belirli K'larda zincirin ortasında
+bitiyor. "Daha derin daha iyi" yanlış.
+
+### Denenip ELENEN: `alwaysinline`
+Ara klonları `alwaysinline` yapmak derinliği tam K yapar; LLVM sürümünden
+bağımsız, kulağa daha ilkeli geliyor. Ölçüm çürüttü: fib N=44'te 82–260 ms
+(bütçeye bırakılan sürüm 3,7). Tam açılım kodu şişiriyor ve ortak alt ifade
+eleme ağacı toplayamıyor.
+
+### Anlam koruyuculuk nasıl kanıtlandı
+`TULPAR_NO_SELFREC=1` kapatma anahtarı eklendi ve **bütün külliyat iki kez**
+derlenip çalıştırıldı (tek değişken bu bayrak): 103 örnek/paket bayt bayt
+aynı, 64 yalnız-derle (pencere açanlar), 0 derlenemeyen. Ayrılan iki satır da
+programların kendi ölçtüğü süre değerleriydi.
+
+Sezgiye aykırı yan bulgu: **yığın derinliği gerilemedi, arttı** — en derin
+başarılı çağrı 250 968 → 641 544. Satır içine alma 4 mantıksal seviyeyi 4
+katından küçük tek kareye topluyor.
+
+Bkz. [[Tuzaklar]] 6u.
+

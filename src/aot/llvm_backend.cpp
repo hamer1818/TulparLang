@@ -461,6 +461,9 @@ LLVMValueRef llvm_build_alloca_at_entry(LLVMBackend *backend, LLVMTypeRef type,
 // Forward declarations
 void codegen_func_def(LLVMBackend *backend, ASTNode_C *node);
 static void predeclare_func_signature(LLVMBackend *backend, ASTNode_C *node);
+static int  selfrec_begin(LLVMBackend *backend, ASTNode_C *fn);
+static void selfrec_finish(LLVMBackend *backend, ASTNode_C *fn, int depth);
+static void selfrec_predeclare(LLVMBackend *backend, ASTNode_C *fn);
 static void report_codegen_error(LLVMBackend *backend, int line,
                                  const char *kind, const char *message,
                                  const char *caret_token, const char *hint);
@@ -9480,8 +9483,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           LLVMBasicBlockRef saved_block = LLVMGetInsertBlock(backend->builder);
           LLVMValueRef saved_func = backend->current_function;
           for (int i = 0; i < module_ast->statement_count; i++) {
-            if (module_ast->statements[i]->type == AST_FUNCTION_DECL)
+            if (module_ast->statements[i]->type == AST_FUNCTION_DECL) {
               predeclare_func_signature(backend, module_ast->statements[i]);
+              selfrec_predeclare(backend, module_ast->statements[i]);
+            }
           }
           if (saved_block) LLVMPositionBuilderAtEnd(backend->builder, saved_block);
           backend->current_function = saved_func;
@@ -9507,7 +9512,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         // codegen_func_def reuses the pre-declared signature created above.
         for (int i = 0; i < module_ast->statement_count; i++) {
           if (module_ast->statements[i]->type == AST_FUNCTION_DECL) {
-            codegen_func_def(backend, module_ast->statements[i]);
+            ASTNode_C *fn = module_ast->statements[i];
+            int rec = selfrec_begin(backend, fn);
+            codegen_func_def(backend, fn);
+            selfrec_finish(backend, fn, rec);
           }
         }
 
@@ -9764,6 +9772,219 @@ static LLVMValueRef native_loop_int_value(LLVMBackend *backend, TypedValue v,
   if (v.boxed)
     return LLVMBuildExtractValue(backend->builder, v.boxed, 2, "loop_int");
   return have_default ? LLVMConstInt(backend->int_type, 0, 0) : nullptr;
+}
+
+// Native (i64) ABI uygunlugu — TEK karar noktasi.
+//
+// Bu soruyu uc yer soruyor: predeclare_func_signature (Gecis 1a) IMZAYI
+// yaratiyor, codegen_func_def (Gecis 1b) GOVDEYI dolduruyor, ozyineleme
+// zinciri (asagida) klonlari ayni ABI ile uretiyor. Ikisi ayrisirsa native
+// imzaya VMValue govdesi (ya da tersi) yazilir ve modul dogrulamasi patlar.
+// Kopyalanmis kosul tam bu yuzden burada birlestirildi.
+static bool native_abi_eligible(LLVMBackend *backend, ASTNode_C *node) {
+  if (!node || node->type != AST_FUNCTION_DECL || !node->name) return false;
+  // async fonksiyonlar ZORUNLU olarak kutulu `t_<ad>` ABI'sini kullanir:
+  // coroutine motoru (runtime/tulpar_async.cpp call_user_fn) onlari tam o
+  // imzayla cagiriyor.
+  if (node->is_async) return false;
+  if (!backend->use_static_typing) return false;
+  if (node->return_type != TYPE_INT) return false;
+  // `main` kutulu ABI'ye zorlanir: native yol fonksiyonu ciplak adiyla
+  // adlandirir, bu da uretilen C `int main()` girisiyle carpisir.
+  if (strcmp(node->name, "main") == 0) return false;
+  for (int i = 0; i < node->param_count; i++) {
+    if (!node->parameters[i] ||
+        node->parameters[i]->data_type == TYPE_UNKNOWN)
+      return false;
+  }
+  if (!is_all_int_params(node)) return false;
+  // `: int` ve tum parametreler int olsa bile native yol deyimlerin ancak bir
+  // alt kumesini uretebiliyor. Govde bunun disina cikiyorsa (json/dizgi yerel
+  // degiskeni, tek basina cagri, throw, ...) kutulu VMValue yoluna dusulur —
+  // yoksa o deyimler SESSIZCE dusurulur ya da yanlis derlenir.
+  return native_codegen_supports_body(node->body) != 0;
+}
+
+// ===========================================================================
+// Ozyineleme zinciri (self-recursion clone chain)
+// ===========================================================================
+// LLVM dogrudan kendini cagiran bir fonksiyonu SATIR ICINE ALMAZ — satir ici
+// alici, bir SCC kenarini kendi icine acmayi reddeder. Boylece `fib(n-1) +
+// fib(n-2)` her dugumde bir gercek cagri odemeye devam eder. GCC bunu aciyor
+// ve fib kiyaslamasinda butun LLVM dillerini 2,4 kat gecmesinin TEK sebebi bu
+// (2026-09-07 olcumu, N=32: gcc -O2 1,6 ms / clang -O3 4,4 / rustc -O3 3,7 /
+// Tulpar 3,9 — gcc'nin `fib`i 266 komut, clang'inki 22).
+//
+// Satir ici aliciya dokunmadan ayni etkiyi aliyoruz: fonksiyonun K kopyasini
+// uretip HALKA seklinde bagliyoruz —
+//     f -> f.rec1 -> f.rec2 -> ... -> f.recK -> f
+// Artik her kenar IKI FARKLI fonksiyon arasinda bir cagri, dolayisiyla siradan
+// satir ici alici onlari kendi maliyet butcesiyle aciyor ve butce bitince
+// duruyor. Yani derinligi biz degil LLVM sinirliyor; kod patlamasi yok
+// (C prototipinde .text 2 KB'de kaldi, derleme suresi degismedi).
+//
+// K nasil secildi. fib TEK BASINA yaniltiyor: gercek derleyicide fib N=44
+// icin K=6 (3,7 ms) K=4'ten (67 ms) cok daha iyi gorunuyor. Ama K'yi BES
+// AYRI ozyineleme sekliyle olcunce tablo degisiyor (zincirsize gore kat):
+//
+//   sekil   zincirsiz    K=4      K=6
+//   fib       25,22    2,25 (11x)  0,40 (63x)
+//   fact      13,40    0,26 (52x)  0,23 (58x)
+//   ack        0,84    0,90 (0,9x) 1,02 (0,8x)
+//   tak        0,45    0,35 (1,3x) 0,36 (1,3x)
+//   deep       1,23    0,75 (1,7x) 73,68 (0,02x)  <-- 60 KAT GERILEME
+//
+// `deep` 200 000 seviye derinlikte tek cagrili ozyineleme; K=6'da kare
+// buyumesi yigin trafigini patlatiyor. K=4 bes seklin HICBIRINDE gerileme
+// yapmiyor. Tek kiyasa bakip K=6 secilseydi derin ozyineleme kullanan her
+// program 60 kat yavaslardi ve fib parlak gorundugu icin fark edilmezdi.
+//
+// Ayrica K'ya bagimlilik MONOTON DEGIL (fib N=44: K=6 3,7 · K=7 82,5 ·
+// K=8 75,7 · K=10 10,7 · K=12 81,7) — satir ici alicinin butcesi belirli
+// K'larda zincirin ortasinda bitiyor. Yani "daha derin daha iyi" yanlis.
+//
+// Kapsam: yalnizca native (i64) ABI'li fonksiyonlar. Kutulu ABI'de her cagri
+// zaten VMValue kutulama maliyeti odedigi icin kazanc kucuk, buna karsilik
+// `t_<ad>` sembolu call() kayit defterine giriyor ve async/struct yollari
+// devreye giriyor — bedeli riskine degmiyor.
+#define SELFREC_DEPTH 4
+// Govde dugum siniri: buyuk ozyinelemeli fonksiyonlarin K kopyasi derleme
+// suresini ve .text'i buyutur. Kucuk govdeler zaten kazancin tamamini veriyor.
+#define SELFREC_MAX_NODES 160
+
+// ASTNode_C'nin butun cocuk baglantilari. Dugum turune gore cogu null olur.
+#define SELFREC_EACH_CHILD(n, FN)                                              \
+  do {                                                                         \
+    FN((n)->left); FN((n)->right); FN((n)->body); FN((n)->condition);           \
+    FN((n)->then_branch); FN((n)->else_branch); FN((n)->init);                  \
+    FN((n)->increment); FN((n)->iterable); FN((n)->return_value);               \
+    FN((n)->index); FN((n)->receiver); FN((n)->callee);                         \
+    FN((n)->try_block); FN((n)->catch_block); FN((n)->finally_block);           \
+    FN((n)->throw_expr);                                                        \
+    for (int _i = 0; _i < (n)->statement_count; _i++) FN((n)->statements[_i]);  \
+    for (int _i = 0; _i < (n)->argument_count; _i++) FN((n)->arguments[_i]);    \
+    for (int _i = 0; _i < (n)->element_count;  _i++) FN((n)->elements[_i]);     \
+    for (int _i = 0; _i < (n)->object_count;   _i++) FN((n)->object_values[_i]);\
+  } while (0)
+
+// Tek gezinti: hem `name`e dogrudan cagri var mi, hem govde kac dugum.
+// Ic fonksiyon/lambda govdelerine GIRMEZ — oradaki `f(...)` cagrilari ayri
+// bir fonksiyonun govdesine ait ve orijinal `f`i cagirmaya devam etmeli.
+static void selfrec_scan(ASTNode_C *n, const char *name, int *found,
+                         int *count) {
+  if (!n) return;
+  (*count)++;
+  if (n->type == AST_FUNCTION_CALL && n->name && strcmp(n->name, name) == 0)
+    *found = 1;
+  if (n->type == AST_FUNCTION_DECL || n->type == AST_LAMBDA) return;
+#define SELFREC_SCAN_CHILD(c) selfrec_scan((c), name, found, count)
+  SELFREC_EACH_CHILD(n, SELFREC_SCAN_CHILD);
+#undef SELFREC_SCAN_CHILD
+}
+
+// `from` adina yapilan dogrudan cagrilari `to`ya cevirir (import_alias.cpp'
+// deki rename_field ile ayni sahiplik kurali: eski ad free, yenisi strdup).
+static void selfrec_rewire(ASTNode_C *n, const char *from, const char *to) {
+  if (!n) return;
+  if (n->type == AST_FUNCTION_CALL && n->name && strcmp(n->name, from) == 0) {
+    free(n->name);
+    n->name = my_strdup(to);
+  }
+  if (n->type == AST_FUNCTION_DECL || n->type == AST_LAMBDA) return;
+#define SELFREC_REWIRE_CHILD(c) selfrec_rewire((c), from, to)
+  SELFREC_EACH_CHILD(n, SELFREC_REWIRE_CHILD);
+#undef SELFREC_REWIRE_CHILD
+}
+
+// Bu fonksiyon icin zincir derinligi (0 = zincirlenmiyor). predeclare ve
+// emit gecisleri AYNI cevabi almak zorunda, o yuzden karar burada.
+static int selfrec_depth(LLVMBackend *backend, ASTNode_C *fn) {
+  // Kapatma anahtari: TULPAR_NO_SELFREC=1 zinciri tamamen devre disi birakir.
+  // Hem hata ayiklama kacisi hem de olcumun A/B'si icin gerekli — zincirin
+  // gercekten bir sey degistirdigini kanitlayan tek yol ayni derleyiciyle iki
+  // ikili uretebilmek.
+  static int disabled = -1;
+  if (disabled < 0) {
+    const char *e = getenv("TULPAR_NO_SELFREC");
+    disabled = (e && *e && strcmp(e, "0") != 0) ? 1 : 0;
+  }
+  if (disabled) return 0;
+  if (!fn || fn->type != AST_FUNCTION_DECL || !fn->name || !fn->body) return 0;
+  if (!native_abi_eligible(backend, fn)) return 0;
+  int found = 0, count = 0;
+  selfrec_scan(fn->body, fn->name, &found, &count);
+  if (!found) return 0;
+  if (count > SELFREC_MAX_NODES) return 0;
+  return SELFREC_DEPTH;
+}
+
+// Klon adi. Kaynak dilinde `.` tanimlayici karakteri degil, dolayisiyla bu ad
+// hicbir kullanici fonksiyonuyla carpisamaz. Donen isaretci derleme boyunca
+// yasar (fn->name'e gecici olarak baglaniyor ve DI metaverisine kopyalaniyor).
+static char *selfrec_clone_name(const char *base, int i) {
+  char buf[300];
+  snprintf(buf, sizeof(buf), "%s.rec%d", base, i);
+  return my_strdup(buf);
+}
+
+// Gecis 1a: klon IMZALARINI yarat. Sart — cagri uretimi hedefi
+// LLVMGetNamedFunction ile bulur, yani `f`in govdesi uretilirken `f.rec1`
+// modulde ZATEN tanimli olmali.
+static void selfrec_predeclare(LLVMBackend *backend, ASTNode_C *fn) {
+  int k = selfrec_depth(backend, fn);
+  if (!k) return;
+  char *orig = fn->name;
+  for (int i = 1; i <= k; i++) {
+    char *cname = selfrec_clone_name(orig, i);
+    if (LLVMGetNamedFunction(backend->module, cname)) { free(cname); continue; }
+    fn->name = cname;
+    predeclare_func_signature(backend, fn);
+    fn->name = orig;
+    LLVMValueRef f = LLVMGetNamedFunction(backend->module, cname);
+    // Klonlar uygulama ayrintisi: internal baglanti hem TU'lar arasi ad
+    // carpismasini engelliyor hem de tamami satir ici alindiginda LLVM'nin
+    // olu kopyalari silmesine izin veriyor (boyut maliyeti sifir).
+    if (f) LLVMSetLinkage(f, LLVMInternalLinkage);
+    // NEDEN `alwaysinline` DEGIL: denendi ve OLCUMLE ELENDI. Ara klonlari
+    // alwaysinline yapmak derinligi TAM K yapiyor (belirlenimli, LLVM
+    // surumunden bagimsiz) — kulaga daha ilkeli geliyor ama fib N=44'te
+    // 82-260 ms veriyor; butceye birakilan surum 3,7 ms. Tam acilim kodu
+    // sisiriyor ve ortak alt ifade eleme agaci toplayamiyor. Karari
+    // satir ici alicinin maliyet butcesi versin.
+    // register_function ve LLVMAddFunction adi KOPYALIYOR, gecici ad burada
+    // birakilabilir.
+    free(cname);
+  }
+}
+
+// Gecis 1b, ORIJINAL govde uretilmeden ONCE: `f`in kendi cagrilarini ilk
+// klona yonlendir. Donen deger selfrec_finish'e verilecek derinlik.
+static int selfrec_begin(LLVMBackend *backend, ASTNode_C *fn) {
+  int k = selfrec_depth(backend, fn);
+  if (!k) return 0;
+  char *first = selfrec_clone_name(fn->name, 1);
+  selfrec_rewire(fn->body, fn->name, first);
+  free(first);
+  return k;
+}
+
+// Gecis 1b, orijinal govde uretildikten SONRA: klonlari sirayla uret ve
+// halkayi kapat. Cikista AST kaynaktaki haline geri donmus olur (govdedeki
+// cagrilar yeniden `f` adini tasir), cunku ayni AST'yi baska gecisler
+// (ornegin ayni modulun ikinci kez import edilmesi) yeniden gezebiliyor.
+static void selfrec_finish(LLVMBackend *backend, ASTNode_C *fn, int depth) {
+  if (depth <= 0) return;
+  char *orig = fn->name;
+  for (int i = 1; i <= depth; i++) {
+    char *cur = selfrec_clone_name(orig, i);
+    char *nxt = (i < depth) ? selfrec_clone_name(orig, i + 1) : my_strdup(orig);
+    selfrec_rewire(fn->body, cur, nxt);
+    fn->name = cur;
+    codegen_func_def(backend, fn);
+    fn->name = orig;
+    free(cur);
+    free(nxt);
+  }
 }
 
 // Generate a pure native function with i64 parameters and return
@@ -10295,26 +10516,9 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
   // `main` is forced onto the boxed `t_main` ABI: the native path names the
   // function by its bare name (`node->name`), which for "main" would clash
   // with the synthesized C `int main()` entrypoint.
-  if (!node->is_async && backend->use_static_typing &&
-      node->return_type == TYPE_INT && strcmp(node->name, "main") != 0) {
-    // Verify all parameters have types
-    int all_typed = 1;
-    for (int i = 0; i < node->param_count; i++) {
-      if (node->parameters[i]->data_type == TYPE_UNKNOWN) {
-        all_typed = 0;
-        break;
-      }
-    }
-    // Even with `: int` and all-int params, the native path can only emit a
-    // limited subset of statements. If the body contains anything outside
-    // that subset (json/string locals, standalone calls, throws, ...), fall
-    // through to the regular VMValue codegen — otherwise it would silently
-    // drop those statements or miscompile non-int locals.
-    if (all_typed && is_all_int_params(node) &&
-        native_codegen_supports_body(node->body)) {
-      codegen_native_func_def(backend, node);
-      return;
-    }
+  if (native_abi_eligible(backend, node)) {
+    codegen_native_func_def(backend, node);
+    return;
   }
 
   int user_param_count = node->param_count;
@@ -10618,31 +10822,10 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
 static void predeclare_func_signature(LLVMBackend *backend, ASTNode_C *node) {
   if (node->type != AST_FUNCTION_DECL) return;
 
-  // Native ABI? Must match the eligibility decision in codegen_func_def
-  // exactly — predeclare creates the LLVM signature and codegen fills the
-  // body, so disagreement between the two passes produces bogus IR (native
-  // signature with VMValue body or vice versa). `main` is forced boxed for
-  // the same reason as in codegen_func_def: the native path would name it
-  // by its bare name and collide with the C `int main()` entrypoint.
-  bool native_eligible = backend->use_static_typing
-                         && node->return_type == TYPE_INT
-                         && is_all_int_params(node)
-                         && strcmp(node->name, "main") != 0;
-  if (native_eligible) {
-    for (int i = 0; i < node->param_count; i++) {
-      if (node->parameters[i]->data_type == TYPE_UNKNOWN) {
-        native_eligible = false;
-        break;
-      }
-    }
-  }
-  if (native_eligible && !native_codegen_supports_body(node->body)) {
-    native_eligible = false;
-  }
-  // Async functions must use the boxed `void t_<name>(ret*, args*)` ABI: the
-  // coroutine engine (runtime/tulpar_async.cpp call_user_fn) invokes them
-  // through that exact signature, so the native i64-ABI is never an option.
-  if (node->is_async) native_eligible = false;
+  // Native ABI karari native_abi_eligible()'da — codegen_func_def ile AYNI
+  // fonksiyon. predeclare imzayi, codegen govdeyi uretiyor; ikisi ayrisirsa
+  // native imzaya VMValue govdesi yazilir.
+  bool native_eligible = native_abi_eligible(backend, node);
 
   if (native_eligible) {
     if (LLVMGetNamedFunction(backend->module, node->name)) return;
@@ -10850,8 +11033,10 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
     LLVMBasicBlockRef saved_block = LLVMGetInsertBlock(backend->builder);
     LLVMValueRef saved_func = backend->current_function;
     for (int i = 0; i < node->statement_count; i++) {
-      if (node->statements[i]->type == AST_FUNCTION_DECL)
+      if (node->statements[i]->type == AST_FUNCTION_DECL) {
         predeclare_func_signature(backend, node->statements[i]);
+        selfrec_predeclare(backend, node->statements[i]);
+      }
     }
     if (saved_block) LLVMPositionBuilderAtEnd(backend->builder, saved_block);
     backend->current_function = saved_func;
@@ -10898,8 +11083,14 @@ void llvm_backend_compile(LLVMBackend *backend, ASTNode_C *node) {
 
     // Pass 1b: Emit function bodies
     for (int i = 0; i < node->statement_count; i++) {
-      if (node->statements[i]->type == AST_FUNCTION_DECL)
-        codegen_func_def(backend, node->statements[i]);
+      if (node->statements[i]->type == AST_FUNCTION_DECL) {
+        ASTNode_C *fn = node->statements[i];
+        // Ozyineleme zinciri: `f`in kendi cagrilarini `f.rec1`e yonlendirir,
+        // govdeyi urettikten sonra klonlari uretip halkayi kapatir.
+        int rec = selfrec_begin(backend, fn);
+        codegen_func_def(backend, fn);
+        selfrec_finish(backend, fn, rec);
+      }
     }
   }
 

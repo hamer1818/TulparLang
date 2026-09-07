@@ -1059,11 +1059,14 @@ Sonuç: 13 → 6 paylaşımlı nesne, boş program 1,15 → 0,76 ms, fib
 eklerken onu ayrı bir TU'ya koy. Aynı sorun SQLite için hâlâ duruyor —
 her ikili 636 KB SQLite taşıyor (boyut; hız değil, statik).
 
-### `-static-libstdc++` denendi ve BIRAKILDI
-Açılıştan 0,26 ms daha kazandırıyor (libstdc++.so da yüklenmiyor) ama:
-ikili 2,1 → 3,8 MB **ve fib 4,75 → 6,35 ms**. Kod yerleşimi değişiyor;
-aynı sınıfta açıklanamayan bir yerleşim etkisi elek'te de ölçüldü
-(bkz. Performance.md). Net zarar.
+### `-static-libstdc++` önce BIRAKILDI, sonra ALINDI — okuma sırası önemli
+İlk ölçüm şunu dedi: açılıştan 0,26 ms kazandırıyor ama ikili 2,1 → 3,8 MB
+**ve fib 4,75 → 6,35 ms**; "net zarar" denip geri alındı.
+
+**Bu karar YANLIŞTI ve geri alındı** — sebebi hemen aşağıdaki 6t. Tek bir
+ikiliye bakılmıştı; sekiz yerleşimde ölçülünce tablo tersine döndü ve bayrak
+`--gc-sections` ile birlikte kalıcı olarak alındı. Bu paragrafı, "denendi ve
+bırakıldı" sonucuna varmadan önce 6t ile birlikte oku.
 
 ## 6t. Kod YERLEŞİMİ ölçümü ±%27 oynatıyor — tek ikiliye bakma
 
@@ -1102,6 +1105,64 @@ deney tabloyu tersine çevirdi: statik medyan **4,01**, dinamik **4,20**.
 
 Bu, [[Tuzaklar]] 6f-2'nin (tavan modelinde tek değişken) kardeşi: orada
 model programı fazla değişkenliydi, burada ölçüm tek örnekliydi.
+
+## 6u. LLVM ÖZYİNELEMEYİ satır içine almaz — gcc alır, fark 2,4 kat
+
+`fib` kıyaslamasında gcc her LLVM dilini eziyordu ve bu aylarca "gcc işte,
+olağan" diye geçildi. Sayı tutmuyordu: fib(32) ≈ 7 milyon çağrı, gcc 1,6 ms,
+yani çevrim başına bir çağrı. İmkânsız.
+
+`objdump` cevabı verdi:
+
+| derleyici | `fib` gövdesi | fib(36) |
+|---|---|---|
+| gcc -O2 | **266 komut** | 10,3 ms |
+| clang -O3 | 22 komut | 25,1 ms |
+| rustc -O3 | — | 24,1 ms |
+| Tulpar (önce) | — | 25,2 ms |
+
+gcc özyinelemeyi **satır içine alıp** çağrı sayısını φ^k kat düşürüyor. LLVM'in
+satır içi alıcısı bunu YAPMAZ: bir SCC kenarını kendi içine açmayı reddediyor.
+clang, Rust ve biz — üçümüz de aynı tavanda takılıydık, çünkü aynı alıcıyı
+kullanıyoruz.
+
+**Çözüm satır içi alıcıya dokunmadan:** fonksiyonun K kopyasını üretip halka
+kur —
+
+    f -> f.rec1 -> f.rec2 -> f.rec3 -> f.rec4 -> f
+
+Artık her kenar İKİ FARKLI fonksiyon arasında; sıradan alıcı onları kendi
+maliyet bütçesiyle açıyor ve bütçe bitince duruyor. Yani derinliği biz değil
+LLVM sınırlıyor — kod patlaması olmuyor (`.text` 2 KB'de kaldı, derleme süresi
+değişmedi). `llvm_backend.cpp` içinde `selfrec_*`.
+
+Ölçüldü (fib N=36): 25,2 → **2,26 ms**. gcc'nin 4,6, Rust'ın 10,7 katı hızlı.
+
+Yan bulgu, sezgiye aykırı: **yığın derinliği gerilemedi, arttı** — en derin
+başarılı çağrı 250 968 → 641 544. Satır içine alma 4 mantıksal seviyeyi 4
+katından küçük TEK kareye topluyor, yani kare başına iş artarken toplam kare
+sayısı daha çok azalıyor.
+
+### K'yı ölçmeden seçme
+Derinlik sezgiyle değil ölçümle seçildi (C prototipi, N=36, en iyi/9):
+
+| K | 0 | 2 | 4 | 6 | 8 | 12 |
+|---|---|---|---|---|---|---|
+| ms | 25,2 | 1,89 | **1,40** | 2,24 | 2,62 | 2,92 |
+
+Monoton değil: K=4 taban, sonrası kötüleşiyor. "Ne kadar çok o kadar iyi"
+varsayımıyla K=8 seçilseydi kazancın yarısı gidiyordu.
+
+### Bu koruma nasıl boşa çıkardı
+`build.sh`'taki denetim İKİ ayaklı, çünkü tek ayak sessizce boş çıkar:
+IR'de klon tanımı aramak, klonlar üretilip HİÇ satır içi alınmadığında
+(ör. yanlışlıkla `noinline`) yeşil kalırdı — kazanç sıfırken. O yüzden ikinci
+ayak zincirli/zincirsiz ikilileri **göreli** ölçüyor (`TULPAR_NO_SELFREC=1`
+tek değişken); gerçek fark 7 kat, eşik 2 kat.
+
+Aynı sebeple kıyas programı N'i **ortamdan** okuyor: `fib(30)` sabit olsaydı
+LLVM derleme zamanında katlar, iki ikili de 0 ms sürer, ölçüm hiçbir şey
+ölçmezdi. [[Tuzaklar]] 6f-2'nin aynısı.
 
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için

@@ -487,6 +487,78 @@ TPREOF
     fi
     rm -rf "$OPT_TMP"
 
+    # ÖZYİNELEME ZİNCİRİ gerçekten kuruluyor ve işe yarıyor mu?
+    #
+    # LLVM doğrudan kendini çağıran bir fonksiyonu satır içine ALMAZ (satır
+    # içi alıcı bir SCC kenarını kendi içine açmayı reddediyor). Arka uç bu
+    # yüzden K=4 klon üretip halka kuruyor — llvm_backend.cpp `selfrec_*`.
+    # Ölçüldü 2026-09-07: fib(32) 4,90 -> 0,71 ms; gcc -O2 1,70, Rust 3,70.
+    #
+    # Denetim İKİ ayaklı, çünkü her ayak tek başına sessizce boşa çıkabilir:
+    #   1) IR'de klon TANIMI var mı  -> zincir kuruluyor mu
+    #   2) zincirli ikili, zincirsizden en az 2 kat hızlı mı
+    # Yalnız (1) olsaydı: klonlar üretilip hiç satır içi ALINMADIĞINDA
+    # (ör. yanlışlıkla noinline) denetim yeşil kalır, kazanç sıfır olurdu.
+    # Yalnız (2) olsaydı: makineye bağlı olurdu. Ölçüm GÖRELİ — aynı makine,
+    # aynı an, tek değişken TULPAR_NO_SELFREC. N=32'de ölçülen oran ~6-7 kat,
+    # eşik 2 kat. (N=30 ile başlanmıştı: iş yükü küçük olduğu için süreç
+    # açılışı oranı 2,7 kata indiriyordu — eşiğe fazla yakın. Payı iş yükünü
+    # büyüterek açtık, eşiği düşürerek değil.)
+    #
+    # N ortamdan okunuyor: sabit olsaydı LLVM `fib(30)`u derleme zamanında
+    # katlar ve iki ikili de 0 ms sürerdi — ölçüm hiçbir şey ölçmezdi.
+    SR_TMP=$(mktemp -d)
+    cat > "$SR_TMP/fib.tpr" <<'TPREOF'
+func fib(int n): int {
+    if (n <= 1) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+int n = toInt(env("SR_N"));
+if (n <= 0) { n = 32; }
+print(fib(n));
+TPREOF
+    TULPAR_AOT_EMIT_LL=1 ./tulpar build "$SR_TMP/fib.tpr" "$SR_TMP/fib_on" >/dev/null 2>&1
+    SR_LL=$(ls "$SR_TMP"/*.ll 2>/dev/null | head -1)
+    if [ -z "$SR_LL" ] || ! grep -q "@fib\.rec" "$SR_LL"; then
+        echo -e "${RED}Ozyineleme zinciri URETILMIYOR — ozyinelemeli kod satir ici alinmiyor!${NC}"
+        rm -rf "$SR_TMP"
+        exit 1
+    fi
+    TULPAR_NO_SELFREC=1 ./tulpar build "$SR_TMP/fib.tpr" "$SR_TMP/fib_off" >/dev/null 2>&1
+    if [ ! -x "$SR_TMP/fib_on" ] || [ ! -x "$SR_TMP/fib_off" ]; then
+        echo -e "${RED}Ozyineleme olcumu icin ikililer uretilemedi!${NC}"
+        rm -rf "$SR_TMP"
+        exit 1
+    fi
+    # Cikti esitligi: hizlanma dogru sonuc uzerinde olmali.
+    SR_OUT_ON=$(SR_N=32 "$SR_TMP/fib_on")
+    SR_OUT_OFF=$(SR_N=32 "$SR_TMP/fib_off")
+    if [ "$SR_OUT_ON" != "$SR_OUT_OFF" ] || [ "$SR_OUT_ON" != "2178309" ]; then
+        echo -e "${RED}Ozyineleme zinciri SONUCU DEGISTIRDI! zincirli=$SR_OUT_ON zincirsiz=$SR_OUT_OFF beklenen=2178309${NC}"
+        rm -rf "$SR_TMP"
+        exit 1
+    fi
+    sr_best_us() {
+        local best=99999999 i t0 t1 d
+        for i in 1 2 3; do
+            t0=$(date +%s%N); SR_N=32 "$1" >/dev/null 2>&1; t1=$(date +%s%N)
+            d=$(( (t1 - t0) / 1000 ))
+            [ "$d" -lt "$best" ] && best=$d
+        done
+        echo "$best"
+    }
+    SR_ON=$(sr_best_us "$SR_TMP/fib_on")
+    SR_OFF=$(sr_best_us "$SR_TMP/fib_off")
+    if [ "$SR_OFF" -gt $(( SR_ON * 2 )) ]; then
+        echo -e "${GREEN}ozyineleme zinciri calisiyor${NC} (${SR_OFF}us -> ${SR_ON}us)"
+    else
+        echo -e "${RED}Ozyineleme zinciri KAZANC VERMIYOR — klonlar satir ici alinmiyor!${NC}"
+        echo "  zincirsiz=${SR_OFF}us zincirli=${SR_ON}us (en az 2 kat bekleniyor)"
+        rm -rf "$SR_TMP"
+        exit 1
+    fi
+    rm -rf "$SR_TMP"
+
     # Kod üretimi DENKLİK denetimi: sahne JSON'undan üretilen Tulpar kodu
     # derlenip çalıştırılıyor ve kurduğu sahne yeniden serileştirilerek
     # kaynakla karşılaştırılıyor. "Kod da aynı sahneyi kuruyor" iddiasını
