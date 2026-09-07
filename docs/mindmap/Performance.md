@@ -455,3 +455,30 @@ bir yazmaca alıyor (`mov $ADDR,%r12` + `(%r12)`), içeri alınınca
 RIP-göreli adresleme üretiyor ve sıcak döngüde daha uzun kodlanıyor.
 Elek 9,66 → 10,54 ms. Geri alındı; içeri alınan modüllerin globalleri
 tarihsel olarak `internal` ve onlara dokunulmadı.
+
+## Açılış maliyeti: her ikiliye 0,4 ms'lik OpenSSL vergisi (2026-09-06)
+
+Ayrıntı ve ölçüm tablosu [[Tuzaklar]] 6s'de. Özet: `print(1)` ikilisi 13
+paylaşımlı nesne yüklüyordu; OpenSSL'e dokunan kod
+`src/vm/runtime_net.cpp`e ayrılıp `-Wl,--as-needed` eklenince 6'ya indi.
+
+| | önce | sonra |
+|---|---|---|
+| boş program | 1,15 ms | **0,76** |
+| fib | 5,08 | **4,54** |
+| ikili boyutu | 2,04 MB | 2,04 MB |
+
+Bu, kıyasların TAMAMINI etkileyen tek değişiklik — her Tulpar programı
+hiçbir şey yapmadan önce o kadar bekliyordu.
+
+**Sırada duran, ölçülmüş ama yapılmamış:** SQLite de aynı durumda
+(`runtime_bindings.cpp` `sqlite3_*` çağırıyor). Ayrılırsa her ikili
+636 KB küçülür; hız etkisi yok, çünkü statik bağlanıyor.
+
+### Elek: bekçi kaldırmanın kazancı SIFIR (ölçüldü)
+C modelinde bekçi + soğuk yol 0,97 ms tutuyordu (`width2.c`). Tulpar'da
+aynı şeyi yapmak — iç döngünün YALNIZ bekçisiz sürümünü üretmek, genel
+gövde hiç yok, ikili yamalanarak doğrulandı — 10,74 → 10,85 ms verdi.
+Yani **kazanç yok**. O döngü bellek sınırlı; komut saymak orada işe
+yaramıyor. Elek'te kalan tek gerçek kaldıraç eleman genişliği (0,60 ms)
+ve tek başına Rust'ı geçmeye yetmiyor.

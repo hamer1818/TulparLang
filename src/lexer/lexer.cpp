@@ -4,7 +4,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <iostream>
+// <iostream> BILEREK YOK: hic kullanilmiyordu ve `std::ios_base::Init`
+// statik kurucusunu `libtulpar_runtime.a`ya sokuyordu (lexer.cpp her AOT
+// ikilisine giriyor). Cikarilinca arsivden kalkti; ikili boyutu
+// DEGISMEDI, cunku akislari baska bir birim de cekiyor — yine de
+// kullanilmayan bir bagimliligi tasimanin anlami yok.
 #include <unordered_map>
 
 // ============================================================================

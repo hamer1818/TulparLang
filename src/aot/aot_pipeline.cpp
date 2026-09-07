@@ -148,8 +148,24 @@ struct AOTPhaseTimer {
   #define AOT_EXE_SUFFIX ".exe"
   #define AOT_TMP_RUN_BASE ".tulpar_run"
 #else
+  // `-Wl,--as-needed`: KULLANILMAYAN PAYLASIMLI KUTUPHANEYI BAGLAMA.
+  //
+  // Baglanti satiri `-lssl -lcrypto` tasiyor (TLS yerlesikleri icin sart),
+  // ama programlarin cogu TLS kullanmiyor. Bayrak olmadan her ikili
+  // libssl + libcrypto'yu — ve onlarin libz/brotli/zstd bagimliliklarini —
+  // ACILISTA YUKLUYORDU. Olculdu (2026-09-06, pinlenmis): 13 paylasimli
+  // nesne yerine 6; bos program 1,18 -> 0,53 ms, fib 5,21 -> 4,75.
+  //
+  // Bayragin ise yaramasinin SARTI, OpenSSL'e dokunan kodun
+  // `runtime_net.cpp`e ayrilmis olmasi: ayni nesnede kaldigi surece
+  // sembol "kullaniliyor" sayiliyor ve kutuphane dusmuyor.
+  //
+  // `-static-libstdc++` DENENDI VE BIRAKILDI: libstdc++.so'yu yuklememek
+  // acilistan 0,26 ms kazandiriyor ama ikiliyi 2,1 -> 3,8 MB buyutuyor VE
+  // fib'i 4,75 -> 6,35 ms geriletiyor (kod yerlesimi degisiyor; ayni
+  // sinifta bir etki elek'te de olculdu). Net zarar.
   #define AOT_LINK_LIB_FLAGS \
-      "-rdynamic " \
+      "-rdynamic -Wl,--as-needed " \
       "-ltulpar_runtime -lm -lpthread -ldl" AOT_TLS_LINK_FLAGS
   #define AOT_LINK_PIE_FLAG "-no-pie"
   #define AOT_EXE_SUFFIX ""

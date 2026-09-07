@@ -1017,6 +1017,54 @@ Ayrıca sonda programı bilerek **yalnız** doldurma döngüsünden ibaret:
 bir indirgeme eklenirse o vektörleşir ve denetim yanlış yere yeşil
 kalır.
 
+## 6s. Kıyas süresinin YARISI programın kendisi değildi
+
+`print(1)` yazan bir Tulpar ikilisi **1,15 ms** sürüyordu; aynı işi yapan C
+programı 0,41. Bu vergi HER kıyasta vardı ve kimse ölçmemişti —
+`arrayiter`in 2,2 ms'sinin yarısı, `fib`in dörtte biri.
+
+Sebep bizim `aot_runtime_init`imiz değil (o ~0,08 ms). Bileşen bileşen
+ölçüldü (2026-09-06, pinlenmiş, boş programlar):
+
+| ikili | ms |
+|---|---|
+| düz C | 0,41 |
+| C++ (libstdc++.so dinamik) | 0,72 |
+| C + OpenSSL | 0,80 |
+| C++ + OpenSSL | 1,00 |
+| **Tulpar** | **1,08** |
+
+Yani süre **paylaşımlı kütüphane yüklemekten** geliyordu. `print(1)` yazan
+bir ikili **13 paylaşımlı nesne** açıyordu: libssl, libcrypto ve onların
+libz/brotli/zstd bağımlılıkları dahil.
+
+**Neden:** `runtime_bindings.cpp` — HER AOT ikilisine giren nesne —
+OpenSSL'e doğrudan dokunuyordu (TLS sunucu primitifleri + HTTP istemcisi).
+Bağlayıcı bir arşiv üyesini yalnız ihtiyaç duyulan bir sembolü tanımladığı
+için içeri alır; o nesne her zaman gerektiği için OpenSSL de her zaman
+gerekiyordu.
+
+**Çözüm iki parça ve İKİSİ BİRDEN şart:**
+1. OpenSSL'e dokunan kod ayrı bir derleme birimine (`src/vm/runtime_net.cpp`).
+2. Bağlantıya `-Wl,--as-needed`.
+
+Yalnız (2) işe yaramaz: sembol kullanıldığı sürece kütüphane düşmez.
+Yalnız (1) de yaramaz: `-lssl -lcrypto` bayrakları satırda durduğu için
+DT_NEEDED yine yazılır.
+
+Sonuç: 13 → 6 paylaşımlı nesne, boş program 1,15 → 0,76 ms, fib
+5,08 → 4,54. İkili boyutu değişmedi.
+
+**Kural:** çalışma zamanına dışarıdan bir kütüphaneye dokunan kod
+eklerken onu ayrı bir TU'ya koy. Aynı sorun SQLite için hâlâ duruyor —
+her ikili 636 KB SQLite taşıyor (boyut; hız değil, statik).
+
+### `-static-libstdc++` denendi ve BIRAKILDI
+Açılıştan 0,26 ms daha kazandırıyor (libstdc++.so da yüklenmiyor) ama:
+ikili 2,1 → 3,8 MB **ve fib 4,75 → 6,35 ms**. Kod yerleşimi değişiyor;
+aynı sınıfta açıklanamayan bir yerleşim etkisi elek'te de ölçüldü
+(bkz. Performance.md). Net zarar.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.

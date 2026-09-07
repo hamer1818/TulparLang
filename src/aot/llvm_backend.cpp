@@ -8826,7 +8826,8 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     const char *w_ivar = nullptr, *w_ub = nullptr, *w_step = nullptr;
     int w_incl = 0;
     const char *w_saved_ivar[4] = {nullptr, nullptr, nullptr, nullptr};
-    if (backend->shape_count > 0 && backend->loop_depth == 0 &&
+    if (backend->shape_count > 0 &&
+        (backend->loop_depth == 0 || getenv("TULPAR_X_NEST")) &&
         tulpar_while_index_proven(node->condition, node->body, &w_ivar, &w_ub,
                                   &w_step, &w_incl)) {
       LLVMValueRef ok = nullptr;
@@ -8878,7 +8879,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           backend->shape_cache[i].proven_ivar = w_saved_ivar[i];
 
         LLVMPositionBuilderAtEnd(backend->builder, wb_gen);
-        codegen_while_body(backend, node, wb_done);
+        if (getenv("TULPAR_X_ONLYFAST"))
+          LLVMBuildBr(backend->builder, wb_done);   /* DENEY: genel surum YOK */
+        else
+          codegen_while_body(backend, node, wb_done);
 
         LLVMPositionBuilderAtEnd(backend->builder, wb_done);
         backend->shape_count = shape_saved;
