@@ -756,3 +756,58 @@ Yani elekteki açığın çoğu bizim ürettiğimiz IR'da değil, LLVM'in arka u
 Bu kazının asıl getirisi hız değil, `int y = yan() + 0;` ifadesinin fonksiyonu
 İKİ KEZ çağırdığının bulunması oldu. Bkz. [[Tuzaklar]] 6x.
 
+## Elek: 5. sıradan 2. sıraya — çağrıyı IR'DEN kaldırmak (2026-09-08)
+
+Bir önceki bölüm "elek bitti" diyordu. **Yanlıştı** — teşhis doğruydu ama
+çözüm yolu denenmemişti. Teşhis şuydu: dış döngüde (5M yineleme)
+`f[i] == 0` karşılaştırmasının geri düşüş dalında `vm_binary_op` çağrısı
+duruyor; çalışma zamanında hiç yürütülmüyor ama IR'de olduğu için LLVM
+`i` ve `n`'i yazmaçta tutamıyor.
+
+Çözüm çağrıyı **hiç üretmemek**. Üç parça gerekti; hiçbiri tek başına yetmiyor:
+
+1. **Kutulu ikili işlem artık TİPLİ YOLU önce soruyor.** `codegen_expression`
+   AST_BINARY_OP'ta koşulsuz etiket makinesi üretiyordu (iki tag okuması, dört
+   temel blok, geri düşüş çağrısı). Artık `codegen_typed_expr`e soruyor; iki
+   operand da statik int ise düz i64 işlem çıkıyor.
+2. **`codegen_typed_expr` dizi erişimini öğrendi.** Kanıtlı (`shape_access_proven`)
+   okuma ham i64'tür; kutulanmasına gerek yok. Önce yalnız literal /
+   tanımlayıcı / çağrı / ikili işlem tanınıyordu.
+3. **`while` kanıtı sabit adımı kabul ediyor.** `stmt_is_step` adımın bir AD
+   olmasını şart koşuyordu ("sabit adım zaten `for` kanıtında") — ama `for`
+   kanıtı yalnız `for` döngülerine bakıyor. `while (i <= n) { ...; i = i + 1; }`
+   ikisinin de dışında kalıyordu ve **hiç sürümlenmiyordu**; elek'in dış
+   döngüsü tam bu biçimde. Sabit adım üstelik daha kolay: `STEP > 0` sınavı
+   derleme zamanında katlanıyor.
+
+### Sonuç
+Dış döngü **11 komut / 3 bellek erişimi → 6 komut**:
+
+```
+inc  %rsi                 ; i++            (yazmaçta)
+mov  %rsi,0x0(%rbp)       ; i -> global
+cmp  %rdx,%rsi            ; i <= n         (n YAZMAÇTA)
+jg   ...
+cmpq $0x0,(%r14,%rsi,8)   ; f[i] == 0      (etiket makinesi YOK)
+jne  ...
+```
+
+gcc'nin karşılığı 5 komut (tek fark: `i` bizde global olduğu için yazılıyor).
+
+| | ms |
+|---|--:|
+| Tulpar önceki | 8,43 |
+| **Tulpar yeni** | **8,06** |
+| gcc -O2, **8 bayt** eleman | 8,19 |
+| gcc -O2, 4 bayt eleman | 7,51 |
+
+**Aynı eleman genişliğinde gcc'yi geçiyoruz.** Resmî koşumda elek 8,1 —
+5. sıradan **2. sıraya**; C++ (8,4), Rust (8,3) ve Go (8,8) geride, yalnız
+C (7,9) önde ve fark 0,2 ms. O 0,2, C'nin `int*` (4 bayt) kullanmasından
+geliyor — i32 ölçümüyle (0,19) birebir tutuyor.
+
+### Ders
+"LLVM tavanındayız" sonucuna varmadan önce, sıcak döngüde **çalışmayan ama
+duran** bir çağrı olup olmadığına bak. Ölü bir dal bile optimize ediciyi
+durduruyor; onu kaldırmak çağrının süresinden fazlasını geri veriyor.
+

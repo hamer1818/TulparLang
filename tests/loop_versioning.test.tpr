@@ -680,4 +680,171 @@ test("while: float eleman yazmasi", "run_while_float_yazma");
 test("while: break", "run_while_break");
 test("while: kanitli okuma", "run_while_okuma");
 test("while: buyuk dizi", "run_while_buyuk");
+// --- SABIT ADIMLI `while` (2026-09-08) ------------------------------------
+// `while (i <= n) { ...; i = i + 1; }` — adim bir AD degil SABIT. Kanit bunu
+// REDDEDIYORDU ("sabit adim zaten `for` kanitinda"), ama `for` kaniti yalniz
+// `for` dongulerine bakiyor; bu bicim ikisinin de disinda kaliyordu ve hic
+// surumlenmiyordu. Elek'in DIS dongusu tam bu bicimde.
+
+func run_wsabit_temel() {
+    int[] a = array_fill(10, 3);
+    int t = 0;
+    int i = 0;
+    int ub = 9;
+    while (i <= ub) { t = t + a[i]; i = i + 1; }
+    assert_eq_int(t, 30);
+}
+
+// Adim > 1 sabit.
+func run_wsabit_adim2() {
+    int[] a = array_fill(10, 2);
+    int t = 0;
+    int i = 0;
+    int ub = 9;
+    while (i <= ub) { t = t + a[i]; i = i + 2; }
+    assert_eq_int(t, 10);
+}
+
+// `<` bicimi (kapsamayan sinir).
+func run_wsabit_kucuk() {
+    int[] a = array_fill(8, 5);
+    int t = 0;
+    int i = 0;
+    int n = 8;
+    while (i < n) { t = t + a[i]; i = i + 1; }
+    assert_eq_int(t, 40);
+}
+
+// SINIR DIZIDEN BUYUK: hizli surum KOSMAMALI, genel surum dogru olmali.
+// (Hizli surum kossaydi bekcisiz erisim dizinin disina cikardi.)
+func run_wsabit_sinir_asiyor() {
+    int[] a = array_fill(4, 1);
+    int t = 0;
+    int i = 0;
+    int ub = 3;
+    while (i <= ub) { t = t + a[i]; i = i + 1; }
+    assert_eq_int(t, 4);
+    // ub artik diziden buyuk: kanit sinavi (UB < count) dusmeli
+    int[] b = array_fill(4, 1);
+    int u = 0;
+    int j = 0;
+    int ub2 = 10;
+    int say = 0;
+    while (j <= ub2) {
+        if (j < 4) { u = u + b[j]; say = say + 1; }
+        j = j + 1;
+    }
+    assert_eq_int(u, 4);
+    assert_eq_int(say, 4);
+}
+
+// NEGATIF baslangic: kanit v >= 0 sinavini yapmali.
+func run_wsabit_negatif_baslangic() {
+    int[] a = array_fill(5, 2);
+    int t = 0;
+    int i = -3;
+    int ub = 4;
+    while (i <= ub) {
+        if (i >= 0) { t = t + a[i]; }
+        i = i + 1;
+    }
+    assert_eq_int(t, 10);
+}
+
+// KUTULU dizi: hizli surum kosarsa idata NULL'dur ve program coker.
+func run_wsabit_kutulu() {
+    array c = [1, "iki", 3];
+    int v = 0;
+    int i = 0;
+    int ub = 2;
+    while (i <= ub) {
+        if (i != 1) { v = v + c[i]; }
+        i = i + 1;
+    }
+    assert_eq_int(v, 4);
+}
+
+// Sabit adimli yazma: kanitli eleman yazmasi da dogru olmali.
+func run_wsabit_yazma() {
+    int[] a = array_fill(6, 0);
+    int i = 0;
+    int ub = 5;
+    while (i <= ub) { a[i] = i * 2; i = i + 1; }
+    assert_eq_int(a[0], 0);
+    assert_eq_int(a[3], 6);
+    assert_eq_int(a[5], 10);
+}
+
+// SINIR govdede degisiyor: kanit reddetmeli (bir kezlik sinav bayatlar).
+func run_wsabit_sinir_degisiyor() {
+    int[] a = array_fill(6, 1);
+    int t = 0;
+    int i = 0;
+    int ub = 5;
+    while (i <= ub) {
+        t = t + a[i];
+        if (i == 2) { ub = 3; }
+        i = i + 1;
+    }
+    assert_eq_int(t, 4);
+}
+
+// SINIRDA: UB tam olarak son gecerli indeks. Kanit `UB < count` sinavini
+// yapiyor; bir fazlasi (UB == count) hizli surumu KAPATMALI, bu ise ACMALI.
+// Iki durumu birlikte sinamak, sinavin `<=` ile `<` arasinda kaymadigini
+// gosteren tek sey.
+func run_wsabit_tam_sinir() {
+    int[] a = array_fill(7, 4);
+    int t = 0;
+    int i = 0;
+    int ub = 6;                 // == count-1, hizli surum acilmali
+    while (i <= ub) { t = t + a[i]; i = i + 1; }
+    assert_eq_int(t, 28);
+
+    int[] b = array_fill(7, 4);
+    int u = 0;
+    int j = 0;
+    int ub2 = 7;                // == count, hizli surum KAPANMALI
+    while (j <= ub2) {
+        if (j < 7) { u = u + b[j]; }
+        j = j + 1;
+    }
+    assert_eq_int(u, 28);
+}
+
+// Adim 3: son yineleme diziyi TASMAMALI.
+func run_wsabit_adim3() {
+    int[] a = array_fill(10, 1);
+    int t = 0;
+    int i = 0;
+    int ub = 9;
+    while (i <= ub) { t = t + a[i]; i = i + 3; }
+    assert_eq_int(t, 4);
+}
+
+// BREAK: erken cikis kanitli erisimi bozmamali.
+func run_wsabit_break() {
+    int[] a = array_fill(10, 3);
+    int t = 0;
+    int i = 0;
+    int ub = 9;
+    while (i <= ub) {
+        if (i == 4) { break; }
+        t = t + a[i];
+        i = i + 1;
+    }
+    assert_eq_int(t, 12);
+}
+
+test("while sabit adim: temel", "run_wsabit_temel");
+test("while sabit adim: adim 2", "run_wsabit_adim2");
+test("while sabit adim: `<` bicimi", "run_wsabit_kucuk");
+test("while sabit adim: sinir diziden buyuk", "run_wsabit_sinir_asiyor");
+test("while sabit adim: negatif baslangic", "run_wsabit_negatif_baslangic");
+test("while sabit adim: kutulu dizi", "run_wsabit_kutulu");
+test("while sabit adim: kanitli yazma", "run_wsabit_yazma");
+test("while sabit adim: sinir degisiyor", "run_wsabit_sinir_degisiyor");
+test("while sabit adim: tam sinir", "run_wsabit_tam_sinir");
+test("while sabit adim: adim 3", "run_wsabit_adim3");
+test("while sabit adim: break", "run_wsabit_break");
 test_summary();

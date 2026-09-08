@@ -5,40 +5,40 @@
       "desc": "tamsay\u0131 aritmeti\u011fi (zincirleme ba\u011f\u0131ml\u0131l\u0131k)",
       "rows": {
         "c": {
-          "best": 134.8,
-          "median": 135.2
+          "best": 134.5,
+          "median": 134.6
         },
         "cpp": {
-          "best": 134.8,
-          "median": 135.2
+          "best": 135.0,
+          "median": 135.1
         },
         "rust": {
-          "best": 144.1,
-          "median": 144.4
+          "best": 144.2,
+          "median": 144.3
         },
         "go": {
-          "best": 134.7,
-          "median": 135.0
+          "best": 134.9,
+          "median": 136.0
         },
         "csharp": {
-          "best": 149.2,
-          "median": 149.7
+          "best": 149.6,
+          "median": 150.6
         },
         "java": {
-          "best": 144.4,
-          "median": 145.3
+          "best": 146.3,
+          "median": 147.1
         },
         "node": {
           "best": 710.1,
-          "median": 715.1
+          "median": 714.5
         },
         "python": {
-          "best": 3128.4,
-          "median": 3175.4
+          "best": 3145.2,
+          "median": 3253.1
         },
         "tulpar": {
-          "best": 134.5,
-          "median": 134.6
+          "best": 135.5,
+          "median": 136.3
         }
       },
       "output": "723378784",
@@ -54,35 +54,35 @@
         },
         "cpp": {
           "best": 1.9,
-          "median": 1.9
+          "median": 2.0
         },
         "rust": {
-          "best": 3.7,
-          "median": 3.8
+          "best": 3.8,
+          "median": 3.9
         },
         "go": {
-          "best": 6.6,
-          "median": 6.7
+          "best": 6.7,
+          "median": 6.8
         },
         "csharp": {
-          "best": 20.3,
-          "median": 20.4
+          "best": 20.7,
+          "median": 21.1
         },
         "java": {
-          "best": 12.6,
-          "median": 12.8
+          "best": 13.3,
+          "median": 13.7
         },
         "node": {
-          "best": 24.6,
-          "median": 25.5
+          "best": 26.4,
+          "median": 28.6
         },
         "python": {
           "best": 141.7,
-          "median": 144.7
+          "median": 145.1
         },
         "tulpar": {
           "best": 0.6,
-          "median": 0.6
+          "median": 0.7
         }
       },
       "output": "2178309",
@@ -93,40 +93,40 @@
       "desc": "dizi/bellek eri\u015fimi",
       "rows": {
         "c": {
-          "best": 7.5,
-          "median": 7.7
-        },
-        "cpp": {
           "best": 7.9,
           "median": 8.0
+        },
+        "cpp": {
+          "best": 8.4,
+          "median": 8.9
         },
         "rust": {
           "best": 8.3,
           "median": 8.6
         },
         "go": {
-          "best": 8.3,
+          "best": 8.8,
           "median": 8.8
         },
         "csharp": {
-          "best": 20.9,
-          "median": 21.7
+          "best": 22.6,
+          "median": 22.8
         },
         "java": {
-          "best": 20.2,
-          "median": 20.5
+          "best": 22.9,
+          "median": 25.7
         },
         "node": {
-          "best": 27.8,
-          "median": 29.0
+          "best": 30.3,
+          "median": 31.8
         },
         "python": {
-          "best": 450.8,
-          "median": 452.6
+          "best": 452.2,
+          "median": 475.9
         },
         "tulpar": {
-          "best": 8.4,
-          "median": 9.1
+          "best": 8.1,
+          "median": 9.0
         }
       },
       "output": "348513",
@@ -137,40 +137,40 @@
       "desc": "dizgi kurma + tarama",
       "rows": {
         "c": {
-          "best": 37.8,
-          "median": 38.3
+          "best": 38.1,
+          "median": 38.5
         },
         "cpp": {
-          "best": 14.7,
-          "median": 14.8
+          "best": 14.9,
+          "median": 15.3
         },
         "rust": {
-          "best": 18.6,
-          "median": 18.9
+          "best": 19.0,
+          "median": 19.1
         },
         "go": {
-          "best": 24.6,
-          "median": 25.3
+          "best": 25.1,
+          "median": 25.7
         },
         "csharp": {
-          "best": 29.1,
-          "median": 30.0
+          "best": 31.3,
+          "median": 32.4
         },
         "java": {
-          "best": 32.1,
-          "median": 32.7
+          "best": 34.9,
+          "median": 35.4
         },
         "node": {
-          "best": 99.9,
-          "median": 102.4
+          "best": 101.4,
+          "median": 105.4
         },
         "python": {
-          "best": 197.9,
-          "median": 203.6
+          "best": 201.1,
+          "median": 205.4
         },
         "tulpar": {
-          "best": 13.0,
-          "median": 13.3
+          "best": 13.5,
+          "median": 13.8
         }
       },
       "output": "7780000 2000000",
@@ -181,40 +181,40 @@
       "desc": "dizi yineleme (deyimsel uzunlukla)",
       "rows": {
         "c": {
-          "best": 2.1,
-          "median": 2.3
+          "best": 2.2,
+          "median": 2.7
         },
         "cpp": {
-          "best": 2.7,
-          "median": 3.6
+          "best": 3.0,
+          "median": 3.4
         },
         "rust": {
-          "best": 1.6,
-          "median": 1.7
+          "best": 2.2,
+          "median": 2.5
         },
         "go": {
-          "best": 3.6,
-          "median": 4.2
+          "best": 3.8,
+          "median": 4.6
         },
         "csharp": {
-          "best": 18.2,
-          "median": 18.5
+          "best": 19.2,
+          "median": 20.1
         },
         "java": {
-          "best": 17.5,
-          "median": 19.2
+          "best": 20.0,
+          "median": 21.4
         },
         "node": {
-          "best": 18.3,
-          "median": 19.1
+          "best": 21.2,
+          "median": 22.0
         },
         "python": {
           "best": 404.8,
-          "median": 408.5
+          "median": 410.1
         },
         "tulpar": {
-          "best": 1.5,
-          "median": 1.9
+          "best": 1.8,
+          "median": 2.3
         }
       },
       "output": "12499997500000",
@@ -222,12 +222,12 @@
     }
   },
   "baseline": {
-    "c": 0.18698200074140914,
-    "python": 5.821022999953129,
-    "node": 10.54932000079134,
-    "cpp": 0.4719829994428437,
-    "csharp": 8.227247999457177,
-    "tulpar": 0.25736800125741865
+    "c": 0.15922700004011858,
+    "python": 5.736782000894891,
+    "node": 11.012855000444688,
+    "cpp": 0.43642099990393035,
+    "csharp": 8.50915199953306,
+    "tulpar": 0.289518000499811
   },
   "repeats": 7
 }

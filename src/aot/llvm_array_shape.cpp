@@ -400,8 +400,15 @@ extern "C" int tulpar_loop_index_proven(ASTNode_C *init, ASTNode_C *cond,
 // SONRAKI erisimler artmis v ile UB'yi asabilirdi:
 //     while (k <= n) { k = k + i; f[k] = 1; }   // f[n+i] okur — REDDEDILIR
 static bool stmt_is_step(ASTNode_C *st, const char *ivar,
-                         const char **step_name) {
-  // `v = v + STEP`  (STEP bir AD; sabit adimli bicim zaten `for` kanitinda)
+                         const char **step_name, long long *step_const) {
+  // `v = v + STEP` — STEP ya bir AD ya da POZITIF bir int sabiti.
+  //
+  // Sabit adim once REDDEDILIYORDU ("sabit adimli bicim zaten `for`
+  // kanitinda" diye), ama `for` kaniti yalniz `for` dongulerine bakiyor.
+  // `while (i <= n) { ...; i = i + 1; }` her iki kanitin da disinda kaliyordu
+  // — elek'in DIS dongusu tam bu bicimde ve hic surumlenmiyordu.
+  // Sabit adim ustelik daha kolay: `STEP > 0` sinavi derleme zamaninda
+  // katlaniyor, dongu basina hicbir sey binmiyor.
   if (!st || st->type != AST_ASSIGNMENT || !st->name || st->left) return false;
   if (strcmp(st->name, ivar) != 0) return false;
   ASTNode_C *r = st->right;
@@ -410,15 +417,23 @@ static bool stmt_is_step(ASTNode_C *st, const char *ivar,
   if (!a || !b || a->type != AST_IDENTIFIER || !a->name ||
       strcmp(a->name, ivar) != 0)
     return false;
-  if (b->type != AST_IDENTIFIER || !b->name) return false;
-  *step_name = b->name;
-  return true;
+  if (b->type == AST_IDENTIFIER && b->name) {
+    *step_name = b->name;
+    return true;
+  }
+  if (b->type == AST_INT_LITERAL && b->value.int_value > 0) {
+    *step_name = nullptr;
+    *step_const = b->value.int_value;
+    return true;
+  }
+  return false;
 }
 
 extern "C" int tulpar_while_index_proven(ASTNode_C *cond, ASTNode_C *body,
                                          const char **ivar_out,
                                          const char **ub_out,
                                          const char **step_out,
+                                         long long *step_const_out,
                                          int *inclusive_out) {
   if (!cond || !body) return 0;
 
@@ -439,9 +454,11 @@ extern "C" int tulpar_while_index_proven(ASTNode_C *cond, ASTNode_C *body,
       !body->statements)
     return 0;
   const char *step = nullptr;
-  if (!stmt_is_step(body->statements[body->statement_count - 1], ivar, &step))
+  long long step_const = 0;
+  if (!stmt_is_step(body->statements[body->statement_count - 1], ivar, &step,
+                    &step_const))
     return 0;
-  if (strcmp(step, ivar) == 0) return 0;
+  if (step && strcmp(step, ivar) == 0) return 0;
 
   // v BASKA hicbir yerde atanmamali. Son ifadeden ONCEKI her ifade taraniyor.
   //
@@ -459,7 +476,8 @@ extern "C" int tulpar_while_index_proven(ASTNode_C *cond, ASTNode_C *body,
 
   // UB ve STEP dongu boyunca DEGISMEMELI, yoksa bir kezlik sinav bayatlar.
   if (tulpar_loop_rebinds_name(cond, body, nullptr, ub)) return 0;
-  if (tulpar_loop_rebinds_name(cond, body, nullptr, step)) return 0;
+  // Sabit adimda yeniden baglanma sorusu anlamsiz (sabitin adi yok).
+  if (step && tulpar_loop_rebinds_name(cond, body, nullptr, step)) return 0;
 
   // Kutulayabilen eleman yazmasi olmamali (for kanitiyla ayni kural).
   WriteCtx wc{IntCtx{ivar}, false};
@@ -470,6 +488,7 @@ extern "C" int tulpar_while_index_proven(ASTNode_C *cond, ASTNode_C *body,
   if (ivar_out) *ivar_out = ivar;
   if (ub_out) *ub_out = ub;
   if (step_out) *step_out = step;
+  if (step_const_out) *step_const_out = step_const;
   if (inclusive_out) *inclusive_out = incl;
   return 1;
 }

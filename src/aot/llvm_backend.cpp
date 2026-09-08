@@ -3142,6 +3142,14 @@ LLVMValueRef box_typed_value(LLVMBackend *backend, TypedValue tv) {
   }
 }
 
+// Sekil onbellegi yardimcilari — tanimlari asagida; codegen_typed_expr'in
+// AST_ARRAY_ACCESS dali bunlari daha once kullaniyor.
+static const char *array_base_name(ASTNode_C *n);
+static bool shape_access_proven(const LLVMBackend::ArrShapeEntry *shp,
+                                ASTNode_C *idx);
+static LLVMBackend::ArrShapeEntry *shape_lookup(LLVMBackend *backend,
+                                                const char *name);
+
 // Kutulu ikili islem uretimi — operandlar HAZIR gelir.
 //
 // Ayri fonksiyon olmasinin sebebi bir DOGRULUK HATASI: codegen_typed_expr'in
@@ -3687,6 +3695,44 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
         result.value = result.boxed;
       }
     }
+    return result;
+  }
+
+  case AST_ARRAY_ACCESS: {
+    // KANITLI eleman okumasi ham i64'tur — kutulamaya gerek yok.
+    //
+    // Bu dal olmadan `a[i] == 0` gibi bir ifade, dizi KANITLA kutusuz olsa
+    // bile tam kutulu karsilastirmayi uretiyordu: iki etiket okumasi, dort
+    // temel blok ve `vm_binary_op` geri dusus CAGRISI. Cagri calisma
+    // zamaninda hic yurutulmuyor ama IR'de durdugu icin cevresindeki dongude
+    // LLVM degismezleri yazmacta tutamiyor (elek'in dis dongusu `i` ve `n`'i
+    // her yinelemede bellekten okuyordu).
+    //
+    // YALNIZ kanitli erisim: sekil onbellegi + dongu surumlemesi indeksi
+    // sinirlar icinde ve diziyi kutusuz kanitlamis olmali. Kanitsiz erisimin
+    // sonucu calisma zamaninda kutulu olabilir (float eleman, kutulu dizi),
+    // yani statik olarak int diyemeyiz.
+    LLVMBackend::ArrShapeEntry *tshp =
+        shape_lookup(backend, array_base_name(node));
+    if (tshp && shape_access_proven(tshp, node->index)) {
+      LLVMValueRef tidx = codegen_expression(backend, node->index);
+      if (tidx) {
+        LLVMValueRef tid = LLVMBuildLoad2(backend->builder, backend->ptr_type,
+                                          tshp->idata_slot, "tarr.pid");
+        LLVMValueRef tix = llvm_extract_vm_val_int(backend, tidx);
+        LLVMValueRef tep = LLVMBuildGEP2(backend->builder, backend->int_type,
+                                         tid, &tix, 1, "tarr.pep");
+        LLVMValueRef traw = LLVMBuildLoad2(backend->builder, backend->int_type,
+                                           tep, "tarr.praw");
+        llvm_tbaa_tag(backend, traw, 1);
+        result.value = traw;
+        result.type = INFERRED_INT;
+        return result;
+      }
+    }
+    // Kanitli degil: kutulu yola dus.
+    result.boxed = codegen_expression(backend, node);
+    result.value = result.boxed;
     return result;
   }
 
@@ -5063,9 +5109,24 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   }
 
   case AST_BINARY_OP: {
-    LLVMValueRef L = codegen_expression(backend, node->left);
-    LLVMValueRef R = codegen_expression(backend, node->right);
-    return emit_boxed_binary_op(backend, node, L, R);
+    // TIPLI YOLU ONCE SOR. Iki operand da STATIK olarak int ise (tipli yerel,
+    // native int global, int literal, native ABI cagrisi, ya da yine tipli bir
+    // ikili islem) butun etiket makinesi gereksiz: iki tag okumasi, iki
+    // karsilastirma, dort temel blok ve — en pahalisi — `vm_binary_op` geri
+    // dusus CAGRISI hic uretilmiyor.
+    //
+    // Cagrinin kendi maliyeti degil, VARLIGI pahali: opak bir cagri her seyi
+    // yazabilir sayildigi icin cevresindeki dongude LLVM degismezleri yazmacta
+    // tutamiyor. Elek'in dis dongusu tam bu yuzden `i` ve `n`'i her yinelemede
+    // BELLEKTEN okuyordu — cagri calisma zamaninda hic yurutulmedigi halde.
+    //
+    // codegen_typed_expr'in AST_BINARY_OP dali zaten "ikisi de int mi" testini
+    // yapiyor ve degilse emit_boxed_binary_op'a dusuyor; yani burada tek
+    // yapilacak sey ona sormak ve sonucu kutulamak. Operandlar TEK KEZ
+    // uretiliyor (bkz. Tuzaklar 6x).
+    TypedValue tv = codegen_typed_expr(backend, node);
+    LLVMValueRef boxed = box_typed_value(backend, tv);
+    return boxed ? boxed : llvm_vm_val_int(backend, 0);
   }
 
   case AST_AWAIT: {
@@ -8944,16 +9005,22 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
     // o yuzden proven_ivar KAYDEDILIP geri yukleniyor.
     int wver = 0;
     const char *w_ivar = nullptr, *w_ub = nullptr, *w_step = nullptr;
+    long long w_step_const = 0;
     int w_incl = 0;
     const char *w_saved_ivar[4] = {nullptr, nullptr, nullptr, nullptr};
     if (backend->shape_count > 0 &&
         (backend->loop_depth == 0 || getenv("TULPAR_X_NEST")) &&
         tulpar_while_index_proven(node->condition, node->body, &w_ivar, &w_ub,
-                                  &w_step, &w_incl)) {
+                                  &w_step, &w_step_const, &w_incl)) {
       LLVMValueRef ok = nullptr;
       LLVMValueRef v_val = load_loop_int(backend, w_ivar, &ok);
       LLVMValueRef ub_val = load_loop_int(backend, w_ub, &ok);
-      LLVMValueRef st_val = load_loop_int(backend, w_step, &ok);
+      // Adim SABIT ise adi yok: dogrudan sabiti kullan. `STEP > 0` sinavi da
+      // boylece derleme zamaninda katlaniyor.
+      LLVMValueRef st_val =
+          w_step ? load_loop_int(backend, w_step, &ok)
+                 : LLVMConstInt(backend->int_type,
+                                (unsigned long long)w_step_const, 0);
       if (v_val && ub_val && st_val) wver = 1;
       if (wver) {
         LLVMValueRef zero = LLVMConstInt(backend->int_type, 0, 0);
