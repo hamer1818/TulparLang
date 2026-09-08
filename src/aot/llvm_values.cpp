@@ -192,13 +192,25 @@ LLVMValueRef llvm_convert_ret_pair_to_vmvalue(LLVMBackend *backend,
 // pointer. Bu yüzden seçim derleme-zamanı #if yerine çalışma zamanında
 // yapılır: Windows'ta hep sret; diğer host'larda backend->target_web
 // işaretliyse sret (emcc'nin derlediği runtime'la eşleşir), değilse SysV.
-static int vmvalue_abi_uses_sret(const LLVMBackend *backend) {
+int vmvalue_abi_uses_sret(const LLVMBackend *backend) {
 #if PLATFORM_WINDOWS
   (void)backend;
   return 1;
 #else
   return backend->target_web;
 #endif
+}
+
+// VMValue -> ABI cifti ({i64,i64}). Bellek uzerinden tip donusumu: standart
+// C "pointer cast ile type-pun" kalibi; alloca + store + load, optimize edici
+// iki yarinin da yazmacta kaldigini kanitlayabildiginde tamamen kayboluyor.
+LLVMValueRef llvm_vmvalue_to_ret_pair(LLVMBackend *backend, LLVMValueRef v) {
+  LLVMValueRef slot = llvm_build_alloca_at_entry(backend,
+                                                 backend->vm_value_type,
+                                                 "vm2pair");
+  LLVMBuildStore(backend->builder, v, slot);
+  return LLVMBuildLoad2(backend->builder, backend->ret_pair_type, slot,
+                        "as_pair");
 }
 
 LLVMValueRef llvm_call_vmvalue_func(LLVMBackend *backend, LLVMValueRef func,

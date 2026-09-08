@@ -461,6 +461,10 @@ LLVMValueRef llvm_build_alloca_at_entry(LLVMBackend *backend, LLVMTypeRef type,
 // Forward declarations
 void codegen_func_def(LLVMBackend *backend, ASTNode_C *node);
 static void predeclare_func_signature(LLVMBackend *backend, ASTNode_C *node);
+static LLVMValueRef emit_boxed_fn_return(LLVMBackend *backend,
+                                         LLVMValueRef vmval);
+static bool boxed_value_abi_eligible(LLVMBackend *backend, ASTNode_C *node);
+static void boxed_fast_name(const char *name, char *out, size_t n);
 static int  selfrec_begin(LLVMBackend *backend, ASTNode_C *fn);
 static void selfrec_finish(LLVMBackend *backend, ASTNode_C *fn, int depth);
 static void selfrec_predeclare(LLVMBackend *backend, ASTNode_C *fn);
@@ -2390,6 +2394,7 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
   backend->func_stack = nullptr;
   backend->loop_depth = 0;
   backend->shape_want32 = -1;   // surumlenmemis: erisim yerinde dallan
+  backend->fn_value_abi = 0;
   backend->try_depth = 0;
   backend->lambda_count = 0;
   backend->function_count = 0;
@@ -7571,6 +7576,40 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           }
         }
 
+        // DEGER ABI'li dogrudan cagri. Kosullar dar tutuldu; disinda kalan
+        // her sey eski isaretci yoluna (sarmalayiciya) gidiyor:
+        //   - `t_<ad>.f` uretilmis olmali (uygunluk: async degil, struct
+        //     parametre/donus yok)
+        //   - arguman sayisi bildirilene ESIT (varsayilan doldurma yok)
+        //   - struct parametre yok
+        // Kazanc: arguman ve donus BELLEKTEN degil YAZMACTAN geciyor.
+        // Olculdu: tipsiz `fib` 11,9 -> ... (asagidaki commit mesajinda).
+        {
+          char ffn[300];
+          boxed_fast_name(node->name, ffn, sizeof(ffn));
+          LLVMValueRef ff = LLVMGetNamedFunction(backend->module, ffn);
+          bool simple = ff && callee_entry &&
+                        callee_entry->param_count == node->argument_count &&
+                        !callee_entry->return_struct_name;
+          if (simple && callee_entry->param_struct_names) {
+            for (int i = 0; i < callee_entry->param_count; i++)
+              if (callee_entry->param_struct_names[i]) { simple = false; break; }
+          }
+          if (simple && !backend->pending_struct_result_ptr) {
+            int n2 = node->argument_count;
+            LLVMValueRef *va = static_cast<LLVMValueRef *>(
+                malloc(sizeof(LLVMValueRef) * (n2 > 0 ? n2 : 1)));
+            for (int i = 0; i < n2; i++) {
+              LLVMValueRef av = codegen_expression(backend, node->arguments[i]);
+              va[i] = av ? av : llvm_vm_val_int(backend, 0);
+            }
+            LLVMValueRef r = llvm_call_vmvalue_func(backend, ff, va,
+                                                    (unsigned)n2, "callf");
+            free(va);
+            return r;
+          }
+        }
+
         // 1. Allocate Result Slot. Entry-hoisted: a recursive function (e.g.
         // fib(n-1) + fib(n-2)) emits this alloca many times per stack frame
         // and unbounded recursion would explode the stack otherwise.
@@ -7863,6 +7902,13 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     LLVMBasicBlockRef prev_block = LLVMGetInsertBlock(backend->builder);
     Scope *prev_scope = backend->current_scope;
     int prev_void_abi = backend->current_function_is_void_abi;
+    // Lambda govdesi ISARETCI ABI'sini kullaniyor (`void(ptr res, ptr env,
+    // ptr args...)`). Bayrak cevreleyen fonksiyondan MIRAS ALINIRSA lambda'nin
+    // `return`u deger dondurmeye calisir ve modul dogrulamasi patlar
+    // ("Found return instr that returns non-void in Function of void return
+    // type"). Govde sinirinda temizleniyor.
+    int prev_lambda_value_abi = backend->fn_value_abi;
+    backend->fn_value_abi = 0;
     const char *prev_returns_struct = backend->current_function_returns_struct;
     LLVMValueRef prev_env_ptr = backend->current_env_ptr;
     LLVMValueRef prev_parent_env = backend->current_parent_env;
@@ -7970,6 +8016,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
     backend->current_function = prev_function;
     backend->current_function_node = prev_func_node;
     backend->current_function_is_void_abi = prev_void_abi;
+    backend->fn_value_abi = prev_lambda_value_abi;
     backend->current_function_returns_struct = prev_returns_struct;
     backend->current_env_ptr = prev_env_ptr;
     backend->current_parent_env = prev_parent_env;
@@ -9637,13 +9684,10 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
             ? codegen_expression(backend, node->return_value)
             : llvm_vm_val_int(backend, 0); // Return 0/Void if no value
 
-    // ABI Change: Store to Result Pointer (Param 0)
-    LLVMValueRef res_ptr = LLVMGetParam(backend->current_function, 0);
-    LLVMBuildStore(backend->builder, ret, res_ptr);
     // Pops go AFTER evaluating the return expression: `return f();` inside a
     // try must still route f's throw to this try's handler.
     emit_try_pops(backend, backend->try_depth);
-    return LLVMBuildRetVoid(backend->builder);
+    return emit_boxed_fn_return(backend, ret);
   }
   case AST_TRY_CATCH: {
     // jmp_buf* buf = aot_try_push()
@@ -10537,6 +10581,9 @@ void codegen_native_func_def(LLVMBackend *backend, ASTNode_C *node) {
 
   LLVMValueRef prev_func = backend->current_function;
   LLVMBasicBlockRef prev_block = LLVMGetInsertBlock(backend->builder);
+  // Native (i64) govde: kutulu deger ABI'si burada gecerli degil.
+  int prev_nat_value_abi = backend->fn_value_abi;
+  backend->fn_value_abi = 0;
   backend->current_function = func;
 
   LLVMBasicBlockRef entry = append_bb(backend, func, "entry");
@@ -11108,6 +11155,37 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
 
   LLVMValueRef prev_func = backend->current_function;
   LLVMBasicBlockRef prev_block = LLVMGetInsertBlock(backend->builder);
+
+  // DEGER ABI: govde `t_<ad>.f`e tasiniyor, `t_<ad>` ince bir SARMALAYICI
+  // oluyor (argumanlari isaretcilerden okur, deger-ABI'li ikizi cagirir,
+  // sonucu sonuc isaretcisine yazar). Sarmalayiciyi call() kayit defteri,
+  // async motoru ve dolayli cagrilar kullaniyor; DOGRUDAN cagrilar `.f`e
+  // gidiyor, yani argumanlar ve donus YAZMACTA geciyor.
+  int prev_value_abi = backend->fn_value_abi;
+  backend->fn_value_abi = 0;
+  {
+    char ffn0[300];
+    boxed_fast_name(node->name, ffn0, sizeof(ffn0));
+    LLVMValueRef ff = LLVMGetNamedFunction(backend->module, ffn0);
+    if (ff && LLVMCountBasicBlocks(ff) == 0) {
+      backend->current_function = func;
+      LLVMBasicBlockRef sh = append_bb(backend, func, "shim");
+      LLVMPositionBuilderAtEnd(backend->builder, sh);
+      int pc3 = node->param_count;
+      LLVMValueRef *sargs = static_cast<LLVMValueRef *>(
+          malloc(sizeof(LLVMValueRef) * (pc3 > 0 ? pc3 : 1)));
+      for (int i = 0; i < pc3; i++)
+        sargs[i] = LLVMBuildLoad2(backend->builder, backend->vm_value_type,
+                                  LLVMGetParam(func, i + 1), "shim.arg");
+      LLVMValueRef sres = llvm_call_vmvalue_func(backend, ff, sargs,
+                                                 (unsigned)pc3, "shim.res");
+      free(sargs);
+      LLVMBuildStore(backend->builder, sres, LLVMGetParam(func, 0));
+      LLVMBuildRetVoid(backend->builder);
+      func = ff;                 // govde artik `.f` icinde
+      backend->fn_value_abi = 1;
+    }
+  }
   backend->current_function = func;
 
   LLVMBasicBlockRef entry = append_bb(backend, func, "entry");
@@ -11224,9 +11302,13 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
       //  To be safe and consistent with AST_VARIABLE_DECL, let's copy to local
       //  alloca)
 
+      // Deger ABI'sinde parametre DEGER olarak geliyor (SysV'de {i64,i64}
+      // cifti); sret hedeflerinde (wasm/Win64) yine isaretci.
       LLVMValueRef val =
-          LLVMBuildLoad2(backend->builder, backend->vm_value_type, arg_ptr,
-                         node->parameters[i]->name);
+          (backend->fn_value_abi && !vmvalue_abi_uses_sret(backend))
+              ? llvm_convert_ret_pair_to_vmvalue(backend, LLVMGetParam(func, i))
+              : LLVMBuildLoad2(backend->builder, backend->vm_value_type,
+                               arg_ptr, node->parameters[i]->name);
 
       // `int x` bildirilmiş bir parametreye bool gelirse etiketi int'e
       // çevriliyor — bildirimdeki (`int x = <bool>`) ile AYNI fonksiyon.
@@ -11266,6 +11348,9 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
 
   // Default return if missing
   if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder))) {
+    if (backend->fn_value_abi && !backend->current_function_returns_struct) {
+      emit_boxed_fn_return(backend, llvm_vm_val_int(backend, 0));
+    } else {
     LLVMValueRef res_ptr = LLVMGetParam(func, 0);
     if (backend->current_function_returns_struct) {
       // Struct-returning function with no explicit return: zero-fill the
@@ -11282,8 +11367,10 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
       LLVMBuildStore(backend->builder, llvm_vm_val_int(backend, 0), res_ptr);
     }
     LLVMBuildRetVoid(backend->builder);
+    }
   }
 
+  backend->fn_value_abi = prev_value_abi;
   backend->current_function_returns_struct = prev_returns_struct;
   backend->func_stack = stack_node.parent;
   backend->current_function_node = prev_func_node;
@@ -11296,6 +11383,45 @@ void codegen_func_def(LLVMBackend *backend, ASTNode_C *node) {
   backend->current_function = prev_func;
   if (prev_block)
     LLVMPositionBuilderAtEnd(backend->builder, prev_block);
+}
+
+// Kutulu fonksiyon DEGER ABI'sine uygun mu?
+//
+// Disarida birakilanlar, hepsi imzaya bagli oldugu icin:
+//   - async: coroutine motoru `t_<ad>`i tam o imzayla cagiriyor
+//   - struct parametre/donus: o yuvalar isaretci ABI'sini ANLAMLI kullaniyor
+//     (sret benzeri yazma), deger gecirmek anlamlarini bozar
+//   - `main`: kutulu ABI'ye zorlanmis durumda
+static bool boxed_value_abi_eligible(LLVMBackend *backend, ASTNode_C *node) {
+  if (!node || node->type != AST_FUNCTION_DECL || !node->name) return false;
+  if (node->is_async) return false;
+  if (strcmp(node->name, "main") == 0) return false;
+  if (node->return_custom_type && *node->return_custom_type) return false;
+  for (int i = 0; i < node->param_count; i++) {
+    ASTNode_C *p = node->parameters[i];
+    if (!p) return false;
+    if (p->data_type == TYPE_CUSTOM) return false;
+  }
+  (void)backend;
+  return true;
+}
+
+// `t_<ad>.f` — govdenin yasadigi deger-ABI'li fonksiyon. `t_<ad>` sarmalayici.
+static void boxed_fast_name(const char *name, char *out, size_t n) {
+  snprintf(out, n, "t_%s.f", name);
+}
+
+// Kutulu fonksiyondan DONUS. Deger ABI'sinde degeri dondur; isaretci
+// ABI'sinde (sarmalayici, sret hedefleri, struct donus) sonuc isaretcisine
+// yaz ve void don.
+static LLVMValueRef emit_boxed_fn_return(LLVMBackend *backend,
+                                         LLVMValueRef vmval) {
+  if (backend->fn_value_abi && !vmvalue_abi_uses_sret(backend))
+    return LLVMBuildRet(backend->builder,
+                        llvm_vmvalue_to_ret_pair(backend, vmval));
+  LLVMValueRef res_ptr = LLVMGetParam(backend->current_function, 0);
+  LLVMBuildStore(backend->builder, vmval, res_ptr);
+  return LLVMBuildRetVoid(backend->builder);
 }
 
 // Pass 1a helper: declare the signature for a single function so that
@@ -11333,6 +11459,29 @@ static void predeclare_func_signature(LLVMBackend *backend, ASTNode_C *node) {
     LLVMTypeRef ft = LLVMFunctionType(backend->void_type, pt, total, 0);
     LLVMValueRef f = LLVMAddFunction(backend->module, fn, ft);
     register_function(backend, node->name, ft);
+    // DEGER ABI'li ikiz: govde burada yasayacak, `t_<ad>` sarmalayici olacak.
+    // Sarmalayicinin imzasi HIC DEGISMIYOR — call() kayit defteri, async
+    // motoru ve wasm sret yolu bu degisikligi gormuyor.
+    if (boxed_value_abi_eligible(backend, node)) {
+      char ffn[300];
+      boxed_fast_name(node->name, ffn, sizeof(ffn));
+      if (!LLVMGetNamedFunction(backend->module, ffn)) {
+        int pc2 = node->param_count;
+        LLVMTypeRef *at = static_cast<LLVMTypeRef *>(
+            malloc(sizeof(LLVMTypeRef) * (pc2 > 0 ? pc2 : 1)));
+        for (int i = 0; i < pc2; i++) at[i] = backend->vm_value_type;
+        LLVMTypeRef fft =
+            llvm_make_vmvalue_func_type(backend, at, (unsigned)pc2, 0);
+        LLVMValueRef ff = LLVMAddFunction(backend->module, ffn, fft);
+        LLVMSetLinkage(ff, LLVMInternalLinkage);
+        LLVMAddAttributeAtIndex(
+            ff, LLVMAttributeFunctionIndex,
+            LLVMCreateEnumAttribute(
+                backend->context,
+                LLVMGetEnumAttributeKindForName("nounwind", 8), 0));
+        free(at);
+      }
+    }
     // Boxed ABI keeps every parameter slot as a generic `ptr`, so struct
     // params/return don't change the LLVM signature — they only change how
     // each pointer is dereferenced. set_function_struct_info records which

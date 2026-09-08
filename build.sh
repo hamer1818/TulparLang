@@ -639,6 +639,37 @@ TPREOF
     echo -e "${GREEN}dizi elemani 32-bit${NC} (kanitli erisim i32)"
     rm -rf "$AW_TMP"
 
+    # KUTULU FONKSİYONLARIN DEĞER ABI'si duruyor mu?
+    #
+    # Kutulu gövde `t_<ad>.f` içinde yaşıyor ve VMValue'yu DEĞER olarak
+    # alıp döndürüyor (SysV'de iki yazmaç); `t_<ad>` ince sarmalayıcı.
+    # Ölçüldü: tipsiz `fib(32)` 11,86 -> 7,69 ms.
+    #
+    # Denetim YAPISAL: ABI sessizce işaretçiye dönse sonuç yine doğru olur,
+    # yalnız 1,5 kat yavaş — `tests/boxed_value_abi.test.tpr` bunu göremez.
+    VA_TMP=$(mktemp -d)
+    cat > "$VA_TMP/va.tpr" <<'TPREOF'
+func topla(a, b) { return a + b; }
+var n = toInt(env("VA_N"));
+if (n <= 0) { n = 20; }
+print(topla(n, 22));
+TPREOF
+    TULPAR_AOT_EMIT_LL=1 ./tulpar build "$VA_TMP/va.tpr" "$VA_TMP/va" >/dev/null 2>&1
+    VA_LL=$(ls "$VA_TMP"/*.ll 2>/dev/null | head -1)
+    if [ -z "$VA_LL" ] || ! grep -q "t_topla\.f" "$VA_LL"; then
+        echo -e "${RED}Kutulu deger ABI'si YOK — tipsiz cagrilar bellekten geciyor!${NC}"
+        rm -rf "$VA_TMP"
+        exit 1
+    fi
+    VA_OUT=$(VA_N=20 "$VA_TMP/va")
+    if [ "$VA_OUT" != "42" ]; then
+        echo -e "${RED}Deger ABI'si YANLIS sonuc verdi: $VA_OUT (42 olmali)${NC}"
+        rm -rf "$VA_TMP"
+        exit 1
+    fi
+    echo -e "${GREEN}kutulu deger ABI'si duruyor${NC} (t_<ad>.f)"
+    rm -rf "$VA_TMP"
+
     # Kod üretimi DENKLİK denetimi: sahne JSON'undan üretilen Tulpar kodu
     # derlenip çalıştırılıyor ve kurduğu sahne yeniden serileştirilerek
     # kaynakla karşılaştırılıyor. "Kod da aynı sahneyi kuruyor" iddiasını

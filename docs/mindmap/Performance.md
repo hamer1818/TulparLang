@@ -923,3 +923,42 @@ Genel yoldan tek bir okuma bile diziyi kutuya çeviriyordu (8 → 16 bayt/eleman
 geri dönüşsüz). Artık genişlik farkında ve kutulamadan okuyup yazıyor; i32'ye
 sığmayan değer diziyi **genişletiyor**, kutulamıyor.
 
+## Kutulu fonksiyonlar DEĞER ABI'sine geçti (2026-09-08)
+
+Tipsiz kod ("Python kadar kolay" yarısı) `void t_f(VMValue* ret, VMValue* a0,
+...)` imzasıyla çağrılıyordu: argümanlar ve dönüş **bellekten** geçiyor,
+`t_fib` 312 baytlık kare açıyordu.
+
+**Çözüm — sarmalayıcı ayrımı:** gövde `t_<ad>.f` adında, VMValue'yu DEĞER
+olarak alıp döndüren bir fonksiyona taşındı (SysV'de `{i64,i64}` = iki
+yazmaç). `t_<ad>` ince bir sarmalayıcı olarak kaldı, böylece **call() kayıt
+defteri, async coroutine motoru ve wasm sret yolu hiç değişmedi**.
+
+Altyapı zaten vardı: `llvm_make_vmvalue_func_type` / `llvm_call_vmvalue_func`
+iki hedefte de doğru ABI'yi kuruyor (SysV çifti · wasm/Win64 sret+byval).
+
+**Ölçüm:** tipsiz `fib(32)` **11,86 → 7,69 ms** (1,54 kat).
+
+### Dar tutulan uygunluk
+Dışarıda kalanlar imzaya bağlı oldukları için: async (coroutine motoru `t_<ad>`i
+tam o imzayla çağırıyor), struct parametre/dönüş (o yuvalar işaretçi ABI'sini
+anlamlı kullanıyor), `main`. Çağrı tarafında ayrıca varsayılan-argüman
+doldurması olan çağrılar sarmalayıcıya gidiyor.
+
+### İlk denemede LAMBDALAR kırıldı
+`fn_value_abi` bayrağı çevreleyen fonksiyondan **miras alınıyordu**, oysa
+lambdalar işaretçi ABI'si kullanıyor. Modül doğrulaması *"Found return instr
+that returns non-void in Function of void return type"* ile düşüyor ve program
+**optimize edilmeden** derleniyordu. Dört closure testi kırmızıya döndü ve
+sebebi oydu. Bayrak artık gövde sınırında temizleniyor.
+
+Ders: bir codegen bayrağı "şu an hangi fonksiyonu üretiyoruz" bilgisini
+taşıyorsa, **iç içe gövde üreten her yol** onu kaydedip geri yüklemeli —
+lambda, native fonksiyon, klon zinciri.
+
+### Yan bulgu: asıl maliyet ABI değildi
+Bu işten önce "kutulamanın çağrı maliyeti 2,4 kat" diye tahmin etmiştim
+(tipsiz fib 11,9 vs tipli-zincirsiz 4,9). ABI düzeltilince 7,69'a indi, yani
+ABI payı ~1,5 kat; kalan fark **kutulu aritmetiğin etiket dağıtımı**. Onu
+kapatacak şey ABI değil, tip özelleştirmesi (`n`in int olduğunu bilmek).
+

@@ -173,6 +173,18 @@ typedef struct {
   // de sicak yolda dalsiz calisiyor. Olculdu (elek): erisim yerinde dallanmak
   // 8,06 -> 8,46 (kayip); surum basina uzmanlastirma 7,5 bandi.
   int shape_want32;
+  // Su an uretilen KUTULU fonksiyon govdesi DEGER ABI'sini mi kullaniyor?
+  //
+  // Kutulu kullanici fonksiyonlari `void t_f(VMValue* ret, VMValue* a0, ...)`
+  // imzasiyla cagriliyor: argumanlar ve donus BELLEKTEN geciyor. Olculdu —
+  // tipsiz `fib` 11,9 ms, tipli zincirsiz ikizi 4,9: kutulamanin gercek cagri
+  // maliyeti 2,4 kat.
+  //
+  // Cozum: govde `t_f.f` adinda, VMValue'yu DEGER olarak alip donduren bir
+  // fonksiyona tasiniyor (SysV'de {i64,i64} cifti = iki yazmac). `t_f` ince
+  // bir SARMALAYICI olarak kaliyor, boylece call() kayit defteri, async
+  // coroutine motoru ve wasm sret yolu HIC DEGISMIYOR.
+  int fn_value_abi;
 
   LLVMMetadataRef tbaa_header;
   LLVMMetadataRef tbaa_elem;
