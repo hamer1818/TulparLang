@@ -3142,6 +3142,490 @@ LLVMValueRef box_typed_value(LLVMBackend *backend, TypedValue tv) {
   }
 }
 
+// Kutulu ikili islem uretimi — operandlar HAZIR gelir.
+//
+// Ayri fonksiyon olmasinin sebebi bir DOGRULUK HATASI: codegen_typed_expr'in
+// AST_BINARY_OP dali once iki operandi tipli olarak uretiyor, tipli yol
+// tutmazsa `codegen_expression(node)` cagirip AYNI operandlari BIR DAHA
+// uretiyordu. Yan etkili bir operand IKI KEZ calisiyordu:
+//
+//     func yan() { sayac = sayac + 1; return 5; }
+//     int y = yan() + 0;      // sayac 2 oluyordu, 1 degil
+//
+// Tipli fonksiyonda (`func yan(): int`) sorun yoktu: orada tipli yol tutuyor
+// ve geri dusus hic calismiyor. Yani hata yalnizca KUTULU operandli karisik
+// ifadelerde goruluyordu — sessiz, cunku sonuc DEGERI dogruydu.
+static LLVMValueRef emit_boxed_binary_op(LLVMBackend *backend, ASTNode_C *node,
+                                         LLVMValueRef L, LLVMValueRef R) {
+  if (!L || !R)
+    return llvm_vm_val_int(backend, 0);
+
+  if (node->op == TOKEN_AND || node->op == TOKEN_OR) {
+    LLVMValueRef l_truthy = llvm_build_is_truthy(backend, L);
+    LLVMValueRef r_truthy = llvm_build_is_truthy(backend, R);
+    LLVMValueRef bool_res =
+        (node->op == TOKEN_AND)
+            ? LLVMBuildAnd(backend->builder, l_truthy, r_truthy, "and_bool")
+            : LLVMBuildOr(backend->builder, l_truthy, r_truthy, "or_bool");
+    return llvm_vm_val_bool_val(backend, bool_res);
+  }
+
+  // Extract types for fast path checking
+  LLVMValueRef l_type =
+      LLVMBuildExtractValue(backend->builder, L, 0, "l_type");
+  LLVMValueRef r_type =
+      LLVMBuildExtractValue(backend->builder, R, 0, "r_type");
+
+  // Check if both are INT (type == 1)
+  LLVMValueRef l_is_int =
+      LLVMBuildICmp(backend->builder, LLVMIntEQ, l_type,
+                    LLVMConstInt(backend->int32_type, 0, 0), "l_int");  // VM_VAL_INT = 0
+  LLVMValueRef r_is_int =
+      LLVMBuildICmp(backend->builder, LLVMIntEQ, r_type,
+                    LLVMConstInt(backend->int32_type, 0, 0), "r_int");  // VM_VAL_INT = 0
+  LLVMValueRef both_int =
+      LLVMBuildAnd(backend->builder, l_is_int, r_is_int, "both_int");
+
+  // Check if both are FLOAT (type == 2)
+  LLVMValueRef l_is_float =
+      LLVMBuildICmp(backend->builder, LLVMIntEQ, l_type,
+                    LLVMConstInt(backend->int32_type, 1, 0), "l_float");  // VM_VAL_FLOAT = 1
+  LLVMValueRef r_is_float =
+      LLVMBuildICmp(backend->builder, LLVMIntEQ, r_type,
+                    LLVMConstInt(backend->int32_type, 1, 0), "r_float");  // VM_VAL_FLOAT = 1
+  LLVMValueRef both_float =
+      LLVMBuildAnd(backend->builder, l_is_float, r_is_float, "both_float");
+
+  LLVMValueRef func = backend->current_function;
+  LLVMBasicBlockRef int_block = append_bb(backend, func, "op_int");
+  LLVMBasicBlockRef float_block = append_bb(backend, func, "op_float");
+  LLVMBasicBlockRef fallback_block =
+      append_bb(backend, func, "op_fallback");
+  LLVMBasicBlockRef merge_block = append_bb(backend, func, "op_merge");
+
+  // Branch: int -> int_block, else check float
+  LLVMBasicBlockRef check_float_block =
+      append_bb(backend, func, "check_float");
+  LLVMBuildCondBr(backend->builder, both_int, int_block, check_float_block);
+
+  // Check float block
+  LLVMPositionBuilderAtEnd(backend->builder, check_float_block);
+  LLVMBuildCondBr(backend->builder, both_float, float_block, fallback_block);
+
+  // --- Integer Block ---
+  // VMValue struct: {i32 type, pad, i64 as}
+  LLVMPositionBuilderAtEnd(backend->builder, int_block);
+  LLVMValueRef l_val = LLVMBuildExtractValue(backend->builder, L, 2, "l_val");
+  LLVMValueRef r_val = LLVMBuildExtractValue(backend->builder, R, 2, "r_val");
+  LLVMValueRef int_res = nullptr;
+  int is_bool_res = 0;
+
+  switch (node->op) {
+  case TOKEN_PLUS:
+    int_res = LLVMBuildAdd(backend->builder, l_val, r_val, "add");
+    break;
+  case TOKEN_MINUS:
+    int_res = LLVMBuildSub(backend->builder, l_val, r_val, "sub");
+    break;
+  case TOKEN_MULTIPLY:
+    int_res = LLVMBuildMul(backend->builder, l_val, r_val, "mul");
+    break;
+  case TOKEN_DIVIDE:
+    int_res = build_checked_div(backend, l_val, r_val, 0);
+    break;
+  // MODULO buradan EKSIKTI. `+ - * /` ve butun karsilastirmalar satir ici
+  // hizli yola sahipken `%` her seferinde vm_binary_op'a gidiyordu — yani
+  // tipsiz koddaki her modulo bir runtime CAGRISI. Cagri ayrica cevresindeki
+  // dongude optimizasyonu da kesiyor (LLVM cagrinin her seyi yazabilecegini
+  // varsayip degismezleri yazmacta tutamiyor).
+  // build_checked_div(..., 1) bolme yolunun ZATEN kullandigi ayni yardimci;
+  // sifira bolme davranisi ikisinde de ayni.
+  case TOKEN_MODULO:
+    int_res = build_checked_div(backend, l_val, r_val, 1);
+    break;
+  case TOKEN_EQUAL:
+    int_res = LLVMBuildZExt(
+        backend->builder,
+        LLVMBuildICmp(backend->builder, LLVMIntEQ, l_val, r_val, "eq"),
+        backend->int_type, "zext");
+    is_bool_res = 1;
+    break;
+  case TOKEN_NOT_EQUAL:
+    int_res = LLVMBuildZExt(
+        backend->builder,
+        LLVMBuildICmp(backend->builder, LLVMIntNE, l_val, r_val, "neq"),
+        backend->int_type, "zext");
+    is_bool_res = 1;
+    break;
+  case TOKEN_LESS:
+    int_res = LLVMBuildZExt(
+        backend->builder,
+        LLVMBuildICmp(backend->builder, LLVMIntSLT, l_val, r_val, "lt"),
+        backend->int_type, "zext");
+    is_bool_res = 1;
+    break;
+  case TOKEN_GREATER:
+    int_res = LLVMBuildZExt(
+        backend->builder,
+        LLVMBuildICmp(backend->builder, LLVMIntSGT, l_val, r_val, "gt"),
+        backend->int_type, "zext");
+    is_bool_res = 1;
+    break;
+  case TOKEN_LESS_EQUAL:
+    int_res = LLVMBuildZExt(
+        backend->builder,
+        LLVMBuildICmp(backend->builder, LLVMIntSLE, l_val, r_val, "le"),
+        backend->int_type, "zext");
+    is_bool_res = 1;
+    break;
+  case TOKEN_GREATER_EQUAL:
+    int_res = LLVMBuildZExt(
+        backend->builder,
+        LLVMBuildICmp(backend->builder, LLVMIntSGE, l_val, r_val, "ge"),
+        backend->int_type, "zext");
+    is_bool_res = 1;
+    break;
+  case TOKEN_AND:
+    // Logical AND: both non-zero -> 1, else 0
+    {
+      LLVMValueRef l_nz =
+          LLVMBuildICmp(backend->builder, LLVMIntNE, l_val,
+                        LLVMConstInt(backend->int_type, 0, 0), "l_nz");
+      LLVMValueRef r_nz =
+          LLVMBuildICmp(backend->builder, LLVMIntNE, r_val,
+                        LLVMConstInt(backend->int_type, 0, 0), "r_nz");
+      LLVMValueRef and_res =
+          LLVMBuildAnd(backend->builder, l_nz, r_nz, "and");
+      int_res = LLVMBuildZExt(backend->builder, and_res, backend->int_type,
+                              "zext_and");
+      is_bool_res = 1;
+    }
+    break;
+  case TOKEN_OR:
+    // Logical OR: any non-zero -> 1, else 0
+    {
+      LLVMValueRef l_nz =
+          LLVMBuildICmp(backend->builder, LLVMIntNE, l_val,
+                        LLVMConstInt(backend->int_type, 0, 0), "l_nz");
+      LLVMValueRef r_nz =
+          LLVMBuildICmp(backend->builder, LLVMIntNE, r_val,
+                        LLVMConstInt(backend->int_type, 0, 0), "r_nz");
+      LLVMValueRef or_res = LLVMBuildOr(backend->builder, l_nz, r_nz, "or");
+      int_res = LLVMBuildZExt(backend->builder, or_res, backend->int_type,
+                              "zext_or");
+      is_bool_res = 1;
+    }
+    break;
+  default:
+    int_res = nullptr;
+  }
+
+  LLVMValueRef int_vm_res;
+  if (int_res) {
+    if (is_bool_res) {
+      // Result is BOOL (type 3)
+      int_vm_res = llvm_vm_val_bool(backend, 0); // dummy init
+      // Manually build struct to avoid constant restrictions if needed,
+      // but llvm_vm_val_int_val handles runtime values for INT, need one for
+      // BOOL?
+
+      LLVMValueRef s = LLVMGetUndef(backend->vm_value_type);
+      s = LLVMBuildInsertValue(backend->builder, s,
+                               LLVMConstInt(backend->int32_type, 2, 0), 0,
+                               "");  // VM_VAL_BOOL = 2
+      s = LLVMBuildInsertValue(backend->builder, s, int_res, 2, "");
+      int_vm_res = s;
+    } else {
+      // Result is INT (type 1)
+      int_vm_res = llvm_vm_val_int_val(backend, int_res);
+    }
+    LLVMBuildBr(backend->builder, merge_block);
+  } else {
+    // Op not supported for fast path
+    LLVMBuildBr(backend->builder, fallback_block);
+  }
+  LLVMBasicBlockRef int_block_end = LLVMGetInsertBlock(backend->builder);
+
+  // --- Float Block (Fast Path for float operations) ---
+  LLVMPositionBuilderAtEnd(backend->builder, float_block);
+  LLVMValueRef l_float_bits =
+      LLVMBuildExtractValue(backend->builder, L, 2, "l_float_bits");
+  LLVMValueRef r_float_bits =
+      LLVMBuildExtractValue(backend->builder, R, 2, "r_float_bits");
+  // Reinterpret i64 bits as double
+  // `LLVMDoubleType()` KURESEL baglami kullaniyordu; modulumuz ayri bir
+  // baglamda. Ayni yazilan iki farkli `double` Type nesnesi, tam da bu
+  // fonksiyonun ucuncu blogundaki phi'de bulusuyordu — asagidaki geri
+  // cekilme merdiveninin "boxed karsilastirma merge'unden gecersiz phi"
+  // diye tarif ettigi kusur budur. Bkz. append_bb'nin basligi.
+  LLVMValueRef l_float = LLVMBuildBitCast(backend->builder, l_float_bits,
+                                          backend->float_type, "l_double");
+  LLVMValueRef r_float = LLVMBuildBitCast(backend->builder, r_float_bits,
+                                          backend->float_type, "r_double");
+
+  LLVMValueRef float_res = nullptr;
+  int float_is_bool = 0;
+
+  switch (node->op) {
+  case TOKEN_PLUS:
+    float_res = LLVMBuildFAdd(backend->builder, l_float, r_float, "fadd");
+    break;
+  case TOKEN_MINUS:
+    float_res = LLVMBuildFSub(backend->builder, l_float, r_float, "fsub");
+    break;
+  case TOKEN_MULTIPLY:
+    float_res = LLVMBuildFMul(backend->builder, l_float, r_float, "fmul");
+    break;
+  case TOKEN_DIVIDE:
+    float_res = LLVMBuildFDiv(backend->builder, l_float, r_float, "fdiv");
+    break;
+  case TOKEN_LESS:
+    float_res =
+        LLVMBuildFCmp(backend->builder, LLVMRealOLT, l_float, r_float, "flt");
+    float_is_bool = 1;
+    break;
+  case TOKEN_GREATER:
+    float_res =
+        LLVMBuildFCmp(backend->builder, LLVMRealOGT, l_float, r_float, "fgt");
+    float_is_bool = 1;
+    break;
+  case TOKEN_LESS_EQUAL:
+    float_res =
+        LLVMBuildFCmp(backend->builder, LLVMRealOLE, l_float, r_float, "fle");
+    float_is_bool = 1;
+    break;
+  case TOKEN_GREATER_EQUAL:
+    float_res =
+        LLVMBuildFCmp(backend->builder, LLVMRealOGE, l_float, r_float, "fge");
+    float_is_bool = 1;
+    break;
+  case TOKEN_EQUAL:
+    float_res =
+        LLVMBuildFCmp(backend->builder, LLVMRealOEQ, l_float, r_float, "feq");
+    float_is_bool = 1;
+    break;
+  case TOKEN_NOT_EQUAL:
+    float_res =
+        LLVMBuildFCmp(backend->builder, LLVMRealONE, l_float, r_float, "fne");
+    float_is_bool = 1;
+    break;
+  default:
+    float_res = nullptr;
+  }
+
+  LLVMValueRef float_vm_res;
+  if (float_res) {
+    if (float_is_bool) {
+      // Result is BOOL (type 3)
+      LLVMValueRef bool_ext = LLVMBuildZExt(backend->builder, float_res,
+                                            backend->int_type, "bool_zext");
+      LLVMValueRef s = LLVMGetUndef(backend->vm_value_type);
+      s = LLVMBuildInsertValue(backend->builder, s,
+                               LLVMConstInt(backend->int32_type, 2, 0), 0,
+                               "");  // VM_VAL_BOOL = 2
+      s = LLVMBuildInsertValue(backend->builder, s, bool_ext, 2, "");
+      float_vm_res = s;
+    } else {
+      // Result is FLOAT (type 2) - convert double back to i64 bits
+      LLVMValueRef res_bits = LLVMBuildBitCast(backend->builder, float_res,
+                                               backend->int_type, "res_bits");
+      LLVMValueRef s = LLVMGetUndef(backend->vm_value_type);
+      s = LLVMBuildInsertValue(backend->builder, s,
+                               LLVMConstInt(backend->int32_type, 1, 0), 0,
+                               "");  // VM_VAL_FLOAT = 1
+      s = LLVMBuildInsertValue(backend->builder, s, res_bits, 2, "");
+      float_vm_res = s;
+    }
+    LLVMBuildBr(backend->builder, merge_block);
+  } else {
+    // Op not supported for float fast path
+    LLVMBuildBr(backend->builder, fallback_block);
+  }
+  LLVMBasicBlockRef float_block_end = LLVMGetInsertBlock(backend->builder);
+
+  // --- Fallback Block (Runtime Call) ---
+  LLVMPositionBuilderAtEnd(backend->builder, fallback_block);
+
+  LLVMValueRef fallback_res;
+
+  // For TOKEN_PLUS, check if both are strings and use fast concat
+  if (node->op == TOKEN_PLUS) {
+    // Check if both are STRING (type == 4)
+    LLVMValueRef l_is_str =
+        LLVMBuildICmp(backend->builder, LLVMIntEQ, l_type,
+                      LLVMConstInt(backend->int32_type, 4, 0), "l_str");
+    LLVMValueRef r_is_str =
+        LLVMBuildICmp(backend->builder, LLVMIntEQ, r_type,
+                      LLVMConstInt(backend->int32_type, 4, 0), "r_str");
+    LLVMValueRef both_str =
+        LLVMBuildAnd(backend->builder, l_is_str, r_is_str, "both_str");
+
+    LLVMBasicBlockRef str_concat_block =
+        append_bb(backend, func, "str_concat");
+    LLVMBasicBlockRef generic_block =
+        append_bb(backend, func, "generic_op");
+    LLVMBasicBlockRef fallback_merge =
+        append_bb(backend, func, "fallback_merge");
+
+    LLVMBuildCondBr(backend->builder, both_str, str_concat_block,
+                    generic_block);
+
+    // --- String Concat Fast Path ---
+    LLVMPositionBuilderAtEnd(backend->builder, str_concat_block);
+    LLVMValueRef L_ptr_sc =
+        llvm_build_alloca_at_entry(backend, backend->vm_value_type, "L_ptr_sc");
+    LLVMBuildStore(backend->builder, L, L_ptr_sc);
+    LLVMValueRef R_ptr_sc =
+        llvm_build_alloca_at_entry(backend, backend->vm_value_type, "R_ptr_sc");
+    LLVMBuildStore(backend->builder, R, R_ptr_sc);
+    LLVMValueRef L_void_sc = LLVMBuildBitCast(backend->builder, L_ptr_sc,
+                                              backend->ptr_type, "L_void_sc");
+    LLVMValueRef R_void_sc = LLVMBuildBitCast(backend->builder, R_ptr_sc,
+                                              backend->ptr_type, "R_void_sc");
+    LLVMValueRef str_args[] = {L_void_sc, R_void_sc};
+    LLVMValueRef str_result = llvm_call_vmvalue_func(
+        backend, backend->func_aot_string_concat_fast, str_args, 2, "str_concat_res");
+    LLVMBuildBr(backend->builder, fallback_merge);
+    LLVMBasicBlockRef str_block_end = LLVMGetInsertBlock(backend->builder);
+
+    // --- Generic Runtime Path ---
+    LLVMPositionBuilderAtEnd(backend->builder, generic_block);
+    LLVMValueRef L_ptr =
+        llvm_build_alloca_at_entry(backend, backend->vm_value_type, "L_ptr");
+    LLVMBuildStore(backend->builder, L, L_ptr);
+    LLVMValueRef L_void = LLVMBuildBitCast(backend->builder, L_ptr,
+                                           backend->ptr_type, "L_void");
+
+    LLVMValueRef R_ptr =
+        llvm_build_alloca_at_entry(backend, backend->vm_value_type, "R_ptr");
+    LLVMBuildStore(backend->builder, R, R_ptr);
+    LLVMValueRef R_void = LLVMBuildBitCast(backend->builder, R_ptr,
+                                           backend->ptr_type, "R_void");
+
+    LLVMValueRef res_ptr = llvm_build_alloca_at_entry(
+        backend, backend->vm_value_type, "res_ptr");
+    LLVMValueRef res_void = LLVMBuildBitCast(backend->builder, res_ptr,
+                                             backend->ptr_type, "res_void");
+
+    LLVMValueRef args[] = {
+        LLVMConstPointerNull(backend->ptr_type), L_void, R_void,
+        LLVMConstInt(backend->int32_type, node->op, 0), res_void};
+
+    LLVMBuildCall2(backend->builder, backend->vm_binary_op_type,
+                   backend->func_vm_binary_op, args, 5, "");
+    LLVMValueRef generic_res = LLVMBuildLoad2(
+        backend->builder, backend->vm_value_type, res_ptr, "generic_res");
+    LLVMBuildBr(backend->builder, fallback_merge);
+    LLVMBasicBlockRef generic_block_end =
+        LLVMGetInsertBlock(backend->builder);
+
+    // --- Fallback Merge ---
+    LLVMPositionBuilderAtEnd(backend->builder, fallback_merge);
+    LLVMValueRef fallback_phi = LLVMBuildPhi(
+        backend->builder, backend->vm_value_type, "fallback_phi");
+    LLVMValueRef fb_vals[] = {str_result, generic_res};
+    LLVMBasicBlockRef fb_blocks[] = {str_block_end, generic_block_end};
+    LLVMAddIncoming(fallback_phi, fb_vals, fb_blocks, 2);
+    fallback_res = fallback_phi;
+  } else {
+    // Non-PLUS operations - use generic path
+    LLVMValueRef L_ptr =
+        llvm_build_alloca_at_entry(backend, backend->vm_value_type, "L_ptr");
+    LLVMBuildStore(backend->builder, L, L_ptr);
+    LLVMValueRef L_void = LLVMBuildBitCast(backend->builder, L_ptr,
+                                           backend->ptr_type, "L_void");
+
+    LLVMValueRef R_ptr =
+        llvm_build_alloca_at_entry(backend, backend->vm_value_type, "R_ptr");
+    LLVMBuildStore(backend->builder, R, R_ptr);
+    LLVMValueRef R_void = LLVMBuildBitCast(backend->builder, R_ptr,
+                                           backend->ptr_type, "R_void");
+
+    LLVMValueRef res_ptr = llvm_build_alloca_at_entry(
+        backend, backend->vm_value_type, "res_ptr");
+    LLVMValueRef res_void = LLVMBuildBitCast(backend->builder, res_ptr,
+                                             backend->ptr_type, "res_void");
+
+    LLVMValueRef args[] = {
+        LLVMConstPointerNull(backend->ptr_type), L_void, R_void,
+        LLVMConstInt(backend->int32_type, node->op, 0), res_void};
+
+    LLVMBuildCall2(backend->builder, backend->vm_binary_op_type,
+                   backend->func_vm_binary_op, args, 5, "");
+    fallback_res = LLVMBuildLoad2(backend->builder, backend->vm_value_type,
+                                  res_ptr, "fallback_res");
+
+    // O3 uniformity fix (LLVM 22 InstCombine). The int/float fast paths above
+    // build a comparison's boolean result as `insertvalue({BOOL}, zext(i1
+    // cmp), 2)`, so their payload is a *visible* `zext i1`. The fallback's
+    // payload, in contrast, is an opaque i64 loaded from vm_binary_op. When
+    // the boxed-comparison merge phi is later consumed by a truthiness
+    // `icmp ne 0`, InstCombine's foldOpIntoPhi sinks the compare through a phi
+    // whose incomings mix foldable (`zext i1`) and opaque (i64) values; on
+    // LLVM 22 this can leave a transient PHI with mismatched operand types
+    // (`phi i1 [ i1, i1, i64 ]`). It is self-correcting at unbounded
+    // InstCombine fixpoint, but the default O1/O2/O3 pipelines run InstCombine
+    // with a bounded iteration count, so the invalid state can persist to the
+    // verifier and fail the whole optimization (see llvm_backend_optimize's
+    // graduated fallback). Rebuilding the fallback boolean as the SAME
+    // `zext(i1)` shape makes all three payload incomings uniform, so the fold
+    // is clean and every op level verifies. Only comparison / logical ops
+    // yield a BOOL from vm_binary_op.
+    int fb_op_is_bool =
+        (node->op == TOKEN_EQUAL || node->op == TOKEN_NOT_EQUAL ||
+         node->op == TOKEN_LESS || node->op == TOKEN_GREATER ||
+         node->op == TOKEN_LESS_EQUAL || node->op == TOKEN_GREATER_EQUAL ||
+         node->op == TOKEN_AND || node->op == TOKEN_OR);
+    if (fb_op_is_bool) {
+      LLVMValueRef fb_payload = LLVMBuildExtractValue(
+          backend->builder, fallback_res, 2, "fb_payload");
+      LLVMValueRef fb_bool =
+          LLVMBuildICmp(backend->builder, LLVMIntNE, fb_payload,
+                        LLVMConstInt(backend->int_type, 0, 0), "fb_bool");
+      LLVMValueRef fb_zext = LLVMBuildZExt(backend->builder, fb_bool,
+                                           backend->int_type, "fb_bool_zext");
+      LLVMValueRef fb_s = LLVMGetUndef(backend->vm_value_type);
+      fb_s = LLVMBuildInsertValue(backend->builder, fb_s,
+                                  LLVMConstInt(backend->int32_type, 2, 0), 0,
+                                  "");  // VM_VAL_BOOL = 2
+      fb_s = LLVMBuildInsertValue(backend->builder, fb_s, fb_zext, 2, "");
+      fallback_res = fb_s;
+    }
+  }
+
+  LLVMBuildBr(backend->builder, merge_block);
+  LLVMBasicBlockRef fallback_block_end = LLVMGetInsertBlock(backend->builder);
+
+  // --- Merge Block ---
+  LLVMPositionBuilderAtEnd(backend->builder, merge_block);
+  LLVMValueRef phi =
+      LLVMBuildPhi(backend->builder, backend->vm_value_type, "op_res");
+
+  // Add incoming values based on which paths were valid
+  if (int_res && float_res) {
+    // Both int and float fast paths valid
+    LLVMValueRef incoming_vals[] = {int_vm_res, float_vm_res, fallback_res};
+    LLVMBasicBlockRef incoming_blocks[] = {int_block_end, float_block_end,
+                                           fallback_block_end};
+    LLVMAddIncoming(phi, incoming_vals, incoming_blocks, 3);
+  } else if (int_res) {
+    // Only int fast path valid
+    LLVMValueRef incoming_vals[] = {int_vm_res, fallback_res};
+    LLVMBasicBlockRef incoming_blocks[] = {int_block_end, fallback_block_end};
+    LLVMAddIncoming(phi, incoming_vals, incoming_blocks, 2);
+  } else if (float_res) {
+    // Only float fast path valid
+    LLVMValueRef incoming_vals[] = {float_vm_res, fallback_res};
+    LLVMBasicBlockRef incoming_blocks[] = {float_block_end,
+                                           fallback_block_end};
+    LLVMAddIncoming(phi, incoming_vals, incoming_blocks, 2);
+  } else {
+    // Only fallback was valid
+    LLVMAddIncoming(phi, &fallback_res, &fallback_block_end, 1);
+  }
+
+  return phi;
+}
 // Typed expression codegen - returns native values when possible
 TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
   TypedValue result = {nullptr, INFERRED_UNKNOWN, nullptr};
@@ -3320,10 +3804,12 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
       }
     }
 
-    // Fall back to boxed path
+    // Geri dusus: operandlar YUKARIDA URETILDI, yeniden uretme. Eskiden burada
+    // `codegen_expression(node)` cagriliyordu ve o iki operandi BIR DAHA
+    // uretiyordu — yan etkili operand iki kez calisiyordu.
     LLVMValueRef L_boxed = box_typed_value(backend, L);
     LLVMValueRef R_boxed = box_typed_value(backend, R);
-    result.boxed = codegen_expression(backend, node); // Use existing path
+    result.boxed = emit_boxed_binary_op(backend, node, L_boxed, R_boxed);
     result.value = result.boxed;
     return result;
   }
@@ -4579,474 +5065,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
   case AST_BINARY_OP: {
     LLVMValueRef L = codegen_expression(backend, node->left);
     LLVMValueRef R = codegen_expression(backend, node->right);
-    if (!L || !R)
-      return llvm_vm_val_int(backend, 0);
-
-    if (node->op == TOKEN_AND || node->op == TOKEN_OR) {
-      LLVMValueRef l_truthy = llvm_build_is_truthy(backend, L);
-      LLVMValueRef r_truthy = llvm_build_is_truthy(backend, R);
-      LLVMValueRef bool_res =
-          (node->op == TOKEN_AND)
-              ? LLVMBuildAnd(backend->builder, l_truthy, r_truthy, "and_bool")
-              : LLVMBuildOr(backend->builder, l_truthy, r_truthy, "or_bool");
-      return llvm_vm_val_bool_val(backend, bool_res);
-    }
-
-    // Extract types for fast path checking
-    LLVMValueRef l_type =
-        LLVMBuildExtractValue(backend->builder, L, 0, "l_type");
-    LLVMValueRef r_type =
-        LLVMBuildExtractValue(backend->builder, R, 0, "r_type");
-
-    // Check if both are INT (type == 1)
-    LLVMValueRef l_is_int =
-        LLVMBuildICmp(backend->builder, LLVMIntEQ, l_type,
-                      LLVMConstInt(backend->int32_type, 0, 0), "l_int");  // VM_VAL_INT = 0
-    LLVMValueRef r_is_int =
-        LLVMBuildICmp(backend->builder, LLVMIntEQ, r_type,
-                      LLVMConstInt(backend->int32_type, 0, 0), "r_int");  // VM_VAL_INT = 0
-    LLVMValueRef both_int =
-        LLVMBuildAnd(backend->builder, l_is_int, r_is_int, "both_int");
-
-    // Check if both are FLOAT (type == 2)
-    LLVMValueRef l_is_float =
-        LLVMBuildICmp(backend->builder, LLVMIntEQ, l_type,
-                      LLVMConstInt(backend->int32_type, 1, 0), "l_float");  // VM_VAL_FLOAT = 1
-    LLVMValueRef r_is_float =
-        LLVMBuildICmp(backend->builder, LLVMIntEQ, r_type,
-                      LLVMConstInt(backend->int32_type, 1, 0), "r_float");  // VM_VAL_FLOAT = 1
-    LLVMValueRef both_float =
-        LLVMBuildAnd(backend->builder, l_is_float, r_is_float, "both_float");
-
-    LLVMValueRef func = backend->current_function;
-    LLVMBasicBlockRef int_block = append_bb(backend, func, "op_int");
-    LLVMBasicBlockRef float_block = append_bb(backend, func, "op_float");
-    LLVMBasicBlockRef fallback_block =
-        append_bb(backend, func, "op_fallback");
-    LLVMBasicBlockRef merge_block = append_bb(backend, func, "op_merge");
-
-    // Branch: int -> int_block, else check float
-    LLVMBasicBlockRef check_float_block =
-        append_bb(backend, func, "check_float");
-    LLVMBuildCondBr(backend->builder, both_int, int_block, check_float_block);
-
-    // Check float block
-    LLVMPositionBuilderAtEnd(backend->builder, check_float_block);
-    LLVMBuildCondBr(backend->builder, both_float, float_block, fallback_block);
-
-    // --- Integer Block ---
-    // VMValue struct: {i32 type, pad, i64 as}
-    LLVMPositionBuilderAtEnd(backend->builder, int_block);
-    LLVMValueRef l_val = LLVMBuildExtractValue(backend->builder, L, 2, "l_val");
-    LLVMValueRef r_val = LLVMBuildExtractValue(backend->builder, R, 2, "r_val");
-    LLVMValueRef int_res = nullptr;
-    int is_bool_res = 0;
-
-    switch (node->op) {
-    case TOKEN_PLUS:
-      int_res = LLVMBuildAdd(backend->builder, l_val, r_val, "add");
-      break;
-    case TOKEN_MINUS:
-      int_res = LLVMBuildSub(backend->builder, l_val, r_val, "sub");
-      break;
-    case TOKEN_MULTIPLY:
-      int_res = LLVMBuildMul(backend->builder, l_val, r_val, "mul");
-      break;
-    case TOKEN_DIVIDE:
-      int_res = build_checked_div(backend, l_val, r_val, 0);
-      break;
-    // MODULO buradan EKSIKTI. `+ - * /` ve butun karsilastirmalar satir ici
-    // hizli yola sahipken `%` her seferinde vm_binary_op'a gidiyordu — yani
-    // tipsiz koddaki her modulo bir runtime CAGRISI. Cagri ayrica cevresindeki
-    // dongude optimizasyonu da kesiyor (LLVM cagrinin her seyi yazabilecegini
-    // varsayip degismezleri yazmacta tutamiyor).
-    // build_checked_div(..., 1) bolme yolunun ZATEN kullandigi ayni yardimci;
-    // sifira bolme davranisi ikisinde de ayni.
-    case TOKEN_MODULO:
-      int_res = build_checked_div(backend, l_val, r_val, 1);
-      break;
-    case TOKEN_EQUAL:
-      int_res = LLVMBuildZExt(
-          backend->builder,
-          LLVMBuildICmp(backend->builder, LLVMIntEQ, l_val, r_val, "eq"),
-          backend->int_type, "zext");
-      is_bool_res = 1;
-      break;
-    case TOKEN_NOT_EQUAL:
-      int_res = LLVMBuildZExt(
-          backend->builder,
-          LLVMBuildICmp(backend->builder, LLVMIntNE, l_val, r_val, "neq"),
-          backend->int_type, "zext");
-      is_bool_res = 1;
-      break;
-    case TOKEN_LESS:
-      int_res = LLVMBuildZExt(
-          backend->builder,
-          LLVMBuildICmp(backend->builder, LLVMIntSLT, l_val, r_val, "lt"),
-          backend->int_type, "zext");
-      is_bool_res = 1;
-      break;
-    case TOKEN_GREATER:
-      int_res = LLVMBuildZExt(
-          backend->builder,
-          LLVMBuildICmp(backend->builder, LLVMIntSGT, l_val, r_val, "gt"),
-          backend->int_type, "zext");
-      is_bool_res = 1;
-      break;
-    case TOKEN_LESS_EQUAL:
-      int_res = LLVMBuildZExt(
-          backend->builder,
-          LLVMBuildICmp(backend->builder, LLVMIntSLE, l_val, r_val, "le"),
-          backend->int_type, "zext");
-      is_bool_res = 1;
-      break;
-    case TOKEN_GREATER_EQUAL:
-      int_res = LLVMBuildZExt(
-          backend->builder,
-          LLVMBuildICmp(backend->builder, LLVMIntSGE, l_val, r_val, "ge"),
-          backend->int_type, "zext");
-      is_bool_res = 1;
-      break;
-    case TOKEN_AND:
-      // Logical AND: both non-zero -> 1, else 0
-      {
-        LLVMValueRef l_nz =
-            LLVMBuildICmp(backend->builder, LLVMIntNE, l_val,
-                          LLVMConstInt(backend->int_type, 0, 0), "l_nz");
-        LLVMValueRef r_nz =
-            LLVMBuildICmp(backend->builder, LLVMIntNE, r_val,
-                          LLVMConstInt(backend->int_type, 0, 0), "r_nz");
-        LLVMValueRef and_res =
-            LLVMBuildAnd(backend->builder, l_nz, r_nz, "and");
-        int_res = LLVMBuildZExt(backend->builder, and_res, backend->int_type,
-                                "zext_and");
-        is_bool_res = 1;
-      }
-      break;
-    case TOKEN_OR:
-      // Logical OR: any non-zero -> 1, else 0
-      {
-        LLVMValueRef l_nz =
-            LLVMBuildICmp(backend->builder, LLVMIntNE, l_val,
-                          LLVMConstInt(backend->int_type, 0, 0), "l_nz");
-        LLVMValueRef r_nz =
-            LLVMBuildICmp(backend->builder, LLVMIntNE, r_val,
-                          LLVMConstInt(backend->int_type, 0, 0), "r_nz");
-        LLVMValueRef or_res = LLVMBuildOr(backend->builder, l_nz, r_nz, "or");
-        int_res = LLVMBuildZExt(backend->builder, or_res, backend->int_type,
-                                "zext_or");
-        is_bool_res = 1;
-      }
-      break;
-    default:
-      int_res = nullptr;
-    }
-
-    LLVMValueRef int_vm_res;
-    if (int_res) {
-      if (is_bool_res) {
-        // Result is BOOL (type 3)
-        int_vm_res = llvm_vm_val_bool(backend, 0); // dummy init
-        // Manually build struct to avoid constant restrictions if needed,
-        // but llvm_vm_val_int_val handles runtime values for INT, need one for
-        // BOOL?
-
-        LLVMValueRef s = LLVMGetUndef(backend->vm_value_type);
-        s = LLVMBuildInsertValue(backend->builder, s,
-                                 LLVMConstInt(backend->int32_type, 2, 0), 0,
-                                 "");  // VM_VAL_BOOL = 2
-        s = LLVMBuildInsertValue(backend->builder, s, int_res, 2, "");
-        int_vm_res = s;
-      } else {
-        // Result is INT (type 1)
-        int_vm_res = llvm_vm_val_int_val(backend, int_res);
-      }
-      LLVMBuildBr(backend->builder, merge_block);
-    } else {
-      // Op not supported for fast path
-      LLVMBuildBr(backend->builder, fallback_block);
-    }
-    LLVMBasicBlockRef int_block_end = LLVMGetInsertBlock(backend->builder);
-
-    // --- Float Block (Fast Path for float operations) ---
-    LLVMPositionBuilderAtEnd(backend->builder, float_block);
-    LLVMValueRef l_float_bits =
-        LLVMBuildExtractValue(backend->builder, L, 2, "l_float_bits");
-    LLVMValueRef r_float_bits =
-        LLVMBuildExtractValue(backend->builder, R, 2, "r_float_bits");
-    // Reinterpret i64 bits as double
-    // `LLVMDoubleType()` KURESEL baglami kullaniyordu; modulumuz ayri bir
-    // baglamda. Ayni yazilan iki farkli `double` Type nesnesi, tam da bu
-    // fonksiyonun ucuncu blogundaki phi'de bulusuyordu — asagidaki geri
-    // cekilme merdiveninin "boxed karsilastirma merge'unden gecersiz phi"
-    // diye tarif ettigi kusur budur. Bkz. append_bb'nin basligi.
-    LLVMValueRef l_float = LLVMBuildBitCast(backend->builder, l_float_bits,
-                                            backend->float_type, "l_double");
-    LLVMValueRef r_float = LLVMBuildBitCast(backend->builder, r_float_bits,
-                                            backend->float_type, "r_double");
-
-    LLVMValueRef float_res = nullptr;
-    int float_is_bool = 0;
-
-    switch (node->op) {
-    case TOKEN_PLUS:
-      float_res = LLVMBuildFAdd(backend->builder, l_float, r_float, "fadd");
-      break;
-    case TOKEN_MINUS:
-      float_res = LLVMBuildFSub(backend->builder, l_float, r_float, "fsub");
-      break;
-    case TOKEN_MULTIPLY:
-      float_res = LLVMBuildFMul(backend->builder, l_float, r_float, "fmul");
-      break;
-    case TOKEN_DIVIDE:
-      float_res = LLVMBuildFDiv(backend->builder, l_float, r_float, "fdiv");
-      break;
-    case TOKEN_LESS:
-      float_res =
-          LLVMBuildFCmp(backend->builder, LLVMRealOLT, l_float, r_float, "flt");
-      float_is_bool = 1;
-      break;
-    case TOKEN_GREATER:
-      float_res =
-          LLVMBuildFCmp(backend->builder, LLVMRealOGT, l_float, r_float, "fgt");
-      float_is_bool = 1;
-      break;
-    case TOKEN_LESS_EQUAL:
-      float_res =
-          LLVMBuildFCmp(backend->builder, LLVMRealOLE, l_float, r_float, "fle");
-      float_is_bool = 1;
-      break;
-    case TOKEN_GREATER_EQUAL:
-      float_res =
-          LLVMBuildFCmp(backend->builder, LLVMRealOGE, l_float, r_float, "fge");
-      float_is_bool = 1;
-      break;
-    case TOKEN_EQUAL:
-      float_res =
-          LLVMBuildFCmp(backend->builder, LLVMRealOEQ, l_float, r_float, "feq");
-      float_is_bool = 1;
-      break;
-    case TOKEN_NOT_EQUAL:
-      float_res =
-          LLVMBuildFCmp(backend->builder, LLVMRealONE, l_float, r_float, "fne");
-      float_is_bool = 1;
-      break;
-    default:
-      float_res = nullptr;
-    }
-
-    LLVMValueRef float_vm_res;
-    if (float_res) {
-      if (float_is_bool) {
-        // Result is BOOL (type 3)
-        LLVMValueRef bool_ext = LLVMBuildZExt(backend->builder, float_res,
-                                              backend->int_type, "bool_zext");
-        LLVMValueRef s = LLVMGetUndef(backend->vm_value_type);
-        s = LLVMBuildInsertValue(backend->builder, s,
-                                 LLVMConstInt(backend->int32_type, 2, 0), 0,
-                                 "");  // VM_VAL_BOOL = 2
-        s = LLVMBuildInsertValue(backend->builder, s, bool_ext, 2, "");
-        float_vm_res = s;
-      } else {
-        // Result is FLOAT (type 2) - convert double back to i64 bits
-        LLVMValueRef res_bits = LLVMBuildBitCast(backend->builder, float_res,
-                                                 backend->int_type, "res_bits");
-        LLVMValueRef s = LLVMGetUndef(backend->vm_value_type);
-        s = LLVMBuildInsertValue(backend->builder, s,
-                                 LLVMConstInt(backend->int32_type, 1, 0), 0,
-                                 "");  // VM_VAL_FLOAT = 1
-        s = LLVMBuildInsertValue(backend->builder, s, res_bits, 2, "");
-        float_vm_res = s;
-      }
-      LLVMBuildBr(backend->builder, merge_block);
-    } else {
-      // Op not supported for float fast path
-      LLVMBuildBr(backend->builder, fallback_block);
-    }
-    LLVMBasicBlockRef float_block_end = LLVMGetInsertBlock(backend->builder);
-
-    // --- Fallback Block (Runtime Call) ---
-    LLVMPositionBuilderAtEnd(backend->builder, fallback_block);
-
-    LLVMValueRef fallback_res;
-
-    // For TOKEN_PLUS, check if both are strings and use fast concat
-    if (node->op == TOKEN_PLUS) {
-      // Check if both are STRING (type == 4)
-      LLVMValueRef l_is_str =
-          LLVMBuildICmp(backend->builder, LLVMIntEQ, l_type,
-                        LLVMConstInt(backend->int32_type, 4, 0), "l_str");
-      LLVMValueRef r_is_str =
-          LLVMBuildICmp(backend->builder, LLVMIntEQ, r_type,
-                        LLVMConstInt(backend->int32_type, 4, 0), "r_str");
-      LLVMValueRef both_str =
-          LLVMBuildAnd(backend->builder, l_is_str, r_is_str, "both_str");
-
-      LLVMBasicBlockRef str_concat_block =
-          append_bb(backend, func, "str_concat");
-      LLVMBasicBlockRef generic_block =
-          append_bb(backend, func, "generic_op");
-      LLVMBasicBlockRef fallback_merge =
-          append_bb(backend, func, "fallback_merge");
-
-      LLVMBuildCondBr(backend->builder, both_str, str_concat_block,
-                      generic_block);
-
-      // --- String Concat Fast Path ---
-      LLVMPositionBuilderAtEnd(backend->builder, str_concat_block);
-      LLVMValueRef L_ptr_sc =
-          llvm_build_alloca_at_entry(backend, backend->vm_value_type, "L_ptr_sc");
-      LLVMBuildStore(backend->builder, L, L_ptr_sc);
-      LLVMValueRef R_ptr_sc =
-          llvm_build_alloca_at_entry(backend, backend->vm_value_type, "R_ptr_sc");
-      LLVMBuildStore(backend->builder, R, R_ptr_sc);
-      LLVMValueRef L_void_sc = LLVMBuildBitCast(backend->builder, L_ptr_sc,
-                                                backend->ptr_type, "L_void_sc");
-      LLVMValueRef R_void_sc = LLVMBuildBitCast(backend->builder, R_ptr_sc,
-                                                backend->ptr_type, "R_void_sc");
-      LLVMValueRef str_args[] = {L_void_sc, R_void_sc};
-      LLVMValueRef str_result = llvm_call_vmvalue_func(
-          backend, backend->func_aot_string_concat_fast, str_args, 2, "str_concat_res");
-      LLVMBuildBr(backend->builder, fallback_merge);
-      LLVMBasicBlockRef str_block_end = LLVMGetInsertBlock(backend->builder);
-
-      // --- Generic Runtime Path ---
-      LLVMPositionBuilderAtEnd(backend->builder, generic_block);
-      LLVMValueRef L_ptr =
-          llvm_build_alloca_at_entry(backend, backend->vm_value_type, "L_ptr");
-      LLVMBuildStore(backend->builder, L, L_ptr);
-      LLVMValueRef L_void = LLVMBuildBitCast(backend->builder, L_ptr,
-                                             backend->ptr_type, "L_void");
-
-      LLVMValueRef R_ptr =
-          llvm_build_alloca_at_entry(backend, backend->vm_value_type, "R_ptr");
-      LLVMBuildStore(backend->builder, R, R_ptr);
-      LLVMValueRef R_void = LLVMBuildBitCast(backend->builder, R_ptr,
-                                             backend->ptr_type, "R_void");
-
-      LLVMValueRef res_ptr = llvm_build_alloca_at_entry(
-          backend, backend->vm_value_type, "res_ptr");
-      LLVMValueRef res_void = LLVMBuildBitCast(backend->builder, res_ptr,
-                                               backend->ptr_type, "res_void");
-
-      LLVMValueRef args[] = {
-          LLVMConstPointerNull(backend->ptr_type), L_void, R_void,
-          LLVMConstInt(backend->int32_type, node->op, 0), res_void};
-
-      LLVMBuildCall2(backend->builder, backend->vm_binary_op_type,
-                     backend->func_vm_binary_op, args, 5, "");
-      LLVMValueRef generic_res = LLVMBuildLoad2(
-          backend->builder, backend->vm_value_type, res_ptr, "generic_res");
-      LLVMBuildBr(backend->builder, fallback_merge);
-      LLVMBasicBlockRef generic_block_end =
-          LLVMGetInsertBlock(backend->builder);
-
-      // --- Fallback Merge ---
-      LLVMPositionBuilderAtEnd(backend->builder, fallback_merge);
-      LLVMValueRef fallback_phi = LLVMBuildPhi(
-          backend->builder, backend->vm_value_type, "fallback_phi");
-      LLVMValueRef fb_vals[] = {str_result, generic_res};
-      LLVMBasicBlockRef fb_blocks[] = {str_block_end, generic_block_end};
-      LLVMAddIncoming(fallback_phi, fb_vals, fb_blocks, 2);
-      fallback_res = fallback_phi;
-    } else {
-      // Non-PLUS operations - use generic path
-      LLVMValueRef L_ptr =
-          llvm_build_alloca_at_entry(backend, backend->vm_value_type, "L_ptr");
-      LLVMBuildStore(backend->builder, L, L_ptr);
-      LLVMValueRef L_void = LLVMBuildBitCast(backend->builder, L_ptr,
-                                             backend->ptr_type, "L_void");
-
-      LLVMValueRef R_ptr =
-          llvm_build_alloca_at_entry(backend, backend->vm_value_type, "R_ptr");
-      LLVMBuildStore(backend->builder, R, R_ptr);
-      LLVMValueRef R_void = LLVMBuildBitCast(backend->builder, R_ptr,
-                                             backend->ptr_type, "R_void");
-
-      LLVMValueRef res_ptr = llvm_build_alloca_at_entry(
-          backend, backend->vm_value_type, "res_ptr");
-      LLVMValueRef res_void = LLVMBuildBitCast(backend->builder, res_ptr,
-                                               backend->ptr_type, "res_void");
-
-      LLVMValueRef args[] = {
-          LLVMConstPointerNull(backend->ptr_type), L_void, R_void,
-          LLVMConstInt(backend->int32_type, node->op, 0), res_void};
-
-      LLVMBuildCall2(backend->builder, backend->vm_binary_op_type,
-                     backend->func_vm_binary_op, args, 5, "");
-      fallback_res = LLVMBuildLoad2(backend->builder, backend->vm_value_type,
-                                    res_ptr, "fallback_res");
-
-      // O3 uniformity fix (LLVM 22 InstCombine). The int/float fast paths above
-      // build a comparison's boolean result as `insertvalue({BOOL}, zext(i1
-      // cmp), 2)`, so their payload is a *visible* `zext i1`. The fallback's
-      // payload, in contrast, is an opaque i64 loaded from vm_binary_op. When
-      // the boxed-comparison merge phi is later consumed by a truthiness
-      // `icmp ne 0`, InstCombine's foldOpIntoPhi sinks the compare through a phi
-      // whose incomings mix foldable (`zext i1`) and opaque (i64) values; on
-      // LLVM 22 this can leave a transient PHI with mismatched operand types
-      // (`phi i1 [ i1, i1, i64 ]`). It is self-correcting at unbounded
-      // InstCombine fixpoint, but the default O1/O2/O3 pipelines run InstCombine
-      // with a bounded iteration count, so the invalid state can persist to the
-      // verifier and fail the whole optimization (see llvm_backend_optimize's
-      // graduated fallback). Rebuilding the fallback boolean as the SAME
-      // `zext(i1)` shape makes all three payload incomings uniform, so the fold
-      // is clean and every op level verifies. Only comparison / logical ops
-      // yield a BOOL from vm_binary_op.
-      int fb_op_is_bool =
-          (node->op == TOKEN_EQUAL || node->op == TOKEN_NOT_EQUAL ||
-           node->op == TOKEN_LESS || node->op == TOKEN_GREATER ||
-           node->op == TOKEN_LESS_EQUAL || node->op == TOKEN_GREATER_EQUAL ||
-           node->op == TOKEN_AND || node->op == TOKEN_OR);
-      if (fb_op_is_bool) {
-        LLVMValueRef fb_payload = LLVMBuildExtractValue(
-            backend->builder, fallback_res, 2, "fb_payload");
-        LLVMValueRef fb_bool =
-            LLVMBuildICmp(backend->builder, LLVMIntNE, fb_payload,
-                          LLVMConstInt(backend->int_type, 0, 0), "fb_bool");
-        LLVMValueRef fb_zext = LLVMBuildZExt(backend->builder, fb_bool,
-                                             backend->int_type, "fb_bool_zext");
-        LLVMValueRef fb_s = LLVMGetUndef(backend->vm_value_type);
-        fb_s = LLVMBuildInsertValue(backend->builder, fb_s,
-                                    LLVMConstInt(backend->int32_type, 2, 0), 0,
-                                    "");  // VM_VAL_BOOL = 2
-        fb_s = LLVMBuildInsertValue(backend->builder, fb_s, fb_zext, 2, "");
-        fallback_res = fb_s;
-      }
-    }
-
-    LLVMBuildBr(backend->builder, merge_block);
-    LLVMBasicBlockRef fallback_block_end = LLVMGetInsertBlock(backend->builder);
-
-    // --- Merge Block ---
-    LLVMPositionBuilderAtEnd(backend->builder, merge_block);
-    LLVMValueRef phi =
-        LLVMBuildPhi(backend->builder, backend->vm_value_type, "op_res");
-
-    // Add incoming values based on which paths were valid
-    if (int_res && float_res) {
-      // Both int and float fast paths valid
-      LLVMValueRef incoming_vals[] = {int_vm_res, float_vm_res, fallback_res};
-      LLVMBasicBlockRef incoming_blocks[] = {int_block_end, float_block_end,
-                                             fallback_block_end};
-      LLVMAddIncoming(phi, incoming_vals, incoming_blocks, 3);
-    } else if (int_res) {
-      // Only int fast path valid
-      LLVMValueRef incoming_vals[] = {int_vm_res, fallback_res};
-      LLVMBasicBlockRef incoming_blocks[] = {int_block_end, fallback_block_end};
-      LLVMAddIncoming(phi, incoming_vals, incoming_blocks, 2);
-    } else if (float_res) {
-      // Only float fast path valid
-      LLVMValueRef incoming_vals[] = {float_vm_res, fallback_res};
-      LLVMBasicBlockRef incoming_blocks[] = {float_block_end,
-                                             fallback_block_end};
-      LLVMAddIncoming(phi, incoming_vals, incoming_blocks, 2);
-    } else {
-      // Only fallback was valid
-      LLVMAddIncoming(phi, &fallback_res, &fallback_block_end, 1);
-    }
-
-    return phi;
+    return emit_boxed_binary_op(backend, node, L, R);
   }
 
   case AST_AWAIT: {

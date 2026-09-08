@@ -1245,6 +1245,47 @@ tamamen kapanmasıydı.
 `TULPAR_AOT_DEBUG_O3=1` bunu tek satırda söylüyor. Bir ölçüm sezgiye aykırı
 biçimde kötü çıktığında **önce onu çalıştır**; bkz. [[Tuzaklar]] 6r.
 
+## 6x. Kod üret, sonra AYNI düğümü tekrar üret — yan etki iki kez çalışır
+
+`codegen_typed_expr`in ikili işlem dalı şöyleydi:
+
+```c
+TypedValue L = codegen_typed_expr(node->left);    // KOD ÜRETİR
+TypedValue R = codegen_typed_expr(node->right);   // KOD ÜRETİR
+if (ikisi de int) { ...hızlı yol...; return; }
+// geri düşüş:
+result.boxed = codegen_expression(node);          // OPERANDLARI BİR DAHA ÜRETİR
+```
+
+Sonuç DEĞERİ hep doğruydu — ikinci kopya birincisinin üstüne yazıyor. Yanlış
+olan tek şey **yan etkinin iki kez çalışması**:
+
+```
+func yan() { sayac = sayac + 1; return 5; }
+int y = yan() + 0;      // sayac 2 oluyordu, 1 değil
+int v = (yan() + 1) * (yan() + 1);   // 2 yerine 6
+```
+
+İç içe ifadede ikileme **katlanıyor**. Tipli fonksiyonda (`func yan(): int`)
+görünmüyordu: orada hızlı yol tutuyor ve geri düşüş hiç çalışmıyor. Yani hata
+yalnız KUTULU operandlı karışık ifadelerdeydi — dilin en sık yazılan biçimi.
+
+**Kural:** kod üreten bir fonksiyondan "geri düşerken" düğümü baştan üretme.
+Üretilmiş operandları alan bir yardımcıya çıkar (`emit_boxed_binary_op`).
+Bir üretim fonksiyonunu iki kez çağırmanın bedeli "ölü IR" değil, **tekrar
+eden yan etki**.
+
+### Bu testin İLK YAZIMI hiçbir şey ölçmüyordu
+Ölçüler önce test fonksiyonlarının İÇİNE kondu. Orada `int y = ...` KUTULU
+yerel yoluna gidiyor ve hatalı yol hiç çalışmıyor: eski kodu geri koyan
+enjeksiyon paketi **yeşil** bıraktı. Hatalı yol ÜST DÜZEY `int y = <ifade>;`
+bildirimi (native int global yolu). Ölçüler en üst kapsama taşınınca
+enjeksiyon 8 testin 5'ini kırmızıya çevirdi.
+
+Ders [[Tuzaklar#1a]]'nın kardeşi: yalnız "kararı" değil, **hatanın gerçekten
+geçtiği KAPSAMI** de sürmek gerekiyor. Bir dilde aynı ifade, bulunduğu
+kapsama göre başka kod üretir.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.
