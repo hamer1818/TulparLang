@@ -876,3 +876,50 @@ Yan ürün olarak kalan iyileştirme fikri: `vm_array_get/set`in kutusuz diziyi
 KUTULAMADAN işlemesi bu çalışmada yazıldı ve tek başına doğru bir kazanç —
 bugün genel yoldan tek bir okuma bile diziyi 8 bayttan 16 bayta çıkarıyor.
 
+## i32 eleman GÖNDERİLDİ — elekte 1. sıra (2026-09-08, ikinci deneme)
+
+Bir önceki bölüm i32'yi "her tasarım ya kaybettiriyor ya uçurum açıyor" diye
+geri almıştı. O bölümün son paragrafında yazılan tasarım **kuruldu ve işe
+yaradı**.
+
+### Fikir: dal, erişimden SÜRÜM SEÇİMİNE taşındı
+Döngü sürümlemesi gövdeyi zaten ikiye ayırıyor. Artık:
+
+- **hızlı sürüm** — koşul `count != 0 && is32`; erişimler 32-bit, **dalsız**
+- **genel sürüm** — şekil yuvaları `want=64` ile yeniden dolduruluyor
+  (32-bit ya da kutulu dizide `count = 0` yazılır); erişimler 64-bit, **dalsız**
+- **sürümlenmemiş döngü** — `shape_want32 = -1`, erişim yerinde dallanır
+
+Genişlik değişirse (widen) o sürümün tazeleme fonksiyonu `count = 0` yazıyor ve
+erişimler bekçili yola düşüyor — doğruluğu sağlayan mekanizma bu. Her sürümün
+kendi genişliğine özel bir refill fonksiyonu var (`fn_shape_refill[eager][want]`).
+
+### Ölçüm
+| | i32 dizi | 64-bit dizi |
+|---|--:|--:|
+| önceki (i32 yok) | 8,06 | 8,06 |
+| V1 (önbellek yalnız i32) | 7,56 | **15,12** |
+| V2 (erişimde dal) | **8,46** | 10,92 |
+| **V3 — sürüm başına uzmanlaştırma** | **7,73** | **9,44** |
+
+V3 gönderildi. 64-bit dizilerde kalan %17, genişletilmiş dizinin bekçisiz
+sürüme girememesinden (sayısal kanıt geçerli ama sürüm koşulu `is32` istiyor);
+kapatmak üçüncü bir gövde kopyası gerektirir, o da ölçülmüş bir kayıp.
+
+### Resmî sonuç
+| | C | C++ | Rust | Go | **Tulpar** | sıra |
+|---|--:|--:|--:|--:|--:|:--:|
+| fib | 1,6 | 1,9 | 3,8 | 6,9 | **0,6** | **1.** |
+| **sieve** | 7,9 | 8,1 | 8,4 | 8,8 | **7,8** | **1.** |
+| strcat | 37,7 | 14,7 | 18,8 | 25,1 | **13,8** | **1.** |
+| arrayiter | 2,4 | 3,1 | 1,6 | 4,2 | **1,3** | **1.** |
+| intloop | 135,0 | 135,6 | 144,5 | 135,0 | **135,4** | 3. (%0,3) |
+
+arrayiter de kazandı (1,5 → 1,3): bellek yarıya inince yalnız elek değil her
+dizi yükü kazanıyor.
+
+### Yan kazanç: `vm_array_get/set` artık KUTULAMIYOR
+Genel yoldan tek bir okuma bile diziyi kutuya çeviriyordu (8 → 16 bayt/eleman,
+geri dönüşsüz). Artık genişlik farkında ve kutulamadan okuyup yazıyor; i32'ye
+sığmayan değer diziyi **genişletiyor**, kutulamıyor.
+

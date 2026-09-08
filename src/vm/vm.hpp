@@ -245,7 +245,13 @@ typedef struct ObjArray {
   int count;
   int capacity;
   VMValue *items_;   // kutulu depolama (NULL ise kutulanmamis)
-  long long *idata;  // kutulanmamis int64 depolama (NULL ise kutulu)
+  long long *idata;  // kutulanmamis depolama (NULL ise kutulu)
+  // `idata`nin ELEMAN GENISLIGI: 32 ya da 64. `idata == NULL` iken anlamsiz.
+  //
+  // Dilin `int`i 64-bit KALIYOR. Dizi 32-bit baslar ve i32'ye sigmayan bir
+  // deger yazilinca 64'e GENISLETILIR (aot_arr_widen) — kutulanmaz. Yani
+  // genislik bir DEPOLAMA ayrintisi, tip degil.
+  int elem_bits;
 } ObjArray;
 
 // Diziyi kutulu bicime cevirir. Kutuluysa hicbir sey yapmaz.

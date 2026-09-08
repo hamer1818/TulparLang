@@ -605,6 +605,40 @@ TPREOF
     echo -e "${GREEN}kutulu hizli yollar duruyor${NC} (satir ici %, persist bekcisi)"
     rm -rf "$BX_TMP"
 
+    # DİZİ ELEMAN GENİŞLİĞİ: kanıtlı erişim 32-BİT mi?
+    #
+    # Kutusuz `int[]` 32-bit başlıyor (eleman başına 8 yerine 4 bayt); ölçüldü:
+    # elek 8,06 -> 7,80, arrayiter 1,5 -> 1,3. Doğruluğu
+    # `tests/array_width.test.tpr` kilitliyor ama o paket, hızlı yol sessizce
+    # 64-bit'e dönse de YEŞİL kalır — sonuç yine doğru olur, yalnız yavaş.
+    # Bu yüzden denetim YAPISAL: sürümlenmiş döngünün kanıtlı erişimi
+    # `arr.pep.p32` (i32 GEP) üretmeli.
+    AW_TMP=$(mktemp -d)
+    cat > "$AW_TMP/aw.tpr" <<'TPREOF'
+int n = toInt(env("AW_N"));
+if (n <= 0) { n = 64; }
+int[] a = array_fill(n, 0);
+int t = 0;
+int i = 0;
+while (i < n) { t = t + a[i]; i = i + 1; }
+print(t);
+TPREOF
+    TULPAR_AOT_EMIT_LL=1 ./tulpar build "$AW_TMP/aw.tpr" "$AW_TMP/aw" >/dev/null 2>&1
+    AW_LL=$(ls "$AW_TMP"/*.ll 2>/dev/null | head -1)
+    if [ -z "$AW_LL" ] || ! grep -q "arr\.pep\.p32" "$AW_LL"; then
+        echo -e "${RED}Kanitli dizi erisimi 32-BIT DEGIL — eleman genisligi kazanci gitti!${NC}"
+        rm -rf "$AW_TMP"
+        exit 1
+    fi
+    AW_OUT=$(AW_N=64 "$AW_TMP/aw")
+    if [ "$AW_OUT" != "0" ]; then
+        echo -e "${RED}Genislik denetimi YANLIS sonuc verdi: $AW_OUT${NC}"
+        rm -rf "$AW_TMP"
+        exit 1
+    fi
+    echo -e "${GREEN}dizi elemani 32-bit${NC} (kanitli erisim i32)"
+    rm -rf "$AW_TMP"
+
     # Kod üretimi DENKLİK denetimi: sahne JSON'undan üretilen Tulpar kodu
     # derlenip çalıştırılıyor ve kurduğu sahne yeniden serileştirilerek
     # kaynakla karşılaştırılıyor. "Kod da aynı sahneyi kuruyor" iddiasını

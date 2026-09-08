@@ -2389,6 +2389,7 @@ LLVMBackend *llvm_backend_create(const char *module_name) {
   backend->current_scope = nullptr;
   backend->func_stack = nullptr;
   backend->loop_depth = 0;
+  backend->shape_want32 = -1;   // surumlenmemis: erisim yerinde dallan
   backend->try_depth = 0;
   backend->lambda_count = 0;
   backend->function_count = 0;
@@ -3144,6 +3145,10 @@ LLVMValueRef box_typed_value(LLVMBackend *backend, TypedValue tv) {
 
 // Sekil onbellegi yardimcilari — tanimlari asagida; codegen_typed_expr'in
 // AST_ARRAY_ACCESS dali bunlari daha once kullaniyor.
+static LLVMValueRef emit_shape_elem_load(LLVMBackend *backend,
+                                         LLVMValueRef idata,
+                                         LLVMValueRef is32_slot,
+                                         LLVMValueRef idx, const char *nm);
 static const char *array_base_name(ASTNode_C *n);
 static bool shape_access_proven(const LLVMBackend::ArrShapeEntry *shp,
                                 ASTNode_C *idx);
@@ -3720,11 +3725,9 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
         LLVMValueRef tid = LLVMBuildLoad2(backend->builder, backend->ptr_type,
                                           tshp->idata_slot, "tarr.pid");
         LLVMValueRef tix = llvm_extract_vm_val_int(backend, tidx);
-        LLVMValueRef tep = LLVMBuildGEP2(backend->builder, backend->int_type,
-                                         tid, &tix, 1, "tarr.pep");
-        LLVMValueRef traw = LLVMBuildLoad2(backend->builder, backend->int_type,
-                                           tep, "tarr.praw");
-        llvm_tbaa_tag(backend, traw, 1);
+        LLVMValueRef traw = emit_shape_elem_load(backend, tid,
+                                                 tshp->is32_slot, tix,
+                                                 "tarr.pep");
         result.value = traw;
         result.type = INFERRED_INT;
         return result;
@@ -3997,15 +4000,21 @@ static LLVMBackend::ArrShapeEntry *shape_lookup(LLVMBackend *backend,
 // Dizinin seklini OKU ve onbellek yuvalarina yaz. Sekil uymuyorsa (dizi degil,
 // kutulu, ya da degisken bir dizi tutmuyor) count=0 yaziliyor: o zaman her
 // erisim eski tam yola dusuyor, yani yanlis olamiyor — yalnizca hizlanmiyor.
+// `want`: -1 genislik farketmez (gercek degeri kaydet) · 1 yalniz 32-bit
+// depoyu uygun say · 0 yalniz 64-bit depoyu. Uygun sayilmayan dizide count=0
+// yaziliyor, yani erisimler bekcili yola dusuyor — yanlis olamiyor.
 static void emit_shape_fill(LLVMBackend *backend, const char *name,
                             LLVMValueRef idata_slot, LLVMValueRef count_slot,
-                            LLVMValueRef len_slot, int eager_len) {
+                            LLVMValueRef len_slot, LLVMValueRef is32_slot,
+                            int want, int eager_len) {
   LLVMValueRef minus1 = LLVMConstInt(backend->int_type, (unsigned long long)-1, 1);
   LLVMValueRef slot = get_local(backend, name);
   if (!slot) {
     LLVMBuildStore(backend->builder, LLVMConstNull(backend->ptr_type), idata_slot);
     LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), count_slot);
     LLVMBuildStore(backend->builder, minus1, len_slot);
+    LLVMBuildStore(backend->builder, LLVMConstInt(backend->int32_type, 0, 0),
+                   is32_slot);
     return;
   }
   (void)eager_len;
@@ -4047,17 +4056,41 @@ static void emit_shape_fill(LLVMBackend *backend, const char *name,
   llvm_tbaa_tag(backend, cn, 0);
   LLVMValueRef cn64 = LLVMBuildSExt(backend->builder, cn, backend->int_type, "shape.cn64");
   // Kutulu diziyi hizli yola ALMIYORUZ: count=0 -> eski yol calisir.
+  LLVMValueRef ebp = LLVMBuildStructGEP2(backend->builder,
+                                         backend->obj_array_type, objp, 6,
+                                         "shape.ebp");
+  LLVMValueRef eb = LLVMBuildLoad2(backend->builder, i32t, ebp, "shape.eb");
+  llvm_tbaa_tag(backend, eb, 0);
+  LLVMValueRef is32 = LLVMBuildICmp(backend->builder, LLVMIntEQ, eb,
+                                    LLVMConstInt(i32t, 32, 0), "shape.is32");
   LLVMValueRef ok = LLVMBuildIsNotNull(backend->builder, id, "shape.ubox");
+  if (want == 1)
+    ok = LLVMBuildAnd(backend->builder, ok, is32, "shape.ok32");
+  else if (want == 0)
+    ok = LLVMBuildAnd(backend->builder, ok,
+                      LLVMBuildNot(backend->builder, is32, "shape.n32"),
+                      "shape.ok64");
   LLVMValueRef cn_final = LLVMBuildSelect(
       backend->builder, ok, cn64, LLVMConstInt(backend->int_type, 0, 0), "shape.cnf");
   LLVMBuildStore(backend->builder, id, idata_slot);
   LLVMBuildStore(backend->builder, cn_final, count_slot);
   LLVMBuildStore(backend->builder, cn64, len_slot);   // GERCEK uzunluk
+  LLVMBuildStore(
+      backend->builder,
+      LLVMBuildZExt(backend->builder,
+                    LLVMBuildAnd(backend->builder,
+                                 LLVMBuildIsNotNull(backend->builder, id,
+                                                    "shape.ub2"),
+                                 is32, "shape.u32"),
+                    i32t, "shape.u32z"),
+      is32_slot);
   LLVMBuildBr(backend->builder, b_done);
 
   LLVMPositionBuilderAtEnd(backend->builder, b_no);
   LLVMBuildStore(backend->builder, LLVMConstNull(backend->ptr_type), idata_slot);
   LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), count_slot);
+  LLVMBuildStore(backend->builder, LLVMConstInt(backend->int32_type, 0, 0),
+                 is32_slot);
   if (eager_len) {
     // Dizi degil (dizgi/json/...) ama dongu `len` cagiriyor: uzunlugu BURADA,
     // dongu basinda bir kez hesapla. Rebind denetimi degerin dongu boyunca
@@ -4086,25 +4119,31 @@ static void emit_shape_fill(LLVMBackend *backend, const char *name,
 // Modul-yerel tazeleme fonksiyonu (varsa dondur, yoksa uret).
 // Govdesi emit_shape_fill ile AYNI isi yapmak ZORUNDA — ikisi ayrisirsa
 // onbellek bayat/sarkan isaretci tutar (bkz. Tuzaklar 6l).
-static LLVMValueRef get_shape_refill_fn(LLVMBackend *backend, int eager) {
+static LLVMValueRef get_shape_refill_fn(LLVMBackend *backend, int eager,
+                                        int want) {
   eager = eager ? 1 : 0;
-  if (backend->fn_shape_refill[eager]) return backend->fn_shape_refill[eager];
+  int wi = (want == 1) ? 1 : (want == 0 ? 0 : 2);
+  if (backend->fn_shape_refill[eager][wi])
+    return backend->fn_shape_refill[eager][wi];
 
   LLVMBasicBlockRef save_bb = LLVMGetInsertBlock(backend->builder);
   LLVMTypeRef i32t = backend->int32_type;
   LLVMTypeRef params[] = {backend->ptr_type, backend->ptr_type,
-                          backend->ptr_type, backend->ptr_type};
-  LLVMTypeRef fty = LLVMFunctionType(backend->void_type, params, 4, 0);
-  LLVMValueRef fn = LLVMAddFunction(
-      backend->module,
-      eager ? "tulpar.shape_refill.len" : "tulpar.shape_refill", fty);
+                          backend->ptr_type, backend->ptr_type,
+                          backend->ptr_type};
+  LLVMTypeRef fty = LLVMFunctionType(backend->void_type, params, 5, 0);
+  char fname[64];
+  snprintf(fname, sizeof(fname), "tulpar.shape_refill%s.w%d",
+           eager ? ".len" : "", wi);
+  LLVMValueRef fn = LLVMAddFunction(backend->module, fname, fty);
   LLVMSetLinkage(fn, LLVMInternalLinkage);
-  backend->fn_shape_refill[eager] = fn;
+  backend->fn_shape_refill[eager][wi] = fn;
 
   LLVMValueRef p_v = LLVMGetParam(fn, 0);
   LLVMValueRef p_id = LLVMGetParam(fn, 1);
   LLVMValueRef p_cn = LLVMGetParam(fn, 2);
   LLVMValueRef p_ln = LLVMGetParam(fn, 3);
+  LLVMValueRef p_w = LLVMGetParam(fn, 4);
 
   LLVMBasicBlockRef b_entry = append_bb(backend, fn, "entry");
   LLVMBasicBlockRef b_ty = append_bb(backend, fn, "ty");
@@ -4140,6 +4179,23 @@ static LLVMValueRef get_shape_refill_fn(LLVMBackend *backend, int eager) {
   LLVMValueRef cn = LLVMBuildLoad2(backend->builder, i32t, cnp, "cn");
   LLVMValueRef cn64 = LLVMBuildSExt(backend->builder, cn, backend->int_type, "cn64");
   LLVMValueRef ok = LLVMBuildIsNotNull(backend->builder, id, "ubox");
+  LLVMValueRef ebp = LLVMBuildStructGEP2(backend->builder,
+                                         backend->obj_array_type, objp, 6, "ebp");
+  LLVMValueRef eb = LLVMBuildLoad2(backend->builder, i32t, ebp, "eb");
+  LLVMValueRef is32 = LLVMBuildICmp(backend->builder, LLVMIntEQ, eb,
+                                    LLVMConstInt(i32t, 32, 0), "is32");
+  LLVMBuildStore(backend->builder,
+                 LLVMBuildZExt(backend->builder,
+                               LLVMBuildAnd(backend->builder, ok, is32, "u32"),
+                               i32t, "u32z"),
+                 p_w);
+  // Genislik VARSAYIMI tutmuyorsa count=0: bu surumun uzmanlastirilmis
+  // erisimleri devre disi kalir ve bekcili yola dusulur. Genisletme (widen)
+  // sonrasi dogrulugu saglayan sey tam olarak bu.
+  if (want == 1) ok = LLVMBuildAnd(backend->builder, ok, is32, "ok32");
+  else if (want == 0)
+    ok = LLVMBuildAnd(backend->builder, ok,
+                      LLVMBuildNot(backend->builder, is32, "n32"), "ok64");
   LLVMValueRef cnf = LLVMBuildSelect(backend->builder, ok, cn64,
                                      LLVMConstInt(backend->int_type, 0, 0), "cnf");
   LLVMBuildStore(backend->builder, id, p_id);
@@ -4150,6 +4206,7 @@ static LLVMValueRef get_shape_refill_fn(LLVMBackend *backend, int eager) {
   LLVMPositionBuilderAtEnd(backend->builder, b_no);
   LLVMBuildStore(backend->builder, LLVMConstNull(backend->ptr_type), p_id);
   LLVMBuildStore(backend->builder, LLVMConstInt(backend->int_type, 0, 0), p_cn);
+  LLVMBuildStore(backend->builder, LLVMConstInt(i32t, 0, 0), p_w);
   if (eager) {
     // Dizi degil (dizgi/json/...) ama dongu `len` cagiriyor: bir kez hesapla.
     LLVMValueRef largs[] = {p_v};
@@ -4184,13 +4241,149 @@ static void emit_shape_refresh_all(LLVMBackend *backend) {
     if (!slot) {
       // Degisken gorunmuyor: eski satir ici yol zaten yalniz null yaziyor.
       emit_shape_fill(backend, e->name, e->idata_slot, e->count_slot,
-                      e->len_slot, e->len_eager);
+                      e->len_slot, e->is32_slot, backend->shape_want32,
+                      e->len_eager);
       continue;
     }
-    LLVMValueRef rf = get_shape_refill_fn(backend, e->len_eager);
-    LLVMValueRef args[] = {slot, e->idata_slot, e->count_slot, e->len_slot};
-    LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(rf), rf, args, 4, "");
+    LLVMValueRef rf = get_shape_refill_fn(backend, e->len_eager,
+                                          backend->shape_want32);
+    LLVMValueRef args[] = {slot, e->idata_slot, e->count_slot, e->len_slot,
+                           e->is32_slot};
+    LLVMBuildCall2(backend->builder, LLVMGlobalGetValueType(rf), rf, args, 5, "");
   }
+}
+
+// Onbellekli eleman OKUMASI — genislik varsayimina gore.
+//
+// backend->shape_want32:  1 -> 32-bit dalsiz · 0 -> 64-bit dalsiz ·
+// -1 -> surumlenmemis dongu, genislik yuvasina bakip DALLAN.
+//
+// Dalin surumlenmis donguden CIKARILMASI bu isin butun mesele si: erisim
+// yerinde dallanmak elek'te 8,06 -> 8,46 (kayip) veriyordu; olcum, maliyetin
+// yuvanin yeniden okunmasi degil DALIN KENDISI oldugunu gosterdi.
+static LLVMValueRef emit_shape_elem_load(LLVMBackend *backend,
+                                         LLVMValueRef idata,
+                                         LLVMValueRef is32_slot,
+                                         LLVMValueRef idx, const char *nm) {
+  char b1[64], b2[64];
+  if (backend->shape_want32 == 1) {
+    snprintf(b1, sizeof(b1), "%s.p32", nm);
+    LLVMValueRef ep = LLVMBuildGEP2(backend->builder, backend->int32_type,
+                                    idata, &idx, 1, b1);
+    LLVMValueRef rv = LLVMBuildLoad2(backend->builder, backend->int32_type, ep,
+                                     nm);
+    llvm_tbaa_tag(backend, rv, 1);
+    snprintf(b2, sizeof(b2), "%s.sx", nm);
+    return LLVMBuildSExt(backend->builder, rv, backend->int_type, b2);
+  }
+  if (backend->shape_want32 == 0) {
+    snprintf(b1, sizeof(b1), "%s.p64", nm);
+    LLVMValueRef ep = LLVMBuildGEP2(backend->builder, backend->int_type, idata,
+                                    &idx, 1, b1);
+    LLVMValueRef rv = LLVMBuildLoad2(backend->builder, backend->int_type, ep, nm);
+    llvm_tbaa_tag(backend, rv, 1);
+    return rv;
+  }
+  // Surumlenmemis: genislik yuvasindan dallan.
+  LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+  LLVMValueRef w = LLVMBuildLoad2(backend->builder, backend->int32_type,
+                                  is32_slot, "el.w");
+  LLVMBasicBlockRef b32 = append_bb(backend, fn, "el.32");
+  LLVMBasicBlockRef b64 = append_bb(backend, fn, "el.64");
+  LLVMBasicBlockRef bj = append_bb(backend, fn, "el.join");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntNE, w,
+                                LLVMConstInt(backend->int32_type, 0, 0),
+                                "el.is32"),
+                  b32, b64);
+  LLVMPositionBuilderAtEnd(backend->builder, b32);
+  LLVMValueRef ep32 = LLVMBuildGEP2(backend->builder, backend->int32_type,
+                                    idata, &idx, 1, "el.p32");
+  LLVMValueRef r32 = LLVMBuildLoad2(backend->builder, backend->int32_type,
+                                    ep32, "el.v32");
+  llvm_tbaa_tag(backend, r32, 1);
+  LLVMValueRef s32 = LLVMBuildSExt(backend->builder, r32, backend->int_type,
+                                   "el.sx");
+  LLVMBasicBlockRef e32 = LLVMGetInsertBlock(backend->builder);
+  LLVMBuildBr(backend->builder, bj);
+  LLVMPositionBuilderAtEnd(backend->builder, b64);
+  LLVMValueRef ep64 = LLVMBuildGEP2(backend->builder, backend->int_type, idata,
+                                    &idx, 1, "el.p64");
+  LLVMValueRef r64 = LLVMBuildLoad2(backend->builder, backend->int_type, ep64,
+                                    "el.v64");
+  llvm_tbaa_tag(backend, r64, 1);
+  LLVMBasicBlockRef e64 = LLVMGetInsertBlock(backend->builder);
+  LLVMBuildBr(backend->builder, bj);
+  LLVMPositionBuilderAtEnd(backend->builder, bj);
+  LLVMValueRef phi = LLVMBuildPhi(backend->builder, backend->int_type, "el.res");
+  LLVMValueRef in[] = {s32, r64};
+  LLVMBasicBlockRef bb[] = {e32, e64};
+  LLVMAddIncoming(phi, in, bb, 2);
+  return phi;
+}
+
+// Onbellekli eleman YAZMASI — okuma ile ayni varsayim kurallari.
+// 32-bit dalinda degerin i32'ye SIGDIGI cagiran tarafindan garanti edilmis
+// olmali (bekci zincirine `fits` kosulu ekleniyor).
+static void emit_shape_elem_store(LLVMBackend *backend, LLVMValueRef idata,
+                                  LLVMValueRef is32_slot, LLVMValueRef idx,
+                                  LLVMValueRef v64, const char *nm) {
+  char b1[64];
+  if (backend->shape_want32 == 1) {
+    snprintf(b1, sizeof(b1), "%s.p32", nm);
+    LLVMValueRef ep = LLVMBuildGEP2(backend->builder, backend->int32_type,
+                                    idata, &idx, 1, b1);
+    LLVMValueRef st = LLVMBuildStore(
+        backend->builder,
+        LLVMBuildTrunc(backend->builder, v64, backend->int32_type, "el.tr"), ep);
+    llvm_tbaa_tag(backend, st, 1);
+    return;
+  }
+  if (backend->shape_want32 == 0) {
+    snprintf(b1, sizeof(b1), "%s.p64", nm);
+    LLVMValueRef ep = LLVMBuildGEP2(backend->builder, backend->int_type, idata,
+                                    &idx, 1, b1);
+    LLVMValueRef st = LLVMBuildStore(backend->builder, v64, ep);
+    llvm_tbaa_tag(backend, st, 1);
+    return;
+  }
+  LLVMValueRef fn = LLVMGetBasicBlockParent(LLVMGetInsertBlock(backend->builder));
+  LLVMValueRef w = LLVMBuildLoad2(backend->builder, backend->int32_type,
+                                  is32_slot, "es.w");
+  LLVMBasicBlockRef b32 = append_bb(backend, fn, "es.32");
+  LLVMBasicBlockRef b64 = append_bb(backend, fn, "es.64");
+  LLVMBasicBlockRef bj = append_bb(backend, fn, "es.join");
+  LLVMBuildCondBr(backend->builder,
+                  LLVMBuildICmp(backend->builder, LLVMIntNE, w,
+                                LLVMConstInt(backend->int32_type, 0, 0),
+                                "es.is32"),
+                  b32, b64);
+  LLVMPositionBuilderAtEnd(backend->builder, b32);
+  LLVMValueRef e32p = LLVMBuildGEP2(backend->builder, backend->int32_type,
+                                    idata, &idx, 1, "es.p32");
+  LLVMValueRef s1 = LLVMBuildStore(
+      backend->builder,
+      LLVMBuildTrunc(backend->builder, v64, backend->int32_type, "es.tr"), e32p);
+  llvm_tbaa_tag(backend, s1, 1);
+  LLVMBuildBr(backend->builder, bj);
+  LLVMPositionBuilderAtEnd(backend->builder, b64);
+  LLVMValueRef e64p = LLVMBuildGEP2(backend->builder, backend->int_type, idata,
+                                    &idx, 1, "es.p64");
+  LLVMValueRef s2 = LLVMBuildStore(backend->builder, v64, e64p);
+  llvm_tbaa_tag(backend, s2, 1);
+  LLVMBuildBr(backend->builder, bj);
+  LLVMPositionBuilderAtEnd(backend->builder, bj);
+}
+
+// `v` i32'ye siger mi (calisma zamani sinavi). Sabit degerde katlaniyor.
+static LLVMValueRef emit_fits_i32(LLVMBackend *backend, LLVMValueRef v) {
+  return LLVMBuildICmp(
+      backend->builder, LLVMIntEQ,
+      LLVMBuildSExt(backend->builder,
+                    LLVMBuildTrunc(backend->builder, v, backend->int32_type,
+                                   "fit.tr"),
+                    backend->int_type, "fit.sx"),
+      v, "fit.ok");
 }
 
 // Dongu basinda: sekli kanitlanabilen dizileri onbellege al.
@@ -4211,12 +4404,16 @@ static int emit_shape_cache_for_loop(LLVMBackend *backend, ASTNode_C *cond,
                                                   "shape.count.slot");
     LLVMValueRef lns = llvm_build_alloca_at_entry(backend, backend->int_type,
                                                   "shape.len.slot");
+    LLVMValueRef w32s = llvm_build_alloca_at_entry(backend, backend->int32_type,
+                                                   "shape.is32.slot");
     int uses_len = tulpar_loop_uses_len(cond, body, incr, names[i]);
-    emit_shape_fill(backend, names[i], ids, cns, lns, uses_len);
+    emit_shape_fill(backend, names[i], ids, cns, lns, w32s,
+                    backend->shape_want32, uses_len);
     backend->shape_cache[backend->shape_count].name = names[i];
     backend->shape_cache[backend->shape_count].idata_slot = ids;
     backend->shape_cache[backend->shape_count].count_slot = cns;
     backend->shape_cache[backend->shape_count].len_slot = lns;
+    backend->shape_cache[backend->shape_count].is32_slot = w32s;
     backend->shape_cache[backend->shape_count].len_eager = uses_len;
     backend->shape_cache[backend->shape_count].proven_ivar = nullptr;
     backend->shape_count++;
@@ -4675,11 +4872,9 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         LLVMValueRef pid = LLVMBuildLoad2(backend->builder, backend->ptr_type,
                                           pshp->idata_slot, "arr.pid");
         LLVMValueRef pix = llvm_extract_vm_val_int(backend, idx_val);
-        LLVMValueRef pep = LLVMBuildGEP2(backend->builder, backend->int_type,
-                                         pid, &pix, 1, "arr.pep");
-        LLVMValueRef praw = LLVMBuildLoad2(backend->builder, backend->int_type,
-                                           pep, "arr.praw");
-        llvm_tbaa_tag(backend, praw, 1);
+        LLVMValueRef praw = emit_shape_elem_load(backend, pid,
+                                                 pshp->is32_slot, pix,
+                                                 "arr.pep");
         return llvm_vm_val_int_val(backend, praw);
       }
     }
@@ -4717,11 +4912,8 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                         LLVMBuildAnd(backend->builder, ii0, ir0, "arr.cok"),
                         bb_cached, bb_gen);
         LLVMPositionBuilderAtEnd(backend->builder, bb_cached);
-        LLVMValueRef cep = LLVMBuildGEP2(backend->builder, backend->int_type, cid,
-                                         &ix0, 1, "arr.cep");
-        LLVMValueRef craw = LLVMBuildLoad2(backend->builder, backend->int_type,
-                                           cep, "arr.craw");
-        llvm_tbaa_tag(backend, craw, 1);
+        LLVMValueRef craw = emit_shape_elem_load(backend, cid, shp->is32_slot,
+                                                 ix0, "arr.cep");
         cached_val = llvm_vm_val_int_val(backend, craw);
         cached_end = LLVMGetInsertBlock(backend->builder);
         LLVMBuildBr(backend->builder, bb_done);
@@ -4778,6 +4970,35 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
                       bb_ubox, bb_boxed);
 
       LLVMPositionBuilderAtEnd(backend->builder, bb_ubox);
+      // Bekcili yol (surumlenmemis erisim) IKI GENISLIGI de gormek zorunda.
+      // Dizi NESNESI elde oldugu icin genislik dogrudan okunabiliyor; bu yol
+      // zaten bekcili, bir dal daha gurultuye karisiyor.
+      LLVMValueRef ebp2 = LLVMBuildStructGEP2(
+          backend->builder, backend->obj_array_type, objp, 6, "arr.ebp");
+      LLVMValueRef eb2 = LLVMBuildLoad2(backend->builder, backend->int32_type,
+                                        ebp2, "arr.eb");
+      llvm_tbaa_tag(backend, eb2, 0);
+      LLVMBasicBlockRef bb_u32 = append_bb(backend, fn, "arr.u32");
+      LLVMBasicBlockRef bb_u64 = append_bb(backend, fn, "arr.u64");
+      LLVMBuildCondBr(backend->builder,
+                      LLVMBuildICmp(backend->builder, LLVMIntEQ, eb2,
+                                    LLVMConstInt(backend->int32_type, 32, 0),
+                                    "arr.is32"),
+                      bb_u32, bb_u64);
+
+      LLVMPositionBuilderAtEnd(backend->builder, bb_u32);
+      LLVMValueRef ep32 = LLVMBuildGEP2(backend->builder, backend->int32_type,
+                                        idata, &idx64, 1, "arr.ielem32.ptr");
+      LLVMValueRef r32 = LLVMBuildLoad2(backend->builder, backend->int32_type,
+                                        ep32, "arr.ielem32");
+      llvm_tbaa_tag(backend, r32, 1);
+      LLVMValueRef v32 = llvm_vm_val_int_val(
+          backend, LLVMBuildSExt(backend->builder, r32, backend->int_type,
+                                 "arr.ielem32.sx"));
+      LLVMBasicBlockRef u32_end = LLVMGetInsertBlock(backend->builder);
+      LLVMBuildBr(backend->builder, bb_done);
+
+      LLVMPositionBuilderAtEnd(backend->builder, bb_u64);
       LLVMValueRef ielem_ptr = LLVMBuildGEP2(
           backend->builder, backend->int_type, idata, &idx64, 1, "arr.ielem.ptr");
       LLVMValueRef iraw = LLVMBuildLoad2(backend->builder, backend->int_type,
@@ -4820,9 +5041,10 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
       LLVMPositionBuilderAtEnd(backend->builder, bb_done);
       LLVMValueRef phi = LLVMBuildPhi(backend->builder, backend->vm_value_type,
                                       "arr.res");
-      LLVMValueRef inc[] = {ubox_val, fast_val, slow_val, cached_val};
-      LLVMBasicBlockRef inb[] = {ubox_end, boxed_end, slow_end, cached_end};
-      LLVMAddIncoming(phi, inc, inb, cached_end ? 4 : 3);
+      LLVMValueRef inc[] = {v32, ubox_val, fast_val, slow_val, cached_val};
+      LLVMBasicBlockRef inb[] = {u32_end, ubox_end, boxed_end, slow_end,
+                                 cached_end};
+      LLVMAddIncoming(phi, inc, inb, cached_end ? 5 : 4);
       return phi;
     }
   }
@@ -8639,12 +8861,9 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                                               backend->ptr_type,
                                               pshp->idata_slot, "set.pid");
             LLVMValueRef pix = llvm_extract_vm_val_int(backend, pidx);
-            LLVMValueRef pep = LLVMBuildGEP2(backend->builder,
-                                             backend->int_type, pid, &pix, 1,
-                                             "set.pep");
-            LLVMValueRef pst = LLVMBuildStore(
-                backend->builder, llvm_extract_vm_val_int(backend, val), pep);
-            llvm_tbaa_tag(backend, pst, 1);
+            emit_shape_elem_store(backend, pid, pshp->is32_slot, pix,
+                                  llvm_extract_vm_val_int(backend, val),
+                                  "set.pep");
             return val;
           }
         }
@@ -8723,17 +8942,21 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           LLVMValueRef six = llvm_extract_vm_val_int(backend, index);
           LLVMValueRef sir = LLVMBuildICmp(backend->builder, LLVMIntULT, six,
                                            sccnt, "set.cinr");
+          // 32-bit varsayiminda degerin i32'ye SIGMASI sart; sigmayan deger
+          // genel yola dusuyor ve calisma zamani diziyi GENISLETIYOR
+          // (kutulamiyor). Sabit degerde bu sinav derleme zamaninda katlanir.
+          LLVMValueRef svl = llvm_extract_vm_val_int(backend, val);
           LLVMValueRef sok = LLVMBuildAnd(
               backend->builder,
               LLVMBuildAnd(backend->builder, sii, svi, "set.cok1"), sir,
-              "set.cok");
+              "set.cok0");
+          if (backend->shape_want32 != 0)
+            sok = LLVMBuildAnd(backend->builder, sok,
+                               emit_fits_i32(backend, svl), "set.cok");
           LLVMBuildCondBr(backend->builder, sok, sb_cached, sb_gen);
           LLVMPositionBuilderAtEnd(backend->builder, sb_cached);
-          LLVMValueRef scep = LLVMBuildGEP2(backend->builder, backend->int_type,
-                                            scid, &six, 1, "set.cep");
-          LLVMValueRef scst = LLVMBuildStore(
-              backend->builder, llvm_extract_vm_val_int(backend, val), scep);
-          llvm_tbaa_tag(backend, scst, 1);
+          emit_shape_elem_store(backend, scid, s_shp->is32_slot, six, svl,
+                                "set.cep");
           LLVMBuildBr(backend->builder, sb_done);
           LLVMPositionBuilderAtEnd(backend->builder, sb_gen);
         }
@@ -8808,14 +9031,46 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         LLVMBuildCondBr(backend->builder, s_isubox, sb_uchk, sb_boxed);
 
         LLVMPositionBuilderAtEnd(backend->builder, sb_uchk);
-        LLVMBuildCondBr(backend->builder, s_visint, sb_ubox, sb_slow);
+        // 32-bit depoya sigmayan deger YAVAS yola gidiyor; calisma zamani
+        // (vm_array_set) diziyi GENISLETIYOR — kutulamiyor.
+        LLVMValueRef s_ebp = LLVMBuildStructGEP2(
+            backend->builder, backend->obj_array_type, s_objp, 6, "set.ebp");
+        LLVMValueRef s_eb = LLVMBuildLoad2(backend->builder, si32, s_ebp,
+                                           "set.eb");
+        llvm_tbaa_tag(backend, s_eb, 0);
+        LLVMValueRef s_is32 = LLVMBuildICmp(backend->builder, LLVMIntEQ, s_eb,
+                                            LLVMConstInt(si32, 32, 0),
+                                            "set.is32");
+        LLVMValueRef s_vi = llvm_extract_vm_val_int(backend, val);
+        LLVMValueRef s_wok = LLVMBuildAnd(
+            backend->builder, s_visint,
+            LLVMBuildOr(backend->builder,
+                        LLVMBuildNot(backend->builder, s_is32, "set.not32"),
+                        emit_fits_i32(backend, s_vi), "set.w2"),
+            "set.wok");
+        LLVMBuildCondBr(backend->builder, s_wok, sb_ubox, sb_slow);
 
         LLVMPositionBuilderAtEnd(backend->builder, sb_ubox);
+        LLVMBasicBlockRef sb_u32 = append_bb(backend, fn2, "set.u32");
+        LLVMBasicBlockRef sb_u64 = append_bb(backend, fn2, "set.u64");
+        LLVMBuildCondBr(backend->builder, s_is32, sb_u32, sb_u64);
+
+        LLVMPositionBuilderAtEnd(backend->builder, sb_u32);
+        LLVMValueRef s_ep32 = LLVMBuildGEP2(
+            backend->builder, backend->int32_type, s_idata, &s_idx, 1,
+            "set.ielem32.ptr");
+        LLVMValueRef s_st32 = LLVMBuildStore(
+            backend->builder,
+            LLVMBuildTrunc(backend->builder, s_vi, backend->int32_type,
+                           "set.uv32"), s_ep32);
+        llvm_tbaa_tag(backend, s_st32, 1);
+        LLVMBuildBr(backend->builder, sb_done);
+
+        LLVMPositionBuilderAtEnd(backend->builder, sb_u64);
         LLVMValueRef s_iep = LLVMBuildGEP2(
             backend->builder, backend->int_type, s_idata, &s_idx, 1,
             "set.ielem.ptr");
-        LLVMValueRef s_ist = LLVMBuildStore(backend->builder,
-                       llvm_extract_vm_val_int(backend, val), s_iep);
+        LLVMValueRef s_ist = LLVMBuildStore(backend->builder, s_vi, s_iep);
         llvm_tbaa_tag(backend, s_ist, 1);
         LLVMBuildBr(backend->builder, sb_done);
 
@@ -9039,8 +9294,15 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           LLVMValueRef inr = LLVMBuildICmp(
               backend->builder, w_incl ? LLVMIntSLT : LLVMIntSLE, ub_val, cn,
               "wv.ub");
-          LLVMValueRef nz = LLVMBuildICmp(backend->builder, LLVMIntNE, cn,
-                                          zero, "wv.nz");
+          LLVMValueRef w32w =
+              LLVMBuildLoad2(backend->builder, backend->int32_type,
+                             backend->shape_cache[i].is32_slot, "wv.w32");
+          LLVMValueRef nz = LLVMBuildAnd(
+              backend->builder,
+              LLVMBuildICmp(backend->builder, LLVMIntNE, cn, zero, "wv.cnz"),
+              LLVMBuildICmp(backend->builder, LLVMIntNE, w32w,
+                            LLVMConstInt(backend->int32_type, 0, 0), "wv.w"),
+              "wv.nz");
           ok = LLVMBuildAnd(backend->builder, ok,
                             LLVMBuildAnd(backend->builder, inr, nz, "wv.e"),
                             "wv.and");
@@ -9056,7 +9318,11 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
                                            wb_gen),
                            2000, 1);
 
+        // HIZLI surum: dizi kutusuz VE 32-bit (surumleme kosulu boyle).
+        // Erisimler o varsayimla DALSIZ uretiliyor.
+        int w_saved_want = backend->shape_want32;
         LLVMPositionBuilderAtEnd(backend->builder, wb_fast);
+        backend->shape_want32 = 1;
         for (int i = 0; i < backend->shape_count && i < 4; i++) {
           w_saved_ivar[i] = backend->shape_cache[i].proven_ivar;
           backend->shape_cache[i].proven_ivar = w_ivar;
@@ -9065,11 +9331,22 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         for (int i = 0; i < backend->shape_count && i < 4; i++)
           backend->shape_cache[i].proven_ivar = w_saved_ivar[i];
 
+        // GENEL surum: buraya dusen kutusuz diziler 64-BIT. Sekil yuvalari
+        // o varsayima gore yeniden dolduruluyor (32-bit ya da kutulu dizide
+        // count=0 yazilir ve erisimler bekcili yola duser), boylece genel
+        // surum de DALSIZ.
         LLVMPositionBuilderAtEnd(backend->builder, wb_gen);
+        backend->shape_want32 = 0;
+        for (int i = 0; i < backend->shape_count; i++) {
+          LLVMBackend::ArrShapeEntry *e = &backend->shape_cache[i];
+          emit_shape_fill(backend, e->name, e->idata_slot, e->count_slot,
+                          e->len_slot, e->is32_slot, 0, e->len_eager);
+        }
         if (getenv("TULPAR_X_ONLYFAST"))
           LLVMBuildBr(backend->builder, wb_done);   /* DENEY: genel surum YOK */
         else
           codegen_while_body(backend, node, wb_done);
+        backend->shape_want32 = w_saved_want;
 
         LLVMPositionBuilderAtEnd(backend->builder, wb_done);
         backend->shape_count = shape_saved;
@@ -9145,9 +9422,18 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
         LLVMValueRef cn =
             LLVMBuildLoad2(backend->builder, backend->int_type,
                            backend->shape_cache[i].count_slot, "ver.cn");
-        LLVMValueRef ok = LLVMBuildICmp(
-            backend->builder, LLVMIntNE, cn,
-            LLVMConstInt(backend->int_type, 0, 0), "ver.ok");
+        // Hizli surum 32-BIT depoya gore uretiliyor (dalsiz); 64-bit diziler
+        // genel surume gidiyor ve ORASI da 64-bit'e gore dalsiz uretiliyor.
+        LLVMValueRef w32 =
+            LLVMBuildLoad2(backend->builder, backend->int32_type,
+                           backend->shape_cache[i].is32_slot, "ver.w32");
+        LLVMValueRef ok = LLVMBuildAnd(
+            backend->builder,
+            LLVMBuildICmp(backend->builder, LLVMIntNE, cn,
+                          LLVMConstInt(backend->int_type, 0, 0), "ver.cnz"),
+            LLVMBuildICmp(backend->builder, LLVMIntNE, w32,
+                          LLVMConstInt(backend->int32_type, 0, 0), "ver.w"),
+            "ver.ok");
         all_ok = all_ok ? LLVMBuildAnd(backend->builder, all_ok, ok, "ver.and")
                         : ok;
       }
@@ -9155,13 +9441,22 @@ LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node) {
           backend, LLVMBuildCondBr(backend->builder, all_ok, vb_fast, vb_gen),
           2000, 1);
 
+      int v_saved_want = backend->shape_want32;
       LLVMPositionBuilderAtEnd(backend->builder, vb_fast);
+      backend->shape_want32 = 1;                         // hizli surum: 32-bit
       codegen_for_body(backend, node, vb_done);          // proven_ivar DOLU
 
       for (int i = shape_saved; i < backend->shape_count; i++)
         backend->shape_cache[i].proven_ivar = nullptr;   // genel surum: BEKCILI
       LLVMPositionBuilderAtEnd(backend->builder, vb_gen);
+      backend->shape_want32 = 0;                         // genel surum: 64-bit
+      for (int i = shape_saved; i < backend->shape_count; i++) {
+        LLVMBackend::ArrShapeEntry *e = &backend->shape_cache[i];
+        emit_shape_fill(backend, e->name, e->idata_slot, e->count_slot,
+                        e->len_slot, e->is32_slot, 0, e->len_eager);
+      }
       codegen_for_body(backend, node, vb_done);
+      backend->shape_want32 = v_saved_want;
 
       LLVMPositionBuilderAtEnd(backend->builder, vb_done);
       backend->shape_count = shape_saved;

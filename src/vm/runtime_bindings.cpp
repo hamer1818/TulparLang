@@ -857,11 +857,12 @@ ObjString *vm_alloc_string_aot(void *vm, const char *chars, int length) {
 // alternatifi, uretilen kodun sessizce yanlis adrese yazmasiydi.
 static_assert(sizeof(VMValue) == 16, "VMValue 16 bayt olmali (codegen varsayimi)");
 static_assert(offsetof(VMValue, as) == 8, "VMValue::as @8 olmali");
-static_assert(sizeof(ObjArray) == 56, "ObjArray 56 bayt olmali (codegen varsayimi)");
+static_assert(sizeof(ObjArray) == 64, "ObjArray 64 bayt olmali (codegen varsayimi)");
 static_assert(offsetof(ObjArray, count) == 32, "ObjArray::count @32 olmali");
 static_assert(offsetof(ObjArray, capacity) == 36, "ObjArray::capacity @36 olmali");
 static_assert(offsetof(ObjArray, items_) == 40, "ObjArray::items_ @40 olmali");
 static_assert(offsetof(ObjArray, idata) == 48, "ObjArray::idata @48 olmali");
+static_assert(offsetof(ObjArray, elem_bits) == 56, "ObjArray::elem_bits @56 olmali");
 static_assert(offsetof(Obj, type) == 0, "Obj::type @0 olmali");
 static_assert((int)VM_VAL_INT == 0 && (int)VM_VAL_OBJ == 4,
               "VMValueType sirasi codegen ile uyusmali");
@@ -879,11 +880,35 @@ void arr_debox(ObjArray *a) {
   int cap = a->capacity > n ? a->capacity : (n > 0 ? n : 1);
   VMValue *boxed = (VMValue *)malloc(sizeof(VMValue) * cap);
   if (!boxed) return;   // cevrilemedi: idata oldugu gibi kalir
-  for (int i = 0; i < n; i++) boxed[i] = VM_INT(a->idata[i]);
+  if (a->elem_bits == 32) {
+    const int32_t *src = (const int32_t *)a->idata;
+    for (int i = 0; i < n; i++) boxed[i] = VM_INT((long long)src[i]);
+  } else {
+    for (int i = 0; i < n; i++) boxed[i] = VM_INT(a->idata[i]);
+  }
   free(a->idata);
   a->idata = nullptr;
   a->items_ = boxed;
   a->capacity = cap;   // kapasite KORUNUR: buyume kodu old_capacity'yi onceden okumus olabilir
+}
+
+// 32-bit depolamayi 64'e GENISLETIR. Kutulanmamis dizi i32 baslar; i32'ye
+// sigmayan bir deger yazilmak istendiginde once bu cagriliyor. Kutulamiyor:
+// dizi 8 bayta cikiyor ama KUTUSUZ kaliyor, yani hizli yollar acik kaliyor.
+// Genisletilemezse (bellek yok) kutulu yola duser: yavas ama dogru.
+extern "C" void aot_arr_widen(void *p) {
+  ObjArray *a = (ObjArray *)p;
+  if (!a || !a->idata || a->elem_bits != 32) return;
+  int cap = a->capacity > 0 ? a->capacity : 1;
+  size_t nb = sizeof(long long) * (size_t)cap;
+  long long *wide = a->obj.arena_allocated ? (long long *)aot_arena_alloc(nb)
+                                           : (long long *)malloc(nb);
+  if (!wide) { arr_debox(a); return; }
+  const int32_t *src = (const int32_t *)a->idata;
+  for (int i = 0; i < a->count; i++) wide[i] = (long long)src[i];
+  if (!a->obj.arena_allocated) free(a->idata);
+  a->idata = wide;
+  a->elem_bits = 64;
 }
 
 // Tamsayi bolme hatasi bildirici. Codegen'in IC yardimcisi: kullanici
@@ -1573,6 +1598,14 @@ void vm_array_push_wrapper(VM *vm, ObjArray *array, VMValue value) {
 }
 
 VMValue vm_array_get(ObjArray *array, int index) {
+  // Kutusuz diziden okumak icin KUTULAMAYA gerek yok. Eskiden asagidaki
+  // `arr_items()` diziyi kutuya ceviriyordu: genel yoldan TEK bir okuma bile
+  // butun diziyi 8 bayttan 16 bayta cikariyor ve bir daha geri donmuyordu.
+  if (array && array->idata && index >= 0 && index < array->count) {
+    if (array->elem_bits == 32)
+      return VM_INT((long long)((const int32_t *)array->idata)[index]);
+    return VM_INT(array->idata[index]);
+  }
   if (!array || index < 0 || index >= array->count) {
     printf("%s\n",
            tulpar::i18n::tr_en("Calisma Zamani Hatasi: Dizi indeksi sinir disinda",
@@ -1585,6 +1618,21 @@ VMValue vm_array_get(ObjArray *array, int index) {
 void vm_array_set(ObjArray *array, int index, VMValue value) {
   if (array)
     value = wb_persist_escape((Obj *)array, value);
+  // Kutusuz diziye TAMSAYI yazmak da kutulamayi gerektirmiyor. i32 depoya
+  // sigmayan deger once GENISLETIYOR (kutulamiyor).
+  if (array && array->idata && IS_INT(value) && index >= 0 &&
+      index < array->count) {
+    long long iv = AS_INT(value);
+    if (array->elem_bits == 32 && (long long)(int32_t)iv != iv)
+      aot_arr_widen(array);
+    if (array->idata) {
+      if (array->elem_bits == 32)
+        ((int32_t *)array->idata)[index] = (int32_t)iv;
+      else
+        array->idata[index] = iv;
+      return;
+    }
+  }
   if (!array || index < 0 || index >= array->count) {
     printf("%s\n",
            tulpar::i18n::tr_en("Calisma Zamani Hatasi: Dizi indeksi sinir disinda",
@@ -2056,15 +2104,19 @@ void aot_array_push(VMValue *arr_ptr, VMValue *item_ptr) {
     item = wb_persist_escape((Obj *)arr, item);
     // Kutulanmamis dizi + int deger: kutuya donmeden ekle.
     if (arr->idata && IS_INT(item)) {
-      if (arr->count >= arr->capacity) {
+      long long iv = AS_INT(item);
+      if (arr->elem_bits == 32 && (long long)(int32_t)iv != iv)
+        aot_arr_widen(arr);
+      if (arr->idata && arr->count >= arr->capacity) {
+        size_t esz = (arr->elem_bits == 32) ? sizeof(int32_t) : sizeof(long long);
         int new_cap = arr->capacity < 8 ? 8 : arr->capacity * 2;
         if (new_cap <= arr->count) new_cap = arr->count + 1;
-        size_t nb = sizeof(long long) * (size_t)new_cap;
+        size_t nb = esz * (size_t)new_cap;
         long long *ni;
         if (arr->obj.arena_allocated) {
           ni = (long long *)aot_arena_alloc(nb);
           if (ni && arr->count > 0)
-            memcpy(ni, arr->idata, sizeof(long long) * (size_t)arr->count);
+            memcpy(ni, arr->idata, esz * (size_t)arr->count);
         } else {
           ni = (long long *)realloc(arr->idata, nb);
         }
@@ -2072,7 +2124,10 @@ void aot_array_push(VMValue *arr_ptr, VMValue *item_ptr) {
         else { arr->idata = ni; arr->capacity = new_cap; }
       }
       if (arr->idata) {
-        arr->idata[arr->count++] = AS_INT(item);
+        if (arr->elem_bits == 32)
+          ((int32_t *)arr->idata)[arr->count++] = (int32_t)iv;
+        else
+          arr->idata[arr->count++] = iv;
         return;
       }
     }
@@ -3605,8 +3660,18 @@ VMValue aot_array_fill_ptr(VMValue *n_ptr, VMValue *val_ptr) {
     // Bellek bant genisligine bagli is yukleri (elek vb.) burada iki katina
     // cikiyor; rakiplerin sik dizi duzenine bu sekilde yaklasiyoruz.
     if (IS_INT(item)) {
-      size_t ibytes = sizeof(long long) * (size_t)n;
       long long iv = AS_INT(item);
+      // 32-BIT DEPO: dolgu degeri i32'ye siginca eleman basina 8 yerine 4
+      // bayt. Bellek bant genisligine bagli is yuklerinde bu dogrudan yariya
+      // iniyor. Kapatma anahtari: TULPAR_NO_I32=1 (A/B olcumu icin).
+      static int no_i32 = -1;
+      if (no_i32 < 0) {
+        const char *e = getenv("TULPAR_NO_I32");
+        no_i32 = (e && *e && strcmp(e, "0") != 0) ? 1 : 0;
+      }
+      int bits = (!no_i32 && (long long)(int32_t)iv == iv) ? 32 : 64;
+      size_t esz = (bits == 32) ? sizeof(int32_t) : sizeof(long long);
+      size_t ibytes = esz * (size_t)n;
       // SIFIR DOLGUSU: calloc. Buyuk istekte glibc mmap'e gidiyor ve
       // cekirdek sayfalari ZATEN sifir veriyor — yani 40 MB'lik bir dizide
       // yazma dongusu TAMAMEN gereksiz is. Olculdu (2026-09-05, n=5M):
@@ -3617,12 +3682,18 @@ VMValue aot_array_fill_ptr(VMValue *n_ptr, VMValue *val_ptr) {
       bool zero_fill = (iv == 0 && !arr->obj.arena_allocated);
       long long *id = arr->obj.arena_allocated
                           ? (long long *)aot_arena_alloc(ibytes)
-                          : (zero_fill ? (long long *)calloc((size_t)n,
-                                                             sizeof(long long))
+                          : (zero_fill ? (long long *)calloc((size_t)n, esz)
                                        : (long long *)malloc(ibytes));
       if (id) {
-        if (!zero_fill)
-          for (long long i = 0; i < n; i++) id[i] = iv;
+        if (!zero_fill) {
+          if (bits == 32) {
+            int32_t *i32 = (int32_t *)id;
+            for (long long i = 0; i < n; i++) i32[i] = (int32_t)iv;
+          } else {
+            for (long long i = 0; i < n; i++) id[i] = iv;
+          }
+        }
+        arr->elem_bits = bits;
         arr->idata = id;
         arr->items_ = nullptr;   // kutulu depo YOK: kacirilan her yol gurultuyle patlar
         arr->capacity = (int)n;

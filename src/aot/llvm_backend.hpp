@@ -131,6 +131,9 @@ typedef struct {
     // count_slot bunun yerine gecemez — o, kutulanmamis olmayan dizide
     // bilerek 0 tutuyor (her erisim eski yola dussun diye).
     LLVMValueRef len_slot;
+    // Eleman genisligi yuvasi: 1 = 32-bit depo, 0 = degil. Dongu basinda bir
+    // kez okunuyor; surumleme kosulu bunu kullaniyor.
+    LLVMValueRef is32_slot;
     // Bos degilse: bu dizinin `[<ivar>]` erisiminde SINIR DENETIMI
     // GEREKSIZ (kanit: tulpar_loop_index_proven). Yalniz dongunun HIZLI
     // surumunde dolu — genel surumde daima nullptr.
@@ -159,7 +162,17 @@ typedef struct {
   // aot_len cagiran varyant. Tek fonksiyonda birlestirilince aot_len'in
   // bilinmeyen etkileri BUTUN fonksiyonu kirletiyor ve `len` kullanmayan
   // sicak dongular de bedelini oduyordu (olculdu: sieve 9,07 -> 9,60).
-  LLVMValueRef fn_shape_refill[2];
+  // [eager][want]  want: 0 = 64-bit varsay, 1 = 32-bit varsay, 2 = varsayma
+  LLVMValueRef fn_shape_refill[2][3];
+  // Su an uretilen kodun ELEMAN GENISLIGI VARSAYIMI:
+  //   1  -> dizi 32-bit (dongunun HIZLI surumu icindeyiz)
+  //   0  -> dizi 64-bit (GENEL surum)
+  //  -1  -> bilinmiyor (surumlenmemis dongu) -> erisim yerinde dallan
+  //
+  // Dal boylece HER ERISIMDEN dongunun SURUM SECIMINE tasiniyor: iki genislik
+  // de sicak yolda dalsiz calisiyor. Olculdu (elek): erisim yerinde dallanmak
+  // 8,06 -> 8,46 (kayip); surum basina uzmanlastirma 7,5 bandi.
+  int shape_want32;
 
   LLVMMetadataRef tbaa_header;
   LLVMMetadataRef tbaa_elem;
