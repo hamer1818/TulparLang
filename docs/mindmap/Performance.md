@@ -702,3 +702,57 @@ parametreleri ve wasm sret yolu aynı imzaya bağlı. Güvenli biçimi: gövde
 kayıt-ABI'li `t_f$fast`e taşınır, `t_f` ince bir sarmalayıcı olarak kalır.
 Henüz yapılmadı.
 
+## Elek: BEŞ deneme, hepsi ölçüldü, hiçbiri ödemedi (2026-09-08)
+
+"C'yi her alanda geçelim" hedefiyle elek yeniden ele alındı. Açık 0,8 ms
+(Tulpar 8,5 · C 7,7). Denenen ve **ölçümle elenen** yollar:
+
+| deneme | sonuç |
+|---|---|
+| i32 eleman (geçici hack) | +0,19 ms — maliyetine değmez, bkz. üstteki bölüm |
+| iç içe döngü sürümleme (`TULPAR_X_NEST`) | **−0,57 ms**; 30 ölçüm, iki bağımsız koşum |
+| döngü-değişmezi global önbelleği | **−0,58 ms** (aşağıda) |
+| globalleri `internal` yapmak | IR **hiç değişmiyor** |
+| boru hattına `require<globals-aa>` | IR **hiç değişmiyor** |
+
+### Teşhis: darboğaz iç döngü değil, DIŞ döngü
+Dış tarama 5M kez koşuyor ve bizde şöyle:
+
+```
+mov 0x0(%rbp),%rdx   ; i BELLEKTEN
+inc %rdx
+mov %rdx,0x0(%rbp)   ; i BELLEĞE
+cmp (%r12),%rdx      ; n BELLEKTEN
+...
+xor %ecx,%ecx / test %ecx,%ecx / je    ; hep alınan ÖLÜ etiket denetimi
+```
+
+gcc'nin karşılığı 4 komut. Sebep: `f[i] == 0` karşılaştırmasının geri düşüş
+dalında `vm_binary_op` çağrısı duruyor. Çalışma zamanında **hiç yürütülmüyor**
+(`xor ecx,ecx` + `test` + `je` her zaman atlıyor) ama IR'de olduğu için LLVM
+globalleri yazmaca alamıyor.
+
+`internal` bağlantı + GlobalsAA bunu çözmüyor (ikisi de denendi, IR aynı
+kalıyor). Döngü-değişmezi global önbelleği iki bellek okumasını kaldırıyor ama
+LSR fazladan bir sayaç ekliyor (7→8 komut) ve net −0,58.
+
+**Gerçek çözüm** çağrıyı IR'den kaldırmak olurdu: dizi kanıtla kutusuzken
+`f[i]` doğrudan i64 döndürmeli, yani `codegen_typed_expr` AST_ARRAY_ACCESS'i
+tanımalı (şu an tanımıyor — yalnız literal/tanımlayıcı/çağrı/ikili işlem).
+O zaman `f[i] == 0` düz bir i64 karşılaştırması olur, etiket makinesi ve geri
+düşüş çağrısı hiç üretilmez. Yapılmadı.
+
+### Nereye kadar gidilebilir
+- Tulpar i64 **8,33** < clang'ın i64 C modeli **8,72** → erişim yolumuz düz
+  C'ye göre maliyet eklemiyor.
+- gcc'nin clang'a üstünlüğü **0,56 ms** ve sebebi belirlendi: clang'ın LSR'si
+  iç döngünün adres hesaplarını dış döngüye çıkarıyor — 3 fazladan sayaç, 5M
+  dış yinelemenin hepsinde güncelleniyor, oysa iç döngü yalnız 348K kez
+  giriliyor. gcc bunu yapmıyor (4 komut vs 8).
+
+Yani elekteki açığın çoğu bizim ürettiğimiz IR'da değil, LLVM'in arka ucunda.
+
+### Yan ürün: bir DOĞRULUK hatası
+Bu kazının asıl getirisi hız değil, `int y = yan() + 0;` ifadesinin fonksiyonu
+İKİ KEZ çağırdığının bulunması oldu. Bkz. [[Tuzaklar]] 6x.
+
