@@ -811,3 +811,68 @@ geliyor — i32 ölçümüyle (0,19) birebir tutuyor.
 duran** bir çağrı olup olmadığına bak. Ölü bir dal bile optimize ediciyi
 durduruyor; onu kaldırmak çağrının süresinden fazlasını geri veriyor.
 
+## i32 eleman: TAM UYGULANDI, ölçüldü, GERİ ALINDI (2026-09-08)
+
+Elekte C'ye kalan 0,2 ms'lik açığı kapatmak için 32-bit eleman deposu **baştan
+sona uygulandı** (temsil, çalışma zamanı, sekiz codegen erişim yolu,
+genişletme, testler) ve sonra geri alındı. Sebep tek cümleyle: **her tasarım ya
+kazandığından çok kaybettiriyor ya da 64-bit dizilerde sessiz bir uçurum
+açıyor.**
+
+### Önce: tavan ölçümü BAYATLAMIŞTI
+Eski ölçüm (2026-09-07) i32'yi 0,19 ms diye eledi. O ölçüm, dış döngünün
+bellek yeniden okumalarıyla boğulduğu **eski codegen'de** yapılmıştı. Döngü
+sıkılaştıktan sonra yeniden ölçülünce:
+
+| | ms |
+|---|--:|
+| Tulpar i64 | 8,17 |
+| **Tulpar i32 (hack)** | **7,53** |
+| gcc -O2 4B | 7,62 |
+
+**0,64 ms** — üç katı. Ve i32'li Tulpar gcc'yi *geçiyor*. Ders: bir tavan
+ölçümü, ölçtüğü kodun etrafı değişince geçersizleşir.
+
+### Uygulanan iki tasarım ve ikisinin de düştüğü yer
+`ObjArray`a `elem_bits` eklendi; dizi 32-bit başlıyor, i32'ye sığmayan bir
+değer yazılınca **genişletiliyor** (kutulanmıyor — `aot_arr_widen`). Çalışma
+zamanı okuma/yazma genişlik farkında; `vm_array_get/set` artık kutusuz diziyi
+kutulamadan işliyor (bu tek başına bir iyileştirme).
+
+Ayrım codegen'de: hızlı yollar hangi genişliği varsayacak?
+
+| tasarım | elek (i32 dizi) | elek (64-bit dizi) |
+|---|--:|--:|
+| bugünkü (i32 yok) | 8,06 | 8,06 |
+| **V1** — şekil önbelleği yalnız i32 kabul eder | **7,56** | **15,12** |
+| **V2** — önbellek iki genişliği de destekler (dal) | 8,46 | 10,92 |
+
+- **V1** kazanıyor ama 64-bit diziler önbellekten tamamen düşüyor: **1,87 kat
+  gerileme**. `int[]` içinde bir zaman damgası (`now()` ms) tutmak yeter.
+- **V2** güvenli ama iç döngüye giren dal, kazancın tamamını yiyor —
+  8,46 > 8,06, yani **net kayıp**.
+
+### Dalın maliyeti yeniden okuma DEĞİL
+V2'deki dalın pahalı olmasını "genişlik yuvası döngü içindeki tazelemeler
+yüzünden her turda yeniden okunuyor" diye açıkladım (daha önce `i`/`n` ile
+yaşanan şeyin aynısı). Sınadım: tazelemenin genişliği yazmasını kaldırınca
+8,34 → 8,30. **Hiçbir şey değişmedi.** Maliyet dalın kendisi; dolayısıyla
+"sayacın işaretine gömelim, fazladan yükleme olmasın" fikri de ölü.
+
+### Neden yine de gönderilmedi
+0,2 ms'lik bir sıralama farkı için, `int[]` içinde büyük sayı tutan her
+programa 1,35–1,87 katlık sessiz bir yavaşlama koymak, "C kadar hızlı, Python
+kadar kolay" ile bağdaşmıyor. Görülemeyen uçurum, kolay değildir.
+
+### İşe yarayabilecek tasarım (yapılmadı)
+Döngü sürümlemesi zaten gövdeyi ikiye ayırıyor. Hızlı sürüm i32 varsayıp
+dalsız üretilebilir, **genel sürüm** ise i64 varsayıp yine dalsız — yeter ki
+her sürüm kendi genişliğine özel bir TAZELEME fonksiyonu kullansın (genişlik
+değişirse `count = 0` yazıp erişimleri bekçili yola düşürsün). Böylece dal
+sürüm seçimine taşınır ve iki genişlik de tam hızda kalır. Maliyeti: sürüm
+başına özel refill fonksiyonu + `shape_assume32` bayrağı.
+
+Yan ürün olarak kalan iyileştirme fikri: `vm_array_get/set`in kutusuz diziyi
+KUTULAMADAN işlemesi bu çalışmada yazıldı ve tek başına doğru bir kazanç —
+bugün genel yoldan tek bir okuma bile diziyi 8 bayttan 16 bayta çıkarıyor.
+
