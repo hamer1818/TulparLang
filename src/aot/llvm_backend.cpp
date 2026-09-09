@@ -12182,6 +12182,7 @@ LLVMTypeRef datatype_to_llvm(LLVMBackend *backend, DataType type) {
   case TYPE_STRING:
     return backend->string_type;
   case TYPE_VOID:
+  case TYPE_UNSPECIFIED:   // codegen acisindan ayni; fark yalniz typeinfer'de
     return backend->void_type;
   default:
     return backend->vm_value_type; // Fallback for complex types

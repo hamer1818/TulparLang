@@ -51,7 +51,13 @@ static void report_error(TypeInferContext *ctx, const char *format, ...) {
 static DataType lookup_symbol_type(TypeInferContext *ctx, const std::string &name) {
   auto it = ctx->symbols.find(name);
   if (it == ctx->symbols.end()) {
-    return TYPE_VOID;
+    // SENTINEL: "bu sembolu tanimiyorum" BILINMEYEN'dir, "void" DEGIL.
+    // `function_return_type` ile ayni hatanin kardesiydi. Iki tetikleyici:
+    // (1) bildirimden ONCE kullanim (lib/arcade.tpr:261 `_mus_track`, 274'te
+    //     bildiriliyor), (2) adsiz atama hedefi (`a[i] = x`, `o.f = y`).
+    // Ikisi de VOID donuyordu ve "VOID atamasi hata" degismezi 57 dosyada
+    // yanlis pozitif veriyordu — P21 bunu boyle yakaladi.
+    return TYPE_UNKNOWN;
   }
   return it->second.type;
 }
@@ -402,7 +408,8 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
         // is unknown (TYPE_VOID/UNKNOWN/CUSTOM) we don't flag — better a
         // false negative than a false positive while the catalogue grows.
         auto is_unknown = [](DataType t) {
-          return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM;
+          return t == TYPE_UNKNOWN || t == TYPE_CUSTOM ||
+             t == TYPE_UNSPECIFIED;
         };
         // Polymorphism categories for select built-ins. The catalog
         // registers these with TYPE_UNKNOWN to keep the storage shape
@@ -547,7 +554,8 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
       // can tighten once the builtin catalogue and custom-type tracking
       // are richer.
       auto is_unknown = [](DataType t) {
-        return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM ||
+        return t == TYPE_UNKNOWN || t == TYPE_CUSTOM ||
+           t == TYPE_UNSPECIFIED ||
                t == TYPE_JSON;
       };
       // FONKSİYON REFERANSINI `int`'e yazmak: çalışıyor (referans zaten bir
@@ -587,7 +595,8 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     DataType expr_type = infer_expr(ctx, assign->value.get());
     // See VariableDecl note above: don't flag against unknown-typed sides.
     auto is_unknown = [](DataType t) {
-      return t == TYPE_VOID || t == TYPE_UNKNOWN || t == TYPE_CUSTOM;
+      return t == TYPE_UNKNOWN || t == TYPE_CUSTOM ||
+             t == TYPE_UNSPECIFIED;
     };
     // Bildirimdekiyle aynı tanılama, atama yolunda. `int f = 0; f = selam;`
     // biçimi de aynı tuzağın kapısı.
@@ -632,7 +641,9 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     if (ret->value) {
       DataType ret_type = infer_expr(ctx, ret->value.get());
       // Don't flag against unknown-typed return expressions.
-      if (ctx->current_return_type != TYPE_VOID && ctx->current_return_type != TYPE_UNKNOWN &&
+      if (ctx->current_return_type != TYPE_VOID &&
+          ctx->current_return_type != TYPE_UNSPECIFIED &&
+          ctx->current_return_type != TYPE_UNKNOWN &&
           ret_type != TYPE_VOID && ret_type != TYPE_UNKNOWN &&
           !types_compatible(ctx->current_return_type, ret_type)) {
         report_error(ctx,
@@ -658,6 +669,7 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
   // point of the assert fix was that `on == 1` is the broken one.
   auto cond_acceptable = [](DataType t) {
     return t == TYPE_BOOL || t == TYPE_INT || t == TYPE_VOID ||
+           t == TYPE_UNSPECIFIED ||
            t == TYPE_UNKNOWN || t == TYPE_JSON;
   };
 
