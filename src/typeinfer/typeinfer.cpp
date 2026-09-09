@@ -98,6 +98,20 @@ static bool symbol_is_moved(TypeInferContext *ctx, const std::string &name) {
 //   int[] e = [1,2];  e = push(e, 3);
 // typecheck'ten GECIYORDU, calisma zamaninda `e` 0 oluyordu. Bir
 // eszamanlilik testi tam bu yuzden yanlis sonuc verdi (bkz. Tuzaklar 7a).
+// ⚠ NEDEN HALA AYRI BIR KUME (genellestirilemiyor):
+// "VOID ise atama hatadir" diye genellestirmek DENENDI ve OLCULDU (2026-09-09):
+// 221 dosyanin 77'sinde yanlis pozitif. Sebep, sentinel'in UCUNCU bir anlami:
+// parser.cpp:586 donus tipi YAZILMAYAN fonksiyonu TYPE_VOID kaydediyor. Yani
+// `func f(n) { return n+1; }` VOID gorunuyor ama deger donduruyor — lib/wings,
+// lib/router ve testlerin cogu boyle yaziyor.
+//
+// Sentinel'in uc anlami:
+//   (a) katalogda gercekten deger uretmiyor   -> BU kume, otoriter
+//   (b) infer_expr cikaramadi                 -> TYPE_UNKNOWN'a ayrildi (2026-09-09)
+//   (c) kullanici fonksiyonunda donus YAZILMAMIS -> HALA VOID, ayrilmadi
+//
+// (c) ayrilmadan genelleme yapilamaz; ayirmak ya ayri bir sentinel ya da
+// govdeden donus tipi cikarimi ister — ikisi de ayri bir is.
 static std::set<std::string> &void_builtin_names() {
   static std::set<std::string> s;
   return s;
@@ -109,10 +123,21 @@ static bool expr_is_void_builtin_call(const ASTNode *expr) {
   return void_builtin_names().count(call->name) > 0;
 }
 
+// OLCUM ARACI (gecici): infer_expr'in "cikaramadim" geri dusumu kac kez
+// tetikleniyor? TULPAR_TYPEINFER_STATS=1 ile sonda basilir. Bu sayi, VOID
+// sentinel'inin asiri yuklenmesinin TEORIK mi yoksa CANLI bir delik mi
+// oldugunu soyler: fallback her tetiklendiginde o ifadenin tipi "bilinmiyor"
+// olur ve ona yapilan atama DENETLENMEZ.
+static long g_infer_fallback_hits = 0;
+extern "C" long typeinfer_fallback_hits(void) { return g_infer_fallback_hits; }
+
 static DataType function_return_type(TypeInferContext *ctx, const std::string &name) {
   auto it = ctx->functions.find(name);
   if (it == ctx->functions.end()) {
-    return TYPE_VOID;
+    // SENTINEL AYRIMI: "bu fonksiyonu tanimiyorum" BILINMEYEN'dir, "deger
+    // uretmiyor" DEGIL. Eskiden ikisi de TYPE_VOID donuyordu ve o asiri
+    // yukleme yuzunden `e = push(e,3)` gibi atamalar denetimsiz geciyordu.
+    return TYPE_UNKNOWN;
   }
   return it->second.return_type;
 }
@@ -479,11 +504,13 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
     case TYPE_STRING:
       return TYPE_STRING;
     default:
-      return TYPE_VOID;
+      g_infer_fallback_hits++;
+      return TYPE_UNKNOWN;   // "cikaramadim" — bkz. sentinel ayrimi notu
     }
   }
 
-  return TYPE_VOID;
+  g_infer_fallback_hits++;
+  return TYPE_UNKNOWN;       // "cikaramadim" — bkz. sentinel ayrimi notu
 }
 
 void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
@@ -1327,22 +1354,19 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       // Array mutation — `push(arr, val)` accepts any value type.
       {"push", TYPE_VOID, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
   };
-  // infer_expr bu adlari VOID kayitli olmalarina ragmen gercek bir tipe
-  // cozuyor (tarihsel katalog eksigi) — void-atama denetiminden muaf tutulur.
-  static const char *kVoidLooking[] = {
-      "print", "println", "len", "to_string", "to_int", "to_float",
-      "input", "clock_ms", "abs", "sqrt", "floor", "ceil"};
+  // MUAFIYET LISTESI YOK. P19 supurmesi (2026-09-09) gosterdi ki katalogdaki
+  // 289 builtin'in 83'u TYPE_VOID ve HEPSI gercekten deger uretmiyor (cizim,
+  // kapatma, push, exit...). Eski muafiyet listesindeki 12 addan yalniz
+  // `print` gercekten VOID kayitliydi; `len`/`toString`/`sqrt`/... zaten dogru
+  // tiple kayitli, `println`/`to_string`/`to_int`/`to_float` ise katalogda HIC
+  // yok. Yani liste 11/12 kurguydu — IKINCI BIR HAKIKAT KAYNAGI. Silindi;
+  // degismez artik tek satir: KATALOGDA VOID ISE ATAMA HATADIR.
   for (const auto &s : sigs) {
     std::vector<DataType> ps = s.params;
     typeinfer_register_function(ctx, s.name, s.return_type,
                                 ps.empty() ? nullptr : ps.data(),
                                 static_cast<int>(ps.size()));
-    if (s.return_type == TYPE_VOID) {
-      bool exempt = false;
-      for (const char *e : kVoidLooking)
-        if (std::strcmp(e, s.name) == 0) { exempt = true; break; }
-      if (!exempt) void_builtin_names().insert(s.name);
-    }
+    if (s.return_type == TYPE_VOID) void_builtin_names().insert(s.name);
   }
 }
 

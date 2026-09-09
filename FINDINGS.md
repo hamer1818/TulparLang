@@ -28,9 +28,9 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | # | İddia | Durum | Kanıt |
 |---|---|---|---|
 | M1 | Bellek yönetimi ARC (referans sayımı) | **çürütüldü** — AOT yolu `arc_release`i hiç çağırmıyor; model arena + ömür boyu malloc | [Concurrency](docs/mindmap/Concurrency.md) |
-| M2 | Döngüde üretilen heap değerleri geri alınıyor | **çürütüldü** — dizgi 6,06×, json 5,15× (5× iş için); tamsayı düz | [Memory](docs/mindmap/Memory.md) |
-| M3 | `arena_save`/`restore` bu belleği kurtarıyor | **çürütüldü** — restore'lu 132 488 KB, restore'suz 131 452 KB | Memory |
-| M4 | Sunucu istek yolu düz kalıyor | **kısmen doğrulandı** — tamsayı handler 11,6M istekte RSS 3448 KB sabit; json handler ölçülüyor | Memory |
+| M2 | Döngüde üretilen heap değerleri geri alınıyor | **koşullu** — `arena_drop` ile DÜZ (2 976→2 972 KB); onsuz 5–6× tırmanıyor | [Memory](docs/mindmap/Memory.md) |
+| M3 | `arena_save`/`restore` bu belleği kurtarıyor | **çürütüldü** — restore serbest BIRAKMAZ; bırakan çağrı `arena_drop` | Memory |
+| M4 | Sunucu istek yolu düz kalıyor | **doğrulandı** — json handler 4,16M istekte 3 444 KB sabit; wings istek başına `arena_drop` çağırıyor | Memory |
 | T1 | Paylaşılan global'ler atomik | **çürütüldü** — 8 thread × bir artırma → 7 | Concurrency |
 | T2 | Thread yazmaları görünür | **çürütüldü** — spin-wait sonsuza döner; `sleep()` varken kazara çalışır | Concurrency |
 | T3 | Paylaşılan dizinin eşzamanlı okunması bozuluyor | **GERİ ÇEKİLDİ** — test `push` dönüşünü atıyordu, dizi tek thread'de bile boştu | [Tuzaklar 7a](docs/mindmap/Tuzaklar.md) |
@@ -49,6 +49,14 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
+7. **Başarısızlık işareti meşru değerle aynı sentinel'i paylaşamaz** — `TYPE_VOID`
+   hem "değer üretmiyor" hem "çıkaramadım" hem "dönüş yazılmamış" demekti;
+   üçü de aynı yerde oturunca başarısızlık geçerli davranış kisvesi kazandı.
+8. **Muafiyet listesi yerine kaynağı düzelt** — iki hakikat kaynağı er geç
+   ayrışır; 12 adlık muafiyet listesinin 11'i kurguydu.
+9. **Zayıf çağrı sessizdir** — `arena_restore` çalışıyormuş gibi görünüp
+   serbest bırakmıyordu. API'nin iki katmanı varsa hangisini kullandığını
+   ölç, adına güvenme.
 
 ## Açık kuyruk
 

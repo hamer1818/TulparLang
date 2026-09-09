@@ -1,8 +1,9 @@
 # Bellek — P14 süzme testi (2026-09-09)
 
-> **Özet: döngü içinde üretilen her heap değeri birikiyor ve geri alınmıyor.
-> `arena_save`/`arena_restore` bu belleği kurtarmıyor.** Tam sayı yükleri düz
-> kalıyor. Uzun ömürlü süreçler için bu bir tasarım sınırı, ve bugün belgesiz.
+> **Özet: bellek geri alınabilir, ama doğru çağrı `arena_drop` — `arena_restore`
+> tek başına yetmiyor.** Sunucu yolu (wings) `arena_drop` çağırdığı için 4,16
+> milyon istekte düz kalıyor. `arena_drop` çağırmayan uzun ömürlü döngüler
+> lineer tırmanıyor. Bu bir sızıntı değil, **belgesiz bir sözleşme**.
 
 ## Zemin
 
@@ -26,43 +27,57 @@ Tam sayı satırı düz — ölçüm düzeneği sağlam, sızan şey özellikle 
 değerleri**. Yaklaşık maliyet: kısa bir dizgi başına ~135 bayt, üç anahtarlı
 küçük bir json başına ~400 bayt, hiç geri alınmıyor.
 
-## `arena_save`/`arena_restore` yardım ETMİYOR
+## DÜZELTME (aynı gün): eksik olan çağrı `arena_drop`'tu
 
-Aynı dizgi yükü, tur başına açık `arena_save()` / `arena_restore()` ile:
+> ⚠️ Bu belgenin ilk hâli "`arena_save`/`arena_restore` bu belleği kurtarmıyor,
+> yani değerler geri alınamıyor" diyordu. **İkinci yarısı yanlıştı.** Sondam
+> API'nin iki katmanından yalnız zayıf olanını kullanıyordu.
 
-| | N=200k | N=1M |
-|---|---:|---:|
-| arena_save/restore **ile** | 23 292 KB | 132 488 KB |
-| arena_save **olmadan** | 24 624 KB | 131 452 KB |
+| varyant | N=200k | N=1M | oran |
+|---|---:|---:|---:|
+| arena çağrısı yok | 160 MB | 810 MB | 5,06× |
+| `arena_save` + `arena_restore` | 23 MB | 132 MB | 5,7× |
+| `arena_save` + `arena_restore` + **`arena_drop`** | **2 976 KB** | **2 972 KB** | **1,00× DÜZ** |
 
-Fark yok. `arena_save()` geçerli bir tanıtıcı döndürüyor (`0`, `-1` değil),
-yani çağrı başarılı — ama bu bellek checkpoint ile geri sarılabilen arenada
-değil. Değerler ya doğrudan kalıcı (`malloc`) ayrılıyor ya da yazma bariyeri
-onları kalıcıya terfi ettiriyor; her iki durumda da `arc_release`
-çağrılmadığı için hiç serbest bırakılmıyorlar.
+`arena_restore` tepe işaretçisini geri sarar ama **checkpoint'i ve blokları
+serbest bırakmaz**; serbest bırakan çağrı `arena_drop` (kaynaktaki not bunu
+zaten söylüyordu: *"like arena_restore, but RELEASES the checkpoint"*).
 
-## Neden önemli
+**API tuzağı:** `arena_restore` tek başına *çalışıyormuş gibi görünür* —
+program doğru sonuç verir, hata çıkmaz, yalnız bellek geri gelmez. Bir
+kaynağın "geri sarar" demesi "serbest bırakır" demek değildir; ikisi ayrı
+çağrı ve zayıf olanı sessizdir.
 
-`tulpar` kısa ömürlü betikler için sorunsuz: süreç biter, işletim sistemi
-belleği alır. Sorun **uzun ömürlü süreçlerde**: bir Wings sunucusu istek başına
-dizgi/json üretiyorsa RSS toplam üretilen değerle birlikte tırmanır.
+## Sunucu yolu: DÜZ, ve sebebi biliniyor
 
-⚠ **Bu ölçüm sunucuyu değil, düz döngüleri kapsıyor.** Wings'in istek başına
-patikası `arena_restore` dışında `arena_drop` da kullanıyor olabilir (kaynakta
-"RELEASES the checkpoint" notu var). Sunucunun gerçekten sızıp sızmadığı
-**ayrıca ölçülmeli** — 1 saatlik sabit yük altında RSS eğrisi. Bu ölçüm
-yapılana dek "Wings sızdırıyor" DENMEMELİ; söylenebilecek olan, dilin genel
-değer üretme yolunun geri kazanım yapmadığı.
+`lib/wings.tpr` istek başına `arena_save` → `arena_restore` → **`arena_drop`**
+çağırıyor (satır 2070–2174). Soak testi bunu doğruluyor:
+
+| sunucu | süre | istek | RSS |
+|---|---|---|---|
+| `srv_int` (tamsayı handler) | 1050 s | 11 664 987 | **3 448 KB sabit** |
+| `srv_json` (istek başına string + 4 anahtarlı json) | 360 s | 4 164 616 | **3 444 KB sabit** |
+
+4,16 milyon istek, her biri bir dizgi ve bir json kuruyor. Sızsaydı ~1,7 GB
+olurdu. **Sunucu yolu geri kazanıyor.**
+
+## Geriye kalan gerçek sınır
+
+Sızıntı riski **`arena_drop` çağırmayan uzun ömürlü döngülerde**: bağımsız bir
+script, bir batch işi, ya da kendi döngüsünü kuran bir daemon. Bu kod için
+bugünkü sözleşme belgesiz — kullanıcının `arena_drop`'u bilmesi gerekiyor ve
+`arena_restore`'un yetmediğini ancak RSS grafiğinden öğreniyor.
 
 ## Yapılacaklar
 
-1. **Sunucu süzme testi** — 1 saat sabit yük, RSS eğrisi, iki handler: (a) saf
-   arena patikası, (b) istek başına dizgi/json kuran. Ürün tanımını bu belirler.
+1. ~~Sunucu süzme testi~~ — **yapıldı**, ikisi de düz (yukarıdaki tablo).
 2. **Sözleşmeyi belgele** — bugünkü gerçek: "uzun ömürlü döngülerde üretilen
    heap değerleri geri alınmaz". Kullanıcının bunu RSS grafiğinden öğrenmesi
    kabul edilemez.
-3. `arena_restore`'un neden bu değerleri kapsamadığını netleştir: kalıcıya terfi
-   mi, yoksa ayırma zaten arena dışında mı? İkisi farklı düzeltme gerektirir.
+3. ~~`arena_restore` neden kapsamıyor~~ — **cevaplandı**: kapsıyor ama serbest
+   bırakmıyor; serbest bırakan `arena_drop`. `arena_restore`'un tek başına
+   sessizce yetersiz kalması API tarafında düzeltilmeli (ya `restore` bıraksın,
+   ya belgeler ikisini birlikte anlatsın).
 4. Uzun vadede: ya AOT yolunda `arc_release`i gerçekten devreye al (bedeli
    ölçülmeli — bugünkü bütün performans rakamları geri kazanım YAPMAYAN bir
    runtime'ın rakamları), ya da kapsamı belgelenmiş bir bölge modeli.

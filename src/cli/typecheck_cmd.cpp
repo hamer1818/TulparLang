@@ -11,6 +11,7 @@
 #include "../typeinfer/typeinfer.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <fstream>
@@ -19,6 +20,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+extern "C" long typeinfer_fallback_hits(void);
 
 namespace tulpar {
 
@@ -101,6 +104,10 @@ int typecheck_cmd_main(int argc, char **argv) {
     return 1;
   }
   std::fprintf(stderr, "tulpar typecheck: ok (%s)\n", path);
+  if (const char *st = std::getenv("TULPAR_TYPEINFER_STATS"))
+    if (*st && std::strcmp(st, "0") != 0)
+      std::fprintf(stderr, "[stats] infer_expr fallback hits: %ld\n",
+                   typeinfer_fallback_hits());
   return 0;
 }
 
