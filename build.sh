@@ -496,7 +496,8 @@ TPREOF
     #
     # Denetim İKİ ayaklı, çünkü her ayak tek başına sessizce boşa çıkabilir:
     #   1) IR'de klon TANIMI var mı  -> zincir kuruluyor mu
-    #   2) zincirli ikili, zincirsizden en az 2 kat hızlı mı
+    #   2) zincirli ikili, zincirsizden en az 2 kat hızlı mı (SÜREÇ AÇILIŞI
+    #      ÇIKARILMIŞ iş payı üzerinden — aşağıdaki nota bak)
     # Yalnız (1) olsaydı: klonlar üretilip hiç satır içi ALINMADIĞINDA
     # (ör. yanlışlıkla noinline) denetim yeşil kalır, kazanç sıfır olurdu.
     # Yalnız (2) olsaydı: makineye bağlı olurdu. Ölçüm GÖRELİ — aynı makine,
@@ -541,19 +542,37 @@ TPREOF
     sr_best_us() {
         local best=99999999 i t0 t1 d
         for i in 1 2 3; do
-            t0=$(date +%s%N); SR_N=32 "$1" >/dev/null 2>&1; t1=$(date +%s%N)
+            t0=$(date +%s%N); SR_N=$2 "$1" >/dev/null 2>&1; t1=$(date +%s%N)
             d=$(( (t1 - t0) / 1000 ))
             [ "$d" -lt "$best" ] && best=$d
         done
         echo "$best"
     }
-    SR_ON=$(sr_best_us "$SR_TMP/fib_on")
-    SR_OFF=$(sr_best_us "$SR_TMP/fib_off")
-    if [ "$SR_OFF" -gt $(( SR_ON * 2 )) ]; then
-        echo -e "${GREEN}ozyineleme zinciri calisiyor${NC} (${SR_OFF}us -> ${SR_ON}us)"
+    # SÜREÇ AÇILIŞINI ÇIKAR — yoksa eşik platforma bağlı olur.
+    #
+    # Ölçülen süre `fork+exec+dyld+fib`. Linux'ta açılış ~0,2 ms ve N=32'lik
+    # iş onu gölgede bırakıyor, oran ~7 kat çıkıyor. macOS arm64'te açılış
+    # ~10 ms; aynı sabit HER İKİ tarafa da eklenince oranı 1,0'a doğru EZİYOR
+    # ve zincir kusursuz çalışırken denetim düşüyor. Ölçüldü (2026-09-09, CI
+    # macOS arm64): zincirsiz 18525us / zincirli 12210us = 1,52 kat — oysa
+    # iş payının oranı ~4 kat.
+    #
+    # Çözüm: açılışı AYNI ikiliden N=1 ile ölçüp çıkarmak. Aynı binary, aynı
+    # kod yerleşimi, tek değişen iş miktarı; kalan yalnızca fib işi. Eşik
+    # böylece makineden bağımsız hale geliyor. (Eşiği düşürmek YANLIŞ cevap
+    # olurdu: ölçüm hatasını gizler, gerçek bir gerilemeyi de kaçırırdı.)
+    SR_ON=$(sr_best_us "$SR_TMP/fib_on" 32)
+    SR_OFF=$(sr_best_us "$SR_TMP/fib_off" 32)
+    SR_ON_BASE=$(sr_best_us "$SR_TMP/fib_on" 1)
+    SR_OFF_BASE=$(sr_best_us "$SR_TMP/fib_off" 1)
+    SR_ON_W=$(( SR_ON - SR_ON_BASE ));  [ "$SR_ON_W" -lt 1 ] && SR_ON_W=1
+    SR_OFF_W=$(( SR_OFF - SR_OFF_BASE )); [ "$SR_OFF_W" -lt 1 ] && SR_OFF_W=1
+    if [ "$SR_OFF_W" -gt $(( SR_ON_W * 2 )) ]; then
+        echo -e "${GREEN}ozyineleme zinciri calisiyor${NC} (is: ${SR_OFF_W}us -> ${SR_ON_W}us, acilis ~${SR_ON_BASE}us cikarildi)"
     else
         echo -e "${RED}Ozyineleme zinciri KAZANC VERMIYOR — klonlar satir ici alinmiyor!${NC}"
-        echo "  zincirsiz=${SR_OFF}us zincirli=${SR_ON}us (en az 2 kat bekleniyor)"
+        echo "  is payi: zincirsiz=${SR_OFF_W}us zincirli=${SR_ON_W}us (en az 2 kat bekleniyor)"
+        echo "  ham: zincirsiz=${SR_OFF}us zincirli=${SR_ON}us, acilis=${SR_OFF_BASE}/${SR_ON_BASE}us"
         rm -rf "$SR_TMP"
         exit 1
     fi

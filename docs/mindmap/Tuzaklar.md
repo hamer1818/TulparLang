@@ -1372,5 +1372,40 @@ ortak koda konan platforma özgü varsayım, dar kapsamlı platformda sessizce
 patlar.* Aynı biçim `#ifdef _WIN32` yerine shim başlıklarını kullanma
 kuralının da (CLAUDE.md) arkasındaki sebep.
 
+## 6z. Duvar saati ORANI koruması — sabit ek yük oranı platforma bağlı yapar
+
+Özyineleme zinciri koruması "zincirsiz süre ≥ 2 × zincirli süre" diyordu.
+Linux'ta oran ~7 kat, rahat geçiyordu. macOS arm64'te **1,52 kat** çıkıp CI'ı
+kırdı — zincir kusursuz çalışırken.
+
+Sebep: ölçülen şey `fork+exec+dyld+fib`, yani **süreç açılışı da içinde**.
+Açılış Linux'ta ~0,2 ms, macOS arm64'te ~10 ms. Aynı sabit **her iki tarafa
+da** eklenince oran 1,0'a doğru eziliyor:
+
+| | zincirsiz | zincirli | oran |
+|---|---|---|---|
+| Linux (açılış 0,2 ms) | 4,9 ms | 0,7 ms | ~7× |
+| macOS (açılış ~10 ms) | 18,5 ms | 12,2 ms | **1,52×** |
+
+İş payının gerçek oranı macOS'ta da ~4 kattı; eşiğin altına düşüren tek şey
+paydaya ve paya eklenen ortak sabitti.
+
+**Yanlış cevap:** eşiği 1,3'e düşürmek. Ölçüm hatasını gizler ve gerçek bir
+gerilemeyi de kaçırır.
+**Doğru cevap:** sabiti ÖLÇ ve ÇIKAR. Açılış, **aynı ikiliden** N=1 ile
+ölçülüyor (aynı binary, aynı kod yerleşimi, tek değişen iş miktarı); kalan
+yalnızca fib işi. Eşik böylece makineden bağımsız. Linux'ta iş payı oranı
+%881'e çıktı, enjeksiyon (iki tarafı da zincirsiz yap) hâlâ yakalıyor.
+
+**Bu ikinci kez ısırdı.** İlk seferinde N=30 ile başlanmıştı ve açılış oranı
+2,7 kata indiriyordu; o zaman iş yükünü büyüterek çözülmüştü — ama bu, sabiti
+*görece* küçültmekti, *yok etmek* değil. Daha büyük ek yükü olan bir platform
+gelince aynı hata geri döndü.
+
+**Kural:** bir denetim iki süreyi oranlıyorsa, önce sor: *ikisinde de ortak
+olan ne var?* Varsa çıkar — yoksa oran, ölçtüğünü sandığın şeyi değil,
+platformun ek yükünü ölçer. Aynı disiplin `benchmarks/fair`'de zaten var
+(boş program taban çizgisi ayrı raporlanıyor).
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
