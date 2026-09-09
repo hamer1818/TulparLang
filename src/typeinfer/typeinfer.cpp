@@ -1364,7 +1364,6 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       {"db_query", TYPE_UNKNOWN, {TYPE_UNKNOWN, TYPE_STRING, TYPE_UNKNOWN}},
       {"db_execute", TYPE_BOOL, {TYPE_UNKNOWN, TYPE_STRING, TYPE_UNKNOWN}},
       // Array mutation — `push(arr, val)` accepts any value type.
-      {"push", TYPE_VOID, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
   };
   // MUAFIYET LISTESI YOK. P19 supurmesi (2026-09-09) gosterdi ki katalogdaki
   // 289 builtin'in 83'u TYPE_VOID ve HEPSI gercekten deger uretmiyor (cizim,
@@ -1373,11 +1372,23 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
   // tiple kayitli, `println`/`to_string`/`to_int`/`to_float` ise katalogda HIC
   // yok. Yani liste 11/12 kurguydu — IKINCI BIR HAKIKAT KAYNAGI. Silindi;
   // degismez artik tek satir: KATALOGDA VOID ISE ATAMA HATADIR.
+  std::set<std::string> seen_builtin_names;
   for (const auto &s : sigs) {
     std::vector<DataType> ps = s.params;
     typeinfer_register_function(ctx, s.name, s.return_type,
                                 ps.empty() ? nullptr : ps.data(),
                                 static_cast<int>(ps.size()));
+    // TEKRAR DENETIMI: ayni ad iki kez kayitliysa hangisinin kazandigi kayit
+    // sirasina bagli olur ve bir satiri duzelten kisi otekinin sessizce
+    // kazandigini gormez. `push` tam olarak boyle iki kez duruyordu (ikisi de
+    // ayni oldugu icin zararsizdi — bir sonraki duzenlemeye kadar).
+    if (!seen_builtin_names.insert(s.name).second) {
+      std::fprintf(stderr,
+                   "[typeinfer] KATALOG HATASI: '%s' builtin tablosunda IKI KEZ "
+                   "kayitli — birini silin (src/typeinfer/typeinfer.cpp)\n",
+                   s.name);
+      std::abort();
+    }
     if (s.return_type == TYPE_VOID) void_builtin_names().insert(s.name);
   }
 }
