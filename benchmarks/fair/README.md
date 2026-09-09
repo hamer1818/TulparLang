@@ -71,6 +71,58 @@ da `agree: true`).
 
 Tulpar sırası: `intloop` 3. · `fib` 1. · `sieve` 2. · `strcat` 1. · `arrayiter` 1. (dokuz dil arasında).
 
+Makine: **AMD Ryzen 7 9800X3D** (Zen 5, 8 çekirdek / 16 iş parçacığı,
+5,27 GHz zirve, 96 MB 3D V-Cache), Linux. Araç zincirleri: gcc 16.2.1 ·
+rustc 1.89.0 · go 1.27.1 · Tulpar AOT (LLVM 22).
+
+### "C'den hızlı" iddiası C'nin EN İYİ bayraklarına dayanıyor mu?
+
+Yukarıdaki tablo C'yi `gcc -O2` ile derliyor — Tulpar'ın kendisinin
+hedeflediği jenerik tabanla aynı (`TULPAR_TARGET_CPU` verilmedikçe LLVM
+hedef CPU'su `"generic"`; `-march=native` karşılığı **opt-in ve bu
+sayılarda kullanılmıyor**). Bu adil bir varsayılan, ama "C'den hızlı"
+sıra dışı bir iddia; o yüzden C'ye en iyi bayrakları verip yeniden
+ölçüldü. **12 dönüşümlü tekrar, ortanca ± MAD** (2026-09-09):
+
+| Kıyas | C `-O2` | C `-O3 -march=native -flto` | Tulpar (generic) | Sonuç |
+|---|---:|---:|---:|---|
+| `fib(32)` | 2,49 | 2,08 ± 0,04 | **0,77 ± 0,02** | Tulpar 2,7× — **duruyor** |
+| `strcat(2M)` | 37,95 | 36,98 ± 0,37 | **13,27 ± 0,21** | Tulpar 2,8× — **duruyor** |
+| `sieve(5M)` | 7,86 | 7,75 ± 0,14 | 7,77 ± 0,10 | berabere (MAD içinde) |
+| `arrayiter(5M)` | 2,50 | **1,85** | 2,03 | **C `native` ile geri alıyor** |
+
+Yani dürüst ifade tek bir "C'yi geçtik"ten dar: `fib` ve `strcat`
+kazançları sağlam ve C'nin en iyi bayraklarına karşı da duruyor;
+`sieve`/`intloop` berabere; **`arrayiter` yalnız eşit jenerik bayrakta
+Tulpar'ın, `-march=native` ile C'nin.**
+
+`-O2` → `-O3` farkı ölçüldü ve **ihmal edilebilir** (fib 2491→2290 µs,
+strcat 37951→38133, sieve 7861→7797); sıralamayı değiştiren şey `-O3`
+değil, `-march=native`.
+
+### İki açıklama, sayıların taşımadığı
+
+- **`strcat` farklı araçları kıyaslıyor.** C tarafı naif değil — geometrik
+  büyümeli tampon (`cap*=2`) — ama her sayıyı `snprintf` ile biçimliyor;
+  Tulpar tam bu yol için optimize edilmiş özel bir tamsayı→dizgi yordamı
+  kullanıyor. Elle `itoa` yazan bir C programcısı farkın çoğunu kapatır.
+- **`fib` etiketine rağmen çağrı maliyetini değil satır içi almayı
+  ölçüyor.** İki dil de üstel ağacı gerçekten koşuyor — süre `n`'deki her
+  +2 için φ² katına çıkıyor (ölçüldü: C 2,67×, Tulpar 2,30×), yani hiçbiri
+  ağacı doğrusala çökertmiyor. Ama Tulpar'ın daha düşük üsteli, kazancın
+  bir kısmının özyineleme klon zincirinin sağladığı altifade
+  paylaşımından geldiğini gösteriyor.
+
+### Bu takımın KANITLAMADIĞI şeyler
+
+Tek makinede beş tam sayı/dizgi çekirdeği "en hızlı dil" iddiasını
+taşıyamaz. Kapsam dışı: kayan nokta ve SIMD (matmul, n-body, mandelbrot),
+tahsis baskısı ve hash-map/JSON yükleri — **ARC ile GC farkı ancak orada
+görünür** — işaretçi takibi, sıralama, çok iş parçacıklı ölçekleme, RSS,
+ve sürekli yük altında p99. Savunulabilir okuma: Tulpar **tam sayı ve
+dizgi çekirdeklerinde C sınıfında**, Node/Python/Java/C#'ın açık ara
+önünde, ve `fib` ile `strcat`'te özellikle C'nin de önünde.
+
 İş yükleri: `intloop` N=50M · `fib` N=32 · `sieve` N=5M · `strcat` N=2M ·
 `arrayiter` N=5M.
 

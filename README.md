@@ -21,8 +21,10 @@ programming language built on **LLVM** (18 through 22). It pairs
 Python-shaped syntax with native binary performance. On a nine-language microbenchmark suite
 where every language reads its workload size from the environment and
 the outputs are verified to match, Tulpar AOT is **the fastest of the
-nine on three of five benchmarks** and within 0.1 ms of C on the other
-two — see [Performance](#performance). On a localhost JSON-API
+nine on `fib` and `strcat` — a lead that holds even against C compiled
+with `-O3 -march=native -flto`** — and ties C on `sieve` and `intloop`.
+On `arrayiter`, C wins once it is allowed `-march=native`. See
+[Performance](#performance) for the full flag matrix. On a localhost JSON-API
 micro-benchmark the `listen_async` Wings listener serves **~1.9× the
 throughput of Node.js' built-in `http`**. It ships with a
 batteries-included standard library so you can build a production
@@ -235,8 +237,8 @@ with SHA-256 checksums so re-installs are byte-stable.
 ## Why TulparLang
 
 - **Native speed.** LLVM AOT compilation. Fastest of nine languages on
-  `fib`, `strcat` and `arrayiter`; within 0.1 ms of C on `sieve` and
-  `intloop`. On a localhost JSON-API microbenchmark the `listen_async`
+  `fib` (2.7×) and `strcat` (2.8×) — holding even against C at
+  `-O3 -march=native -flto` — and tied with C on `sieve` and `intloop`. On a localhost JSON-API microbenchmark the `listen_async`
   Wings listener is **1.91× Node.js' `http`** and **2.91× CPython's
   `ThreadingHTTPServer`** in throughput. See
   [Performance](#performance) and
@@ -298,6 +300,54 @@ C# 8.2 · Node 10.7 ms.
 
 **Tulpar AOT is the fastest of the nine on `fib`, `strcat` and
 `arrayiter`, and within 0.1 ms of C on `sieve` and `intloop`.**
+
+#### Does the lead survive C's best compiler flags?
+
+The table above compiles C with `gcc -O2`, the same generic baseline
+Tulpar itself targets (its LLVM target CPU is `"generic"` by default;
+`-march=native` is opt-in and *not* used for these numbers). That is a
+fair default, but "faster than C" is an extraordinary claim, so the
+comparison was re-run with C given its best flags — 12 interleaved
+repetitions, median ± MAD, on one AMD Ryzen 7 9800X3D (Zen 5, 5.27 GHz):
+
+| Benchmark | C `-O2` | C `-O3 -march=native -flto` | Tulpar (generic) | Verdict |
+|---|---:|---:|---:|---|
+| `fib(32)` | 2.49 | 2.08 ± 0.04 | **0.77 ± 0.02** | Tulpar 2.7× — **holds** |
+| `strcat(2M)` | 37.95 | 36.98 ± 0.37 | **13.27 ± 0.21** | Tulpar 2.8× — **holds** |
+| `sieve(5M)` | 7.86 | 7.75 ± 0.14 | 7.77 ± 0.10 | tie (inside MAD) |
+| `arrayiter(5M)` | 2.50 | **1.85** | 2.03 | **C wins with `native`** |
+
+So the honest statement is narrower than a single "beats C": the `fib`
+and `strcat` wins are robust and survive C's best flags, `sieve` and
+`intloop` are ties, and **`arrayiter` is a Tulpar win only at equal
+generic flags — C takes it back with `-march=native`.**
+
+Two further disclosures the numbers alone don't carry:
+
+- **`strcat` compares different tools, not just different compilers.**
+  C's version is a proper geometric-growth buffer (not a naive
+  `realloc`-per-iteration loop), but it formats each number with
+  `snprintf`, a general-purpose formatter, while Tulpar uses a
+  specialised integer-to-string routine that was optimised for exactly
+  this path. A C programmer hand-rolling `itoa` would close much of
+  that gap.
+- **`fib` measures inlining, not just call overhead**, despite its
+  label. Both languages genuinely execute the exponential tree — timing
+  scales as φ² per +2 in `n` (measured: C 2.67×, Tulpar 2.30×), so
+  neither is collapsing it to a linear form. But Tulpar's lower exponent
+  shows part of its lead comes from the self-recursion clone chain
+  enabling subexpression sharing the C build does not get.
+
+#### What this suite does *not* establish
+
+Five integer/string kernels on one machine cannot support "fastest
+language". Not covered: floating point and SIMD (matmul, n-body,
+mandelbrot), allocation pressure and hash-map/JSON workloads — which is
+where ARC-versus-GC differences would actually appear — pointer chasing,
+sorting, multi-threaded scaling, RSS, and sustained-load p99 latency.
+The defensible reading is: Tulpar is **in C's performance class on
+integer and string kernels**, decisively ahead of Node/Python/Java/C#,
+and ahead of C specifically on `fib` and `strcat`.
 
 #### How these numbers are kept honest
 
