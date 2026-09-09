@@ -1,0 +1,99 @@
+import "test";
+
+// YAN ETKILERIN IKI KEZ CALISMASI (2026-09-08).
+//
+// codegen_typed_expr'in AST_BINARY_OP dali once iki operandi TIPLI olarak
+// uretiyor; tipli yol tutmazsa `codegen_expression(node)` cagirip AYNI
+// operandlari BIR DAHA uretiyordu. Sonuc DEGERI dogru cikiyordu, o yuzden
+// hicbir test goremedi — ama yan etki iki kez calisiyordu.
+//
+// ⚠ BU TESTIN ILK YAZIMI HICBIR SEY OLCMUYORDU. Olculer FONKSIYON ICINE
+// konmustu; orada `int y = ...` KUTULU yerel yoluna gidiyor ve hatali yol hic
+// calismiyor. Enjeksiyon (eski kodu geri koymak) paketi yesil biraktı.
+// Hatali yol UST DUZEY `int y = <ifade>;` bildirimi — native int global
+// yolu — o yuzden olculer burada, en ust kapsamda duruyor ve fonksiyonlar
+// yalnizca SAYACLARI dogruluyor.
+//
+// Paket SONUCU degil CAGRI SAYISINI olcuyor: sonuca bakan bir test bu hatayi
+// yakalayamaz, nitekim yakalamadi.
+
+int c_topla = 0;
+func yan_topla() { c_topla = c_topla + 1; return 5; }
+int y_topla = yan_topla() + 0;
+
+int c_carp = 0;
+func yan_carp() { c_carp = c_carp + 1; return 3; }
+int y_carp = yan_carp() * 2;
+
+int c_sol = 0;
+int c_sag = 0;
+func yan_sol() { c_sol = c_sol + 1; return 10; }
+func yan_sag() { c_sag = c_sag + 1; return 4; }
+int y_iki = yan_sol() - yan_sag();
+
+int c_mod = 0;
+func yan_mod() { c_mod = c_mod + 1; return 17; }
+int y_mod = yan_mod() % 5;
+
+int c_ic = 0;
+func yan_ic() { c_ic = c_ic + 1; return 2; }
+int y_ic = (yan_ic() + 1) * (yan_ic() + 1);
+
+int c_tipli = 0;
+func yan_tipli(): int { c_tipli = c_tipli + 1; return 7; }
+int y_tipli = yan_tipli() + 1;
+
+int c_kar = 0;
+func yan_kar() { c_kar = c_kar + 1; return 7; }
+int y_kar = 0;
+if (yan_kar() > 3) { y_kar = 1; }
+
+int c_str = 0;
+func yan_str() { c_str = c_str + 1; return "ab"; }
+str s_str = yan_str() + "cd";
+
+func run_toplama() {
+    assert_eq_int(y_topla, 5);
+    assert_eq_int(c_topla, 1);
+}
+func run_carpma() {
+    assert_eq_int(y_carp, 6);
+    assert_eq_int(c_carp, 1);
+}
+func run_iki_operand() {
+    assert_eq_int(y_iki, 6);
+    assert_eq_int(c_sol, 1);
+    assert_eq_int(c_sag, 1);
+}
+func run_modulo() {
+    assert_eq_int(y_mod, 2);
+    assert_eq_int(c_mod, 1);
+}
+// Ic ice: dis ifade ic ifadeyi ikilerse sayac 2 degil 4 olurdu.
+func run_ic_ice() {
+    assert_eq_int(y_ic, 9);
+    assert_eq_int(c_ic, 2);
+}
+// Tipli fonksiyon: bu yol zaten dogruydu, gerileme koruması.
+func run_tipli_bozulmadi() {
+    assert_eq_int(y_tipli, 8);
+    assert_eq_int(c_tipli, 1);
+}
+func run_karsilastirma() {
+    assert_eq_int(y_kar, 1);
+    assert_eq_int(c_kar, 1);
+}
+func run_dizgi() {
+    assert_eq_str(s_str, "abcd");
+    assert_eq_int(c_str, 1);
+}
+
+test("toplama: yan etki bir kez", "run_toplama");
+test("carpma: yan etki bir kez", "run_carpma");
+test("iki operand da birer kez", "run_iki_operand");
+test("modulo: bir kez", "run_modulo");
+test("ic ice ifade: ikilenmiyor", "run_ic_ice");
+test("tipli fonksiyon bozulmadi", "run_tipli_bozulmadi");
+test("karsilastirma: bir kez", "run_karsilastirma");
+test("dizgi birlestirme: bir kez", "run_dizgi");
+test_summary();

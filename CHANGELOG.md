@@ -9,6 +9,98 @@ fixes. Releases are cut by pushing a `v*` tag (see [RELEASING.md](RELEASING.md))
 
 ## [Unreleased]
 
+### Performance — dokuz dilin ÜÇÜNDE BİRİNCİ, ikisinde C ile başa baş
+
+`benchmarks/fair/` düzeneğinde (her dil `BENCH_N`i ortamdan okuyor, aynı
+algoritma, çıktılar karşılaştırılıyor) en iyi duvar saati, ms:
+
+| Dil | fib(32) | sieve 5M | strcat 2M | arrayiter 5M | intloop 50M |
+|---|---:|---:|---:|---:|---:|
+| **Tulpar AOT** | **0,6** | **7,7** | **13,2** | **1,2** | **134,5** |
+| C (gcc -O2) | 1,6 | 7,6 | 37,6 | 2,2 | 134,4 |
+| C++ (g++ -O2) | 1,9 | 8,0 | 14,7 | 2,7 | 134,9 |
+| Rust (-O3) | 3,8 | 8,1 | 18,7 | 1,5 | 144,0 |
+| Go | 6,7 | 8,5 | 24,3 | 4,3 | 134,5 |
+
+`fib`, `strcat` ve `arrayiter`de dokuz dilin en hızlısı; `sieve` ve
+`intloop`ta C ile arasında 0,1 ms var. İlk adil ölçüme (2026-09-02) göre
+`strcat` 17,7× · `fib` 9,7× · `sieve` 7,8× · `arrayiter` 5,5× hızlandı.
+
+Bu turda inen başlıca değişiklikler:
+
+**Özyineleme zinciri.** LLVM kendini çağıran bir fonksiyonu satır içine
+almaz; gcc alır ve `fib`de bütün LLVM dillerini 2,4 kat geçmesinin tek
+sebebi buydu (gcc'nin `fib`i 266 komut, clang'ınki 22). Arka uç artık
+fonksiyonun dört kopyasını üretip halka kuruyor — her kenar iki *farklı*
+fonksiyon arası çağrı olduğu için sıradan satır içi alıcı onları açıyor.
+`fib` 25,2 → 2,3 ms; yığın derinliği de gerilemedi, arttı (250 968 →
+641 544). Derinlik beş ayrı özyineleme şekliyle seçildi: yalnız `fib`e
+bakıp K=6 seçilseydi derin özyineleme kullanan her program 60 kat
+yavaşlardı.
+
+**Elekten çağrı kalktı.** Dış döngüde `f[i] == 0` karşılaştırmasının geri
+düşüş dalında bir `vm_binary_op` çağrısı duruyordu; çalışma zamanında hiç
+yürütülmüyordu ama IR'de olduğu için LLVM döngü değişmezlerini yazmaçta
+tutamıyordu. Üç parça gerekti: kutulu ikili işlem artık tipli yolu önce
+soruyor, `codegen_typed_expr` kanıtlı dizi erişimini tanıyor, ve `while`
+kanıtı sabit adımı kabul ediyor. Dış döngü 11 komut / 3 bellek
+erişiminden 6 komuta indi.
+
+**32-bit dizi elemanı.** C/Rust/Go elekte 4 baytlık eleman kullanıyor.
+`int[]` artık 32-bit başlıyor ve i32'ye sığmayan bir değer yazılınca
+**genişletiliyor** (kutulanmıyor) — dilin `int`i 64-bit kalıyor. Genişlik
+dalı erişimde değil **döngü sürümü seçiminde**, yani iki genişlik de sıcak
+yolda dalsız. `sieve` 8,1 → 7,7 · `arrayiter` 1,5 → 1,2.
+
+**Tipsiz yolda iki gereksiz çağrı.** `%` operatörünün kutulu satır içi
+hızlı yolu yoktu (13 ikili operatörden eksik olan tek biri) ve
+`aot_persist` her kutulu global atamasında koşulsuz çağrılıyordu, oysa
+skalerde hiçbir şey yapmıyor. `strcat` 18,7 → 13,1 ms.
+
+**Kutulu fonksiyonlar değer ABI'sine geçti.** Gövde `t_<ad>.f`'e taşındı
+(VMValue değer olarak, SysV'de iki yazmaç); `t_<ad>` ince sarmalayıcı
+kaldı, böylece `call()` kayıt defteri, async motoru ve wasm sret yolu
+değişmedi. Tipsiz `fib` 11,9 → 7,7 ms.
+
+**Açılış maliyeti.** Her ikili OpenSSL yüklüyordu (ağ/TLS kodu ayrı bir
+TU'ya alındı) ve libstdc++ dinamik bağlanıyordu. Boş program 1,15 →
+0,23 ms — C'nin 0,17'siyle aynı bantta.
+
+### Fixed — `int` hedefe float yazmak SESSİZCE bozuk sonuç veriyordu
+
+```
+float f = 2.5;  int b = f;        ->  4612811918334230528
+int a = 3.7;                      ->  0
+int e = clock_ms() - start;       ->  4574812796478291968
+```
+
+Üçüncüsü `examples/15_feature_test.tpr`'de aylarca basılı duruyordu; örnek
+testi yalnız çıkış kodunu karşılaştırdığı için görülmedi. Kök neden tek bir
+kalıptı, beş yerde kopyalanmıştı: kutulu dalda double'ın **bit deseni**
+tamsayı diye saklanıyor, diğer dalda sessizce `0` yazılıyordu. Yanındaki
+yorum "typeinfer bunu zaten uyarıyor" diyordu — uyarmıyordu.
+
+Artık `toInt` ile aynı: sıfıra doğru kırpma. Aritmetik geniş tipte yapılır,
+kırpma yazarken olur (C ile aynı). Ayrıca `int` bildirilen **yerel**
+değişkenlerde bildirilen tip hiç uygulanmıyordu (`int y = 10; y -= 2.5;`
+yerelde 7,5 küresel de 7 veriyordu); iki yol artık uyuşuyor.
+
+### Fixed — yan etkiler İKİ KEZ çalışıyordu
+
+`codegen_typed_expr`in ikili işlem dalı iki operandı üretiyor, tipli yol
+tutmazsa `codegen_expression(node)` çağırıp **aynı operandları bir daha**
+üretiyordu:
+
+```
+func yan() { sayac = sayac + 1; return 5; }
+int y = yan() + 0;                    // sayac 2 oluyordu, 1 değil
+int v = (yan() + 1) * (yan() + 1);    // 2 yerine 6 — iç içe katlanıyor
+```
+
+Sonuç *değeri* hep doğruydu, o yüzden hiçbir test göremedi. Tipli
+fonksiyonda görünmüyordu; yalnız kutulu operandlı karışık ifadelerde.
+
+
 ### Fixed/Performance — VMValue'nun dolgusu artık bayt bayt kopyalanmıyor
 
 `VMValue` LLVM'de `{i32, [4 x i8], i64}` modellenmişti ve dolgu bir bayt

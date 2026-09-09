@@ -53,61 +53,84 @@ cd benchmarks/fair && REPEATS=5 python3 run.py
 — her ölçüm oraya bir satır ekliyor, aşağıdaki tablo o anlık görüntünün
 kopyası ve bayatlayabilir.
 
-En iyi duvar saati (ms), 2026-09-05. **Düşük olan hızlı.**
-Dokuz dilin **hepsi aynı çıktıyı bastı** (beş kıyasta da `agree: true`).
+En iyi duvar saati (ms), 2026-09-08 · commit `3edb4f4` · 7 tekrar.
+**Düşük olan hızlı.** Dokuz dilin **hepsi aynı çıktıyı bastı** (beş kıyasta
+da `agree: true`).
 
 | Dil | intloop 50M | fib(32) | sieve 5M | strcat 2M | arrayiter 5M |
 |---|---|---|---|---|---|
-| C (gcc -O2) | **134,6** | **1,6** | **7,6** | 37,7 | 2,3 |
-| C++ (g++ -O2) | 134,7 | 1,9 | 8,0 | **15,0** | 3,0 |
-| Rust (-O3) | 144,2 | 3,9 | 8,2 | 18,8 | **2,2** |
-| Go | 134,8 | 6,7 | 9,2 | 24,8 | 4,3 |
-| C# (.NET 9) | 152,3 | 23,8 | 24,5 | 33,6 | 22,0 |
-| Java | 143,8 | 12,8 | 20,1 | 32,5 | 18,6 |
-| Node.js | 712,8 | 25,4 | 28,6 | 102,5 | 19,2 |
-| Python | 3169,1 | 140,9 | 443,2 | 200,6 | 411,2 |
-| **Tulpar AOT** | 135,1 | 4,5 | 9,3 | 31,3 | 6,0 |
+| C (gcc -O2) | **134,4** | 1,6 | **7,6** | 37,6 | 2,2 |
+| C++ (g++ -O2) | 134,9 | 1,9 | 8,0 | 14,7 | 2,7 |
+| Rust (-O3) | 144,0 | 3,8 | 8,1 | 18,7 | 1,5 |
+| Go | 134,5 | 6,7 | 8,5 | 24,3 | 4,3 |
+| C# (.NET) | 149,3 | 20,3 | 20,9 | 31,2 | 18,3 |
+| Java | 144,1 | 12,4 | 19,7 | 32,9 | 18,2 |
+| Node.js | 712,2 | 24,6 | 28,2 | 96,4 | 18,5 |
+| Python | 3127,3 | 140,8 | 448,1 | 200,0 | 410,2 |
+| **Tulpar AOT** | 134,5 | **0,6** | 7,7 | **13,2** | **1,2** |
 
-Tulpar sırası: `intloop` 4. · `fib` 4. · `sieve` 5. · `strcat` 4. ·
-`arrayiter` 5. (dokuz dil arasında).
+Tulpar sırası: `intloop` 3. · `fib` 1. · `sieve` 2. · `strcat` 1. · `arrayiter` 1. (dokuz dil arasında).
 
 İş yükleri: `intloop` N=50M · `fib` N=32 · `sieve` N=5M · `strcat` N=2M ·
 `arrayiter` N=5M.
 
-Okurken iki şeye dikkat:
+Okurken üç şeye dikkat:
 
-- **`strcat`te C sondan üçüncü** (37,7 ms). Elle `realloc`+`snprintf`
+- **`strcat`te C sondan üçüncü** (37,6 ms). Elle `realloc`+`snprintf`
   döngüsü, C++ `std::string`in 2,5 katı yavaş. "C her zaman en hızlı"
   değil — kap seçimi dili yener.
 - **C# ve Java satırlarında başlatma maliyeti var**: boş program taban
-  çizgisi C# için 8,1 ms (C 0,2 · C++ 0,4 · Tulpar 0,8 · Python 5,7 ·
-  Node 11,3). `fib`in 23,8 ms'sinin üçte biri bu. AOT diller bu maliyeti
-  ödemiyor; kıyas duvar saatini ölçtüğü için fark tabloda görünüyor.
+  çizgisi C# için 8,2 ms (C 0,17 · C++ 0,44 · **Tulpar 0,23** · Python 5,6
+  · Node 10,7). AOT diller bu maliyeti ödemiyor; kıyas duvar saatini
+  ölçtüğü için fark tabloda görünüyor.
+- **`intloop` ve `sieve`de ilk dört dil 0,1–0,9 ms içinde.** O aralıkta
+  sıra numarası ölçüm oynamasıyla değişiyor; anlamlı olan bant, sıra değil.
 
-## İlk ölçümden sonra yapılan iyileştirmeler
+## İlk ölçümden bugüne
 
-İlk tur üç zayıflık gösterdi; ikisi kapatıldı.
+İlk adil ölçüm (2026-09-02) Tulpar'ı beş kıyasın hiçbirinde ilk üçe
+sokmuyordu. Bugün üçünde birinci, birinde ikinci.
 
-| | İlk ölçüm | Şimdi | Ne değişti |
+| | ilk ölçüm | bugün | kazanç |
 |---|---|---|---|
-| `strcat` | 233,5 | **166,3** | dizgi sabitleri internleniyor |
-| `sieve` | 60,4 | **42,1** | interning + `array_fill` |
-| `fib` | 5,8 | **4,3** | interning |
-| `intloop` | 135,2 | 135,1 | değişmedi (beklendiği gibi) |
+| `strcat` 2M | 233,5 | **13,2** | 17,7× |
+| `sieve` 5M | 60,4 | **7,7** | 7,8× |
+| `arrayiter` 5M | 6,6 | **1,2** | 5,5× |
+| `fib(32)` | 5,8 | **0,6** | 9,7× |
+| `intloop` 50M | 135,2 | 134,5 | değişmedi (beklendiği gibi) |
 
-**1. Dizgi sabitleri internleniyor.** Her literal *değerlendirmesi* yeni bir
-`ObjString` ayırıyordu — arena'dan, geçici işaretli — ve kalıcı bir kaba
-konulduğunda yazma bariyeri onu ayrıca derin kopyalıyordu. Ölçüldü:
-`push(dizi, "sabit")` ×4M **140,3 → 20,8 ms**; artık `push(dizi, int)` ile
-(19,9 ms) aynı sınıfta.
+Sıçramaların hepsi ölçümle bulundu; her adımın gerekçesi ve elenen
+denemeler `docs/mindmap/Performance.md`'de. Ana kaldıraçlar:
 
-**2. `array_fill(n, deger)` geldi.** n elemanlı diziyi kurmanın tek yolu n kez
-`push`ti (~4,5 ns/çağrı → 5M'lik dizide 22 ms, iş yapmadan önce). Rakiplerin
-hepsinde tek çağrılık karşılığı vardı; Tulpar'da yoktu, yani bu takım
-Tulpar'ı gereksiz yere döngüye mahkûm ediyordu.
+**1. Kutulanmamış sayısal dizi.** `ObjArray` artık ya kutulu `VMValue`
+vektörü ya da ham tamsayı dizisi tutuyor; erişim codegen'de satır içi
+GEP+load. Üstüne TBAA (eleman deposu ile dizi başlığı ayrı takma-ad
+sınıfı) ve **döngü-değişmezi şekil önbelleği** — dizinin işaretçisi ve
+uzunluğu döngü başında bir kez okunuyor.
 
-**3. Kutulanmamış sayısal dizi — YAPILMADI.** Kalan `sieve` farkı (42,1 vs
-7,6 = 5,5×) burada. `array` hâlâ kutulu bir `VMValue` vektörü ve her indeksli
-erişim çalışma zamanı yardımcısından geçiyor (~3 ns; C'nin ham `int*`
-yüklemesi ~0,5 ns). `int[]` sözdizimi var ama depolamayı değiştirmiyor —
-gerçek çözüm yeni bir `Obj` türü + codegen hızlı yolu, yani ayrı bir proje.
+**2. Döngü sürümleme.** `for`/`while` gövdesi iki kez üretiliyor; hızlı
+sürümde sınır denetimi kanıtla gereksiz olduğu için hiç yok. Kanıt
+sözdizimsel değil, döngü başındaki tek bir sınavla kuruluyor.
+
+**3. 32-bit eleman deposu.** C/Rust/Go elekte 4 baytlık eleman kullanıyor,
+biz 8 kullanıyorduk. Dizi artık 32-bit başlıyor ve i32'ye sığmayan bir
+değer yazılınca **genişletiliyor** (kutulanmıyor) — dilin `int`i 64-bit
+kalıyor. Genişlik dalı erişimde değil **sürüm seçiminde**, yani iki
+genişlik de sıcak yolda dalsız.
+
+**4. Özyineleme zinciri.** LLVM kendini çağıran bir fonksiyonu satır içine
+almaz (gcc alır — `fib`de bütün LLVM dillerini 2,4 kat geçmesinin tek
+sebebi buydu). Arka uç fonksiyonun dört kopyasını üretip halka kuruyor;
+artık her kenar iki *farklı* fonksiyon arası çağrı olduğu için sıradan
+satır içi alıcı onları açıyor.
+
+**5. Açılış maliyeti.** Her ikili OpenSSL yüklüyordu ve libstdc++ dinamik
+bağlanıyordu: boş program 1,15 → 0,23 ms.
+
+**6. Dizgi kurma.** `StringBuilder` + kutulamasız `sb_append` + hızlı
+`itoa`; ayrıca dizgi sabitleri internleniyor.
+
+**7. Tipsiz yol.** `%` operatörünün kutulu satır içi hızlı yolu yoktu ve
+her kutulu global ataması koşulsuz bir çalışma zamanı çağrısı ödüyordu;
+ikisi de kapatıldı. Kutulu fonksiyonlar ayrıca **değer ABI'sine** geçti
+(argüman ve dönüş yazmaçta): tipsiz `fib` 11,9 → 7,7 ms.

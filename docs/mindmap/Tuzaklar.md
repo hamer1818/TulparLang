@@ -587,6 +587,35 @@ Bu, "hızlandırdık" derken en kolay kandırılma biçimi — ve bu oturumda da
 ~20.6–21.4). **Kural:** yapılandırmaları iç içe ve simetrik sırada, birden çok
 tur, her turda min al. Tek seride arka arkaya ölçme.
 
+## 6f-2. Tavan ölçümü: iki program TEK bir şeyde ayrılmıyorsa sayı yalan
+
+Bir optimizasyona girişmeden önce "tavan ne kadar" diye C'de model yazmak
+doğru refleks. Ama model programı kurmak, ölçmek kadar dikkat ister —
+2026-09-06'da aynı gün **iki kez** yanlış sayı üretildi:
+
+| deneme | ne yanlıştı | sonuç |
+|---|---|---|
+| `ceil.c` A vs B | A'nın DIŞ döngüsü yerel `i`, B'ninki global `g_i` kullanıyordu | bekçiye 0,93 ms fatura edildi, oysa farkın çoğu dış döngüydü |
+| `ceil2.c` A/R/G/B | dört bicim `if (m=='A')` ile SICAK dış döngünün içinde seçiliyordu | 5M kez çalışan seçim farkı gizledi, "bekçi bedava" çıktı |
+
+İkisi de kendi içinde tutarlı, ikisi de yanlış. Doğrusu üçüncü denemede:
+tek bir kaynak, **tek** `#define` değişiyor (`width.c` / `width2.c`),
+dallanma dışarıda. O zaman sayılar oturdu:
+
+| ölçüm (elek, N=5M, pinlenmiş) | ms |
+|---|---|
+| C, int64 eleman, bekçisiz | 8,38 |
+| C, int64 eleman, **bekçi + soğuk yol** | 9,35 |
+| C, int32 eleman, bekçisiz | 7,78 |
+| Tulpar bugün | 9,36 |
+
+Yani Tulpar tam olarak "bekçili C" hızında; bekçi 0,97 ms, eleman
+genişliği 0,60 ms.
+
+**Kural:** tavan modelinde değişen tek şey ölçtüğün şey olmalı. Aynı
+kaynak + `-D` ile derle; "mod" seçen bir `if` sıcak döngüye girmesin;
+çıktıyı doğrula. Bir sayı beklentiye uymuyorsa önce **modeli** şüphelen.
+
 ## 6g. `a[i]` düğümünde taban İKİ ayrı alanda olabilir
 
 Şekil önbelleği kodu yazıldı, testler geçti, tanılama "önbelleğe alındı" dedi
@@ -915,6 +944,348 @@ derleme `src/embedded_libs.h` yazıyor — o yüzden konteyner içinde
 yazılabilir bir kopya çıkarılıyor. Daraltma sondası hangi biçimin çöktüğünü
 tek tek gösterdi ve hata dakikalar içinde bulundu.
 
+## 6r. Küresel LLVM bağlamı: doğrulayıcı düşer, optimizasyon SESSİZCE iner
+
+En pahalı sessiz hata sınıflarından biri. LLVM-C'nin bazı çağrıları
+**küresel bağlamı** kullanıyor; modülümüz ise `LLVMContextCreate()` ile
+**ayrı** bir bağlamda:
+
+```c
+LLVMBasicBlockRef LLVMAppendBasicBlock(LLVMValueRef Fn, const char *Name) {
+  return LLVMAppendBasicBlockInContext(LLVMGetGlobalContext(), Fn, Name);
+}                                       // ^^^ KÜRESEL
+```
+
+Sonuç: aynı yazılan tip **iki ayrı `Type` nesnesi** oluyor. `<2 x i64>`
+ile `<2 x i64>` eşit değil.
+
+**Nasıl ortaya çıkıyor (2026-09-06 ölçümü):**
+
+| belirti | görünen |
+|---|---|
+| `LLVMVerifyModule` | `MDNode context does not match Module context` |
+| aynısı, vektörleşen döngüde | `Both operands to a binary operator are not of the same type!` |
+| basılan IR | `add <2 x i64> %vec.ind, <2 x i64> splat (i64 2)` |
+| o IR'ı `llvm-as`'e ver | **ayrıştırılamıyor** — `expected type` |
+
+Son iki satır aynı şeyin iki yüzü: yazıcı ikinci işlenenin tipini
+**ayrıca** basıyor, çünkü kendi gözünde de tipler farklı. Doğrulayıcının
+kendi yazdığı metni kendi ayrıştırıcısı kabul etmiyorsa şüphelenilecek
+şey LLVM değil, **bağlam karışmasıdır**.
+
+**Bedeli:** doğrulama düşünce derleyici O3→O2→O1 merdivenine iniyor.
+`arrayiter` bu yüzden **O1'de** derleniyordu: bütün testler yeşil, çıktı
+doğru, kod **%25 yavaş**. Merdivenin varlığı hatayı gizliyordu —
+"geri çekilme" tasarlanmış bir emniyet ağıydı ve tam da bu yüzden kimse
+ağın her seferinde tutulduğunu fark etmedi.
+
+**Vektörleşmenin kaybı ayrıca sinsi:** üretici (`IRBuilder`) bağlamını
+**eklendiği bloktan** alıyor. Bloklarımız küresel bağlamdaysa, döngü
+vektörleştiricinin bizim bloğumuzda ürettiği her sabit yanlış bağlamdan
+geliyor.
+
+**Kural:** yeni blok/tip yaratan HER çağrı modülün bağlamından geçmeli.
+`append_bb()` (llvm_backend.cpp) tek kapı; 99 çağrı oradan geçiyor.
+`LLVMDoubleType()`, `LLVMInt8Type()`, `LLVMVoidType()` gibi bağlamsız
+kısayolların **hiçbiri** kullanılmamalı — `backend->float_type` vb. var.
+
+**Nasıl yakalanır:** `./build.sh suites` artık küçük bir doldurma
+döngüsü derleyip (a) "aggressive O3 IR invalid" notunun **çıkmadığını**,
+(b) üretilen IR'da bekçisiz depo GEP'inin (`set.pep`) **bulunduğunu**
+denetliyor. Bu bir HIZ özelliğinin doğruluk paketleri arasında
+sınanması: sessizce yavaşlamak da bir gerilemedir ve başka hiçbir test
+bunu görmüyor.
+
+⚠ **Denetimin ne ölçtüğüne dikkat.** İlk iki taslak da hiçbir şey
+ölçmüyordu ya da yanlış şeyi ölçüyordu:
+
+1. "İkilide SIMD komutu var mı" — statik bağlanan çalışma zamanı zaten
+   **6000+** tane içeriyor. Her zaman yeşil.
+2. "`main` içinde `movaps|movdqa` var mı" — yığına yapılan sıradan bir
+   16 baytlık kopya da onları üretiyor; vektörleşmeyen derleyicide bile
+   1 bulunuyordu. Yine her zaman yeşil.
+3. "`main` içinde `paddq|movdqu` var mı" — bu gerçekten ayırt ediyor
+   (eski 0, yeni 4) **ama LLVM 18'de (CI'ın sürümü) doğru kod için de
+   0**: LLVM 18 bu döngüyü vektörleştirmiyor. Docker'da ölçüldü. CI'ı,
+   gerçek bir gerileme olmadan kırardı.
+
+Kalan denetim (b) sürümden bağımsız, çünkü **bizim** ürettiğimiz şeyi
+soruyor: bekçisiz depo. Vektörleşme LLVM'in aşağı akıştaki kararı ve
+onu şart koşmak sürüm tahmini yapmak olurdu.
+
+Ayrıca sonda programı bilerek **yalnız** doldurma döngüsünden ibaret:
+bir indirgeme eklenirse o vektörleşir ve denetim yanlış yere yeşil
+kalır.
+
+## 6s. Kıyas süresinin YARISI programın kendisi değildi
+
+`print(1)` yazan bir Tulpar ikilisi **1,15 ms** sürüyordu; aynı işi yapan C
+programı 0,41. Bu vergi HER kıyasta vardı ve kimse ölçmemişti —
+`arrayiter`in 2,2 ms'sinin yarısı, `fib`in dörtte biri.
+
+Sebep bizim `aot_runtime_init`imiz değil (o ~0,08 ms). Bileşen bileşen
+ölçüldü (2026-09-06, pinlenmiş, boş programlar):
+
+| ikili | ms |
+|---|---|
+| düz C | 0,41 |
+| C++ (libstdc++.so dinamik) | 0,72 |
+| C + OpenSSL | 0,80 |
+| C++ + OpenSSL | 1,00 |
+| **Tulpar** | **1,08** |
+
+Yani süre **paylaşımlı kütüphane yüklemekten** geliyordu. `print(1)` yazan
+bir ikili **13 paylaşımlı nesne** açıyordu: libssl, libcrypto ve onların
+libz/brotli/zstd bağımlılıkları dahil.
+
+**Neden:** `runtime_bindings.cpp` — HER AOT ikilisine giren nesne —
+OpenSSL'e doğrudan dokunuyordu (TLS sunucu primitifleri + HTTP istemcisi).
+Bağlayıcı bir arşiv üyesini yalnız ihtiyaç duyulan bir sembolü tanımladığı
+için içeri alır; o nesne her zaman gerektiği için OpenSSL de her zaman
+gerekiyordu.
+
+**Çözüm iki parça ve İKİSİ BİRDEN şart:**
+1. OpenSSL'e dokunan kod ayrı bir derleme birimine (`src/vm/runtime_net.cpp`).
+2. Bağlantıya `-Wl,--as-needed`.
+
+Yalnız (2) işe yaramaz: sembol kullanıldığı sürece kütüphane düşmez.
+Yalnız (1) de yaramaz: `-lssl -lcrypto` bayrakları satırda durduğu için
+DT_NEEDED yine yazılır.
+
+Sonuç: 13 → 6 paylaşımlı nesne, boş program 1,15 → 0,76 ms, fib
+5,08 → 4,54. İkili boyutu değişmedi.
+
+**Kural:** çalışma zamanına dışarıdan bir kütüphaneye dokunan kod
+eklerken onu ayrı bir TU'ya koy. Aynı sorun SQLite için hâlâ duruyor —
+her ikili 636 KB SQLite taşıyor (boyut; hız değil, statik).
+
+### `-static-libstdc++` önce BIRAKILDI, sonra ALINDI — okuma sırası önemli
+İlk ölçüm şunu dedi: açılıştan 0,26 ms kazandırıyor ama ikili 2,1 → 3,8 MB
+**ve fib 4,75 → 6,35 ms**; "net zarar" denip geri alındı.
+
+**Bu karar YANLIŞTI ve geri alındı** — sebebi hemen aşağıdaki 6t. Tek bir
+ikiliye bakılmıştı; sekiz yerleşimde ölçülünce tablo tersine döndü ve bayrak
+`--gc-sections` ile birlikte kalıcı olarak alındı. Bu paragrafı, "denendi ve
+bırakıldı" sonucuna varmadan önce 6t ile birlikte oku.
+
+## 6t. Kod YERLEŞİMİ ölçümü ±%27 oynatıyor — tek ikiliye bakma
+
+`-static-libstdc++` bir kez ölçülüp **yanlış** karara bağlandı: fib
+4,75 → 6,35 ms göründü, "net zarar" denip geri alındı. Gerçek sebep
+bağlama biçimi değil, **fib'in adresiydi**.
+
+Kanıt: aynı `fib_o.o`, aynı bağlama biçimi, tek fark önüne konan
+dolgu nesnesinin boyutu (fonksiyonu 16'şar bayt kaydırıyor):
+
+| dolgu | fib@ | ms |
+|---|---|---|
+| 0 | 0x418520 | 4,11 |
+| 1 | 0x418530 | 4,30 |
+| 2 | 0x418540 | 4,15 |
+| 3 | 0x418550 | **5,59** |
+| 4 | 0x418560 | 4,11 |
+| 5 | 0x418570 | **5,41** |
+| 6 | 0x418580 | 4,14 |
+| 7 | 0x418590 | 4,26 |
+
+**Aynı kod, aynı hizalama sınıfı (mod 16 / mod 32 / mod 64 hepsi eşit),
+4,06 ile 5,59 arası.** Mekanizma tam belirlenemedi (dal hedefi
+önbelleği / op-cache küme çakışması sınıfından; `perf` bu makinede yok),
+ama etki tekrarlanabilir ve ikiliye özgü.
+
+Eleme yöntemleri denendi ve hepsi ELENDİ:
+- program adı uzunluğu (yığın hizası) — 8 farklı uzunluk, hepsi 5,3
+- fonksiyon/döngü hizalaması — s_fib ile t_fib mod32 ve mod64'te AYNI,
+  yine 1 ms fark
+- ikili boyutu — aynı boyutlu iki ikili 1,45 ms fark ediyor
+
+**Kural:** bir bağlama/kod-üretimi değişikliğini TEK bir ikilinin süresiyle
+yargılama. Sekiz farklı yerleşimde ölç, medyanları karşılaştır. Doğru
+deney tabloyu tersine çevirdi: statik medyan **4,01**, dinamik **4,20**.
+
+Bu, [[Tuzaklar]] 6f-2'nin (tavan modelinde tek değişken) kardeşi: orada
+model programı fazla değişkenliydi, burada ölçüm tek örnekliydi.
+
+## 6u. LLVM ÖZYİNELEMEYİ satır içine almaz — gcc alır, fark 2,4 kat
+
+`fib` kıyaslamasında gcc her LLVM dilini eziyordu ve bu aylarca "gcc işte,
+olağan" diye geçildi. Sayı tutmuyordu: fib(32) ≈ 7 milyon çağrı, gcc 1,6 ms,
+yani çevrim başına bir çağrı. İmkânsız.
+
+`objdump` cevabı verdi:
+
+| derleyici | `fib` gövdesi | fib(36) |
+|---|---|---|
+| gcc -O2 | **266 komut** | 10,3 ms |
+| clang -O3 | 22 komut | 25,1 ms |
+| rustc -O3 | — | 24,1 ms |
+| Tulpar (önce) | — | 25,2 ms |
+
+gcc özyinelemeyi **satır içine alıp** çağrı sayısını φ^k kat düşürüyor. LLVM'in
+satır içi alıcısı bunu YAPMAZ: bir SCC kenarını kendi içine açmayı reddediyor.
+clang, Rust ve biz — üçümüz de aynı tavanda takılıydık, çünkü aynı alıcıyı
+kullanıyoruz.
+
+**Çözüm satır içi alıcıya dokunmadan:** fonksiyonun K kopyasını üretip halka
+kur —
+
+    f -> f.rec1 -> f.rec2 -> f.rec3 -> f.rec4 -> f
+
+Artık her kenar İKİ FARKLI fonksiyon arasında; sıradan alıcı onları kendi
+maliyet bütçesiyle açıyor ve bütçe bitince duruyor. Yani derinliği biz değil
+LLVM sınırlıyor — kod patlaması olmuyor (`.text` 2 KB'de kaldı, derleme süresi
+değişmedi). `llvm_backend.cpp` içinde `selfrec_*`.
+
+Ölçüldü (fib N=36): 25,2 → **2,26 ms**. gcc'nin 4,6, Rust'ın 10,7 katı hızlı.
+
+Yan bulgu, sezgiye aykırı: **yığın derinliği gerilemedi, arttı** — en derin
+başarılı çağrı 250 968 → 641 544. Satır içine alma 4 mantıksal seviyeyi 4
+katından küçük TEK kareye topluyor, yani kare başına iş artarken toplam kare
+sayısı daha çok azalıyor.
+
+### K'yı ölçmeden seçme
+Derinlik sezgiyle değil ölçümle seçildi (C prototipi, N=36, en iyi/9):
+
+| K | 0 | 2 | 4 | 6 | 8 | 12 |
+|---|---|---|---|---|---|---|
+| ms | 25,2 | 1,89 | **1,40** | 2,24 | 2,62 | 2,92 |
+
+Monoton değil: K=4 taban, sonrası kötüleşiyor. "Ne kadar çok o kadar iyi"
+varsayımıyla K=8 seçilseydi kazancın yarısı gidiyordu.
+
+### Bu koruma nasıl boşa çıkardı
+`build.sh`'taki denetim İKİ ayaklı, çünkü tek ayak sessizce boş çıkar:
+IR'de klon tanımı aramak, klonlar üretilip HİÇ satır içi alınmadığında
+(ör. yanlışlıkla `noinline`) yeşil kalırdı — kazanç sıfırken. O yüzden ikinci
+ayak zincirli/zincirsiz ikilileri **göreli** ölçüyor (`TULPAR_NO_SELFREC=1`
+tek değişken); gerçek fark 7 kat, eşik 2 kat.
+
+Aynı sebeple kıyas programı N'i **ortamdan** okuyor: `fib(30)` sabit olsaydı
+LLVM derleme zamanında katlar, iki ikili de 0 ms sürer, ölçüm hiçbir şey
+ölçmezdi. [[Tuzaklar]] 6f-2'nin aynısı.
+
+## 6v. "typeinfer bunu zaten uyarıyor" — UYARMIYORDU
+
+`int` bildirilmiş bir hedefe float yazmak sessizce bozuk sonuç veriyordu:
+
+```
+float f = 2.5;  int b = f;              -> 4612811918334230528
+int a = 3.7;                            -> 0
+int elapsed = clock_ms() - start;       -> 4574812796478291968
+```
+
+Üçüncüsü `examples/15_feature_test.tpr`'de **aylarca basılı duruyordu**
+(`sleep(10) elapsed: 4621851690620944384 ms`) ve kimse bakmadı — çünkü örnek
+testi yalnız **çıkış kodunu** karşılaştırıyor, çıktıyı değil.
+
+Kök neden tek bir kalıptı, beş yerde kopyalanmıştı:
+
+```c
+if (tv.type == INFERRED_INT || tv.type == INFERRED_BOOL) v = tv.value;
+else if (tv.boxed) v = ExtractValue(tv.boxed, 2);   // double'ın BİT DESENİ
+else                v = 0;                           // sessiz sıfır
+```
+
+İki dal, iki ayrı yanlış cevap. Yanındaki yorum şöyle diyordu: *"Floats/
+strings/objects are left alone — typeinfer's pre-pass already warned about
+those mismatches."* **Uyarmıyordu** — `tulpar typecheck` bu dosyaya "ok"
+diyor. Yani boşluk, doğrulanmamış bir varsayımın yorum olarak yazılmasıyla
+açılmış ve o yorum sonraki okuyucuyu da ikna etmiş.
+
+**Kural:** "başka bir katman bunu zaten yakalıyor" diyen bir yorum yazacaksan
+önce o katmanı ÇALIŞTIRIP gör. Yazılmış varsayım, denetlenmiş varsayımdan
+ayırt edilemez hale geliyor. Bu [[Tuzaklar]] 6k'nın (aynı varsayım üç
+katmanda) yakın akrabası.
+
+### İki yol AYRIŞIYORDU, biri doğru göründüğü için gizlendi
+Aynı ifade nereden geçtiğine göre farklı cevap veriyordu:
+
+| | küresel (native yuva) | yerel (kutulu yuva) |
+|---|---|---|
+| `int y = 10; y -= 2.5;` | 7 | **7,5** |
+| `int y = 10; y = 2.5;` | 2 | **2,5** |
+
+Yani `int` bildirilen yerel değişkende float kalabiliyordu. Küresel yol doğru
+davrandığı için el ile denerken kolayca "düzeldi" sanılabilirdi. Testin İKİ
+yolu da sürmesi gerekiyor — paket şimdi ikisini ayrı ayrı kilitliyor.
+
+### Doğru anlam: aritmetik geniş tipte, kırpma yazarken
+`y -= 2.5` → `10 - 2,5 = 7,5` → **7**. Sağ tarafı önce kırpmak (`2,5 → 2`,
+sonra `10 - 2 = 8`) başka bir cevap verir. İlk düzeltme sağ tarafı önce
+kırpıyordu ve test 8 bekleyip kırmızıya döndü — beklentiyi C ile
+doğrulayınca doğrusunun 7 olduğu çıktı. Bildirim yolu (`int c = f * 2.0` → 5)
+zaten C anlamındaydı; tutarlılık oradan geldi.
+
+## 6w. Tavan modelini BAŞKA BİR DİLDE kurma
+
+Elekte i32 eleman kazancı `width.c` ile ölçüldü: tek `#define`, sadece
+genişlik değişiyor, ölçüm kusursuz — **0,59 ms**. Aylarca "kalan tek kaldıraç"
+olarak bu sayı taşındı.
+
+Derleyiciye geçici bir "hep i32" hack'i konup dilin İÇİNDE ölçülünce çıkan
+sayı **0,19 ms** oldu. Üçte biri.
+
+Model kusurlu değildi; **yanlış programı** modelliyordu. `width.c` C'nin elek
+döngüsünü ölçüyor: farklı erişim yolu, farklı sınır denetimi, farklı kayıt
+baskısı. [[Tuzaklar]] 6f-2 "modelde tek şey değişsin" diyor; bu onun eksik
+kalan yarısı: **model, optimize edeceğin programın kendisi olmalı.**
+
+**Kural:** bir optimizasyonun tavanını başka bir dilde ölçme. Derleyiciye
+doğruluğu umursamayan geçici bir hack koy, gerçek programı koştur, sonra
+hack'i at. Elek hack'i üç düzenlemeydi ve yarım saat sürdü — makineyi kurmak
+günler sürecekti.
+
+### Aynı ölçümde ikinci tuzak: TBAA etiketi YÜKÜN kendisine gider
+İlk i32 hack'i eleği 8,3'ten **19,9 ms**'ye çıkardı. Sebep i32 değildi:
+`sext` sonucuna TBAA etiketi konmuştu, yükleme komutuna değil. Doğrulayıcı
+`"This instruction shall not have a TBAA access tag!"` diyor ve modül
+**hiçbir seviyede** optimize edilemiyor — 2,3 kat yavaşlama optimizasyonun
+tamamen kapanmasıydı.
+
+`TULPAR_AOT_DEBUG_O3=1` bunu tek satırda söylüyor. Bir ölçüm sezgiye aykırı
+biçimde kötü çıktığında **önce onu çalıştır**; bkz. [[Tuzaklar]] 6r.
+
+## 6x. Kod üret, sonra AYNI düğümü tekrar üret — yan etki iki kez çalışır
+
+`codegen_typed_expr`in ikili işlem dalı şöyleydi:
+
+```c
+TypedValue L = codegen_typed_expr(node->left);    // KOD ÜRETİR
+TypedValue R = codegen_typed_expr(node->right);   // KOD ÜRETİR
+if (ikisi de int) { ...hızlı yol...; return; }
+// geri düşüş:
+result.boxed = codegen_expression(node);          // OPERANDLARI BİR DAHA ÜRETİR
+```
+
+Sonuç DEĞERİ hep doğruydu — ikinci kopya birincisinin üstüne yazıyor. Yanlış
+olan tek şey **yan etkinin iki kez çalışması**:
+
+```
+func yan() { sayac = sayac + 1; return 5; }
+int y = yan() + 0;      // sayac 2 oluyordu, 1 değil
+int v = (yan() + 1) * (yan() + 1);   // 2 yerine 6
+```
+
+İç içe ifadede ikileme **katlanıyor**. Tipli fonksiyonda (`func yan(): int`)
+görünmüyordu: orada hızlı yol tutuyor ve geri düşüş hiç çalışmıyor. Yani hata
+yalnız KUTULU operandlı karışık ifadelerdeydi — dilin en sık yazılan biçimi.
+
+**Kural:** kod üreten bir fonksiyondan "geri düşerken" düğümü baştan üretme.
+Üretilmiş operandları alan bir yardımcıya çıkar (`emit_boxed_binary_op`).
+Bir üretim fonksiyonunu iki kez çağırmanın bedeli "ölü IR" değil, **tekrar
+eden yan etki**.
+
+### Bu testin İLK YAZIMI hiçbir şey ölçmüyordu
+Ölçüler önce test fonksiyonlarının İÇİNE kondu. Orada `int y = ...` KUTULU
+yerel yoluna gidiyor ve hatalı yol hiç çalışmıyor: eski kodu geri koyan
+enjeksiyon paketi **yeşil** bıraktı. Hatalı yol ÜST DÜZEY `int y = <ifade>;`
+bildirimi (native int global yolu). Ölçüler en üst kapsama taşınınca
+enjeksiyon 8 testin 5'ini kırmızıya çevirdi.
+
+Ders [[Tuzaklar#1a]]'nın kardeşi: yalnız "kararı" değil, **hatanın gerçekten
+geçtiği KAPSAMI** de sürmek gerekiyor. Bir dilde aynı ifade, bulunduğu
+kapsama göre başka kod üretir.
+
 ## 7. Derleme / gömülü lib
 - `lib/*.tpr` **derleme zamanında gömülüyor** → değişikliği görmek için
   `cmake -S . -B build-linux` **RECONFIGURE** şart; yalnız `--build` yetmez.
@@ -967,6 +1338,74 @@ koşuyor — demo + kapsamı KASTEN dolduran `tests/kod_uretimi_tam.scene.json`
 kural). Üç bozmanın **ikisini yalnız yeni sahne** yakalıyor. **Kural: yeni bir
 serileştirilebilir alan ekleyen, düzeneği de büyütür** — yoksa alan sessizce
 üç yoldan yalnız ikisinde yaşar.
+
+## 6y. GNU'ya özgü bağlantı bayrağını `#else` dalına koymak — macOS'u kırar, Linux CI yeşil kalır
+
+`aot_pipeline.cpp`'deki bağlantı bayrakları `#if PLATFORM_WINDOWS / #else`
+şeklinde ikiye ayrılıyordu. O `#else`, **Linux ile macOS'u birlikte**
+kapsıyor. Açılış maliyetini düşüren beş bayrak (`-static-libstdc++`,
+`-static-libgcc`, `-Wl,--as-needed`, `--exclude-libs,ALL`, `--gc-sections`)
+oraya eklendi. Hepsi GNU ld / GCC sürücüsüne özgü; Apple clang
+`-static-libgcc`'yi **sert hatayla** reddediyor, `--as-needed` /
+`--exclude-libs` / `--gc-sections` ise ld64'te hiç yok.
+
+Sonuç: o daldaki **her macOS AOT derlemesi** kırıldı — `tulpar foo.tpr`
+dahil, çünkü çalıştırma da aynı bağlantı satırından geçiyor. Yani macOS'ta
+dil tamamen kullanılamaz haldeydi.
+
+**Neden geç fark edildi.** Yerel geliştirme Linux; suites, örnekler ve
+typeinfer'in üçü de Linux'ta koşuyor ve **hepsi yeşildi**. CI'da macOS işi
+var ama testleri koşmuyor (bkz. CLAUDE.md) — tek işlevsel adımı
+`AOT end-to-end smoke`. Hatayı yakalayan tek şey o adım oldu (PR #310).
+Yani **macOS'un tüm güvencesi tek bir smoke adımı**; onu zayıflatmak, bu
+sınıf hataların doğrudan main'e girmesi demek.
+
+**Kural.** Yeni bir bağlantı bayrağı eklerken önce şunu sor: *bu GNU'ya mı
+özgü?* Öyleyse `#elif PLATFORM_LINUX` dalına koy. Taşıyıcı `#else` dalı
+(macOS + diğer Unix'ler) muhafazakâr kalmalı. macOS'a aynı kazancı
+getirmek isteyen, ld64 karşılığını (`-dead_strip`) **gerçek bir macOS
+makinesinde ölçmeli** — burada tahminle bayrak eklemek, Linux yeşilken
+macOS'u kırmanın kestirme yolu.
+
+**Genel biçim:** *bir platformun test kapsamı diğerinden dar olduğunda,
+ortak koda konan platforma özgü varsayım, dar kapsamlı platformda sessizce
+patlar.* Aynı biçim `#ifdef _WIN32` yerine shim başlıklarını kullanma
+kuralının da (CLAUDE.md) arkasındaki sebep.
+
+## 6z. Duvar saati ORANI koruması — sabit ek yük oranı platforma bağlı yapar
+
+Özyineleme zinciri koruması "zincirsiz süre ≥ 2 × zincirli süre" diyordu.
+Linux'ta oran ~7 kat, rahat geçiyordu. macOS arm64'te **1,52 kat** çıkıp CI'ı
+kırdı — zincir kusursuz çalışırken.
+
+Sebep: ölçülen şey `fork+exec+dyld+fib`, yani **süreç açılışı da içinde**.
+Açılış Linux'ta ~0,2 ms, macOS arm64'te ~10 ms. Aynı sabit **her iki tarafa
+da** eklenince oran 1,0'a doğru eziliyor:
+
+| | zincirsiz | zincirli | oran |
+|---|---|---|---|
+| Linux (açılış 0,2 ms) | 4,9 ms | 0,7 ms | ~7× |
+| macOS (açılış ~10 ms) | 18,5 ms | 12,2 ms | **1,52×** |
+
+İş payının gerçek oranı macOS'ta da ~4 kattı; eşiğin altına düşüren tek şey
+paydaya ve paya eklenen ortak sabitti.
+
+**Yanlış cevap:** eşiği 1,3'e düşürmek. Ölçüm hatasını gizler ve gerçek bir
+gerilemeyi de kaçırır.
+**Doğru cevap:** sabiti ÖLÇ ve ÇIKAR. Açılış, **aynı ikiliden** N=1 ile
+ölçülüyor (aynı binary, aynı kod yerleşimi, tek değişen iş miktarı); kalan
+yalnızca fib işi. Eşik böylece makineden bağımsız. Linux'ta iş payı oranı
+%881'e çıktı, enjeksiyon (iki tarafı da zincirsiz yap) hâlâ yakalıyor.
+
+**Bu ikinci kez ısırdı.** İlk seferinde N=30 ile başlanmıştı ve açılış oranı
+2,7 kata indiriyordu; o zaman iş yükünü büyüterek çözülmüştü — ama bu, sabiti
+*görece* küçültmekti, *yok etmek* değil. Daha büyük ek yükü olan bir platform
+gelince aynı hata geri döndü.
+
+**Kural:** bir denetim iki süreyi oranlıyorsa, önce sor: *ikisinde de ortak
+olan ne var?* Varsa çıkar — yoksa oran, ölçtüğünü sandığın şeyi değil,
+platformun ek yükünü ölçer. Aynı disiplin `benchmarks/fair`'de zaten var
+(boş program taban çizgisi ayrı raporlanıyor).
 
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]

@@ -24,6 +24,11 @@ LLVMValueRef llvm_build_vm_val_obj(LLVMBackend *backend, LLVMValueRef obj_ptr);
 // `lib/test.tpr`'daki `assert`'in sessiz no-op olması tam bu boşluktu.
 // Bildirimde (`int x = <bool>`) ve PARAMETRE bağlamada AYNI fonksiyon
 // çağrılıyor ki ikisi ayrışamasın.
+// Kutulu VMValue -> i64 tam sayi yuku; FLOAT ise sifira dogru kirparak
+// donusturur. Kutulu deger bekleyen her "int hedefe yaz" yolu bunu kullanir.
+LLVMValueRef llvm_vm_val_to_int_payload(LLVMBackend *backend,
+                                        LLVMValueRef vm_val);
+
 LLVMValueRef llvm_coerce_bool_tag_to_int(LLVMBackend *backend,
                                          LLVMValueRef vm_val);
 
@@ -32,6 +37,12 @@ LLVMValueRef llvm_extract_vm_val_int(LLVMBackend *backend, LLVMValueRef vm_val);
 LLVMValueRef llvm_extract_vm_val_ptr(LLVMBackend *backend, LLVMValueRef vm_val);
 
 // ABI-safe VMValue return conversion
+// VMValue'nun C ABI'si bu hedefte sret+byval mi (wasm32 / Win64) yoksa
+// {i64,i64} cifti mi (SysV)?
+int vmvalue_abi_uses_sret(const LLVMBackend *backend);
+// VMValue -> ABI cifti.
+LLVMValueRef llvm_vmvalue_to_ret_pair(LLVMBackend *backend, LLVMValueRef v);
+
 LLVMValueRef llvm_convert_ret_pair_to_vmvalue(LLVMBackend *backend,
                                               LLVMValueRef ret_pair);
 LLVMValueRef llvm_call_vmvalue_func(LLVMBackend *backend, LLVMValueRef func,

@@ -147,7 +147,63 @@ struct AOTPhaseTimer {
   #define AOT_LINK_PIE_FLAG ""
   #define AOT_EXE_SUFFIX ".exe"
   #define AOT_TMP_RUN_BASE ".tulpar_run"
+#elif PLATFORM_LINUX
+  // ⚠ BU DAL YALNIZ LINUX. Asagidaki bayraklarin hepsi GNU ld / GCC
+  // surucusune ozgu ve Apple clang + ld64 bunlari TANIMIYOR:
+  // `-static-libgcc` sert hata veriyor ("unsupported option"),
+  // `--as-needed` / `--exclude-libs` / `--gc-sections` ld64'te yok.
+  // Bir kez macOS'u kirdi (CI PR #310'da yakaladi): dal `#else` idi,
+  // yani Linux'la macOS'u birlikte kapsiyordu, Linux CI yesil kaliyordu
+  // ve hata yalniz macOS'ta "AOT end-to-end smoke" adiminda cikiyordu.
+  // Yeni bir baglanti bayragi eklerken once "bu GNU'ya mi ozgu?" diye
+  // sor; oyleyse buraya koy, asagidaki tasiyici `#else` dalina DEGIL.
+  //
+  // `-Wl,--as-needed`: KULLANILMAYAN PAYLASIMLI KUTUPHANEYI BAGLAMA.
+  //
+  // Baglanti satiri `-lssl -lcrypto` tasiyor (TLS yerlesikleri icin sart),
+  // ama programlarin cogu TLS kullanmiyor. Bayrak olmadan her ikili
+  // libssl + libcrypto'yu — ve onlarin libz/brotli/zstd bagimliliklarini —
+  // ACILISTA YUKLUYORDU. Olculdu (2026-09-06, pinlenmis): 13 paylasimli
+  // nesne yerine 6; bos program 1,18 -> 0,53 ms, fib 5,21 -> 4,75.
+  //
+  // Bayragin ise yaramasinin SARTI, OpenSSL'e dokunan kodun
+  // `runtime_net.cpp`e ayrilmis olmasi: ayni nesnede kaldigi surece
+  // sembol "kullaniliyor" sayiliyor ve kutuphane dusmuyor.
+  //
+  // `-static-libstdc++` DENENDI VE BIRAKILDI: libstdc++.so'yu yuklememek
+  // acilistan 0,26 ms kazandiriyor ama ikiliyi 2,1 -> 3,8 MB buyutuyor VE
+  // fib'i 4,75 -> 6,35 ms geriletiyor (kod yerlesimi degisiyor; ayni
+  // sinifta bir etki elek'te de olculdu). Net zarar.
+  // `-static-libstdc++ -static-libgcc`: libstdc++.so + libgcc_s.so'yu
+  // ACILISTA YUKLEMEMEK. Olculdu: bunlar bos bir programa 0,31 ms
+  // biniyor ve HER Tulpar ikilisi oduyordu.
+  //
+  // ⚠ Bu karar bir kez YANLIS verildi: tek bir kiyasa (fib) bakilmisti ve
+  // statik surum 1 ms YAVAS gorunuyordu. Gercek sebep KOD YERLESIMIYDI —
+  // ayni fib kodu, ayni hizalama, yalniz farkli adres: 4,06 ile 5,59 ms
+  // arasi (±%27). Sekiz farkli yerlesimde olculunce tablo duzeldi:
+  // statik medyan 4,01, dinamik 4,20. Bkz. Tuzaklar 6t.
+  //
+  // `--exclude-libs,ALL` + `--gc-sections`: statik libstdc++'in
+  // kullanilmayan bolumlerini atiyor. `-rdynamic` her sembolu kok
+  // sayacagi icin ikisi birlikte sart; arsiv sembolleri .dynsym'e
+  // girmeyince gc calisabiliyor. Ikili 4,01 -> 2,97 MB (dinamik 2,14).
+  // `call()` yalniz KULLANICI fonksiyonlarini dlsym'liyor ve onlar
+  // arsivde degil, kullanicinin kendi nesnesinde — o yuzden etkilenmiyor.
+  #define AOT_LINK_LIB_FLAGS \
+      "-rdynamic -Wl,--as-needed -static-libstdc++ -static-libgcc " \
+      "-Wl,--exclude-libs,ALL -Wl,--gc-sections " \
+      "-ltulpar_runtime -lm -lpthread -ldl" AOT_TLS_LINK_FLAGS
+  #define AOT_LINK_PIE_FLAG "-no-pie"
+  #define AOT_EXE_SUFFIX ""
+  #define AOT_TMP_RUN_BASE "/tmp/.tulpar_run"
 #else
+  // macOS (ld64) ve diger Unix'ler: GNU'ya ozgu bayraklarin HICBIRI yok.
+  // Bu, Linux'un acilis optimizasyonlarindan once de calisan baglanti
+  // satirinin ta kendisi; kasitli olarak muhafazakar tutuluyor. macOS'a
+  // ayni kazanci getirmek isteyen once ld64 karsiligini (`-dead_strip`,
+  // `-Wl,-no_exported_symbols`) GERCEK bir macOS makinesinde OLCMELI —
+  // burada tahminle bayrak eklemek, Linux CI yesilken macOS'u kirar.
   #define AOT_LINK_LIB_FLAGS \
       "-rdynamic " \
       "-ltulpar_runtime -lm -lpthread -ldl" AOT_TLS_LINK_FLAGS

@@ -1,0 +1,189 @@
+import "test";
+
+// DIZI ELEMAN GENISLIGI (2026-09-08).
+//
+// Kutusuz `int[]` artik 32-BIT baslar: eleman basina 8 yerine 4 bayt. Dilin
+// `int`i 64-bit KALIYOR — i32'ye sigmayan bir deger yazilinca dizi 64'e
+// GENISLETILIYOR (aot_arr_widen), kutulanmiyor.
+//
+// Olculdu (elek n=5M): 8,06 -> 7,80 ms, ve arrayiter 1,5 -> 1,3. C'yi elekte
+// GECIYOR (7,9).
+//
+// Bu paket GENISLEMENIN her yolunu ayri ayri kilitliyor. Yollar farkli kod
+// uretiyor: kanitli (surumlenmis dongu), onbellekli (sekil), ve bekcili
+// (dongusuz). Biri unutulursa 8 baytlik yazma i32 dizide KOMSU ELEMANI ezer
+// — nitekim ilk yazimda tam bu oldu ve `a[3]` 1 yerine 769 cikti.
+
+// --- temel: kucuk degerler 32-bit depoda dogru --------------------------
+func run_kucuk() {
+    int[] a = array_fill(6, 7);
+    assert_eq_int(a[0], 7);
+    assert_eq_int(a[5], 7);
+    assert_eq_int(len(a), 6);
+    a[2] = -3;
+    assert_eq_int(a[2], -3);
+    assert_eq_int(a[1], 7);
+    assert_eq_int(a[3], 7);
+}
+
+// --- SINIR degerleri: i32'nin tam kenarlari -----------------------------
+// 2147483647 ve -2147483648 SIGAR; bir fazlasi/eksigi SIGMAZ ve genisletir.
+func run_sinir() {
+    int[] a = array_fill(4, 0);
+    a[0] = 2147483647;
+    a[1] = -2147483648;
+    assert_eq_int(a[0], 2147483647);
+    assert_eq_int(a[1], -2147483648);
+    a[2] = 2147483648;
+    a[3] = -2147483649;
+    assert_eq_int(a[2], 2147483648);
+    assert_eq_int(a[3], -2147483649);
+    // genisleme SONRASI eski degerler korunmali
+    assert_eq_int(a[0], 2147483647);
+    assert_eq_int(a[1], -2147483648);
+}
+
+// --- BEKCILI yol (dongusuz yazma): komsu elemani ezmemeli ---------------
+// Ilk yazimda bu yol i64 yaziyordu ve i32 dizide iki elemani birden
+// bozuyordu; `a[3]` 1 yerine 769 cikiyordu.
+func run_bekcili_yazma() {
+    int[] a = array_fill(5, 1);
+    a[0] = 7;
+    assert_eq_int(a[0], 7);
+    assert_eq_int(a[1], 1);
+    a[1] = 5000000000;
+    assert_eq_int(a[1], 5000000000);
+    assert_eq_int(a[0], 7);
+    assert_eq_int(a[2], 1);
+    assert_eq_int(a[3], 1);
+    assert_eq_int(a[4], 1);
+}
+
+// --- DONGU icinde genisleme (onbellekli/kanitli yol) --------------------
+func run_dongude_genisleme() {
+    int[] a = array_fill(8, 2);
+    int n = 8;
+    int i = 0;
+    while (i < n) { a[i] = i * 3; i = i + 1; }
+    assert_eq_int(a[0], 0);
+    assert_eq_int(a[7], 21);
+    // simdi buyuk bir deger: dizi genisliyor, dongu devam ediyor
+    a[4] = 6000000000;
+    int t = 0;
+    int j = 0;
+    while (j < n) { t = t + a[j]; j = j + 1; }
+    // 0+3+6+9+6000000000+15+18+21 = 6000000072
+    assert_eq_int(t, 6000000072);
+}
+
+// --- genisledikten SONRA dongu hala dogru -------------------------------
+// ⚠ SINIR bir DEGISKEN olmali. Ilk yazimda `while (i < 10)` yazilmisti;
+// dongu surumlemesinin kaniti ust siniri AD olarak istiyor, yani o dongu hic
+// surumlenmiyordu ve test surumlemeyi HIC OLCMUYORDU: surumleme kosulundan
+// genislik sartini kaldiran enjeksiyon paketi YESIL biraktı. Degisken sinirla
+// dongu surumleniyor ve enjeksiyon kirmiziya donuyor.
+func run_genisleme_sonrasi_dongu() {
+    int[] a = array_fill(10, 1);
+    int n = 10;
+    a[5] = 9000000000;          // dizi 64-bit'e GENISLEDI
+    int t = 0;
+    int i = 0;
+    while (i < n) { t = t + a[i]; i = i + 1; }
+    assert_eq_int(t, 9000000009);
+    // genis dizide YAZMA da dogru
+    int j = 0;
+    while (j < n) { a[j] = j; j = j + 1; }
+    assert_eq_int(a[0], 0);
+    assert_eq_int(a[9], 9);
+    // genis dizide buyuk deger yazip geri okuma
+    int k = 0;
+    while (k < n) { a[k] = 3000000000 + k; k = k + 1; }
+    assert_eq_int(a[0], 3000000000);
+    assert_eq_int(a[9], 3000000009);
+}
+
+// --- PUSH ile genisleme -------------------------------------------------
+func run_push() {
+    int[] b = array_fill(2, 3);
+    push(b, 4);
+    push(b, 8000000000);
+    push(b, 9);
+    assert_eq_int(len(b), 5);
+    assert_eq_int(b[0], 3);
+    assert_eq_int(b[1], 3);
+    assert_eq_int(b[2], 4);
+    assert_eq_int(b[3], 8000000000);
+    assert_eq_int(b[4], 9);
+}
+
+// --- BUYUK dolgu degeri: bastan 64-bit ----------------------------------
+func run_buyuk_dolgu() {
+    int[] c = array_fill(3, 4000000000);
+    assert_eq_int(c[0], 4000000000);
+    c[1] = 1;
+    assert_eq_int(c[1], 1);
+    assert_eq_int(c[2], 4000000000);
+    int t = 0;
+    int i = 0;
+    while (i < 3) { t = t + c[i]; i = i + 1; }
+    assert_eq_int(t, 8000000001);
+}
+
+// --- for dongusu (ayri surumleme yolu) ----------------------------------
+func run_for_dongusu() {
+    int[] a = array_fill(20, 0);
+    for (int i = 0; i < len(a); i = i + 1) { a[i] = i * i; }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 2470);
+    a[10] = 7000000000;
+    int u = 0;
+    for (int k = 0; k < len(a); k = k + 1) { u = u + a[k]; }
+    assert_eq_int(u, 7000002370);
+}
+
+// --- KUTULU dizi bozulmamali -------------------------------------------
+func run_kutulu() {
+    array c = [1, "iki", 3.5];
+    assert_eq_int(c[0], 1);
+    assert_eq_str(c[1], "iki");
+    assert_eq_float(c[2], 3.5);
+}
+
+// --- float yazmak diziyi KUTULUYOR (eski davranis korunmali) -----------
+func run_float_kutuluyor() {
+    int[] a = array_fill(4, 1);
+    a[1] = 2.5;
+    assert_eq_float(a[1], 2.5);
+    assert_eq_int(a[0], 1);
+    assert_eq_int(a[3], 1);
+}
+
+// --- BUYUK dizi: genisleme kopyalamayi dogru yapmali -------------------
+func run_buyuk_dizi() {
+    int[] a = array_fill(4096, 5);
+    a[4000] = 5500000000;
+    assert_eq_int(a[0], 5);
+    assert_eq_int(a[3999], 5);
+    assert_eq_int(a[4000], 5500000000);
+    assert_eq_int(a[4095], 5);
+    int t = 0;
+    int i = 0;
+    int m = 4096;
+    while (i < m) { t = t + a[i]; i = i + 1; }
+    // 4095 * 5 + 5500000000
+    assert_eq_int(t, 5500020475);
+}
+
+test("kucuk degerler 32-bit depoda", "run_kucuk");
+test("i32 sinir degerleri", "run_sinir");
+test("bekcili yazma komsuyu ezmiyor", "run_bekcili_yazma");
+test("dongu icinde genisleme", "run_dongude_genisleme");
+test("genisleme sonrasi dongu", "run_genisleme_sonrasi_dongu");
+test("push ile genisleme", "run_push");
+test("buyuk dolgu degeri", "run_buyuk_dolgu");
+test("for dongusu yolu", "run_for_dongusu");
+test("kutulu dizi bozulmadi", "run_kutulu");
+test("float yazmak kutuluyor", "run_float_kutuluyor");
+test("buyuk dizide genisleme", "run_buyuk_dizi");
+test_summary();

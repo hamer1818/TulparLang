@@ -197,27 +197,115 @@ static bool visit_len_of(ASTNode_C *n, void *p) {
   return true;
 }
 
-// Govdede ELEMAN YAZMASI var mi? (`a[i] = ...`, `a[i] += ...`, `a[i]++`)
+// Govdedeki ELEMAN YAZMALARI diziyi KUTULAYABILIR mi?
 //
 // Bu, sinir denetimi elemenin YUK TASIYAN kosulu. Kutusuz bir diziye int
 // OLMAYAN bir deger yazmak (`a[i] = 2.5`) diziyi KUTULUYOR: idata free
-// ediliyor, items_ ayriliyor. Onbellekteki idata o an sarkiyor ve bugun
-// bunu yalniz yavas yoldaki tazeleme kurtariyor (bkz. Tuzaklar 6l).
-// Bekcisiz hizli surumde tazeleme YOK, yani yazma da olmamali.
+// ediliyor, items_ ayriliyor. Onbellekteki idata o an sarkiyor ve bunu
+// yalniz yavas yoldaki tazeleme kurtariyor (bkz. Tuzaklar 6l). Bekcisiz
+// hizli surumde tazeleme YOK — dolayisiyla KUTULAMA da olmamali.
 //
-// Yazma HANGI ISIMDEN oldugu onemsiz: `array b = a;` ikisini ayni diziye
-// bagliyor, yani `b[i] = 2.5` bizim `a`mizi da kutular. O yuzden soru
-// "bu diziye yaziliyor mu" degil, "govdede HERHANGI bir eleman yazmasi
-// var mi".
-static bool visit_any_elem_write(ASTNode_C *n, void *p) {
-  bool *found = (bool *)p;
-  if ((n->type == AST_ASSIGNMENT || n->type == AST_COMPOUND_ASSIGN ||
-       n->type == AST_INCREMENT || n->type == AST_DECREMENT) &&
-      n->left && n->left->type == AST_ARRAY_ACCESS) {
-    *found = true;
+// Yazmanin HANGI ISIMDEN oldugu onemsiz: `array b = a;` ikisini ayni
+// diziye bagliyor, yani `b[i] = 2.5` bizim `a`mizi da kutular. O yuzden
+// soru "bu diziye yaziliyor mu" degil, "govdedeki HER eleman yazmasi
+// KESIN tamsayi mi".
+//
+// 2026-09-06'ya kadar burasi "govdede eleman yazmasi VARSA vazgec"
+// diyordu; o yuzden `for (i...) { a[i] = i; }` gibi DOLDURMA dongulerinin
+// tamami bekcili kaliyor ve vektorlesemiyordu.
+
+// Bir ifadenin degeri KESIN tamsayi mi?
+//
+// Yalniz "evet" cevabi yuk tasiyor; "hayir" en fazla optimizasyonu
+// kaciriyor. O yuzden liste beyaz: taniniamayan her dugum "hayir".
+//
+// bool BILEREK DISARIDA: etiketi 0 (INT) degil 2, yani `a[i] = true`
+// kutusuz diziye dogrudan yazilamaz.
+struct IntCtx {
+  const char *ivar;  // dongu degiskeni: int oldugu dongu BICIMINDEN belli
+};
+
+static bool expr_is_int(ASTNode_C *n, IntCtx *ic) {
+  if (!n) return false;
+  switch (n->type) {
+  case AST_INT_LITERAL:
+    return true;
+  case AST_IDENTIFIER:
+    // TEK kabul edilen ad DONGU DEGISKENI. Int oldugu dongunun BICIMINDEN
+    // belli: init bir int sabiti, artim int sabiti ekliyor ve govde onu
+    // yeniden baglamiyor — ucu de tulpar_loop_index_proven'in on kosulu.
+    //
+    // BASKA HICBIR AD KABUL EDILMIYOR, cunku turunu bilmenin yolu yok:
+    // `int k` yazan bir yerel bile kutulu bir VMValue yuvasinda duruyor ve
+    // icine calisma zamaninda float girebilir (parametreye cagiran float
+    // gecebilir). Bir sure codegen'e "bu ad native i64 yuvasinda mi" diye
+    // soran bir geri cagri vardi; OLCULDU (2026-09-06) ve pratikte HIC
+    // "evet" demiyor — yalniz dar bicimli "native fonksiyon" yayicisinda
+    // native yuva olusuyor. Sinanamayan bir kanit yolu tasimaktansa
+    // kaldirildi.
+    //
+    // Genisletmenin dogru yolu bu degil: `a[i] = k` gibi dongu-DEGISMEZI
+    // bir adin etiketi de dongu degismezidir, yani `tag(k) == INT` sinavi
+    // dongu BASINA, surumleme kosuluna (`count_slot != 0` yanina)
+    // eklenebilir. Kiyaslamalarin hicbiri buna bagli olmadigi icin
+    // yapilmadi.
+    return n->name && ic->ivar && strcmp(n->name, ic->ivar) == 0;
+  case AST_UNARY_OP:
+    return n->op == TOKEN_MINUS && expr_is_int(n->left, ic);
+  case AST_BINARY_OP:
+    switch (n->op) {
+    // Tulpar'da int/int TAMSAYI bolme (`7 / 2 == 3`), yani `/` de int
+    // koruyor. Karsilastirmalar bool uretiyor: listede yoklar.
+    case TOKEN_PLUS:
+    case TOKEN_MINUS:
+    case TOKEN_MULTIPLY:
+    case TOKEN_DIVIDE:
+    case TOKEN_MODULO:
+      return expr_is_int(n->left, ic) && expr_is_int(n->right, ic);
+    default:
+      return false;
+    }
+  default:
     return false;
   }
-  return true;
+}
+
+struct WriteCtx {
+  IntCtx ic;
+  bool unsafe;
+};
+
+static bool visit_elem_write_ok(ASTNode_C *n, void *p) {
+  WriteCtx *w = (WriteCtx *)p;
+  if (!n->left || n->left->type != AST_ARRAY_ACCESS) return true;
+  switch (n->type) {
+  case AST_INCREMENT:
+  case AST_DECREMENT:
+    // Kutusuz dizide eleman zaten int; int +-1 yine int.
+    return true;
+  case AST_ASSIGNMENT:
+    if (expr_is_int(n->right, &w->ic)) return true;
+    break;
+  case AST_COMPOUND_ASSIGN:
+    // `a[i] op= x`: sol taraf (kutusuz dizide) int, op int koruyor ve x
+    // int ise sonuc int.
+    switch (n->op) {
+    case TOKEN_PLUS_EQUAL:
+    case TOKEN_MINUS_EQUAL:
+    case TOKEN_MULTIPLY_EQUAL:
+    case TOKEN_DIVIDE_EQUAL:
+    case TOKEN_MODULO_EQUAL:
+      if (expr_is_int(n->right, &w->ic)) return true;
+      break;
+    default:
+      break;
+    }
+    break;
+  default:
+    return true;   // eleman yazmasi degil
+  }
+  w->unsafe = true;
+  return false;
 }
 
 // `for (int i = C; i < len(a); i = i + K)` bicimi mi, ve `a[i]` icin SINIR
@@ -232,7 +320,8 @@ static bool visit_any_elem_write(ASTNode_C *n, void *p) {
 // (count_slot != 0) ve dongu SURUMLENIYOR — LLVM'in kendi unswitch'i bu
 // isi yapamiyor, olculdu (Performance.md).
 //
-// ELEMAN YAZMASI OLAN govde reddediliyor: bkz. visit_any_elem_write.
+// KUTULAYABILEN eleman yazmasi olan govde reddediliyor: bkz.
+// visit_elem_write_ok.
 extern "C" int tulpar_loop_index_proven(ASTNode_C *init, ASTNode_C *cond,
                                         ASTNode_C *body, ASTNode_C *incr,
                                         const char *array_name,
@@ -279,14 +368,128 @@ extern "C" int tulpar_loop_index_proven(ASTNode_C *init, ASTNode_C *cond,
   // `i` govdede baska yerde ATANMAMALI (kosul/artim disinda).
   if (tulpar_loop_rebinds_name(nullptr, body, nullptr, ivar)) return 0;
 
-  // Govdede HIC eleman yazmasi olmamali — kutulama riski.
-  bool wrote = false;
-  walk_all(body, visit_any_elem_write, &wrote);
-  walk_all(cond, visit_any_elem_write, &wrote);
-  walk_all(incr, visit_any_elem_write, &wrote);
-  if (wrote) return 0;
+  // HER eleman yazmasi KESIN tamsayi olmali — yoksa kutulama riski.
+  WriteCtx wc{IntCtx{ivar}, false};
+  walk_all(body, visit_elem_write_ok, &wc);
+  walk_all(cond, visit_elem_write_ok, &wc);
+  walk_all(incr, visit_elem_write_ok, &wc);
+  if (wc.unsafe) return 0;
 
   if (ivar_out) *ivar_out = ivar;
+  return 1;
+}
+
+// `while (v <= UB) { ... ; v = v + STEP; }` bicimi mi?
+//
+// NEDEN AYRI BIR KANIT: `for` bicimindeki kanit tamamen SOZDIZIMSEL —
+// baslangic bir int sabiti, artim bir int sabiti, ust sinir `len(a)`.
+// Elek'in ic dongusu ucunu de saglamiyor:
+//
+//     int k = i * i;                        // baslangic: ifade
+//     while (k <= n) { f[k] = 1; k = k + i; }   // sinir n, adim i
+//
+// Ama uc buyuklugun de DONGU DEGISMEZI oldugu goruluyor. O zaman kanit
+// sozdiziminden degil, dongu BASINDA BIR KEZ yapilan sinavdan gelebilir:
+//
+//     v >= 0  &&  STEP > 0  &&  UB < count      ->   0 <= v <= UB < count
+//
+// Ucu de dongu disinda, bir kez. Bu fonksiyon yalniz BICIMI dogruluyor ve
+// isimleri disari veriyor; sinavi codegen uretiyor (surumleme kosulu).
+//
+// v'nin govdedeki TEK atamasi son ifade olmali. Ortada olsaydi, ondan
+// SONRAKI erisimler artmis v ile UB'yi asabilirdi:
+//     while (k <= n) { k = k + i; f[k] = 1; }   // f[n+i] okur — REDDEDILIR
+static bool stmt_is_step(ASTNode_C *st, const char *ivar,
+                         const char **step_name, long long *step_const) {
+  // `v = v + STEP` — STEP ya bir AD ya da POZITIF bir int sabiti.
+  //
+  // Sabit adim once REDDEDILIYORDU ("sabit adimli bicim zaten `for`
+  // kanitinda" diye), ama `for` kaniti yalniz `for` dongulerine bakiyor.
+  // `while (i <= n) { ...; i = i + 1; }` her iki kanitin da disinda kaliyordu
+  // — elek'in DIS dongusu tam bu bicimde ve hic surumlenmiyordu.
+  // Sabit adim ustelik daha kolay: `STEP > 0` sinavi derleme zamaninda
+  // katlaniyor, dongu basina hicbir sey binmiyor.
+  if (!st || st->type != AST_ASSIGNMENT || !st->name || st->left) return false;
+  if (strcmp(st->name, ivar) != 0) return false;
+  ASTNode_C *r = st->right;
+  if (!r || r->type != AST_BINARY_OP || r->op != TOKEN_PLUS) return false;
+  ASTNode_C *a = r->left, *b = r->right;
+  if (!a || !b || a->type != AST_IDENTIFIER || !a->name ||
+      strcmp(a->name, ivar) != 0)
+    return false;
+  if (b->type == AST_IDENTIFIER && b->name) {
+    *step_name = b->name;
+    return true;
+  }
+  if (b->type == AST_INT_LITERAL && b->value.int_value > 0) {
+    *step_name = nullptr;
+    *step_const = b->value.int_value;
+    return true;
+  }
+  return false;
+}
+
+extern "C" int tulpar_while_index_proven(ASTNode_C *cond, ASTNode_C *body,
+                                         const char **ivar_out,
+                                         const char **ub_out,
+                                         const char **step_out,
+                                         long long *step_const_out,
+                                         int *inclusive_out) {
+  if (!cond || !body) return 0;
+
+  // kosul: `v <= UB` ya da `v < UB`, ikisi de AD.
+  if (cond->type != AST_BINARY_OP) return 0;
+  int incl;
+  if (cond->op == TOKEN_LESS_EQUAL) incl = 1;
+  else if (cond->op == TOKEN_LESS) incl = 0;
+  else return 0;
+  ASTNode_C *l = cond->left, *r = cond->right;
+  if (!l || l->type != AST_IDENTIFIER || !l->name) return 0;
+  if (!r || r->type != AST_IDENTIFIER || !r->name) return 0;
+  const char *ivar = l->name, *ub = r->name;
+  if (strcmp(ivar, ub) == 0) return 0;
+
+  // govde bir blok olmali ve SON ifadesi adim olmali.
+  if (body->type != AST_BLOCK || body->statement_count < 1 ||
+      !body->statements)
+    return 0;
+  const char *step = nullptr;
+  long long step_const = 0;
+  if (!stmt_is_step(body->statements[body->statement_count - 1], ivar, &step,
+                    &step_const))
+    return 0;
+  if (step && strcmp(step, ivar) == 0) return 0;
+
+  // v BASKA hicbir yerde atanmamali. Son ifadeden ONCEKI her ifade taraniyor.
+  //
+  // Not: "adim SON ifade olmali" kurali boylece IKI yerden birden geliyor —
+  // yukaridaki `stmt_is_step(son ifade)` ve bu tarama. Enjeksiyonla
+  // dogrulandi (2026-09-06): yalniz birini kaldirmak testleri kizartmiyor,
+  // cunku digeri ayni bicimi zaten reddediyor; IKISI birden kalkinca
+  // `while (k <= ub) { k = k + step; a[k] = 3; }` bekcisiz uretiliyor ve
+  // paket cokuyor. Yani bu bir gevseklik degil, kasitli cift kilit.
+  for (int i = 0; i < body->statement_count - 1; i++)
+    if (tulpar_loop_rebinds_name(nullptr, body->statements[i], nullptr, ivar))
+      return 0;
+  // Son ifadenin ICINDE (sagda) v'ye baska atama olamaz — `v = v + STEP`
+  // bicimi zaten bunu disliyor.
+
+  // UB ve STEP dongu boyunca DEGISMEMELI, yoksa bir kezlik sinav bayatlar.
+  if (tulpar_loop_rebinds_name(cond, body, nullptr, ub)) return 0;
+  // Sabit adimda yeniden baglanma sorusu anlamsiz (sabitin adi yok).
+  if (step && tulpar_loop_rebinds_name(cond, body, nullptr, step)) return 0;
+
+  // Kutulayabilen eleman yazmasi olmamali (for kanitiyla ayni kural).
+  WriteCtx wc{IntCtx{ivar}, false};
+  walk_all(body, visit_elem_write_ok, &wc);
+  walk_all(cond, visit_elem_write_ok, &wc);
+  if (wc.unsafe) return 0;
+
+  if (ivar_out) *ivar_out = ivar;
+  if (ub_out) *ub_out = ub;
+  if (step_out) *step_out = step;
+  if (step_const_out) *step_const_out = step_const;
+  if (inclusive_out) *inclusive_out = incl;
   return 1;
 }
 

@@ -439,6 +439,256 @@ if [ "$ACTION" = "suites" ]; then
     fi
     rm -rf "$RW_TMP"
 
+    # OPTİMİZASYON SEVİYESİ denetimi.
+    #
+    # `LLVMRunPasses`ten sonra modül doğrulayıcıdan geçemezse derleyici
+    # O3 -> O2 -> O1 merdivenine düşüyor ve bunu tek satır stderr notuyla
+    # söylüyor. 2026-09-06'ya kadar bu not KİMSENİN GÖRMEDİĞİ bir yerde
+    # duruyordu: temel blokları KÜRESEL bağlamda yaratmak yüzünden
+    # vektörleşen her döngü doğrulamayı düşürüyor ve program sessizce
+    # O1'de derleniyordu. Testler yeşil, çıktı doğru, kod %25 yavaş.
+    #
+    # Bu yüzden bir SÜRAT özelliği burada, doğruluk paketlerinin yanında
+    # sınanıyor: sessizce yavaşlamak da bir gerileme.
+    OPT_TMP=$(mktemp -d)
+    cat > "$OPT_TMP/vec.tpr" <<'TPREOF'
+int[] a = array_fill(4096, 0);
+for (int i = 0; i < len(a); i = i + 1) { a[i] = i; }
+print(a[4095]);
+TPREOF
+    OPT_OUT=$(TULPAR_AOT_EMIT_LL=1 ./tulpar build "$OPT_TMP/vec.tpr" "$OPT_TMP/vec" 2>&1)
+    if echo "$OPT_OUT" | grep -q "aggressive O3 IR invalid"; then
+        echo -e "${RED}Optimizasyon O3'ten DUSTU — uretilen kod sessizce yavas!${NC}"
+        echo "$OPT_OUT" | grep -i "o3\|note" | head -3
+        rm -rf "$OPT_TMP"
+        exit 1
+    fi
+    echo -e "${GREEN}optimizasyon O3'te kaldi${NC}"
+    # Bekçisiz KANITLI YAZMA gerçekten üretiliyor mu?
+    #
+    # İlk yazılan denetim sökülen `main` içinde SIMD komutu arıyordu.
+    # ÖLÇÜLDÜ ve BIRAKILDI: LLVM 18'de (CI'ın sürümü) aynı döngü
+    # vektörleşmiyor — komut sayısı 0, oysa üretilen kod doğru ve O3'ten
+    # de düşmüyor. Yani o denetim CI'ı, gerçek bir gerileme olmadan
+    # kırardı. Vektörleşme LLVM'in aşağı akıştaki kararı; BİZİM
+    # garantimiz bekçisiz depo komutunun üretilmesi.
+    #
+    # `set.pep` = kanıtlı eleman yazmasının GEP'i (llvm_backend.cpp,
+    # AST_ASSIGNMENT / ARRAY_ACCESS dalı). Adı değiştirirsen burayı da
+    # değiştir.
+    LLOUT="$OPT_TMP/vec.ll"
+    if [ ! -f "$LLOUT" ]; then LLOUT=$(ls "$OPT_TMP"/*.ll 2>/dev/null | head -1); fi
+    if [ -n "$LLOUT" ] && [ -f "$LLOUT" ] && grep -q "set\.pep" "$LLOUT"; then
+        echo -e "${GREEN}kanitli eleman yazmasi uretiliyor${NC} (bekcisiz depo)"
+    else
+        echo -e "${RED}Kanitli eleman yazmasi URETILMIYOR — doldurma dongusu bekcili!${NC}"
+        rm -rf "$OPT_TMP"
+        exit 1
+    fi
+    rm -rf "$OPT_TMP"
+
+    # ÖZYİNELEME ZİNCİRİ gerçekten kuruluyor ve işe yarıyor mu?
+    #
+    # LLVM doğrudan kendini çağıran bir fonksiyonu satır içine ALMAZ (satır
+    # içi alıcı bir SCC kenarını kendi içine açmayı reddediyor). Arka uç bu
+    # yüzden K=4 klon üretip halka kuruyor — llvm_backend.cpp `selfrec_*`.
+    # Ölçüldü 2026-09-07: fib(32) 4,90 -> 0,71 ms; gcc -O2 1,70, Rust 3,70.
+    #
+    # Denetim İKİ ayaklı, çünkü her ayak tek başına sessizce boşa çıkabilir:
+    #   1) IR'de klon TANIMI var mı  -> zincir kuruluyor mu
+    #   2) zincirli ikili, zincirsizden en az 2 kat hızlı mı (SÜREÇ AÇILIŞI
+    #      ÇIKARILMIŞ iş payı üzerinden — aşağıdaki nota bak)
+    # Yalnız (1) olsaydı: klonlar üretilip hiç satır içi ALINMADIĞINDA
+    # (ör. yanlışlıkla noinline) denetim yeşil kalır, kazanç sıfır olurdu.
+    # Yalnız (2) olsaydı: makineye bağlı olurdu. Ölçüm GÖRELİ — aynı makine,
+    # aynı an, tek değişken TULPAR_NO_SELFREC. N=32'de ölçülen oran ~6-7 kat,
+    # eşik 2 kat. (N=30 ile başlanmıştı: iş yükü küçük olduğu için süreç
+    # açılışı oranı 2,7 kata indiriyordu — eşiğe fazla yakın. Payı iş yükünü
+    # büyüterek açtık, eşiği düşürerek değil.)
+    #
+    # N ortamdan okunuyor: sabit olsaydı LLVM `fib(30)`u derleme zamanında
+    # katlar ve iki ikili de 0 ms sürerdi — ölçüm hiçbir şey ölçmezdi.
+    SR_TMP=$(mktemp -d)
+    cat > "$SR_TMP/fib.tpr" <<'TPREOF'
+func fib(int n): int {
+    if (n <= 1) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+int n = toInt(env("SR_N"));
+if (n <= 0) { n = 32; }
+print(fib(n));
+TPREOF
+    TULPAR_AOT_EMIT_LL=1 ./tulpar build "$SR_TMP/fib.tpr" "$SR_TMP/fib_on" >/dev/null 2>&1
+    SR_LL=$(ls "$SR_TMP"/*.ll 2>/dev/null | head -1)
+    if [ -z "$SR_LL" ] || ! grep -q "@fib\.rec" "$SR_LL"; then
+        echo -e "${RED}Ozyineleme zinciri URETILMIYOR — ozyinelemeli kod satir ici alinmiyor!${NC}"
+        rm -rf "$SR_TMP"
+        exit 1
+    fi
+    TULPAR_NO_SELFREC=1 ./tulpar build "$SR_TMP/fib.tpr" "$SR_TMP/fib_off" >/dev/null 2>&1
+    if [ ! -x "$SR_TMP/fib_on" ] || [ ! -x "$SR_TMP/fib_off" ]; then
+        echo -e "${RED}Ozyineleme olcumu icin ikililer uretilemedi!${NC}"
+        rm -rf "$SR_TMP"
+        exit 1
+    fi
+    # Cikti esitligi: hizlanma dogru sonuc uzerinde olmali.
+    SR_OUT_ON=$(SR_N=32 "$SR_TMP/fib_on")
+    SR_OUT_OFF=$(SR_N=32 "$SR_TMP/fib_off")
+    if [ "$SR_OUT_ON" != "$SR_OUT_OFF" ] || [ "$SR_OUT_ON" != "2178309" ]; then
+        echo -e "${RED}Ozyineleme zinciri SONUCU DEGISTIRDI! zincirli=$SR_OUT_ON zincirsiz=$SR_OUT_OFF beklenen=2178309${NC}"
+        rm -rf "$SR_TMP"
+        exit 1
+    fi
+    sr_best_us() {
+        local best=99999999 i t0 t1 d
+        for i in 1 2 3; do
+            t0=$(date +%s%N); SR_N=$2 "$1" >/dev/null 2>&1; t1=$(date +%s%N)
+            d=$(( (t1 - t0) / 1000 ))
+            [ "$d" -lt "$best" ] && best=$d
+        done
+        echo "$best"
+    }
+    # SÜREÇ AÇILIŞINI ÇIKAR — yoksa eşik platforma bağlı olur.
+    #
+    # Ölçülen süre `fork+exec+dyld+fib`. Linux'ta açılış ~0,2 ms ve N=32'lik
+    # iş onu gölgede bırakıyor, oran ~7 kat çıkıyor. macOS arm64'te açılış
+    # ~10 ms; aynı sabit HER İKİ tarafa da eklenince oranı 1,0'a doğru EZİYOR
+    # ve zincir kusursuz çalışırken denetim düşüyor. Ölçüldü (2026-09-09, CI
+    # macOS arm64): zincirsiz 18525us / zincirli 12210us = 1,52 kat — oysa
+    # iş payının oranı ~4 kat.
+    #
+    # Çözüm: açılışı AYNI ikiliden N=1 ile ölçüp çıkarmak. Aynı binary, aynı
+    # kod yerleşimi, tek değişen iş miktarı; kalan yalnızca fib işi. Eşik
+    # böylece makineden bağımsız hale geliyor. (Eşiği düşürmek YANLIŞ cevap
+    # olurdu: ölçüm hatasını gizler, gerçek bir gerilemeyi de kaçırırdı.)
+    SR_ON=$(sr_best_us "$SR_TMP/fib_on" 32)
+    SR_OFF=$(sr_best_us "$SR_TMP/fib_off" 32)
+    SR_ON_BASE=$(sr_best_us "$SR_TMP/fib_on" 1)
+    SR_OFF_BASE=$(sr_best_us "$SR_TMP/fib_off" 1)
+    SR_ON_W=$(( SR_ON - SR_ON_BASE ));  [ "$SR_ON_W" -lt 1 ] && SR_ON_W=1
+    SR_OFF_W=$(( SR_OFF - SR_OFF_BASE )); [ "$SR_OFF_W" -lt 1 ] && SR_OFF_W=1
+    if [ "$SR_OFF_W" -gt $(( SR_ON_W * 2 )) ]; then
+        echo -e "${GREEN}ozyineleme zinciri calisiyor${NC} (is: ${SR_OFF_W}us -> ${SR_ON_W}us, acilis ~${SR_ON_BASE}us cikarildi)"
+    else
+        echo -e "${RED}Ozyineleme zinciri KAZANC VERMIYOR — klonlar satir ici alinmiyor!${NC}"
+        echo "  is payi: zincirsiz=${SR_OFF_W}us zincirli=${SR_ON_W}us (en az 2 kat bekleniyor)"
+        echo "  ham: zincirsiz=${SR_OFF}us zincirli=${SR_ON}us, acilis=${SR_OFF_BASE}/${SR_ON_BASE}us"
+        rm -rf "$SR_TMP"
+        exit 1
+    fi
+    rm -rf "$SR_TMP"
+
+    # KUTULU (tipsiz) YOLUN satır içi hızlı yolları duruyor mu?
+    #
+    # Bu ikisi SESSİZCE geri alınabilir: ikisi de yalnızca hız değiştiriyor,
+    # sonucu değil. `tests/boxed_fast_paths.test.tpr` doğruluğu kilitliyor ama
+    # hızlı yol silinse geri düşüş AYNI cevabı verir ve paket yeşil kalır —
+    # yani o paket tek başına bu gerilemeyi göremez. Denetim burada YAPISAL.
+    #
+    #   1) `srem`  = kutulu `%` için satır içi tamsayı yolu (build_checked_div).
+    #      Yoksa her modulo vm_binary_op'a gidiyor: ölçüldü 134,6 -> 46,5 ms.
+    #   2) `ap.isobj` = global atamasındaki aot_persist etiket denetimi.
+    #      Yoksa her kutulu global ataması koşulsuz runtime çağrısı:
+    #      ölçüldü 90,8 -> 46,3 ms.
+    #
+    # Değerler ortamdan okunuyor: sabit olsaydı LLVM katlar, `srem` hiç
+    # üretilmezdi ve denetim kendi kendini yanlış kırardı.
+    BX_TMP=$(mktemp -d)
+    cat > "$BX_TMP/bx.tpr" <<'TPREOF'
+var a = toInt(env("BX_A"));
+if (a <= 0) { a = 17; }
+var b = toInt(env("BX_B"));
+if (b <= 0) { b = 5; }
+var g = 0;
+g = a % b;
+print(g);
+TPREOF
+    TULPAR_AOT_EMIT_LL=1 ./tulpar build "$BX_TMP/bx.tpr" "$BX_TMP/bx" >/dev/null 2>&1
+    BX_LL=$(ls "$BX_TMP"/*.ll 2>/dev/null | head -1)
+    if [ -z "$BX_LL" ] || ! grep -q "srem" "$BX_LL"; then
+        echo -e "${RED}Kutulu '%' satir ici yolu YOK — her modulo runtime cagrisi!${NC}"
+        rm -rf "$BX_TMP"
+        exit 1
+    fi
+    if ! grep -q "ap\.isobj" "$BX_LL"; then
+        echo -e "${RED}aot_persist etiket bekcisi YOK — her kutulu global atamasi runtime cagrisi!${NC}"
+        rm -rf "$BX_TMP"
+        exit 1
+    fi
+    BX_OUT=$(BX_A=17 BX_B=5 "$BX_TMP/bx")
+    if [ "$BX_OUT" != "2" ]; then
+        echo -e "${RED}Kutulu '%' YANLIS sonuc veriyor: $BX_OUT (2 olmali)${NC}"
+        rm -rf "$BX_TMP"
+        exit 1
+    fi
+    echo -e "${GREEN}kutulu hizli yollar duruyor${NC} (satir ici %, persist bekcisi)"
+    rm -rf "$BX_TMP"
+
+    # DİZİ ELEMAN GENİŞLİĞİ: kanıtlı erişim 32-BİT mi?
+    #
+    # Kutusuz `int[]` 32-bit başlıyor (eleman başına 8 yerine 4 bayt); ölçüldü:
+    # elek 8,06 -> 7,80, arrayiter 1,5 -> 1,3. Doğruluğu
+    # `tests/array_width.test.tpr` kilitliyor ama o paket, hızlı yol sessizce
+    # 64-bit'e dönse de YEŞİL kalır — sonuç yine doğru olur, yalnız yavaş.
+    # Bu yüzden denetim YAPISAL: sürümlenmiş döngünün kanıtlı erişimi
+    # `arr.pep.p32` (i32 GEP) üretmeli.
+    AW_TMP=$(mktemp -d)
+    cat > "$AW_TMP/aw.tpr" <<'TPREOF'
+int n = toInt(env("AW_N"));
+if (n <= 0) { n = 64; }
+int[] a = array_fill(n, 0);
+int t = 0;
+int i = 0;
+while (i < n) { t = t + a[i]; i = i + 1; }
+print(t);
+TPREOF
+    TULPAR_AOT_EMIT_LL=1 ./tulpar build "$AW_TMP/aw.tpr" "$AW_TMP/aw" >/dev/null 2>&1
+    AW_LL=$(ls "$AW_TMP"/*.ll 2>/dev/null | head -1)
+    if [ -z "$AW_LL" ] || ! grep -q "arr\.pep\.p32" "$AW_LL"; then
+        echo -e "${RED}Kanitli dizi erisimi 32-BIT DEGIL — eleman genisligi kazanci gitti!${NC}"
+        rm -rf "$AW_TMP"
+        exit 1
+    fi
+    AW_OUT=$(AW_N=64 "$AW_TMP/aw")
+    if [ "$AW_OUT" != "0" ]; then
+        echo -e "${RED}Genislik denetimi YANLIS sonuc verdi: $AW_OUT${NC}"
+        rm -rf "$AW_TMP"
+        exit 1
+    fi
+    echo -e "${GREEN}dizi elemani 32-bit${NC} (kanitli erisim i32)"
+    rm -rf "$AW_TMP"
+
+    # KUTULU FONKSİYONLARIN DEĞER ABI'si duruyor mu?
+    #
+    # Kutulu gövde `t_<ad>.f` içinde yaşıyor ve VMValue'yu DEĞER olarak
+    # alıp döndürüyor (SysV'de iki yazmaç); `t_<ad>` ince sarmalayıcı.
+    # Ölçüldü: tipsiz `fib(32)` 11,86 -> 7,69 ms.
+    #
+    # Denetim YAPISAL: ABI sessizce işaretçiye dönse sonuç yine doğru olur,
+    # yalnız 1,5 kat yavaş — `tests/boxed_value_abi.test.tpr` bunu göremez.
+    VA_TMP=$(mktemp -d)
+    cat > "$VA_TMP/va.tpr" <<'TPREOF'
+func topla(a, b) { return a + b; }
+var n = toInt(env("VA_N"));
+if (n <= 0) { n = 20; }
+print(topla(n, 22));
+TPREOF
+    TULPAR_AOT_EMIT_LL=1 ./tulpar build "$VA_TMP/va.tpr" "$VA_TMP/va" >/dev/null 2>&1
+    VA_LL=$(ls "$VA_TMP"/*.ll 2>/dev/null | head -1)
+    if [ -z "$VA_LL" ] || ! grep -q "t_topla\.f" "$VA_LL"; then
+        echo -e "${RED}Kutulu deger ABI'si YOK — tipsiz cagrilar bellekten geciyor!${NC}"
+        rm -rf "$VA_TMP"
+        exit 1
+    fi
+    VA_OUT=$(VA_N=20 "$VA_TMP/va")
+    if [ "$VA_OUT" != "42" ]; then
+        echo -e "${RED}Deger ABI'si YANLIS sonuc verdi: $VA_OUT (42 olmali)${NC}"
+        rm -rf "$VA_TMP"
+        exit 1
+    fi
+    echo -e "${GREEN}kutulu deger ABI'si duruyor${NC} (t_<ad>.f)"
+    rm -rf "$VA_TMP"
+
     # Kod üretimi DENKLİK denetimi: sahne JSON'undan üretilen Tulpar kodu
     # derlenip çalıştırılıyor ve kurduğu sahne yeniden serileştirilerek
     # kaynakla karşılaştırılıyor. "Kod da aynı sahneyi kuruyor" iddiasını

@@ -1,0 +1,174 @@
+import "test";
+
+// OZYINELEME ZINCIRI (2026-09-07).
+//
+// LLVM dogrudan kendini cagiran bir fonksiyonu satir ici ALMAZ. Arka uc bu
+// yuzden her ozyinelemeli native fonksiyonun K kopyasini uretip halka kurar:
+//     f -> f.rec1 -> f.rec2 -> f.rec3 -> f.rec4 -> f
+// Her kenar iki FARKLI fonksiyon arasi cagri oldugundan siradan satir ici
+// alici onlari kendi butcesiyle aciyor. Olculdu: fib(36) 25,2 -> 2,3 ms.
+//
+// Donusum ANLAM KORUYUCU olmak zorunda. Bu paket zincirin dokundugu her
+// davranisi kilitliyor. TULPAR_NO_SELFREC=1 ile derlenince de AYNI sonuclari
+// vermeli — fark testi (tools) tam bunu karsilastiriyor.
+
+// --- temel: klasik ikili ozyineleme ---------------------------------------
+func fib(int n): int {
+    if (n <= 1) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+func run_fib() {
+    assert_eq_int(fib(0), 0);
+    assert_eq_int(fib(1), 1);
+    assert_eq_int(fib(10), 55);
+    assert_eq_int(fib(25), 75025);
+}
+
+// --- tek cagrili (kuyruk) ozyineleme --------------------------------------
+func fact(int n): int {
+    if (n <= 1) { return 1; }
+    return n * fact(n - 1);
+}
+func run_fact() {
+    assert_eq_int(fact(1), 1);
+    assert_eq_int(fact(5), 120);
+    assert_eq_int(fact(12), 479001600);
+}
+
+// --- YAN ETKI SIRASI: zincir cagri sirasini degistirmemeli -----------------
+// Global sayac, ozyineleme icinde artiyor. Klonlarin her biri ayni globali
+// gormeli; biri kacirilirsa sayac tutmaz.
+int g_sayac = 0;
+func say(int n): int {
+    if (n <= 0) { return 0; }
+    g_sayac = g_sayac + 1;
+    return say(n - 1);
+}
+func run_yan_etki() {
+    g_sayac = 0;
+    say(50);
+    assert_eq_int(g_sayac, 50);
+    say(7);
+    assert_eq_int(g_sayac, 57);
+}
+
+// --- KARSILIKLI ozyineleme: zincirlenmemeli ama bozulmamali ---------------
+func cift_mi(int n): int { if (n == 0) { return 1; } return tek_mi(n - 1); }
+func tek_mi(int n): int  { if (n == 0) { return 0; } return cift_mi(n - 1); }
+func run_karsilikli() {
+    assert_eq_int(cift_mi(0), 1);
+    assert_eq_int(cift_mi(10), 1);
+    assert_eq_int(cift_mi(11), 0);
+    assert_eq_int(tek_mi(11), 1);
+}
+
+// --- IC ICE ozyineleme (Ackermann): cagri hem arguman hem govde -----------
+func ack(int m, int n): int {
+    if (m == 0) { return n + 1; }
+    if (n == 0) { return ack(m - 1, 1); }
+    return ack(m - 1, ack(m, n - 1));
+}
+func run_ack() {
+    assert_eq_int(ack(0, 0), 1);
+    assert_eq_int(ack(2, 3), 9);
+    assert_eq_int(ack(3, 3), 61);
+}
+
+// --- ayni fonksiyon hem ozyinelemeli hem disaridan cagriliyor -------------
+// `f` halkanin basi; `g` disaridan cagiriyor. Disaridan gelen cagri ORIJINAL
+// `f`e gitmeli, klona degil.
+func kare_top(int n): int {
+    if (n <= 0) { return 0; }
+    return n * n + kare_top(n - 1);
+}
+func iki_kere(int n): int { return kare_top(n) + kare_top(n); }
+func run_disaridan() {
+    assert_eq_int(kare_top(3), 14);
+    assert_eq_int(iki_kere(3), 28);
+    assert_eq_int(iki_kere(10), 770);
+}
+
+// --- COK PARAMETRELI ozyineleme: arguman sirasi karismamali ---------------
+// Zincir parametreleri yeniden bagliyor; sira bozulursa sonuc sessizce yanlis
+// cikar. Iki argumani ASIMETRIK kullaniyoruz ki takas yakalansin.
+func tak(int x, int y, int z): int {
+    if (y >= x) { return z; }
+    return tak(tak(x - 1, y, z), tak(y - 1, z, x), tak(z - 1, x, y));
+}
+func run_cok_param() {
+    // Beklenenler BAGIMSIZ hesaplandi (ayni ozyinelemenin Python referansi),
+    // elle tahmin edilmedi — ilk yazimda ucu de yanlisti ve paket kirmiziya
+    // dondu, yani bu satirlar gercekten bir sey olcuyor.
+    assert_eq_int(tak(1, 0, 2), 1);
+    assert_eq_int(tak(9, 5, 3), 4);
+    assert_eq_int(tak(12, 6, 0), 1);
+}
+
+// --- DERIN ozyineleme: zincir yigin derinligini KISALTMAMALI --------------
+// Satir ici alma kare sayisini azaltip boyutunu buyutuyor. Olculdu: en derin
+// basarili cagri 250 968 -> 641 544, yani derinlik geriledi degil arttı.
+// Burada guvenli bir esikte kaliyoruz; amac cokme olmadigini kanitlamak.
+func derin(int n): int {
+    if (n <= 0) { return 0; }
+    int r = derin(n - 1);
+    return r / 2 + n;
+}
+func run_derin() {
+    assert_eq_int(derin(0), 0);
+    assert_eq_int(derin(1), 1);
+    // 100 000 seviye: zincirsiz da zincirli de kaldirabilmeli.
+    // 100 000 seviye: zincirsiz da zincirli de kaldirabilmeli. Beklenen deger
+    // bagimsiz hesaplandi (r = r/2 + i, tam sayi bolmesi).
+    assert_eq_int(derin(100000), 199998);
+}
+
+// --- ozyineleme DONGU icinde: sekil onbellegi ile birlikte calismali ------
+func run_dongu_icinde() {
+    int t = 0;
+    for (int i = 0; i < 12; i = i + 1) { t = t + fib(i); }
+    assert_eq_int(t, 232);
+}
+
+// --- ozyinelemeli fonksiyon DIZI uzerinde -------------------------------
+// Govdesi dizi erisimi iceren fonksiyon native yola GIRMEZ (kutulu kalir),
+// yani zincirlenmez. Yine de dogru calismali.
+int[] veri = array_fill(20, 2);
+func dizi_top(int i): int {
+    if (i >= 20) { return 0; }
+    return veri[i] + dizi_top(i + 1);
+}
+func run_dizi() {
+    assert_eq_int(dizi_top(0), 40);
+    assert_eq_int(dizi_top(18), 4);
+}
+
+// --- ozyinelemesi OLMAYAN fonksiyon: zincir hic devreye girmemeli --------
+func iki_kat(int n): int { return n * 2; }
+func run_ozyinelemesiz() {
+    assert_eq_int(iki_kat(21), 42);
+}
+
+// --- NEGATIF / SINIR argumanlari ----------------------------------------
+func geri(int n): int {
+    if (n <= 0) { return 0; }
+    return 1 + geri(n - 1);
+}
+func run_sinir() {
+    assert_eq_int(geri(0), 0);
+    assert_eq_int(geri(-5), 0);
+    assert_eq_int(geri(4), 4);
+}
+
+test("fib: ikili ozyineleme", "run_fib");
+test("fact: tek cagrili ozyineleme", "run_fact");
+test("yan etki sirasi korunuyor", "run_yan_etki");
+test("karsilikli ozyineleme bozulmuyor", "run_karsilikli");
+test("ackermann: ic ice cagri", "run_ack");
+test("disaridan cagri orijinale gidiyor", "run_disaridan");
+test("cok parametreli (tak)", "run_cok_param");
+test("derin ozyineleme cokmuyor", "run_derin");
+test("dongu icinde ozyineleme", "run_dongu_icinde");
+test("dizi erisimli govde (kutulu yol)", "run_dizi");
+test("ozyinelemesiz fonksiyon", "run_ozyinelemesiz");
+test("sinir argumanlari", "run_sinir");
+test_summary();

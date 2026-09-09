@@ -13,6 +13,9 @@ kapalı forma katlıyor ve boş programı ölçmüş oluyorsun — [[Tuzaklar#1]
 algoritma, aynı veri yapısı, çıktı doğrulanıyor. En iyi/medyan + boş program
 taban çizgisi. Çalıştır: `python3 benchmarks/fair/run.py [test]`.
 
+> ⚠ Aşağıdaki tablo 2026-09-03 durumudur, **bayattır**. Güncel sonuç için
+> bu notun sonundaki "Sonuç (resmî koşum, r23)" bölümüne bak.
+
 | Test | C | Rust | Go | **Tulpar** | Java | Node | Sıra |
 |---|--:|--:|--:|--:|--:|--:|:--:|
 | intloop (50M) | 134.6 | 144.5 | 135.6 | **135.6** | 147.7 | 715.2 | **2.–3.** |
@@ -21,7 +24,7 @@ taban çizgisi. Çalıştır: `python3 benchmarks/fair/run.py [test]`.
 | strcat (2M) | 37.8 | 19.1 | 25.4 | **31.6** | 35.9 | 105.6 | **3.** |
 | arrayiter (5M) | 2.3 | 1.7 | 4.0 | **6.6** | 19.5 | 21.3 | 4. |
 
-Hedef "her alanda 2.–3. sıra" 5 testin 3'ünde tutuyor.
+Hedef "her alanda 2.–3. sıra" bu koşumda 5 testin 3'ünde tutuyordu.
 
 `arrayiter` sonradan eklendi (2026-09-04): önceki dördü Tulpar'ın **en yaygın
 döngü kalıbını** hiç ölçmüyordu — `for (int i = 0; i < len(a); ...)`. O kalıp
@@ -335,3 +338,627 @@ FastAPI'yi 5–15× geçer (Node Fastify ligi); Go/Rust altında. Asıl koz: **d
 
 ## İlgili
 [[Wings Serve Modes]] · [[Memory Leak Fixes]] · [[SQLite and DB]] · [[Roadmap]]
+
+## Optimize edici HEDEF MAKİNEYİ ve kendi BAĞLAMINI görmüyordu (2026-09-06)
+
+İki ayrı kusur, ikisi de "üretilen kod doğru ama sessizce yavaş"
+sınıfından. İkisi de çıktı testiyle görünmez.
+
+### 1. `LLVMRunPasses(..., nullptr, ...)`
+TargetMachine geçilmiyordu → `TargetTransformInfo` yok → vektörleştiricinin
+maliyet modeli yok → hiç ateşlenmiyor. `arrayiter`'in `main`'inde SIMD
+komutu **0 → 7**.
+
+### 2. Temel bloklar KÜRESEL bağlamda yaratılıyordu
+`LLVMAppendBasicBlock` küresel bağlamı kullanıyor (bkz. [[Tuzaklar]] 6r).
+Vektörleşen döngüde doğrulayıcı düşüyor, derleyici O3'ten **O1'e** iniyor.
+Yani (1) düzeltildikten sonra vektörleşen her döngü, tam da vektörleştiği
+için optimizasyonsuz kalıyordu.
+
+### 3. Kanıtlı ELEMAN YAZMASI
+Döngü sürümleme "gövdede eleman yazması varsa vazgeç" diyordu, çünkü
+kutusuz bir diziye float yazmak diziyi kutuluyor ve önbellekteki `idata`
+sarkıyor. Artık yazılan değerin **kesin tamsayı** olduğu kanıtlanabiliyorsa
+yazma da bekçisiz üretiliyor. Kanıt dar: int sabitleri, **döngü değişkeni**
+ve bunlar üzerinde `+ - * / %`.
+
+Döngü değişkeni dışında hiçbir ad kabul edilmiyor. Denendi ve **geri
+alındı**: codegen'e "bu ad native i64 yuvasında mı" diye soran bir geri
+çağrı yazıldı, ölçüldü, **pratikte hiç "evet" demiyor** — `int k = 7`
+diyen bir yerel bile kutulu bir `VMValue` yuvasında duruyor. Sınanamayan
+bir kanıt yolu taşımaktansa kaldırıldı. Genişletmenin doğru yolu:
+`a[i] = k` gibi döngü-DEĞİŞMEZİ bir adın etiketi de döngü değişmezidir,
+yani `tag(k) == INT` sınavı döngü BAŞINA (sürümleme koşulunun yanına)
+eklenebilir. Hiçbir kıyas buna bağlı olmadığı için yapılmadı.
+
+### Ölçüm (arrayiter, BENCH_N=5M, 11 tur, ortanca)
+
+| aşama | ms |
+|---|---|
+| başlangıç | 3,45 |
+| yazma kanıtı (O1'e düşerek) | 3,88 — **gerileme** |
+| + bağlam düzeltmesi (O3 korunuyor) | **2,83** |
+
+Ortadaki satır dersin kendisi: yeni optimizasyon tek başına ölçülseydi
+"işe yaramıyor, geri al" denirdi. İşe yarıyordu; boru hattı onu
+cezalandırıyordu.
+
+### LLVM 18 ile LLVM 22 aynı şeyi yapmıyor
+Docker'da (`ubuntu:24.04` + `llvm-18-dev`) ölçüldü: aynı doldurma
+döngüsünde **LLVM 22 vektörleştiriyor, LLVM 18 vektörleştirmiyor** —
+`main` içinde 4 vs 0 vektör komutu. İkisinde de üretilen kod doğru,
+ikisinde de O3 korunuyor, ikisinde de bekçisiz depo üretiliyor. Yani
+buradaki kazancın bir kısmı **yerel makineye özgü**; CI'ın gördüğü
+Tulpar daha yavaş. Kıyas sayıları yerel (LLVM 22) ölçümlerdir.
+
+### Denenip BIRAKILAN
+`TULPAR_TARGET_CPU=native` — Zen4'te AVX-512 seçimleri kazandırmıyor
+(arrayiter 2,91 vs generic 2,77; intloop 151,9 vs 135). Kaçış kapısı
+olarak duruyor, varsayılan `generic` (rustc tabanıyla aynı).
+
+## `while` döngü sürümlemesi ve ELEK'İN GERÇEK açığı (2026-09-06)
+
+### Elek tavanı — düzeltilmiş sayılar
+Aynı kaynak, tek `#define` değişiyor (`width.c` / `width2.c`; önceki iki
+ölçümüm geçersizdi, bkz. [[Tuzaklar]] 6f-2). N=5M, pinlenmiş, en iyi:
+
+| | ms |
+|---|---|
+| C, int64 eleman, bekçisiz | 8,38 |
+| C, int64 eleman, **bekçi + soğuk yol** | 9,35 |
+| C, int32 eleman, bekçisiz | 7,78 |
+| C, int8 eleman, bekçisiz | 7,39 |
+| **Tulpar** | **9,36** |
+
+Okunacak şey: Tulpar **bekçili C ile aynı hızda**. Kalan açık iki
+kalemden ibaret — bekçi 0,97 ms, eleman genişliği 0,60 ms — ve üçüncü
+bir "codegen kalitesi" kalemi yok.
+
+### `while` sürümlemesi: kod mükemmel, sonuç ters
+`while (v <= UB) { a[v] = ...; v = v + STEP; }` biçimi için kanıt
+sözdiziminden çıkmıyor (elek'te başlangıç `i*i`, adım `i`, sınır `n`).
+Çözüm: sayısal koşulları döngü BAŞINDA bir kez sınamak —
+`v >= 0 && STEP > 0 && UB < count` — ve döngüyü sürümlemek.
+
+Üretilen hızlı gövde gcc'ninkiyle **komut komut aynı**:
+
+```
+movq $0x1,(%r12,%rbp,8)      ; gcc:  movq $0x1,(%rcx,%rax,8)
+add  %rcx,%rbp               ;       add  %rdx,%rax
+cmp  %rdx,%rbp               ;       cmp  %rbx,%rax
+jle  ...                     ;       jle  ...
+```
+
+İkili yamalanıp (`0xCC`) doğrulandı: hızlı dal koşuyor, genel dal **hiç**
+koşmuyor. Buna rağmen:
+
+| | ms |
+|---|---|
+| elek, sürümleme yok | 9,53 |
+| elek, iç döngü sürümlü (derinlik 1) | **10,22** ← gerileme |
+| elek, yalnız en dış seviyede | 9,54 |
+| tek döngülü doldurma, sürümleme yok | 8,65 |
+| tek döngülü doldurma, sürümlü | **8,01** |
+
+Yani dönüşüm doğru ve döngüyü hızlandırıyor; İÇ İÇE açıldığında dış
+döngünün gövdesine ikinci bir kopya girmesi kazancı yiyor. Mekanizma tam
+olarak aydınlatılamadı — dış döngünün makine kodu komut komut aynı,
+fark yalnız yazmaç ataması ve 13 komutluk büyüme — ama etki N ile
+ÖLÇEKLENIYOR (N=20M'de 80,3 → 83,5), yani bellek sistemine bağlı.
+
+**Karar:** `for` sürümlemesiyle aynı kural — yalnız `loop_depth == 0`.
+Elek değişmiyor, tek döngülü doldurma %7 kazanıyor. Kısıt artık keyfi
+değil, ÖLÇÜLMÜŞ.
+
+### Denenip BIRAKILAN: global'leri `internal` yapmak
+"İçeri alırsak GlobalsAA kanıt üretir, sıcak döngüde her tur yeniden
+okunmazlar" — **yanlış**. Üretilen IR birebir aynı kalıyor (globaller yine
+her tur okunuyor), yalnız makine kodu değişiyor: dışa açıkken LLVM adresi
+bir yazmaca alıyor (`mov $ADDR,%r12` + `(%r12)`), içeri alınınca
+RIP-göreli adresleme üretiyor ve sıcak döngüde daha uzun kodlanıyor.
+Elek 9,66 → 10,54 ms. Geri alındı; içeri alınan modüllerin globalleri
+tarihsel olarak `internal` ve onlara dokunulmadı.
+
+## Açılış maliyeti: her ikiliye 0,4 ms'lik OpenSSL vergisi (2026-09-06)
+
+Ayrıntı ve ölçüm tablosu [[Tuzaklar]] 6s'de. Özet: `print(1)` ikilisi 13
+paylaşımlı nesne yüklüyordu; OpenSSL'e dokunan kod
+`src/vm/runtime_net.cpp`e ayrılıp `-Wl,--as-needed` eklenince 6'ya indi.
+
+| | önce | sonra |
+|---|---|---|
+| boş program | 1,15 ms | **0,76** |
+| fib | 5,08 | **4,54** |
+| ikili boyutu | 2,04 MB | 2,04 MB |
+
+Bu, kıyasların TAMAMINI etkileyen tek değişiklik — her Tulpar programı
+hiçbir şey yapmadan önce o kadar bekliyordu.
+
+**Sırada duran, ölçülmüş ama yapılmamış:** SQLite de aynı durumda
+(`runtime_bindings.cpp` `sqlite3_*` çağırıyor). Ayrılırsa her ikili
+636 KB küçülür; hız etkisi yok, çünkü statik bağlanıyor.
+
+### Elek: bekçi kaldırmanın kazancı SIFIR (ölçüldü)
+C modelinde bekçi + soğuk yol 0,97 ms tutuyordu (`width2.c`). Tulpar'da
+aynı şeyi yapmak — iç döngünün YALNIZ bekçisiz sürümünü üretmek, genel
+gövde hiç yok, ikili yamalanarak doğrulandı — 10,74 → 10,85 ms verdi.
+Yani **kazanç yok**. O döngü bellek sınırlı; komut saymak orada işe
+yaramıyor. Elek'te kalan tek gerçek kaldıraç eleman genişliği (0,60 ms)
+ve tek başına Rust'ı geçmeye yetmiyor.
+
+## Açılış: 1,15 → 0,35 ms (2026-09-06/07)
+
+Üç adımda, hepsi bağlama satırında:
+
+| adım | boş program |
+|---|---|
+| başlangıç | 1,15 ms |
+| ağ/TLS ayrı TU + `--as-needed` (OpenSSL yüklenmiyor) | 0,76 |
+| `-static-libstdc++ -static-libgcc` | 0,53 |
+| `--exclude-libs,ALL --gc-sections` (boyutu geri alır) | **0,35** |
+
+C'nin boş programı 0,2–0,4 ms; artık aynı bantdayız. İkili 2,04 → 2,97 MB
+(statik libstdc++ 4,01 yapıyordu, `--gc-sections` 1 MB'ını geri aldı).
+
+⚠ İkinci adımın kararı bir kez YANLIŞ verildi çünkü tek kıyasa bakıldı;
+kod yerleşimi ölçümü ±%27 oynatıyor. Bkz. [[Tuzaklar]] 6t.
+
+### Sonuç (resmî koşum, r23 — özyineleme zinciri sonrası)
+
+En iyi / (ortanca), 7 tekrar:
+
+| | C | C++ | Rust | Go | **Tulpar** | sıra |
+|---|---|---|---|---|---|---|
+| **fib** | 1,6 | 1,9 | 3,7 | 6,7 | **0,6** | **1.** |
+| intloop | 134,6 | 134,9 | 144,3 | 134,9 | **134,6** | **1.–2.** |
+| arrayiter | 2,1 (2,5) | 2,9 (3,2) | 1,5 (2,4) | 3,9 (4,3) | **1,6 (2,2)** | 2. / **ortancada 1.** |
+| strcat | 37,8 | 14,8 | 19,2 | 24,6 | **18,7** | **2.** |
+| sieve | 7,6 | 8,1 | 8,2 | 8,4 | **8,6** | 5. |
+
+**fib'de birinciyiz** — C'nin 2,7, Rust'ın 6, Go'nun 11 katı hızlı. Sebebi
+gcc'nin bile yapmadığı kadar derin özyineleme açılımı (aşağıdaki bölüm).
+
+Go'ya karşı 4 galibiyet 1 yenilgi (elek, 0,2 ms), Rust'a karşı 4 galibiyet
+1 yenilgi (elek, 0,4 ms). Boş program tabanı: C 0,19 · Tulpar 0,28.
+
+Kalan tek açık **elek**; ölçülmüş tek kaldıraç i32 dizi elemanı (0,60 ms).
+
+## Özyineleme: LLVM'in yapmadığı işi biz yapıyoruz (2026-09-07)
+
+fib'de gcc her LLVM dilini 2,4 kat geçiyordu ve bu "gcc işte" diye
+geçiliyordu. Sayı tutmuyordu: fib(32) ≈ 7 milyon çağrı, gcc 1,6 ms — çevrim
+başına bir çağrı, imkânsız. `objdump` cevabı verdi: gcc'nin `fib` gövdesi
+**266 komut**, clang'ınki **22**. gcc özyinelemeyi satır içine alıp çağrı
+sayısını düşürüyor; LLVM'in satır içi alıcısı bir SCC kenarını kendi içine
+açmayı reddediyor. clang, Rust ve biz aynı tavanda takılıydık.
+
+**Çözüm:** her özyinelemeli native fonksiyonun K kopyasını üretip halka kur —
+`f → f.rec1 → … → f.recK → f`. Her kenar iki *farklı* fonksiyon arası çağrı
+olduğu için sıradan alıcı onları kendi bütçesiyle açıyor. Derinliği biz değil
+LLVM sınırlıyor, kod patlaması olmuyor (derleme süresi 58 → 62 ms, `fib`
+sembolü 1,4 KB'de kaldı). Kod: `llvm_backend.cpp` `selfrec_*`.
+
+### K'yı fib'e bakarak seçmek TUZAK
+Gerçek derleyicide fib N=44: K=4 → 67 ms, K=6 → **3,7 ms**. K=6 açık ara
+görünüyor. Beş ayrı özyineleme şekliyle ölçünce tablo değişiyor
+(zincirsize göre kat):
+
+| şekil | zincirsiz | K=4 | K=6 |
+|---|--:|--:|--:|
+| fib (iki çağrı) | 25,22 | 2,25 (11×) | 0,40 (63×) |
+| fact (tek çağrı) | 13,40 | 0,26 (52×) | 0,23 (58×) |
+| ack (iç içe) | 0,84 | 0,90 (0,9×) | 1,02 (0,8×) |
+| tak (üç param) | 0,45 | 0,35 (1,3×) | 0,36 (1,3×) |
+| **deep (200K derinlik)** | 1,23 | 0,75 (1,7×) | **73,68 (0,02×)** |
+
+`deep`te K=6 **60 kat gerileme** yapıyor: kare büyümesi 200 000 seviyede yığın
+trafiğini patlatıyor. K=4 beş şeklin hiçbirinde gerilemiyor → **K=4**.
+
+K'ya bağımlılık ayrıca monoton değil (fib N=44: K=6 3,7 · K=7 82,5 · K=8 75,7
+· K=10 10,7 · K=12 81,7) — alıcının bütçesi belirli K'larda zincirin ortasında
+bitiyor. "Daha derin daha iyi" yanlış.
+
+### Denenip ELENEN: `alwaysinline`
+Ara klonları `alwaysinline` yapmak derinliği tam K yapar; LLVM sürümünden
+bağımsız, kulağa daha ilkeli geliyor. Ölçüm çürüttü: fib N=44'te 82–260 ms
+(bütçeye bırakılan sürüm 3,7). Tam açılım kodu şişiriyor ve ortak alt ifade
+eleme ağacı toplayamıyor.
+
+### Anlam koruyuculuk nasıl kanıtlandı
+`TULPAR_NO_SELFREC=1` kapatma anahtarı eklendi ve **bütün külliyat iki kez**
+derlenip çalıştırıldı (tek değişken bu bayrak): 103 örnek/paket bayt bayt
+aynı, 64 yalnız-derle (pencere açanlar), 0 derlenemeyen. Ayrılan iki satır da
+programların kendi ölçtüğü süre değerleriydi.
+
+Sezgiye aykırı yan bulgu: **yığın derinliği gerilemedi, arttı** — en derin
+başarılı çağrı 250 968 → 641 544. Satır içine alma 4 mantıksal seviyeyi 4
+katından küçük tek kareye topluyor.
+
+Bkz. [[Tuzaklar]] 6u.
+
+## i32 dizi elemanı ÖLÇÜLDÜ ve BIRAKILDI (2026-09-07)
+
+Elekte C/Rust/Go'nun üçü de **32-bit** eleman kullanıyor (`int*`,
+`vec![0i32]`, `make([]int32,n)`); Tulpar 64-bit. Yani bu bir eşitleme, hile
+değil — ve uzun süredir "kalan tek ölçülmüş kaldıraç" diye duruyordu.
+
+### C modeli 0,59 ms dedi, dilin içi 0,19 dedi
+`width.c` (tek `#define`, sadece eleman genişliği değişiyor):
+
+| | 8 bayt | 4 bayt | kazanç |
+|---|--:|--:|--:|
+| clang -O3 | 8,72 | 8,05 | **0,59** |
+| gcc -O2 | 8,05 | 7,49 | **0,75** |
+
+Ama bu model **C'nin** elek döngüsünü ölçüyor, Tulpar'ınkini değil. Gerçek
+tavan için derleyiciye geçici, doğruluğu umursamayan bir "hep i32" hack'i
+kondu (array_fill + altı eleman erişim yolu) ve elek koşturuldu:
+
+| | ms |
+|---|--:|
+| Tulpar i64 (bugün) | 8,33 |
+| **Tulpar i32 (hack)** | **8,14** |
+
+**Kazanç 0,19 ms** — modelin vaat ettiğinin üçte biri. Üstelik bu bir ÜST
+SINIR: gerçek uygulamada `int` 64-bit kalmak zorunda olduğu için taşan
+değerde diziyi genişleten bir kontrol gerekir; hack'te o yok.
+
+Bedeli ise: `ObjArray`da üçüncü bir durum, 35 çalışma zamanı erişim yeri,
+taşmada genişletme, ve muhtemelen üçüncü bir döngü sürümü. 0,19 ms elek'i
+8,6'dan ~8,4'e taşır — Go ile berabere, Rust'ın (8,2) hâlâ gerisinde. Yani
+**hedefe ulaştırmıyor bile**. Bırakıldı.
+
+### Asıl bulgu: elekte zaten LLVM tavanındayız
+Aynı ölçümün yan ürünü daha değerli:
+
+- Tulpar i64 **8,33** < clang'ın i64 C modeli **8,72** → bizim erişim
+  yolumuz düz C'ye göre ölçülebilir bir maliyet EKLEMİYOR.
+- Tulpar i32 **8,14** ≈ clang i32 **8,05**.
+- gcc i32 **7,49** — aradaki 0,56 ms **gcc'nin LLVM'e üstünlüğü**, bizim
+  açığımız değil.
+
+İç döngü karşılaştırması bunu doğruluyor: gcc 4 komut (ölçekli indeks
+adresleme, tek sayaç), clang 5 (LSR fazladan bir gösterici sayacı yaratıyor).
+
+Yani elekteki 1,0 ms'lik açık şöyle bölünüyor: ~0,2 eleman genişliği
+(alınmaya değmez), ~0,56 gcc-LLVM farkı (bizim elimizde değil), kalanı
+gürültü. **Elek bitti.**
+
+### İç içe döngü sürümlemesi: 4 komutluk döngü, YAVAŞ program
+`TULPAR_X_NEST=1` ile iç döngü de sürümleniyor ve üretilen gövde gcc'ninkiyle
+KOMUT KOMUT AYNI oluyor:
+
+```
+movq $0x1,(%r12,%rbp,8)      ; bugünkü 7 komutluk sürümde:
+add  %rcx,%rbp               ;   add 0x0(%rbp),%r15   <- i BELLEKTEN
+cmp  %rdx,%rbp               ;   cmp (%r12),%r15      <- n BELLEKTEN
+jle  ...                     ;   + sınır denetimi
+```
+
+Yine de program yavaşlıyor: 8,54 → 9,21 (en iyi), 9,66 → 10,03 (ortanca),
+30 ölçüm, araya sokularak. Sebep iç döngü değil, **dış döngü gövdesinin
+ikiye katlanması**. Bu, 2026-09-06'daki aynı sonucun bağımsız tekrarı — o
+zaman tek ikiliye bakıldığı için şüpheliydi, artık değil.
+
+Globallerin bellekten okunmasının sebebi de belli: soğuk yolda
+`call vm_set_element_ptr` var, çağrı her şeyi yazabileceği için LLVM
+`i`/`n`'i yazmaçta tutamıyor. `internal` bağlantı denenmişti (2026-09-06) ve
+IR'ı hiç değiştirmemişti — GlobalsAA kanıtı üretmiyor.
+
+## Tipsiz ("kolay yazma") yol: iki gereksiz runtime çağrısı (2026-09-07)
+
+`func fib(n)` tipli ikizinden 21 kat yavaştı. "Kutulama pahalı" diye
+geçiştirilecek bir şey değil — ölçünce maliyetin nerede olduğu çıktı.
+
+### Önce ölç: çağrı mı, aritmetik mi?
+Dört sonda, 20M yineleme. **İlk denemem hiçbir şey ölçmedi**: tipli
+sürümlerin ikisi de 0,26 ms çıktı, yani boş program seviyesi — LLVM
+`t = t + i*3 - 1` döngüsünü SCEV ile kapalı forma katlamıştı. Gövde
+katlanmaya dirençli hale getirildi (`% 1000003`), sonra:
+
+| | önce | sonra |
+|---|--:|--:|
+| tipli aritmetik | 46,4 | 46,33 |
+| **tipsiz aritmetik** | **134,6** (2,9×) | **46,51** (1,0×) |
+| tipli çağrı | 46,4 | 46,35 |
+| **tipsiz çağrı** | **90,8** (2,0×) | **46,32** (1,0×) |
+
+### Bulunan iki şey
+1. **`%` operatörünün kutulu satır içi yolu YOKTU.** `+ − * /` ve bütün
+   karşılaştırmalar `op_int` bloğunda satır içi işleniyor; modulo `switch`in
+   `default`ına düşüp `vm_binary_op`a gidiyordu. Dilin ikili operatör kümesi
+   13 taneydi ve eksik olan tek operatör buydu. Düzeltme tek satır:
+   `build_checked_div(..., 1)` — bölme yolunun zaten kullandığı yardımcı.
+2. **`aot_persist` her kutulu global atamasında KOŞULSUZ çağrılıyordu.**
+   Fonksiyon yığın değerlerini kalıcı kopyaya çıkarıyor; skalerde değeri
+   olduğu gibi döndürüyor. Yani `var t = 0; t = t + 1;` her turda bir runtime
+   çağrısı ödüyordu, hiçbir iş yapmayan. Etiket denetimi satır içine alındı:
+   yalnız `VM_VAL_OBJ` ise çağrıya gidiliyor.
+
+Çağrının kendi maliyetinden **daha pahalı olan şey, LLVM'in onu aşamaması**:
+opak bir çağrı her şeyi yazabilir sayıldığı için döngü değişmezleri yazmaçta
+kalamıyor. Sıcak döngüden bir çağrı kaldırmak, o çağrının süresinden fazlasını
+geri veriyor.
+
+### Kalan: tipsiz fib hâlâ yavaş, sebebi ABI
+Bu iki düzeltme `fib`i değiştirmedi (11,92 ms) — orada `%` yok ve sıcak yolda
+kutulu global ataması yok. Doğru kıyas zincir olmadan yapılmalı:
+
+| | ms |
+|---|--:|
+| tipli fib (zincirli) | 0,56 |
+| tipli fib (zincirsiz) | 4,90 |
+| **tipsiz fib** | **11,92** |
+
+Yani kutulamanın gerçek çağrı maliyeti **2,4×**; geri kalan fark özyineleme
+zincirinin kutulu yola uygulanmamasından (zincir denendi, 1,4× geriledi).
+
+2,4×'in kaynağı `t_f` ABI'si: `void t_f(VMValue* ret, VMValue* arg0)`.
+Argümanlar ve dönüş BELLEKTEN geçiyor (çağrı başına ~6 bellek işlemi), ve
+`t_fib` 312 baytlık kare açıyor. Kayıtla geçen bir ABI (`{i64,i64}` çifti —
+`llvm_values.cpp` bunu çalışma zamanı fonksiyonları için zaten yapıyor) bunu
+kaldırır, ama `call()` kayıt defteri, async coroutine motoru, struct
+parametreleri ve wasm sret yolu aynı imzaya bağlı. Güvenli biçimi: gövde
+kayıt-ABI'li `t_f$fast`e taşınır, `t_f` ince bir sarmalayıcı olarak kalır.
+Henüz yapılmadı.
+
+## Elek: BEŞ deneme, hepsi ölçüldü, hiçbiri ödemedi (2026-09-08)
+
+"C'yi her alanda geçelim" hedefiyle elek yeniden ele alındı. Açık 0,8 ms
+(Tulpar 8,5 · C 7,7). Denenen ve **ölçümle elenen** yollar:
+
+| deneme | sonuç |
+|---|---|
+| i32 eleman (geçici hack) | +0,19 ms — maliyetine değmez, bkz. üstteki bölüm |
+| iç içe döngü sürümleme (`TULPAR_X_NEST`) | **−0,57 ms**; 30 ölçüm, iki bağımsız koşum |
+| döngü-değişmezi global önbelleği | **−0,58 ms** (aşağıda) |
+| globalleri `internal` yapmak | IR **hiç değişmiyor** |
+| boru hattına `require<globals-aa>` | IR **hiç değişmiyor** |
+
+### Teşhis: darboğaz iç döngü değil, DIŞ döngü
+Dış tarama 5M kez koşuyor ve bizde şöyle:
+
+```
+mov 0x0(%rbp),%rdx   ; i BELLEKTEN
+inc %rdx
+mov %rdx,0x0(%rbp)   ; i BELLEĞE
+cmp (%r12),%rdx      ; n BELLEKTEN
+...
+xor %ecx,%ecx / test %ecx,%ecx / je    ; hep alınan ÖLÜ etiket denetimi
+```
+
+gcc'nin karşılığı 4 komut. Sebep: `f[i] == 0` karşılaştırmasının geri düşüş
+dalında `vm_binary_op` çağrısı duruyor. Çalışma zamanında **hiç yürütülmüyor**
+(`xor ecx,ecx` + `test` + `je` her zaman atlıyor) ama IR'de olduğu için LLVM
+globalleri yazmaca alamıyor.
+
+`internal` bağlantı + GlobalsAA bunu çözmüyor (ikisi de denendi, IR aynı
+kalıyor). Döngü-değişmezi global önbelleği iki bellek okumasını kaldırıyor ama
+LSR fazladan bir sayaç ekliyor (7→8 komut) ve net −0,58.
+
+**Gerçek çözüm** çağrıyı IR'den kaldırmak olurdu: dizi kanıtla kutusuzken
+`f[i]` doğrudan i64 döndürmeli, yani `codegen_typed_expr` AST_ARRAY_ACCESS'i
+tanımalı (şu an tanımıyor — yalnız literal/tanımlayıcı/çağrı/ikili işlem).
+O zaman `f[i] == 0` düz bir i64 karşılaştırması olur, etiket makinesi ve geri
+düşüş çağrısı hiç üretilmez. Yapılmadı.
+
+### Nereye kadar gidilebilir
+- Tulpar i64 **8,33** < clang'ın i64 C modeli **8,72** → erişim yolumuz düz
+  C'ye göre maliyet eklemiyor.
+- gcc'nin clang'a üstünlüğü **0,56 ms** ve sebebi belirlendi: clang'ın LSR'si
+  iç döngünün adres hesaplarını dış döngüye çıkarıyor — 3 fazladan sayaç, 5M
+  dış yinelemenin hepsinde güncelleniyor, oysa iç döngü yalnız 348K kez
+  giriliyor. gcc bunu yapmıyor (4 komut vs 8).
+
+Yani elekteki açığın çoğu bizim ürettiğimiz IR'da değil, LLVM'in arka ucunda.
+
+### Yan ürün: bir DOĞRULUK hatası
+Bu kazının asıl getirisi hız değil, `int y = yan() + 0;` ifadesinin fonksiyonu
+İKİ KEZ çağırdığının bulunması oldu. Bkz. [[Tuzaklar]] 6x.
+
+## Elek: 5. sıradan 2. sıraya — çağrıyı IR'DEN kaldırmak (2026-09-08)
+
+Bir önceki bölüm "elek bitti" diyordu. **Yanlıştı** — teşhis doğruydu ama
+çözüm yolu denenmemişti. Teşhis şuydu: dış döngüde (5M yineleme)
+`f[i] == 0` karşılaştırmasının geri düşüş dalında `vm_binary_op` çağrısı
+duruyor; çalışma zamanında hiç yürütülmüyor ama IR'de olduğu için LLVM
+`i` ve `n`'i yazmaçta tutamıyor.
+
+Çözüm çağrıyı **hiç üretmemek**. Üç parça gerekti; hiçbiri tek başına yetmiyor:
+
+1. **Kutulu ikili işlem artık TİPLİ YOLU önce soruyor.** `codegen_expression`
+   AST_BINARY_OP'ta koşulsuz etiket makinesi üretiyordu (iki tag okuması, dört
+   temel blok, geri düşüş çağrısı). Artık `codegen_typed_expr`e soruyor; iki
+   operand da statik int ise düz i64 işlem çıkıyor.
+2. **`codegen_typed_expr` dizi erişimini öğrendi.** Kanıtlı (`shape_access_proven`)
+   okuma ham i64'tür; kutulanmasına gerek yok. Önce yalnız literal /
+   tanımlayıcı / çağrı / ikili işlem tanınıyordu.
+3. **`while` kanıtı sabit adımı kabul ediyor.** `stmt_is_step` adımın bir AD
+   olmasını şart koşuyordu ("sabit adım zaten `for` kanıtında") — ama `for`
+   kanıtı yalnız `for` döngülerine bakıyor. `while (i <= n) { ...; i = i + 1; }`
+   ikisinin de dışında kalıyordu ve **hiç sürümlenmiyordu**; elek'in dış
+   döngüsü tam bu biçimde. Sabit adım üstelik daha kolay: `STEP > 0` sınavı
+   derleme zamanında katlanıyor.
+
+### Sonuç
+Dış döngü **11 komut / 3 bellek erişimi → 6 komut**:
+
+```
+inc  %rsi                 ; i++            (yazmaçta)
+mov  %rsi,0x0(%rbp)       ; i -> global
+cmp  %rdx,%rsi            ; i <= n         (n YAZMAÇTA)
+jg   ...
+cmpq $0x0,(%r14,%rsi,8)   ; f[i] == 0      (etiket makinesi YOK)
+jne  ...
+```
+
+gcc'nin karşılığı 5 komut (tek fark: `i` bizde global olduğu için yazılıyor).
+
+| | ms |
+|---|--:|
+| Tulpar önceki | 8,43 |
+| **Tulpar yeni** | **8,06** |
+| gcc -O2, **8 bayt** eleman | 8,19 |
+| gcc -O2, 4 bayt eleman | 7,51 |
+
+**Aynı eleman genişliğinde gcc'yi geçiyoruz.** Resmî koşumda elek 8,1 —
+5. sıradan **2. sıraya**; C++ (8,4), Rust (8,3) ve Go (8,8) geride, yalnız
+C (7,9) önde ve fark 0,2 ms. O 0,2, C'nin `int*` (4 bayt) kullanmasından
+geliyor — i32 ölçümüyle (0,19) birebir tutuyor.
+
+### Ders
+"LLVM tavanındayız" sonucuna varmadan önce, sıcak döngüde **çalışmayan ama
+duran** bir çağrı olup olmadığına bak. Ölü bir dal bile optimize ediciyi
+durduruyor; onu kaldırmak çağrının süresinden fazlasını geri veriyor.
+
+## i32 eleman: TAM UYGULANDI, ölçüldü, GERİ ALINDI (2026-09-08)
+
+Elekte C'ye kalan 0,2 ms'lik açığı kapatmak için 32-bit eleman deposu **baştan
+sona uygulandı** (temsil, çalışma zamanı, sekiz codegen erişim yolu,
+genişletme, testler) ve sonra geri alındı. Sebep tek cümleyle: **her tasarım ya
+kazandığından çok kaybettiriyor ya da 64-bit dizilerde sessiz bir uçurum
+açıyor.**
+
+### Önce: tavan ölçümü BAYATLAMIŞTI
+Eski ölçüm (2026-09-07) i32'yi 0,19 ms diye eledi. O ölçüm, dış döngünün
+bellek yeniden okumalarıyla boğulduğu **eski codegen'de** yapılmıştı. Döngü
+sıkılaştıktan sonra yeniden ölçülünce:
+
+| | ms |
+|---|--:|
+| Tulpar i64 | 8,17 |
+| **Tulpar i32 (hack)** | **7,53** |
+| gcc -O2 4B | 7,62 |
+
+**0,64 ms** — üç katı. Ve i32'li Tulpar gcc'yi *geçiyor*. Ders: bir tavan
+ölçümü, ölçtüğü kodun etrafı değişince geçersizleşir.
+
+### Uygulanan iki tasarım ve ikisinin de düştüğü yer
+`ObjArray`a `elem_bits` eklendi; dizi 32-bit başlıyor, i32'ye sığmayan bir
+değer yazılınca **genişletiliyor** (kutulanmıyor — `aot_arr_widen`). Çalışma
+zamanı okuma/yazma genişlik farkında; `vm_array_get/set` artık kutusuz diziyi
+kutulamadan işliyor (bu tek başına bir iyileştirme).
+
+Ayrım codegen'de: hızlı yollar hangi genişliği varsayacak?
+
+| tasarım | elek (i32 dizi) | elek (64-bit dizi) |
+|---|--:|--:|
+| bugünkü (i32 yok) | 8,06 | 8,06 |
+| **V1** — şekil önbelleği yalnız i32 kabul eder | **7,56** | **15,12** |
+| **V2** — önbellek iki genişliği de destekler (dal) | 8,46 | 10,92 |
+
+- **V1** kazanıyor ama 64-bit diziler önbellekten tamamen düşüyor: **1,87 kat
+  gerileme**. `int[]` içinde bir zaman damgası (`now()` ms) tutmak yeter.
+- **V2** güvenli ama iç döngüye giren dal, kazancın tamamını yiyor —
+  8,46 > 8,06, yani **net kayıp**.
+
+### Dalın maliyeti yeniden okuma DEĞİL
+V2'deki dalın pahalı olmasını "genişlik yuvası döngü içindeki tazelemeler
+yüzünden her turda yeniden okunuyor" diye açıkladım (daha önce `i`/`n` ile
+yaşanan şeyin aynısı). Sınadım: tazelemenin genişliği yazmasını kaldırınca
+8,34 → 8,30. **Hiçbir şey değişmedi.** Maliyet dalın kendisi; dolayısıyla
+"sayacın işaretine gömelim, fazladan yükleme olmasın" fikri de ölü.
+
+### Neden yine de gönderilmedi
+0,2 ms'lik bir sıralama farkı için, `int[]` içinde büyük sayı tutan her
+programa 1,35–1,87 katlık sessiz bir yavaşlama koymak, "C kadar hızlı, Python
+kadar kolay" ile bağdaşmıyor. Görülemeyen uçurum, kolay değildir.
+
+### İşe yarayabilecek tasarım (yapılmadı)
+Döngü sürümlemesi zaten gövdeyi ikiye ayırıyor. Hızlı sürüm i32 varsayıp
+dalsız üretilebilir, **genel sürüm** ise i64 varsayıp yine dalsız — yeter ki
+her sürüm kendi genişliğine özel bir TAZELEME fonksiyonu kullansın (genişlik
+değişirse `count = 0` yazıp erişimleri bekçili yola düşürsün). Böylece dal
+sürüm seçimine taşınır ve iki genişlik de tam hızda kalır. Maliyeti: sürüm
+başına özel refill fonksiyonu + `shape_assume32` bayrağı.
+
+Yan ürün olarak kalan iyileştirme fikri: `vm_array_get/set`in kutusuz diziyi
+KUTULAMADAN işlemesi bu çalışmada yazıldı ve tek başına doğru bir kazanç —
+bugün genel yoldan tek bir okuma bile diziyi 8 bayttan 16 bayta çıkarıyor.
+
+## i32 eleman GÖNDERİLDİ — elekte 1. sıra (2026-09-08, ikinci deneme)
+
+Bir önceki bölüm i32'yi "her tasarım ya kaybettiriyor ya uçurum açıyor" diye
+geri almıştı. O bölümün son paragrafında yazılan tasarım **kuruldu ve işe
+yaradı**.
+
+### Fikir: dal, erişimden SÜRÜM SEÇİMİNE taşındı
+Döngü sürümlemesi gövdeyi zaten ikiye ayırıyor. Artık:
+
+- **hızlı sürüm** — koşul `count != 0 && is32`; erişimler 32-bit, **dalsız**
+- **genel sürüm** — şekil yuvaları `want=64` ile yeniden dolduruluyor
+  (32-bit ya da kutulu dizide `count = 0` yazılır); erişimler 64-bit, **dalsız**
+- **sürümlenmemiş döngü** — `shape_want32 = -1`, erişim yerinde dallanır
+
+Genişlik değişirse (widen) o sürümün tazeleme fonksiyonu `count = 0` yazıyor ve
+erişimler bekçili yola düşüyor — doğruluğu sağlayan mekanizma bu. Her sürümün
+kendi genişliğine özel bir refill fonksiyonu var (`fn_shape_refill[eager][want]`).
+
+### Ölçüm
+| | i32 dizi | 64-bit dizi |
+|---|--:|--:|
+| önceki (i32 yok) | 8,06 | 8,06 |
+| V1 (önbellek yalnız i32) | 7,56 | **15,12** |
+| V2 (erişimde dal) | **8,46** | 10,92 |
+| **V3 — sürüm başına uzmanlaştırma** | **7,73** | **9,44** |
+
+V3 gönderildi. 64-bit dizilerde kalan %17, genişletilmiş dizinin bekçisiz
+sürüme girememesinden (sayısal kanıt geçerli ama sürüm koşulu `is32` istiyor);
+kapatmak üçüncü bir gövde kopyası gerektirir, o da ölçülmüş bir kayıp.
+
+### Resmî sonuç
+| | C | C++ | Rust | Go | **Tulpar** | sıra |
+|---|--:|--:|--:|--:|--:|:--:|
+| fib | 1,6 | 1,9 | 3,8 | 6,9 | **0,6** | **1.** |
+| **sieve** | 7,9 | 8,1 | 8,4 | 8,8 | **7,8** | **1.** |
+| strcat | 37,7 | 14,7 | 18,8 | 25,1 | **13,8** | **1.** |
+| arrayiter | 2,4 | 3,1 | 1,6 | 4,2 | **1,3** | **1.** |
+| intloop | 135,0 | 135,6 | 144,5 | 135,0 | **135,4** | 3. (%0,3) |
+
+arrayiter de kazandı (1,5 → 1,3): bellek yarıya inince yalnız elek değil her
+dizi yükü kazanıyor.
+
+### Yan kazanç: `vm_array_get/set` artık KUTULAMIYOR
+Genel yoldan tek bir okuma bile diziyi kutuya çeviriyordu (8 → 16 bayt/eleman,
+geri dönüşsüz). Artık genişlik farkında ve kutulamadan okuyup yazıyor; i32'ye
+sığmayan değer diziyi **genişletiyor**, kutulamıyor.
+
+## Kutulu fonksiyonlar DEĞER ABI'sine geçti (2026-09-08)
+
+Tipsiz kod ("Python kadar kolay" yarısı) `void t_f(VMValue* ret, VMValue* a0,
+...)` imzasıyla çağrılıyordu: argümanlar ve dönüş **bellekten** geçiyor,
+`t_fib` 312 baytlık kare açıyordu.
+
+**Çözüm — sarmalayıcı ayrımı:** gövde `t_<ad>.f` adında, VMValue'yu DEĞER
+olarak alıp döndüren bir fonksiyona taşındı (SysV'de `{i64,i64}` = iki
+yazmaç). `t_<ad>` ince bir sarmalayıcı olarak kaldı, böylece **call() kayıt
+defteri, async coroutine motoru ve wasm sret yolu hiç değişmedi**.
+
+Altyapı zaten vardı: `llvm_make_vmvalue_func_type` / `llvm_call_vmvalue_func`
+iki hedefte de doğru ABI'yi kuruyor (SysV çifti · wasm/Win64 sret+byval).
+
+**Ölçüm:** tipsiz `fib(32)` **11,86 → 7,69 ms** (1,54 kat).
+
+### Dar tutulan uygunluk
+Dışarıda kalanlar imzaya bağlı oldukları için: async (coroutine motoru `t_<ad>`i
+tam o imzayla çağırıyor), struct parametre/dönüş (o yuvalar işaretçi ABI'sini
+anlamlı kullanıyor), `main`. Çağrı tarafında ayrıca varsayılan-argüman
+doldurması olan çağrılar sarmalayıcıya gidiyor.
+
+### İlk denemede LAMBDALAR kırıldı
+`fn_value_abi` bayrağı çevreleyen fonksiyondan **miras alınıyordu**, oysa
+lambdalar işaretçi ABI'si kullanıyor. Modül doğrulaması *"Found return instr
+that returns non-void in Function of void return type"* ile düşüyor ve program
+**optimize edilmeden** derleniyordu. Dört closure testi kırmızıya döndü ve
+sebebi oydu. Bayrak artık gövde sınırında temizleniyor.
+
+Ders: bir codegen bayrağı "şu an hangi fonksiyonu üretiyoruz" bilgisini
+taşıyorsa, **iç içe gövde üreten her yol** onu kaydedip geri yüklemeli —
+lambda, native fonksiyon, klon zinciri.
+
+### Yan bulgu: asıl maliyet ABI değildi
+Bu işten önce "kutulamanın çağrı maliyeti 2,4 kat" diye tahmin etmiştim
+(tipsiz fib 11,9 vs tipli-zincirsiz 4,9). ABI düzeltilince 7,69'a indi, yani
+ABI payı ~1,5 kat; kalan fark **kutulu aritmetiğin etiket dağıtımı**. Onu
+kapatacak şey ABI değil, tip özelleştirmesi (`n`in int olduğunu bilmek).
+

@@ -130,9 +130,10 @@ func run_sinir_disi_indeks() {
     assert_eq_int(u, 0);
 }
 
-// GOVDEDE ELEMAN YAZMASI olan dongu hizli surume ALINMAMALI: kutusuz bir
-// diziye float yazmak diziyi KUTULUYOR ve onbellekteki idata sarkiyor.
-// Yazma HANGI isimden olursa olsun (takma ad) risk ayni.
+// Govdede eleman yazmasi + OKUMASI. Yazilan deger `a[i] + 1`, yani bir
+// ARRAY_ACCESS: kutusuz oldugunu kanitlayamiyoruz (baska bir dizi kutulu
+// olabilir), o yuzden kanit DUSUYOR ve dongu bekcili kaliyor. Sonuc her
+// halukarda dogru olmali.
 func run_govdede_yazma() {
     int[] a = array_fill(5, 1);
     int t = 0;
@@ -201,6 +202,440 @@ func run_buyuk() {
     assert_eq_int(t, 100000);
 }
 
+// ---------------------------------------------------------------------
+// KANITLI ELEMAN YAZMASI (2026-09-06). Once "govdede yazma varsa vazgec"
+// deniyordu; simdi yazilan degerin KESIN tamsayi oldugu kanitlanabiliyorsa
+// yazma da bekcisiz uretiliyor (doldurma dongulerinin vektorlesmesi buna
+// bagli). Kanit dusen her bicim asagida ayri ayri kilitli.
+// ---------------------------------------------------------------------
+
+// En yaygin bicim: `a[i] = i`. Dongu degiskeninin int oldugu dongunun
+// BICIMINDEN belli, yani yazma kutulayamaz.
+func run_yazma_ivar() {
+    int[] a = array_fill(64, 0);
+    for (int i = 0; i < len(a); i = i + 1) { a[i] = i; }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 2016);          // 0..63 toplami
+    assert_eq_int(a[0], 0);
+    assert_eq_int(a[63], 63);
+}
+
+// Aritmetik: int sabitleri ve ivar uzerinde `+ - * / %` int koruyor.
+func run_yazma_aritmetik() {
+    int[] a = array_fill(10, 0);
+    for (int i = 0; i < len(a); i = i + 1) { a[i] = i * 3 + 1; }
+    assert_eq_int(a[0], 1);
+    assert_eq_int(a[9], 28);
+    int[] b = array_fill(10, 0);
+    for (int i = 0; i < len(b); i = i + 1) { b[i] = i / 2; }
+    assert_eq_int(b[7], 3);          // TAMSAYI bolme
+}
+
+// Ayni dongude hem kanitli yazma hem kanitli okuma.
+func run_yazma_ve_okuma() {
+    int[] a = array_fill(32, 5);
+    int t = 0;
+    for (int i = 0; i < len(a); i = i + 1) {
+        t = t + a[i];
+        a[i] = i;
+    }
+    assert_eq_int(t, 160);           // yazmadan ONCE okundu
+    assert_eq_int(a[31], 31);
+}
+
+// FLOAT yazmasi kanit dusurmeli: bekcisiz yazma diziyi kutulardi ve
+// ayni dongudeki bekcisiz OKUMA serbest birakilmis idata'ya bakardi.
+// Kanit dusunce iki islem de eski (bekcili + tazelemeli) yoldan gecer.
+func run_yazma_float_kanit_dusurur() {
+    array a = array_fill(8, 1);
+    float t = 0.0;
+    for (int i = 0; i < len(a); i = i + 1) {
+        if (i == 4) { a[i] = 0.5; }
+        else { a[i] = i; }
+        t = t + a[i];
+    }
+    // 0+1+2+3+0.5+5+6+7
+    assert_close(t, 24.5, 0.000001);
+}
+
+// Kanitli yazma ile KUTULAYAN yazma AYNI dongude. Ikincisi butun dongunun
+// kanitini dusurmeli — yoksa birincisi bekcisiz kalir ve kutulamadan sonra
+// sarkan idata'ya yazar.
+func run_karisik_yazma() {
+    array a = array_fill(8, 0);
+    array b = a;                     // takma ad: b uzerinden kutulama
+    for (int i = 0; i < len(a); i = i + 1) {
+        a[i] = i;
+        if (i == 3) { b[i] = 1.5; }
+    }
+    float t = 0.0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    // 0+1+2+1.5+4+5+6+7  (3. eleman float olarak KALDI)
+    assert_close(t, 26.5, 0.000001);
+}
+
+// SINIR DISI yazma: `a[i+1]` son turda a[len]'e yaziyor. Indeks ivar
+// olmadigi icin o yazma bekcili kalir; kanitli OKUMA yine dogru olmali.
+//
+// ⚠ BU TEST TEK BASINA HICBIR SEY OLCMUYOR. Yazma yerindeki indeks
+// kaniti kaldirilinca (enjeksiyon) a[8] yaziliyor — malloc'un yuvarladigi
+// blogun ICINE dusuyor, hicbir sey bozulmuyor ve 28 test YESIL kaliyor.
+// Okuma tarafinda da ayni tuzak yasanmisti (bkz. run_sinir_disi_indeks).
+// Olcen sey asagidaki UZAK yazma.
+func run_yazma_sinir_disi() {
+    int[] a = array_fill(8, 0);
+    for (int i = 0; i < len(a); i = i + 1) { a[i + 1] = i; }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    // a[0] hic yazilmadi (0), a[1..7] = 0..6 -> 21
+    assert_eq_int(t, 21);
+    assert_eq_int(len(a), 8);        // sinir disi yazma diziyi BUYUTMEDI
+}
+
+// UZAK sinir disi yazma: 8 GB otesi (8 MB yetmiyor — buyuk bir yiginda
+// haritali alana dusebiliyor). Bekci varsa her tur hata basip
+// yazmiyor ve dizi bozulmamis kaliyor; bekci kalkarsa yigin cok otesine
+// yaziliyor ve program cokuyor.
+func run_yazma_sinir_disi_uzak() {
+    int[] b = array_fill(4, 9);
+    for (int i = 0; i < len(b); i = i + 1) {
+        b[i + 1000000000] = 7;
+    }
+    int t = 0;
+    for (int j = 0; j < len(b); j = j + 1) { t = t + b[j]; }
+    assert_eq_int(t, 36);
+    assert_eq_int(len(b), 4);
+}
+
+// DONGU DEGISKENI DISINDA bir ad yazilirsa kanit dusmeli: turunu bilmenin
+// yolu yok. Burada `x` bir float ve bekcisiz yazma onu int gibi saklardi.
+func golgeli(int x): float {
+    array a = array_fill(6, 0);
+    for (int i = 0; i < len(a); i = i + 1) {
+        float x = 0.5;               // parametreyi GOLGELIYOR
+        a[i] = x;
+    }
+    float t = 0.0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    return t;
+}
+func run_yazma_golgelenme() {
+    assert_close(golgeli(3), 3.0, 0.000001);
+}
+
+// Bilesik atama ve artirma: eleman kutusuz dizide zaten int, int koruyan
+// operatorle int kaliyor.
+func run_yazma_bilesik() {
+    int[] a = array_fill(10, 2);
+    for (int i = 0; i < len(a); i = i + 1) { a[i] += 3; }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 50);
+
+    int[] b = array_fill(10, 1);
+    for (int i = 0; i < len(b); i = i + 1) { b[i]++; }
+    int u = 0;
+    for (int j = 0; j < len(b); j = j + 1) { u = u + b[j]; }
+    assert_eq_int(u, 20);
+}
+
+// Fonksiyon icinde, PARAMETREYLE gelen dizi.
+func doldur_ivar(int[] a): int {
+    for (int i = 0; i < len(a); i = i + 1) { a[i] = i; }   // KANITLI
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    return t;
+}
+// `k` dongu degiskeni degil: kutulu bir yuvada duruyor ve cagiran float
+// gecebilir, yani kanit DUSUYOR ve bu dongu bekcili kaliyor. Bilincli
+// olarak muhafazakar; sonuc yine dogru olmali.
+func doldur_k(int[] a, int k): int {
+    for (int i = 0; i < len(a); i = i + 1) { a[i] = k; }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    return t;
+}
+func run_yazma_fonksiyonda() {
+    int[] a = array_fill(50, 0);
+    assert_eq_int(doldur_ivar(a), 1225);
+    assert_eq_int(a[49], 49);
+    int[] b = array_fill(50, 0);
+    assert_eq_int(doldur_k(b, 4), 200);
+    assert_eq_int(b[49], 4);
+}
+
+// BUYUK dizi: vektorlesen yol burada calisiyor. Sarkan isaretci ya da
+// yanlis adim varsa toplam tutmaz.
+func run_yazma_buyuk() {
+    int[] a = array_fill(200000, 0);
+    for (int i = 0; i < len(a); i = i + 1) { a[i] = 1; }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 200000);
+    // Tek sayili uzunluk: vektor artigi (epilogue) dogru mu?
+    int[] b = array_fill(100003, 0);
+    for (int i = 0; i < len(b); i = i + 1) { b[i] = i; }
+    assert_eq_int(b[100002], 100002);
+    assert_eq_int(b[0], 0);
+}
+
+// BOS ve TEK elemanli dizide yazma: hizli surum hic acilmamali /
+// dogru calismali.
+func run_yazma_kucuk() {
+    int[] a = array_fill(0, 0);
+    for (int i = 0; i < len(a); i = i + 1) { a[i] = i; }
+    assert_eq_int(len(a), 0);
+    int[] b = array_fill(1, 0);
+    for (int i = 0; i < len(b); i = i + 1) { b[i] = 42; }
+    assert_eq_int(b[0], 42);
+}
+
+// ---------------------------------------------------------------------
+// `while` SURUMLEMESI (2026-09-06).
+//
+// `while (v <= UB) { ...a[v]...; v = v + STEP; }`. `for` kanitindan farki:
+// baslangic/adim/sinir sozdiziminden okunamiyor (ifade olabilirler), o
+// yuzden sayisal kosullar DONGU BASINDA BIR KEZ sinaniyor:
+//     v >= 0  &&  STEP > 0  &&  UB < count      ->  0 <= v <= UB < count
+// Uc buyuklugun de dongu boyunca degismedigi ayrica dogrulaniyor.
+//
+// Sinav dusen her bicim asagida ayri ayri kilitli; hepsinde beklenen sey
+// "genel surume duser, sonuc DOGRU kalir".
+// ---------------------------------------------------------------------
+
+func run_while_temel() {
+    int[] a = array_fill(64, 0);
+    int step = 1;
+    int ub = 63;
+    int k = 0;
+    while (k <= ub) { a[k] = k; k = k + step; }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 2016);
+    assert_eq_int(a[63], 63);
+}
+
+// Adim 1 olmak zorunda degil; `k = k + step` ile atlayarak yaziyor.
+func run_while_adim() {
+    int[] a = array_fill(20, 0);
+    int step = 3;
+    int ub = 19;
+    int k = 2;
+    while (k <= ub) { a[k] = 7; k = k + step; }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 42);          // 2,5,8,11,14,17 -> 6 tane
+    assert_eq_int(a[2], 7);
+    assert_eq_int(a[3], 0);
+}
+
+// `<` bicimi: en buyuk indeks UB-1, yani sinav UB <= count.
+func run_while_kucuktur() {
+    int[] a = array_fill(10, 0);
+    int ub = 10;
+    int step = 1;
+    int k = 0;
+    while (k < ub) { a[k] = 2; k = k + step; }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 20);
+}
+
+// SINIR DIZIDEN BUYUK: sinav dusmeli, genel surum kosmali. Bekci
+// sinir disi yazmayi durduruyor, dizi bozulmuyor.
+func run_while_sinir_buyuk() {
+    int[] a = array_fill(8, 1);
+    int ub = 1000000000;
+    int step = 200000000;
+    int k = 0;
+    while (k <= ub) { a[k] = 2; k = k + step; }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 9);           // yalniz a[0] yazildi: 2 + 7*1
+    assert_eq_int(len(a), 8);      // dizi BUYUMEDI
+}
+
+// NEGATIF baslangic: `v >= 0` sinavi dusmeli.
+//
+// ⚠ Ilk yazilisinda govde `if (k >= 0) { a[k] = 2; }` idi — yani negatif
+// indeksle HIC erisilmiyordu ve sinavi kaldiran enjeksiyon YESIL
+// kaliyordu. Koruma KALDIRILDI ve adim, tasmayi gozlenebilir kilacak
+// kadar buyuk secildi (bir eleman tasmak malloc yuvarlamasinda kayboluyor;
+// bkz. run_sinir_disi_indeks'teki ayni ders).
+func run_while_negatif_baslangic() {
+    int[] a = array_fill(8, 1);
+    int ub = 7;
+    int step = 1000000000;
+    int k = 0 - 3000000000;
+    while (k <= ub) { a[k] = 2; k = k + step; }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 9);           // yalniz a[0] yazildi: 2 + 7*1
+}
+
+// NEGATIF ADIM: `step > 0` sinavi dusmeli. Bu bicim yalniz `break` ile
+// sonlanabildigi icin sinanabiliyor; adim negatifken v her turda azaliyor
+// ve bekcisiz yazma TAMPONUN ONUNE yaziyor. Uzagi seciyoruz ki tasma
+// gozlenebilir olsun (bir eleman tasmak malloc yuvarlamasinda kayboluyor).
+func run_while_negatif_adim() {
+    int[] a = array_fill(8, 1);
+    int ub = 7;
+    int step = 0 - 1000000000;
+    int k = 3;
+    int say = 0;
+    while (k <= ub) {
+        a[k] = 2;
+        say = say + 1;
+        if (say > 3) { break; }
+        k = k + step;
+    }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 9);           // yalniz a[3] yazildi: 2 + 7*1
+}
+
+// KUTULU dizi: count 0, sinav dusuyor, genel surum dogru sonucu veriyor.
+func run_while_kutulu() {
+    array c = [1, 2.5, 3];
+    int ub = 2;
+    int step = 1;
+    int k = 0;
+    float t = 0.0;
+    while (k <= ub) { t = t + c[k]; k = k + step; }
+    assert_close(t, 6.5, 0.000001);
+}
+
+// ADIM float: etiket denetimi dusuyor -> genel surum. (Adim 1'e
+// yuvarlanmiyor; `k + 0.5` her turda artiriyor ve dongu bitiyor.)
+func run_while_float_adim() {
+    int[] a = array_fill(8, 0);
+    float step = 1.5;
+    int ub = 7;
+    int k = 0;
+    while (k <= ub) { a[k] = 5; k = k + step; }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert(t > 0, "dongu kosmali");
+}
+
+// ARTIM SON IFADE DEGIL: kanit dusmeli. Artim ONCE olursa ondan sonraki
+// erisim artmis v ile siniri ASIYOR — kanit tam da bunu disliyor.
+//
+// ⚠ Ilk yazilisinda erisim `if (k <= ub)` ile korunuyordu, yani hic
+// tasmiyordu ve "artim son ifade olmali" kuralini kaldiran enjeksiyon
+// YESIL kaliyordu. Koruma kaldirildi, adim tasmayi gozlenebilir kilacak
+// kadar buyuk.
+func run_while_artim_ortada() {
+    int[] a = array_fill(8, 0);
+    int ub = 7;
+    int step = 1000000000;
+    int k = 0;
+    while (k <= ub) {
+        k = k + step;              // ONCE artiyor
+        a[k] = 3;                  // k artik siniri asmis olabilir
+    }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 0);           // tek tur, o da sinir disi -> hicbir yazma
+}
+
+// SINIR govdede DEGISIYOR: bir kezlik sinav BAYATLIYOR, kanit dusmeli.
+//
+// ⚠ Ilk yazilisinda ub 4'ten 15'e cikiyordu ve dizi 16 elemanliydi — yani
+// bayat sinavla bile hicbir sey tasmiyordu. Simdi yeni sinir diziden cok
+// buyuk ve adim buyuk, yani tasma hem gerceklesiyor hem gozlenebilir.
+func run_while_sinir_degisiyor() {
+    int[] a = array_fill(8, 0);
+    int ub = 7;
+    int step = 200000000;
+    int k = 0;
+    while (k <= ub) {
+        a[k] = 1;
+        if (k == 0) { ub = 1000000000; }   // sinav bayatliyor
+        k = k + step;
+    }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 1);           // yalniz a[0]
+}
+
+// ADIM govdede DEGISIYOR: `step > 0` sinavi bayatliyor.
+func run_while_adim_degisiyor() {
+    int[] a = array_fill(8, 0);
+    int ub = 7;
+    int step = 1;
+    int k = 0;
+    int say = 0;
+    while (k <= ub) {
+        a[k] = 1;
+        say = say + 1;
+        if (say == 3) { step = 0 - 1000000000; }
+        if (say > 5) { break; }
+        k = k + step;
+    }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 3);           // a[0], a[1], a[2]
+}
+
+// FLOAT eleman yazmasi: kutulama riski -> kanit dusmeli, cokmemeli.
+func run_while_float_yazma() {
+    array a = array_fill(8, 0);
+    int ub = 7;
+    int step = 1;
+    int k = 0;
+    while (k <= ub) {
+        if (k == 3) { a[k] = 1.5; } else { a[k] = k; }
+        k = k + step;
+    }
+    float t = 0.0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    // 0+1+2+1.5+4+5+6+7
+    assert_close(t, 26.5, 0.000001);
+}
+
+// break / continue iki surumde de dogru.
+func run_while_break() {
+    int[] a = array_fill(16, 0);
+    int ub = 15;
+    int step = 1;
+    int k = 0;
+    int say = 0;
+    while (k <= ub) {
+        if (k == 10) { break; }
+        a[k] = 1;
+        say = say + 1;
+        k = k + step;
+    }
+    assert_eq_int(say, 10);
+    assert_eq_int(a[9], 1);
+    assert_eq_int(a[10], 0);
+}
+
+// Kanitli OKUMA da ayni sinava bagli.
+func run_while_okuma() {
+    int[] a = array_fill(50, 3);
+    int ub = 49;
+    int step = 1;
+    int k = 0;
+    int t = 0;
+    while (k <= ub) { t = t + a[k]; k = k + step; }
+    assert_eq_int(t, 150);
+}
+
+// BUYUK dizi: sarkma ya da yanlis adim varsa burada gorunur.
+func run_while_buyuk() {
+    int[] a = array_fill(200000, 0);
+    int ub = 199999;
+    int step = 1;
+    int k = 0;
+    while (k <= ub) { a[k] = 1; k = k + step; }
+    int t = 0;
+    for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
+    assert_eq_int(t, 200000);
+}
+
 test("temel", "run_temel");
 test("kutulu dizi genel surume duser", "run_kutulu_dizi");
 test("float dizi", "run_float_dizi");
@@ -218,4 +653,198 @@ test("takma ad uzerinden kutulama", "run_takma_ad");
 test("dongu degiskeni degisiyor", "run_ivar_degisiyor");
 test("fonksiyon icinde", "run_fonksiyonda");
 test("buyuk dizi", "run_buyuk");
+test("kanitli yazma: a[i] = i", "run_yazma_ivar");
+test("kanitli yazma: aritmetik", "run_yazma_aritmetik");
+test("kanitli yazma + okuma", "run_yazma_ve_okuma");
+test("float yazmasi kaniti dusurur", "run_yazma_float_kanit_dusurur");
+test("karisik yazma (takma adla kutulama)", "run_karisik_yazma");
+test("sinir disi yazma", "run_yazma_sinir_disi");
+test("uzak sinir disi yazma", "run_yazma_sinir_disi_uzak");
+test("golgelenen ad kanit vermez", "run_yazma_golgelenme");
+test("bilesik atama / artirma", "run_yazma_bilesik");
+test("fonksiyon icinde yazma", "run_yazma_fonksiyonda");
+test("buyuk dizide yazma", "run_yazma_buyuk");
+test("bos / tek elemanli dizide yazma", "run_yazma_kucuk");
+test("while: temel", "run_while_temel");
+test("while: adim > 1", "run_while_adim");
+test("while: `<` bicimi", "run_while_kucuktur");
+test("while: sinir diziden buyuk", "run_while_sinir_buyuk");
+test("while: negatif baslangic", "run_while_negatif_baslangic");
+test("while: negatif adim", "run_while_negatif_adim");
+test("while: kutulu dizi", "run_while_kutulu");
+test("while: float adim", "run_while_float_adim");
+test("while: artim son ifade degil", "run_while_artim_ortada");
+test("while: sinir govdede degisiyor", "run_while_sinir_degisiyor");
+test("while: adim govdede degisiyor", "run_while_adim_degisiyor");
+test("while: float eleman yazmasi", "run_while_float_yazma");
+test("while: break", "run_while_break");
+test("while: kanitli okuma", "run_while_okuma");
+test("while: buyuk dizi", "run_while_buyuk");
+// --- SABIT ADIMLI `while` (2026-09-08) ------------------------------------
+// `while (i <= n) { ...; i = i + 1; }` — adim bir AD degil SABIT. Kanit bunu
+// REDDEDIYORDU ("sabit adim zaten `for` kanitinda"), ama `for` kaniti yalniz
+// `for` dongulerine bakiyor; bu bicim ikisinin de disinda kaliyordu ve hic
+// surumlenmiyordu. Elek'in DIS dongusu tam bu bicimde.
+
+func run_wsabit_temel() {
+    int[] a = array_fill(10, 3);
+    int t = 0;
+    int i = 0;
+    int ub = 9;
+    while (i <= ub) { t = t + a[i]; i = i + 1; }
+    assert_eq_int(t, 30);
+}
+
+// Adim > 1 sabit.
+func run_wsabit_adim2() {
+    int[] a = array_fill(10, 2);
+    int t = 0;
+    int i = 0;
+    int ub = 9;
+    while (i <= ub) { t = t + a[i]; i = i + 2; }
+    assert_eq_int(t, 10);
+}
+
+// `<` bicimi (kapsamayan sinir).
+func run_wsabit_kucuk() {
+    int[] a = array_fill(8, 5);
+    int t = 0;
+    int i = 0;
+    int n = 8;
+    while (i < n) { t = t + a[i]; i = i + 1; }
+    assert_eq_int(t, 40);
+}
+
+// SINIR DIZIDEN BUYUK: hizli surum KOSMAMALI, genel surum dogru olmali.
+// (Hizli surum kossaydi bekcisiz erisim dizinin disina cikardi.)
+func run_wsabit_sinir_asiyor() {
+    int[] a = array_fill(4, 1);
+    int t = 0;
+    int i = 0;
+    int ub = 3;
+    while (i <= ub) { t = t + a[i]; i = i + 1; }
+    assert_eq_int(t, 4);
+    // ub artik diziden buyuk: kanit sinavi (UB < count) dusmeli
+    int[] b = array_fill(4, 1);
+    int u = 0;
+    int j = 0;
+    int ub2 = 10;
+    int say = 0;
+    while (j <= ub2) {
+        if (j < 4) { u = u + b[j]; say = say + 1; }
+        j = j + 1;
+    }
+    assert_eq_int(u, 4);
+    assert_eq_int(say, 4);
+}
+
+// NEGATIF baslangic: kanit v >= 0 sinavini yapmali.
+func run_wsabit_negatif_baslangic() {
+    int[] a = array_fill(5, 2);
+    int t = 0;
+    int i = -3;
+    int ub = 4;
+    while (i <= ub) {
+        if (i >= 0) { t = t + a[i]; }
+        i = i + 1;
+    }
+    assert_eq_int(t, 10);
+}
+
+// KUTULU dizi: hizli surum kosarsa idata NULL'dur ve program coker.
+func run_wsabit_kutulu() {
+    array c = [1, "iki", 3];
+    int v = 0;
+    int i = 0;
+    int ub = 2;
+    while (i <= ub) {
+        if (i != 1) { v = v + c[i]; }
+        i = i + 1;
+    }
+    assert_eq_int(v, 4);
+}
+
+// Sabit adimli yazma: kanitli eleman yazmasi da dogru olmali.
+func run_wsabit_yazma() {
+    int[] a = array_fill(6, 0);
+    int i = 0;
+    int ub = 5;
+    while (i <= ub) { a[i] = i * 2; i = i + 1; }
+    assert_eq_int(a[0], 0);
+    assert_eq_int(a[3], 6);
+    assert_eq_int(a[5], 10);
+}
+
+// SINIR govdede degisiyor: kanit reddetmeli (bir kezlik sinav bayatlar).
+func run_wsabit_sinir_degisiyor() {
+    int[] a = array_fill(6, 1);
+    int t = 0;
+    int i = 0;
+    int ub = 5;
+    while (i <= ub) {
+        t = t + a[i];
+        if (i == 2) { ub = 3; }
+        i = i + 1;
+    }
+    assert_eq_int(t, 4);
+}
+
+// SINIRDA: UB tam olarak son gecerli indeks. Kanit `UB < count` sinavini
+// yapiyor; bir fazlasi (UB == count) hizli surumu KAPATMALI, bu ise ACMALI.
+// Iki durumu birlikte sinamak, sinavin `<=` ile `<` arasinda kaymadigini
+// gosteren tek sey.
+func run_wsabit_tam_sinir() {
+    int[] a = array_fill(7, 4);
+    int t = 0;
+    int i = 0;
+    int ub = 6;                 // == count-1, hizli surum acilmali
+    while (i <= ub) { t = t + a[i]; i = i + 1; }
+    assert_eq_int(t, 28);
+
+    int[] b = array_fill(7, 4);
+    int u = 0;
+    int j = 0;
+    int ub2 = 7;                // == count, hizli surum KAPANMALI
+    while (j <= ub2) {
+        if (j < 7) { u = u + b[j]; }
+        j = j + 1;
+    }
+    assert_eq_int(u, 28);
+}
+
+// Adim 3: son yineleme diziyi TASMAMALI.
+func run_wsabit_adim3() {
+    int[] a = array_fill(10, 1);
+    int t = 0;
+    int i = 0;
+    int ub = 9;
+    while (i <= ub) { t = t + a[i]; i = i + 3; }
+    assert_eq_int(t, 4);
+}
+
+// BREAK: erken cikis kanitli erisimi bozmamali.
+func run_wsabit_break() {
+    int[] a = array_fill(10, 3);
+    int t = 0;
+    int i = 0;
+    int ub = 9;
+    while (i <= ub) {
+        if (i == 4) { break; }
+        t = t + a[i];
+        i = i + 1;
+    }
+    assert_eq_int(t, 12);
+}
+
+test("while sabit adim: temel", "run_wsabit_temel");
+test("while sabit adim: adim 2", "run_wsabit_adim2");
+test("while sabit adim: `<` bicimi", "run_wsabit_kucuk");
+test("while sabit adim: sinir diziden buyuk", "run_wsabit_sinir_asiyor");
+test("while sabit adim: negatif baslangic", "run_wsabit_negatif_baslangic");
+test("while sabit adim: kutulu dizi", "run_wsabit_kutulu");
+test("while sabit adim: kanitli yazma", "run_wsabit_yazma");
+test("while sabit adim: sinir degisiyor", "run_wsabit_sinir_degisiyor");
+test("while sabit adim: tam sinir", "run_wsabit_tam_sinir");
+test("while sabit adim: adim 3", "run_wsabit_adim3");
+test("while sabit adim: break", "run_wsabit_break");
 test_summary();

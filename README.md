@@ -17,11 +17,14 @@
 ## What is TulparLang?
 
 **TulparLang** is an open-source, statically-typed, ahead-of-time compiled
-programming language built on **LLVM 18**. It pairs Python-shaped syntax
-with native binary performance — within ~1.5–1.8× of `gcc -O2` on
-integer microbenchmarks (`loopsum`, `fib(35)`), and on a localhost
-JSON-API micro-benchmark the `listen_async` Wings listener serves
-**~1.9× the throughput of Node.js' built-in `http`** — and ships with a
+programming language built on **LLVM** (18 through 22). It pairs
+Python-shaped syntax with native binary performance. On a nine-language microbenchmark suite
+where every language reads its workload size from the environment and
+the outputs are verified to match, Tulpar AOT is **the fastest of the
+nine on three of five benchmarks** and within 0.1 ms of C on the other
+two — see [Performance](#performance). On a localhost JSON-API
+micro-benchmark the `listen_async` Wings listener serves **~1.9× the
+throughput of Node.js' built-in `http`**. It ships with a
 batteries-included standard library so you can build a production
 HTTP/HTTPS API without installing a single external dependency.
 
@@ -231,12 +234,14 @@ with SHA-256 checksums so re-installs are byte-stable.
 
 ## Why TulparLang
 
-- **Native speed.** LLVM 18 AOT compilation. ~1.5–1.8× of `gcc -O2`
-  on integer microbenchmarks; on a localhost JSON-API microbenchmark
-  the `listen_async` Wings listener is **1.91× Node.js' `http`** and
-  **2.91× CPython's `ThreadingHTTPServer`** in throughput. See
-  [benchmarks/RESULTS.md](benchmarks/RESULTS.md) for the full table
-  and methodology.
+- **Native speed.** LLVM AOT compilation. Fastest of nine languages on
+  `fib`, `strcat` and `arrayiter`; within 0.1 ms of C on `sieve` and
+  `intloop`. On a localhost JSON-API microbenchmark the `listen_async`
+  Wings listener is **1.91× Node.js' `http`** and **2.91× CPython's
+  `ThreadingHTTPServer`** in throughput. See
+  [Performance](#performance) and
+  [benchmarks/fair/README.md](benchmarks/fair/README.md) for the
+  methodology.
 - **No build step for prototyping.** `tulpar file.tpr` runs in one step.
   `tulpar build file.tpr` produces a standalone native binary when you
   want to ship.
@@ -268,42 +273,66 @@ with SHA-256 checksums so re-installs are byte-stable.
 
 ## Performance
 
+### Cross-language microbenchmarks
+
+_Wall time, best of 7 runs, in milliseconds. **Lower is faster**; the
+fastest entry in each column is bold. Run
+`python3 benchmarks/fair/run.py` to reproduce; last run on commit
+`3edb4f4` (Linux, LLVM 22)._
+
+| Language | fib(32) | sieve(5M) | strcat(2M) | arrayiter(5M) | intloop(50M) |
+|---|---:|---:|---:|---:|---:|
+| **Tulpar AOT** | **0.6** | 7.7 | **13.2** | **1.2** | 134.5 |
+| C (gcc -O2) | 1.6 | **7.6** | 37.6 | 2.2 | **134.4** |
+| C++ (g++ -O2) | 1.9 | 8.0 | 14.7 | 2.7 | 134.9 |
+| Rust (-O3) | 3.8 | 8.1 | 18.7 | 1.5 | 144.0 |
+| Go | 6.7 | 8.5 | 24.3 | 4.3 | 134.5 |
+| Java | 12.4 | 19.7 | 32.9 | 18.2 | 144.1 |
+| C# (.NET) | 20.3 | 20.9 | 31.2 | 18.3 | 149.3 |
+| Node.js | 24.6 | 28.2 | 96.4 | 18.5 | 712.2 |
+| Python | 140.8 | 448.1 | 200.0 | 410.2 | 3127.3 |
+
+Empty-program baseline on the same machine (process start-up, included in
+every number above): C 0.17 · **Tulpar 0.23** · C++ 0.44 · Python 5.6 ·
+C# 8.2 · Node 10.7 ms.
+
+**Tulpar AOT is the fastest of the nine on `fib`, `strcat` and
+`arrayiter`, and within 0.1 ms of C on `sieve` and `intloop`.**
+
+#### How these numbers are kept honest
+
+An earlier version of this table (still visible, clearly marked, in
+[benchmarks/RESULTS.md](benchmarks/RESULTS.md)) was audited in September
+2026 and **thrown out**. It had three flaws that each invalidated the
+result on their own — the worst being that only Tulpar read its workload
+size at run time, while `gcc -O2` and `rustc -O3` folded their loops to a
+closed form and "won" without executing them. The suite in
+[`benchmarks/fair/`](benchmarks/fair/README.md) fixes all three:
+
+- **Every language reads `BENCH_N` from the environment**, so no compiler
+  can constant-fold the workload away.
+- **Same algorithm, same data structure**, with each language using its
+  own idiomatic tool (`StringBuilder` / `std::string` /
+  `strings.Builder` / `Int32Array` / `int[]`) — forcing a naive form on
+  someone measures the trap, not the language.
+- **Outputs are compared across languages**; if they disagree the row is
+  reported invalid instead of published.
+- Warm-up run discarded, best **and** median reported, and the
+  empty-program baseline printed alongside so you can see how much of a
+  number is process start-up.
+
+> **Scope.** These are microbenchmarks — tight loops on a single machine.
+> They isolate compiler and runtime costs and let Tulpar be compared
+> against C, Rust, Go and Node on the same shape of workload. They do
+> **not** model production traffic (cold starts, large payloads,
+> distributed clients, p99 tail latency, GC pressure under load).
+
+### HTTP throughput
+
 <!-- BENCH:META START -->
 > _Baked from local benchmark run (best of 5). Last run: **2026-05-21T08:23:24Z** UTC · commit [`d91f184`](../../commit/d91f184c4447c2607d73dca070c704faaf87fbf3) · runner `Windows` · `developer machine` (16 CPUs). Methodology + Local Run instructions: [benchmarks/CI.md](benchmarks/CI.md)._
 <!-- BENCH:META END -->
 
-> **Scope.** All numbers below are **microbenchmarks** — tight integer
-> loops and small JSON handlers on a single machine, localhost loopback
-> for HTTP. They isolate compiler / runtime / scheduler costs and let
-> Tulpar be compared against C, Rust, Go, Node, etc. on the same shape
-> of workload. They do **not** model real production traffic (cold
-> starts, large payloads, distributed clients, p99 tail latency, GC
-> pressure under load). Treat them as a peer-comparison floor for the
-> hot path, not as a production projection.
-
-### CPU benchmarks
-
-10M-iteration sum and recursive `fib(35)`. See
-[benchmarks/RESULTS.md](benchmarks/RESULTS.md) for the raw numbers from
-the most recent CI run and the optimization-pipeline writeup.
-
-<!-- BENCH:CPU_TABLE START -->
-_Wall time of the inner loop, best of 5 runs. **Lower is faster.**_
-
-| Workload | Tulpar AOT (LLVM) | C (gcc -O2) | Rust (-O3) | Go | Node.js | Python |
-|---|---:|---:|---:|---:|---:|---:|
-| loopsum (ms) | **59.2** | 25.4 | 24.4 | 33.6 | 48.3 | 554.8 |
-| fib(35) (ms) | **82.6** | 37.7 | 48.0 | 73.6 | 109.4 | 945.7 |
-| ackermann(3,8) (ms) | **59.3** | 24.1 | 27.9 | 33.9 | 50.5 | 261.2 |
-| tak(18,12,6) (ms) | **56.9** | 22.4 | 24.3 | 29.6 | 42.7 | 26.6 |
-| sieve(100K) (ms) | **62.1** | 24.8 | 24.4 | 30.2 | 43.4 | 34.2 |
-| struct_sum (ms) | **57.5** | 24.8 | 24.9 | 36.0 | 67.9 | 1393.1 |
-| struct_arr_push (ms) | **103.9** | 31.6 | 32.4 | 37.9 | 179.0 | 305.3 |
-
-Tulpar AOT lands at **2.19×–3.29× of C (gcc -O2)** on these microbenchmarks (i.e. C-comparable, with a small multiplicative gap), **0.7–1.7× faster than Node.js**, and **0–24× faster than Python**.
-<!-- BENCH:CPU_TABLE END -->
-
-### HTTP throughput
 
 3000 GETs across 4 keep-alive connections, single localhost loop. Same
 JSON handler running on every server.
@@ -535,7 +564,7 @@ TulparLang/
 │   ├── lexer/          # Tokenization
 │   ├── parser/         # Recursive-descent parser, AST nodes
 │   ├── typeinfer/      # Type inference (build pre-pass)
-│   ├── aot/            # LLVM 18 AOT backend (the only execution path)
+│   ├── aot/            # LLVM AOT backend (the only execution path)
 │   ├── vm/             # Shared runtime: aot_* builtins, arena allocator, value types
 │   ├── lsp/            # Language Server Protocol
 │   ├── fmt/            # Source formatter
@@ -560,7 +589,7 @@ failure is a hard error.
 
 | Component          | Role                                                        |
 |--------------------|-------------------------------------------------------------|
-| **AOT (LLVM 18)**  | The only execution path. LLVM IR → native via clang.        |
+| **AOT (LLVM)**     | The only execution path. LLVM IR → native via clang.        |
 | **`src/vm/` runtime** | Shared runtime linked into AOT'd binaries (the `aot_*` builtins, arena allocator, value types) — *not* an interpreter. |
 
 The bytecode VM interpreter and the REPL were removed in **v3.0.0**
