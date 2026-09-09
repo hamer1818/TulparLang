@@ -1,0 +1,5 @@
+// Y1: `var x = e;` TAM OLARAK `T x = e;` demektir (T = infer(e)).
+// Once `var` dinamik dogup dinamik kaliyordu ve bu atama sessizce geciyordu.
+var b = [1, 2];
+b = 5;
+print(b);

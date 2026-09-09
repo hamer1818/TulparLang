@@ -541,7 +541,19 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
                    decl->custom_type.value().c_str(), decl->name.c_str(),
                    decl->loc.line);
     }
-    if (declared_type == TYPE_VOID && decl->initializer) {
+    // Y1: `var x = e;` TAM OLARAK `T x = e;` demektir (T = infer(e)).
+    // Once `var` TYPE_UNKNOWN olarak kaliyordu, yani degisken DINAMIK dogup
+    // dinamik kaliyordu: `var b = [1,2]; b = 5;` typecheck'ten geciyordu.
+    // Dilin "statik tipli" iddiasi ile deyimsel kullanim (tutorial'in hemen
+    // her satiri `var`) boylece ayrisiyordu. Artik `var` cikarildigi tipte
+    // dogar ve o tipte kalir; gercekten dinamik bir deger isteyen `json`
+    // kullanir — o tipin dinamikligi belgelenmis bir ozellik.
+    //
+    // infer(e) cozulemezse degisken UNKNOWN dogar ve bugunku gibi denetimsiz
+    // kalir (gurultulu hata yerine sessiz gecis) — bunu HATAYA cevirmek ayri
+    // bir karar, once infer kapsaminin olculmesi gerekiyor.
+    if ((declared_type == TYPE_VOID || declared_type == TYPE_UNKNOWN) &&
+        decl->initializer) {
       declared_type = infer_expr(ctx, decl->initializer.get());
     }
     if (decl->initializer) {
@@ -591,6 +603,37 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
   }
 
   if (const auto *assign = as_node<Assignment>(stmt)) {
+    // KARMASIK HEDEF (`a[i] = x`, `o.f = y`): `name` bos, hedef bir ifade.
+    // P22 (2026-09-09) bu yolun HIC denetlenmedigini gosterdi:
+    //   str[] s = ["a"];  s[0] = 5;   -> typecheck OK, program "5" basiyor
+    //   int[] n = [1];    n[0] = "abc"; -> typecheck OK
+    // Yani `str[]` eleman tipini atamada zorlamiyordu. Kapsam: yalniz
+    // ArrayAccess hedefi ve YALNIZ tipli dizi kaplari; `json` bilerek disarida
+    // (dinamik olmasi belgelenmis bir ozellik), string indeksi de disarida.
+    if (assign->name.empty() && assign->target) {
+      if (const auto *acc = as_node<ArrayAccess>(assign->target.get())) {
+        DataType cont = infer_expr(ctx, acc->object.get());
+        DataType want = TYPE_UNKNOWN;
+        switch (cont) {
+        case TYPE_ARRAY_INT:   want = TYPE_INT;    break;
+        case TYPE_ARRAY_FLOAT: want = TYPE_FLOAT;  break;
+        case TYPE_ARRAY_STR:   want = TYPE_STRING; break;
+        case TYPE_ARRAY_BOOL:  want = TYPE_BOOL;   break;
+        default: break;
+        }
+        DataType got = infer_expr(ctx, assign->value.get());
+        if (want != TYPE_UNKNOWN && got != TYPE_UNKNOWN &&
+            got != TYPE_CUSTOM && got != TYPE_UNSPECIFIED &&
+            !store_coercible(want, got) && !types_compatible(want, got)) {
+          report_error(ctx,
+                       "Element type mismatch: array holds %s, assigned %s at line %d",
+                       datatype_to_string(want), datatype_to_string(got),
+                       assign->loc.line);
+        }
+      }
+      infer_expr(ctx, assign->value.get());
+      return;
+    }
     DataType var_type = lookup_symbol_type(ctx, assign->name);
     DataType expr_type = infer_expr(ctx, assign->value.get());
     // See VariableDecl note above: don't flag against unknown-typed sides.

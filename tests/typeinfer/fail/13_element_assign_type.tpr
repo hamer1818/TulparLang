@@ -1,0 +1,6 @@
+// P22: `a[i] = x` yolu HIC denetlenmiyordu — `str[] s; s[0] = 5;` typecheck'ten
+// geciyor ve program "5" basiyordu. json bilerek disarida (dinamik olmasi
+// belgelenmis bir ozellik).
+str[] s = ["a"];
+s[0] = 5;
+print(s[0]);
