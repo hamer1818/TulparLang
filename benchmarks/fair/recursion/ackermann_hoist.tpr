@@ -1,0 +1,11 @@
+// ackermann.tpr ile AYNI hesap; tek fark: ic cagri ARGUMAN POZISYONUNDAN
+// cikarilip yerel degiskene alindi. H1'i sinar.
+func ack(int m, int n): int {
+    if (m == 0) { return n + 1; }
+    if (n == 0) { return ack(m - 1, 1); }
+    int t = ack(m, n - 1);
+    return ack(m - 1, t);
+}
+int n = toInt(env("BENCH_N"));
+if (n <= 0) { n = 9; }
+print(ack(3, n));

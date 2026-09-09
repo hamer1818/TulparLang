@@ -1,35 +1,26 @@
-kernel,n,variant,median_ms,mad_ms,best_ms,reps
-fib,32,gcc -O2,1.839,0.228,1.556,12
-fib,32,gcc -O3 -native -flto,1.801,0.233,1.552,12
-fib,32,clang -O2,4.124,0.346,3.776,12
-fib,32,clang -O3 -native -flto,3.967,0.192,3.771,12
-fib,32,Tulpar (zincirli),0.67,0.099,0.552,12
-fib,32,Tulpar (zincirSIZ),4.241,0.387,3.84,12
-ackermann,9,gcc -O2,3.31,0.196,3.097,12
-ackermann,9,gcc -O3 -native -flto,3.298,0.229,3.034,12
-ackermann,9,clang -O2,12.005,0.64,10.531,12
-ackermann,9,clang -O3 -native -flto,11.602,0.789,10.451,12
-ackermann,9,Tulpar (zincirli),14.004,0.278,13.491,12
-ackermann,9,Tulpar (zincirSIZ),11.108,0.276,10.581,12
-tak,18,gcc -O2,10.267,0.131,10.089,12
-tak,18,gcc -O3 -native -flto,4.898,0.051,4.802,12
-tak,18,clang -O2,10.463,0.2,10.071,12
-tak,18,clang -O3 -native -flto,10.44,0.19,10.117,12
-tak,18,Tulpar (zincirli),7.216,0.198,6.959,12
-tak,18,Tulpar (zincirSIZ),11.309,0.164,11.108,12
-treesum,24,gcc -O2,5.918,0.11,5.717,12
-treesum,24,gcc -O3 -native -flto,5.809,0.094,5.713,12
-treesum,24,clang -O2,19.845,0.235,19.542,12
-treesum,24,clang -O3 -native -flto,20.001,0.261,18.346,12
-treesum,24,Tulpar (zincirli),14.756,0.141,14.328,12
-treesum,24,Tulpar (zincirSIZ),20.151,0.238,18.3,12
-mutual,30000000,gcc -O2,0.181,0.023,0.154,12
-mutual,30000000,gcc -O3 -native -flto,0.164,0.01,0.153,12
-mutual,30000000,clang -O2,0.156,0.016,0.139,12
-mutual,30000000,clang -O3 -native -flto,0.148,0.009,0.135,12
-mutual,30000000,Tulpar (zincirli),0.225,0.01,0.208,12
-mutual,30000000,Tulpar (zincirSIZ),0.233,0.014,0.213,12
-strcat,2000000,C snprintf (gcc -O3 -native -flto),37.11,0.28,36.17,12
-strcat,2000000,C ELLE itoa (gcc -O3 -native -flto),11.07,0.1,10.95,12
-strcat,2000000,C elle itoa (clang -O3 -native -flto),11.64,0.13,11.48,12
-strcat,2000000,Tulpar,13.85,0.39,12.97,12
+run,kernel,n,lang,median_ms,mad_ms,best_ms,reps
+2026-09-09T13:56:13,fib,32,gcc -O3 -march=native -flto,1.664,0.071,1.59,15
+2026-09-09T13:56:13,fib,32,clang -O3 -march=native -flto,3.909,0.092,3.814,15
+2026-09-09T13:56:13,fib,32,rustc -O3 -C target-cpu=native,3.88,0.147,3.7,15
+2026-09-09T13:56:13,fib,32,Tulpar AOT (K=1),0.47,0.019,0.438,15
+2026-09-09T13:56:13,fib,32,Tulpar AOT (zincirsiz),3.938,0.085,3.853,15
+2026-09-09T13:56:13,ackermann,9,gcc -O3 -march=native -flto,3.079,0.034,3.031,15
+2026-09-09T13:56:13,ackermann,9,clang -O3 -march=native -flto,11.775,0.806,10.393,15
+2026-09-09T13:56:13,ackermann,9,rustc -O3 -C target-cpu=native,11.065,0.501,10.496,15
+2026-09-09T13:56:13,ackermann,9,Tulpar AOT (K=1),9.777,0.208,9.348,15
+2026-09-09T13:56:13,ackermann,9,Tulpar AOT (zincirsiz),10.587,0.047,10.493,15
+2026-09-09T13:56:13,tak,18,gcc -O3 -march=native -flto,4.926,0.086,4.762,15
+2026-09-09T13:56:13,tak,18,clang -O3 -march=native -flto,10.765,0.333,10.18,15
+2026-09-09T13:56:13,tak,18,rustc -O3 -C target-cpu=native,10.272,0.04,10.197,15
+2026-09-09T13:56:13,tak,18,Tulpar AOT (K=1),7.551,0.209,7.292,15
+2026-09-09T13:56:13,tak,18,Tulpar AOT (zincirsiz),11.218,0.062,11.094,15
+2026-09-09T13:56:13,treesum,24,gcc -O3 -march=native -flto,5.836,0.084,5.733,15
+2026-09-09T13:56:13,treesum,24,clang -O3 -march=native -flto,19.702,0.153,17.995,15
+2026-09-09T13:56:13,treesum,24,rustc -O3 -C target-cpu=native,19.296,0.381,17.972,15
+2026-09-09T13:56:13,treesum,24,Tulpar AOT (K=1),21.046,0.986,18.71,15
+2026-09-09T13:56:13,treesum,24,Tulpar AOT (zincirsiz),19.827,0.142,18.296,15
+2026-09-09T13:56:13,mutual,20000,gcc -O3 -march=native -flto,1.166,0.079,0.966,15
+2026-09-09T13:56:13,mutual,20000,clang -O3 -march=native -flto,1.416,0.025,1.378,15
+2026-09-09T13:56:13,mutual,20000,rustc -O3 -C target-cpu=native,1.491,0.024,1.429,15
+2026-09-09T13:56:13,mutual,20000,Tulpar AOT (K=1),1.531,0.024,1.475,15
+2026-09-09T13:56:13,mutual,20000,Tulpar AOT (zincirsiz),1.525,0.024,1.492,15

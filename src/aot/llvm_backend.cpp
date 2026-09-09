@@ -10372,7 +10372,7 @@ static bool native_abi_eligible(LLVMBackend *backend, ASTNode_C *node) {
 // satir ici alma bunu kaldirmiyor, yalnizca kodu buyutuyor. (Tipsiz surum
 // tipliden 21 kat yavas — 11,88 vs 0,56 — ama o acigi kapatacak sey zincir
 // degil, kutulamanin kendisi.)
-#define SELFREC_DEPTH 4
+#define SELFREC_DEPTH 1
 // Govde dugum siniri: buyuk ozyinelemeli fonksiyonlarin K kopyasi derleme
 // suresini ve .text'i buyutur. Kucuk govdeler zaten kazancin tamamini veriyor.
 #define SELFREC_MAX_NODES 160
@@ -10434,13 +10434,24 @@ static int selfrec_depth(LLVMBackend *backend, ASTNode_C *fn) {
     disabled = (e && *e && strcmp(e, "0") != 0) ? 1 : 0;
   }
   if (disabled) return 0;
+  // TULPAR_SELFREC_DEPTH=K zincir derinligini gecici olarak degistirir (1..8).
+  // NEDEN VAR: derinlik = uretilen kod miktari. Bir gerilemenin KOD SISMESI
+  // (icache) mi yoksa yapisal bir sebep mi oldugunu ayirt etmenin en ucuz yolu
+  // K'yi taratip gerilemenin K ile olceklenip olceklenmedigine bakmak.
+  // `ackermann` gerilemesi bu anahtarla teshis edildi.
+  static int depth_override = -2;
+  if (depth_override == -2) {
+    const char *d = getenv("TULPAR_SELFREC_DEPTH");
+    long v = (d && *d) ? strtol(d, nullptr, 10) : -1;
+    depth_override = (v >= 0 && v <= 8) ? (int)v : -1;
+  }
   if (!fn || fn->type != AST_FUNCTION_DECL || !fn->name || !fn->body) return 0;
   if (!native_abi_eligible(backend, fn)) return 0;
   int found = 0, count = 0;
   selfrec_scan(fn->body, fn->name, &found, &count);
   if (!found) return 0;
   if (count > SELFREC_MAX_NODES) return 0;
-  return SELFREC_DEPTH;
+  return depth_override >= 0 ? depth_override : SELFREC_DEPTH;
 }
 
 // Klon adi. Kaynak dilinde `.` tanimlayici karakteri degil, dolayisiyla bu ad

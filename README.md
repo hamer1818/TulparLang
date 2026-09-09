@@ -332,12 +332,24 @@ comparison, not a compiler one.
 
 **And the `fib` win does not generalise.** Running the whole
 self-recursion family — `ackermann`, `tak`, `treesum`, plus a mutual
-recursion negative control — shows the clone-chain pass gains 6.33× on
-`fib` but only 1.04–1.57× elsewhere, and **regresses `ackermann` by 21%**
-(14.00 vs 11.11 ms unchained). `gcc` beats Tulpar on `ackermann` (4.2×),
-`treesum` (2.5×) and `tak` (1.47×). "Faster than C at recursion" is
-**not** supported; only `fib` is. Full data, matched `clang` baseline and
-raw CSV: [`benchmarks/fair/recursion/`](benchmarks/fair/recursion/README.md).
+recursion negative control — showed the clone-chain pass gaining 6.33× on
+`fib` but only 1.04–1.57× elsewhere, and **regressing `ackermann` by
+21%**. Diagnosing that regression found the chain depth was simply too
+large: a single clone is enough to break the self-recursion SCC edge, and
+deeper chains only add code and layout churn. `SELFREC_DEPTH` went 4 → 1,
+which removed the regression and made `fib` faster still (0.67 → 0.47 ms).
+
+Even so, **`gcc` still beats Tulpar across the rest of that family** —
+`treesum` 3.6×, `ackermann` 3.2×, `tak` 1.5× — while Tulpar leads `clang`
+and `rustc` there. "Faster than C at recursion" is **not** supported;
+only `fib` is. Full diagnosis, depth sweep, matched `clang`/`rustc`
+baselines and raw CSV:
+[`benchmarks/fair/recursion/`](benchmarks/fair/recursion/README.md).
+
+Useful calibration from that run: compiling the *same C source* with gcc
+versus clang swings the result by **1.21×–3.82×** on these kernels. Any
+cross-language gap smaller than that is a compiler difference, not a
+language one.
 
 Two further disclosures the numbers alone don't carry:
 
