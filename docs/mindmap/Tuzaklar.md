@@ -1426,5 +1426,31 @@ Kardeş bulgu: aynı turda global yazmalarının başka thread'e **görünmediğ
 bellek modeli olmadığı için bu doğru davranış). Yani spin-wait sessizce sonsuza
 kadar döner. Ayrıntı: [[Concurrency]].
 
+## 7b. HEP başarısız olan kod, BAZEN başarılı olandan daha az tehlikelidir
+
+Eşzamanlılık testinde iki paylaşılan sayaç vardı. 8 thread × 100 000 artırma:
+
+```
+done=7 counter=800000 beklenen=800000
+```
+
+`done` **her koşuda** yanlıştı — bakılır bakılmaz görüldü, teşhis edildi,
+yazıldı. `counter` ise çoğu koşuda **tam** çıktı. Cazip okuma: "counter yolu
+sağlam."
+
+Yanlış. İkisi de aynı korumasız oku-değiştir-yaz. `counter`'ın tam çıkması
+kazara tutarlı bir spill/load-store desenine işaret ediyor — derleyici bu
+turda öyle kod ürettiği için. Bir sonraki kayıt tahsisi değişikliği, farklı
+bir `-O` seviyesi ya da başka bir CPU o deseni bozar ve aynı kod sessizce
+kaybetmeye başlar.
+
+**Kural:** bir yarışın *gözlemlenmemesi*, yokluğunun kanıtı değildir.
+Tehlikeyi mekanizmadan çıkar, çıktıdan değil: kod korumasız RMW yapıyorsa
+yarış vardır — bugün tetiklenip tetiklenmediği yalnız kod üretimiyle ilgilidir.
+Aynı sebeple, **hep patlayan bir hata bir hediyedir**; asıl korkulacak olan
+bazen patlayandır, çünkü test edilir, geçer, üretime gider.
+
+Kardeş bulgu ve ölçüm ayrıntısı: [[Concurrency]] · [[Tuzaklar#7a]].
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
