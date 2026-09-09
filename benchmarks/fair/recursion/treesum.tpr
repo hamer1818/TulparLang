@@ -1,0 +1,7 @@
+func tsum(int node, int depth): int {
+    if (depth == 0) { return node; }
+    return node + tsum(node * 2, depth - 1) + tsum(node * 2 + 1, depth - 1);
+}
+int n = toInt(env("BENCH_N"));
+if (n <= 0) { n = 24; }
+print(tsum(1, n));

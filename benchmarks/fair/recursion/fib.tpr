@@ -1,0 +1,7 @@
+func fib(int n): int {
+    if (n <= 1) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+int n = toInt(env("BENCH_N"));
+if (n <= 0) { n = 32; }
+print(fib(n));

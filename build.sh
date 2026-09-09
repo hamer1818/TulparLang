@@ -518,13 +518,39 @@ int n = toInt(env("SR_N"));
 if (n <= 0) { n = 32; }
 print(fib(n));
 TPREOF
-    TULPAR_AOT_EMIT_LL=1 ./tulpar build "$SR_TMP/fib.tpr" "$SR_TMP/fib_on" >/dev/null 2>&1
-    SR_LL=$(ls "$SR_TMP"/*.ll 2>/dev/null | head -1)
-    if [ -z "$SR_LL" ] || ! grep -q "@fib\.rec" "$SR_LL"; then
-        echo -e "${RED}Ozyineleme zinciri URETILMIYOR — ozyinelemeli kod satir ici alinmiyor!${NC}"
-        rm -rf "$SR_TMP"
+    # 1. ayak: zincirin ETKISI IR'de gorunuyor mu?
+    #
+    # Bu ayak once `@fib.rec` sembolunu ariyordu. YANLISTI: derinlik K=1'e
+    # inince klon TAMAMEN satir ici alinip yok oluyor — yani optimizasyon
+    # HER ZAMANKINDEN IYI calisirken (8,85x) denetim dusuyordu. Sembol bir
+    # UYGULAMA ARTEFAKTI; sinanmasi gereken sey ETKI.
+    #
+    # Kalici degismez: zincir, ozyinelemenin bir seviyesinin acilmasini
+    # saglar, dolayisiyla zincirli `@fib` govdesi zincirsizden DAHA COK
+    # oz-cagri icerir (olculdu: 3 vs 1). Sembol hayatta kalsa da kalmasa da
+    # bu dogru.
+    SR_LLDIR=$(mktemp -d)
+    TULPAR_AOT_EMIT_LL=1 ./tulpar build "$SR_TMP/fib.tpr" "$SR_LLDIR/fib_on" >/dev/null 2>&1
+    SR_LL_ON=$(ls "$SR_LLDIR"/*.ll 2>/dev/null | head -1)
+    [ -n "$SR_LL_ON" ] && mv "$SR_LL_ON" "$SR_LLDIR/on.ll"
+    TULPAR_NO_SELFREC=1 TULPAR_AOT_EMIT_LL=1 ./tulpar build "$SR_TMP/fib.tpr" "$SR_LLDIR/fib_off" >/dev/null 2>&1
+    SR_LL_OFF=$(ls "$SR_LLDIR"/*.ll 2>/dev/null | grep -v 'on\.ll' | head -1)
+    [ -n "$SR_LL_OFF" ] && mv "$SR_LL_OFF" "$SR_LLDIR/off.ll"
+    sr_selfcalls() {
+        [ -f "$1" ] || { echo 0; return; }
+        awk '/^define .*@fib\(/,/^}/' "$1" | grep -c 'call .*@fib'
+    }
+    SR_C_ON=$(sr_selfcalls "$SR_LLDIR/on.ll")
+    SR_C_OFF=$(sr_selfcalls "$SR_LLDIR/off.ll")
+    if [ "$SR_C_ON" -le "$SR_C_OFF" ]; then
+        echo -e "${RED}Ozyineleme zinciri ETKISIZ — ozyinelemeli kod satir ici alinmiyor!${NC}"
+        echo "  @fib icindeki oz-cagri: zincirli=$SR_C_ON zincirsiz=$SR_C_OFF (zincirli DAHA COK olmali)"
+        rm -rf "$SR_TMP" "$SR_LLDIR"
         exit 1
     fi
+    rm -rf "$SR_LLDIR"
+    cp "$SR_TMP/fib.tpr" "$SR_TMP/fib_copy.tpr" 2>/dev/null
+    ./tulpar build "$SR_TMP/fib.tpr" "$SR_TMP/fib_on" >/dev/null 2>&1
     TULPAR_NO_SELFREC=1 ./tulpar build "$SR_TMP/fib.tpr" "$SR_TMP/fib_off" >/dev/null 2>&1
     if [ ! -x "$SR_TMP/fib_on" ] || [ ! -x "$SR_TMP/fib_off" ]; then
         echo -e "${RED}Ozyineleme olcumu icin ikililer uretilemedi!${NC}"
@@ -576,6 +602,54 @@ TPREOF
         rm -rf "$SR_TMP"
         exit 1
     fi
+
+    # GERILEME KAPISI: zincir BASKA sekillerde ZARAR VERMEMELI.
+    #
+    # Bu denetim uzun sure YALNIZ fib'i sinadi ve tam bu yuzden gercek bir
+    # gerilemeyi kacirdi: K=4'te `ackermann` zincirli surumde zincirsizden
+    # %29 YAVASTI (13,74 vs 10,66 ms) ve butun testler yesil kaliyordu.
+    # Olculdu 2026-09-09: derinlik K taranınca hicbir K her cekirdekte en iyi
+    # degil, ama K=1'in EN KOTU durumu 1,03x (notr) iken K=4'unki 0,78x
+    # (zarar). Bir optimizasyonun bazi programlari yavaslatmasi HATADIR;
+    # bazilarina daha az kazandirmasi degil. Bu yuzden K=1 ve bu kapi.
+    #
+    # ackermann secildi cunku sekli fib'den farkli: ozyinelemeli cagri baska
+    # bir cagrinin argumaninda (ack(m-1, ack(m, n-1))). fib'de yan yana.
+    AR_TMP=$(mktemp -d)
+    cat > "$AR_TMP/ack.tpr" <<'TPREOF'
+func ack(int m, int n): int {
+    if (m == 0) { return n + 1; }
+    if (n == 0) { return ack(m - 1, 1); }
+    return ack(m - 1, ack(m, n - 1));
+}
+int n = toInt(env("SR_N"));
+if (n <= 0) { n = 9; }
+print(ack(3, n));
+TPREOF
+    ./tulpar build "$AR_TMP/ack.tpr" "$AR_TMP/ack_on" >/dev/null 2>&1
+    TULPAR_NO_SELFREC=1 ./tulpar build "$AR_TMP/ack.tpr" "$AR_TMP/ack_off" >/dev/null 2>&1
+    if [ ! -x "$AR_TMP/ack_on" ] || [ ! -x "$AR_TMP/ack_off" ]; then
+        echo -e "${RED}Gerileme kapisi icin ackermann ikilileri uretilemedi!${NC}"
+        rm -rf "$AR_TMP"; exit 1
+    fi
+    AR_O1=$(SR_N=9 "$AR_TMP/ack_on"); AR_O2=$(SR_N=9 "$AR_TMP/ack_off")
+    if [ "$AR_O1" != "$AR_O2" ] || [ "$AR_O1" != "4093" ]; then
+        echo -e "${RED}Zincir ackermann SONUCUNU DEGISTIRDI! on=$AR_O1 off=$AR_O2 beklenen=4093${NC}"
+        rm -rf "$AR_TMP"; exit 1
+    fi
+    AR_ON=$(sr_best_us "$AR_TMP/ack_on" 9);   AR_ONB=$(sr_best_us "$AR_TMP/ack_on" 1)
+    AR_OFF=$(sr_best_us "$AR_TMP/ack_off" 9); AR_OFFB=$(sr_best_us "$AR_TMP/ack_off" 1)
+    AR_ON_W=$(( AR_ON - AR_ONB ));   [ "$AR_ON_W" -lt 1 ] && AR_ON_W=1
+    AR_OFF_W=$(( AR_OFF - AR_OFFB )); [ "$AR_OFF_W" -lt 1 ] && AR_OFF_W=1
+    # Zincirli, zincirsizin 1,25 katindan yavas OLMAMALI (%25 pay olcum
+    # oynamasi icin; gercek gerileme %29'du, yani bu kapi onu yakalardi).
+    if [ $(( AR_ON_W * 100 )) -gt $(( AR_OFF_W * 125 )) ]; then
+        echo -e "${RED}Zincir ackermann'i GERILETIYOR — karlilik modeli bozuk!${NC}"
+        echo "  is payi: zincirli=${AR_ON_W}us zincirsiz=${AR_OFF_W}us (>%25 yavas)"
+        rm -rf "$AR_TMP"; exit 1
+    fi
+    echo -e "${GREEN}zincir baska sekillerde zarar vermiyor${NC} (ackermann: ${AR_OFF_W}us -> ${AR_ON_W}us)"
+    rm -rf "$AR_TMP"
     rm -rf "$SR_TMP"
 
     # KUTULU (tipsiz) YOLUN satır içi hızlı yolları duruyor mu?
