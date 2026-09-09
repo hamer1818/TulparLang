@@ -1407,5 +1407,24 @@ olan ne var?* Varsa çıkar — yoksa oran, ölçtüğünü sandığın şeyi de
 platformun ek yükünü ölçer. Aynı disiplin `benchmarks/fair`'de zaten var
 (boş program taban çizgisi ayrı raporlanıyor).
 
+## 7a. Bu runtime'da OKUMA her zaman okuma değildir
+
+8 thread paylaşılan bir `int[]`'i **yalnız okurken** program çöktü:
+`get islemi icin gecersiz hedef veya indeks`. Dizi değişmiyordu.
+
+Sebep: `ObjArray` ya kutulanmamış (`idata`) ya kutulu (`items_`) tutuluyor ve
+**genel yoldan ilk erişimde tembel olarak kutuluya çevriliyor**. O çevrim dizi
+başlığına *yazar*. İki thread aynı anda "okuyunca" ikisi de başlığı yazmaya
+çalışıyor.
+
+**Kural:** tembel temsil değişimi (lazy boxing, memoization, kopyala-yazarken,
+önbellek doldurma) olan her yapıda "salt-okur paylaşım güvenlidir" varsayımı
+YANLIŞ. Paylaşımdan önce sor: *bu okuma yolu ilk çağrıda bir şey yazıyor mu?*
+
+Kardeş bulgu: aynı turda global yazmalarının başka thread'e **görünmediği** de
+ölçüldü (optimize edici okumayı döngüden çıkarıp yazmaçta tutuyor — dilin bir
+bellek modeli olmadığı için bu doğru davranış). Yani spin-wait sessizce sonsuza
+kadar döner. Ayrıntı: [[Concurrency]].
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]

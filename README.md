@@ -411,6 +411,15 @@ closed form and "won" without executing them. The suite in
 
 ### HTTP throughput
 
+> **\*** These figures come from `listen_pool`, a multi-threaded listener,
+> and Wings keeps mutable globals (request counters, the router table).
+> Tulpar has **no memory model**: shared mutable state across threads is
+> neither atomic nor reliably visible — measured, with three reproducers, in
+> [docs/mindmap/Concurrency.md](docs/mindmap/Concurrency.md). The throughput
+> number itself is real; the concurrency contract underneath it is
+> undocumented and untested, so treat the counters as approximate until that
+> gate closes.
+
 <!-- BENCH:META START -->
 > _Baked from local benchmark run (best of 5). Last run: **2026-05-21T08:23:24Z** UTC · commit [`d91f184`](../../commit/d91f184c4447c2607d73dca070c704faaf87fbf3) · runner `Windows` · `developer machine` (16 CPUs). Methodology + Local Run instructions: [benchmarks/CI.md](benchmarks/CI.md)._
 <!-- BENCH:META END -->
