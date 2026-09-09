@@ -147,7 +147,17 @@ struct AOTPhaseTimer {
   #define AOT_LINK_PIE_FLAG ""
   #define AOT_EXE_SUFFIX ".exe"
   #define AOT_TMP_RUN_BASE ".tulpar_run"
-#else
+#elif PLATFORM_LINUX
+  // ⚠ BU DAL YALNIZ LINUX. Asagidaki bayraklarin hepsi GNU ld / GCC
+  // surucusune ozgu ve Apple clang + ld64 bunlari TANIMIYOR:
+  // `-static-libgcc` sert hata veriyor ("unsupported option"),
+  // `--as-needed` / `--exclude-libs` / `--gc-sections` ld64'te yok.
+  // Bir kez macOS'u kirdi (CI PR #310'da yakaladi): dal `#else` idi,
+  // yani Linux'la macOS'u birlikte kapsiyordu, Linux CI yesil kaliyordu
+  // ve hata yalniz macOS'ta "AOT end-to-end smoke" adiminda cikiyordu.
+  // Yeni bir baglanti bayragi eklerken once "bu GNU'ya mi ozgu?" diye
+  // sor; oyleyse buraya koy, asagidaki tasiyici `#else` dalina DEGIL.
+  //
   // `-Wl,--as-needed`: KULLANILMAYAN PAYLASIMLI KUTUPHANEYI BAGLAMA.
   //
   // Baglanti satiri `-lssl -lcrypto` tasiyor (TLS yerlesikleri icin sart),
@@ -183,6 +193,19 @@ struct AOTPhaseTimer {
   #define AOT_LINK_LIB_FLAGS \
       "-rdynamic -Wl,--as-needed -static-libstdc++ -static-libgcc " \
       "-Wl,--exclude-libs,ALL -Wl,--gc-sections " \
+      "-ltulpar_runtime -lm -lpthread -ldl" AOT_TLS_LINK_FLAGS
+  #define AOT_LINK_PIE_FLAG "-no-pie"
+  #define AOT_EXE_SUFFIX ""
+  #define AOT_TMP_RUN_BASE "/tmp/.tulpar_run"
+#else
+  // macOS (ld64) ve diger Unix'ler: GNU'ya ozgu bayraklarin HICBIRI yok.
+  // Bu, Linux'un acilis optimizasyonlarindan once de calisan baglanti
+  // satirinin ta kendisi; kasitli olarak muhafazakar tutuluyor. macOS'a
+  // ayni kazanci getirmek isteyen once ld64 karsiligini (`-dead_strip`,
+  // `-Wl,-no_exported_symbols`) GERCEK bir macOS makinesinde OLCMELI —
+  // burada tahminle bayrak eklemek, Linux CI yesilken macOS'u kirar.
+  #define AOT_LINK_LIB_FLAGS \
+      "-rdynamic " \
       "-ltulpar_runtime -lm -lpthread -ldl" AOT_TLS_LINK_FLAGS
   #define AOT_LINK_PIE_FLAG "-no-pie"
   #define AOT_EXE_SUFFIX ""

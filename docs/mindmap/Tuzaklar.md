@@ -1339,5 +1339,38 @@ kural). Üç bozmanın **ikisini yalnız yeni sahne** yakalıyor. **Kural: yeni 
 serileştirilebilir alan ekleyen, düzeneği de büyütür** — yoksa alan sessizce
 üç yoldan yalnız ikisinde yaşar.
 
+## 6y. GNU'ya özgü bağlantı bayrağını `#else` dalına koymak — macOS'u kırar, Linux CI yeşil kalır
+
+`aot_pipeline.cpp`'deki bağlantı bayrakları `#if PLATFORM_WINDOWS / #else`
+şeklinde ikiye ayrılıyordu. O `#else`, **Linux ile macOS'u birlikte**
+kapsıyor. Açılış maliyetini düşüren beş bayrak (`-static-libstdc++`,
+`-static-libgcc`, `-Wl,--as-needed`, `--exclude-libs,ALL`, `--gc-sections`)
+oraya eklendi. Hepsi GNU ld / GCC sürücüsüne özgü; Apple clang
+`-static-libgcc`'yi **sert hatayla** reddediyor, `--as-needed` /
+`--exclude-libs` / `--gc-sections` ise ld64'te hiç yok.
+
+Sonuç: o daldaki **her macOS AOT derlemesi** kırıldı — `tulpar foo.tpr`
+dahil, çünkü çalıştırma da aynı bağlantı satırından geçiyor. Yani macOS'ta
+dil tamamen kullanılamaz haldeydi.
+
+**Neden geç fark edildi.** Yerel geliştirme Linux; suites, örnekler ve
+typeinfer'in üçü de Linux'ta koşuyor ve **hepsi yeşildi**. CI'da macOS işi
+var ama testleri koşmuyor (bkz. CLAUDE.md) — tek işlevsel adımı
+`AOT end-to-end smoke`. Hatayı yakalayan tek şey o adım oldu (PR #310).
+Yani **macOS'un tüm güvencesi tek bir smoke adımı**; onu zayıflatmak, bu
+sınıf hataların doğrudan main'e girmesi demek.
+
+**Kural.** Yeni bir bağlantı bayrağı eklerken önce şunu sor: *bu GNU'ya mı
+özgü?* Öyleyse `#elif PLATFORM_LINUX` dalına koy. Taşıyıcı `#else` dalı
+(macOS + diğer Unix'ler) muhafazakâr kalmalı. macOS'a aynı kazancı
+getirmek isteyen, ld64 karşılığını (`-dead_strip`) **gerçek bir macOS
+makinesinde ölçmeli** — burada tahminle bayrak eklemek, Linux yeşilken
+macOS'u kırmanın kestirme yolu.
+
+**Genel biçim:** *bir platformun test kapsamı diğerinden dar olduğunda,
+ortak koda konan platforma özgü varsayım, dar kapsamlı platformda sessizce
+patlar.* Aynı biçim `#ifdef _WIN32` yerine shim başlıklarını kullanma
+kuralının da (CLAUDE.md) arkasındaki sebep.
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
