@@ -2,6 +2,7 @@
 // Full static type inference for compile-time type checking
 
 #include "typeinfer.hpp"
+#include <cstring>
 #include "../common/localization.hpp"
 #include "../embedded_libs.h"
 #include "../lexer/lexer.hpp"
@@ -80,6 +81,32 @@ static bool symbol_is_moved(TypeInferContext *ctx, const std::string &name) {
     return false;
   }
   return it->second.is_moved;
+}
+
+// DEGER URETMEYEN builtin'ler. Katalogda TYPE_VOID kayitli olanlardan,
+// gercekte deger donduren ama tabloda VOID gorunen istisnalar cikarilarak
+// (bkz. infer_expr'deki ozel durumlar) kayit sirasinda doldurulur.
+//
+// NEDEN AYRI BIR KUME: `TYPE_VOID` bu dosyada CIFT ANLAMLI — hem "deger
+// uretmiyor" hem de infer_expr'in "cikaramadim" geri dusumu (son satir
+// `return TYPE_VOID;`). Bu yuzden `is_unknown` onu bilinmeyen sayiyor ve
+// atama denetimi atlaniyor. Genel davranisi degistirmek her yerde yanlis
+// pozitif uretirdi; bunun yerine YALNIZ katalogdan gelen, otoriter "void"
+// bilgisini ayri tutuyoruz.
+//
+// Bu delik gercek bir hataya yol acti: `push` VOID donuyor ve
+//   int[] e = [1,2];  e = push(e, 3);
+// typecheck'ten GECIYORDU, calisma zamaninda `e` 0 oluyordu. Bir
+// eszamanlilik testi tam bu yuzden yanlis sonuc verdi (bkz. Tuzaklar 7a).
+static std::set<std::string> &void_builtin_names() {
+  static std::set<std::string> s;
+  return s;
+}
+
+static bool expr_is_void_builtin_call(const ASTNode *expr) {
+  const auto *call = as_node<FunctionCall>(expr);
+  if (!call) return false;
+  return void_builtin_names().count(call->name) > 0;
 }
 
 static DataType function_return_type(TypeInferContext *ctx, const std::string &name) {
@@ -548,6 +575,20 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
                    assign->name.c_str(), datatype_to_string(var_type),
                    assign->loc.line);
       typeinfer_add_symbol(ctx, assign->name.c_str(), TYPE_STRING);
+      return;
+    }
+    // DEGER URETMEYEN cagrinin atanmasi: her zaman hata, hedef tipi ne olursa
+    // olsun (`var` dahil). `is_unknown(TYPE_VOID)` true oldugu icin asagidaki
+    // genel denetim bunu goremiyordu.
+    if (expr_is_void_builtin_call(assign->value.get())) {
+      report_error(ctx,
+                   tulpar::i18n::tr_en(
+                       "'%s' DEGER URETMIYOR ama '%s' degiskenine atanıyor "
+                       "(satir %d) — cagriyi tek basina deyim olarak yaz",
+                       "'%s' does not return a value but is assigned to '%s' "
+                       "at line %d - call it as a statement instead"),
+                   as_node<FunctionCall>(assign->value.get())->name.c_str(),
+                   assign->name.c_str(), assign->loc.line);
       return;
     }
     if (!is_unknown(var_type) && !is_unknown(expr_type) &&
@@ -1286,11 +1327,22 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       // Array mutation — `push(arr, val)` accepts any value type.
       {"push", TYPE_VOID, {TYPE_UNKNOWN, TYPE_UNKNOWN}},
   };
+  // infer_expr bu adlari VOID kayitli olmalarina ragmen gercek bir tipe
+  // cozuyor (tarihsel katalog eksigi) — void-atama denetiminden muaf tutulur.
+  static const char *kVoidLooking[] = {
+      "print", "println", "len", "to_string", "to_int", "to_float",
+      "input", "clock_ms", "abs", "sqrt", "floor", "ceil"};
   for (const auto &s : sigs) {
     std::vector<DataType> ps = s.params;
     typeinfer_register_function(ctx, s.name, s.return_type,
                                 ps.empty() ? nullptr : ps.data(),
                                 static_cast<int>(ps.size()));
+    if (s.return_type == TYPE_VOID) {
+      bool exempt = false;
+      for (const char *e : kVoidLooking)
+        if (std::strcmp(e, s.name) == 0) { exempt = true; break; }
+      if (!exempt) void_builtin_names().insert(s.name);
+    }
   }
 }
 
