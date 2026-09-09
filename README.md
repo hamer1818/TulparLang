@@ -20,11 +20,12 @@
 programming language built on **LLVM** (18 through 22). It pairs
 Python-shaped syntax with native binary performance. On a nine-language microbenchmark suite
 where every language reads its workload size from the environment and
-the outputs are verified to match, Tulpar AOT is **the fastest of the
-nine on `fib` and `strcat` — a lead that holds even against C compiled
-with `-O3 -march=native -flto`** — and ties C on `sieve` and `intloop`.
-On `arrayiter`, C wins once it is allowed `-march=native`. See
-[Performance](#performance) for the full flag matrix. On a localhost JSON-API
+the outputs are verified to match, Tulpar AOT **beats C on `fib`
+(2.7× vs `gcc -O3 -march=native -flto`) and ties it on `sieve` and
+`intloop`**, while C takes `arrayiter` and `strcat` once given equal
+flags and the same integer-formatting routine. See
+[Performance](#performance) for the flag matrix and the follow-up
+attribution run. On a localhost JSON-API
 micro-benchmark the `listen_async` Wings listener serves **~1.9× the
 throughput of Node.js' built-in `http`**. It ships with a
 batteries-included standard library so you can build a production
@@ -236,9 +237,9 @@ with SHA-256 checksums so re-installs are byte-stable.
 
 ## Why TulparLang
 
-- **Native speed.** LLVM AOT compilation. Fastest of nine languages on
-  `fib` (2.7×) and `strcat` (2.8×) — holding even against C at
-  `-O3 -march=native -flto` — and tied with C on `sieve` and `intloop`. On a localhost JSON-API microbenchmark the `listen_async`
+- **Native speed.** LLVM AOT compilation, in C's performance class on
+  integer kernels: 2.7× C on `fib`, tied on `sieve` and `intloop`, and
+  far ahead of Node/Python/Java/C# throughout. On a localhost JSON-API microbenchmark the `listen_async`
   Wings listener is **1.91× Node.js' `http`** and **2.91× CPython's
   `ThreadingHTTPServer`** in throughput. See
   [Performance](#performance) and
@@ -317,10 +318,26 @@ repetitions, median ± MAD, on one AMD Ryzen 7 9800X3D (Zen 5, 5.27 GHz):
 | `sieve(5M)` | 7.86 | 7.75 ± 0.14 | 7.77 ± 0.10 | tie (inside MAD) |
 | `arrayiter(5M)` | 2.50 | **1.85** | 2.03 | **C wins with `native`** |
 
-So the honest statement is narrower than a single "beats C": the `fib`
-and `strcat` wins are robust and survive C's best flags, `sieve` and
-`intloop` are ties, and **`arrayiter` is a Tulpar win only at equal
-generic flags — C takes it back with `-march=native`.**
+So the honest statement is narrower than a single "beats C": `fib` is a
+robust win that survives C's best flags, `sieve` and `intloop` are ties,
+and **`arrayiter` is a Tulpar win only at equal generic flags — C takes
+it back with `-march=native`.**
+
+**`strcat` was withdrawn as a win.** A follow-up control gave C the same
+hand-rolled integer-to-string routine Tulpar uses instead of `snprintf`:
+C then runs it in **11.07 ± 0.10 ms against Tulpar's 13.85 ± 0.39** — C
+is 1.25× ahead. The original 2.8× "win" was entirely the
+`snprintf`-versus-specialised-`itoa` asymmetry, i.e. a standard-library
+comparison, not a compiler one.
+
+**And the `fib` win does not generalise.** Running the whole
+self-recursion family — `ackermann`, `tak`, `treesum`, plus a mutual
+recursion negative control — shows the clone-chain pass gains 6.33× on
+`fib` but only 1.04–1.57× elsewhere, and **regresses `ackermann` by 21%**
+(14.00 vs 11.11 ms unchained). `gcc` beats Tulpar on `ackermann` (4.2×),
+`treesum` (2.5×) and `tak` (1.47×). "Faster than C at recursion" is
+**not** supported; only `fib` is. Full data, matched `clang` baseline and
+raw CSV: [`benchmarks/fair/recursion/`](benchmarks/fair/recursion/README.md).
 
 Two further disclosures the numbers alone don't carry:
 
@@ -336,7 +353,9 @@ Two further disclosures the numbers alone don't carry:
   scales as φ² per +2 in `n` (measured: C 2.67×, Tulpar 2.30×), so
   neither is collapsing it to a linear form. But Tulpar's lower exponent
   shows part of its lead comes from the self-recursion clone chain
-  enabling subexpression sharing the C build does not get.
+  enabling subexpression sharing the C build does not get — and that
+  pass, measured across the recursion family, turns out to be a `fib`
+  outlier rather than a general win.
 
 #### What this suite does *not* establish
 
@@ -346,8 +365,9 @@ mandelbrot), allocation pressure and hash-map/JSON workloads — which is
 where ARC-versus-GC differences would actually appear — pointer chasing,
 sorting, multi-threaded scaling, RSS, and sustained-load p99 latency.
 The defensible reading is: Tulpar is **in C's performance class on
-integer and string kernels**, decisively ahead of Node/Python/Java/C#,
-and ahead of C specifically on `fib` and `strcat`.
+integer kernels** and decisively ahead of Node/Python/Java/C#. Its flat
+loop and recursion codegen is C-class, not above it; the one verified
+win over C is `fib`.
 
 #### How these numbers are kept honest
 

@@ -1,0 +1,8 @@
+func odd_(int n): int { if (n == 0) { return 0; } return even_(n - 1); }
+func even_(int n): int { if (n == 0) { return 1; } return odd_(n - 1); }
+int n = toInt(env("BENCH_N"));
+if (n <= 0) { n = 30000000; }
+int s = 0;
+int i = 0;
+while (i < n) { s = s + even_(i % 1000); i = i + 1000; }
+print(s);

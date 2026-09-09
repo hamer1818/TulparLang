@@ -91,10 +91,25 @@ sıra dışı bir iddia; o yüzden C'ye en iyi bayrakları verip yeniden
 | `sieve(5M)` | 7,86 | 7,75 ± 0,14 | 7,77 ± 0,10 | berabere (MAD içinde) |
 | `arrayiter(5M)` | 2,50 | **1,85** | 2,03 | **C `native` ile geri alıyor** |
 
-Yani dürüst ifade tek bir "C'yi geçtik"ten dar: `fib` ve `strcat`
-kazançları sağlam ve C'nin en iyi bayraklarına karşı da duruyor;
-`sieve`/`intloop` berabere; **`arrayiter` yalnız eşit jenerik bayrakta
-Tulpar'ın, `-march=native` ile C'nin.**
+Yani dürüst ifade tek bir "C'yi geçtik"ten dar: `fib` sağlam bir kazanç ve
+C'nin en iyi bayraklarına karşı da duruyor; `sieve`/`intloop` berabere;
+**`arrayiter` yalnız eşit jenerik bayrakta Tulpar'ın, `-march=native` ile
+C'nin.**
+
+> ⚠️ **`strcat` kazancı sonradan GERİ ÇEKİLDİ.** Bir kontrol koşusunda C'ye
+> `snprintf` yerine Tulpar'ın kullandığı elle yazılmış tamsayı→dizgi
+> yordamının aynısı verildi: C **11,07 ± 0,10 ms**, Tulpar **13,85 ± 0,39** —
+> C 1,25× önde. Yukarıdaki 2,8×'lik fark tamamen biçimlendirici
+> asimetrisiydi, yani derleyici değil **stdlib** kıyası. Ayrıntı ve ham veri:
+> [`recursion/`](recursion/README.md).
+
+> ⚠️ **`fib` kazancı GENELLEŞMİYOR.** Özyineleme ailesinin tamamı
+> (`ackermann`, `tak`, `treesum` + karşılıklı özyineleme negatif kontrolü)
+> koşuldu: klon zinciri `fib`'de 6,33× kazandırırken ailenin geri kalanında
+> 1,04–1,57×'te kalıyor ve **`ackermann`'ı %21 geriletiyor**. `gcc` bu ailede
+> `ackermann` 4,2×, `treesum` 2,5×, `tak` 1,47× önde. "Özyinelemede C'den
+> hızlıyız" desteklenmiyor. Eşleşen `clang` tabanı ve CSV yine
+> [`recursion/`](recursion/README.md) altında.
 
 `-O2` → `-O3` farkı ölçüldü ve **ihmal edilebilir** (fib 2491→2290 µs,
 strcat 37951→38133, sieve 7861→7797); sıralamayı değiştiren şey `-O3`
@@ -119,9 +134,10 @@ Tek makinede beş tam sayı/dizgi çekirdeği "en hızlı dil" iddiasını
 taşıyamaz. Kapsam dışı: kayan nokta ve SIMD (matmul, n-body, mandelbrot),
 tahsis baskısı ve hash-map/JSON yükleri — **ARC ile GC farkı ancak orada
 görünür** — işaretçi takibi, sıralama, çok iş parçacıklı ölçekleme, RSS,
-ve sürekli yük altında p99. Savunulabilir okuma: Tulpar **tam sayı ve
-dizgi çekirdeklerinde C sınıfında**, Node/Python/Java/C#'ın açık ara
-önünde, ve `fib` ile `strcat`'te özellikle C'nin de önünde.
+ve sürekli yük altında p99. Savunulabilir okuma: Tulpar **tam sayı
+çekirdeklerinde C sınıfında** ve Node/Python/Java/C#'ın açık ara önünde.
+Düz döngü ve özyineleme codegen'i C-sınıfıdır, C-üstü değildir; C'yi
+geçtiği doğrulanmış tek çekirdek `fib`.
 
 İş yükleri: `intloop` N=50M · `fib` N=32 · `sieve` N=5M · `strcat` N=2M ·
 `arrayiter` N=5M.

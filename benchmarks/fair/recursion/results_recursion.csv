@@ -1,0 +1,35 @@
+kernel,n,variant,median_ms,mad_ms,best_ms,reps
+fib,32,gcc -O2,1.839,0.228,1.556,12
+fib,32,gcc -O3 -native -flto,1.801,0.233,1.552,12
+fib,32,clang -O2,4.124,0.346,3.776,12
+fib,32,clang -O3 -native -flto,3.967,0.192,3.771,12
+fib,32,Tulpar (zincirli),0.67,0.099,0.552,12
+fib,32,Tulpar (zincirSIZ),4.241,0.387,3.84,12
+ackermann,9,gcc -O2,3.31,0.196,3.097,12
+ackermann,9,gcc -O3 -native -flto,3.298,0.229,3.034,12
+ackermann,9,clang -O2,12.005,0.64,10.531,12
+ackermann,9,clang -O3 -native -flto,11.602,0.789,10.451,12
+ackermann,9,Tulpar (zincirli),14.004,0.278,13.491,12
+ackermann,9,Tulpar (zincirSIZ),11.108,0.276,10.581,12
+tak,18,gcc -O2,10.267,0.131,10.089,12
+tak,18,gcc -O3 -native -flto,4.898,0.051,4.802,12
+tak,18,clang -O2,10.463,0.2,10.071,12
+tak,18,clang -O3 -native -flto,10.44,0.19,10.117,12
+tak,18,Tulpar (zincirli),7.216,0.198,6.959,12
+tak,18,Tulpar (zincirSIZ),11.309,0.164,11.108,12
+treesum,24,gcc -O2,5.918,0.11,5.717,12
+treesum,24,gcc -O3 -native -flto,5.809,0.094,5.713,12
+treesum,24,clang -O2,19.845,0.235,19.542,12
+treesum,24,clang -O3 -native -flto,20.001,0.261,18.346,12
+treesum,24,Tulpar (zincirli),14.756,0.141,14.328,12
+treesum,24,Tulpar (zincirSIZ),20.151,0.238,18.3,12
+mutual,30000000,gcc -O2,0.181,0.023,0.154,12
+mutual,30000000,gcc -O3 -native -flto,0.164,0.01,0.153,12
+mutual,30000000,clang -O2,0.156,0.016,0.139,12
+mutual,30000000,clang -O3 -native -flto,0.148,0.009,0.135,12
+mutual,30000000,Tulpar (zincirli),0.225,0.01,0.208,12
+mutual,30000000,Tulpar (zincirSIZ),0.233,0.014,0.213,12
+strcat,2000000,C snprintf (gcc -O3 -native -flto),37.11,0.28,36.17,12
+strcat,2000000,C ELLE itoa (gcc -O3 -native -flto),11.07,0.1,10.95,12
+strcat,2000000,C elle itoa (clang -O3 -native -flto),11.64,0.13,11.48,12
+strcat,2000000,Tulpar,13.85,0.39,12.97,12
