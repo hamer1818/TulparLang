@@ -7,6 +7,21 @@ sorununun çözümü bu dosya.
 
 Durum: **açık** · **doğrulandı** · **çürütüldü** · **geri çekildi** · **düzeltildi**
 
+## #0 — Bir kimlik bir gerçek taşır; ikinci gerçek geldiğinde isim bölünür
+
+Yedi turun tek yasası. Aşağıdaki bulguların çoğu bunun ayrı ayrı örnekleri:
+
+| Olay | Paylaşılan kimlik | Sonuç |
+|---|---|---|
+| `TYPE_VOID` × 4 anlam | tek sentinel | denetimsiz atama, yanlış yayınlanmış bulgu |
+| `arena_restore` ≈ `arena_drop` | "benziyor" | zayıfı sessiz kullanıldı, sahte sızıntı raporu |
+| `push` × 2 katalog satırı | tek isim, iki kayıt | hangisi kazanır belirsiz |
+| "ARC", "statik tipli", "C kadar hızlı" | tek cümle, birden çok gerçek | üçü de daraltıldı |
+
+**Ön koşul (kural 7'nin tamamlayıcısı): sentinel üzerine değişmez kurulamaz;
+önce anlamlar ayrılır.** Değişmezi kurmadan önce sentinel'in kaç anlam
+taşıdığını say — P21 bunu üçten dörde çıkardı.
+
 ## Performans iddiaları
 
 | # | İddia | Durum | Kanıt |
@@ -37,6 +52,12 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | T4 | `arr_debox` okuma yolundan yazıyor | **açık (incelemeyle)** — sertleştirildi, ama tetikleyen test yok | Concurrency |
 | Y1 | Dil statik tipli | **daraltılmalı** — `var` çapraz-tip yeniden atamaya izin veriyor | `tests/typeinfer/` |
 | Y2 | `void` dönüşün atanması denetleniyor | **çürütüldü, DÜZELTİLDİ** — `e = push(e,3)` geçiyordu; artık hata | `tests/typeinfer/fail/11_void_assignment.tpr` |
+| Y3 | Eleman ataması tip denetleniyor | **çürütüldü, DÜZELTİLDİ (branch)** — `str[] s; s[0]=5;` geçiyor VE çalışıyordu | `fail/13_element_assign_type.tpr` |
+| Y4 | `var` çıkarıldığı tipte kalıyor | **çürütüldü, DÜZELTİLDİ (branch)** — `var b=[1,2]; b=5;` geçiyordu | `fail/12_var_cross_type.tpr` |
+| Y5 | `call("ad")` adın varlığını doğruluyor | **çürütüldü** — literal adda bile doğrulamıyor; hata çalışma zamanına kalıyor | P25 |
+| R1 | Çalışma zamanı hatası süreci başarısız kılıyor | **çürütüldü** — dizi sınır dışı / sıfıra bölme / `call` bulunamadı: tanı basılıyor, yerine `0` konuyor, **çıkış kodu 0** | P25 |
+| R2 | `build.sh test` çalışma zamanı hatasını yakalıyor | **çürütüldü** — enjeksiyonla ölçüldü: bir örneğe `kk[999]` eklendi, suite "All tests passed" dedi | P25 |
+| T5 | `thread_join` işçinin sonucunu taşıyor | **çürütüldü** — 0 dönüyor; typeinfer katalogunda hiç yok | P20 |
 
 ## Yöntem kuralları (turlardan çıkan)
 
