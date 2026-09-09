@@ -1407,24 +1407,41 @@ olan ne var?* Varsa çıkar — yoksa oran, ölçtüğünü sandığın şeyi de
 platformun ek yükünü ölçer. Aynı disiplin `benchmarks/fair`'de zaten var
 (boş program taban çizgisi ayrı raporlanıyor).
 
-## 7a. Bu runtime'da OKUMA her zaman okuma değildir
+## 7a. Kendi testin yanlışsa, güvenle yanlış sonuç yayınlarsın
 
-8 thread paylaşılan bir `int[]`'i **yalnız okurken** program çöktü:
-`get islemi icin gecersiz hedef veya indeks`. Dizi değişmiyordu.
+Sekiz thread paylaşılan bir `int[]`'i "yalnız okurken" program çöktü. Teşhis
+hazırdı ve inandırıcıydı: `ObjArray` genel yoldan ilk erişimde tembel olarak
+kutuluya çevriliyor, o çevrim başlığa *yazıyor*, iki okuyucu çakışıyor. Bulgu
+yazıldı, belgelendi, yayınlandı.
 
-Sebep: `ObjArray` ya kutulanmamış (`idata`) ya kutulu (`items_`) tutuluyor ve
-**genel yoldan ilk erişimde tembel olarak kutuluya çevriliyor**. O çevrim dizi
-başlığına *yazar*. İki thread aynı anda "okuyunca" ikisi de başlığı yazmaya
-çalışıyor.
+**Test yanlıştı.** Kurulum şöyleydi:
 
-**Kural:** tembel temsil değişimi (lazy boxing, memoization, kopyala-yazarken,
-önbellek doldurma) olan her yapıda "salt-okur paylaşım güvenlidir" varsayımı
-YANLIŞ. Paylaşımdan önce sor: *bu okuma yolu ilk çağrıda bir şey yazıyor mu?*
+```tulpar
+while (i < 100000) { shared = push(shared, i); i = i + 1; }
+```
 
-Kardeş bulgu: aynı turda global yazmalarının başka thread'e **görünmediği** de
-ölçüldü (optimize edici okumayı döngüden çıkarıp yazmaçta tutuyor — dilin bir
-bellek modeli olmadığı için bu doğru davranış). Yani spin-wait sessizce sonsuza
-kadar döner. Ayrıntı: [[Concurrency]].
+`push` diziyi **yerinde değiştirir**; dönüş değeri dizi değildir. Atama diziyi
+her turda eziyordu. Dizi **tek thread'de bile** boştu (`len=0`) ve çöküşün
+thread'lerle hiçbir ilgisi yoktu. Doğru yazımla (`push(shared, i);`) test üç
+koşuda da temiz geçiyor.
+
+Hatayı yakalayan şey, işçinin ne gördüğünü sormak için konan tek satırdı — ve o
+satır **ana thread'in de `len=0` gördüğünü** bastı. Eşzamanlılık hipotezi o anda
+öldü.
+
+**Kurallar:**
+- **Tek thread'li kontrol koş.** Eşzamanlılık hatası bildirmeden önce aynı
+  düzeneği tek thread'de koştur. Orada da patlıyorsa hata eşzamanlılıkta değil.
+- **Düzeneğin kendi ön koşullarını bastır.** `len(shared)`, checksum, kurulum
+  değerleri — "test doğru şeyi kurdu mu" sorusu, "test ne buldu"dan önce gelir.
+- **Hazır bir mekanizma açıklamasının varlığı, kanıt değildir.** `arr_debox`
+  gerçekten okuma yolundan yazıyor; hipotez doğruydu, gözlem yanlıştı. Doğru
+  mekanizma + yanlış gözlem = kendinden emin yanlış bulgu.
+- API'nin dönüş sözleşmesini varsayma: `push` yerinde değiştirir,
+  `shared = push(...)` sessizce yıkıcıdır.
+
+İlgili: [[Concurrency]] · aynı sınıfın eski üyeleri için
+[[Tuzaklar#injection-harness-empty-output]].
 
 ## 7b. HEP başarısız olan kod, BAZEN başarılı olandan daha az tehlikelidir
 

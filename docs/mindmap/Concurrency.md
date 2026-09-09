@@ -54,30 +54,37 @@ dışarı çıkarıp yazmaçta tutuyor. **Doğru davranış**, çünkü dilin bi
 modeli yok — `volatile`/atomik/ordering kavramı yok. Sonuç: bekleme döngüleri
 (spin-wait) sessizce sonsuza kadar döner.
 
-## Bulgu 3 — "Salt-okur paylaşım" runtime seviyesinde salt-okur DEĞİL
+## Bulgu 3 — GERİ ÇEKİLDİ (test hatalıydı)
 
-8 thread paylaşılan bir `int[]`'i yalnız **okuyor**. Sonuç:
+> ⚠️ **Bu bulgu 2026-09-09'da yayınlandı ve aynı gün geri çekildi.** Önce
+> "8 thread paylaşılan bir `int[]`'i yalnız okurken program çöküyor" denmişti.
+> Yanlıştı: test `shared = push(shared, i)` yazıyordu. **`push` diziyi yerinde
+> değiştirir**, dönüş değeri dizi değildir — atama diziyi eziyordu. Sonuç: dizi
+> tek thread'de bile boştu (`len=0`) ve çöküş thread'lerle ilgisizdi.
+>
+> Doğru yazımla (`push(shared, i);` deyim olarak) test **üç koşuda da temiz
+> geçiyor**: `fin=8`, hatalı toplam `0`. **Paylaşılan bir `int[]`'i eşzamanlı
+> okumak çalışıyor.**
 
-```
-Calisma Zamani Hatasi: get islemi icin gecersiz hedef veya indeks
-```
+Geriye kalan gerçek nokta, ölçümden değil **kaynak incelemesinden**: `arr_debox`
+bir *okuma* yolundan (`arr_items`) tetikleniyor ve dizi başlığına yazıyor
+(`malloc`, `free(idata)`, işaretçi güncellemesi), hiçbir senkronizasyon yok.
+İki thread aynı anda oraya girerse yarış vardır — ama bunu **tetikleyen bir test
+yok**. [[Tuzaklar#7b]] uyarınca tehlikeyi mekanizmadan çıkarıp sertleştirdik
+(çift denetimli kilit + eski tamponu serbest bırakmama), ama bunun *kanıtlanmış
+bir hatayı* değil, *incelemeyle görülen bir yarışı* kapattığını açıkça yazıyoruz.
 
-Sebep: `ObjArray` kutulanmamış (`idata`) ya da kutulu (`items_`) tutuluyor ve
-**genel yoldan ilk erişimde tembel olarak kutuluya çevriliyor** — kaynaktaki
-not: *"bir dizi, kutulanmamış hızlı yolun dışında ilk kez kullanıldığı anda bir
-kez çevriliyor"*. Bu çevrim dizi başlığına **yazar**. Yani iki thread aynı
-diziyi "okurken" ikisi de başlığı yazmaya çalışıyor → bozulma.
-
-**Genel ilke: bu runtime'da okuma her zaman okuma değildir.** Tembel temsil
-değişimi olan her yapı için "salt-okur paylaşım güvenlidir" varsayımı yanlış.
+**P15 (paylaşılan json okuması) de temiz** — aynı düzeltilmiş düzenekle hata yok.
 
 ## Bunun Wings / `listen_pool` başlığına etkisi
 
 `lib/wings.tpr` ve `lib/router.tpr` değişebilir global tutuyor —
 `_wings_requests_total`, `_wings_requests_2xx/4xx`, `_request` (json),
 `_router_routes` (array). `listen_pool` bunları **çok iş parçacıklı** koşuyor.
-Bulgu 1 ve 3 doğrudan uygulanır: sayaçlar eksik sayar, ve istek başına
-paylaşılan `json`/`array` durumu tembel çevrim yarışına açıktır.
+**Bulgu 1 doğrudan uygulanır**: sayaçlar korumasız oku-değiştir-yaz yapıyor,
+yani eksik sayarlar. Bulgu 3 geri çekildiği için "paylaşılan aggregate bozulur"
+iddiası **artık yapılmıyor**; kalan risk incelemeyle görülen `arr_debox` yarışı
+ve o da sertleştirildi.
 
 **Bu yüzden `~36k req/s` başlığı bu kapı kapanana dek yıldızlı yayınlanmalı.**
 Sayı yanlış demiyoruz — altındaki eşzamanlılık sözleşmesinin belgesiz ve
@@ -91,8 +98,10 @@ sınanmamış olduğunu söylüyoruz.
    bırakmak, kullanıcının sessiz veri kaybıyla tanışması demek.
 2. **Wings sayaçlarını thread-güvenli yap** (atomik yerleşik ya da thread başına
    toplama + okuma anında birleştirme).
-3. **Tembel kutulama çevrimini** paylaşılan dizilerde kapıla ya da dizi
-   oluşturulurken kesinleştir.
+3. ~~Tembel kutulama çevrimini kapıla~~ — **yapıldı** (çift denetimli kilit;
+   eski tampon bilerek serbest bırakılmıyor ki hızlı yoldaki bir okuyucu
+   use-after-free yaşamasın). Kanıtlanmış bir hatayı değil, incelemeyle görülen
+   bir yarışı kapatıyor.
 4. Atomik yerleşikler (`atomic_add`, `atomic_load`) ve bir `volatile`/bariyer
    kavramı — bellek modelinin en küçük hali.
 5. TSan'lı bir CI işi: runtime'ı `-fsanitize=thread` ile derleyip yukarıdaki üç
@@ -101,7 +110,8 @@ sınanmamış olduğunu söylüyoruz.
 ## Ölçüm dosyaları
 
 `/tmp` altında üretildi (kalıcı değil): `mutate.tpr` (bulgu 1),
-`min2.tpr`/`min3.tpr` (bulgu 2), `readonly.tpr` (bulgu 3). Kalıcı gerileme
+`min2.tpr`/`min3.tpr` (bulgu 2), `readonly_fix.tpr` (bulgu 3'ün düzeltilmiş,
+temiz geçen hâli). Kalıcı gerileme
 testi hâline getirilmeleri 5. maddeye bağlı — bugünkü davranış "hatalı" olduğu
 için testler ancak sözleşme yazıldıktan sonra anlamlı olur.
 

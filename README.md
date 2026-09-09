@@ -414,7 +414,7 @@ closed form and "won" without executing them. The suite in
 > **\*** These figures come from `listen_pool`, a multi-threaded listener,
 > and Wings keeps mutable globals (request counters, the router table).
 > Tulpar has **no memory model**: shared mutable state across threads is
-> neither atomic nor reliably visible — measured, with three reproducers, in
+> neither atomic nor reliably visible — measured, with reproducers, in
 > [docs/mindmap/Concurrency.md](docs/mindmap/Concurrency.md). The throughput
 > number itself is real; the concurrency contract underneath it is
 > undocumented and untested, so treat the counters as approximate until that

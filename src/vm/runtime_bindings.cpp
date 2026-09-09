@@ -874,8 +874,32 @@ static_assert((int)OBJ_ARRAY == 1, "OBJ_ARRAY = 1 olmali (codegen varsayimi)");
 // burayi cagiriyor: yani bir dizi, kutulanmamis hizli yolun disinda ilk kez
 // kullanildigi anda bir kez cevriliyor ve oyle kaliyor. Yavaslamiyor, cunku
 // cevrim eleman basina tek bir yazma ve yalniz BIR KEZ oluyor.
+// ESZAMANLILIK: bu cevrim bir OKUMA yolundan tetikleniyor (`arr_items`), yani
+// ayni diziyi "yalnizca okuyan" iki thread ayni anda BURAYA girebilir. Once
+// oyle oluyordu ve program cokuyordu: 8 thread paylasilan bir int[]'i okurken
+// "gecersiz hedef veya indeks". Iki hata birdeydi — (1) iki thread ayni anda
+// cevirip birbirinin isaretcilerini eziyordu, (2) `free(a->idata)` sirasinda
+// baska bir thread hala `idata[i]` okuyordu (use-after-free).
+//
+// Duzeltme iki parcali:
+//   (1) Cift denetimli kilit: yalniz BIR thread cevirir, otekiler kilidi alip
+//       isin bittigini gorup doner. Hizli yol (arr_items'taki `a->idata`
+//       kontrolu) kilitsiz kalir — cevrim dizi omrunde en fazla bir kez olur.
+//   (2) `idata` SERBEST BIRAKILMIYOR. Cevrim aninda baska bir thread'in elinde
+//       o isaretci olabilir; okudugu veri bayat degil (icerik ayni, yalniz
+//       temsil degisti), yani okumasi DOGRU sonuc verir. Serbest biraksaydik
+//       ayni okuma use-after-free olurdu. Bedeli: dizi omru boyunca eski
+//       tampon duruyor. Bilerek: dogruluk > o bellek. (Zaten P14'e gore bu
+//       runtime deger bellegini genel olarak geri kazanmiyor —
+//       docs/mindmap/Memory.md.)
+//
+// Tek is parcacikli programlarda davranis aynidir; yalniz `free` gitti.
+static std::mutex g_debox_mutex;
+
 void arr_debox(ObjArray *a) {
   if (!a || !a->idata) return;
+  std::lock_guard<std::mutex> lk(g_debox_mutex);
+  if (!a->idata) return;   // baska bir thread cevirdi
   int n = a->count;
   int cap = a->capacity > n ? a->capacity : (n > 0 ? n : 1);
   VMValue *boxed = (VMValue *)malloc(sizeof(VMValue) * cap);
@@ -886,10 +910,12 @@ void arr_debox(ObjArray *a) {
   } else {
     for (int i = 0; i < n; i++) boxed[i] = VM_INT(a->idata[i]);
   }
-  free(a->idata);
-  a->idata = nullptr;
+  // items_ ONCE yayinlanir, idata SONRA temizlenir: hizli yolun `idata`yi hala
+  // gordugu bir an varsa eski (gecerli, ayni icerikli) tampondan okur; tersi
+  // sirada items_ henuz yokken idata null gorunup null dereference olurdu.
   a->items_ = boxed;
   a->capacity = cap;   // kapasite KORUNUR: buyume kodu old_capacity'yi onceden okumus olabilir
+  a->idata = nullptr;  // NOT: eski tampon BILEREK serbest birakilmiyor — yukaridaki nota bak
 }
 
 // 32-bit depolamayi 64'e GENISLETIR. Kutulanmamis dizi i32 baslar; i32'ye
