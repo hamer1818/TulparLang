@@ -6763,6 +6763,61 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         snprintf(prefixed, sizeof(prefixed), "t_%s", raw);
         LLVMValueRef func = LLVMGetNamedFunction(backend->module, prefixed);
         if (!func) {
+          // TEK ABI: normallestirici sarmalayici uret.
+          //
+          // `aot_thread_entry` isciyi `void(VMValue *sonuc, VMValue *arg)`
+          // olarak cagiriyor. Tipsiz fonksiyonlar bu imzayi `t_<ad>` shim'iyle
+          // zaten tasiyor; TAM TIPLI olanlar icin yalnizca `@f(i64) -> i64`
+          // uretiliyor ve kod eskiden HAM sembole dusuyordu — yani i64 alan
+          // bir fonksiyon void(ptr,ptr) diye cagriliyordu. Olculdu (T9,
+          // 2026-09-10): `thread_create(isci, 42)` -> isci 42 yerine
+          // 140166943450080 (bir isaretci) gordu. Ozelligin omru boyunca
+          // sessiz tanimsiz davranis.
+          //
+          // Cozum, cagri yolu sayisini BIRE indirmek: burada `tw_<ad>` diye
+          // bir sarmalayici uretiliyor, imzasi shim'inkiyle ayni. Icinde
+          // arguman VMValue'dan i64'e cozuluyor, native fonksiyon cagriliyor,
+          // donus tekrar VMValue'ya kutulaniyor. Entry'ye ULASAN TEK ABI var.
+          //
+          // Derin kopya sozlesmesi etkilenmiyor: kopya `aot_thread_create`ta,
+          // yani BU sarmalayicidan ONCE yapiliyor — tek marshaling noktasi
+          // korunuyor (iki yol = #0 riski).
+          LLVMValueRef bare = LLVMGetNamedFunction(backend->module, raw);
+          if (bare && node->arguments[0]->type == AST_IDENTIFIER) {
+            char wname[300];
+            snprintf(wname, sizeof(wname), "tw_%s", raw);
+            LLVMValueRef w = LLVMGetNamedFunction(backend->module, wname);
+            if (!w) {
+              LLVMTypeRef bft = LLVMGlobalGetValueType(bare);
+              // Yalniz TEK i64 parametreli native isci sarilabiliyor; baska
+              // bir sekil gelirse asagidaki derleme hatasina dusuyoruz.
+              if (LLVMCountParamTypes(bft) == 1) {
+                LLVMTypeRef wpt[] = {backend->ptr_type, backend->ptr_type};
+                LLVMTypeRef wft =
+                    LLVMFunctionType(backend->void_type, wpt, 2, 0);
+                w = LLVMAddFunction(backend->module, wname, wft);
+                LLVMBasicBlockRef prev = LLVMGetInsertBlock(backend->builder);
+                LLVMBasicBlockRef wbb =
+                    LLVMAppendBasicBlockInContext(backend->context, w, "entry");
+                LLVMPositionBuilderAtEnd(backend->builder, wbb);
+                LLVMValueRef res_p = LLVMGetParam(w, 0);
+                LLVMValueRef arg_p = LLVMGetParam(w, 1);
+                LLVMValueRef av = LLVMBuildLoad2(
+                    backend->builder, backend->vm_value_type, arg_p, "tw_arg");
+                LLVMValueRef ai = llvm_vm_val_to_int_payload(backend, av);
+                LLVMValueRef cargs[] = {ai};
+                LLVMValueRef rv = LLVMBuildCall2(backend->builder, bft, bare,
+                                                 cargs, 1, "tw_call");
+                LLVMBuildStore(backend->builder,
+                               llvm_vm_val_int_val(backend, rv), res_p);
+                LLVMBuildRetVoid(backend->builder);
+                if (prev) LLVMPositionBuilderAtEnd(backend->builder, prev);
+              }
+            }
+            if (w) func = w;
+          }
+        }
+        if (!func) {
           // ⚠ HAM SEMBOLE DUSMEK ABI UYUMSUZLUGUDUR — sessizce COP veri gecer.
           //
           // `aot_thread_entry` isciyi `void(VMValue *sonuc, VMValue *arg)`
@@ -6776,8 +6831,7 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           //
           // Dogru duzeltme her aday icin shim uretmek; o ayri bir is. Bu arada
           // SESSIZ COP yerine DERLEME ZAMANI HATASI veriyoruz.
-          LLVMValueRef bare = LLVMGetNamedFunction(backend->module, raw);
-          if (bare) {
+          if (LLVMGetNamedFunction(backend->module, raw)) {
             fprintf(stderr, tulpar::i18n::tr_en(
                 "Hata: thread_create() TAM TIPLI bir fonksiyonla kullanilamaz "
                 "('%s'). Donus/parametre tipini kaldirin: `func %s(x) { ... }`\n",

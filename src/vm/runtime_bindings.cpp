@@ -5364,15 +5364,22 @@ VMValue aot_cpu_count(void) {
 // `thread_join` onu donduruyor — argumanla AYNI marshaling yolundan
 // (aot_persist), yani cikan da kopyadir.
 //
-// KAYIT OMRU: `thread_create` kaydi ayirir ve ADRESINI id olarak dondurur;
-// `thread_join` okuyup serbest birakir, `thread_detach` da serbest birakir.
-// Ikisi de cagrilmazsa kayit sizar — thread handle'i eskiden de ayni sekilde
-// sizabiliyordu, davranis degismedi.
+// HANDLE SOZLESMESI: **join handle'i TUKETIR; ikinci join hatadir; detach
+// edilmis handle join edilemez.**
+//
+// Kayit hicbir yolda SERBEST BIRAKILMIYOR ve bu bilerek. Ilk yazimda `join`
+// kaydi free ediyordu; olculdu (2026-09-10): ikinci join
+// `free(): double free detected in tcache 2` ile CEKIRDEK DOKUMU verdi —
+// yani kaydi serbest birakmak, hatali kullanimi bellek guvenligi hatasina
+// ceviriyordu. Simdi `consumed` bayragi tutuluyor: ikinci join guvenli bir
+// calisma zamani hatasi veriyor. Bedeli kayit basina birkac yuz bayt (P43/P49
+// ile birlikte olculmus, belgelenmis maliyet); alternatifi use-after-free.
 typedef struct {
   void *func_ptr;          // Cagrilacak fonksiyon
   VMValue arg;             // KOPYALANMIS arguman
   VMValue result;          // Iscinin donusu (kopya)
   tulpar_thread_t thread;  // Isletim sistemi handle'i
+  int consumed;            // join/detach edildi mi (asagidaki sozlesme)
 } AOTThreadRec;
 
 // Thread entry point wrapper.
@@ -5437,6 +5444,7 @@ VMValue aot_thread_create(void *func_ptr, VMValue arg) {
   // DERIN KOPYA: isci kendi kopyasiyla calisir (bkz. AOTThreadRec notu).
   rec->arg = aot_persist(arg);
   rec->result = VM_VOID();
+  rec->consumed = 0;
 
 #if PLATFORM_WINDOWS
   int result = tulpar_thread_create(&thread, (tulpar_thread_func_t)aot_thread_entry, rec);
@@ -5463,22 +5471,38 @@ VMValue aot_thread_join(VMValue threadVal) {
   if (!IS_INT(threadVal)) return VM_INT(0);
   AOTThreadRec *rec = (AOTThreadRec *)(uintptr_t)AS_INT(threadVal);
   if (!rec) return VM_INT(0);
+  if (rec->consumed) {
+    aot_runtime_error(tulpar::i18n::tr_en(
+        "Calisma Zamani Hatasi: thread_join: bu handle zaten tuketildi "
+        "(join handle'i tuketir; ikinci join hatadir)",
+        "Runtime Error: thread_join: handle already consumed "
+        "(join consumes the handle; a second join is an error)"));
+    return VM_INT(0);
+  }
+  rec->consumed = 1;
   tulpar_thread_join(rec->thread);
   // SOZLESMENIN IKINCI YARISI: kopyayla girer, JOIN'LE CIKAR.
-  VMValue out = rec->result;
-  free(rec);
-  return out;
+  return rec->result;
 }
 
 VMValue aot_thread_detach(VMValue threadVal) {
   if (!IS_INT(threadVal)) return VM_INT(0);
   AOTThreadRec *rec = (AOTThreadRec *)(uintptr_t)AS_INT(threadVal);
   if (!rec) return VM_INT(0);
+  if (rec->consumed) {
+    aot_runtime_error(tulpar::i18n::tr_en(
+        "Calisma Zamani Hatasi: thread_detach: bu handle zaten tuketildi",
+        "Runtime Error: thread_detach: handle already consumed"));
+    return VM_INT(0);
+  }
+  // Detach da handle'i TUKETIR: sonrasinda join etmek pthread duzeyinde
+  // tanimsiz davranistir, o yuzden bayrak burada da kalkiyor ve sonraki join
+  // guvenli bir hata veriyor. (Olculdu: bayrak yokken "detach sonrasi join"
+  // KAZARA calisiyordu — tanimli degil, sansliydi.)
+  rec->consumed = 1;
   tulpar_thread_detach(rec->thread);
-  // ⚠ Detach edilen thread hala `rec`e yaziyor olabilir (sonuc slotu), o
-  // yuzden kaydi BURADA serbest birakmiyoruz: detach "sonucu istemiyorum"
-  // demek, "kaydi simdi yok et" demek degil. Bilerek sizdiriyoruz — kayit
-  // birkac yuz bayt ve alternatifi use-after-free.
+  // Kayit serbest birakilmiyor: detach edilen thread hala sonuc slotuna
+  // yaziyor olabilir. Bkz. AOTThreadRec'teki handle sozlesmesi notu.
   return VM_INT(0);
 }
 

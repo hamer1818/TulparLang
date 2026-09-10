@@ -74,9 +74,46 @@ func run_muteks_kopya_sonrasi() {
     assert_eq_int(_sayac, 160000);      // 8 * 20000, kayip YOK
 }
 
+// T9: TAM TIPLI isci fonksiyonu. Eskiden `t_<ad>` shim'i olmadigi icin kod ham
+// sembole dusuyor ve isci ISARETCIYI TAMSAYI diye aliyordu (olculdu: 42 yerine
+// 140166943450080). Artik cagri aninda normallestirici bir sarmalayici
+// uretiliyor: entry'ye ULASAN TEK ABI var.
+int _tipli_gordu = 0;
+func _tipli(int id): int { _tipli_gordu = id; return id * 100 + 7; }
+func run_tipli_isci() {
+    _tipli_gordu = 0;
+    int t = thread_create(_tipli, 5);
+    var r = thread_join(t);
+    assert_eq_int(_tipli_gordu, 5);     // arguman DOGRU geldi
+    assert_eq_int(r, 507);              // donus de dogru
+}
+
+// HANDLE SOZLESMESI: join handle'i TUKETIR; ikinci join hatadir; detach
+// edilmis handle join edilemez. Ilk yazimda `join` kaydi free ediyordu ve
+// ikinci join CEKIRDEK DOKUMU veriyordu (double free).
+func _bir(n) { return n + 1; }
+func run_cift_join_hatadir() {
+    int t = thread_create(_bir, 5);
+    var a = thread_join(t);
+    assert_eq_int(a, 6);
+    bool firladi = false;
+    try { thread_join(t); } catch (e) { firladi = true; }
+    assert(firladi, "ikinci join hata vermeli (cokme DEGIL)");
+}
+func run_detach_sonrasi_join_hatadir() {
+    int t = thread_create(_bir, 5);
+    thread_detach(t);
+    bool firladi = false;
+    try { thread_join(t); } catch (e) { firladi = true; }
+    assert(firladi, "detach edilmis handle join edilememeli");
+}
+
 print("=== thread kopya sozlesmesi ===");
 test("join iscinin donusunu tasir",     "run_join_sonuc_tasir");
 test("arguman derin kopyalanir",        "run_arguman_derin_kopyalanir");
 test("ic ice dizi de kopyalanir",       "run_ic_ice_dizi_kopyalanir");
 test("muteks kopya sonrasi bozulmadi",  "run_muteks_kopya_sonrasi");
+test("tam tipli isci dogru marshal",    "run_tipli_isci");
+test("ikinci join hatadir",            "run_cift_join_hatadir");
+test("detach sonrasi join hatadir",    "run_detach_sonrasi_join_hatadir");
 test_summary();
