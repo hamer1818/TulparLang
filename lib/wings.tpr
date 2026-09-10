@@ -1501,7 +1501,42 @@ func _wings_status_or(json result, int fallback) {
 // on cache hits assumes 2xx — only success responses get cached
 // (404 / 5xx bodies aren't worth pinning and would mask transient
 // upstream failures).
+// ISTEK-BASINA HATA SINIRI (P39, 2026-09-10).
+//
+// NEDEN VAR: strict calisma zamaninda (TULPAR_STRICT_RUNTIME=1) bir hata artik
+// ISTISNA (bkz. FINDINGS R3/P26b). Handler icinde sinir disi bir okuma
+// yakalanmazsa `aot_throw` yigini cozup surece exit(1) verir — yani TEK BOZUK
+// ISTEK SUNUCUYU INDIRIR. Olculdu (P39): `/oku?i=999` sonrasi surec oldu ve
+// sonraki istekler baglanti hatasi aldi.
+//
+// Yumusak cagda bu gorunmuyordu cunku hata sessizce 0 ikame edip devam
+// ediyordu — yani sunucu dayanikliligi SESSIZ IKAMEYLE satin alinmisti. Burasi
+// onu gorunur karsiligiyla yeniden satin aliyor: 500 + sayac + canli surec.
+// Her framework'un dispatch sarmali bunu yapar (Go net/http recover, vb).
+//
+// TEK NOKTA YETIYOR: wings'in kendi notuna gore burasi "the single dispatch
+// entry point" — listen, listen_pool, listen_async ve listen_evented'in
+// dordu de buradan geciyor (dogrulandi). Sarmalin .tpr katmaninda olmasi
+// SART: longjmp ayni yigin uzerinde calisiyor, C katmaninda cozulemez.
+//
+// Yumusak varsayilanda hicbir sey degismez: hata firlatilmadigi icin `catch`
+// hic tetiklenmez.
 func _wings_dispatch_cached(int route_idx, int keep) {
+    try {
+        return _wings_dispatch_inner(route_idx, keep);
+    } catch (e) {
+        // `_wings_last_status` SOZLESME GEREGI her donuste yazilmali (bkz.
+        // tanimindaki not): serve dongusu logu handler kostuktan SONRA basiyor
+        // ve durumu buradan okuyor. Catch yolu onu atlarsa istek 500 donerken
+        // 200 loglanir.
+        _wings_last_status = 500;
+        _wings_requests_total = _wings_requests_total + 1;
+        _wings_requests_5xx = _wings_requests_5xx + 1;
+        return server_error("handler error: " + toString(e));
+    }
+}
+
+func _wings_dispatch_inner(int route_idx, int keep) {
     // Global middleware chain — runs before cache check + handler, for every
     // serve mode (this is the single dispatch entry point). A middleware that
     // returns a response dict (`_status` set) short-circuits; `{}` continues.

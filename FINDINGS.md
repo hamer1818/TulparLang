@@ -135,6 +135,39 @@ Bu savunulabilir bir tasarım (Python/JS'ten farklı) ama hiçbir yerde yazılı
 değil — L1'in doğum hikâyesinin birebir aynısı: *belgelenmemiş operatör
 semantiği*. Boşluk sınamak isteyen `len(x) > 0` yazmalı.
 
+## 🟡 P39 — strict flip'in ÜÇÜNCÜ kapısı: sunucu dayanıklılığı
+
+Yumuşak çağ, sunucu dayanıklılığını **sessiz ikameyle satın almıştı**:
+handler'da sınır dışı → 0 ikamesi → handler devam → sunucu yaşıyor. Strict'te
+aynı patika throw üretiyor ve wings dispatch'inde sınır yoksa süreç ölüyor.
+
+**Ölçüldü (flip öncesi):** `/oku?i=999` → süreç **öldü** (exit 1), sonraki
+istekler bağlantı hatası. **Tek bozuk istek sunucuyu indiriyordu.**
+
+**Yapıldı:** `_wings_dispatch_cached` istek-başına try/catch sınırı oldu
+(gövde `_wings_dispatch_inner`'a taşındı). Tek nokta yetti — wings'in kendi
+notuna göre orası *"the single dispatch entry point"*; `listen`, `listen_pool`,
+`listen_async`, `listen_evented` dördü de oradan geçiyor (doğrulandı). Sarmalın
+`.tpr` katmanında olması şart: longjmp aynı yığın üzerinde çalışıyor.
+
+**Durum: 3'te 2.**
+
+| | önce | sonra |
+|---|---|---|
+| süreç bozuk istekten sonra | **öldü** | **CANLI** ✅ |
+| durum kaydı / log | 200 (yanlış) | **500** ✅ |
+| istemcinin aldığı yanıt | — | hâlâ boş (`000`, 2 bayt) ❌ |
+
+**Kalan:** yakalanan istisnadan sonra serve döngüsü yanıtı sokete yazmıyor.
+Dil düzeyinde sorun YOK — `catch` içinden `return` doğru çalışıyor (izole test:
+`_status=500`, alanlar doğru). Sorun wings'in zarf/yazma yolunda, muhtemelen
+longjmp'ın atladığı bir ara durum. **Flip bu kapanmadan yapılamaz.**
+
+**Yan bulgu:** `_wings_last_status` sözleşme gereği "her dönüşte" yazılmalıymış
+(tanımındaki not); catch yolu onu atlayınca istek 500 dönerken 200 loglanıyordu.
+Eklendi. Aynı sınıf: **bir fonksiyonun belgelenmiş yan etkisi, yeni bir çıkış
+yolu eklendiğinde sessizce atlanır.**
+
 ## Yöntem kuralları (turlardan çıkan)
 
 1. **Tek thread'li kontrol** — eşzamanlılık hatası bildirmeden önce aynı
