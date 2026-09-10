@@ -120,13 +120,22 @@ yalnız `&&`/`||`'de idi.
 | S2 | `mutex_*` ile paylaşım | **ölçüldü, belgesiz** ([[Concurrency]]) |
 | S3 | `arena_drop` gerekliliği (`arena_restore` serbest bırakmaz) | **ölçüldü, belgesiz** ([[Memory]]) |
 | S4 | SSE/WS akışında handler ortası throw | **tanımsız** (P39) |
+| S5 | `at` / `json_get` sınır politikası | **belgelendi** — negatif indeks "sondan" değil, sınır dışı |
 
 **S1'in ampirik yarısı (P38a):** korpusta `if(<ad>)` deseninde **165 site**,
 bunların **39'u** bool bildirimi olmayan değerler — yani truthiness'e yaslanıyor.
 ⚠ **Erişimci tasarımına doğrudan girdi:** o 39'un bir kısmı (`if (_schema)`,
 `if (q)`, `if (hdrs)` — lib/wings) eksik `json[k]`'nin sessizce `0` (falsy)
-dönmesine yaslanıyor. **`json[k]` strict'te fırlatır yapılırsa bu sitelerin
-sözleşmesi kırılır** — göç, erişimci setinin parçası olmalı.
+dönmesine yaslanıyor.
+
+**P41 audit'i (2026-09-10) yükü ölçtü — 38'e 1:**
+
+| grup | tanım | sayı | göç |
+|---|---|---:|---|
+| A | tek atamalı yerel; throw **atama satırında** patlar, `if (v)` tanımlı kalır | **38** | gerekmiyor |
+| B | global ya da yeniden atanan | **1** | gerçek iş (`lib/scene3d.tpr:11783`) |
+
+Yani `json[k]` strict'te fırlatır yapılırsa pratik göç yükü **tek site**.
 
 **S1 — truthiness (P38, 2026-09-10):**
 

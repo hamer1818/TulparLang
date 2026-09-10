@@ -987,6 +987,12 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       // TASIMIYOR (P20, olculdu: `return id*100+7` yapan isciden 0 donuyor).
       // Boylece `var r = thread_join(t)` artik derleme zamaninda hata veriyor
       // ve bosluk sessiz kalmiyor. Donus degeri eklenince bu satir guncellenir.
+      // ERISIMCILER (2026-09-10). Donus tipi UNKNOWN cunku eleman/alan tipi
+      // kapta saklI; varsayilan da herhangi bir tip olabilir. UC ARGUMANLI —
+      // iki argumanli asiri yukleme BILEREK yok: bir builtin, bir is (ayni
+      // isim + farkli hakikat = katalog ciftlesmesi, bkz. `push` dersi).
+      {"at", TYPE_UNKNOWN, {TYPE_UNKNOWN, TYPE_INT, TYPE_UNKNOWN}},
+      {"json_get", TYPE_UNKNOWN, {TYPE_JSON, TYPE_STRING, TYPE_UNKNOWN}},
       {"thread_join", TYPE_VOID, {TYPE_INT}},
       {"thread_detach", TYPE_VOID, {TYPE_INT}},
       // Muteksler CALISIYOR (olculdu): 8 thread x 50 000 artirma, muteksli

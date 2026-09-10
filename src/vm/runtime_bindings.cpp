@@ -7770,6 +7770,63 @@ VMValue aot_string_substring(VMValue str, VMValue startVal, VMValue endVal) {
   return VM_OBJ((Obj *)aot_allocate_string(s->chars + start, len));
 }
 
+
+// ---------------------------------------------------------------------------
+// ERISIMCILER — `at` ve `json_get` (2026-09-10)
+//
+// NEDEN VAR: bu runtime bugun eksik anahtar / sinir disi indeks icin sessizce
+// `0` ikame ediyor. Bu davranis MESRU kullanimlara sahip ("opsiyonel alan",
+// "nobetci"), ama sorunlu olan sey ORTAMDA yasamasi: dogru erisim ile hatali
+// erisim ayni sekilde davraniyor ve ikisi de sessiz.
+//
+// Politika tek cumle: YUMUSAKLIK ORTAMDA YASAMAZ, ERISIMCIDEDIR. Yokluk,
+// CAGIRANIN KARARI olur — `at(a, i, 0)` yazan kisi varsayilani secmistir;
+// `a[i]` yazan kisi elemanin var oldugunu iddia etmistir.
+//
+// SINIR POLITIKASI — BUGUNKU DAVRANIS BELGELENIYOR, DEGISTIRILMIYOR:
+// negatif indeks "sondan sayma" DEGILDIR, basitce sinir disidir (olculdu:
+// `a[-1]` tani basip 0 donuyor). `at` de ayni cizgiyi kullanir: [0, count)
+// disindaki her indeks -> varsayilan. Goc sirasinda ikinci bir semantik karar
+// kamufle etmemek icin bilerek boyle.
+//
+// Ikisi de TANI BASMAZ: cagiran zaten yoklugu bekliyor.
+VMValue aot_at(VMValue arr_val, VMValue idx_val, VMValue def_val) {
+  // ⚠ `IS_OBJECT` "heap nesnesi mi" DEGIL, "dict mi" demek (OBJ_OBJECT);
+  // "heap nesnesi mi" sorusunun makrosu `IS_OBJ`. Ilk yazimda IS_OBJECT
+  // kullanildi ve `at` dizilerde HER ZAMAN varsayilani dondurdu — ad ile
+  // anlam ayrisiyor (#0'in makro katmanindaki hali). Dogrusu `IS_ARRAY`.
+  if (!IS_ARRAY(arr_val) || !IS_INT(idx_val))
+    return def_val;
+  ObjArray *a = (ObjArray *)AS_OBJ(arr_val);
+  long long i = AS_INT(idx_val);
+  if (i < 0 || i >= (long long)a->count)
+    return def_val;
+  return arr_items(a)[i];
+}
+
+VMValue aot_json_get(VMValue obj_val, VMValue key_val, VMValue def_val) {
+  if (!IS_OBJECT(obj_val) || !IS_STRING(key_val))
+    return def_val;   // IS_OBJECT = "dict mi" (yukaridaki nota bak)
+  ObjObject *o = (ObjObject *)AS_OBJ(obj_val);
+  const char *k = AS_STRING(key_val)->chars;
+  // `vm_object_get` eksik anahtarda VM_INT(0) donuyor ve bu GERCEK bir 0'dan
+  // ayirt edilemiyor — bu yuzden varligi burada acikca sinamak zorundayiz.
+  for (int i = 0; i < o->count; i++)
+    if (strcmp(o->keys[i]->chars, k) == 0)
+      return o->values[i];
+  return def_val;
+}
+
+extern "C" VMValue aot_at_ptr(VMValue *a, VMValue *i, VMValue *d) {
+  if (!a || !i || !d) return VM_INT(0);
+  return aot_at(*a, *i, *d);
+}
+
+extern "C" VMValue aot_json_get_ptr(VMValue *o, VMValue *k, VMValue *d) {
+  if (!o || !k || !d) return VM_INT(0);
+  return aot_json_get(*o, *k, *d);
+}
+
 VMValue aot_string_substring_ptr(VMValue *s_ptr, VMValue *start_ptr,
                                  VMValue *end_ptr) {
   if (!s_ptr || !start_ptr || !end_ptr)

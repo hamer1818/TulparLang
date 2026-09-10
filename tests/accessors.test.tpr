@@ -1,0 +1,76 @@
+// `at` ve `json_get` — YUMUSAKLIK ORTAMDA YASAMAZ, ERISIMCIDEDIR.
+//
+// Bu runtime eksik anahtar / sinir disi indeks icin sessizce 0 ikame ediyor
+// ve dogru erisim ile hatali erisim ayni sekilde davraniyordu. Erisimciler
+// yoklugu CAGIRANIN KARARI yapiyor: `at(a, i, 0)` yazan varsayilani secmistir,
+// `a[i]` yazan elemanin var oldugunu iddia etmistir.
+import "test";
+
+func run_at_gecerli() {
+    int[] a = [10, 20, 30];
+    assert_eq_int(at(a, 0, -1), 10);
+    assert_eq_int(at(a, 2, -1), 30);
+}
+
+// SINIR POLITIKASI: negatif indeks "sondan sayma" DEGIL, sinir disi.
+// Bugunku `a[-1]` davranisiyla ayni cizgi — goce ikinci bir semantik karar
+// gizlenmedi.
+func run_at_sinir_disi() {
+    int[] a = [10, 20, 30];
+    assert_eq_int(at(a, 3, -1), -1);
+    assert_eq_int(at(a, 99, -1), -1);
+    assert_eq_int(at(a, -1, -1), -1);
+}
+
+func run_at_bos_dizi() {
+    int[] bos = [];
+    assert_eq_int(at(bos, 0, 42), 42);
+}
+
+// Her dizi temsili: kutulu `array`, tipli `int[]`, ve json dizisi.
+func run_at_tum_temsiller() {
+    array b = [1, 2, 3];
+    int[] t = [1, 2, 3];
+    json j = [1, 2, 3];
+    assert_eq_int(at(b, 1, -1), 2);
+    assert_eq_int(at(t, 1, -1), 2);
+    assert_eq_int(at(j, 1, -1), 2);
+}
+
+func run_json_get_var() {
+    json j = {"k": 5};
+    assert_eq_int(json_get(j, "k", -1), 5);
+}
+
+func run_json_get_yok() {
+    json j = {"k": 5};
+    assert_eq_int(json_get(j, "yok", -1), -1);
+}
+
+// EN KRITIK TEST: gercek bir 0, "anahtar yok"tan AYIRT EDILEBILMELI.
+// `vm_object_get` ikisine de VM_INT(0) donduruyor; erisimci kendi varlik
+// denetimini yaptigi icin ayrim korunuyor.
+func run_json_get_gercek_sifir() {
+    json j = {"sifir": 0};
+    assert_eq_int(json_get(j, "sifir", -1), 0);
+    assert_eq_int(json_get(j, "baska", -1), -1);
+}
+
+// Yanlis tipli kap/anahtar: varsayilan doner, tani BASMAZ.
+func run_erisimci_yanlis_tip() {
+    int sayi = 7;
+    assert_eq_int(at(sayi, 0, -1), -1);
+    json j = {"k": 1};
+    assert_eq_int(at(j, 0, -1), -1);
+}
+
+print("=== erisimci testleri ===");
+test("at: gecerli indeks",              "run_at_gecerli");
+test("at: sinir disi ve negatif",       "run_at_sinir_disi");
+test("at: bos dizi",                    "run_at_bos_dizi");
+test("at: tum dizi temsilleri",         "run_at_tum_temsiller");
+test("json_get: anahtar var",           "run_json_get_var");
+test("json_get: anahtar yok",           "run_json_get_yok");
+test("json_get: gercek 0 ile yok ayri", "run_json_get_gercek_sifir");
+test("erisimci: yanlis tip varsayilan", "run_erisimci_yanlis_tip");
+test_summary();

@@ -2235,6 +2235,14 @@ void declare_runtime_functions(LLVMBackend *backend) {
   backend->func_aot_string_substring =
       LLVMAddFunction(backend->module, "aot_string_substring_ptr", str3_type);
 
+  // ERISIMCILER: at(dizi, i, varsayilan) / json_get(o, anahtar, varsayilan).
+  // Ayni uc-VMValue ABI'si (str3_type) — bkz. runtime_bindings.cpp'deki not:
+  // "yumusaklik ortamda yasamaz, erisimcidedir".
+  backend->func_aot_at =
+      LLVMAddFunction(backend->module, "aot_at_ptr", str3_type);
+  backend->func_aot_json_get =
+      LLVMAddFunction(backend->module, "aot_json_get_ptr", str3_type);
+
   // ====== Time Functions ======
   LLVMTypeRef time0_type = llvm_make_vmvalue_func_type(backend, nullptr, 0, 0);
   backend->func_aot_timestamp =
@@ -7186,6 +7194,32 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
           backend->builder, v2_ptr, backend->ptr_type, "substring_arg2_void");
       LLVMValueRef args[] = {v0_void, v1_void, v2_void};
       return llvm_call_vmvalue_func(backend, backend->func_aot_string_substring, args, 3, "substring_res");
+    }
+
+    // at(dizi, i, varsayilan) / json_get(o, anahtar, varsayilan) — ucu de
+    // VMValue alan ayni ABI. Yokluk CAGIRANIN KARARI: bu ikisi tani basmaz.
+    if ((strcmp(bi_name, "at") == 0 || strcmp(bi_name, "json_get") == 0) &&
+        node->argument_count >= 3) {
+      LLVMValueRef a0 = codegen_expression(backend, node->arguments[0]);
+      LLVMValueRef a1 = codegen_expression(backend, node->arguments[1]);
+      LLVMValueRef a2 = codegen_expression(backend, node->arguments[2]);
+      LLVMValueRef p0 = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "acc_a0");
+      LLVMBuildStore(backend->builder, a0, p0);
+      LLVMValueRef p1 = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "acc_a1");
+      LLVMBuildStore(backend->builder, a1, p1);
+      LLVMValueRef p2 = llvm_build_alloca_at_entry(
+          backend, backend->vm_value_type, "acc_a2");
+      LLVMBuildStore(backend->builder, a2, p2);
+      LLVMValueRef aargs[] = {
+          LLVMBuildBitCast(backend->builder, p0, backend->ptr_type, "acc_v0"),
+          LLVMBuildBitCast(backend->builder, p1, backend->ptr_type, "acc_v1"),
+          LLVMBuildBitCast(backend->builder, p2, backend->ptr_type, "acc_v2")};
+      LLVMValueRef fn = (strcmp(bi_name, "at") == 0)
+                            ? backend->func_aot_at
+                            : backend->func_aot_json_get;
+      return llvm_call_vmvalue_func(backend, fn, aargs, 3, "acc_res");
     }
 
     // ====== Time Functions ======

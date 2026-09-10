@@ -380,6 +380,10 @@ const BuiltinEntry kBuiltins[] = {
 
     // ---- Thread ----
     {"thread_create",  "thread_create(func_name: str, arg: any): int", ""},
+    {"at",             "at(arr: array, i: int, default: any): any",
+     "Dizi elemani; [0,count) disinda varsayilani dondurur (tani basmaz)."},
+    {"json_get",       "json_get(obj: json, key: str, default: any): any",
+     "Json alani; anahtar yoksa varsayilani dondurur (tani basmaz)."},
     {"thread_join",    "thread_join(thread_id: int): void",         ""},
     {"thread_detach",  "thread_detach(thread_id: int): void",       ""},
     {"mutex_create",   "mutex_create(): int",                       ""},
