@@ -5343,11 +5343,37 @@ VMValue aot_cpu_count(void) {
   return VM_INT((int64_t)n);
 }
 
-// Thread argument structure
+// Thread kaydi — ARGUMAN VE SONUCUN EVI (derin kopya sozlesmesi, 2026-09-10)
+//
+// SOZLESME TEK CUMLE: **kopyayla girer, join'le cikar.**
+//
+// NEDEN: `thread_create` argumani ONCE dogrudan geciyordu, yani cagiran ile
+// isci AYNI heap nesnesini paylasiyordu. Olculdu (FINDINGS T1/T2): korumasiz
+// paylasilan durum ne atomik ne gorunur — 8 thread x bir artirma 7 veriyor ve
+// spin-wait sonsuza doner. Paylasimi VARSAYILAN yapmak yerine PAHALI VE
+// GORUNUR kilmak (C++ std::thread decay-copy, Rust move, Swift Sendable ayni
+// cizgi): argumanlar KOPYA girer, paylasmak isteyen `mutex_*` kullanir.
+//
+// Kopyalanan kume `aot_persist`in kapsadigi kadar: dizgi, dizi, json (ic ice
+// dahil — ozyinelemeli kopyalar). Tamsayi/float/bool zaten deger; fd ve
+// handle gibi ILKELLER dokunulmadan gecer (examples/37_async_http.tpr
+// server_fd'yi boyle gonderiyor ve etkilenmiyor).
+//
+// SONUC SLOTU: `aot_thread_entry` isciyi cagirirken donusu ZATEN hesapliyordu
+// ama ATIYORDU (P20: `thread_join` hep 0 donuyordu). Artik kayda yaziliyor ve
+// `thread_join` onu donduruyor — argumanla AYNI marshaling yolundan
+// (aot_persist), yani cikan da kopyadir.
+//
+// KAYIT OMRU: `thread_create` kaydi ayirir ve ADRESINI id olarak dondurur;
+// `thread_join` okuyup serbest birakir, `thread_detach` da serbest birakir.
+// Ikisi de cagrilmazsa kayit sizar — thread handle'i eskiden de ayni sekilde
+// sizabiliyordu, davranis degismedi.
 typedef struct {
-  void *func_ptr; // Function pointer to call
-  VMValue arg;    // Argument to pass
-} AOTThreadArgs;
+  void *func_ptr;          // Cagrilacak fonksiyon
+  VMValue arg;             // KOPYALANMIS arguman
+  VMValue result;          // Iscinin donusu (kopya)
+  tulpar_thread_t thread;  // Isletim sistemi handle'i
+} AOTThreadRec;
 
 // Thread entry point wrapper.
 //
@@ -5379,17 +5405,19 @@ static unsigned __stdcall aot_thread_entry(void *arg) {
 #else
 static void *aot_thread_entry(void *arg) {
 #endif
-  AOTThreadArgs *targs = (AOTThreadArgs *)arg;
+  AOTThreadRec *rec = (AOTThreadRec *)arg;
 
   typedef void (*ThreadFunc)(VMValue *result, VMValue *arg);
-  ThreadFunc func = (ThreadFunc)targs->func_ptr;
+  ThreadFunc func = (ThreadFunc)rec->func_ptr;
 
   if (func) {
     VMValue result = VM_VOID();
-    func(&result, &targs->arg);
+    func(&result, &rec->arg);
+    // Argumanla AYNI marshaling yolu: cikan da KOPYA. Iscinin arenasi
+    // kapandiginda cagiran gecerli bir degere bakmali.
+    rec->result = aot_persist(result);
   }
-
-  free(targs);
+  // Kayit BURADA serbest birakilmaz — `thread_join`/`thread_detach` yapar.
 #if PLATFORM_WINDOWS
   return 0;
 #else
@@ -5401,25 +5429,30 @@ static void *aot_thread_entry(void *arg) {
 VMValue aot_thread_create(void *func_ptr, VMValue arg) {
   tulpar_thread_t thread;
 
-  AOTThreadArgs *targs = static_cast<AOTThreadArgs*>(malloc(sizeof(AOTThreadArgs)));
-  if (!targs)
+  AOTThreadRec *rec = static_cast<AOTThreadRec *>(malloc(sizeof(AOTThreadRec)));
+  if (!rec)
     return VM_INT(-1);
 
-  targs->func_ptr = func_ptr;
-  targs->arg = arg;
+  rec->func_ptr = func_ptr;
+  // DERIN KOPYA: isci kendi kopyasiyla calisir (bkz. AOTThreadRec notu).
+  rec->arg = aot_persist(arg);
+  rec->result = VM_VOID();
 
 #if PLATFORM_WINDOWS
-  int result = tulpar_thread_create(&thread, (tulpar_thread_func_t)aot_thread_entry, targs);
+  int result = tulpar_thread_create(&thread, (tulpar_thread_func_t)aot_thread_entry, rec);
 #else
-  int result = tulpar_thread_create(&thread, aot_thread_entry, targs);
+  int result = tulpar_thread_create(&thread, aot_thread_entry, rec);
 #endif
   if (result != 0) {
-    free(targs);
+    free(rec);
     return VM_INT(-1);
   }
+  rec->thread = thread;
 
-  // Return thread ID as int64
-  return VM_INT((int64_t)(uintptr_t)thread);
+  // Id artik KAYDIN adresi (eskiden ham thread handle'iydi). Kullanici icin
+  // opak bir tamsayi oldugu icin gorunur bir fark yok; join/detach onu geri
+  // cevirip sonucu okuyabiliyor.
+  return VM_INT((int64_t)(uintptr_t)rec);
 }
 
 // thread_join / thread_detach return VMValue (sentinel 0) instead of
@@ -5428,15 +5461,24 @@ VMValue aot_thread_create(void *func_ptr, VMValue arg) {
 // `thread_detach(t)` crashes immediately on first call.
 VMValue aot_thread_join(VMValue threadVal) {
   if (!IS_INT(threadVal)) return VM_INT(0);
-  tulpar_thread_t thread = (tulpar_thread_t)(uintptr_t)AS_INT(threadVal);
-  tulpar_thread_join(thread);
-  return VM_INT(0);
+  AOTThreadRec *rec = (AOTThreadRec *)(uintptr_t)AS_INT(threadVal);
+  if (!rec) return VM_INT(0);
+  tulpar_thread_join(rec->thread);
+  // SOZLESMENIN IKINCI YARISI: kopyayla girer, JOIN'LE CIKAR.
+  VMValue out = rec->result;
+  free(rec);
+  return out;
 }
 
 VMValue aot_thread_detach(VMValue threadVal) {
   if (!IS_INT(threadVal)) return VM_INT(0);
-  tulpar_thread_t thread = (tulpar_thread_t)(uintptr_t)AS_INT(threadVal);
-  tulpar_thread_detach(thread);
+  AOTThreadRec *rec = (AOTThreadRec *)(uintptr_t)AS_INT(threadVal);
+  if (!rec) return VM_INT(0);
+  tulpar_thread_detach(rec->thread);
+  // ⚠ Detach edilen thread hala `rec`e yaziyor olabilir (sonuc slotu), o
+  // yuzden kaydi BURADA serbest birakmiyoruz: detach "sonucu istemiyorum"
+  // demek, "kaydi simdi yok et" demek degil. Bilerek sizdiriyoruz — kayit
+  // birkac yuz bayt ve alternatifi use-after-free.
   return VM_INT(0);
 }
 

@@ -993,7 +993,10 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
       // isim + farkli hakikat = katalog ciftlesmesi, bkz. `push` dersi).
       {"at", TYPE_UNKNOWN, {TYPE_UNKNOWN, TYPE_INT, TYPE_UNKNOWN}},
       {"json_get", TYPE_UNKNOWN, {TYPE_JSON, TYPE_STRING, TYPE_UNKNOWN}},
-      {"thread_join", TYPE_VOID, {TYPE_INT}},
+      // P20 KAPANDI (2026-09-10): join artik iscinin donusunu tasiyor
+      // (sozlesme: kopyayla girer, join'le cikar). Donus tipi UNKNOWN cunku
+      // isci herhangi bir tip donebilir.
+      {"thread_join", TYPE_UNKNOWN, {TYPE_INT}},
       {"thread_detach", TYPE_VOID, {TYPE_INT}},
       // Muteksler CALISIYOR (olculdu): 8 thread x 50 000 artirma, muteksli
       // surumde counter tam 400 000 ve done tam 8, uc kosuda da. Yani

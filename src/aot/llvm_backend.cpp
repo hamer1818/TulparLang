@@ -6762,7 +6762,31 @@ LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node) {
         char prefixed[256];
         snprintf(prefixed, sizeof(prefixed), "t_%s", raw);
         LLVMValueRef func = LLVMGetNamedFunction(backend->module, prefixed);
-        if (!func) func = LLVMGetNamedFunction(backend->module, raw);
+        if (!func) {
+          // ⚠ HAM SEMBOLE DUSMEK ABI UYUMSUZLUGUDUR — sessizce COP veri gecer.
+          //
+          // `aot_thread_entry` isciyi `void(VMValue *sonuc, VMValue *arg)`
+          // olarak cagiriyor. Bu ABI'yi yalnizca `t_<ad>` shim'i tasiyor.
+          // TAM TIPLI bir fonksiyon (`func f(int n): int`) icin shim
+          // URETILMIYOR — yalnizca `@f(i64) -> i64` var. Eskiden kod ona
+          // dusuyordu ve isci ISARETCIYI TAMSAYI diye aliyordu: olculdu
+          // (2026-09-10), `thread_create(isci, 42)` icin isci 42 yerine
+          // 140166943450080 gordu. Tanimsiz davranis, ozelligin omru boyunca
+          // sessiz.
+          //
+          // Dogru duzeltme her aday icin shim uretmek; o ayri bir is. Bu arada
+          // SESSIZ COP yerine DERLEME ZAMANI HATASI veriyoruz.
+          LLVMValueRef bare = LLVMGetNamedFunction(backend->module, raw);
+          if (bare) {
+            fprintf(stderr, tulpar::i18n::tr_en(
+                "Hata: thread_create() TAM TIPLI bir fonksiyonla kullanilamaz "
+                "('%s'). Donus/parametre tipini kaldirin: `func %s(x) { ... }`\n",
+                "Error: thread_create() cannot take a fully typed function "
+                "('%s'). Drop the type annotations: `func %s(x) { ... }`\n"),
+                raw, raw);
+            backend->had_error = 1;
+          }
+        }
         if (func) func_ptr = func;
       }
       if (!func_ptr) {

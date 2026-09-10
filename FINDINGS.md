@@ -65,6 +65,9 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | R7 | Site'nin "invalid body → 422" vaadi tutuyor | **doğrulandı** — 422 + alan detayı (`name: required`, `expected str, got int`) | P28 |
 | R2 | `build.sh test` çalışma zamanı hatasını yakalıyor | **çürütüldü, DÜZELTİLDİ** — harness artık `TULPAR_STRICT_RUNTIME=1` ile koşuyor (dil varsayılanı değişmeden); enjeksiyon kırmızı | P25 |
 | T5 | `thread_join` işçinin sonucunu taşıyor | **çürütüldü** — 0 dönüyor; katalogda `void` olarak kaydedildi, artık atanması hata | P20 |
+| T8 | `thread_create` argümanı paylaşılıyor | **DEĞİŞTİ (sözleşme)** — artık **derin kopya**; işçi kendi kopyasıyla çalışır (P47 fikstürle kilitli) | thread_copy |
+| T9 | `thread_create` tipli fonksiyonla çalışıyor | **çürütüldü** — `t_<ad>` şimi yalnız tipsiz fonksiyonlar için var; tipli olanda **ham sembole düşüp işaretçiyi tamsayı diye geçiriyordu** (ölçüldü: 42 yerine 140166943450080). Artık **derleme zamanı hatası** | thread_copy |
+| T10 | join-dönüşü ücretsiz | **çürütüldü (ölçülmüş maliyet)** — P43: 4× iş yükü → 2,82× RSS; sonuç ömür boyu depoda, geri alınmıyor | P43 |
 | T6 | Dilde senkronizasyon ilkeli yok | **çürütüldü** — `mutex_*` var ve çalışıyor; yalnız katalogda yokmuş | P27 |
 | C9 | Suite'ler çalışma zamanı hatasını yakalıyor | **doğrulandı (enjeksiyonla)** — tek dosya çıkış 1, suite çıkış 1, paket sayısı 75'te kalıyor | P26 |
 | R3 | `try/catch` çalışma zamanı hatasını yakalıyor | **çürütüldü, DÜZELTİLDİ (strict'te)** — strict modda hata `aot_throw` ile fırlıyor: `catch` yakalıyor, yakalanmazsa stderr + exit 1 | P26b |
@@ -124,6 +127,7 @@ yalnız `&&`/`||`'de idi.
 | S3 | `arena_drop` gerekliliği (`arena_restore` serbest bırakmaz) | **ölçüldü, belgesiz** ([[Memory]]) |
 | S4 | SSE/WS akışında handler ortası throw | **ÖLÇÜLDÜ ve KAPANDI** — üç fazlı sözleşme (P44) |
 | S5 | `at` / `json_get` sınır politikası | **belgelendi** — negatif indeks "sondan" değil, sınır dışı |
+| S7 | Thread sözleşmesi: **kopyayla girer, join'le çıkar** | **yazıldı** — argüman derin kopya, join sonucu taşır; paylaşmak isteyen `mutex_*` kullanır |
 | S6 | Paylaşılan-değer katmanı mutasyona uğratılmaz | **sabitlendi** — `vm_object_get` üstünde sözleşme yorumu + `tests/shared_json_read.test.tpr`; uğratılacaksa T7 ve derin kopya yeniden değerlendirilir |
 
 **S1'in ampirik yarısı (P38a):** korpusta `if(<ad>)` deseninde **165 site**,
