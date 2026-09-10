@@ -2009,7 +2009,7 @@ func wings_metrics_prom() {
 // wings can't both stream and build a single response, so SSE handlers
 // `socket_close()` the fd themselves when the stream ends.
 func wings_sse_headers() {
-    _wings_stream_started = 1;          // S4: akis basladi (bkz. bayragin notu)
+    _wings_stream_started = 1;          // S4: akis basladi (bkz. bayragin notu; WS karsiligi wings_ws_upgrade)
     str s = "HTTP/1.1 200 OK\r\n";
     s = s + "Content-Type: text/event-stream\r\n";
     s = s + "Cache-Control: no-cache\r\n";
@@ -2081,6 +2081,15 @@ func wings_ws_upgrade(json req) {
     if (length(key) == 0) {
         return "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
     }
+    // S4 / P46: akis BURADA basliyor — 101 gonderildikten sonra soket artik
+    // WebSocket cerceve akisidir ve zarf yazmak protokolu bozar. Olculdu
+    // (fix oncesi): 101 + \x81"ilk" cercevesinin ARDINA ham "HTTP/1.1 500
+    // Internal Server Error ..." enjekte ediliyordu; hicbir WS istemcisi
+    // bunu cozemez.
+    //
+    // Bayrak YALNIZ basari yolunda kalkiyor: yukaridaki 400 dalinda akis hic
+    // baslamadigi icin normal 500 sentezi gecerli kalmali.
+    _wings_stream_started = 1;
     str accept_key = wings_ws_accept_key(key);
     str s = "HTTP/1.1 101 Switching Protocols\r\n";
     s = s + "Upgrade: websocket\r\n";

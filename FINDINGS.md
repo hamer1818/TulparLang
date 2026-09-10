@@ -208,8 +208,24 @@ akışı alıp gövdesinde gömülü bir HTTP yanıtı görüyordu. Protokol boz
 
 **Üç fazlı sözleşme:** akış başlamadan → 500 + log; akış ortasında → **yalnız
 log + bağlantı kapanır, zarf YAZILMAZ**; her iki fazda → süreç yaşar.
-Kanca `wings_sse_headers()` (akışın başladığı tek nokta) bir bayrak kaldırıyor,
-dispatch her istekte sıfırlıyor.
+Kanca: akışın başladığı **iki nokta** — `wings_sse_headers()` ve
+`wings_ws_upgrade()`; dispatch her istekte sıfırlıyor.
+
+**P46 — WS tarafı ayrıca ölçüldü (2026-09-10), ve SSE'den beterdi.** İlk fix
+yalnız SSE kancasını kurmuştu; `wings_ws_upgrade` bayrağı kaldırmıyordu:
+
+| | fix öncesi | fix sonrası |
+|---|---|---|
+| WS akış ortası | 101 + `\x81"ilk"` + **ham `HTTP/1.1 500 ...` çerçeve akışına enjekte** | 101 + `\x81"ilk"`, **5 bayt, temiz** |
+| WS 400 dalı (anahtar yok) | 400 | 400, 0 bayt — akış hiç başlamadığı için normal yol korundu |
+
+Hiçbir WS istemcisi enjekte edilmiş HTTP'yi çerçeve olarak çözemez. Bayrak
+**yalnız başarı yolunda** kalkıyor; 400 dalında akış başlamadığı için sentez
+geçerli kalıyor.
+
+**Kalan kenar (gözlemlenemedi):** 400 dalında handler tam bir HTTP yanıtı
+göndermiş oluyor ve catch ikinci bir zarf yazabilir; keep-alive'da teorik
+kalıntı. Bu testte 0 bayt artık ölçüldü, bağlantı kapanıyor.
 
 **Yan bulgu:** `_wings_last_status` sözleşme gereği "her dönüşte" yazılmalıymış
 (tanımındaki not); catch yolu onu atlayınca istek 500 dönerken 200 loglanıyordu.
@@ -227,6 +243,11 @@ yolu eklendiğinde sessizce atlanır.**
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
+20. **Yanlış gözlem gerçek sinyal taşıyabilir; sinyali çerçeveden ayır.**
+   Bulgu 3'te üç şey vardı: hatalı test (`push` yanlış kullanımı) ❌, hatalı
+   teori (`arr_debox` yarışı) ❌, ve **doğru tanı** ✅ — teslim katmanı
+   (stdout + fırlatmama) onu çöpe çeviriyordu. Geri çekerken içeriği de atmak
+   ikna ediciydi ama yarım güvenlikti; sinyal R10 ile geri geldi.
 19. **Metin-deseniyle yapılan dönüşüm, envanteri yeniden üretmez.** Flip'in
    printf→throw dönüşümü regex'le yapıldı ve farklı biçimli bir `printf`i
    kaçırdı. Garanti mekanik olmalı: `build.sh` artık `runtime_bindings.cpp`'de
