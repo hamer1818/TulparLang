@@ -127,7 +127,7 @@ yalnız `&&`/`||`'de idi.
 | S1 | **Truthiness tablosu** — yalnız SAYISAL SIFIR yanlış | **ölçüldü, belgesiz** |
 | S2 | `mutex_*` ile paylaşım | **ölçüldü, belgesiz** ([[Concurrency]]) |
 | S3 | `arena_drop` gerekliliği (`arena_restore` serbest bırakmaz) | **ölçüldü, belgesiz** ([[Memory]]) |
-| S4 | SSE/WS akışında handler ortası throw | **ÖLÇÜLDÜ ve KAPANDI** — üç fazlı sözleşme (P44) |
+| S4 | SSE/WS akışında handler ortası throw | **kod kapandı, cümle kapanmadı** — üç fazlı sözleşme (P44/P46) yazıldı ve düzeltildi, ama **fikstürü yok** (#21 borcu, aşağıdaki retrofit sayımı) |
 | S5 | `at` / `json_get` sınır politikası | **belgelendi** — negatif indeks "sondan" değil, sınır dışı |
 | S7 | Thread sözleşmesi: **kopyayla girer, join'le çıkar** | **yazıldı** — argüman derin kopya, join sonucu taşır; paylaşmak isteyen `mutex_*` kullanır |
 | S9 | Uzun ömürlü süreçte **değer-başı geri kazanım yok** (join-dönüş dahil) | **ölçüldü** — join-dönüş değerleri sürecin ömrü boyunca yaşar; binlerce join içeren süreçte RSS ~N×değer-boyu artar (P43). M2'nin çözülmesi bu sınıfın **tamamını** kapatır; yamayı her ekleme noktasına serpmek değil, kök düzeltme tek yerde |
@@ -142,9 +142,37 @@ native i64 register."* Yani T9'un düzelttiği ABI boşluğunun geçici çözüm
 sıfır maliyet (ölçüldü). Kalan 2 aggregate fikstürün kendi testleri.
 **Üretim kodunda 0 gerçek aggregate sitesi → göç bedelsiz.**
 
-⚠ Yan bulgu: o boxing hilesi artık **gereksiz** (T9 sonrası `tw_` sarmalayıcı
-tipli/native işçiyi normalleştiriyor). Temizlik fırsatı; bayrak serve
-patikasına dokunduğu için kendi turunu hak ediyor.
+**P50 — fosil göçü (yapıldı).** O boxing hilesi T9'dan sonra **gereksiz**:
+`tw_<ad>` sarmalayıcısı tipli/native işçiyi normalleştiriyor, yani argümanı
+elle `json`'a sarmanın tek gerekçesi ortadan kalktı. Dört site de düz `int`e
+geçti — `_wings_serve_connection`, `_wings_pool_worker` (`lib/wings.tpr`) ve
+`_wings_tls_serve` (`lib/wings_tls.tpr`) artık `int` parametre alıyor, üç
+çağrı yerindeki `json c = client;` ara değişkeni silindi.
+
+*Müze notu:* boxing yorumu (*"Box the fd into a json so `thread_create` passes
+it through the canonical VMValue ABI rather than a native i64 register"*)
+teşhis olarak **doğruydu** — `a56f273` (T9) öncesi ham sembole düşen çağrı
+işçiye işaretçiyi tamsayı diye veriyordu, ve `thread_create` yalnız `t_<ad>`
+shim'i olan (yani tipsiz/kutulu) işçiyi taşıyabiliyordu. Yorum bir hatayı
+değil, **eksik bir ABI'yi** belgeliyordu; ABI tamamlanınca fosilleşti. Bu
+yüzden koddan çıkarılıp buraya taşındı: silinen çözüm değil, **artık
+geçersizleşmiş bir kısıt** kaydı.
+
+**Doğrulama — derlenmiş değil, koşulmuş.** Örnek suite'i wings'i yalnız
+*derliyor* (`COMPILE_ONLY_TESTS`), yani göç orada sınanmış olmazdı. İki ayrı
+ikili (`listen_pool(port, 4)` ve `listen_async(port)`) ayağa kaldırılıp her
+birine **20 eşzamanlı** `GET /ping` sürüldü: her ikisinde de **200=20/20**,
+**tek** gövde (thread'ler arası karışma yok) ve bağlantı başına **tam bir**
+HTTP zarfı (P48 sınıfı çift zarf yok). Sonda kırmızıya dönebiliyor: var olmayan
+rotada 0/6, dinlemeyen portta bağlantı reddi (#10).
+
+⚠ Göç güvenliğinin ön koşulu ölçüldü, varsayılmadı: `native_abi_eligible()`
+native (i64) yola çıkmak için `: int` **dönüş tipi** şart koşuyor; bu dört
+işçinin hiçbirinde yok, dolayısıyla hepsi kutulu `t_<ad>` ABI'sinde kalıyor ve
+`thread_create` sarmalayıcıya hiç düşmüyor. Düşseydi sorun çıkardı: `tw_`
+sarmalayıcısı dönüşü koşulsuz `llvm_vm_val_int_val` ile kutuluyor, yani
+**void dönen** bir native işçiyi saramazdı. Bugün o dal erişilemez — parametre
+tipi değiştirmenin ABI'yi de değiştirebileceği not edilsin.
 
 **P43/P49 — önce/sonra (RSS zirve, spawn döngüsü):**
 
@@ -165,6 +193,32 @@ kayıt; o da aynı genel işle kapanır, join/detach'e özgü değil.
 bellek özelliği — Tulpar'dan gözlemlenemiyor, fikstürle değil **ölçümle**
 doğrulanıyor (yukarıdaki tablo). Diğer iki cümlenin fikstürü var.
 | S6 | Paylaşılan-değer katmanı mutasyona uğratılmaz | **sabitlendi** — `vm_object_get` üstünde sözleşme yorumu + `tests/shared_json_read.test.tpr`; uğratılacaksa T7 ve derin kopya yeniden değerlendirilir |
+
+### Retrofit sayımı — hangi sözleşmenin fikstürü var (#21 denetimi)
+
+| Sözleşme | Fikstür | Otomasyonda |
+|---|---|---|
+| S1 truthiness | ❌ **yok** — korpusta tek eşleşme bir *yorum* satırı | — |
+| S2 `mutex_*` | ✅ `thread_copy.test.tpr` (P30 sayaç) + `shared_json_read.test.tpr` | ✅ suites |
+| S3 `arena_drop` | ❌ **yok** — `arena_restore` üç testte *geçiyor* ama hepsi "kalıcı değer hayatta kalır" yönünü sınıyor; *"restore serbest bırakmaz"* cümlesini hiçbiri sınamıyor. `arena_drop` hiçbir fikstürde geçmiyor | — |
+| S4 üç fazlı akış | ❌ **yok** — `9f81587` ve `eda9ae1` ikisi de tek satır test eklemedi (stat ile doğrulandı); ölçüm tek kullanımlık düzeneklerdeydi | — |
+| S5 `at`/`json_get` | ✅ `accessors.test.tpr` (8 test) | ✅ suites |
+| S6 paylaşılan okuma | ✅ `shared_json_read.test.tpr` | ✅ suites |
+| S7 thread sözleşmesi | ✅ `thread_copy.test.tpr` — 3 cümlenin 2'si; 3.'sü (*detach atar*) ölçüm istisnası | ✅ suites |
+| S8 handle sözleşmesi | ✅ `thread_copy.test.tpr` (çift-join, detach sonrası join) | ✅ suites |
+| S9 geri kazanım yok | ⚖ **ölçüm** (P43 RSS tablosu) — gözlemlenemeyen bellek özelliği, #21 istisnası | — |
+
+**Sayım: 9 sözleşmenin 5'i fikstürlü, 1'i meşru ölçüm istisnası, 3'ü borçlu**
+(S1, S3, S4). En ağır borç **S4**: defterde "KAPANDI" yazıyordu, oysa #21'e
+göre kapanmamıştı — *kod* düzeldi, *cümle* sınanmadı. Kuralın kendisi bunu
+yakaladı; satır yukarıda düzeltildi.
+
+⚠ İkinci bulgu: `tests/ws_masked_client_smoke.py` ve `tests/wings_tls_smoke.py`
+**hiçbir otomasyonda koşmuyor** — `build.sh` yalnız `builtin_audit`,
+`wedge_mesh_check`, `dist_archive_audit`, `ast_child_fields_audit`,
+`silent_failure_probe` ve `lsp_audit`'i çağırıyor. Yani S4'e en yakın duran iki
+harness bile kırmızıya dönemez (kural #10: hiç kırmızı görülmemiş düzenek
+yeşil değil, **bilinmiyor**).
 
 **S1'in ampirik yarısı (P38a):** korpusta `if(<ad>)` deseninde **165 site**,
 bunların **39'u** bool bildirimi olmayan değerler — yani truthiness'e yaslanıyor.
@@ -298,6 +352,14 @@ yolu eklendiğinde sessizce atlanır.**
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
+22. **Tanı aracı da tanının parçası.** P48'de `curl` tek yanıt gördü, ham
+   soket **iki** yanıt gördü — aynı bayt akışı, iki farklı sonuç. Araç
+   protokolü *sizin adınıza yorumladığı* için kanıtı siliyordu:
+   `Content-Length: 3`'te okumayı bıraktı, ihlal o sınırın hemen ardındaydı.
+   Kural: bir sözleşme ihlali *aranırken* ölçüm ham katmanda olmalı;
+   yorumlayan araç ancak ihlal **bulunduktan sonra**, "kullanıcı ne görür"
+   sorusunu yanıtlamak için meşrudur. Ters sırada kullanılırsa araç, aradığınız
+   şeyi tanım gereği gizler.
 21. **Sözleşme cümlesi, onu test eden fikstür doğmadan kapanmaz.** S-listesi
    *belgelenmemiş* sözleşmeleri avladı; T11 tersini gösterdi: **belgelenen
    sözleşme de tehlikeli** — sınanmadan yazılanın ihlali sessizce kabul edilir.
@@ -357,6 +419,16 @@ yolu eklendiğinde sessizce atlanır.**
 9. **Zayıf çağrı sessizdir** — `arena_restore` çalışıyormuş gibi görünüp
    serbest bırakmıyordu. API'nin iki katmanı varsa hangisini kullandığını
    ölç, adına güvenme.
+
+**Global lint neden ertelendi (yöntem notu).** Yazma tarafı ucuz: hangi
+global'in hangi `thread_create` erişiminden sonra yazıldığını bulmak birkaç
+saatlik iş. Ama tek başına yazma tarafı **yanlış mesaj** üretir — "bu global
+yazılıyor" bir kusur değil, programın olağan hâli. Doğru cümle *"bu global
+başka bir thread'de **okunuyor** — senkronizasyon nerede?"*, ve o cümle okuma
+tarafını, yani genel bir AST gezgini gerektiriyor. Yarım lint, gürültü üretip
+kendi kapatılmasına yol açardı (#10'un tersi: hiç kırmızıya dönmeyen değil,
+**sürekli kırmızıya dönen** düzenek de bilgi taşımaz). Erteleme, yapılamadığı
+için değil; **eksik hâli zararlı olduğu için**.
 
 ## Açık kuyruk
 

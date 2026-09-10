@@ -2143,8 +2143,7 @@ func log_error(str msg) {
 // thread (it's an inline call back into the same interpreter), so the
 // VM serves connections sequentially anyway. The lock-free design is
 // safe there too — there are simply no concurrent writers to race on.
-func _wings_serve_connection(json client_arg) {
-    int client = client_arg;
+func _wings_serve_connection(int client) {
     int wm = arena_save();
 
     while (true) {
@@ -2464,13 +2463,7 @@ func listen_evented(int port) {
 // At 1k req/s, listen_async creates 1000 threads/sec; listen_pool
 // reuses N. Empirically 4-16 workers saturate a single CPU core's
 // worth of HTTP work; tune to physical cores for CPU-bound handlers.
-//
-// The socket fd is boxed into a `json` parameter because
-// `thread_create` passes its argument through the canonical VMValue
-// ABI rather than a native i64 register; the worker unboxes on entry.
-// This is the same pattern `listen_async` uses for per-conn fds.
-func _wings_pool_worker(json server_box) {
-    int server = server_box;
+func _wings_pool_worker(int server) {
     while (true) {
         int client = socket_accept(server);
         if (client < 0) {
@@ -2478,8 +2471,7 @@ func _wings_pool_worker(json server_box) {
         }
         // Reuse the existing per-connection serve function — keep-alive
         // loop, arena reset, request counters, etc. all already there.
-        json c = client;
-        _wings_serve_connection(c);
+        _wings_serve_connection(client);
     }
 }
 
@@ -2525,8 +2517,7 @@ func listen_pool(int port, int n_workers) {
     // listening socket. The first kernel-delivered connection wakes
     // exactly one worker.
     for (int i = 0; i < n_workers; i = i + 1) {
-        json sb = server;
-        int t = thread_create(_wings_pool_worker, sb);
+        int t = thread_create(_wings_pool_worker, server);
         thread_detach(t);
     }
 
@@ -2572,11 +2563,7 @@ func listen_async(int port) {
         if (client < 0) {
             continue;
         }
-        // Box the fd into a json so `thread_create` passes it through
-        // the canonical VMValue ABI rather than a native i64 register.
-        // The worker unboxes on entry.
-        json c = client;
-        int t = thread_create(_wings_serve_connection, c);
+        int t = thread_create(_wings_serve_connection, client);
         thread_detach(t);
     }
 }

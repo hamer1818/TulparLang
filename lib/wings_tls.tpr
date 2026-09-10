@@ -31,11 +31,7 @@ import "wings";
 // SSL_write, and tears down. No keep-alive yet — each connection
 // serves one request and closes (TLS keep-alive can be re-added once
 // `_wings_serve_one_request`-style splitting happens for the TLS path).
-//
-// The SSL pointer is boxed into a `json` so `thread_create` passes it
-// through the canonical VMValue ABI; the worker unboxes on entry.
-func _wings_tls_serve(json ssl_box) {
-    int ssl = ssl_box;
+func _wings_tls_serve(int ssl) {
     int wm = arena_save();
 
     // SSL_read max — 256 KiB is plenty for typical wings JSON requests
@@ -183,8 +179,7 @@ func wings_tls(int port, str cert_path, str key_path) {
         if (ssl == 0) {
             continue;
         }
-        json sb = ssl;
-        int t = thread_create(_wings_tls_serve, sb);
+        int t = thread_create(_wings_tls_serve, ssl);
         thread_detach(t);
     }
 }
