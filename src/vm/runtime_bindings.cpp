@@ -129,10 +129,25 @@ extern "C" void aot_runtime_error(const char *msg) {
   // Yani karar dilin hata felsefesine ait: yumusak hata mi kalsin, yoksa
   // firlatilabilir/olumcul mu olsun (bkz. FINDINGS R1/R3). Anahtar, kararin
   // maliyetini olcmeyi mumkun kiliyor; varsayilani degistirmek ayri bir is.
+  // FLIP (2026-09-10): STRICT ARTIK VARSAYILAN. `TULPAR_SOFT_RUNTIME=1` eski
+  // "tani bas, 0 ikame et, devam et" davranisini BIR SURUM DONGUSU boyunca
+  // geri getirir; sonra bu kapi kalkar.
+  //
+  // Flip'in on kosullarinin hepsi olculdu:
+  //   L1  — `&&`/`||` kisa devre yapmiyordu; duzeltildi (yoksa her koruma
+  //         deyimi firlatirdi).
+  //   P36 — korpus-geneli strict delta: 77 suite, 0 tani.
+  //   P37 — goc maliyeti: 1 test dosyasi (loop_versioning), 0 ornek.
+  //   P39 — wings istek-basina hata siniri: bozuk istek sunucuyu DUSURMUYOR,
+  //         500 donuyor.
+  //   R8  — longjmp riski: 76 suite strict altinda, 0 cokme.
+  //
+  // `TULPAR_STRICT_RUNTIME` hala taniniyor (build.sh harness'i onu set
+  // ediyordu) ama artik etkisiz — varsayilan zaten strict.
   static int strict = -1;
   if (strict < 0) {
-    const char *e = std::getenv("TULPAR_STRICT_RUNTIME");
-    strict = (e && *e && std::strcmp(e, "0") != 0) ? 1 : 0;
+    const char *e = std::getenv("TULPAR_SOFT_RUNTIME");
+    strict = (e && *e && std::strcmp(e, "0") != 0) ? 0 : 1;
   }
   if (strict) {
     // P26b BIRLESTIRME: strict modda calisma zamani hatasi bir ISTISNADIR.
@@ -1031,9 +1046,15 @@ extern "C" void aot_arr_widen(void *p) {
 // kind: 0 = sifira bolme, 1 = tasma (INT_MIN / -1).
 extern "C" void aot_div_error(long long kind) {
   if (kind == 1) {
-    printf("%s\n", tulpar::i18n::tr_en(
-                        "Calisma Zamani Hatasi: Tamsayi bolme tasmasi",
-                        "Runtime Error: Integer division overflow"));
+    // Bu dal FLIP'te GOZDEN KACTI: `aot_runtime_error` donusumu regex'le
+    // yapilmisti ve bu printf farkli bicimdeydi, o yuzden yakalanmadi —
+    // tasma tanIsI stdout'a yaziliyor ve surec 0 ile cikiyordu, sifira
+    // bolme ise firlatiyordu. AYNI AILEDEN IKI HATA, IKI FARKLI SOZLESME.
+    // Yakalayan sey `INT_MIN / -1` sondasinin ESKI beklentiyle GECMESI oldu:
+    // yesil bir sonda, donusumun eksik kaldigini gosterdi.
+    aot_runtime_error(tulpar::i18n::tr_en(
+        "Calisma Zamani Hatasi: Tamsayi bolme tasmasi",
+        "Runtime Error: Integer division overflow"));
   } else {
     aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
                                        "Runtime Error: Division by zero"));

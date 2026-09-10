@@ -1051,18 +1051,16 @@ if [ "$ACTION" = "test" ]; then
                 return 0
             fi
             if [ -f "$input_file" ]; then
-                # OLCUM ALETI DIL VARSAYILANINDAN SIKI OLABILIR. Calisma
-                # zamani hatasi bugun varsayilan olarak cikis kodunu
-                # degistirmiyor (bkz. FINDINGS R1/R5: "sinir disi -> 0" TEST
-                # EDILMIS bir sozlesme) — ama bu kosucu "yalnizca cikis
-                # kodunu" karsilastirdigi icin o varsayilan onu KOR yapiyordu:
-                # bir ornege `kk[999]` enjekte edildiginde suite "All tests
-                # passed!" diyordu (R2, olculdu). TULPAR_STRICT_RUNTIME=1 ile
-                # harness siki kosuyor; dilin varsayilani degismiyor.
-                # Olculdu: 50 orneğin SIFIRINDA calisma zamani hatasi var.
-                TULPAR_STRICT_RUNTIME=1 $TIMEOUT_CMD "./$out_path" < "$input_file" > /dev/null 2>&1
+                # Bu kosucu "yalnizca cikis kodunu" karsilastiriyor. Calisma
+                # zamani hatasi cikis kodunu degistirmediginde bu KOR olur: bir
+                # ornege `kk[999]` enjekte edildiginde suite "All tests passed!"
+                # diyordu (R2, olculdu). Bir sure harness `TULPAR_STRICT_RUNTIME=1`
+                # ile dil varsayilanindan siki kostu; FLIP'ten sonra (2026-09-10)
+                # strict zaten varsayilan, o yuzden bayrak kaldirildi — iki
+                # hakikat tablosu birakmamak icin.
+                $TIMEOUT_CMD "./$out_path" < "$input_file" > /dev/null 2>&1
             else
-                TULPAR_STRICT_RUNTIME=1 $TIMEOUT_CMD "./$out_path" > /dev/null 2>&1
+                $TIMEOUT_CMD "./$out_path" > /dev/null 2>&1
             fi
 
             if [ $? -eq 0 ]; then

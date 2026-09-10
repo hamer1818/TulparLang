@@ -55,8 +55,9 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | Y3 | Eleman ataması tip denetleniyor | **çürütüldü, DÜZELTİLDİ (branch)** — `str[] s; s[0]=5;` geçiyor VE çalışıyordu | `fail/13_element_assign_type.tpr` |
 | Y4 | `var` çıkarıldığı tipte kalıyor | **çürütüldü, DÜZELTİLDİ (branch)** — `var b=[1,2]; b=5;` geçiyordu | `fail/12_var_cross_type.tpr` |
 | Y5 | `call("ad")` adın varlığını doğruluyor | **çürütüldü** — literal adda bile doğrulamıyor; hata çalışma zamanına kalıyor | P25 |
-| R1 | Çalışma zamanı hatası süreci başarısız kılıyor | **çürütüldü; KISMEN düzeltildi** — tanılar artık stderr'e gidiyor (stdout temiz); çıkış kodu ≠ 0 `TULPAR_STRICT_RUNTIME=1` ile **seçime bağlı** | P25 |
-| R5 | "Sınır dışı → 0, devam" bir kaza | **çürütüldü** — TEST EDİLMİŞ sözleşme; flip artık **1 test dosyası** göçü gerektiriyor (L1 sonrası scene3d 9→0) | R1 seti · P36/P37 |
+| R1 | Çalışma zamanı hatası süreci başarısız kılıyor | **çürütüldü, DÜZELTİLDİ (FLIP 2026-09-10)** — strict artık **varsayılan**: tanı stderr'e, yakalanmazsa exit≠0; `TULPAR_SOFT_RUNTIME=1` bir sürüm döngüsü kaçış kapısı | P25 |
+| R5 | "Sınır dışı → 0, devam" bir kaza | **çürütüldü; SÖZLEŞME DEĞİŞTİ** — `loop_versioning` 8 testi yeni sözleşmeye göre yazıldı (fırlatma = bekçinin kanıtı) | R1 seti · P36/P37 |
+| R9 | Tüm çalışma zamanı hataları aynı sözleşmede | **çürütüldü, DÜZELTİLDİ** — `aot_div_error`'ün taşma dalı flip'te gözden kaçmıştı (farklı `printf` biçimi); sıfıra bölme fırlatırken taşma stdout'a yazıp 0 ile çıkıyordu | flip |
 | R8 | strict'te longjmp runtime çerçevelerini bozar | **çürütüldü** — 76 suite strict altında koşuldu, **0 çökme** | P26b |
 | R6 | Sondalar tanıyı doğru yerde arıyor | **çürütüldü, DÜZELTİLDİ** — `silent_failure_probe.py` tanıyı stdout'ta bekliyordu; stderr süzgeci eklendi | R1 seti |
 | R7 | Site'nin "invalid body → 422" vaadi tutuyor | **doğrulandı** — 422 + alan detayı (`name: required`, `expected str, got int`) | P28 |

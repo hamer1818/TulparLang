@@ -24,10 +24,18 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 TULPAR = str(ROOT / "tulpar")
 D = pathlib.Path(tempfile.mkdtemp(prefix="probe"))
 CASES = []
-def c(name, src, expect):
-    # expect=None: program DERLENMEMELI (sifirdan farkli cikis). Sessizce
-    # gecerli sayilan bozuk sozdizimi bu tarayicinin aradigi siniftir.
-    CASES.append((name, src, None if expect is None else expect.strip()))
+def c(name, src, expect, mode="output"):
+    # mode="output"        : cikis 0 ve (stderr'deki calisma zamani satirlari +
+    #                        stdout) tam olarak `expect`e esit olmali.
+    # expect=None          : program DERLENMEMELI (sifirdan farkli cikis).
+    #                        Sessizce gecerli sayilan bozuk sozdizimi bu
+    #                        tarayicinin aradigi siniftir.
+    # mode="runtime_error" : FLIP sonrasi sozlesme (2026-09-10) — calisma
+    #                        zamani hatasi bir istisnadir: surec exit!=0 ile
+    #                        bitmeli VE stderr `expect`i icermeli. Ciktinin
+    #                        tamami sinanmaz, cunku fail-fast hatadan sonraki
+    #                        satirlari hic calistirmaz.
+    CASES.append((name, src, None if expect is None else expect.strip(), mode))
 
 # --- 1. Ad cakismasi: KULLANICI FONKSIYONLARI ---
 c("fonksiyon adi 'free'", 'func free(int x) { return x + 1; }\nprint(free(1));', "2")
@@ -79,16 +87,27 @@ for _b, _v in [("exit", 4), ("len", 101), ("abs", 101), ("round", 101),
 # `10 / n` (n calisma zamaninda 0) ham sdiv uretiyordu -> SIGFPE, program
 # TEK KELIME ETMEDEN oluyordu. Sabit 0 ile yazilirsa LLVM katliyor ve hata
 # GORUNMUYOR; o yuzden bolen ortamdan geliyor (katlanamaz).
-c("sifira bolme oldurmemeli",
+#
+# ⚠ SOZLESME 2026-09-10'da DEGISTI (flip). Bu sondalarin adi eskiden
+# "oldurmemeli" idi ve "tani bas, 0 ikame et, DEVAM ET" davranisini
+# iddia ediyorlardi — yani BUGUNKU DAVRANISI belgeliyorlardi, hedef
+# sozlesmeyi degil. Artik calisma zamani hatasi bir ISTISNA: yakalanmazsa
+# stderr'e "Uncaught Exception: ..." yazilir ve surec exit!=0 ile biter.
+#
+# Sondanin ASIL amaci degismedi: hata SESSIZ OLMAMALI. Onu simdi cikis
+# kodu + stderr tanIsI ile sinIyoruz. Eski yumusak davranis
+# `TULPAR_SOFT_RUNTIME=1` ile bir surum dongusu boyunca hala erisilebilir
+# ve ayri bir sonda onu koruyor.
+c("sifira bolme SESSIZ OLMAMALI",
   'int n = toInt(env("KESINLIKLE_YOK_12345"));\nprint(10 / n);\nprint(7);',
-  "Runtime Error: Division by zero\n0\n7")
-c("sifira mod oldurmemeli",
+  "Runtime Error: Division by zero", mode="runtime_error")
+c("sifira mod SESSIZ OLMAMALI",
   'int n = toInt(env("KESINLIKLE_YOK_12345"));\nprint(10 % n);\nprint(7);',
-  "Runtime Error: Division by zero\n0\n7")
-c("INT_MIN / -1 oldurmemeli",
+  "Runtime Error: Division by zero", mode="runtime_error")
+c("INT_MIN / -1 SESSIZ OLMAMALI",
   'int n = toInt(env("KESINLIKLE_YOK_12345"));\nint m = n - 1;\n'
   'int big = -9223372036854775807 - 1;\nprint(big / m);\nprint(7);',
-  "Runtime Error: Integer division overflow\n0\n7")
+  "Runtime Error: Integer division overflow", mode="runtime_error")
 c("normal bolme bozulmadi", 'print(10 / 3);\nprint(-7 / 2);\nprint(10 % 3);\nprint(-7 % 3);',
   "3\n-3\n1\n-1")
 
@@ -106,7 +125,7 @@ c("blok dis degiskeni yazar", 'int x = 7;\nif (true) { x = 9; }\nprint(x);', "9"
 # --- 7b. Bilesik atamalar ---
 c("%= operatoru", 'int x = 17;\nx %= 5;\nprint(x);', "2")
 c("%= sifira", 'int n = toInt(env("KESINLIKLE_YOK_12345"));\nint z = 7;\nz %= n;\n'
-  'print(z);\nprint(9);', "Runtime Error: Division by zero\n0\n9")
+  'print(z);\nprint(9);', "Runtime Error: Division by zero", mode="runtime_error")
 
 # --- 7. Eleman hedefli ++/-- (2026-09-04'te bulunan hata) ---
 # `a[0]++` SESSIZ HIC-ISLEMDI: parser `++` token'ini tuketip atiyordu
@@ -201,7 +220,7 @@ c("array_fill sifir sonra yaz",
   'for (int i = 0; i < 64; i = i + 1) { t = t + a[i]; }\nprint(t);', "5")
 
 fails = 0
-for name, src, expect in CASES:
+for name, src, expect, mode in CASES:
     safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)
     f = D / (safe + ".tpr")
     f.write_text(src, encoding="utf-8")
@@ -226,6 +245,17 @@ for name, src, expect in CASES:
             print(f"  ✗ {name}")
             print(f"      HATA BEKLENIYORDU ama derlendi; cikti={out!r}")
         continue
+    if mode == "runtime_error":
+        # FLIP sonrasi sozlesme: hata SESSIZ OLMAMALI — surec exit!=0 ile
+        # bitmeli ve tani stderr'de gorunmeli. Fail-fast hatadan sonraki
+        # satirlari calistirmadigi icin ciktinin TAMAMI sinanmaz.
+        err_all = (p.stderr or "")
+        if p.returncode == 0 or expect not in err_all:
+            fails += 1
+            print(f"  ✗ {name}")
+            print(f"      cikis={p.returncode} (0 OLMAMALI), stderr'de beklenen={expect!r}")
+            print(f"      stderr: {err_all.strip()[:200]}")
+        continue
     if p.returncode != 0 or out != expect:
         fails += 1
         print(f"  ✗ {name}")
@@ -238,7 +268,7 @@ for name, src, expect in CASES:
 # BOZULUYORDU (ayni sinif daha once `=>` icin de olmus — formatter.cpp'deki
 # yoruma bakin). Bu sonda o sinifi topluca yakaliyor.
 fmt_fails = 0
-for name, src, expect in CASES:
+for name, src, expect, mode in CASES:
     if expect is None or "\n" not in src:
         continue
     safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in name)
@@ -253,6 +283,14 @@ for name, src, expect in CASES:
     g.write_text(r.stdout, encoding="utf-8")
     q = subprocess.run([TULPAR, str(g)], capture_output=True, text=True,
                        timeout=90, env=env)
+    if mode == "runtime_error":
+        # fmt gidis-donusu de yeni sozlesmeye tabi: bicimlendirilmis kod da
+        # ayni hatayi ayni sekilde (exit!=0 + stderr tanIsI) uretmeli.
+        if q.returncode == 0 or expect not in (q.stderr or ""):
+            fmt_fails += 1
+            print(f"  ✗ fmt gidis-donus: {name}")
+            print(f"      cikis={q.returncode} (0 OLMAMALI), stderr'de beklenen={expect!r}")
+        continue
     _qrt = [ln for ln in (q.stderr or "").splitlines()
             if ln.startswith("Runtime Error:") or ln.startswith("Calisma Zamani Hatasi:")]
     q_out = "\n".join(_qrt + (q.stdout or "").splitlines()).strip()

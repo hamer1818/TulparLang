@@ -110,24 +110,42 @@ func run_farkli_indeks() {
 // Ilk yazilan bu testte `if (i + 1 < len(a))` korumasi vardi, yani hic
 // tasmiyordu ve indeks denetimini kaldiran enjeksiyon YESIL kaliyordu —
 // test hicbir sey olcmuyordu. Koruma bilerek KALDIRILDI.
+// SOZLESME 2026-09-10'da DEGISTI. Once bu test "sinir disi okuma 0 dondurur
+// ve dongu devam eder" diye yazilmisti — o, BUGUNKU DAVRANISI belgeliyordu,
+// hedef sozlesmeyi degil. Artik sinir disi erisim FIRLATIYOR; testin asil
+// amaci (bekcinin VAR oldugunu kanitlamak) firlatmayla daha guclu karsilaniyor:
+// eskiden bir eleman tasmak yetmiyordu (malloc yuvarlamasi 0 dondurup
+// enjeksiyonu yesil birakiyordu) ve uzagi okumak gerekiyordu; simdi TEK eleman
+// tasmasi bile gozlemlenebilir.
+//
+// Yoklugu bekleyen kod icin mesru yol `at(dizi, i, varsayilan)` — yumusaklik
+// ortamda degil, ERISIMCIDE yasar.
 func run_sinir_disi_indeks() {
     int[] a = array_fill(64, 7);
-    int t = 0;
-    for (int i = 0; i < len(a); i = i + 1) {
-        t = t + a[i + 1];        // son tur: a[64] -> sinir disi -> 0
-    }
-    assert_eq_int(t, 63 * 7);
 
-    // BIR eleman tasmak yetmiyor: a[64] malloc'un yuvarladigi blogun
-    // ICINE dusuyor ve 0 okuyor, yani bekciyi kaldiran enjeksiyon YESIL
-    // kaliyordu. Tasmayi GOZLENEBILIR yapmak icin uzagi okuyoruz: bekci
-    // varsa her tur hata basip 0 donuyor, yoksa 32 KB otesi okunuyor.
+    // Bekci var mi? Tek eleman tasmasi firlatmali.
+    bool firladi = false;
+    try { int x = a[64]; } catch (e) { firladi = true; }
+    assert(firladi, "sinir disi OKUMA firlatmali — bekci yok!");
+
+    // Uzak tasma da ayni sekilde.
     int[] b = array_fill(4, 9);
-    int u = 0;
-    for (int i = 0; i < len(b); i = i + 1) {
-        u = u + b[i + 4096];
-    }
-    assert_eq_int(u, 0);
+    bool uzak = false;
+    try { int y = b[4096]; } catch (e) { uzak = true; }
+    assert(uzak, "uzak sinir disi okuma firlatmali");
+
+    // Sinirlar ICINDE hicbir sey degismedi.
+    int t = 0;
+    for (int i = 0; i < len(a); i = i + 1) { t = t + a[i]; }
+    assert_eq_int(t, 64 * 7);
+}
+
+// Yoklugu BEKLEYEN kodun mesru yolu.
+func run_sinir_disi_erisimci() {
+    int[] a = array_fill(64, 7);
+    assert_eq_int(at(a, 64, -1), -1);      // tasma -> varsayilan, tani yok
+    assert_eq_int(at(a, 4096, -1), -1);
+    assert_eq_int(at(a, 0, -1), 7);        // gecerli indeks etkilenmedi
 }
 
 // Govdede eleman yazmasi + OKUMASI. Yazilan deger `a[i] + 1`, yani bir
@@ -285,12 +303,17 @@ func run_karisik_yazma() {
 // Olcen sey asagidaki UZAK yazma.
 func run_yazma_sinir_disi() {
     int[] a = array_fill(8, 0);
-    for (int i = 0; i < len(a); i = i + 1) { a[i + 1] = i; }
+    // Sinirlar icindeki yazmalar normal.
+    for (int i = 0; i < 7; i = i + 1) { a[i + 1] = i; }
     int t = 0;
     for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
-    // a[0] hic yazilmadi (0), a[1..7] = 0..6 -> 21
-    assert_eq_int(t, 21);
-    assert_eq_int(len(a), 8);        // sinir disi yazma diziyi BUYUTMEDI
+    assert_eq_int(t, 21);            // a[0]=0, a[1..7]=0..6
+    // Tek eleman tasan YAZMA firlatmali (bekcinin kaniti) ve diziyi
+    // BUYUTMEMELI.
+    bool firladi = false;
+    try { a[8] = 99; } catch (e) { firladi = true; }
+    assert(firladi, "sinir disi YAZMA firlatmali — bekci yok!");
+    assert_eq_int(len(a), 8);
 }
 
 // UZAK sinir disi yazma: 8 GB otesi (8 MB yetmiyor — buyuk bir yiginda
@@ -299,12 +322,12 @@ func run_yazma_sinir_disi() {
 // yaziliyor ve program cokuyor.
 func run_yazma_sinir_disi_uzak() {
     int[] b = array_fill(4, 9);
-    for (int i = 0; i < len(b); i = i + 1) {
-        b[i + 1000000000] = 7;
-    }
+    bool firladi = false;
+    try { b[1000000000] = 7; } catch (e) { firladi = true; }
+    assert(firladi, "UZAK sinir disi yazma firlatmali — bekci kalkarsa yigin bozulur");
     int t = 0;
     for (int j = 0; j < len(b); j = j + 1) { t = t + b[j]; }
-    assert_eq_int(t, 36);
+    assert_eq_int(t, 36);            // dizi bozulmamis
     assert_eq_int(len(b), 4);
 }
 
@@ -444,12 +467,18 @@ func run_while_kucuktur() {
 
 // SINIR DIZIDEN BUYUK: sinav dusmeli, genel surum kosmali. Bekci
 // sinir disi yazmayi durduruyor, dizi bozulmuyor.
+// Sinir diziden BUYUK: kanit dusmeli ve bekci kalmali. Yeni sozlesmede bekcinin
+// kaniti, ikinci turun FIRLATMASI (eskiden "hata basip 0 doner"di).
 func run_while_sinir_buyuk() {
     int[] a = array_fill(8, 1);
     int ub = 1000000000;
     int step = 200000000;
     int k = 0;
-    while (k <= ub) { a[k] = 2; k = k + step; }
+    bool firladi = false;
+    try {
+        while (k <= ub) { a[k] = 2; k = k + step; }
+    } catch (e) { firladi = true; }
+    assert(firladi, "sinir diziden buyukken bekci firlatmali");
     int t = 0;
     for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
     assert_eq_int(t, 9);           // yalniz a[0] yazildi: 2 + 7*1
@@ -468,10 +497,16 @@ func run_while_negatif_baslangic() {
     int ub = 7;
     int step = 1000000000;
     int k = 0 - 3000000000;
-    while (k <= ub) { a[k] = 2; k = k + step; }
+    // Yeni sozlesme: negatif indeks sinir disidir ve FIRLATIR (bkz.
+    // run_sinir_disi_indeks). Bekcinin kaniti ilk turun firlatmasi.
+    bool firladi = false;
+    try {
+        while (k <= ub) { a[k] = 2; k = k + step; }
+    } catch (e) { firladi = true; }
+    assert(firladi, "negatif baslangicta bekci firlatmali");
     int t = 0;
     for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
-    assert_eq_int(t, 9);           // yalniz a[0] yazildi: 2 + 7*1
+    assert_eq_int(t, 8);           // hicbir yazma gecmedi: 8 * 1
 }
 
 // NEGATIF ADIM: `step > 0` sinavi dusmeli. Bu bicim yalniz `break` ile
@@ -484,12 +519,18 @@ func run_while_negatif_adim() {
     int step = 0 - 1000000000;
     int k = 3;
     int say = 0;
-    while (k <= ub) {
-        a[k] = 2;
-        say = say + 1;
-        if (say > 3) { break; }
-        k = k + step;
-    }
+    // Ilk tur a[3]'e yaziyor (gecerli), ikinci tur k negatife dusuyor ve
+    // yeni sozlesmede FIRLATIYOR.
+    bool firladi = false;
+    try {
+        while (k <= ub) {
+            a[k] = 2;
+            say = say + 1;
+            if (say > 3) { break; }
+            k = k + step;
+        }
+    } catch (e) { firladi = true; }
+    assert(firladi, "negatif adimda bekci firlatmali");
     int t = 0;
     for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
     assert_eq_int(t, 9);           // yalniz a[3] yazildi: 2 + 7*1
@@ -531,13 +572,17 @@ func run_while_artim_ortada() {
     int ub = 7;
     int step = 1000000000;
     int k = 0;
-    while (k <= ub) {
-        k = k + step;              // ONCE artiyor
-        a[k] = 3;                  // k artik siniri asmis olabilir
-    }
+    bool firladi = false;
+    try {
+        while (k <= ub) {
+            k = k + step;              // ONCE artiyor
+            a[k] = 3;                  // k artik siniri asmis
+        }
+    } catch (e) { firladi = true; }
+    assert(firladi, "artim son ifade degilken bekci firlatmali");
     int t = 0;
     for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
-    assert_eq_int(t, 0);           // tek tur, o da sinir disi -> hicbir yazma
+    assert_eq_int(t, 0);           // hicbir yazma gecmedi
 }
 
 // SINIR govdede DEGISIYOR: bir kezlik sinav BAYATLIYOR, kanit dusmeli.
@@ -550,11 +595,15 @@ func run_while_sinir_degisiyor() {
     int ub = 7;
     int step = 200000000;
     int k = 0;
-    while (k <= ub) {
-        a[k] = 1;
-        if (k == 0) { ub = 1000000000; }   // sinav bayatliyor
-        k = k + step;
-    }
+    bool firladi = false;
+    try {
+        while (k <= ub) {
+            a[k] = 1;
+            if (k == 0) { ub = 1000000000; }   // sinav bayatliyor
+            k = k + step;
+        }
+    } catch (e) { firladi = true; }
+    assert(firladi, "sinir govdede degisince bekci firlatmali");
     int t = 0;
     for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
     assert_eq_int(t, 1);           // yalniz a[0]
@@ -567,13 +616,17 @@ func run_while_adim_degisiyor() {
     int step = 1;
     int k = 0;
     int say = 0;
-    while (k <= ub) {
-        a[k] = 1;
-        say = say + 1;
-        if (say == 3) { step = 0 - 1000000000; }
-        if (say > 5) { break; }
-        k = k + step;
-    }
+    bool firladi = false;
+    try {
+        while (k <= ub) {
+            a[k] = 1;
+            say = say + 1;
+            if (say == 3) { step = 0 - 1000000000; }
+            if (say > 5) { break; }
+            k = k + step;
+        }
+    } catch (e) { firladi = true; }
+    assert(firladi, "adim govdede degisince bekci firlatmali");
     int t = 0;
     for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }
     assert_eq_int(t, 3);           // a[0], a[1], a[2]
@@ -647,6 +700,7 @@ test("bastan olmayan baslangic", "run_bastan_degil");
 test("ic ice dongu", "run_ic_ice");
 test("farkli indeks bekciyi korur", "run_farkli_indeks");
 test("sinir disi indeks bekciye takilir", "run_sinir_disi_indeks");
+test("sinir disi: erisimci varsayilani", "run_sinir_disi_erisimci");
 test("govdede eleman yazmasi", "run_govdede_yazma");
 test("donguda kutulama", "run_donguda_kutulama");
 test("takma ad uzerinden kutulama", "run_takma_ad");
