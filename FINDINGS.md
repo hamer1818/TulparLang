@@ -119,6 +119,14 @@ yalnız `&&`/`||`'de idi.
 | S1 | **Truthiness tablosu** — yalnız SAYISAL SIFIR yanlış | **ölçüldü, belgesiz** |
 | S2 | `mutex_*` ile paylaşım | **ölçüldü, belgesiz** ([[Concurrency]]) |
 | S3 | `arena_drop` gerekliliği (`arena_restore` serbest bırakmaz) | **ölçüldü, belgesiz** ([[Memory]]) |
+| S4 | SSE/WS akışında handler ortası throw | **tanımsız** (P39) |
+
+**S1'in ampirik yarısı (P38a):** korpusta `if(<ad>)` deseninde **165 site**,
+bunların **39'u** bool bildirimi olmayan değerler — yani truthiness'e yaslanıyor.
+⚠ **Erişimci tasarımına doğrudan girdi:** o 39'un bir kısmı (`if (_schema)`,
+`if (q)`, `if (hdrs)` — lib/wings) eksik `json[k]`'nin sessizce `0` (falsy)
+dönmesine yaslanıyor. **`json[k]` strict'te fırlatır yapılırsa bu sitelerin
+sözleşmesi kırılır** — göç, erişimci setinin parçası olmalı.
 
 **S1 — truthiness (P38, 2026-09-10):**
 
@@ -150,18 +158,33 @@ notuna göre orası *"the single dispatch entry point"*; `listen`, `listen_pool`
 `listen_async`, `listen_evented` dördü de oradan geçiyor (doğrulandı). Sarmalın
 `.tpr` katmanında olması şart: longjmp aynı yığın üzerinde çalışıyor.
 
-**Durum: 3'te 2.**
+**Durum: KAPANDI (2026-09-10).**
 
 | | önce | sonra |
 |---|---|---|
 | süreç bozuk istekten sonra | **öldü** | **CANLI** ✅ |
 | durum kaydı / log | 200 (yanlış) | **500** ✅ |
-| istemcinin aldığı yanıt | — | hâlâ boş (`000`, 2 bayt) ❌ |
+| istemcinin aldığı yanıt | — | **500 + JSON gövde** ✅ |
 
-**Kalan:** yakalanan istisnadan sonra serve döngüsü yanıtı sokete yazmıyor.
-Dil düzeyinde sorun YOK — `catch` içinden `return` doğru çalışıyor (izole test:
-`_status=500`, alanlar doğru). Sorun wings'in zarf/yazma yolunda, muhtemelen
-longjmp'ın atladığı bir ara durum. **Flip bu kapanmadan yapılamaz.**
+**Kök neden (P40 yanlışlandı):** ne "socket_send hiç çağrılmıyor" (H-A) ne de
+"Content-Length tutmuyor" (H-C) idi. `curl -v` üçüncü bir karakter gösterdi —
+bağlantı açık kalıyor, **0 bayt**, zaman aşımı. Sebep bir **tip uyumsuzluğu**:
+`_wings_dispatch_cached` bir dict değil, `_wings_build_response`'un ürettiği
+**tel dizgisi** döndürüyor. `catch`'ten ham dict dönünce çağıran boş dizgi
+görüyor — ve boş dizgi `{"_stream":1}` nöbetçisiyle **aynı şey** demek
+("handler zaten yazdı, socket_send yapma"). Yani bağlantı ne yazılıyor ne
+kapanıyor. **Boş dizginin iki iş birden taşıması: #0'ın ta kendisi.**
+
+**Çözüm:** hatayı normal handler'ın üreteceğiyle aynı şekle sentezleyip mevcut
+zarf yolundan geçirmek — `_wings_build_response(server_error(...), keep)`.
+Downstream'de sıfır özel durum; yanıt da tek kapıdan çıkıyor.
+
+**Doğrulandı:** iyi 200 · kötü **500** + `{"error":"handler error: ..."}` ·
+süreç CANLI · sonraki 200 · /healthz 200.
+
+**Açık kalan (S4 adayı):** SSE/WS akış patikasında handler ortasında throw'un
+sözleşmesi tanımsız — `{"_stream":1}` zarfı baypas ediyor. Muhtemel kabul
+edilebilir davranış "bağlantı kapanır, log düşer" ama **yazılmalı**.
 
 **Yan bulgu:** `_wings_last_status` sözleşme gereği "her dönüşte" yazılmalıymış
 (tanımındaki not); catch yolu onu atlayınca istek 500 dönerken 200 loglanıyordu.
@@ -179,6 +202,12 @@ yolu eklendiğinde sessizce atlanır.**
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
+16. **Yeni çıkış yolu = tüm belgelenmiş yan etkilerin yeniden envanteri.**
+   `catch`, kontrol akışına eklenen bir kapıdır; longjmp atladığı her satırın
+   yan etkisini iptal eder. Fonksiyonun sözleşmesi N kapıda da aynı olmalı.
+   (`_wings_last_status` "her dönüşte yazılır" notu tam olarak bu envanterdi ve
+   işini yaptı.) R1'in "tanı tek kapıdan çıkar" ilkesinin ayna hâli: **yan etki
+   de tek envanterden denetlenir; yanıt da tek kapıdan çıkar.**
 15. **Göç aleti hedef sözleşmeyi test eder, mevcut olanı değil** — göç
    süresince iki sözleşme eşzamanlı yaşar; hedefin harness'ı flip'ten ÖNCE
    yeşile oturur, böylece flip günü hiçbir şey değişmez. (`build.sh test`
