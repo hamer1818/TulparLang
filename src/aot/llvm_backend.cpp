@@ -3092,6 +3092,66 @@ LLVMValueRef get_local_native(LLVMBackend *backend, const char *name) {
 }
 
 LLVMValueRef codegen_expression(LLVMBackend *backend, ASTNode_C *node);
+
+// KISA DEVRE (`&&` / `||`) — L1 duzeltmesi, 2026-09-10.
+//
+// NEDEN VAR: her iki operator de IKI OPERANDI DA degerlendiriyordu. Tipli yol
+// (`TOKEN_AND`/`TOKEN_OR` case'leri) ve kutulu yol (`emit_boxed_binary_op`)
+// ZATEN URETILMIS L ve R alip duz `LLVMBuildAnd`/`Or` yapiyordu; kisa devre o
+// noktada yapisal olarak imkansizdi. Sonuc: evrensel koruma deyimi kirikti —
+//   while (j > 0 && o[j - 1] > v)     // j=0 iken o[-1] OKUNUYORDU
+//   if (i < len(a) && a[i] == x)      // ayni
+// ve yan etkili sag taraflar kosulsuz calisiyordu.
+//
+// NASIL BULUNDU: R1'in TULPAR_STRICT_RUNTIME anahtari dedektor olarak
+// kosulunca scene3d_engine 654/654 GECERKEN 9 tani yuttugu gorundu; izolasyon
+// bir insertion sort'a, oradan yukaridaki satira indi. Kod dogruydu, dil
+// yanlisti (bkz. Tuzaklar 7c).
+//
+// SABLON ternary'den (AST_TERNARY): phi YERINE giris blogunda bir alloca
+// yuvasi. Phi olsaydi dallarin tipi ayni olmak zorundaydi; yuva ile o kisit
+// yok ve iki yol (tipli/kutulu) ayni yardimciyi paylasabiliyor.
+//
+// SONUC TIPI i64 0/1 — cagiran taraf ya oldugu gibi kullanir (tipli yol) ya
+// da bool VMValue'ya kutular (kutulu yol).
+static LLVMValueRef emit_logical_shortcircuit_i64(LLVMBackend *backend,
+                                                  ASTNode_C *node) {
+  LLVMValueRef slot =
+      llvm_build_alloca_at_entry(backend, backend->int_type, "sc_res");
+
+  // SOL TARAF TAM BIR KEZ. Thunk yok; tek cagri noktasi burasi.
+  LLVMValueRef lv = codegen_expression(backend, node->left);
+  LLVMValueRef lb = llvm_build_is_truthy(backend, lv);
+
+  LLVMValueRef func = backend->current_function;
+  LLVMBasicBlockRef rhs_bb = append_bb(backend, func, "sc_rhs");
+  LLVMBasicBlockRef done_bb = append_bb(backend, func, "sc_end");
+
+  // KISALTMA KIMLIGI OPERATORE GORE: `&&` erken cikista FALSE, `||` TRUE.
+  // Ters cevirmek klasik sessiz hatadir; fikstur bunu kilitliyor
+  // (tests/short_circuit.test.tpr).
+  int is_and = (node->op == TOKEN_AND);
+  LLVMBuildStore(backend->builder,
+                 LLVMConstInt(backend->int_type, is_and ? 0 : 1, 0), slot);
+  if (is_and)
+    LLVMBuildCondBr(backend->builder, lb, rhs_bb, done_bb);
+  else
+    LLVMBuildCondBr(backend->builder, lb, done_bb, rhs_bb);
+
+  LLVMPositionBuilderAtEnd(backend->builder, rhs_bb);
+  LLVMValueRef rv = codegen_expression(backend, node->right);
+  LLVMValueRef rb = llvm_build_is_truthy(backend, rv);
+  LLVMBuildStore(backend->builder,
+                 LLVMBuildZExt(backend->builder, rb, backend->int_type,
+                               "sc_rhs_i64"),
+                 slot);
+  if (!LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(backend->builder)))
+    LLVMBuildBr(backend->builder, done_bb);
+
+  LLVMPositionBuilderAtEnd(backend->builder, done_bb);
+  return LLVMBuildLoad2(backend->builder, backend->int_type, slot, "sc_val");
+}
+
 LLVMValueRef codegen_statement(LLVMBackend *backend, ASTNode_C *node);
 
 // Typed expression result for unboxed operations
@@ -3782,6 +3842,17 @@ TypedValue codegen_typed_expr(LLVMBackend *backend, ASTNode_C *node) {
   }
 
   case AST_BINARY_OP: {
+    // KISA DEVRE, operandlar URETILMEDEN once. Asagidaki iki satir L ve R'yi
+    // kosulsuz uretiyor; `&&`/`||` icin bu YANLIS (bkz. L1 / Tuzaklar 7c).
+    if (node->op == TOKEN_AND || node->op == TOKEN_OR) {
+      TypedValue sc;
+      // INFERRED_BOOL: sonuc bool'dur, int degil. INFERRED_INT deseydik
+      // `toString(t && f)` "true" yerine "1" basardi — davranis degisikligi
+      // olurdu (examples/04_math_logic.tpr tam bunu yazdiriyor).
+      sc.type = INFERRED_BOOL;
+      sc.value = emit_logical_shortcircuit_i64(backend, node);
+      return sc;
+    }
     TypedValue L = codegen_typed_expr(backend, node->left);
     TypedValue R = codegen_typed_expr(backend, node->right);
 

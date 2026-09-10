@@ -1,0 +1,109 @@
+// `&&` ve `||` KISA DEVRE — L1 duzeltmesinin kilidi.
+//
+// Once iki operator de IKI OPERANDI DA degerlendiriyordu; evrensel koruma
+// deyimi (`i < len(a) && a[i] == x`) kiriktir ve yan etkili sag taraflar
+// kosulsuz calisiyordu. Bulgu, R1'in strict anahtari dedektor olarak
+// kosulunca bir insertion sort'un icinden cikti (bkz. Tuzaklar 7c).
+import "test";
+
+int sayac = 0;
+func yan(): int { sayac = sayac + 1; return 1; }
+
+func run_and_kisa_devre() {
+    sayac = 0;
+    bool r = (1 == 2) && (yan() == 1);
+    assert_eq_int(sayac, 0);        // sag taraf CALISMAMALI
+    assert(!r, "false && X yanlis olmali");
+}
+
+func run_or_kisa_devre() {
+    sayac = 0;
+    bool r = (1 == 1) || (yan() == 1);
+    assert_eq_int(sayac, 0);        // sag taraf CALISMAMALI
+    assert(r, "true || X dogru olmali");
+}
+
+// Sag taraf GEREKTIGINDE calismali — kisa devre "hic calistirma" degil.
+func run_and_sag_calisir() {
+    sayac = 0;
+    bool r = (1 == 1) && (yan() == 1);
+    assert_eq_int(sayac, 1);
+    assert(r, "true && true dogru olmali");
+}
+
+func run_or_sag_calisir() {
+    sayac = 0;
+    bool r = (1 == 2) || (yan() == 1);
+    assert_eq_int(sayac, 1);
+    assert(r, "false || true dogru olmali");
+}
+
+// PHI KIMLIGI: erken cikista `&&` FALSE, `||` TRUE dondurmeli. Ters cevirmek
+// klasik sessiz hatadir — bu iki test onu kilitliyor.
+func run_kisaltma_kimligi() {
+    assert(!((1 == 2) && (1 == 1)), "&& erken cikis FALSE olmali");
+    assert((1 == 1) || (1 == 2), "|| erken cikis TRUE olmali");
+}
+
+// SOL TARAF TAM BIR KEZ degerlendirilmeli (cift degerlendirme yasak).
+func run_sol_tek_kez() {
+    sayac = 0;
+    bool r = (yan() == 1) && (1 == 1);
+    assert_eq_int(sayac, 1);
+    assert(r, "sonuc dogru olmali");
+}
+
+// KORUMA DEYIMI: sinir disi okuma HIC olmamali.
+func run_koruma_deyimi() {
+    int[] bos = [];
+    int n = 0;
+    bool girdi = false;
+    if (n > 0 && bos[n - 1] == 5) { girdi = true; }
+    assert(!girdi, "bos dizide koruma gecmemeli");
+    int[] dolu = [7];
+    bool ikinci = false;
+    if (len(dolu) > 0 && dolu[0] == 7) { ikinci = true; }
+    assert(ikinci, "dolu dizide koruma gecmeli");
+}
+
+// Insertion sort — L1'in bulundugu birebir desen.
+func _sirala(a): array {
+    array o = [];
+    int i = 0;
+    while (i < length(a)) {
+        str v = a[i];
+        int j = length(o);
+        push(o, v);
+        while (j > 0 && o[j - 1] > v) { o[j] = o[j - 1]; j = j - 1; }
+        o[j] = v;
+        i = i + 1;
+    }
+    return o;
+}
+
+func run_siralama_sinir_disi_okumaz() {
+    array s = _sirala(["c", "a", "b", "a"]);
+    assert_eq_int(length(s), 4);
+    assert_eq_str(s[0], "a");
+    assert_eq_str(s[3], "c");
+}
+
+// Bool sonuc tipi korunmali: `toString` "true"/"false" basmali, "1"/"0" degil.
+func run_bool_tipi_korunur() {
+    bool t = true;
+    bool f = false;
+    assert_eq_str(toString(t && f), "false");
+    assert_eq_str(toString(t || f), "true");
+}
+
+print("=== kisa devre testleri ===");
+test("&& kisa devre yapar",            "run_and_kisa_devre");
+test("|| kisa devre yapar",            "run_or_kisa_devre");
+test("&& gerektiginde sagi calistirir","run_and_sag_calisir");
+test("|| gerektiginde sagi calistirir","run_or_sag_calisir");
+test("kisaltma kimligi dogru",         "run_kisaltma_kimligi");
+test("sol taraf tek kez",              "run_sol_tek_kez");
+test("koruma deyimi sinir disi okumaz","run_koruma_deyimi");
+test("siralama sinir disi okumaz",     "run_siralama_sinir_disi_okumaz");
+test("bool sonuc tipi korunur",        "run_bool_tipi_korunur");
+test_summary();

@@ -59,7 +59,7 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | R5 | "Sınır dışı → 0, devam" bir kaza | **çürütüldü** — TEST EDİLMİŞ sözleşme (`loop_versioning::run_sinir_disi_indeks`); strict'i varsayılan yapmak 2 suite'i kırıyor → **karar kullanıcıya** | R1 seti |
 | R6 | Sondalar tanıyı doğru yerde arıyor | **çürütüldü, DÜZELTİLDİ** — `silent_failure_probe.py` tanıyı stdout'ta bekliyordu; stderr süzgeci eklendi | R1 seti |
 | R7 | Site'nin "invalid body → 422" vaadi tutuyor | **doğrulandı** — 422 + alan detayı (`name: required`, `expected str, got int`) | P28 |
-| R2 | `build.sh test` çalışma zamanı hatasını yakalıyor | **çürütüldü** — enjeksiyonla ölçüldü: bir örneğe `kk[999]` eklendi, suite "All tests passed" dedi | P25 |
+| R2 | `build.sh test` çalışma zamanı hatasını yakalıyor | **çürütüldü, DÜZELTİLDİ** — harness artık `TULPAR_STRICT_RUNTIME=1` ile koşuyor (dil varsayılanı değişmeden); enjeksiyon kırmızı | P25 |
 | T5 | `thread_join` işçinin sonucunu taşıyor | **çürütüldü** — 0 dönüyor; katalogda `void` olarak kaydedildi, artık atanması hata | P20 |
 | T6 | Dilde senkronizasyon ilkeli yok | **çürütüldü** — `mutex_*` var ve çalışıyor; yalnız katalogda yokmuş | P27 |
 | C9 | Suite'ler çalışma zamanı hatasını yakalıyor | **doğrulandı (enjeksiyonla)** — tek dosya çıkış 1, suite çıkış 1, paket sayısı 75'te kalıyor | P26 |
@@ -97,7 +97,19 @@ daraltıldı → `_t_sort_str3`'ün insertion sort'u → `while (j > 0 && o[j-1]
 yan etki (sağ taraf koşulsuz çalışıyor — `no_double_eval` ailesinin kardeşi).
 Semantiği hiçbir yerde belgelenmemiş, yani bilinçli bir karar değil.
 
-**Durum: açık.** Codegen ameliyatı; kendi audit'iyle yürümeli.
+**Durum: DÜZELTİLDİ (2026-09-10).** `emit_logical_shortcircuit_i64` — ternary'nin
+deseni (phi yerine giriş bloğunda alloca yuvası, böylece iki yol aynı yardımcıyı
+paylaşabiliyor). Sol taraf tam bir kez, kısaltma kimliği operatöre göre
+(`&&`→false, `||`→true), sonuç `INFERRED_BOOL` (int deseydi `toString(t && f)`
+"1" basardı). Fikstür: `tests/short_circuit.test.tpr` (9 test, phi kimliği ve
+sol-tek-kez dahil).
+
+**P32 doğrulaması:** strict dedektör koşumunda `scene3d_engine` **9 → 0**;
+`loop_versioning` 30 → 30 (değişmedi — onlar gerçekten kasıtlı sınır testleri).
+
+**Yan bulgu — ternary zaten lazy** (P35): `1==1 ? 5 : yan()` sağ tarafı
+çalıştırmıyor. Yani kusur koşullu değerlendirme ailesinin tamamında değil,
+yalnız `&&`/`||`'de idi.
 
 ## Yöntem kuralları (turlardan çıkan)
 
@@ -110,6 +122,14 @@ Semantiği hiçbir yerde belgelenmemiş, yani bilinçli bir karar değil.
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
+13. **Ölçüm aleti dil varsayılanından sıkı olabilir** — dilin sözleşmesi
+   yumuşak kalabilir, ama harness hatayı görmezden gelmemeli. `build.sh test`
+   strict koşuyor; dil koşmuyor.
+14. **Yeşil bir test kusursuz kod demek değildir; kusurlar bileşik kurup doğru
+   üretebilir.** En tehlikeli yeşil, kusurların birbirini sildiği yeşildir:
+   L1 (kısa devre yok) + yumuşak OOB (0 ikamesi) birlikte `o[-1]` okumasını
+   `0 > v = false` yapıp insertion sort'u DOĞRU çalıştırıyordu. Tek birini
+   düzeltmek bileşiği bozar — düzeltme sırası bağımlılık grafiğiyle yürür.
 7. **Başarısızlık işareti meşru değerle aynı sentinel'i paylaşamaz** — `TYPE_VOID`
    hem "değer üretmiyor" hem "çıkaramadım" hem "dönüş yazılmamış" demekti;
    üçü de aynı yerde oturunca başarısızlık geçerli davranış kisvesi kazandı.
