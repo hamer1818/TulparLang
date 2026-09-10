@@ -111,6 +111,29 @@ sol-tek-kez dahil).
 çalıştırmıyor. Yani kusur koşullu değerlendirme ailesinin tamamında değil,
 yalnız `&&`/`||`'de idi.
 
+## Belgelenmemiş sözleşmeler
+
+| # | Sözleşme | Durum |
+|---|---|---|
+| S1 | **Truthiness tablosu** — yalnız SAYISAL SIFIR yanlış | **ölçüldü, belgesiz** |
+| S2 | `mutex_*` ile paylaşım | **ölçüldü, belgesiz** ([[Concurrency]]) |
+| S3 | `arena_drop` gerekliliği (`arena_restore` serbest bırakmaz) | **ölçüldü, belgesiz** ([[Memory]]) |
+
+**S1 — truthiness (P38, 2026-09-10):**
+
+| değer | `if()` sonucu |
+|---|---|
+| `int 0` · `float 0.0` | **false** |
+| `int 7` · `"a"` · `[1]` | true |
+| `""` boş dizgi | **true** |
+| `[]` boş dizi | **true** |
+| `{}` boş json | **true** |
+
+Yani **yalnız sayısal sıfır yanlıştır**; boşluk/uzunluk doğruluğu etkilemez.
+Bu savunulabilir bir tasarım (Python/JS'ten farklı) ama hiçbir yerde yazılı
+değil — L1'in doğum hikâyesinin birebir aynısı: *belgelenmemiş operatör
+semantiği*. Boşluk sınamak isteyen `len(x) > 0` yazmalı.
+
 ## Yöntem kuralları (turlardan çıkan)
 
 1. **Tek thread'li kontrol** — eşzamanlılık hatası bildirmeden önce aynı
@@ -122,6 +145,10 @@ yalnız `&&`/`||`'de idi.
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
+15. **Göç aleti hedef sözleşmeyi test eder, mevcut olanı değil** — göç
+   süresince iki sözleşme eşzamanlı yaşar; hedefin harness'ı flip'ten ÖNCE
+   yeşile oturur, böylece flip günü hiçbir şey değişmez. (`build.sh test`
+   strict koşuyor, dil koşmuyor; Y1 branch'i de aynı kalıp.)
 13. **Ölçüm aleti dil varsayılanından sıkı olabilir** — dilin sözleşmesi
    yumuşak kalabilir, ama harness hatayı görmezden gelmemeli. `build.sh test`
    strict koşuyor; dil koşmuyor.
