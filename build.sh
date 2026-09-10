@@ -694,7 +694,17 @@ PYEOF
         echo "$RT_LEAK" | head -5 | sed 's/^/  /'
         exit 1
     fi
-    echo -e "${GREEN}tani tek kapidan cikiyor${NC} (runtime_bindings'de ham printf yok)"
+    # SAYISAL BEKLENEN-DEGER: desen-guvenligi tek basina yetmez — denetim
+    # sessizce korlese "sizinti yok" der. Yetkili cikis noktalarinin sayisini
+    # da raporluyoruz; beklenen minimumun altina duserse denetim degil, KAPI
+    # kaybolmus demektir.
+    RT_GATES=$(grep -c "aot_runtime_error(" src/vm/runtime_bindings.cpp)
+    if [ "$RT_GATES" -lt 15 ]; then
+        echo -e "${RED}Yetkili tani kapisi sayisi beklenenin altinda ($RT_GATES < 15)${NC}"
+        echo "  Tanilar baska bir yola mi tasindi? Denetim korlesmis olabilir."
+        exit 1
+    fi
+    echo -e "${GREEN}tani tek kapidan cikiyor${NC} (ham printf yok, $RT_GATES yetkili kapi)"
     rm -rf "$AR_TMP"
     rm -rf "$SR_TMP"
 

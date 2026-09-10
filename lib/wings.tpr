@@ -88,6 +88,19 @@ int _wings_color = 1;
 // before dispatch). _wings_dispatch_cached writes this at every return.
 int _wings_last_status = 200;
 
+// AKIS BASLADI MI? (S4 / P44, 2026-09-10)
+//
+// SSE/WS handler'lari sokete DOGRUDAN yaziyor (`socket_send(fd, ...)`) ve
+// wings bunu goremiyor. Strict varsayilandan sonra akis ORTASINDA bir hata
+// firlarsa dispatch sarmali 500 zarfini SENTEZLIYOR ve serve dongusu onu ayni
+// sokete YAZIYOR — olculdu (P44): istemci 200 SSE akisi aliyor ve govdesinde
+// "HTTP/1.1 500 Internal Server Error ..." gomulu geliyor. Protokol bozulmasi.
+//
+// `wings_sse_headers()` akisin BASLADIGI tek noktadir; orasi bu bayragi
+// kaldiriyor, dispatch her istekte sifirliyor. Bayrak kalkmissa catch yolu
+// zarf YAZMAZ — yalniz loglar ve baglantiyi kapatir.
+int _wings_stream_started = 0;
+
 // Pulls config overrides from the environment. Today honours
 // `TULPAR_HTTP_MAX_BODY` (bytes) and `TULPAR_HTTP_QUIET` (any
 // non-empty value silences the per-request access log). Future
@@ -1522,6 +1535,7 @@ func _wings_status_or(json result, int fallback) {
 // Yumusak varsayilanda hicbir sey degismez: hata firlatilmadigi icin `catch`
 // hic tetiklenmez.
 func _wings_dispatch_cached(int route_idx, int keep) {
+    _wings_stream_started = 0;          // her istekte sifirlanir
     try {
         return _wings_dispatch_inner(route_idx, keep);
     } catch (e) {
@@ -1543,6 +1557,14 @@ func _wings_dispatch_cached(int route_idx, int keep) {
         //
         // Cozum: hatayi normal handler'in uretecegiyle AYNI sekle sentezleyip
         // mevcut zarf yolundan gecirmek — downstream'de sifir ozel durum.
+        // UC FAZLI SOZLESME (S4, P44 ile olculdu):
+        //   akis baslamadan -> 500 + log (zarf sentezlenir)
+        //   akis ortasinda  -> yalniz log + baglanti kapanir; zarf YAZILMAZ,
+        //                      cunku header'lar gitti ve yazmak akisi bozuyor
+        //   her iki fazda   -> surec yasar
+        if (_wings_stream_started == 1) {
+            return "";                  // bos dizgi = "yazma, kapat"
+        }
         return _wings_build_response(server_error("handler error: " + toString(e)), keep);
     }
 }
@@ -1987,6 +2009,7 @@ func wings_metrics_prom() {
 // wings can't both stream and build a single response, so SSE handlers
 // `socket_close()` the fd themselves when the stream ends.
 func wings_sse_headers() {
+    _wings_stream_started = 1;          // S4: akis basladi (bkz. bayragin notu)
     str s = "HTTP/1.1 200 OK\r\n";
     s = s + "Content-Type: text/event-stream\r\n";
     s = s + "Cache-Control: no-cache\r\n";

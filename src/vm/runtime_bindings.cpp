@@ -1944,6 +1944,20 @@ void vm_object_set(VM *vm, ObjObject *obj, char *key, VMValue value) {
   obj->count++;
 }
 
+// ⚠ GUVENLIK SOZLESMESI (FINDINGS T7 / P15, 2026-09-10): BU SAF BIR OKUMA
+// YOLUDUR. Paylasilan bir `json`, thread'ler arasinda ESZAMANLI OKUNUYOR ve
+// bunun guvenli olmasinin TEK sebebi burada hicbir yazma olmamasi —
+// `ObjObject`te tembel/onbellek alani yok, ilk erisimde kurulan bir hash
+// indeksi yok, memoizasyon yok.
+//
+// Dizilerin karsit ornegi ogretici: `arr_items()` -> `arr_debox()` bir OKUMA
+// yolundan tetiklenip dizi basligina YAZIYOR, ve tam bu yuzden orasi kilit
+// altina alinmak zorunda kaldi.
+//
+// BURAYA memoizasyon / lazy hash / erisim sayaci EKLEMEYIN. Eklenecekse bu,
+// eszamanlilik sozlesmesinin degismesi demektir: T7 ve derin kopya tasarimi
+// yeniden degerlendirilmelidir (S6). Kalicilik fikstur ile de gozleniyor:
+// tests/shared_json_read.test.tpr.
 VMValue vm_object_get(ObjObject *obj, char *key) {
   if (!obj || !key)
     return VM_INT(0);

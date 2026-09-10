@@ -122,8 +122,9 @@ yalnız `&&`/`||`'de idi.
 | S1 | **Truthiness tablosu** — yalnız SAYISAL SIFIR yanlış | **ölçüldü, belgesiz** |
 | S2 | `mutex_*` ile paylaşım | **ölçüldü, belgesiz** ([[Concurrency]]) |
 | S3 | `arena_drop` gerekliliği (`arena_restore` serbest bırakmaz) | **ölçüldü, belgesiz** ([[Memory]]) |
-| S4 | SSE/WS akışında handler ortası throw | **tanımsız** (P39) |
+| S4 | SSE/WS akışında handler ortası throw | **ÖLÇÜLDÜ ve KAPANDI** — üç fazlı sözleşme (P44) |
 | S5 | `at` / `json_get` sınır politikası | **belgelendi** — negatif indeks "sondan" değil, sınır dışı |
+| S6 | Paylaşılan-değer katmanı mutasyona uğratılmaz | **sabitlendi** — `vm_object_get` üstünde sözleşme yorumu + `tests/shared_json_read.test.tpr`; uğratılacaksa T7 ve derin kopya yeniden değerlendirilir |
 
 **S1'in ampirik yarısı (P38a):** korpusta `if(<ad>)` deseninde **165 site**,
 bunların **39'u** bool bildirimi olmayan değerler — yani truthiness'e yaslanıyor.
@@ -194,9 +195,21 @@ Downstream'de sıfır özel durum; yanıt da tek kapıdan çıkıyor.
 **Doğrulandı:** iyi 200 · kötü **500** + `{"error":"handler error: ..."}` ·
 süreç CANLI · sonraki 200 · /healthz 200.
 
-**Açık kalan (S4 adayı):** SSE/WS akış patikasında handler ortasında throw'un
-sözleşmesi tanımsız — `{"_stream":1}` zarfı baypas ediyor. Muhtemel kabul
-edilebilir davranış "bağlantı kapanır, log düşer" ama **yazılmalı**.
+**S4 kapandı (P44, 2026-09-10) — ve tanımsızlık zararsız değilmiş.** Ölçüm:
+
+| faz | flip sonrası, fix ÖNCESİ | fix SONRASI |
+|---|---|---|
+| Stream başlamadan | 500 + JSON ✓ | 500 + JSON ✓ |
+| **Stream ortası** | **200, 371 bayt — gövdeye gömülü `HTTP/1.1 500 ...`** ❌ | 200, 27 bayt, temiz SSE ✓ |
+| süreç | CANLI | CANLI ✓ |
+
+Sentez-500 "ulaşmıyor" değildi — **akışın içine yazılıyordu**: istemci 200 SSE
+akışı alıp gövdesinde gömülü bir HTTP yanıtı görüyordu. Protokol bozulması.
+
+**Üç fazlı sözleşme:** akış başlamadan → 500 + log; akış ortasında → **yalnız
+log + bağlantı kapanır, zarf YAZILMAZ**; her iki fazda → süreç yaşar.
+Kanca `wings_sse_headers()` (akışın başladığı tek nokta) bir bayrak kaldırıyor,
+dispatch her istekte sıfırlıyor.
 
 **Yan bulgu:** `_wings_last_status` sözleşme gereği "her dönüşte" yazılmalıymış
 (tanımındaki not); catch yolu onu atlayınca istek 500 dönerken 200 loglanıyordu.
@@ -221,6 +234,9 @@ yolu eklendiğinde sessizce atlanır.**
    ⚠ Ve o denetimin ilk hâli **satır-bazlıydı** — yani korumak için yazıldığı
    hatanın aynısını yaptı: iki çok-satırlı sızıntıyı göremedi ve yanlış yeşil
    verdi. Şimdi parantez dengesiyle tarıyor; enjeksiyonla kırmızı üretildi.
+   **Denetleyicinin körlüğü, denetlediği kodunkiyle aynı sınıftır; denetleyici
+   de enjeksiyonla sınanır** — ve desen-güvenliğinin yanına sayısal
+   beklenen-değer konur (yetkili kapı sayısı eşiğin altına düşerse build kırılır).
 16. **Yeni çıkış yolu = tüm belgelenmiş yan etkilerin yeniden envanteri.**
    `catch`, kontrol akışına eklenen bir kapıdır; longjmp atladığı her satırın
    yan etkisini iptal eder. Fonksiyonun sözleşmesi N kapıda da aynı olmalı.

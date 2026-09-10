@@ -1,0 +1,44 @@
+// KALICILIK FIKSTURU — paylasilan json'un eszamanli OKUNMASI (FINDINGS T7).
+//
+// P15 incelemeyle kapandi: `vm_get_element` -> `vm_object_get` saf dogrusal
+// tarama, `ObjObject`te tembel/onbellek alani yok. Inceleme BUGUNU kanitlar;
+// bu fikstur GELECEGI gozler — biri `vm_object_get`e memoizasyon/lazy hash
+// eklerse (uc ay sonra, "hizli bir optimizasyon" diye), Bulgu 3'un json
+// surumunu sessizce kurmus olur. Fikstur onu yakalar.
+//
+// Dizilerin karsit ornegi: `arr_items` -> `arr_debox` okuma yolundan YAZIYOR.
+import "test";
+
+json paylasilan = {};
+int hazir = 0;
+int hatali = 0;
+int biten = 0;
+var kilit = mutex_create();
+
+func okuyucu(int id) {
+    int r = 0;
+    while (r < 40) {
+        int t = 0;
+        int j = 0;
+        while (j < 200) { t = t + paylasilan["k" + toString(j)]; j = j + 1; }
+        // 0+1+...+199 = 19900
+        if (t != 19900) { mutex_lock(kilit); hatali = hatali + 1; mutex_unlock(kilit); }
+        r = r + 1;
+    }
+    mutex_lock(kilit); biten = biten + 1; mutex_unlock(kilit);
+    return 0;
+}
+
+func run_eszamanli_json_okuma() {
+    int i = 0;
+    while (i < 200) { paylasilan["k" + toString(i)] = i; i = i + 1; }
+    int t = 0;
+    while (t < 8) { thread_create(okuyucu, t); t = t + 1; }
+    sleep(6000);
+    assert_eq_int(biten, 8);        // sekiz okuyucu da bitti
+    assert_eq_int(hatali, 0);       // hicbiri bozuk toplam gormedi
+}
+
+print("=== paylasilan json eszamanli okuma ===");
+test("8 thread ayni json'u okur", "run_eszamanli_json_okuma");
+test_summary();
