@@ -66,6 +66,39 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | R3 | `try/catch` çalışma zamanı hatasını yakalıyor | **çürütüldü** — yakalamıyor; akış `try` içinde devam ediyor | P26b |
 | R4 | LSP tablosu ile tip katalogu tutarlı | **çürütüldü, DÜZELTİLDİ** — 20 native builtin katalogda yoktu (tip+arite denetimsiz); `sb_append` imzası LSP'de yanlıştı | P27 |
 
+## 🔴 L1 — `&&` ve `||` KISA DEVRE YAPMIYOR
+
+En ağır bulgu. Her iki operatör de **iki operandı da değerlendiriyor**:
+
+```tulpar
+int sayac = 0;
+func yan(): int { sayac = sayac + 1; return 1; }
+bool r1 = (1 == 2) && (yan() == 1);   // sayac=1  — sol FALSE, sag YINE calisti
+bool r2 = (1 == 1) || (yan() == 1);   // sayac=1  — sol TRUE,  sag YINE calisti
+
+int[] bos = [];  int n = 0;
+if (n > 0 && bos[n - 1] == 5) { }     // "Dizi indeksi sinir disinda"
+```
+
+Yani **evrensel koruma deyimi kırık**: `i < len(a) && a[i] == x`, `p != 0 && ...`
+gibi her yazım sağ tarafı yine çalıştırıyor.
+
+**Kök neden** (`src/aot/llvm_backend.cpp`): hem tipli yol (`TOKEN_AND`/`TOKEN_OR`
+case'leri) hem kutulu yol (`emit_boxed_binary_op`) **zaten değerlendirilmiş**
+`L` ve `R` alıp düz `LLVMBuildAnd`/`Or` yapıyor. Kısa devre o noktada zaten
+imkânsız; dal + phi, sağ operand üretilmeden ÖNCE kurulmalı.
+
+**Nasıl bulundu:** R1'in `TULPAR_STRICT_RUNTIME=1` anahtarı dedektör olarak
+koşuldu (P31). `scene3d_engine` 654/654 geçerken 9 tanı yutuyordu; izole edilip
+daraltıldı → `_t_sort_str3`'ün insertion sort'u → `while (j > 0 && o[j-1] > v)`
+→ `j=0` iken `o[-1]` değerlendiriliyor. Sıralama kodu **doğruydu**; dil yanlıştı.
+
+**Etki:** doğruluk (koruma deyimleri), performans (gereksiz değerlendirme) ve
+yan etki (sağ taraf koşulsuz çalışıyor — `no_double_eval` ailesinin kardeşi).
+Semantiği hiçbir yerde belgelenmemiş, yani bilinçli bir karar değil.
+
+**Durum: açık.** Codegen ameliyatı; kendi audit'iyle yürümeli.
+
 ## Yöntem kuralları (turlardan çıkan)
 
 1. **Tek thread'li kontrol** — eşzamanlılık hatası bildirmeden önce aynı

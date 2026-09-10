@@ -1469,5 +1469,31 @@ bazen patlayandır, çünkü test edilir, geçer, üretime gider.
 
 Kardeş bulgu ve ölçüm ayrıntısı: [[Concurrency]] · [[Tuzaklar#7a]].
 
+## 7c. Doğru kod + yanlış dil = kodu suçlarsın
+
+`scene3d_engine` 654/654 geçerken 9 tane "Dizi indeksi sinir disinda" tanısı
+yutuyordu. İzole edilip daraltıldı: kaynak, bir insertion sort'un iç döngüsü —
+
+```tulpar
+while (j > 0 && o[j - 1] > v) { o[j] = o[j - 1]; j = j - 1; }
+```
+
+Kod okununca **kusursuz**: `j > 0` koruması `o[j-1]`i tam olarak korumak için
+var. İlk refleks "sıralama yanlış yazılmış" demekti. Değildi — **dil `&&`'i
+kısa devre yapmıyor**, sağ operand koşulsuz değerlendiriliyor ve `j=0` iken
+`o[-1]` okunuyor.
+
+**Kural:** bir tanı, doğruluğuna ikna olduğun bir kodun içinden çıkıyorsa
+suçlamayı bir katman aşağı taşı. "Kod doğru görünüyor ama hata var" bir
+çelişki değil, **katman ipucudur** — dil/runtime/derleyici sırasıyla sorgula.
+Burada doğrulama iki satırdı: `(1==2) && yan()` çağırıyor mu?
+
+İkinci ders, dedektör hakkında: bu bulgu bir test yazılarak değil, **var olan
+bir suite'in yuttuğu tanıları görünür kılan bir anahtarla** bulundu
+(`TULPAR_STRICT_RUNTIME=1`). Yeşil bir suite, yutulmuş tanıların üstünde
+oturuyor olabilir; onları görünür kılan her mekanizma bedava bulgu üretir.
+
+İlgili: [[Testing]] · FINDINGS L1.
+
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
