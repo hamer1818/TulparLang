@@ -398,7 +398,8 @@ DataType infer_expr(TypeInferContext *ctx, const ASTNode *expr) {
       // `print(...)` de istediği kadar değer alıyor: ikisi de gerçekten
       // değişken argümanlı, tek parametreyle kaydedilip burada muaf.
       const bool is_variadic_builtin =
-          (effective_name == "call" || effective_name == "print");
+          (effective_name == "call" || effective_name == "print" ||
+           effective_name == "gather");
       if (got > expected && !is_variadic_builtin) {
         report_error(ctx,
                      "Function '%s' expects %d argument(s), got %d at line %d",
@@ -971,6 +972,50 @@ static void register_builtin_signatures(TypeInferContext *ctx) {
   // on the C-bridge AST — those happen after our pre-pass on the std::variant
   // AST, so the synthetic calls never reach typeinfer.
   const BuiltinSig sigs[] = {
+      // --- P27 (2026-09-10): LSP tablosunda VAR, katalogda YOK olan 20 native
+      // builtin. LSP ile katalog CAPRAZ SUPURULUNCE cikti: 358 LSP adindan
+      // 70'i katalogda yoktu, 50'si lib/*.tpr'de tanimli (import ile zaten
+      // denetleniyor), geriye kalan 20'si GERCEK BOSLUKTU — yani tip ve arite
+      // denetimi HIC yapilmiyordu. Olculdu: `thread_join(t, 99, "fazladan")`
+      // typecheck'ten geciyordu.
+      //
+      // Iki hakikat tablosu (#0): bir sembol hem LSP'de hem katalogda yasiyor
+      // ve ayrisabiliyor. Kalici cozum LSP'yi katalogdan uretmek; bu satirlar
+      // o gune kadarki uzlastirma.
+      //
+      // NOT: `thread_join` BUGUNKU gercegiyle VOID kayitli — isciyi sonucunu
+      // TASIMIYOR (P20, olculdu: `return id*100+7` yapan isciden 0 donuyor).
+      // Boylece `var r = thread_join(t)` artik derleme zamaninda hata veriyor
+      // ve bosluk sessiz kalmiyor. Donus degeri eklenince bu satir guncellenir.
+      {"thread_join", TYPE_VOID, {TYPE_INT}},
+      {"thread_detach", TYPE_VOID, {TYPE_INT}},
+      // Muteksler CALISIYOR (olculdu): 8 thread x 50 000 artirma, muteksli
+      // surumde counter tam 400 000 ve done tam 8, uc kosuda da. Yani
+      // paylasilan degisebilir durumun sozlesmesi "desteklenmiyor" degil,
+      // "muteks ister" — ilkel zaten vardi, yalniz katalogda yoktu.
+      {"mutex_create", TYPE_INT, {}},
+      {"mutex_lock", TYPE_VOID, {TYPE_INT}},
+      {"mutex_unlock", TYPE_VOID, {TYPE_INT}},
+      {"mutex_destroy", TYPE_VOID, {TYPE_INT}},
+      {"StringBuilder", TYPE_INT, {TYPE_INT}},
+      // sb_append HER tipi alir (tests/stringbuilder.test.tpr::run_mixed_types
+      // int, float ve bool ekliyor). LSP tablosu "s: str" diyordu ve YANLISTI
+      // — iki hakikat tablosunun ayristigi somut ornek (#0). LSP de duzeltildi.
+      {"sb_append", TYPE_VOID, {TYPE_INT, TYPE_UNKNOWN}},
+      {"sb_tostring", TYPE_STRING, {TYPE_INT}},
+      {"sb_free", TYPE_VOID, {TYPE_INT}},
+      {"db_last_insert_id", TYPE_INT, {TYPE_INT}},
+      {"db_error", TYPE_STRING, {TYPE_INT}},
+      {"http_status_text", TYPE_STRING, {TYPE_INT}},
+      {"persist", TYPE_UNKNOWN, {TYPE_UNKNOWN}},
+      {"wings_current_fd", TYPE_INT, {}},
+      {"wings_set_current_fd", TYPE_INT, {TYPE_INT}},
+      {"wings_ws_accept_key", TYPE_STRING, {TYPE_STRING}},
+      {"wings_ws_send_frame", TYPE_INT, {TYPE_INT, TYPE_INT, TYPE_STRING}},
+      {"wings_ws_recv_frame", TYPE_JSON, {TYPE_INT}},
+      // `gather(...promises)` gercekten degisken argumanli — asagidaki arite
+      // muafiyetine eklendi.
+      {"gather", TYPE_UNKNOWN, {TYPE_UNKNOWN}},
       // --- Denetimsiz kalan 40 builtin (2026-08-25) ---
       // Tabloda olmayan bir builtin HİÇ denetlenmiyor: dönüşü VOID sayılıyor,
       // o yüzden hem argümanları hem de sonucu kullanan her satır atlanıyor.

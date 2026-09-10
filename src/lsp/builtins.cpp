@@ -391,7 +391,7 @@ const BuiltinEntry kBuiltins[] = {
     {"call",         "call(name: str, ...): any",                   "İsme göre fonksiyon çağırır (handler dispatch)."},
     {"exit",         "exit(code: int): void",                       "Süreci verilen kodla sonlandırır."},
     {"StringBuilder","StringBuilder(capacity: int): int",           "Yeni StringBuilder yaratır, handle döner. sb_append/sb_tostring/sb_free ile kullanılır."},
-    {"sb_append",    "sb_append(sb: int, s: str): void",            "StringBuilder'a ekler."},
+    {"sb_append",    "sb_append(sb: int, value: any): void",            "StringBuilder'a ekler."},
     {"sb_tostring",  "sb_tostring(sb: int): str",                   "StringBuilder içeriğini döner."},
     {"sb_free",      "sb_free(sb: int): void",                      ""},
 

@@ -46,7 +46,7 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | M2 | Döngüde üretilen heap değerleri geri alınıyor | **koşullu** — `arena_drop` ile DÜZ (2 976→2 972 KB); onsuz 5–6× tırmanıyor | [Memory](docs/mindmap/Memory.md) |
 | M3 | `arena_save`/`restore` bu belleği kurtarıyor | **çürütüldü** — restore serbest BIRAKMAZ; bırakan çağrı `arena_drop` | Memory |
 | M4 | Sunucu istek yolu düz kalıyor | **doğrulandı** — json handler 4,16M istekte 3 444 KB sabit; wings istek başına `arena_drop` çağırıyor | Memory |
-| T1 | Paylaşılan global'ler atomik | **çürütüldü** — 8 thread × bir artırma → 7 | Concurrency |
+| T1 | Paylaşılan global'ler atomik | **çürütüldü** — korumasız 8 thread × bir artırma → 7; **`mutex_*` ile tam 400 000** | Concurrency |
 | T2 | Thread yazmaları görünür | **çürütüldü** — spin-wait sonsuza döner; `sleep()` varken kazara çalışır | Concurrency |
 | T3 | Paylaşılan dizinin eşzamanlı okunması bozuluyor | **GERİ ÇEKİLDİ** — test `push` dönüşünü atıyordu, dizi tek thread'de bile boştu | [Tuzaklar 7a](docs/mindmap/Tuzaklar.md) |
 | T4 | `arr_debox` okuma yolundan yazıyor | **açık (incelemeyle)** — sertleştirildi, ama tetikleyen test yok | Concurrency |
@@ -57,7 +57,11 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | Y5 | `call("ad")` adın varlığını doğruluyor | **çürütüldü** — literal adda bile doğrulamıyor; hata çalışma zamanına kalıyor | P25 |
 | R1 | Çalışma zamanı hatası süreci başarısız kılıyor | **çürütüldü** — dizi sınır dışı / sıfıra bölme / `call` bulunamadı: tanı basılıyor, yerine `0` konuyor, **çıkış kodu 0** | P25 |
 | R2 | `build.sh test` çalışma zamanı hatasını yakalıyor | **çürütüldü** — enjeksiyonla ölçüldü: bir örneğe `kk[999]` eklendi, suite "All tests passed" dedi | P25 |
-| T5 | `thread_join` işçinin sonucunu taşıyor | **çürütüldü** — 0 dönüyor; typeinfer katalogunda hiç yok | P20 |
+| T5 | `thread_join` işçinin sonucunu taşıyor | **çürütüldü** — 0 dönüyor; katalogda `void` olarak kaydedildi, artık atanması hata | P20 |
+| T6 | Dilde senkronizasyon ilkeli yok | **çürütüldü** — `mutex_*` var ve çalışıyor; yalnız katalogda yokmuş | P27 |
+| C9 | Suite'ler çalışma zamanı hatasını yakalıyor | **doğrulandı (enjeksiyonla)** — tek dosya çıkış 1, suite çıkış 1, paket sayısı 75'te kalıyor | P26 |
+| R3 | `try/catch` çalışma zamanı hatasını yakalıyor | **çürütüldü** — yakalamıyor; akış `try` içinde devam ediyor | P26b |
+| R4 | LSP tablosu ile tip katalogu tutarlı | **çürütüldü, DÜZELTİLDİ** — 20 native builtin katalogda yoktu (tip+arite denetimsiz); `sb_append` imzası LSP'de yanlıştı | P27 |
 
 ## Yöntem kuralları (turlardan çıkan)
 

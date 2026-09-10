@@ -1,8 +1,35 @@
 # Eşzamanlılık — P10 doğruluk kapısı (2026-09-09)
 
-> **Özet: Tulpar'ın bir bellek modeli yok.** `thread_create` ile paylaşılan
-> değişebilir durum ne atomik ne de görünür. Üç ayrı hata sınıfı ölçümle
-> gösterildi. Bu bir performans notu değil, **doğruluk** notu.
+> **Özet (2026-09-10'da DÜZELTİLDİ): dilde MUTEKS var ve çalışıyor.**
+> `thread_create` ile paylaşılan değişebilir durum korumasız kullanılırsa ne
+> atomik ne görünür — ama `mutex_lock`/`mutex_unlock` ikisini de çözüyor
+> (ölçüldü, aşağıda). Sözleşme "paylaşım desteklenmiyor" değil, **"paylaşım
+> muteks ister"**. İlkeller zaten vardı; tip katalogunda olmadıkları için
+> ne typecheck görüyordu ne de ben.
+
+## DÜZELTME — muteksler var, çalışıyor, ve katalogda yoktular
+
+Bu belgenin ilk hâli "dilde bellek modeli yok, paylaşım tanımsız" diyordu.
+Eksik olan parça, LSP tablosuyla tip katalogunun çapraz süpürülmesinde çıktı
+(P27): `mutex_create` / `mutex_lock` / `mutex_unlock` / `mutex_destroy`
+**dilde mevcut**, ama tip katalogunda kayıtlı değillerdi — yani hem typecheck
+onları görmüyordu hem de builtin listesine bakan ben.
+
+Bulgu 1'in birebir aynısı, muteksle (8 thread × 50 000 artırma):
+
+| | `done` | `counter` |
+|---|---|---|
+| korumasız | 7 (kayıp) | değişken |
+| **muteksli** | **8** | **400 000** — üç koşuda da tam |
+
+Muteks **Bulgu 2'yi de** çözüyor: `mutex_lock` opak bir çağrı olduğu için
+optimize edici global okumasını döngüden çıkaramıyor, yani `done`'ın güncel
+değeri görünüyor.
+
+**Geriye kalan gerçek eksik**, sözleşmenin kendisi: bu ilkellerin varlığı
+hiçbir yerde belgelenmiyor, `thread_create` dokümanı paylaşımdan söz etmiyor
+ve korumasız paylaşım sessizce yanlış sonuç veriyor. Yani sorun "araç yok"
+değil, **"araç var ama kimse söylemiyor"**.
 
 ## Zemin: ARC AOT yolunda çalışmıyor
 
@@ -92,18 +119,19 @@ sınanmamış olduğunu söylüyoruz.
 
 ## Ne yapılmalı (öncelik sırası)
 
-1. **Sözleşmeyi yaz.** Bugünkü gerçek: *"`thread_create` ile paylaşılan
-   değişebilir durum desteklenmiyor; her thread kendi verisiyle çalışmalı,
-   iletişim işletim sistemi ilkelleriyle (soket/dosya) yapılmalı."* Belgesiz
-   bırakmak, kullanıcının sessiz veri kaybıyla tanışması demek.
+1. **Sözleşmeyi yaz.** Bugünkü gerçek: *"paylaşılan değişebilir duruma
+   `mutex_lock`/`mutex_unlock` ile erişin; korumasız erişim hem güncelleme
+   kaybeder hem görünürlük garantisi vermez."* Belgesiz bırakmak, kullanıcının
+   sessiz veri kaybıyla tanışması demek — üstelik çözüm elinin altındayken.
 2. **Wings sayaçlarını thread-güvenli yap** (atomik yerleşik ya da thread başına
    toplama + okuma anında birleştirme).
 3. ~~Tembel kutulama çevrimini kapıla~~ — **yapıldı** (çift denetimli kilit;
    eski tampon bilerek serbest bırakılmıyor ki hızlı yoldaki bir okuyucu
    use-after-free yaşamasın). Kanıtlanmış bir hatayı değil, incelemeyle görülen
    bir yarışı kapatıyor.
-4. Atomik yerleşikler (`atomic_add`, `atomic_load`) ve bir `volatile`/bariyer
-   kavramı — bellek modelinin en küçük hali.
+4. ~~Atomik yerleşikler~~ — muteks zaten yeterli taban; asıl eksik bir
+   **bellek modeli cümlesi** ("muteks altındaki yazmalar diğer thread'lere
+   görünür") ve `mutex_*`'ın belgelenmesi.
 5. TSan'lı bir CI işi: runtime'ı `-fsanitize=thread` ile derleyip yukarıdaki üç
    üretecin koşulması.
 
