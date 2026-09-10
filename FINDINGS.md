@@ -56,14 +56,15 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | Y4 | `var` çıkarıldığı tipte kalıyor | **çürütüldü, DÜZELTİLDİ (branch)** — `var b=[1,2]; b=5;` geçiyordu | `fail/12_var_cross_type.tpr` |
 | Y5 | `call("ad")` adın varlığını doğruluyor | **çürütüldü** — literal adda bile doğrulamıyor; hata çalışma zamanına kalıyor | P25 |
 | R1 | Çalışma zamanı hatası süreci başarısız kılıyor | **çürütüldü; KISMEN düzeltildi** — tanılar artık stderr'e gidiyor (stdout temiz); çıkış kodu ≠ 0 `TULPAR_STRICT_RUNTIME=1` ile **seçime bağlı** | P25 |
-| R5 | "Sınır dışı → 0, devam" bir kaza | **çürütüldü** — TEST EDİLMİŞ sözleşme (`loop_versioning::run_sinir_disi_indeks`); strict'i varsayılan yapmak 2 suite'i kırıyor → **karar kullanıcıya** | R1 seti |
+| R5 | "Sınır dışı → 0, devam" bir kaza | **çürütüldü** — TEST EDİLMİŞ sözleşme; flip artık **1 test dosyası** göçü gerektiriyor (L1 sonrası scene3d 9→0) | R1 seti · P36/P37 |
+| R8 | strict'te longjmp runtime çerçevelerini bozar | **çürütüldü** — 76 suite strict altında koşuldu, **0 çökme** | P26b |
 | R6 | Sondalar tanıyı doğru yerde arıyor | **çürütüldü, DÜZELTİLDİ** — `silent_failure_probe.py` tanıyı stdout'ta bekliyordu; stderr süzgeci eklendi | R1 seti |
 | R7 | Site'nin "invalid body → 422" vaadi tutuyor | **doğrulandı** — 422 + alan detayı (`name: required`, `expected str, got int`) | P28 |
 | R2 | `build.sh test` çalışma zamanı hatasını yakalıyor | **çürütüldü, DÜZELTİLDİ** — harness artık `TULPAR_STRICT_RUNTIME=1` ile koşuyor (dil varsayılanı değişmeden); enjeksiyon kırmızı | P25 |
 | T5 | `thread_join` işçinin sonucunu taşıyor | **çürütüldü** — 0 dönüyor; katalogda `void` olarak kaydedildi, artık atanması hata | P20 |
 | T6 | Dilde senkronizasyon ilkeli yok | **çürütüldü** — `mutex_*` var ve çalışıyor; yalnız katalogda yokmuş | P27 |
 | C9 | Suite'ler çalışma zamanı hatasını yakalıyor | **doğrulandı (enjeksiyonla)** — tek dosya çıkış 1, suite çıkış 1, paket sayısı 75'te kalıyor | P26 |
-| R3 | `try/catch` çalışma zamanı hatasını yakalıyor | **çürütüldü** — yakalamıyor; akış `try` içinde devam ediyor | P26b |
+| R3 | `try/catch` çalışma zamanı hatasını yakalıyor | **çürütüldü, DÜZELTİLDİ (strict'te)** — strict modda hata `aot_throw` ile fırlıyor: `catch` yakalıyor, yakalanmazsa stderr + exit 1 | P26b |
 | R4 | LSP tablosu ile tip katalogu tutarlı | **çürütüldü, DÜZELTİLDİ** — 20 native builtin katalogda yoktu (tip+arite denetimsiz); `sb_append` imzası LSP'de yanlıştı | P27 |
 
 ## 🔴 L1 — `&&` ve `||` KISA DEVRE YAPMIYOR

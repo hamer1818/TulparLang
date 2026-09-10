@@ -108,6 +108,8 @@ typedef struct {
 //
 // NOT: `try/catch` bu hatalari HALA yakalamiyor (P26b) — iki hata sistemini
 // birlestirmek ayri bir is; bkz. FINDINGS R3.
+extern "C" void aot_throw(VMValue exception);
+VMValue aot_string_from_cstr(const char *cstr);
 static bool g_rt_error_seen = false;
 
 static void rt_error_exit_hook(void) {
@@ -132,9 +134,21 @@ extern "C" void aot_runtime_error(const char *msg) {
     const char *e = std::getenv("TULPAR_STRICT_RUNTIME");
     strict = (e && *e && std::strcmp(e, "0") != 0) ? 1 : 0;
   }
-  if (strict && !g_rt_error_seen) {
-    g_rt_error_seen = true;
-    std::atexit(rt_error_exit_hook);
+  if (strict) {
+    // P26b BIRLESTIRME: strict modda calisma zamani hatasi bir ISTISNADIR.
+    // `aot_throw` zaten dogru sozlesmeyi tasiyor — yakalanirsa `try/catch`e
+    // longjmp eder, yakalanmazsa stderr + exit(1) (fail-fast). Yani iki hata
+    // sistemi burada bulusuyor ve P26b ("try/catch runtime hatasini
+    // yakalamiyor") kapanir.
+    //
+    // ⚠ RISK, OLCULMESI GEREKEN: longjmp runtime'in C++ ici cagri
+    // cerceverlerinden ATLAR. RAII tutan bir cerceve arada kalirsa yikici
+    // calismaz. Bu yuzden secime bagli kaliyor ve korpus uzerinde olculuyor.
+    // Burada BASMIYORUZ: mesaji ya `catch` blogu kullanir ya da `aot_throw`in
+    // yakalanmayan yolu "Uncaught Exception: ..." diye stderr'e yazar. Ikisini
+    // birden yapmak ayni tanIyI iki kez basiyordu.
+    aot_throw(aot_string_from_cstr(msg));
+    return;   // ulasilmaz
   }
   std::fprintf(stderr, "%s\n", msg);
 }
