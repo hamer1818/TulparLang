@@ -649,6 +649,52 @@ TPREOF
         rm -rf "$AR_TMP"; exit 1
     fi
     echo -e "${GREEN}zincir baska sekillerde zarar vermiyor${NC} (ackermann: ${AR_OFF_W}us -> ${AR_ON_W}us)"
+
+    # TANI TEK KAPIDAN CIKAR — mekanik garanti (#19).
+    #
+    # Calisma zamani tanilari `aot_runtime_error` / `vm_runtime_error`den
+    # gecmeli: ikisi de stderr'e yazar ve strict modda firlatir. Ham `printf`
+    # ile yazilan bir tani (a) programin kendi ciktisina karisir, (b) firlatmaz,
+    # yani surec 0 ile cikar.
+    #
+    # NEDEN MEKANIK: flip sirasinda printf->throw donusumu REGEX'le yapildi ve
+    # farkli bicimli bir printf'i KACIRDI — `aot_div_error`in tasma dali stdout'a
+    # yazip 0 ile cikmaya devam etti, sifira bolme ise firlatiyordu. Ayni
+    # aileden iki hata, iki farkli sozlesme. Kacan dali yakalayan sey bir
+    # sondanin ESKI beklentiyle GECMESI oldu — yani sans. Metin-deseniyle
+    # yapilan donusum envanteri yeniden uretmez; bu denetim envanteri kalici
+    # kilar: bir sonraki kacak yesil sonda degil, KIRMIZI BUILD olur.
+    # ⚠ COK SATIRLI OLMALI. Ilk yazimda bu denetim satir-bazliydi
+    # (`grep printf | grep Hatasi`) ve HEMEN yanlis yesil verdi: kaynakta
+    # `printf("%s\n",` bir satirda, hata metni SONRAKI satirda olan IKI
+    # sizinti vardi ve denetim ikisini de goremedi. Yani koruma, korumak icin
+    # yazildigi hatanin (metin-deseni envanteri yeniden uretmez, #19) TAM
+    # OLARAK aynisini yapiyordu. Simdi cagri parantez dengesiyle taraniyor.
+    RT_LEAK=$(python3 - <<'PYEOF'
+import re, pathlib
+txt = pathlib.Path("src/vm/runtime_bindings.cpp").read_text(encoding="utf-8")
+for m in re.finditer(r'\bprintf\s*\(', txt):
+    seg = txt[m.start():m.start() + 600]
+    depth = 0
+    call = seg
+    for i, ch in enumerate(seg):
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth == 0:
+                call = seg[:i + 1]
+                break
+    if re.search(r'Hatasi|Runtime Error', call):
+        print(f"  satir {txt[:m.start()].count(chr(10)) + 1}: {call.splitlines()[0][:70]}")
+PYEOF
+)
+    if [ -n "$RT_LEAK" ]; then
+        echo -e "${RED}TANI STDOUT'A SIZIYOR — aot_runtime_error kullanin!${NC}"
+        echo "$RT_LEAK" | head -5 | sed 's/^/  /'
+        exit 1
+    fi
+    echo -e "${GREEN}tani tek kapidan cikiyor${NC} (runtime_bindings'de ham printf yok)"
     rm -rf "$AR_TMP"
     rm -rf "$SR_TMP"
 

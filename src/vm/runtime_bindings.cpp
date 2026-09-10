@@ -2001,10 +2001,9 @@ VMValue vm_get_element(VMValue target, VMValue index) {
       return VM_OBJ(aot_allocate_string(&str->chars[idx], 1));
     }
   }
-  printf("%s\n",
-         tulpar::i18n::tr_en(
-             "Calisma Zamani Hatasi: get islemi icin gecersiz hedef veya indeks",
-             "Runtime Error: Invalid index or target for get access"));
+  aot_runtime_error(tulpar::i18n::tr_en(
+      "Calisma Zamani Hatasi: get islemi icin gecersiz hedef veya indeks",
+      "Runtime Error: Invalid index or target for get access"));
   return VM_INT(0);
 }
 
@@ -2020,10 +2019,9 @@ void vm_set_element(VM *vm, VMValue target, VMValue index, VMValue value) {
       return;
     }
   }
-  printf("%s\n",
-         tulpar::i18n::tr_en(
-             "Calisma Zamani Hatasi: set islemi icin gecersiz hedef veya indeks",
-             "Runtime Error: Invalid index or target for set access"));
+  aot_runtime_error(tulpar::i18n::tr_en(
+      "Calisma Zamani Hatasi: set islemi icin gecersiz hedef veya indeks",
+      "Runtime Error: Invalid index or target for set access"));
 }
 
 // Print a VMValue (used by OP_PRINT in VM)

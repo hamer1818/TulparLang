@@ -50,6 +50,8 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | T2 | Thread yazmaları görünür | **çürütüldü** — spin-wait sonsuza döner; `sleep()` varken kazara çalışır | Concurrency |
 | T3 | Paylaşılan dizinin eşzamanlı okunması bozuluyor | **GERİ ÇEKİLDİ** — test `push` dönüşünü atıyordu, dizi tek thread'de bile boştu | [Tuzaklar 7a](docs/mindmap/Tuzaklar.md) |
 | T4 | `arr_debox` okuma yolundan yazıyor | **açık (incelemeyle)** — sertleştirildi, ama tetikleyen test yok | Concurrency |
+| T7 | json okuma yolu da yazma içeriyor (P15) | **çürütüldü (incelemeyle)** — `vm_get_element`→`vm_object_get` saf doğrusal tarama; `ObjObject`'te tembel/önbellek alanı yok. Dizilerdeki `arr_items`→`arr_debox` yazmasının karşılığı json'da **yok** | P15 |
+| R10 | Tanı sızıntısı kalmadı | **çürütüldü, DÜZELTİLDİ** — `vm_get_element`/`vm_set_element`'in "gecersiz hedef" tanıları stdout'a yazıyordu; ilk #19 koruması **satır-bazlı olduğu için göremedi** | P15 turu |
 | Y1 | Dil statik tipli | **daraltılmalı** — `var` çapraz-tip yeniden atamaya izin veriyor | `tests/typeinfer/` |
 | Y2 | `void` dönüşün atanması denetleniyor | **çürütüldü, DÜZELTİLDİ** — `e = push(e,3)` geçiyordu; artık hata | `tests/typeinfer/fail/11_void_assignment.tpr` |
 | Y3 | Eleman ataması tip denetleniyor | **çürütüldü, DÜZELTİLDİ (branch)** — `str[] s; s[0]=5;` geçiyor VE çalışıyordu | `fail/13_element_assign_type.tpr` |
@@ -212,6 +214,13 @@ yolu eklendiğinde sessizce atlanır.**
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
+19. **Metin-deseniyle yapılan dönüşüm, envanteri yeniden üretmez.** Flip'in
+   printf→throw dönüşümü regex'le yapıldı ve farklı biçimli bir `printf`i
+   kaçırdı. Garanti mekanik olmalı: `build.sh` artık `runtime_bindings.cpp`'de
+   yetkili çıkış dışında hata metni taşıyan `printf` ararsa **build'i kırar**.
+   ⚠ Ve o denetimin ilk hâli **satır-bazlıydı** — yani korumak için yazıldığı
+   hatanın aynısını yaptı: iki çok-satırlı sızıntıyı göremedi ve yanlış yeşil
+   verdi. Şimdi parantez dengesiyle tarıyor; enjeksiyonla kırmızı üretildi.
 16. **Yeni çıkış yolu = tüm belgelenmiş yan etkilerin yeniden envanteri.**
    `catch`, kontrol akışına eklenen bir kapıdır; longjmp atladığı her satırın
    yan etkisini iptal eder. Fonksiyonun sözleşmesi N kapıda da aynı olmalı.
