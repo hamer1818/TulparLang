@@ -130,7 +130,21 @@ yalnız `&&`/`||`'de idi.
 | S4 | SSE/WS akışında handler ortası throw | **ÖLÇÜLDÜ ve KAPANDI** — üç fazlı sözleşme (P44) |
 | S5 | `at` / `json_get` sınır politikası | **belgelendi** — negatif indeks "sondan" değil, sınır dışı |
 | S7 | Thread sözleşmesi: **kopyayla girer, join'le çıkar** | **yazıldı** — argüman derin kopya, join sonucu taşır; paylaşmak isteyen `mutex_*` kullanır |
+| S9 | Uzun ömürlü süreçte **değer-başı geri kazanım yok** (join-dönüş dahil) | **ölçüldü** — join-dönüş değerleri sürecin ömrü boyunca yaşar; binlerce join içeren süreçte RSS ~N×değer-boyu artar (P43). M2'nin çözülmesi bu sınıfın **tamamını** kapatır; yamayı her ekleme noktasına serpmek değil, kök düzeltme tek yerde |
 | S8 | Handle sözleşmesi | **yazıldı + fikstür** — *join handle'ı tüketir; ikinci join hatadır; detach edilmiş handle join edilemez* |
+
+**Audit (derin kopya göçü, 7. madde):** korpusta **13** `thread_create` sitesi.
+5'i aggregate *görünüyor*; `lib/wings.tpr`'deki 3'ü aslında **json'a sarılmış
+int** — kaynaktaki yorum sebebini söylüyor: *"Box the fd into a json so
+`thread_create` passes it through the canonical VMValue ABI rather than a
+native i64 register."* Yani T9'un düzelttiği ABI boşluğunun geçici çözümü.
+`aot_persist` heap olmayan değerde **no-op**, dolayısıyla derin kopya onlara
+sıfır maliyet (ölçüldü). Kalan 2 aggregate fikstürün kendi testleri.
+**Üretim kodunda 0 gerçek aggregate sitesi → göç bedelsiz.**
+
+⚠ Yan bulgu: o boxing hilesi artık **gereksiz** (T9 sonrası `tw_` sarmalayıcı
+tipli/native işçiyi normalleştiriyor). Temizlik fırsatı; bayrak serve
+patikasına dokunduğu için kendi turunu hak ediyor.
 
 **P43/P49 — önce/sonra (RSS zirve, spawn döngüsü):**
 
@@ -220,6 +234,21 @@ Downstream'de sıfır özel durum; yanıt da tek kapıdan çıkıyor.
 
 **Doğrulandı:** iyi 200 · kötü **500** + `{"error":"handler error: ..."}` ·
 süreç CANLI · sonraki 200 · /healthz 200.
+
+**P48 — sözleşme ihlalinin bedeli ölçüldü (2026-09-10).** Sokete **ham yazan**
+ama `{"_stream":1}` **döndürmeyen** bir handler throw ederse, keep-alive
+bağlantısında **iki HTTP yanıtı** üst üste gider:
+
+```
+toplam 411 bayt · HTTP yanıtı sayısı: 2
+HTTP/1.1 200 OK ... ham   HTTP/1.1 500 Internal Server Error ...
+```
+
+İstemcinin **sonraki** isteği bu 500'ü kendi yanıtı sanar — yanıt
+desenkronizasyonu. **Fix yok, sözleşme var:** sokete doğrudan yazan handler
+bağlantıyı devraldığını `{"_stream":1}` ile bildirmek zorundadır; bildirmezse
+throw'da ikinci zarf üretilir. Akış başlatıcıları (`wings_sse_headers`,
+`wings_ws_upgrade`) bunu zaten yapıyor; ham yazan kod etmiyorsa sözleşme dışı.
 
 **S4 kapandı (P44, 2026-09-10) — ve tanımsızlık zararsız değilmiş.** Ölçüm:
 
