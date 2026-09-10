@@ -55,7 +55,10 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | Y3 | Eleman ataması tip denetleniyor | **çürütüldü, DÜZELTİLDİ (branch)** — `str[] s; s[0]=5;` geçiyor VE çalışıyordu | `fail/13_element_assign_type.tpr` |
 | Y4 | `var` çıkarıldığı tipte kalıyor | **çürütüldü, DÜZELTİLDİ (branch)** — `var b=[1,2]; b=5;` geçiyordu | `fail/12_var_cross_type.tpr` |
 | Y5 | `call("ad")` adın varlığını doğruluyor | **çürütüldü** — literal adda bile doğrulamıyor; hata çalışma zamanına kalıyor | P25 |
-| R1 | Çalışma zamanı hatası süreci başarısız kılıyor | **çürütüldü** — dizi sınır dışı / sıfıra bölme / `call` bulunamadı: tanı basılıyor, yerine `0` konuyor, **çıkış kodu 0** | P25 |
+| R1 | Çalışma zamanı hatası süreci başarısız kılıyor | **çürütüldü; KISMEN düzeltildi** — tanılar artık stderr'e gidiyor (stdout temiz); çıkış kodu ≠ 0 `TULPAR_STRICT_RUNTIME=1` ile **seçime bağlı** | P25 |
+| R5 | "Sınır dışı → 0, devam" bir kaza | **çürütüldü** — TEST EDİLMİŞ sözleşme (`loop_versioning::run_sinir_disi_indeks`); strict'i varsayılan yapmak 2 suite'i kırıyor → **karar kullanıcıya** | R1 seti |
+| R6 | Sondalar tanıyı doğru yerde arıyor | **çürütüldü, DÜZELTİLDİ** — `silent_failure_probe.py` tanıyı stdout'ta bekliyordu; stderr süzgeci eklendi | R1 seti |
+| R7 | Site'nin "invalid body → 422" vaadi tutuyor | **doğrulandı** — 422 + alan detayı (`name: required`, `expected str, got int`) | P28 |
 | R2 | `build.sh test` çalışma zamanı hatasını yakalıyor | **çürütüldü** — enjeksiyonla ölçüldü: bir örneğe `kk[999]` eklendi, suite "All tests passed" dedi | P25 |
 | T5 | `thread_join` işçinin sonucunu taşıyor | **çürütüldü** — 0 dönüyor; katalogda `void` olarak kaydedildi, artık atanması hata | P20 |
 | T6 | Dilde senkronizasyon ilkeli yok | **çürütüldü** — `mutex_*` var ve çalışıyor; yalnız katalogda yokmuş | P27 |
@@ -79,6 +82,16 @@ Bundan küçük diller arası farklar derleyici farkıdır.
    üçü de aynı yerde oturunca başarısızlık geçerli davranış kisvesi kazandı.
 8. **Muafiyet listesi yerine kaynağı düzelt** — iki hakikat kaynağı er geç
    ayrışır; 12 adlık muafiyet listesinin 11'i kurguydu.
+9b. **Ölçüm aleti de bir programdır** — ona uyguladığın şüphe sahibine de
+   uygulanır. `$?` boru hattında son komutundur; bu oturumda iki kez yanılttı.
+10. **Hiç kırmızı görülmemiş bir ölçüm düzeneği yeşil değil, bilinmiyor** —
+   enjeksiyonla kanıtla. (P26 iç suite için hak edilmiş yeşili verdi; R2 örnek
+   suite'inin kör olduğunu gösterdi.)
+11. **Bilinmeyen araç, eksik araçtır** — katalog envanterini gerçek envanterden
+   bağımsız doğrula; uyuşmazlık = bulgu. `mutex_*` üç tur boyunca "yok"
+   sanıldı, meğer katalogda yokmuş.
+12. **API'yi yanlış kullanan test, özelliği yanlış suçlar** — `push`,
+   `body_schema`/`req.json`: ikisi de önce "dil bozuk" diye raporlanacaktı.
 9. **Zayıf çağrı sessizdir** — `arena_restore` çalışıyormuş gibi görünüp
    serbest bırakmıyordu. API'nin iki katmanı varsa hangisini kullandığını
    ölç, adına güvenme.

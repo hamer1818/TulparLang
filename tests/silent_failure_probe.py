@@ -210,9 +210,16 @@ for name, src, expect in CASES:
     env = dict(os.environ, LC_ALL="C")
     p = subprocess.run([TULPAR, str(f)], capture_output=True, text=True,
                        timeout=90, env=env)
-    out = (p.stdout or "").strip()
-    # [typecheck] uyarilari stderr'e gidiyor; cikti karsilastirmasini
-    # bozmamali (golgeleme sondasi bilerek uyari uretiyor).
+    # CALISMA ZAMANI TANILARI ARTIK STDERR'E GIDIYOR (R1, 2026-09-10): once
+    # `printf` ile stdout'a yaziliyorlardi ve programin kendi ciktisina
+    # karisiyorlardi. Sonda tanIyI gormeye devam etmeli, ama stderr'in
+    # tamamini almak olmaz — `[typecheck]` uyarilari da orada ve karsilastirmayi
+    # bozar (golgeleme sondasi bilerek uyari uretiyor). Bu yuzden stderr'den
+    # YALNIZ calisma zamani hatasi satirlari suzuluyor ve stdout'un ONUNE
+    # ekleniyor: hata, ikame edilen deger yazdirilmadan once olusuyor.
+    _rt = [ln for ln in (p.stderr or "").splitlines()
+           if ln.startswith("Runtime Error:") or ln.startswith("Calisma Zamani Hatasi:")]
+    out = "\n".join(_rt + (p.stdout or "").splitlines()).strip()
     if expect is None:
         if p.returncode == 0:
             fails += 1
@@ -246,7 +253,10 @@ for name, src, expect in CASES:
     g.write_text(r.stdout, encoding="utf-8")
     q = subprocess.run([TULPAR, str(g)], capture_output=True, text=True,
                        timeout=90, env=env)
-    if q.returncode != 0 or (q.stdout or "").strip() != expect:
+    _qrt = [ln for ln in (q.stderr or "").splitlines()
+            if ln.startswith("Runtime Error:") or ln.startswith("Calisma Zamani Hatasi:")]
+    q_out = "\n".join(_qrt + (q.stdout or "").splitlines()).strip()
+    if q.returncode != 0 or q_out != expect:
         fmt_fails += 1
         print(f"  ✗ fmt gidis-donus: {name}")
         print(f"      beklenen={expect!r} alinan={(q.stdout or '').strip()!r}")

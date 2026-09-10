@@ -85,6 +85,60 @@ typedef struct {
 // `thread_local` is C++11; works on both gcc/MinGW and MSVC. Each
 // worker thread initialises its own arena lazily on first alloc; the
 // `aot_arena_init` path is idempotent per thread.
+// ---------------------------------------------------------------------------
+// CALISMA ZAMANI HATASI — tek gecis noktasi (R1, 2026-09-10)
+//
+// Olculdu: dizi sinir disi, sifira bolme, `call` bulunamadi ve eksik json
+// anahtari — dordunde de tani STDOUT'a yaziliyordu ve surec 0 ile cikiyordu.
+// Iki ayri sorun:
+//
+//   (1) STDOUT. Tani, programin kendi ciktisina karisiyordu. Ciktiyi
+//       karsilastiran her test duzenegini zehirler; merkezi `vm_runtime_error`
+//       zaten stderr kullaniyordu ama buradaki 18 site onu ATLAYIP printf
+//       cagiriyordu.
+//   (2) CIKIS KODU 0. Cikis koduna bakan her arac (CI, supervisor, shell &&)
+//       basarisizligi goremiyordu. build.sh'in ornek kosucusu "yalnizca cikis
+//       kodunu" karsilastirdigi icin bir ornege `kk[999]` enjekte edildiginde
+//       suite "All tests passed!" diyordu (R2, olculdu).
+//
+// Bu yardimci ikisini de duzeltir, DAVRANISI DEGISTIRMEDEN: hata hala yumusak
+// (yerine 0 konur, akis devam eder). Degisen yalniz akis (stderr) ve nihai
+// cikis kodu. Goc kapisi olculdu: 50 orneğin SIFIRINDA calisma zamani hatasi
+// var, yani bu degisiklik hicbir ornegi kirmiyor.
+//
+// NOT: `try/catch` bu hatalari HALA yakalamiyor (P26b) — iki hata sistemini
+// birlestirmek ayri bir is; bkz. FINDINGS R3.
+static bool g_rt_error_seen = false;
+
+static void rt_error_exit_hook(void) {
+  if (g_rt_error_seen) _exit(70);   // 70 = EX_SOFTWARE
+}
+
+extern "C" void aot_runtime_error(const char *msg) {
+  // Cikis kodu SECIME BAGLI (TULPAR_STRICT_RUNTIME=1). Varsayilan hala 0.
+  //
+  // NEDEN VARSAYILAN DEGIL: "sinir disi okuma 0 dondurur ve program devam
+  // eder" davranisi bir kaza degil, TEST EDILMIS SOZLESME —
+  // tests/loop_versioning.test.tpr::run_sinir_disi_indeks tam bunu iddia
+  // ediyor (`a[64] -> sinir disi -> 0`) ve scene3d_engine ayni deseni
+  // kullaniyor. Cikis kodunu kosulsuz 70 yapmak bu iki suite'i (55/55 ve
+  // 654/654 gecerken) FAIL'e cevirdi — olculdu.
+  //
+  // Yani karar dilin hata felsefesine ait: yumusak hata mi kalsin, yoksa
+  // firlatilabilir/olumcul mu olsun (bkz. FINDINGS R1/R3). Anahtar, kararin
+  // maliyetini olcmeyi mumkun kiliyor; varsayilani degistirmek ayri bir is.
+  static int strict = -1;
+  if (strict < 0) {
+    const char *e = std::getenv("TULPAR_STRICT_RUNTIME");
+    strict = (e && *e && std::strcmp(e, "0") != 0) ? 1 : 0;
+  }
+  if (strict && !g_rt_error_seen) {
+    g_rt_error_seen = true;
+    std::atexit(rt_error_exit_hook);
+  }
+  std::fprintf(stderr, "%s\n", msg);
+}
+
 static thread_local AOTArena *g_aot_string_arena = nullptr;
 
 // ---------------------------------------------------------------------------
@@ -286,7 +340,7 @@ static VMValue aot_invoke_boxed_n(void (*fp)(VMValue *), int arity,
 // AOT Dynamic Call Support
 VMValue aot_call_dynamic(VMValue func_name) {
   if (!IS_STRING(func_name)) {
-    printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
+    aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
                                        "Runtime Error: call() expects string"));
     return VM_VOID();
   }
@@ -314,13 +368,18 @@ VMValue aot_call_dynamic(VMValue func_name) {
       func_ptr = (void (*)(VMValue *))tulpar_dlsym(TULPAR_RTLD_DEFAULT, original_name);
     }
     if (!func_ptr) {
-      printf("%s '%s' (AOT)\n",
-             tulpar::i18n::tr_en("Calisma Zamani Hatasi: Fonksiyon bulunamadi",
-                                 "Runtime Error: Function not found"),
-             name);
+      {
+        char _b[512];
+        std::snprintf(_b, sizeof _b, "%s '%s' (AOT)",
+                      tulpar::i18n::tr_en(
+                          "Calisma Zamani Hatasi: Fonksiyon bulunamadi",
+                          "Runtime Error: Function not found"),
+                      name);
+        aot_runtime_error(_b);
+      }
       const char *error = tulpar_dlerror();
       if (error) {
-        printf("  Detail: %s\n", error);
+        std::fprintf(stderr, "  Detail: %s\n", error);
       }
       return VM_VOID();
     }
@@ -348,7 +407,7 @@ VMValue aot_call_dynamic(VMValue func_name) {
 // `func list_users()` or `func get_user(req)`.
 VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
   if (!IS_STRING(func_name)) {
-    printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
+    aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
                                        "Runtime Error: call() expects string"));
     return VM_VOID();
   }
@@ -374,10 +433,15 @@ VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
       func_ptr = (void (*)(VMValue *))tulpar_dlsym(TULPAR_RTLD_DEFAULT, original_name);
     }
     if (!func_ptr) {
-      printf("%s '%s' (AOT)\n",
-             tulpar::i18n::tr_en("Calisma Zamani Hatasi: Fonksiyon bulunamadi",
-                                 "Runtime Error: Function not found"),
-             name);
+      {
+        char _b[512];
+        std::snprintf(_b, sizeof _b, "%s '%s' (AOT)",
+                      tulpar::i18n::tr_en(
+                          "Calisma Zamani Hatasi: Fonksiyon bulunamadi",
+                          "Runtime Error: Function not found"),
+                      name);
+        aot_runtime_error(_b);
+      }
       return VM_VOID();
     }
     // Native dlsym fallback: arity unknown (-1) → invoke with the 1-arg shape,
@@ -397,7 +461,7 @@ VMValue aot_call_dynamic_1(VMValue func_name, VMValue arg) {
 // two context args instead of smuggling them through globals.
 VMValue aot_call_dynamic_n(VMValue func_name, VMValue *args, int argc) {
   if (!IS_STRING(func_name)) {
-    printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
+    aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: call() string bekler",
                                        "Runtime Error: call() expects string"));
     return VM_VOID();
   }
@@ -423,10 +487,15 @@ VMValue aot_call_dynamic_n(VMValue func_name, VMValue *args, int argc) {
       func_ptr = (void (*)(VMValue *))tulpar_dlsym(TULPAR_RTLD_DEFAULT, original_name);
     }
     if (!func_ptr) {
-      printf("%s '%s' (AOT)\n",
-             tulpar::i18n::tr_en("Calisma Zamani Hatasi: Fonksiyon bulunamadi",
-                                 "Runtime Error: Function not found"),
-             name);
+      {
+        char _b[512];
+        std::snprintf(_b, sizeof _b, "%s '%s' (AOT)",
+                      tulpar::i18n::tr_en(
+                          "Calisma Zamani Hatasi: Fonksiyon bulunamadi",
+                          "Runtime Error: Function not found"),
+                      name);
+        aot_runtime_error(_b);
+      }
       return VM_VOID();
     }
     aot_call_cache_insert(original_name, orig_len, hash, func_ptr, -1);
@@ -952,7 +1021,7 @@ extern "C" void aot_div_error(long long kind) {
                         "Calisma Zamani Hatasi: Tamsayi bolme tasmasi",
                         "Runtime Error: Integer division overflow"));
   } else {
-    printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
+    aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
                                        "Runtime Error: Division by zero"));
   }
 }
@@ -1395,7 +1464,7 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
     switch (type_pair) {
     case TYPE_INT_INT:
       if (AS_INT(b) == 0) {
-        printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
+        aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
                                            "Runtime Error: Division by zero"));
         *result = VM_INT(0);
         return;
@@ -1428,7 +1497,7 @@ void vm_binary_op(VM *vm, VMValue *a_ptr, VMValue *b_ptr, int op_token,
     switch (type_pair) {
     case TYPE_INT_INT:
       if (AS_INT(b) == 0) {
-        printf("%s\n", tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
+        aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: Sifira bolme",
                                            "Runtime Error: Division by zero"));
         *result = VM_INT(0);
         return;
@@ -1633,8 +1702,7 @@ VMValue vm_array_get(ObjArray *array, int index) {
     return VM_INT(array->idata[index]);
   }
   if (!array || index < 0 || index >= array->count) {
-    printf("%s\n",
-           tulpar::i18n::tr_en("Calisma Zamani Hatasi: Dizi indeksi sinir disinda",
+    aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: Dizi indeksi sinir disinda",
                                "Runtime Error: Array index out of bounds"));
     return VM_INT(0);
   }
@@ -1660,8 +1728,7 @@ void vm_array_set(ObjArray *array, int index, VMValue value) {
     }
   }
   if (!array || index < 0 || index >= array->count) {
-    printf("%s\n",
-           tulpar::i18n::tr_en("Calisma Zamani Hatasi: Dizi indeksi sinir disinda",
+    aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: Dizi indeksi sinir disinda",
                                "Runtime Error: Array index out of bounds"));
     return;
   }
@@ -1869,8 +1936,7 @@ VMValue vm_get_element_ptr(VMValue *target, VMValue *index) {
 void vm_set_element_ptr(VM *vm, VMValue *target, VMValue *index,
                         VMValue *value) {
   if (!target || !index || !value) {
-    printf("%s\n",
-           tulpar::i18n::tr_en("Calisma Zamani Hatasi: set element icin gecersiz pointer",
+    aot_runtime_error(tulpar::i18n::tr_en("Calisma Zamani Hatasi: set element icin gecersiz pointer",
                                "Runtime Error: nullptr pointer in set element"));
     return;
   }
@@ -8956,13 +9022,19 @@ VMValue aot_is_bool(VMValue v) { return VM_BOOL(IS_BOOL(v)); }
 
 VMValue aot_call_closure(ObjClosure *cls, VMValue *args, int argc) {
   if (!cls) {
-    printf("Calisma Zamani Hatasi: Null closure cagirildi\n");
+    aot_runtime_error("Calisma Zamani Hatasi: Null closure cagirildi");
     VMValue res;
     res.type = VM_VAL_VOID;
     return res;
   }
   if (cls->arity != argc) {
-    printf("Calisma Zamani Hatasi: Hatali parametre sayisi. Beklenen: %d, Alinan: %d\n", cls->arity, argc);
+    {
+      char _b[160];
+      std::snprintf(_b, sizeof _b,
+                    "Calisma Zamani Hatasi: Hatali parametre sayisi. Beklenen: %d, Alinan: %d",
+                    cls->arity, argc);
+      aot_runtime_error(_b);
+    }
     VMValue res;
     res.type = VM_VAL_VOID;
     return res;
@@ -8999,7 +9071,7 @@ VMValue aot_call_closure(ObjClosure *cls, VMValue *args, int argc) {
       ((void(*)(VMValue*, void*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*, VMValue*))cls->func_ptr)(&result, env, &args[0], &args[1], &args[2], &args[3], &args[4], &args[5], &args[6], &args[7]);
       break;
     default:
-      printf("Calisma Zamani Hatasi: 8'den fazla parametreli closure cagirimi desteklenmiyor\n");
+      aot_runtime_error("Calisma Zamani Hatasi: 8'den fazla parametreli closure cagirimi desteklenmiyor");
       break;
   }
   return result;
