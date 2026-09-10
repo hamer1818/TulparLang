@@ -69,7 +69,7 @@ Bundan küçük diller arası farklar derleyici farkıdır.
 | T9 | `thread_create` tipli fonksiyonla çalışıyor | **çürütüldü, DÜZELTİLDİ** — `t_<ad>` şimi yalnız tipsiz fonksiyonlar için vardı; tipli olanda ham sembole düşüp **işaretçiyi tamsayı diye geçiriyordu** (42 yerine 140166943450080). Artık çağrı anında **normalleştirici sarmalayıcı** üretiliyor: entry'ye ulaşan **tek ABI** var | thread_copy |
 | T11 | join kaydı serbest bırakılabilir | **çürütüldü** — ilk yazımda `join` kaydı `free` ediyordu ve ikinci join **çekirdek dökümü** verdi (`double free`). Kayıt artık hiçbir yolda serbest bırakılmıyor; `consumed` bayrağı güvenli hata veriyor | thread_copy |
 | T12 | detach edilen thread join edilebilir | **çürütüldü** — bayrak yokken **kazara** çalışıyordu (pthread düzeyinde tanımsız). Artık açık hata | thread_copy |
-| T10 | join-dönüşü ücretsiz | **çürütüldü (ölçülmüş maliyet)** — P43: 4× iş → 2,82× RSS; **P49**: detach biraz daha kötü (3,06×), çünkü kayıt da bırakılmıyor. Bilinen maliyet; çözüm değer-başı serbest bırakma | P43/P49 |
+| T10 | join-dönüşü ücretsiz | **çürütüldü (ölçülmüş), KISMEN düzeltildi** — detach dalı artık sonucu hiç üretmiyor; join dalı genel kalıcı-değer sızıntısına tabi (M2) | P43/P49 |
 | T6 | Dilde senkronizasyon ilkeli yok | **çürütüldü** — `mutex_*` var ve çalışıyor; yalnız katalogda yokmuş | P27 |
 | C9 | Suite'ler çalışma zamanı hatasını yakalıyor | **doğrulandı (enjeksiyonla)** — tek dosya çıkış 1, suite çıkış 1, paket sayısı 75'te kalıyor | P26 |
 | R3 | `try/catch` çalışma zamanı hatasını yakalıyor | **çürütüldü, DÜZELTİLDİ (strict'te)** — strict modda hata `aot_throw` ile fırlıyor: `catch` yakalıyor, yakalanmazsa stderr + exit 1 | P26b |
@@ -130,7 +130,26 @@ yalnız `&&`/`||`'de idi.
 | S4 | SSE/WS akışında handler ortası throw | **ÖLÇÜLDÜ ve KAPANDI** — üç fazlı sözleşme (P44) |
 | S5 | `at` / `json_get` sınır politikası | **belgelendi** — negatif indeks "sondan" değil, sınır dışı |
 | S7 | Thread sözleşmesi: **kopyayla girer, join'le çıkar** | **yazıldı** — argüman derin kopya, join sonucu taşır; paylaşmak isteyen `mutex_*` kullanır |
-| S8 | Handle sözleşmesi | **yazıldı** — *join handle'ı tüketir; ikinci join hatadır; detach edilmiş handle join edilemez* (fikstürle kilitli) |
+| S8 | Handle sözleşmesi | **yazıldı + fikstür** — *join handle'ı tüketir; ikinci join hatadır; detach edilmiş handle join edilemez* |
+
+**P43/P49 — önce/sonra (RSS zirve, spawn döngüsü):**
+
+| | N=1000 | N=4000 | oran | |
+|---|---:|---:|---:|---|
+| join, **önce** | 7660 | 21840 | 2,85× | |
+| join, **sonra** | 6932 | 21528 | 3,11× | değişmedi — beklendiği gibi |
+| detach, **önce** | 7960 | 24380 | 3,06× | |
+| detach, **sonra** | 7564 | **20868** | 2,76× | **−%14**, sonuç hiç üretilmiyor |
+
+**İki dal ayrı:** *detach atar* fiziksel olarak gerçekleşti — sonuç kopyası
+üretilmiyor. *join dalı düzeltilemez*: dönen değer artık **çağıranın** ve genel
+kalıcı-değer ömrüne tabi (M2 — `arc_release` AOT yolunda hiç çağrılmıyor,
+değer-başı geri kazanım yok). Kalan büyüme her iki dalda da argüman kopyası +
+kayıt; o da aynı genel işle kapanır, join/detach'e özgü değil.
+
+⚠ **#21 istisnası, gerekçesiyle:** S7'nin üçüncü cümlesi (*detach atar*) bir
+bellek özelliği — Tulpar'dan gözlemlenemiyor, fikstürle değil **ölçümle**
+doğrulanıyor (yukarıdaki tablo). Diğer iki cümlenin fikstürü var.
 | S6 | Paylaşılan-değer katmanı mutasyona uğratılmaz | **sabitlendi** — `vm_object_get` üstünde sözleşme yorumu + `tests/shared_json_read.test.tpr`; uğratılacaksa T7 ve derin kopya yeniden değerlendirilir |
 
 **S1'in ampirik yarısı (P38a):** korpusta `if(<ad>)` deseninde **165 site**,
@@ -250,6 +269,14 @@ yolu eklendiğinde sessizce atlanır.**
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
+21. **Sözleşme cümlesi, onu test eden fikstür doğmadan kapanmaz.** S-listesi
+   *belgelenmemiş* sözleşmeleri avladı; T11 tersini gösterdi: **belgelenen
+   sözleşme de tehlikeli** — sınanmadan yazılanın ihlali sessizce kabul edilir.
+   *"join handle'ı tüketir"* cümlesi yazıldığında kaydı `free` eden kod iki tur
+   boyunca sessizce duruyordu; cümleyi doğrulayan test yazılınca çift-join
+   **çekirdek dökümü** verdi. Cümle, yazarını kendi hatasına götürdü.
+   Gözlemlenemeyen cümleler (bellek özellikleri) ölçümle doğrulanır ve bu
+   **gerekçesiyle** kaydedilir.
 20. **Yanlış gözlem gerçek sinyal taşıyabilir; sinyali çerçeveden ayır.**
    Bulgu 3'te üç şey vardı: hatalı test (`push` yanlış kullanımı) ❌, hatalı
    teori (`arr_debox` yarışı) ❌, ve **doğru tanı** ✅ — teslim katmanı

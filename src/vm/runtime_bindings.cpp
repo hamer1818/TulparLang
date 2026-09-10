@@ -5380,6 +5380,7 @@ typedef struct {
   VMValue result;          // Iscinin donusu (kopya)
   tulpar_thread_t thread;  // Isletim sistemi handle'i
   int consumed;            // join/detach edildi mi (asagidaki sozlesme)
+  int detached;            // YALNIZ detach kaldirir — bkz. entry'deki not
 } AOTThreadRec;
 
 // Thread entry point wrapper.
@@ -5420,9 +5421,27 @@ static void *aot_thread_entry(void *arg) {
   if (func) {
     VMValue result = VM_VOID();
     func(&result, &rec->arg);
-    // Argumanla AYNI marshaling yolu: cikan da KOPYA. Iscinin arenasi
-    // kapandiginda cagiran gecerli bir degere bakmali.
-    rec->result = aot_persist(result);
+    // ⚠ `consumed` DEGIL `detached` bakiyoruz. Ilk yazimda `consumed`
+    // kullanildi ve JOIN YOLUNU BOZDU: `thread_join` bayragi beklemeden ONCE
+    // kaldiriyor, isci onu gorup sonucu atiyordu — join `void` donuyor ve
+    // `r["n"]` "gecersiz hedef" hatasi veriyordu. Olcum yakaladi.
+    // "Sonucu isteyen var mi" sorusunun dogru bayragi yalnizca detach'in
+    // kaldirdigi olan.
+    //
+    // DETACH ATAR (S7'nin ucuncu cumlesi). Handle detach edilmisse sonucu
+    // kimse okumayacak — o hâlde KOPYALAMIYORUZ da. Olculdu (P49): detach
+    // edilen isciler join edilenlerden daha cok siziyordu (3,06x vs 2,85x)
+    // cunku sonuc yine de kalici depoya kopyalaniyordu ve kimse istemiyordu.
+    //
+    // JOIN dali burada duzeltilemez: donen deger artik CAGIRANIN ve genel
+    // kalici-deger omrune tabi (FINDINGS M2 — `arc_release` AOT yolunda hic
+    // cagrilmiyor, deger-basi geri kazanim YOK). O, join'e ozgu bir sizinti
+    // degil; genel geri kazanim isiyle birlikte kapanir.
+    if (!rec->detached) {
+      // Argumanla AYNI marshaling yolu: cikan da KOPYA. Iscinin arenasi
+      // kapandiginda cagiran gecerli bir degere bakmali.
+      rec->result = aot_persist(result);
+    }
   }
   // Kayit BURADA serbest birakilmaz — `thread_join`/`thread_detach` yapar.
 #if PLATFORM_WINDOWS
@@ -5445,6 +5464,7 @@ VMValue aot_thread_create(void *func_ptr, VMValue arg) {
   rec->arg = aot_persist(arg);
   rec->result = VM_VOID();
   rec->consumed = 0;
+  rec->detached = 0;
 
 #if PLATFORM_WINDOWS
   int result = tulpar_thread_create(&thread, (tulpar_thread_func_t)aot_thread_entry, rec);
@@ -5500,6 +5520,7 @@ VMValue aot_thread_detach(VMValue threadVal) {
   // guvenli bir hata veriyor. (Olculdu: bayrak yokken "detach sonrasi join"
   // KAZARA calisiyordu — tanimli degil, sansliydi.)
   rec->consumed = 1;
+  rec->detached = 1;
   tulpar_thread_detach(rec->thread);
   // Kayit serbest birakilmiyor: detach edilen thread hala sonuc slotuna
   // yaziyor olabilir. Bkz. AOTThreadRec'teki handle sozlesmesi notu.
