@@ -107,11 +107,36 @@ Yüklü bir koşucuda eşzamanlı kol da 50 ms'yi aşıyor ve test, **gather
 bozulmadan** kırmızı veriyordu — macOS/arm64 CI'da 2026-09-09 ile 09-11
 arasında dört koşumda tam bu satır düştü. Yerelde (Linux) hiç görünmedi.
 
-**Kural:** zamanlama iddiası MUTLAK eşikle değil, **iki kolun farkıyla**
-sınanır (`arena_contract_smoke.py`'nin deseni). Aynı süreçte hem seri hem
-eşzamanlı kol koşar; yük ikisini birden yavaşlatır, **oran** korunur.
-`assert(esz * 2 < seri)` orantılı yük altında hiç düşmez, gather seriye
-dönerse hemen düşer.
+**İlk düzeltmem de yanlıştı ve aynı yerde patladı.** İki kollu farka çevirdim
+(`assert(esz * 2 < seri)`) ve gerekçem *"yük ikisini de yavaşlatır, oran
+korunur"* idi. macOS/arm64 bunu bir koşumda çürüttü.
+
+Hata şurada: **`sleep_async` duvar saatidir, yükle uzamaz** — yalnızca çağrı
+başına *ek yük* uzar. Yani iki kol aynı katsayıyla ölçeklenmiyor:
+
+| | taban | yük altında |
+|---|---|---|
+| seri (3 uyku) | 60 ms | 60 + 3h |
+| eşzamanlı (1 uyku) | 20 ms | 20 + h′ |
+
+Seri kol 60 ms tabanlı olduğu için ek yükü **oransal olarak yutuyor**,
+eşzamanlı kol (20 ms tabanlı) yutmuyor. Oran yük altında korunmuyor,
+eşzamanlı kolun **aleyhine bozuluyor**. "Farkı ölç" doğru içgüdüydü; yanlış
+olan, farkın **hangi büyüklüğe göre** normalize edildiğiydi.
+
+**Kural:** zamanlama iddiası, ölçülen şeyin **BİR BİRİMİNE** göre
+normalize edilir — ek yükü *tanımı gereği* içeren bir referansa. Burada birim,
+tek bir awaited 20 ms uykunun gerçek maliyeti:
+
+```
+seri olsaydı   -> ~3 birim
+eşzamanlı ise  -> ~1 birim
+eşik 2 birimde -> her iki yönde de %100 pay
+```
+
+Platform ne kadar yavaşsa birim o kadar büyür, eşik onunla birlikte açılır.
+Ölçülen değerler **basılıyor** (`[olcum] birim=… gather=…`): sayısı olmayan
+bir eşik iki kez tahminle konuldu ve iki kez yanlış çıktı.
 
 ⚠ **Bu ders defterde ZATEN yazılıydı** — [[#6z. Duvar saati ORANI koruması —
 sabit ek yük oranı platforma bağlı yapar]] aynı sınıfı aynı platformda
@@ -119,6 +144,73 @@ sabit ek yük oranı platforma bağlı yapar]] aynı sınıfı aynı platformda
 uygulanmadı ve aynı hata ikinci kez CI'ı kırdı. **Bir tuzak yazıldığında
 aynı sınıftan BÜTÜN yerler taranmalı**: `grep -rn "assert(.*time_ms\|dt <"
 tests/` bunu bir dakikada verirdi.
+
+### 1n. İki kol AYRI zamanlarda ölçülürse oran çöp olur — turla eşle
+`build.sh`'ın ackermann gerileme kapısı her kolu **ayrı blokta** ölçüyordu:
+önce zincirli üç kez, sonra zincirsiz üç kez, her birinin en iyisi. Aynı
+kodda, aynı gün:
+
+| | oran |
+|---|---|
+| yerel, 10 deneme | **0,873 – 0,925** (zincirli daha hızlı, yayılım 0,05) |
+| CI Linux | **1,262** → kapı düştü |
+
+~%40'lık bu kayma küçük gürültüyle açıklanamaz. Sebep tasarımdı: bir yavaşlama
+**yalnız bir kola** denk geldiğinde oran çöpe dönüyor, ve kapı ölçtüğü özellik
+kusursuz çalışırken kırmızı veriyor.
+
+**Kural:** karşılaştırılan iki kol **milisaniyeler** arayla, aynı turda
+ölçülür; sonra turların **medyanı** alınır. Aynı turda ölçülen iki kolu bir
+yavaşlama birlikte vurur ve **oranda sadeleşir**. Doğrudan kanıt — düzeltilmiş
+ölçümde bir deneme:
+
+```
+deneme 1  oran=%89  zincirli=11825us zincirsiz=13353us   <- mutlak süreler %30 yüksek
+deneme 3  oran=%91  zincirli= 9461us zincirsiz=10371us   <- oran değişmedi
+```
+
+Medyan, ortalamadan üstün: ortalama tek bir bozuk turu içine alır, medyan onu
+tanımı gereği dışarıda bırakır.
+
+⚠ **Ölçümü ve eşiği AYNI ANDA değiştirme.** Kırmızıyı hangisinin düzelttiği
+bilinmez olur. Burada yalnız ölçüm değişti; eşik (%125) sabit bırakıldı ve
+kapının hâlâ **ayırt ettiği** ayrıca kanıtlandı: tarihsel gerileme
+(`TULPAR_SELFREC_DEPTH=4`) yeniden üretilip **5/5** yakalandı (%126-129 —
+belgelenen %29 gerilemeyle birebir).
+
+Bu, [[#1l. Duvar saati EŞİĞİ, yük altında özelliği değil koşucuyu ölçer]] ve
+[[#6z. Duvar saati ORANI koruması — sabit ek yük oranı platforma bağlı yapar]]
+ile aynı ailenin **üçüncü** üyesi. Üçünün ortak dersi: *zamanlama kapısı
+yazarken asıl soru "eşik kaç olsun" değil, **"neye göre normalize ediyorum"**.*
+
+Nöbetçi: `tests/perf_pair.py` — tur eşlemesi + açılış çıkarma + medyan;
+karar vermez, yalnız ölçer (eşiği çağıran koyar).
+
+### 1m. Koşmayan sonda, koşturulduğu gün SINADIĞI ŞEYİ suçlar
+`wings_tls_smoke.py` "elle koşulur, CI'da değil" diye duruyordu. 2026-09-11'de
+ilk kez koşulduğunda çıktısı şuydu:
+
+```
+FAIL: build failed
+```
+
+TLS hakkında bir hüküm. Gerçek sebep: ikili arayıcısı listenin başında
+`tulpar.exe` arıyordu ve depo kökündeki **üç ay bayat PE32+ artığı**
+seçiliyordu (native Windows 3.13.0'da kaldırıldı, `.exe` ölü ağırlık kaldı).
+Wine onu çalıştırmaya kalkıyor, `libcrypto-3-x64.dll` bulunamıyor, sonda da
+bunu "TLS derlenemedi" diye raporluyordu.
+
+Sonda **var olduğu sürece bozuktu** ve hiçbir şey bunu söylemedi — çünkü
+otomasyonda değildi. Otomasyon dışı bir sonda, "henüz yazılmamış" testten
+daha kötüdür: yazılmamış test kimseyi yanıltmaz, koşmayan sonda ise
+*"o taraf kapsanıyor"* hissi verir.
+
+**Kural:** bir sondayı "manuel" bırakmak bir karar değil, **ertelenmiş bir
+arıza**. Otomasyona alınamıyorsa sebebi yazılır (ör. donanım gerekiyor); o
+sebep yoksa bağlanır. Bağlarken iki şey ölçülür: **güvenilirlik** (tekrarlı
+koşum — [[#1l. Duvar saati EŞİĞİ, yük altında özelliği değil koşucuyu ölçer]])
+ve **sessiz SKIP** — `exit 0` ile atlayan bir sonda kapıyı boşuna yeşil yapar,
+o yüzden atlama GÖRÜNÜR olmalı.
 
 ### 1j. Disk artığı testler arasında taşınıyor
 "Diske yazılmamış olmalı" testi, önceki bir **bozma denemesinin** yazdığı
