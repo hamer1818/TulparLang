@@ -329,8 +329,61 @@ işaretçi durum uzayını üçe katlar ve R11 bu dosyada hata sınıfının ner
 yaşadığını gösterdi.
 
 **Kârlılık kapısı (iş başlamadan yazıldı):** göç, `matmul` oranını **≤ 4×**e
-ve float düz taramayı **≤ 2×**ye indirmezse geri alınır. Üst sınır bilgisi
-var: aynı motorda int dizisi 1,48× yapıyor, yani hedef ulaşılabilir.
+ve float düz taramayı **≤ 2×**ye indirmezse geri alınır.
+
+### ⛔ KAPI KAPANDI — ve işi DURDURDU (2026-09-11)
+
+Kapı, refactor'a başlamadan önce **ulaşılabilir tavanı** ölçmeyi şart
+koşuyordu. Ucuz ve kesin deney: aynı `matmul`'ü **int dizisiyle** koşmak —
+çünkü int yolu **zaten kutusuz**. Yani int matmul, float unboxing'inin
+verebileceği en iyi sonuçtur.
+
+| | C (gcc -O2) | Tulpar | oran |
+|---|---:|---:|---:|
+| `matmul` **int** (zaten kutusuz) | 67,8 ms | 403,3 ms | **5,95×** |
+| `matmul` float (kutulu, bugün) | 31,0 ms | 824,5 ms | 26,6× |
+| **kapı** | | | **≤ 4×** |
+
+**Sonuç: float dizilerini kutusuzlaştırmak `matmul`ü 26,6×'ten ~6×'e
+indirir — kapıyı GEÇMEZ.** Kalan 6× depolama genişliği değil, çünkü int
+dizisi C'nin `long long`undan *dar* (4 bayt vs 8) ve yine de 5,95× kaybediyor.
+
+### Darboğaz nerede: dört şekil, izole
+
+40M eleman, aynı veri, yalnız erişim şekli değişiyor:
+
+| şekil | C | Tulpar | oran |
+|---|---:|---:|---:|
+| lineer okuma `a[i]` | 26,0 ms | 25,2 ms | **0,97×** |
+| hesaplı indeks `a[i*m]` | 21,7 ms | 19,1 ms | **0,88×** |
+| iki dizi `a[i] * b[i]` | 30,5 ms | 54,6 ms | 1,79× |
+| **oku-yaz** `a[i] = a[i] + b[i]` | 26,9 ms | 76,5 ms | **2,84×** |
+
+Hipotezim (*"hesaplı indeks şekil önbelleğini/döngü sürümlemesini deliyor"*)
+**çürütüldü**: hesaplı indeks bedava, hatta Tulpar önde. Maliyet **eleman
+YAZMA** yolunda ve ikinci dizinin eklenmesinde. `matmul`'ün iç döngüsü tam
+olarak "iki dizi + birine oku-yaz" — 5,95× bu ikisinin bileşimi.
+
+### Revize edilmiş ürün kararı
+
+Kapı işini yaptı: **büyük ve riskli bir refactor'u, ölçülmüş bir gerekçeyle
+durdurdu.** (`idata` yüzeyi ~117 değinme, 49'u codegen'de, ve `items_`in
+aksine **derleme-zamanı koruması yok** — atlanan her yol sessiz bozulma.)
+
+Karar ikiye ayrıldı:
+
+1. **Float unboxing HÂLÂ değerli — ama `matmul` gerekçesiyle değil.** Kendi
+   kapısıyla gelmeli: *float düz tarama ≤ 2× ve eleman başına ≤ 8 bayt.*
+   Bu ulaşılabilir — int lineer okuma **0,97×** yapıyor. Kazanç: float
+   traversal 5,45× → ~1×, bellek 16,1 → 8,1 bayt/eleman.
+2. **`matmul` açığı AYRI bir iş kalemi: eleman yazma yolu.** 2,84×'lik tek
+   şekil, üç ölçümün en büyüğü. Onu kapatmadan hiçbir depolama değişikliği
+   `matmul`i kapıdan geçiremez.
+
+⚠ **Kaydedilmesi gereken:** bu turun ürünü kod değil, **yapılmayan iş**.
+Ölçüm yapılmasaydı ~117 değinmelik bir refactor yapılacak, sonunda `matmul`
+6×'te kalacak ve kapı "geçemedi" diyerek **hepsi geri alınacaktı**. Kapının
+değeri tam burada: iş başlamadan önce sorulan "tavan nedir?" sorusu.
 
 **Zorunlu fikstür paketi (#21):** göç bir sözleşme değiştiriyor —
 *"kutulanmamış depolama yalnız tam sayılar içindir"* cümlesi ölüyor. Yerine
@@ -759,6 +812,23 @@ yolu eklendiğinde sessizce atlanır.**
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
+29. **İki hakikat kaynağı birleştirilirken bir mutabakat yarışı beklenir;
+   birleşmenin çıktısı bir MUTABAKAT RAPORUDUR, sessiz bir merge değil.**
+   S1 tablosu ile `[typecheck]`'in iç tablosu aynı şeyi söylemiyordu ve
+   çelişki **on iki tur** görünmedi — çünkü tablo *dokümantasyondu*, karar
+   kaynağı değil. Birleştirme işi açılınca yüzeye çıktı: `float` bunca
+   zamandır yanlış pozitif üretiyormuş. Ders: birleşme, hangi tarafın hangi
+   satırda kazandığını **sayarak** biter (burada: 3 silme, 0 ekleme, biri
+   gerçek yanlış pozitif). LSP↔katalog birleşmesinin halefi — aynı iş,
+   ikinci tur, bu kez raporlu.
+28. **Uyarı çerçevesi yanlışsa çözüm susturmak değil, SORUYU DÜZELTMEKTİR.**
+   `if(str)` için doğru hamle uyarıyı kaldırmak değildi: *"boolean ya da
+   integer olmalı"* yanlış bir cümleydi (izinli ve tanımlı), ama *"her zaman
+   doğru"* gerçek bir hata kokusu. Uyarı kaldırılsaydı S1'in belgelediği
+   tuzağın tam anında verilen tek sinyal de giderdi. Çerçeve düzeltilince
+   araç **daha** değerli oldu — tanı artık tabloyu öğretiyor.
+   (P44'ün sentez-düzeltmesinin aynası: orada soru *"yazdım mı"*, burada
+   *"neden buradasın"*.)
 27. **Gezici envanteri düğüm-tipine göre değil, ANLAMSAL HEDEFE göre
    kurulur.** Lint'in gezicisi `Assignment`'ın yalnız `target` (düğüm)
    alanına bakıyordu; aynı düğüm basit hedefi `name` (dizgi) alanında
