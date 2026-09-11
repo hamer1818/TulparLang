@@ -79,6 +79,19 @@ edilen sayı keşfedilenin sayısıydı.
 Sivri yanı: atlanan tek ad, bir önceki turda "argüman sırasını ters yazmışım"
 diye düzeltilen builtin'di. Düzeltme #12'yi kapatırken #11'i açtı.
 
+**Asıl yapısal kusur ayrı:** kural #10 ("kırmızıya dönebildiğini gör") **elle**
+uygulanıyordu. Kapıyı yazan kişi bir kez enjeksiyon yapıp yeşili görüyor,
+sonra o kanıt **buharlaşıyor** — hiçbir şey onu tekrar koşmuyor. İki kapı
+(TypedValue, #19) tam bu yüzden iki tur üst üste kör kaldı: ikisi de
+geçtikleri BİÇİM için doğruydu, kaçan şey kapının koruduğunu SANDIĞI sınıfın
+öbür biçimleriydi. Yani sorun duyarlılık değil **kapsam**dı.
+
+Çözüm `tests/source_gates.py`: desen tek yerde tanımlı (`build.sh` onu çağırır,
+kopya tutmaz — yoksa self-test kapıyı değil bir yeniden yazımını sınar) ve her
+kapı yakalaMASI gereken **kaçış biçimleri** ile geçirMESİ gereken **meşru
+biçimler** tablosunu taşır. Tablo her koşumda doğrulanıyor. Yeni bir kaçış
+bulunduğunda önce tabloya eklenir (kırmızı verir), sonra desen düzeltilir.
+
 **Kural:** bir tarama "N şeyi korudum" diyorsa, N **ölçülen** olmalı.
 Keşfedilen ile ölçülen ayrı sayılır ve etikette ikisi birden yazılır
 (`builtin taramasi (50/50)`). Atlama sessiz olamaz: ya şekli düzelt ya adıyla
