@@ -339,9 +339,16 @@ bir nokta**. Açılış çıkarılmış, gcc -O2'ye karşı:
 |---|---:|---:|---:|---:|
 | oran | 12,3× | 12,0× | 14,5× | **17,3×** |
 
-Dürüst cümle: **`fib` çekirdeğinde Tulpar ölçülen her derleyiciden farklı bir
-karmaşıklık sınıfında; bildirilen oran n'e bağlı ve n ile büyüyor.** Bu,
-"2,7×"ten hem daha güçlü hem daha koşullu.
+Dürüst cümle: **`fib` çekirdeğinde AYNI karmaşıklık sınıfı, DAHA KÜÇÜK
+TABAN** — her iki taraf da üstel, fark tabanda (1,488 vs 1,607). Bildirilen
+oran n'e bağlı ve `(1,607/1,488)ⁿ` ile büyüyor, yani sınırsız. Bu, "2,7×"ten
+hem daha güçlü hem daha koşullu.
+
+⚠ **İlk yazımda "farklı karmaşıklık sınıfı" dedim — yanlıştı ve yayına
+çıktı** (site, iki dil). "Farklı sınıf" polinom-vs-üstel demektir; burada
+olan, aynı ailede küçük taban. Ölçüler değişmedi, onlardan çıkarılan iddia
+daraltıldı. Bu, #31'in doğuş vakası: **ayrışmanın var olduğunu ölçmeden
+atıf yapma** — ve atfın *adı* da bir iddiadır.
 
 ## 📐 FP SETİ — "float yavaş mı?" sorusunun iki ayrı cevabı var (2026-09-11)
 
@@ -903,6 +910,15 @@ yolu eklendiğinde sessizce atlanır.**
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
+31. **Hızın "nedeni" sorulduğunda ayrışma VARSAYILIR; ayrışmanın var
+   olduğunu ölçmeden atıf yapma — ve atfın ADI da bir iddiadır.** P11 "çağrı
+   başına kaç µop" diye sordu; doğru soru "kaç çağrı"ydı — birim, ayrışmanın
+   bir bileşeni (çağrı) sabit kaldığını varsayıyordu, oysa değişen tam oydu.
+   P12 "hangi bayrak" diye sordu; cevap bir bayrak değil bir davranıştı
+   (satır içi alma). Ve ölçüm doğru çıktıktan *sonra* bile ad yanlış
+   konabilir: `fib` sonucunu "farklı karmaşıklık sınıfı" diye yazdım —
+   ölçüler doğruydu, **isim yanlıştı** ve yayına çıktı. Sayı doğrulandığında
+   iş bitmez; onu adlandıran cümle de doğrulanır.
 30. **Kârlılık kapısı işten ÖNCE ölçülür; tavan kapının altındaysa iş
    yapılmaz.** Float-dizi unboxing'i için tavan, *zaten kutusuz olan* int
    yolunun bugünkü oranıdır — hipotetik hesap değil, ölçülebilir bir üst
@@ -1187,8 +1203,9 @@ Geriye **iki adlandırılmış iş kalemi** kalıyor, ikisi de ölçülmüş ger
 
 Baştaki sorunun cevabı, iki ölçülmüş cümle:
 
-> **Aritmetik C'nin kendisi; dizi-depolaması ölçülmüş açık. `fib`de farklı
-> bir karmaşıklık sınıfındayız ve oran n ile büyüyor.**
+> **Aritmetik C'nin kendisi; dizi-depolaması ölçülmüş açık. `fib`de aynı
+> sınıf, küçük taban — 1,488'e karşı 1,607; oran n ile büyüyor
+> (12,3×@34 → 17,3×@40).**
 
 Hiçbiri bir *açık* değil; hepsi bir cümle, bir sayı ve o sayıyı yeniden
 üretecek bir düzenek taşıyor.
