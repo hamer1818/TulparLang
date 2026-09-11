@@ -157,6 +157,14 @@ denetime girdi ve **hiçbirinde gerçek hata yokmuş**; ve yeni başlatma tanıs
 gerçek kodda yanlış pozitif üretmiyor. İkisi de sentetik vakalarda kırmızı
 verebiliyor (#10).
 
+**Bilinen sınır (P23-v2 adayı):** ön-geçiş `var` global'lerinin **tipini**
+çözmüyor — yalnız bildirim satırını kaydediyor (başlatma denetimi onlarda da
+çalışıyor). Bugün kapsamda kayıp yok, çünkü riskli 231 site'in tamamı açık
+tipli. Ama bu bir *ölçüm sonucu*, bir *garanti* değil: korpus `var` global'e
+kayarsa sınır görünür hâle gelir. Kapanış cümlesi hazır — *"`var` global'in
+tipi de sırasız çözülür"* — ve o cümlenin fikstürü, bugünkü `pass/10`'un
+`var` ile yazılmış ikizidir.
+
 ⚠ **Sondanın kendi hatası, üç kez.** Korpus taramasının ilk üç sürümü
 "195 dosyada 0 tanı" dedi — sırasıyla stderr'i okumadığı, `LC_ALL=C`'nin
 mesajı İngilizceye çevirdiğini hesaba katmadığı, ve `Type Error`'ı küçük
@@ -645,6 +653,22 @@ yolu eklendiğinde sessizce atlanır.**
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
+26. **Taban ölçüm bir tablo değil, bir tespittir; önce kendisi sınanır,
+   sonra referans olur.** P23'ün taban ölçümünün **ilk üç sürümü** "195
+   dosyada 0 tanı" dedi ve üçü de *yeşil* görünüyordu: tanılar stdout'ta
+   sanıldı (stderr'e gidiyorlar), `LC_ALL=C` mesajı İngilizceye çevirdi
+   (desen Türkçe arıyordu), ve İngilizce mesaj `Type Error` (büyük E) iken
+   desen `Type error` arıyordu. Üçü de #9b'nin varyantı. O taban, P23'ün
+   bütün kapılarının referansı olacaktı. Mekanizma: tarayıcı iş yapmadan
+   **önce**, tanı üretmesi kesin bir fikstür üzerinde kendini sınar ve
+   göremezse *"temiz korpus"* demek yerine hata verir. Kanıtlandı — eski
+   bozuk desen enjekte edildiğinde kendini sınama kırmızı veriyor.
+   ⚠ İkinci yarısı: **sayı, içerik değildir.** P23'ün korpus kapısı ilk
+   turda "6 dosya / 17 tanı değişmedi" diye *sayıyla* doğrulanmıştı; bir
+   tanı kaybolup yerine başkası gelseydi sayı yine tutardı. İçerik diff'i
+   sonradan alındı (P23 öncesi derleyici yeniden kurulup 17 satır metin
+   karşılaştırılarak) ve birebir aynı çıktı — ama önce kanıt yoktu.
+   `tests/typecheck_corpus_baseline.txt` artık **metin** tutuyor.
 25. **Nöbetçinin maliyeti, kapsamının parçasıdır.** Yığın tarayıcısının ilk
    hâli her yinelemede `toString(...)` ile dizgi ayırıyordu ve **42 saniye**
    sürüyordu; canlılık emicisi `if (<çağrı>)`'ya çevrilince **4,5 saniye**

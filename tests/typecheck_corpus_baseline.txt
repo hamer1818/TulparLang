@@ -1,0 +1,17 @@
+lib/arcade.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 452
+lib/arcade.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 1565
+lib/arcade.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 1747
+lib/arcade.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 1882
+lib/scene3d.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 1342
+lib/scene3d.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 4521
+lib/scene3d.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 6309
+lib/scene3d.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 6432
+lib/scene3d.tpr :: Type Error: Argument 1 of 'call': expected str, got int at line 6503
+examples/04_math_logic.tpr :: Type Error: Unknown type 'bigint' in declaration of 'b1' at line 14
+examples/04_math_logic.tpr :: Type Error: Unknown type 'bigint' in declaration of 'b2' at line 15
+examples/04_math_logic.tpr :: Type Error: Unknown type 'bigint' in declaration of 'b3' at line 16
+examples/09_socket_client.tpr :: Type Error: Function 'input' expects 0 argument(s), got 1 at line 17
+examples/09_socket_server.tpr :: Type Error: Function 'input' expects 0 argument(s), got 1 at line 38
+tests/truthiness.test.tpr :: Type Error: Condition must be boolean or integer at line 38
+tests/truthiness.test.tpr :: Type Error: Condition must be boolean or integer at line 61
+tests/truthiness.test.tpr :: Type Error: Condition must be boolean or integer at line 72

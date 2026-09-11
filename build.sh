@@ -267,6 +267,16 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}Yigin sizintisi taramasi basarisiz!${NC}"
             exit 1
         fi
+        # KORPUS TANI TABANI (#26). Taban SAYI degil METIN tutuyor: bir tani
+        # sessizce dogarsa ya da kaybolursa kirmizi verir. Tarayici, is
+        # yapmadan once KENDINI siniyor (tani uretmesi kesin bir fikstur
+        # uzerinde); goremezse "temiz korpus" demek yerine hata veriyor —
+        # P23'un taban olcumunun ilk uc surumu tam bu yuzden yanlis "0 tani"
+        # demisti.
+        if ! DISPLAY= WAYLAND_DISPLAY= python3 tests/typecheck_corpus_scan.py --check; then
+            echo -e "${RED}Korpus tani tabani degisti!${NC}"
+            exit 1
+        fi
     fi
 
     # LSP. Editör eklentisinin dayandığı yüzey ve hiçbir otomasyonda yoktu:
