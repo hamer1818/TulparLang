@@ -227,14 +227,14 @@ büyüme tabanı ölçülür — clang 1,604 · gcc 1,607 · Tulpar zincirsiz 1,
 |---|---|---|
 | `stream_contract_smoke.py` | S4 üç fazlı akış | `_wings_stream_started` kancalarını sök |
 | `arena_contract_smoke.py` | `restore` bırakmaz / `drop` bırakır | kolları aynı yap |
-| `stack_growth_smoke.py` | R11, 13 şekil + **kaynaktan türetilen** 50 builtin | bir makroyu ham `LLVMBuildAlloca`ya çevir |
-| `typecheck_corpus_scan.py` | korpus tanı tabanı (**metin** tutar) | bir dosyaya tip hatası ekle |
+| `stack_growth_smoke.py` | R11, 13 şekil + **kaynaktan türetilen** 50 builtin (etiket `50/50` = ölçülen/keşfedilen) | bir makroyu ham `LLVMBuildAlloca`ya çevir · ya da bir `OVERRIDE`ı derlenmez yap (artık **sessiz atlamıyor**) |
+| `typecheck_corpus_scan.py` | korpus tanı tabanı (**metin** tutar), 233 dosya — `examples/**` özyinelemeli, `tests/typeinfer/` hariç | bir dosyaya tip hatası ekle (`examples/en/` dahil) |
 | `truthiness.test.tpr` | S1 tablosu | — |
 | `thread_copy.test.tpr` | S7/S8 thread + handle | — |
 | `shared_json_read.test.tpr` | S6 paylaşılan okuma | — |
 | `accessors.test.tpr` | S5 sınır politikası | — |
-| `build.sh` #19 kapısı | tanı tek kapıdan çıkar | `runtime_bindings.cpp`'ye ham `printf("... Hatasi ...")` ekle |
-| `build.sh` TypedValue kapısı | ilklendirme | `TypedValue x;` yaz |
+| `build.sh` #19 kapısı | tanı tek kapıdan çıkar (`printf` · `fprintf(stdout,…)` · `puts`; `stderr` muaf) | `runtime_bindings.cpp`'ye ham `printf("... Hatasi ...")` ekle |
+| `build.sh` TypedValue kapısı | ilklendirme (virgüllü/dizili/işaretçili biçimler dahil) | `TypedValue x;` · `TypedValue a, b;` · `TypedValue d[2];` |
 
 ⚠ `typecheck_corpus_scan.py` **iş yapmadan önce kendini sınar**: tanı üretmesi
 kesin bir fikstürde tanı göremezse "temiz korpus" demek yerine hata verir.
@@ -289,3 +289,45 @@ aynı soru sıfırdan sorulurdu.
 
 Bir maddeyi doğrulayamazsan, **iddiayı değil düzeneği önce sorgula** — bu
 oturumda ölçüm aleti en az beş kez yalan söyledi (E bölümü).
+
+---
+
+## F. Bağımsız denetim — 2026-09-11, ikinci göz
+
+Yukarıdaki liste bağımsız olarak denetlendi: ön koşul yeniden koşuldu
+(**80/80 suite** · örnekler yeşil · typeinfer **13+17**), **A'nın 13
+maddesinin 13'ü** yeniden üretildi, B'nin üç oranı yeniden ölçüldü
+(mandelbrot 1,00× · matmul 26,7× · nbody 11,6×; dokuz dilin çıktısı aynı),
+ve **beş nöbetçi gerçekten kırmızıya döndürülüp geri alındı**. S4'ün
+enjeksiyonu, dosyanın önceden yazdığı sonucu birebir verdi: tam 4 kontrol
+düştü ve WS kuyruğunda `\x81\x03ilk` ardına ham `HTTP/1.1 500` geldi.
+
+**İddialarda yanlış çıkan olmadı.** Altı uyuşmazlığın hepsi ölçüm
+aletinin kendi kör noktasıydı — yani E bölümünün aradığı sınıf. Hepsi
+kapatıldı:
+
+| # | bulgu | kapanış | kırmızı kanıtı |
+|---|---|---|---|
+| F1 | Yığın tarayıcısı **"50 builtin" deyip 49 ölçüyordu**: `join`in argümanı tek tırnaklıydı, program derlenmiyordu, `rc is None` dalı sessizce atlıyordu | tırnak düzeltildi; atlama artık **kırmızı**, etiket `ölçülen/keşfedilen` yazıyor | bir `OVERRIDE` bozuldu → `builtin taramasi (49/50) repeat (DERLENMEDI — olculmedi)` |
+| F2 | #19 kapısı `fprintf(stdout, …)` ve `puts(…)`'u **görmüyordu** (`\bprintf` bütün `fprintf`leri eliyor) | desen `f?printf\|f?puts`'a genişletildi, `stderr` muaf | üç sızıntı enjekte edildi, üçü de yakalandı; yetkili `stderr` muaf kaldı |
+| F3 | TypedValue kapısı `TypedValue a, b;` ve `TypedValue d[2];` biçimlerini **kaçırıyordu** | desen ilklendiricisiz HER bildirimi yakalar hâle getirildi | üç biçim enjekte edildi, üçü de yakalandı; temiz ağaçta 0 yanlış pozitif |
+| F4 | Korpus taraması `examples/en/`'i (30 dosya) **hiç görmüyordu** | `examples/**` özyinelemeli, `tests/typeinfer/` hariç — 198 → **233 dosya**, taban yine 14 | `examples/en/breakout.tpr`'ye tanı eklendi → kapı kırmızı |
+| F5 | `async.test.tpr`'nin `assert(dt < 50)` **duvar saati eşiği** macOS/arm64 CI'ı dört koşumda kırmıştı (gather bozulmadan) | iki kollu **fark** ölçümüne çevrildi (`esz * 2 < seri`) — orantılı yük altında düşmez | gather kolu seri yapıldı → kırmızı; marj: seri 60 ms / eşzamanlı 20 ms |
+| F6 | D.1/D.2'nin sayıları **elle yazılmış tabloydu**, koşucusu yoktu — oysa S11 kararı ona dayanıyor | `benchmarks/fair/shapes.py` eklendi: dört şekil, C tabanı, çıktı mutabakatı, sıralama iddiası | çıktıyı ayırma → `AYRISIYOR`; sıralamayı bozma → `IDDIA CURUDU` |
+
+**F5, defterde ZATEN yazılı bir dersti** ([[Tuzaklar]] 6z, aynı sınıf, aynı
+platform) — bir korumada düzeltilmiş, `async.test.tpr`'ye uygulanmamıştı.
+Ders: *bir tuzak yazıldığında aynı sınıftan bütün yerler taranır.* Tarandı;
+`.tpr` süitlerinde başka mutlak zaman eşiği kalmadı.
+
+**Denetim sırasında düzeneğin kendisi iki kez yalan söyledi** (F6'yı ölçerken):
+ölçülen döngüyü bir tekrar sarmalayıcısına koymak Tulpar'ı **20 kat** yavaş
+gösterdi, ve döngü sınırını `n` yazmak (`len(a)` yerine) **3,5 kat**
+gösterdi — ikisi de `shapes.py`'nin başlığında yazılı, ikisi de
+[[Tuzaklar]]'a eklendi (1k, 1l, 6ş).
+
+**Geri çekilen hipotez:** referans commit `27302c3`'ün CI'sinde bütün test
+adımları `skipped` görünüyor. Bu bir boşluk DEĞİL: `tree(897c22c) ==
+tree(27302c3)`, yani birebir aynı ağaç PR koşumunda iki platformda da tam
+sınanmış. Artefakt yeniden kullanımı meşru. (Yine de: `main`'deki yeşil bir
+push koşumu "burada yeniden sınandı" demek değildir — ağaç hash'ine bak.)
