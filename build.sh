@@ -695,6 +695,15 @@ TPREOF
     # kelepcelenen tur SAYILIYOR. Kelepce varsa kapi yesil IDDIA ETMEZ; ne
     # olculemedigini ve neyin hala kapsadigini soyler. Bu bir GERILEME degil,
     # platformun olcum siniri — o yuzden kirmizi degil, GORUNUR sari.
+    #
+    # ⚠ TAKIP — sari dal macOS'ta KALICI bir bosluk. Iki cikis yolu var:
+    #   (a) N'i buyutmek: fib(40) zincirli kolu macOS acilisinin ustune
+    #       cikarir ama ZINCIRSIZ kol ~1,4 sn olur; 5 tur x 2 kol = ~7 sn
+    #       CI suresi, yalnizca sariyi yesile cevirmek icin.
+    #   (b) DOGRU cozum: olcumu SUREC ICINE almak — program kendi isini
+    #       `time_ms()` ile olcup bassin. O zaman cikarilacak acilis KALMAZ,
+    #       dejenerasyon da imkansiz olur. perf_pair.py duvar saati olctugu
+    #       icin bu ayri bir yardimci ister; yapilana kadar sari dal durur.
     SR_RES=$(python3 tests/perf_pair.py "$SR_TMP/fib_on" "$SR_TMP/fib_off" 32 1 5)
     SR_RATIO=$(echo "$SR_RES" | cut -d' ' -f1)
     SR_ON_W=$(echo "$SR_RES" | cut -d' ' -f2)
@@ -747,9 +756,17 @@ TPREOF
         echo -e "${RED}Gerileme kapisi icin ackermann ikilileri uretilemedi!${NC}"
         rm -rf "$AR_TMP"; exit 1
     fi
-    AR_O1=$(SR_N=9 "$AR_TMP/ack_on"); AR_O2=$(SR_N=9 "$AR_TMP/ack_off")
-    if [ "$AR_O1" != "$AR_O2" ] || [ "$AR_O1" != "4093" ]; then
-        echo -e "${RED}Zincir ackermann SONUCUNU DEGISTIRDI! on=$AR_O1 off=$AR_O2 beklenen=4093${NC}"
+    # N=11 (ack(3,11) = 2^14-3 = 16381). N=9 idi ve is payi ~14 ms cikiyordu:
+    # paylasimli bir CI VM'inde bu KISA. Olculdu (2026-09-11) — ayni kod, ayni
+    # tur-esli olcum, iki ardisik CI kosumu: Linux %66, sonra %134. Yani
+    # eslestirme gurultuyu azaltti ama bitirmedi; sinyalin kendisi kucuktu.
+    # N=11 is payini ~150-170 ms yapiyor (14 kat sinyal) ve yerel yayilim
+    # 8 denemede %88-93 (5 puan) — N=9 ile 87-94 idi ama CI'da 66-134.
+    # Kapinin maliyeti ~1,6 sn; gurultuyu ESIK gevseterek degil SINYALI
+    # buyuterek yenmek dogru cevap (esik gevsetmek gerilemeyi de kacirir).
+    AR_O1=$(SR_N=11 "$AR_TMP/ack_on"); AR_O2=$(SR_N=11 "$AR_TMP/ack_off")
+    if [ "$AR_O1" != "$AR_O2" ] || [ "$AR_O1" != "16381" ]; then
+        echo -e "${RED}Zincir ackermann SONUCUNU DEGISTIRDI! on=$AR_O1 off=$AR_O2 beklenen=16381${NC}"
         rm -rf "$AR_TMP"; exit 1
     fi
     # ⚠ IKI KOL AYNI TURDA OLCULUR, ORANIN MEDYANI ALINIR.
@@ -759,7 +776,9 @@ TPREOF
     # donuyor ve kapi, zincir kusursuz calisirken kirmizi veriyor. Olculdu
     # 2026-09-11: yerelde oran 10 denemede 0,873-0,925 (zincirli DAHA HIZLI,
     # yayilim 0,05), ama CI Linux ayni kodda 1,262 gordu — kucuk gurultuyle
-    # aciklanamayacak ~%40 kayma, ve kapi dustu (PR #316).
+    # aciklanamayacak ~%40 kayma, ve kapi dustu (PR #316). Eslestirme tek
+    # basina yetmedi: iki ardisik CI kosumu %66 ve %134 verdi. Ikinci yari
+    # asagidaki N=11 (sinyali buyutme).
     #
     # Cozum: her TURDA dort olcum de alinir (on9/off9/on1/off1) ve o turun
     # orani hesaplanir. Bir patlama tura denk gelirse ORANDA SADELESIR, cunku
@@ -775,10 +794,13 @@ TPREOF
     # (oran %126-129, belgelenen %29 gerilemeyle birebir). Normal K=1 ise
     # 10 denemede %87-94. Yani esigin iki yanindaki paylar: normal tarafta
     # ~31 puan, gerileme tarafinda ~4 puan.
-    # ⚠ TAKIP: tespit payi dar. CI'in tur-esli olcumdeki yayilimi gorulduk-
-    # ten sonra esik %110'a cekilebilir (normal tarafta hala ~16 puan pay
-    # kalir, tespit payi ~18 puana cikar). Once bir tur veri toplansin.
-    AR_RES=$(python3 tests/perf_pair.py "$AR_TMP/ack_on" "$AR_TMP/ack_off" 9 1 5)
+    # N=11 ile yerel olculer: normal %88-93 (8 deneme), K=4 gerilemesi
+    # %127-137 (5/5 yakalandi). Esigin iki yanindaki pay: normal tarafta
+    # ~32 puan, tespit tarafinda ~2 puan.
+    # ⚠ TAKIP: tespit payi hala dar. CI'in N=11 ile KARARLI degeri gorulduk-
+    # ten sonra esik %110'a cekilmeli (o zaman iki yanda da ~17 puan olur).
+    # Once bir tur veri toplansin — esik ve olcum ayni anda degistirilmez.
+    AR_RES=$(python3 tests/perf_pair.py "$AR_TMP/ack_on" "$AR_TMP/ack_off" 11 1 5)
     AR_RATIO=$(echo "$AR_RES" | cut -d' ' -f1)
     AR_ON_W=$(echo "$AR_RES" | cut -d' ' -f2)
     AR_OFF_W=$(echo "$AR_RES" | cut -d' ' -f3)
