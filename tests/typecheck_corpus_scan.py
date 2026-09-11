@@ -67,9 +67,27 @@ def main():
         print("      olcum aletinin bozuk oldugunun kanitidir (#26).")
         return 2
 
-    files = []
-    for pat in ("lib/*.tpr", "examples/*.tpr", "tests/*.tpr", "packages/*/*.tpr"):
-        files += sorted(glob.glob(os.path.join(ROOT, pat)))
+    # KAPSAM. `examples/*.tpr` uzun sure OZYINELEMESIZDI ve `examples/en/`
+    # altindaki 30 dosya (arcade oyunlarinin Ingilizce ikizleri) hic
+    # taranmiyordu — 2026-09-11 bagimsiz denetimi olctu. O dizinde bugun 0
+    # tani var, yani taban dogruydu; ama orada DOGACAK bir tani kapiyi
+    # kirmizi yapmazdi. Kapsam bir dizin eklendiginde bayatlamasin diye
+    # `examples` artik ozyinelemeli.
+    #
+    # ⛔ tests/typeinfer/ HARIC: `fail/` fiksturleri KASTEN tani uretir
+    # (typeinfer runner'inin bilinen-pozitifleri). Onlari korpusa katmak,
+    # tabani 17 kasitli taniyla sisirir ve kapinin sinyalini bogardi.
+    # Sira DESEN SIRASI + desen icinde alfabetik. Genel bir `sorted(set(...))`
+    # tabani satir satir ayni birakip SIRASINI degistirir; kapi o zaman
+    # "degisti" der ama + / - listesi bos cikar (asagidaki sira-farki dali
+    # bunu artik adiyla soyluyor).
+    files, seen = [], set()
+    for pat in ("lib/*.tpr", "examples/**/*.tpr", "tests/*.tpr", "packages/*/*.tpr"):
+        for f in sorted(glob.glob(os.path.join(ROOT, pat), recursive=True)):
+            if os.sep + "typeinfer" + os.sep in f or f in seen:
+                continue
+            seen.add(f)
+            files.append(f)
     rows = []
     for f in files:
         rel = os.path.relpath(f, ROOT)
@@ -96,10 +114,15 @@ def main():
             print("korpus tani tabani: %d tani, degismedi" % len(rows))
             return 0
         print("KORPUS TANI TABANI DEGISTI (sayi degil METIN karsilastirildi):")
-        for l in sorted(set(rows) - set(want)):
+        eklenen, giden = sorted(set(rows) - set(want)), sorted(set(want) - set(rows))
+        for l in eklenen:
             print("   + %s" % l)
-        for l in sorted(set(want) - set(rows)):
+        for l in giden:
             print("   - %s" % l)
+        if not eklenen and not giden:
+            # Ayni satirlar, BASKA SIRA. Bunu soylemezsek kapi "degisti" deyip
+            # bos bir liste basiyor ve okuyan kisi kapiyi bozuk saniyor.
+            print("   (ayni %d satir, SIRASI farkli — tarama sirasi degismis)" % len(rows))
         print("Kasitliysa: python3 tests/typecheck_corpus_scan.py --update")
         return 1
 

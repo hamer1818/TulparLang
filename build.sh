@@ -282,7 +282,18 @@ if [ "$ACTION" = "suites" ]; then
         # Yorum satirlari elenir: bu denetimin KENDI aciklama satiri
         # (`TypedValue sc;` ornegi) deseni tetikliyordu — koruma kendi
         # belgesine takiliyordu.
-        TV_BARE=$(grep -nE "\bTypedValue[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*;" src/aot/*.cpp \
+        # ⚠ DESEN BICIMDEN BAGIMSIZ OLMALI. Ilk yazim satir basina bagliydi
+        # (enjeksiyonu kacirdi), ikincisi TEK DEGISKEN adina bagliydi:
+        # `TypedValue x;` yakaliyor ama `TypedValue a, b;` ve
+        # `TypedValue d[2];` KACIYORDU (2026-09-11 bagimsiz denetimi
+        # olctu — ucu de ayni sekilde ilklendirilmemis). Yani kapi, iki tur
+        # ust uste korudugu hatanin kendi turunu yapti.
+        # Simdi: `TypedValue` + bosluk + icinde ; = ( ) { } GECMEYEN bir
+        # bildirim govdesi + `;`. Bu, ilklendiricisiz HER bildirimi yakalar
+        # (virgullu, dizili, isaretcili) ve mesru bicimleri gecirir:
+        # `= {...}` (esittir var), fonksiyon bildirimi/parametresi (parantez
+        # var), `} TypedValue;` (arada bosluk yok).
+        TV_BARE=$(grep -nE "\bTypedValue[[:space:]]+[^;=(){}]*;" src/aot/*.cpp \
                   | grep -vE "^[^:]*:[0-9]+:[[:space:]]*(//|\*|/\*)" || true)
         if [ -n "$TV_BARE" ]; then
             echo -e "${RED}ILKLENDIRILMEMIS TypedValue — uc alani da yazin!${NC}"
@@ -734,7 +745,16 @@ TPREOF
     RT_LEAK=$(python3 - <<'PYEOF'
 import re, pathlib
 txt = pathlib.Path("src/vm/runtime_bindings.cpp").read_text(encoding="utf-8")
-for m in re.finditer(r'\bprintf\s*\(', txt):
+# STDOUT'A YAZAN HER BICIM. Desen uzun sure yalniz `\bprintf\(` idi ve `\b`
+# yuzunden BUTUN fprintf'leri eliyordu — niyet stderr'e yazan yetkili kapilari
+# muaf tutmakti, ama `fprintf(stdout, ...)` da ayni delikten geciyordu.
+# 2026-09-11 denetiminde olculdu: `fprintf(stdout, "... Hatasi ...")` ve
+# `puts("... Hatasi ...")` enjekte edildi, kapi IKISINI DE goremedi. Ikisi de
+# tam olarak bu kapinin yasakladigi seyi yapar: taniyi programin kendi
+# ciktisina karistirir ve FIRLATMAZ, yani surec 0 ile cikar.
+# Simdi: printf / fprintf / puts / fputs taranir, ilk argumani `stderr` olan
+# cagri muaftir (yetkili kapi zaten stderr'e yazar).
+for m in re.finditer(r'\b(f?printf|f?puts)\s*\(', txt):
     seg = txt[m.start():m.start() + 600]
     depth = 0
     call = seg
@@ -746,6 +766,9 @@ for m in re.finditer(r'\bprintf\s*\(', txt):
             if depth == 0:
                 call = seg[:i + 1]
                 break
+    # Yetkili: stderr'e yazan f-bicimleri.
+    if re.match(r'\bf(printf|puts)\s*\(\s*stderr\b', call):
+        continue
     if re.search(r'Hatasi|Runtime Error', call):
         print(f"  satir {txt[:m.start()].count(chr(10)) + 1}: {call.splitlines()[0][:70]}")
 PYEOF
