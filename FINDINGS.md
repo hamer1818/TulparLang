@@ -252,6 +252,97 @@ mesajı İngilizceye çevirdiğini hesaba katmadığı, ve `Type Error`'ı küç
 harfle aradığı için. Üçü de *yeşil* görünüyordu. P23'ün taban ölçümü az
 kalsın "korpus tertemiz" diye yayınlanacaktı (#9b).
 
+## 🔬 P11/P12 — `fib` KAZANIMININ ADI: MİKRO-MİMARİ DEĞİL, ALGORİTMİK (2026-09-11)
+
+Oturumun ilk itirazı *"fib(32) 0,6 ms fizik kontrolünü geçmiyor"* idi. On üç
+tur sonra cevabı geldi ve **itiraz haklıymış — ama beklenen sebepten değil.**
+
+### P11 çürütüldü: birimi yanlıştı
+
+Öngörü *"zincirli fib çağrı başına ≤4 µop emekliye ayırır"* idi. Ölçüm birimi
+**geçersiz**: n=36'da naif çağrı başına **0,13 çevrim** düşüyor. Bir çağrı
+0,13 çevrimde yürütülemez — yani çağrılar *olmuyor*. "µop/çağrı" birimi,
+çağrıların var olduğunu varsayıyordu.
+
+### Gerçek mekanizma: büyüme üssü değişiyor
+
+Süreç açılışı **aynı ikiliden** çıkarıldı (kural #5; ilk ölçümümde bunu
+atladım ve 1,66 gibi sahte bir üs çıktı — n=28'de sürenin tamamı açılıştı):
+
+| | üs (n'de +1 başına) | φ = 1,618 |
+|---|---:|---|
+| clang -O3 | 1,604 | naif ağaç |
+| Tulpar **zincirsiz** | 1,612 | naif ağaç |
+| gcc -O2 | **1,607** | **naif ağaç** |
+| **Tulpar zincirli** | **1,488** | **farklı sınıf** |
+
+**gcc'nin üssü de naif.** gcc'nin `fib` gövdesi 264 komut (clang 20) — agresif
+açma, ama **sabit çarpan** kazancı; karmaşıklık sınıfı değişmiyor.
+
+### Mekanizma, makine kodundan ve tekrarlama bağıntısından
+
+Tulpar'ın `fib`i 36 komut, **3 çağrı**. Zincir `fib`i bir kez satır içine
+alıyor:
+
+```
+fib(n) = fib(n-1) + fib(n-2)
+       = [fib(n-2) + fib(n-3)] + [fib(n-3) + fib(n-4)]
+       = fib(n-2) + 2·fib(n-3) + fib(n-4)      <- fib(n-3) İKİ KEZ
+```
+
+CSE yinelenen alt ağacı birleştiriyor → **3 ayrı çağrı**, ve bağıntı
+`T(n) = T(n-2)+T(n-3)+T(n-4)` oluyor; `x⁴ = x²+x+1` kökü **1,4656**.
+Ölçülen **1,4883** (%1,55 fark).
+
+### Model yanlışlanabilirdi — ve derinlik 2'de yanlışlandı
+
+| derinlik | model tekil çağrılar | model üs | ölçülen | objdump çağrı |
+|---|---|---:|---:|---:|
+| 0 | [1,2] | 1,6180 | **1,6190** (+0,06%) | 1 |
+| **1** (sevk edilen) | [2,3,4] | 1,4656 | **1,4883** (+1,55%) | 3 |
+| 2 | [3,4,5,6] | 1,3803 | 1,5146 (+9,7%) | **3** |
+| 3 | [4,5,6,7,8] | 1,3247 | 1,5486 (+16,9%) | 12 |
+
+Derinlik 0 ve 1'de model **birebir**. Derinlik 2'de model 4 tekil çağrı
+öngörüyor, makine kodunda **3** var — LLVM açmayı bırakmış. Derinlik 3'te 12
+çağrı var — açmış ama **CSE yapmamış**. Yani *daha derin zincir daha az
+paylaşım* veriyor.
+
+Bu, `SELFREC_DEPTH` 4→1 kararının **nedenini** veriyor: o karar beş şeklin
+ölçümüyle alınmıştı (*"K'ya bağımlılık monoton değil"*), ama mekanizma
+bilinmiyordu. Artık biliniyor: **kazanç satır içi almadan değil, satır içi
+almanın açtığı CSE'den geliyor; ve CSE penceresi K=1'de en verimli.**
+
+### P12 çürütüldü: gcc'nin avantajı sibling-call değil, SATIR İÇİ ALMA
+
+Bisection, gcc'nin `treesum`da 3,5× önde olduğu yerde koşuldu:
+
+| gcc bayrağı | treesum | tabana göre |
+|---|---:|---:|
+| `-O2` | 5,72 ms | 1,00× |
+| `-fno-optimize-sibling-calls` | 5,18 ms | **0,73× — daha HIZLI** |
+| `-fno-shrink-wrap` | 6,79 ms | 0,95× (gürültü) |
+| **`-fno-inline`** | **18,15 ms** | **2,54× yavaş** |
+
+`-fno-inline` ile gcc clang (19,86) ve Tulpar (20,45) bandına iniyor. Yani
+gcc'nin özyineleme üstünlüğü **kendi kendini çağıran fonksiyonu satır içine
+almaya istekli olması**; LLVM bunu reddediyor. Tulpar'ın klon zinciri, tam
+olarak o reddi dolanmak için var — ve `fib`de gcc'nin elde ettiğinden
+**fazlasını** elde ediyor (sabit çarpan değil, sınıf değişimi).
+
+### ⚠ Yayınlanmış iddianın düzeltilmesi
+
+*"fib'de C'den 2,7× hızlı"* bir **sabit değil, ıraksayan bir eğrinin üstünde
+bir nokta**. Açılış çıkarılmış, gcc -O2'ye karşı:
+
+| n | 34 | 36 | 38 | 40 |
+|---|---:|---:|---:|---:|
+| oran | 12,3× | 12,0× | 14,5× | **17,3×** |
+
+Dürüst cümle: **`fib` çekirdeğinde Tulpar ölçülen her derleyiciden farklı bir
+karmaşıklık sınıfında; bildirilen oran n'e bağlı ve n ile büyüyor.** Bu,
+"2,7×"ten hem daha güçlü hem daha koşullu.
+
 ## 📐 FP SETİ — "float yavaş mı?" sorusunun iki ayrı cevabı var (2026-09-11)
 
 On iki tur önce yazılan **P3** (*"kutulu float 5–20× yavaş"*) nihayet ölçüldü.
@@ -812,6 +903,15 @@ yolu eklendiğinde sessizce atlanır.**
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
+30. **Kârlılık kapısı işten ÖNCE ölçülür; tavan kapının altındaysa iş
+   yapılmaz.** Float-dizi unboxing'i için tavan, *zaten kutusuz olan* int
+   yolunun bugünkü oranıdır — hipotetik hesap değil, ölçülebilir bir üst
+   sınır. Ölçüldü: int `matmul` **5,95×**, kapı ≤4×. Yani ~117 değinmelik
+   bir refactor, `idata`'nın derleme-zamanı koruması olmadan (atlanan her
+   yol sessiz bozulma), sonunda 6×'te tıkanıp **tümüyle geri alınacaktı**.
+   13 tur boyunca kapılar hata *yakaladı*; bu kapı ilk kez **çabayı
+   önledi** — farklı bir değer sınıfı. Yöntem P36'nın ters yönü: hedef
+   sözleşmeyi mevcut bir nesnede test et.
 29. **İki hakikat kaynağı birleştirilirken bir mutabakat yarışı beklenir;
    birleşmenin çıktısı bir MUTABAKAT RAPORUDUR, sessiz bir merge değil.**
    S1 tablosu ile `[typecheck]`'in iç tablosu aynı şeyi söylemiyordu ve
@@ -965,7 +1065,7 @@ için değil; **eksik hâli zararlı olduğu için**.
 2. ~~**P23** (iki geçişli sembol toplama)~~ — **KAPANDI 2026-09-11**, yukarıdaki bölüm
 3. ~~**`[typecheck]` if-şekilleri ↔ S1 tablosu birleşimi**~~ — **KAPANDI 2026-09-11**
 4. **Float dizi unboxing'i** — yol haritası + kârlılık kapısı yukarıda yazılı
-5. P11/P12 (llvm-mca ile `fib` atribüsyonu; gcc bayrak ikili araması)
+5. ~~P11/P12 (`fib` atribüsyonu; gcc bayrak ikili araması)~~ — **KAPANDI 2026-09-11**
 
 Küçük kalemler: `ws_masked_client_smoke.py` + `wings_tls_smoke.py` hâlâ
 otomasyon dışı · yığın taraması async/closure/match şekillerini kapsamıyor ·
@@ -1047,11 +1147,48 @@ numarayı alır ve boşluklar doldurulmaz (doldurmak, eski bir commit mesajında
 **Sözleşme muhasebesi: 9 sözleşmenin 8'i fikstürlü, 1'i meşru ölçüm
 istisnası (S9), borç yok.**
 
+## Öngörü defterinin hesabı
+
+Benim kayıtlı öngörülerimin **yaklaşık yarısı yanlışlandı** — ve defter
+hiçbir değer kaybetmedi, çünkü değeri doğruluk oranında değil, **her yanlışın
+bir kapanmış kapı bırakmasında**ydı. Son turların dökümü:
+
+| öngörü | sonuç | bıraktığı kapı |
+|---|---|---|
+| P51 mandelbrot 5–15× geride | ❌ 1,00× | üç çekirdekli ayrım; "tek sayı" tuzağı kayda geçti |
+| P52 matmul daha kötü | ✅ 26,6× | depolama/değer ayrımı ölçüldü |
+| P53 nbody arada | ✅ 11,6× | — |
+| P54 Python'dan hızlı, C'ye uzak | ⚖ yarısı | aritmetikte C'nin *kendisi* |
+| "hesaplı indeks önbelleği deler" | ❌ 0,88× | darboğaz **eleman yazma** diye adlandırıldı |
+| "unboxing matmul'ü kurtarır" | ❌ tavan 5,95× | **#30** — kapı işten önce ölçülür |
+| P11 "≤4 µop/çağrı" | ❌ birim geçersiz | kazanç **algoritmik** diye adlandırıldı |
+| P12 "sibling-call + shrink-wrap" | ❌ `-fno-inline` | gcc'nin avantajı **satır içi alma** |
+| paylaşım modeli (derinlik 0–1) | ✅ %0,06 / %1,55 | `SELFREC_DEPTH=1`in *nedeni* |
+| paylaşım modeli (derinlik 2–3) | ❌ %9,7 / %16,9 | derin zincir **daha az** paylaşım verir |
+
+En pahalı yanlışlar en çok şeyi öğretti: P11'in birimi geçersiz çıkınca
+`fib`in gerçek mekanizması bulundu; "unboxing kurtarır" çürüyünce 117
+dokunuşluk bir refactor yapılmadan kapandı.
+
 ## Kalan ark
 
-Kuyrukta **bulgu-fix'i yok** — hepsi *tamlama*: lint (AST okuma tarafı),
-P23 (iki geçişli sembol toplama), `[typecheck]` ↔ S1 birleşimi, float-dizi
-unboxing'i (kârlılık kapısı yazılı), P11/P12 atribüsyonu. Bunlar birer
-**açık** değil, birer **iş kalemi**; her birinin ne zaman kapandığını
-söyleyen bir cümle ve o cümleyi sınayacak bir fikstür şekli bu defterde
-zaten tanımlı.
+**Beş tamlamanın beşi de kapandı.** Lint (thread-paylaşımlı global), P23
+(sırasız sembol çözümü + başlatma ayrımı), S1 ↔ `[typecheck]` birleşimi,
+float-dizi unboxing (kapı ölçüldü → **iş yapılmadı**, gerekçesi yazılı), ve
+P11/P12 (`fib` atribüsyonu + gcc'nin adı).
+
+Geriye **iki adlandırılmış iş kalemi** kalıyor, ikisi de ölçülmüş gerekçeyle:
+
+1. **Eleman yazma yolu** — `a[i] = a[i] + b[i]` tek başına **2,84×**; üç
+   erişim şeklinin en büyüğü ve `matmul` açığının kökü. Bu kapanmadan hiçbir
+   depolama değişikliği `matmul`ü kapıdan geçiremez.
+2. **Float-dizi unboxing, kendi kapısıyla** — tarama ≤2× ve eleman ≤8 bayt.
+   Ulaşılabilir (int lineer **0,97×**). `matmul` gerekçesiyle değil.
+
+Baştaki sorunun cevabı, iki ölçülmüş cümle:
+
+> **Aritmetik C'nin kendisi; dizi-depolaması ölçülmüş açık. `fib`de farklı
+> bir karmaşıklık sınıfındayız ve oran n ile büyüyor.**
+
+Hiçbiri bir *açık* değil; hepsi bir cümle, bir sayı ve o sayıyı yeniden
+üretecek bir düzenek taşıyor.
