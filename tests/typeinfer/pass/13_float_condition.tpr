@@ -1,0 +1,14 @@
+// S1: `float 0.0` YANLIS, `float 1.5` DOGRU — yani kayan nokta kosulu tam
+// `int` kadar anlamli. Eskiden uyari aliyordu; S1 tablosuyla birlesme onu
+// yanlis pozitif olarak kaldirdi. Bu fikstur geri gelmesini engelliyor.
+float esik = 0.0;
+if (esik) {
+    print("sifir olmayan");
+} else {
+    print("sifir");
+}
+float oran = 1.5;
+while (oran > 2.0) {
+    oran = oran - 1.0;
+}
+print(toString(oran));

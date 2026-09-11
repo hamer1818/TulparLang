@@ -57,9 +57,10 @@ func run_bos_dizgi_dogru() {
     assert_eq_int(dogru_mu(bos), 1);
     assert_eq_int(dogru_mu(sifir_metni), 1);
     assert_eq_int(dogru_mu(a), 1);
-    int k = 0;
-    if (bos) { k = 1; }
-    assert_eq_int(k, 1);
+    /* Dogrudan `if (bos)` YAZMIYORUZ: o desen artik (DOGRU olarak) "her
+       zaman dogru" tanisi aliyor. Bu paket DAVRANISI siniyor, TANIYI
+       degil — taninin fiksturu tests/typeinfer/fail/17. Kutulu yol
+       (dogru_mu) ayni tabloyu ayni kesinlikte siniyor. */
 }
 
 // ---- Bos dizi DOGRU -------------------------------------------------------
@@ -68,9 +69,6 @@ func run_bos_dizi_dogru() {
     array dolu = [1];
     assert_eq_int(dogru_mu(bos), 1);
     assert_eq_int(dogru_mu(dolu), 1);
-    int k = 0;
-    if (bos) { k = 1; }
-    assert_eq_int(k, 1);
 }
 
 // ---- Bos json nesnesi DOGRU (olculdu 2026-09-11; tabloda yoktu) ----------

@@ -739,18 +739,54 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
   // "no information", same as VOID, so warning on them is a false positive by
   // construction — `if (on)` is the correct way to read a flag, and the whole
   // point of the assert fix was that `on == 1` is the broken one.
-  auto cond_acceptable = [](DataType t) {
-    return t == TYPE_BOOL || t == TYPE_INT || t == TYPE_VOID ||
-           t == TYPE_UNSPECIFIED ||
-           t == TYPE_UNKNOWN || t == TYPE_JSON;
+  // ⚠ BU KURAL S1 TABLOSUNDAN TURETILIR — ayri bir hakikat kaynagi DEGIL.
+  //
+  // S1 (olculdu, FINDINGS): `if()` icinde YALNIZ SAYISAL SIFIR yanlistir.
+  //   int 0 · float 0.0            -> false
+  //   int 7 · -1 · float 1.5       -> true
+  //   "" · "a" · "0"               -> true  (HER ZAMAN)
+  //   [] · [1] · {} · {k:1}        -> true  (HER ZAMAN)
+  //   j["OLMAYAN"]                 -> false (eksik anahtar 0 doner)
+  //
+  // Tablodan cikan UC sinif:
+  //   SAYISAL  (bool/int/float) -> iki yon de anlamli, SESSIZ
+  //   DINAMIK  (json/unknown/void/unspecified) -> calisma zamaninda belli,
+  //            SESSIZ. `json` ozellikle: eksik anahtar 0 donuyor ve
+  //            lib/wings'teki `if (hdrs)` deseni tam buna yasliyor.
+  //   SABIT    (str/array/struct) -> HER ZAMAN dogru; uyari hak ediyor ama
+  //            "boolean ya da integer olmali" cumlesi YANLIS: izinli ve
+  //            tanimli. Dogru cumle "her zaman dogru" + duzeltme onerisi.
+  //
+  // Eskiden `float` da uyari aliyordu — S1'e gore YANLIS POZITIF: `if (0.0)`
+  // yanlis, `if (1.5)` dogru, yani tam `int` kadar anlamli. Iki hakikat
+  // kaynagi (tablo vs kural) burada ayrisiyordu; birlestirildi (#8).
+  auto cond_numeric = [](DataType t) {
+    return t == TYPE_BOOL || t == TYPE_INT || t == TYPE_FLOAT;
+  };
+  auto cond_dynamic = [](DataType t) {
+    return t == TYPE_VOID || t == TYPE_UNSPECIFIED || t == TYPE_UNKNOWN ||
+           t == TYPE_JSON;
+  };
+  auto cond_always_true = [&](DataType t) {
+    return !cond_numeric(t) && !cond_dynamic(t);
+  };
+  auto check_condition = [&](DataType t, int line) {
+    if (!cond_always_true(t)) return;
+    report_error(
+        ctx,
+        tulpar::i18n::tr_en(
+            "'%s' kosulu HER ZAMAN dogru - Tulpar'da yalnizca SAYISAL SIFIR "
+            "yanlistir (bos dizgi ve bos dizi DOGRUdur). Bosluk sinamak icin "
+            "`length(x) > 0` yaz (satir %d)",
+            "a '%s' condition is ALWAYS true - in Tulpar only NUMERIC ZERO is "
+            "false (an empty string and an empty array are both true). To test "
+            "for emptiness write `length(x) > 0` at line %d"),
+        datatype_to_string(t), line);
   };
 
   if (const auto *if_stmt = as_node<IfStatement>(stmt)) {
     DataType cond_type = infer_expr(ctx, if_stmt->condition.get());
-    if (!cond_acceptable(cond_type)) {
-      report_error(ctx, "Condition must be boolean or integer at line %d",
-                   if_stmt->loc.line);
-    }
+    check_condition(cond_type, if_stmt->loc.line);
     infer_stmt(ctx, if_stmt->then_branch.get());
     if (if_stmt->else_branch) {
       infer_stmt(ctx, if_stmt->else_branch.get());
@@ -760,10 +796,9 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
 
   if (const auto *while_stmt = as_node<WhileLoop>(stmt)) {
     DataType cond_type = infer_expr(ctx, while_stmt->condition.get());
-    if (!cond_acceptable(cond_type)) {
-      report_error(ctx, "While condition must be boolean or integer at line %d",
-                   while_stmt->loc.line);
-    }
+    // ⚠ `while` kosulu SABIT dogruysa dongu sonsuzdur — `if`ten daha
+    // tehlikeli, ayni tanidan gecmesi o yuzden onemli.
+    check_condition(cond_type, while_stmt->loc.line);
     infer_stmt(ctx, while_stmt->body.get());
     return;
   }
@@ -772,10 +807,7 @@ void infer_stmt(TypeInferContext *ctx, const ASTNode *stmt) {
     infer_stmt(ctx, for_stmt->init.get());
     if (for_stmt->condition) {
       DataType cond_type = infer_expr(ctx, for_stmt->condition.get());
-      if (!cond_acceptable(cond_type)) {
-        report_error(ctx, "For condition must be boolean or integer at line %d",
-                     for_stmt->loc.line);
-      }
+      check_condition(cond_type, for_stmt->loc.line);
     }
     infer_stmt(ctx, for_stmt->increment.get());
     infer_stmt(ctx, for_stmt->body.get());

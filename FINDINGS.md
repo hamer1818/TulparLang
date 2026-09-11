@@ -492,6 +492,7 @@ yalnız `&&`/`||`'de idi.
 | S4 | SSE/WS akışında handler ortası throw | **ÖLÇÜLDÜ, KAPANDI ve KİLİTLENDİ** — `tests/stream_contract_smoke.py` (16 kontrol; kancalar sökülünce kırmızı verdiği **ölçüldü**) |
 | S5 | `at` / `json_get` sınır politikası | **belgelendi** — negatif indeks "sondan" değil, sınır dışı |
 | S7 | Thread sözleşmesi: **kopyayla girer, join'le çıkar** | **yazıldı** — argüman derin kopya, join sonucu taşır; paylaşmak isteyen `mutex_*` kullanır |
+| S10 | **Lint'in mutex-ilişkilendirmesi yaklaşıktır** | **belgelendi** — kilit derinliği *deyim* düzeyinde izleniyor ama **hangi mutex'in hangi global'i koruduğu bilinmiyor** (dilde o bağ yok); dallanma/erken dönüş de izlenmiyor. Yanlış negatif üretebilir, yanlış pozitif üretmemesi bilerek seçildi (#25) |
 | S9 | Uzun ömürlü süreçte **değer-başı geri kazanım yok** (join-dönüş dahil) | **ölçüldü** — join-dönüş değerleri sürecin ömrü boyunca yaşar; binlerce join içeren süreçte RSS ~N×değer-boyu artar (P43). M2'nin çözülmesi bu sınıfın **tamamını** kapatır; yamayı her ekleme noktasına serpmek değil, kök düzeltme tek yerde |
 | S8 | Handle sözleşmesi | **yazıldı + fikstür** — *join handle'ı tüketir; ikinci join hatadır; detach edilmiş handle join edilemez* |
 
@@ -605,15 +606,39 @@ dönmesine yaslanıyor.
 
 Yani `json[k]` strict'te fırlatır yapılırsa pratik göç yükü **tek site**.
 
-**⚠ S1'in fikstürü bir gerilim ortaya çıkardı (2026-09-11):** `truthiness.test.tpr`
-6/6 yeşil koşuyor ama `[typecheck]` üç satırda uyarı basıyor —
-*"Condition must be boolean or integer"* — tam da S1'in **tanımlı** dediği
-üç şekilde (`if(float)`, `if(str)`, `if(array)`). Yani **çalışma zamanı
-tablosu bunları tanımlı sayıyor, tip denetleyicisi şüpheli sayıyor.** Çelişki
-değil (biri uyarı, öbürü davranış) ama iki hakikat kaynağı (#8): tabloyu
-"belgelenmiş sözleşme" diye satan bir dil, aynı ifadeye uyarı basmamalı — ya
-uyarı S1'in dışladığı şekillere daralmalı, ya tablo "uyarılır ama tanımlı"
-demeli. Karar verilmedi; kuyruğa yazıldı.
+**✅ S1 ile `[typecheck]` BİRLEŞTİ (2026-09-11).** Kapanış cümlesi:
+*if-desenleri S1 tablosunun satırlarıdır.*
+
+S1'in fikstürü bir gerilim ortaya çıkarmıştı: `truthiness.test.tpr` yeşil
+koşuyor ama `[typecheck]` üç satırda *"Condition must be boolean or integer"*
+basıyordu — tam da S1'in **tanımlı** dediği şekillerde. İki hakikat kaynağı
+(#8), ve üstelik cümlenin kendisi **yanlıştı**: `if("")` izinli ve tanımlı,
+"olmalı" denecek bir şey yok.
+
+Kural artık tablodan türetiliyor — üç sınıf:
+
+| sınıf | tipler | S1'e göre | karar |
+|---|---|---|---|
+| SAYISAL | `bool` `int` **`float`** | sıfır yanlış, diğeri doğru → anlamlı | **sessiz** |
+| DİNAMİK | `json` `unknown` `void` | çalışma zamanında belli (eksik anahtar `0` döner) | **sessiz** |
+| SABİT | `str` `array` `struct` | **her zaman doğru** | **uyarı** |
+
+İki ayrı düzeltme çıktı:
+1. **`float` yanlış pozitifti.** `if(0.0)` yanlış, `if(1.5)` doğru — tam `int`
+   kadar anlamlı. Uyarı kaldırıldı.
+2. **`str`/`array` uyarısı kalıyor ama cümlesi değişti.** Artık *"her zaman
+   doğru — Tulpar'da yalnızca sayısal sıfır yanlıştır; boşluk sınamak için
+   `length(x) > 0` yaz"*. Yani tanı, tabloyu **öğretiyor**.
+
+`if`/`while`/`for`'un üçü de aynı kapıdan geçiyor (önce üç ayrı `if` bloğu
+vardı, üçü de aynı yanlış cümleyi kuruyordu). `while` için ayrıca önemli:
+sabit-doğru bir `while` koşulu **sonsuz döngüdür**.
+
+Korpus etkisi ölçüldü ve tam beklenen: **3 silme, 0 ekleme** — silinenlerin
+biri `float` yanlış pozitifi, ikisi `truthiness.test.tpr`'nin kendi doğrudan
+`if`'leri (kutulu yola taşındı; o paket **davranışı** sınıyor, tanının kendi
+fikstürü `typeinfer/fail/17`). Gerçek kodda `if(str)`/`if(array)` yok —
+P38a'nın saydığı 39 truthiness sitesi dinamik sınıfta (`json`), yani sessiz.
 
 **S1 — truthiness (P38, 2026-09-10):**
 
@@ -734,6 +759,18 @@ yolu eklendiğinde sessizce atlanır.**
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
+27. **Gezici envanteri düğüm-tipine göre değil, ANLAMSAL HEDEFE göre
+   kurulur.** Lint'in gezicisi `Assignment`'ın yalnız `target` (düğüm)
+   alanına bakıyordu; aynı düğüm basit hedefi `name` (dizgi) alanında
+   taşıyor, yani `fin = 1;` — **en yaygın yazım** — hiç görülmüyordu ve lint
+   kırmızı vermesi gereken şekilde **sessiz** kaldı. Aynı ikili kalıp
+   `CompoundAssign`/`IncrementOp`/`DecrementOp`'ta da var.
+   ⚠ Bunu *"gezici her çocuk alanını geziyor mu"* denetimi **yakalayamazdı**:
+   `name` bir `ASTNode` alanı değil, dolayısıyla o soru ona hiç değmiyor.
+   `tests/ast_child_fields_audit.py` bu yüzden gerekli ama **yeterli değil** —
+   envanterin birimi "çocuk düğüm" değil, "yazma/okuma hedefi"dir.
+   (P22'nin aynadaki yüzü: orada aynı dalın *iş kalemi* kapanmıştı, burada
+   *yöntem kalemi* kapandı.)
 26. **Taban ölçüm bir tablo değil, bir tespittir; önce kendisi sınanır,
    sonra referans olur.** P23'ün taban ölçümünün **ilk üç sürümü** "195
    dosyada 0 tanı" dedi ve üçü de *yeşil* görünüyordu: tanılar stdout'ta
@@ -856,7 +893,7 @@ için değil; **eksik hâli zararlı olduğu için**.
 **Kalan (2026-09-11 sonu):**
 1. ~~**Lint** (tam hâliyle, AST okuma tarafı)~~ — **KAPANDI 2026-09-11**, yukarıdaki bölüm
 2. ~~**P23** (iki geçişli sembol toplama)~~ — **KAPANDI 2026-09-11**, yukarıdaki bölüm
-3. **`[typecheck]` if-şekilleri ↔ S1 tablosu birleşimi** (#8'in kapanışı)
+3. ~~**`[typecheck]` if-şekilleri ↔ S1 tablosu birleşimi**~~ — **KAPANDI 2026-09-11**
 4. **Float dizi unboxing'i** — yol haritası + kârlılık kapısı yukarıda yazılı
 5. P11/P12 (llvm-mca ile `fib` atribüsyonu; gcc bayrak ikili araması)
 

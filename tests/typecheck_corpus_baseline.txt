@@ -12,6 +12,3 @@ examples/04_math_logic.tpr :: Type Error: Unknown type 'bigint' in declaration o
 examples/04_math_logic.tpr :: Type Error: Unknown type 'bigint' in declaration of 'b3' at line 16
 examples/09_socket_client.tpr :: Type Error: Function 'input' expects 0 argument(s), got 1 at line 17
 examples/09_socket_server.tpr :: Type Error: Function 'input' expects 0 argument(s), got 1 at line 38
-tests/truthiness.test.tpr :: Type Error: Condition must be boolean or integer at line 38
-tests/truthiness.test.tpr :: Type Error: Condition must be boolean or integer at line 61
-tests/truthiness.test.tpr :: Type Error: Condition must be boolean or integer at line 72
