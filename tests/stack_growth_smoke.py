@@ -87,7 +87,12 @@ OVERRIDE = {
     # ⚠ join AYIRICI-ONCE: join(sep, xs). Ilk yazilista ters yazilmisti ve
     # sonda "sizinti" diye raporladi; oysa typecheck zaten uyariyordu
     # (#12: API'yi yanlis kullanan test, ozelligi yanlis suclar).
-    "join": '\'","\', g',
+    # CIFT TIRNAK ZORUNLU. Duzeltmenin ilk hali TEK tirnak yazdi
+    # (join TEK-tirnakli ayirici ile); Tulpar sozcukleyicisi tek tirnagi
+    # tanimiyor, program DERLENMIYORDU ve asagidaki "rc is None" dali onu
+    # SESSIZCE atliyordu — tarama "50 builtin" deyip 49 olcuyordu
+    # (2026-09-11 bagimsiz denetimi). #12 i kapatan duzeltme #11 i acti.
+    "join": '",", g',
     "randint": "1, 10",
     "log": "2.0", "log2": "2.0", "log10": "2.0",
     "asin": "0.5", "acos": "0.5",
@@ -114,13 +119,19 @@ def discover_builtins():
 
 
 def scan_builtins(tmp, env):
-    """Her builtin'i dongude cagir; yigin sizdiran duser."""
+    """Her builtin'i dongude cagir; yigin sizdiran duser.
+
+    Donus: (bad, kesfedilen, olculen). KESFEDILEN ile OLCULEN ayri raporlanir:
+    ikisinin ayni oldugunu varsaymak, 2026-09-11 denetiminin yakaladigi
+    hatanin ta kendisiydi (asagiya bak).
+    """
     items = discover_builtins()
     if not items:
         print("  " + RED + "KAYNAKTAN BUILTIN OKUNAMADI" + RESET +
               " — makro bicimi degismis olabilir, tarama HICBIR SEY olcmuyor")
-        return ["builtin kesfi"], 0
+        return ["builtin kesfi"], 0, 0
     bad = []
+    measured = 0
     for idx, (name, args, pre) in enumerate(items):
         # Sonuc `n`e besleniyor ki LLVM dongusu atmasin (Faz 1'in dersi).
         # Canlilik emicisi UCUZ olmali: ilk yazilista her yineleme
@@ -133,10 +144,20 @@ def scan_builtins(tmp, env):
                 "print(toString(n));\n") % (pre, BUILTIN_N, body)
         rc, out = build_and_run(text, tmp, "b%d" % idx, env)
         if rc is None:
-            continue  # derlenmedi: bu builtin bu sekilde cagrilamiyor, atla
+            # DERLENMEDI = OLCULMEDI. Eskiden burada sessiz `continue` vardi
+            # ve tarama, derlenmeyen builtin'i olculmus SAYIYORDU: `join`in
+            # arguman metni tek tirnakliydi, program hic derlenmiyordu, ve
+            # satir "50 builtin ... TEMIZ" diyordu. 50 KESFEDILEN sayisiydi;
+            # OLCULEN 49'du. Sessiz atlama, tam da bu taramanin var olma
+            # sebebi olan hata sinifidir (#11: bilinmeyen arac, eksik aractir).
+            # Artik KIRMIZI: ya sekli duzelt ya OVERRIDE/PRE_FOR ile adiyla
+            # tanimla — muafiyet listesi yerine kaynagi duzelt (#8).
+            bad.append("%s (DERLENMEDI — olculmedi)" % name)
+            continue
+        measured += 1
         if rc != 0 or out in ("", "0"):
             bad.append("%s (rc=%s)" % (name, rc))
-    return bad, len(items)
+    return bad, len(items), measured
 
 
 CONTROL = ("KONTROL: derin ozyineleme",
@@ -182,9 +203,11 @@ def main():
             fails.append(name)
 
     # Faz 2: kutulu-ABI builtin'leri (liste kaynaktan turetilir).
-    bad, total = scan_builtins(tmp, env)
+    bad, total, measured = scan_builtins(tmp, env)
+    # ETIKET OLCUMU ANLATIR: "kesfedilen" degil "olculen" yazilir, ve ikisi
+    # ayrildiginda bu satirin kendisi farki gosterir.
     print("  %s %-24s %s" % (GREEN + "TEMIZ  " + RESET if not bad else RED + "SIZINTI" + RESET,
-                             "builtin taramasi (%d ad)" % total,
+                             "builtin taramasi (%d/%d)" % (measured, total),
                              "" if not bad else ", ".join(bad[:8])))
     fails.extend(bad)
 
@@ -201,7 +224,8 @@ def main():
         print(RED + "Yigin taramasi BASARISIZ" + RESET + ": %s" % ", ".join(fails))
         return 1
     print(GREEN + "Yigin temiz" + RESET +
-          " — %d sekil + %d builtin, kontrol kirmizi verebiliyor" % (len(SHAPES), total))
+          " — %d sekil + %d builtin (%d/%d olculdu), kontrol kirmizi verebiliyor"
+          % (len(SHAPES), measured, measured, total))
     return 0
 
 

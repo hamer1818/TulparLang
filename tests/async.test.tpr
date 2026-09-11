@@ -65,12 +65,32 @@ func run_gather_order() {
 }
 
 // gather runs its children concurrently: 3×20ms should finish in ~20ms, not 60.
+//
+// IKI KOL, MUTLAK ESIK DEGIL. Bu once `assert(dt < 50)` idi: 20ms'lik
+// beklemeyle 60ms'lik seri sure arasinda duran bir DUVAR SAATI esigi. Yuklu
+// bir kosucuda esZamanli kol da 50ms'yi asiyor ve test, gather bozulmadan
+// kirmizi veriyordu — macOS/arm64 CI'da 2026-09-09 ile 09-11 arasinda dort
+// kosumda tam bu satir dustu. Olculen sey ozellik degil, kosucunun yuku.
+//
+// Cozum deponun kendi kurali (bkz. tests/arena_contract_smoke.py): FARKI
+// olc, sonucu degil. Iki kol AYNI bekleme kumesini kosar, tek fark
+// seri-mi-gather-mi oldugudur; yuk ikisini birden yavaslatir, ORAN kalir.
+// Seri kol >= 60ms tabanlidir, esZamanli kol >= 20ms; gather seriye
+// donerse iki kol esitlenir ve kapi kirmizi verir.
 func run_gather_concurrent() {
-    int t0 = time_ms();
+    int s0 = time_ms();
+    await wait_val(20, 1);
+    await wait_val(20, 1);
+    await wait_val(20, 1);
+    int seri = time_ms() - s0;
+
+    int g0 = time_ms();
     var r = await gather(wait_val(20, 1), wait_val(20, 1), wait_val(20, 1));
-    int dt = time_ms() - t0;
+    int esz = time_ms() - g0;
+
     assert_eq_int(length(r), 3);
-    assert(dt < 50, "gather should run children concurrently (~20ms, not ~60)");
+    assert(esz * 2 < seri,
+           "gather should run children concurrently (esZamanli kol serinin yarisindan kisa olmali)");
 }
 
 // Non-promise arguments pass through unchanged.

@@ -68,6 +68,45 @@ Soyutlama gerçekten var olsun diye sabitler kaydırıldı (`_PB_* = 10..13`).
 **Kural:** bir dolaylılık katmanı ekliyorsan, onu atlayan kestirmenin
 GERÇEKTEN farklı sonuç vermesini sağla — yoksa katman yalnız kâğıt üstünde.
 
+### 1k. Nöbetçi KEŞFETTİĞİNİ sayıyor, ÖLÇTÜĞÜNÜ değil — 50 dedi, 49 ölçtü
+`stack_growth_smoke.py` builtin listesini kaynaktan türetiyor (doğru
+tasarım: elle liste bayatlar) ve "50 builtin TEMİZ" diye kapanıyordu.
+Gerçekte **49** ölçüyordu: `join`'in argüman metni tek tırnaklıydı, Tulpar
+sözcükleyicisi tek tırnağı tanımıyor, program hiç derlenmiyordu ve tarayıcı
+derlenmeyeni `if rc is None: continue` ile **sessizce atlıyordu**. Rapor
+edilen sayı keşfedilenin sayısıydı.
+
+Sivri yanı: atlanan tek ad, bir önceki turda "argüman sırasını ters yazmışım"
+diye düzeltilen builtin'di. Düzeltme #12'yi kapatırken #11'i açtı.
+
+**Kural:** bir tarama "N şeyi korudum" diyorsa, N **ölçülen** olmalı.
+Keşfedilen ile ölçülen ayrı sayılır ve etikette ikisi birden yazılır
+(`builtin taramasi (50/50)`). Atlama sessiz olamaz: ya şekli düzelt ya adıyla
+muaf tut — ama "atladım" da bir sonuçtur ve raporlanır. Aynı desen her
+"liste üzerinde gez" nöbetçisinde geçerli: `run.py`'nin çıktı mutabakatı da
+derlenemeyen dili kümeden düşürür, yani 9 dil 3'e inse "hepsi aynı basıyor"
+yine doğru görünür.
+
+### 1l. Duvar saati EŞİĞİ, yük altında özelliği değil koşucuyu ölçer
+`async.test.tpr`'nin "gather eşzamanlı mı" testi `assert(dt < 50)` yazıyordu:
+20 ms'lik eşzamanlı süre ile 60 ms'lik seri süre arasında duran bir eşik.
+Yüklü bir koşucuda eşzamanlı kol da 50 ms'yi aşıyor ve test, **gather
+bozulmadan** kırmızı veriyordu — macOS/arm64 CI'da 2026-09-09 ile 09-11
+arasında dört koşumda tam bu satır düştü. Yerelde (Linux) hiç görünmedi.
+
+**Kural:** zamanlama iddiası MUTLAK eşikle değil, **iki kolun farkıyla**
+sınanır (`arena_contract_smoke.py`'nin deseni). Aynı süreçte hem seri hem
+eşzamanlı kol koşar; yük ikisini birden yavaşlatır, **oran** korunur.
+`assert(esz * 2 < seri)` orantılı yük altında hiç düşmez, gather seriye
+dönerse hemen düşer.
+
+⚠ **Bu ders defterde ZATEN yazılıydı** — [[#6z. Duvar saati ORANI koruması —
+sabit ek yük oranı platforma bağlı yapar]] aynı sınıfı aynı platformda
+(macOS arm64) anlatıyor. 6z bir korumada düzeltildi, `async.test.tpr`'ye
+uygulanmadı ve aynı hata ikinci kez CI'ı kırdı. **Bir tuzak yazıldığında
+aynı sınıftan BÜTÜN yerler taranmalı**: `grep -rn "assert(.*time_ms\|dt <"
+tests/` bunu bir dakikada verirdi.
+
 ### 1j. Disk artığı testler arasında taşınıyor
 "Diske yazılmamış olmalı" testi, önceki bir **bozma denemesinin** yazdığı
 dosyayı okuyup yanlış yere kızardı. Kayıt/dosya sınayan testler kendi
@@ -1542,6 +1581,36 @@ kodu atınca şekiller hiçbir şey ölçmeden "TEMİZ" diyordu), artı yığın
 tüketMESİ gereken bir kontrol şekli.
 
 İlgili: [[Testing]] · FINDINGS R11.
+
+## 6ş. Döngü sınırı `n` mi `len(a)` mı — aynı iş, 3,5 kat fark
+
+40M elemanlık lineer okuma:
+
+```tulpar
+for (int j = 0; j < len(a); j = j + 1) { t = t + a[j]; }   //  5 ms
+for (int j = 0; j < n;      j = j + 1) { t = t + a[j]; }   // 18 ms
+```
+
+Aynı çıktı, aynı eleman sayısı, **3,5 kat**. Sınır diziye bağlandığında
+derleyici indeksin sınır içinde olduğunu kanıtlıyor ve eleman başına sınır
+denetimini düşürüyor ("kanıtlı erişim"; `./build.sh suites` bunu *"dizi
+elemani 32-bit (kanitli erisim i32)"* satırıyla kilitliyor). `n` yazıldığında
+kanıt kurulamıyor — `n` çalışma zamanında değişmiş olabilir.
+
+**Ölçüm tuzağı:** `n` ile yazılmış bir kıyas, dili değil **yazım şeklini**
+ölçer ve Tulpar'ı 3,5 kat yavaş gösterir. 2026-09-11 denetiminde dört
+erişim şekli önce böyle ölçüldü ve `FINDINGS` tablosuyla uyuşmadı; düzenek
+suçluydu, iddia değil. Deponun kendi kıyası doğru deyimi kullanıyor
+(`benchmarks/fair/arrayiter.tpr`).
+
+**Dil tarafı:** bu bir kusur değil, kanıt yolunun sınırı. Ama kullanıcıya
+görünmez — `n` yazmak doğal. Hızlı yol tutulmadığında uyarmak
+([[#6i. Hızlı yol ile yavaş yol AYNI şeyi yapmalı — yoksa dil kendiyle
+çelişir]]) açık bir iş kalemi.
+
+Nöbetçi: `benchmarks/fair/shapes.py` — dört erişim şekli, C tabanıyla,
+çıktı mutabakatlı; "en pahalı şekil oku-yaz" sıralamasını kilitliyor
+(S11 kararının dayanağı).
 
 ## İlgili
 [[Testing]] · [[Editor]] · [[Scene3D]] · [[Build System]] · [[Decisions]]
