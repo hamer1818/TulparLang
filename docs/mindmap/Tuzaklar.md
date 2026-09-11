@@ -107,11 +107,36 @@ Yüklü bir koşucuda eşzamanlı kol da 50 ms'yi aşıyor ve test, **gather
 bozulmadan** kırmızı veriyordu — macOS/arm64 CI'da 2026-09-09 ile 09-11
 arasında dört koşumda tam bu satır düştü. Yerelde (Linux) hiç görünmedi.
 
-**Kural:** zamanlama iddiası MUTLAK eşikle değil, **iki kolun farkıyla**
-sınanır (`arena_contract_smoke.py`'nin deseni). Aynı süreçte hem seri hem
-eşzamanlı kol koşar; yük ikisini birden yavaşlatır, **oran** korunur.
-`assert(esz * 2 < seri)` orantılı yük altında hiç düşmez, gather seriye
-dönerse hemen düşer.
+**İlk düzeltmem de yanlıştı ve aynı yerde patladı.** İki kollu farka çevirdim
+(`assert(esz * 2 < seri)`) ve gerekçem *"yük ikisini de yavaşlatır, oran
+korunur"* idi. macOS/arm64 bunu bir koşumda çürüttü.
+
+Hata şurada: **`sleep_async` duvar saatidir, yükle uzamaz** — yalnızca çağrı
+başına *ek yük* uzar. Yani iki kol aynı katsayıyla ölçeklenmiyor:
+
+| | taban | yük altında |
+|---|---|---|
+| seri (3 uyku) | 60 ms | 60 + 3h |
+| eşzamanlı (1 uyku) | 20 ms | 20 + h′ |
+
+Seri kol 60 ms tabanlı olduğu için ek yükü **oransal olarak yutuyor**,
+eşzamanlı kol (20 ms tabanlı) yutmuyor. Oran yük altında korunmuyor,
+eşzamanlı kolun **aleyhine bozuluyor**. "Farkı ölç" doğru içgüdüydü; yanlış
+olan, farkın **hangi büyüklüğe göre** normalize edildiğiydi.
+
+**Kural:** zamanlama iddiası, ölçülen şeyin **BİR BİRİMİNE** göre
+normalize edilir — ek yükü *tanımı gereği* içeren bir referansa. Burada birim,
+tek bir awaited 20 ms uykunun gerçek maliyeti:
+
+```
+seri olsaydı   -> ~3 birim
+eşzamanlı ise  -> ~1 birim
+eşik 2 birimde -> her iki yönde de %100 pay
+```
+
+Platform ne kadar yavaşsa birim o kadar büyür, eşik onunla birlikte açılır.
+Ölçülen değerler **basılıyor** (`[olcum] birim=… gather=…`): sayısı olmayan
+bir eşik iki kez tahminle konuldu ve iki kez yanlış çıktı.
 
 ⚠ **Bu ders defterde ZATEN yazılıydı** — [[#6z. Duvar saati ORANI koruması —
 sabit ek yük oranı platforma bağlı yapar]] aynı sınıfı aynı platformda

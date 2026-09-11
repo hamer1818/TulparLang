@@ -66,31 +66,54 @@ func run_gather_order() {
 
 // gather runs its children concurrently: 3×20ms should finish in ~20ms, not 60.
 //
-// IKI KOL, MUTLAK ESIK DEGIL. Bu once `assert(dt < 50)` idi: 20ms'lik
-// beklemeyle 60ms'lik seri sure arasinda duran bir DUVAR SAATI esigi. Yuklu
-// bir kosucuda esZamanli kol da 50ms'yi asiyor ve test, gather bozulmadan
-// kirmizi veriyordu — macOS/arm64 CI'da 2026-09-09 ile 09-11 arasinda dort
-// kosumda tam bu satir dustu. Olculen sey ozellik degil, kosucunun yuku.
+// BIRIM MALIYETLE OLC — mutlak esikle DE, seri kolla DA degil.
 //
-// Cozum deponun kendi kurali (bkz. tests/arena_contract_smoke.py): FARKI
-// olc, sonucu degil. Iki kol AYNI bekleme kumesini kosar, tek fark
-// seri-mi-gather-mi oldugudur; yuk ikisini birden yavaslatir, ORAN kalir.
-// Seri kol >= 60ms tabanlidir, esZamanli kol >= 20ms; gather seriye
-// donerse iki kol esitlenir ve kapi kirmizi verir.
+// Bu satir iki kez yanlis yazildi ve ikisi de macOS/arm64 CI'da patladi:
+//
+//   1) `assert(dt < 50)` — DUVAR SAATI esigi. 20ms'lik eszamanli sure ile
+//      60ms'lik seri sure arasinda duruyordu; yuklu kosucuda eszamanli kol
+//      da 50ms'yi asiyor ve test gather BOZULMADAN kirmizi veriyordu.
+//      2026-09-09..09-11 arasi dort kosum.
+//
+//   2) `assert(esz * 2 < seri)` — iki kollu fark. Gerekcesi "yuk ikisini de
+//      yavaslatir, ORAN kalir" idi. YANLISTI: `sleep_async` DUVAR SAATIDIR,
+//      yukle uzamaz — yalnizca cagri basina EK YUK uzar. Seri kol 60ms
+//      tabanli oldugu icin ek yuku oransal olarak yutar, eszamanli kol
+//      (20ms tabanli) yutmaz. Yani yuk altinda oran KORUNMAZ, eszamanli
+//      kolun aleyhine bozulur. Bu da macOS/arm64'te dustu.
+//
+// Dogru referans SERI KOL DEGIL, BIR BIRIM: tek bir awaited 20ms uykunun
+// gercek maliyeti (uyku + o platformun cagri basina ek yuku). Birim, ek yuku
+// TANIMI GEREGI icerir, yani platform ne kadar yavassa esik o kadar acilir.
+//
+//   seri olsaydi   -> ~3 birim
+//   eszamanli ise  -> ~1 birim
+//   esik 2 birimde -> her iki yonde de %100 pay
+//
+// Olculen degerler basiliyor: bu esigin tarihi, sayisi olmayan bir esigin
+// tahminle konuldugunda iki kez yanlis ciktigini gosteriyor.
 func run_gather_concurrent() {
-    int s0 = time_ms();
+    int u0 = time_ms();
     await wait_val(20, 1);
-    await wait_val(20, 1);
-    await wait_val(20, 1);
-    int seri = time_ms() - s0;
+    int birim = time_ms() - u0;
 
     int g0 = time_ms();
     var r = await gather(wait_val(20, 1), wait_val(20, 1), wait_val(20, 1));
     int esz = time_ms() - g0;
 
+    // Serbest satir YEREL kosum icin (`./tulpar tests/async.test.tpr`).
+    // ⚠ CI'da GORUNMEZ: build.sh'in paket kosucusu, dusen bir pakette yalnizca
+    // `^FAIL` ile baslayan satirlari basiyor. Bu yuzden olculen degerler
+    // IDDIA MESAJININ ICINE de konuyor — bir esik dustugunde teshis icin
+    // gereken sey tam olarak o iki sayidir, ve bu esik sayisi olmadigi icin
+    // iki kez tahminle konulup iki kez yanlis cikti.
+    print("      [olcum] birim=" + toString(birim) + "ms  gather=" + toString(esz) +
+          "ms  (seri olsaydi ~" + toString(birim * 3) + "ms)");
     assert_eq_int(length(r), 3);
-    assert(esz * 2 < seri,
-           "gather should run children concurrently (esZamanli kol serinin yarisindan kisa olmali)");
+    assert(esz < birim * 2,
+           "gather should run children concurrently — gather ~1 birim olmali, seri ~3 (birim=" +
+           toString(birim) + "ms gather=" + toString(esz) + "ms esik=" +
+           toString(birim * 2) + "ms)");
 }
 
 // Non-promise arguments pass through unchanged.
