@@ -120,6 +120,32 @@ uygulanmadı ve aynı hata ikinci kez CI'ı kırdı. **Bir tuzak yazıldığınd
 aynı sınıftan BÜTÜN yerler taranmalı**: `grep -rn "assert(.*time_ms\|dt <"
 tests/` bunu bir dakikada verirdi.
 
+### 1m. Koşmayan sonda, koşturulduğu gün SINADIĞI ŞEYİ suçlar
+`wings_tls_smoke.py` "elle koşulur, CI'da değil" diye duruyordu. 2026-09-11'de
+ilk kez koşulduğunda çıktısı şuydu:
+
+```
+FAIL: build failed
+```
+
+TLS hakkında bir hüküm. Gerçek sebep: ikili arayıcısı listenin başında
+`tulpar.exe` arıyordu ve depo kökündeki **üç ay bayat PE32+ artığı**
+seçiliyordu (native Windows 3.13.0'da kaldırıldı, `.exe` ölü ağırlık kaldı).
+Wine onu çalıştırmaya kalkıyor, `libcrypto-3-x64.dll` bulunamıyor, sonda da
+bunu "TLS derlenemedi" diye raporluyordu.
+
+Sonda **var olduğu sürece bozuktu** ve hiçbir şey bunu söylemedi — çünkü
+otomasyonda değildi. Otomasyon dışı bir sonda, "henüz yazılmamış" testten
+daha kötüdür: yazılmamış test kimseyi yanıltmaz, koşmayan sonda ise
+*"o taraf kapsanıyor"* hissi verir.
+
+**Kural:** bir sondayı "manuel" bırakmak bir karar değil, **ertelenmiş bir
+arıza**. Otomasyona alınamıyorsa sebebi yazılır (ör. donanım gerekiyor); o
+sebep yoksa bağlanır. Bağlarken iki şey ölçülür: **güvenilirlik** (tekrarlı
+koşum — [[#1l. Duvar saati EŞİĞİ, yük altında özelliği değil koşucuyu ölçer]])
+ve **sessiz SKIP** — `exit 0` ile atlayan bir sonda kapıyı boşuna yeşil yapar,
+o yüzden atlama GÖRÜNÜR olmalı.
+
 ### 1j. Disk artığı testler arasında taşınıyor
 "Diske yazılmamış olmalı" testi, önceki bir **bozma denemesinin** yazdığı
 dosyayı okuyup yanlış yere kızardı. Kayıt/dosya sınayan testler kendi

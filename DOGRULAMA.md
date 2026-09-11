@@ -252,7 +252,14 @@ yanlıştı (stdout/stderr · `LC_ALL=C` dil çevirisi · büyük/küçük harf)
    Ulaşılabilir (int lineer 0,97×). `matmul` gerekçesiyle **değil** (S11).
 3. **14 korpus tanısı** — `tests/typecheck_corpus_baseline.txt`'te kayıtlı,
    bilinen ve kabul edilmiş. Sayı değişirse kapı kırmızı verir.
-4. `ws_masked_client_smoke.py` + `wings_tls_smoke.py` hâlâ otomasyon dışı.
+4. ~~`ws_masked_client_smoke.py` + `wings_tls_smoke.py` hâlâ otomasyon dışı.~~
+   **KAPANDI (2026-09-11):** ikisi de `./build.sh suites` içinde. İlk kez
+   koşulduğunda `wings_tls_smoke.py` **Linux'ta tamamen bozuk** çıktı — ikili
+   arayıcısı depo kökündeki bayat `tulpar.exe`'yi seçiyor, Wine onu
+   çalıştıramıyor ve sonda bunu *"FAIL: build failed"* diye TLS'in hatası
+   sanıyordu. Düzeltildi; şimdi `HTTPS GET / -> 200`. Güvenilirlik 6/6
+   ölçüldü, TLS'in sessiz SKIP'i sarı `ATLANDI` satırıyla görünür yapıldı.
+   Ders: [[Tuzaklar]] 1m.
 5. **Sürüm etiketi kesilmedi.** `main`'de 5 kırıcı değişiklik birikti; SemVer
    politikası (`CHANGELOG.md`) **MAJOR** diyor.
 

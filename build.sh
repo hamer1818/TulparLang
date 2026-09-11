@@ -304,6 +304,42 @@ if [ "$ACTION" = "suites" ]; then
             echo -e "${RED}Korpus tani tabani degisti!${NC}"
             exit 1
         fi
+        # OTOMASYON DISI KALMIS IKI SONDA — artik iceride (DOGRULAMA D.4).
+        #
+        # Ikisi de gercek soket kullaniyor ve sozlesmenin YAZILI olup
+        # SINANMAYAN yarisini kapatiyor: `ws_masked_client_smoke.py` RFC 6455'in
+        # istemci->sunucu MASKELI yonunu (ornekler yalniz maskesiz yonu
+        # kapsiyordu), `wings_tls_smoke.py` ise `wings_tls` dinleyicisini.
+        #
+        # ⚠ NEDEN GECIKTI VE NE BULUNDU: bunlar "elle kosulur" diye duruyordu
+        # ve 2026-09-11 denetiminde ILK KEZ kosuldugunda `wings_tls_smoke.py`
+        # LINUX'TA TAMAMEN BOZUK cikti — ikili arayicisi listenin basinda
+        # `tulpar.exe` ariyordu ve depo kokundeki 3 ay bayat PE32+ artigi
+        # seciliyordu. Wine onu calistirmaya kalkiyor, eksik DLL ile duusuyor,
+        # sonda da "FAIL: build failed" diyordu: TLS hakkinda bir hukum, aslinda
+        # eksik bir libcrypto DLL'inden. Kosmayan bir sonda bozuldugunu
+        # soylemez; kosturuldugu gun SINADIGI SEYI suclar.
+        #
+        # Guvenilirlik olculdu (6/6 temiz, her ikisi de) — bu oturumun dersi
+        # zaten "ag/zaman duyarli bir testi once olc, sonra sert kapiya koy".
+        #
+        # SKIP GORUNUR: `wings_tls_smoke.py` openssl yoksa ya da ikili TLS'siz
+        # derlendiyse exit 0 ile ATLIYOR. Sessiz gecerse kapi bos yere yesil
+        # verir, o yuzden sondanin kendi satiri basiliyor ve SKIP sari yazilir.
+        for smoke in ws_masked_client_smoke wings_tls_smoke; do
+            SMOKE_OUT=$(DISPLAY= WAYLAND_DISPLAY= python3 "tests/$smoke.py" 2>&1)
+            SMOKE_RC=$?
+            SMOKE_LAST=$(printf '%s\n' "$SMOKE_OUT" | tail -1)
+            if [ "$SMOKE_RC" -ne 0 ]; then
+                echo -e "${RED}$smoke basarisiz!${NC}"
+                printf '%s\n' "$SMOKE_OUT" | tail -12 | sed 's/^/  /'
+                exit 1
+            fi
+            case "$SMOKE_LAST" in
+                SKIP*) echo -e "${YELLOW}$smoke ATLANDI${NC} — $SMOKE_LAST" ;;
+                *)     echo -e "${GREEN}$SMOKE_LAST${NC}" ;;
+            esac
+        done
     fi
 
     # LSP. Editör eklentisinin dayandığı yüzey ve hiçbir otomasyonda yoktu:

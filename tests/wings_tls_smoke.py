@@ -31,10 +31,21 @@ def find_tulpar_exe() -> str:
     env = os.environ.get("TULPAR_EXE")
     if env and os.path.exists(env):
         return os.path.abspath(env)
-    for c in ["tulpar.exe", "./tulpar.exe", "./tulpar"]:
+    # NATIVE BINARY FIRST. This list used to start with "tulpar.exe", and on
+    # Linux that is exactly wrong: the repo root still carries a stale
+    # tulpar.exe from before native Windows was dropped in 3.13.0 (it is a
+    # build leftover, not tracked by git). Measured 2026-09-11: this harness
+    # picked that 3-month-old PE32+ binary, Wine tried to run it, and the
+    # smoke reported "FAIL: build failed" — a TLS verdict produced by a
+    # missing libcrypto DLL. The harness had been broken on Linux for as long
+    # as the leftover existed, and nobody noticed because it is not wired into
+    # CI (DOGRULAMA D.4). A harness that cannot find the right binary does not
+    # report "cannot find"; it reports a FAILURE OF THE THING IT TESTS.
+    for c in ["./tulpar", "tulpar", "./tulpar.exe", "tulpar.exe"]:
         if os.path.exists(c):
             return os.path.abspath(c)
-    raise SystemExit("could not find tulpar.exe in repo root")
+    raise SystemExit("could not find the tulpar binary in the repo root "
+                     "(run ./build.sh first, or set TULPAR_EXE)")
 
 
 SOURCE_TEMPLATE = """\
