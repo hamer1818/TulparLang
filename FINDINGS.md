@@ -562,6 +562,22 @@ yolu eklendiğinde sessizce atlanır.**
 5. **Ortak sabiti çıkar** — iki süreyi oranlıyorsan süreç açılışını ölç ve çıkar.
 6. **Temiz koşu kanıt değil** — yarış olasılıksaldır; tehlikeyi mekanizmadan
    çıkar, çıktıdan değil.
+25. **Nöbetçinin maliyeti, kapsamının parçasıdır.** Yığın tarayıcısının ilk
+   hâli her yinelemede `toString(...)` ile dizgi ayırıyordu ve **42 saniye**
+   sürüyordu; canlılık emicisi `if (<çağrı>)`'ya çevrilince **4,5 saniye**
+   oldu — aynı kapsama, onda bir maliyet. Pahalı bir nöbetçi, er geç
+   "şimdilik atlayalım" denen nöbetçidir; ve koşulmayan nöbetçi yoktur (#10).
+   Bu oturumda aynı mesaj üç kez geldi: taramanın ucuzlatılması, üç smoke
+   betiğinin `build.sh`'e bağlanması, ve ASAN'ın `run_asan.sh`'ın C paketinden
+   çıkıp *herhangi bir* Tulpar programına inmesi.
+24. **Bir makro, 50 sitede aynı kusuru yaşatan tek satırdır.** `MATH1_FUNC` /
+   `MATH2_FUNC` / `STR1_FUNC` / `STR2_FUNC`'in dördü de ham `LLVMBuildAlloca`
+   kullanıyordu; tek satırlık hata **50 builtin'i** birden yığın sızdırır
+   yaptı. L1 (iki operatör) ya da #0 (tek kimlik) gibi değil — burada hata
+   sayısı **çağrı noktası sayısı kadar**. Sonuç: korumanın hedefi makronun
+   *kendisi* olmalı, çağrı noktalarını saymak değil. Uygulaması: nöbetçi
+   listeyi **kaynaktan türetiyor**, yani makroya yeni satır eklendiğinde
+   koruma kendiliğinden genişliyor (#8'in ve #11'in birleşimi).
 23. **Bir bellek/başarım ölçümü, ölçtüğü programın SAĞ ÇIKTIĞINI
    denetlemeden rapor edilemez.** S3'ün ilk tablosu (drop 11 MB · restore
    161 MB · none 143 MB · **oran 15×**) yayına hazır görünüyordu; üç kolun
@@ -665,3 +681,82 @@ içermiyor (veri hazır, yayın kararı bekliyor).
 (5 koşulla onaylı) · global lint · donmuş 9 dilli CSV + checksum kolonu ·
 llvm-mca ile `fib` atribüsyonu · gcc üstünlüğünün bayrak ikili araması ·
 FP/SIMD.
+
+---
+
+# Kapanış — 13 turun defteri
+
+## Üç satır
+
+1. **Başlangıç sorusu ("C kadar hızlı mıyız?") cevaplandı — ikiye bölünerek.**
+   Tam sayı, dizgi ve **skaler kayan nokta** çekirdeklerinde C sınıfı;
+   **kayan nokta dizilerinde 5–27× geride**, sebebi ölçülmüş (kutulanmamış
+   depolama yalnız tam sayılarda: 16,1'e karşı 8,1 bayt/eleman). Pazarlama
+   cümlesi, iki ölçülmüş satıra dönüştü.
+2. **Defterin kendi disiplini kendi borcunu buldu.** #21 ("sözleşme cümlesi,
+   fikstür doğmadan kapanmaz") retrofit sayımında **"ÖLÇÜLDÜ ve KAPANDI"
+   yazan tek satırın fikstürsüz kalan tek satır olduğunu** gösterdi (S4).
+   Üç borç da aynı turda kapandı ve S4'ün kilidi *sökme testiyle* kanıtlandı.
+3. **Ölçümün sağlık kontrolü, ölçümün kendisinden değerli çıktı.** S3
+   fikstürünün çıkış-kodu denetimi, ikna edici görünen bir "15× oran"ın
+   aslında üç farklı çöküş noktasının oranı olduğunu ortaya çıkardı — ve
+   oradan R11 doğdu: 51 sitede yığın sızıntısı, iki dalgada.
+
+## Kural dizini
+
+| # | Kural |
+|---|---|
+| 1 | Tek thread'li kontrol |
+| 2 | Düzeneğin ön koşullarını bastır |
+| 3 | Etkiyi sına, artefaktı değil |
+| 4 | Asla zarar verme |
+| 5 | Ortak sabiti çıkar |
+| 6 | Temiz koşu kanıt değil |
+| 7 | Başarısızlık işareti meşru değerle aynı sentinel'i paylaşamaz |
+| 8 | Muafiyet listesi yerine kaynağı düzelt |
+| 9 | Zayıf çağrı sessizdir |
+| 9b | Ölçüm aleti de bir programdır |
+| 10 | Hiç kırmızı görülmemiş düzenek yeşil değil, **bilinmiyor** |
+| 11 | Bilinmeyen araç, eksik araçtır |
+| 12 | API'yi yanlış kullanan test, özelliği yanlış suçlar |
+| 13 | Ölçüm aleti dil varsayılanından sıkı olabilir |
+| 14 | Yeşil test kusursuz kod demek değil; kusurlar bileşik kurup doğru üretebilir |
+| 15 | Göç aleti hedef sözleşmeyi test eder, mevcut olanı değil |
+| 16 | Yeni çıkış yolu = belgelenmiş yan etkilerin yeniden envanteri |
+| 19 | Metin-deseniyle yapılan dönüşüm, envanteri yeniden üretmez |
+| 20 | Yanlış gözlem gerçek sinyal taşıyabilir; sinyali çerçeveden ayır |
+| 21 | Sözleşme cümlesi, onu test eden fikstür doğmadan kapanmaz |
+| 22 | Tanı aracı da tanının parçası |
+| 23 | Ölçüm, ölçtüğü programın sağ çıktığını denetlemeden rapor edilemez |
+| 24 | Bir makro, 50 sitede aynı kusuru yaşatan tek satırdır |
+| 25 | Nöbetçinin maliyeti, kapsamının parçasıdır |
+
+⚠ **17 ve 18 numaraları hiç kullanılmadı** — kayıp kayıt değil, numaralandırma
+boşluğu. Kural listesi bir sayaç değil, bir dizin; yeni kural en büyük
+numarayı alır ve boşluklar doldurulmaz (doldurmak, eski bir commit mesajındaki
+"#17" göndermesini başka bir kurala bağlardı).
+
+## Nöbette ne var
+
+| Nöbetçi | Neyi kilitliyor |
+|---|---|
+| `tests/stream_contract_smoke.py` | S4 — akış sözleşmesinin üç fazı + kasıtlı ihlal rotası |
+| `tests/arena_contract_smoke.py` | S3 — `restore` bırakmaz / `drop` bırakır, zıt yönlü iki iddia |
+| `tests/stack_growth_smoke.py` | R11 — 13 şekil + **kaynaktan türetilen** 50 builtin |
+| `tests/truthiness.test.tpr` | S1 — iki yönlü truthiness tablosu |
+| `tests/thread_copy.test.tpr` | S7/S8 — thread ve handle sözleşmeleri |
+| `tests/shared_json_read.test.tpr` | S6 — paylaşılan değer mutasyona uğratılmaz |
+| `tests/accessors.test.tpr` | S5 — `at`/`json_get` sınır politikası |
+| `build.sh` #19 kapısı | tanı tek kapıdan çıkar (çok satırlı `printf` sızıntısı dahil) |
+
+**Sözleşme muhasebesi: 9 sözleşmenin 8'i fikstürlü, 1'i meşru ölçüm
+istisnası (S9), borç yok.**
+
+## Kalan ark
+
+Kuyrukta **bulgu-fix'i yok** — hepsi *tamlama*: lint (AST okuma tarafı),
+P23 (iki geçişli sembol toplama), `[typecheck]` ↔ S1 birleşimi, float-dizi
+unboxing'i (kârlılık kapısı yazılı), P11/P12 atribüsyonu. Bunlar birer
+**açık** değil, birer **iş kalemi**; her birinin ne zaman kapandığını
+söyleyen bir cümle ve o cümleyi sınayacak bir fikstür şekli bu defterde
+zaten tanımlı.

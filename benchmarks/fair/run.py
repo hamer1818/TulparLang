@@ -284,8 +284,48 @@ def main():
           {k: (round(v, 1) if v else None) for k, v in base.items()})
     (HERE / "results.json").write_text(json.dumps(
         {"results": results, "baseline": base, "repeats": REPEATS}, indent=2))
-    print("\n-> results.json")
+    write_markdown(results, base)
+    print("\n-> results.json + RESULTS.md")
     return 1 if invalid else 0
+
+
+def write_markdown(results, base):
+    """results.json'dan okunabilir tablo uret.
+
+    Elle yazilmiyor: depo kokundeki eski `benchmarks/RESULTS.md` elle
+    tutuluyordu ve BAYATLADI (2026-05 tarihli, silinmis VM satiri, "best of
+    1"). Uretilen tablo bayatlayamaz — kosumun kendisiyle ayni anda dogar.
+    """
+    lines = ["# Adil dil karsilastirmasi — sonuclar", ""]
+    lines.append("Uretildi: `benchmarks/fair/run.py` · %d tekrar, en iyi deger · "
+                 "**dusuk = hizli** (ms)." % REPEATS)
+    lines.append("")
+    lines.append("Her satir ayni algoritmayi ayni veri yapisiyla kosar ve "
+                 "**ciktilar dogrulanir** — diller ayni sonucu basmazsa satir "
+                 "gecersiz sayilir.")
+    lines.append("")
+    order = [l for l in LANGS]
+    head = "| Dil | " + " | ".join(b for b in results) + " |"
+    lines += [head, "|---|" + "---:|" * len(results)]
+    for lang in order:
+        cells = []
+        for b, r in results.items():
+            row = r["rows"].get(lang)
+            cells.append(("%.1f" % row["best"]) if row else "—")
+        lines.append("| %s | %s |" % (LABEL[lang], " | ".join(cells)))
+    lines += ["", "## Is yukleri ve cikti mutabakati", "",
+              "| Kiyas | BENCH_N | Ne olcer | Ortak cikti |", "|---|---:|---|---|"]
+    for b, r in results.items():
+        agree = r["output"] if r["agree"] else "**AYRISIYOR — GECERSIZ**"
+        lines.append("| `%s` | %s | %s | `%s` |" % (b, r["n"], r["desc"], agree))
+    lines += ["", "## Bos program taban cizgisi (ms)", "",
+              "Olctugumuz seyin ne kadari surec baslatma? Is yukleri bunu "
+              "golgede birakacak kadar buyuk secildi.", ""]
+    lines.append("| " + " | ".join(LABEL.get(k, k) for k in base) + " |")
+    lines.append("|" + "---:|" * len(base))
+    lines.append("| " + " | ".join(("%.1f" % v) if v else "—" for v in base.values()) + " |")
+    lines.append("")
+    (HERE / "RESULTS.md").write_text("\n".join(lines) + "\n")
 
 
 if __name__ == "__main__":

@@ -16,6 +16,11 @@
 >
 > Adil ölçüm: [`benchmarks/fair/`](fair/README.md) — hepsi ortamdan N okuyor,
 > aynı algoritmayı aynı veri yapısıyla koşuyor ve **çıktıları doğrulanıyor**.
+> Güncel tablo: [`benchmarks/fair/RESULTS.md`](fair/RESULTS.md) — **elle
+> yazılmıyor**, `fair/run.py` koşumun kendisiyle aynı anda üretiyor, yani
+> aşağıdaki blok gibi bayatlayamaz. (Aşağısı 2026-05 tarihli, "best of 1",
+> ve 3.13.0'da silinmiş bir **VM** satırı taşıyor — bu dosyanın niye
+> güvenilmez olduğunun kendi kanıtı.)
 
 <!-- BENCH:RESULTS START -->
 
